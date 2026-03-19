@@ -86,19 +86,6 @@ void checkZeroColumnGlobalCountStarSupport(bool supported) {
       supported, "Zero-column global aggregation only supports count(*)");
 }
 
-column_index_t getInputIndex(
-    const core::AggregationNode& aggregationNode,
-    const core::AggregationNode::Aggregate& aggregate,
-    size_t aggregateIndex) {
-  if (aggregationNode.sources()[0]->outputType()->size() == 0 &&
-      aggregationNode.groupingKeys().empty() &&
-      isCountStarAggregate(aggregate)) {
-    return kConstantChannel;
-  }
-
-  return static_cast<column_index_t>(
-      aggregationNode.groupingKeys().size() + aggregateIndex);
-}
 
 bool hasOnlyConstantArguments(const core::CallTypedExpr& call) {
   return !call.inputs().empty() &&
@@ -215,7 +202,7 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
       const bool hasInputColumns = input.num_columns() > 0;
       int64_t count;
       if (isZeroColumnCountStar()) { // Matches count(*) with zero columns.
-        count = hasInputColumns ? input.num_rows() : inputRowCount_;
+        count = inputRowCount_;
       } else if (countsAllRows()) { // Matches count(*), or
                                     // count(non NULL constant) with one or more
                                     // columns.
@@ -927,7 +914,19 @@ auto toAggregators(
     // Positional mapping: inputs are keys first, then aggregate columns in
     // aggregate order.
     auto const& aggregate = aggregationNode.aggregates()[i];
-    auto const inputIndex = getInputIndex(aggregationNode, aggregate, i);
+    // The case of zero input is mapped to kConstantChannel.
+    auto getInputIndex = [](
+        const core::AggregationNode& aggregationNode,
+        size_t aggregateIndex,
+        size_t numKeys) -> column_index_t {
+      if (aggregationNode.sources()[0]->outputType()->size() == 0 &&
+          numKeys == 0) {
+        return kConstantChannel;
+      }
+      return static_cast<column_index_t>(
+          numKeys + aggregateIndex);
+    };
+    auto const inputIndex = getInputIndex(aggregationNode, i, numKeys);
     auto const kind = aggregate.call->name();
     auto const constant = constants[i];
     auto const companionStep = getCompanionStep(kind, step);
