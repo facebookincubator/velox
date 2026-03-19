@@ -31,6 +31,7 @@ velox_add_library(
   SfmSketchRegistration.cpp
   TDigestRegistration.cpp
   TimestampWithTimeZoneRegistration.cpp
+  TimestampWithTimeZoneType.cpp
   TimeWithTimezoneRegistration.cpp
   TimeWithTimezoneType.cpp
   SetDigestRegistration.cpp
