@@ -30,12 +30,6 @@ cudf::type_id veloxToCudfTypeId(const TypePtr& type);
 
 namespace with_arrow {
 
-std::unique_ptr<cudf::table> toCudfTable(
-    const facebook::velox::RowVectorPtr& veloxTable,
-    facebook::velox::memory::MemoryPool* pool,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr);
-
 facebook::velox::RowVectorPtr toVeloxColumn(
     const cudf::table_view& table,
     facebook::velox::memory::MemoryPool* pool,
@@ -50,6 +44,25 @@ facebook::velox::RowVectorPtr toVeloxColumn(
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
 
+// New overload: Accepts a Velox TypePtr for recursive metadata construction.
+facebook::velox::RowVectorPtr toVeloxColumn(
+    const cudf::table_view& table,
+    facebook::velox::memory::MemoryPool* pool,
+    const TypePtr& type,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
+
 } // namespace with_arrow
+
+/// Converts a Velox RowVector to a cudf table by directly reading from
+/// Velox vector buffers and copying to GPU. This avoids the overhead of
+/// Arrow serialization/deserialization. Supports flat scalar types, strings,
+/// and complex/nested types (ARRAY as LIST, ROW as STRUCT, MAP as
+/// LIST<STRUCT<key, value>>).
+std::unique_ptr<cudf::table> toCudfTable(
+    const facebook::velox::RowVectorPtr& veloxTable,
+    facebook::velox::memory::MemoryPool* pool,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
 
 } // namespace facebook::velox::cudf_velox

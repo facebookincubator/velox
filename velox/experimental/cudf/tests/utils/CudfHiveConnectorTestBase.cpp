@@ -169,7 +169,7 @@ void CudfHiveConnectorTestBase::writeToFile(
     VELOX_CHECK_NOT_NULL(vector);
     if (vector->size()) {
       auto stream = cudf::get_default_stream();
-      auto cudfTable = with_arrow::toCudfTable(
+      auto cudfTable = toCudfTable(
           vector,
           vector->pool(),
           stream,
@@ -210,7 +210,7 @@ void CudfHiveConnectorTestBase::writeToFile(
   auto const sinkInfo = cudf::io::sink_info(filePath);
   VELOX_CHECK_NOT_NULL(vector);
   auto stream = cudf::get_default_stream();
-  auto cudfTable = with_arrow::toCudfTable(
+  auto cudfTable = toCudfTable(
       vector, vector->pool(), stream, cudf::get_current_device_resource_ref());
   stream.synchronize();
   auto tableInputMetadata = cudf::io::table_input_metadata(cudfTable->view());

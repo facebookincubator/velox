@@ -145,7 +145,7 @@ RowVectorPtr CudfFromVelox::getOutput() {
 
   // Convert RowVector to cudf table
   auto tbl =
-      with_arrow::toCudfTable(input, input->pool(), stream, get_output_mr());
+      toCudfTable(input, input->pool(), stream, get_output_mr());
 
   stream.synchronize();
 
