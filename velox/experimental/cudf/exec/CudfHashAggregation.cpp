@@ -53,49 +53,6 @@ using namespace facebook::velox;
 using facebook::velox::cudf_velox::get_output_mr;
 using facebook::velox::cudf_velox::get_temp_mr;
 
-bool isCountFunctionName(const std::string& kind) {
-  auto prefix = cudf_velox::CudfConfig::getInstance().functionNamePrefix;
-  if (!prefix.empty() && kind.rfind(prefix, 0) == 0) {
-    return kind.substr(prefix.size()).starts_with("count");
-  }
-  return kind.starts_with("count");
-}
-
-bool isCountStarAggregate(const core::AggregationNode::Aggregate& aggregate) {
-  return isCountFunctionName(aggregate.call->name()) &&
-      aggregate.call->inputs().empty();
-}
-
-bool isSupportedZeroColumnAggregation(
-    const core::AggregationNode& aggregationNode) {
-  // The only supported aggregation shape in that case is global count(*).
-  return aggregationNode.groupingKeys()
-             .empty() && // GROUP BY not supported with count(*) on zero
-                         // columns.
-      !aggregationNode.aggregates().empty() &&
-      std::all_of(
-             aggregationNode.aggregates().begin(),
-             aggregationNode.aggregates().end(),
-             [](const auto& aggregate) {
-               return isCountStarAggregate(aggregate);
-             });
-}
-
-void checkZeroColumnGlobalCountStarSupport(bool supported) {
-  VELOX_CHECK(
-      supported, "Zero-column global aggregation only supports count(*)");
-}
-
-
-bool hasOnlyConstantArguments(const core::CallTypedExpr& call) {
-  return !call.inputs().empty() &&
-      std::all_of(
-          call.inputs().begin(), call.inputs().end(), [](const auto& arg) {
-            return dynamic_cast<const core::ConstantTypedExpr*>(arg.get()) !=
-                nullptr;
-          });
-}
-
 #define DEFINE_SIMPLE_AGGREGATOR(Name, name, KIND)                            \
   struct Name##Aggregator : cudf_velox::CudfHashAggregation::Aggregator {     \
     Name##Aggregator(                                                         \
@@ -164,11 +121,48 @@ DEFINE_SIMPLE_AGGREGATOR(Min, min, MIN)
 DEFINE_SIMPLE_AGGREGATOR(Max, max, MAX)
 
 struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
+  enum class CountInputKind {
+    kColumn,
+    kConstant,
+    kCountStarWithColumns,
+    kCountStarNoColumns,
+  };
+
+  static bool isCountFunctionName(const std::string& kind) {
+    auto prefix = cudf_velox::CudfConfig::getInstance().functionNamePrefix;
+    if (!prefix.empty() && kind.rfind(prefix, 0) == 0) {
+      return kind.substr(prefix.size()).starts_with("count");
+    }
+    return kind.starts_with("count");
+  }
+
+  static bool isCountStarAggregate(
+      const core::AggregationNode::Aggregate& aggregate) {
+    return isCountFunctionName(aggregate.call->name()) &&
+        aggregate.call->inputs().empty();
+  }
+
+  static CountInputKind getInputKind(
+      const core::AggregationNode::Aggregate& aggregate,
+      column_index_t inputIndex,
+      const VectorPtr& constant) {
+    if (isCountStarAggregate(aggregate)) {
+      return inputIndex == kConstantChannel
+          ? CountInputKind::kCountStarNoColumns
+          : CountInputKind::kCountStarWithColumns;
+    }
+    return constant != nullptr ? CountInputKind::kConstant
+                               : CountInputKind::kColumn;
+  }
+
+ public:
   CountAggregator(
+      const core::AggregationNode::Aggregate& aggregate,
       core::AggregationNode::Step step,
       uint32_t inputIndex,
       VectorPtr constant,
       bool isGlobal,
+      memory::MemoryPool* pool,
       const TypePtr& resultType)
       : Aggregator(
             step,
@@ -176,7 +170,19 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
             inputIndex,
             constant,
             isGlobal,
-            resultType) {}
+            resultType),
+        inputKind_(getInputKind(aggregate, inputIndex, constant)) {
+    switch (inputKind_) {
+      case CountInputKind::kCountStarWithColumns:
+        this->constant =
+            BaseVector::createConstant(BIGINT(), Variant(int64_t{1}), 1, pool);
+        break;
+      case CountInputKind::kCountStarNoColumns:
+      case CountInputKind::kConstant:
+      case CountInputKind::kColumn:
+        break;
+    }
+  }
 
   void addGroupbyRequest(
       cudf::table_view const& tbl,
@@ -201,17 +207,21 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
     if (exec::isRawInput(step)) {
       const bool hasInputColumns = input.num_columns() > 0;
       int64_t count;
-      if (isZeroColumnCountStar()) { // Matches count(*) with zero columns.
-        count = inputRowCount_;
-      } else if (countsAllRows()) { // Matches count(*), or
-                                    // count(non NULL constant) with one or more
-                                    // columns.
-        checkZeroColumnGlobalCountStarSupport(hasInputColumns);
-        count = input.num_rows();
-      } else { // Matches count(<column>) case.
-        checkZeroColumnGlobalCountStarSupport(hasInputColumns);
-        auto inputCol = input.column(inputIndex);
-        count = inputCol.size() - inputCol.null_count();
+      switch (inputKind_) {
+        case CountInputKind::kCountStarNoColumns:
+          count = inputRowCount_;
+          break;
+        case CountInputKind::kCountStarWithColumns:
+        case CountInputKind::kConstant:
+          checkZeroColumnGlobalCountStarSupport(hasInputColumns);
+          count = input.num_rows();
+          break;
+        case CountInputKind::kColumn: {
+          checkZeroColumnGlobalCountStarSupport(hasInputColumns);
+          auto inputCol = input.column(inputIndex);
+          count = inputCol.size() - inputCol.null_count();
+          break;
+        }
       }
 
       auto resultScalar =
@@ -255,14 +265,16 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
   }
 
  private:
-  bool isZeroColumnCountStar() const {
-    return constant == nullptr && inputIndex == kConstantChannel;
-  }
-
   bool countsAllRows() const {
-    return constant != nullptr || inputIndex == kConstantChannel;
+    return inputKind_ != CountInputKind::kColumn;
   }
 
+  void checkZeroColumnGlobalCountStarSupport(bool supported) {
+    VELOX_CHECK(
+        supported, "Zero-column global aggregation only supports count(*)");
+  }
+
+  CountInputKind inputKind_;
   vector_size_t inputRowCount_ = 0;
   uint32_t outputIdx_;
 };
@@ -745,18 +757,20 @@ struct ApproxDistinctAggregator : cudf_velox::CudfHashAggregation::Aggregator {
 
 std::unique_ptr<cudf_velox::CudfHashAggregation::Aggregator> createAggregator(
     core::AggregationNode::Step step,
-    std::string const& kind,
+    const core::AggregationNode::Aggregate& aggregate,
     uint32_t inputIndex,
     VectorPtr constant,
     bool isGlobal,
+    memory::MemoryPool* pool,
     const TypePtr& resultType) {
+  auto const& kind = aggregate.call->name();
   auto prefix = cudf_velox::CudfConfig::getInstance().functionNamePrefix;
   if (kind.rfind(prefix + "sum", 0) == 0) {
     return std::make_unique<SumAggregator>(
         step, inputIndex, constant, isGlobal, resultType);
   } else if (kind.rfind(prefix + "count", 0) == 0) {
     return std::make_unique<CountAggregator>(
-        step, inputIndex, constant, isGlobal, resultType);
+        aggregate, step, inputIndex, constant, isGlobal, pool, resultType);
   } else if (kind.rfind(prefix + "min", 0) == 0) {
     return std::make_unique<MinAggregator>(
         step, inputIndex, constant, isGlobal, resultType);
@@ -857,7 +871,7 @@ AggregationInputChannels buildAggregationInputChannels(
       groupingKeyInputChannels.begin(),
       groupingKeyInputChannels.end());
 
-  const auto selectFallbackChannel =
+  const auto fallbackChannel =
       groupingKeyInputChannels.empty() ? 0 : groupingKeyInputChannels.front();
 
   for (auto i = 0; i < aggregationNode.aggregates().size(); ++i) {
@@ -871,7 +885,7 @@ AggregationInputChannels buildAggregationInputChannels(
           auto constant =
               dynamic_cast<const core::ConstantTypedExpr*>(arg.get())) {
         result.constants[i] = constant->toConstantVector(operatorCtx.pool());
-        aggInputs.push_back(selectFallbackChannel);
+        aggInputs.push_back(fallbackChannel);
       } else {
         VELOX_NYI("Constants and lambdas not yet supported");
       }
@@ -879,14 +893,7 @@ AggregationInputChannels buildAggregationInputChannels(
 
     VELOX_CHECK(aggInputs.size() <= 1);
     if (aggInputs.empty()) {
-      if (isCountFunctionName(aggregate.call->name()) &&
-          inputRowSchema->size() > 0) {
-        // Keep count(*) using a real input when a column exists and use a
-        // synthetic (non-null) constant {1} to maintain count semantics.
-        result.constants[i] = BaseVector::createConstant(
-            BIGINT(), Variant(int64_t{1}), 1, operatorCtx.pool());
-      }
-      aggInputs.push_back(selectFallbackChannel);
+      aggInputs.push_back(fallbackChannel);
     }
 
     if (aggregate.distinct) {
@@ -903,6 +910,7 @@ auto toAggregators(
     core::AggregationNode const& aggregationNode,
     core::AggregationNode::Step step,
     TypePtr const& outputType,
+    memory::MemoryPool* pool,
     std::vector<VectorPtr> const& constants) {
   bool const isGlobal = aggregationNode.groupingKeys().empty();
   const auto numKeys = aggregationNode.groupingKeys().size();
@@ -915,20 +923,18 @@ auto toAggregators(
     // aggregate order.
     auto const& aggregate = aggregationNode.aggregates()[i];
     // The case of zero input is mapped to kConstantChannel.
-    auto getInputIndex = [](
-        const core::AggregationNode& aggregationNode,
-        size_t aggregateIndex,
-        size_t numKeys) -> column_index_t {
+    auto getInputIndex = [](const core::AggregationNode& aggregationNode,
+                            size_t aggregateIndex,
+                            size_t numKeys) -> column_index_t {
       if (aggregationNode.sources()[0]->outputType()->size() == 0 &&
           numKeys == 0) {
         return kConstantChannel;
       }
-      return static_cast<column_index_t>(
-          numKeys + aggregateIndex);
+      return static_cast<column_index_t>(numKeys + aggregateIndex);
     };
     auto const inputIndex = getInputIndex(aggregationNode, i, numKeys);
-    auto const kind = aggregate.call->name();
     auto const constant = constants[i];
+    auto const kind = aggregate.call->name();
     auto const companionStep = getCompanionStep(kind, step);
     const auto originalName = getOriginalName(kind);
     const auto resultType = exec::isPartialOutput(companionStep)
@@ -936,7 +942,13 @@ auto toAggregators(
         : outputType->childAt(numKeys + i);
 
     aggregators.push_back(createAggregator(
-        companionStep, kind, inputIndex, constant, isGlobal, resultType));
+        companionStep,
+        aggregate,
+        inputIndex,
+        constant,
+        isGlobal,
+        pool,
+        resultType));
   }
   return aggregators;
 }
@@ -1023,6 +1035,7 @@ void CudfHashAggregation::initialize() {
       *aggregationNode_,
       aggregationNode_->step(),
       outputType_,
+      operatorCtx_->pool(),
       aggregationInput.constants);
   streamingEnabled_ =
       !hasCompanionAggregates(aggregationNode_->aggregates()) && !isGlobal_;
@@ -1042,6 +1055,7 @@ void CudfHashAggregation::initialize() {
         *aggregationNode_,
         core::AggregationNode::Step::kIntermediate,
         bufferedResultType_,
+        operatorCtx_->pool(),
         nullConstants);
 
     if (isSingleStep_) {
@@ -1049,11 +1063,13 @@ void CudfHashAggregation::initialize() {
           *aggregationNode_,
           core::AggregationNode::Step::kPartial,
           bufferedResultType_,
+          operatorCtx_->pool(),
           aggregationInput.constants);
       finalAggregators_ = toAggregators(
           *aggregationNode_,
           core::AggregationNode::Step::kFinal,
           outputType_,
+          operatorCtx_->pool(),
           nullConstants);
     }
   }
@@ -2075,11 +2091,39 @@ bool matchTypedCallAgainstSignatures(
   return false;
 }
 
+namespace {
+
+bool isSupportedZeroColumnAggregation(
+    const core::AggregationNode& aggregationNode) {
+  // The only supported aggregation shape in that case is global count(*).
+  return aggregationNode.groupingKeys()
+             .empty() && // GROUP BY not supported with count(*) on zero
+                         // columns.
+      !aggregationNode.aggregates().empty() &&
+      std::all_of(
+             aggregationNode.aggregates().begin(),
+             aggregationNode.aggregates().end(),
+             [](const auto& aggregate) {
+               return CountAggregator::isCountStarAggregate(aggregate);
+             });
+}
+
+bool hasOnlyConstantArguments(const core::CallTypedExpr& call) {
+  return !call.inputs().empty() &&
+      std::all_of(
+          call.inputs().begin(), call.inputs().end(), [](const auto& arg) {
+            return dynamic_cast<const core::ConstantTypedExpr*>(arg.get()) !=
+                nullptr;
+          });
+}
+
+} // namespace
+
 // Step-aware aggregation validation function
 bool canAggregationBeEvaluatedByCudf(
     const core::CallTypedExpr& call,
     core::AggregationNode::Step step,
-    const std::vector<TypePtr>& /*rawInputTypes*/,
+    const std::vector<TypePtr>& rawInputTypes,
     core::QueryCtx* queryCtx) {
   // Check against step-aware aggregation registry
   const auto companionStep = getCompanionStep(call.name(), step);
@@ -2095,16 +2139,18 @@ bool canAggregationBeEvaluatedByCudf(
     return false;
   }
 
-  if (isCountFunctionName(
-          call.name())) { // Inclusive of cases such as count(1).
+  // Allow certain cases of count(<constant>), and all of count(<column>) and
+  // count(*).
+  if (CountAggregator::isCountFunctionName(call.name())) {
     for (const auto& arg : call.inputs()) {
       auto constant = dynamic_cast<const core::ConstantTypedExpr*>(arg.get());
       if (constant && constant->isNull()) {
         return false;
       }
     }
-  } else if (hasOnlyConstantArguments(call)) { // Catches all-constant cases
-                                               // such as sum(1), min(2), etc.
+  } else if (hasOnlyConstantArguments(call)) { // Fallback on all-constant and
+                                               // non-count cases such as
+                                               // sum(1), min(2), etc.
     return false;
   }
 
