@@ -159,11 +159,9 @@ TEST_P(PartitionedOutputTest, flush) {
           .customStats.at(std::string(Operator::kShuffleSerdeKind));
   ASSERT_EQ(serdeKindRuntimsStats.count, 1);
   ASSERT_EQ(
-      serdeKindRuntimsStats.min,
-      static_cast<int64_t>(VectorSerde::kindByName(GetParam())));
+      serdeKindRuntimsStats.min, Operator::shuffleSerdeStatsValue(GetParam()));
   ASSERT_EQ(
-      serdeKindRuntimsStats.max,
-      static_cast<int64_t>(VectorSerde::kindByName(GetParam())));
+      serdeKindRuntimsStats.max, Operator::shuffleSerdeStatsValue(GetParam()));
 }
 
 TEST_P(PartitionedOutputTest, keyChannelNotAtBeginningWithNulls) {
@@ -275,11 +273,9 @@ TEST_P(PartitionedOutputTest, multipleFlushCycles) {
           .customStats.at(std::string(Operator::kShuffleSerdeKind));
   ASSERT_EQ(serdeKindRuntimsStats.count, 1);
   ASSERT_EQ(
-      serdeKindRuntimsStats.min,
-      static_cast<int64_t>(VectorSerde::kindByName(GetParam())));
+      serdeKindRuntimsStats.min, Operator::shuffleSerdeStatsValue(GetParam()));
   ASSERT_EQ(
-      serdeKindRuntimsStats.max,
-      static_cast<int64_t>(VectorSerde::kindByName(GetParam())));
+      serdeKindRuntimsStats.max, Operator::shuffleSerdeStatsValue(GetParam()));
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(

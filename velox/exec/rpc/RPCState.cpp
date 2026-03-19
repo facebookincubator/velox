@@ -16,7 +16,7 @@
 
 #include "velox/exec/rpc/RPCState.h"
 
-#include <folly/executors/GlobalExecutor.h>
+#include <folly/executors/InlineExecutor.h>
 
 #include "velox/common/base/Exceptions.h"
 
@@ -26,24 +26,23 @@
 namespace facebook::velox::exec::rpc {
 
 // ===== Configuration =====
+// These setters are called during RPCOperator construction, before any
+// concurrent access. No lock needed — avoids lock-order-inversion with the
+// Task mutex (TSAN: M0→M1→M0 cycle).
 
 void RPCState::setStreamingMode(RPCStreamingMode mode) {
-  std::lock_guard<std::mutex> l(mutex_);
   streamingMode_ = mode;
 }
 
 RPCStreamingMode RPCState::streamingMode() const {
-  std::lock_guard<std::mutex> l(mutex_);
   return streamingMode_;
 }
 
 void RPCState::setMaxPendingRows(int64_t maxPendingRows) {
-  std::lock_guard<std::mutex> l(mutex_);
   maxPendingRows_ = maxPendingRows;
 }
 
 void RPCState::setMaxPendingBatches(int64_t maxPendingBatches) {
-  std::lock_guard<std::mutex> l(mutex_);
   maxPendingBatches_ = maxPendingBatches;
 }
 
@@ -117,7 +116,7 @@ void RPCState::addPendingRow(
   // We capture selfPtr to keep this RPCState alive until the callback fires.
   auto stateForError = selfPtr;
   folly::futures::detachOn(
-      folly::getGlobalCPUExecutor(),
+      folly::getKeepAliveToken(folly::InlineExecutor::instance()),
       std::move(future)
           .deferValue([state = std::move(selfPtr), rowId, location](
                           RPCResponse response) mutable {
@@ -222,7 +221,7 @@ void RPCState::addPendingBatch(
   // completes. We use .via().thenValue() to run the callback eagerly.
   auto callbackFuture =
       std::move(future)
-          .via(folly::getGlobalCPUExecutor())
+          .via(folly::getKeepAliveToken(folly::InlineExecutor::instance()))
           .thenValue([state = selfPtr](std::vector<RPCResponse> responses) {
             RPC_STATE_VLOG(1)
                 << "Batch completed with " << responses.size() << " responses";

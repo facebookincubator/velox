@@ -76,8 +76,9 @@ class AsyncRPCFunctionRegistry {
   static std::unordered_set<std::string> registeredFunctions();
 
   /// Clears all registered functions.
-  /// Primarily for testing.
-  static void clear();
+  /// Intended ONLY for unit tests to avoid test contamination.
+  /// WARNING: Do NOT call this in production code.
+  static void testingClear();
 
  private:
   static std::mutex& mutex();

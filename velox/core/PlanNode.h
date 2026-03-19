@@ -2179,7 +2179,12 @@ using GroupIdNodePtr = std::shared_ptr<const GroupIdNode>;
 class ExchangeNode : public PlanNode {
  public:
   ExchangeNode(const PlanNodeId& id, RowTypePtr type, std::string serdeKind)
-      : PlanNode(id), outputType_(type), serdeKind_(std::move(serdeKind)) {}
+      : PlanNode(id), outputType_(type), serdeKind_(std::move(serdeKind)) {
+    VELOX_CHECK(
+        isRegisteredNamedVectorSerde(serdeKind_),
+        "Serde is not registered: {}",
+        serdeKind_);
+  }
 
   class Builder {
    public:
