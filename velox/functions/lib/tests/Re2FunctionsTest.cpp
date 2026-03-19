@@ -17,6 +17,7 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <sys/mman.h>
 #include <velox/type/Type.h>
 #include <functional>
 #include <optional>
@@ -32,6 +33,27 @@
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/FlatVector.h"
+
+// Detect sanitizer builds for guarding death tests.
+#ifdef __has_feature
+#define RE2_BUILDING_WITH_ASAN() __has_feature(address_sanitizer)
+#define RE2_BUILDING_WITH_TSAN() __has_feature(thread_sanitizer)
+#else
+#if defined(__SANITIZE_ADDRESS__) && __SANITIZE_ADDRESS__
+#define RE2_BUILDING_WITH_ASAN() 1
+#else
+#define RE2_BUILDING_WITH_ASAN() 0
+#endif
+#if defined(__SANITIZE_THREAD__) && __SANITIZE_THREAD__
+#define RE2_BUILDING_WITH_TSAN() 1
+#else
+#define RE2_BUILDING_WITH_TSAN() 0
+#endif
+#endif
+
+#if RE2_BUILDING_WITH_TSAN() || RE2_BUILDING_WITH_ASAN()
+#define RE2_BUILDING_WITH_SAN
+#endif
 
 namespace facebook::velox::functions {
 
@@ -520,6 +542,81 @@ TEST_F(Re2FunctionsTest, likePattern) {
 
   testLike("aabbccddeeff", "%aa%bb%", true);
   testLike("aaccddeeff", "%aa%bb%", false);
+}
+
+// Test LikeGeneric with non-constant patterns longer than 12 bytes (non-inline
+// StringView) to exercise the code path where pattern data is stored as a
+// pointer to the vector's string buffer rather than inline in the StringView.
+TEST_F(Re2FunctionsTest, likeGenericWithLongPatterns) {
+  // Patterns >12 bytes to ensure StringView stores a pointer (non-inline).
+  // Fixed pattern.
+  testLike("longfixedpatternvalue", "longfixedpatternvalue", true);
+  testLike("longfixedpatternvalue", "longfixedpatternother", false);
+  // Prefix pattern.
+  testLike("longprefixpatternvalue", "longprefixpattern%", true);
+  testLike("shortvalue", "longprefixpattern%", false);
+  // Suffix pattern.
+  testLike("valuelongsuffixpattern", "%longsuffixpattern", true);
+  testLike("shortvalue", "%longsuffixpattern", false);
+  // Substring pattern.
+  testLike("prefixlongsubstringpatternsuffix", "%longsubstringpattern%", true);
+  testLike("nothinghere", "%longsubstringpattern%", false);
+  // Generic pattern.
+  testLike("a_long_generic_pattern_value", "%long_generic_pattern%", true);
+  testLike("a_short_value", "%long_generic_pattern%", false);
+}
+
+// Verify that copying a pattern string before calling determinePatternKind
+// protects against use-after-free when the underlying StringView buffer is
+// reclaimed. Uses mmap/munmap to simulate the production crash scenario where
+// memory-mapped pages backing pattern data are unmapped under memory pressure,
+// producing a SIGSEGV at a page-aligned address (as seen in T260427308).
+TEST_F(Re2FunctionsTest, likePatternCopyProtectsAgainstDanglingPointer) {
+  // Use a pattern with only literal chars + trailing '%' to get kPrefix kind.
+  // Avoid '_' which is a LIKE single-char wildcard.
+  const std::string pattern = "averylongpatternthatexceedsinlinestorage%";
+  ASSERT_GT(pattern.size(), 12);
+
+  // Allocate a page of memory via mmap (simulates memory-mapped file pages
+  // that back string data in production scans).
+  void* page = mmap(
+      nullptr,
+      4096,
+      PROT_READ | PROT_WRITE,
+      MAP_PRIVATE | MAP_ANONYMOUS,
+      -1,
+      0);
+  ASSERT_NE(page, MAP_FAILED);
+  memcpy(page, pattern.data(), pattern.size());
+
+  // Create a StringView pointing into the mmap'd page (simulates how
+  // FlatVector<StringView> stores pointers to string buffers).
+  StringView patternView(static_cast<const char*>(page), pattern.size());
+
+  // The fix: copy to a local string while the page is still mapped.
+  std::string patternCopy(patternView.data(), patternView.size());
+
+  // Unmap the page (simulates buffer reclamation under memory pressure).
+  // After this, any access to 'page' causes SIGSEGV, exactly matching the
+  // production crash at page-aligned address 0x7fa369c00000.
+  munmap(page, 4096);
+
+  // With the fix (using the copy): works correctly.
+  auto metadata = determinePatternKind(patternCopy, std::nullopt);
+  EXPECT_EQ(metadata.patternKind(), PatternKind::kPrefix);
+  EXPECT_EQ(
+      metadata.fixedPattern(), "averylongpatternthatexceedsinlinestorage");
+
+  // Without the fix (using the unmapped page): SIGSEGV.
+  // Under sanitizers, ASSERT_DEATH may not work reliably (sanitizers
+  // intercept signals and fork() has known issues with ASAN shadow memory).
+#ifndef RE2_BUILDING_WITH_SAN
+  ASSERT_DEATH(
+      determinePatternKind(
+          std::string_view(static_cast<const char*>(page), pattern.size()),
+          std::nullopt),
+      "");
+#endif
 }
 
 TEST_F(Re2FunctionsTest, likeDeterminePatternKind) {
