@@ -973,18 +973,18 @@ TypePtr ReaderBase::convertType(
               "DECIMAL",
               requestedType->toString());
           // Allow decimal widening: precision may be larger and scale may
-          // increase as long as precisionIncrease >= scaleIncrease (matching
-          // Spark's isDecimalTypeMatched rule). Short-to-long decimal crossing
-          // is handled by getDecimalValues via the upcast path.
+          // increase as long as precisionIncrease >= scaleIncrease.
+          // Short-to-long decimal crossing is handled by getDecimalValues
+          // via the upcast path.
           VELOX_CHECK(
               isCompatible(
                   requestedType,
                   isRepeated,
                   [&](const TypePtr& type) {
                     auto [precision, scale] = getDecimalPrecisionScale(*type);
-                    auto precInc = precision - schemaElementPrecision;
+                    auto precisionInc = precision - schemaElementPrecision;
                     auto scaleInc = scale - schemaElementScale;
-                    return scaleInc >= 0 && precInc >= scaleInc;
+                    return scaleInc >= 0 && precisionInc >= scaleInc;
                   }),
               kTypeMappingErrorFmtStr,
               type->toString(),

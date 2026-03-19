@@ -60,10 +60,11 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
     if (logicalType.has_value() && logicalType.value().__isset.INTEGER &&
         !logicalType.value().INTEGER.isSigned) {
       getUnsignedIntValues(rows, requestedType_, result);
-    } else if (requestedType_->isDecimal()) {
-      getDecimalValues(rows, fileType, result);
     } else {
       getIntValues(rows, requestedType_, result);
+      if (requestedType_->isDecimal() && !allNull_) {
+        rescaleDecimalValues(fileType, *result);
+      }
     }
   }
 
@@ -87,45 +88,23 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
   }
 
  private:
-  /// Reads integer values and rescales them to the requested decimal type.
-  /// Handles both INT->Decimal (file stores raw integers, scale from 0) and
-  /// Decimal->Decimal (file stores scaled decimals, scale from file type).
-  void getDecimalValues(
-      const RowSet& rows,
+  // Rescales integer or decimal values to match the requested decimal type.
+  // For INT->Decimal, fileScale is 0; for Decimal->Decimal, fileScale comes
+  // from the file's decimal type.
+  void rescaleDecimalValues(
       const ParquetTypeWithId& fileType,
-      VectorPtr* result) {
-    // For Decimal->Decimal, read as plain integer (BIGINT/HUGEINT) to avoid
-    // applyDecimalScaleMultiplier incorrectly re-scaling already-scaled values.
-    // Use the requested type's physical width for the read type so that
-    // short->long decimal crossing (int64->int128) is handled by
-    // getFlatValues' upcast path.
-    const bool isDecimalToDecimal = fileType.convertedType_.has_value() &&
-        fileType.convertedType_.value() == thrift::ConvertedType::DECIMAL &&
-        fileType.type()->isDecimal();
-
-    const TypePtr readType = isDecimalToDecimal
-        ? (requestedType_->isShortDecimal() ? TypePtr(BIGINT())
-                                            : TypePtr(HUGEINT()))
-        : requestedType_;
-
-    getIntValues(rows, readType, result);
-
-    // allNull_ produces a ConstantVector; skip value rescaling.
-    if (allNull_) {
-      return;
-    }
-
+      VectorPtr& result) {
     int32_t requestedScale = getDecimalPrecisionScale(*requestedType_).second;
-    int32_t fileScale = isDecimalToDecimal
+    int32_t fileScale = fileType.type()->isDecimal()
         ? getDecimalPrecisionScale(*fileType.type()).second
         : 0;
     int32_t scaleAdjust = requestedScale - fileScale;
-    VELOX_CHECK_GE(
+    VELOX_USER_CHECK_GE(
         scaleAdjust,
         0,
         "Parquet does not support scale narrowing: {}",
         scaleAdjust);
-    VELOX_CHECK_LE(
+    VELOX_USER_CHECK_LE(
         scaleAdjust,
         LongDecimalType::kMaxPrecision,
         "Scale adjustment exceeds max decimal precision: {}",
@@ -136,15 +115,12 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
         // Safe to cast: kPowersOfTen[scaleAdjust] fits in int64_t because
         // scaleAdjust <= maxPrecision(18) and 10^18 < 2^63.
         applyDecimalScaleMultiplier<int64_t>(
-            *result,
+            result,
             static_cast<int64_t>(DecimalUtil::kPowersOfTen[scaleAdjust]));
       } else {
         applyDecimalScaleMultiplier<int128_t>(
-            *result, DecimalUtil::kPowersOfTen[scaleAdjust]);
+            result, DecimalUtil::kPowersOfTen[scaleAdjust]);
       }
-    }
-    if (isDecimalToDecimal) {
-      (*result)->setType(requestedType_);
     }
   }
 
