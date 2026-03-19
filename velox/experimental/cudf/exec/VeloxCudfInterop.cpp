@@ -130,7 +130,6 @@ getMetadata(Iterator begin, Iterator end, const std::string& namePrefix) {
     metadata.push_back(cudf::column_metadata(namePrefix + std::to_string(i)));
     metadata.back().children_meta = getMetadata(
         c->child_begin(), c->child_end(), namePrefix + std::to_string(i));
-    std::cout <<"The child metadata size is " << metadata.back().children_meta.size() << std::endl;
     i++;
   }
   return metadata;
@@ -180,7 +179,6 @@ facebook::velox::RowVectorPtr toVeloxColumn(
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
   auto metadata = getMetadata(table.begin(), table.end(), namePrefix);
-  std::cout <<"The input table metadata size " << metadata.size() << std::endl;
   return toVeloxColumn(table, pool, metadata, stream, mr);
 }
 
@@ -439,7 +437,6 @@ struct DispatchColumn {
     auto* arrayVector = vector->as<ArrayVector>();
     VELOX_CHECK_NOT_NULL(arrayVector, "Expected ArrayVector for direct conversion");
     if (!isCompact(*arrayVector) && arrayVector->elements()->type()->isPrimitiveType()) {
-      std::cout <<"array is not compact and primitive type"<< std::endl;
       auto* rawOffsets = arrayVector->rawOffsets();
       auto* rawSizes = arrayVector->rawSizes();
       int32_t totalElements = 0;
@@ -447,8 +444,6 @@ struct DispatchColumn {
       offsets[0] = 0;
       // Step 1: build compact offsets
       for (int i = 0; i < numRows; ++i) {
-        std::cout <<"offsets at index " << i << " " <<rawOffsets[i] << std::endl;
-        std::cout <<"sizes at index " << i << " " <<rawSizes[i] << std::endl;
         totalElements += rawSizes[i];
         offsets[i + 1] = totalElements; 
       }
@@ -460,8 +455,6 @@ struct DispatchColumn {
       for (int i = 0; i < numRows; ++i) {
         auto offset = rawOffsets[i];
         auto size = rawSizes[i];
-        std::cout <<"offsets at index " << i << " " <<offset << std::endl;
-        std::cout <<"sizes at index " << i << " " <<size << std::endl;
         for (int j = 0; j < size; ++j) {
            gatherIndices.push_back(offset + j);
         }
@@ -471,7 +464,6 @@ struct DispatchColumn {
       std::memcpy( indexBuffer->asMutable<vector_size_t>(), gatherIndices.data(), gatherIndices.size() * sizeof(vector_size_t));
       // Use Velox dictionary to compact
       auto compactElements = BaseVector::wrapInDictionary( BufferPtr(nullptr), indexBuffer, gatherIndices.size(), elements);
-      std::cout <<"compactElements is " << compactElements->toString()<< std::endl;
       // Now convert compacted child
       BaseVector::flattenVector(compactElements);
       auto childColumn = convertColumn(compactElements, type->childAt(0), pool);
@@ -489,7 +481,6 @@ struct DispatchColumn {
     }
 
     if (!isCompact(*arrayVector)) {
-      std::cout <<"array is not compact"<< std::endl;
       // Non-compact: accumulate only for non-null rows, always set offset for each row.
       // Need to reorder all the row, fallback to with arrow conversion
       // Wrap the vector in a RowVector for Arrow conversion
@@ -548,8 +539,6 @@ struct DispatchColumn {
       auto childType = type->childAt(i);
       childColumns.push_back(convertColumn(child, childType, pool));
     }
-
-    std::cout << "childColumns size " << childColumns.size() << std::endl;
 
     auto nullBuf = copyNullMask(vector);
     auto nullCount = getNullCount(vector);
