@@ -33,6 +33,8 @@
 #include <cudf/table/table.hpp>
 #include <cudf/types.hpp>
 #include <cudf/utilities/error.hpp>
+#include <cudf/table/table_view.hpp>
+#include <cudf/column/column_view.hpp>
 
 #include <rmm/cuda_stream_view.hpp>
 
@@ -103,22 +105,330 @@ namespace with_arrow {
 
 namespace {
 
+  void setVeloxNulls(
+    const cudf::column_view& col,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr,
+    BufferPtr& nulls) {
+  if (!col.has_nulls()) {
+    return nullptr;
+  }
+
+  auto size = col.size();
+
+  auto* dst = nulls->asMutable<uint64_t>(); // Velox uses bitmask (uint64_t aligned)
+
+  const uint8_t* srcMask = nullptr;
+  std::unique_ptr<cudf::column> tempMask;
+
+  // 🔥 Handle offset (same as Arrow code)
+  if (col.offset() > 0) {
+    tempMask = cudf::detail::copy_bitmask(col, stream, mr);
+    srcMask = tempMask->view().null_mask();
+  } else {
+    srcMask = col.null_mask();
+  }
+
+  size_t bytes = ((size + 7) / 8);
+
+  CUDF_CUDA_TRY(cudaMemcpyAsync(
+      dst,
+      srcMask,
+      bytes,
+      cudaMemcpyDeviceToHost,
+      stream.value()));
+
+  stream.synchronize();
+}
+
+template <typename T>
+VectorPtr makeFlatVectorFromDevice(
+    const cudf::column_view& col,
+    memory::MemoryPool* pool,
+    rmm::cuda_stream_view stream,
+    TypePtr type) {
+  auto size = col.size();
+  auto vec = BaseVector::create(type, size, pool);
+  auto flat = vec->asFlatVector<T>();
+
+  setVeloxNulls(col, stream, mr, flat->mutableNulls(size));
+  char* rawValues = flat->mutableRawValues<char>();
+
+  CUDF_CUDA_TRY(cudaMemcpyAsync(
+      rawValues,
+      col.data<T>(),
+      size * sizeof(T),
+      cudaMemcpyDeviceToHost,
+      stream.value()));
+  return vec;
+}
+
+// CUDA kernel to build StringView array on GPU
+__global__ void build_string_views_kernel(
+    const int32_t* d_offsets,
+    const char* d_chars,
+    StringView* d_stringViews,
+    size_t size)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= size) return;
+
+    int32_t begin = d_offsets[i];
+    int32_t end   = d_offsets[i + 1];
+    d_stringViews[i] = StringView(d_chars + begin, end - begin);
+}
+
+VectorPtr makeStringFlatVectorFromDevice(
+    const cudf::column_view& col,
+    memory::MemoryPool* pool,
+    rmm::cuda_stream_view stream,
+    TypePtr type,
+    rmm::device_async_resource_ref mr) {
+    auto size = scv.size();
+
+    // Allocate device memory for Velox StringView array
+    auto d_stringViews = rmm::device_uvector<StringView>(size, stream);
+
+    // Launch kernel to build StringViews
+    const int threads = 256;
+    const int blocks  = (size + threads - 1) / threads;
+
+    build_string_views_kernel<<<blocks, threads, 0, stream.value()>>>(
+        scv.offsets().data<int32_t>(),
+        scv.chars().data<char>(),
+        d_stringViews.data(),
+        size
+    );
+
+    CUDA_TRY(cudaGetLastError());
+
+    // Allocate Velox FlatVector<StringView> using device memory
+    auto flatVector = BaseVector::create<FlatVector<StringView>>(VARCHAR(), size, pool);
+
+    // Set the device buffer for values directly
+    flatVector->setBuffer(
+        flatVector->mutableRawValues<StringView>(),
+        rmm::device_buffer(d_stringViews.data(), size * sizeof(StringView), stream, rmm::cuda_stream_view{}),
+        size * sizeof(StringView)
+    );
+
+    setVeloxNulls(col, stream, mr, flatVector->mutableNulls(size));
+
+    return vec;
+}
+
+template<>
+VectorPtr makeFlatVectorFromDevice<TypeKind::VARCHAR>(
+    const cudf::column_view& col,
+    memory::MemoryPool* pool,
+    rmm::cuda_stream_view stream,
+    TypePtr type) {
+  return makeStringFlatVectorFromDevice(col, pool, stream, type);
+}
+
+template<>
+VectorPtr makeFlatVectorFromDevice<TypeKind::VARBINARY>(
+    const cudf::column_view& col,
+    memory::MemoryPool* pool,
+    rmm::cuda_stream_view stream,
+    TypePtr type) {
+  return makeStringFlatVectorFromDevice(col, pool, stream, type);
+}
+
+template<>
+VectorPtr makeFlatVectorFromDevice<TypeKind::BOOLEAN>(
+    const cudf::column_view& col,
+    memory::MemoryPool* pool,
+    rmm::cuda_stream_view stream,
+    TypePtr type) {
+  auto size = col.size();
+  auto vec = BaseVector::create(BOOLEAN(), size, pool);
+  auto flat = vec->asFlatVector<bool>();
+
+  // 🔥 GPU: pack bools → bitmask
+  auto [mask, _] =
+      cudf::detail::bools_to_mask(col, stream, mr);
+  // allocate Velox buffer
+  auto raw = flat->mutableRawValues<uint64_t>();
+  size_t bytes = ((size + 7) / 8);
+  // copy packed bits (device → host)
+  CUDF_CUDA_TRY(cudaMemcpyAsync(
+      raw,
+      mask->data(),
+      bytes,
+      cudaMemcpyDeviceToHost,
+      stream.value()));
+
+  // nulls
+  setVeloxNulls(col, stream, mr, flat->mutableNulls(size));
+
+  return vec;
+
+}
+
+VectorPtr toVeloxColumn(
+    const cudf::column_view& col,
+    memory::MemoryPool* pool,
+    const cudf::column_metadata& meta,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref /*mr*/) {
+
+  switch (col.type().id()) {
+
+    case cudf::type_id::INT32:
+      return makeFlatVectorFromDevice<int32_t>(
+          col, pool, stream, INTEGER());
+
+    case cudf::type_id::INT64:
+      return makeFlatVectorFromDevice<int64_t>(
+          col, pool, stream, BIGINT());
+
+    case cudf::type_id::FLOAT32:
+      return makeFlatVectorFromDevice<float>(
+          col, pool, stream, REAL());
+
+    case cudf::type_id::FLOAT64:
+      return makeFlatVectorFromDevice<double>(
+          col, pool, stream, DOUBLE());
+
+    case cudf::type_id::BOOL8:
+      return makeFlatVectorFromDevice<bool>(
+          col, pool, stream, BOOLEAN());
+
+    // ========================
+    // LIST → ArrayVector
+    // ========================
+    case cudf::type_id::LIST: {
+      auto offsetsCol = col.child(0);
+      auto childCol = col.child(1);
+
+      int size = col.size();
+
+      std::vector<int32_t> offsets(size + 1);
+
+      CUDF_CUDA_TRY(cudaMemcpyAsync(
+          offsets.data(),
+          offsetsCol.data<int32_t>(),
+          (size + 1) * sizeof(int32_t),
+          cudaMemcpyDeviceToHost,
+          stream.value()));
+
+      stream.synchronize();
+
+      auto offsetsBuf = AlignedBuffer::allocate<vector_size_t>(size, pool);
+      auto sizesBuf = AlignedBuffer::allocate<vector_size_t>(size, pool);
+
+      auto* rawOffsets = offsetsBuf->asMutable<vector_size_t>();
+      auto* rawSizes = sizesBuf->asMutable<vector_size_t>();
+
+      for (int i = 0; i < size; ++i) {
+        rawOffsets[i] = offsets[i];
+        rawSizes[i] = offsets[i + 1] - offsets[i];
+      }
+
+      auto childVec = toVeloxColumn(
+          childCol,
+          pool,
+          meta.children.empty() ? cudf::column_metadata{} : meta.children[0],
+          stream,
+          nullptr);
+
+      return std::make_shared<ArrayVector>(
+          pool,
+          ARRAY(childVec->type()),
+          nullptr,
+          size,
+          offsetsBuf,
+          sizesBuf,
+          childVec);
+    }
+
+    // ========================
+    // STRUCT → RowVector
+    // ========================
+    case cudf::type_id::STRUCT: {
+      std::vector<VectorPtr> children;
+      std::vector<std::string> names;
+      std::vector<TypePtr> types;
+
+      for (size_t i = 0; i < col.num_children(); ++i) {
+        auto child = toVeloxColumn(
+            col.child(i),
+            pool,
+            meta.children.size() > i ? meta.children[i]
+                                     : cudf::column_metadata{},
+            stream,
+            nullptr);
+
+        children.push_back(child);
+
+        std::string name =
+            (meta.children.size() > i && !meta.children[i].name.empty())
+            ? meta.children[i].name
+            : "c" + std::to_string(i);
+
+        names.push_back(name);
+        types.push_back(child->type());
+      }
+
+      auto rowType = std::make_shared<RowType>(names, types);
+
+      return std::make_shared<RowVector>(
+          pool,
+          rowType,
+          nullptr,
+          col.size(),
+          std::move(children));
+    }
+
+    default:
+      VELOX_FAIL("Unsupported cudf type: {}", static_cast<int>(col.type().id()));
+  }
+}
+
+// ========================
+// Entry point
+// ========================
 RowVectorPtr toVeloxColumn(
     const cudf::table_view& table,
     memory::MemoryPool* pool,
     const std::vector<cudf::column_metadata>& metadata,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
-  auto arrowDeviceArray = cudf::to_arrow_host(table, stream, mr);
-  auto& arrowArray = arrowDeviceArray->array;
 
-  auto arrowSchema = cudf::to_arrow_schema(table, metadata);
-  auto veloxTable = importFromArrowAsOwner(*arrowSchema, arrowArray, pool);
-  // BaseVector to RowVector
-  auto castedPtr =
-      std::dynamic_pointer_cast<facebook::velox::RowVector>(veloxTable);
-  VELOX_CHECK_NOT_NULL(castedPtr);
-  return castedPtr;
+  std::vector<VectorPtr> children;
+  std::vector<std::string> names;
+  std::vector<TypePtr> types;
+
+  for (size_t i = 0; i < table.num_columns(); ++i) {
+    const auto& col = table.column(i);
+
+    std::string name =
+        (i < metadata.size() && !metadata[i].name.empty())
+        ? metadata[i].name
+        : "c" + std::to_string(i);
+
+    auto vec = toVeloxColumn(
+        col,
+        pool,
+        i < metadata.size() ? metadata[i] : cudf::column_metadata{},
+        stream,
+        mr);
+
+    children.push_back(vec);
+    names.push_back(name);
+    types.push_back(vec->type());
+  }
+  stream.synchronize();
+
+  auto rowType = std::make_shared<RowType>(names, types);
+
+  return std::make_shared<RowVector>(
+      pool,
+      rowType,
+      nullptr,
+      table.num_rows(),
+      std::move(children));
 }
 
 template <typename Iterator>
