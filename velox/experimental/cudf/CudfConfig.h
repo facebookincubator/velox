@@ -53,6 +53,9 @@ struct CudfConfig {
   /// Query session configs for the cuDF Operators.
   static constexpr const char* kCudfTopNBatchSize{"cudf.topk_batch_size"};
 
+  static constexpr const char* kCudfEnableEnforceSingleRow{
+      "cudf.enable_enforce_single_row"};
+
   /// Singleton CudfConfig instance.
   /// Clients must set the configs below before invoking registerCudf().
   static CudfConfig& getInstance();
@@ -129,6 +132,10 @@ struct CudfConfig {
   // Register the Spark or Presto functions, the value could be either spark or
   // presto.
   std::string functionEngine{"presto"};
+
+  /// Enable GPU acceleration for EnforceSingleRow operator.
+  /// Set to false to measure performance impact by forcing CPU fallback.
+  bool enableEnforceSingleRow{true};
 };
 
 } // namespace facebook::velox::cudf_velox
