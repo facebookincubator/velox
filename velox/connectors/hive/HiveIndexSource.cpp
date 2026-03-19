@@ -17,6 +17,7 @@
 
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/time/Timer.h"
+#include "velox/connectors/hive/FileIndexReader.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/exec/OperatorUtils.h"
@@ -222,19 +223,20 @@ BufferPtr filterIndices(
 }
 } // namespace
 
+/// Iterates over results from a SplitIndexReader and applies HiveIndexSource's
+/// format-agnostic orchestration: remaining filter evaluation and output
+/// projection.
 class HiveLookupIterator : public IndexSource::ResultIterator {
  public:
   HiveLookupIterator(
       std::shared_ptr<HiveIndexSource> indexSource,
-      HiveIndexReader* indexReader,
+      SplitIndexReader* indexReader,
       IndexSource::Request request,
-      vector_size_t maxRowsPerRequest)
+      SplitIndexReader::Options options)
       : indexSource_(std::move(indexSource)),
         indexReader_(indexReader),
         request_(std::move(request)),
-        maxRowsPerRequest_(maxRowsPerRequest) {}
-
-  ~HiveLookupIterator() override = default;
+        options_(options) {}
 
   bool hasNext() override {
     return state_ != State::kEnd;
@@ -247,10 +249,9 @@ class HiveLookupIterator : public IndexSource::ResultIterator {
       return nullptr;
     }
 
-    // Set the request on first call.
+    // Initialize lookup on first call.
     if (state_ == State::kInit) {
-      indexReader_->startLookup(
-          request_, {.maxRowsPerRequest = maxRowsPerRequest_});
+      indexReader_->startLookup(request_, options_);
       setState(State::kRead);
     }
 
@@ -365,9 +366,9 @@ class HiveLookupIterator : public IndexSource::ResultIterator {
 
   const std::shared_ptr<HiveIndexSource> indexSource_;
   // Raw pointer to index reader for lookup operations.
-  HiveIndexReader* const indexReader_;
+  SplitIndexReader* const indexReader_;
   const IndexSource::Request request_;
-  const vector_size_t maxRowsPerRequest_;
+  const SplitIndexReader::Options options_;
 
   State state_{State::kInit};
   // Cached empty result for reuse when no rows pass the remaining filter.
@@ -643,26 +644,60 @@ void HiveIndexSource::init(
 
 void HiveIndexSource::addSplits(
     std::vector<std::shared_ptr<ConnectorSplit>> splits) {
-  VELOX_CHECK_NULL(
-      indexReader_, "addSplits can only be called once for HiveIndexSource");
-  std::vector<std::shared_ptr<const HiveConnectorSplit>> hiveSplits;
-  hiveSplits.reserve(splits.size());
+  VELOX_CHECK(
+      readers_.empty(),
+      "addSplits can only be called once for HiveIndexSource");
+
+  // Group splits by file format.
+  std::unordered_map<
+      dwio::common::FileFormat,
+      std::vector<std::shared_ptr<const HiveConnectorSplit>>>
+      splitsByFormat;
   for (auto& split : splits) {
     auto hiveSplit = checkedPointerCast<const HiveConnectorSplit>(split);
-    VELOX_CHECK_EQ(
-        hiveSplit->fileFormat,
-        dwio::common::FileFormat::NIMBLE,
-        "HiveIndexSource only supports Nimble file format");
-    hiveSplits.push_back(hiveSplit);
+    auto format = hiveSplit->fileFormat;
+    splitsByFormat[format].push_back(std::move(hiveSplit));
   }
-  createHiveIndexReader(std::move(hiveSplits));
+
+  auto* registry = IndexReaderFactoryRegistry::getInstance();
+  for (auto& [format, formatSplits] : splitsByFormat) {
+    const auto* factory = registry->getFactory(format);
+    if (factory != nullptr) {
+      createCustomIndexReader(*factory, std::move(formatSplits));
+    } else {
+      // Fall back to built-in FileIndexReader.
+      VELOX_CHECK_EQ(
+          format,
+          dwio::common::FileFormat::NIMBLE,
+          "No IndexReaderFactory registered for format: {}",
+          dwio::common::toString(format));
+      // Create one reader per split. FileIndexReader currently supports a
+      // single file.
+      for (auto& nimbleSplit : formatSplits) {
+        createFileIndexReader({std::move(nimbleSplit)});
+      }
+    }
+  }
+
+  VELOX_CHECK(!readers_.empty(), "No index readers created from splits");
 }
 
 std::shared_ptr<IndexSource::ResultIterator> HiveIndexSource::lookup(
     const Request& request) {
-  VELOX_CHECK_NOT_NULL(indexReader_, "No index reader available for lookup");
+  VELOX_CHECK(!readers_.empty(), "No index readers available for lookup");
+  VELOX_CHECK_EQ(
+      readers_.size(),
+      1,
+      "Multi-reader lookup not yet supported. "
+      "Partition routing will be added in a follow-up.");
+
   return std::make_shared<HiveLookupIterator>(
-      shared_from_this(), indexReader_.get(), request, maxRowsPerIndexRequest_);
+      shared_from_this(),
+      readers_[0].get(),
+      request,
+      SplitIndexReader::Options{
+          .maxRowsPerRequest =
+              static_cast<vector_size_t>(maxRowsPerIndexRequest_)});
 }
 
 std::unordered_map<std::string, RuntimeMetric> HiveIndexSource::runtimeStats() {
@@ -670,6 +705,17 @@ std::unordered_map<std::string, RuntimeMetric> HiveIndexSource::runtimeStats() {
   if (remainingFilterTimeNs_ != 0) {
     stats[std::string(Connector::kTotalRemainingFilterTime)] =
         RuntimeMetric(remainingFilterTimeNs_, RuntimeCounter::Unit::kNanos);
+  }
+  // Merge stats from all readers.
+  for (auto& reader : readers_) {
+    for (auto& [key, metric] : reader->runtimeStats()) {
+      auto it = stats.find(key);
+      if (it != stats.end()) {
+        it->second.merge(metric);
+      } else {
+        stats.emplace(key, metric);
+      }
+    }
   }
   return stats;
 }
@@ -729,22 +775,36 @@ RowVectorPtr HiveIndexSource::projectOutput(
       pool_, outputType_, BufferPtr(nullptr), numRows, outputColumns);
 }
 
-void HiveIndexSource::createHiveIndexReader(
+void HiveIndexSource::createCustomIndexReader(
+    const IndexReaderFactory& factory,
     std::vector<std::shared_ptr<const HiveConnectorSplit>> splits) {
   VELOX_CHECK(!splits.empty(), "No splits available");
-  indexReader_ = std::make_unique<HiveIndexReader>(
-      std::move(splits),
-      tableHandle_,
-      connectorQueryCtx_,
-      hiveConfig_,
-      scanSpec_,
-      indexLookupConditions_,
-      requestType_,
-      readerOutputType_,
-      ioStatistics_,
-      ioStats_,
-      fileHandleFactory_,
-      executor_);
+  auto reader = factory(splits, tableHandle_, connectorQueryCtx_);
+  VELOX_CHECK_NOT_NULL(
+      reader,
+      "IndexReaderFactory returned null for format: {}",
+      dwio::common::toString(splits[0]->fileFormat));
+  readers_.push_back(std::move(reader));
+}
+
+void HiveIndexSource::createFileIndexReader(
+    std::vector<std::shared_ptr<const HiveConnectorSplit>> splits) {
+  VELOX_CHECK(!splits.empty(), "No splits available");
+  readers_.push_back(
+      std::make_unique<FileIndexReader>(
+          std::move(splits),
+          tableHandle_,
+          connectorQueryCtx_,
+          hiveConfig_,
+          scanSpec_,
+          indexLookupConditions_,
+          requestType_,
+          readerOutputType_,
+          ioStatistics_,
+          ioStats_,
+          fileHandleFactory_,
+          executor_,
+          maxRowsPerIndexRequest_));
 }
 
 } // namespace facebook::velox::connector::hive

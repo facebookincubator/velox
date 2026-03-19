@@ -695,7 +695,7 @@ TEST_F(VectorFuzzerTest, time) {
   // Test flat TIME vector.
   auto timeVector = fuzzer.fuzzFlat(TIME());
   ASSERT_EQ(VectorEncoding::Simple::FLAT, timeVector->encoding());
-  ASSERT_TRUE(timeVector->type()->isTime());
+  ASSERT_TRUE(timeVector->type()->equivalent(*TIME()));
   ASSERT_EQ(vectorSize, timeVector->size());
 
   auto flatTimeVector = timeVector->as<FlatVector<int64_t>>();
@@ -704,7 +704,7 @@ TEST_F(VectorFuzzerTest, time) {
   // Test constant TIME vector.
   auto constTimeVector = fuzzer.fuzzConstant(TIME(), vectorSize);
   ASSERT_EQ(VectorEncoding::Simple::CONSTANT, constTimeVector->encoding());
-  ASSERT_TRUE(constTimeVector->type()->isTime());
+  ASSERT_TRUE(constTimeVector->type()->equivalent(*TIME()));
   ASSERT_EQ(vectorSize, constTimeVector->size());
 
   // Verify constant TIME value is in valid range.
@@ -719,7 +719,7 @@ TEST_F(VectorFuzzerTest, time) {
   auto dictTimeVector =
       fuzzer.fuzzDictionary(fuzzer.fuzzFlat(TIME(), 100), 500);
   ASSERT_EQ(VectorEncoding::Simple::DICTIONARY, dictTimeVector->encoding());
-  ASSERT_TRUE(dictTimeVector->type()->isTime());
+  ASSERT_TRUE(dictTimeVector->type()->equivalent(*TIME()));
 
   // Verify all TIME values in dictionary are in valid range.
   auto dictVector = dictTimeVector->as<DictionaryVector<int64_t>>();

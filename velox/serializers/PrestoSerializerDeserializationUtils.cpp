@@ -180,6 +180,7 @@ void readRowVectorStructNulls(
 
 std::string readLengthPrefixedString(ByteInputStream* source) {
   int32_t size = source->read<int32_t>();
+  VELOX_CHECK_GE(size, 0, "Invalid serialized string size: {}", size);
   std::string value;
   value.resize(size);
   source->readBytes(&value[0], size);

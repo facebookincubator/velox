@@ -187,8 +187,13 @@ class Operator : public BaseRuntimeStatWriter {
       "spillDeserializationWallNanos"};
 
   /// The vector serde kind used by an operator for shuffle. The recorded
-  /// runtime stats value is the corresponding enum value.
+  /// runtime stats value is the int64_t returned by shuffleSerdeStatsValue().
   static constexpr std::string_view kShuffleSerdeKind{"shuffleSerdeKind"};
+
+  /// Maps a serde name to an int64_t for stat reporting.
+  /// Returns 0 for "Presto", 1 for "CompactRow", 2 for "UnsafeRow", -1
+  /// otherwise.
+  static int64_t shuffleSerdeStatsValue(std::string_view name);
 
   /// The compression kind used by an operator for shuffle. The recorded
   /// runtime stats value is the corresponding enum value.

@@ -69,6 +69,7 @@ bool read<bool>(std::istream& in) {
 template <>
 std::string read<std::string>(std::istream& in) {
   auto size = read<int32_t>(in);
+  VELOX_CHECK_GE(size, 0, "Invalid serialized string size: {}", size);
   std::string data;
   data.resize(size);
   in.read(data.data(), size);

@@ -19,6 +19,9 @@
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/Task.h"
+#include "velox/serializers/CompactRowSerializer.h"
+#include "velox/serializers/PrestoSerializer.h"
+#include "velox/serializers/UnsafeRowSerializer.h"
 
 namespace facebook::velox::exec {
 
@@ -27,6 +30,7 @@ Destination::Destination(
     const std::string& taskId,
     int destination,
     VectorSerde* serde,
+    const std::string& serdeKind,
     VectorSerde::Options* serdeOptions,
     memory::MemoryPool* pool,
     bool eagerFlush,
@@ -34,6 +38,7 @@ Destination::Destination(
     : taskId_(taskId),
       destination_(destination),
       serde_(serde),
+      serdeKind_(serdeKind),
       serdeOptions_(serdeOptions),
       pool_(pool),
       eagerFlush_(eagerFlush),
@@ -79,14 +84,14 @@ BlockingReason Destination::advance(
   createVectorStreamGroup(output);
 
   const auto rows = folly::Range(&rows_[firstRow], rowIdx_ - firstRow);
-  if (serde_->kind() == "CompactRow") {
+  if (serdeKind_ == serializer::CompactRowVectorSerde::name()) {
     VELOX_CHECK_NOT_NULL(outputCompactRow);
     current_->append(*outputCompactRow, rows, sizes);
-  } else if (serde_->kind() == "UnsafeRow") {
+  } else if (serdeKind_ == serializer::spark::UnsafeRowVectorSerde::name()) {
     VELOX_CHECK_NOT_NULL(outputUnsafeRow);
     current_->append(*outputUnsafeRow, rows, sizes);
   } else {
-    VELOX_CHECK_EQ(serde_->kind(), "Presto");
+    VELOX_CHECK_EQ(serdeKind_, serializer::presto::PrestoVectorSerde::name());
     current_->append(output, rows, scratch);
   }
 
@@ -228,6 +233,7 @@ PartitionedOutput::PartitionedOutput(
           eagerFlush ||
           ctx->task->queryCtx()->queryConfig().partitionedOutputEagerFlush()),
       serde_(getNamedVectorSerde(planNode->serdeKind())),
+      serdeKind_(planNode->serdeKind()),
       serdeOptions_(getVectorSerdeOptions(
           common::stringToCompressionKind(operatorCtx_->driverCtx()
                                               ->queryConfig()
@@ -274,9 +280,9 @@ void PartitionedOutput::initializeInput(RowVectorPtr input) {
     output_->childAt(i)->loadedVector();
   }
 
-  if (serde_->kind() == "CompactRow") {
+  if (serdeKind_ == serializer::CompactRowVectorSerde::name()) {
     outputCompactRow_ = std::make_unique<row::CompactRow>(output_);
-  } else if (serde_->kind() == "UnsafeRow") {
+  } else if (serdeKind_ == serializer::spark::UnsafeRowVectorSerde::name()) {
     outputUnsafeRow_ = std::make_unique<row::UnsafeRowFast>(output_);
   }
 }
@@ -290,6 +296,7 @@ void PartitionedOutput::initializeDestinations() {
               taskId,
               i,
               serde_,
+              serdeKind_,
               serdeOptions_.get(),
               pool(),
               eagerFlush_,
@@ -319,16 +326,16 @@ void PartitionedOutput::estimateRowSizes() {
   raw_vector<vector_size_t> storage(pool());
   const auto numbers = iota(numInput, storage);
   const auto rows = folly::Range(numbers, numInput);
-  if (serde_->kind() == "CompactRow") {
+  if (serdeKind_ == serializer::CompactRowVectorSerde::name()) {
     VELOX_CHECK_NOT_NULL(outputCompactRow_);
     serde_->estimateSerializedSize(
         outputCompactRow_.get(), rows, sizePointers_.data());
-  } else if (serde_->kind() == "UnsafeRow") {
+  } else if (serdeKind_ == serializer::spark::UnsafeRowVectorSerde::name()) {
     VELOX_CHECK_NOT_NULL(outputUnsafeRow_);
     serde_->estimateSerializedSize(
         outputUnsafeRow_.get(), rows, sizePointers_.data());
   } else {
-    VELOX_CHECK_EQ(serde_->kind(), "Presto");
+    VELOX_CHECK_EQ(serdeKind_, serializer::presto::PrestoVectorSerde::name());
     serde_->estimateSerializedSize(
         output_.get(), rows, sizePointers_.data(), scratch_);
   }
@@ -511,8 +518,7 @@ void PartitionedOutput::close() {
     auto lockedStats = stats_.wlock();
     lockedStats->addRuntimeStat(
         Operator::kShuffleSerdeKind,
-        RuntimeCounter(
-            static_cast<int64_t>(VectorSerde::kindByName(serde_->kind()))));
+        RuntimeCounter(Operator::shuffleSerdeStatsValue(serdeKind_)));
     lockedStats->addRuntimeStat(
         Operator::kShuffleCompressionKind,
         RuntimeCounter(static_cast<int64_t>(serdeOptions_->compressionKind)));

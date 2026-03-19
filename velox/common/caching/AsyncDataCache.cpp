@@ -137,6 +137,26 @@ void AsyncDataCacheEntry::initialize(FileCacheKey key) {
   }
 }
 
+std::vector<folly::Range<char*>> AsyncDataCacheEntry::dataRanges(
+    size_t length) {
+  std::vector<folly::Range<char*>> buffers;
+  if (tinyData() == nullptr) {
+    buffers.reserve(data_.numRuns());
+    uint64_t offsetInRuns = 0;
+    for (int i = 0; i < data_.numRuns(); ++i) {
+      auto run = data_.runAt(i);
+      const uint64_t bytes =
+          run.numPages() * memory::AllocationTraits::kPageSize;
+      const uint64_t readSize = std::min(bytes, length - offsetInRuns);
+      buffers.emplace_back(run.data<char>(), readSize);
+      offsetInRuns += readSize;
+    }
+  } else {
+    buffers.emplace_back(tinyData(), size_);
+  }
+  return buffers;
+}
+
 void AsyncDataCacheEntry::makeEvictable() {
   accessStats_.lastUse = 0;
   accessStats_.numUses = 0;
@@ -266,6 +286,15 @@ bool CacheShard::exists(RawFileCacheKey key) const {
     return true;
   }
   return false;
+}
+
+bool CacheShard::testingIsEvictable(RawFileCacheKey key) const {
+  std::lock_guard<std::mutex> l(mutex_);
+  auto it = entryMap_.find(key);
+  if (it == entryMap_.end()) {
+    return false;
+  }
+  return it->second->testingIsEvictable();
 }
 
 CachePin CacheShard::initEntry(
@@ -780,6 +809,11 @@ void AsyncDataCache::makeEvictable(RawFileCacheKey key) {
 bool AsyncDataCache::exists(RawFileCacheKey key) const {
   const int shard = std::hash<RawFileCacheKey>()(key) & shardMask_;
   return shards_[shard]->exists(key);
+}
+
+bool AsyncDataCache::testingIsEvictable(RawFileCacheKey key) const {
+  const int shard = std::hash<RawFileCacheKey>()(key) & shardMask_;
+  return shards_[shard]->testingIsEvictable(key);
 }
 
 bool AsyncDataCache::makeSpace(
