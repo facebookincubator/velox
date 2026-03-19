@@ -51,9 +51,20 @@ OperatorAdapterRegistry& OperatorAdapterRegistry::getInstance() {
   return instance;
 }
 
-void OperatorAdapterRegistry::registerAdapter(
-    std::unique_ptr<OperatorAdapter> adapter) {
+bool OperatorAdapterRegistry::registerAdapter(
+    std::unique_ptr<OperatorAdapter> adapter,
+    bool overwrite) {
+  for (auto& existing : adapters_) {
+    if (existing->name() == adapter->name()) {
+      if (!overwrite) {
+        return false;
+      }
+      existing = std::move(adapter);
+      return true;
+    }
+  }
   adapters_.push_back(std::move(adapter));
+  return true;
 }
 
 const OperatorAdapter* OperatorAdapterRegistry::findAdapter(
