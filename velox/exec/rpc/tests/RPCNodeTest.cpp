@@ -26,7 +26,6 @@
 
 #include "velox/core/PlanNode.h"
 
-#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "velox/common/memory/Memory.h"
@@ -173,7 +172,10 @@ TEST_F(RPCNodeTest, functionDispatchPerRow) {
   for (const auto& [idx, _] : futures) {
     rowIndices.push_back(idx);
   }
-  EXPECT_THAT(rowIndices, testing::ElementsAre(0, 1, 2));
+  ASSERT_EQ(rowIndices.size(), 3);
+  EXPECT_EQ(rowIndices[0], 0);
+  EXPECT_EQ(rowIndices[1], 1);
+  EXPECT_EQ(rowIndices[2], 2);
 
   // Resolve futures and verify responses.
   for (auto& [rowIdx, future] : futures) {
