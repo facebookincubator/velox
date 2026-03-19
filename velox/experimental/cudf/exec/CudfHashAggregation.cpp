@@ -86,6 +86,20 @@ void checkZeroColumnGlobalCountStarSupport(bool supported) {
       supported, "Zero-column global aggregation only supports count(*)");
 }
 
+column_index_t getInputIndex(
+    const core::AggregationNode& aggregationNode,
+    const core::AggregationNode::Aggregate& aggregate,
+    size_t aggregateIndex) {
+  if (aggregationNode.sources()[0]->outputType()->size() == 0 &&
+      aggregationNode.groupingKeys().empty() &&
+      isCountStarAggregate(aggregate)) {
+    return kConstantChannel;
+  }
+
+  return static_cast<column_index_t>(
+      aggregationNode.groupingKeys().size() + aggregateIndex);
+}
+
 bool hasOnlyConstantArguments(const core::CallTypedExpr& call) {
   return !call.inputs().empty() &&
       std::all_of(
@@ -202,7 +216,8 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
       int64_t count;
       if (isZeroColumnCountStar()) { // Matches count(*) with zero columns.
         count = hasInputColumns ? input.num_rows() : inputRowCount_;
-      } else if (countsAllRows()) { // Matches count(*) with one or more
+      } else if (countsAllRows()) { // Matches count(*), or
+                                    // count(non NULL constant) with one or more
                                     // columns.
         checkZeroColumnGlobalCountStarSupport(hasInputColumns);
         count = input.num_rows();
@@ -877,23 +892,14 @@ AggregationInputChannels buildAggregationInputChannels(
 
     VELOX_CHECK(aggInputs.size() <= 1);
     if (aggInputs.empty()) {
-      if (isCountFunctionName(aggregate.call->name())) {
-        if (inputRowSchema->size() == 0) {
-          checkZeroColumnGlobalCountStarSupport(
-              isCountStarAggregate(aggregate));
-          // Zero-column global count(*) is a special case handle in the
-          // aggregator.
-          aggInputs.push_back(selectFallbackChannel);
-        } else {
-          // Keep count(*) using a real input when a column exists and use a
-          // synthetic (non-null) constant {1} to maintain count semantics.
-          aggInputs.push_back(selectFallbackChannel);
-          result.constants[i] = BaseVector::createConstant(
-              BIGINT(), Variant(int64_t{1}), 1, operatorCtx.pool());
-        }
-      } else {
-        aggInputs.push_back(selectFallbackChannel);
+      if (isCountFunctionName(aggregate.call->name()) &&
+          inputRowSchema->size() > 0) {
+        // Keep count(*) using a real input when a column exists and use a
+        // synthetic (non-null) constant {1} to maintain count semantics.
+        result.constants[i] = BaseVector::createConstant(
+            BIGINT(), Variant(int64_t{1}), 1, operatorCtx.pool());
       }
+      aggInputs.push_back(selectFallbackChannel);
     }
 
     if (aggregate.distinct) {
@@ -913,8 +919,6 @@ auto toAggregators(
     std::vector<VectorPtr> const& constants) {
   bool const isGlobal = aggregationNode.groupingKeys().empty();
   const auto numKeys = aggregationNode.groupingKeys().size();
-  const bool isZeroColumnInput =
-      aggregationNode.sources()[0]->outputType()->size() == 0;
 
   std::vector<std::unique_ptr<cudf_velox::CudfHashAggregation::Aggregator>>
       aggregators;
@@ -923,12 +927,9 @@ auto toAggregators(
     // Positional mapping: inputs are keys first, then aggregate columns in
     // aggregate order.
     auto const& aggregate = aggregationNode.aggregates()[i];
-    auto inputIndex = static_cast<uint32_t>(numKeys + i);
+    auto const inputIndex = getInputIndex(aggregationNode, aggregate, i);
     auto const kind = aggregate.call->name();
     auto const constant = constants[i];
-    if (isZeroColumnInput && isGlobal && isCountStarAggregate(aggregate)) {
-      inputIndex = kConstantChannel;
-    }
     auto const companionStep = getCompanionStep(kind, step);
     const auto originalName = getOriginalName(kind);
     const auto resultType = exec::isPartialOutput(companionStep)
