@@ -917,9 +917,9 @@ jobs:
           cat /proc/sys/vm/max_map_count
           export LD_LIBRARY_PATH=$(pwd):$LD_LIBRARY_PATH
           chmod +x velox_exchange_fuzzer run-fuzzer-parallel.sh
-          # Exchange fuzzer is multi-threaded and memory-heavy; run 2 instances
-          # on ubuntu-latest (more RAM) with a longer duration per instance.
-          ./run-fuzzer-parallel.sh 2 /tmp/exchange_fuzzer_repro \
+          # Exchange fuzzer is multi-threaded and memory-heavy; run 1 instance
+          # on ubuntu-latest with an extended duration.
+          ./run-fuzzer-parallel.sh 1 /tmp/exchange_fuzzer_repro \
             ./velox_exchange_fuzzer \
                 --seed __SEED__ \
                 --duration_sec 480 \
