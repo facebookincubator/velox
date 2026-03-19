@@ -18,6 +18,7 @@
 
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/SplitReader.h"
+#include "velox/connectors/hive/iceberg/DeletionVectorReader.h"
 #include "velox/connectors/hive/iceberg/PositionalDeleteFileReader.h"
 
 namespace facebook::velox::connector::hive::iceberg {
@@ -101,5 +102,8 @@ class IcebergSplitReader : public SplitReader {
   std::list<std::unique_ptr<PositionalDeleteFileReader>>
       positionalDeleteFileReaders_;
   BufferPtr deleteBitmap_;
+
+  /// Readers for Iceberg V3 deletion vectors (Puffin-encoded roaring bitmaps).
+  std::list<std::unique_ptr<DeletionVectorReader>> deletionVectorReaders_;
 };
 } // namespace facebook::velox::connector::hive::iceberg
