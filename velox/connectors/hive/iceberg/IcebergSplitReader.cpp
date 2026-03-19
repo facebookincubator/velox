@@ -108,6 +108,13 @@ void IcebergSplitReader::prepareSplit(
   for (const auto& deleteFile : deleteFiles) {
     if (deleteFile.content == FileContent::kPositionalDeletes) {
       if (deleteFile.recordCount > 0) {
+        if (shouldSkipBySequenceNumber(
+                deleteFile.dataSequenceNumber,
+                icebergSplit->dataSequenceNumber,
+                /*isEqualityDelete=*/false)) {
+          continue;
+        }
+
         // Skip the delete file if all delete positions are before this split.
         // TODO: Skip delete files where all positions are after the split, if
         // split row count becomes available.
@@ -190,6 +197,13 @@ void IcebergSplitReader::prepareSplit(
       }
     } else if (deleteFile.content == FileContent::kDeletionVector) {
       if (deleteFile.recordCount > 0) {
+        if (shouldSkipBySequenceNumber(
+                deleteFile.dataSequenceNumber,
+                icebergSplit->dataSequenceNumber,
+                /*isEqualityDelete=*/false)) {
+          continue;
+        }
+
         deletionVectorReaders_.push_back(
             std::make_unique<DeletionVectorReader>(
                 deleteFile, splitOffset_, connectorQueryCtx_->memoryPool()));
