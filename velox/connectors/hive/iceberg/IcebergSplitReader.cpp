@@ -28,6 +28,29 @@
 using namespace facebook::velox::dwio::common;
 
 namespace facebook::velox::connector::hive::iceberg {
+namespace {
+
+/// Returns true if a delete/update file should be skipped based on sequence
+/// number conflict resolution. Per the Iceberg spec (V2+):
+///   - Equality deletes apply when deleteSeqNum > dataSeqNum (i.e., skip when
+///     deleteSeqNum <= dataSeqNum).
+///   - Positional deletes, deletion vectors, and positional updates apply when
+///     deleteSeqNum >= dataSeqNum (i.e., skip when deleteSeqNum < dataSeqNum),
+///     because same-snapshot positional deletes SHOULD apply.
+///   - A sequence number of 0 means "unassigned" (legacy V1 tables) and
+///     disables filtering (never skip).
+bool shouldSkipBySequenceNumber(
+    int64_t fileSeqNum,
+    int64_t dataSeqNum,
+    bool isEqualityDelete) {
+  if (fileSeqNum <= 0 || dataSeqNum <= 0) {
+    return false;
+  }
+  return isEqualityDelete ? (fileSeqNum <= dataSeqNum)
+                          : (fileSeqNum < dataSeqNum);
+}
+
+} // namespace
 
 IcebergSplitReader::IcebergSplitReader(
     const std::shared_ptr<const hive::HiveConnectorSplit>& hiveSplit,
@@ -120,6 +143,13 @@ void IcebergSplitReader::prepareSplit(
       }
     } else if (deleteFile.content == FileContent::kEqualityDeletes) {
       if (deleteFile.recordCount > 0 && !deleteFile.equalityFieldIds.empty()) {
+        if (shouldSkipBySequenceNumber(
+                deleteFile.dataSequenceNumber,
+                icebergSplit->dataSequenceNumber,
+                /*isEqualityDelete=*/true)) {
+          continue;
+        }
+
         // Resolve equalityFieldIds to column names and types. In Iceberg,
         // field IDs for top-level columns are assigned sequentially starting
         // from 1, matching the column order in the table schema.
