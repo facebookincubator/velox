@@ -313,6 +313,16 @@ TEST(SignatureBinderTest, decimals) {
       ASSERT_FALSE(binder1.tryBind());
     }
 
+    // Non-decimal arguments with the same number of type parameters as
+    // DECIMAL (e.g. MAP has 2 type parameters).
+    {
+      const std::vector<TypePtr> argTypes{
+          MAP(VARCHAR(), BIGINT()), MAP(VARCHAR(), BIGINT())};
+      exec::SignatureBinder binder(*signature, argTypes);
+      std::vector<Coercion> coercions;
+      ASSERT_FALSE(binder.tryBindWithCoercions(coercions));
+    }
+
     // Resolving invalid ShortDecimal/LongDecimal arguments returns nullptr.
     {
       // Missing constraints.

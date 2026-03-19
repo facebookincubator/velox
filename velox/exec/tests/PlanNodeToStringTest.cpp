@@ -21,6 +21,7 @@
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
+#include "velox/serializers/RegisterAllVectorSerdes.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 #include <gtest/gtest.h>
@@ -37,6 +38,7 @@ class PlanNodeToStringTest : public testing::Test,
     functions::prestosql::registerAllScalarFunctions();
     aggregate::prestosql::registerAllAggregateFunctions();
     parse::registerTypeResolver();
+    registerAllNamedVectorSerdes();
     data_ = makeRowVector(
         {makeFlatVector<int16_t>({0, 1, 2, 3, 4}),
          makeFlatVector<int32_t>({0, 1, 2, 3, 4}),
@@ -1054,6 +1056,37 @@ TEST_F(PlanNodeToStringTest, tableWrite) {
         "-- TableWriteMerge[3][stats[INTERMEDIATE [c2]: min(\"a0\"), max(\"a1\")]] -> rows:BIGINT, fragments:VARBINARY, commitcontext:VARBINARY, c2:BIGINT, a0:SMALLINT, a1:INTEGER\n",
         plan->toString(true, false));
   }
+}
+
+TEST_F(PlanNodeToStringTest, countingJoin) {
+  auto makePlan = [&](core::JoinType joinType) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    return PlanBuilder(planNodeIdGenerator)
+        .values({data_})
+        .hashJoin(
+            {"c0"},
+            {"u_c0"},
+            PlanBuilder(planNodeIdGenerator)
+                .values({data_})
+                .project({"c0 as u_c0"})
+                .planNode(),
+            "",
+            {"c0", "c1"},
+            joinType)
+        .planNode();
+  };
+
+  auto plan = makePlan(core::JoinType::kCountingAnti);
+  ASSERT_EQ("-- HashJoin[3]\n", plan->toString());
+  ASSERT_EQ(
+      "-- HashJoin[3][COUNTING ANTI c0=u_c0] -> c0:SMALLINT, c1:INTEGER\n",
+      plan->toString(true, false));
+
+  plan = makePlan(core::JoinType::kCountingLeftSemiFilter);
+  ASSERT_EQ("-- HashJoin[3]\n", plan->toString());
+  ASSERT_EQ(
+      "-- HashJoin[3][COUNTING LEFT SEMI (FILTER) c0=u_c0] -> c0:SMALLINT, c1:INTEGER\n",
+      plan->toString(true, false));
 }
 
 } // namespace

@@ -35,9 +35,13 @@ class HiveTableHandle;
 class HiveColumnHandle;
 class HiveConfig;
 
-/// Handles index lookups for Hive tables with cluster indexes. Focuses on:
+/// Handles index lookups for a single Nimble file with cluster indexes.
+/// Focuses on:
 /// - Creating index bounds from index lookup conditions
 /// - Delegating actual index lookups to the format-specific IndexReader
+///
+/// Each FileIndexReader operates on exactly one file (split). HiveIndexSource
+/// handles multi-split orchestration (union, partition routing) on top.
 ///
 /// The format-specific IndexReader (e.g., SelectiveNimbleIndexReader) handles:
 /// - Encoding keys into format-specific representations
@@ -46,7 +50,7 @@ class HiveConfig;
 class FileIndexReader : public SplitIndexReader {
  public:
   FileIndexReader(
-      const std::vector<std::shared_ptr<const HiveConnectorSplit>>& hiveSplits,
+      std::shared_ptr<const HiveConnectorSplit> hiveSplit,
       const std::shared_ptr<const HiveTableHandle>& hiveTableHandle,
       const ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<const HiveConfig>& hiveConfig,

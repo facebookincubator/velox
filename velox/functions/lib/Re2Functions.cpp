@@ -943,8 +943,12 @@ class LikeGeneric final : public exec::VectorFunction {
     auto applyRow = [&](const StringView& input,
                         const StringView& pattern,
                         const std::optional<char>& escapeChar) -> bool {
+      // Copy the pattern to a local string to protect against potential
+      // use-after-free if the underlying string buffer is reclaimed by memory
+      // arbitration under memory pressure.
+      std::string patternCopy(pattern.data(), pattern.size());
       PatternMetadata patternMetadata =
-          determinePatternKind(std::string_view(pattern), escapeChar);
+          determinePatternKind(patternCopy, escapeChar);
 
       if (isAscii) {
         switch (patternMetadata.patternKind()) {

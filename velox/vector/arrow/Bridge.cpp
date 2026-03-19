@@ -626,12 +626,19 @@ VectorPtr createStringFlatVectorFromUtf8View(
     auto* view = reinterpret_cast<const uint32_t*>(&(
         reinterpret_cast<const uint64_t*>(arrowArray.buffers[1]))[2 * idx_64]);
     rawStringViews[2 * idx_64] = *reinterpret_cast<const uint64_t*>(view);
-    if (view[0] > 12)
+    if (view[0] > 12) {
+      const auto bufferIndex = view[2];
+      VELOX_CHECK_LT(
+          bufferIndex,
+          num_buffers - 3,
+          "Arrow Utf8View buffer index out of range");
       rawStringViews[2 * idx_64 + 1] =
-          reinterpret_cast<uint64_t>(arrowArray.buffers[2 + view[2]]) + view[3];
-    else
+          reinterpret_cast<uint64_t>(arrowArray.buffers[2 + bufferIndex]) +
+          view[3];
+    } else {
       rawStringViews[2 * idx_64 + 1] =
           *reinterpret_cast<const uint64_t*>(&view[2]);
+    }
   }
 
   return std::make_shared<FlatVector<StringView>>(

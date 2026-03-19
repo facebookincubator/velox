@@ -51,6 +51,7 @@ HashTable<ignoreNullKeys>::HashTable(
     bool allowDuplicates,
     bool isJoinBuild,
     bool hasProbedFlag,
+    bool hasCountFlag,
     uint32_t minTableSizeForParallelJoinBuild,
     memory::MemoryPool* pool,
     uint64_t bloomFilterMaxSize)
@@ -78,6 +79,7 @@ HashTable<ignoreNullKeys>::HashTable(
       allowDuplicates,
       isJoinBuild,
       hasProbedFlag,
+      hasCountFlag,
       hashMode_ != HashMode::kHash,
       /*useListRowIndex=*/false,
       pool);
