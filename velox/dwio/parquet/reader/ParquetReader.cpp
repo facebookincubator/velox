@@ -77,9 +77,7 @@ bool isCompatible(
 
 // Checks if a decimal type has enough integer precision to hold all values
 // of the given Parquet physical int type.
-bool hasEnoughDecimalPrecision(
-    const TypePtr& type,
-    int32_t minIntegerDigits) {
+bool hasEnoughDecimalPrecision(const TypePtr& type, int32_t minIntegerDigits) {
   if (!type->isDecimal()) {
     return false;
   }
