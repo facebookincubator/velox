@@ -56,24 +56,19 @@ set(
   FilterToExpressionTest.cpp
   FunctionResolutionTest.cpp
   HashBitRangeTest.cpp
-  HashJoinBridgeTest.cpp
-  HashJoinTest.cpp
   HashPartitionFunctionTest.cpp
   HashTableTest.cpp
-  IndexLookupJoinTest.cpp
   LimitTest.cpp
   LocalPartitionTest.cpp
   MarkDistinctTest.cpp
   MarkSortedTest.cpp
   EnforceDistinctTest.cpp
   MemoryReclaimerTest.cpp
-  MergeJoinTest.cpp
   MergeTest.cpp
   MergerTest.cpp
   MixedUnionTest.cpp
   MixedUnionWithTableScanTest.cpp
   MultiFragmentTest.cpp
-  NestedLoopJoinTest.cpp
   OrderByTest.cpp
   OperatorTraceTest.cpp
   OutputBufferManagerTest.cpp
@@ -165,6 +160,40 @@ velox_add_grouped_tests(
   PREFIX velox_exec_test
   SOURCES ${VELOX_EXEC_TEST_SOURCES}
   DEPS ${VELOX_EXEC_TEST_DEPS}
+  EXTRA_SOURCES Main.cpp
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+set(
+  VELOX_EXEC_JOIN_TEST_SOURCES
+  HashJoinBridgeTest.cpp
+  HashJoinTest.cpp
+  IndexLookupJoinTest.cpp
+  MergeJoinTest.cpp
+  NestedLoopJoinTest.cpp
+)
+
+set(
+  VELOX_EXEC_JOIN_TEST_DEPS
+  velox_dwio_common_test_utils
+  velox_exec
+  velox_exec_test_lib
+  velox_memory
+  velox_test_util
+  velox_type_test_lib
+  velox_vector_fuzzer
+  Folly::folly
+  GTest::gtest
+  GTest::gtest_main
+  GTest::gmock
+  fmt::fmt
+  re2::re2
+)
+
+velox_add_grouped_tests(
+  PREFIX velox_exec_join_test
+  SOURCES ${VELOX_EXEC_JOIN_TEST_SOURCES}
+  DEPS ${VELOX_EXEC_JOIN_TEST_DEPS}
   EXTRA_SOURCES Main.cpp
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
