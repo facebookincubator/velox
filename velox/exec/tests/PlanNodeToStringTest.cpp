@@ -1058,5 +1058,36 @@ TEST_F(PlanNodeToStringTest, tableWrite) {
   }
 }
 
+TEST_F(PlanNodeToStringTest, countingJoin) {
+  auto makePlan = [&](core::JoinType joinType) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    return PlanBuilder(planNodeIdGenerator)
+        .values({data_})
+        .hashJoin(
+            {"c0"},
+            {"u_c0"},
+            PlanBuilder(planNodeIdGenerator)
+                .values({data_})
+                .project({"c0 as u_c0"})
+                .planNode(),
+            "",
+            {"c0", "c1"},
+            joinType)
+        .planNode();
+  };
+
+  auto plan = makePlan(core::JoinType::kCountingAnti);
+  ASSERT_EQ("-- HashJoin[3]\n", plan->toString());
+  ASSERT_EQ(
+      "-- HashJoin[3][COUNTING ANTI c0=u_c0] -> c0:SMALLINT, c1:INTEGER\n",
+      plan->toString(true, false));
+
+  plan = makePlan(core::JoinType::kCountingLeftSemiFilter);
+  ASSERT_EQ("-- HashJoin[3]\n", plan->toString());
+  ASSERT_EQ(
+      "-- HashJoin[3][COUNTING LEFT SEMI (FILTER) c0=u_c0] -> c0:SMALLINT, c1:INTEGER\n",
+      plan->toString(true, false));
+}
+
 } // namespace
 } // namespace facebook::velox::exec
