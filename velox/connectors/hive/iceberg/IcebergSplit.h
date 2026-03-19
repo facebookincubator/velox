@@ -25,6 +25,13 @@ namespace facebook::velox::connector::hive::iceberg {
 struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
   std::vector<IcebergDeleteFile> deleteFiles;
 
+  /// Data sequence number of the base data file in this split. Per the Iceberg
+  /// spec (V2+), an equality delete file should only apply to data files whose
+  /// data sequence number is strictly less than the delete file's sequence
+  /// number. A value of 0 means "unassigned" (legacy V1 tables) and disables
+  /// sequence number filtering.
+  int64_t dataSequenceNumber{0};
+
   HiveIcebergSplit(
       const std::string& connectorId,
       const std::string& filePath,
@@ -55,7 +62,8 @@ struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
       bool cacheable = true,
       std::vector<IcebergDeleteFile> deletes = {},
       const std::unordered_map<std::string, std::string>& infoColumns = {},
-      std::optional<FileProperties> fileProperties = std::nullopt);
+      std::optional<FileProperties> fileProperties = std::nullopt,
+      int64_t dataSequenceNumber = 0);
 };
 
 } // namespace facebook::velox::connector::hive::iceberg
