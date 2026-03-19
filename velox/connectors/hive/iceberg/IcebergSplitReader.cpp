@@ -115,8 +115,12 @@ void IcebergSplitReader::prepareSplit(
                 splitOffset_,
                 hiveSplit_->connectorId));
       }
+    } else if (deleteFile.content == FileContent::kEqualityDeletes) {
+      VELOX_NYI("Equality deletes are not yet supported.");
     } else {
-      VELOX_NYI();
+      VELOX_NYI(
+          "Unsupported delete file content type: {}",
+          static_cast<int>(deleteFile.content));
     }
   }
 }

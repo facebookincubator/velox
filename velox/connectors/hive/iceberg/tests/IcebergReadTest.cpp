@@ -42,6 +42,17 @@ using namespace facebook::velox::common::testutil;
 
 namespace facebook::velox::connector::hive::iceberg {
 
+namespace {
+/// Return the file size for the given path, properly closing the FILE handle.
+size_t getTestFileSize(const std::string& path) {
+  FILE* f = std::fopen(path.c_str(), "r");
+  VELOX_CHECK_NOT_NULL(f, "Failed to open file: {}", path);
+  auto size = testing::internal::GetFileSize(f);
+  std::fclose(f);
+  return size;
+}
+} // namespace
+
 static const char* kIcebergConnectorId = "test-iceberg";
 
 class HiveIcebergTest : public HiveConnectorTestBase {
@@ -241,8 +252,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
               deleteFilePath,
               fileFomat_,
               deleteFilePaths[deleteFileName].first,
-              testing::internal::GetFileSize(
-                  std::fopen(deleteFilePath.c_str(), "r")));
+              getTestFileSize(deleteFilePath));
           deleteFiles.push_back(icebergDeleteFile);
         }
       }
@@ -354,8 +364,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
         deleteFilePath->getPath(),
         fileFomat_,
         deletedPositionSize,
-        testing::internal::GetFileSize(
-            std::fopen(deleteFilePath->getPath().c_str(), "r")));
+        getTestFileSize(deleteFilePath->getPath()));
     auto fileSize = filesystems::getFileSystem(path, nullptr)
                         ->openFileForRead(path)
                         ->size();
@@ -934,8 +943,7 @@ TEST_F(HiveIcebergTest, skipDeleteFileByPositionUpperBound) {
       deleteFilePath->getPath(),
       dwio::common::FileFormat::DWRF,
       3,
-      testing::internal::GetFileSize(
-          std::fopen(deleteFilePath->getPath().c_str(), "r")),
+      getTestFileSize(deleteFilePath->getPath()),
       {},
       {},
       {{posColumn->id, encodedUpperBound}});
@@ -1004,4 +1012,5 @@ TEST_F(HiveIcebergTest, positionalDeleteFileWithRowGroupFilter) {
       0);
 }
 #endif
+
 } // namespace facebook::velox::connector::hive::iceberg
