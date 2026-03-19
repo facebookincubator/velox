@@ -40,6 +40,10 @@ struct TestParam {
       : outputKind(_outputKind), serdeKind(_serdeKind) {}
 };
 
+inline void PrintTo(const TestParam& param, std::ostream* os) {
+  *os << fmt::format("{}_{}", param.outputKind, param.serdeKind);
+}
+
 class OutputBufferManagerTest : public testing::Test {
  protected:
   OutputBufferManagerTest() : serdeKind_("Presto") {
@@ -436,7 +440,7 @@ class OutputBufferManagerTest : public testing::Test {
   const std::string serdeKind_;
   std::shared_ptr<folly::Executor> executor_{
       std::make_shared<folly::CPUThreadPoolExecutor>(
-          folly::hardware_concurrency())};
+          folly::available_concurrency())};
   std::shared_ptr<facebook::velox::memory::MemoryPool> pool_;
   std::shared_ptr<OutputBufferManager> bufferManager_;
   RowTypePtr rowType_;

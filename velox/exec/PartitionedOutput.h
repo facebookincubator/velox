@@ -33,6 +33,7 @@ class Destination {
       const std::string& taskId,
       int destination,
       VectorSerde* serde,
+      const std::string& serdeKind,
       VectorSerde::Options* options,
       memory::MemoryPool* pool,
       bool eagerFlush,
@@ -114,6 +115,7 @@ class Destination {
   const std::string taskId_;
   const int destination_;
   VectorSerde* const serde_;
+  const std::string serdeKind_;
   VectorSerde::Options* const serdeOptions_;
   memory::MemoryPool* const pool_;
   const bool eagerFlush_;
@@ -239,6 +241,7 @@ class PartitionedOutput : public Operator {
   const int64_t maxBufferedBytes_;
   const bool eagerFlush_;
   VectorSerde* const serde_;
+  const std::string serdeKind_;
   const std::unique_ptr<VectorSerde::Options> serdeOptions_;
 
   BlockingReason blockingReason_{BlockingReason::kNotBlocked};

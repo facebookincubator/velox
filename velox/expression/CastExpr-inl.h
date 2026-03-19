@@ -388,12 +388,27 @@ VectorPtr CastExpr::applyDecimalToFloatCast(
   const auto simpleInput = input.as<SimpleVector<FromNativeType>>();
   const auto scaleFactor = DecimalUtil::kPowersOfTen[precisionScale.second];
   applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
-    const auto output =
-        util::Converter<ToKind>::tryCast(simpleInput->valueAt(row))
-            .thenOrThrow(folly::identity, [&](const Status& status) {
-              VELOX_USER_FAIL("{}", status.message());
-            });
-    resultBuffer[row] = output / scaleFactor;
+    const auto unscaledValue = simpleInput->valueAt(row);
+    // Avoid precision loss: float has ~7 significant digits; casting unscaled
+    // int128 to float first loses precision for values with 8+ digits (e.g.
+    // 113751964). Divide in double then cast to float so result is correct.
+    To finalValue;
+    if constexpr (ToKind == TypeKind::REAL) {
+      const auto output =
+          util::Converter<TypeKind::DOUBLE>::tryCast(unscaledValue)
+              .thenOrThrow(folly::identity, [&](const Status& status) {
+                VELOX_USER_FAIL("{}", status.message());
+              });
+      finalValue = static_cast<To>(output / scaleFactor);
+    } else {
+      const auto output =
+          util::Converter<ToKind>::tryCast(unscaledValue)
+              .thenOrThrow(folly::identity, [&](const Status& status) {
+                VELOX_USER_FAIL("{}", status.message());
+              });
+      finalValue = output / scaleFactor;
+    }
+    resultBuffer[row] = finalValue;
   });
   return result;
 }
@@ -489,7 +504,11 @@ VectorPtr CastExpr::applyDecimalToVarcharCast(
     char inlined[StringView::kInlineSize];
     applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
       auto actualSize = DecimalUtil::castToString<FromNativeType>(
-          simpleInput->valueAt(row), scale, rowSize, inlined);
+          simpleInput->valueAt(row),
+          scale,
+          rowSize,
+          inlined,
+          hooks_->isScientific());
       flatResult->setNoCopy(row, StringView(inlined, actualSize));
     });
     return result;
@@ -501,7 +520,11 @@ VectorPtr CastExpr::applyDecimalToVarcharCast(
 
   applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
     auto actualSize = DecimalUtil::castToString<FromNativeType>(
-        simpleInput->valueAt(row), scale, rowSize, rawBuffer);
+        simpleInput->valueAt(row),
+        scale,
+        rowSize,
+        rawBuffer,
+        hooks_->isScientific());
     flatResult->setNoCopy(row, StringView(rawBuffer, actualSize));
     if (!StringView::isInline(actualSize)) {
       // If string view is inline, corresponding bytes on the raw string buffer

@@ -574,9 +574,13 @@ if(NOT TARGET gflags::gflags)
 endif()
 
 if(${gflags_SOURCE} STREQUAL "BUNDLED")
-  # we force glog from source to avoid issues with a system version built
-  # against another gflags version (which is likely)
-  set(glog_SOURCE BUNDLED)
+  # Allow explicit glog_SOURCE override (e.g. when system glog is built
+  # against the same gflags version as BUNDLED).
+  if(DEFINED ENV{glog_SOURCE})
+    set(glog_SOURCE $ENV{glog_SOURCE})
+  else()
+    set(glog_SOURCE BUNDLED)
+  endif()
 else()
   set(glog_SOURCE SYSTEM)
 endif()

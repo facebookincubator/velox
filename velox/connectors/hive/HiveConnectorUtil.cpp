@@ -644,20 +644,20 @@ void configureReaderOptions(
   switch (hiveSplit->fileFormat) {
     case dwio::common::FileFormat::DWRF:
     case dwio::common::FileFormat::ORC:
-      readerOptions.setFooterEstimatedSize(
+      readerOptions.setFooterSpeculativeIoSize(
           hiveConfig->orcFooterSpeculativeIoSize(sessionProperties));
       break;
     case dwio::common::FileFormat::PARQUET:
-      readerOptions.setFooterEstimatedSize(
+      readerOptions.setFooterSpeculativeIoSize(
           hiveConfig->parquetFooterSpeculativeIoSize(sessionProperties));
       break;
     case dwio::common::FileFormat::NIMBLE:
-      readerOptions.setFooterEstimatedSize(
+      readerOptions.setFooterSpeculativeIoSize(
           hiveConfig->nimbleFooterSpeculativeIoSize(sessionProperties));
       break;
     default:
       // Use ORC default for unknown formats.
-      readerOptions.setFooterEstimatedSize(
+      readerOptions.setFooterSpeculativeIoSize(
           hiveConfig->orcFooterSpeculativeIoSize(sessionProperties));
       break;
   }

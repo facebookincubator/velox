@@ -24,6 +24,12 @@
 #include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
+#include "velox/connectors/hive/iceberg/IcebergDataFileStatistics.h"
+
+#ifdef VELOX_ENABLE_PARQUET
+#include "velox/connectors/hive/iceberg/IcebergParquetStatsCollector.h"
+#endif
+
 #include "velox/connectors/hive/iceberg/IcebergConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergPartitionName.h"
 #include "velox/connectors/hive/iceberg/PartitionSpec.h"
@@ -31,35 +37,6 @@
 #include "velox/functions/iceberg/Register.h"
 
 namespace facebook::velox::connector::hive::iceberg {
-
-namespace {
-
-IcebergColumnHandlePtr convertToIcebergColumnHandle(
-    const HiveColumnHandlePtr& hiveColumn) {
-  static int32_t fieldIdCounter = 1;
-
-  std::function<parquet::ParquetFieldId(const TypePtr&, int32_t&)> makeField =
-      [&makeField](
-          const TypePtr& type, int32_t& fieldId) -> parquet::ParquetFieldId {
-    const int32_t currentId = fieldId++;
-    std::vector<parquet::ParquetFieldId> children;
-    children.reserve(type->size());
-    for (auto i = 0; i < type->size(); ++i) {
-      children.push_back(makeField(type->childAt(i), fieldId));
-    }
-    return parquet::ParquetFieldId{currentId, children};
-  };
-
-  auto field = makeField(hiveColumn->dataType(), fieldIdCounter);
-
-  return std::make_shared<const IcebergColumnHandle>(
-      hiveColumn->name(),
-      hiveColumn->columnType(),
-      hiveColumn->dataType(),
-      field);
-}
-
-} // namespace
 
 /// Represents a request for Iceberg write.
 class IcebergInsertTableHandle final : public HiveInsertTableHandle {
@@ -183,8 +160,8 @@ class IcebergDataSink : public HiveDataSink {
   // base HiveDataSink writer options with Iceberg-specific settings:
   // - Sets timestamp timezone to nullopt (UTC) for Iceberg compliance.
   // - Sets timestamp precision to microseconds.
-  std::shared_ptr<dwio::common::WriterOptions> createWriterOptions()
-      const override;
+  std::shared_ptr<dwio::common::WriterOptions> createWriterOptions(
+      size_t writerIndex) const override;
 
   // Extracts partition values for a specific writer to be included in the
   // commit message. Converts the transformed partition values from columnar
@@ -193,6 +170,10 @@ class IcebergDataSink : public HiveDataSink {
   // values for the given writer index) for JSON serialization.
   // Returns nullptr for null partition values.
   folly::dynamic makeCommitPartitionValue(uint32_t writerIndex) const;
+
+  void rotateWriter(size_t index) override;
+
+  void closeInternal() override;
 
   // Iceberg partition specification defining how the table is partitioned.
   // Contains partition fields with source column names, transform types
@@ -240,6 +221,23 @@ class IcebergDataSink : public HiveDataSink {
   // folly::dynamic array of values across all partition fields), ready for JSON
   // serialization.
   std::vector<folly::dynamic> commitPartitionValue_;
+
+  // Statistics for all data files written by this sink, organized by writer
+  // index and file index within each writer. These statistics are populated
+  // during rotateWriter() (for rotated files) and during closeInternal()
+  // (for the final file of each writer). These metrics are subsequently used
+  // to construct Iceberg commit messages.
+  // Outer vector: indexed by writer index (same as writerInfo_).
+  // Inner vector: one entry per file written by that writer (including
+  // rotated files and the final file). Each entry corresponds to one
+  // individual data file.
+  std::vector<std::vector<IcebergDataFileStatisticsPtr>> dataFileStats_;
+
+  const IcebergInsertTableHandlePtr icebergInsertTableHandle_;
+
+#ifdef VELOX_ENABLE_PARQUET
+  std::shared_ptr<IcebergParquetStatsCollector> parquetStatsCollector_;
+#endif
 };
 
 } // namespace facebook::velox::connector::hive::iceberg

@@ -19,7 +19,6 @@
 #include "velox/dwio/common/Reader.h"
 #include "velox/dwio/common/ReaderFactory.h"
 #include "velox/dwio/parquet/reader/Metadata.h"
-#include "velox/dwio/parquet/reader/ParquetStatsContext.h"
 
 namespace facebook::velox::dwio::common {
 
@@ -92,9 +91,7 @@ class ParquetReader : public dwio::common::Reader {
   std::optional<uint64_t> numberOfRows() const override;
 
   std::unique_ptr<dwio::common::ColumnStatistics> columnStatistics(
-      uint32_t index) const override {
-    return nullptr;
-  }
+      uint32_t index) const override;
 
   const velox::RowTypePtr& rowType() const override;
 

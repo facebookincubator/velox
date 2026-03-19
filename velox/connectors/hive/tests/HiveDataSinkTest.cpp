@@ -74,7 +74,7 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
     setupMemoryPools();
 
     spillExecutor_ = std::make_unique<folly::IOThreadPoolExecutor>(
-        folly::hardware_concurrency());
+        folly::available_concurrency());
   }
 
   void TearDown() override {

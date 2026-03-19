@@ -57,9 +57,7 @@ std::string BufferInputStream::toString() const {
 }
 
 bool BufferInputStream::atEnd() const {
-  if (current_ == nullptr) {
-    return false;
-  }
+  VELOX_DCHECK_NOT_NULL(current_);
   if (current_->position < current_->size) {
     return false;
   }
@@ -77,9 +75,7 @@ size_t BufferInputStream::size() const {
 }
 
 size_t BufferInputStream::remainingSize() const {
-  if (ranges_.empty()) {
-    return 0;
-  }
+  VELOX_DCHECK(!ranges_.empty());
   const auto* lastRange = &ranges_.back();
   auto* cur = current_;
   size_t remainingBytes = cur->availableBytes();
@@ -90,10 +86,8 @@ size_t BufferInputStream::remainingSize() const {
 }
 
 std::streampos BufferInputStream::tellp() const {
-  if (ranges_.empty()) {
-    return 0;
-  }
-  assert(current_);
+  VELOX_DCHECK(!ranges_.empty());
+  VELOX_DCHECK_NOT_NULL(current_);
   int64_t size = 0;
   for (auto& range : ranges_) {
     if (&range == current_) {
@@ -105,9 +99,7 @@ std::streampos BufferInputStream::tellp() const {
 }
 
 void BufferInputStream::seekp(std::streampos position) {
-  if (ranges_.empty() && position == 0) {
-    return;
-  }
+  VELOX_DCHECK(!ranges_.empty());
   int64_t toSkip = position;
   for (auto& range : ranges_) {
     if (toSkip <= range.size) {

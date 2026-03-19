@@ -31,7 +31,7 @@ class CacheTTLControllerTest : public ::testing::Test {
  protected:
   void SetUp() override {
     allocator_ = std::make_shared<MmapAllocator>(
-        MmapAllocator::Options{.capacity = 1024L * 1024L});
+        MemoryAllocator::Options{.capacity = 1024L * 1024L});
     cache_ = AsyncDataCache::create(allocator_.get());
   }
 

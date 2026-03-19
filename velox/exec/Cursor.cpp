@@ -275,7 +275,7 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
       : TaskCursorBase(
             params,
             std::make_shared<folly::CPUThreadPoolExecutor>(
-                folly::hardware_concurrency())),
+                folly::available_concurrency())),
         maxDrivers_{params.maxDrivers},
         numConcurrentSplitGroups_{params.numConcurrentSplitGroups},
         numSplitGroups_{params.numSplitGroups} {
@@ -853,7 +853,7 @@ class TaskDebuggerParallelCursor : public TaskDebuggerCursorBase {
       : TaskDebuggerCursorBase(
             params,
             std::make_shared<folly::CPUThreadPoolExecutor>(
-                folly::hardware_concurrency())),
+                folly::available_concurrency())),
         maxDrivers_(params.maxDrivers),
         numConcurrentSplitGroups_(params.numConcurrentSplitGroups) {
     // Installs the required trace provider.

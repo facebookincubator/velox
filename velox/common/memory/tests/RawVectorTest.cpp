@@ -26,6 +26,10 @@ struct TestParam {
   bool useMemoryPool{false};
 };
 
+inline void PrintTo(const TestParam& param, std::ostream* os) {
+  *os << (param.useMemoryPool ? "withPool" : "noPool");
+}
+
 class RawVectorTest : public testing::WithParamInterface<TestParam>,
                       public testing::Test {
  protected:

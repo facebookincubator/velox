@@ -23,12 +23,12 @@
 #include "velox/expression/fuzzer/ExpressionFuzzer.h"
 #include "velox/expression/fuzzer/FuzzerRunner.h"
 #include "velox/expression/fuzzer/SpecialFormSignatureGenerator.h"
-#include "velox/functions/prestosql/fuzzer/DistinctFromArgTypesGenerator.h"
 #include "velox/functions/prestosql/fuzzer/DivideArgTypesGenerator.h"
-#include "velox/functions/prestosql/fuzzer/FloorAndRoundArgTypesGenerator.h"
+#include "velox/functions/prestosql/fuzzer/FloorCeilRoundArgTypesGenerator.h"
 #include "velox/functions/prestosql/fuzzer/ModulusArgTypesGenerator.h"
 #include "velox/functions/prestosql/fuzzer/MultiplyArgTypesGenerator.h"
 #include "velox/functions/prestosql/fuzzer/PlusMinusArgTypesGenerator.h"
+#include "velox/functions/prestosql/fuzzer/SkipIPAddressArgTypesGenerator.h"
 
 #include "velox/functions/prestosql/fuzzer/SortArrayTransformer.h"
 #include "velox/functions/prestosql/fuzzer/TruncateArgTypesGenerator.h"
@@ -76,11 +76,16 @@ std::unordered_map<std::string, std::shared_ptr<ArgTypesGenerator>>
         {"minus", std::make_shared<PlusMinusArgTypesGenerator>()},
         {"multiply", std::make_shared<MultiplyArgTypesGenerator>()},
         {"divide", std::make_shared<DivideArgTypesGenerator>()},
-        {"floor", std::make_shared<FloorAndRoundArgTypesGenerator>()},
-        {"round", std::make_shared<FloorAndRoundArgTypesGenerator>()},
+        {"floor", std::make_shared<FloorCeilRoundArgTypesGenerator>()},
+        {"ceil", std::make_shared<FloorCeilRoundArgTypesGenerator>()},
+        {"round", std::make_shared<FloorCeilRoundArgTypesGenerator>()},
         {"mod", std::make_shared<ModulusArgTypesGenerator>()},
         {"truncate", std::make_shared<TruncateArgTypesGenerator>()},
-        {"distinct_from", std::make_shared<DistinctFromArgTypesGenerator>()}};
+        // Block IPADDRESS in containers for functions whose hash-based
+        // deduplication calls compareTo() on Int128ArrayBlock, which is not
+        // implemented. See: https://github.com/prestodb/presto/issues/26836
+        {"distinct_from", std::make_shared<SkipIPAddressArgTypesGenerator>()},
+        {"array_union", std::make_shared<SkipIPAddressArgTypesGenerator>()}};
 
 std::unordered_map<std::string, std::shared_ptr<ExprTransformer>>
     exprTransformers = {
@@ -302,6 +307,7 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "array_subset", // Velox-only function, not available in Presto
     "map_values_in_range", // Velox-only function, not available in Presto
     "transform_with_index", // Velox-only function, not available in Presto
+    "dot_product", // Velox-only function, not available in Presto
     "remap_keys", // Velox-only function, not available in Presto
     "map_intersect", // Velox-only function, not available in Presto
     "map_keys_overlap", // Velox-only function, not available in Presto

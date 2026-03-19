@@ -1648,6 +1648,89 @@ TEST_F(ParquetTableScanTest, reusedLazyVectors) {
       .assertResults(expectedRowVector);
 }
 
+// Verify that entire Parquet files are pruned based on file-level column
+// statistics when the filter eliminates all data in the file.
+TEST_F(ParquetTableScanTest, statsBasedFileSkipping) {
+  WriterOptions options;
+  std::vector<std::string> filePaths;
+  std::vector<RowVectorPtr> dataVectors;
+  const vector_size_t numRows = 100;
+  filePaths.push_back(TempFilePath::create()->getPath());
+  dataVectors.push_back(makeRowVector(
+      {"c0", "c1", "c2"},
+      {
+          makeFlatVector<int64_t>(numRows, [](auto row) { return row; }),
+          makeFlatVector<double>(
+              numRows, [](auto row) { return static_cast<double>(row); }),
+          makeFlatVector<StringView>(
+              numRows,
+              [](auto row) {
+                static std::vector<StringView> values = {"a", "b", "c", "d"};
+                return values[row % values.size()];
+              }),
+      }));
+  // File 1: integers [0, 99], doubles [0.0, 99.0], strings ["a".."d"].
+  writeToParquetFile(filePaths.back(), dataVectors, options);
+
+  filePaths.push_back(TempFilePath::create()->getPath());
+  dataVectors.push_back(makeRowVector(
+      {"c0", "c1", "c2"},
+      {
+          makeFlatVector<int64_t>(numRows, [](auto row) { return row + 200; }),
+          makeFlatVector<double>(numRows, [](auto row) { return row + 200; }),
+          makeFlatVector<StringView>(
+              numRows,
+              [](auto row) {
+                static std::vector<StringView> values = {"p", "q", "r", "s"};
+                return values[row % values.size()];
+              }),
+      }));
+  // File 2: integers [200, 299], doubles [200.0, 299.0], strings ["p".."s"].
+  writeToParquetFile(filePaths.back(), {dataVectors.back()}, options);
+
+  createDuckDbTable(dataVectors);
+
+  auto makeSplits = [&]() {
+    std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
+    for (const auto& path : filePaths) {
+      splits.push_back(makeSplit(path));
+    }
+    return splits;
+  };
+
+  auto testFileSkipping = [&](const std::string& filter,
+                              int32_t expectedSkipped,
+                              int32_t expectedProcessed) {
+    SCOPED_TRACE(filter);
+    auto plan = PlanBuilder(pool_.get())
+                    .tableScan(dataVectors.back()->rowType(), {filter})
+                    .planNode();
+    auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                    .splits(makeSplits())
+                    .assertResults("SELECT * FROM tmp WHERE " + filter);
+    auto stats =
+        task->taskStats().pipelineStats[0].operatorStats[0].runtimeStats;
+    EXPECT_EQ(stats["skippedSplits"].sum, expectedSkipped);
+    EXPECT_EQ(stats["processedSplits"].sum, expectedProcessed);
+  };
+
+  // Neither file has values > 1000, both files skipped.
+  testFileSkipping("c0 > 1000", 2, 0);
+  // Neither file has values < 0, both files skipped.
+  testFileSkipping("c0 < 0", 2, 0);
+  // Low-range file (max=99) is skipped, high-range file is read.
+  testFileSkipping("c0 >= 200", 1, 1);
+  // High-range file (min=200) is skipped, low-range file is read.
+  testFileSkipping("c0 <= 99", 1, 1);
+  // Double column: both files skipped.
+  testFileSkipping("c1 > 500.0", 2, 0);
+  // String column: low-range has ["a".."d"], high-range has ["p".."s"], both
+  // skipped.
+  testFileSkipping("c2 = 'z'", 2, 0);
+  // Matches both files, no files skipped.
+  testFileSkipping("c0 >= 0", 0, 2);
+}
+
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   folly::Init init{&argc, &argv, false};

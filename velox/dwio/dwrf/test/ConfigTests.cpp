@@ -78,6 +78,10 @@ struct ConfigTestParams {
   std::vector<uint32_t> expectedCols{}; // do we expect the spec to be valid
 };
 
+inline void PrintTo(const ConfigTestParams& param, std::ostream* os) {
+  *os << "cols:" << param.inputCols;
+}
+
 TEST(ConfigTests, writerOptionsDefaultConfig) {
   WriterOptions options;
   const facebook::velox::config::ConfigBase base({});

@@ -23,6 +23,9 @@
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/Expr.h"
+#include "velox/serializers/CompactRowSerializer.h"
+#include "velox/serializers/PrestoSerializer.h"
+#include "velox/serializers/UnsafeRowSerializer.h"
 
 using facebook::velox::common::testutil::TestValue;
 
@@ -76,6 +79,20 @@ OperatorCtx::createConnectorQueryCtx(
   connectorQueryCtx->setRowSizeTrackingMode(
       driverCtx_->queryConfig().rowSizeTrackingMode());
   return connectorQueryCtx;
+}
+
+// static
+int64_t Operator::shuffleSerdeStatsValue(std::string_view name) {
+  if (name == serializer::presto::PrestoVectorSerde::name()) {
+    return 0;
+  }
+  if (name == serializer::CompactRowVectorSerde::name()) {
+    return 1;
+  }
+  if (name == serializer::spark::UnsafeRowVectorSerde::name()) {
+    return 2;
+  }
+  return -1;
 }
 
 Operator::Operator(

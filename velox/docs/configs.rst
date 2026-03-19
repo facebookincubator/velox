@@ -161,6 +161,10 @@ Generic Configuration
      - bool
      - true
      - Whether hash probe can generate any dynamic filter (including Bloom filter) and push down to upstream operators.
+   * - hash_probe_string_dynamic_filter_pushdown_enabled
+     - bool
+     - false
+     - Whether hash probe can generate dynamic filter for string types and push down to upstream operators.
    * - hash_probe_bloom_filter_pushdown_max_size
      - integer
      - 0
@@ -409,6 +413,10 @@ Spilling
      - boolean
      - true
      - When `spill_enabled` is true, determines whether TopNRowNumber operator can spill to disk under memory pressure.
+   * - mark_distinct_spill_enabled
+     - boolean
+     - false
+     - When `spill_enabled` is true, determines whether MarkDistinct operator can spill to disk under memory pressure.
    * - writer_spill_enabled
      - boolean
      - true

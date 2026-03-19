@@ -201,7 +201,7 @@ class ConcatFilesSpillMergeStreamTest : public OperatorTestBase {
        {"c3", VARCHAR()}});
   const std::shared_ptr<folly::Executor> executor_{
       std::make_shared<folly::CPUThreadPoolExecutor>(
-          folly::hardware_concurrency())};
+          folly::available_concurrency())};
   const std::vector<column_index_t> sortColumnIndices_{0, 2};
   const std::vector<CompareFlags> sortCompareFlags_{
       CompareFlags{},
