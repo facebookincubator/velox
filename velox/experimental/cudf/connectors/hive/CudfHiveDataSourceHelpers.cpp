@@ -28,6 +28,8 @@
 #include <cudf/io/parquet_io_utils.hpp>
 #include <cudf/io/types.hpp>
 
+#include <thrust/tuple.h>
+
 #include <folly/futures/Future.h>
 
 #include <future>
