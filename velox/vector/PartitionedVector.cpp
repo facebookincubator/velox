@@ -214,9 +214,9 @@ PartitionedVectorPtr createPartitionedFlatVector(
   auto partitionedFlatVector = std::make_shared<PartitionedFlatVector<T>>(
       flatVector, numPartitions, endPartitionOffsets, pool);
 
-  if (numPartitions > 1) {
-    partitionedFlatVector->partition(partitions, ctx);
-  }
+  // Always call partition() so that numNullsPerPartition_ is populated,
+  // even when numPartitions == 1 and no data movement is required.
+  partitionedFlatVector->partition(partitions, ctx);
 
   return partitionedFlatVector;
 }
@@ -364,6 +364,18 @@ void PartitionedFlatVector<T>::partition(
       numPartitions_,
       ctx,
       pool_);
+
+  // Count nulls per partition from the now-partitioned null bitmap.
+  if (const uint64_t* rawNulls = vector_->rawNulls()) {
+    for (uint32_t p = 0; p < numPartitions_; ++p) {
+      const vector_size_t begin = p == 0 ? 0 : rawEndPartitionOffsets_[p - 1];
+      const vector_size_t end = rawEndPartitionOffsets_[p];
+      if (begin < end) {
+        numNullsPerPartition_[p] =
+            static_cast<vector_size_t>(bits::countNulls(rawNulls, begin, end));
+      }
+    }
+  }
 }
 
 template <typename T>
@@ -399,6 +411,18 @@ void PartitionedRowVector::partition(
     Byte* rawNulls = reinterpret_cast<Byte*>(vector_->mutableRawNulls());
     partitionBitsInPlace(
         rawNulls, partitions, numPartitions_, ctx, endPartitionOffsets_, pool_);
+  }
+
+  // Count nulls per partition from the now-partitioned null bitmap.
+  if (const uint64_t* rawNulls = vector_->rawNulls()) {
+    for (uint32_t p = 0; p < numPartitions_; ++p) {
+      const vector_size_t begin = p == 0 ? 0 : rawEndPartitionOffsets_[p - 1];
+      const vector_size_t end = rawEndPartitionOffsets_[p];
+      if (begin < end) {
+        numNullsPerPartition_[p] =
+            static_cast<vector_size_t>(bits::countNulls(rawNulls, begin, end));
+      }
+    }
   }
 }
 

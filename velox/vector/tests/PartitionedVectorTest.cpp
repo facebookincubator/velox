@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 #include <algorithm>
-#include <iostream>
 #include <random>
 
 #include <gtest/gtest.h>
@@ -277,6 +276,135 @@ TEST_P(PartitioningVectorTest, noNullBufferAllocatedForNullFreeRow) {
       << "partition() must not allocate a null buffer for null-free child 0";
   EXPECT_FALSE(base->childAt(1)->mayHaveNulls())
       << "partition() must not allocate a null buffer for null-free child 1";
+}
+
+// numNullsAt() tests
+// ---------------------------------------------------------------------------
+
+// A null-free flat vector must report zero nulls for every partition.
+TEST_P(PartitioningVectorTest, numNullsAtFlatNoNulls) {
+  const int numValues = GetParam();
+  auto flat = makeFlatVector<int32_t>(numValues, [](auto row) { return row; });
+
+  std::vector<uint32_t> partitions(numValues);
+  for (int i = 0; i < numValues; ++i) {
+    partitions[i] = i % 3;
+  }
+  auto pv = PartitionedVector::create(flat, partitions, 3, ctx_, pool_.get());
+  for (uint32_t p = 0; p < 3; ++p) {
+    EXPECT_EQ(pv->numNullsAt(p), 0) << "partition " << p;
+  }
+}
+
+// A flat vector with every other row null must report the exact per-partition
+// null count. The sum across all partitions must equal the total null count.
+TEST_P(PartitioningVectorTest, numNullsAtFlatSomeNulls) {
+  const int numValues = GetParam();
+  auto flat = makeFlatVector<int32_t>(
+      numValues, [](auto row) { return row; }, nullEvery(2));
+
+  std::vector<uint32_t> partitions(numValues);
+  for (int i = 0; i < numValues; ++i) {
+    partitions[i] = i % 3;
+  }
+  auto pv = PartitionedVector::create(flat, partitions, 3, ctx_, pool_.get());
+
+  // Per-partition counts must agree with manual bit-scan of the base vector.
+  const auto* rawNulls = pv->baseVector()->rawNulls();
+  const auto* rawOffsets = pv->rawPartitionOffsets();
+  for (uint32_t p = 0; p < 3; ++p) {
+    const vector_size_t begin = p == 0 ? 0 : rawOffsets[p - 1];
+    const vector_size_t end = rawOffsets[p];
+    const vector_size_t expected = rawNulls
+        ? BaseVector::countNulls(pv->baseVector()->nulls(), begin, end)
+        : 0;
+    EXPECT_EQ(pv->numNullsAt(p), expected) << "partition " << p;
+  }
+
+  // Sum across partitions must equal the total null count in the source vector.
+  const vector_size_t total =
+      pv->numNullsAt(0) + pv->numNullsAt(1) + pv->numNullsAt(2);
+  EXPECT_EQ(total, BaseVector::countNulls(flat->nulls(), 0, numValues));
+}
+
+// An all-null flat vector must report numNullsAt(p) == rows in that partition.
+TEST_P(PartitioningVectorTest, numNullsAtFlatAllNulls) {
+  const int numValues = GetParam();
+  auto flat = makeAllNullFlatVector<int32_t>(numValues);
+
+  std::vector<uint32_t> partitions(numValues);
+  for (int i = 0; i < numValues; ++i) {
+    partitions[i] = i % 3;
+  }
+  auto pv = PartitionedVector::create(flat, partitions, 3, ctx_, pool_.get());
+
+  const auto* rawOffsets = pv->rawPartitionOffsets();
+  for (uint32_t p = 0; p < 3; ++p) {
+    const vector_size_t begin = p == 0 ? 0 : rawOffsets[p - 1];
+    const vector_size_t numRowsInPartition = rawOffsets[p] - begin;
+    EXPECT_EQ(pv->numNullsAt(p), numRowsInPartition) << "partition " << p;
+  }
+}
+
+// A row vector with no row-level nulls must report zero per-partition nulls at
+// the row level, even when child columns have nulls.
+TEST_P(PartitioningVectorTest, numNullsAtRowNoRowLevelNulls) {
+  const int numValues = GetParam();
+  auto row = makeRowVector({
+      makeFlatVector<int32_t>(
+          numValues, [](auto row) { return row; }, nullEvery(2)),
+  });
+  ASSERT_FALSE(row->mayHaveNulls());
+
+  std::vector<uint32_t> partitions(numValues);
+  for (int i = 0; i < numValues; ++i) {
+    partitions[i] = i % 3;
+  }
+  auto pv = PartitionedVector::create(row, partitions, 3, ctx_, pool_.get());
+  for (uint32_t p = 0; p < 3; ++p) {
+    EXPECT_EQ(pv->numNullsAt(p), 0)
+        << "Row-level numNullsAt() must not count child nulls, partition " << p;
+  }
+}
+
+// A row vector with row-level nulls must report per-partition counts that match
+// a manual bit-scan. Child null counts must be counted independently.
+TEST_P(PartitioningVectorTest, numNullsAtRowRowLevelNulls) {
+  const int numValues = GetParam();
+  auto row = makeRowVector(
+      {makeFlatVector<int32_t>(
+          numValues, [](auto row) { return row; }, nullEvery(3))},
+      nullEvery(2));
+
+  std::vector<uint32_t> partitions(numValues);
+  for (int i = 0; i < numValues; ++i) {
+    partitions[i] = i % 3;
+  }
+  auto pv = PartitionedVector::create(row, partitions, 3, ctx_, pool_.get());
+
+  const auto* rawOffsets = pv->rawPartitionOffsets();
+  for (uint32_t p = 0; p < 3; ++p) {
+    const vector_size_t begin = p == 0 ? 0 : rawOffsets[p - 1];
+    const vector_size_t end = rawOffsets[p];
+    const vector_size_t expected =
+        BaseVector::countNulls(pv->baseVector()->nulls(), begin, end);
+    EXPECT_EQ(pv->numNullsAt(p), expected)
+        << "Row-level null count mismatch, partition " << p;
+  }
+
+  // Child null counts must be tracked independently of row-level nulls.
+  auto* prv = dynamic_cast<PartitionedRowVector*>(pv.get());
+  ASSERT_NE(prv, nullptr);
+  auto child = prv->childAt(0);
+  const auto* childOffsets = child->rawPartitionOffsets();
+  for (uint32_t p = 0; p < 3; ++p) {
+    const vector_size_t begin = p == 0 ? 0 : childOffsets[p - 1];
+    const vector_size_t end = childOffsets[p];
+    const vector_size_t expected =
+        BaseVector::countNulls(child->baseVector()->nulls(), begin, end);
+    EXPECT_EQ(child->numNullsAt(p), expected)
+        << "Child null count mismatch, partition " << p;
+  }
 }
 
 // Test with different vector sizes, including edge cases like 0 and 1.

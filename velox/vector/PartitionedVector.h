@@ -149,6 +149,12 @@ class PartitionedVector {
     return dynamic_cast<T*>(this);
   }
 
+  /// Returns the number of null rows in the given partition.
+  vector_size_t numNullsAt(uint32_t partition) const {
+    VELOX_DCHECK_LT(partition, numPartitions_);
+    return numNullsPerPartition_[partition];
+  }
+
   TypeKind typeKind() const {
     return vector_->typeKind();
   }
@@ -181,6 +187,7 @@ class PartitionedVector {
       : vector_(vector),
         numPartitions_(numPartitions),
         endPartitionOffsets_(endPartitionOffsets),
+        numNullsPerPartition_(numPartitions, 0),
         pool_(pool) {
     VELOX_CHECK_NOT_NULL(vector_);
     VELOX_CHECK_GT(numPartitions_, 0);
@@ -214,6 +221,9 @@ class PartitionedVector {
   // The raw pointer to the endPartitionOffsets_ buffer for easy access during
   // partitioning.
   vector_size_t* rawEndPartitionOffsets_;
+
+  /// Null row counts per partition, computed during partition().
+  std::vector<vector_size_t> numNullsPerPartition_;
 
   velox::memory::MemoryPool* pool_;
 };
@@ -258,6 +268,12 @@ class PartitionedRowVector : public PartitionedVector {
       PartitionBuildContext& ctx) override;
 
   VectorPtr partitionAt(uint32_t partition) const override;
+
+  /// Returns the partitioned child vector at the given column index.
+  PartitionedVectorPtr childAt(uint32_t col) const {
+    VELOX_DCHECK_LT(col, partitionedChildren_.size());
+    return partitionedChildren_[col];
+  }
 
   const vector_size_t* rawSizes() override {
     VELOX_UNREACHABLE("PartitionedRowVector does not implement rawSizes()");
