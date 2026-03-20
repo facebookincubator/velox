@@ -189,6 +189,7 @@ TopNRowNumber::TopNRowNumber(
         false, // allowDuplicates
         false, // isJoinBuild
         false, // hasProbedFlag
+        false, // hasCountFlag
         0, // minTableSizeForParallelJoinBuild
         pool());
     partitionOffset_ = table_->rows()->columnAt(numKeys).offset();

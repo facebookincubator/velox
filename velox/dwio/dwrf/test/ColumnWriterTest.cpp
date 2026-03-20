@@ -1507,6 +1507,93 @@ void testFlatMapWriter(
   }
 }
 
+// Regression test for dangling StringView keys in FlatMapColumnWriter.
+//
+// FlatMapColumnWriter stores StringView keys in an F14NodeMap (valueWriters_).
+// StringView is non-owning — it holds a pointer to external string data.
+// When the input batch is released between writes, the stored StringViews
+// become dangling. On a subsequent write that triggers F14 rehash,
+// F14Table::rehashImpl recomputes hashes from the dangling pointers and
+// hits assertion: hp.second == srcChunk->tag(srcI).
+//
+// This test reproduces the crash by:
+// 1. Writing a batch with long string keys (>12 chars → external pointer)
+// 2. Corrupting the backing buffer to simulate freed memory
+// 3. Writing a second batch with enough new keys to trigger F14 rehash
+//
+// With the bug: crashes with SIGABRT in F14Table::rehashImpl.
+// With the fix: passes (keys are properly owned).
+TEST_F(ColumnWriterTest, TestFlatMapDanglingStringViewKeyOnRehash) {
+  const auto rowType = CppToType<Row<Map<StringView, int32_t>>>::create();
+  const auto writerSchema = TypeWithId::create(rowType);
+  const auto writerDataTypeWithId = writerSchema->childAt(0);
+
+  const auto config = std::make_shared<Config>();
+  config->set(Config::FLATTEN_MAP, true);
+  config->set(Config::MAP_FLAT_COLS, {writerDataTypeWithId->column()});
+  config->set(Config::MAP_FLAT_DISABLE_DICT_ENCODING, true);
+  config->set<uint32_t>(Config::MAP_FLAT_MAX_KEYS, 100);
+
+  WriterContext context{config, memory::memoryManager()->addRootPool()};
+  context.initBuffer();
+  const auto writer = BaseColumnWriter::create(context, *writerDataTypeWithId);
+
+  using b = MapBuilder<StringView, int32_t>;
+
+  // Batch 1: 10 rows, each with one key-value pair.
+  // Keys are >12 chars so StringView uses an external data pointer
+  // (not inline storage). We control the backing buffer so we can
+  // corrupt it after writing to reliably simulate use-after-free.
+  constexpr int kBatch1Size = 10;
+  constexpr int kKeySlotSize = 32;
+  auto keyDataBuf = std::make_unique<char[]>(kBatch1Size * kKeySlotSize);
+
+  {
+    b::rows rows;
+    for (int i = 0; i < kBatch1Size; ++i) {
+      auto key = fmt::format("very_long_string_key_{:04d}", i);
+      ASSERT_GT(key.size(), 12u);
+      memcpy(keyDataBuf.get() + i * kKeySlotSize, key.data(), key.size());
+      StringView sv(
+          keyDataBuf.get() + i * kKeySlotSize,
+          static_cast<int32_t>(key.size()));
+      rows.emplace_back(b::row{b::pair{sv, static_cast<int32_t>(i)}});
+    }
+    auto batch = b::create(*pool_, rows);
+    writer->write(batch, common::Ranges::of(0, batch->size()));
+  }
+
+  // Corrupt batch 1's key data to simulate the input vector's string
+  // buffer being freed and reused. The writer's F14NodeMap still holds
+  // StringView keys pointing into this buffer.
+  memset(keyDataBuf.get(), 0xFF, kBatch1Size * kKeySlotSize);
+
+  // Batch 2: 15 rows with new keys. Combined with batch 1's 10 keys,
+  // the total of 25 unique keys exceeds the F14NodeMap's initial
+  // capacity, triggering rehashImpl. During rehash, F14 recomputes
+  // hashes for batch 1's stored StringView keys — which now point to
+  // corrupted memory — producing different hashes and hitting the
+  // assertion: hp.second == srcChunk->tag(srcI).
+  {
+    std::vector<std::string> keyStrings;
+    keyStrings.reserve(15);
+    for (int i = 0; i < 15; ++i) {
+      keyStrings.push_back(fmt::format("different_long_key_b2_{:04d}", i));
+    }
+    b::rows rows;
+    for (int i = 0; i < 15; ++i) {
+      rows.emplace_back(
+          b::row{b::pair{
+              StringView(keyStrings[i]),
+              static_cast<int32_t>(i + kBatch1Size)}});
+    }
+    auto batch = b::create(*pool_, rows);
+    writer->write(batch, common::Ranges::of(0, batch->size()));
+  }
+
+  writer->createIndexEntry();
+}
+
 TEST_F(ColumnWriterTest, TestFlatMapKeyNotInAllBatches) {
   VectorMaker maker(pool_.get());
   // Test the case where not all keys appear in all batches.

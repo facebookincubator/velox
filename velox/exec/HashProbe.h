@@ -119,7 +119,8 @@ class HashProbe : public Operator {
   // output.
   static bool joinIncludesMissesFromLeft(core::JoinType joinType) {
     return isLeftJoin(joinType) || isFullJoin(joinType) ||
-        isAntiJoin(joinType) || isLeftSemiProjectJoin(joinType);
+        isAntiJoin(joinType) || isCountingAntiJoin(joinType) ||
+        isLeftSemiProjectJoin(joinType);
   }
 
   void setState(ProbeOperatorState state);

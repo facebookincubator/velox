@@ -21,6 +21,7 @@
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
+#include "velox/serializers/RegisterAllVectorSerdes.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 #include <gtest/gtest.h>
@@ -38,6 +39,7 @@ class PlanNodeSerdeTest : public testing::Test,
     functions::prestosql::registerAllScalarFunctions();
     aggregate::prestosql::registerAllAggregateFunctions();
     parse::registerTypeResolver();
+    registerAllNamedVectorSerdes();
 
     Type::registerSerDe();
     common::Filter::registerSerDe();
@@ -994,6 +996,29 @@ TEST_F(PlanNodeSerdeTest, columnStatsSpec) {
             std::move(aggregateNames),
             std::move(aggregates)),
         "");
+  }
+}
+
+TEST_F(PlanNodeSerdeTest, countingJoin) {
+  for (auto joinType :
+       {core::JoinType::kCountingAnti,
+        core::JoinType::kCountingLeftSemiFilter}) {
+    SCOPED_TRACE(core::JoinTypeName::toName(joinType));
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .values({data_})
+                    .hashJoin(
+                        {"c0"},
+                        {"u_c0"},
+                        PlanBuilder(planNodeIdGenerator)
+                            .values({data_})
+                            .project({"c0 as u_c0"})
+                            .planNode(),
+                        "",
+                        {"c0", "c1"},
+                        joinType)
+                    .planNode();
+    testSerde(plan);
   }
 }
 
