@@ -315,7 +315,7 @@ RowVectorPtr toVeloxColumn(
       std::dynamic_pointer_cast<const facebook::velox::RowType>(type);
   VELOX_CHECK_NOT_NULL(rowType);
   auto metadata = getMetadataWithName(rowType);
-  return toVeloxColumn(table, pool, metadata, nullptr, stream, mr);
+  return toVeloxColumn(table, pool, metadata, &rowType, stream, mr);
 }
 
 } // namespace with_arrow
