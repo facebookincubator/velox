@@ -396,7 +396,6 @@ class MergeExchange : public Merge {
   BlockingReason addMergeSources(ContinueFuture* future) override;
 
  private:
-  const std::string serdeKind_;
   VectorSerde* const serde_;
   const std::unique_ptr<VectorSerde::Options> serdeOptions_;
   bool noMoreSplits_ = false;
