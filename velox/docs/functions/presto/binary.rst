@@ -6,6 +6,10 @@ Binary Functions
 
     Computes the crc32 checksum of ``binary``.
 
+.. function:: contains(x, element) -> boolean
+
+     Returns true if the binary ``x`` contains the ``element``.
+
 .. function:: fnv1_32(binary) -> integer
 
     Computes the FNV-1 32-bit hash of ``binary``.
@@ -140,6 +144,30 @@ Binary Functions
 
     Computes the 64-bit SpookyHashV2 hash of ``binary``.
 
+.. function:: strpos(binary, pattern) -> bigint
+
+     Returns the starting byte position of the first instance of ``pattern`` in
+     ``binary``. Positions start with ``1``. If not found, ``0`` is returned.
+
+.. function:: strpos(binary, pattern, instance) -> bigint
+     :noindex:
+
+     Returns the byte position of the N-th ``instance`` of ``pattern`` in ``binary``.
+     ``instance`` must be a positive number.
+     Positions start with ``1``. If not found, ``0`` is returned.
+
+.. function:: strrpos(binary, pattern) -> bigint
+
+     Returns the starting byte position of the last instance of ``pattern`` in
+     ``binary``. Positions start with ``1``. If not found, ``0`` is returned.
+
+.. function:: strrpos(binary, pattern, instance) -> bigint
+     :noindex:
+
+     Returns the byte position of the N-th ``instance`` of ``pattern`` in ``binary`` starting from the end of the binary.
+     ``instance`` must be a positive number.
+     Positions start with ``1``. If not found, ``0`` is returned.
+
 .. function:: to_base64(binary) -> varchar
 
     Encodes ``binary`` into a base64 string representation.
@@ -166,12 +194,12 @@ Binary Functions
 
 .. function:: to_ieee754_64(double) -> varbinary
 
-    Encodes ``double`` in a 64-bit big-endian binary according to IEEE 754 double-precision floating-point format.
+     Encodes ``double`` in a 64-bit big-endian binary according to IEEE 754 double-precision floating-point format.
 
 .. function:: xxhash64(binary) -> varbinary
 
-    Computes the xxhash64 hash of ``binary``.
+     Computes the xxhash64 hash of ``binary``.
 
 .. function:: xxhash64(binary, bigint) -> varbinary
 
-    Computes the xxhash64 hash of ``binary`` with ``bigint`` seed.
+     Computes the xxhash64 hash of ``binary`` with ``bigint`` seed.

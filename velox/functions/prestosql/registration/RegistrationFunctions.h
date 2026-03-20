@@ -53,6 +53,8 @@ void registerURLFunctions(const std::string& prefix = "");
 
 void registerStringFunctions(const std::string& prefix = "");
 
+void registerVarbinaryFunctions(const std::string& prefix = "");
+
 void registerBinaryFunctions(const std::string& prefix = "");
 
 void registerBitwiseFunctions(const std::string& prefix = "");

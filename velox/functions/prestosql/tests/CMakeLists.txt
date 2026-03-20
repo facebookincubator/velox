@@ -137,6 +137,7 @@ add_executable(
   QDigestFunctionsTest.cpp
   URLFunctionsTest.cpp
   UuidFunctionsTest.cpp
+  VarbinaryFunctionsTest.cpp
   WidthBucketArrayTest.cpp
   WordStemTest.cpp
   ZipTest.cpp

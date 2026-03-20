@@ -43,6 +43,7 @@ velox_add_library(
   TDigestFunctionsRegistration.cpp
   QDigestFunctionsRegistration.cpp
   URLFunctionsRegistration.cpp
+  VarbinaryFunctionsRegistration.cpp
 )
 
 if(VELOX_ENABLE_GEO)
