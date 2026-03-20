@@ -229,7 +229,7 @@ namespace {
 // Each split independently produces results with sorted inputHits. This
 // iterator interleaves rows across splits to maintain the global non-decreasing
 // inputHit ordering required by IndexLookupJoin (for left join missed-row
-// detection and the DCHECK in prepareLookupResult).
+// detection and the check in prepareLookupResult).
 //
 // Uses a k-way merge: buffers one Result per split, then repeatedly picks
 // the split with the smallest current request index and copies all its rows
@@ -253,7 +253,7 @@ class UnionResultIterator : public IndexSource::ResultIterator {
 
   bool hasNext() override {
     for (const auto& split : splits_) {
-      if (split.hasResult() || !split.hasExhausted()) {
+      if (!split.hasExhausted()) {
         return true;
       }
     }

@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include "velox/functions/prestosql/Cardinality.h"
+#include "velox/functions/Registerer.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
 using namespace facebook::velox;
@@ -24,14 +26,17 @@ namespace {
 
 class CardinalityTest : public FunctionBaseTest {
  protected:
+  template <typename TResult>
   void testArrayCardinality(
+      const std::string& functionName,
       std::function<vector_size_t(vector_size_t /* row */)> sizeAt,
       std::function<bool(vector_size_t /*row */)> isNullAt) {
     vector_size_t numRows = 100;
     auto arrayVector =
         makeArrayVector<int64_t>(numRows, sizeAt, valueAt, isNullAt);
-    auto result = evaluate<SimpleVector<int64_t>>(
-        "cardinality(c0)", makeRowVector({arrayVector}));
+    auto expr = fmt::format("{}(c0)", functionName);
+    auto result =
+        evaluate<SimpleVector<TResult>>(expr, makeRowVector({arrayVector}));
     for (vector_size_t i = 0; i < numRows; ++i) {
       EXPECT_EQ(result->isNullAt(i), arrayVector->isNullAt(i)) << "at " << i;
       if (!arrayVector->isNullAt(i)) {
@@ -40,20 +45,37 @@ class CardinalityTest : public FunctionBaseTest {
     }
   }
 
+  template <typename TResult>
   void testMapCardinality(
+      const std::string& functionName,
       std::function<vector_size_t(vector_size_t /* row */)> sizeAt,
       std::function<bool(vector_size_t /*row */)> isNullAt) {
     vector_size_t numRows = 100;
     auto mapVector = makeMapVector<int64_t, int64_t>(
         numRows, sizeAt, valueAt, valueAt, isNullAt);
-    auto result = evaluate<SimpleVector<int64_t>>(
-        "cardinality(c0)", makeRowVector({mapVector}));
+    auto expr = fmt::format("{}(c0)", functionName);
+    auto result =
+        evaluate<SimpleVector<TResult>>(expr, makeRowVector({mapVector}));
     for (vector_size_t i = 0; i < numRows; ++i) {
       EXPECT_EQ(result->isNullAt(i), mapVector->isNullAt(i)) << "at " << i;
       if (!mapVector->isNullAt(i)) {
         EXPECT_EQ(result->valueAt(i), sizeAt(i)) << "at " << i;
       }
     }
+  }
+
+  template <typename TResult>
+  void testArrayCardinality(const std::string& functionName) {
+    auto sizeAt = [](vector_size_t row) { return 1 + row % 7; };
+    testArrayCardinality<TResult>(functionName, sizeAt, nullptr);
+    testArrayCardinality<TResult>(functionName, sizeAt, nullEvery(5));
+  }
+
+  template <typename TResult>
+  void testMapCardinality(const std::string& functionName) {
+    auto sizeAt = [](vector_size_t row) { return 1 + row % 7; };
+    testMapCardinality<TResult>(functionName, sizeAt, nullptr);
+    testMapCardinality<TResult>(functionName, sizeAt, nullEvery(5));
   }
 
   static inline vector_size_t valueAt(vector_size_t idx) {
@@ -63,13 +85,25 @@ class CardinalityTest : public FunctionBaseTest {
 } // namespace
 
 TEST_F(CardinalityTest, array) {
-  auto sizeAt = [](vector_size_t row) { return 1 + row % 7; };
-  testArrayCardinality(sizeAt, nullptr);
-  testArrayCardinality(sizeAt, nullEvery(5));
+  testArrayCardinality<int64_t>("cardinality");
 }
 
 TEST_F(CardinalityTest, map) {
-  auto sizeAt = [](vector_size_t row) { return 1 + row % 7; };
-  testMapCardinality(sizeAt, nullptr);
-  testMapCardinality(sizeAt, nullEvery(5));
+  testMapCardinality<int64_t>("cardinality");
+}
+
+TEST_F(CardinalityTest, arrayInteger) {
+  static constexpr std::string_view kCardinalityInteger{"cardinality_integer"};
+  registerFunction<functions::CardinalityFunction, int32_t, Array<Generic<T1>>>(
+      {std::string{kCardinalityInteger}});
+  testArrayCardinality<int32_t>(std::string{kCardinalityInteger});
+}
+
+TEST_F(CardinalityTest, mapInteger) {
+  static constexpr std::string_view kCardinalityInteger{"cardinality_integer"};
+  registerFunction<
+      functions::CardinalityFunction,
+      int32_t,
+      Map<Generic<T1>, Generic<T2>>>({std::string{kCardinalityInteger}});
+  testMapCardinality<int32_t>(std::string{kCardinalityInteger});
 }
