@@ -115,8 +115,8 @@ TEST_F(CudfStringFunctionTest, likeExactMatch) {
 }
 
 TEST_F(CudfStringFunctionTest, likeNoMatch) {
-  auto input = makeRowVector(
-      {makeFlatVector<std::string>({"abc", "def", "ghi"})});
+  auto input =
+      makeRowVector({makeFlatVector<std::string>({"abc", "def", "ghi"})});
   createDuckDbTable({input});
 
   auto plan = PlanBuilder()
@@ -152,8 +152,7 @@ TEST_F(CudfStringFunctionTest, likeInFilter) {
                   .project({"c0", "c1"})
                   .planNode();
 
-  assertQuery(
-      plan, "SELECT c0, c1 FROM tmp WHERE c1 LIKE 'hel%'");
+  assertQuery(plan, "SELECT c0, c1 FROM tmp WHERE c1 LIKE 'hel%'");
 }
 
 // ---- UPPER tests ----------------------------------------------------------
@@ -163,10 +162,8 @@ TEST_F(CudfStringFunctionTest, upperBasic) {
       {makeFlatVector<std::string>({"hello", "World", "FOO", "bAr"})});
   createDuckDbTable({input});
 
-  auto plan = PlanBuilder()
-                  .values({input})
-                  .project({"UPPER(c0) AS result"})
-                  .planNode();
+  auto plan =
+      PlanBuilder().values({input}).project({"UPPER(c0) AS result"}).planNode();
 
   assertQuery(plan, "SELECT UPPER(c0) AS result FROM tmp");
 }
@@ -176,23 +173,19 @@ TEST_F(CudfStringFunctionTest, upperAlreadyUpper) {
       makeRowVector({makeFlatVector<std::string>({"ABC", "XYZ", "HELLO"})});
   createDuckDbTable({input});
 
-  auto plan = PlanBuilder()
-                  .values({input})
-                  .project({"UPPER(c0) AS result"})
-                  .planNode();
+  auto plan =
+      PlanBuilder().values({input}).project({"UPPER(c0) AS result"}).planNode();
 
   assertQuery(plan, "SELECT UPPER(c0) AS result FROM tmp");
 }
 
 TEST_F(CudfStringFunctionTest, upperEmptyAndSpecial) {
-  auto input = makeRowVector(
-      {makeFlatVector<std::string>({"", "123", "a1b2", "!@#"})});
+  auto input =
+      makeRowVector({makeFlatVector<std::string>({"", "123", "a1b2", "!@#"})});
   createDuckDbTable({input});
 
-  auto plan = PlanBuilder()
-                  .values({input})
-                  .project({"UPPER(c0) AS result"})
-                  .planNode();
+  auto plan =
+      PlanBuilder().values({input}).project({"UPPER(c0) AS result"}).planNode();
 
   assertQuery(plan, "SELECT UPPER(c0) AS result FROM tmp");
 }
@@ -204,10 +197,8 @@ TEST_F(CudfStringFunctionTest, lowerBasic) {
       {makeFlatVector<std::string>({"HELLO", "World", "foo", "bAr"})});
   createDuckDbTable({input});
 
-  auto plan = PlanBuilder()
-                  .values({input})
-                  .project({"LOWER(c0) AS result"})
-                  .planNode();
+  auto plan =
+      PlanBuilder().values({input}).project({"LOWER(c0) AS result"}).planNode();
 
   assertQuery(plan, "SELECT LOWER(c0) AS result FROM tmp");
 }
@@ -217,23 +208,19 @@ TEST_F(CudfStringFunctionTest, lowerAlreadyLower) {
       makeRowVector({makeFlatVector<std::string>({"abc", "xyz", "hello"})});
   createDuckDbTable({input});
 
-  auto plan = PlanBuilder()
-                  .values({input})
-                  .project({"LOWER(c0) AS result"})
-                  .planNode();
+  auto plan =
+      PlanBuilder().values({input}).project({"LOWER(c0) AS result"}).planNode();
 
   assertQuery(plan, "SELECT LOWER(c0) AS result FROM tmp");
 }
 
 TEST_F(CudfStringFunctionTest, lowerEmptyAndSpecial) {
-  auto input = makeRowVector(
-      {makeFlatVector<std::string>({"", "123", "A1B2", "!@#"})});
+  auto input =
+      makeRowVector({makeFlatVector<std::string>({"", "123", "A1B2", "!@#"})});
   createDuckDbTable({input});
 
-  auto plan = PlanBuilder()
-                  .values({input})
-                  .project({"LOWER(c0) AS result"})
-                  .planNode();
+  auto plan =
+      PlanBuilder().values({input}).project({"LOWER(c0) AS result"}).planNode();
 
   assertQuery(plan, "SELECT LOWER(c0) AS result FROM tmp");
 }
@@ -270,8 +257,7 @@ TEST_F(CudfStringFunctionTest, concatThreeColumns) {
 }
 
 TEST_F(CudfStringFunctionTest, concatColumnAndLiteral) {
-  auto input = makeRowVector(
-      {makeFlatVector<std::string>({"hello", "world"})});
+  auto input = makeRowVector({makeFlatVector<std::string>({"hello", "world"})});
   createDuckDbTable({input});
 
   auto plan = PlanBuilder()
@@ -283,8 +269,7 @@ TEST_F(CudfStringFunctionTest, concatColumnAndLiteral) {
 }
 
 TEST_F(CudfStringFunctionTest, concatLiteralAndColumn) {
-  auto input = makeRowVector(
-      {makeFlatVector<std::string>({"world", "there"})});
+  auto input = makeRowVector({makeFlatVector<std::string>({"world", "there"})});
   createDuckDbTable({input});
 
   auto plan = PlanBuilder()
@@ -310,8 +295,7 @@ TEST_F(CudfStringFunctionTest, concatWithEmptyStrings) {
 }
 
 TEST_F(CudfStringFunctionTest, concatMultipleLiterals) {
-  auto input = makeRowVector(
-      {makeFlatVector<std::string>({"mid"})});
+  auto input = makeRowVector({makeFlatVector<std::string>({"mid"})});
   createDuckDbTable({input});
 
   auto plan = PlanBuilder()
