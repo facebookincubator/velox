@@ -230,11 +230,7 @@ void CudfHashJoinBuild::noMoreInput() {
   auto stream = cudfGlobalStreamPool().get_stream();
   // Using output_mr here to allow spilling queued up large tables
   auto tbls = getConcatenatedTableBatched(
-      inputs_, joinNode_->sources()[1]->outputType(), stream, get_output_mr());
-
-  // Release input data after synchronizing
-  stream.synchronize();
-  inputs_.clear();
+      std::move(inputs_), joinNode_->sources()[1]->outputType(), stream, get_output_mr());
 
   for (auto const& tbl : tbls) {
     VELOX_CHECK_NOT_NULL(tbl);

@@ -55,10 +55,11 @@ namespace facebook::velox::cudf_velox {
  * The function is stream-safe and handles proper stream synchronization. All
  * input streams from individual tables are collected and joined on the provided
  * output stream. Tables that may have been created on different CUDA streams
- * are also properly synchronized.
+ * are also properly synchronized. The input tables are consumed and deallocated
+ * after synchronization.
  *
  * @param tables Input vector of CUDF tables to concatenate (consumed during
- * operation)
+ * operation, must be passed as rvalue)
  * @param tableType Velox type representation for creating empty tables when
  * needed
  * @param stream CUDA stream for asynchronous operations and memory management
@@ -68,7 +69,7 @@ namespace facebook::velox::cudf_velox {
  */
 [[nodiscard]] std::vector<std::unique_ptr<cudf::table>>
 getConcatenatedTableBatched(
-    std::vector<CudfVectorPtr>& tables,
+    std::vector<CudfVectorPtr>&& tables,
     const TypePtr& tableType,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
