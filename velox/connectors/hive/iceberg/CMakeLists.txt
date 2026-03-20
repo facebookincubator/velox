@@ -22,6 +22,7 @@ set(
   IcebergDataSink.cpp
   IcebergDataSource.cpp
   IcebergPartitionName.cpp
+  EqualityDeleteFileReader.cpp
   IcebergSplit.cpp
   IcebergSplitReader.cpp
   PartitionSpec.cpp
