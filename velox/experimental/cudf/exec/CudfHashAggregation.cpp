@@ -1409,8 +1409,8 @@ RowVectorPtr CudfHashAggregation::getOutput() {
 
   auto stream = cudfGlobalStreamPool().get_stream();
 
-  auto tbl =
-      getConcatenatedTable(std::move(inputs_), inputType_, stream, get_output_mr());
+  auto tbl = getConcatenatedTable(
+      std::move(inputs_), inputType_, stream, get_output_mr());
 
   if (noMoreInput_) {
     finished_ = true;

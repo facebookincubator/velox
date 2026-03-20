@@ -169,16 +169,16 @@ std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
             mr));
   }
   // Order input deallocations after the concatenate reads by making all input
-  // streams wait for the output stream. This ensures the output stream completes
-  // before input tables are deallocated.
+  // streams wait for the output stream. This ensures the output stream
+  // completes before input tables are deallocated.
   CudaEvent event(cudaEventDisableTiming);
   streamsWaitForStream(event, inputStreams, stream);
   // Synchronize before deallocating input tables to ensure concatenate
   // operations have completed reading from them.
   // Note: With a stream-ordered memory resource (pool, arena, or async), the
   // streamsWaitForStream call above would suffice since deallocations on
-  // inputStreams would be ordered after the concatenate. 
-  
+  // inputStreams would be ordered after the concatenate.
+
   // Input tables are deallocated here when 'tables' goes out of scope.
   return outputTables;
 }
