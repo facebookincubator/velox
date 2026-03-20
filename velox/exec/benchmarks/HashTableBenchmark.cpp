@@ -182,6 +182,7 @@ class HashTableBenchmark : public VectorTestBase {
           dependentTypes,
           true,
           false,
+          false, // hasCountFlag
           1'000,
           pool_.get());
 

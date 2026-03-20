@@ -1517,6 +1517,7 @@ TEST_F(RowContainerTest, alignment) {
       false,
       false,
       true,
+      false, // hasCountFlag
       true,
       false,
       pool_.get());
@@ -1685,6 +1686,7 @@ TEST_F(RowContainerTest, probedFlag) {
       true, // hasNext
       true, // isJoinBuild
       true, // hasProbedFlag
+      false, // hasCountFlag
       false, // hasNormalizedKey
       false, // useListRowIndex
       pool_.get());
@@ -1788,6 +1790,32 @@ TEST_F(RowContainerTest, probedFlag) {
       makeNullableFlatVector<bool>(
           {true, true, true, true, std::nullopt, true}),
       result);
+}
+
+TEST_F(RowContainerTest, countFlag) {
+  RowContainer rows(
+      {INTEGER()},
+      true, // nullableKeys
+      std::vector<Accumulator>{},
+      {}, // dependentTypes
+      false, // hasNext
+      true, // isJoinBuild
+      false, // hasProbedFlag
+      true, // hasCountFlag
+      false, // hasNormalizedKey
+      false, // useListRowIndex
+      pool_.get());
+
+  ASSERT_NE(rows.countOffset(), 0);
+
+  auto* row = rows.newRow();
+  EXPECT_EQ(rows.count(row), 1);
+  rows.incrementCount(row);
+  EXPECT_EQ(rows.count(row), 2);
+  rows.decrementCount(row);
+  EXPECT_EQ(rows.count(row), 1);
+  rows.decrementCount(row);
+  EXPECT_EQ(rows.count(row), 0);
 }
 
 TEST_F(RowContainerTest, mixedFree) {
@@ -2740,6 +2768,7 @@ TEST_F(RowContainerTest, setAllNull) {
       false,
       true,
       false,
+      false, // hasCountFlag
       false,
       false,
       pool_.get());

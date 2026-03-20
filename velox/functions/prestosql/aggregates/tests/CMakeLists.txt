@@ -21,6 +21,7 @@ set(
   ApproxPercentileTest.cpp
   ArbitraryTest.cpp
   ArrayAggTest.cpp
+  VectorSumTest.cpp
   AverageAggregationTest.cpp
   BitwiseAggregationTest.cpp
   BoolAndOrTest.cpp

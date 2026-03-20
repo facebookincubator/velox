@@ -117,6 +117,7 @@ class IndexLookupJoinReplayerTest : public HiveConnectorTestBase {
         /*dependentTypes=*/dependentTypes,
         /*allowDuplicates=*/true,
         /*hasProbedFlag=*/false,
+        /*hasCountFlag=*/false,
         /*minTableSizeForParallelJoinBuild=*/1,
         pool_.get());
 

@@ -135,6 +135,7 @@ RowContainer::RowContainer(
     bool hasNext,
     bool isJoinBuild,
     bool hasProbedFlag,
+    bool hasCountFlag,
     bool hasNormalizedKeys,
     bool useListRowIndex,
     memory::MemoryPool* pool)
@@ -247,6 +248,10 @@ RowContainer::RowContainer(
     nextOffset_ = offset;
     offset += sizeof(void*);
   }
+  if (hasCountFlag) {
+    countOffset_ = offset;
+    offset += sizeof(int32_t);
+  }
   fixedRowSize_ = bits::roundUp(offset, alignment_);
   originalNormalizedKeySize_ = hasNormalizedKeys_
       ? bits::roundUp(sizeof(normalized_key_t), alignment_)
@@ -320,6 +325,9 @@ char* RowContainer::initializeRow(char* row, bool reuse) {
     variableRowSize(row) = 0;
   }
   bits::clearBit(row, freeFlagOffset_);
+  if (countOffset_) {
+    countRef(row) = 1;
+  }
   return row;
 }
 

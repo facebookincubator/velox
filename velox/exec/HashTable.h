@@ -544,6 +544,7 @@ class HashTable : public BaseHashTable {
       bool allowDuplicates,
       bool isJoinBuild,
       bool hasProbedFlag,
+      bool hasCountFlag,
       uint32_t minTableSizeForParallelJoinBuild,
       memory::MemoryPool* pool,
       uint64_t bloomFilterMaxSize = 0);
@@ -561,6 +562,7 @@ class HashTable : public BaseHashTable {
         false, // allowDuplicates
         false, // isJoinBuild
         false, // hasProbedFlag
+        false, // hasCountFlag
         0, // minTableSizeForParallelJoinBuild
         pool);
   }
@@ -570,6 +572,7 @@ class HashTable : public BaseHashTable {
       const std::vector<TypePtr>& dependentTypes,
       bool allowDuplicates,
       bool hasProbedFlag,
+      bool hasCountFlag,
       uint32_t minTableSizeForParallelJoinBuild,
       memory::MemoryPool* pool,
       uint64_t bloomFilterMaxSize = 0) {
@@ -580,6 +583,7 @@ class HashTable : public BaseHashTable {
         allowDuplicates,
         true, // isJoinBuild
         hasProbedFlag,
+        hasCountFlag,
         minTableSizeForParallelJoinBuild,
         pool,
         bloomFilterMaxSize);
