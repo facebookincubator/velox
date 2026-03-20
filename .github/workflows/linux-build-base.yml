@@ -406,6 +406,10 @@ jobs:
         run: |
           ccache -sz
 
+      - name: Install Mold Linker
+        run: |
+          apt-get update && apt-get install -y mold
+
       - name: Make Debug Build
         env:
           VELOX_DEPENDENCY_SOURCE: SYSTEM
@@ -423,6 +427,8 @@ jobs:
         run: |
           EXTRA_CMAKE_FLAGS=(
             "-DCMAKE_LINK_LIBRARIES_STRATEGY=REORDER_FREELY"
+            "-DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=mold"
+            "-DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=mold"
             "-DVELOX_BUILD_SHARED=ON"
             "-DVELOX_ENABLE_BENCHMARKS=ON"
             "-DVELOX_ENABLE_EXAMPLES=ON"
@@ -511,6 +517,10 @@ jobs:
         run: |
           ccache -sz
 
+      - name: Install Mold Linker
+        run: |
+          dnf install -y -q --setopt=install_weak_deps=False mold
+
       - name: Make Debug Build
         env:
           VELOX_DEPENDENCY_SOURCE: SYSTEM
@@ -523,6 +533,8 @@ jobs:
             -DVELOX_ENABLE_PARQUET=ON
             -DARROW_THRIFT_USE_SHARED=ON
             -DVELOX_ENABLE_EXAMPLES=ON
+            -DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=mold
+            -DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=mold
         run: |
           uv tool install --force cmake@3.31.1
           dnf install -y -q --setopt=install_weak_deps=False grpc-devel grpc-plugins
