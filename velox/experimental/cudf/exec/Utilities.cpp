@@ -102,11 +102,10 @@ std::unique_ptr<cudf::table> getConcatenatedTable(
   auto output = cudf::concatenate(tableViews, stream, mr);
 
   // Order input deallocations after the concatenate read.
+  // With stream-ordered memory resources (pool, arena, async), deallocations
+  // on inputStreams will be ordered after the concatenate completes.
   CudaEvent event(cudaEventDisableTiming);
   streamsWaitForStream(event, inputStreams, stream);
-  // Synchronize before deallocating input tables to ensure concatenate
-  // operations have completed reading from them.
-  stream.synchronize();
   // Input tables are deallocated here when 'tables' goes out of scope.
   return output;
 }
@@ -178,11 +177,8 @@ std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
   // operations have completed reading from them.
   // Note: With a stream-ordered memory resource (pool, arena, or async), the
   // streamsWaitForStream call above would suffice since deallocations on
-  // inputStreams would be ordered after the concatenate. However, we
-  // synchronize here to guarantee correctness regardless of the configured
-  // memory resource.
-  // TODO: What about managed MR? Managed async needs CUDA 13
-  stream.synchronize();
+  // inputStreams would be ordered after the concatenate. 
+  
   // Input tables are deallocated here when 'tables' goes out of scope.
   return outputTables;
 }
