@@ -34,9 +34,9 @@ namespace facebook::velox::cudf_velox {
 
 // Concatenate a vector of cuDF tables into a single table.
 // This function joins the streams owned by individual tables on the passed
-// stream. Inputs are not safe to use after calling this function.
+// stream. Input tables are consumed and deallocated after synchronization.
 [[nodiscard]] std::unique_ptr<cudf::table> getConcatenatedTable(
-    std::vector<CudfVectorPtr>& tables,
+    std::vector<CudfVectorPtr>&& tables,
     const TypePtr& tableType,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
