@@ -59,7 +59,7 @@ namespace facebook::velox::cudf_velox {
  * after synchronization.
  *
  * @param tables Input vector of CUDF tables to concatenate (consumed during
- * operation, must be passed as rvalue)
+ * operation)
  * @param tableType Velox type representation for creating empty tables when
  * needed
  * @param stream CUDA stream for asynchronous operations and memory management

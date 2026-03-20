@@ -64,7 +64,10 @@ RowVectorPtr CudfBatchConcat::getOutput() {
     // Use stream from existing buffer vectors
     outputQueueStream_ = buffer_[0]->stream();
     auto tables = getConcatenatedTableBatched(
-        std::move(buffer_), outputType_, outputQueueStream_, get_output_mr());
+        std::exchange(buffer_, {}),
+        outputType_,
+        outputQueueStream_,
+        get_output_mr());
 
     currentNumRows_ = 0;
 

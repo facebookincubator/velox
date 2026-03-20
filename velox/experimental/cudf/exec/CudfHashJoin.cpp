@@ -230,7 +230,7 @@ void CudfHashJoinBuild::noMoreInput() {
   auto stream = cudfGlobalStreamPool().get_stream();
   // Using output_mr here to allow spilling queued up large tables
   auto tbls = getConcatenatedTableBatched(
-      std::move(inputs_),
+      std::exchange(inputs_, {}),
       joinNode_->sources()[1]->outputType(),
       stream,
       get_output_mr());
@@ -594,7 +594,7 @@ void CudfHashJoinProbe::noMoreInput() {
   auto stream = cudfGlobalStreamPool().get_stream();
   // Using output_mr here to allow spilling queued up large tables
   auto tbl = getConcatenatedTable(
-      std::move(inputs_),
+      std::exchange(inputs_, {}),
       joinNode_->sources()[1]->outputType(),
       stream,
       get_output_mr());
