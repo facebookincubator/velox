@@ -19,6 +19,7 @@
 
 #include "velox/common/memory/Memory.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/dwio/parquet/RegisterParquetWriter.h"
 #include "velox/exec/TableWriter.h"
@@ -90,17 +91,19 @@ class InsertTest : public velox::test::VectorTestBase {
     folly::dynamic obj =
         folly::parseJson(std::string_view(details->valueAt(1)));
 
-    ASSERT_EQ(numRows, obj["rowCount"].asInt());
-    auto fileWriteInfos = obj["fileWriteInfos"];
+    ASSERT_EQ(numRows, obj[HiveCommitMessage::kRowCount].asInt());
+    auto fileWriteInfos = obj[HiveCommitMessage::kFileWriteInfos];
     ASSERT_EQ(1, fileWriteInfos.size());
 
-    auto writeFileName = fileWriteInfos[0]["writeFileName"].asString();
+    auto writeFileName =
+        fileWriteInfos[0][HiveCommitMessage::kWriteFileName].asString();
 
     // Read from 'writeFileName' and verify the data matches the original.
     plan = exec::test::PlanBuilder().tableScan(rowType).planNode();
 
     auto filePath = fmt::format("{}{}", outputDirectory, writeFileName);
-    const int64_t fileSize = fileWriteInfos[0]["fileSize"].asInt();
+    const int64_t fileSize =
+        fileWriteInfos[0][HiveCommitMessage::kFileSize].asInt();
     auto split = exec::test::HiveConnectorSplitBuilder(filePath)
                      .fileFormat(dwio::common::FileFormat::PARQUET)
                      .length(fileSize)
