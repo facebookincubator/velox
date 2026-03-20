@@ -77,6 +77,11 @@ void CudfTpcdsBenchmark::initQueryBuilder() {
 }
 
 void CudfTpcdsBenchmark::initialize() {
+  // Must be set before TpcdsBenchmark::initialize(), which calls
+  // initQueryBuilder() -> registerCudf(), which bakes the prefix into the
+  // step-aware aggregation registry.
+  cudf_velox::CudfConfig::getInstance().functionNamePrefix = "presto.default.";
+
   TpcdsBenchmark::initialize();
 
   if (FLAGS_velox_cudf_table_scan) {
