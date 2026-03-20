@@ -15,18 +15,27 @@
  */
 
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/benchmarks/CudfBenchmarkHelpers.h"
 #include "velox/experimental/cudf/benchmarks/CudfTpchBenchmark.h"
+#include "velox/experimental/cudf/benchmarks/TpchPlanRewriter.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
 
+#include "velox/common/base/SuccinctPrinter.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/exec/OperatorType.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
+#include "velox/tpch/gen/TpchGen.h"
 
 #include <experimental/cudf/connectors/hive/CudfHiveConnector.h>
 
+DECLARE_string(data_path);
+DECLARE_string(data_format);
+DECLARE_bool(filters_as_node);
 DECLARE_int64(max_coalesced_bytes);
 DECLARE_string(max_coalesced_distance_bytes);
 DECLARE_int32(parquet_prefetch_rowgroups);
@@ -71,7 +80,21 @@ DEFINE_bool(velox_cudf_table_scan, true, "Enable cuDF table scan");
 
 DEFINE_bool(cudf_debug_enabled, false, "Enable debug printing");
 
+DEFINE_bool(
+    preload,
+    false,
+    "Pre-load all TPC-H tables to GPU and replace TableScans with ValuesNodes. "
+    "Use with --run_query_verbose=N to run a single query.");
+
+DEFINE_int32(
+    preload_batch_size,
+    100 * 1024 * 1024,
+    "Batch size in bytes when reading parquet during preload.");
+
 void CudfTpchBenchmark::initialize() {
+  if (FLAGS_preload) {
+    FLAGS_filters_as_node = true;
+  }
   TpchBenchmark::initialize();
 
   if (FLAGS_velox_cudf_table_scan) {
@@ -159,7 +182,55 @@ CudfTpchBenchmark::listSplits(
   return TpchBenchmark::listSplits(path, numSplitsPerFile, plan);
 }
 
+void CudfTpchBenchmark::ensurePreloaded() {
+  if (!preloadedTables_.empty()) {
+    return;
+  }
+  auto pool = memory::memoryManager()->addLeafPool();
+  auto format = toFileFormat(FLAGS_data_format);
+
+  static const std::vector<std::pair<std::string, tpch::Table>> kTables = {
+      {"lineitem", tpch::Table::TBL_LINEITEM},
+      {"orders", tpch::Table::TBL_ORDERS},
+      {"customer", tpch::Table::TBL_CUSTOMER},
+      {"part", tpch::Table::TBL_PART},
+      {"partsupp", tpch::Table::TBL_PARTSUPP},
+      {"supplier", tpch::Table::TBL_SUPPLIER},
+      {"nation", tpch::Table::TBL_NATION},
+      {"region", tpch::Table::TBL_REGION},
+  };
+
+  for (const auto& [tableName, table] : kTables) {
+    auto schema = tpch::getTableSchema(table);
+    auto stdCols = schema->names();
+    auto info = cudf_velox::readTableInfo(
+        tableName, FLAGS_data_path, stdCols, format, pool.get());
+    if (info.dataFiles.empty()) {
+      continue;
+    }
+    auto vectors = cudf_velox::readParquetIntoCudfVectors(
+        info.dataFiles,
+        info.type,
+        info.fileColumnNames,
+        pool.get(),
+        FLAGS_preload_batch_size);
+    preloadedTables_[tableName] = std::move(vectors);
+  }
+  cudf_velox::registerGpuValuesAdapter();
+}
+
+TpchPlan CudfTpchBenchmark::transformPlan(TpchPlan plan) {
+  if (!FLAGS_preload) {
+    return plan;
+  }
+  ensurePreloaded();
+  plan.plan = replaceTableScansWithValues(plan.plan, preloadedTables_);
+  plan.dataFiles.clear();
+  return plan;
+}
+
 void CudfTpchBenchmark::shutdown() {
+  preloadedTables_.clear();
   cudf_velox::unregisterCudf();
   TpchBenchmark::shutdown();
 }

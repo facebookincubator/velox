@@ -12,13 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(velox_cudf_benchmark_lib CudfTpchBenchmark.cpp)
+add_library(velox_cudf_benchmark_lib
+  CudfBenchmarkHelpers.cpp
+  CudfTpchBenchmark.cpp
+  TpchPlanRewriter.cpp
+)
 
 target_link_libraries(
   velox_cudf_benchmark_lib
   velox_cudf_exec
   velox_cudf_exec_test_lib
   velox_tpch_benchmark_lib
+  velox_tpch_gen
 )
 
 add_executable(velox_cudf_tpch_benchmark CudfTpchBenchmarkMain.cpp)

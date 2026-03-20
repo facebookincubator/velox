@@ -27,11 +27,16 @@ class TpchBenchmark : public facebook::velox::QueryBenchmarkBase {
   void runMain(std::ostream& out, facebook::velox::RunStats& runStats) override;
 
   void runQuery(int32_t queryId) {
-    const auto planContext = queryBuilder_->getQueryPlan(queryId);
+    auto planContext = transformPlan(queryBuilder_->getQueryPlan(queryId));
     run(planContext, queryConfigs_);
   }
 
  protected:
+  virtual facebook::velox::exec::test::TpchPlan transformPlan(
+      facebook::velox::exec::test::TpchPlan plan) {
+    return plan;
+  }
+
   std::unordered_map<std::string, std::string> queryConfigs_;
 
  private:

@@ -17,9 +17,11 @@
 #pragma once
 
 #include "velox/benchmarks/tpch/TpchBenchmark.h"
+#include "velox/vector/ComplexVector.h"
 
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 class CudfTpchBenchmark : public TpchBenchmark {
@@ -36,4 +38,14 @@ class CudfTpchBenchmark : public TpchBenchmark {
       const facebook::velox::exec::test::TpchPlan& plan) override;
 
   void shutdown() override;
+
+ protected:
+  facebook::velox::exec::test::TpchPlan transformPlan(
+      facebook::velox::exec::test::TpchPlan plan) override;
+
+ private:
+  void ensurePreloaded();
+
+  std::unordered_map<std::string, std::vector<facebook::velox::RowVectorPtr>>
+      preloadedTables_;
 };
