@@ -18,7 +18,6 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
 #include "velox/parse/PlanNodeIdGenerator.h"
-#include "velox/serializers/RegisterAllVectorSerdes.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -30,7 +29,6 @@ class PlanNodeTest : public testing::Test, public test::VectorTestBase {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
-    registerAllNamedVectorSerdes();
   }
 
   PlanNodeTest() {
