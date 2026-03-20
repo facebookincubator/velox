@@ -6755,5 +6755,27 @@ TEST_F(TableScanTest, longDecimalFilter) {
   assertQuery(op, createSplit(), "SELECT b FROM tmp WHERE a is null");
 }
 
+TEST_F(TableScanTest, fileFormatRuntimeStats) {
+  auto vectors = makeVectors(3, 1'000);
+
+  // Write 3 DWRF files.
+  auto filePaths = makeFilePaths(3);
+  for (const auto& filePath : filePaths) {
+    writeToFile(filePath->getPath(), vectors);
+  }
+
+  // DuckDB reference table needs all data from all 3 files.
+  std::vector<RowVectorPtr> allVectors;
+  for (int i = 0; i < 3; ++i) {
+    allVectors.insert(allVectors.end(), vectors.begin(), vectors.end());
+  }
+  createDuckDbTable(allVectors);
+
+  auto task = assertQuery(tableScanNode(), filePaths, "SELECT * FROM tmp");
+  auto stats = getTableScanRuntimeStats(task);
+  ASSERT_EQ(stats.count("fileFormat.dwrf"), 1);
+  ASSERT_EQ(stats.at("fileFormat.dwrf").sum, 3);
+}
+
 } // namespace
 } // namespace facebook::velox::exec
