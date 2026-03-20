@@ -481,6 +481,7 @@ void HashProbe::asyncWaitForHashTable() {
     }
   } else if (
       (isInnerJoin(joinType_) || isLeftSemiFilterJoin(joinType_) ||
+       isCountingLeftSemiFilterJoin(joinType_) ||
        isRightSemiFilterJoin(joinType_) ||
        (isRightSemiProjectJoin(joinType_) && !nullAware_) ||
        isRightJoin(joinType_)) &&
@@ -987,8 +988,8 @@ bool HashProbe::needLastProbe() const {
 
 bool HashProbe::skipProbeOnEmptyBuild() const {
   return isInnerJoin(joinType_) || isLeftSemiFilterJoin(joinType_) ||
-      isRightJoin(joinType_) || isRightSemiFilterJoin(joinType_) ||
-      isRightSemiProjectJoin(joinType_);
+      isCountingLeftSemiFilterJoin(joinType_) || isRightJoin(joinType_) ||
+      isRightSemiFilterJoin(joinType_) || isRightSemiProjectJoin(joinType_);
 }
 
 bool HashProbe::canSpill() const {
@@ -1143,7 +1144,7 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
 
   const bool isLeftSemiOrAntiJoinNoFilter = !filter_ &&
       (isLeftSemiFilterJoin(joinType_) || isLeftSemiProjectJoin(joinType_) ||
-       isAntiJoin(joinType_));
+       isAntiJoin(joinType_) || isCountingJoin(joinType_));
 
   const bool emptyBuildSide = (table_->numDistinct() == 0);
 
@@ -1203,6 +1204,31 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
             mapping[numOut] = i;
             ++numOut;
           }
+        }
+      }
+    } else if (isCountingAntiJoin(joinType_)) {
+      // Counting anti-join: emit row if no match or count has reached zero.
+      // Decrement count on match.
+      auto* rows = table_->rows();
+      for (auto i = 0; i < inputSize; ++i) {
+        auto* hit = lookup_->hits[i];
+        if (!activeRows_.isValid(i) || !hit || rows->count(hit) == 0) {
+          mapping[numOut] = i;
+          ++numOut;
+        } else {
+          rows->decrementCount(hit);
+        }
+      }
+    } else if (isCountingLeftSemiFilterJoin(joinType_)) {
+      // Counting semi-join: emit row if match and count > 0.
+      // Decrement count on match.
+      auto* rows = table_->rows();
+      for (auto i = 0; i < inputSize; ++i) {
+        auto* hit = lookup_->hits[i];
+        if (activeRows_.isValid(i) && hit && rows->count(hit) > 0) {
+          rows->decrementCount(hit);
+          mapping[numOut] = i;
+          ++numOut;
         }
       }
     } else {
@@ -1718,7 +1744,7 @@ void HashProbe::ensureLoadedIfNotAtEnd(column_index_t channel) {
 void HashProbe::ensureLoaded(column_index_t channel) {
   if (!filter_ &&
       (isLeftSemiFilterJoin(joinType_) || isLeftSemiProjectJoin(joinType_) ||
-       isAntiJoin(joinType_))) {
+       isAntiJoin(joinType_) || isCountingJoin(joinType_))) {
     return;
   }
 

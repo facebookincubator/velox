@@ -76,16 +76,16 @@ class SplitIndexReader {
 
 /// Factory function type for creating IndexReader instances.
 ///
-/// Called by HiveIndexSource during addSplits() to create a reader for each
-/// split (or group of splits) based on the file format. The factory receives
-/// all the context needed to set up a reader for the given storage format.
+/// Creates one IndexReader per split during HiveIndexSource::addSplits().
+/// Receives all the context needed to set up a reader for the given storage
+/// format.
 ///
-/// @param splits The splits to create the reader for.
+/// @param split The split to create the reader for.
 /// @param tableHandle The table handle containing table metadata.
 /// @param connectorQueryCtx Query context (memory pool, session config, etc.).
 /// @return A unique_ptr to the created IndexReader.
 using IndexReaderFactory = std::function<std::unique_ptr<SplitIndexReader>(
-    const std::vector<std::shared_ptr<const HiveConnectorSplit>>& splits,
+    const std::shared_ptr<const HiveConnectorSplit>& split,
     const ConnectorTableHandlePtr& tableHandle,
     ConnectorQueryCtx* connectorQueryCtx)>;
 
