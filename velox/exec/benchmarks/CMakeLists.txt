@@ -161,6 +161,16 @@ target_link_libraries(
   Folly::follybenchmark
 )
 
+add_executable(velox_mark_sorted_benchmark MarkSortedBenchmark.cpp)
+
+target_link_libraries(
+  velox_mark_sorted_benchmark
+  velox_exec
+  velox_exec_test_lib
+  velox_vector_test_lib
+  Folly::follybenchmark
+)
+
 add_executable(velox_streaming_aggregation_benchmark StreamingAggregationBenchmark.cpp)
 
 target_link_libraries(

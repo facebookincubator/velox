@@ -378,6 +378,7 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
           dependentTypes,
           true,
           false,
+          false, // hasCountFlag
           1'000,
           tablePools[i].get());
 

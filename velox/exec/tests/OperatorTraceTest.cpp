@@ -457,7 +457,8 @@ TEST_F(OperatorTraceTest, task) {
 }
 
 TEST_F(OperatorTraceTest, error) {
-  const auto planNode = PlanBuilder().values({}).planNode();
+  const auto planNode =
+      PlanBuilder().values(std::vector<RowVectorPtr>{}).planNode();
   // No trace dir.
   {
     const auto queryConfigs = std::unordered_map<std::string, std::string>{

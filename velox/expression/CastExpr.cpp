@@ -237,7 +237,7 @@ VectorPtr CastExpr::castFromTime(
       auto* resultFlatVector = castResult->as<FlatVector<StringView>>();
 
       Buffer* buffer = resultFlatVector->getBufferWithSpace(
-          rows.countSelected() * TimeType::kTimeToVarcharRowSize,
+          rows.countSelected() * TIME()->timeToVarcharRowSize(),
           true /*exactSize*/);
       char* rawBuffer = buffer->asMutable<char>() + buffer->size();
 
@@ -844,8 +844,10 @@ void CastExpr::applyPeeled(
         fromType->toString(),
         toType->toString());
   } else if (fromType->isTime()) {
+    VELOX_DCHECK(fromType->equivalent(*TIME()));
     result = castFromTime(rows, input, context, toType);
   } else if (toType->isTime()) {
+    VELOX_DCHECK(toType->equivalent(*TIME()));
     result = castToTime(rows, input, context, fromType);
   } else if (toType->isShortDecimal()) {
     result = applyDecimal<int64_t>(rows, input, context, fromType, toType);

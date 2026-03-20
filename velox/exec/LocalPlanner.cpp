@@ -30,6 +30,7 @@
 #include "velox/exec/IndexLookupJoin.h"
 #include "velox/exec/Limit.h"
 #include "velox/exec/MarkDistinct.h"
+#include "velox/exec/MarkSorted.h"
 #include "velox/exec/Merge.h"
 #include "velox/exec/MergeJoin.h"
 #include "velox/exec/MixedUnion.h"
@@ -642,6 +643,11 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
             std::make_unique<EnforceDistinct>(
                 id, ctx.get(), enforceDistinctNode));
       }
+    } else if (
+        auto markSortedNode =
+            std::dynamic_pointer_cast<const core::MarkSortedNode>(planNode)) {
+      operators.push_back(
+          std::make_unique<MarkSorted>(id, ctx.get(), markSortedNode));
     } else if (
         auto localMerge =
             std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode)) {

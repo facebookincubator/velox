@@ -456,6 +456,12 @@ class QueryConfig {
   static constexpr const char* kHashJoinSpillFileCreateConfig =
       "hash_join_spill_file_create_config";
 
+  /// Config used to create row number spill files. This config is provided to
+  /// underlying file system and the config is free form. The form should be
+  /// defined by the underlying file system.
+  static constexpr const char* kRowNumberSpillFileCreateConfig =
+      "row_number_spill_file_create_config";
+
   /// Default offset spill start partition bit.
   /// 'kSpillNumPartitionBits' together to
   /// calculate the spilling partition number for join spill or aggregation
@@ -846,7 +852,8 @@ class QueryConfig {
 
   /// If this is true, then the unnest operator might split output for each
   /// input batch based on the output batch size control. Otherwise, it produces
-  /// a single output for each input batch.
+  /// a single output for each input batch. This can be overridden on a per
+  /// operator basis by the splitOutput parameter in the UnnestPlanNode.
   static constexpr const char* kUnnestSplitOutput = "unnest_split_output";
 
   /// Priority of the query in the memory pool reclaimer. Lower value means
@@ -875,6 +882,13 @@ class QueryConfig {
   /// join HashBuild.
   static constexpr const char* kJoinBuildVectorHasherMaxNumDistinct =
       "join_build_vector_hasher_max_num_distinct";
+
+  /// Batch size threshold for zero-copy optimization in MarkSorted operator.
+  /// For batches smaller than this threshold, the operator holds a reference to
+  /// the entire input batch instead of copying key columns for cross-batch
+  /// comparison.
+  static constexpr const char* kMarkSortedZeroCopyThreshold =
+      "mark_sorted_zero_copy_threshold";
 
   enum class RowSizeTrackingMode {
     DISABLED = 0,
@@ -1190,7 +1204,7 @@ class QueryConfig {
   }
 
   bool markDistinctSpillEnabled() const {
-    return get<bool>(kMarkDistinctSpillEnabled, true);
+    return get<bool>(kMarkDistinctSpillEnabled, false);
   }
 
   bool topNRowNumberSpillEnabled() const {
@@ -1266,6 +1280,10 @@ class QueryConfig {
 
   std::string hashJoinSpillFileCreateConfig() const {
     return get<std::string>(kHashJoinSpillFileCreateConfig, "");
+  }
+
+  std::string rowNumberSpillFileCreateConfig() const {
+    return get<std::string>(kRowNumberSpillFileCreateConfig, "");
   }
 
   int32_t minSpillableReservationPct() const {
@@ -1552,6 +1570,10 @@ class QueryConfig {
 
   uint32_t joinBuildVectorHasherMaxNumDistinct() const {
     return get<uint32_t>(kJoinBuildVectorHasherMaxNumDistinct, 1'000'000);
+  }
+
+  int32_t markSortedZeroCopyThreshold() const {
+    return get<int32_t>(kMarkSortedZeroCopyThreshold, 1000);
   }
 
   template <typename T>

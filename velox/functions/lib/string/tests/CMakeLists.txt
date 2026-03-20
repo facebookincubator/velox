@@ -24,3 +24,16 @@ target_link_libraries(
   gflags::gflags
   glog::glog
 )
+
+if(VELOX_ENABLE_BENCHMARKS)
+  add_executable(velox_string_core_benchmark StringCoreBenchmark.cpp)
+
+  target_link_libraries(
+    velox_string_core_benchmark
+    velox_functions_string
+    Folly::folly
+    Folly::follybenchmark
+    gflags::gflags
+    glog::glog
+  )
+endif()

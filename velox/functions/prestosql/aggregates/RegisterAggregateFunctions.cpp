@@ -57,6 +57,7 @@
 #include "velox/functions/prestosql/aggregates/SumAggregate.h"
 #include "velox/functions/prestosql/aggregates/SumDataSizeForStatsAggregate.h"
 #include "velox/functions/prestosql/aggregates/VarianceAggregates.h"
+#include "velox/functions/prestosql/aggregates/VectorSumAggregate.h"
 #include "velox/functions/prestosql/types/JsonRegistration.h"
 #include "velox/functions/prestosql/types/KHyperLogLogRegistration.h"
 #include "velox/functions/prestosql/types/SetDigestRegistration.h"
@@ -338,6 +339,8 @@ void registerAllAggregateFunctions(
       overwrite);
   registerArrayAggAggregate(
       {prefix + kArrayAgg}, withCompanionFunctions, overwrite);
+  registerVectorSumAggregate(
+      {prefix + kVectorSum}, withCompanionFunctions, overwrite);
   registerAverageAggregate({prefix + kAvg}, withCompanionFunctions, overwrite);
   registerBitwiseAndAggregate(
       {prefix + kBitwiseAnd},

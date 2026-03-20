@@ -181,6 +181,11 @@ class AsyncDataCacheEntry {
     return tinyData_.empty() ? nullptr : tinyData_.data();
   }
 
+  // Returns writable buffer ranges covering the first 'length' bytes of
+  // this entry's data. For small entries (tinyData), returns a single range.
+  // For larger entries (allocation-backed), returns one range per run.
+  std::vector<folly::Range<char*>> dataRanges(size_t length);
+
   const FileCacheKey& key() const {
     return key_;
   }
@@ -262,6 +267,12 @@ class AsyncDataCacheEntry {
 
   /// Sets access stats so that this is immediately evictable.
   void makeEvictable();
+
+  /// Returns true if this entry has been marked as immediately evictable
+  /// (lastUse == 0).
+  bool testingIsEvictable() const {
+    return accessStats_.lastUse == 0;
+  }
 
   std::string toString() const;
 
@@ -589,6 +600,8 @@ class CacheShard {
   /// Returns true if there is an entry for 'key'. Updates access time.
   bool exists(RawFileCacheKey key) const;
 
+  bool testingIsEvictable(RawFileCacheKey key) const;
+
   AsyncDataCache* cache() const {
     return cache_;
   }
@@ -841,6 +854,11 @@ class AsyncDataCache : public memory::Cache {
 
   /// Returns true if there is an entry for 'key'. Updates access time.
   bool exists(RawFileCacheKey key) const;
+
+  /// Returns true if the entry for 'key' exists and has been marked as
+  /// immediately evictable (lastUse == 0). Returns false if entry does not
+  /// exist or is not evictable. Does not update access stats.
+  bool testingIsEvictable(RawFileCacheKey key) const;
 
 #if defined(__has_feature)
 #if __has_feature(thread_sanitizer)

@@ -780,11 +780,12 @@ MergeExchange::MergeExchange(
           mergeExchangeNode->sortingOrders(),
           mergeExchangeNode->id(),
           OperatorType::kMergeExchange),
-      serde_(getNamedVectorSerde(mergeExchangeNode->serdeKind())),
+      serdeKind_(mergeExchangeNode->serdeKind()),
+      serde_(getNamedVectorSerde(serdeKind_)),
       serdeOptions_(getVectorSerdeOptions(
           common::stringToCompressionKind(
               driverCtx->queryConfig().shuffleCompressionKind()),
-          mergeExchangeNode->serdeKind())) {}
+          serdeKind_)) {}
 
 BlockingReason MergeExchange::addMergeSources(ContinueFuture* future) {
   if (operatorCtx_->driverCtx()->driverId != 0) {
@@ -861,8 +862,7 @@ void MergeExchange::close() {
     auto lockedStats = stats_.wlock();
     lockedStats->addRuntimeStat(
         Operator::kShuffleSerdeKind,
-        RuntimeCounter(
-            static_cast<int64_t>(VectorSerde::kindByName(serde_->kind()))));
+        RuntimeCounter(Operator::shuffleSerdeStatsValue(serdeKind_)));
     lockedStats->addRuntimeStat(
         Operator::kShuffleCompressionKind,
         RuntimeCounter(static_cast<int64_t>(serdeOptions_->compressionKind)));
