@@ -124,6 +124,10 @@ bool isAggregationSpillOperator(std::string_view operatorType) {
   return operatorType == OperatorType::kAggregation ||
       operatorType == OperatorType::kPartialAggregation;
 }
+
+bool isRowNumberSpillOperator(std::string_view operatorType) {
+  return operatorType == OperatorType::kRowNumber;
+}
 } // namespace
 
 std::optional<common::SpillConfig> DriverCtx::makeSpillConfig(
@@ -158,6 +162,11 @@ std::optional<common::SpillConfig> DriverCtx::makeSpillConfig(
         queryConfig.aggregationSpillFileCreateConfig();
     if (!aggregationConfig.empty()) {
       fileCreateConfig = aggregationConfig;
+    }
+  } else if (isRowNumberSpillOperator(operatorType)) {
+    const auto& rowNumberConfig = queryConfig.rowNumberSpillFileCreateConfig();
+    if (!rowNumberConfig.empty()) {
+      fileCreateConfig = rowNumberConfig;
     }
   }
 
@@ -202,6 +211,7 @@ BlockingState::BlockingState(
               .count()) {
   // Set before leaving the thread.
   driver_->state().hasBlockingFuture = true;
+  driver_->state().blockingStartUs = sinceUs_;
   numBlockedDrivers_++;
 }
 
@@ -897,6 +907,15 @@ void Driver::updateStats() {
   task()->addDriverStats(ctx_->pipelineId, std::move(stats));
 }
 
+void Driver::updateOperatorBlockingStats() {
+  // Record blocked time if the driver was blocked when terminated.
+  // This ensures we don't lose blocked time metrics when a query is aborted.
+  if (state_.hasBlockingFuture && blockedOperatorId_ < operators_.size()) {
+    operators_[blockedOperatorId_]->recordBlockingTime(
+        state_.blockingStartUs, blockingReason_);
+  }
+}
+
 void Driver::startBarrier() {
   VELOX_CHECK(ctx_->task->underBarrier());
   VELOX_CHECK(
@@ -1003,6 +1022,7 @@ void Driver::close() {
 void Driver::closeByTask() {
   VELOX_CHECK(isOnThread());
   VELOX_CHECK(isTerminated());
+  updateOperatorBlockingStats();
   closeOperators();
   updateStats();
   closed_ = true;

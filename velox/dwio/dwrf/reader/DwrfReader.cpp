@@ -250,17 +250,6 @@ const velox::common::ScanSpec* getChildScanSpec(
       : nullptr;
 }
 
-void registerColumnMetrics(
-    const dwio::common::TypeWithId& node,
-    dwio::common::ColumnMetricsSet& metricsSet) {
-  metricsSet.getOrCreate(node.id(), node.type()->kind());
-  for (uint32_t i = 0; i < node.size(); ++i) {
-    if (const auto* child = node.childAt(i).get()) {
-      registerColumnMetrics(*child, metricsSet);
-    }
-  }
-}
-
 } // namespace
 
 DwrfRowReader::DwrfRowReader(
@@ -279,11 +268,8 @@ DwrfRowReader::DwrfRowReader(
       columnReaderStats_(
           std::make_shared<dwio::common::ColumnReaderStatistics>()),
       currentUnit_{nullptr} {
-  if (options_.collectColumnStats()) {
-    columnReaderStats_->columnMetricsSet.emplace();
-    registerColumnMetrics(
-        *getReader().schemaWithId(), *columnReaderStats_->columnMetricsSet);
-  }
+  columnReaderStats_->initColumnStatsCollection(
+      *getReader().schemaWithId(), options_);
   const auto& fileFooter = getReader().footer();
   const uint32_t numberOfStripes = fileFooter.stripesSize();
   currentStripe_ = numberOfStripes;

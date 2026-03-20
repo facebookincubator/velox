@@ -368,6 +368,10 @@ class QueryConfig {
   static constexpr const char* kRowNumberSpillEnabled =
       "row_number_spill_enabled";
 
+  /// MarkDistinct spilling flag, only applies if "spill_enabled" flag is set.
+  static constexpr const char* kMarkDistinctSpillEnabled =
+      "mark_distinct_spill_enabled";
+
   /// TopNRowNumber spilling flag, only applies if "spill_enabled" flag is set.
   static constexpr const char* kTopNRowNumberSpillEnabled =
       "topn_row_number_spill_enabled";
@@ -451,6 +455,12 @@ class QueryConfig {
   /// defined by the underlying file system.
   static constexpr const char* kHashJoinSpillFileCreateConfig =
       "hash_join_spill_file_create_config";
+
+  /// Config used to create row number spill files. This config is provided to
+  /// underlying file system and the config is free form. The form should be
+  /// defined by the underlying file system.
+  static constexpr const char* kRowNumberSpillFileCreateConfig =
+      "row_number_spill_file_create_config";
 
   /// Default offset spill start partition bit.
   /// 'kSpillNumPartitionBits' together to
@@ -842,7 +852,8 @@ class QueryConfig {
 
   /// If this is true, then the unnest operator might split output for each
   /// input batch based on the output batch size control. Otherwise, it produces
-  /// a single output for each input batch.
+  /// a single output for each input batch. This can be overridden on a per
+  /// operator basis by the splitOutput parameter in the UnnestPlanNode.
   static constexpr const char* kUnnestSplitOutput = "unnest_split_output";
 
   /// Priority of the query in the memory pool reclaimer. Lower value means
@@ -1185,6 +1196,10 @@ class QueryConfig {
     return get<bool>(kRowNumberSpillEnabled, true);
   }
 
+  bool markDistinctSpillEnabled() const {
+    return get<bool>(kMarkDistinctSpillEnabled, false);
+  }
+
   bool topNRowNumberSpillEnabled() const {
     return get<bool>(kTopNRowNumberSpillEnabled, true);
   }
@@ -1258,6 +1273,10 @@ class QueryConfig {
 
   std::string hashJoinSpillFileCreateConfig() const {
     return get<std::string>(kHashJoinSpillFileCreateConfig, "");
+  }
+
+  std::string rowNumberSpillFileCreateConfig() const {
+    return get<std::string>(kRowNumberSpillFileCreateConfig, "");
   }
 
   int32_t minSpillableReservationPct() const {

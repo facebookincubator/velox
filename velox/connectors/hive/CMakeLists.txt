@@ -16,6 +16,7 @@ velox_add_library(velox_hive_config OBJECT HiveConfig.cpp)
 velox_link_libraries(velox_hive_config velox_core velox_exception)
 
 add_subdirectory(iceberg)
+add_subdirectory(paimon)
 
 velox_add_library(
   velox_hive_connector
@@ -28,7 +29,7 @@ velox_add_library(
   HiveConnectorSplit.cpp
   HiveDataSink.cpp
   HiveDataSource.cpp
-  HiveIndexReader.cpp
+  FileIndexReader.cpp
   HiveIndexSource.cpp
   HivePartitionName.cpp
   PartitionIdGenerator.cpp

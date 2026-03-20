@@ -751,6 +751,8 @@ distribution fields.
      - Factory to make partition functions to use when calculating partitions for input rows.
    * - outputType
      - A list of output columns. This is a subset of input columns possibly in a different order.
+   * - serdeKind
+     - Name of the serialization format to use for shuffling data. Built-in formats: 'Presto', 'CompactRow', 'UnsafeRow'.
 
 ValuesNode
 ~~~~~~~~~~
@@ -786,6 +788,8 @@ streams are coming from remote exchange or shuffle.
      - Description
    * - type
      - A list of columns in the input streams.
+   * - serdeKind
+     - Name of the serialization format used by the upstream shuffle. Built-in formats: 'Presto', 'CompactRow', 'UnsafeRow'.
 
 MergeExchangeNode
 ~~~~~~~~~~~~~~~~~
@@ -806,6 +810,8 @@ orderedness. Input streams are coming from remote exchange or shuffle.
      - List of one of more input columns to sort by.
    * - sortingOrders
      - Sorting order for each of the soring keys. See OrderBy for the list of supported orders.
+   * - serdeKind
+     - Name of the serialization format used by the upstream shuffle. Built-in formats: 'Presto', 'CompactRow', 'UnsafeRow'.
 
 LocalMergeNode
 ~~~~~~~~~~~~~~
@@ -1017,6 +1023,11 @@ MarkDistinctNode
 
 The MarkDistinct operator is used to produce aggregate mask columns for aggregations over distinct values, e.g. agg(DISTINCT a).
 Mask is a boolean column set to true for a subset of input rows that collectively represent a set of unique values of 'distinctKeys'.
+
+This operator supports spilling. The spill mechanism follows the same pattern as RowNumber: when memory pressure
+triggers spilling, the hash table contents and future input are partitioned and written to disk. During restore,
+each partition's hash table is rebuilt from the spilled data, preserving knowledge of which keys were already seen.
+Disabled by default; enable with `mark_distinct_spill_enabled` configuration property.
 
 .. list-table::
   :widths: 10 30
