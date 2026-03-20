@@ -13,10 +13,10 @@
 # limitations under the License.
 include_guard(GLOBAL)
 
-set(VELOX_DUCKDB_VERSION 0.8.1)
+set(VELOX_DUCKDB_VERSION 1.4.4)
 set(
   VELOX_DUCKDB_BUILD_SHA256_CHECKSUM
-  a0674f7e320dc7ebcf51990d7fc1c0e7f7b2c335c08f5953702b5285e6c30694
+  43645e15419c6539bae6915ba397de6569e4a7ca0d502be95d653a78fdb0bece
 )
 set(
   VELOX_DUCKDB_SOURCE_URL
@@ -35,14 +35,16 @@ FetchContent_Declare(
   URL_HASH ${VELOX_DUCKDB_BUILD_SHA256_CHECKSUM}
   PATCH_COMMAND
     git apply ${CMAKE_CURRENT_LIST_DIR}/duckdb/remove-ccache.patch && git apply
-    ${CMAKE_CURRENT_LIST_DIR}/duckdb/re2.patch
+    ${CMAKE_CURRENT_LIST_DIR}/duckdb/re2.patch && git apply
+    ${CMAKE_CURRENT_LIST_DIR}/duckdb/zstd.patch
 )
 
 # DuckDB uses git commands to retrieve version information during the build,
 # which works with git clone. To prevent incorrectly using the parent project's
 # git version when building from a tarball, we define GIT_COMMIT_HASH to skip
 # that.
-set(GIT_COMMIT_HASH "6536a77")
+set(GIT_COMMIT_HASH "6ddac80")
+set(OVERRIDE_GIT_DESCRIBE "v${VELOX_DUCKDB_VERSION}-0-g6ddac80" CACHE STRING "" FORCE)
 set(BUILD_UNITTESTS OFF)
 set(BUILD_TESTING OFF)
 set(ENABLE_SANITIZER OFF)
@@ -56,6 +58,11 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-non-virtual-dtor")
 # Clang17 requires this. See issue #13215.
 if("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 17.0.0)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-missing-template-arg-list-after-template-kw")
+endif()
+# GCC produces false positive -Wstringop-overflow warnings in DuckDB's
+# wal_replay.cpp and parquet_decimal_utils.hpp after inlining.
+if("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-stringop-overflow")
 endif()
 
 FetchContent_MakeAvailable(duckdb)
