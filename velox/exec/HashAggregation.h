@@ -51,6 +51,8 @@ class HashAggregation : public Operator {
     return !noMoreInput_ && !partialFull_;
   }
 
+  bool startDrain() override;
+
   void noMoreInput() override;
 
   BlockingReason isBlocked(ContinueFuture* /* unused */) override {
