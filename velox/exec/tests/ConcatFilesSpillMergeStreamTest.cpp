@@ -146,8 +146,7 @@ class ConcatFilesSpillMergeStreamTest : public OperatorTestBase {
               outputRow,
               outputSize,
               spillSources,
-              spillSourceRows,
-              {});
+              spillSourceRows);
           outputRow += outputSize;
           outputSize = 0;
         }
@@ -156,12 +155,7 @@ class ConcatFilesSpillMergeStreamTest : public OperatorTestBase {
       }
       if (FOLLY_LIKELY(outputSize != 0)) {
         gatherCopy(
-            output.get(),
-            outputRow,
-            outputSize,
-            spillSources,
-            spillSourceRows,
-            {});
+            output.get(), outputRow, outputSize, spillSources, spillSourceRows);
       }
       results.push_back(output);
     }

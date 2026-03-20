@@ -832,6 +832,10 @@ class RowContainer {
         stringAllocator_->freeSpace());
   }
 
+  /// Returns the total bytes used to store rows in this container, excluding
+  /// free space and internal bookkeeping overhead (e.g. row pointer capacity).
+  int64_t usedBytes() const;
+
   /// Returns the average size of rows in bytes stored in this container.
   std::optional<int64_t> estimateRowSize() const;
 

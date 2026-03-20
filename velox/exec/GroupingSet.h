@@ -277,22 +277,6 @@ class GroupingSet {
   // Returns the currently accummulated bytes of the unspill merge rows.
   uint64_t mergeRowBytes() const;
 
-  // Initializes a new row in 'mergeRows' with the keys from the
-  // current element from 'stream'. Accumulators are left in the initial
-  // state with no data accumulated. This is called each time a new
-  // key is received from a merge of spilled data. After this
-  // updateRow() is called on the same element and on every subsequent
-  // element read from the stream until a new key is seen, at which
-  // time we again call initializeRow(). When enough rows have been
-  // accumulated and we have a new key, we produce the output and
-  // clear 'mergeRows_' with extractSpillResult() and only then do
-  // initializeRow().
-  void initializeRow(SpillMergeStream& stream, char* row);
-
-  // Updates the accumulators in 'row' with the intermediate type data from
-  // 'keys'. This is called for each row received from a merge of spilled data.
-  void updateRow(SpillMergeStream& keys, char* row);
-
   // Returns a RowType of the spilled data.
   RowTypePtr makeSpillType() const;
 
@@ -310,6 +294,27 @@ class GroupingSet {
   // 'excludeToIntermediate' is true, skip the functions that support
   // 'toIntermediate'.
   std::vector<Accumulator> accumulators(bool excludeToIntermediate);
+
+  // Updates the accumulators in 'mergeStates_' with the intermediate type data
+  // gathered in 'intermediateResult_'. Called in batches during spill merge.
+  void updateRows();
+
+  // Initializes new rows with the keys from 'firstRowStates_' and sets
+  // accumulators to their initial state. Called in batches during spill merge.
+  void initializeRows();
+
+  // Ensures 'groupIndices_' is sized to 'newSize' with identity mapping.This
+  // function only expands the size if 'newSize' is greater than the current
+  // size.
+  void ensureGroupIndices(vector_size_t newSize);
+
+  // Initializes and updates 'mergeRows_' with pending spill merge state by
+  // calling initializeRows() and updateRows() respectively for accumulated
+  // first row of every group and unmerged rows. Updates 'averageRowSize' with
+  // the average row size in 'mergeRows_' only when there are pending merge
+  // states to process, used to estimate the row size of new groups that have
+  // not yet been merged.
+  void initializeAndUpdateRows(int32_t maxOutputRows, uint64_t& averageRowSize);
 
   // A subset of grouping keys on which the input is clustered.
   const std::vector<column_index_t> preGroupedKeyChannels_;
@@ -388,6 +393,18 @@ class GroupingSet {
 
   std::vector<vector_size_t> spillSourceRows_;
 
+  // Records the first rows of all groups of spilled data.
+  std::vector<SpillMergeStream*> firstRowStreams_;
+  std::vector<vector_size_t> firstRowIndices_;
+  std::vector<char*> firstRowStates_;
+
+  // Records the source unmerged rows to update rows by batch.
+  std::vector<const RowVector*> mergeSources_;
+  std::vector<vector_size_t> mergeRowIndices_;
+  std::vector<char*> mergeStates_;
+
+  std::vector<vector_size_t> groupIndices_;
+
   // The value of mayPushdown flag specified in addInput() for the
   // 'remainingInput_'.
   bool remainingMayPushdown_;
@@ -416,6 +433,9 @@ class GroupingSet {
 
   // Intermediate vector for passing arguments to aggregate in merging spill.
   std::vector<VectorPtr> mergeArgs_;
+
+  // Intermediate result from multiple merging streams in merging spill.
+  RowVectorPtr intermediateResult_;
 
   // Indicates the element in mergeArgs_[0] that corresponds to the accumulator
   // to merge.

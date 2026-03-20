@@ -1203,9 +1203,12 @@ bool GroupingSet::mergeNextWithAggregates(
   // True if 'merge_' indicates that the next key is the same as the current
   // one.
   bool nextKeyIsEqual{false};
+  bool endOfBatch{false};
+  uint64_t averageRowSize{0};
   for (;;) {
     const auto next = merge_->nextWithEquals();
     if (next.first == nullptr) {
+      initializeAndUpdateRows(maxOutputRows, averageRowSize);
       extractSpillResult(result);
       if (result->size() > 0) {
         return true;
@@ -1219,16 +1222,29 @@ bool GroupingSet::mergeNextWithAggregates(
       continue;
     }
     if (!nextKeyIsEqual) {
+      // This is the first row of a new group.
       mergeState_ = mergeRows_->newRow();
-      initializeRow(*next.first, mergeState_);
+      firstRowStreams_.push_back(next.first);
+      firstRowIndices_.push_back(next.first->currentIndex());
+      firstRowStates_.push_back(mergeState_);
     }
-    updateRow(*next.first, mergeState_);
+    mergeSources_.push_back(&next.first->current());
+    mergeRowIndices_.push_back(next.first->currentIndex(&endOfBatch));
+    mergeStates_.push_back(mergeState_);
     nextKeyIsEqual = next.second;
+    // Merge spilled rows before pop() to avoid dangling pointers into the
+    // stream's internal RowVector.
+    // Also ensures averageRowSize is initialized at the first group boundary,
+    // so the byte-based batch limit check below can take effect early.
+    if (endOfBatch || (!nextKeyIsEqual && averageRowSize == 0)) {
+      initializeAndUpdateRows(maxOutputRows, averageRowSize);
+    }
     next.first->pop();
 
     if (!nextKeyIsEqual &&
         ((mergeRows_->numRows() >= maxOutputRows) ||
-         (mergeRowBytes() >= maxOutputBytes))) {
+         (mergeRows_->numRows() * averageRowSize >= maxOutputBytes))) {
+      initializeAndUpdateRows(maxOutputRows, averageRowSize);
       extractSpillResult(result);
       return true;
     }
@@ -1237,7 +1253,7 @@ bool GroupingSet::mergeNextWithAggregates(
 }
 
 uint64_t GroupingSet::mergeRowBytes() const {
-  auto totalBytes = mergeRows_->allocatedBytes();
+  auto totalBytes = mergeRows_->usedBytes();
   if (sortedAggregations_ != nullptr) {
     totalBytes += sortedAggregations_->inputRowBytes();
 
@@ -1387,27 +1403,49 @@ bool GroupingSet::mergeNextWithoutAggregates(
   return numOutputRows > 0;
 }
 
-void GroupingSet::initializeRow(SpillMergeStream& stream, char* row) {
-  for (auto i = 0; i < keyChannels_.size(); ++i) {
-    mergeRows_->store(stream.decoded(i), stream.currentIndex(), mergeState_, i);
+void GroupingSet::ensureGroupIndices(vector_size_t newSize) {
+  vector_size_t size = groupIndices_.size();
+  if (size < newSize) {
+    groupIndices_.resize(newSize);
+    std::iota(groupIndices_.begin() + size, groupIndices_.end(), size);
   }
-  vector_size_t zero = 0;
+}
+
+void GroupingSet::initializeRows() {
+  VELOX_CHECK_EQ(firstRowStreams_.size(), firstRowIndices_.size());
+  VELOX_CHECK_EQ(firstRowStreams_.size(), firstRowStates_.size());
+  ensureGroupIndices(firstRowStreams_.size());
+  for (auto i = 0; i < keyChannels_.size(); ++i) {
+    for (auto j = 0; j < firstRowStates_.size(); ++j) {
+      mergeRows_->store(
+          firstRowStreams_[j]->decoded(i),
+          firstRowIndices_[j],
+          firstRowStates_[j],
+          i);
+    }
+  }
   for (auto i = 0; i < aggregates_.size(); ++i) {
     if (!aggregates_[i].sortingKeys.empty()) {
       continue;
     }
     if (!aggregates_[i].distinct) {
       aggregates_[i].function->initializeNewGroups(
-          &row, folly::Range<const vector_size_t*>(&zero, 1));
+          firstRowStates_.data(),
+          folly::Range<const vector_size_t*>(
+              groupIndices_.data(), firstRowStates_.size()));
     } else {
       distinctAggregations_[i]->initializeNewGroups(
-          &row, folly::Range<const vector_size_t*>(&zero, 1));
+          firstRowStates_.data(),
+          folly::Range<const vector_size_t*>(
+              groupIndices_.data(), firstRowStates_.size()));
     }
   }
 
   if (sortedAggregations_ != nullptr) {
     sortedAggregations_->initializeNewGroups(
-        &row, folly::Range<const vector_size_t*>(&zero, 1));
+        firstRowStates_.data(),
+        folly::Range<const vector_size_t*>(
+            groupIndices_.data(), firstRowStates_.size()));
   }
 }
 
@@ -1438,38 +1476,72 @@ void GroupingSet::clearMergeRows() {
   }
 }
 
-void GroupingSet::updateRow(SpillMergeStream& input, char* row) {
-  if (input.currentIndex() >= mergeSelection_.size()) {
-    mergeSelection_.resize(bits::roundUp(input.currentIndex() + 1, 64));
-    mergeSelection_.clearAll();
-  }
-  mergeSelection_.setValid(input.currentIndex(), true);
-  mergeSelection_.updateBounds();
+void GroupingSet::updateRows() {
+  VELOX_CHECK_EQ(mergeStates_.size(), intermediateResult_->size());
+  mergeSelection_.resizeFill(intermediateResult_->size(), true);
   for (auto i = 0; i < aggregates_.size(); ++i) {
     if (!aggregates_[i].sortingKeys.empty()) {
       continue;
     }
-    mergeArgs_[0] = input.current().childAt(i + keyChannels_.size());
-    aggregates_[i].function->addSingleGroupIntermediateResults(
-        row, mergeSelection_, mergeArgs_, false);
+    mergeArgs_[0] = intermediateResult_->childAt(i + keyChannels_.size());
+    aggregates_[i].function->addIntermediateResults(
+        mergeStates_.data(), mergeSelection_, mergeArgs_, false);
   }
-  mergeSelection_.setValid(input.currentIndex(), false);
 
   auto sortOrDistinctAggIndex = aggregates_.size() + keyChannels_.size();
   if (sortedAggregations_ != nullptr) {
-    const auto& vector = input.current().childAt(sortOrDistinctAggIndex);
-    sortedAggregations_->addSingleGroupSpillInput(
-        row, vector, input.currentIndex());
+    const auto& vector = intermediateResult_->childAt(sortOrDistinctAggIndex);
+    for (int i = 0; i < mergeStates_.size(); ++i) {
+      sortedAggregations_->addSingleGroupSpillInput(mergeStates_[i], vector, i);
+    }
     ++sortOrDistinctAggIndex;
   }
 
   for (const auto& distinctAgg : distinctAggregations_) {
     if (distinctAgg != nullptr) {
-      distinctAgg->addSingleGroupSpillInput(
-          row,
-          input.current().childAt(sortOrDistinctAggIndex),
-          input.currentIndex());
+      const auto& vector = intermediateResult_->childAt(sortOrDistinctAggIndex);
+      for (int i = 0; i < mergeStates_.size(); ++i) {
+        distinctAgg->addSingleGroupSpillInput(mergeStates_[i], vector, i);
+      }
       ++sortOrDistinctAggIndex;
+    }
+  }
+}
+
+void GroupingSet::initializeAndUpdateRows(
+    int32_t maxOutputRows,
+    uint64_t& averageRowSize) {
+  if (!firstRowStreams_.empty()) {
+    initializeRows();
+    firstRowStreams_.clear();
+    firstRowIndices_.clear();
+    firstRowStates_.clear();
+  }
+
+  if (!mergeStates_.empty()) {
+    if (!intermediateResult_) {
+      intermediateResult_ = BaseVector::create<RowVector>(
+          mergeSources_.back()->type(), maxOutputRows, pool_);
+    }
+    intermediateResult_->prepareForReuse();
+    intermediateResult_->resize(mergeSources_.size());
+    // Only gather copy accumulators.
+    for (auto i = keyChannels_.size(); i < intermediateResult_->childrenSize();
+         i++) {
+      gatherCopy(
+          intermediateResult_->childAt(i).get(),
+          0,
+          mergeSources_.size(),
+          mergeSources_,
+          mergeRowIndices_,
+          i);
+    }
+    updateRows();
+    mergeSources_.clear();
+    mergeRowIndices_.clear();
+    mergeStates_.clear();
+    if (const auto updatedSize = mergeRowBytes() / mergeRows_->numRows()) {
+      averageRowSize = updatedSize;
     }
   }
 }

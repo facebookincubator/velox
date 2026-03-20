@@ -139,6 +139,21 @@ void gatherCopy(
     const std::vector<vector_size_t>& sourceIndices,
     const std::vector<IdentityProjection>& columnMap = {});
 
+/// Scatter copy from multiple source row vectors into the target base vector.
+/// 'targetIndex' is first row in 'target' to copy to. 'count' specifies how
+/// many rows to copy from the sources. 'sources' and 'sourceIndices' specify
+/// the source rows to copy from. 'sourceChannel' specifies the column channel
+/// in the source row vectors to copy from.
+///
+/// NOTE: all the source row vectors must have the same data type.
+void gatherCopy(
+    BaseVector* target,
+    vector_size_t targetIndex,
+    vector_size_t count,
+    const std::vector<const RowVector*>& sources,
+    const std::vector<vector_size_t>& sourceIndices,
+    column_index_t sourceChannel);
+
 /// Generates the system-wide unique disk spill file path for an operator. It
 /// will be the directory on fs with namespace support or common file prefix if
 /// not. It is assumed that the disk spilling file hierarchy for an operator is

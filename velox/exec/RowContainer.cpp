@@ -1034,15 +1034,17 @@ void RowContainer::extractProbedFlags(
   }
 }
 
+int64_t RowContainer::usedBytes() const {
+  int64_t freeBytes = rows_.freeBytes() + fixedRowSize_ * numFreeRows_;
+  return rows_.allocatedBytes() - freeBytes + stringAllocator_->retainedSize() -
+      stringAllocator_->freeSpace() - rowPointers_.capacity() * sizeof(char*);
+}
+
 std::optional<int64_t> RowContainer::estimateRowSize() const {
   if (numRows_ == 0) {
     return std::nullopt;
   }
-  int64_t freeBytes = rows_.freeBytes() + fixedRowSize_ * numFreeRows_;
-  int64_t usedSize = rows_.allocatedBytes() - freeBytes +
-      stringAllocator_->retainedSize() - stringAllocator_->freeSpace() -
-      rowPointers_.capacity() * sizeof(char*);
-  int64_t rowSize = usedSize / numRows_;
+  int64_t rowSize = usedBytes() / numRows_;
   VELOX_CHECK_GT(
       rowSize, 0, "Estimated row size of the RowContainer must be positive.");
   return rowSize;
