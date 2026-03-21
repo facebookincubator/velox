@@ -18,22 +18,23 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <vector>
 
 #include <fmt/format.h>
 
+#include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/hyperloglog/DenseHll.h"
 #include "velox/common/hyperloglog/SparseHll.h"
-#include "velox/exec/Aggregate.h"
+#include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/expression/FunctionSignature.h"
-#include "velox/expression/VectorReaders.h"
-#include "velox/expression/VectorWriters.h"
 #include "velox/functions/lib/HllAccumulator.h"
-#include "velox/functions/sparksql/XxHash64.h"
 #include "velox/type/Conversions.h"
 #include "velox/type/DecimalUtil.h"
-#include "velox/vector/ComplexVector.h"
+#include "velox/type/StringView.h"
+#include "velox/type/Timestamp.h"
 #include "velox/vector/DecodedVector.h"
 
 namespace facebook::velox::functions::aggregate::sparksql {
@@ -43,6 +44,161 @@ constexpr uint64_t kXxHash64Seed = 42;
 
 using HllAccumulator =
     common::hll::HllAccumulator<int64_t, false, HashStringAllocator>;
+
+class SparkXxHash64 final {
+ public:
+  static uint64_t hashInt32(int32_t input, uint64_t seed) {
+    uint64_t hash = seed + PRIME64_5 + 4ULL;
+    uint64_t data = static_cast<uint64_t>(static_cast<uint32_t>(input));
+    hash ^= data * PRIME64_1;
+    hash = bits::rotateLeft64(hash, 23) * PRIME64_2 + PRIME64_3;
+    return fmix(hash);
+  }
+
+  static uint64_t hashInt64(int64_t input, uint64_t seed) {
+    uint64_t hash = seed + PRIME64_5 + 8ULL;
+    uint64_t data = static_cast<uint64_t>(input);
+    hash ^= bits::rotateLeft64(data * PRIME64_2, 31) * PRIME64_1;
+    hash = bits::rotateLeft64(hash, 27) * PRIME64_1 + PRIME64_4;
+    return fmix(hash);
+  }
+
+  static uint64_t hashFloat(float input, uint64_t seed) {
+    uint32_t bits = 0;
+    std::memcpy(&bits, &input, sizeof(bits));
+    if (input == -0.f) {
+      bits = 0;
+    }
+    return hashInt32(static_cast<int32_t>(bits), seed);
+  }
+
+  static uint64_t hashDouble(double input, uint64_t seed) {
+    uint64_t bits = 0;
+    std::memcpy(&bits, &input, sizeof(bits));
+    if (input == -0.) {
+      bits = 0;
+    }
+    return hashInt64(static_cast<int64_t>(bits), seed);
+  }
+
+  static uint64_t hashLongDecimal(int128_t input, uint64_t seed) {
+    char out[sizeof(int128_t)];
+    int32_t length = DecimalUtil::toByteArray(input, out);
+    return hashBytes(StringView(out, length), seed);
+  }
+
+  static uint64_t hashTimestamp(Timestamp input, uint64_t seed) {
+    return hashInt64(input.toMicros(), seed);
+  }
+
+ private:
+  static constexpr uint64_t PRIME64_1 = 0x9E3779B185EBCA87ULL;
+  static constexpr uint64_t PRIME64_2 = 0xC2B2AE3D27D4EB4FULL;
+  static constexpr uint64_t PRIME64_3 = 0x165667B19E3779F9ULL;
+  static constexpr uint64_t PRIME64_4 = 0x85EBCA77C2B2AE63ULL;
+  static constexpr uint64_t PRIME64_5 = 0x27D4EB2F165667C5ULL;
+
+  static uint64_t hashBytes(const StringView& input, uint64_t seed) {
+    const char* i = input.data();
+    const char* const end = input.data() + input.size();
+
+    uint64_t hash = hashBytesByWords(input, seed);
+    uint32_t length = input.size();
+    auto offset = i + (length & -8);
+    if (offset + 4L <= end) {
+      uint32_t value = 0;
+      std::memcpy(&value, offset, sizeof(value));
+      hash ^= static_cast<uint64_t>(value) * PRIME64_1;
+      hash = bits::rotateLeft64(hash, 23) * PRIME64_2 + PRIME64_3;
+      offset += 4L;
+    }
+
+    while (offset < end) {
+      hash ^= static_cast<uint64_t>(static_cast<uint8_t>(*offset)) * PRIME64_5;
+      hash = bits::rotateLeft64(hash, 11) * PRIME64_1;
+      ++offset;
+    }
+    return fmix(hash);
+  }
+
+  static uint64_t fmix(uint64_t hash) {
+    hash ^= hash >> 33;
+    hash *= PRIME64_2;
+    hash ^= hash >> 29;
+    hash *= PRIME64_3;
+    hash ^= hash >> 32;
+    return hash;
+  }
+
+  static uint64_t hashBytesByWords(const StringView& input, uint64_t seed) {
+    const char* i = input.data();
+    const char* const end = input.data() + input.size();
+    uint32_t length = input.size();
+    uint64_t hash;
+    if (length >= 32) {
+      uint64_t v1 = seed + PRIME64_1 + PRIME64_2;
+      uint64_t v2 = seed + PRIME64_2;
+      uint64_t v3 = seed;
+      uint64_t v4 = seed - PRIME64_1;
+      const char* const limit = end - 32;
+      while (i <= limit) {
+        uint64_t word = 0;
+        std::memcpy(&word, i, sizeof(word));
+        v1 = bits::rotateLeft64(v1 + word * PRIME64_2, 31) * PRIME64_1;
+        i += 8;
+
+        std::memcpy(&word, i, sizeof(word));
+        v2 = bits::rotateLeft64(v2 + word * PRIME64_2, 31) * PRIME64_1;
+        i += 8;
+
+        std::memcpy(&word, i, sizeof(word));
+        v3 = bits::rotateLeft64(v3 + word * PRIME64_2, 31) * PRIME64_1;
+        i += 8;
+
+        std::memcpy(&word, i, sizeof(word));
+        v4 = bits::rotateLeft64(v4 + word * PRIME64_2, 31) * PRIME64_1;
+        i += 8;
+      }
+      hash = bits::rotateLeft64(v1, 1) + bits::rotateLeft64(v2, 7) +
+          bits::rotateLeft64(v3, 12) + bits::rotateLeft64(v4, 18);
+      v1 *= PRIME64_2;
+      v1 = bits::rotateLeft64(v1, 31);
+      v1 *= PRIME64_1;
+      hash ^= v1;
+      hash = hash * PRIME64_1 + PRIME64_4;
+
+      v2 *= PRIME64_2;
+      v2 = bits::rotateLeft64(v2, 31);
+      v2 *= PRIME64_1;
+      hash ^= v2;
+      hash = hash * PRIME64_1 + PRIME64_4;
+
+      v3 *= PRIME64_2;
+      v3 = bits::rotateLeft64(v3, 31);
+      v3 *= PRIME64_1;
+      hash ^= v3;
+      hash = hash * PRIME64_1 + PRIME64_4;
+
+      v4 *= PRIME64_2;
+      v4 = bits::rotateLeft64(v4, 31);
+      v4 *= PRIME64_1;
+      hash ^= v4;
+      hash = hash * PRIME64_1 + PRIME64_4;
+    } else {
+      hash = seed + PRIME64_5;
+    }
+
+    hash += length;
+
+    for (; i <= end - 8; i += 8) {
+      uint64_t word = 0;
+      std::memcpy(&word, i, sizeof(word));
+      hash ^= bits::rotateLeft64(word * PRIME64_2, 31) * PRIME64_1;
+      hash = bits::rotateLeft64(hash, 27) * PRIME64_1 + PRIME64_4;
+    }
+    return hash;
+  }
+};
 
 int8_t computeIndexBitLength(double relativeSD) {
   VELOX_USER_CHECK(
@@ -63,17 +219,14 @@ int8_t computeIndexBitLength(double relativeSD) {
 }
 
 template <TypeKind kind>
-double toDoubleDispatch(
-    const DecodedVector& decoded,
-    vector_size_t row,
-    const TypePtr& type) {
+double toDoubleDispatch(const exec::GenericView& value, const TypePtr& type) {
   if constexpr (
       kind == TypeKind::TINYINT || kind == TypeKind::SMALLINT ||
       kind == TypeKind::INTEGER || kind == TypeKind::BIGINT ||
       kind == TypeKind::REAL || kind == TypeKind::DOUBLE) {
     using T = typename TypeTraits<kind>::NativeType;
     auto converted =
-        util::Converter<TypeKind::DOUBLE>::tryCast(decoded.valueAt<T>(row));
+        util::Converter<TypeKind::DOUBLE>::tryCast(value.template castTo<T>());
     VELOX_USER_CHECK(converted.hasValue(), "Failed to convert value to DOUBLE");
     return converted.value();
   } else {
@@ -85,39 +238,33 @@ double toDoubleDispatch(
 
 template <>
 double toDoubleDispatch<TypeKind::TIMESTAMP>(
-    const DecodedVector& decoded,
-    vector_size_t row,
+    const exec::GenericView& value,
     const TypePtr& /*type*/) {
-  return static_cast<double>(decoded.valueAt<Timestamp>(row).toMicros());
+  return static_cast<double>(value.castTo<Timestamp>().toMicros());
 }
 
 template <TypeKind kind>
 uint64_t hashValueDispatch(
-    const DecodedVector& decoded,
-    vector_size_t row,
+    const exec::GenericView& value,
     const TypePtr& type) {
   using T = typename TypeTraits<kind>::NativeType;
   if constexpr (kind == TypeKind::TINYINT) {
-    return ::facebook::velox::functions::sparksql::XxHash64::hashInt32(
-        static_cast<int32_t>(decoded.valueAt<T>(row)), kXxHash64Seed);
+    return SparkXxHash64::hashInt32(
+        static_cast<int32_t>(value.template castTo<T>()), kXxHash64Seed);
   } else if constexpr (kind == TypeKind::SMALLINT) {
-    return ::facebook::velox::functions::sparksql::XxHash64::hashInt32(
-        static_cast<int32_t>(decoded.valueAt<T>(row)), kXxHash64Seed);
+    return SparkXxHash64::hashInt32(
+        static_cast<int32_t>(value.template castTo<T>()), kXxHash64Seed);
   } else if constexpr (kind == TypeKind::INTEGER) {
-    return ::facebook::velox::functions::sparksql::XxHash64::hashInt32(
-        decoded.valueAt<T>(row), kXxHash64Seed);
+    return SparkXxHash64::hashInt32(value.template castTo<T>(), kXxHash64Seed);
   } else if constexpr (kind == TypeKind::BIGINT) {
-    return ::facebook::velox::functions::sparksql::XxHash64::hashInt64(
-        decoded.valueAt<T>(row), kXxHash64Seed);
+    return SparkXxHash64::hashInt64(value.template castTo<T>(), kXxHash64Seed);
   } else if constexpr (kind == TypeKind::REAL) {
-    return ::facebook::velox::functions::sparksql::XxHash64::hashFloat(
-        decoded.valueAt<T>(row), kXxHash64Seed);
+    return SparkXxHash64::hashFloat(value.template castTo<T>(), kXxHash64Seed);
   } else if constexpr (kind == TypeKind::DOUBLE) {
-    return ::facebook::velox::functions::sparksql::XxHash64::hashDouble(
-        decoded.valueAt<T>(row), kXxHash64Seed);
+    return SparkXxHash64::hashDouble(value.template castTo<T>(), kXxHash64Seed);
   } else if constexpr (kind == TypeKind::TIMESTAMP) {
-    return ::facebook::velox::functions::sparksql::XxHash64::hashTimestamp(
-        decoded.valueAt<T>(row), kXxHash64Seed);
+    return SparkXxHash64::hashTimestamp(
+        value.template castTo<T>(), kXxHash64Seed);
   } else {
     VELOX_UNSUPPORTED(
         "Unsupported type for approx_count_distinct_for_intervals: {}",
@@ -125,326 +272,155 @@ uint64_t hashValueDispatch(
   }
 }
 
-template <>
-uint64_t hashValueDispatch<TypeKind::HUGEINT>(
-    const DecodedVector& decoded,
-    vector_size_t row,
-    const TypePtr& /*type*/) {
-  return ::facebook::velox::functions::sparksql::XxHash64::hashLongDecimal(
-      decoded.valueAt<int128_t>(row), kXxHash64Seed);
-}
-
-class ApproxCountDistinctForIntervalsAggregate : public exec::Aggregate {
+class ApproxCountDistinctForIntervalsAggregate {
  public:
-  explicit ApproxCountDistinctForIntervalsAggregate(
-      const TypePtr& resultType,
-      const std::vector<TypePtr>& argTypes)
-      : exec::Aggregate(resultType) {
-    if (argTypes.size() >= 2) {
+  using InputType = Row<Generic<T1>, Array<Generic<T2>>, double>;
+  using IntermediateType = Row<Array<double>, Array<Varbinary>>;
+  using OutputType = Array<int64_t>;
+
+  static constexpr bool default_null_behavior_ = false;
+
+  void initialize(
+      core::AggregationNode::Step step,
+      const std::vector<TypePtr>& argTypes,
+      const TypePtr& /*resultType*/) {
+    if (exec::isRawInput(step)) {
+      VELOX_CHECK_EQ(argTypes.size(), 3);
       inputType_ = argTypes[0];
       endpointsElementType_ = argTypes[1]->childAt(0);
+    } else {
+      VELOX_CHECK_EQ(argTypes.size(), 1);
     }
   }
 
-  int32_t accumulatorFixedWidthSize() const override {
-    return sizeof(Accumulator);
-  }
+  struct AccumulatorType {
+    std::vector<HllAccumulator> hlls;
+    ApproxCountDistinctForIntervalsAggregate* fn;
 
-  int32_t accumulatorAlignmentSize() const override {
-    return alignof(Accumulator);
-  }
+    static constexpr bool is_fixed_size_ = false;
+    static constexpr bool is_aligned_ = true;
 
-  bool isFixedSize() const override {
-    return false;
-  }
+    AccumulatorType(
+        HashStringAllocator* /*allocator*/,
+        ApproxCountDistinctForIntervalsAggregate* fn)
+        : fn(fn) {}
 
-  void addRawInput(
-      char** groups,
-      const SelectivityVector& rows,
-      const std::vector<VectorPtr>& args,
-      bool /*mayPushdown*/) override {
-    VELOX_CHECK_NOT_NULL(inputType_);
-    VELOX_CHECK_NOT_NULL(endpointsElementType_);
-    ensureRelativeSd(args);
-    ensureEndpointsFromRaw(args);
-    if (!endpointsSet_) {
-      return;
-    }
+    bool addInput(
+        HashStringAllocator* allocator,
+        exec::optional_arg_type<Generic<T1>> data,
+        exec::optional_arg_type<Array<Generic<T2>>> endpoints,
+        exec::optional_arg_type<double> relativeSd) {
+      fn->ensureRelativeSd(relativeSd);
+      fn->ensureEndpoints(endpoints);
 
-    decodedValues_.decode(*args[0], rows);
+      if (!data.has_value()) {
+        return false;
+      }
 
-    auto updateRow = [&](vector_size_t row, char* group) {
-      const double inputValue = toDouble(decodedValues_, row, inputType_);
-      if (inputValue < endpointsMin_ || inputValue > endpointsMax_) {
-        return;
+      const double inputValue = fn->toDouble(data.value(), fn->inputType_);
+      if (inputValue < fn->endpointsMin_ || inputValue > fn->endpointsMax_) {
+        return false;
       }
 
       const auto intervalIndex = std::isnan(inputValue)
-          ? (intervalCount_ - 1)
-          : findIntervalIndex(inputValue);
-      auto tracker = trackRowSize(group);
-      auto* accumulator = value<Accumulator>(group);
-      accumulator->ensureSize(allocator_, intervalCount_, indexBitLength_);
-      const uint64_t hash = hashValue(decodedValues_, row, inputType_);
-      accumulator->hlls[intervalIndex].insertHash(hash);
-      clearNull(group);
-    };
-
-    if (decodedValues_.mayHaveNulls()) {
-      rows.applyToSelected([&](vector_size_t row) {
-        if (!decodedValues_.isNullAt(row)) {
-          updateRow(row, groups[row]);
-        }
-      });
-    } else {
-      rows.applyToSelected(
-          [&](vector_size_t row) { updateRow(row, groups[row]); });
-    }
-  }
-
-  void addSingleGroupRawInput(
-      char* group,
-      const SelectivityVector& rows,
-      const std::vector<VectorPtr>& args,
-      bool /*mayPushdown*/) override {
-    VELOX_CHECK_NOT_NULL(inputType_);
-    VELOX_CHECK_NOT_NULL(endpointsElementType_);
-    ensureRelativeSd(args);
-    ensureEndpointsFromRaw(args);
-    if (!endpointsSet_) {
-      return;
+          ? (fn->intervalCount_ - 1)
+          : fn->findIntervalIndex(inputValue);
+      ensureSize(allocator, fn->intervalCount_, fn->indexBitLength_);
+      const uint64_t hash = fn->hashValue(data.value(), fn->inputType_);
+      hlls[intervalIndex].insertHash(hash);
+      return true;
     }
 
-    decodedValues_.decode(*args[0], rows);
-    auto tracker = trackRowSize(group);
-    auto* accumulator = value<Accumulator>(group);
-
-    auto updateRow = [&](vector_size_t row) {
-      const double inputValue = toDouble(decodedValues_, row, inputType_);
-      if (inputValue < endpointsMin_ || inputValue > endpointsMax_) {
-        return;
+    bool combine(
+        HashStringAllocator* allocator,
+        exec::optional_arg_type<IntermediateType> other) {
+      if (!other.has_value()) {
+        return false;
       }
-      const auto intervalIndex = std::isnan(inputValue)
-          ? (intervalCount_ - 1)
-          : findIntervalIndex(inputValue);
-      accumulator->ensureSize(allocator_, intervalCount_, indexBitLength_);
-      const uint64_t hash = hashValue(decodedValues_, row, inputType_);
-      accumulator->hlls[intervalIndex].insertHash(hash);
-      clearNull(group);
-    };
 
-    if (decodedValues_.mayHaveNulls()) {
-      rows.applyToSelected([&](vector_size_t row) {
-        if (!decodedValues_.isNullAt(row)) {
-          updateRow(row);
-        }
-      });
-    } else {
-      rows.applyToSelected([&](vector_size_t row) { updateRow(row); });
-    }
-  }
-
-  void addIntermediateResults(
-      char** groups,
-      const SelectivityVector& rows,
-      const std::vector<VectorPtr>& args,
-      bool /*mayPushdown*/) override {
-    decodedIntermediate_.decode(*args[0], rows);
-    exec::VectorReader<Row<Array<double>, Array<Varbinary>>> reader(
-        &decodedIntermediate_);
-
-    rows.applyToSelected([&](auto row) {
-      if (!reader.isSet(row)) {
-        return;
-      }
-      auto rowView = reader[row];
+      auto rowView = other.value();
       auto endpointsView = rowView.template at<0>();
       auto hllsView = rowView.template at<1>();
       if (!endpointsView.has_value() || !hllsView.has_value()) {
-        return;
+        return false;
       }
-      ensureEndpointsFromIntermediate(endpointsView.value());
-      if (!endpointsSet_) {
-        return;
-      }
+
+      fn->ensureEndpointsFromIntermediate(endpointsView.value());
 
       const auto& hllsArray = hllsView.value();
       VELOX_USER_CHECK_EQ(
           hllsArray.size(),
-          intervalCount_,
+          fn->intervalCount_,
           "HLL array size {} does not match endpoints size {}",
           hllsArray.size(),
-          intervalCount_);
+          fn->intervalCount_);
 
       for (const auto& entry : hllsArray) {
         if (entry.has_value()) {
-          maybeSetIndexBitLengthFromSerialized(entry.value());
+          fn->maybeSetIndexBitLengthFromSerialized(entry.value());
           break;
         }
       }
 
-      auto* group = groups[row];
-      auto tracker = trackRowSize(group);
-      auto* accumulator = value<Accumulator>(group);
-      accumulator->ensureSize(allocator_, intervalCount_, indexBitLength_);
-
+      ensureSize(allocator, fn->intervalCount_, fn->indexBitLength_);
       for (size_t i = 0; i < hllsArray.size(); ++i) {
         const auto& entry = hllsArray[i];
-        if (!entry.has_value()) {
-          continue;
-        }
-        accumulator->hlls[i].mergeWith(entry.value(), allocator_);
-      }
-      clearNull(group);
-    });
-  }
-
-  void addSingleGroupIntermediateResults(
-      char* group,
-      const SelectivityVector& rows,
-      const std::vector<VectorPtr>& args,
-      bool /*mayPushdown*/) override {
-    decodedIntermediate_.decode(*args[0], rows);
-    exec::VectorReader<Row<Array<double>, Array<Varbinary>>> reader(
-        &decodedIntermediate_);
-    auto tracker = trackRowSize(group);
-    auto* accumulator = value<Accumulator>(group);
-
-    rows.applyToSelected([&](auto row) {
-      if (!reader.isSet(row)) {
-        return;
-      }
-      auto rowView = reader[row];
-      auto endpointsView = rowView.template at<0>();
-      auto hllsView = rowView.template at<1>();
-      if (!endpointsView.has_value() || !hllsView.has_value()) {
-        return;
-      }
-      ensureEndpointsFromIntermediate(endpointsView.value());
-      if (!endpointsSet_) {
-        return;
-      }
-      const auto& hllsArray = hllsView.value();
-      VELOX_USER_CHECK_EQ(
-          hllsArray.size(),
-          intervalCount_,
-          "HLL array size {} does not match endpoints size {}",
-          hllsArray.size(),
-          intervalCount_);
-
-      for (const auto& entry : hllsArray) {
         if (entry.has_value()) {
-          maybeSetIndexBitLengthFromSerialized(entry.value());
-          break;
+          hlls[i].mergeWith(entry.value(), allocator);
         }
       }
-
-      accumulator->ensureSize(allocator_, intervalCount_, indexBitLength_);
-      for (size_t i = 0; i < hllsArray.size(); ++i) {
-        const auto& entry = hllsArray[i];
-        if (!entry.has_value()) {
-          continue;
-        }
-        accumulator->hlls[i].mergeWith(entry.value(), allocator_);
-      }
-      clearNull(group);
-    });
-  }
-
-  void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
-      override {
-    VELOX_CHECK(result);
-    auto arrayVector = (*result)->asUnchecked<ArrayVector>();
-    arrayVector->resize(numGroups);
-
-    exec::VectorWriter<Array<int64_t>> writer;
-    writer.init(*arrayVector);
-
-    for (auto i = 0; i < numGroups; ++i) {
-      writer.setOffset(i);
-      if (!endpointsSet_ || indexBitLength_ < 0) {
-        writer.commitNull();
-        continue;
-      }
-      auto& arrayWriter = writer.current();
-      auto* accumulator = value<Accumulator>(groups[i]);
-
-      for (int32_t interval = 0; interval < intervalCount_; ++interval) {
-        int64_t count = 0;
-        if (accumulator->hlls.size() == intervalCount_) {
-          count = accumulator->hlls[interval].cardinality();
-        }
-        if (duplicateIntervals_[interval]) {
-          count = 1;
-        }
-        arrayWriter.add_item() = count;
-      }
-      writer.commit();
+      return true;
     }
 
-    writer.finish();
-  }
-
-  void extractAccumulators(char** groups, int32_t numGroups, VectorPtr* result)
-      override {
-    VELOX_CHECK(result);
-    auto rowVector = (*result)->asUnchecked<RowVector>();
-    rowVector->resize(numGroups);
-
-    exec::VectorWriter<Row<Array<double>, Array<Varbinary>>> writer;
-    writer.init(*rowVector);
-
-    for (auto i = 0; i < numGroups; ++i) {
-      writer.setOffset(i);
-      if (!endpointsSet_) {
-        writer.commitNull();
-        continue;
+    bool writeIntermediateResult(
+        bool nonNullGroup,
+        exec::out_type<IntermediateType>& out) {
+      if (!fn->endpointsSet_ || fn->indexBitLength_ < 0) {
+        return false;
       }
-      auto& rowWriter = writer.current();
+
+      auto& rowWriter = out;
       auto& endpointsWriter = rowWriter.template get_writer_at<0>();
-      for (double endpoint : endpoints_) {
+      for (double endpoint : fn->endpoints_) {
         endpointsWriter.add_item() = endpoint;
       }
 
       auto& hllsWriter = rowWriter.template get_writer_at<1>();
-      auto* accumulator = value<Accumulator>(groups[i]);
-      ensureEmptyHll();
-      for (int32_t interval = 0; interval < intervalCount_; ++interval) {
+      fn->ensureEmptyHll();
+      for (int32_t interval = 0; interval < fn->intervalCount_; ++interval) {
         auto itemWriter = hllsWriter.add_item();
-        if (accumulator->hlls.size() == intervalCount_) {
-          auto& hll = accumulator->hlls[interval];
+        if (nonNullGroup && hlls.size() == fn->intervalCount_) {
+          auto& hll = hlls[interval];
           const auto size = hll.serializedSize();
           std::string buffer(size, '\0');
           hll.serialize(buffer.data());
           itemWriter.append(buffer);
         } else {
-          itemWriter.append(emptyHll_);
+          itemWriter.append(fn->emptyHll_);
         }
       }
-      writer.commit();
+      return true;
     }
 
-    writer.finish();
-  }
+    bool writeFinalResult(bool nonNullGroup, exec::out_type<OutputType>& out) {
+      if (!fn->endpointsSet_ || fn->indexBitLength_ < 0) {
+        return false;
+      }
 
- protected:
-  void initializeNewGroupsInternal(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    setAllNulls(groups, indices);
-    for (auto i : indices) {
-      new (groups[i] + offset_) Accumulator();
+      for (int32_t interval = 0; interval < fn->intervalCount_; ++interval) {
+        int64_t count = 0;
+        if (nonNullGroup && hlls.size() == fn->intervalCount_) {
+          count = hlls[interval].cardinality();
+        }
+        if (fn->duplicateIntervals_[interval]) {
+          count = 1;
+        }
+        out.add_item() = count;
+      }
+      return true;
     }
-  }
 
-  void destroyInternal(folly::Range<char**> groups) override {
-    destroyAccumulators<Accumulator>(groups);
-  }
-
- private:
-  struct Accumulator {
-    std::vector<HllAccumulator> hlls;
-
+   private:
     void ensureSize(
         HashStringAllocator* allocator,
         int32_t targetSize,
@@ -464,70 +440,42 @@ class ApproxCountDistinctForIntervalsAggregate : public exec::Aggregate {
     }
   };
 
-  void ensureRelativeSd(const std::vector<VectorPtr>& args) {
+ private:
+  void ensureRelativeSd(exec::optional_arg_type<double> relativeSd) {
     if (indexBitLength_ >= 0) {
       return;
     }
-    VELOX_USER_CHECK_EQ(
-        args.size(),
-        3,
-        "approx_count_distinct_for_intervals requires relativeSD");
-    SelectivityVector rows(args[2]->size());
-    rows.setAll();
-    DecodedVector decoded;
-    decoded.decode(*args[2], rows);
     VELOX_USER_CHECK(
-        decoded.isConstantMapping(),
-        "relativeSD must be constant for approx_count_distinct_for_intervals");
-    VELOX_USER_CHECK(
-        !decoded.isNullAt(decoded.index(0)),
+        relativeSd.has_value(),
         "relativeSD must not be null for approx_count_distinct_for_intervals");
-    double relativeSD = decoded.valueAt<double>(decoded.index(0));
-    indexBitLength_ = computeIndexBitLength(relativeSD);
+    indexBitLength_ = computeIndexBitLength(relativeSd.value());
     ensureEmptyHll();
   }
 
-  void ensureEndpointsFromRaw(const std::vector<VectorPtr>& args) {
-    if (endpointsSet_ || args.size() < 2) {
+  void ensureEndpoints(exec::optional_arg_type<Array<Generic<T2>>> endpoints) {
+    if (endpointsSet_) {
       return;
     }
 
-    SelectivityVector rows(args[1]->size());
-    rows.setAll();
-    decodedEndpoints_.decode(*args[1], rows);
-
+    VELOX_CHECK_NOT_NULL(endpointsElementType_);
     VELOX_USER_CHECK(
-        decodedEndpoints_.isConstantMapping(),
-        "Endpoints must be constant for approx_count_distinct_for_intervals");
-    VELOX_USER_CHECK(
-        !decodedEndpoints_.isNullAt(0),
+        endpoints.has_value(),
         "Endpoints must not be null for approx_count_distinct_for_intervals");
 
-    const auto index = decodedEndpoints_.index(0);
-    auto* arrayVector = decodedEndpoints_.base()->as<ArrayVector>();
-    const auto offset = arrayVector->offsetAt(index);
-    const auto size = arrayVector->sizeAt(index);
+    const auto& endpointsView = endpoints.value();
     VELOX_USER_CHECK_GE(
-        size,
+        endpointsView.size(),
         2,
         "approx_count_distinct_for_intervals requires at least 2 endpoints");
 
-    auto elements = arrayVector->elements();
-    SelectivityVector elementRows(elements->size());
-    elementRows.setAll();
-    decodedEndpointElements_.decode(*elements, elementRows);
-
-    std::vector<double> endpoints;
-    endpoints.reserve(size);
-    for (vector_size_t i = 0; i < size; ++i) {
-      const auto elementIndex = offset + i;
+    std::vector<double> converted;
+    converted.reserve(endpointsView.size());
+    for (const auto& entry : endpointsView) {
       VELOX_USER_CHECK(
-          !decodedEndpointElements_.isNullAt(elementIndex),
-          "Endpoints must not contain null values");
-      endpoints.push_back(toDouble(
-          decodedEndpointElements_, elementIndex, endpointsElementType_));
+          entry.has_value(), "Endpoints must not contain null values");
+      converted.push_back(toDouble(entry.value(), endpointsElementType_));
     }
-    setEndpoints(endpoints);
+    setEndpoints(converted);
   }
 
   void ensureEndpointsFromIntermediate(
@@ -535,18 +483,20 @@ class ApproxCountDistinctForIntervalsAggregate : public exec::Aggregate {
     if (endpointsSet_) {
       return;
     }
+
     VELOX_USER_CHECK_GE(
         endpointsView.size(),
         2,
         "approx_count_distinct_for_intervals requires at least 2 endpoints");
-    std::vector<double> endpoints;
-    endpoints.reserve(endpointsView.size());
+
+    std::vector<double> converted;
+    converted.reserve(endpointsView.size());
     for (const auto& entry : endpointsView) {
       VELOX_USER_CHECK(
           entry.has_value(), "Endpoints must not contain null values");
-      endpoints.push_back(entry.value());
+      converted.push_back(entry.value());
     }
-    setEndpoints(endpoints);
+    setEndpoints(converted);
   }
 
   void setEndpoints(const std::vector<double>& endpoints) {
@@ -556,6 +506,13 @@ class ApproxCountDistinctForIntervalsAggregate : public exec::Aggregate {
         VELOX_USER_CHECK_EQ(endpoints_[i], endpoints[i]);
       }
       return;
+    }
+
+    for (size_t i = 1; i < endpoints.size(); ++i) {
+      VELOX_USER_CHECK_LE(
+          endpoints[i - 1],
+          endpoints[i],
+          "Endpoints must be sorted in ascending order");
     }
 
     endpoints_ = endpoints;
@@ -579,6 +536,7 @@ class ApproxCountDistinctForIntervalsAggregate : public exec::Aggregate {
     if (indexBitLength_ >= 0) {
       return;
     }
+
     const char* data = serialized.data();
     if (common::hll::SparseHlls::canDeserialize(data)) {
       indexBitLength_ =
@@ -591,38 +549,38 @@ class ApproxCountDistinctForIntervalsAggregate : public exec::Aggregate {
     ensureEmptyHll();
   }
 
-  static double toDouble(
-      const DecodedVector& decoded,
-      vector_size_t row,
-      const TypePtr& type) {
-    const auto decimalToDouble = [](auto value, int32_t scale) {
+  static double toDouble(const exec::GenericView& value, const TypePtr& type) {
+    const auto decimalToDouble = [](auto decimal, int32_t scale) {
       const auto scaleFactor = DecimalUtil::kPowersOfTen[scale];
-      auto converted = util::Converter<TypeKind::DOUBLE>::tryCast(value);
+      auto converted = util::Converter<TypeKind::DOUBLE>::tryCast(decimal);
       VELOX_USER_CHECK(
           converted.hasValue(), "Failed to convert decimal to DOUBLE");
       return converted.value() / scaleFactor;
     };
 
     if (type->isShortDecimal()) {
-      auto value = decoded.valueAt<int64_t>(row);
-      auto scale = type->asShortDecimal().scale();
-      return decimalToDouble(value, scale);
+      return decimalToDouble(
+          value.castTo<int64_t>(), type->asShortDecimal().scale());
     }
     if (type->isLongDecimal()) {
-      auto value = decoded.valueAt<int128_t>(row);
-      auto scale = type->asLongDecimal().scale();
-      return decimalToDouble(value, scale);
+      return decimalToDouble(
+          value.castTo<int128_t>(), type->asLongDecimal().scale());
     }
+
     return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-        toDoubleDispatch, type->kind(), decoded, row, type);
+        toDoubleDispatch, type->kind(), value, type);
   }
 
   static uint64_t hashValue(
-      const DecodedVector& decoded,
-      vector_size_t row,
+      const exec::GenericView& value,
       const TypePtr& type) {
+    if (type->isLongDecimal()) {
+      return SparkXxHash64::hashLongDecimal(
+          value.castTo<int128_t>(), kXxHash64Seed);
+    }
+
     return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-        hashValueDispatch, type->kind(), decoded, row, type);
+        hashValueDispatch, type->kind(), value, type);
   }
 
   int32_t findIntervalIndex(double value) const {
@@ -634,7 +592,8 @@ class ApproxCountDistinctForIntervalsAggregate : public exec::Aggregate {
       }
       return index == 0 ? 0 : index - 1;
     }
-    auto insertionPoint = static_cast<int32_t>(it - endpoints_.begin());
+
+    const auto insertionPoint = static_cast<int32_t>(it - endpoints_.begin());
     return insertionPoint == 0 ? 0 : insertionPoint - 1;
   }
 
@@ -649,10 +608,68 @@ class ApproxCountDistinctForIntervalsAggregate : public exec::Aggregate {
   int8_t indexBitLength_{-1};
   std::string emptyHll_;
 
-  DecodedVector decodedValues_;
-  DecodedVector decodedEndpoints_;
-  DecodedVector decodedEndpointElements_;
-  DecodedVector decodedIntermediate_;
+  template <typename FUNC>
+  friend class exec::SimpleAggregateAdapter;
+};
+
+class ApproxCountDistinctForIntervalsAggregateAdapter final
+    : public exec::SimpleAggregateAdapter<
+          ApproxCountDistinctForIntervalsAggregate> {
+ public:
+  using Base =
+      exec::SimpleAggregateAdapter<ApproxCountDistinctForIntervalsAggregate>;
+
+  ApproxCountDistinctForIntervalsAggregateAdapter(
+      core::AggregationNode::Step step,
+      const std::vector<TypePtr>& argTypes,
+      const TypePtr& resultType)
+      : Base(step, argTypes, resultType) {}
+
+  void addRawInput(
+      char** groups,
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args,
+      bool mayPushdown) override {
+    validateRawArguments(rows, args);
+    Base::addRawInput(groups, rows, args, mayPushdown);
+  }
+
+  void addSingleGroupRawInput(
+      char* group,
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args,
+      bool mayPushdown) override {
+    validateRawArguments(rows, args);
+    Base::addSingleGroupRawInput(group, rows, args, mayPushdown);
+  }
+
+ private:
+  static void validateRawArguments(
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args) {
+    VELOX_USER_CHECK_EQ(
+        args.size(),
+        3,
+        "approx_count_distinct_for_intervals requires relativeSD");
+
+    const auto firstRow = rows.begin();
+
+    DecodedVector decodedEndpoints(*args[1], rows);
+    VELOX_USER_CHECK(
+        decodedEndpoints.isConstantMapping(),
+        "Endpoints must be constant for approx_count_distinct_for_intervals");
+    VELOX_USER_CHECK(
+        !decodedEndpoints.isNullAt(firstRow),
+        "Endpoints must not be null for approx_count_distinct_for_intervals");
+
+    DecodedVector decodedRelativeSd(*args[2], rows);
+    VELOX_USER_CHECK(
+        decodedRelativeSd.isConstantMapping(),
+        "relativeSD must be constant for approx_count_distinct_for_intervals");
+    VELOX_USER_CHECK(
+        !decodedRelativeSd.isNullAt(firstRow),
+        "relativeSD must not be null for approx_count_distinct_for_intervals");
+  }
 };
 
 exec::AggregateRegistrationResult registerApproxCountDistinctForIntervals(
@@ -662,7 +679,6 @@ exec::AggregateRegistrationResult registerApproxCountDistinctForIntervals(
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
   const auto returnType = "array(bigint)";
   const auto intermediateType = "row(array(double), array(varbinary))";
-
   const std::vector<std::string> valueTypes = {
       "tinyint",
       "smallint",
@@ -674,7 +690,6 @@ exec::AggregateRegistrationResult registerApproxCountDistinctForIntervals(
       "timestamp",
       "interval day to second",
       "interval year to month"};
-
   const std::vector<std::string> endpointTypes = valueTypes;
 
   auto addSignature = [&](exec::AggregateFunctionSignatureBuilder builder) {
@@ -727,7 +742,7 @@ exec::AggregateRegistrationResult registerApproxCountDistinctForIntervals(
       name,
       std::move(signatures),
       [name](
-          core::AggregationNode::Step /*step*/,
+          core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& /*config*/)
@@ -736,8 +751,9 @@ exec::AggregateRegistrationResult registerApproxCountDistinctForIntervals(
             argTypes.size() == 1 || argTypes.size() == 3,
             "{} takes 3 arguments",
             name);
-        return std::make_unique<ApproxCountDistinctForIntervalsAggregate>(
-            resultType, argTypes);
+        return std::make_unique<
+            ApproxCountDistinctForIntervalsAggregateAdapter>(
+            step, argTypes, resultType);
       },
       withCompanionFunctions,
       overwrite);

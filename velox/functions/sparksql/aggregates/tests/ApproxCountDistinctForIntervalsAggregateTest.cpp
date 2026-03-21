@@ -119,6 +119,20 @@ TEST_F(ApproxCountDistinctForIntervalsAggregateTest, tooFewEndpoints) {
       "approx_count_distinct_for_intervals requires at least 2 endpoints");
 }
 
+TEST_F(ApproxCountDistinctForIntervalsAggregateTest, endpointsNotSorted) {
+  auto values = makeFlatVector<double>({1.0, 2.0});
+  auto endpoints = makeEndpointsVector<double>(values->size(), {0.0, 2.0, 1.0});
+  auto data = makeRowVector({values, endpoints});
+
+  VELOX_ASSERT_THROW(
+      testAggregations(
+          {data},
+          {},
+          {"approx_count_distinct_for_intervals(c0, c1, 0.05)"},
+          {makeRowVector({makeArrayVector<int64_t>({{0, 0}})})}),
+      "Endpoints must be sorted in ascending order");
+}
+
 TEST_F(ApproxCountDistinctForIntervalsAggregateTest, endpointsNonFoldable) {
   auto values = makeFlatVector<double>({1.0, 2.0});
   auto endpoints = makeArrayVector<double>({{0.0, 1.0}, {0.0, 2.0}});
