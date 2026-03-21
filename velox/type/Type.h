@@ -446,6 +446,8 @@ enum class TypeParameterKind {
   kVarcharEnumLiteral,
 };
 
+VELOX_DECLARE_ENUM_NAME(TypeParameterKind);
+
 struct TypeParameter {
   const TypeParameterKind kind;
 

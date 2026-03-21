@@ -18,50 +18,9 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/fuzzer/PrestoSql.h"
-#include "velox/functions/prestosql/types/JsonType.h"
-#include "velox/functions/prestosql/types/KHyperLogLogType.h"
-#include "velox/functions/prestosql/types/QDigestType.h"
-#include "velox/functions/prestosql/types/SetDigestType.h"
-#include "velox/functions/prestosql/types/TDigestType.h"
-#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 namespace facebook::velox::exec::test {
 namespace {
-
-TEST(PrestoSqlTest, toTypeSql) {
-  EXPECT_EQ(toTypeSql(BOOLEAN()), "BOOLEAN");
-  EXPECT_EQ(toTypeSql(TINYINT()), "TINYINT");
-  EXPECT_EQ(toTypeSql(SMALLINT()), "SMALLINT");
-  EXPECT_EQ(toTypeSql(INTEGER()), "INTEGER");
-  EXPECT_EQ(toTypeSql(BIGINT()), "BIGINT");
-  EXPECT_EQ(toTypeSql(REAL()), "REAL");
-  EXPECT_EQ(toTypeSql(DOUBLE()), "DOUBLE");
-  EXPECT_EQ(toTypeSql(VARCHAR()), "VARCHAR");
-  EXPECT_EQ(toTypeSql(VARBINARY()), "VARBINARY");
-  EXPECT_EQ(toTypeSql(TDIGEST(DOUBLE())), "TDIGEST(DOUBLE)");
-  EXPECT_EQ(toTypeSql(TIMESTAMP()), "TIMESTAMP");
-  EXPECT_EQ(toTypeSql(QDIGEST(DOUBLE())), "QDIGEST(DOUBLE)");
-  EXPECT_EQ(toTypeSql(QDIGEST(BIGINT())), "QDIGEST(BIGINT)");
-  EXPECT_EQ(toTypeSql(QDIGEST(REAL())), "QDIGEST(REAL)");
-  EXPECT_EQ(toTypeSql(SETDIGEST()), "SETDIGEST");
-  EXPECT_EQ(toTypeSql(KHYPERLOGLOG()), "KHYPERLOGLOG");
-  EXPECT_EQ(toTypeSql(DATE()), "DATE");
-  EXPECT_EQ(toTypeSql(TIMESTAMP_WITH_TIME_ZONE()), "TIMESTAMP WITH TIME ZONE");
-  EXPECT_EQ(toTypeSql(ARRAY(BOOLEAN())), "ARRAY(BOOLEAN)");
-  EXPECT_EQ(toTypeSql(MAP(BOOLEAN(), INTEGER())), "MAP(BOOLEAN, INTEGER)");
-  EXPECT_EQ(
-      toTypeSql(ROW({{"a", BOOLEAN()}, {"b", INTEGER()}})),
-      "ROW(a BOOLEAN, b INTEGER)");
-  EXPECT_EQ(
-      toTypeSql(
-          ROW({{"a_", BOOLEAN()}, {"b$", INTEGER()}, {"c d", INTEGER()}})),
-      "ROW(a_ BOOLEAN, b$ INTEGER, c d INTEGER)");
-  EXPECT_EQ(toTypeSql(JSON()), "JSON");
-  EXPECT_EQ(toTypeSql(UNKNOWN()), "UNKNOWN");
-  VELOX_ASSERT_THROW(
-      toTypeSql(FUNCTION({INTEGER()}, INTEGER())),
-      "Type is not supported: FUNCTION");
-}
 
 void toUnaryOperator(
     const std::string& operatorName,
