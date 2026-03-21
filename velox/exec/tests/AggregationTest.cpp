@@ -391,6 +391,7 @@ class AggregationTest : public OperatorTestBase {
         false,
         false,
         true,
+        false, // hasCountFlag
         true,
         false,
         pool_.get());
@@ -4220,6 +4221,7 @@ TEST_F(AggregationTest, destroyAfterPartialInitialization) {
       false, // hasNext
       false, // isJoinBuild
       false, // hasProbedFlag
+      false, // hasCountFlag
       false, // hasNormalizedKeys
       false, // useListRowIndex
       pool());

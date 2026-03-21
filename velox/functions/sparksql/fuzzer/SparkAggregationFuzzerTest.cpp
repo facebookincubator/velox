@@ -79,6 +79,9 @@ int main(int argc, char** argv) {
       // and relativeSD arguments for this function.
       "approx_count_distinct_for_intervals",
       "bloom_filter_agg",
+      // Velox registers a 2-arg collect_set(T, boolean) signature that Spark
+      // doesn't support. The fuzzer may pick this signature and fail.
+      "collect_set",
       "first_ignore_null",
       "last_ignore_null",
       "regr_replacement",

@@ -88,6 +88,7 @@ class RowContainerTestBase : public testing::Test,
         isJoinBuild,
         isJoinBuild,
         true,
+        false, // hasCountFlag
         true,
         useListRowIndex,
         pool_.get());

@@ -27,17 +27,6 @@
 
 namespace facebook::velox::connector::hive {
 namespace {
-// Returns the single split from the vector. Checks that the vector is not empty
-// and has exactly one element.
-// TODO: Support multiple splits.
-std::shared_ptr<const HiveConnectorSplit> getSingleSplit(
-    const std::vector<std::shared_ptr<const HiveConnectorSplit>>& hiveSplits) {
-  VELOX_CHECK_EQ(
-      hiveSplits.size(),
-      1,
-      "FileIndexReader currently only supports a single split");
-  return hiveSplits[0];
-}
 
 // Gets the index of a column in the request type by name.
 // Throws if the column is not found.
@@ -82,7 +71,7 @@ void processBetweenBound(
 } // namespace
 
 FileIndexReader::FileIndexReader(
-    const std::vector<std::shared_ptr<const HiveConnectorSplit>>& hiveSplits,
+    std::shared_ptr<const HiveConnectorSplit> hiveSplit,
     const std::shared_ptr<const HiveTableHandle>& hiveTableHandle,
     const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<const HiveConfig>& hiveConfig,
@@ -108,7 +97,7 @@ FileIndexReader::FileIndexReader(
       scanSpec_{scanSpec},
       indexLookupConditions_{indexLookupConditions},
       maxRowsPerRequest_{maxRowsPerRequest},
-      hiveSplit_{getSingleSplit(hiveSplits)},
+      hiveSplit_{std::move(hiveSplit)},
       fileReader_{createFileReader()},
       indexReader_{createIndexReader()} {
   parseIndexLookupConditions();
@@ -290,10 +279,10 @@ std::unique_ptr<dwio::common::Reader> FileIndexReader::createFileReader() {
 std::unique_ptr<dwio::common::IndexReader>
 FileIndexReader::createIndexReader() {
   VELOX_CHECK_NOT_NULL(fileReader_);
-  VELOX_CHECK_EQ(
-      hiveSplit_->fileFormat,
-      dwio::common::FileFormat::NIMBLE,
-      "FileIndexReader only supports Nimble file format");
+  VELOX_CHECK(
+      hiveSplit_->fileFormat == dwio::common::FileFormat::NIMBLE ||
+          hiveSplit_->fileFormat == dwio::common::FileFormat::FLUX,
+      "FileIndexReader only supports Nimble and Flux file formats");
 
   dwio::common::RowReaderOptions rowReaderOpts;
   configureRowReaderOptions(

@@ -379,26 +379,21 @@ class ApproxCountDistinctForIntervalsAggregate {
         return false;
       }
 
-      auto& rowWriter = out;
-      auto& endpointsWriter = rowWriter.template get_writer_at<0>();
-      for (double endpoint : fn->endpoints_) {
-        endpointsWriter.add_item() = endpoint;
-      }
-
-      auto& hllsWriter = rowWriter.template get_writer_at<1>();
       fn->ensureEmptyHll();
+      std::vector<std::string> serializedHlls;
+      serializedHlls.reserve(fn->intervalCount_);
       for (int32_t interval = 0; interval < fn->intervalCount_; ++interval) {
-        auto itemWriter = hllsWriter.add_item();
         if (nonNullGroup && hlls.size() == fn->intervalCount_) {
           auto& hll = hlls[interval];
           const auto size = hll.serializedSize();
           std::string buffer(size, '\0');
           hll.serialize(buffer.data());
-          itemWriter.append(buffer);
+          serializedHlls.push_back(std::move(buffer));
         } else {
-          itemWriter.append(fn->emptyHll_);
+          serializedHlls.push_back(fn->emptyHll_);
         }
       }
+      out.copy_from(std::make_tuple(fn->endpoints_, serializedHlls));
       return true;
     }
 

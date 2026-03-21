@@ -344,7 +344,11 @@ bool SignatureBinder::tryBindVariablesWithCoercion(
         typeSignature.parameters().empty(),
         "Variables with parameters are not supported");
     const auto& variable = variableIt->second;
-    VELOX_CHECK(variable.isTypeParameter(), "Not expecting integer variable");
+    if (!variable.isTypeParameter()) {
+      // Integer variables (e.g. decimal precision and scale) are bound
+      // later by tryBind. Skip them here.
+      return true;
+    }
 
     if (!variable.isEligibleType(*actualType)) {
       return false;

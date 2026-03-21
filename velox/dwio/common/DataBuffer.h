@@ -28,16 +28,12 @@ namespace facebook::velox::dwio::common {
 template <typename T, typename = std::enable_if_t<std::is_trivial_v<T>>>
 class DataBuffer {
  public:
-  explicit DataBuffer(
-      velox::memory::MemoryPool& pool,
-      uint64_t size = 0,
-      bool zeroFilled = true)
+  explicit DataBuffer(velox::memory::MemoryPool& pool, uint64_t size = 0)
       : pool_(&pool),
-        // Initial allocation uses calloc if zeroFilled, to avoid memset.
+        // Initial allocation uses calloc, to avoid memset.
         buf_(
             reinterpret_cast<T*>(
-                zeroFilled ? pool_->allocateZeroFilled(1, sizeInBytes(size))
-                           : pool_->allocate(sizeInBytes(size)))),
+                pool_->allocateZeroFilled(1, sizeInBytes(size)))),
         size_(size),
         capacity_(size) {
     VELOX_CHECK(buf_ != nullptr || size_ == 0);
