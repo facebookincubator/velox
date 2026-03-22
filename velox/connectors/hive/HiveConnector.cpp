@@ -33,13 +33,15 @@ HiveConnector::HiveConnector(
     const std::string& id,
     std::shared_ptr<const config::ConfigBase> config,
     folly::Executor* ioExecutor)
-    : FileConnector(
-          id,
-          config,
-          std::make_shared<HiveConfig>(config),
-          ioExecutor),
-      hiveConfig_(
-          std::static_pointer_cast<HiveConfig>(fileConnectorConfig_)) {
+    : Connector(id, std::move(config)),
+      hiveConfig_(std::make_shared<HiveConfig>(connectorConfig())),
+      fileHandleFactory_(
+          hiveConfig_->isFileHandleCacheEnabled()
+              ? std::make_unique<SimpleLRUCache<FileHandleKey, FileHandle>>(
+                    hiveConfig_->numCacheFileHandles())
+              : nullptr,
+          std::make_unique<FileHandleGenerator>(hiveConfig_->config())),
+      ioExecutor_(ioExecutor) {
   if (hiveConfig_->isFileHandleCacheEnabled()) {
     LOG(INFO) << "Hive connector " << connectorId()
               << " created with maximum of "

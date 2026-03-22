@@ -15,7 +15,6 @@ velox_add_library(velox_connector Connector.cpp)
 
 velox_link_libraries(velox_connector velox_common_config velox_vector)
 
-add_subdirectory(common)
 add_subdirectory(fuzzer)
 
 if(${VELOX_ENABLE_HIVE_CONNECTOR})
