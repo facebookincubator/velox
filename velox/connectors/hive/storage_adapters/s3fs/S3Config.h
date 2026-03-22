@@ -77,6 +77,7 @@ class S3Config {
     kUseProxyFromEnv,
     kCredentialsProvider,
     kIMDSEnabled,
+    kExecutorPoolSize,
     kEnd
   };
 
@@ -116,6 +117,8 @@ class S3Config {
             {Keys::kCredentialsProvider,
              std::make_pair("aws-credentials-provider", std::nullopt)},
             {Keys::kIMDSEnabled, std::make_pair("aws-imds-enabled", "true")},
+            {Keys::kExecutorPoolSize,
+             std::make_pair("executor-pool-size", std::nullopt)},
         };
     return config;
   }
@@ -249,6 +252,15 @@ class S3Config {
   bool useIMDS() const {
     auto value = config_.find(Keys::kIMDSEnabled)->second.value();
     return folly::to<bool>(value);
+  }
+
+  /// Executor pool size for async operations.
+  std::optional<uint32_t> executorPoolSize() const {
+    auto val = config_.find(Keys::kExecutorPoolSize)->second;
+    if (val.has_value()) {
+      return folly::to<uint32_t>(val.value());
+    }
+    return std::optional<uint32_t>();
   }
 
  private:

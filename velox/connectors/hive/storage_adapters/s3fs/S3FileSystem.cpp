@@ -34,6 +34,7 @@
 #include <aws/core/auth/AWSCredentialsProviderChain.h>
 #include <aws/core/client/AdaptiveRetryStrategy.h>
 #include <aws/core/client/DefaultRetryStrategy.h>
+#include <aws/core/utils/threading/PooledThreadExecutor.h>
 #include <aws/identity-management/auth/STSAssumeRoleCredentialsProvider.h>
 #include <aws/s3/S3Client.h>
 #include <aws/s3/model/CopyObjectRequest.h>
@@ -299,6 +300,9 @@ class S3FileSystem::Impl {
         inferPayloadSign(s3Config.payloadSigningPolicy());
 
     auto credentialsProvider = getCredentialsProvider(s3Config);
+    if (s3Config.executorPoolSize().has_value() && s3Config.executorPoolSize().value()>0) {
+      clientConfig.executor = Aws::MakeShared<Aws::Utils::Threading::PooledThreadExecutor>(nullptr, s3Config.executorPoolSize().value());
+    }
 
     client_ = std::make_shared<Aws::S3::S3Client>(
         credentialsProvider, nullptr /* endpointProvider */, clientConfig);
