@@ -13,7 +13,12 @@
 # limitations under the License.
 
 velox_add_library(velox_hive_config OBJECT HiveConfig.cpp)
-velox_link_libraries(velox_hive_config velox_core velox_exception)
+velox_link_libraries(
+  velox_hive_config
+  velox_connector_common
+  velox_core
+  velox_exception
+)
 
 add_subdirectory(iceberg)
 add_subdirectory(paimon)
@@ -22,7 +27,6 @@ velox_add_library(
   velox_hive_connector
   OBJECT
   BufferedInputBuilder.cpp
-  FileHandle.cpp
   HiveConfig.cpp
   HiveConnector.cpp
   HiveConnectorUtil.cpp
@@ -42,6 +46,7 @@ velox_link_libraries(
   PRIVATE
     velox_common_io
     velox_connector
+    velox_connector_common
     velox_dwio_catalog_fbhive
     velox_hive_partition_function
     velox_key_encoder

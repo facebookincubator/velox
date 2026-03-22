@@ -18,6 +18,7 @@
 #include <optional>
 #include <unordered_map>
 #include "velox/connectors/Connector.h"
+#include "velox/connectors/common/FileSplit.h"
 #include "velox/connectors/hive/FileProperties.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/dwio/common/Options.h"
@@ -42,31 +43,12 @@ struct RowIdProperties {
   std::string tableGuid;
 };
 
-struct HiveConnectorSplit : public connector::ConnectorSplit {
-  const std::string filePath;
-  dwio::common::FileFormat fileFormat;
-  const uint64_t start;
-  const uint64_t length;
-
-  /// Mapping from partition keys to values. Values are specified as strings
-  /// formatted the same way as CAST(x as VARCHAR). Null values are specified as
-  /// std::nullopt. Date values must be formatted using ISO 8601 as YYYY-MM-DD.
-  /// All scalar types and date type are supported.
-  const std::unordered_map<std::string, std::optional<std::string>>
-      partitionKeys;
+struct HiveConnectorSplit : public connector::FileSplit {
   std::optional<int32_t> tableBucketNumber;
   std::unordered_map<std::string, std::string> customSplitInfo;
   std::shared_ptr<std::string> extraFileInfo;
-  // Parameters that are provided as the serialization options.
+  /// Parameters that are provided as the serialization options.
   std::unordered_map<std::string, std::string> serdeParameters;
-
-  /// These represent columns like $file_size, $file_modified_time that are
-  /// associated with the HiveSplit.
-  std::unordered_map<std::string, std::string> infoColumns;
-
-  /// These represent file properties like file size that are used while opening
-  /// the file handle.
-  std::optional<FileProperties> properties;
 
   std::optional<RowIdProperties> rowIdProperties;
 
@@ -91,18 +73,21 @@ struct HiveConnectorSplit : public connector::ConnectorSplit {
       std::optional<RowIdProperties> _rowIdProperties = std::nullopt,
       const std::optional<HiveBucketConversion>& _bucketConversion =
           std::nullopt)
-      : ConnectorSplit(connectorId, splitWeight, cacheable),
-        filePath(_filePath),
-        fileFormat(_fileFormat),
-        start(_start),
-        length(_length),
-        partitionKeys(_partitionKeys),
+      : FileSplit(
+            connectorId,
+            _filePath,
+            _fileFormat,
+            _start,
+            _length,
+            _partitionKeys,
+            splitWeight,
+            cacheable,
+            _infoColumns,
+            std::move(_properties)),
         tableBucketNumber(_tableBucketNumber),
         customSplitInfo(_customSplitInfo),
         extraFileInfo(_extraFileInfo),
         serdeParameters(_serdeParameters),
-        infoColumns(_infoColumns),
-        properties(_properties),
         rowIdProperties(_rowIdProperties),
         bucketConversion(_bucketConversion) {}
 

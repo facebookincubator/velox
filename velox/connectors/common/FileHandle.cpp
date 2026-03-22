@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/FileHandle.h"
+#include "velox/connectors/common/FileHandle.h"
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/file/FileSystems.h"

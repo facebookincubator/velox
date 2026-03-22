@@ -18,6 +18,7 @@
 #include <optional>
 #include <string>
 #include "velox/common/base/Exceptions.h"
+#include "velox/connectors/common/FileConnectorConfig.h"
 
 namespace facebook::velox::config {
 class ConfigBase;
@@ -26,7 +27,7 @@ class ConfigBase;
 namespace facebook::velox::connector::hive {
 
 /// Hive connector configs.
-class HiveConfig {
+class HiveConfig : public connector::FileConnectorConfig {
  public:
   enum class InsertExistingPartitionsBehavior {
     kError,
@@ -122,18 +123,9 @@ class HiveConfig {
   static constexpr const char* kLoadQuantum = "load-quantum";
   static constexpr const char* kLoadQuantumSession = "load-quantum";
 
-  /// Maximum number of entries in the file handle cache.
-  static constexpr const char* kNumCacheFileHandles = "num_cached_file_handles";
-
-  /// Expiration time in ms for a file handle in the cache. A value of 0
-  /// means cache will not evict the handle after kFileHandleExprationDurationMs
-  /// has passed.
-  static constexpr const char* kFileHandleExpirationDurationMs =
-      "file-handle-expiration-duration-ms";
-
-  /// Enable file handle cache.
-  static constexpr const char* kEnableFileHandleCache =
-      "file-handle-cache-enabled";
+  // File handle cache constants (kNumCacheFileHandles,
+  // kFileHandleExpirationDurationMs, kEnableFileHandleCache) are inherited
+  // from FileConnectorConfig.
 
   /// The threshold of file size in bytes when the whole file is fetched with
   /// meta data together. Optimization to decrease the small IO requests
@@ -296,11 +288,8 @@ class HiveConfig {
 
   int32_t loadQuantum(const config::ConfigBase* session) const;
 
-  int32_t numCacheFileHandles() const;
-
-  uint64_t fileHandleExpirationDurationMs() const;
-
-  bool isFileHandleCacheEnabled() const;
+  // numCacheFileHandles(), fileHandleExpirationDurationMs(), and
+  // isFileHandleCacheEnabled() are inherited from FileConnectorConfig.
 
   uint64_t fileWriterFlushThresholdBytes() const;
 
@@ -364,19 +353,12 @@ class HiveConfig {
   /// Schema of the query. Used for storage logging.
   std::string schema(const config::ConfigBase* session) const;
 
-  HiveConfig(std::shared_ptr<const config::ConfigBase> config) {
+  HiveConfig(std::shared_ptr<const config::ConfigBase> config)
+      : FileConnectorConfig(std::move(config)) {
     VELOX_CHECK_NOT_NULL(
-        config, "Config is null for HiveConfig initialization");
-    config_ = std::move(config);
+        config_, "Config is null for HiveConfig initialization");
     // TODO: add sanity check
   }
-
-  const std::shared_ptr<const config::ConfigBase>& config() const {
-    return config_;
-  }
-
- private:
-  std::shared_ptr<const config::ConfigBase> config_;
 };
 
 } // namespace facebook::velox::connector::hive

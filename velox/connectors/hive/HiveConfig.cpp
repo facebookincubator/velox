@@ -173,18 +173,6 @@ int32_t HiveConfig::loadQuantum(const config::ConfigBase* session) const {
       kLoadQuantumSession, config_->get<int32_t>(kLoadQuantum, 8 << 20));
 }
 
-int32_t HiveConfig::numCacheFileHandles() const {
-  return config_->get<int32_t>(kNumCacheFileHandles, 20'000);
-}
-
-uint64_t HiveConfig::fileHandleExpirationDurationMs() const {
-  return config_->get<uint64_t>(kFileHandleExpirationDurationMs, 0);
-}
-
-bool HiveConfig::isFileHandleCacheEnabled() const {
-  return config_->get<bool>(kEnableFileHandleCache, true);
-}
-
 std::string HiveConfig::writeFileCreateConfig() const {
   return config_->get<std::string>(kWriteFileCreateConfig, "");
 }
