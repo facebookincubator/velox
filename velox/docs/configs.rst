@@ -1054,6 +1054,10 @@ Each query can override the config by setting corresponding query session proper
      - true
      - AWS Instance Metadata Service (IMDS) is an AWS EC2 instance component used by applications to securely access metadata.
        We must disable it on other instances to avoid high first-time read latency from S3 compatible object storages.
+   * - hive.s3.executor-pool-size
+     - integer
+     -
+     - Define the executor size in the AWS thread pool which is used to perform S3 requests. 0 means disabled. 
 
 Bucket Level Configuration
 """"""""""""""""""""""""""
