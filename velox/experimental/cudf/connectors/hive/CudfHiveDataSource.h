@@ -110,6 +110,9 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   // Setup the cuDF data source and options
   void setupCudfDataSourceAndOptions();
 
+  // Construct a RowTypePtr for the table column names and types.
+  const RowTypePtr getTableRowType();
+
   RowVectorPtr emptyOutput_;
 
   std::shared_ptr<CudfHiveConnectorSplit> split_;

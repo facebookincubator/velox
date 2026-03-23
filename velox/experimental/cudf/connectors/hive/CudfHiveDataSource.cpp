@@ -131,25 +131,9 @@ CudfHiveDataSource::CudfHiveDataSource(
       }
     }
 
-    const RowTypePtr remainingFilterType_ = [&] {
-      if (tableHandle_->dataColumns()) {
-        std::vector<std::string> new_names;
-        std::vector<TypePtr> new_types;
-
-        for (const auto& name : readColumnNames_) {
-          auto parsedType = tableHandle_->dataColumns()->findChild(name);
-          new_names.emplace_back(std::move(name));
-          new_types.push_back(parsedType);
-        }
-
-        return ROW(std::move(new_names), std::move(new_types));
-      } else {
-        return outputType_;
-      }
-    }();
-
+    auto const remainingFilterType = getTableRowType();
     cudfExpressionEvaluator_ = velox::cudf_velox::createCudfExpression(
-        remainingFilterExprSet_->exprs()[0], remainingFilterType_);
+        remainingFilterExprSet_->exprs()[0], remainingFilterType);
     // TODO(kn): Get column names and subfields from remaining filter and add to
     // readColumnNames_
   }
@@ -157,24 +141,7 @@ CudfHiveDataSource::CudfHiveDataSource(
   // Build a combined AST for all subfield filters once. This is query-constant
   // and doesn't depend on split-specific state.
   if (!subfieldFilters_.empty()) {
-    const RowTypePtr readerFilterType = [&] {
-      if (tableHandle_->dataColumns()) {
-        std::vector<std::string> newNames;
-        std::vector<TypePtr> newTypes;
-
-        for (const auto& name : readColumnNames_) {
-          // Ensure all columns being read are available to the filter.
-          auto parsedType = tableHandle_->dataColumns()->findChild(name);
-          newNames.emplace_back(std::move(name));
-          newTypes.push_back(parsedType);
-        }
-
-        return ROW(std::move(newNames), std::move(newTypes));
-      } else {
-        return outputType_;
-      }
-    }();
-
+    auto const readerFilterType = getTableRowType();
     subfieldFilterExpr_ = &createAstFromSubfieldFilters(
         subfieldFilters_, subfieldTree_, subfieldScalars_, readerFilterType);
   }
@@ -501,27 +468,9 @@ void CudfHiveDataSource::setupCudfDataSourceAndOptions() {
     dataSource_ = std::move(cudf::io::make_datasources(sourceInfo).front());
   }
 
-  RowTypePtr readerFilterType = nullptr;
   bool hasDecimalFilter = false;
   if (subfieldFilters_.size()) {
-    readerFilterType = [&] {
-      if (tableHandle_->dataColumns()) {
-        std::vector<std::string> newNames;
-        std::vector<TypePtr> newTypes;
-
-        for (const auto& name : readColumnNames_) {
-          // Ensure all columns being read are available to the filter
-          auto parsedType = tableHandle_->dataColumns()->findChild(name);
-          newNames.emplace_back(std::move(name));
-          newTypes.push_back(parsedType);
-        }
-
-        return ROW(std::move(newNames), std::move(newTypes));
-      } else {
-        return outputType_;
-      }
-    }();
-
+    auto const readerFilterType = getTableRowType();
     for (const auto& [field, _] : subfieldFilters_) {
       if (!field.valid()) {
         continue;
@@ -627,6 +576,20 @@ CudfHiveDataSource::getRuntimeStats() {
     res.emplace(storageStats.first, storageStats.second);
   }
   return res;
+}
+
+const RowTypePtr CudfHiveDataSource::getTableRowType() {
+  if (tableHandle_->dataColumns()) {
+    std::vector<std::string> names;
+    std::vector<TypePtr> types;
+    for (const auto& name : readColumnNames_) {
+      auto parsedType = tableHandle_->dataColumns()->findChild(name);
+      names.emplace_back(std::move(name));
+      types.push_back(parsedType);
+    }
+    return ROW(std::move(names), std::move(types));
+  }
+  return outputType_;
 }
 
 } // namespace facebook::velox::cudf_velox::connector::hive
