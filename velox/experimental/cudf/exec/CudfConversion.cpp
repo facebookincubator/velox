@@ -147,6 +147,10 @@ RowVectorPtr CudfFromVelox::getOutput() {
   auto tbl =
       with_arrow::toCudfTable(input, input->pool(), stream, get_output_mr());
 
+  // Synchronize to ensure toCudfTable finishes reading from input's CPU buffers
+  // before input goes out of scope
+  stream.synchronize();
+
   VELOX_CHECK_NOT_NULL(tbl);
 
   // Return a CudfVector that owns the cudf table
