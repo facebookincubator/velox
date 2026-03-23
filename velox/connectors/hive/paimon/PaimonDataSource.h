@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/connectors/hive/HiveDataSource.h"
+#include "velox/connectors/hive/paimon/PaimonConnectorSplit.h"
 
 namespace facebook::velox::connector::hive::paimon {
 
@@ -24,6 +25,10 @@ namespace facebook::velox::connector::hive::paimon {
 /// Handles PaimonConnectorSplit which may contain multiple data files
 /// in a single logical split (one per LSM-tree level in a bucket).
 /// Currently only supports append-only tables with rawConvertible=true.
+///
+/// Converts PaimonConnectorSplit to HiveConnectorSplit for the first data
+/// file so that HiveDataSource machinery works. Multi-file iteration is
+/// handled by PaimonSplitReader.
 class PaimonDataSource : public HiveDataSource {
  public:
   PaimonDataSource(
@@ -37,8 +42,11 @@ class PaimonDataSource : public HiveDataSource {
 
   void addSplit(std::shared_ptr<ConnectorSplit> split) override;
 
-  std::optional<RowVectorPtr> next(uint64_t size, velox::ContinueFuture& future)
-      override;
+ protected:
+  std::unique_ptr<SplitReader> createSplitReader() override;
+
+ private:
+  std::shared_ptr<PaimonConnectorSplit> paimonSplit_;
 };
 
 } // namespace facebook::velox::connector::hive::paimon

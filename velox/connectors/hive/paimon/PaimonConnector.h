@@ -39,6 +39,12 @@ class PaimonConnector final : public HiveConnector {
       const ColumnHandleMap& columnHandles,
       ConnectorQueryCtx* connectorQueryCtx) override;
 
+  std::unique_ptr<DataSink> createDataSink(
+      RowTypePtr inputType,
+      ConnectorInsertTableHandlePtr connectorInsertTableHandle,
+      ConnectorQueryCtx* connectorQueryCtx,
+      CommitStrategy commitStrategy) override;
+
  private:
   const std::shared_ptr<PaimonConfig> paimonConfig_;
 };
