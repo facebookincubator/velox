@@ -16,12 +16,12 @@
 
 #pragma once
 
-#include "velox/experimental/cudf/exec/NvtxHelper.h"
+#include "velox/experimental/cudf/exec/CudfOperator.h"
 
 #include "velox/exec/Operator.h"
 
 namespace facebook::velox::cudf_velox {
-class CudfLimit : public exec::Operator, public NvtxHelper {
+class CudfLimit : public CudfOperatorBase {
  public:
   CudfLimit(
       int32_t operatorId,
@@ -30,10 +30,6 @@ class CudfLimit : public exec::Operator, public NvtxHelper {
 
   bool needsInput() const override;
 
-  void addInput(RowVectorPtr input) override;
-
-  RowVectorPtr getOutput() override;
-
   exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
     return exec::BlockingReason::kNotBlocked;
   }
@@ -41,6 +37,10 @@ class CudfLimit : public exec::Operator, public NvtxHelper {
   bool isFinished() override {
     return finished_ || (noMoreInput_ && input_ == nullptr);
   }
+
+ protected:
+  void doAddInput(RowVectorPtr input) override;
+  RowVectorPtr doGetOutput() override;
 
  private:
   int64_t remainingOffset_;

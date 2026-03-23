@@ -79,6 +79,15 @@ constexpr std::string_view extractClassAndFunction(
   return prettyFunction.substr(prevColonPos + 2, parenPos - prevColonPos - 2);
 }
 
+inline nvtx3::event_attributes create_nvtx_attributes(const std::string& category, const std::string& tag) {
+    std::hash<std::string> hasher;
+    nvtx3::named_category_in<facebook::velox::cudf_velox::VeloxDomain> category_{
+        static_cast<uint32_t>(hasher(category)),
+        category.c_str()
+    };
+    return nvtx3::event_attributes{tag, category_};
+}
+
 #define VELOX_NVTX_OPERATOR_FUNC_RANGE()                                         \
   static_assert(                                                                 \
       std::is_base_of<NvtxHelper, std::remove_pointer<decltype(this)>::type>::   \

@@ -888,17 +888,16 @@ CudfHashAggregation::CudfHashAggregation(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
     std::shared_ptr<core::AggregationNode const> const& aggregationNode)
-    : Operator(
+    : CudfOperatorBase(
+          operatorId,
           driverCtx,
           aggregationNode->outputType(),
-          operatorId,
           aggregationNode->id(),
           makeCudfAggregationOperatorName(aggregationNode->step()),
-          std::nullopt),
-      NvtxHelper(
           nvtx3::rgb{34, 139, 34}, // Forest Green
-          operatorId,
-          fmt::format("[{}]", aggregationNode->id())),
+          NvtxMethodFlag::kAll,
+          std::nullopt,
+          aggregationNode),
       aggregationNode_(aggregationNode),
       isPartialOutput_(
           exec::isPartialOutput(aggregationNode->step()) &&
@@ -1177,8 +1176,7 @@ void CudfHashAggregation::computeSingleGroupbyStreaming(CudfVectorPtr tbl) {
   }
 }
 
-void CudfHashAggregation::addInput(RowVectorPtr input) {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+void CudfHashAggregation::doAddInput(RowVectorPtr input) {
   if (input->size() == 0) {
     return;
   }
@@ -1331,8 +1329,7 @@ CudfVectorPtr CudfHashAggregation::releaseAndResetPartialOutput() {
   return std::move(bufferedResult_);
 }
 
-RowVectorPtr CudfHashAggregation::getOutput() {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+RowVectorPtr CudfHashAggregation::doGetOutput() {
 
   // Handle partial groupby and distinct.
   if (isPartialOutput_ && !isGlobal_ && streamingEnabled_) {
@@ -1441,7 +1438,7 @@ RowVectorPtr CudfHashAggregation::getOutput() {
   }
 }
 
-void CudfHashAggregation::noMoreInput() {
+void CudfHashAggregation::doNoMoreInput() {
   Operator::noMoreInput();
   if (isPartialOutput_ && inputs_.empty()) {
     finished_ = true;

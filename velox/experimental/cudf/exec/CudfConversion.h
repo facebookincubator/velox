@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "velox/experimental/cudf/exec/NvtxHelper.h"
+#include "velox/experimental/cudf/exec/CudfOperator.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/exec/Driver.h"
@@ -29,7 +29,7 @@
 
 namespace facebook::velox::cudf_velox {
 
-class CudfFromVelox : public exec::Operator, public NvtxHelper {
+class CudfFromVelox : public CudfOperatorBase {
  public:
   static constexpr const char* kGpuBatchSizeRows =
       "velox.cudf.gpu_batch_size_rows";
@@ -44,10 +44,6 @@ class CudfFromVelox : public exec::Operator, public NvtxHelper {
     return !finished_;
   }
 
-  void addInput(RowVectorPtr input) override;
-
-  RowVectorPtr getOutput() override;
-
   exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
     return exec::BlockingReason::kNotBlocked;
   }
@@ -56,7 +52,10 @@ class CudfFromVelox : public exec::Operator, public NvtxHelper {
     return finished_;
   }
 
-  void close() override;
+ protected:
+  void doAddInput(RowVectorPtr input) override;
+  RowVectorPtr doGetOutput() override;
+  void doClose() override;
 
  private:
   std::vector<RowVectorPtr> inputs_;
@@ -64,7 +63,7 @@ class CudfFromVelox : public exec::Operator, public NvtxHelper {
   bool finished_ = false;
 };
 
-class CudfToVelox : public exec::Operator, public NvtxHelper {
+class CudfToVelox : public CudfOperatorBase {
  public:
   static constexpr const char* kPassthroughMode =
       "velox.cudf.to_velox.passthrough_mode";
@@ -79,10 +78,6 @@ class CudfToVelox : public exec::Operator, public NvtxHelper {
     return !finished_;
   }
 
-  void addInput(RowVectorPtr input) override;
-
-  RowVectorPtr getOutput() override;
-
   exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
     return exec::BlockingReason::kNotBlocked;
   }
@@ -91,7 +86,10 @@ class CudfToVelox : public exec::Operator, public NvtxHelper {
     return finished_;
   }
 
-  void close() override;
+ protected:
+  void doAddInput(RowVectorPtr input) override;
+  RowVectorPtr doGetOutput() override;
+  void doClose() override;
 
  private:
   bool isPassthroughMode() const;

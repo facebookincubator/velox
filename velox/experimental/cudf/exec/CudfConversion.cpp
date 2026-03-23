@@ -75,19 +75,18 @@ CudfFromVelox::CudfFromVelox(
     RowTypePtr outputType,
     exec::DriverCtx* driverCtx,
     std::string planNodeId)
-    : exec::Operator(
+    : CudfOperatorBase(
+          operatorId,
           driverCtx,
           outputType,
-          operatorId,
           planNodeId,
-          "CudfFromVelox"),
-      NvtxHelper(
+          "CudfFromVelox",
           nvtx3::rgb{255, 140, 0}, // Orange
-          operatorId,
-          fmt::format("[{}]", planNodeId)) {}
+          NvtxMethodFlag::kAll,
+          std::nullopt,
+          std::nullopt) {}
 
-void CudfFromVelox::addInput(RowVectorPtr input) {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+void CudfFromVelox::doAddInput(RowVectorPtr input) {
   if (input->size() > 0) {
     // Materialize lazy vectors
     for (auto& child : input->children()) {
@@ -101,8 +100,7 @@ void CudfFromVelox::addInput(RowVectorPtr input) {
   }
 }
 
-RowVectorPtr CudfFromVelox::getOutput() {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+RowVectorPtr CudfFromVelox::doGetOutput() {
   const auto targetOutputSize =
       preferredGpuBatchSizeRows(operatorCtx_->driverCtx()->queryConfig());
 
@@ -157,10 +155,10 @@ RowVectorPtr CudfFromVelox::getOutput() {
       input->pool(), outputType_, size, std::move(tbl), stream);
 }
 
-void CudfFromVelox::close() {
+void CudfFromVelox::doClose() {
   // TODO(kn): Remove default stream after redesign of CudfFromVelox
   cudf::get_default_stream(cudf::allow_default_stream).synchronize();
-  exec::Operator::close();
+  Operator::close();
   inputs_.clear();
 }
 
@@ -169,23 +167,23 @@ CudfToVelox::CudfToVelox(
     RowTypePtr outputType,
     exec::DriverCtx* driverCtx,
     std::string planNodeId)
-    : exec::Operator(
+    : CudfOperatorBase(
+          operatorId,
           driverCtx,
           outputType,
-          operatorId,
           planNodeId,
-          "CudfToVelox"),
-      NvtxHelper(
+          "CudfToVelox",
           nvtx3::rgb{148, 0, 211}, // Purple
-          operatorId,
-          fmt::format("[{}]", planNodeId)) {}
+          NvtxMethodFlag::kAll,
+          std::nullopt,
+          std::nullopt) {}
 
 bool CudfToVelox::isPassthroughMode() const {
   return operatorCtx_->driverCtx()->queryConfig().get<bool>(
       kPassthroughMode, true);
 }
 
-void CudfToVelox::addInput(RowVectorPtr input) {
+void CudfToVelox::doAddInput(RowVectorPtr input) {
   // Accumulate inputs
   if (input->size() > 0) {
     auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
@@ -202,8 +200,7 @@ std::optional<uint64_t> CudfToVelox::averageRowSize() {
   return averageRowSize_;
 }
 
-RowVectorPtr CudfToVelox::getOutput() {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+RowVectorPtr CudfToVelox::doGetOutput() {
   if (finished_ || inputs_.empty()) {
     finished_ = noMoreInput_ && inputs_.empty();
     return nullptr;
@@ -307,8 +304,8 @@ RowVectorPtr CudfToVelox::getOutput() {
   return output;
 }
 
-void CudfToVelox::close() {
-  exec::Operator::close();
+void CudfToVelox::doClose() {
+  Operator::close();
   inputs_.clear();
 }
 
