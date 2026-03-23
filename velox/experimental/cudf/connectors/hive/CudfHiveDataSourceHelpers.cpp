@@ -25,8 +25,8 @@
 #include <cudf/io/parquet_io_utils.hpp>
 #include <cudf/io/types.hpp>
 
+#include <cuda/iterator>
 #include <cuda/std/tuple>
-#include <thrust/iterator/zip_iterator.h>
 
 #include <folly/futures/Future.h>
 
@@ -219,7 +219,7 @@ fetchByteRangesAsync(
   if (auto bufferedInput =
           dynamic_cast<BufferedInputDataSource*>(dataSource.get())) {
     auto iter =
-        thrust::make_zip_iterator(byteRanges.begin(), columnChunkData.begin());
+        cuda::make_zip_iterator(byteRanges.begin(), columnChunkData.begin());
     {
       std::lock_guard<std::mutex> lock(mutex);
       std::for_each(
@@ -286,7 +286,7 @@ fetchByteRangesAsync(
   stream.synchronize();
 
   {
-    auto iter = thrust::make_zip_iterator(
+    auto iter = cuda::make_zip_iterator(
         ioOffsets.begin(), ioSizes.begin(), destinations.begin());
 
     std::lock_guard<std::mutex> lock(mutex);
