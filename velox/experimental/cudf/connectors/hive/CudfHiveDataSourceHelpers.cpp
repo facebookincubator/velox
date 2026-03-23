@@ -19,22 +19,18 @@
 
 #include "velox/dwio/common/BufferedInput.h"
 
-#include <cudf/ast/detail/expression_transformer.hpp>
-#include <cudf/ast/detail/operators.hpp>
-#include <cudf/ast/expressions.hpp>
 #include <cudf/detail/utilities/integer_utils.hpp>
 #include <cudf/io/datasource.hpp>
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/parquet_io_utils.hpp>
 #include <cudf/io/types.hpp>
 
-#include <thrust/tuple.h>
+#include <cuda/std/tuple>
+#include <thrust/iterator/zip_iterator.h>
 
 #include <folly/futures/Future.h>
 
 #include <future>
-#include <string>
-#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -228,8 +224,8 @@ fetchByteRangesAsync(
       std::lock_guard<std::mutex> lock(mutex);
       std::for_each(
           iter, iter + byteRanges.size(), [bufferedInput](auto const& tuple) {
-            auto const& byteRange = thrust::get<0>(tuple);
-            auto const& destination = thrust::get<1>(tuple);
+            auto const& byteRange = cuda::std::get<0>(tuple);
+            auto const& destination = cuda::std::get<1>(tuple);
             bufferedInput->enqueueForDevice(
                 static_cast<uint64_t>(byteRange.offset()),
                 static_cast<uint64_t>(byteRange.size()),
@@ -296,9 +292,9 @@ fetchByteRangesAsync(
     std::lock_guard<std::mutex> lock(mutex);
 
     std::for_each(iter, iter + ioOffsets.size(), [&](auto const& tuple) {
-      auto const ioOffset = thrust::get<0>(tuple);
-      auto const ioSize = thrust::get<1>(tuple);
-      auto const dest = thrust::get<2>(tuple);
+      auto const ioOffset = cuda::std::get<0>(tuple);
+      auto const ioSize = cuda::std::get<1>(tuple);
+      auto const dest = cuda::std::get<2>(tuple);
 
       // Directly read the column chunk data to the device buffer if supported
       if (dataSource->supports_device_read() and
