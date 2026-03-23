@@ -44,6 +44,7 @@ class CudfFilterProjectTest : public OperatorTestBase {
     OperatorTestBase::SetUp();
     filesystems::registerLocalFileSystem();
     cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
+    cudf_velox::CudfConfig::getInstance().memoryResource = "cuda";
     cudf_velox::registerCudf();
     rng_.seed(123);
 
@@ -1184,6 +1185,7 @@ class CudfSimpleFilterProjectTest : public cudf_velox::CudfFunctionBaseTest {
     functions::prestosql::registerAllScalarFunctions();
     aggregate::prestosql::registerAllAggregateFunctions();
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+    cudf_velox::CudfConfig::getInstance().memoryResource = "cuda";
     cudf_velox::registerCudf();
   }
 
@@ -1299,6 +1301,55 @@ TEST_F(CudfFilterProjectTest, toUnixtimeEpochDayPattern) {
   runTest(
       plan,
       "SELECT cast(to_unixtime(c0) / 86400.0 as bigint) AS result FROM tmp");
+}
+
+// These tests mirror the CudfFilterProjectTest date_diff/to_unixtime tests
+// but use CudfSimpleFilterProjectTest (no DuckDB) so they work on aarch64
+// 64K-page kernels where DuckDB's allocator cannot initialize.
+TEST_F(CudfSimpleFilterProjectTest, dateDiffDayDate) {
+  auto result = evaluateOnce<int64_t, int32_t, int32_t>(
+      "date_diff('day', c0, c1)",
+      {DATE(), DATE()},
+      std::optional<int32_t>(20120),
+      std::optional<int32_t>(20130));
+  EXPECT_EQ(result, 10);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, dateDiffMonthDate) {
+  // 2019-02-28 (17955) to 2020-03-28 (18349) = 13 months
+  auto result = evaluateOnce<int64_t, int32_t, int32_t>(
+      "date_diff('month', c0, c1)",
+      {DATE(), DATE()},
+      std::optional<int32_t>(17955),
+      std::optional<int32_t>(18349));
+  EXPECT_EQ(result, 13);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, dateDiffSecondTimestamp) {
+  // 86400 seconds apart
+  auto data = makeRowVector({
+      makeFlatVector<Timestamp>({Timestamp(1740733200, 500000000)}),
+      makeFlatVector<Timestamp>({Timestamp(1740819600, 500000000)}),
+  });
+  auto exprSet =
+      compileExpression("date_diff('second', c0, c1)", asRowType(data->type()));
+  auto result = evaluate(*exprSet, data);
+  auto expected = makeFlatVector<int64_t>({86400});
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, toUnixtime) {
+  auto result = evaluateOnce<double, Timestamp>(
+      "to_unixtime(c0)",
+      std::optional<Timestamp>(Timestamp(1738568700, 0)));
+  EXPECT_DOUBLE_EQ(result.value(), 1738568700.0);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, toUnixtimeEpoch) {
+  auto result = evaluateOnce<double, Timestamp>(
+      "to_unixtime(c0)",
+      std::optional<Timestamp>(Timestamp(0, 0)));
+  EXPECT_DOUBLE_EQ(result.value(), 0.0);
 }
 
 } // namespace
