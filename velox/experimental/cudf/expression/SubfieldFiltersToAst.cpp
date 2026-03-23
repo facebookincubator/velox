@@ -246,7 +246,7 @@ std::reference_wrapper<const cudf::ast::expression> buildHugeintRangeExpr(
 }
 
 template <TypeKind Kind, typename FilterT, typename ValueT>
-const cudf::ast::expression& buildHashInListExpr(
+const cudf::ast::expression& buildValuesListExpr(
     const common::Filter& filter,
     cudf::ast::tree& tree,
     const cudf::ast::expression& columnRef,
@@ -257,7 +257,7 @@ const cudf::ast::expression& buildHashInListExpr(
   using Operation = cudf::ast::operation;
 
   auto* valuesFilter = dynamic_cast<const FilterT*>(&filter);
-  VELOX_CHECK_NOT_NULL(valuesFilter, "Filter is not a hash-table list filter");
+  VELOX_CHECK_NOT_NULL(valuesFilter, "Filter is not a values list filter");
   auto const& values = valuesFilter->values();
   VELOX_CHECK(!values.empty(), "Empty List filter not supported");
 
@@ -306,48 +306,6 @@ const cudf::ast::expression& createBytesRangeExpr(
   return createRangeExpr<
       facebook::velox::common::BytesRange,
       cudf::string_scalar>(filter, tree, scalars, columnRef, stream, mr);
-}
-
-template <typename FilterT, typename ScalarT>
-const cudf::ast::expression& buildInListExpr(
-    const common::Filter& filter,
-    cudf::ast::tree& tree,
-    const cudf::ast::expression& columnRef,
-    std::vector<std::unique_ptr<cudf::scalar>>& scalars,
-    bool isNegated,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
-  using Op = cudf::ast::ast_operator;
-  using Operation = cudf::ast::operation;
-
-  auto* valuesFilter = dynamic_cast<const FilterT*>(&filter);
-  VELOX_CHECK_NOT_NULL(valuesFilter, "Filter is not a List filter");
-  auto const& values = valuesFilter->values();
-  if (values.empty()) {
-    VELOX_FAIL("Empty List filter not supported");
-  }
-
-  std::vector<const cudf::ast::expression*> exprVec;
-  for (const auto& value : values) {
-    scalars.emplace_back(std::make_unique<ScalarT>(value, true, stream, mr));
-    stream.synchronize();
-    auto const& literal = tree.push(
-        cudf::ast::literal{*static_cast<ScalarT*>(scalars.back().get())});
-    auto const& equalExpr = tree.push(
-        Operation{isNegated ? Op::NOT_EQUAL : Op::EQUAL, columnRef, literal});
-    exprVec.push_back(&equalExpr);
-  }
-
-  const cudf::ast::expression* result = exprVec[0];
-  for (size_t i = 1; i < exprVec.size(); ++i) {
-    if (isNegated) {
-      result =
-          &tree.push(Operation{Op::NULL_LOGICAL_AND, *result, *exprVec[i]});
-    } else {
-      result = &tree.push(Operation{Op::NULL_LOGICAL_OR, *result, *exprVec[i]});
-    }
-  }
-  return *result;
 }
 
 // Build an IN-list expression for integer columns where the filter values are
@@ -468,7 +426,7 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
 
     case common::FilterKind::kBigintValuesUsingHashTable: {
       auto const& columnType = inputRowSchema->childAt(columnIndex);
-      return buildHashInListExpr<
+      return buildValuesListExpr<
           TypeKind::BIGINT,
           common::BigintValuesUsingHashTable,
           int64_t>(filter, tree, columnRef, scalars, columnType);
@@ -492,20 +450,26 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
 
     case common::FilterKind::kHugeintValuesUsingHashTable: {
       auto const& columnType = inputRowSchema->childAt(columnIndex);
-      return buildHashInListExpr<
+      return buildValuesListExpr<
           TypeKind::HUGEINT,
           common::HugeintValuesUsingHashTable,
           int128_t>(filter, tree, columnRef, scalars, columnType);
     }
 
     case common::FilterKind::kBytesValues: {
-      return buildInListExpr<common::BytesValues, cudf::string_scalar>(
-          filter, tree, columnRef, scalars, false, stream, mr);
+      auto const& columnType = inputRowSchema->childAt(columnIndex);
+      return buildValuesListExpr<
+          TypeKind::VARCHAR,
+          common::BytesValues,
+          StringView>(filter, tree, columnRef, scalars, columnType);
     }
 
     case common::FilterKind::kNegatedBytesValues: {
-      return buildInListExpr<common::NegatedBytesValues, cudf::string_scalar>(
-          filter, tree, columnRef, scalars, true, stream, mr);
+      auto const& columnType = inputRowSchema->childAt(columnIndex);
+      return buildValuesListExpr<
+          TypeKind::VARCHAR,
+          common::NegatedBytesValues,
+          StringView>(filter, tree, columnRef, scalars, columnType, true);
     }
 
     case common::FilterKind::kDoubleRange: {
