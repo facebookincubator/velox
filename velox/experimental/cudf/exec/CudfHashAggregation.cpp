@@ -1326,9 +1326,7 @@ CudfVectorPtr CudfHashAggregation::releaseAndResetPartialOutput() {
   }
 
   numInputRows_ = 0;
-  // We're moving bufferedResult_ to the caller because we want it to be null
-  // after this call.
-  return std::move(bufferedResult_);
+  return std::exchange(bufferedResult_, nullptr);
 }
 
 RowVectorPtr CudfHashAggregation::getOutput() {
