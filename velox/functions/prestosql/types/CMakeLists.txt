@@ -13,10 +13,12 @@
 # limitations under the License.
 
 add_subdirectory(parser)
+
 velox_add_library(
   velox_presto_types
   BigintEnumRegistration.cpp
   BigintEnumType.cpp
+  PrestoTypeSql.cpp
   BingTileRegistration.cpp
   BingTileType.cpp
   EnumTypeBase.cpp

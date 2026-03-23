@@ -40,6 +40,7 @@
 #include "velox/functions/prestosql/types/IPPrefixType.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/functions/prestosql/types/KHyperLogLogType.h"
+#include "velox/functions/prestosql/types/PrestoTypeSql.h"
 #include "velox/functions/prestosql/types/QDigestType.h"
 #include "velox/functions/prestosql/types/SetDigestType.h"
 #include "velox/functions/prestosql/types/SfmSketchType.h"
@@ -396,7 +397,7 @@ std::string PrestoQueryRunner::createTable(
   for (auto i = 0; i < inputType->size(); ++i) {
     appendComma(i, nullValues);
     nullValues << fmt::format(
-        "cast(null as {})", toTypeSql(inputType->childAt(i)));
+        "cast(null as {})", toPrestoTypeSql(inputType->childAt(i)));
   }
 
   execute(fmt::format("DROP TABLE IF EXISTS {}", name));

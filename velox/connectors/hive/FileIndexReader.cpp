@@ -279,10 +279,10 @@ std::unique_ptr<dwio::common::Reader> FileIndexReader::createFileReader() {
 std::unique_ptr<dwio::common::IndexReader>
 FileIndexReader::createIndexReader() {
   VELOX_CHECK_NOT_NULL(fileReader_);
-  VELOX_CHECK_EQ(
-      hiveSplit_->fileFormat,
-      dwio::common::FileFormat::NIMBLE,
-      "FileIndexReader only supports Nimble file format");
+  VELOX_CHECK(
+      hiveSplit_->fileFormat == dwio::common::FileFormat::NIMBLE ||
+          hiveSplit_->fileFormat == dwio::common::FileFormat::FLUX,
+      "FileIndexReader only supports Nimble and Flux file formats");
 
   dwio::common::RowReaderOptions rowReaderOpts;
   configureRowReaderOptions(

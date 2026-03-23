@@ -1731,6 +1731,50 @@ TEST_F(ParquetTableScanTest, statsBasedFileSkipping) {
   testFileSkipping("c0 >= 0", 0, 2);
 }
 
+TEST_F(ParquetTableScanTest, fileFormatRuntimeStats) {
+  auto rowType = ROW({"a", "b"}, {BIGINT(), DOUBLE()});
+  auto vector = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int64_t>(100, [](auto row) { return row; }),
+          makeFlatVector<double>(100, [](auto row) { return row * 1.5; }),
+      });
+  std::vector<RowVectorPtr> vectors = {vector};
+
+  // Write one Parquet file and one DWRF file.
+  auto parquetFile = TempFilePath::create();
+  WriterOptions parquetOptions;
+  parquetOptions.memoryPool = rootPool_.get();
+  writeToParquetFile(parquetFile->getPath(), vectors, parquetOptions);
+
+  auto dwrfFile = TempFilePath::create();
+  writeToFile(dwrfFile->getPath(), vectors);
+
+  // DuckDB reference table with data from both files.
+  std::vector<RowVectorPtr> allVectors = {vector, vector};
+  createDuckDbTable(allVectors);
+
+  auto parquetSplit = makeHiveConnectorSplits(
+      parquetFile->getPath(), 1, dwio::common::FileFormat::PARQUET);
+  auto dwrfSplit = makeHiveConnectorSplits(
+      dwrfFile->getPath(), 1, dwio::common::FileFormat::DWRF);
+
+  auto plan = PlanBuilder().tableScan(asRowType(vectors[0]->type())).planNode();
+
+  auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                  .splits({parquetSplit[0], dwrfSplit[0]})
+                  .assertResults("SELECT * FROM tmp");
+
+  auto stats = task->taskStats().pipelineStats[0].operatorStats[0].runtimeStats;
+  ASSERT_EQ(stats.count("fileFormat.parquet"), 1);
+  ASSERT_EQ(stats.at("fileFormat.parquet").sum, 1);
+  ASSERT_EQ(stats.count("fileFormat.dwrf"), 1);
+  ASSERT_EQ(stats.at("fileFormat.dwrf").sum, 1);
+
+  task.reset();
+  waitForAllTasksToBeDeleted();
+}
+
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   folly::Init init{&argc, &argv, false};

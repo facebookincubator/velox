@@ -869,29 +869,29 @@ std::vector<std::string> HiveDataSink::commitMessage() const {
     const auto& info = writerInfo_.at(i);
     VELOX_CHECK_NOT_NULL(info);
 
-    // Build the fileWriteInfos array from all written files.
     folly::dynamic fileWriteInfosArray = folly::dynamic::array;
     for (const auto& fileInfo : info->writtenFiles) {
       fileWriteInfosArray.push_back(
-          folly::dynamic::object("writeFileName", fileInfo.writeFileName)(
-              "targetFileName", fileInfo.targetFileName)(
-              "fileSize", fileInfo.fileSize));
+          folly::dynamic::object(
+              HiveCommitMessage::kWriteFileName, fileInfo.writeFileName)(
+              HiveCommitMessage::kTargetFileName, fileInfo.targetFileName)(
+              HiveCommitMessage::kFileSize, fileInfo.fileSize));
     }
 
     // clang-format off
       auto partitionUpdateJson = folly::toJson(
        folly::dynamic::object
-          ("name", info->writerParameters.partitionName().value_or(""))
-          ("updateMode",
+          (HiveCommitMessage::kName, info->writerParameters.partitionName().value_or(""))
+          (HiveCommitMessage::kUpdateMode,
             HiveWriterParameters::updateModeToString(
               info->writerParameters.updateMode()))
-          ("writePath", info->writerParameters.writeDirectory())
-          ("targetPath", info->writerParameters.targetDirectory())
-          ("fileWriteInfos", std::move(fileWriteInfosArray))
-          ("rowCount", info->numWrittenRows)
-          ("inMemoryDataSizeInBytes", info->inputSizeInBytes)
-          ("onDiskDataSizeInBytes", ioStats_.at(i)->rawBytesWritten())
-          ("containsNumberedFileNames", true));
+          (HiveCommitMessage::kWritePath, info->writerParameters.writeDirectory())
+          (HiveCommitMessage::kTargetPath, info->writerParameters.targetDirectory())
+          (HiveCommitMessage::kFileWriteInfos, std::move(fileWriteInfosArray))
+          (HiveCommitMessage::kRowCount, info->numWrittenRows)
+          (HiveCommitMessage::kInMemoryDataSizeInBytes, info->inputSizeInBytes)
+          (HiveCommitMessage::kOnDiskDataSizeInBytes, ioStats_.at(i)->rawBytesWritten())
+          (HiveCommitMessage::kContainsNumberedFileNames, true));
     // clang-format on
     partitionUpdates.push_back(partitionUpdateJson);
   }

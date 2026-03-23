@@ -15,25 +15,11 @@
  */
 #pragma once
 
-#include "velox/functions/Macros.h"
+#include "velox/type/Type.h"
 
-namespace facebook::velox::functions {
+namespace facebook::velox {
 
-/// Returns the number of elements in an array or map.
-template <typename T>
-struct CardinalityFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
+/// Returns the Presto SQL string representation of the given type.
+std::string toPrestoTypeSql(const TypePtr& type);
 
-  template <typename TReturn>
-  void call(TReturn& out, const arg_type<Array<Generic<T1>>>& input) {
-    out = input.size();
-  }
-
-  template <typename TReturn>
-  void call(
-      TReturn& out,
-      const arg_type<Map<Generic<T1>, Generic<T2>>>& input) {
-    out = input.size();
-  }
-};
-} // namespace facebook::velox::functions
+} // namespace facebook::velox
