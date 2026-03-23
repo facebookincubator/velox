@@ -1573,17 +1573,31 @@ int32_t HashProbe::evalFilter(int32_t numRows) {
     filterInputRows_.updateBounds();
   }
 
-  RowVectorPtr filterInput = createFilterInput(numRows);
+  // Skip filter evaluation when no rows are selected. filterPassed()
+  // short-circuits on filterInputRows_, so the result is never read.
+  // We cannot call createFilterInput() here because it wraps probe columns
+  // in a dictionary over outputRowMapping_, which listJoinResults() may have
+  // already overwritten — the dictionary would fail validation in debug builds.
+  if (FOLLY_LIKELY(filterInputRows_.hasSelections())) {
+    RowVectorPtr filterInput = createFilterInput(numRows);
+    if (nullAware_) {
+      prepareFilterRowsForNullAwareJoin(
+          filterInput, numRows, filterPropagateNulls);
+    }
 
-  if (nullAware_) {
-    prepareFilterRowsForNullAwareJoin(
-        filterInput, numRows, filterPropagateNulls);
+    EvalCtx evalCtx(operatorCtx_->execCtx(), filter_.get(), filterInput.get());
+    filter_->eval(0, 1, true, filterInputRows_, evalCtx, filterResult_);
+
+    decodedFilterResult_.decode(*filterResult_[0], filterInputRows_);
+  } else if (nullAware_) {
+    if (filterTableInput_ == nullptr) {
+      filterTableInput_ =
+          BaseVector::create<RowVector>(filterInputType_, kBatchSize, pool());
+    }
+    if (filterPropagateNulls) {
+      nullFilterInputRows_.resizeFill(numRows, false);
+    }
   }
-
-  EvalCtx evalCtx(operatorCtx_->execCtx(), filter_.get(), filterInput.get());
-  filter_->eval(0, 1, true, filterInputRows_, evalCtx, filterResult_);
-
-  decodedFilterResult_.decode(*filterResult_[0], filterInputRows_);
 
   int32_t numPassed = 0;
   if (isLeftJoin(joinType_) || isFullJoin(joinType_)) {
