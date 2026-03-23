@@ -14,10 +14,17 @@
  * limitations under the License.
  */
 #include "velox/common/process/ThreadDebugInfo.h"
+#include "velox/experimental/cudf/CudfConfig.h"
 
 #include <folly/Unit.h>
 #include <folly/init/Init.h>
+#include <gflags/gflags.h>
 #include <gtest/gtest.h>
+
+DEFINE_int32(
+    exchange_log_level,
+    0,
+    "VLOG level for cudf-exchange modules (0=silent, 1-3=increasing verbosity)");
 
 // This main is needed for some tests on linux.
 int main(int argc, char** argv) {
@@ -25,5 +32,7 @@ int main(int argc, char** argv) {
   // Signal handler required for ThreadDebugInfoTest
   facebook::velox::process::addDefaultFatalSignalHandler();
   folly::Init init(&argc, &argv, false);
+  facebook::velox::cudf_velox::CudfConfig::getInstance().exchangeLogLevel =
+      FLAGS_exchange_log_level;
   return RUN_ALL_TESTS();
 }

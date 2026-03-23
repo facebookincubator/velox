@@ -16,7 +16,9 @@
 #pragma once
 
 #include <ucxx/api.h>
+#include <chrono>
 #include <cstdint>
+#include <random>
 #include <string>
 #include "velox/common/future/VeloxPromise.h"
 #include "velox/experimental/cudf-exchange/Acceptor.h"
@@ -104,7 +106,22 @@ class Communicator {
 
   /// @brief Removes an endpoint from the communicator. This is required when
   /// the endpoint has become stale since the other side has disappeared.
+  /// NOTE: This should NOT be called from within a UCX callback. Use
+  /// deferEndpointCleanup() instead.
   void removeEndpointRef(std::shared_ptr<EndpointRef> ep);
+
+  /// @brief Defers endpoint cleanup to the main progress loop.
+  /// This MUST be used instead of removeEndpointRef when called from
+  /// within a UCX callback, because UCX callbacks cannot call progress
+  /// functions (which closeBlocking() does internally).
+  /// @param ep The endpoint to be cleaned up later.
+  void deferEndpointCleanup(std::shared_ptr<EndpointRef> ep);
+
+  /// @brief Defers cleanup of a cancelled UCXX request to the main loop.
+  /// The request (and the GPU buffers it references via its arg) will be
+  /// held alive until UCX has fully processed the cancellation.
+  /// Must only be called from the Communicator thread.
+  void deferRequestCleanup(std::shared_ptr<ucxx::Request> request);
 
   // Returns the URL of the coordinator.
   const std::string& getCoordinatorUrl();
@@ -119,6 +136,14 @@ class Communicator {
   /// Used for same-node detection in intra-node transfer optimization.
   /// @returns The port number from the UCXX listener.
   uint16_t getListenerPort() const;
+
+  /// @brief Get the unique worker ID for this Communicator instance.
+  /// Used for intra-process detection: if two endpoints share the same
+  /// workerId, they are in the same process and can use
+  /// IntraNodeTransferRegistry instead of UCXX.
+  uint64_t getWorkerId() const {
+    return workerId_;
+  }
 
  private:
   Communicator() =
@@ -171,6 +196,32 @@ class Communicator {
 
   // The map that maintains the shared endpoints.
   std::map<HostPort, std::shared_ptr<EndpointRef>> endpoints_;
+
+  /// @brief Signals the UCXX worker to wake up from a blocking
+  /// progressWorkerEvent() call. Thread-safe. No-op if worker_ is null
+  /// or if not in blocking progress mode.
+  void signalWorker();
+
+  /// A random unique identifier for this Communicator instance (process).
+  /// Generated once at initialization. Used by the Acceptor to determine
+  /// if a connecting source is in the same process (intra-node transfer).
+  uint64_t workerId_{0};
+
+  // Queue of endpoints that need cleanup, populated by callbacks.
+  // UCX callbacks cannot call progress functions (like closeBlocking),
+  // so they defer cleanup to the main loop via this queue.
+  WorkQueue<EndpointRef> deferredEndpointCleanup_;
+
+  /// Cancelled UCXX requests whose GPU buffers may still be referenced by
+  /// UCX internals. Held alive here until isCompleted() returns true,
+  /// ensuring the GPU buffers (owned via the request's arg shared_ptr)
+  /// are not freed prematurely.
+  std::vector<std::shared_ptr<ucxx::Request>> deferredRequests_;
+
+  // Heartbeat state for diagnostic logging.
+  std::chrono::steady_clock::time_point lastHeartbeat_{
+      std::chrono::steady_clock::now()};
+  uint64_t workItemsProcessed_{0};
 };
 
 } // namespace facebook::velox::cudf_exchange

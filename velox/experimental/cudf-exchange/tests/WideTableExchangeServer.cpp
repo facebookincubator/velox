@@ -205,7 +205,10 @@ int main(int argc, char** argv) {
 
   // Register task with the queue manager
   queueManager->initializeTask(
-      srcTask, FLAGS_num_partitions, FLAGS_num_src_drivers);
+      srcTask,
+      facebook::velox::core::PartitionedOutputNode::Kind::kPartitioned,
+      FLAGS_num_partitions,
+      FLAGS_num_src_drivers);
   std::cout << "Registered task '" << FLAGS_task_id << "' with queue manager"
             << std::endl;
 

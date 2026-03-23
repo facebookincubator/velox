@@ -11,14 +11,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_library(
-  velox_cudf_exchange
-  OBJECT
+set(
+  CUDF_EXCHANGE_SOURCES
   CudfPartitionedOutput.cpp
   CudfOutputQueueManager.cpp
   CudfQueues.cpp
-  HybridExchange.cpp
-  ExchangeClientFacade.cpp
+  UcxExchange.cpp
   CudfExchangeProtocol.cpp
   CudfExchangeSource.cpp
   CudfExchangeServer.cpp
@@ -30,6 +28,23 @@ add_library(
   NetUtil.cpp
   IntraNodeTransferRegistry.cpp
 )
+
+# Generate a header containing the module basenames (without .cpp extension)
+# for use by Communicator to set per-file VLOG levels.
+set(CUDF_EXCHANGE_MODULE_LIST "")
+foreach(src ${CUDF_EXCHANGE_SOURCES})
+  string(REGEX REPLACE "\\.cpp$" "" module "${src}")
+  string(APPEND CUDF_EXCHANGE_MODULE_LIST "\"${module}\",\n    ")
+endforeach()
+configure_file(
+  ${CMAKE_CURRENT_SOURCE_DIR}/CudfExchangeModules.h.in
+  ${CMAKE_CURRENT_BINARY_DIR}/CudfExchangeModules.h
+  @ONLY
+)
+
+add_library(velox_cudf_exchange OBJECT ${CUDF_EXCHANGE_SOURCES})
+
+target_include_directories(velox_cudf_exchange PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
 find_package(ucx REQUIRED)
 

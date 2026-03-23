@@ -155,17 +155,17 @@ class CudfTestData : public BaseTableGenerator {
     return integers_;
   }
 
-  std::shared_ptr<std::vector<float>> getDoubles() {
-    return doubles_;
+  std::shared_ptr<std::vector<float>> getFloats() {
+    return floats_;
   }
 
   /// @brief Sets the data directly (used for creating partitioned test data).
   void setData(
       std::shared_ptr<std::vector<uint32_t>> integers,
-      std::shared_ptr<std::vector<float>> doubles,
+      std::shared_ptr<std::vector<float>> floats,
       std::shared_ptr<std::vector<std::string>> strings) {
     integers_ = std::move(integers);
-    doubles_ = std::move(doubles);
+    floats_ = std::move(floats);
     strings_ = std::move(strings);
     numRows_ = integers_->size();
   }
@@ -173,7 +173,7 @@ class CudfTestData : public BaseTableGenerator {
  protected:
   std::shared_ptr<std::vector<std::string>> strings_;
   std::shared_ptr<std::vector<uint32_t>> integers_;
-  std::shared_ptr<std::vector<float>> doubles_;
+  std::shared_ptr<std::vector<float>> floats_;
   size_t numRows_ = 0;
 };
 

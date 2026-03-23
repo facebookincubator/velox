@@ -41,6 +41,10 @@ void CudfExchangeQueue::enqueueLocked(
     std::vector<ContinuePromise>& promises) {
   if (data == nullptr) {
     ++numCompleted_;
+    VLOG(2) << "[EX-QUEUE] source completed (null enqueued)"
+            << " numCompleted=" << numCompleted_
+            << " numSources=" << numSources_
+            << " noMoreSources=" << noMoreSources_;
     auto completedPromises = checkCompleteLocked();
     promises.reserve(promises.size() + completedPromises.size());
     for (auto& promise : completedPromises) {
@@ -59,6 +63,21 @@ void CudfExchangeQueue::enqueueLocked(
   receivedBytes_ += dataSize;
 
   queue_.push_back(std::move(data));
+
+  // High-water-mark alerts: log when queue size crosses thresholds.
+  auto newSize = static_cast<int64_t>(queue_.size());
+  if (newSize > peakSize_) {
+    if ((peakSize_ < 100 && newSize >= 100) ||
+        (peakSize_ < 1000 && newSize >= 1000) ||
+        (peakSize_ < 10000 && newSize >= 10000)) {
+      VLOG(1) << "[EX-QUEUE] high water mark: queueSize=" << newSize
+              << " peakBytes=" << peakBytes_
+              << " receivedTables=" << receivedTables_;
+    }
+    peakSize_ = newSize;
+  }
+
+  size_t wokenConsumers = 0;
   while (!promises_.empty()) {
     VELOX_CHECK_LE(promises_.size(), numberOfConsumers_);
     const int32_t unblockedConsumers = numberOfConsumers_ - promises_.size();
@@ -70,6 +89,11 @@ void CudfExchangeQueue::enqueueLocked(
     auto it = promises_.begin();
     promises.push_back(std::move(it->second));
     promises_.erase(it);
+    ++wokenConsumers;
+  }
+  if (wokenConsumers > 0) {
+    VLOG(2) << "[EX-QUEUE] waking " << wokenConsumers << " consumers"
+            << " queueSize=" << queue_.size();
   }
 }
 
@@ -109,6 +133,11 @@ PackedTableWithStreamPtr CudfExchangeQueue::dequeueLocked(
     if (atEnd_) {
       *atEnd = true;
     } else {
+      VLOG(2) << "[EX-QUEUE] consumer=" << consumerId
+              << " blocked (empty queue, waiting for data)"
+              << " numSources=" << numSources_
+              << " numCompleted=" << numCompleted_
+              << " waitingConsumers=" << (promises_.size() + 1);
       addPromiseLocked(consumerId, future, stalePromise);
     }
     return data;

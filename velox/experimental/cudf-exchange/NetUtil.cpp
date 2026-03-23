@@ -14,11 +14,17 @@
  * limitations under the License.
  */
 #include <arpa/inet.h>
+#include <ifaddrs.h>
 #include <netdb.h>
+#include <netinet/in.h>
 #include <sys/socket.h>
 #include <cstring>
 #include <set>
+#include <sstream>
 #include <string>
+#include <unordered_set>
+
+#include <glog/logging.h>
 
 // Helper: resolve a hostname/IP string into a set of stringified addresses
 static std::set<std::string> resolveHost(const std::string& host) {
@@ -67,4 +73,55 @@ bool isSameHost(const std::string& h1, const std::string& h2) {
     }
   }
   return false;
+}
+
+// Get all IP addresses assigned to local network interfaces.
+// Used for server-side intra-node detection.
+std::unordered_set<std::string> getLocalIpAddresses() {
+  std::unordered_set<std::string> localIps;
+  struct ifaddrs* ifaddr = nullptr;
+  struct ifaddrs* ifa = nullptr;
+
+  if (getifaddrs(&ifaddr) == -1) {
+    LOG(WARNING) << "[EXCHANGE_DEBUG] getLocalIpAddresses: getifaddrs() failed";
+    return localIps;
+  }
+
+  for (ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next) {
+    if (ifa->ifa_addr == nullptr) {
+      continue;
+    }
+
+    char ipstr[INET6_ADDRSTRLEN];
+    if (ifa->ifa_addr->sa_family == AF_INET) {
+      // IPv4
+      sockaddr_in* ipv4 = reinterpret_cast<sockaddr_in*>(ifa->ifa_addr);
+      inet_ntop(AF_INET, &ipv4->sin_addr, ipstr, sizeof(ipstr));
+      localIps.insert(ipstr);
+    } else if (ifa->ifa_addr->sa_family == AF_INET6) {
+      // IPv6
+      sockaddr_in6* ipv6 = reinterpret_cast<sockaddr_in6*>(ifa->ifa_addr);
+      inet_ntop(AF_INET6, &ipv6->sin6_addr, ipstr, sizeof(ipstr));
+      localIps.insert(ipstr);
+    }
+  }
+
+  // CRITICAL: Use freeifaddrs(), not freeaddrinfo()
+  freeifaddrs(ifaddr);
+
+  // Log all local IPs for debugging
+  std::ostringstream oss;
+  oss << "{";
+  bool first = true;
+  for (const auto& ip : localIps) {
+    if (!first)
+      oss << ", ";
+    oss << ip;
+    first = false;
+  }
+  oss << "}";
+  LOG(INFO) << "[EXCHANGE_DEBUG] getLocalIpAddresses: " << localIps.size()
+            << " addresses: " << oss.str();
+
+  return localIps;
 }

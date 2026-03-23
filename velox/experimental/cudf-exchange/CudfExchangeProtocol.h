@@ -15,11 +15,9 @@
  */
 #pragma once
 
-#include <cuda.h>
 #include <cuda_runtime.h>
 #include <cinttypes>
 #include <cstring>
-#include <iostream>
 #include <memory>
 #include <stdexcept>
 #include <vector>
@@ -28,8 +26,6 @@
 /// Definitions needed for the Cudf exchange protocol.
 
 namespace facebook::velox::cudf_exchange {
-
-void cudaCheck(CUresult result);
 
 // data and metadata tags are split into 3 parts:
 // - 4 bytes: A hash of the producing taskId. The taskId is unique within a
@@ -64,24 +60,20 @@ inline uint64_t getHandshakeResponseTag(uint64_t taskHash) {
   return (taskHash << 32) | HANDSHAKE_RESPONSE_TAG;
 }
 
-/// Maximum length for listener IP address (supports IPv6).
-constexpr size_t kMaxListenerIpLen = 64;
-
 /// @brief Request that is sent from the client (CudfExchangeSource) to the
 /// server (CudfExchangeServer) after connection.
 ///
-/// The handshake establishes the partition key for data exchange and includes
-/// the source's Communicator listener address. The server uses this to detect
-/// if the source is on the same node (same Communicator instance) by comparing
-/// with its own listener address. Same-node detection enables local exchange
-/// optimizations that bypass UCXX transfers.
+/// The handshake establishes the partition key for data exchange.
+/// The workerId identifies the source's Communicator instance (process).
+/// If the server's workerId matches, both are in the same process, enabling
+/// intra-node transfer via IntraNodeTransferRegistry instead of UCXX.
 struct HandshakeMsg {
   char taskId[256];
   uint32_t destination;
-  /// Source's Communicator listener IP address for same-node detection.
-  char sourceListenerIp[kMaxListenerIpLen];
-  /// Source's Communicator listener port for same-node detection.
-  uint16_t sourceListenerPort;
+  /// Unique identifier for the source's Communicator instance.
+  /// Generated randomly at Communicator startup. The server compares this
+  /// against its own workerId to detect same-process (intra-node) transfers.
+  uint64_t workerId{0};
 };
 
 /// @brief Response sent from server to source after handshake.
@@ -96,7 +88,14 @@ struct HandshakeResponse {
 };
 
 constexpr uint32_t kMagicNumber = 0x12345678;
-constexpr uint32_t kMetaBufSize = 4096;
+/// Maximum metadata buffer size for receiving. This should be large enough
+/// to handle tables with many columns. 1MB allows for ~10,000+ columns.
+/// The sender allocates exact size needed; receiver pre-allocates this max.
+constexpr uint32_t kMaxMetaBufSize = 1024 * 1024; // 1MB
+
+/// Minimum header size needed to read the totalSize field.
+/// Format: [magic (4 bytes)][totalSize (4 bytes)]
+constexpr uint32_t kMetaHeaderSize = sizeof(kMagicNumber) + sizeof(uint32_t);
 
 struct MetadataMsg {
   std::unique_ptr<std::vector<uint8_t>> cudfMetadata;
@@ -104,21 +103,20 @@ struct MetadataMsg {
   std::vector<int64_t> remainingBytes;
   bool atEnd;
 
-  uint32_t getSerializedSize() {
-    // The header: the magic number and the metadata length (an uint32_t).
-    uint32_t totalSize = 2 * sizeof(uint32_t);
-    // cudfMetadata: lenght info and then the data.
-    totalSize += sizeof(size_t);
-    if (cudfMetadata && cudfMetadata->size() > 0) {
-      totalSize += cudfMetadata->size();
-    }
-    totalSize += sizeof(size_t); // dataSizeBytes
-
+  uint32_t getSerializedSize() const {
+    // The header: the magic number and the metadata length.
+    uint32_t totalSize = sizeof(kMagicNumber) + sizeof(totalSize);
+    // cudfMetadata: length info and then the data.
+    size_t cudfSize = cudfMetadata ? cudfMetadata->size() : 0;
+    totalSize += sizeof(cudfSize);
+    totalSize += cudfSize;
+    // dataSizeBytes
+    totalSize += sizeof(dataSizeBytes);
     // remainingBytes: length and then the data.
-    totalSize += sizeof(size_t);
-    totalSize += remainingBytes.size() * sizeof(uint64_t);
-
-    totalSize += sizeof(uint8_t); // atEnd, encoded in a byte.
+    totalSize += sizeof(size_t); // for numRemaining count
+    totalSize += remainingBytes.size() * sizeof(remainingBytes[0]);
+    // atEnd, encoded in a byte.
+    totalSize += sizeof(uint8_t);
 
     return totalSize;
   }
@@ -127,28 +125,35 @@ struct MetadataMsg {
   std::pair<std::shared_ptr<uint8_t>, size_t> serialize() {
     uint32_t totalSize = getSerializedSize();
 
-    // Allocate a contiguous block of memory
-    // Use shared_ptr with a custom deleter for arrays.
+    // Validate that the serialized size fits in the maximum allowed buffer.
+    // The receiver allocates kMaxMetaBufSize; sender must not exceed this.
+    VELOX_CHECK_LE(
+        totalSize,
+        kMaxMetaBufSize,
+        "Metadata serialized size ({}) exceeds maximum buffer size ({}). "
+        "This can happen with extremely wide tables. "
+        "Consider reducing table width or increasing kMaxMetaBufSize.",
+        totalSize,
+        kMaxMetaBufSize);
+
+    // Allocate exact size needed - no wasted memory for small metadata.
     auto deleter = [](uint8_t* p) { delete[] p; };
-    // allocate a fixed size buffer, make it easier for the receiving side.
-    // TODO: Extend the exchange protocol and send the actual size.
-    std::shared_ptr<uint8_t> buffer(new uint8_t[kMetaBufSize], deleter);
+    std::shared_ptr<uint8_t> buffer(new uint8_t[totalSize], deleter);
 
     uint8_t* ptr = buffer.get();
 
-    // write the magic number
-    std::memcpy(ptr, &kMagicNumber, sizeof(uint32_t));
-    ptr += sizeof(uint32_t);
-    // write the size of the metadata
-    std::memcpy(ptr, &totalSize, sizeof(uint32_t));
-    ptr += sizeof(uint32_t);
+    // Write the magic number.
+    std::memcpy(ptr, &kMagicNumber, sizeof(kMagicNumber));
+    ptr += sizeof(kMagicNumber);
+
+    // Write the size of the metadata.
+    std::memcpy(ptr, &totalSize, sizeof(totalSize));
+    ptr += sizeof(totalSize);
 
     // Serialize cudfMetadata size.
-
     size_t cudfSize = cudfMetadata ? cudfMetadata->size() : 0;
-
-    std::memcpy(ptr, &cudfSize, sizeof(size_t));
-    ptr += sizeof(size_t);
+    std::memcpy(ptr, &cudfSize, sizeof(cudfSize));
+    ptr += sizeof(cudfSize);
 
     // If data exists, serialize each byte.
     if (cudfSize > 0) {
@@ -157,22 +162,24 @@ struct MetadataMsg {
     }
 
     // Serialize dataSizeBytes.
-    std::memcpy(ptr, &dataSizeBytes, sizeof(size_t));
-    ptr += sizeof(size_t);
+    std::memcpy(ptr, &dataSizeBytes, sizeof(dataSizeBytes));
+    ptr += sizeof(dataSizeBytes);
 
     // Serialize number of remainingBytes elements.
     size_t numRemaining = remainingBytes.size();
-    std::memcpy(ptr, &numRemaining, sizeof(size_t));
-    ptr += sizeof(size_t);
+    std::memcpy(ptr, &numRemaining, sizeof(numRemaining));
+    ptr += sizeof(numRemaining);
 
     // Serialize remainingBytes elements.
     if (numRemaining > 0) {
-      std::memcpy(ptr, remainingBytes.data(), numRemaining * sizeof(uint64_t));
-      ptr += numRemaining * sizeof(uint64_t);
+      size_t bytesSize = numRemaining * sizeof(remainingBytes[0]);
+      std::memcpy(ptr, remainingBytes.data(), bytesSize);
+      ptr += bytesSize;
     }
 
     // Serialize atEnd bool as 0/1.
-    *ptr = atEnd ? 1 : 0;
+    uint8_t atEndByte = atEnd ? 1 : 0;
+    *ptr = atEndByte;
 
     return std::make_pair<std::shared_ptr<uint8_t>, size_t>(
         std::move(buffer), totalSize);
@@ -186,58 +193,58 @@ struct MetadataMsg {
 
     MetadataMsg record;
 
+    // Extract magic number.
     uint32_t magicNumber = 0;
-    // extract magic number.
-    std::memcpy(&magicNumber, ptr, sizeof(uint32_t));
+    std::memcpy(&magicNumber, ptr, sizeof(magicNumber));
     VELOX_CHECK_EQ(magicNumber, kMagicNumber);
+    ptr += sizeof(magicNumber);
 
-    ptr += sizeof(uint32_t);
-    // extract the total size.
+    // Extract the total size.
     uint32_t totalSize = 0;
-    std::memcpy(&totalSize, ptr, sizeof(uint32_t));
-    ptr += sizeof(uint32_t);
+    std::memcpy(&totalSize, ptr, sizeof(totalSize));
+    ptr += sizeof(totalSize);
 
     const uint8_t* endPtr = buffer + totalSize;
 
     // Deserialize cudfMetadata:
-    // First read the size of the metadata (stored as size_t)
-    if (ptr + sizeof(size_t) > endPtr)
+    // First read the size of the metadata.
+    size_t metaSize = 0;
+    if (ptr + sizeof(metaSize) > endPtr)
       throw std::runtime_error("Insufficient data for cudfMetadata size");
-    uint64_t metaSize = 0;
-    std::memcpy(&metaSize, ptr, sizeof(size_t));
-    ptr += sizeof(size_t);
+    std::memcpy(&metaSize, ptr, sizeof(metaSize));
+    ptr += sizeof(metaSize);
 
     // Allocate a vector of the correct size.
     record.cudfMetadata = std::make_unique<std::vector<uint8_t>>(metaSize);
     if (metaSize > 0) {
-      if (ptr + metaSize * sizeof(uint8_t) > endPtr)
+      if (ptr + metaSize > endPtr)
         throw std::runtime_error("Insufficient data for cudfMetadata bytes");
       std::memcpy(record.cudfMetadata->data(), ptr, metaSize);
       ptr += metaSize;
     }
 
-    // Deserialize dataSizeBytes, stored as a size_t.
-    if (ptr + sizeof(size_t) > endPtr)
+    // Deserialize dataSizeBytes.
+    if (ptr + sizeof(record.dataSizeBytes) > endPtr)
       throw std::runtime_error("Insufficient data for dataSizeBytes");
-    std::memcpy(&record.dataSizeBytes, ptr, sizeof(size_t));
-    ptr += sizeof(size_t);
+    std::memcpy(&record.dataSizeBytes, ptr, sizeof(record.dataSizeBytes));
+    ptr += sizeof(record.dataSizeBytes);
 
     // Deserialize remainingBytes vector:
-    // Start with the count of elements (stored as size_t).
-    if (ptr + sizeof(size_t) > endPtr)
-      throw std::runtime_error("Insufficient data for remainingBytes count");
+    // Start with the count of elements.
     size_t numRemaining = 0;
-    std::memcpy(&numRemaining, ptr, sizeof(size_t));
-    ptr += sizeof(size_t);
+    if (ptr + sizeof(numRemaining) > endPtr)
+      throw std::runtime_error("Insufficient data for remainingBytes count");
+    std::memcpy(&numRemaining, ptr, sizeof(numRemaining));
+    ptr += sizeof(numRemaining);
 
-    // Reserve space in the vector and read each element of type uint64_t.
-    if (ptr + numRemaining * sizeof(uint64_t) > endPtr)
-      throw std::runtime_error("Insufficient data for remainingBytes values");
+    // Reserve space in the vector and read each element.
     record.remainingBytes.resize(numRemaining);
     if (numRemaining > 0) {
-      std::memcpy(
-          record.remainingBytes.data(), ptr, numRemaining * sizeof(uint64_t));
-      ptr += numRemaining * sizeof(uint64_t);
+      size_t bytesSize = numRemaining * sizeof(record.remainingBytes[0]);
+      if (ptr + bytesSize > endPtr)
+        throw std::runtime_error("Insufficient data for remainingBytes values");
+      std::memcpy(record.remainingBytes.data(), ptr, bytesSize);
+      ptr += bytesSize;
     }
 
     // Deserialize bool `atEnd` (stored as a single byte: 1 for true, 0 for

@@ -102,6 +102,10 @@ class CudfExchangeClient
 
   // Total number of packed_clumns in flight.
   int64_t totalPendingColumns_{0};
+
+  // Diagnostic counters for progress and flow control.
+  int64_t totalDequeued_{0};
+  bool inFlowControl_{false};
 };
 
 } // namespace facebook::velox::cudf_exchange

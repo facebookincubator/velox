@@ -23,6 +23,8 @@
 #include <cudf/table/table_view.hpp>
 #include <cudf/unary.hpp>
 
+using namespace facebook::velox::exec;
+
 namespace facebook::velox::cudf_exchange {
 
 constexpr int kPipelineId = 0;
@@ -37,16 +39,9 @@ SinkDriverMock::SinkDriverMock(
       numRows_{0},
       numBytes_{0},
       referenceData_(referenceData) {
-  // create a new exchange client facade. Since this test doesn't use
-  // HTTP exchange, the facade will only use a cudf exchange client.
-  // create new cudfExchangeClient
-  auto cudfClient = std::make_shared<CudfExchangeClient>(
+  // Create a CudfExchangeClient shared across all exchange operators.
+  exchangeClient_ = std::make_shared<CudfExchangeClient>(
       task_->taskId(), task_->destination(), numDrivers_);
-  exchangeClient_ = std::make_shared<ExchangeClientFacade>(
-      task_->taskId(),
-      kPipelineId,
-      std::move(cudfClient),
-      nullptr); // no HTTP client.
   uint32_t operatorId = 0;
   auto planNode = task_->planFragment().planNode;
   // create the set of exchange operators.
@@ -55,7 +50,7 @@ SinkDriverMock::SinkDriverMock(
         std::make_shared<DriverCtx>(
             task_, driverId, kPipelineId, kUngroupedGroupId, kPartitionId));
     hybridExchanges_.emplace_back(
-        std::make_unique<HybridExchange>(
+        std::make_unique<UcxExchange>(
             operatorId, driverCtxs_.back().get(), planNode, exchangeClient_));
   }
 }
@@ -86,7 +81,7 @@ void SinkDriverMock::run() {
   }
 }
 
-void SinkDriverMock::receiveAllData(HybridExchange* hybridExchange) {
+void SinkDriverMock::receiveAllData(UcxExchange* hybridExchange) {
   while (true) {
     ContinueFuture future;
     auto blocked = hybridExchange->isBlocked(&future);
@@ -101,6 +96,7 @@ void SinkDriverMock::receiveAllData(HybridExchange* hybridExchange) {
                 res);
         numBytes_.fetch_add(cudfRes->estimateFlatSize());
         numRows_ += cudfRes->getTableView().num_rows();
+        numChunksReceived_.fetch_add(1);
         // If we have Reference data check the received data is the same
         if (referenceData_)
           updateDataValidity(cudfRes->getTableView());

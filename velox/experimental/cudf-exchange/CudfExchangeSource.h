@@ -35,7 +35,6 @@
 #include <rmm/mr/device_memory_resource.hpp>
 #include <rmm/mr/pool_memory_resource.hpp>
 
-using namespace facebook::velox::exec;
 namespace facebook::velox::cudf_exchange {
 
 struct CudfExchangeMetrics {
@@ -84,6 +83,23 @@ class CudfExchangeSource
   /// of an error or an operator like Limit aborting the query
   /// once it received enough data.
   void close();
+
+  /// @brief Marks this source as registered with the exchange queue.
+  /// Must be called after addSourceLocked() increments numSources_ for this
+  /// source. Without this, deliverEndMarker() will not enqueue the nullptr
+  /// (preventing spurious numCompleted_ increments for unregistered sources).
+  void setRegistered() {
+    registered_ = true;
+  }
+
+  /// @brief Called by CudfExchangeClient::next() on the consumer (driver)
+  /// thread to wake up this source after it went dormant due to backpressure.
+  /// Uses CAS to ensure exactly one wake-up per dormant period.
+  void resumeFromBackpressure();
+
+  // Backpressure thresholds. Public so CudfExchangeClient can use them.
+  static constexpr int32_t kBackpressureHighWaterMark = 32;
+  static constexpr int32_t kBackpressureLowWaterMark = 16;
 
   // Returns runtime statistics. ExchangeSource is expected to report
   // background CPU time by including a runtime metric named
@@ -192,24 +208,50 @@ class CudfExchangeSource
 
   /// @brief For intra-node transfer: handles data retrieved from registry.
   /// @param data The packed_columns from registry (nullptr if atEnd or error)
+  /// @param producerStream The CUDA stream on which the data was produced
   /// @param atEnd True if this is end-of-stream
-  void onIntraNodeData(std::shared_ptr<cudf::packed_columns> data, bool atEnd);
+  void onIntraNodeData(
+      std::shared_ptr<cudf::packed_columns> data,
+      rmm::cuda_stream_view producerStream,
+      bool atEnd);
 
   /// @brief Sets the new state of this exchange source using
-  /// sequential consistency.
+  /// sequential consistency. Logs transitions at VLOG(2).
   /// @param newState the new state of the CudfExchangeSource.
-  void setState(ReceiverState newState) {
-    state_.store(newState, std::memory_order_seq_cst);
-  }
+  void setState(ReceiverState newState);
 
   /// @brief Returns the state.
   ReceiverState getState() {
     return state_.load(std::memory_order_seq_cst);
   }
 
+  static std::string getStateAsString(ReceiverState s) {
+    const std::string stateMap[] = {
+        "Created",
+        "WaitingForHandshakeComplete",
+        "WaitingForHandshakeResponse",
+        "ReadyToReceive",
+        "WaitingForMetadata",
+        "WaitingForData",
+        "WaitingForIntraNodeData",
+        "Done"};
+    return stateMap[static_cast<uint32_t>(s)];
+  }
+
+  std::string getStateAsString() {
+    return getStateAsString(state_.load());
+  }
+
   /// @brief Remove the state associated with the source called by the
   /// state-machine
   void cleanUp();
+
+  /// @brief Delivers the nullptr end-of-stream marker to the queue exactly
+  /// once. Safe to call from any thread. Uses atomic CAS on
+  /// endMarkerDelivered_ to guarantee at-most-once delivery.
+  /// Returns early without enqueuing if the source was never registered
+  /// with the queue (i.e., registered_ is false).
+  void deliverEndMarker();
 
   /// @brief Sets the state to "desired" if and only if the current
   /// state is "expected".
@@ -230,11 +272,22 @@ class CudfExchangeSource
   std::atomic<ReceiverState> state_;
 
   uint32_t sequenceNumber_{0};
+  uint32_t intraNodePollCount_{0};
 
   // The shared queue of packed tables that all CudfExchangeSources write to
   const std::shared_ptr<CudfExchangeQueue> queue_{nullptr};
   std::atomic<bool> closed_{false};
   bool atEnd_{false}; // set when "atEnd" is being received.
+
+  /// @brief Guards exactly-once delivery of the nullptr end-of-stream marker.
+  /// Only one thread can win the CAS and call enqueue(nullptr).
+  std::atomic<bool> endMarkerDelivered_{false};
+
+  /// @brief True only after addSourceLocked() has been called for this source.
+  /// Prevents deliverEndMarker() from incrementing numCompleted_ for sources
+  /// that were never registered with the queue (e.g., created after client
+  /// close).
+  bool registered_{false};
 
   /// True if the server detected that this source is on the same node.
   /// Set from the isIntraNodeTransfer flag in HandshakeResponse, which the
@@ -242,6 +295,11 @@ class CudfExchangeSource
   /// HandshakeMsg) with its own Communicator's listener address.
   /// When true, intra-node transfer optimizations bypass UCXX transfers.
   bool isIntraNodeTransfer_{false};
+
+  // Backpressure: when queue exceeds kBackpressureHighWaterMark, the source
+  // goes dormant. The consumer thread wakes it via resumeFromBackpressure()
+  // when the queue drains to kBackpressureLowWaterMark.
+  std::atomic<bool> backpressureActive_{false};
 
   // Some metrics/counters:
   CudfExchangeMetrics metrics_;
@@ -251,6 +309,14 @@ class CudfExchangeSource
   // NOTE: The request owns/holds a reference to the upcall function
   // and must therefore exist until the upcall is done.
   std::shared_ptr<ucxx::Request> request_{nullptr};
+
+  // Completed UCXX requests are kept alive here to prevent use-after-free.
+  // UCP's ucp_wireup_replay_pending_requests can fire callbacks on already-
+  // completed requests; if the ucxx::Request has been freed, the callback
+  // lambda is in freed memory and crashes. Retaining them here ensures the
+  // Request (and its callback lambda) stays valid for the lifetime of this
+  // source.
+  std::vector<std::shared_ptr<ucxx::Request>> completedRequests_;
 };
 
 } // namespace facebook::velox::cudf_exchange

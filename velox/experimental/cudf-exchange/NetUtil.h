@@ -16,8 +16,16 @@
 #pragma once
 
 #include <string>
+#include <unordered_set>
 
 /// @brief Utility function that checks whether two
 /// hostnames resolve to the same underlying host.
 // The hostnames can be domain names, IPv4 or IPv6 addresses.
 bool isSameHost(const std::string& h1, const std::string& h2);
+
+/// @brief Get all IP addresses assigned to local network interfaces.
+/// Used for server-side intra-node detection by checking if a peer's IP
+/// is in this set. Includes both IPv4 and IPv6 addresses, as well as
+/// loopback addresses (127.0.0.1, ::1).
+/// @return Set of IP address strings for all local interfaces.
+std::unordered_set<std::string> getLocalIpAddresses();

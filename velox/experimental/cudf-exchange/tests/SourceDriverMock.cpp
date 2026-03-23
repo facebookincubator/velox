@@ -15,6 +15,7 @@
  */
 #include "velox/experimental/cudf-exchange/tests/SourceDriverMock.h"
 #include "velox/experimental/cudf-exchange/tests/CudfTestHelpers.h"
+#include "velox/experimental/cudf/exec/Utilities.h"
 
 namespace facebook::velox::cudf_exchange {
 
@@ -71,7 +72,7 @@ void SourceDriverMock::run() {
 }
 
 void SourceDriverMock::sendAllData(CudfPartitionedOutput* partitionedOutput) {
-  auto stream = rmm::cuda_stream_default;
+  auto stream = cudf_velox::cudfGlobalStreamPool().get_stream();
   // Use tableGenerator's rowType if available, otherwise get from task
   auto rowType = tableGenerator_ ? tableGenerator_->getRowType()
                                  : task_->planFragment().planNode->outputType();

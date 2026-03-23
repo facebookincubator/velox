@@ -199,6 +199,8 @@ class CudfExchangeQueue {
   int64_t receivedBytes_{0};
   // Maximum value of totalBytes_.
   int64_t peakBytes_{0};
+  // Peak queue size (number of items). Used for high-water-mark alerts.
+  int64_t peakSize_{0};
 };
 
 } // namespace facebook::velox::cudf_exchange

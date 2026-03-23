@@ -15,33 +15,51 @@
  */
 #include "velox/experimental/cudf-exchange/CudfExchangeServer.h"
 #include <glog/logging.h>
+#include <rmm/cuda_stream_view.hpp>
 #include "cuda_runtime.h"
 #include "velox/experimental/cudf-exchange/Communicator.h"
 #include "velox/experimental/cudf-exchange/CudfExchangeProtocol.h"
 #include "velox/experimental/cudf-exchange/IntraNodeTransferRegistry.h"
+#include "velox/experimental/cudf/exec/Utilities.h"
 
 namespace facebook::velox::cudf_exchange {
+
+// Context wrappers for UCXX tagSend callbackData. These decouple the
+// ucxx::Request lifetime (which must survive for UCP wireup replay) from
+// the buffer lifetime (which should be freed promptly after DMA completes).
+//
+// The Request holds a shared_ptr to the context via callbackData. The
+// context holds a shared_ptr to the actual buffer. When the send completion
+// callback fires, it moves the buffer out of the context, releasing the GPU
+// (or CPU) memory. The context remains alive as an empty shell for the
+// lifetime of the Request, which is safe and costs negligible memory.
+struct MetaSendContext {
+  std::shared_ptr<uint8_t> metadata;
+};
+
+struct DataSendContext {
+  std::shared_ptr<cudf::packed_columns> data;
+};
+
+void CudfExchangeServer::setState(ServerState newState) {
+  auto oldState = state_.exchange(newState, std::memory_order_seq_cst);
+  VLOG(2) << (isIntraNodeTransfer_ ? "[INTRA]" : "[REMOTE]") << " [ExSrv "
+          << partitionKey_.toString() << " seq=" << sequenceNumber_ << "] "
+          << getStateAsString(oldState) << " -> " << getStateAsString(newState);
+}
 
 // This constructor is private
 CudfExchangeServer::CudfExchangeServer(
     const std::shared_ptr<Communicator> communicator,
     std::shared_ptr<EndpointRef> endpointRef,
     const PartitionKey& key,
-    const std::string& sourceListenerIp,
-    uint16_t sourceListenerPort)
+    bool isIntraNodeTransfer)
     : CommElement(communicator, endpointRef),
       partitionKey_(key),
       partitionKeyHash_(fnv1a_32(partitionKey_.toString())),
-      sourceListenerIp_(sourceListenerIp),
-      sourceListenerPort_(sourceListenerPort),
+      isIntraNodeTransfer_(isIntraNodeTransfer),
       queueMgr_(CudfOutputQueueManager::getInstanceRef()) {
   setState(ServerState::Created);
-
-  // Detect if the source is on the same node by comparing listener addresses.
-  std::string myIp = communicator_->getListenerIp();
-  uint16_t myPort = communicator_->getListenerPort();
-  isIntraNodeTransfer_ =
-      (myIp == sourceListenerIp_) && (myPort == sourceListenerPort_);
 
   if (isIntraNodeTransfer_) {
     VLOG(3) << "@" << partitionKey_.taskId
@@ -55,10 +73,9 @@ std::shared_ptr<CudfExchangeServer> CudfExchangeServer::create(
     const std::shared_ptr<Communicator> communicator,
     std::shared_ptr<EndpointRef> endpointRef,
     const PartitionKey& key,
-    const std::string& sourceListenerIp,
-    uint16_t sourceListenerPort) {
+    bool isIntraNodeTransfer) {
   auto ptr = std::shared_ptr<CudfExchangeServer>(new CudfExchangeServer(
-      communicator, endpointRef, key, sourceListenerIp, sourceListenerPort));
+      communicator, endpointRef, key, isIntraNodeTransfer));
   return ptr;
 }
 
@@ -86,7 +103,7 @@ void CudfExchangeServer::process() {
           partitionKey_.taskId,
           partitionKey_.destination,
           [weakQueue](
-              std::unique_ptr<cudf::packed_columns> data,
+              std::shared_ptr<cudf::packed_columns> data,
               std::vector<int64_t> remainingBytes) {
             auto self = weakQueue.lock();
             if (!self) {
@@ -133,9 +150,17 @@ void CudfExchangeServer::process() {
             intraNodeRetrieveFuture_.wait_for(std::chrono::milliseconds(0));
         if (status == std::future_status::ready) {
           intraNodeRetrieveFuture_.get(); // Clear the future
+          intraNodePollCount_ = 0;
           onIntraNodeRetrieveComplete();
         } else {
           // Not ready yet, re-queue to check later
+          ++intraNodePollCount_;
+          if (intraNodePollCount_ % 100 == 0) {
+            VLOG(2) << "[INTRA] [ExSrv " << partitionKey_.toString()
+                    << " seq=" << sequenceNumber_
+                    << "] still waiting for source retrieval, polls="
+                    << intraNodePollCount_;
+          }
           communicator_->addToWorkQueue(getSelfPtr());
         }
       }
@@ -171,6 +196,22 @@ void CudfExchangeServer::close() {
     dataRequest_->cancel();
   }
 
+  // Move all requests to the Communicator's deferred list so the GPU
+  // buffers they reference (via their arg shared_ptr) stay alive until
+  // UCX has fully processed any in-flight operations.
+  if (communicator_) {
+    if (metaRequest_) {
+      communicator_->deferRequestCleanup(std::move(metaRequest_));
+    }
+    if (dataRequest_) {
+      communicator_->deferRequestCleanup(std::move(dataRequest_));
+    }
+    for (auto& req : completedRequests_) {
+      communicator_->deferRequestCleanup(std::move(req));
+    }
+    completedRequests_.clear();
+  }
+
   communicator_->unregister(getSelfPtr());
 }
 
@@ -190,6 +231,13 @@ std::shared_ptr<CudfExchangeServer> CudfExchangeServer::getSelfPtr() {
 void CudfExchangeServer::sendData() {
   std::lock_guard<std::recursive_mutex> lock(dataMutex_);
 
+  VLOG(2) << (isIntraNodeTransfer_ ? "[INTRA]" : "[REMOTE]") << " [ExSrv "
+          << partitionKey_.toString() << " seq=" << sequenceNumber_
+          << "] sendData hasData=" << (dataPtr_ != nullptr)
+          << (dataPtr_ && dataPtr_->gpu_data
+                  ? " size=" + std::to_string(dataPtr_->gpu_data->size())
+                  : "");
+
   if (isIntraNodeTransfer_) {
     // INTRA-NODE TRANSFER PATH: Use registry for all communication, no UCXX
     // needed
@@ -202,16 +250,15 @@ void CudfExchangeServer::sendData() {
               << " Intra-node transfer: publishing data for sequence "
               << sequenceNumber_ << " of size " << bytes_;
 
-      // Convert the data to shared_ptr for sharing with the source
-      auto sharedData = std::make_shared<cudf::packed_columns>(
-          std::move(dataPtr_->metadata), std::move(dataPtr_->gpu_data));
-      dataPtr_.reset();
-
       IntraNodeTransferKey key{
           partitionKey_.taskId, partitionKey_.destination, sequenceNumber_};
+      // Stream value is unused: the consumer (CudfExchangeSource::
+      // onIntraNodeData) allocates its own pool stream for downstream ops.
+      // dataPtr_ is already a shared_ptr, pass directly to share ownership.
       intraNodeRetrieveFuture_ =
           IntraNodeTransferRegistry::getInstance()->publish(
-              key, sharedData, /*atEnd=*/false);
+              key, dataPtr_, rmm::cuda_stream_default, /*atEnd=*/false);
+      dataPtr_.reset();
       intraNodeAtEndPublished_ = false;
 
       // Transition to WaitingForIntraNodeRetrieve state
@@ -228,7 +275,7 @@ void CudfExchangeServer::sendData() {
           partitionKey_.taskId, partitionKey_.destination, sequenceNumber_};
       intraNodeRetrieveFuture_ =
           IntraNodeTransferRegistry::getInstance()->publish(
-              key, nullptr, /*atEnd=*/true);
+              key, nullptr, rmm::cuda_stream_default, /*atEnd=*/true);
       intraNodeAtEndPublished_ = true;
 
       queueMgr_->deleteResults(partitionKey_.taskId, partitionKey_.destination);
@@ -242,7 +289,11 @@ void CudfExchangeServer::sendData() {
     std::shared_ptr<MetadataMsg> metadataMsg = std::make_shared<MetadataMsg>();
 
     if (dataPtr_) {
-      metadataMsg->cudfMetadata = std::move(dataPtr_->metadata);
+      // Copy metadata (not move) because in broadcast mode, the same
+      // packed_columns may be shared across multiple destination queues.
+      // Metadata is small (CPU-side), so copying is negligible.
+      metadataMsg->cudfMetadata =
+          std::make_unique<std::vector<uint8_t>>(*dataPtr_->metadata);
       metadataMsg->dataSizeBytes = dataPtr_->gpu_data->size();
       metadataMsg->remainingBytes = {};
       metadataMsg->atEnd = false;
@@ -263,13 +314,28 @@ void CudfExchangeServer::sendData() {
     // Use weak_ptr to prevent use-after-free if close() is called during
     // callback
     std::weak_ptr<CudfExchangeServer> weakMeta = weak_from_this();
+    if (metaRequest_) {
+      completedRequests_.push_back(std::move(metaRequest_));
+    }
+
+    // Wrap the serialized metadata in a context so the callback can release
+    // it after the send completes, while the Request (and context shell)
+    // stays alive for UCP wireup replay.
+    auto metaCtx = std::make_shared<MetaSendContext>();
+    metaCtx->metadata = serializedMetadata;
+
     metaRequest_ = endpointRef_->endpoint_->tagSend(
-        serializedMetadata.get(),
+        metaCtx->metadata.get(),
         serMetaSize,
         ucxx::Tag{metadataTag},
         false,
         [tid = partitionKey_.toString(), metadataTag, weakMeta](
             ucs_status_t status, std::shared_ptr<void> arg) {
+          // Release the metadata buffer from the context. The context
+          // shell stays alive with the Request; only the payload is freed.
+          auto ctx = std::static_pointer_cast<MetaSendContext>(arg);
+          auto metaHolder = std::move(ctx->metadata); // release CPU buffer
+
           auto self = weakMeta.lock();
           if (!self) {
             return; // Object was destroyed, safe to ignore
@@ -292,7 +358,7 @@ void CudfExchangeServer::sendData() {
             self->communicator_->addToWorkQueue(self);
           }
         },
-        serializedMetadata);
+        metaCtx);
 
     // send the data chunk (if any)
     if (dataPtr_) {
@@ -313,16 +379,35 @@ void CudfExchangeServer::sendData() {
       // Use weak_ptr to prevent use-after-free if close() is called during
       // callback
       std::weak_ptr<CudfExchangeServer> weakData = weak_from_this();
+      if (dataRequest_) {
+        completedRequests_.push_back(std::move(dataRequest_));
+      }
+
+      // Wrap the GPU data buffer in a context so the callback can release
+      // it after the DMA completes, while the Request (and context shell)
+      // stays alive for UCP wireup replay.
+      auto dataCtx = std::make_shared<DataSendContext>();
+      dataCtx->data = dataPtr_;
+
       dataRequest_ = endpointRef_->endpoint_->tagSend(
-          dataPtr_->gpu_data->data(),
-          dataPtr_->gpu_data->size(),
+          dataCtx->data->gpu_data->data(),
+          dataCtx->data->gpu_data->size(),
           ucxx::Tag{dataTag},
           false,
           [weakData](ucs_status_t status, std::shared_ptr<void> arg) {
+            // Release the GPU data buffer from the context. The DMA has
+            // completed by the time this callback fires, so the buffer is
+            // safe to free. The context shell stays alive with the Request.
+            auto ctx = std::static_pointer_cast<DataSendContext>(arg);
+            auto dataHolder = std::move(ctx->data);
+
             if (auto self = weakData.lock()) {
               self->sendComplete(status, arg);
             }
-          });
+            // dataHolder is destroyed here, releasing the GPU buffer if
+            // sendComplete() already reset the server's dataPtr_.
+          },
+          dataCtx);
     } else {
       // Data pointer is null, so no more data will be coming.
       VLOG(3) << "@" << partitionKey_.taskId

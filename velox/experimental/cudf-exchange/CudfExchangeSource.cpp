@@ -21,10 +21,18 @@
 #include <folly/Uri.h>
 #include "velox/experimental/cudf-exchange/CudfExchangeSource.h"
 #include "velox/experimental/cudf-exchange/IntraNodeTransferRegistry.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 
 using namespace facebook::velox::exec;
 namespace facebook::velox::cudf_exchange {
+
+void CudfExchangeSource::setState(ReceiverState newState) {
+  auto oldState = state_.exchange(newState, std::memory_order_seq_cst);
+  VLOG(2) << (isIntraNodeTransfer_ ? "[INTRA]" : "[REMOTE]") << " [ExSrc "
+          << toString() << " seq=" << sequenceNumber_ << "] "
+          << getStateAsString(oldState) << " -> " << getStateAsString(newState);
+}
 
 // This constructor is private.
 CudfExchangeSource::CudfExchangeSource(
@@ -90,6 +98,7 @@ void CudfExchangeSource::process() {
         // connection failed.
         VLOG(0) << toString() << " Failed to connect to " << host_ << ":"
                 << std::to_string(port_);
+        deliverEndMarker();
         setState(ReceiverState::Done);
       }
       communicator_->addToWorkQueue(getSelfPtr());
@@ -100,7 +109,27 @@ void CudfExchangeSource::process() {
     case ReceiverState::WaitingForHandshakeResponse:
       // Waiting for HandshakeResponse is handled by callback.
       break;
-    case ReceiverState::ReadyToReceive:
+    case ReceiverState::ReadyToReceive: {
+      // Backpressure: don't post the next receive if the consumer queue is
+      // overloaded. The source goes dormant (not in work queue) and will be
+      // woken by CudfExchangeClient::next() calling resumeFromBackpressure()
+      // when the queue drains below the low water mark.
+      //
+      // This creates natural backpressure: the server's tagSend for data
+      // will block at rendezvous until we post a matching tagRecv. For
+      // intra-node: the server's publish future won't resolve until we poll.
+      int32_t queueSize = queue_->size();
+      if (queueSize > kBackpressureHighWaterMark) {
+        if (!backpressureActive_.exchange(true, std::memory_order_acq_rel)) {
+          VLOG(1) << "[BACKPRESSURE] [ExSrc " << toString()
+                  << "] pausing, queueSize=" << queueSize
+                  << " > highWater=" << kBackpressureHighWaterMark;
+        }
+        // Go dormant — do NOT re-enqueue into work queue.
+        // CudfExchangeClient::next() will call resumeFromBackpressure().
+        break;
+      }
+
       if (isIntraNodeTransfer_) {
         // INTRA-NODE TRANSFER: Use registry instead of UCXX
         setStateIf(
@@ -113,7 +142,7 @@ void CudfExchangeSource::process() {
             ReceiverState::ReadyToReceive, ReceiverState::WaitingForMetadata);
         getMetadata();
       }
-      break;
+    } break;
     case ReceiverState::WaitingForMetadata:
       // Waiting for metadata is handled by an upcall from UCXX. Nothing to do
       break;
@@ -146,6 +175,19 @@ void CudfExchangeSource::cleanUp() {
     request_->cancel();
   }
 
+  // Move all requests to the Communicator's deferred list so the GPU
+  // buffers they reference (via their arg shared_ptr) stay alive until
+  // UCX has fully processed any in-flight operations.
+  if (communicator_) {
+    if (request_) {
+      communicator_->deferRequestCleanup(std::move(request_));
+    }
+    for (auto& req : completedRequests_) {
+      communicator_->deferRequestCleanup(std::move(req));
+    }
+    completedRequests_.clear();
+  }
+
   if (endpointRef_) {
     endpointRef_->removeCommElem(getSelfPtr());
     endpointRef_ = nullptr;
@@ -171,9 +213,22 @@ void CudfExchangeSource::close() {
 
   VLOG(1) << toString() << " CudfExchangeSource::close called.";
 
-  // Let the Communicator progress thread do the actual clean-up
+  // Guarantee the end marker is delivered before transitioning to Done.
+  deliverEndMarker();
+
+  // Let the Communicator progress thread do the actual clean-up.
   setState(ReceiverState::Done);
   communicator_->addToWorkQueue(getSelfPtr());
+}
+
+void CudfExchangeSource::resumeFromBackpressure() {
+  bool expected = true;
+  if (backpressureActive_.compare_exchange_strong(
+          expected, false, std::memory_order_acq_rel)) {
+    VLOG(1) << "[BACKPRESSURE] [ExSrc " << toString()
+            << "] resumed by consumer, queueSize=" << queue_->size();
+    communicator_->addToWorkQueue(getSelfPtr());
+  }
 }
 
 folly::F14FastMap<std::string, int64_t> CudfExchangeSource::stats() const {
@@ -237,6 +292,22 @@ void CudfExchangeSource::enqueue(PackedTableWithStreamPtr data) {
   }
 }
 
+void CudfExchangeSource::deliverEndMarker() {
+  if (!registered_) {
+    // Never registered with queue -- don't deliver end marker to avoid
+    // spurious numCompleted_ increments.
+    return;
+  }
+  bool expected = false;
+  if (!endMarkerDelivered_.compare_exchange_strong(
+          expected, true, std::memory_order_acq_rel)) {
+    // Already delivered by another thread/path.
+    return;
+  }
+  VLOG(3) << toString() << " delivering end-of-stream marker to queue";
+  enqueue(nullptr);
+}
+
 void CudfExchangeSource::setEndpoint(std::shared_ptr<EndpointRef> endpointRef) {
   endpointRef_ = std::move(endpointRef);
 }
@@ -244,34 +315,29 @@ void CudfExchangeSource::setEndpoint(std::shared_ptr<EndpointRef> endpointRef) {
 void CudfExchangeSource::sendHandshake() {
   std::shared_ptr<HandshakeMsg> handshakeReq = std::make_shared<HandshakeMsg>();
   handshakeReq->destination = partitionKey_.destination;
+  // Use sizeof(...) - 1 and explicitly null-terminate to prevent buffer
+  // overread if taskId is longer than the destination buffer.
   strncpy(
       handshakeReq->taskId,
       partitionKey_.taskId.c_str(),
-      sizeof(handshakeReq->taskId));
-
-  // Include our Communicator's listener address for same-node detection.
-  // The server will compare this with its own listener address.
-  std::string myIp = communicator_->getListenerIp();
-  strncpy(
-      handshakeReq->sourceListenerIp,
-      myIp.c_str(),
-      sizeof(handshakeReq->sourceListenerIp) - 1);
-  handshakeReq->sourceListenerIp[sizeof(handshakeReq->sourceListenerIp) - 1] =
-      '\0';
-  handshakeReq->sourceListenerPort = communicator_->getListenerPort();
+      sizeof(handshakeReq->taskId) - 1);
+  handshakeReq->taskId[sizeof(handshakeReq->taskId) - 1] = '\0';
+  handshakeReq->workerId = communicator_->getWorkerId();
 
   VLOG(3) << toString() << " Sending handshake with initial value: "
-          << partitionKey_.toString() << " to server (sourceListener: " << myIp
-          << ":" << handshakeReq->sourceListenerPort << ")";
+          << partitionKey_.toString() << " to server";
 
   // Create the handshake which will register client's existence with the server
   ucxx::AmReceiverCallbackInfo info(
       communicator_->kAmCallbackOwner, communicator_->kAmCallbackId);
   // Use weak_ptr to prevent use-after-free if close() is called during callback
   std::weak_ptr<CudfExchangeSource> weak = weak_from_this();
+  if (request_) {
+    completedRequests_.push_back(std::move(request_));
+  }
   request_ = endpointRef_->endpoint_->amSend(
       handshakeReq.get(),
-      sizeof(HandshakeMsg),
+      sizeof(*handshakeReq),
       UCS_MEMORY_TYPE_HOST,
       info,
       false,
@@ -289,6 +355,13 @@ void CudfExchangeSource::onHandshake(
   // Check if close() was called - avoid processing if we're shutting down
   if (closed_.load(std::memory_order_acquire)) {
     VLOG(3) << toString() << " onHandshake called after close, ignoring";
+    deliverEndMarker();
+    return;
+  }
+  // Guard against replayed callbacks from UCP wireup replay.
+  if (getState() != ReceiverState::WaitingForHandshakeComplete) {
+    VLOG(2) << toString() << " onHandshake called in state "
+            << getStateAsString() << ", ignoring (possible UCXX replay)";
     return;
   }
   if (status != UCS_OK) {
@@ -299,8 +372,9 @@ void CudfExchangeSource::onHandshake(
         partitionKey_.toString(),
         ucs_status_string(status));
     VLOG(0) << errorMsg;
+    queue_->setError(errorMsg);
+    deliverEndMarker();
     setState(ReceiverState::Done);
-    queue_->setError(errorMsg); // Let the operator know via the queue
     communicator_->addToWorkQueue(getSelfPtr());
   } else {
     VLOG(3) << toString() << "+ onHandshake " << ucs_status_string(status);
@@ -313,8 +387,9 @@ void CudfExchangeSource::onHandshake(
 }
 
 void CudfExchangeSource::getMetadata() {
-  uint32_t sizeMetadata = 4096; // shouldn't be a fixed size.
-  auto metadataReq = std::make_shared<std::vector<uint8_t>>(sizeMetadata);
+  // Use kMaxMetaBufSize to support tables with many columns.
+  // The sender allocates exact size needed; receiver pre-allocates max.
+  auto metadataReq = std::make_shared<std::vector<uint8_t>>(kMaxMetaBufSize);
   uint64_t metadataTag = getMetadataTag(partitionKeyHash_, sequenceNumber_);
 
   VLOG(3) << toString()
@@ -323,9 +398,12 @@ void CudfExchangeSource::getMetadata() {
 
   // Use weak_ptr to prevent use-after-free if close() is called during callback
   std::weak_ptr<CudfExchangeSource> weak = weak_from_this();
+  if (request_) {
+    completedRequests_.push_back(std::move(request_));
+  }
   request_ = endpointRef_->endpoint_->tagRecv(
       reinterpret_cast<void*>(metadataReq->data()),
-      sizeMetadata,
+      kMaxMetaBufSize,
       ucxx::Tag{metadataTag},
       ucxx::TagMaskFull,
       false,
@@ -343,6 +421,13 @@ void CudfExchangeSource::onMetadata(
   // Check if close() was called - avoid processing if we're shutting down
   if (closed_.load(std::memory_order_acquire)) {
     VLOG(3) << toString() << " onMetadata called after close, ignoring";
+    deliverEndMarker();
+    return;
+  }
+  // Guard against replayed callbacks from UCP wireup replay.
+  if (getState() != ReceiverState::WaitingForMetadata) {
+    VLOG(2) << toString() << " onMetadata called in state "
+            << getStateAsString() << ", ignoring (possible UCXX replay)";
     return;
   }
   VLOG(3) << toString() << " + onMetadata " << ucs_status_string(status);
@@ -355,8 +440,9 @@ void CudfExchangeSource::onMetadata(
         partitionKey_.toString(),
         ucs_status_string(status));
     VLOG(0) << errorMsg;
+    queue_->setError(errorMsg);
+    deliverEndMarker();
     setState(ReceiverState::Done);
-    queue_->setError(errorMsg); // Let the operator know via the queue
     communicator_->addToWorkQueue(getSelfPtr());
   } else {
     VELOX_CHECK(arg != nullptr, "Didn't get metadata");
@@ -378,9 +464,9 @@ void CudfExchangeSource::onMetadata(
       atEnd_ = true;
       // enqueue a nullpointer to mark the end for this source.
       VLOG(3) << "There is no more data to transfer for " << toString();
+      deliverEndMarker();
       setStateIf(ReceiverState::WaitingForMetadata, ReceiverState::Done);
       communicator_->addToWorkQueue(getSelfPtr());
-      enqueue(nullptr);
       // jump out of this function.
       return;
     }
@@ -389,6 +475,9 @@ void CudfExchangeSource::onMetadata(
     // Get a stream from the global stream pool
     auto stream =
         facebook::velox::cudf_velox::cudfGlobalStreamPool().get_stream();
+    // Store the stream in the DataAndMetadata struct so it can be used later
+    // in onData() when creating the PackedTableWithStream.
+    ptr->stream = stream;
     try {
       ptr->dataBuf = std::make_unique<rmm::device_buffer>(
           ptr->metadata.dataSizeBytes, stream);
@@ -396,6 +485,7 @@ void CudfExchangeSource::onMetadata(
       VLOG(0) << toString() << " *** RMM  failed to allocate: " << e.what();
       queue_->setError("Failed to alloc GPU memory"); // Let the operator know
                                                       // via the queue
+      deliverEndMarker();
       setState(ReceiverState::Done);
       communicator_->addToWorkQueue(getSelfPtr());
       return;
@@ -420,6 +510,9 @@ void CudfExchangeSource::onMetadata(
     // Use weak_ptr to prevent use-after-free if close() is called during
     // callback
     std::weak_ptr<CudfExchangeSource> weak = weak_from_this();
+    if (request_) {
+      completedRequests_.push_back(std::move(request_));
+    }
     request_ = endpointRef_->endpoint_->tagRecv(
         ptr->dataBuf->data(),
         ptr->metadata.dataSizeBytes,
@@ -442,6 +535,13 @@ void CudfExchangeSource::onData(
   // Check if close() was called - avoid processing if we're shutting down
   if (closed_.load(std::memory_order_acquire)) {
     VLOG(3) << toString() << " onData called after close, ignoring";
+    deliverEndMarker();
+    return;
+  }
+  // Guard against replayed callbacks from UCP wireup replay.
+  if (getState() != ReceiverState::WaitingForData) {
+    VLOG(2) << toString() << " onData called in state " << getStateAsString()
+            << ", ignoring (possible UCXX replay)";
     return;
   }
   VLOG(3) << toString() << " + onData " << ucs_status_string(status);
@@ -454,8 +554,9 @@ void CudfExchangeSource::onData(
         partitionKey_.toString(),
         ucs_status_string(status));
     VLOG(0) << toString() << errorMsg;
+    queue_->setError(errorMsg);
+    deliverEndMarker();
     setState(ReceiverState::Done);
-    queue_->setError(errorMsg); // Let the operator know via the queue
   } else {
     VLOG(3) << toString() << "+ onData " << ucs_status_string(status)
             << " got chunk: " << sequenceNumber_;
@@ -497,9 +598,12 @@ void CudfExchangeSource::receiveHandshakeResponse() {
 
   // Use weak_ptr to prevent use-after-free if close() is called during callback
   std::weak_ptr<CudfExchangeSource> weak = weak_from_this();
+  if (request_) {
+    completedRequests_.push_back(std::move(request_));
+  }
   request_ = endpointRef_->endpoint_->tagRecv(
       responseBuffer.get(),
-      sizeof(HandshakeResponse),
+      sizeof(*responseBuffer),
       ucxx::Tag{responseTag},
       ucxx::TagMaskFull,
       false,
@@ -518,6 +622,13 @@ void CudfExchangeSource::onHandshakeResponse(
   if (closed_.load(std::memory_order_acquire)) {
     VLOG(3) << toString()
             << " onHandshakeResponse called after close, ignoring";
+    deliverEndMarker();
+    return;
+  }
+  // Guard against replayed callbacks from UCP wireup replay.
+  if (getState() != ReceiverState::WaitingForHandshakeResponse) {
+    VLOG(2) << toString() << " onHandshakeResponse called in state "
+            << getStateAsString() << ", ignoring (possible UCXX replay)";
     return;
   }
 
@@ -529,8 +640,9 @@ void CudfExchangeSource::onHandshakeResponse(
         partitionKey_.toString(),
         ucs_status_string(status));
     VLOG(0) << errorMsg;
-    setState(ReceiverState::Done);
     queue_->setError(errorMsg);
+    deliverEndMarker();
+    setState(ReceiverState::Done);
     communicator_->addToWorkQueue(getSelfPtr());
     return;
   }
@@ -554,33 +666,40 @@ void CudfExchangeSource::waitForIntraNodeData() {
   if (closed_.load(std::memory_order_acquire)) {
     VLOG(3) << toString()
             << " waitForIntraNodeData called after close, ignoring";
+    deliverEndMarker();
     return;
   }
 
   IntraNodeTransferKey key{
       partitionKey_.taskId, partitionKey_.destination, sequenceNumber_};
 
-  VLOG(3) << toString()
-          << " polling for intra-node transfer data, seq=" << sequenceNumber_;
-
   auto result = IntraNodeTransferRegistry::getInstance()->poll(key);
 
   if (!result.has_value()) {
     // Data not ready yet, re-queue to try again
+    ++intraNodePollCount_;
+    if (intraNodePollCount_ % 100 == 0) {
+      VLOG(2) << "[INTRA] [ExSrc " << toString() << " seq=" << sequenceNumber_
+              << "] still polling for data, polls=" << intraNodePollCount_;
+    }
     communicator_->addToWorkQueue(getSelfPtr());
     return;
   }
 
-  auto [data, atEnd] = result.value();
-  onIntraNodeData(std::move(data), atEnd);
+  intraNodePollCount_ = 0;
+  // Pass the stream along with the data so the consumer can synchronize if
+  // needed
+  onIntraNodeData(std::move(result->data), result->stream, result->atEnd);
 }
 
 void CudfExchangeSource::onIntraNodeData(
     std::shared_ptr<cudf::packed_columns> data,
+    rmm::cuda_stream_view producerStream,
     bool atEnd) {
   // Check if close() was called
   if (closed_.load(std::memory_order_acquire)) {
     VLOG(3) << toString() << " onIntraNodeData called after close, ignoring";
+    deliverEndMarker();
     return;
   }
 
@@ -588,10 +707,8 @@ void CudfExchangeSource::onIntraNodeData(
     // End of stream
     atEnd_ = true;
     VLOG(3) << toString() << " Intra-node transfer: end of stream";
+    deliverEndMarker();
     setState(ReceiverState::Done);
-
-    // Enqueue nullptr to mark end for this source
-    enqueue(nullptr);
 
     communicator_->addToWorkQueue(getSelfPtr());
     return;
@@ -606,6 +723,7 @@ void CudfExchangeSource::onIntraNodeData(
         sequenceNumber_);
     VLOG(0) << toString() << " " << errorMsg;
     queue_->setError(errorMsg);
+    deliverEndMarker();
     setState(ReceiverState::Done);
     communicator_->addToWorkQueue(getSelfPtr());
     return;
@@ -628,12 +746,12 @@ void CudfExchangeSource::onIntraNodeData(
   auto packedTable = std::make_unique<cudf::packed_table>(
       cudf::packed_table{tableView, std::move(packedCols)});
 
-  // Get a stream from the global stream pool for the PackedTableWithStream.
-  // For intra-node transfer, the data was allocated on the server side.
+  // Get a stream from the pool so downstream cuDF operations on this data
+  // run on a dedicated stream, not the default stream. The producer already
+  // synchronized before enqueuing, so the GPU data is ready. This matches
+  // the inter-node (UCX) receive path which also allocates a pool stream.
   auto stream =
       facebook::velox::cudf_velox::cudfGlobalStreamPool().get_stream();
-
-  // Bundle the packed_table with the stream
   auto tableWithStream =
       std::make_unique<PackedTableWithStream>(std::move(packedTable), stream);
 
@@ -660,6 +778,9 @@ bool CudfExchangeSource::setStateIf(
     // spurious failure.
     exp = expected; // reset for the next try
   }
+  VLOG(2) << (isIntraNodeTransfer_ ? "[INTRA]" : "[REMOTE]") << " [ExSrc "
+          << toString() << " seq=" << sequenceNumber_ << "] "
+          << getStateAsString(expected) << " -> " << getStateAsString(desired);
   return true;
 }
 

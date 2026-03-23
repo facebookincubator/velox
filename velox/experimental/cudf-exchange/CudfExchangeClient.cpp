@@ -40,6 +40,7 @@ void CudfExchangeClient::addRemoteTaskId(const std::string& remoteTaskId) {
     } else {
       sources_.push_back(source);
       queue_->addSourceLocked();
+      source->setRegistered();
       VLOG(3) << "@" << taskId_
               << " Added remote split for task: " << remoteTaskId;
     }
@@ -128,8 +129,48 @@ CudfExchangeClient::next(int consumerId, bool* atEnd, ContinueFuture* future) {
     // TODO: Review this primitive form of flow control.
     // Maybe need to inspect the #bytes rather than the #tables?
     // Don't request more data when queue size exceeds the configured limit.
+    // NOTE: This check is currently a no-op because the cudf exchange is
+    // push-based — there is no mechanism to "request" or "not request" more
+    // data. The server pushes unconditionally. Real backpressure is
+    // implemented in CudfExchangeSource::process() (ReadyToReceive state).
     if (data != nullptr && queue_->size() > maxQueuedColumns_) {
+      if (!inFlowControl_) {
+        inFlowControl_ = true;
+        VLOG(1) << "[FLOW-CTRL] @" << taskId_ << " consumer=" << consumerId
+                << " entering flow control"
+                << " queueSize=" << queue_->size()
+                << " maxQueued=" << maxQueuedColumns_;
+      }
       return data;
+    } else if (inFlowControl_ && data != nullptr) {
+      inFlowControl_ = false;
+      VLOG(1) << "[FLOW-CTRL] @" << taskId_ << " consumer=" << consumerId
+              << " leaving flow control"
+              << " queueSize=" << queue_->size()
+              << " maxQueued=" << maxQueuedColumns_;
+    }
+
+    // Per-stage progress counters.
+    if (data != nullptr) {
+      ++totalDequeued_;
+      if (totalDequeued_ % 1000 == 0) {
+        VLOG(1) << "[PROGRESS] @" << taskId_ << " consumer=" << consumerId
+                << " dequeued=" << totalDequeued_
+                << " queueSize=" << queue_->size()
+                << " queueBytes=" << queue_->totalBytes();
+      }
+    }
+
+    // Wake up backpressured sources when queue drains sufficiently.
+    // Sources go dormant (not in work queue) when the queue exceeds the
+    // high water mark. We resume them here on the consumer thread.
+    // The CAS inside resumeFromBackpressure() ensures each source is
+    // woken exactly once per dormant period.
+    if (data != nullptr &&
+        queue_->size() <= CudfExchangeSource::kBackpressureLowWaterMark) {
+      for (auto& source : sources_) {
+        source->resumeFromBackpressure();
+      }
     }
   }
 

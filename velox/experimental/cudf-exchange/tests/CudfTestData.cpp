@@ -35,10 +35,12 @@ static const char alphanum[] =
 // ----- BaseTableGenerator static helper methods -----
 
 std::string BaseTableGenerator::genRandomStr(size_t len) {
+  thread_local std::mt19937 gen{std::random_device{}()};
+  std::uniform_int_distribution<size_t> dist(0, sizeof(alphanum) - 2);
   std::string rStr;
   rStr.reserve(len);
   for (size_t i = 0; i < len; ++i) {
-    rStr += alphanum[rand() % (sizeof(alphanum) - 1)];
+    rStr += alphanum[dist(gen)];
   }
   return rStr;
 }
@@ -262,7 +264,7 @@ void CudfTestData::initialize(
   numRows_ = numRows;
   strings_ = std::make_shared<std::vector<std::string>>();
   integers_ = std::make_shared<std::vector<uint32_t>>();
-  doubles_ = std::make_shared<std::vector<float>>();
+  floats_ = std::make_shared<std::vector<float>>();
 
   std::random_device rd;
   std::mt19937 gen(rd());
@@ -276,13 +278,12 @@ void CudfTestData::initialize(
 
     strings_->push_back(str);
     integers_->push_back(strLength);
-    doubles_->push_back(hashValue);
+    floats_->push_back(hashValue);
   }
 
   for (size_t i = 0; i < numRows; i++) {
     VLOG(4) << "In dataTest Generated data String: " << strings_->at(i)
-            << " Integer: " << integers_->at(i)
-            << " Double: " << doubles_->at(i);
+            << " Integer: " << integers_->at(i) << " Float: " << floats_->at(i);
   }
 
   VLOG(3) << "- CudfTestData::initialize";
@@ -295,8 +296,8 @@ std::unique_ptr<cudf::table> CudfTestData::makeTable(
   // Column 0: INT32 (integers)
   columns.push_back(makeNumericColumn(*integers_, stream));
 
-  // Column 1: FLOAT64 (doubles stored as float)
-  columns.push_back(makeNumericColumn(*doubles_, stream));
+  // Column 1: FLOAT32
+  columns.push_back(makeNumericColumn(*floats_, stream));
 
   // Column 2: STRING
   columns.push_back(makeStringsColumn(*strings_));
@@ -320,14 +321,11 @@ bool CudfTestData::verifyTable(
   auto receivedDoubles = getColVector<float>(table.column(1), numRows, stream);
   auto receivedStrings = getStringCol(table.column(2), numRows, stream);
 
-  // Compare with expected data
+  // Compare with expected data. Use modular indexing because batch
+  // accumulation in CudfPartitionedOutput may concatenate multiple identical
+  // chunks into one larger table, causing srcIdx to exceed the reference size.
   for (size_t i = 0; i < numRows; ++i) {
-    size_t srcIdx = startRow + i;
-    if (srcIdx >= integers_->size()) {
-      VLOG(0) << "CudfTestData::verifyTable: srcIdx " << srcIdx
-              << " out of range " << integers_->size();
-      return false;
-    }
+    size_t srcIdx = (startRow + i) % integers_->size();
 
     if (receivedInts[i] != (*integers_)[srcIdx]) {
       VLOG(0) << "CudfTestData::verifyTable: int mismatch at row " << i
@@ -336,9 +334,9 @@ bool CudfTestData::verifyTable(
       return false;
     }
 
-    if (receivedDoubles[i] != (*doubles_)[srcIdx]) {
-      VLOG(0) << "CudfTestData::verifyTable: double mismatch at row " << i
-              << ": expected " << (*doubles_)[srcIdx] << ", got "
+    if (receivedDoubles[i] != (*floats_)[srcIdx]) {
+      VLOG(0) << "CudfTestData::verifyTable: float mismatch at row " << i
+              << ": expected " << (*floats_)[srcIdx] << ", got "
               << receivedDoubles[i];
       return false;
     }
@@ -440,13 +438,11 @@ bool WideTestTable::verifyNumericColumns(
   auto rxFloat64 = getColVector<double>(table.column(9), numRows, stream);
   auto rxBool = getColVector<int8_t>(table.column(10), numRows, stream);
 
+  // Use modular indexing because batch accumulation in CudfPartitionedOutput
+  // may concatenate multiple identical chunks into one larger table, causing
+  // srcIdx to exceed the reference size.
   for (size_t i = 0; i < numRows; ++i) {
-    size_t srcIdx = startRow + i;
-    if (srcIdx >= numRows_) {
-      VLOG(0) << "verifyNumericColumns: srcIdx " << srcIdx << " out of range "
-              << numRows_;
-      return false;
-    }
+    size_t srcIdx = (startRow + i) % numRows_;
 
     if (rxInt8[i] != int8Data_[srcIdx] || rxInt16[i] != int16Data_[srcIdx] ||
         rxInt32[i] != int32Data_[srcIdx] || rxInt64[i] != int64Data_[srcIdx] ||
@@ -555,7 +551,7 @@ bool WideComplexTestTable::verifyTable(
       getColVector<double>(structView.child(1), numRows, stream);
 
   for (size_t i = 0; i < numRows; ++i) {
-    size_t srcIdx = startRow + i;
+    size_t srcIdx = (startRow + i) % numRows_;
     if (rxStrings[i] != stringData_[srcIdx] ||
         rxStructField1[i] != structField1Data_[srcIdx] ||
         rxStructField2[i] != structField2Data_[srcIdx]) {

@@ -26,12 +26,14 @@
 #include <gtest/gtest.h>
 #include <rmm/device_buffer.hpp>
 #include <chrono>
+#include <future>
 #include <memory>
 #include <sstream>
 #include <vector>
 #include "CudfTestHelpers.h"
 #include "folly/experimental/EventCount.h"
 #include "velox/common/memory/MemoryPool.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/experimental/cudf-exchange/Communicator.h"
 #include "velox/experimental/cudf-exchange/CudfExchangeProtocol.h"
@@ -41,6 +43,7 @@
 #include "velox/experimental/cudf-exchange/tests/CudfTestHelpers.h"
 #include "velox/experimental/cudf-exchange/tests/SinkDriverMock.h"
 #include "velox/experimental/cudf-exchange/tests/SourceDriverMock.h"
+#include "velox/experimental/cudf/CudfConfig.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -231,7 +234,11 @@ TEST_P(CudfExchangeTest, basicTest) {
         createSourceTask(srcTaskId, pool_, CudfTestData::kTestRowType);
 
     // tell the queue manager that a new source task exists.
-    queueManager_->initializeTask(srcTask, p.numPartitions, p.numSrcDrivers);
+    queueManager_->initializeTask(
+        srcTask,
+        core::PartitionedOutputNode::Kind::kPartitioned,
+        p.numPartitions,
+        p.numSrcDrivers);
 
     sourceMocks.emplace_back(
         std::make_shared<CudfPartitionedOutputMock>(
@@ -336,7 +343,11 @@ TEST_P(CudfExchangeTest, dataIntegrityTest) {
         createSourceTask(srcTaskId, pool_, CudfTestData::kTestRowType);
 
     // tell the queue manager that a new source task exists.
-    queueManager_->initializeTask(srcTask, p.numPartitions, p.numSrcDrivers);
+    queueManager_->initializeTask(
+        srcTask,
+        core::PartitionedOutputNode::Kind::kPartitioned,
+        p.numPartitions,
+        p.numSrcDrivers);
 
     // Mock the CudfPartitionedOutput operator, it will produce numChunks of
     // data each containing numRowsPerChunk of data copied from the CudfTestData
@@ -452,7 +463,11 @@ TEST_P(CudfExchangeTest, bandwidthTest) {
     // block sending
     auto srcTask = createSourceTask(
         srcTaskId, pool_, CudfTestData::kTestRowType, FOUR_GBYTES * 10);
-    queueManager_->initializeTask(srcTask, p.numPartitions, p.numSrcDrivers);
+    queueManager_->initializeTask(
+        srcTask,
+        core::PartitionedOutputNode::Kind::kPartitioned,
+        p.numPartitions,
+        p.numSrcDrivers);
 
     // Mock the CudfPartitionedOutput operator, it will produce numChunks of
     // data each containing numRowsPerChunk of data copied from the CudfTestData
@@ -561,7 +576,11 @@ TEST_P(CudfExchangeTest, realPartitionedOutputTest) {
       srcTaskId, pool_, rowType, p.numPartitions, partitionKeys);
 
   // Tell the queue manager that a new source task exists
-  queueManager_->initializeTask(srcTask, p.numPartitions, p.numSrcDrivers);
+  queueManager_->initializeTask(
+      srcTask,
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      p.numPartitions,
+      p.numSrcDrivers);
 
   // Create table generator for wide tables, nullptr for narrow tables
   std::shared_ptr<BaseTableGenerator> tableGenerator;
@@ -721,7 +740,11 @@ TEST_P(CudfExchangeTest, realPartitionedOutputDataIntegrityTest) {
       srcTaskId, pool_, rowType, p.numPartitions, partitionKeys);
 
   // Tell the queue manager that a new source task exists
-  queueManager_->initializeTask(srcTask, p.numPartitions, numSrcDrivers);
+  queueManager_->initializeTask(
+      srcTask,
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      p.numPartitions,
+      numSrcDrivers);
 
   // Create SourceDriverMock with the tableGenerator
   auto sourceDriver = std::make_shared<SourceDriverMock>(
@@ -800,6 +823,561 @@ TEST_P(CudfExchangeTest, realPartitionedOutputDataIntegrityTest) {
   queueManager_->removeTask(srcTaskId);
 
   VLOG(3) << "- CudfExchangeTest::realPartitionedOutputDataIntegrityTest";
+}
+
+// Test that verifies intra-node exchange does not livelock when a producing
+// task is removed while the consumer is polling IntraNodeTransferRegistry.
+// Before the fix: test times out (livelock). After the fix: test passes.
+TEST_P(CudfExchangeTest, intraNodeTaskRemovalLivelock) {
+  // This test doesn't use parameters — run only for the first param set.
+  {
+    ExchangeTestParams p = GetParam();
+    if (p.numSrcDrivers != 1 || p.numDstDrivers != 1 || p.numPartitions != 1 ||
+        p.numChunks != 100 || p.numUpstreamTasks != 1 ||
+        p.tableType != TableType::NARROW) {
+      GTEST_SKIP() << "intraNodeTaskRemovalLivelock: runs only once";
+    }
+  }
+
+  const std::string taskPrefix = getUniqueTaskPrefix();
+  const std::string srcTaskId = taskPrefix + "srcProducerNeverSends";
+  const std::string sinkTaskId = taskPrefix + "sinkConsumer";
+  const int numPartitions = 1;
+  const int partitionId = 0;
+
+  // 1. Create and initialize source task but never enqueue any data.
+  //    This simulates a producer that gets cancelled before producing.
+  auto srcTask = createSourceTask(srcTaskId, pool_, CudfTestData::kTestRowType);
+  queueManager_->initializeTask(
+      srcTask,
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      numPartitions,
+      /*numDrivers=*/1);
+
+  // 2. Create sink task with exchange plan node.
+  core::PlanNodeId exchangeNodeId;
+  auto sinkTask = createExchangeTask(
+      sinkTaskId, CudfTestData::kTestRowType, partitionId, exchangeNodeId);
+  auto sinkDriver =
+      std::make_shared<SinkDriverMock>(sinkTask, /*numDrivers=*/1);
+
+  // Add split pointing to source task. Since we use a single Communicator,
+  // the handshake will resolve to intra-node (same listener IP:port).
+  std::vector<exec::Split> splits;
+  splits.emplace_back(remoteSplit(srcTaskId, partitionId));
+  sinkDriver->addSplits(splits);
+
+  // 3. Start sink driver on background threads — it will begin polling
+  //    IntraNodeTransferRegistry for data that never arrives.
+  sinkDriver->run();
+
+  // 4. Wait for the CudfExchangeSource to complete handshake and start polling.
+  std::this_thread::sleep_for(std::chrono::seconds(1));
+
+  // 5. Premature task cancellation — abort the source task then remove it.
+  //    This mirrors the production flow where the task is aborted before
+  //    removal. After the fix, the consumer should detect this and stop
+  //    polling.
+  srcTask->requestAbort();
+  queueManager_->removeTask(srcTaskId);
+
+  // 6. Wait for sink to complete with a timeout.
+  auto future =
+      std::async(std::launch::async, [&]() { sinkDriver->joinThreads(); });
+  auto status = future.wait_for(std::chrono::seconds(10));
+
+  // 7. Verify that the sink completed (no livelock).
+  if (status != std::future_status::ready) {
+    // Abort the sink task to prevent the test from hanging indefinitely.
+    sinkTask->requestAbort();
+    future.wait();
+    FAIL() << "Sink driver did not complete within 10s after removeTask()"
+           << " — intra-node livelock: source stuck polling "
+           << "IntraNodeTransferRegistry for cancelled task";
+  }
+  // If we get here, the source correctly detected the cancelled task.
+}
+
+// Regression test for broadcast + intra-node SIGSEGV.
+// Before the fix in Acceptor.cpp, broadcast tasks using intra-node transfer
+// would crash because the intra-node source destructively moves gpu_data from
+// a shared packed_columns object, corrupting it for other servers.
+// The fix disables intra-node at handshake time for broadcast tasks, falling
+// back to UCXX. This test verifies that broadcast with intra-node enabled
+// completes without crash and delivers correct data.
+TEST_P(CudfExchangeTest, broadcastIntraNodeFallback) {
+  // This test doesn't use parameters — run only for the first param set.
+  {
+    ExchangeTestParams p = GetParam();
+    if (p.numSrcDrivers != 1 || p.numDstDrivers != 1 || p.numPartitions != 1 ||
+        p.numChunks != 100 || p.numUpstreamTasks != 1 ||
+        p.tableType != TableType::NARROW) {
+      GTEST_SKIP() << "broadcastIntraNodeFallback: runs only once";
+    }
+  }
+
+  // Enable intra-node exchange so the Acceptor's broadcast guard is exercised.
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const bool origIntraNode = config.intraNodeExchange;
+  config.intraNodeExchange = true;
+
+  const std::string taskPrefix = getUniqueTaskPrefix();
+  const std::string srcTaskId = taskPrefix + "broadcastSrc";
+  const int numDestinations = 3;
+  const int numDrivers = 1;
+  const int numChunks = 5;
+  const int numRowsPerChunk = 1000;
+
+  // Create source task with broadcast mode.
+  auto srcTask = createSourceTask(srcTaskId, pool_, CudfTestData::kTestRowType);
+  queueManager_->initializeTask(
+      srcTask,
+      core::PartitionedOutputNode::Kind::kBroadcast,
+      numDestinations,
+      numDrivers);
+  // Finalize destinations for broadcast.
+  queueManager_->updateOutputBuffers(srcTaskId, numDestinations, true);
+
+  // Create one sink per destination. Each connects to its own destination
+  // index.
+  std::vector<std::shared_ptr<SinkDriverMock>> sinkDrivers;
+  for (int destId = 0; destId < numDestinations; ++destId) {
+    const std::string sinkTaskId =
+        taskPrefix + "broadcastSink" + std::to_string(destId);
+    core::PlanNodeId exchangeNodeId;
+    auto sinkTask = createExchangeTask(
+        sinkTaskId, CudfTestData::kTestRowType, destId, exchangeNodeId);
+    auto sinkDriver =
+        std::make_shared<SinkDriverMock>(sinkTask, /*numDrivers=*/1);
+
+    std::vector<exec::Split> splits;
+    splits.emplace_back(remoteSplit(srcTaskId, destId));
+    sinkDriver->addSplits(splits);
+
+    sinkDrivers.push_back(sinkDriver);
+  }
+
+  // Producer sends to 1 partition (destination 0); broadcast replicates to all.
+  auto sourceMock = std::make_shared<CudfPartitionedOutputMock>(
+      srcTaskId, numDrivers, /*numPartitions=*/1, numChunks, numRowsPerChunk);
+
+  // Start source and sinks.
+  sourceMock->run();
+  for (auto& sink : sinkDrivers) {
+    sink->run();
+  }
+
+  // Wait for completion.
+  sourceMock->joinThreads();
+  for (auto& sink : sinkDrivers) {
+    sink->joinThreads();
+  }
+
+  // Each sink should receive all chunks: 5 * 1000 = 5000 rows.
+  const size_t expectedRowsPerSink =
+      static_cast<size_t>(numChunks) * numRowsPerChunk;
+  for (int i = 0; i < numDestinations; ++i) {
+    EXPECT_EQ(sinkDrivers[i]->numRows(), expectedRowsPerSink)
+        << "Sink " << i << " row count mismatch";
+  }
+
+  // Cleanup.
+  queueManager_->removeTask(srcTaskId);
+  config.intraNodeExchange = origIntraNode;
+}
+
+// Regression test for broadcast + intra-node placeholder race condition.
+// When sinks connect BEFORE initializeTask() is called, the Acceptor creates
+// a placeholder CudfOutputQueue. If initializeTask() later upgrades that
+// placeholder to broadcast mode, the intra-node flag may be incorrectly set
+// because the broadcast guard in Acceptor only runs at handshake time — but
+// the placeholder was already created with intra-node enabled.
+// Without a fix, this causes a SIGSEGV when the intra-node source
+// destructively moves gpu_data from the shared packed_columns object.
+TEST_P(CudfExchangeTest, broadcastIntraNodePlaceholderRace) {
+  // This test doesn't use parameters — run only for the first param set.
+  {
+    ExchangeTestParams p = GetParam();
+    if (p.numSrcDrivers != 1 || p.numDstDrivers != 1 || p.numPartitions != 1 ||
+        p.numChunks != 100 || p.numUpstreamTasks != 1 ||
+        p.tableType != TableType::NARROW) {
+      GTEST_SKIP() << "broadcastIntraNodePlaceholderRace: runs only once";
+    }
+  }
+
+  // Enable intra-node exchange so the race condition can manifest.
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const bool origIntraNode = config.intraNodeExchange;
+  config.intraNodeExchange = true;
+
+  const std::string taskPrefix = getUniqueTaskPrefix();
+  const std::string srcTaskId = taskPrefix + "broadcastPlaceholderSrc";
+  const int numDestinations = 3;
+  const int numDrivers = 1;
+  const int numChunks = 5;
+  const int numRowsPerChunk = 1000;
+
+  // Step 1: Create sink tasks and start them BEFORE initializeTask().
+  // This triggers handshakes that create a placeholder queue in
+  // CudfOutputQueueManager with intra-node potentially enabled.
+  std::vector<std::shared_ptr<SinkDriverMock>> sinkDrivers;
+  for (int destId = 0; destId < numDestinations; ++destId) {
+    const std::string sinkTaskId =
+        taskPrefix + "broadcastPlaceholderSink" + std::to_string(destId);
+    core::PlanNodeId exchangeNodeId;
+    auto sinkTask = createExchangeTask(
+        sinkTaskId, CudfTestData::kTestRowType, destId, exchangeNodeId);
+    auto sinkDriver =
+        std::make_shared<SinkDriverMock>(sinkTask, /*numDrivers=*/1);
+
+    std::vector<exec::Split> splits;
+    splits.emplace_back(remoteSplit(srcTaskId, destId));
+    sinkDriver->addSplits(splits);
+
+    sinkDrivers.push_back(sinkDriver);
+  }
+
+  // Start sinks — they will handshake and create placeholder queues.
+  for (auto& sink : sinkDrivers) {
+    sink->run();
+  }
+
+  // Step 2: Wait for handshakes to be processed.
+  std::this_thread::sleep_for(std::chrono::seconds(1));
+
+  // Step 3: NOW initialize the task with broadcast mode.
+  // This upgrades the placeholder queue to broadcast.
+  auto srcTask = createSourceTask(srcTaskId, pool_, CudfTestData::kTestRowType);
+  queueManager_->initializeTask(
+      srcTask,
+      core::PartitionedOutputNode::Kind::kBroadcast,
+      numDestinations,
+      numDrivers);
+
+  // Step 4: Finalize destinations for broadcast.
+  queueManager_->updateOutputBuffers(srcTaskId, numDestinations, true);
+
+  // Step 5: Create and run the producer.
+  auto sourceMock = std::make_shared<CudfPartitionedOutputMock>(
+      srcTaskId, numDrivers, /*numPartitions=*/1, numChunks, numRowsPerChunk);
+  sourceMock->run();
+
+  // Step 6: Wait for completion — without a fix this crashes (SIGSEGV).
+  sourceMock->joinThreads();
+  for (auto& sink : sinkDrivers) {
+    sink->joinThreads();
+  }
+
+  // Step 7: Verify all sinks received correct row counts.
+  const size_t expectedRowsPerSink =
+      static_cast<size_t>(numChunks) * numRowsPerChunk;
+  for (int i = 0; i < numDestinations; ++i) {
+    EXPECT_EQ(sinkDrivers[i]->numRows(), expectedRowsPerSink)
+        << "Sink " << i << " row count mismatch";
+  }
+
+  // Cleanup.
+  queueManager_->removeTask(srcTaskId);
+  config.intraNodeExchange = origIntraNode;
+}
+
+// Test that CudfPartitionedOutput's batch accumulation correctly merges many
+// small input chunks into fewer, larger output chunks while preserving all rows
+// and data integrity.
+TEST_P(CudfExchangeTest, batchAccumulationTest) {
+  // This test doesn't use parameters — run only for the first param set.
+  {
+    ExchangeTestParams p = GetParam();
+    if (p.numSrcDrivers != 1 || p.numDstDrivers != 1 || p.numPartitions != 1 ||
+        p.numChunks != 100 || p.numUpstreamTasks != 1 ||
+        p.tableType != TableType::NARROW) {
+      GTEST_SKIP() << "batchAccumulationTest: runs only once";
+    }
+  }
+
+  const int kTargetRows = CudfPartitionedOutput::kDefaultTargetRowsPerChunk;
+
+  // --- Scenario 1: Small chunks that SHOULD be accumulated ---
+  // 500 chunks × 100 rows = 50,000 total rows.
+  // With kTargetRowsPerChunk = 10,000 and 100 rows/chunk, we need 100 chunks
+  // to reach the threshold → expect 5 flushes (500/100 = 5), 0 remainder.
+  {
+    const int numChunks = 500;
+    const int numRowsPerChunk = 100;
+    const int numPartitions = 1;
+    const int numDrivers = 1;
+    const std::string taskPrefix = getUniqueTaskPrefix();
+    const std::string srcTaskId = taskPrefix + "sourceTask0";
+
+    auto rowType = CudfTestData::kTestRowType;
+
+    // Create reference data for integrity verification.
+    auto dataToSend = std::make_shared<CudfTestData>();
+    dataToSend->initialize(numRowsPerChunk);
+
+    auto srcTask =
+        createPartitionedOutputTask(srcTaskId, pool_, rowType, numPartitions);
+    queueManager_->initializeTask(
+        srcTask,
+        core::PartitionedOutputNode::Kind::kPartitioned,
+        numPartitions,
+        numDrivers);
+
+    auto sourceDriver = std::make_shared<SourceDriverMock>(
+        srcTask, numDrivers, numChunks, numRowsPerChunk, dataToSend);
+
+    const std::string sinkTaskId = taskPrefix + "sinkTask0";
+    core::PlanNodeId exchangeNodeId;
+    auto sinkTask = createExchangeTask(sinkTaskId, rowType, 0, exchangeNodeId);
+    auto sinkDriver =
+        std::make_shared<SinkDriverMock>(sinkTask, numDrivers, dataToSend);
+
+    std::vector<exec::Split> splits;
+    splits.emplace_back(remoteSplit(srcTaskId, 0));
+    sinkDriver->addSplits(splits);
+
+    sourceDriver->run();
+    sinkDriver->run();
+    sourceDriver->joinThreads();
+    sinkDriver->joinThreads();
+
+    size_t expectedTotalRows = static_cast<size_t>(numChunks) * numRowsPerChunk;
+
+    // Verify all rows arrived.
+    EXPECT_EQ(sinkDriver->numRows(), expectedTotalRows)
+        << "Accumulation must not lose rows";
+
+    // Verify data integrity.
+    EXPECT_TRUE(sinkDriver->dataIsValid())
+        << "Accumulated data must match reference";
+
+    // Verify chunk reduction. Compute expected output chunks:
+    // chunksPerFlush = ceil(kTargetRows / numRowsPerChunk)
+    // outputChunks = ceil(numChunks / chunksPerFlush)
+    size_t chunksPerFlush =
+        (kTargetRows + numRowsPerChunk - 1) / numRowsPerChunk;
+    size_t expectedOutputChunks =
+        (numChunks + chunksPerFlush - 1) / chunksPerFlush;
+
+    VLOG(0) << "batchAccumulationTest scenario 1: sent " << numChunks
+            << " chunks of " << numRowsPerChunk << " rows, received "
+            << sinkDriver->numChunksReceived() << " chunks (expected "
+            << expectedOutputChunks << ")";
+
+    EXPECT_EQ(sinkDriver->numChunksReceived(), expectedOutputChunks)
+        << "Small chunks should be accumulated into fewer output chunks";
+
+    // Sanity: output chunks must be strictly fewer than input chunks.
+    EXPECT_LT(sinkDriver->numChunksReceived(), static_cast<uint64_t>(numChunks))
+        << "Accumulation should reduce chunk count";
+
+    queueManager_->removeTask(srcTaskId);
+  }
+
+  // --- Scenario 2: Small chunks with a remainder (not evenly divisible) ---
+  // 150 chunks × 100 rows = 15,000 total rows.
+  // 100 chunks → first flush (10,000 rows), 50 remaining → partial flush.
+  // Expected: 2 output chunks.
+  {
+    const int numChunks = 150;
+    const int numRowsPerChunk = 100;
+    const int numPartitions = 1;
+    const int numDrivers = 1;
+    const std::string taskPrefix = getUniqueTaskPrefix();
+    const std::string srcTaskId = taskPrefix + "sourceTask0";
+
+    auto rowType = CudfTestData::kTestRowType;
+
+    auto dataToSend = std::make_shared<CudfTestData>();
+    dataToSend->initialize(numRowsPerChunk);
+
+    auto srcTask =
+        createPartitionedOutputTask(srcTaskId, pool_, rowType, numPartitions);
+    queueManager_->initializeTask(
+        srcTask,
+        core::PartitionedOutputNode::Kind::kPartitioned,
+        numPartitions,
+        numDrivers);
+
+    auto sourceDriver = std::make_shared<SourceDriverMock>(
+        srcTask, numDrivers, numChunks, numRowsPerChunk, dataToSend);
+
+    const std::string sinkTaskId = taskPrefix + "sinkTask0";
+    core::PlanNodeId exchangeNodeId;
+    auto sinkTask = createExchangeTask(sinkTaskId, rowType, 0, exchangeNodeId);
+    auto sinkDriver =
+        std::make_shared<SinkDriverMock>(sinkTask, numDrivers, dataToSend);
+
+    std::vector<exec::Split> splits;
+    splits.emplace_back(remoteSplit(srcTaskId, 0));
+    sinkDriver->addSplits(splits);
+
+    sourceDriver->run();
+    sinkDriver->run();
+    sourceDriver->joinThreads();
+    sinkDriver->joinThreads();
+
+    size_t expectedTotalRows = static_cast<size_t>(numChunks) * numRowsPerChunk;
+
+    EXPECT_EQ(sinkDriver->numRows(), expectedTotalRows)
+        << "Remainder scenario must not lose rows";
+
+    EXPECT_TRUE(sinkDriver->dataIsValid())
+        << "Remainder scenario data must match reference";
+
+    size_t chunksPerFlush =
+        (kTargetRows + numRowsPerChunk - 1) / numRowsPerChunk;
+    size_t expectedOutputChunks =
+        (numChunks + chunksPerFlush - 1) / chunksPerFlush;
+
+    VLOG(0) << "batchAccumulationTest scenario 2: sent " << numChunks
+            << " chunks of " << numRowsPerChunk << " rows, received "
+            << sinkDriver->numChunksReceived() << " chunks (expected "
+            << expectedOutputChunks << ")";
+
+    EXPECT_EQ(sinkDriver->numChunksReceived(), expectedOutputChunks)
+        << "Remainder chunks should be flushed on noMoreInput";
+
+    queueManager_->removeTask(srcTaskId);
+  }
+
+  // --- Scenario 3: Large chunks (>= threshold) should NOT be accumulated ---
+  // 5 chunks × 20,000 rows = 100,000 total rows.
+  // Each chunk exceeds kTargetRowsPerChunk, so each addInput triggers an
+  // immediate flush via the single-input fast path. Expected: 5 output chunks.
+  {
+    const int numChunks = 5;
+    const int numRowsPerChunk = 20000;
+    const int numPartitions = 1;
+    const int numDrivers = 1;
+    const std::string taskPrefix = getUniqueTaskPrefix();
+    const std::string srcTaskId = taskPrefix + "sourceTask0";
+
+    auto rowType = CudfTestData::kTestRowType;
+
+    auto dataToSend = std::make_shared<CudfTestData>();
+    dataToSend->initialize(numRowsPerChunk);
+
+    auto srcTask =
+        createPartitionedOutputTask(srcTaskId, pool_, rowType, numPartitions);
+    queueManager_->initializeTask(
+        srcTask,
+        core::PartitionedOutputNode::Kind::kPartitioned,
+        numPartitions,
+        numDrivers);
+
+    auto sourceDriver = std::make_shared<SourceDriverMock>(
+        srcTask, numDrivers, numChunks, numRowsPerChunk, dataToSend);
+
+    const std::string sinkTaskId = taskPrefix + "sinkTask0";
+    core::PlanNodeId exchangeNodeId;
+    auto sinkTask = createExchangeTask(sinkTaskId, rowType, 0, exchangeNodeId);
+    auto sinkDriver =
+        std::make_shared<SinkDriverMock>(sinkTask, numDrivers, dataToSend);
+
+    std::vector<exec::Split> splits;
+    splits.emplace_back(remoteSplit(srcTaskId, 0));
+    sinkDriver->addSplits(splits);
+
+    sourceDriver->run();
+    sinkDriver->run();
+    sourceDriver->joinThreads();
+    sinkDriver->joinThreads();
+
+    size_t expectedTotalRows = static_cast<size_t>(numChunks) * numRowsPerChunk;
+
+    EXPECT_EQ(sinkDriver->numRows(), expectedTotalRows)
+        << "Large-chunk scenario must not lose rows";
+
+    EXPECT_TRUE(sinkDriver->dataIsValid())
+        << "Large-chunk scenario data must match reference";
+
+    VLOG(0) << "batchAccumulationTest scenario 3: sent " << numChunks
+            << " chunks of " << numRowsPerChunk << " rows, received "
+            << sinkDriver->numChunksReceived() << " chunks (expected "
+            << numChunks << ")";
+
+    // Large chunks should pass through without accumulation — each addInput
+    // immediately flushes because pendingRows >= kTargetRowsPerChunk.
+    EXPECT_EQ(sinkDriver->numChunksReceived(), static_cast<uint64_t>(numChunks))
+        << "Large chunks should not be accumulated";
+
+    queueManager_->removeTask(srcTaskId);
+  }
+
+  // --- Scenario 4: Custom threshold via QueryConfig ---
+  // 50 chunks × 100 rows = 5,000 total rows with a custom threshold of 500.
+  // chunksPerFlush = ceil(500/100) = 5
+  // outputChunks = ceil(50/5) = 10
+  {
+    const int numChunks = 50;
+    const int numRowsPerChunk = 100;
+    const int64_t customThreshold = 500;
+    const int numPartitions = 1;
+    const int numDrivers = 1;
+    const std::string taskPrefix = getUniqueTaskPrefix();
+    const std::string srcTaskId = taskPrefix + "sourceTask0";
+
+    auto rowType = CudfTestData::kTestRowType;
+
+    auto dataToSend = std::make_shared<CudfTestData>();
+    dataToSend->initialize(numRowsPerChunk);
+
+    // Pass custom threshold via QueryConfig.
+    std::unordered_map<std::string, std::string> extraConfig{
+        {core::QueryConfig::kCudfPartitionedOutputBatchRows,
+         std::to_string(customThreshold)}};
+
+    auto srcTask = createPartitionedOutputTask(
+        srcTaskId, pool_, rowType, numPartitions, {}, FOUR_GBYTES, extraConfig);
+    queueManager_->initializeTask(
+        srcTask,
+        core::PartitionedOutputNode::Kind::kPartitioned,
+        numPartitions,
+        numDrivers);
+
+    auto sourceDriver = std::make_shared<SourceDriverMock>(
+        srcTask, numDrivers, numChunks, numRowsPerChunk, dataToSend);
+
+    const std::string sinkTaskId = taskPrefix + "sinkTask0";
+    core::PlanNodeId exchangeNodeId;
+    auto sinkTask = createExchangeTask(sinkTaskId, rowType, 0, exchangeNodeId);
+    auto sinkDriver =
+        std::make_shared<SinkDriverMock>(sinkTask, numDrivers, dataToSend);
+
+    std::vector<exec::Split> splits;
+    splits.emplace_back(remoteSplit(srcTaskId, 0));
+    sinkDriver->addSplits(splits);
+
+    sourceDriver->run();
+    sinkDriver->run();
+    sourceDriver->joinThreads();
+    sinkDriver->joinThreads();
+
+    size_t expectedTotalRows = static_cast<size_t>(numChunks) * numRowsPerChunk;
+
+    EXPECT_EQ(sinkDriver->numRows(), expectedTotalRows)
+        << "Custom threshold scenario must not lose rows";
+
+    EXPECT_TRUE(sinkDriver->dataIsValid())
+        << "Custom threshold scenario data must match reference";
+
+    size_t chunksPerFlush =
+        (customThreshold + numRowsPerChunk - 1) / numRowsPerChunk;
+    size_t expectedOutputChunks =
+        (numChunks + chunksPerFlush - 1) / chunksPerFlush;
+
+    VLOG(0) << "batchAccumulationTest scenario 4: sent " << numChunks
+            << " chunks of " << numRowsPerChunk
+            << " rows with custom threshold=" << customThreshold
+            << ", received " << sinkDriver->numChunksReceived()
+            << " chunks (expected " << expectedOutputChunks << ")";
+
+    EXPECT_EQ(sinkDriver->numChunksReceived(), expectedOutputChunks)
+        << "Custom threshold should control accumulation granularity";
+
+    queueManager_->removeTask(srcTaskId);
+  }
 }
 
 std::shared_ptr<CudfOutputQueueManager> CudfExchangeTest::queueManager_;

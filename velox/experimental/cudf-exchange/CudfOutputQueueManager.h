@@ -18,6 +18,7 @@
 #include <cudf/contiguous_split.hpp>
 #include <velox/exec/Task.h>
 #include <functional>
+#include <unordered_set>
 #include "velox/experimental/cudf-exchange/CudfQueues.h"
 
 namespace facebook::velox::cudf_exchange {
@@ -36,15 +37,25 @@ class CudfOutputQueueManager {
 
   /// @brief Initializes a task and creates the corresponding output queues that
   /// are associated with this task.
-  /// @param taskId The unique task Id.
-  /// @param numQueues The number of queues (destinations or partitions)
+  /// @param task The task.
+  /// @param kind The output mode (partitioned, broadcast, etc.)
+  /// @param numDestinations The number of queues (destinations or partitions)
   /// associated with this task.
   /// @param numDrivers The number of drivers that contribute data to these
   /// queues. Used to recognize when the queues are complete.
   void initializeTask(
       std::shared_ptr<exec::Task> task,
+      core::PartitionedOutputNode::Kind kind,
       int numDestinations,
       int numDrivers);
+
+  /// @brief Updates the number of destination buffers for a task.
+  /// For broadcast mode, new destinations are backfilled with previously
+  /// broadcast data.
+  void updateOutputBuffers(
+      const std::string& taskId,
+      int numBuffers,
+      bool noMoreBuffers);
 
   /// @brief Enqueues a cudf packed column into the queue.
   /// @param taskId The unique task Id.
@@ -89,6 +100,13 @@ class CudfOutputQueueManager {
       int destination,
       CudfDataAvailableCallback notify);
 
+  /// Returns true if the given task can use intra-node transfer.
+  /// Returns false if the task is not yet initialized (placeholder queue
+  /// from early sink connections) or if the task uses broadcast mode
+  /// (broadcast shares packed_columns across destinations — the intra-node
+  /// source's destructive move would corrupt data for other servers).
+  bool canUseIntraNode(const std::string& taskId);
+
   /// @brief Removes the queue for the given task from the queue manager.
   /// Calls "terminate" on the queue to awake waiting producers.
   void removeTask(const std::string& taskId);
@@ -109,6 +127,13 @@ class CudfOutputQueueManager {
       std::unordered_map<std::string, std::shared_ptr<CudfOutputQueue>>,
       std::mutex>
       queues_;
+
+  // Tasks that have been removed via removeTask(). Prevents getData() from
+  // re-creating placeholder queues for tasks that are already dead, which
+  // would cause crashes when deleteResults() is called with destinations
+  // that exceed the placeholder's undersized queues_ vector.
+  folly::Synchronized<std::unordered_set<std::string>, std::mutex>
+      removedTasks_;
 };
 
 } // namespace facebook::velox::cudf_exchange

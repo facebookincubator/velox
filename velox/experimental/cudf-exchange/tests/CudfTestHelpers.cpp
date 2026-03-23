@@ -102,7 +102,8 @@ std::shared_ptr<Task> createPartitionedOutputTask(
     RowTypePtr rowType,
     int numPartitions,
     const std::vector<std::string>& partitionKeys,
-    uint64_t kMaxOutputBufferSize) {
+    uint64_t kMaxOutputBufferSize,
+    const std::unordered_map<std::string, std::string>& extraConfig) {
   VLOG(3) << "Creating PartitionedOutput task with " << numPartitions
           << " partitions";
 
@@ -132,6 +133,7 @@ std::shared_ptr<Task> createPartitionedOutputTask(
   std::unordered_map<std::string, std::string> configSettings{
       {velox::core::QueryConfig::kMaxOutputBufferSize,
        std::to_string(kMaxOutputBufferSize)}};
+  configSettings.insert(extraConfig.begin(), extraConfig.end());
 
   auto queryCtx = core::QueryCtx::create(
       executor.get(), core::QueryConfig(std::move(configSettings)));

@@ -17,7 +17,9 @@
 #include "velox/experimental/cudf-exchange/Communicator.h"
 #include "velox/experimental/cudf-exchange/CudfExchangeProtocol.h"
 #include "velox/experimental/cudf-exchange/CudfExchangeServer.h"
+#include "velox/experimental/cudf-exchange/CudfOutputQueueManager.h"
 #include "velox/experimental/cudf-exchange/EndpointRef.h"
+#include "velox/experimental/cudf/CudfConfig.h"
 
 namespace facebook::velox::cudf_exchange {
 
@@ -30,9 +32,16 @@ void Acceptor::cStyleAMCallback(
       request->isCompleted(), "AMCallback called with incomplete request!");
   auto buffer =
       std::dynamic_pointer_cast<ucxx::Buffer>(request->getRecvBuffer());
+  VELOX_CHECK(buffer != nullptr, "AMCallback: failed to get receive buffer.");
+  // Validate buffer size BEFORE casting to prevent reading past buffer bounds.
+  VELOX_CHECK_GE(
+      buffer->getSize(),
+      sizeof(HandshakeMsg),
+      "AMCallback: received buffer size ({}) is smaller than HandshakeMsg ({}). "
+      "Possible protocol mismatch or truncated message.",
+      buffer->getSize(),
+      sizeof(HandshakeMsg));
   HandshakeMsg* handshakePtr = reinterpret_cast<HandshakeMsg*>(buffer->data());
-  VELOX_CHECK(
-      handshakePtr != nullptr, "AMCallback: could not cast to HandhsakeMsg.");
 
   // Create a exchangeServer based on the information received in the initial
   // handshake.
@@ -46,22 +55,44 @@ void Acceptor::cStyleAMCallback(
 
   const PartitionKey key = {handshakePtr->taskId, handshakePtr->destination};
 
-  // Extract source's listener address for same-node detection.
-  std::string sourceListenerIp(handshakePtr->sourceListenerIp);
-  uint16_t sourceListenerPort = handshakePtr->sourceListenerPort;
+  // Determine if this is an intra-process transfer by comparing the source's
+  // workerId with our Communicator's workerId. A match means both source and
+  // server are in the same Communicator singleton (same process), so
+  // IntraNodeTransferRegistry (in-process std::promise/future) can be used.
+  //
+  // Previous approach used IP comparison (getLocalIpAddresses), which fails
+  // when multiple Docker containers share the same host IP address.
+  bool isIntraNodeTransfer =
+      cudf_velox::CudfConfig::getInstance().intraNodeExchange &&
+      (handshakePtr->workerId == communicator->getWorkerId());
 
-  auto exchangeServer = CudfExchangeServer::create(
-      communicator, epRef, key, sourceListenerIp, sourceListenerPort);
+  // Disable intra-node when the task is not yet initialized (placeholder
+  // queue from sinks connecting before initializeTask) or when the task
+  // uses broadcast mode (all destination servers share the same
+  // packed_columns — the intra-node source's destructive move would
+  // corrupt it for other servers).
+  if (isIntraNodeTransfer) {
+    if (!CudfOutputQueueManager::getInstanceRef()->canUseIntraNode(
+            key.taskId)) {
+      VLOG(2) << "[ACCEPTOR] Disabling intra-node for task " << key.taskId
+              << " (not initialized or broadcast)";
+      isIntraNodeTransfer = false;
+    }
+  }
+
+  std::string peerIp = epRef->getPeerIp();
+
+  auto exchangeServer =
+      CudfExchangeServer::create(communicator, epRef, key, isIntraNodeTransfer);
 
   // Add this exchangeServer to the endpoint reference.
   epRef->addCommElem(exchangeServer);
 
   // Register exchangeServer with communicator.
   communicator->registerCommElement(exchangeServer);
-  VLOG(3) << "Registered new exchange server task: "
-          << exchangeServer->toString()
-          << " (sourceListener: " << sourceListenerIp << ":"
-          << sourceListenerPort << ")";
+  VLOG(2) << "[ACCEPTOR] new server: " << exchangeServer->toString()
+          << " peerIp=" << peerIp
+          << " isIntraNodeTransfer=" << isIntraNodeTransfer;
 
   // Send HandshakeResponse back to the source to inform about intra-node
   // transfer. This allows the source to bypass UCXX for all subsequent data
@@ -79,7 +110,7 @@ void Acceptor::cStyleAMCallback(
   // Fire-and-forget: we don't need to track this request completion
   epRef->endpoint_->tagSend(
       response.get(),
-      sizeof(HandshakeResponse),
+      sizeof(*response),
       ucxx::Tag{responseTag},
       false,
       [response, keyStr = key.toString()](
