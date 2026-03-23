@@ -182,7 +182,7 @@ fetchByteRangesAsync(
 
   // Pad buffer sizes to be a multiple of 8 bytes. Required by
   // `decode_page_data_kernel` in cuDF Parquet reader.
-  constexpr auto bufferPaddingMultiple = 8;
+  constexpr auto kBufferPaddingMultiple = 8;
 
   // Allocate device spans for each column chunk
   std::vector<cudf::device_span<const uint8_t>> columnChunkData{};
@@ -198,7 +198,7 @@ fetchByteRangesAsync(
   // Allocate single device buffer for all column chunks
   std::vector<rmm::device_buffer> columnChunkBuffers{};
   columnChunkBuffers.emplace_back(
-      cudf::util::round_up_safe<size_t>(totalSize, bufferPaddingMultiple),
+      cudf::util::round_up_safe<size_t>(totalSize, kBufferPaddingMultiple),
       stream,
       mr);
 
