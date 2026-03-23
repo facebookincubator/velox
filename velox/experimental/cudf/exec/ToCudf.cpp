@@ -15,40 +15,22 @@
  */
 
 #include "velox/experimental/cudf/CudfConfig.h"
-#include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
-#include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
-#include "velox/experimental/cudf/exec/CudfAssignUniqueId.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
-#include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/CudfHashAggregation.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
-#include "velox/experimental/cudf/exec/CudfLimit.h"
-#include "velox/experimental/cudf/exec/CudfLocalPartition.h"
 #include "velox/experimental/cudf/exec/CudfOperator.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
 #include "velox/experimental/cudf/exec/CudfTopN.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
-#include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/JitExpression.h"
 
 #include "folly/Conv.h"
-#include "velox/exec/AssignUniqueId.h"
-#include "velox/exec/CallbackSink.h"
 #include "velox/exec/Driver.h"
-#include "velox/exec/FilterProject.h"
-#include "velox/exec/HashAggregation.h"
-#include "velox/exec/HashBuild.h"
-#include "velox/exec/HashProbe.h"
-#include "velox/exec/Limit.h"
 #include "velox/exec/Operator.h"
-#include "velox/exec/OrderBy.h"
-#include "velox/exec/StreamingAggregation.h"
-#include "velox/exec/TableScan.h"
-#include "velox/exec/Task.h"
-#include "velox/exec/TopN.h"
 #include "velox/exec/Values.h"
 
 #include <cudf/detail/nvtx/ranges.hpp>
@@ -218,6 +200,7 @@ bool CompileState::compile(bool allowCpuFallback) {
         isPureCpuOperator = true;
       }
     }
+
     if (thisOpProps.producesGpuOutput and
         (nextOperatorIsNotGpu or isLastOperatorOfTask) and planNode) {
       replaceOp.push_back(
@@ -287,8 +270,6 @@ bool CompileState::compile(bool allowCpuFallback) {
   return replacementsMade;
 }
 
-std::shared_ptr<rmm::mr::device_memory_resource> mr_;
-
 struct CudfDriverAdapter {
   CudfDriverAdapter(bool allowCpuFallback)
       : allowCpuFallback_{allowCpuFallback} {}
@@ -336,6 +317,14 @@ void registerCudf() {
   cudf::set_current_device_resource(mr.get());
   mr_ = mr;
 
+  const auto& outputMrMode = CudfConfig::getInstance().outputMemoryResource;
+  if (!outputMrMode.empty() && outputMrMode != mrMode) {
+    output_mr_ = cudf_velox::createMemoryResource(
+        outputMrMode, CudfConfig::getInstance().memoryPercent);
+  } else {
+    output_mr_ = mr_;
+  }
+
   exec::Operator::registerOperator(
       std::make_unique<CudfHashJoinBridgeTranslator>());
   CudfDriverAdapter cda{CudfConfig::getInstance().allowCpuFallback};
@@ -354,6 +343,7 @@ void registerCudf() {
 }
 
 void unregisterCudf() {
+  output_mr_ = nullptr;
   mr_ = nullptr;
   exec::DriverFactory::adapters.erase(
       std::remove_if(
@@ -386,6 +376,21 @@ void CudfConfig::initialize(
   if (config.find(kCudfMemoryPercent) != config.end()) {
     memoryPercent = folly::to<int32_t>(config[kCudfMemoryPercent]);
   }
+  if (config.find(kCudfOutputMr) != config.end()) {
+    outputMemoryResource = config[kCudfOutputMr];
+  }
+  if (config.find(kCudfBatchSizeMinThreshold) != config.end()) {
+    batchSizeMinThreshold =
+        folly::to<int32_t>(config[kCudfBatchSizeMinThreshold]);
+  }
+  if (config.find(kCudfBatchSizeMaxThreshold) != config.end()) {
+    batchSizeMaxThreshold =
+        folly::to<int32_t>(config[kCudfBatchSizeMaxThreshold]);
+  }
+  if (config.find(kCudfConcatOptimizationEnabled) != config.end()) {
+    concatOptimizationEnabled =
+        folly::to<bool>(config[kCudfConcatOptimizationEnabled]);
+  }
   if (config.find(kCudfFunctionNamePrefix) != config.end()) {
     functionNamePrefix = config[kCudfFunctionNamePrefix];
   }
@@ -404,6 +409,12 @@ void CudfConfig::initialize(
   }
   if (config.find(kCudfLogFallback) != config.end()) {
     logFallback = folly::to<bool>(config[kCudfLogFallback]);
+  }
+  if (config.find(kCudfTopNBatchSize) != config.end()) {
+    topNBatchSize = folly::to<int32_t>(config[kCudfTopNBatchSize]);
+  }
+  if (config.find(kCudfFunctionEngine) != config.end()) {
+    functionEngine = config[kCudfFunctionEngine];
   }
 }
 

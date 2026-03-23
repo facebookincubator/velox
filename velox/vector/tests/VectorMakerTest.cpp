@@ -694,6 +694,76 @@ TEST_F(VectorMakerTest, mapVectorUsingKeyValueVectorsUnevenKeysValues) {
   EXPECT_THROW(maker_.mapVector({0, 2, 4}, keys, values), VeloxRuntimeError);
 }
 
+TEST_F(VectorMakerTest, mapVectorWithExplicitSizesNoNulls) {
+  // Keys/values laid out non-contiguously:
+  //   index: 0  1  2  3  4
+  //   key:   1  2  3  4  5
+  //   val:   10 20 30 40 50
+  //
+  // Row 0 -> offset=2, size=3 (indices 2,3,4)
+  // Row 1 -> offset=0, size=2 (indices 0,1)
+  auto keys = maker_.flatVector<int32_t>({1, 2, 3, 4, 5});
+  auto values = maker_.flatVector<int64_t>({10, 20, 30, 40, 50});
+
+  auto mapVector = maker_.mapVector({2, 0}, {3, 2}, keys, values);
+
+  EXPECT_EQ(mapVector->size(), 2);
+  EXPECT_EQ(mapVector->offsetAt(0), 2);
+  EXPECT_EQ(mapVector->sizeAt(0), 3);
+  EXPECT_EQ(mapVector->offsetAt(1), 0);
+  EXPECT_EQ(mapVector->sizeAt(1), 2);
+  EXPECT_FALSE(mapVector->isNullAt(0));
+  EXPECT_FALSE(mapVector->isNullAt(1));
+}
+
+TEST_F(VectorMakerTest, mapVectorWithExplicitSizesWithGaps) {
+  // Rows reference non-adjacent regions, leaving a gap at indices 2-3.
+  //   index: 0  1  2  3  4  5
+  //   key:   1  2  9  9  3  4
+  //   val:   10 20 0  0  30 40
+  //
+  // Row 0 -> offset=0, size=2
+  // Row 1 -> offset=4, size=2
+  auto keys = maker_.flatVector<int32_t>({1, 2, 9, 9, 3, 4});
+  auto values = maker_.flatVector<int64_t>({10, 20, 0, 0, 30, 40});
+
+  auto mapVector = maker_.mapVector({0, 4}, {2, 2}, keys, values);
+
+  EXPECT_EQ(mapVector->size(), 2);
+  EXPECT_EQ(mapVector->offsetAt(0), 0);
+  EXPECT_EQ(mapVector->sizeAt(0), 2);
+  EXPECT_EQ(mapVector->offsetAt(1), 4);
+  EXPECT_EQ(mapVector->sizeAt(1), 2);
+}
+
+TEST_F(VectorMakerTest, mapVectorWithExplicitSizesWithNulls) {
+  auto keys = maker_.flatVector<int32_t>({1, 2, 3, 4});
+  auto values = maker_.flatVector<int64_t>({10, 20, 30, 40});
+
+  // Row 0 -> offset=2, size=2, not null
+  // Row 1 -> null
+  // Row 2 -> offset=0, size=2, not null
+  auto mapVector = maker_.mapVector({2, 0, 0}, {2, 0, 2}, keys, values, {1});
+
+  EXPECT_EQ(mapVector->size(), 3);
+  EXPECT_FALSE(mapVector->isNullAt(0));
+  EXPECT_TRUE(mapVector->isNullAt(1));
+  EXPECT_FALSE(mapVector->isNullAt(2));
+  EXPECT_EQ(mapVector->offsetAt(0), 2);
+  EXPECT_EQ(mapVector->sizeAt(0), 2);
+  EXPECT_EQ(mapVector->sizeAt(1), 0);
+  EXPECT_EQ(mapVector->offsetAt(2), 0);
+  EXPECT_EQ(mapVector->sizeAt(2), 2);
+}
+
+TEST_F(VectorMakerTest, mapVectorWithExplicitSizesMismatch) {
+  auto keys = maker_.flatVector<int32_t>({1, 2});
+  auto values = maker_.flatVector<int64_t>({10, 20});
+
+  // offsets and sizes must have the same length.
+  EXPECT_THROW(maker_.mapVector({0}, {1, 1}, keys, values), VeloxRuntimeError);
+}
+
 TEST_F(VectorMakerTest, mapVectorStringString) {
   auto mapVector = maker_.mapVector<std::string, std::string>({
       {{"a", "1"}, {"b", "2"}},

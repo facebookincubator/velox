@@ -19,13 +19,14 @@
 
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/dwio/common/Reader.h"
 #include "velox/dwio/common/ReaderFactory.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/vector/BaseVector.h"
 
 using namespace facebook::velox;
+using namespace facebook::velox::common::testutil;
 using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::dwrf;
 

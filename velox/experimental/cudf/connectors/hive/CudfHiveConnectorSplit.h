@@ -101,7 +101,7 @@ class CudfHiveConnectorSplitBuilder {
 
   std::shared_ptr<CudfHiveConnectorSplit> build() const {
     return std::make_shared<CudfHiveConnectorSplit>(
-        connectorId_, filePath_, splitWeight_);
+        connectorId_, filePath_, start_, length_, splitWeight_, infoColumns_);
   }
 
  private:

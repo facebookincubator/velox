@@ -799,6 +799,152 @@ TEST(VariantTest, equalsWithEpsilonFloat) {
   ASSERT_FALSE(Variant(sum1).equalsWithEpsilon(Variant(sum3)));
 }
 
+TEST(VariantTest, nullEqualsNullPrimitiveTypes) {
+  auto testNullEquality = [](const TypeKind& kind) {
+    const auto null = Variant::null(kind);
+    ASSERT_EQ(
+        null.equals(null, CompareFlags::NullHandlingMode::kNullAsIndeterminate),
+        std::nullopt);
+    auto compareResult =
+        null.equals(null, CompareFlags::NullHandlingMode::kNullAsValue);
+    ASSERT_TRUE(compareResult.has_value());
+    ASSERT_TRUE(compareResult.value());
+  };
+
+  // null = null is
+  //  - indeterminate with kNullAsIndeterminate nullHandlingMode.
+  //  - true with kNullAsValue nullHandlingMode.
+  testNullEquality(TypeKind::SMALLINT);
+  testNullEquality(TypeKind::INTEGER);
+  testNullEquality(TypeKind::BIGINT);
+  testNullEquality(TypeKind::VARCHAR);
+  testNullEquality(TypeKind::VARBINARY);
+  testNullEquality(TypeKind::DOUBLE);
+  testNullEquality(TypeKind::TIMESTAMP);
+  testNullEquality(TypeKind::ARRAY);
+  testNullEquality(TypeKind::MAP);
+  testNullEquality(TypeKind::ROW);
+}
+
+TEST(VariantTest, arrayComparisonWithNullElements) {
+  auto makeArray = [](const std::vector<std::optional<int32_t>>& elements) {
+    std::vector<Variant> arrayElements;
+    for (const auto& element : elements) {
+      if (element.has_value()) {
+        arrayElements.emplace_back(element.value());
+      } else {
+        arrayElements.push_back(Variant::null(TypeKind::INTEGER));
+      }
+    }
+    return Variant::array(arrayElements);
+  };
+
+  auto a = makeArray({5, std::nullopt, 1});
+  auto b = makeArray({5, std::nullopt, 1});
+  auto c = makeArray({5, std::nullopt, 2});
+
+  // Both are non-null arrays with null elements inside.
+  // With kNullAsValue, they should be equal if all elements match.
+  auto result = a.equals(b, CompareFlags::NullHandlingMode::kNullAsValue);
+  ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(result.value());
+
+  // With kNullAsIndeterminate, null elements make the comparison indeterminate.
+  result = a.equals(b, CompareFlags::NullHandlingMode::kNullAsIndeterminate);
+  ASSERT_FALSE(result.has_value());
+
+  // Comparison of arrays with different elements and null inside fails both
+  // with kNullAsValue and kNullAsIndeterminate modes.
+  result = a.equals(c, CompareFlags::NullHandlingMode::kNullAsValue);
+  ASSERT_TRUE(result.has_value());
+  ASSERT_FALSE(result.value());
+
+  result = a.equals(c, CompareFlags::NullHandlingMode::kNullAsIndeterminate);
+  ASSERT_TRUE(result.has_value());
+  ASSERT_FALSE(result.value());
+}
+
+TEST(VariantTest, rowComparisonWithNullElements) {
+  auto makeRow = [](int32_t before,
+                    const std::optional<std::string>& middle,
+                    double after) {
+    std::vector<Variant> rowElements;
+    rowElements.emplace_back(before);
+    if (middle.has_value()) {
+      rowElements.emplace_back(middle.value());
+    } else {
+      rowElements.push_back(Variant::null(TypeKind::VARCHAR));
+    }
+    rowElements.emplace_back(after);
+    return Variant::row(rowElements);
+  };
+
+  auto a = makeRow(5, std::nullopt, 1.0);
+  auto b = makeRow(5, std::nullopt, 1.0);
+  auto c = makeRow(5, std::nullopt, 2.0);
+
+  // Rows with null elements inside and kNullAsValue should match if nulls
+  // match.
+  auto result = a.equals(b, CompareFlags::NullHandlingMode::kNullAsValue);
+  ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(result.value());
+
+  // With kNullAsIndeterminate, null elements make the comparison indeterminate.
+  result = a.equals(b, CompareFlags::NullHandlingMode::kNullAsIndeterminate);
+  ASSERT_FALSE(result.has_value());
+
+  // Comparison of rows with different elements and null inside fails both
+  // with kNullAsValue and kNullAsIndeterminate modes.
+  result = a.equals(b, CompareFlags::NullHandlingMode::kNullAsValue);
+  ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(result.value());
+
+  result = a.equals(c, CompareFlags::NullHandlingMode::kNullAsIndeterminate);
+  ASSERT_TRUE(result.has_value());
+  ASSERT_FALSE(result.value());
+}
+
+TEST(VariantTest, mapComparisonWithNullElements) {
+  auto makeMap =
+      [](const std::vector<std::pair<int32_t, std::optional<int32_t>>>&
+             entries) {
+        std::map<Variant, Variant> m;
+        for (const auto& e : entries) {
+          if (e.second.has_value()) {
+            m.emplace(Variant(e.first), Variant(e.second.value()));
+          } else {
+            m.emplace(Variant(e.first), Variant::null(TypeKind::INTEGER));
+          }
+        }
+        return Variant::map(m);
+      };
+
+  auto a = makeMap({{0, 9}, {1, std::nullopt}, {2, 3}});
+  auto b = makeMap({{0, 9}, {1, std::nullopt}, {2, 3}});
+  auto c = makeMap({{0, 9}, {1, std::nullopt}, {2, 4}});
+
+  // Both are non-null maps with null values inside.
+  // With kNullAsValue, they should be equal if all keys and values match.
+  auto result = a.equals(b, CompareFlags::NullHandlingMode::kNullAsValue);
+  ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(result.value());
+
+  // With kNullAsIndeterminate, null elements make the comparison
+  // indeterminate when keys/values are otherwise identical.
+  result = a.equals(b, CompareFlags::NullHandlingMode::kNullAsIndeterminate);
+  ASSERT_FALSE(result.has_value());
+
+  // Maps with different values for a given key (after a null) should be a
+  // definitive mismatch under both null handling modes.
+  result = a.equals(c, CompareFlags::NullHandlingMode::kNullAsValue);
+  ASSERT_TRUE(result.has_value());
+  ASSERT_FALSE(result.value());
+
+  result = a.equals(c, CompareFlags::NullHandlingMode::kNullAsIndeterminate);
+  ASSERT_TRUE(result.has_value());
+  ASSERT_FALSE(result.value());
+}
+
 TEST(VariantTest, mapWithNaNKey) {
   // Verify that map variants treat all NaN keys as equivalent and comparable
   // (consider them the largest) with other values.

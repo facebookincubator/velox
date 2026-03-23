@@ -18,6 +18,7 @@
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/FieldReference.h"
@@ -118,9 +119,9 @@ HashProbe::HashProbe(
           joinNode->outputType(),
           operatorId,
           joinNode->id(),
-          "HashProbe",
+          OperatorType::kHashProbe,
           joinNode->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId, "HashProbe")
+              ? driverCtx->makeSpillConfig(operatorId, OperatorType::kHashProbe)
               : std::nullopt),
       outputBatchSize_{outputBatchRows()},
       joinNode_(std::move(joinNode)),
@@ -379,6 +380,10 @@ void HashProbe::initializeResultIter() {
 
 void HashProbe::pushdownDynamicFilters() {
   auto* driver = operatorCtx_->driverCtx()->driver;
+  const bool hashProbeStringDynamicFilterPushdownEnabled =
+      operatorCtx_->driverCtx()
+          ->queryConfig()
+          .hashProbeStringDynamicFilterPushdownEnabled();
   auto numFilters = driver->pushdownFilters(
       this,
       keyChannels_,
@@ -388,6 +393,12 @@ void HashProbe::pushdownDynamicFilters() {
           return true;
         }
         auto& hasher = *table_->hashers()[sourceChannel];
+        if (hasher.typeKind() == TypeKind::VARCHAR ||
+            hasher.typeKind() == TypeKind::VARBINARY) {
+          if (!hashProbeStringDynamicFilterPushdownEnabled) {
+            return false;
+          }
+        }
         filter = hasher.getFilter(false);
         if (!filter) {
           filter = hasher.getBloomFilter();
@@ -398,7 +409,8 @@ void HashProbe::pushdownDynamicFilters() {
               checkedPointerCast<const common::BigintValuesUsingBloomFilter>(
                   filter.get());
           addRuntimeStat(
-              "bloomFilterSize", RuntimeCounter(bloomFilter->blocksByteSize()));
+              std::string(HashProbe::kBloomFilterSize),
+              RuntimeCounter(bloomFilter->blocksByteSize()));
         }
         dynamicFiltersProducedOnChannels_.insert(sourceChannel);
         for (auto* peer : findPeerOperators()) {
@@ -469,6 +481,7 @@ void HashProbe::asyncWaitForHashTable() {
     }
   } else if (
       (isInnerJoin(joinType_) || isLeftSemiFilterJoin(joinType_) ||
+       isCountingLeftSemiFilterJoin(joinType_) ||
        isRightSemiFilterJoin(joinType_) ||
        (isRightSemiProjectJoin(joinType_) && !nullAware_) ||
        isRightJoin(joinType_)) &&
@@ -975,8 +988,8 @@ bool HashProbe::needLastProbe() const {
 
 bool HashProbe::skipProbeOnEmptyBuild() const {
   return isInnerJoin(joinType_) || isLeftSemiFilterJoin(joinType_) ||
-      isRightJoin(joinType_) || isRightSemiFilterJoin(joinType_) ||
-      isRightSemiProjectJoin(joinType_);
+      isCountingLeftSemiFilterJoin(joinType_) || isRightJoin(joinType_) ||
+      isRightSemiFilterJoin(joinType_) || isRightSemiProjectJoin(joinType_);
 }
 
 bool HashProbe::canSpill() const {
@@ -1121,7 +1134,9 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
   const auto inputSize = input_->size();
 
   if (replacedWithDynamicFilter_) {
-    addRuntimeStat("replacedWithDynamicFilterRows", RuntimeCounter(inputSize));
+    addRuntimeStat(
+        std::string(HashProbe::kReplacedWithDynamicFilterRows),
+        RuntimeCounter(inputSize));
     auto output = Operator::fillOutput(inputSize, nullptr);
     input_ = nullptr;
     return output;
@@ -1129,7 +1144,7 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
 
   const bool isLeftSemiOrAntiJoinNoFilter = !filter_ &&
       (isLeftSemiFilterJoin(joinType_) || isLeftSemiProjectJoin(joinType_) ||
-       isAntiJoin(joinType_));
+       isAntiJoin(joinType_) || isCountingJoin(joinType_));
 
   const bool emptyBuildSide = (table_->numDistinct() == 0);
 
@@ -1189,6 +1204,31 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
             mapping[numOut] = i;
             ++numOut;
           }
+        }
+      }
+    } else if (isCountingAntiJoin(joinType_)) {
+      // Counting anti-join: emit row if no match or count has reached zero.
+      // Decrement count on match.
+      auto* rows = table_->rows();
+      for (auto i = 0; i < inputSize; ++i) {
+        auto* hit = lookup_->hits[i];
+        if (!activeRows_.isValid(i) || !hit || rows->count(hit) == 0) {
+          mapping[numOut] = i;
+          ++numOut;
+        } else {
+          rows->decrementCount(hit);
+        }
+      }
+    } else if (isCountingLeftSemiFilterJoin(joinType_)) {
+      // Counting semi-join: emit row if match and count > 0.
+      // Decrement count on match.
+      auto* rows = table_->rows();
+      for (auto i = 0; i < inputSize; ++i) {
+        auto* hit = lookup_->hits[i];
+        if (activeRows_.isValid(i) && hit && rows->count(hit) > 0) {
+          rows->decrementCount(hit);
+          mapping[numOut] = i;
+          ++numOut;
         }
       }
     } else {
@@ -1374,7 +1414,7 @@ const uint64_t* getFlatFilterResult(VectorPtr& result) {
 } // namespace
 
 void HashProbe::applyFilterOnTableRowsForNullAwareJoin(
-    const SelectivityVector& rows,
+    SelectivityVector& rows,
     SelectivityVector& filterPassedRows,
     std::function<int32_t(char**, int32_t)> iterator) {
   if (!rows.hasSelections()) {
@@ -1382,46 +1422,52 @@ void HashProbe::applyFilterOnTableRowsForNullAwareJoin(
   }
   VELOX_CHECK(table_->rows(), "Should not move rows in hash joins");
   char* data[kBatchSize];
-  while (auto numRows = iterator(data, kBatchSize)) {
-    filterTableInput_->resize(numRows);
-    filterTableInputRows_.resizeFill(numRows, true);
+
+  while (auto numBuildRows = iterator(data, kBatchSize)) {
+    // Extract build-side columns once per build batch.
+    filterTableInput_->resize(numBuildRows);
+    filterTableInputRows_.resizeFill(numBuildRows, true);
     for (auto& projection : filterTableProjections_) {
       table_->extractColumn(
-          folly::Range<char* const*>(data, numRows),
+          folly::Range<char* const*>(data, numBuildRows),
           projection.inputChannel,
           filterTableInput_->childAt(projection.outputChannel));
     }
+
+    // Skip probe rows that already passed the filter on a previous build batch.
+    rows.deselect(filterPassedRows);
     rows.applyToSelected([&](vector_size_t row) {
       for (auto& projection : filterInputProjections_) {
         filterTableInput_->childAt(projection.outputChannel) =
             BaseVector::wrapInConstant(
-                numRows, row, input_->childAt(projection.inputChannel));
+                numBuildRows, row, input_->childAt(projection.inputChannel));
       }
       EvalCtx evalCtx(
           operatorCtx_->execCtx(), filter_.get(), filterTableInput_.get());
       filter_->eval(filterTableInputRows_, evalCtx, filterTableResult_);
+
+      bool passed = false;
       if (auto* values = getFlatFilterResult(filterTableResult_[0])) {
-        if (!bits::testSetBits(
-                values, 0, numRows, [](vector_size_t) { return false; })) {
-          filterPassedRows.setValid(row, true);
-        }
+        passed = !bits::testSetBits(
+            values, 0, numBuildRows, [](vector_size_t) { return false; });
       } else {
         decodedFilterTableResult_.decode(
             *filterTableResult_[0], filterTableInputRows_);
         if (decodedFilterTableResult_.isConstantMapping()) {
-          if (!decodedFilterTableResult_.isNullAt(0) &&
-              decodedFilterTableResult_.valueAt<bool>(0)) {
-            filterPassedRows.setValid(row, true);
-          }
+          passed = !decodedFilterTableResult_.isNullAt(0) &&
+              decodedFilterTableResult_.valueAt<bool>(0);
         } else {
-          for (vector_size_t i = 0; i < numRows; ++i) {
+          for (vector_size_t i = 0; i < numBuildRows; ++i) {
             if (!decodedFilterTableResult_.isNullAt(i) &&
                 decodedFilterTableResult_.valueAt<bool>(i)) {
-              filterPassedRows.setValid(row, true);
+              passed = true;
               break;
             }
           }
         }
+      }
+      if (passed) {
+        filterPassedRows.setValid(row, true);
       }
     });
   }
@@ -1466,7 +1512,7 @@ SelectivityVector HashProbe::evalFilterForNullAwareJoin(
   if (buildSideHasNullKeys_) {
     prepareNullKeyProbeHashers();
     BaseHashTable::NullKeyRowsIterator iter;
-    nullKeyProbeRows.deselect(filterPassedRows);
+    nullKeyProbeRows.updateBounds();
     applyFilterOnTableRowsForNullAwareJoin(
         nullKeyProbeRows, filterPassedRows, [&](char** data, int32_t maxRows) {
           return table_->listNullKeyRows(
@@ -1474,7 +1520,7 @@ SelectivityVector HashProbe::evalFilterForNullAwareJoin(
         });
   }
   BaseHashTable::RowsIterator iter;
-  crossJoinProbeRows.deselect(filterPassedRows);
+  crossJoinProbeRows.updateBounds();
   applyFilterOnTableRowsForNullAwareJoin(
       crossJoinProbeRows, filterPassedRows, [&](char** data, int32_t maxRows) {
         return table_->listAllRows(
@@ -1698,7 +1744,7 @@ void HashProbe::ensureLoadedIfNotAtEnd(column_index_t channel) {
 void HashProbe::ensureLoaded(column_index_t channel) {
   if (!filter_ &&
       (isLeftSemiFilterJoin(joinType_) || isLeftSemiProjectJoin(joinType_) ||
-       isAntiJoin(joinType_))) {
+       isAntiJoin(joinType_) || isCountingJoin(joinType_))) {
     return;
   }
 

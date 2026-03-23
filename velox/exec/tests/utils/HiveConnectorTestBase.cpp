@@ -16,6 +16,7 @@
 
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 
+#include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/connectors/hive/HiveConnector.h"
@@ -28,6 +29,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 
 namespace facebook::velox::exec::test {
+using namespace facebook::velox::common::testutil;
 
 HiveConnectorTestBase::HiveConnectorTestBase() {
   filesystems::registerLocalFileSystem();
@@ -36,6 +38,13 @@ HiveConnectorTestBase::HiveConnectorTestBase() {
 
 void HiveConnectorTestBase::SetUp() {
   OperatorTestBase::SetUp();
+
+  // Clear any stale cache entries from previous tests to avoid reading
+  // corrupted/stale data when temp files are reused (same inode/fileNum).
+  if (auto* cache = cache::AsyncDataCache::getInstance()) {
+    cache->clear();
+  }
+
   connector::hive::HiveConnectorFactory factory;
   auto hiveConnector = factory.newConnector(
       kHiveConnectorId,

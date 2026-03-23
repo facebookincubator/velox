@@ -135,7 +135,9 @@ function you are using.
 
 .. function:: ST_Equals(geometry1: Geometry, geometry2: Geometry) -> boolean
 
-    Returns ``true`` if the given geometries represent the same geometry.
+    Returns ``true`` if the given geometries represent the same geometry
+    according to ISO SQL/MM semantics. Also returns ``true`` if both geometries are empty,
+    regardless of their geometry types.
 
 .. function:: ST_Intersects(geometry1: Geometry, geometry2: Geometry) -> boolean
 

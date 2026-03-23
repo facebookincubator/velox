@@ -343,10 +343,12 @@ std::unique_ptr<dwio::common::SeekableInputStream> StripeStreamsImpl::getStream(
 
   const auto streamDebugInfo =
       fmt::format("Stripe {} Stream {}", stripeIndex_, si.toString());
+
   return readState_->readerBase->createDecompressedStream(
       std::move(streamInput),
       streamDebugInfo,
-      getDecrypter(si.encodingKey().node()));
+      getDecrypter(si.encodingKey().node()),
+      getDecompressCounter(si.encodingKey().node()));
 }
 
 uint32_t StripeStreamsImpl::visitStreamsOfNode(

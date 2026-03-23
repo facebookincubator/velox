@@ -44,6 +44,16 @@ class XORShiftRandom {
         (static_cast<uint32_t>(next(31)) * static_cast<uint64_t>(bound)) >> 31);
   }
 
+  /// Returns a random double in [0.0, 1.0) matching Java's Random.nextDouble().
+  /// Uses 53 bits of randomness (26 + 27) to fill the mantissa of a double.
+  /// @see
+  /// https://github.com/openjdk/jdk/blob/master/src/java.base/share/classes/java/util/Random.java
+  double nextDouble() {
+    int64_t bits =
+        (static_cast<int64_t>(next(26)) << 27) + static_cast<int64_t>(next(27));
+    return static_cast<double>(bits) / static_cast<double>(1LL << 53);
+  }
+
  private:
   /// Generates the next random bits.
   int32_t next(int32_t bits) {

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/common/time/CpuWallTimer.h"
 #include "velox/dwio/common/SelectiveColumnReaderInternal.h"
 
 namespace facebook::velox::dwio::common {
@@ -57,6 +58,25 @@ SelectiveColumnReader::SelectiveColumnReader(
       innerNonNullRows_(memoryPool_) {
   scanState_.rowsCopy = raw_vector<vector_size_t>(memoryPool_);
   scanState_.filterCache = raw_vector<uint8_t>(memoryPool_);
+  // Initialize per-column metrics if collection is enabled.
+  if (params.runtimeStatistics().columnMetricsSet) {
+    columnMetrics_ = params.runtimeStatistics().columnMetricsSet->getOrCreate(
+        fileType_->id());
+  }
+}
+
+void SelectiveColumnReader::readWithTiming(
+    int64_t offset,
+    const RowSet& rows,
+    const uint64_t* incomingNulls) {
+  if (columnMetrics_ && fileType_->type()->isPrimitiveType()) {
+    DeltaCpuWallTimer timer([this](const CpuWallTiming& timing) {
+      columnMetrics_->decodeCPUTimeNanos.increment(timing.cpuNanos);
+    });
+    read(offset, rows, incomingNulls);
+  } else {
+    read(offset, rows, incomingNulls);
+  }
 }
 
 void SelectiveColumnReader::filterRowGroups(

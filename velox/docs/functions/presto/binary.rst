@@ -105,6 +105,11 @@ Binary Functions
 
     Computes the md5 hash of ``binary``.
 
+.. function:: murmur3_x64_128(binary) -> varbinary
+
+    Computes a 128-bit hash of ``binary`` that is equivalent to the 128-bit
+    MurmurHash3 algorithm, often called MurmurHash3_x64_128 or Murmur3F.
+
 .. function:: rpad(binary, size, padbinary) -> varbinary
     :noindex:
 

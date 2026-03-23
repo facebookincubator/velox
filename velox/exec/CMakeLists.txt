@@ -52,6 +52,7 @@ velox_add_library(
   LocalPartition.cpp
   LocalPlanner.cpp
   MarkDistinct.cpp
+  MarkSorted.cpp
   EnforceDistinct.cpp
   MemoryReclaimer.cpp
   Merge.cpp
@@ -147,4 +148,5 @@ if(${VELOX_ENABLE_BENCHMARKS})
 endif()
 
 add_subdirectory(prefixsort)
+add_subdirectory(rpc)
 add_subdirectory(trace)

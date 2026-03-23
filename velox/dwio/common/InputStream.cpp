@@ -65,16 +65,17 @@ ReadFileInputStream::ReadFileInputStream(
     const MetricsLogPtr& metricsLog,
     IoStatistics* stats,
     velox::IoStats* ioStats,
-    folly::F14FastMap<std::string, std::string> fileOpts)
+    folly::F14FastMap<std::string, std::string> fileOpts,
+    bool cacheable)
     : InputStream(readFile->getName(), metricsLog, stats, ioStats),
-      fileIoContext_(ioStats, std::move(fileOpts)),
+      fileIoContext_(ioStats, std::move(fileOpts), nullptr, cacheable),
       readFile_(std::move(readFile)) {}
 
 void ReadFileInputStream::read(
     void* buf,
     uint64_t length,
     uint64_t offset,
-    MetricsLog::MetricsType purpose) {
+    MetricsLog::Type purpose) {
   VELOX_CHECK_NOT_NULL(buf);
   logRead(offset, length, purpose);
   uint64_t readTimeUs{0};

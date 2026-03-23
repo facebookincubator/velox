@@ -25,6 +25,7 @@
 #include "velox/common/encode/Base64.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/TableHandle.h"
@@ -33,7 +34,6 @@
 #include "velox/exec/fuzzer/PrestoQueryRunner.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/expression/fuzzer/FuzzerToolkit.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/vector/VectorSaver.h"
@@ -76,6 +76,7 @@ using namespace facebook::velox::connector::hive;
 using namespace facebook::velox::test;
 
 namespace facebook::velox::exec::test {
+using namespace facebook::velox::common::testutil;
 
 namespace {
 using facebook::velox::filesystems::FileSystem;
@@ -416,8 +417,8 @@ void WriterFuzzer::go() {
     }
     auto input = generateInputData(names, types, partitionOffset);
 
-    const auto outputDirPath = exec::test::TempDirectoryPath::create(
-        FLAGS_file_system_error_injection);
+    const auto outputDirPath =
+        TempDirectoryPath::create(FLAGS_file_system_error_injection);
 
     verifyWriter(
         input,
@@ -435,8 +436,7 @@ void WriterFuzzer::go() {
     // File rotation only works when bucketCount == 0 and sortBy is empty.
     if (bucketCount == 0 && sortBy.empty()) {
       const auto fileRotationOutputDirPath =
-          exec::test::TempDirectoryPath::create(
-              FLAGS_file_system_error_injection);
+          TempDirectoryPath::create(FLAGS_file_system_error_injection);
       verifyFileRotation(
           input,
           names,
@@ -585,7 +585,8 @@ void WriterFuzzer::verifyWriter(
   }
 
   try {
-    referenceQueryRunner_->execute("DROP TABLE IF EXISTS tmp_write");
+    referenceQueryRunner_->execute(
+        "DROP TABLE IF EXISTS " + ReferenceQueryRunner::getWriteTableName());
   } catch (...) {
     LOG(WARNING) << "Drop table query failed in the reference DB";
     return;
@@ -631,7 +632,8 @@ void WriterFuzzer::verifyWriter(
   }
   try {
     auto referenceData = referenceQueryRunner_->execute(
-        "SELECT *" + bucketSql + " FROM tmp_write");
+        "SELECT *" + bucketSql + " FROM " +
+        ReferenceQueryRunner::getWriteTableName());
     VELOX_CHECK(
         assertEqualResults(referenceData, {actual}),
         "Velox and reference DB results don't match");
@@ -785,7 +787,8 @@ void WriterFuzzer::verifyFileRotation(
 
   // 5. Compare with Presto as the source of truth.
   try {
-    referenceQueryRunner_->execute("DROP TABLE IF EXISTS tmp_write");
+    referenceQueryRunner_->execute(
+        "DROP TABLE IF EXISTS " + ReferenceQueryRunner::getWriteTableName());
   } catch (...) {
     LOG(WARNING) << "Drop table query failed in the reference DB";
     return;
@@ -802,7 +805,8 @@ void WriterFuzzer::verifyFileRotation(
       "File rotation: Velox and Presto row counts don't match");
 
   try {
-    auto prestoData = referenceQueryRunner_->execute("SELECT * FROM tmp_write");
+    auto prestoData = referenceQueryRunner_->execute(
+        "SELECT * FROM " + ReferenceQueryRunner::getWriteTableName());
     VELOX_CHECK(
         assertEqualResults(prestoData, {actual}),
         "File rotation: Velox and Presto data don't match");
@@ -886,8 +890,8 @@ RowVectorPtr WriterFuzzer::veloxToPrestoResult(const RowVectorPtr& result) {
 }
 
 std::string WriterFuzzer::getReferenceOutputDirectoryPath(int32_t layers) {
-  auto filePath =
-      referenceQueryRunner_->execute("SELECT \"$path\" FROM tmp_write");
+  auto filePath = referenceQueryRunner_->execute(
+      "SELECT \"$path\" FROM " + ReferenceQueryRunner::getWriteTableName());
   auto stringView = extractSingleValue<StringView>(filePath);
   auto tableDirectoryPath =
       fs::path(std::string_view(stringView)).parent_path();
@@ -1038,8 +1042,8 @@ std::string WriterFuzzer::sortSql(
     }
     selectedColumns << sortBy.at(i)->sortColumn();
   }
-  return "SELECT " + selectedColumns.str() + " FROM tmp_write " +
-      whereSql.str();
+  return "SELECT " + selectedColumns.str() + " FROM " +
+      ReferenceQueryRunner::getWriteTableName() + " " + whereSql.str();
 }
 
 std::string WriterFuzzer::partitionToSql(

@@ -60,6 +60,7 @@ velox_add_library(
   SumDataSizeForStatsAggregate.cpp
   TDigestAggregate.cpp
   VarianceAggregates.cpp
+  VectorSumAggregate.cpp
 )
 
 velox_link_libraries(

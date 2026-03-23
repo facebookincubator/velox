@@ -71,7 +71,7 @@ add_library(velox_aggregation_fuzzer_base AggregationFuzzerBase.cpp)
 target_link_libraries(
   velox_aggregation_fuzzer_base
   velox_exec_test_lib
-  velox_temp_path
+  velox_test_util
   velox_common_base
   velox_file
   velox_hive_connector
@@ -107,7 +107,7 @@ target_link_libraries(
   velox_exec_test_lib
   velox_expression_test_utility
   velox_aggregation_fuzzer_base
-  velox_temp_path
+  velox_test_util
 )
 
 add_library(velox_row_number_fuzzer_base_lib RowNumberFuzzerBase.cpp)
@@ -148,6 +148,20 @@ add_executable(velox_topn_row_number_fuzzer TopNRowNumberFuzzerRunner.cpp)
 
 target_link_libraries(velox_topn_row_number_fuzzer velox_topn_row_number_fuzzer_lib)
 
+add_library(velox_mark_distinct_fuzzer_lib MarkDistinctFuzzer.cpp)
+
+target_link_libraries(
+  velox_mark_distinct_fuzzer_lib
+  velox_row_number_fuzzer_base_lib
+  velox_type
+  velox_expression_test_utility
+)
+
+# MarkDistinct Fuzzer.
+add_executable(velox_mark_distinct_fuzzer MarkDistinctFuzzerRunner.cpp)
+
+target_link_libraries(velox_mark_distinct_fuzzer velox_mark_distinct_fuzzer_lib velox_aggregates)
+
 # Join Fuzzer.
 add_executable(velox_join_fuzzer JoinFuzzerRunner.cpp JoinFuzzer.cpp JoinMaker.cpp)
 
@@ -182,7 +196,7 @@ target_link_libraries(
   velox_vector_fuzzer
   velox_exec_test_lib
   velox_expression_test_utility
-  velox_temp_path
+  velox_test_util
   velox_vector_test_lib
   velox_dwio_faulty_file_sink
   velox_file_test_utils
@@ -201,6 +215,8 @@ target_link_libraries(
   velox_fuzzer_util
   velox_type
   velox_vector_fuzzer
+  velox_dwio_dwrf_reader
+  velox_dwio_dwrf_writer
   velox_exec_test_lib
   velox_expression_test_utility
   velox_functions_prestosql
@@ -217,7 +233,7 @@ target_link_libraries(velox_cache_fuzzer velox_cache_fuzzer_lib velox_fuzzer_uti
 target_link_libraries(
   velox_cache_fuzzer_lib
   velox_dwio_common
-  velox_temp_path
+  velox_test_util
   velox_vector_test_lib
 )
 

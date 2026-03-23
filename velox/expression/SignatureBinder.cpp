@@ -344,7 +344,11 @@ bool SignatureBinder::tryBindVariablesWithCoercion(
         typeSignature.parameters().empty(),
         "Variables with parameters are not supported");
     const auto& variable = variableIt->second;
-    VELOX_CHECK(variable.isTypeParameter(), "Not expecting integer variable");
+    if (!variable.isTypeParameter()) {
+      // Integer variables (e.g. decimal precision and scale) are bound
+      // later by tryBind. Skip them here.
+      return true;
+    }
 
     if (!variable.isEligibleType(*actualType)) {
       return false;
@@ -608,4 +612,42 @@ TypePtr SignatureBinder::tryResolveType(
       return nullptr;
   }
 }
+TypePtr tryResolveReturnTypeWithCoercions(
+    const std::vector<FunctionSignaturePtr>& signatures,
+    const std::vector<TypePtr>& argTypes,
+    std::vector<TypePtr>& coercions) {
+  std::vector<std::pair<std::vector<Coercion>, TypePtr>> candidates;
+  for (const auto& signature : signatures) {
+    SignatureBinder binder(*signature, argTypes);
+    std::vector<Coercion> requiredCoercions;
+    if (binder.tryBindWithCoercions(requiredCoercions)) {
+      auto type = binder.tryResolveReturnType();
+      bool needsCoercion = false;
+      for (const auto& c : requiredCoercions) {
+        if (c.type != nullptr) {
+          needsCoercion = true;
+          break;
+        }
+      }
+      if (!needsCoercion) {
+        // Exact match. No coercions needed.
+        coercions.resize(argTypes.size(), nullptr);
+        return type;
+      }
+      candidates.emplace_back(std::move(requiredCoercions), type);
+    }
+  }
+
+  if (auto index = Coercion::pickLowestCost(candidates)) {
+    const auto& requiredCoercions = candidates[index.value()].first;
+    coercions.reserve(requiredCoercions.size());
+    for (const auto& coercion : requiredCoercions) {
+      coercions.push_back(coercion.type);
+    }
+    return candidates[index.value()].second;
+  }
+
+  return nullptr;
+}
+
 } // namespace facebook::velox::exec

@@ -77,6 +77,10 @@ VectorPtr RowReader::projectColumns(
   if (size == 0) {
     return RowVector::createEmpty(rowType, input->pool());
   }
+
+  // Preserve input nulls buffer
+  BufferPtr outputNulls = input->nulls();
+
   if (size < input->size()) {
     auto indices = allocateIndices(size, input->pool());
     auto* rawIndices = indices->asMutable<vector_size_t>();
@@ -91,9 +95,25 @@ VectorPtr RowReader::projectColumns(
       child = BaseVector::wrapInDictionary(
           nullptr, indices, size, std::move(child));
     }
+
+    // Filter the nulls buffer to match the filtered rows
+    if (input->nulls()) {
+      outputNulls = AlignedBuffer::allocate<bool>(size, input->pool());
+      auto* rawOutputNulls = outputNulls->asMutable<uint64_t>();
+      // Initialize all as not null (all bits set to 1)
+      memset(rawOutputNulls, 0xFF, bits::nbytes(size));
+
+      const auto* rawInputNulls = input->rawNulls();
+      for (vector_size_t i = 0; i < size; ++i) {
+        if (bits::isBitNull(rawInputNulls, rawIndices[i])) {
+          bits::setNull(rawOutputNulls, i);
+        }
+      }
+    }
   }
+
   return std::make_shared<RowVector>(
-      input->pool(), rowType, nullptr, size, std::move(children));
+      input->pool(), rowType, outputNulls, size, std::move(children));
 }
 
 namespace {

@@ -40,6 +40,8 @@ add_library(
   WaveSplitReader.cpp
 )
 
+target_compile_options(velox_wave_exec PRIVATE ${VELOX_CUDA_DEBUG_FLAGS})
+
 target_link_libraries(
   velox_wave_exec
   velox_wave_vector

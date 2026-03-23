@@ -113,7 +113,7 @@ BaseRuntimeStatWriter* getThreadLocalRunTimeStatWriter() {
 }
 
 void addThreadLocalRuntimeStat(
-    const std::string& name,
+    std::string_view name,
     const RuntimeCounter& value) {
   if (localRuntimeStatWriter) {
     localRuntimeStatWriter->addRuntimeStat(name, value);

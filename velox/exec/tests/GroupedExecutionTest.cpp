@@ -17,16 +17,18 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/MemoryArbitrator.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
+#include "velox/common/testutil/TempFilePath.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::exec::test {
+using namespace facebook::velox::common::testutil;
 
 class GroupedExecutionTest : public virtual HiveConnectorTestBase {
  protected:
@@ -547,7 +549,7 @@ TEST_F(GroupedExecutionTest, hashJoinWithMixedGroupedExecutionWithSpill) {
     }
 
     TestScopedSpillInjection scopedSpillInjection(triggerSpill ? 100 : 0);
-    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    const auto spillDirectory = TempDirectoryPath::create();
     AssertQueryBuilder queryBuilder(duckDbQueryRunner_);
     queryBuilder.plan(plan)
         .spillDirectory(spillDirectory->getPath())
@@ -675,7 +677,7 @@ DEBUG_ONLY_TEST_F(
           }
         }));
 
-    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    const auto spillDirectory = TempDirectoryPath::create();
     std::optional<common::SpillDiskOptions> spillOpts;
     if (testData.enableSpill) {
       spillOpts = common::SpillDiskOptions{
@@ -826,7 +828,7 @@ DEBUG_ONLY_TEST_F(
         memory::testingRunArbitration(op->pool());
       }));
 
-  const auto spillDirectory = exec::test::TempDirectoryPath::create();
+  const auto spillDirectory = TempDirectoryPath::create();
   common::SpillDiskOptions spillOpts{
       .spillDirPath = spillDirectory->getPath(),
       .spillDirCreated = true,

@@ -39,7 +39,7 @@ target_link_libraries(
   arrow
   arrow_testing
   velox_dwio_native_parquet_reader
-  velox_temp_path
+  velox_test_util
 )
 
 add_library(

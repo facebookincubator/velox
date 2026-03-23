@@ -24,6 +24,7 @@
 using facebook::velox::test::BatchMaker;
 
 namespace facebook::velox::exec::test {
+using namespace facebook::velox::common::testutil;
 namespace {
 
 class LocalPartitionTest : public HiveConnectorTestBase {
@@ -1220,11 +1221,23 @@ TEST_F(LocalPartitionTest, barrier) {
                           tableScanNode(),
                       })
                   .planNode();
+  struct {
+    bool hasBarrier;
+    bool serialExecution;
 
-  for (const auto hasBarrier : {false, true}) {
-    SCOPED_TRACE(fmt::format("hasBarrier {}", hasBarrier));
+    std::string toString() const {
+      return fmt::format(
+          "hasBarrier: {}, serialExecution: {}", hasBarrier, serialExecution);
+    }
+  } testSettings[] = {
+      {false, false}, {false, true}, {true, false}, {true, true}};
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.toString());
     AssertQueryBuilder queryBuilder(plan, duckDbQueryRunner_);
-    queryBuilder.barrierExecution(hasBarrier).serialExecution(true);
+    queryBuilder.barrierExecution(testData.hasBarrier)
+        .serialExecution(testData.serialExecution)
+        .maxDrivers(testData.serialExecution ? 1 : 3);
     for (auto i = 0; i < numSources; ++i) {
       for (auto j = 0; j < numSplits; ++j) {
         queryBuilder.split(
@@ -1233,7 +1246,8 @@ TEST_F(LocalPartitionTest, barrier) {
     }
 
     const auto task = queryBuilder.assertResults("SELECT * FROM tmp");
-    ASSERT_EQ(task->taskStats().numBarriers, hasBarrier ? numSplits : 0);
+    ASSERT_EQ(
+        task->taskStats().numBarriers, testData.hasBarrier ? numSplits : 0);
   }
 }
 

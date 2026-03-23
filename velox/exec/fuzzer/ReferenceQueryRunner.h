@@ -162,10 +162,15 @@ class ReferenceQueryRunner {
     VELOX_UNSUPPORTED();
   }
 
-  /// Returns the name of the values node table in the form t_<id>.
-  static std::string getTableName(const core::ValuesNode& valuesNode) {
-    return fmt::format("t_{}", valuesNode.id());
-  }
+  /// Returns the name of the values node table in the form
+  /// [<prefix>_]t_<id>. When --table_name_prefix is set, the prefix is
+  /// prepended to avoid collisions between parallel fuzzer instances
+  /// sharing the same database server.
+  static std::string getTableName(const core::ValuesNode& valuesNode);
+
+  /// Returns the write destination table name, incorporating the
+  /// --table_name_prefix when set.
+  static std::string getWriteTableName();
 
  protected:
   memory::MemoryPool* aggregatePool() {

@@ -179,6 +179,23 @@ bool registerWindowFunction(
 std::optional<std::vector<FunctionSignaturePtr>> getWindowFunctionSignatures(
     const std::string& name);
 
+/// Resolves the return type of a window function.
+/// Throws if no matching signature is found.
+TypePtr resolveWindowResultType(
+    const std::string& name,
+    const std::vector<TypePtr>& argTypes);
+
+/// Like 'resolveWindowResultType', but with support for applying type
+/// coercions if a function signature doesn't match 'argTypes' exactly.
+///
+/// @param coercions A list of optional type coercions applied to resolve the
+/// function. Contains one entry per argument. The entry is null if no coercion
+/// is required for that argument.
+TypePtr resolveWindowResultTypeWithCoercions(
+    const std::string& name,
+    const std::vector<TypePtr>& argTypes,
+    std::vector<TypePtr>& coercions);
+
 struct WindowFunctionEntry {
   std::vector<FunctionSignaturePtr> signatures;
   WindowFunctionFactory factory;

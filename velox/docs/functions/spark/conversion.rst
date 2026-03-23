@@ -80,9 +80,15 @@ Valid examples
 From strings
 ^^^^^^^^^^^^
 
+*(ANSI compliant)*
+
 Casting a string to an integral type is allowed if the string represents a number within the range of result type.
-Casting from strings that represent floating-point numbers truncates the decimal part of the input value.
-Casting from invalid input values throws.
+Casting from strings that represent floating-point numbers truncates the
+decimal part of the input value when ANSI mode is disabled; throws an
+error otherwise.
+
+Casting from other invalid strings returns NULL when ANSI mode is disabled;
+throws an error otherwise.
 
 Valid examples
 
@@ -91,28 +97,28 @@ Valid examples
   SELECT cast('12345' as bigint); -- 12345
   SELECT cast('+1' as tinyint); -- 1
   SELECT cast('-1' as tinyint); -- -1
-  SELECT cast('12345.67' as bigint); -- 12345
-  SELECT cast('1.2' as tinyint); -- 1
-  SELECT cast('-1.8' as tinyint); -- -1
+  SELECT cast('12345.67' as bigint); -- 12345 (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('1.2' as tinyint); -- 1 (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('-1.8' as tinyint); -- -1 (ANSI OFF) / ERROR (ANSI ON)
   SELECT cast('+1' as tinyint); -- 1
-  SELECT cast('1.' as tinyint); -- 1
+  SELECT cast('1.' as tinyint); -- 1 (ANSI OFF) / ERROR (ANSI ON)
   SELECT cast('-1' as tinyint); -- -1
-  SELECT cast('-1.' as tinyint); -- -1
-  SELECT cast('0.' as tinyint); -- 0
-  SELECT cast('.' as tinyint); -- 0
-  SELECT cast('-.' as tinyint); -- 0
+  SELECT cast('-1.' as tinyint); -- -1 (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('0.' as tinyint); -- 0 (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('.' as tinyint); -- 0 (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('-.' as tinyint); -- 0 (ANSI OFF) / ERROR (ANSI ON)
 
 Invalid examples
 
 ::
 
-  SELECT cast('1234567' as tinyint); -- NULL // Reason: Out of range
-  SELECT cast('1a' as tinyint); -- NULL // Invalid argument
-  SELECT cast('' as tinyint); -- NULL // Invalid argument
-  SELECT cast('1,234,567' as bigint); -- NULL // Invalid argument
-  SELECT cast('1'234'567' as bigint); -- NULL // Invalid argument
-  SELECT cast('nan' as bigint); -- NULL // Invalid argument
-  SELECT cast('infinity' as bigint); -- NULL // Invalid argument
+  SELECT cast('1234567' as tinyint); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('1a' as tinyint); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('' as tinyint); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('1,234,567' as bigint); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('1'234'567' as bigint); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('nan' as bigint); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('infinity' as bigint); -- NULL (ANSI OFF) / ERROR (ANSI ON)
 
 From decimal
 ^^^^^^^^^^^^
@@ -197,8 +203,9 @@ From DECIMAL
 *(ANSI compliant)*
 
 Casting a DECIMAL to STRING returns a plain decimal value.
-Scientific notation is not used.
-The scale is preserved and trailing zeros are kept.
+The scale is preserved and trailing zeros are kept for normal (non-scientific) form.
+When the absolute value is less than:math:`10^{-6}`, the result is formatted in scientific notation (e.g. ``1.23E-8``).
+
 The conversion always succeeds with identical results for both ANSI ON and OFF modes.
 
 Valid examples
@@ -213,6 +220,9 @@ Valid examples
   SELECT cast(cast(0.00 as decimal(5, 2)) as string); -- '0.00'
   SELECT cast(cast(999.99 as decimal(5, 2)) as string); -- '999.99'
   SELECT cast(cast(-0.01 as decimal(3, 2)) as string); -- '-0.01'
+  SELECT cast(cast(1 as decimal(38, 20)) as string);   -- '1E-20'
+  SELECT cast(cast(0 as decimal(10, 7)) as string);   -- '0E-7'
+  SELECT cast(cast(123 as decimal(38, 10)) as string); -- '1.23E-8'
 
 From TIMESTAMP
 ^^^^^^^^^^^^^^

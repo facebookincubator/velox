@@ -107,24 +107,24 @@ void HiveColumnHandle::registerSerDe() {
 HiveTableHandle::HiveTableHandle(
     std::string connectorId,
     const std::string& tableName,
-    bool filterPushdownEnabled,
     common::SubfieldFilters subfieldFilters,
     const core::TypedExprPtr& remainingFilter,
     const RowTypePtr& dataColumns,
     std::vector<std::string> indexColumns,
     const std::unordered_map<std::string, std::string>& tableParameters,
     std::vector<HiveColumnHandlePtr> filterColumnHandles,
-    double sampleRate)
+    double sampleRate,
+    std::string dbName)
     : ConnectorTableHandle(std::move(connectorId)),
       tableName_(tableName),
-      filterPushdownEnabled_(filterPushdownEnabled),
       subfieldFilters_(std::move(subfieldFilters)),
       remainingFilter_(remainingFilter),
       sampleRate_(sampleRate),
       dataColumns_(dataColumns),
       indexColumns_(std::move(indexColumns)),
       tableParameters_(tableParameters),
-      filterColumnHandles_(std::move(filterColumnHandles)) {
+      filterColumnHandles_(std::move(filterColumnHandles)),
+      dbName_(std::move(dbName)) {
   VELOX_CHECK_GT(sampleRate_, 0.0, "Sample rate must be positive");
   VELOX_CHECK_LE(sampleRate_, 1.0, "Sample rate must not exceed 1.0");
 }
@@ -132,7 +132,6 @@ HiveTableHandle::HiveTableHandle(
 HiveTableHandle::HiveTableHandle(
     std::string connectorId,
     const std::string& tableName,
-    bool filterPushdownEnabled,
     common::SubfieldFilters subfieldFilters,
     const core::TypedExprPtr& remainingFilter,
     const RowTypePtr& dataColumns,
@@ -142,7 +141,6 @@ HiveTableHandle::HiveTableHandle(
     : HiveTableHandle(
           std::move(connectorId),
           tableName,
-          filterPushdownEnabled,
           std::move(subfieldFilters),
           remainingFilter,
           dataColumns,
@@ -213,7 +211,6 @@ std::string HiveTableHandle::toString() const {
 folly::dynamic HiveTableHandle::serialize() const {
   folly::dynamic obj = ConnectorTableHandle::serializeBase("HiveTableHandle");
   obj["tableName"] = tableName_;
-  obj["filterPushdownEnabled"] = filterPushdownEnabled_;
 
   folly::dynamic subfieldFilters = folly::dynamic::array;
   for (const auto& [subfield, filter] : subfieldFilters_) {
@@ -255,6 +252,10 @@ folly::dynamic HiveTableHandle::serialize() const {
     obj["indexColumns"] = indexColumns;
   }
 
+  if (!dbName_.empty()) {
+    obj["dbName"] = dbName_;
+  }
+
   return obj;
 }
 
@@ -263,7 +264,6 @@ ConnectorTableHandlePtr HiveTableHandle::create(
     void* context) {
   auto connectorId = obj["connectorId"].asString();
   auto tableName = obj["tableName"].asString();
-  auto filterPushdownEnabled = obj["filterPushdownEnabled"].asBool();
 
   core::TypedExprPtr remainingFilter;
   if (auto it = obj.find("remainingFilter"); it != obj.items().end()) {
@@ -313,17 +313,22 @@ ConnectorTableHandlePtr HiveTableHandle::create(
     }
   }
 
+  std::string dbName;
+  if (auto it = obj.find("dbName"); it != obj.items().end()) {
+    dbName = it->second.asString();
+  }
+
   return std::make_shared<const HiveTableHandle>(
       connectorId,
       tableName,
-      filterPushdownEnabled,
       std::move(subfieldFilters),
       remainingFilter,
       dataColumns,
       std::move(indexColumns),
       tableParameters,
       std::move(filterColumnHandles),
-      sampleRate);
+      sampleRate,
+      std::move(dbName));
 }
 
 void HiveTableHandle::registerSerDe() {

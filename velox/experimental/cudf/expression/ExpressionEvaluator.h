@@ -21,6 +21,7 @@
 #include "velox/type/Type.h"
 
 #include <cudf/column/column.hpp>
+#include <cudf/table/table_view.hpp>
 
 #include <functional>
 #include <memory>
@@ -47,6 +48,17 @@ inline cudf::column_view asView(ColumnOrView& holder) {
         }
       },
       holder);
+}
+
+// Helper to convert a table_view to a vector of column_views.
+inline std::vector<cudf::column_view> tableViewToColumnViews(
+    cudf::table_view tableView) {
+  std::vector<cudf::column_view> result;
+  result.reserve(tableView.num_columns());
+  for (cudf::size_type i = 0; i < tableView.num_columns(); ++i) {
+    result.push_back(tableView.column(i));
+  }
+  return result;
 }
 
 class CudfFunction {
@@ -87,7 +99,7 @@ class CudfExpression {
   virtual void close() = 0;
 
   virtual ColumnOrView eval(
-      std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
+      std::vector<cudf::column_view> inputColumnViews,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr,
       bool finalize = false) = 0;
@@ -125,7 +137,7 @@ class FunctionExpression : public CudfExpression {
   // referenced subexpression (to do CSE)
 
   ColumnOrView eval(
-      std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
+      std::vector<cudf::column_view> inputColumnViews,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr,
       bool finalize = false) override;

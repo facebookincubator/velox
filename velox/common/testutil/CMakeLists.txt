@@ -12,9 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(velox_test_util ScopedTestTime.cpp TestValue.cpp RandomSeed.cpp)
+velox_add_library(
+  velox_test_util
+  ScopedTestTime.cpp
+  TestValue.cpp
+  RandomSeed.cpp
+  TempFilePath.cpp
+  TempDirectoryPath.cpp
+)
 
-velox_link_libraries(velox_test_util PUBLIC velox_exception PRIVATE glog::glog Folly::folly)
+velox_link_libraries(velox_test_util PUBLIC velox_exception Folly::folly PRIVATE glog::glog)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

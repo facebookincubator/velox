@@ -17,6 +17,23 @@
 
 namespace facebook::velox::core {
 
+namespace {
+const auto& kindNames() {
+  static const folly::F14FastMap<IExpr::Kind, std::string_view> kNames = {
+      {IExpr::Kind::kInput, "Input"},
+      {IExpr::Kind::kFieldAccess, "FieldAccess"},
+      {IExpr::Kind::kCall, "Call"},
+      {IExpr::Kind::kCast, "Cast"},
+      {IExpr::Kind::kConstant, "Constant"},
+      {IExpr::Kind::kLambda, "Lambda"},
+      {IExpr::Kind::kSubquery, "Subquery"},
+  };
+  return kNames;
+}
+} // namespace
+
+VELOX_DEFINE_EMBEDDED_ENUM_NAME(IExpr, Kind, kindNames)
+
 bool FieldAccessExpr::operator==(const IExpr& other) const {
   if (!other.is(Kind::kFieldAccess)) {
     return false;

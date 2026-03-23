@@ -365,7 +365,7 @@ std::vector<std::unique_ptr<StreamLoader>> writeToNimbleAndGetStreamLoaders(
     auto numChildren = chunkVectors[0]->as<RowVector>()->childrenSize();
 
     auto readFile = std::make_unique<InMemoryReadFile>(file);
-    auto tablet = TabletReader::create(std::move(readFile), *pool);
+    auto tablet = TabletReader::create(std::move(readFile), pool, {});
     auto stripeIdentifier = tablet->stripeIdentifier(0);
     // VELOX_CHECK_EQ(numChildren + 1, tablet.streamCount(stripeIdentifier));
 

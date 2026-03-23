@@ -20,14 +20,15 @@
 #include "velox/common/caching/SimpleLRUCache.h"
 #include "velox/common/file/File.h"
 #include "velox/common/file/FileSystems.h"
-#include "velox/exec/tests/utils/TempFilePath.h"
+#include "velox/common/testutil/TempFilePath.h"
 
 using namespace facebook::velox;
+using namespace facebook::velox::common::testutil;
 
 TEST(FileHandleTest, localFile) {
   filesystems::registerLocalFileSystem();
 
-  auto tempFile = exec::test::TempFilePath::create();
+  auto tempFile = TempFilePath::create();
   const auto& filename = tempFile->getPath();
   remove(filename.c_str());
 
@@ -52,7 +53,7 @@ TEST(FileHandleTest, localFile) {
 TEST(FileHandleTest, localFileWithProperties) {
   filesystems::registerLocalFileSystem();
 
-  auto tempFile = exec::test::TempFilePath::create();
+  auto tempFile = TempFilePath::create();
   const auto& filename = tempFile->getPath();
   remove(filename.c_str());
 

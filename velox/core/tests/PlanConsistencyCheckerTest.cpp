@@ -102,32 +102,49 @@ TEST_F(PlanConsistencyCheckerTest, project) {
   auto valuesNode =
       std::make_shared<ValuesNode>(nextId(), std::vector<RowVectorPtr>{});
 
-  auto projectNode = std::make_shared<ProjectNode>(
-      nextId(),
-      std::vector<std::string>{"a", "b", "c"},
-      std::vector<TypedExprPtr>{Lit(true), Lit(1), Lit(0.1)},
-      valuesNode);
-  ASSERT_NO_THROW(PlanConsistencyChecker::check(projectNode));
+  {
+    auto projectNode = std::make_shared<ProjectNode>(
+        nextId(),
+        std::vector<std::string>{"a", "b", "c"},
+        std::vector<TypedExprPtr>{Lit(true), Lit(1), Lit(0.1)},
+        valuesNode);
+    ASSERT_NO_THROW(PlanConsistencyChecker::check(projectNode));
+  }
 
-  // Duplicate output name.
-  projectNode = std::make_shared<ProjectNode>(
-      nextId(),
-      std::vector<std::string>{"a", "a", "c"},
-      std::vector<TypedExprPtr>{Lit(true), Lit(1), Lit(0.1)},
-      valuesNode);
+  {
+    // Duplicate output name in the root ProjectNode is allowed. This is used to
+    // apply user-specified column aliases (e.g. SELECT 1 AS x, 2 AS x).
+    auto projectNode = std::make_shared<ProjectNode>(
+        nextId(),
+        std::vector<std::string>{"a", "a", "c"},
+        std::vector<TypedExprPtr>{Lit(true), Lit(1), Lit(0.1)},
+        valuesNode);
+    ASSERT_NO_THROW(PlanConsistencyChecker::check(projectNode));
 
-  VELOX_ASSERT_THROW(
-      PlanConsistencyChecker::check(projectNode), "Duplicate output column: a");
+    // Duplicate output name in a non-root ProjectNode is not allowed.
+    auto outputProject = std::make_shared<ProjectNode>(
+        nextId(),
+        std::vector<std::string>{"x", "y", "z"},
+        std::vector<TypedExprPtr>{
+            Col(BOOLEAN(), "a"), Col(BOOLEAN(), "a"), Col(DOUBLE(), "c")},
+        projectNode);
+
+    VELOX_ASSERT_THROW(
+        PlanConsistencyChecker::check(outputProject),
+        "Duplicate output column: a");
+  }
 
   // Wrong column name.
-  projectNode = std::make_shared<ProjectNode>(
-      nextId(),
-      std::vector<std::string>{"a", "a", "c"},
-      std::vector<TypedExprPtr>{Lit(true), Col(REAL(), "x"), Lit(0.1)},
-      valuesNode);
+  {
+    auto projectNode = std::make_shared<ProjectNode>(
+        nextId(),
+        std::vector<std::string>{"a", "a", "c"},
+        std::vector<TypedExprPtr>{Lit(true), Col(REAL(), "x"), Lit(0.1)},
+        valuesNode);
 
-  VELOX_ASSERT_THROW(
-      PlanConsistencyChecker::check(projectNode), "Field not found: x");
+    VELOX_ASSERT_THROW(
+        PlanConsistencyChecker::check(projectNode), "Field not found: x");
+  }
 }
 
 TEST_F(PlanConsistencyCheckerTest, aggregation) {

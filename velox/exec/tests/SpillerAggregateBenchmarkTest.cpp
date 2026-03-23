@@ -37,7 +37,8 @@ int main(int argc, char* argv[]) {
         "AggregationOutputSpiller], the aggregate spiller dose not support it.",
         spillerType);
   }
-  auto test = std::make_unique<test::AggregateSpillBenchmarkBase>(spillerType);
+  auto test =
+      std::make_unique<exec::test::AggregateSpillBenchmarkBase>(spillerType);
   test->setUp();
   test->run();
   test->printStats();

@@ -56,13 +56,23 @@ General Aggregate Functions
 
 .. spark:function:: collect_list(x) -> array<[same as x]>
 
-    Returns an array created from the input ``x`` elements. Ignores null
-    inputs, and returns an empty array when all inputs are null.
+    Returns an array created from the input ``x`` elements. By default,
+    ignores null inputs and returns an empty array when all inputs are null.
 
-.. spark:function:: collect_set(x) -> array<[same as x]>
+    When the configuration property ``spark.collect_list.ignore_nulls`` is set
+    to ``false``, null values are included in the output array (RESPECT NULLS
+    behavior). In this mode, an all-null input produces an array of nulls
+    instead of an empty array.
 
-    Returns an array consisting of all unique values from the input ``x`` elements excluding NULLs.
-    NaN values are considered distinct. Returns empty array if input is empty or all NULL.
+.. spark:function:: collect_set(x [, ignoreNulls]) -> array<[same as x]>
+
+    Returns an array consisting of all unique values from the input ``x`` elements.
+    When ``ignoreNulls`` is ``true``, null inputs are excluded and an all-null
+    input returns an empty array. NaN values are considered distinct.
+
+    When ``ignoreNulls`` is set to ``false`` (RESPECT NULLS), null values are
+    included in the result set. In this mode, an all-null input produces an
+    array containing a single null instead of an empty array.
 
     Example::
 

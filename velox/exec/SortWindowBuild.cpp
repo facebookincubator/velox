@@ -372,7 +372,8 @@ void SortWindowBuild::loadNextPartitionBatchFromSpill() {
     numSpillReadBatches_--;
 
     auto lockedOpStats = opStats_->wlock();
-    lockedOpStats->runtimeStats[Window::kWindowSpillReadNumBatches] =
+    lockedOpStats
+        ->runtimeStats[std::string(Window::kWindowSpillReadNumBatches)] =
         RuntimeMetric(numSpillReadBatches_);
   }
 }

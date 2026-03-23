@@ -18,12 +18,13 @@
 
 #include <utility>
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/exec/fuzzer/RowNumberFuzzerBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 namespace facebook::velox::exec {
+using namespace facebook::velox::common::testutil;
 namespace {
 
 class RowNumberFuzzer : public RowNumberFuzzerBase {
@@ -174,7 +175,7 @@ void RowNumberFuzzer::runSingleIteration() {
   std::vector<PlanWithSplits> altPlans;
   altPlans.push_back(std::move(defaultPlan));
 
-  const auto tableScanDir = exec::test::TempDirectoryPath::create();
+  const auto tableScanDir = TempDirectoryPath::create();
   addPlansWithTableScan(tableScanDir->getPath(), keyNames, input, altPlans);
 
   for (auto i = 0; i < altPlans.size(); ++i) {

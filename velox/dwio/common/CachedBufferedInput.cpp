@@ -15,9 +15,11 @@
  */
 
 #include "velox/dwio/common/CachedBufferedInput.h"
+#include "folly/io/Cursor.h"
 #include "velox/common/Casts.h"
 #include "velox/common/memory/Allocation.h"
 #include "velox/common/process/TraceContext.h"
+#include "velox/common/time/Timer.h"
 #include "velox/dwio/common/CacheInputStream.h"
 
 DECLARE_int32(cache_prefetch_min_pct);
@@ -48,8 +50,6 @@ std::unique_ptr<SeekableInputStream> CachedBufferedInput::enqueue(
     id = TrackingId(sid->getId());
   }
   VELOX_CHECK_LE(region.offset + region.length, fileSize_);
-  requests_.emplace_back(
-      RawFileCacheKey{fileNum_.id(), region.offset}, region.length, id);
   if (tracker_ != nullptr) {
     tracker_->recordReference(id, region.length, fileNum_.id(), groupId_.id());
   }
@@ -59,18 +59,29 @@ std::unique_ptr<SeekableInputStream> CachedBufferedInput::enqueue(
       region,
       input_,
       fileNum_.id(),
-      options_.noCacheRetention(),
+      options_.cacheable(),
       tracker_,
       id,
       groupId_.id(),
       options_.loadQuantum());
-  requests_.back().stream = stream.get();
+  if (preloaded()) {
+    // Data is already in cache. Give the stream its own pin copy so it can
+    // outlive this CachedBufferedInput and skip all loading/prefetch logic.
+    stream->setPreloadedPin(preloadPin_);
+  } else {
+    requests_.emplace_back(
+        RawFileCacheKey{fileNum_.id(), region.offset}, region.length, id);
+    requests_.back().stream = stream.get();
+  }
   return stream;
 }
 
 bool CachedBufferedInput::isBuffered(uint64_t /*offset*/, uint64_t /*length*/)
     const {
-  return false;
+  // When preloaded, the entire file content is already in cache, so any
+  // region within the file is considered buffered and can be served without
+  // additional I/O.
+  return preloaded();
 }
 
 bool CachedBufferedInput::shouldPreload(int32_t numPages) {
@@ -161,6 +172,51 @@ bool lessThan(const CacheRequest* left, const CacheRequest* right) {
 }
 
 } // namespace
+
+void CachedBufferedInput::preload() {
+  VELOX_CHECK(preloadPin_.empty(), "preload() called more than once");
+  VELOX_CHECK(requests_.empty(), "preload() must be called before enqueue()");
+  cache::RawFileCacheKey key{fileNum_.id(), 0};
+  folly::SemiFuture<bool> waitFuture(false);
+  do {
+    preloadPin_ = cache_->findOrCreate(key, fileSize_, &waitFuture);
+    if (preloadPin_.empty()) {
+      uint64_t waitUs{0};
+      {
+        MicrosecondTimer timer(&waitUs);
+        std::move(waitFuture).wait();
+      }
+      ioStatistics_->queryThreadIoLatencyUs().increment(waitUs);
+      ioStatistics_->cacheWaitLatencyUs().increment(waitUs);
+    }
+  } while (preloadPin_.empty());
+
+  auto* entry = preloadPin_.checkedEntry();
+  if (!entry->getAndClearFirstUseFlag()) {
+    // Already loaded by another concurrent query.
+    ioStatistics_->ramHit().increment(fileSize_);
+  }
+  if (!entry->isExclusive()) {
+    // Cache hit — already loaded.
+    return;
+  }
+
+  entry->setGroupId(groupId_.id());
+  entry->setTrackingId(
+      cache::TrackingId(StreamIdentifier::sequentialFile().id_));
+  auto ranges = entry->dataRanges(fileSize_);
+  uint64_t storageReadUs{0};
+  {
+    MicrosecondTimer timer(&storageReadUs);
+    input_->read(ranges, 0, LogType::FILE);
+  }
+  ioStatistics_->read().increment(fileSize_);
+  ioStatistics_->incRawBytesRead(fileSize_);
+  ioStatistics_->queryThreadIoLatencyUs().increment(storageReadUs);
+  ioStatistics_->storageReadLatencyUs().increment(storageReadUs);
+  ioStatistics_->incTotalScanTime(storageReadUs * 1'000);
+  entry->setExclusiveToShared(options_.cacheable());
+}
 
 void CachedBufferedInput::load(const LogType /*unused*/) {
   // 'requests_ is cleared on exit.
@@ -504,6 +560,10 @@ void CachedBufferedInput::readRegions(
     VELOX_CHECK(groupEnds.empty());
     return;
   }
+  // Record the starting position so that we only submit the loads created by
+  // this call. Without this, non-prefetch loads or stale loads from previous
+  // cycles could be incorrectly submitted for async prefetching.
+  const int32_t startIndex = static_cast<int32_t>(coalescedLoads_.size());
   int32_t requestIdx{0};
   std::vector<CacheRequest*> requestGroup;
   for (auto groupEndIdx : groupEnds) {
@@ -515,21 +575,25 @@ void CachedBufferedInput::readRegions(
   }
 
   if (prefetch && executor_) {
-    std::vector<int32_t> doneIndices;
-    for (auto i = 0; i < coalescedLoads_.size(); ++i) {
+    // Only submit the loads created by this call to the executor.
+    for (auto i = startIndex; i < coalescedLoads_.size(); ++i) {
       auto& load = coalescedLoads_[i];
       if (load->state() == CoalescedLoad::State::kPlanned) {
         executor_->add(
-            [pendingLoad = load, ssdSavable = !options_.noCacheRetention()]() {
+            [pendingLoad = load, ssdSavable = options_.cacheable()]() {
               process::TraceContext trace("Read Ahead");
               pendingLoad->loadOrFuture(nullptr, ssdSavable);
             });
-      } else {
-        doneIndices.push_back(i);
       }
     }
     // Remove the loads that were complete. There can be done loads if the same
     // CachedBufferedInput has multiple cycles of enqueues and loads.
+    std::vector<int32_t> doneIndices;
+    for (int32_t i = 0; i < startIndex; ++i) {
+      if (coalescedLoads_[i]->state() != CoalescedLoad::State::kPlanned) {
+        doneIndices.push_back(i);
+      }
+    }
     for (int i = 0, j = 0, k = 0; i < coalescedLoads_.size(); ++i) {
       if (j < doneIndices.size() && doneIndices[j] == i) {
         ++j;
@@ -573,17 +637,21 @@ std::unique_ptr<SeekableInputStream> CachedBufferedInput::read(
     uint64_t length,
     LogType /*logType*/) const {
   VELOX_CHECK_LE(offset + length, fileSize_);
-  return std::make_unique<CacheInputStream>(
+  auto stream = std::make_unique<CacheInputStream>(
       const_cast<CachedBufferedInput*>(this),
       ioStatistics_.get(),
       Region{offset, length},
       input_,
       fileNum_.id(),
-      options_.noCacheRetention(),
+      options_.cacheable(),
       nullptr,
       TrackingId(),
       0,
       options_.loadQuantum());
+  if (preloaded()) {
+    stream->setPreloadedPin(preloadPin_);
+  }
+  return stream;
 }
 
 bool CachedBufferedInput::prefetch(Region region) {
@@ -597,6 +665,91 @@ bool CachedBufferedInput::prefetch(Region region) {
   // cache entry will be accessed.
   coalescedLoad(stream.get());
   return true;
+}
+
+void CachedBufferedInput::cacheRegion(
+    uint64_t offset,
+    uint64_t length,
+    std::string_view data) {
+  VELOX_CHECK_EQ(data.size(), length);
+  auto iobuf = folly::IOBuf::wrapBufferAsValue(data.data(), data.size());
+  cacheRegion(offset, length, iobuf, 0);
+}
+
+void CachedBufferedInput::cacheRegion(
+    uint64_t offset,
+    uint64_t length,
+    const folly::IOBuf& buffer,
+    uint64_t bufferOffset) {
+  auto pin = cache_->findOrCreate(
+      RawFileCacheKey{fileNum_.id(), offset}, length, nullptr);
+  // Empty pin means the cache is at capacity and cannot accept new entries.
+  // Non-exclusive means another thread already cached this region; skip the
+  // duplicate write.
+  if (pin.empty() || !pin.checkedEntry()->isExclusive()) {
+    return;
+  }
+
+  folly::io::Cursor cursor(&buffer);
+  cursor.skip(bufferOffset);
+  VELOX_CHECK_GE(
+      cursor.totalLength(),
+      length,
+      "IOBuf has {} bytes after offset {}, need {}",
+      cursor.totalLength(),
+      bufferOffset,
+      length);
+
+  auto* entry = pin.checkedEntry();
+  if (entry->size() < cache::AsyncDataCacheEntry::kTinyDataSize) {
+    cursor.pull(entry->tinyData(), length);
+  } else {
+    auto& allocation = entry->data();
+    uint64_t copyBytes = 0;
+    for (int i = 0; i < allocation.numRuns() && copyBytes < length; ++i) {
+      const auto run = allocation.runAt(i);
+      const uint64_t copySize =
+          std::min<uint64_t>(run.numBytes(), length - copyBytes);
+      cursor.pull(run.data(), copySize);
+      copyBytes += copySize;
+    }
+    VELOX_CHECK_EQ(copyBytes, length);
+  }
+
+  // Clear the first-use flag since this entry is being populated externally
+  // (not loaded on-demand). The first findCachedRegion access should count
+  // as a cache hit.
+  entry->getAndClearFirstUseFlag();
+  entry->setExclusiveToShared();
+}
+
+std::optional<CachedRegion> CachedBufferedInput::findCachedRegion(
+    uint64_t offset) const {
+  const cache::RawFileCacheKey key{fileNum_.id(), offset};
+  for (;;) {
+    folly::SemiFuture<bool> waitFuture(false);
+    auto result = cache_->find(key, &waitFuture);
+    if (!result.has_value()) {
+      return std::nullopt;
+    }
+    if (!result->empty()) {
+      auto* entry = result->checkedEntry();
+      if (!entry->getAndClearFirstUseFlag()) {
+        ioStatistics_->ramHit().increment(entry->size());
+      }
+      return CachedRegion{std::move(*result)};
+    }
+    // Entry is exclusive — wait for it to become shared, then retry.
+    uint64_t waitUs{0};
+    {
+      MicrosecondTimer timer(&waitUs);
+      std::move(waitFuture)
+          .via(&folly::QueuedImmediateExecutor::instance())
+          .wait();
+    }
+    ioStatistics_->queryThreadIoLatencyUs().increment(waitUs);
+    ioStatistics_->cacheWaitLatencyUs().increment(waitUs);
+  }
 }
 
 } // namespace facebook::velox::dwio::common

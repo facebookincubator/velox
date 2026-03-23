@@ -119,6 +119,7 @@ SparseHll<TAllocator>::SparseHll(const char* serialized, TAllocator* allocator)
   stream.read<int8_t>();
 
   auto size = stream.read<int16_t>();
+  VELOX_CHECK_GE(size, 0, "Invalid SparseHll entry count: {}", size);
   entries_.resize(size);
   for (auto i = 0; i < size; i++) {
     entries_[i] = stream.read<uint32_t>();

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/NestedLoopJoinBuild.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::exec {
@@ -50,7 +51,7 @@ NestedLoopJoinBuild::NestedLoopJoinBuild(
           nullptr,
           operatorId,
           joinNode->id(),
-          "NestedLoopJoinBuild") {}
+          OperatorType::kNestedLoopJoinBuild) {}
 
 void NestedLoopJoinBuild::addInput(RowVectorPtr input) {
   if (input->size() > 0) {

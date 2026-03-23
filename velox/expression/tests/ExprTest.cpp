@@ -23,9 +23,9 @@
 #include "gtest/gtest.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/core/Expressions.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/expression/CoalesceExpr.h"
 #include "velox/expression/ConjunctExpr.h"
 #include "velox/expression/ConstantExpr.h"
@@ -44,6 +44,8 @@
 
 DECLARE_string(velox_save_input_on_expression_any_failure_path);
 DECLARE_string(velox_save_input_on_expression_system_failure_path);
+
+using namespace facebook::velox::common::testutil;
 
 namespace facebook::velox::test {
 namespace {
@@ -2484,7 +2486,7 @@ TEST_P(ParameterizedExprTest, exceptionContext) {
   }
 
   // Enable saving vector and expression SQL for system errors only.
-  auto tempDirectory = exec::test::TempDirectoryPath::create();
+  auto tempDirectory = TempDirectoryPath::create();
   FLAGS_velox_save_input_on_expression_system_failure_path =
       tempDirectory->getPath();
 
@@ -3339,6 +3341,30 @@ TEST_P(ParameterizedExprTest, flatNoNullsFastPath) {
   exprSet = compileExpression("a.c0", ROW({"a"}, {ROW({"c0"}, {INTEGER()})}));
   ASSERT_EQ(1, exprSet->exprs().size());
   ASSERT_FALSE(exprSet->exprs()[0]->supportsFlatNoNullsFastPath());
+}
+
+TEST_P(ParameterizedExprTest, flatNoNullsFastPathDisabledByConfig) {
+  auto data = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int32_t>({1, 2, 3}),
+          makeFlatVector<int32_t>({10, 20, 30}),
+      });
+
+  // Evaluate with fast path enabled (default).
+  auto result = evaluate("a + b", data);
+  auto expected = makeFlatVector<int32_t>({11, 22, 33});
+  assertEqualVectors(expected, result);
+
+  // Evaluate with fast path disabled via config.
+  std::unordered_map<std::string, std::string> configData(
+      {{core::QueryConfig::kExprEvalFlatNoNulls, "false"}});
+  auto queryCtx = velox::core::QueryCtx::create(
+      nullptr, core::QueryConfig(std::move(configData)));
+  auto execCtx = std::make_unique<core::ExecCtx>(pool_.get(), queryCtx.get());
+
+  result = evaluateMultiple({"a + b"}, data, std::nullopt, execCtx.get())[0];
+  assertEqualVectors(expected, result);
 }
 
 TEST_P(ParameterizedExprTest, commonSubExpressionWithEncodedInput) {

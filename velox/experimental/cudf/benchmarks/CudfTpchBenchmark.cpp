@@ -32,6 +32,7 @@ DECLARE_string(max_coalesced_distance_bytes);
 DECLARE_int32(parquet_prefetch_rowgroups);
 
 using namespace facebook::velox;
+using namespace facebook::velox::common::testutil;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::dwio::common;
@@ -136,7 +137,8 @@ CudfTpchBenchmark::listSplits(
   // CudfHiveDataSource outside of this benchmark
   if (FLAGS_velox_cudf_table_scan) {
     // TODO (dm): Instead of this, we can maybe use
-    // makeHiveConnectorSplits(vector<shared_ptr<TempFilePath>>& filePaths)
+    // makeHiveConnectorSplits(vector<shared_ptr<TempFilePath>>&
+    // filePaths)
     std::vector<std::shared_ptr<connector::ConnectorSplit>> result;
     auto temp = HiveConnectorTestBase::makeHiveConnectorSplits(
         path, 1, plan.dataFileFormat);

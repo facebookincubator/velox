@@ -88,6 +88,14 @@ class Subfield {
       return dynamic_cast<const T*>(this);
     }
 
+    template <typename T>
+    const T* asChecked() const {
+      auto* ptr = dynamic_cast<const T*>(this);
+      VELOX_CHECK_NOT_NULL(
+          ptr, "PathElement is not of expected type. Actual kind: {}", kind_);
+      return ptr;
+    }
+
    private:
     const SubfieldKind kind_;
   };

@@ -16,6 +16,7 @@
 #include "velox/exec/fuzzer/JoinFuzzer.h"
 #include <boost/random/uniform_int_distribution.hpp>
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
 #include "velox/dwio/dwrf/RegisterDwrfWriter.h"
@@ -25,7 +26,6 @@
 #include "velox/exec/fuzzer/JoinMaker.h"
 #include "velox/exec/fuzzer/ReferenceQueryRunner.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 DEFINE_int32(steps, 10, "Number of plans to generate and test.");
@@ -66,6 +66,7 @@ DEFINE_double(
     "The chance of testing plans with filters enabled.");
 
 namespace facebook::velox::exec {
+using namespace facebook::velox::common::testutil;
 
 namespace {
 
@@ -390,10 +391,10 @@ RowVectorPtr JoinFuzzer::execute(
     builder.numConcurrentSplitGroups(randInt(1, plan.numGroups));
   }
 
-  std::shared_ptr<test::TempDirectoryPath> spillDirectory;
+  std::shared_ptr<TempDirectoryPath> spillDirectory;
   int32_t spillPct{0};
   if (injectSpill) {
-    spillDirectory = exec::test::TempDirectoryPath::create();
+    spillDirectory = TempDirectoryPath::create();
     builder.config(core::QueryConfig::kSpillEnabled, true)
         .config(core::QueryConfig::kJoinSpillEnabled, true)
         .config(core::QueryConfig::kMixedGroupedModeHashJoinSpillEnabled, true)
@@ -618,7 +619,7 @@ void JoinFuzzer::verify(core::JoinType joinType) {
     }
   }
 
-  const auto tableScanDir = exec::test::TempDirectoryPath::create();
+  const auto tableScanDir = TempDirectoryPath::create();
   auto localFs = filesystems::getFileSystem(tableScanDir->getPath(), nullptr);
   std::string probePath =
       fmt::format("{}/{}", tableScanDir->getPath(), "probe");

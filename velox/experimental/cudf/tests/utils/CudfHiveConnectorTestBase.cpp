@@ -38,6 +38,7 @@
 #include <string>
 
 namespace facebook::velox::cudf_velox::exec::test {
+using namespace facebook::velox::common::testutil;
 
 namespace {
 
@@ -81,9 +82,6 @@ void CudfHiveConnectorTestBase::SetUp() {
   facebook::velox::cudf_velox::connector::hive::CudfHiveConnectorFactory
       factory;
   auto config = std::unordered_map<std::string, std::string>{};
-  // TODO(mh):Enable experimental cudf reader
-  // config.insert({facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::kUseExperimentalCudfReader,
-  // "true"});
   auto hiveConnector = factory.newConnector(
       kCudfHiveConnectorId,
       std::make_shared<facebook::velox::config::ConfigBase>(std::move(config)),
@@ -128,8 +126,7 @@ std::vector<RowVectorPtr> CudfHiveConnectorTestBase::makeVectors(
 std::shared_ptr<facebook::velox::exec::Task>
 CudfHiveConnectorTestBase::assertQuery(
     const core::PlanNodePtr& plan,
-    const std::vector<
-        std::shared_ptr<facebook::velox::exec::test::TempFilePath>>& filePaths,
+    const std::vector<std::shared_ptr<TempFilePath>>& filePaths,
     const std::string& duckDbSql) {
   return OperatorTestBase::assertQuery(
       plan, makeCudfHiveConnectorSplits(filePaths), duckDbSql);
@@ -151,13 +148,12 @@ CudfHiveConnectorTestBase::assertQuery(
       .assertResults(duckDbSql);
 }
 
-std::vector<std::shared_ptr<facebook::velox::exec::test::TempFilePath>>
+std::vector<std::shared_ptr<TempFilePath>>
 CudfHiveConnectorTestBase::makeFilePaths(int count) {
-  std::vector<std::shared_ptr<facebook::velox::exec::test::TempFilePath>>
-      filePaths;
+  std::vector<std::shared_ptr<TempFilePath>> filePaths;
   filePaths.reserve(count);
   for (auto i = 0; i < count; ++i) {
-    filePaths.emplace_back(facebook::velox::exec::test::TempFilePath::create());
+    filePaths.emplace_back(TempFilePath::create());
   }
   return filePaths;
 }
@@ -173,7 +169,11 @@ void CudfHiveConnectorTestBase::writeToFile(
     VELOX_CHECK_NOT_NULL(vector);
     if (vector->size()) {
       auto stream = cudf::get_default_stream();
-      auto cudfTable = with_arrow::toCudfTable(vector, vector->pool(), stream);
+      auto cudfTable = with_arrow::toCudfTable(
+          vector,
+          vector->pool(),
+          stream,
+          cudf::get_current_device_resource_ref());
       stream.synchronize();
       cudfTables.emplace_back(std::move(cudfTable));
     }
@@ -210,7 +210,8 @@ void CudfHiveConnectorTestBase::writeToFile(
   auto const sinkInfo = cudf::io::sink_info(filePath);
   VELOX_CHECK_NOT_NULL(vector);
   auto stream = cudf::get_default_stream();
-  auto cudfTable = with_arrow::toCudfTable(vector, vector->pool(), stream);
+  auto cudfTable = with_arrow::toCudfTable(
+      vector, vector->pool(), stream, cudf::get_current_device_resource_ref());
   stream.synchronize();
   auto tableInputMetadata = cudf::io::table_input_metadata(cudfTable->view());
   fillColumnNames(tableInputMetadata, prefix);
@@ -223,9 +224,7 @@ void CudfHiveConnectorTestBase::writeToFile(
 
 std::vector<std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
 CudfHiveConnectorTestBase::makeCudfHiveConnectorSplits(
-    const std::vector<
-        std::shared_ptr<facebook::velox::exec::test::TempFilePath>>&
-        filePaths) {
+    const std::vector<std::shared_ptr<TempFilePath>>& filePaths) {
   std::vector<std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
       splits;
   for (const auto& filePath : filePaths) {
@@ -295,6 +294,8 @@ CudfHiveConnectorTestBase::makeCudfHiveConnectorSplit(
     uint64_t start,
     uint64_t length) {
   return facebook::velox::connector::hive::HiveConnectorSplitBuilder(filePath)
+      .connectorId(kCudfHiveConnectorId)
+      .fileFormat(facebook::velox::dwio::common::FileFormat::PARQUET)
       .infoColumn("$file_size", fmt::format("{}", fileSize))
       .infoColumn("$file_modified_time", fmt::format("{}", fileModifiedTime))
       .start(start)

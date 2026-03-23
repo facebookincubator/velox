@@ -15,13 +15,13 @@
  */
 
 #include "velox/exec/tests/TableEvolutionFuzzer.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/common/tests/utils/FilterGenerator.h"
 #include "velox/dwio/dwrf/common/Config.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/expression/fuzzer/ExpressionFuzzer.h"
 #include "velox/functions/FunctionRegistry.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
@@ -56,6 +56,7 @@ DEFINE_int32(
     "N=5 means 20% chance, N=2 means 50% chance.");
 
 namespace facebook::velox::exec::test {
+using namespace facebook::velox::common::testutil;
 
 std::ostream& operator<<(
     std::ostream& out,

@@ -133,7 +133,7 @@ target_link_libraries(
   velox_expression_verifier_unit_test
   velox_expression_verifier
   velox_file
-  velox_temp_path
+  velox_test_util
   velox_parse_expression
   velox_parse_parser
   velox_parse_utils
@@ -152,7 +152,7 @@ target_link_libraries(
   velox_expression_fuzzer
   velox_expression_verifier
   velox_function_registry
-  velox_temp_path
+  velox_test_util
   velox_exec_test_lib
   velox_vector_test_lib
   GTest::gtest

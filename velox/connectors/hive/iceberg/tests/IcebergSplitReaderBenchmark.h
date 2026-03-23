@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
@@ -24,13 +25,14 @@
 #include "velox/dwio/common/tests/utils/DataSetBuilder.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
 
 namespace facebook::velox::iceberg::reader::test {
+
+using TempDirectoryPath = common::testutil::TempDirectoryPath;
 
 constexpr uint32_t kNumRowsPerBatch = 20000;
 constexpr uint32_t kNumBatches = 50;
@@ -108,10 +110,10 @@ class IcebergSplitReaderBenchmark {
 
  private:
   const std::string fileName_ = "test.data";
-  const std::shared_ptr<exec::test::TempDirectoryPath> fileFolder_ =
-      exec::test::TempDirectoryPath::create();
-  const std::shared_ptr<exec::test::TempDirectoryPath> deleteFileFolder_ =
-      exec::test::TempDirectoryPath::create();
+  const std::shared_ptr<TempDirectoryPath> fileFolder_ =
+      TempDirectoryPath::create();
+  const std::shared_ptr<TempDirectoryPath> deleteFileFolder_ =
+      TempDirectoryPath::create();
 
   std::unique_ptr<facebook::velox::test::DataSetBuilder> dataSetBuilder_;
   std::shared_ptr<memory::MemoryPool> rootPool_;

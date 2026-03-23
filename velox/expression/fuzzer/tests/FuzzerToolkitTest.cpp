@@ -17,10 +17,12 @@
 #include "velox/expression/fuzzer/FuzzerToolkit.h"
 
 #include <gtest/gtest.h>
-#include "velox/exec/tests/utils/TempFilePath.h"
+#include "velox/common/testutil/TempFilePath.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 namespace facebook::velox::fuzzer::test {
+using namespace facebook::velox::common::testutil;
+
 class FuzzerToolKitTest : public testing::Test,
                           public facebook::velox::test::VectorTestBase {
  protected:
@@ -51,7 +53,7 @@ TEST_F(FuzzerToolKitTest, inputRowMetadataRoundTrip) {
   metadata.columnsToWrapInCommonDictionary = {1, 2, 3, 4, 5};
 
   {
-    auto path = exec::test::TempFilePath::create();
+    auto path = TempFilePath::create();
     metadata.saveToFile(path->getPath().c_str());
     auto copy =
         InputRowMetadata::restoreFromFile(path->getPath().c_str(), pool());

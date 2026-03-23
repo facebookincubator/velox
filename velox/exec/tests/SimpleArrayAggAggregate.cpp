@@ -127,7 +127,7 @@ exec::AggregateRegistrationResult registerSimpleArrayAggAggregate(
 
   return exec::registerAggregateFunction(
       name,
-      std::move(signatures),
+      signatures,
       [name](
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,

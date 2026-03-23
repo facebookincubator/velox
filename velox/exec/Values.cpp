@@ -15,6 +15,7 @@
  */
 #include "velox/exec/Values.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/exec/OperatorType.h"
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
@@ -28,7 +29,7 @@ Values::Values(
           values->outputType(),
           operatorId,
           values->id(),
-          "Values"),
+          OperatorType::kValues),
       valueNodes_(std::move(values)),
       roundsLeft_(valueNodes_->repeatTimes()) {}
 

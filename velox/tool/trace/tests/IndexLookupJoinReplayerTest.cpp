@@ -22,12 +22,12 @@
 #include <folly/experimental/EventCount.h>
 
 #include "velox/common/file/tests/FaultyFileSystem.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/PartitionFunction.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/exec/tests/utils/TestIndexStorageConnector.h"
 #include "velox/exec/trace/TraceUtil.h"
 #include "velox/serializers/PrestoSerializer.h"
@@ -117,6 +117,7 @@ class IndexLookupJoinReplayerTest : public HiveConnectorTestBase {
         /*dependentTypes=*/dependentTypes,
         /*allowDuplicates=*/true,
         /*hasProbedFlag=*/false,
+        /*hasCountFlag=*/false,
         /*minTableSizeForParallelJoinBuild=*/1,
         pool_.get());
 

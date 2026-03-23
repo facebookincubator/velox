@@ -302,6 +302,7 @@ class RowContainer {
             false, // hasNext
             false, // isJoinBuild
             false, // hasProbedFlag
+            false, // hasCountFlag
             false, // hasNormalizedKey
             useListRowIndex,
             pool) {}
@@ -334,6 +335,7 @@ class RowContainer {
       bool hasNext,
       bool isJoinBuild,
       bool hasProbedFlag,
+      bool hasCountFlag,
       bool hasNormalizedKey,
       bool useListRowIndex,
       memory::MemoryPool* pool);
@@ -764,6 +766,31 @@ class RowContainer {
   /// 0 if not applicable.
   int32_t probedFlagOffset() const {
     return probedFlagOffset_;
+  }
+
+  /// Byte offset of the per-row count for counting joins. 0 if not applicable.
+  int32_t countOffset() const {
+    return countOffset_;
+  }
+
+  /// Returns the count stored at the given row. Used for counting joins.
+  int32_t count(const char* row) const {
+    VELOX_DCHECK_NE(countOffset_, 0);
+    return countRef(const_cast<char*>(row));
+  }
+
+  /// Increments the count at the given row. Used during hash table build for
+  /// counting joins.
+  void incrementCount(char* row) const {
+    VELOX_DCHECK_NE(countOffset_, 0);
+    ++countRef(row);
+  }
+
+  /// Decrements the count at the given row. Used during hash table probe for
+  /// counting joins.
+  void decrementCount(char* row) const {
+    VELOX_DCHECK_NE(countOffset_, 0);
+    --countRef(row);
   }
 
   /// Returns the offset of a uint32_t row size or 0 if the row has no variable
@@ -1508,6 +1535,10 @@ class RowContainer {
     }
   }
 
+  int32_t& countRef(char* row) const {
+    return *reinterpret_cast<int32_t*>(row + countOffset_);
+  }
+
   const std::vector<TypePtr> keyTypes_;
   const bool nullableKeys_;
   const bool isJoinBuild_;
@@ -1547,6 +1578,9 @@ class RowContainer {
   // Bit offset of the probed flag for a full or right outer join  payload. 0 if
   // not applicable.
   int32_t probedFlagOffset_ = 0;
+
+  // Byte offset of the per-row count for counting joins. 0 if not applicable.
+  int32_t countOffset_ = 0;
 
   // Bit position of free bit.
   int32_t freeFlagOffset_ = 0;
