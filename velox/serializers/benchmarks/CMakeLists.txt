@@ -21,3 +21,17 @@ target_link_libraries(
   Folly::folly
   Folly::follybenchmark
 )
+
+add_executable(
+  velox_presto_iterative_partitioning_serializer_benchmark
+  PrestoIterativePartitioningSerializerBenchmark.cpp
+)
+
+target_link_libraries(
+  velox_presto_iterative_partitioning_serializer_benchmark
+  velox_presto_serializer
+  velox_vector_test_lib
+  velox_memory
+  Folly::folly
+  Folly::follybenchmark
+)

@@ -36,6 +36,7 @@ target_link_libraries(
 set(
   VELOX_SERIALIZER_TEST_SOURCES
   CompactRowSerializerTest.cpp
+  PrestoIterativePartitioningSerializerTest.cpp
   PrestoOutputStreamListenerTest.cpp
   PrestoSerializerTest.cpp
   SerializedPageFileTest.cpp
@@ -51,6 +52,7 @@ set(
   velox_row_fast
   GTest::gtest
   GTest::gtest_main
+  GTest::gmock
   glog::glog
 )
 
