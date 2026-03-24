@@ -19,6 +19,7 @@
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
+
 using namespace facebook::velox;
 using namespace facebook::velox::common;
 using namespace facebook::velox::dwio::common;
@@ -1170,7 +1171,7 @@ TEST_F(ParquetReaderWideningTest, allowInt32Narrowing) {
   }
 }
 
-// A. INT -> Integer widening + filter
+// INT -> Integer widening + filter.
 TEST_F(ParquetReaderWideningTest, tinyintToSmallintWideningWithFilter) {
   auto writeData =
       makeRowVector({"col"}, {makeFlatVector<int8_t>({-10, 0, 10, 50, 127})});
@@ -1219,7 +1220,7 @@ TEST_F(ParquetReaderWideningTest, intToBigintWideningWithFilter) {
       expected);
 }
 
-// B. INT -> DOUBLE widening + filter
+// INT -> DOUBLE widening + filter.
 TEST_F(ParquetReaderWideningTest, intToDoubleWideningWithFilter) {
   auto writeData =
       makeRowVector({"col"}, {makeFlatVector<int32_t>({-100, 0, 50, 100})});
@@ -1258,7 +1259,7 @@ TEST_F(
       makeRowVector({"col"}, {makeFlatVector<double>({50.0, 100.0})}));
 }
 
-// C. INT -> Decimal widening + filter
+// INT -> Decimal widening + filter.
 TEST_F(ParquetReaderWideningTest, intToDecimalWideningWithFilter) {
   auto writeData =
       makeRowVector({"col"}, {makeFlatVector<int32_t>({-100, 0, 50, 100})});
@@ -1316,7 +1317,7 @@ TEST_F(ParquetReaderWideningTest, DISABLED_bigintToDecimalWideningWithFilter) {
               {int128_t(50) * 10, int128_t(100) * 10}, DECIMAL(21, 1))}));
 }
 
-// D1. Decimal -> Decimal (short->short) + filter
+// Decimal -> Decimal (short->short) + filter.
 TEST_F(ParquetReaderWideningTest, decimalShortToShortWideningWithFilter) {
   auto writeData = makeRowVector(
       {"col"},
@@ -1404,7 +1405,7 @@ TEST_F(
           {makeFlatVector<int128_t>({500'000, 1'000'000}, DECIMAL(22, 4))}));
 }
 
-// E. INT32 narrowing + filter
+// INT32 narrowing + filter.
 TEST_F(ParquetReaderWideningTest, intNarrowingFilterBehavior) {
   // INT32 -> TINYINT with filter x in [0, 127] (TINYINT range).
   // INT32 value 200 fails filter (200 > 127), so it is filtered out.
@@ -1420,7 +1421,7 @@ TEST_F(ParquetReaderWideningTest, intNarrowingFilterBehavior) {
       /*allowInt32Narrowing=*/true);
 }
 
-// F. Null filter tests
+// Null filter tests.
 TEST_F(ParquetReaderWideningTest, intToBigintWideningNullFilter) {
   auto writeData = makeRowVector(
       {"col"},

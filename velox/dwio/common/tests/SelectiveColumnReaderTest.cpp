@@ -64,7 +64,7 @@ TEST(IsDenseTest, singleNonZeroElement) {
   EXPECT_FALSE(isDense(rows));
 }
 
-/// Minimal FormatData stub for testing SelectiveColumnReader in isolation.
+// Minimal FormatData stub for testing SelectiveColumnReader in isolation.
 class StubFormatData : public FormatData {
  public:
   void readNulls(
@@ -94,7 +94,7 @@ class StubFormatData : public FormatData {
       FilterRowGroupsResult& /*result*/) override {}
 };
 
-/// Minimal FormatParams stub that produces a StubFormatData.
+// Minimal FormatParams stub that produces a StubFormatData.
 class StubFormatParams : public FormatParams {
  public:
   StubFormatParams(memory::MemoryPool& pool, ColumnReaderStatistics& stats)
@@ -107,7 +107,7 @@ class StubFormatParams : public FormatParams {
   }
 };
 
-/// Concrete subclass that exposes getFlatValues and internal state for testing.
+// Concrete subclass that exposes getFlatValues and internal state for testing.
 class TestColumnReader : public SelectiveColumnReader {
  public:
   TestColumnReader(
