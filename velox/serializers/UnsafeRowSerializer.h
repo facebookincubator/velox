@@ -21,7 +21,7 @@ namespace facebook::velox::serializer::spark {
 
 class UnsafeRowVectorSerde : public VectorSerde {
  public:
-  UnsafeRowVectorSerde() = default;
+  UnsafeRowVectorSerde() : VectorSerde(kSerdeKind) {}
 
   void estimateSerializedSize(
       const row::UnsafeRowFast* unsafeRow,
@@ -57,9 +57,8 @@ class UnsafeRowVectorSerde : public VectorSerde {
   /// default serde is already registered.
   static void registerVectorSerde();
 
-  /// Registers this serde in the named serde registry under kSerdeKind
-  /// (same name returned by name()). Throws if a serde with the same name
-  /// is already registered.
+  /// Registers this serde in the named serde registry under kSerdeKind.
+  /// Throws if a serde with the same name is already registered.
   static void registerNamedVectorSerde();
 
   /// Registers this serde in the named serde registry under kSerdeKind only
