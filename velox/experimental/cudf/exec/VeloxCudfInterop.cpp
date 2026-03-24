@@ -127,22 +127,19 @@ std::unique_ptr<cudf::table> toCudfTable(
     rmm::device_async_resource_ref mr,
     std::optional<std::string> timestampTimeZone) {
   // Need to flattenDictionary and flattenConstant, otherwise we observe issues
-<<<<<<< HEAD
   // in the null mask. Also, libcudf does not support Arrow binary, so we export
   // VARBINARY as UTF-8.
-  ArrowOptions arrowOptions{
-      .flattenDictionary = true,
-      .flattenConstant = true,
-      .exportVarbinaryAsString = true,
-      .useDecimalTypeWidth = true};
-=======
-  // in the null mask.
   TimestampUnit unit = CudfConfig::getInstance().timestampUnit ==
           cudf::type_id::TIMESTAMP_NANOSECONDS
       ? TimestampUnit::kNano
       : TimestampUnit::kMicro;
-  ArrowOptions arrowOptions{true, true, unit};
->>>>>>> 837baed09 (feat(cudf): Add config to set timestamp unit)
+  ArrowOptions arrowOptions{
+      .flattenDictionary = true,
+      .flattenConstant = true,
+      .timestampUnit = unit,
+      .timestampTimeZone = timestampTimeZone,
+      .exportVarbinaryAsString = true,
+      .useDecimalTypeWidth = true};
   ArrowArray arrowArray;
   exportToArrow(
       std::dynamic_pointer_cast<facebook::velox::BaseVector>(veloxTable),
