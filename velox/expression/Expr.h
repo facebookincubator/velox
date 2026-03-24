@@ -653,6 +653,11 @@ class Expr {
       inputWeakVectors_.push_back(input);
     }
 
+    void reserve(size_t size) {
+      inputVectors_.reserve(size);
+      inputWeakVectors_.reserve(size);
+    }
+
     bool operator<(const InputForSharedResults& other) const {
       return inputVectors_ < other.inputVectors_;
     }
