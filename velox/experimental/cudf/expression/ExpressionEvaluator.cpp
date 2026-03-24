@@ -281,13 +281,34 @@ class RoundFunction : public CudfFunction {
       std::vector<ColumnOrView>& inputColumns,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
+    auto inputCol = asView(inputColumns[0]);
+    auto inputTypeId = inputCol.type().id();
+
+    if (inputTypeId == cudf::type_id::FLOAT32 ||
+        inputTypeId == cudf::type_id::FLOAT64) {
+      // round_decimal does not support floating-point types directly.
+      // Cast to DECIMAL128, round, then cast back.
+      int32_t decimalScale = -(std::max(scale_, 0) + 15);
+      // The maximum scale for DECIMAL128 in cuDF is 38, so we clamp it to that.
+      decimalScale = std::max(decimalScale, -38);
+      auto decimalType =
+          cudf::data_type(cudf::type_id::DECIMAL128, decimalScale);
+      auto decimalCol = cudf::cast(inputCol, decimalType, stream, mr);
+      auto rounded = cudf::round_decimal(
+          decimalCol->view(),
+          scale_,
+          cudf::rounding_method::HALF_UP,
+          stream,
+          mr);
+      return cudf::cast(rounded->view(), inputCol.type(), stream, mr);
+    }
+
     return cudf::round_decimal(
-        asView(inputColumns[0]),
+        inputCol,
         scale_,
         cudf::rounding_method::HALF_UP,
         stream,
         mr);
-    ;
   }
 
  private:
@@ -1000,6 +1021,15 @@ bool registerBuiltinFunctions(const std::string& prefix) {
        FunctionSignatureBuilder()
            .returnType("bigint")
            .argumentType("bigint")
+           .constantArgumentType("integer")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("double")
+           .argumentType("double")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("double")
+           .argumentType("double")
            .constantArgumentType("integer")
            .build()});
 
