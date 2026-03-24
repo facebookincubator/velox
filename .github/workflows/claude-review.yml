@@ -20,7 +20,9 @@
 # assistance by commenting on the PR.
 #
 # Supported Commands:
-# - /claude-review : Perform a thorough code review of the PR
+# - /claude-review [additional context] : Perform a thorough code review of the PR.
+#     Optionally provide additional context or instructions after the command.
+#     Example: /claude-review Please focus on memory safety and thread safety.
 # - /claude-query <question> : Ask Claude a question about the PR or codebase
 #
 # Security Model:
@@ -109,7 +111,10 @@ jobs:
 
             if (body.includes('/claude-review')) {
               core.setOutput('type', 'review');
-              core.setOutput('query', '');
+              // Extract optional additional context after /claude-review
+              const reviewMatch = body.match(/\/claude-review\s+([\s\S]*)/);
+              const additionalContext = reviewMatch ? reviewMatch[1].trim() : '';
+              core.setOutput('query', additionalContext);
             } else if (body.includes('/claude-query')) {
               // Extract everything after /claude-query
               const match = body.match(/\/claude-query\s+([\s\S]*)/);
@@ -212,6 +217,7 @@ jobs:
           PR_AUTHOR: ${{ steps.pr_info.outputs.pr_author }}
           DIFF_STATS: ${{ steps.generate_diff.outputs.diff_stats }}
           IS_TRUNCATED: ${{ steps.generate_diff.outputs.is_truncated }}
+          ADDITIONAL_CONTEXT: ${{ steps.command.outputs.query }}
         run: |
           # Create system context first (no variable expansion needed)
           cat > /tmp/prompt.txt << 'PROMPT_EOF'
@@ -288,6 +294,16 @@ jobs:
 
           # PR body may contain special characters, write it safely
           printf '%s\n' "${PR_BODY}" >> /tmp/prompt.txt
+
+          # Add additional context/instructions if provided via /claude-review <context>
+          if [ -n "${ADDITIONAL_CONTEXT}" ]; then
+            cat >> /tmp/prompt.txt << 'PROMPT_EOF'
+
+          ## Additional Instructions from Reviewer
+
+          PROMPT_EOF
+            printf '%s\n' "${ADDITIONAL_CONTEXT}" >> /tmp/prompt.txt
+          fi
 
           cat >> /tmp/prompt.txt << 'PROMPT_EOF'
 
@@ -530,7 +546,7 @@ jobs:
             - Always apply human judgment to AI suggestions
 
             **Available commands:**
-            - \`/claude-review\` - Request a code review
+            - \`/claude-review [additional context]\` - Request a code review. Optionally provide additional instructions (e.g., \`/claude-review Please focus on memory safety\`)
             - \`/claude-query <question>\` - Ask a question about the PR or codebase
             </details>`;
 

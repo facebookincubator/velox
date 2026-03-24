@@ -169,7 +169,7 @@ RowVectorPtr SortBuffer::getOutput(vector_size_t maxOutputRows) {
   } else {
     getOutputWithoutSpill();
   }
-  return output_;
+  return std::move(output_);
 }
 
 bool SortBuffer::hasSpilled() const {

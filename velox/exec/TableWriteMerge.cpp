@@ -16,38 +16,10 @@
 
 #include "velox/exec/TableWriteMerge.h"
 
-#include "HashAggregation.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/TableWriter.h"
-#include "velox/exec/Task.h"
 
 namespace facebook::velox::exec {
-namespace {
-
-bool isSameCommitContext(
-    const folly::dynamic& first,
-    const folly::dynamic& second) {
-  return std::tie(
-             first[TableWriteTraits::kTaskIdContextKey],
-             first[TableWriteTraits::kCommitStrategyContextKey]) ==
-      std::tie(
-             second[TableWriteTraits::kTaskIdContextKey],
-             second[TableWriteTraits::kCommitStrategyContextKey]);
-}
-
-bool containsNonNullRows(const VectorPtr& vector) {
-  if (!vector->mayHaveNulls()) {
-    return true;
-  }
-  for (int i = 0; i < vector->size(); ++i) {
-    if (!vector->isNullAt(i)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-} // namespace
 
 TableWriteMerge::TableWriteMerge(
     int32_t operatorId,
@@ -82,35 +54,98 @@ void TableWriteMerge::initialize() {
   }
 }
 
+namespace {
+// Creates a RowVector containing only the rows at the given indices from
+// 'input'. Each child vector is wrapped in a dictionary to avoid copying.
+RowVectorPtr
+selectRows(const RowVectorPtr& input, BufferPtr indices, vector_size_t size) {
+  std::vector<VectorPtr> children(input->childrenSize());
+  for (auto i = 0; i < input->childrenSize(); ++i) {
+    children[i] =
+        BaseVector::wrapInDictionary(nullptr, indices, size, input->childAt(i));
+  }
+  return std::make_shared<RowVector>(
+      input->pool(), input->type(), nullptr, size, std::move(children));
+}
+} // namespace
+
 void TableWriteMerge::addInput(RowVectorPtr input) {
   VELOX_CHECK(!noMoreInput_);
   VELOX_CHECK_GT(input->size(), 0);
 
-  if (isStatistics(input)) {
-    VELOX_CHECK_NOT_NULL(statsCollector_);
-    statsCollector_->addInput(input);
-    return;
+  // Possibly mixed batch: split into stats and data using dictionary wrapping.
+  auto statsIndices = allocateIndices(input->size(), pool());
+  auto dataIndices = allocateIndices(input->size(), pool());
+  auto* rawStatsIndices = statsIndices->asMutable<vector_size_t>();
+  auto* rawDataIndices = dataIndices->asMutable<vector_size_t>();
+  vector_size_t numStats{0};
+  vector_size_t numData{0};
+  for (vector_size_t i = 0; i < input->size(); ++i) {
+    if (TableWriteTraits::isStatisticsRow(input, i)) {
+      rawStatsIndices[numStats++] = i;
+    } else {
+      rawDataIndices[numData++] = i;
+    }
   }
 
-  // Increments row count.
+  if (numStats > 0) {
+    if (numData == 0) {
+      addStatisticsInput(input);
+    } else {
+      addStatisticsInput(selectRows(input, statsIndices, numStats));
+    }
+  }
+
+  if (numData > 0) {
+    if (numStats == 0) {
+      addDataInput(input);
+    } else {
+      addDataInput(selectRows(input, dataIndices, numData));
+    }
+  }
+}
+
+void TableWriteMerge::addStatisticsInput(const RowVectorPtr& input) {
+  VELOX_CHECK_NOT_NULL(statsCollector_);
+  statsCollector_->addInput(input);
+}
+
+void TableWriteMerge::addDataInput(const RowVectorPtr& input) {
   numRows_ += TableWriteTraits::getRowCount(input);
 
-  // Makes sure the lifespan is the same.
+  // Validate commit strategy consistency. TaskId may differ in cross-worker
+  // merge (coordinator merging output from multiple workers).
   auto commitContext = TableWriteTraits::getTableCommitContext(input);
   if (lastCommitContext_ != nullptr) {
-    VELOX_CHECK(
-        isSameCommitContext(lastCommitContext_, commitContext),
-        "incompatible table commit context: {} is not compatible with {}",
-        lastCommitContext_.asString(),
-        commitContext.asString());
+    VELOX_CHECK_EQ(
+        lastCommitContext_[TableWriteTraits::kCommitStrategyContextKey]
+            .asString(),
+        commitContext[TableWriteTraits::kCommitStrategyContextKey].asString(),
+        "Mismatched commit strategy in commit context");
   }
   lastCommitContext_ = commitContext;
 
-  // Adds fragments to the buffer. Fragments will be emitted as soon as possible
-  // to avoid using extra memory.
+  // Buffer non-null fragments for early emission to free memory. The input
+  // may contain a mix of fragment rows (non-null) and summary rows (null
+  // fragment) when the TableWriter produces them in a single multi-row
+  // output.
   auto fragmentVector = input->childAt(TableWriteTraits::kFragmentChannel);
-  if (containsNonNullRows(fragmentVector)) {
+  if (!fragmentVector->mayHaveNulls()) {
     fragmentVectors_.push(fragmentVector);
+  } else {
+    auto indices = allocateIndices(fragmentVector->size(), pool());
+    auto* rawIndices = indices->asMutable<vector_size_t>();
+    vector_size_t numNonNull{0};
+    for (vector_size_t i = 0; i < fragmentVector->size(); ++i) {
+      if (!fragmentVector->isNullAt(i)) {
+        rawIndices[numNonNull++] = i;
+      }
+    }
+    if (numNonNull > 0) {
+      fragmentVectors_.push(
+          BaseVector::wrapInDictionary(
+              nullptr, indices, numNonNull, fragmentVector));
+    }
   }
 }
 
@@ -216,8 +251,4 @@ RowVectorPtr TableWriteMerge::createLastOutput() {
   return output;
 }
 
-bool TableWriteMerge::isStatistics(RowVectorPtr input) {
-  return input->childAt(TableWriteTraits::kRowCountChannel)->isNullAt(0) &&
-      input->childAt(TableWriteTraits::kFragmentChannel)->isNullAt(0);
-}
 } // namespace facebook::velox::exec

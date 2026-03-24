@@ -123,6 +123,19 @@ TEST_F(BloomFilterTest, merge) {
   EXPECT_EQ(bloom.serializedSize(), merge.serializedSize());
 }
 
+TEST_F(BloomFilterTest, corruptMergeSize) {
+  // Serialization format: int8_t version (1) + int32_t size.
+  // Craft data with negative size to verify validation.
+  std::string data(5, '\0');
+  data[0] = 1; // kBloomFilterV1
+  // Write size = -1 as little-endian int32_t at offset 1.
+  int32_t badSize = -1;
+  memcpy(&data[1], &badSize, sizeof(badSize));
+
+  BloomFilter bloom;
+  EXPECT_THROW(bloom.merge(data.data()), VeloxRuntimeError);
+}
+
 TEST_F(BloomFilterTest, optimalNumOfBitsWithFpp) {
   EXPECT_EQ(BloomFilter<>::optimalNumOfBits(1000, 0.03), 7298);
   EXPECT_EQ(BloomFilter<>::optimalNumOfBits(1000000, 0.01), 9585058);

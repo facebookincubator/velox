@@ -109,7 +109,7 @@ PartitionedOutputReplayer::PartitionedOutputReplayer(
     const std::string& queryId,
     const std::string& taskId,
     const std::string& nodeId,
-    VectorSerde::Kind serdeKind,
+    std::string serdeKind,
     const std::string& operatorType,
     const std::string& driverIds,
     uint64_t queryCapacity,

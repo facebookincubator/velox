@@ -585,10 +585,9 @@ std::unique_ptr<Operator> BlockedOperatorFactory::toOperator(
 
 std::unique_ptr<VectorSerde::Options> getVectorSerdeOptions(
     common::CompressionKind compressionKind,
-    VectorSerde::Kind kind,
+    const std::string& kind,
     std::optional<float> minCompressionRatio) {
-  std::unique_ptr<VectorSerde::Options> options =
-      kind == VectorSerde::Kind::kPresto
+  std::unique_ptr<VectorSerde::Options> options = kind == "Presto"
       ? std::make_unique<serializer::presto::PrestoVectorSerde::PrestoOptions>()
       : std::make_unique<VectorSerde::Options>();
   options->compressionKind = compressionKind;

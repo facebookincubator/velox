@@ -54,6 +54,7 @@ const cudf::ast::expression& createRangeExpr(
 
   auto addLiteral = [&](auto value) -> const cudf::ast::expression& {
     scalars.emplace_back(std::make_unique<ScalarT>(value, true, stream, mr));
+    stream.synchronize();
     return tree.push(
         cudf::ast::literal{*static_cast<ScalarT*>(scalars.back().get())});
   };
@@ -131,11 +132,10 @@ std::reference_wrapper<const cudf::ast::expression> buildBigintRangeExpr(
     };
 
     if (bigintRange->isSingleValue()) {
-      // Equal comparison: column = value. This value is the same as the
-      // lower/upper bound.
-      if (skipLowerBound || skipUpperBound) {
-        // If the singular value of this filter lies outside the range of the
-        // column's NativeT type then we want to be always false
+      // Equal comparison: column = value.
+      if (lower < static_cast<int64_t>(std::numeric_limits<NativeT>::min()) ||
+          lower > static_cast<int64_t>(std::numeric_limits<NativeT>::max())) {
+        // Value is outside the representable range of NativeT, always false.
         return tree.push(Operation{Op::NOT_EQUAL, columnRef, columnRef});
       } else {
         auto const& literal = addLiteral(lower);
@@ -224,6 +224,7 @@ const cudf::ast::expression& buildInListExpr(
   std::vector<const cudf::ast::expression*> exprVec;
   for (const auto& value : values) {
     scalars.emplace_back(std::make_unique<ScalarT>(value, true, stream, mr));
+    stream.synchronize();
     auto const& literal = tree.push(
         cudf::ast::literal{*static_cast<ScalarT*>(scalars.back().get())});
     auto const& equalExpr = tree.push(
@@ -398,6 +399,7 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
       scalars.emplace_back(
           std::make_unique<cudf::numeric_scalar<bool>>(
               matchesTrue, true, stream, mr));
+      stream.synchronize();
       auto const& matchesBoolExpr = tree.push(
           cudf::ast::literal{
               *static_cast<cudf::numeric_scalar<bool>*>(scalars.back().get())});
@@ -412,6 +414,40 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
       // For IsNotNull, we can use NOT(IS_NULL)
       auto const& nullCheck = tree.push(Operation{Op::IS_NULL, columnRef});
       return tree.push(Operation{Op::NOT, nullCheck});
+    }
+
+    case common::FilterKind::kBigintMultiRange:
+    case common::FilterKind::kMultiRange: {
+      // Both multi-range types recurse into sub-filters and combine with OR.
+      std::vector<const common::Filter*> subFilters;
+      if (filter.kind() == common::FilterKind::kBigintMultiRange) {
+        auto* multiRange =
+            static_cast<const common::BigintMultiRange*>(&filter);
+        for (const auto& range : multiRange->ranges()) {
+          subFilters.push_back(range.get());
+        }
+      } else {
+        auto* multiRange = static_cast<const common::MultiRange*>(&filter);
+        for (const auto& f : multiRange->filters()) {
+          subFilters.push_back(f.get());
+        }
+      }
+      VELOX_CHECK(!subFilters.empty(), "MultiRange filter must not be empty");
+
+      std::vector<const cudf::ast::expression*> exprRefs;
+      exprRefs.reserve(subFilters.size());
+      for (const auto* subFilter : subFilters) {
+        auto const& subExpr = createAstFromSubfieldFilter(
+            subfield, *subFilter, tree, scalars, inputRowSchema);
+        exprRefs.push_back(&subExpr);
+      }
+
+      const cudf::ast::expression* result = exprRefs[0];
+      for (size_t i = 1; i < exprRefs.size(); ++i) {
+        result =
+            &tree.push(Operation{Op::NULL_LOGICAL_OR, *result, *exprRefs[i]});
+      }
+      return *result;
     }
 
     default:

@@ -19,6 +19,11 @@
 #include "conversion.h"
 #include "serde.h"
 #include "signatures.h"
+#include "velox/external/utf8proc/utf8procImpl.h"
+
+#ifndef PYVELOX_VERSION
+#define PYVELOX_VERSION dev
+#endif
 
 namespace facebook::velox::py {
 using namespace velox;

@@ -27,28 +27,27 @@
 
 namespace facebook::velox {
 namespace {
-class VectorStreamGroupTest
-    : public testing::Test,
-      public velox::test::VectorTestBase,
-      public testing::WithParamInterface<VectorSerde::Kind> {
+class VectorStreamGroupTest : public testing::Test,
+                              public velox::test::VectorTestBase,
+                              public testing::WithParamInterface<std::string> {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 
   void SetUp() override {
-    if (isRegisteredNamedVectorSerde(VectorSerde::Kind::kPresto)) {
-      deregisterNamedVectorSerde(VectorSerde::Kind::kPresto);
+    if (isRegisteredNamedVectorSerde("Presto")) {
+      deregisterNamedVectorSerde("Presto");
     }
     serializer::presto::PrestoVectorSerde::registerNamedVectorSerde();
 
-    if (isRegisteredNamedVectorSerde(VectorSerde::Kind::kCompactRow)) {
-      deregisterNamedVectorSerde(VectorSerde::Kind::kCompactRow);
+    if (isRegisteredNamedVectorSerde("CompactRow")) {
+      deregisterNamedVectorSerde("CompactRow");
     }
     serializer::CompactRowVectorSerde::registerNamedVectorSerde();
 
-    if (isRegisteredNamedVectorSerde(VectorSerde::Kind::kUnsafeRow)) {
-      deregisterNamedVectorSerde(VectorSerde::Kind::kUnsafeRow);
+    if (isRegisteredNamedVectorSerde("UnsafeRow")) {
+      deregisterNamedVectorSerde("UnsafeRow");
     }
     serializer::spark::UnsafeRowVectorSerde::registerNamedVectorSerde();
   }
@@ -89,7 +88,7 @@ TEST_P(VectorStreamGroupTest, clear) {
   OStreamOutputStream outputStream(&output);
   vectorGroup.flush(&outputStream);
   vectorGroup.clear();
-  if (GetParam() == VectorSerde::Kind::kPresto) {
+  if (GetParam() == "Presto") {
     // We expect two pages for header after clear.
     ASSERT_EQ(
         vectorGroup.size(),
@@ -114,9 +113,9 @@ TEST_P(VectorStreamGroupTest, clear) {
 VELOX_INSTANTIATE_TEST_SUITE_P(
     VectorStreamGroupTest,
     VectorStreamGroupTest,
-    testing::ValuesIn(
-        {VectorSerde::Kind::kPresto,
-         VectorSerde::Kind::kCompactRow,
-         VectorSerde::Kind::kUnsafeRow}));
+    testing::Values(
+        std::string("Presto"),
+        std::string("CompactRow"),
+        std::string("UnsafeRow")));
 } // namespace
 } // namespace facebook::velox

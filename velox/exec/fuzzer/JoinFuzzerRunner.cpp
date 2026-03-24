@@ -101,18 +101,15 @@ int main(int argc, char** argv) {
   facebook::velox::filesystems::registerLocalFileSystem();
   facebook::velox::functions::prestosql::registerAllScalarFunctions();
   facebook::velox::parse::registerTypeResolver();
-  if (!isRegisteredNamedVectorSerde(
-          facebook::velox::VectorSerde::Kind::kPresto)) {
+  if (!facebook::velox::isRegisteredNamedVectorSerde("Presto")) {
     facebook::velox::serializer::presto::PrestoVectorSerde::
         registerNamedVectorSerde();
   }
-  if (!isRegisteredNamedVectorSerde(
-          facebook::velox::VectorSerde::Kind::kCompactRow)) {
+  if (!facebook::velox::isRegisteredNamedVectorSerde("CompactRow")) {
     facebook::velox::serializer::CompactRowVectorSerde::
         registerNamedVectorSerde();
   }
-  if (!isRegisteredNamedVectorSerde(
-          facebook::velox::VectorSerde::Kind::kUnsafeRow)) {
+  if (!facebook::velox::isRegisteredNamedVectorSerde("UnsafeRow")) {
     facebook::velox::serializer::spark::UnsafeRowVectorSerde::
         registerNamedVectorSerde();
   }

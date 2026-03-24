@@ -293,11 +293,18 @@ class Reader {
    */
   virtual std::optional<uint64_t> numberOfRows() const = 0;
 
-  /**
-   * Get statistics for a specified column.
-   * @param index column index
-   * @return column statisctics
-   */
+  /// Returns file-level statistics for the column identified by 'index'.
+  ///
+  /// 'index' is a node ID in the type tree (TypeWithId::id()), not a top-level
+  /// column ordinal. Node 0 is the root ROW type; top-level columns start at 1
+  /// for flat schemas. For nested types, IDs follow pre-order DFS numbering.
+  ///
+  /// Use typeWithId() to navigate the schema and obtain the correct ID:
+  ///   auto& col = reader->typeWithId()->childByName("column_name");
+  ///   auto stats = reader->columnStatistics(col->id());
+  ///
+  /// Returns nullptr if statistics are not available (e.g., non-leaf complex
+  /// types in Parquet, out-of-range index, or missing stats in the file).
   virtual std::unique_ptr<ColumnStatistics> columnStatistics(
       uint32_t index) const = 0;
 

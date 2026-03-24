@@ -19,28 +19,34 @@ target_link_libraries(
   PRIVATE velox_common_base Folly::folly velox_time glog::glog GTest::gtest GTest::gtest_main
 )
 
-add_executable(
-  velox_cache_test
+# Split velox_cache_test into individual test binaries for parallel execution.
+set(
+  VELOX_CACHE_TEST_SOURCES
   AsyncDataCacheTest.cpp
   CacheTTLControllerTest.cpp
   SsdFileTest.cpp
   SsdFileTrackerTest.cpp
   StringIdMapTest.cpp
 )
-add_test(velox_cache_test velox_cache_test)
-target_link_libraries(
-  velox_cache_test
-  PRIVATE
-    velox_caching
-    velox_file
-    velox_file_test_utils
-    velox_memory
-    velox_test_util
-    velox_flag_definitions
-    Folly::folly
-    glog::glog
-    GTest::gtest
-    GTest::gtest_main
+
+set(
+  VELOX_CACHE_TEST_DEPS
+  velox_caching
+  velox_file
+  velox_file_test_utils
+  velox_memory
+  velox_test_util
+  velox_flag_definitions
+  Folly::folly
+  glog::glog
+  GTest::gtest
+  GTest::gtest_main
+)
+
+velox_add_grouped_tests(
+  PREFIX velox_cache_test
+  SOURCES ${VELOX_CACHE_TEST_SOURCES}
+  DEPS ${VELOX_CACHE_TEST_DEPS}
 )
 
 add_executable(cached_factory_test CachedFactoryTest.cpp)

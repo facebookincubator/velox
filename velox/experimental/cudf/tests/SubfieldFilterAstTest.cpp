@@ -403,6 +403,73 @@ TEST_F(SubfieldFilterAstTest, Int32SingleValueOutOfRange) {
   testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
+// Single value at the exact type boundary (INT32_MAX on INTEGER column).
+// The value is representable so the filter should match.
+TEST_F(SubfieldFilterAstTest, Int32SingleValueAtMax) {
+  const std::string columnName = "c0";
+  auto rowType = ROW({{columnName, INTEGER()}});
+  const int64_t value = std::numeric_limits<int32_t>::max();
+  auto filter = std::make_unique<common::BigintRange>(
+      value, value, /*nullAllowed*/ false);
+
+  common::Subfield subfield(columnName);
+  cudf::ast::tree tree;
+  std::vector<std::unique_ptr<cudf::scalar>> scalars;
+  const auto& expr =
+      createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
+
+  EXPECT_GT(tree.size(), 0UL);
+  EXPECT_EQ(scalars.size(), 1UL)
+      << "Single value at INT32_MAX should create 1 scalar for equality";
+
+  auto vec = makeTestVector(rowType, 100);
+  testFilterExecution(rowType, columnName, *filter, vec, expr);
+}
+
+// Single value at the exact type boundary (INT32_MIN on INTEGER column).
+TEST_F(SubfieldFilterAstTest, Int32SingleValueAtMin) {
+  const std::string columnName = "c0";
+  auto rowType = ROW({{columnName, INTEGER()}});
+  const int64_t value = std::numeric_limits<int32_t>::min();
+  auto filter = std::make_unique<common::BigintRange>(
+      value, value, /*nullAllowed*/ false);
+
+  common::Subfield subfield(columnName);
+  cudf::ast::tree tree;
+  std::vector<std::unique_ptr<cudf::scalar>> scalars;
+  const auto& expr =
+      createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
+
+  EXPECT_GT(tree.size(), 0UL);
+  EXPECT_EQ(scalars.size(), 1UL)
+      << "Single value at INT32_MIN should create 1 scalar for equality";
+
+  auto vec = makeTestVector(rowType, 100);
+  testFilterExecution(rowType, columnName, *filter, vec, expr);
+}
+
+// Single value at TINYINT boundary (127 on TINYINT column).
+TEST_F(SubfieldFilterAstTest, TinyIntSingleValueAtMax) {
+  const std::string columnName = "c0";
+  auto rowType = ROW({{columnName, TINYINT()}});
+  const int64_t value = std::numeric_limits<int8_t>::max();
+  auto filter = std::make_unique<common::BigintRange>(
+      value, value, /*nullAllowed*/ false);
+
+  common::Subfield subfield(columnName);
+  cudf::ast::tree tree;
+  std::vector<std::unique_ptr<cudf::scalar>> scalars;
+  const auto& expr =
+      createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
+
+  EXPECT_GT(tree.size(), 0UL);
+  EXPECT_EQ(scalars.size(), 1UL)
+      << "Single value at INT8_MAX should create 1 scalar for equality";
+
+  auto vec = makeTestVector(rowType, 100);
+  testFilterExecution(rowType, columnName, *filter, vec, expr);
+}
+
 // Type boundary tests
 TEST_F(SubfieldFilterAstTest, IntegerOverflowBounds) {
   const std::string columnName = "c0";
@@ -688,5 +755,257 @@ INSTANTIATE_TEST_SUITE_P(
     [](const ::testing::TestParamInfo<IntInListCase>& info) {
       return std::string(info.param.name);
     });
+
+struct BigintMultiRangeCase {
+  TypeKind kind;
+  std::vector<std::pair<int64_t, int64_t>> ranges;
+  const char* name;
+};
+
+class BigintMultiRangeParamTest
+    : public SubfieldFilterAstTest,
+      public ::testing::WithParamInterface<BigintMultiRangeCase> {};
+
+TEST_P(BigintMultiRangeParamTest, BigintMultiRange) {
+  const auto& p = GetParam();
+  const std::string columnName = "c0";
+  auto rowType = ROW({{columnName, buildTypeForKind(p.kind)}});
+
+  std::vector<std::unique_ptr<common::BigintRange>> ranges;
+  for (const auto& [lower, upper] : p.ranges) {
+    ranges.push_back(
+        std::make_unique<common::BigintRange>(
+            lower, upper, /*nullAllowed*/ false));
+  }
+  auto filter = std::make_unique<common::BigintMultiRange>(
+      std::move(ranges), /*nullAllowed*/ false);
+
+  common::Subfield subfield(columnName);
+  cudf::ast::tree tree;
+  std::vector<std::unique_ptr<cudf::scalar>> scalars;
+  const auto& expr =
+      createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
+
+  ASSERT_GT(tree.size(), 0UL);
+  // Each range needs 2 scalars (lower and upper bound).
+  EXPECT_EQ(scalars.size(), p.ranges.size() * 2);
+
+  auto vec = makeTestVector(rowType, 100);
+  testFilterExecution(rowType, columnName, *filter, vec, expr);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    BigintMultiRange,
+    BigintMultiRangeParamTest,
+    ::testing::Values(
+        BigintMultiRangeCase{TypeKind::BIGINT, {{1, 5}, {10, 20}}, "Bigint"},
+        BigintMultiRangeCase{TypeKind::INTEGER, {{5, 15}, {20, 30}}, "Integer"},
+        BigintMultiRangeCase{
+            TypeKind::SMALLINT,
+            {{1, 100}, {200, 300}},
+            "SmallInt"},
+        BigintMultiRangeCase{
+            TypeKind::TINYINT,
+            {{-100, -50}, {10, 50}},
+            "TinyInt"},
+        BigintMultiRangeCase{
+            TypeKind::BIGINT,
+            {{1, 10}, {20, 30}, {50, 60}},
+            "ThreeRanges"}),
+    [](const ::testing::TestParamInfo<BigintMultiRangeCase>& info) {
+      return std::string(info.param.name);
+    });
+
+// MultiRange tests (FilterKind::kMultiRange)
+// MultiRange wraps arbitrary sub-filters with OR semantics. Common use case:
+// not-equal predicates represented as (< X) OR (> X).
+TEST_F(SubfieldFilterAstTest, MultiRangeDoubleNotEqual) {
+  const std::string columnName = "c0";
+  auto rowType = ROW({{columnName, DOUBLE()}});
+
+  // Create "!= 5.0" which is represented as (< 5.0) OR (> 5.0)
+  std::vector<std::unique_ptr<common::Filter>> filters;
+  // Range: (-inf, 5.0) exclusive
+  filters.push_back(
+      std::make_unique<common::DoubleRange>(
+          std::numeric_limits<double>::lowest(),
+          /*lowerUnbounded*/ true,
+          /*lowerExclusive*/ false,
+          5.0,
+          /*upperUnbounded*/ false,
+          /*upperExclusive*/ true,
+          /*nullAllowed*/ false));
+  // Range: (5.0, +inf) exclusive
+  filters.push_back(
+      std::make_unique<common::DoubleRange>(
+          5.0,
+          /*lowerUnbounded*/ false,
+          /*lowerExclusive*/ true,
+          std::numeric_limits<double>::max(),
+          /*upperUnbounded*/ true,
+          /*upperExclusive*/ false,
+          /*nullAllowed*/ false));
+  auto filter = std::make_unique<common::MultiRange>(
+      std::move(filters), /*nullAllowed*/ false);
+
+  common::Subfield subfield(columnName);
+  cudf::ast::tree tree;
+  std::vector<std::unique_ptr<cudf::scalar>> scalars;
+  const auto& expr =
+      createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
+
+  ASSERT_GT(tree.size(), 0UL) << "No expressions created for MultiRange";
+  // Each range has one bounded side, so 2 scalars total
+  EXPECT_EQ(scalars.size(), 2UL)
+      << "Expected 2 scalars for double != filter (< 5.0 OR > 5.0)";
+
+  auto vec = makeTestVector(rowType, 100);
+  testFilterExecution(rowType, columnName, *filter, vec, expr);
+}
+
+TEST_F(SubfieldFilterAstTest, MultiRangeBytesNotEqual) {
+  const std::string columnName = "c0";
+  auto rowType = ROW({{columnName, VARCHAR()}});
+
+  // Create "!= 'hello'" which is represented as (< 'hello') OR (> 'hello')
+  std::vector<std::unique_ptr<common::Filter>> filters;
+  // Range: (-inf, 'hello') exclusive
+  filters.push_back(
+      std::make_unique<common::BytesRange>(
+          "",
+          /*lowerUnbounded*/ true,
+          /*lowerExclusive*/ false,
+          "hello",
+          /*upperUnbounded*/ false,
+          /*upperExclusive*/ true,
+          /*nullAllowed*/ false));
+  // Range: ('hello', +inf) exclusive
+  filters.push_back(
+      std::make_unique<common::BytesRange>(
+          "hello",
+          /*lowerUnbounded*/ false,
+          /*lowerExclusive*/ true,
+          "",
+          /*upperUnbounded*/ true,
+          /*upperExclusive*/ false,
+          /*nullAllowed*/ false));
+  auto filter = std::make_unique<common::MultiRange>(
+      std::move(filters), /*nullAllowed*/ false);
+
+  common::Subfield subfield(columnName);
+  cudf::ast::tree tree;
+  std::vector<std::unique_ptr<cudf::scalar>> scalars;
+  const auto& expr =
+      createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
+
+  ASSERT_GT(tree.size(), 0UL) << "No expressions created for BytesRange";
+  EXPECT_EQ(scalars.size(), 2UL)
+      << "Expected 2 scalars for bytes != filter (< 'hello' OR > 'hello')";
+
+  // Create test data with known values
+  auto strings = makeFlatVector<std::string>(std::vector<std::string>{
+      "alpha", "hello", "world", "hello", "zebra", "apple"});
+  auto vec = makeRowVector({columnName}, {strings});
+  testFilterExecution(rowType, columnName, *filter, vec, expr);
+}
+
+TEST_F(SubfieldFilterAstTest, MultiRangeSingleFilter) {
+  const std::string columnName = "c0";
+  auto rowType = ROW({{columnName, DOUBLE()}});
+
+  // Single filter in MultiRange: just (> 10.0)
+  std::vector<std::unique_ptr<common::Filter>> filters;
+  filters.push_back(
+      std::make_unique<common::DoubleRange>(
+          10.0,
+          /*lowerUnbounded*/ false,
+          /*lowerExclusive*/ true,
+          std::numeric_limits<double>::max(),
+          /*upperUnbounded*/ true,
+          /*upperExclusive*/ false,
+          /*nullAllowed*/ false));
+  auto filter = std::make_unique<common::MultiRange>(
+      std::move(filters), /*nullAllowed*/ false);
+
+  common::Subfield subfield(columnName);
+  cudf::ast::tree tree;
+  std::vector<std::unique_ptr<cudf::scalar>> scalars;
+  const auto& expr =
+      createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
+
+  ASSERT_GT(tree.size(), 0UL)
+      << "No expressions created for single-filter case";
+  EXPECT_EQ(scalars.size(), 1UL)
+      << "Expected 1 scalar for single bounded range";
+
+  auto vec = makeTestVector(rowType, 100);
+  testFilterExecution(rowType, columnName, *filter, vec, expr);
+}
+
+TEST_F(SubfieldFilterAstTest, MultiRangeMixedFilters) {
+  const std::string columnName = "c0";
+  auto rowType = ROW({{columnName, REAL()}});
+
+  // Multiple float ranges: [0.0, 1.0] OR [5.0, 10.0] OR [20.0, 30.0]
+  std::vector<std::unique_ptr<common::Filter>> filters;
+  filters.push_back(
+      std::make_unique<common::FloatRange>(
+          0.0f,
+          /*lowerUnbounded*/ false,
+          /*lowerExclusive*/ false,
+          1.0f,
+          /*upperUnbounded*/ false,
+          /*upperExclusive*/ false,
+          /*nullAllowed*/ false));
+  filters.push_back(
+      std::make_unique<common::FloatRange>(
+          5.0f,
+          /*lowerUnbounded*/ false,
+          /*lowerExclusive*/ false,
+          10.0f,
+          /*upperUnbounded*/ false,
+          /*upperExclusive*/ false,
+          /*nullAllowed*/ false));
+  filters.push_back(
+      std::make_unique<common::FloatRange>(
+          20.0f,
+          /*lowerUnbounded*/ false,
+          /*lowerExclusive*/ false,
+          30.0f,
+          /*upperUnbounded*/ false,
+          /*upperExclusive*/ false,
+          /*nullAllowed*/ false));
+  auto filter = std::make_unique<common::MultiRange>(
+      std::move(filters), /*nullAllowed*/ false);
+
+  common::Subfield subfield(columnName);
+  cudf::ast::tree tree;
+  std::vector<std::unique_ptr<cudf::scalar>> scalars;
+  const auto& expr =
+      createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
+
+  ASSERT_GT(tree.size(), 0UL) << "No expressions created for mixed filters";
+  // Each bounded range has 2 scalars, so 6 total
+  EXPECT_EQ(scalars.size(), 6UL)
+      << "Expected 6 scalars for three bounded float ranges";
+
+  auto vec = makeTestVector(rowType, 100);
+  testFilterExecution(rowType, columnName, *filter, vec, expr);
+}
+
+TEST_F(SubfieldFilterAstTest, EmptyMultiRangeThrows) {
+  auto rowType = ROW({{"c0", DOUBLE()}});
+
+  // MultiRange with empty filter list should throw.
+  auto filter = std::make_unique<common::MultiRange>(
+      std::vector<std::unique_ptr<common::Filter>>{}, /*nullAllowed*/ false);
+
+  common::Subfield subfield("c0");
+  cudf::ast::tree tree;
+  std::vector<std::unique_ptr<cudf::scalar>> scalars;
+  EXPECT_THROW(
+      createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType),
+      VeloxException);
+}
 
 } // namespace

@@ -1648,6 +1648,133 @@ TEST_F(ParquetTableScanTest, reusedLazyVectors) {
       .assertResults(expectedRowVector);
 }
 
+// Verify that entire Parquet files are pruned based on file-level column
+// statistics when the filter eliminates all data in the file.
+TEST_F(ParquetTableScanTest, statsBasedFileSkipping) {
+  WriterOptions options;
+  std::vector<std::string> filePaths;
+  std::vector<RowVectorPtr> dataVectors;
+  const vector_size_t numRows = 100;
+  filePaths.push_back(TempFilePath::create()->getPath());
+  dataVectors.push_back(makeRowVector(
+      {"c0", "c1", "c2"},
+      {
+          makeFlatVector<int64_t>(numRows, [](auto row) { return row; }),
+          makeFlatVector<double>(
+              numRows, [](auto row) { return static_cast<double>(row); }),
+          makeFlatVector<StringView>(
+              numRows,
+              [](auto row) {
+                static std::vector<StringView> values = {"a", "b", "c", "d"};
+                return values[row % values.size()];
+              }),
+      }));
+  // File 1: integers [0, 99], doubles [0.0, 99.0], strings ["a".."d"].
+  writeToParquetFile(filePaths.back(), dataVectors, options);
+
+  filePaths.push_back(TempFilePath::create()->getPath());
+  dataVectors.push_back(makeRowVector(
+      {"c0", "c1", "c2"},
+      {
+          makeFlatVector<int64_t>(numRows, [](auto row) { return row + 200; }),
+          makeFlatVector<double>(numRows, [](auto row) { return row + 200; }),
+          makeFlatVector<StringView>(
+              numRows,
+              [](auto row) {
+                static std::vector<StringView> values = {"p", "q", "r", "s"};
+                return values[row % values.size()];
+              }),
+      }));
+  // File 2: integers [200, 299], doubles [200.0, 299.0], strings ["p".."s"].
+  writeToParquetFile(filePaths.back(), {dataVectors.back()}, options);
+
+  createDuckDbTable(dataVectors);
+
+  auto makeSplits = [&]() {
+    std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
+    for (const auto& path : filePaths) {
+      splits.push_back(makeSplit(path));
+    }
+    return splits;
+  };
+
+  auto testFileSkipping = [&](const std::string& filter,
+                              int32_t expectedSkipped,
+                              int32_t expectedProcessed) {
+    SCOPED_TRACE(filter);
+    auto plan = PlanBuilder(pool_.get())
+                    .tableScan(dataVectors.back()->rowType(), {filter})
+                    .planNode();
+    auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                    .splits(makeSplits())
+                    .assertResults("SELECT * FROM tmp WHERE " + filter);
+    auto stats =
+        task->taskStats().pipelineStats[0].operatorStats[0].runtimeStats;
+    EXPECT_EQ(stats["skippedSplits"].sum, expectedSkipped);
+    EXPECT_EQ(stats["processedSplits"].sum, expectedProcessed);
+  };
+
+  // Neither file has values > 1000, both files skipped.
+  testFileSkipping("c0 > 1000", 2, 0);
+  // Neither file has values < 0, both files skipped.
+  testFileSkipping("c0 < 0", 2, 0);
+  // Low-range file (max=99) is skipped, high-range file is read.
+  testFileSkipping("c0 >= 200", 1, 1);
+  // High-range file (min=200) is skipped, low-range file is read.
+  testFileSkipping("c0 <= 99", 1, 1);
+  // Double column: both files skipped.
+  testFileSkipping("c1 > 500.0", 2, 0);
+  // String column: low-range has ["a".."d"], high-range has ["p".."s"], both
+  // skipped.
+  testFileSkipping("c2 = 'z'", 2, 0);
+  // Matches both files, no files skipped.
+  testFileSkipping("c0 >= 0", 0, 2);
+}
+
+TEST_F(ParquetTableScanTest, fileFormatRuntimeStats) {
+  auto rowType = ROW({"a", "b"}, {BIGINT(), DOUBLE()});
+  auto vector = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int64_t>(100, [](auto row) { return row; }),
+          makeFlatVector<double>(100, [](auto row) { return row * 1.5; }),
+      });
+  std::vector<RowVectorPtr> vectors = {vector};
+
+  // Write one Parquet file and one DWRF file.
+  auto parquetFile = TempFilePath::create();
+  WriterOptions parquetOptions;
+  parquetOptions.memoryPool = rootPool_.get();
+  writeToParquetFile(parquetFile->getPath(), vectors, parquetOptions);
+
+  auto dwrfFile = TempFilePath::create();
+  writeToFile(dwrfFile->getPath(), vectors);
+
+  // DuckDB reference table with data from both files.
+  std::vector<RowVectorPtr> allVectors = {vector, vector};
+  createDuckDbTable(allVectors);
+
+  auto parquetSplit = makeHiveConnectorSplits(
+      parquetFile->getPath(), 1, dwio::common::FileFormat::PARQUET);
+  auto dwrfSplit = makeHiveConnectorSplits(
+      dwrfFile->getPath(), 1, dwio::common::FileFormat::DWRF);
+
+  auto plan = PlanBuilder().tableScan(asRowType(vectors[0]->type())).planNode();
+
+  auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                  .splits({parquetSplit[0], dwrfSplit[0]})
+                  .assertResults("SELECT * FROM tmp");
+
+  auto stats = task->taskStats().pipelineStats[0].operatorStats[0].runtimeStats;
+  ASSERT_EQ(stats.count("fileFormat.parquet"), 1);
+  ASSERT_EQ(stats.at("fileFormat.parquet").sum, 1);
+  ASSERT_EQ(stats.count("fileFormat.dwrf"), 1);
+  ASSERT_EQ(stats.at("fileFormat.dwrf").sum, 1);
+
+  task.reset();
+  waitForAllTasksToBeDeleted();
+}
+
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   folly::Init init{&argc, &argv, false};

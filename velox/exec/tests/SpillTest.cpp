@@ -79,6 +79,10 @@ struct TestParam {
   }
 };
 
+inline void PrintTo(const TestParam& param, std::ostream* os) {
+  *os << param.toString();
+}
+
 class SpillTest : public ::testing::TestWithParam<uint32_t>,
                   public facebook::velox::test::VectorTestBase {
  public:
@@ -129,7 +133,7 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
       facebook::velox::serializer::presto::PrestoVectorSerde::
           registerVectorSerde();
     }
-    if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kPresto)) {
+    if (!isRegisteredNamedVectorSerde("Presto")) {
       facebook::velox::serializer::presto::PrestoVectorSerde::
           registerNamedVectorSerde();
     }

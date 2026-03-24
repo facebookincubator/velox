@@ -56,18 +56,15 @@ int main(int argc, char** argv) {
   folly::Init init(&argc, &argv);
 
   facebook::velox::functions::prestosql::registerInternalFunctions();
-  if (!isRegisteredNamedVectorSerde(
-          facebook::velox::VectorSerde::Kind::kPresto)) {
+  if (!facebook::velox::isRegisteredNamedVectorSerde("Presto")) {
     facebook::velox::serializer::presto::PrestoVectorSerde::
         registerNamedVectorSerde();
   }
-  if (!isRegisteredNamedVectorSerde(
-          facebook::velox::VectorSerde::Kind::kCompactRow)) {
+  if (!facebook::velox::isRegisteredNamedVectorSerde("CompactRow")) {
     facebook::velox::serializer::CompactRowVectorSerde::
         registerNamedVectorSerde();
   }
-  if (!isRegisteredNamedVectorSerde(
-          facebook::velox::VectorSerde::Kind::kUnsafeRow)) {
+  if (!facebook::velox::isRegisteredNamedVectorSerde("UnsafeRow")) {
     facebook::velox::serializer::spark::UnsafeRowVectorSerde::
         registerNamedVectorSerde();
   }
@@ -78,6 +75,9 @@ int main(int argc, char** argv) {
   // following names.
   std::unordered_set<std::string> skipFunctions = {
       "bloom_filter_agg",
+      // Velox registers a 2-arg collect_set(T, boolean) signature that Spark
+      // doesn't support. The fuzzer may pick this signature and fail.
+      "collect_set",
       "first_ignore_null",
       "last_ignore_null",
       "regr_replacement",
