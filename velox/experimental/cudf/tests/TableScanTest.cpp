@@ -294,7 +294,7 @@ TEST_P(TableScanTestParameterized, allColumnsUsingExperimentalReader) {
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    UseBufferedInput,
+    ,
     TableScanTestParameterized,
     testing::Bool(),
     [](const testing::TestParamInfo<bool>& info) {
