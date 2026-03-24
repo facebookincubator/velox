@@ -224,7 +224,7 @@ TEST_P(TableScanTestParameterized, allColumns) {
   resetCudfHiveConnector(
       std::make_shared<config::ConfigBase>(std::move(config)));
 
-  // Test scan all columns with file data source (kUseBufferedInput=false)
+  // Test scan all columns with CudfHiveConnectorSplits
   {
     auto splits = makeCudfHiveConnectorSplits({filePath});
     testScanAllColumns(splits);
