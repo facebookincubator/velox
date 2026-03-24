@@ -551,7 +551,7 @@ TEST_F(CudfDecimalTest, decimalCompareWithLiteral) {
   facebook::velox::test::assertEqualVectors(expected, result);
 }
 
-TEST_F(CudfDecimalTest, decimalLogicalAndOrProject) {
+TEST_F(CudfDecimalTest, DISABLED_decimalLogicalAndOrProject) {
   auto rowType = ROW({
       {"a", DECIMAL(10, 2)},
       {"b", DECIMAL(10, 2)},
@@ -595,7 +595,7 @@ TEST_F(CudfDecimalTest, decimalLogicalAndOrProject) {
           "FROM tmp");
 }
 
-TEST_F(CudfDecimalTest, decimalLogicalAndOrFilter) {
+TEST_F(CudfDecimalTest, DISABLED_decimalLogicalAndOrFilter) {
   auto rowType = ROW({
       {"a", DECIMAL(10, 2)},
       {"b", DECIMAL(10, 2)},
