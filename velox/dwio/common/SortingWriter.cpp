@@ -86,21 +86,12 @@ bool SortingWriter::finish() {
   return true;
 }
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-void SortingWriter::close() {
-  VELOX_CHECK(isFinishing());
-  setState(State::kClosed);
-  VELOX_CHECK_NULL(sortBuffer_);
-  outputWriter_->close();
-}
-#else
 std::unique_ptr<FileMetadata> SortingWriter::close() {
   VELOX_CHECK(isFinishing());
   setState(State::kClosed);
   VELOX_CHECK_NULL(sortBuffer_);
   return outputWriter_->close();
 }
-#endif
 
 void SortingWriter::abort() {
   setState(State::kAborted);

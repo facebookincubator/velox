@@ -27,6 +27,7 @@ add_executable(
   UuidTypeTest.cpp
   IPAddressTypeTest.cpp
   IPPrefixTypeTest.cpp
+  PrestoTypeSqlTest.cpp
 )
 
 if(VELOX_ENABLE_GEO)

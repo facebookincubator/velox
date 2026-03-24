@@ -43,6 +43,10 @@ velox_link_libraries(
   Folly::folly
 )
 
+if(VELOX_ENABLE_PARQUET)
+  velox_link_libraries(velox_hive_iceberg_splitreader velox_dwio_arrow_parquet_writer)
+endif()
+
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()

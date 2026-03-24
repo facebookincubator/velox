@@ -59,6 +59,7 @@ Generic Configuration
      - 0
      - Abandons building a HashTable without duplicates in HashBuild for left semi/anti join if the percentage of
        distinct keys in the HashTable exceeds this threshold. Zero means 'disable this optimization'.
+       Does not apply to counting joins (kCountingAnti, kCountingLeftSemiFilter) which always require deduplication.
    * - session_timezone
      - string
      -

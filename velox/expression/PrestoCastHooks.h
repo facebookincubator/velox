@@ -67,6 +67,10 @@ class PrestoCastHooks : public CastHooks {
 
   PolicyType getPolicy() const override;
 
+  bool isScientific() const override {
+    return false;
+  }
+
  private:
   const bool legacyCast_;
   TimestampToStringOptions options_ = {

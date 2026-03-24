@@ -57,6 +57,7 @@ are summarized below.
   - ❌ `// A simple counter.` above `size_t count_{0};`
 - Avoid redundant comments that repeat what the code already says. Comments should explain *why*, not *what*.
 - Use `// TODO: Description.` for future work. Do not include author's username.
+- Do not duplicate comments between `.h` and `.cpp`. Document the function in the header; the implementation should not repeat the same comment. Duplicated comments diverge over time.
 
 ### Naming Conventions
 
@@ -68,6 +69,11 @@ are summarized below.
 - **kPascalCase** for static constants and enumerators.
 - Do not abbreviate. Use full, descriptive names. Well-established abbreviations (`id`, `url`, `sql`, `expr`) are acceptable.
 - Prefer `numXxx` over `xxxCount` (e.g. `numRows`, `numKeys`).
+- Never name a file or class `*Utils`, `*Helpers`, or `*Common`. These generic
+  names attract unrelated functions over time and lose cohesion. Name files and
+  classes after the concept they represent. Use a class with static methods to
+  group related operations, and shorten method names since the class name
+  provides context.
 
 ### Asserts and CHECKs
 
@@ -86,13 +92,18 @@ are summarized below.
 - Use uniform initialization: `size_t size{0}` over `size_t size = 0`.
 - Declare variables in the smallest scope, as close to usage as possible.
 - Use digit separators (`'`) for numeric literals with 4 or more digits: `10'000`, not `10000`.
+- Use trailing commas in multi-line initializer lists, enum definitions, and
+  function-call argument lists that span multiple lines. This produces cleaner
+  diffs when items are added or reordered.
 
 ### API Design
 
 - Keep the public API surface small.
 - Prefer free functions in `.cpp` (anonymous namespace) over private/static class methods.
+- Define free functions close to where they are used, not grouped together at the top or bottom of the file.
 - Keep method implementations in `.cpp` except for trivial one-liners.
 - Avoid default arguments when all callers can pass values explicitly.
+- Never use `friend`, `FRIEND_TEST`, or any friend declarations. If a test needs access to private members, redesign the API or test through public methods instead.
 
 ### Tests
 
@@ -119,6 +130,23 @@ Common matchers:
 - `SizeIs(n)` - collection has n elements
 
 Requires `#include <gmock/gmock.h>`.
+
+## Common Mistakes
+
+These are frequently violated rules. Check every new or modified line against
+this list before finishing.
+
+- **Bug fixes without a failing test first.** Write the test first, confirm it fails, then fix. A test that passes with and without the fix proves nothing.
+- **`///` vs `//` wrong comment style.** `///` is only for public API in headers. Everything else uses `//`.
+- **One-letter and abbreviated variable names.** Use full, descriptive names. Only loop indices (`i`, `j`) are acceptable.
+- **Undocumented APIs in headers.** Every class, method, and member variable in a `.h` file must have a comment.
+- **Non-trivial implementations in headers.** If a method body has more than one statement, it belongs in the `.cpp` file.
+- **`goto` statements.** Never use `goto`. Use early returns, helper functions, or duplicated code paths.
+- **Fitting tests to buggy code.** Never update test expectations to match buggy output without verifying correctness first.
+- **Generic file and class names.** Never name a file or class `*Utils`, `*Helpers`, or `*Common`.
+- **Verify causation before asserting it.** Do not attribute failures to a commit based on its message alone. Verify empirically.
+- **Silently simplifying an approved plan.** If a step is harder than expected, say so and get approval before reducing scope.
+- **Working around infrastructure bugs.** Do not silently work around bugs in shared infrastructure. Report and discuss.
 
 ## Design Documents
 

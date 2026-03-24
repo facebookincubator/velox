@@ -439,6 +439,9 @@ TEST_F(MapFromEntriesTest, unknownInputs) {
   test("try(map_from_entries(array_constructor(row_constructor(null, null))))");
   test("try(map_from_entries(array_constructor(null)))");
   test("try(map_from_entries(null))");
+
+  // Empty array of unknown type should produce an empty map without error.
+  test("map_from_entries(array_constructor())");
 }
 
 TEST_F(MapFromEntriesTest, nullRowEntriesWithSmallerChildren) {

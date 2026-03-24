@@ -62,11 +62,7 @@ class TextWriter : public dwio::common::Writer {
     return true;
   }
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  void close() override;
-#else
   std::unique_ptr<dwio::common::FileMetadata> close() override;
-#endif
 
   void abort() override;
 

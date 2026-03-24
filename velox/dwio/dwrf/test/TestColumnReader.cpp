@@ -311,6 +311,10 @@ struct ReaderTestParams {
   }
 };
 
+inline void PrintTo(const ReaderTestParams& param, std::ostream* os) {
+  *os << param.toString();
+}
+
 class TestColumnReader : public testing::TestWithParam<ReaderTestParams>,
                          public ColumnReaderTestBase {
  protected:
@@ -370,6 +374,12 @@ struct NonSelectiveReaderTestParams {
   }
 };
 
+inline void PrintTo(
+    const NonSelectiveReaderTestParams& param,
+    std::ostream* os) {
+  *os << param.toString();
+}
+
 // For test cases where SelectiveColumnReader does not have support.
 class TestNonSelectiveColumnReader
     : public testing::TestWithParam<NonSelectiveReaderTestParams>,
@@ -422,6 +432,10 @@ struct SchemaMismatchTestParam {
     return out.str();
   }
 };
+
+inline void PrintTo(const SchemaMismatchTestParam& param, std::ostream* os) {
+  *os << param.toString();
+}
 
 class SchemaMismatchTest : public TestWithParam<SchemaMismatchTestParam>,
                            public ColumnReaderTestBase {

@@ -56,6 +56,7 @@ set(
   FilterToExpressionTest.cpp
   FunctionResolutionTest.cpp
   HashBitRangeTest.cpp
+  CountingJoinTest.cpp
   HashJoinBridgeTest.cpp
   HashJoinTest.cpp
   HashPartitionFunctionTest.cpp

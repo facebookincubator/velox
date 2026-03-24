@@ -307,6 +307,33 @@ Map Aggregate Functions
     Returns the union of all the input maps summing the values of matching keys in all
     the maps. All null values in the original maps are coalesced to 0.
 
+Array Aggregate Functions
+-------------------------
+
+.. function:: vector_sum(array(T)) -> array(T)
+
+    Returns the element-wise sum of all input arrays. Equivalent to
+    ``ARRAY[SUM(a[1]), SUM(a[2]), ...]``, with the same null-handling
+    semantics as :func:`sum`: null elements are skipped, and positions
+    where all input values are null produce null in the output.
+    All input arrays must have the same length; an error is raised if
+    arrays of different lengths are encountered.
+    Supported types for T are: TINYINT, SMALLINT, INTEGER, BIGINT, REAL
+    and DOUBLE.
+    For integer types, arithmetic overflow results in an error,
+    consistent with the behavior of :func:`sum`. For floating-point
+    types (REAL, DOUBLE), NaN values propagate through the sum and
+    overflow produces Infinity, following standard IEEE 754 semantics.
+
+    This is useful when rows contain fixed-dimension vectors (e.g.
+    embedding vectors or feature arrays) and you need to compute a
+    component-wise sum across all rows::
+
+        SELECT vector_sum(embedding) FROM item_embeddings;
+
+        -- With 3 rows: [1, 2, 3], [10, 20, 30], [100, 200, 300]
+        -- Returns:     [111, 222, 333]
+
 Approximate Aggregate Functions
 -------------------------------
 

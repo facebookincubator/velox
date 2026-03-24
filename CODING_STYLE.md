@@ -83,6 +83,28 @@ line width, indentation and ordering (for includes, using directives and etc). 
   code paths, and are not recommended for use in production environments. For
   example, `debug_disable_expression_with_peeling` is used to disable peeling
   optimization employed in expression evaluation.
+* **Never name a file or class `*Utils`, `*Helpers`, or `*Common`.** These
+  generic names attract unrelated functions over time and lose cohesion.
+  Instead, name files and classes after the concept they represent. When
+  extracting shared functions, ask: "What do these functions have in common
+  beyond being useful?" The answer is the name. Use a class with static methods
+  to group related operations, and shorten method names since the class name
+  provides context.
+
+  ```cpp
+  // ❌ Wrong — generic name, will attract unrelated functions.
+  class ParserUtils {
+    static std::vector<size_t> widenProjectionsForSort(...);
+    static void sortAndTrimProjections(...);
+  };
+
+  // ✅ Correct — named after the concept (sorting + projections).
+  class SortProjection {
+    static std::vector<size_t> widenProjections(...);
+    static void sortAndTrim(...);
+  };
+  ```
+
 * **Do not abbreviate** variable, function, or class names. Use full,
   descriptive names. Clarity is more important than brevity.
 
@@ -203,6 +225,10 @@ return result;
 buffer.reserve(1024);
 ```
 
+* **Do not duplicate comments between `.h` and `.cpp`.** Document the function
+  in the header; the implementation should not repeat the same comment.
+  Duplicated comments diverge over time.
+
 ## Asserts and CHECKs
 
 * For assertions and other types of validation, use `VELOX_CHECK_*` macros
@@ -260,6 +286,9 @@ buffer.reserve(1024);
   * `int* foo;` `const Bar& bar;` NOT `int *foo;` `const Bar &bar`;
   * Beware that `int* foo, bar;` will be parsed as declaring `foo` as an `int*`
     and `bar` as an `int`. Note that multiple declaration is discouraged.
+* Use trailing commas in multi-line initializer lists, enum definitions, and
+  function-call argument lists that span multiple lines. This produces cleaner
+  diffs when items are added or reordered.
 * For member variables:
   * Group member variable and methods based on their visibility (public,
     protected and private)
@@ -484,9 +513,14 @@ using ContinuePromise = VeloxPromise<bool>;
   need access to class state or doesn't need to be called from outside the
   translation unit, make it a free function (typically in an anonymous
   namespace) rather than a static or private method.
+* **Define free functions close to where they are used**, not grouped together
+  at the top or bottom of the file.
 * **Keep method implementations in .cpp.** Except for trivial one-liners,
   define methods in the .cpp file to keep headers small and reduce build times.
 * **Avoid default arguments** when all callers can pass values explicitly.
+* **Never use `friend`, `FRIEND_TEST`, or any friend declarations.** If a test
+  needs access to private members, redesign the API or test through public
+  methods instead.
 
 ## Tests
 
@@ -515,3 +549,114 @@ using ContinuePromise = VeloxPromise<bool>;
   * `SizeIs(n)` - collection has n elements
 
   Requires `#include <gmock/gmock.h>`.
+
+## Common Mistakes
+
+These are frequently violated rules. Check every new or modified line against
+this list before finishing.
+
+### Bug fixes without a failing test first
+
+When fixing a bug, write the test **first**, run it, and confirm it **fails**
+before applying the fix. Then apply the fix and confirm the test passes. If you
+wrote the test after the fix, temporarily revert the fix and verify the test
+fails. A test that passes both with and without the fix proves nothing. This is
+the single most important workflow rule for bug fixes.
+
+### `///` vs `//` — wrong comment style
+
+`///` is **only** for public API: public classes, public methods, public member
+variables. Everything else uses `//`: private/protected members, anonymous
+namespace functions and types, comments inside function bodies.
+
+```cpp
+// ❌ Wrong — anonymous-namespace function is not public API.
+namespace {
+/// Returns true if 'a' is a prefix of 'b'.
+bool isPrefix(const ExprVector& a, const ExprVector& b);
+} // namespace
+
+// ✅ Correct.
+namespace {
+// Returns true if 'a' is a prefix of 'b'.
+bool isPrefix(const ExprVector& a, const ExprVector& b);
+} // namespace
+```
+
+### One-letter and abbreviated variable names
+
+Do not abbreviate. Use full, descriptive names. Loop indices (`i`, `j`) are
+acceptable. Everything else — function parameters, lambda parameters, local
+variables — must be descriptive.
+
+```cpp
+// ❌ Wrong — one-letter names and abbreviations.
+bool sameKeys(const ExprVector& a, const ExprVector& b);
+std::sort(groups.begin(), groups.end(), [](const auto& a, const auto& b) { ... });
+
+// ✅ Correct — descriptive names.
+bool sameKeys(const ExprVector& lhs, const ExprVector& rhs);
+std::sort(groups.begin(), groups.end(), [](const auto& lhs, const auto& rhs) { ... });
+```
+
+### Undocumented APIs in headers
+
+Every class, every non-trivial method declaration, and every member variable in
+a `.h` file must have a comment. Trivial one-liner getters may be left
+undocumented if the name is self-explanatory.
+
+```cpp
+// ❌ Wrong — no comment on method declaration.
+  ExprPtr translate(const PlanNode* node);
+
+// ✅ Correct.
+  // Translates a logical plan node to an executable expression.
+  ExprPtr translate(const PlanNode* node);
+```
+
+### Non-trivial implementations in headers
+
+Keep method implementations in `.cpp` except for trivial one-liners. If a
+method body has more than one statement, it belongs in the `.cpp` file.
+
+### `goto` statements
+
+Never use `goto`. Restructure the code using early returns, helper functions, or
+duplicated code paths instead. `goto` makes control flow hard to follow and is
+never necessary in C++.
+
+### Fitting tests to buggy code
+
+When a test fails, **never** update the test expectation to match what the code
+produces without first verifying that the code is correct. The default
+assumption should be that the code is wrong, not the test.
+
+### Generic file and class names (`*Utils`, `*Helpers`, `*Common`)
+
+Never name a file or class `*Utils`, `*Helpers`, or `*Common`. These generic
+names attract unrelated functions over time and lose cohesion. Instead, name
+files and classes after the concept they represent. When extracting shared
+functions, ask: "What do these functions have in common beyond being useful?"
+The answer is the name.
+
+### Verify causation before asserting it
+
+When investigating a test failure or regression, do not attribute it to a
+specific commit based on the commit message alone. Verify empirically by
+checking out the parent commit and running the test. Incorrect attribution
+leads to wrong fixes — e.g., updating test expectations when the real problem
+is a bug introduced by a different commit.
+
+### Silently simplifying an approved plan
+
+Never silently simplify or skip parts of an approved implementation plan. If a
+step turns out to be harder than expected, or you want to defer it, say so
+explicitly and get approval before proceeding with a reduced scope. Reporting
+"done" when a key piece was dropped is worse than asking for help.
+
+### Working around infrastructure bugs
+
+When you discover a bug in test infrastructure, shared helpers, or common
+utilities, do **not** silently work around it. Stop, report the finding, and
+discuss whether to fix the root cause or work around it. Workarounds accumulate
+into technical debt and mask real problems.

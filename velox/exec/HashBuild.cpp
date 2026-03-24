@@ -242,11 +242,13 @@ void HashBuild::setupTable() {
         dependentTypes,
         true, // allowDuplicates
         true, // hasProbedFlag
+        false, // hasCountFlag
         queryConfig.minTableRowsForParallelJoinBuild(),
         tableMemoryPool());
   } else {
     // Right semi join needs to tag build rows that were probed.
     const bool needProbedFlag = joinNode_->isRightSemiFilterJoin();
+    const bool hasCountFlag = joinNode_->isCountingJoin();
     if (isLeftNullAwareJoinWithFilter(joinNode_)) {
       // We need to check null key rows in build side in case of null-aware anti
       // or left semi project join with filter set.
@@ -255,6 +257,7 @@ void HashBuild::setupTable() {
           dependentTypes,
           !dropDuplicates_, // allowDuplicates
           needProbedFlag, // hasProbedFlag
+          hasCountFlag,
           queryConfig.minTableRowsForParallelJoinBuild(),
           tableMemoryPool());
     } else {
@@ -264,15 +267,16 @@ void HashBuild::setupTable() {
           dependentTypes,
           !dropDuplicates_, // allowDuplicates
           needProbedFlag, // hasProbedFlag
+          hasCountFlag,
           queryConfig.minTableRowsForParallelJoinBuild(),
           tableMemoryPool(),
           queryConfig.hashProbeBloomFilterPushdownMaxSize());
     }
   }
   analyzeKeys_ = table_->hashMode() != BaseHashTable::HashMode::kHash;
-  if (abandonHashBuildDedupMinPct_ == 0) {
+  if (abandonHashBuildDedupMinPct_ == 0 && !joinNode_->isCountingJoin()) {
     // Building a HashTable without duplicates is disabled if
-    // abandonBuildNoDupHashMinPct_ is 0.
+    // abandonBuildNoDupHashMinPct_ is 0. Counting joins always require dedup.
     abandonHashBuildDedup_ = true;
     table_->setAllowDuplicates(true);
     return;
@@ -484,7 +488,9 @@ void HashBuild::addInput(RowVectorPtr input) {
   }
 
   if (dropDuplicates_ && !abandonHashBuildDedup_) {
-    const bool abandonEarly = abandonHashBuildDedupEarly(table_->numDistinct());
+    // Counting joins must not abandon dedup — accurate counts are required.
+    const bool abandonEarly = !joinNode_->isCountingJoin() &&
+        abandonHashBuildDedupEarly(table_->numDistinct());
     if (!abandonEarly) {
       numHashInputRows_ += activeRows_.countSelected();
       table_->prepareForGroupProbe(
@@ -497,6 +503,20 @@ void HashBuild::addInput(RowVectorPtr input) {
       }
       table_->groupProbe(
           *lookup_, BaseHashTable::kNoSpillInputStartPartitionBit);
+
+      // For counting joins, increment the count for duplicate rows.
+      // New rows are initialized with count = 1 by initializeRow.
+      // Increment count for all rows, then decrement for new rows to
+      // correct the over-counting.
+      if (joinNode_->isCountingJoin()) {
+        auto* rows = table_->rows();
+        for (auto row : lookup_->rows) {
+          rows->incrementCount(lookup_->hits[row]);
+        }
+        for (auto newRow : lookup_->newGroups) {
+          rows->decrementCount(lookup_->hits[newRow]);
+        }
+      }
       return;
     }
     abandonHashBuildDedup();
@@ -1241,6 +1261,9 @@ bool HashBuild::canSpill() const {
   // For Cached hash table, we don't support spill either by the
   // task thats building or by the task that is re-using it
   if (useHashTableCache()) {
+    return false;
+  }
+  if (joinNode_->isCountingJoin()) {
     return false;
   }
   if (operatorCtx_->task()->hasMixedExecutionGroupJoin(joinNode_.get())) {
