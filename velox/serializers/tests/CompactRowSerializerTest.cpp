@@ -70,6 +70,8 @@ class CompactRowSerializerTest : public ::testing::Test,
     deregisterNamedVectorSerde("CompactRow");
     serializer::CompactRowVectorSerde::registerVectorSerde();
     serializer::CompactRowVectorSerde::registerNamedVectorSerde();
+    ASSERT_EQ(getVectorSerde()->kind(), "CompactRow");
+    ASSERT_EQ(getNamedVectorSerde("CompactRow")->kind(), "CompactRow");
     appendRow_ = GetParam().appendRow;
     compressionKind_ = GetParam().compressionKind;
     microBatchDeserialize_ = GetParam().microBatchDeserialize;

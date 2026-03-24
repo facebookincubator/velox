@@ -206,6 +206,16 @@ class RowIterator {
 
 class VectorSerde {
  public:
+  enum class Kind {
+    kPresto,
+    kCompactRow,
+    kUnsafeRow,
+  };
+
+  static std::string kindName(Kind type);
+
+  static Kind kindByName(const std::string& name);
+
   virtual ~VectorSerde() = default;
 
   // Lets the caller pass options to the Serde. This can be extended to add
@@ -228,6 +238,10 @@ class VectorSerde {
     /// times compression misses the target the less frequently it is tried.
     float minCompressionRatio{0.8};
   };
+
+  const std::string& kind() const {
+    return kind_;
+  }
 
   virtual void estimateSerializedSize(
       const BaseVector* /*vector*/,
@@ -336,7 +350,14 @@ class VectorSerde {
       const Options* options = nullptr) {
     VELOX_NYI();
   }
+
+ protected:
+  explicit VectorSerde(std::string kind) : kind_(std::move(kind)) {}
+
+  const std::string kind_;
 };
+
+std::ostream& operator<<(std::ostream& out, VectorSerde::Kind kind);
 
 /// Register/deregister the "default" vector serde.
 void registerVectorSerde(std::unique_ptr<VectorSerde> serdeToRegister);
@@ -511,3 +532,12 @@ RowVectorPtr IOBufToRowVector(
     VectorSerde* serde = nullptr);
 
 } // namespace facebook::velox
+
+template <>
+struct fmt::formatter<facebook::velox::VectorSerde::Kind>
+    : formatter<std::string> {
+  auto format(facebook::velox::VectorSerde::Kind s, format_context& ctx) const {
+    return formatter<std::string>::format(
+        facebook::velox::VectorSerde::kindName(s), ctx);
+  }
+};

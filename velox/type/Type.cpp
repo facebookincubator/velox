@@ -1522,6 +1522,22 @@ const auto& timePrecisionNames() {
 
 VELOX_DEFINE_ENUM_NAME(TimePrecision, timePrecisionNames);
 
+namespace {
+
+const auto& typeParameterKindNames() {
+  static const folly::F14FastMap<TypeParameterKind, std::string_view> kNames = {
+      {TypeParameterKind::kType, "kType"},
+      {TypeParameterKind::kLongLiteral, "kLongLiteral"},
+      {TypeParameterKind::kLongEnumLiteral, "kLongEnumLiteral"},
+      {TypeParameterKind::kVarcharEnumLiteral, "kVarcharEnumLiteral"},
+  };
+  return kNames;
+}
+
+} // namespace
+
+VELOX_DEFINE_ENUM_NAME(TypeParameterKind, typeParameterKindNames);
+
 template <TimePrecision kPrecision, bool kLocalTime>
 folly::dynamic TimeType<kPrecision, kLocalTime>::serialize() const {
   folly::dynamic obj = folly::dynamic::object;

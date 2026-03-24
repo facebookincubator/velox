@@ -104,6 +104,11 @@ These stats are reported only by TableScan operator
    * - numRunningScanThreads
      -
      - The number of running table scan drivers.
+   * - fileFormat.<format>
+     -
+     - The number of splits read for each file format (e.g. fileFormat.dwrf,
+       fileFormat.parquet, fileFormat.nimble). Reported per format encountered
+       during the query.
 
 TableWriter
 -----------

@@ -25,6 +25,7 @@
 #include "velox/dwio/parquet/writer/Writer.h"
 #include "velox/dwio/parquet/writer/arrow/Metadata.h"
 #include "velox/dwio/parquet/writer/arrow/Statistics.h"
+#include "velox/type/Type.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
