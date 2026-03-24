@@ -178,6 +178,8 @@ fetchByteRangesAsync(
     cudf::host_span<const cudf::io::text::byte_range_info> byteRanges,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
+  // Static mutex to ensure all IO operations for each driver are enqueued at
+  // once
   static std::mutex mutex;
 
   // Pad buffer sizes to be a multiple of 8 bytes. Required by
@@ -272,14 +274,16 @@ fetchByteRangesAsync(
     chunk = nextChunk;
   }
   VELOX_CHECK(
-      ioOffsets.size() == ioSizes.size() and
-          ioSizes.size() == destinations.size(),
-      "Unexpected number of IO offsets, sizes, or destinations");
+      ioOffsets.size() == ioSizes.size(),
+      "Number of IO offsets and sizes must be equal");
+  VELOX_CHECK(
+      ioSizes.size() == destinations.size(),
+      "Number of IO sizes and destinations must be equal");
 
   std::vector<std::future<size_t>> deviceReadTasks{};
   std::vector<std::future<size_t>> hostReadTasks{};
-  deviceReadTasks.reserve(byteRanges.size());
-  hostReadTasks.reserve(byteRanges.size());
+  deviceReadTasks.reserve(ioOffsets.size());
+  hostReadTasks.reserve(ioOffsets.size());
 
   // device_read_async is not guaranteed to follow stream-ordering (see
   // datasource API docs)
@@ -312,7 +316,7 @@ fetchByteRangesAsync(
                   CUDF_CUDA_TRY(cudaMemcpyAsync(
                       dest,
                       hostBuffer->data(),
-                      ioSize,
+                      hostBuffer->size(),
                       cudaMemcpyHostToDevice,
                       stream.value()));
                   return ioSize;
