@@ -30,6 +30,12 @@ struct ArrowArrayStream;
 
 namespace facebook::velox::core {
 
+/// Direct access to HashTable from HashJoinNode would introduce a dependency
+/// cycle. We resolved this by defining an OpaqueHashTable interface,
+/// effectively decoupling the node logic from the specific table
+/// implementation.
+struct OpaqueHashTable;
+
 class PlanNodeVisitor;
 class PlanNodeVisitorContext;
 
@@ -3302,7 +3308,9 @@ class HashJoinNode : public AbstractJoinNode {
       PlanNodePtr left,
       PlanNodePtr right,
       RowTypePtr outputType,
-      bool useHashTableCache = false)
+      bool useHashTableCache = false,
+      bool joinHasNullKeys = false,
+      std::shared_ptr<OpaqueHashTable> reusableHashTable = nullptr)
       : AbstractJoinNode(
             id,
             joinType,
@@ -3313,7 +3321,9 @@ class HashJoinNode : public AbstractJoinNode {
             std::move(right),
             std::move(outputType)),
         nullAware_{nullAware},
-        useHashTableCache_{useHashTableCache} {
+        useHashTableCache_{useHashTableCache},
+        joinHasNullKeys_{joinHasNullKeys},
+        reusableHashTable_(std::move(reusableHashTable)) {
     validate();
 
     if (isCountingJoin()) {
@@ -3357,6 +3367,17 @@ class HashJoinNode : public AbstractJoinNode {
       return *this;
     }
 
+    Builder& joinHasNullKeys(bool joinHasNullKeys) {
+      joinHasNullKeys_ = joinHasNullKeys;
+      return *this;
+    }
+
+    Builder& reusableHashTable(
+        std::shared_ptr<OpaqueHashTable> opaqueHashTable) {
+      reusableHashTable_ = std::move(opaqueHashTable);
+      return *this;
+    }
+
     std::shared_ptr<HashJoinNode> build() const {
       VELOX_USER_CHECK(id_.has_value(), "HashJoinNode id is not set");
       VELOX_USER_CHECK(
@@ -3384,12 +3405,16 @@ class HashJoinNode : public AbstractJoinNode {
           left_.value(),
           right_.value(),
           outputType_.value(),
-          useHashTableCache_.value_or(false));
+          useHashTableCache_.value_or(false),
+          joinHasNullKeys_.value_or(false),
+          reusableHashTable_.value_or(nullptr));
     }
 
    private:
     std::optional<bool> nullAware_;
     std::optional<bool> useHashTableCache_;
+    std::optional<bool> joinHasNullKeys_;
+    std::optional<std::shared_ptr<OpaqueHashTable>> reusableHashTable_;
   };
 
   std::string_view name() const override {
@@ -3422,6 +3447,14 @@ class HashJoinNode : public AbstractJoinNode {
     return useHashTableCache_;
   }
 
+  bool joinHasNullKeys() const {
+    return joinHasNullKeys_;
+  }
+
+  std::shared_ptr<OpaqueHashTable> reusableHashTable() const {
+    return reusableHashTable_;
+  }
+
   folly::dynamic serialize() const override;
 
   static PlanNodePtr create(const folly::dynamic& obj, void* context);
@@ -3431,6 +3464,8 @@ class HashJoinNode : public AbstractJoinNode {
 
   const bool nullAware_;
   const bool useHashTableCache_;
+  const bool joinHasNullKeys_;
+  std::shared_ptr<OpaqueHashTable> reusableHashTable_;
 };
 
 using HashJoinNodePtr = std::shared_ptr<const HashJoinNode>;
