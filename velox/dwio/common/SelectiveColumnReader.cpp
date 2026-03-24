@@ -294,7 +294,7 @@ void SelectiveColumnReader::getIntValues(
       break;
     case TypeKind::DOUBLE:
       // Only Parquet INT32 (valueSize_==4) widens to DOUBLE. INT64->DOUBLE
-      // is rejected at schema validation time due to precision loss.
+      // is rejected in convertType due to precision loss.
       switch (valueSize_) {
         case 4:
           getFlatValues<int32_t, double>(rows, result, requestedType);
