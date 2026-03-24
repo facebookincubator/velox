@@ -78,6 +78,7 @@ void IcebergSplitReader::prepareSplit(
   baseReadOffset_ = 0;
   splitOffset_ = baseRowReader_->nextRowNumber();
   positionalDeleteFileReaders_.clear();
+  deletionVectorReaders_.clear();
 
   const auto& deleteFiles = icebergSplit->deleteFiles;
   for (const auto& deleteFile : deleteFiles) {
@@ -118,6 +119,12 @@ void IcebergSplitReader::prepareSplit(
       }
     } else if (deleteFile.content == FileContent::kEqualityDeletes) {
       VELOX_NYI("Equality deletes are not yet supported.");
+    } else if (deleteFile.content == FileContent::kDeletionVector) {
+      if (deleteFile.recordCount > 0) {
+        deletionVectorReaders_.push_back(
+            std::make_unique<DeletionVectorReader>(
+                deleteFile, splitOffset_, connectorQueryCtx_->memoryPool()));
+      }
     } else {
       VELOX_NYI(
           "Unsupported delete file content type: {}",
@@ -142,7 +149,8 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
     return 0;
   }
 
-  if (!positionalDeleteFileReaders_.empty()) {
+  if (!positionalDeleteFileReaders_.empty() ||
+      !deletionVectorReaders_.empty()) {
     auto numBytes = bits::nbytes(actualSize);
     dwio::common::ensureCapacity<int8_t>(
         deleteBitmap_, numBytes, connectorQueryCtx_->memoryPool(), false, true);
@@ -153,6 +161,17 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
 
       if ((*iter)->noMoreData()) {
         iter = positionalDeleteFileReaders_.erase(iter);
+      } else {
+        ++iter;
+      }
+    }
+
+    for (auto iter = deletionVectorReaders_.begin();
+         iter != deletionVectorReaders_.end();) {
+      (*iter)->readDeletePositions(baseReadOffset_, actualSize, deleteBitmap_);
+
+      if ((*iter)->noMoreData()) {
+        iter = deletionVectorReaders_.erase(iter);
       } else {
         ++iter;
       }
