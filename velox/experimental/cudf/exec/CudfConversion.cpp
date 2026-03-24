@@ -87,7 +87,7 @@ CudfFromVelox::CudfFromVelox(
           operatorId,
           fmt::format("[{}]", planNodeId)),
       timestampTimeZone_(driverCtx->queryConfig().get<std::string>(
-          QueryConfig::kSessionTimezone)) {}
+          facebook::velox::core::QueryConfig::kSessionTimezone)) {}
 
 void CudfFromVelox::addInput(RowVectorPtr input) {
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
