@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <cudf/types.hpp>
+
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -129,6 +131,8 @@ struct CudfConfig {
   // Register the Spark or Presto functions, the value could be either spark or
   // presto.
   std::string functionEngine{"presto"};
+
+  cudf::type_id timestampUnit = cudf::type_id::TIMESTAMP_NANOSECONDS;
 };
 
 } // namespace facebook::velox::cudf_velox

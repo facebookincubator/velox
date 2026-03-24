@@ -415,6 +415,9 @@ void CudfConfig::initialize(
   }
   if (config.find(kCudfFunctionEngine) != config.end()) {
     functionEngine = config[kCudfFunctionEngine];
+    if (functionEngine == "spark") {
+      timestampUnit = cudf::type_id::TIMESTAMP_MICROSECONDS;
+    }
   }
 }
 
