@@ -1793,6 +1793,105 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoinWithFilterEmptyBatch) {
       .run();
 }
 
+DEBUG_ONLY_TEST_P(HashJoinTest, reuseHashTable) {
+  // Create build and probe vectors.
+  std::vector<RowVectorPtr> buildVectors = makeBatches(1, [&](int32_t) {
+    return makeRowVector(
+        {"u_0"},
+        {
+            makeFlatVector<int64_t>(100, [](auto row) { return row % 23; }),
+        });
+  });
+
+  std::vector<RowVectorPtr> probeVectors = makeBatches(5, [&](int32_t) {
+    return makeRowVector(
+        {"t_0"},
+        {
+            makeFlatVector<int64_t>(100, [](auto row) { return row % 23; }),
+        });
+  });
+
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", buildVectors);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto buildPlanNode =
+      PlanBuilder(planNodeIdGenerator).values(buildVectors).planNode();
+  auto probePlanNode =
+      PlanBuilder(planNodeIdGenerator).values(probeVectors).planNode();
+
+  auto outputType = ROW({"t_0", "u_0"}, {BIGINT(), BIGINT()});
+
+  // Build the HashTable for build side data
+  std::vector<std::unique_ptr<VectorHasher>> hashers;
+  hashers.push_back(std::make_unique<VectorHasher>(BIGINT(), 0));
+
+  std::shared_ptr<facebook::velox::exec::BaseHashTable> table =
+      HashTable<false>::createForJoin(
+          std::move(hashers),
+          {}, /*dependentTypes*/
+          true /*allowDuplicates*/,
+          true /*hasProbedFlag*/,
+          false /*hasCountFlag*/,
+          1 /*minTableSizeForParallelJoinBuild*/,
+          pool());
+
+  auto rowContainer = table->rows();
+  uint32_t numColumns = buildVectors[0]->childrenSize();
+  std::vector<DecodedVector> decodedVectors;
+  decodedVectors.reserve(numColumns);
+  for (const auto& rowVector : buildVectors) {
+    if (!rowVector || rowVector->size() == 0)
+      continue;
+
+    decodedVectors.clear();
+    SelectivityVector rows(rowVector->size());
+    for (auto& child : rowVector->children()) {
+      decodedVectors.emplace_back(*child, rows);
+    }
+
+    for (auto i = 0; i < rowVector->size(); ++i) {
+      auto* row = rowContainer->newRow();
+      for (auto j = 0; j < numColumns; ++j) {
+        rowContainer->store(decodedVectors[j], i, row, j);
+      }
+    }
+  }
+
+  table->prepareJoinTable(
+      {}, BaseHashTable::kNoSpillInputStartPartitionBit, 1'000'000);
+
+  auto opaqueSharedHashTable = std::shared_ptr<core::OpaqueHashTable>(
+      table, reinterpret_cast<core::OpaqueHashTable*>(table.get()));
+
+  auto joinNode =
+      core::HashJoinNode::Builder()
+          .id(planNodeIdGenerator->next())
+          .joinType(core::JoinType::kInner)
+          .nullAware(false)
+          .leftKeys(
+              {std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "t_0")})
+          .rightKeys(
+              {std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "u_0")})
+          .left(probePlanNode)
+          .right(buildPlanNode)
+          .outputType(outputType)
+          .reusableHashTable(opaqueSharedHashTable)
+          .build();
+
+  std::atomic_bool reusedHashTable{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::HashBuild::HashBuild",
+      std::function<void(HashBuild*)>(
+          [&](HashBuild* windowBuild) { reusedHashTable.store(true); }));
+
+  auto task =
+      AssertQueryBuilder(joinNode, duckDbQueryRunner_)
+          .maxDrivers(1)
+          .assertResults("SELECT t.t_0, u.u_0 FROM t, u WHERE t.t_0 = u.u_0");
+  ASSERT_TRUE(reusedHashTable.load());
+}
+
 VELOX_INSTANTIATE_TEST_SUITE_P(
     MultiThreadedHashJoinTest,
     MultiThreadedHashJoinTest,

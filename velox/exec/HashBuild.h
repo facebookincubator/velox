@@ -117,6 +117,10 @@ class HashBuild final : public Operator {
   // Invoked to set up hash table to build.
   void setupTable();
 
+  // Reuse the pre-built hash table.
+  void setReusableHashTable(
+      std::shared_ptr<core::OpaqueHashTable> opaqueHashTable);
+
   // Sets up hash table caching if enabled. Returns true if the cached table
   // is already available or if this operator should wait for another task
   // to build it, in which case further initialization should be skipped.
@@ -406,6 +410,8 @@ class HashBuild final : public Operator {
   // Count the number of hash table input rows for building deduped
   // hash table. It will not be updated after abandonBuildNoDupHash_ is true.
   int64_t numHashInputRows_ = 0;
+
+  bool reuseHashTable_ = false;
 };
 
 inline std::ostream& operator<<(std::ostream& os, HashBuild::State state) {
