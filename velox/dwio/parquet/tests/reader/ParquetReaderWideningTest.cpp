@@ -1246,7 +1246,7 @@ TEST_F(ParquetReaderWideningTest, tinyintToDoubleWideningWithFilter) {
       expected);
 }
 
-// DoubleRange filter not yet supported for widened columns.
+// DoubleRange filter not yet supported for widened columns. See #16895.
 TEST_F(
     ParquetReaderWideningTest,
     DISABLED_intToDoubleWideningWithDoubleRangeFilter) {
@@ -1272,7 +1272,7 @@ TEST_F(ParquetReaderWideningTest, intToDecimalWideningWithFilter) {
           {"col"}, {makeFlatVector<int64_t>({50, 100}, DECIMAL(10, 0))}));
 }
 
-// Scale > 0 not yet supported for filter pushdown with widening.
+// Scale > 0 not yet supported for filter pushdown with widening. See #16895.
 TEST_F(
     ParquetReaderWideningTest,
     DISABLED_intToDecimalWithScaleWideningWithFilter) {
@@ -1286,6 +1286,7 @@ TEST_F(
           {"col"}, {makeFlatVector<int64_t>({5'000, 10'000}, DECIMAL(12, 2))}));
 }
 
+// HugeintRange filter not yet supported for widened columns. See #16895.
 TEST_F(ParquetReaderWideningTest, DISABLED_bigintToDecimalWideningWithFilter) {
   auto writeData =
       makeRowVector({"col"}, {makeFlatVector<int64_t>({-100, 0, 50, 100})});
@@ -1331,7 +1332,7 @@ TEST_F(ParquetReaderWideningTest, decimalShortToShortWideningWithFilter) {
           {"col"}, {makeFlatVector<int64_t>({5'000, 10'000}, DECIMAL(10, 2))}));
 }
 
-// Scale changed: DECIMAL(7,2) -> DECIMAL(10,4).
+// Scale changed: DECIMAL(7,2) -> DECIMAL(10,4). See #16895.
 TEST_F(
     ParquetReaderWideningTest,
     DISABLED_decimalScaleChangeWideningWithFilter) {
@@ -1348,7 +1349,7 @@ TEST_F(
 }
 
 // Cases have different failure modes: same-scale fails on HugeintRange crash,
-// scale-change fails on unscaled value mismatch. Fix separately when enabling.
+// scale-change fails on unscaled value mismatch. See #16895.
 TEST_F(
     ParquetReaderWideningTest,
     DISABLED_decimalShortToLongWideningWithFilter) {
@@ -1390,6 +1391,7 @@ TEST_F(
           {makeFlatVector<int64_t>({500'000, 1'000'000}, DECIMAL(12, 4))}));
 }
 
+// HugeintRange filter with scale change not yet supported. See #16895.
 TEST_F(
     ParquetReaderWideningTest,
     DISABLED_decimalLongToLongWideningWithFilter) {
