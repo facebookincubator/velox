@@ -15,6 +15,7 @@
 set(
   ICEBERG_SOURCES
   DeletionVectorReader.cpp
+  DeletionVectorWriter.cpp
   IcebergConfig.cpp
   IcebergColumnHandle.cpp
   IcebergConnector.cpp
