@@ -211,6 +211,12 @@ class JoinMaker {
   bool supportsFlippingNestedLoopJoin() const;
 
   bool supportsMergeJoin() const {
+    // TODO: Merge join does not correctly handle full outer join with filter.
+    // Right-side miss rows are not emitted when all filter evaluations fail
+    // for a matched right row. Skip until the bug is fixed.
+    if (core::isFullJoin(joinType_) && !filter_.empty()) {
+      return false;
+    }
     return core::MergeJoinNode::isSupported(joinType_);
   }
 
