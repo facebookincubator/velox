@@ -19,7 +19,7 @@
 #include "velox/exec/fuzzer/PrestoQueryRunner.h"
 #include "velox/exec/fuzzer/ReferenceQueryRunner.h"
 #include "velox/functions/prestosql/types/JsonType.h"
-#include "velox/functions/prestosql/types/PrestoTypeSql.h"
+#include "velox/functions/prestosql/types/PrestoTypes.h"
 #include "velox/vector/SimpleVector.h"
 
 namespace facebook::velox::exec::test {
@@ -317,7 +317,7 @@ std::string toCastSql(const core::CastTypedExpr& cast) {
     sql << "cast(";
   }
   toCallInputsSql(cast.inputs(), sql);
-  sql << " as " << facebook::velox::toPrestoTypeSql(cast.type());
+  sql << " as " << facebook::velox::PrestoTypes::toSql(cast.type());
   sql << ")";
   return sql.str();
 }
@@ -328,7 +328,7 @@ std::string toConcatSql(const core::ConcatTypedExpr& concat) {
   return fmt::format(
       "cast(row({}) as {})",
       input.str(),
-      facebook::velox::toPrestoTypeSql(concat.type()));
+      facebook::velox::PrestoTypes::toSql(concat.type()));
 }
 
 template <typename T>
@@ -354,7 +354,7 @@ std::string getConstantValue(const core::ConstantTypedExpr& expr) {
 
 std::string toConstantSql(const core::ConstantTypedExpr& constant) {
   const auto& type = constant.type();
-  const auto typeSql = facebook::velox::toPrestoTypeSql(type);
+  const auto typeSql = facebook::velox::PrestoTypes::toSql(type);
 
   std::stringstream sql;
   if (constant.isNull()) {

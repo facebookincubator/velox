@@ -39,4 +39,24 @@ TEST_F(IPPrefixTypeTest, basic) {
 TEST_F(IPPrefixTypeTest, serde) {
   testTypeSerde(IPPREFIX());
 }
+
+TEST_F(IPPrefixTypeTest, valueToString) {
+  auto toString = [](std::string_view ip, int8_t prefixLength) {
+    auto ipValue = ipaddress::tryGetIPv6asInt128FromString(ip).value();
+    char buffer[IPPrefixType::kMaxStringSize];
+    return std::string(
+        IPPREFIX()->valueToString(ipValue, prefixLength, buffer));
+  };
+
+  EXPECT_EQ(toString("192.128.0.0", 9), "192.128.0.0/9");
+  EXPECT_EQ(toString("192.168.255.255", 32), "192.168.255.255/32");
+  EXPECT_EQ(toString("2001:db8::1", 32), "2001:db8::1/32");
+  EXPECT_EQ(toString("::ffff:1.2.3.4", -128), "1.2.3.4/128");
+  // Longest possible: full IPv6 + /128. Prefix length 128 is stored as -128
+  // in int8_t (TINYINT); valueToString casts to uint8_t for formatting.
+  EXPECT_EQ(
+      toString("1234:5678:90ab:cdef:1234:5678:90ab:cdef", -128),
+      "1234:5678:90ab:cdef:1234:5678:90ab:cdef/128");
+}
+
 } // namespace facebook::velox::test
