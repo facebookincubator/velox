@@ -233,7 +233,7 @@ RowVectorPtr CudfToVelox::convertFrontToVelox(rmm::cuda_stream_view stream) {
 //      D->H work until veloxBuffer_ is exhausted.
 //
 //  (B) Front input < targetBatchSize  (e.g. CudfFilterProject with high
-//      selectivity: many small GPU batches).  We GPU-concatenate inputs
+//      selectivity: many small GPU batches).  We concatenate inputs on device
 //      until we accumulate targetBatchSize rows, then convert the concat
 //      result to Velox in one shot.  This preserves the GPU-side merge
 //      that avoids emitting many undersized Velox batches downstream.
