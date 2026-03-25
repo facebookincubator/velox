@@ -746,6 +746,28 @@ class ReaderOptions : public io::ReaderOptions {
     fileMetadataCacheEnabled_ = value;
   }
 
+  /// Whether to load and initialize the cluster index during file open.
+  /// When true, the cluster index section is preloaded and the structured
+  /// ClusterIndex object is created. Default true.
+  bool loadClusterIndex() const {
+    return loadClusterIndex_;
+  }
+
+  void setLoadClusterIndex(bool value) {
+    loadClusterIndex_ = value;
+  }
+
+  /// Whether to load and initialize the chunk index during file open.
+  /// When true, the chunk index section is preloaded and the structured
+  /// ChunkIndex object is created. Default true.
+  bool loadChunkIndex() const {
+    return loadChunkIndex_;
+  }
+
+  void setLoadChunkIndex(bool value) {
+    loadChunkIndex_ = value;
+  }
+
   bool allowEmptyFile() const {
     return allowEmptyFile_;
   }
@@ -772,6 +794,8 @@ class ReaderOptions : public io::ReaderOptions {
   bool adjustTimestampToTimezone_{false};
   bool selectiveNimbleReaderEnabled_{false};
   bool fileMetadataCacheEnabled_{false};
+  bool loadClusterIndex_{true};
+  bool loadChunkIndex_{true};
   bool allowEmptyFile_{false};
 };
 
