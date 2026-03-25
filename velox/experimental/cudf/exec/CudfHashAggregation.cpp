@@ -171,7 +171,12 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
     auto& request = requests.emplace_back();
     outputIdx_ = requests.size() - 1;
     const bool countAll = countsAllRows();
-    request.values = tbl.column(countAll ? 0 : inputIndex);
+    // For raw input, count(*) can use any column (column 0) since we just
+    // need a row count. For non-raw input (intermediate/final in streaming),
+    // the input is partial results where column 0 is the grouping key;
+    // we must use inputIndex to access the partial count column.
+    request.values = tbl.column(
+        (countAll && exec::isRawInput(step)) ? 0 : inputIndex);
     std::unique_ptr<cudf::groupby_aggregation> aggRequest =
         exec::isRawInput(step)
         ? cudf::make_count_aggregation<cudf::groupby_aggregation>(
