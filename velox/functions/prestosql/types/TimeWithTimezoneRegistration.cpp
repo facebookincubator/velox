@@ -72,7 +72,7 @@ void castToString(
     const auto timeWithTimezone = decoded.valueAt<int64_t>(row);
     auto output =
         TIME_WITH_TIME_ZONE()->valueToString(timeWithTimezone, rawBuffer);
-    flatResult->setNoCopy(row, output);
+    flatResult->setNoCopy(row, StringView(output.data(), output.size()));
     rawBuffer += output.size();
   });
   buffer->setSize(rawBuffer - buffer->asMutable<char>());

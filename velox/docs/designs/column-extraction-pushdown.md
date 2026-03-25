@@ -432,19 +432,30 @@ enum class ExtractionStep : uint8_t {
   kSize,
 };
 
-/// One step in the extraction chain.
-struct ExtractionPathElement {
-  ExtractionStep step;
+/// Base class for one step in the extraction chain.  Subclasses carry
+/// step-specific data (field name, filter keys).
+class ExtractionPathElement {
+ public:
+  virtual ~ExtractionPathElement() = default;
+  virtual ExtractionStep step() const = 0;
 
-  /// Field name, only used when step == kStructField.
-  std::string fieldName;
-
-  /// Filter keys, only used when step == kMapKeyFilter.
-  /// Contains the set of map keys to retain.  Use stringFilterKeys for
-  /// VARCHAR keys or intFilterKeys for BIGINT/INTEGER keys.
-  std::vector<std::string> stringFilterKeys;
-  std::vector<int64_t> intFilterKeys;
+  /// Factory methods.
+  static std::shared_ptr<const ExtractionPathElement> simple(ExtractionStep);
+  static std::shared_ptr<const ExtractionPathElement> structField(
+      const std::string& name);
+  static std::shared_ptr<const ExtractionPathElement> mapKeyFilter(
+      std::vector<std::string> keys);
+  static std::shared_ptr<const ExtractionPathElement> mapKeyFilter(
+      std::vector<int64_t> keys);
 };
+
+using ExtractionPathElementPtr = std::shared_ptr<const ExtractionPathElement>;
+
+/// Concrete subclasses:
+///   SimpleExtractionPathElement       — MapKeys, MapValues, ArrayElements, Size
+///   StructFieldExtractionPathElement  — kStructField; carries fieldName()
+///   MapKeyFilterExtractionPathElement — kMapKeyFilter; carries
+///                                      stringFilterKeys() / intFilterKeys()
 
 /// Named extraction chain producing one output column.
 struct NamedExtraction {
@@ -452,7 +463,7 @@ struct NamedExtraction {
   std::string outputName;
 
   /// Extraction chain to apply.  Empty means pass-through (no extraction).
-  std::vector<ExtractionPathElement> chain;
+  std::vector<ExtractionPathElementPtr> chain;
 
   /// Output type after applying the chain.
   TypePtr dataType;
@@ -503,12 +514,25 @@ public class HiveColumnHandle extends BaseHiveColumnHandle {
         TypeSignature dataType
     ) {}
 
-    public record ExtractionPathElement(
-        ExtractionStep step,
-        Optional<String> fieldName,           // only for STRUCT_FIELD
-        Optional<List<String>> stringFilterKeys, // only for MAP_KEY_FILTER (VARCHAR keys)
-        Optional<List<Long>> intFilterKeys    // only for MAP_KEY_FILTER (BIGINT keys)
-    ) {}
+    public sealed interface ExtractionPathElement {
+        ExtractionStep step();
+
+        // MapKeys, MapValues, ArrayElements, Size
+        record Simple(ExtractionStep step)
+            implements ExtractionPathElement {}
+
+        record StructField(String fieldName)
+            implements ExtractionPathElement {
+            public ExtractionStep step() { return ExtractionStep.STRUCT_FIELD; }
+        }
+
+        record MapKeyFilter(
+            List<String> stringFilterKeys,
+            List<Long> intFilterKeys)
+            implements ExtractionPathElement {
+            public ExtractionStep step() { return ExtractionStep.MAP_KEY_FILTER; }
+        }
+    }
 
     public enum ExtractionStep {
         STRUCT_FIELD,

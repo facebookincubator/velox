@@ -129,9 +129,12 @@ SimpleFunctionRegistry::getFunctionSignaturesAndMetadata(
       result.reserve(signatureMap->size());
       for (const auto& [signature, functions] : *signatureMap) {
         VectorFunctionMetadata metadata{
-            false,
-            functions[0]->getMetadata().isDeterministic(),
-            functions[0]->getMetadata().defaultNullBehavior()};
+            .supportsFlattening = false,
+            .deterministic = functions[0]->getMetadata().isDeterministic(),
+            .defaultNullBehavior =
+                functions[0]->getMetadata().defaultNullBehavior(),
+            .companionFunction = false,
+            .owner = functions[0]->getMetadata().owner()};
         result.emplace_back(
             std::pair<VectorFunctionMetadata, const FunctionSignature*>{
                 metadata, &signature});
