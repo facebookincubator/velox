@@ -31,8 +31,6 @@
 #include "velox/expression/Expr.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/type/Type.h"
-#include "velox/type/Variant.h"
-#include "velox/vector/BaseVector.h"
 
 #include <cudf/binaryop.hpp>
 #include <cudf/column/column_factories.hpp>
@@ -97,7 +95,8 @@ using facebook::velox::cudf_velox::get_temp_mr;
     std::unique_ptr<cudf::column> doReduce(                                   \
         cudf::table_view const& input,                                        \
         TypePtr const& outputType,                                            \
-        rmm::cuda_stream_view stream) override {                              \
+        rmm::cuda_stream_view stream,                                         \
+        vector_size_t /*inputRowCount*/) override {                           \
       auto const aggRequest =                                                 \
           cudf::make_##name##_aggregation<cudf::reduce_aggregation>();        \
       auto const cudfOutputType =                                             \
@@ -123,14 +122,12 @@ DEFINE_SIMPLE_AGGREGATOR(Max, max, MAX)
 struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
   enum class CountInputKind {
     kColumn,
-    kConstant,
-    kCountStarWithColumns,
-    kCountStarNoColumns,
+    kCountAll,
   };
 
-  static bool isCountFunctionName(const std::string& kind) {
+  static bool isCountFunctionName(std::string_view kind) {
     auto prefix = cudf_velox::CudfConfig::getInstance().functionNamePrefix;
-    if (!prefix.empty() && kind.rfind(prefix, 0) == 0) {
+    if (!prefix.empty() && kind.starts_with(prefix)) {
       return kind.substr(prefix.size()).starts_with("count");
     }
     return kind.starts_with("count");
@@ -144,15 +141,11 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
 
   static CountInputKind getInputKind(
       const core::AggregationNode::Aggregate& aggregate,
-      column_index_t inputIndex,
       const VectorPtr& constant) {
-    if (isCountStarAggregate(aggregate)) {
-      return inputIndex == kConstantChannel
-          ? CountInputKind::kCountStarNoColumns
-          : CountInputKind::kCountStarWithColumns;
+    if (aggregate.call->inputs().empty() || constant != nullptr) {
+      return CountInputKind::kCountAll;
     }
-    return constant != nullptr ? CountInputKind::kConstant
-                               : CountInputKind::kColumn;
+    return CountInputKind::kColumn;
   }
 
  public:
@@ -162,7 +155,6 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
       uint32_t inputIndex,
       VectorPtr constant,
       bool isGlobal,
-      memory::MemoryPool* pool,
       const TypePtr& resultType)
       : Aggregator(
             step,
@@ -171,18 +163,7 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
             constant,
             isGlobal,
             resultType),
-        inputKind_(getInputKind(aggregate, inputIndex, constant)) {
-    switch (inputKind_) {
-      case CountInputKind::kCountStarWithColumns:
-        this->constant =
-            BaseVector::createConstant(BIGINT(), Variant(int64_t{1}), 1, pool);
-        break;
-      case CountInputKind::kCountStarNoColumns:
-      case CountInputKind::kConstant:
-      case CountInputKind::kColumn:
-        break;
-    }
-  }
+        inputKind_(getInputKind(aggregate, constant)) {}
 
   void addGroupbyRequest(
       cudf::table_view const& tbl,
@@ -203,21 +184,19 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
   std::unique_ptr<cudf::column> doReduce(
       cudf::table_view const& input,
       TypePtr const& outputType,
-      rmm::cuda_stream_view stream) override {
+      rmm::cuda_stream_view stream,
+      vector_size_t inputRowCount) override {
     if (exec::isRawInput(step)) {
-      const bool hasInputColumns = input.num_columns() > 0;
       int64_t count;
       switch (inputKind_) {
-        case CountInputKind::kCountStarNoColumns:
-          count = inputRowCount_;
-          break;
-        case CountInputKind::kCountStarWithColumns:
-        case CountInputKind::kConstant:
-          checkZeroColumnGlobalCountStarSupport(hasInputColumns);
-          count = input.num_rows();
+        case CountInputKind::kCountAll:
+          count = input.num_columns() > 0 ? input.num_rows() : inputRowCount;
           break;
         case CountInputKind::kColumn: {
-          checkZeroColumnGlobalCountStarSupport(hasInputColumns);
+          VELOX_CHECK_GT(
+              input.num_columns(),
+              0,
+              "count(column) requires at least one input column");
           auto inputCol = input.column(inputIndex);
           count = inputCol.size() - inputCol.null_count();
           break;
@@ -230,7 +209,6 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
       return cudf::make_column_from_scalar(
           resultScalar, 1, stream, get_output_mr());
     } else {
-      // For non-raw input (intermediate/final), use sum aggregation
       auto const aggRequest =
           cudf::make_sum_aggregation<cudf::reduce_aggregation>();
       auto const cudfOutputType = cudf::data_type(cudf::type_id::INT64);
@@ -250,7 +228,6 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
   std::unique_ptr<cudf::column> makeOutputColumn(
       std::vector<cudf::groupby::aggregation_result>& results,
       rmm::cuda_stream_view stream) override {
-    // cudf produces int32 for count(0) but velox expects int64
     auto col = std::move(results[outputIdx_].results[0]);
     const auto cudfOutputType =
         cudf::data_type(cudf_velox::veloxToCudfTypeId(resultType));
@@ -260,22 +237,12 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
     return col;
   }
 
-  void setInputRowCount(vector_size_t inputRowCount) override {
-    inputRowCount_ = inputRowCount;
-  }
-
  private:
   bool countsAllRows() const {
-    return inputKind_ != CountInputKind::kColumn;
-  }
-
-  void checkZeroColumnGlobalCountStarSupport(bool supported) {
-    VELOX_CHECK(
-        supported, "Zero-column global aggregation only supports count(*)");
+    return inputKind_ == CountInputKind::kCountAll;
   }
 
   CountInputKind inputKind_;
-  vector_size_t inputRowCount_ = 0;
   uint32_t outputIdx_;
 };
 
@@ -437,7 +404,8 @@ struct MeanAggregator : cudf_velox::CudfHashAggregation::Aggregator {
   std::unique_ptr<cudf::column> doReduce(
       cudf::table_view const& input,
       TypePtr const& outputType,
-      rmm::cuda_stream_view stream) override {
+      rmm::cuda_stream_view stream,
+      vector_size_t /*inputRowCount*/) override {
     switch (step) {
       case core::AggregationNode::Step::kSingle: {
         auto const aggRequest =
@@ -582,7 +550,8 @@ struct ApproxDistinctAggregator : cudf_velox::CudfHashAggregation::Aggregator {
   std::unique_ptr<cudf::column> doReduce(
       cudf::table_view const& input,
       TypePtr const& outputType,
-      rmm::cuda_stream_view stream) override {
+      rmm::cuda_stream_view stream,
+      vector_size_t /*inputRowCount*/) override {
     if (exec::isRawInput(step)) {
       return doPartialReduce(input, stream);
     } else if (step == core::AggregationNode::Step::kIntermediate) {
@@ -761,7 +730,6 @@ std::unique_ptr<cudf_velox::CudfHashAggregation::Aggregator> createAggregator(
     uint32_t inputIndex,
     VectorPtr constant,
     bool isGlobal,
-    memory::MemoryPool* pool,
     const TypePtr& resultType) {
   auto const& kind = aggregate.call->name();
   auto prefix = cudf_velox::CudfConfig::getInstance().functionNamePrefix;
@@ -770,7 +738,7 @@ std::unique_ptr<cudf_velox::CudfHashAggregation::Aggregator> createAggregator(
         step, inputIndex, constant, isGlobal, resultType);
   } else if (kind.rfind(prefix + "count", 0) == 0) {
     return std::make_unique<CountAggregator>(
-        aggregate, step, inputIndex, constant, isGlobal, pool, resultType);
+        aggregate, step, inputIndex, constant, isGlobal, resultType);
   } else if (kind.rfind(prefix + "min", 0) == 0) {
     return std::make_unique<MinAggregator>(
         step, inputIndex, constant, isGlobal, resultType);
@@ -910,7 +878,6 @@ auto toAggregators(
     core::AggregationNode const& aggregationNode,
     core::AggregationNode::Step step,
     TypePtr const& outputType,
-    memory::MemoryPool* pool,
     std::vector<VectorPtr> const& constants) {
   bool const isGlobal = aggregationNode.groupingKeys().empty();
   const auto numKeys = aggregationNode.groupingKeys().size();
@@ -919,10 +886,8 @@ auto toAggregators(
       aggregators;
   aggregators.reserve(aggregationNode.aggregates().size());
   for (size_t i = 0; i < aggregationNode.aggregates().size(); ++i) {
-    // Positional mapping: inputs are keys first, then aggregate columns in
-    // aggregate order.
     auto const& aggregate = aggregationNode.aggregates()[i];
-    // The case of zero input is mapped to kConstantChannel.
+    // Zero input columns with zero grouping keys yields kConstantChannel.
     auto getInputIndex = [](const core::AggregationNode& aggregationNode,
                             size_t aggregateIndex,
                             size_t numKeys) -> column_index_t {
@@ -947,7 +912,6 @@ auto toAggregators(
         inputIndex,
         constant,
         isGlobal,
-        pool,
         resultType));
   }
   return aggregators;
@@ -1035,7 +999,6 @@ void CudfHashAggregation::initialize() {
       *aggregationNode_,
       aggregationNode_->step(),
       outputType_,
-      operatorCtx_->pool(),
       aggregationInput.constants);
   streamingEnabled_ =
       !hasCompanionAggregates(aggregationNode_->aggregates()) && !isGlobal_;
@@ -1055,7 +1018,6 @@ void CudfHashAggregation::initialize() {
         *aggregationNode_,
         core::AggregationNode::Step::kIntermediate,
         bufferedResultType_,
-        operatorCtx_->pool(),
         nullConstants);
 
     if (isSingleStep_) {
@@ -1063,13 +1025,11 @@ void CudfHashAggregation::initialize() {
           *aggregationNode_,
           core::AggregationNode::Step::kPartial,
           bufferedResultType_,
-          operatorCtx_->pool(),
           aggregationInput.constants);
       finalAggregators_ = toAggregators(
           *aggregationNode_,
           core::AggregationNode::Step::kFinal,
           outputType_,
-          operatorCtx_->pool(),
           nullConstants);
     }
   }
@@ -1375,9 +1335,8 @@ CudfVectorPtr CudfHashAggregation::doGlobalAggregation(
   std::vector<std::unique_ptr<cudf::column>> resultColumns;
   resultColumns.reserve(aggregators_.size());
   for (auto i = 0; i < aggregators_.size(); i++) {
-    aggregators_[i]->setInputRowCount(numInputRows_);
-    resultColumns.push_back(
-        aggregators_[i]->doReduce(tableView, outputType_->childAt(i), stream));
+    resultColumns.push_back(aggregators_[i]->doReduce(
+        tableView, outputType_->childAt(i), stream, numInputRows_));
   }
 
   return std::make_shared<cudf_velox::CudfVector>(
@@ -1531,23 +1490,20 @@ RowVectorPtr CudfHashAggregation::getOutput() {
     return getDistinctKeys(tbl->view(), groupingKeyInputChannels_, stream);
   }
 
-  if (isGlobal_ && tbl->view().num_columns() == 0) {
-    auto output = doGlobalAggregation(tbl->view(), stream);
-    if (isPartialOutput_ && !noMoreInput_) {
-      numInputRows_ = 0;
-    }
-    return output;
-  }
-
-  auto permutedInputView = tbl->view().select(
-      aggregationInputChannels_.begin(), aggregationInputChannels_.end());
   if (isGlobal_) {
-    auto output = doGlobalAggregation(permutedInputView, stream);
+    auto tableView = tbl->view().num_columns() == 0
+        ? tbl->view()
+        : tbl->view().select(
+              aggregationInputChannels_.begin(),
+              aggregationInputChannels_.end());
+    auto output = doGlobalAggregation(tableView, stream);
     if (isPartialOutput_ && !noMoreInput_) {
       numInputRows_ = 0;
     }
     return output;
   } else {
+    auto permutedInputView = tbl->view().select(
+        aggregationInputChannels_.begin(), aggregationInputChannels_.end());
     return doGroupByAggregation(
         permutedInputView,
         groupingKeyOutputChannels_,
@@ -2095,10 +2051,9 @@ namespace {
 
 bool isSupportedZeroColumnAggregation(
     const core::AggregationNode& aggregationNode) {
-  // The only supported aggregation shape in that case is global count(*).
-  return aggregationNode.groupingKeys()
-             .empty() && // GROUP BY not supported with count(*) on zero
-                         // columns.
+  // Zero-column aggregation only supports global count(*) — no GROUP BY keys,
+  // and every aggregate must be count(*).
+  return aggregationNode.groupingKeys().empty() &&
       !aggregationNode.aggregates().empty() &&
       std::all_of(
              aggregationNode.aggregates().begin(),

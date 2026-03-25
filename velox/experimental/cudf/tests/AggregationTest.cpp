@@ -159,6 +159,55 @@ class AggregationTest : public OperatorTestBase {
     }
   }
 
+  enum class AggSteps { kSingle, kPartialFinal, kPartialIntermediateFinal };
+
+  void testAggregation(
+      const std::vector<RowVectorPtr>& data,
+      const std::vector<std::string>& groupingKeys,
+      const std::vector<std::string>& aggregates,
+      const std::string& expectedSql,
+      AggSteps steps) {
+    auto builder = PlanBuilder().values(data);
+    switch (steps) {
+      case AggSteps::kSingle:
+        builder.singleAggregation(groupingKeys, aggregates);
+        break;
+      case AggSteps::kPartialFinal:
+        builder.partialAggregation(groupingKeys, aggregates).finalAggregation();
+        break;
+      case AggSteps::kPartialIntermediateFinal:
+        builder.partialAggregation(groupingKeys, aggregates)
+            .intermediateAggregation()
+            .finalAggregation();
+        break;
+    }
+    assertQuery(builder.planNode(), expectedSql);
+  }
+
+  void testGlobalCountStarZeroColumns(AggSteps steps) {
+    auto data = makeRowVector({
+        makeFlatVector<int64_t>({1, 2, 3, 4}),
+    });
+    createDuckDbTable({data});
+
+    auto builder =
+        PlanBuilder().values({data}).filter("c0 > 0").project({});
+    switch (steps) {
+      case AggSteps::kSingle:
+        builder.singleAggregation({}, {"count(*)"});
+        break;
+      case AggSteps::kPartialFinal:
+        builder.partialAggregation({}, {"count(*)"}).finalAggregation();
+        break;
+      case AggSteps::kPartialIntermediateFinal:
+        builder.partialAggregation({}, {"count(*)"})
+            .intermediateAggregation()
+            .finalAggregation();
+        break;
+    }
+    assertQuery(builder.planNode(), "SELECT count(*) FROM tmp WHERE c0 > 0");
+  }
+
   RowTypePtr rowType_{
       ROW({"c0", "c1", "c2", "c3", "c4", "c5", "c6"},
           {BIGINT(),
@@ -505,54 +554,15 @@ TEST_F(AggregationTest, countStarGlobalZeroRows) {
 }
 
 TEST_F(AggregationTest, countStarGlobalZeroColumns) {
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>({1, 2, 3, 4}),
-  });
-  createDuckDbTable({data});
-
-  auto op = PlanBuilder()
-                .values({data})
-                .filter("c0 > 0")
-                .project({})
-                .partialAggregation({}, {"count(*)"})
-                .finalAggregation()
-                .planNode();
-
-  assertQuery(op, "SELECT count(*) FROM tmp WHERE c0 > 0");
+  testGlobalCountStarZeroColumns(AggSteps::kPartialFinal);
 }
 
 TEST_F(AggregationTest, countStarGlobalSingleZeroColumns) {
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>({1, 2, 3, 4}),
-  });
-  createDuckDbTable({data});
-
-  auto op = PlanBuilder()
-                .values({data})
-                .filter("c0 > 0")
-                .project({})
-                .singleAggregation({}, {"count(*)"})
-                .planNode();
-
-  assertQuery(op, "SELECT count(*) FROM tmp WHERE c0 > 0");
+  testGlobalCountStarZeroColumns(AggSteps::kSingle);
 }
 
 TEST_F(AggregationTest, countStarGlobalPartialIntermediateFinalZeroColumns) {
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>({1, 2, 3, 4}),
-  });
-  createDuckDbTable({data});
-
-  auto op = PlanBuilder()
-                .values({data})
-                .filter("c0 > 0")
-                .project({})
-                .partialAggregation({}, {"count(*)"})
-                .intermediateAggregation()
-                .finalAggregation()
-                .planNode();
-
-  assertQuery(op, "SELECT count(*) FROM tmp WHERE c0 > 0");
+  testGlobalCountStarZeroColumns(AggSteps::kPartialIntermediateFinal);
 }
 
 TEST_F(AggregationTest, countStarGlobalPartialFinalZeroColumnsLocalPartition) {
@@ -581,13 +591,9 @@ TEST_F(AggregationTest, countStarVsCountColumnSingleGlobalNulls) {
       makeNullableFlatVector<int64_t>({1, std::nullopt, 2, std::nullopt}),
   });
   createDuckDbTable({data});
-
-  auto op = PlanBuilder()
-                .values({data})
-                .singleAggregation({}, {"count(*)", "count(c0)"})
-                .planNode();
-
-  assertQuery(op, "SELECT count(*), count(c0) FROM tmp");
+  testAggregation(
+      {data}, {}, {"count(*)", "count(c0)"},
+      "SELECT count(*), count(c0) FROM tmp", AggSteps::kSingle);
 }
 
 TEST_F(AggregationTest, countStarVsCountColumnPartialFinalGlobalNulls) {
@@ -595,14 +601,9 @@ TEST_F(AggregationTest, countStarVsCountColumnPartialFinalGlobalNulls) {
       makeNullableFlatVector<int64_t>({1, std::nullopt, 2, std::nullopt}),
   });
   createDuckDbTable({data});
-
-  auto op = PlanBuilder()
-                .values({data})
-                .partialAggregation({}, {"count(*)", "count(c0)"})
-                .finalAggregation()
-                .planNode();
-
-  assertQuery(op, "SELECT count(*), count(c0) FROM tmp");
+  testAggregation(
+      {data}, {}, {"count(*)", "count(c0)"},
+      "SELECT count(*), count(c0) FROM tmp", AggSteps::kPartialFinal);
 }
 
 TEST_F(
@@ -612,184 +613,100 @@ TEST_F(
       makeNullableFlatVector<int64_t>({1, std::nullopt, 2, std::nullopt}),
   });
   createDuckDbTable({data});
-
-  auto op = PlanBuilder()
-                .values({data})
-                .partialAggregation({}, {"count(*)", "count(c0)"})
-                .intermediateAggregation()
-                .finalAggregation()
-                .planNode();
-
-  assertQuery(op, "SELECT count(*), count(c0) FROM tmp");
+  testAggregation(
+      {data}, {}, {"count(*)", "count(c0)"},
+      "SELECT count(*), count(c0) FROM tmp",
+      AggSteps::kPartialIntermediateFinal);
 }
 
 TEST_F(AggregationTest, countSingleGroupBy) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
-
-  std::string keyName = "c0";
-  std::vector<std::string> aggregates = {"count(0)"};
-  auto op = PlanBuilder()
-                .values(vectors)
-                .singleAggregation({keyName}, aggregates)
-                .planNode();
-
-  assertQuery(
-      op, "SELECT " + keyName + ", count(*) FROM tmp GROUP BY " + keyName);
+  testAggregation(
+      vectors, {"c0"}, {"count(0)"},
+      "SELECT c0, count(*) FROM tmp GROUP BY c0", AggSteps::kSingle);
 }
 
 TEST_F(AggregationTest, countPartialFinalGroupBy) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
-
-  std::string keyName = "c0";
-  std::vector<std::string> aggregates = {"count(0)"};
-  auto op = PlanBuilder()
-                .values(vectors)
-                .partialAggregation({keyName}, aggregates)
-                .finalAggregation()
-                .planNode();
-
-  assertQuery(
-      op, "SELECT " + keyName + ", count(*) FROM tmp GROUP BY " + keyName);
+  testAggregation(
+      vectors, {"c0"}, {"count(0)"},
+      "SELECT c0, count(*) FROM tmp GROUP BY c0", AggSteps::kPartialFinal);
 }
 
 TEST_F(AggregationTest, countPartialIntermediateFinalGroupBy) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
-
-  std::string keyName = "c0";
-  std::vector<std::string> aggregates = {"count(0)"};
-  auto op = PlanBuilder()
-                .values(vectors)
-                .partialAggregation({keyName}, aggregates)
-                .intermediateAggregation()
-                .finalAggregation()
-                .planNode();
-
-  assertQuery(
-      op, "SELECT " + keyName + ", count(*) FROM tmp GROUP BY " + keyName);
+  testAggregation(
+      vectors, {"c0"}, {"count(0)"},
+      "SELECT c0, count(*) FROM tmp GROUP BY c0",
+      AggSteps::kPartialIntermediateFinal);
 }
 
 TEST_F(AggregationTest, countConstantSingleGroupBy) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
-
-  std::string keyName = "c0";
-  std::vector<std::string> aggregates = {"count(1)"};
-  auto op = PlanBuilder()
-                .values(vectors)
-                .singleAggregation({keyName}, aggregates)
-                .planNode();
-
-  assertQuery(
-      op, "SELECT " + keyName + ", count(1) FROM tmp GROUP BY " + keyName);
+  testAggregation(
+      vectors, {"c0"}, {"count(1)"},
+      "SELECT c0, count(1) FROM tmp GROUP BY c0", AggSteps::kSingle);
 }
 
 TEST_F(AggregationTest, countConstantSingleGroupByNonZeroKey) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
-
-  std::string keyName = "c2";
-  std::vector<std::string> aggregates = {"count(1)"};
-  auto op = PlanBuilder()
-                .values(vectors)
-                .singleAggregation({keyName}, aggregates)
-                .planNode();
-
-  assertQuery(
-      op, "SELECT " + keyName + ", count(1) FROM tmp GROUP BY " + keyName);
+  testAggregation(
+      vectors, {"c2"}, {"count(1)"},
+      "SELECT c2, count(1) FROM tmp GROUP BY c2", AggSteps::kSingle);
 }
 
 TEST_F(AggregationTest, countConstantPartialFinalGroupBy) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
-
-  std::string keyName = "c0";
-  std::vector<std::string> aggregates = {"count(1)"};
-  auto op = PlanBuilder()
-                .values(vectors)
-                .partialAggregation({keyName}, aggregates)
-                .finalAggregation()
-                .planNode();
-
-  assertQuery(
-      op, "SELECT " + keyName + ", count(1) FROM tmp GROUP BY " + keyName);
+  testAggregation(
+      vectors, {"c0"}, {"count(1)"},
+      "SELECT c0, count(1) FROM tmp GROUP BY c0", AggSteps::kPartialFinal);
 }
 
 TEST_F(AggregationTest, countConstantPartialFinalGroupByNonZeroKey) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
-
-  std::string keyName = "c2";
-  std::vector<std::string> aggregates = {"count(1)"};
-  auto op = PlanBuilder()
-                .values(vectors)
-                .partialAggregation({keyName}, aggregates)
-                .finalAggregation()
-                .planNode();
-
-  assertQuery(
-      op, "SELECT " + keyName + ", count(1) FROM tmp GROUP BY " + keyName);
+  testAggregation(
+      vectors, {"c2"}, {"count(1)"},
+      "SELECT c2, count(1) FROM tmp GROUP BY c2", AggSteps::kPartialFinal);
 }
 
 TEST_F(AggregationTest, countConstantPartialIntermediateFinalGroupBy) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
-
-  std::string keyName = "c0";
-  std::vector<std::string> aggregates = {"count(1)"};
-  auto op = PlanBuilder()
-                .values(vectors)
-                .partialAggregation({keyName}, aggregates)
-                .intermediateAggregation()
-                .finalAggregation()
-                .planNode();
-
-  assertQuery(
-      op, "SELECT " + keyName + ", count(1) FROM tmp GROUP BY " + keyName);
+  testAggregation(
+      vectors, {"c0"}, {"count(1)"},
+      "SELECT c0, count(1) FROM tmp GROUP BY c0",
+      AggSteps::kPartialIntermediateFinal);
 }
 
 TEST_F(AggregationTest, countSingleGlobal) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
-
-  std::vector<std::string> aggregates = {"count(0)"};
-  auto op = PlanBuilder()
-                .values(vectors)
-                .singleAggregation({}, aggregates)
-                .planNode();
-
-  assertQuery(op, "SELECT count(*) FROM tmp");
+  testAggregation(
+      vectors, {}, {"count(0)"}, "SELECT count(*) FROM tmp",
+      AggSteps::kSingle);
 }
 
 TEST_F(AggregationTest, countPartialFinalGlobal) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
-
-  std::vector<std::string> aggregates = {"count(0)"};
-  auto op = PlanBuilder()
-                .values(vectors)
-                .partialAggregation({}, aggregates)
-                .finalAggregation()
-                .planNode();
-
-  assertQuery(op, "SELECT count(*) FROM tmp");
+  testAggregation(
+      vectors, {}, {"count(0)"}, "SELECT count(*) FROM tmp",
+      AggSteps::kPartialFinal);
 }
 
 TEST_F(AggregationTest, countPartialIntermediateFinalGlobal) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
-
-  std::vector<std::string> aggregates = {"count(0)"};
-  auto op = PlanBuilder()
-                .values(vectors)
-                .partialAggregation({}, aggregates)
-                .intermediateAggregation()
-                .finalAggregation()
-                .planNode();
-
-  assertQuery(op, "SELECT count(*) FROM tmp");
+  testAggregation(
+      vectors, {}, {"count(0)"}, "SELECT count(*) FROM tmp",
+      AggSteps::kPartialIntermediateFinal);
 }
 
 /// Tests the spark scenario of having different types of aggs in the same
