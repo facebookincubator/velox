@@ -1600,7 +1600,7 @@ class TimeType : public BigintType {
   /// When casting from TIME to varchar, the resultant varchar size depends on
   /// precision: 12 bytes for milliseconds (HH:MM:SS.mmm), 15 bytes for
   /// microseconds (HH:MM:SS.mmmmmm).
-  constexpr int32_t timeToVarcharRowSize() const {
+  static constexpr int32_t timeToVarcharRowSize() {
     return kPrecision == TimePrecision::kMilliseconds ? 12 : 15;
   }
 
@@ -2606,21 +2606,41 @@ template <typename T>
 std::string Type::valueToString(T value) const {
   if constexpr (std::is_same_v<T, bool>) {
     return value ? "true" : "false";
+
   } else if constexpr (std::is_same_v<T, std::shared_ptr<void>>) {
     return "<opaque>";
-  } else if constexpr (
-      std::is_same_v<T, int64_t> || std::is_same_v<T, int128_t>) {
+
+  } else if constexpr (std::is_same_v<T, int128_t>) {
     if (isDecimal()) {
       return LongDecimalType::toString(value, *this);
-    } else {
-      return velox::to<std::string>(value);
     }
+    return velox::to<std::string>(value);
+
+  } else if constexpr (std::is_same_v<T, int64_t>) {
+    if (isDecimal()) {
+      return LongDecimalType::toString(value, *this);
+    }
+    if (isIntervalDayTime()) {
+      return INTERVAL_DAY_TIME()->valueToString(value);
+    }
+    if (TIME()->equivalent(*this)) {
+      char buffer[TimeMilliPrecisionType::timeToVarcharRowSize()];
+      return std::string(TIME()->valueToString(value, buffer));
+    }
+    if (TIME_MICRO_UTC()->equivalent(*this)) {
+      return TimeMicroPrecisionUtcType::toCompactIso8601(value);
+    }
+    return velox::to<std::string>(value);
+
   } else if constexpr (std::is_same_v<T, int32_t>) {
     if (isDate()) {
       return DATE()->toString(value);
-    } else {
-      return velox::to<std::string>(value);
     }
+    if (isIntervalYearMonth()) {
+      return INTERVAL_YEAR_MONTH()->valueToString(value);
+    }
+    return velox::to<std::string>(value);
+
   } else {
     return velox::to<std::string>(value);
   }

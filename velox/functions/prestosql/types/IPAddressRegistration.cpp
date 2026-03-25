@@ -107,21 +107,10 @@ class IPAddressCastOperator : public exec::CastOperator {
       BaseVector& result) {
     auto* flatResult = result.as<FlatVector<StringView>>();
     const auto* ipaddresses = input.as<SimpleVector<int128_t>>();
-    folly::ByteArray16 addrBytes;
 
     context.applyToSelectedNoThrow(rows, [&](auto row) {
-      const auto intAddr = ipaddresses->valueAt(row);
-      memcpy(&addrBytes, &intAddr, ipaddress::kIPAddressBytes);
-
-      std::reverse(addrBytes.begin(), addrBytes.end());
-      folly::IPAddressV6 v6Addr(addrBytes);
-
       exec::StringWriter result(flatResult, row);
-      if (v6Addr.isIPv4Mapped()) {
-        result.append(v6Addr.createIPv4().str());
-      } else {
-        result.append(v6Addr.str());
-      }
+      result.append(IPADDRESS()->valueToString(ipaddresses->valueAt(row)));
       result.finalize();
     });
   }
