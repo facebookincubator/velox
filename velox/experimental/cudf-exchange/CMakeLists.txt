@@ -50,8 +50,8 @@ find_package(ucx REQUIRED)
 
 target_link_libraries(
   velox_cudf_exchange
-  PUBLIC ucxx::ucxx ucx::ucp ucx::ucs
-  PRIVATE cudf::cudf CUDA::cudart CUDA::cuda_driver Folly::folly velox_core
+  PUBLIC ucxx::ucxx ucx::ucp
+  PRIVATE cudf::cudf CUDA::cudart CUDA::cuda_driver Folly::folly velox_core ucx::ucs
 )
 
 if(VELOX_BUILD_TESTING)

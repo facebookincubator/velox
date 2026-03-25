@@ -27,12 +27,14 @@
 
 namespace facebook::velox::cudf_exchange {
 
-// data and metadata tags are split into 3 parts:
-// - 4 bytes: A hash of the producing taskId. The taskId is unique within a
-// cluster.
-// - 1 byte: The operation, which is either metadata, or data.
-// - 3 bytes: The sequence number of the chunk that is exchanged between 2
-// tasks.
+// Data and metadata tags are a uint64_t split into 3 fields, most-significant
+// first:
+// - Bits 63..32 (4 bytes): FNV-1a hash of the producing taskId, which is
+//   unique within a cluster.
+// - Bits 31..24 (1 byte): Operation type (metadata, data, or handshake
+//   response).
+// - Bits 23..0  (3 bytes): Sequence number of the chunk exchanged between 2
+//   tasks.
 
 // Definition of the operations.
 constexpr uint64_t METADATA_TAG = 0x02000000;
@@ -97,23 +99,29 @@ constexpr uint32_t kMaxMetaBufSize = 1024 * 1024; // 1MB
 /// Format: [magic (4 bytes)][totalSize (4 bytes)]
 constexpr uint32_t kMetaHeaderSize = sizeof(kMagicNumber) + sizeof(uint32_t);
 
+/// Wire-format types for MetadataMsg serialization. Using shared type aliases
+/// ensures serialize() and deserializeMetadataMsg() agree on field widths.
+using WireLengthType = uint64_t;
+using WireDataSizeType = int64_t;
+using WireRemainingElementType = int64_t;
+
 struct MetadataMsg {
   std::unique_ptr<std::vector<uint8_t>> cudfMetadata;
-  int64_t dataSizeBytes;
-  std::vector<int64_t> remainingBytes;
+  WireDataSizeType dataSizeBytes;
+  std::vector<WireRemainingElementType> remainingBytes;
   bool atEnd;
 
   uint32_t getSerializedSize() const {
     // The header: the magic number and the metadata length.
     uint32_t totalSize = sizeof(kMagicNumber) + sizeof(totalSize);
     // cudfMetadata: length info and then the data.
-    size_t cudfSize = cudfMetadata ? cudfMetadata->size() : 0;
+    WireLengthType cudfSize = cudfMetadata ? cudfMetadata->size() : 0;
     totalSize += sizeof(cudfSize);
     totalSize += cudfSize;
     // dataSizeBytes
     totalSize += sizeof(dataSizeBytes);
     // remainingBytes: length and then the data.
-    totalSize += sizeof(size_t); // for numRemaining count
+    totalSize += sizeof(WireLengthType); // for numRemaining count
     totalSize += remainingBytes.size() * sizeof(remainingBytes[0]);
     // atEnd, encoded in a byte.
     totalSize += sizeof(uint8_t);
@@ -151,7 +159,7 @@ struct MetadataMsg {
     ptr += sizeof(totalSize);
 
     // Serialize cudfMetadata size.
-    size_t cudfSize = cudfMetadata ? cudfMetadata->size() : 0;
+    WireLengthType cudfSize = cudfMetadata ? cudfMetadata->size() : 0;
     std::memcpy(ptr, &cudfSize, sizeof(cudfSize));
     ptr += sizeof(cudfSize);
 
@@ -166,13 +174,13 @@ struct MetadataMsg {
     ptr += sizeof(dataSizeBytes);
 
     // Serialize number of remainingBytes elements.
-    size_t numRemaining = remainingBytes.size();
+    WireLengthType numRemaining = remainingBytes.size();
     std::memcpy(ptr, &numRemaining, sizeof(numRemaining));
     ptr += sizeof(numRemaining);
 
     // Serialize remainingBytes elements.
     if (numRemaining > 0) {
-      size_t bytesSize = numRemaining * sizeof(remainingBytes[0]);
+      auto bytesSize = numRemaining * sizeof(remainingBytes[0]);
       std::memcpy(ptr, remainingBytes.data(), bytesSize);
       ptr += bytesSize;
     }
@@ -208,7 +216,7 @@ struct MetadataMsg {
 
     // Deserialize cudfMetadata:
     // First read the size of the metadata.
-    size_t metaSize = 0;
+    WireLengthType metaSize = 0;
     if (ptr + sizeof(metaSize) > endPtr)
       throw std::runtime_error("Insufficient data for cudfMetadata size");
     std::memcpy(&metaSize, ptr, sizeof(metaSize));
@@ -231,7 +239,7 @@ struct MetadataMsg {
 
     // Deserialize remainingBytes vector:
     // Start with the count of elements.
-    size_t numRemaining = 0;
+    WireLengthType numRemaining = 0;
     if (ptr + sizeof(numRemaining) > endPtr)
       throw std::runtime_error("Insufficient data for remainingBytes count");
     std::memcpy(&numRemaining, ptr, sizeof(numRemaining));
@@ -240,7 +248,7 @@ struct MetadataMsg {
     // Reserve space in the vector and read each element.
     record.remainingBytes.resize(numRemaining);
     if (numRemaining > 0) {
-      size_t bytesSize = numRemaining * sizeof(record.remainingBytes[0]);
+      auto bytesSize = numRemaining * sizeof(record.remainingBytes[0]);
       if (ptr + bytesSize > endPtr)
         throw std::runtime_error("Insufficient data for remainingBytes values");
       std::memcpy(record.remainingBytes.data(), ptr, bytesSize);

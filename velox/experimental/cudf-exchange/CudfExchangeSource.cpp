@@ -335,6 +335,9 @@ void CudfExchangeSource::sendHandshake() {
   if (request_) {
     completedRequests_.push_back(std::move(request_));
   }
+  // Pass handshakeReq as the callback arg to keep the send buffer alive until
+  // the async amSend completes. UCXX stores it as shared_ptr<void> but the
+  // type-erased deleter still calls ~HandshakeMsg correctly.
   request_ = endpointRef_->endpoint_->amSend(
       handshakeReq.get(),
       sizeof(*handshakeReq),
@@ -351,7 +354,12 @@ void CudfExchangeSource::sendHandshake() {
 
 void CudfExchangeSource::onHandshake(
     ucs_status_t status,
-    std::shared_ptr<void> arg) {
+    std::shared_ptr<void> /*arg*/) {
+  // arg holds the HandshakeMsg that was sent — it is unused here because this
+  // is a send completion callback (the outgoing data has already been
+  // transmitted). The parameter exists only because UCXX uses it as a lifetime
+  // handle; letting it go out of scope releases the send buffer.
+
   // Check if close() was called - avoid processing if we're shutting down
   if (closed_.load(std::memory_order_acquire)) {
     VLOG(3) << toString() << " onHandshake called after close, ignoring";

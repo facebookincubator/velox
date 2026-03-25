@@ -43,11 +43,11 @@ class UcxExchange : public SourceOperator, public cudf_velox::NvtxHelper {
 
   ~UcxExchange() override;
 
-  BlockingReason isBlocked(ContinueFuture* future) override;
+  [[nodiscard]] BlockingReason isBlocked(ContinueFuture* future) override;
 
-  bool isFinished() override;
+  [[nodiscard]] bool isFinished() override;
 
-  RowVectorPtr getOutput() override;
+  [[nodiscard]] RowVectorPtr getOutput() override;
 
   void close() override;
 

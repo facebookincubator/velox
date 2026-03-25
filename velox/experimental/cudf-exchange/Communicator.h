@@ -61,7 +61,7 @@ class Communicator {
   /// @param coordinatorURL The URL of the coordinator
   /// @param future An optional future that will be set when the communicator
   /// is running and ready to accept connections.
-  static std::shared_ptr<Communicator> initAndGet(
+  [[nodiscard]] static std::shared_ptr<Communicator> initAndGet(
       uint16_t port,
       const std::string& coordinatorURL,
       ContinueFuture* future = nullptr);
@@ -100,7 +100,7 @@ class Communicator {
   /// @param hostPort Identifies and existing endpoint or is used to create a
   /// new endpoint if none exists for this host and port.
   /// @returns The endpoint reference or null if no connection was possible.
-  std::shared_ptr<EndpointRef> assocEndpointRef(
+  [[nodiscard]] std::shared_ptr<EndpointRef> assocEndpointRef(
       std::shared_ptr<CommElement> commElement,
       HostPort hostPort);
 
@@ -124,18 +124,18 @@ class Communicator {
   void deferRequestCleanup(std::shared_ptr<ucxx::Request> request);
 
   // Returns the URL of the coordinator.
-  const std::string& getCoordinatorUrl();
+  [[nodiscard]] const std::string& getCoordinatorUrl();
 
   /// @brief Get the listener's bound IP address.
   /// Used for same-node detection in intra-node transfer optimization.
   /// @returns The IP address string from the UCXX listener, or empty if not
   /// initialized.
-  std::string getListenerIp() const;
+  [[nodiscard]] std::string getListenerIp() const;
 
   /// @brief Get the listener's bound port.
   /// Used for same-node detection in intra-node transfer optimization.
   /// @returns The port number from the UCXX listener.
-  uint16_t getListenerPort() const;
+  [[nodiscard]] uint16_t getListenerPort() const;
 
   /// @brief Get the unique worker ID for this Communicator instance.
   /// Used for intra-process detection: if two endpoints share the same
