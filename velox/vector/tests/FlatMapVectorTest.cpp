@@ -393,6 +393,95 @@ TEST_F(FlatMapVectorTest, nullInMaps) {
   EXPECT_TRUE(flatMap->isInMap(2, 0));
 }
 
+TEST_F(FlatMapVectorTest, copyRangesWithNullInMaps) {
+  auto vectorSize = 2;
+  auto distinctKeys = maker_.flatVector<int32_t>({1, 2, 3});
+
+  std::vector<VectorPtr> sourceMapValues{
+      makeFlatVector<int32_t>({10, 20}),
+      makeFlatVector<int32_t>({30, 40}),
+      makeFlatVector<int32_t>({50, 60}),
+  };
+
+  std::vector<BufferPtr> sourceInMaps(distinctKeys->size());
+  sourceInMaps[1] = AlignedBuffer::allocate<bool>(vectorSize, pool_.get(), 0);
+
+  auto source = std::make_shared<FlatMapVector>(
+      pool_.get(),
+      MAP(INTEGER(), INTEGER()),
+      nullptr,
+      vectorSize,
+      distinctKeys,
+      sourceMapValues,
+      sourceInMaps);
+
+  auto target = std::make_shared<FlatMapVector>(
+      pool_.get(),
+      MAP(INTEGER(), INTEGER()),
+      nullptr,
+      vectorSize,
+      makeFlatVector<int32_t>({4}),
+      std::vector<VectorPtr>{makeFlatVector<int32_t>({0, 0})},
+      std::vector<BufferPtr>{nullptr});
+
+  std::vector<BaseVector::CopyRange> ranges = {BaseVector::CopyRange{0, 0, 2}};
+  target->copyRanges(
+      source.get(), folly::Range<const BaseVector::CopyRange*>{ranges});
+
+  assertEqualVectors(source, target);
+}
+
+struct MockBufferViewReleaser {
+  void addRef() {}
+  void release() {}
+};
+
+TEST_F(FlatMapVectorTest, resizeWithViewInMaps) {
+  using MockBufferView = BufferView<MockBufferViewReleaser&>;
+  static MockBufferViewReleaser releaser;
+
+  auto vectorSize = 2;
+  auto distinctKeys = maker_.flatVector<int32_t>({1, 2});
+
+  std::vector<VectorPtr> mapValues{
+      BaseVector::create(INTEGER(), vectorSize, pool_.get()),
+      BaseVector::create(INTEGER(), vectorSize, pool_.get()),
+  };
+  mapValues[0]->asFlatVector<int32_t>()->set(0, 10);
+  mapValues[0]->asFlatVector<int32_t>()->set(1, 20);
+  mapValues[1]->asFlatVector<int32_t>()->set(0, 30);
+  mapValues[1]->asFlatVector<int32_t>()->set(1, 40);
+
+  auto inMapBuffer = AlignedBuffer::allocate<bool>(vectorSize, pool_.get());
+  auto rawInMapBuffer = inMapBuffer->asMutable<uint64_t>();
+  bits::setBit(rawInMapBuffer, 0, true);
+  bits::setBit(rawInMapBuffer, 1, true);
+
+  std::vector<BufferPtr> inMaps{
+      MockBufferView::create(inMapBuffer, releaser),
+      nullptr,
+  };
+
+  auto flatMap = std::make_shared<FlatMapVector>(
+      pool_.get(),
+      MAP(INTEGER(), INTEGER()),
+      nullptr,
+      vectorSize,
+      distinctKeys,
+      std::move(mapValues),
+      std::move(inMaps));
+
+  flatMap->resize(4);
+
+  EXPECT_EQ(flatMap->size(), 4);
+  EXPECT_TRUE(flatMap->isInMap(0, 0));
+  EXPECT_TRUE(flatMap->isInMap(0, 1));
+
+  // Verify sizeAt() works after resize.
+  EXPECT_EQ(flatMap->sizeAt(0), 2);
+  EXPECT_EQ(flatMap->sizeAt(1), 2);
+}
+
 TEST_F(FlatMapVectorTest, primitiveKeys) {
   // bigint key.
   auto flatMapVector = maker_.flatMapVector<int64_t, double>({

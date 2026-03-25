@@ -230,11 +230,10 @@ void CudfHashJoinBuild::noMoreInput() {
   auto stream = cudfGlobalStreamPool().get_stream();
   // Using output_mr here to allow spilling queued up large tables
   auto tbls = getConcatenatedTableBatched(
-      inputs_, joinNode_->sources()[1]->outputType(), stream, get_output_mr());
-
-  // Release input data after synchronizing
-  stream.synchronize();
-  inputs_.clear();
+      std::exchange(inputs_, {}),
+      joinNode_->sources()[1]->outputType(),
+      stream,
+      get_output_mr());
 
   for (auto const& tbl : tbls) {
     VELOX_CHECK_NOT_NULL(tbl);
@@ -595,10 +594,10 @@ void CudfHashJoinProbe::noMoreInput() {
   auto stream = cudfGlobalStreamPool().get_stream();
   // Using output_mr here to allow spilling queued up large tables
   auto tbl = getConcatenatedTable(
-      inputs_, joinNode_->sources()[1]->outputType(), stream, get_output_mr());
-
-  // Release input data after synchronizing
-  stream.synchronize();
+      std::exchange(inputs_, {}),
+      joinNode_->sources()[1]->outputType(),
+      stream,
+      get_output_mr());
 
   VELOX_CHECK_NOT_NULL(tbl);
 
@@ -614,8 +613,6 @@ void CudfHashJoinProbe::noMoreInput() {
       tbl->num_rows(),
       std::move(tbl),
       stream);
-
-  inputs_.clear();
 }
 
 std::unique_ptr<cudf::table> CudfHashJoinProbe::unfilteredOutput(
