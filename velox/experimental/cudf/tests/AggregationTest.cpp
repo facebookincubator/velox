@@ -1054,6 +1054,91 @@ TEST_F(AggregationTest, countConstantPartialIntermediateFinalGlobalNulls) {
       AggSteps::kPartialIntermediateFinal);
 }
 
+// --- count(NULL) global ---
+
+TEST_F(AggregationTest, countNullSingleGlobal) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3, 4}),
+  });
+  createDuckDbTable({data});
+  testAggregation(
+      {data},
+      {},
+      {"count(null)"},
+      "SELECT count(null) FROM tmp",
+      AggSteps::kSingle);
+}
+
+TEST_F(AggregationTest, countNullPartialFinalGlobal) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3, 4}),
+  });
+  createDuckDbTable({data});
+  testAggregation(
+      {data},
+      {},
+      {"count(null)"},
+      "SELECT count(null) FROM tmp",
+      AggSteps::kPartialFinal);
+}
+
+TEST_F(AggregationTest, countNullPartialIntermediateFinalGlobal) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3, 4}),
+  });
+  createDuckDbTable({data});
+  testAggregation(
+      {data},
+      {},
+      {"count(null)"},
+      "SELECT count(null) FROM tmp",
+      AggSteps::kPartialIntermediateFinal);
+}
+
+// --- count(NULL) group-by ---
+
+TEST_F(AggregationTest, countNullSingleGroupBy) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3}),
+      makeFlatVector<int64_t>({10, 20, 30, 40, 50, 60}),
+  });
+  createDuckDbTable({data});
+  testAggregation(
+      {data},
+      {"c0"},
+      {"count(null)"},
+      "SELECT c0, count(null) FROM tmp GROUP BY c0",
+      AggSteps::kSingle);
+}
+
+TEST_F(AggregationTest, countNullPartialFinalGroupBy) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3}),
+      makeFlatVector<int64_t>({10, 20, 30, 40, 50, 60}),
+  });
+  createDuckDbTable({data});
+  testAggregation(
+      {data},
+      {"c0"},
+      {"count(null)"},
+      "SELECT c0, count(null) FROM tmp GROUP BY c0",
+      AggSteps::kPartialFinal);
+}
+
+TEST_F(AggregationTest, countNullPartialIntermediateFinalGroupBy) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3}),
+      makeFlatVector<int64_t>({10, 20, 30, 40, 50, 60}),
+  });
+  createDuckDbTable({data});
+  testAggregation(
+      {data},
+      {"c0"},
+      {"count(null)"},
+      "SELECT c0, count(null) FROM tmp GROUP BY c0",
+      AggSteps::kPartialIntermediateFinal);
+}
+
 /// Tests the spark scenario of having different types of aggs in the same
 /// planNode Specific example being tested is
 /// https://github.com/facebookincubator/velox/issues/12830#issuecomment-2783340233

@@ -425,8 +425,8 @@ TEST_F(ToCudfSelectionTest, zeroColumnCountConstantFallsBack) {
   ASSERT_TRUE(wasDefaultHashAggregationUsed(task));
 }
 
-// Test count(NULL) should fall back to CPU.
-TEST_F(ToCudfSelectionTest, countNullAggregationFallsBack) {
+// Test count(NULL) runs on cudf GPU (returns 0).
+TEST_F(ToCudfSelectionTest, countNullAggregationUsesGpu) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
 
@@ -445,8 +445,8 @@ TEST_F(ToCudfSelectionTest, countNullAggregationFallsBack) {
                   .plan(plan)
                   .assertResults("SELECT count(NULL) FROM tmp");
 
-  ASSERT_FALSE(wasCudfAggregationUsed(task));
-  ASSERT_TRUE(wasDefaultHashAggregationUsed(task));
+  ASSERT_TRUE(wasCudfAggregationUsed(task));
+  ASSERT_FALSE(wasDefaultHashAggregationUsed(task));
 }
 
 // Test CUDF disabled should always use regular aggregation

@@ -123,6 +123,7 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
   enum class CountInputKind {
     kColumn,
     kCountAll,
+    kNullConstant,
   };
 
   static bool isCountFunctionName(std::string_view kind) {
@@ -142,8 +143,12 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
   static CountInputKind getInputKind(
       const core::AggregationNode::Aggregate& aggregate,
       const VectorPtr& constant) {
-    if (aggregate.call->inputs().empty() || constant != nullptr) {
+    if (aggregate.call->inputs().empty()) {
       return CountInputKind::kCountAll;
+    }
+    if (constant != nullptr) {
+      return constant->isNullAt(0) ? CountInputKind::kNullConstant
+                                   : CountInputKind::kCountAll;
     }
     return CountInputKind::kColumn;
   }
@@ -170,7 +175,10 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
       std::vector<cudf::groupby::aggregation_request>& requests) override {
     auto& request = requests.emplace_back();
     outputIdx_ = requests.size() - 1;
-    const bool countAll = countsAllRows();
+
+    // kCountAll and kNullConstant both submit a count-all-rows request;
+    // kNullConstant overrides the result with zeros in makeOutputColumn.
+    const bool countAll = (inputKind_ != CountInputKind::kColumn);
     // For raw input, count(*) can use any column (column 0) since we just
     // need a row count. For non-raw input (intermediate/final in streaming),
     // the input is partial results where column 0 is the grouping key;
@@ -194,6 +202,9 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
     if (exec::isRawInput(step)) {
       int64_t count;
       switch (inputKind_) {
+        case CountInputKind::kNullConstant:
+          count = 0;
+          break;
         case CountInputKind::kCountAll:
           count = input.num_columns() > 0 ? input.num_rows() : inputRowCount;
           break;
@@ -234,6 +245,11 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
       std::vector<cudf::groupby::aggregation_result>& results,
       rmm::cuda_stream_view stream) override {
     auto col = std::move(results[outputIdx_].results[0]);
+    if (inputKind_ == CountInputKind::kNullConstant) {
+      auto zero = cudf::numeric_scalar<int64_t>(0, true, stream, get_temp_mr());
+      col = cudf::make_column_from_scalar(
+          zero, col->size(), stream, get_output_mr());
+    }
     const auto cudfOutputType =
         cudf::data_type(cudf_velox::veloxToCudfTypeId(resultType));
     if (col->type() != cudfOutputType) {
@@ -243,10 +259,6 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
   }
 
  private:
-  bool countsAllRows() const {
-    return inputKind_ == CountInputKind::kCountAll;
-  }
-
   CountInputKind inputKind_;
   uint32_t outputIdx_;
 };
@@ -2095,22 +2107,17 @@ bool canAggregationBeEvaluatedByCudf(
     return false;
   }
 
-  // Allow certain cases of count(<constant>), and all of count(<column>) and
-  // count(*).
+  // CountAggregator handles all variants directly: count(*), count(column),
+  // count(constant), count(NULL). Skip signature matching (count(NULL) has
+  // UNKNOWN type that wouldn't match any registered signature).
   if (CountAggregator::isCountFunctionName(call.name())) {
-    for (const auto& arg : call.inputs()) {
-      auto constant = dynamic_cast<const core::ConstantTypedExpr*>(arg.get());
-      if (constant && constant->isNull()) {
-        return false;
-      }
-    }
-  } else if (hasOnlyConstantArguments(call)) { // Fallback on all-constant and
-                                               // non-count cases such as
-                                               // sum(1), min(2), etc.
+    return true;
+  }
+
+  if (hasOnlyConstantArguments(call)) {
     return false;
   }
 
-  // Validate against step-specific signatures from registry
   return matchTypedCallAgainstSignatures(call, stepIt->second);
 }
 
@@ -2149,7 +2156,13 @@ bool canBeEvaluatedByCudf(
       return false;
     }
 
-    // Check input expressions can be evaluated by CUDF, expand the input first
+    // CountAggregator handles its own inputs; skip expression validation
+    // (e.g. count(NULL) has UNKNOWN type unsupported by the cuDF AST
+    // evaluator).
+    if (CountAggregator::isCountFunctionName(aggregate.call->name())) {
+      continue;
+    }
+
     for (const auto& input : aggregate.call->inputs()) {
       auto expandedInput = expandFieldReference(input, sourceNode);
       std::vector<core::TypedExprPtr> exprs = {expandedInput};
