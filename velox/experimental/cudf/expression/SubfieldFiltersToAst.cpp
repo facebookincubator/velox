@@ -182,6 +182,8 @@ std::reference_wrapper<const cudf::ast::expression> buildIntegerRangeExpr(
       return *upperExpr;
     }
 
+    // If neither lower nor upper bound expressions were created, it means
+    // the filter covers the entire range of the type, so it's a no-op.
     return tree.push(Operation{Op::EQUAL, columnRef, columnRef});
   } else {
     VELOX_FAIL("Unsupported type for buildRangeExpr: {}", Kind);
