@@ -175,8 +175,8 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
     // need a row count. For non-raw input (intermediate/final in streaming),
     // the input is partial results where column 0 is the grouping key;
     // we must use inputIndex to access the partial count column.
-    request.values = tbl.column(
-        (countAll && exec::isRawInput(step)) ? 0 : inputIndex);
+    request.values =
+        tbl.column((countAll && exec::isRawInput(step)) ? 0 : inputIndex);
     std::unique_ptr<cudf::groupby_aggregation> aggRequest =
         exec::isRawInput(step)
         ? cudf::make_count_aggregation<cudf::groupby_aggregation>(
@@ -912,12 +912,7 @@ auto toAggregators(
         : outputType->childAt(numKeys + i);
 
     aggregators.push_back(createAggregator(
-        companionStep,
-        aggregate,
-        inputIndex,
-        constant,
-        isGlobal,
-        resultType));
+        companionStep, aggregate, inputIndex, constant, isGlobal, resultType));
   }
   return aggregators;
 }
@@ -1340,8 +1335,9 @@ CudfVectorPtr CudfHashAggregation::doGlobalAggregation(
   std::vector<std::unique_ptr<cudf::column>> resultColumns;
   resultColumns.reserve(aggregators_.size());
   for (auto i = 0; i < aggregators_.size(); i++) {
-    resultColumns.push_back(aggregators_[i]->doReduce(
-        tableView, outputType_->childAt(i), stream, numInputRows_));
+    resultColumns.push_back(
+        aggregators_[i]->doReduce(
+            tableView, outputType_->childAt(i), stream, numInputRows_));
   }
 
   return std::make_shared<cudf_velox::CudfVector>(
