@@ -393,6 +393,44 @@ TEST_F(FlatMapVectorTest, nullInMaps) {
   EXPECT_TRUE(flatMap->isInMap(2, 0));
 }
 
+TEST_F(FlatMapVectorTest, copyRangesWithNullInMaps) {
+  auto vectorSize = 2;
+  auto distinctKeys = maker_.flatVector<int32_t>({1, 2, 3});
+
+  std::vector<VectorPtr> sourceMapValues{
+      makeFlatVector<int32_t>({10, 20}),
+      makeFlatVector<int32_t>({30, 40}),
+      makeFlatVector<int32_t>({50, 60}),
+  };
+
+  std::vector<BufferPtr> sourceInMaps(distinctKeys->size());
+  sourceInMaps[1] = AlignedBuffer::allocate<bool>(vectorSize, pool_.get(), 0);
+
+  auto source = std::make_shared<FlatMapVector>(
+      pool_.get(),
+      MAP(INTEGER(), INTEGER()),
+      nullptr,
+      vectorSize,
+      distinctKeys,
+      sourceMapValues,
+      sourceInMaps);
+
+  auto target = std::make_shared<FlatMapVector>(
+      pool_.get(),
+      MAP(INTEGER(), INTEGER()),
+      nullptr,
+      vectorSize,
+      makeFlatVector<int32_t>({4}),
+      std::vector<VectorPtr>{makeFlatVector<int32_t>({0, 0})},
+      std::vector<BufferPtr>{nullptr});
+
+  std::vector<BaseVector::CopyRange> ranges = {BaseVector::CopyRange{0, 0, 2}};
+  target->copyRanges(
+      source.get(), folly::Range<const BaseVector::CopyRange*>{ranges});
+
+  assertEqualVectors(source, target);
+}
+
 TEST_F(FlatMapVectorTest, primitiveKeys) {
   // bigint key.
   auto flatMapVector = maker_.flatMapVector<int64_t, double>({
