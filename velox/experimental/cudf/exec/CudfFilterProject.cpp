@@ -257,7 +257,6 @@ RowVectorPtr CudfFilterProject::getOutput() {
   auto outputColumns = project(inputTableColumns, stream);
 
   auto outputTable = std::make_unique<cudf::table>(std::move(outputColumns));
-  stream.synchronize();
   auto const numColumns = outputTable->num_columns();
   auto const size = numColumns > 0 ? outputTable->num_rows() : outputSize;
   if (CudfConfig::getInstance().debugEnabled) {
