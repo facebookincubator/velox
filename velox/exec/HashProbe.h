@@ -200,7 +200,7 @@ class HashProbe : public Operator {
   // 'filterPropagateNulls' is true, the probe input row which has null in any
   // probe filter column can't pass the filter.
   void prepareFilterRowsForNullAwareJoin(
-      RowVectorPtr& filterInput,
+      const RowVector* filterInput,
       vector_size_t numRows,
       bool filterPropagateNulls);
 

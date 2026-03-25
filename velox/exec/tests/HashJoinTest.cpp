@@ -308,6 +308,99 @@ TEST_P(MultiThreadedHashJoinTest, filter) {
       .run();
 }
 
+// Regression test for a JoinFuzzer-found bug where HashProbe::evalFilter
+// produces a DictionaryVector<bool> with indices pointing past the base
+// vector's size. The issue involves the filter "t_N = true" on a
+// dictionary-encoded probe boolean column combined with expression
+// memoization across multiple output batches from the same probe input.
+// In debug builds, this triggers a validation failure in
+// DictionaryVector::validate().
+//
+// This test exercises the same code path: hash join with boolean filter on
+// a probe column that is also a join key, using dictionary-encoded probe
+// input (matching the fuzzer's ENCODED input type) and small output batch
+// sizes to force multiple output batches from the same probe input.
+TEST_P(HashJoinTest, booleanJoinFilterDictionaryValidation) {
+  VectorFuzzer::Options opts;
+  opts.nullRatio = 0.1;
+
+  for (int seed = 0; seed < 20; ++seed) {
+    SCOPED_TRACE(fmt::format("seed: {}", seed));
+    opts.vectorSize = 10 + (seed % 20);
+    VectorFuzzer fuzzer(opts, pool_.get(), seed);
+
+    auto probeType = ROW({"t0", "t1"}, {INTEGER(), BOOLEAN()});
+    auto buildType = ROW({"u0", "u1"}, {INTEGER(), BOOLEAN()});
+
+    // Use fuzzRow which wraps columns in dictionary/constant encoding,
+    // matching the JoinFuzzer's ENCODED input type.
+    std::vector<RowVectorPtr> probeVectors = {fuzzer.fuzzRow(probeType)};
+    std::vector<RowVectorPtr> buildVectors = {fuzzer.fuzzRow(buildType)};
+
+    for (int batchSize : {3, 5}) {
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+          .numDrivers(1)
+          .probeKeys({"t0", "t1"})
+          .probeVectors(std::vector<RowVectorPtr>(probeVectors))
+          .buildKeys({"u0", "u1"})
+          .buildVectors(std::vector<RowVectorPtr>(buildVectors))
+          .joinFilter("t1 = true")
+          .joinOutputLayout({"t0", "t1", "u0", "u1"})
+          .config(
+              core::QueryConfig::kPreferredOutputBatchRows,
+              std::to_string(batchSize))
+          .config(
+              core::QueryConfig::kMaxOutputBatchRows, std::to_string(batchSize))
+          .injectSpill(false)
+          .referenceQuery(
+              "SELECT t.t0, t.t1, u.u0, u.u1 FROM t, u "
+              "WHERE t.t0 = u.u0 AND t.t1 = u.u1 AND t.t1 = true")
+          .run();
+    }
+  }
+}
+
+// Same as above but with the boolean filter column as a non-key payload
+// column, exercising a slightly different code path where only integer
+// keys are used for join matching.
+TEST_P(HashJoinTest, booleanPayloadFilterDictionaryValidation) {
+  VectorFuzzer::Options opts;
+  opts.nullRatio = 0.1;
+
+  for (int seed = 0; seed < 20; ++seed) {
+    SCOPED_TRACE(fmt::format("seed: {}", seed));
+    opts.vectorSize = 10 + (seed % 20);
+    VectorFuzzer fuzzer(opts, pool_.get(), seed);
+
+    auto probeType = ROW({"t0", "t1"}, {INTEGER(), BOOLEAN()});
+    auto buildType = ROW({"u0", "u1"}, {INTEGER(), BOOLEAN()});
+
+    std::vector<RowVectorPtr> probeVectors = {fuzzer.fuzzRow(probeType)};
+    std::vector<RowVectorPtr> buildVectors = {fuzzer.fuzzRow(buildType)};
+
+    for (int batchSize : {3, 5}) {
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+          .numDrivers(1)
+          .probeKeys({"t0"})
+          .probeVectors(std::vector<RowVectorPtr>(probeVectors))
+          .buildKeys({"u0"})
+          .buildVectors(std::vector<RowVectorPtr>(buildVectors))
+          .joinFilter("t1 = true")
+          .joinOutputLayout({"t0", "t1", "u0", "u1"})
+          .config(
+              core::QueryConfig::kPreferredOutputBatchRows,
+              std::to_string(batchSize))
+          .config(
+              core::QueryConfig::kMaxOutputBatchRows, std::to_string(batchSize))
+          .injectSpill(false)
+          .referenceQuery(
+              "SELECT t.t0, t.t1, u.u0, u.u1 FROM t, u "
+              "WHERE t.t0 = u.u0 AND t.t1 = true")
+          .run();
+    }
+  }
+}
+
 DEBUG_ONLY_TEST_P(MultiThreadedHashJoinTest, filterSpillOnFirstProbeInput) {
   auto spillDirectory = TempDirectoryPath::create();
   std::atomic_bool injectProbeSpillOnce{true};
@@ -1746,6 +1839,51 @@ TEST_P(MultiThreadedHashJoinTest, antiJoinWithFilterAndEmptyBuild) {
         })
         .run();
   }
+}
+
+// Reproduces a debug-mode crash in evalFilter for ANTI join with filter.
+// A batch of all matched rows followed by a batch of all non-matching rows
+// triggers DictionaryVector::validate on a stale filterResult_ whose shared
+// outputRowMapping_ buffer has been overwritten by listJoinResults.
+TEST_P(MultiThreadedHashJoinTest, antiJoinWithBooleanKeysAndFilter) {
+  // 5 build rows with key (true, true).
+  auto buildVectors = makeBatches(1, [&](int32_t /*unused*/) {
+    return makeRowVector(
+        {"u0", "u1"},
+        {
+            makeFlatVector<bool>(5, [](auto /*row*/) { return true; }),
+            makeFlatVector<bool>(5, [](auto /*row*/) { return true; }),
+        });
+  });
+
+  // 10 probe rows: rows 0-1 match (2 * 5 = 10 output entries),
+  // rows 2-9 don't match (8 miss entries).
+  auto probeVectors = makeBatches(1, [&](int32_t /*unused*/) {
+    return makeRowVector(
+        {"t0", "t1"},
+        {
+            makeFlatVector<bool>(10, [](auto row) { return row < 2; }),
+            makeFlatVector<bool>(10, [](auto row) { return row < 2; }),
+        });
+  });
+
+  // outputBatchSize=10 forces the split: 10 matches in batch 1,
+  // 8 misses in batch 2.
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .numDrivers(1)
+      .probeKeys({"t0", "t1"})
+      .probeVectors(std::move(probeVectors))
+      .buildKeys({"u0", "u1"})
+      .buildVectors(std::move(buildVectors))
+      .joinType(core::JoinType::kAnti)
+      .joinFilter("t1 = true")
+      .joinOutputLayout({"t0", "t1"})
+      .referenceQuery(
+          "SELECT t.* FROM t WHERE NOT EXISTS "
+          "(SELECT * FROM u WHERE t.t0 = u.u0 AND t.t1 = u.u1 AND t.t1 = true)")
+      .config(core::QueryConfig::kPreferredOutputBatchRows, std::to_string(10))
+      .checkSpillStats(false)
+      .run();
 }
 
 TEST_P(MultiThreadedHashJoinTest, leftJoin) {
