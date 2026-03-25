@@ -111,7 +111,7 @@ const cudf::ast::expression& createRangeExpr(
 }
 
 template <TypeKind Kind, typename FilterT>
-std::reference_wrapper<const cudf::ast::expression> buildRangeExpr(
+std::reference_wrapper<const cudf::ast::expression> buildIntegerRangeExpr(
     const common::Filter& filter,
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
@@ -152,27 +152,28 @@ std::reference_wrapper<const cudf::ast::expression> buildRangeExpr(
     };
 
     if (lower == upper) {
+      // Equal comparison: column = value.
       if (lower < minBound || lower > maxBound) {
+        // Value is outside the representable range of NativeT, always false.
         return tree.push(Operation{Op::NOT_EQUAL, columnRef, columnRef});
       }
       auto const& literal = addLiteral(lower);
       return tree.push(Operation{Op::EQUAL, columnRef, literal});
     }
 
+    // Range comparison: column >= lower AND column <= upper.
     const cudf::ast::expression* lowerExpr = nullptr;
     if (!skipLowerBound) {
       auto const& lowerLiteral = addLiteral(lower);
       lowerExpr =
           &tree.push(Operation{Op::GREATER_EQUAL, columnRef, lowerLiteral});
     }
-
     const cudf::ast::expression* upperExpr = nullptr;
     if (!skipUpperBound) {
       auto const& upperLiteral = addLiteral(upper);
       upperExpr =
           &tree.push(Operation{Op::LESS_EQUAL, columnRef, upperLiteral});
     }
-
     if (lowerExpr && upperExpr) {
       return tree.push(
           Operation{Op::NULL_LOGICAL_AND, *lowerExpr, *upperExpr});
@@ -194,10 +195,18 @@ std::reference_wrapper<const cudf::ast::expression> buildBigintRangeExpr(
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const cudf::ast::expression& columnRef,
-    rmm::cuda_stream_view /*stream*/,
-    rmm::device_async_resource_ref /*mr*/,
     const TypePtr& columnTypePtr) {
-  return buildRangeExpr<Kind, common::BigintRange>(
+  return buildIntegerRangeExpr<Kind, common::BigintRange>(
+      filter, tree, scalars, columnRef, columnTypePtr);
+}
+
+std::reference_wrapper<const cudf::ast::expression> buildHugeintRangeExpr(
+    const common::Filter& filter,
+    cudf::ast::tree& tree,
+    std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+    const cudf::ast::expression& columnRef,
+    const TypePtr& columnTypePtr) {
+  return buildIntegerRangeExpr<TypeKind::HUGEINT, common::HugeintRange>(
       filter, tree, scalars, columnRef, columnTypePtr);
 }
 
@@ -367,17 +376,14 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
           tree,
           scalars,
           columnRef,
-          stream,
-          mr,
           columnType);
       return result.get();
     }
 
     case common::FilterKind::kHugeintRange: {
       auto const& columnType = inputRowSchema->childAt(columnIndex);
-      return buildRangeExpr<TypeKind::HUGEINT, common::HugeintRange>(
-                 filter, tree, scalars, columnRef, columnType)
-          .get();
+      auto const& expr = buildHugeintRangeExpr(filter, tree, scalars, columnRef, columnType);
+      return expr.get();
     }
 
     case common::FilterKind::kBigintValuesUsingHashTable: {
