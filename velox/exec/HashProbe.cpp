@@ -15,6 +15,7 @@
  */
 
 #include "velox/exec/HashProbe.h"
+#include <folly/ScopeGuard.h>
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/testutil/TestValue.h"
@@ -866,6 +867,7 @@ void HashProbe::fillLeftSemiProjectMatchColumn(vector_size_t size) {
 }
 
 void HashProbe::fillOutput(vector_size_t size) {
+  TestValue::adjust("facebook::velox::exec::HashProbe::fillOutput", this);
   prepareOutput(size);
 
   for (auto [in, out] : projectedInputColumns_) {
@@ -1077,7 +1079,7 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
 
   clearProjectedOutput();
 
-  if (!input_) {
+  if (input_ == nullptr) {
     if (hasMoreInput()) {
       return nullptr;
     }
@@ -1248,6 +1250,20 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
       return nullptr;
     }
     VELOX_CHECK_LE(numOut, outputBatchSize);
+
+    // Pre-load lazy input vectors within a reclaimable section so that the
+    // subsequent non-reclaimable evalFilter/fillOutput does not trigger OOM.
+    // If memory reclaim spills the hash table during lazy loading,
+    // ensureLazyInputLoaded() spills the current input and sets input_ to
+    // nullptr. We must bail out because resultIter_ now references freed
+    // hash table rows.
+    if (!toSpillOutput) {
+      ensureLazyInputLoaded();
+      if (input_ == nullptr) {
+        return nullptr;
+      }
+      VELOX_CHECK_NOT_NULL(table_);
+    }
 
     numOut = evalFilter(numOut);
 
@@ -1889,9 +1905,11 @@ void HashProbe::ensureOutputFits() {
     memory::testingRunArbitration(pool());
   }
 
-  const uint64_t bytesToReserve =
-      operatorCtx_->driverCtx()->queryConfig().preferredOutputBatchBytes() *
-      1.2;
+  const uint64_t bytesToReserve = static_cast<uint64_t>(
+      static_cast<double>(operatorCtx_->driverCtx()
+                              ->queryConfig()
+                              .preferredOutputBatchBytes()) *
+      1.2);
   if (pool()->availableReservation() >= bytesToReserve) {
     return;
   }
@@ -1905,6 +1923,97 @@ void HashProbe::ensureOutputFits() {
                << " for memory pool " << pool()->name()
                << ", usage: " << succinctBytes(pool()->usedBytes())
                << ", reservation: " << succinctBytes(pool()->reservedBytes());
+}
+
+bool HashProbe::needLazyLoadProbeInput() const {
+  if (!canReclaim() || input_ == nullptr || replacedWithDynamicFilter_) {
+    return false;
+  }
+
+  // For left semi filter/project and anti joins without a filter,
+  // ensureLoaded() is a no-op — lazy vectors are passed through zero-copy
+  // via wrapChild() in fillOutput() and never loaded during probe.
+  // Preloading is unnecessary because no loading happens.
+  if (!filter_ &&
+      (isLeftSemiFilterJoin(joinType_) || isLeftSemiProjectJoin(joinType_) ||
+       isAntiJoin(joinType_))) {
+    return false;
+  }
+  return true;
+}
+
+void HashProbe::ensureLazyInputLoaded() {
+  if (!needLazyLoadProbeInput()) {
+    return;
+  }
+
+  VELOX_CHECK_NOT_NULL(input_);
+
+  // When atEnd (single output batch), fillOutput() skips loading via
+  // ensureLoadedIfNotAtEnd() and wraps lazy vectors zero-copy.
+  // However, createFilterInput() unconditionally loads filter+projected
+  // columns, so those still need preloading when a filter is present.
+  const bool atEnd{resultIter_->atEnd()};
+  if (atEnd && !filter_) {
+    return;
+  }
+
+  std::vector<column_index_t> lazyChannels;
+  if (!atEnd) {
+    for (const auto& [in, _] : projectedInputColumns_) {
+      if (isLazyNotLoaded(*input_->childAt(in))) {
+        lazyChannels.push_back(in);
+      }
+    }
+  }
+  if (filter_) {
+    for (const auto& projection : filterInputProjections_) {
+      if (atEnd &&
+          projectedInputColumns_.find(projection.inputChannel) ==
+              projectedInputColumns_.end()) {
+        continue;
+      }
+      if (isLazyNotLoaded(*input_->childAt(projection.inputChannel))) {
+        lazyChannels.push_back(projection.inputChannel);
+      }
+    }
+  }
+  if (lazyChannels.empty()) {
+    return;
+  }
+
+  const bool tableWasNonEmpty{table_->numDistinct() > 0};
+  {
+    loadingLazyInput_ = true;
+    SCOPE_EXIT {
+      loadingLazyInput_ = false;
+    };
+    Operator::ReclaimableSectionGuard guard(this);
+    if (testingTriggerSpill(pool()->name())) {
+      memory::testingRunArbitration(pool());
+    }
+    for (const auto channel : lazyChannels) {
+      ensureLoaded(channel);
+    }
+  }
+
+  // If the hash table was spilled during lazy loading (it was non-empty
+  // before but is now empty), spill the current input so it can be re-probed
+  // during the restore pass. After spilling, resultIter_ references freed
+  // hash table rows, so we must abandon the current iteration by setting
+  // input_ to nullptr.
+  VELOX_CHECK_NOT_NULL(input_);
+  if (tableWasNonEmpty && table_->numDistinct() == 0) {
+    VELOX_CHECK_NOT_NULL(inputSpiller_);
+    spillInput(input_);
+    if (input_ != nullptr) {
+      // Non-spilled rows remain. For join types that skip probe on empty
+      // build side (inner, right, semi filter), dropping them is correct.
+      // For left/anti/full joins this would be data loss — fail loudly.
+      VELOX_CHECK(skipProbeOnEmptyBuild());
+    }
+    input_ = nullptr;
+  }
 }
 
 bool HashProbe::canReclaim() const {
@@ -2036,6 +2145,13 @@ void HashProbe::spillOutput(const std::vector<HashProbe*>& operators) {
   auto* spillExecutor = spillConfig()->executor;
   for (auto* op : operators) {
     HashProbe* probeOp = static_cast<HashProbe*>(op);
+    // Skip operators that are in the middle of loading lazy input vectors.
+    // Their reclaim path re-enters getOutputInternal()->fillOutput(), or
+    // evalFilter()->createFilterInput() which loads the same lazy vectors,
+    // deadlocking on the column reader's folly::basic_once_flag.
+    if (probeOp->loadingLazyInput_) {
+      continue;
+    }
     spillTasks.push_back(
         memory::createAsyncMemoryReclaimTask<SpillResult>([probeOp]() {
           try {

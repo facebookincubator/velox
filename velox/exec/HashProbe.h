@@ -279,6 +279,17 @@ class HashProbe : public Operator {
   // operator is set to reclaimable at this stage.
   void ensureOutputFits();
 
+  // Returns true if the current input batch requires lazy preloading before
+  // the non-reclaimable probe output loop. Checks canReclaim(), input state,
+  // and join type to determine if preloading is needed.
+  bool needLazyLoadProbeInput() const;
+
+  // Pre-loads lazy input vectors in a reclaimable section so that the
+  // subsequent non-reclaimable evalFilter/fillOutput does not trigger OOM.
+  // Called after listJoinResults() so that atEnd() is known and preloading
+  // can be skipped for columns that fillOutput/createFilterInput won't load.
+  void ensureLazyInputLoaded();
+
   // Setups spilled output reader if 'spillOutputPartitionSet_' is not empty.
   void maybeSetupSpillOutputReader();
 
@@ -683,6 +694,11 @@ class HashProbe : public Operator {
   // cases where there is more than one batch of output or join filter
   // input.
   SelectivityVector passingInputRows_;
+
+  // Set while loading lazy input vectors inside a ReclaimableSectionGuard.
+  // Tells reclaim() to skip spillOutput() for this operator to avoid
+  // re-entering the column reader (which would deadlock on call_once).
+  tsan_atomic<bool> loadingLazyInput_{false};
 
   // Indicates if this hash probe has exceeded max spill limit which is not
   // allowed to spill. This is reset when hash probe operator starts to probe
