@@ -24,11 +24,20 @@ values need to match, and an optional filter to apply to join results.
     :align: center
 
 The join type can be one of kInner, kLeft, kRight, kFull, kLeftSemiFilter,
-kLeftSemiProject, kRightSemiFilter, kRightSemiProject, or kAnti.
+kCountingLeftSemiFilter, kLeftSemiProject, kRightSemiFilter, kRightSemiProject,
+kAnti, or kCountingAnti.
 
 kLeftSemiProject, kRightSemiProject and kAnti joins support an additional
 nullAware flag to distinguish between IN (null aware) and EXISTS (regular)
 semantics.
+
+kCountingAnti and kCountingLeftSemiFilter are multiset variants of kAnti and
+kLeftSemiFilter. The build side deduplicates keys and stores a per-key count.
+On probe, each match decrements the count. kCountingAnti emits a probe row when
+the count reaches zero or no match is found (EXCEPT ALL semantics).
+kCountingLeftSemiFilter emits a probe row while the count is greater than zero
+(INTERSECT ALL semantics). Counting joins do not support extra filter or
+null-aware mode. Spilling is not yet supported.
 
 Filter is optional. If specified it can be any expression over the results of
 the join. This expression will be evaluated using the same expression

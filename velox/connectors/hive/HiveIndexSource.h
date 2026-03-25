@@ -112,14 +112,18 @@ class HiveIndexSource : public IndexSource,
       std::vector<std::string>& readColumnNames,
       std::vector<TypePtr>& readColumnTypes);
 
+  // Creates a UnionResultIterator that unions results from all readers.
+  std::shared_ptr<ResultIterator> createUnionLookupIterator(
+      const Request& request,
+      const SplitIndexReader::Options& options);
+
   // Creates a SplitIndexReader using a registered IndexReaderFactory.
   void createCustomIndexReader(
       const IndexReaderFactory& factory,
-      std::vector<std::shared_ptr<const HiveConnectorSplit>> splits);
+      std::shared_ptr<const HiveConnectorSplit> split);
 
-  // Creates FileIndexReader for the splits.
-  void createFileIndexReader(
-      std::vector<std::shared_ptr<const HiveConnectorSplit>> splits);
+  // Creates a FileIndexReader for a single split.
+  void createFileIndexReader(std::shared_ptr<const HiveConnectorSplit> split);
 
   FileHandleFactory* const fileHandleFactory_;
   ConnectorQueryCtx* const connectorQueryCtx_;

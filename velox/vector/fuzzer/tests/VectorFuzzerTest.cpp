@@ -98,8 +98,8 @@ class VectorFuzzerTest : public testing::Test {
     for (size_t i = 0; i < timeVector->size(); ++i) {
       if (!timeVector->isNullAt(i)) {
         auto timeValue = timeVector->valueAt(i);
-        ASSERT_GE(timeValue, TimeType::kMin);
-        ASSERT_LE(timeValue, TimeType::kMax);
+        ASSERT_GE(timeValue, TIME()->getMin());
+        ASSERT_LE(timeValue, TIME()->getMax());
       }
     }
   }
@@ -711,8 +711,8 @@ TEST_F(VectorFuzzerTest, time) {
   auto constVector = constTimeVector->as<ConstantVector<int64_t>>();
   if (!constVector->isNullAt(0)) {
     auto timeValue = constVector->valueAt(0);
-    ASSERT_GE(timeValue, TimeType::kMin);
-    ASSERT_LE(timeValue, TimeType::kMax);
+    ASSERT_GE(timeValue, TIME()->getMin());
+    ASSERT_LE(timeValue, TIME()->getMax());
   }
 
   // Test dictionary TIME vector.

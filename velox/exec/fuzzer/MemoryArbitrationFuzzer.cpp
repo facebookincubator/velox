@@ -1083,8 +1083,13 @@ void MemoryArbitrationFuzzer::go() {
   size_t iteration = 0;
 
   while (!isDone(iteration, startTime)) {
+    LOG(INFO) << "==============================> Started iteration "
+              << iteration << " (seed: " << currentSeed_ << ")";
     verify();
     stats_.rlock()->print();
+
+    LOG(INFO) << "==============================> Done with iteration "
+              << iteration;
 
     reSeed();
     ++iteration;

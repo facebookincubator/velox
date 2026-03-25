@@ -216,7 +216,7 @@ void PrestoQueryRunnerToSqlPlanNodeVisitor::visit(
   // )
   // AS SELECT * FROM t_<id>
   std::stringstream sql;
-  sql << "CREATE TABLE tmp_write";
+  sql << "CREATE TABLE " << ReferenceQueryRunner::getWriteTableName();
   std::vector<std::string> partitionKeys;
   for (auto i = 0; i < node.columnNames().size(); ++i) {
     if (insertTableHandle->inputColumns()[i]->isPartitionKey()) {

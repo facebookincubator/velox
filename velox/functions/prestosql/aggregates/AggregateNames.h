@@ -88,6 +88,7 @@ const char* const kTDigestAgg = "tdigest_agg";
 const char* const kVariance = "variance"; // Alias for var_samp.
 const char* const kVarPop = "var_pop";
 const char* const kVarSamp = "var_samp";
+const char* const kVectorSum = "vector_sum";
 const char* const kMaxSizeForStats = "max_data_size_for_stats";
 const char* const kSumDataSizeForStats = "sum_data_size_for_stats";
 const char* const kNoisyApproxSetSfm = "noisy_approx_set_sfm";

@@ -21,6 +21,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/base/Nulls.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/vector/arrow/Bridge.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
@@ -2063,6 +2064,51 @@ TEST_F(ArrowBridgeArrayImportAsViewerTest, ree) {
 
 TEST_F(ArrowBridgeArrayImportAsViewerTest, failures) {
   testImportFailures();
+}
+
+// Verify that importing a Utf8View array with an out-of-bounds buffer index
+// in a non-inline string view throws instead of reading past the buffers
+// array.
+TEST_F(ArrowBridgeArrayImportAsViewerTest, utf8ViewOobBufferIndex) {
+  // Arrow Utf8View layout (format "vu"):
+  //   buffer[0] = nulls
+  //   buffer[1] = views (16 bytes each)
+  //   buffer[2 .. n_buffers-2] = data buffers
+  //   buffer[n_buffers-1] = buffer sizes (uint64_t per data buffer)
+  //
+  // We set up one data buffer (index 2) and one sizes buffer (index 3), so
+  // n_buffers = 4 and the only valid data-buffer index is 0.  The crafted
+  // view references buffer index 99 — well out of range.
+
+  const char dataBuffer[] = "some data string";
+  const uint64_t bufferSizesArr[] = {sizeof(dataBuffer)};
+
+  // Arrow Utf8View: [4B length][4B prefix][4B buffer_index][4B buffer_offset]
+  struct Utf8ViewEntry {
+    uint32_t length;
+    char prefix[4];
+    uint32_t bufferIndex;
+    uint32_t bufferOffset;
+  };
+  Utf8ViewEntry malformedView{};
+  malformedView.length = 16; // > 12, so non-inline.
+  std::memcpy(malformedView.prefix, "some", 4);
+  malformedView.bufferIndex = 99; // Out of bounds.
+  malformedView.bufferOffset = 0;
+
+  const void* buffers[] = {
+      nullptr, // nulls
+      &malformedView, // views
+      dataBuffer, // data buffer 0
+      bufferSizesArr, // buffer sizes
+  };
+
+  auto arrowSchema = makeArrowSchema("vu");
+  auto arrowArray = makeArrowArray(buffers, 4, 1, 0);
+
+  VELOX_ASSERT_THROW(
+      importFromArrowAsViewer(arrowSchema, arrowArray, pool_.get()),
+      "Arrow Utf8View buffer index out of range");
 }
 
 class ArrowBridgeArrayImportAsOwnerTest

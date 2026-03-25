@@ -1555,7 +1555,8 @@ void AbstractJoinNode::validate() const {
   // Output of left semi and anti joins cannot include columns from the right
   // side.
   bool outputMayIncludeRightColumns =
-      !(isLeftSemiFilterJoin() || isLeftSemiProjectJoin() || isAntiJoin());
+      !(isLeftSemiFilterJoin() || isLeftSemiProjectJoin() || isAntiJoin() ||
+        isCountingJoin());
 
   for (auto i = 0; i < numOutputColumns; ++i) {
     auto name = outputType_->nameOf(i);
@@ -1616,6 +1617,8 @@ const auto& joinTypeNames() {
       {JoinType::kLeftSemiProject, "LEFT SEMI (PROJECT)"},
       {JoinType::kRightSemiProject, "RIGHT SEMI (PROJECT)"},
       {JoinType::kAnti, "ANTI"},
+      {JoinType::kCountingAnti, "COUNTING ANTI"},
+      {JoinType::kCountingLeftSemiFilter, "COUNTING LEFT SEMI (FILTER)"},
   };
   return kNames;
 }

@@ -72,6 +72,7 @@ std::shared_ptr<TestIndexTable> TestIndexTable::create(
       /*dependentTypes=*/dependentTypes,
       /*allowDuplicates=*/true,
       /*hasProbedFlag=*/false,
+      /*hasCountFlag=*/false,
       /*minTableSizeForParallelJoinBuild=*/1,
       &pool);
 

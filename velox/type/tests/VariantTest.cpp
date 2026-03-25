@@ -1688,6 +1688,30 @@ TEST(VariantTest, toString) {
   EXPECT_EQ(
       Variant::row({1, 2, 3}).toString(ROW({INTEGER(), INTEGER(), INTEGER()})),
       "[1,2,3]");
+
+  // Non-decimal HUGEINT types (e.g., IPADDRESS, UUID).
+  auto hugeintType = HugeintType::create();
+  EXPECT_EQ(
+      Variant::create<TypeKind::HUGEINT>(int128_t(42)).toString(hugeintType),
+      "42");
+  EXPECT_EQ(
+      Variant::create<TypeKind::HUGEINT>(
+          HugeInt::build(0x0123456789ABCDEF, 0xFEDCBA9876543210))
+          .toString(hugeintType),
+      "1512366075204170947332355369683137040");
+}
+
+TEST(VariantTest, toJsonHugeint) {
+  auto hugeintType = HugeintType::create();
+  auto small = Variant::create<TypeKind::HUGEINT>(int128_t(42));
+  auto large = Variant::create<TypeKind::HUGEINT>(
+      HugeInt::build(0x0123456789ABCDEF, 0xFEDCBA9876543210));
+
+  EXPECT_EQ(small.toJson(hugeintType), "42");
+  EXPECT_EQ(large.toJson(hugeintType), "1512366075204170947332355369683137040");
+
+  EXPECT_EQ(small.toJsonUnsafe(), "42");
+  EXPECT_EQ(large.toJsonUnsafe(), "1512366075204170947332355369683137040");
 }
 
 template <typename T>

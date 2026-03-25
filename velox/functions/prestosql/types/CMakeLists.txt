@@ -13,10 +13,12 @@
 # limitations under the License.
 
 add_subdirectory(parser)
+
 velox_add_library(
   velox_presto_types
   BigintEnumRegistration.cpp
   BigintEnumType.cpp
+  PrestoTypes.cpp
   BingTileRegistration.cpp
   BingTileType.cpp
   EnumTypeBase.cpp
@@ -31,10 +33,14 @@ velox_add_library(
   SfmSketchRegistration.cpp
   TDigestRegistration.cpp
   TimestampWithTimeZoneRegistration.cpp
+  TimestampWithTimeZoneType.cpp
   TimeWithTimezoneRegistration.cpp
   TimeWithTimezoneType.cpp
+  IPAddressType.cpp
+  IPPrefixType.cpp
   SetDigestRegistration.cpp
   UuidRegistration.cpp
+  UuidType.cpp
   VarcharEnumRegistration.cpp
   VarcharEnumType.cpp
 )
