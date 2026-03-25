@@ -110,139 +110,95 @@ const cudf::ast::expression& createRangeExpr(
   return tree.push(Operation{Op::EQUAL, columnRef, columnRef});
 }
 
-template <TypeKind Kind>
-std::reference_wrapper<const cudf::ast::expression> buildBigintRangeExpr(
+template <TypeKind Kind, typename FilterT>
+std::reference_wrapper<const cudf::ast::expression> buildRangeExpr(
     const common::Filter& filter,
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const cudf::ast::expression& columnRef,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr,
     const TypePtr& columnTypePtr) {
   using NativeT = typename TypeTraits<Kind>::NativeType;
 
-  if constexpr (std::is_integral_v<NativeT>) {
+  if constexpr (
+      (std::is_same_v<FilterT, common::BigintRange> &&
+       std::is_integral_v<NativeT>) ||
+      std::is_same_v<FilterT, common::HugeintRange>) {
     using Op = cudf::ast::ast_operator;
     using Operation = cudf::ast::operation;
 
-    auto* bigintRange = static_cast<const common::BigintRange*>(&filter);
+    auto* rangeFilter = static_cast<const FilterT*>(&filter);
+    const auto lower = rangeFilter->lower();
+    const auto upper = rangeFilter->upper();
+    using ValueT = std::decay_t<decltype(lower)>;
 
-    const auto lower = bigintRange->lower();
-    const auto upper = bigintRange->upper();
+    const auto [minBound, maxBound] = [&]() -> std::pair<ValueT, ValueT> {
+      if constexpr (std::is_same_v<FilterT, common::HugeintRange>) {
+        return getInt128BoundsForType(columnTypePtr);
+      } else {
+        return {
+            static_cast<ValueT>(std::numeric_limits<NativeT>::min()),
+            static_cast<ValueT>(std::numeric_limits<NativeT>::max())};
+      }
+    }();
 
-    const bool skipLowerBound =
-        lower <= static_cast<int64_t>(std::numeric_limits<NativeT>::min());
-    const bool skipUpperBound =
-        upper >= static_cast<int64_t>(std::numeric_limits<NativeT>::max());
+    const bool skipLowerBound = lower <= minBound;
+    const bool skipUpperBound = upper >= maxBound;
 
-    auto addLiteral = [&](int64_t value) -> const cudf::ast::expression& {
+    auto addLiteral = [&](ValueT value) -> const cudf::ast::expression& {
       variant veloxVariant = static_cast<NativeT>(value);
       const auto& literal =
           makeScalarAndLiteral<Kind>(columnTypePtr, veloxVariant, scalars);
       return tree.push(literal);
     };
 
-    if (bigintRange->isSingleValue()) {
-      // Equal comparison: column = value.
-      if (lower < static_cast<int64_t>(std::numeric_limits<NativeT>::min()) ||
-          lower > static_cast<int64_t>(std::numeric_limits<NativeT>::max())) {
-        // Value is outside the representable range of NativeT, always false.
+    if (lower == upper) {
+      if (lower < minBound || lower > maxBound) {
         return tree.push(Operation{Op::NOT_EQUAL, columnRef, columnRef});
-      } else {
-        auto const& literal = addLiteral(lower);
-        return tree.push(Operation{Op::EQUAL, columnRef, literal});
       }
-    } else {
-      // Range comparison: column >= lower AND column <= upper
-
-      const cudf::ast::expression* lowerExpr = nullptr;
-      if (!skipLowerBound) {
-        auto const& lowerLiteral = addLiteral(lower);
-        lowerExpr =
-            &tree.push(Operation{Op::GREATER_EQUAL, columnRef, lowerLiteral});
-      }
-
-      const cudf::ast::expression* upperExpr = nullptr;
-      if (!skipUpperBound) {
-        auto const& upperLiteral = addLiteral(upper);
-        upperExpr =
-            &tree.push(Operation{Op::LESS_EQUAL, columnRef, upperLiteral});
-      }
-
-      if (lowerExpr && upperExpr) {
-        auto const& result =
-            tree.push(Operation{Op::NULL_LOGICAL_AND, *lowerExpr, *upperExpr});
-        return result;
-      } else if (lowerExpr) {
-        return *lowerExpr;
-      } else if (upperExpr) {
-        return *upperExpr;
-      }
-
-      // If neither lower nor upper bound expressions were created, it means
-      // the filter covers the entire range of the type, so it's a no-op
-      return tree.push(Operation{Op::EQUAL, columnRef, columnRef});
+      auto const& literal = addLiteral(lower);
+      return tree.push(Operation{Op::EQUAL, columnRef, literal});
     }
+
+    const cudf::ast::expression* lowerExpr = nullptr;
+    if (!skipLowerBound) {
+      auto const& lowerLiteral = addLiteral(lower);
+      lowerExpr =
+          &tree.push(Operation{Op::GREATER_EQUAL, columnRef, lowerLiteral});
+    }
+
+    const cudf::ast::expression* upperExpr = nullptr;
+    if (!skipUpperBound) {
+      auto const& upperLiteral = addLiteral(upper);
+      upperExpr =
+          &tree.push(Operation{Op::LESS_EQUAL, columnRef, upperLiteral});
+    }
+
+    if (lowerExpr && upperExpr) {
+      return tree.push(
+          Operation{Op::NULL_LOGICAL_AND, *lowerExpr, *upperExpr});
+    } else if (lowerExpr) {
+      return *lowerExpr;
+    } else if (upperExpr) {
+      return *upperExpr;
+    }
+
+    return tree.push(Operation{Op::EQUAL, columnRef, columnRef});
   } else {
-    VELOX_FAIL("Unsupported type for buildBigintRangeExpr: {}", Kind);
+    VELOX_FAIL("Unsupported type for buildRangeExpr: {}", Kind);
   }
 }
 
-std::reference_wrapper<const cudf::ast::expression> buildHugeintRangeExpr(
+template <TypeKind Kind>
+std::reference_wrapper<const cudf::ast::expression> buildBigintRangeExpr(
     const common::Filter& filter,
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const cudf::ast::expression& columnRef,
+    rmm::cuda_stream_view /*stream*/,
+    rmm::device_async_resource_ref /*mr*/,
     const TypePtr& columnTypePtr) {
-  using Op = cudf::ast::ast_operator;
-  using Operation = cudf::ast::operation;
-
-  auto* hugeintRange = static_cast<const common::HugeintRange*>(&filter);
-  const auto lower = hugeintRange->lower();
-  const auto upper = hugeintRange->upper();
-
-  const auto [minVal, maxVal] = getInt128BoundsForType(columnTypePtr);
-  const bool skipLowerBound = lower <= minVal;
-  const bool skipUpperBound = upper >= maxVal;
-
-  auto addLiteral = [&](int128_t value) -> const cudf::ast::expression& {
-    variant veloxVariant = value;
-    const auto& literal = makeScalarAndLiteral<TypeKind::HUGEINT>(
-        columnTypePtr, veloxVariant, scalars);
-    return tree.push(literal);
-  };
-
-  if (lower == upper) {
-    if (skipLowerBound || skipUpperBound) {
-      return tree.push(Operation{Op::NOT_EQUAL, columnRef, columnRef});
-    }
-    auto const& literal = addLiteral(lower);
-    return tree.push(Operation{Op::EQUAL, columnRef, literal});
-  }
-
-  const cudf::ast::expression* lowerExpr = nullptr;
-  if (!skipLowerBound) {
-    auto const& lowerLiteral = addLiteral(lower);
-    lowerExpr =
-        &tree.push(Operation{Op::GREATER_EQUAL, columnRef, lowerLiteral});
-  }
-
-  const cudf::ast::expression* upperExpr = nullptr;
-  if (!skipUpperBound) {
-    auto const& upperLiteral = addLiteral(upper);
-    upperExpr = &tree.push(Operation{Op::LESS_EQUAL, columnRef, upperLiteral});
-  }
-
-  if (lowerExpr && upperExpr) {
-    return tree.push(Operation{Op::NULL_LOGICAL_AND, *lowerExpr, *upperExpr});
-  } else if (lowerExpr) {
-    return *lowerExpr;
-  } else if (upperExpr) {
-    return *upperExpr;
-  }
-
-  // No bounds => pass-through filter.
-  return tree.push(Operation{Op::EQUAL, columnRef, columnRef});
+  return buildRangeExpr<Kind, common::BigintRange>(
+      filter, tree, scalars, columnRef, columnTypePtr);
 }
 
 template <TypeKind Kind, typename FilterT, typename ValueT>
@@ -419,9 +375,9 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
 
     case common::FilterKind::kHugeintRange: {
       auto const& columnType = inputRowSchema->childAt(columnIndex);
-      auto const& expr =
-          buildHugeintRangeExpr(filter, tree, scalars, columnRef, columnType);
-      return expr.get();
+      return buildRangeExpr<TypeKind::HUGEINT, common::HugeintRange>(
+                 filter, tree, scalars, columnRef, columnType)
+          .get();
     }
 
     case common::FilterKind::kBigintValuesUsingHashTable: {
