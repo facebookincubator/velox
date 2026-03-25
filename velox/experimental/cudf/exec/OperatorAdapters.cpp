@@ -20,6 +20,7 @@
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/CudfHashAggregation.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
+#include "velox/experimental/cudf/exec/CudfNestedLoopJoin.h"
 #include "velox/experimental/cudf/exec/CudfLimit.h"
 #include "velox/experimental/cudf/exec/CudfLocalPartition.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
@@ -36,6 +37,8 @@
 #include "velox/exec/HashProbe.h"
 #include "velox/exec/Limit.h"
 #include "velox/exec/LocalPartition.h"
+#include "velox/exec/NestedLoopJoinBuild.h"
+#include "velox/exec/NestedLoopJoinProbe.h"
 #include "velox/exec/OrderBy.h"
 #include "velox/exec/StreamingAggregation.h"
 #include "velox/exec/TableScan.h"
@@ -358,6 +361,92 @@ class HashJoinProbeAdapter : public CudfHashJoinBaseAdapter {
     std::vector<std::unique_ptr<exec::Operator>> result;
     result.push_back(
         std::make_unique<CudfHashJoinProbe>(operatorId, ctx, joinPlanNode));
+    return result;
+  }
+};
+
+/// NestedLoopJoinBuildAdapter - Replaces with CudfNestedLoopJoinBuild (cross
+/// join only)
+class NestedLoopJoinBuildAdapter : public OperatorAdapter {
+ public:
+  NestedLoopJoinBuildAdapter() : OperatorAdapter("NestedLoopJoinBuild") {}
+
+  bool canHandle(const exec::Operator* op) const override {
+    return dynamic_cast<const exec::NestedLoopJoinBuild*>(op) != nullptr;
+  }
+
+  bool canRunOnGPU(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& planNode,
+      exec::DriverCtx* /*ctx*/) const override {
+    auto nljNode =
+        std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(planNode);
+    return nljNode != nullptr &&
+        CudfNestedLoopJoinProbe::isSupported(nljNode.get());
+  }
+
+  bool acceptsGpuInput() const override {
+    return true;
+  }
+
+  bool producesGpuOutput() const override {
+    return false;
+  }
+
+  std::vector<std::unique_ptr<exec::Operator>> createReplacements(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& planNode,
+      exec::DriverCtx* ctx,
+      int32_t operatorId) const override {
+    auto nljNode =
+        std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(planNode);
+    std::vector<std::unique_ptr<exec::Operator>> result;
+    result.push_back(
+        std::make_unique<CudfNestedLoopJoinBuild>(
+            operatorId, ctx, nljNode));
+    return result;
+  }
+};
+
+/// NestedLoopJoinProbeAdapter - Replaces with CudfNestedLoopJoinProbe (cross
+/// join only)
+class NestedLoopJoinProbeAdapter : public OperatorAdapter {
+ public:
+  NestedLoopJoinProbeAdapter() : OperatorAdapter("NestedLoopJoinProbe") {}
+
+  bool canHandle(const exec::Operator* op) const override {
+    return dynamic_cast<const exec::NestedLoopJoinProbe*>(op) != nullptr;
+  }
+
+  bool canRunOnGPU(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& planNode,
+      exec::DriverCtx* /*ctx*/) const override {
+    auto nljNode =
+        std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(planNode);
+    return nljNode != nullptr &&
+        CudfNestedLoopJoinProbe::isSupported(nljNode.get());
+  }
+
+  bool acceptsGpuInput() const override {
+    return true;
+  }
+
+  bool producesGpuOutput() const override {
+    return true;
+  }
+
+  std::vector<std::unique_ptr<exec::Operator>> createReplacements(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& planNode,
+      exec::DriverCtx* ctx,
+      int32_t operatorId) const override {
+    auto nljNode =
+        std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(planNode);
+    std::vector<std::unique_ptr<exec::Operator>> result;
+    result.push_back(
+        std::make_unique<CudfNestedLoopJoinProbe>(
+            operatorId, ctx, nljNode));
     return result;
   }
 };
@@ -696,6 +785,8 @@ void registerAllOperatorAdapters() {
   registry.registerAdapter(std::make_unique<AggregationAdapter>());
   registry.registerAdapter(std::make_unique<HashJoinBuildAdapter>());
   registry.registerAdapter(std::make_unique<HashJoinProbeAdapter>());
+  registry.registerAdapter(std::make_unique<NestedLoopJoinBuildAdapter>());
+  registry.registerAdapter(std::make_unique<NestedLoopJoinProbeAdapter>());
   registry.registerAdapter(std::make_unique<OrderByAdapter>());
   registry.registerAdapter(std::make_unique<TopNAdapter>());
   registry.registerAdapter(std::make_unique<LimitAdapter>());

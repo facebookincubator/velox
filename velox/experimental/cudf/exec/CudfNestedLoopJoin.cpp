@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/CudfNestedLoopJoin.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
@@ -94,8 +95,9 @@ void CudfNestedLoopJoinBuild::noMoreInput() {
 
   auto stream = cudfGlobalStreamPool().get_stream();
   auto buildType = joinNode_->sources()[1]->outputType();
+  auto mr = cudf::get_current_device_resource_ref();
   auto tbls =
-      getConcatenatedTableBatched(inputs_, buildType, stream);
+      getConcatenatedTableBatched(inputs_, buildType, stream, mr);
   stream.synchronize();
   inputs_.clear();
 
@@ -248,7 +250,8 @@ RowVectorPtr CudfNestedLoopJoinProbe::getOutput() {
   if (buildCudf.size() == 1) {
     buildView = buildCudf[0]->getTableView();
   } else {
-    buildTableHolder = getConcatenatedTable(buildCudf, buildType, stream);
+    auto mr = cudf::get_current_device_resource_ref();
+    buildTableHolder = getConcatenatedTable(buildCudf, buildType, stream, mr);
     buildView = buildTableHolder->view();
   }
 

@@ -12,16 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# When building the monolith with CUDF, Task.cpp (in velox) references CudfConfig::getInstance().
-# We add CudfConfig.cpp to the monolith so the symbol is defined; velox_cudf_exec then omits it
-# to avoid duplicate definition.
-if(VELOX_MONO_LIBRARY AND VELOX_ENABLE_CUDF)
-  velox_add_library(velox_cudf_config ../CudfConfig.cpp)
-  velox_link_libraries(velox_cudf_config Folly::folly)
-endif()
-
-set(
-  CUDF_EXEC_SOURCES
+add_library(
+  velox_cudf_exec
   CudfAssignUniqueId.cpp
   CudfConversion.cpp
   CudfFilterProject.cpp
@@ -40,11 +32,6 @@ set(
   Utilities.cpp
   VeloxCudfInterop.cpp
 )
-if(NOT (VELOX_MONO_LIBRARY AND VELOX_ENABLE_CUDF))
-  list(APPEND CUDF_EXEC_SOURCES ../CudfConfig.cpp)
-endif()
-
-add_library(velox_cudf_exec ${CUDF_EXEC_SOURCES})
 
 target_link_libraries(
   velox_cudf_exec

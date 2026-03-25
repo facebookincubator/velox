@@ -26,6 +26,9 @@
 
 namespace facebook::velox::cudf_velox {
 
+[[nodiscard]] std::unique_ptr<cudf::table> makeEmptyTable(
+    TypePtr const& inputType);
+
 // Concatenate a vector of cuDF tables into a single table
 [[nodiscard]] std::unique_ptr<cudf::table> concatenateTables(
     std::vector<std::unique_ptr<cudf::table>> tables,
