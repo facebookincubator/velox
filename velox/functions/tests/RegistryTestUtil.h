@@ -109,6 +109,29 @@ struct IPPrefixFunc {
   }
 };
 
+// Non-deterministic, uses callNullable (defaultNullBehavior=false), has owner.
+template <typename T>
+struct MetadataTestFuncAllSet {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  static constexpr bool is_deterministic = false;
+  static constexpr std::string_view owner = "test-owner-team";
+
+  FOLLY_ALWAYS_INLINE bool callNullable(int32_t& result, const int32_t* input) {
+    result = input ? *input : 0;
+    return true;
+  }
+};
+
+// Deterministic (default), uses call (defaultNullBehavior=true), no owner.
+template <typename T>
+struct MetadataTestFuncDefaults {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(int32_t& result, int32_t input) {
+    result = input;
+  }
+};
+
 class VectorFuncOne : public velox::exec::VectorFunction {
  public:
   void apply(
