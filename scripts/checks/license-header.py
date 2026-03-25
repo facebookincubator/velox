@@ -189,6 +189,16 @@ def main():
 
         header_comment = wrap.wrapper(header_text, args)
 
+        # Accept any file that already has an Apache 2.0 license header,
+        # regardless of the copyright holder. This allows files copyrighted
+        # by other organizations (e.g. IBM Corporation) to coexist without
+        # being overwritten with the Facebook header.
+        if not args.remove:
+            apache_marker = "Licensed under the Apache License, Version 2.0"
+            if apache_marker in content[: len(header_comment) + args.extra + 200]:
+                message(log_to, "OK   : " + filepath)
+                continue
+
         start = 0
         end = 0
 
