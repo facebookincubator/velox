@@ -393,10 +393,11 @@ void PageReader::prepareDataPageV2(const PageHeader& pageHeader, int64_t row) {
 }
 
 void PageReader::prepareDictionary(const PageHeader& pageHeader) {
-  dictionary_.numValues = *pageHeader.dictionary_page_header()->num_values();
-  dictionaryEncoding_ = *pageHeader.dictionary_page_header()->encoding();
-  dictionary_.sorted = pageHeader.dictionary_page_header()->is_sorted() &&
-      *pageHeader.dictionary_page_header()->is_sorted();
+  VELOX_CHECK(pageHeader.dictionary_page_header());
+  const auto& dictHeader = *pageHeader.dictionary_page_header();
+  dictionary_.numValues = *dictHeader.num_values();
+  dictionaryEncoding_ = *dictHeader.encoding();
+  dictionary_.sorted = dictHeader.is_sorted() && *dictHeader.is_sorted();
   VELOX_CHECK(
       dictionaryEncoding_ == Encoding::PLAIN_DICTIONARY ||
       dictionaryEncoding_ == Encoding::PLAIN);

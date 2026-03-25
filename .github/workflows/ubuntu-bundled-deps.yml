@@ -72,7 +72,7 @@ jobs:
         run: |
           source scripts/setup-ubuntu.sh && \
           install_apt_deps && install_faiss_deps && \
-          install_boost && install_fast_float && install_folly && install_fizz && install_wangle && install_fbthrift
+          install_boost && install_fast_float && install_folly && install_fizz && install_wangle && install_folly && install_fbthrift
 
       - name: Clear CCache Statistics
         run: |
