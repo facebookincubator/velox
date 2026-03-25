@@ -13,27 +13,25 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#pragma once
 
-#include "velox/functions/Macros.h"
+#include "velox/functions/prestosql/types/IPPrefixType.h"
 
-namespace facebook::velox::functions {
+#include <fmt/format.h>
 
-/// Returns the number of elements in an array or map.
-template <typename T>
-struct CardinalityFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
+namespace facebook::velox {
 
-  template <typename TReturn>
-  void call(TReturn& out, const arg_type<Array<Generic<T1>>>& input) {
-    out = input.size();
-  }
+std::string_view IPPrefixType::valueToString(
+    int128_t ip,
+    int8_t prefixLength,
+    char* buffer) const {
+  auto ipStr = IPADDRESS()->valueToString(ip);
+  auto result = fmt::format_to_n(
+      buffer,
+      kMaxStringSize,
+      "{}/{}",
+      ipStr,
+      static_cast<uint8_t>(prefixLength));
+  return {buffer, result.size};
+}
 
-  template <typename TReturn>
-  void call(
-      TReturn& out,
-      const arg_type<Map<Generic<T1>, Generic<T2>>>& input) {
-    out = input.size();
-  }
-};
-} // namespace facebook::velox::functions
+} // namespace facebook::velox

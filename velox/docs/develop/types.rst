@@ -222,7 +222,10 @@ IPPREFIX networks.
 IPPREFIX represents an IPv6 or IPv4 formatted IPv6 address along with a one byte
 prefix length. Its physical type is ROW(HUGEINT, TINYINT). The IPADDRESS is stored in
 the HUGEINT and is in the form defined in `RFC 4291#section-2.5.5.2 <https://datatracker.ietf.org/doc/html/rfc4291.html#section-2.5.5.2>`_.
-The prefix length is stored in the TINYINT.
+The prefix length is stored in the TINYINT. Note that IPv6 prefix lengths go up
+to 128, which overflows TINYINT (int8_t, max 127). Prefix length 128 is stored
+as -128. Code that reads the prefix length must cast to uint8_t to recover the
+correct unsigned value.
 The IP address stored is the canonical(smallest) IP address in the
 subnet range. This type can be used in IP subnet functions.
 

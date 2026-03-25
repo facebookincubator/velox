@@ -23,7 +23,7 @@ namespace facebook::velox::test {
 
 class MockVectorSerde : public VectorSerde {
  public:
-  MockVectorSerde() = default;
+  MockVectorSerde() : VectorSerde("Presto") {}
 
   void estimateSerializedSize(
       const BaseVector* /*vector*/,

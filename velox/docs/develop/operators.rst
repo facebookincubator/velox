@@ -751,8 +751,6 @@ distribution fields.
      - Factory to make partition functions to use when calculating partitions for input rows.
    * - outputType
      - A list of output columns. This is a subset of input columns possibly in a different order.
-   * - serdeKind
-     - Name of the serialization format to use for shuffling data. Built-in formats: 'Presto', 'CompactRow', 'UnsafeRow'.
 
 ValuesNode
 ~~~~~~~~~~
@@ -788,8 +786,6 @@ streams are coming from remote exchange or shuffle.
      - Description
    * - type
      - A list of columns in the input streams.
-   * - serdeKind
-     - Name of the serialization format used by the upstream shuffle. Built-in formats: 'Presto', 'CompactRow', 'UnsafeRow'.
 
 MergeExchangeNode
 ~~~~~~~~~~~~~~~~~
@@ -810,8 +806,6 @@ orderedness. Input streams are coming from remote exchange or shuffle.
      - List of one of more input columns to sort by.
    * - sortingOrders
      - Sorting order for each of the soring keys. See OrderBy for the list of supported orders.
-   * - serdeKind
-     - Name of the serialization format used by the upstream shuffle. Built-in formats: 'Presto', 'CompactRow', 'UnsafeRow'.
 
 LocalMergeNode
 ~~~~~~~~~~~~~~
