@@ -284,8 +284,7 @@ class RoundFunction : public CudfFunction {
     auto inputCol = asView(inputColumns[0]);
     auto inputTypeId = inputCol.type().id();
 
-    if (inputTypeId == cudf::type_id::FLOAT32 ||
-        inputTypeId == cudf::type_id::FLOAT64) {
+    if (inputTypeId == cudf::type_id::FLOAT64) {
       // round_decimal does not support floating-point types directly.
       // Cast to DECIMAL128, round, then cast back.
       int32_t decimalScale = -(std::max(scale_, 0) + 15);
