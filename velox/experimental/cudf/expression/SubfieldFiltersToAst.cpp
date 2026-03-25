@@ -175,8 +175,7 @@ std::reference_wrapper<const cudf::ast::expression> buildIntegerRangeExpr(
           &tree.push(Operation{Op::LESS_EQUAL, columnRef, upperLiteral});
     }
     if (lowerExpr && upperExpr) {
-      return tree.push(
-          Operation{Op::NULL_LOGICAL_AND, *lowerExpr, *upperExpr});
+      return tree.push(Operation{Op::NULL_LOGICAL_AND, *lowerExpr, *upperExpr});
     } else if (lowerExpr) {
       return *lowerExpr;
     } else if (upperExpr) {
@@ -382,7 +381,8 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
 
     case common::FilterKind::kHugeintRange: {
       auto const& columnType = inputRowSchema->childAt(columnIndex);
-      auto const& expr = buildHugeintRangeExpr(filter, tree, scalars, columnRef, columnType);
+      auto const& expr =
+          buildHugeintRangeExpr(filter, tree, scalars, columnRef, columnType);
       return expr.get();
     }
 
