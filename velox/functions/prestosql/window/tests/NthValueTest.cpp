@@ -346,6 +346,57 @@ TEST_F(NthValueTest, ignoreNulls) {
   }
 }
 
+// Verify that first_value, last_value, and nth_value handle constant value
+// arguments. This can happen when the optimizer constant-folds a column that
+// is always the same value within the window partition context.
+TEST_F(NthValueTest, constantArgument) {
+  auto input = makeRowVector({
+      makeFlatVector<int32_t>({1, 1, 1, 2, 2}),
+      makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
+  });
+
+  // Use a frame clause that produces empty frames for the first row in each
+  // partition: "rows between 2 preceding and 1 preceding" is empty when
+  // there are fewer than 2 preceding rows.
+  auto assertResults = [&](const std::string& function,
+                           const VectorPtr& expectedWindow) {
+    auto expected = makeRowVector({
+        input->childAt(0),
+        input->childAt(1),
+        expectedWindow,
+    });
+    WindowTestBase::testWindowFunction(
+        {input},
+        function,
+        "partition by c0 order by c1",
+        "rows between 2 preceding and 1 preceding",
+        expected);
+  };
+
+  // Constant for valid frames, null for empty.
+  auto expected = makeNullableFlatVector<StringView>(
+      {std::nullopt, "foo", "foo", std::nullopt, "foo"});
+
+  assertResults("first_value('foo')", expected);
+  assertResults("last_value('foo')", expected);
+  assertResults("nth_value('foo', 1)", expected);
+
+  // Null constant value returns null for all rows.
+  auto allNulls = makeAllNullFlatVector<StringView>(5);
+
+  assertResults("first_value(null::varchar)", allNulls);
+  assertResults("last_value(null::varchar)", allNulls);
+  assertResults("nth_value(null::varchar, 1)", allNulls);
+
+  // nth_value with offset beyond frame returns null.
+  WindowTestBase::testWindowFunction(
+      {input},
+      "nth_value('foo', 100)",
+      "partition by c0 order by c1",
+      "rows between unbounded preceding and current row",
+      makeRowVector({input->childAt(0), input->childAt(1), allNulls}));
+}
+
 TEST_F(NthValueTest, frameStartsFromFollowing) {
   auto input = makeRowVector({
       makeNullableFlatVector<int64_t>({1, std::nullopt, 2}),

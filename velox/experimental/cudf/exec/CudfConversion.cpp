@@ -145,6 +145,8 @@ RowVectorPtr CudfFromVelox::doGetOutput() {
   auto tbl =
       with_arrow::toCudfTable(input, input->pool(), stream, get_output_mr());
 
+  // Synchronize to ensure toCudfTable finishes reading from input's CPU buffers
+  // before input goes out of scope
   stream.synchronize();
 
   VELOX_CHECK_NOT_NULL(tbl);
@@ -208,7 +210,6 @@ RowVectorPtr CudfToVelox::doGetOutput() {
 
   // Get the target batch size
   const auto targetBatchSize = outputBatchRows(averageRowSize());
-  auto stream = inputs_.front()->stream();
 
   // Process single input directly in these cases:
   // 1. In passthrough mode
@@ -222,6 +223,7 @@ RowVectorPtr CudfToVelox::doGetOutput() {
     inputs_.pop_front();
 
     auto tableView = cudfVector->getTableView();
+    auto stream = cudfVector->stream();
     if (tableView.num_rows() == 0) {
       finished_ = noMoreInput_ && inputs_.empty();
       return nullptr;
@@ -250,6 +252,7 @@ RowVectorPtr CudfToVelox::doGetOutput() {
       // If the next input would exceed targetBatchSize,
       // we need to split it and only take what we need
       auto cudfTableView = input->getTableView();
+      auto stream = input->stream();
       auto partitions = std::vector<cudf::size_type>{
           static_cast<cudf::size_type>(targetBatchSize - totalSize)};
       auto tableSplits = cudf::split(cudfTableView, partitions, stream);
@@ -286,8 +289,9 @@ RowVectorPtr CudfToVelox::doGetOutput() {
   }
 
   // Concatenate the selected tables on the GPU
-  auto resultTable =
-      getConcatenatedTable(selectedInputs, outputType_, stream, get_temp_mr());
+  auto stream = cudfGlobalStreamPool().get_stream();
+  auto resultTable = getConcatenatedTable(
+      std::move(selectedInputs), outputType_, stream, get_temp_mr());
 
   // Convert the concatenated table to a RowVector
   const auto size = resultTable->num_rows();

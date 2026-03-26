@@ -2531,3 +2531,124 @@ TEST_F(MergeJoinTest, dynamicOutputBatchSizingDisabledByDefault) {
   // The last batch should be <= preferredRows (may have fewer remaining rows).
   EXPECT_LE(outputBatchSizes.back(), preferredRows);
 }
+
+TEST_F(MergeJoinTest, flatMapVectorInnerJoin) {
+  auto left = makeRowVector(
+      {"t_c0", "t_c1"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3}),
+          makeFlatMapVector<int64_t, int64_t>({
+              {{1, 10}, {2, 20}},
+              {{1, 30}, {3, 40}},
+              {{2, 50}},
+          }),
+      });
+
+  auto right = makeRowVector(
+      {"u_c0", "u_c1"},
+      {
+          makeFlatVector<int64_t>({1, 2, 4}),
+          makeFlatMapVector<int64_t, int64_t>({
+              {{1, 100}, {2, 200}},
+              {{3, 300}},
+              {{1, 400}, {2, 500}, {3, 600}},
+          }),
+      });
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({left})
+          .mergeJoin(
+              {"t_c0"},
+              {"u_c0"},
+              PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+              "",
+              {"t_c0", "t_c1", "u_c1"},
+              core::JoinType::kInner)
+          .planNode();
+
+  auto expected = makeRowVector({
+      makeFlatVector<int64_t>({1, 2}),
+      makeFlatMapVector<int64_t, int64_t>({
+          {{1, 10}, {2, 20}},
+          {{1, 30}, {3, 40}},
+      }),
+      makeFlatMapVector<int64_t, int64_t>({
+          {{1, 100}, {2, 200}},
+          {{3, 300}},
+      }),
+  });
+
+  CursorParameters params;
+  params.planNode = plan;
+  auto [cursor, results] = readCursor(params);
+  facebook::velox::test::assertEqualVectors(expected, results[0]);
+  ASSERT_EQ(
+      results[0]->childAt(1)->wrappedVector()->encoding(),
+      VectorEncoding::Simple::FLAT_MAP);
+  ASSERT_EQ(
+      results[0]->childAt(2)->wrappedVector()->encoding(),
+      VectorEncoding::Simple::FLAT_MAP);
+}
+
+TEST_F(MergeJoinTest, flatMapVectorLeftJoin) {
+  auto left = makeRowVector(
+      {"t_c0", "t_c1"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3}),
+          makeFlatMapVector<int64_t, int64_t>({
+              {{1, 10}, {2, 20}},
+              {{1, 30}, {3, 40}},
+              {{2, 50}},
+          }),
+      });
+
+  auto right = makeRowVector(
+      {"u_c0", "u_c1"},
+      {
+          makeFlatVector<int64_t>({1, 2}),
+          makeFlatMapVector<int64_t, int64_t>({
+              {{1, 100}, {2, 200}},
+              {{3, 300}},
+          }),
+      });
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({left})
+          .mergeJoin(
+              {"t_c0"},
+              {"u_c0"},
+              PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+              "",
+              {"t_c0", "t_c1", "u_c1"},
+              core::JoinType::kLeft)
+          .planNode();
+
+  auto expected = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3}),
+      makeFlatMapVector<int64_t, int64_t>({
+          {{1, 10}, {2, 20}},
+          {{1, 30}, {3, 40}},
+          {{2, 50}},
+      }),
+      makeNullableFlatMapVector<int64_t, int64_t>({
+          {{{1, 100}, {2, 200}}},
+          {{{3, 300}}},
+          std::nullopt,
+      }),
+  });
+
+  CursorParameters params;
+  params.planNode = plan;
+  auto [cursor, results] = readCursor(params);
+  facebook::velox::test::assertEqualVectors(expected, results[0]);
+  ASSERT_EQ(
+      results[0]->childAt(1)->wrappedVector()->encoding(),
+      VectorEncoding::Simple::FLAT_MAP);
+  ASSERT_EQ(
+      results[0]->childAt(2)->wrappedVector()->encoding(),
+      VectorEncoding::Simple::FLAT_MAP);
+}

@@ -782,6 +782,14 @@ Each query can override the config by setting corresponding query session proper
      - string
      - 10MB
      - Maximum bytes for sort writer in one batch of output. This is to limit the memory usage of sort writer.
+   * - max-target-file-size
+     - max_target_file_size
+     - string
+     - 0B
+     - Maximum target file size for writers. When a file exceeds this size during writing, the writer
+       closes the current file and starts writing to a new file. Accepts human-readable values like
+       "1GB". Zero means no limit (default). File rotation is not supported for bucketed tables or
+       sorted writes.
    * - file-preload-threshold
      -
      - integer
@@ -948,7 +956,7 @@ Each query can override the config by setting corresponding query session proper
      - 1024
      - Batch size used when writing into Parquet through Arrow bridge.
    * - hive.parquet.writer.created-by
-     -
+     - hive.parquet.writer.created_by
      - string
      - parquet-cpp-velox version 0.0.0
      - Created-by value used when writing to Parquet.
