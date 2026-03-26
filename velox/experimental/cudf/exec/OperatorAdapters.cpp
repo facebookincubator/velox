@@ -669,10 +669,6 @@ class EnforceSingleRowAdapter : public OperatorAdapter {
       const exec::Operator* /*op*/,
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* /*ctx*/) const override {
-    // Check if GPU EnforceSingleRow is enabled in config
-    if (!CudfConfig::getInstance().enableEnforceSingleRow) {
-      return false;
-    }
     return std::dynamic_pointer_cast<const core::EnforceSingleRowNode>(
                planNode) != nullptr;
   }
@@ -756,7 +752,9 @@ void registerAllOperatorAdapters() {
   registry.registerAdapter(std::make_unique<LocalPartitionAdapter>());
   registry.registerAdapter(std::make_unique<LocalExchangeAdapter>());
   registry.registerAdapter(std::make_unique<AssignUniqueIdAdapter>());
-  registry.registerAdapter(std::make_unique<EnforceSingleRowAdapter>());
+  if (CudfConfig::getInstance().enableEnforceSingleRow) {
+    registry.registerAdapter(std::make_unique<EnforceSingleRowAdapter>());
+  }
   registry.registerAdapter(std::make_unique<ValuesAdapter>());
   registry.registerAdapter(std::make_unique<CallbackSinkAdapter>());
 }
