@@ -94,12 +94,12 @@ void CudfEnforceSingleRow::noMoreInput() {
     // Convert to CudfVector
     auto stream = cudf::get_default_stream();
     auto cudfTable =
-        with_arrow::toCudfTable(nullRow, operatorCtx_->pool(), stream, cudf::get_current_device_resource_ref());
+        with_arrow::toCudfTable(nullRow, pool(), stream, cudf::get_current_device_resource_ref());
     // Synchronize to ensure toCudfTable finishes reading from nullRow's CPU
     // buffers before nullRow goes out of scope
     stream.synchronize();
     input_ = std::make_shared<CudfVector>(
-        operatorCtx_->pool(), outputType_, 1, std::move(cudfTable), stream);
+        pool(), outputType_, 1, std::move(cudfTable), stream);
   }
 
   exec::Operator::noMoreInput();
