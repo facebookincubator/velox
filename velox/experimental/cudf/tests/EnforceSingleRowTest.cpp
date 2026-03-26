@@ -53,7 +53,8 @@ TEST_F(CudfEnforceSingleRowTest, singleRow) {
 
 TEST_F(CudfEnforceSingleRowTest, twoSingleRowBatches) {
   // Two rows of input in two separate single-row batches - should fail
-  // Note: The test framework may concatenate batches, so error may show total rows
+  // Note: The test framework may concatenate batches, so error may show total
+  // rows
   auto singleRow =
       makeRowVector({makeFlatVector<int32_t>(1, [](auto row) { return row; })});
 
