@@ -38,7 +38,6 @@ class CudfEnforceSingleRowTest : public HiveConnectorTestBase {
     cudf_velox::unregisterCudf();
     HiveConnectorTestBase::TearDown();
   }
-
 };
 
 TEST_F(CudfEnforceSingleRowTest, singleRow) {
