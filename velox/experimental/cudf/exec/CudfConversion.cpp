@@ -205,9 +205,10 @@ std::optional<uint64_t> CudfToVelox::averageRowSize() {
 // Pop inputs_.front(), convert its GPU table to a Velox RowVector via a
 // single to_arrow_host + synchronize, and return it.  The caller is
 // responsible for any further slicing.
-RowVectorPtr CudfToVelox::convertFrontToVelox(rmm::cuda_stream_view stream) {
+RowVectorPtr CudfToVelox::convertFrontToVelox() {
   auto cudfVector = std::move(inputs_.front());
   inputs_.pop_front();
+  auto stream = cudfVector->stream();
   auto tableView = cudfVector->getTableView();
   auto output = with_arrow::toVeloxColumn(
       tableView, pool(), outputType_, "", stream, get_temp_mr());
@@ -254,13 +255,11 @@ RowVectorPtr CudfToVelox::getOutput() {
       return nullptr;
     }
 
-    auto stream = inputs_.front()->stream();
-
     // Passthrough mode: emit each GPU input as a single Velox batch with no
     // re-batching.  Used when the caller knows the batch size is already
     // correct (e.g. default pipeline without explicit batch-size overrides).
     if (isPassthroughMode()) {
-      auto output = convertFrontToVelox(stream);
+      auto output = convertFrontToVelox();
       finished_ = noMoreInput_ && inputs_.empty();
       if (output->size() == 0) {
         return nullptr;
@@ -268,18 +267,18 @@ RowVectorPtr CudfToVelox::getOutput() {
       return output;
     }
 
-    const auto targetBatchSize =
-        static_cast<vector_size_t>(outputBatchRows(averageRowSize()));
+    const auto targetBatchSize = outputBatchRows(averageRowSize());
 
     if (static_cast<vector_size_t>(inputs_.front()->size()) >=
         targetBatchSize) {
       // Case A: large input.  Convert once; subsequent calls slice CPU-side.
-      veloxBuffer_ = convertFrontToVelox(stream);
+      veloxBuffer_ = convertFrontToVelox();
       veloxOffset_ = 0;
       averageRowSize_ = std::nullopt; // recompute from next input
     } else {
       // Case B: small inputs.  GPU-concat until we reach targetBatchSize,
       // then convert the merged table in one D->H transfer.
+      auto stream = inputs_.front()->stream();
       std::vector<CudfVectorPtr> toConcat;
       vector_size_t accumulated = 0;
       while (!inputs_.empty() && accumulated < targetBatchSize) {
@@ -287,6 +286,10 @@ RowVectorPtr CudfToVelox::getOutput() {
         toConcat.push_back(std::move(inputs_.front()));
         inputs_.pop_front();
       }
+      VELOX_CHECK_LE(
+          accumulated,
+          std::numeric_limits<cudf::size_type>::max(),
+          "Accumulated row count exceeds cudf int32 limit");
       auto concatTable =
           getConcatenatedTable(toConcat, outputType_, stream, get_temp_mr());
       auto tableView = concatTable->view();
@@ -310,8 +313,7 @@ RowVectorPtr CudfToVelox::getOutput() {
   const auto targetBatchSize = outputBatchRows(
       veloxBuffer_->estimateFlatSize() /
       static_cast<uint64_t>(std::max<vector_size_t>(totalRows, 1)));
-  const auto take = std::min(
-      static_cast<vector_size_t>(targetBatchSize), totalRows - veloxOffset_);
+  const auto take = std::min(targetBatchSize, totalRows - veloxOffset_);
 
   auto slice = std::dynamic_pointer_cast<RowVector>(
       veloxBuffer_->slice(veloxOffset_, take));
