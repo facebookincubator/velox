@@ -690,8 +690,9 @@ class EnforceSingleRowAdapter : public OperatorAdapter {
         std::dynamic_pointer_cast<const core::EnforceSingleRowNode>(planNode);
 
     std::vector<std::unique_ptr<exec::Operator>> result;
-    result.push_back(std::make_unique<CudfEnforceSingleRow>(
-        operatorId, ctx, enforceSingleRowPlanNode));
+    result.push_back(
+        std::make_unique<CudfEnforceSingleRow>(
+            operatorId, ctx, enforceSingleRowPlanNode));
     return result;
   }
 };
