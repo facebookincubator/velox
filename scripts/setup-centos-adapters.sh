@@ -89,6 +89,7 @@ function install_cuda {
   local dashed
   dashed="$(echo "$version" | tr '.' '-')"
   dnf_install \
+    cuda-nvcc-"$dashed" \
     cuda-compat-"$dashed" \
     cuda-driver-devel-"$dashed" \
     cuda-minimal-build-"$dashed" \
@@ -97,6 +98,55 @@ function install_cuda {
     libnvjitlink-devel-"$dashed" \
     cuda-nvml-devel-"$dashed" \
     numactl-devel
+}
+
+function install_cudf {
+  # Build and install cuDF and RAPIDS dependencies from source
+  # Based on CMake/resolve_dependency_modules/cudf.cmake
+  # Versions defined in setup-versions.sh
+  
+  # Install rapids-cmake
+  wget_and_untar "https://github.com/rapidsai/rapids-cmake/archive/${RAPIDS_CMAKE_COMMIT}.tar.gz" rapids-cmake
+  cmake_install_dir rapids-cmake \
+    -DCMAKE_BUILD_TYPE=Release
+  
+  # Install rmm (RAPIDS Memory Manager)
+  wget_and_untar "https://github.com/rapidsai/rmm/archive/${RMM_COMMIT}.tar.gz" rmm
+  (
+    cd "${DEPENDENCY_DIR}/rmm/cpp" || exit
+    cmake_install \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DBUILD_TESTS=OFF \
+      -DBUILD_BENCHMARKS=OFF \
+      -DCMAKE_CUDA_ARCHITECTURES="70"
+  )
+  
+  # Install kvikio (GPU file I/O)
+  wget_and_untar "https://github.com/rapidsai/kvikio/archive/${KVIKIO_COMMIT}.tar.gz" kvikio
+  (
+    cd "${DEPENDENCY_DIR}/kvikio/cpp" || exit
+    cmake_install \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DBUILD_TESTS=OFF \
+      -DBUILD_BENCHMARKS=OFF
+  )
+  
+  # Install cudf (GPU DataFrame library)
+  wget_and_untar "https://github.com/rapidsai/cudf/archive/${CUDF_COMMIT}.tar.gz" cudf
+  (
+    cd "${DEPENDENCY_DIR}/cudf/cpp" || exit
+    # Setup libcudf build to not have testing components (from cudf.cmake)
+    cmake_install \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DBUILD_TESTS=OFF \
+      -DCUDF_BUILD_TESTUTIL=OFF \
+      -DCUDF_BUILD_STREAMS_TEST_UTIL=OFF \
+      -DBUILD_SHARED_LIBS=ON \
+      -DCMAKE_CXX_FLAGS="-Wno-non-virtual-dtor -Wno-missing-field-initializers -Wno-deprecated-copy -Wno-restrict" \
+      -DCMAKE_CUDA_ARCHITECTURES="70" \
+      -DCMAKE_CUDA_FLAGS="-ccbin /opt/rh/gcc-toolset-14/root/usr/bin" \
+      -DCMAKE_PREFIX_PATH="${INSTALL_PREFIX}"
+  )
 }
 
 function install_adapters_deps_from_dnf {
@@ -115,6 +165,7 @@ function install_s3 {
 
 function install_adapters {
   run_and_time install_adapters_deps_from_dnf
+  run_and_time install_cudf
   run_and_time install_s3
   run_and_time install_gcs_sdk_cpp
   run_and_time install_azure_storage_sdk_cpp
@@ -125,8 +176,8 @@ function install_adapters {
 
 (
   if [[ $# -ne 0 ]]; then
-    # Activate gcc12; enable errors on unset variables afterwards.
-    source /opt/rh/gcc-toolset-12/enable || exit 1
+    # Activate gcc14; enable errors on unset variables afterwards.
+    source /opt/rh/gcc-toolset-14/enable || exit 1
     set -u
 
     for cmd in "$@"; do
@@ -134,9 +185,10 @@ function install_adapters {
     done
     echo "All specified dependencies installed!"
   else
-    # Activate gcc12; enable errors on unset variables afterwards.
-    source /opt/rh/gcc-toolset-12/enable || exit 1
+    # Activate gcc14; enable errors on unset variables afterwards.
+    source /opt/rh/gcc-toolset-14/enable || exit 1
     set -u
+    export PATH=/opt/rh/gcc-toolset-14/root/usr/bin:$PATH
     install_cuda "$VELOX_CUDA_VERSION"
     install_adapters
     echo "All dependencies for the Velox Adapters installed!"

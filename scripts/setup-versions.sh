@@ -60,3 +60,17 @@ AZURE_SDK_VERSION="12.8.0"
 MINIO_VERSION="2022-05-26T05-48-41Z"
 MINIO_BINARY_NAME="minio-2022-05-26"
 AWS_SDK_VERSION="1.11.654"
+
+# cuDF and RAPIDS related versions (from CMake/resolve_dependency_modules/cudf.cmake)
+# rapids-cmake commit 7ece71c from 2026-02-04
+RAPIDS_CMAKE_VERSION="26.04"
+RAPIDS_CMAKE_COMMIT="7ece71c2f94fb0ed402d567b457ce54ecb859695"
+# rmm commit f225c62 from 2026-02-10
+RMM_VERSION="26.04"
+RMM_COMMIT="f225c620fc177cbdd807dc67bfb53fa4b4272e9f"
+# kvikio commit 62b3d6f from 2026-02-10
+KVIKIO_VERSION="26.04"
+KVIKIO_COMMIT="62b3d6fa4ba1fc518b0069a8214b1283e63df019"
+# cudf commit e6ba1fe from 2026-02-11
+CUDF_VERSION="26.04"
+CUDF_COMMIT="e6ba1feee8f056ce2e245f771403cfa5f598d813"

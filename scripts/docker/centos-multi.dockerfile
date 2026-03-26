@@ -118,14 +118,24 @@ COPY scripts/setup-common.sh /
 COPY scripts/setup-centos9.sh /
 COPY scripts/setup-centos-adapters.sh /
 
+ARG CUDA_VERSION
+
 RUN mkdir build
 WORKDIR /build
 
 ENV UV_TOOL_BIN_DIR=/usr/local/bin \
     UV_INSTALL_DIR=/usr/local/bin \
-    INSTALL_PREFIX=/deps
+    INSTALL_PREFIX=/deps \
+    CUDA_VERSION=${CUDA_VERSION:-12.9} \
+    CC=gcc \
+    CXX=g++
 
 RUN bash -c 'source /setup-centos9.sh && install_build_prerequisites'
+
+RUN bash /setup-centos-adapters.sh install_cuda && \
+      dnf clean all
+# put CUDA binaries on the PATH
+ENV PATH=/usr/local/cuda/bin:${PATH}
 
 RUN bash /setup-centos-adapters.sh install_adapters && \
     find $INSTALL_PREFIX/lib/cmake -type f -name '*.cmake' -exec sed -i 's|/deps/|/usr/local/|g' {} \;
@@ -139,10 +149,8 @@ COPY scripts/setup-centos-adapters.sh /
 
 ARG CUDA_VERSION
 ENV CUDA_VERSION=${CUDA_VERSION:-12.9}
-
 RUN bash /setup-centos-adapters.sh install_cuda && \
       dnf clean all
-
 RUN bash /setup-centos-adapters.sh install_adapters_deps_from_dnf && \
       dnf clean all
 
@@ -178,5 +186,5 @@ RUN echo "/usr/local/lib" > /etc/ld.so.conf.d/velox_deps.conf \
  && ldconfig
 
 COPY scripts/setup-classpath.sh /
-ENTRYPOINT ["/bin/bash", "-c", "source /setup-classpath.sh && source /opt/rh/gcc-toolset-12/enable && exec \"$@\"", "--"]
+ENTRYPOINT ["/bin/bash", "-c", "source /setup-classpath.sh && source /opt/rh/gcc-toolset-14/enable && exec \"$@\"", "--"]
 CMD ["/bin/bash"]
