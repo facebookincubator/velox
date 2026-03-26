@@ -171,7 +171,12 @@ void RemoteVectorFunction::applyRemote(
 
   // Invoke function that communicates with the remote host.
   try {
+<<<<<<< HEAD
     remoteResponse = folly::coro::blockingWait(invokeRemoteFunction(request));
+=======
+    remoteResponse =
+        folly::coro::blockingWait(invokeRemoteFunction(request));
+>>>>>>> 84bcc4b97 (fix(remote): Port coroutine-based invokeRemoteFunction to OSS)
   } catch (const std::exception& e) {
     VELOX_FAIL(
         "Error while executing remote function '{}' at '{}': {}",

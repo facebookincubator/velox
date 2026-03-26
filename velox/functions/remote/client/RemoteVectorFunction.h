@@ -53,7 +53,7 @@ class RemoteVectorFunction : public exec::VectorFunction {
  protected:
   // The actual function that communicates with the remote host.
   // Returns a coroutine to allow the worker thread to yield while
-  // waiting for the remote response
+  // waiting for the remote response.
   virtual folly::coro::Task<std::unique_ptr<remote::RemoteFunctionResponse>>
   invokeRemoteFunction(const remote::RemoteFunctionRequest& request) const = 0;
 
