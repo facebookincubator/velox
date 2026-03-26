@@ -128,10 +128,8 @@ TEST_F(CudfEnforceSingleRowTest, zeroColumns) {
 
   auto plan = PlanBuilder().values({data}).enforceSingleRow().planNode();
 
-  CursorParameters params;
-  params.planNode = plan;
-  auto result = readCursor(params);
-  ASSERT_EQ(result.second, 1);
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+  ASSERT_EQ(result->size(), 1);
 }
 
 TEST_F(CudfEnforceSingleRowTest, largeBatch) {
