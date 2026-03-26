@@ -17,6 +17,8 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
@@ -37,21 +39,6 @@ class CudfEnforceSingleRowTest : public HiveConnectorTestBase {
     HiveConnectorTestBase::TearDown();
   }
 
-  void assertQueryFails(
-      const std::shared_ptr<const core::PlanNode>& plan,
-      const std::string& errorMessage) {
-    CursorParameters params;
-    params.planNode = plan;
-    try {
-      readCursor(params);
-      VELOX_FAIL("Expected query to fail, but it succeeded");
-    } catch (const VeloxException& e) {
-      ASSERT_TRUE(e.message().find(errorMessage) != std::string::npos)
-          << "Expected query to fail with error message: " << errorMessage
-          << ". The query failed with a different error message: "
-          << e.message();
-    }
-  }
 };
 
 TEST_F(CudfEnforceSingleRowTest, singleRow) {
@@ -71,11 +58,13 @@ TEST_F(CudfEnforceSingleRowTest, twoSingleRowBatches) {
   auto singleRow =
       makeRowVector({makeFlatVector<int32_t>(1, [](auto row) { return row; })});
 
-  assertQueryFails(
-      PlanBuilder()
-          .values({singleRow, singleRow})
-          .enforceSingleRow()
-          .planNode(),
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(
+          PlanBuilder()
+              .values({singleRow, singleRow})
+              .enforceSingleRow()
+              .planNode())
+          .copyResults(pool()),
       "Expected single row of input");
 }
 
@@ -84,8 +73,10 @@ TEST_F(CudfEnforceSingleRowTest, multipleRows) {
   auto multipleRows = makeRowVector(
       {makeFlatVector<int32_t>(27, [](auto row) { return row; })});
 
-  assertQueryFails(
-      PlanBuilder().values({multipleRows}).enforceSingleRow().planNode(),
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(
+          PlanBuilder().values({multipleRows}).enforceSingleRow().planNode())
+          .copyResults(pool()),
       "Expected single row of input. Received 27 rows.");
 }
 
@@ -148,7 +139,9 @@ TEST_F(CudfEnforceSingleRowTest, largeBatch) {
   auto largeRows = makeRowVector(
       {makeFlatVector<int32_t>(1000, [](auto row) { return row; })});
 
-  assertQueryFails(
-      PlanBuilder().values({largeRows}).enforceSingleRow().planNode(),
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(
+          PlanBuilder().values({largeRows}).enforceSingleRow().planNode())
+          .copyResults(pool()),
       "Expected single row of input. Received 1000 rows.");
 }
