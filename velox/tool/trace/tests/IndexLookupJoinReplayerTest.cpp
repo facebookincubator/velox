@@ -19,7 +19,7 @@
 
 #include <string>
 
-#include <folly/experimental/EventCount.h>
+#include <folly/synchronization/EventCount.h>
 
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
