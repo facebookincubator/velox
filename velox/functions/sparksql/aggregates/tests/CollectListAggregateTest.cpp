@@ -124,24 +124,28 @@ TEST_F(CollectListAggregateTest, allNullsInput) {
       {});
 }
 
-std::unordered_map<std::string, std::string> makeConfig(bool ignoreNulls) {
-  return {{"spark.collect_list.ignore_nulls", ignoreNulls ? "true" : "false"}};
+TEST_F(CollectListAggregateTest, explicitIgnoreNullsTrue) {
+  // 2-arg form with ignoreNulls=true should behave same as 1-arg.
+  auto input = makeRowVector({makeNullableFlatVector<int32_t>(
+      {1, 2, std::nullopt, 4, std::nullopt, 6})});
+  auto expected =
+      makeRowVector({makeArrayVectorFromJson<int32_t>({"[1, 2, 4, 6]"})});
+  testAggregations(
+      {input},
+      {},
+      {"spark_collect_list(c0, true)"},
+      {"array_sort(a0)"},
+      {expected});
 }
 
 TEST_F(CollectListAggregateTest, respectNulls) {
-  // When ignoreNulls is false (RESPECT NULLS), nulls should be included.
+  // 2-arg form with ignoreNulls=false (RESPECT NULLS).
   auto input = makeRowVector({makeNullableFlatVector<int32_t>(
       {1, 2, std::nullopt, 4, std::nullopt, 6})});
   auto expected = makeRowVector({makeNullableArrayVector<int32_t>(
       std::vector<std::vector<std::optional<int32_t>>>{
           {1, 2, std::nullopt, 4, std::nullopt, 6}})});
-  std::vector<RowVectorPtr> expectedResult{expected};
-  testAggregations(
-      {input},
-      {},
-      {"spark_collect_list(c0)"},
-      expectedResult,
-      makeConfig(false));
+  testAggregations({input}, {}, {"spark_collect_list(c0, false)"}, {expected});
 }
 
 TEST_F(CollectListAggregateTest, respectNullsGroupBy) {
@@ -153,30 +157,20 @@ TEST_F(CollectListAggregateTest, respectNullsGroupBy) {
        makeNullableArrayVector<int64_t>(
            std::vector<std::vector<std::optional<int64_t>>>{
                {std::nullopt, 1}, {2, std::nullopt, 3}})});
-  std::vector<RowVectorPtr> expectedResult{expected};
   testAggregations(
       {data},
       {"c0"},
-      {"spark_collect_list(c1)"},
+      {"spark_collect_list(c1, false)"},
       {"c0", "a0"},
-      expectedResult,
-      makeConfig(false));
+      {expected});
 }
 
 TEST_F(CollectListAggregateTest, respectNullsAllNulls) {
-  // When all inputs are null and ignoreNulls is false, output should be an
-  // array of nulls (not an empty array).
   auto input = makeRowVector({makeAllNullFlatVector<int32_t>(3)});
   auto expected = makeRowVector({makeNullableArrayVector<int32_t>(
       std::vector<std::vector<std::optional<int32_t>>>{
           {std::nullopt, std::nullopt, std::nullopt}})});
-  std::vector<RowVectorPtr> expectedResult{expected};
-  testAggregations(
-      {input},
-      {},
-      {"spark_collect_list(c0)"},
-      expectedResult,
-      makeConfig(false));
+  testAggregations({input}, {}, {"spark_collect_list(c0, false)"}, {expected});
 }
 } // namespace
 } // namespace facebook::velox::functions::aggregate::sparksql::test

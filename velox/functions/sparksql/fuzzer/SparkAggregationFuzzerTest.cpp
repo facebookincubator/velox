@@ -87,6 +87,8 @@ int main(int argc, char** argv) {
       // Velox registers a 2-arg collect_set(T, boolean) signature that Spark
       // doesn't support. The fuzzer may pick this signature and fail.
       "collect_set",
+      // Same as collect_set — 2-arg signature not supported by Spark.
+      "collect_list",
       "first_ignore_null",
       "last_ignore_null",
       "regr_replacement",

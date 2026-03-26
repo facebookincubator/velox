@@ -18,6 +18,7 @@
 
 #include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/functions/lib/aggregates/ValueList.h"
+#include "velox/vector/ConstantVector.h"
 
 using namespace facebook::velox::aggregate;
 using namespace facebook::velox::exec;
@@ -43,14 +44,6 @@ class CollectListAggregate {
   // cannot access the runtime ignoreNulls_ config. Without it, partial
   // aggregation uses the accumulator path, which correctly respects the config.
   bool ignoreNulls_{true};
-
-  void initialize(
-      core::AggregationNode::Step /*step*/,
-      const std::vector<TypePtr>& /*argTypes*/,
-      const TypePtr& /*resultType*/,
-      const core::QueryConfig& config) {
-    ignoreNulls_ = config.sparkCollectListIgnoreNulls();
-  }
 
   struct AccumulatorType {
     ValueList elements_;
@@ -114,16 +107,40 @@ class CollectListAggregate {
   };
 };
 
+// Adapter that overrides setConstantInputs to read the ignoreNulls flag.
+class CollectListAdapter : public SimpleAggregateAdapter<CollectListAggregate> {
+ public:
+  using SimpleAggregateAdapter<CollectListAggregate>::SimpleAggregateAdapter;
+
+  void setConstantInputs(
+      const std::vector<VectorPtr>& constantInputs) override {
+    if (constantInputs.size() >= 2 && constantInputs[1] != nullptr &&
+        !constantInputs[1]->isNullAt(0)) {
+      fn_->ignoreNulls_ =
+          constantInputs[1]->as<ConstantVector<bool>>()->valueAt(0);
+    }
+  }
+};
+
 AggregateRegistrationResult registerCollectList(
     const std::string& name,
     bool withCompanionFunctions,
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
+      // collect_list(E) -> array(E): default ignoreNulls=true.
       exec::AggregateFunctionSignatureBuilder()
           .typeVariable("E")
           .returnType("array(E)")
           .intermediateType("array(E)")
           .argumentType("E")
+          .build(),
+      // collect_list(E, ignoreNulls) -> array(E): explicit flag.
+      exec::AggregateFunctionSignatureBuilder()
+          .typeVariable("E")
+          .returnType("array(E)")
+          .intermediateType("array(E)")
+          .argumentType("E")
+          .constantArgumentType("boolean")
           .build()};
   return exec::registerAggregateFunction(
       name,
@@ -133,9 +150,7 @@ AggregateRegistrationResult registerCollectList(
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& config) -> std::unique_ptr<exec::Aggregate> {
-        VELOX_CHECK_EQ(
-            argTypes.size(), 1, "{} takes at most one argument", name);
-        return std::make_unique<SimpleAggregateAdapter<CollectListAggregate>>(
+        return std::make_unique<CollectListAdapter>(
             step, argTypes, resultType, &config);
       },
       withCompanionFunctions,
