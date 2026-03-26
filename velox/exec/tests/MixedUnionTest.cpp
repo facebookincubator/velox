@@ -1519,3 +1519,478 @@ TEST_F(MixedUnionBarrierTest, barrierWithAggregation) {
   // 10 distinct groups
   ASSERT_EQ(result->size(), 10);
 }
+
+// ============================================================================
+// Tests for MixedUnion with batch sizes per source (mix ratios)
+// ============================================================================
+
+TEST_F(MixedUnionTest, mixedUnionWithBatchSizesPerSource) {
+  // Create two sources with different amounts of data
+  auto data1 = makeRowVector({
+      makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6, 7, 8, 9, 10}),
+      makeFlatVector<std::string>(
+          {"a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9", "a10"}),
+  });
+  auto data2 = makeRowVector({
+      makeFlatVector<int32_t>({100, 200, 300, 400, 500, 600, 700, 800}),
+      makeFlatVector<std::string>(
+          {"b1", "b2", "b3", "b4", "b5", "b6", "b7", "b8"}),
+  });
+
+  // Create a MixedUnionNode with batch sizes per source
+  // Source 0: take 3 rows at a time
+  // Source 1: take 2 rows at a time
+  std::vector<int64_t> batchSizesPerSource = {3, 2};
+
+  auto mixedUnionNode = std::make_shared<core::MixedUnionNode>(
+      "mixedUnion",
+      std::vector<core::PlanNodePtr>{
+          PlanBuilder().values({data1}).planNode(),
+          PlanBuilder().values({data2}).planNode()},
+      batchSizesPerSource);
+
+  // Verify the batch sizes are stored correctly
+  EXPECT_EQ(mixedUnionNode->getBatchSizeForSource(0), 3);
+  EXPECT_EQ(mixedUnionNode->getBatchSizeForSource(1), 2);
+  EXPECT_EQ(
+      mixedUnionNode->getBatchSizeForSource(999),
+      0); // Non-existent source returns 0
+}
+
+TEST_F(MixedUnionTest, mixedUnionNodeBuilder) {
+  auto data1 = makeRowVector({
+      makeFlatVector<int32_t>({1, 2}),
+      makeFlatVector<std::string>({"a", "b"}),
+  });
+  auto data2 = makeRowVector({
+      makeFlatVector<int32_t>({3, 4}),
+      makeFlatVector<std::string>({"c", "d"}),
+  });
+
+  // Test using the Builder with batch sizes
+  auto mixedUnionNode = core::MixedUnionNode::Builder()
+                            .id("testMixedUnion")
+                            .source(PlanBuilder().values({data1}).planNode())
+                            .source(PlanBuilder().values({data2}).planNode())
+                            .batchSizeForSource(0, 5)
+                            .batchSizeForSource(1, 10)
+                            .build();
+
+  EXPECT_EQ(mixedUnionNode->id(), "testMixedUnion");
+  EXPECT_EQ(mixedUnionNode->sources().size(), 2);
+  EXPECT_EQ(mixedUnionNode->getBatchSizeForSource(0), 5);
+  EXPECT_EQ(mixedUnionNode->getBatchSizeForSource(1), 10);
+}
+
+TEST_F(MixedUnionTest, mixedUnionNodeBuilderWithBatchSizesVector) {
+  auto data1 = makeRowVector({
+      makeFlatVector<int32_t>({1, 2}),
+      makeFlatVector<std::string>({"a", "b"}),
+  });
+  auto data2 = makeRowVector({
+      makeFlatVector<int32_t>({3, 4}),
+      makeFlatVector<std::string>({"c", "d"}),
+  });
+
+  // Test using the Builder with a vector of batch sizes
+  std::vector<int64_t> batchSizes = {100, 200};
+
+  auto mixedUnionNode = core::MixedUnionNode::Builder()
+                            .id("testMixedUnion2")
+                            .source(PlanBuilder().values({data1}).planNode())
+                            .source(PlanBuilder().values({data2}).planNode())
+                            .batchSizesPerSource(std::move(batchSizes))
+                            .build();
+
+  EXPECT_EQ(mixedUnionNode->getBatchSizeForSource(0), 100);
+  EXPECT_EQ(mixedUnionNode->getBatchSizeForSource(1), 200);
+}
+
+TEST_F(MixedUnionTest, mixedUnionCopyConstructor) {
+  auto data1 = makeRowVector({
+      makeFlatVector<int32_t>({1}),
+      makeFlatVector<std::string>({"a"}),
+  });
+  auto data2 = makeRowVector({
+      makeFlatVector<int32_t>({2}),
+      makeFlatVector<std::string>({"b"}),
+  });
+
+  std::vector<int64_t> batchSizes = {50, 75};
+
+  auto original = std::make_shared<core::MixedUnionNode>(
+      "original",
+      std::vector<core::PlanNodePtr>{
+          PlanBuilder().values({data1}).planNode(),
+          PlanBuilder().values({data2}).planNode()},
+      batchSizes);
+
+  // Use the Builder copy constructor
+  auto copy = core::MixedUnionNode::Builder(*original).id("copy").build();
+
+  EXPECT_EQ(copy->id(), "copy");
+  EXPECT_EQ(copy->sources().size(), 2);
+  EXPECT_EQ(copy->getBatchSizeForSource(0), 50);
+  EXPECT_EQ(copy->getBatchSizeForSource(1), 75);
+}
+
+TEST_F(MixedUnionTest, mixedUnionAsymmetricRatio) {
+  // Test with asymmetric batch sizes (1:4 ratio)
+  auto data1 = makeRowVector({
+      makeFlatVector<int32_t>({1, 2, 3, 4}),
+      makeFlatVector<std::string>({"a1", "a2", "a3", "a4"}),
+  });
+  auto data2 = makeRowVector({
+      makeFlatVector<int32_t>({100, 200, 300, 400, 500, 600, 700, 800}),
+      makeFlatVector<std::string>(
+          {"b1", "b2", "b3", "b4", "b5", "b6", "b7", "b8"}),
+  });
+
+  // 1:4 ratio
+  std::vector<int64_t> batchSizes = {1, 4}; // Take 1 row from source 0, 4 from source 1
+
+  auto mixedUnionNode = std::make_shared<core::MixedUnionNode>(
+      "asymmetricMixedUnion",
+      std::vector<core::PlanNodePtr>{
+          PlanBuilder().values({data1}).planNode(),
+          PlanBuilder().values({data2}).planNode()},
+      batchSizes);
+
+  EXPECT_EQ(mixedUnionNode->getBatchSizeForSource(0), 1);
+  EXPECT_EQ(mixedUnionNode->getBatchSizeForSource(1), 4);
+
+  // Verify the batch sizes are stored correctly in the vector
+  const auto& storedBatchSizes = mixedUnionNode->batchSizesPerSource();
+  EXPECT_EQ(storedBatchSizes.size(), 2);
+  EXPECT_EQ(storedBatchSizes[0], 1);
+  EXPECT_EQ(storedBatchSizes[1], 4);
+}
+
+TEST_F(MixedUnionTest, mixedUnionEmptyBatchSizes) {
+  // Test with no batch sizes specified (should use default behavior)
+  auto data1 = makeRowVector({
+      makeFlatVector<int32_t>({1, 2}),
+      makeFlatVector<std::string>({"a", "b"}),
+  });
+  auto data2 = makeRowVector({
+      makeFlatVector<int32_t>({3, 4}),
+      makeFlatVector<std::string>({"c", "d"}),
+  });
+
+  // Create with empty batch sizes vector
+  std::vector<int64_t> emptyBatchSizes;
+
+  auto mixedUnionNode = std::make_shared<core::MixedUnionNode>(
+      "emptyBatchSizesMixedUnion",
+      std::vector<core::PlanNodePtr>{
+          PlanBuilder().values({data1}).planNode(),
+          PlanBuilder().values({data2}).planNode()},
+      emptyBatchSizes);
+
+  // All getBatchSizeForSource calls should return 0
+  EXPECT_EQ(mixedUnionNode->getBatchSizeForSource(0), 0);
+  EXPECT_EQ(mixedUnionNode->getBatchSizeForSource(1), 0);
+  EXPECT_TRUE(mixedUnionNode->batchSizesPerSource().empty());
+}
+
+TEST_F(MixedUnionTest, mixedUnionPartialBatchSizes) {
+  // Test with batch size specified for only some sources
+  auto data1 = makeRowVector({
+      makeFlatVector<int32_t>({1, 2}),
+      makeFlatVector<std::string>({"a", "b"}),
+  });
+  auto data2 = makeRowVector({
+      makeFlatVector<int32_t>({3, 4}),
+      makeFlatVector<std::string>({"c", "d"}),
+  });
+  auto data3 = makeRowVector({
+      makeFlatVector<int32_t>({5, 6}),
+      makeFlatVector<std::string>({"e", "f"}),
+  });
+
+  // Only specify batch size for source 1 (source 0 is 0, source 2 uses default)
+  std::vector<int64_t> batchSizes = {0, 25};
+
+  auto mixedUnionNode = std::make_shared<core::MixedUnionNode>(
+      "partialBatchSizesMixedUnion",
+      std::vector<core::PlanNodePtr>{
+          PlanBuilder().values({data1}).planNode(),
+          PlanBuilder().values({data2}).planNode(),
+          PlanBuilder().values({data3}).planNode()},
+      batchSizes);
+
+  // Source 0 and 2 should return 0 (not specified or zero)
+  EXPECT_EQ(mixedUnionNode->getBatchSizeForSource(0), 0);
+  EXPECT_EQ(mixedUnionNode->getBatchSizeForSource(1), 25);
+  EXPECT_EQ(mixedUnionNode->getBatchSizeForSource(2), 0);
+}
+
+// ============================================================================
+// Execution tests verifying batch size ratios produce correct mixing
+// ============================================================================
+
+TEST_F(MixedUnionTest, batchSizeExecutionAllRowsPresent) {
+  // Verify that all rows from both sources are present in the output
+  // even when batch sizes limit how many rows are taken per output batch.
+  constexpr int kRows1 = 100;
+  constexpr int kRows2 = 80;
+  auto data1 = makeRowVector({
+      makeFlatVector<int64_t>(kRows1, [](auto row) { return row; }),
+  });
+  auto data2 = makeRowVector({
+      makeFlatVector<int64_t>(kRows2, [](auto row) { return row + 1000; }),
+  });
+
+  // 3:2 ratio
+  std::vector<int64_t> batchSizes = {3, 2};
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto mixedUnionNode = std::make_shared<core::MixedUnionNode>(
+      planNodeIdGenerator->next(),
+      std::vector<core::PlanNodePtr>{
+          PlanBuilder(planNodeIdGenerator).values({data1}).planNode(),
+          PlanBuilder(planNodeIdGenerator).values({data2}).planNode()},
+      batchSizes);
+
+  auto result = AssertQueryBuilder(mixedUnionNode)
+                    .serialExecution(true)
+                    .copyResults(pool());
+  ASSERT_EQ(result->size(), kRows1 + kRows2);
+
+  // Verify all values are present
+  auto* col = result->childAt(0)->asFlatVector<int64_t>();
+  std::set<int64_t> values;
+  for (int i = 0; i < result->size(); ++i) {
+    values.insert(col->valueAt(i));
+  }
+  EXPECT_EQ(values.size(), kRows1 + kRows2);
+  // Check source 1 values
+  for (int i = 0; i < kRows1; ++i) {
+    EXPECT_TRUE(values.count(i)) << "Missing value " << i << " from source 0";
+  }
+  // Check source 2 values
+  for (int i = 0; i < kRows2; ++i) {
+    EXPECT_TRUE(values.count(i + 1000))
+        << "Missing value " << (i + 1000) << " from source 1";
+  }
+}
+
+TEST_F(MixedUnionTest, batchSizeExecutionMixingVerification) {
+  // Verify that rows from different sources actually appear interleaved,
+  // not all source-0 rows followed by all source-1 rows.
+  constexpr int kRows = 20;
+  auto data1 = makeRowVector({
+      // Source 0: values 0-19
+      makeFlatVector<int64_t>(kRows, [](auto row) { return row; }),
+  });
+  auto data2 = makeRowVector({
+      // Source 1: values 1000-1019
+      makeFlatVector<int64_t>(kRows, [](auto row) { return row + 1000; }),
+  });
+
+  // 1:1 ratio, small batch sizes to force multiple output rounds
+  std::vector<int64_t> batchSizes = {5, 5};
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto mixedUnionNode = std::make_shared<core::MixedUnionNode>(
+      planNodeIdGenerator->next(),
+      std::vector<core::PlanNodePtr>{
+          PlanBuilder(planNodeIdGenerator).values({data1}).planNode(),
+          PlanBuilder(planNodeIdGenerator).values({data2}).planNode()},
+      batchSizes);
+
+  auto result = AssertQueryBuilder(mixedUnionNode)
+                    .serialExecution(true)
+                    .copyResults(pool());
+  ASSERT_EQ(result->size(), kRows * 2);
+
+  // Check that the output is not simply all source-0 followed by all source-1.
+  // With mixing, we should see transitions between sources within the output.
+  auto* col = result->childAt(0)->asFlatVector<int64_t>();
+  bool seenSource0 = false;
+  bool seenSource1 = false;
+  int transitions = 0;
+  bool lastWasSource0 = false;
+
+  for (int i = 0; i < result->size(); ++i) {
+    bool isSource0 = col->valueAt(i) < 1000;
+    if (i > 0 && isSource0 != lastWasSource0) {
+      transitions++;
+    }
+    if (isSource0) {
+      seenSource0 = true;
+    } else {
+      seenSource1 = true;
+    }
+    lastWasSource0 = isSource0;
+  }
+  EXPECT_TRUE(seenSource0);
+  EXPECT_TRUE(seenSource1);
+  // With 5-row batch sizes and 20 rows per source, we expect multiple
+  // transitions (at least 2 = source0-chunk, source1-chunk, source0-chunk).
+  EXPECT_GE(transitions, 2) << "Expected interleaved output, not sequential";
+}
+
+TEST_F(MixedUnionTest, batchSizeExecutionAsymmetricRatio) {
+  // Test that 1:4 ratio produces roughly 1 row from source 0 for every
+  // 4 rows from source 1 in each output batch.
+  constexpr int kRows1 = 40;
+  constexpr int kRows2 = 160;
+  auto data1 = makeRowVector({
+      makeFlatVector<int64_t>(kRows1, [](auto row) { return row; }),
+  });
+  auto data2 = makeRowVector({
+      makeFlatVector<int64_t>(kRows2, [](auto row) { return row + 1000; }),
+  });
+
+  // 1:4 ratio
+  std::vector<int64_t> batchSizes = {1, 4};
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto mixedUnionNode = std::make_shared<core::MixedUnionNode>(
+      planNodeIdGenerator->next(),
+      std::vector<core::PlanNodePtr>{
+          PlanBuilder(planNodeIdGenerator).values({data1}).planNode(),
+          PlanBuilder(planNodeIdGenerator).values({data2}).planNode()},
+      batchSizes);
+
+  auto result = AssertQueryBuilder(mixedUnionNode)
+                    .serialExecution(true)
+                    .copyResults(pool());
+  ASSERT_EQ(result->size(), kRows1 + kRows2);
+
+  // Count rows from each source
+  auto* col = result->childAt(0)->asFlatVector<int64_t>();
+  int source0Count = 0;
+  int source1Count = 0;
+  for (int i = 0; i < result->size(); ++i) {
+    if (col->valueAt(i) < 1000) {
+      source0Count++;
+    } else {
+      source1Count++;
+    }
+  }
+  EXPECT_EQ(source0Count, kRows1);
+  EXPECT_EQ(source1Count, kRows2);
+}
+
+TEST_F(MixedUnionTest, batchSizeExecutionThreeSources) {
+  // Test mixing with three sources at different ratios
+  constexpr int kRows1 = 30;
+  constexpr int kRows2 = 60;
+  constexpr int kRows3 = 90;
+  auto data1 = makeRowVector({
+      makeFlatVector<int64_t>(kRows1, [](auto row) { return row; }),
+  });
+  auto data2 = makeRowVector({
+      makeFlatVector<int64_t>(kRows2, [](auto row) { return row + 1000; }),
+  });
+  auto data3 = makeRowVector({
+      makeFlatVector<int64_t>(kRows3, [](auto row) { return row + 2000; }),
+  });
+
+  // 1:2:3 ratio
+  std::vector<int64_t> batchSizes = {1, 2, 3};
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto mixedUnionNode = std::make_shared<core::MixedUnionNode>(
+      planNodeIdGenerator->next(),
+      std::vector<core::PlanNodePtr>{
+          PlanBuilder(planNodeIdGenerator).values({data1}).planNode(),
+          PlanBuilder(planNodeIdGenerator).values({data2}).planNode(),
+          PlanBuilder(planNodeIdGenerator).values({data3}).planNode()},
+      batchSizes);
+
+  auto result = AssertQueryBuilder(mixedUnionNode)
+                    .serialExecution(true)
+                    .copyResults(pool());
+  ASSERT_EQ(result->size(), kRows1 + kRows2 + kRows3);
+
+  // Verify all values present
+  auto* col = result->childAt(0)->asFlatVector<int64_t>();
+  std::set<int64_t> values;
+  for (int i = 0; i < result->size(); ++i) {
+    values.insert(col->valueAt(i));
+  }
+  EXPECT_EQ(values.size(), kRows1 + kRows2 + kRows3);
+}
+
+TEST_F(MixedUnionTest, batchSizeExecutionWithDownstreamFilter) {
+  // Verify batch sizes work correctly with a downstream filter
+  constexpr int kRows = 50;
+  auto data1 = makeRowVector({
+      makeFlatVector<int64_t>(kRows, [](auto row) { return row; }),
+  });
+  auto data2 = makeRowVector({
+      makeFlatVector<int64_t>(kRows, [](auto row) { return row + 1000; }),
+  });
+
+  std::vector<int64_t> batchSizes = {5, 10};
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto mixedUnionNode = std::make_shared<core::MixedUnionNode>(
+      planNodeIdGenerator->next(),
+      std::vector<core::PlanNodePtr>{
+          PlanBuilder(planNodeIdGenerator).values({data1}).planNode(),
+          PlanBuilder(planNodeIdGenerator).values({data2}).planNode()},
+      batchSizes);
+
+  // Filter to only keep values >= 25 (from source 0) and >= 1025 (from source 1)
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .addNode([&](auto, auto) { return mixedUnionNode; })
+                  .filter("c0 >= 25")
+                  .planNode();
+
+  auto result = AssertQueryBuilder(plan).serialExecution(true).copyResults(pool());
+
+  // Source 0: values 25..49 = 25 rows
+  // Source 1: values 1000..1049 = 50 rows (all >= 25)
+  ASSERT_EQ(result->size(), 75);
+}
+
+TEST_F(MixedUnionTest, batchSizeExecutionWithProjection) {
+  // Verify batch sizes work correctly with a downstream projection
+  constexpr int kRows = 20;
+  auto data1 = makeRowVector({
+      makeFlatVector<int64_t>(kRows, [](auto row) { return row; }),
+      makeFlatVector<int64_t>(kRows, [](auto row) { return row * 10; }),
+  });
+  auto data2 = makeRowVector({
+      makeFlatVector<int64_t>(kRows, [](auto row) { return row + 100; }),
+      makeFlatVector<int64_t>(kRows, [](auto row) { return (row + 100) * 10; }),
+  });
+
+  std::vector<int64_t> batchSizes = {3, 7};
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto mixedUnionNode = std::make_shared<core::MixedUnionNode>(
+      planNodeIdGenerator->next(),
+      std::vector<core::PlanNodePtr>{
+          PlanBuilder(planNodeIdGenerator).values({data1}).planNode(),
+          PlanBuilder(planNodeIdGenerator).values({data2}).planNode()},
+      batchSizes);
+
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .addNode([&](auto, auto) { return mixedUnionNode; })
+                  .project({"c0 + c1 as sum"})
+                  .planNode();
+
+  auto result = AssertQueryBuilder(plan).serialExecution(true).copyResults(pool());
+  ASSERT_EQ(result->size(), kRows * 2);
+
+  // Verify projected values: c0 + c1
+  auto* col = result->childAt(0)->asFlatVector<int64_t>();
+  std::set<int64_t> sums;
+  for (int i = 0; i < result->size(); ++i) {
+    sums.insert(col->valueAt(i));
+  }
+  // Source 0: row + row*10 = row*11 for row in [0..19]
+  for (int i = 0; i < kRows; ++i) {
+    EXPECT_TRUE(sums.count(i * 11)) << "Missing sum " << i * 11;
+  }
+  // Source 1: (row+100) + (row+100)*10 = (row+100)*11 for row in [0..19]
+  for (int i = 0; i < kRows; ++i) {
+    EXPECT_TRUE(sums.count((i + 100) * 11))
+        << "Missing sum " << (i + 100) * 11;
+  }
+}
