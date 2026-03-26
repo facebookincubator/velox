@@ -223,6 +223,7 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
       return cudf::make_column_from_scalar(
           resultScalar, 1, stream, get_output_mr());
     } else {
+      // For non-raw input (intermediate/final), use sum aggregation.
       auto const aggRequest =
           cudf::make_sum_aggregation<cudf::reduce_aggregation>();
       auto const cudfOutputType = cudf::data_type(cudf::type_id::INT64);
@@ -247,6 +248,7 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
       col = cudf::make_column_from_scalar(
           zero, col->size(), stream, get_output_mr());
     }
+    // cudf produces int32 for count but velox expects int64.
     const auto cudfOutputType =
         cudf::data_type(cudf_velox::veloxToCudfTypeId(resultType));
     if (col->type() != cudfOutputType) {
@@ -2102,6 +2104,7 @@ bool canAggregationBeEvaluatedByCudf(
     return false;
   }
 
+  // Validate against step-specific signatures from registry.
   return matchTypedCallAgainstSignatures(call, stepIt->second);
 }
 
@@ -2147,6 +2150,7 @@ bool canBeEvaluatedByCudf(
       continue;
     }
 
+    // Check input expressions can be evaluated by cuDF, expand the input first.
     for (const auto& input : aggregate.call->inputs()) {
       auto expandedInput = expandFieldReference(input, sourceNode);
       std::vector<core::TypedExprPtr> exprs = {expandedInput};
