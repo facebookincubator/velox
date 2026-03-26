@@ -63,6 +63,8 @@ class ASTExpression : public CudfExpression {
   // ASTExpression
   static bool canEvaluate(std::shared_ptr<velox::exec::Expr> expr);
 
+  static bool canEvaluate(const velox::core::TypedExprPtr& expr);
+
  private:
   std::shared_ptr<velox::exec::Expr> expr_;
 
