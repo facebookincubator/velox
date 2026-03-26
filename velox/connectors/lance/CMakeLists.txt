@@ -22,14 +22,14 @@ velox_link_libraries(
   fmt::fmt
 )
 
-# Link the pre-built Lance FFI static library and platform deps.
+# Link the pre-built Lance C static library and platform deps.
 # These go through velox_link_libraries to work with VELOX_MONO_LIBRARY mode.
 if(LANCE_FFI_LIB_PATH)
   velox_link_libraries(velox_lance_connector ${LANCE_FFI_LIB_PATH})
 else()
   message(
     WARNING
-    "LANCE_FFI_LIB_PATH not set. You must provide the path to liblance_duckdb_ffi.a "
+    "LANCE_FFI_LIB_PATH not set. You must provide the path to liblance_c.a "
     "via -DLANCE_FFI_LIB_PATH=<path> for the Lance connector to link successfully."
   )
 endif()

@@ -16,6 +16,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 #include "velox/connectors/Connector.h"
 
@@ -24,17 +25,30 @@ namespace facebook::velox::connector::lance {
 /// Split representing a Lance dataset to scan.
 struct LanceConnectorSplit : public connector::ConnectorSplit {
   const std::string datasetPath;
+  /// Fragment IDs to scan. Empty means scan all fragments.
+  const std::vector<uint64_t> fragmentIds;
 
+  /// Create a split that scans all fragments.
   explicit LanceConnectorSplit(
       const std::string& connectorId,
       const std::string& datasetPath)
       : ConnectorSplit(connectorId), datasetPath(datasetPath) {}
 
+  /// Create a split that scans specific fragments.
+  LanceConnectorSplit(
+      const std::string& connectorId,
+      const std::string& datasetPath,
+      std::vector<uint64_t> fragmentIds)
+      : ConnectorSplit(connectorId),
+        datasetPath(datasetPath),
+        fragmentIds(std::move(fragmentIds)) {}
+
   std::string toString() const override {
     return fmt::format(
-        "[LanceConnectorSplit: connectorId {}, path {}]",
+        "[LanceConnectorSplit: connectorId {}, path {}, fragments {}]",
         connectorId,
-        datasetPath);
+        datasetPath,
+        fragmentIds.size());
   }
 };
 

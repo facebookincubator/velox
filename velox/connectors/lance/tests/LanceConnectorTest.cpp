@@ -107,6 +107,18 @@ TEST_F(LanceConnectorTest, splitFields) {
       kLanceConnectorId, "/tmp/test.lance");
   ASSERT_EQ(split->datasetPath, "/tmp/test.lance");
   ASSERT_EQ(split->connectorId, kLanceConnectorId);
+  ASSERT_TRUE(split->fragmentIds.empty());
+}
+
+TEST_F(LanceConnectorTest, splitWithFragments) {
+  std::vector<uint64_t> frags = {0, 2, 5};
+  auto split = std::make_shared<LanceConnectorSplit>(
+      kLanceConnectorId, "/tmp/test.lance", frags);
+  ASSERT_EQ(split->datasetPath, "/tmp/test.lance");
+  ASSERT_EQ(split->fragmentIds.size(), 3);
+  ASSERT_EQ(split->fragmentIds[0], 0);
+  ASSERT_EQ(split->fragmentIds[1], 2);
+  ASSERT_EQ(split->fragmentIds[2], 5);
 }
 
 TEST_F(LanceConnectorTest, splitToString) {
@@ -114,7 +126,7 @@ TEST_F(LanceConnectorTest, splitToString) {
       kLanceConnectorId, "/data/my_table.lance");
   ASSERT_EQ(
       split->toString(),
-      "[LanceConnectorSplit: connectorId lance-test, path /data/my_table.lance]");
+      "[LanceConnectorSplit: connectorId lance-test, path /data/my_table.lance, fragments 0]");
 }
 
 TEST_F(LanceConnectorTest, columnHandleName) {

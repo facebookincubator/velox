@@ -20,74 +20,88 @@
 
 #include "velox/vector/arrow/Abi.h"
 
-// FFI declarations for the lance-duckdb Rust library (liblance_duckdb_ffi.a).
-// These are a subset of the functions from the lance-duckdb project needed for
-// reading Lance datasets.
+// FFI declarations for the lance-c library (liblance_c.a).
+// These match the C API defined in lance-c's include/lance.h.
 
 extern "C" {
 
-/// Opens a Lance dataset at the given path. Returns an opaque dataset handle,
-/// or nullptr on error. Check lance_last_error_message() on failure.
-void* lance_open_dataset(const char* path);
+/* --- Opaque handles --- */
 
-/// Closes and frees the dataset handle.
-void lance_close_dataset(void* dataset);
+typedef struct LanceDataset LanceDataset;
+typedef struct LanceScanner LanceScanner;
+typedef struct LanceBatch LanceBatch;
 
-/// Returns an opaque schema handle for the dataset's scan schema.
-/// Returns nullptr on error.
-void* lance_get_schema_for_scan(void* dataset);
+/* --- Error handling --- */
 
-/// Converts an opaque schema handle to an ArrowSchema.
-/// Returns 0 on success, non-zero on error.
-int32_t lance_schema_to_arrow(void* schema, ArrowSchema* out);
+typedef enum {
+  LANCE_OK = 0,
+  LANCE_ERR_INVALID_ARGUMENT = 1,
+  LANCE_ERR_IO = 2,
+  LANCE_ERR_NOT_FOUND = 3,
+  LANCE_ERR_DATASET_ALREADY_EXISTS = 4,
+  LANCE_ERR_INDEX = 5,
+  LANCE_ERR_INTERNAL = 6,
+  LANCE_ERR_NOT_SUPPORTED = 7,
+  LANCE_ERR_COMMIT_CONFLICT = 8,
+} LanceErrorCode;
 
-/// Frees an opaque schema handle.
-void lance_free_schema(void* schema);
+LanceErrorCode lance_last_error_code(void);
+const char* lance_last_error_message(void);
+void lance_free_string(const char* s);
 
-/// Creates a scan stream over the dataset.
-/// @param dataset Opaque dataset handle.
-/// @param columns Array of column name strings to project (nullptr = all).
-/// @param columns_len Number of column names.
-/// @param filter_ir Filter IR bytes (nullptr = no filter).
-/// @param filter_ir_len Length of filter_ir.
-/// @param limit Max rows to return (-1 = unlimited).
-/// @param offset Row offset to start from (0 = beginning).
-/// @return Opaque stream handle, or nullptr on error.
-void* lance_create_dataset_stream_ir(
-    void* dataset,
-    const char** columns,
-    size_t columns_len,
-    const uint8_t* filter_ir,
-    size_t filter_ir_len,
-    int64_t limit,
-    int64_t offset);
+/* --- Dataset lifecycle --- */
 
-/// Gets the next batch from the stream.
-/// @param stream Opaque stream handle.
-/// @param out_batch Pointer to receive the opaque batch handle.
-/// @return 0 if a batch was returned, 1 if the stream is exhausted,
-///         negative on error.
-int32_t lance_stream_next(void* stream, void** out_batch);
+LanceDataset* lance_dataset_open(
+    const char* uri,
+    const char* const* storage_opts,
+    uint64_t version);
 
-/// Closes and frees a stream handle.
-void lance_close_stream(void* stream);
+void lance_dataset_close(LanceDataset* dataset);
 
-/// Converts an opaque batch handle to Arrow C Data Interface structs.
-/// @return 0 on success, non-zero on error.
-int32_t
-lance_batch_to_arrow(void* batch, ArrowArray* out_array, ArrowSchema* out_schema);
+/* --- Dataset metadata --- */
 
-/// Frees an opaque batch handle.
-void lance_free_batch(void* batch);
+uint64_t lance_dataset_version(const LanceDataset* dataset);
+uint64_t lance_dataset_count_rows(const LanceDataset* dataset);
+int32_t lance_dataset_schema(const LanceDataset* dataset, ArrowSchema* out);
 
-/// Returns the error code from the last failed FFI call.
-int32_t lance_last_error_code();
+/* --- Fragment enumeration --- */
 
-/// Returns the error message from the last failed FFI call.
-/// The returned string is valid until the next FFI call on the same thread.
-const char* lance_last_error_message();
+uint64_t lance_dataset_fragment_count(const LanceDataset* dataset);
+int32_t lance_dataset_fragment_ids(
+    const LanceDataset* dataset,
+    uint64_t* out_ids);
 
-/// Frees a string allocated by the FFI library.
-void lance_free_string(char* s);
+/* --- Scanner builder --- */
+
+LanceScanner* lance_scanner_new(
+    const LanceDataset* dataset,
+    const char* const* columns,
+    const char* filter);
+
+int32_t lance_scanner_set_limit(LanceScanner* scanner, int64_t limit);
+int32_t lance_scanner_set_offset(LanceScanner* scanner, int64_t offset);
+int32_t lance_scanner_set_batch_size(
+    LanceScanner* scanner,
+    int64_t batch_size);
+int32_t lance_scanner_set_fragment_ids(
+    LanceScanner* scanner,
+    const uint64_t* ids,
+    size_t len);
+
+void lance_scanner_close(LanceScanner* scanner);
+
+/* --- Sync scan: batch iteration --- */
+
+/// Returns: 0 = batch available, 1 = end of stream, -1 = error
+int32_t lance_scanner_next(LanceScanner* scanner, LanceBatch** out);
+
+/* --- Batch (Arrow C Data Interface) --- */
+
+int32_t lance_batch_to_arrow(
+    const LanceBatch* batch,
+    ArrowArray* out_array,
+    ArrowSchema* out_schema);
+
+void lance_batch_free(LanceBatch* batch);
 
 } // extern "C"

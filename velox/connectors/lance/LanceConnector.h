@@ -19,6 +19,7 @@
 #include "velox/connectors/lance/LanceColumnHandle.h"
 #include "velox/connectors/lance/LanceConnectorSplit.h"
 #include "velox/connectors/lance/LanceTableHandle.h"
+#include "velox/connectors/lance/lance_ffi.h"
 
 namespace facebook::velox::connector::lance {
 
@@ -57,14 +58,14 @@ class LanceDataSource : public DataSource {
   // Re-orders imported Arrow columns to match the expected output schema.
   RowVectorPtr projectOutputColumns(RowVectorPtr vector);
 
-  // Closes and frees the active stream and dataset handles.
-  void closeStreamAndDataset();
+  // Closes and frees the active scanner and dataset handles.
+  void closeScannerAndDataset();
 
   RowTypePtr outputType_;
   std::vector<std::string> columnNames_;
 
-  void* dataset_{nullptr};
-  void* stream_{nullptr};
+  LanceDataset* dataset_{nullptr};
+  LanceScanner* scanner_{nullptr};
   bool splitProcessed_{true};
 
   uint64_t completedRows_{0};

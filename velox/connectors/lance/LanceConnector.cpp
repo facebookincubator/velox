@@ -60,16 +60,16 @@ LanceDataSource::LanceDataSource(
 }
 
 LanceDataSource::~LanceDataSource() {
-  closeStreamAndDataset();
+  closeScannerAndDataset();
 }
 
-void LanceDataSource::closeStreamAndDataset() {
-  if (stream_) {
-    lance_close_stream(stream_);
-    stream_ = nullptr;
+void LanceDataSource::closeScannerAndDataset() {
+  if (scanner_) {
+    lance_scanner_close(scanner_);
+    scanner_ = nullptr;
   }
   if (dataset_) {
-    lance_close_dataset(dataset_);
+    lance_dataset_close(dataset_);
     dataset_ = nullptr;
   }
 }
@@ -84,37 +84,44 @@ void LanceDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   VELOX_CHECK(lanceSplit, "Wrong type of split for LanceDataSource.");
 
   // Clean up any prior state.
-  closeStreamAndDataset();
+  closeScannerAndDataset();
 
   // Open the dataset.
-  dataset_ = lance_open_dataset(lanceSplit->datasetPath.c_str());
+  dataset_ = lance_dataset_open(lanceSplit->datasetPath.c_str(), nullptr, 0);
   VELOX_CHECK_NOT_NULL(
       dataset_,
       "Failed to open Lance dataset: {} path: {}",
       lance_last_error_message(),
       lanceSplit->datasetPath);
 
-  // Build column projection pointers for the FFI call.
+  // Build NULL-terminated column projection array.
   std::vector<const char*> colPtrs;
-  colPtrs.reserve(columnNames_.size());
+  colPtrs.reserve(columnNames_.size() + 1);
   for (const auto& col : columnNames_) {
     colPtrs.push_back(col.c_str());
   }
+  colPtrs.push_back(nullptr);
 
-  // Create the scan stream with column projection.
-  stream_ = lance_create_dataset_stream_ir(
-      dataset_,
-      colPtrs.data(),
-      colPtrs.size(),
-      /*filter_ir=*/nullptr,
-      /*filter_ir_len=*/0,
-      /*limit=*/-1,
-      /*offset=*/0);
+  // Create the scanner with column projection.
+  scanner_ = lance_scanner_new(dataset_, colPtrs.data(), /*filter=*/nullptr);
   VELOX_CHECK_NOT_NULL(
-      stream_,
-      "Failed to create scan stream: {} path: {}",
+      scanner_,
+      "Failed to create scanner: {} path: {}",
       lance_last_error_message(),
       lanceSplit->datasetPath);
+
+  // If the split specifies fragment IDs, restrict the scan.
+  if (!lanceSplit->fragmentIds.empty()) {
+    int32_t rc = lance_scanner_set_fragment_ids(
+        scanner_,
+        lanceSplit->fragmentIds.data(),
+        lanceSplit->fragmentIds.size());
+    VELOX_CHECK_EQ(
+        rc,
+        0,
+        "Failed to set fragment IDs: {}",
+        lance_last_error_message());
+  }
 
   splitProcessed_ = false;
 }
@@ -150,29 +157,29 @@ std::optional<RowVectorPtr> LanceDataSource::next(
     return nullptr;
   }
 
-  VELOX_CHECK_NOT_NULL(stream_, "No active scan stream.");
+  VELOX_CHECK_NOT_NULL(scanner_, "No active scanner.");
 
-  void* batch = nullptr;
-  int32_t rc = lance_stream_next(stream_, &batch);
+  LanceBatch* batch = nullptr;
+  int32_t rc = lance_scanner_next(scanner_, &batch);
 
   if (rc == 1) {
     // Stream exhausted.
     splitProcessed_ = true;
-    closeStreamAndDataset();
+    closeScannerAndDataset();
     return nullptr;
   }
 
   VELOX_CHECK_GE(
       rc,
       0,
-      "Error reading from Lance stream: {}",
+      "Error reading from Lance scanner: {}",
       lance_last_error_message());
 
   // Convert the batch to Arrow C Data Interface structs.
   ArrowArray arrowArray;
   ArrowSchema arrowSchema;
   int32_t convertRc = lance_batch_to_arrow(batch, &arrowArray, &arrowSchema);
-  lance_free_batch(batch);
+  lance_batch_free(batch);
 
   VELOX_CHECK_EQ(
       convertRc,
