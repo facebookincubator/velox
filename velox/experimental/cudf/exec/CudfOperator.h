@@ -61,7 +61,7 @@ class CudfOperator : public NvtxHelper {
 };
 
 /// Built-in operators extend this class and override do* methods.
-class CudfOperatorBase : public exec::Operator, public CudfOperator {
+class CudfOperatorBase : public exec::Operator, public NvtxHelper {
  public:
   CudfOperatorBase(
       int32_t operatorId,
@@ -80,7 +80,10 @@ class CudfOperatorBase : public exec::Operator, public CudfOperator {
             planNodeId,
             operatorName,
             spillConfig),
-        CudfOperator(operatorId, planNodeId, color),
+        NvtxHelper(
+            color.value_or(nvtx3::rgb{160, 82, 45}),
+            operatorId,
+            fmt::format("[{}]", planNodeId)),
         className_(operatorName),
         nvtxMethods_(nvtxMethods) {}
 
