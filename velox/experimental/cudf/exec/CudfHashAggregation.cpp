@@ -128,10 +128,7 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
 
   static bool isCountFunctionName(std::string_view kind) {
     auto prefix = cudf_velox::CudfConfig::getInstance().functionNamePrefix;
-    if (!prefix.empty() && kind.starts_with(prefix)) {
-      return kind.substr(prefix.size()).starts_with("count");
-    }
-    return kind.starts_with("count");
+    return kind.rfind(prefix + "count", 0) == 0;
   }
 
   static bool isCountStarAggregate(
@@ -174,7 +171,7 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
       cudf::table_view const& tbl,
       std::vector<cudf::groupby::aggregation_request>& requests) override {
     auto& request = requests.emplace_back();
-    outputIdx_ = requests.size() - 1;
+    outputIndex_ = requests.size() - 1;
 
     // kCountAll and kNullConstant both submit a count-all-rows request;
     // kNullConstant overrides the result with zeros in makeOutputColumn.
@@ -217,6 +214,7 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
           count = inputCol.size() - inputCol.null_count();
           break;
         }
+        default: VELOX_UNREACHABLE();
       }
 
       auto resultScalar =
@@ -238,13 +236,12 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
       return cudf::make_column_from_scalar(
           *resultScalar, 1, stream, get_output_mr());
     }
-    return nullptr;
   }
 
   std::unique_ptr<cudf::column> makeOutputColumn(
       std::vector<cudf::groupby::aggregation_result>& results,
       rmm::cuda_stream_view stream) override {
-    auto col = std::move(results[outputIdx_].results[0]);
+    auto col = std::move(results[outputIndex_].results[0]);
     if (inputKind_ == CountInputKind::kNullConstant) {
       auto zero = cudf::numeric_scalar<int64_t>(0, true, stream, get_temp_mr());
       col = cudf::make_column_from_scalar(
@@ -260,7 +257,7 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
 
  private:
   CountInputKind inputKind_;
-  uint32_t outputIdx_;
+  uint32_t outputIndex_;
 };
 
 struct MeanAggregator : cudf_velox::CudfHashAggregation::Aggregator {
@@ -903,18 +900,10 @@ auto toAggregators(
       aggregators;
   aggregators.reserve(aggregationNode.aggregates().size());
   for (size_t i = 0; i < aggregationNode.aggregates().size(); ++i) {
+    // Positional mapping: inputs are keys first, then aggregate columns in
+    // aggregate order.
     auto const& aggregate = aggregationNode.aggregates()[i];
-    // Zero input columns with zero grouping keys yields kConstantChannel.
-    auto getInputIndex = [](const core::AggregationNode& aggregationNode,
-                            size_t aggregateIndex,
-                            size_t numKeys) -> column_index_t {
-      if (aggregationNode.sources()[0]->outputType()->size() == 0 &&
-          numKeys == 0) {
-        return kConstantChannel;
-      }
-      return static_cast<column_index_t>(numKeys + aggregateIndex);
-    };
-    auto const inputIndex = getInputIndex(aggregationNode, i, numKeys);
+    auto const inputIndex = static_cast<column_index_t>(numKeys + i);
     auto const constant = constants[i];
     auto const kind = aggregate.call->name();
     auto const companionStep = getCompanionStep(kind, step);
