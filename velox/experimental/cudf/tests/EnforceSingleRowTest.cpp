@@ -105,10 +105,10 @@ TEST_F(CudfEnforceSingleRowTest, emptyInput) {
 TEST_F(CudfEnforceSingleRowTest, multipleColumns) {
   // Test with multiple columns of different types
   auto singleRow = makeRowVector({
-      makeFlatVector<int32_t>(1, [](auto row) { return 42; }),
-      makeFlatVector<int64_t>(1, [](auto row) { return 100L; }),
-      makeFlatVector<double>(1, [](auto row) { return 3.14; }),
-      makeFlatVector<std::string>(1, [](auto row) { return "test"; }),
+      makeFlatVector<int32_t>(1, [](auto /*row*/) { return 42; }),
+      makeFlatVector<int64_t>(1, [](auto /*row*/) { return 100L; }),
+      makeFlatVector<double>(1, [](auto /*row*/) { return 3.14; }),
+      makeFlatVector<std::string>(1, [](auto /*row*/) { return "test"; }),
   });
 
   createDuckDbTable({singleRow});
