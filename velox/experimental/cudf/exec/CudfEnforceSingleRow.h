@@ -63,8 +63,6 @@ class CudfEnforceSingleRow : public exec::Operator, public CudfOperator {
     return exec::BlockingReason::kNotBlocked;
   }
 
- private:
-  CudfVectorPtr input_;
 };
 
 } // namespace facebook::velox::cudf_velox
