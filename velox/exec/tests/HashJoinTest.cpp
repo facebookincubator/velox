@@ -25,6 +25,7 @@
 #include "velox/exec/Cursor.h"
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/HashJoinBridge.h"
+#include "velox/exec/HashProbe.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/PlanNodeStats.h"
@@ -306,6 +307,99 @@ TEST_P(MultiThreadedHashJoinTest, filter) {
       .referenceQuery(
           "SELECT t_k0, t_data, u_k0, u_data FROM t, u WHERE t_k0 = u_k0 AND ((t_k0 % 100) + (u_k0 % 100)) % 40 < 20")
       .run();
+}
+
+// Regression test for a JoinFuzzer-found bug where HashProbe::evalFilter
+// produces a DictionaryVector<bool> with indices pointing past the base
+// vector's size. The issue involves the filter "t_N = true" on a
+// dictionary-encoded probe boolean column combined with expression
+// memoization across multiple output batches from the same probe input.
+// In debug builds, this triggers a validation failure in
+// DictionaryVector::validate().
+//
+// This test exercises the same code path: hash join with boolean filter on
+// a probe column that is also a join key, using dictionary-encoded probe
+// input (matching the fuzzer's ENCODED input type) and small output batch
+// sizes to force multiple output batches from the same probe input.
+TEST_P(HashJoinTest, booleanJoinFilterDictionaryValidation) {
+  VectorFuzzer::Options opts;
+  opts.nullRatio = 0.1;
+
+  for (int seed = 0; seed < 20; ++seed) {
+    SCOPED_TRACE(fmt::format("seed: {}", seed));
+    opts.vectorSize = 10 + (seed % 20);
+    VectorFuzzer fuzzer(opts, pool_.get(), seed);
+
+    auto probeType = ROW({"t0", "t1"}, {INTEGER(), BOOLEAN()});
+    auto buildType = ROW({"u0", "u1"}, {INTEGER(), BOOLEAN()});
+
+    // Use fuzzRow which wraps columns in dictionary/constant encoding,
+    // matching the JoinFuzzer's ENCODED input type.
+    std::vector<RowVectorPtr> probeVectors = {fuzzer.fuzzRow(probeType)};
+    std::vector<RowVectorPtr> buildVectors = {fuzzer.fuzzRow(buildType)};
+
+    for (int batchSize : {3, 5}) {
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+          .numDrivers(1)
+          .probeKeys({"t0", "t1"})
+          .probeVectors(std::vector<RowVectorPtr>(probeVectors))
+          .buildKeys({"u0", "u1"})
+          .buildVectors(std::vector<RowVectorPtr>(buildVectors))
+          .joinFilter("t1 = true")
+          .joinOutputLayout({"t0", "t1", "u0", "u1"})
+          .config(
+              core::QueryConfig::kPreferredOutputBatchRows,
+              std::to_string(batchSize))
+          .config(
+              core::QueryConfig::kMaxOutputBatchRows, std::to_string(batchSize))
+          .injectSpill(false)
+          .referenceQuery(
+              "SELECT t.t0, t.t1, u.u0, u.u1 FROM t, u "
+              "WHERE t.t0 = u.u0 AND t.t1 = u.u1 AND t.t1 = true")
+          .run();
+    }
+  }
+}
+
+// Same as above but with the boolean filter column as a non-key payload
+// column, exercising a slightly different code path where only integer
+// keys are used for join matching.
+TEST_P(HashJoinTest, booleanPayloadFilterDictionaryValidation) {
+  VectorFuzzer::Options opts;
+  opts.nullRatio = 0.1;
+
+  for (int seed = 0; seed < 20; ++seed) {
+    SCOPED_TRACE(fmt::format("seed: {}", seed));
+    opts.vectorSize = 10 + (seed % 20);
+    VectorFuzzer fuzzer(opts, pool_.get(), seed);
+
+    auto probeType = ROW({"t0", "t1"}, {INTEGER(), BOOLEAN()});
+    auto buildType = ROW({"u0", "u1"}, {INTEGER(), BOOLEAN()});
+
+    std::vector<RowVectorPtr> probeVectors = {fuzzer.fuzzRow(probeType)};
+    std::vector<RowVectorPtr> buildVectors = {fuzzer.fuzzRow(buildType)};
+
+    for (int batchSize : {3, 5}) {
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+          .numDrivers(1)
+          .probeKeys({"t0"})
+          .probeVectors(std::vector<RowVectorPtr>(probeVectors))
+          .buildKeys({"u0"})
+          .buildVectors(std::vector<RowVectorPtr>(buildVectors))
+          .joinFilter("t1 = true")
+          .joinOutputLayout({"t0", "t1", "u0", "u1"})
+          .config(
+              core::QueryConfig::kPreferredOutputBatchRows,
+              std::to_string(batchSize))
+          .config(
+              core::QueryConfig::kMaxOutputBatchRows, std::to_string(batchSize))
+          .injectSpill(false)
+          .referenceQuery(
+              "SELECT t.t0, t.t1, u.u0, u.u1 FROM t, u "
+              "WHERE t.t0 = u.u0 AND t.t1 = true")
+          .run();
+    }
+  }
 }
 
 DEBUG_ONLY_TEST_P(MultiThreadedHashJoinTest, filterSpillOnFirstProbeInput) {
@@ -1746,6 +1840,51 @@ TEST_P(MultiThreadedHashJoinTest, antiJoinWithFilterAndEmptyBuild) {
         })
         .run();
   }
+}
+
+// Reproduces a debug-mode crash in evalFilter for ANTI join with filter.
+// A batch of all matched rows followed by a batch of all non-matching rows
+// triggers DictionaryVector::validate on a stale filterResult_ whose shared
+// outputRowMapping_ buffer has been overwritten by listJoinResults.
+TEST_P(MultiThreadedHashJoinTest, antiJoinWithBooleanKeysAndFilter) {
+  // 5 build rows with key (true, true).
+  auto buildVectors = makeBatches(1, [&](int32_t /*unused*/) {
+    return makeRowVector(
+        {"u0", "u1"},
+        {
+            makeFlatVector<bool>(5, [](auto /*row*/) { return true; }),
+            makeFlatVector<bool>(5, [](auto /*row*/) { return true; }),
+        });
+  });
+
+  // 10 probe rows: rows 0-1 match (2 * 5 = 10 output entries),
+  // rows 2-9 don't match (8 miss entries).
+  auto probeVectors = makeBatches(1, [&](int32_t /*unused*/) {
+    return makeRowVector(
+        {"t0", "t1"},
+        {
+            makeFlatVector<bool>(10, [](auto row) { return row < 2; }),
+            makeFlatVector<bool>(10, [](auto row) { return row < 2; }),
+        });
+  });
+
+  // outputBatchSize=10 forces the split: 10 matches in batch 1,
+  // 8 misses in batch 2.
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .numDrivers(1)
+      .probeKeys({"t0", "t1"})
+      .probeVectors(std::move(probeVectors))
+      .buildKeys({"u0", "u1"})
+      .buildVectors(std::move(buildVectors))
+      .joinType(core::JoinType::kAnti)
+      .joinFilter("t1 = true")
+      .joinOutputLayout({"t0", "t1"})
+      .referenceQuery(
+          "SELECT t.* FROM t WHERE NOT EXISTS "
+          "(SELECT * FROM u WHERE t.t0 = u.u0 AND t.t1 = u.u1 AND t.t1 = true)")
+      .config(core::QueryConfig::kPreferredOutputBatchRows, std::to_string(10))
+      .checkSpillStats(false)
+      .run();
 }
 
 TEST_P(MultiThreadedHashJoinTest, leftJoin) {
@@ -3742,6 +3881,253 @@ TEST_P(HashJoinTest, lazyVectorPartiallyLoadedInFilterLeftSemiFilter) {
       "not (c1 < 15 and c2 >= 0)",
       {"c1", "c2"},
       "SELECT t.c1, t.c2 FROM t WHERE c0 IN (SELECT u.c0 FROM u WHERE t.c0 = u.c0 AND NOT (t.c1 < 15 AND t.c2 >= 0))");
+}
+
+// Verifies that lazy probe-side vectors are loaded in ensureLazyInputLoaded()
+// (inside a reclaimable section) BEFORE the non-reclaimable probe output loop
+// in getOutputInternal(). Tests fuzzed data with partial/all lazy columns and
+// deterministic low-selectivity data. When spill is injected via
+// HashJoinBuilder, verifies spill actually occurs and results remain correct.
+DEBUG_ONLY_TEST_P(HashJoinTest, hashProbeEnsureLazyInputLoaded) {
+  struct {
+    bool useDeterministicData;
+    std::vector<int> lazyColumnIndices;
+    bool useHashJoinBuilder;
+
+    std::string debugString() const {
+      return fmt::format(
+          "useDeterministicData: {}, lazyColumns: {}, useHashJoinBuilder: {}",
+          useDeterministicData,
+          lazyColumnIndices.empty() ? "all"
+                                    : folly::join(",", lazyColumnIndices),
+          useHashJoinBuilder);
+    }
+  } testSettings[] = {
+      // Fuzzed data, non-key columns lazy.
+      {false, {1, 2}, false},
+      // Deterministic low selectivity (~1% match rate), non-key columns lazy.
+      {true, {1, 2}, false},
+      // Fuzzed data, all columns lazy, with spill injection.
+      {false, {}, true},
+  };
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+
+    std::vector<RowVectorPtr> probeVectors;
+    std::vector<RowVectorPtr> buildInput;
+
+    if (testData.useDeterministicData) {
+      auto probe = makeRowVector(
+          {"t_k1", "t_k2", "t_v1"},
+          {makeFlatVector<int32_t>(1'000, [](auto row) { return row; }),
+           makeFlatVector<StringView>(
+               1'000,
+               [](auto /*row*/) { return StringView::makeInline("probe"); }),
+           makeFlatVector<StringView>(1'000, [](auto /*row*/) {
+             return StringView::makeInline("val");
+           })});
+      probeVectors.push_back(
+          VectorFuzzer({.vectorSize = 1'000}, pool())
+              .fuzzRowChildrenToLazy(probe, testData.lazyColumnIndices));
+      createDuckDbTable(
+          "t",
+          {std::dynamic_pointer_cast<RowVector>(
+              probe->testingCopyPreserveEncodings())});
+
+      // Build data only has keys 0-9, so only ~1% of probe rows match.
+      // Use enough duplicates (200 per key) so the output exceeds
+      // outputBatchSize (default 1024) and spans multiple batches, ensuring
+      // the ensureLoadedIfNotAtEnd at-end optimization does not bypass the
+      // preloading path we are testing.
+      auto build = makeRowVector(
+          {"u_k1", "u_k2", "u_v1"},
+          {makeFlatVector<int32_t>(2'000, [](auto row) { return row % 10; }),
+           makeFlatVector<StringView>(
+               2'000,
+               [](auto /*row*/) { return StringView::makeInline("build"); }),
+           makeFlatVector<int32_t>(2'000, [](auto row) { return row * 100; })});
+      buildInput.push_back(build);
+      createDuckDbTable("u", {build});
+    } else {
+      VectorFuzzer::Options opts;
+      opts.vectorSize = 1'000;
+      VectorFuzzer fuzzer(opts, pool());
+
+      auto nonLazy = fuzzer.fuzzRow(probeType_);
+      // Overwrite the join key column (index 0) with values from a small
+      // range to guarantee probe-build matches. Without this, random int32
+      // keys across 1'000 rows have near-zero probability of overlapping.
+      nonLazy->childAt(0) =
+          makeFlatVector<int32_t>(1'000, [](auto row) { return row % 100; });
+      createDuckDbTable(
+          "t",
+          {std::dynamic_pointer_cast<RowVector>(
+              nonLazy->testingCopyPreserveEncodings())});
+      probeVectors.push_back(
+          testData.lazyColumnIndices.empty()
+              ? VectorFuzzer(opts, pool()).fuzzRowChildrenToLazy(nonLazy)
+              : VectorFuzzer(opts, pool())
+                    .fuzzRowChildrenToLazy(
+                        nonLazy, testData.lazyColumnIndices));
+
+      auto buildRow = fuzzer.fuzzRow(buildType_);
+      buildRow->childAt(0) =
+          makeFlatVector<int32_t>(1'000, [](auto row) { return row % 100; });
+      buildInput.push_back(buildRow);
+      createDuckDbTable("u", buildInput);
+    }
+
+    // Track whether fillOutput (the non-reclaimable probe output loop) has
+    // been entered. Lazy loading should happen BEFORE this point.
+    std::atomic_bool fillOutputEntered{false};
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::HashProbe::fillOutput",
+        std::function<void(HashProbe*)>(
+            [&](HashProbe*) { fillOutputEntered = true; }));
+
+    std::atomic_int lazyLoadsBeforeFillOutput{0};
+    std::atomic_int lazyLoadsDuringFillOutput{0};
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::{}::VectorLoaderWrap::loadInternal",
+        std::function<void(void*)>([&](void*) {
+          if (fillOutputEntered) {
+            ++lazyLoadsDuringFillOutput;
+          } else {
+            ++lazyLoadsBeforeFillOutput;
+          }
+        }));
+
+    const std::string referenceQuery =
+        "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1";
+
+    if (testData.useHashJoinBuilder) {
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+          .numDrivers(numDrivers_)
+          .parallelizeJoinBuildRows(parallelBuildSideRowsEnabled_)
+          .probeKeys({"t_k1"})
+          .probeVectors(std::move(probeVectors))
+          .buildKeys({"u_k1"})
+          .buildVectors(std::move(buildInput))
+          .referenceQuery(referenceQuery)
+          .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
+            if (hasSpill) {
+              const auto statsPair = taskSpilledStats(*task);
+              ASSERT_GT(statsPair.first.spilledBytes, 0);
+            }
+          })
+          .run();
+    } else {
+      const auto spillDirectory = TempDirectoryPath::create();
+      auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+      auto plan = PlanBuilder(planNodeIdGenerator)
+                      .values(probeVectors, false)
+                      .hashJoin(
+                          {"t_k1"},
+                          {"u_k1"},
+                          PlanBuilder(planNodeIdGenerator)
+                              .values(buildInput, false)
+                              .planNode(),
+                          "",
+                          concat(probeType_->names(), buildType_->names()))
+                      .planNode();
+
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .spillDirectory(spillDirectory->getPath())
+          .config(core::QueryConfig::kSpillEnabled, true)
+          .config(core::QueryConfig::kJoinSpillEnabled, true)
+          .plan(plan)
+          .assertResults(referenceQuery);
+    }
+
+    // HashJoinBuilder runs the query twice (without and with spill).  On the
+    // first (non-spill) run canReclaim() is false, so ensureLazyInputLoaded()
+    // is a no-op and lazy vectors are loaded inside fillOutput().  The atomic
+    // counters accumulate across both runs, so only assert loading order for
+    // the single-run non-builder case where spill is explicitly configured.
+    if (!testData.useHashJoinBuilder) {
+      ASSERT_GT(lazyLoadsBeforeFillOutput, 0);
+      ASSERT_EQ(lazyLoadsDuringFillOutput, 0);
+    }
+  }
+}
+
+// Verifies that hash join with lazy probe input produces correct results
+// across multiple join types, with automatic spill injection via
+// HashJoinBuilder.
+TEST_P(MultiThreadedHashJoinTest, hashJoinWithLazyProbeInputAndSpill) {
+  VectorFuzzer::Options opts;
+  opts.vectorSize = 1'000;
+  VectorFuzzer fuzzer(opts, pool());
+
+  const int32_t numProbeVectors = 3;
+  std::vector<RowVectorPtr> probeVectors;
+  std::vector<RowVectorPtr> probeReference;
+  probeVectors.reserve(numProbeVectors);
+  probeReference.reserve(numProbeVectors);
+  for (int32_t i = 0; i < numProbeVectors; ++i) {
+    auto nonLazy = fuzzer.fuzzRow(probeType_);
+    probeReference.push_back(
+        std::dynamic_pointer_cast<RowVector>(
+            nonLazy->testingCopyPreserveEncodings()));
+    probeVectors.push_back(
+        VectorFuzzer(opts, pool()).fuzzRowChildrenToLazy(nonLazy));
+  }
+  createDuckDbTable("t", probeReference);
+
+  const int32_t numBuildVectors = 3;
+  std::vector<RowVectorPtr> buildVectors;
+  buildVectors.reserve(numBuildVectors);
+  for (int32_t i = 0; i < numBuildVectors; ++i) {
+    buildVectors.push_back(fuzzer.fuzzRow(buildType_));
+  }
+  createDuckDbTable("u", buildVectors);
+
+  struct {
+    core::JoinType joinType;
+    std::string filter;
+    std::vector<std::string> outputColumns;
+    std::string referenceQuery;
+  } testCases[] = {
+      {core::JoinType::kInner,
+       "",
+       concat(probeType_->names(), buildType_->names()),
+       "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1"},
+      {core::JoinType::kLeft,
+       "",
+       concat(probeType_->names(), buildType_->names()),
+       "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t LEFT JOIN u ON t.t_k1 = u.u_k1"},
+      {core::JoinType::kFull,
+       "",
+       concat(probeType_->names(), buildType_->names()),
+       "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t FULL OUTER JOIN u ON t.t_k1 = u.u_k1"},
+      {core::JoinType::kAnti,
+       "t_k2 <> u_k2",
+       probeType_->names(),
+       "SELECT t_k1, t_k2, t_v1 FROM t WHERE NOT EXISTS (SELECT 1 FROM u WHERE t.t_k1 = u.u_k1 AND t.t_k2 <> u.u_k2)"},
+      {core::JoinType::kLeftSemiProject,
+       "",
+       concat(probeType_->names(), {"match"}),
+       "SELECT t_k1, t_k2, t_v1, EXISTS (SELECT 1 FROM u WHERE t.t_k1 = u.u_k1) FROM t"},
+  };
+
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(
+        fmt::format("joinType: {}", static_cast<int>(testCase.joinType)));
+
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .numDrivers(numDrivers_)
+        .parallelizeJoinBuildRows(parallelBuildSideRowsEnabled_)
+        .probeKeys({"t_k1"})
+        .probeVectors(std::vector<RowVectorPtr>(probeVectors))
+        .buildKeys({"u_k1"})
+        .buildVectors(std::vector<RowVectorPtr>(buildVectors))
+        .joinType(testCase.joinType)
+        .joinFilter(testCase.filter)
+        .joinOutputLayout(std::vector<std::string>(testCase.outputColumns))
+        .referenceQuery(testCase.referenceQuery)
+        .run();
+  }
 }
 
 TEST_P(HashJoinTest, dynamicFilters) {
