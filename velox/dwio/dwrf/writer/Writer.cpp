@@ -58,10 +58,12 @@ uint64_t orcWriterMaxStripeSize(
     const config::ConfigBase& config,
     const config::ConfigBase& session) {
   return config::toCapacity(
-      session.get<std::string>(
-          dwrf::Config::kOrcWriterMaxStripeSizeSession,
-          config.get<std::string>(
-              dwrf::Config::kOrcWriterMaxStripeSize, "64MB")),
+      session
+          .getLegacyWithFallback<std::string>(
+              dwrf::Config::kOrcWriterMaxStripeSizeSession,
+              config,
+              dwrf::Config::kOrcWriterMaxStripeSize)
+          .value_or("64MB"),
       config::CapacityUnit::BYTE);
 }
 
@@ -69,68 +71,66 @@ uint64_t orcWriterMaxDictionaryMemory(
     const config::ConfigBase& config,
     const config::ConfigBase& session) {
   return config::toCapacity(
-      session.get<std::string>(
-          dwrf::Config::kOrcWriterMaxDictionaryMemorySession,
-          config.get<std::string>(
-              dwrf::Config::kOrcWriterMaxDictionaryMemory, "16MB")),
+      session
+          .getLegacyWithFallback<std::string>(
+              dwrf::Config::kOrcWriterMaxDictionaryMemorySession,
+              config,
+              dwrf::Config::kOrcWriterMaxDictionaryMemory)
+          .value_or("16MB"),
       config::CapacityUnit::BYTE);
 }
 
 bool isOrcWriterIntegerDictionaryEncodingEnabled(
     const config::ConfigBase& config,
     const config::ConfigBase& session) {
-  return session.get<bool>(
-      dwrf::Config::kOrcWriterIntegerDictionaryEncodingEnabledSession,
-      config.get<bool>(
-          dwrf::Config::kOrcWriterIntegerDictionaryEncodingEnabled, true));
+  return session
+      .getLegacyWithFallback<bool>(
+          dwrf::Config::kOrcWriterIntegerDictionaryEncodingEnabledSession,
+          config,
+          dwrf::Config::kOrcWriterIntegerDictionaryEncodingEnabled)
+      .value_or(true);
 }
 
 bool isOrcWriterStringDictionaryEncodingEnabled(
     const config::ConfigBase& config,
     const config::ConfigBase& session) {
-  return session.get<bool>(
-      dwrf::Config::kOrcWriterStringDictionaryEncodingEnabledSession,
-      config.get<bool>(
-          dwrf::Config::kOrcWriterStringDictionaryEncodingEnabled, true));
+  return session
+      .getLegacyWithFallback<bool>(
+          dwrf::Config::kOrcWriterStringDictionaryEncodingEnabledSession,
+          config,
+          dwrf::Config::kOrcWriterStringDictionaryEncodingEnabled)
+      .value_or(true);
 }
 
 bool orcWriterLinearStripeSizeHeuristics(
     const config::ConfigBase& config,
     const config::ConfigBase& session) {
-  return session.get<bool>(
-      dwrf::Config::kOrcWriterLinearStripeSizeHeuristicsSession,
-      config.get<bool>(
-          dwrf::Config::kOrcWriterLinearStripeSizeHeuristics, true));
+  return session
+      .getLegacyWithFallback<bool>(
+          dwrf::Config::kOrcWriterLinearStripeSizeHeuristicsSession,
+          config,
+          dwrf::Config::kOrcWriterLinearStripeSizeHeuristics)
+      .value_or(true);
 }
 
 uint64_t orcWriterMinCompressionSize(
     const config::ConfigBase& config,
     const config::ConfigBase& session) {
-  return session.get<uint64_t>(
-      dwrf::Config::kOrcWriterMinCompressionSizeSession,
-      config.get<uint64_t>(dwrf::Config::kOrcWriterMinCompressionSize, 1024));
+  return session
+      .getLegacyWithFallback<uint64_t>(
+          dwrf::Config::kOrcWriterMinCompressionSizeSession,
+          config,
+          dwrf::Config::kOrcWriterMinCompressionSize)
+      .value_or(1024);
 }
 
 std::optional<uint8_t> orcWriterCompressionLevel(
     const config::ConfigBase& config,
     const config::ConfigBase& session) {
-  auto sessionProp =
-      session.get<uint8_t>(dwrf::Config::kOrcWriterCompressionLevelSession);
-
-  if (sessionProp.has_value()) {
-    return sessionProp.value();
-  }
-
-  auto configProp =
-      config.get<uint8_t>(dwrf::Config::kOrcWriterCompressionLevel);
-
-  if (configProp.has_value()) {
-    return configProp.value();
-  }
-
-  // Presto has a single config controlling this value, but different defaults
-  // depending on the compression kind.
-  return std::nullopt;
+  return session.getLegacyWithFallback<uint8_t>(
+      dwrf::Config::kOrcWriterCompressionLevelSession,
+      config,
+      dwrf::Config::kOrcWriterCompressionLevel);
 }
 
 uint8_t orcWriterZLIBCompressionLevel(

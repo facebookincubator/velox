@@ -251,8 +251,10 @@ std::string Variant::toString(const TypePtr& type) const {
       return str;
     }
     case TypeKind::HUGEINT: {
-      VELOX_CHECK(type->isLongDecimal());
-      return DecimalUtil::toString(value<TypeKind::HUGEINT>(), type);
+      if (type->isLongDecimal()) {
+        return DecimalUtil::toString(value<TypeKind::HUGEINT>(), type);
+      }
+      return folly::to<std::string>(value<TypeKind::HUGEINT>());
     }
     case TypeKind::TINYINT:
       [[fallthrough]];
@@ -465,8 +467,10 @@ std::string Variant::toJson(const Type& type) const {
       return target;
     }
     case TypeKind::HUGEINT: {
-      VELOX_CHECK(type.isLongDecimal());
-      return DecimalUtil::toString(value<TypeKind::HUGEINT>(), type);
+      if (type.isLongDecimal()) {
+        return DecimalUtil::toString(value<TypeKind::HUGEINT>(), type);
+      }
+      return folly::to<std::string>(value<TypeKind::HUGEINT>());
     }
     case TypeKind::TINYINT:
       [[fallthrough]];
@@ -497,7 +501,7 @@ std::string Variant::toJson(const Type& type) const {
       return stringifyFloatingPointerValue<double>(value<TypeKind::DOUBLE>());
     }
     case TypeKind::TIMESTAMP: {
-      auto& timestamp = value<TypeKind::TIMESTAMP>();
+      const auto& timestamp = value<TypeKind::TIMESTAMP>();
       return '"' + timestamp.toString() + '"';
     }
     case TypeKind::OPAQUE: {
@@ -592,8 +596,10 @@ std::string Variant::toJsonUnsafe(const TypePtr& type) const {
       return target;
     }
     case TypeKind::HUGEINT: {
-      VELOX_CHECK(type && type->isLongDecimal());
-      return DecimalUtil::toString(value<TypeKind::HUGEINT>(), type);
+      if (type && type->isLongDecimal()) {
+        return DecimalUtil::toString(value<TypeKind::HUGEINT>(), type);
+      }
+      return folly::to<std::string>(value<TypeKind::HUGEINT>());
     }
     case TypeKind::TINYINT:
       [[fallthrough]];

@@ -91,19 +91,23 @@ class InsertTest : public velox::test::VectorTestBase {
     folly::dynamic obj =
         folly::parseJson(std::string_view(details->valueAt(1)));
 
-    ASSERT_EQ(numRows, obj[HiveCommitMessage::kRowCount].asInt());
-    auto fileWriteInfos = obj[HiveCommitMessage::kFileWriteInfos];
+    ASSERT_EQ(
+        numRows, obj[connector::hive::HiveCommitMessage::kRowCount].asInt());
+    auto fileWriteInfos =
+        obj[connector::hive::HiveCommitMessage::kFileWriteInfos];
     ASSERT_EQ(1, fileWriteInfos.size());
 
     auto writeFileName =
-        fileWriteInfos[0][HiveCommitMessage::kWriteFileName].asString();
+        fileWriteInfos[0][connector::hive::HiveCommitMessage::kWriteFileName]
+            .asString();
 
     // Read from 'writeFileName' and verify the data matches the original.
     plan = exec::test::PlanBuilder().tableScan(rowType).planNode();
 
     auto filePath = fmt::format("{}{}", outputDirectory, writeFileName);
     const int64_t fileSize =
-        fileWriteInfos[0][HiveCommitMessage::kFileSize].asInt();
+        fileWriteInfos[0][connector::hive::HiveCommitMessage::kFileSize]
+            .asInt();
     auto split = exec::test::HiveConnectorSplitBuilder(filePath)
                      .fileFormat(dwio::common::FileFormat::PARQUET)
                      .length(fileSize)
