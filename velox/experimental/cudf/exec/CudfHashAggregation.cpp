@@ -214,7 +214,8 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
           count = inputCol.size() - inputCol.null_count();
           break;
         }
-        default: VELOX_UNREACHABLE();
+        default:
+          VELOX_UNREACHABLE();
       }
 
       auto resultScalar =

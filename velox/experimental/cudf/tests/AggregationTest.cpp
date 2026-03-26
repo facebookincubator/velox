@@ -32,6 +32,9 @@ using facebook::velox::test::BatchMaker;
 using namespace common::testutil;
 
 class AggregationTest : public OperatorTestBase {
+ public:
+  enum class AggSteps { kSingle, kPartialFinal, kPartialIntermediateFinal };
+
  protected:
   static void SetUpTestCase() {
     OperatorTestBase::SetUpTestCase();
@@ -158,8 +161,6 @@ class AggregationTest : public OperatorTestBase {
               fromClause + " GROUP BY c0, c1, c6");
     }
   }
-
-  enum class AggSteps { kSingle, kPartialFinal, kPartialIntermediateFinal };
 
   void testAggregation(
       const std::vector<RowVectorPtr>& data,
@@ -552,18 +553,6 @@ TEST_F(AggregationTest, countStarGlobalZeroRows) {
   assertQuery(op, "SELECT count(*) FROM tmp WHERE c0 > 10");
 }
 
-TEST_F(AggregationTest, countStarGlobalZeroColumns) {
-  testGlobalCountStarZeroColumns(AggSteps::kPartialFinal);
-}
-
-TEST_F(AggregationTest, countStarGlobalSingleZeroColumns) {
-  testGlobalCountStarZeroColumns(AggSteps::kSingle);
-}
-
-TEST_F(AggregationTest, countStarGlobalPartialIntermediateFinalZeroColumns) {
-  testGlobalCountStarZeroColumns(AggSteps::kPartialIntermediateFinal);
-}
-
 TEST_F(AggregationTest, countStarGlobalPartialFinalZeroColumnsLocalPartition) {
   auto data = makeRowVector({
       makeFlatVector<int64_t>({1, 2, 3, 4}),
@@ -585,91 +574,6 @@ TEST_F(AggregationTest, countStarGlobalPartialFinalZeroColumnsLocalPartition) {
       .assertResults("SELECT count(*) FROM tmp WHERE c0 > 0");
 }
 
-TEST_F(AggregationTest, countStarVsCountColumnSingleGlobalNulls) {
-  auto data = makeRowVector({
-      makeNullableFlatVector<int64_t>({1, std::nullopt, 2, std::nullopt}),
-  });
-  createDuckDbTable({data});
-  testAggregation(
-      {data},
-      {},
-      {"count(*)", "count(c0)"},
-      "SELECT count(*), count(c0) FROM tmp",
-      AggSteps::kSingle);
-}
-
-TEST_F(AggregationTest, countStarVsCountColumnPartialFinalGlobalNulls) {
-  auto data = makeRowVector({
-      makeNullableFlatVector<int64_t>({1, std::nullopt, 2, std::nullopt}),
-  });
-  createDuckDbTable({data});
-  testAggregation(
-      {data},
-      {},
-      {"count(*)", "count(c0)"},
-      "SELECT count(*), count(c0) FROM tmp",
-      AggSteps::kPartialFinal);
-}
-
-TEST_F(
-    AggregationTest,
-    countStarVsCountColumnPartialIntermediateFinalGlobalNulls) {
-  auto data = makeRowVector({
-      makeNullableFlatVector<int64_t>({1, std::nullopt, 2, std::nullopt}),
-  });
-  createDuckDbTable({data});
-  testAggregation(
-      {data},
-      {},
-      {"count(*)", "count(c0)"},
-      "SELECT count(*), count(c0) FROM tmp",
-      AggSteps::kPartialIntermediateFinal);
-}
-
-TEST_F(AggregationTest, countSingleGroupBy) {
-  auto vectors = makeVectors(rowType_, 10, 100);
-  createDuckDbTable(vectors);
-  testAggregation(
-      vectors,
-      {"c0"},
-      {"count(0)"},
-      "SELECT c0, count(*) FROM tmp GROUP BY c0",
-      AggSteps::kSingle);
-}
-
-TEST_F(AggregationTest, countPartialFinalGroupBy) {
-  auto vectors = makeVectors(rowType_, 10, 100);
-  createDuckDbTable(vectors);
-  testAggregation(
-      vectors,
-      {"c0"},
-      {"count(0)"},
-      "SELECT c0, count(*) FROM tmp GROUP BY c0",
-      AggSteps::kPartialFinal);
-}
-
-TEST_F(AggregationTest, countPartialIntermediateFinalGroupBy) {
-  auto vectors = makeVectors(rowType_, 10, 100);
-  createDuckDbTable(vectors);
-  testAggregation(
-      vectors,
-      {"c0"},
-      {"count(0)"},
-      "SELECT c0, count(*) FROM tmp GROUP BY c0",
-      AggSteps::kPartialIntermediateFinal);
-}
-
-TEST_F(AggregationTest, countConstantSingleGroupBy) {
-  auto vectors = makeVectors(rowType_, 10, 100);
-  createDuckDbTable(vectors);
-  testAggregation(
-      vectors,
-      {"c0"},
-      {"count(1)"},
-      "SELECT c0, count(1) FROM tmp GROUP BY c0",
-      AggSteps::kSingle);
-}
-
 TEST_F(AggregationTest, countConstantSingleGroupByNonZeroKey) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
@@ -679,17 +583,6 @@ TEST_F(AggregationTest, countConstantSingleGroupByNonZeroKey) {
       {"count(1)"},
       "SELECT c2, count(1) FROM tmp GROUP BY c2",
       AggSteps::kSingle);
-}
-
-TEST_F(AggregationTest, countConstantPartialFinalGroupBy) {
-  auto vectors = makeVectors(rowType_, 10, 100);
-  createDuckDbTable(vectors);
-  testAggregation(
-      vectors,
-      {"c0"},
-      {"count(1)"},
-      "SELECT c0, count(1) FROM tmp GROUP BY c0",
-      AggSteps::kPartialFinal);
 }
 
 TEST_F(AggregationTest, countConstantPartialFinalGroupByNonZeroKey) {
@@ -703,7 +596,41 @@ TEST_F(AggregationTest, countConstantPartialFinalGroupByNonZeroKey) {
       AggSteps::kPartialFinal);
 }
 
-TEST_F(AggregationTest, countConstantPartialIntermediateFinalGroupBy) {
+// Parameterized fixture that runs each count-aggregation scenario across
+// single, partial+final, and partial+intermediate+final steps.
+class CountAggregationStepsTest
+    : public AggregationTest,
+      public testing::WithParamInterface<AggregationTest::AggSteps> {};
+
+TEST_P(CountAggregationStepsTest, countStarGlobalZeroColumns) {
+  testGlobalCountStarZeroColumns(GetParam());
+}
+
+TEST_P(CountAggregationStepsTest, countStarVsCountColumnGlobalNulls) {
+  auto data = makeRowVector({
+      makeNullableFlatVector<int64_t>({1, std::nullopt, 2, std::nullopt}),
+  });
+  createDuckDbTable({data});
+  testAggregation(
+      {data},
+      {},
+      {"count(*)", "count(c0)"},
+      "SELECT count(*), count(c0) FROM tmp",
+      GetParam());
+}
+
+TEST_P(CountAggregationStepsTest, countGroupBy) {
+  auto vectors = makeVectors(rowType_, 10, 100);
+  createDuckDbTable(vectors);
+  testAggregation(
+      vectors,
+      {"c0"},
+      {"count(0)"},
+      "SELECT c0, count(*) FROM tmp GROUP BY c0",
+      GetParam());
+}
+
+TEST_P(CountAggregationStepsTest, countConstantGroupBy) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
   testAggregation(
@@ -711,72 +638,24 @@ TEST_F(AggregationTest, countConstantPartialIntermediateFinalGroupBy) {
       {"c0"},
       {"count(1)"},
       "SELECT c0, count(1) FROM tmp GROUP BY c0",
-      AggSteps::kPartialIntermediateFinal);
+      GetParam());
 }
 
-TEST_F(AggregationTest, countSingleGlobal) {
+TEST_P(CountAggregationStepsTest, countGlobal) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
   testAggregation(
-      vectors, {}, {"count(0)"}, "SELECT count(*) FROM tmp", AggSteps::kSingle);
+      vectors, {}, {"count(0)"}, "SELECT count(*) FROM tmp", GetParam());
 }
 
-TEST_F(AggregationTest, countPartialFinalGlobal) {
+TEST_P(CountAggregationStepsTest, countStarGlobal) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
   testAggregation(
-      vectors,
-      {},
-      {"count(0)"},
-      "SELECT count(*) FROM tmp",
-      AggSteps::kPartialFinal);
+      vectors, {}, {"count(*)"}, "SELECT count(*) FROM tmp", GetParam());
 }
 
-TEST_F(AggregationTest, countPartialIntermediateFinalGlobal) {
-  auto vectors = makeVectors(rowType_, 10, 100);
-  createDuckDbTable(vectors);
-  testAggregation(
-      vectors,
-      {},
-      {"count(0)"},
-      "SELECT count(*) FROM tmp",
-      AggSteps::kPartialIntermediateFinal);
-}
-
-// --- count(*) global with regular (non-zero-column) data ---
-
-TEST_F(AggregationTest, countStarSingleGlobal) {
-  auto vectors = makeVectors(rowType_, 10, 100);
-  createDuckDbTable(vectors);
-  testAggregation(
-      vectors, {}, {"count(*)"}, "SELECT count(*) FROM tmp", AggSteps::kSingle);
-}
-
-TEST_F(AggregationTest, countStarPartialFinalGlobal) {
-  auto vectors = makeVectors(rowType_, 10, 100);
-  createDuckDbTable(vectors);
-  testAggregation(
-      vectors,
-      {},
-      {"count(*)"},
-      "SELECT count(*) FROM tmp",
-      AggSteps::kPartialFinal);
-}
-
-TEST_F(AggregationTest, countStarPartialIntermediateFinalGlobal) {
-  auto vectors = makeVectors(rowType_, 10, 100);
-  createDuckDbTable(vectors);
-  testAggregation(
-      vectors,
-      {},
-      {"count(*)"},
-      "SELECT count(*) FROM tmp",
-      AggSteps::kPartialIntermediateFinal);
-}
-
-// --- count(*) group-by ---
-
-TEST_F(AggregationTest, countStarSingleGroupBy) {
+TEST_P(CountAggregationStepsTest, countStarGroupBy) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
   testAggregation(
@@ -784,111 +663,26 @@ TEST_F(AggregationTest, countStarSingleGroupBy) {
       {"c0"},
       {"count(*)"},
       "SELECT c0, count(*) FROM tmp GROUP BY c0",
-      AggSteps::kSingle);
+      GetParam());
 }
 
-TEST_F(AggregationTest, countStarPartialFinalGroupBy) {
+TEST_P(CountAggregationStepsTest, countColumnGlobal) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
   testAggregation(
-      vectors,
-      {"c0"},
-      {"count(*)"},
-      "SELECT c0, count(*) FROM tmp GROUP BY c0",
-      AggSteps::kPartialFinal);
+      vectors, {}, {"count(c0)"}, "SELECT count(c0) FROM tmp", GetParam());
 }
 
-TEST_F(AggregationTest, countStarPartialIntermediateFinalGroupBy) {
-  auto vectors = makeVectors(rowType_, 10, 100);
-  createDuckDbTable(vectors);
-  testAggregation(
-      vectors,
-      {"c0"},
-      {"count(*)"},
-      "SELECT c0, count(*) FROM tmp GROUP BY c0",
-      AggSteps::kPartialIntermediateFinal);
-}
-
-// --- count(column) global ---
-
-TEST_F(AggregationTest, countColumnSingleGlobal) {
-  auto vectors = makeVectors(rowType_, 10, 100);
-  createDuckDbTable(vectors);
-  testAggregation(
-      vectors,
-      {},
-      {"count(c0)"},
-      "SELECT count(c0) FROM tmp",
-      AggSteps::kSingle);
-}
-
-TEST_F(AggregationTest, countColumnPartialFinalGlobal) {
-  auto vectors = makeVectors(rowType_, 10, 100);
-  createDuckDbTable(vectors);
-  testAggregation(
-      vectors,
-      {},
-      {"count(c0)"},
-      "SELECT count(c0) FROM tmp",
-      AggSteps::kPartialFinal);
-}
-
-TEST_F(AggregationTest, countColumnPartialIntermediateFinalGlobal) {
-  auto vectors = makeVectors(rowType_, 10, 100);
-  createDuckDbTable(vectors);
-  testAggregation(
-      vectors,
-      {},
-      {"count(c0)"},
-      "SELECT count(c0) FROM tmp",
-      AggSteps::kPartialIntermediateFinal);
-}
-
-// --- count(column) global with nulls (isolated, not combined with count(*))
-// ---
-
-TEST_F(AggregationTest, countColumnSingleGlobalNulls) {
+TEST_P(CountAggregationStepsTest, countColumnGlobalNulls) {
   auto data = makeRowVector({
       makeNullableFlatVector<int64_t>({1, std::nullopt, 2, std::nullopt}),
   });
   createDuckDbTable({data});
   testAggregation(
-      {data},
-      {},
-      {"count(c0)"},
-      "SELECT count(c0) FROM tmp",
-      AggSteps::kSingle);
+      {data}, {}, {"count(c0)"}, "SELECT count(c0) FROM tmp", GetParam());
 }
 
-TEST_F(AggregationTest, countColumnPartialFinalGlobalNulls) {
-  auto data = makeRowVector({
-      makeNullableFlatVector<int64_t>({1, std::nullopt, 2, std::nullopt}),
-  });
-  createDuckDbTable({data});
-  testAggregation(
-      {data},
-      {},
-      {"count(c0)"},
-      "SELECT count(c0) FROM tmp",
-      AggSteps::kPartialFinal);
-}
-
-TEST_F(AggregationTest, countColumnPartialIntermediateFinalGlobalNulls) {
-  auto data = makeRowVector({
-      makeNullableFlatVector<int64_t>({1, std::nullopt, 2, std::nullopt}),
-  });
-  createDuckDbTable({data});
-  testAggregation(
-      {data},
-      {},
-      {"count(c0)"},
-      "SELECT count(c0) FROM tmp",
-      AggSteps::kPartialIntermediateFinal);
-}
-
-// --- count(column) group-by ---
-
-TEST_F(AggregationTest, countColumnSingleGroupBy) {
+TEST_P(CountAggregationStepsTest, countColumnGroupBy) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
   testAggregation(
@@ -896,34 +690,10 @@ TEST_F(AggregationTest, countColumnSingleGroupBy) {
       {"c0"},
       {"count(c3)"},
       "SELECT c0, count(c3) FROM tmp GROUP BY c0",
-      AggSteps::kSingle);
+      GetParam());
 }
 
-TEST_F(AggregationTest, countColumnPartialFinalGroupBy) {
-  auto vectors = makeVectors(rowType_, 10, 100);
-  createDuckDbTable(vectors);
-  testAggregation(
-      vectors,
-      {"c0"},
-      {"count(c3)"},
-      "SELECT c0, count(c3) FROM tmp GROUP BY c0",
-      AggSteps::kPartialFinal);
-}
-
-TEST_F(AggregationTest, countColumnPartialIntermediateFinalGroupBy) {
-  auto vectors = makeVectors(rowType_, 10, 100);
-  createDuckDbTable(vectors);
-  testAggregation(
-      vectors,
-      {"c0"},
-      {"count(c3)"},
-      "SELECT c0, count(c3) FROM tmp GROUP BY c0",
-      AggSteps::kPartialIntermediateFinal);
-}
-
-// --- count(column) group-by with nulls ---
-
-TEST_F(AggregationTest, countColumnSingleGroupByNulls) {
+TEST_P(CountAggregationStepsTest, countColumnGroupByNulls) {
   auto data = makeRowVector({
       makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3}),
       makeNullableFlatVector<int64_t>(
@@ -935,42 +705,10 @@ TEST_F(AggregationTest, countColumnSingleGroupByNulls) {
       {"c0"},
       {"count(c1)"},
       "SELECT c0, count(c1) FROM tmp GROUP BY c0",
-      AggSteps::kSingle);
+      GetParam());
 }
 
-TEST_F(AggregationTest, countColumnPartialFinalGroupByNulls) {
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3}),
-      makeNullableFlatVector<int64_t>(
-          {10, std::nullopt, 20, std::nullopt, std::nullopt, std::nullopt}),
-  });
-  createDuckDbTable({data});
-  testAggregation(
-      {data},
-      {"c0"},
-      {"count(c1)"},
-      "SELECT c0, count(c1) FROM tmp GROUP BY c0",
-      AggSteps::kPartialFinal);
-}
-
-TEST_F(AggregationTest, countColumnPartialIntermediateFinalGroupByNulls) {
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3}),
-      makeNullableFlatVector<int64_t>(
-          {10, std::nullopt, 20, std::nullopt, std::nullopt, std::nullopt}),
-  });
-  createDuckDbTable({data});
-  testAggregation(
-      {data},
-      {"c0"},
-      {"count(c1)"},
-      "SELECT c0, count(c1) FROM tmp GROUP BY c0",
-      AggSteps::kPartialIntermediateFinal);
-}
-
-// --- count(*) vs count(column) group-by with nulls ---
-
-TEST_F(AggregationTest, countStarVsCountColumnSingleGroupByNulls) {
+TEST_P(CountAggregationStepsTest, countStarVsCountColumnGroupByNulls) {
   auto data = makeRowVector({
       makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3}),
       makeNullableFlatVector<int64_t>(
@@ -982,122 +720,28 @@ TEST_F(AggregationTest, countStarVsCountColumnSingleGroupByNulls) {
       {"c0"},
       {"count(*)", "count(c1)"},
       "SELECT c0, count(*), count(c1) FROM tmp GROUP BY c0",
-      AggSteps::kSingle);
+      GetParam());
 }
 
-TEST_F(AggregationTest, countStarVsCountColumnPartialFinalGroupByNulls) {
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3}),
-      makeNullableFlatVector<int64_t>(
-          {10, std::nullopt, 20, std::nullopt, std::nullopt, std::nullopt}),
-  });
-  createDuckDbTable({data});
-  testAggregation(
-      {data},
-      {"c0"},
-      {"count(*)", "count(c1)"},
-      "SELECT c0, count(*), count(c1) FROM tmp GROUP BY c0",
-      AggSteps::kPartialFinal);
-}
-
-TEST_F(
-    AggregationTest,
-    countStarVsCountColumnPartialIntermediateFinalGroupByNulls) {
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3}),
-      makeNullableFlatVector<int64_t>(
-          {10, std::nullopt, 20, std::nullopt, std::nullopt, std::nullopt}),
-  });
-  createDuckDbTable({data});
-  testAggregation(
-      {data},
-      {"c0"},
-      {"count(*)", "count(c1)"},
-      "SELECT c0, count(*), count(c1) FROM tmp GROUP BY c0",
-      AggSteps::kPartialIntermediateFinal);
-}
-
-// --- count(constant) global with nulls in data ---
-
-TEST_F(AggregationTest, countConstantSingleGlobalNulls) {
+TEST_P(CountAggregationStepsTest, countConstantGlobalNulls) {
   auto data = makeRowVector({
       makeNullableFlatVector<int64_t>({1, std::nullopt, 2, std::nullopt}),
   });
   createDuckDbTable({data});
   testAggregation(
-      {data}, {}, {"count(1)"}, "SELECT count(1) FROM tmp", AggSteps::kSingle);
+      {data}, {}, {"count(1)"}, "SELECT count(1) FROM tmp", GetParam());
 }
 
-TEST_F(AggregationTest, countConstantPartialFinalGlobalNulls) {
-  auto data = makeRowVector({
-      makeNullableFlatVector<int64_t>({1, std::nullopt, 2, std::nullopt}),
-  });
-  createDuckDbTable({data});
-  testAggregation(
-      {data},
-      {},
-      {"count(1)"},
-      "SELECT count(1) FROM tmp",
-      AggSteps::kPartialFinal);
-}
-
-TEST_F(AggregationTest, countConstantPartialIntermediateFinalGlobalNulls) {
-  auto data = makeRowVector({
-      makeNullableFlatVector<int64_t>({1, std::nullopt, 2, std::nullopt}),
-  });
-  createDuckDbTable({data});
-  testAggregation(
-      {data},
-      {},
-      {"count(1)"},
-      "SELECT count(1) FROM tmp",
-      AggSteps::kPartialIntermediateFinal);
-}
-
-// --- count(NULL) global ---
-
-TEST_F(AggregationTest, countNullSingleGlobal) {
+TEST_P(CountAggregationStepsTest, countNullGlobal) {
   auto data = makeRowVector({
       makeFlatVector<int64_t>({1, 2, 3, 4}),
   });
   createDuckDbTable({data});
   testAggregation(
-      {data},
-      {},
-      {"count(null)"},
-      "SELECT count(null) FROM tmp",
-      AggSteps::kSingle);
+      {data}, {}, {"count(null)"}, "SELECT count(null) FROM tmp", GetParam());
 }
 
-TEST_F(AggregationTest, countNullPartialFinalGlobal) {
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>({1, 2, 3, 4}),
-  });
-  createDuckDbTable({data});
-  testAggregation(
-      {data},
-      {},
-      {"count(null)"},
-      "SELECT count(null) FROM tmp",
-      AggSteps::kPartialFinal);
-}
-
-TEST_F(AggregationTest, countNullPartialIntermediateFinalGlobal) {
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>({1, 2, 3, 4}),
-  });
-  createDuckDbTable({data});
-  testAggregation(
-      {data},
-      {},
-      {"count(null)"},
-      "SELECT count(null) FROM tmp",
-      AggSteps::kPartialIntermediateFinal);
-}
-
-// --- count(NULL) group-by ---
-
-TEST_F(AggregationTest, countNullSingleGroupBy) {
+TEST_P(CountAggregationStepsTest, countNullGroupBy) {
   auto data = makeRowVector({
       makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3}),
       makeFlatVector<int64_t>({10, 20, 30, 40, 50, 60}),
@@ -1108,36 +752,28 @@ TEST_F(AggregationTest, countNullSingleGroupBy) {
       {"c0"},
       {"count(null)"},
       "SELECT c0, count(null) FROM tmp GROUP BY c0",
-      AggSteps::kSingle);
+      GetParam());
 }
 
-TEST_F(AggregationTest, countNullPartialFinalGroupBy) {
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3}),
-      makeFlatVector<int64_t>({10, 20, 30, 40, 50, 60}),
-  });
-  createDuckDbTable({data});
-  testAggregation(
-      {data},
-      {"c0"},
-      {"count(null)"},
-      "SELECT c0, count(null) FROM tmp GROUP BY c0",
-      AggSteps::kPartialFinal);
-}
-
-TEST_F(AggregationTest, countNullPartialIntermediateFinalGroupBy) {
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3}),
-      makeFlatVector<int64_t>({10, 20, 30, 40, 50, 60}),
-  });
-  createDuckDbTable({data});
-  testAggregation(
-      {data},
-      {"c0"},
-      {"count(null)"},
-      "SELECT c0, count(null) FROM tmp GROUP BY c0",
-      AggSteps::kPartialIntermediateFinal);
-}
+INSTANTIATE_TEST_SUITE_P(
+    CountAggregation,
+    CountAggregationStepsTest,
+    testing::Values(
+        AggregationTest::AggSteps::kSingle,
+        AggregationTest::AggSteps::kPartialFinal,
+        AggregationTest::AggSteps::kPartialIntermediateFinal),
+    [](const testing::TestParamInfo<AggregationTest::AggSteps>& info)
+        -> std::string {
+      switch (info.param) {
+        case AggregationTest::AggSteps::kSingle:
+          return "Single";
+        case AggregationTest::AggSteps::kPartialFinal:
+          return "PartialFinal";
+        case AggregationTest::AggSteps::kPartialIntermediateFinal:
+          return "PartialIntermediateFinal";
+      }
+      return "Unknown";
+    });
 
 /// Tests the spark scenario of having different types of aggs in the same
 /// planNode Specific example being tested is
