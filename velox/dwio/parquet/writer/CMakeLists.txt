@@ -14,7 +14,7 @@
 
 add_subdirectory(arrow)
 
-velox_add_library(velox_dwio_arrow_parquet_writer Writer.cpp)
+velox_add_library(velox_dwio_arrow_parquet_writer Writer.cpp HEADERS Writer.h)
 
 velox_link_libraries(
   velox_dwio_arrow_parquet_writer
@@ -25,3 +25,5 @@ velox_link_libraries(
   arrow
   fmt::fmt
 )
+
+velox_add_library(velox_writer_config INTERFACE HEADERS WriterConfig.h)

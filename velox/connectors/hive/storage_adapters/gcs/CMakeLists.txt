@@ -14,7 +14,17 @@
 
 # for generated headers
 
-velox_add_library(velox_gcs RegisterGcsFileSystem.cpp)
+velox_add_library(
+  velox_gcs
+  RegisterGcsFileSystem.cpp
+  HEADERS
+  GcsFileSystem.h
+  GcsOAuthCredentialsProvider.h
+  GcsReadFile.h
+  GcsUtil.h
+  GcsWriteFile.h
+  RegisterGcsFileSystem.h
+)
 
 if(VELOX_ENABLE_GCS)
   velox_sources(velox_gcs PRIVATE GcsFileSystem.cpp GcsUtil.cpp GcsWriteFile.cpp GcsReadFile.cpp)

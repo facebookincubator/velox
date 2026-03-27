@@ -28,6 +28,8 @@ velox_add_library(
   RegisterSpecialForm.cpp
   RegisterString.cpp
   RegisterUrl.cpp
+  HEADERS
+  Register.h
 )
 
 # GCC 12 has a bug where it does not respect "pragma ignore" directives and ends

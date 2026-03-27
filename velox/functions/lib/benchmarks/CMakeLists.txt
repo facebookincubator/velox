@@ -23,3 +23,5 @@ target_link_libraries(
   Folly::folly
   Folly::follybenchmark
 )
+
+velox_add_library(velox_functions_benchmark_util INTERFACE HEADERS FunctionBenchmarkBase.h)

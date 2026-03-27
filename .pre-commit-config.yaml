@@ -50,6 +50,14 @@ repos:
         additional_dependencies: [clang-tidy==18.1.8]
         require_serial: true
 
+      - id: check-header-ownership
+        name: check-header-ownership
+        description: Verify every .h file is tracked by a CMakeLists.txt target.
+        entry: python3 scripts/checks/check-header-ownership.py velox
+        language: python
+        pass_filenames: false
+        files: (\.h|CMakeLists\.txt)$
+
       - id: license-header
         name: license-header
         description: Add missing license headers.

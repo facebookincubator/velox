@@ -23,7 +23,7 @@ add_fbthrift_cpp_library(
 
 target_compile_options(remote_function_thrift PRIVATE -Wno-deprecated-declarations)
 
-velox_add_library(velox_functions_remote_get_serde GetSerde.cpp)
+velox_add_library(velox_functions_remote_get_serde GetSerde.cpp HEADERS GetSerde.h)
 velox_link_libraries(
   velox_functions_remote_get_serde
   PUBLIC remote_function_thrift velox_presto_serializer
