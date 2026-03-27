@@ -94,9 +94,9 @@ void CudfEnforceSingleRow::noMoreInput() {
     }
 
     // Convert to CudfVector
-    auto stream = cudf::get_default_stream();
+    auto stream = cudf::get_default_stream(cudf::allow_default_stream);
     auto cudfTable =
-        with_arrow::toCudfTable(nullRow, pool(), stream, cudf::get_current_device_resource_ref());
+        with_arrow::toCudfTable(nullRow, pool(), stream, get_output_mr());
     // Synchronize to ensure toCudfTable finishes reading from nullRow's CPU
     // buffers before nullRow goes out of scope
     stream.synchronize();
