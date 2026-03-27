@@ -189,11 +189,6 @@ jobs:
         working-directory: _build/release
         run: |
           source /setup-classpath.sh
-          # Remove next lines after new image contains the mockito jar.
-          MOCKITO_JAR="/usr/local/hadoop/share/hadoop/mapreduce/mockito-core-2.23.4.jar"
-          if [ ! -f "$MOCKITO_JAR" ]; then
-            wget https://repo1.maven.org/maven2/org/mockito/mockito-core/2.23.4/mockito-core-2.23.4.jar -O "$MOCKITO_JAR"
-          fi
           ulimit -n 65536
           ctest -j 24 --timeout 900 --label-exclude cuda_driver --output-on-failure --no-tests=error
 
@@ -375,7 +370,6 @@ jobs:
 
       - name: Install Dependencies
         env:
-          VELOX_BUILD_SHARED: "ON"
           VELOX_ARROW_CMAKE_PATCH: ${{ github.workspace }}/velox/CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch
         run: |
           if git diff --name-only HEAD^1 HEAD | grep -q "scripts/setup-"; then
@@ -418,7 +412,6 @@ jobs:
           # version). Without this, BUNDLED gflags cascades to BUNDLED glog
           # which conflicts with system glog loaded transitively.
           glog_SOURCE: SYSTEM
-          VELOX_GFLAGS_URL: file:///velox/deps-sources/gflags-v2.2.2.tar.gz
           MAKEFLAGS: NUM_THREADS=32 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=6
         run: |
           EXTRA_CMAKE_FLAGS=(
