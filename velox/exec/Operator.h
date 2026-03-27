@@ -195,6 +195,12 @@ class Operator : public BaseRuntimeStatWriter {
   static constexpr std::string_view kShuffleCompressionKind{
       "shuffleCompressionKind"};
 
+  /// Converts serde kind name to integer value for stats reporting.
+  /// Maps: "Presto" -> 0, "CompactRow" -> 1, "UnsafeRow" -> 2.
+  /// These values match the deprecated VectorSerde::Kind enum for backward
+  /// compatibility with existing stats consumers.
+  static int64_t shuffleSerdeStatsValue(const std::string& serdeKind);
+
   /// 'operatorId' is the initial index of the 'this' in the Driver's list of
   /// Operators. This is used as in index into OperatorStats arrays in the Task.
   /// 'planNodeId' is a query-level unique identifier of the PlanNode to which

@@ -803,4 +803,19 @@ void Operator::MemoryReclaimer::abort(
   // Calls operator close to free up major memory usage.
   op_->close();
 }
+
+// static
+int64_t Operator::shuffleSerdeStatsValue(const std::string& serdeKind) {
+  static const std::unordered_map<std::string, int64_t> kSerdeKindToValue = {
+      {"Presto", 0},
+      {"CompactRow", 1},
+      {"UnsafeRow", 2},
+  };
+  const auto it = kSerdeKindToValue.find(serdeKind);
+  VELOX_CHECK(
+      it != kSerdeKindToValue.end(),
+      "Unknown serde kind for stats: {}",
+      serdeKind);
+  return it->second;
+}
 } // namespace facebook::velox::exec

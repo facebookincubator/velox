@@ -94,6 +94,7 @@ std::unique_ptr<BatchVectorSerializer> VectorSerde::createBatchSerializer(
   return std::make_unique<DefaultBatchVectorSerializer>(pool, this, options);
 }
 
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
 std::string VectorSerde::kindName(Kind kind) {
   switch (kind) {
     case Kind::kPresto:
@@ -122,6 +123,7 @@ std::ostream& operator<<(std::ostream& out, VectorSerde::Kind kind) {
   out << VectorSerde::kindName(kind);
   return out;
 }
+#endif
 
 VectorSerde* getVectorSerde() {
   auto serde = getVectorSerdeImpl().get();

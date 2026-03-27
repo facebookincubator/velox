@@ -23,7 +23,17 @@ namespace facebook::velox::test {
 
 class MockVectorSerde : public VectorSerde {
  public:
-  MockVectorSerde() : VectorSerde("Presto") {}
+  inline static const std::string kSerdeKind{"Presto"};
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  MockVectorSerde() = default;
+
+  Kind kind() const override {
+    return Kind::kPresto;
+  }
+#else
+  MockVectorSerde() : VectorSerde(kSerdeKind) {}
+#endif
 
   void estimateSerializedSize(
       const BaseVector* /*vector*/,
@@ -71,7 +81,7 @@ TEST(VectorStreamTest, serdeRegistration) {
 }
 
 TEST(VectorStreamTest, namedSerdeRegistration) {
-  const std::string kind = "Presto";
+  const std::string kind = MockVectorSerde::kSerdeKind;
 
   // Nothing registered yet.
   deregisterNamedVectorSerde(kind);

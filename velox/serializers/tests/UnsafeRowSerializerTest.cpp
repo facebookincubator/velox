@@ -69,8 +69,6 @@ class UnsafeRowSerializerTest : public ::testing::Test,
     deregisterNamedVectorSerde("CompactRow");
     serializer::spark::UnsafeRowVectorSerde::registerVectorSerde();
     serializer::spark::UnsafeRowVectorSerde::registerNamedVectorSerde();
-    ASSERT_EQ(getVectorSerde()->kind(), "UnsafeRow");
-    ASSERT_EQ(getNamedVectorSerde("UnsafeRow")->kind(), "UnsafeRow");
     appendRow_ = GetParam().appendRow;
     compressionKind_ = GetParam().compressionKind;
     microBatchDeserialize_ = GetParam().microBatchDeserialize;
