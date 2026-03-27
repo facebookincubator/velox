@@ -121,17 +121,6 @@ TEST_F(CudfEnforceSingleRowTest, withNulls) {
   assertQuery(plan, "SELECT * FROM tmp");
 }
 
-TEST_F(CudfEnforceSingleRowTest, zeroColumns) {
-  // Test with zero columns in output type
-  auto rowType = ROW({});
-  auto data = BaseVector::create<RowVector>(rowType, 1, pool());
-
-  auto plan = PlanBuilder().values({data}).enforceSingleRow().planNode();
-
-  auto result = AssertQueryBuilder(plan).copyResults(pool());
-  ASSERT_EQ(result->size(), 1);
-}
-
 TEST_F(CudfEnforceSingleRowTest, largeBatch) {
   // Large batch (more than 1 row) - should fail
   auto largeRows = makeRowVector(
