@@ -16,11 +16,10 @@
 
 #include "velox/dwio/parquet/reader/PageReader.h"
 
-#include <thrift/protocol/TCompactProtocol.h>
-#include <thrift/transport/TBufferTransports.h>
+#include <thrift/lib/cpp2/protocol/Serializer.h>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
-#include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
+#include "velox/dwio/parquet/thrift/ParquetThrift.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::common;
@@ -44,17 +43,17 @@ TEST_F(ParquetPageReaderTest, smallPage) {
       headerSize,
       stats);
   auto header = pageReader->readPageHeader();
-  EXPECT_EQ(header.type, thrift::PageType::type::DATA_PAGE);
-  EXPECT_EQ(header.uncompressed_page_size, 16950);
-  EXPECT_EQ(header.compressed_page_size, 10759);
-  EXPECT_EQ(header.data_page_header.num_values, 21738);
+  EXPECT_EQ(*header.type(), thrift::PageType::DATA_PAGE);
+  EXPECT_EQ(*header.uncompressed_page_size(), 16950);
+  EXPECT_EQ(*header.compressed_page_size(), 10759);
+  EXPECT_EQ(*header.data_page_header()->num_values(), 21738);
 
   // expectedMinValue: "aaaa...aaaa"
   std::string expectedMinValue(39, 'a');
   // expectedMaxValue: "zzzz...zzzz"
   std::string expectedMaxValue(49, 'z');
-  auto minValue = header.data_page_header.statistics.min_value;
-  auto maxValue = header.data_page_header.statistics.max_value;
+  auto minValue = *header.data_page_header()->statistics()->min_value();
+  auto maxValue = *header.data_page_header()->statistics()->max_value();
   EXPECT_EQ(minValue, expectedMinValue);
   EXPECT_EQ(maxValue, expectedMaxValue);
   EXPECT_GT(stats.pageLoadTimeNs.sum(), 0);
@@ -76,17 +75,17 @@ TEST_F(ParquetPageReaderTest, largePage) {
       stats);
   auto header = pageReader->readPageHeader();
 
-  EXPECT_EQ(header.type, thrift::PageType::type::DATA_PAGE);
-  EXPECT_EQ(header.uncompressed_page_size, 1050822);
-  EXPECT_EQ(header.compressed_page_size, 66759);
-  EXPECT_EQ(header.data_page_header.num_values, 970);
+  EXPECT_EQ(*header.type(), thrift::PageType::DATA_PAGE);
+  EXPECT_EQ(*header.uncompressed_page_size(), 1050822);
+  EXPECT_EQ(*header.compressed_page_size(), 66759);
+  EXPECT_EQ(*header.data_page_header()->num_values(), 970);
 
   // expectedMinValue: "aaaa...aaaa"
   std::string expectedMinValue(1295, 'a');
   // expectedMinValue: "zzzz...zzzz"
   std::string expectedMaxValue(2255, 'z');
-  auto minValue = header.data_page_header.statistics.min_value;
-  auto maxValue = header.data_page_header.statistics.max_value;
+  auto minValue = *header.data_page_header()->statistics()->min_value();
+  auto maxValue = *header.data_page_header()->statistics()->max_value();
   EXPECT_EQ(minValue, expectedMinValue);
   EXPECT_EQ(maxValue, expectedMaxValue);
   EXPECT_GT(stats.pageLoadTimeNs.sum(), 0);
@@ -122,8 +121,80 @@ TEST(CompressionOptionsTest, testCompressionOptions) {
       dwio::common::compression::Compressor::PARQUET_ZLIB_WINDOW_BITS);
 }
 
+namespace {
+
+// Helper to serialize a PageHeader using Thrift compact protocol.
+std::string serializePageHeader(const thrift::PageHeader& header) {
+  return apache::thrift::CompactSerializer::serialize<std::string>(header);
+}
+
+// Helper to create a DATA_PAGE header with specified sizes.
+thrift::PageHeader createDataPageV1Header(
+    int32_t uncompressedSize,
+    int32_t compressedSize,
+    int32_t numValues) {
+  thrift::PageHeader header;
+  header.type() = thrift::PageType::DATA_PAGE;
+  header.uncompressed_page_size() = uncompressedSize;
+  header.compressed_page_size() = compressedSize;
+
+  thrift::DataPageHeader dataHeader;
+  dataHeader.num_values() = numValues;
+  dataHeader.encoding() = thrift::Encoding::PLAIN;
+  dataHeader.definition_level_encoding() = thrift::Encoding::RLE;
+  dataHeader.repetition_level_encoding() = thrift::Encoding::RLE;
+  header.data_page_header() = dataHeader;
+
+  return header;
+}
+
+// Helper to create a DATA_PAGE_V2 header with specified sizes.
+thrift::PageHeader createDataPageV2Header(
+    int32_t uncompressedSize,
+    int32_t compressedSize,
+    int32_t numValues,
+    int32_t definitionLevelsByteLength,
+    int32_t repetitionLevelsByteLength) {
+  thrift::PageHeader header;
+  header.type() = thrift::PageType::DATA_PAGE_V2;
+  header.uncompressed_page_size() = uncompressedSize;
+  header.compressed_page_size() = compressedSize;
+
+  thrift::DataPageHeaderV2 dataHeader;
+  dataHeader.num_values() = numValues;
+  dataHeader.num_nulls() = 0;
+  dataHeader.num_rows() = numValues;
+  dataHeader.encoding() = thrift::Encoding::PLAIN;
+  dataHeader.definition_levels_byte_length() = definitionLevelsByteLength;
+  dataHeader.repetition_levels_byte_length() = repetitionLevelsByteLength;
+  dataHeader.is_compressed() = false;
+  header.data_page_header_v2() = dataHeader;
+
+  return header;
+}
+
+/// Helper to create a DICTIONARY_PAGE header with specified sizes.
+thrift::PageHeader createDictionaryPageHeader(
+    int32_t uncompressedSize,
+    int32_t compressedSize,
+    int32_t numValues) {
+  thrift::PageHeader header;
+  header.type() = thrift::PageType::DICTIONARY_PAGE;
+  header.uncompressed_page_size() = uncompressedSize;
+  header.compressed_page_size() = compressedSize;
+
+  thrift::DictionaryPageHeader dictPageHeader;
+  dictPageHeader.num_values() = numValues;
+  dictPageHeader.encoding() = thrift::Encoding::PLAIN;
+  header.dictionary_page_header() = dictPageHeader;
+
+  return header;
+}
+
+} // namespace
+
 // Test that prepareDictionary rejects FIXED_LEN_BYTE_ARRAY dictionary pages
-// where the Parquet type length exceeds the Velox type length.  This guards
+// where the Parquet type length exceeds the Velox type length. This guards
 // against heap buffer overflow from malicious Parquet files that have a patched
 // precision (e.g. decimal128 with typeLength=16 but precision lowered to make
 // Velox choose int64_t with cppSizeInBytes=8).
@@ -137,21 +208,9 @@ TEST_F(ParquetPageReaderTest, fixedLenByteArrayDictOverflow) {
   constexpr int32_t kDictPageSize = kNumDictValues * kParquetTypeLength;
 
   // Create a DICTIONARY_PAGE header.
-  thrift::PageHeader dictHeader;
-  dictHeader.__set_type(thrift::PageType::DICTIONARY_PAGE);
-  dictHeader.__set_uncompressed_page_size(kDictPageSize);
-  dictHeader.__set_compressed_page_size(kDictPageSize);
-  thrift::DictionaryPageHeader dictPageHeader;
-  dictPageHeader.__set_num_values(kNumDictValues);
-  dictPageHeader.__set_encoding(thrift::Encoding::PLAIN);
-  dictHeader.__set_dictionary_page_header(dictPageHeader);
-
-  auto transport = std::make_shared<apache::thrift::transport::TMemoryBuffer>();
-  apache::thrift::protocol::TCompactProtocolT<
-      apache::thrift::transport::TMemoryBuffer>
-      protocol(transport);
-  dictHeader.write(&protocol);
-  std::string dictHeaderBytes = transport->getBufferAsString();
+  auto dictHeader =
+      createDictionaryPageHeader(kDictPageSize, kDictPageSize, kNumDictValues);
+  std::string dictHeaderBytes = serializePageHeader(dictHeader);
 
   // Dictionary page data (content doesn't matter, check fires before read).
   std::string dictPageData(kDictPageSize, '\0');
@@ -160,23 +219,17 @@ TEST_F(ParquetPageReaderTest, fixedLenByteArrayDictOverflow) {
   // dictionary page.
   constexpr int32_t kDataPageSize = 8;
   thrift::PageHeader dataHeader;
-  dataHeader.__set_type(thrift::PageType::DATA_PAGE);
-  dataHeader.__set_uncompressed_page_size(kDataPageSize);
-  dataHeader.__set_compressed_page_size(kDataPageSize);
+  dataHeader.type() = thrift::PageType::DATA_PAGE;
+  dataHeader.uncompressed_page_size() = kDataPageSize;
+  dataHeader.compressed_page_size() = kDataPageSize;
   thrift::DataPageHeader dataPageHeader;
-  dataPageHeader.__set_num_values(1);
-  dataPageHeader.__set_encoding(thrift::Encoding::RLE_DICTIONARY);
-  dataPageHeader.__set_definition_level_encoding(thrift::Encoding::RLE);
-  dataPageHeader.__set_repetition_level_encoding(thrift::Encoding::RLE);
-  dataHeader.__set_data_page_header(dataPageHeader);
+  dataPageHeader.num_values() = 1;
+  dataPageHeader.encoding() = thrift::Encoding::RLE_DICTIONARY;
+  dataPageHeader.definition_level_encoding() = thrift::Encoding::RLE;
+  dataPageHeader.repetition_level_encoding() = thrift::Encoding::RLE;
+  dataHeader.data_page_header() = dataPageHeader;
 
-  auto transport2 =
-      std::make_shared<apache::thrift::transport::TMemoryBuffer>();
-  apache::thrift::protocol::TCompactProtocolT<
-      apache::thrift::transport::TMemoryBuffer>
-      protocol2(transport2);
-  dataHeader.write(&protocol2);
-  std::string dataHeaderBytes = transport2->getBufferAsString();
+  std::string dataHeaderBytes = serializePageHeader(dataHeader);
 
   std::string dataPageData(kDataPageSize, '\0');
 
@@ -223,64 +276,29 @@ TEST_F(ParquetPageReaderTest, fixedLenByteArrayDictOverflow) {
   VELOX_ASSERT_THROW(pageReader->skip(1), "");
 }
 
-namespace {
+// Example test demonstrating proper FBThrift dictionary page creation.
+// This serves as a reference for converting any OSS-specific tests.
+TEST_F(ParquetPageReaderTest, dictionaryPageExample) {
+  constexpr int32_t kDictPageSize = 100;
+  constexpr int32_t kNumDictValues = 10;
 
-// Helper to serialize a PageHeader using Thrift compact protocol.
-std::string serializePageHeader(const thrift::PageHeader& header) {
-  auto transport = std::make_shared<apache::thrift::transport::TMemoryBuffer>();
-  apache::thrift::protocol::TCompactProtocolT<
-      apache::thrift::transport::TMemoryBuffer>
-      protocol(transport);
-  header.write(&protocol);
-  return transport->getBufferAsString();
+  // Create dictionary page header using FBThrift API
+  auto dictHeader =
+      createDictionaryPageHeader(kDictPageSize, kDictPageSize, kNumDictValues);
+
+  // Verify the header was created correctly
+  EXPECT_EQ(*dictHeader.type(), thrift::PageType::DICTIONARY_PAGE);
+  EXPECT_EQ(*dictHeader.uncompressed_page_size(), kDictPageSize);
+  EXPECT_EQ(*dictHeader.compressed_page_size(), kDictPageSize);
+  EXPECT_EQ(*dictHeader.dictionary_page_header()->num_values(), kNumDictValues);
+  EXPECT_EQ(
+      *dictHeader.dictionary_page_header()->encoding(),
+      thrift::Encoding::PLAIN);
+
+  // Serialize using FBThrift CompactSerializer
+  std::string serialized = serializePageHeader(dictHeader);
+  EXPECT_GT(serialized.size(), 0);
 }
-
-// Helper to create a DATA_PAGE header with specified sizes.
-thrift::PageHeader createDataPageV1Header(
-    int32_t uncompressedSize,
-    int32_t compressedSize,
-    int32_t numValues) {
-  thrift::PageHeader header;
-  header.__set_type(thrift::PageType::DATA_PAGE);
-  header.__set_uncompressed_page_size(uncompressedSize);
-  header.__set_compressed_page_size(compressedSize);
-
-  thrift::DataPageHeader dataHeader;
-  dataHeader.__set_num_values(numValues);
-  dataHeader.__set_encoding(thrift::Encoding::PLAIN);
-  dataHeader.__set_definition_level_encoding(thrift::Encoding::RLE);
-  dataHeader.__set_repetition_level_encoding(thrift::Encoding::RLE);
-  header.__set_data_page_header(dataHeader);
-
-  return header;
-}
-
-// Helper to create a DATA_PAGE_V2 header with specified sizes.
-thrift::PageHeader createDataPageV2Header(
-    int32_t uncompressedSize,
-    int32_t compressedSize,
-    int32_t numValues,
-    int32_t definitionLevelsByteLength,
-    int32_t repetitionLevelsByteLength) {
-  thrift::PageHeader header;
-  header.__set_type(thrift::PageType::DATA_PAGE_V2);
-  header.__set_uncompressed_page_size(uncompressedSize);
-  header.__set_compressed_page_size(compressedSize);
-
-  thrift::DataPageHeaderV2 dataHeader;
-  dataHeader.__set_num_values(numValues);
-  dataHeader.__set_num_nulls(0);
-  dataHeader.__set_num_rows(numValues);
-  dataHeader.__set_encoding(thrift::Encoding::PLAIN);
-  dataHeader.__set_definition_levels_byte_length(definitionLevelsByteLength);
-  dataHeader.__set_repetition_levels_byte_length(repetitionLevelsByteLength);
-  dataHeader.__set_is_compressed(false);
-  header.__set_data_page_header_v2(dataHeader);
-
-  return header;
-}
-
-} // namespace
 
 // Test that prepareDataPageV1 rejects pages with defineLength exceeding page
 // size. This guards against heap buffer overflow from corrupt Parquet files.

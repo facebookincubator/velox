@@ -24,50 +24,59 @@ add_library(velox_overload_int_function_dynamic SHARED DynamicIntFunctionOverloa
 add_library(velox_overload_varchar_function_dynamic SHARED DynamicVarcharFunctionOverload.cpp)
 add_library(velox_function_non_default_dynamic SHARED DynamicFunctionNonDefault.cpp)
 
-set(CMAKE_DYLIB_TEST_LINK_LIBRARIES fmt::fmt Folly::folly glog::glog xsimd)
-
-target_link_libraries(velox_function_dynamic PRIVATE ${CMAKE_DYLIB_TEST_LINK_LIBRARIES})
-
-target_link_libraries(
-  velox_overwrite_int_function_dynamic
-  PRIVATE ${CMAKE_DYLIB_TEST_LINK_LIBRARIES}
-)
-
-target_link_libraries(
-  velox_overwrite_varchar_function_dynamic
-  PRIVATE ${CMAKE_DYLIB_TEST_LINK_LIBRARIES}
-)
-
-target_link_libraries(velox_function_err_dynamic PRIVATE ${CMAKE_DYLIB_TEST_LINK_LIBRARIES})
-
-target_link_libraries(
-  velox_overload_int_function_dynamic
-  PRIVATE ${CMAKE_DYLIB_TEST_LINK_LIBRARIES}
-)
-
-target_link_libraries(
-  velox_overload_varchar_function_dynamic
-  PRIVATE ${CMAKE_DYLIB_TEST_LINK_LIBRARIES}
-)
-
-target_link_libraries(velox_function_non_default_dynamic PRIVATE ${CMAKE_DYLIB_TEST_LINK_LIBRARIES})
-
+add_library(velox_function_dynamic_link_test_common INTERFACE)
+target_link_libraries(velox_function_dynamic_link_test_common INTERFACE fmt::fmt glog::glog xsimd)
+if(folly_SOURCE STREQUAL BUNDLED)
+  # We can prevent errors related to 'is being linked both statically
+  # and dynamically into this executable,' particularly for
+  # folly::hazptr_use_executor(), by "-Wl,--exclude-libs,ALL". But it
+  # works only for bundled Folly.
+  target_link_libraries(velox_function_dynamic_link_test_common INTERFACE Folly::Folly)
+else()
+  # We use only for Folly headers for system Folly. If we link Folly
+  # (static library) to shared libraries, multiple Folly exist in the
+  # same process.
+  target_include_directories(
+    velox_function_dynamic_link_test_common
+    INTERFACE $<TARGET_PROPERTY:Folly::folly_deps,INTERFACE_INCLUDE_DIRECTORIES>
+  )
+endif()
 if(APPLE)
-  set(COMMON_LIBRARY_LINK_OPTIONS "-Wl,-undefined,dynamic_lookup")
+  target_link_options(
+    velox_function_dynamic_link_test_common
+    INTERFACE "-Wl,-undefined,dynamic_lookup"
+  )
 else()
   # This ensures compatibility during Linux compilation by preventing errors
   # related to 'is being linked both statically and dynamically into this
-  # executable,' particularly for folly_hazptr_use_executor."
-  set(COMMON_LIBRARY_LINK_OPTIONS "-Wl,--exclude-libs,ALL")
+  # executable,' particularly for folly::hazptr_use_executor().
+  #
+  # This works for bundled Folly but not work with system Folly.
+  target_link_options(velox_function_dynamic_link_test_common INTERFACE "-Wl,--exclude-libs,ALL")
 endif()
 
-target_link_options(velox_function_dynamic PRIVATE ${COMMON_LIBRARY_LINK_OPTIONS})
-target_link_options(velox_overwrite_int_function_dynamic PRIVATE ${COMMON_LIBRARY_LINK_OPTIONS})
-target_link_options(velox_overwrite_varchar_function_dynamic PRIVATE ${COMMON_LIBRARY_LINK_OPTIONS})
-target_link_options(velox_function_err_dynamic PRIVATE ${COMMON_LIBRARY_LINK_OPTIONS})
-target_link_options(velox_overload_int_function_dynamic PRIVATE ${COMMON_LIBRARY_LINK_OPTIONS})
-target_link_options(velox_overload_varchar_function_dynamic PRIVATE ${COMMON_LIBRARY_LINK_OPTIONS})
-target_link_options(velox_function_non_default_dynamic PRIVATE ${COMMON_LIBRARY_LINK_OPTIONS})
+target_link_libraries(velox_function_dynamic PRIVATE velox_function_dynamic_link_test_common)
+target_link_libraries(
+  velox_overwrite_int_function_dynamic
+  PRIVATE velox_function_dynamic_link_test_common
+)
+target_link_libraries(
+  velox_overwrite_varchar_function_dynamic
+  PRIVATE velox_function_dynamic_link_test_common
+)
+target_link_libraries(velox_function_err_dynamic PRIVATE velox_function_dynamic_link_test_common)
+target_link_libraries(
+  velox_overload_int_function_dynamic
+  PRIVATE velox_function_dynamic_link_test_common
+)
+target_link_libraries(
+  velox_overload_varchar_function_dynamic
+  PRIVATE velox_function_dynamic_link_test_common
+)
+target_link_libraries(
+  velox_function_non_default_dynamic
+  PRIVATE velox_function_dynamic_link_test_common
+)
 
 # Here's the actual test which will dynamically load the library defined above.
 add_executable(velox_function_dynamic_link_test DynamicLinkTest.cpp)

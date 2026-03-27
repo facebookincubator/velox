@@ -18,7 +18,7 @@
 
 #include "velox/dwio/parquet/reader/IntegerColumnReader.h"
 #include "velox/dwio/parquet/reader/ParquetColumnReader.h"
-#include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
+#include "velox/dwio/parquet/thrift/ParquetThrift.h"
 
 namespace facebook::velox::parquet {
 
@@ -36,14 +36,14 @@ class TimeColumnReader : public IntegerColumnReader {
     const auto typeWithId =
         std::static_pointer_cast<const ParquetTypeWithId>(fileType_);
     if (auto logicalType = typeWithId->logicalType_) {
-      VELOX_CHECK(logicalType->__isset.TIME);
-      const auto unit = logicalType->TIME.unit;
+      VELOX_CHECK(logicalType->getType() == thrift::LogicalType::Type::TIME);
+      const auto unit = logicalType->get_TIME().unit();
       VELOX_CHECK(
-          unit.__isset.MILLIS,
+          unit->getType() == thrift::TimeUnit::Type::MILLIS,
           "TIME precision other than milliseconds is not supported");
     } else if (auto convertedType = typeWithId->convertedType_) {
       VELOX_CHECK(
-          convertedType == thrift::ConvertedType::type::TIME_MILLIS,
+          convertedType == thrift::ConvertedType::TIME_MILLIS,
           "TIME converted type other than TIME_MILLIS is not supported");
     } else {
       VELOX_NYI("Logical type and converted type are not provided for TIME.");
