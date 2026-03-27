@@ -41,4 +41,12 @@ std::unique_ptr<DataSource> PaimonConnector::createDataSource(
       hiveConfig_);
 }
 
+std::unique_ptr<DataSink> PaimonConnector::createDataSink(
+    RowTypePtr /*inputType*/,
+    ConnectorInsertTableHandlePtr /*connectorInsertTableHandle*/,
+    ConnectorQueryCtx* /*connectorQueryCtx*/,
+    CommitStrategy /*commitStrategy*/) {
+  VELOX_NYI("Paimon write support (PaimonDataSink) is not yet implemented.");
+}
+
 } // namespace facebook::velox::connector::hive::paimon

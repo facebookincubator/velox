@@ -15,6 +15,8 @@
  */
 #include "velox/connectors/hive/paimon/PaimonDataSource.h"
 
+#include "velox/connectors/hive/paimon/PaimonSplitReader.h"
+
 namespace facebook::velox::connector::hive::paimon {
 
 PaimonDataSource::PaimonDataSource(
@@ -35,13 +37,41 @@ PaimonDataSource::PaimonDataSource(
           hiveConfig) {}
 
 void PaimonDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
-  VELOX_NYI("PaimonDataSource::addSplit");
+  paimonSplit_ = checkedPointerCast<PaimonConnectorSplit>(split);
+
+  VELOX_CHECK(
+      !paimonSplit_->dataFiles().empty(),
+      "Paimon split must contain at least one data file.");
+
+  if (!paimonSplit_->rawConvertible()) {
+    VELOX_NYI(
+        "Merge-on-read is not yet supported for Paimon splits with "
+        "rawConvertible=false.");
+  }
+
+  // Convert the first data file to a HiveConnectorSplit for the parent.
+  // HiveDataSource::addSplit() requires a HiveConnectorSplit — it sets split_,
+  // calls createSplitReader() (which we override), and prepares the reader.
+  // Per-file validation is handled by PaimonSplitReader.
+  auto hiveSplit = PaimonSplitReader::toHiveConnectorSplit(
+      *paimonSplit_, paimonSplit_->dataFiles()[0]);
+  HiveDataSource::addSplit(std::move(hiveSplit));
 }
 
-std::optional<RowVectorPtr> PaimonDataSource::next(
-    uint64_t size,
-    velox::ContinueFuture& future) {
-  VELOX_NYI("PaimonDataSource::next");
+std::unique_ptr<SplitReader> PaimonDataSource::createSplitReader() {
+  return std::make_unique<PaimonSplitReader>(
+      split_,
+      paimonSplit_,
+      hiveTableHandle_,
+      &partitionKeys_,
+      connectorQueryCtx_,
+      hiveConfig_,
+      readerOutputType_,
+      ioStatistics_,
+      ioStats_,
+      fileHandleFactory_,
+      ioExecutor_,
+      scanSpec_);
 }
 
 } // namespace facebook::velox::connector::hive::paimon
