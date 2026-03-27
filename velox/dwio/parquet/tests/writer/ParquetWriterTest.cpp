@@ -27,6 +27,7 @@
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/parquet/RegisterParquetWriter.h" // @manual
 #include "velox/dwio/parquet/reader/PageReader.h"
+#include "velox/dwio/parquet/reader/ParquetTypeWithId.h"
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
 #include "velox/dwio/parquet/writer/WriterConfig.h"
 #include "velox/exec/Cursor.h"
@@ -690,6 +691,95 @@ TEST_F(ParquetWriterTest, updateWriterOptionsFromHiveConfig) {
   ASSERT_EQ(
       options.parquetWriteTimestampUnit.value(),
       TimestampPrecision::kMilliseconds);
+}
+
+TEST_F(ParquetWriterTest, enableStoreDecimalAsInteger) {
+  const auto rowType = ROW({
+      {"c0", DECIMAL(8, 2)},
+      {"c1", DECIMAL(10, 2)},
+      {"c2", DECIMAL(19, 2)},
+  });
+  // c1 includes an unscaled value exceeding INT32 range (50000000.00).
+  const auto data = makeRowVector({
+      makeFlatVector<int64_t>({100, 99999999}, DECIMAL(8, 2)),
+      makeFlatVector<int64_t>({100, 5000000000LL}, DECIMAL(10, 2)),
+      makeFlatVector<int128_t>({100, 200}, DECIMAL(19, 2)),
+  });
+
+  using PhysicalTypes =
+      std::vector<std::shared_ptr<const ParquetTypeWithId::TypeWithId>>;
+
+  auto expectParquetType = [&](size_t columnIndex,
+                               const PhysicalTypes& types,
+                               thrift::Type::type expectedType,
+                               std::optional<int32_t> expectedTypeLength =
+                                   std::nullopt) {
+    auto col =
+        std::dynamic_pointer_cast<const ParquetTypeWithId>(types[columnIndex]);
+    ASSERT_NE(col, nullptr);
+    ASSERT_TRUE(col->parquetType_.has_value());
+    EXPECT_EQ(col->parquetType_.value(), expectedType);
+    if (expectedTypeLength.has_value()) {
+      EXPECT_EQ(col->typeLength_, expectedTypeLength.value());
+    }
+  };
+
+  const auto verifyStoredAsInteger = [&](const PhysicalTypes& types) {
+    expectParquetType(0, types, thrift::Type::type::INT32);
+    expectParquetType(1, types, thrift::Type::type::INT64);
+    expectParquetType(2, types, thrift::Type::type::FIXED_LEN_BYTE_ARRAY, 9);
+  };
+
+  const auto verifyStoredAsFixedLenByteArray = [&](const PhysicalTypes& types) {
+    expectParquetType(0, types, thrift::Type::type::FIXED_LEN_BYTE_ARRAY, 4);
+    expectParquetType(1, types, thrift::Type::type::FIXED_LEN_BYTE_ARRAY, 5);
+    expectParquetType(2, types, thrift::Type::type::FIXED_LEN_BYTE_ARRAY, 9);
+  };
+
+  const auto writeReadAndVerify =
+      [&](std::unordered_map<std::string, std::string> configFromFile,
+          std::unordered_map<std::string, std::string> sessionProperties,
+          const std::function<void(const PhysicalTypes&)>&
+              verifyPhysicalTypes) {
+        auto* sinkPtr = write(
+            data, std::move(configFromFile), std::move(sessionProperties));
+
+        dwio::common::ReaderOptions readerOptions(leafPool_.get());
+        readerOptions.setDataIoStats(dataIoStats_);
+        readerOptions.setMetadataIoStats(metadataIoStats_);
+        auto reader = createReaderInMemory(*sinkPtr, readerOptions);
+        auto& parquetReader = dynamic_cast<ParquetReader&>(*reader);
+
+        const auto& types = parquetReader.typeWithId()->getChildren();
+        ASSERT_EQ(types.size(), 3);
+        verifyPhysicalTypes(types);
+
+        auto rowReader = createRowReaderWithSchema(std::move(reader), rowType);
+        assertReadWithReaderAndExpected(rowType, *rowReader, data, *leafPool_);
+      };
+
+  const auto configKey = config::ConfigBase::toConfigKey(
+      parquet::WriterConfig::kParquetSessionEnableStoreDecimalAsInteger);
+  const auto sessionKey =
+      parquet::WriterConfig::kParquetSessionEnableStoreDecimalAsInteger;
+
+  // Connector session property.
+  writeReadAndVerify({}, {{sessionKey, "true"}}, verifyStoredAsInteger);
+  writeReadAndVerify(
+      {}, {{sessionKey, "false"}}, verifyStoredAsFixedLenByteArray);
+
+  // Hive config from file.
+  writeReadAndVerify({{configKey, "true"}}, {}, verifyStoredAsInteger);
+  writeReadAndVerify(
+      {{configKey, "false"}}, {}, verifyStoredAsFixedLenByteArray);
+
+  // Session property takes precedence over Hive config from file.
+  writeReadAndVerify(
+      {{configKey, "false"}}, {{sessionKey, "true"}}, verifyStoredAsInteger);
+  writeReadAndVerify(
+      {{configKey, "true"}},
+      {{sessionKey, "false"}},
+      verifyStoredAsFixedLenByteArray);
 }
 
 #ifdef VELOX_ENABLE_PARQUET
