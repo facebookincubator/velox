@@ -248,4 +248,142 @@ TEST_F(CudfNestedLoopJoinTest, largerCrossJoin) {
   }
 }
 
+// Ported from CPU NestedLoopJoinTest.emptyBuildOrProbeWithoutFilter
+// (cross join subset only -- GPU only supports inner cross join).
+TEST_F(CudfNestedLoopJoinTest, emptyBuildOrProbeWithoutFilter) {
+  auto probeData = makeRowVector(
+      {"p0"}, {makeFlatVector<int32_t>({1, 2, 3})});
+  auto emptyProbe = makeRowVector(
+      {"p0"}, {makeFlatVector<int32_t>({})});
+  auto buildData = makeRowVector(
+      {"b0"}, {makeFlatVector<int64_t>({10, 20})});
+  auto emptyBuild = makeRowVector(
+      {"b0"}, {makeFlatVector<int64_t>({})});
+
+  // probe x emptyBuild = 0 rows
+  auto plan1 = makeCrossJoinPlan({probeData}, {emptyBuild}, {"p0", "b0"});
+  ASSERT_EQ(AssertQueryBuilder(plan1).copyResults(pool())->size(), 0);
+
+  // emptyProbe x build = 0 rows
+  auto plan2 = makeCrossJoinPlan({emptyProbe}, {buildData}, {"p0", "b0"});
+  ASSERT_EQ(AssertQueryBuilder(plan2).copyResults(pool())->size(), 0);
+
+  // emptyProbe x emptyBuild = 0 rows
+  auto plan3 = makeCrossJoinPlan({emptyProbe}, {emptyBuild}, {"p0", "b0"});
+  ASSERT_EQ(AssertQueryBuilder(plan3).copyResults(pool())->size(), 0);
+
+  // probe x build = 6 rows
+  auto plan4 = makeCrossJoinPlan({probeData}, {buildData}, {"p0", "b0"});
+  ASSERT_EQ(AssertQueryBuilder(plan4).copyResults(pool())->size(), 6);
+}
+
+// Ported from CPU NestedLoopJoinTest.allTypes (cross join only).
+TEST_F(CudfNestedLoopJoinTest, allTypesCrossJoin) {
+  auto probeData = makeRowVector(
+      {"p0", "p1", "p2", "p3", "p4", "p5"},
+      {
+          makeFlatVector<int64_t>({1, 2}),
+          makeFlatVector<StringView>({"hello", "world"}),
+          makeFlatVector<float>({1.1f, 2.2f}),
+          makeFlatVector<double>({10.1, 20.2}),
+          makeFlatVector<int32_t>({100, 200}),
+          makeFlatVector<int16_t>({10, 20}),
+      });
+  auto buildData = makeRowVector(
+      {"b0", "b1"},
+      {
+          makeFlatVector<int64_t>({99}),
+          makeFlatVector<StringView>({"gpu"}),
+      });
+
+  auto plan = makeCrossJoinPlan(
+      {probeData}, {buildData},
+      {"p0", "p1", "p2", "p3", "p4", "p5", "b0", "b1"});
+
+  auto expected = makeRowVector({
+      makeFlatVector<int64_t>({1, 2}),
+      makeFlatVector<StringView>({"hello", "world"}),
+      makeFlatVector<float>({1.1f, 2.2f}),
+      makeFlatVector<double>({10.1, 20.2}),
+      makeFlatVector<int32_t>({100, 200}),
+      makeFlatVector<int16_t>({10, 20}),
+      makeFlatVector<int64_t>({99, 99}),
+      makeFlatVector<StringView>({"gpu", "gpu"}),
+  });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// Ported from CPU NestedLoopJoinTest.mergeBuildVectors (cross join only).
+TEST_F(CudfNestedLoopJoinTest, mergeBuildVectors) {
+  auto buildBatch1 = makeRowVector(
+      {"b0"}, {makeFlatVector<int64_t>({1, 2})});
+  auto buildBatch2 = makeRowVector(
+      {"b0"}, {makeFlatVector<int64_t>({3, 4})});
+  auto buildBatch3 = makeRowVector(
+      {"b0"}, {makeFlatVector<int64_t>({5, 6, 7})});
+  auto probeData = makeRowVector(
+      {"p0"}, {makeFlatVector<int32_t>({10, 20})});
+
+  auto plan = makeCrossJoinPlan(
+      {probeData},
+      {buildBatch1, buildBatch2, buildBatch3},
+      {"p0", "b0"});
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  // 2 probe rows x 7 build rows = 14 output rows
+  ASSERT_EQ(result->size(), 14);
+}
+
+// Test cross join with nullable columns.
+TEST_F(CudfNestedLoopJoinTest, withNulls) {
+  auto probeData = makeRowVector(
+      {"p0"},
+      {
+          makeNullableFlatVector<int64_t>({1, std::nullopt, 3}),
+      });
+  auto buildData = makeRowVector(
+      {"b0"},
+      {
+          makeNullableFlatVector<int64_t>({std::nullopt, 20}),
+      });
+
+  auto plan = makeCrossJoinPlan({probeData}, {buildData}, {"p0", "b0"});
+
+  auto expected = makeRowVector({
+      makeNullableFlatVector<int64_t>(
+          {1, 1, std::nullopt, std::nullopt, 3, 3}),
+      makeNullableFlatVector<int64_t>(
+          {std::nullopt, 20, std::nullopt, 20, std::nullopt, 20}),
+  });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// Ported from CPU NestedLoopJoinTest.zeroColumnBuild.
+TEST_F(CudfNestedLoopJoinTest, zeroColumnBuild) {
+  auto probeData = makeRowVector(
+      {"p0"}, {makeFlatVector<int32_t>({1, 2, 3})});
+
+  // Build side with no columns but 2 rows.
+  auto buildData = makeRowVector({}, 2);
+
+  auto planNodeIdGenerator =
+      std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values({probeData})
+                  .nestedLoopJoin(
+                      PlanBuilder(planNodeIdGenerator)
+                          .values({buildData})
+                          .planNode(),
+                      {"p0"})
+                  .planNode();
+
+  auto expected = makeRowVector({
+      makeFlatVector<int32_t>({1, 1, 2, 2, 3, 3}),
+  });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
 } // namespace
