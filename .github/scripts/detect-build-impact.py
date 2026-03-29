@@ -298,7 +298,9 @@ def main():
 
     for file_path in changed_files:
         targets, method = resolve_file_to_targets(
-            file_path, file_to_targets, header_to_sources,
+            file_path,
+            file_to_targets,
+            header_to_sources,
         )
         if targets:
             directly_affected.update(targets)

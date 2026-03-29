@@ -223,9 +223,7 @@ def scan_one_file(
     return source_file, headers
 
 
-def scan_header_deps(
-    build_dir: str, source_dir: str
-) -> dict[str, list[str]]:
+def scan_header_deps(build_dir: str, source_dir: str) -> dict[str, list[str]]:
     """Scan compile_commands.json with g++ -MM to build header_to_sources map."""
     compile_commands_path = os.path.join(build_dir, "compile_commands.json")
     if not os.path.exists(compile_commands_path):
