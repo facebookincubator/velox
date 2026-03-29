@@ -4,7 +4,7 @@
 .. role:: m(math)
 
 ==========
-Hash table
+Hash Table
 ==========
 
 The hash table used in Velox is similar to the
@@ -126,11 +126,164 @@ insert an entry, we compute a hash, extract tag and bucket number, go to the buc
 entry if there is space. If the bucket is full, we proceed to the next bucket and continue until we
 find a bucket with an empty slot. We insert the new entry there.
 
+Hash Modes
+----------
+
+The description above covers the default bucket-based hash table (kHash mode).
+Velox also supports two optimized modes that avoid per-entry hashing and
+bucket probing when the key values allow it. The hash table analyzes the key
+data during build and selects the best mode automatically.
+
+The three modes are:
+
+* **kArray** — Direct array lookup. Does not use the bucket-based hash table at
+  all. Each key combination maps to an index in a flat array. Lookup is O(1)
+  with no hashing or probing. Used when the combined key space is small enough
+  to fit in an array.
+
+* **kNormalizedKey** — Bucket-based (same layout as kHash), but keys are
+  encoded into a single 64-bit normalized key stored alongside each row. Key
+  comparison uses this normalized key instead of comparing individual columns,
+  which is faster for multi-column keys.
+
+* **kHash** — Bucket-based with full key comparison. Used when keys cannot be
+  mapped to value IDs or normalized into 64 bits (e.g., complex types like
+  ARRAY, MAP, ROW).
+
+kArray Mode
+~~~~~~~~~~~
+
+In kArray mode, the bucket-based hash table is not used at all. Instead,
+``table_`` is a flat array of pointers indexed directly by a value ID computed
+from the key columns. Lookup is a single array access — no hashing, no tag
+comparison, no probing.
+
+VectorHasher tracks the range (min, max) and distinct values for each key
+column. Each column is assigned a *multiplier* so that multi-column keys
+produce a unique combined index:
+
+.. code-block:: text
+
+    index = valueId(col0) + valueId(col1) * multiplier1 + valueId(col2) * multiplier2 + ...
+
+The value ID for a column is computed using one of two approaches:
+
+1. **Range-based**: for numeric types, the value ID is ``value - min``. The
+   array dimension for the column is the range (max - min + 1). The combined
+   product of all column ranges must be < 2M. This is preferred when the range
+   is within 20x of the distinct count (to avoid wasting array space on sparse
+   ranges).
+
+2. **Distinct-value-based**: VectorHasher maintains a mapping from each unique
+   value to a consecutive integer ID (0, 1, 2, ...). This works for all
+   supported types including VARCHAR, where each unique string gets its own
+   ID. The combined product of per-column distinct counts must be < 2M.
+   This is used when ranges are too large or not applicable (e.g., for
+   VARCHAR, where values don't have a numeric range).
+
+The array size is the product of all per-column dimensions (ranges or distinct
+counts), capped at ``kArrayHashMaxSize`` (2M entries = 16MB of pointer
+storage).
+
+**Supported types**: BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT, VARCHAR,
+VARBINARY, TIMESTAMP. Types like REAL, DOUBLE, ARRAY, MAP, ROW do not support
+value ID tracking and cannot use kArray mode.
+
+**Examples**:
+
+* Two BIGINT columns, 500 rows with values 0..499. Range per column is 500,
+  combined range is 500 * 500 = 250'000 < 2M. Uses range-based kArray.
+  (See ``HashTableTest.int2DenseArray``.)
+
+* One VARCHAR column, 500 rows. Each unique string is assigned a consecutive
+  ID (e.g., "apple" → 0, "banana" → 1, ...). With 500 distinct values, the
+  array has 500 entries. (See ``HashTableTest.string1DenseArray``.)
+
+* Two BIGINT columns, 500 rows with spacing 1'000 (values 0, 1000, 2000, ...).
+  Range per column is 500'000, combined range is 250B — too large. But distinct
+  count per column is 500, combined 250'000 < 2M. Uses distinct-value-based
+  kArray. (See ``HashTableTest.int2SparseArray``.)
+
+kNormalizedKey Mode
+~~~~~~~~~~~~~~~~~~~
+
+When the combined key space exceeds 2M entries but can be encoded into a single
+64-bit integer, the table uses kNormalizedKey mode. This uses the same
+bucket-based layout as kHash, but stores a 64-bit *normalized key* immediately
+before each row in the RowContainer.
+
+The normalized key is computed using the same multiplier-based encoding as
+kArray mode:
+
+.. code-block:: text
+
+    normalizedKey = valueId(col0) + valueId(col1) * multiplier1 + ...
+
+During lookups, the normalized key is compared first — a single 64-bit integer
+comparison. If it doesn't match, the full per-column key comparison is skipped.
+This is particularly effective for multi-column keys where comparing individual
+columns would require multiple memory accesses and type-specific comparisons.
+
+**Examples**:
+
+* Two VARCHAR columns, 5'000 rows. Distinct count per column exceeds what fits
+  in a flat array, but the combined distinct values fit in 64 bits.
+  (See ``HashTableTest.string2Normalized``.)
+
+* Two BIGINT columns, 10'000 rows with spacing 1'000 (values 0, 1000, 2000,
+  ...). Range per column is 10M, combined range overflows the 2M array limit,
+  but fits in a 64-bit normalized key.
+  (See ``HashTableTest.int2SparseNormalized``.)
+
+kHash Mode
+~~~~~~~~~~
+
+This is the fallback mode used when:
+
+* Key types don't support value IDs (e.g., ARRAY, MAP, ROW, DOUBLE, REAL).
+* A single key column has more than 10'000 distinct values and the range
+  overflows (cannot use normalized keys).
+* Both the combined range and combined distinct count overflow 64 bits.
+
+In this mode, lookups compute a hash, probe buckets, compare tags, and then
+compare actual key values by following pointers to the RowContainer.
+
+**Examples**:
+
+* One ROW(BIGINT, VARCHAR, BIGINT) column. ROW type does not support value IDs.
+  (See ``HashTableTest.structKey``.)
+
+* Six columns (5 BIGINT + 1 VARCHAR), 100'000 rows with spacing 1'000. The
+  combined cardinality overflows 64 bits.
+  (See ``HashTableTest.mixed6Sparse``.)
+
+Mode Selection
+~~~~~~~~~~~~~~
+
+The mode is selected by ``decideHashMode()`` using this priority:
+
+1. If combined ranges < 2M → **kArray** (range-based).
+2. If best combination of per-column ranges/distincts < 2M → **kArray**
+   (mixed).
+3. If combined ranges fit in 64 bits → **kNormalizedKey**.
+4. If single key column with > 10'000 distincts → **kHash** (normalized key
+   not worthwhile for a single wide column).
+5. If combined distincts < 2M → **kArray** (distinct-value-based).
+6. If both ranges and distincts overflow → **kHash**.
+7. Otherwise → **kNormalizedKey** (combined distincts fit in 64 bits).
+
+The selected mode is reported in the ``hashtable.hashMode`` runtime stat:
+0 for kHash, 1 for kArray, 2 for kNormalizedKey.
+
+See ``HashTableTest`` in ``velox/exec/tests/HashTableTest.cpp`` for tests
+covering all three modes.
+
 Use Cases
 ---------
 
-The main use cases for the hash table are `Join <joins.html>`_ and
-`Aggregation <aggregations.html>`_ operators.
+The main use cases for the hash table are :doc:`Join <joins>` and
+:doc:`Aggregation <aggregations>` operators. It is also used by RowNumber,
+TopNRowNumber, and MarkDistinct operators.
 
 The HashBuild operator builds the hash table to store unique values of the join keys found on the build
 side of the join. The HashProbe operator looks up entries in the hash table using join keys from the
