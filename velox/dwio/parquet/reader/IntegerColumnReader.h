@@ -55,6 +55,11 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
 
   void getValues(const RowSet& rows, VectorPtr* result) override {
     auto& fileType = static_cast<const ParquetTypeWithId&>(*fileType_);
+    if (fileType.type()->isDecimal()) {
+      VELOX_CHECK(requestedType_->isDecimal());
+      getDecimalValues(rows, fileType.type(), requestedType_, result);
+      return;
+    }
     auto logicalType = fileType.logicalType_;
     if (logicalType.has_value() && logicalType.value().__isset.INTEGER &&
         !logicalType.value().INTEGER.isSigned) {
@@ -74,6 +79,12 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
         offset,
         rows,
         nullptr);
+    const velox::common::Filter* filter = scanSpec_->filter();
+    if (filter && fileType_->type()->isDecimal()) {
+      auto rescaledFilter = common::rescaleDecimalFilter(
+          filter, requestedType_, fileType_->type());
+      scanSpec_->setFilter(std::move(rescaledFilter));
+    }
     readCommon<IntegerColumnReader, true>(rows);
     readOffset_ += rows.back() + 1;
   }
