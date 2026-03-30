@@ -15,6 +15,7 @@
  */
 
 #include <re2/re2.h>
+#include <algorithm>
 
 #include "velox/common/config/Config.h"
 
@@ -136,6 +137,12 @@ std::unordered_map<std::string, std::string> ConfigBase::rawConfigsCopy()
     const {
   std::shared_lock<std::shared_mutex> l(mutex_);
   return configs_;
+}
+
+std::string ConfigBase::toConfigKey(std::string_view sessionKey) {
+  std::string configKey{sessionKey};
+  std::replace(configKey.begin(), configKey.end(), '_', '-');
+  return configKey;
 }
 
 std::optional<std::string> ConfigBase::access(const std::string& key) const {

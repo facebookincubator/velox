@@ -11,13 +11,30 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-velox_add_library(velox_parse_expression Expressions.cpp SqlExpressionsParser.cpp)
+velox_add_library(
+  velox_parse_expression
+  Expressions.cpp
+  SqlExpressionsParser.cpp
+  HEADERS
+  Expressions.h
+  IExpr.h
+  SqlExpressionsParser.h
+  TypeResolver.h
+)
 velox_link_libraries(velox_parse_expression velox_type velox_parse_utils velox_expression)
 
-velox_add_library(velox_parse_parser ExpressionsParser.cpp QueryPlanner.cpp)
+velox_add_library(
+  velox_parse_parser
+  ExpressionsParser.cpp
+  QueryPlanner.cpp
+  HEADERS
+  DuckLogicalOperator.h
+  ExpressionsParser.h
+  QueryPlanner.h
+)
 velox_link_libraries(velox_parse_parser velox_parse_expression velox_type velox_duckdb_parser)
 
-velox_add_library(velox_parse_utils TypeResolver.cpp)
+velox_add_library(velox_parse_utils TypeResolver.cpp HEADERS PlanNodeIdGenerator.h)
 velox_link_libraries(
   velox_parse_utils
   velox_buffer
@@ -30,3 +47,5 @@ velox_link_libraries(
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()
+
+velox_add_library(velox_plan_node_id_generator INTERFACE HEADERS PlanNodeIdGenerator.h)

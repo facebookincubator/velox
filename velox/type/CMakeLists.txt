@@ -37,6 +37,26 @@ velox_add_library(
   TypeEncodingUtil.cpp
   TypeUtil.cpp
   Variant.cpp
+  HEADERS
+  Conversions.h
+  CppToType.h
+  DecimalUtil.h
+  Filter.h
+  FloatingPointUtil.h
+  HugeInt.h
+  OpaqueCustomTypes.h
+  SimpleFunctionApi.h
+  Subfield.h
+  Time.h
+  Timestamp.h
+  TimestampConversion.h
+  Tokenizer.h
+  Tree.h
+  Type.h
+  TypeCoercer.h
+  TypeEncodingUtil.h
+  TypeUtil.h
+  Variant.h
 )
 
 velox_link_libraries(

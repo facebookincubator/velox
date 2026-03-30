@@ -12,5 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 add_library(velox_fastpforlib STATIC bitpacking.cpp)
+velox_add_test_headers(velox_fastpforlib bitpacking.h bitpackinghelpers.h)
 
 target_include_directories(velox_fastpforlib PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>)

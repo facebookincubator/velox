@@ -123,3 +123,5 @@ if(VELOX_ENABLE_BENCHMARKS)
     glog::glog
   )
 endif()
+
+velox_add_library(velox_type_filter_builder INTERFACE HEADERS SubfieldFiltersBuilder.h)

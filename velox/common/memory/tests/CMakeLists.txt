@@ -68,3 +68,5 @@ if(VELOX_ENABLE_BENCHMARKS)
 
   target_link_libraries(velox_concurrent_allocation_benchmark PRIVATE velox_memory velox_time)
 endif()
+
+velox_add_library(velox_memory_test_util INTERFACE HEADERS SharedArbitratorTestUtil.h)

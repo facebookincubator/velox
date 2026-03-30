@@ -66,6 +66,74 @@ velox_add_library(
   TypeWithId.cpp
   Writer.cpp
   WriterFactory.cpp
+  HEADERS
+  Adaptor.h
+  Arena.h
+  BitConcatenation.h
+  BitPackDecoder.h
+  BufferUtil.h
+  BufferedInput.h
+  CacheInputStream.h
+  CachedBufferedInput.h
+  ChainedBuffer.h
+  Closeable.h
+  ColumnLoader.h
+  ColumnSelector.h
+  ColumnVisitors.h
+  DataBuffer.h
+  DataBufferHolder.h
+  DecoderUtil.h
+  DirectBufferedInput.h
+  DirectDecoder.h
+  DirectInputStream.h
+  ErrorTolerance.h
+  ExecutorBarrier.h
+  FileMetadata.h
+  FileSink.h
+  FilterNode.h
+  FlatMapHelper.h
+  FlushPolicy.h
+  FormatData.h
+  InputStream.h
+  IntCodecCommon.h
+  IntDecoder.h
+  MeasureTime.h
+  MetadataFilter.h
+  MetricsLog.h
+  Mutation.h
+  OnDemandUnitLoader.h
+  Options.h
+  OutputStream.h
+  ParallelFor.h
+  ParallelUnitLoader.h
+  PositionProvider.h
+  RandGen.h
+  Range.h
+  Reader.h
+  ReaderFactory.h
+  Retry.h
+  ScanSpec.h
+  SeekableInputStream.h
+  SelectiveByteRleColumnReader.h
+  SelectiveColumnReader.h
+  SelectiveColumnReaderInternal.h
+  SelectiveFlatMapColumnReader.h
+  SelectiveFloatingPointColumnReader.h
+  SelectiveIntegerColumnReader.h
+  SelectiveRepeatedColumnReader.h
+  SelectiveStructColumnReader.h
+  Statistics.h
+  StatisticsBuilder.h
+  StreamIdentifier.h
+  StreamUtil.h
+  Throttler.h
+  TypeUtil.h
+  TypeUtils.h
+  TypeWithId.h
+  UnitLoader.h
+  UnitLoaderTools.h
+  Writer.h
+  WriterFactory.h
 )
 
 velox_include_directories(velox_dwio_common PRIVATE ${Protobuf_INCLUDE_DIRS})

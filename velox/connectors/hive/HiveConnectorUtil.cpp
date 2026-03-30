@@ -639,6 +639,8 @@ void configureReaderOptions(
       connectorQueryCtx->selectiveNimbleReaderEnabled());
   readerOptions.setFileMetadataCacheEnabled(
       hiveConfig->fileMetadataCacheEnabled(sessionProperties));
+  readerOptions.setPinFileMetadata(
+      hiveConfig->pinFileMetadata(sessionProperties));
 
   // Set footer speculative IO size based on file format.
   switch (hiveSplit->fileFormat) {
