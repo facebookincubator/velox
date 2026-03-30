@@ -147,10 +147,6 @@ class BaseHashTable {
   static constexpr std::string_view kNumTombstones{"hashtable.numTombstones"};
   static constexpr std::string_view kHashMode{"hashtable.hashMode"};
 
-  /// Populates 'runtimeStats' with hash table stats.
-  virtual void addRuntimeStats(
-      std::unordered_map<std::string, RuntimeMetric>& runtimeStats) const = 0;
-
   /// The same as above but only reported by the HashBuild operator.
   static constexpr std::string_view kBuildWallNanos{"hashtable.buildWallNanos"};
   static constexpr std::string_view kParallelJoinPartitionWallNanos{
@@ -173,6 +169,10 @@ class BaseHashTable {
       "hashtable.vectorHasherMergeCpuNanos"};
   static constexpr std::string_view kHashTableCacheHit{"hashtable.cacheHit"};
   static constexpr std::string_view kHashTableCacheMiss{"hashtable.cacheMiss"};
+
+  /// Populates 'runtimeStats' with hash table stats.
+  virtual void addRuntimeStats(
+      std::unordered_map<std::string, RuntimeMetric>& runtimeStats) const = 0;
 
   /// Returns the string of the given 'mode'.
   static std::string modeString(HashMode mode);
