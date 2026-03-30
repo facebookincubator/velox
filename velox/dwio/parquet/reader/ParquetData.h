@@ -200,6 +200,13 @@ class ParquetData : public dwio::common::FormatData {
     return reader_->isDeltaByteArray();
   }
 
+  void setRequestedType(const TypePtr& requestedType) {
+    requestedType_ = requestedType;
+    if (reader_) {
+      reader_->setRequestedType(requestedType_);
+    }
+  }
+
   bool parentNullsInLeaves() const override {
     return true;
   }
@@ -226,6 +233,7 @@ class ParquetData : public dwio::common::FormatData {
   dwio::common::ColumnReaderStatistics& stats_;
   const tz::TimeZone* sessionTimezone_;
   std::unique_ptr<PageReader> reader_;
+  TypePtr requestedType_;
 
   // Nulls derived from leaf repdefs for non-leaf readers.
   BufferPtr presetNulls_;

@@ -18,24 +18,9 @@
 
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/parquet/reader/ParquetData.h"
+#include "velox/dwio/parquet/reader/ParquetReaderUtils.h"
 
 namespace facebook::velox::parquet {
-
-/// Parquet stores integers of 8, 16, 32 bits with 32 bits and 64 as 64 bits.
-inline int32_t parquetSizeOfIntKind(TypeKind kind) {
-  switch (kind) {
-    case TypeKind::TINYINT:
-    case TypeKind::SMALLINT:
-    case TypeKind::INTEGER:
-      return 4;
-    case TypeKind::BIGINT:
-      return 8;
-    case TypeKind::HUGEINT:
-      return 16;
-    default:
-      VELOX_FAIL("Not an integer TypeKind");
-  }
-}
 
 /// Wrapper for static functions for Parquet columns.
 class ParquetColumnReader {
