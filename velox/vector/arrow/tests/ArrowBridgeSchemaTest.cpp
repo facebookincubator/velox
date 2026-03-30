@@ -22,6 +22,7 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/vector/arrow/Bridge.h"
+#include "velox/vector/arrow/tests/FancyIntType.h"
 
 namespace facebook::velox::test {
 namespace {
@@ -32,6 +33,7 @@ class ArrowBridgeSchemaExportTest : public testing::Test {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+    registerFancyIntType();
   }
 
   void testScalarType(
@@ -248,6 +250,7 @@ TEST_F(ArrowBridgeSchemaExportTest, scalar) {
   testScalarType(DECIMAL(20, 15), "d:20,15,128", {.useDecimalTypeWidth = true});
 
   testScalarType(UNKNOWN(), "n");
+  testScalarType(FANCY_INT(), "fi");
 }
 
 TEST_F(ArrowBridgeSchemaExportTest, nested) {
@@ -294,6 +297,7 @@ TEST_F(ArrowBridgeSchemaExportTest, constant) {
   testConstant(DATE(), "tdD");
   testConstant(INTERVAL_YEAR_MONTH(), "tiM");
   testConstant(UNKNOWN(), "n");
+  testConstant(FANCY_INT(), "fi");
 
   testConstant(ARRAY(INTEGER()), "+l");
   testConstant(ARRAY(UNKNOWN()), "+l");
@@ -415,6 +419,7 @@ TEST_F(ArrowBridgeSchemaImportTest, scalar) {
   EXPECT_EQ(*BIGINT(), *testSchemaImport("l"));
   EXPECT_EQ(*REAL(), *testSchemaImport("f"));
   EXPECT_EQ(*DOUBLE(), *testSchemaImport("g"));
+  EXPECT_EQ(*FANCY_INT(), *testSchemaImport("fi"));
 
   EXPECT_EQ(*VARCHAR(), *testSchemaImport("u"));
   EXPECT_EQ(*VARCHAR(), *testSchemaImport("U"));
@@ -509,6 +514,7 @@ class ArrowBridgeSchemaTest : public testing::Test {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+    registerFancyIntType();
   }
 
   void roundtripTest(
@@ -538,6 +544,7 @@ TEST_F(ArrowBridgeSchemaTest, roundtrip) {
   roundtripTest(VARCHAR());
   roundtripTest(VARCHAR(), {.exportToStringView = true});
   roundtripTest(REAL());
+  roundtripTest(FANCY_INT());
   roundtripTest(ARRAY(DOUBLE()));
   roundtripTest(ARRAY(ARRAY(ARRAY(ARRAY(VARBINARY())))));
   roundtripTest(MAP(VARCHAR(), REAL()));

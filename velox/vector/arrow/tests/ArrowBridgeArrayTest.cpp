@@ -24,6 +24,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/vector/arrow/Bridge.h"
+#include "velox/vector/arrow/tests/FancyIntType.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -47,6 +48,7 @@ class ArrowBridgeArrayExportTest : public testing::Test {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+    registerFancyIntType();
   }
 
   template <typename T>
@@ -493,6 +495,20 @@ TEST_F(ArrowBridgeArrayExportTest, flatBigint) {
       std::numeric_limits<int64_t>::min(),
       std::nullopt,
   });
+}
+
+TEST_F(ArrowBridgeArrayExportTest, flatFancyInt) {
+  testFlatVector<int64_t>(
+      {
+          std::nullopt,
+          99876,
+          std::nullopt,
+          12345678,
+          std::numeric_limits<int64_t>::max(),
+          std::numeric_limits<int64_t>::min(),
+          std::nullopt,
+      },
+      FANCY_INT());
 }
 
 TEST_F(ArrowBridgeArrayExportTest, flatReal) {
@@ -1348,6 +1364,12 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
     testArrowImport<int64_t>("l", {-99, 4, 318321631, 1211, -12});
     testArrowImport<int64_t>("l", {std::nullopt, 12345678, std::nullopt});
     testArrowImport<int64_t>("l", {std::nullopt, std::nullopt});
+
+    testArrowImport<int64_t>("fi", {});
+    testArrowImport<int64_t>("fi", {std::nullopt});
+    testArrowImport<int64_t>("fi", {-99, 4, 318321631, 1211, -12});
+    testArrowImport<int64_t>("fi", {std::nullopt, 12345678, std::nullopt});
+    testArrowImport<int64_t>("fi", {std::nullopt, std::nullopt});
 
     testArrowImport<double>("g", {});
     testArrowImport<double>("g", {std::nullopt});
