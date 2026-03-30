@@ -694,6 +694,8 @@ jobs:
             ./spark_aggregation_fuzzer_test \
                 --seed __SEED__ \
                 --duration_sec $DURATION \
+                --batch_size 40 \
+                --num_batches 4 \
                 --enable_sorted_aggregations=false \
                 --enable_streaming_aggregations=false \
                 --minloglevel=0 \
