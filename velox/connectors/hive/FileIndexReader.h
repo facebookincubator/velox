@@ -92,6 +92,18 @@ class FileIndexReader : public SplitIndexReader {
 
   std::string toString() const;
 
+  /// Wall time spent setting up index bounds and initiating lookup.
+  static constexpr std::string_view kIndexLookupWallNanos{
+      "fileIndexLookupWallNanos"};
+  /// Wall time spent reading index results via next().
+  static constexpr std::string_view kIndexReadWallNanos{
+      "fileIndexReadWallNanos"};
+  /// The number of startLookup() calls made to the format-specific IndexReader.
+  static constexpr std::string_view kNumFileIndexLookupRequests{
+      "numFileIndexLookupRequests"};
+  /// The total number of output rows returned across all next() calls.
+  static constexpr std::string_view kNumIndexOutputRows{"numIndexOutputRows"};
+
  private:
   // Creates the file reader for reading file metadata and schema.
   std::unique_ptr<dwio::common::Reader> createFileReader();
@@ -148,6 +160,12 @@ class FileIndexReader : public SplitIndexReader {
   // Reusable column vectors for building index bounds.
   std::vector<VectorPtr> lowerBoundColumns_;
   std::vector<VectorPtr> upperBoundColumns_;
+
+  // Performance counters for runtime stats.
+  uint64_t indexLookupTimeNs_{0};
+  uint64_t indexReadTimeNs_{0};
+  uint64_t numIndexLookupRequests_{0};
+  uint64_t numIndexOutputRows_{0};
 };
 
 } // namespace facebook::velox::connector::hive

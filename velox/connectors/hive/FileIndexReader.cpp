@@ -17,6 +17,7 @@
 #include "velox/connectors/hive/FileIndexReader.h"
 
 #include "velox/common/Casts.h"
+#include "velox/common/time/Timer.h"
 #include "velox/connectors/hive/BufferedInputBuilder.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
@@ -311,13 +312,20 @@ void FileIndexReader::startLookup(
   VELOX_CHECK_NOT_NULL(request.input);
   VELOX_CHECK(requestType_->equivalent(*request.input->type()));
 
-  // Use caller-provided maxRowsPerRequest if set, otherwise fall back to
-  // the construction-time default.
-  const auto maxRows = options.maxRowsPerRequest != 0
-      ? options.maxRowsPerRequest
-      : static_cast<vector_size_t>(maxRowsPerRequest_);
-  auto indexBounds = buildRequestIndexBounds(request.input);
-  indexReader_->startLookup(indexBounds, {.maxRowsPerRequest = maxRows});
+  ++numIndexLookupRequests_;
+
+  uint64_t lookupTimeNs{0};
+  {
+    NanosecondTimer timer(&lookupTimeNs);
+    // Use caller-provided maxRowsPerRequest if set, otherwise fall back to
+    // the construction-time default.
+    const auto maxRows = options.maxRowsPerRequest != 0
+        ? options.maxRowsPerRequest
+        : static_cast<vector_size_t>(maxRowsPerRequest_);
+    auto indexBounds = buildRequestIndexBounds(request.input);
+    indexReader_->startLookup(indexBounds, {.maxRowsPerRequest = maxRows});
+  }
+  indexLookupTimeNs_ += lookupTimeNs;
 }
 
 serializer::IndexBounds FileIndexReader::buildRequestIndexBounds(
@@ -406,13 +414,39 @@ bool FileIndexReader::hasNext() {
 
 std::unique_ptr<FileIndexReader::Result> FileIndexReader::next(
     vector_size_t maxOutputRows) {
-  return indexReader_->next(maxOutputRows);
+  uint64_t readTimeNs{0};
+  std::unique_ptr<Result> result;
+  {
+    NanosecondTimer timer(&readTimeNs);
+    result = indexReader_->next(maxOutputRows);
+  }
+  indexReadTimeNs_ += readTimeNs;
+  if (result != nullptr) {
+    numIndexOutputRows_ += result->size();
+  }
+  return result;
 }
 
 std::unordered_map<std::string, RuntimeMetric> FileIndexReader::runtimeStats() {
-  // TODO: Populate with format-specific stats in a follow-up.
-  // File-based IO stats are tracked externally via IoStatistics.
-  return {};
+  std::unordered_map<std::string, RuntimeMetric> stats;
+  if (numIndexLookupRequests_ != 0) {
+    stats[std::string(kNumFileIndexLookupRequests)] = RuntimeMetric(
+        static_cast<int64_t>(numIndexLookupRequests_),
+        RuntimeCounter::Unit::kNone);
+  }
+  if (numIndexOutputRows_ != 0) {
+    stats[std::string(kNumIndexOutputRows)] = RuntimeMetric(
+        static_cast<int64_t>(numIndexOutputRows_), RuntimeCounter::Unit::kNone);
+  }
+  if (indexLookupTimeNs_ != 0) {
+    stats[std::string(kIndexLookupWallNanos)] = RuntimeMetric(
+        static_cast<int64_t>(indexLookupTimeNs_), RuntimeCounter::Unit::kNanos);
+  }
+  if (indexReadTimeNs_ != 0) {
+    stats[std::string(kIndexReadWallNanos)] = RuntimeMetric(
+        static_cast<int64_t>(indexReadTimeNs_), RuntimeCounter::Unit::kNanos);
+  }
+  return stats;
 }
 
 std::string FileIndexReader::toString() const {

@@ -197,6 +197,9 @@ These stats are reported only by IndexLookupJoin operator
    * - clientNumLazyDecodedResultBatches
      -
      - The number of lazy decoded result batches returned from the storage client.
+   * - numIndexSplits
+     -
+     - The number of index splits provided for index lookup.
 
 Merge
 -----
