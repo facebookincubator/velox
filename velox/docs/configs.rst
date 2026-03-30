@@ -835,6 +835,14 @@ Each query can override the config by setting corresponding query session proper
      - Whether to cache file metadata (footer, stripes, index) in the process-wide AsyncDataCache. When enabled,
        the first reader performs a speculative tail read and populates the cache; subsequent readers on the same file
        serve metadata from cache with zero file IO. Currently only supported by Nimble format.
+   * - pin-file-metadata
+     - pin_file_metadata
+     - bool
+     - false
+     - Whether to pin parsed metadata objects (e.g., StripeGroup, IndexGroup) in the reader's metadata cache with
+       strong references so they are never evicted. This avoids re-reading and re-parsing metadata on every stripe
+       access when weak-pointer cache entries would otherwise expire. Can be used independently of
+       file-metadata-cache-enabled. Currently only supported by Nimble format.
    * - hive.reader.collect-column-stats
      - hive.reader.collect_column_stats
      - bool

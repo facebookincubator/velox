@@ -210,7 +210,8 @@ allows for dynamic filter pushdown while partitioned execution does not.
 HashJoinNode supports a ``useHashTableCache`` flag (used only by Presto-on-Spark)
 that enables caching of the hash table built for broadcast joins. When enabled,
 the first task to build the hash table stores it in a global cache, and subsequent
-tasks from same query reuse the cached table instead of rebuilding it.
+tasks from same query reuse the cached table instead of rebuilding it. See
+:doc:`Broadcast Build Caching <hash-table-caching>` for details.
 
 PartitionedOutput operator and OutputBufferManager support
 broadcasting the results of the plan evaluation. This functionality is enabled

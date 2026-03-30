@@ -27,25 +27,14 @@
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
+using IndexSource = connector::IndexSource;
+
 namespace {
 
-// Runtime stat names for IndexSource output tracking (rows before join filter).
-constexpr std::string_view kIndexSourceOutputPositions{
-    "indexSourceOutputPositions"};
-constexpr std::string_view kIndexSourceOutputBytes{"indexSourceOutputBytes"};
-constexpr std::string_view kIndexSourceOutputVectors{
-    "indexSourceOutputVectors"};
-
-// Runtime stat names for IndexSource input tracking (lookup keys sent to
-// connector).
-constexpr std::string_view kIndexSourceInputPositions{
-    "indexSourceInputPositions"};
-constexpr std::string_view kIndexSourceInputBytes{"indexSourceInputBytes"};
-
-/// Splits operator stats to provide separate entries for the IndexLookupJoin
-/// node and the IndexSource node. This ensures the IndexSource appears with its
-/// own operator stats in the query plan visualization, rather than being hidden
-/// inside the join operator.
+// Splits operator stats to provide separate entries for the IndexLookupJoin
+// node and the IndexSource node. This ensures the IndexSource appears with its
+// own operator stats in the query plan visualization, rather than being hidden
+// inside the join operator.
 std::vector<OperatorStats> splitIndexLookupJoinStats(
     const OperatorStats& combinedStats,
     const core::PlanNodeId& indexSourceNodeId) {
@@ -75,23 +64,26 @@ std::vector<OperatorStats> splitIndexLookupJoinStats(
   };
 
   // Input stats (lookup keys sent to connector).
-  indexSourceStats.inputPositions = getTrackedStat(kIndexSourceInputPositions);
-  indexSourceStats.inputBytes = getTrackedStat(kIndexSourceInputBytes);
+  indexSourceStats.inputPositions =
+      getTrackedStat(IndexSource::kInputPositions);
+  indexSourceStats.inputBytes = getTrackedStat(IndexSource::kInputBytes);
 
   // Output stats (rows received from connector, before join filter).
   indexSourceStats.outputPositions =
-      getTrackedStat(kIndexSourceOutputPositions);
-  indexSourceStats.outputBytes = getTrackedStat(kIndexSourceOutputBytes);
-  indexSourceStats.outputVectors = getTrackedStat(kIndexSourceOutputVectors);
+      getTrackedStat(IndexSource::kOutputPositions);
+  indexSourceStats.outputBytes = getTrackedStat(IndexSource::kOutputBytes);
+  indexSourceStats.outputVectors = getTrackedStat(IndexSource::kOutputVectors);
 
   // Copy runtime stats to IndexSource - these include connector lookup metrics.
   // Remove the internal tracking stats that were only used for splitting.
   indexSourceStats.runtimeStats = combinedStats.runtimeStats;
-  indexSourceStats.runtimeStats.erase(std::string(kIndexSourceInputPositions));
-  indexSourceStats.runtimeStats.erase(std::string(kIndexSourceInputBytes));
-  indexSourceStats.runtimeStats.erase(std::string(kIndexSourceOutputPositions));
-  indexSourceStats.runtimeStats.erase(std::string(kIndexSourceOutputBytes));
-  indexSourceStats.runtimeStats.erase(std::string(kIndexSourceOutputVectors));
+  indexSourceStats.runtimeStats.erase(
+      std::string(IndexSource::kInputPositions));
+  indexSourceStats.runtimeStats.erase(std::string(IndexSource::kInputBytes));
+  indexSourceStats.runtimeStats.erase(
+      std::string(IndexSource::kOutputPositions));
+  indexSourceStats.runtimeStats.erase(std::string(IndexSource::kOutputBytes));
+  indexSourceStats.runtimeStats.erase(std::string(IndexSource::kOutputVectors));
 
   // Create stats for the IndexLookupJoin node. This is the main join operator
   // that receives probe input from the left side and performs the join logic.
@@ -103,13 +95,51 @@ std::vector<OperatorStats> splitIndexLookupJoinStats(
   joinStats.backgroundTiming.clear();
 
   // Remove the internal tracking stats that were only used for splitting.
-  joinStats.runtimeStats.erase(std::string(kIndexSourceInputPositions));
-  joinStats.runtimeStats.erase(std::string(kIndexSourceInputBytes));
-  joinStats.runtimeStats.erase(std::string(kIndexSourceOutputPositions));
-  joinStats.runtimeStats.erase(std::string(kIndexSourceOutputBytes));
-  joinStats.runtimeStats.erase(std::string(kIndexSourceOutputVectors));
+  joinStats.runtimeStats.erase(std::string(IndexSource::kInputPositions));
+  joinStats.runtimeStats.erase(std::string(IndexSource::kInputBytes));
+  joinStats.runtimeStats.erase(std::string(IndexSource::kOutputPositions));
+  joinStats.runtimeStats.erase(std::string(IndexSource::kOutputBytes));
+  joinStats.runtimeStats.erase(std::string(IndexSource::kOutputVectors));
 
   return {std::move(joinStats), std::move(indexSourceStats)};
+}
+
+// Records IndexSource input stats (lookup keys sent to connector).
+void recordIndexSourceInputStats(
+    folly::Synchronized<OperatorStats>& stats,
+    const RowVectorPtr& lookupInput) {
+  auto lockedStats = stats.wlock();
+  lockedStats->addRuntimeStat(
+      IndexSource::kInputPositions,
+      RuntimeCounter(
+          static_cast<int64_t>(lookupInput->size()),
+          RuntimeCounter::Unit::kNone));
+  lockedStats->addRuntimeStat(
+      IndexSource::kInputBytes,
+      RuntimeCounter(
+          static_cast<int64_t>(lookupInput->estimateFlatSize()),
+          RuntimeCounter::Unit::kBytes));
+}
+
+// Records IndexSource output stats (rows received from connector, before join
+// filter).
+void recordIndexSourceOutputStats(
+    folly::Synchronized<OperatorStats>& stats,
+    const IndexSource::Result& lookupResult) {
+  auto lockedStats = stats.wlock();
+  lockedStats->addRuntimeStat(
+      IndexSource::kOutputPositions,
+      RuntimeCounter(
+          static_cast<int64_t>(lookupResult.size()),
+          RuntimeCounter::Unit::kNone));
+  lockedStats->addRuntimeStat(
+      IndexSource::kOutputBytes,
+      RuntimeCounter(
+          static_cast<int64_t>(lookupResult.output->estimateFlatSize()),
+          RuntimeCounter::Unit::kBytes));
+  lockedStats->addRuntimeStat(
+      IndexSource::kOutputVectors,
+      RuntimeCounter(1, RuntimeCounter::Unit::kNone));
 }
 
 void duplicateJoinKeyCheck(
@@ -258,6 +288,22 @@ inline RowVectorPtr createRowVector(
   return std::make_shared<RowVector>(
       pool, type, nullptr, numRows, std::move(children));
 }
+
+// Sets up the StatsSplitter to report separate operator stats for both
+// IndexLookupJoin and IndexSource nodes. This must be done in the constructor
+// (not initialize()) because operator stats are copied to task stats before
+// initialize() is called.
+void initStatsSplitter(
+    folly::Synchronized<OperatorStats>& opStats,
+    const core::PlanNodeId& indexSourceNodeId) {
+  opStats.withWLock([&](auto& stats) {
+    stats.setStatSplitter(
+        [indexSourceId = indexSourceNodeId](const auto& combinedStats) {
+          return splitIndexLookupJoinStats(combinedStats, indexSourceId);
+        });
+  });
+}
+
 } // namespace
 
 IndexLookupJoin::IndexLookupJoin(
@@ -305,17 +351,7 @@ IndexLookupJoin::IndexLookupJoin(
   duplicateJoinKeyCheck(joinNode_->leftKeys());
   duplicateJoinKeyCheck(joinNode_->rightKeys());
 
-  // Set up StatsSplitter to report separate operator stats for both
-  // IndexLookupJoin and IndexSource nodes. This must be done in the constructor
-  // (not initialize()) because operator stats are copied to task stats before
-  // initialize() is called.
-  folly::Synchronized<OperatorStats>& opStats = Operator::stats();
-  opStats.withWLock([&](auto& stats) {
-    stats.setStatSplitter(
-        [indexSourceId = indexSourceNodeId_](const auto& combinedStats) {
-          return splitIndexLookupJoinStats(combinedStats, indexSourceId);
-        });
-  });
+  initStatsSplitter(stats_, indexSourceNodeId_);
 }
 
 void IndexLookupJoin::initialize() {
@@ -891,21 +927,7 @@ void IndexLookupJoin::startLookup(InputBatchState& batch) {
     return;
   }
 
-  // Track IndexSource input stats (lookup keys sent to connector). Store as
-  // runtime stats so they aggregate correctly across multiple drivers.
-  {
-    auto lockedStats = stats_.wlock();
-    lockedStats->addRuntimeStat(
-        kIndexSourceInputPositions,
-        RuntimeCounter(
-            static_cast<int64_t>(batch.lookupInput->size()),
-            RuntimeCounter::Unit::kNone));
-    lockedStats->addRuntimeStat(
-        kIndexSourceInputBytes,
-        RuntimeCounter(
-            static_cast<int64_t>(batch.lookupInput->estimateFlatSize()),
-            RuntimeCounter::Unit::kBytes));
-  }
+  recordIndexSourceInputStats(stats_, batch.lookupInput);
 
   // Create the lookup result iterator.
   batch.lookupResultIter =
@@ -971,26 +993,7 @@ RowVectorPtr IndexLookupJoin::produceRemainingOutput(InputBatchState& batch) {
 void IndexLookupJoin::prepareLookupResult(InputBatchState& batch) {
   VELOX_CHECK_NOT_NULL(batch.lookupResult);
 
-  // Track IndexSource output stats (rows received from connector, before join
-  // filter is applied). Store as runtime stats so they aggregate correctly
-  // across multiple drivers.
-  {
-    auto lockedStats = stats_.wlock();
-    lockedStats->addRuntimeStat(
-        kIndexSourceOutputPositions,
-        RuntimeCounter(
-            static_cast<int64_t>(batch.lookupResult->size()),
-            RuntimeCounter::Unit::kNone));
-    lockedStats->addRuntimeStat(
-        kIndexSourceOutputBytes,
-        RuntimeCounter(
-            static_cast<int64_t>(
-                batch.lookupResult->output->estimateFlatSize()),
-            RuntimeCounter::Unit::kBytes));
-    lockedStats->addRuntimeStat(
-        kIndexSourceOutputVectors,
-        RuntimeCounter(1, RuntimeCounter::Unit::kNone));
-  }
+  recordIndexSourceOutputStats(stats_, *batch.lookupResult);
 
   if (rawLookupInputHitIndices_ != nullptr) {
     return;

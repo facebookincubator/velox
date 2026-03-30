@@ -13,6 +13,13 @@
 # limitations under the License.
 
 add_library(velox_file_test_utils TestUtils.cpp FaultyFile.cpp FaultyFileSystem.cpp)
+velox_add_test_headers(
+  velox_file_test_utils
+  FaultyFile.h
+  FaultyFileSystem.h
+  FaultyFileSystemOperations.h
+  TestUtils.h
+)
 
 target_link_libraries(velox_file_test_utils PUBLIC velox_file)
 

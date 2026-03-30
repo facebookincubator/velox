@@ -12,3 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 velox_install_library_headers()
+
+# Wrapper headers — verify these are still needed and correctly included.
+velox_add_library(velox_dwio_common_wrap INTERFACE HEADERS zero-copy-stream-wrapper.h)

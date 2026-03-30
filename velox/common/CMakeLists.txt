@@ -30,4 +30,8 @@ add_subdirectory(time)
 add_subdirectory(testutil)
 add_subdirectory(fuzzer)
 
+velox_add_library(velox_enums INTERFACE HEADERS Enums.h)
+
+velox_add_library(velox_casts INTERFACE HEADERS Casts.h)
+
 velox_install_library_headers()

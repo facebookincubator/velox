@@ -233,6 +233,14 @@ class HiveConfig {
   static constexpr const char* kFileMetadataCacheEnabledSession =
       "file_metadata_cache_enabled";
 
+  /// Whether to pin parsed metadata objects (e.g., StripeGroup, IndexGroup)
+  /// in the reader's metadata cache with strong references so they are never
+  /// evicted. This avoids re-reading and re-parsing metadata on every stripe
+  /// access when weak-pointer cache entries would otherwise expire.
+  /// Currently only supported by Nimble format.
+  static constexpr const char* kPinFileMetadata = "pin-file-metadata";
+  static constexpr const char* kPinFileMetadataSession = "pin_file_metadata";
+
   /// Speculative tail-read size in bytes when opening files. Controls how many
   /// bytes are read from the end of the file to load the footer and nearby
   /// metadata in a single IO operation. Format-specific configs with different
@@ -346,6 +354,9 @@ class HiveConfig {
 
   /// Whether to cache file metadata in the process-wide AsyncDataCache.
   bool fileMetadataCacheEnabled(const config::ConfigBase* session) const;
+
+  /// Whether to pin parsed metadata objects in the reader's metadata cache.
+  bool pinFileMetadata(const config::ConfigBase* session) const;
 
   /// Returns the speculative tail read size in bytes for footer.
   /// ORC/Parquet default to 256KB, Nimble defaults to 8MB. 0 means adaptive.

@@ -63,6 +63,72 @@ velox_add_library(
   WidthBucketArray.cpp
   Zip.cpp
   ZipWith.cpp
+  HEADERS
+  Arithmetic.h
+  ArithmeticImpl.h
+  ArrayConstructor.h
+  ArrayFunctions.h
+  ArraySort.h
+  ArraySubset.h
+  BinaryFunctions.h
+  BingTileFunctions.h
+  Bitwise.h
+  Cardinality.h
+  Comparisons.h
+  DataSizeFunctions.h
+  DateTimeFunctions.h
+  DateTimeImpl.h
+  DecimalFunctions.h
+  DistanceFunctions.h
+  DotProduct.h
+  EnumFunctions.h
+  Fail.h
+  FloatingPointFunctions.h
+  GeometryFunctions.h
+  GreatestLeast.h
+  HyperLogLogFunctions.h
+  IPAddressFunctions.h
+  InPredicate.h
+  IntegerFunctions.h
+  JsonFunctions.h
+  KHyperLogLogFunctions.h
+  L2Norm.h
+  Map.h
+  MapAppend.h
+  MapExcept.h
+  MapFunctions.h
+  MapIntersect.h
+  MapKeysByTopNValues.h
+  MapKeysOverlap.h
+  MapNormalize.h
+  MapSubset.h
+  MapTopN.h
+  MapTopNImpl.h
+  MapTopNKeys.h
+  MapTopNValues.h
+  MapTrimValues.h
+  MapUpdate.h
+  MapValuesInRange.h
+  MultimapFromEntries.h
+  Probability.h
+  QDigestFunctions.h
+  Rand.h
+  Reduce.h
+  RegexpReplace.h
+  RegexpSplit.h
+  RemapKeys.h
+  SetDigestFunctions.h
+  SfmSketchFunctions.h
+  SplitPart.h
+  SplitToMap.h
+  SplitToMultiMap.h
+  StringFunctions.h
+  TDigestFunctions.h
+  URIParser.h
+  URLFunctions.h
+  UuidFunctions.h
+  WidthBucketArray.h
+  WordStem.h
 )
 
 velox_link_libraries(

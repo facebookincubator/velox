@@ -53,6 +53,7 @@ target_link_libraries(
 add_test(NAME velox_rpc_node_test COMMAND velox_rpc_node_test)
 
 add_executable(velox_demo_rpc_function_test DemoRPCFunctionTest.cpp)
+velox_add_test_headers(velox_demo_rpc_function_test DemoRPCFunction.h)
 
 target_link_libraries(
   velox_demo_rpc_function_test
