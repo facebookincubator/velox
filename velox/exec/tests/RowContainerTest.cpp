@@ -299,7 +299,8 @@ class RowContainerTest : public exec::test::RowContainerTestBase,
     auto rowNumbersRange = folly::Range(rowNumbers.data(), size);
 
     auto result = BaseVector::create(expected->type(), size, pool_.get());
-    container.extractColumn(rows.data(), rowNumbersRange, column, 0, result, false);
+    container.extractColumn(
+        rows.data(), rowNumbersRange, column, 0, result, false);
 
     EXPECT_EQ(size, result->size());
     for (vector_size_t i = 0; i < size; ++i) {
@@ -330,7 +331,8 @@ class RowContainerTest : public exec::test::RowContainerTestBase,
     auto rowNumbersRange = folly::Range(rowNumbers.data(), size);
 
     auto result = BaseVector::create(expected->type(), size, pool_.get());
-    container.extractColumn(rows.data(), rowNumbersRange, column, 0, result, false);
+    container.extractColumn(
+        rows.data(), rowNumbersRange, column, 0, result, false);
 
     EXPECT_EQ(size, result->size());
     EXPECT_TRUE(result->equalValueAt(expected.get(), 0, 0))

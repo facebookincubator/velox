@@ -82,7 +82,7 @@ void extractColumns(
       child = BaseVector::create(resultTypes[resultChannel], rows.size(), pool);
     }
     child->resize(rows.size());
-    table->extractColumn(rows, projection.inputChannel, child, false);
+    table->extractColumn(rows, projection.inputChannel, child);
   }
 }
 
