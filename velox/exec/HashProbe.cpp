@@ -1459,8 +1459,7 @@ void HashProbe::applyFilterOnTableRowsForNullAwareJoin(
       table_->extractColumn(
           folly::Range<char* const*>(data, numBuildRows),
           projection.inputChannel,
-          filterTableInput_->childAt(projection.outputChannel),
-          false);
+          filterTableInput_->childAt(projection.outputChannel));
     }
 
     // Skip probe rows that already passed the filter on a previous build batch.
