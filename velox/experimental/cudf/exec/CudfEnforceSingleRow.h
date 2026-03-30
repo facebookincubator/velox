@@ -62,7 +62,6 @@ class CudfEnforceSingleRow : public exec::Operator, public CudfOperator {
   exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
     return exec::BlockingReason::kNotBlocked;
   }
-
 };
 
 } // namespace facebook::velox::cudf_velox
