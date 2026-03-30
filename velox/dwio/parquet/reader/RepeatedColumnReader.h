@@ -61,7 +61,8 @@ class MapColumnReader : public dwio::common::SelectiveMapColumnReader {
       const TypePtr& requestedType,
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       ParquetParams& params,
-      common::ScanSpec& scanSpec);
+      common::ScanSpec& scanSpec,
+      memory::MemoryPool& pool);
 
   void prepareRead(
       vector_size_t offset,
@@ -118,7 +119,8 @@ class ListColumnReader : public dwio::common::SelectiveListColumnReader {
       const TypePtr& requestedType,
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       ParquetParams& params,
-      common::ScanSpec& scanSpec);
+      common::ScanSpec& scanSpec,
+      memory::MemoryPool& pool);
 
   void prepareRead(
       vector_size_t offset,
