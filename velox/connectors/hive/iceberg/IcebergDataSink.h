@@ -97,7 +97,7 @@ class IcebergDataSink : public HiveDataSink {
   /// - fileSizeInBytes: raw bytes written to disk.
   /// - metrics: object with recordCount (number of rows written).
   /// - partitionSpecJson: partition specification.
-  /// - fileFormat: storage format (e.g., "PARQUET").
+  /// - fileFormat: storage format (e.g., "PARQUET", "DWRF").
   /// - content: file content type ("DATA" for data files).
   ///
   /// See
