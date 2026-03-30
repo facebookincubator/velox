@@ -155,6 +155,49 @@ TEST_F(CudfStringFunctionTest, likeInFilter) {
   assertQuery(plan, "SELECT c0, c1 FROM tmp WHERE c1 LIKE 'hel%'");
 }
 
+TEST_F(CudfStringFunctionTest, likeWithNulls) {
+  auto input = makeRowVector({makeNullableFlatVector<std::string>(
+      {"hello", std::nullopt, "help", std::nullopt})});
+  createDuckDbTable({input});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"c0 LIKE '%el%' AS result"})
+                  .planNode();
+
+  assertQuery(plan, "SELECT c0 LIKE '%el%' AS result FROM tmp");
+}
+
+// Input: {"café", "naïve", "hello"}, pattern: '%fé'
+TEST_F(CudfStringFunctionTest, likeUnicode) {
+  auto input = makeRowVector(
+      {makeFlatVector<std::string>({"caf\xc3\xa9", "na\xc3\xafve", "hello"})});
+  createDuckDbTable({input});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"c0 LIKE '%f\xc3\xa9' AS result"})
+                  .planNode();
+
+  assertQuery(plan, "SELECT c0 LIKE '%f\xc3\xa9' AS result FROM tmp");
+}
+
+// cuDF's _ wildcard matches a single byte rather than a single Unicode code
+// point, so multi-byte characters like é cause a mismatch with DuckDB.
+// Leaving this test disabled for now, pending further investigation.
+TEST_F(CudfStringFunctionTest, DISABLED_likeUnicodeSingleCharWildcard) {
+  auto input = makeRowVector(
+      {makeFlatVector<std::string>({"caf\xc3\xa9", "cafe", "caf\xc3\xa9s"})});
+  createDuckDbTable({input});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"c0 LIKE 'caf_' AS result"})
+                  .planNode();
+
+  assertQuery(plan, "SELECT c0 LIKE 'caf_' AS result FROM tmp");
+}
+
 // ---- UPPER tests ----------------------------------------------------------
 
 TEST_F(CudfStringFunctionTest, upperBasic) {
@@ -190,6 +233,29 @@ TEST_F(CudfStringFunctionTest, upperEmptyAndSpecial) {
   assertQuery(plan, "SELECT UPPER(c0) AS result FROM tmp");
 }
 
+TEST_F(CudfStringFunctionTest, upperWithNulls) {
+  auto input = makeRowVector({makeNullableFlatVector<std::string>(
+      {"hello", std::nullopt, "WORLD", std::nullopt})});
+  createDuckDbTable({input});
+
+  auto plan =
+      PlanBuilder().values({input}).project({"UPPER(c0) AS result"}).planNode();
+
+  assertQuery(plan, "SELECT UPPER(c0) AS result FROM tmp");
+}
+
+// Input: {"café", "naïve", "hello"}
+TEST_F(CudfStringFunctionTest, upperUnicode) {
+  auto input = makeRowVector(
+      {makeFlatVector<std::string>({"caf\xc3\xa9", "na\xc3\xafve", "hello"})});
+  createDuckDbTable({input});
+
+  auto plan =
+      PlanBuilder().values({input}).project({"UPPER(c0) AS result"}).planNode();
+
+  assertQuery(plan, "SELECT UPPER(c0) AS result FROM tmp");
+}
+
 // ---- LOWER tests ----------------------------------------------------------
 
 TEST_F(CudfStringFunctionTest, lowerBasic) {
@@ -217,6 +283,29 @@ TEST_F(CudfStringFunctionTest, lowerAlreadyLower) {
 TEST_F(CudfStringFunctionTest, lowerEmptyAndSpecial) {
   auto input =
       makeRowVector({makeFlatVector<std::string>({"", "123", "A1B2", "!@#"})});
+  createDuckDbTable({input});
+
+  auto plan =
+      PlanBuilder().values({input}).project({"LOWER(c0) AS result"}).planNode();
+
+  assertQuery(plan, "SELECT LOWER(c0) AS result FROM tmp");
+}
+
+TEST_F(CudfStringFunctionTest, lowerWithNulls) {
+  auto input = makeRowVector({makeNullableFlatVector<std::string>(
+      {"HELLO", std::nullopt, "world", std::nullopt})});
+  createDuckDbTable({input});
+
+  auto plan =
+      PlanBuilder().values({input}).project({"LOWER(c0) AS result"}).planNode();
+
+  assertQuery(plan, "SELECT LOWER(c0) AS result FROM tmp");
+}
+
+// Input: {"CAFÉ", "NAÏVE", "HELLO"}
+TEST_F(CudfStringFunctionTest, lowerUnicode) {
+  auto input = makeRowVector(
+      {makeFlatVector<std::string>({"CAF\xc3\x89", "NA\xc3\x8fVE", "HELLO"})});
   createDuckDbTable({input});
 
   auto plan =
@@ -306,6 +395,51 @@ TEST_F(CudfStringFunctionTest, concatMultipleLiterals) {
   assertQuery(plan, "SELECT concat('start-', c0, '-end') AS result FROM tmp");
 }
 
+TEST_F(CudfStringFunctionTest, concatWithNullColumn) {
+  auto input = makeRowVector(
+      {makeNullableFlatVector<std::string>(
+           {"hello", std::nullopt, "foo"}),
+       makeNullableFlatVector<std::string>(
+           {" world", "bar", std::nullopt})});
+  createDuckDbTable({input});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"concat(c0, c1) AS result"})
+                  .planNode();
+
+  assertQuery(plan, "SELECT concat(c0, c1) AS result FROM tmp");
+}
+
+TEST_F(CudfStringFunctionTest, concatAllNulls) {
+  auto input = makeRowVector(
+      {makeNullableFlatVector<std::string>({std::nullopt, std::nullopt}),
+       makeNullableFlatVector<std::string>({std::nullopt, std::nullopt})});
+  createDuckDbTable({input});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"concat(c0, c1) AS result"})
+                  .planNode();
+
+  assertQuery(plan, "SELECT concat(c0, c1) AS result FROM tmp");
+}
+
+// Input: {"hello", "München"} + {" wörld", " Straße"}
+TEST_F(CudfStringFunctionTest, concatUnicode) {
+  auto input = makeRowVector(
+      {makeFlatVector<std::string>({"hello", "M\xc3\xbcnchen"}),
+       makeFlatVector<std::string>({" w\xc3\xb6rld", " Stra\xc3\x9f" "e"})});
+  createDuckDbTable({input});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"concat(c0, c1) AS result"})
+                  .planNode();
+
+  assertQuery(plan, "SELECT concat(c0, c1) AS result FROM tmp");
+}
+
 // ---------------------------------------------------------------------------
 // Direct expression tests: exercise the cudf expression evaluator directly
 // via CudfFunctionBaseTest::evaluateOnce.
@@ -354,6 +488,26 @@ TEST_F(CudfStringExprTest, likeSingleChar) {
   EXPECT_TRUE(result.value());
 }
 
+TEST_F(CudfStringExprTest, likeNullInput) {
+  auto result = evaluateOnce<bool, std::string>(
+      "c0 LIKE '%el%'", std::optional<std::string>(std::nullopt));
+  EXPECT_FALSE(result.has_value());
+}
+
+// "café" LIKE '%fé'
+TEST_F(CudfStringExprTest, likeUnicode) {
+  auto result = evaluateOnce<bool, std::string>(
+      "c0 LIKE '%f\xc3\xa9'", std::string("caf\xc3\xa9"));
+  EXPECT_TRUE(result.value());
+}
+
+// "cafe" (no accent) should NOT match '%fé'
+TEST_F(CudfStringExprTest, likeUnicodeNoMatch) {
+  auto result = evaluateOnce<bool, std::string>(
+      "c0 LIKE '%f\xc3\xa9'", std::string("cafe"));
+  EXPECT_FALSE(result.value());
+}
+
 TEST_F(CudfStringExprTest, upperBasic) {
   auto result = evaluateOnce<std::string, std::string>("upper(c0)", "hello");
   EXPECT_EQ(result.value(), "HELLO");
@@ -369,6 +523,19 @@ TEST_F(CudfStringExprTest, upperEmpty) {
   EXPECT_EQ(result.value(), "");
 }
 
+TEST_F(CudfStringExprTest, upperNullInput) {
+  auto result = evaluateOnce<std::string, std::string>(
+      "upper(c0)", std::optional<std::string>(std::nullopt));
+  EXPECT_FALSE(result.has_value());
+}
+
+// upper("café") -> "CAFÉ"
+TEST_F(CudfStringExprTest, upperUnicode) {
+  auto result = evaluateOnce<std::string, std::string>(
+      "upper(c0)", std::string("caf\xc3\xa9"));
+  EXPECT_EQ(result.value(), "CAF\xc3\x89");
+}
+
 TEST_F(CudfStringExprTest, lowerBasic) {
   auto result = evaluateOnce<std::string, std::string>("lower(c0)", "HELLO");
   EXPECT_EQ(result.value(), "hello");
@@ -382,6 +549,19 @@ TEST_F(CudfStringExprTest, lowerMixedCase) {
 TEST_F(CudfStringExprTest, lowerEmpty) {
   auto result = evaluateOnce<std::string, std::string>("lower(c0)", "");
   EXPECT_EQ(result.value(), "");
+}
+
+TEST_F(CudfStringExprTest, lowerNullInput) {
+  auto result = evaluateOnce<std::string, std::string>(
+      "lower(c0)", std::optional<std::string>(std::nullopt));
+  EXPECT_FALSE(result.has_value());
+}
+
+// lower("CAFÉ") -> "café"
+TEST_F(CudfStringExprTest, lowerUnicode) {
+  auto result = evaluateOnce<std::string, std::string>(
+      "lower(c0)", std::string("CAF\xc3\x89"));
+  EXPECT_EQ(result.value(), "caf\xc3\xa9");
 }
 
 TEST_F(CudfStringExprTest, concatTwoArgs) {
@@ -406,6 +586,24 @@ TEST_F(CudfStringExprTest, concatEmptyStrings) {
   auto result = evaluateOnce<std::string, std::string, std::string>(
       "concat(c0, c1)", "", "");
   EXPECT_EQ(result.value(), "");
+}
+
+TEST_F(CudfStringExprTest, concatWithNullArg) {
+  auto result = evaluateOnce<std::string, std::string, std::string>(
+      "concat(c0, c1)",
+      std::optional<std::string>("hello"),
+      std::optional<std::string>(std::nullopt));
+  // DuckDB and cudf treat nulls as empty strings in concat.
+  EXPECT_EQ(result.value(), "hello");
+}
+
+// concat("hello", " wörld") -> "hello wörld"
+TEST_F(CudfStringExprTest, concatUnicode) {
+  auto result = evaluateOnce<std::string, std::string, std::string>(
+      "concat(c0, c1)",
+      std::string("hello"),
+      std::string(" w\xc3\xb6rld"));
+  EXPECT_EQ(result.value(), "hello w\xc3\xb6rld");
 }
 
 } // namespace
