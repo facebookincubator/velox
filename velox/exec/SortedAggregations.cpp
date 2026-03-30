@@ -316,7 +316,8 @@ vector_size_t SortedAggregations::extractSingleGroup(
         groupRows.data(),
         numGroupRows,
         inputMapping_[aggregate.mask.value()],
-        mask);
+        mask,
+        false);
 
     rowNumbers.reserve(numGroupRows);
     for (auto i = 0; i < numGroupRows; ++i) {
@@ -353,10 +354,11 @@ vector_size_t SortedAggregations::extractSingleGroup(
             folly::Range(rowNumbers.data(), rowNumbers.size()),
             columnIndex,
             0, // resultOffset
-            inputVectors[i]);
+            inputVectors[i],
+            false);
       } else {
         inputData_->extractColumn(
-            groupRows.data(), numRows, columnIndex, inputVectors[i]);
+            groupRows.data(), numRows, columnIndex, inputVectors[i], false);
       }
     }
   }

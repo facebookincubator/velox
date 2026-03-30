@@ -571,7 +571,7 @@ class HashTableTest : public testing::TestWithParam<bool>,
     ASSERT_EQ(numRows, nullValues.size());
     auto actual =
         BaseVector::create<FlatVector<int64_t>>(BIGINT(), numRows, pool());
-    table->rows()->extractColumn(rows.data(), numRows, 1, actual);
+    table->rows()->extractColumn(rows.data(), numRows, 1, actual, false);
     for (int i = 0; i < actual->size(); ++i) {
       auto it = nullValues.find(actual->valueAt(i));
       ASSERT_TRUE(it != nullValues.end());

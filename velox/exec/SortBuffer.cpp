@@ -407,7 +407,8 @@ void SortBuffer::getOutputWithoutSpill() {
         sortedRows_.data() + numOutputRows_,
         output_->size(),
         columnProjection.inputChannel,
-        output_->childAt(columnProjection.outputChannel));
+        output_->childAt(columnProjection.outputChannel),
+        false);
   }
   numOutputRows_ += output_->size();
 }

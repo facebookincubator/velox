@@ -124,7 +124,8 @@ RowVectorPtr TopN::getOutput() {
         rows_.data() + numRowsReturned_,
         numRowsToReturn,
         i,
-        result->childAt(i));
+        result->childAt(i),
+        false);
   }
   numRowsReturned_ += numRowsToReturn;
   finished_ = (numRowsReturned_ == rows_.size());

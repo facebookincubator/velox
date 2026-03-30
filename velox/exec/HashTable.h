@@ -771,7 +771,8 @@ class HashTable : public BaseHashTable {
         rows.size(),
         rows_->columnAt(columnIndex),
         columnHasNulls_[columnIndex],
-        result);
+        result,
+        false);
   }
 
   auto& testingOtherTables() const {

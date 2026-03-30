@@ -167,7 +167,7 @@ RowVectorPtr StreamingAggregation::createOutput(size_t numGroups) {
   auto output = BaseVector::create<RowVector>(outputType_, numGroups, pool());
 
   for (auto i = 0; i < groupingKeys_.size(); ++i) {
-    rows_->extractColumn(groups_.data(), numGroups, i, output->childAt(i));
+    rows_->extractColumn(groups_.data(), numGroups, i, output->childAt(i), false);
   }
 
   const auto numKeys = groupingKeys_.size();

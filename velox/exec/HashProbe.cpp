@@ -82,7 +82,7 @@ void extractColumns(
       child = BaseVector::create(resultTypes[resultChannel], rows.size(), pool);
     }
     child->resize(rows.size());
-    table->extractColumn(rows, projection.inputChannel, child);
+    table->extractColumn(rows, projection.inputChannel, child, false);
   }
 }
 
@@ -1459,7 +1459,8 @@ void HashProbe::applyFilterOnTableRowsForNullAwareJoin(
       table_->extractColumn(
           folly::Range<char* const*>(data, numBuildRows),
           projection.inputChannel,
-          filterTableInput_->childAt(projection.outputChannel));
+          filterTableInput_->childAt(projection.outputChannel),
+          false);
     }
 
     // Skip probe rows that already passed the filter on a previous build batch.

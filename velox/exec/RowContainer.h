@@ -450,7 +450,7 @@ class RowContainer {
       bool columnHasNulls,
       vector_size_t resultOffset,
       const VectorPtr& result,
-      bool shallowStringCopy = false);
+      bool shallowStringCopy);
 
   /// Copies the values at 'col' into 'result' for the 'numRows' rows pointed to
   /// by 'rows'. If an entry in 'rows' is null, sets corresponding row in
@@ -472,7 +472,7 @@ class RowContainer {
       RowColumn col,
       bool columnHasNulls,
       const VectorPtr& result,
-      bool shallowStringCopy = false) {
+      bool shallowStringCopy) {
     extractColumn(
         rows, numRows, col, columnHasNulls, 0, result, shallowStringCopy);
   }
@@ -501,7 +501,7 @@ class RowContainer {
       bool columnHasNulls,
       vector_size_t resultOffset,
       const VectorPtr& result,
-      bool shallowStringCopy = false);
+      bool shallowStringCopy);
 
   /// Sets in result all locations with null values in col for rows (for numRows
   /// number of rows).
@@ -519,7 +519,7 @@ class RowContainer {
       int32_t numRows,
       int32_t columnIndex,
       const VectorPtr& result,
-      bool shallowStringCopy = false) const {
+      bool shallowStringCopy) const {
     extractColumn(
         rows,
         numRows,
@@ -539,7 +539,7 @@ class RowContainer {
       int32_t columnIndex,
       int32_t resultOffset,
       const VectorPtr& result,
-      bool shallowStringCopy = false) const {
+      bool shallowStringCopy) const {
     extractColumn(
         rows,
         numRows,
@@ -563,7 +563,7 @@ class RowContainer {
       int32_t columnIndex,
       const vector_size_t resultOffset,
       const VectorPtr& result,
-      bool shallowStringCopy = false) const {
+      bool shallowStringCopy) const {
     extractColumn(
         rows,
         rowNumbers,
@@ -1026,7 +1026,7 @@ class RowContainer {
       bool columnHasNulls,
       int32_t resultOffset,
       const VectorPtr& result,
-      bool shallowStringCopy = false) {
+      bool shallowStringCopy) {
     if (rowNumbers.size() > 0) {
       extractColumnTypedInternal<true, Kind>(
           rows,
@@ -1059,7 +1059,7 @@ class RowContainer {
       bool columnHasNulls,
       int32_t resultOffset,
       const VectorPtr& result,
-      bool shallowStringCopy = false) {
+      bool shallowStringCopy) {
     // Resize the result vector before all copies.
     result->resize(numRows + resultOffset);
 
@@ -1196,7 +1196,7 @@ class RowContainer {
       uint8_t nullMask,
       int32_t resultOffset,
       FlatVector<T>* result,
-      bool shallowStringCopy = false) {
+      bool shallowStringCopy) {
     auto maxRows = numRows + resultOffset;
     VELOX_DCHECK_LE(maxRows, result->size());
 
@@ -1238,7 +1238,7 @@ class RowContainer {
       int32_t offset,
       int32_t resultOffset,
       FlatVector<T>* result,
-      bool shallowStringCopy = false) {
+      bool shallowStringCopy) {
     [[maybe_unused]] auto maxRows = numRows + resultOffset;
     VELOX_DCHECK_LE(maxRows, result->size());
     BufferPtr valuesBuffer = result->mutableValues();
@@ -1507,7 +1507,7 @@ class RowContainer {
       StringView value,
       FlatVector<StringView>* values,
       vector_size_t index,
-      bool shallowStringCopy = false);
+      bool shallowStringCopy);
 
   static int32_t compareStringAsc(
       StringView left,

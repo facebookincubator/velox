@@ -90,7 +90,7 @@ class PrefixSortTest : public exec::test::OperatorTestBase {
         BaseVector::create<RowVector>(rowType, numRows, pool_.get());
     for (int column = 0; column < compareFlags.size(); ++column) {
       rowContainer.extractColumn(
-          rows.data(), numRows, column, actual->childAt(column));
+          rows.data(), numRows, column, actual->childAt(column), false);
     }
 
     velox::test::assertEqualVectors(actual, expectedResult);
@@ -148,7 +148,7 @@ const RowVectorPtr PrefixSortTest::generateExpectedResult(
       BaseVector::create<RowVector>(rowType, numRows, pool_.get());
   for (int column = 0; column < compareFlags.size(); ++column) {
     rowContainer.extractColumn(
-        rows.data(), numRows, column, result->childAt(column));
+        rows.data(), numRows, column, result->childAt(column), false);
   }
   return result;
 }

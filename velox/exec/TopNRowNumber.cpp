@@ -741,7 +741,7 @@ RowVectorPtr TopNRowNumber::getOutputFromMemory() {
 
   for (int i = 0; i < inputChannels_.size(); ++i) {
     data_->extractColumn(
-        outputRows_.data(), offset, i, output->childAt(inputChannels_[i]));
+        outputRows_.data(), offset, i, output->childAt(inputChannels_[i]), false);
   }
 
   return output;

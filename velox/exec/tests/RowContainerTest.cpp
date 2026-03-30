@@ -159,7 +159,7 @@ class RowContainerTest : public exec::test::RowContainerTestBase,
       // Test the extractColumn API that didn't use the offset parameter and
       // copied to the start of the result vector.
       auto result = BaseVector::create(expected->type(), size, pool_.get());
-      container.extractColumn(rows.data(), size, column, result);
+      container.extractColumn(rows.data(), size, column, result, false);
       assertEqualVectors(expected, result);
     };
 
@@ -175,7 +175,7 @@ class RowContainerTest : public exec::test::RowContainerTestBase,
       // Test extractColumn from offset.
       auto result = BaseVector::create(expected->type(), size, pool_.get());
       container.extractColumn(
-          rows.data(), size - offset, column, offset, result);
+          rows.data(), size - offset, column, offset, result, false);
       testEqualVectors(result, expected, offset, 0);
     };
 
@@ -190,7 +190,7 @@ class RowContainerTest : public exec::test::RowContainerTestBase,
       folly::Range<const vector_size_t*> rowNumbersRange =
           folly::Range(rowNumbers.data(), size - offset);
       container.extractColumn(
-          rows.data(), rowNumbersRange, column, offset, result);
+          rows.data(), rowNumbersRange, column, offset, result, false);
       testEqualVectors(result, expected, offset, offset);
     };
 
@@ -242,12 +242,12 @@ class RowContainerTest : public exec::test::RowContainerTestBase,
       // Test the extractColumn API that didn't use the offset parameter
       // and copies to the start of the result vector.
       auto result = BaseVector::create(expected->type(), size, pool_.get());
-      container.extractColumn(input.data(), size, column, result);
+      container.extractColumn(input.data(), size, column, result, false);
       verifyResults(result);
 
       // Test extractColumn from offset.
       container.extractColumn(
-          input.data() + offset, size - offset, column, offset, result);
+          input.data() + offset, size - offset, column, offset, result, false);
       verifyResults(result, offset);
     };
 
@@ -275,7 +275,7 @@ class RowContainerTest : public exec::test::RowContainerTestBase,
       folly::Range<const vector_size_t*> rowNumbersRange =
           folly::Range(rowNumbers.data(), rowNumbersSize);
       container.extractColumn(
-          input.data(), rowNumbersRange, column, offset, result);
+          input.data(), rowNumbersRange, column, offset, result, false);
       verifyResults(result, offset);
     };
 
@@ -299,7 +299,7 @@ class RowContainerTest : public exec::test::RowContainerTestBase,
     auto rowNumbersRange = folly::Range(rowNumbers.data(), size);
 
     auto result = BaseVector::create(expected->type(), size, pool_.get());
-    container.extractColumn(rows.data(), rowNumbersRange, column, 0, result);
+    container.extractColumn(rows.data(), rowNumbersRange, column, 0, result, false);
 
     EXPECT_EQ(size, result->size());
     for (vector_size_t i = 0; i < size; ++i) {
@@ -330,7 +330,7 @@ class RowContainerTest : public exec::test::RowContainerTestBase,
     auto rowNumbersRange = folly::Range(rowNumbers.data(), size);
 
     auto result = BaseVector::create(expected->type(), size, pool_.get());
-    container.extractColumn(rows.data(), rowNumbersRange, column, 0, result);
+    container.extractColumn(rows.data(), rowNumbersRange, column, 0, result, false);
 
     EXPECT_EQ(size, result->size());
     EXPECT_TRUE(result->equalValueAt(expected.get(), 0, 0))
@@ -527,7 +527,7 @@ class RowContainerTest : public exec::test::RowContainerTestBase,
     {
       std::sort(rows.begin(), rows.end(), compareRows);
       VectorPtr result = BaseVector::create(type, numRows, pool_.get());
-      rowContainer->extractColumn(rows.data(), numRows, 0, result);
+      rowContainer->extractColumn(rows.data(), numRows, 0, result, false);
       assertEqualVectors(expected, result);
     }
 
@@ -1014,7 +1014,8 @@ TEST_P(RowContainerTest, extractWithNullsAndTargetOffset) {
         data1->columnAt(col),
         data1->columnHasNulls(col),
         0,
-        result->childAt(col));
+        result->childAt(col),
+        false);
   }
   for (int32_t col = 0; col < 3; col++) {
     RowContainer::extractColumn(
@@ -1023,7 +1024,8 @@ TEST_P(RowContainerTest, extractWithNullsAndTargetOffset) {
         data2->columnAt(col),
         data2->columnHasNulls(col),
         kNumRows,
-        result->childAt(col));
+        result->childAt(col),
+        false);
   }
 
   // Check we have all nulls correct.
@@ -1160,7 +1162,7 @@ TEST_P(RowContainerTest, types) {
 
     auto extracted = copy->childAt(column);
     extracted->resize(kNumRows);
-    data->extractColumn(rows.data(), rows.size(), column, extracted);
+    data->extractColumn(rows.data(), rows.size(), column, extracted, false);
     raw_vector<uint64_t> hashes(kNumRows);
     auto source = batch->childAt(column);
     auto columnType = batch->type()->as<TypeKind::ROW>().childAt(column);
@@ -1925,7 +1927,7 @@ TEST_F(RowContainerTest, unknown) {
       return rowContainer->compare(l, r, 0, {}) < 0;
     });
     VectorPtr result = BaseVector::create(UNKNOWN(), rows.size(), pool_.get());
-    rowContainer->extractColumn(rows.data(), rows.size(), 0, result);
+    rowContainer->extractColumn(rows.data(), rows.size(), 0, result, false);
     // Since the Vector is just a null constant, it should be indistinguishable
     // from the original.
     assertEqualVectors(data->childAt(0), result);
@@ -2154,7 +2156,7 @@ TEST_F(RowContainerTest, extractSerializedRow) {
     auto copy = BaseVector::create<RowVector>(rowType, data->size(), pool());
     for (auto i = 0; i < copy->childrenSize(); ++i) {
       rowContainer.extractColumn(
-          rows.data(), copy->size(), i, copy->childAt(i));
+          rows.data(), copy->size(), i, copy->childAt(i), false);
     }
 
     assertEqualVectors(data, copy);
@@ -2231,7 +2233,7 @@ TEST_P(RowContainerTest, hugeIntStoreWithNulls) {
     data->store(decoded, i, rows[i], kColumnIndex);
   }
   auto extracted = BaseVector::copy(*source);
-  data->extractColumn(rows.data(), kNumRows, kColumnIndex, extracted);
+  data->extractColumn(rows.data(), kNumRows, kColumnIndex, extracted, false);
   assertEqualVectors(source, extracted);
 }
 
@@ -2279,7 +2281,7 @@ TEST_P(RowContainerTest, columnHasNulls) {
   for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
     auto vector =
         BaseVector::create(rowVector->childAt(i)->type(), kNumRows, pool());
-    rowContainer->extractColumn(rows.data(), kNumRows, i, vector);
+    rowContainer->extractColumn(rows.data(), kNumRows, i, vector, false);
     if (i % 2 == 0) {
       ASSERT_TRUE(!vector->mayHaveNulls());
     } else {
@@ -2336,7 +2338,7 @@ TEST_P(RowContainerTest, store) {
     for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
       auto vector =
           BaseVector::create(rowVector->childAt(i)->type(), kNumRows, pool());
-      rowContainer->extractColumn(rows.data(), kNumRows, i, vector);
+      rowContainer->extractColumn(rows.data(), kNumRows, i, vector, false);
       assertEqualVectors(rowVector->childAt(i), vector);
     }
   }

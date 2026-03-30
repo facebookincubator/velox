@@ -825,7 +825,8 @@ void GroupingSet::extractGroups(
         groups.data(),
         groups.size(),
         groupingKeyOutputProjections_[i],
-        keyVector);
+        keyVector,
+        false);
   }
   for (int32_t i = 0; i < aggregates_.size(); ++i) {
     if (!aggregates_[i].sortingKeys.empty()) {
