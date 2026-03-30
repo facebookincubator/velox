@@ -29,7 +29,7 @@ using namespace facebook::velox;
 using namespace facebook::velox::connector::lance;
 using namespace facebook::velox::exec::test;
 
-static const std::string kLanceConnectorId = "lance-test";
+static constexpr std::string_view kLanceConnectorId = "lance-test";
 
 class LanceConnectorTest : public OperatorTestBase {
  protected:
@@ -116,10 +116,7 @@ TEST_F(LanceConnectorTest, splitWithFragments) {
   auto split = std::make_shared<LanceConnectorSplit>(
       kLanceConnectorId, "/tmp/test.lance", frags);
   ASSERT_EQ(split->datasetPath, "/tmp/test.lance");
-  ASSERT_EQ(split->fragmentIds.size(), 3);
-  ASSERT_EQ(split->fragmentIds[0], 0);
-  ASSERT_EQ(split->fragmentIds[1], 2);
-  ASSERT_EQ(split->fragmentIds[2], 5);
+  ASSERT_THAT(split->fragmentIds, testing::ElementsAre(0, 2, 5));
 }
 
 TEST_F(LanceConnectorTest, splitToString) {

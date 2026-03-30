@@ -38,18 +38,22 @@ class LanceDataSource : public DataSource {
 
   void addDynamicFilter(
       column_index_t /*outputChannel*/,
-      const std::shared_ptr<common::Filter>& /*filter*/) override {
+      const std::shared_ptr<common::Filter>& /*filter*/) final {
     VELOX_NYI("Dynamic filters not supported by LanceConnector.");
   }
 
+  /// Returns the next batch of rows. Returns nullopt when the split is
+  /// exhausted.
   std::optional<RowVectorPtr> next(
       uint64_t size,
       velox::ContinueFuture& future) override;
 
+  /// Returns the number of rows read so far.
   uint64_t getCompletedRows() override {
     return completedRows_;
   }
 
+  /// Returns the number of bytes read so far.
   uint64_t getCompletedBytes() override {
     return completedBytes_;
   }
@@ -62,9 +66,12 @@ class LanceDataSource : public DataSource {
   void closeScannerAndDataset();
 
   RowTypePtr outputType_;
+  // Names of columns to project from the Lance dataset, in output order.
   std::vector<std::string> columnNames_;
 
+  // Open Lance dataset handle; null when no split is active.
   LanceDataset* dataset_{nullptr};
+  // Active scanner handle; null when no split is active.
   LanceScanner* scanner_{nullptr};
   bool splitProcessed_{true};
 
@@ -86,18 +93,13 @@ class LanceConnector final : public Connector {
       const RowTypePtr& outputType,
       const ConnectorTableHandlePtr& tableHandle,
       const connector::ColumnHandleMap& columnHandles,
-      ConnectorQueryCtx* connectorQueryCtx) override final {
-    return std::make_unique<LanceDataSource>(
-        outputType, tableHandle, columnHandles, connectorQueryCtx);
-  }
+      ConnectorQueryCtx* connectorQueryCtx) final;
 
   std::unique_ptr<DataSink> createDataSink(
-      RowTypePtr /*inputType*/,
-      ConnectorInsertTableHandlePtr /*connectorInsertTableHandle*/,
-      ConnectorQueryCtx* /*connectorQueryCtx*/,
-      CommitStrategy /*commitStrategy*/) override final {
-    VELOX_NYI("LanceConnector does not support data sink.");
-  }
+      RowTypePtr inputType,
+      ConnectorInsertTableHandlePtr connectorInsertTableHandle,
+      ConnectorQueryCtx* connectorQueryCtx,
+      CommitStrategy commitStrategy) final;
 };
 
 /// Factory for creating LanceConnector instances.
@@ -111,9 +113,7 @@ class LanceConnectorFactory : public ConnectorFactory {
       const std::string& id,
       std::shared_ptr<const config::ConfigBase> config,
       folly::Executor* ioExecutor = nullptr,
-      folly::Executor* cpuExecutor = nullptr) override {
-    return std::make_shared<LanceConnector>(id, config, ioExecutor);
-  }
+      folly::Executor* cpuExecutor = nullptr) override;
 };
 
 } // namespace facebook::velox::connector::lance

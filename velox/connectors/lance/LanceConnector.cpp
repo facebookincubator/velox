@@ -27,6 +27,31 @@ LanceConnector::LanceConnector(
     folly::Executor* /*executor*/)
     : Connector(id, std::move(config)) {}
 
+std::unique_ptr<DataSource> LanceConnector::createDataSource(
+    const RowTypePtr& outputType,
+    const ConnectorTableHandlePtr& tableHandle,
+    const connector::ColumnHandleMap& columnHandles,
+    ConnectorQueryCtx* connectorQueryCtx) {
+  return std::make_unique<LanceDataSource>(
+      outputType, tableHandle, columnHandles, connectorQueryCtx);
+}
+
+std::unique_ptr<DataSink> LanceConnector::createDataSink(
+    RowTypePtr /*inputType*/,
+    ConnectorInsertTableHandlePtr /*connectorInsertTableHandle*/,
+    ConnectorQueryCtx* /*connectorQueryCtx*/,
+    CommitStrategy /*commitStrategy*/) {
+  VELOX_NYI("LanceConnector does not support data sink.");
+}
+
+std::shared_ptr<Connector> LanceConnectorFactory::newConnector(
+    const std::string& id,
+    std::shared_ptr<const config::ConfigBase> config,
+    folly::Executor* ioExecutor,
+    folly::Executor* /*cpuExecutor*/) {
+  return std::make_shared<LanceConnector>(id, std::move(config), ioExecutor);
+}
+
 LanceDataSource::LanceDataSource(
     const RowTypePtr& outputType,
     const connector::ConnectorTableHandlePtr& tableHandle,
@@ -43,7 +68,7 @@ LanceDataSource::LanceDataSource(
   columnNames_.reserve(outputType->size());
   for (const auto& outputName : outputType->names()) {
     auto it = columnHandles.find(outputName);
-    VELOX_CHECK(
+    VELOX_USER_CHECK(
         it != columnHandles.end(),
         "Missing ColumnHandle for output column: {}",
         outputName);
@@ -81,7 +106,7 @@ void LanceDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
       " Call next() to process the split.");
 
   auto lanceSplit = std::dynamic_pointer_cast<LanceConnectorSplit>(split);
-  VELOX_CHECK(lanceSplit, "Wrong type of split for LanceDataSource.");
+  VELOX_CHECK_NOT_NULL(lanceSplit, "Wrong type of split for LanceDataSource.");
 
   // Clean up any prior state.
   closeScannerAndDataset();
@@ -90,9 +115,9 @@ void LanceDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   dataset_ = lance_dataset_open(lanceSplit->datasetPath.c_str(), nullptr, 0);
   VELOX_CHECK_NOT_NULL(
       dataset_,
-      "Failed to open Lance dataset: {} path: {}",
-      lance_last_error_message(),
-      lanceSplit->datasetPath);
+      "Failed to open Lance dataset at path {}: {}",
+      lanceSplit->datasetPath,
+      lance_last_error_message());
 
   // Build NULL-terminated column projection array.
   std::vector<const char*> colPtrs;
@@ -106,9 +131,9 @@ void LanceDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   scanner_ = lance_scanner_new(dataset_, colPtrs.data(), /*filter=*/nullptr);
   VELOX_CHECK_NOT_NULL(
       scanner_,
-      "Failed to create scanner: {} path: {}",
-      lance_last_error_message(),
-      lanceSplit->datasetPath);
+      "Failed to create scanner at path {}: {}",
+      lanceSplit->datasetPath,
+      lance_last_error_message());
 
   // If the split specifies fragment IDs, restrict the scan.
   if (!lanceSplit->fragmentIds.empty()) {
@@ -176,16 +201,23 @@ std::optional<RowVectorPtr> LanceDataSource::next(
       lance_last_error_message());
 
   // Convert the batch to Arrow C Data Interface structs.
-  ArrowArray arrowArray;
-  ArrowSchema arrowSchema;
+  ArrowArray arrowArray{};
+  ArrowSchema arrowSchema{};
   int32_t convertRc = lance_batch_to_arrow(batch, &arrowArray, &arrowSchema);
   lance_batch_free(batch);
 
-  VELOX_CHECK_EQ(
-      convertRc,
-      0,
-      "Failed to convert Lance batch to Arrow: {}",
-      lance_last_error_message());
+  if (convertRc != 0) {
+    // Call release callbacks if the library partially initialized the structs.
+    if (arrowArray.release) {
+      arrowArray.release(&arrowArray);
+    }
+    if (arrowSchema.release) {
+      arrowSchema.release(&arrowSchema);
+    }
+    VELOX_FAIL(
+        "Failed to convert Lance batch to Arrow: {}",
+        lance_last_error_message());
+  }
 
   // Import Arrow data into Velox.
   auto result = importFromArrowAsOwner(arrowSchema, arrowArray, pool_);

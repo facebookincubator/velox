@@ -25,13 +25,13 @@
 
 extern "C" {
 
-/* --- Opaque handles --- */
+// --- Opaque handles ---
 
 typedef struct LanceDataset LanceDataset;
 typedef struct LanceScanner LanceScanner;
 typedef struct LanceBatch LanceBatch;
 
-/* --- Error handling --- */
+// --- Error handling ---
 
 typedef enum {
   LANCE_OK = 0,
@@ -49,7 +49,7 @@ LanceErrorCode lance_last_error_code(void);
 const char* lance_last_error_message(void);
 void lance_free_string(const char* s);
 
-/* --- Dataset lifecycle --- */
+// --- Dataset lifecycle ---
 
 LanceDataset* lance_dataset_open(
     const char* uri,
@@ -58,20 +58,20 @@ LanceDataset* lance_dataset_open(
 
 void lance_dataset_close(LanceDataset* dataset);
 
-/* --- Dataset metadata --- */
+// --- Dataset metadata ---
 
 uint64_t lance_dataset_version(const LanceDataset* dataset);
 uint64_t lance_dataset_count_rows(const LanceDataset* dataset);
 int32_t lance_dataset_schema(const LanceDataset* dataset, ArrowSchema* out);
 
-/* --- Fragment enumeration --- */
+// --- Fragment enumeration ---
 
 uint64_t lance_dataset_fragment_count(const LanceDataset* dataset);
 int32_t lance_dataset_fragment_ids(
     const LanceDataset* dataset,
     uint64_t* out_ids);
 
-/* --- Scanner builder --- */
+// --- Scanner builder ---
 
 LanceScanner* lance_scanner_new(
     const LanceDataset* dataset,
@@ -90,12 +90,12 @@ int32_t lance_scanner_set_fragment_ids(
 
 void lance_scanner_close(LanceScanner* scanner);
 
-/* --- Sync scan: batch iteration --- */
+// --- Sync scan: batch iteration ---
 
 /// Returns: 0 = batch available, 1 = end of stream, -1 = error
 int32_t lance_scanner_next(LanceScanner* scanner, LanceBatch** out);
 
-/* --- Batch (Arrow C Data Interface) --- */
+// --- Batch (Arrow C Data Interface) ---
 
 int32_t lance_batch_to_arrow(
     const LanceBatch* batch,
