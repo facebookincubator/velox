@@ -51,9 +51,12 @@ struct CudfConfig {
       "cudf.concat_optimization_enabled"};
   // The value could be either spark or presto.
   static constexpr const char* kCudfFunctionEngine{"cudf.function_engine"};
+  static constexpr const char* kCudfTimestampUnit{"cudf.timestamp_unit"};
 
   /// Query session configs for the cuDF Operators.
   static constexpr const char* kCudfTopNBatchSize{"cudf.topk_batch_size"};
+
+  
 
   /// Singleton CudfConfig instance.
   /// Clients must set the configs below before invoking registerCudf().
@@ -132,6 +135,9 @@ struct CudfConfig {
   // presto.
   std::string functionEngine{"presto"};
 
+  /// Timestamp unit for cuDF timestamp types.
+  /// Can be configured via kCudfTimestampUnit with string values:
+  /// "s" (seconds), "ms" (milliseconds), "us" (microseconds), "ns" (nanoseconds).
   cudf::type_id timestampUnit = cudf::type_id::TIMESTAMP_NANOSECONDS;
 };
 
