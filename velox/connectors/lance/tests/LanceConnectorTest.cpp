@@ -57,9 +57,11 @@ class LanceConnectorTest : public OperatorTestBase {
   }
 
   // Build a TableScan plan node for the Lance connector.
+  // tableName is the logical table name; the physical dataset path is provided
+  // separately via the split.
   core::PlanNodePtr makeTableScanPlan(
       const RowTypePtr& outputType,
-      const std::string& datasetPath) {
+      const std::string& tableName) {
     connector::ColumnHandleMap assignments;
     for (const auto& name : outputType->names()) {
       assignments[name] = std::make_shared<LanceColumnHandle>(name);
@@ -69,7 +71,7 @@ class LanceConnectorTest : public OperatorTestBase {
         .connectorId(kLanceConnectorId)
         .outputType(outputType)
         .tableHandle(
-            std::make_shared<LanceTableHandle>(kLanceConnectorId, datasetPath))
+            std::make_shared<LanceTableHandle>(kLanceConnectorId, tableName))
         .assignments(std::move(assignments))
         .endTableScan()
         .planNode();
@@ -89,17 +91,16 @@ TEST_F(LanceConnectorTest, registrationWorks) {
 
 TEST_F(LanceConnectorTest, tableHandleFields) {
   auto handle = std::make_shared<LanceTableHandle>(
-      kLanceConnectorId, "/tmp/test.lance");
-  ASSERT_EQ(handle->datasetPath(), "/tmp/test.lance");
-  ASSERT_EQ(handle->name(), "/tmp/test.lance");
+      kLanceConnectorId, "test_table");
+  ASSERT_EQ(handle->tableName(), "test_table");
+  ASSERT_EQ(handle->name(), "test_table");
   ASSERT_EQ(handle->connectorId(), kLanceConnectorId);
 }
 
 TEST_F(LanceConnectorTest, tableHandleToString) {
   auto handle = std::make_shared<LanceTableHandle>(
-      kLanceConnectorId, "/data/my_table.lance");
-  ASSERT_EQ(
-      handle->toString(), "LanceTableHandle [path: /data/my_table.lance]");
+      kLanceConnectorId, "my_table");
+  ASSERT_EQ(handle->toString(), "LanceTableHandle [table: my_table]");
 }
 
 TEST_F(LanceConnectorTest, splitFields) {
@@ -143,7 +144,7 @@ TEST_F(LanceConnectorTest, fullScan) {
   auto outputType =
       ROW({"x", "y", "b", "c"}, {BIGINT(), BIGINT(), BIGINT(), BIGINT()});
 
-  auto plan = makeTableScanPlan(outputType, datasetPath);
+  auto plan = makeTableScanPlan(outputType, "test_table1");
 
   auto result =
       AssertQueryBuilder(plan).split(makeSplit(datasetPath)).copyResults(pool());
@@ -176,7 +177,7 @@ TEST_F(LanceConnectorTest, columnProjection) {
   auto datasetPath = getTestDatasetPath();
   auto outputType = ROW({"b", "x"}, {BIGINT(), BIGINT()});
 
-  auto plan = makeTableScanPlan(outputType, datasetPath);
+  auto plan = makeTableScanPlan(outputType, "test_table1");
 
   auto result =
       AssertQueryBuilder(plan).split(makeSplit(datasetPath)).copyResults(pool());
@@ -204,7 +205,7 @@ TEST_F(LanceConnectorTest, partialColumnProjection) {
   auto datasetPath = getTestDatasetPath();
   auto outputType = ROW({"c", "x"}, {BIGINT(), BIGINT()});
 
-  auto plan = makeTableScanPlan(outputType, datasetPath);
+  auto plan = makeTableScanPlan(outputType, "test_table1");
 
   auto result =
       AssertQueryBuilder(plan).split(makeSplit(datasetPath)).copyResults(pool());
@@ -234,7 +235,7 @@ TEST_F(LanceConnectorTest, singleColumnProjection) {
   auto datasetPath = getTestDatasetPath();
   auto outputType = ROW({"x"}, {BIGINT()});
 
-  auto plan = makeTableScanPlan(outputType, datasetPath);
+  auto plan = makeTableScanPlan(outputType, "test_table1");
 
   auto result =
       AssertQueryBuilder(plan).split(makeSplit(datasetPath)).copyResults(pool());

@@ -22,27 +22,29 @@
 namespace facebook::velox::connector::lance {
 
 /// Represents a handle to a Lance dataset for table scan operations.
+/// Holds the logical table name; the physical dataset path is carried by the
+/// split and is used by LanceDataSource to open the dataset.
 class LanceTableHandle : public ConnectorTableHandle {
  public:
   LanceTableHandle(
       const std::string& connectorId,
-      const std::string& datasetPath)
-      : ConnectorTableHandle(connectorId), datasetPath_(datasetPath) {}
+      const std::string& tableName)
+      : ConnectorTableHandle(connectorId), tableName_(tableName) {}
 
   const std::string& name() const override {
-    return datasetPath_;
+    return tableName_;
   }
 
-  const std::string& datasetPath() const {
-    return datasetPath_;
+  const std::string& tableName() const {
+    return tableName_;
   }
 
   std::string toString() const override {
-    return fmt::format("LanceTableHandle [path: {}]", datasetPath_);
+    return fmt::format("LanceTableHandle [table: {}]", tableName_);
   }
 
  private:
-  const std::string datasetPath_;
+  const std::string tableName_;
 };
 
 } // namespace facebook::velox::connector::lance
