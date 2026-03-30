@@ -397,10 +397,8 @@ TEST_F(CudfStringFunctionTest, concatMultipleLiterals) {
 
 TEST_F(CudfStringFunctionTest, concatWithNullColumn) {
   auto input = makeRowVector(
-      {makeNullableFlatVector<std::string>(
-           {"hello", std::nullopt, "foo"}),
-       makeNullableFlatVector<std::string>(
-           {" world", "bar", std::nullopt})});
+      {makeNullableFlatVector<std::string>({"hello", std::nullopt, "foo"}),
+       makeNullableFlatVector<std::string>({" world", "bar", std::nullopt})});
   createDuckDbTable({input});
 
   auto plan = PlanBuilder()
@@ -429,7 +427,10 @@ TEST_F(CudfStringFunctionTest, concatAllNulls) {
 TEST_F(CudfStringFunctionTest, concatUnicode) {
   auto input = makeRowVector(
       {makeFlatVector<std::string>({"hello", "M\xc3\xbcnchen"}),
-       makeFlatVector<std::string>({" w\xc3\xb6rld", " Stra\xc3\x9f" "e"})});
+       makeFlatVector<std::string>(
+           {" w\xc3\xb6rld",
+            " Stra\xc3\x9f"
+            "e"})});
   createDuckDbTable({input});
 
   auto plan = PlanBuilder()
@@ -600,9 +601,7 @@ TEST_F(CudfStringExprTest, concatWithNullArg) {
 // concat("hello", " wörld") -> "hello wörld"
 TEST_F(CudfStringExprTest, concatUnicode) {
   auto result = evaluateOnce<std::string, std::string, std::string>(
-      "concat(c0, c1)",
-      std::string("hello"),
-      std::string(" w\xc3\xb6rld"));
+      "concat(c0, c1)", std::string("hello"), std::string(" w\xc3\xb6rld"));
   EXPECT_EQ(result.value(), "hello w\xc3\xb6rld");
 }
 
