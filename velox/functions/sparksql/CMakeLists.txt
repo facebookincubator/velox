@@ -15,6 +15,7 @@
 add_subdirectory(specialforms)
 velox_add_library(
   velox_functions_spark_impl
+  AesEncryptDecrypt.cpp
   ArrayGetFunction.cpp
   ArraySort.cpp
   AssertNotNull.cpp
@@ -56,6 +57,7 @@ velox_add_library(
   Comparisons.h
   ConcatWs.h
   DateTimeFunctions.h
+  AesEncryptDecrypt.h
   DecimalArithmetic.h
   DecimalCeil.h
   DecimalUtil.h
