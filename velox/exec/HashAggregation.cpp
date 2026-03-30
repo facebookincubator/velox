@@ -233,8 +233,6 @@ void HashAggregation::updateRuntimeStats() {
   const auto& hashers = groupingSet_->hashLookup().hashers;
   uint64_t asRange{0};
   uint64_t asDistinct{0};
-  const auto hashTableStats = groupingSet_->hashTableStats();
-
   auto lockedStats = stats_.wlock();
   auto& runtimeStats = lockedStats->runtimeStats;
 
@@ -248,14 +246,9 @@ void HashAggregation::updateRuntimeStats() {
     }
   }
 
-  runtimeStats[std::string(BaseHashTable::kCapacity)] =
-      RuntimeMetric(hashTableStats.capacity);
-  runtimeStats[std::string(BaseHashTable::kNumRehashes)] =
-      RuntimeMetric(hashTableStats.numRehashes);
-  runtimeStats[std::string(BaseHashTable::kNumDistinct)] =
-      RuntimeMetric(hashTableStats.numDistinct);
-  runtimeStats[std::string(BaseHashTable::kNumTombstones)] =
-      RuntimeMetric(hashTableStats.numTombstones);
+  if (auto* table = groupingSet_->table()) {
+    table->addRuntimeStats(runtimeStats);
+  }
 }
 
 void HashAggregation::prepareOutput(vector_size_t size) {
