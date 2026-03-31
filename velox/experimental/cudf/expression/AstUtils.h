@@ -110,16 +110,20 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
         VELOX_CHECK(decimalType, "Invalid Decimal Type (failed dynamic_cast)");
         auto const cudfScale = numeric::scale_type{-decimalType->scale()};
         using CudfDecimalType = cudf::fixed_point_scalar<numeric::decimal64>;
-        return std::make_unique<CudfDecimalType>(
+        auto scalar = std::make_unique<CudfDecimalType>(
             value, cudfScale, !isNull, stream, mr);
+        stream.synchronize();
+        return scalar;
       } else if (type->kind() == TypeKind::HUGEINT) {
         auto const decimalType =
             std::dynamic_pointer_cast<const LongDecimalType>(type);
         VELOX_CHECK(decimalType, "Invalid Decimal Type (failed dynamic_cast)");
         auto const cudfScale = numeric::scale_type{-decimalType->scale()};
         using CudfDecimalType = cudf::fixed_point_scalar<numeric::decimal128>;
-        return std::make_unique<CudfDecimalType>(
+        auto scalar = std::make_unique<CudfDecimalType>(
             value, cudfScale, !isNull, stream, mr);
+        stream.synchronize();
+        return scalar;
       }
       VELOX_UNREACHABLE(
           "Invalid Decimal Type (bad TypeKind: {})", type->kind());
