@@ -20,6 +20,7 @@ add_subdirectory(fbhive)
 
 velox_add_library(
   velox_type
+  CastRegistry.cpp
   Conversions.cpp
   DecimalUtil.cpp
   Filter.cpp
@@ -38,6 +39,8 @@ velox_add_library(
   TypeUtil.cpp
   Variant.cpp
   HEADERS
+  CastRegistry.h
+  CastRule.h
   Conversions.h
   CppToType.h
   DecimalUtil.h

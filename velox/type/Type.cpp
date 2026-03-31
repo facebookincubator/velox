@@ -25,6 +25,7 @@
 #include <typeindex>
 
 #include "velox/external/tzdb/exception.h"
+#include "velox/type/CastRegistry.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/Time.h"
 #include "velox/type/TimestampConversion.h"
@@ -1169,7 +1170,11 @@ std::unordered_set<std::string> getCustomTypeNames() {
 
 bool unregisterCustomType(const std::string& name) {
   auto uppercaseName = boost::algorithm::to_upper_copy(name);
-  return typeFactories().erase(uppercaseName) == 1;
+  bool removed = typeFactories().erase(uppercaseName) == 1;
+  if (removed) {
+    CastRulesRegistry::instance().unregisterCastRules(uppercaseName);
+  }
+  return removed;
 }
 
 const CustomTypeFactory* FOLLY_NULLABLE
