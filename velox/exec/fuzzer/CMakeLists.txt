@@ -175,6 +175,7 @@ target_link_libraries(velox_topn_row_number_fuzzer velox_topn_row_number_fuzzer_
 
 # Join Fuzzer Base Library.
 add_library(velox_join_fuzzer_base JoinFuzzerBase.cpp)
+velox_add_test_headers(velox_join_fuzzer_base JoinFuzzerBase.h)
 
 target_link_libraries(
   velox_join_fuzzer_base
