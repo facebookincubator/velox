@@ -100,6 +100,10 @@ class CudfNestedLoopJoinProbe : public exec::Operator, public NvtxHelper {
   std::optional<std::vector<RowVectorPtr>> buildVectors_;
   ContinueFuture future_{ContinueFuture::makeEmpty()};
 
+  /// Cached concatenated build table (computed once in getBuildData)
+  std::unique_ptr<cudf::table> concatenatedBuildTable_;
+  cudf::table_view buildView_;
+
   /// Output column order: which columns come from probe vs build (by output
   /// index).
   std::vector<cudf::size_type> leftColumnIndicesToGather_;

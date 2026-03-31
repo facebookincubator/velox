@@ -38,7 +38,7 @@ namespace facebook::velox::cudf_velox {
 
 namespace {
 
-constexpr auto oobPolicy = cudf::out_of_bounds_policy::NULLIFY;
+constexpr auto oobPolicy = cudf::out_of_bounds_policy::DONT_CHECK;
 
 } // namespace
 
@@ -193,6 +193,26 @@ bool CudfNestedLoopJoinProbe::getBuildData(ContinueFuture* future) {
     return false;
   }
   buildVectors_ = std::move(data);
+
+  // Concatenate build side once and cache the result
+  auto buildType = joinNode_->sources()[1]->outputType();
+  std::vector<CudfVectorPtr> buildCudf;
+  for (const auto& row : buildVectors_.value()) {
+    auto cv = std::dynamic_pointer_cast<CudfVector>(row);
+    VELOX_CHECK_NOT_NULL(cv, "Build side must be CudfVector from GPU build");
+    buildCudf.push_back(cv);
+  }
+
+  if (buildCudf.size() == 1) {
+    buildView_ = buildCudf[0]->getTableView();
+  } else {
+    auto stream = cudfGlobalStreamPool().get_stream();
+    auto mr = cudf::get_current_device_resource_ref();
+    concatenatedBuildTable_ =
+        getConcatenatedTable(buildCudf, buildType, stream, mr);
+    buildView_ = concatenatedBuildTable_->view();
+    stream.synchronize();
+  }
   return true;
 }
 
@@ -235,29 +255,9 @@ RowVectorPtr CudfNestedLoopJoinProbe::getOutput() {
   auto probeInput = std::dynamic_pointer_cast<CudfVector>(input_);
   VELOX_CHECK_NOT_NULL(probeInput, "CudfNestedLoopJoinProbe expects CudfVector");
 
-  auto buildType = joinNode_->sources()[1]->outputType();
-
-  std::vector<CudfVectorPtr> buildCudf;
-  for (const auto& row : buildVectors_.value()) {
-    auto cv = std::dynamic_pointer_cast<CudfVector>(row);
-    VELOX_CHECK_NOT_NULL(cv, "Build side must be CudfVector from GPU build");
-    buildCudf.push_back(cv);
-  }
-
-  auto stream = cudfGlobalStreamPool().get_stream();
-  cudf::table_view buildView;
-  std::unique_ptr<cudf::table> buildTableHolder;
-  if (buildCudf.size() == 1) {
-    buildView = buildCudf[0]->getTableView();
-  } else {
-    auto mr = cudf::get_current_device_resource_ref();
-    buildTableHolder = getConcatenatedTable(buildCudf, buildType, stream, mr);
-    buildView = buildTableHolder->view();
-  }
-
   auto probeView = probeInput->getTableView();
   const cudf::size_type nL = probeView.num_rows();
-  const cudf::size_type nR = buildView.num_rows();
+  const cudf::size_type nR = buildView_.num_rows();
 
   input_.reset();
 
@@ -266,21 +266,21 @@ RowVectorPtr CudfNestedLoopJoinProbe::getOutput() {
   }
 
   const cudf::size_type outRows = nL * nR;
-  auto mr = cudf::get_current_device_resource_ref();
+  auto stream = probeInput->stream();
+  auto mr = get_output_mr();
 
   auto seqCol = cudf::sequence(
       outRows,
-      cudf::numeric_scalar<cudf::size_type>(0, true, stream),
-      cudf::numeric_scalar<cudf::size_type>(1, true, stream),
+      cudf::numeric_scalar<cudf::size_type>(0, true, stream, mr),
+      cudf::numeric_scalar<cudf::size_type>(1, true, stream, mr),
       stream,
       mr);
 
-  auto nRScalar = std::make_unique<cudf::numeric_scalar<cudf::size_type>>(
-      nR, true, stream);
+  auto nRScalar = cudf::numeric_scalar<cudf::size_type>(nR, true, stream, mr);
 
   auto leftIndicesCol = cudf::binary_operation(
       seqCol->view(),
-      *nRScalar,
+      nRScalar,
       cudf::binary_operator::DIV,
       cudf::data_type{cudf::type_id::INT32},
       stream,
@@ -288,19 +288,19 @@ RowVectorPtr CudfNestedLoopJoinProbe::getOutput() {
 
   auto rightIndicesCol = cudf::binary_operation(
       seqCol->view(),
-      *nRScalar,
+      nRScalar,
       cudf::binary_operator::MOD,
       cudf::data_type{cudf::type_id::INT32},
       stream,
       mr);
 
   auto leftGatherView = probeView.select(leftColumnIndicesToGather_);
-  auto rightGatherView = buildView.select(rightColumnIndicesToGather_);
+  auto rightGatherView = buildView_.select(rightColumnIndicesToGather_);
 
   auto leftGathered = cudf::gather(
-      leftGatherView, leftIndicesCol->view(), oobPolicy, stream);
+      leftGatherView, leftIndicesCol->view(), oobPolicy, stream, mr);
   auto rightGathered = cudf::gather(
-      rightGatherView, rightIndicesCol->view(), oobPolicy, stream);
+      rightGatherView, rightIndicesCol->view(), oobPolicy, stream, mr);
 
   std::vector<std::unique_ptr<cudf::column>> outCols(
       joinNode_->outputType()->size());
@@ -314,7 +314,6 @@ RowVectorPtr CudfNestedLoopJoinProbe::getOutput() {
   }
 
   auto outTable = std::make_unique<cudf::table>(std::move(outCols));
-  stream.synchronize();
 
   return std::make_shared<CudfVector>(
       pool(),
