@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfEnforceSingleRow.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
@@ -36,10 +35,6 @@ CudfEnforceSingleRow::CudfEnforceSingleRow(
           "CudfEnforceSingleRow"),
       CudfOperator(operatorId, planNode->id()) {
   isIdentityProjection_ = true;
-
-  if (CudfConfig::getInstance().debugEnabled) {
-    VLOG(2) << "CudfEnforceSingleRow constructor";
-  }
 }
 
 bool CudfEnforceSingleRow::needsInput() const {
@@ -48,10 +43,6 @@ bool CudfEnforceSingleRow::needsInput() const {
 
 void CudfEnforceSingleRow::addInput(RowVectorPtr input) {
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
-
-  if (CudfConfig::getInstance().debugEnabled) {
-    VLOG(2) << "CudfEnforceSingleRow::addInput";
-  }
 
   // Cast to CudfVector to access GPU data
   auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
@@ -80,10 +71,6 @@ void CudfEnforceSingleRow::addInput(RowVectorPtr input) {
 void CudfEnforceSingleRow::noMoreInput() {
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
 
-  if (CudfConfig::getInstance().debugEnabled) {
-    VLOG(2) << "CudfEnforceSingleRow::noMoreInput";
-  }
-
   if (!noMoreInput_ && input_ == nullptr) {
     // We have not seen any data. Return a single row of all nulls.
     // Create a CPU-side null row and convert to GPU
@@ -109,10 +96,6 @@ void CudfEnforceSingleRow::noMoreInput() {
 
 RowVectorPtr CudfEnforceSingleRow::getOutput() {
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
-
-  if (CudfConfig::getInstance().debugEnabled) {
-    VLOG(2) << "CudfEnforceSingleRow::getOutput";
-  }
 
   if (!noMoreInput_) {
     return nullptr;
