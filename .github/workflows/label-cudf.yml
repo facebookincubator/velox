@@ -20,6 +20,7 @@ on:
       - opened
       - reopened
       - edited
+      - synchronize
 
 permissions:
   contents: read
@@ -69,4 +70,3 @@ jobs:
               console.log(`PR title does not contain (cudf): "${title}"`);
             }
 
-# Made with Bob
