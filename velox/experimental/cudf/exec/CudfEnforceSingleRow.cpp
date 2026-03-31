@@ -19,6 +19,8 @@
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
+#include <cudf/table/table.hpp>
+
 namespace facebook::velox::cudf_velox {
 
 CudfEnforceSingleRow::CudfEnforceSingleRow(
@@ -31,9 +33,7 @@ CudfEnforceSingleRow::CudfEnforceSingleRow(
           operatorId,
           planNode->id(),
           "CudfEnforceSingleRow"),
-      CudfOperator(operatorId, planNode->id()) {
-  isIdentityProjection_ = true;
-}
+      CudfOperator(operatorId, planNode->id()) {}
 
 bool CudfEnforceSingleRow::needsInput() const {
   return true;
@@ -70,7 +70,6 @@ void CudfEnforceSingleRow::noMoreInput() {
 
   if (!noMoreInput_ && input_ == nullptr) {
     // We have not seen any data. Return a single row of all nulls.
-    // Create a CPU-side null row and convert to GPU
     auto nullRow = BaseVector::create<RowVector>(outputType_, 1, pool());
     for (auto& child : nullRow->children()) {
       child->resize(1);
@@ -81,8 +80,6 @@ void CudfEnforceSingleRow::noMoreInput() {
     auto stream = cudf::get_default_stream(cudf::allow_default_stream);
     auto cudfTable =
         with_arrow::toCudfTable(nullRow, pool(), stream, get_output_mr());
-    // Synchronize to ensure toCudfTable finishes reading from nullRow's CPU
-    // buffers before nullRow goes out of scope
     stream.synchronize();
     input_ = std::make_shared<CudfVector>(
         pool(), outputType_, 1, std::move(cudfTable), stream);
