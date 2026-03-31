@@ -32,6 +32,7 @@ void registerVectorFunctions() {
       {"nonsimd_eq"});
   registerFunction<EqFunction, bool, IntervalYearMonth, IntervalYearMonth>(
       {"nonsimd_eq"});
+  registerFunction<EqFunction, bool, Time, Time>({"nonsimd_eq"});
 }
 
 } // namespace facebook::velox::functions
@@ -144,6 +145,14 @@ BENCHMARK(non_simd_interval_year_month_eq) {
 
 BENCHMARK_RELATIVE(simd_interval_year_month_eq) {
   benchmark->run("eq", INTERVAL_YEAR_MONTH());
+}
+
+BENCHMARK(non_simd_time) {
+  benchmark->run("nonsimd_eq", TIME());
+}
+
+BENCHMARK_RELATIVE(simd_time) {
+  benchmark->run("eq", TIME());
 }
 
 } // namespace
