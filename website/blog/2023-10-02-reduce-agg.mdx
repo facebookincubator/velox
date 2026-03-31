@@ -22,6 +22,8 @@ state is returned. Throws an error if initialState is NULL or inputFunction or c
 returns a NULL.
 ```
 
+<!-- truncate -->
+
 Once can think of reduce_agg as using inputFunction to implement partial aggregation and
 combineFunction to implement final aggregation. Partial aggregation processes a list of
 input values and produces an intermediate state:
