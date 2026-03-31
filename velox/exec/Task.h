@@ -472,6 +472,17 @@ class Task : public std::enable_shared_from_this<Task> {
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId);
 
+  /// Sets per-source split counts for a MixedUnion node. Used to compute
+  /// mixing fractions from the split ratio.
+  void setSourceSplitCounts(
+      const core::PlanNodeId& planNodeId,
+      std::vector<int64_t> counts);
+
+  /// Returns per-source split counts for a MixedUnion node, or empty if not
+  /// set.
+  const std::vector<int64_t>& getSourceSplitCounts(
+      const core::PlanNodeId& planNodeId);
+
   void createMergeJoinSource(
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId);

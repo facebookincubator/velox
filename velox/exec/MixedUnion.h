@@ -74,8 +74,6 @@ class MixedUnion : public SourceOperator {
   /// Check if we have data from all active sources for mixed mode
   bool hasDataFromAllSources() const;
 
-  const std::shared_ptr<const core::MixedUnionNode> unionNode_;
-
   /// MergeSource objects representing each input pipeline
   std::vector<std::shared_ptr<MergeSource>> sources_;
 
@@ -97,6 +95,18 @@ class MixedUnion : public SourceOperator {
   /// Maximum output batch size
   const vector_size_t maxOutputBatchRows_;
   const uint64_t maxOutputBatchBytes_;
+
+  /// Re-read per-source split counts from the Task and recompute
+  /// sourceFractions_. Called on each barrier cycle so that per-UnionedSplit
+  /// ratios are applied, matching the Koski path behavior.
+  void updateSourceFractions();
+
+  // Per-source mixing fractions derived from split counts set on the Task.
+  // fraction[i] = splitCount[i] / max(splitCounts). The source with the most
+  // splits has fraction 1.0 and takes all rows; smaller sources take a
+  // proportional fraction, retaining the rest for subsequent output batches.
+  // Empty when no ratios are configured (equal-share mixing).
+  std::vector<double> sourceFractions_;
 };
 
 } // namespace facebook::velox::exec

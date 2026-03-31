@@ -3018,6 +3018,25 @@ const std::vector<std::shared_ptr<MergeSource>>& Task::getLocalMergeSources(
   return splitGroupStates_[splitGroupId].localMergeSources[planNodeId];
 }
 
+void Task::setSourceSplitCounts(
+    const core::PlanNodeId& planNodeId,
+    std::vector<int64_t> counts) {
+  // Store in split group 0 (ungrouped execution).
+  splitGroupStates_[0].sourceSplitCounts[planNodeId] = std::move(counts);
+}
+
+static const std::vector<int64_t> kEmptySplitCounts;
+
+const std::vector<int64_t>& Task::getSourceSplitCounts(
+    const core::PlanNodeId& planNodeId) {
+  auto& state = splitGroupStates_[0];
+  auto it = state.sourceSplitCounts.find(planNodeId);
+  if (it != state.sourceSplitCounts.end()) {
+    return it->second;
+  }
+  return kEmptySplitCounts;
+}
+
 void Task::createMergeJoinSource(
     uint32_t splitGroupId,
     const core::PlanNodeId& planNodeId) {

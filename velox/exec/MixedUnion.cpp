@@ -31,7 +31,6 @@ MixedUnion::MixedUnion(
           operatorId,
           unionNode->id(),
           OperatorType::kMixedUnion),
-      unionNode_(unionNode),
       maxOutputBatchRows_(outputBatchRows()),
       maxOutputBatchBytes_(
           driverCtx->queryConfig().preferredOutputBatchBytes()) {}
@@ -47,6 +46,8 @@ BlockingReason MixedUnion::addMergeSources(ContinueFuture* /* future */) {
     pendingData_.resize(numSources);
     sourcesFinished_.resize(numSources, false);
     sourcesDrained_.resize(numSources, false);
+
+    updateSourceFractions();
   }
   return BlockingReason::kNotBlocked;
 }
@@ -183,12 +184,60 @@ void MixedUnion::finishDrain() {
 }
 
 RowVectorPtr MixedUnion::getOutputMixed() {
+  // Re-read split counts in case they were updated for a new barrier cycle.
+  updateSourceFractions();
+
   // Drain pendingData_ populated by isBlocked() in both normal and drain modes.
+  vector_size_t numSourcesWithData = 0;
+  for (const auto& data : pendingData_) {
+    if (data) {
+      ++numSourcesWithData;
+    }
+  }
+
   std::vector<RowVectorPtr> validInputs;
-  for (size_t i = 0; i < pendingData_.size(); ++i) {
-    if (pendingData_[i]) {
-      validInputs.push_back(std::move(pendingData_[i]));
-      pendingData_[i] = nullptr;
+  if (numSourcesWithData > 0) {
+    // When fractions are configured and multiple sources have data, apply
+    // proportional mixing so the output reflects the split ratio. Otherwise
+    // each source gets an equal share of maxOutputBatchRows_.
+    const bool useFractions =
+        !sourceFractions_.empty() && numSourcesWithData > 1;
+
+    for (size_t i = 0; i < pendingData_.size(); ++i) {
+      if (!pendingData_[i]) {
+        continue;
+      }
+      const auto available = pendingData_[i]->size();
+      auto rowsToTake = available;
+
+      if (useFractions && i < sourceFractions_.size()) {
+        if (sourceFractions_[i] < 1.0) {
+          rowsToTake = std::max<vector_size_t>(
+              1,
+              static_cast<vector_size_t>(
+                  std::round(available * sourceFractions_[i])));
+          rowsToTake = std::min(rowsToTake, available);
+        }
+        // fraction == 1.0: take all rows.
+      } else if (numSourcesWithData > 1) {
+        // Equal-share fallback.
+        const auto perSourceShare = maxOutputBatchRows_ / numSourcesWithData;
+        if (perSourceShare > 0 &&
+            available > static_cast<vector_size_t>(perSourceShare)) {
+          rowsToTake = static_cast<vector_size_t>(perSourceShare);
+        }
+      }
+
+      if (rowsToTake < available) {
+        validInputs.push_back(
+            std::dynamic_pointer_cast<RowVector>(
+                pendingData_[i]->slice(0, rowsToTake)));
+        pendingData_[i] = std::dynamic_pointer_cast<RowVector>(
+            pendingData_[i]->slice(rowsToTake, available - rowsToTake));
+      } else {
+        validInputs.push_back(std::move(pendingData_[i]));
+        pendingData_[i] = nullptr;
+      }
     }
   }
 
@@ -290,6 +339,28 @@ bool MixedUnion::hasDataFromAllSources() const {
     }
   }
   return true;
+}
+
+void MixedUnion::updateSourceFractions() {
+  const auto& splitCounts =
+      operatorCtx_->task()->getSourceSplitCounts(planNodeId());
+  if (splitCounts.empty()) {
+    sourceFractions_.clear();
+    return;
+  }
+  const auto maxCount =
+      *std::max_element(splitCounts.begin(), splitCounts.end());
+  if (maxCount <= 0) {
+    sourceFractions_.clear();
+    return;
+  }
+  sourceFractions_.resize(sources_.size(), 1.0);
+  for (size_t i = 0;
+       i < std::min(splitCounts.size(), static_cast<size_t>(sources_.size()));
+       ++i) {
+    sourceFractions_[i] =
+        static_cast<double>(splitCounts[i]) / static_cast<double>(maxCount);
+  }
 }
 
 void MixedUnion::close() {

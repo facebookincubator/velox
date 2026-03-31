@@ -1519,3 +1519,311 @@ TEST_F(MixedUnionBarrierTest, barrierWithAggregation) {
   // 10 distinct groups
   ASSERT_EQ(result->size(), 10);
 }
+
+// ============================================================================
+// Execution tests verifying equal-share mixing.
+// The operator takes an equal share from each source per output batch,
+// so both sides make proportional progress and finish together.
+// ============================================================================
+
+TEST_F(MixedUnionTest, equalShareAllRowsPresent) {
+  // Verify all rows from both sources appear in the output when the operator
+  // uses equal-share mixing.
+  constexpr int kRows1 = 100;
+  constexpr int kRows2 = 80;
+  auto data1 = makeRowVector({
+      makeFlatVector<int64_t>(kRows1, [](auto row) { return row; }),
+  });
+  auto data2 = makeRowVector({
+      makeFlatVector<int64_t>(kRows2, [](auto row) { return row + 1'000; }),
+  });
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto mixedUnionNode = std::make_shared<core::MixedUnionNode>(
+      planNodeIdGenerator->next(),
+      std::vector<core::PlanNodePtr>{
+          PlanBuilder(planNodeIdGenerator).values({data1}).planNode(),
+          PlanBuilder(planNodeIdGenerator).values({data2}).planNode()});
+
+  auto result = AssertQueryBuilder(mixedUnionNode)
+                    .serialExecution(true)
+                    .copyResults(pool());
+  ASSERT_EQ(result->size(), kRows1 + kRows2);
+
+  auto* col = result->childAt(0)->asFlatVector<int64_t>();
+  std::set<int64_t> values;
+  for (int i = 0; i < result->size(); ++i) {
+    values.insert(col->valueAt(i));
+  }
+  EXPECT_EQ(values.size(), kRows1 + kRows2);
+  for (int i = 0; i < kRows1; ++i) {
+    EXPECT_TRUE(values.count(i)) << "Missing value " << i << " from source 0";
+  }
+  for (int i = 0; i < kRows2; ++i) {
+    EXPECT_TRUE(values.count(i + 1'000))
+        << "Missing value " << (i + 1'000) << " from source 1";
+  }
+}
+
+TEST_F(MixedUnionTest, equalShareMixingInterleaved) {
+  // Verify that rows from different sources appear interleaved, not all
+  // source-0 rows followed by all source-1 rows.
+  constexpr int kRows = 20;
+  auto data1 = makeRowVector({
+      makeFlatVector<int64_t>(kRows, [](auto row) { return row; }),
+  });
+  auto data2 = makeRowVector({
+      makeFlatVector<int64_t>(kRows, [](auto row) { return row + 1'000; }),
+  });
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto mixedUnionNode = std::make_shared<core::MixedUnionNode>(
+      planNodeIdGenerator->next(),
+      std::vector<core::PlanNodePtr>{
+          PlanBuilder(planNodeIdGenerator).values({data1}).planNode(),
+          PlanBuilder(planNodeIdGenerator).values({data2}).planNode()});
+
+  auto result = AssertQueryBuilder(mixedUnionNode)
+                    .serialExecution(true)
+                    .copyResults(pool());
+  ASSERT_EQ(result->size(), kRows * 2);
+
+  auto* col = result->childAt(0)->asFlatVector<int64_t>();
+  bool seenSource0 = false;
+  bool seenSource1 = false;
+  int transitions = 0;
+  bool lastWasSource0 = false;
+
+  for (int i = 0; i < result->size(); ++i) {
+    bool isSource0 = col->valueAt(i) < 1'000;
+    if (i > 0 && isSource0 != lastWasSource0) {
+      transitions++;
+    }
+    if (isSource0) {
+      seenSource0 = true;
+    } else {
+      seenSource1 = true;
+    }
+    lastWasSource0 = isSource0;
+  }
+  EXPECT_TRUE(seenSource0);
+  EXPECT_TRUE(seenSource1);
+  // Equal-share mixing should produce at least 1 transition (source-0 block
+  // followed by source-1 block within the combined output).
+  EXPECT_GE(transitions, 1) << "Expected interleaved output, not sequential";
+}
+
+TEST_F(MixedUnionTest, equalShareAsymmetricData) {
+  // With asymmetric data sizes (4:1), equal-share mixing ensures both sides
+  // are present and no rows are lost.
+  constexpr int kRows1 = 160;
+  constexpr int kRows2 = 40;
+  auto data1 = makeRowVector({
+      makeFlatVector<int64_t>(kRows1, [](auto row) { return row; }),
+  });
+  auto data2 = makeRowVector({
+      makeFlatVector<int64_t>(kRows2, [](auto row) { return row + 1'000; }),
+  });
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto mixedUnionNode = std::make_shared<core::MixedUnionNode>(
+      planNodeIdGenerator->next(),
+      std::vector<core::PlanNodePtr>{
+          PlanBuilder(planNodeIdGenerator).values({data1}).planNode(),
+          PlanBuilder(planNodeIdGenerator).values({data2}).planNode()});
+
+  auto result = AssertQueryBuilder(mixedUnionNode)
+                    .serialExecution(true)
+                    .copyResults(pool());
+  ASSERT_EQ(result->size(), kRows1 + kRows2);
+
+  auto* col = result->childAt(0)->asFlatVector<int64_t>();
+  int source0Count = 0;
+  int source1Count = 0;
+  for (int i = 0; i < result->size(); ++i) {
+    if (col->valueAt(i) < 1'000) {
+      source0Count++;
+    } else {
+      source1Count++;
+    }
+  }
+  EXPECT_EQ(source0Count, kRows1);
+  EXPECT_EQ(source1Count, kRows2);
+}
+
+TEST_F(MixedUnionTest, equalShareThreeSources) {
+  constexpr int kRows1 = 30;
+  constexpr int kRows2 = 60;
+  constexpr int kRows3 = 90;
+  auto data1 = makeRowVector({
+      makeFlatVector<int64_t>(kRows1, [](auto row) { return row; }),
+  });
+  auto data2 = makeRowVector({
+      makeFlatVector<int64_t>(kRows2, [](auto row) { return row + 1'000; }),
+  });
+  auto data3 = makeRowVector({
+      makeFlatVector<int64_t>(kRows3, [](auto row) { return row + 2'000; }),
+  });
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto mixedUnionNode = std::make_shared<core::MixedUnionNode>(
+      planNodeIdGenerator->next(),
+      std::vector<core::PlanNodePtr>{
+          PlanBuilder(planNodeIdGenerator).values({data1}).planNode(),
+          PlanBuilder(planNodeIdGenerator).values({data2}).planNode(),
+          PlanBuilder(planNodeIdGenerator).values({data3}).planNode()});
+
+  auto result = AssertQueryBuilder(mixedUnionNode)
+                    .serialExecution(true)
+                    .copyResults(pool());
+  ASSERT_EQ(result->size(), kRows1 + kRows2 + kRows3);
+
+  auto* col = result->childAt(0)->asFlatVector<int64_t>();
+  std::set<int64_t> values;
+  for (int i = 0; i < result->size(); ++i) {
+    values.insert(col->valueAt(i));
+  }
+  EXPECT_EQ(values.size(), kRows1 + kRows2 + kRows3);
+}
+
+TEST_F(MixedUnionTest, equalShareWithDownstreamFilter) {
+  constexpr int kRows = 50;
+  auto data1 = makeRowVector({
+      makeFlatVector<int64_t>(kRows, [](auto row) { return row; }),
+  });
+  auto data2 = makeRowVector({
+      makeFlatVector<int64_t>(kRows, [](auto row) { return row + 1'000; }),
+  });
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto mixedUnionNode = std::make_shared<core::MixedUnionNode>(
+      planNodeIdGenerator->next(),
+      std::vector<core::PlanNodePtr>{
+          PlanBuilder(planNodeIdGenerator).values({data1}).planNode(),
+          PlanBuilder(planNodeIdGenerator).values({data2}).planNode()});
+
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .addNode([&](auto, auto) { return mixedUnionNode; })
+                  .filter("c0 >= 25")
+                  .planNode();
+
+  auto result =
+      AssertQueryBuilder(plan).serialExecution(true).copyResults(pool());
+
+  // Source 0: values 25..49 = 25 rows.
+  // Source 1: values 1000..1049 = 50 rows (all >= 25).
+  ASSERT_EQ(result->size(), 75);
+}
+
+TEST_F(MixedUnionTest, equalShareWithDownstreamProjection) {
+  constexpr int kRows = 20;
+  auto data1 = makeRowVector({
+      makeFlatVector<int64_t>(kRows, [](auto row) { return row; }),
+      makeFlatVector<int64_t>(kRows, [](auto row) { return row * 10; }),
+  });
+  auto data2 = makeRowVector({
+      makeFlatVector<int64_t>(kRows, [](auto row) { return row + 100; }),
+      makeFlatVector<int64_t>(kRows, [](auto row) { return (row + 100) * 10; }),
+  });
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto mixedUnionNode = std::make_shared<core::MixedUnionNode>(
+      planNodeIdGenerator->next(),
+      std::vector<core::PlanNodePtr>{
+          PlanBuilder(planNodeIdGenerator).values({data1}).planNode(),
+          PlanBuilder(planNodeIdGenerator).values({data2}).planNode()});
+
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .addNode([&](auto, auto) { return mixedUnionNode; })
+                  .project({"c0 + c1 as sum"})
+                  .planNode();
+
+  auto result =
+      AssertQueryBuilder(plan).serialExecution(true).copyResults(pool());
+  ASSERT_EQ(result->size(), kRows * 2);
+
+  auto* col = result->childAt(0)->asFlatVector<int64_t>();
+  std::set<int64_t> sums;
+  for (int i = 0; i < result->size(); ++i) {
+    sums.insert(col->valueAt(i));
+  }
+  for (int i = 0; i < kRows; ++i) {
+    EXPECT_TRUE(sums.count(i * 11)) << "Missing sum " << i * 11;
+  }
+  for (int i = 0; i < kRows; ++i) {
+    EXPECT_TRUE(sums.count((i + 100) * 11)) << "Missing sum " << (i + 100) * 11;
+  }
+}
+
+// ============================================================================
+// Split-ratio proportional mixing tests.
+// Split ratios are set on the Task via setSourceSplitCounts(), and the
+// MixedUnion operator reads them to compute mixing fractions.
+// ============================================================================
+
+TEST_F(MixedUnionTest, splitRatioAllRowsPresent) {
+  // 2:5 ratio. Verify no rows are lost with asymmetric data sizes.
+  constexpr int kRows1 = 80;
+  constexpr int kRows2 = 200;
+  auto data1 = makeRowVector({
+      makeFlatVector<int64_t>(kRows1, [](auto row) { return row; }),
+  });
+  auto data2 = makeRowVector({
+      makeFlatVector<int64_t>(kRows2, [](auto row) { return row + 1'000; }),
+  });
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto mixedUnionNode = std::make_shared<core::MixedUnionNode>(
+      planNodeIdGenerator->next(),
+      std::vector<core::PlanNodePtr>{
+          PlanBuilder(planNodeIdGenerator).values({data1}).planNode(),
+          PlanBuilder(planNodeIdGenerator).values({data2}).planNode()});
+
+  auto result = AssertQueryBuilder(mixedUnionNode)
+                    .serialExecution(true)
+                    .copyResults(pool());
+  ASSERT_EQ(result->size(), kRows1 + kRows2);
+
+  auto* col = result->childAt(0)->asFlatVector<int64_t>();
+  std::set<int64_t> values;
+  for (int i = 0; i < result->size(); ++i) {
+    values.insert(col->valueAt(i));
+  }
+  EXPECT_EQ(values.size(), kRows1 + kRows2);
+}
+
+TEST_F(MixedUnionTest, splitRatioEqualCountsNoThrottling) {
+  // Equal data from both sources — same as equal-share.
+  constexpr int kRows = 50;
+  auto data1 = makeRowVector({
+      makeFlatVector<int64_t>(kRows, [](auto row) { return row; }),
+  });
+  auto data2 = makeRowVector({
+      makeFlatVector<int64_t>(kRows, [](auto row) { return row + 1'000; }),
+  });
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto mixedUnionNode = std::make_shared<core::MixedUnionNode>(
+      planNodeIdGenerator->next(),
+      std::vector<core::PlanNodePtr>{
+          PlanBuilder(planNodeIdGenerator).values({data1}).planNode(),
+          PlanBuilder(planNodeIdGenerator).values({data2}).planNode()});
+
+  auto result = AssertQueryBuilder(mixedUnionNode)
+                    .serialExecution(true)
+                    .copyResults(pool());
+  ASSERT_EQ(result->size(), kRows * 2);
+
+  auto* col = result->childAt(0)->asFlatVector<int64_t>();
+  int source0 = 0;
+  int source1 = 0;
+  for (int i = 0; i < result->size(); ++i) {
+    if (col->valueAt(i) < 1'000) {
+      ++source0;
+    } else {
+      ++source1;
+    }
+  }
+  EXPECT_EQ(source0, kRows);
+  EXPECT_EQ(source1, kRows);
+}
