@@ -147,6 +147,8 @@ RowVectorPtr CudfFromVelox::getOutput() {
   auto tbl =
       with_arrow::toCudfTable(input, input->pool(), stream, get_output_mr());
 
+  // Synchronize to ensure toCudfTable finishes reading from input's CPU buffers
+  // before input goes out of scope
   stream.synchronize();
 
   VELOX_CHECK_NOT_NULL(tbl);
@@ -290,8 +292,8 @@ RowVectorPtr CudfToVelox::getOutput() {
           accumulated,
           std::numeric_limits<cudf::size_type>::max(),
           "Accumulated row count exceeds cudf int32 limit");
-      auto concatTable =
-          getConcatenatedTable(toConcat, outputType_, stream, get_temp_mr());
+      auto concatTable = getConcatenatedTable(
+          std::move(toConcat), outputType_, stream, get_temp_mr());
       auto tableView = concatTable->view();
       veloxBuffer_ = with_arrow::toVeloxColumn(
           tableView, pool(), outputType_, "", stream, get_temp_mr());

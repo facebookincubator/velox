@@ -14,7 +14,7 @@
 
 # RPCNode is part of velox_core (in core/PlanNode.h)
 
-velox_add_library(velox_rpc_state RPCState.cpp)
+velox_add_library(velox_rpc_state RPCState.cpp HEADERS RPCState.h)
 
 velox_link_libraries(
   velox_rpc_state
@@ -25,11 +25,11 @@ velox_link_libraries(
   Folly::folly
 )
 
-velox_add_library(velox_rpc_rate_limiter RPCRateLimiter.cpp)
+velox_add_library(velox_rpc_rate_limiter RPCRateLimiter.cpp HEADERS RPCRateLimiter.h)
 
 velox_link_libraries(velox_rpc_rate_limiter velox_future)
 
-velox_add_library(velox_rpc_operator RPCOperator.cpp)
+velox_add_library(velox_rpc_operator RPCOperator.cpp HEADERS RPCOperator.h)
 
 velox_link_libraries(
   velox_rpc_operator
@@ -45,7 +45,12 @@ velox_link_libraries(
   Folly::folly
 )
 
-velox_add_library(velox_rpc_plan_node_translator RPCPlanNodeTranslator.cpp)
+velox_add_library(
+  velox_rpc_plan_node_translator
+  RPCPlanNodeTranslator.cpp
+  HEADERS
+  RPCPlanNodeTranslator.h
+)
 
 velox_link_libraries(velox_rpc_plan_node_translator velox_rpc_operator velox_exec)
 

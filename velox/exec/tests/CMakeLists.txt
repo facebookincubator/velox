@@ -19,6 +19,11 @@ add_executable(
   AggregateCompanionSignaturesTest.cpp
   DummyAggregateFunction.cpp
 )
+velox_add_test_headers(
+  aggregate_companion_functions_test
+  DummyAggregateFunction.h
+  PrestoQueryRunnerIntermediateTypeTransformTestBase.h
+)
 
 add_test(
   NAME aggregate_companion_functions_test
@@ -290,6 +295,7 @@ add_executable(
   TableEvolutionFuzzerTest.cpp
   TableEvolutionFuzzer.cpp
 )
+velox_add_test_headers(velox_table_evolution_fuzzer_test TableEvolutionFuzzer.h)
 
 target_link_libraries(
   velox_table_evolution_fuzzer_test
@@ -330,6 +336,7 @@ add_library(
   SimpleVariadicArrayAggAggregate.cpp
   SimpleVariadicSumAggregate.cpp
 )
+velox_add_test_headers(velox_simple_aggregate SimpleAggregateFunctionsRegistration.h)
 
 target_link_libraries(
   velox_simple_aggregate
@@ -356,6 +363,12 @@ if(VELOX_ENABLE_BENCHMARKS)
     velox_spiller_join_benchmark_base
     JoinSpillInputBenchmarkBase.cpp
     SpillerBenchmarkBase.cpp
+  )
+  velox_add_test_headers(
+    velox_spiller_join_benchmark_base
+    AggregateSpillBenchmarkBase.h
+    JoinSpillInputBenchmarkBase.h
+    SpillerBenchmarkBase.h
   )
   target_link_libraries(
     velox_spiller_join_benchmark_base
@@ -411,3 +424,5 @@ add_test(
 )
 
 target_link_libraries(velox_driver_test velox_exec velox_exec_test_lib GTest::gtest)
+
+velox_add_library(velox_aggregate_registry_util INTERFACE HEADERS AggregateRegistryTestUtil.h)

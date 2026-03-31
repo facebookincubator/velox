@@ -11,7 +11,14 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-velox_add_library(velox_functions_string INTERFACE)
+velox_add_library(
+  velox_functions_string
+  INTERFACE
+  HEADERS
+  GreekFinalSigma.h
+  StringCore.h
+  StringImpl.h
+)
 
 velox_link_libraries(velox_functions_string INTERFACE velox_common_base Folly::folly)
 
