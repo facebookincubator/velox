@@ -323,10 +323,11 @@ class LogicalFunction : public CudfFunction {
       auto constExpr =
           std::dynamic_pointer_cast<velox::exec::ConstantExpr>(input);
       if (constExpr) {
-        literals_.push_back(VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-            createCudfScalar,
+        VELOX_CHECK_EQ(
             constExpr->value()->typeKind(),
-            constExpr->value()));
+            TypeKind::BOOLEAN,
+            "Logical function only supports boolean literals");
+        literals_.push_back(createCudfScalar<TypeKind::BOOLEAN>(constExpr->value()));
       } else {
         literals_.push_back(nullptr);
       }

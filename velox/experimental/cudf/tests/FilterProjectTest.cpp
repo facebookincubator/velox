@@ -1177,6 +1177,48 @@ TEST_F(CudfFilterProjectTest, switchExpr) {
   facebook::velox::test::assertEqualVectors(expected, result);
 }
 
+TEST_F(CudfFilterProjectTest, andAndAndExpr) {
+  auto data = makeRowVector(
+      {makeFlatVector<int64_t>({100,  100,  100,  100}, DECIMAL(17, 2)),
+       makeFlatVector<int64_t>({100, -100,  100,  100}, DECIMAL(17, 2)),
+       makeFlatVector<int64_t>({100, -100, -100,  100}, DECIMAL(17, 2)),
+       makeFlatVector<int64_t>({100, -100, -100, -100}, DECIMAL(17, 2))});
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .project(
+              {"(c0 > CAST(0.0 AS DECIMAL(17, 2))) AND (c1 > CAST(0.0 AS DECIMAL(17, 2))) AND (c2 > CAST(0.0 AS DECIMAL(17, 2))) AND (c3 > CAST(0.0 AS DECIMAL(17, 2))) AS result"})
+          .planNode();
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  auto expected = makeRowVector({
+      makeNullableFlatVector<bool>(
+          {true, false, false, false}),
+  });
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfFilterProjectTest, DISABLED_andAndAndWithDecimalDivideBelowExpr) {
+  auto data = makeRowVector(
+      {makeFlatVector<int64_t>({100,  100,  100,  100}, DECIMAL(17, 2)),
+       makeFlatVector<int64_t>({100, -100,  100,  100}, DECIMAL(17, 2)),
+       makeFlatVector<int64_t>({100, -100, -100,  100}, DECIMAL(17, 2)),
+       makeFlatVector<int64_t>({100, -100, -100, -100}, DECIMAL(17, 2))});
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .project(
+              {"(CAST((c0 / CAST(3.0 AS DECIMAL(17,2))) AS DECIMAL(17, 2)) > CAST(0.0 AS DECIMAL(17, 2))) AND (c1 > CAST(0.0 AS DECIMAL(17, 2))) AND (c2 > CAST(0.0 AS DECIMAL(17, 2))) AND (c3 > CAST(0.0 AS DECIMAL(17, 2))) AS result"})
+          .planNode();
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  auto expected = makeRowVector({
+      makeNullableFlatVector<bool>(
+          {true, false, false, false}),
+  });
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
 class CudfSimpleFilterProjectTest : public cudf_velox::CudfFunctionBaseTest {
  protected:
   static void SetUpTestCase() {
