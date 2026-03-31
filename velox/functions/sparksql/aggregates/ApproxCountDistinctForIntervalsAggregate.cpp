@@ -18,23 +18,18 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdint>
-#include <cstring>
-#include <vector>
 
 #include <fmt/format.h>
 
-#include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/hyperloglog/DenseHll.h"
 #include "velox/common/hyperloglog/SparseHll.h"
 #include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/lib/HllAccumulator.h"
+#include "velox/functions/sparksql/XxHash64.h"
 #include "velox/type/Conversions.h"
 #include "velox/type/DecimalUtil.h"
-#include "velox/type/StringView.h"
-#include "velox/type/Timestamp.h"
 #include "velox/vector/DecodedVector.h"
 
 namespace facebook::velox::functions::aggregate::sparksql {
@@ -44,161 +39,6 @@ constexpr uint64_t kXxHash64Seed = 42;
 
 using HllAccumulator =
     common::hll::HllAccumulator<int64_t, false, HashStringAllocator>;
-
-class SparkXxHash64 final {
- public:
-  static uint64_t hashInt32(int32_t input, uint64_t seed) {
-    uint64_t hash = seed + PRIME64_5 + 4ULL;
-    uint64_t data = static_cast<uint64_t>(static_cast<uint32_t>(input));
-    hash ^= data * PRIME64_1;
-    hash = bits::rotateLeft64(hash, 23) * PRIME64_2 + PRIME64_3;
-    return fmix(hash);
-  }
-
-  static uint64_t hashInt64(int64_t input, uint64_t seed) {
-    uint64_t hash = seed + PRIME64_5 + 8ULL;
-    uint64_t data = static_cast<uint64_t>(input);
-    hash ^= bits::rotateLeft64(data * PRIME64_2, 31) * PRIME64_1;
-    hash = bits::rotateLeft64(hash, 27) * PRIME64_1 + PRIME64_4;
-    return fmix(hash);
-  }
-
-  static uint64_t hashFloat(float input, uint64_t seed) {
-    uint32_t bits = 0;
-    std::memcpy(&bits, &input, sizeof(bits));
-    if (input == -0.f) {
-      bits = 0;
-    }
-    return hashInt32(static_cast<int32_t>(bits), seed);
-  }
-
-  static uint64_t hashDouble(double input, uint64_t seed) {
-    uint64_t bits = 0;
-    std::memcpy(&bits, &input, sizeof(bits));
-    if (input == -0.) {
-      bits = 0;
-    }
-    return hashInt64(static_cast<int64_t>(bits), seed);
-  }
-
-  static uint64_t hashLongDecimal(int128_t input, uint64_t seed) {
-    char out[sizeof(int128_t)];
-    int32_t length = DecimalUtil::toByteArray(input, out);
-    return hashBytes(StringView(out, length), seed);
-  }
-
-  static uint64_t hashTimestamp(Timestamp input, uint64_t seed) {
-    return hashInt64(input.toMicros(), seed);
-  }
-
- private:
-  static constexpr uint64_t PRIME64_1 = 0x9E3779B185EBCA87ULL;
-  static constexpr uint64_t PRIME64_2 = 0xC2B2AE3D27D4EB4FULL;
-  static constexpr uint64_t PRIME64_3 = 0x165667B19E3779F9ULL;
-  static constexpr uint64_t PRIME64_4 = 0x85EBCA77C2B2AE63ULL;
-  static constexpr uint64_t PRIME64_5 = 0x27D4EB2F165667C5ULL;
-
-  static uint64_t hashBytes(const StringView& input, uint64_t seed) {
-    const char* i = input.data();
-    const char* const end = input.data() + input.size();
-
-    uint64_t hash = hashBytesByWords(input, seed);
-    uint32_t length = input.size();
-    auto offset = i + (length & -8);
-    if (offset + 4L <= end) {
-      uint32_t value = 0;
-      std::memcpy(&value, offset, sizeof(value));
-      hash ^= static_cast<uint64_t>(value) * PRIME64_1;
-      hash = bits::rotateLeft64(hash, 23) * PRIME64_2 + PRIME64_3;
-      offset += 4L;
-    }
-
-    while (offset < end) {
-      hash ^= static_cast<uint64_t>(static_cast<uint8_t>(*offset)) * PRIME64_5;
-      hash = bits::rotateLeft64(hash, 11) * PRIME64_1;
-      ++offset;
-    }
-    return fmix(hash);
-  }
-
-  static uint64_t fmix(uint64_t hash) {
-    hash ^= hash >> 33;
-    hash *= PRIME64_2;
-    hash ^= hash >> 29;
-    hash *= PRIME64_3;
-    hash ^= hash >> 32;
-    return hash;
-  }
-
-  static uint64_t hashBytesByWords(const StringView& input, uint64_t seed) {
-    const char* i = input.data();
-    const char* const end = input.data() + input.size();
-    uint32_t length = input.size();
-    uint64_t hash;
-    if (length >= 32) {
-      uint64_t v1 = seed + PRIME64_1 + PRIME64_2;
-      uint64_t v2 = seed + PRIME64_2;
-      uint64_t v3 = seed;
-      uint64_t v4 = seed - PRIME64_1;
-      const char* const limit = end - 32;
-      while (i <= limit) {
-        uint64_t word = 0;
-        std::memcpy(&word, i, sizeof(word));
-        v1 = bits::rotateLeft64(v1 + word * PRIME64_2, 31) * PRIME64_1;
-        i += 8;
-
-        std::memcpy(&word, i, sizeof(word));
-        v2 = bits::rotateLeft64(v2 + word * PRIME64_2, 31) * PRIME64_1;
-        i += 8;
-
-        std::memcpy(&word, i, sizeof(word));
-        v3 = bits::rotateLeft64(v3 + word * PRIME64_2, 31) * PRIME64_1;
-        i += 8;
-
-        std::memcpy(&word, i, sizeof(word));
-        v4 = bits::rotateLeft64(v4 + word * PRIME64_2, 31) * PRIME64_1;
-        i += 8;
-      }
-      hash = bits::rotateLeft64(v1, 1) + bits::rotateLeft64(v2, 7) +
-          bits::rotateLeft64(v3, 12) + bits::rotateLeft64(v4, 18);
-      v1 *= PRIME64_2;
-      v1 = bits::rotateLeft64(v1, 31);
-      v1 *= PRIME64_1;
-      hash ^= v1;
-      hash = hash * PRIME64_1 + PRIME64_4;
-
-      v2 *= PRIME64_2;
-      v2 = bits::rotateLeft64(v2, 31);
-      v2 *= PRIME64_1;
-      hash ^= v2;
-      hash = hash * PRIME64_1 + PRIME64_4;
-
-      v3 *= PRIME64_2;
-      v3 = bits::rotateLeft64(v3, 31);
-      v3 *= PRIME64_1;
-      hash ^= v3;
-      hash = hash * PRIME64_1 + PRIME64_4;
-
-      v4 *= PRIME64_2;
-      v4 = bits::rotateLeft64(v4, 31);
-      v4 *= PRIME64_1;
-      hash ^= v4;
-      hash = hash * PRIME64_1 + PRIME64_4;
-    } else {
-      hash = seed + PRIME64_5;
-    }
-
-    hash += length;
-
-    for (; i <= end - 8; i += 8) {
-      uint64_t word = 0;
-      std::memcpy(&word, i, sizeof(word));
-      hash ^= bits::rotateLeft64(word * PRIME64_2, 31) * PRIME64_1;
-      hash = bits::rotateLeft64(hash, 27) * PRIME64_1 + PRIME64_4;
-    }
-    return hash;
-  }
-};
 
 int8_t computeIndexBitLength(double relativeSD) {
   VELOX_USER_CHECK(
@@ -249,27 +89,39 @@ uint64_t hashValueDispatch(
     const TypePtr& type) {
   using T = typename TypeTraits<kind>::NativeType;
   if constexpr (kind == TypeKind::TINYINT) {
-    return SparkXxHash64::hashInt32(
+    return ::facebook::velox::functions::sparksql::XxHash64::hashInt32(
         static_cast<int32_t>(value.template castTo<T>()), kXxHash64Seed);
   } else if constexpr (kind == TypeKind::SMALLINT) {
-    return SparkXxHash64::hashInt32(
+    return ::facebook::velox::functions::sparksql::XxHash64::hashInt32(
         static_cast<int32_t>(value.template castTo<T>()), kXxHash64Seed);
   } else if constexpr (kind == TypeKind::INTEGER) {
-    return SparkXxHash64::hashInt32(value.template castTo<T>(), kXxHash64Seed);
+    return ::facebook::velox::functions::sparksql::XxHash64::hashInt32(
+        value.template castTo<T>(), kXxHash64Seed);
   } else if constexpr (kind == TypeKind::BIGINT) {
-    return SparkXxHash64::hashInt64(value.template castTo<T>(), kXxHash64Seed);
+    return ::facebook::velox::functions::sparksql::XxHash64::hashInt64(
+        value.template castTo<T>(), kXxHash64Seed);
   } else if constexpr (kind == TypeKind::REAL) {
-    return SparkXxHash64::hashFloat(value.template castTo<T>(), kXxHash64Seed);
+    return ::facebook::velox::functions::sparksql::XxHash64::hashFloat(
+        value.template castTo<T>(), kXxHash64Seed);
   } else if constexpr (kind == TypeKind::DOUBLE) {
-    return SparkXxHash64::hashDouble(value.template castTo<T>(), kXxHash64Seed);
+    return ::facebook::velox::functions::sparksql::XxHash64::hashDouble(
+        value.template castTo<T>(), kXxHash64Seed);
   } else if constexpr (kind == TypeKind::TIMESTAMP) {
-    return SparkXxHash64::hashTimestamp(
+    return ::facebook::velox::functions::sparksql::XxHash64::hashTimestamp(
         value.template castTo<T>(), kXxHash64Seed);
   } else {
     VELOX_UNSUPPORTED(
         "Unsupported type for approx_count_distinct_for_intervals: {}",
         type->toString());
   }
+}
+
+template <>
+uint64_t hashValueDispatch<TypeKind::HUGEINT>(
+    const exec::GenericView& value,
+    const TypePtr& /*type*/) {
+  return ::facebook::velox::functions::sparksql::XxHash64::hashLongDecimal(
+      value.castTo<int128_t>(), kXxHash64Seed);
 }
 
 class ApproxCountDistinctForIntervalsAggregate {
@@ -569,11 +421,6 @@ class ApproxCountDistinctForIntervalsAggregate {
   static uint64_t hashValue(
       const exec::GenericView& value,
       const TypePtr& type) {
-    if (type->isLongDecimal()) {
-      return SparkXxHash64::hashLongDecimal(
-          value.castTo<int128_t>(), kXxHash64Seed);
-    }
-
     return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
         hashValueDispatch, type->kind(), value, type);
   }

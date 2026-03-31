@@ -25,8 +25,6 @@
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
-#include "velox/type/Timestamp.h"
-#include "velox/vector/BaseVector.h"
 
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::functions::aggregate::test;
