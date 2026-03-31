@@ -60,6 +60,7 @@ class CudfJoinFuzzer : public JoinFuzzerBase {
         core::JoinType::kFull,
         core::JoinType::kAnti,
         core::JoinType::kLeftSemiFilter,
+        core::JoinType::kLeftSemiProject,
     };
   }
 
