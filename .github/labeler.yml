@@ -1,0 +1,7 @@
+# Automatically add labels based on file paths
+cudf:
+  - changed-files:
+    - any-glob-to-any-file: [
+        'velox/experimental/cudf/**',
+        'CMake/resolve_dependency_modules/cudf.cmake'
+      ]
