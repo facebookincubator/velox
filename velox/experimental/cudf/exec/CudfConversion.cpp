@@ -26,8 +26,7 @@
 #include "velox/exec/Operator.h"
 #include "velox/vector/ComplexVector.h"
 
-#include <cudf/copying.hpp>
-#include <cudf/table/table.hpp>
+#include <cudf/types.hpp>
 #include <cudf/utilities/default_stream.hpp>
 
 namespace facebook::velox::cudf_velox {
