@@ -230,8 +230,11 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
   // DECIMAL inputs.
   // @TODO implement DECIMAL in AST and JIT
   if (containsDecimalType(expr, false)) {
-    LOG(WARNING) << "DECIMAL expression not supported by AST/JIT: "
-                 << expr->toString();
+    if (cudf_velox::CudfConfig::getInstance().debugEnabled) {
+      LOG(WARNING)
+          << "Expression contains DECIMAL type, which is not supported by AST/JIT: "
+          << expr->toString();
+    }
     return false;
   }
 
