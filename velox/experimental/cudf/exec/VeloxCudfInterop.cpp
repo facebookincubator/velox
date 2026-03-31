@@ -126,13 +126,26 @@ std::unique_ptr<cudf::table> toCudfTable(
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr,
     std::optional<std::string> timestampTimeZone) {
+  TimestampUnit unit;
+  switch (CudfConfig::getInstance().timestampUnit) {
+    case cudf::type_id::TIMESTAMP_NANOSECONDS:
+      unit = TimestampUnit::kNano;
+      break;
+    case cudf::type_id::TIMESTAMP_MICROSECONDS:
+      unit = TimestampUnit::kMicro;
+      break;
+    case cudf::type_id::TIMESTAMP_MILLISECONDS:
+      unit = TimestampUnit::kMilli;
+      break;
+    case cudf::type_id::TIMESTAMP_SECONDS:
+      unit = TimestampUnit::kSecond;
+      break;
+    default:
+      VELOX_UNSUPPORTED();
+  }
   // Need to flattenDictionary and flattenConstant, otherwise we observe issues
   // in the null mask. Also, libcudf does not support Arrow binary, so we export
   // VARBINARY as UTF-8.
-  TimestampUnit unit = CudfConfig::getInstance().timestampUnit ==
-          cudf::type_id::TIMESTAMP_NANOSECONDS
-      ? TimestampUnit::kNano
-      : TimestampUnit::kMicro;
   ArrowOptions arrowOptions{
       .flattenDictionary = true,
       .flattenConstant = true,
