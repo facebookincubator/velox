@@ -26,6 +26,20 @@ inline const T load(const char* ptr) {
   return ret;
 }
 
+inline std::optional<int64_t> decodeInt64Stat(const std::string& bytes) {
+  switch (bytes.size()) {
+    case sizeof(int64_t):
+      return load<int64_t>(bytes.data());
+    case sizeof(int32_t):
+      // Parquet stores Time types as int32_t (for milliseconds), but Velox's
+      // Time type is always int64_t, so we need to load sizeof(int32_t) and
+      // cast to int64_t.
+      return static_cast<int64_t>(load<int32_t>(bytes.data()));
+    default:
+      return std::nullopt;
+  }
+}
+
 template <typename T>
 inline std::optional<T> getMin(const thrift::Statistics& columnChunkStats) {
   return columnChunkStats.__isset.min_value
@@ -42,6 +56,24 @@ inline std::optional<T> getMax(const thrift::Statistics& columnChunkStats) {
       : (columnChunkStats.__isset.max
              ? std::optional<T>(load<T>(columnChunkStats.max.data()))
              : std::nullopt);
+}
+
+template <>
+inline std::optional<int64_t> getMin(
+    const thrift::Statistics& columnChunkStats) {
+  return columnChunkStats.__isset.min_value
+      ? decodeInt64Stat(columnChunkStats.min_value)
+      : (columnChunkStats.__isset.min ? decodeInt64Stat(columnChunkStats.min)
+                                      : std::nullopt);
+}
+
+template <>
+inline std::optional<int64_t> getMax(
+    const thrift::Statistics& columnChunkStats) {
+  return columnChunkStats.__isset.max_value
+      ? decodeInt64Stat(columnChunkStats.max_value)
+      : (columnChunkStats.__isset.max ? decodeInt64Stat(columnChunkStats.max)
+                                      : std::nullopt);
 }
 
 template <>

@@ -23,6 +23,8 @@
 #include <type_traits>
 #include <utility>
 #include "velox/common/time/CpuWallTimer.h"
+#include "velox/dwio/common/Options.h"
+#include "velox/dwio/common/TypeWithId.h"
 #include "velox/dwio/common/UnitLoader.h"
 
 #include "velox/common/base/Exceptions.h"
@@ -676,6 +678,18 @@ struct ColumnReaderStatistics {
   // collection is enabled.
   std::optional<ColumnMetricsSet> columnMetricsSet;
 
+  /// Initializes column stats collection for the given schema if enabled in
+  /// options. Recursively registers metrics for all columns in the type tree.
+  void initColumnStatsCollection(
+      const TypeWithId& schema,
+      const RowReaderOptions& options) {
+    if (!options.collectColumnStats()) {
+      return;
+    }
+    columnMetricsSet.emplace();
+    registerColumnMetricsImpl(schema);
+  }
+
   /// Merges all stats from another ColumnReaderStatistics instance.
   void mergeFrom(const ColumnReaderStatistics& other) {
     flattenStringDictionaryValues += other.flattenStringDictionaryValues;
@@ -708,6 +722,16 @@ struct ColumnReaderStatistics {
     }
     if (columnMetricsSet) {
       columnMetricsSet->toRuntimeMetrics(result);
+    }
+  }
+
+ private:
+  void registerColumnMetricsImpl(const TypeWithId& node) {
+    columnMetricsSet->getOrCreate(node.id(), node.type()->kind());
+    for (uint32_t i = 0; i < node.size(); ++i) {
+      if (const auto* child = node.childAt(i).get()) {
+        registerColumnMetricsImpl(*child);
+      }
     }
   }
 };

@@ -31,12 +31,14 @@ if(${VELOX_BUILD_TEST_UTILS})
   )
 
   add_library(velox_benchmark_builder ExpressionBenchmarkBuilder.cpp)
+  velox_add_test_headers(velox_benchmark_builder ExpressionBenchmarkBuilder.h)
   target_link_libraries(velox_benchmark_builder ${velox_benchmark_deps})
 
   # This is a workaround for the use of VectorTestBase.h which includes gtest.h
   target_link_libraries(velox_benchmark_builder GTest::gtest)
 
   add_library(velox_query_benchmark QueryBenchmarkBase.cpp)
+  velox_add_test_headers(velox_query_benchmark QueryBenchmarkBase.h)
 
   target_link_libraries(
     velox_query_benchmark

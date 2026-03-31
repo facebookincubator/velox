@@ -32,12 +32,13 @@ namespace facebook::velox::functions {
 /// elements. Both arrays must have the same length. If either array is null,
 /// returns null. If arrays have different lengths, throws an error.
 /// Null elements in arrays are treated as zero.
+/// NaN values propagate through the computation (IEEE 754 behavior).
 template <typename TExec, typename T>
 struct DotProductFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
   template <typename TOutput>
-  FOLLY_ALWAYS_INLINE bool call(
+  FOLLY_ALWAYS_INLINE void call(
       TOutput& out,
       const arg_type<Array<T>>& array1,
       const arg_type<Array<T>>& array2) {
@@ -69,7 +70,6 @@ struct DotProductFunction {
       }
     }
     out = sum;
-    return true;
   }
 };
 
@@ -83,44 +83,46 @@ struct MapDotProductFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
   template <typename TOutput>
-  FOLLY_ALWAYS_INLINE bool call(
+  FOLLY_ALWAYS_INLINE void call(
       TOutput& out,
       const arg_type<Map<K, V>>& map1,
       const arg_type<Map<K, V>>& map2) {
     TOutput sum = 0;
 
-    // Build a lookup map from map2 for O(1) key lookup.
+    // Build a lookup map from the smaller map for O(1) key lookup.
     // This reduces complexity from O(n*m) to O(n+m).
-    folly::F14FastMap<arg_type<K>, arg_type<V>> map2Lookup;
-    map2Lookup.reserve(map2.size());
-    for (const auto& [key, val] : map2) {
+    const auto& smallMap = map1.size() <= map2.size() ? map1 : map2;
+    const auto& largeMap = map1.size() <= map2.size() ? map2 : map1;
+
+    folly::F14FastMap<arg_type<K>, arg_type<V>> lookup;
+    lookup.reserve(smallMap.size());
+    for (const auto& [key, val] : smallMap) {
       if (val.has_value()) {
-        map2Lookup.emplace(key, val.value());
+        lookup.emplace(key, val.value());
       }
     }
 
-    // Iterate through map1 and look up matching keys in map2.
-    for (const auto& [key1, val1] : map1) {
-      if (!val1.has_value()) {
+    // Iterate through the larger map and look up matching keys.
+    for (const auto& [key, val] : largeMap) {
+      if (!val.has_value()) {
         continue;
       }
 
-      auto it = map2Lookup.find(key1);
-      if (it != map2Lookup.end()) {
+      auto it = lookup.find(key);
+      if (it != lookup.end()) {
         if constexpr (std::is_same_v<TOutput, int64_t>) {
           auto product = checkedMultiply<TOutput>(
-              static_cast<TOutput>(val1.value()),
+              static_cast<TOutput>(val.value()),
               static_cast<TOutput>(it->second));
           sum = checkedPlus<TOutput>(sum, product);
         } else {
-          sum += static_cast<TOutput>(val1.value()) *
+          sum += static_cast<TOutput>(val.value()) *
               static_cast<TOutput>(it->second);
         }
       }
     }
 
     out = sum;
-    return true;
   }
 };
 

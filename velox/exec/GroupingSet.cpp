@@ -276,7 +276,7 @@ void GroupingSet::addInputForActiveRows(
     const RowVectorPtr& input,
     bool mayPushdown) {
   VELOX_CHECK(!isGlobal_);
-  if (!table_) {
+  if (table_ == nullptr) {
     createHashTable();
   }
   ensureInputFits(input);
@@ -1139,6 +1139,7 @@ bool GroupingSet::getOutputWithSpill(
           false,
           false,
           false,
+          false, // hasCountFlag
           false,
           false,
           pool_);
@@ -1491,6 +1492,7 @@ void GroupingSet::abandonPartialAggregation() {
       false,
       false,
       false,
+      false, // hasCountFlag
       false,
       false,
       pool_);

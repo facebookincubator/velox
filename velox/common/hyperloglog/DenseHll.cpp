@@ -252,6 +252,9 @@ DenseHllView deserialize(const char* serialized) {
   VELOX_CHECK_EQ(kPrestoDenseV2, version);
 
   auto indexBitLength = stream.read<int8_t>();
+  VELOX_CHECK_GE(indexBitLength, 4, "indexBitLength must be in [4, 16] range");
+  VELOX_CHECK_LE(indexBitLength, 16, "indexBitLength must be in [4, 16] range");
+
   auto baseline = stream.read<int8_t>();
 
   auto numBuckets = 1 << indexBitLength;
@@ -259,6 +262,8 @@ DenseHllView deserialize(const char* serialized) {
   const int8_t* deltas = stream.read<int8_t>(numBuckets / 2);
 
   auto overflows = stream.read<int16_t>();
+  VELOX_CHECK_GE(
+      overflows, 0, "Invalid DenseHll overflow count: {}", overflows);
 
   const uint16_t* overflowBuckets =
       overflows ? stream.read<uint16_t>(overflows) : nullptr;

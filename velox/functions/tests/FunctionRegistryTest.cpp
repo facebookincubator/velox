@@ -693,6 +693,39 @@ TEST_F(FunctionRegistryTest, companionFunction) {
   }
 }
 
+TEST_F(FunctionRegistryTest, getFunctionSignaturesAndMetadata) {
+  registerFunction<MetadataTestFuncAllSet, int32_t, int32_t>(
+      {"metadata_test_all_set"});
+  registerFunction<MetadataTestFuncDefaults, int32_t, int32_t>(
+      {"metadata_test_defaults"});
+
+  const auto& registry = exec::simpleFunctions();
+
+  {
+    auto result =
+        registry.getFunctionSignaturesAndMetadata("metadata_test_all_set");
+    ASSERT_EQ(result.size(), 1);
+    const auto& metadata = result[0].first;
+    EXPECT_FALSE(metadata.supportsFlattening);
+    EXPECT_FALSE(metadata.deterministic);
+    EXPECT_FALSE(metadata.defaultNullBehavior);
+    EXPECT_FALSE(metadata.companionFunction);
+    EXPECT_EQ(metadata.owner, "test-owner-team");
+  }
+
+  {
+    auto result =
+        registry.getFunctionSignaturesAndMetadata("metadata_test_defaults");
+    ASSERT_EQ(result.size(), 1);
+    const auto& metadata = result[0].first;
+    EXPECT_FALSE(metadata.supportsFlattening);
+    EXPECT_TRUE(metadata.deterministic);
+    EXPECT_TRUE(metadata.defaultNullBehavior);
+    EXPECT_FALSE(metadata.companionFunction);
+    EXPECT_TRUE(metadata.owner.empty());
+  }
+}
+
 template <typename T>
 struct TestFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);

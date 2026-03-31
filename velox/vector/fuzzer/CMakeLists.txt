@@ -13,10 +13,12 @@
 # limitations under the License.
 
 add_library(velox_vector_fuzzer_util Utils.cpp)
+velox_add_test_headers(velox_vector_fuzzer_util Utils.h)
 
 target_link_libraries(velox_vector_fuzzer_util velox_vector velox_common_fuzzer_util)
 
 add_library(velox_vector_fuzzer GeneratorSpec.cpp VectorFuzzer.cpp)
+velox_add_test_headers(velox_vector_fuzzer GeneratorSpec.h VectorFuzzer.h)
 
 target_link_libraries(
   velox_vector_fuzzer
@@ -33,6 +35,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 add_library(velox_constrained_vector_generator ConstrainedVectorGenerator.cpp)
+velox_add_test_headers(velox_constrained_vector_generator ConstrainedVectorGenerator.h)
 
 target_link_libraries(
   velox_constrained_vector_generator
@@ -41,6 +44,8 @@ target_link_libraries(
   velox_constrained_input_generators
   velox_vector_fuzzer_util
 )
+
+add_subdirectory(examples)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

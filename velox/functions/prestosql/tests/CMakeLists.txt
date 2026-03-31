@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+add_subdirectory(resources)
 add_subdirectory(utils)
 
 add_executable(
@@ -43,6 +44,7 @@ add_executable(
   ArrayPositionTest.cpp
   ArrayRemoveTest.cpp
   ArrayShuffleTest.cpp
+  ArraySplitIntoChunksTest.cpp
   ArraySortTest.cpp
   ArraySubsetTest.cpp
   L2NormTest.cpp
@@ -52,6 +54,7 @@ add_executable(
   ArrayTrimTest.cpp
   ArrayUnionTest.cpp
   DotProductTest.cpp
+  DotProductFuzzerTest.cpp
   ArgTypesGeneratorTest.cpp
   BinaryFunctionsTest.cpp
   BingTileCastTest.cpp
@@ -171,3 +174,5 @@ target_link_libraries(
   GTest::gmock
   GTest::gmock_main
 )
+
+velox_add_library(velox_cast_base_test_helper INTERFACE HEADERS CastBaseTest.h)

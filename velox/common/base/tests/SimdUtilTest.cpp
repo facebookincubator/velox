@@ -656,4 +656,76 @@ TEST_F(SimdUtilTest, randomStringStrStr) {
   }
 }
 
+TEST_F(SimdUtilTest, simdFill) {
+  // Test supported types: SIMD path (int32_t, uint32_t, int64_t, uint64_t,
+  // float, double).
+  auto testFill = [](auto value) {
+    using T = decltype(value);
+    struct TestParam {
+      uint32_t count;
+      std::string debugString() const {
+        return fmt::format("count {}", count);
+      }
+    };
+    std::vector<TestParam> testSettings = {
+        {0},
+        {1},
+        {3},
+        {7},
+        {8},
+        {9},
+        {15},
+        {16},
+        {17},
+        {31},
+        {32},
+        {33},
+        {63},
+        {64},
+        {100},
+        {255},
+        {256},
+        {1'000},
+        {10'000}};
+    for (const auto& testData : testSettings) {
+      SCOPED_TRACE(testData.debugString());
+      std::vector<T> output(testData.count, T{});
+      simd::simdFill(output.data(), value, testData.count);
+      for (uint32_t i = 0; i < testData.count; ++i) {
+        ASSERT_EQ(output[i], value) << "at index " << i;
+      }
+    }
+  };
+
+  testFill(static_cast<int32_t>(42));
+  testFill(static_cast<uint32_t>(42));
+  testFill(static_cast<int64_t>(123'456'789));
+  testFill(static_cast<uint64_t>(123'456'789));
+  testFill(3.14f);
+  testFill(2.718281828);
+
+  // Test unsupported types: fallback to std::fill (int8_t, int16_t, bool).
+  {
+    std::vector<int8_t> output(100, 0);
+    simd::simdFill(output.data(), static_cast<int8_t>(7), 100u);
+    for (auto v : output) {
+      ASSERT_EQ(v, 7);
+    }
+  }
+  {
+    std::vector<int16_t> output(100, 0);
+    simd::simdFill(output.data(), static_cast<int16_t>(1'234), 100u);
+    for (auto v : output) {
+      ASSERT_EQ(v, 1'234);
+    }
+  }
+  {
+    bool output[100] = {};
+    simd::simdFill(output, true, 100u);
+    for (int i = 0; i < 100; ++i) {
+      ASSERT_EQ(output[i], true);
+    }
+  }
+}
+
 } // namespace

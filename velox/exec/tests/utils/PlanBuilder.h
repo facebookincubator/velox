@@ -655,6 +655,11 @@ class PlanBuilder {
       bool parallelizable = false,
       size_t repeatTimes = 1);
 
+  /// Convenience overload that wraps a single RowVectorPtr in a vector.
+  PlanBuilder& values(const RowVectorPtr& value) {
+    return values(std::vector<RowVectorPtr>{value});
+  }
+
   PlanBuilder& filtersAsNode(bool filtersAsNode) {
     filtersAsNode_ = filtersAsNode;
     return *this;
@@ -684,12 +689,6 @@ class PlanBuilder {
   /// @param serdekind The kind of seralized data format.
   PlanBuilder& exchange(const RowTypePtr& outputType, std::string serdekind);
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  PlanBuilder& exchange(const RowTypePtr& outputType, VectorSerde::Kind kind) {
-    return exchange(outputType, VectorSerde::kindName(kind));
-  }
-#endif
-
   /// Add a MergeExchangeNode using specified ORDER BY clauses.
   ///
   /// For example,
@@ -702,15 +701,6 @@ class PlanBuilder {
       const RowTypePtr& outputType,
       const std::vector<std::string>& keys,
       std::string serdekind);
-
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  PlanBuilder& mergeExchange(
-      const RowTypePtr& outputType,
-      const std::vector<std::string>& keys,
-      VectorSerde::Kind kind) {
-    return mergeExchange(outputType, keys, VectorSerde::kindName(kind));
-  }
-#endif
 
   /// Add a ProjectNode using specified SQL expressions.
   ///
@@ -893,8 +883,18 @@ class PlanBuilder {
           connector::CommitStrategy::kNoCommit,
       std::shared_ptr<core::InsertTableHandle> insertTableHandle = nullptr);
 
-  /// Add a TableWriteMergeNode.
-  PlanBuilder& tableWriteMerge();
+  /// Add a TableWriteMergeNode. Derives the ColumnStatsSpec from the
+  /// TableWriteNode in the plan tree and applies the given step.
+  /// Finds the TableWriteNode through LocalPartitionNode if present.
+  /// @param step Must be kIntermediate or kFinal. Defaults to kIntermediate.
+  PlanBuilder& tableWriteMerge(
+      core::AggregationNode::Step step =
+          core::AggregationNode::Step::kIntermediate);
+
+  /// Add a TableWriteMergeNode with an explicit ColumnStatsSpec. Use for
+  /// coordinator-side merge where the TableWriteNode is in a different
+  /// fragment (e.g. after an Exchange).
+  PlanBuilder& tableWriteMerge(core::ColumnStatsSpec columnStatsSpec);
 
   /// Add an AggregationNode representing partial aggregation with the
   /// specified grouping keys, aggregates and optional masks.
@@ -1193,39 +1193,12 @@ class PlanBuilder {
       const std::vector<std::string>& outputLayout = {},
       std::string serdeKind = "Presto");
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  PlanBuilder& partitionedOutput(
-      const std::vector<std::string>& keys,
-      int numPartitions,
-      bool replicateNullsAndAny,
-      const std::vector<std::string>& outputLayout,
-      VectorSerde::Kind kind) {
-    return partitionedOutput(
-        keys,
-        numPartitions,
-        replicateNullsAndAny,
-        outputLayout,
-        VectorSerde::kindName(kind));
-  }
-#endif
-
   /// Same as above, but assumes 'replicateNullsAndAny' is false.
   PlanBuilder& partitionedOutput(
       const std::vector<std::string>& keys,
       int numPartitions,
       const std::vector<std::string>& outputLayout = {},
       std::string serdeKind = "Presto");
-
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  PlanBuilder& partitionedOutput(
-      const std::vector<std::string>& keys,
-      int numPartitions,
-      const std::vector<std::string>& outputLayout,
-      VectorSerde::Kind kind) {
-    return partitionedOutput(
-        keys, numPartitions, outputLayout, VectorSerde::kindName(kind));
-  }
-#endif
 
   /// Same as above, but allows to provide custom partition function.
   PlanBuilder& partitionedOutput(
@@ -1235,24 +1208,6 @@ class PlanBuilder {
       core::PartitionFunctionSpecPtr partitionFunctionSpec,
       const std::vector<std::string>& outputLayout = {},
       std::string serdeKind = "Presto");
-
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  PlanBuilder& partitionedOutput(
-      const std::vector<std::string>& keys,
-      int numPartitions,
-      bool replicateNullsAndAny,
-      core::PartitionFunctionSpecPtr partitionFunctionSpec,
-      const std::vector<std::string>& outputLayout,
-      VectorSerde::Kind kind) {
-    return partitionedOutput(
-        keys,
-        numPartitions,
-        replicateNullsAndAny,
-        std::move(partitionFunctionSpec),
-        outputLayout,
-        VectorSerde::kindName(kind));
-  }
-#endif
 
   /// Adds a PartitionedOutputNode to broadcast the input data.
   ///
@@ -1264,28 +1219,10 @@ class PlanBuilder {
       const std::vector<std::string>& outputLayout = {},
       std::string serdeKind = "Presto");
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  PlanBuilder& partitionedOutputBroadcast(
-      const std::vector<std::string>& outputLayout,
-      VectorSerde::Kind kind) {
-    return partitionedOutputBroadcast(
-        outputLayout, VectorSerde::kindName(kind));
-  }
-#endif
-
   /// Adds a PartitionedOutputNode to put data into arbitrary buffer.
   PlanBuilder& partitionedOutputArbitrary(
       const std::vector<std::string>& outputLayout = {},
       std::string serdeKind = "Presto");
-
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  PlanBuilder& partitionedOutputArbitrary(
-      const std::vector<std::string>& outputLayout,
-      VectorSerde::Kind kind) {
-    return partitionedOutputArbitrary(
-        outputLayout, VectorSerde::kindName(kind));
-  }
-#endif
 
   /// Adds a LocalPartitionNode to hash-partition the input on the specified
   /// keys using exec::HashPartitionFunction. Number of partitions is determined
@@ -1301,6 +1238,9 @@ class PlanBuilder {
   /// A convenience method to add a LocalPartitionNode with a single source (the
   /// current plan node).
   PlanBuilder& localPartition(const std::vector<std::string>& keys);
+
+  /// Add a LocalPartitionNode with gather type (N-to-1, empty partition keys).
+  PlanBuilder& localGather();
 
   /// A convenience method to add a LocalPartitionNode with hive partition
   /// function.
@@ -1587,6 +1527,15 @@ class PlanBuilder {
   PlanBuilder& streamingEnforceDistinct(
       const std::vector<std::string>& distinctKeys,
       std::string errorMessage);
+
+  /// Add a MarkSortedNode to mark rows indicating sortedness.
+  /// @param markerKey Name of output marker column (boolean).
+  /// @param sortingKeys List of columns used for sorting.
+  /// @param sortingOrders Sort orders for each sorting key.
+  PlanBuilder& markSorted(
+      const std::string& markerKey,
+      const std::vector<std::string>& sortingKeys,
+      const std::vector<core::SortOrder>& sortingOrders);
 
   /// Stores the latest plan node ID into the specified variable. Useful for
   /// capturing IDs of the leaf plan nodes (table scans, exchanges, etc.) to use

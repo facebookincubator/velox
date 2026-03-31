@@ -413,6 +413,15 @@ class IndexSource {
   virtual std::shared_ptr<ResultIterator> lookup(const Request& request) = 0;
 
   virtual std::unordered_map<std::string, RuntimeMetric> runtimeStats() = 0;
+
+  /// Defines stat names for IndexSource operator stats tracking.
+  static constexpr std::string_view kOutputPositions{
+      "indexSourceOutputPositions"};
+  static constexpr std::string_view kOutputBytes{"indexSourceOutputBytes"};
+  static constexpr std::string_view kOutputVectors{"indexSourceOutputVectors"};
+  static constexpr std::string_view kInputPositions{
+      "indexSourceInputPositions"};
+  static constexpr std::string_view kInputBytes{"indexSourceInputBytes"};
 };
 
 /// Collection of context data for use in a DataSource, IndexSource or DataSink.
@@ -778,7 +787,8 @@ std::shared_ptr<Connector> getConnector(const std::string& connectorId);
 
 /// Returns a map of all (connectorId -> connector) pairs currently
 /// registered.
-const std::unordered_map<std::string, std::shared_ptr<Connector>>&
-getAllConnectors();
+[[deprecated("Use ConnectorRegistry methods instead.")]] const std::
+    unordered_map<std::string, std::shared_ptr<Connector>>&
+    getAllConnectors();
 
 } // namespace facebook::velox::connector

@@ -45,6 +45,10 @@ velox_add_library(
   ${BISON_TypeParser_OUTPUTS}
   ${FLEX_TypeParserScanner_OUTPUTS}
   ParserUtil.cpp
+  HEADERS
+  ParserUtil.h
+  Scanner.h
+  TypeParser.h
 )
 velox_include_directories(
   velox_presto_type_parser

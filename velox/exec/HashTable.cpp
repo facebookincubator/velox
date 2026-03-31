@@ -51,6 +51,7 @@ HashTable<ignoreNullKeys>::HashTable(
     bool allowDuplicates,
     bool isJoinBuild,
     bool hasProbedFlag,
+    bool hasCountFlag,
     uint32_t minTableSizeForParallelJoinBuild,
     memory::MemoryPool* pool,
     uint64_t bloomFilterMaxSize)
@@ -78,6 +79,7 @@ HashTable<ignoreNullKeys>::HashTable(
       allowDuplicates,
       isJoinBuild,
       hasProbedFlag,
+      hasCountFlag,
       hashMode_ != HashMode::kHash,
       /*useListRowIndex=*/false,
       pool);
@@ -1381,7 +1383,9 @@ bool HashTable<ignoreNullKeys>::arrayPushRow(char* row, int32_t index) {
       hasDuplicates_.set();
     }
   } else if (existing) {
-    // Semijoin or a known unique build side ignores a repeat of a key.
+    if (rows_->countOffset() > 0) {
+      rows_->addCount(existing, rows_->count(row));
+    }
     return false;
   }
   table_[index] = row;
@@ -1424,6 +1428,8 @@ FOLLY_ALWAYS_INLINE void HashTable<ignoreNullKeys>::buildFullProbe(
               RowContainer::normalizedKey(inserted)) {
             if (nextOffset_ > 0) {
               pushNext(group, inserted);
+            } else if (rows_->countOffset() > 0) {
+              rows_->addCount(group, rows_->count(inserted));
             }
             return true;
           }
@@ -1441,6 +1447,8 @@ FOLLY_ALWAYS_INLINE void HashTable<ignoreNullKeys>::buildFullProbe(
           if (compareKeys(group, inserted)) {
             if (nextOffset_ > 0) {
               pushNext(group, inserted);
+            } else if (rows_->countOffset() > 0) {
+              rows_->addCount(group, rows_->count(inserted));
             }
             return true;
           }

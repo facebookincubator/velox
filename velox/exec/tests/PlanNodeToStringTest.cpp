@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/WindowFunction.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -986,6 +987,104 @@ TEST_F(PlanNodeToStringTest, markDistinct) {
   ASSERT_EQ(
       "-- MarkDistinct[1][a, b] -> a:VARCHAR, b:BIGINT, c:BIGINT, marker:BOOLEAN\n",
       op->toString(true, false));
+}
+
+TEST_F(PlanNodeToStringTest, tableWrite) {
+  auto outputDir = common::testutil::TempDirectoryPath::create();
+
+  // TableWrite without stats.
+  {
+    auto plan = PlanBuilder()
+                    .values({data_})
+                    .tableWrite(outputDir->getPath())
+                    .planNode();
+    ASSERT_EQ("-- TableWrite[1]\n", plan->toString());
+    ASSERT_EQ(
+        "-- TableWrite[1][test-hive, c0, c1, c2] -> rows:BIGINT, fragments:VARBINARY, commitcontext:VARBINARY\n",
+        plan->toString(true, false));
+  }
+
+  // TableWrite with stats (no grouping keys) and TableWriteMerge.
+  {
+    core::TableWriteNodePtr writeNode;
+    auto plan = PlanBuilder()
+                    .values({data_})
+                    .tableWrite(
+                        outputDir->getPath(),
+                        dwio::common::FileFormat::DWRF,
+                        {"min(c0)"})
+                    .capturePlanNode(writeNode)
+                    .localGather()
+                    .tableWriteMerge()
+                    .planNode();
+
+    ASSERT_EQ("-- TableWrite[1]\n", writeNode->toString());
+    ASSERT_EQ(
+        "-- TableWrite[1][test-hive, c0, c1, c2, stats[PARTIAL: min(ROW[\"c0\"])]] -> rows:BIGINT, fragments:VARBINARY, commitcontext:VARBINARY, a0:SMALLINT\n",
+        writeNode->toString(true, false));
+
+    ASSERT_EQ("-- TableWriteMerge[3]\n", plan->toString());
+    ASSERT_EQ(
+        "-- TableWriteMerge[3][stats[INTERMEDIATE: min(\"a0\")]] -> rows:BIGINT, fragments:VARBINARY, commitcontext:VARBINARY, a0:SMALLINT\n",
+        plan->toString(true, false));
+  }
+
+  // TableWrite with stats and grouping keys (partitioned table).
+  {
+    core::TableWriteNodePtr writeNode;
+    auto plan = PlanBuilder()
+                    .values({data_})
+                    .tableWrite(
+                        outputDir->getPath(),
+                        {"c2"},
+                        dwio::common::FileFormat::DWRF,
+                        {"min(c0)", "max(c1)"})
+                    .capturePlanNode(writeNode)
+                    .localGather()
+                    .tableWriteMerge()
+                    .planNode();
+
+    ASSERT_EQ("-- TableWrite[1]\n", writeNode->toString());
+    ASSERT_EQ(
+        "-- TableWrite[1][test-hive, c0, c1, c2, stats[PARTIAL [c2]: min(ROW[\"c0\"]), max(ROW[\"c1\"])]] -> rows:BIGINT, fragments:VARBINARY, commitcontext:VARBINARY, c2:BIGINT, a0:SMALLINT, a1:INTEGER\n",
+        writeNode->toString(true, false));
+
+    ASSERT_EQ("-- TableWriteMerge[3]\n", plan->toString());
+    ASSERT_EQ(
+        "-- TableWriteMerge[3][stats[INTERMEDIATE [c2]: min(\"a0\"), max(\"a1\")]] -> rows:BIGINT, fragments:VARBINARY, commitcontext:VARBINARY, c2:BIGINT, a0:SMALLINT, a1:INTEGER\n",
+        plan->toString(true, false));
+  }
+}
+
+TEST_F(PlanNodeToStringTest, countingJoin) {
+  auto makePlan = [&](core::JoinType joinType) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    return PlanBuilder(planNodeIdGenerator)
+        .values({data_})
+        .hashJoin(
+            {"c0"},
+            {"u_c0"},
+            PlanBuilder(planNodeIdGenerator)
+                .values({data_})
+                .project({"c0 as u_c0"})
+                .planNode(),
+            "",
+            {"c0", "c1"},
+            joinType)
+        .planNode();
+  };
+
+  auto plan = makePlan(core::JoinType::kCountingAnti);
+  ASSERT_EQ("-- HashJoin[3]\n", plan->toString());
+  ASSERT_EQ(
+      "-- HashJoin[3][COUNTING ANTI c0=u_c0] -> c0:SMALLINT, c1:INTEGER\n",
+      plan->toString(true, false));
+
+  plan = makePlan(core::JoinType::kCountingLeftSemiFilter);
+  ASSERT_EQ("-- HashJoin[3]\n", plan->toString());
+  ASSERT_EQ(
+      "-- HashJoin[3][COUNTING LEFT SEMI (FILTER) c0=u_c0] -> c0:SMALLINT, c1:INTEGER\n",
+      plan->toString(true, false));
 }
 
 } // namespace

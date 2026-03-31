@@ -86,11 +86,11 @@ bool SortingWriter::finish() {
   return true;
 }
 
-void SortingWriter::close() {
+std::unique_ptr<FileMetadata> SortingWriter::close() {
   VELOX_CHECK(isFinishing());
   setState(State::kClosed);
   VELOX_CHECK_NULL(sortBuffer_);
-  outputWriter_->close();
+  return outputWriter_->close();
 }
 
 void SortingWriter::abort() {

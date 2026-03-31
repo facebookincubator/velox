@@ -87,6 +87,7 @@ add_executable(
   VarcharTypeWriteSideCheckTest.cpp
   XxHash64Test.cpp
 )
+velox_add_test_headers(velox_functions_spark_test JsonTestUtil.h)
 
 add_test(velox_functions_spark_test velox_functions_spark_test)
 
@@ -114,3 +115,7 @@ target_link_libraries(
   GTest::gtest
   GTest::gtest_main
 )
+
+velox_add_library(velox_array_sort_test_lib INTERFACE HEADERS ArraySortTestData.h)
+
+velox_add_library(velox_spark_function_base INTERFACE HEADERS SparkFunctionBaseTest.h)

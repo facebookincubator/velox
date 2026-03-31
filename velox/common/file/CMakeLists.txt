@@ -21,6 +21,15 @@ velox_add_library(
   FileIoTracer.cpp
   FileSystems.cpp
   FileUtils.cpp
+  HEADERS
+  File.h
+  FileInputStream.h
+  FileIoTracer.h
+  FileSystems.h
+  FileUtils.h
+  PlainUserNameTokenProvider.h
+  Region.h
+  TokenProvider.h
 )
 velox_link_libraries(
   velox_file

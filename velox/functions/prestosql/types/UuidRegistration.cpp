@@ -26,45 +26,8 @@
 namespace facebook::velox {
 namespace {
 template <TypeKind>
-struct UuidWriter {
-  static void write(exec::StringWriter& writer, const uint8_t* uuidBytes) =
-      delete;
-};
-
-template <TypeKind>
 struct UuidParser {
   static int128_t parse(const StringView& uuidValue) = delete;
-};
-
-template <>
-struct UuidWriter<TypeKind::VARCHAR> {
-  static void write(exec::StringWriter& writer, const uint8_t* uuidBytes) {
-    writer.resize(36);
-    // Do not use boost::lexical_cast. It is very slow.
-
-    // 2 hex digits per each value in [0, 127] range (1 byte).
-    static const char* const kHexTable =
-        "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
-        "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f"
-        "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f"
-        "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f"
-        "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f"
-        "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf"
-        "c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf"
-        "e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff";
-
-    size_t offset = 0;
-    for (auto i = 0; i < 16; ++i) {
-      writer.data()[offset] = kHexTable[uuidBytes[i] * 2];
-      writer.data()[offset + 1] = kHexTable[uuidBytes[i] * 2 + 1];
-
-      offset += 2;
-      if (i == 3 || i == 5 || i == 7 || i == 9) {
-        writer.data()[offset] = '-';
-        offset++;
-      }
-    }
-  }
 };
 
 template <>
@@ -74,14 +37,6 @@ struct UuidParser<TypeKind::VARCHAR> {
     int128_t u;
     memcpy(&u, &uuid, 16);
     return u;
-  }
-};
-
-template <>
-struct UuidWriter<TypeKind::VARBINARY> {
-  static void write(exec::StringWriter& writer, const uint8_t* uuidBytes) {
-    writer.resize(16);
-    memcpy(writer.data(), uuidBytes, 16);
   }
 };
 
@@ -151,12 +106,16 @@ class UuidCastOperator : public exec::CastOperator {
     const auto* uuids = input.as<SimpleVector<int128_t>>();
 
     context.applyToSelectedNoThrow(rows, [&](auto row) {
-      // Ensure UUID bytes are big endian.
-      const auto uuid = DecimalUtil::bigEndian(uuids->valueAt(row));
-      const auto* uuidBytes = reinterpret_cast<const uint8_t*>(&uuid);
-
+      const auto value = uuids->valueAt(row);
       exec::StringWriter writer(flatResult, row);
-      UuidWriter<KIND>::write(writer, uuidBytes);
+      if constexpr (KIND == TypeKind::VARCHAR) {
+        writer.resize(UuidType::kStringSize);
+        UUID()->valueToString(value, writer.data());
+      } else {
+        auto bigEndian = DecimalUtil::bigEndian(value);
+        writer.resize(16);
+        memcpy(writer.data(), &bigEndian, 16);
+      }
       writer.finalize();
     });
   }

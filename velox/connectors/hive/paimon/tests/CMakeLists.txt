@@ -24,11 +24,8 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     GTest::gmock
   )
 
-  add_executable(
-    velox_hive_paimon_data_file_meta_test PaimonDataFileMetaTest.cpp)
-  add_test(
-    velox_hive_paimon_data_file_meta_test
-    velox_hive_paimon_data_file_meta_test)
+  add_executable(velox_hive_paimon_data_file_meta_test PaimonDataFileMetaTest.cpp)
+  add_test(velox_hive_paimon_data_file_meta_test velox_hive_paimon_data_file_meta_test)
 
   target_link_libraries(
     velox_hive_paimon_data_file_meta_test
@@ -38,11 +35,8 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     GTest::gmock
   )
 
-  add_executable(
-    velox_hive_paimon_deletion_file_test PaimonDeletionFileTest.cpp)
-  add_test(
-    velox_hive_paimon_deletion_file_test
-    velox_hive_paimon_deletion_file_test)
+  add_executable(velox_hive_paimon_deletion_file_test PaimonDeletionFileTest.cpp)
+  add_test(velox_hive_paimon_deletion_file_test velox_hive_paimon_deletion_file_test)
 
   target_link_libraries(
     velox_hive_paimon_deletion_file_test
@@ -52,11 +46,8 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     GTest::gmock
   )
 
-  add_executable(
-    velox_hive_paimon_row_kind_test PaimonRowKindTest.cpp)
-  add_test(
-    velox_hive_paimon_row_kind_test
-    velox_hive_paimon_row_kind_test)
+  add_executable(velox_hive_paimon_row_kind_test PaimonRowKindTest.cpp)
+  add_test(velox_hive_paimon_row_kind_test velox_hive_paimon_row_kind_test)
 
   target_link_libraries(
     velox_hive_paimon_row_kind_test

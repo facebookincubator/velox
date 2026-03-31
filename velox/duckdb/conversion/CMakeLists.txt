@@ -11,11 +11,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-velox_add_library(velox_duckdb_conversion DuckConversion.cpp)
+velox_add_library(velox_duckdb_conversion DuckConversion.cpp HEADERS DuckConversion.h)
 
 velox_link_libraries(velox_duckdb_conversion velox_core velox_vector duckdb_static)
 
-velox_add_library(velox_duckdb_parser DuckParser.cpp)
+velox_add_library(velox_duckdb_parser DuckParser.cpp HEADERS DuckParser.h)
 
 velox_link_libraries(
   velox_duckdb_parser

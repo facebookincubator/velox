@@ -119,6 +119,10 @@ struct TestParam {
   }
 };
 
+inline void PrintTo(const TestParam& param, std::ostream* os) {
+  *os << param.toString();
+}
+
 struct TestParamsBuilder {
   std::vector<TestParam> getTestParams() {
     std::vector<TestParam> params;

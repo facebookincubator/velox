@@ -39,6 +39,7 @@ target_link_libraries(
 )
 
 add_library(velox_dwio_parquet_reader_benchmark_lib ParquetReaderBenchmark.cpp)
+velox_add_test_headers(velox_dwio_parquet_reader_benchmark_lib ParquetReaderBenchmark.h)
 target_link_libraries(
   velox_dwio_parquet_reader_benchmark_lib
   velox_dwio_parquet_reader
