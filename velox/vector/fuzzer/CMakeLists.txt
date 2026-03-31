@@ -45,8 +45,7 @@ target_link_libraries(
   velox_vector_fuzzer_util
 )
 
-add_subdirectory(examples)
-
 if(${VELOX_BUILD_TESTING})
+  add_subdirectory(examples)
   add_subdirectory(tests)
 endif()
