@@ -19,6 +19,8 @@
 
 namespace facebook::velox::cudf_velox {
 
-bool containsDecimalType(const std::shared_ptr<velox::exec::Expr>& expr, const bool deep);
+bool containsDecimalType(
+    const std::shared_ptr<velox::exec::Expr>& expr,
+    const bool deep);
 
 } // namespace facebook::velox::cudf_velox

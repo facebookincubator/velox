@@ -22,7 +22,8 @@ bool isOfDecimalType(const std::shared_ptr<velox::exec::Expr>& expr) {
   return expr && expr->type() && expr->type()->isDecimal();
 }
 
-bool containsDecimalTypeRecursive(const std::shared_ptr<velox::exec::Expr>& expr) {
+bool containsDecimalTypeRecursive(
+    const std::shared_ptr<velox::exec::Expr>& expr) {
   // check output type
   if (isOfDecimalType(expr)) {
     return true;
@@ -36,8 +37,9 @@ bool containsDecimalTypeRecursive(const std::shared_ptr<velox::exec::Expr>& expr
   return false;
 }
 
-bool containsDecimalType(const std::shared_ptr<velox::exec::Expr>& expr,
-                         const bool deep) {
+bool containsDecimalType(
+    const std::shared_ptr<velox::exec::Expr>& expr,
+    const bool deep) {
   // check output type
   if (isOfDecimalType(expr)) {
     return true;
@@ -47,7 +49,7 @@ bool containsDecimalType(const std::shared_ptr<velox::exec::Expr>& expr,
     for (const auto& input : expr->inputs()) {
       if (containsDecimalTypeRecursive(input)) {
         return true;
-      } 
+      }
     }
   } else {
     // only check immediate inputs
