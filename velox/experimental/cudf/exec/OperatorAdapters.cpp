@@ -211,8 +211,9 @@ class FilterProjectAdapter : public OperatorAdapter {
     auto filterPlanNode = filterProjectOp->filterNode();
 
     std::vector<std::unique_ptr<exec::Operator>> result;
-    result.push_back(std::make_unique<CudfFilterProject>(
-        operatorId, ctx, filterPlanNode, projectPlanNode));
+    result.push_back(
+        std::make_unique<CudfFilterProject>(
+            operatorId, ctx, filterPlanNode, projectPlanNode));
     return result;
   }
 };
@@ -284,11 +285,13 @@ class AggregationAdapter : public OperatorAdapter {
 
     std::vector<std::unique_ptr<exec::Operator>> result;
     if (CudfConfig::getInstance().concatOptimizationEnabled) {
-      result.push_back(std::make_unique<CudfBatchConcat>(
-          operatorId, ctx, aggregationPlanNode));
+      result.push_back(
+          std::make_unique<CudfBatchConcat>(
+              operatorId, ctx, aggregationPlanNode));
     }
-    result.push_back(std::make_unique<CudfHashAggregation>(
-        operatorId, ctx, aggregationPlanNode));
+    result.push_back(
+        std::make_unique<CudfHashAggregation>(
+            operatorId, ctx, aggregationPlanNode));
     return result;
   }
 };
@@ -581,8 +584,9 @@ class LocalPartitionAdapter : public OperatorAdapter {
         std::dynamic_pointer_cast<const core::LocalPartitionNode>(planNode);
 
     std::vector<std::unique_ptr<exec::Operator>> result;
-    result.push_back(std::make_unique<CudfLocalPartition>(
-        operatorId, ctx, localPartitionPlanNode));
+    result.push_back(
+        std::make_unique<CudfLocalPartition>(
+            operatorId, ctx, localPartitionPlanNode));
     return result;
   }
 
@@ -662,12 +666,13 @@ class AssignUniqueIdAdapter : public OperatorAdapter {
         std::dynamic_pointer_cast<const core::AssignUniqueIdNode>(planNode);
 
     std::vector<std::unique_ptr<exec::Operator>> result;
-    result.push_back(std::make_unique<CudfAssignUniqueId>(
-        operatorId,
-        ctx,
-        assignUniqueIdPlanNode,
-        assignUniqueIdPlanNode->taskUniqueId(),
-        assignUniqueIdPlanNode->uniqueIdCounter()));
+    result.push_back(
+        std::make_unique<CudfAssignUniqueId>(
+            operatorId,
+            ctx,
+            assignUniqueIdPlanNode,
+            assignUniqueIdPlanNode->taskUniqueId(),
+            assignUniqueIdPlanNode->uniqueIdCounter()));
     return result;
   }
 };
