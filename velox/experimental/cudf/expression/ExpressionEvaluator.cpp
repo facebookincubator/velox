@@ -457,6 +457,7 @@ class BinaryFunction : public CudfFunction {
           rhsCast = cudf::cast(rhsView, targetType, stream, mr);
           rhsView = rhsCast->view();
         }
+        // @TODO Check for divide-by-zero as in the DECIMAL case above?
         return cudf::binary_operation(lhsView, rhsView, op_, type_, stream, mr);
       }
       if (cudf::is_fixed_point(type_)) {
@@ -473,6 +474,7 @@ class BinaryFunction : public CudfFunction {
             rhsCast = cudf::cast(rhsView, type_, stream, mr);
             rhsView = rhsCast->view();
           }
+          // @TODO Check for divide-by-zero as in the DECIMAL case above?
           return cudf::binary_operation(
               lhsView, rhsView, op_, type_, stream, mr);
         }
@@ -493,10 +495,12 @@ class BinaryFunction : public CudfFunction {
               rhsView = rhsCast->view();
             }
           }
+          // @TODO Check for divide-by-zero as in the DECIMAL case above?
           return cudf::binary_operation(
               lhsView, rhsView, op_, type_, stream, mr);
         }
       }
+      // @TODO Check for divide-by-zero as in the DECIMAL case above?
       return cudf::binary_operation(lhsView, rhsView, op_, type_, stream, mr);
     } else if (left_ == nullptr) {
       if (op_ == cudf::binary_operator::DIV && cudf::is_fixed_point(type_)) {
@@ -655,6 +659,7 @@ class BinaryFunction : public CudfFunction {
         rhsCast = cudf::cast(rhsView, targetType, stream, mr);
         rhsView = rhsCast->view();
       }
+      // @TODO Check for divide-by-zero as in the DECIMAL case above?
       return cudf::binary_operation(lhsView, rhsView, op_, type_, stream, mr);
     }
     if (cudf::is_fixed_point(type_)) {
