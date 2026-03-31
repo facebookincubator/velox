@@ -416,11 +416,6 @@ void CudfConfig::initialize(
   if (config.find(kCudfFunctionEngine) != config.end()) {
     functionEngine = config[kCudfFunctionEngine];
   }
-
-  if (config.find(kCudfEnableEnforceSingleRow) != config.end()) {
-    enableEnforceSingleRow =
-        folly::to<bool>(config[kCudfEnableEnforceSingleRow]);
-  }
 }
 
 } // namespace facebook::velox::cudf_velox

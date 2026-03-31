@@ -753,9 +753,7 @@ void registerAllOperatorAdapters() {
   registry.registerAdapter(std::make_unique<LocalPartitionAdapter>());
   registry.registerAdapter(std::make_unique<LocalExchangeAdapter>());
   registry.registerAdapter(std::make_unique<AssignUniqueIdAdapter>());
-  if (CudfConfig::getInstance().enableEnforceSingleRow) {
-    registry.registerAdapter(std::make_unique<EnforceSingleRowAdapter>());
-  }
+  registry.registerAdapter(std::make_unique<EnforceSingleRowAdapter>());
   registry.registerAdapter(std::make_unique<ValuesAdapter>());
   registry.registerAdapter(std::make_unique<CallbackSinkAdapter>());
 }
