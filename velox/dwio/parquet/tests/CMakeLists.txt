@@ -47,3 +47,5 @@ target_link_libraries(
 )
 
 file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/examples DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
+
+velox_add_library(velox_dwio_parquet_test_base INTERFACE HEADERS ParquetTestBase.h)

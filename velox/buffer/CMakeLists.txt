@@ -12,7 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(velox_buffer Buffer.cpp StringViewBufferHolder.cpp)
+velox_add_library(
+  velox_buffer
+  Buffer.cpp
+  StringViewBufferHolder.cpp
+  HEADERS
+  Buffer.h
+  StringViewBufferHolder.h
+)
 
 velox_link_libraries(velox_buffer velox_memory velox_common_base Folly::folly)
 

@@ -1588,4 +1588,95 @@ TEST_F(CachedBufferedInputTest, prefetchScope) {
 
   EXPECT_EQ(ioStatistics_->prefetch().sum(), kNumRequests * kRequestSize);
 }
+
+TEST_F(CachedBufferedInputTest, cloneNonCacheable) {
+  constexpr int32_t kContentSize = 1 << 20; // 1MB
+  std::string content(kContentSize, 'x');
+  auto readFile = std::make_shared<InMemoryReadFile>(content);
+
+  io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setLoadQuantum(1 << 20);
+
+  auto& ids = fileIds();
+  StringIdLease fileId(ids, "testFile");
+  StringIdLease groupId(ids, "testGroup");
+
+  const auto fileNum = fileId.id();
+  CachedBufferedInput input(
+      readFile,
+      MetricsLog::voidLog(),
+      std::move(fileId),
+      cache_.get(),
+      tracker_,
+      std::move(groupId),
+      ioStatistics_,
+      /*ioStats=*/nullptr,
+      executor_.get(),
+      readerOptions);
+
+  ASSERT_TRUE(input.hasCache());
+
+  auto nonCacheable = input.cloneNonCacheable();
+  ASSERT_TRUE(nonCacheable->hasCache());
+
+  // Read through the non-cacheable clone.
+  constexpr uint64_t kOffset = 0;
+  constexpr uint64_t kLength = 1'024;
+  StreamIdentifier sid(0);
+  auto stream = nonCacheable->enqueue({kOffset, kLength}, &sid);
+  nonCacheable->load(LogType::FILE);
+
+  auto result = getNext(*stream);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->size(), kLength);
+
+  // The cache should have an entry from the non-cacheable read.
+  auto statsAfterLoad = cache_->refreshStats();
+  EXPECT_GT(statsAfterLoad.numEntries, 0);
+
+  // The entry should not be evictable while the non-cacheable clone is alive.
+  const cache::RawFileCacheKey cacheKey{fileNum, kOffset};
+  EXPECT_FALSE(cache_->testingIsEvictable(cacheKey));
+
+  // Release the stream and destroy the non-cacheable input. Because
+  // cacheable=false, the destructor marks preloaded entries as immediately
+  // evictable (lastUse=0, numUses=0).
+  stream.reset();
+  nonCacheable.reset();
+
+  // The entry is still in cache but now marked as immediately evictable.
+  auto statsAfterDestroy = cache_->refreshStats();
+  EXPECT_EQ(statsAfterDestroy.numEntries, statsAfterLoad.numEntries);
+  EXPECT_TRUE(cache_->testingIsEvictable(cacheKey));
+
+  // Read the same region through a cacheable input — should still work.
+  StringIdLease fileId2(ids, "testFile2");
+  StringIdLease groupId2(ids, "testGroup2");
+  const auto fileNum2 = fileId2.id();
+  CachedBufferedInput cacheableInput(
+      readFile,
+      MetricsLog::voidLog(),
+      std::move(fileId2),
+      cache_.get(),
+      tracker_,
+      std::move(groupId2),
+      ioStatistics_,
+      /*ioStats=*/nullptr,
+      executor_.get(),
+      readerOptions);
+
+  auto stream2 = cacheableInput.enqueue({kOffset, kLength}, &sid);
+  cacheableInput.load(LogType::FILE);
+  auto result2 = getNext(*stream2);
+  ASSERT_TRUE(result2.has_value());
+  EXPECT_EQ(result2->size(), kLength);
+
+  // The cacheable input's entry should persist and not be marked evictable.
+  stream2.reset();
+  const cache::RawFileCacheKey cacheKey2{fileNum2, kOffset};
+  auto statsAfterCacheable = cache_->refreshStats();
+  EXPECT_GT(statsAfterCacheable.numEntries, 0);
+  EXPECT_FALSE(cache_->testingIsEvictable(cacheKey2));
+}
+
 } // namespace

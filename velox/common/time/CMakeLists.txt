@@ -15,10 +15,17 @@ if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()
 
-velox_add_library(velox_time CpuWallTimer.cpp Timer.cpp)
+velox_add_library(
+  velox_time
+  CpuWallTimer.cpp
+  Timer.cpp
+  HEADERS
+  CpuWallTimer.h
+  Timer.h
+)
 velox_link_libraries(velox_time PUBLIC velox_process velox_test_util Folly::folly fmt::fmt)
 
-velox_add_library(velox_hierarchical_timer HierarchicalTimer.cpp)
+velox_add_library(velox_hierarchical_timer HierarchicalTimer.cpp HEADERS HierarchicalTimer.h)
 velox_link_libraries(
   velox_hierarchical_timer
   PUBLIC velox_exception velox_common_base Folly::folly fmt::fmt glog::glog

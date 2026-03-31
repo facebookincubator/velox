@@ -265,6 +265,8 @@ int main(int argc, char** argv) {
           {"convex_hull_agg_merge_extract", nullptr},
           {"make_set_digest", std::make_shared<SetDigestResultVerifier>()},
           {"merge_set_digest", std::make_shared<SetDigestResultVerifier>()},
+          // Velox-only function, not available in Presto.
+          {"vector_sum", nullptr},
       };
 
   using Runner = facebook::velox::exec::test::AggregationFuzzerRunner;

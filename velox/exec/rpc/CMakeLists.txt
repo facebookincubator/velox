@@ -14,7 +14,7 @@
 
 # RPCNode is part of velox_core (in core/PlanNode.h)
 
-velox_add_library(velox_rpc_state RPCState.cpp)
+velox_add_library(velox_rpc_state RPCState.cpp HEADERS RPCState.h)
 
 velox_link_libraries(
   velox_rpc_state
@@ -25,11 +25,11 @@ velox_link_libraries(
   Folly::folly
 )
 
-velox_add_library(velox_rpc_rate_limiter RPCRateLimiter.cpp)
+velox_add_library(velox_rpc_rate_limiter RPCRateLimiter.cpp HEADERS RPCRateLimiter.h)
 
 velox_link_libraries(velox_rpc_rate_limiter velox_future)
 
-velox_add_library(velox_rpc_operator RPCOperator.cpp)
+velox_add_library(velox_rpc_operator RPCOperator.cpp HEADERS RPCOperator.h)
 
 velox_link_libraries(
   velox_rpc_operator
@@ -45,6 +45,24 @@ velox_link_libraries(
   Folly::folly
 )
 
-velox_add_library(velox_rpc_plan_node_translator RPCPlanNodeTranslator.cpp)
+velox_add_library(
+  velox_rpc_plan_node_translator
+  RPCPlanNodeTranslator.cpp
+  HEADERS
+  RPCPlanNodeTranslator.h
+)
 
 velox_link_libraries(velox_rpc_plan_node_translator velox_rpc_operator velox_exec)
+
+if(${VELOX_BUILD_TESTING})
+  velox_add_library(velox_demo_rpc_function tests/DemoRPCFunction.cpp)
+
+  velox_link_libraries(
+    velox_demo_rpc_function
+    velox_mock_rpc_client
+    velox_expression_functions
+    velox_async_rpc_function
+  )
+
+  add_subdirectory(tests)
+endif()

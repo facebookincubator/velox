@@ -556,9 +556,6 @@ class ReaderOptions : public io::ReaderOptions {
  public:
   static constexpr uint64_t kDefaultFooterSpeculativeIoSize =
       1024 * 1024; // 1MB
-  /// @deprecated Use kDefaultFooterSpeculativeIoSize instead.
-  static constexpr uint64_t kDefaultFooterEstimatedSize =
-      kDefaultFooterSpeculativeIoSize;
   static constexpr uint64_t kDefaultFilePreloadThreshold =
       1024 * 1024 * 8; // 8MB
 
@@ -613,11 +610,6 @@ class ReaderOptions : public io::ReaderOptions {
   ReaderOptions& setFooterSpeculativeIoSize(uint64_t size) {
     footerSpeculativeIoSize_ = size;
     return *this;
-  }
-
-  /// @deprecated Use setFooterSpeculativeIoSize instead.
-  ReaderOptions& setFooterEstimatedSize(uint64_t size) {
-    return setFooterSpeculativeIoSize(size);
   }
 
   ReaderOptions& setFilePreloadThreshold(uint64_t threshold) {
@@ -684,11 +676,6 @@ class ReaderOptions : public io::ReaderOptions {
 
   uint64_t footerSpeculativeIoSize() const {
     return footerSpeculativeIoSize_;
-  }
-
-  /// @deprecated Use footerSpeculativeIoSize instead.
-  uint64_t footerEstimatedSize() const {
-    return footerSpeculativeIoSize();
   }
 
   uint64_t filePreloadThreshold() const {
@@ -759,6 +746,40 @@ class ReaderOptions : public io::ReaderOptions {
     fileMetadataCacheEnabled_ = value;
   }
 
+  /// If true, pins parsed metadata objects (e.g., StripeGroup, IndexGroup) in
+  /// the reader's metadata cache with strong references so they are never
+  /// evicted. This avoids re-reading and re-parsing metadata on every stripe
+  /// access when weak-pointer cache entries would otherwise expire.
+  bool pinFileMetadata() const {
+    return pinFileMetadata_;
+  }
+
+  void setPinFileMetadata(bool value) {
+    pinFileMetadata_ = value;
+  }
+
+  /// Whether to load and initialize the cluster index during file open.
+  /// When true, the cluster index section is preloaded and the structured
+  /// ClusterIndex object is created. Default true.
+  bool loadClusterIndex() const {
+    return loadClusterIndex_;
+  }
+
+  void setLoadClusterIndex(bool value) {
+    loadClusterIndex_ = value;
+  }
+
+  /// Whether to load and initialize the chunk index during file open.
+  /// When true, the chunk index section is preloaded and the structured
+  /// ChunkIndex object is created. Default true.
+  bool loadChunkIndex() const {
+    return loadChunkIndex_;
+  }
+
+  void setLoadChunkIndex(bool value) {
+    loadChunkIndex_ = value;
+  }
+
   bool allowEmptyFile() const {
     return allowEmptyFile_;
   }
@@ -785,6 +806,9 @@ class ReaderOptions : public io::ReaderOptions {
   bool adjustTimestampToTimezone_{false};
   bool selectiveNimbleReaderEnabled_{false};
   bool fileMetadataCacheEnabled_{false};
+  bool pinFileMetadata_{false};
+  bool loadClusterIndex_{true};
+  bool loadChunkIndex_{true};
   bool allowEmptyFile_{false};
 };
 

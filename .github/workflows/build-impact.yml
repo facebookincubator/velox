@@ -1,0 +1,217 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Build Impact Analysis
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - velox/**
+      - CMakeLists.txt
+      - CMake/**
+      - .github/workflows/build-impact.yml
+      - .github/scripts/generate-dependency-graph.py
+      - .github/scripts/detect-build-impact.py
+
+  pull_request:
+    paths:
+      - velox/**
+      - '!velox/docs/**'
+      - CMakeLists.txt
+      - CMake/**
+      # TODO: Remove after testing comment workflow
+      - .github/**
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.repository }}-${{ github.head_ref || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  # ==========================================================================
+  # Push to main: generate and upload the dependency graph artifact.
+  # ==========================================================================
+  generate-graph:
+    if: github.event_name == 'push'
+    runs-on: 8-core-ubuntu
+    container: ghcr.io/facebookincubator/velox-dev:adapters
+    env:
+      VELOX_DEPENDENCY_SOURCE: SYSTEM
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/generate-dependency-graph
+
+      - name: Upload dependency graph
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-graph
+          path: dependency-graph.json
+          retention-days: 90
+
+  # ==========================================================================
+  # Pull request: check what changed and whether the graph artifact exists.
+  # ==========================================================================
+  check-changes:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      cmake-changed: ${{ steps.check.outputs.cmake_changed }}
+      graph-available: ${{ steps.artifact.outputs.available }}
+      graph-run-id: ${{ steps.artifact.outputs.run_id }}
+      use-slow-path: ${{ steps.decide.outputs.slow }}
+    steps:
+      - name: Get changed files
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Use the GitHub API to get the changed files directly.
+          # This avoids issues with fork PRs where HEAD_SHA may not
+          # be available in the local clone.
+          gh api --paginate \
+            "/repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
+            -q '.[].filename' > changed_files.txt
+          cat changed_files.txt
+
+          # Check if any CMake files changed.
+          if grep -qE '(CMakeLists\.txt|CMake/.+\.cmake)$' changed_files.txt; then
+            echo "cmake_changed=true" >> "$GITHUB_OUTPUT"
+            echo "CMake files changed — slow path needed."
+          else
+            echo "cmake_changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check if graph artifact exists
+        id: artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Find the latest successful generate-graph run on main.
+          run_id=$(gh api \
+            "/repos/${{ github.repository }}/actions/workflows/build-impact.yml/runs?branch=main&status=success&per_page=5" \
+            -q '.workflow_runs[0].id // empty')
+
+          if [ -z "$run_id" ]; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "No graph artifact found — slow path needed."
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+            echo "Graph artifact available from run $run_id."
+          fi
+
+      - name: Decide fast or slow path
+        id: decide
+        env:
+          CMAKE_CHANGED: ${{ steps.check.outputs.cmake_changed }}
+          GRAPH_AVAILABLE: ${{ steps.artifact.outputs.available }}
+        run: |
+          if [[ "$CMAKE_CHANGED" == "true" ]] || \
+             [[ "$GRAPH_AVAILABLE" == "false" ]]; then
+            echo "slow=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "slow=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload changed files list
+        uses: actions/upload-artifact@v4
+        with:
+          name: changed-files
+          path: changed_files.txt
+
+  # ==========================================================================
+  # Fast path: download pre-computed graph, run impact detection.
+  # ==========================================================================
+  fast-detect:
+    needs: check-changes
+    if: needs.check-changes.outputs.use-slow-path == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Download changed files
+        uses: actions/download-artifact@v4
+        with:
+          name: changed-files
+
+      - name: Download dependency graph
+        uses: actions/download-artifact@v4
+        with:
+          name: dependency-graph
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ needs.check-changes.outputs.graph-run-id }}
+
+      - name: Run impact detection
+        run: |
+          python3 .github/scripts/detect-build-impact.py \
+            --graph dependency-graph.json \
+            --changed-files changed_files.txt \
+            --build-type release \
+            --graph-source "Fast path • Graph from main@${{ github.event.pull_request.base.sha }}" \
+            --output comment.md
+
+      - name: Upload comment
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-impact-comment
+          path: comment.md
+
+  # ==========================================================================
+  # Slow path: generate graph from PR branch, then run impact detection.
+  # ==========================================================================
+  slow-detect:
+    needs: check-changes
+    if: needs.check-changes.outputs.use-slow-path == 'true'
+    runs-on: 8-core-ubuntu
+    container: ghcr.io/facebookincubator/velox-dev:adapters
+    env:
+      VELOX_DEPENDENCY_SOURCE: SYSTEM
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download changed files
+        uses: actions/download-artifact@v4
+        with:
+          name: changed-files
+
+      - uses: ./.github/actions/generate-dependency-graph
+
+      - name: Run impact detection
+        run: |
+          python3 .github/scripts/detect-build-impact.py \
+            --graph dependency-graph.json \
+            --changed-files changed_files.txt \
+            --build-type release \
+            --graph-source "Slow path • Graph generated from PR branch" \
+            --output comment.md
+
+      - name: Upload comment
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-impact-comment
+          path: comment.md

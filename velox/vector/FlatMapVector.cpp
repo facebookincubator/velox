@@ -130,7 +130,17 @@ void FlatMapVector::resize(vector_size_t newSize, bool setNotNull) {
 
         if (i < inMaps_.size() && inMaps_[i] != nullptr) {
           VELOX_CHECK(inMaps_[i]->unique(), "Resizing shared in map vector");
-          AlignedBuffer::reallocate<bool>(&inMaps_[i], newSize, 0);
+          if (!inMaps_[i]->isMutable()) {
+            // Can't reallocate an immutable buffer, must create new buffer.
+            auto newInMap = AlignedBuffer::allocate<bool>(newSize, pool_, 0);
+            memcpy(
+                newInMap->asMutable<uint64_t>(),
+                inMaps_[i]->as<uint64_t>(),
+                bits::nbytes(oldSize));
+            inMaps_[i] = std::move(newInMap);
+          } else {
+            AlignedBuffer::reallocate<bool>(&inMaps_[i], newSize, 0);
+          }
         }
       }
     }

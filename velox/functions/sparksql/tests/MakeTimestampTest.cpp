@@ -157,13 +157,15 @@ TEST_F(MakeTimestampTest, errors) {
        1,
        1,
        1,
+       1,
+       1,
        1});
-  const auto month = makeFlatVector<int32_t>({1, 1, 0, 13, 1, 1, 1, 1});
-  const auto day = makeFlatVector<int32_t>({1, 1, 1, 1, 0, 32, 1, 1});
-  const auto hour = makeFlatVector<int32_t>({1, 1, 1, 1, 1, 1, 25, 1});
-  const auto minute = makeFlatVector<int32_t>({1, 1, 1, 1, 1, 1, 1, 61});
+  const auto month = makeFlatVector<int32_t>({1, 1, 0, 13, 1, 1, 1, 1, 1, 1});
+  const auto day = makeFlatVector<int32_t>({1, 1, 1, 1, 0, 32, 1, 1, 1, 1});
+  const auto hour = makeFlatVector<int32_t>({1, 1, 1, 1, 1, 1, 25, 1, 24, 1});
+  const auto minute = makeFlatVector<int32_t>({1, 1, 1, 1, 1, 1, 1, 61, 1, 60});
   const auto micros =
-      makeFlatVector<int64_t>({1, 1, 1, 1, 1, 1, 1, 1}, microsType);
+      makeFlatVector<int64_t>({1, 1, 1, 1, 1, 1, 1, 1, 1, 1}, microsType);
   auto data = makeRowVector({year, month, day, hour, minute, micros});
   testInvalidInputs(data);
 

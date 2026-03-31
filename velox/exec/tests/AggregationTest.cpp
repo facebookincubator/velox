@@ -18,7 +18,7 @@
 #include <folly/Math.h>
 #include <re2/re2.h>
 
-#include "folly/experimental/EventCount.h"
+#include "folly/synchronization/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/SharedArbitrator.h"
@@ -391,6 +391,7 @@ class AggregationTest : public OperatorTestBase {
         false,
         false,
         true,
+        false, // hasCountFlag
         true,
         false,
         pool_.get());
@@ -4220,6 +4221,7 @@ TEST_F(AggregationTest, destroyAfterPartialInitialization) {
       false, // hasNext
       false, // isJoinBuild
       false, // hasProbedFlag
+      false, // hasCountFlag
       false, // hasNormalizedKeys
       false, // useListRowIndex
       pool());

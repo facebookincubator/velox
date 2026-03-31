@@ -302,6 +302,8 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
 
   VLOG(1) << "Adding split " << split_->toString();
 
+  ++numSplitsByFileFormat_[split_->fileFormat];
+
   if (splitReader_) {
     splitReader_.reset();
   }
@@ -551,6 +553,12 @@ HiveDataSource::getRuntimeStats() {
          RuntimeMetric(numBucketConversion_)});
   }
 
+  for (const auto& [format, count] : numSplitsByFileFormat_) {
+    res.insert(
+        {fmt::format("{}{}", kFileFormat, dwio::common::toString(format)),
+         RuntimeMetric(count)});
+  }
+
   const auto ioStatsMap = ioStats_->stats();
   for (const auto& storageStats : ioStatsMap) {
     res.emplace(storageStats.first, storageStats.second);
@@ -581,6 +589,10 @@ void HiveDataSource::setFromDataSource(
   ioStats_ = std::move(source->ioStats_);
 
   numBucketConversion_ += source->numBucketConversion_;
+
+  for (const auto& [format, count] : source->numSplitsByFileFormat_) {
+    numSplitsByFileFormat_[format] += count;
+  }
 }
 
 int64_t HiveDataSource::estimatedRowSize() {
