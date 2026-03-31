@@ -88,51 +88,27 @@ class CudfOperatorBase : public exec::Operator, public NvtxHelper {
         nvtxMethods_(nvtxMethods) {}
 
   void addInput(RowVectorPtr input) override {
-    if (nvtxMethods_ & NvtxMethodFlag::kAddInput) {
-      if (CudfConfig::getInstance().debugEnabled) {
-        VLOG(2) << "Calling " << className_ << "::addInput";
-      }
-      VELOX_NVTX_OPERATOR_FUNC_RANGE();
-      doAddInput(std::move(input));
-    } else {
-      doAddInput(std::move(input));
-    }
+    VELOX_NVTX_OPERATOR_FUNC_RANGE_IF(
+        nvtxMethods_ & NvtxMethodFlag::kAddInput, className_);
+    doAddInput(std::move(input));
   }
 
   RowVectorPtr getOutput() override {
-    if (nvtxMethods_ & NvtxMethodFlag::kGetOutput) {
-      if (CudfConfig::getInstance().debugEnabled) {
-        VLOG(2) << "Calling " << className_ << "::getOutput";
-      }
-      VELOX_NVTX_OPERATOR_FUNC_RANGE();
-      return doGetOutput();
-    } else {
-      return doGetOutput();
-    }
+    VELOX_NVTX_OPERATOR_FUNC_RANGE_IF(
+        nvtxMethods_ & NvtxMethodFlag::kGetOutput, className_);
+    return doGetOutput();
   }
 
   void noMoreInput() override {
-    if (nvtxMethods_ & NvtxMethodFlag::kNoMoreInput) {
-      if (CudfConfig::getInstance().debugEnabled) {
-        VLOG(2) << "Calling " << className_ << "::noMoreInput";
-      }
-      VELOX_NVTX_OPERATOR_FUNC_RANGE();
-      doNoMoreInput();
-    } else {
-      doNoMoreInput();
-    }
+    VELOX_NVTX_OPERATOR_FUNC_RANGE_IF(
+        nvtxMethods_ & NvtxMethodFlag::kNoMoreInput, className_);
+    doNoMoreInput();
   }
 
   void close() override {
-    if (nvtxMethods_ & NvtxMethodFlag::kClose) {
-      VELOX_NVTX_OPERATOR_FUNC_RANGE();
-      if (CudfConfig::getInstance().debugEnabled) {
-        VLOG(2) << "Calling " << className_ << "::close";
-      }
-      doClose();
-    } else {
-      doClose();
-    }
+    VELOX_NVTX_OPERATOR_FUNC_RANGE_IF(
+        nvtxMethods_ & NvtxMethodFlag::kClose, className_);
+    doClose();
   }
 
  protected:
