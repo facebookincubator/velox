@@ -14,6 +14,7 @@
 velox_add_library(
   velox_functions_spark_aggregates
   ApproxCountDistinctForIntervalsAggregate.cpp
+  ApproxCountDistinctForIntervalsAggregate.h
   ApproxPercentileAggregate.cpp
   AverageAggregate.cpp
   BitwiseXorAggregate.cpp

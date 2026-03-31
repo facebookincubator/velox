@@ -38,6 +38,7 @@ velox_add_library(
   TimestampUtils.cpp
   Transform.cpp
   UnscaledValueFunction.cpp
+  XxHash64.h
 )
 
 velox_link_libraries(
