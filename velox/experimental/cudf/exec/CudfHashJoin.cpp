@@ -426,7 +426,7 @@ CudfHashJoinProbe::CudfHashJoinProbe(
     exec::ExprSet exprs({joinNode_->filter()}, operatorCtx_->execCtx());
     VELOX_CHECK_EQ(exprs.exprs().size(), 1);
     useAstFilter_ = CudfConfig::getInstance().astExpressionEnabled &&
-        !containsDecimalType(exprs.exprs()[0]);
+        !containsDecimalType(exprs.exprs()[0], false);
 
     // Create a reusable evaluator for the filter column. This is expensive to
     // build, and the expression + input schema are stable for the lifetime of

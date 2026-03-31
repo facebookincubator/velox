@@ -18,16 +18,43 @@
 
 namespace facebook::velox::cudf_velox {
 
-bool containsDecimalType(const std::shared_ptr<velox::exec::Expr>& expr) {
-  if (!expr) {
-    return false;
-  }
-  if (expr->type() && expr->type()->isDecimal()) {
+bool isOfDecimalType(const std::shared_ptr<velox::exec::Expr>& expr) {
+  return expr && expr->type() && expr->type()->isDecimal();
+}
+
+bool containsDecimalTypeRecursive(const std::shared_ptr<velox::exec::Expr>& expr) {
+  // check output type
+  if (isOfDecimalType(expr)) {
     return true;
   }
+  // recurse into inputs
   for (const auto& input : expr->inputs()) {
-    if (containsDecimalType(input)) {
+    if (containsDecimalTypeRecursive(input)) {
       return true;
+    }
+  }
+  return false;
+}
+
+bool containsDecimalType(const std::shared_ptr<velox::exec::Expr>& expr,
+                         const bool deep) {
+  // check output type
+  if (isOfDecimalType(expr)) {
+    return true;
+  }
+  if (deep) {
+    // check recursively
+    for (const auto& input : expr->inputs()) {
+      if (containsDecimalTypeRecursive(input)) {
+        return true;
+      } 
+    }
+  } else {
+    // only check immediate inputs
+    for (const auto& input : expr->inputs()) {
+      if (isOfDecimalType(input)) {
+        return true;
+      }
     }
   }
   return false;

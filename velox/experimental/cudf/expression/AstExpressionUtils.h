@@ -228,7 +228,7 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
 
   // reject anything with DECIMAL for now
   // @TODO implement DECIMAL in AST and JIT
-  if (containsDecimalType(expr)) {
+  if (containsDecimalType(expr, false)) {
     LOG(WARNING) << "DECIMAL expression not supported by AST/JIT: "
                  << expr->toString();
     return false;
