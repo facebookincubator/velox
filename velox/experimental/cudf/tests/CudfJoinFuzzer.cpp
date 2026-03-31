@@ -110,8 +110,11 @@ class CudfJoinFuzzer : public JoinFuzzerBase {
     }
 
     // Determine output columns based on join type.
+    // Semi filter and anti joins output only probe-side columns.
+    // Semi project joins output probe-side columns plus a "match" boolean.
     std::vector<std::string> outputColumns;
-    if (core::isLeftSemiFilterJoin(joinType) ||
+    if (core::isLeftSemiProjectJoin(joinType) ||
+        core::isLeftSemiFilterJoin(joinType) ||
         core::isRightSemiFilterJoin(joinType) || core::isAntiJoin(joinType)) {
       if (core::isRightSemiFilterJoin(joinType)) {
         outputColumns = asRowType(buildInput[0]->type())->names();
@@ -130,6 +133,11 @@ class CudfJoinFuzzer : public JoinFuzzerBase {
     // Remove some output columns.
     const auto numOutput = randInt(1, outputColumns.size());
     outputColumns.resize(numOutput);
+
+    // Semi project joins require a trailing "match" boolean column.
+    if (core::isLeftSemiProjectJoin(joinType)) {
+      outputColumns.push_back("match");
+    }
 
     // Build the hash join plan.
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
