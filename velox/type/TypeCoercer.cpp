@@ -15,6 +15,8 @@
  */
 #include "velox/type/TypeCoercer.h"
 
+#include "velox/type/CastRegistry.h"
+
 namespace facebook::velox {
 
 int64_t Coercion::overallCost(const std::vector<Coercion>& coercions) {
@@ -74,9 +76,22 @@ std::optional<Coercion> TypeCoercer::coerceTypeBase(
     return Coercion{.type = fromType, .cost = 0};
   }
 
+  // Check built-in coercions first.
   auto it = kAllowedCoercions.find({fromType->name(), toTypeName});
   if (it != kAllowedCoercions.end()) {
     return it->second;
+  }
+
+  // Check custom type coercions from CastRulesRegistry. Built-in coercions
+  // are already handled by kAllowedCoercions above. Use getCustomType (not
+  // getType) because parametric built-in factories (ARRAY, ROW, DECIMAL)
+  // throw when called with empty parameters.
+  if (fromType->size() == 0) {
+    auto toType = getCustomType(toTypeName, {});
+    if (toType != nullptr &&
+        CastRulesRegistry::instance().canCoerce(fromType, toType)) {
+      return Coercion{.type = std::move(toType), .cost = 1};
+    }
   }
 
   return std::nullopt;

@@ -391,5 +391,18 @@ class IndexLookupJoin : public Operator {
   // after the no-more-splits signal is received (i.e., 'noMoreIndexSplits_' is
   // true).
   std::vector<std::shared_ptr<connector::ConnectorSplit>> indexSplits_;
+
+  // Traces the index splits received by this operator for replay. Set when
+  // tracing is enabled for this operator.
+  std::unique_ptr<trace::TraceSplitWriter> indexSplitTracer_;
+
+  // Creates the index split tracer if input tracing is enabled.
+  void createIndexSplitTracer();
+
+  // Traces the given index split for replay.
+  void traceIndexSplit(const exec::Split& split);
+
+  // Closes and resets the index split tracer.
+  void closeIndexSplitTracer();
 };
 } // namespace facebook::velox::exec

@@ -793,6 +793,13 @@ class RowContainer {
     --countRef(row);
   }
 
+  /// Adds 'n' to the count at the given row. Used during hash table merge
+  /// to combine counts from multiple build-side tables.
+  void addCount(char* row, int32_t n) const {
+    VELOX_DCHECK_NE(countOffset_, 0);
+    countRef(row) += n;
+  }
+
   /// Returns the offset of a uint32_t row size or 0 if the row has no variable
   /// width fields or accumulators.
   int32_t rowSizeOffset() const {

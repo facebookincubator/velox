@@ -120,6 +120,37 @@ class ConfigBase : public IConfig {
 
   std::unordered_map<std::string, std::string> rawConfigsCopy() const final;
 
+  /// Converts a session key to another config key by replacing
+  /// '_' with '-'.
+  static std::string toConfigKey(std::string_view sessionKey);
+
+  /// Returns the value for 'key' if present; otherwise checks 'fallback'.
+  /// Fallback key is derived from 'key' by replacing '_' with '-'.
+  template <typename T>
+  std::optional<T> getWithFallback(
+      std::string_view key,
+      const ConfigBase& fallback) const {
+    if (auto value = get<T>(std::string(key))) {
+      return value;
+    }
+    return fallback.get<T>(toConfigKey(key));
+  }
+
+  /// Deprecated: Do not use in new code.
+  /// Legacy helper for key pairs that don't follow the standard
+  /// session-key('_') <-> config-key('-') naming convention.
+  /// Prefer getWithFallback(key, fallback) instead.
+  template <typename T>
+  std::optional<T> getLegacyWithFallback(
+      std::string_view key,
+      const ConfigBase& fallback,
+      std::string_view fallbackKey) const {
+    if (auto value = get<T>(std::string(key))) {
+      return value;
+    }
+    return fallback.get<T>(std::string(fallbackKey));
+  }
+
  protected:
   mutable std::shared_mutex mutex_;
   std::unordered_map<std::string, std::string> configs_;

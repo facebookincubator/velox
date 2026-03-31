@@ -38,6 +38,7 @@ const config = {
         blog: {
           showReadingTime: true,
           onUntruncatedBlogPosts: 'ignore',
+          blogSidebarCount: 24,
         },
         theme: {
           customCss: require.resolve('./src/css/custom.css'),

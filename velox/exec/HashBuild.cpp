@@ -1061,7 +1061,6 @@ void HashBuild::processSpillInput() {
 void HashBuild::addRuntimeStats() {
   // Report range sizes and number of distinct values for the join keys.
   const auto& hashers = table_->hashers();
-  const auto hashTableStats = table_->stats();
   uint64_t asRange{0};
   uint64_t asDistinct{0};
   auto lockedStats = stats_.wlock();
@@ -1129,16 +1128,7 @@ void HashBuild::addRuntimeStats() {
     }
   }
 
-  lockedStats->runtimeStats[std::string(BaseHashTable::kCapacity)] =
-      RuntimeMetric(hashTableStats.capacity);
-  lockedStats->runtimeStats[std::string(BaseHashTable::kNumRehashes)] =
-      RuntimeMetric(hashTableStats.numRehashes);
-  lockedStats->runtimeStats[std::string(BaseHashTable::kNumDistinct)] =
-      RuntimeMetric(hashTableStats.numDistinct);
-  if (hashTableStats.numTombstones != 0) {
-    lockedStats->runtimeStats[std::string(BaseHashTable::kNumTombstones)] =
-        RuntimeMetric(hashTableStats.numTombstones);
-  }
+  table_->addRuntimeStats(lockedStats->runtimeStats);
 
   // Add max spilling level stats if spilling has been triggered.
   if (spiller_ != nullptr && spiller_->spillTriggered()) {

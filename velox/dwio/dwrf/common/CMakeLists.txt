@@ -29,6 +29,25 @@ velox_add_library(
   Statistics.cpp
   wrap/orc-proto-wrapper.cpp
   wrap/dwrf-proto-wrapper.cpp
+  HEADERS
+  ByteRLE.h
+  Checksum.h
+  Common.h
+  Compression.h
+  Config.h
+  DecoderUtil.h
+  Decryption.h
+  EncoderUtil.h
+  Encryption.h
+  EncryptionCommon.h
+  EncryptionSpecification.h
+  FileMetadata.h
+  FloatingPointDecoder.h
+  IntEncoder.h
+  NextVisitor.h
+  RLEv1.h
+  RLEv2.h
+  Statistics.h
 )
 
 velox_link_libraries(

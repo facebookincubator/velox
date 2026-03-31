@@ -746,6 +746,18 @@ class ReaderOptions : public io::ReaderOptions {
     fileMetadataCacheEnabled_ = value;
   }
 
+  /// If true, pins parsed metadata objects (e.g., StripeGroup, IndexGroup) in
+  /// the reader's metadata cache with strong references so they are never
+  /// evicted. This avoids re-reading and re-parsing metadata on every stripe
+  /// access when weak-pointer cache entries would otherwise expire.
+  bool pinFileMetadata() const {
+    return pinFileMetadata_;
+  }
+
+  void setPinFileMetadata(bool value) {
+    pinFileMetadata_ = value;
+  }
+
   /// Whether to load and initialize the cluster index during file open.
   /// When true, the cluster index section is preloaded and the structured
   /// ClusterIndex object is created. Default true.
@@ -794,6 +806,7 @@ class ReaderOptions : public io::ReaderOptions {
   bool adjustTimestampToTimezone_{false};
   bool selectiveNimbleReaderEnabled_{false};
   bool fileMetadataCacheEnabled_{false};
+  bool pinFileMetadata_{false};
   bool loadClusterIndex_{true};
   bool loadChunkIndex_{true};
   bool allowEmptyFile_{false};

@@ -29,6 +29,20 @@ velox_add_library(
   RegrReplacementAggregate.cpp
   SumAggregate.cpp
   VarianceAggregate.cpp
+  HEADERS
+  ApproxPercentileAggregate.h
+  AverageAggregate.h
+  BitwiseXorAggregate.h
+  BloomFilterAggAggregate.h
+  CentralMomentsAggregate.h
+  CollectListAggregate.h
+  CovarianceAggregate.h
+  DecimalAverageAggregate.h
+  DecimalSumAggregate.h
+  Register.h
+  RegrReplacementAggregate.h
+  SumAggregate.h
+  VarianceAggregate.h
 )
 
 velox_link_libraries(

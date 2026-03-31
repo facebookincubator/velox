@@ -33,7 +33,27 @@ if(VELOX_ENABLE_PARQUET)
   list(APPEND ICEBERG_SOURCES IcebergParquetStatsCollector.cpp)
 endif()
 
-velox_add_library(velox_hive_iceberg_splitreader ${ICEBERG_SOURCES})
+velox_add_library(
+  velox_hive_iceberg_splitreader
+  ${ICEBERG_SOURCES}
+  HEADERS
+  IcebergColumnHandle.h
+  IcebergConfig.h
+  IcebergConnector.h
+  IcebergDataFileStatistics.h
+  IcebergDataSink.h
+  IcebergDataSource.h
+  IcebergDeleteFile.h
+  IcebergMetadataColumns.h
+  IcebergParquetStatsCollector.h
+  IcebergPartitionName.h
+  IcebergSplit.h
+  IcebergSplitReader.h
+  PartitionSpec.h
+  PositionalDeleteFileReader.h
+  TransformEvaluator.h
+  TransformExprBuilder.h
+)
 
 velox_link_libraries(
   velox_hive_iceberg_splitreader

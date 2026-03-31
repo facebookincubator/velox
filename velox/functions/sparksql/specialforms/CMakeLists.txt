@@ -22,6 +22,15 @@ velox_add_library(
   MakeDecimal.cpp
   SparkCastExpr.cpp
   SparkCastHooks.cpp
+  HEADERS
+  AtLeastNNonNulls.h
+  DecimalRound.h
+  FromJson.h
+  GetArrayStructFields.h
+  GetStructField.h
+  MakeDecimal.h
+  SparkCastExpr.h
+  SparkCastHooks.h
 )
 
 velox_link_libraries(

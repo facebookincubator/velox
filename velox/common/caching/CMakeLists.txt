@@ -22,6 +22,16 @@ velox_add_library(
   SsdFile.cpp
   SsdFileTracker.cpp
   StringIdMap.cpp
+  HEADERS
+  AsyncDataCache.h
+  CacheTTLController.h
+  FileGroupStats.h
+  FileIds.h
+  ScanTracker.h
+  SsdCache.h
+  SsdFile.h
+  SsdFileTracker.h
+  StringIdMap.h
 )
 velox_link_libraries(
   velox_caching
@@ -40,3 +50,7 @@ velox_link_libraries(
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()
+
+velox_add_library(velox_simple_lru_cache INTERFACE HEADERS SimpleLRUCache.h)
+
+velox_add_library(velox_cached_factory INTERFACE HEADERS CachedFactory.h)
