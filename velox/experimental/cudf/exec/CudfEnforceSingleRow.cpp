@@ -19,8 +19,6 @@
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
-#include <cudf/table/table.hpp>
-
 namespace facebook::velox::cudf_velox {
 
 CudfEnforceSingleRow::CudfEnforceSingleRow(
@@ -49,8 +47,7 @@ void CudfEnforceSingleRow::addInput(RowVectorPtr input) {
   VELOX_CHECK_NOT_NULL(
       cudfInput, "CudfEnforceSingleRow expects CudfVector input");
 
-  // Get row count from GPU table metadata (host-side, no data transfer)
-  auto numInput = cudfInput->getTableView().num_rows();
+  auto numInput = cudfInput->size();
 
   VELOX_CHECK_NE(
       numInput, 0, "CudfEnforceSingleRow::addInput received empty set of rows");
