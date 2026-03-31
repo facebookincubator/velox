@@ -23,6 +23,7 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/SharedArbitrator.h"
 #include "velox/connectors/Connector.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveDataSink.h"
@@ -266,10 +267,7 @@ TraceReplayRunner::~TraceReplayRunner() {
   // This ensures file handles are closed while folly::RequestContext is still
   // valid, preventing use-after-free during program shutdown when the static
   // connector map is destroyed after RequestContext.
-  const auto connectorsCopy = connector::getAllConnectors();
-  for (const auto& [connectorId, connector] : connectorsCopy) {
-    connector::unregisterConnector(connectorId);
-  }
+  connector::ConnectorRegistry::unregisterAll();
 }
 
 void TraceReplayRunner::init() {
