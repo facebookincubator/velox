@@ -79,8 +79,7 @@ class CudfNestedLoopJoinTest : public testing::Test, public VectorTestBase {
       const std::vector<RowVectorPtr>& probeData,
       const std::vector<RowVectorPtr>& buildData,
       const std::vector<std::string>& outputLayout) {
-    auto planNodeIdGenerator =
-        std::make_shared<core::PlanNodeIdGenerator>();
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     return PlanBuilder(planNodeIdGenerator)
         .values(probeData)
         .nestedLoopJoin(
@@ -115,10 +114,8 @@ TEST_F(CudfNestedLoopJoinTest, basicCrossJoin) {
 }
 
 TEST_F(CudfNestedLoopJoinTest, emptyBuild) {
-  auto probeData = makeRowVector(
-      {"p0"}, {makeFlatVector<int32_t>({1, 2, 3})});
-  auto buildData = makeRowVector(
-      {"b0"}, {makeFlatVector<int64_t>({})});
+  auto probeData = makeRowVector({"p0"}, {makeFlatVector<int32_t>({1, 2, 3})});
+  auto buildData = makeRowVector({"b0"}, {makeFlatVector<int64_t>({})});
 
   auto plan = makeCrossJoinPlan({probeData}, {buildData}, {"p0", "b0"});
   auto result = AssertQueryBuilder(plan).copyResults(pool());
@@ -126,10 +123,8 @@ TEST_F(CudfNestedLoopJoinTest, emptyBuild) {
 }
 
 TEST_F(CudfNestedLoopJoinTest, emptyProbe) {
-  auto probeData = makeRowVector(
-      {"p0"}, {makeFlatVector<int32_t>({})});
-  auto buildData = makeRowVector(
-      {"b0"}, {makeFlatVector<int64_t>({10, 20})});
+  auto probeData = makeRowVector({"p0"}, {makeFlatVector<int32_t>({})});
+  auto buildData = makeRowVector({"b0"}, {makeFlatVector<int64_t>({10, 20})});
 
   auto plan = makeCrossJoinPlan({probeData}, {buildData}, {"p0", "b0"});
   auto result = AssertQueryBuilder(plan).copyResults(pool());
@@ -137,10 +132,8 @@ TEST_F(CudfNestedLoopJoinTest, emptyProbe) {
 }
 
 TEST_F(CudfNestedLoopJoinTest, bothEmpty) {
-  auto probeData = makeRowVector(
-      {"p0"}, {makeFlatVector<int32_t>({})});
-  auto buildData = makeRowVector(
-      {"b0"}, {makeFlatVector<int64_t>({})});
+  auto probeData = makeRowVector({"p0"}, {makeFlatVector<int32_t>({})});
+  auto buildData = makeRowVector({"b0"}, {makeFlatVector<int64_t>({})});
 
   auto plan = makeCrossJoinPlan({probeData}, {buildData}, {"p0", "b0"});
   auto result = AssertQueryBuilder(plan).copyResults(pool());
@@ -148,10 +141,9 @@ TEST_F(CudfNestedLoopJoinTest, bothEmpty) {
 }
 
 TEST_F(CudfNestedLoopJoinTest, singleRowBuild) {
-  auto probeData = makeRowVector(
-      {"p0"}, {makeFlatVector<int32_t>({1, 2, 3, 4, 5})});
-  auto buildData = makeRowVector(
-      {"b0"}, {makeFlatVector<int64_t>({42})});
+  auto probeData =
+      makeRowVector({"p0"}, {makeFlatVector<int32_t>({1, 2, 3, 4, 5})});
+  auto buildData = makeRowVector({"b0"}, {makeFlatVector<int64_t>({42})});
 
   auto plan = makeCrossJoinPlan({probeData}, {buildData}, {"p0", "b0"});
 
@@ -164,19 +156,13 @@ TEST_F(CudfNestedLoopJoinTest, singleRowBuild) {
 }
 
 TEST_F(CudfNestedLoopJoinTest, multipleProbeAndBuildBatches) {
-  auto probeBatch1 = makeRowVector(
-      {"p0"}, {makeFlatVector<int32_t>({1, 2})});
-  auto probeBatch2 = makeRowVector(
-      {"p0"}, {makeFlatVector<int32_t>({3})});
-  auto buildBatch1 = makeRowVector(
-      {"b0"}, {makeFlatVector<int64_t>({10})});
-  auto buildBatch2 = makeRowVector(
-      {"b0"}, {makeFlatVector<int64_t>({20})});
+  auto probeBatch1 = makeRowVector({"p0"}, {makeFlatVector<int32_t>({1, 2})});
+  auto probeBatch2 = makeRowVector({"p0"}, {makeFlatVector<int32_t>({3})});
+  auto buildBatch1 = makeRowVector({"b0"}, {makeFlatVector<int64_t>({10})});
+  auto buildBatch2 = makeRowVector({"b0"}, {makeFlatVector<int64_t>({20})});
 
   auto plan = makeCrossJoinPlan(
-      {probeBatch1, probeBatch2},
-      {buildBatch1, buildBatch2},
-      {"p0", "b0"});
+      {probeBatch1, probeBatch2}, {buildBatch1, buildBatch2}, {"p0", "b0"});
 
   auto expected = makeRowVector({
       makeFlatVector<int32_t>({1, 1, 2, 2, 3, 3}),
@@ -199,16 +185,14 @@ TEST_F(CudfNestedLoopJoinTest, outputColumnOrder) {
           makeFlatVector<int64_t>({99}),
       });
 
-  auto planNodeIdGenerator =
-      std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan = PlanBuilder(planNodeIdGenerator)
-                  .values({probeData})
-                  .nestedLoopJoin(
-                      PlanBuilder(planNodeIdGenerator)
-                          .values({buildData})
-                          .planNode(),
-                      {"b0", "p0", "p1"})
-                  .planNode();
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({probeData})
+          .nestedLoopJoin(
+              PlanBuilder(planNodeIdGenerator).values({buildData}).planNode(),
+              {"b0", "p0", "p1"})
+          .planNode();
 
   auto expected = makeRowVector({
       makeFlatVector<int64_t>({99}),
@@ -229,10 +213,10 @@ TEST_F(CudfNestedLoopJoinTest, largerCrossJoin) {
   std::vector<int64_t> buildValues(kBuildRows);
   std::iota(buildValues.begin(), buildValues.end(), 1000);
 
-  auto probeData = makeRowVector(
-      {"p0"}, {makeFlatVector<int32_t>(probeValues)});
-  auto buildData = makeRowVector(
-      {"b0"}, {makeFlatVector<int64_t>(buildValues)});
+  auto probeData =
+      makeRowVector({"p0"}, {makeFlatVector<int32_t>(probeValues)});
+  auto buildData =
+      makeRowVector({"b0"}, {makeFlatVector<int64_t>(buildValues)});
 
   auto plan = makeCrossJoinPlan({probeData}, {buildData}, {"p0", "b0"});
   auto result = AssertQueryBuilder(plan).copyResults(pool());
@@ -251,14 +235,10 @@ TEST_F(CudfNestedLoopJoinTest, largerCrossJoin) {
 // Ported from CPU NestedLoopJoinTest.emptyBuildOrProbeWithoutFilter
 // (cross join subset only -- GPU only supports inner cross join).
 TEST_F(CudfNestedLoopJoinTest, emptyBuildOrProbeWithoutFilter) {
-  auto probeData = makeRowVector(
-      {"p0"}, {makeFlatVector<int32_t>({1, 2, 3})});
-  auto emptyProbe = makeRowVector(
-      {"p0"}, {makeFlatVector<int32_t>({})});
-  auto buildData = makeRowVector(
-      {"b0"}, {makeFlatVector<int64_t>({10, 20})});
-  auto emptyBuild = makeRowVector(
-      {"b0"}, {makeFlatVector<int64_t>({})});
+  auto probeData = makeRowVector({"p0"}, {makeFlatVector<int32_t>({1, 2, 3})});
+  auto emptyProbe = makeRowVector({"p0"}, {makeFlatVector<int32_t>({})});
+  auto buildData = makeRowVector({"b0"}, {makeFlatVector<int64_t>({10, 20})});
+  auto emptyBuild = makeRowVector({"b0"}, {makeFlatVector<int64_t>({})});
 
   // probe x emptyBuild = 0 rows
   auto plan1 = makeCrossJoinPlan({probeData}, {emptyBuild}, {"p0", "b0"});
@@ -297,7 +277,8 @@ TEST_F(CudfNestedLoopJoinTest, allTypesCrossJoin) {
       });
 
   auto plan = makeCrossJoinPlan(
-      {probeData}, {buildData},
+      {probeData},
+      {buildData},
       {"p0", "p1", "p2", "p3", "p4", "p5", "b0", "b1"});
 
   auto expected = makeRowVector({
@@ -316,19 +297,14 @@ TEST_F(CudfNestedLoopJoinTest, allTypesCrossJoin) {
 
 // Ported from CPU NestedLoopJoinTest.mergeBuildVectors (cross join only).
 TEST_F(CudfNestedLoopJoinTest, mergeBuildVectors) {
-  auto buildBatch1 = makeRowVector(
-      {"b0"}, {makeFlatVector<int64_t>({1, 2})});
-  auto buildBatch2 = makeRowVector(
-      {"b0"}, {makeFlatVector<int64_t>({3, 4})});
-  auto buildBatch3 = makeRowVector(
-      {"b0"}, {makeFlatVector<int64_t>({5, 6, 7})});
-  auto probeData = makeRowVector(
-      {"p0"}, {makeFlatVector<int32_t>({10, 20})});
+  auto buildBatch1 = makeRowVector({"b0"}, {makeFlatVector<int64_t>({1, 2})});
+  auto buildBatch2 = makeRowVector({"b0"}, {makeFlatVector<int64_t>({3, 4})});
+  auto buildBatch3 =
+      makeRowVector({"b0"}, {makeFlatVector<int64_t>({5, 6, 7})});
+  auto probeData = makeRowVector({"p0"}, {makeFlatVector<int32_t>({10, 20})});
 
   auto plan = makeCrossJoinPlan(
-      {probeData},
-      {buildBatch1, buildBatch2, buildBatch3},
-      {"p0", "b0"});
+      {probeData}, {buildBatch1, buildBatch2, buildBatch3}, {"p0", "b0"});
   auto result = AssertQueryBuilder(plan).copyResults(pool());
 
   // 2 probe rows x 7 build rows = 14 output rows
@@ -351,8 +327,7 @@ TEST_F(CudfNestedLoopJoinTest, withNulls) {
   auto plan = makeCrossJoinPlan({probeData}, {buildData}, {"p0", "b0"});
 
   auto expected = makeRowVector({
-      makeNullableFlatVector<int64_t>(
-          {1, 1, std::nullopt, std::nullopt, 3, 3}),
+      makeNullableFlatVector<int64_t>({1, 1, std::nullopt, std::nullopt, 3, 3}),
       makeNullableFlatVector<int64_t>(
           {std::nullopt, 20, std::nullopt, 20, std::nullopt, 20}),
   });

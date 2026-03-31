@@ -20,9 +20,9 @@
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/CudfHashAggregation.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
-#include "velox/experimental/cudf/exec/CudfNestedLoopJoin.h"
 #include "velox/experimental/cudf/exec/CudfLimit.h"
 #include "velox/experimental/cudf/exec/CudfLocalPartition.h"
+#include "velox/experimental/cudf/exec/CudfNestedLoopJoin.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
 #include "velox/experimental/cudf/exec/CudfTopN.h"
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
@@ -402,8 +402,7 @@ class NestedLoopJoinBuildAdapter : public OperatorAdapter {
         std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(planNode);
     std::vector<std::unique_ptr<exec::Operator>> result;
     result.push_back(
-        std::make_unique<CudfNestedLoopJoinBuild>(
-            operatorId, ctx, nljNode));
+        std::make_unique<CudfNestedLoopJoinBuild>(operatorId, ctx, nljNode));
     return result;
   }
 };
@@ -445,8 +444,7 @@ class NestedLoopJoinProbeAdapter : public OperatorAdapter {
         std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(planNode);
     std::vector<std::unique_ptr<exec::Operator>> result;
     result.push_back(
-        std::make_unique<CudfNestedLoopJoinProbe>(
-            operatorId, ctx, nljNode));
+        std::make_unique<CudfNestedLoopJoinProbe>(operatorId, ctx, nljNode));
     return result;
   }
 };

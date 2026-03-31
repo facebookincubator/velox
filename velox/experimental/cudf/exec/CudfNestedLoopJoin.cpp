@@ -63,7 +63,8 @@ CudfNestedLoopJoinBuild::CudfNestedLoopJoinBuild(
 void CudfNestedLoopJoinBuild::addInput(RowVectorPtr input) {
   if (input->size() > 0) {
     auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
-    VELOX_CHECK_NOT_NULL(cudfInput, "CudfNestedLoopJoinBuild expects CudfVector");
+    VELOX_CHECK_NOT_NULL(
+        cudfInput, "CudfNestedLoopJoinBuild expects CudfVector");
     inputs_.push_back(std::move(cudfInput));
   }
 }
@@ -82,8 +83,7 @@ void CudfNestedLoopJoinBuild::noMoreInput() {
     auto* op = peer->findOperator(planNodeId());
     auto* build = dynamic_cast<CudfNestedLoopJoinBuild*>(op);
     VELOX_CHECK_NOT_NULL(build);
-    inputs_.insert(
-        inputs_.end(), build->inputs_.begin(), build->inputs_.end());
+    inputs_.insert(inputs_.end(), build->inputs_.begin(), build->inputs_.end());
   }
 
   SCOPE_EXIT {
@@ -96,8 +96,7 @@ void CudfNestedLoopJoinBuild::noMoreInput() {
   auto stream = cudfGlobalStreamPool().get_stream();
   auto buildType = joinNode_->sources()[1]->outputType();
   auto mr = cudf::get_current_device_resource_ref();
-  auto tbls =
-      getConcatenatedTableBatched(inputs_, buildType, stream, mr);
+  auto tbls = getConcatenatedTableBatched(inputs_, buildType, stream, mr);
   stream.synchronize();
   inputs_.clear();
 
@@ -115,12 +114,9 @@ void CudfNestedLoopJoinBuild::noMoreInput() {
   }
 
   if (buildVectors.empty()) {
-    buildVectors.push_back(std::make_shared<CudfVector>(
-        pool(),
-        buildType,
-        0,
-        makeEmptyTable(buildType),
-        stream));
+    buildVectors.push_back(
+        std::make_shared<CudfVector>(
+            pool(), buildType, 0, makeEmptyTable(buildType), stream));
   }
 
   operatorCtx_->task()
@@ -253,7 +249,8 @@ RowVectorPtr CudfNestedLoopJoinProbe::getOutput() {
   }
 
   auto probeInput = std::dynamic_pointer_cast<CudfVector>(input_);
-  VELOX_CHECK_NOT_NULL(probeInput, "CudfNestedLoopJoinProbe expects CudfVector");
+  VELOX_CHECK_NOT_NULL(
+      probeInput, "CudfNestedLoopJoinProbe expects CudfVector");
 
   auto probeView = probeInput->getTableView();
   const cudf::size_type nL = probeView.num_rows();
@@ -316,11 +313,7 @@ RowVectorPtr CudfNestedLoopJoinProbe::getOutput() {
   auto outTable = std::make_unique<cudf::table>(std::move(outCols));
 
   return std::make_shared<CudfVector>(
-      pool(),
-      outputType_,
-      outTable->num_rows(),
-      std::move(outTable),
-      stream);
+      pool(), outputType_, outTable->num_rows(), std::move(outTable), stream);
 }
 
 bool CudfNestedLoopJoinProbe::isFinished() {

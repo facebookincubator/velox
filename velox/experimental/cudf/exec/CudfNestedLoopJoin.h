@@ -46,9 +46,13 @@ class CudfNestedLoopJoinBuild : public exec::Operator, public NvtxHelper {
 
   void addInput(RowVectorPtr input) override;
 
-  RowVectorPtr getOutput() override { return nullptr; }
+  RowVectorPtr getOutput() override {
+    return nullptr;
+  }
 
-  bool needsInput() const override { return !noMoreInput_; }
+  bool needsInput() const override {
+    return !noMoreInput_;
+  }
 
   void noMoreInput() override;
 
