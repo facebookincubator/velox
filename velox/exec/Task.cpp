@@ -3204,6 +3204,8 @@ void Task::createLocalExchangeQueuesLocked(
       queryCtx_->queryConfig().maxLocalExchangeBufferSize());
   exchange.vectorPool = std::make_shared<LocalExchangeVectorPool>(
       queryCtx_->queryConfig().maxLocalExchangeBufferSize());
+  exchange.dynamicFilters =
+      std::make_shared<folly::Synchronized<LocalExchangeDynamicFilters>>();
   exchange.queues.reserve(numPartitions);
   for (auto i = 0; i < numPartitions; ++i) {
     exchange.queues.emplace_back(
@@ -3282,6 +3284,22 @@ Task::getScaleWriterPartitionBalancer(
       splitGroupId,
       taskId());
   return it->second.scaleWriterPartitionBalancer;
+}
+
+const std::shared_ptr<folly::Synchronized<LocalExchangeDynamicFilters>>&
+Task::getLocalExchangeDynamicFilters(
+    uint32_t splitGroupId,
+    const core::PlanNodeId& planNodeId) {
+  auto& splitGroupState = splitGroupStates_[splitGroupId];
+
+  auto it = splitGroupState.localExchanges.find(planNodeId);
+  VELOX_CHECK(
+      it != splitGroupState.localExchanges.end(),
+      "Incorrect local exchange ID {} for group {}, task {}",
+      planNodeId,
+      splitGroupId,
+      taskId());
+  return it->second.dynamicFilters;
 }
 
 const std::shared_ptr<LocalExchangeMemoryManager>&

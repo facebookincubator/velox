@@ -1793,6 +1793,107 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoinWithFilterEmptyBatch) {
       .run();
 }
 
+TEST_P(MultiThreadedHashJoinTest, dynamicFiltersThroughLocalPartition) {
+  const int32_t numSplits = 5;
+  const int32_t numRowsProbe = 333;
+  const int32_t numRowsBuild = 100;
+
+  std::vector<RowVectorPtr> probeVectors;
+  probeVectors.reserve(numSplits);
+
+  std::vector<std::shared_ptr<TempFilePath>> tempFiles;
+  tempFiles.reserve(numSplits);
+  for (int32_t i = 0; i < numSplits; ++i) {
+    auto rowVector = makeRowVector({
+        makeFlatVector<int32_t>(
+            numRowsProbe, [&](auto row) { return row - i * 10; }),
+        makeFlatVector<int64_t>(numRowsProbe, [](auto row) { return row; }),
+    });
+    probeVectors.push_back(rowVector);
+    tempFiles.push_back(TempFilePath::create());
+    writeToFile(tempFiles.back()->getPath(), rowVector);
+  }
+
+  auto makeInputSplits = [&](const core::PlanNodeId& nodeId) {
+    return [&] {
+      std::vector<exec::Split> probeSplits;
+      probeSplits.reserve(tempFiles.size());
+      for (auto& file : tempFiles) {
+        probeSplits.push_back(
+            exec::Split(makeHiveConnectorSplit(file->getPath())));
+      }
+      SplitInput splits;
+      splits.emplace(nodeId, probeSplits);
+      return splits;
+    };
+  };
+
+  std::vector<RowVectorPtr> buildVectors;
+  buildVectors.reserve(5);
+  for (int32_t i = 0; i < 5; ++i) {
+    buildVectors.push_back(makeRowVector({
+        makeFlatVector<int32_t>(
+            numRowsBuild / 5,
+            [i](auto row) { return 35 + 2 * (row + i * numRowsBuild / 5); }),
+        makeFlatVector<int64_t>(numRowsBuild / 5, [](auto row) { return row; }),
+    }));
+  }
+
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", buildVectors);
+
+  auto probeType = ROW({"c0", "c1"}, {INTEGER(), BIGINT()});
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto buildSide = PlanBuilder(planNodeIdGenerator, pool_.get())
+                       .values(buildVectors)
+                       .project({"c0 AS u_c0", "c1 AS u_c1"})
+                       .planNode();
+
+  for (const auto serialExecution : {false, true}) {
+    SCOPED_TRACE(fmt::format("serialExecution: {}", serialExecution));
+
+    core::PlanNodeId probeScanId;
+    core::PlanNodeId localPartitionId;
+    core::PlanNodeId joinId;
+    auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
+                  .tableScan(probeType)
+                  .capturePlanNodeId(probeScanId)
+                  .localGather()
+                  .capturePlanNodeId(localPartitionId)
+                  .hashJoin(
+                      {"c0"},
+                      {"u_c0"},
+                      buildSide,
+                      "",
+                      {"c0", "c1", "u_c1"},
+                      core::JoinType::kInner)
+                  .capturePlanNodeId(joinId)
+                  .project({"c0", "c1 + 1", "c1 + u_c1"})
+                  .planNode();
+
+    auto task =
+        AssertQueryBuilder(op, duckDbQueryRunner_)
+            .serialExecution(serialExecution)
+            .maxDrivers(serialExecution ? 1 : 3)
+            .config(core::QueryConfig::kMaxLocalExchangeBufferSize, "1")
+            .splits(probeScanId, makeInputSplits(probeScanId)().at(probeScanId))
+            .assertResults(
+                "SELECT t.c0, t.c1 + 1, t.c1 + u.c1 FROM t, u WHERE t.c0 = u.c0");
+
+    auto planStats = toPlanStats(task->taskStats());
+    auto getStatSum = [&](const core::PlanNodeId& id, const std::string& name) {
+      return planStats.at(id).customStats.at(name).sum;
+    };
+    ASSERT_EQ(1, getStatSum(joinId, "dynamicFiltersProduced"));
+    ASSERT_EQ(
+        serialExecution ? 1 : 3,
+        getStatSum(probeScanId, "dynamicFiltersAccepted"));
+    ASSERT_LT(planStats.at(probeScanId).outputRows, numRowsProbe * numSplits);
+    ASSERT_EQ(
+        planStats.at(probeScanId).dynamicFilterStats.producerNodeIds,
+        std::unordered_set<core::PlanNodeId>({localPartitionId}));
+  }
+}
 VELOX_INSTANTIATE_TEST_SUITE_P(
     MultiThreadedHashJoinTest,
     MultiThreadedHashJoinTest,

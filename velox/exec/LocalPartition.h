@@ -20,6 +20,11 @@
 
 namespace facebook::velox::exec {
 
+struct LocalExchangeDynamicFilters {
+  PushdownFilters filters;
+  uint64_t version{0};
+};
+
 /// Keeps track of the total size in bytes of the data buffered in all
 /// LocalExchangeQueues.
 class LocalExchangeMemoryManager {
@@ -193,9 +198,19 @@ class LocalExchange : public SourceOperator {
   /// notifies the producer that no more data is needed.
   void close() override;
 
+  bool canAddDynamicFilter() const override {
+    return true;
+  }
+
+  void addDynamicFilterLocked(
+      const core::PlanNodeId& producer,
+      const PushdownFilters& filters) override;
+
  private:
   const int partition_;
   const std::shared_ptr<LocalExchangeQueue> queue_{nullptr};
+  const std::shared_ptr<folly::Synchronized<LocalExchangeDynamicFilters>>
+      dynamicFilters_{nullptr};
   ContinueFuture future_;
   BlockingReason blockingReason_{BlockingReason::kNotBlocked};
 };
@@ -236,6 +251,8 @@ class LocalPartition : public Operator {
   bool isFinished() override;
 
  protected:
+  void maybePushdownDynamicFilters();
+
   void prepareForInput(RowVectorPtr& input);
 
   void allocateIndexBuffers(const std::vector<vector_size_t>& sizes);
@@ -258,6 +275,8 @@ class LocalPartition : public Operator {
 
   const std::vector<std::shared_ptr<LocalExchangeQueue>> queues_;
   const size_t numPartitions_;
+  const std::shared_ptr<folly::Synchronized<LocalExchangeDynamicFilters>>
+      dynamicFilters_{nullptr};
   std::unique_ptr<core::PartitionFunction> partitionFunction_;
 
   std::vector<BlockingReason> blockingReasons_;
@@ -268,6 +287,7 @@ class LocalPartition : public Operator {
   /// Reusable buffers for input partitioning.
   std::vector<BufferPtr> indexBuffers_;
   std::vector<vector_size_t*> rawIndices_;
+  uint64_t dynamicFiltersVersion_{0};
 
  private:
   // Try getting a reusable vector for 'partition' from the corresponding

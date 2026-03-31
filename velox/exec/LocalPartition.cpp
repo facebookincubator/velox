@@ -270,7 +270,10 @@ LocalExchange::LocalExchange(
       queue_{operatorCtx_->task()->getLocalExchangeQueue(
           ctx->splitGroupId,
           planNodeId,
-          partition)} {}
+          partition)},
+      dynamicFilters_{operatorCtx_->task()->getLocalExchangeDynamicFilters(
+          ctx->splitGroupId,
+          planNodeId)} {}
 
 BlockingReason LocalExchange::isBlocked(ContinueFuture* future) {
   if (blockingReason_ != BlockingReason::kNotBlocked) {
@@ -324,6 +327,21 @@ void LocalExchange::close() {
   }
 }
 
+void LocalExchange::addDynamicFilterLocked(
+    const core::PlanNodeId& /*producer*/,
+    const PushdownFilters& filters) {
+  dynamicFilters_->withWLock([&](auto& dynamicFilters) {
+    for (auto channel : filters.dynamicFilteredColumns) {
+      auto it = filters.filters.find(channel);
+      VELOX_CHECK(it != filters.filters.end());
+      common::Filter::merge(
+          it->second, dynamicFilters.filters.filters[channel]);
+      dynamicFilters.filters.dynamicFilteredColumns.insert(channel);
+    }
+    ++dynamicFilters.version;
+  });
+}
+
 LocalPartition::LocalPartition(
     int32_t operatorId,
     DriverCtx* ctx,
@@ -338,6 +356,9 @@ LocalPartition::LocalPartition(
       queues_{
           ctx->task->getLocalExchangeQueues(ctx->splitGroupId, planNode->id())},
       numPartitions_{queues_.size()},
+      dynamicFilters_{ctx->task->getLocalExchangeDynamicFilters(
+          ctx->splitGroupId,
+          planNode->id())},
       partitionFunction_(
           numPartitions_ == 1 ? nullptr
                               : planNode->partitionFunctionSpec().create(
@@ -577,11 +598,48 @@ void LocalPartition::populateAndEnqueuePartitions(
   }
 }
 
+void LocalPartition::maybePushdownDynamicFilters() {
+  std::vector<column_index_t> channels;
+  std::vector<common::FilterPtr> filters;
+  uint64_t version;
+
+  {
+    auto lockedFilters = dynamicFilters_->rlock();
+    if (lockedFilters->version == dynamicFiltersVersion_ ||
+        lockedFilters->filters.dynamicFilteredColumns.empty()) {
+      return;
+    }
+
+    channels.reserve(lockedFilters->filters.dynamicFilteredColumns.size());
+    for (auto channel : lockedFilters->filters.dynamicFilteredColumns) {
+      channels.push_back(channel);
+    }
+    std::sort(channels.begin(), channels.end());
+
+    filters.reserve(channels.size());
+    for (auto channel : channels) {
+      auto it = lockedFilters->filters.filters.find(channel);
+      VELOX_CHECK(it != lockedFilters->filters.filters.end());
+      filters.push_back(it->second);
+    }
+    version = lockedFilters->version;
+  }
+
+  operatorCtx_->driver()->pushdownFilters(
+      this, channels, [&](column_index_t index, common::FilterPtr& filter) {
+        filter = filters[index];
+        return true;
+      });
+  dynamicFiltersVersion_ = version;
+}
+
 void LocalPartition::addInput(RowVectorPtr input) {
   prepareForInput(input);
   if (input->size() == 0) {
     return;
   }
+
+  maybePushdownDynamicFilters();
 
   const auto singlePartition = numPartitions_ == 1
       ? 0
@@ -628,6 +686,7 @@ void LocalPartition::prepareForInput(RowVectorPtr& input) {
 }
 
 BlockingReason LocalPartition::isBlocked(ContinueFuture* future) {
+  maybePushdownDynamicFilters();
   if (!futures_.empty()) {
     auto blockingReason = blockingReasons_.front();
     *future = folly::collectAll(futures_.begin(), futures_.end()).unit();

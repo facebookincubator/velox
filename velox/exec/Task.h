@@ -503,6 +503,11 @@ class Task : public std::enable_shared_from_this<Task> {
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId);
 
+  const std::shared_ptr<folly::Synchronized<LocalExchangeDynamicFilters>>&
+  getLocalExchangeDynamicFilters(
+      uint32_t splitGroupId,
+      const core::PlanNodeId& planNodeId);
+
   /// Returns the shared skewed partition balancer for scale writer local
   /// partitioning with the given split group id and plan node id.
   const std::shared_ptr<common::SkewedPartitionRebalancer>&
