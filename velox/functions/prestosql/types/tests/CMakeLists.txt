@@ -27,8 +27,9 @@ add_executable(
   UuidTypeTest.cpp
   IPAddressTypeTest.cpp
   IPPrefixTypeTest.cpp
-  PrestoTypeSqlTest.cpp
+  PrestoTypesTest.cpp
 )
+velox_add_test_headers(velox_presto_types_test TypeTestBase.h)
 
 if(VELOX_ENABLE_GEO)
   target_sources(
@@ -43,6 +44,7 @@ target_link_libraries(
   velox_presto_types_test
   velox_presto_types
   velox_presto_type_parser
+  velox_vector_test_lib
   Folly::folly
   GTest::gtest
   GTest::gtest_main

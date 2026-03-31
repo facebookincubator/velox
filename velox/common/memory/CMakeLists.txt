@@ -33,6 +33,25 @@ velox_add_library(
   RawVector.cpp
   SharedArbitrator.cpp
   StreamArena.cpp
+  HEADERS
+  Allocation.h
+  AllocationPool.h
+  ArbitrationOperation.h
+  ArbitrationParticipant.h
+  ByteStream.h
+  CompactDoubleList.h
+  HashStringAllocator.h
+  MallocAllocator.h
+  Memory.h
+  MemoryAllocator.h
+  MemoryArbitrator.h
+  MemoryPool.h
+  MmapAllocator.h
+  MmapArena.h
+  RawVector.h
+  Scratch.h
+  SharedArbitrator.h
+  StreamArena.h
 )
 
 velox_link_libraries(

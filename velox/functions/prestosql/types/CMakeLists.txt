@@ -18,7 +18,7 @@ velox_add_library(
   velox_presto_types
   BigintEnumRegistration.cpp
   BigintEnumType.cpp
-  PrestoTypeSql.cpp
+  PrestoTypes.cpp
   BingTileRegistration.cpp
   BingTileType.cpp
   EnumTypeBase.cpp
@@ -36,10 +36,53 @@ velox_add_library(
   TimestampWithTimeZoneType.cpp
   TimeWithTimezoneRegistration.cpp
   TimeWithTimezoneType.cpp
+  IPAddressType.cpp
+  IPPrefixType.cpp
   SetDigestRegistration.cpp
   UuidRegistration.cpp
+  UuidType.cpp
   VarcharEnumRegistration.cpp
   VarcharEnumType.cpp
+  HEADERS
+  BigintEnumRegistration.h
+  BigintEnumType.h
+  BingTileRegistration.h
+  BingTileType.h
+  EnumTypeBase.h
+  GeometryRegistration.h
+  GeometryType.h
+  HyperLogLogRegistration.h
+  HyperLogLogType.h
+  IPAddressRegistration.h
+  IPAddressType.h
+  IPPrefixRegistration.h
+  IPPrefixType.h
+  JsonCastOperator.h
+  JsonRegistration.h
+  JsonType.h
+  KHyperLogLogRegistration.h
+  KHyperLogLogType.h
+  P4HyperLogLogRegistration.h
+  P4HyperLogLogType.h
+  PrestoTypes.h
+  QDigestRegistration.h
+  QDigestType.h
+  SetDigestRegistration.h
+  SetDigestType.h
+  SfmSketchRegistration.h
+  SfmSketchType.h
+  SphericalGeographyRegistration.h
+  SphericalGeographyType.h
+  TDigestRegistration.h
+  TDigestType.h
+  TimeWithTimezoneRegistration.h
+  TimeWithTimezoneType.h
+  TimestampWithTimeZoneRegistration.h
+  TimestampWithTimeZoneType.h
+  UuidRegistration.h
+  UuidType.h
+  VarcharEnumRegistration.h
+  VarcharEnumType.h
 )
 if(VELOX_ENABLE_GEO)
   velox_sources(

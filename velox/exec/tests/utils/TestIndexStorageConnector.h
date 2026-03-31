@@ -143,6 +143,26 @@ class TestIndexConnectorSplit : public connector::ConnectorSplit {
   std::string toString() const override {
     return "TestIndexConnectorSplit";
   }
+
+  folly::dynamic serialize() const override {
+    folly::dynamic obj = folly::dynamic::object;
+    obj["name"] = "TestIndexConnectorSplit";
+    obj["connectorId"] = connectorId;
+    return obj;
+  }
+
+  static std::shared_ptr<TestIndexConnectorSplit> create(
+      const folly::dynamic& obj) {
+    return std::make_shared<TestIndexConnectorSplit>(
+        obj["connectorId"].getString());
+  }
+
+  static void registerSerDe() {
+    auto& registry = DeserializationWithContextRegistryForSharedPtr();
+    registry.Register(
+        "TestIndexConnectorSplit",
+        [](const folly::dynamic& obj, void*) { return create(obj); });
+  }
 };
 
 class TestIndexColumnHandle : public connector::ColumnHandle {

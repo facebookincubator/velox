@@ -46,6 +46,13 @@ class UuidType final : public HugeintType {
     return name();
   }
 
+  static constexpr int32_t kStringSize = 36;
+
+  /// Formats an int128_t UUID value as xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx.
+  /// @param buffer Output buffer, pre-allocated with at least kStringSize
+  /// bytes.
+  std::string_view valueToString(int128_t value, char* buffer) const;
+
   folly::dynamic serialize() const override {
     folly::dynamic obj = folly::dynamic::object;
     obj["name"] = "Type";

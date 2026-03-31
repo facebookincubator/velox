@@ -250,5 +250,158 @@ TEST_F(CountingJoinTest, buildSideDedup) {
       joinStats.customStats.at(std::string(BaseHashTable::kNumDistinct)).sum);
 }
 
+// Verifies that counts are correctly merged when multiple build drivers process
+// the same keys. Each driver builds its own hash table with per-key counts;
+// during the merge in prepareJoinTable, duplicate keys must have their counts
+// summed rather than silently dropped.
+//
+// Tests three key configurations to exercise all hash table modes:
+//  - Small INT32 keys {1, 2}: array mode (arrayPushRow path).
+//  - Two INT32 key columns with ~1500 distinct values each: normalized-key
+//    mode (buildFullProbe with normalizedKey comparison).
+//  - Complex-type (ARRAY(INT32)) keys: hash mode (buildFullProbe with
+//    compareKeys).
+TEST_F(CountingJoinTest, multipleBuildDrivers) {
+  constexpr int32_t kNumDrivers = 4;
+
+  auto test = [&](const RowVectorPtr& probeVector,
+                  const RowVectorPtr& buildVector,
+                  core::JoinType joinType,
+                  BaseHashTable::HashMode expectedHashMode,
+                  const std::vector<VectorPtr>& expectedChildren) {
+    auto expected =
+        makeRowVector(probeVector->rowType()->names(), expectedChildren);
+    auto probeKeys = probeVector->rowType()->names();
+
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .values({probeVector})
+                    .hashJoin(
+                        probeKeys,
+                        buildVector->rowType()->names(),
+                        PlanBuilder(planNodeIdGenerator)
+                            .values({buildVector}, /*parallelizable=*/true)
+                            .planNode(),
+                        "",
+                        probeKeys,
+                        joinType)
+                    .planNode();
+    auto task = AssertQueryBuilder(plan)
+                    .maxDrivers(kNumDrivers)
+                    .assertResults(expected);
+
+    // Verify that all build drivers ran. Each driver processes 1 batch.
+    auto planStats = toPlanStats(task->taskStats());
+    const auto& joinStats = planStats.at(plan->id());
+
+    const auto& buildStats = *joinStats.operatorStats.at("HashBuild");
+    EXPECT_EQ(kNumDrivers, buildStats.numDrivers);
+    EXPECT_EQ(kNumDrivers, buildStats.inputVectors);
+    EXPECT_EQ(buildVector->size() * kNumDrivers, buildStats.inputRows);
+
+    // Probe side runs single-threaded (Values node is not parallelizable by
+    // default). It processes 1 batch.
+    const auto& probeStats = *joinStats.operatorStats.at("HashProbe");
+    EXPECT_EQ(1, probeStats.numDrivers);
+    EXPECT_EQ(1, probeStats.inputVectors);
+    EXPECT_EQ(probeVector->size(), probeStats.inputRows);
+
+    EXPECT_EQ(
+        static_cast<int64_t>(expectedHashMode),
+        buildStats.customStats.at(std::string(BaseHashTable::kHashMode)).sum);
+  };
+
+  // Small keys {1, 2}: triggers array-based hash mode.
+  // Build: {1, 1, 2}, each of 4 drivers => merged {1:8, 2:4}.
+  // Probe: {1:3, 2:5}.
+  {
+    SCOPED_TRACE("small keys (array mode)");
+    auto buildVector =
+        makeRowVector({"u0"}, {makeFlatVector<int32_t>({1, 1, 2})});
+    auto probeVector =
+        makeRowVector({makeFlatVector<int32_t>({1, 1, 1, 2, 2, 2, 2, 2})});
+
+    // EXCEPT ALL: {1: max(3-8,0)=0, 2: max(5-4,0)=1} => {2}.
+    test(
+        probeVector,
+        buildVector,
+        core::JoinType::kCountingAnti,
+        BaseHashTable::HashMode::kArray,
+        {makeFlatVector<int32_t>({2})});
+    // INTERSECT ALL: {1: min(3,8)=3, 2: min(5,4)=4}.
+    test(
+        probeVector,
+        buildVector,
+        core::JoinType::kCountingLeftSemiFilter,
+        BaseHashTable::HashMode::kArray,
+        {makeFlatVector<int32_t>({1, 1, 1, 2, 2, 2, 2})});
+  }
+
+  // Two INT32 key columns with ~1500 distinct values each. The combined
+  // cardinality (1500 * 1500 = 2.25M) exceeds kArrayHashMaxSize (2M),
+  // forcing normalized-key mode (buildFullProbe with normalizedKey comparison).
+  {
+    SCOPED_TRACE("multi-column keys (normalized-key mode)");
+    constexpr int32_t kNumKeys = 1'500;
+
+    // Build: 2-column keys (i, i) for i in 0..kNumKeys-1, plus duplicates of
+    // (0, 0) and (1, 1). Both columns are identical — we need 2 columns so
+    // the combined cardinality (1500 * 1500 = 2.25M) exceeds kArrayHashMaxSize
+    // (2M).
+    auto buildKeys = makeFlatVector<int32_t>(kNumKeys + 2, [](auto row) {
+      return row < kNumKeys ? row : row - kNumKeys;
+    });
+
+    // Probe: key (0,0) appears 10 times, key (1,1) appears 5 times.
+    auto probeKeys =
+        makeFlatVector<int32_t>({0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1});
+
+    // Each of 4 drivers: (0,0) count=2, (1,1) count=2, others count=1.
+    // After merge: (0,0) count=8, (1,1) count=8.
+    // EXCEPT ALL: (0,0): max(10-8,0)=2, (1,1): max(5-8,0)=0.
+    auto expectedAnti = makeFlatVector<int32_t>({0, 0});
+    test(
+        makeRowVector({probeKeys, probeKeys}),
+        makeRowVector({"u0", "u1"}, {buildKeys, buildKeys}),
+        core::JoinType::kCountingAnti,
+        BaseHashTable::HashMode::kNormalizedKey,
+        {expectedAnti, expectedAnti});
+    // INTERSECT ALL: (0,0): min(10,8)=8, (1,1): min(5,8)=5.
+    auto expectedSemi =
+        makeFlatVector<int32_t>({0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1});
+    test(
+        makeRowVector({probeKeys, probeKeys}),
+        makeRowVector({"u0", "u1"}, {buildKeys, buildKeys}),
+        core::JoinType::kCountingLeftSemiFilter,
+        BaseHashTable::HashMode::kNormalizedKey,
+        {expectedSemi, expectedSemi});
+  }
+
+  // ARRAY(INT32) type keys do not support value IDs in VectorHasher, forcing
+  // kHash mode (buildFullProbe with compareKeys).
+  {
+    SCOPED_TRACE("complex-type keys (hash mode)");
+    auto buildVector =
+        makeRowVector({"u0"}, {makeArrayVector<int32_t>({{1}, {1}, {2}})});
+    auto probeVector = makeRowVector(
+        {makeArrayVector<int32_t>({{1}, {1}, {1}, {2}, {2}, {2}, {2}, {2}})});
+
+    // EXCEPT ALL: {[1]: max(3-8,0)=0, [2]: max(5-4,0)=1} => {[2]}.
+    test(
+        probeVector,
+        buildVector,
+        core::JoinType::kCountingAnti,
+        BaseHashTable::HashMode::kHash,
+        {makeArrayVector<int32_t>({{2}})});
+    // INTERSECT ALL: {[1]: min(3,8)=3, [2]: min(5,4)=4}.
+    test(
+        probeVector,
+        buildVector,
+        core::JoinType::kCountingLeftSemiFilter,
+        BaseHashTable::HashMode::kHash,
+        {makeArrayVector<int32_t>({{1}, {1}, {1}, {2}, {2}, {2}, {2}})});
+  }
+}
+
 } // namespace
 } // namespace facebook::velox::exec::test

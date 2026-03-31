@@ -145,6 +145,35 @@ struct WriterOptions : public dwio::common::WriterOptions, public WriterConfig {
   /// The structure should match the schema hierarchy with nested children.
   std::vector<ParquetFieldId> parquetFieldIds;
 
+  // Parsing session and hive configs.
+
+  // Session and connector config names differ by '_' vs '-' separators.
+  // Connector keys are inferred from session keys by replacing '_' with '-'.
+  static constexpr const char* kParquetWriteTimestampUnit =
+      "hive.parquet.writer.timestamp_unit";
+  static constexpr const char* kParquetEnableDictionary =
+      "hive.parquet.writer.enable_dictionary";
+  static constexpr const char* kParquetDictionaryPageSizeLimit =
+      "hive.parquet.writer.dictionary_page_size_limit";
+  static constexpr const char* kParquetDataPageVersion =
+      "hive.parquet.writer.datapage_version";
+  static constexpr const char* kParquetWritePageSize =
+      "hive.parquet.writer.page_size";
+  static constexpr const char* kParquetWriteBatchSize =
+      "hive.parquet.writer.batch_size";
+  static constexpr const char* kParquetCreatedBy =
+      "hive.parquet.writer.created_by";
+  static constexpr const char* kParquetMaxTargetFileSize =
+      "max_target_file_size";
+  // Serde parameter keys for timestamp settings. These can be set via
+  // serdeParameters map to override the default timestamp behavior.
+  // The timezone key accepts a timezone string or empty string to disable
+  // timezone conversion.
+  static constexpr const char* kParquetSerdeTimestampUnit =
+      "parquet.writer.timestamp.unit";
+  static constexpr const char* kParquetSerdeTimestampTimezone =
+      "parquet.writer.timestamp.timezone";
+
   // Process hive connector and session configs.
   void processConfigs(
       const config::ConfigBase& connectorConfig,

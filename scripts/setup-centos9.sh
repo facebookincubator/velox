@@ -86,7 +86,12 @@ function install_gflags {
   # Remove an older version if present.
   dnf remove -y gflags
   wget_and_untar https://github.com/gflags/gflags/archive/"${GFLAGS_VERSION}".tar.gz gflags
-  cmake_install_dir gflags -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=ON -DBUILD_gflags_LIB=ON -DLIB_SUFFIX=64
+  cmake_install_dir gflags -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=ON -DBUILD_gflags_LIB=ON
+  # CentOS 9 does not include ${INSTALL_PREFIX}/lib in the default ldconfig
+  # search paths. Register it so that downstream builds (e.g. fbthrift's
+  # thrift1 compiler) can find libgflags.so at runtime.
+  echo "${INSTALL_PREFIX}/lib" >/etc/ld.so.conf.d/usr-local.conf
+  ldconfig
 }
 
 function install_faiss_deps {

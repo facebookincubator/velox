@@ -281,6 +281,11 @@ bool HiveConfig::fileMetadataCacheEnabled(
       config_->get<bool>(kFileMetadataCacheEnabled, false));
 }
 
+bool HiveConfig::pinFileMetadata(const config::ConfigBase* session) const {
+  return session->get<bool>(
+      kPinFileMetadataSession, config_->get<bool>(kPinFileMetadata, false));
+}
+
 uint64_t HiveConfig::orcFooterSpeculativeIoSize(
     const config::ConfigBase* session) const {
   return session->get<uint64_t>(

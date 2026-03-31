@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/common/base/Portability.h"
+#include "velox/common/base/RuntimeMetrics.h"
 #include "velox/exec/OneWayStatusFlag.h"
 #include "velox/exec/RowContainer.h"
 #include "velox/exec/VectorHasher.h"
@@ -144,6 +145,7 @@ class BaseHashTable {
   static constexpr std::string_view kNumRehashes{"hashtable.numRehashes"};
   static constexpr std::string_view kNumDistinct{"hashtable.numDistinct"};
   static constexpr std::string_view kNumTombstones{"hashtable.numTombstones"};
+  static constexpr std::string_view kHashMode{"hashtable.hashMode"};
 
   /// The same as above but only reported by the HashBuild operator.
   static constexpr std::string_view kBuildWallNanos{"hashtable.buildWallNanos"};
@@ -167,6 +169,10 @@ class BaseHashTable {
       "hashtable.vectorHasherMergeCpuNanos"};
   static constexpr std::string_view kHashTableCacheHit{"hashtable.cacheHit"};
   static constexpr std::string_view kHashTableCacheMiss{"hashtable.cacheMiss"};
+
+  /// Populates 'runtimeStats' with hash table stats.
+  virtual void addRuntimeStats(
+      std::unordered_map<std::string, RuntimeMetric>& runtimeStats) const = 0;
 
   /// Returns the string of the given 'mode'.
   static std::string modeString(HashMode mode);
@@ -685,6 +691,19 @@ class HashTable : public BaseHashTable {
 
   HashMode hashMode() const override {
     return hashMode_;
+  }
+
+  void addRuntimeStats(
+      std::unordered_map<std::string, RuntimeMetric>& runtimeStats)
+      const override {
+    runtimeStats[std::string(kCapacity)] = RuntimeMetric(capacity_);
+    runtimeStats[std::string(kHashMode)] =
+        RuntimeMetric(static_cast<int64_t>(hashMode_));
+    runtimeStats[std::string(kNumRehashes)] = RuntimeMetric(numRehashes_);
+    runtimeStats[std::string(kNumDistinct)] = RuntimeMetric(numDistinct_);
+    if (numTombstones_ != 0) {
+      runtimeStats[std::string(kNumTombstones)] = RuntimeMetric(numTombstones_);
+    }
   }
 
   void decideHashMode(

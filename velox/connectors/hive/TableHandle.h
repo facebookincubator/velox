@@ -23,6 +23,150 @@
 
 namespace facebook::velox::connector::hive {
 
+/// Type of extraction to apply at one nesting level.
+enum class ExtractionStep : uint8_t {
+  /// Navigate into a struct field.  Input must be ROW.
+  kStructField,
+  /// Extract map keys as ARRAY.  Input must be MAP.
+  kMapKeys,
+  /// Extract map values as ARRAY.  Input must be MAP.
+  kMapValues,
+  /// Filter map to specific keys.  Input must be MAP.  Type-preserving.
+  kMapKeyFilter,
+  /// Navigate into array elements.  Input must be ARRAY.
+  kArrayElements,
+  /// Extract size as BIGINT.  Input must be MAP or ARRAY.  Terminal.
+  kSize,
+};
+
+/// Base class for one step in the extraction chain.
+class ExtractionPathElement {
+ public:
+  virtual ~ExtractionPathElement() = default;
+
+  /// Return the step type.
+  virtual ExtractionStep step() const = 0;
+
+  /// Create a simple step (MapKeys, MapValues, ArrayElements, Size).
+  static std::shared_ptr<const ExtractionPathElement> simple(
+      ExtractionStep step);
+
+  /// Create a StructField step.
+  static std::shared_ptr<const ExtractionPathElement> structField(
+      const std::string& name);
+
+  /// Create a MapKeyFilter step with string keys.
+  static std::shared_ptr<const ExtractionPathElement> mapKeyFilter(
+      std::vector<std::string> keys);
+
+  /// Create a MapKeyFilter step with integer keys.
+  static std::shared_ptr<const ExtractionPathElement> mapKeyFilter(
+      std::vector<int64_t> keys);
+};
+
+using ExtractionPathElementPtr = std::shared_ptr<const ExtractionPathElement>;
+
+/// Simple extraction step without extra data (MapKeys, MapValues,
+/// ArrayElements, Size).
+class SimpleExtractionPathElement : public ExtractionPathElement {
+ public:
+  explicit SimpleExtractionPathElement(ExtractionStep step) : step_(step) {}
+
+  ExtractionStep step() const override {
+    return step_;
+  }
+
+ private:
+  ExtractionStep step_;
+};
+
+/// Struct field extraction step.
+class StructFieldExtractionPathElement : public ExtractionPathElement {
+ public:
+  explicit StructFieldExtractionPathElement(std::string name)
+      : fieldName_(std::move(name)) {}
+
+  ExtractionStep step() const override {
+    return ExtractionStep::kStructField;
+  }
+
+  const std::string& fieldName() const {
+    return fieldName_;
+  }
+
+ private:
+  std::string fieldName_;
+};
+
+/// Map key filter extraction step with string keys.
+class StringMapKeyFilterExtractionPathElement : public ExtractionPathElement {
+ public:
+  explicit StringMapKeyFilterExtractionPathElement(
+      std::vector<std::string> keys)
+      : filterKeys_(std::move(keys)) {}
+
+  ExtractionStep step() const override {
+    return ExtractionStep::kMapKeyFilter;
+  }
+
+  const std::vector<std::string>& filterKeys() const {
+    return filterKeys_;
+  }
+
+ private:
+  std::vector<std::string> filterKeys_;
+};
+
+/// Map key filter extraction step with integer keys.
+class IntMapKeyFilterExtractionPathElement : public ExtractionPathElement {
+ public:
+  explicit IntMapKeyFilterExtractionPathElement(std::vector<int64_t> keys)
+      : filterKeys_(std::move(keys)) {}
+
+  ExtractionStep step() const override {
+    return ExtractionStep::kMapKeyFilter;
+  }
+
+  const std::vector<int64_t>& filterKeys() const {
+    return filterKeys_;
+  }
+
+ private:
+  std::vector<int64_t> filterKeys_;
+};
+
+/// Compare two ExtractionPathElements for equality.  Non-virtual to avoid
+/// slicing hazards with virtual operator==.
+bool extractionPathElementEquals(
+    const ExtractionPathElement& lhs,
+    const ExtractionPathElement& rhs);
+
+/// Named extraction chain producing one output column.
+struct NamedExtraction {
+  /// Output column name in the scan's outputType.
+  std::string outputName;
+
+  /// Extraction chain to apply.  Empty means pass-through (no extraction).
+  std::vector<ExtractionPathElementPtr> chain;
+
+  /// Output type after applying the chain.
+  TypePtr dataType;
+
+  bool operator==(const NamedExtraction& other) const;
+};
+
+/// Return the string name for an ExtractionStep enum value.
+std::string extractionStepName(ExtractionStep step);
+
+/// Parse an ExtractionStep from its string name.
+ExtractionStep extractionStepFromName(const std::string& name);
+
+/// Derive the output type by applying the extraction chain to the input type.
+/// Throws if the chain is invalid for the given input type.
+TypePtr deriveExtractionOutputType(
+    const TypePtr& inputType,
+    const std::vector<ExtractionPathElementPtr>& chain);
+
 class HiveColumnHandle : public ColumnHandle {
  public:
   /// NOTE: Make sure to update the mapping in columnTypeNames() when modifying
@@ -44,32 +188,45 @@ class HiveColumnHandle : public ColumnHandle {
     } partitionDateValueFormat;
   };
 
-  /// NOTE: 'dataType' is the column type in target write table. 'hiveType' is
+  /// NOTE: 'dataType' is the column type in target write table.  'hiveType' is
   /// converted type of the corresponding column in source table which might not
   /// be the same type, and the table scan needs to do data coercion if needs.
   /// The table writer also needs to respect the type difference when processing
   /// input data such as bucket id calculation.
+  ///
+  /// 'extractions' specifies named extraction chains.  When non-empty,
+  /// 'requiredSubfields' must be empty (mutually exclusive).  When a single
+  /// extraction is present, 'dataType' is that extraction's dataType.  When
+  /// multiple extractions are present, 'dataType' is a ROW type whose fields
+  /// are the outputNames with their corresponding dataTypes.
   HiveColumnHandle(
       const std::string& name,
       ColumnType columnType,
       TypePtr dataType,
       TypePtr hiveType,
       std::vector<common::Subfield> requiredSubfields = {},
+      std::vector<NamedExtraction> extractions = {},
       ColumnParseParameters columnParseParameters = {},
+      std::function<void(VectorPtr&)> postProcessor = {});
+
+  /// Legacy constructor without extractions for backward compatibility.
+  HiveColumnHandle(
+      const std::string& name,
+      ColumnType columnType,
+      TypePtr dataType,
+      TypePtr hiveType,
+      std::vector<common::Subfield> requiredSubfields,
+      ColumnParseParameters columnParseParameters,
       std::function<void(VectorPtr&)> postProcessor = {})
-      : name_(name),
-        columnType_(columnType),
-        dataType_(std::move(dataType)),
-        hiveType_(std::move(hiveType)),
-        requiredSubfields_(std::move(requiredSubfields)),
-        columnParseParameters_(columnParseParameters),
-        postProcessor_(std::move(postProcessor)) {
-    VELOX_USER_CHECK(
-        dataType_->equivalent(*hiveType_),
-        "data type {} and hive type {} do not match",
-        dataType_->toString(),
-        hiveType_->toString());
-  }
+      : HiveColumnHandle(
+            name,
+            columnType,
+            std::move(dataType),
+            std::move(hiveType),
+            std::move(requiredSubfields),
+            /*extractions=*/{},
+            columnParseParameters,
+            std::move(postProcessor)) {}
 
   const std::string& name() const override {
     return name_;
@@ -103,6 +260,17 @@ class HiveColumnHandle : public ColumnHandle {
   /// required index.
   const std::vector<common::Subfield>& requiredSubfields() const {
     return requiredSubfields_;
+  }
+
+  /// Named extraction chains.  Empty means no extraction (current behavior).
+  /// When a single entry is present, the column handle's dataType is that
+  /// entry's dataType.  When multiple entries are present, the column
+  /// handle's dataType is a ROW type whose fields are the outputNames with
+  /// their corresponding dataTypes.
+  /// Mutually exclusive with requiredSubfields — if extractions is non-empty,
+  /// requiredSubfields must be empty.
+  const std::vector<NamedExtraction>& extractions() const {
+    return extractions_;
   }
 
   bool isPartitionKey() const {
@@ -150,6 +318,7 @@ class HiveColumnHandle : public ColumnHandle {
   const TypePtr dataType_;
   const TypePtr hiveType_;
   const std::vector<common::Subfield> requiredSubfields_;
+  const std::vector<NamedExtraction> extractions_;
   const ColumnParseParameters columnParseParameters_;
   const std::function<void(VectorPtr&)> postProcessor_;
 };

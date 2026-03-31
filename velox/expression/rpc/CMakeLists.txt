@@ -21,7 +21,7 @@ velox_link_libraries(
   INTERFACE velox_rpc_types velox_core velox_type velox_vector Folly::folly
 )
 
-velox_add_library(velox_rpc_function_stubs RPCFunctionStubs.cpp)
+velox_add_library(velox_rpc_function_stubs RPCFunctionStubs.cpp HEADERS RPCFunctionStubs.h)
 
 velox_link_libraries(
   velox_rpc_function_stubs
@@ -30,7 +30,12 @@ velox_link_libraries(
   glog::glog
 )
 
-velox_add_library(velox_async_rpc_function_registry AsyncRPCFunctionRegistry.cpp)
+velox_add_library(
+  velox_async_rpc_function_registry
+  AsyncRPCFunctionRegistry.cpp
+  HEADERS
+  AsyncRPCFunctionRegistry.h
+)
 
 velox_link_libraries(
   velox_async_rpc_function_registry

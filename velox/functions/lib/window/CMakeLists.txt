@@ -12,7 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(velox_functions_window NthValue.cpp Ntile.cpp Rank.cpp RowNumber.cpp)
+velox_add_library(
+  velox_functions_window
+  NthValue.cpp
+  Ntile.cpp
+  Rank.cpp
+  RowNumber.cpp
+  HEADERS
+  RegistrationFunctions.h
+)
 
 velox_link_libraries(velox_functions_window velox_buffer velox_exec Folly::folly)
 

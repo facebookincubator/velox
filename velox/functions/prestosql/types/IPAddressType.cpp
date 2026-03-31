@@ -13,13 +13,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#pragma once
 
-#include "velox/type/Type.h"
+#include "velox/functions/prestosql/types/IPAddressType.h"
 
 namespace facebook::velox {
 
-/// Returns the Presto SQL string representation of the given type.
-std::string toPrestoTypeSql(const TypePtr& type);
+std::string IPAddressType::valueToString(int128_t value) const {
+  auto bytes = ipaddress::toIPv6ByteArray(value);
+  folly::IPAddressV6 v6Addr(bytes);
+  if (v6Addr.isIPv4Mapped()) {
+    return v6Addr.createIPv4().str();
+  }
+  return v6Addr.str();
+}
 
 } // namespace facebook::velox

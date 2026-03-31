@@ -271,4 +271,36 @@ class LambdaExpr : public IExpr,
   const ExprPtr body_;
 };
 
+/// Named ROW constructor. Carries field names alongside child expressions
+/// through the unresolved expression tree.
+class ConcatExpr : public IExpr {
+ public:
+  ConcatExpr(std::vector<std::string> fieldNames, std::vector<ExprPtr> inputs)
+      : IExpr(IExpr::Kind::kConcat, std::move(inputs)),
+        fieldNames_(std::move(fieldNames)) {
+    VELOX_CHECK_EQ(fieldNames_.size(), this->inputs().size());
+  }
+
+  const std::vector<std::string>& fieldNames() const {
+    return fieldNames_;
+  }
+
+  std::string toString() const override;
+
+  ExprPtr replaceInputs(std::vector<ExprPtr> newInputs) const override {
+    return std::make_shared<ConcatExpr>(fieldNames_, std::move(newInputs));
+  }
+
+  ExprPtr dropAlias() const override {
+    return std::make_shared<ConcatExpr>(fieldNames_, inputs());
+  }
+
+  bool operator==(const IExpr& other) const override;
+
+  size_t localHash() const override;
+
+ private:
+  const std::vector<std::string> fieldNames_;
+};
+
 } // namespace facebook::velox::core

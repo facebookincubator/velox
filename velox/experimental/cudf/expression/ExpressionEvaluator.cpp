@@ -796,7 +796,7 @@ class ConcatFunction : public CudfFunction {
     }
 
     // Concatenate the columns, nulls as empty strings, no separators.
-    cudf::string_scalar emptyString("");
+    cudf::string_scalar emptyString("", true, stream, mr);
     return cudf::strings::concatenate(
         cudf::table_view(columnViews),
         emptyString,
