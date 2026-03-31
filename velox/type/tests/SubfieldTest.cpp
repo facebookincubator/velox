@@ -43,7 +43,7 @@ void assertInvalidSubfield(
 }
 
 TEST(SubfieldTest, invalidPaths) {
-  assertInvalidSubfield("a[b]", "Invalid index b]");
+  assertInvalidSubfield("a[b]", "Invalid index b");
   assertInvalidSubfield("a[2", "Invalid subfield path: a[2^");
   assertInvalidSubfield("a.*", "Invalid subfield path: a.^*");
   assertInvalidSubfield("a[2].[3].", "Invalid subfield path: a[2].^[3].");
