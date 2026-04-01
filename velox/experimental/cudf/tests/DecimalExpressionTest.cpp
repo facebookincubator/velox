@@ -911,5 +911,59 @@ TEST_F(CudfDecimalTest, decimalDivideByZero) {
       "Division by zero");
 }
 
+TEST_F(CudfDecimalTest, decimalModulo) {
+  auto input = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int64_t>(
+              {700, 100, -700, 0, 500}, DECIMAL(10, 2)),
+          makeFlatVector<int64_t>(
+              {300, 300, 300, 300, 200}, DECIMAL(10, 2)),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({"a % b AS mod"})
+                  .planNode();
+
+  unregisterCudf();
+  auto cpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  registerCudf();
+
+  auto gpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+
+  facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
+}
+
+TEST_F(CudfDecimalTest, decimalModuloDifferentScales) {
+  auto input = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int64_t>({12345, -2500, 100}, DECIMAL(10, 2)),
+          makeFlatVector<int64_t>({10, -25, 3}, DECIMAL(10, 1)),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({"a % b AS mod"})
+                  .planNode();
+
+  unregisterCudf();
+  auto cpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  registerCudf();
+
+  auto gpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+
+  facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
+}
+
 } // namespace
 } // namespace facebook::velox::cudf_velox
