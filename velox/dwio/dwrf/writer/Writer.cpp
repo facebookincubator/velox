@@ -798,7 +798,7 @@ void Writer::flush() {
   flushInternal(false);
 }
 
-std::unique_ptr<dwio::common::FileMetadata> Writer::close() {
+void Writer::close() {
   checkRunning();
   auto exitGuard = folly::makeGuard([this]() {
     flushPolicy_->onClose();
@@ -806,7 +806,6 @@ std::unique_ptr<dwio::common::FileMetadata> Writer::close() {
   });
   flushInternal(true);
   writerBase_->close();
-  return std::make_unique<DwrfFileMetadata>();
 }
 
 void Writer::abort() {
