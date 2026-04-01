@@ -497,12 +497,22 @@ class FileWriterImpl : public FileWriter {
       offset += batchSize;
 
       // Flush current row group if it is full.
-      if (rowGroupWriter_->numRows() >= maxRowGroupLength) {
+      if (rowGroupWriter_->numRows() >= maxRowGroupLength &&
+          offset < batch.num_rows()) {
         RETURN_NOT_OK(newBufferedRowGroup());
       }
     }
 
     return Status::OK();
+  }
+
+  int64_t currentRowGroupBufferedBytes() const override {
+    if (rowGroupWriter_ == nullptr) {
+      return 0;
+    }
+    auto stats = rowGroupWriter_->estimatedBufferedStats();
+    return stats.defLevelBytes + stats.repLevelBytes + stats.valueBytes +
+        stats.dictBytes;
   }
 
   const WriterProperties& properties() const {

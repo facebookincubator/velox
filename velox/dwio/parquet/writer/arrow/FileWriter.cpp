@@ -73,6 +73,10 @@ int64_t RowGroupWriter::totalCompressedBytesWritten() const {
   return contents_->totalCompressedBytesWritten();
 }
 
+RowGroupWriter::BufferedStats RowGroupWriter::estimatedBufferedStats() const {
+  return contents_->estimatedBufferedStats();
+}
+
 bool RowGroupWriter::buffered() const {
   return contents_->buffered();
 }
@@ -265,6 +269,22 @@ class RowGroupSerializer : public RowGroupWriter::Contents {
       }
     }
     return totalCompressedBytesWritten;
+  }
+
+  RowGroupWriter::BufferedStats estimatedBufferedStats() const override {
+    RowGroupWriter::BufferedStats stats;
+    if (closed_) {
+      return stats;
+    }
+    for (const auto& columnWriter : columnWriters_) {
+      if (columnWriter) {
+        stats.defLevelBytes += columnWriter->estimatedBufferedDefLevelBytes();
+        stats.repLevelBytes += columnWriter->estimatedBufferedRepLevelBytes();
+        stats.valueBytes += columnWriter->estimatedBufferedValueBytes();
+        stats.dictBytes += columnWriter->estimatedBufferedDictBytes();
+      }
+    }
+    return stats;
   }
 
   bool buffered() const override {

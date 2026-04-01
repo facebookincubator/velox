@@ -37,6 +37,15 @@ static constexpr uint8_t kParquetEMagic[4] = {'P', 'A', 'R', 'E'};
 
 class PARQUET_EXPORT RowGroupWriter {
  public:
+  // Estimated uncompressed byte sizes of data buffered by column writers
+  // that have not yet been serialized into pages.
+  struct BufferedStats {
+    int64_t defLevelBytes = 0;
+    int64_t repLevelBytes = 0;
+    int64_t valueBytes = 0;
+    int64_t dictBytes = 0;
+  };
+
   // Forward declare a virtual class 'Contents' to aid dependency injection and
   // more easily create test fixtures. An implementation of the Contents class
   // is defined in the .cpp file.
@@ -59,6 +68,9 @@ class PARQUET_EXPORT RowGroupWriter {
     virtual int64_t totalCompressedBytes() const = 0;
     /// \brief Total compressed bytes written by the page writer
     virtual int64_t totalCompressedBytesWritten() const = 0;
+    /// \brief Estimated sizes of buffered data (levels, values, dict) not yet
+    /// written to pages.
+    virtual BufferedStats estimatedBufferedStats() const = 0;
 
     virtual bool buffered() const = 0;
   };
@@ -100,6 +112,9 @@ class PARQUET_EXPORT RowGroupWriter {
   int64_t totalCompressedBytes() const;
   /// \brief Total compressed bytes written by the page writer
   int64_t totalCompressedBytesWritten() const;
+  /// \brief Estimated sizes of buffered data (levels, values, dict) not yet
+  /// written to pages.
+  BufferedStats estimatedBufferedStats() const;
   /// Returns whether the current RowGroupWriter is in the buffered mode and is
   /// created by calling ParquetFileWriter::appendBufferedRowGroup().
   bool buffered() const;
