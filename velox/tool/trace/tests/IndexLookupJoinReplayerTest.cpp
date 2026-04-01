@@ -62,11 +62,14 @@ class IndexLookupJoinReplayerTest : public HiveConnectorTestBase {
     velox::exec::trace::registerDummySourceSerDe();
     core::ITypedExpr::registerSerDe();
     registerPartitionFunctionSerDe();
-    auto connectorCpuExecutor =
-        std::make_unique<folly::CPUThreadPoolExecutor>(128);
-    TestIndexConnectorFactory::registerConnector(connectorCpuExecutor.get());
     TestIndexTableHandle::registerSerDe();
     TestIndexColumnHandle::registerSerDe();
+    TestIndexConnectorSplit::registerSerDe();
+  }
+
+  void SetUp() override {
+    HiveConnectorTestBase::SetUp();
+    TestIndexConnectorFactory::registerConnector(connectorCpuExecutor_.get());
   }
 
   void TearDown() override {
@@ -149,9 +152,13 @@ class IndexLookupJoinReplayerTest : public HiveConnectorTestBase {
   // Makes index table handle with the specified index table and async lookup
   // flag.
   static std::shared_ptr<TestIndexTableHandle> makeIndexTableHandle(
-      const std::shared_ptr<TestIndexTable>& indexTable) {
+      const std::shared_ptr<TestIndexTable>& indexTable,
+      bool needsIndexSplit = false) {
     return std::make_shared<TestIndexTableHandle>(
-        kTestIndexConnectorName, indexTable, /*asyncLookup*/ false);
+        kTestIndexConnectorName,
+        indexTable,
+        /*asyncLookup=*/false,
+        needsIndexSplit);
   }
 
   struct PlanWithSplits {
@@ -294,6 +301,93 @@ TEST_F(IndexLookupJoinReplayerTest, test) {
           .copyResults(pool(), task);
 
   // Run the replayer
+  const auto replayingResult = IndexLookupJoinReplayer(
+                                   traceRoot,
+                                   task->queryCtx()->queryId(),
+                                   task->taskId(),
+                                   traceNodeId_,
+                                   "IndexLookupJoin",
+                                   "",
+                                   0,
+                                   executor_.get())
+                                   .run();
+  assertEqualResults({results}, {replayingResult});
+}
+
+TEST_F(IndexLookupJoinReplayerTest, testWithIndexSplits) {
+  // Test that index splits are traced and replayed correctly when
+  // needsIndexSplit is true.
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId probeScanId;
+
+  const auto indexTable = createIndexTable(
+      /*numEqualJoinKeys=*/1,
+      makeRowVector(
+          indexType_->names(),
+          {makeFlatVector<int64_t>({1, 2, 3}),
+           makeFlatVector<int32_t>({10, 20, 30}),
+           makeFlatVector<int16_t>({100, 200, 300}),
+           makeFlatVector<StringView>({"a", "b", "c"})}),
+      makeRowVector(
+          {"u4", "u5"},
+          {makeFlatVector<int64_t>({1000, 2000, 3000}),
+           makeFlatVector<StringView>({"x", "y", "z"})}));
+
+  // Create handle with needsIndexSplit=true.
+  auto indexTableHandle =
+      makeIndexTableHandle(indexTable, /*needsIndexSplit=*/true);
+
+  connector::ColumnHandleMap columnHandles;
+  for (const auto& name : indexType_->names()) {
+    columnHandles[name] = std::make_shared<TestIndexColumnHandle>(name);
+  }
+
+  auto indexScan = std::make_shared<core::TableScanNode>(
+      planNodeIdGenerator->next(), indexType_, indexTableHandle, columnHandles);
+  const auto indexScanId = indexScan->id();
+
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(probeType_)
+          .capturePlanNodeId(probeScanId)
+          .indexLookupJoin(
+              leftKeys,
+              rightKeys,
+              std::dynamic_pointer_cast<const core::TableScanNode>(indexScan),
+              /*joinConditions=*/{},
+              /*filter=*/"",
+              /*hasMarker=*/false,
+              concat(probeType_, indexType_)->names(),
+              core::JoinType::kInner)
+          .capturePlanNodeId(traceNodeId_)
+          .planNode();
+
+  const auto testDir = TempDirectoryPath::create();
+  const auto traceRoot = fmt::format("{}/{}", testDir->getPath(), "traceRoot");
+  std::shared_ptr<Task> task;
+
+  const auto sourceFilePath = TempFilePath::create();
+  writeToFile(sourceFilePath->getPath(), probeInput_);
+
+  // Provide index splits to the original query.
+  auto results =
+      AssertQueryBuilder(plan)
+          .config(core::QueryConfig::kQueryTraceEnabled, true)
+          .config(core::QueryConfig::kQueryTraceDir, traceRoot)
+          .config(core::QueryConfig::kQueryTraceMaxBytes, 100UL << 30)
+          .config(core::QueryConfig::kQueryTraceTaskRegExp, ".*")
+          .config(core::QueryConfig::kQueryTraceNodeId, traceNodeId_)
+          .splits(
+              probeScanId,
+              {Split(makeHiveConnectorSplit(sourceFilePath->getPath()))})
+          .splits(
+              indexScanId,
+              {Split(
+                  std::make_shared<TestIndexConnectorSplit>(
+                      kTestIndexConnectorName))})
+          .copyResults(pool(), task);
+
+  // Replay and verify the results match.
   const auto replayingResult = IndexLookupJoinReplayer(
                                    traceRoot,
                                    task->queryCtx()->queryId(),

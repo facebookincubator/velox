@@ -27,6 +27,8 @@ presto> select array_sort_desc(array[2, 5, null, 1, -1]);
 
 Both array_sort and array_sort_desc place nulls at the end of the array.
 
+<!-- truncate -->
+
 There is also a version of <a href="https://prestodb.io/docs/current/functions/array.html#id2">array_sort</a>
 function that takes a comparator lambda function and uses it to sort the array.
 

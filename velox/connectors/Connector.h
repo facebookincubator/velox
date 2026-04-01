@@ -787,7 +787,8 @@ std::shared_ptr<Connector> getConnector(const std::string& connectorId);
 
 /// Returns a map of all (connectorId -> connector) pairs currently
 /// registered.
-const std::unordered_map<std::string, std::shared_ptr<Connector>>&
-getAllConnectors();
+[[deprecated("Use ConnectorRegistry methods instead.")]] const std::
+    unordered_map<std::string, std::shared_ptr<Connector>>&
+    getAllConnectors();
 
 } // namespace facebook::velox::connector

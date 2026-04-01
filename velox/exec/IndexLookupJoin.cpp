@@ -18,9 +18,12 @@
 #include "velox/buffer/Buffer.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/Connector.h"
+#include "velox/core/QueryConfig.h"
+#include "velox/exec/OperatorTraceWriter.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
+#include "velox/exec/trace/TraceUtil.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/FieldReference.h"
 
@@ -376,6 +379,40 @@ void IndexLookupJoin::initialize() {
       lookupTableHandle_,
       lookupColumnHandles_,
       connectorQueryCtx_.get());
+
+  createIndexSplitTracer();
+}
+
+void IndexLookupJoin::createIndexSplitTracer() {
+  if (inputTracer_ == nullptr) {
+    return;
+  }
+  const auto& queryConfig = operatorCtx_->driverCtx()->queryConfig();
+  const auto taskTraceDir = exec::trace::getTaskTraceDirectory(
+      queryConfig.queryTraceDir(),
+      operatorCtx_->driverCtx()->task->queryCtx()->queryId(),
+      operatorCtx_->taskId());
+  const auto opTraceDir = exec::trace::getOpTraceDirectory(
+      taskTraceDir,
+      planNodeId(),
+      operatorCtx_->driverCtx()->pipelineId,
+      operatorCtx_->driverCtx()->driverId);
+  indexSplitTracer_ =
+      std::make_unique<trace::OperatorTraceSplitWriter>(this, opTraceDir);
+}
+
+void IndexLookupJoin::traceIndexSplit(const exec::Split& split) {
+  if (FOLLY_UNLIKELY(indexSplitTracer_ != nullptr)) {
+    auto connectorSplit = split.connectorSplit;
+    indexSplitTracer_->write(exec::Split(std::move(connectorSplit)));
+  }
+}
+
+void IndexLookupJoin::closeIndexSplitTracer() {
+  // NOTE: skip calling finish() because the input tracer (via Operator::close)
+  // already wrote the summary file. Both tracers share the same summary path
+  // and finish() would fail with O_EXCL.
+  indexSplitTracer_.reset();
 }
 
 void IndexLookupJoin::ensureInputLoaded(const InputBatchState& batch) {
@@ -633,6 +670,7 @@ bool IndexLookupJoin::collectIndexSplits(ContinueFuture* future) {
       return true;
     }
 
+    traceIndexSplit(split);
     indexSplits_.push_back(std::move(split.connectorSplit));
   }
 }
@@ -1416,6 +1454,8 @@ void IndexLookupJoin::close() {
   lookupOutputNulls_ = nullptr;
 
   Operator::close();
+
+  closeIndexSplitTracer();
 }
 
 bool IndexLookupJoin::applyFilterOnLookupResult(InputBatchState& batch) {

@@ -136,7 +136,7 @@ std::unique_ptr<Subfield::PathElement> Tokenizer::matchUnquotedSubscript() {
   }
   int end = index_;
 
-  std::string token = path_.substr(start, end);
+  std::string token = path_.substr(start, end - start);
 
   // an empty unquoted token is not allowed
   if (token.empty()) {
