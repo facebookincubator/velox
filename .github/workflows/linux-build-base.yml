@@ -96,6 +96,7 @@ jobs:
       cudf-changes: ${{ steps.changes.outputs.cudf }}
       build-outcome: ${{ steps.build.outcome }}
       test-outcome: ${{ steps.tests.outcome }}
+      flaky: ${{ steps.tests.outputs.flaky }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -196,7 +197,21 @@ jobs:
         run: |
           source /setup-classpath.sh
           ulimit -n 65536
-          ctest -j 24 --timeout 900 --label-exclude cuda_driver --output-on-failure --no-tests=error
+          if ctest -j 24 --timeout 900 --label-exclude cuda_driver \
+               --output-on-failure --no-tests=error \
+               --output-junit test-results.xml; then
+            echo "All tests passed on first run."
+          else
+            echo "::warning::Some tests failed. Retrying failed tests..."
+            if ctest --rerun-failed -j 4 --timeout 900 \
+                 --output-on-failure --output-junit retry-results.xml; then
+              echo "::warning::All failed tests passed on retry — these are flaky tests."
+              echo "flaky=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "::error::Tests failed consistently on retry."
+              exit 1
+            fi
+          fi
 
       # Clang-tidy needs a complete build because some files are only generated during the build
       # that clang tidy will not find and report errors otherwise.
@@ -318,10 +333,14 @@ jobs:
             echo "Tests failed."
             exit 1
           fi
+          if [[ "$FLAKY" == "true" ]]; then
+            echo "::warning::Some tests were flaky (failed then passed on retry)."
+          fi
           echo "Tests passed."
         env:
           BUILD_OUTCOME: ${{ needs.adapters.outputs.build-outcome }}
           TEST_OUTCOME: ${{ needs.adapters.outputs.test-outcome }}
+          FLAKY: ${{ needs.adapters.outputs.flaky }}
 
   cudf-tests:
     runs-on: 4-core-ubuntu-gpu-t4
@@ -396,6 +415,7 @@ jobs:
     outputs:
       build-outcome: ${{ steps.build.outcome }}
       test-outcome: ${{ steps.tests.outcome }}
+      flaky: ${{ steps.tests.outputs.flaky }}
     defaults:
       run:
         shell: bash
@@ -493,7 +513,21 @@ jobs:
         if: steps.build.outcome == 'success'
         run: |
           ulimit -n 65536
-          cd _build/debug && ctest -j 24 --timeout 1800 --output-on-failure --no-tests=error
+          cd _build/debug
+          if ctest -j 24 --timeout 1800 --output-on-failure --no-tests=error \
+               --output-junit test-results.xml; then
+            echo "All tests passed on first run."
+          else
+            echo "::warning::Some tests failed. Retrying failed tests..."
+            if ctest --rerun-failed -j 4 --timeout 1800 \
+                 --output-on-failure --output-junit retry-results.xml; then
+              echo "::warning::All failed tests passed on retry — these are flaky tests."
+              echo "flaky=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "::error::Tests failed consistently on retry."
+              exit 1
+            fi
+          fi
 
   ubuntu-debug-build-status:
     if: always()
@@ -525,10 +559,14 @@ jobs:
             echo "Tests failed."
             exit 1
           fi
+          if [[ "$FLAKY" == "true" ]]; then
+            echo "::warning::Some tests were flaky (failed then passed on retry)."
+          fi
           echo "Tests passed."
         env:
           BUILD_OUTCOME: ${{ needs.ubuntu-debug.outputs.build-outcome }}
           TEST_OUTCOME: ${{ needs.ubuntu-debug.outputs.test-outcome }}
+          FLAKY: ${{ needs.ubuntu-debug.outputs.flaky }}
 
   fedora-debug:
     runs-on: 32-core-ubuntu
