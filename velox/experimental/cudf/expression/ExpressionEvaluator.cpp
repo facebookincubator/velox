@@ -116,6 +116,42 @@ bool hasDecimalZero(
   return boolScalar.is_valid(stream) && boolScalar.value(stream);
 }
 
+std::unique_ptr<cudf::scalar> castDecimalScalar(
+    const cudf::scalar& src,
+    cudf::data_type targetType,
+    rmm::cuda_stream_view stream) {
+  __int128_t rep;
+  if (src.type().id() == cudf::type_id::DECIMAL64) {
+    auto const& dec =
+        static_cast<cudf::fixed_point_scalar<numeric::decimal64> const&>(src);
+    rep = static_cast<int64_t>(dec.value(stream));
+  } else {
+    auto const& dec =
+        static_cast<cudf::fixed_point_scalar<numeric::decimal128> const&>(src);
+    rep = static_cast<__int128_t>(dec.value(stream));
+  }
+
+  int32_t scaleDiff = src.type().scale() - targetType.scale();
+  if (scaleDiff > 0) {
+    for (int32_t i = 0; i < scaleDiff; ++i) {
+      rep *= 10;
+    }
+  } else if (scaleDiff < 0) {
+    for (int32_t i = 0; i < -scaleDiff; ++i) {
+      rep /= 10;
+    }
+  }
+
+  if (targetType.id() == cudf::type_id::DECIMAL128) {
+    return cudf::make_fixed_point_scalar<numeric::decimal128>(
+        rep, numeric::scale_type{targetType.scale()}, stream);
+  }
+  return cudf::make_fixed_point_scalar<numeric::decimal64>(
+      static_cast<int64_t>(rep),
+      numeric::scale_type{targetType.scale()},
+      stream);
+}
+
 struct CudfExpressionEvaluatorEntry {
   int priority;
   CudfExpressionEvaluatorCanEvaluate canEvaluate;
@@ -536,53 +572,54 @@ class BinaryFunction : public CudfFunction {
       auto lhsView = asView(inputColumns[0]);
       if (isComparisonOp(op_) && cudf::is_fixed_point(lhsView.type()) &&
           cudf::is_fixed_point(right_->type())) {
-        auto rhsCol =
-            cudf::make_column_from_scalar(*right_, lhsView.size(), stream, mr);
-        auto rhsView = rhsCol->view();
         auto lhsScale = -lhsView.type().scale();
-        auto rhsScale = -rhsView.type().scale();
+        auto rhsScale = -right_->type().scale();
         auto targetScale = lhsScale > rhsScale ? lhsScale : rhsScale;
         auto targetTypeId = (lhsView.type().id() == cudf::type_id::DECIMAL128 ||
-                             rhsView.type().id() == cudf::type_id::DECIMAL128)
+                             right_->type().id() == cudf::type_id::DECIMAL128)
             ? cudf::type_id::DECIMAL128
             : cudf::type_id::DECIMAL64;
         auto targetType =
             cudf::data_type{targetTypeId, numeric::scale_type{-targetScale}};
         std::unique_ptr<cudf::column> lhsCast;
-        std::unique_ptr<cudf::column> rhsCast;
         if (lhsView.type() != targetType) {
           lhsCast = cudf::cast(lhsView, targetType, stream, mr);
           lhsView = lhsCast->view();
         }
-        if (rhsView.type() != targetType) {
-          rhsCast = cudf::cast(rhsView, targetType, stream, mr);
-          rhsView = rhsCast->view();
-        }
-        return cudf::binary_operation(lhsView, rhsView, op_, type_, stream, mr);
+        auto rhsScalar = (right_->type() != targetType)
+            ? castDecimalScalar(*right_, targetType, stream)
+            : nullptr;
+        return cudf::binary_operation(
+            lhsView,
+            rhsScalar ? *rhsScalar : *right_,
+            op_,
+            type_,
+            stream,
+            mr);
       }
       if (cudf::is_fixed_point(type_)) {
-        auto rhsCol =
-            cudf::make_column_from_scalar(*right_, lhsView.size(), stream, mr);
-        auto rhsView = rhsCol->view();
         if (op_ == cudf::binary_operator::ADD ||
             op_ == cudf::binary_operator::SUB ||
             op_ == cudf::binary_operator::MOD) {
           std::unique_ptr<cudf::column> lhsCast;
-          std::unique_ptr<cudf::column> rhsCast;
           if (lhsView.type() != type_) {
             lhsCast = cudf::cast(lhsView, type_, stream, mr);
             lhsView = lhsCast->view();
           }
-          if (rhsView.type() != type_) {
-            rhsCast = cudf::cast(rhsView, type_, stream, mr);
-            rhsView = rhsCast->view();
-          }
+          auto rhsScalar = (right_->type() != type_)
+              ? castDecimalScalar(*right_, type_, stream)
+              : nullptr;
           return cudf::binary_operation(
-              lhsView, rhsView, op_, type_, stream, mr);
+              lhsView,
+              rhsScalar ? *rhsScalar : *right_,
+              op_,
+              type_,
+              stream,
+              mr);
         }
         if (op_ == cudf::binary_operator::MUL) {
           std::unique_ptr<cudf::column> lhsCast;
-          std::unique_ptr<cudf::column> rhsCast;
+          std::unique_ptr<cudf::scalar> rhsScalar;
           if (type_.id() == cudf::type_id::DECIMAL128) {
             if (lhsView.type().id() == cudf::type_id::DECIMAL64) {
               auto castType = cudf::data_type{
@@ -590,15 +627,19 @@ class BinaryFunction : public CudfFunction {
               lhsCast = cudf::cast(lhsView, castType, stream, mr);
               lhsView = lhsCast->view();
             }
-            if (rhsView.type().id() == cudf::type_id::DECIMAL64) {
+            if (right_->type().id() == cudf::type_id::DECIMAL64) {
               auto castType = cudf::data_type{
-                  cudf::type_id::DECIMAL128, rhsView.type().scale()};
-              rhsCast = cudf::cast(rhsView, castType, stream, mr);
-              rhsView = rhsCast->view();
+                  cudf::type_id::DECIMAL128, right_->type().scale()};
+              rhsScalar = castDecimalScalar(*right_, castType, stream);
             }
           }
           return cudf::binary_operation(
-              lhsView, rhsView, op_, type_, stream, mr);
+              lhsView,
+              rhsScalar ? *rhsScalar : *right_,
+              op_,
+              type_,
+              stream,
+              mr);
         }
       }
       return cudf::binary_operation(
@@ -637,68 +678,74 @@ class BinaryFunction : public CudfFunction {
     auto rhsView = asView(inputColumns[0]);
     if (isComparisonOp(op_) && cudf::is_fixed_point(left_->type()) &&
         cudf::is_fixed_point(rhsView.type())) {
-      auto lhsCol =
-          cudf::make_column_from_scalar(*left_, rhsView.size(), stream, mr);
-      auto lhsView = lhsCol->view();
-      auto lhsScale = -lhsView.type().scale();
+      auto lhsScale = -left_->type().scale();
       auto rhsScale = -rhsView.type().scale();
       auto targetScale = lhsScale > rhsScale ? lhsScale : rhsScale;
-      auto targetTypeId = (lhsView.type().id() == cudf::type_id::DECIMAL128 ||
+      auto targetTypeId = (left_->type().id() == cudf::type_id::DECIMAL128 ||
                            rhsView.type().id() == cudf::type_id::DECIMAL128)
           ? cudf::type_id::DECIMAL128
           : cudf::type_id::DECIMAL64;
       auto targetType =
           cudf::data_type{targetTypeId, numeric::scale_type{-targetScale}};
-      std::unique_ptr<cudf::column> lhsCast;
       std::unique_ptr<cudf::column> rhsCast;
-      if (lhsView.type() != targetType) {
-        lhsCast = cudf::cast(lhsView, targetType, stream, mr);
-        lhsView = lhsCast->view();
-      }
       if (rhsView.type() != targetType) {
         rhsCast = cudf::cast(rhsView, targetType, stream, mr);
         rhsView = rhsCast->view();
       }
-      // @TODO Check for divide-by-zero as in the DECIMAL case above?
-      return cudf::binary_operation(lhsView, rhsView, op_, type_, stream, mr);
+      auto lhsScalar = (left_->type() != targetType)
+          ? castDecimalScalar(*left_, targetType, stream)
+          : nullptr;
+      return cudf::binary_operation(
+          lhsScalar ? *lhsScalar : *left_,
+          rhsView,
+          op_,
+          type_,
+          stream,
+          mr);
     }
     if (cudf::is_fixed_point(type_)) {
-      auto lhsCol =
-          cudf::make_column_from_scalar(*left_, rhsView.size(), stream, mr);
-      auto lhsView = lhsCol->view();
       if (op_ == cudf::binary_operator::ADD ||
           op_ == cudf::binary_operator::SUB ||
           op_ == cudf::binary_operator::MOD) {
-        std::unique_ptr<cudf::column> lhsCast;
         std::unique_ptr<cudf::column> rhsCast;
-        if (lhsView.type() != type_) {
-          lhsCast = cudf::cast(lhsView, type_, stream, mr);
-          lhsView = lhsCast->view();
-        }
         if (rhsView.type() != type_) {
           rhsCast = cudf::cast(rhsView, type_, stream, mr);
           rhsView = rhsCast->view();
         }
-        return cudf::binary_operation(lhsView, rhsView, op_, type_, stream, mr);
+        auto lhsScalar = (left_->type() != type_)
+            ? castDecimalScalar(*left_, type_, stream)
+            : nullptr;
+        return cudf::binary_operation(
+            lhsScalar ? *lhsScalar : *left_,
+            rhsView,
+            op_,
+            type_,
+            stream,
+            mr);
       }
       if (op_ == cudf::binary_operator::MUL) {
-        std::unique_ptr<cudf::column> lhsCast;
         std::unique_ptr<cudf::column> rhsCast;
+        std::unique_ptr<cudf::scalar> lhsScalar;
         if (type_.id() == cudf::type_id::DECIMAL128) {
-          if (lhsView.type().id() == cudf::type_id::DECIMAL64) {
-            auto castType = cudf::data_type{
-                cudf::type_id::DECIMAL128, lhsView.type().scale()};
-            lhsCast = cudf::cast(lhsView, castType, stream, mr);
-            lhsView = lhsCast->view();
-          }
           if (rhsView.type().id() == cudf::type_id::DECIMAL64) {
             auto castType = cudf::data_type{
                 cudf::type_id::DECIMAL128, rhsView.type().scale()};
             rhsCast = cudf::cast(rhsView, castType, stream, mr);
             rhsView = rhsCast->view();
           }
+          if (left_->type().id() == cudf::type_id::DECIMAL64) {
+            auto castType = cudf::data_type{
+                cudf::type_id::DECIMAL128, left_->type().scale()};
+            lhsScalar = castDecimalScalar(*left_, castType, stream);
+          }
         }
-        return cudf::binary_operation(lhsView, rhsView, op_, type_, stream, mr);
+        return cudf::binary_operation(
+            lhsScalar ? *lhsScalar : *left_,
+            rhsView,
+            op_,
+            type_,
+            stream,
+            mr);
       }
     }
     return cudf::binary_operation(*left_, rhsView, op_, type_, stream, mr);
