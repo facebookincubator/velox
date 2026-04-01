@@ -116,6 +116,11 @@ class PrestoIterativePartitioningSerializer {
       const PartitionedVectorPtr& partitionedVector,
       const std::vector<IOBufOutputStream*>& outputStreams) const;
 
+  template <TypeKind kind>
+  void flushSingleConstantVector(
+      const PartitionedVectorPtr& partitionedVector,
+      const std::vector<IOBufOutputStream*>& outputStreams) const;
+
   void flushHeader(
       std::string_view name,
       const std::vector<uint32_t>& nonEmptyPartitions,
@@ -129,6 +134,18 @@ class PrestoIterativePartitioningSerializer {
       const std::vector<PartitionedVectorPtr>& partitionedVectors,
       const std::vector<uint32_t>& nonEmptyPartitions,
       const std::vector<IOBufOutputStream*>& outputStreams) const;
+
+  static void flushSimpleVectorNulls(
+      const PartitionedVectorPtr& partitionedVector,
+      const std::vector<uint32_t>& nonEmptyPartitions,
+      std::vector<std::vector<uint8_t>>& bitmaps,
+      std::vector<vector_size_t>& destBitOffsets);
+
+  static void flushConstantVectorNulls(
+      const PartitionedVectorPtr& partitionedVector,
+      const std::vector<uint32_t>& nonEmptyPartitions,
+      std::vector<std::vector<uint8_t>>& bitmaps,
+      std::vector<vector_size_t>& destBitOffsets);
 
   template <typename T>
   void flushFlatValues(

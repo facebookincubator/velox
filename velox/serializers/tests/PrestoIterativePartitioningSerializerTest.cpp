@@ -87,6 +87,19 @@ class PrestoIterativePartitioningSerializerTestBase : public VectorTestBase {
   PrestoVectorSerde serde_;
 };
 
+template <>
+std::vector<bool> PrestoIterativePartitioningSerializerTestBase::sortedValues<
+    bool>(const RowVectorPtr& row, int column) {
+  auto* flat = row->childAt(column)->as<FlatVector<bool>>();
+  std::vector<bool> vals;
+  vals.reserve(row->size());
+  for (int i = 0; i < row->size(); ++i) {
+    vals.push_back(flat->valueAtFast(i));
+  }
+  std::sort(vals.begin(), vals.end());
+  return vals;
+}
+
 // ---------------------------------------------------------------------------
 // Value-parameterized fixture — routing, null-handling over scalar TypePtrs.
 // Uses BaseVector::create() + setNull() so no C++ type dispatch is needed.
@@ -487,6 +500,144 @@ TEST_F(PrestoIterativePartitioningSerializerTest, multipleCycles) {
     EXPECT_EQ(
         r1->childAt(0)->as<FlatVector<int32_t>>()->valueAt(0), cycle * 2 + 1);
   }
+}
+
+// ── Encoding
+// ─────────────────────────────────────────────────────────────────
+
+// Constant vectors are flattened across append() calls.
+TEST_F(PrestoIterativePartitioningSerializerTest, constantColumnAcrossAppends) {
+  auto type = ROW({"v"}, {BIGINT()});
+  auto serializer = makeSerializer(type, 3);
+
+  serializer->append(
+      makeRowVector({"v"}, {makeConstant<int64_t>(11, 4)}), {0, 1, 0, 2});
+  serializer->append(
+      makeRowVector({"v"}, {makeConstant<int64_t>(22, 5)}), {2, 0, 1, 1, 2});
+
+  auto ioBufs = serializer->flush();
+  ASSERT_EQ(ioBufs.size(), 3);
+
+  auto r0 = deserialize(*ioBufs.at(0).first, type);
+  auto r1 = deserialize(*ioBufs.at(1).first, type);
+  auto r2 = deserialize(*ioBufs.at(2).first, type);
+
+  EXPECT_EQ(sortedValues<int64_t>(r0, 0), (std::vector<int64_t>{11, 11, 22}));
+  EXPECT_EQ(sortedValues<int64_t>(r1, 0), (std::vector<int64_t>{11, 22, 22}));
+  EXPECT_EQ(sortedValues<int64_t>(r2, 0), (std::vector<int64_t>{11, 22, 22}));
+}
+
+// Boolean constant vectors are flattened across append() calls.
+TEST_F(
+    PrestoIterativePartitioningSerializerTest,
+    booleanConstantColumnAcrossAppends) {
+  auto type = ROW({"v"}, {BOOLEAN()});
+  auto serializer = makeSerializer(type, 2);
+
+  serializer->append(
+      makeRowVector({"v"}, {makeConstant<bool>(true, 4)}), {0, 1, 0, 1});
+  serializer->append(
+      makeRowVector({"v"}, {makeConstant<bool>(false, 3)}), {1, 0, 1});
+
+  auto ioBufs = serializer->flush();
+  ASSERT_EQ(ioBufs.size(), 2);
+
+  auto r0 = deserialize(*ioBufs.at(0).first, type);
+  auto r1 = deserialize(*ioBufs.at(1).first, type);
+
+  EXPECT_EQ(sortedValues<bool>(r0, 0), (std::vector<bool>{false, true, true}));
+  EXPECT_EQ(
+      sortedValues<bool>(r1, 0), (std::vector<bool>{false, false, true, true}));
+}
+
+// Null constant vectors contribute only nulls but still advance row positions.
+TEST_F(
+    PrestoIterativePartitioningSerializerTest,
+    nullConstantColumnAcrossAppends) {
+  auto type = ROW({"v"}, {BIGINT()});
+  auto serializer = makeSerializer(type, 2);
+
+  serializer->append(
+      makeRowVector({"v"}, {makeConstant<int64_t>(std::nullopt, 3)}),
+      {0, 1, 0});
+  serializer->append(
+      makeRowVector({"v"}, {makeConstant<int64_t>(7, 3)}), {1, 0, 1});
+
+  auto ioBufs = serializer->flush();
+  ASSERT_EQ(ioBufs.size(), 2);
+
+  auto r0 = deserialize(*ioBufs.at(0).first, type);
+  auto r1 = deserialize(*ioBufs.at(1).first, type);
+
+  auto actual0 = nullableValues<int64_t>(r0, 0);
+  std::sort(actual0.begin(), actual0.end());
+  auto expected0 =
+      std::vector<std::optional<int64_t>>{std::nullopt, std::nullopt, 7};
+  EXPECT_EQ(actual0, expected0);
+
+  auto actual1 = nullableValues<int64_t>(r1, 0);
+  std::sort(actual1.begin(), actual1.end());
+  auto expected1 = std::vector<std::optional<int64_t>>{std::nullopt, 7, 7};
+  EXPECT_EQ(actual1, expected1);
+}
+
+// Constant and flat vectors are flattened and serialized correctly across
+// append() calls.
+TEST_F(PrestoIterativePartitioningSerializerTest, mixedConstantFlatVector) {
+  auto type = ROW({"v"}, {BIGINT()});
+  auto serializer = makeSerializer(type, 2);
+
+  serializer->append(
+      makeRowVector({"v"}, {makeConstant<int64_t>(7, 3)}), {0, 1, 0});
+  serializer->append(
+      makeRowVector({"v"}, {makeFlatVector<int64_t>({1, 2, 3})}), {1, 1, 0});
+  serializer->append(
+      makeRowVector({"v"}, {makeConstant<int64_t>(8, 2)}), {0, 1});
+
+  auto ioBufs = serializer->flush();
+  ASSERT_EQ(ioBufs.size(), 2);
+
+  auto r0 = deserialize(*ioBufs.at(0).first, type);
+  auto r1 = deserialize(*ioBufs.at(1).first, type);
+
+  EXPECT_EQ(sortedValues<int64_t>(r0, 0), (std::vector<int64_t>{3, 7, 7, 8}));
+  EXPECT_EQ(sortedValues<int64_t>(r1, 0), (std::vector<int64_t>{1, 2, 7, 8}));
+}
+
+// Null constant rows are preserved and serialized correctly with flat and
+// nullable flat vectors across append() calls.
+TEST_F(PrestoIterativePartitioningSerializerTest, mixedNullConstantFlatVector) {
+  auto type = ROW({"v"}, {BIGINT()});
+  auto serializer = makeSerializer(type, 2);
+
+  serializer->append(
+      makeRowVector({"v"}, {makeFlatVector<int64_t>({1, 2, 3, 4})}),
+      {0, 1, 1, 0});
+  serializer->append(
+      makeRowVector({"v"}, {makeConstant<int64_t>(std::nullopt, 3)}),
+      {0, 1, 0});
+  serializer->append(
+      makeRowVector(
+          {"v"}, {makeNullableFlatVector<int64_t>({std::nullopt, 7, 3})}),
+      {1, 0, 1});
+
+  auto ioBufs = serializer->flush();
+  ASSERT_EQ(ioBufs.size(), 2);
+
+  auto r0 = deserialize(*ioBufs.at(0).first, type);
+  auto r1 = deserialize(*ioBufs.at(1).first, type);
+
+  auto actual0 = nullableValues<int64_t>(r0, 0);
+  std::sort(actual0.begin(), actual0.end());
+  auto expected0 =
+      std::vector<std::optional<int64_t>>{std::nullopt, std::nullopt, 1, 4, 7};
+  EXPECT_EQ(actual0, expected0);
+
+  auto actual1 = nullableValues<int64_t>(r1, 0);
+  std::sort(actual1.begin(), actual1.end());
+  auto expected1 =
+      std::vector<std::optional<int64_t>>{std::nullopt, std::nullopt, 2, 3, 3};
+  EXPECT_EQ(actual1, expected1);
 }
 
 // ── Scale and regression

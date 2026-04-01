@@ -18,6 +18,7 @@
 #include "velox/common/base/BitUtil.h"
 #include "velox/type/Type.h"
 #include "velox/vector/ComplexVector.h"
+#include "velox/vector/ConstantVector.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::serializer::presto {
@@ -30,6 +31,9 @@ constexpr int64_t kVectorSizeTypeSize{sizeof(vector_size_t)};
 constexpr int64_t kUncompressedSizeOffset{kVectorSizeTypeSize + 1};
 // [numRows:4][codec:1][uncompressedSize:4][compressedSize:4][checksum:8]
 constexpr int64_t kHeaderSize{kUncompressedSizeOffset + 4 + 4 + 8};
+
+// chunk size for flushing constant values
+constexpr int32_t kChunkBytes = 4096;
 
 static inline const std::string_view kByteArray{"BYTE_ARRAY"};
 static inline const std::string_view kShortArray{"SHORT_ARRAY"};
@@ -484,11 +488,13 @@ void PrestoIterativePartitioningSerializer::flushColumn(
     case TypeKind::ROW:
     case TypeKind::ARRAY:
     case TypeKind::MAP:
-      VELOX_NYI();
+      VELOX_NYI(
+          "Unsupported vector type kind for PrestoIterativePartitioningSerializer: {}",
+          typeKind);
 
     default:
       VELOX_UNSUPPORTED(
-          "Invalid vector encoding for PrestoIterativePartitioningSerializer: ",
+          "Invalid vector type kind for PrestoIterativePartitioningSerializer: {}",
           typeKind);
   }
 }
@@ -565,6 +571,59 @@ void PrestoIterativePartitioningSerializer::flushSingleFlatVector<
   }
 }
 
+template <TypeKind kind>
+void PrestoIterativePartitioningSerializer::flushSingleConstantVector(
+    const PartitionedVectorPtr& partitionedVector,
+    const std::vector<IOBufOutputStream*>& outputStreams) const {
+  if constexpr (
+      kind == TypeKind::VARCHAR || kind == TypeKind::VARBINARY ||
+      kind == TypeKind::TIMESTAMP) {
+    VELOX_NYI(
+        "flushSingleConstantVector does not support variable-length type: {}",
+        kind);
+  }
+
+  using T = typename TypeTraits<kind>::NativeType;
+  auto* constantVector =
+      partitionedVector->baseVector()->template as<ConstantVector<T>>();
+  VELOX_DCHECK_NOT_NULL(constantVector);
+
+  if (constantVector->isNullAt(0)) {
+    return;
+  }
+
+  const auto value = constantVector->valueAtFast(0);
+  const auto* partitionOffsets = partitionedVector->rawPartitionOffsets();
+
+  Scratch scratch;
+  ScratchPtr<T> values(scratch);
+  const auto numRowsPerChunk =
+      std::max<vector_size_t>(1, kChunkBytes / sizeof(T));
+  const char* chunkBytes = nullptr;
+
+  vector_size_t lastOffset = 0;
+  for (uint32_t p = 0; p < numPartitions_; ++p) {
+    const auto offset = partitionOffsets[p];
+    auto numRows = offset - lastOffset;
+    if (numRows > 0) {
+      VELOX_DCHECK_NOT_NULL(outputStreams[p]);
+
+      if (chunkBytes == nullptr) {
+        auto* ptr = values.get(numRowsPerChunk);
+        std::fill_n(ptr, numRowsPerChunk, value);
+        chunkBytes = reinterpret_cast<const char*>(ptr);
+      }
+
+      while (numRows > 0) {
+        auto n = std::min<vector_size_t>(numRowsPerChunk, numRows);
+        outputStreams[p]->write(chunkBytes, n * sizeof(T));
+        numRows -= n;
+      }
+    }
+    lastOffset = offset;
+  }
+}
+
 void PrestoIterativePartitioningSerializer::flushSingleSimpleVector(
     const PartitionedVectorPtr& partitionedVector,
     const std::vector<IOBufOutputStream*>& outputStreams) const {
@@ -576,16 +635,22 @@ void PrestoIterativePartitioningSerializer::flushSingleSimpleVector(
       VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
           flushSingleFlatVector, typeKind, partitionedVector, outputStreams);
       break;
-    case VectorEncoding::Simple::BIASED:
     case VectorEncoding::Simple::CONSTANT:
+      VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          flushSingleConstantVector,
+          typeKind,
+          partitionedVector,
+          outputStreams);
+      break;
+    case VectorEncoding::Simple::BIASED:
     case VectorEncoding::Simple::DICTIONARY:
     case VectorEncoding::Simple::SEQUENCE:
       VELOX_NYI(
-          "Unsupported vector encoding for PrestoIterativePartitioningSerializer: ",
+          "Unsupported vector encoding for PrestoIterativePartitioningSerializer: {}",
           encoding);
     default:
       VELOX_UNSUPPORTED(
-          "Invalid vector encoding for PrestoIterativePartitioningSerializer:flushSingleSimpleVector ",
+          "Invalid vector encoding for PrestoIterativePartitioningSerializer:flushSingleSimpleVector: {}",
           encoding);
   }
 }
@@ -647,24 +712,25 @@ void PrestoIterativePartitioningSerializer::flushNulls(
 
   std::vector<vector_size_t> destBitOffsets(numPartitions_, 0);
   for (const auto& pv : partitionedVectors) {
-    const uint64_t* rawNulls = pv->baseVector()->rawNulls();
-    const auto* partitionOffsets = pv->rawPartitionOffsets();
-
-    vector_size_t startBit = 0;
-    for (uint32_t p : nonEmptyPartitions) {
-      const vector_size_t numBits = partitionOffsets[p] - startBit;
-      if (rawNulls && numBits > 0 && !bitmaps[p].empty()) {
-        bits::copyBits(
-            rawNulls,
-            startBit,
-            reinterpret_cast<uint64_t*>(bitmaps[p].data()),
-            destBitOffsets[p],
-            numBits);
-      }
-      if (!bitmaps[p].empty()) {
-        destBitOffsets[p] += numBits;
-      }
-      startBit = partitionOffsets[p];
+    auto encoding = pv->baseVector()->encoding();
+    switch (encoding) {
+      case VectorEncoding::Simple::FLAT:
+        flushSimpleVectorNulls(pv, nonEmptyPartitions, bitmaps, destBitOffsets);
+        break;
+      case VectorEncoding::Simple::CONSTANT:
+        flushConstantVectorNulls(
+            pv, nonEmptyPartitions, bitmaps, destBitOffsets);
+        break;
+      case VectorEncoding::Simple::BIASED:
+      case VectorEncoding::Simple::DICTIONARY:
+      case VectorEncoding::Simple::SEQUENCE:
+        VELOX_NYI(
+            "Unsupported vector encoding for PrestoIterativePartitioningSerializer: {}",
+            encoding);
+      default:
+        VELOX_UNSUPPORTED(
+            "Invalid vector encoding for PrestoIterativePartitioningSerializer: {}",
+            encoding);
     }
   }
 
@@ -683,6 +749,55 @@ void PrestoIterativePartitioningSerializer::flushNulls(
 
     outputStreams[p]->write(
         reinterpret_cast<const char*>(bitmaps[p].data()), numBytes);
+  }
+}
+
+void PrestoIterativePartitioningSerializer::flushSimpleVectorNulls(
+    const PartitionedVectorPtr& partitionedVector,
+    const std::vector<uint32_t>& nonEmptyPartitions,
+    std::vector<std::vector<uint8_t>>& bitmaps,
+    std::vector<vector_size_t>& destBitOffsets) {
+  const uint64_t* rawNulls = partitionedVector->baseVector()->rawNulls();
+  const auto* rawPartitionOffsets = partitionedVector->rawPartitionOffsets();
+  vector_size_t startBit = 0;
+  for (uint32_t p : nonEmptyPartitions) {
+    vector_size_t numBits = rawPartitionOffsets[p] - startBit;
+    if (rawNulls && numBits > 0 && !bitmaps[p].empty()) {
+      bits::copyBits(
+          rawNulls,
+          startBit,
+          reinterpret_cast<uint64_t*>(bitmaps[p].data()),
+          destBitOffsets[p],
+          numBits);
+    }
+    if (!bitmaps[p].empty()) {
+      destBitOffsets[p] += numBits;
+    }
+    startBit = rawPartitionOffsets[p];
+  }
+}
+
+void PrestoIterativePartitioningSerializer::flushConstantVectorNulls(
+    const PartitionedVectorPtr& partitionedVector,
+    const std::vector<uint32_t>& nonEmptyPartitions,
+    std::vector<std::vector<uint8_t>>& bitmaps,
+    std::vector<vector_size_t>& destBitOffsets) {
+  const bool isNullConstant = partitionedVector->baseVector()->isNullAt(0);
+  const auto* rawPartitionOffsets = partitionedVector->rawPartitionOffsets();
+  vector_size_t startBit = 0;
+  for (uint32_t p : nonEmptyPartitions) {
+    vector_size_t numBits = rawPartitionOffsets[p] - startBit;
+    if (isNullConstant && numBits > 0 && !bitmaps[p].empty()) {
+      bits::fillBits(
+          reinterpret_cast<uint64_t*>(bitmaps[p].data()),
+          destBitOffsets[p],
+          destBitOffsets[p] + numBits,
+          bits::kNull);
+    }
+    if (!bitmaps[p].empty()) {
+      destBitOffsets[p] += numBits;
+    }
+    startBit = rawPartitionOffsets[p];
   }
 }
 

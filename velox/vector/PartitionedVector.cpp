@@ -308,8 +308,11 @@ PartitionedVectorPtr PartitionedVector::create(
     }
 
     case VectorEncoding::Simple::CONSTANT: {
-      return std::make_shared<PartitionedConstantVector>(
-          vector, numPartitions, endPartitionOffsets, pool);
+      auto partitionedConstantVector =
+          std::make_shared<PartitionedConstantVector>(
+              vector, numPartitions, endPartitionOffsets, pool);
+      partitionedConstantVector->partition(partitions, ctx);
+      return partitionedConstantVector;
     }
 
     case VectorEncoding::Simple::ARRAY:
@@ -461,7 +464,19 @@ VectorPtr PartitionedRowVector::partitionAt(uint32_t partition) const {
 
 void PartitionedConstantVector::partition(
     const std::vector<uint32_t>& /*partitions*/,
-    PartitionBuildContext& /*ctx*/) {}
+    PartitionBuildContext& /*ctx*/) {
+  if (!vector_->isNullAt(0)) {
+    return;
+  }
+
+  for (uint32_t p = 0; p < numPartitions_; ++p) {
+    const vector_size_t begin = p == 0 ? 0 : rawEndPartitionOffsets_[p - 1];
+    const vector_size_t end = rawEndPartitionOffsets_[p];
+    if (begin < end) {
+      numNullsPerPartition_[p] = end - begin;
+    }
+  }
+}
 
 VectorPtr PartitionedConstantVector::partitionAt(uint32_t partition) const {
   VELOX_CHECK_LT(partition, numPartitions_);
