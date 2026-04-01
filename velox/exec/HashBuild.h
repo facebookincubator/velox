@@ -227,6 +227,14 @@ class HashBuild final : public Operator {
   // will be added to the joined output.
   void removeInputRowsForAntiJoinFilter();
 
+  // Returns true if dependent channel decoding is needed for the anti-join
+  // null filter (when filterPropagatesNulls_ and filter references dependent
+  // columns).
+  bool needsDependentDecodeForAntiJoinFilter() const {
+    return isAntiJoin(joinType_) && filterPropagatesNulls_ &&
+        !dependentFilterChannels_.empty();
+  }
+
   void addRuntimeStats();
 
   // Indicates if this hash build operator is under non-reclaimable state or
