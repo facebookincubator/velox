@@ -201,10 +201,8 @@ class CudfFilterProjectTest : public OperatorTestBase {
         PlanBuilder().values(input).project({"c0 + c1 AS result"}).planNode();
     runTest(plan, "SELECT c0 + c1 AS result FROM tmp");
 
-    plan = PlanBuilder()
-               .values(input)
-               .project({"1.0 + c1 AS result"})
-               .planNode();
+    plan =
+        PlanBuilder().values(input).project({"1.0 + c1 AS result"}).planNode();
     runTest(plan, "SELECT 1.0 + c1 AS result FROM tmp");
   }
 
@@ -213,10 +211,8 @@ class CudfFilterProjectTest : public OperatorTestBase {
         PlanBuilder().values(input).project({"c0 - c1 AS result"}).planNode();
     runTest(plan, "SELECT c0 - c1 AS result FROM tmp");
 
-    plan = PlanBuilder()
-               .values(input)
-               .project({"c1 - 1.0 AS result"})
-               .planNode();
+    plan =
+        PlanBuilder().values(input).project({"c1 - 1.0 AS result"}).planNode();
     runTest(plan, "SELECT c1 - 1.0 AS result FROM tmp");
   }
 
@@ -225,18 +221,14 @@ class CudfFilterProjectTest : public OperatorTestBase {
         PlanBuilder().values(input).project({"c0 * c1 AS result"}).planNode();
     runTest(plan, "SELECT c0 * c1 AS result FROM tmp");
 
-    plan = PlanBuilder()
-               .values(input)
-               .project({"c1 * 2.0 AS result"})
-               .planNode();
+    plan =
+        PlanBuilder().values(input).project({"c1 * 2.0 AS result"}).planNode();
     runTest(plan, "SELECT c1 * 2.0 AS result FROM tmp");
   }
 
   void testDivideScalarVariants(const std::vector<RowVectorPtr>& input) {
-    auto plan = PlanBuilder()
-                    .values(input)
-                    .project({"c1 / 2.0 AS result"})
-                    .planNode();
+    auto plan =
+        PlanBuilder().values(input).project({"c1 / 2.0 AS result"}).planNode();
     runTest(plan, "SELECT c1 / 2.0 AS result FROM tmp");
 
     plan = PlanBuilder()
@@ -260,8 +252,7 @@ class CudfFilterProjectTest : public OperatorTestBase {
     plan = PlanBuilder().values(input).project({"c0 < 1 AS result"}).planNode();
     runTest(plan, "SELECT c0 < 1 AS result FROM tmp");
 
-    plan =
-        PlanBuilder().values(input).project({"1 < c0 AS result"}).planNode();
+    plan = PlanBuilder().values(input).project({"1 < c0 AS result"}).planNode();
     runTest(plan, "SELECT 1 < c0 AS result FROM tmp");
   }
 
@@ -273,8 +264,7 @@ class CudfFilterProjectTest : public OperatorTestBase {
     plan = PlanBuilder().values(input).project({"c0 > 1 AS result"}).planNode();
     runTest(plan, "SELECT c0 > 1 AS result FROM tmp");
 
-    plan =
-        PlanBuilder().values(input).project({"1 > c0 AS result"}).planNode();
+    plan = PlanBuilder().values(input).project({"1 > c0 AS result"}).planNode();
     runTest(plan, "SELECT 1 > c0 AS result FROM tmp");
   }
 

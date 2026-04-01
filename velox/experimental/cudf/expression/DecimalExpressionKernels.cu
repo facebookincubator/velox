@@ -166,8 +166,7 @@ __int128_t getDecimalScalarValue(
   if (s.type().id() == cudf::type_id::DECIMAL64) {
     auto const& dec =
         static_cast<cudf::fixed_point_scalar<numeric::decimal64> const&>(s);
-    return static_cast<__int128_t>(
-        static_cast<int64_t>(dec.value(stream)));
+    return static_cast<__int128_t>(static_cast<int64_t>(dec.value(stream)));
   }
   auto const& dec =
       static_cast<cudf::fixed_point_scalar<numeric::decimal128> const&>(s);

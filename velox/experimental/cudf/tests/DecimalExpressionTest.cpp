@@ -915,10 +915,8 @@ TEST_F(CudfDecimalTest, decimalModulo) {
   auto input = makeRowVector(
       {"a", "b"},
       {
-          makeFlatVector<int64_t>(
-              {700, 100, -700, 0, 500}, DECIMAL(10, 2)),
-          makeFlatVector<int64_t>(
-              {300, 300, 300, 300, 200}, DECIMAL(10, 2)),
+          makeFlatVector<int64_t>({700, 100, -700, 0, 500}, DECIMAL(10, 2)),
+          makeFlatVector<int64_t>({300, 300, 300, 300, 200}, DECIMAL(10, 2)),
       });
 
   std::vector<RowVectorPtr> vectors = {input};
