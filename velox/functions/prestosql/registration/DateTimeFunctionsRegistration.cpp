@@ -344,15 +344,6 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerFunction<XxHash64TimeFunction, int64_t, Time>(
       {prefix + "xxhash64_internal"});
 
-  // Register hash_code operator for Date, Timestamp, and Time types.
-  // These are used by Presto for hash-based operations like joins and statistics.
-  registerFunction<XxHash64DateFunction, int64_t, Date>(
-      {prefix + "$operator$hash_code"});
-  registerFunction<XxHash64TimestampFunction, int64_t, Timestamp>(
-      {prefix + "$operator$hash_code"});
-  registerFunction<XxHash64TimeFunction, int64_t, Time>(
-      {prefix + "$operator$hash_code"});
-      
   registerFunction<ParseDurationFunction, IntervalDayTime, Varchar>(
       {prefix + "parse_duration"});
 
