@@ -389,24 +389,6 @@ when processing small batches, e.g. &lt; 10K rows.</p></td>
 to lowercase. This allows fine-grained control over CPU tracking overhead when only specific functions need to
 be monitored.</p></td>
 </tr>
-<tr class="row-even"><td><p>expression.adaptive_cpu_sampling</p></td>
-<td><p>boolean</p></td>
-<td><p>false</p></td>
-<td><p>Enables adaptive per-function CPU usage sampling. Each function is calibrated over 6 batches (1 warmup + 5
-calibration) to measure the overhead of CPU tracking (clock_gettime) relative to the function’s execution time.
-The timer overhead is measured once per ExprSet and shared across all functions. Functions where tracking overhead
-is acceptable are always tracked; functions where overhead exceeds <code class="docutils literal notranslate"><span class="pre">expression.adaptive_cpu_sampling_max_overhead_pct</span></code>
-are sampled at a rate proportional to their overhead. Sampled timing stats are extrapolated to approximate
-full-population values.</p></td>
-</tr>
-<tr class="row-odd"><td><p>expression.adaptive_cpu_sampling_max_overhead_pct</p></td>
-<td><p>float</p></td>
-<td><p>1.0</p></td>
-<td><p>Maximum acceptable CPU tracking overhead percentage per function, used with <code class="docutils literal notranslate"><span class="pre">expression.adaptive_cpu_sampling</span></code>.
-Functions whose tracking overhead exceeds this threshold are sampled at a rate of
-ceil(overhead_pct / max_overhead_pct). For example, with max_overhead=1.0, a function with 70% tracking overhead
-is sampled every 70th batch, bounding its effective overhead to ~1%. Must be greater than 0.</p></td>
-</tr>
 <tr class="row-even"><td><p>legacy_cast</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
