@@ -286,22 +286,6 @@ Expression Evaluation Configuration
        ``expression.track_cpu_usage`` is set to false. Function names are case-insensitive and will be normalized
        to lowercase. This allows fine-grained control over CPU tracking overhead when only specific functions need to
        be monitored.
-   * - expression.adaptive_cpu_sampling
-     - boolean
-     - false
-     - Enables adaptive per-function CPU usage sampling. Each function is calibrated over 6 batches (1 warmup + 5
-       calibration) to measure the overhead of CPU tracking (clock_gettime) relative to the function's execution time.
-       The timer overhead is measured once per ExprSet and shared across all functions. Functions where tracking overhead
-       is acceptable are always tracked; functions where overhead exceeds ``expression.adaptive_cpu_sampling_max_overhead_pct``
-       are sampled at a rate proportional to their overhead. Sampled timing stats are extrapolated to approximate
-       full-population values.
-   * - expression.adaptive_cpu_sampling_max_overhead_pct
-     - float
-     - 1.0
-     - Maximum acceptable CPU tracking overhead percentage per function, used with ``expression.adaptive_cpu_sampling``.
-       Functions whose tracking overhead exceeds this threshold are sampled at a rate of
-       ceil(overhead_pct / max_overhead_pct). For example, with max_overhead=1.0, a function with 70% tracking overhead
-       is sampled every 70th batch, bounding its effective overhead to ~1%. Must be greater than 0.
    * - legacy_cast
      - bool
      - false

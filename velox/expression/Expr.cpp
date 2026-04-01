@@ -16,7 +16,6 @@
 #include <boost/lexical_cast.hpp>
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/uuid_io.hpp>
-#include <cmath>
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Fs.h"
@@ -1588,94 +1587,13 @@ bool Expr::applyFunctionWithPeeling(
   return true;
 }
 
-std::unique_ptr<CpuWallTimer> Expr::cpuWallTimer(const EvalCtx& context) {
-  // 1. Compile-time tracking (set via trackCpuUsage_) always wins.
-  if (trackCpuUsage_) {
-    return std::make_unique<CpuWallTimer>(stats_.timing);
-  }
-
-  // 2. Adaptive per-function sampling.
-  if (context.adaptiveCpuSamplingEnabled()) {
-    switch (adaptiveState_) {
-      case AdaptiveCpuSamplingState::kWarmup:
-        // Warmup batch: just run the function, no timing.
-        return nullptr;
-      case AdaptiveCpuSamplingState::kCalibrating: {
-        // Measure function execution time (without CpuWallTimer).
-        // Timer overhead is measured once per ExprSet and shared via EvalCtx.
-        calibrationStopWatch_.emplace();
-        return nullptr;
-      }
-      case AdaptiveCpuSamplingState::kAlwaysTrack:
-        return std::make_unique<CpuWallTimer>(stats_.timing);
-      case AdaptiveCpuSamplingState::kSampling:
-        if (++adaptiveSamplingCounter_ % adaptiveSamplingRate_ == 0) {
-          return std::make_unique<CpuWallTimer>(stats_.timing);
-        }
-        return nullptr;
-    }
-  }
-
-  return nullptr;
-}
-
-void Expr::finalizeAdaptiveCalibration(
-    double maxOverheadPct,
-    uint64_t timerOverheadNanos) {
-  switch (adaptiveState_) {
-    case AdaptiveCpuSamplingState::kWarmup: {
-      adaptiveState_ = AdaptiveCpuSamplingState::kCalibrating;
-      break;
-    }
-    case AdaptiveCpuSamplingState::kCalibrating: {
-      calibrationFunctionWallNanos_ +=
-          calibrationStopWatch_->elapsed().wallNanos;
-      calibrationStopWatch_.reset();
-
-      if (++calibrationBatchCount_ < kCalibrationBatches) {
-        break;
-      }
-
-      // Use the shared timer overhead measurement, scaled by calibration
-      // batch count. The overhead per invocation is a platform constant
-      // measured once per ExprSet.
-      auto totalTimerOverhead = timerOverheadNanos * calibrationBatchCount_;
-
-      if (calibrationFunctionWallNanos_ > 0 && maxOverheadPct > 0) {
-        double overheadPct = 100.0 * static_cast<double>(totalTimerOverhead) /
-            static_cast<double>(calibrationFunctionWallNanos_);
-
-        if (overheadPct > maxOverheadPct) {
-          adaptiveSamplingRate_ =
-              static_cast<uint32_t>(std::ceil(overheadPct / maxOverheadPct));
-          // Start counter at rate-1 so the first post-calibration batch is
-          // always timed (++counter hits rate, which passes % rate == 0).
-          adaptiveSamplingCounter_ = adaptiveSamplingRate_ - 1;
-          adaptiveState_ = AdaptiveCpuSamplingState::kSampling;
-        } else {
-          adaptiveState_ = AdaptiveCpuSamplingState::kAlwaysTrack;
-        }
-      } else {
-        // Function ~0ns — timer dominates. Aggressive sampling.
-        adaptiveSamplingRate_ = 100;
-        adaptiveSamplingCounter_ = adaptiveSamplingRate_ - 1;
-        adaptiveState_ = AdaptiveCpuSamplingState::kSampling;
-      }
-      break;
-    }
-    default:
-      VELOX_UNREACHABLE(
-          "Unexpected adaptive sampling state in finalizeAdaptiveCalibration");
-  }
-}
-
 void Expr::applyFunction(
     const SelectivityVector& rows,
     EvalCtx& context,
     VectorPtr& result) {
   stats_.numProcessedVectors += 1;
   stats_.numProcessedRows += rows.countSelected();
-  auto timer = cpuWallTimer(context);
+  auto timer = cpuWallTimer();
 
   computeIsAsciiForInputs(vectorFunction_.get(), inputValues_, rows);
   auto isAscii = type()->isVarchar()
@@ -1715,14 +1633,6 @@ void Expr::applyFunction(
     result->asUnchecked<SimpleVector<StringView>>()->setIsAscii(
         isAscii.value(), rows);
   }
-
-  // Only do Adaptive Calibration if the adaptive sampling is on and we are in
-  // warmup or calibrating state.
-  if (context.adaptiveCpuSamplingEnabled() && isCalibrating()) {
-    finalizeAdaptiveCalibration(
-        context.adaptiveCpuSamplingMaxOverheadPct(),
-        context.timerOverheadNanos());
-  }
 }
 
 void Expr::evalSpecialFormWithStats(
@@ -1731,17 +1641,9 @@ void Expr::evalSpecialFormWithStats(
     VectorPtr& result) {
   stats_.numProcessedVectors += 1;
   stats_.numProcessedRows += rows.countSelected();
-  auto timer = cpuWallTimer(context);
+  auto timer = cpuWallTimer();
 
   evalSpecialForm(rows, context, result);
-
-  // Only do Adaptive Calibration if the adaptive sampling is on and we are in
-  // warmup or calibrating state.
-  if (context.adaptiveCpuSamplingEnabled() && isCalibrating()) {
-    finalizeAdaptiveCalibration(
-        context.adaptiveCpuSamplingMaxOverheadPct(),
-        context.timerOverheadNanos());
-  }
 }
 
 namespace {
@@ -1971,14 +1873,7 @@ ExprSet::ExprSet(
     core::ExecCtx* execCtx,
     bool enableConstantFolding,
     bool lazyDereference)
-    : execCtx_(execCtx),
-      lazyDereference_(lazyDereference),
-      adaptiveCpuSampling_(
-          execCtx->queryCtx()->queryConfig().exprAdaptiveCpuSampling()),
-      adaptiveCpuSamplingMaxOverheadPct_(
-          execCtx->queryCtx()
-              ->queryConfig()
-              .exprAdaptiveCpuSamplingMaxOverheadPct()) {
+    : execCtx_(execCtx), lazyDereference_(lazyDereference) {
   exprs_ = compileExpressions(sources, execCtx, this, enableConstantFolding);
   if (lazyDereference_) {
     validateLazyDereference(exprs_);
@@ -1991,24 +1886,6 @@ ExprSet::ExprSet(
 }
 
 namespace {
-
-/// If the expression is in adaptive sampling mode, extrapolate timing stats
-/// to approximate full-population values. Otherwise, return raw stats.
-exec::ExprStats adjustStats(const exec::Expr& expr) {
-  if (expr.isAdaptiveSampling() && expr.stats().timing.count > 0) {
-    exec::ExprStats adjusted = expr.stats();
-    double ratio = static_cast<double>(adjusted.numProcessedVectors) /
-        static_cast<double>(adjusted.timing.count);
-    adjusted.timing.cpuNanos = static_cast<uint64_t>(
-        static_cast<double>(adjusted.timing.cpuNanos) * ratio);
-    adjusted.timing.wallNanos = static_cast<uint64_t>(
-        static_cast<double>(adjusted.timing.wallNanos) * ratio);
-    adjusted.timing.count = adjusted.numProcessedVectors;
-    return adjusted;
-  }
-  return expr.stats();
-}
-
 void addStats(
     const exec::Expr& expr,
     std::unordered_map<std::string, exec::ExprStats>& stats,
@@ -2027,7 +1904,7 @@ void addStats(
   bool emptyStats =
       !expr.stats().numProcessedRows && !expr.stats().defaultNullRowsSkipped;
   if (!emptyStats && !excludeSplFormExpr) {
-    stats[expr.name()].add(adjustStats(expr));
+    stats[expr.name()].add(expr.stats());
   }
 
   for (const auto& input : expr.inputs()) {
@@ -2139,24 +2016,6 @@ void printInputAndExprs(
 }
 } // namespace
 
-void ExprSet::initializeAdaptiveCpuSampling(EvalCtx& context) {
-  context.setAdaptiveCpuSamplingEnabled(true);
-  context.setAdaptiveCpuSamplingMaxOverheadPct(
-      adaptiveCpuSamplingMaxOverheadPct_);
-
-  // Measure CpuWallTimer overhead once per ExprSet (platform constant).
-  if (!timerOverheadMeasured_) {
-    CpuWallTiming dummyTiming;
-    DeltaCpuWallTimeStopWatch overheadWatch;
-    {
-      auto dummy = std::make_unique<CpuWallTimer>(dummyTiming);
-    }
-    timerOverheadNanos_ = overheadWatch.elapsed().wallNanos;
-    timerOverheadMeasured_ = true;
-  }
-  context.setTimerOverheadNanos(timerOverheadNanos_);
-}
-
 void ExprSet::eval(
     int32_t begin,
     int32_t end,
@@ -2168,11 +2027,6 @@ void ExprSet::eval(
   result.resize(exprs_.size());
   if (initialize) {
     clearSharedSubexprs();
-  }
-
-  // Apply adaptive per-function CPU sampling if configured.
-  if (adaptiveCpuSampling_) {
-    initializeAdaptiveCpuSampling(context);
   }
 
   if (!lazyDereference_) {
