@@ -965,5 +965,189 @@ TEST_F(CudfDecimalTest, decimalModuloDifferentScales) {
   facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
 }
 
+TEST_F(CudfDecimalTest, decimalSubtractPromotesToLong) {
+  auto input = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int64_t>(
+              {999'999'999'999'999'999LL,
+               -900'000'000'000'000'000LL,
+               123'456'789'012'345'678LL},
+              DECIMAL(18, 0)),
+          makeFlatVector<int64_t>(
+              {-999'999'999'999'999'999LL,
+               900'000'000'000'000'000LL,
+               123'456'789'012'345'678LL},
+              DECIMAL(18, 0)),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({"a - b AS diff"})
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"diff"},
+      {makeFlatVector<int128_t>(
+          {static_cast<int128_t>(1'999'999'999'999'999'998LL),
+           static_cast<int128_t>(-1'800'000'000'000'000'000LL),
+           static_cast<int128_t>(0)},
+          DECIMAL(19, 0))});
+
+  unregisterCudf();
+  auto cpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  registerCudf();
+
+  auto gpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+
+  ASSERT_TRUE(cpuResult->childAt(0)->type()->isLongDecimal());
+  ASSERT_TRUE(gpuResult->childAt(0)->type()->isLongDecimal());
+  facebook::velox::test::assertEqualVectors(expected, cpuResult);
+  facebook::velox::test::assertEqualVectors(expected, gpuResult);
+}
+
+TEST_F(CudfDecimalTest, decimalDivideDifferentScales) {
+  auto input = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int64_t>({12345, -2500, 100}, DECIMAL(10, 2)),
+          makeFlatVector<int64_t>({10, -25, 3}, DECIMAL(10, 1)),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({"a / b AS div"})
+                  .planNode();
+
+  unregisterCudf();
+  auto cpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  registerCudf();
+
+  auto gpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+
+  facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
+}
+
+TEST_F(CudfDecimalTest, decimalModuloNullPropagation) {
+  auto input = makeRowVector(
+      {"a", "b"},
+      {
+          makeNullableFlatVector<int64_t>(
+              {100, std::nullopt, 300, std::nullopt}, DECIMAL(10, 2)),
+          makeNullableFlatVector<int64_t>(
+              {200, 200, std::nullopt, std::nullopt}, DECIMAL(10, 2)),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({
+                      "a % b AS mod",
+                      "a - b AS diff",
+                      "a * b AS prod",
+                  })
+                  .planNode();
+
+  unregisterCudf();
+  auto cpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  registerCudf();
+
+  auto gpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+
+  facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
+}
+
+// Velox comparison functions require both arguments to have the same type
+// (Generic<T1>, Generic<T1>), so raw different-scale comparisons fail at the
+// type-resolution stage before cuDF evaluation.
+TEST_F(CudfDecimalTest, DISABLED_decimalCompareDifferentScales) {
+  auto input = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int64_t>({120, 150, 100}, DECIMAL(10, 2)),
+          makeFlatVector<int64_t>({12, 10, 20}, DECIMAL(10, 1)),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({
+                      "a = b AS eq",
+                      "a != b AS neq",
+                      "a < b AS lt",
+                      "a <= b AS lte",
+                      "a > b AS gt",
+                      "a >= b AS gte",
+                  })
+                  .planNode();
+
+  // 1.20 == 1.2, 1.50 > 1.0, 1.00 < 2.0
+  auto expected = makeRowVector(
+      {"eq", "neq", "lt", "lte", "gt", "gte"},
+      {
+          makeNullableFlatVector<bool>({true, false, false}, BOOLEAN()),
+          makeNullableFlatVector<bool>({false, true, true}, BOOLEAN()),
+          makeNullableFlatVector<bool>({false, false, true}, BOOLEAN()),
+          makeNullableFlatVector<bool>({true, false, true}, BOOLEAN()),
+          makeNullableFlatVector<bool>({false, true, false}, BOOLEAN()),
+          makeNullableFlatVector<bool>({true, true, false}, BOOLEAN()),
+      });
+
+  auto result =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfDecimalTest, decimalCompareDifferentScalesWithCast) {
+  auto input = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int64_t>({120, 150, 100}, DECIMAL(10, 2)),
+          makeFlatVector<int64_t>({12, 10, 20}, DECIMAL(10, 1)),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({
+                      "a = CAST(b AS DECIMAL(10, 2)) AS eq",
+                      "a != CAST(b AS DECIMAL(10, 2)) AS neq",
+                      "a < CAST(b AS DECIMAL(10, 2)) AS lt",
+                      "a <= CAST(b AS DECIMAL(10, 2)) AS lte",
+                      "a > CAST(b AS DECIMAL(10, 2)) AS gt",
+                      "a >= CAST(b AS DECIMAL(10, 2)) AS gte",
+                  })
+                  .planNode();
+
+  // 1.20 == 1.2, 1.50 > 1.0, 1.00 < 2.0
+  auto expected = makeRowVector(
+      {"eq", "neq", "lt", "lte", "gt", "gte"},
+      {
+          makeNullableFlatVector<bool>({true, false, false}, BOOLEAN()),
+          makeNullableFlatVector<bool>({false, true, true}, BOOLEAN()),
+          makeNullableFlatVector<bool>({false, false, true}, BOOLEAN()),
+          makeNullableFlatVector<bool>({true, false, true}, BOOLEAN()),
+          makeNullableFlatVector<bool>({false, true, false}, BOOLEAN()),
+          makeNullableFlatVector<bool>({true, true, false}, BOOLEAN()),
+      });
+
+  auto result =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
 } // namespace
 } // namespace facebook::velox::cudf_velox
