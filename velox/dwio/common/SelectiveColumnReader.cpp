@@ -263,7 +263,19 @@ void SelectiveColumnReader::getIntValues(
       }
       break;
     case TypeKind::HUGEINT:
-      getFlatValues<int128_t, int128_t>(rows, result, requestedType);
+      switch (valueSize_) {
+        case 16:
+          getFlatValues<int128_t, int128_t>(rows, result, requestedType);
+          break;
+        case 8:
+          getFlatValues<int64_t, int128_t>(rows, result, requestedType);
+          break;
+        case 4:
+          getFlatValues<int32_t, int128_t>(rows, result, requestedType);
+          break;
+        default:
+          VELOX_FAIL("Unsupported value size: {}", valueSize_);
+      }
       break;
     case TypeKind::BIGINT:
       switch (valueSize_) {
@@ -275,6 +287,17 @@ void SelectiveColumnReader::getIntValues(
           break;
         case 2:
           getFlatValues<int16_t, int64_t>(rows, result, requestedType);
+          break;
+        default:
+          VELOX_FAIL("Unsupported value size: {}", valueSize_);
+      }
+      break;
+    case TypeKind::DOUBLE:
+      // Only Parquet INT32 (valueSize_==4) widens to DOUBLE. INT64->DOUBLE
+      // is rejected in convertType due to precision loss.
+      switch (valueSize_) {
+        case 4:
+          getFlatValues<int32_t, double>(rows, result, requestedType);
           break;
         default:
           VELOX_FAIL("Unsupported value size: {}", valueSize_);

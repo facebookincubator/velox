@@ -74,8 +74,8 @@ of available functions [can be found here.](https://facebookincubator.github.io/
 Recent blog posts ([all posts](https://velox-lib.io/blog)):
 
 - [From flaky Axiom CI to a Velox bug fix: a cross-repo debugging story](https://velox-lib.io/blog/debugging-flaky-ci-across-repos) (2026-03-29)
+- [Adaptive Per-Function CPU Time Tracking](https://velox-lib.io/blog/velox-adaptive-cpu-sampling) (2026-03-26)
 - [Accelerating Unicode string processing with SIMD in Velox](https://velox-lib.io/blog/simd-capped-unicode-length) (2026-03-13)
-- [The hidden traps of regex in LIKE and split](https://velox-lib.io/blog/regex-hidden-traps) (2026-03-07)
 
 ## Community
 

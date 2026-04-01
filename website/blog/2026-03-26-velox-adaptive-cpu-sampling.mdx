@@ -1,0 +1,154 @@
+---
+slug: velox-adaptive-cpu-sampling
+title: "Adaptive Per-Function CPU Time Tracking"
+authors: [Rajeev975, pedroerp]
+tags: [tech-blog, expressions]
+---
+
+## Context
+
+Velox evaluates SQL expressions as trees of functions. A query like
+`if(array_gte(a, b), multiply(x, y), 0)` compiles into a tree where each node
+processes an entire vector of rows at a time. When a query runs slowly, the
+first question usually is: which function is consuming the most CPU? Is it the
+expensive array comparison, or the cheap arithmetic called millions of times?
+This problem is even more prominent in use cases like training data loading,
+when very long and deeply nested expression trees are common, and jobs may run
+for many hours, or days; in such cases, the CPU usage of even seemingly
+short-lived functions may add up to substantial overhead. Without a detailed
+per-function CPU usage breakdown, you may be left guessing — or worse,
+optimizing the wrong thing.
+
+Velox supports CPU usage tracking through the `expression.track_cpu_usage` query
+config. When enabled, every function invocation is wrapped in a `CpuWallTimer`
+— an RAII guard that makes the `clock_gettime()` system call at entry and exit,
+recording the CPU and wall time spent in each function. This gives precise,
+per-function cost attribution across the entire expression tree.
+
+## The Overhead Problem
+
+That precision comes at a price. Each `CpuWallTimer` invocation performs a heap
+allocation, two `clock_gettime()` syscalls, and a heap deallocation — roughly
+~5μs of fixed overhead, depending on the platform. For a function like
+`array_gte()`, which spends milliseconds per vector iterating over array
+elements, 5μs is a negligible noise. But for a function like `multiply` that
+incurs a single instruction, the timer takes longer than the work itself:
+
+| Vector Size | No Tracking | Full Tracking | Overhead |
+|-------------|-------------|---------------|----------|
+| 100 rows    | 2.13ms      | 5.89ms        | **2.8x** |
+| 1,000 rows  | 300μs       | 668μs         | **2.2x** |
+| 10,000 rows | 193μs       | 233μs         | 1.2x     |
+
+*Benchmark for `multiply(a, b)` on double columns. Times are per 10K
+iterations.*
+
+This overhead forced production systems to disable per-function CPU tracking
+entirely, losing visibility into more granular CPU consumption. Selective
+per-function tracking (`expression.track_cpu_usage_for_functions`) was added to
+Velox in the past to let operators opt in specific functions, but even for
+tracked functions the overhead remained — you just chose which functions to pay
+the cost for.
+
+## Why Uniform Sampling Falls Short
+
+The obvious next step is to sample: measure every Nth vector instead of every
+one, and extrapolate. A uniform rate applied to all functions would be simple —
+one counter, one config key. But a single rate cannot serve both cheap and
+expensive functions.
+
+Consider `array_gte`, where the timer overhead is less than 0.1% of execution
+time. Sampling in this case throws away measurement precision for no benefit —
+the function can afford full tracking. Now consider `multiply` on small vectors,
+where the timer is 2500% of the function cost. Even a 1/1000 rate may not be
+aggressive enough. A rate that works for one function is either inaccurate or
+insufficient for another.
+
+## Adaptive Per-Function Sampling
+
+When a query starts running, adaptive sampling does not yet know which functions
+are cheap and which are expensive. So it watches.
+
+The first vector through each function is a warmup — caches and branch
+predictors settle, and the system measures the cost of the `CpuWallTimer` itself
+by creating and destroying a dummy one. Over the next 5 vectors, each function
+runs with a lightweight stopwatch instead, quietly accumulating how long it
+actually takes without any timer overhead.
+
+By the sixth vector, the system has what it needs: the ratio of timer overhead
+to function cost. If the ratio is within a configurable threshold (default 1%),
+the function switches to full tracking: every future vector gets a
+`CpuWallTimer`, with zero information loss. If the timer dominates, the function
+switches to sampling at a rate that bounds overhead to the threshold:
+
+| Function | Per-Vector Cost | Timer Overhead | Overhead Ratio | Decision |
+|----------|-----------------|----------------|----------------|----------|
+| `multiply(a,b)` 100 rows | ~0.2μs | ~5μs | 2500% | Sample 1/2500 |
+| `multiply(a,b)` 10K rows | ~20μs | ~5μs | 25% | Sample 1/25 |
+| `array_gte(a,b)` 100 rows | ~3ms | ~5μs | 0.17% | Always track |
+| `array_gte(a,b)` 10K rows | ~12ms | ~5μs | 0.04% | Always track |
+
+Expensive functions get exact tracking. Cheap functions sample aggressively. No
+per-function configuration needed — just a single "max acceptable overhead"
+knob.
+
+When stats are read, sampled functions have their CPU and wall time scaled up by
+the ratio of total vectors to timed vectors. To handle short queries where the
+sampling counter might never fire, the first post-calibration vector is always
+timed, guaranteeing at least one measurement to extrapolate from.
+
+## Results
+
+So does it work? We benchmarked adaptive sampling against both no tracking and
+full tracking, across cheap and expensive functions, at different vector sizes,
+and with different adaptive rates (1% and 0.5%). Results are presented below:
+
+| Benchmark | No Tracking | Full Tracking | Adaptive 1% | Adaptive 0.5% |
+|-----------|-------------|---------------|-------------|---------------|
+| multiply 100 rows | 2.13ms | 5.86ms (**36%**) | 2.19ms (**97%**) | 2.16ms (**98%**) |
+| multiply 1K rows | 299μs | 671μs (**44%**) | 304μs (**98%**) | 302μs (**99%**) |
+| multiply 10K rows | 193μs | 224μs (**86%**) | 165μs (**117%**) | 193μs (**100%**) |
+| array_gte 100 rows | 188ms | 193ms (**98%**) | 189ms (**100%**) | 187ms (**100%**) |
+| array_gte 1K rows | 32ms | 32ms (**100%**) | 32ms (**100%**) | 32ms (**100%**) |
+| array_gte 10K rows | 11ms | 11ms (**100%**) | 11ms (**100%**) | 11ms (**100%**) |
+
+*(Percentages are relative to "No Tracking" — higher is better)*
+
+For `multiply` on 100-row vectors, overhead drops from 64% to under 3%. For
+`array_gte`, overhead was already negligible and remains so — the function is
+fully tracked with near zero sampling.
+
+The natural concern with sampling is accuracy. We ran a correctness benchmark
+comparing the extrapolated CPU time from adaptive sampling against the true
+value from full tracking over 1,000 vectors:
+
+| Function | 100 rows | 1,000 rows | 10,000 rows |
+|----------|----------|------------|-------------|
+| multiply | 108.8% | 102.4% | 103.7% |
+| array_gte | 99.8% | 100.3% | 99.6% |
+
+Estimates land within 1–9% of the true value. For expensive functions that end
+up in *always track* mode, accuracy is exact — every vector is timed.
+
+## Configuration
+
+Two config properties control adaptive sampling:
+
+| Config | Type | Default | Description |
+|--------|------|---------|-------------|
+| `expression.adaptive_cpu_sampling` | bool | false | Enable adaptive per-function sampling |
+| `expression.adaptive_cpu_sampling_max_overhead_pct` | double | 1.0 | Target max overhead percentage |
+
+Adaptive sampling interacts cleanly with existing tracking modes.
+`expression.track_cpu_usage` (global tracking for all functions) takes highest
+priority and always wins. `expression.track_cpu_usage_for_functions` (selective
+per-function tracking) overrides adaptive for named functions. Adaptive sampling
+applies to everything else.
+
+## Takeaway
+
+Adaptive per-function CPU time tracking eliminates the tradeoff between
+observability and performance. Every function gets the best tracking mode for
+its cost profile — cheap functions run at near-native speed with minimal
+overhead, expensive functions get exact tracking at zero additional cost. The
+system is self-tuning and requires no per-function configuration.
