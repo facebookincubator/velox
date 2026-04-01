@@ -20,6 +20,7 @@ add_library(
   CudfHashAggregation.cpp
   CudfHashJoin.cpp
   CudfLimit.cpp
+  CudfMarkDistinct.cpp
   CudfLocalPartition.cpp
   CudfOrderBy.cpp
   CudfBatchConcat.cpp

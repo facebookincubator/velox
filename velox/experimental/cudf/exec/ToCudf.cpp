@@ -416,6 +416,12 @@ void CudfConfig::initialize(
   if (config.find(kCudfFunctionEngine) != config.end()) {
     functionEngine = config[kCudfFunctionEngine];
   }
+  if (config.find(kCudfEnableMarkDistinct) != config.end()) {
+    enableMarkDistinct = folly::to<bool>(config[kCudfEnableMarkDistinct]);
+  }
+  if (config.find(kCudfMarkDistinctMaxKeys) != config.end()) {
+    markDistinctMaxKeys = folly::to<int64_t>(config[kCudfMarkDistinctMaxKeys]);
+  }
 }
 
 } // namespace facebook::velox::cudf_velox
