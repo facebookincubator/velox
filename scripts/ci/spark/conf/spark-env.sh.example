@@ -1,1 +1,2 @@
 export SPARK_DAEMON_MEMORY=5g
+export SPARK_DAEMON_JAVA_OPTS="-XX:+UseG1GC -XX:MaxGCPauseMillis=200"

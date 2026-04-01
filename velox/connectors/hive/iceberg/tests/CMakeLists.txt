@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 add_library(velox_dwio_iceberg_reader_benchmark_lib IcebergSplitReaderBenchmark.cpp)
+velox_add_test_headers(velox_dwio_iceberg_reader_benchmark_lib IcebergSplitReaderBenchmark.h)
 target_link_libraries(
   velox_dwio_iceberg_reader_benchmark_lib
   velox_exec_test_lib
@@ -70,6 +71,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     TransformE2ETest.cpp
     TransformTest.cpp
   )
+  velox_add_test_headers(velox_hive_iceberg_insert_test IcebergTestBase.h)
 
   add_test(velox_hive_iceberg_insert_test velox_hive_iceberg_insert_test)
 

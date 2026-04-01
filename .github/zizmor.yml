@@ -15,3 +15,6 @@ rules:
   use-trusted-publishing:
     ignore:
       - build_pyvelox.yml
+  dangerous-triggers:
+    ignore:
+      - build-impact-comment.yml

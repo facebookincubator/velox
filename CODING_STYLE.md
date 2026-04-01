@@ -388,6 +388,20 @@ macro names are always upper-snake-case. Also:
     should opening the `-inl.h` be necessary (or the .cpp file, for that
     matter).
 
+### CMake Header Ownership
+
+Every `.h` file in the Velox codebase must be associated with a CMake target.
+This ensures headers are discoverable through the CMake File API, enabling
+build impact analysis and selective builds.
+
+* When adding headers to a `velox_add_library()` target, list them under the
+  `HEADERS` keyword.
+* When adding headers to test, benchmark, or fuzzer targets that use
+  `add_library()` or `add_executable()`, use
+  `velox_add_test_headers(<target> <header>)`.
+* The `check-header-ownership` pre-commit hook will flag any `.h` file that
+  is not tracked by a CMake target.
+
 ## Function Arguments
 
 * Const

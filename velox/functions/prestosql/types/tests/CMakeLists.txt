@@ -29,6 +29,7 @@ add_executable(
   IPPrefixTypeTest.cpp
   PrestoTypesTest.cpp
 )
+velox_add_test_headers(velox_presto_types_test TypeTestBase.h)
 
 if(VELOX_ENABLE_GEO)
   target_sources(

@@ -9,6 +9,8 @@ tags: [tech-blog]
 
 This post describes the design principles and software components for extending Velox with hardware acceleration libraries like NVIDIA's [cuDF](https://github.com/rapidsai/cudf). Velox provides a flexible execution model for hardware accelerators, and cuDF's data structures and algorithms align well with core components in Velox.
 
+<!-- truncate -->
+
 ## How Velox and cuDF Fit Together
 
 Extensibility is a key feature in Velox. The cuDF library integrates with Velox using the [DriverAdapter](https://github.com/facebookincubator/velox/blob/2a9c9043264a60c9a1b01324f8371c64bd095af9/velox/experimental/cudf/exec/ToCudf.cpp#L293) interface to rewrite query plans for GPU execution. The rewriting process allows for operator replacement, operator fusion and operator addition, giving cuDF a lot of freedom when preparing a query plan with GPU operators. Once Velox converts a query plan into executable pipelines, the cuDF DriverAdapter rewrites the plan to use GPU operators:
