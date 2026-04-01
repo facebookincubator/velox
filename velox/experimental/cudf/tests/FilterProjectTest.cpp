@@ -698,8 +698,8 @@ TEST_F(CudfFilterProjectTest, roundDouble) {
                   .values({data})
                   .project({"round(c0) as c1"})
                   .planNode();
-  auto expected = makeRowVector(
-      {makeFlatVector<double>({3.0, 3.0, -2.0, 1.0, 101.0})});
+  auto expected =
+      makeRowVector({makeFlatVector<double>({3.0, 3.0, -2.0, 1.0, 101.0})});
   AssertQueryBuilder(plan).assertResults(expected);
 
   // round(double, 2)
@@ -708,44 +708,40 @@ TEST_F(CudfFilterProjectTest, roundDouble) {
              .values({data})
              .project({"round(c0, 2) as c1"})
              .planNode();
-  expected = makeRowVector(
-      {makeFlatVector<double>({3.14, 2.72, -1.5, 0.5, 101.0})});
+  expected =
+      makeRowVector({makeFlatVector<double>({3.14, 2.72, -1.5, 0.5, 101.0})});
   AssertQueryBuilder(plan).assertResults(expected);
 
   // round(double, -1) — round to nearest 10
-  data = makeRowVector(
-      {makeFlatVector<double>({123.456, -987.654, 55.0, 5.0})});
+  data =
+      makeRowVector({makeFlatVector<double>({123.456, -987.654, 55.0, 5.0})});
   plan = PlanBuilder()
              .setParseOptions(options)
              .values({data})
              .project({"round(c0, -1) as c1"})
              .planNode();
-  expected = makeRowVector(
-      {makeFlatVector<double>({120.0, -990.0, 60.0, 10.0})});
+  expected =
+      makeRowVector({makeFlatVector<double>({120.0, -990.0, 60.0, 10.0})});
   AssertQueryBuilder(plan).assertResults(expected);
 
   // round(double, -3) — round to nearest 1000
-  data = makeRowVector(
-      {makeFlatVector<double>({4123.0, 456789098.0})});
+  data = makeRowVector({makeFlatVector<double>({4123.0, 456789098.0})});
   plan = PlanBuilder()
              .setParseOptions(options)
              .values({data})
              .project({"round(c0, -3) as c1"})
              .planNode();
-  expected = makeRowVector(
-      {makeFlatVector<double>({4000.0, 456789000.0})});
+  expected = makeRowVector({makeFlatVector<double>({4000.0, 456789000.0})});
   AssertQueryBuilder(plan).assertResults(expected);
 
   // Large values
-  data = makeRowVector(
-      {makeFlatVector<double>({1e15 + 0.5, -1e15 - 0.5})});
+  data = makeRowVector({makeFlatVector<double>({1e15 + 0.5, -1e15 - 0.5})});
   plan = PlanBuilder()
              .setParseOptions(options)
              .values({data})
              .project({"round(c0) as c1"})
              .planNode();
-  expected = makeRowVector(
-      {makeFlatVector<double>({1e15 + 1.0, -1e15 - 1.0})});
+  expected = makeRowVector({makeFlatVector<double>({1e15 + 1.0, -1e15 - 1.0})});
   AssertQueryBuilder(plan).assertResults(expected);
 }
 

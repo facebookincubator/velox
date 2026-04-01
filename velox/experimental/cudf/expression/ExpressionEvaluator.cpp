@@ -303,11 +303,7 @@ class RoundFunction : public CudfFunction {
     }
 
     return cudf::round_decimal(
-        inputCol,
-        scale_,
-        cudf::rounding_method::HALF_UP,
-        stream,
-        mr);
+        inputCol, scale_, cudf::rounding_method::HALF_UP, stream, mr);
   }
 
  private:
