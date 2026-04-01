@@ -47,6 +47,7 @@ TEST_F(CastRulesRegistryTest, canCastAndCanCoerce) {
       {.fromType = "BIGINT",
        .toType = "DOUBLE",
        .implicitAllowed = true,
+       .cost = 3,
        .validator = {}},
       {.fromType = "DOUBLE",
        .toType = "VARCHAR",
@@ -56,7 +57,7 @@ TEST_F(CastRulesRegistryTest, canCastAndCanCoerce) {
 
   // Same type is always allowed.
   EXPECT_TRUE(CastRulesRegistry::instance().canCast(BIGINT(), BIGINT()));
-  EXPECT_TRUE(CastRulesRegistry::instance().canCoerce(BIGINT(), BIGINT()));
+  EXPECT_EQ(CastRulesRegistry::instance().canCoerce(BIGINT(), BIGINT()), 0);
 
   // Implicit rule: BIGINT -> DOUBLE allows both cast and coerce.
   EXPECT_TRUE(CastRulesRegistry::instance().canCast(BIGINT(), DOUBLE()));
@@ -131,15 +132,169 @@ TEST_F(CastRulesRegistryTest, conflictingRulesThrow) {
       VeloxException);
 }
 
-TEST_F(CastRulesRegistryTest, parametricTypesReturnFalse) {
-  // Parametric types (ARRAY, MAP, ROW, custom types with children like
-  // IPPREFIX) are handled by callers recursing into children. The registry
-  // only stores leaf-to-leaf rules, so parametric types return false.
-  EXPECT_FALSE(
+TEST_F(CastRulesRegistryTest, canCoerceCost) {
+  registerRules({
+      {.fromType = "BIGINT",
+       .toType = "DOUBLE",
+       .implicitAllowed = true,
+       .cost = 5,
+       .validator = {}},
+  });
+
+  // Primitive coercion returns the rule's cost.
+  EXPECT_EQ(CastRulesRegistry::instance().canCoerce(BIGINT(), DOUBLE()), 5);
+
+  // Container types sum children costs.
+  EXPECT_EQ(
+      CastRulesRegistry::instance().canCoerce(ARRAY(BIGINT()), ARRAY(DOUBLE())),
+      5);
+  EXPECT_EQ(
+      CastRulesRegistry::instance().canCoerce(
+          MAP(BIGINT(), BIGINT()), MAP(DOUBLE(), DOUBLE())),
+      10);
+  EXPECT_EQ(
+      CastRulesRegistry::instance().canCoerce(
+          ROW({BIGINT(), BIGINT(), BIGINT()}),
+          ROW({DOUBLE(), DOUBLE(), DOUBLE()})),
+      15);
+
+  // No coercion returns nullopt.
+  EXPECT_FALSE(CastRulesRegistry::instance().canCoerce(DOUBLE(), BIGINT()));
+
+  // Mixed costs: different rules contribute different costs in the same
+  // container.
+  registerRules({
+      {.fromType = "VARCHAR",
+       .toType = "INTEGER",
+       .implicitAllowed = true,
+       .cost = 3,
+       .validator = {}},
+  });
+  EXPECT_EQ(
+      CastRulesRegistry::instance().canCoerce(
+          ROW({BIGINT(), VARCHAR()}), ROW({DOUBLE(), INTEGER()})),
+      8);
+  EXPECT_EQ(
+      CastRulesRegistry::instance().canCoerce(
+          MAP(VARCHAR(), BIGINT()), MAP(INTEGER(), DOUBLE())),
+      8);
+
+  // Nested containers: cost comes from the leaf rule only.
+  EXPECT_EQ(
+      CastRulesRegistry::instance().canCoerce(
+          ARRAY(ARRAY(BIGINT())), ARRAY(ARRAY(DOUBLE()))),
+      5);
+}
+
+TEST_F(CastRulesRegistryTest, parametricTypeCasting) {
+  // Rule for element types: BIGINT -> DOUBLE.
+  registerRules({
+      {.fromType = "BIGINT",
+       .toType = "DOUBLE",
+       .implicitAllowed = true,
+       .validator = {}},
+  });
+
+  // ARRAY<BIGINT> -> ARRAY<DOUBLE> via recursive element check.
+  EXPECT_TRUE(
       CastRulesRegistry::instance().canCast(ARRAY(BIGINT()), ARRAY(DOUBLE())));
+  EXPECT_TRUE(
+      CastRulesRegistry::instance().canCoerce(
+          ARRAY(BIGINT()), ARRAY(DOUBLE())));
+
+  // Negative: ARRAY<DOUBLE> -> ARRAY<BIGINT> (no reverse rule).
   EXPECT_FALSE(
+      CastRulesRegistry::instance().canCast(ARRAY(DOUBLE()), ARRAY(BIGINT())));
+}
+
+TEST_F(CastRulesRegistryTest, nestedParametricTypes) {
+  registerRules({
+      {.fromType = "BIGINT",
+       .toType = "DOUBLE",
+       .implicitAllowed = true,
+       .validator = {}},
+  });
+
+  // ARRAY<ARRAY<BIGINT>> -> ARRAY<ARRAY<DOUBLE>>.
+  EXPECT_TRUE(
+      CastRulesRegistry::instance().canCast(
+          ARRAY(ARRAY(BIGINT())), ARRAY(ARRAY(DOUBLE()))));
+}
+
+TEST_F(CastRulesRegistryTest, mapTypeCasting) {
+  registerRules({
+      {.fromType = "BIGINT",
+       .toType = "DOUBLE",
+       .implicitAllowed = true,
+       .validator = {}},
+  });
+
+  // MAP<BIGINT, VARCHAR> -> MAP<DOUBLE, VARCHAR>.
+  EXPECT_TRUE(
+      CastRulesRegistry::instance().canCast(
+          MAP(BIGINT(), VARCHAR()), MAP(DOUBLE(), VARCHAR())));
+
+  // Negative: MAP<VARCHAR, BIGINT> -> MAP<BIGINT, VARCHAR> (no
+  // VARCHAR->BIGINT rule).
+  EXPECT_FALSE(
+      CastRulesRegistry::instance().canCast(
+          MAP(VARCHAR(), BIGINT()), MAP(BIGINT(), VARCHAR())));
+}
+
+TEST_F(CastRulesRegistryTest, mismatchedChildCount) {
+  // ROW(BIGINT) vs ROW(BIGINT, VARCHAR) — different child counts.
+  EXPECT_FALSE(
+      CastRulesRegistry::instance().canCast(
+          ROW({BIGINT()}), ROW({BIGINT(), VARCHAR()})));
+}
+
+TEST_F(CastRulesRegistryTest, differentContainerBaseTypes) {
+  registerRules({
+      {.fromType = "BIGINT",
+       .toType = "DOUBLE",
+       .implicitAllowed = true,
+       .validator = {}},
+  });
+
+  // Different container base types are not supported (e.g. ARRAY -> MAP).
+  EXPECT_FALSE(
+      CastRulesRegistry::instance().canCast(
+          ARRAY(BIGINT()), MAP(BIGINT(), DOUBLE())));
+}
+
+TEST_F(CastRulesRegistryTest, rowTypeCasting) {
+  registerRules({
+      {.fromType = "BIGINT",
+       .toType = "DOUBLE",
+       .implicitAllowed = true,
+       .validator = {}},
+  });
+
+  // ROW({BIGINT}) -> ROW({DOUBLE}) via recursive child check.
+  EXPECT_TRUE(
+      CastRulesRegistry::instance().canCast(ROW({BIGINT()}), ROW({DOUBLE()})));
+  EXPECT_TRUE(
       CastRulesRegistry::instance().canCoerce(
           ROW({BIGINT()}), ROW({DOUBLE()})));
+}
+
+TEST_F(CastRulesRegistryTest, containerCoercionExplicitOnlyRule) {
+  // Register an explicit-only rule (implicitAllowed=false).
+  registerRules({
+      {.fromType = "VARCHAR",
+       .toType = "BIGINT",
+       .implicitAllowed = false,
+       .validator = {}},
+  });
+
+  // Explicit cast on a container with explicit-only element rule succeeds.
+  EXPECT_TRUE(
+      CastRulesRegistry::instance().canCast(ARRAY(VARCHAR()), ARRAY(BIGINT())));
+
+  // Implicit coercion on a container with explicit-only element rule fails.
+  EXPECT_FALSE(
+      CastRulesRegistry::instance().canCoerce(
+          ARRAY(VARCHAR()), ARRAY(BIGINT())));
 }
 
 TEST_F(CastRulesRegistryTest, clearRemovesAllRules) {

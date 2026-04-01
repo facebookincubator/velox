@@ -82,15 +82,14 @@ std::optional<Coercion> TypeCoercer::coerceTypeBase(
     return it->second;
   }
 
-  // Check custom type coercions from CastRulesRegistry. Built-in coercions
-  // are already handled by kAllowedCoercions above. Use getCustomType (not
-  // getType) because parametric built-in factories (ARRAY, ROW, DECIMAL)
-  // throw when called with empty parameters.
+  // Fall back to CastRulesRegistry for custom type coercions.
   if (fromType->size() == 0) {
     auto toType = getCustomType(toTypeName, {});
-    if (toType != nullptr &&
-        CastRulesRegistry::instance().canCoerce(fromType, toType)) {
-      return Coercion{.type = std::move(toType), .cost = 1};
+    if (toType != nullptr) {
+      if (auto cost =
+              CastRulesRegistry::instance().canCoerce(fromType, toType)) {
+        return Coercion{.type = std::move(toType), .cost = *cost};
+      }
     }
   }
 

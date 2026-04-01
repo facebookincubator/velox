@@ -60,47 +60,65 @@ void CastRulesRegistry::unregisterCastRules(const std::string& typeName) {
 
 bool CastRulesRegistry::canCast(const TypePtr& fromType, const TypePtr& toType)
     const {
-  return canCastImpl(fromType, toType, /*requireImplicit=*/false);
+  return castCostImpl(fromType, toType, /*requireImplicit=*/false).has_value();
 }
 
-bool CastRulesRegistry::canCoerce(
+std::optional<int32_t> CastRulesRegistry::canCoerce(
     const TypePtr& fromType,
     const TypePtr& toType) const {
-  return canCastImpl(fromType, toType, /*requireImplicit=*/true);
+  return castCostImpl(fromType, toType, /*requireImplicit=*/true);
 }
 
-bool CastRulesRegistry::canCastImpl(
+std::optional<int32_t> CastRulesRegistry::castCostImpl(
     const TypePtr& fromType,
     const TypePtr& toType,
     bool requireImplicit) const {
   VELOX_CHECK_NOT_NULL(fromType, "fromType must not be null");
   VELOX_CHECK_NOT_NULL(toType, "toType must not be null");
 
-  // Cast rules are only registered for non-parametric (leaf) types. Parametric
-  // types (ARRAY, MAP, ROW, and custom types with children like IPPREFIX) are
-  // handled by callers (TypeCoercer::coercible, leastCommonSuperType) which
-  // recurse into children before reaching this method. Return false for
-  // parametric types rather than throwing — this is a query function.
-  if (fromType->size() != 0 || toType->size() != 0) {
-    return false;
-  }
-
-  // Same type is always allowed.
+  // Same type is always allowed with zero cost.
   if (fromType->equivalent(*toType)) {
-    return true;
+    return 0;
   }
 
-  auto rule = findRule(fromType->name(), toType->name());
-  if (!rule) {
-    return false;
+  const auto fromName = fromType->name();
+  const auto toName = toType->name();
+
+  // For leaf types (primitives and custom types), look up rule directly.
+  if (fromType->size() == 0 && toType->size() == 0) {
+    auto rule = findRule(fromName, toName);
+    if (!rule) {
+      return std::nullopt;
+    }
+    if (requireImplicit && !rule->implicitAllowed) {
+      return std::nullopt;
+    }
+    if (rule->validator && !rule->validator(fromType, toType)) {
+      return std::nullopt;
+    }
+    return requireImplicit ? rule->cost : 0;
   }
-  if (requireImplicit && !rule->implicitAllowed) {
-    return false;
+
+  // For container types (ARRAY, MAP, ROW) with the same base type,
+  // recursively check children and sum costs.
+  if (fromName == toName) {
+    if (fromType->size() != toType->size()) {
+      return std::nullopt;
+    }
+    int32_t totalCost = 0;
+    for (auto i = 0; i < fromType->size(); ++i) {
+      auto childCost = castCostImpl(
+          fromType->childAt(i), toType->childAt(i), requireImplicit);
+      if (!childCost) {
+        return std::nullopt;
+      }
+      totalCost += *childCost;
+    }
+    return totalCost;
   }
-  if (rule->validator && !rule->validator(fromType, toType)) {
-    return false;
-  }
-  return true;
+
+  // Different base types with children — not supported.
+  return std::nullopt;
 }
 
 std::optional<CastRule> CastRulesRegistry::findRule(

@@ -30,6 +30,9 @@
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/serializers/UnsafeRowSerializer.h"
 
+DECLARE_int32(batch_size);
+DECLARE_int32(num_batches);
+
 DEFINE_int64(
     seed,
     0,
@@ -70,6 +73,12 @@ int main(int argc, char** argv) {
   }
   facebook::velox::memory::MemoryManager::initialize(
       facebook::velox::memory::MemoryManager::Options{});
+
+  // Spark reference execution uses gRPC and can be sensitive to large
+  // payloads. Keep generated input sizes modest to reduce transport and
+  // memory pressure.
+  FLAGS_batch_size = 40;
+  FLAGS_num_batches = 4;
 
   // Spark does not provide user-accessible aggregate functions with the
   // following names.

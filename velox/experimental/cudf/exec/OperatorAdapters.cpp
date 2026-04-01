@@ -27,6 +27,7 @@
 #include "velox/experimental/cudf/exec/CudfTopN.h"
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
+#include "velox/experimental/cudf/exec/Validation.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/exec/AssignUniqueId.h"
@@ -94,6 +95,9 @@ class TableScanAdapter : public OperatorAdapter {
     auto tableScanNode =
         std::dynamic_pointer_cast<const core::TableScanNode>(planNode);
     if (!tableScanNode) {
+      LOG_FALLBACK(
+          "TableScan planNode is not TableScanNode, PlanNode id: {}",
+          planNode->id());
       return false;
     }
     auto const& connector = velox::connector::getConnector(
@@ -101,6 +105,11 @@ class TableScanAdapter : public OperatorAdapter {
     auto cudfHiveConnector = std::dynamic_pointer_cast<
         facebook::velox::cudf_velox::connector::hive::CudfHiveConnector>(
         connector);
+    if (!cudfHiveConnector) {
+      LOG_FALLBACK(
+          "TableScan connector is not CudfHiveConnector, PlanNode id: {}",
+          planNode->id());
+    }
     return cudfHiveConnector != nullptr;
   }
 
@@ -140,6 +149,9 @@ class FilterProjectAdapter : public OperatorAdapter {
       exec::DriverCtx* ctx) const override {
     auto filterProjectOp = dynamic_cast<const exec::FilterProject*>(op);
     if (!filterProjectOp) {
+      LOG_FALLBACK(
+          "FilterProjectAdapter operator is not FilterProject, PlanNode id: {}",
+          planNode->id());
       return false;
     }
 
@@ -150,6 +162,9 @@ class FilterProjectAdapter : public OperatorAdapter {
     if (projectPlanNode) {
       if (projectPlanNode->sources()[0]->outputType()->size() == 0) {
         if (filterNode || !projectPlanNode->projections().empty()) {
+          LOG_FALLBACK(
+              "FilterProject empty input or output type, PlanNode id: {}",
+              planNode->id());
           return false;
         }
       }
@@ -159,6 +174,9 @@ class FilterProjectAdapter : public OperatorAdapter {
     if (filterNode) {
       if (!canBeEvaluatedByCudf(
               {filterNode->filter()}, ctx->task->queryCtx().get())) {
+        LOG_FALLBACK(
+            "FilterProject filter cannot be evaluated by cuDF, PlanNode id: {}",
+            planNode->id());
         return false;
       }
     }
@@ -167,6 +185,9 @@ class FilterProjectAdapter : public OperatorAdapter {
     if (projectPlanNode) {
       if (!canBeEvaluatedByCudf(
               projectPlanNode->projections(), ctx->task->queryCtx().get())) {
+        LOG_FALLBACK(
+            "FilterProject projections cannot be evaluated by cuDF, PlanNode id: {}",
+            planNode->id());
         return false;
       }
     }
@@ -214,17 +235,29 @@ class AggregationAdapter : public OperatorAdapter {
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* ctx) const override {
     if (!canHandle(op)) {
+      LOG_FALLBACK(
+          "Aggregation op is not HashAggregation or StreamingAggregation, PlanNode id: {}",
+          planNode->id());
       return false;
     }
 
     auto aggregationPlanNode =
         std::dynamic_pointer_cast<const core::AggregationNode>(planNode);
     if (!aggregationPlanNode) {
+      LOG_FALLBACK(
+          "Aggregation planNode is not AggregationNode, PlanNode id: {}",
+          planNode->id());
       return false;
     }
 
-    return canBeEvaluatedByCudf(
-        *aggregationPlanNode, ctx->task->queryCtx().get());
+    bool canEvaluate =
+        canBeEvaluatedByCudf(*aggregationPlanNode, ctx->task->queryCtx().get());
+    if (!canEvaluate) {
+      LOG_FALLBACK(
+          "Aggregation aggregation cannot be evaluated by cuDF, PlanNode id: {}",
+          planNode->id());
+    }
+    return canEvaluate;
   }
 
   bool acceptsGpuInput() const override {
@@ -265,22 +298,33 @@ class CudfHashJoinBaseAdapter : public OperatorAdapter {
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* ctx) const override {
     if (!canHandle(op)) {
+      LOG_FALLBACK(
+          "HashJoin operator is not HashBuild or HashProbe, PlanNode id: {}",
+          planNode->id());
       return false;
     }
 
     auto joinPlanNode =
         std::dynamic_pointer_cast<const core::HashJoinNode>(planNode);
     if (!joinPlanNode) {
+      LOG_FALLBACK(
+          "HashJoin planNode is not HashJoinNode, PlanNode id: {}",
+          planNode->id());
       return false;
     }
 
     if (!CudfHashJoinProbe::isSupportedJoinType(joinPlanNode->joinType())) {
+      LOG_FALLBACK(
+          "HashJoin unsupported join type, PlanNode id: {}", planNode->id());
       return false;
     }
 
     // Disabling null-aware anti join with filter until we implement it right
     if (joinPlanNode->joinType() == core::JoinType::kAnti &&
         joinPlanNode->isNullAware() && joinPlanNode->filter()) {
+      LOG_FALLBACK(
+          "HashJoin null-aware anti join with filter not implemented, PlanNode id: {}",
+          planNode->id());
       return false;
     }
 
@@ -295,6 +339,9 @@ class CudfHashJoinBaseAdapter : public OperatorAdapter {
     if (joinPlanNode->filter()) {
       if (!canBeEvaluatedByCudf(
               {joinPlanNode->filter()}, ctx->task->queryCtx().get())) {
+        LOG_FALLBACK(
+            "HashJoin join filter cannot be evaluated by cuDF, PlanNode id: {}",
+            planNode->id());
         return false;
       }
     }
@@ -499,8 +546,18 @@ class LocalPartitionAdapter : public OperatorAdapter {
       exec::DriverCtx* /*ctx*/) const override {
     auto localPartitionPlanNode =
         std::dynamic_pointer_cast<const core::LocalPartitionNode>(planNode);
-    return canHandle(op) && localPartitionPlanNode &&
+    bool canRun = canHandle(op) && localPartitionPlanNode &&
         CudfLocalPartition::shouldReplace(localPartitionPlanNode);
+    if (!canRun) {
+      LOG_FALLBACK(
+          "LocalPartitionAdapter {}, PlanNode id: {}",
+          !canHandle(op) ? "operator is not LocalPartition"
+              : !localPartitionPlanNode
+              ? "planNode is not LocalPartitionNode"
+              : "CudfLocalPartition::shouldReplace returned false",
+          planNode->id());
+    }
+    return canRun;
   }
 
   bool acceptsGpuInput() const override {
@@ -624,8 +681,11 @@ class ValuesAdapter : public OperatorAdapter {
 
   bool canRunOnGPU(
       const exec::Operator* /*op*/,
-      const core::PlanNodePtr& /*planNode*/,
+      const core::PlanNodePtr& planNode,
       exec::DriverCtx* /*ctx*/) const override {
+    LOG_FALLBACK(
+        "Values operator not supported on cuDF, PlanNode id: {}",
+        planNode->id());
     return false;
   }
 
@@ -661,8 +721,11 @@ class CallbackSinkAdapter : public OperatorAdapter {
 
   bool canRunOnGPU(
       const exec::Operator* /*op*/,
-      const core::PlanNodePtr& /*planNode*/,
+      const core::PlanNodePtr& planNode,
       exec::DriverCtx* /*ctx*/) const override {
+    LOG_FALLBACK(
+        "CallbackSink operator not supported on cuDF, PlanNode id: {}",
+        planNode->id());
     return false;
   }
 
