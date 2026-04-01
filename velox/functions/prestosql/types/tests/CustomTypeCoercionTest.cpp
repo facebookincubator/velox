@@ -16,6 +16,10 @@
 
 #include <gtest/gtest.h>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/prestosql/types/HyperLogLogRegistration.h"
+#include "velox/functions/prestosql/types/HyperLogLogType.h"
+#include "velox/functions/prestosql/types/P4HyperLogLogRegistration.h"
+#include "velox/functions/prestosql/types/P4HyperLogLogType.h"
 #include "velox/functions/prestosql/types/TimeWithTimezoneRegistration.h"
 #include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneRegistration.h"
@@ -29,6 +33,8 @@ namespace {
 class CustomTypeCoercionTest : public testing::Test {
  protected:
   void SetUp() override {
+    registerHyperLogLogType();
+    registerP4HyperLogLogType();
     registerTimestampWithTimeZoneType();
     registerTimeWithTimezoneType();
   }
@@ -66,6 +72,17 @@ TEST_F(CustomTypeCoercionTest, timeWithTimeZone) {
       TypeCoercer::coerceTypeBase(TIME_WITH_TIME_ZONE(), TIME()->name()));
   ASSERT_FALSE(
       TypeCoercer::coerceTypeBase(TIME_WITH_TIME_ZONE(), DATE()->name()));
+}
+
+TEST_F(CustomTypeCoercionTest, p4HyperLogLog) {
+  auto coercion =
+      TypeCoercer::coerceTypeBase(P4HYPERLOGLOG(), HYPERLOGLOG()->name());
+  ASSERT_TRUE(coercion.has_value());
+  VELOX_EXPECT_EQ_TYPES(coercion->type, HYPERLOGLOG());
+
+  // Reverse direction is explicit-only, not coercible.
+  ASSERT_FALSE(
+      TypeCoercer::coerceTypeBase(HYPERLOGLOG(), P4HYPERLOGLOG()->name()));
 }
 
 } // namespace
