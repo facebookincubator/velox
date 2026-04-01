@@ -1068,6 +1068,68 @@ TEST_F(CudfDecimalTest, decimalModuloNullPropagation) {
   facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
 }
 
+TEST_F(CudfDecimalTest, decimalArithmeticWithScalarRight) {
+  auto input = makeRowVector(
+      {"a"},
+      {
+          makeFlatVector<int64_t>({500, -250, 100}, DECIMAL(10, 2)),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({
+                      "a + CAST('1.00' AS DECIMAL(10, 2)) AS add_r",
+                      "a - CAST('1.00' AS DECIMAL(10, 2)) AS sub_r",
+                      "a * CAST('2.00' AS DECIMAL(10, 2)) AS mul_r",
+                      "a / CAST('2.00' AS DECIMAL(10, 2)) AS div_r",
+                      "a % CAST('3.00' AS DECIMAL(10, 2)) AS mod_r",
+                  })
+                  .planNode();
+
+  unregisterCudf();
+  auto cpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  registerCudf();
+
+  auto gpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+
+  facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
+}
+
+TEST_F(CudfDecimalTest, decimalArithmeticWithScalarLeft) {
+  auto input = makeRowVector(
+      {"a"},
+      {
+          makeFlatVector<int64_t>({500, -250, 100}, DECIMAL(10, 2)),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({
+                      "CAST('10.00' AS DECIMAL(10, 2)) + a AS add_l",
+                      "CAST('10.00' AS DECIMAL(10, 2)) - a AS sub_l",
+                      "CAST('2.00' AS DECIMAL(10, 2)) * a AS mul_l",
+                      "CAST('10.00' AS DECIMAL(10, 2)) / a AS div_l",
+                      "CAST('10.00' AS DECIMAL(10, 2)) % a AS mod_l",
+                  })
+                  .planNode();
+
+  unregisterCudf();
+  auto cpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  registerCudf();
+
+  auto gpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+
+  facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
+}
+
 // Velox comparison functions require both arguments to have the same type
 // (Generic<T1>, Generic<T1>), so raw different-scale comparisons fail at the
 // type-resolution stage before cuDF evaluation.
