@@ -21,6 +21,7 @@
 namespace facebook::velox::connector {
 
 /// Provides static methods for connector registry operations.
+/// All methods are thread-safe.
 class ConnectorRegistry {
  public:
   /// Return the connector with the specified ID, or nullptr if not registered.
@@ -30,11 +31,11 @@ class ConnectorRegistry {
   template <typename T>
   static std::vector<std::shared_ptr<T>> findAll() {
     std::vector<std::shared_ptr<T>> result;
-    for (const auto& [_, connector] : all()) {
+    forEach([&](const std::shared_ptr<Connector>& connector) {
       if (auto casted = std::dynamic_pointer_cast<T>(connector)) {
         result.push_back(std::move(casted));
       }
-    }
+    });
     return result;
   }
 
@@ -42,9 +43,9 @@ class ConnectorRegistry {
   static void unregisterAll();
 
  private:
-  // Return a reference to the internal connector map.
-  static const std::unordered_map<std::string, std::shared_ptr<Connector>>&
-  all();
+  // Invoke 'func' on each registered connector under the read lock.
+  static void forEach(
+      std::function<void(const std::shared_ptr<Connector>&)> func);
 };
 
 } // namespace facebook::velox::connector
