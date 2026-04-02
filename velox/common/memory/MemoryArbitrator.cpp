@@ -544,10 +544,14 @@ ScopedReclaimedBytesRecorder::~ScopedReclaimedBytesRecorder() {
   const int64_t reservedBytesAfterReclaim = pool_->reservedBytes();
   if (reservedBytesAfterReclaim > reservedBytesBeforeReclaim_) {
     LOG(ERROR) << "Unexpected reserved bytes growth from " << pool_->name()
+               << ", root pool: " << pool_->root()->name()
                << " after memory reclaim from "
                << succinctBytes(reservedBytesBeforeReclaim_) << " to "
-               << succinctBytes(reservedBytesAfterReclaim) << ", current usage "
-               << succinctBytes(pool_->usedBytes());
+               << succinctBytes(reservedBytesAfterReclaim)
+               << ", used: " << succinctBytes(pool_->usedBytes())
+               << ", reservation: " << succinctBytes(pool_->reservedBytes())
+               << ", root pool reservation: "
+               << succinctBytes(pool_->root()->reservedBytes());
   }
   *reclaimedBytes_ = reservedBytesBeforeReclaim_ - reservedBytesAfterReclaim;
 }

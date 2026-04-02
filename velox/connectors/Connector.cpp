@@ -15,47 +15,28 @@
  */
 
 #include "velox/connectors/Connector.h"
+#include "velox/connectors/ConnectorRegistryInternal.h"
 
 namespace facebook::velox::connector {
-namespace {
-
-std::unordered_map<std::string, std::shared_ptr<Connector>>& connectors() {
-  static std::unordered_map<std::string, std::shared_ptr<Connector>> connectors;
-  return connectors;
-}
-} // namespace
-
-bool DataSink::Stats::empty() const {
-  return numWrittenBytes == 0 && numWrittenFiles == 0 && spillStats.empty();
-}
-
-std::string DataSink::Stats::toString() const {
-  return fmt::format(
-      "numWrittenBytes {} numWrittenFiles {} {}",
-      succinctBytes(numWrittenBytes),
-      numWrittenFiles,
-      spillStats.toString());
-}
 
 bool registerConnector(std::shared_ptr<Connector> connector) {
   bool ok = connectors().insert({connector->connectorId(), connector}).second;
   VELOX_CHECK(
       ok,
-      "Connector with ID '{}' is already registered",
+      "Connector with ID is already registered: {}",
       connector->connectorId());
   return true;
 }
 
 bool unregisterConnector(const std::string& connectorId) {
-  auto count = connectors().erase(connectorId);
-  return count == 1;
+  return connectors().erase(connectorId) == 1;
 }
 
 std::shared_ptr<Connector> getConnector(const std::string& connectorId) {
   auto it = connectors().find(connectorId);
   VELOX_CHECK(
       it != connectors().end(),
-      "Connector with ID '{}' not registered",
+      "Connector with ID is not registered: {}",
       connectorId);
   return it->second;
 }
@@ -67,6 +48,18 @@ bool hasConnector(const std::string& connectorId) {
 const std::unordered_map<std::string, std::shared_ptr<Connector>>&
 getAllConnectors() {
   return connectors();
+}
+
+bool DataSink::Stats::empty() const {
+  return numWrittenBytes == 0 && numWrittenFiles == 0 && spillStats.empty();
+}
+
+std::string DataSink::Stats::toString() const {
+  return fmt::format(
+      "numWrittenBytes {} numWrittenFiles {} {}",
+      succinctBytes(numWrittenBytes),
+      numWrittenFiles,
+      spillStats.toString());
 }
 
 folly::Synchronized<

@@ -860,13 +860,22 @@ uint64_t Writer::MemoryReclaimer::reclaim(
     LOG(WARNING)
         << "Can't reclaim from dwrf writer which is under non-reclaimable "
            "section: "
-        << pool->name();
+        << pool->name() << ", root pool: " << pool->root()->name()
+        << ", used: " << succinctBytes(pool->usedBytes())
+        << ", reservation: " << succinctBytes(pool->reservedBytes())
+        << ", root pool reservation: "
+        << succinctBytes(pool->root()->reservedBytes());
     ++stats.numNonReclaimableAttempts;
     return 0;
   }
   if (!writer_->isRunning()) {
     LOG(WARNING) << "Can't reclaim from a not running dwrf writer: "
-                 << pool->name() << ", state: " << writer_->state();
+                 << pool->name() << ", root pool: " << pool->root()->name()
+                 << ", state: " << writer_->state()
+                 << ", used: " << succinctBytes(pool->usedBytes())
+                 << ", reservation: " << succinctBytes(pool->reservedBytes())
+                 << ", root pool reservation: "
+                 << succinctBytes(pool->root()->reservedBytes());
     ++stats.numNonReclaimableAttempts;
     return 0;
   }
