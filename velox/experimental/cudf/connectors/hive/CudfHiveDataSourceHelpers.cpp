@@ -19,6 +19,7 @@
 
 #include "velox/dwio/common/BufferedInput.h"
 
+#include <cudf/detail/utilities/host_worker_pool.hpp>
 #include <cudf/detail/utilities/integer_utils.hpp>
 #include <cudf/io/datasource.hpp>
 #include <cudf/io/parquet.hpp>
@@ -281,23 +282,19 @@ fetchByteRangesAsync(
       ioSizes.size() == destinations.size(),
       "Number of IO sizes and destinations must be equal");
 
-  auto syncFunction = [dataSource,
-                       stream,
-                       ioOffsets = std::move(ioOffsets),
-                       ioSizes = std::move(ioSizes),
-                       destinations = std::move(destinations)]() {
-    std::vector<std::future<size_t>> deviceReadTasks;
-    std::vector<std::future<size_t>> hostReadTasks;
-    deviceReadTasks.reserve(ioOffsets.size());
-    hostReadTasks.reserve(ioOffsets.size());
+  auto iter = cuda::make_zip_iterator(
+      ioOffsets.begin(), ioSizes.begin(), destinations.begin());
 
-    auto iter = cuda::make_zip_iterator(
-        ioOffsets.begin(), ioSizes.begin(), destinations.begin());
+  std::vector<std::future<size_t>> deviceReadTasks;
+  std::vector<std::future<size_t>> hostReadTasks;
+  deviceReadTasks.reserve(ioOffsets.size());
+  hostReadTasks.reserve(ioOffsets.size());
 
-    // device_read_async is not guaranteed to follow stream-ordering (see
-    // datasource API docs)
-    stream.synchronize();
+  // device_read_async is not guaranteed to follow stream-ordering (see
+  // datasource API docs)
+  stream.synchronize();
 
+  {
     std::lock_guard<std::mutex> lock(ioBatchMutex());
 
     std::for_each(iter, iter + ioOffsets.size(), [&](auto const& tuple) {
@@ -311,8 +308,7 @@ fetchByteRangesAsync(
             dataSource->device_read_async(ioOffset, ioSize, dest, stream));
       } else {
         hostReadTasks.emplace_back(
-            std::async(
-                std::launch::deferred,
+            cudf::detail::host_worker_pool::submit_task(
                 [dataSource, ioOffset, ioSize, dest, stream]() {
                   auto hostBuffer = dataSource->host_read(ioOffset, ioSize);
                   CUDF_CUDA_TRY(cudaMemcpyAsync(
@@ -325,7 +321,10 @@ fetchByteRangesAsync(
                 }));
       }
     });
+  }
 
+  auto syncFunction = [](decltype(hostReadTasks)&& hostReadTasks,
+                         decltype(deviceReadTasks)&& deviceReadTasks) {
     for (auto& task : hostReadTasks) {
       task.get();
     }
@@ -337,7 +336,11 @@ fetchByteRangesAsync(
   return {
       std::move(columnChunkBuffers),
       std::move(columnChunkData),
-      std::async(std::launch::deferred, std::move(syncFunction))};
+      std::async(
+          std::launch::deferred,
+          std::move(syncFunction),
+          std::move(hostReadTasks),
+          std::move(deviceReadTasks))};
 }
 
 } // namespace facebook::velox::cudf_velox::connector::hive
