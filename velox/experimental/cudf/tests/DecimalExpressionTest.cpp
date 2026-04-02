@@ -1209,5 +1209,88 @@ TEST_F(CudfDecimalTest, decimalCompareDifferentScalesWithCast) {
   facebook::velox::test::assertEqualVectors(expected, result);
 }
 
+TEST_F(CudfDecimalTest, decimalGreatestLeastAllColumns) {
+  auto input = makeRowVector(
+      {"a", "b", "c"},
+      {
+          makeFlatVector<int64_t>({100, 500, -300}, DECIMAL(10, 2)),
+          makeFlatVector<int64_t>({400, 200, -100}, DECIMAL(10, 2)),
+          makeFlatVector<int64_t>({300, 300, -200}, DECIMAL(10, 2)),
+      });
+  std::vector<RowVectorPtr> vectors = {input};
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({"greatest(a, b, c) AS g", "least(a, b, c) AS l"})
+                  .planNode();
+
+  unregisterCudf();
+  auto cpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  registerCudf();
+  auto gpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
+}
+
+TEST_F(CudfDecimalTest, decimalGreatestLeastMixed) {
+  auto input = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int64_t>({100, 500, -300}, DECIMAL(10, 2)),
+          makeFlatVector<int64_t>({400, 200, -100}, DECIMAL(10, 2)),
+      });
+  std::vector<RowVectorPtr> vectors = {input};
+  auto plan =
+      exec::test::PlanBuilder()
+          .values(vectors)
+          .project(
+              {"greatest(a, CAST('5.00' AS DECIMAL(10, 2)), b) AS g",
+               "least(a, CAST('0.00' AS DECIMAL(10, 2)), b) AS l"})
+          .planNode();
+
+  unregisterCudf();
+  auto cpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  registerCudf();
+  auto gpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
+}
+
+TEST_F(CudfDecimalTest, decimalGreatestLeastWithNulls) {
+  // The cuDF implementation uses NULL_MAX / NULL_MIN which skip nulls
+  // (returning null only when all inputs are null). This differs from
+  // Presto (which propagates null if any input is null), so we verify
+  // against manually constructed expected results.
+  auto input = makeRowVector(
+      {"a", "b", "c"},
+      {
+          makeNullableFlatVector<int64_t>(
+              {100, std::nullopt, std::nullopt}, DECIMAL(10, 2)),
+          makeNullableFlatVector<int64_t>(
+              {std::nullopt, 200, std::nullopt}, DECIMAL(10, 2)),
+          makeNullableFlatVector<int64_t>(
+              {300, std::nullopt, std::nullopt}, DECIMAL(10, 2)),
+      });
+  std::vector<RowVectorPtr> vectors = {input};
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({"greatest(a, b, c) AS g", "least(a, b, c) AS l"})
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"g", "l"},
+      {
+          makeNullableFlatVector<int64_t>(
+              {300, 200, std::nullopt}, DECIMAL(10, 2)),
+          makeNullableFlatVector<int64_t>(
+              {100, 200, std::nullopt}, DECIMAL(10, 2)),
+      });
+
+  auto result =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
 } // namespace
 } // namespace facebook::velox::cudf_velox

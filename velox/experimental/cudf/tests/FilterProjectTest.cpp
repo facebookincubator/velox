@@ -1312,6 +1312,69 @@ TEST_F(CudfFilterProjectTest, switchExpr) {
   facebook::velox::test::assertEqualVectors(expected, result);
 }
 
+TEST_F(CudfFilterProjectTest, greatestLeastAllColumns) {
+  auto data = makeRowVector({
+      makeFlatVector<double>({1.0, 5.0, -3.0}),
+      makeFlatVector<double>({4.0, 2.0, -1.0}),
+      makeFlatVector<double>({3.0, 3.0, -2.0}),
+  });
+  createDuckDbTable({data});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .project(
+                      {"greatest(c0, c1, c2) AS g", "least(c0, c1, c2) AS l"})
+                  .planNode();
+  assertQuery(
+      plan, "SELECT greatest(c0, c1, c2), least(c0, c1, c2) FROM tmp");
+}
+
+TEST_F(CudfFilterProjectTest, greatestLeastMixed) {
+  auto data = makeRowVector({
+      makeFlatVector<double>({1.0, 10.0, -3.0}),
+      makeFlatVector<double>({4.0, 2.0, -1.0}),
+  });
+  createDuckDbTable({data});
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .project(
+              {"greatest(c0, 5.0, c1) AS g", "least(c0, 0.0, c1) AS l"})
+          .planNode();
+  assertQuery(
+      plan, "SELECT greatest(c0, 5.0, c1), least(c0, 0.0, c1) FROM tmp");
+}
+
+TEST_F(CudfFilterProjectTest, greatestLeastAllLiterals) {
+  auto data = makeRowVector({makeFlatVector<double>({0.0})});
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .project(
+              {"greatest(1.0, 3.0, 2.0) AS g", "least(1.0, 3.0, 2.0) AS l"})
+          .planNode();
+  auto expected = makeRowVector({
+      makeFlatVector<double>({3.0}),
+      makeFlatVector<double>({1.0}),
+  });
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfFilterProjectTest, greatestLeastWithNulls) {
+  auto data = makeRowVector({
+      makeNullableFlatVector<double>({1.0, std::nullopt, std::nullopt}),
+      makeNullableFlatVector<double>({std::nullopt, 2.0, std::nullopt}),
+      makeNullableFlatVector<double>({3.0, std::nullopt, std::nullopt}),
+  });
+  createDuckDbTable({data});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .project(
+                      {"greatest(c0, c1, c2) AS g", "least(c0, c1, c2) AS l"})
+                  .planNode();
+  assertQuery(
+      plan, "SELECT greatest(c0, c1, c2), least(c0, c1, c2) FROM tmp");
+}
+
 class CudfSimpleFilterProjectTest : public cudf_velox::CudfFunctionBaseTest {
  protected:
   static void SetUpTestCase() {
