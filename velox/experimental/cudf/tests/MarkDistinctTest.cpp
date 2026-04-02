@@ -279,25 +279,3 @@ TEST_F(CudfMarkDistinctTest, emptyBatch) {
   EXPECT_FALSE(markers->valueAt(2)); // 2: duplicate
   EXPECT_TRUE(markers->valueAt(3)); // 3: first
 }
-
-// Test: Memory limit exceeded triggers error.
-TEST_F(CudfMarkDistinctTest, memoryLimitExceeded) {
-  auto& config = cudf_velox::CudfConfig::getInstance();
-  auto originalMaxKeys = config.markDistinctMaxKeys;
-  // Set a very low limit so the test triggers the error quickly.
-  config.markDistinctMaxKeys = 3;
-
-  // 5 distinct keys exceeds the limit of 3.
-  auto input = makeRowVector({
-      makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
-  });
-
-  auto plan =
-      PlanBuilder().values({input}).markDistinct("m", {"c0"}).planNode();
-
-  VELOX_ASSERT_USER_THROW(
-      AssertQueryBuilder(plan).copyResults(pool()),
-      "CudfMarkDistinct exceeded maximum distinct keys limit");
-
-  config.markDistinctMaxKeys = originalMaxKeys;
-}

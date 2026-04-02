@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfMarkDistinct.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
@@ -115,7 +114,7 @@ RowVectorPtr CudfMarkDistinct::getOutput() {
         cudf::null_equality::EQUAL,
         cudf::set_as_build_table::RIGHT,
         stream);
-    numSeenKeys_ = static_cast<int64_t>(seenKeys_->num_rows());
+
   } else {
     // Subsequent batch: probe the persistent filter — no hash table rebuild.
 
@@ -169,20 +168,7 @@ RowVectorPtr CudfMarkDistinct::getOutput() {
           cudf::null_equality::EQUAL,
           cudf::set_as_build_table::RIGHT,
           stream);
-      numSeenKeys_ = static_cast<int64_t>(seenKeys_->num_rows());
     }
-  }
-
-  // Check memory limit after updating seenKeys_.
-  const auto maxKeys = CudfConfig::getInstance().markDistinctMaxKeys;
-  if (maxKeys > 0 && numSeenKeys_ > maxKeys) {
-    VELOX_USER_FAIL(
-        "CudfMarkDistinct exceeded maximum distinct keys limit ({} > {}). "
-        "GPU MarkDistinct does not support spilling. Consider increasing "
-        "cudf.mark_distinct_max_keys or disabling GPU acceleration with "
-        "cudf.enable_mark_distinct=false to use CPU with spilling support.",
-        numSeenKeys_,
-        maxKeys);
   }
 
   // Scatter TRUE at new row positions.

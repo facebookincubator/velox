@@ -55,8 +55,6 @@ struct CudfConfig {
 
   static constexpr const char* kCudfEnableMarkDistinct{
       "cudf.enable_mark_distinct"};
-  static constexpr const char* kCudfMarkDistinctMaxKeys{
-      "cudf.mark_distinct_max_keys"};
 
   /// Singleton CudfConfig instance.
   /// Clients must set the configs below before invoking registerCudf().
@@ -138,12 +136,6 @@ struct CudfConfig {
   /// Enable GPU acceleration for MarkDistinct operator.
   /// Set to false to measure performance impact by forcing CPU fallback.
   bool enableMarkDistinct{true};
-
-  /// Maximum number of distinct keys to track in GPU memory for MarkDistinct.
-  /// If exceeded, throws an error suggesting CPU fallback. Set to 0 for no
-  /// limit. Default 10M keys is suitable for most workloads without exhausting
-  /// GPU memory.
-  int64_t markDistinctMaxKeys{10'000'000};
 };
 
 } // namespace facebook::velox::cudf_velox

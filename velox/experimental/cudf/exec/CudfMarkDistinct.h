@@ -37,9 +37,8 @@ namespace facebook::velox::cudf_velox {
 /// first time the key combination has been seen.
 ///
 /// Unlike the CPU implementation, this operator does not support spilling.
-/// If the number of distinct keys exceeds cudf.mark_distinct_max_keys (default
-/// 10M), it throws an error. For high-cardinality workloads, disable GPU
-/// acceleration with cudf.enable_mark_distinct=false to use CPU with spilling.
+/// For high-cardinality workloads, disable GPU acceleration with
+/// cudf.enable_mark_distinct=false to use CPU with spilling.
 class CudfMarkDistinct : public exec::Operator, public NvtxHelper {
  public:
   CudfMarkDistinct(
@@ -82,9 +81,6 @@ class CudfMarkDistinct : public exec::Operator, public NvtxHelper {
   /// new distinct keys. Only rebuilt when seenKeys_ grows (new keys found).
   /// Null until the first batch has been processed.
   std::unique_ptr<cudf::filtered_join> seenFilter_;
-
-  /// Total distinct key rows accumulated, for the memory limit check.
-  int64_t numSeenKeys_{0};
 };
 
 } // namespace facebook::velox::cudf_velox
