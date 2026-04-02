@@ -285,7 +285,7 @@ fetchByteRangesAsync(
                        stream,
                        ioOffsets = std::move(ioOffsets),
                        ioSizes = std::move(ioSizes),
-                       destinations = std::move(destinations)]() mutable {
+                       destinations = std::move(destinations)]() {
     std::vector<std::future<size_t>> deviceReadTasks;
     std::vector<std::future<size_t>> hostReadTasks;
     deviceReadTasks.reserve(ioOffsets.size());
