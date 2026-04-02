@@ -173,7 +173,7 @@ RowVectorPtr CudfMarkDistinct::getOutput() {
 
   // Scatter TRUE at new row positions.
   if (newRowIndicesCol && newRowIndicesCol->size() > 0) {
-    cudf::numeric_scalar<bool> trueScalar(true, true, stream, outputMr);
+    cudf::numeric_scalar<bool> trueScalar(true, true, stream, tempMR);
     std::vector<std::reference_wrapper<const cudf::scalar>> sources = {
         trueScalar};
     cudf::table_view markerTableView({markerCol->view()});
