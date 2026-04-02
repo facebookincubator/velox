@@ -775,6 +775,24 @@ TEST_F(E2EFilterTest, flushRowGroupByBufferedSize) {
   EXPECT_EQ(parquetReader.numberOfRows(), 50);
 }
 
+TEST_F(E2EFilterTest, flushTowRowGroups) {
+  bytesInRowGroup_ = 200;
+  rowType_ = ROW({"c0"}, {INTEGER()});
+  std::vector<RowVectorPtr> batches;
+  for (int i = 0; i < 20; i++) {
+    batches.push_back(
+        makeRowVector({makeFlatVector<int32_t>({1, 1, 1, 1, 1})}));
+  }
+  writeToMemory(rowType_, batches, false);
+  dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+  auto input = std::make_unique<BufferedInput>(
+      std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
+  auto reader = makeReader(readerOpts, std::move(input));
+  auto parquetReader = dynamic_cast<ParquetReader&>(*reader.get());
+  EXPECT_EQ(parquetReader.fileMetaData().numRowGroups(), 2);
+  EXPECT_EQ(parquetReader.numberOfRows(), 100);
+}
+
 // Do not create an empty row group in the end of the file.
 TEST_F(E2EFilterTest, flushEmptyRowGroup) {
   rowsInRowGroup_ = 50;

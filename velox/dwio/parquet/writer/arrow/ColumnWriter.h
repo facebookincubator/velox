@@ -194,7 +194,7 @@ class PARQUET_EXPORT ColumnWriter {
   /// totalBytesWritten().
   virtual int64_t totalCompressedBytesWritten() const = 0;
 
-  // Estimated size of the values that are not written to a page yet
+  /// Estimated size of the values that are not written to a page yet.
   virtual int64_t estimatedBufferedValueBytes() const = 0;
 
   /// \brief Estimated size of the definition levels that are not written to a
