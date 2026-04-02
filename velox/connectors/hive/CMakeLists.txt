@@ -35,6 +35,24 @@ velox_add_library(
   PartitionIdGenerator.cpp
   SplitReader.cpp
   TableHandle.cpp
+  HEADERS
+  BufferedInputBuilder.h
+  FileHandle.h
+  FileIndexReader.h
+  FileProperties.h
+  HiveConfig.h
+  HiveConnector.h
+  HiveConnectorSplit.h
+  HiveConnectorUtil.h
+  HiveDataSink.h
+  HiveDataSource.h
+  HiveIndexSource.h
+  HivePartitionFunction.h
+  HivePartitionName.h
+  IndexReader.h
+  PartitionIdGenerator.h
+  SplitReader.h
+  TableHandle.h
 )
 
 velox_link_libraries(

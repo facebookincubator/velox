@@ -16,7 +16,7 @@
 
 #include "velox/exec/IndexLookupJoin.h"
 #include "fmt/format.h"
-#include "folly/experimental/EventCount.h"
+#include "folly/synchronization/EventCount.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest-matchers.h"
 #include "velox/common/base/tests/GTestUtils.h"

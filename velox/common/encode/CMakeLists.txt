@@ -16,5 +16,14 @@ if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()
 
-velox_add_library(velox_encode Base64.cpp Base32.cpp)
+velox_add_library(
+  velox_encode
+  Base64.cpp
+  Base32.cpp
+  HEADERS
+  Base32.h
+  Base64.h
+)
 velox_link_libraries(velox_encode PUBLIC velox_status Folly::folly)
+
+velox_add_library(velox_common_encode INTERFACE HEADERS ByteStream.h Coding.h UInt128.h)

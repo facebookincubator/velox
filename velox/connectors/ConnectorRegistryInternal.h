@@ -13,13 +13,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
-#include "velox/type/Type.h"
+#include <memory>
+#include <string>
+#include <unordered_map>
 
-namespace facebook::velox {
+namespace facebook::velox::connector {
 
-/// Returns the Presto SQL string representation of the given type.
-std::string toPrestoTypeSql(const TypePtr& type);
+class Connector;
 
-} // namespace facebook::velox
+// Internal helper shared by Connector.cpp and ConnectorRegistry.cpp.
+// Not part of the public API. Do not include from outside velox/connectors/.
+inline std::unordered_map<std::string, std::shared_ptr<Connector>>&
+connectors() {
+  static std::unordered_map<std::string, std::shared_ptr<Connector>> instance;
+  return instance;
+}
+
+} // namespace facebook::velox::connector

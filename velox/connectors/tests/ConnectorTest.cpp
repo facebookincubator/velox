@@ -16,6 +16,7 @@
 
 #include "velox/connectors/Connector.h"
 #include "velox/common/config/Config.h"
+#include "velox/connectors/ConnectorRegistry.h"
 
 #include <gtest/gtest.h>
 
@@ -43,40 +44,24 @@ class TestConnector : public connector::Connector {
   }
 };
 
-class TestConnectorFactory : public connector::ConnectorFactory {
- public:
-  TestConnectorFactory() : ConnectorFactory("test-factory") {}
-
-  std::shared_ptr<Connector> newConnector(
-      const std::string& id,
-      std::shared_ptr<const config::ConfigBase> /*config*/,
-      folly::Executor* /*ioExecutor*/ = nullptr,
-      folly::Executor* /*cpuExecutor*/ = nullptr) override {
-    return std::make_shared<TestConnector>(id);
-  }
-};
-
-TEST(ConnectorTest, getAllConnectors) {
-  TestConnectorFactory factory;
-
+TEST(ConnectorTest, registryOperations) {
   const int32_t numConnectors = 10;
   for (int32_t i = 0; i < numConnectors; i++) {
-    registerConnector(factory.newConnector(
-        fmt::format("connector-{}", i),
-        std::make_shared<config::ConfigBase>(
-            std::unordered_map<std::string, std::string>())));
-  }
-
-  const auto& connectors = getAllConnectors();
-  EXPECT_EQ(connectors.size(), numConnectors);
-  for (int32_t i = 0; i < numConnectors; i++) {
-    EXPECT_EQ(connectors.count(fmt::format("connector-{}", i)), 1);
+    registerConnector(
+        std::make_shared<TestConnector>(fmt::format("connector-{}", i)));
   }
 
   for (int32_t i = 0; i < numConnectors; i++) {
-    unregisterConnector(fmt::format("connector-{}", i));
+    EXPECT_NE(
+        ConnectorRegistry::tryGet(fmt::format("connector-{}", i)), nullptr);
   }
-  EXPECT_EQ(getAllConnectors().size(), 0);
+  EXPECT_EQ(ConnectorRegistry::tryGet("nonexistent"), nullptr);
+
+  auto allTestConnectors = ConnectorRegistry::findAll<TestConnector>();
+  EXPECT_EQ(allTestConnectors.size(), numConnectors);
+
+  ConnectorRegistry::unregisterAll();
+  EXPECT_EQ(ConnectorRegistry::findAll<TestConnector>().size(), 0);
 }
 
 TEST(ConnectorTest, connectorSplit) {

@@ -19,6 +19,13 @@ velox_add_library(
   KHyperLogLogInputGenerator.cpp
   P4HyperLogLogInputGenerator.cpp
   SfmSketchInputGenerator.cpp
+  HEADERS
+  HyperLogLogInputGenerator.h
+  KHyperLogLogInputGenerator.h
+  P4HyperLogLogInputGenerator.h
+  SfmSketchInputGenerator.h
+  TimeWithTimezoneInputGenerator.h
+  TimestampWithTimeZoneInputGenerator.h
 )
 
 velox_link_libraries(
