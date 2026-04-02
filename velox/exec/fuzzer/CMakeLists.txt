@@ -132,11 +132,11 @@ target_link_libraries(
   velox_test_util
 )
 
-add_library(velox_row_number_fuzzer_base_lib RowNumberFuzzerBase.cpp)
-velox_add_test_headers(velox_row_number_fuzzer_base_lib RowNumberFuzzerBase.h)
+add_library(velox_spill_fuzzer_base_lib SpillFuzzerBase.cpp)
+velox_add_test_headers(velox_spill_fuzzer_base_lib SpillFuzzerBase.h)
 
 target_link_libraries(
-  velox_row_number_fuzzer_base_lib
+  velox_spill_fuzzer_base_lib
   velox_dwio_dwrf_reader
   velox_fuzzer_util
   velox_vector_fuzzer
@@ -148,7 +148,7 @@ velox_add_test_headers(velox_row_number_fuzzer_lib RowNumberFuzzer.h)
 
 target_link_libraries(
   velox_row_number_fuzzer_lib
-  velox_row_number_fuzzer_base_lib
+  velox_spill_fuzzer_base_lib
   velox_type
   velox_expression_test_utility
 )
@@ -163,7 +163,7 @@ velox_add_test_headers(velox_topn_row_number_fuzzer_lib TopNRowNumberFuzzer.h)
 
 target_link_libraries(
   velox_topn_row_number_fuzzer_lib
-  velox_row_number_fuzzer_base_lib
+  velox_spill_fuzzer_base_lib
   velox_type
   velox_expression_test_utility
 )
@@ -178,7 +178,7 @@ velox_add_test_headers(velox_mark_distinct_fuzzer_lib MarkDistinctFuzzer.h)
 
 target_link_libraries(
   velox_mark_distinct_fuzzer_lib
-  velox_row_number_fuzzer_base_lib
+  velox_spill_fuzzer_base_lib
   velox_type
   velox_expression_test_utility
 )

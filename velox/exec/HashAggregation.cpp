@@ -495,9 +495,11 @@ void HashAggregation::reclaim(
     if (groupingSet_->hasSpilled()) {
       LOG(WARNING)
           << "Can't reclaim from aggregation operator which has spilled and is under output processing, pool "
-          << pool()->name()
-          << ", memory usage: " << succinctBytes(pool()->usedBytes())
-          << ", reservation: " << succinctBytes(pool()->reservedBytes());
+          << pool()->name() << ", root pool: " << pool()->root()->name()
+          << ", used: " << succinctBytes(pool()->usedBytes())
+          << ", reservation: " << succinctBytes(pool()->reservedBytes())
+          << ", root pool reservation: "
+          << succinctBytes(pool()->root()->reservedBytes());
       return;
     }
     if (isDistinct_) {
