@@ -22,6 +22,7 @@
 
 #include "velox/expression/CastExpr.h"
 #include "velox/functions/prestosql/types/UuidType.h"
+#include "velox/type/CastRegistry.h"
 
 namespace facebook::velox {
 namespace {
@@ -161,5 +162,23 @@ class UuidTypeFactory : public CustomTypeFactory {
 
 void registerUuidType() {
   registerCustomType("uuid", std::make_unique<const UuidTypeFactory>());
+  registerCastRules({
+      {.fromType = "VARCHAR",
+       .toType = "UUID",
+       .implicitAllowed = false,
+       .validator = {}},
+      {.fromType = "VARBINARY",
+       .toType = "UUID",
+       .implicitAllowed = false,
+       .validator = {}},
+      {.fromType = "UUID",
+       .toType = "VARCHAR",
+       .implicitAllowed = false,
+       .validator = {}},
+      {.fromType = "UUID",
+       .toType = "VARBINARY",
+       .implicitAllowed = false,
+       .validator = {}},
+  });
 }
 } // namespace facebook::velox
