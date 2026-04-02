@@ -811,67 +811,80 @@ class BetweenFunction : public CudfFunction {
   std::unique_ptr<cudf::scalar> maxLiteral_;
 };
 
+template <TypeKind Kind>
+static VectorPtr foldConstantPair(
+    const VectorPtr& a,
+    const VectorPtr& b,
+    cudf::binary_operator op) {
+  using T = typename TypeTraits<Kind>::NativeType;
+  if (a->isNullAt(0)) return b;
+  if (b->isNullAt(0)) return a;
+  auto aVal = a->as<ConstantVector<T>>()->value();
+  auto bVal = b->as<ConstantVector<T>>()->value();
+  bool bWins = (op == cudf::binary_operator::NULL_MAX) ? (bVal > aVal)
+                                                       : (bVal < aVal);
+  return bWins ? b : a;
+}
+
 class GreatestLeastFunction : public CudfFunction {
  public:
   GreatestLeastFunction(
       const std::shared_ptr<velox::exec::Expr>& expr,
       cudf::binary_operator op)
       : op_(op), type_(cudf_velox::veloxToCudfDataType(expr->type())) {
-    // Must have at least two inputs.
     VELOX_CHECK_GE(
         expr->inputs().size(),
         2,
         "Greatest/Least function expects at least 2 inputs");
-    // Scan inputs for literals.
-    for (size_t i = 0; i < expr->inputs().size(); ++i) {
-      auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
-          expr->inputs()[i]);
-      if (constExpr) {
-        literals_.push_back(VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-            createCudfScalar,
-            constExpr->value()->typeKind(),
-            constExpr->value()));
+    // Separate column inputs (into order_) from constant inputs (folded into
+    // a single scalar). Column indices refer to positions in the packed
+    // inputColumns vector that eval() receives (which excludes literals).
+    std::vector<VectorPtr> constValues;
+    size_t columnIndex = 0;
+    for (const auto& input : expr->inputs()) {
+      if (auto constExpr =
+              std::dynamic_pointer_cast<velox::exec::ConstantExpr>(input)) {
+        constValues.push_back(constExpr->value());
       } else {
-        literals_.push_back(nullptr);
+        order_.push_back(columnIndex++);
       }
     }
-    // Loose sort to ensure that at least the first input is a column.
-    for (size_t i = 0; i < literals_.size(); ++i) {
-      if (!literals_[i]) {
-        order_.push_back(i);
+    // Fold all constant values into a single scalar on the host.
+    if (!constValues.empty()) {
+      auto winner = constValues[0];
+      for (size_t i = 1; i < constValues.size(); ++i) {
+        winner = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+            foldConstantPair, winner->typeKind(), winner, constValues[i], op);
       }
+      foldedScalar_ = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          createCudfScalar, winner->typeKind(), winner);
     }
-    for (size_t i = 0; i < literals_.size(); ++i) {
-      if (literals_[i]) {
-        order_.push_back(i);
-      }
-    }
-    // Ensure that at least one input is a column.
-    VELOX_CHECK(
-        !order_.empty() && !literals_[order_[0]],
-        "Greatest/Least expects at least one non-literal input");
   }
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
-    // We know that the first input is a column, so we iterate the inputs
-    // in the sorted order, building a chain of binary operations, either
-    // (column, scalar) or (column, column).
+    // All inputs were constant -- return the pre-folded scalar as a column.
+    if (order_.empty()) {
+      return cudf::make_column_from_scalar(*foldedScalar_, 1, stream, mr);
+    }
+
+    // Accumulate across column inputs.
     std::unique_ptr<cudf::column> result;
     for (size_t i = 1; i < order_.size(); ++i) {
-      auto nextIdx = order_[i];
       cudf::column_view lhs =
           result ? result->view() : asView(inputColumns[order_[0]]);
+      result = cudf::binary_operation(
+          lhs, asView(inputColumns[order_[i]]), op_, type_, stream, mr);
+    }
 
-      if (literals_[nextIdx]) {
-        result = cudf::binary_operation(
-            lhs, *literals_[nextIdx], op_, type_, stream, mr);
-      } else {
-        result = cudf::binary_operation(
-            lhs, asView(inputColumns[nextIdx]), op_, type_, stream, mr);
-      }
+    // Apply the folded constant as a final (column, scalar) operation.
+    if (foldedScalar_) {
+      cudf::column_view lhs =
+          result ? result->view() : asView(inputColumns[order_[0]]);
+      result = cudf::binary_operation(
+          lhs, *foldedScalar_, op_, type_, stream, mr);
     }
     return result;
   }
@@ -879,7 +892,7 @@ class GreatestLeastFunction : public CudfFunction {
  private:
   const cudf::binary_operator op_;
   const cudf::data_type type_;
-  std::vector<std::unique_ptr<cudf::scalar>> literals_;
+  std::unique_ptr<cudf::scalar> foldedScalar_;
   std::vector<size_t> order_;
 };
 
