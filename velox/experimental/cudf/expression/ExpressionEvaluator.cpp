@@ -817,12 +817,12 @@ class GreatestLeastFunction : public CudfFunction {
       const std::shared_ptr<velox::exec::Expr>& expr,
       cudf::binary_operator op)
       : op_(op), type_(cudf_velox::veloxToCudfDataType(expr->type())) {
-    // must have at least three inputs
+    // Must have at least two inputs.
     VELOX_CHECK_GE(
         expr->inputs().size(),
-        3,
-        "Greatest/Least function expects at least 3 inputs");
-    // scan inputs for literals
+        2,
+        "Greatest/Least function expects at least 2 inputs");
+    // Scan inputs for literals.
     for (size_t i = 0; i < expr->inputs().size(); ++i) {
       auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
           expr->inputs()[i]);
@@ -835,45 +835,42 @@ class GreatestLeastFunction : public CudfFunction {
         literals_.push_back(nullptr);
       }
     }
+    // Loose sort to ensure that at least the first input is a column.
+    for (size_t i = 0; i < literals_.size(); ++i) {
+      if (!literals_[i]) {
+        order_.push_back(i);
+      }
+    }
+    for (size_t i = 0; i < literals_.size(); ++i) {
+      if (literals_[i]) {
+        order_.push_back(i);
+      }
+    }
+    // Ensure that at least one input is a column.
+    VELOX_CHECK(
+        !order_.empty() && !literals_[order_[0]],
+        "Greatest/Least expects at least one non-literal input");
   }
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
-    // construct a chain of NULL_MIN or NULL_MAX operations
+    // We know that the first input is a column, so we iterate the inputs
+    // in the sorted order, building a chain of binary operations, either
+    // (column, scalar) or (column, column).
     std::unique_ptr<cudf::column> result;
-    // the first pair of values
-    if (literals_[0] && literals_[1]) {
-      // no variant of cudf::binary_operation that takes two scalars so we must
-      // create columns
-      auto col0 = cudf::make_column_from_scalar(*literals_[0], 1, stream);
-      auto col1 = cudf::make_column_from_scalar(*literals_[1], 1, stream);
-      result = cudf::binary_operation(
-          col0->view(), col1->view(), op_, type_, stream, mr);
-    } else if (literals_[0]) {
-      result = cudf::binary_operation(
-          *literals_[0], asView(inputColumns[1]), op_, type_, stream, mr);
-    } else if (literals_[1]) {
-      result = cudf::binary_operation(
-          asView(inputColumns[0]), *literals_[1], op_, type_, stream, mr);
-    } else {
-      result = cudf::binary_operation(
-          asView(inputColumns[0]),
-          asView(inputColumns[1]),
-          op_,
-          type_,
-          stream,
-          mr);
-    }
-    // remaining values
-    for (size_t i = 2; i < inputColumns.size(); ++i) {
-      if (literals_[i]) {
+    for (size_t i = 1; i < order_.size(); ++i) {
+      auto nextIdx = order_[i];
+      cudf::column_view lhs =
+          result ? result->view() : asView(inputColumns[order_[0]]);
+
+      if (literals_[nextIdx]) {
         result = cudf::binary_operation(
-            result->view(), *literals_[i], op_, type_, stream, mr);
+            lhs, *literals_[nextIdx], op_, type_, stream, mr);
       } else {
         result = cudf::binary_operation(
-            result->view(), asView(inputColumns[i]), op_, type_, stream, mr);
+            lhs, asView(inputColumns[nextIdx]), op_, type_, stream, mr);
       }
     }
     return result;
@@ -883,6 +880,7 @@ class GreatestLeastFunction : public CudfFunction {
   const cudf::binary_operator op_;
   const cudf::data_type type_;
   std::vector<std::unique_ptr<cudf::scalar>> literals_;
+  std::vector<size_t> order_;
 };
 
 class SwitchFunction : public CudfFunction {
