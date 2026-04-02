@@ -110,6 +110,12 @@ bool HiveConfig::isParquetUseColumnNames(
       config_->get<bool>(kParquetUseColumnNames, false));
 }
 
+bool HiveConfig::allowInt32Narrowing(const config::ConfigBase* session) const {
+  return session->get<bool>(
+      kAllowInt32NarrowingSession,
+      config_->get<bool>(kAllowInt32Narrowing, false));
+}
+
 bool HiveConfig::isFileColumnNamesReadAsLowerCase(
     const config::ConfigBase* session) const {
   return session->get<bool>(

@@ -41,21 +41,31 @@ DECLARE_bool(enable_oom_injection);
 
 namespace facebook::velox::exec {
 
-class RowNumberFuzzerBase {
+struct PlanWithSplits {
+  core::PlanNodePtr plan;
+  std::vector<Split> splits;
+
+  explicit PlanWithSplits(
+      core::PlanNodePtr _plan,
+      const std::vector<Split>& _splits = {})
+      : plan(std::move(_plan)), splits(_splits) {}
+};
+
+class SpillFuzzerBase {
  public:
-  explicit RowNumberFuzzerBase(
+  explicit SpillFuzzerBase(
       size_t initialSeed,
       std::unique_ptr<test::ReferenceQueryRunner>);
 
   void run();
 
-  virtual ~RowNumberFuzzerBase() = default;
+  virtual ~SpillFuzzerBase() = default;
 
  protected:
   bool isTableScanSupported(const TypePtr& type);
 
-  // Runs one test iteration from query plans generations, executions and result
-  // verifications.
+  // Runs one test iteration from query plans generations, executions and
+  // result verifications.
   virtual void runSingleIteration() = 0;
 
   // Sets up the Dwrf reader/writer, serializers and Hive connector for the
@@ -91,27 +101,16 @@ class RowNumberFuzzerBase {
       const std::vector<RowVectorPtr>& input,
       const RowVectorPtr& result);
 
-  struct PlanWithSplits {
-    core::PlanNodePtr plan;
-    std::vector<Split> splits;
-
-    explicit PlanWithSplits(
-        core::PlanNodePtr _plan,
-        const std::vector<Split>& _splits = {})
-        : plan(std::move(_plan)), splits(_splits) {}
-  };
-
-  // Executes a plan with spilling and oom injection possibly.
+  // Executes a plan with optional spill and OOM injection.
   RowVectorPtr execute(
       const PlanWithSplits& plan,
-      const std::shared_ptr<memory::MemoryPool>& pool,
       bool injectSpill,
       bool injectOOM,
       const std::optional<std::string>& spillConfig = std::nullopt,
       int maxSpillLevel = -1);
 
-  // Tests a plan by executing it with and without spilling. OOM injection
-  // also might be done based on FLAG_enable_oom_injection.
+  // Tests a plan by executing it with and without spilling. OOM injection is
+  // controlled by FLAGS_enable_oom_injection.
   void testPlan(
       const PlanWithSplits& plan,
       int32_t testNumber,
@@ -123,15 +122,15 @@ class RowNumberFuzzerBase {
 
   std::shared_ptr<memory::MemoryPool> rootPool_{
       memory::memoryManager()->addRootPool(
-          "rowNumberFuzzer",
+          "spillFuzzer",
           memory::kMaxMemory,
           exec::MemoryReclaimer::create())};
   std::shared_ptr<memory::MemoryPool> pool_{rootPool_->addLeafChild(
-      "rowNumberFuzzerLeaf",
+      "spillFuzzerLeaf",
       true,
       exec::MemoryReclaimer::create())};
   std::shared_ptr<memory::MemoryPool> writerPool_{rootPool_->addAggregateChild(
-      "rowNumberFuzzerWriter",
+      "spillFuzzerWriter",
       exec::MemoryReclaimer::create())};
   VectorFuzzer vectorFuzzer_;
   std::unique_ptr<test::ReferenceQueryRunner> referenceQueryRunner_;
