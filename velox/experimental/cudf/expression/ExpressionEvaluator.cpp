@@ -817,12 +817,14 @@ static VectorPtr foldConstantPair(
     const VectorPtr& b,
     cudf::binary_operator op) {
   using T = typename TypeTraits<Kind>::NativeType;
-  if (a->isNullAt(0)) return b;
-  if (b->isNullAt(0)) return a;
+  if (a->isNullAt(0))
+    return b;
+  if (b->isNullAt(0))
+    return a;
   auto aVal = a->as<ConstantVector<T>>()->value();
   auto bVal = b->as<ConstantVector<T>>()->value();
-  bool bWins = (op == cudf::binary_operator::NULL_MAX) ? (bVal > aVal)
-                                                       : (bVal < aVal);
+  bool bWins =
+      (op == cudf::binary_operator::NULL_MAX) ? (bVal > aVal) : (bVal < aVal);
   return bWins ? b : a;
 }
 
@@ -883,8 +885,8 @@ class GreatestLeastFunction : public CudfFunction {
     if (foldedScalar_) {
       cudf::column_view lhs =
           result ? result->view() : asView(inputColumns[order_[0]]);
-      result = cudf::binary_operation(
-          lhs, *foldedScalar_, op_, type_, stream, mr);
+      result =
+          cudf::binary_operation(lhs, *foldedScalar_, op_, type_, stream, mr);
     }
     return result;
   }

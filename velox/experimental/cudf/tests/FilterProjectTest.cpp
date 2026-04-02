@@ -1319,13 +1319,12 @@ TEST_F(CudfFilterProjectTest, greatestLeastAllColumns) {
       makeFlatVector<double>({3.0, 3.0, -2.0}),
   });
   createDuckDbTable({data});
-  auto plan = PlanBuilder()
-                  .values({data})
-                  .project(
-                      {"greatest(c0, c1, c2) AS g", "least(c0, c1, c2) AS l"})
-                  .planNode();
-  assertQuery(
-      plan, "SELECT greatest(c0, c1, c2), least(c0, c1, c2) FROM tmp");
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .project({"greatest(c0, c1, c2) AS g", "least(c0, c1, c2) AS l"})
+          .planNode();
+  assertQuery(plan, "SELECT greatest(c0, c1, c2), least(c0, c1, c2) FROM tmp");
 }
 
 TEST_F(CudfFilterProjectTest, greatestLeastMixed) {
@@ -1337,8 +1336,7 @@ TEST_F(CudfFilterProjectTest, greatestLeastMixed) {
   auto plan =
       PlanBuilder()
           .values({data})
-          .project(
-              {"greatest(c0, 5.0, c1) AS g", "least(c0, 0.0, c1) AS l"})
+          .project({"greatest(c0, 5.0, c1) AS g", "least(c0, 0.0, c1) AS l"})
           .planNode();
   assertQuery(
       plan, "SELECT greatest(c0, 5.0, c1), least(c0, 0.0, c1) FROM tmp");
@@ -1366,13 +1364,12 @@ TEST_F(CudfFilterProjectTest, greatestLeastWithNulls) {
       makeNullableFlatVector<double>({3.0, std::nullopt, std::nullopt}),
   });
   createDuckDbTable({data});
-  auto plan = PlanBuilder()
-                  .values({data})
-                  .project(
-                      {"greatest(c0, c1, c2) AS g", "least(c0, c1, c2) AS l"})
-                  .planNode();
-  assertQuery(
-      plan, "SELECT greatest(c0, c1, c2), least(c0, c1, c2) FROM tmp");
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .project({"greatest(c0, c1, c2) AS g", "least(c0, c1, c2) AS l"})
+          .planNode();
+  assertQuery(plan, "SELECT greatest(c0, c1, c2), least(c0, c1, c2) FROM tmp");
 }
 
 TEST_F(CudfFilterProjectTest, betweenDouble) {

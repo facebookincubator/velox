@@ -1240,13 +1240,12 @@ TEST_F(CudfDecimalTest, decimalGreatestLeastMixed) {
           makeFlatVector<int64_t>({400, 200, -100}, DECIMAL(10, 2)),
       });
   std::vector<RowVectorPtr> vectors = {input};
-  auto plan =
-      exec::test::PlanBuilder()
-          .values(vectors)
-          .project(
-              {"greatest(a, CAST('5.00' AS DECIMAL(10, 2)), b) AS g",
-               "least(a, CAST('0.00' AS DECIMAL(10, 2)), b) AS l"})
-          .planNode();
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project(
+                      {"greatest(a, CAST('5.00' AS DECIMAL(10, 2)), b) AS g",
+                       "least(a, CAST('0.00' AS DECIMAL(10, 2)), b) AS l"})
+                  .planNode();
 
   unregisterCudf();
   auto cpuResult =
@@ -1294,8 +1293,7 @@ TEST_F(CudfDecimalTest, decimalGreatestLeastWithNulls) {
 
 TEST_F(CudfDecimalTest, decimalBetween) {
   auto input = makeRowVector(
-      {"a"},
-      {makeFlatVector<int64_t>({-100, 50, 150, 300}, DECIMAL(10, 2))});
+      {"a"}, {makeFlatVector<int64_t>({-100, 50, 150, 300}, DECIMAL(10, 2))});
   std::vector<RowVectorPtr> vectors = {input};
   auto plan = exec::test::PlanBuilder()
                   .values(vectors)
@@ -1321,8 +1319,7 @@ TEST_F(CudfDecimalTest, decimalCoalesceColumnWithLiteral) {
   auto plan =
       exec::test::PlanBuilder()
           .values(vectors)
-          .project(
-              {"coalesce(a, CAST('0.00' AS DECIMAL(10, 2))) AS result"})
+          .project({"coalesce(a, CAST('0.00' AS DECIMAL(10, 2))) AS result"})
           .planNode();
 
   unregisterCudf();
@@ -1340,14 +1337,12 @@ TEST_F(CudfDecimalTest, decimalCoalesceColumnWithLiteral) {
 // causing the cuDF compiler to reject the expression.
 TEST_F(CudfDecimalTest, DISABLED_decimalCoalesceLiteralFirst) {
   auto input = makeRowVector(
-      {"a"},
-      {makeFlatVector<int64_t>({100, 200, 300}, DECIMAL(10, 2))});
+      {"a"}, {makeFlatVector<int64_t>({100, 200, 300}, DECIMAL(10, 2))});
   std::vector<RowVectorPtr> vectors = {input};
   auto plan =
       exec::test::PlanBuilder()
           .values(vectors)
-          .project(
-              {"coalesce(CAST('5.00' AS DECIMAL(10, 2)), a) AS result"})
+          .project({"coalesce(CAST('5.00' AS DECIMAL(10, 2)), a) AS result"})
           .planNode();
 
   unregisterCudf();
