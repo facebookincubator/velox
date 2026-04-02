@@ -15,15 +15,15 @@
 add_library(
   velox_cudf_exec
   CudfAssignUniqueId.cpp
+  CudfBatchConcat.cpp
   CudfConversion.cpp
   CudfFilterProject.cpp
   CudfHashAggregation.cpp
   CudfHashJoin.cpp
   CudfLimit.cpp
-  CudfMarkDistinct.cpp
   CudfLocalPartition.cpp
+  CudfMarkDistinct.cpp
   CudfOrderBy.cpp
-  CudfBatchConcat.cpp
   CudfTopN.cpp
   DebugUtil.cpp
   GpuResources.cpp

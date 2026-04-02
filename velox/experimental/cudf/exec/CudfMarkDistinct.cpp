@@ -49,27 +49,12 @@ CudfMarkDistinct::CudfMarkDistinct(
     auto idx = inputType->getChildIdx(key->name());
     distinctKeyIndices_.push_back(static_cast<cudf::size_type>(idx));
   }
-
-  if (CudfConfig::getInstance().debugEnabled) {
-    VLOG(2) << "CudfMarkDistinct constructor, keys="
-            << distinctKeyIndices_.size();
-  }
 }
 
 void CudfMarkDistinct::addInput(RowVectorPtr input) {
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
   VELOX_CHECK_NULL(input_);
   input_ = std::move(input);
-}
-
-void CudfMarkDistinct::noMoreInput() {
-  exec::Operator::noMoreInput();
-  // Release accumulated state to free GPU memory early. This is safe because
-  // the Velox driver contract guarantees getOutput() is called before
-  // noMoreInput() for any pending input_.
-  seenKeys_.reset();
-  seenFilter_.reset();
-  numSeenKeys_ = 0;
 }
 
 RowVectorPtr CudfMarkDistinct::getOutput() {
@@ -86,9 +71,9 @@ RowVectorPtr CudfMarkDistinct::getOutput() {
   auto outputMr = get_output_mr();
   auto tempMr = get_temp_mr();
   auto tableView = cudfInput->getTableView();
-  auto N = static_cast<cudf::size_type>(tableView.num_rows());
+  auto numRows = static_cast<cudf::size_type>(tableView.num_rows());
 
-  if (N == 0) {
+  if (numRows == 0) {
     input_ = nullptr;
     return nullptr;
   }
@@ -99,7 +84,7 @@ RowVectorPtr CudfMarkDistinct::getOutput() {
   // Create marker column (all false initially).
   cudf::numeric_scalar<bool> falseScalar(false, true, stream, tempMr);
   auto markerCol =
-      cudf::make_column_from_scalar(falseScalar, N, stream, outputMr);
+      cudf::make_column_from_scalar(falseScalar, numRows, stream, outputMr);
 
   // Find first occurrences within this batch (returns a column of indices).
   auto batchDistinctIdxCol = cudf::distinct_indices(

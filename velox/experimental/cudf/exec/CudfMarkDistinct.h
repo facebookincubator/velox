@@ -61,8 +61,6 @@ class CudfMarkDistinct : public exec::Operator, public NvtxHelper {
 
   void addInput(RowVectorPtr input) override;
 
-  void noMoreInput() override;
-
   RowVectorPtr getOutput() override;
 
   exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
