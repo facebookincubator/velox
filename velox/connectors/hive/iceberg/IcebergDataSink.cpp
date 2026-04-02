@@ -136,9 +136,10 @@ IcebergInsertTableHandle::IcebergInsertTableHandle(
           nullptr,
           false,
           std::make_shared<const HiveInsertFileNameGenerator>()),
+      icebergInputColumns_(std::move(inputColumns)),
       partitionSpec_(partitionSpec) {
   VELOX_USER_CHECK(
-      !inputColumns_.empty(),
+      !icebergInputColumns_.empty(),
       "Input columns cannot be empty for Iceberg tables.");
   VELOX_USER_CHECK_NOT_NULL(
       locationHandle_, "Location handle is required for Iceberg tables.");
@@ -162,7 +163,7 @@ namespace {
 // matching partition key column in the input. Returns an empty vector if
 // partitionSpec is nullptr.
 std::vector<column_index_t> createPartitionChannels(
-    const std::vector<HiveColumnHandlePtr>& inputColumns,
+    const std::vector<IcebergColumnHandlePtr>& inputColumns,
     const IcebergPartitionSpecPtr& partitionSpec) {
   std::vector<column_index_t> channels;
   if (!partitionSpec) {
@@ -193,7 +194,7 @@ std::vector<column_index_t> createPartitionChannels(
 std::vector<column_index_t> createDataChannels(
     const IcebergInsertTableHandlePtr& insertTableHandle) {
   std::vector<column_index_t> dataChannels(
-      insertTableHandle->inputColumns().size());
+      insertTableHandle->icebergInputColumns().size());
   std::iota(dataChannels.begin(), dataChannels.end(), 0);
   return dataChannels;
 }
@@ -255,7 +256,7 @@ IcebergDataSink::IcebergDataSink(
           commitStrategy,
           hiveConfig,
           createPartitionChannels(
-              insertTableHandle->inputColumns(),
+              insertTableHandle->icebergInputColumns(),
               insertTableHandle->partitionSpec()),
           createDataChannels(insertTableHandle),
           createPartitionRowType(insertTableHandle->partitionSpec()),
@@ -316,14 +317,8 @@ IcebergDataSink::IcebergDataSink(
   commitPartitionValue_.resize(maxOpenWriters_);
 
 #ifdef VELOX_ENABLE_PARQUET
-  std::vector<IcebergColumnHandlePtr> columnHandles;
-  columnHandles.reserve(insertTableHandle->inputColumns().size());
-  for (auto& column : insertTableHandle->inputColumns()) {
-    columnHandles.emplace_back(
-        checkedPointerCast<const IcebergColumnHandle>(column));
-  }
-  parquetStatsCollector_ =
-      std::make_shared<IcebergParquetStatsCollector>(std::move(columnHandles));
+  parquetStatsCollector_ = std::make_shared<IcebergParquetStatsCollector>(
+      insertTableHandle->icebergInputColumns());
 #endif
 }
 

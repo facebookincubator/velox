@@ -29,7 +29,7 @@ using namespace facebook::velox::dwio::common;
 namespace facebook::velox::connector::hive::iceberg {
 
 IcebergSplitReader::IcebergSplitReader(
-    const std::shared_ptr<const hive::HiveConnectorSplit>& hiveSplit,
+    const std::shared_ptr<const IcebergConnectorSplit>& icebergSplit,
     const HiveTableHandlePtr& hiveTableHandle,
     const HiveColumnHandleMap* partitionKeys,
     const ConnectorQueryCtx* connectorQueryCtx,
@@ -41,7 +41,7 @@ IcebergSplitReader::IcebergSplitReader(
     folly::Executor* executor,
     const std::shared_ptr<common::ScanSpec>& scanSpec)
     : SplitReader(
-          hiveSplit,
+          icebergSplit,
           hiveTableHandle,
           partitionKeys,
           connectorQueryCtx,
@@ -52,6 +52,7 @@ IcebergSplitReader::IcebergSplitReader(
           fileHandleFactory,
           executor,
           scanSpec),
+      icebergSplit_(icebergSplit),
       baseReadOffset_(0),
       splitOffset_(0),
       deleteBitmap_(nullptr) {}
@@ -73,12 +74,11 @@ void IcebergSplitReader::prepareSplit(
 
   createRowReader(std::move(metadataFilter), std::move(rowType), std::nullopt);
 
-  auto icebergSplit = checkedPointerCast<const HiveIcebergSplit>(hiveSplit_);
   baseReadOffset_ = 0;
   splitOffset_ = baseRowReader_->nextRowNumber();
   positionalDeleteFileReaders_.clear();
 
-  const auto& deleteFiles = icebergSplit->deleteFiles;
+  const auto& deleteFiles = icebergSplit_->deleteFiles;
   for (const auto& deleteFile : deleteFiles) {
     if (deleteFile.content == FileContent::kPositionalDeletes) {
       if (deleteFile.recordCount > 0) {
@@ -104,7 +104,7 @@ void IcebergSplitReader::prepareSplit(
         positionalDeleteFileReaders_.push_back(
             std::make_unique<PositionalDeleteFileReader>(
                 deleteFile,
-                hiveSplit_->filePath,
+                icebergSplit_->filePath,
                 fileHandleFactory_,
                 connectorQueryCtx_,
                 ioExecutor_,
@@ -113,7 +113,7 @@ void IcebergSplitReader::prepareSplit(
                 ioStats_,
                 runtimeStats,
                 splitOffset_,
-                hiveSplit_->connectorId));
+                icebergSplit_->connectorId));
       }
     } else {
       VELOX_NYI();
@@ -171,8 +171,8 @@ std::vector<TypePtr> IcebergSplitReader::adaptColumns(
   // Iceberg table stores all column's data in data file.
   for (const auto& childSpec : childrenSpecs) {
     const std::string& fieldName = childSpec->fieldName();
-    if (auto iter = hiveSplit_->infoColumns.find(fieldName);
-        iter != hiveSplit_->infoColumns.end()) {
+    if (auto iter = icebergSplit_->infoColumns.find(fieldName);
+        iter != icebergSplit_->infoColumns.end()) {
       auto infoColumnType = readerOutputType_->findChild(fieldName);
       auto constant = newConstantFromString(
           infoColumnType,
@@ -197,8 +197,8 @@ std::vector<TypePtr> IcebergSplitReader::adaptColumns(
         // files, partition column values are stored in partition metadata
         // rather than in the data file itself, following Hive's partitioning
         // convention.
-        if (auto it = hiveSplit_->partitionKeys.find(fieldName);
-            it != hiveSplit_->partitionKeys.end()) {
+        if (auto it = icebergSplit_->partitionKeys.find(fieldName);
+            it != icebergSplit_->partitionKeys.end()) {
           setPartitionValue(childSpec.get(), fieldName, it->second);
         } else {
           childSpec->setConstantValue(

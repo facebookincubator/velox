@@ -71,7 +71,17 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
     return partitionSpec_;
   }
 
+  /// Returns the Iceberg input columns for this insert.
+  const std::vector<IcebergColumnHandlePtr>& icebergInputColumns() const {
+    return icebergInputColumns_;
+  }
+
  private:
+  // Stored separately from the parent's inputColumns_ (which holds the same
+  // columns as HiveColumnHandlePtr) because the parent HiveDataSink methods
+  // operate on HiveColumnHandle while Iceberg-specific code needs the
+  // IcebergColumnHandle type without downcasting.
+  const std::vector<IcebergColumnHandlePtr> icebergInputColumns_;
   const IcebergPartitionSpecPtr partitionSpec_;
 };
 
