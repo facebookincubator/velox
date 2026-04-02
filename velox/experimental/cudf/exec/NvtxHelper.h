@@ -28,10 +28,12 @@ class NvtxHelper {
  public:
   NvtxHelper();
   NvtxHelper(
-      nvtx3::color color,
+      std::optional<nvtx3::color> color = std::nullopt,
       std::optional<int64_t> payload = std::nullopt,
       std::optional<std::string> extraInfo = std::nullopt)
-      : color_(color), payload_(payload), extraInfo_(extraInfo) {}
+      : color_(color.value_or(nvtx3::rgb{160, 82, 45} /* Sienna */)),
+        payload_(payload),
+        extraInfo_(extraInfo) {}
 
   nvtx3::color color_{nvtx3::rgb{125, 125, 125}}; // Gray
   std::optional<int64_t> payload_{};
