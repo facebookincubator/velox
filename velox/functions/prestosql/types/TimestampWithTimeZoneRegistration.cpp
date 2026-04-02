@@ -20,6 +20,7 @@
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/functions/prestosql/types/fuzzer_utils/TimestampWithTimeZoneInputGenerator.h"
+#include "velox/type/CastRegistry.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox {
@@ -386,7 +387,6 @@ class TimestampWithTimeZoneTypeFactory : public CustomTypeFactory {
     return TIMESTAMP_WITH_TIME_ZONE();
   }
 
-  // Type casting from and to TimestampWithTimezone is not supported yet.
   exec::CastOperatorPtr getCastOperator() const override {
     return TimestampWithTimeZoneCastOperator::get();
   }
@@ -403,5 +403,43 @@ void registerTimestampWithTimeZoneType() {
   registerCustomType(
       "timestamp with time zone",
       std::make_unique<const TimestampWithTimeZoneTypeFactory>());
+  // Lower cost = preferred during overload resolution. TIMESTAMP is closer
+  // to TIMESTAMP WITH TIME ZONE than DATE.
+  registerCastRules({
+      {.fromType = "TIMESTAMP",
+       .toType = "TIMESTAMP WITH TIME ZONE",
+       .implicitAllowed = true,
+       .cost = 1,
+       .validator = {}},
+      {.fromType = "VARCHAR",
+       .toType = "TIMESTAMP WITH TIME ZONE",
+       .implicitAllowed = false,
+       .validator = {}},
+      {.fromType = "DATE",
+       .toType = "TIMESTAMP WITH TIME ZONE",
+       .implicitAllowed = true,
+       .cost = 2,
+       .validator = {}},
+      {.fromType = "TIME",
+       .toType = "TIMESTAMP WITH TIME ZONE",
+       .implicitAllowed = false,
+       .validator = {}},
+      {.fromType = "TIMESTAMP WITH TIME ZONE",
+       .toType = "TIMESTAMP",
+       .implicitAllowed = false,
+       .validator = {}},
+      {.fromType = "TIMESTAMP WITH TIME ZONE",
+       .toType = "VARCHAR",
+       .implicitAllowed = false,
+       .validator = {}},
+      {.fromType = "TIMESTAMP WITH TIME ZONE",
+       .toType = "DATE",
+       .implicitAllowed = false,
+       .validator = {}},
+      {.fromType = "TIMESTAMP WITH TIME ZONE",
+       .toType = "TIME",
+       .implicitAllowed = false,
+       .validator = {}},
+  });
 }
 } // namespace facebook::velox

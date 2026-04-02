@@ -85,6 +85,12 @@ class HiveConfig {
   static constexpr const char* kParquetUseColumnNamesSession =
       "parquet_use_column_names";
 
+  /// Allows reading INT32 physical type columns as a narrower integer type.
+  static constexpr const char* kAllowInt32Narrowing =
+      "hive.parquet.allow-int32-narrowing";
+  static constexpr const char* kAllowInt32NarrowingSession =
+      "allow_int32_narrowing";
+
   /// Reads the source file column name as lower case.
   static constexpr const char* kFileColumnNamesReadAsLowerCase =
       "file-column-names-read-as-lower-case";
@@ -284,6 +290,8 @@ class HiveConfig {
   bool isOrcUseColumnNames(const config::ConfigBase* session) const;
 
   bool isParquetUseColumnNames(const config::ConfigBase* session) const;
+
+  bool allowInt32Narrowing(const config::ConfigBase* session) const;
 
   bool isFileColumnNamesReadAsLowerCase(
       const config::ConfigBase* session) const;

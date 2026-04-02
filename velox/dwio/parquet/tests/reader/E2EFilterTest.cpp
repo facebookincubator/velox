@@ -757,6 +757,104 @@ TEST_F(E2EFilterTest, combineRowGroup) {
   EXPECT_EQ(parquetReader.numberOfRows(), 5);
 }
 
+// Reproduces the real-world scenario from the bug report. Parquet-mr 1.8.1
+// computed binary column min/max using signed byte ordering, which differs from
+// the unsigned lexicographic (memcmp) ordering Velox uses.
+//
+// With signed byte ordering:  三星应用商店 < 360手机助手 < vivo预装
+// With memcmp byte ordering:  360手机助手  < vivo预装    < 三星应用商店
+//
+// A row group containing {"三星应用商店", "vivo预装"} has memcmp-based stats
+// min="vivo预装", max="三星应用商店". A filter for "360手机助手" falls below
+// the memcmp min, so the row group would be incorrectly skipped — even though
+// it should match under the signed ordering that parquet-mr 1.8.1 used to write
+// the stats.
+TEST_F(E2EFilterTest, parquetMRVersionStringStatsRowGroupFiltering) {
+  const std::string kSanXing = "三星应用商店";
+  const std::string kVivo = "vivo预装";
+  const std::string k360 = "360手机助手";
+
+  auto rowType = ROW({"s"}, {VARCHAR()});
+
+  auto writeAndGetStats = [&](const std::string& createdBy,
+                              RuntimeStatistics& stats) {
+    options_.memoryPool = E2EFilterTestBase::rootPool_.get();
+    options_.createdBy = createdBy;
+    // Flush after every 5 rows to create separate row groups.
+    options_.flushPolicyFactory = []() {
+      return std::make_unique<LambdaFlushPolicy>(
+          /*rowsInRowGroup=*/5,
+          /*bytesInRowGroup=*/1'024 * 1'024,
+          []() { return false; });
+    };
+
+    auto sink = std::make_unique<MemorySink>(
+        200 * 1024 * 1024, FileSink::Options{.pool = leafPool_.get()});
+    auto* sinkPtr = sink.get();
+    auto writer =
+        std::make_unique<parquet::Writer>(std::move(sink), options_, rowType);
+    // Row group 1: contains the value we will filter for ("360手机助手").
+    writer->write(makeRowVector(
+        {"s"},
+        {makeFlatVector<std::string>(
+            {k360, kSanXing, kVivo, k360, kSanXing})}));
+    // Row group 2: does not contain "360手机助手".
+    writer->write(makeRowVector(
+        {"s"},
+        {makeFlatVector<std::string>(
+            {kSanXing, kVivo, kSanXing, kVivo, kSanXing})}));
+    writer->close();
+
+    dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+    auto input = std::make_unique<BufferedInput>(
+        std::make_shared<InMemoryReadFile>(
+            std::string(sinkPtr->data(), sinkPtr->size())),
+        readerOptions.memoryPool());
+    auto reader = makeReader(readerOptions, std::move(input));
+    auto& parquetReader = dynamic_cast<ParquetReader&>(*reader);
+    EXPECT_EQ(parquetReader.fileMetaData().numRowGroups(), 2);
+
+    auto scanSpec = std::make_shared<ScanSpec>("");
+    scanSpec->addAllChildFields(*rowType);
+    // Equality filter: s = "360手机助手".
+    scanSpec->getOrCreateChild(Subfield("s"))
+        ->setFilter(
+            std::make_unique<BytesRange>(
+                k360, false, false, k360, false, false, false));
+
+    RowReaderOptions rowReaderOpts;
+    rowReaderOpts.select(
+        std::make_shared<ColumnSelector>(rowType, rowType->names()));
+    rowReaderOpts.setScanSpec(scanSpec);
+    auto rowReader = reader->createRowReader(rowReaderOpts);
+
+    VectorPtr result = BaseVector::create(rowType, 1, leafPool_.get());
+    uint64_t totalRows{0};
+    while (rowReader->next(1'000, result)) {
+      totalRows += result->size();
+    }
+    EXPECT_EQ(totalRows, 2);
+
+    rowReader->updateRuntimeStats(stats);
+  };
+
+  // parquet-mr 1.8.2: stats are trusted. Under memcmp ordering, row group 1
+  // has min="360手机助手" max="三星应用商店" which contains "360手机助手", so
+  // it is read. Row group 2 has min="vivo预装" max="三星应用商店" which does
+  // not contain "360手机助手" (it falls below memcmp min), so it is skipped.
+  RuntimeStatistics stats182;
+  writeAndGetStats("parquet-mr version 1.8.2", stats182);
+  EXPECT_EQ(stats182.skippedStrides, 1);
+  EXPECT_EQ(stats182.processedStrides, 1);
+
+  // parquet-mr 1.8.1: stats are untrusted (signed byte ordering bug), so no
+  // row groups are skipped. Both row groups are scanned.
+  RuntimeStatistics stats181;
+  writeAndGetStats("parquet-mr version 1.8.1", stats181);
+  EXPECT_EQ(stats181.skippedStrides, 0);
+  EXPECT_EQ(stats181.processedStrides, 2);
+}
+
 TEST_F(E2EFilterTest, writeDecimalAsInteger) {
   auto rowVector = makeRowVector(
       {makeFlatVector<int64_t>({1, 2}, DECIMAL(8, 2)),
