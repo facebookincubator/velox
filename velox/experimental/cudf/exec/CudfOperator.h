@@ -87,25 +87,25 @@ class CudfOperatorBase : public exec::Operator, public NvtxHelper {
         className_(operatorName),
         nvtxMethods_(nvtxMethods) {}
 
-  void addInput(RowVectorPtr input) override {
+  void addInput(RowVectorPtr input) final {
     VELOX_NVTX_OPERATOR_FUNC_RANGE_IF(
         nvtxMethods_ & NvtxMethodFlag::kAddInput, className_);
     doAddInput(std::move(input));
   }
 
-  RowVectorPtr getOutput() override {
+  RowVectorPtr getOutput() final {
     VELOX_NVTX_OPERATOR_FUNC_RANGE_IF(
         nvtxMethods_ & NvtxMethodFlag::kGetOutput, className_);
     return doGetOutput();
   }
 
-  void noMoreInput() override {
+  void noMoreInput() final {
     VELOX_NVTX_OPERATOR_FUNC_RANGE_IF(
         nvtxMethods_ & NvtxMethodFlag::kNoMoreInput, className_);
     doNoMoreInput();
   }
 
-  void close() override {
+  void close() final {
     VELOX_NVTX_OPERATOR_FUNC_RANGE_IF(
         nvtxMethods_ & NvtxMethodFlag::kClose, className_);
     doClose();
