@@ -788,6 +788,20 @@ class ReaderOptions : public io::ReaderOptions {
     allowEmptyFile_ = value;
   }
 
+  /// Allows reading INT32 physical type columns as a narrower integer type
+  /// (e.g., INT32 -> TINYINT/SMALLINT). Some Parquet writers store INT_8 and
+  /// INT_16 values as plain INT32 without a converted type annotation. When
+  /// enabled, the value is silently truncated on overflow. When disabled
+  /// (default), only annotated type-matching reads are allowed (e.g.,
+  /// INT_8 -> TINYINT, INT_16 -> SMALLINT, INT_32 -> INTEGER).
+  bool allowInt32Narrowing() const {
+    return allowInt32Narrowing_;
+  }
+
+  void setAllowInt32Narrowing(bool value) {
+    allowInt32Narrowing_ = value;
+  }
+
  private:
   uint64_t tailLocation_;
   FileFormat fileFormat_;
@@ -810,6 +824,7 @@ class ReaderOptions : public io::ReaderOptions {
   bool loadClusterIndex_{true};
   bool loadChunkIndex_{true};
   bool allowEmptyFile_{false};
+  bool allowInt32Narrowing_{false};
 };
 
 struct WriterOptions {

@@ -246,6 +246,38 @@ getMetadata(Iterator begin, Iterator end, const std::string& namePrefix) {
   return metadata;
 }
 
+// Recursively generate metadata using exact names from Velox RowType.
+cudf::column_metadata getMetadataWithName(
+    const facebook::velox::TypePtr& type,
+    const std::string& name) {
+  cudf::column_metadata meta(name);
+  if (type->kind() == facebook::velox::TypeKind::ROW) {
+    auto rowType =
+        std::dynamic_pointer_cast<const facebook::velox::RowType>(type);
+    for (size_t i = 0; i < rowType->size(); ++i) {
+      meta.children_meta.push_back(
+          getMetadataWithName(rowType->childAt(i), rowType->nameOf(i)));
+    }
+  } else if (type->kind() == facebook::velox::TypeKind::ARRAY) {
+    // cudf::lists_column_view::child_column_index is 1, the first metadata is
+    // offsets
+    meta.children_meta.emplace_back(cudf::column_metadata(name + "_offsets"));
+    meta.children_meta.push_back(
+        getMetadataWithName(type->childAt(0), "element"));
+  }
+  return meta;
+}
+
+std::vector<cudf::column_metadata> getMetadataWithName(
+    const RowTypePtr& rowType) {
+  std::vector<cudf::column_metadata> metadata;
+  for (size_t i = 0; i < rowType->size(); ++i) {
+    metadata.push_back(
+        getMetadataWithName(rowType->childAt(i), rowType->nameOf(i)));
+  }
+  return metadata;
+}
+
 } // namespace
 
 facebook::velox::RowVectorPtr toVeloxColumn(
@@ -269,18 +301,23 @@ facebook::velox::RowVectorPtr toVeloxColumn(
   return toVeloxColumn(table, pool, metadata, &outputType, stream, mr);
 }
 
+// New overload: Accepts a Velox TypePtr for recursive metadata construction.
 RowVectorPtr toVeloxColumn(
     const cudf::table_view& table,
     memory::MemoryPool* pool,
-    const std::vector<std::string>& columnNames,
+    const TypePtr& type,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
-  std::vector<cudf::column_metadata> metadata;
-  for (auto name : columnNames) {
-    metadata.emplace_back(cudf::column_metadata(name));
-  }
-  return toVeloxColumn(table, pool, metadata, nullptr, stream, mr);
+  // Recursively generate metadata using Velox type names for all columns.
+  // This assumes 'type' is a RowType and its children match the cudf table
+  // columns.
+  auto rowType =
+      std::dynamic_pointer_cast<const facebook::velox::RowType>(type);
+  VELOX_CHECK_NOT_NULL(rowType);
+  auto metadata = getMetadataWithName(rowType);
+  return toVeloxColumn(table, pool, metadata, &rowType, stream, mr);
 }
 
 } // namespace with_arrow
+
 } // namespace facebook::velox::cudf_velox

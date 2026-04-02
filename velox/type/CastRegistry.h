@@ -47,15 +47,16 @@ class CastRulesRegistry {
   /// Unregister all rules involving the given type name.
   void unregisterCastRules(const std::string& typeName);
 
-  /// Check if cast is supported (explicit or implicit). Only for
-  /// non-parametric (leaf) types — callers handle container types by recursing
-  /// into children themselves.
+  /// Check if cast is supported (explicit or implicit). Handles container
+  /// types (ARRAY, MAP, ROW) by recursively checking children.
   bool canCast(const TypePtr& fromType, const TypePtr& toType) const;
 
-  /// Check if implicit coercion is allowed. Only for non-parametric (leaf)
-  /// types — callers handle container types by recursing into children
-  /// themselves.
-  bool canCoerce(const TypePtr& fromType, const TypePtr& toType) const;
+  /// Check if implicit coercion is allowed. Returns the coercion cost if
+  /// allowed, or std::nullopt if not. For container types (ARRAY, MAP, ROW),
+  /// returns the sum of children coercion costs.
+  std::optional<int32_t> canCoerce(
+      const TypePtr& fromType,
+      const TypePtr& toType) const;
 
   /// Clear all registered rules. Used for testing.
   void clear();
@@ -63,7 +64,10 @@ class CastRulesRegistry {
  private:
   CastRulesRegistry() = default;
 
-  bool canCastImpl(
+  // Unified implementation. When requireImplicit is true, returns the cost
+  // of implicit coercion. When false, returns 0 for any supported cast.
+  // Returns nullopt if the cast/coercion is not supported.
+  std::optional<int32_t> castCostImpl(
       const TypePtr& fromType,
       const TypePtr& toType,
       bool requireImplicit) const;

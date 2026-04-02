@@ -335,11 +335,7 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
       ? std::make_shared<CudfVector>(
             pool_, outputType_, nRows, std::move(cudfTable), stream_)
       : with_arrow::toVeloxColumn(
-            cudfTable->view(),
-            pool_,
-            outputType_->names(),
-            stream_,
-            get_temp_mr());
+            cudfTable->view(), pool_, outputType_, stream_, get_temp_mr());
   stream_.synchronize();
 
   // Check if conversion yielded a nullptr

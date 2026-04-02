@@ -32,12 +32,12 @@ std::optional<Timestamp> makeTimeStampFromDecodedArgs(
     DecodedVector* microsVector) {
   // Check hour.
   auto hour = hourVector->valueAt<int32_t>(row);
-  if (hour < 0 || hour > 24) {
+  if (hour < 0 || hour >= 24) {
     return std::nullopt;
   }
   // Check minute.
   auto minute = minuteVector->valueAt<int32_t>(row);
-  if (minute < 0 || minute > 60) {
+  if (minute < 0 || minute >= 60) {
     return std::nullopt;
   }
   // Check microseconds.

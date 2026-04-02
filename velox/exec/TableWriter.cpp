@@ -392,8 +392,11 @@ uint64_t TableWriter::ConnectorReclaimer::reclaim(
     // TODO: reduce the log frequency if it is too verbose.
     ++stats.numNonReclaimableAttempts;
     LOG(WARNING) << "Can't reclaim from a closed writer connector pool: "
-                 << pool->name()
-                 << ", memory usage: " << succinctBytes(pool->reservedBytes());
+                 << pool->name() << ", root pool: " << pool->root()->name()
+                 << ", used: " << succinctBytes(pool->usedBytes())
+                 << ", reservation: " << succinctBytes(pool->reservedBytes())
+                 << ", root pool reservation: "
+                 << succinctBytes(pool->root()->reservedBytes());
     return 0;
   }
 
@@ -402,8 +405,11 @@ uint64_t TableWriter::ConnectorReclaimer::reclaim(
     ++stats.numNonReclaimableAttempts;
     LOG(WARNING)
         << "Can't reclaim from a writer connector pool which hasn't initialized yet: "
-        << pool->name()
-        << ", memory usage: " << succinctBytes(pool->reservedBytes());
+        << pool->name() << ", root pool: " << pool->root()->name()
+        << ", used: " << succinctBytes(pool->usedBytes())
+        << ", reservation: " << succinctBytes(pool->reservedBytes())
+        << ", root pool reservation: "
+        << succinctBytes(pool->root()->reservedBytes());
     return 0;
   }
   RuntimeStatWriterScopeGuard opStatsGuard(op_);

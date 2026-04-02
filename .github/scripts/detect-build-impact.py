@@ -141,25 +141,11 @@ def generate_comment(
     lines = []
     lines.append("## Build Impact Analysis\n")
 
-    # Directly changed targets table.
-    lines.append("### Directly Changed Targets")
-    lines.append("| Target | Changed Files |")
-    lines.append("|--------|--------------|")
-
     # Group changed files by target.
     target_files: dict[str, list[str]] = defaultdict(list)
     for file_path, info in changed_targets.items():
         for target in info["targets"]:
             target_files[target].append(os.path.basename(file_path))
-
-    for target in sorted(target_files.keys()):
-        files_list = sorted(set(target_files[target]))
-        files = ", ".join(files_list[:5])
-        if len(files_list) > 5:
-            files += f", ... (+{len(files_list) - 5} more)"
-        lines.append(f"| `{target}` | {files} |")
-
-    lines.append("")
 
     # Selective build targets.
     selective_sorted = sorted(selective_targets)
@@ -189,13 +175,28 @@ def generate_comment(
             lines.append(f"> - ... and {len(unresolved_files) - 10} more")
         lines.append("")
 
-    # Collapsible full list.
+    # Collapsible affected targets breakdown.
+    transitive_only = all_affected - set(target_files.keys())
     lines.append("<details>")
-    lines.append(f"<summary>All affected targets ({total_affected})</summary>")
+    lines.append(f"<summary>Affected targets ({total_affected})</summary>")
     lines.append("")
-    for target in sorted(all_affected):
-        lines.append(f"- `{target}`")
+    lines.append(f"#### Directly changed ({len(target_files)})")
     lines.append("")
+    lines.append("| Target | Changed Files |")
+    lines.append("|--------|--------------|")
+    for target in sorted(target_files.keys()):
+        files_list = sorted(set(target_files[target]))
+        files = ", ".join(files_list[:5])
+        if len(files_list) > 5:
+            files += f", ... (+{len(files_list) - 5} more)"
+        lines.append(f"| `{target}` | {files} |")
+    lines.append("")
+    if transitive_only:
+        lines.append(f"#### Transitively affected ({len(transitive_only)})")
+        lines.append("")
+        for target in sorted(transitive_only):
+            lines.append(f"- `{target}`")
+        lines.append("")
     lines.append("</details>")
     lines.append("")
 
