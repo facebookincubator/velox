@@ -19,38 +19,29 @@
 
 namespace facebook::velox::connector {
 
+ScopedRegistry<std::string, Connector>& connectors() {
+  static ScopedRegistry<std::string, Connector> instance;
+  return instance;
+}
+
 bool registerConnector(std::shared_ptr<Connector> connector) {
-  return connectors().withWLock([&](auto& registry) {
-    bool ok = registry.insert({connector->connectorId(), connector}).second;
-    VELOX_CHECK(
-        ok,
-        "Connector with ID is already registered: {}",
-        connector->connectorId());
-    return true;
-  });
+  connectors().insert(connector->connectorId(), connector);
+  return true;
 }
 
 bool unregisterConnector(const std::string& connectorId) {
-  return connectors().withWLock(
-      [&](auto& registry) { return registry.erase(connectorId) == 1; });
+  return connectors().erase(connectorId);
 }
 
 std::shared_ptr<Connector> getConnector(const std::string& connectorId) {
-  return connectors().withRLock(
-      [&](const auto& registry) -> std::shared_ptr<Connector> {
-        auto it = registry.find(connectorId);
-        VELOX_CHECK(
-            it != registry.end(),
-            "Connector with ID is not registered: {}",
-            connectorId);
-        return it->second;
-      });
+  auto connector = connectors().find(connectorId);
+  VELOX_CHECK_NOT_NULL(
+      connector, "Connector with ID is not registered: {}", connectorId);
+  return connector;
 }
 
 bool hasConnector(const std::string& connectorId) {
-  return connectors().withRLock([&](const auto& registry) {
-    return registry.find(connectorId) != registry.end();
-  });
+  return connectors().find(connectorId) != nullptr;
 }
 
 bool DataSink::Stats::empty() const {

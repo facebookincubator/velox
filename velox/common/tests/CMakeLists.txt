@@ -11,18 +11,14 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_executable(velox_connector_test ConnectorTest.cpp)
-add_test(velox_connector_test velox_connector_test)
+add_executable(velox_scoped_registry_test ScopedRegistryTest.cpp)
+add_test(velox_scoped_registry_test velox_scoped_registry_test)
 
 target_link_libraries(
-  velox_connector_test
-  velox_connector
-  velox_connector_registry
-  velox_core
-  velox_memory
+  velox_scoped_registry_test
+  velox_common_base
   GTest::gmock
   GTest::gtest
   GTest::gtest_main
-  glog::glog
   Folly::folly
 )
