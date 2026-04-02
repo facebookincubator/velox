@@ -22,22 +22,30 @@ namespace facebook::velox::connector {
 // static
 std::shared_ptr<Connector> ConnectorRegistry::tryGet(
     const std::string& connectorId) {
-  auto it = connectors().find(connectorId);
-  if (it != connectors().end()) {
-    return it->second;
-  }
-  return nullptr;
+  return connectors().withRLock(
+      [&](const auto& registry) -> std::shared_ptr<Connector> {
+        auto it = registry.find(connectorId);
+        if (it != registry.end()) {
+          return it->second;
+        }
+        return nullptr;
+      });
 }
 
 // static
 void ConnectorRegistry::unregisterAll() {
-  connectors().clear();
+  folly::F14FastMap<std::string, std::shared_ptr<Connector>> entries;
+  connectors().withWLock([&](auto& registry) { entries.swap(registry); });
 }
 
 // static
-const std::unordered_map<std::string, std::shared_ptr<Connector>>&
-ConnectorRegistry::all() {
-  return connectors();
+void ConnectorRegistry::forEach(
+    std::function<void(const std::shared_ptr<Connector>&)> func) {
+  connectors().withRLock([&](const auto& registry) {
+    for (const auto& [_, connector] : registry) {
+      func(connector);
+    }
+  });
 }
 
 } // namespace facebook::velox::connector

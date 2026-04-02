@@ -18,7 +18,9 @@
 
 #include <memory>
 #include <string>
-#include <unordered_map>
+
+#include "folly/Synchronized.h"
+#include "folly/container/F14Map.h"
 
 namespace facebook::velox::connector {
 
@@ -26,9 +28,11 @@ class Connector;
 
 // Internal helper shared by Connector.cpp and ConnectorRegistry.cpp.
 // Not part of the public API. Do not include from outside velox/connectors/.
-inline std::unordered_map<std::string, std::shared_ptr<Connector>>&
-connectors() {
-  static std::unordered_map<std::string, std::shared_ptr<Connector>> instance;
+using ConnectorMap = folly::Synchronized<
+    folly::F14FastMap<std::string, std::shared_ptr<Connector>>>;
+
+inline ConnectorMap& connectors() {
+  static ConnectorMap instance;
   return instance;
 }
 
