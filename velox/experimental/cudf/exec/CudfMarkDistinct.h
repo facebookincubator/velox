@@ -37,8 +37,6 @@ namespace facebook::velox::cudf_velox {
 /// first time the key combination has been seen.
 ///
 /// Unlike the CPU implementation, this operator does not support spilling.
-/// For high-cardinality workloads, disable GPU acceleration with
-/// cudf.enable_mark_distinct=false to use CPU with spilling.
 class CudfMarkDistinct : public exec::Operator, public NvtxHelper {
  public:
   CudfMarkDistinct(

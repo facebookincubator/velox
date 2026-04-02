@@ -416,9 +416,6 @@ void CudfConfig::initialize(
   if (config.find(kCudfFunctionEngine) != config.end()) {
     functionEngine = config[kCudfFunctionEngine];
   }
-  if (config.find(kCudfEnableMarkDistinct) != config.end()) {
-    enableMarkDistinct = folly::to<bool>(config[kCudfEnableMarkDistinct]);
-  }
 }
 
 } // namespace facebook::velox::cudf_velox
