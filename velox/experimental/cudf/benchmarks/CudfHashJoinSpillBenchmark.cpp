@@ -50,7 +50,7 @@
 
 DECLARE_string(data_path);
 DECLARE_string(data_format);
-DECLARE_bool(preload);
+DECLARE_string(preload);
 
 DEFINE_int32(
     repeat,
@@ -108,7 +108,7 @@ class CudfHashJoinSpillBenchmark : public CudfTpchBenchmark {
 
     TpchPlan tpchPlan;
 
-    if (FLAGS_preload) {
+    if (FLAGS_preload != "off") {
       out << "=== cuDF Hash Join Spill Benchmark (preloaded) ===" << std::endl;
       out << "Data path: " << FLAGS_data_path << std::endl;
       out << "Repeat: " << FLAGS_repeat << std::endl;

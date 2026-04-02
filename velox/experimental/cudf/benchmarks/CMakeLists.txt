@@ -15,7 +15,7 @@
 add_library(velox_cudf_benchmark_lib
   CudfBenchmarkHelpers.cpp
   CudfTpchBenchmark.cpp
-  TpchPlanRewriter.cpp
+  PreloadedScanOperator.cpp
 )
 
 target_link_libraries(
