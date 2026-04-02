@@ -318,11 +318,17 @@ void HashBuild::setupSpiller(SpillPartition* spillPartition) {
         numPartitionBits;
     // Disable spilling if exceeding the max spill level and the query might run
     // out of memory if the restored partition still can't fit in memory.
-    if (config->exceedSpillLevelLimit(startPartitionBit)) {
+    if (FOLLY_UNLIKELY(config->exceedSpillLevelLimit(startPartitionBit))) {
       RECORD_METRIC_VALUE(kMetricMaxSpillLevelExceededCount);
       LOG(WARNING) << "Exceeded spill level limit: " << config->maxSpillLevel
                    << ", and disable spilling for memory pool: "
-                   << pool()->name();
+                   << pool()->name()
+                   << ", root pool: " << pool()->root()->name()
+                   << ", used: " << succinctBytes(pool()->usedBytes())
+                   << ", reservation: "
+                   << succinctBytes(pool()->reservedBytes())
+                   << ", root pool reservation: "
+                   << succinctBytes(pool()->root()->reservedBytes());
       spillStats_->spillMaxLevelExceededCount.fetch_add(
           1, std::memory_order_relaxed);
       exceededMaxSpillLevelLimit_ = true;
@@ -651,8 +657,11 @@ void HashBuild::ensureInputFits(RowVectorPtr& input) {
   }
   LOG(WARNING) << "Failed to reserve " << succinctBytes(targetIncrementBytes)
                << " for memory pool " << pool()->name()
-               << ", usage: " << succinctBytes(pool()->usedBytes())
-               << ", reservation: " << succinctBytes(pool()->reservedBytes());
+               << ", root pool: " << pool()->root()->name()
+               << ", used: " << succinctBytes(pool()->usedBytes())
+               << ", reservation: " << succinctBytes(pool()->reservedBytes())
+               << ", root pool reservation: "
+               << succinctBytes(pool()->root()->reservedBytes());
 }
 
 void HashBuild::spillInput(const RowVectorPtr& input) {
@@ -990,9 +999,11 @@ void HashBuild::ensureTableFits(uint64_t numRows) {
 
   LOG(WARNING) << "Failed to reserve " << succinctBytes(memoryBytesToReserve)
                << " for join table build from last hash build operator "
-               << pool()->name()
-               << ", usage: " << succinctBytes(pool()->usedBytes())
-               << ", reservation: " << succinctBytes(pool()->reservedBytes());
+               << pool()->name() << ", root pool: " << pool()->root()->name()
+               << ", used: " << succinctBytes(pool()->usedBytes())
+               << ", reservation: " << succinctBytes(pool()->reservedBytes())
+               << ", root pool reservation: "
+               << succinctBytes(pool()->root()->reservedBytes());
 }
 
 void HashBuild::postHashBuildProcess() {
@@ -1288,8 +1299,12 @@ void HashBuild::reclaim(
     LOG(WARNING)
         << "Can't reclaim from hash build operator, exceeded maximum spill "
            "level of "
-        << config->maxSpillLevel << ", " << pool()->name() << ", usage "
-        << succinctBytes(pool()->usedBytes());
+        << config->maxSpillLevel << ", " << pool()->name()
+        << ", root pool: " << pool()->root()->name()
+        << ", used: " << succinctBytes(pool()->usedBytes())
+        << ", reservation: " << succinctBytes(pool()->reservedBytes())
+        << ", root pool reservation: "
+        << succinctBytes(pool()->root()->reservedBytes());
     return;
   }
 
@@ -1302,11 +1317,16 @@ void HashBuild::reclaim(
     LOG(WARNING) << "Can't reclaim from hash build operator, state_["
                  << stateName(state_) << "], nonReclaimableSection_["
                  << nonReclaimableSection_ << "], spiller_["
-                 << (stateCleared_ ? "cleared"
-                                   : (spiller_->finalized() ? "finalized"
-                                                            : "non-finalized"))
+                 << (stateCleared_               ? "cleared"
+                         : spiller_ == nullptr   ? "null"
+                         : spiller_->finalized() ? "finalized"
+                                                 : "non-finalized")
                  << "] " << pool()->name()
-                 << ", usage: " << succinctBytes(pool()->usedBytes());
+                 << ", root pool: " << pool()->root()->name()
+                 << ", used: " << succinctBytes(pool()->usedBytes())
+                 << ", reservation: " << succinctBytes(pool()->reservedBytes())
+                 << ", root pool reservation: "
+                 << succinctBytes(pool()->root()->reservedBytes());
     return;
   }
 
@@ -1325,9 +1345,18 @@ void HashBuild::reclaim(
       ++stats.numNonReclaimableAttempts;
       LOG(WARNING) << "Can't reclaim from hash build operator, state_["
                    << stateName(buildOp->state_) << "], nonReclaimableSection_["
-                   << buildOp->nonReclaimableSection_ << "], "
-                   << buildOp->pool()->name() << ", usage: "
-                   << succinctBytes(buildOp->pool()->usedBytes());
+                   << buildOp->nonReclaimableSection_ << "], spiller_["
+                   << (buildOp->stateCleared_               ? "cleared"
+                           : buildOp->spiller_ == nullptr   ? "null"
+                           : buildOp->spiller_->finalized() ? "finalized"
+                                                            : "non-finalized")
+                   << "], " << buildOp->pool()->name()
+                   << ", root pool: " << buildOp->pool()->root()->name()
+                   << ", used: " << succinctBytes(buildOp->pool()->usedBytes())
+                   << ", reservation: "
+                   << succinctBytes(buildOp->pool()->reservedBytes())
+                   << ", root pool reservation: "
+                   << succinctBytes(buildOp->pool()->root()->reservedBytes());
       return;
     }
   }

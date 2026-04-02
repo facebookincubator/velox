@@ -94,6 +94,8 @@ jobs:
       USE_CLANG: "${{ inputs.use-clang && 'true' || 'false' }}"
     outputs:
       cudf-changes: ${{ steps.changes.outputs.cudf }}
+      build-outcome: ${{ steps.build.outcome }}
+      test-outcome: ${{ steps.tests.outcome }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -139,6 +141,7 @@ jobs:
           ccache -sz
 
       - name: Make Release Build
+        id: build
         env:
           MAKEFLAGS: NUM_THREADS=32 MAX_HIGH_MEM_JOBS=12 MAX_LINK_JOBS=12
           CUDA_ARCHITECTURES: 70
@@ -184,6 +187,9 @@ jobs:
           key: ccache-linux-adapters-${{ inputs.use-clang && 'clang' || 'gcc' }}
 
       - name: Run Tests
+        id: tests
+        continue-on-error: true
+        if: steps.build.outcome == 'success'
         env:
           LIBHDFS3_CONF: ${{ github.workspace }}/scripts/ci/hdfs-client.xml
         working-directory: _build/release
@@ -198,7 +204,7 @@ jobs:
       # need to run clang-tidy for that.
       # Let's also run this as last step so that if skipped it doesn't affect subsequent steps.
       - name: Install and run clang-tidy
-        if: ${{ ! inputs.use-clang && needs.get-changes.outputs.run-clang-tidy == 'true' }}
+        if: ${{ steps.build.outcome == 'success' && ! inputs.use-clang && needs.get-changes.outputs.run-clang-tidy == 'true' }}
         env:
           FILES: ${{ needs.get-changes.outputs.changed-files }}
           RANGE: ${{ needs.get-changes.outputs.diff-range }}
@@ -282,6 +288,41 @@ jobs:
             _build/release/velox/experimental/cudf/cudf-libs.tar
           retention-days: ${{ env.RETENTION }}
 
+  adapters-build-status:
+    if: always()
+    needs: adapters
+    runs-on: ubuntu-latest
+    name: "BUILD: Linux adapters release"
+    steps:
+      - run: |
+          if [[ "$BUILD_OUTCOME" != "success" ]]; then
+            echo "Build failed or was cancelled."
+            exit 1
+          fi
+          echo "Build succeeded."
+        env:
+          BUILD_OUTCOME: ${{ needs.adapters.outputs.build-outcome }}
+
+  adapters-test-status:
+    if: always()
+    needs: adapters
+    runs-on: ubuntu-latest
+    name: "TEST: Linux adapters release"
+    steps:
+      - run: |
+          if [[ "$BUILD_OUTCOME" != "success" ]]; then
+            echo "Build failed — tests did not run."
+            exit 1
+          fi
+          if [[ "$TEST_OUTCOME" != "success" ]]; then
+            echo "Tests failed."
+            exit 1
+          fi
+          echo "Tests passed."
+        env:
+          BUILD_OUTCOME: ${{ needs.adapters.outputs.build-outcome }}
+          TEST_OUTCOME: ${{ needs.adapters.outputs.test-outcome }}
+
   cudf-tests:
     runs-on: 4-core-ubuntu-gpu-t4
     needs: adapters
@@ -352,6 +393,9 @@ jobs:
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache
       USE_CLANG: ${{ inputs.use-clang && 'true' || 'false' }}
+    outputs:
+      build-outcome: ${{ steps.build.outcome }}
+      test-outcome: ${{ steps.tests.outcome }}
     defaults:
       run:
         shell: bash
@@ -401,6 +445,7 @@ jobs:
           ccache -sz
 
       - name: Make Debug Build
+        id: build
         env:
           VELOX_DEPENDENCY_SOURCE: SYSTEM
           ICU_SOURCE: SYSTEM
@@ -430,6 +475,7 @@ jobs:
             EXTRA_CMAKE_FLAGS+=("-DVELOX_ENABLE_FAISS=ON")
             EXTRA_CMAKE_FLAGS+=("-DVELOX_ENABLE_REMOTE_FUNCTIONS=ON")
           fi
+          export EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS[*]}"
           make debug
 
       - name: CCache after
@@ -442,9 +488,47 @@ jobs:
           key: ccache-ubuntu-debug-default-${{ inputs.use-clang && 'clang' || 'gcc' }}
 
       - name: Run Tests
+        id: tests
+        continue-on-error: true
+        if: steps.build.outcome == 'success'
         run: |
           ulimit -n 65536
           cd _build/debug && ctest -j 24 --timeout 1800 --output-on-failure --no-tests=error
+
+  ubuntu-debug-build-status:
+    if: always()
+    needs: ubuntu-debug
+    runs-on: ubuntu-latest
+    name: "BUILD: Ubuntu debug"
+    steps:
+      - run: |
+          if [[ "$BUILD_OUTCOME" != "success" ]]; then
+            echo "Build failed or was cancelled."
+            exit 1
+          fi
+          echo "Build succeeded."
+        env:
+          BUILD_OUTCOME: ${{ needs.ubuntu-debug.outputs.build-outcome }}
+
+  ubuntu-debug-test-status:
+    if: always()
+    needs: ubuntu-debug
+    runs-on: ubuntu-latest
+    name: "TEST: Ubuntu debug"
+    steps:
+      - run: |
+          if [[ "$BUILD_OUTCOME" != "success" ]]; then
+            echo "Build failed — tests did not run."
+            exit 1
+          fi
+          if [[ "$TEST_OUTCOME" != "success" ]]; then
+            echo "Tests failed."
+            exit 1
+          fi
+          echo "Tests passed."
+        env:
+          BUILD_OUTCOME: ${{ needs.ubuntu-debug.outputs.build-outcome }}
+          TEST_OUTCOME: ${{ needs.ubuntu-debug.outputs.test-outcome }}
 
   fedora-debug:
     runs-on: 32-core-ubuntu
@@ -454,6 +538,8 @@ jobs:
     name: Fedora debug
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache
+    outputs:
+      build-outcome: ${{ steps.build.outcome }}
     defaults:
       run:
         shell: bash
@@ -505,6 +591,7 @@ jobs:
           ccache -sz
 
       - name: Make Debug Build
+        id: build
         env:
           VELOX_DEPENDENCY_SOURCE: SYSTEM
           faiss_SOURCE: BUNDLED
@@ -530,3 +617,18 @@ jobs:
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-fedora-debug-default-gcc
+
+  fedora-debug-build-status:
+    if: always()
+    needs: fedora-debug
+    runs-on: ubuntu-latest
+    name: "BUILD: Fedora debug"
+    steps:
+      - run: |
+          if [[ "$BUILD_OUTCOME" != "success" ]]; then
+            echo "Build failed or was cancelled."
+            exit 1
+          fi
+          echo "Build succeeded."
+        env:
+          BUILD_OUTCOME: ${{ needs.fedora-debug.outputs.build-outcome }}

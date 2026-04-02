@@ -258,8 +258,11 @@ void SortBuffer::ensureInputFits(const VectorPtr& input) {
   }
   LOG(WARNING) << "Failed to reserve " << succinctBytes(targetIncrementBytes)
                << " for memory pool " << pool()->name()
-               << ", usage: " << succinctBytes(pool()->usedBytes())
-               << ", reservation: " << succinctBytes(pool()->reservedBytes());
+               << ", root pool: " << pool()->root()->name()
+               << ", used: " << succinctBytes(pool()->usedBytes())
+               << ", reservation: " << succinctBytes(pool()->reservedBytes())
+               << ", root pool reservation: "
+               << succinctBytes(pool()->root()->reservedBytes());
 }
 
 void SortBuffer::ensureOutputFits(vector_size_t batchSize) {
@@ -290,8 +293,11 @@ void SortBuffer::ensureOutputFits(vector_size_t batchSize) {
   LOG(WARNING) << "Failed to reserve "
                << succinctBytes(outputBufferSizeToReserve)
                << " for memory pool " << pool_->name()
-               << ", usage: " << succinctBytes(pool_->usedBytes())
-               << ", reservation: " << succinctBytes(pool_->reservedBytes());
+               << ", root pool: " << pool_->root()->name()
+               << ", used: " << succinctBytes(pool_->usedBytes())
+               << ", reservation: " << succinctBytes(pool_->reservedBytes())
+               << ", root pool reservation: "
+               << succinctBytes(pool_->root()->reservedBytes());
 }
 
 void SortBuffer::ensureSortFits() {

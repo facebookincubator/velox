@@ -757,9 +757,12 @@ uint64_t Operator::MemoryReclaimer::reclaim(
     ++stats.numNonReclaimableAttempts;
     RECORD_METRIC_VALUE(kMetricMemoryNonReclaimableCount);
     LOG(WARNING) << "Can't reclaim from memory pool " << pool->name()
-                 << " which is under non-reclaimable section, memory usage: "
-                 << succinctBytes(pool->usedBytes())
-                 << ", reservation: " << succinctBytes(pool->reservedBytes());
+                 << " which is under non-reclaimable section"
+                 << ", root pool: " << pool->root()->name()
+                 << ", used: " << succinctBytes(pool->usedBytes())
+                 << ", reservation: " << succinctBytes(pool->reservedBytes())
+                 << ", root pool reservation: "
+                 << succinctBytes(pool->root()->reservedBytes());
     return 0;
   }
 
