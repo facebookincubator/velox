@@ -1312,5 +1312,76 @@ TEST_F(CudfDecimalTest, decimalBetween) {
   facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
 }
 
+TEST_F(CudfDecimalTest, decimalCoalesceColumnWithLiteral) {
+  auto input = makeRowVector(
+      {"a"},
+      {makeNullableFlatVector<int64_t>(
+          {100, std::nullopt, 300, std::nullopt, 500}, DECIMAL(10, 2))});
+  std::vector<RowVectorPtr> vectors = {input};
+  auto plan =
+      exec::test::PlanBuilder()
+          .values(vectors)
+          .project(
+              {"coalesce(a, CAST('0.00' AS DECIMAL(10, 2))) AS result"})
+          .planNode();
+
+  unregisterCudf();
+  auto cpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  registerCudf();
+  auto gpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
+}
+
+// Disabled: a non-null literal in the first position makes the entire coalesce
+// trivially constant. For simple types Velox folds this away before it reaches
+// cuDF, but the CAST wrapper needed for decimal literals prevents that folding,
+// causing the cuDF compiler to reject the expression.
+TEST_F(CudfDecimalTest, DISABLED_decimalCoalesceLiteralFirst) {
+  auto input = makeRowVector(
+      {"a"},
+      {makeFlatVector<int64_t>({100, 200, 300}, DECIMAL(10, 2))});
+  std::vector<RowVectorPtr> vectors = {input};
+  auto plan =
+      exec::test::PlanBuilder()
+          .values(vectors)
+          .project(
+              {"coalesce(CAST('5.00' AS DECIMAL(10, 2)), a) AS result"})
+          .planNode();
+
+  unregisterCudf();
+  auto cpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  registerCudf();
+  auto gpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
+}
+
+TEST_F(CudfDecimalTest, decimalCoalesceStopsAtFirstLiteral) {
+  auto input = makeRowVector(
+      {"a", "b"},
+      {
+          makeNullableFlatVector<int64_t>(
+              {100, std::nullopt, 300, std::nullopt}, DECIMAL(10, 2)),
+          makeFlatVector<int64_t>({900, 800, 700, 600}, DECIMAL(10, 2)),
+      });
+  std::vector<RowVectorPtr> vectors = {input};
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({"coalesce(a, CAST('1.00' AS DECIMAL(10, 2)), b) "
+                            "AS result"})
+                  .planNode();
+
+  unregisterCudf();
+  auto cpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  registerCudf();
+  auto gpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
+}
+
 } // namespace
 } // namespace facebook::velox::cudf_velox
