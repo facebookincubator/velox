@@ -572,8 +572,7 @@ class BinaryFunction : public CudfFunction {
           return cudf::binary_operation(
               lhsView, *rhsScalar, op_, type_, stream, mr);
         }
-        return cudf::binary_operation(
-            lhsView, *right_, op_, type_, stream, mr);
+        return cudf::binary_operation(lhsView, *right_, op_, type_, stream, mr);
       }
       if (cudf::is_fixed_point(type_)) {
         if (op_ == cudf::binary_operator::ADD ||
@@ -653,8 +652,7 @@ class BinaryFunction : public CudfFunction {
         return cudf::binary_operation(
             *lhsScalar, rhsView, op_, type_, stream, mr);
       }
-      return cudf::binary_operation(
-          *left_, rhsView, op_, type_, stream, mr);
+      return cudf::binary_operation(*left_, rhsView, op_, type_, stream, mr);
     }
     if (cudf::is_fixed_point(type_)) {
       if (op_ == cudf::binary_operator::ADD ||
@@ -670,8 +668,7 @@ class BinaryFunction : public CudfFunction {
           return cudf::binary_operation(
               *lhsScalar, rhsView, op_, type_, stream, mr);
         }
-        return cudf::binary_operation(
-            *left_, rhsView, op_, type_, stream, mr);
+        return cudf::binary_operation(*left_, rhsView, op_, type_, stream, mr);
       }
       if (op_ == cudf::binary_operator::MUL) {
         std::unique_ptr<cudf::column> rhsCast;
