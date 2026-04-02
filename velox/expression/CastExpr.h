@@ -29,11 +29,13 @@ class CastOperator {
   virtual ~CastOperator() = default;
 
   /// Determines whether the cast operator supports casting to the custom type
-  /// from the other type.
+  /// from the other type. CastRulesRegistry is checked first; this method is
+  /// only called as a fallback when no registry rule exists.
   virtual bool isSupportedFromType(const TypePtr& other) const = 0;
 
   /// Determines whether the cast operator supports casting from the custom type
-  /// to the other type.
+  /// to the other type. CastRulesRegistry is checked first; this method is
+  /// only called as a fallback when no registry rule exists.
   virtual bool isSupportedToType(const TypePtr& other) const = 0;
 
   /// Casts an input vector to the custom type. This function should not throw

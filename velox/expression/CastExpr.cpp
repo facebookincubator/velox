@@ -26,6 +26,7 @@
 #include "velox/expression/ScopedVarSetter.h"
 #include "velox/external/tzdb/time_zone.h"
 #include "velox/functions/lib/RowsTranslationUtil.h"
+#include "velox/type/CastRegistry.h"
 #include "velox/type/Type.h"
 #include "velox/type/tz/TimeZoneMap.h"
 #include "velox/vector/ComplexVector.h"
@@ -782,15 +783,19 @@ void CastExpr::applyPeeled(
     const TypePtr& toType,
     VectorPtr& result) {
   auto castFromOperator = getCastOperator(fromType);
-  if (castFromOperator && !castFromOperator->isSupportedToType(toType)) {
-    VELOX_USER_FAIL(
-        "Cannot cast {} to {}.", fromType->toString(), toType->toString());
-  }
-
   auto castToOperator = getCastOperator(toType);
-  if (castToOperator && !castToOperator->isSupportedFromType(fromType)) {
-    VELOX_USER_FAIL(
-        "Cannot cast {} to {}.", fromType->toString(), toType->toString());
+
+  // Check CastRulesRegistry first — it has all registered cast rules.
+  // If no rule exists (e.g., JSON container types), fall back to operator.
+  if (!CastRulesRegistry::instance().canCast(fromType, toType)) {
+    if (castFromOperator && !castFromOperator->isSupportedToType(toType)) {
+      VELOX_USER_FAIL(
+          "Cannot cast {} to {}.", fromType->toString(), toType->toString());
+    }
+    if (castToOperator && !castToOperator->isSupportedFromType(fromType)) {
+      VELOX_USER_FAIL(
+          "Cannot cast {} to {}.", fromType->toString(), toType->toString());
+    }
   }
 
   if (castFromOperator || castToOperator) {
