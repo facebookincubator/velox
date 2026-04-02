@@ -36,7 +36,7 @@ CudfTopN::CudfTopN(
           topNNode->outputType(),
           topNNode->id(),
           "CudfTopN",
-          nvtx3::rgb{255, 140, 0}, // Dark Orange
+          nvtx3::rgb{175, 238, 238}, // Pale Turquoise
           NvtxMethodFlag::kAll,
           std::nullopt,
           topNNode),
