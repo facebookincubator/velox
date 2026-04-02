@@ -97,7 +97,7 @@ RowVectorPtr CudfMarkDistinct::getOutput() {
   auto batchKeys = tableView.select(distinctKeyIndices_);
 
   // Create marker column (all false initially).
-  cudf::numeric_scalar<bool> falseScalar(false, true, stream, outputMr);
+  cudf::numeric_scalar<bool> falseScalar(false, true, stream, tempMr);
   auto markerCol =
       cudf::make_column_from_scalar(falseScalar, N, stream, outputMr);
 
