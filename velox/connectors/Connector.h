@@ -45,7 +45,7 @@ class ConfigBase;
 
 namespace facebook::velox::core {
 class ITypedExpr;
-}
+} // namespace facebook::velox::core
 
 namespace facebook::velox::core {
 struct IndexLookupCondition;
@@ -768,21 +768,14 @@ class Connector {
       trackers_;
 };
 
-/// Adds connector instance to the registry using connector ID as the key.
-/// Throws if connector with the same ID is already present. Always returns
-/// true. The return value makes it easy to use with FB_ANONYMOUS_VARIABLE.
+// Legacy free functions. Prefer ConnectorRegistry methods for new code.
+
 bool registerConnector(std::shared_ptr<Connector> connector);
 
-/// Returns true if a connector with the specified ID has been registered, false
-/// otherwise.
 bool hasConnector(const std::string& connectorId);
 
-/// Removes the connector with specified ID from the registry. Returns true
-/// if connector was removed and false if connector didn't exist.
 bool unregisterConnector(const std::string& connectorId);
 
-/// Returns a connector with specified ID. Throws if connector doesn't
-/// exist.
 std::shared_ptr<Connector> getConnector(const std::string& connectorId);
 
 } // namespace facebook::velox::connector
