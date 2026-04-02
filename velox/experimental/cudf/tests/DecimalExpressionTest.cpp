@@ -1292,5 +1292,25 @@ TEST_F(CudfDecimalTest, decimalGreatestLeastWithNulls) {
   facebook::velox::test::assertEqualVectors(expected, result);
 }
 
+TEST_F(CudfDecimalTest, decimalBetween) {
+  auto input = makeRowVector(
+      {"a"},
+      {makeFlatVector<int64_t>({-100, 50, 150, 300}, DECIMAL(10, 2))});
+  std::vector<RowVectorPtr> vectors = {input};
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({"a BETWEEN CAST('0.00' AS DECIMAL(10, 2)) "
+                            "AND CAST('2.00' AS DECIMAL(10, 2)) AS result"})
+                  .planNode();
+
+  unregisterCudf();
+  auto cpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  registerCudf();
+  auto gpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
+}
+
 } // namespace
 } // namespace facebook::velox::cudf_velox

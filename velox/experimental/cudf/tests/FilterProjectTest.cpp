@@ -1375,6 +1375,18 @@ TEST_F(CudfFilterProjectTest, greatestLeastWithNulls) {
       plan, "SELECT greatest(c0, c1, c2), least(c0, c1, c2) FROM tmp");
 }
 
+TEST_F(CudfFilterProjectTest, betweenDouble) {
+  auto data = makeRowVector({
+      makeFlatVector<double>({-1.0, 0.5, 1.5, 3.0}),
+  });
+  createDuckDbTable({data});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .project({"c0 BETWEEN 0.0 AND 2.0 AS result"})
+                  .planNode();
+  assertQuery(plan, "SELECT c0 BETWEEN 0.0 AND 2.0 AS result FROM tmp");
+}
+
 class CudfSimpleFilterProjectTest : public cudf_velox::CudfFunctionBaseTest {
  protected:
   static void SetUpTestCase() {
