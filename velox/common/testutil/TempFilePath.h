@@ -84,10 +84,9 @@ class TempFilePath {
   }
 
   const bool enableFaultInjection_;
+  int fd_{-1};
   const std::string tempPath_;
   const std::string path_;
-
-  int fd_{};
 };
 
 std::vector<std::string> toFilePaths(
