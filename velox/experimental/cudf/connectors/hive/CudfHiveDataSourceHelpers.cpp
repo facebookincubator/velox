@@ -31,9 +31,16 @@
 #include <folly/futures/Future.h>
 
 #include <future>
+#include <mutex>
 #include <vector>
 
 namespace {
+
+std::mutex& ioBatchMutex() {
+  static std::mutex mutex;
+  return mutex;
+}
+
 template <typename T>
 std::future<T> toStdFuture(folly::Future<T> follyFuture) {
   auto promise = std::make_shared<std::promise<T>>();
@@ -78,6 +85,7 @@ void BufferedInputDataSource::enqueueForDevice(
 
 void BufferedInputDataSource::load(rmm::cuda_stream_view stream) {
   input_->load(velox::dwio::common::LogType::FILE);
+  std::lock_guard<std::mutex> lock(ioBatchMutex());
   for (auto& deviceLoad : pendingDeviceLoads_) {
     deviceLoad(stream);
   }
@@ -178,10 +186,6 @@ fetchByteRangesAsync(
     cudf::host_span<const cudf::io::text::byte_range_info> byteRanges,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
-  // Static mutex to ensure all IO operations for each driver are enqueued at
-  // once
-  static std::mutex mutex;
-
   // Pad buffer sizes to be a multiple of 8 bytes. Required by
   // `decode_page_data_kernel` in cuDF Parquet reader.
   constexpr auto kBufferPaddingMultiple = 8;
@@ -222,18 +226,15 @@ fetchByteRangesAsync(
           dynamic_cast<BufferedInputDataSource*>(dataSource.get())) {
     auto iter =
         cuda::make_zip_iterator(byteRanges.begin(), columnChunkData.begin());
-    {
-      std::lock_guard<std::mutex> lock(mutex);
-      std::for_each(
-          iter, iter + byteRanges.size(), [bufferedInput](auto const& tuple) {
-            auto const& byteRange = cuda::std::get<0>(tuple);
-            auto const& destination = cuda::std::get<1>(tuple);
-            bufferedInput->enqueueForDevice(
-                static_cast<uint64_t>(byteRange.offset()),
-                static_cast<uint64_t>(byteRange.size()),
-                const_cast<uint8_t*>(destination.data()));
-          });
-    }
+    std::for_each(
+        iter, iter + byteRanges.size(), [bufferedInput](auto const& tuple) {
+          auto const& byteRange = cuda::std::get<0>(tuple);
+          auto const& destination = cuda::std::get<1>(tuple);
+          bufferedInput->enqueueForDevice(
+              static_cast<uint64_t>(byteRange.offset()),
+              static_cast<uint64_t>(byteRange.size()),
+              const_cast<uint8_t*>(destination.data()));
+        });
 
     // load buffered input data source
     auto syncFunction = [](BufferedInputDataSource* bufferedInput,
@@ -280,34 +281,35 @@ fetchByteRangesAsync(
       ioSizes.size() == destinations.size(),
       "Number of IO sizes and destinations must be equal");
 
-  std::vector<std::future<size_t>> deviceReadTasks{};
-  std::vector<std::future<size_t>> hostReadTasks{};
-  deviceReadTasks.reserve(ioOffsets.size());
-  hostReadTasks.reserve(ioOffsets.size());
+  auto syncFunction = [dataSource,
+                       stream,
+                       ioOffsets = std::move(ioOffsets),
+                       ioSizes = std::move(ioSizes),
+                       destinations = std::move(destinations)]() mutable {
+    std::vector<std::future<size_t>> deviceReadTasks;
+    std::vector<std::future<size_t>> hostReadTasks;
+    deviceReadTasks.reserve(ioOffsets.size());
+    hostReadTasks.reserve(ioOffsets.size());
 
-  // device_read_async is not guaranteed to follow stream-ordering (see
-  // datasource API docs)
-  stream.synchronize();
-
-  {
     auto iter = cuda::make_zip_iterator(
         ioOffsets.begin(), ioSizes.begin(), destinations.begin());
 
-    std::lock_guard<std::mutex> lock(mutex);
+    // device_read_async is not guaranteed to follow stream-ordering (see
+    // datasource API docs)
+    stream.synchronize();
+
+    std::lock_guard<std::mutex> lock(ioBatchMutex());
 
     std::for_each(iter, iter + ioOffsets.size(), [&](auto const& tuple) {
       auto const ioOffset = cuda::std::get<0>(tuple);
       auto const ioSize = cuda::std::get<1>(tuple);
       auto const dest = cuda::std::get<2>(tuple);
 
-      // Directly read the column chunk data to the device buffer if supported
       if (dataSource->supports_device_read() and
           dataSource->is_device_read_preferred(ioSize)) {
         deviceReadTasks.emplace_back(
             dataSource->device_read_async(ioOffset, ioSize, dest, stream));
       } else {
-        // Read the column chunk data to the host buffer and copy it to the
-        // device buffer
         hostReadTasks.emplace_back(
             std::async(
                 std::launch::deferred,
@@ -323,11 +325,7 @@ fetchByteRangesAsync(
                 }));
       }
     });
-  }
 
-  // Synchronize host and device reads
-  auto syncFunction = [](decltype(hostReadTasks) hostReadTasks,
-                         decltype(deviceReadTasks) deviceReadTasks) {
     for (auto& task : hostReadTasks) {
       task.get();
     }
@@ -339,11 +337,7 @@ fetchByteRangesAsync(
   return {
       std::move(columnChunkBuffers),
       std::move(columnChunkData),
-      std::async(
-          std::launch::deferred,
-          syncFunction,
-          std::move(hostReadTasks),
-          std::move(deviceReadTasks))};
+      std::async(std::launch::deferred, std::move(syncFunction))};
 }
 
 } // namespace facebook::velox::cudf_velox::connector::hive
