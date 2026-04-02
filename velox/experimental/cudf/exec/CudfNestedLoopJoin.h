@@ -2,7 +2,7 @@
  * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
+ * you may not use it except in compliance with the License.
  * You may obtain a copy of the License at
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/core/PlanNode.h"
@@ -32,10 +33,37 @@
 
 namespace facebook::velox::cudf_velox {
 
+/// Custom join bridge for GPU NestedLoopJoin that transfers cudf::table objects
+/// directly between build and probe operators, avoiding intermediate CudfVector
+/// wrapping.
+class CudfNestedLoopJoinBridge : public exec::JoinBridge {
+ public:
+  struct BuildData {
+    std::vector<std::shared_ptr<cudf::table>> tables;
+    rmm::cuda_stream_view stream;
+  };
+
+  void setData(BuildData data);
+
+  std::optional<BuildData> dataOrFuture(ContinueFuture* future);
+
+ private:
+  std::optional<BuildData> data_;
+};
+
+/// Translator that creates CudfNestedLoopJoinBridge instances for
+/// NestedLoopJoinNode plan nodes.
+class CudfNestedLoopJoinBridgeTranslator
+    : public exec::Operator::PlanNodeTranslator {
+ public:
+  std::unique_ptr<exec::JoinBridge> toJoinBridge(
+      const core::PlanNodePtr& node) override;
+};
+
 /**
  * GPU build operator for NestedLoopJoin (cross join).
  * Accumulates build-side CudfVector inputs, concatenates them on GPU, and
- * passes the result to the probe via the existing NestedLoopJoinBridge.
+ * passes the result to the probe via CudfNestedLoopJoinBridge.
  */
 class CudfNestedLoopJoinBuild : public exec::Operator, public NvtxHelper {
  public:
@@ -46,13 +74,9 @@ class CudfNestedLoopJoinBuild : public exec::Operator, public NvtxHelper {
 
   void addInput(RowVectorPtr input) override;
 
-  RowVectorPtr getOutput() override {
-    return nullptr;
-  }
+  RowVectorPtr getOutput() override { return nullptr; }
 
-  bool needsInput() const override {
-    return !noMoreInput_;
-  }
+  bool needsInput() const override { return !noMoreInput_; }
 
   void noMoreInput() override;
 
@@ -68,9 +92,10 @@ class CudfNestedLoopJoinBuild : public exec::Operator, public NvtxHelper {
 
 /**
  * GPU probe operator for NestedLoopJoin (cross join).
- * Reads build data from NestedLoopJoinBridge (CudfVectors from GPU build),
+ * Reads build data from CudfNestedLoopJoinBridge as cudf::table objects,
  * then for each probe batch computes the cross product on GPU using
- * repeat(probe, nBuild) and gather(build, indices).
+ * gather operations. Each build table batch is processed independently
+ * to avoid exceeding cudf::size_type limits.
  */
 class CudfNestedLoopJoinProbe : public exec::Operator, public NvtxHelper {
  public:
@@ -91,22 +116,29 @@ class CudfNestedLoopJoinProbe : public exec::Operator, public NvtxHelper {
 
   bool isFinished() override;
 
-  /// Only cross join (no filter) with inner join type is supported on GPU.
+  /// Inner join (with or without filter condition) is supported on GPU.
   static bool isSupported(const core::NestedLoopJoinNode* node) {
-    return node->joinCondition() == nullptr &&
-        node->joinType() == core::JoinType::kInner;
+    return node->joinType() == core::JoinType::kInner;
   }
 
  private:
   bool getBuildData(ContinueFuture* future);
 
+  RowVectorPtr crossJoinWithBuildBatch(
+      const cudf::table_view& probeView,
+      const cudf::table_view& buildBatchView,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr);
+
   std::shared_ptr<const core::NestedLoopJoinNode> joinNode_;
-  std::optional<std::vector<RowVectorPtr>> buildVectors_;
   ContinueFuture future_{ContinueFuture::makeEmpty()};
 
-  /// Cached concatenated build table (computed once in getBuildData)
-  std::unique_ptr<cudf::table> concatenatedBuildTable_;
-  cudf::table_view buildView_;
+  /// Build tables received from the bridge (shared across probe drivers)
+  std::optional<CudfNestedLoopJoinBridge::BuildData> buildData_;
+
+  /// Filter evaluator for join condition (lazy init)
+  std::shared_ptr<CudfExpression> filterEvaluator_;
+  RowTypePtr filterConcatType_;
 
   /// Output column order: which columns come from probe vs build (by output
   /// index).
@@ -114,6 +146,9 @@ class CudfNestedLoopJoinProbe : public exec::Operator, public NvtxHelper {
   std::vector<cudf::size_type> rightColumnIndicesToGather_;
   std::vector<size_t> leftColumnOutputIndices_;
   std::vector<size_t> rightColumnOutputIndices_;
+
+  /// Index into build tables for the current probe input
+  size_t buildBatchIdx_{0};
 
   bool finished_{false};
 };

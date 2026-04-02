@@ -21,8 +21,11 @@
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
 #include "velox/core/PlanNode.h"
-#include "velox/exec/NestedLoopJoinBuild.h"
 #include "velox/exec/Task.h"
+#include "velox/expression/Expr.h"
+#include "velox/type/TypeUtil.h"
+
+#include <cudf/stream_compaction.hpp>
 
 #include <cudf/binaryop.hpp>
 #include <cudf/column/column_factories.hpp>
@@ -41,6 +44,40 @@ namespace {
 constexpr auto oobPolicy = cudf::out_of_bounds_policy::DONT_CHECK;
 
 } // namespace
+
+// --- CudfNestedLoopJoinBridge ---
+
+void CudfNestedLoopJoinBridge::setData(BuildData data) {
+  std::vector<ContinuePromise> promises;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    VELOX_CHECK(!data_.has_value(), "setData must be called only once");
+    data_ = std::move(data);
+    promises = std::move(promises_);
+  }
+  notify(std::move(promises));
+}
+
+std::optional<CudfNestedLoopJoinBridge::BuildData>
+CudfNestedLoopJoinBridge::dataOrFuture(ContinueFuture* future) {
+  std::lock_guard<std::mutex> l(mutex_);
+  VELOX_CHECK(!cancelled_, "Getting data after the build side is aborted");
+  if (data_.has_value()) {
+    return data_;
+  }
+  promises_.emplace_back("CudfNestedLoopJoinBridge::dataOrFuture");
+  *future = promises_.back().getSemiFuture();
+  return std::nullopt;
+}
+
+std::unique_ptr<exec::JoinBridge>
+CudfNestedLoopJoinBridgeTranslator::toJoinBridge(
+    const core::PlanNodePtr& node) {
+  if (std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(node)) {
+    return std::make_unique<CudfNestedLoopJoinBridge>();
+  }
+  return nullptr;
+}
 
 // --- CudfNestedLoopJoinBuild ---
 
@@ -61,10 +98,18 @@ CudfNestedLoopJoinBuild::CudfNestedLoopJoinBuild(
       joinNode_(joinNode) {}
 
 void CudfNestedLoopJoinBuild::addInput(RowVectorPtr input) {
+  std::lock_guard<std::mutex> lock(cudfGlobalMutex());
   if (input->size() > 0) {
     auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
-    VELOX_CHECK_NOT_NULL(
-        cudfInput, "CudfNestedLoopJoinBuild expects CudfVector");
+    if (!cudfInput) {
+      auto stream = cudfGlobalStreamPool().get_stream();
+      auto tbl = with_arrow::toCudfTable(
+          input, input->pool(), stream,
+          cudf::get_current_device_resource_ref());
+      stream.synchronize();
+      cudfInput = std::make_shared<CudfVector>(
+          pool(), input->type(), input->size(), std::move(tbl), stream);
+    }
     inputs_.push_back(std::move(cudfInput));
   }
 }
@@ -83,7 +128,8 @@ void CudfNestedLoopJoinBuild::noMoreInput() {
     auto* op = peer->findOperator(planNodeId());
     auto* build = dynamic_cast<CudfNestedLoopJoinBuild*>(op);
     VELOX_CHECK_NOT_NULL(build);
-    inputs_.insert(inputs_.end(), build->inputs_.begin(), build->inputs_.end());
+    inputs_.insert(
+        inputs_.end(), build->inputs_.begin(), build->inputs_.end());
   }
 
   SCOPE_EXIT {
@@ -96,33 +142,27 @@ void CudfNestedLoopJoinBuild::noMoreInput() {
   auto stream = cudfGlobalStreamPool().get_stream();
   auto buildType = joinNode_->sources()[1]->outputType();
   auto mr = cudf::get_current_device_resource_ref();
-  auto tbls = getConcatenatedTableBatched(inputs_, buildType, stream, mr);
-  stream.synchronize();
-  inputs_.clear();
+  auto tbls = getConcatenatedTableBatched(
+      std::exchange(inputs_, {}), buildType, stream, mr);
 
-  std::vector<RowVectorPtr> buildVectors;
-  buildVectors.reserve(tbls.size());
+  std::vector<std::shared_ptr<cudf::table>> buildTables;
+  buildTables.reserve(tbls.size());
   for (auto& tbl : tbls) {
     VELOX_CHECK_NOT_NULL(tbl);
-    auto numRows = tbl->num_rows();
-    if (numRows == 0) {
-      continue;
+    if (tbl->num_rows() > 0) {
+      buildTables.push_back(std::move(tbl));
     }
-    auto cudfVec = std::make_shared<CudfVector>(
-        pool(), buildType, numRows, std::move(tbl), stream);
-    buildVectors.push_back(std::move(cudfVec));
   }
 
-  if (buildVectors.empty()) {
-    buildVectors.push_back(
-        std::make_shared<CudfVector>(
-            pool(), buildType, 0, makeEmptyTable(buildType), stream));
+  if (buildTables.empty()) {
+    buildTables.push_back(makeEmptyTable(buildType));
   }
 
-  operatorCtx_->task()
-      ->getNestedLoopJoinBridge(
-          operatorCtx_->driverCtx()->splitGroupId, planNodeId())
-      ->setData(std::move(buildVectors));
+  auto bridge = std::dynamic_pointer_cast<CudfNestedLoopJoinBridge>(
+      operatorCtx_->task()->getCustomJoinBridge(
+          operatorCtx_->driverCtx()->splitGroupId, planNodeId()));
+  VELOX_CHECK_NOT_NULL(bridge);
+  bridge->setData({std::move(buildTables), stream});
 }
 
 exec::BlockingReason CudfNestedLoopJoinBuild::isBlocked(
@@ -179,36 +219,18 @@ CudfNestedLoopJoinProbe::CudfNestedLoopJoinProbe(
 }
 
 bool CudfNestedLoopJoinProbe::getBuildData(ContinueFuture* future) {
-  if (buildVectors_.has_value()) {
+  if (buildData_.has_value()) {
     return true;
   }
-  auto bridge = operatorCtx_->task()->getNestedLoopJoinBridge(
-      operatorCtx_->driverCtx()->splitGroupId, planNodeId());
+  auto bridge = std::dynamic_pointer_cast<CudfNestedLoopJoinBridge>(
+      operatorCtx_->task()->getCustomJoinBridge(
+          operatorCtx_->driverCtx()->splitGroupId, planNodeId()));
+  VELOX_CHECK_NOT_NULL(bridge);
   auto data = bridge->dataOrFuture(future);
   if (!data.has_value()) {
     return false;
   }
-  buildVectors_ = std::move(data);
-
-  // Concatenate build side once and cache the result
-  auto buildType = joinNode_->sources()[1]->outputType();
-  std::vector<CudfVectorPtr> buildCudf;
-  for (const auto& row : buildVectors_.value()) {
-    auto cv = std::dynamic_pointer_cast<CudfVector>(row);
-    VELOX_CHECK_NOT_NULL(cv, "Build side must be CudfVector from GPU build");
-    buildCudf.push_back(cv);
-  }
-
-  if (buildCudf.size() == 1) {
-    buildView_ = buildCudf[0]->getTableView();
-  } else {
-    auto stream = cudfGlobalStreamPool().get_stream();
-    auto mr = cudf::get_current_device_resource_ref();
-    concatenatedBuildTable_ =
-        getConcatenatedTable(buildCudf, buildType, stream, mr);
-    buildView_ = concatenatedBuildTable_->view();
-    stream.synchronize();
-  }
+  buildData_ = std::move(data);
   return true;
 }
 
@@ -217,8 +239,10 @@ bool CudfNestedLoopJoinProbe::needsInput() const {
 }
 
 void CudfNestedLoopJoinProbe::addInput(RowVectorPtr input) {
+  std::lock_guard<std::mutex> lock(cudfGlobalMutex());
   VELOX_CHECK_NULL(input_);
   input_ = std::move(input);
+  buildBatchIdx_ = 0;
 }
 
 void CudfNestedLoopJoinProbe::noMoreInput() {
@@ -234,37 +258,14 @@ exec::BlockingReason CudfNestedLoopJoinProbe::isBlocked(
   return exec::BlockingReason::kWaitForJoinBuild;
 }
 
-RowVectorPtr CudfNestedLoopJoinProbe::getOutput() {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
-  if (input_ == nullptr) {
-    if (!noMoreInput_) {
-      return nullptr;
-    }
-    finished_ = true;
-    return nullptr;
-  }
-
-  if (!getBuildData(&future_)) {
-    return nullptr;
-  }
-
-  auto probeInput = std::dynamic_pointer_cast<CudfVector>(input_);
-  VELOX_CHECK_NOT_NULL(
-      probeInput, "CudfNestedLoopJoinProbe expects CudfVector");
-
-  auto probeView = probeInput->getTableView();
+RowVectorPtr CudfNestedLoopJoinProbe::crossJoinWithBuildBatch(
+    const cudf::table_view& probeView,
+    const cudf::table_view& buildBatchView,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
   const cudf::size_type nL = probeView.num_rows();
-  const cudf::size_type nR = buildView_.num_rows();
-
-  input_.reset();
-
-  if (nR == 0) {
-    return nullptr;
-  }
-
+  const cudf::size_type nR = buildBatchView.num_rows();
   const cudf::size_type outRows = nL * nR;
-  auto stream = probeInput->stream();
-  auto mr = get_output_mr();
 
   auto seqCol = cudf::sequence(
       outRows,
@@ -292,7 +293,7 @@ RowVectorPtr CudfNestedLoopJoinProbe::getOutput() {
       mr);
 
   auto leftGatherView = probeView.select(leftColumnIndicesToGather_);
-  auto rightGatherView = buildView_.select(rightColumnIndicesToGather_);
+  auto rightGatherView = buildBatchView.select(rightColumnIndicesToGather_);
 
   auto leftGathered = cudf::gather(
       leftGatherView, leftIndicesCol->view(), oobPolicy, stream, mr);
@@ -312,8 +313,93 @@ RowVectorPtr CudfNestedLoopJoinProbe::getOutput() {
 
   auto outTable = std::make_unique<cudf::table>(std::move(outCols));
 
+  if (joinNode_->joinCondition()) {
+    if (!filterEvaluator_) {
+      auto probeType = asRowType(joinNode_->sources()[0]->outputType());
+      auto buildType = asRowType(joinNode_->sources()[1]->outputType());
+      filterConcatType_ = facebook::velox::type::concatRowTypes(
+          std::vector<velox::RowTypePtr>{probeType, buildType});
+      exec::ExprSet exprs(
+          {joinNode_->joinCondition()}, operatorCtx_->execCtx());
+      VELOX_CHECK_EQ(exprs.exprs().size(), 1);
+      filterEvaluator_ =
+          createCudfExpression(exprs.exprs()[0], filterConcatType_);
+    }
+
+    std::vector<cudf::column_view> allColViews;
+    auto leftView = leftGathered->view();
+    auto rightView = rightGathered->view();
+    for (cudf::size_type i = 0; i < leftView.num_columns(); i++) {
+      allColViews.push_back(leftView.column(i));
+    }
+    for (cudf::size_type i = 0; i < rightView.num_columns(); i++) {
+      allColViews.push_back(rightView.column(i));
+    }
+
+    auto filterResult = filterEvaluator_->eval(allColViews, stream, mr);
+    auto filterView = asView(filterResult);
+    auto filtered = cudf::apply_boolean_mask(
+        outTable->view(), filterView, stream, mr);
+    outTable = std::move(filtered);
+  }
+
   return std::make_shared<CudfVector>(
-      pool(), outputType_, outTable->num_rows(), std::move(outTable), stream);
+      pool(),
+      outputType_,
+      outTable->num_rows(),
+      std::move(outTable),
+      stream);
+}
+
+RowVectorPtr CudfNestedLoopJoinProbe::getOutput() {
+  std::lock_guard<std::mutex> lock(cudfGlobalMutex());
+  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+  if (input_ == nullptr) {
+    if (!noMoreInput_) {
+      return nullptr;
+    }
+    finished_ = true;
+    return nullptr;
+  }
+
+  if (!getBuildData(&future_)) {
+    return nullptr;
+  }
+
+  auto& buildTables = buildData_->tables;
+
+  // Skip empty build batches
+  while (buildBatchIdx_ < buildTables.size() &&
+         buildTables[buildBatchIdx_]->num_rows() == 0) {
+    ++buildBatchIdx_;
+  }
+
+  // All build batches for this probe input have been processed
+  if (buildBatchIdx_ >= buildTables.size()) {
+    input_.reset();
+    buildBatchIdx_ = 0;
+    return nullptr;
+  }
+
+  auto probeInput = std::dynamic_pointer_cast<CudfVector>(input_);
+  VELOX_CHECK_NOT_NULL(
+      probeInput, "CudfNestedLoopJoinProbe expects CudfVector");
+
+  auto probeView = probeInput->getTableView();
+  auto buildBatchView = buildTables[buildBatchIdx_]->view();
+  auto stream = probeInput->stream();
+  auto mr = get_output_mr();
+
+  auto result = crossJoinWithBuildBatch(probeView, buildBatchView, stream, mr);
+  ++buildBatchIdx_;
+
+  // If we've processed all build batches, release the probe input
+  if (buildBatchIdx_ >= buildTables.size()) {
+    input_.reset();
+    buildBatchIdx_ = 0;
+  }
+
+  return result;
 }
 
 bool CudfNestedLoopJoinProbe::isFinished() {
