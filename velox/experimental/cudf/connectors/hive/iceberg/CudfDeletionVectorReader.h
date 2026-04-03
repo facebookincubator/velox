@@ -18,21 +18,23 @@
 
 #include <cudf/table/table.hpp>
 #include <cudf/types.hpp>
+
 #include <rmm/cuda_stream_view.hpp>
 #include <rmm/mr/device_memory_resource.hpp>
 
-#include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
-
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <string>
+#include <unordered_map>
 
 namespace facebook::velox::cudf_velox::connector::hive::iceberg {
 
 /// Reads and applies Iceberg V3 deletion vectors on the GPU.
 ///
 /// Lifecycle:
-///   1. Construct with the IcebergDeleteFile describing the Puffin DV.
+///   1. Construct with the Puffin file path, size, and bounds maps extracted
+///      from the IcebergDeleteFile.
 ///   2. Call loadAndInitialize() to read the blob from disk, parse the DV-v1
 ///      envelope, and build the cuco roaring bitmap on the GPU. The bitmap is
 ///      retained as a member so it is constructed only once per split.
@@ -40,10 +42,14 @@ namespace facebook::velox::cudf_velox::connector::hive::iceberg {
 ///      to filter out deleted rows.
 class CudfDeletionVectorReader {
  public:
-  using IcebergDeleteFile =
-      ::facebook::velox::connector::hive::iceberg::IcebergDeleteFile;
+  //! Forward declaration of the opaque cuco roaring bitmap wrapper.
+  struct BitmapImpl;
 
-  explicit CudfDeletionVectorReader(const IcebergDeleteFile& dvFile);
+  CudfDeletionVectorReader(
+      std::string filePath,
+      uint64_t fileSizeInBytes,
+      std::unordered_map<int32_t, std::string> lowerBounds,
+      std::unordered_map<int32_t, std::string> upperBounds);
 
   ~CudfDeletionVectorReader();
 
@@ -74,22 +80,21 @@ class CudfDeletionVectorReader {
   static constexpr int32_t kDvLengthFieldId = 101;
 
  private:
-  /// Reads raw bytes from the Puffin file at the offset/length described by
-  /// the IcebergDeleteFile bounds maps.
+  /// Reads raw bytes from the Puffin file. Defined in .cpp (uses Velox I/O).
   std::string loadBlob();
 
-  /// Strips the DV-v1 envelope (length + magic + payload + CRC) and sets
-  /// dvPayloadOffset_ / dvPayloadSize_.
+  /// Strips the DV-v1 envelope. Defined in .cpp (uses Velox macros).
   void parseDvBlobEnvelope();
 
-  const IcebergDeleteFile dvFile_;
+  std::string filePath_;
+  uint64_t fileSizeInBytes_;
+  std::unordered_map<int32_t, std::string> lowerBounds_;
+  std::unordered_map<int32_t, std::string> upperBounds_;
 
   std::string dvBlobBytes_;
   std::size_t dvPayloadOffset_{0};
   std::size_t dvPayloadSize_{0};
 
-  // Pimpl to keep cuco CUDA types out of this header.
-  struct BitmapImpl;
   std::unique_ptr<BitmapImpl> bitmap_;
 };
 

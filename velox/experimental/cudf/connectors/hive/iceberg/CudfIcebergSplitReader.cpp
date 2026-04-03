@@ -130,7 +130,11 @@ void CudfIcebergSplitReader::loadDeletionVector() {
         continue;
       }
 
-      dvReader_ = std::make_unique<CudfDeletionVectorReader>(deleteFile);
+      dvReader_ = std::make_unique<CudfDeletionVectorReader>(
+          deleteFile.filePath,
+          deleteFile.fileSizeInBytes,
+          deleteFile.lowerBounds,
+          deleteFile.upperBounds);
       dvReader_->loadAndInitialize(stream_);
       break;
     }
