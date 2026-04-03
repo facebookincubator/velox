@@ -18,7 +18,7 @@
 
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnectorSplit.h"
-#include "velox/experimental/cudf/connectors/hive/CudfHiveDataSourceHelpers.hpp"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveDataSourceHelpers.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 

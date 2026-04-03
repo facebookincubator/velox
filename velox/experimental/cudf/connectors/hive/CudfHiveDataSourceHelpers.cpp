@@ -15,7 +15,7 @@
  */
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
-#include "velox/experimental/cudf/connectors/hive/CudfHiveDataSourceHelpers.hpp"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveDataSourceHelpers.h"
 
 #include "velox/dwio/common/BufferedInput.h"
 

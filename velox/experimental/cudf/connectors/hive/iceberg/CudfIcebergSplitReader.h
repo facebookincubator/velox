@@ -17,7 +17,7 @@
 #pragma once
 
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
-#include "velox/experimental/cudf/connectors/hive/CudfHiveDataSourceHelpers.hpp"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveDataSourceHelpers.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 
 #include "velox/common/io/IoStatistics.h"
@@ -27,6 +27,7 @@
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
+#include "velox/experimental/cudf/connectors/hive/iceberg/CudfDeletionVectorReader.h"
 #include "velox/dwio/common/Statistics.h"
 
 #include <cudf/io/datasource.hpp>
@@ -92,7 +93,7 @@ class CudfIcebergSplitReader : public NvtxHelper {
  private:
   void setupCudfDataSourceAndOptions();
   void createCudfReader();
-  void loadDeletionVectorBlob();
+  void loadDeletionVector();
   void setupDeleteFileReaders();
 
   RowVectorPtr applyPositionalDeletes(RowVectorPtr output);
@@ -115,12 +116,7 @@ class CudfIcebergSplitReader : public NvtxHelper {
   CudfParquetReaderPtr splitReader_;
   rmm::cuda_stream_view stream_;
 
-  // Raw DV blob bytes loaded from the Puffin file. The Roaring64 payload
-  // region is identified by dvPayloadOffset_ / dvPayloadSize_.
-  std::string dvBlobBytes_;
-  std::size_t dvPayloadOffset_{0};
-  std::size_t dvPayloadSize_{0};
-  bool hasDeletionVector_{false};
+  std::unique_ptr<CudfDeletionVectorReader> dvReader_;
 
   std::list<std::unique_ptr<velox_iceberg::PositionalDeleteFileReader>>
       positionalDeleteFileReaders_;

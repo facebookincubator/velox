@@ -14,11 +14,10 @@
 
 add_library(
   velox_cudf_iceberg_connector
-  CudfDeletionVectorBlobReader.cpp
+  CudfDeletionVectorReader.cu
   CudfIcebergConnector.cpp
   CudfIcebergDataSource.cpp
   CudfIcebergSplitReader.cpp
-  CudfIcebergSplitReaderHelpers.cu
 )
 
 set_target_properties(velox_cudf_iceberg_connector PROPERTIES CUDA_ARCHITECTURES native)
