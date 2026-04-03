@@ -66,7 +66,8 @@ std::unique_ptr<DataSource> CudfIcebergConnector::createDataSource(
         &fileHandleFactory_,
         ioExecutor_,
         connectorQueryCtx,
-        cudfHiveConfig_);
+        cudfHiveConfig_,
+        hiveConfig_);
   }
 
   // Fall back to the CPU-based Iceberg data source.

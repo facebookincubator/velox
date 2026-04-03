@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergSplitReader.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfDeletionVectorBlobReader.h"
+#include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergSplitReaderHelpers.hpp"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
@@ -41,7 +42,6 @@
 #include "velox/dwio/common/BufferUtil.h"
 
 #include <cudf/io/datasource.hpp>
-#include <cudf/io/experimental/deletion_vectors.hpp>
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/types.hpp>
 #include <cudf/table/table.hpp>
@@ -68,22 +68,6 @@ bool shouldSkipBySequenceNumber(
   }
   return isEqualityDelete ? (fileSeqNum <= dataSeqNum)
                           : (fileSeqNum < dataSeqNum);
-}
-
-void validateRoaring64BitmapBlob(const std::string& blob) {
-  VELOX_CHECK_GE(
-      blob.size(),
-      sizeof(uint64_t),
-      "Deletion vector blob too small: {} bytes, expected at least {}.",
-      blob.size(),
-      sizeof(uint64_t));
-
-  uint64_t numBuckets;
-  std::memcpy(&numBuckets, blob.data(), sizeof(uint64_t));
-  VELOX_CHECK_GT(
-      numBuckets,
-      0,
-      "Roaring64 bitmap has zero buckets, nothing to delete.");
 }
 
 } // namespace
@@ -122,9 +106,10 @@ CudfIcebergSplitReader::CudfIcebergSplitReader(
 
 void CudfIcebergSplitReader::prepareSplit() {
   splitReader_.reset();
-  experimentalSplitReader_.reset();
   dataSource_.reset();
   dvBlobBytes_.clear();
+  dvPayloadOffset_ = 0;
+  dvPayloadSize_ = 0;
   hasDeletionVector_ = false;
   positionalDeleteFileReaders_.clear();
   equalityDeleteFileReaders_.clear();
@@ -151,9 +136,16 @@ void CudfIcebergSplitReader::loadDeletionVectorBlob() {
 
       CudfDeletionVectorBlobReader blobReader(deleteFile);
       dvBlobBytes_ = blobReader.loadBlob();
-      validateRoaring64BitmapBlob(dvBlobBytes_);
-      hasDeletionVector_ = true;
 
+      parseDvBlobEnvelope(dvBlobBytes_, dvPayloadOffset_, dvPayloadSize_);
+
+      VELOX_CHECK_GT(
+          dvPayloadSize_,
+          sizeof(uint64_t),
+          "Deletion vector Roaring64 payload too small: {} bytes.",
+          dvPayloadSize_);
+
+      hasDeletionVector_ = true;
       break;
     }
   }
@@ -172,8 +164,6 @@ void CudfIcebergSplitReader::setupDeleteFileReaders() {
         continue;
       }
 
-      // Skip the delete file if all delete positions are before this split.
-      // splitOffset is 0 for cudf reads since we read from the beginning.
       constexpr uint64_t splitOffset = 0;
       if (auto iter = deleteFile.upperBounds.find(
               velox_iceberg::IcebergMetadataColumn::kPosId);
@@ -253,7 +243,7 @@ void CudfIcebergSplitReader::setupDeleteFileReaders() {
       }
     } else if (
         deleteFile.content == velox_iceberg::FileContent::kDeletionVector) {
-      // Handled via loadDeletionVectorBlob() and the experimental reader.
+      // Handled via loadDeletionVectorBlob() and applyDeletionVector().
     } else {
       VELOX_NYI(
           "Unsupported delete file content type: {}",
@@ -344,67 +334,42 @@ void CudfIcebergSplitReader::setupCudfDataSourceAndOptions() {
 }
 
 void CudfIcebergSplitReader::createCudfReader() {
-  if (hasDeletionVector_) {
-    cudf::io::parquet::experimental::deletion_vector_info dvInfo;
-    dvInfo.serialized_roaring_bitmaps.push_back(
-        cudf::host_span<cuda::std::byte const>(
-            reinterpret_cast<cuda::std::byte const*>(dvBlobBytes_.data()),
-            dvBlobBytes_.size()));
-    dvInfo.deletion_vector_row_counts.push_back(
-        std::numeric_limits<cudf::size_type>::max());
-
-    experimentalSplitReader_ =
-        std::make_unique<ExperimentalCudfParquetReader>(
-            cudfHiveConfig_->maxChunkReadLimit(),
-            cudfHiveConfig_->maxPassReadLimit(),
-            readerOptions_,
-            dvInfo,
-            stream_,
-            get_output_mr());
-  } else {
-    splitReader_ = std::make_unique<cudf::io::chunked_parquet_reader>(
-        cudfHiveConfig_->maxChunkReadLimit(),
-        cudfHiveConfig_->maxPassReadLimit(),
-        readerOptions_,
-        stream_,
-        get_output_mr());
-  }
+  splitReader_ = std::make_unique<cudf::io::chunked_parquet_reader>(
+      cudfHiveConfig_->maxChunkReadLimit(),
+      cudfHiveConfig_->maxPassReadLimit(),
+      readerOptions_,
+      stream_,
+      get_output_mr());
 }
 
 std::optional<RowVectorPtr> CudfIcebergSplitReader::next(uint64_t /*size*/) {
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
-  VELOX_CHECK(
-      splitReader_ || experimentalSplitReader_,
-      "No split reader present");
+  VELOX_CHECK(splitReader_, "No split reader present");
 
-  bool hasNext = hasDeletionVector_ ? experimentalSplitReader_->has_next()
-                                    : splitReader_->has_next();
-  if (!hasNext) {
+  if (!splitReader_->has_next()) {
     return std::nullopt;
   }
 
-  auto tableWithMetadata = hasDeletionVector_
-      ? experimentalSplitReader_->read_chunk()
-      : splitReader_->read_chunk();
+  auto tableWithMetadata = splitReader_->read_chunk();
   auto cudfTable = std::move(tableWithMetadata.tbl);
-
-  if (hasDeletionVector_) {
-    auto allColumns = cudfTable->release();
-    VELOX_CHECK_GE(
-        allColumns.size(),
-        1,
-        "Expected at least 1 column (row index) from experimental reader");
-    std::vector<std::unique_ptr<cudf::column>> userColumns;
-    userColumns.reserve(allColumns.size() - 1);
-    std::move(
-        allColumns.begin() + 1,
-        allColumns.end(),
-        std::back_inserter(userColumns));
-    cudfTable = std::make_unique<cudf::table>(std::move(userColumns));
-  }
-
   auto nRows = cudfTable->num_rows();
 
+  // Apply deletion vector on the GPU if present.
+  if (hasDeletionVector_ && nRows > 0) {
+    const void* payload =
+        dvBlobBytes_.data() + dvPayloadOffset_;
+    cudfTable = applyDeletionVector(
+        cudfTable->view(),
+        payload,
+        dvPayloadSize_,
+        baseReadOffset_,
+        stream_,
+        get_output_mr());
+  }
+
+  auto nRowsAfterDv = cudfTable->num_rows();
+
+  // Trim extra columns if the parquet file has more than we need.
   if (outputType_->size() < cudfTable->num_columns()) {
     auto cudfTableColumns = cudfTable->release();
     std::vector<std::unique_ptr<cudf::column>> outputColumns;
@@ -418,7 +383,7 @@ std::optional<RowVectorPtr> CudfIcebergSplitReader::next(uint64_t /*size*/) {
 
   auto output = cudfIsRegistered()
       ? std::make_shared<CudfVector>(
-            pool_, outputType_, nRows, std::move(cudfTable), stream_)
+            pool_, outputType_, nRowsAfterDv, std::move(cudfTable), stream_)
       : with_arrow::toVeloxColumn(
             cudfTable->view(),
             pool_,
@@ -429,16 +394,12 @@ std::optional<RowVectorPtr> CudfIcebergSplitReader::next(uint64_t /*size*/) {
 
   VELOX_CHECK_NOT_NULL(output, "Cudf to Velox conversion yielded a nullptr");
 
-  // For positional and equality deletes, we need a proper RowVector.
-  // CudfVector wraps a cudf table and its children_ is empty, so we need
-  // to materialize to a Velox RowVector first.
   bool hasPositionalDeletes = !positionalDeleteFileReaders_.empty();
   bool hasEqualityDeletes = !equalityDeleteFileReaders_.empty();
 
   if (hasPositionalDeletes || hasEqualityDeletes) {
     auto rowVector = std::dynamic_pointer_cast<RowVector>(output);
     if (!rowVector) {
-      // output is a CudfVector; force conversion to Velox RowVector.
       auto cudfVec = std::dynamic_pointer_cast<CudfVector>(output);
       if (cudfVec) {
         rowVector = with_arrow::toVeloxColumn(
@@ -493,7 +454,6 @@ RowVectorPtr CudfIcebergSplitReader::applyPositionalDeletes(
     }
   }
 
-  // Count deleted rows.
   auto* bitmap = deleteBitmap->as<uint8_t>();
   vector_size_t numDeleted = 0;
   for (vector_size_t i = 0; i < numRows; ++i) {

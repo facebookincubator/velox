@@ -18,13 +18,17 @@ add_library(
   CudfIcebergConnector.cpp
   CudfIcebergDataSource.cpp
   CudfIcebergSplitReader.cpp
+  CudfIcebergSplitReaderHelpers.cu
 )
 
 set_target_properties(velox_cudf_iceberg_connector PROPERTIES CUDA_ARCHITECTURES native)
+target_compile_options(velox_cudf_iceberg_connector PRIVATE
+  $<$<COMPILE_LANGUAGE:CUDA>:--expt-extended-lambda>
+)
 
 target_link_libraries(
   velox_cudf_iceberg_connector
-  PRIVATE velox_hive_iceberg_splitreader velox_hive_connector velox_functions_iceberg
+  PRIVATE velox_hive_iceberg_splitreader velox_hive_connector velox_functions_iceberg cuco::cuco
   PUBLIC cudf::cudf velox_cudf_hive_connector
 )
 

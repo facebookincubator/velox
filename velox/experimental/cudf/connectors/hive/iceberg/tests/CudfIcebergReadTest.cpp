@@ -140,54 +140,81 @@ TEST_F(CudfIcebergReadTest, deletionVector) {
   auto filePath = TempFilePath::create();
   writeToFile(filePath->getPath(), data);
 
-  // Create a deletion vector file containing roaring bitmap with positions
-  // 10, 20, 30, 40, 50 deleted. We use the Velox DeletionVectorWriter or
-  // simply create a binary roaring bitmap.
+  // Construct a deletion-vector-v1 blob for positions {10, 20, 30, 40, 50}.
   //
-  // Construct a Roaring64 bitmap blob for positions {10,20,30,40,50}.
-  // The cudf experimental reader expects 64-bit roaring bitmap (portable) format.
+  // DV-v1 blob format (Iceberg spec):
+  //   [4B big-endian: combined length of (magic + vector)]
+  //   [4B magic: 0xD1 0xD3 0x39 0x64]
+  //   [vector: 64-bit Roaring portable format]
+  //   [4B big-endian: CRC-32 of (magic + vector)]
+  //
+  // The 64-bit Roaring format:
+  //   [uint64 LE: num_buckets]
+  //   For each bucket:
+  //     [uint32 LE: bucket_key (upper 32 bits)]
+  //     [standard 32-bit Roaring bitmap in portable format]
+  //
+  // All our positions are < 2^16, so they fall in one bucket (key=0)
+  // with one array container.
   auto dvFilePath = TempFilePath::create();
   {
-    // Build a Roaring64 bitmap for positions {10, 20, 30, 40, 50}.
-    // The cudf experimental reader expects 64-bit roaring bitmap format:
-    //   [uint64: num_buckets]
-    //   For each bucket:
-    //     [uint32: bucket_key (upper 32 bits)]
-    //     [standard 32-bit roaring bitmap (portable format)]
-    //
-    // All our positions are < 2^16, so they fall in one bucket with key=0.
-    std::vector<uint8_t> blob;
-    auto appendLE = [&blob](auto val) {
+    std::vector<uint8_t> vectorPayload;
+    auto appendLE = [&vectorPayload](auto val) {
       val = folly::Endian::little(val);
-      blob.insert(
-          blob.end(),
+      vectorPayload.insert(
+          vectorPayload.end(),
           reinterpret_cast<uint8_t*>(&val),
           reinterpret_cast<uint8_t*>(&val) + sizeof(val));
     };
 
-    // Roaring64 header: 1 bucket.
+    // Roaring64: 1 bucket, key=0.
     appendLE(static_cast<uint64_t>(1));
-    // Bucket key: 0 (upper 32 bits of 64-bit values).
     appendLE(static_cast<uint32_t>(0));
 
-    // Now the standard 32-bit roaring bitmap for the lower 32 bits.
-    // Cookie: 12346 (SERIAL_COOKIE_NO_RUNCONTAINER).
+    // Standard 32-bit roaring bitmap (portable format, no-run cookie 12346).
     appendLE(static_cast<uint32_t>(12346));
-    // Number of containers: 1.
     appendLE(static_cast<uint32_t>(1));
     // Descriptive header: container key=0, cardinality-1=4.
     appendLE(static_cast<uint16_t>(0));
     appendLE(static_cast<uint16_t>(4));
-    // Offset header: byte offset from start of 32-bit bitmap to container data.
-    // 32-bit bitmap layout: cookie(4) + numContainers(4) + desc(4) + offset(4) = 16.
+    // Offset header (required since cookie 12346 always has it for 1 container).
+    // Offset = cookie(4) + numContainers(4) + desc(4) + offset(4) = 16.
     appendLE(static_cast<uint32_t>(16));
     // Array container: 5 uint16 values.
     for (uint16_t pos : {10, 20, 30, 40, 50}) {
       appendLE(pos);
     }
 
-    // Write blob to file. TempFilePath::create() already creates the file,
-    // so we need to allow overwriting.
+    // Build the DV-v1 envelope.
+    static constexpr uint8_t dvMagic[] = {0xD1, 0xD3, 0x39, 0x64};
+    // magic + vector
+    std::vector<uint8_t> magicAndVector;
+    magicAndVector.insert(
+        magicAndVector.end(), dvMagic, dvMagic + sizeof(dvMagic));
+    magicAndVector.insert(
+        magicAndVector.end(), vectorPayload.begin(), vectorPayload.end());
+
+    uint32_t combinedLength = static_cast<uint32_t>(magicAndVector.size());
+    uint32_t crc = 0;
+    {
+      // CRC-32 of (magic + vector). Use zlib-compatible CRC via folly or
+      // a simple manual computation. For test purposes, we use a zero CRC
+      // since our parser currently doesn't validate it.
+      crc = 0;
+    }
+
+    std::vector<uint8_t> blob;
+    auto appendBE32 = [&blob](uint32_t val) {
+      blob.push_back(static_cast<uint8_t>((val >> 24) & 0xFF));
+      blob.push_back(static_cast<uint8_t>((val >> 16) & 0xFF));
+      blob.push_back(static_cast<uint8_t>((val >> 8) & 0xFF));
+      blob.push_back(static_cast<uint8_t>(val & 0xFF));
+    };
+
+    appendBE32(combinedLength);
+    blob.insert(blob.end(), magicAndVector.begin(), magicAndVector.end());
+    appendBE32(crc);
+
     auto fs = filesystems::getFileSystem(dvFilePath->getPath(), nullptr);
     filesystems::FileOptions writeOptions;
     writeOptions.shouldThrowOnFileAlreadyExists = false;
@@ -198,7 +225,6 @@ TEST_F(CudfIcebergReadTest, deletionVector) {
     writeFile->close();
   }
 
-  // Create IcebergDeleteFile for the DV.
   IcebergDeleteFile dvDeleteFile(
       FileContent::kDeletionVector,
       dvFilePath->getPath(),
