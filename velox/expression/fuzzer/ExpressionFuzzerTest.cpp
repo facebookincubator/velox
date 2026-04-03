@@ -482,6 +482,7 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "uniqueness_distribution(khyperloglog) -> map(bigint,double)",
     "uniqueness_distribution(khyperloglog,bigint) -> map(bigint,double)",
     "merge_khll(array(khyperloglog)) -> khyperloglog",
+    "pmod", // Not available in Presto
 };
 
 int main(int argc, char** argv) {

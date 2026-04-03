@@ -272,6 +272,49 @@ TEST_F(ArithmeticTest, modInt) {
   assertError<int64_t>("mod(c0, c1)", {10}, {0}, "Cannot divide by 0");
 }
 
+TEST_F(ArithmeticTest, pmod) {
+  // Positive modulo returns non-negative results for positive divisors.
+  std::vector<double> numerDouble = {0, 6, -7, 10, -10};
+  std::vector<double> denomDouble = {1, 2, 3, 3, 3};
+  std::vector<double> expectedDouble = {0, 0, 2, 1, 2};
+
+  assertExpression<double>(
+      "pmod(c0, c1)", numerDouble, denomDouble, expectedDouble);
+
+  // Division by zero returns NULL.
+  EXPECT_EQ(
+      std::nullopt,
+      evaluateOnce<double>(
+          "pmod(c0, c1)",
+          std::optional<double>(5.0),
+          std::optional<double>(0.0)));
+}
+
+TEST_F(ArithmeticTest, pmodInt) {
+  std::vector<int64_t> numerInt = {9, 10, -7, 0, -9};
+  std::vector<int64_t> denomInt = {3, 3, 3, 3, 3};
+  std::vector<int64_t> expectedInt = {0, 1, 2, 0, 0};
+
+  assertExpression<int64_t, int64_t>(
+      "pmod(c0, c1)", numerInt, denomInt, expectedInt);
+
+  // INT64_MIN % -1 edge case.
+  EXPECT_EQ(
+      0,
+      evaluateOnce<int64_t>(
+          "pmod(c0, c1)",
+          std::optional<int64_t>(std::numeric_limits<int64_t>::min()),
+          std::optional<int64_t>(-1)));
+
+  // Division by zero returns NULL.
+  EXPECT_EQ(
+      std::nullopt,
+      evaluateOnce<int64_t>(
+          "pmod(c0, c1)",
+          std::optional<int64_t>(10),
+          std::optional<int64_t>(0)));
+}
+
 TEST_F(ArithmeticTest, power) {
   std::vector<double> baseDouble = {
       0, 0, 0, -1, -1, -1, -9, 9.1, 10.1, 11.1, -11.1};

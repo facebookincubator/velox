@@ -19,35 +19,29 @@
 
 namespace facebook::velox::connector {
 
+ScopedRegistry<std::string, Connector>& connectors() {
+  static ScopedRegistry<std::string, Connector> instance;
+  return instance;
+}
+
 bool registerConnector(std::shared_ptr<Connector> connector) {
-  bool ok = connectors().insert({connector->connectorId(), connector}).second;
-  VELOX_CHECK(
-      ok,
-      "Connector with ID is already registered: {}",
-      connector->connectorId());
+  connectors().insert(connector->connectorId(), connector);
   return true;
 }
 
 bool unregisterConnector(const std::string& connectorId) {
-  return connectors().erase(connectorId) == 1;
+  return connectors().erase(connectorId);
 }
 
 std::shared_ptr<Connector> getConnector(const std::string& connectorId) {
-  auto it = connectors().find(connectorId);
-  VELOX_CHECK(
-      it != connectors().end(),
-      "Connector with ID is not registered: {}",
-      connectorId);
-  return it->second;
+  auto connector = connectors().find(connectorId);
+  VELOX_CHECK_NOT_NULL(
+      connector, "Connector with ID is not registered: {}", connectorId);
+  return connector;
 }
 
 bool hasConnector(const std::string& connectorId) {
-  return connectors().find(connectorId) != connectors().end();
-}
-
-const std::unordered_map<std::string, std::shared_ptr<Connector>>&
-getAllConnectors() {
-  return connectors();
+  return connectors().find(connectorId) != nullptr;
 }
 
 bool DataSink::Stats::empty() const {

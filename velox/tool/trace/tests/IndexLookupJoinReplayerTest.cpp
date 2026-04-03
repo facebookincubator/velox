@@ -23,6 +23,7 @@
 
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/PartitionFunction.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -76,7 +77,7 @@ class IndexLookupJoinReplayerTest : public HiveConnectorTestBase {
     probeInput_.clear();
     indexInput_.clear();
     HiveConnectorTestBase::TearDown();
-    connector::unregisterConnector(kTestIndexConnectorName);
+    connector::ConnectorRegistry::global().erase(kTestIndexConnectorName);
   }
 
   // Create index table with the given key and value inputs.

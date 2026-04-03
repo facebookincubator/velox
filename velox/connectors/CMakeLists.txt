@@ -17,7 +17,7 @@ velox_link_libraries(velox_connector velox_common_config velox_vector)
 
 velox_add_library(velox_connector_registry ConnectorRegistry.cpp HEADERS ConnectorRegistry.h)
 
-velox_link_libraries(velox_connector_registry velox_connector)
+velox_link_libraries(velox_connector_registry velox_connector velox_scoped_registry velox_core)
 
 add_subdirectory(fuzzer)
 

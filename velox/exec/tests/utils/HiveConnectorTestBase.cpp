@@ -19,6 +19,7 @@
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
@@ -51,7 +52,8 @@ void HiveConnectorTestBase::SetUp() {
       std::make_shared<config::ConfigBase>(
           std::unordered_map<std::string, std::string>()),
       ioExecutor_.get());
-  connector::registerConnector(hiveConnector);
+  connector::ConnectorRegistry::global().insert(
+      hiveConnector->connectorId(), hiveConnector);
   dwio::common::registerFileSinks();
   dwrf::registerDwrfReaderFactory();
   dwrf::registerDwrfWriterFactory();
@@ -64,19 +66,20 @@ void HiveConnectorTestBase::TearDown() {
   ioExecutor_.reset();
   dwrf::unregisterDwrfReaderFactory();
   dwrf::unregisterDwrfWriterFactory();
-  connector::unregisterConnector(kHiveConnectorId);
+  connector::ConnectorRegistry::global().erase(kHiveConnectorId);
   text::unregisterTextReaderFactory();
   OperatorTestBase::TearDown();
 }
 
 void HiveConnectorTestBase::resetHiveConnector(
     const std::shared_ptr<const config::ConfigBase>& config) {
-  connector::unregisterConnector(kHiveConnectorId);
+  connector::ConnectorRegistry::global().erase(kHiveConnectorId);
 
   connector::hive::HiveConnectorFactory factory;
   auto hiveConnector =
       factory.newConnector(kHiveConnectorId, config, ioExecutor_.get());
-  connector::registerConnector(hiveConnector);
+  connector::ConnectorRegistry::global().insert(
+      hiveConnector->connectorId(), hiveConnector);
 }
 
 void HiveConnectorTestBase::writeToFiles(

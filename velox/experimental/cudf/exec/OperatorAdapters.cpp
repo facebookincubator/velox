@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
 #include "velox/experimental/cudf/exec/CudfAssignUniqueId.h"
 #include "velox/experimental/cudf/exec/CudfBatchConcat.h"
@@ -159,12 +160,13 @@ class FilterProjectAdapter : public OperatorAdapter {
     auto filterNode = filterProjectOp->filterNode();
 
     if (projectPlanNode) {
-      if (projectPlanNode->sources()[0]->outputType()->size() == 0 ||
-          projectPlanNode->outputType()->size() == 0) {
-        LOG_FALLBACK(
-            "FilterProject empty input or output type, PlanNode id: {}",
-            planNode->id());
-        return false;
+      if (projectPlanNode->sources()[0]->outputType()->size() == 0) {
+        if (filterNode || !projectPlanNode->projections().empty()) {
+          LOG_FALLBACK(
+              "FilterProject empty input type with filter or projections, PlanNode id: {}",
+              planNode->id());
+          return false;
+        }
       }
     }
 
@@ -244,15 +246,6 @@ class AggregationAdapter : public OperatorAdapter {
     if (!aggregationPlanNode) {
       LOG_FALLBACK(
           "Aggregation planNode is not AggregationNode, PlanNode id: {}",
-          planNode->id());
-      return false;
-    }
-
-    if (aggregationPlanNode->sources()[0]->outputType()->size() == 0) {
-      // We cannot handle RowVectors with a length but no data.
-      // This is the case with count(*) global (without groupby)
-      LOG_FALLBACK(
-          "Aggregation empty input type (e.g., count(*) without groupby), PlanNode id: {}",
           planNode->id());
       return false;
     }

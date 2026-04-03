@@ -1309,7 +1309,8 @@ class ParquetRowReader::Impl {
     uint64_t rowNumber = 0;
     for (auto i = 0; i < rowGroups_.size(); i++) {
       VELOX_CHECK_GT(rowGroups_[i].columns.size(), 0);
-      auto fileOffset = rowGroups_[i].__isset.file_offset
+      auto fileOffset =
+          (rowGroups_[i].__isset.file_offset && rowGroups_[i].file_offset != 0)
           ? rowGroups_[i].file_offset
           : rowGroups_[i].columns[0].meta_data.__isset.dictionary_page_offset
           ? rowGroups_[i].columns[0].meta_data.dictionary_page_offset

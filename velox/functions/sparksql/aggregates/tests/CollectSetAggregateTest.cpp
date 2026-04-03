@@ -306,6 +306,33 @@ TEST_F(CollectSetAggregateTest, unknownType) {
   testAggregations({data}, {"c0"}, {"collect_set(c0, true)"}, {}, {expected});
 }
 
+// Verify the 1-arg collect_set(c0) defaults to ignoring nulls (Spark default).
+TEST_F(CollectSetAggregateTest, defaultIgnoreNulls) {
+  auto data = makeRowVector({
+      makeNullableFlatVector<int32_t>(
+          {1, 2, std::nullopt, 4, 5, std::nullopt, 4, 2}),
+  });
+
+  auto expected = makeRowVector({
+      makeArrayVectorFromJson<int32_t>({"[1, 2, 4, 5]"}),
+  });
+
+  // 1-arg signature: no explicit ignoreNulls boolean.
+  testAggregations(
+      {data}, {}, {"collect_set(c0)"}, {"spark_array_sort(a0)"}, {expected});
+
+  // All null inputs — returns empty array (nulls ignored).
+  data = makeRowVector({
+      makeAllNullFlatVector<int32_t>(5),
+  });
+
+  expected = makeRowVector({
+      makeArrayVectorFromJson<int32_t>({"[]"}),
+  });
+
+  testAggregations({data}, {}, {"collect_set(c0)"}, {}, {expected});
+}
+
 // Verify that collect_set(c0, true) correctly ignores null inputs.
 TEST_F(CollectSetAggregateTest, explicitIgnoreNullsTrue) {
   auto data = makeRowVector({
