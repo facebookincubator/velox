@@ -15,8 +15,14 @@
  */
 
 #include "velox/connectors/ConnectorRegistry.h"
-#include "velox/connectors/ConnectorRegistryInternal.h"
 
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "velox/connectors/Connector.h"
+#include "velox/connectors/ConnectorRegistryInternal.h"
 #include "velox/core/QueryCtx.h"
 
 namespace facebook::velox::connector {

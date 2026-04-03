@@ -16,6 +16,10 @@
 
 #pragma once
 
+#include <memory>
+#include <utility>
+#include <vector>
+
 #include "folly/Synchronized.h"
 #include "folly/container/F14Map.h"
 #include "folly/container/F14Set.h"

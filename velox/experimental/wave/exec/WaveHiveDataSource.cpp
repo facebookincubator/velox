@@ -15,6 +15,8 @@
  */
 
 #include "velox/experimental/wave/exec/WaveHiveDataSource.h"
+#include "velox/connectors/ConnectorRegistry.h"
+#include "velox/connectors/hive/HiveDataSource.h"
 
 namespace facebook::velox::wave {
 
@@ -164,7 +166,8 @@ void WaveHiveDataSource::registerConnector() {
   // Create hive connector with config...
   connector::hive::HiveConnectorFactory factory;
   auto hiveConnector = factory.newConnector("wavemock", config, nullptr);
-  connector::registerConnector(hiveConnector);
+  connector::ConnectorRegistry::global().insert(
+      hiveConnector->connectorId(), hiveConnector);
   connector::hive::HiveDataSource::registerWaveDelegateHook(
       [](const HiveTableHandlePtr& hiveTableHandle,
          const std::shared_ptr<common::ScanSpec>& scanSpec,

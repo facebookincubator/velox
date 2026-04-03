@@ -15,6 +15,12 @@
  */
 
 #include "velox/connectors/Connector.h"
+
+#include <memory>
+#include <string>
+
+#include "velox/common/ScopedRegistry.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/connectors/ConnectorRegistryInternal.h"
 
 namespace facebook::velox::connector {
@@ -24,7 +30,7 @@ ScopedRegistry<std::string, Connector>& connectors() {
   return instance;
 }
 
-bool registerConnector(std::shared_ptr<Connector> connector) {
+bool registerConnector(const std::shared_ptr<Connector>& connector) {
   connectors().insert(connector->connectorId(), connector);
   return true;
 }

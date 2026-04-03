@@ -19,9 +19,9 @@
 #include <folly/Executor.h>
 #include <folly/Synchronized.h>
 #include <folly/container/F14Map.h>
-#include <folly/executors/CPUThreadPoolExecutor.h>
 #include <deque>
 #include <functional>
+#include <string_view>
 #include <typeindex>
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/caching/AsyncDataCache.h"
