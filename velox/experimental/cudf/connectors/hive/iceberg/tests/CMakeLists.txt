@@ -28,10 +28,12 @@ target_link_libraries(
   velox_test_util
 )
 
+# End-to-end read tests (connector-level tests with full Velox pipeline).
 add_executable(
   velox_cudf_iceberg_read_test
   Main.cpp
   CudfIcebergReadTest.cpp
+  CudfEqualityDeleteFileReaderTest.cpp
 )
 
 target_link_libraries(
@@ -54,3 +56,29 @@ add_test(
 )
 
 set_tests_properties(velox_cudf_iceberg_read_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
+
+# Unit tests for CudfDeletionVectorReader (standalone, no connector pipeline).
+add_executable(
+  velox_cudf_iceberg_deletion_vector_test
+  CudfDeletionVectorReaderTest.cpp
+)
+
+target_link_libraries(
+  velox_cudf_iceberg_deletion_vector_test
+  velox_cudf_iceberg_connector
+  velox_cudf_exec_test_lib
+  velox_exec
+  velox_exec_test_lib
+  velox_test_util
+  gtest
+  gtest_main
+  fmt::fmt
+)
+
+add_test(
+  NAME velox_cudf_iceberg_deletion_vector_test
+  COMMAND velox_cudf_iceberg_deletion_vector_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+set_tests_properties(velox_cudf_iceberg_deletion_vector_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)

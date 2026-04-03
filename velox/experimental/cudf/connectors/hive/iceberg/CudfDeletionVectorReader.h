@@ -95,6 +95,7 @@ class CudfDeletionVectorReader {
   std::size_t dvPayloadOffset_{0};
   std::size_t dvPayloadSize_{0};
 
+  std::string normalizedPayload_;
   std::unique_ptr<BitmapImpl> bitmap_;
 };
 

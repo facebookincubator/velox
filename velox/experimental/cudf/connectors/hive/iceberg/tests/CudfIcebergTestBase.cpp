@@ -17,15 +17,25 @@
 #include "velox/experimental/cudf/connectors/hive/iceberg/tests/CudfIcebergTestBase.h"
 
 #include "velox/common/file/FileSystems.h"
+#include "velox/dwio/dwrf/RegisterDwrfReader.h"
+#include "velox/dwio/dwrf/RegisterDwrfWriter.h"
+#include "velox/dwio/dwrf/writer/Writer.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
 
 namespace facebook::velox::cudf_velox::exec::test {
 
 using namespace facebook::velox::connector::hive::iceberg;
+using namespace facebook::velox::exec::test;
 
 void CudfIcebergTestBase::SetUp() {
   CudfHiveConnectorTestBase::SetUp();
 
-  // Register cudf Iceberg connector.
+  // Register DWRF reader/writer factories so that the upstream
+  // PositionalDeleteFileReader and EqualityDeleteFileReader can read DWRF
+  // delete files.
+  dwrf::registerDwrfReaderFactory();
+  dwrf::registerDwrfWriterFactory();
+
   connector::hive::iceberg::CudfIcebergConnectorFactory factory;
   auto icebergConnector = factory.newConnector(
       kCudfIcebergConnectorId,
@@ -37,6 +47,8 @@ void CudfIcebergTestBase::SetUp() {
 
 void CudfIcebergTestBase::TearDown() {
   facebook::velox::connector::unregisterConnector(kCudfIcebergConnectorId);
+  dwrf::unregisterDwrfReaderFactory();
+  dwrf::unregisterDwrfWriterFactory();
   CudfHiveConnectorTestBase::TearDown();
 }
 
@@ -46,7 +58,8 @@ CudfIcebergTestBase::makeIcebergSplits(
     const std::vector<IcebergDeleteFile>& deleteFiles,
     const std::unordered_map<std::string, std::optional<std::string>>&
         partitionKeys,
-    uint32_t splitCount) {
+    uint32_t splitCount,
+    int64_t dataSequenceNumber) {
   auto file = filesystems::getFileSystem(dataFilePath, nullptr)
                   ->openFileForRead(dataFilePath);
   const int64_t fileSize = file->size();
@@ -69,10 +82,56 @@ CudfIcebergTestBase::makeIcebergSplits(
         std::unordered_map<std::string, std::string>{},
         nullptr,
         /*cacheable=*/true,
-        deleteFiles));
+        deleteFiles,
+        std::unordered_map<std::string, std::string>{},
+        std::nullopt,
+        dataSequenceNumber));
   }
 
   return splits;
+}
+
+void CudfIcebergTestBase::writeDeleteFile(
+    const std::string& filePath,
+    const std::vector<RowVectorPtr>& vectors) {
+  // Uses the upstream velox::dwrf::Writer — same as
+  // HiveConnectorTestBase::writeToFile.
+  velox::dwrf::WriterOptions options;
+  options.config = std::make_shared<facebook::velox::dwrf::Config>();
+  options.schema = vectors[0]->type();
+  auto fs = filesystems::getFileSystem(filePath, {});
+  auto writeFile = fs->openFileForWrite(
+      filePath,
+      {.shouldCreateParentDirectories = true,
+       .shouldThrowOnFileAlreadyExists = false});
+  auto sink = std::make_unique<dwio::common::WriteFileSink>(
+      std::move(writeFile), filePath);
+  auto childPool =
+      rootPool_->addAggregateChild("CudfIcebergTestBase.DwrfWriter");
+  options.memoryPool = childPool.get();
+
+  facebook::velox::dwrf::Writer writer{std::move(sink), options};
+  for (const auto& vector : vectors) {
+    writer.write(vector);
+  }
+  writer.close();
+}
+
+uint64_t CudfIcebergTestBase::getFileSize(const std::string& path) {
+  return filesystems::getFileSystem(path, nullptr)
+      ->openFileForRead(path)
+      ->size();
+}
+
+core::PlanNodePtr CudfIcebergTestBase::makeTableScanPlan(
+    const RowTypePtr& rowType) {
+  return PlanBuilder()
+      .startTableScan()
+      .connectorId(kCudfIcebergConnectorId)
+      .outputType(rowType)
+      .dataColumns(rowType)
+      .endTableScan()
+      .planNode();
 }
 
 } // namespace facebook::velox::cudf_velox::exec::test

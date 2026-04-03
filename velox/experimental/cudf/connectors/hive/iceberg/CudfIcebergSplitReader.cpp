@@ -380,18 +380,18 @@ std::optional<RowVectorPtr> CudfIcebergSplitReader::next(uint64_t /*size*/) {
   bool hasEqualityDeletes = !equalityDeleteFileReaders_.empty();
 
   if (hasPositionalDeletes || hasEqualityDeletes) {
-    auto rowVector = std::dynamic_pointer_cast<RowVector>(output);
-    if (!rowVector) {
-      auto cudfVec = std::dynamic_pointer_cast<CudfVector>(output);
-      if (cudfVec) {
-        rowVector = with_arrow::toVeloxColumn(
-            cudfVec->getTableView(),
-            pool_,
-            outputType_->names(),
-            stream_,
-            get_temp_mr());
-        stream_.synchronize();
-      }
+    RowVectorPtr rowVector;
+    auto cudfVec = std::dynamic_pointer_cast<CudfVector>(output);
+    if (cudfVec) {
+      rowVector = with_arrow::toVeloxColumn(
+          cudfVec->getTableView(),
+          pool_,
+          outputType_->names(),
+          stream_,
+          get_temp_mr());
+      stream_.synchronize();
+    } else {
+      rowVector = std::dynamic_pointer_cast<RowVector>(output);
     }
     VELOX_CHECK_NOT_NULL(
         rowVector,

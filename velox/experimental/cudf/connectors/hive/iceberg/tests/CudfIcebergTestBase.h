@@ -28,14 +28,15 @@ static const std::string kCudfIcebergConnectorId = "test-cudf-iceberg";
 
 /// Test base for CudfIcebergConnector tests. Registers the
 /// CudfIcebergConnectorFactory and provides helpers for creating Iceberg
-/// splits and writing parquet test data files.
+/// splits, writing parquet data files (via CudfHiveConnectorTestBase), and
+/// writing DWRF delete files (via the upstream velox::dwrf::Writer).
 class CudfIcebergTestBase : public CudfHiveConnectorTestBase {
  public:
   void SetUp() override;
   void TearDown() override;
 
-  /// Creates a HiveIcebergSplit pointing to a data file with optional delete
-  /// files. Uses the cudf iceberg connector ID.
+  /// Creates HiveIcebergSplits pointing to a data file with optional delete
+  /// files and sequence number. Uses the cudf iceberg connector ID.
   std::vector<std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
   makeIcebergSplits(
       const std::string& dataFilePath,
@@ -44,7 +45,21 @@ class CudfIcebergTestBase : public CudfHiveConnectorTestBase {
           deleteFiles = {},
       const std::unordered_map<std::string, std::optional<std::string>>&
           partitionKeys = {},
-      uint32_t splitCount = 1);
+      uint32_t splitCount = 1,
+      int64_t dataSequenceNumber = 0);
+
+  /// Writes a DWRF file using the upstream velox::dwrf::Writer. Used for
+  /// equality and positional delete files which are read by the upstream
+  /// Velox DWRF reader (not cudf).
+  void writeDeleteFile(
+      const std::string& filePath,
+      const std::vector<RowVectorPtr>& vectors);
+
+  uint64_t getFileSize(const std::string& path);
+
+  /// Builds a table scan plan using the cudf iceberg connector.
+  facebook::velox::core::PlanNodePtr makeTableScanPlan(
+      const RowTypePtr& rowType);
 };
 
 } // namespace facebook::velox::cudf_velox::exec::test
