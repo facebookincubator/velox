@@ -1349,4 +1349,8 @@ Note: These configurations are experimental and subject to change.
    * - cudf.function_engine
      - string
      - presto
+   * - cudf.timestamp_unit
+     - string
+     - ns
+     - Timestamp precision unit for cuDF timestamp types. Valid values are: "s" (seconds), "ms" (milliseconds), "us" (microseconds), "ns" (nanoseconds). This controls the precision of timestamp data when converting between Velox and cuDF formats.
      - Register the function for a specific engine. The optional values are presto or spark.
