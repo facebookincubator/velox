@@ -17,6 +17,7 @@
 #include "velox/type/TypeCoercer.h"
 #include <gtest/gtest.h>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/type/CastRegistry.h"
 
 namespace facebook::velox {
 namespace {
@@ -216,6 +217,12 @@ TEST(TypeCoercerTest, leastCommonSuperType) {
   ASSERT_TRUE(
       TypeCoercer::leastCommonSuperType(
           MAP(INTEGER(), REAL()), ROW({INTEGER(), REAL()})) == nullptr);
+}
+
+TEST(TypeCoercerTest, parametricBuiltinTargetDoesNotThrow) {
+  // Parametric built-in factories throw on empty params. Verify graceful
+  // handling.
+  EXPECT_EQ(TypeCoercer::coerceTypeBase(BIGINT(), "ARRAY"), std::nullopt);
 }
 
 } // namespace

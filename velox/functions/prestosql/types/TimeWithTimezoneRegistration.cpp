@@ -19,6 +19,7 @@
 #include "velox/external/tzdb/time_zone.h"
 #include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
 #include "velox/functions/prestosql/types/fuzzer_utils/TimeWithTimezoneInputGenerator.h"
+#include "velox/type/CastRegistry.h"
 #include "velox/type/Time.h"
 #include "velox/type/Type.h"
 #include "velox/type/tz/TimeZoneMap.h"
@@ -290,6 +291,24 @@ void registerTimeWithTimezoneType() {
   registerCustomType(
       "time with time zone",
       std::make_unique<const TimeWithTimezoneTypeFactory>());
+  registerCastRules({
+      {.fromType = "TIME",
+       .toType = "TIME WITH TIME ZONE",
+       .implicitAllowed = true,
+       .validator = {}},
+      {.fromType = "VARCHAR",
+       .toType = "TIME WITH TIME ZONE",
+       .implicitAllowed = false,
+       .validator = {}},
+      {.fromType = "TIME WITH TIME ZONE",
+       .toType = "TIME",
+       .implicitAllowed = false,
+       .validator = {}},
+      {.fromType = "TIME WITH TIME ZONE",
+       .toType = "VARCHAR",
+       .implicitAllowed = false,
+       .validator = {}},
+  });
 }
 
 } // namespace facebook::velox

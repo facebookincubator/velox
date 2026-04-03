@@ -32,6 +32,7 @@
 #include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveDataSource.h"
@@ -223,7 +224,7 @@ DEBUG_ONLY_TEST_F(TableScanTest, pendingCoalescedIoWhenTaskFailed) {
 TEST_F(TableScanTest, connectorStats) {
   auto hiveConnector =
       std::dynamic_pointer_cast<connector::hive::HiveConnector>(
-          connector::getConnector(kHiveConnectorId));
+          connector::ConnectorRegistry::tryGet(kHiveConnectorId));
   EXPECT_NE(nullptr, hiveConnector);
   verifyCacheStats(hiveConnector->fileHandleCacheStats(), 0, 0, 0);
 

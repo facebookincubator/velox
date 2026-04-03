@@ -692,12 +692,21 @@ class CustomDirectBufferedInput
             executor,
             readerOptions,
             std::move(fileReadOps)) {
-    // Dummy reserve to ensure the accessibility of protected members in
-    // DirectBufferedInput.
-    requests_.reserve(1);
-    coalescedLoads_.reserve(1);
     VELOX_NYI("Not implemented in CustomBufferedInputBuilder");
   }
+
+ protected:
+  // Expose protected members to verify their accessibility.
+  using facebook::velox::dwio::common::DirectBufferedInput::coalescedLoads_;
+  using facebook::velox::dwio::common::DirectBufferedInput::executor_;
+  using facebook::velox::dwio::common::DirectBufferedInput::fileNum_;
+  using facebook::velox::dwio::common::DirectBufferedInput::fileSize_;
+  using facebook::velox::dwio::common::DirectBufferedInput::groupId_;
+  using facebook::velox::dwio::common::DirectBufferedInput::ioStatistics_;
+  using facebook::velox::dwio::common::DirectBufferedInput::ioStats_;
+  using facebook::velox::dwio::common::DirectBufferedInput::options_;
+  using facebook::velox::dwio::common::DirectBufferedInput::requests_;
+  using facebook::velox::dwio::common::DirectBufferedInput::tracker_;
 };
 
 class CustomBufferedInputBuilder

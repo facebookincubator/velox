@@ -1079,7 +1079,7 @@ bool AggregationFuzzer::compareEquivalentPlanResults(
               firstPlan, referenceQueryRunner_.get());
           stats_.updateReferenceQueryStats(referenceResult.second);
 
-          if (referenceResult.first) {
+          if (referenceResult.first && !referenceResult.first.value().empty()) {
             velox::fuzzer::ResultOrError expected;
             expected.result = fuzzer::mergeRowVectors(
                 referenceResult.first.value(), pool_.get());

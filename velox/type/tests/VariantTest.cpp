@@ -1054,9 +1054,11 @@ TEST(VariantOpaqueTest, opaque) {
 }
 
 void testSerDe(const Variant& value) {
-  auto serialized = value.serialize();
-  auto copy = Variant::create(serialized);
-
+  auto dynamic = value.serialize();
+  auto copy = Variant::create(dynamic);
+  ASSERT_EQ(value, copy);
+  auto json = folly::toJson(value.serialize());
+  copy = Variant::create(folly::parseJson(json));
   ASSERT_EQ(value, copy);
 }
 
@@ -1085,6 +1087,18 @@ TEST(VariantSerializationTest, serialize) {
   testSerDe(Variant(static_cast<int64_t>(1234567)));
   testSerDe(Variant(static_cast<float>(1.2f)));
   testSerDe(Variant(static_cast<double>(1.234)));
+  testSerDe(
+      Variant(static_cast<float>(std::numeric_limits<float>::quiet_NaN())));
+  testSerDe(
+      Variant(static_cast<double>(std::numeric_limits<double>::quiet_NaN())));
+  testSerDe(
+      Variant(static_cast<float>(std::numeric_limits<float>::signaling_NaN())));
+  testSerDe(Variant(
+      static_cast<double>(std::numeric_limits<double>::signaling_NaN())));
+  testSerDe(
+      Variant(static_cast<float>(std::numeric_limits<float>::infinity())));
+  testSerDe(
+      Variant(static_cast<double>(std::numeric_limits<double>::infinity())));
   testSerDe(Variant("This is a test."));
   testSerDe(Variant::binary("This is a test."));
   testSerDe(Variant(Timestamp(1, 2)));
@@ -1128,6 +1142,9 @@ TEST(VariantSerializationTest, serializeArrayTypes) {
           Variant(1.5),
           Variant(2.7),
           Variant(-3.14),
+          Variant(std::numeric_limits<double>::quiet_NaN()),
+          Variant(std::numeric_limits<double>::signaling_NaN()),
+          Variant(std::numeric_limits<double>::infinity()),
       }));
 
   // Array with boolean values.

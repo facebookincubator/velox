@@ -38,6 +38,7 @@ add_executable(
 # add_executable(velox_cudf_table_write_test Main.cpp TableWriteTest.cpp)
 add_executable(velox_cudf_topn_test Main.cpp TopNTest.cpp)
 add_executable(velox_cudf_batch_concat_test Main.cpp BatchConcatTest.cpp)
+add_executable(velox_cudf_interop_test Main.cpp InteropTest.cpp)
 
 # cuDF Join Fuzzer - standalone executable for fuzz testing GPU hash joins
 add_executable(velox_cudf_join_fuzzer CudfJoinFuzzerRunner.cpp CudfJoinFuzzer.cpp)
@@ -134,6 +135,12 @@ add_test(
 )
 
 add_test(
+  NAME velox_cudf_interop_test
+  COMMAND velox_cudf_interop_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+add_test(
   NAME velox_cudf_aggregation_selection_test
   COMMAND velox_cudf_aggregation_selection_test
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
@@ -182,6 +189,7 @@ set_tests_properties(
   PROPERTIES LABELS cuda_driver TIMEOUT 3000
 )
 set_tests_properties(velox_cudf_batch_concat_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
+set_tests_properties(velox_cudf_interop_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 
 target_link_libraries(
   velox_cudf_aggregation_test
@@ -396,6 +404,16 @@ target_link_libraries(
 )
 
 set_target_properties(velox_cudf_join_fuzzer PROPERTIES LABELS cuda_driver)
+
+target_link_libraries(
+  velox_cudf_interop_test
+  velox_cudf_exec
+  velox_exec
+  velox_exec_test_lib
+  velox_test_util
+  gtest
+  gtest_main
+)
 
 add_subdirectory(utils)
 

@@ -17,9 +17,13 @@
 #pragma once
 
 #include <folly/Executor.h>
+#include <folly/Synchronized.h>
+#include <folly/container/F14Map.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <deque>
 #include <functional>
+#include <typeindex>
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/core/QueryConfig.h"
@@ -317,6 +321,50 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     traceCtxProvider_ = std::move(provider);
   }
 
+  /// Store a per-query registry override. Each subsystem defines its own key
+  /// (e.g., "connectors", "vectorFunctions"). The registry is stored as a
+  /// type-erased shared_ptr; callers must use the same type T for setRegistry
+  /// and registry calls with the same key. Returns true if the key was newly
+  /// inserted. Throws if the key already exists unless 'overwrite' is true,
+  /// in which case the existing entry is replaced and false is returned.
+  template <typename T>
+  bool setRegistry(
+      std::string_view key,
+      std::shared_ptr<T> registry,
+      bool overwrite = false) {
+    return registries_.withWLock([&](auto& map) {
+      auto it = map.find(std::string(key));
+      if (it != map.end()) {
+        VELOX_CHECK(overwrite, "Registry already set: {}", key);
+        it->second = {std::move(registry), std::type_index(typeid(T))};
+        return false;
+      }
+      map.emplace(
+          std::string(key),
+          RegistryEntry{std::move(registry), std::type_index(typeid(T))});
+      return true;
+    });
+  }
+
+  /// Retrieve a per-query registry override. Returns nullptr if no override
+  /// was set for this key. Asserts that the stored type matches T.
+  template <typename T>
+  std::shared_ptr<T> registry(std::string_view key) const {
+    return registries_.withRLock([&](const auto& map) -> std::shared_ptr<T> {
+      auto it = map.find(std::string(key));
+      if (it == map.end()) {
+        return nullptr;
+      }
+      VELOX_CHECK(
+          it->second.type == std::type_index(typeid(T)),
+          "Registry type mismatch for key '{}': expected {}, got {}",
+          key,
+          typeid(T).name(),
+          it->second.type.name());
+      return std::static_pointer_cast<T>(it->second.ptr);
+    });
+  }
+
   void testingOverrideMemoryPool(std::shared_ptr<memory::MemoryPool> pool) {
     pool_ = std::move(pool);
   }
@@ -428,6 +476,16 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
 
   // A function that constructs a custom trace ctx object.
   TraceCtxProvider traceCtxProvider_;
+
+  // Type-erased registry entry for per-query overrides.
+  struct RegistryEntry {
+    std::shared_ptr<void> ptr;
+    std::type_index type;
+  };
+
+  // Per-query registry overrides keyed by subsystem name.
+  folly::Synchronized<folly::F14FastMap<std::string, RegistryEntry>>
+      registries_;
 };
 
 // Represents the state of one thread of query execution.

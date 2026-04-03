@@ -16,6 +16,7 @@
 #include <folly/init/Init.h>
 #include <folly/system/HardwareConcurrency.h>
 #include "velox/common/memory/Memory.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/tpch/TpchConnector.h"
 #include "velox/connectors/tpch/TpchConnectorSplit.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -53,11 +54,12 @@ class VeloxIn10MinDemo : public VectorTestBase {
         kTpchConnectorId,
         std::make_shared<config::ConfigBase>(
             std::unordered_map<std::string, std::string>()));
-    connector::registerConnector(tpchConnector);
+    connector::ConnectorRegistry::global().insert(
+        tpchConnector->connectorId(), tpchConnector);
   }
 
   ~VeloxIn10MinDemo() {
-    connector::unregisterConnector(kTpchConnectorId);
+    connector::ConnectorRegistry::global().erase(kTpchConnectorId);
   }
 
   /// Parse SQL expression into a typed expression tree using DuckDB SQL parser.
