@@ -428,6 +428,14 @@ CudfHashJoinProbe::CudfHashJoinProbe(
     useAstFilter_ = CudfConfig::getInstance().astExpressionEnabled &&
         !containsDecimalType(exprs.exprs()[0], false);
 
+    // Validate AST filtering for this join type now to avoid run-time error.
+    if (joinNode_->isRightSemiFilterJoin() ||
+        joinNode_->isLeftSemiFilterJoin() || joinNode_->isAntiJoin()) {
+      VELOX_CHECK(
+          useAstFilter_,
+          "AST expression evaluation must be enabled for semi-filter and anti joins.");
+    }
+
     // Create a reusable evaluator for the filter column. This is expensive to
     // build, and the expression + input schema are stable for the lifetime of
     // the operator instance.
@@ -1245,9 +1253,6 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::leftSemiFilterJoin(
     std::unique_ptr<rmm::device_uvector<cudf::size_type>> leftJoinIndices;
 
     if (joinNode_->filter()) {
-      if (!useAstFilter_) {
-        VELOX_NYI("Join filter requires AST for semi joins");
-      }
       leftJoinIndices = cudf::mixed_left_semi_join(
           leftTableView.select(leftKeyIndices_),
           rightTableView.select(rightKeyIndices_),
@@ -1562,9 +1567,6 @@ CudfHashJoinProbe::rightSemiFilterJoin(
 
   std::unique_ptr<rmm::device_uvector<cudf::size_type>> rightJoinIndices;
   if (joinNode_->filter()) {
-    if (!useAstFilter_) {
-      VELOX_NYI("Join filter requires AST for semi joins");
-    }
     rightJoinIndices = cudf::mixed_left_semi_join(
         rightTableView.select(rightKeyIndices_),
         leftTableView.select(leftKeyIndices_),
@@ -1634,9 +1636,6 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::antiJoin(
 
   std::unique_ptr<rmm::device_uvector<cudf::size_type>> leftJoinIndices;
   if (joinNode_->filter()) {
-    if (!useAstFilter_) {
-      VELOX_NYI("Join filter requires AST for anti joins");
-    }
     leftJoinIndices = cudf::mixed_left_anti_join(
         leftTableView.select(leftKeyIndices_),
         rightTableView.select(rightKeyIndices_),
