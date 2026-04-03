@@ -18,6 +18,7 @@
 
 #include <boost/random/uniform_int_distribution.hpp>
 #include "velox/common/file/FileSystems.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
 
@@ -68,13 +69,12 @@ JoinFuzzerBase::JoinFuzzerBase(
   std::unordered_map<std::string, std::string> hiveConfig = {
       {connector::hive::HiveConfig::kNumCacheFileHandles, "1000"}};
 
-  if (!connector::hasConnector(test::kHiveConnectorId)) {
-    connector::hive::HiveConnectorFactory factory;
-    auto hiveConnector = factory.newConnector(
-        test::kHiveConnectorId,
-        std::make_shared<config::ConfigBase>(std::move(hiveConfig)));
-    connector::registerConnector(hiveConnector);
-  }
+  connector::hive::HiveConnectorFactory factory;
+  auto hiveConnector = factory.newConnector(
+      test::kHiveConnectorId,
+      std::make_shared<config::ConfigBase>(std::move(hiveConfig)));
+  connector::ConnectorRegistry::global().insert(
+      hiveConnector->connectorId(), hiveConnector);
 
   seed(initialSeed);
 }
