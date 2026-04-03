@@ -16,14 +16,14 @@
 
 #pragma once
 
-#include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/common/CudfSystemConfig.h"
 
 #include "velox/common/base/ExceptionHelper.h"
 
 namespace facebook::velox::cudf_velox {
 
 /// Log a reason for falling back to Velox CPU execution if
-/// CudfConfig::getInstance().logFallback is enabled. It captures the
+/// CudfSystemConfig::getInstance().logFallback is enabled. It captures the
 /// file name, line number, function name, and reason for the failure. The
 /// validation failure introduces extra data format conversion which can
 /// negatively impact the performance, so log the messgage to notify the
@@ -37,7 +37,7 @@ namespace facebook::velox::cudf_velox {
 /// toType->toString());
 #define LOG_FALLBACK(...)                                                                                \
   do {                                                                                                   \
-    if (CudfConfig::getInstance().logFallback) {                                                         \
+    if (CudfSystemConfig::getInstance().logFallback()) {                                                 \
       auto message = ::facebook::velox::errorMessage(__VA_ARGS__);                                       \
       LOG(WARNING) << fmt::format(                                                                       \
           "Validation failed at function: {}, reason: Operation is not supported in cuDF execution: {}", \

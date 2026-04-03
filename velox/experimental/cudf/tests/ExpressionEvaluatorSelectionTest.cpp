@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/common/CudfSystemConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
@@ -48,7 +48,8 @@ class CudfExpressionSelectionTest : public ::testing::Test {
     pool_ = memory::memoryManager()->addLeafPool("", false);
     queryCtx_ = core::QueryCtx::create();
     execCtx_ = std::make_unique<core::ExecCtx>(pool_.get(), queryCtx_.get());
-    CudfConfig::getInstance().functionEngine = "spark";
+    CudfSystemConfig::getInstance().set(
+        CudfSystemConfig::kCudfFunctionEngine, "spark");
     cudf_velox::registerCudf();
     rowType_ = ROW({
         {"a", BIGINT()},
@@ -76,17 +77,21 @@ class CudfExpressionSelectionTest : public ::testing::Test {
 };
 
 TEST_F(CudfExpressionSelectionTest, astRoot) {
-  auto prevAst = CudfConfig::getInstance().astExpressionEnabled;
-  auto prevJit = CudfConfig::getInstance().jitExpressionEnabled;
-  CudfConfig::getInstance().astExpressionEnabled = true;
-  CudfConfig::getInstance().jitExpressionEnabled = true;
+  auto prevAst = CudfSystemConfig::getInstance().astExpressionEnabled();
+  auto prevJit = CudfSystemConfig::getInstance().jitExpressionEnabled();
+  CudfSystemConfig::getInstance().updateConfigs(
+      {{CudfSystemConfig::kCudfAstExpressionEnabled, "true"},
+       {CudfSystemConfig::kCudfJitExpressionEnabled, "true"}});
   auto expr = compileExecExpr("a + c", rowType_, execCtx_.get());
   auto cudfExpr = createCudfExpression(expr, rowType_);
   auto* ast = dynamic_cast<ASTExpression*>(cudfExpr.get());
   auto* jit = dynamic_cast<JitExpression*>(cudfExpr.get());
   ASSERT_TRUE(ast != nullptr || jit != nullptr);
-  CudfConfig::getInstance().astExpressionEnabled = prevAst;
-  CudfConfig::getInstance().jitExpressionEnabled = prevJit;
+  CudfSystemConfig::getInstance().updateConfigs(
+      {{CudfSystemConfig::kCudfAstExpressionEnabled,
+        prevAst ? "true" : "false"},
+       {CudfSystemConfig::kCudfJitExpressionEnabled,
+        prevJit ? "true" : "false"}});
 }
 
 TEST_F(CudfExpressionSelectionTest, functionRoot) {
@@ -98,10 +103,11 @@ TEST_F(CudfExpressionSelectionTest, functionRoot) {
 }
 
 TEST_F(CudfExpressionSelectionTest, astTopLevelWithFunctionPrecompute) {
-  auto prevAst = CudfConfig::getInstance().astExpressionEnabled;
-  auto prevJit = CudfConfig::getInstance().jitExpressionEnabled;
-  CudfConfig::getInstance().astExpressionEnabled = true;
-  CudfConfig::getInstance().jitExpressionEnabled = true;
+  auto prevAst = CudfSystemConfig::getInstance().astExpressionEnabled();
+  auto prevJit = CudfSystemConfig::getInstance().jitExpressionEnabled();
+  CudfSystemConfig::getInstance().updateConfigs(
+      {{CudfSystemConfig::kCudfAstExpressionEnabled, "true"},
+       {CudfSystemConfig::kCudfJitExpressionEnabled, "true"}});
   auto expr = compileExecExpr(
       "(year(date) > 2020) AND (length(name) < 10)", rowType_, execCtx_.get());
   ASSERT_TRUE(canBeEvaluatedByCudf(expr, /*deep=*/false));
@@ -109,8 +115,11 @@ TEST_F(CudfExpressionSelectionTest, astTopLevelWithFunctionPrecompute) {
   auto* ast = dynamic_cast<ASTExpression*>(cudfExpr.get());
   auto* jit = dynamic_cast<JitExpression*>(cudfExpr.get());
   ASSERT_TRUE(ast != nullptr || jit != nullptr);
-  CudfConfig::getInstance().astExpressionEnabled = prevAst;
-  CudfConfig::getInstance().jitExpressionEnabled = prevJit;
+  CudfSystemConfig::getInstance().updateConfigs(
+      {{CudfSystemConfig::kCudfAstExpressionEnabled,
+        prevAst ? "true" : "false"},
+       {CudfSystemConfig::kCudfJitExpressionEnabled,
+        prevJit ? "true" : "false"}});
 }
 
 TEST_F(CudfExpressionSelectionTest, functionTopLevelWithNestedFunction) {
@@ -248,7 +257,8 @@ TEST_F(CudfExpressionSelectionTest, DISABLED_castAndTryCast) {
   // TODO (dm): This is required for passing of castAndTryCast test but breaks
   // others. This is because ASTExpr agrees to support bad casts. remove after
   // ASTExpr checks cast types
-  // CudfConfig::getInstance().astExpressionEnabled = false;
+  // CudfSystemConfig::getInstance().set(
+  //     CudfSystemConfig::kCudfAstExpressionEnabled, "false");
 
   // OK: cast bigint -> double (supported by cuDF)
   auto okCast = compileExecExpr("cast(a AS double)", rowType_, execCtx_.get());

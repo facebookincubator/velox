@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/experimental/cudf/common/CudfSystemConfig.h"
 #include "velox/experimental/cudf/exec/Validation.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstUtils.h"
@@ -1121,7 +1122,7 @@ bool registerBuiltinFunctions(const std::string& prefix) {
           // Cast needs special handling dynamically using cudf.
       });
 
-  if (CudfConfig::getInstance().functionEngine == "spark") {
+  if (CudfSystemConfig::getInstance().functionEngine() == "spark") {
     registerSparkFunctions(prefix);
   } else {
     registerPrestoFunctions(prefix);

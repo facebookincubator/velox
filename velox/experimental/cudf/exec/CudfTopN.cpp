@@ -13,8 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
+#include "velox/experimental/cudf/common/CudfSystemConfig.h"
 #include "velox/experimental/cudf/exec/CudfTopN.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
@@ -27,6 +27,16 @@
 #include <algorithm>
 
 namespace facebook::velox::cudf_velox {
+namespace {
+inline int32_t topNBatchSize(const core::QueryCtx& ctx) {
+  std::optional<int32_t> topNBatchSizeSession =
+      ctx.queryConfig().get<int32_t>(core::QueryConfig::kCudfTopNBatchSize);
+  return topNBatchSizeSession.has_value()
+      ? topNBatchSizeSession.value()
+      : CudfSystemConfig::getInstance().topNBatchSize();
+}
+} // namespace
+
 CudfTopN::CudfTopN(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
@@ -43,7 +53,7 @@ CudfTopN::CudfTopN(
           fmt::format("[{}]", topNNode->id())),
       count_(topNNode->count()),
       topNNode_(topNNode),
-      kBatchSize_(CudfConfig::getInstance().topNBatchSize),
+      kBatchSize_(topNBatchSize(operatorCtx_->execCtx()->queryCtx())),
       cudaEvent_(std::make_unique<CudaEvent>(cudaEventDisableTiming)) {
   const auto numColumns{outputType_->children().size()};
   const auto numSortingKeys{topNNode->sortingKeys().size()};

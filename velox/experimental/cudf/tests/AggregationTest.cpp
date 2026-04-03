@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/common/CudfSystemConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
@@ -41,7 +41,8 @@ class AggregationTest : public OperatorTestBase {
   void SetUp() override {
     OperatorTestBase::SetUp();
     filesystems::registerLocalFileSystem();
-    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
+    cudf_velox::CudfSystemConfig::getInstance().updateConfigs(
+        {{cudf_velox::CudfSystemConfig::kCudfAllowCpuFallback, "false"}});
     cudf_velox::registerCudf();
   }
 

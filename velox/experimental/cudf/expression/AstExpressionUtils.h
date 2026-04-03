@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/common/CudfSystemConfig.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
@@ -225,8 +225,8 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
   using velox::exec::FieldReference;
   using Op = cudf::ast::ast_operator;
 
-  const auto name =
-      stripPrefix(expr->name(), CudfConfig::getInstance().functionNamePrefix);
+  const auto name = stripPrefix(
+      expr->name(), CudfSystemConfig::getInstance().functionNamePrefix());
   const auto len = expr->inputs().size();
 
   // Literals and field references are always supported
@@ -417,8 +417,8 @@ cudf::ast::expression const& AstContext::multipleInputsToPairWise(
     const std::shared_ptr<velox::exec::Expr>& expr) {
   using Operation = cudf::ast::operation;
 
-  const auto name =
-      stripPrefix(expr->name(), CudfConfig::getInstance().functionNamePrefix);
+  const auto name = stripPrefix(
+      expr->name(), CudfSystemConfig::getInstance().functionNamePrefix());
   auto len = expr->inputs().size();
   // Create a simple chain of operations
   auto result = &pushExprToTree(expr->inputs()[0]);
@@ -443,8 +443,8 @@ cudf::ast::expression const& AstContext::pushExprToTree(
   using velox::exec::ConstantExpr;
   using velox::exec::FieldReference;
 
-  const auto name =
-      stripPrefix(expr->name(), CudfConfig::getInstance().functionNamePrefix);
+  const auto name = stripPrefix(
+      expr->name(), CudfSystemConfig::getInstance().functionNamePrefix());
   auto len = expr->inputs().size();
   auto& type = expr->type();
 
@@ -485,167 +485,168 @@ cudf::ast::expression const& AstContext::pushExprToTree(
   } else if (name == "isnotnull") {
     VELOX_CHECK_EQ(len, 1);
     auto const& op1 = pushExprToTree(expr->inputs()[0]);
-    auto const& nullOp = tree.push(Operation{Op::IS_NULL, op1});
-    return tree.push(Operation{Op::NOT, nullOp});
+    auto const& nullOp = tree.push(Operation{Op::IS_NULL, op1));
+      return tree.push(Operation{Op::NOT, nullOp});
   } else if (name == "between") {
-    VELOX_CHECK_EQ(len, 3);
-    auto const& value = pushExprToTree(expr->inputs()[0]);
-    auto const& lower = pushExprToTree(expr->inputs()[1]);
-    auto const& upper = pushExprToTree(expr->inputs()[2]);
-    // construct between(op2, op3) using >= and <=
-    auto const& geLower = tree.push(Operation{Op::GREATER_EQUAL, value, lower});
-    auto const& leUpper = tree.push(Operation{Op::LESS_EQUAL, value, upper});
-    return tree.push(Operation{Op::NULL_LOGICAL_AND, geLower, leUpper});
+      VELOX_CHECK_EQ(len, 3);
+      auto const& value = pushExprToTree(expr->inputs()[0]);
+      auto const& lower = pushExprToTree(expr->inputs()[1]);
+      auto const& upper = pushExprToTree(expr->inputs()[2]);
+      // construct between(op2, op3) using >= and <=
+      auto const& geLower =
+          tree.push(Operation{Op::GREATER_EQUAL, value, lower});
+      auto const& leUpper = tree.push(Operation{Op::LESS_EQUAL, value, upper});
+      return tree.push(Operation{Op::NULL_LOGICAL_AND, geLower, leUpper});
   } else if (name == "in") {
-    // number of inputs is variable. >=2
-    VELOX_CHECK_EQ(len, 2);
-    // actually len is 2, second input is ARRAY
-    auto const& op1 = pushExprToTree(expr->inputs()[0]);
-    auto c = dynamic_cast<ConstantExpr*>(expr->inputs()[1].get());
-    VELOX_CHECK_NOT_NULL(c, "literal expression should be ConstantExpr");
-    auto value = c->value();
-    VELOX_CHECK_NOT_NULL(value, "ConstantExpr value is null");
+      // number of inputs is variable. >=2
+      VELOX_CHECK_EQ(len, 2);
+      // actually len is 2, second input is ARRAY
+      auto const& op1 = pushExprToTree(expr->inputs()[0]);
+      auto c = dynamic_cast<ConstantExpr*>(expr->inputs()[1].get());
+      VELOX_CHECK_NOT_NULL(c, "literal expression should be ConstantExpr");
+      auto value = c->value();
+      VELOX_CHECK_NOT_NULL(value, "ConstantExpr value is null");
 
-    // Use the new createLiteralsFromArray function to get literals
-    auto literals = createLiteralsFromArray(value, scalars);
+      // Use the new createLiteralsFromArray function to get literals
+      auto literals = createLiteralsFromArray(value, scalars);
 
-    // Create equality expressions for each literal and OR them together
-    std::vector<const cudf::ast::expression*> exprVec;
-    for (auto& literal : literals) {
-      auto const& opi = tree.push(std::move(literal));
-      auto const& logicalNode = tree.push(Operation{Op::EQUAL, op1, opi});
-      exprVec.push_back(&logicalNode);
-    }
+      // Create equality expressions for each literal and OR them together
+      std::vector<const cudf::ast::expression*> exprVec;
+      for (auto& literal : literals) {
+        auto const& opi = tree.push(std::move(literal));
+        auto const& logicalNode = tree.push(Operation{Op::EQUAL, op1, opi});
+        exprVec.push_back(&logicalNode);
+      }
 
-    // Handle empty IN list case
-    if (exprVec.empty()) {
-      // FAIL
-      VELOX_FAIL("Empty IN list");
-      // Return FALSE for empty IN list
-      // auto falseValue = std::make_shared<ConstantVector<bool>>(
-      //     value->pool(), 1, false, TypeKind::BOOLEAN, false);
-      // return tree.push(createLiteral(falseValue, scalars));
-    }
+      // Handle empty IN list case
+      if (exprVec.empty()) {
+        // FAIL
+        VELOX_FAIL("Empty IN list");
+        // Return FALSE for empty IN list
+        // auto falseValue = std::make_shared<ConstantVector<bool>>(
+        //     value->pool(), 1, false, TypeKind::BOOLEAN, false);
+        // return tree.push(createLiteral(falseValue, scalars));
+      }
 
-    // OR all logical nodes
-    auto* result = exprVec[0];
-    for (size_t i = 1; i < exprVec.size(); i++) {
-      auto const& treeNode =
-          tree.push(Operation{Op::NULL_LOGICAL_OR, *result, *exprVec[i]});
-      result = &treeNode;
-    }
-    return *result;
+      // OR all logical nodes
+      auto* result = exprVec[0];
+      for (size_t i = 1; i < exprVec.size(); i++) {
+        auto const& treeNode =
+            tree.push(Operation{Op::NULL_LOGICAL_OR, *result, *exprVec[i]});
+        result = &treeNode;
+      }
+      return *result;
   } else if (name == "cast" || name == "try_cast") {
-    VELOX_CHECK_EQ(len, 1);
-    auto const& op1 = pushExprToTree(expr->inputs()[0]);
-    if (expr->type()->kind() == TypeKind::INTEGER) {
-      // No int32 cast in cudf ast
-      return tree.push(Operation{Op::CAST_TO_INT64, op1});
-    } else if (expr->type()->kind() == TypeKind::BIGINT) {
-      return tree.push(Operation{Op::CAST_TO_INT64, op1});
-    } else if (expr->type()->kind() == TypeKind::DOUBLE) {
-      return tree.push(Operation{Op::CAST_TO_FLOAT64, op1});
-    } else {
-      VELOX_FAIL("Unsupported type for cast operation");
-    }
+      VELOX_CHECK_EQ(len, 1);
+      auto const& op1 = pushExprToTree(expr->inputs()[0]);
+      if (expr->type()->kind() == TypeKind::INTEGER) {
+        // No int32 cast in cudf ast
+        return tree.push(Operation{Op::CAST_TO_INT64, op1});
+      } else if (expr->type()->kind() == TypeKind::BIGINT) {
+        return tree.push(Operation{Op::CAST_TO_INT64, op1});
+      } else if (expr->type()->kind() == TypeKind::DOUBLE) {
+        return tree.push(Operation{Op::CAST_TO_FLOAT64, op1});
+      } else {
+        VELOX_FAIL("Unsupported type for cast operation");
+      }
   } else if (auto fieldExpr = std::dynamic_pointer_cast<FieldReference>(expr)) {
-    // Refer to the appropriate side
-    const auto fieldName =
-        fieldExpr->inputs().empty() ? name : fieldExpr->inputs()[0]->name();
-    for (size_t sideIdx = 0; sideIdx < inputRowSchema.size(); ++sideIdx) {
-      auto& schema = inputRowSchema[sideIdx];
-      if (schema.get()->containsChild(fieldName)) {
-        auto columnIndex = schema.get()->getChildIdx(fieldName);
-        // This column may be complex data type like ROW, we need to get the
-        // name from row. Push fieldName.name to the tree.
-        auto side = static_cast<cudf::ast::table_reference>(sideIdx);
-        if (fieldExpr->field() == fieldName) {
-          return tree.push(cudf::ast::column_reference(columnIndex, side));
-        } else if (!allowPureAstOnly) {
-          return addPrecomputeInstruction(
-              fieldName, "nested_column", fieldExpr->field());
-        } else {
-          VELOX_FAIL("Unsupported type for nested column operation");
+      // Refer to the appropriate side
+      const auto fieldName =
+          fieldExpr->inputs().empty() ? name : fieldExpr->inputs()[0]->name();
+      for (size_t sideIdx = 0; sideIdx < inputRowSchema.size(); ++sideIdx) {
+        auto& schema = inputRowSchema[sideIdx];
+        if (schema.get()->containsChild(fieldName)) {
+          auto columnIndex = schema.get()->getChildIdx(fieldName);
+          // This column may be complex data type like ROW, we need to get the
+          // name from row. Push fieldName.name to the tree.
+          auto side = static_cast<cudf::ast::table_reference>(sideIdx);
+          if (fieldExpr->field() == fieldName) {
+            return tree.push(cudf::ast::column_reference(columnIndex, side));
+          } else if (!allowPureAstOnly) {
+            return addPrecomputeInstruction(
+                fieldName, "nested_column", fieldExpr->field());
+          } else {
+            VELOX_FAIL("Unsupported type for nested column operation");
+          }
+        }
+      }
+      VELOX_FAIL("Field not found, " + name);
+  } else if (!allowPureAstOnly && canBeEvaluatedByCudf(expr, /*deep=*/false)) {
+      // Shallow check: only verify this operation is supported
+      // Children will be recursively handled by createCudfExpression
+      // Determine which side this expression references
+      int sideIdx = findExpressionSide(expr);
+      if (sideIdx < 0) {
+        sideIdx = 0; // Default to left side if no fields found
+      }
+      auto node = createCudfExpression(
+          expr, inputRowSchema[sideIdx], kAstEvaluatorName);
+      return addPrecomputeInstructionOnSide(sideIdx, 0, name, "", node);
+  } else {
+      VELOX_FAIL("Unsupported expression: " + name);
+  }
+  }
+
+  int AstContext::findExpressionSide(
+      const std::shared_ptr<velox::exec::Expr>& expr) const {
+    for (const auto* field : expr->distinctFields()) {
+      for (size_t sideIdx = 0; sideIdx < inputRowSchema.size(); ++sideIdx) {
+        if (inputRowSchema[sideIdx].get()->containsChild(field->field())) {
+          return static_cast<int>(sideIdx);
         }
       }
     }
-    VELOX_FAIL("Field not found, " + name);
-  } else if (!allowPureAstOnly && canBeEvaluatedByCudf(expr, /*deep=*/false)) {
-    // Shallow check: only verify this operation is supported
-    // Children will be recursively handled by createCudfExpression
-    // Determine which side this expression references
-    int sideIdx = findExpressionSide(expr);
-    if (sideIdx < 0) {
-      sideIdx = 0; // Default to left side if no fields found
-    }
-    auto node =
-        createCudfExpression(expr, inputRowSchema[sideIdx], kAstEvaluatorName);
-    return addPrecomputeInstructionOnSide(sideIdx, 0, name, "", node);
-  } else {
-    VELOX_FAIL("Unsupported expression: " + name);
+    return -1;
   }
-}
 
-int AstContext::findExpressionSide(
-    const std::shared_ptr<velox::exec::Expr>& expr) const {
-  for (const auto* field : expr->distinctFields()) {
-    for (size_t sideIdx = 0; sideIdx < inputRowSchema.size(); ++sideIdx) {
-      if (inputRowSchema[sideIdx].get()->containsChild(field->field())) {
-        return static_cast<int>(sideIdx);
+  std::vector<ColumnOrView> precomputeSubexpressions(
+      const std::vector<cudf::column_view>& inputColumnViews,
+      const std::vector<PrecomputeInstruction>& precomputeInstructions,
+      const std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+      const RowTypePtr& inputRowSchema,
+      rmm::cuda_stream_view stream) {
+    std::vector<ColumnOrView> precomputedColumns;
+    precomputedColumns.reserve(precomputeInstructions.size());
+
+    for (const auto& instruction : precomputeInstructions) {
+      auto
+          [dependent_column_index,
+           ins_name,
+           new_column_index,
+           nested_dependent_column_indices,
+           cudf_expression] = instruction;
+
+      // If a compiled cudf node is available, evaluate it directly.
+      if (cudf_expression) {
+        auto result = cudf_expression->eval(
+            inputColumnViews,
+            stream,
+            get_output_mr(),
+            /*finalize=*/true);
+        precomputedColumns.push_back(std::move(result));
+        continue;
+      }
+      if (ins_name.rfind("fill", 0) == 0) {
+        auto scalarIndex =
+            std::stoi(ins_name.substr(5)); // "fill " is 5 characters
+        auto newColumn = cudf::make_column_from_scalar(
+            *scalars[scalarIndex],
+            inputColumnViews[dependent_column_index].size(),
+            stream,
+            get_output_mr());
+        precomputedColumns.push_back(std::move(newColumn));
+      } else if (ins_name == "nested_column") {
+        // Nested column already exists in input. Don't materialize.
+        auto view = inputColumnViews[dependent_column_index].child(
+            nested_dependent_column_indices[0]);
+        precomputedColumns.push_back(view);
+      } else {
+        VELOX_FAIL("Unsupported precompute operation " + ins_name);
       }
     }
+
+    return precomputedColumns;
   }
-  return -1;
-}
-
-std::vector<ColumnOrView> precomputeSubexpressions(
-    const std::vector<cudf::column_view>& inputColumnViews,
-    const std::vector<PrecomputeInstruction>& precomputeInstructions,
-    const std::vector<std::unique_ptr<cudf::scalar>>& scalars,
-    const RowTypePtr& inputRowSchema,
-    rmm::cuda_stream_view stream) {
-  std::vector<ColumnOrView> precomputedColumns;
-  precomputedColumns.reserve(precomputeInstructions.size());
-
-  for (const auto& instruction : precomputeInstructions) {
-    auto
-        [dependent_column_index,
-         ins_name,
-         new_column_index,
-         nested_dependent_column_indices,
-         cudf_expression] = instruction;
-
-    // If a compiled cudf node is available, evaluate it directly.
-    if (cudf_expression) {
-      auto result = cudf_expression->eval(
-          inputColumnViews,
-          stream,
-          get_output_mr(),
-          /*finalize=*/true);
-      precomputedColumns.push_back(std::move(result));
-      continue;
-    }
-    if (ins_name.rfind("fill", 0) == 0) {
-      auto scalarIndex =
-          std::stoi(ins_name.substr(5)); // "fill " is 5 characters
-      auto newColumn = cudf::make_column_from_scalar(
-          *scalars[scalarIndex],
-          inputColumnViews[dependent_column_index].size(),
-          stream,
-          get_output_mr());
-      precomputedColumns.push_back(std::move(newColumn));
-    } else if (ins_name == "nested_column") {
-      // Nested column already exists in input. Don't materialize.
-      auto view = inputColumnViews[dependent_column_index].child(
-          nested_dependent_column_indices[0]);
-      precomputedColumns.push_back(view);
-    } else {
-      VELOX_FAIL("Unsupported precompute operation " + ins_name);
-    }
-  }
-
-  return precomputedColumns;
-}
 
 } // namespace
 } // namespace facebook::velox::cudf_velox

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/common/CudfSystemConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
 #include "velox/experimental/cudf/exec/CudfAssignUniqueId.h"
 #include "velox/experimental/cudf/exec/CudfBatchConcat.h"
@@ -284,7 +285,7 @@ class AggregationAdapter : public OperatorAdapter {
         std::dynamic_pointer_cast<const core::AggregationNode>(planNode);
 
     std::vector<std::unique_ptr<exec::Operator>> result;
-    if (CudfConfig::getInstance().concatOptimizationEnabled) {
+    if (CudfSystemConfig::getInstance().concatOptimizationEnabled()) {
       result.push_back(
           std::make_unique<CudfBatchConcat>(
               operatorId, ctx, aggregationPlanNode));

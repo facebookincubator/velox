@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
+#include "velox/experimental/cudf/common/CudfSystemConfig.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/CudfHashAggregation.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
@@ -681,8 +681,10 @@ std::unique_ptr<cudf_velox::CudfHashAggregation::Aggregator> createAggregator(
     uint32_t inputIndex,
     VectorPtr constant,
     bool isGlobal,
-    const TypePtr& resultType) {
-  auto prefix = cudf_velox::CudfConfig::getInstance().functionNamePrefix;
+    const TypePtr& resultType,
+    const cudf_velox::CudfSystemConfig& cudfConfig) {
+  const auto prefix =
+      cudf_velox::CudfSystemConfig::getInstance().functionNamePrefix();
   if (kind.rfind(prefix + "sum", 0) == 0) {
     return std::make_unique<SumAggregator>(
         step, inputIndex, constant, isGlobal, resultType);
@@ -1870,7 +1872,7 @@ bool registerStepAwareBuiltinAggregationFunctions(const std::string& prefix) {
   // AVG partial REAL->row(DOUBLE,BIGINT) and intermediate are the same for
   // both engines and are already registered above.
 
-  if (CudfConfig::getInstance().functionEngine == "spark") {
+  if (CudfSystemConfig::getInstance().functionEngine() == "spark") {
     // Spark: SUM(REAL) -> DOUBLE, AVG(REAL) -> DOUBLE
     appendRegisterAggregationFunctionForStep(
         prefix + "sum",

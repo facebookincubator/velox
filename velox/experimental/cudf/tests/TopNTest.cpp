@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/common/CudfSystemConfig.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
@@ -284,7 +284,7 @@ TEST_F(TopNTest, numericTopNSynchronization) {
   // sync.
   AssertQueryBuilder(plan, duckDbQueryRunner_)
       .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, batchSize)
-      .config(cudf_velox::CudfConfig::kCudfTopNBatchSize, 1)
+      .config(cudf_velox::CudfSystemConfig::kCudfTopNBatchSize, 1)
       .assertResults(
           fmt::format(
               "SELECT c0, c1, c2 FROM tmp ORDER BY c1 DESC, c0 LIMIT {}",

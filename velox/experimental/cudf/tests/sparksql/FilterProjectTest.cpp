@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/common/CudfSystemConfig.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
@@ -39,7 +39,8 @@ class CudfFilterProjectTest : public CudfFunctionBaseTest {
     parse::registerTypeResolver();
     functions::sparksql::registerFunctions("");
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
-    CudfConfig::getInstance().functionEngine = "spark";
+    CudfSystemConfig::getInstance().updateConfigs(
+        {{CudfSystemConfig::kCudfFunctionEngine, "spark"}});
     cudf_velox::registerCudf();
   }
 

@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
+#include "velox/experimental/cudf/common/CudfSystemConfig.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
@@ -138,8 +138,9 @@ std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
 
   std::vector<std::unique_ptr<cudf::table>> outputTables;
   const auto& cudfConfig = CudfConfig::getInstance();
-  auto const maxRows = cudfConfig.batchSizeMaxThreshold
-      ? static_cast<size_t>(cudfConfig.batchSizeMaxThreshold.value())
+  const auto maxBatchSize = cudfConfig.batchSizeMaxThreshold();
+  auto const maxRows = maxBatchSize
+      ? static_cast<size_t>(maxBatchSize.value())
       : static_cast<size_t>(std::numeric_limits<cudf::size_type>::max());
   size_t startpos = 0;
   size_t runningRows = 0;

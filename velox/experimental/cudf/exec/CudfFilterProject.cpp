@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
+#include "velox/experimental/cudf/common/CudfSystemConfig.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
@@ -196,7 +196,7 @@ void CudfFilterProject::initialize() {
                                   : filter_->sources()[0]->outputType();
 
   // convert to AST
-  if (CudfConfig::getInstance().debugEnabled) {
+  if (CudfSystemConfig::getInstance().debugEnabled()) {
     int i = 0;
     for (const auto& expr : expr->exprs()) {
       LOG(INFO) << "expr[" << i++ << "] " << expr->toString();
@@ -255,7 +255,7 @@ RowVectorPtr CudfFilterProject::getOutput() {
   auto outputTable = std::make_unique<cudf::table>(std::move(outputColumns));
   auto const numColumns = outputTable->num_columns();
   auto const size = outputTable->num_rows();
-  if (CudfConfig::getInstance().debugEnabled) {
+  if (CudfSystemConfig::getInstance().debugEnabled()) {
     VLOG(1) << "cudfProject Output: " << size << " rows, " << numColumns
             << " columns";
   }

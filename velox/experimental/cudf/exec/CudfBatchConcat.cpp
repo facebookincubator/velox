@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
+#include "velox/experimental/cudf/common/CudfSystemConfig.h"
 #include "velox/experimental/cudf/exec/CudfBatchConcat.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
@@ -37,7 +37,7 @@ CudfBatchConcat::CudfBatchConcat(
           planNode->id(),
           nvtx3::rgb{211, 211, 211} /* LightGrey */),
       driverCtx_(driverCtx),
-      targetRows_(CudfConfig::getInstance().batchSizeMinThreshold) {}
+      targetRows_(CudfSystemConfig::getInstance().batchSizeMinThreshold()) {}
 
 void CudfBatchConcat::addInput(RowVectorPtr input) {
   auto cudfVector = std::dynamic_pointer_cast<CudfVector>(input);

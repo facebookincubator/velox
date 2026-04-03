@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/common/CudfSystemConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
 #include "velox/exec/PlanNodeStats.h"
@@ -31,20 +31,24 @@ class CudfBatchConcatTest : public OperatorTestBase {
  protected:
   void SetUp() override {
     OperatorTestBase::SetUp();
-    CudfConfig::getInstance().debugEnabled = true;
+    CudfSystemConfig::getInstance().set(
+        CudfSystemConfig::kCudfDebugEnabled, "true");
     cudf_velox::registerCudf();
   }
 
   void TearDown() override {
-    CudfConfig::getInstance().concatOptimizationEnabled = false;
+    CudfSystemConfig::getInstance().set(
+        CudfSystemConfig::kCudfConcatOptimizationEnabled, "false");
     cudf_velox::unregisterCudf();
     OperatorTestBase::TearDown();
   }
 
   void updateCudfConfig(int32_t min, std::optional<int32_t> max) {
-    auto& config = CudfConfig::getInstance();
-    config.batchSizeMinThreshold = min;
-    config.batchSizeMaxThreshold = max;
+    auto& config = CudfSystemConfig::getInstance();
+    config.set(
+        CudfSystemConfig::kCudfBatchSizeMinThreshold, std::to_string(min));
+    config.set(
+        CudfSystemConfig::kCudfBatchSizeMaxThreshold, std::to_string(max));
   }
 
   template <typename T>
@@ -89,7 +93,8 @@ TEST_F(CudfBatchConcatTest, concatReducesBatchesBeforeAggregation) {
   // With min threshold 30, concat should accumulate ~3 batches before flushing,
   // producing fewer output batches than the 6 it received.
   updateCudfConfig(/*min=*/30, /*max=*/std::nullopt);
-  CudfConfig::getInstance().concatOptimizationEnabled = true;
+  CudfSystemConfig::getInstance().set(
+      CudfSystemConfig::kCudfConcatOptimizationEnabled, "true");
 
   std::vector<RowVectorPtr> vectors;
   for (int i = 0; i < 6; ++i) {
@@ -130,7 +135,8 @@ TEST_F(CudfBatchConcatTest, concatReducesBatchesBeforeAggregation) {
 // disabled, even when aggregation is present.
 TEST_F(CudfBatchConcatTest, concatNotInsertedWhenDisabled) {
   updateCudfConfig(/*min=*/30, /*max=*/std::nullopt);
-  CudfConfig::getInstance().concatOptimizationEnabled = false;
+  CudfSystemConfig::getInstance().set(
+      CudfSystemConfig::kCudfConcatOptimizationEnabled, "false");
 
   std::vector<RowVectorPtr> vectors;
   for (int i = 0; i < 6; ++i) {
@@ -164,7 +170,8 @@ TEST_F(CudfBatchConcatTest, concatNotInsertedWhenDisabled) {
 // and flushes them as a single merged batch on noMoreInput.
 TEST_F(CudfBatchConcatTest, concatMergesAllOnFlushWithHighThreshold) {
   updateCudfConfig(/*min=*/100000, /*max=*/std::nullopt);
-  CudfConfig::getInstance().concatOptimizationEnabled = true;
+  CudfSystemConfig::getInstance().set(
+      CudfSystemConfig::kCudfConcatOptimizationEnabled, "true");
 
   std::vector<RowVectorPtr> vectors;
   for (int i = 0; i < 6; ++i) {
@@ -203,7 +210,8 @@ TEST_F(CudfBatchConcatTest, concatMergesAllOnFlushWithHighThreshold) {
 // Verifies correctness with grouped aggregation (non-global) and concat.
 TEST_F(CudfBatchConcatTest, concatWithGroupedAggregation) {
   updateCudfConfig(/*min=*/30, /*max=*/std::nullopt);
-  CudfConfig::getInstance().concatOptimizationEnabled = true;
+  CudfSystemConfig::getInstance().set(
+      CudfSystemConfig::kCudfConcatOptimizationEnabled, "true");
 
   std::vector<RowVectorPtr> vectors;
   for (int i = 0; i < 6; ++i) {

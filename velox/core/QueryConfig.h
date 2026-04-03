@@ -909,6 +909,9 @@ class QueryConfig {
   static constexpr const char* kMarkSortedZeroCopyThreshold =
       "mark_sorted_zero_copy_threshold";
 
+  /// Number of cuDF TopN batches to accumulate before merging.
+  static constexpr const char* kCudfTopNBatchSize = "cudf_topn_batch_size";
+
   enum class RowSizeTrackingMode {
     DISABLED = 0,
     EXCLUDE_DELTA_SPLITS = 1,

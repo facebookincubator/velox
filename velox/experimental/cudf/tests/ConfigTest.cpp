@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/common/CudfSystemConfig.h"
 
 #include <gtest/gtest.h>
 
@@ -22,20 +22,32 @@ namespace facebook::velox::cudf_velox::test {
 
 TEST(ConfigTest, CudfConfig) {
   std::unordered_map<std::string, std::string> options = {
-      {CudfConfig::kCudfEnabled, "false"},
-      {CudfConfig::kCudfDebugEnabled, "true"},
-      {CudfConfig::kCudfMemoryResource, "arena"},
-      {CudfConfig::kCudfMemoryPercent, "25"},
-      {CudfConfig::kCudfFunctionNamePrefix, "presto"},
-      {CudfConfig::kCudfAllowCpuFallback, "false"}};
+      {CudfSystemConfig::kCudfAllowCpuFallback, "false"},
+      {CudfSystemConfig::kCudfDebugEnabled, "true"},
+      {CudfSystemConfig::kCudfLogFallback, "true"},
+      {CudfSystemConfig::kCudfMemoryResource, "arena"},
+      {CudfSystemConfig::kCudfMemoryPercent, "25"},
+      {CudfSystemConfig::kCudfFunctionNamePrefix, "presto"},
+      {CudfSystemConfig::kCudfEnabled, "false"},
+      {CudfSystemConfig::kCudfAllowCpuFallback, "false"},
+      {CudfSystemConfig::kCudfTopNBatchSize, "10"}};
 
-  CudfConfig config;
-  config.initialize(std::move(options));
-  ASSERT_EQ(config.enabled, false);
-  ASSERT_EQ(config.debugEnabled, true);
-  ASSERT_EQ(config.memoryResource, "arena");
-  ASSERT_EQ(config.memoryPercent, 25);
-  ASSERT_EQ(config.functionNamePrefix, "presto");
-  ASSERT_EQ(config.allowCpuFallback, false);
+  CudfSystemConfig config(std::move(options));
+  config.updateConfigs(std::move(options));
+  ASSERT_EQ(config.cudfEnabled(), false);
+  ASSERT_EQ(config.memoryResource(), "arena");
+  ASSERT_EQ(config.memoryPercent(), 25);
+  ASSERT_EQ(config.functionNamePrefix(), "presto");
+  ASSERT_EQ(config.allowCpuFallback(), false);
+  ASSERT_EQ(config.debugEnabled(), true);
+  ASSERT_EQ(config.logFallback(), true);
+  ASSERT_EQ(config.topNBatchSize(), 10);
+}
+
+TEST(ConfigTest, CudfSystemConfigLegacyUnderscoreKeys) {
+  CudfSystemConfig config;
+  config.updateConfigs({{"cudf.allow_cpu_fallback", "false"}});
+
+  ASSERT_EQ(config.allowCpuFallback(), false);
 }
 } // namespace facebook::velox::cudf_velox::test
