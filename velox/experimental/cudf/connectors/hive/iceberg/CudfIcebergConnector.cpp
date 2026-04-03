@@ -30,6 +30,10 @@ using namespace facebook::velox::connector;
 
 namespace {
 
+// Registers Iceberg partition transform functions with prefix.
+// NOTE: These functions are registered for internal transform usage only.
+// Upstream engines such as Prestissimo and Gluten should register the same
+// functions with different prefixes to avoid conflicts.
 void registerIcebergInternalFunctions(const std::string& prefix) {
   static std::once_flag registerFlag;
   std::call_once(registerFlag, [prefix]() {
@@ -41,13 +45,12 @@ void registerIcebergInternalFunctions(const std::string& prefix) {
 
 CudfIcebergConnector::CudfIcebergConnector(
     const std::string& id,
-    std::shared_ptr<const facebook::velox::config::ConfigBase> config,
+    std::shared_ptr<const velox::config::ConfigBase> config,
     folly::Executor* executor)
-    : ::facebook::velox::connector::hive::HiveConnector(id, config, executor),
+    : velox::connector::hive::HiveConnector(id, config, executor),
       cudfHiveConfig_(std::make_shared<CudfHiveConfig>(config)),
       icebergConfig_(
-          std::make_shared<
-              ::facebook::velox::connector::hive::iceberg::IcebergConfig>(
+          std::make_shared<velox::connector::hive::iceberg::IcebergConfig>(
               connectorConfig())) {
   registerIcebergInternalFunctions(icebergConfig_->functionPrefix());
   VLOG(1) << "cuDF Iceberg connector created";
@@ -71,8 +74,7 @@ std::unique_ptr<DataSource> CudfIcebergConnector::createDataSource(
   }
 
   // Fall back to the CPU-based Iceberg data source.
-  return std::make_unique<
-      ::facebook::velox::connector::hive::iceberg::IcebergDataSource>(
+  return std::make_unique<velox::connector::hive::iceberg::IcebergDataSource>(
       outputType,
       tableHandle,
       columnHandles,
@@ -84,7 +86,7 @@ std::unique_ptr<DataSource> CudfIcebergConnector::createDataSource(
 
 std::shared_ptr<Connector> CudfIcebergConnectorFactory::newConnector(
     const std::string& id,
-    std::shared_ptr<const facebook::velox::config::ConfigBase> config,
+    std::shared_ptr<const velox::config::ConfigBase> config,
     folly::Executor* ioExecutor,
     folly::Executor* /*cpuExecutor*/) {
   return std::make_shared<CudfIcebergConnector>(id, config, ioExecutor);
