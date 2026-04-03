@@ -15,6 +15,7 @@
  */
 
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
+#include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergConnector.h"
 #include "velox/experimental/cudf/exec/CudfAssignUniqueId.h"
 #include "velox/experimental/cudf/exec/CudfBatchConcat.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
@@ -97,10 +98,17 @@ class TableScanAdapter : public OperatorAdapter {
     }
     auto const& connector = velox::connector::getConnector(
         tableScanNode->tableHandle()->connectorId());
-    auto cudfHiveConnector = std::dynamic_pointer_cast<
-        facebook::velox::cudf_velox::connector::hive::CudfHiveConnector>(
-        connector);
-    return cudfHiveConnector != nullptr;
+    if (std::dynamic_pointer_cast<
+            facebook::velox::cudf_velox::connector::hive::CudfHiveConnector>(
+            connector)) {
+      return true;
+    }
+    if (std::dynamic_pointer_cast<
+            facebook::velox::cudf_velox::connector::hive::iceberg::
+                CudfIcebergConnector>(connector)) {
+      return true;
+    }
+    return false;
   }
 
   bool acceptsGpuInput() const override {
