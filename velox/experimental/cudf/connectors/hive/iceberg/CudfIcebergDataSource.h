@@ -16,33 +16,21 @@
 
 #pragma once
 
-#include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
-#include "velox/experimental/cudf/exec/NvtxHelper.h"
-
-#include "velox/common/io/IoStatistics.h"
-#include "velox/connectors/Connector.h"
-#include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConfig.h"
-#include "velox/connectors/hive/TableHandle.h"
-#include "velox/connectors/hive/iceberg/IcebergSplit.h"
-#include "velox/dwio/common/Statistics.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
 
 namespace facebook::velox::cudf_velox::connector::hive::iceberg {
 
 namespace velox_connector = ::facebook::velox::connector;
 namespace velox_hive = ::facebook::velox::connector::hive;
 
-class CudfIcebergSplitReader;
-
-/// GPU-accelerated Iceberg data source that reads parquet data files via
-/// libcudf and handles Iceberg delete semantics.
+/// Iceberg-specific data source that extends CudfHiveDataSource.
 ///
-/// This is a thin orchestrator that delegates all per-split reading and delete
-/// application to CudfIcebergSplitReader. For each split:
-///   - addSplit() creates a CudfIcebergSplitReader and calls prepareSplit().
-///   - next() delegates to the split reader's next().
-class CudfIcebergDataSource : public velox_connector::DataSource,
-                              public NvtxHelper {
+/// Mirrors the upstream IcebergDataSource : HiveDataSource pattern.
+/// Delegates all base Hive/Parquet handling to CudfHiveDataSource and
+/// only overrides addSplit() and next() to handle Iceberg-specific
+/// split types and the CudfIcebergSplitReader.
+class CudfIcebergDataSource : public CudfHiveDataSource {
  public:
   CudfIcebergDataSource(
       const RowTypePtr& outputType,
@@ -59,48 +47,18 @@ class CudfIcebergDataSource : public velox_connector::DataSource,
   void addSplit(
       std::shared_ptr<velox_connector::ConnectorSplit> split) override;
 
-  void addDynamicFilter(
-      column_index_t /*outputChannel*/,
-      const std::shared_ptr<common::Filter>& /*filter*/) override {
-    VELOX_NYI(
-        "Dynamic filters not yet implemented by CudfIcebergConnector.");
-  }
-
   std::optional<RowVectorPtr> next(
       uint64_t size,
       velox::ContinueFuture& future) override;
 
   uint64_t getCompletedRows() override;
 
-  uint64_t getCompletedBytes() override {
-    return completedBytes_;
-  }
-
   std::unordered_map<std::string, RuntimeMetric> getRuntimeStats() override;
 
  private:
-  const RowTypePtr outputType_;
+  std::shared_ptr<const velox_hive::HiveConfig> hiveConfig_;
 
-  std::shared_ptr<const velox_hive::HiveTableHandle> tableHandle_;
-
-  const std::shared_ptr<CudfHiveConfig> cudfHiveConfig_;
-  const std::shared_ptr<const velox_hive::HiveConfig> hiveConfig_;
-  FileHandleFactory* const fileHandleFactory_;
-  folly::Executor* const executor_;
-  const velox_connector::ConnectorQueryCtx* const connectorQueryCtx_;
-
-  memory::MemoryPool* const pool_;
-
-  std::vector<std::string> readColumnNames_;
-
-  std::shared_ptr<io::IoStatistics> ioStatistics_;
-  std::shared_ptr<IoStats> ioStats_;
-
-  size_t completedBytes_{0};
-
-  dwio::common::RuntimeStatistics runtimeStats_;
-
-  std::unique_ptr<CudfIcebergSplitReader> splitReader_;
+  std::unique_ptr<class CudfIcebergSplitReader> splitReader_;
 };
 
 } // namespace facebook::velox::cudf_velox::connector::hive::iceberg

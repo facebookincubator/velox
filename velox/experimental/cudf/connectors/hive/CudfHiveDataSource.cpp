@@ -77,8 +77,8 @@ CudfHiveDataSource::CudfHiveDataSource(
       executor_(executor),
       connectorQueryCtx_(connectorQueryCtx),
       pool_(connectorQueryCtx->memoryPool()),
-      baseReaderOpts_(pool_),
       outputType_(outputType),
+      baseReaderOpts_(pool_),
       expressionEvaluator_(connectorQueryCtx->expressionEvaluator()) {
   // Set up column projection if needed
   auto readColumnTypes = outputType_->children();

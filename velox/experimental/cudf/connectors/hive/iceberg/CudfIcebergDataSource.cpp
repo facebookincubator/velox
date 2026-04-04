@@ -37,40 +37,15 @@ CudfIcebergDataSource::CudfIcebergDataSource(
     const velox_connector::ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<CudfHiveConfig>& cudfHiveConfig,
     const std::shared_ptr<const velox_hive::HiveConfig>& hiveConfig)
-    : NvtxHelper(
-          nvtx3::rgb{80, 200, 120},
-          std::nullopt,
-          fmt::format("[iceberg:{}]", tableHandle->name())),
-      outputType_(outputType),
-      cudfHiveConfig_(cudfHiveConfig),
-      hiveConfig_(hiveConfig),
-      fileHandleFactory_(fileHandleFactory),
-      executor_(executor),
-      connectorQueryCtx_(connectorQueryCtx),
-      pool_(connectorQueryCtx->memoryPool()) {
-  for (const auto& outputName : outputType_->names()) {
-    auto it = columnHandles.find(outputName);
-    VELOX_CHECK(
-        it != columnHandles.end(),
-        "ColumnHandle is missing for output column: {}",
-        outputName);
-
-    auto* handle = static_cast<const velox_hive::HiveColumnHandle*>(
-        it->second.get());
-    readColumnNames_.emplace_back(handle->name());
-  }
-
-  tableHandle_ =
-      std::dynamic_pointer_cast<const velox_hive::HiveTableHandle>(
-          tableHandle);
-  VELOX_CHECK_NOT_NULL(
-      tableHandle_, "TableHandle must be an instance of HiveTableHandle");
-
-  VELOX_CHECK_NOT_NULL(fileHandleFactory_, "No FileHandleFactory present");
-
-  ioStatistics_ = std::make_shared<io::IoStatistics>();
-  ioStats_ = std::make_shared<IoStats>();
-}
+    : CudfHiveDataSource(
+          outputType,
+          tableHandle,
+          columnHandles,
+          fileHandleFactory,
+          executor,
+          connectorQueryCtx,
+          cudfHiveConfig),
+      hiveConfig_(hiveConfig) {}
 
 CudfIcebergDataSource::~CudfIcebergDataSource() = default;
 
@@ -78,6 +53,7 @@ void CudfIcebergDataSource::addSplit(
     std::shared_ptr<velox_connector::ConnectorSplit> split) {
   auto icebergSplit =
       std::dynamic_pointer_cast<const velox_iceberg::HiveIcebergSplit>(split);
+
   if (!icebergSplit) {
     auto hiveSplit =
         std::dynamic_pointer_cast<velox_hive::HiveConnectorSplit>(split);
@@ -147,11 +123,12 @@ std::optional<RowVectorPtr> CudfIcebergDataSource::next(
   if (!result.has_value()) {
     return RowVectorPtr(nullptr);
   }
+  completedRows_ += result.value()->size();
   return result;
 }
 
 uint64_t CudfIcebergDataSource::getCompletedRows() {
-  return splitReader_ ? splitReader_->completedRows() : 0;
+  return completedRows_;
 }
 
 std::unordered_map<std::string, RuntimeMetric>

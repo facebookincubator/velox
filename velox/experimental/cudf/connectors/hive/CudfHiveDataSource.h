@@ -90,6 +90,32 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
 
   std::unordered_map<std::string, RuntimeMetric> getRuntimeStats() override;
 
+ protected:
+  std::shared_ptr<CudfHiveConnectorSplit> split_;
+  std::shared_ptr<const ::facebook::velox::connector::hive::HiveTableHandle>
+      tableHandle_;
+
+  const std::shared_ptr<CudfHiveConfig> cudfHiveConfig_;
+  facebook::velox::FileHandleFactory* const fileHandleFactory_;
+  folly::Executor* const executor_;
+  const ConnectorQueryCtx* const connectorQueryCtx_;
+
+  memory::MemoryPool* const pool_;
+
+  // Columns to read.
+  std::vector<std::string> readColumnNames_;
+
+  std::shared_ptr<io::IoStatistics> ioStatistics_;
+  std::shared_ptr<velox::IoStats> ioStats_;
+
+  // The row type for the data source output, not including filter-only columns.
+  const RowTypePtr outputType_;
+
+  size_t completedRows_{0};
+  size_t completedBytes_{0};
+
+  dwio::common::RuntimeStatistics runtimeStats_;
+
  private:
   // Create a CudfParquetReader with the given split.
   CudfParquetReaderPtr createSplitReader();
@@ -97,9 +123,7 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
 
   // Clear split_ and splitReaders after split has been fully processed.
   void resetSplit();
-  // Clear cudfTable_ and currentCudfTableView_ once we have successfully
-  // converted it to `RowVectorPtr` and returned.
-  void resetCudfTableAndView();
+
   const RowVectorPtr& getEmptyOutput() {
     if (!emptyOutput_) {
       emptyOutput_ = RowVector::createEmpty(outputType_, pool_);
@@ -112,17 +136,6 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
 
   RowVectorPtr emptyOutput_;
 
-  std::shared_ptr<CudfHiveConnectorSplit> split_;
-  std::shared_ptr<const ::facebook::velox::connector::hive::HiveTableHandle>
-      tableHandle_;
-
-  const std::shared_ptr<CudfHiveConfig> cudfHiveConfig_;
-  facebook::velox::FileHandleFactory* const fileHandleFactory_;
-  folly::Executor* const executor_;
-  const ConnectorQueryCtx* const connectorQueryCtx_;
-
-  memory::MemoryPool* const pool_;
-
   // cuDF split reader stuff.
   cudf::io::parquet_reader_options readerOptions_;
   std::shared_ptr<cudf::io::datasource> dataSource_;
@@ -132,25 +145,14 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   bool useExperimentalSplitReader_;
   rmm::cuda_stream_view stream_;
 
-  // Output type from file reader.  This is different from outputType_ that it
-  // contains column names before assignment, and columns that only used in
-  // remaining filter.
+  // Output type from file reader. This is different from outputType_ in that it
+  // contains column names before assignment, and columns that are only used in
+  // the remaining filter.
   RowTypePtr readerOutputType_;
 
-  // Columns to read.
   std::unordered_set<std::string> readColumnSet_;
-  std::vector<std::string> readColumnNames_;
-
-  std::shared_ptr<io::IoStatistics> ioStatistics_;
-  std::shared_ptr<velox::IoStats> ioStats_;
 
   dwio::common::ReaderOptions baseReaderOpts_;
-
-  size_t completedRows_{0};
-  size_t completedBytes_{0};
-
-  // The row type for the data source output, not including filter-only columns
-  const RowTypePtr outputType_;
 
   // Expression evaluator for remaining filter.
   core::ExpressionEvaluator* const expressionEvaluator_;
@@ -164,16 +166,15 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   // Cached combined subfield filter expression owned by 'subfieldTree_'.
   cudf::ast::expression const* subfieldFilterExpr_{nullptr};
 
-  dwio::common::RuntimeStatistics runtimeStats_;
   std::atomic<uint64_t> totalRemainingFilterTime_{0};
 
-  // Create callback data for total scan timing calculation
+  // Callback data for total scan timing calculation.
   struct TotalScanTimeCallbackData {
     uint64_t startTimeUs;
     std::shared_ptr<io::IoStatistics> ioStatistics;
   };
 
-  // Host callback function to calculate total scan time
+  // Host callback function to calculate total scan time.
   static void totalScanTimeCalculator(void* userData);
 };
 
