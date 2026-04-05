@@ -798,7 +798,7 @@ TEST_F(HiveConnectorTest, disjuncts) {
 
 /// A mock filesystem that delegates to the local filesystem but captures
 /// the FileOptions::fileReadOps passed to openFileForRead. Used to verify
-/// that SplitReader::createReader() propagates table identity (dbName,
+/// that FileSplitReader::createReader() propagates table identity (dbName,
 /// tableName) into fileReadOps.
 class CapturingFileSystem : public filesystems::FileSystem {
  public:
@@ -898,14 +898,15 @@ TEST_F(HiveConnectorTest, fileReadOpsTableIdentityPropagation) {
       /*dbName=*/"test_db");
 
   // Build the split using the capturing filesystem scheme so that
-  // openFileForRead captures the fileReadOps populated by SplitReader.
+  // openFileForRead captures the fileReadOps populated by FileSplitReader.
   auto split = exec::test::HiveConnectorSplitBuilder(
                    fmt::format("capture:{}", filePath->getPath()))
                    .fileFormat(dwio::common::FileFormat::DWRF)
                    .build();
 
   // Build and run a table scan. This exercises the full pipeline:
-  // SplitReader::createReader() -> FileHandleGenerator -> CapturingFileSystem.
+  // FileSplitReader::createReader() -> FileHandleGenerator ->
+  // CapturingFileSystem.
   auto plan = PlanBuilder()
                   .startTableScan()
                   .outputType(rowType)
@@ -917,7 +918,8 @@ TEST_F(HiveConnectorTest, fileReadOpsTableIdentityPropagation) {
   auto result = AssertQueryBuilder(plan).split(split).copyResults(pool_.get());
   ASSERT_EQ(result->size(), 3);
 
-  // Verify that SplitReader propagated dbName and tableName into fileReadOps.
+  // Verify that FileSplitReader propagated dbName and tableName into
+  // fileReadOps.
   auto& captured = CapturingFileSystem::capturedFileReadOps();
   ASSERT_EQ(captured.at(std::string(kDbNameKey)), "test_db");
   ASSERT_EQ(captured.at(std::string(kTableNameKey)), "test_table");

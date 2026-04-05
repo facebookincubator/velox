@@ -15,13 +15,10 @@
  */
 
 #pragma once
-#include <folly/Executor.h>
 #include <folly/container/F14Map.h>
 
-#include "velox/connectors/Connector.h"
-#include "velox/connectors/hive/FileHandle.h"
+#include "velox/connectors/hive/FileConnectorUtil.h"
 #include "velox/dwio/common/BufferedInput.h"
-#include "velox/dwio/common/Reader.h"
 
 namespace facebook::velox::exec {
 class Expr;
@@ -41,9 +38,7 @@ void checkColumnNameLowerCase(const TypePtr& type);
 
 void checkColumnNameLowerCase(
     const common::SubfieldFilters& filters,
-    const std::unordered_map<
-        std::string,
-        std::shared_ptr<const HiveColumnHandle>>& infoColumns);
+    const std::unordered_map<std::string, FileColumnHandlePtr>& infoColumns);
 
 void checkColumnNameLowerCase(const core::TypedExprPtr& typeExpr);
 
@@ -52,11 +47,11 @@ struct SpecialColumnNames {
   std::optional<std::string> rowId;
 };
 
-/// Checks that two HiveColumnHandle instances are consistent in terms of
-/// column type, data type, and hive type. Throws if inconsistent.
+/// Check that two FileColumnHandle instances are consistent in terms of
+/// column type, data type, and file type. Throw if inconsistent.
 void checkColumnHandleConsistent(
-    const HiveColumnHandle& x,
-    const HiveColumnHandle& y);
+    const FileColumnHandle& x,
+    const FileColumnHandle& y);
 
 /// Creates a ScanSpec for reading data from a Hive table.
 ///
@@ -93,12 +88,8 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
         outputSubfields,
     const common::SubfieldFilters& subfieldFilters,
     const RowTypePtr& dataColumns,
-    const std::unordered_map<
-        std::string,
-        std::shared_ptr<const HiveColumnHandle>>& partitionKeys,
-    const std::unordered_map<
-        std::string,
-        std::shared_ptr<const HiveColumnHandle>>& infoColumns,
+    const std::unordered_map<std::string, FileColumnHandlePtr>& partitionKeys,
+    const std::unordered_map<std::string, FileColumnHandlePtr>& infoColumns,
     const SpecialColumnNames& specialColumns,
     bool disableStatsBasedFilterReorder,
     memory::MemoryPool* pool);
@@ -113,29 +104,27 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
     const common::SubfieldFilters& subfieldFilters,
     const std::vector<std::string>& indexColumns,
     const RowTypePtr& dataColumns,
-    const std::unordered_map<
-        std::string,
-        std::shared_ptr<const HiveColumnHandle>>& partitionKeys,
-    const std::unordered_map<
-        std::string,
-        std::shared_ptr<const HiveColumnHandle>>& infoColumns,
+    const std::unordered_map<std::string, FileColumnHandlePtr>& partitionKeys,
+    const std::unordered_map<std::string, FileColumnHandlePtr>& infoColumns,
     const SpecialColumnNames& specialColumns,
     bool disableStatsBasedFilterReorder,
     memory::MemoryPool* pool);
 
 void configureReaderOptions(
-    const std::shared_ptr<const HiveConfig>& config,
+    const std::shared_ptr<const FileConfig>& config,
     const ConnectorQueryCtx* connectorQueryCtx,
-    const std::shared_ptr<const HiveTableHandle>& hiveTableHandle,
-    const std::shared_ptr<const HiveConnectorSplit>& hiveSplit,
+    const FileTableHandlePtr& tableHandle,
+    const std::shared_ptr<const FileConnectorSplit>& fileSplit,
+    const std::unordered_map<std::string, std::string>& serdeParameters,
     dwio::common::ReaderOptions& readerOptions);
 
 void configureReaderOptions(
-    const std::shared_ptr<const HiveConfig>& hiveConfig,
+    const std::shared_ptr<const FileConfig>& fileConfig,
     const ConnectorQueryCtx* connectorQueryCtx,
     const RowTypePtr& fileSchema,
-    const std::shared_ptr<const HiveConnectorSplit>& hiveSplit,
+    const std::shared_ptr<const FileConnectorSplit>& fileSplit,
     const std::unordered_map<std::string, std::string>& tableParameters,
+    const std::unordered_map<std::string, std::string>& serdeParameters,
     dwio::common::ReaderOptions& readerOptions);
 
 void configureRowReaderOptions(
@@ -143,22 +132,12 @@ void configureRowReaderOptions(
     const std::shared_ptr<common::ScanSpec>& scanSpec,
     std::shared_ptr<common::MetadataFilter> metadataFilter,
     const RowTypePtr& rowType,
-    const std::shared_ptr<const HiveConnectorSplit>& hiveSplit,
-    const std::shared_ptr<const HiveConfig>& hiveConfig,
+    const std::shared_ptr<const FileConnectorSplit>& fileSplit,
+    const std::unordered_map<std::string, std::string>& serdeParameters,
+    const std::shared_ptr<const FileConfig>& fileConfig,
     const config::ConfigBase* sessionProperties,
     folly::Executor* ioExecutor,
     dwio::common::RowReaderOptions& rowReaderOptions);
-
-bool testFilters(
-    const common::ScanSpec* scanSpec,
-    const dwio::common::Reader* reader,
-    const std::string& filePath,
-    const std::unordered_map<std::string, std::optional<std::string>>&
-        partitionKey,
-    const std::unordered_map<
-        std::string,
-        std::shared_ptr<const HiveColumnHandle>>& partitionKeysHandle,
-    bool asLocalTime);
 
 std::unique_ptr<dwio::common::BufferedInput> createBufferedInput(
     const FileHandle& fileHandle,

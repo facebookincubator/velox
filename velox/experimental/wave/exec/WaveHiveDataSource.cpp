@@ -79,7 +79,7 @@ void WaveHiveDataSource::addSplit(
   VELOX_CHECK(
       split_ == nullptr,
       "Previous split has not been processed yet. Call next to process the split.");
-  split_ = std::dynamic_pointer_cast<HiveConnectorSplit>(split);
+  split_ = split;
   VELOX_CHECK(split_, "Wrong type of split");
 
   VLOG(1) << "Adding split " << split_->toString();
@@ -172,7 +172,7 @@ void WaveHiveDataSource::registerConnector() {
       [](const HiveTableHandlePtr& hiveTableHandle,
          const std::shared_ptr<common::ScanSpec>& scanSpec,
          const RowTypePtr& readerOutputType,
-         std::unordered_map<std::string, HiveColumnHandlePtr>* partitionKeys,
+         std::unordered_map<std::string, FileColumnHandlePtr>* partitionKeys,
          FileHandleFactory* fileHandleFactory,
          folly::Executor* executor,
          const connector::ConnectorQueryCtx* connectorQueryCtx,
@@ -180,11 +180,15 @@ void WaveHiveDataSource::registerConnector() {
          const std::shared_ptr<io::IoStatistics>& ioStatistics,
          const exec::ExprSet* remainingFilter,
          std::shared_ptr<common::MetadataFilter> metadataFilter) {
+        // HiveColumnHandle extends FileColumnHandle, so this cast is safe.
+        auto* hivePartitionKeys = reinterpret_cast<
+            std::unordered_map<std::string, HiveColumnHandlePtr>*>(
+            partitionKeys);
         return std::make_shared<WaveHiveDataSource>(
             hiveTableHandle,
             scanSpec,
             readerOutputType,
-            partitionKeys,
+            hivePartitionKeys,
             fileHandleFactory,
             executor,
             connectorQueryCtx,

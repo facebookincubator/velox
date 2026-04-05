@@ -15,25 +15,16 @@
  */
 #pragma once
 
-#include "velox/common/config/Config.h"
+#include "velox/connectors/hive/FileConfig.h"
 
 namespace facebook::velox::connector::hive::paimon {
 
 /// Paimon-specific connector configuration.
-/// Wraps the shared ConfigBase and provides accessors for Paimon settings.
-class PaimonConfig {
+/// Extends FileConfig with Paimon-specific settings.
+class PaimonConfig : public FileConfig {
  public:
   explicit PaimonConfig(std::shared_ptr<const config::ConfigBase> config)
-      : config_(std::move(config)) {
-    VELOX_CHECK_NOT_NULL(config_);
-  }
-
-  const std::shared_ptr<const config::ConfigBase>& config() const {
-    return config_;
-  }
-
- private:
-  const std::shared_ptr<const config::ConfigBase> config_;
+      : FileConfig(std::move(config)) {}
 };
 
 } // namespace facebook::velox::connector::hive::paimon
