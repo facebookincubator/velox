@@ -292,7 +292,7 @@ when to “Resume.”</p>
 <ul class="simple">
 <li><p><strong>Injection</strong>: The <code class="docutils literal notranslate"><span class="pre">requestBarrier</span></code> API directly injects a BarrierSplit into
 the Task’s split queue. This split is distinct from regular data splits (e.g.,
-FileSplit).</p></li>
+FileConnectorSplit).</p></li>
 <li><p><strong>Detection</strong>: The Driver loop responsible for the TableScan fetches the next
 split from the queue. When it pops the BarrierSplit, it does not attempt to
 read data.</p></li>
