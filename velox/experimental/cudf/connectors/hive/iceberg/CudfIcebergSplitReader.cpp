@@ -15,8 +15,8 @@
  */
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
-#include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergSplitReader.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfDeletionVectorReader.h"
+#include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergSplitReader.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
@@ -46,8 +46,9 @@
 #include <cudf/table/table.hpp>
 #include <cudf/table/table_view.hpp>
 
-#include <folly/lang/Bits.h>
 #include <nvtx3/nvtx3.hpp>
+
+#include <folly/lang/Bits.h>
 
 #include <cstring>
 
@@ -187,8 +188,7 @@ void CudfIcebergSplitReader::setupDeleteFileReaders() {
               icebergSplit_->connectorId));
     } else if (
         deleteFile.content == velox_iceberg::FileContent::kEqualityDeletes) {
-      if (deleteFile.recordCount == 0 ||
-          deleteFile.equalityFieldIds.empty()) {
+      if (deleteFile.recordCount == 0 || deleteFile.equalityFieldIds.empty()) {
         continue;
       }
       if (shouldSkipBySequenceNumber(
@@ -397,8 +397,7 @@ std::optional<RowVectorPtr> CudfIcebergSplitReader::next(uint64_t /*size*/) {
       rowVector = std::dynamic_pointer_cast<RowVector>(output);
     }
     VELOX_CHECK_NOT_NULL(
-        rowVector,
-        "Failed to get RowVector for delete application.");
+        rowVector, "Failed to get RowVector for delete application.");
 
     if (hasPositionalDeletes) {
       rowVector = applyPositionalDeletes(rowVector);
@@ -411,15 +410,11 @@ std::optional<RowVectorPtr> CudfIcebergSplitReader::next(uint64_t /*size*/) {
     baseReadOffset_ += nRows;
 
     if (wasCudfVector && rowVector->size() > 0) {
-      auto cudfTable = with_arrow::toCudfTable(
-          rowVector, pool_, stream_, get_output_mr());
+      auto cudfTable =
+          with_arrow::toCudfTable(rowVector, pool_, stream_, get_output_mr());
       stream_.synchronize();
       return std::make_shared<CudfVector>(
-          pool_,
-          outputType_,
-          rowVector->size(),
-          std::move(cudfTable),
-          stream_);
+          pool_, outputType_, rowVector->size(), std::move(cudfTable), stream_);
     }
     return rowVector;
   }
@@ -490,17 +485,15 @@ RowVectorPtr CudfIcebergSplitReader::applyPositionalDeletes(
   return newRowOutput;
 }
 
-RowVectorPtr CudfIcebergSplitReader::applyEqualityDeletes(
-    RowVectorPtr output) {
+RowVectorPtr CudfIcebergSplitReader::applyEqualityDeletes(RowVectorPtr output) {
   auto numRows = output->size();
   if (numRows == 0) {
     return output;
   }
 
-  BufferPtr eqDeleteBitmap = AlignedBuffer::allocate<bool>(
-      numRows, connectorQueryCtx_->memoryPool());
-  std::memset(
-      eqDeleteBitmap->asMutable<uint8_t>(), 0, eqDeleteBitmap->size());
+  BufferPtr eqDeleteBitmap =
+      AlignedBuffer::allocate<bool>(numRows, connectorQueryCtx_->memoryPool());
+  std::memset(eqDeleteBitmap->asMutable<uint8_t>(), 0, eqDeleteBitmap->size());
 
   for (auto& reader : equalityDeleteFileReaders_) {
     reader->applyDeletes(output, eqDeleteBitmap);

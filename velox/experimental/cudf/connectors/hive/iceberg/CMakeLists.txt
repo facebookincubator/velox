@@ -22,8 +22,9 @@ add_library(
 )
 
 set_target_properties(velox_cudf_iceberg_connector PROPERTIES CUDA_ARCHITECTURES native)
-target_compile_options(velox_cudf_iceberg_connector PRIVATE
-  $<$<COMPILE_LANGUAGE:CUDA>:--expt-extended-lambda>
+target_compile_options(
+  velox_cudf_iceberg_connector
+  PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--expt-extended-lambda>
 )
 
 target_link_libraries(

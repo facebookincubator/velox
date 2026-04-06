@@ -103,9 +103,9 @@ class TableScanAdapter : public OperatorAdapter {
             connector)) {
       return true;
     }
-    if (std::dynamic_pointer_cast<
-            facebook::velox::cudf_velox::connector::hive::iceberg::
-                CudfIcebergConnector>(connector)) {
+    if (std::dynamic_pointer_cast<facebook::velox::cudf_velox::connector::hive::
+                                      iceberg::CudfIcebergConnector>(
+            connector)) {
       return true;
     }
     return false;

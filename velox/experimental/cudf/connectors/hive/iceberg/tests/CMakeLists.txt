@@ -12,10 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(
-  velox_cudf_iceberg_test_lib
-  CudfIcebergTestBase.cpp
-)
+add_library(velox_cudf_iceberg_test_lib CudfIcebergTestBase.cpp)
 
 set_target_properties(velox_cudf_iceberg_test_lib PROPERTIES CUDA_ARCHITECTURES native)
 
@@ -58,10 +55,7 @@ add_test(
 set_tests_properties(velox_cudf_iceberg_read_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 
 # Unit tests for CudfDeletionVectorReader (standalone, no connector pipeline).
-add_executable(
-  velox_cudf_iceberg_deletion_vector_test
-  CudfDeletionVectorReaderTest.cpp
-)
+add_executable(velox_cudf_iceberg_deletion_vector_test CudfDeletionVectorReaderTest.cpp)
 
 target_link_libraries(
   velox_cudf_iceberg_deletion_vector_test
@@ -81,4 +75,7 @@ add_test(
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-set_tests_properties(velox_cudf_iceberg_deletion_vector_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
+set_tests_properties(
+  velox_cudf_iceberg_deletion_vector_test
+  PROPERTIES LABELS cuda_driver TIMEOUT 3000
+)

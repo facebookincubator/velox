@@ -28,10 +28,10 @@ namespace {
 
 static constexpr uint8_t kDvMagic[] = {0xD1, 0xD3, 0x39, 0x64};
 
-uint32_t readU32BE(const uint8_t* p) {
+constexpr auto readU32BigEndian(const uint8_t* p) {
   return (static_cast<uint32_t>(p[0]) << 24) |
-      (static_cast<uint32_t>(p[1]) << 16) |
-      (static_cast<uint32_t>(p[2]) << 8) | static_cast<uint32_t>(p[3]);
+      (static_cast<uint32_t>(p[1]) << 16) | (static_cast<uint32_t>(p[2]) << 8) |
+      static_cast<uint32_t>(p[3]);
 }
 
 } // namespace
@@ -40,8 +40,7 @@ std::string CudfDeletionVectorReader::loadBlob() {
   uint64_t blobOffset = 0;
   uint64_t blobLength = fileSizeInBytes_;
 
-  if (auto it = lowerBounds_.find(kDvOffsetFieldId);
-      it != lowerBounds_.end()) {
+  if (auto it = lowerBounds_.find(kDvOffsetFieldId); it != lowerBounds_.end()) {
     try {
       blobOffset = std::stoull(it->second);
     } catch (const std::exception& e) {
@@ -49,8 +48,7 @@ std::string CudfDeletionVectorReader::loadBlob() {
           "Failed to parse DV blob offset from bounds map: {}", e.what());
     }
   }
-  if (auto it = upperBounds_.find(kDvLengthFieldId);
-      it != upperBounds_.end()) {
+  if (auto it = upperBounds_.find(kDvLengthFieldId); it != upperBounds_.end()) {
     try {
       blobLength = std::stoull(it->second);
     } catch (const std::exception& e) {
@@ -87,10 +85,9 @@ void CudfDeletionVectorReader::parseDvBlobEnvelope() {
   // DV-v1 blob format:
   //   [4B BE combined_length] [4B magic] [vector payload ...] [4B BE CRC]
   if (dvBlobBytes_.size() >= 12) {
-    const auto* raw =
-        reinterpret_cast<const uint8_t*>(dvBlobBytes_.data());
+    const auto* raw = reinterpret_cast<const uint8_t*>(dvBlobBytes_.data());
     if (std::memcmp(raw + 4, kDvMagic, 4) == 0) {
-      uint32_t combinedLength = readU32BE(raw);
+      const auto combinedLength = readU32BigEndian(raw);
       if (combinedLength >= 4 &&
           dvBlobBytes_.size() >=
               static_cast<std::size_t>(4 + combinedLength + 4)) {

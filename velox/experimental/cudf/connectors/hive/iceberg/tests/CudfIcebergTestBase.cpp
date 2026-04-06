@@ -71,21 +71,22 @@ CudfIcebergTestBase::makeIcebergSplits(
   splits.reserve(splitCount);
 
   for (uint32_t i = 0; i < splitCount; ++i) {
-    splits.emplace_back(std::make_shared<HiveIcebergSplit>(
-        kCudfIcebergConnectorId,
-        dataFilePath,
-        dwio::common::FileFormat::PARQUET,
-        i * splitSize,
-        splitSize,
-        partitionKeys,
-        std::nullopt,
-        std::unordered_map<std::string, std::string>{},
-        nullptr,
-        /*cacheable=*/true,
-        deleteFiles,
-        std::unordered_map<std::string, std::string>{},
-        std::nullopt,
-        dataSequenceNumber));
+    splits.emplace_back(
+        std::make_shared<HiveIcebergSplit>(
+            kCudfIcebergConnectorId,
+            dataFilePath,
+            dwio::common::FileFormat::PARQUET,
+            i * splitSize,
+            splitSize,
+            partitionKeys,
+            std::nullopt,
+            std::unordered_map<std::string, std::string>{},
+            nullptr,
+            /*cacheable=*/true,
+            deleteFiles,
+            std::unordered_map<std::string, std::string>{},
+            std::nullopt,
+            dataSequenceNumber));
   }
 
   return splits;

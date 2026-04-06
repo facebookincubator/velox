@@ -21,12 +21,14 @@
 /// files are written as DWRF (via the upstream velox::dwrf::Writer) since
 /// they are read by the upstream Velox EqualityDeleteFileReader, not cudf.
 
-#include <folly/Singleton.h>
+#include "velox/experimental/cudf/connectors/hive/iceberg/tests/CudfIcebergTestBase.h"
+
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/experimental/cudf/connectors/hive/iceberg/tests/CudfIcebergTestBase.h"
+
+#include <folly/Singleton.h>
 
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::connector::hive::iceberg;
@@ -65,8 +67,7 @@ TEST_F(CudfEqualityDeleteFileReaderTest, basicSingleColumnDelete) {
 
   auto splits = makeIcebergSplits(dataFile->getPath(), {icebergDeleteFile});
   auto plan = makeTableScanPlan(rowType);
-  auto result =
-      AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
   auto expected = makeRowVector({
       makeFlatVector<int64_t>({0, 1, 2, 4, 5, 6, 8, 9}),
@@ -108,8 +109,7 @@ TEST_F(CudfEqualityDeleteFileReaderTest, multiColumnDelete) {
 
   auto splits = makeIcebergSplits(dataFile->getPath(), {icebergDeleteFile});
   auto plan = makeTableScanPlan(rowType);
-  auto result =
-      AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
   auto expected = makeRowVector({
       makeFlatVector<int32_t>({1, 3, 4}),
@@ -149,8 +149,7 @@ TEST_F(CudfEqualityDeleteFileReaderTest, noMatchingDeletes) {
 
   auto splits = makeIcebergSplits(dataFile->getPath(), {icebergDeleteFile});
   auto plan = makeTableScanPlan(rowType);
-  auto result =
-      AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
   auto expected = makeRowVector({
       makeFlatVector<int64_t>({1, 2, 3}),
@@ -188,14 +187,14 @@ TEST_F(CudfEqualityDeleteFileReaderTest, allRowsDeleted) {
 
   auto splits = makeIcebergSplits(dataFile->getPath(), {icebergDeleteFile});
   auto plan = makeTableScanPlan(rowType);
-  auto result =
-      AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
   EXPECT_EQ(result->size(), 0);
 }
 
 /// Equality deletes with higher sequence number should apply.
-/// (Ported from upstream EqualityDeleteFileReaderTest::sequenceNumberDeleteApplies)
+/// (Ported from upstream
+/// EqualityDeleteFileReaderTest::sequenceNumberDeleteApplies)
 TEST_F(CudfEqualityDeleteFileReaderTest, sequenceNumberDeleteApplies) {
   folly::SingletonVault::singleton()->registrationComplete();
 
@@ -232,8 +231,7 @@ TEST_F(CudfEqualityDeleteFileReaderTest, sequenceNumberDeleteApplies) {
       /*splitCount=*/1,
       /*dataSequenceNumber=*/3);
   auto plan = makeTableScanPlan(rowType);
-  auto result =
-      AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
   auto expected = makeRowVector({
       makeFlatVector<int64_t>({1, 3, 5}),
@@ -244,7 +242,8 @@ TEST_F(CudfEqualityDeleteFileReaderTest, sequenceNumberDeleteApplies) {
 }
 
 /// Equality deletes with lower sequence number should be skipped.
-/// (Ported from upstream EqualityDeleteFileReaderTest::sequenceNumberDeleteSkipped)
+/// (Ported from upstream
+/// EqualityDeleteFileReaderTest::sequenceNumberDeleteSkipped)
 TEST_F(CudfEqualityDeleteFileReaderTest, sequenceNumberDeleteSkipped) {
   folly::SingletonVault::singleton()->registrationComplete();
 
@@ -281,8 +280,7 @@ TEST_F(CudfEqualityDeleteFileReaderTest, sequenceNumberDeleteSkipped) {
       /*splitCount=*/1,
       /*dataSequenceNumber=*/5);
   auto plan = makeTableScanPlan(rowType);
-  auto result =
-      AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
   auto expected = makeRowVector({
       makeFlatVector<int64_t>({1, 2, 3}),
@@ -293,7 +291,8 @@ TEST_F(CudfEqualityDeleteFileReaderTest, sequenceNumberDeleteSkipped) {
 }
 
 /// Equal sequence numbers should also skip.
-/// (Ported from upstream EqualityDeleteFileReaderTest::sequenceNumberEqualSkipped)
+/// (Ported from upstream
+/// EqualityDeleteFileReaderTest::sequenceNumberEqualSkipped)
 TEST_F(CudfEqualityDeleteFileReaderTest, sequenceNumberEqualSkipped) {
   folly::SingletonVault::singleton()->registrationComplete();
 
@@ -329,8 +328,7 @@ TEST_F(CudfEqualityDeleteFileReaderTest, sequenceNumberEqualSkipped) {
       /*splitCount=*/1,
       /*dataSequenceNumber=*/5);
   auto plan = makeTableScanPlan(rowType);
-  auto result =
-      AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
   auto expected = makeRowVector({
       makeFlatVector<int64_t>({1, 2, 3}),
@@ -340,7 +338,8 @@ TEST_F(CudfEqualityDeleteFileReaderTest, sequenceNumberEqualSkipped) {
 }
 
 /// Sequence number 0 means legacy/unassigned — always apply.
-/// (Ported from upstream EqualityDeleteFileReaderTest::sequenceNumberZeroAlwaysApplies)
+/// (Ported from upstream
+/// EqualityDeleteFileReaderTest::sequenceNumberZeroAlwaysApplies)
 TEST_F(CudfEqualityDeleteFileReaderTest, sequenceNumberZeroAlwaysApplies) {
   folly::SingletonVault::singleton()->registrationComplete();
 
@@ -376,8 +375,7 @@ TEST_F(CudfEqualityDeleteFileReaderTest, sequenceNumberZeroAlwaysApplies) {
       /*splitCount=*/1,
       /*dataSequenceNumber=*/10);
   auto plan = makeTableScanPlan(rowType);
-  auto result =
-      AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
   auto expected = makeRowVector({
       makeFlatVector<int64_t>({1, 3}),
@@ -439,8 +437,7 @@ TEST_F(CudfEqualityDeleteFileReaderTest, mixedSequenceNumbers) {
       /*splitCount=*/1,
       /*dataSequenceNumber=*/5);
   auto plan = makeTableScanPlan(rowType);
-  auto result =
-      AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
   auto expected = makeRowVector({
       makeFlatVector<int64_t>({1, 3, 4, 5}),

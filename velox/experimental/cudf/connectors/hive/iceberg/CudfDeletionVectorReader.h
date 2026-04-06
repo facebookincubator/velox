@@ -56,8 +56,7 @@ class CudfDeletionVectorReader {
   CudfDeletionVectorReader(CudfDeletionVectorReader&&) noexcept;
   CudfDeletionVectorReader& operator=(CudfDeletionVectorReader&&) noexcept;
   CudfDeletionVectorReader(const CudfDeletionVectorReader&) = delete;
-  CudfDeletionVectorReader& operator=(const CudfDeletionVectorReader&) =
-      delete;
+  CudfDeletionVectorReader& operator=(const CudfDeletionVectorReader&) = delete;
 
   /// Reads the DV blob from the Puffin file, strips the DV-v1 envelope, and
   /// constructs the cuco roaring bitmap on the GPU.

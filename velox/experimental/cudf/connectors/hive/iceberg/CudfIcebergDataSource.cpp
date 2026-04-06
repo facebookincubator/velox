@@ -61,28 +61,26 @@ void CudfIcebergDataSource::addSplit(
       VELOX_CHECK(
           hiveSplit->fileFormat == dwio::common::FileFormat::PARQUET,
           "CudfIcebergDataSource only supports PARQUET format.");
-      icebergSplit =
-          std::make_shared<velox_iceberg::HiveIcebergSplit>(
-              hiveSplit->connectorId,
-              hiveSplit->filePath,
-              hiveSplit->fileFormat,
-              hiveSplit->start,
-              hiveSplit->length,
-              hiveSplit->partitionKeys,
-              hiveSplit->tableBucketNumber,
-              hiveSplit->customSplitInfo,
-              hiveSplit->extraFileInfo,
-              hiveSplit->cacheable,
-              std::vector<velox_iceberg::IcebergDeleteFile>{},
-              hiveSplit->infoColumns,
-              hiveSplit->properties);
+      icebergSplit = std::make_shared<velox_iceberg::HiveIcebergSplit>(
+          hiveSplit->connectorId,
+          hiveSplit->filePath,
+          hiveSplit->fileFormat,
+          hiveSplit->start,
+          hiveSplit->length,
+          hiveSplit->partitionKeys,
+          hiveSplit->tableBucketNumber,
+          hiveSplit->customSplitInfo,
+          hiveSplit->extraFileInfo,
+          hiveSplit->cacheable,
+          std::vector<velox_iceberg::IcebergDeleteFile>{},
+          hiveSplit->infoColumns,
+          hiveSplit->properties);
     } else {
       VELOX_FAIL("Unsupported split type: {}", split->toString());
     }
   }
 
-  VLOG(1) << "CudfIcebergDataSource: adding split "
-          << icebergSplit->filePath;
+  VLOG(1) << "CudfIcebergDataSource: adding split " << icebergSplit->filePath;
 
   splitReader_ = std::make_unique<CudfIcebergSplitReader>(
       icebergSplit,
@@ -109,8 +107,8 @@ void CudfIcebergDataSource::addSplit(
       completedBytes_ += fileHandleCachePtr->file->size();
     }
   } catch (const std::exception& e) {
-    LOG(WARNING) << "Failed to get file size for "
-                 << icebergSplit->filePath << ": " << e.what();
+    LOG(WARNING) << "Failed to get file size for " << icebergSplit->filePath
+                 << ": " << e.what();
   }
 }
 
@@ -142,8 +140,8 @@ CudfIcebergDataSource::getRuntimeStats() {
       {std::string(velox_hive::HiveDataSource::kTotalScanTime),
        RuntimeMetric(
            ioStatistics_->totalScanTime(), RuntimeCounter::Unit::kNanos)});
-  const auto& ioStatsMap = ioStats_->stats();
-  for (const auto& storageStats : ioStatsMap) {
+  const auto& ioStats = ioStats_->stats();
+  for (const auto& storageStats : ioStats) {
     res.emplace(storageStats.first, storageStats.second);
   }
   return res;

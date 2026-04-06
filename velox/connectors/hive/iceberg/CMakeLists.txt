@@ -40,6 +40,9 @@ velox_add_library(
   velox_hive_iceberg_splitreader
   ${ICEBERG_SOURCES}
   HEADERS
+  DeletionVectorReader.h
+  DeletionVectorWriter.h
+  EqualityDeleteFileReader.h
   IcebergColumnHandle.h
   IcebergConfig.h
   IcebergConnector.h

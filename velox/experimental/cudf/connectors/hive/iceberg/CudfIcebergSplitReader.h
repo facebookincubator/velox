@@ -18,6 +18,7 @@
 
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveDataSourceHelpers.h"
+#include "velox/experimental/cudf/connectors/hive/iceberg/CudfDeletionVectorReader.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 
 #include "velox/common/io/IoStatistics.h"
@@ -25,17 +26,15 @@
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/TableHandle.h"
+#include "velox/connectors/hive/iceberg/EqualityDeleteFileReader.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
-#include "velox/experimental/cudf/connectors/hive/iceberg/CudfDeletionVectorReader.h"
+#include "velox/connectors/hive/iceberg/PositionalDeleteFileReader.h"
 #include "velox/dwio/common/Statistics.h"
 
 #include <cudf/io/datasource.hpp>
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/types.hpp>
-
-#include "velox/connectors/hive/iceberg/EqualityDeleteFileReader.h"
-#include "velox/connectors/hive/iceberg/PositionalDeleteFileReader.h"
 
 #include <list>
 

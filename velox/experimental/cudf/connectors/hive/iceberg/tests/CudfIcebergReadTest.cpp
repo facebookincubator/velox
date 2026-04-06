@@ -18,7 +18,8 @@
 /// Deletion vector and equality delete tests live in their own files
 /// (CudfDeletionVectorReaderTest.cpp and CudfEqualityDeleteFileReaderTest.cpp).
 
-#include <folly/Singleton.h>
+#include "velox/experimental/cudf/connectors/hive/iceberg/tests/CudfIcebergTestBase.h"
+
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
@@ -26,7 +27,8 @@
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/experimental/cudf/connectors/hive/iceberg/tests/CudfIcebergTestBase.h"
+
+#include <folly/Singleton.h>
 
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::exec;

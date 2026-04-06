@@ -16,8 +16,9 @@
 
 #pragma once
 
-#include "velox/connectors/hive/HiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
+
+#include "velox/connectors/hive/HiveConfig.h"
 
 namespace facebook::velox::cudf_velox::connector::hive::iceberg {
 
@@ -26,7 +27,6 @@ namespace velox_hive = ::facebook::velox::connector::hive;
 
 /// Iceberg-specific data source that extends CudfHiveDataSource.
 ///
-/// Mirrors the upstream IcebergDataSource : HiveDataSource pattern.
 /// Delegates all base Hive/Parquet handling to CudfHiveDataSource and
 /// only overrides addSplit() and next() to handle Iceberg-specific
 /// split types and the CudfIcebergSplitReader.
@@ -47,9 +47,8 @@ class CudfIcebergDataSource : public CudfHiveDataSource {
   void addSplit(
       std::shared_ptr<velox_connector::ConnectorSplit> split) override;
 
-  std::optional<RowVectorPtr> next(
-      uint64_t size,
-      velox::ContinueFuture& future) override;
+  std::optional<RowVectorPtr> next(uint64_t size, velox::ContinueFuture& future)
+      override;
 
   uint64_t getCompletedRows() override;
 
@@ -57,7 +56,6 @@ class CudfIcebergDataSource : public CudfHiveDataSource {
 
  private:
   std::shared_ptr<const velox_hive::HiveConfig> hiveConfig_;
-
   std::unique_ptr<class CudfIcebergSplitReader> splitReader_;
 };
 

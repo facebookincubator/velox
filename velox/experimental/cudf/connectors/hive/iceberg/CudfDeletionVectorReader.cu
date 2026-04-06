@@ -86,10 +86,8 @@ bool roaring32NeedsNormalization(const char* r32, std::size_t available) {
 }
 
 /// For cookie 12346, returns the total serialized block size.
-std::size_t noRunBlockSize(
-    const char* r32,
-    uint32_t numContainers,
-    bool hasOffsets) {
+std::size_t
+noRunBlockSize(const char* r32, uint32_t numContainers, bool hasOffsets) {
   std::size_t hdr = 8 + numContainers * 4;
   if (hasOffsets) {
     hdr += numContainers * 4;
@@ -106,10 +104,8 @@ std::size_t noRunBlockSize(
 }
 
 /// For cookie 12347, returns total serialized block size.
-std::size_t runBlockSize(
-    const char* r32,
-    std::size_t available,
-    uint32_t numContainers) {
+std::size_t
+runBlockSize(const char* r32, std::size_t available, uint32_t numContainers) {
   std::size_t kcOffset = 4 + (numContainers + 7) / 8;
   bool hasOffsets = (numContainers >= kNoOffsetThreshold);
   std::size_t hdr = kcOffset + numContainers * 4;
@@ -135,7 +131,8 @@ std::size_t roaring32BlockSize(const char* r32, std::size_t available) {
   if ((cookie & kCookieMask) == kRunCookie) {
     return runBlockSize(r32, available, numContainers);
   }
-  return noRunBlockSize(r32, numContainers, numContainers >= kNoOffsetThreshold);
+  return noRunBlockSize(
+      r32, numContainers, numContainers >= kNoOffsetThreshold);
 }
 
 /// Injects missing offset headers into a cookie-12346 (no-run) Roaring32
@@ -169,9 +166,7 @@ std::string injectNoRunOffsets(
 /// cuco's metadata parser rejects run bitmaps with < 4 containers outright
 /// (the `contains_run_container` device code exists but the host parser
 /// doesn't reach it), so we must convert to array format on the host.
-std::string convertRunToNoRun(
-    const char* r32,
-    uint32_t numContainers) {
+std::string convertRunToNoRun(const char* r32, uint32_t numContainers) {
   std::size_t kcOffset = 4 + (numContainers + 7) / 8;
 
   // Parse key-card pairs and run data from the original block.
@@ -209,15 +204,13 @@ std::string convertRunToNoRun(
   out.append(reinterpret_cast<const char*>(&numContainers), 4);
 
   for (auto& ci : containers) {
-    uint16_t cardMinus1 =
-        static_cast<uint16_t>(ci.expandedValues.size() - 1);
+    uint16_t cardMinus1 = static_cast<uint16_t>(ci.expandedValues.size() - 1);
     out.append(reinterpret_cast<const char*>(&ci.key), 2);
     out.append(reinterpret_cast<const char*>(&cardMinus1), 2);
   }
 
   // Offset section.
-  uint32_t base =
-      8 + numContainers * 4 + numContainers * 4;
+  uint32_t base = 8 + numContainers * 4 + numContainers * 4;
   for (auto& ci : containers) {
     out.append(reinterpret_cast<const char*>(&base), 4);
     base += static_cast<uint32_t>(ci.expandedValues.size()) * 2;
@@ -377,8 +370,8 @@ void CudfDeletionVectorReader::loadAndInitialize(rmm::cuda_stream_view stream) {
   // raw Roaring32. Otherwise treat as Roaring64.
   uint32_t firstWord;
   std::memcpy(&firstWord, payload, 4);
-  bool isRawRoaring32 = (firstWord == kNoRunCookie) ||
-      ((firstWord & kCookieMask) == kRunCookie);
+  bool isRawRoaring32 =
+      (firstWord == kNoRunCookie) || ((firstWord & kCookieMask) == kRunCookie);
 
   bitmap_ = std::make_unique<BitmapImpl>();
 
@@ -403,8 +396,7 @@ void CudfDeletionVectorReader::loadAndInitialize(rmm::cuda_stream_view stream) {
       // Single bucket — unwrap the inner Roaring32 and use the cheaper
       // 32-bit bitmap directly, avoiding the Roaring64 envelope overhead.
       const char* r32 = payload + sizeof(uint64_t) + sizeof(uint32_t);
-      std::size_t r32Size =
-          payloadSize - sizeof(uint64_t) - sizeof(uint32_t);
+      std::size_t r32Size = payloadSize - sizeof(uint64_t) - sizeof(uint32_t);
       normalizedPayload_ = normalizeRoaring32ForCuco(r32, r32Size);
       auto const* bytes =
           reinterpret_cast<cuda::std::byte const*>(normalizedPayload_.data());
