@@ -126,6 +126,36 @@ core::JoinType JoinFuzzerBase::pickJoinType() {
   return joinTypes[idx];
 }
 
+// static
+bool JoinFuzzerBase::isReferenceSupported(core::JoinType joinType) {
+  // Join types supported by DuckDB/Presto SQL conversion in PrestoSql.cpp.
+  // kRight, kRightSemiFilter, and kRightSemiProject are not supported.
+  switch (joinType) {
+    case core::JoinType::kInner:
+    case core::JoinType::kLeft:
+    case core::JoinType::kFull:
+    case core::JoinType::kLeftSemiFilter:
+    case core::JoinType::kLeftSemiProject:
+    case core::JoinType::kAnti:
+      return true;
+    default:
+      return false;
+  }
+}
+
+std::vector<core::JoinType> JoinFuzzerBase::getSupportedJoinTypes() const {
+  std::vector<core::JoinType> supportedTypes;
+  // Iterate through all join types and filter by both target and reference
+  // support.
+  for (int i = 0; i < static_cast<int>(core::JoinType::kNumJoinTypes); ++i) {
+    auto joinType = static_cast<core::JoinType>(i);
+    if (isTargetSupported(joinType) && isReferenceSupported(joinType)) {
+      supportedTypes.push_back(joinType);
+    }
+  }
+  return supportedTypes;
+}
+
 std::string JoinFuzzerBase::joinTypeName(core::JoinType joinType) const {
   switch (joinType) {
     case core::JoinType::kInner:

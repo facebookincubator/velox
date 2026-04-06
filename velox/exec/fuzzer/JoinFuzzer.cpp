@@ -75,15 +75,9 @@ class JoinFuzzer : public JoinFuzzerBase {
   }
 
  protected:
-  std::vector<core::JoinType> getSupportedJoinTypes() const override {
-    // Right joins are tested by flipping sides of the left joins.
-    return {
-        core::JoinType::kInner,
-        core::JoinType::kLeft,
-        core::JoinType::kFull,
-        core::JoinType::kLeftSemiFilter,
-        core::JoinType::kLeftSemiProject,
-        core::JoinType::kAnti};
+  bool isTargetSupported(core::JoinType /*joinType*/) const override {
+    // CPU Velox supports all join types.
+    return true;
   }
 
   std::vector<TypePtr> getSupportedTypes() const override {

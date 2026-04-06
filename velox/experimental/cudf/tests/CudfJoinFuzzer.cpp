@@ -20,6 +20,7 @@
 #include "velox/exec/fuzzer/JoinFuzzerBase.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/experimental/cudf/exec/CudfHashJoin.h"
 
 namespace facebook::velox::cudf_velox::test {
 
@@ -48,24 +49,9 @@ class CudfJoinFuzzer : public JoinFuzzerBase {
             "cudfJoinFuzzer") {}
 
  protected:
-  std::vector<core::JoinType> getSupportedJoinTypes() const override {
-    // This list is the intersection of:
-    // 1. cuDF-supported types: CudfHashJoinProbe::isSupportedJoinType() in
-    //    CudfHashJoin.h supports kInner, kLeft, kFull, kAnti, kLeftSemiFilter,
-    //    kLeftSemiProject, kRight, and kRightSemiFilter.
-    // 2. DuckDB reference runner: PrestoSqlPlanNodeVisitor only supports
-    //    kInner, kLeft, kFull, kAnti, kLeftSemiFilter, and kLeftSemiProject.
-    //
-    // We cannot use CudfHashJoinProbe::isSupportedJoinType() directly because
-    // kRight and kRightSemiFilter are not supported by the DuckDB reference.
-    return {
-        core::JoinType::kInner,
-        core::JoinType::kLeft,
-        core::JoinType::kFull,
-        core::JoinType::kAnti,
-        core::JoinType::kLeftSemiFilter,
-        core::JoinType::kLeftSemiProject,
-    };
+  bool isTargetSupported(core::JoinType joinType) const override {
+    // Delegate to CudfHashJoinProbe's support check.
+    return CudfHashJoinProbe::isSupportedJoinType(joinType);
   }
 
   std::vector<TypePtr> getSupportedTypes() const override {

@@ -26,7 +26,7 @@ namespace facebook::velox::exec {
 /// database.
 ///
 /// Subclasses must implement:
-/// - getSupportedJoinTypes(): Returns the join types to test
+/// - isTargetSupported(): Returns whether the target executor supports a join type
 /// - getSupportedTypes(): Returns the data types to use for columns
 /// - verify(): Performs the actual verification for a given join type
 class JoinFuzzerBase {
@@ -44,8 +44,10 @@ class JoinFuzzerBase {
  protected:
   // === Customization points (must override in subclasses) ===
 
-  /// Returns the join types that this fuzzer should test.
-  virtual std::vector<core::JoinType> getSupportedJoinTypes() const = 0;
+  /// Returns whether the target executor (e.g., CPU Velox, cuDF) supports
+  /// the given join type. Subclasses should override this to reflect their
+  /// executor's capabilities.
+  virtual bool isTargetSupported(core::JoinType joinType) const = 0;
 
   /// Returns the data types that this fuzzer should use for key and payload
   /// columns.
@@ -58,6 +60,15 @@ class JoinFuzzerBase {
   virtual std::string joinTypeName(core::JoinType joinType) const;
 
   // === Shared utilities ===
+
+  /// Returns the join types that this fuzzer should test. This is the
+  /// intersection of join types supported by the target executor
+  /// (isTargetSupported) and the reference database (isReferenceSupported).
+  std::vector<core::JoinType> getSupportedJoinTypes() const;
+
+  /// Returns whether the reference query runner (e.g., DuckDB) supports
+  /// the given join type for result verification.
+  static bool isReferenceSupported(core::JoinType joinType);
 
   static VectorFuzzer::Options getFuzzerOptions();
 
