@@ -26,7 +26,8 @@ namespace facebook::velox::exec {
 /// database.
 ///
 /// Subclasses must implement:
-/// - isTargetSupported(): Returns whether the target executor supports a join type
+/// - isTargetSupported(): Returns whether the target executor supports a join
+/// type
 /// - getSupportedTypes(): Returns the data types to use for columns
 /// - verify(): Performs the actual verification for a given join type
 class JoinFuzzerBase {

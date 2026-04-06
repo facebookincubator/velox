@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/exec/CudfHashJoin.h"
 #include "velox/experimental/cudf/tests/CudfJoinFuzzer.h"
 
 #include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/exec/fuzzer/JoinFuzzerBase.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/experimental/cudf/exec/CudfHashJoin.h"
 
 namespace facebook::velox::cudf_velox::test {
 
