@@ -22,11 +22,26 @@
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
 
-DECLARE_int32(steps);
-DECLARE_int32(duration_sec);
-DECLARE_int32(batch_size);
-DECLARE_int32(num_batches);
-DECLARE_double(null_ratio);
+DEFINE_int32(steps, 10, "Number of plans to generate and test.");
+
+DEFINE_int32(
+    duration_sec,
+    0,
+    "For how long it should run (in seconds). If zero, "
+    "it executes exactly --steps iterations and exits.");
+
+DEFINE_int32(
+    batch_size,
+    100,
+    "The number of elements on each generated vector.");
+
+DEFINE_int32(num_batches, 10, "The number of generated vectors.");
+
+DEFINE_double(
+    null_ratio,
+    0.1,
+    "Chance of adding a null value in a vector "
+    "(expressed as double from 0 to 1).");
 
 namespace facebook::velox::exec {
 
