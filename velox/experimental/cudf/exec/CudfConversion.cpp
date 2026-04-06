@@ -261,6 +261,9 @@ RowVectorPtr CudfToVelox::getOutput() {
       inputs_.pop_front();
     }
     finished_ = noMoreInput_ && inputs_.empty();
+    if (totalSize == 0) {
+      return nullptr;
+    }
     return BaseVector::create<RowVector>(outputType_, totalSize, pool());
   }
 
