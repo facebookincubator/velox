@@ -74,6 +74,9 @@ DECLARE_int32(batch_size);
 DECLARE_int32(num_batches);
 DECLARE_double(null_ratio);
 
+// Memory configuration for Velox's memory management. Required even for GPU
+// execution since the fuzzer uses Velox pools for vector generation and
+// reference query execution.
 DEFINE_int64(allocator_capacity, 8L << 30, "Allocator capacity in bytes.");
 
 DEFINE_int64(arbitrator_capacity, 6L << 30, "Arbitrator capacity in bytes.");

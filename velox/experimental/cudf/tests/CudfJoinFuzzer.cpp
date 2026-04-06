@@ -49,11 +49,15 @@ class CudfJoinFuzzer : public JoinFuzzerBase {
 
  protected:
   std::vector<core::JoinType> getSupportedJoinTypes() const override {
-    // Join types supported by both:
-    // 1. CudfHashJoinProbe::isSupportedJoinType()
-    // 2. DuckDB's SQL conversion (PrestoSqlPlanNodeVisitor)
-    // Note: kRight and kRightSemiFilter are supported by cuDF but not by
-    // DuckDB's SQL conversion.
+    // This list is the intersection of:
+    // 1. cuDF-supported types: CudfHashJoinProbe::isSupportedJoinType() in
+    //    CudfHashJoin.h supports kInner, kLeft, kFull, kAnti, kLeftSemiFilter,
+    //    kLeftSemiProject, kRight, and kRightSemiFilter.
+    // 2. DuckDB reference runner: PrestoSqlPlanNodeVisitor only supports
+    //    kInner, kLeft, kFull, kAnti, kLeftSemiFilter, and kLeftSemiProject.
+    //
+    // We cannot use CudfHashJoinProbe::isSupportedJoinType() directly because
+    // kRight and kRightSemiFilter are not supported by the DuckDB reference.
     return {
         core::JoinType::kInner,
         core::JoinType::kLeft,
