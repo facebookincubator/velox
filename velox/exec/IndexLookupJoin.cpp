@@ -18,6 +18,7 @@
 #include "velox/buffer/Buffer.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/Connector.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/exec/OperatorTraceWriter.h"
 #include "velox/exec/OperatorType.h"
@@ -347,7 +348,9 @@ IndexLookupJoin::IndexLookupJoin(
               operatorType(),
               lookupTableHandle_->connectorId()),
           spillConfig_.has_value() ? &(spillConfig_.value()) : nullptr)},
-      connector_(connector::getConnector(lookupTableHandle_->connectorId())),
+      connector_(
+          connector::ConnectorRegistry::tryGet(
+              lookupTableHandle_->connectorId())),
       maxNumInputBatches_(
           1 + driverCtx->queryConfig().indexLookupJoinMaxPrefetchBatches()),
       joinNode_{joinNode} {

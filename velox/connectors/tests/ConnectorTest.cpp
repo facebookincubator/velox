@@ -15,13 +15,16 @@
  */
 
 #include "velox/connectors/Connector.h"
-#include "velox/common/config/Config.h"
+
+#include <memory>
+#include <utility>
+
+#include <fmt/format.h>
+#include <gtest/gtest.h>
+
 #include "velox/common/memory/Memory.h"
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/core/QueryCtx.h"
-
-#include <gmock/gmock.h>
-#include <gtest/gtest.h>
 
 namespace facebook::velox::connector {
 namespace {

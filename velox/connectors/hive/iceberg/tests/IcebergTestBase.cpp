@@ -19,7 +19,6 @@
 #include <filesystem>
 
 #include "velox/connectors/ConnectorRegistry.h"
-#include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergConnector.h"
@@ -189,8 +188,8 @@ void addColumnHandles(
         std::make_shared<const IcebergColumnHandle>(
             columnName,
             partitionColumnIds.contains(i)
-                ? HiveColumnHandle::ColumnType::kPartitionKey
-                : HiveColumnHandle::ColumnType::kRegular,
+                ? FileColumnHandle::ColumnType::kPartitionKey
+                : FileColumnHandle::ColumnType::kRegular,
             type,
             field));
   }

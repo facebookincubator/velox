@@ -16,7 +16,12 @@
 
 #include "velox/common/ScopedRegistry.h"
 
-#include <gmock/gmock.h>
+#include <map>
+#include <memory>
+#include <set>
+#include <string>
+#include <utility>
+
 #include <gtest/gtest.h>
 
 namespace facebook::velox {
@@ -25,7 +30,7 @@ namespace {
 // Minimal value type for testing.
 class TestEntry {
  public:
-  explicit TestEntry(const std::string& name) : name_{name} {}
+  explicit TestEntry(std::string name) : name_{std::move(name)} {}
 
   const std::string& name() const {
     return name_;
@@ -94,7 +99,9 @@ TEST(ScopedRegistryTest, snapshot) {
   for (const auto& [key, _] : entries) {
     keys.insert(key);
   }
-  EXPECT_THAT(keys, testing::UnorderedElementsAre("a", "b"));
+  EXPECT_EQ(keys.size(), 2);
+  EXPECT_TRUE(keys.count("a"));
+  EXPECT_TRUE(keys.count("b"));
 }
 
 TEST(ScopedRegistryTest, parentFallback) {
@@ -102,7 +109,7 @@ TEST(ScopedRegistryTest, parentFallback) {
   auto entry = std::make_shared<TestEntry>("from-parent");
   parent.insert("key", entry);
 
-  ScopedRegistry<std::string, TestEntry> child(&parent);
+  const ScopedRegistry<std::string, TestEntry> child(&parent);
   EXPECT_EQ(child.find("key"), entry);
 }
 

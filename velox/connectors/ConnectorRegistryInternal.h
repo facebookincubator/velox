@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <string>
+
 #include "velox/common/ScopedRegistry.h"
 #include "velox/connectors/Connector.h"
 

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
@@ -93,7 +94,7 @@ cudf::data_type veloxToCudfDataType(const TypePtr& type) {
     case TypeKind::VARBINARY:
       return cudf::data_type{cudf::type_id::STRING};
     case TypeKind::TIMESTAMP:
-      return cudf::data_type{cudf::type_id::TIMESTAMP_NANOSECONDS};
+      return cudf::data_type{CudfConfig::getInstance().timestampUnit};
     // case TypeKind::HUGEINT: return cudf::type_id::DURATION_DAYS;
     // TODO: DATE was converted to a logical type:
     // https://github.com/facebookincubator/velox/commit/e480f5c03a6c47897ef4488bd56918a89719f908
@@ -123,13 +124,33 @@ std::unique_ptr<cudf::table> toCudfTable(
     const facebook::velox::RowVectorPtr& veloxTable,
     facebook::velox::memory::MemoryPool* pool,
     rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
+    rmm::device_async_resource_ref mr,
+    std::optional<std::string> timestampTimeZone) {
+  TimestampUnit unit;
+  switch (CudfConfig::getInstance().timestampUnit) {
+    case cudf::type_id::TIMESTAMP_NANOSECONDS:
+      unit = TimestampUnit::kNano;
+      break;
+    case cudf::type_id::TIMESTAMP_MICROSECONDS:
+      unit = TimestampUnit::kMicro;
+      break;
+    case cudf::type_id::TIMESTAMP_MILLISECONDS:
+      unit = TimestampUnit::kMilli;
+      break;
+    case cudf::type_id::TIMESTAMP_SECONDS:
+      unit = TimestampUnit::kSecond;
+      break;
+    default:
+      VELOX_UNSUPPORTED();
+  }
   // Need to flattenDictionary and flattenConstant, otherwise we observe issues
   // in the null mask. Also, libcudf does not support Arrow binary, so we export
   // VARBINARY as UTF-8.
   ArrowOptions arrowOptions{
       .flattenDictionary = true,
       .flattenConstant = true,
+      .timestampUnit = unit,
+      .timestampTimeZone = timestampTimeZone,
       .exportVarbinaryAsString = true,
       .useDecimalTypeWidth = true};
   ArrowArray arrowArray;

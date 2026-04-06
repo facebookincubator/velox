@@ -16,6 +16,7 @@
 
 #include "velox/connectors/hive/iceberg/IcebergDataSource.h"
 
+#include "velox/connectors/hive/iceberg/IcebergSplit.h"
 #include "velox/connectors/hive/iceberg/IcebergSplitReader.h"
 
 namespace facebook::velox::connector::hive::iceberg {
@@ -37,19 +38,24 @@ IcebergDataSource::IcebergDataSource(
           connectorQueryCtx,
           hiveConfig) {}
 
-std::unique_ptr<SplitReader> IcebergDataSource::createSplitReader() {
-  return std::make_unique<IcebergSplitReader>(
-      split_,
-      hiveTableHandle_,
+std::unique_ptr<FileSplitReader> IcebergDataSource::createSplitReader() {
+  prepareSplit();
+  auto icebergSplit = checkedPointerCast<const HiveIcebergSplit>(split_);
+
+  auto reader = std::make_unique<IcebergSplitReader>(
+      icebergSplit,
+      tableHandle_,
       &partitionKeys_,
       connectorQueryCtx_,
-      hiveConfig_,
+      fileConfig_,
       readerOutputType_,
       ioStatistics_,
       ioStats_,
       fileHandleFactory_,
       ioExecutor_,
       scanSpec_);
+
+  return reader;
 }
 
 } // namespace facebook::velox::connector::hive::iceberg

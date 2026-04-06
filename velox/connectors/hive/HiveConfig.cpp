@@ -98,31 +98,6 @@ std::optional<std::string> HiveConfig::gcsAuthAccessTokenProvider() const {
       config_->get<std::string>(kGcsAuthAccessTokenProvider));
 }
 
-bool HiveConfig::isOrcUseColumnNames(const config::ConfigBase* session) const {
-  return session->get<bool>(
-      kOrcUseColumnNamesSession, config_->get<bool>(kOrcUseColumnNames, false));
-}
-
-bool HiveConfig::isParquetUseColumnNames(
-    const config::ConfigBase* session) const {
-  return session->get<bool>(
-      kParquetUseColumnNamesSession,
-      config_->get<bool>(kParquetUseColumnNames, false));
-}
-
-bool HiveConfig::allowInt32Narrowing(const config::ConfigBase* session) const {
-  return session->get<bool>(
-      kAllowInt32NarrowingSession,
-      config_->get<bool>(kAllowInt32Narrowing, false));
-}
-
-bool HiveConfig::isFileColumnNamesReadAsLowerCase(
-    const config::ConfigBase* session) const {
-  return session->get<bool>(
-      kFileColumnNamesReadAsLowerCaseSession,
-      config_->get<bool>(kFileColumnNamesReadAsLowerCase, false));
-}
-
 bool HiveConfig::isPartitionPathAsLowerCase(
     const config::ConfigBase* session) const {
   return session->get<bool>(kPartitionPathAsLowerCaseSession, true);
@@ -133,50 +108,6 @@ bool HiveConfig::allowNullPartitionKeys(
   return session->get<bool>(
       kAllowNullPartitionKeysSession,
       config_->get<bool>(kAllowNullPartitionKeys, true));
-}
-
-bool HiveConfig::ignoreMissingFiles(const config::ConfigBase* session) const {
-  return session->get<bool>(kIgnoreMissingFilesSession, false);
-}
-
-int64_t HiveConfig::maxCoalescedBytes(const config::ConfigBase* session) const {
-  return session->get<int64_t>(
-      kMaxCoalescedBytesSession,
-      config_->get<int64_t>(kMaxCoalescedBytes, 128 << 20)); // 128MB
-}
-
-int32_t HiveConfig::maxCoalescedDistanceBytes(
-    const config::ConfigBase* session) const {
-  const auto distance = config::toCapacity(
-      session->get<std::string>(
-          kMaxCoalescedDistanceSession,
-          config_->get<std::string>(kMaxCoalescedDistance, "512kB")),
-      config::CapacityUnit::BYTE);
-  VELOX_USER_CHECK_LE(
-      distance,
-      std::numeric_limits<int32_t>::max(),
-      "The max merge distance to combine read requests must be less than 2GB."
-      " Got {} bytes.",
-      distance);
-  return int32_t(distance);
-}
-
-int32_t HiveConfig::prefetchRowGroups() const {
-  return config_->get<int32_t>(kPrefetchRowGroups, 1);
-}
-
-size_t HiveConfig::parallelUnitLoadCount(
-    const config::ConfigBase* session) const {
-  auto count = session->get<size_t>(
-      kParallelUnitLoadCountSession,
-      config_->get<size_t>(kParallelUnitLoadCount, 0));
-  VELOX_CHECK_LE(count, 100, "parallelUnitLoadCount too large: {}", count);
-  return count;
-}
-
-int32_t HiveConfig::loadQuantum(const config::ConfigBase* session) const {
-  return session->get<int32_t>(
-      kLoadQuantumSession, config_->get<int32_t>(kLoadQuantum, 8 << 20));
 }
 
 int32_t HiveConfig::numCacheFileHandles() const {
@@ -226,91 +157,11 @@ uint64_t HiveConfig::maxTargetFileSizeBytes(
       config::CapacityUnit::BYTE);
 }
 
-uint64_t HiveConfig::filePreloadThreshold() const {
-  return config_->get<uint64_t>(kFilePreloadThreshold, 8UL << 20);
-}
-
-uint8_t HiveConfig::readTimestampUnit(const config::ConfigBase* session) const {
-  const auto unit = session->get<uint8_t>(
-      kReadTimestampUnitSession,
-      config_->get<uint8_t>(kReadTimestampUnit, 3 /*milli*/));
-  VELOX_CHECK(
-      unit == 3 || unit == 6 /*micro*/ || unit == 9 /*nano*/,
-      "Invalid timestamp unit.");
-  return unit;
-}
-
-bool HiveConfig::readTimestampPartitionValueAsLocalTime(
-    const config::ConfigBase* session) const {
-  return session->get<bool>(
-      kReadTimestampPartitionValueAsLocalTimeSession,
-      config_->get<bool>(kReadTimestampPartitionValueAsLocalTime, true));
-}
-
-bool HiveConfig::readStatsBasedFilterReorderDisabled(
-    const config::ConfigBase* session) const {
-  return session->get<bool>(
-      kReadStatsBasedFilterReorderDisabledSession,
-      config_->get<bool>(kReadStatsBasedFilterReorderDisabled, false));
-}
-
-bool HiveConfig::preserveFlatMapsInMemory(
-    const config::ConfigBase* session) const {
-  return session->get<bool>(
-      kPreserveFlatMapsInMemorySession,
-      config_->get<bool>(kPreserveFlatMapsInMemory, false));
-}
-
-bool HiveConfig::indexEnabled(const config::ConfigBase* session) const {
-  return session->get<bool>(
-      kIndexEnabledSession, config_->get<bool>(kIndexEnabled, false));
-}
-
-bool HiveConfig::readerCollectColumnStats(
-    const config::ConfigBase* session) const {
-  return session->get<bool>(
-      kReaderCollectColumnStatsSession,
-      config_->get<bool>(kReaderCollectColumnStats, false));
-}
-
 uint32_t HiveConfig::maxRowsPerIndexRequest(
     const config::ConfigBase* session) const {
   return session->get<uint32_t>(
       kMaxRowsPerIndexRequestSession,
       config_->get<uint32_t>(kMaxRowsPerIndexRequest, 0));
-}
-
-bool HiveConfig::fileMetadataCacheEnabled(
-    const config::ConfigBase* session) const {
-  return session->get<bool>(
-      kFileMetadataCacheEnabledSession,
-      config_->get<bool>(kFileMetadataCacheEnabled, false));
-}
-
-bool HiveConfig::pinFileMetadata(const config::ConfigBase* session) const {
-  return session->get<bool>(
-      kPinFileMetadataSession, config_->get<bool>(kPinFileMetadata, false));
-}
-
-uint64_t HiveConfig::orcFooterSpeculativeIoSize(
-    const config::ConfigBase* session) const {
-  return session->get<uint64_t>(
-      kOrcFooterSpeculativeIoSizeSession,
-      config_->get<uint64_t>(kOrcFooterSpeculativeIoSize, 256UL << 10));
-}
-
-uint64_t HiveConfig::parquetFooterSpeculativeIoSize(
-    const config::ConfigBase* session) const {
-  return session->get<uint64_t>(
-      kParquetFooterSpeculativeIoSizeSession,
-      config_->get<uint64_t>(kParquetFooterSpeculativeIoSize, 256UL << 10));
-}
-
-uint64_t HiveConfig::nimbleFooterSpeculativeIoSize(
-    const config::ConfigBase* session) const {
-  return session->get<uint64_t>(
-      kNimbleFooterSpeculativeIoSizeSession,
-      config_->get<uint64_t>(kNimbleFooterSpeculativeIoSize, 8UL << 20));
 }
 
 std::string HiveConfig::user(const config::ConfigBase* session) const {

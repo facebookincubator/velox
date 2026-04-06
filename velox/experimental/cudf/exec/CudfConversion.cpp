@@ -22,6 +22,7 @@
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
+#include "velox/core/QueryConfig.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/Operator.h"
 #include "velox/vector/ComplexVector.h"
@@ -83,7 +84,9 @@ CudfFromVelox::CudfFromVelox(
       NvtxHelper(
           nvtx3::rgb{255, 140, 0}, // Orange
           operatorId,
-          fmt::format("[{}]", planNodeId)) {}
+          fmt::format("[{}]", planNodeId)),
+      timestampTimeZone_(driverCtx->queryConfig().get<std::string>(
+          facebook::velox::core::QueryConfig::kSessionTimezone)) {}
 
 void CudfFromVelox::addInput(RowVectorPtr input) {
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
@@ -143,8 +146,8 @@ RowVectorPtr CudfFromVelox::getOutput() {
   auto stream = cudfGlobalStreamPool().get_stream();
 
   // Convert RowVector to cudf table
-  auto tbl =
-      with_arrow::toCudfTable(input, input->pool(), stream, get_output_mr());
+  auto tbl = with_arrow::toCudfTable(
+      input, input->pool(), stream, get_output_mr(), timestampTimeZone_);
 
   // Synchronize to ensure toCudfTable finishes reading from input's CPU buffers
   // before input goes out of scope

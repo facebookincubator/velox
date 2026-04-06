@@ -128,7 +128,12 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
     auto tableHandle = createTableHandle();
     auto split = createSplit();
     configureReaderOptions(
-        hiveConfig, connectorQueryCtx.get(), tableHandle, split, readerOptions);
+        hiveConfig,
+        connectorQueryCtx.get(),
+        tableHandle,
+        split,
+        split->serdeParameters,
+        readerOptions);
   };
 
   auto clearDynamicParameters = [&](FileFormat newFileFormat) {
@@ -355,7 +360,12 @@ TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {
     auto tableHandle = createTableHandle();
     auto split = createSplit(FileFormat::ORC);
     configureReaderOptions(
-        hiveConfig, connectorQueryCtx.get(), tableHandle, split, readerOptions);
+        hiveConfig,
+        connectorQueryCtx.get(),
+        tableHandle,
+        split,
+        split->serdeParameters,
+        readerOptions);
     EXPECT_EQ(
         readerOptions.footerSpeculativeIoSize(),
         hiveConfig->orcFooterSpeculativeIoSize(&sessionProperties));
@@ -368,7 +378,12 @@ TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {
     auto tableHandle = createTableHandle();
     auto split = createSplit(FileFormat::DWRF);
     configureReaderOptions(
-        hiveConfig, connectorQueryCtx.get(), tableHandle, split, readerOptions);
+        hiveConfig,
+        connectorQueryCtx.get(),
+        tableHandle,
+        split,
+        split->serdeParameters,
+        readerOptions);
     EXPECT_EQ(
         readerOptions.footerSpeculativeIoSize(),
         hiveConfig->orcFooterSpeculativeIoSize(&sessionProperties));
@@ -381,7 +396,12 @@ TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {
     auto tableHandle = createTableHandle();
     auto split = createSplit(FileFormat::PARQUET);
     configureReaderOptions(
-        hiveConfig, connectorQueryCtx.get(), tableHandle, split, readerOptions);
+        hiveConfig,
+        connectorQueryCtx.get(),
+        tableHandle,
+        split,
+        split->serdeParameters,
+        readerOptions);
     EXPECT_EQ(
         readerOptions.footerSpeculativeIoSize(),
         hiveConfig->parquetFooterSpeculativeIoSize(&sessionProperties));
@@ -394,7 +414,12 @@ TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {
     auto tableHandle = createTableHandle();
     auto split = createSplit(FileFormat::NIMBLE);
     configureReaderOptions(
-        hiveConfig, connectorQueryCtx.get(), tableHandle, split, readerOptions);
+        hiveConfig,
+        connectorQueryCtx.get(),
+        tableHandle,
+        split,
+        split->serdeParameters,
+        readerOptions);
     EXPECT_EQ(
         readerOptions.footerSpeculativeIoSize(),
         hiveConfig->nimbleFooterSpeculativeIoSize(&sessionProperties));
@@ -443,7 +468,12 @@ TEST_F(HiveConnectorUtilTest, fileMetadataCacheEnabledSessionOverride) {
     auto split = std::make_shared<hive::HiveConnectorSplit>(
         "testConnectorId", "/tmp/", FileFormat::DWRF);
     configureReaderOptions(
-        hiveConfig, connectorQueryCtx.get(), tableHandle, split, readerOptions);
+        hiveConfig,
+        connectorQueryCtx.get(),
+        tableHandle,
+        split,
+        split->serdeParameters,
+        readerOptions);
     ASSERT_EQ(readerOptions.fileMetadataCacheEnabled(), enabled);
   }
 }
@@ -513,6 +543,7 @@ TEST_F(HiveConnectorUtilTest, cacheRetention) {
         connectorQueryCtx.get(),
         tableHandle,
         hiveSplit,
+        hiveSplit->serdeParameters,
         readerOptions);
 
     ASSERT_EQ(readerOptions.cacheable(), testData.expectedCacheable);
@@ -532,8 +563,9 @@ TEST_F(HiveConnectorUtilTest, configureSstRowReaderOptions) {
       /*scanSpec=*/nullptr,
       /*metadataFilter=*/nullptr,
       /*rowType=*/nullptr,
-      /*hiveSplit=*/hiveSplit,
-      /*hiveConfig=*/nullptr,
+      /*fileSplit=*/hiveSplit,
+      /*serdeParameters=*/hiveSplit->serdeParameters,
+      /*fileConfig=*/nullptr,
       /*sessionProperties=*/nullptr,
       /*ioExecutor=*/nullptr,
       /*rowReaderOptions=*/rowReaderOpts);
@@ -558,8 +590,9 @@ TEST_F(HiveConnectorUtilTest, configureRowReaderOptionsFromConfig) {
         /*scanSpec=*/nullptr,
         /*metadataFilter=*/nullptr,
         /*rowType=*/nullptr,
-        /*hiveSplit=*/hiveSplit,
-        /*hiveConfig=*/hiveConfig,
+        /*fileSplit=*/hiveSplit,
+        /*serdeParameters=*/{},
+        /*fileConfig=*/hiveConfig,
         /*sessionProperties=*/&sessionProperties,
         /*ioExecutor=*/nullptr,
         /*rowReaderOptions=*/rowReaderOpts);
@@ -584,8 +617,9 @@ TEST_F(HiveConnectorUtilTest, configureRowReaderOptionsFromConfig) {
         /*scanSpec=*/nullptr,
         /*metadataFilter=*/nullptr,
         /*rowType=*/nullptr,
-        /*hiveSplit=*/hiveSplit,
-        /*hiveConfig=*/hiveConfig,
+        /*fileSplit=*/hiveSplit,
+        /*serdeParameters=*/{},
+        /*fileConfig=*/hiveConfig,
         /*sessionProperties=*/&sessionProperties,
         /*ioExecutor=*/nullptr,
         /*rowReaderOptions=*/rowReaderOpts);
@@ -611,8 +645,9 @@ TEST_F(HiveConnectorUtilTest, configureRowReaderOptionsFromConfig) {
         /*scanSpec=*/nullptr,
         /*metadataFilter=*/nullptr,
         /*rowType=*/nullptr,
-        /*hiveSplit=*/hiveSplit,
-        /*hiveConfig=*/hiveConfig,
+        /*fileSplit=*/hiveSplit,
+        /*serdeParameters=*/{},
+        /*fileConfig=*/hiveConfig,
         /*sessionProperties=*/&sessionProperties,
         /*ioExecutor=*/nullptr,
         /*rowReaderOptions=*/rowReaderOpts);
@@ -639,8 +674,9 @@ TEST_F(HiveConnectorUtilTest, configureRowReaderOptionsFromConfig) {
         /*scanSpec=*/nullptr,
         /*metadataFilter=*/nullptr,
         /*rowType=*/nullptr,
-        /*hiveSplit=*/hiveSplit,
-        /*hiveConfig=*/hiveConfig,
+        /*fileSplit=*/hiveSplit,
+        /*serdeParameters=*/{},
+        /*fileConfig=*/hiveConfig,
         /*sessionProperties=*/&sessionProperties,
         /*ioExecutor=*/nullptr,
         /*rowReaderOptions=*/rowReaderOpts);
@@ -652,9 +688,9 @@ TEST_F(HiveConnectorUtilTest, configureRowReaderOptionsFromConfig) {
 TEST_F(HiveConnectorUtilTest, checkColumnHandleConsistent) {
   // Create two consistent column handles
   auto handle1 = std::make_shared<hive::HiveColumnHandle>(
-      "col1", hive::HiveColumnHandle::ColumnType::kRegular, BIGINT(), BIGINT());
+      "col1", hive::FileColumnHandle::ColumnType::kRegular, BIGINT(), BIGINT());
   auto handle2 = std::make_shared<hive::HiveColumnHandle>(
-      "col1", hive::HiveColumnHandle::ColumnType::kRegular, BIGINT(), BIGINT());
+      "col1", hive::FileColumnHandle::ColumnType::kRegular, BIGINT(), BIGINT());
 
   // Should not throw for consistent handles
   EXPECT_NO_THROW(hive::checkColumnHandleConsistent(*handle1, *handle2));
@@ -662,7 +698,7 @@ TEST_F(HiveConnectorUtilTest, checkColumnHandleConsistent) {
   // Test inconsistent column type
   auto handlePartition = std::make_shared<hive::HiveColumnHandle>(
       "col1",
-      hive::HiveColumnHandle::ColumnType::kPartitionKey,
+      hive::FileColumnHandle::ColumnType::kPartitionKey,
       BIGINT(),
       BIGINT());
   VELOX_ASSERT_THROW(
@@ -672,7 +708,7 @@ TEST_F(HiveConnectorUtilTest, checkColumnHandleConsistent) {
   // Test inconsistent data type
   auto handleVarchar = std::make_shared<hive::HiveColumnHandle>(
       "col1",
-      hive::HiveColumnHandle::ColumnType::kRegular,
+      hive::FileColumnHandle::ColumnType::kRegular,
       VARCHAR(),
       VARCHAR());
   VELOX_ASSERT_THROW(
