@@ -1086,6 +1086,14 @@ Each query can override the config by setting corresponding query session proper
      - true
      - AWS Instance Metadata Service (IMDS) is an AWS EC2 instance component used by applications to securely access metadata.
        We must disable it on other instances to avoid high first-time read latency from S3 compatible object storages.
+   * - hive.s3.min-part-size
+     - string
+     - 10MB
+     - Minimum multi-part upload part size. The smallest allowed value is 5MB. The largest allowed value is 5GB.
+       If a file is less than this size, the file is sent as a single put request.
+       Otherwise, the file is split into multiple equal sized chunks of this part size excluding the last chunk.
+       The `AWS specification <https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html> `_ limits the part size between 5MB and 5GB.
+       Some S3 backend providers enforce these limits strictly.
 
 Bucket Level Configuration
 """"""""""""""""""""""""""

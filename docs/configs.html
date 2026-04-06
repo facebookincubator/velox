@@ -1405,6 +1405,15 @@ The provider must be registered using “registerAWSCredentialsProvider” befor
 <td><p>AWS Instance Metadata Service (IMDS) is an AWS EC2 instance component used by applications to securely access metadata.
 We must disable it on other instances to avoid high first-time read latency from S3 compatible object storages.</p></td>
 </tr>
+<tr class="row-even"><td><p>hive.s3.min-part-size</p></td>
+<td><p>string</p></td>
+<td><p>10MB</p></td>
+<td><p>Minimum multi-part upload part size. The smallest allowed value is 5MB. The largest allowed value is 5GB.
+If a file is less than this size, the file is sent as a single put request.
+Otherwise, the file is split into multiple equal sized chunks of this part size excluding the last chunk.
+The <a href="#id1"><span class="problematic" id="id2">`</span></a>AWS specification &lt;<a class="reference external" href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html">https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html</a>&gt; <a href="#id3"><span class="problematic" id="id4">`</span></a>_ limits the part size between 5MB and 5GB.
+Some S3 backend providers enforce these limits strictly.</p></td>
+</tr>
 </tbody>
 </table>
 <section id="bucket-level-configuration">
