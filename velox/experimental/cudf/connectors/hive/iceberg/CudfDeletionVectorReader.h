@@ -79,20 +79,16 @@ class CudfDeletionVectorReader {
   static constexpr int32_t kDvLengthFieldId = 101;
 
  private:
-  /// Reads raw bytes from the Puffin file. Defined in .cpp (uses Velox I/O).
-  std::string loadBlob();
-
-  /// Strips the DV-v1 envelope. Defined in .cpp (uses Velox macros).
-  void parseDvBlobEnvelope();
+  /// Constructs the cuco roaring bitmap on the GPU from normalizedPayload_.
+  /// Defined in .cu (requires nvcc for cuco/thrust).
+  /// @tparam use32bit If true, build a 32-bit bitmap; otherwise 64-bit.
+  template <bool use32bit>
+  void buildBitmap(rmm::cuda_stream_view stream);
 
   std::string filePath_;
   uint64_t fileSizeInBytes_;
   std::unordered_map<int32_t, std::string> lowerBounds_;
   std::unordered_map<int32_t, std::string> upperBounds_;
-
-  std::string dvBlobBytes_;
-  std::size_t dvPayloadOffset_{0};
-  std::size_t dvPayloadSize_{0};
 
   std::string normalizedPayload_;
   std::unique_ptr<BitmapImpl> bitmap_;

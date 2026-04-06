@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergDataSource.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergSplitReader.h"
 
+#include "velox/common/Casts.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
@@ -55,29 +56,25 @@ void CudfIcebergDataSource::addSplit(
       std::dynamic_pointer_cast<const velox_iceberg::HiveIcebergSplit>(split);
 
   if (!icebergSplit) {
-    auto hiveSplit =
-        std::dynamic_pointer_cast<velox_hive::HiveConnectorSplit>(split);
-    if (hiveSplit) {
-      VELOX_CHECK(
-          hiveSplit->fileFormat == dwio::common::FileFormat::PARQUET,
-          "CudfIcebergDataSource only supports PARQUET format.");
-      icebergSplit = std::make_shared<velox_iceberg::HiveIcebergSplit>(
-          hiveSplit->connectorId,
-          hiveSplit->filePath,
-          hiveSplit->fileFormat,
-          hiveSplit->start,
-          hiveSplit->length,
-          hiveSplit->partitionKeys,
-          hiveSplit->tableBucketNumber,
-          hiveSplit->customSplitInfo,
-          hiveSplit->extraFileInfo,
-          hiveSplit->cacheable,
-          std::vector<velox_iceberg::IcebergDeleteFile>{},
-          hiveSplit->infoColumns,
-          hiveSplit->properties);
-    } else {
-      VELOX_FAIL("Unsupported split type: {}", split->toString());
-    }
+    auto hiveSplit = checkedPointerCast<velox_hive::HiveConnectorSplit>(split);
+
+    VELOX_CHECK(
+        hiveSplit->fileFormat == dwio::common::FileFormat::PARQUET,
+        "CudfIcebergDataSource only supports PARQUET format.");
+    icebergSplit = std::make_shared<velox_iceberg::HiveIcebergSplit>(
+        hiveSplit->connectorId,
+        hiveSplit->filePath,
+        hiveSplit->fileFormat,
+        hiveSplit->start,
+        hiveSplit->length,
+        hiveSplit->partitionKeys,
+        hiveSplit->tableBucketNumber,
+        hiveSplit->customSplitInfo,
+        hiveSplit->extraFileInfo,
+        hiveSplit->cacheable,
+        std::vector<velox_iceberg::IcebergDeleteFile>{},
+        hiveSplit->infoColumns,
+        hiveSplit->properties);
   }
 
   VLOG(1) << "CudfIcebergDataSource: adding split " << icebergSplit->filePath;
@@ -96,6 +93,8 @@ void CudfIcebergDataSource::addSplit(
       ioStats_);
   splitReader_->prepareSplit();
 
+  // TODO: `completedBytes_` should be updated in `next()` as we read more and
+  // more table bytes
   try {
     const auto fileHandleKey = FileHandleKey{
         .filename = icebergSplit->filePath,
@@ -123,10 +122,6 @@ std::optional<RowVectorPtr> CudfIcebergDataSource::next(
   }
   completedRows_ += result.value()->size();
   return result;
-}
-
-uint64_t CudfIcebergDataSource::getCompletedRows() {
-  return completedRows_;
 }
 
 std::unordered_map<std::string, RuntimeMetric>

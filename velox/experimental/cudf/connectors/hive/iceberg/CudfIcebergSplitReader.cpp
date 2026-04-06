@@ -351,18 +351,6 @@ std::optional<RowVectorPtr> CudfIcebergSplitReader::next(uint64_t /*size*/) {
 
   auto nRowsAfterDv = cudfTable->num_rows();
 
-  // Trim extra columns if the parquet file has more than we need.
-  if (outputType_->size() < cudfTable->num_columns()) {
-    auto cudfTableColumns = cudfTable->release();
-    std::vector<std::unique_ptr<cudf::column>> outputColumns;
-    outputColumns.reserve(outputType_->size());
-    std::move(
-        cudfTableColumns.begin(),
-        cudfTableColumns.begin() + outputType_->size(),
-        std::back_inserter(outputColumns));
-    cudfTable = std::make_unique<cudf::table>(std::move(outputColumns));
-  }
-
   auto output = cudfIsRegistered()
       ? std::make_shared<CudfVector>(
             pool_, outputType_, nRowsAfterDv, std::move(cudfTable), stream_)

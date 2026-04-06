@@ -50,8 +50,6 @@ class CudfIcebergDataSource : public CudfHiveDataSource {
   std::optional<RowVectorPtr> next(uint64_t size, velox::ContinueFuture& future)
       override;
 
-  uint64_t getCompletedRows() override;
-
   std::unordered_map<std::string, RuntimeMetric> getRuntimeStats() override;
 
  private:
