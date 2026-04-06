@@ -90,6 +90,7 @@ class S3FileSystem : public FileSystem {
  protected:
   class Impl;
   std::shared_ptr<Impl> impl_;
+  std::shared_ptr<S3Config> s3Config_;
 };
 
 } // namespace facebook::velox::filesystems

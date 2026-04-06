@@ -318,8 +318,8 @@ class HiveIcebergTest : public HiveConnectorTestBase {
       const auto& columnName = rowType->nameOf(i);
       const auto& columnType = rowType->childAt(i);
       auto columnHandleType = partitionIndices.contains(i)
-          ? HiveColumnHandle::ColumnType::kPartitionKey
-          : HiveColumnHandle::ColumnType::kRegular;
+          ? FileColumnHandle::ColumnType::kPartitionKey
+          : FileColumnHandle::ColumnType::kRegular;
 
       assignments.insert(
           {columnName,

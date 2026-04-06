@@ -16,6 +16,7 @@
 #include "velox/exec/TableScan.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/Task.h"
 
@@ -90,7 +91,8 @@ TableScan::TableScan(
           driverCtx_->driverId,
           operatorType(),
           tableHandle_->connectorId())),
-      connector_(connector::getConnector(tableHandle_->connectorId())),
+      connector_(
+          connector::ConnectorRegistry::tryGet(tableHandle_->connectorId())),
       getOutputTimeLimitMs_(
           driverCtx_->queryConfig().tableScanGetOutputTimeLimitMs()),
       outputBatchRowsOverride_(

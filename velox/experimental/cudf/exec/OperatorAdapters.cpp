@@ -30,6 +30,7 @@
 #include "velox/experimental/cudf/exec/Validation.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/exec/AssignUniqueId.h"
 #include "velox/exec/CallbackSink.h"
 #include "velox/exec/FilterProject.h"
@@ -100,7 +101,7 @@ class TableScanAdapter : public OperatorAdapter {
           planNode->id());
       return false;
     }
-    auto const& connector = velox::connector::getConnector(
+    auto const& connector = velox::connector::ConnectorRegistry::tryGet(
         tableScanNode->tableHandle()->connectorId());
     auto cudfHiveConnector = std::dynamic_pointer_cast<
         facebook::velox::cudf_velox::connector::hive::CudfHiveConnector>(

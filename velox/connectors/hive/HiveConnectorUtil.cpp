@@ -16,8 +16,12 @@
 
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 
-#include "velox/connectors/hive/HiveConfig.h"
-#include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/connectors/hive/FileColumnHandle.h"
+
+#include "velox/connectors/hive/FileConfig.h"
+#include "velox/connectors/hive/FileConnectorSplit.h"
+#include "velox/connectors/hive/FileConnectorUtil.h"
+#include "velox/connectors/hive/FileTableHandle.h"
 #include "velox/dwio/common/CachedBufferedInput.h"
 #include "velox/dwio/common/DirectBufferedInput.h"
 #include "velox/expression/Expr.h"
@@ -239,7 +243,7 @@ inline uint8_t parseDelimiter(const std::string& delim) {
 
 inline bool isSynthesizedColumn(
     const std::string& name,
-    const std::unordered_map<std::string, HiveColumnHandlePtr>& infoColumns) {
+    const std::unordered_map<std::string, FileColumnHandlePtr>& infoColumns) {
   return infoColumns.count(name) != 0;
 }
 
@@ -284,7 +288,7 @@ void checkColumnNameLowerCase(const TypePtr& type) {
 
 void checkColumnNameLowerCase(
     const common::SubfieldFilters& filters,
-    const std::unordered_map<std::string, HiveColumnHandlePtr>& infoColumns) {
+    const std::unordered_map<std::string, FileColumnHandlePtr>& infoColumns) {
   for (const auto& filterIt : filters) {
     const auto name = filterIt.first.toString();
     if (isSynthesizedColumn(name, infoColumns)) {
@@ -345,27 +349,21 @@ void processFieldSpec(
 } // namespace
 
 void checkColumnHandleConsistent(
-    const HiveColumnHandle& x,
-    const HiveColumnHandle& y) {
+    const FileColumnHandle& x,
+    const FileColumnHandle& y) {
   VELOX_CHECK_EQ(
       x.columnType(),
       y.columnType(),
       "Inconsistent column handle type: {}, expected {}, got {}",
       x.name(),
-      HiveColumnHandle::columnTypeName(x.columnType()),
-      HiveColumnHandle::columnTypeName(y.columnType()));
+      FileColumnHandle::columnTypeName(x.columnType()),
+      FileColumnHandle::columnTypeName(y.columnType()));
   VELOX_CHECK(
       x.dataType()->equivalent(*y.dataType()),
       "Inconsistent column handle data type: {}, expected {}, got {}",
       x.name(),
       x.dataType()->toString(),
       y.dataType()->toString());
-  VELOX_CHECK(
-      x.hiveType()->equivalent(*y.hiveType()),
-      "Inconsistent column handle hive type: {}, expected {}, got {}",
-      x.name(),
-      x.hiveType()->toString(),
-      y.hiveType()->toString());
 }
 
 std::shared_ptr<common::ScanSpec> makeScanSpec(
@@ -374,8 +372,8 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
         outputSubfields,
     const common::SubfieldFilters& subfieldFilters,
     const RowTypePtr& dataColumns,
-    const std::unordered_map<std::string, HiveColumnHandlePtr>& partitionKeys,
-    const std::unordered_map<std::string, HiveColumnHandlePtr>& infoColumns,
+    const std::unordered_map<std::string, FileColumnHandlePtr>& partitionKeys,
+    const std::unordered_map<std::string, FileColumnHandlePtr>& infoColumns,
     const SpecialColumnNames& specialColumns,
     bool disableStatsBasedFilterReorder,
     memory::MemoryPool* pool) {
@@ -399,8 +397,8 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
     const common::SubfieldFilters& subfieldFilters,
     const std::vector<std::string>& indexColumns,
     const RowTypePtr& dataColumns,
-    const std::unordered_map<std::string, HiveColumnHandlePtr>& partitionKeys,
-    const std::unordered_map<std::string, HiveColumnHandlePtr>& infoColumns,
+    const std::unordered_map<std::string, FileColumnHandlePtr>& partitionKeys,
+    const std::unordered_map<std::string, FileColumnHandlePtr>& infoColumns,
     const SpecialColumnNames& specialColumns,
     bool disableStatsBasedFilterReorder,
     memory::MemoryPool* pool) {
@@ -575,111 +573,52 @@ std::unique_ptr<dwio::common::SerDeOptions> parseSerdeParameters(
 }
 
 void configureReaderOptions(
-    const std::shared_ptr<const HiveConfig>& hiveConfig,
+    const std::shared_ptr<const FileConfig>& fileConfig,
     const ConnectorQueryCtx* connectorQueryCtx,
-    const std::shared_ptr<const HiveTableHandle>& hiveTableHandle,
-    const std::shared_ptr<const HiveConnectorSplit>& hiveSplit,
+    const FileTableHandlePtr& tableHandle,
+    const std::shared_ptr<const FileConnectorSplit>& fileSplit,
+    const std::unordered_map<std::string, std::string>& serdeParameters,
     dwio::common::ReaderOptions& readerOptions) {
   configureReaderOptions(
-      hiveConfig,
+      fileConfig,
       connectorQueryCtx,
-      hiveTableHandle->dataColumns(),
-      hiveSplit,
-      hiveTableHandle->tableParameters(),
+      tableHandle->dataColumns(),
+      fileSplit,
+      tableHandle->tableParameters(),
+      serdeParameters,
       readerOptions);
 }
 
 void configureReaderOptions(
-    const std::shared_ptr<const HiveConfig>& hiveConfig,
+    const std::shared_ptr<const FileConfig>& fileConfig,
     const ConnectorQueryCtx* connectorQueryCtx,
     const RowTypePtr& fileSchema,
-    const std::shared_ptr<const HiveConnectorSplit>& hiveSplit,
+    const std::shared_ptr<const FileConnectorSplit>& fileSplit,
     const std::unordered_map<std::string, std::string>& tableParameters,
+    const std::unordered_map<std::string, std::string>& serdeParameters,
     dwio::common::ReaderOptions& readerOptions) {
-  auto sessionProperties = connectorQueryCtx->sessionProperties();
-  readerOptions.setLoadQuantum(hiveConfig->loadQuantum(sessionProperties));
-  readerOptions.setMaxCoalesceBytes(
-      hiveConfig->maxCoalescedBytes(sessionProperties));
-  readerOptions.setMaxCoalesceDistance(
-      hiveConfig->maxCoalescedDistanceBytes(sessionProperties));
-  readerOptions.setFileColumnNamesReadAsLowerCase(
-      hiveConfig->isFileColumnNamesReadAsLowerCase(sessionProperties));
-  readerOptions.setAllowEmptyFile(true);
-  bool useColumnNamesForColumnMapping = false;
-  switch (hiveSplit->fileFormat) {
-    case dwio::common::FileFormat::DWRF:
-    case dwio::common::FileFormat::ORC: {
-      useColumnNamesForColumnMapping =
-          hiveConfig->isOrcUseColumnNames(sessionProperties);
-      break;
-    }
-    case dwio::common::FileFormat::PARQUET: {
-      useColumnNamesForColumnMapping =
-          hiveConfig->isParquetUseColumnNames(sessionProperties);
-      readerOptions.setAllowInt32Narrowing(
-          hiveConfig->allowInt32Narrowing(sessionProperties));
-      break;
-    }
-    default:
-      useColumnNamesForColumnMapping = false;
-  }
+  // Check if format was UNKNOWN before the generic call, since the generic
+  // version will set it. Serde options should only be applied on the first
+  // call (when format transitions from UNKNOWN).
+  const bool formatWasUnknown =
+      readerOptions.fileFormat() == dwio::common::FileFormat::UNKNOWN;
 
-  readerOptions.setUseColumnNamesForColumnMapping(
-      useColumnNamesForColumnMapping);
-  readerOptions.setFileSchema(fileSchema);
-  readerOptions.setFilePreloadThreshold(hiveConfig->filePreloadThreshold());
-  readerOptions.setPrefetchRowGroups(hiveConfig->prefetchRowGroups());
-  readerOptions.setCacheable(hiveSplit->cacheable);
-  const auto& sessionTzName = connectorQueryCtx->sessionTimezone();
-  if (!sessionTzName.empty()) {
-    const auto timezone = tz::locateZone(sessionTzName);
-    readerOptions.setSessionTimezone(timezone);
-  }
-  readerOptions.setAdjustTimestampToTimezone(
-      connectorQueryCtx->adjustTimestampToTimezone());
-  readerOptions.setSelectiveNimbleReaderEnabled(
-      connectorQueryCtx->selectiveNimbleReaderEnabled());
-  readerOptions.setFileMetadataCacheEnabled(
-      hiveConfig->fileMetadataCacheEnabled(sessionProperties));
-  readerOptions.setPinFileMetadata(
-      hiveConfig->pinFileMetadata(sessionProperties));
+  // Call the generic version which handles everything except serde.
+  // Use fully qualified call to the generic overload (6 params, no serde).
+  hive::configureReaderOptions(
+      fileConfig,
+      connectorQueryCtx,
+      fileSchema,
+      fileSplit,
+      tableParameters,
+      readerOptions);
 
-  // Set footer speculative IO size based on file format.
-  switch (hiveSplit->fileFormat) {
-    case dwio::common::FileFormat::DWRF:
-    case dwio::common::FileFormat::ORC:
-      readerOptions.setFooterSpeculativeIoSize(
-          hiveConfig->orcFooterSpeculativeIoSize(sessionProperties));
-      break;
-    case dwio::common::FileFormat::PARQUET:
-      readerOptions.setFooterSpeculativeIoSize(
-          hiveConfig->parquetFooterSpeculativeIoSize(sessionProperties));
-      break;
-    case dwio::common::FileFormat::NIMBLE:
-      readerOptions.setFooterSpeculativeIoSize(
-          hiveConfig->nimbleFooterSpeculativeIoSize(sessionProperties));
-      break;
-    default:
-      // Use ORC default for unknown formats.
-      readerOptions.setFooterSpeculativeIoSize(
-          hiveConfig->orcFooterSpeculativeIoSize(sessionProperties));
-      break;
-  }
-
-  if (readerOptions.fileFormat() != dwio::common::FileFormat::UNKNOWN) {
-    VELOX_CHECK(
-        readerOptions.fileFormat() == hiveSplit->fileFormat,
-        "HiveDataSource received splits of different formats: {} and {}",
-        dwio::common::toString(readerOptions.fileFormat()),
-        dwio::common::toString(hiveSplit->fileFormat));
-  } else {
-    auto serDeOptions =
-        parseSerdeParameters(hiveSplit->serdeParameters, tableParameters);
+  // Apply serde options on top (Hive-specific).
+  if (formatWasUnknown) {
+    auto serDeOptions = parseSerdeParameters(serdeParameters, tableParameters);
     if (serDeOptions) {
       readerOptions.setSerDeOptions(*serDeOptions);
     }
-
-    readerOptions.setFileFormat(hiveSplit->fileFormat);
   }
 }
 
@@ -688,151 +627,27 @@ void configureRowReaderOptions(
     const std::shared_ptr<common::ScanSpec>& scanSpec,
     std::shared_ptr<common::MetadataFilter> metadataFilter,
     const RowTypePtr& rowType,
-    const std::shared_ptr<const HiveConnectorSplit>& hiveSplit,
-    const std::shared_ptr<const HiveConfig>& hiveConfig,
+    const std::shared_ptr<const FileConnectorSplit>& fileSplit,
+    const std::unordered_map<std::string, std::string>& serdeParameters,
+    const std::shared_ptr<const FileConfig>& fileConfig,
     const config::ConfigBase* sessionProperties,
     folly::Executor* const ioExecutor,
     dwio::common::RowReaderOptions& rowReaderOptions) {
-  auto skipRowsIt =
-      tableParameters.find(dwio::common::TableParameter::kSkipHeaderLineCount);
-  if (skipRowsIt != tableParameters.end()) {
-    rowReaderOptions.setSkipRows(folly::to<uint64_t>(skipRowsIt->second));
-  }
-  rowReaderOptions.setScanSpec(scanSpec);
-  rowReaderOptions.setIOExecutor(ioExecutor);
-  rowReaderOptions.setMetadataFilter(std::move(metadataFilter));
-  rowReaderOptions.setRequestedType(rowType);
-  rowReaderOptions.range(hiveSplit->start, hiveSplit->length);
-  if (hiveConfig && sessionProperties) {
-    rowReaderOptions.setTimestampPrecision(
-        static_cast<TimestampPrecision>(
-            hiveConfig->readTimestampUnit(sessionProperties)));
-    rowReaderOptions.setPreserveFlatMapsInMemory(
-        hiveConfig->preserveFlatMapsInMemory(sessionProperties));
-    rowReaderOptions.setParallelUnitLoadCount(
-        hiveConfig->parallelUnitLoadCount(sessionProperties));
-    rowReaderOptions.setIndexEnabled(
-        hiveConfig->indexEnabled(sessionProperties));
-    rowReaderOptions.setCollectColumnStats(
-        hiveConfig->readerCollectColumnStats(sessionProperties));
-  }
-  rowReaderOptions.setSerdeParameters(hiveSplit->serdeParameters);
-}
+  // Call the generic version which handles everything except serde.
+  // Use fully qualified call to the generic overload (9 params, no serde).
+  hive::configureRowReaderOptions(
+      tableParameters,
+      scanSpec,
+      std::move(metadataFilter),
+      rowType,
+      fileSplit,
+      fileConfig,
+      sessionProperties,
+      ioExecutor,
+      rowReaderOptions);
 
-namespace {
-
-bool applyPartitionFilter(
-    const TypePtr& type,
-    const std::string& partitionValue,
-    bool isPartitionDateDaysSinceEpoch,
-    const common::Filter* filter,
-    bool asLocalTime) {
-  if (type->isDate()) {
-    int32_t result = 0;
-    // days_since_epoch partition values are integers in string format. Eg.
-    // Iceberg partition values.
-    if (isPartitionDateDaysSinceEpoch) {
-      result = folly::to<int32_t>(partitionValue);
-    } else {
-      result = DATE()->toDays(partitionValue);
-    }
-    return applyFilter(*filter, result);
-  }
-
-  switch (type->kind()) {
-    case TypeKind::BIGINT:
-    case TypeKind::INTEGER:
-    case TypeKind::SMALLINT:
-    case TypeKind::TINYINT: {
-      return applyFilter(*filter, folly::to<int64_t>(partitionValue));
-    }
-    case TypeKind::REAL:
-    case TypeKind::DOUBLE: {
-      return applyFilter(*filter, folly::to<double>(partitionValue));
-    }
-    case TypeKind::BOOLEAN: {
-      return applyFilter(*filter, folly::to<bool>(partitionValue));
-    }
-    case TypeKind::TIMESTAMP: {
-      auto result = util::fromTimestampString(
-          StringView(partitionValue), util::TimestampParseMode::kPrestoCast);
-      VELOX_CHECK(!result.hasError());
-      if (asLocalTime) {
-        result.value().toGMT(Timestamp::defaultTimezone());
-      }
-      return applyFilter(*filter, result.value());
-    }
-    case TypeKind::VARCHAR: {
-      return applyFilter(*filter, partitionValue);
-    }
-    default:
-      VELOX_FAIL(
-          "Bad type {} for partition value: {}", type->kind(), partitionValue);
-  }
-}
-
-} // namespace
-
-bool testFilters(
-    const common::ScanSpec* scanSpec,
-    const dwio::common::Reader* reader,
-    const std::string& filePath,
-    const std::unordered_map<std::string, std::optional<std::string>>&
-        partitionKeys,
-    const std::unordered_map<std::string, HiveColumnHandlePtr>&
-        partitionKeysHandle,
-    bool asLocalTime) {
-  const auto totalRows = reader->numberOfRows();
-  const auto& fileTypeWithId = reader->typeWithId();
-  const auto& rowType = reader->rowType();
-  for (const auto& child : scanSpec->children()) {
-    if (child->filter()) {
-      const auto& name = child->fieldName();
-      auto iter = partitionKeys.find(name);
-      // By design, the partition key columns for Iceberg tables are included in
-      // the data files to facilitate partition transform and partition
-      // evolution, so we need to test both cases.
-      if (!rowType->containsChild(name) || iter != partitionKeys.end()) {
-        if (iter != partitionKeys.end() && iter->second.has_value()) {
-          const auto handlesIter = partitionKeysHandle.find(name);
-          VELOX_CHECK(handlesIter != partitionKeysHandle.end());
-
-          // This is a non-null partition key
-          return applyPartitionFilter(
-              handlesIter->second->dataType(),
-              iter->second.value(),
-              handlesIter->second->isPartitionDateValueDaysSinceEpoch(),
-              child->filter(),
-              asLocalTime);
-        }
-        // Column is missing, most likely due to schema evolution. Or it's a
-        // partition key but the partition value is NULL.
-        if (child->filter()->isDeterministic() &&
-            !child->filter()->testNull()) {
-          VLOG(1) << "Skipping " << filePath
-                  << " because the filter testNull() failed for column "
-                  << child->fieldName();
-          return false;
-        }
-      } else {
-        const auto& typeWithId = fileTypeWithId->childByName(name);
-        const auto columnStats = reader->columnStatistics(typeWithId->id());
-        if (columnStats != nullptr &&
-            !testFilter(
-                child->filter(),
-                columnStats.get(),
-                totalRows.value(),
-                typeWithId->type())) {
-          VLOG(1) << "Skipping " << filePath
-                  << " based on stats and filter for column "
-                  << child->fieldName();
-          return false;
-        }
-      }
-    }
-  }
-
-  return true;
+  // Apply serde parameters on top (Hive-specific).
+  rowReaderOptions.setSerdeParameters(serdeParameters);
 }
 
 std::unique_ptr<dwio::common::BufferedInput> createBufferedInput(

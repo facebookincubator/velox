@@ -768,14 +768,18 @@ class Connector {
       trackers_;
 };
 
-// Legacy free functions. Prefer ConnectorRegistry methods for new code.
+/// Deprecated free functions. Use ConnectorRegistry methods instead.
 
-bool registerConnector(std::shared_ptr<Connector> connector);
+[[deprecated("Use ConnectorRegistry::global().insert() instead.")]]
+bool registerConnector(const std::shared_ptr<Connector>& connector);
 
+[[deprecated("Use ConnectorRegistry::tryGet() instead.")]]
 bool hasConnector(const std::string& connectorId);
 
+[[deprecated("Use ConnectorRegistry::global().erase() instead.")]]
 bool unregisterConnector(const std::string& connectorId);
 
+[[deprecated("Use ConnectorRegistry::tryGet() instead.")]]
 std::shared_ptr<Connector> getConnector(const std::string& connectorId);
 
 } // namespace facebook::velox::connector
