@@ -111,7 +111,7 @@ jobs:
           sparse-checkout: |
             CLAUDE.md
             .claude/CLAUDE.md
-            .github/prompts/ci-failure-analysis.md
+            .claude/skills/ci-failure-analysis/SKILL.md
           persist-credentials: false
 
       - name: Prepare analysis prompt
@@ -128,7 +128,7 @@ jobs:
             -e "s|{{PR_NUMBER}}|${PR_NUMBER}|g" \
             -e "s|{{REPOSITORY}}|${REPOSITORY}|g" \
             -e "s|{{RUN_ID}}|${RUN_ID}|g" \
-            .github/prompts/ci-failure-analysis.md)
+            .claude/skills/ci-failure-analysis/SKILL.md)
 
           # Failure metadata may contain newlines/special chars — append separately.
           PROMPT=$(echo "$PROMPT" | sed "s|{{FAILURE_METADATA}}|${FAILURE_METADATA}|g")
