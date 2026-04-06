@@ -582,60 +582,56 @@ TEST(TimestampTest, skipTrailingZeros) {
 }
 
 TEST(TimestampTest, fromTimestampStringFormats) {
-  // Format 1: Microseconds (Iceberg identity transform)
-  // This format is handled by parsing as int64_t and converting via Timestamp::fromMicros
+  static constexpr int64_t kExpectedSeconds = 1687271130;
+  static constexpr uint64_t kExpectedNanos = 500000000;
+  static constexpr auto kMicrosecondsString = "1687271130500000";
+  static constexpr auto kIso8601String = "2023-06-20T14:25:30.500";
+  static constexpr auto kPrestoCastString = "2023-06-20 14:25:30.500";
+
+  // Format 1: Microseconds (Iceberg identity transform).
   {
-    std::string microStr = "1234567890123456";
-    int64_t micros = folly::to<int64_t>(microStr);
-    Timestamp ts = Timestamp::fromMicros(micros);
-    // Verify the timestamp was created correctly
-    EXPECT_EQ(ts.getSeconds(), 1234567890);
-    EXPECT_EQ(ts.getNanos(), 123456000);
+    const auto microsResult = folly::tryTo<int64_t>(kMicrosecondsString);
+    ASSERT_TRUE(microsResult.hasValue());
+
+    const auto ts = Timestamp::fromMicros(microsResult.value());
+    EXPECT_EQ(ts.getSeconds(), kExpectedSeconds);
+    EXPECT_EQ(ts.getNanos(), kExpectedNanos);
   }
-  
-  // Format 2: ISO 8601 (Iceberg)
+
+  // Format 2: ISO 8601 (Iceberg).
   {
     auto result = util::fromTimestampString(
-        "2023-01-15T10:30:45.123", util::TimestampParseMode::kIso8601);
-    ASSERT_FALSE(result.hasError())
-        << "Failed to parse ISO 8601 timestamp: " << result.error().message();
-    
-    Timestamp ts = result.value();
-    // Verify the timestamp was parsed successfully
-    EXPECT_EQ(ts.getNanos(), 123000000);
-    // Verify it's a reasonable timestamp (year 2023, month January)
-    EXPECT_GT(ts.getSeconds(), 1672531200); // 2023-01-01 00:00:00 UTC
-    EXPECT_LT(ts.getSeconds(), 1675209600); // 2023-02-01 00:00:00 UTC
+        kIso8601String, util::TimestampParseMode::kIso8601);
+    ASSERT_TRUE(result.hasValue());
+
+    const auto ts = result.value();
+    EXPECT_EQ(ts.getSeconds(), kExpectedSeconds);
+    EXPECT_EQ(ts.getNanos(), kExpectedNanos);
   }
-  
-  // Format 3: PrestoCast (backward compatibility)
+
+  // Format 3: PrestoCast (backward compatibility).
   {
     auto result = util::fromTimestampString(
-        "2023-06-20 14:25:30.500", util::TimestampParseMode::kPrestoCast);
-    ASSERT_FALSE(result.hasError())
-        << "Failed to parse PrestoCast timestamp: " << result.error().message();
-    
-    Timestamp ts = result.value();
-    // Verify the timestamp was parsed successfully and has the expected nanos
-    // Note: The exact seconds value depends on timezone handling in PrestoCast mode
-    EXPECT_EQ(ts.getNanos(), 500000000);
-    // Verify it's a reasonable timestamp (year 2023)
-    EXPECT_GT(ts.getSeconds(), 1672531200); // 2023-01-01 00:00:00 UTC
-    EXPECT_LT(ts.getSeconds(), 1704067200); // 2024-01-01 00:00:00 UTC
+        kPrestoCastString, util::TimestampParseMode::kPrestoCast);
+    ASSERT_TRUE(result.hasValue());
+
+    const auto ts = result.value();
+    EXPECT_EQ(ts.getSeconds(), kExpectedSeconds);
+    EXPECT_EQ(ts.getNanos(), kExpectedNanos);
   }
-  
-  // Verify that ISO 8601 parser rejects PrestoCast format
+
+  // Verify that ISO 8601 parser rejects PrestoCast format.
   {
     auto result = util::fromTimestampString(
-        "2023-06-20 14:25:30.500", util::TimestampParseMode::kIso8601);
+        kPrestoCastString, util::TimestampParseMode::kIso8601);
     EXPECT_TRUE(result.hasError())
         << "ISO 8601 parser should reject PrestoCast format";
   }
-  
-  // Verify that PrestoCast parser rejects ISO 8601 format with 'T' separator
+
+  // Verify that PrestoCast parser rejects ISO 8601 format with 'T' separator.
   {
     auto result = util::fromTimestampString(
-        "2023-01-15T10:30:45.123", util::TimestampParseMode::kPrestoCast);
+        kIso8601String, util::TimestampParseMode::kPrestoCast);
     EXPECT_TRUE(result.hasError())
         << "PrestoCast parser should reject ISO 8601 format with 'T' separator";
   }

@@ -1100,18 +1100,15 @@ TEST_F(HiveConnectorUtilTest, createRangeFilter) {
   }
 }
 
-TEST_F(HiveConnectorUtilTest, timestampPartitionValueParsing) {
-  // This test verifies that TIMESTAMP partition filtering supports three formats
-  // through the applyPartitionFilter function (internal to HiveConnectorUtil.cpp):
-  // 1. Microseconds (Iceberg identity transform): "1234567890123456"
-  // 2. ISO 8601 (Iceberg): "2023-01-15T10:30:45.123"
-  // 3. PrestoCast (backward compatibility): "2023-06-20 14:25:30.500"
+TEST_F(HiveConnectorUtilTest, timestampPartitionFilterCreationUnsupported) {
+  // TIMESTAMP partition values are not supported by direct filter creation APIs
+  // (e.g., createPointFilter / createRangeFilter).
   //
-  // Note: TIMESTAMP remains in kUnsupportedFilterTypes because createPointFilter
-  // and createRangeFilter don't support TIMESTAMP directly. However, partition
-  // filtering works through applyPartitionFilter which has special TIMESTAMP handling.
-  
-  // Verify TIMESTAMP is still in unsupported types for createPointFilter/createRangeFilter
+  // However, TIMESTAMP values can still be handled during partition filtering
+  // through internal logic, which supports common representations such as:
+  // - Microseconds (e.g., "1234567890123456", Iceberg identity transform)
+  // - ISO 8601 (e.g., "2023-01-15T10:30:45.123")
+  // - Presto-style cast format (e.g., "2023-06-20 14:25:30.500")
   bool foundTimestamp = false;
   for (const auto& unsupported : kUnsupportedFilterTypes) {
     if (unsupported.type->kind() == TypeKind::TIMESTAMP) {
