@@ -131,12 +131,6 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
     return kind.rfind(prefix + "count", 0) == 0;
   }
 
-  static bool isCountStarAggregate(
-      const core::AggregationNode::Aggregate& aggregate) {
-    return isCountFunctionName(aggregate.call->name()) &&
-        aggregate.call->inputs().empty();
-  }
-
   static CountInputKind getInputKind(
       const core::AggregationNode::Aggregate& aggregate,
       const VectorPtr& constant) {
@@ -2051,15 +2045,16 @@ namespace {
 
 bool isSupportedZeroColumnAggregation(
     const core::AggregationNode& aggregationNode) {
-  // Zero-column aggregation only supports global count(*) — no GROUP BY keys,
-  // and every aggregate must be count(*).
+  // Zero-column input: only global prefixed `count` aggregates (same as
+  // createAggregator). No GROUP BY keys.
   return aggregationNode.groupingKeys().empty() &&
       !aggregationNode.aggregates().empty() &&
       std::all_of(
              aggregationNode.aggregates().begin(),
              aggregationNode.aggregates().end(),
              [](const auto& aggregate) {
-               return CountAggregator::isCountStarAggregate(aggregate);
+               return CountAggregator::isCountFunctionName(
+                   aggregate.call->name());
              });
 }
 
