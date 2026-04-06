@@ -250,6 +250,17 @@ TEST_P(RemoteFunctionTest, opaque) {
   assertEqualVectors(expected, results);
 }
 
+TEST_P(RemoteFunctionTest, partialSelection) {
+  // Uses if() to create partial selectivity — remote_plus is only called for
+  // rows where c0 > 2.
+  auto inputVector = makeFlatVector<int64_t>({1, 2, 3, 4, 5});
+  auto results = evaluate<SimpleVector<int64_t>>(
+      "if(c0 > 2, remote_plus(c0, c0), c0)", makeRowVector({inputVector}));
+
+  auto expected = makeFlatVector<int64_t>({1, 2, 6, 8, 10});
+  assertEqualVectors(expected, results);
+}
+
 TEST_P(RemoteFunctionTest, connectionError) {
   auto inputVector = makeFlatVector<int64_t>({1, 2, 3, 4, 5});
   auto func = [&]() {
@@ -378,6 +389,39 @@ TEST_F(MockRemoteFunctionTest, mockClientIsCalled) {
 
   // Verify the mock returned our expected values.
   auto expected = makeFlatVector<int64_t>({2, 4, 6});
+  assertEqualVectors(expected, results);
+}
+
+TEST_F(MockRemoteFunctionTest, activeRowsSerialization) {
+  // Verify that only active rows are serialized and sent to the remote server.
+  auto signatures = {exec::FunctionSignatureBuilder()
+                         .returnType("bigint")
+                         .argumentType("bigint")
+                         .argumentType("bigint")
+                         .build()};
+  registerMockRemoteFunction("mock_plus_active", signatures);
+
+  EXPECT_CALL(*mockClient_, invokeFunction)
+      .WillOnce([this](
+                    remote::RemoteFunctionResponse& response,
+                    const remote::RemoteFunctionRequest& request) {
+        // Verify the request contains only the active rows (3 out of 5).
+        const auto& inputs = request.inputs().value();
+        EXPECT_EQ(inputs.rowCount().value(), 3);
+
+        // Return the result for those 3 rows.
+        auto resultVector =
+            makeRowVector({makeFlatVector<int64_t>({6, 8, 10})});
+        setMockResponse(response, resultVector);
+      });
+
+  // Use if() so remote function is called only for rows where c0 > 2.
+  auto inputVector = makeFlatVector<int64_t>({1, 2, 3, 4, 5});
+  auto results = evaluate<SimpleVector<int64_t>>(
+      "if(c0 > 2, mock_plus_active(c0, c0), c0)",
+      makeRowVector({inputVector}));
+
+  auto expected = makeFlatVector<int64_t>({1, 2, 6, 8, 10});
   assertEqualVectors(expected, results);
 }
 
