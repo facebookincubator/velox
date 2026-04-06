@@ -174,17 +174,6 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
   RowTypePtr bufferedResultType_;
 };
 
-// Step-aware aggregation function registry
-// Map of function name -> Map of step -> signatures
-using StepAwareAggregationRegistry = std::unordered_map<
-    std::string,
-    std::unordered_map<
-        core::AggregationNode::Step,
-        std::vector<exec::FunctionSignaturePtr>>>;
-
-// Get the step-aware aggregation registry
-StepAwareAggregationRegistry& getStepAwareAggregationRegistry();
-
 // Register aggregation function signatures for a specific step
 bool registerAggregationFunctionForStep(
     const std::string& name,

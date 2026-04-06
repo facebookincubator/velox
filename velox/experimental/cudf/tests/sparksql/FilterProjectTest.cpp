@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/expression/SparkFunctions.h"
 #include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -39,11 +40,12 @@ class CudfFilterProjectTest : public CudfFunctionBaseTest {
     parse::registerTypeResolver();
     functions::sparksql::registerFunctions("");
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
-    CudfConfig::getInstance().functionEngine = "spark";
     cudf_velox::registerCudf();
+    cudf_velox::registerSparkFunctions("");
   }
 
   static void TearDownTestCase() {
+    cudf_velox::unregisterFunctions();
     cudf_velox::unregisterCudf();
   }
 
