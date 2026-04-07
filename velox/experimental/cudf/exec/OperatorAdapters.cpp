@@ -98,17 +98,10 @@ class TableScanAdapter : public OperatorAdapter {
     }
     auto const& connector = velox::connector::getConnector(
         tableScanNode->tableHandle()->connectorId());
-    if (std::dynamic_pointer_cast<
-            facebook::velox::cudf_velox::connector::hive::CudfHiveConnector>(
-            connector)) {
-      return true;
-    }
-    if (std::dynamic_pointer_cast<facebook::velox::cudf_velox::connector::hive::
-                                      iceberg::CudfIcebergConnector>(
-            connector)) {
-      return true;
-    }
-    return false;
+    auto cudfHiveConnector = std::dynamic_pointer_cast<
+        facebook::velox::cudf_velox::connector::hive::CudfHiveConnector>(
+        connector);
+    return cudfHiveConnector != nullptr;
   }
 
   bool acceptsGpuInput() const override {
