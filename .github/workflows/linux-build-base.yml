@@ -97,6 +97,8 @@ jobs:
       build-outcome: ${{ steps.build.outcome }}
       test-outcome: ${{ steps.tests.outcome }}
       flaky: ${{ steps.tests.outputs.flaky }}
+      failed-tests: ${{ steps.tests.outputs.failed-tests }}
+      failed-cases: ${{ steps.tests.outputs.failed-cases }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -199,7 +201,7 @@ jobs:
           ulimit -n 65536
           if ctest -j 24 --timeout 900 --label-exclude cuda_driver \
                --output-on-failure --no-tests=error \
-               --output-junit test-results.xml; then
+               --output-junit test-results.xml 2>&1 | tee /tmp/ctest-output.log; then
             echo "All tests passed on first run."
           else
             echo "::warning::Some tests failed. Retrying failed tests..."
@@ -209,6 +211,22 @@ jobs:
               echo "flaky=true" >> "$GITHUB_OUTPUT"
             else
               echo "::error::Tests failed consistently on retry."
+              FAILED_TESTS=$(grep -A 1000 'The following tests FAILED:' /tmp/ctest-output.log | grep -E '^\s+[0-9]+ - ' | sed 's/.*- \(.*\) (.*/\1/' || true)
+              FAILED_CASES=$(grep -E '^\[  FAILED  \]' /tmp/ctest-output.log | sed 's/\[  FAILED  \] //' | sed 's/ (.*//' | grep '\.' | sort -u || true)
+              if [[ -n "$FAILED_TESTS" ]]; then
+                {
+                  echo 'failed-tests<<EOF'
+                  echo "$FAILED_TESTS"
+                  echo 'EOF'
+                } >> "$GITHUB_OUTPUT"
+              fi
+              if [[ -n "$FAILED_CASES" ]]; then
+                {
+                  echo 'failed-cases<<EOF'
+                  echo "$FAILED_CASES"
+                  echo 'EOF'
+                } >> "$GITHUB_OUTPUT"
+              fi
               exit 1
             fi
           fi
@@ -307,40 +325,144 @@ jobs:
     if: always()
     needs: adapters
     runs-on: ubuntu-latest
-    name: "BUILD: Linux adapters release"
+    name: "BUILD: Linux release with adapters"
     steps:
       - run: |
+          if [[ -z "$BUILD_OUTCOME" || "$BUILD_OUTCOME" == "cancelled" ]]; then
+            echo "Build was cancelled (likely superseded by a newer push). Skipping."
+            exit 0
+          fi
           if [[ "$BUILD_OUTCOME" != "success" ]]; then
-            echo "Build failed or was cancelled."
+            echo "::error::Linux adapters release build failed. Do not land this PR until the build is fixed."
             exit 1
           fi
           echo "Build succeeded."
         env:
           BUILD_OUTCOME: ${{ needs.adapters.outputs.build-outcome }}
 
+      - name: Upload build failure artifact
+        if: failure()
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          mkdir -p /tmp/ci-failure
+          cat > /tmp/ci-failure/comment.md <<EOF
+          :no_entry: **Do not land** — Linux adapters release build failed.
+
+          Please fix the build before merging this PR.
+          Check the **Linux release with adapters** workflow for detailed logs.
+
+          :link: [View build logs](${RUN_URL})
+          EOF
+
+      - name: Upload failure comment artifact
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-failure-adapters-build
+          path: /tmp/ci-failure/comment.md
+          retention-days: 1
+
   adapters-test-status:
     if: always()
     needs: adapters
     runs-on: ubuntu-latest
-    name: "TEST: Linux adapters release"
+    name: "TEST: Linux release with adapters"
     steps:
       - run: |
+          if [[ -z "$BUILD_OUTCOME" || "$BUILD_OUTCOME" == "cancelled" ]]; then
+            echo "Run was cancelled (likely superseded by a newer push). Skipping."
+            exit 0
+          fi
           if [[ "$BUILD_OUTCOME" != "success" ]]; then
-            echo "Build failed — tests did not run."
+            echo "::error::Build failed — tests did not run. Check the 'Linux release with adapters' build job for compiler errors and build logs."
             exit 1
           fi
+          if [[ -z "$TEST_OUTCOME" || "$TEST_OUTCOME" == "cancelled" ]]; then
+            echo "Tests were cancelled (likely superseded by a newer push). Skipping."
+            exit 0
+          fi
           if [[ "$TEST_OUTCOME" != "success" ]]; then
-            echo "Tests failed."
+            if [[ -n "$FAILED_CASES" ]]; then
+              CASE_LIST=$(echo "$FAILED_CASES" | sed 's/^/  - /')
+              CASE_COUNT=$(echo "$FAILED_CASES" | wc -l | tr -d ' ')
+              echo "::error::${CASE_COUNT} test case(s) failed in the Linux adapters release configuration. Failed: $(echo "$FAILED_CASES" | tr '\n' ', ' | sed 's/,$//'). To see the full test output with failure details, click the 'Linux release with adapters' job in the workflow run, then expand the 'Run Tests' step."
+              echo ""
+              echo "Failed test cases:"
+              echo "$CASE_LIST"
+            elif [[ -n "$FAILED_TESTS" ]]; then
+              TEST_LIST=$(echo "$FAILED_TESTS" | sed 's/^/  - /')
+              TEST_COUNT=$(echo "$FAILED_TESTS" | wc -l | tr -d ' ')
+              echo "::error::${TEST_COUNT} test(s) failed in the Linux adapters release configuration. Failed tests: $(echo "$FAILED_TESTS" | tr '\n' ', ' | sed 's/,$//'). To see the full test output with failure details, click the 'Linux release with adapters' job in the workflow run, then expand the 'Run Tests' step."
+              echo ""
+              echo "Failed tests:"
+              echo "$TEST_LIST"
+            else
+              echo "::error::Tests failed in the Linux adapters release configuration but no specific test names were captured. Check the 'Run Tests' step in the 'Linux release with adapters' job for details."
+            fi
+            echo ""
+            echo "To investigate, click the 'Linux release with adapters' job in the workflow run, then expand the 'Run Tests' step for the full ctest output with assertion failures and stack traces."
             exit 1
           fi
           if [[ "$FLAKY" == "true" ]]; then
             echo "::warning::Some tests were flaky (failed then passed on retry)."
           fi
-          echo "Tests passed."
+          echo "All tests passed in Linux adapters release."
         env:
           BUILD_OUTCOME: ${{ needs.adapters.outputs.build-outcome }}
           TEST_OUTCOME: ${{ needs.adapters.outputs.test-outcome }}
           FLAKY: ${{ needs.adapters.outputs.flaky }}
+          FAILED_TESTS: ${{ needs.adapters.outputs.failed-tests }}
+          FAILED_CASES: ${{ needs.adapters.outputs.failed-cases }}
+
+      - name: Upload test failure artifact
+        if: failure()
+        env:
+          FAILED_TESTS: ${{ needs.adapters.outputs.failed-tests }}
+          FAILED_CASES: ${{ needs.adapters.outputs.failed-cases }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/ci-failure
+          if [[ -n "$FAILED_CASES" ]]; then
+            FORMATTED=$(echo "$FAILED_CASES" | sed 's/^/- /')
+            LABEL="test cases"
+          elif [[ -n "$FAILED_TESTS" ]]; then
+            FORMATTED=$(echo "$FAILED_TESTS" | sed 's/^/- /')
+            LABEL="tests"
+          else
+            echo "No failure details to upload."
+            exit 0
+          fi
+          # Look up the job ID and "Run Tests" step number for a direct deep link.
+          JOBS_JSON=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs")
+          JOB_ID=$(echo "$JOBS_JSON" | jq -r '[.jobs[] | select(.name | endswith("Linux release with adapters"))][0].id // empty')
+          STEP_NUM=$(echo "$JOBS_JSON" | jq -r '[.jobs[] | select(.name | endswith("Linux release with adapters"))][0].steps[] | select(.name == "Run Tests") | .number // empty')
+          if [[ -n "$JOB_ID" && -n "$STEP_NUM" ]]; then
+            JOB_URL="${RUN_URL}/job/${JOB_ID}#step:${STEP_NUM}:1000"
+          elif [[ -n "$JOB_ID" ]]; then
+            JOB_URL="${RUN_URL}/job/${JOB_ID}"
+          else
+            JOB_URL="${RUN_URL}"
+          fi
+          cat > /tmp/ci-failure/comment.md <<EOF
+          ### :x: Test Failures: Linux adapters release
+
+          The following ${LABEL} failed:
+
+          ${FORMATTED}
+
+          :link: [View failed test logs](${JOB_URL})
+          EOF
+
+      - name: Upload failure comment artifact
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-failure-adapters-test
+          path: /tmp/ci-failure/comment.md
+          retention-days: 1
+          if-no-files-found: ignore
 
   cudf-tests:
     runs-on: 4-core-ubuntu-gpu-t4
@@ -416,6 +538,8 @@ jobs:
       build-outcome: ${{ steps.build.outcome }}
       test-outcome: ${{ steps.tests.outcome }}
       flaky: ${{ steps.tests.outputs.flaky }}
+      failed-tests: ${{ steps.tests.outputs.failed-tests }}
+      failed-cases: ${{ steps.tests.outputs.failed-cases }}
     defaults:
       run:
         shell: bash
@@ -515,7 +639,7 @@ jobs:
           ulimit -n 65536
           cd _build/debug
           if ctest -j 24 --timeout 1800 --output-on-failure --no-tests=error \
-               --output-junit test-results.xml; then
+               --output-junit test-results.xml 2>&1 | tee /tmp/ctest-output.log; then
             echo "All tests passed on first run."
           else
             echo "::warning::Some tests failed. Retrying failed tests..."
@@ -525,6 +649,22 @@ jobs:
               echo "flaky=true" >> "$GITHUB_OUTPUT"
             else
               echo "::error::Tests failed consistently on retry."
+              FAILED_TESTS=$(grep -A 1000 'The following tests FAILED:' /tmp/ctest-output.log | grep -E '^\s+[0-9]+ - ' | sed 's/.*- \(.*\) (.*/\1/' || true)
+              FAILED_CASES=$(grep -E '^\[  FAILED  \]' /tmp/ctest-output.log | sed 's/\[  FAILED  \] //' | sed 's/ (.*//' | grep '\.' | sort -u || true)
+              if [[ -n "$FAILED_TESTS" ]]; then
+                {
+                  echo 'failed-tests<<EOF'
+                  echo "$FAILED_TESTS"
+                  echo 'EOF'
+                } >> "$GITHUB_OUTPUT"
+              fi
+              if [[ -n "$FAILED_CASES" ]]; then
+                {
+                  echo 'failed-cases<<EOF'
+                  echo "$FAILED_CASES"
+                  echo 'EOF'
+                } >> "$GITHUB_OUTPUT"
+              fi
               exit 1
             fi
           fi
@@ -533,40 +673,144 @@ jobs:
     if: always()
     needs: ubuntu-debug
     runs-on: ubuntu-latest
-    name: "BUILD: Ubuntu debug"
+    name: "BUILD: Ubuntu debug with system dependencies"
     steps:
       - run: |
+          if [[ -z "$BUILD_OUTCOME" || "$BUILD_OUTCOME" == "cancelled" ]]; then
+            echo "Build was cancelled (likely superseded by a newer push). Skipping."
+            exit 0
+          fi
           if [[ "$BUILD_OUTCOME" != "success" ]]; then
-            echo "Build failed or was cancelled."
+            echo "::error::Ubuntu debug build failed. Do not land this PR until the build is fixed."
             exit 1
           fi
           echo "Build succeeded."
         env:
           BUILD_OUTCOME: ${{ needs.ubuntu-debug.outputs.build-outcome }}
 
+      - name: Upload build failure artifact
+        if: failure()
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          mkdir -p /tmp/ci-failure
+          cat > /tmp/ci-failure/comment.md <<EOF
+          :no_entry: **Do not land** — Ubuntu debug build failed.
+
+          Please fix the build before merging this PR.
+          Check the **Ubuntu debug with system dependencies** workflow for detailed logs.
+
+          :link: [View build logs](${RUN_URL})
+          EOF
+
+      - name: Upload failure comment artifact
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-failure-ubuntu-debug-build
+          path: /tmp/ci-failure/comment.md
+          retention-days: 1
+
   ubuntu-debug-test-status:
     if: always()
     needs: ubuntu-debug
     runs-on: ubuntu-latest
-    name: "TEST: Ubuntu debug"
+    name: "TEST: Ubuntu debug with system dependencies"
     steps:
       - run: |
+          if [[ -z "$BUILD_OUTCOME" || "$BUILD_OUTCOME" == "cancelled" ]]; then
+            echo "Run was cancelled (likely superseded by a newer push). Skipping."
+            exit 0
+          fi
           if [[ "$BUILD_OUTCOME" != "success" ]]; then
-            echo "Build failed — tests did not run."
+            echo "::error::Build failed — tests did not run. Check the 'Ubuntu debug with system dependencies' build job for compiler errors and build logs."
             exit 1
           fi
+          if [[ -z "$TEST_OUTCOME" || "$TEST_OUTCOME" == "cancelled" ]]; then
+            echo "Tests were cancelled (likely superseded by a newer push). Skipping."
+            exit 0
+          fi
           if [[ "$TEST_OUTCOME" != "success" ]]; then
-            echo "Tests failed."
+            if [[ -n "$FAILED_CASES" ]]; then
+              CASE_LIST=$(echo "$FAILED_CASES" | sed 's/^/  - /')
+              CASE_COUNT=$(echo "$FAILED_CASES" | wc -l | tr -d ' ')
+              echo "::error::${CASE_COUNT} test case(s) failed in the Ubuntu debug configuration. Failed: $(echo "$FAILED_CASES" | tr '\n' ', ' | sed 's/,$//'). To see the full test output with failure details, click the 'Ubuntu debug with system dependencies' job in the workflow run, then expand the 'Run Tests' step."
+              echo ""
+              echo "Failed test cases:"
+              echo "$CASE_LIST"
+            elif [[ -n "$FAILED_TESTS" ]]; then
+              TEST_LIST=$(echo "$FAILED_TESTS" | sed 's/^/  - /')
+              TEST_COUNT=$(echo "$FAILED_TESTS" | wc -l | tr -d ' ')
+              echo "::error::${TEST_COUNT} test(s) failed in the Ubuntu debug configuration. Failed tests: $(echo "$FAILED_TESTS" | tr '\n' ', ' | sed 's/,$//'). To see the full test output with failure details, click the 'Ubuntu debug with system dependencies' job in the workflow run, then expand the 'Run Tests' step."
+              echo ""
+              echo "Failed tests:"
+              echo "$TEST_LIST"
+            else
+              echo "::error::Tests failed in the Ubuntu debug configuration but no specific test names were captured. Check the 'Run Tests' step in the 'Ubuntu debug with system dependencies' job for details."
+            fi
+            echo ""
+            echo "To investigate, click the 'Ubuntu debug with system dependencies' job in the workflow run, then expand the 'Run Tests' step for the full ctest output with assertion failures and stack traces."
             exit 1
           fi
           if [[ "$FLAKY" == "true" ]]; then
             echo "::warning::Some tests were flaky (failed then passed on retry)."
           fi
-          echo "Tests passed."
+          echo "All tests passed in Ubuntu debug."
         env:
           BUILD_OUTCOME: ${{ needs.ubuntu-debug.outputs.build-outcome }}
           TEST_OUTCOME: ${{ needs.ubuntu-debug.outputs.test-outcome }}
           FLAKY: ${{ needs.ubuntu-debug.outputs.flaky }}
+          FAILED_TESTS: ${{ needs.ubuntu-debug.outputs.failed-tests }}
+          FAILED_CASES: ${{ needs.ubuntu-debug.outputs.failed-cases }}
+
+      - name: Upload test failure artifact
+        if: failure()
+        env:
+          FAILED_TESTS: ${{ needs.ubuntu-debug.outputs.failed-tests }}
+          FAILED_CASES: ${{ needs.ubuntu-debug.outputs.failed-cases }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/ci-failure
+          if [[ -n "$FAILED_CASES" ]]; then
+            FORMATTED=$(echo "$FAILED_CASES" | sed 's/^/- /')
+            LABEL="test cases"
+          elif [[ -n "$FAILED_TESTS" ]]; then
+            FORMATTED=$(echo "$FAILED_TESTS" | sed 's/^/- /')
+            LABEL="tests"
+          else
+            echo "No failure details to upload."
+            exit 0
+          fi
+          # Look up the job ID and "Run Tests" step number for a direct deep link.
+          JOBS_JSON=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs")
+          JOB_ID=$(echo "$JOBS_JSON" | jq -r '[.jobs[] | select(.name | endswith("Ubuntu debug with system dependencies"))][0].id // empty')
+          STEP_NUM=$(echo "$JOBS_JSON" | jq -r '[.jobs[] | select(.name | endswith("Ubuntu debug with system dependencies"))][0].steps[] | select(.name == "Run Tests") | .number // empty')
+          if [[ -n "$JOB_ID" && -n "$STEP_NUM" ]]; then
+            JOB_URL="${RUN_URL}/job/${JOB_ID}#step:${STEP_NUM}:1000"
+          elif [[ -n "$JOB_ID" ]]; then
+            JOB_URL="${RUN_URL}/job/${JOB_ID}"
+          else
+            JOB_URL="${RUN_URL}"
+          fi
+          cat > /tmp/ci-failure/comment.md <<EOF
+          ### :x: Test Failures: Ubuntu debug
+
+          The following ${LABEL} failed:
+
+          ${FORMATTED}
+
+          :link: [View failed test logs](${JOB_URL})
+          EOF
+
+      - name: Upload failure comment artifact
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-failure-ubuntu-debug-test
+          path: /tmp/ci-failure/comment.md
+          retention-days: 1
+          if-no-files-found: ignore
 
   fedora-debug:
     runs-on: 32-core-ubuntu
@@ -663,10 +907,37 @@ jobs:
     name: "BUILD: Fedora debug"
     steps:
       - run: |
+          if [[ -z "$BUILD_OUTCOME" || "$BUILD_OUTCOME" == "cancelled" ]]; then
+            echo "Build was cancelled (likely superseded by a newer push). Skipping."
+            exit 0
+          fi
           if [[ "$BUILD_OUTCOME" != "success" ]]; then
-            echo "Build failed or was cancelled."
+            echo "::error::Fedora debug build failed. Do not land this PR until the build is fixed."
             exit 1
           fi
           echo "Build succeeded."
         env:
           BUILD_OUTCOME: ${{ needs.fedora-debug.outputs.build-outcome }}
+
+      - name: Upload build failure artifact
+        if: failure()
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          mkdir -p /tmp/ci-failure
+          cat > /tmp/ci-failure/comment.md <<EOF
+          :no_entry: **Do not land** — Fedora debug build failed.
+
+          Please fix the build before merging this PR.
+          Check the **Fedora debug** workflow for detailed logs.
+
+          :link: [View build logs](${RUN_URL})
+          EOF
+
+      - name: Upload failure comment artifact
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-failure-fedora-build
+          path: /tmp/ci-failure/comment.md
+          retention-days: 1
