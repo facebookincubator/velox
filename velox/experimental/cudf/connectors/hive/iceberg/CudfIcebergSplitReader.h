@@ -73,13 +73,12 @@ class CudfIcebergSplitReader : public CudfSplitReader {
       rmm::device_async_resource_ref output_mr) override;
 
  private:
-  /// Determine the memory resource to use for the cudf reader.
+  /// Determine the memory resource to construct the `chunked_parquet_reader`
+  /// and when calling `readNextChunk` for the hybrid scan reader.
   rmm::device_async_resource_ref determineCudfMemoryResource();
 
-  /// Load the deletion vector blob from the puffin file.
-  void loadDeletionVector();
-
-  /// Setup delete file readers for positional and equality deletes.
+  /// Setup delete file readers for positional deletes, equality deletes, and
+  /// deletion vectors.
   void setupDeleteFileReaders();
 
   /// Apply positional deletes (V2) to the input cudf table.

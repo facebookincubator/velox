@@ -108,10 +108,9 @@ void CudfIcebergSplitReader::prepareSplit() {
   equalityDeleteFileReaders_.clear();
   baseReadOffset_ = 0;
 
-  // Must load deletion vector and setup delete file readers before calling base
-  // method so that `prepareSplit` can use the correct memory resource for the
-  // cudf reader
-  loadDeletionVector();
+  // Note: Must setup delete file readers before calling base `prepareSplit` so
+  // that it can correctly determine the memory resource to construct the cuDF
+  // reader.
   setupDeleteFileReaders();
 
   // Call base to setup stream, datasource, options, and the cudf reader
@@ -120,9 +119,8 @@ void CudfIcebergSplitReader::prepareSplit() {
 
 rmm::device_async_resource_ref
 CudfIcebergSplitReader::determineCudfMemoryResource() {
-  // If we will be applying any deletes, use temporary mr to create the
-  // `chunked_parquet_reader` and when calling `readNextChunk` for the hybrid
-  // scan reader.
+  // If we will be applying any deletes, use temporary mr to read table chunks
+  // from cuDF readers. Otherwise, use the output mr.
   return (dvReader_ or positionalDeleteFileReaders_.size() or
           equalityDeleteFileReaders_.size())
       ? get_temp_mr()
@@ -186,31 +184,9 @@ CudfIcebergSplitReader::readNextChunk(
   return cudfTable;
 }
 
-void CudfIcebergSplitReader::loadDeletionVector() {
-  for (const auto& deleteFile : icebergSplit_->deleteFiles) {
-    if (deleteFile.content == velox_iceberg::FileContent::kDeletionVector) {
-      if (deleteFile.recordCount == 0) {
-        continue;
-      }
-      if (shouldSkipBySequenceNumber(
-              deleteFile.dataSequenceNumber,
-              icebergSplit_->dataSequenceNumber,
-              false)) {
-        continue;
-      }
-
-      dvReader_ = std::make_unique<CudfDeletionVectorReader>(
-          deleteFile.filePath,
-          deleteFile.fileSizeInBytes,
-          deleteFile.lowerBounds,
-          deleteFile.upperBounds);
-      dvReader_->loadAndInitialize(stream_);
-      break;
-    }
-  }
-}
-
 void CudfIcebergSplitReader::setupDeleteFileReaders() {
+  constexpr uint64_t splitOffset = 0;
+
   for (const auto& deleteFile : icebergSplit_->deleteFiles) {
     if (deleteFile.content == velox_iceberg::FileContent::kPositionalDeletes) {
       if (deleteFile.recordCount == 0) {
@@ -223,7 +199,7 @@ void CudfIcebergSplitReader::setupDeleteFileReaders() {
         continue;
       }
 
-      constexpr uint64_t splitOffset = 0;
+      // Skip the delete file if all delete positions are before this split.
       if (auto iter = deleteFile.upperBounds.find(
               velox_iceberg::IcebergMetadataColumn::kPosId);
           iter != deleteFile.upperBounds.end()) {
@@ -301,7 +277,22 @@ void CudfIcebergSplitReader::setupDeleteFileReaders() {
       }
     } else if (
         deleteFile.content == velox_iceberg::FileContent::kDeletionVector) {
-      // Handled via loadDeletionVectorBlob() and applyDeletionVector().
+      if (deleteFile.recordCount == 0) {
+        continue;
+      }
+      if (shouldSkipBySequenceNumber(
+              deleteFile.dataSequenceNumber,
+              icebergSplit_->dataSequenceNumber,
+              /*isEqualityDelete=*/false)) {
+        continue;
+      }
+
+      dvReader_ = std::make_unique<CudfDeletionVectorReader>(
+          deleteFile.filePath,
+          deleteFile.fileSizeInBytes,
+          deleteFile.lowerBounds,
+          deleteFile.upperBounds);
+      dvReader_->loadAndInitialize(stream_);
     } else {
       VELOX_NYI(
           "Unsupported delete file content type: {}",
