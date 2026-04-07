@@ -18,6 +18,7 @@
 #include <folly/Executor.h>
 #include <folly/container/F14Map.h>
 #include "velox/common/io/IoStatistics.h"
+#include "velox/common/time/CpuWallTimer.h"
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
@@ -32,6 +33,30 @@
 namespace facebook::velox::connector::hive {
 
 class HiveConfig;
+
+/// Captures per-iteration timing breakdown for index lookups. Each field is
+/// reported as a separate runtime stat in addition to the aggregate
+/// connectorLookupWallNanos.
+struct IterationStats {
+  /// Wall time spent in indexReader_->startLookup() for this iteration.
+  uint64_t lookupTimeNs{0};
+  /// Wall time spent in indexReader_->next() for this iteration.
+  uint64_t nextTimeNs{0};
+  /// Time spent projecting the output columns for this iteration. Uses
+  /// CpuWallTiming to capture both wall and CPU time, since the downstream stat
+  /// (kConnectorResultPrepareTime) reports CPU nanos.
+  CpuWallTiming outputTiming;
+  /// Wall time spent evaluating the remaining filter for this iteration.
+  uint64_t postFilterTimeNs{0};
+
+  /// Per-phase stat names reported by HiveIndexSource::recordIterationStats().
+  static constexpr std::string_view kIndexSetupWallNanos{
+      "connectorIndexSetupWallNanos"};
+  static constexpr std::string_view kIndexReadWallNanos{
+      "connectorIndexReadWallNanos"};
+  static constexpr std::string_view kPostFilterWallNanos{
+      "connectorPostFilterWallNanos"};
+};
 
 /// Provides index lookup for Hive-metastore-backed tables.
 ///
@@ -125,6 +150,10 @@ class HiveIndexSource : public IndexSource,
   // Creates a FileIndexReader for a single split.
   void createFileIndexReader(std::shared_ptr<const HiveConnectorSplit> split);
 
+  // Records per-iteration timing breakdown using addOperatorRuntimeStats to
+  // preserve per-call count/min/max granularity.
+  void recordIterationStats(const IterationStats& iterationStats);
+
   FileHandleFactory* const fileHandleFactory_;
   ConnectorQueryCtx* const connectorQueryCtx_;
   const std::shared_ptr<HiveConfig> hiveConfig_;
@@ -183,6 +212,9 @@ class HiveIndexSource : public IndexSource,
 
   std::shared_ptr<io::IoStatistics> ioStatistics_;
   std::shared_ptr<IoStats> ioStats_;
+
+  // Per-call timing stats accumulated via addOperatorRuntimeStats().
+  std::unordered_map<std::string, RuntimeMetric> runtimeStats_;
 };
 
 } // namespace facebook::velox::connector::hive

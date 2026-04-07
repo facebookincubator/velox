@@ -81,6 +81,8 @@ class IndexLookupJoin : public Operator {
   /// The number of lookup results received from remote storage with error.
   static constexpr std::string_view kClientNumErrorResults{
       "clientNumErrorResults"};
+  /// The number of index splits provided for index lookup.
+  static constexpr std::string_view kNumIndexSplits{"numIndexSplits"};
 
  private:
   using ResultIterator = connector::IndexSource::ResultIterator;

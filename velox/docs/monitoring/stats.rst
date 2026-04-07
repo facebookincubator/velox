@@ -197,6 +197,9 @@ These stats are reported only by IndexLookupJoin operator
    * - clientNumLazyDecodedResultBatches
      -
      - The number of lazy decoded result batches returned from the storage client.
+   * - numIndexSplits
+     -
+     - The number of index splits provided for index lookup.
 
 Merge
 -----
@@ -408,6 +411,19 @@ These stats are reported only by connector data or index sources.
        read. When filters are present, overlapping request ranges are split at
        boundaries to enable per-request output tracking. Without filters,
        overlapping ranges are merged to minimize I/O.
+   * - numIndexStripeTotalRows
+     -
+     - The total number of rows in all loaded stripes during index lookup.
+       Measures the full stripe row count regardless of how many rows are
+       actually needed. Comparing with numIndexMatchedRows shows cluster
+       index selectivity within stripes.
+   * - numIndexMatchedRows
+     -
+     - The total number of rows matched by the cluster index across all
+       stripes during index lookup. These are the rows identified as matching
+       the lookup bounds within each stripe, before any ScanSpec filter
+       pushdown. Comparing with numFileIndexOutputRows shows filter
+       selectivity.
 
 FileBasedDataSource
 -------------------

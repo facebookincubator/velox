@@ -17,6 +17,7 @@
 
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/time/Timer.h"
+#include "velox/connectors/hive/FileDataSource.h"
 #include "velox/connectors/hive/FileIndexReader.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
@@ -456,17 +457,29 @@ class HiveLookupIterator : public IndexSource::ResultIterator {
       return nullptr;
     }
 
+    IterationStats iterationStats;
+    std::optional<std::unique_ptr<IndexSource::Result>> result;
+
     // Initialize lookup on first call.
     if (state_ == State::kInit) {
-      indexReader_->startLookup(request_, options_);
+      {
+        NanosecondTimer timer(&iterationStats.lookupTimeNs);
+        indexReader_->startLookup(request_, options_);
+      }
       setState(State::kRead);
     }
 
     if (!indexReader_->hasNext()) {
       setState(State::kEnd);
+    } else {
+      result = getOutput(size, iterationStats);
+    }
+
+    indexSource_->recordIterationStats(iterationStats);
+    if (state_ == State::kEnd && !result.has_value()) {
       return nullptr;
     }
-    return getOutput(size);
+    return result;
   }
 
  private:
@@ -523,25 +536,37 @@ class HiveLookupIterator : public IndexSource::ResultIterator {
     }
   }
 
-  std::unique_ptr<IndexSource::Result> getOutput(vector_size_t size) {
-    auto result = indexReader_->next(size);
+  std::unique_ptr<IndexSource::Result> getOutput(
+      vector_size_t size,
+      IterationStats& iterationStats) {
+    std::unique_ptr<IndexSource::Result> result;
+    {
+      NanosecondTimer timer(&iterationStats.nextTimeNs);
+      result = indexReader_->next(size);
+    }
     if (result == nullptr) {
       VELOX_CHECK(!indexReader_->hasNext());
       setState(State::kEnd);
       return nullptr;
     }
     if (indexSource_->remainingFilterExprSet_ == nullptr) {
+      CpuWallTimer timer(iterationStats.outputTiming);
       result->output = indexSource_->projectOutput(
           result->output->size(), nullptr, result->output);
       return result;
     }
-    return evaluateRemainingFilter(std::move(result));
+    return evaluateRemainingFilter(std::move(result), iterationStats);
   }
 
   std::unique_ptr<IndexSource::Result> evaluateRemainingFilter(
-      std::unique_ptr<IndexSource::Result> result) {
+      std::unique_ptr<IndexSource::Result> result,
+      IterationStats& iterationStats) {
     auto& output = result->output;
-    const auto numRemainingRows = indexSource_->evaluateRemainingFilter(output);
+    vector_size_t numRemainingRows;
+    {
+      NanosecondTimer timer(&iterationStats.postFilterTimeNs);
+      numRemainingRows = indexSource_->evaluateRemainingFilter(output);
+    }
 
     if (numRemainingRows == 0) {
       return getEmptyResult();
@@ -556,8 +581,11 @@ class HiveLookupIterator : public IndexSource::ResultIterator {
           result->inputHits,
           indexSource_->pool_);
     }
-    output =
-        indexSource_->projectOutput(numRemainingRows, remainingIndices, output);
+    {
+      CpuWallTimer timer(iterationStats.outputTiming);
+      output = indexSource_->projectOutput(
+          numRemainingRows, remainingIndices, output);
+    }
     return result;
   }
 
@@ -909,11 +937,14 @@ HiveIndexSource::createUnionLookupIterator(
 }
 
 std::unordered_map<std::string, RuntimeMetric> HiveIndexSource::runtimeStats() {
-  std::unordered_map<std::string, RuntimeMetric> stats;
+  // Start with accumulated per-call timing stats.
+  auto stats = runtimeStats_;
+
   if (remainingFilterTimeNs_ != 0) {
     stats[std::string(Connector::kTotalRemainingFilterTime)] =
         RuntimeMetric(remainingFilterTimeNs_, RuntimeCounter::Unit::kNanos);
   }
+
   // Merge stats from all readers.
   for (auto& reader : readers_) {
     for (auto& [key, metric] : reader->runtimeStats()) {
@@ -925,7 +956,85 @@ std::unordered_map<std::string, RuntimeMetric> HiveIndexSource::runtimeStats() {
       }
     }
   }
+  // Add I/O stats from ioStatistics_ (storage read, ram cache, ssd cache).
+  if (ioStatistics_) {
+    if (ioStatistics_->read().count() > 0) {
+      stats[std::string(FileDataSource::kStorageReadBytes)] = RuntimeMetric(
+          ioStatistics_->read().sum(),
+          ioStatistics_->read().count(),
+          ioStatistics_->read().min(),
+          ioStatistics_->read().max(),
+          RuntimeCounter::Unit::kBytes);
+    }
+    if (ioStatistics_->ramHit().count() > 0) {
+      stats[std::string(FileDataSource::kNumRamRead)] =
+          RuntimeMetric(ioStatistics_->ramHit().count());
+      stats[std::string(FileDataSource::kRamReadBytes)] = RuntimeMetric(
+          ioStatistics_->ramHit().sum(),
+          ioStatistics_->ramHit().count(),
+          ioStatistics_->ramHit().min(),
+          ioStatistics_->ramHit().max(),
+          RuntimeCounter::Unit::kBytes);
+    }
+    if (ioStatistics_->ssdRead().count() > 0) {
+      stats[std::string(FileDataSource::kNumLocalRead)] =
+          RuntimeMetric(ioStatistics_->ssdRead().count());
+      stats[std::string(FileDataSource::kLocalReadBytes)] = RuntimeMetric(
+          ioStatistics_->ssdRead().sum(),
+          ioStatistics_->ssdRead().count(),
+          ioStatistics_->ssdRead().min(),
+          ioStatistics_->ssdRead().max(),
+          RuntimeCounter::Unit::kBytes);
+    }
+  }
+
   return stats;
+}
+
+void HiveIndexSource::recordIterationStats(
+    const IterationStats& iterationStats) {
+  const auto totalTimeNs = iterationStats.lookupTimeNs +
+      iterationStats.nextTimeNs + iterationStats.outputTiming.wallNanos +
+      iterationStats.postFilterTimeNs;
+  if (totalTimeNs != 0) {
+    exec::addOperatorRuntimeStats(
+        std::string_view("connectorLookupWallNanos"),
+        RuntimeCounter(
+            static_cast<int64_t>(totalTimeNs), RuntimeCounter::Unit::kNanos),
+        runtimeStats_);
+  }
+  if (iterationStats.lookupTimeNs != 0) {
+    exec::addOperatorRuntimeStats(
+        IterationStats::kIndexSetupWallNanos,
+        RuntimeCounter(
+            static_cast<int64_t>(iterationStats.lookupTimeNs),
+            RuntimeCounter::Unit::kNanos),
+        runtimeStats_);
+  }
+  if (iterationStats.nextTimeNs != 0) {
+    exec::addOperatorRuntimeStats(
+        IterationStats::kIndexReadWallNanos,
+        RuntimeCounter(
+            static_cast<int64_t>(iterationStats.nextTimeNs),
+            RuntimeCounter::Unit::kNanos),
+        runtimeStats_);
+  }
+  if (iterationStats.outputTiming.cpuNanos != 0) {
+    exec::addOperatorRuntimeStats(
+        std::string_view("connectorResultPrepareCpuNanos"),
+        RuntimeCounter(
+            static_cast<int64_t>(iterationStats.outputTiming.cpuNanos),
+            RuntimeCounter::Unit::kNanos),
+        runtimeStats_);
+  }
+  if (iterationStats.postFilterTimeNs != 0) {
+    exec::addOperatorRuntimeStats(
+        IterationStats::kPostFilterWallNanos,
+        RuntimeCounter(
+            static_cast<int64_t>(iterationStats.postFilterTimeNs),
+            RuntimeCounter::Unit::kNanos),
+        runtimeStats_);
+  }
 }
 
 vector_size_t HiveIndexSource::evaluateRemainingFilter(

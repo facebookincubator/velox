@@ -317,6 +317,8 @@ void FileIndexReader::startLookup(
   VELOX_CHECK_NOT_NULL(request.input);
   VELOX_CHECK(requestType_->equivalent(*request.input->type()));
 
+  ++numIndexLookupRequests_;
+
   // Use caller-provided maxRowsPerRequest if set, otherwise fall back to
   // the construction-time default.
   const auto maxRows = options.maxRowsPerRequest != 0
@@ -412,13 +414,25 @@ bool FileIndexReader::hasNext() {
 
 std::unique_ptr<FileIndexReader::Result> FileIndexReader::next(
     vector_size_t maxOutputRows) {
-  return indexReader_->next(maxOutputRows);
+  auto result = indexReader_->next(maxOutputRows);
+  if (result != nullptr) {
+    numIndexOutputRows_ += result->size();
+  }
+  return result;
 }
 
 std::unordered_map<std::string, RuntimeMetric> FileIndexReader::runtimeStats() {
-  // TODO: Populate with format-specific stats in a follow-up.
-  // File-based IO stats are tracked externally via IoStatistics.
-  return {};
+  std::unordered_map<std::string, RuntimeMetric> stats;
+  if (numIndexLookupRequests_ != 0) {
+    stats[std::string(kNumFileIndexLookupRequests)] = RuntimeMetric(
+        static_cast<int64_t>(numIndexLookupRequests_),
+        RuntimeCounter::Unit::kNone);
+  }
+  if (numIndexOutputRows_ != 0) {
+    stats[std::string(kNumFileIndexOutputRows)] = RuntimeMetric(
+        static_cast<int64_t>(numIndexOutputRows_), RuntimeCounter::Unit::kNone);
+  }
+  return stats;
 }
 
 std::string FileIndexReader::toString() const {

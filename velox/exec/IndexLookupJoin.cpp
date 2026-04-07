@@ -669,6 +669,14 @@ bool IndexLookupJoin::collectIndexSplits(ContinueFuture* future) {
     if (!split.hasConnectorSplit()) {
       noMoreIndexSplits_ = true;
       VELOX_CHECK(!indexSplits_.empty());
+      {
+        auto lockedStats = stats_.wlock();
+        lockedStats->addRuntimeStat(
+            kNumIndexSplits,
+            RuntimeCounter(
+                static_cast<int64_t>(indexSplits_.size()),
+                RuntimeCounter::Unit::kNone));
+      }
       indexSource_->addSplits(std::move(indexSplits_));
       return true;
     }

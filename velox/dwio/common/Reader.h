@@ -227,6 +227,20 @@ class IndexReader {
   static constexpr std::string_view kNumIndexLookupReadSegments =
       "numIndexLookupReadSegments";
 
+  /// Tracks the total number of rows in all loaded stripes. Measures the full
+  /// stripe row count regardless of how many rows are actually needed by
+  /// index lookups. Comparing with kNumIndexMatchedRows shows cluster index
+  /// selectivity within stripes.
+  static constexpr std::string_view kNumIndexStripeTotalRows =
+      "numIndexStripeTotalRows";
+
+  /// Tracks the total number of rows matched by the cluster index across all
+  /// stripes. These are the rows identified as matching the lookup bounds
+  /// within each stripe, before any ScanSpec filter pushdown. Comparing with
+  /// actual output rows shows filter selectivity.
+  static constexpr std::string_view kNumIndexMatchedRows =
+      "numIndexMatchedRows";
+
   virtual ~IndexReader() = default;
 
   /// Options for controlling index reader behavior.
