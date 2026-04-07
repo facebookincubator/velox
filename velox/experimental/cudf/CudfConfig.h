@@ -129,7 +129,6 @@ struct CudfConfig {
   // Register the Spark or Presto functions, the value could be either spark or
   // presto.
   std::string functionEngine{"presto"};
-
 };
 
 } // namespace facebook::velox::cudf_velox
