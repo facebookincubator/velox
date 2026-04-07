@@ -17,9 +17,9 @@
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveDataSourceHelpers.hpp"
 
+#include "velox/common/Casts.h"
 #include "velox/dwio/common/BufferedInput.h"
 
-#include <cudf/detail/utilities/host_worker_pool.hpp>
 #include <cudf/detail/utilities/integer_utils.hpp>
 #include <cudf/io/datasource.hpp>
 #include <cudf/io/parquet.hpp>
@@ -37,6 +37,7 @@
 
 namespace {
 
+// Static mutex to serialize batches of IO operations across drivers
 std::mutex& ioBatchMutex() {
   static std::mutex mutex;
   return mutex;
@@ -238,15 +239,17 @@ fetchByteRangesAsync(
         });
 
     // load buffered input data source
-    auto syncFunction = [](BufferedInputDataSource* bufferedInput,
+    auto syncFunction = [](std::shared_ptr<cudf::io::datasource> dataSource,
                            rmm::cuda_stream_view stream) {
-      bufferedInput->load(stream);
+      auto buffer =
+          checkedPointerCast<BufferedInputDataSource>(dataSource.get());
+      buffer->load(stream);
     };
 
     return {
         std::move(columnChunkBuffers),
         std::move(columnChunkData),
-        std::async(std::launch::deferred, syncFunction, bufferedInput, stream)};
+        std::async(std::launch::deferred, syncFunction, dataSource, stream)};
   }
 
   // KvikIO dataSource: Impl borrowed from `fetch_byte_ranges_to_device_async()`
@@ -275,11 +278,13 @@ fetchByteRangesAsync(
     }
     chunk = nextChunk;
   }
-  VELOX_CHECK(
-      ioOffsets.size() == ioSizes.size(),
+  VELOX_CHECK_EQ(
+      ioOffsets.size(),
+      ioSizes.size(),
       "Number of IO offsets and sizes must be equal");
-  VELOX_CHECK(
-      ioSizes.size() == destinations.size(),
+  VELOX_CHECK_EQ(
+      ioSizes.size(),
+      destinations.size(),
       "Number of IO sizes and destinations must be equal");
 
   auto iter = cuda::make_zip_iterator(
@@ -307,8 +312,13 @@ fetchByteRangesAsync(
         deviceReadTasks.emplace_back(
             dataSource->device_read_async(ioOffset, ioSize, dest, stream));
       } else {
+        // TODO(mh): We can't yet guarantee (without a safe thread pool) that
+        // all `cudaMemcpyAsync`s will be launched by the time we release the
+        // mutex. That said, this is a rare usecase as host-buffer data should
+        // prefer using a `BufferedInputDataSource` datasource.
         hostReadTasks.emplace_back(
-            cudf::detail::host_worker_pool::submit_task(
+            std::async(
+                std::launch::async,
                 [dataSource, ioOffset, ioSize, dest, stream]() {
                   auto hostBuffer = dataSource->host_read(ioOffset, ioSize);
                   CUDF_CUDA_TRY(cudaMemcpyAsync(
