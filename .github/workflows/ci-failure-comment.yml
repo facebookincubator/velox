@@ -25,6 +25,14 @@ name: CI Failure Comment
 #
 # zizmor:disable:dangerous-triggers -- only reads artifacts and posts comments, no PR code execution.
 on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Workflow run ID to analyze (from a failed Linux Build run)
+        required: true
+      pr_number:
+        description: PR number to comment on
+        required: true
   workflow_run:
     workflows: [Linux Build using GCC]
     types:
@@ -39,8 +47,9 @@ permissions:
 jobs:
   analyze-and-comment:
     if: >
-      github.event.workflow_run.event == 'pull_request' &&
-      github.event.workflow_run.conclusion == 'failure'
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.event == 'pull_request' &&
+       github.event.workflow_run.conclusion == 'failure')
     runs-on: ubuntu-latest
     steps:
       - name: Get PR number
@@ -50,7 +59,14 @@ jobs:
           REPO: ${{ github.repository }}
           HEAD_OWNER: ${{ github.event.workflow_run.head_repository.owner.login }}
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          INPUT_PR_NUMBER: ${{ inputs.pr_number }}
         run: |
+          # For workflow_dispatch, use the provided PR number directly.
+          if [ -n "$INPUT_PR_NUMBER" ]; then
+            echo "number=$INPUT_PR_NUMBER" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           pr_number=$(gh api \
             "/repos/${REPO}/pulls?head=${HEAD_OWNER}:${HEAD_BRANCH}&state=open" \
             -q '.[0].number // empty')
@@ -66,7 +82,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           github-token: ${{ github.token }}
-          run-id: ${{ github.event.workflow_run.id }}
+          run-id: ${{ inputs.run_id || github.event.workflow_run.id }}
           pattern: ci-failure-*
           path: /tmp/ci-failures
           merge-multiple: false
@@ -120,7 +136,7 @@ jobs:
         env:
           PR_NUMBER: ${{ steps.pr.outputs.number }}
           REPOSITORY: ${{ github.repository }}
-          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_ID: ${{ inputs.run_id || github.event.workflow_run.id }}
           FAILURE_METADATA: ${{ steps.metadata.outputs.failure_metadata }}
         run: |
           # Read the prompt template and interpolate variables.
@@ -130,8 +146,9 @@ jobs:
             -e "s|{{RUN_ID}}|${RUN_ID}|g" \
             .claude/skills/ci-failure-analysis/SKILL.md)
 
-          # Failure metadata may contain newlines/special chars — append separately.
-          PROMPT=$(echo "$PROMPT" | sed "s|{{FAILURE_METADATA}}|${FAILURE_METADATA}|g")
+          # Failure metadata may contain newlines/special chars — use bash
+          # parameter expansion instead of sed to handle multiline content.
+          PROMPT="${PROMPT//\{\{FAILURE_METADATA\}\}/${FAILURE_METADATA}}"
 
           {
             echo 'value<<EOF'
