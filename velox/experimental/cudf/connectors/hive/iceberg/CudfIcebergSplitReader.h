@@ -17,7 +17,7 @@
 #pragma once
 
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
-#include "velox/experimental/cudf/connectors/hive/CudfHiveDataSourceHelpers.h"
+#include "velox/experimental/cudf/connectors/hive/CudfSplitReaderHelpers.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfDeletionVectorReader.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 
