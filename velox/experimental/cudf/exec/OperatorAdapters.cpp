@@ -104,7 +104,17 @@ class TableScanAdapter : public OperatorAdapter {
     auto cudfIcebergConnector =
         std::dynamic_pointer_cast<facebook::velox::cudf_velox::connector::hive::
                                       iceberg::CudfIcebergConnector>(connector);
-    return cudfHiveConnector != nullptr or cudfIcebergConnector != nullptr;
+
+    bool canRunOnGPU =
+        cudfHiveConnector != nullptr or cudfIcebergConnector != nullptr;
+
+    if (!canRunOnGPU) {
+      LOG_FALLBACK(
+          "TableScan connector is not CudfHiveConnector or CudfIcebergConnector, PlanNode id: {}",
+          planNode->id());
+    }
+
+    return canRunOnGPU;
   }
 
   bool acceptsGpuInput() const override {
