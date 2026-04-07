@@ -11,6 +11,14 @@ optionally "failed_tests" (newline-separated test names).
 Your task:
 1. Use `gh api` to download the logs for the failed jobs in this workflow run.
    - List jobs: `gh api repos/{{REPOSITORY}}/actions/runs/{{RUN_ID}}/jobs`
+   - For each job, save its `id` and note the step numbers from the `steps` array.
+     Find the step that ran the tests or build (usually named "Run Tests", "Build",
+     or similar — look for the step whose logs contain the failure output, not the
+     status-reporting step). You need the job `id` and step `number` to build a
+     direct link: `https://github.com/{{REPOSITORY}}/actions/runs/{{RUN_ID}}/job/{job_id}#step:{step_number}:{line_number}`
+     where `line_number` is the line within that step's output where the failure
+     appears (e.g., the `[  FAILED  ]` line for test failures, or the `error:` line
+     for build failures). If you cannot determine the exact line, use line 1.
    - Download job logs: `gh api repos/{{REPOSITORY}}/actions/jobs/{job_id}/logs` (returns plain text)
    - If job logs API fails, try: `gh run view {{RUN_ID}} --repo {{REPOSITORY}} --log-failed`
 
@@ -38,7 +46,7 @@ Format the comment as follows (use markdown):
 ```
 ## CI Failure Analysis
 
-### <STATUS_EMOJI> <Job Name> — <BUILD|TEST> Failure
+### <STATUS_EMOJI> <Job Name> — <BUILD|TEST> Failure  [View logs](<step-level link>)
 
 **Failed tests:** (or **Build errors:** for build failures)
 
@@ -53,6 +61,10 @@ For build failures, show:
 
 Keep failure details in a code block for readability.
 
+(Repeat the above section for each failed job, each with its own step-level link)
+
+---
+
 **Correlation with PR changes:**
 - State whether the failure appears related to the PR diff or not
 - If related, point to the specific file/function in the diff that likely caused it
@@ -64,8 +76,6 @@ Keep failure details in a code block for readability.
 
 **Recommended fix:** (if the failure is related to the PR)
 - Brief suggestion of what to fix
-
-[View full CI logs](<link to the workflow run>)
 ```
 
 Important rules:
