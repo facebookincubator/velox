@@ -804,8 +804,8 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::innerJoin(
     cudf::table_view extendedRightView =
         (joinNode_->filter() && useAstFilter_ &&
          !rightPrecomputeInstructions_.empty())
-            ? cachedExtendedRightViews_[i]
-            : rightTableView;
+        ? cachedExtendedRightViews_[i]
+        : rightTableView;
 
     // left = probe, right = build
     VELOX_CHECK_NOT_NULL(hb);
@@ -915,8 +915,8 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::leftJoin(
     // Use cached precomputed columns for right (build) table
     cudf::table_view extendedRightView =
         (joinNode_->filter() && !rightPrecomputeInstructions_.empty())
-            ? cachedExtendedRightViews_[i]
-            : rightTableView;
+        ? cachedExtendedRightViews_[i]
+        : rightTableView;
 
     VELOX_CHECK_NOT_NULL(hb);
     if (buildStream_.has_value()) {

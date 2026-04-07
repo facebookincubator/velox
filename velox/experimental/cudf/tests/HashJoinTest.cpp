@@ -3578,8 +3578,7 @@ TEST_P(MultiThreadedHashJoinTest, innerJoinWithCaseFilterSpanningBothSides) {
       .probeVectors(std::move(probeVectors))
       .buildKeys({"u0"})
       .buildVectors(std::move(buildVectors))
-      .joinFilter(
-          "CASE WHEN t_val > 0.0 THEN t_val / u_val ELSE 0.0 END > 0.5")
+      .joinFilter("CASE WHEN t_val > 0.0 THEN t_val / u_val ELSE 0.0 END > 0.5")
       .joinOutputLayout({"t0", "t_val", "u0", "u_val"})
       .referenceQuery(
           "SELECT t.t0, t.t_val, u.u0, u.u_val FROM t, u "
