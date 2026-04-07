@@ -98,12 +98,12 @@ CudfDeletionVectorReader& CudfDeletionVectorReader::operator=(
 // buildBitmap — construct the cuco roaring bitmap from normalizedPayload_
 // ---------------------------------------------------------------------------
 
-template <bool use32bit>
+template <CudfDeletionVectorReader::BitmapType Bits>
 void CudfDeletionVectorReader::buildBitmap(rmm::cuda_stream_view stream) {
   bitmap_ = std::make_unique<BitmapImpl>();
   auto const* bytes =
       reinterpret_cast<cuda::std::byte const*>(normalizedPayload_.data());
-  if constexpr (use32bit) {
+  if constexpr (Bits == BitmapType::k32Bit) {
     bitmap_->bitmap32 = std::make_unique<Roaring32BitmapType>(
         bytes, rmm::mr::polymorphic_allocator<char>{}, stream);
   } else {
@@ -112,10 +112,10 @@ void CudfDeletionVectorReader::buildBitmap(rmm::cuda_stream_view stream) {
   }
 }
 
-template void CudfDeletionVectorReader::buildBitmap<true>(
-    rmm::cuda_stream_view);
-template void CudfDeletionVectorReader::buildBitmap<false>(
-    rmm::cuda_stream_view);
+template void CudfDeletionVectorReader::buildBitmap<
+    CudfDeletionVectorReader::BitmapType::k32Bit>(rmm::cuda_stream_view);
+template void CudfDeletionVectorReader::buildBitmap<
+    CudfDeletionVectorReader::BitmapType::k64Bit>(rmm::cuda_stream_view);
 
 // ---------------------------------------------------------------------------
 // applyDeletionVector — filter deleted rows from a table chunk

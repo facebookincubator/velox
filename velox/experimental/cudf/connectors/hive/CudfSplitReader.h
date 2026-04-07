@@ -89,9 +89,8 @@ class CudfSplitReader : public NvtxHelper {
   // Setup the cuDF data source and options
   void setupCudfDataSourceAndOptions();
 
-  /// Create the chunked parquet reader. NOT virtual — identical between Hive
-  /// and Iceberg (same chunked_parquet_reader constructor with same args).
-  void createCudfReader();
+  /// Create the chunked parquet reader.
+  virtual void createCudfReader(rmm::device_async_resource_ref output_mr);
 
   /// Create the experimental hybrid scan reader.
   void createExperimentalReader();
@@ -103,7 +102,8 @@ class CudfSplitReader : public NvtxHelper {
   /// reading (DV, positional, equality). The base next() calls this hook,
   /// then applies remaining filter, column trimming, scan timing, and
   /// Velox conversion — all shared between Hive and Iceberg.
-  virtual std::optional<std::unique_ptr<cudf::table>> readNextChunk();
+  virtual std::optional<std::unique_ptr<cudf::table>> readNextChunk(
+      rmm::device_async_resource_ref output_mr);
 
   std::shared_ptr<CudfHiveConnectorSplit> split_;
   std::shared_ptr<const ::facebook::velox::connector::hive::HiveTableHandle>

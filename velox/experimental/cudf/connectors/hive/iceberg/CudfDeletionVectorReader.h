@@ -79,10 +79,13 @@ class CudfDeletionVectorReader {
   static constexpr int32_t kDvLengthFieldId = 101;
 
  private:
+  /// Bitmap type for the deletion vector.
+  enum class BitmapType : uint8_t { k32Bit = 0, k64Bit = 1 };
+
   /// Constructs the cuco roaring bitmap on the GPU from normalizedPayload_.
   /// Defined in .cu (requires nvcc for cuco/thrust).
   /// @tparam use32bit If true, build a 32-bit bitmap; otherwise 64-bit.
-  template <bool use32bit>
+  template <BitmapType Bits>
   void buildBitmap(rmm::cuda_stream_view stream);
 
   std::string filePath_;

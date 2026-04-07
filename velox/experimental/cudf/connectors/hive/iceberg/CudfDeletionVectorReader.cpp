@@ -446,7 +446,10 @@ void CudfDeletionVectorReader::loadAndInitialize(rmm::cuda_stream_view stream) {
       parseRoaring32Cookie(probe, cookie, numContainers);
       if (cookie == kNoRunCookie) {
         injectNoRunOffsetsFromFile(
-            *src.file, payloadFileOffset, payloadSize, numContainers,
+            *src.file,
+            payloadFileOffset,
+            payloadSize,
+            numContainers,
             normalizedPayload_);
       } else {
         // Run-cookie: must parse full payload to expand runs (tiny payloads).
@@ -459,7 +462,7 @@ void CudfDeletionVectorReader::loadAndInitialize(rmm::cuda_stream_view stream) {
       src.file->pread(
           payloadFileOffset, payloadSize, normalizedPayload_.data());
     }
-    buildBitmap<true>(stream);
+    buildBitmap<BitmapType::k32Bit>(stream);
   } else {
     VELOX_CHECK_GT(
         payloadSize,
@@ -482,7 +485,10 @@ void CudfDeletionVectorReader::loadAndInitialize(rmm::cuda_stream_view stream) {
         parseRoaring32Cookie(innerProbe, cookie, numContainers);
         if (cookie == kNoRunCookie) {
           injectNoRunOffsetsFromFile(
-              *src.file, r32FileOffset, r32Size, numContainers,
+              *src.file,
+              r32FileOffset,
+              r32Size,
+              numContainers,
               normalizedPayload_);
         } else {
           std::string tmp(r32Size, '\0');
@@ -493,7 +499,7 @@ void CudfDeletionVectorReader::loadAndInitialize(rmm::cuda_stream_view stream) {
         normalizedPayload_.resize(r32Size);
         src.file->pread(r32FileOffset, r32Size, normalizedPayload_.data());
       }
-      buildBitmap<true>(stream);
+      buildBitmap<BitmapType::k32Bit>(stream);
     } else {
       std::string tmp(payloadSize, '\0');
       src.file->pread(payloadFileOffset, payloadSize, tmp.data());
@@ -502,7 +508,7 @@ void CudfDeletionVectorReader::loadAndInitialize(rmm::cuda_stream_view stream) {
       } else {
         normalizedPayload_ = std::move(tmp);
       }
-      buildBitmap<false>(stream);
+      buildBitmap<BitmapType::k64Bit>(stream);
     }
   }
 }

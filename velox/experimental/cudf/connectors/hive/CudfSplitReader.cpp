@@ -105,7 +105,7 @@ void CudfSplitReader::prepareSplit() {
     createExperimentalReader();
     hybridScanState_ = std::make_unique<HybridScanState>();
   } else {
-    createCudfReader();
+    createCudfReader(get_output_mr());
   }
 }
 
@@ -117,7 +117,7 @@ std::optional<RowVectorPtr> CudfSplitReader::next(uint64_t /*size*/) {
   // Record start time before reading chunk
   auto startTimeUs = getCurrentTimeMicro();
 
-  auto chunkOpt = readNextChunk();
+  auto chunkOpt = readNextChunk(get_output_mr());
   if (!chunkOpt.has_value()) {
     return std::nullopt;
   }
@@ -192,7 +192,8 @@ std::optional<RowVectorPtr> CudfSplitReader::next(uint64_t /*size*/) {
   return output;
 }
 
-std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk() {
+std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk(
+    rmm::device_async_resource_ref output_mr) {
   if (!useExperimentalCudfReader_) {
     // Read table using the regular cudf parquet reader
     VELOX_CHECK_NOT_NULL(splitReader_, "cudf parquet reader not present");
@@ -254,7 +255,7 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk() {
         hybridScanState_->columnChunkData_,
         readerOptions_,
         stream_,
-        get_output_mr());
+        output_mr);
     // TODO: check remainingFilterExprSet_ flag here to choose mr
   });
 
@@ -370,7 +371,8 @@ void CudfSplitReader::setupCudfDataSourceAndOptions() {
   }
 }
 
-void CudfSplitReader::createCudfReader() {
+void CudfSplitReader::createCudfReader(
+    rmm::device_async_resource_ref output_mr) {
   setupCudfDataSourceAndOptions();
   // Create a parquet reader
   splitReader_ = std::make_unique<cudf::io::chunked_parquet_reader>(
@@ -378,7 +380,7 @@ void CudfSplitReader::createCudfReader() {
       cudfHiveConfig_->maxPassReadLimit(),
       readerOptions_,
       stream_,
-      get_output_mr());
+      output_mr);
 }
 
 void CudfSplitReader::createExperimentalReader() {

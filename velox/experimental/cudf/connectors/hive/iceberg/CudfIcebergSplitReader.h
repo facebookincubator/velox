@@ -65,25 +65,27 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   void prepareSplit() override;
 
  protected:
-  /// Override to apply Iceberg deletes after reading a chunk.
-  std::optional<std::unique_ptr<cudf::table>> readNextChunk() override;
+  /// Override to create the chunked parquet reader.
+  void createCudfReader(rmm::device_async_resource_ref output_mr) override;
 
-  /// NOTE: setupCudfDataSourceAndOptions() and createCudfReader() are NOT
-  /// overridden. The base CudfSplitReader implementations (taken from the more
-  /// mature CudfHiveDataSource) handle both Hive and Iceberg cases:
-  ///   - Path cleaning (file:, s3a:) is done in addSplit() when building
-  ///     CudfHiveConnectorSplit, so split_->filePath is already clean.
-  ///   - Subfield filter is safely skipped when subfieldFilterExpr_ is nullptr.
-  ///   - Reader creation is identical between Hive and Iceberg.
+  /// Override to apply Iceberg deletes after reading a cudf table chunk.
+  std::optional<std::unique_ptr<cudf::table>> readNextChunk(
+      rmm::device_async_resource_ref output_mr) override;
 
  private:
+  /// Load the deletion vector blob from the puffin file.
   void loadDeletionVector();
+
+  /// Setup delete file readers for positional and equality deletes.
   void setupDeleteFileReaders();
 
+  /// Apply positional deletes (V2) to the input cudf table.
   std::unique_ptr<cudf::table> applyPositionalDeletes(
       cudf::table_view input,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr);
+
+  /// Apply equality deletes (V2) to the input cudf table.
   std::unique_ptr<cudf::table> applyEqualityDeletes(
       cudf::table_view input,
       const RowVectorPtr& rowVector,
@@ -93,14 +95,19 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   std::shared_ptr<const velox_iceberg::HiveIcebergSplit> icebergSplit_;
   std::shared_ptr<const velox_hive::HiveConfig> hiveConfig_;
 
+  /// cuCollections-accelerated deletion vector (roaring bitmap) reader
   std::unique_ptr<CudfDeletionVectorReader> dvReader_;
+
+  /// Positional delete file readers
   std::list<std::unique_ptr<velox_iceberg::PositionalDeleteFileReader>>
       positionalDeleteFileReaders_;
+
+  /// Equality delete file readers.
   std::list<std::unique_ptr<velox_iceberg::EqualityDeleteFileReader>>
       equalityDeleteFileReaders_;
 
-  // Tracks the absolute row offset within the data file. Each chunk advances
-  // this by the number of rows read (before deletes).
+  /// Tracks the absolute row offset within the data file. Each chunk advances
+  /// this by the number of rows read (before deletes).
   uint64_t baseReadOffset_{0};
 };
 
