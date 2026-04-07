@@ -464,22 +464,6 @@ void CudfHiveDataSource::setupCudfDataSourceAndOptions() {
     dataSource_ = std::move(cudf::io::make_datasources(sourceInfo).front());
   }
 
-  bool hasDecimalFilter = false;
-  if (subfieldFilters_.size()) {
-    auto const readerFilterType = getTableRowType();
-    for (const auto& [field, _] : subfieldFilters_) {
-      if (!field.valid()) {
-        continue;
-      }
-      const auto& fieldName = field.baseName();
-      const auto fieldType = readerFilterType->findChild(fieldName);
-      if (fieldType && fieldType->isDecimal()) {
-        hasDecimalFilter = true;
-        break;
-      }
-    }
-  }
-
   // Reader options
   readerOptions_ =
       cudf::io::parquet_reader_options::builder(std::move(sourceInfo))
@@ -488,7 +472,6 @@ void CudfHiveDataSource::setupCudfDataSourceAndOptions() {
           .allow_mismatched_pq_schemas(
               cudfHiveConfig_->isAllowMismatchedCudfHiveSchemas())
           .timestamp_type(cudfHiveConfig_->timestampType())
-          .use_jit_filter(hasDecimalFilter)
           .build();
 
   // Set skip_bytes and num_bytes if available
