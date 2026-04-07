@@ -27,9 +27,12 @@ namespace velox_hive = ::facebook::velox::connector::hive;
 
 /// Iceberg-specific data source that extends CudfHiveDataSource.
 ///
-/// Delegates all base Hive/Parquet handling to CudfHiveDataSource and
-/// only overrides addSplit() and next() to handle Iceberg-specific
-/// split types and the CudfIcebergSplitReader.
+/// Provides Iceberg table format support by creating  CudfIcebergSplitReader
+/// instances that handle:
+/// - GPU-accelerated positional delete files and vectors for row-level deletes.
+/// - GPU-accelerated equality delete files for column-level deletes.
+/// - Schema evolution with column adaptation.
+/// - Iceberg-specific metadata columns.
 class CudfIcebergDataSource : public CudfHiveDataSource {
  public:
   CudfIcebergDataSource(
