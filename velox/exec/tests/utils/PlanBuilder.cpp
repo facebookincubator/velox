@@ -339,7 +339,7 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
           {name,
            std::make_shared<HiveColumnHandle>(
                hiveColumnName,
-               HiveColumnHandle::ColumnType::kRegular,
+               FileColumnHandle::ColumnType::kRegular,
                type,
                type)});
     }
@@ -427,8 +427,8 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
           std::make_shared<connector::hive::HiveColumnHandle>(
               column,
               isPartitionKey
-                  ? connector::hive::HiveColumnHandle::ColumnType::kPartitionKey
-                  : connector::hive::HiveColumnHandle::ColumnType::kRegular,
+                  ? connector::hive::FileColumnHandle::ColumnType::kPartitionKey
+                  : connector::hive::FileColumnHandle::ColumnType::kRegular,
               outputType->childAt(i),
               outputType->childAt(i)));
     }

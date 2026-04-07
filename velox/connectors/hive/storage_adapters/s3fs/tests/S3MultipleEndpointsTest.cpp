@@ -17,6 +17,7 @@
 #include <folly/init/Init.h>
 
 #include "gtest/gtest.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/RegisterS3FileSystem.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Util.h"
@@ -71,8 +72,10 @@ class S3MultipleEndpoints : public S3Test, public ::test::VectorTestBase {
         std::string(connectorId2),
         minioSecondServer_->hiveConfig(config2Override),
         ioExecutor_.get());
-    connector::registerConnector(hiveConnector1);
-    connector::registerConnector(hiveConnector2);
+    connector::ConnectorRegistry::global().insert(
+        hiveConnector1->connectorId(), hiveConnector1);
+    connector::ConnectorRegistry::global().insert(
+        hiveConnector2->connectorId(), hiveConnector2);
   }
 
   void TearDown() override {
@@ -191,8 +194,8 @@ TEST_F(S3MultipleEndpoints, baseEndpoints) {
 
   testJoin(kExpectedRows, outputDirectory, kConnectorId1, kConnectorId2);
 
-  connector::unregisterConnector(std::string(kConnectorId1));
-  connector::unregisterConnector(std::string(kConnectorId2));
+  connector::ConnectorRegistry::global().erase(std::string(kConnectorId1));
+  connector::ConnectorRegistry::global().erase(std::string(kConnectorId2));
 }
 
 TEST_F(S3MultipleEndpoints, bucketEndpoints) {
@@ -218,8 +221,8 @@ TEST_F(S3MultipleEndpoints, bucketEndpoints) {
 
   testJoin(kExpectedRows, outputDirectory, kConnectorId1, kConnectorId2);
 
-  connector::unregisterConnector(std::string(kConnectorId1));
-  connector::unregisterConnector(std::string(kConnectorId2));
+  connector::ConnectorRegistry::global().erase(std::string(kConnectorId1));
+  connector::ConnectorRegistry::global().erase(std::string(kConnectorId2));
 }
 
 } // namespace facebook::velox

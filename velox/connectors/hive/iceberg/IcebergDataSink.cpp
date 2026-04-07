@@ -19,7 +19,6 @@
 #include <boost/lexical_cast.hpp>
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/uuid_io.hpp>
-#include <folly/json.h>
 #include <memory>
 #include <string>
 #include <utility>
@@ -27,18 +26,10 @@
 
 #include "velox/common/base/Fs.h"
 #include "velox/common/encode/Base64.h"
-#include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/connectors/hive/PartitionIdGenerator.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
-
-#ifdef VELOX_ENABLE_PARQUET
-#include "velox/connectors/hive/iceberg/IcebergParquetStatsCollector.h"
-#include "velox/dwio/parquet/writer/Writer.h"
-#endif
-
 #include "velox/connectors/hive/iceberg/TransformExprBuilder.h"
 #include "velox/exec/OperatorUtils.h"
-#include "velox/type/Type.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -311,25 +302,17 @@ IcebergDataSink::IcebergDataSink(
           partitionSpec_ != nullptr
               ? std::make_unique<IcebergPartitionName>(partitionSpec_)
               : nullptr),
-      partitionRowType_(std::move(partitionRowType)),
-      icebergInsertTableHandle_(insertTableHandle) {
+      partitionRowType_(std::move(partitionRowType)) {
   commitPartitionValue_.resize(maxOpenWriters_);
-
-#ifdef VELOX_ENABLE_PARQUET
-  std::vector<IcebergColumnHandlePtr> columnHandles;
-  columnHandles.reserve(insertTableHandle->inputColumns().size());
-  for (auto& column : insertTableHandle->inputColumns()) {
-    columnHandles.emplace_back(
-        checkedPointerCast<const IcebergColumnHandle>(column));
-  }
-  parquetStatsCollector_ =
-      std::make_shared<IcebergParquetStatsCollector>(std::move(columnHandles));
-#endif
 }
 
 std::vector<std::string> IcebergDataSink::commitMessage() const {
   std::vector<std::string> commitTasks;
   commitTasks.reserve(writerInfo_.size());
+
+  auto icebergInsertTableHandle =
+      std::dynamic_pointer_cast<const IcebergInsertTableHandle>(
+          insertTableHandle_);
 
   for (auto i = 0; i < writerInfo_.size(); ++i) {
     const auto& writerInfo = writerInfo_.at(i);
@@ -337,21 +320,19 @@ std::vector<std::string> IcebergDataSink::commitMessage() const {
 
     // Following metadata (json format) is consumed by Presto CommitTaskData.
     // It contains the minimal subset of metadata.
-    VELOX_CHECK_EQ(writerInfo->writtenFiles.size(), dataFileStats_[i].size());
-    for (auto fileIdx = 0; fileIdx < writerInfo->writtenFiles.size();
-         ++fileIdx) {
-      const auto& fileInfo = writerInfo->writtenFiles[fileIdx];
+    // TODO: Complete metrics is missing now and this could lead to suboptimal
+    // query plan, will collect full iceberg metrics in following PR.
+    for (const auto& fileInfo : writerInfo->writtenFiles) {
       // clang-format off
       folly::dynamic commitData = folly::dynamic::object(
         "path", (fs::path(writerInfo->writerParameters.targetDirectory()) /
                       fileInfo.targetFileName).string())
         ("fileSizeInBytes", fileInfo.fileSize)
-        ("metrics", dataFileStats_[i][fileIdx]->toJson())
+        ("metrics",
+          folly::dynamic::object("recordCount", fileInfo.numRows))
         ("partitionSpecJson",
-          icebergInsertTableHandle_->partitionSpec() ?
-            icebergInsertTableHandle_->partitionSpec()->specId : 0)
-        // Sort order evolution is not supported. Set default id to 0 ( unsorted order).
-        ("sortOrderId", 0)
+          icebergInsertTableHandle->partitionSpec() ?
+            icebergInsertTableHandle->partitionSpec()->specId : 0)
         ("fileFormat", "PARQUET")
         ("content", "DATA");
       // clang-format on
@@ -403,8 +384,8 @@ uint32_t IcebergDataSink::ensureWriter(const HiveWriterId& id) {
 }
 
 std::shared_ptr<dwio::common::WriterOptions>
-IcebergDataSink::createWriterOptions(size_t writerIndex) const {
-  auto options = HiveDataSink::createWriterOptions(writerIndex);
+IcebergDataSink::createWriterOptions() const {
+  auto options = HiveDataSink::createWriterOptions();
   // Per Iceberg specification (https://iceberg.apache.org/spec/#parquet):
   // - Timestamps must be stored with microsecond precision.
   // - Timestamps must NOT be adjusted to UTC timezone; they should be written
@@ -417,15 +398,6 @@ IcebergDataSink::createWriterOptions(size_t writerIndex) const {
   // (TimestampPrecision::kMicroseconds).
   options->serdeParameters["parquet.writer.timestamp.unit"] = "6";
   options->serdeParameters["parquet.writer.timestamp.timezone"] = "";
-
-#ifdef VELOX_ENABLE_PARQUET
-  if (parquetStatsCollector_) {
-    auto parquetOptions = checkedPointerCast<parquet::WriterOptions>(options);
-    parquetOptions->parquetFieldIds =
-        parquetStatsCollector_->parquetFieldIds().children;
-  }
-#endif
-
   // Re-process configs to apply the serde parameters we just set.
   options->processConfigs(
       *hiveConfig_->config(), *connectorQueryCtx_->sessionProperties());
@@ -446,89 +418,6 @@ folly::dynamic IcebergDataSink::makeCommitPartitionValue(
     }
   }
   return partitionValues;
-}
-
-void IcebergDataSink::rotateWriter(size_t index) {
-  VELOX_CHECK_LT(index, writers_.size());
-  VELOX_CHECK_NOT_NULL(writers_[index]);
-
-  // Ensure dataFileStats_ has an entry for this writer index.
-  if (dataFileStats_.size() <= index) {
-    dataFileStats_.resize(index + 1);
-  }
-
-  // Collect Iceberg parquet stats from the writer BEFORE closing it.
-  // The base rotateWriter() will call writers_[index]->close() which returns
-  // file metadata, but the base class discards that return value. We need to
-  // close the writer ourselves to capture the metadata, then prevent double
-  // close by resetting the writer.
-  {
-    memory::NonReclaimableSectionGuard nonReclaimableGuard(
-        writerInfo_[index]->nonReclaimableSectionHolder.get());
-    auto metadata = writers_[index]->close();
-#ifdef VELOX_ENABLE_PARQUET
-    bool fileAdded = getCurrentFileBytes(index) > 0;
-#endif
-
-    // Finalize file info (capture file size, add to writtenFiles).
-    finalizeWriterFile(index);
-
-#ifdef VELOX_ENABLE_PARQUET
-    if (fileAdded) {
-      dataFileStats_[index].emplace_back(
-          parquetStatsCollector_->aggregate(std::move(metadata)));
-    }
-#endif
-  }
-
-  // Release old writer. The new writer will be created lazily on the next
-  // write call.
-  writers_[index].reset();
-
-  ++writerInfo_[index]->fileSequenceNumber;
-}
-
-void IcebergDataSink::closeInternal() {
-  VELOX_CHECK_NE(state_, State::kRunning);
-  VELOX_CHECK_NE(state_, State::kFinishing);
-
-  if (state_ == State::kClosed) {
-    // Ensure dataFileStats_ has entries for all writers.
-    dataFileStats_.resize(writers_.size());
-
-    for (auto i = 0; i < writers_.size(); ++i) {
-      if (writers_[i] == nullptr) {
-        // Writer was rotated and is null. Stats for rotated files were already
-        // collected in rotateWriter(). No final file to close.
-        continue;
-      }
-      memory::NonReclaimableSectionGuard nonReclaimableGuard(
-          writerInfo_[i]->nonReclaimableSectionHolder.get());
-
-      auto metadata = writers_[i]->close();
-#ifdef VELOX_ENABLE_PARQUET
-      bool fileAdded = getCurrentFileBytes(i) > 0;
-#endif
-
-      finalizeWriterFile(i);
-
-#ifdef VELOX_ENABLE_PARQUET
-      if (fileAdded) {
-        dataFileStats_[i].emplace_back(
-            parquetStatsCollector_->aggregate(std::move(metadata)));
-      }
-#endif
-    }
-  } else {
-    for (auto i = 0; i < writers_.size(); ++i) {
-      if (writers_[i] == nullptr) {
-        continue;
-      }
-      memory::NonReclaimableSectionGuard nonReclaimableGuard(
-          writerInfo_[i]->nonReclaimableSectionHolder.get());
-      writers_[i]->abort();
-    }
-  }
 }
 
 } // namespace facebook::velox::connector::hive::iceberg

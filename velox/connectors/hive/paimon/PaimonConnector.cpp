@@ -38,7 +38,7 @@ std::unique_ptr<DataSource> PaimonConnector::createDataSource(
       &fileHandleFactory_,
       ioExecutor_,
       connectorQueryCtx,
-      hiveConfig_);
+      paimonConfig_);
 }
 
 } // namespace facebook::velox::connector::hive::paimon

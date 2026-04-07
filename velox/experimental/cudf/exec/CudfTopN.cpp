@@ -19,8 +19,7 @@
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 
-#include <cudf/detail/copy.hpp>
-#include <cudf/detail/gather.hpp>
+#include <cudf/copying.hpp>
 #include <cudf/detail/utilities/stream_pool.hpp>
 #include <cudf/merge.hpp>
 #include <cudf/sorting.hpp>
@@ -118,11 +117,11 @@ std::unique_ptr<cudf::table> CudfTopN::getTopK(
   auto const kIndices =
       cudf::split(indices->view(), {std::min(k, indices->size())}, stream)
           .front();
-  return cudf::detail::gather(
+  return cudf::gather(
       values,
       kIndices,
       cudf::out_of_bounds_policy::DONT_CHECK,
-      cudf::detail::negative_index_policy::NOT_ALLOWED,
+      cudf::negative_index_policy::NOT_ALLOWED,
       stream,
       mr);
 }

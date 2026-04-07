@@ -32,6 +32,7 @@
 #include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveDataSource.h"
@@ -197,9 +198,9 @@ DEBUG_ONLY_TEST_F(TableScanTest, pendingCoalescedIoWhenTaskFailed) {
   // on-demand load.
   const std::string errMsg{"injectedError"};
   SCOPED_TESTVALUE_SET(
-      "facebook::velox::connector::hive::HiveDataSource::next",
-      std::function<void(connector::hive::HiveDataSource*)>(
-          [&](connector::hive::HiveDataSource* /*unused*/) {
+      "facebook::velox::connector::hive::FileDataSource::next",
+      std::function<void(connector::hive::FileDataSource*)>(
+          [&](connector::hive::FileDataSource* /*unused*/) {
             VELOX_FAIL(errMsg);
           }));
   SCOPED_TESTVALUE_SET(
@@ -223,7 +224,7 @@ DEBUG_ONLY_TEST_F(TableScanTest, pendingCoalescedIoWhenTaskFailed) {
 TEST_F(TableScanTest, connectorStats) {
   auto hiveConnector =
       std::dynamic_pointer_cast<connector::hive::HiveConnector>(
-          connector::getConnector(kHiveConnectorId));
+          connector::ConnectorRegistry::tryGet(kHiveConnectorId));
   EXPECT_NE(nullptr, hiveConnector);
   verifyCacheStats(hiveConnector->fileHandleCacheStats(), 0, 0, 0);
 
@@ -562,7 +563,7 @@ TEST_F(TableScanTest, subfieldPruningRowType) {
   connector::ColumnHandleMap assignments;
   assignments["e"] = std::make_shared<HiveColumnHandle>(
       "e",
-      HiveColumnHandle::ColumnType::kRegular,
+      FileColumnHandle::ColumnType::kRegular,
       columnType,
       columnType,
       std::move(requiredSubfields));
@@ -618,7 +619,7 @@ TEST_F(TableScanTest, subfieldPruningRemainingFilterSubfieldsMissing) {
   connector::ColumnHandleMap assignments;
   assignments["e"] = std::make_shared<HiveColumnHandle>(
       "e",
-      HiveColumnHandle::ColumnType::kRegular,
+      FileColumnHandle::ColumnType::kRegular,
       columnType,
       columnType,
       std::move(requiredSubfields));
@@ -673,7 +674,7 @@ TEST_F(TableScanTest, subfieldPruningRemainingFilterRootFieldMissing) {
   writeToFile(filePath->getPath(), vectors);
   connector::ColumnHandleMap assignments;
   assignments["d"] = std::make_shared<HiveColumnHandle>(
-      "d", HiveColumnHandle::ColumnType::kRegular, BIGINT(), BIGINT());
+      "d", FileColumnHandle::ColumnType::kRegular, BIGINT(), BIGINT());
   auto op = PlanBuilder()
                 .startTableScan()
                 .outputType(ROW({{"d", BIGINT()}}))
@@ -715,7 +716,7 @@ TEST_F(TableScanTest, subfieldPruningRemainingFilterStruct) {
       SCOPED_TRACE(fmt::format("{} {}", outputColumn, filterColumn));
       connector::ColumnHandleMap assignments;
       assignments["d"] = std::make_shared<HiveColumnHandle>(
-          "d", HiveColumnHandle::ColumnType::kRegular, BIGINT(), BIGINT());
+          "d", FileColumnHandle::ColumnType::kRegular, BIGINT(), BIGINT());
       if (outputColumn > kNoOutput) {
         std::vector<common::Subfield> subfields;
         if (outputColumn == kSubfieldOnly) {
@@ -723,7 +724,7 @@ TEST_F(TableScanTest, subfieldPruningRemainingFilterStruct) {
         }
         assignments["c"] = std::make_shared<HiveColumnHandle>(
             "c",
-            HiveColumnHandle::ColumnType::kRegular,
+            FileColumnHandle::ColumnType::kRegular,
             structType,
             structType,
             std::move(subfields));
@@ -800,7 +801,7 @@ TEST_F(TableScanTest, subfieldPruningRemainingFilterMap) {
       SCOPED_TRACE(fmt::format("{} {}", outputColumn, filterColumn));
       connector::ColumnHandleMap assignments;
       assignments["a"] = std::make_shared<HiveColumnHandle>(
-          "a", HiveColumnHandle::ColumnType::kRegular, BIGINT(), BIGINT());
+          "a", FileColumnHandle::ColumnType::kRegular, BIGINT(), BIGINT());
       if (outputColumn > kNoOutput) {
         std::vector<common::Subfield> subfields;
         if (outputColumn == kSubfieldOnly) {
@@ -808,7 +809,7 @@ TEST_F(TableScanTest, subfieldPruningRemainingFilterMap) {
         }
         assignments["b"] = std::make_shared<HiveColumnHandle>(
             "b",
-            HiveColumnHandle::ColumnType::kRegular,
+            FileColumnHandle::ColumnType::kRegular,
             mapType,
             mapType,
             std::move(subfields));
@@ -899,7 +900,7 @@ TEST_F(TableScanTest, subfieldPruningMapType) {
   connector::ColumnHandleMap assignments;
   assignments["c"] = std::make_shared<HiveColumnHandle>(
       "c",
-      HiveColumnHandle::ColumnType::kRegular,
+      FileColumnHandle::ColumnType::kRegular,
       mapType,
       mapType,
       std::move(requiredSubfields));
@@ -982,7 +983,7 @@ TEST_F(TableScanTest, subfieldPruningArrayType) {
   connector::ColumnHandleMap assignments;
   assignments["c"] = std::make_shared<HiveColumnHandle>(
       "c",
-      HiveColumnHandle::ColumnType::kRegular,
+      FileColumnHandle::ColumnType::kRegular,
       arrayType,
       arrayType,
       std::move(requiredSubfields));
@@ -1438,7 +1439,7 @@ DEBUG_ONLY_TEST_F(TableScanTest, batchSizeFileEstimateFallback) {
       }));
 
   SCOPED_TESTVALUE_SET(
-      "facebook::velox::connector::hive::HiveDataSource::estimatedRowSize",
+      "facebook::velox::connector::hive::FileDataSource::estimatedRowSize",
       std::function<void(int64_t*)>([&](int64_t* estimatedRowSize) {
         if (splitCount.load() >= 2) {
           *estimatedRowSize = connector::DataSource::kUnknownRowSize;
@@ -3318,7 +3319,7 @@ TEST_F(TableScanTest, bucketConversion) {
                         {"c2",
                          std::make_shared<HiveColumnHandle>(
                              "c2",
-                             HiveColumnHandle::ColumnType::kRowIndex,
+                             FileColumnHandle::ColumnType::kRowIndex,
                              BIGINT(),
                              BIGINT())},
                         {"c1", makeColumnHandle("c1", BIGINT(), {})},
@@ -5564,13 +5565,13 @@ TEST_F(TableScanTest, dynamicFilterWithRowIndexColumn) {
   connector::ColumnHandleMap assignments;
   assignments["a"] = std::make_shared<connector::hive::HiveColumnHandle>(
       "a",
-      connector::hive::HiveColumnHandle::ColumnType::kRegular,
+      connector::hive::FileColumnHandle::ColumnType::kRegular,
       BIGINT(),
       BIGINT());
   assignments["row_index"] =
       std::make_shared<connector::hive::HiveColumnHandle>(
           "row_index",
-          connector::hive::HiveColumnHandle::ColumnType::kRowIndex,
+          connector::hive::FileColumnHandle::ColumnType::kRowIndex,
           BIGINT(),
           BIGINT());
   std::shared_ptr<TempFilePath> files[2];
@@ -5848,9 +5849,9 @@ DEBUG_ONLY_TEST_F(TableScanTest, cancellationToken) {
 
   std::atomic_bool cancelled{false};
   SCOPED_TESTVALUE_SET(
-      "facebook::velox::connector::hive::HiveDataSource::next",
-      std::function<void(connector::hive::HiveDataSource*)>(
-          [&](connector::hive::HiveDataSource* source) {
+      "facebook::velox::connector::hive::FileDataSource::next",
+      std::function<void(connector::hive::FileDataSource*)>(
+          [&](connector::hive::FileDataSource* source) {
             auto cancellationToken =
                 source->testingConnectorQueryCtx()->cancellationToken();
             while (true) {
@@ -5912,7 +5913,7 @@ TEST_F(TableScanTest, rowNumberInRemainingFilter) {
                       {"r1",
                        std::make_shared<HiveColumnHandle>(
                            "r1",
-                           HiveColumnHandle::ColumnType::kRowIndex,
+                           FileColumnHandle::ColumnType::kRowIndex,
                            BIGINT(),
                            BIGINT())},
                   })
@@ -5962,7 +5963,7 @@ TEST_F(TableScanTest, rowId) {
   writeToFile(file->getPath(), {vector});
   auto makeRowIdColumnHandle = [&](auto& name) {
     return std::make_shared<HiveColumnHandle>(
-        name, HiveColumnHandle::ColumnType::kRowId, rowIdType, rowIdType);
+        name, FileColumnHandle::ColumnType::kRowId, rowIdType, rowIdType);
   };
   {
     SCOPED_TRACE("Preload");
@@ -6557,7 +6558,7 @@ TEST_F(TableScanTest, columnPostProcessorWithSubfieldFilters) {
   };
   auto c0Handle = std::make_shared<HiveColumnHandle>(
       "c0",
-      HiveColumnHandle::ColumnType::kRegular,
+      FileColumnHandle::ColumnType::kRegular,
       BIGINT(),
       BIGINT(),
       std::vector<common::Subfield>{},
@@ -6566,7 +6567,7 @@ TEST_F(TableScanTest, columnPostProcessorWithSubfieldFilters) {
   auto c1Handle = regularColumn("c1", BIGINT());
   auto c2Handle = std::make_shared<HiveColumnHandle>(
       "c2",
-      HiveColumnHandle::ColumnType::kRegular,
+      FileColumnHandle::ColumnType::kRegular,
       BIGINT(),
       BIGINT(),
       std::vector<common::Subfield>{},

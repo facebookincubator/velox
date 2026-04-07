@@ -30,8 +30,15 @@ add_subdirectory(time)
 add_subdirectory(testutil)
 add_subdirectory(fuzzer)
 
+if(${VELOX_BUILD_TESTING})
+  add_subdirectory(tests)
+endif()
+
 velox_add_library(velox_enums INTERFACE HEADERS Enums.h)
 
 velox_add_library(velox_casts INTERFACE HEADERS Casts.h)
+
+velox_add_library(velox_scoped_registry INTERFACE HEADERS ScopedRegistry.h)
+velox_link_libraries(velox_scoped_registry INTERFACE velox_exception Folly::folly)
 
 velox_install_library_headers()

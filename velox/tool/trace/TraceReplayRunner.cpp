@@ -381,14 +381,15 @@ TraceReplayRunner::createReplayer() const {
         taskTraceMetadataReader_->connectorId(FLAGS_node_id);
     VELOX_CHECK(connectorId.has_value());
 
-    if (!connector::hasConnector(connectorId.value())) {
+    if (!connector::ConnectorRegistry::tryGet(connectorId.value())) {
       connector::hive::HiveConnectorFactory factory;
       const auto hiveConnector = factory.newConnector(
           connectorId.value(),
           std::make_shared<config::ConfigBase>(
               std::unordered_map<std::string, std::string>()),
           ioExecutor_.get());
-      connector::registerConnector(hiveConnector);
+      connector::ConnectorRegistry::global().insert(
+          hiveConnector->connectorId(), hiveConnector);
     }
     replayer = std::make_unique<tool::trace::TableScanReplayer>(
         FLAGS_root_dir,

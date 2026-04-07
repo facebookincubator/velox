@@ -15,29 +15,70 @@
  */
 
 #include "velox/connectors/ConnectorRegistry.h"
+
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "velox/connectors/Connector.h"
 #include "velox/connectors/ConnectorRegistryInternal.h"
+#include "velox/core/QueryCtx.h"
 
 namespace facebook::velox::connector {
+
+namespace {
+
+ConnectorRegistry::Registry& registryFor(const core::QueryCtx& queryCtx) {
+  auto registry = queryCtx.registry<ConnectorRegistry::Registry>(
+      ConnectorRegistry::kRegistryKey);
+  return registry ? *registry : ConnectorRegistry::global();
+}
+
+} // namespace
+
+// static
+ConnectorRegistry::Registry& ConnectorRegistry::global() {
+  return connectors();
+}
+
+// static
+std::shared_ptr<ConnectorRegistry::Registry> ConnectorRegistry::create(
+    const Registry* parent) {
+  return std::make_shared<Registry>(parent);
+}
+
+// static
+std::shared_ptr<Connector> ConnectorRegistry::tryGet(
+    const core::QueryCtx& queryCtx,
+    const std::string& connectorId) {
+  return registryFor(queryCtx).find(connectorId);
+}
 
 // static
 std::shared_ptr<Connector> ConnectorRegistry::tryGet(
     const std::string& connectorId) {
-  auto it = connectors().find(connectorId);
-  if (it != connectors().end()) {
-    return it->second;
+  return global().find(connectorId);
+}
+
+// static
+void ConnectorRegistry::unregisterAll(const core::QueryCtx& queryCtx) {
+  auto registry = queryCtx.registry<ConnectorRegistry::Registry>(
+      ConnectorRegistry::kRegistryKey);
+  if (registry) {
+    registry->clear();
   }
-  return nullptr;
 }
 
 // static
 void ConnectorRegistry::unregisterAll() {
-  connectors().clear();
+  global().clear();
 }
 
 // static
-const std::unordered_map<std::string, std::shared_ptr<Connector>>&
-ConnectorRegistry::all() {
-  return connectors();
+std::vector<std::pair<std::string, std::shared_ptr<Connector>>>
+ConnectorRegistry::snapshot(const core::QueryCtx& queryCtx) {
+  return registryFor(queryCtx).snapshot();
 }
 
 } // namespace facebook::velox::connector
