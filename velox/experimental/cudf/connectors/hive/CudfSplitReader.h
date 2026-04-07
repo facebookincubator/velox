@@ -62,7 +62,7 @@ class CudfSplitReader : public NvtxHelper {
       const std::shared_ptr<CudfHiveConfig>& cudfHiveConfig,
       const std::shared_ptr<io::IoStatistics>& ioStatistics,
       const std::shared_ptr<IoStats>& ioStats,
-      bool useExperimentalReader,
+      bool useExperimentalCudfReader,
       cudf::ast::expression const* subfieldFilterExpr,
       std::unique_ptr<exec::ExprSet>* remainingFilterExprSet,
       std::shared_ptr<CudfExpression> cudfExpressionEvaluator,
@@ -123,7 +123,7 @@ class CudfSplitReader : public NvtxHelper {
   CudfParquetReaderPtr splitReader_;
   CudfHybridScanReaderPtr exptSplitReader_;
   std::unique_ptr<HybridScanState> hybridScanState_;
-  bool useExperimentalReader_;
+  bool useExperimentalCudfReader_;
   rmm::cuda_stream_view stream_;
 
   std::shared_ptr<io::IoStatistics> ioStatistics_;

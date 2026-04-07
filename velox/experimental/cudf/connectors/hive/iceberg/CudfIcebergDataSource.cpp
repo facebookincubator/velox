@@ -78,7 +78,7 @@ void CudfIcebergDataSource::convertSplit(
   VLOG(1) << "Converted split to HiveIcebergSplit: "
           << icebergSplit_->toString();
 
-  // Convert HiveIcebergSplit to CudfHiveConnectorSplit
+  // Convert `HiveIcebergSplit` to `CudfHiveConnectorSplit`
   CudfHiveDataSource::convertSplit(
       std::const_pointer_cast<velox_iceberg::HiveIcebergSplit>(icebergSplit_));
 }
@@ -98,7 +98,7 @@ CudfIcebergDataSource::createCudfSplitReader() {
       hiveConfig_,
       ioStatistics_,
       ioStats_,
-      useExperimentalSplitReader_,
+      useExperimentalCudfReader_,
       subfieldFilterExpr_,
       &remainingFilterExprSet_,
       cudfExpressionEvaluator_,

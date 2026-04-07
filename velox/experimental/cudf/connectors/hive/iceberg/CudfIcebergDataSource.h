@@ -48,8 +48,8 @@ class CudfIcebergDataSource : public CudfHiveDataSource {
       const std::shared_ptr<const velox_hive::HiveConfig>& hiveConfig);
 
  protected:
-  // Override to create and use CudfIcebergSplitReader instead of
-  // CudfHiveSplitReader
+  // Override to create `CudfIcebergSplitReader` instead of
+  // `CudfHiveSplitReader`
   std::unique_ptr<CudfSplitReader> createCudfSplitReader() override;
 
   // Override to convert ConnectorSplit to `HiveIcebergSplit` and then to

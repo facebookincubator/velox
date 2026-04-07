@@ -80,7 +80,12 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   std::unordered_map<std::string, RuntimeMetric> getRuntimeStats() override;
 
  protected:
+  // Virtual method to create a `CudfSplitReader` or subclass for the data
+  // source.
   virtual std::unique_ptr<CudfSplitReader> createCudfSplitReader();
+
+  // Virtual method to convert the input `ConnectorSplit` to appropriate
+  // subclass(es).
   virtual void convertSplit(std::shared_ptr<ConnectorSplit> split);
 
   std::shared_ptr<CudfHiveConnectorSplit> split_;
@@ -110,7 +115,7 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
 
   std::unique_ptr<CudfSplitReader> cudfSplitReader_;
 
-  bool useExperimentalSplitReader_;
+  bool useExperimentalCudfReader_;
 
   std::unique_ptr<exec::ExprSet> remainingFilterExprSet_;
   std::shared_ptr<velox::cudf_velox::CudfExpression> cudfExpressionEvaluator_;

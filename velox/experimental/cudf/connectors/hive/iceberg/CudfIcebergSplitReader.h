@@ -56,7 +56,7 @@ class CudfIcebergSplitReader : public CudfSplitReader {
       const std::shared_ptr<const velox_hive::HiveConfig>& hiveConfig,
       const std::shared_ptr<io::IoStatistics>& ioStatistics,
       const std::shared_ptr<IoStats>& ioStats,
-      bool useExperimentalReader,
+      bool useExperimentalCudfReader,
       cudf::ast::expression const* subfieldFilterExpr,
       std::unique_ptr<exec::ExprSet>* remainingFilterExprSet,
       std::shared_ptr<CudfExpression> cudfExpressionEvaluator,

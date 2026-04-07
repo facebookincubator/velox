@@ -63,7 +63,7 @@ CudfSplitReader::CudfSplitReader(
     const std::shared_ptr<CudfHiveConfig>& cudfHiveConfig,
     const std::shared_ptr<io::IoStatistics>& ioStatistics,
     const std::shared_ptr<IoStats>& ioStats,
-    bool useExperimentalReader,
+    bool useExperimentalCudfReader,
     cudf::ast::expression const* subfieldFilterExpr,
     std::unique_ptr<exec::ExprSet>* remainingFilterExprSet,
     std::shared_ptr<CudfExpression> cudfExpressionEvaluator,
@@ -81,7 +81,7 @@ CudfSplitReader::CudfSplitReader(
       connectorQueryCtx_(connectorQueryCtx),
       cudfHiveConfig_(cudfHiveConfig),
       pool_(connectorQueryCtx->memoryPool()),
-      useExperimentalReader_(useExperimentalReader),
+      useExperimentalCudfReader_(useExperimentalCudfReader),
       ioStatistics_(ioStatistics),
       ioStats_(ioStats),
       baseReaderOpts_(pool_),
@@ -100,8 +100,8 @@ void CudfSplitReader::prepareSplit() {
   // Acquire a CUDA stream
   stream_ = cudfGlobalStreamPool().get_stream();
 
-  // Create a cudf split reader
-  if (useExperimentalReader_) {
+  // Create a cuDF split reader
+  if (useExperimentalCudfReader_) {
     createExperimentalReader();
     hybridScanState_ = std::make_unique<HybridScanState>();
   } else {
@@ -193,7 +193,7 @@ std::optional<RowVectorPtr> CudfSplitReader::next(uint64_t /*size*/) {
 }
 
 std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk() {
-  if (!useExperimentalReader_) {
+  if (!useExperimentalCudfReader_) {
     // Read table using the regular cudf parquet reader
     VELOX_CHECK_NOT_NULL(splitReader_, "cudf parquet reader not present");
 

@@ -158,8 +158,8 @@ CudfHiveDataSource::CudfHiveDataSource(
   ioStatistics_ = std::make_shared<io::IoStatistics>();
   ioStats_ = std::make_shared<facebook::velox::IoStats>();
 
-  // Whether to use the experimental split reader
-  useExperimentalSplitReader_ =
+  // Whether to use the experimental cuDF reader
+  useExperimentalCudfReader_ =
       cudfHiveConfig_->useExperimentalCudfReaderSession(
           connectorQueryCtx_->sessionProperties());
 }
@@ -176,7 +176,7 @@ std::unique_ptr<CudfSplitReader> CudfHiveDataSource::createCudfSplitReader() {
       cudfHiveConfig_,
       ioStatistics_,
       ioStats_,
-      useExperimentalSplitReader_,
+      useExperimentalCudfReader_,
       subfieldFilterExpr_,
       &remainingFilterExprSet_,
       cudfExpressionEvaluator_,
@@ -223,6 +223,7 @@ void CudfHiveDataSource::convertSplit(std::shared_ptr<ConnectorSplit> split) {
 }
 
 void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
+  // Virtual method for class-specific conversion of the split
   convertSplit(split);
 
   cudfSplitReader_ = createCudfSplitReader();
