@@ -27,6 +27,7 @@
 #include "velox/experimental/cudf/exec/CudfTopN.h"
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
+#include "velox/experimental/cudf/exec/Validation.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/exec/AssignUniqueId.h"
