@@ -178,6 +178,9 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
   // Filter related members
   /** @brief Whether filter has been initialized (deferred from constructor) */
   bool filterInitialized_{false};
+  /** @brief Whether to use AST-based filtering (false if filter spans both
+   * sides) */
+  bool useAstFilter_{true};
   /** @brief CUDF AST tree for join filter evaluation */
   cudf::ast::tree tree_;
   /** @brief Scalar values used in filter expressions */
