@@ -925,5 +925,86 @@ TEST_F(HiveConnectorTest, fileReadOpsTableIdentityPropagation) {
   ASSERT_EQ(captured.at(std::string(kTableNameKey)), "test_table");
 }
 
+/// Verifies that getRuntimeStats() merge logic allows IoStats (ReadFile-layer)
+/// to override the storageReadBytes value from IoStatistics (DWIO-level).
+TEST_F(HiveConnectorTest, ioStatsOverridesStorageReadBytes) {
+  // Step 1: Simulate DWIO-level IoStatistics with an inaccurate estimate.
+  auto ioStatistics = std::make_shared<io::IoStatistics>();
+  ioStatistics->read().increment(200); // DWIO estimate (undercounts gaps)
+
+  // Step 2: Simulate ReadFile-layer IoStats with ground-truth values.
+  IoStats ioStats;
+  ioStats.addCounter(
+      std::string(FileDataSource::kStorageReadBytes),
+      RuntimeCounter(50, RuntimeCounter::Unit::kBytes));
+  ioStats.addCounter(
+      "extentCacheHitBytes", RuntimeCounter(250, RuntimeCounter::Unit::kBytes));
+
+  // Replicate the merge logic from FileDataSource::getRuntimeStats().
+  std::unordered_map<std::string, RuntimeMetric> res;
+
+  // IoStatistics inserts first (Step 2 in getRuntimeStats).
+  res.insert(
+      {std::string(FileDataSource::kStorageReadBytes),
+       RuntimeMetric(
+           ioStatistics->read().sum(),
+           ioStatistics->read().count(),
+           ioStatistics->read().min(),
+           ioStatistics->read().max(),
+           RuntimeCounter::Unit::kBytes)});
+
+  // IoStats merge (Step 3 in getRuntimeStats) — override storageReadBytes.
+  const auto ioStatsMap = ioStats.stats();
+  for (const auto& [key, value] : ioStatsMap) {
+    if (key == FileDataSource::kStorageReadBytes) {
+      res[std::string(key)] = value;
+    } else {
+      res.emplace(key, value);
+    }
+  }
+
+  // Ground-truth storageReadBytes from IoStats should override DWIO estimate.
+  ASSERT_EQ(res.at("storageReadBytes").sum, 50);
+  ASSERT_EQ(res.at("storageReadBytes").unit, RuntimeCounter::Unit::kBytes);
+  // extentCacheHitBytes should be added as a new diagnostic counter.
+  ASSERT_EQ(res.at("extentCacheHitBytes").sum, 250);
+}
+
+/// Verifies that without IoStats override, storageReadBytes retains the
+/// IoStatistics value.
+TEST_F(HiveConnectorTest, storageReadBytesWithoutOverride) {
+  auto ioStatistics = std::make_shared<io::IoStatistics>();
+  ioStatistics->read().increment(200);
+
+  // IoStats has unrelated counters only — no storageReadBytes.
+  IoStats ioStats;
+  ioStats.addCounter(
+      "wsInRegionReadBytes", RuntimeCounter(300, RuntimeCounter::Unit::kBytes));
+
+  std::unordered_map<std::string, RuntimeMetric> res;
+  res.insert(
+      {std::string(FileDataSource::kStorageReadBytes),
+       RuntimeMetric(
+           ioStatistics->read().sum(),
+           ioStatistics->read().count(),
+           ioStatistics->read().min(),
+           ioStatistics->read().max(),
+           RuntimeCounter::Unit::kBytes)});
+
+  const auto ioStatsMap = ioStats.stats();
+  for (const auto& [key, value] : ioStatsMap) {
+    if (key == FileDataSource::kStorageReadBytes) {
+      res[std::string(key)] = value;
+    } else {
+      res.emplace(key, value);
+    }
+  }
+
+  // storageReadBytes should retain the IoStatistics value.
+  ASSERT_EQ(res.at("storageReadBytes").sum, 200);
+  // Unrelated IoStats counters should still be added.
+  ASSERT_EQ(res.at("wsInRegionReadBytes").sum, 300);
+}
+
 } // namespace
 } // namespace facebook::velox::connector::hive

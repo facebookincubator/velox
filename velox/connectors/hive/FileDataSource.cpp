@@ -341,60 +341,66 @@ FileDataSource::getRuntimeStats() {
   res.insert(
       {std::string(Connector::kIoWaitWallNanos),
        RuntimeMetric(
-           ioStatistics_->queryThreadIoLatencyUs().sum() * 1'000,
+           saturateCast(ioStatistics_->queryThreadIoLatencyUs().sum() * 1'000),
            ioStatistics_->queryThreadIoLatencyUs().count(),
-           ioStatistics_->queryThreadIoLatencyUs().min() * 1'000,
-           ioStatistics_->queryThreadIoLatencyUs().max() * 1'000,
+           saturateCast(ioStatistics_->queryThreadIoLatencyUs().min() * 1'000),
+           saturateCast(ioStatistics_->queryThreadIoLatencyUs().max() * 1'000),
            RuntimeCounter::Unit::kNanos)});
   // Breakdown of ioWaitWallNanos by I/O type
   if (ioStatistics_->storageReadLatencyUs().count() > 0) {
     res.insert(
         {std::string(Connector::kStorageReadWallNanos),
          RuntimeMetric(
-             ioStatistics_->storageReadLatencyUs().sum() * 1'000,
+             saturateCast(ioStatistics_->storageReadLatencyUs().sum() * 1'000),
              ioStatistics_->storageReadLatencyUs().count(),
-             ioStatistics_->storageReadLatencyUs().min() * 1'000,
-             ioStatistics_->storageReadLatencyUs().max() * 1'000,
+             saturateCast(ioStatistics_->storageReadLatencyUs().min() * 1'000),
+             saturateCast(ioStatistics_->storageReadLatencyUs().max() * 1'000),
              RuntimeCounter::Unit::kNanos)});
   }
   if (ioStatistics_->ssdCacheReadLatencyUs().count() > 0) {
     res.insert(
         {std::string(Connector::kSsdCacheReadWallNanos),
          RuntimeMetric(
-             ioStatistics_->ssdCacheReadLatencyUs().sum() * 1'000,
+             saturateCast(ioStatistics_->ssdCacheReadLatencyUs().sum() * 1'000),
              ioStatistics_->ssdCacheReadLatencyUs().count(),
-             ioStatistics_->ssdCacheReadLatencyUs().min() * 1'000,
-             ioStatistics_->ssdCacheReadLatencyUs().max() * 1'000,
+             saturateCast(ioStatistics_->ssdCacheReadLatencyUs().min() * 1'000),
+             saturateCast(ioStatistics_->ssdCacheReadLatencyUs().max() * 1'000),
              RuntimeCounter::Unit::kNanos)});
   }
   if (ioStatistics_->cacheWaitLatencyUs().count() > 0) {
     res.insert(
         {std::string(Connector::kCacheWaitWallNanos),
          RuntimeMetric(
-             ioStatistics_->cacheWaitLatencyUs().sum() * 1'000,
+             saturateCast(ioStatistics_->cacheWaitLatencyUs().sum() * 1'000),
              ioStatistics_->cacheWaitLatencyUs().count(),
-             ioStatistics_->cacheWaitLatencyUs().min() * 1'000,
-             ioStatistics_->cacheWaitLatencyUs().max() * 1'000,
+             saturateCast(ioStatistics_->cacheWaitLatencyUs().min() * 1'000),
+             saturateCast(ioStatistics_->cacheWaitLatencyUs().max() * 1'000),
              RuntimeCounter::Unit::kNanos)});
   }
   if (ioStatistics_->coalescedSsdLoadLatencyUs().count() > 0) {
     res.insert(
         {std::string(Connector::kCoalescedSsdLoadWallNanos),
          RuntimeMetric(
-             ioStatistics_->coalescedSsdLoadLatencyUs().sum() * 1'000,
+             saturateCast(
+                 ioStatistics_->coalescedSsdLoadLatencyUs().sum() * 1'000),
              ioStatistics_->coalescedSsdLoadLatencyUs().count(),
-             ioStatistics_->coalescedSsdLoadLatencyUs().min() * 1'000,
-             ioStatistics_->coalescedSsdLoadLatencyUs().max() * 1'000,
+             saturateCast(
+                 ioStatistics_->coalescedSsdLoadLatencyUs().min() * 1'000),
+             saturateCast(
+                 ioStatistics_->coalescedSsdLoadLatencyUs().max() * 1'000),
              RuntimeCounter::Unit::kNanos)});
   }
   if (ioStatistics_->coalescedStorageLoadLatencyUs().count() > 0) {
     res.insert(
         {std::string(Connector::kCoalescedStorageLoadWallNanos),
          RuntimeMetric(
-             ioStatistics_->coalescedStorageLoadLatencyUs().sum() * 1'000,
+             saturateCast(
+                 ioStatistics_->coalescedStorageLoadLatencyUs().sum() * 1'000),
              ioStatistics_->coalescedStorageLoadLatencyUs().count(),
-             ioStatistics_->coalescedStorageLoadLatencyUs().min() * 1'000,
-             ioStatistics_->coalescedStorageLoadLatencyUs().max() * 1'000,
+             saturateCast(
+                 ioStatistics_->coalescedStorageLoadLatencyUs().min() * 1'000),
+             saturateCast(
+                 ioStatistics_->coalescedStorageLoadLatencyUs().max() * 1'000),
              RuntimeCounter::Unit::kNanos)});
   }
   res.insert(
@@ -402,10 +408,10 @@ FileDataSource::getRuntimeStats() {
         RuntimeMetric(ioStatistics_->prefetch().count())},
        {std::string(kPrefetchBytes),
         RuntimeMetric(
-            ioStatistics_->prefetch().sum(),
+            saturateCast(ioStatistics_->prefetch().sum()),
             ioStatistics_->prefetch().count(),
-            ioStatistics_->prefetch().min(),
-            ioStatistics_->prefetch().max(),
+            saturateCast(ioStatistics_->prefetch().min()),
+            saturateCast(ioStatistics_->prefetch().max()),
             RuntimeCounter::Unit::kBytes)},
        {std::string(kTotalScanTime),
         RuntimeMetric(
@@ -425,10 +431,10 @@ FileDataSource::getRuntimeStats() {
     res.insert(
         {std::string(kStorageReadBytes),
          RuntimeMetric(
-             ioStatistics_->read().sum(),
+             saturateCast(ioStatistics_->read().sum()),
              ioStatistics_->read().count(),
-             ioStatistics_->read().min(),
-             ioStatistics_->read().max(),
+             saturateCast(ioStatistics_->read().min()),
+             saturateCast(ioStatistics_->read().max()),
              RuntimeCounter::Unit::kBytes)});
   }
   if (ioStatistics_->ssdRead().count() > 0) {
@@ -438,10 +444,10 @@ FileDataSource::getRuntimeStats() {
     res.insert(
         {std::string(kLocalReadBytes),
          RuntimeMetric(
-             ioStatistics_->ssdRead().sum(),
+             saturateCast(ioStatistics_->ssdRead().sum()),
              ioStatistics_->ssdRead().count(),
-             ioStatistics_->ssdRead().min(),
-             ioStatistics_->ssdRead().max(),
+             saturateCast(ioStatistics_->ssdRead().min()),
+             saturateCast(ioStatistics_->ssdRead().max()),
              RuntimeCounter::Unit::kBytes)});
   }
   if (ioStatistics_->ramHit().count() > 0) {
@@ -451,16 +457,23 @@ FileDataSource::getRuntimeStats() {
     res.insert(
         {std::string(kRamReadBytes),
          RuntimeMetric(
-             ioStatistics_->ramHit().sum(),
+             saturateCast(ioStatistics_->ramHit().sum()),
              ioStatistics_->ramHit().count(),
-             ioStatistics_->ramHit().min(),
-             ioStatistics_->ramHit().max(),
+             saturateCast(ioStatistics_->ramHit().min()),
+             saturateCast(ioStatistics_->ramHit().max()),
              RuntimeCounter::Unit::kBytes)});
   }
 
   const auto ioStatsMap = ioStats_->stats();
-  for (const auto& storageStats : ioStatsMap) {
-    res.emplace(storageStats.first, storageStats.second);
+  for (const auto& [key, value] : ioStatsMap) {
+    // IoStats may carry a ReadFile-layer storageReadBytes that reflects the
+    // actual bytes fetched from remote storage. Use it to override the
+    // DWIO-level estimate (IoStatistics).
+    if (key == kStorageReadBytes) {
+      res[std::string(key)] = value;
+    } else {
+      res.emplace(key, value);
+    }
   }
   return res;
 }

@@ -46,7 +46,9 @@ using TestRowType = variant;
 class ArraySortTest : public FunctionBaseTest,
                       public testing::WithParamInterface<TypeKind> {
  protected:
-  ArraySortTest() : numValues_(10), numVectors_(5) {}
+  ArraySortTest() : numValues_(10), numVectors_(5) {
+    options_.parseIntegerAsBigint = false;
+  }
 
   void SetUp() override;
 

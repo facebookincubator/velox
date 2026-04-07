@@ -1390,7 +1390,7 @@ CudfVectorPtr CudfHashAggregation::releaseAndResetPartialOutput() {
         std::string(exec::HashAggregation::kFlushTimes), RuntimeCounter(1));
     lockedStats->addRuntimeStat(
         std::string(exec::HashAggregation::kPartialAggregationPct),
-        RuntimeCounter(aggregationPct));
+        RuntimeCounter(saturateCast(aggregationPct)));
   }
 
   numInputRows_ = 0;
