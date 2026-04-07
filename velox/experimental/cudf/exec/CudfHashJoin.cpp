@@ -438,8 +438,7 @@ void CudfHashJoinProbe::initializeFilter() {
   // the operator instance.
   std::vector<velox::RowTypePtr> filterRowTypes{probeType_, buildType_};
   filterEvaluator_ = createCudfExpression(
-      exprs.exprs()[0],
-      facebook::velox::type::concatRowTypes(filterRowTypes));
+      exprs.exprs()[0], facebook::velox::type::concatRowTypes(filterRowTypes));
 
   // We don't need to get tables that contain conditional comparison columns
   // We'll pass the entire table. The ast will handle finding the required
