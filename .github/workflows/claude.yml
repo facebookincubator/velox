@@ -40,7 +40,7 @@ on:
   issue_comment:
     types: [created]
 
-  # Agent mode: manual trigger for testing (log-only unless MCP tools used)
+  # Agent mode: manual trigger for testing (log-only when dry_run is true)
   workflow_dispatch:
     inputs:
       pr_number:
@@ -57,6 +57,16 @@ on:
           - claude-sonnet-4-20250514
           - claude-4-0-sonnet-20250805
         default: claude-opus-4-6
+      additional_context:
+        description: Additional instructions for the review (e.g. focus on memory safety)
+        required: false
+        type: string
+        default: ''
+      dry_run:
+        description: Log review output only — do not post a comment on the PR
+        required: false
+        type: boolean
+        default: false
 
 # Restrict default permissions — jobs declare only what they need
 permissions:
@@ -93,22 +103,73 @@ jobs:
           ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}
           persist-credentials: false
 
+      # Build prompt and claude_args in bash to avoid format() curly-brace
+      # issues with user-supplied additional_context, and to keep the logic
+      # readable. Outputs are only set for workflow_dispatch; for
+      # issue_comment (tag mode), prompt stays empty so the action uses
+      # tag mode and CLAUDE.md provides skill routing.
+      - name: Build prompt and args
+        id: config
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          INPUT_PR_NUMBER: ${{ inputs.pr_number }}
+          INPUT_MODEL: ${{ inputs.model }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          INPUT_ADDITIONAL_CONTEXT: ${{ inputs.additional_context }}
+        run: |
+          # --- Prompt ---
+          PROMPT="Review the PR currently checked out in the Velox project current workspace. Use the /pr-review skill."
+
+          if [ "$INPUT_DRY_RUN" = "true" ]; then
+            PROMPT="$PROMPT Output the review to the workflow log only. Do NOT post any comments on the PR."
+          else
+            PROMPT="$PROMPT Post the final output as a comment on the original PR ${INPUT_PR_NUMBER}."
+          fi
+
+          if [ -n "$INPUT_ADDITIONAL_CONTEXT" ]; then
+            PROMPT="$PROMPT Additional reviewer instructions: ${INPUT_ADDITIONAL_CONTEXT}"
+          fi
+
+          # Write multi-line safe output
+          {
+            echo "prompt<<PROMPT_EOF"
+            echo "$PROMPT"
+            echo "PROMPT_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          # --- Allowed tools ---
+          TOOLS="Skill"
+
+          # Comment-posting tools only when NOT dry_run
+          if [ "$INPUT_DRY_RUN" != "true" ]; then
+            TOOLS="$TOOLS,Bash(gh pr comment:*)"
+            TOOLS="$TOOLS,mcp__github_inline_comment__create_inline_comment"
+          fi
+
+          # Read-only PR tools (always available for workflow_dispatch)
+          TOOLS="$TOOLS,Bash(gh pr diff:*),Bash(gh pr view:*)"
+
+          # Codebase exploration tools
+          TOOLS="$TOOLS,Read,Glob,Grep"
+
+          ARGS="--model ${INPUT_MODEL:-claude-opus-4-6} --allowedTools ${TOOLS}"
+          echo "claude_args=$ARGS" >> "$GITHUB_OUTPUT"
+
       - name: Run Claude Code
         uses: izaitsevfb/claude-code-action@ececd56fb999d06b4dd2477437bc408938295d76 # forked-pr-fix
         with:
           trigger_phrase: "@claude"
           # prompt is only set for workflow_dispatch (agent mode).
-          # For issue_comment (tag mode), prompt must be empty to avoid
-          # triggering agent mode
-          # CLAUDE.md provides skill routing instructions instead.
-          prompt: ${{ github.event_name == 'workflow_dispatch' && format('Review the PR currently checked out in the Velox project current workspace. Use the /pr-review skill and post the final output as a comment on the original PR {0}', inputs.pr_number) || '' }}
+          # For issue_comment (tag mode), prompt must be empty so the action
+          # uses tag mode; CLAUDE.md provides skill routing instead.
+          prompt: ${{ steps.config.outputs.prompt || '' }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          # Tool access:
+          # Tool access (workflow_dispatch uses computed args from setup step):
           #   - Skill: invoke /pr-review and /query skills
           #   - Read,Glob,Grep: codebase exploration (used by skills)
-          #   - mcp__github_inline_comment: post comments on specific PR lines
-          #   - workflow_dispatch adds: MCP comment tool + gh CLI for PR data
-          claude_args: "--model ${{ github.event_name == 'workflow_dispatch' && inputs.model || 'claude-opus-4-6' }} --allowedTools Skill,${{ github.event_name == 'workflow_dispatch' && 'mcp__github_comment__create_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),' || '' }}mcp__github_inline_comment__create_inline_comment,Read,Glob,Grep"
+          #   - mcp__github_inline_comment: post inline comments (excluded in dry_run)
+          #   - Bash(gh pr comment/diff/view): gh CLI for PR data (comment excluded in dry_run)
+          claude_args: ${{ steps.config.outputs.claude_args || '--model claude-opus-4-6 --allowedTools Skill,mcp__github_inline_comment__create_inline_comment,Read,Glob,Grep' }}
           settings: '{"alwaysThinkingEnabled": true}'
 
   # Notify unauthorized users who try to invoke @claude

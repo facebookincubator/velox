@@ -13,5 +13,6 @@
 # limitations under the License.
 
 add_library(velox_exec_prefixsort_test_lib EncoderTestUtils.cpp)
+velox_add_test_headers(velox_exec_prefixsort_test_lib EncoderTestUtils.h)
 
 target_link_libraries(velox_exec_prefixsort_test_lib velox_vector_test_lib)

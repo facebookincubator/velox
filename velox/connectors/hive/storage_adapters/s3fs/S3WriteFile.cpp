@@ -29,6 +29,7 @@
 #include <aws/s3/model/CreateMultipartUploadRequest.h>
 #include <aws/s3/model/HeadBucketRequest.h>
 #include <aws/s3/model/HeadObjectRequest.h>
+#include <aws/s3/model/PutObjectRequest.h>
 #include <aws/s3/model/UploadPartRequest.h>
 
 namespace facebook::velox::filesystems {
@@ -38,13 +39,14 @@ class S3WriteFile::Impl {
   explicit Impl(
       std::string_view path,
       Aws::S3::S3Client* client,
-      memory::MemoryPool* pool)
-      : client_(client), pool_(pool) {
+      memory::MemoryPool* pool,
+      size_t minPartSize)
+      : client_(client), pool_(pool), minPartSize_(minPartSize) {
     VELOX_CHECK_NOT_NULL(client);
     VELOX_CHECK_NOT_NULL(pool);
     getBucketAndKeyFromPath(path, bucket_, key_);
     currentPart_ = std::make_unique<dwio::common::DataBuffer<char>>(*pool_);
-    currentPart_->reserve(kPartUploadSize);
+    currentPart_->reserve(minPartSize_);
     // Check that the object doesn't exist, if it does throw an error.
     {
       Aws::S3::Model::HeadObjectRequest request;
@@ -77,31 +79,60 @@ class S3WriteFile::Impl {
             outcome, "Failed to create S3 bucket", bucket_, "");
       }
     }
-
-    // Initiate the multi-part upload.
-    {
-      Aws::S3::Model::CreateMultipartUploadRequest request;
-      request.SetBucket(awsString(bucket_));
-      request.SetKey(awsString(key_));
-
-      /// If we do not set anything then the SDK will default to application/xml
-      /// which confuses some tools
-      /// (https://github.com/apache/arrow/issues/11934). So we instead default
-      /// to application/octet-stream which is less misleading.
-      request.SetContentType(kApplicationOctetStream);
-      auto outcome = client_->CreateMultipartUpload(request);
-      VELOX_CHECK_AWS_OUTCOME(
-          outcome, "Failed initiating multiple part upload", bucket_, key_);
-      uploadState_.id = outcome.GetResult().GetUploadId();
-    }
-
     fileSize_ = 0;
+  }
+
+  void createMultipartUploadRequest() {
+    Aws::S3::Model::CreateMultipartUploadRequest request;
+    request.SetBucket(awsString(bucket_));
+    request.SetKey(awsString(key_));
+
+    /// If we do not set anything then the SDK will default to application/xml
+    /// which confuses some tools
+    /// (https://github.com/apache/arrow/issues/11934). So we instead default
+    /// to application/octet-stream which is less misleading.
+    request.SetContentType(kApplicationOctetStream);
+    auto outcome = client_->CreateMultipartUpload(request);
+    VELOX_CHECK_AWS_OUTCOME(
+        outcome, "Failed initiating multiple part upload", bucket_, key_);
+    uploadState_.id = outcome.GetResult().GetUploadId();
+  }
+
+  // This uploads the buffer as a single object. This is used if we deal with
+  // buffers smaller than min-part-size.
+
+  void putObjectRequest() {
+    Aws::S3::Model::PutObjectRequest request;
+    request.SetBucket(awsString(bucket_));
+    request.SetKey(awsString(key_));
+
+    /// If we do not set anything then the SDK will default to application/xml
+    /// which confuses some tools
+    /// (https://github.com/apache/arrow/issues/11934). So we instead default
+    /// to application/octet-stream which is less misleading.
+    request.SetContentType(kApplicationOctetStream);
+    request.SetContentLength(currentPart_->size());
+    request.SetBody(
+        std::make_shared<StringViewStream>(
+            currentPart_->data(), currentPart_->size()));
+    RECORD_METRIC_VALUE(kMetricS3StartedUploads);
+    auto outcome = client_->PutObject(request);
+    VELOX_CHECK_AWS_OUTCOME(
+        outcome, "Failed single object upload", bucket_, key_);
+    if (outcome.IsSuccess()) {
+      RECORD_METRIC_VALUE(kMetricS3SuccessfulUploads);
+    } else {
+      RECORD_METRIC_VALUE(kMetricS3FailedUploads);
+    }
   }
 
   // Appends data to the end of the file.
   void append(std::string_view data) {
     VELOX_CHECK(!closed(), "File is closed");
-    if (data.size() + currentPart_->size() >= kPartUploadSize) {
+    if (data.size() + currentPart_->size() > minPartSize_) {
+      if (uploadState_.partNumber == 0) {
+        createMultipartUploadRequest();
+      }
       upload(data);
     } else {
       // Append to current part.
@@ -113,16 +144,26 @@ class S3WriteFile::Impl {
   // No-op.
   void flush() {
     VELOX_CHECK(!closed(), "File is closed");
-    /// currentPartSize must be less than kPartUploadSize since
-    /// append() would have already flushed after reaching kUploadPartSize.
-    VELOX_CHECK_LT(currentPart_->size(), kPartUploadSize);
+    /// currentPartSize must be less than minPartSize_ since
+    /// append() would have already flushed after reaching minPartSize_.
+    VELOX_CHECK_LT(currentPart_->size(), minPartSize_);
   }
 
-  // Complete the multipart upload and close the file.
+  // Send the buffer in a single request or complete the multipart upload.
+  // Then close the file.
   void close() {
     if (closed()) {
       return;
     }
+    // If we haven't sent anything yet, that is the file is less then
+    // minFileSize_. lets put the object that is in the buffer.
+    if (uploadState_.partNumber == 0) {
+      // Send single request.
+      putObjectRequest();
+      currentPart_->clear();
+      return;
+    }
+
     RECORD_METRIC_VALUE(kMetricS3StartedUploads);
     uploadPart({currentPart_->data(), currentPart_->size()}, true);
     VELOX_CHECK_EQ(uploadState_.partNumber, uploadState_.completedParts.size());
@@ -158,7 +199,6 @@ class S3WriteFile::Impl {
   }
 
  private:
-  static constexpr int64_t kPartUploadSize = 10 * 1024 * 1024;
   static constexpr const char* kApplicationOctetStream =
       "application/octet-stream";
 
@@ -174,8 +214,8 @@ class S3WriteFile::Impl {
   };
   UploadState uploadState_;
 
-  // Data can be smaller or larger than the kPartUploadSize.
-  // Complete the currentPart_ and upload kPartUploadSize chunks of data.
+  // Data can be smaller or larger than the minPartSize_.
+  // Complete the currentPart_ and upload minPartSize_ chunks of data.
   // Save the remaining into currentPart_.
   void upload(const std::string_view data) {
     auto dataPtr = data.data();
@@ -186,18 +226,18 @@ class S3WriteFile::Impl {
     uploadPart({currentPart_->data(), currentPart_->size()});
     dataPtr += remainingBufferSize;
     dataSize -= remainingBufferSize;
-    while (dataSize > kPartUploadSize) {
-      uploadPart({dataPtr, kPartUploadSize});
-      dataPtr += kPartUploadSize;
-      dataSize -= kPartUploadSize;
+    while (dataSize > minPartSize_) {
+      uploadPart({dataPtr, minPartSize_});
+      dataPtr += minPartSize_;
+      dataSize -= minPartSize_;
     }
     // Stash the remaining at the beginning of currentPart.
     currentPart_->unsafeAppend(0, dataPtr, dataSize);
   }
 
   void uploadPart(const std::string_view part, bool isLast = false) {
-    // Only the last part can be less than kPartUploadSize.
-    VELOX_CHECK(isLast || (!isLast && (part.size() == kPartUploadSize)));
+    // Only the last part can be less than minPartSize_.
+    VELOX_CHECK(isLast || (!isLast && (part.size() == minPartSize_)));
     // Upload the part.
     {
       Aws::S3::Model::UploadPartRequest request;
@@ -232,13 +272,15 @@ class S3WriteFile::Impl {
   std::string bucket_;
   std::string key_;
   size_t fileSize_ = -1;
+  size_t minPartSize_;
 };
 
 S3WriteFile::S3WriteFile(
     std::string_view path,
     Aws::S3::S3Client* client,
-    memory::MemoryPool* pool) {
-  impl_ = std::make_shared<Impl>(path, client, pool);
+    memory::MemoryPool* pool,
+    size_t minPartSize) {
+  impl_ = std::make_shared<Impl>(path, client, pool, minPartSize);
 }
 
 void S3WriteFile::append(std::string_view data) {

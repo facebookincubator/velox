@@ -124,6 +124,10 @@ bool isAggregationSpillOperator(std::string_view operatorType) {
   return operatorType == OperatorType::kAggregation ||
       operatorType == OperatorType::kPartialAggregation;
 }
+
+bool isRowNumberSpillOperator(std::string_view operatorType) {
+  return operatorType == OperatorType::kRowNumber;
+}
 } // namespace
 
 std::optional<common::SpillConfig> DriverCtx::makeSpillConfig(
@@ -158,6 +162,11 @@ std::optional<common::SpillConfig> DriverCtx::makeSpillConfig(
         queryConfig.aggregationSpillFileCreateConfig();
     if (!aggregationConfig.empty()) {
       fileCreateConfig = aggregationConfig;
+    }
+  } else if (isRowNumberSpillOperator(operatorType)) {
+    const auto& rowNumberConfig = queryConfig.rowNumberSpillFileCreateConfig();
+    if (!rowNumberConfig.empty()) {
+      fileCreateConfig = rowNumberConfig;
     }
   }
 

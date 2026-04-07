@@ -16,6 +16,8 @@
 
 #include "velox/functions/remote/client/RemoteVectorFunction.h"
 
+#include <folly/coro/BlockingWait.h>
+
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/remote/if/GetSerde.h"
 #include "velox/type/fbhive/HiveTypeSerializer.h"
@@ -112,7 +114,7 @@ void RemoteVectorFunction::applyRemote(
 
   // Invoke function that communicates with the remote host.
   try {
-    remoteResponse = invokeRemoteFunction(request);
+    remoteResponse = folly::coro::blockingWait(invokeRemoteFunction(request));
   } catch (const std::exception& e) {
     VELOX_FAIL(
         "Error while executing remote function '{}' at '{}': {}",
@@ -143,7 +145,7 @@ void RemoteVectorFunction::applyRemote(
         return;
       }
       try {
-        throw std::runtime_error(std::string(errorsVector->valueAt(i)));
+        VELOX_USER_FAIL("{}", errorsVector->valueAt(i));
       } catch (const std::exception&) {
         context.setError(i, std::current_exception());
       }

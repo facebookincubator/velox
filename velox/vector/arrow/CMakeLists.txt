@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-velox_add_library(velox_arrow_bridge Bridge.cpp)
+velox_add_library(velox_arrow_bridge Bridge.cpp HEADERS Abi.h Bridge.h)
 
 velox_link_libraries(velox_arrow_bridge velox_memory velox_type velox_buffer velox_exception)
 

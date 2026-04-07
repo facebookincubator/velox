@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(velox_functions_iceberg_hash Murmur3Hash32.cpp)
+velox_add_library(velox_functions_iceberg_hash Murmur3Hash32.cpp HEADERS Murmur3Hash32.h)
 
 velox_link_libraries(velox_functions_iceberg_hash velox_common_base velox_functions_util)
 
@@ -22,6 +22,12 @@ velox_add_library(
   DateTimeFunctions.cpp
   Register.cpp
   Truncate.cpp
+  HEADERS
+  BucketFunction.h
+  DateTimeFunctions.h
+  DateTimeUtil.h
+  Register.h
+  Truncate.h
 )
 
 velox_link_libraries(

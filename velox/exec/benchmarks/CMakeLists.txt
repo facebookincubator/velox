@@ -109,6 +109,7 @@ if(${VELOX_ENABLE_PARQUET})
 endif()
 
 add_library(velox_orderby_benchmark_util OrderByBenchmarkUtil.cpp)
+velox_add_test_headers(velox_orderby_benchmark_util OrderByBenchmarkUtil.h)
 
 target_link_libraries(velox_orderby_benchmark_util velox_vector_fuzzer velox_vector_test_lib)
 
@@ -158,6 +159,16 @@ target_link_libraries(
   velox_vector_fuzzer
   velox_vector_test_lib
   velox_window
+  Folly::follybenchmark
+)
+
+add_executable(velox_mark_sorted_benchmark MarkSortedBenchmark.cpp)
+
+target_link_libraries(
+  velox_mark_sorted_benchmark
+  velox_exec
+  velox_exec_test_lib
+  velox_vector_test_lib
   Folly::follybenchmark
 )
 

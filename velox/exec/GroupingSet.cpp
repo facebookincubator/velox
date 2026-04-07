@@ -970,8 +970,11 @@ void GroupingSet::ensureInputFits(const RowVectorPtr& input) {
   }
   LOG(WARNING) << "Failed to reserve " << succinctBytes(targetIncrementBytes)
                << " for memory pool " << pool_->name()
-               << ", usage: " << succinctBytes(pool_->usedBytes())
-               << ", reservation: " << succinctBytes(pool_->reservedBytes());
+               << ", root pool: " << pool_->root()->name()
+               << ", used: " << succinctBytes(pool_->usedBytes())
+               << ", reservation: " << succinctBytes(pool_->reservedBytes())
+               << ", root pool reservation: "
+               << succinctBytes(pool_->root()->reservedBytes());
 }
 
 void GroupingSet::ensureOutputFits() {
@@ -1010,8 +1013,11 @@ void GroupingSet::ensureOutputFits() {
   LOG(WARNING) << "Failed to reserve "
                << succinctBytes(outputBufferSizeToReserve)
                << " for memory pool " << pool_->name()
-               << ", usage: " << succinctBytes(pool_->usedBytes())
-               << ", reservation: " << succinctBytes(pool_->reservedBytes());
+               << ", root pool: " << pool_->root()->name()
+               << ", used: " << succinctBytes(pool_->usedBytes())
+               << ", reservation: " << succinctBytes(pool_->reservedBytes())
+               << ", root pool reservation: "
+               << succinctBytes(pool_->root()->reservedBytes());
 }
 
 RowTypePtr GroupingSet::makeSpillType() const {
@@ -1139,6 +1145,7 @@ bool GroupingSet::getOutputWithSpill(
           false,
           false,
           false,
+          false, // hasCountFlag
           false,
           false,
           pool_);
@@ -1491,6 +1498,7 @@ void GroupingSet::abandonPartialAggregation() {
       false,
       false,
       false,
+      false, // hasCountFlag
       false,
       false,
       pool_);

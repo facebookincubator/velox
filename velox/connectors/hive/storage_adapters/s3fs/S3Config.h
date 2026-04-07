@@ -77,6 +77,7 @@ class S3Config {
     kUseProxyFromEnv,
     kCredentialsProvider,
     kIMDSEnabled,
+    kMultipartMinPartSize,
     kEnd
   };
 
@@ -116,6 +117,8 @@ class S3Config {
             {Keys::kCredentialsProvider,
              std::make_pair("aws-credentials-provider", std::nullopt)},
             {Keys::kIMDSEnabled, std::make_pair("aws-imds-enabled", "true")},
+            {Keys::kMultipartMinPartSize,
+             std::make_pair("min-part-size", "10MB")},
         };
     return config;
   }
@@ -250,6 +253,8 @@ class S3Config {
     auto value = config_.find(Keys::kIMDSEnabled)->second.value();
     return folly::to<bool>(value);
   }
+
+  size_t minPartSize() const;
 
  private:
   std::unordered_map<Keys, std::optional<std::string>> config_;

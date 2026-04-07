@@ -45,7 +45,7 @@ class ConfigBase;
 
 namespace facebook::velox::core {
 class ITypedExpr;
-}
+} // namespace facebook::velox::core
 
 namespace facebook::velox::core {
 struct IndexLookupCondition;
@@ -413,6 +413,15 @@ class IndexSource {
   virtual std::shared_ptr<ResultIterator> lookup(const Request& request) = 0;
 
   virtual std::unordered_map<std::string, RuntimeMetric> runtimeStats() = 0;
+
+  /// Defines stat names for IndexSource operator stats tracking.
+  static constexpr std::string_view kOutputPositions{
+      "indexSourceOutputPositions"};
+  static constexpr std::string_view kOutputBytes{"indexSourceOutputBytes"};
+  static constexpr std::string_view kOutputVectors{"indexSourceOutputVectors"};
+  static constexpr std::string_view kInputPositions{
+      "indexSourceInputPositions"};
+  static constexpr std::string_view kInputBytes{"indexSourceInputBytes"};
 };
 
 /// Collection of context data for use in a DataSource, IndexSource or DataSink.
@@ -759,26 +768,18 @@ class Connector {
       trackers_;
 };
 
-/// Adds connector instance to the registry using connector ID as the key.
-/// Throws if connector with the same ID is already present. Always returns
-/// true. The return value makes it easy to use with FB_ANONYMOUS_VARIABLE.
-bool registerConnector(std::shared_ptr<Connector> connector);
+/// Deprecated free functions. Use ConnectorRegistry methods instead.
 
-/// Returns true if a connector with the specified ID has been registered, false
-/// otherwise.
+[[deprecated("Use ConnectorRegistry::global().insert() instead.")]]
+bool registerConnector(const std::shared_ptr<Connector>& connector);
+
+[[deprecated("Use ConnectorRegistry::tryGet() instead.")]]
 bool hasConnector(const std::string& connectorId);
 
-/// Removes the connector with specified ID from the registry. Returns true
-/// if connector was removed and false if connector didn't exist.
+[[deprecated("Use ConnectorRegistry::global().erase() instead.")]]
 bool unregisterConnector(const std::string& connectorId);
 
-/// Returns a connector with specified ID. Throws if connector doesn't
-/// exist.
+[[deprecated("Use ConnectorRegistry::tryGet() instead.")]]
 std::shared_ptr<Connector> getConnector(const std::string& connectorId);
-
-/// Returns a map of all (connectorId -> connector) pairs currently
-/// registered.
-const std::unordered_map<std::string, std::shared_ptr<Connector>>&
-getAllConnectors();
 
 } // namespace facebook::velox::connector

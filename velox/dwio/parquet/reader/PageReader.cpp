@@ -508,6 +508,7 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
       auto numParquetBytes = dictionary_.numValues * parquetTypeLength;
       auto veloxTypeLength = type_->type()->cppSizeInBytes();
       auto numVeloxBytes = dictionary_.numValues * veloxTypeLength;
+      VELOX_CHECK_LE(numParquetBytes, numVeloxBytes);
       dictionary_.values = AlignedBuffer::allocate<char>(numVeloxBytes, &pool_);
       auto data = dictionary_.values->asMutable<char>();
       // Read the data bytes.

@@ -21,6 +21,9 @@
 
 namespace facebook::velox::filesystems {
 
+static constexpr size_t kMinimumMultipartMinPartSize = 5U << 20; // 5MB
+static constexpr size_t kMaximumMultipartMinPartSize = 5U << 30; // 5GB
+
 std::string S3Config::cacheKey(
     std::string_view bucket,
     std::shared_ptr<const config::ConfigBase> config) {
@@ -72,6 +75,15 @@ S3Config::S3Config(
   }
   payloadSigningPolicy_ =
       properties->get<std::string>(kS3PayloadSigningPolicy, "Never");
+
+  VELOX_CHECK_GE(
+      minPartSize(),
+      kMinimumMultipartMinPartSize,
+      "The min-part-size S3 configuration must exceed 5MB.");
+  VELOX_CHECK_LE(
+      minPartSize(),
+      kMaximumMultipartMinPartSize,
+      "The min-part-size S3 configuration must not exceed 5GB.");
 }
 
 std::optional<std::string> S3Config::endpointRegion() const {
@@ -85,6 +97,12 @@ std::optional<std::string> S3Config::endpointRegion() const {
     }
   }
   return region;
+}
+
+size_t S3Config::minPartSize() const {
+  return config::toCapacity(
+      config_.find(Keys::kMultipartMinPartSize)->second.value(),
+      config::CapacityUnit::BYTE);
 }
 
 } // namespace facebook::velox::filesystems

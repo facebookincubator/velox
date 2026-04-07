@@ -42,7 +42,8 @@ function(pyvelox_add_module TARGET)
   install(TARGETS ${TARGET} LIBRARY DESTINATION pyvelox COMPONENT pyvelox_libraries)
 endfunction()
 
-# TODO use file sets
+# Glob-based header install fallback. Kept for directories that have not yet
+# migrated to the HEADERS keyword in velox_add_library (which uses FILE_SET).
 function(velox_install_library_headers)
   # Find any headers and install them relative to the source tree in include.
   file(GLOB _hdrs "*.h")
@@ -57,6 +58,28 @@ function(velox_install_library_headers)
   endif()
 endfunction()
 
+# Associate headers with test/benchmark/fuzzer targets via FILE_SET for CMake
+# File API discoverability. For production libraries use the HEADERS keyword
+# in velox_add_library() instead.
+function(velox_add_test_headers TARGET)
+  get_target_property(_type ${TARGET} TYPE)
+  if(_type STREQUAL "INTERFACE_LIBRARY")
+    set(_scope INTERFACE)
+  else()
+    set(_scope PUBLIC)
+  endif()
+
+  target_sources(
+    ${TARGET}
+    ${_scope}
+    FILE_SET HEADERS
+    BASE_DIRS
+    ${PROJECT_SOURCE_DIR}
+    FILES
+    ${ARGN}
+  )
+endfunction()
+
 # Base add velox library call to add a library and install it.
 function(velox_base_add_library TARGET)
   add_library(${TARGET} ${ARGN})
@@ -68,10 +91,9 @@ endfunction()
 function(velox_add_library TARGET)
   set(options OBJECT STATIC SHARED INTERFACE)
   set(oneValueArgs)
-  set(multiValueArgs)
+  set(multiValueArgs HEADERS)
   cmake_parse_arguments(VELOX "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
-  # Remove library type specifiers from ARGN
   set(library_type)
   if(VELOX_OBJECT)
     set(library_type OBJECT)
@@ -83,15 +105,13 @@ function(velox_add_library TARGET)
     set(library_type INTERFACE)
   endif()
 
-  list(REMOVE_ITEM ARGN OBJECT)
-  list(REMOVE_ITEM ARGN STATIC)
-  list(REMOVE_ITEM ARGN SHARED)
-  list(REMOVE_ITEM ARGN INTERFACE)
+  set(_sources ${VELOX_UNPARSED_ARGUMENTS})
+
   # Propagate to the underlying add_library and then install the target.
   if(VELOX_MONO_LIBRARY)
     if(TARGET velox)
       # Target already exists, append sources to it.
-      target_sources(velox PRIVATE ${ARGN})
+      target_sources(velox PRIVATE ${_sources})
       if(VELOX_BUILD_PYTHON_PACKAGE)
         install(TARGETS velox LIBRARY DESTINATION pyvelox COMPONENT pyvelox_libraries)
       endif()
@@ -101,7 +121,7 @@ function(velox_add_library TARGET)
         set(_type SHARED)
       endif()
       # Create the target if this is the first invocation.
-      add_library(velox ${_type} ${ARGN})
+      add_library(velox ${_type} ${_sources})
       set_target_properties(velox PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib)
       set_target_properties(velox PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib)
       install(TARGETS velox DESTINATION lib/velox EXPORT velox_targets)
@@ -159,8 +179,36 @@ function(velox_add_library TARGET)
     endif()
   else()
     # Create a library for each invocation.
-    velox_base_add_library(${TARGET} ${library_type} ${ARGN})
+    velox_base_add_library(${TARGET} ${library_type} ${_sources})
   endif()
+
+  # Associate headers with the target via FILE_SET for tracking and IDE
+  # integration. The glob-based velox_install_library_headers() remains as
+  # fallback for directories that have not yet listed their headers explicitly.
+  if(VELOX_HEADERS)
+    if(VELOX_MONO_LIBRARY)
+      set(_header_target velox)
+      # The velox target is a real (non-INTERFACE) library, so always use PUBLIC.
+      set(_header_scope PUBLIC)
+    else()
+      set(_header_target ${TARGET})
+      if(VELOX_INTERFACE)
+        set(_header_scope INTERFACE)
+      else()
+        set(_header_scope PUBLIC)
+      endif()
+    endif()
+    target_sources(
+      ${_header_target}
+      ${_header_scope}
+      FILE_SET HEADERS
+      BASE_DIRS
+      ${PROJECT_SOURCE_DIR}
+      FILES
+      ${VELOX_HEADERS}
+    )
+  endif()
+
   velox_install_library_headers()
 endfunction()
 
@@ -219,4 +267,55 @@ function(velox_sources TARGET)
   else()
     target_sources(${TARGET} ${ARGN})
   endif()
+endfunction()
+
+# Number of test source files per grouped test binary. Controls the trade-off
+# between link time (fewer groups = faster linking) and ctest parallelism
+# (more groups = more parallel test processes). Set to 1 for per-file binaries.
+set(VELOX_TESTS_PER_GROUP 10 CACHE STRING "Number of test source files per grouped test binary")
+
+# Creates grouped test binaries from a list of test sources. Groups tests into
+# batches of VELOX_TESTS_PER_GROUP to reduce link target count while
+# maintaining ctest parallelism.
+#
+# Usage:
+#   velox_add_grouped_tests(
+#     PREFIX velox_exec
+#     SOURCES ${MY_SOURCES}
+#     DEPS ${MY_DEPS}
+#     [EXTRA_SOURCES Main.cpp]
+#     [WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}]
+#   )
+function(velox_add_grouped_tests)
+  cmake_parse_arguments(ARG "" "PREFIX;WORKING_DIRECTORY" "SOURCES;DEPS;EXTRA_SOURCES" ${ARGN})
+
+  if(NOT ARG_WORKING_DIRECTORY)
+    set(ARG_WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+  endif()
+
+  list(LENGTH ARG_SOURCES _num_sources)
+  math(
+    EXPR
+    _num_groups
+    "(${_num_sources} + ${VELOX_TESTS_PER_GROUP} - 1) / ${VELOX_TESTS_PER_GROUP}"
+  )
+
+  set(_idx 0)
+  set(_group 0)
+  set(_current_sources "")
+
+  foreach(_source IN LISTS ARG_SOURCES)
+    list(APPEND _current_sources ${_source})
+    math(EXPR _idx "${_idx} + 1")
+    math(EXPR _group_end "(${_group} + 1) * ${VELOX_TESTS_PER_GROUP}")
+
+    if(_idx GREATER_EQUAL _group_end OR _idx EQUAL _num_sources)
+      set(_target "${ARG_PREFIX}_group${_group}")
+      add_executable(${_target} ${_current_sources} ${ARG_EXTRA_SOURCES})
+      add_test(NAME ${_target} COMMAND ${_target} WORKING_DIRECTORY ${ARG_WORKING_DIRECTORY})
+      target_link_libraries(${_target} ${ARG_DEPS})
+      set(_current_sources "")
+      math(EXPR _group "${_group} + 1")
+    endif()
+  endforeach()
 endfunction()

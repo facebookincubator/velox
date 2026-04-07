@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <folly/coro/Task.h>
+
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/remote/if/gen-cpp2/RemoteFunction_types.h"
 #include "velox/vector/VectorStream.h"
@@ -49,9 +51,11 @@ class RemoteVectorFunction : public exec::VectorFunction {
       VectorPtr& result) const override;
 
  protected:
-  // The actual function to communicates with the remote host.
-  virtual std::unique_ptr<remote::RemoteFunctionResponse> invokeRemoteFunction(
-      const remote::RemoteFunctionRequest& request) const = 0;
+  // The actual function that communicates with the remote host.
+  // Returns a coroutine to allow the worker thread to yield while
+  // waiting for the remote response
+  virtual folly::coro::Task<std::unique_ptr<remote::RemoteFunctionResponse>>
+  invokeRemoteFunction(const remote::RemoteFunctionRequest& request) const = 0;
 
   // A string representation of the remote host being connected to. Useful for
   // exception messages.

@@ -121,7 +121,7 @@ function install_protobuf {
 }
 
 function install_grpc {
-  github_checkout grpc/grpc "${GRPC_VERSION}" --depth 1
+  wget_and_untar https://github.com/grpc/grpc/archive/refs/tags/v"${GRPC_VERSION}".tar.gz grpc
   cmake_install_dir grpc \
     -DgRPC_BUILD_TESTS=OFF \
     -DgRPC_ABSL_PROVIDER=package \
@@ -335,19 +335,19 @@ function install_gcs_sdk_cpp {
   install_grpc
 
   # crc32
-  github_checkout google/crc32c "${CRC32_VERSION}" --depth 1
+  wget_and_untar https://github.com/google/crc32c/archive/refs/tags/"${CRC32_VERSION}".tar.gz crc32c
   cmake_install_dir crc32c \
     -DCRC32C_BUILD_TESTS=OFF \
     -DCRC32C_BUILD_BENCHMARKS=OFF \
     -DCRC32C_USE_GLOG=OFF
 
   # nlohmann json
-  github_checkout nlohmann/json "${NLOHMAN_JSON_VERSION}" --depth 1
+  wget_and_untar https://github.com/nlohmann/json/archive/refs/tags/v"${NLOHMAN_JSON_VERSION}".tar.gz json
   cmake_install_dir json \
     -DJSON_BuildTests=OFF
 
   # google-cloud-cpp
-  github_checkout googleapis/google-cloud-cpp "${GOOGLE_CLOUD_CPP_VERSION}" --depth 1
+  wget_and_untar https://github.com/googleapis/google-cloud-cpp/archive/refs/tags/v"${GOOGLE_CLOUD_CPP_VERSION}".tar.gz google-cloud-cpp
   cmake_install_dir google-cloud-cpp \
     -DGOOGLE_CLOUD_CPP_ENABLE_EXAMPLES=OFF \
     -DGOOGLE_CLOUD_CPP_ENABLE=storage
@@ -404,6 +404,8 @@ function install_hdfs_deps {
   wget_and_untar https://dlcdn.apache.org/hadoop/common/hadoop-"${HADOOP_VERSION}"/hadoop-"${HADOOP_VERSION}".tar.gz hadoop
   cp -a "${DEPENDENCY_DIR}"/hadoop "$INSTALL_PREFIX"
   wget "${WGET_OPTS[@]}" -P "$INSTALL_PREFIX"/hadoop/share/hadoop/common/lib/ https://repo1.maven.org/maven2/junit/junit/4.11/junit-4.11.jar
+  # Needed for HADOOP 3.3.6 minicluster. Can remove after updating to 3.4.2.
+  wget "${WGET_OPTS[@]}" -P "$INSTALL_PREFIX"/hadoop/share/hadoop/mapreduce/ https://repo1.maven.org/maven2/org/mockito/mockito-core/2.23.4/mockito-core-2.23.4.jar
 }
 
 function install_uv {

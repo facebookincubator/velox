@@ -626,3 +626,9 @@ target_link_libraries(
   ZLIB::ZLIB
   ${TEST_LINK_LIBS}
 )
+
+velox_add_library(velox_test_column_statistics_base INTERFACE HEADERS ColumnStatisticsBase.h)
+
+velox_add_library(velox_test-read-file INTERFACE HEADERS TestReadFile.h)
+
+velox_add_library(velox_orc-test INTERFACE HEADERS OrcTest.h)

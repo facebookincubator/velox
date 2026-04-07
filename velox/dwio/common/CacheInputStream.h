@@ -78,7 +78,18 @@ class CacheInputStream : public SeekableInputStream {
         groupId_,
         loadQuantum_);
     copy->position_ = position_;
+    if (preloaded_) {
+      copy->setPreloadedPin(pin_);
+    }
     return copy;
+  }
+
+  /// Sets the stream to serve data from a preloaded whole-file cache entry.
+  /// The pin is copied so the stream can outlive the CachedBufferedInput. When
+  /// set, the stream skips coalesced loading, prefetching, and eviction.
+  void setPreloadedPin(cache::CachePin pin) {
+    pin_ = std::move(pin);
+    preloaded_ = true;
   }
 
   /// Sets the stream to range over a window that starts at the current position
@@ -174,6 +185,10 @@ class CacheInputStream : public SeekableInputStream {
   // Percentage of 'loadQuantum_' at which the next load quantum gets scheduled.
   // Over 100 means no prefetch.
   int32_t prefetchPct_{200};
+
+  // True if this stream serves data from a preloaded whole-file cache entry.
+  // When set, loading, prefetching, and eviction are all skipped.
+  bool preloaded_{false};
 
   // True if prefetch the next 'loadQuantum_' has been started. Cleared when
   // moving to the next load quantum.

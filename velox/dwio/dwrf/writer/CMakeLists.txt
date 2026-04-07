@@ -25,6 +25,24 @@ velox_add_library(
   WriterBase.cpp
   WriterContext.cpp
   WriterSink.cpp
+  HEADERS
+  ColumnWriter.h
+  DictionaryEncodingUtils.h
+  EntropyEncodingSelector.h
+  FlatMapColumnWriter.h
+  FlushPolicy.h
+  IndexBuilder.h
+  IntegerDictionaryEncoder.h
+  LayoutPlanner.h
+  PhysicalSizeAggregator.h
+  RatioTracker.h
+  StatisticsBuilder.h
+  StatisticsBuilderUtils.h
+  StringDictionaryEncoder.h
+  Writer.h
+  WriterBase.h
+  WriterContext.h
+  WriterSink.h
 )
 
 velox_link_libraries(

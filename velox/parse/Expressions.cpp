@@ -159,4 +159,34 @@ std::string LambdaExpr::toString() const {
   return out.str();
 }
 
+std::string ConcatExpr::toString() const {
+  std::ostringstream out;
+  out << "row(";
+  for (size_t i = 0; i < inputs().size(); ++i) {
+    if (i > 0) {
+      out << ", ";
+    }
+    out << inputs()[i]->toString() << " as " << fieldNames_[i];
+  }
+  out << ")";
+  return appendAliasIfExists(out.str());
+}
+
+bool ConcatExpr::operator==(const IExpr& other) const {
+  if (!other.is(Kind::kConcat)) {
+    return false;
+  }
+  auto* otherConcat = other.as<ConcatExpr>();
+  return fieldNames_ == otherConcat->fieldNames_ &&
+      compareAliasAndInputs(other);
+}
+
+size_t ConcatExpr::localHash() const {
+  size_t hash = 0;
+  for (const auto& name : fieldNames_) {
+    hash = bits::hashMix(hash, std::hash<std::string>{}(name));
+  }
+  return hash;
+}
+
 } // namespace facebook::velox::core

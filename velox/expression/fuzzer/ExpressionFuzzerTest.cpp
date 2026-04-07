@@ -24,7 +24,7 @@
 #include "velox/expression/fuzzer/FuzzerRunner.h"
 #include "velox/expression/fuzzer/SpecialFormSignatureGenerator.h"
 #include "velox/functions/prestosql/fuzzer/DivideArgTypesGenerator.h"
-#include "velox/functions/prestosql/fuzzer/FloorAndRoundArgTypesGenerator.h"
+#include "velox/functions/prestosql/fuzzer/FloorCeilRoundArgTypesGenerator.h"
 #include "velox/functions/prestosql/fuzzer/ModulusArgTypesGenerator.h"
 #include "velox/functions/prestosql/fuzzer/MultiplyArgTypesGenerator.h"
 #include "velox/functions/prestosql/fuzzer/PlusMinusArgTypesGenerator.h"
@@ -76,8 +76,9 @@ std::unordered_map<std::string, std::shared_ptr<ArgTypesGenerator>>
         {"minus", std::make_shared<PlusMinusArgTypesGenerator>()},
         {"multiply", std::make_shared<MultiplyArgTypesGenerator>()},
         {"divide", std::make_shared<DivideArgTypesGenerator>()},
-        {"floor", std::make_shared<FloorAndRoundArgTypesGenerator>()},
-        {"round", std::make_shared<FloorAndRoundArgTypesGenerator>()},
+        {"floor", std::make_shared<FloorCeilRoundArgTypesGenerator>()},
+        {"ceil", std::make_shared<FloorCeilRoundArgTypesGenerator>()},
+        {"round", std::make_shared<FloorCeilRoundArgTypesGenerator>()},
         {"mod", std::make_shared<ModulusArgTypesGenerator>()},
         {"truncate", std::make_shared<TruncateArgTypesGenerator>()},
         // Block IPADDRESS in containers for functions whose hash-based
@@ -178,7 +179,7 @@ std::unordered_set<std::string> skipFunctions = {
     "uniqueness_distribution(khyperloglog,bigint) -> map(bigint,double)",
     "merge_khll(array(khyperloglog)) -> khyperloglog",
     // Fuzzer cannot generate valid 'comparator' lambda.
-    "array_sort(array(T),constant function(T,T,bigint)) -> array(T)",
+    "array_sort(array(T),constant function(T,T,integer)) -> array(T)",
     "array_sort(array(T),constant function(T,U)) -> array(T)",
     "array_sort_desc(array(T),constant function(T,U)) -> array(T)",
     "split_to_map(varchar,varchar,varchar,function(varchar,varchar,varchar,varchar)) -> map(varchar,varchar)",
@@ -306,6 +307,7 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "array_subset", // Velox-only function, not available in Presto
     "map_values_in_range", // Velox-only function, not available in Presto
     "transform_with_index", // Velox-only function, not available in Presto
+    "dot_product", // Velox-only function, not available in Presto
     "remap_keys", // Velox-only function, not available in Presto
     "map_intersect", // Velox-only function, not available in Presto
     "map_keys_overlap", // Velox-only function, not available in Presto
@@ -480,6 +482,7 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "uniqueness_distribution(khyperloglog) -> map(bigint,double)",
     "uniqueness_distribution(khyperloglog,bigint) -> map(bigint,double)",
     "merge_khll(array(khyperloglog)) -> khyperloglog",
+    "pmod", // Not available in Presto
 };
 
 int main(int argc, char** argv) {
