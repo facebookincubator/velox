@@ -83,6 +83,11 @@ std::optional<Coercion> TypeCoercer::coerceTypeBase(
   }
 
   // Fall back to CastRulesRegistry for custom type coercions.
+  // TODO: getCustomType() returns nullptr for built-in types (e.g., DOUBLE,
+  // VARCHAR), so registry rules between built-in pairs are invisible here.
+  // Switching to getType() would fix this, but getType("ARRAY", {}) and
+  // getType("ROW", {}) throw because parametric factories require params.
+  // Requires a try/catch guard or a non-throwing getType variant.
   if (fromType->size() == 0) {
     auto toType = getCustomType(toTypeName, {});
     if (toType != nullptr) {

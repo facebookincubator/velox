@@ -19,6 +19,7 @@
 #include "velox/common/fuzzer/ConstrainedGenerators.h"
 #include "velox/functions/prestosql/types/JsonCastOperator.h"
 #include "velox/functions/prestosql/types/JsonType.h"
+#include "velox/type/CastRegistry.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox {
@@ -64,5 +65,86 @@ class JsonTypeFactory : public CustomTypeFactory {
 
 void registerJsonType() {
   registerCustomType("json", std::make_unique<const JsonTypeFactory>());
+  // Register primitive cast rules only. Container types (ARRAY, MAP, ROW)
+  // are cross-type casts (e.g. ARRAY -> JSON), which the registry cannot
+  // resolve via its same-base-type recursive logic. These are handled at
+  // runtime by JsonCastOperator::isSupportedFromType/isSupportedToType.
+  registerCastRules({
+      // TO JSON (from primitive types).
+      {.fromType = "UNKNOWN",
+       .toType = "JSON",
+       .implicitAllowed = false,
+       .validator = {}},
+      {.fromType = "BOOLEAN",
+       .toType = "JSON",
+       .implicitAllowed = false,
+       .validator = {}},
+      {.fromType = "TINYINT",
+       .toType = "JSON",
+       .implicitAllowed = false,
+       .validator = {}},
+      {.fromType = "SMALLINT",
+       .toType = "JSON",
+       .implicitAllowed = false,
+       .validator = {}},
+      {.fromType = "INTEGER",
+       .toType = "JSON",
+       .implicitAllowed = false,
+       .validator = {}},
+      {.fromType = "BIGINT",
+       .toType = "JSON",
+       .implicitAllowed = false,
+       .validator = {}},
+      {.fromType = "REAL",
+       .toType = "JSON",
+       .implicitAllowed = false,
+       .validator = {}},
+      {.fromType = "DOUBLE",
+       .toType = "JSON",
+       .implicitAllowed = false,
+       .validator = {}},
+      {.fromType = "VARCHAR",
+       .toType = "JSON",
+       .implicitAllowed = false,
+       .validator = {}},
+      {.fromType = "TIMESTAMP",
+       .toType = "JSON",
+       .implicitAllowed = false,
+       .validator = {}},
+      // FROM JSON (to primitive types).
+      // Note: JSON -> TIMESTAMP is not supported in Presto.
+      {.fromType = "JSON",
+       .toType = "BOOLEAN",
+       .implicitAllowed = false,
+       .validator = {}},
+      {.fromType = "JSON",
+       .toType = "TINYINT",
+       .implicitAllowed = false,
+       .validator = {}},
+      {.fromType = "JSON",
+       .toType = "SMALLINT",
+       .implicitAllowed = false,
+       .validator = {}},
+      {.fromType = "JSON",
+       .toType = "INTEGER",
+       .implicitAllowed = false,
+       .validator = {}},
+      {.fromType = "JSON",
+       .toType = "BIGINT",
+       .implicitAllowed = false,
+       .validator = {}},
+      {.fromType = "JSON",
+       .toType = "REAL",
+       .implicitAllowed = false,
+       .validator = {}},
+      {.fromType = "JSON",
+       .toType = "DOUBLE",
+       .implicitAllowed = false,
+       .validator = {}},
+      {.fromType = "JSON",
+       .toType = "VARCHAR",
+       .implicitAllowed = false,
+       .validator = {}},
+  });
 }
 } // namespace facebook::velox

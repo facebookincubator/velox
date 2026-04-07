@@ -17,6 +17,7 @@
 #include "velox/functions/prestosql/types/VarcharEnumRegistration.h"
 #include "velox/expression/CastExpr.h"
 #include "velox/functions/prestosql/types/VarcharEnumType.h"
+#include "velox/type/CastRegistry.h"
 
 namespace facebook::velox {
 namespace {
@@ -103,5 +104,15 @@ class VarcharEnumTypeFactory : public CustomTypeFactory {
 void registerVarcharEnumType() {
   registerCustomType(
       "varchar_enum", std::make_unique<const VarcharEnumTypeFactory>());
+  registerCastRules({
+      {.fromType = "VARCHAR",
+       .toType = "VARCHAR_ENUM",
+       .implicitAllowed = false,
+       .validator = {}},
+      {.fromType = "VARCHAR_ENUM",
+       .toType = "VARCHAR",
+       .implicitAllowed = false,
+       .validator = {}},
+  });
 }
 } // namespace facebook::velox

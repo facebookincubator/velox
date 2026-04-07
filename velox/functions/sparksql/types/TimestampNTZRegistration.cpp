@@ -19,6 +19,7 @@
 #include "velox/expression/CastExpr.h"
 #include "velox/functions/sparksql/types/TimestampNTZCastUtil.h"
 #include "velox/functions/sparksql/types/TimestampNTZType.h"
+#include "velox/type/CastRegistry.h"
 
 namespace facebook::velox::functions::sparksql {
 namespace {
@@ -106,6 +107,12 @@ class TimestampNTZTypeFactory : public CustomTypeFactory {
 void registerTimestampNTZType() {
   registerCustomType(
       "timestamp_ntz", std::make_unique<const TimestampNTZTypeFactory>());
+  registerCastRules({
+      {.fromType = "VARCHAR",
+       .toType = "TIMESTAMP_NTZ",
+       .implicitAllowed = false,
+       .validator = {}},
+  });
 }
 
 } // namespace facebook::velox::functions::sparksql

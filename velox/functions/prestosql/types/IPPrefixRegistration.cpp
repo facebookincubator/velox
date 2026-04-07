@@ -21,6 +21,7 @@
 #include "velox/common/fuzzer/ConstrainedGenerators.h"
 #include "velox/expression/CastExpr.h"
 #include "velox/functions/prestosql/types/IPPrefixType.h"
+#include "velox/type/CastRegistry.h"
 
 namespace facebook::velox {
 namespace {
@@ -192,5 +193,23 @@ class IPPrefixTypeFactory : public CustomTypeFactory {
 
 void registerIPPrefixType() {
   registerCustomType("ipprefix", std::make_unique<const IPPrefixTypeFactory>());
+  registerCastRules({
+      {.fromType = "VARCHAR",
+       .toType = "IPPREFIX",
+       .implicitAllowed = false,
+       .validator = {}},
+      {.fromType = "IPADDRESS",
+       .toType = "IPPREFIX",
+       .implicitAllowed = false,
+       .validator = {}},
+      {.fromType = "IPPREFIX",
+       .toType = "VARCHAR",
+       .implicitAllowed = false,
+       .validator = {}},
+      {.fromType = "IPPREFIX",
+       .toType = "IPADDRESS",
+       .implicitAllowed = false,
+       .validator = {}},
+  });
 }
 } // namespace facebook::velox
