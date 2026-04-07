@@ -23,7 +23,7 @@
 #include "velox/experimental/cudf/expression/AstUtils.h"
 // TODO(kn): in another PR
 // #include "velox/experimental/cudf/CudfNoDefaults.h"
-#include "velox/experimental/cudf/expression/DecimalUtils.h"
+#include "velox/experimental/cudf/expression/DecimalTypeCheck.h"
 
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/FieldReference.h"
