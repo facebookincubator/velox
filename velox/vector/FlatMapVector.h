@@ -349,22 +349,7 @@ class FlatMapVector : public BaseVector {
     VELOX_NYI("{} unsupported", __FUNCTION__);
   }
 
- private:
-  void setDistinctKeysImpl(VectorPtr distinctKeys) {
-    VELOX_CHECK(distinctKeys != nullptr);
-    VELOX_CHECK(
-        *distinctKeys->type() == *keyType(),
-        "Unexpected key type: {}",
-        distinctKeys->type()->toString());
-
-    distinctKeys_ = std::move(distinctKeys);
-    keyToChannel_.clear();
-
-    for (vector_size_t i = 0; i < numDistinctKeys(); i++) {
-      keyToChannel_.insert({distinctKeys_->hashValueAt(i), i});
-    }
-  }
-
+ public:
   /// Appends a new distinct key to the flat map specified by `sourceChannel` on
   /// `sourceDistinctKeys`.
   void appendDistinctKey(
@@ -393,6 +378,22 @@ class FlatMapVector : public BaseVector {
       column_index_t targetChannel,
       const uint64_t* sourceInMaps,
       const folly::Range<const BaseVector::CopyRange*>& ranges);
+
+ private:
+  void setDistinctKeysImpl(VectorPtr distinctKeys) {
+    VELOX_CHECK(distinctKeys != nullptr);
+    VELOX_CHECK(
+        *distinctKeys->type() == *keyType(),
+        "Unexpected key type: {}",
+        distinctKeys->type()->toString());
+
+    distinctKeys_ = std::move(distinctKeys);
+    keyToChannel_.clear();
+
+    for (vector_size_t i = 0; i < numDistinctKeys(); i++) {
+      keyToChannel_.insert({distinctKeys_->hashValueAt(i), i});
+    }
+  }
 
   /// Compares a map in this Vector with a map in a MapVector.
   std::optional<int32_t> compareToMap(
