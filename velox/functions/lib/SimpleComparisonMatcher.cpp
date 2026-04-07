@@ -97,14 +97,15 @@ bool ComparisonConstantMatcher::match(const core::TypedExprPtr& expr) {
 std::optional<int64_t> ComparisonConstantMatcher::asConstant(
     const core::ITypedExpr* expr) {
   if (auto constant = dynamic_cast<const core::ConstantTypedExpr*>(expr)) {
-    if (constant->hasValueVector()) {
-      auto constantVector =
-          constant->valueVector()->as<SimpleVector<int64_t>>();
-      if (!constantVector->isNullAt(0)) {
-        return constantVector->valueAt(0);
-      }
-    } else {
-      if (!constant->value().isNull()) {
+    if (!constant->isNull()) {
+      if (constant->hasValueVector()) {
+        const auto& vector = constant->valueVector();
+        if (constant->type()->isBigint()) {
+          return vector->as<SimpleVector<int64_t>>()->valueAt(0);
+        } else if (constant->type()->isInteger()) {
+          return vector->as<SimpleVector<int32_t>>()->valueAt(0);
+        }
+      } else {
         if (constant->value().kind() == TypeKind::BIGINT) {
           return constant->value().value<int64_t>();
         }

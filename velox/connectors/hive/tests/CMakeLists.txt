@@ -13,6 +13,10 @@
 # limitations under the License.
 add_executable(
   velox_hive_connector_test
+  FileColumnHandleTest.cpp
+  FileConfigTest.cpp
+  FileConnectorSplitTest.cpp
+  FileConnectorUtilTest.cpp
   FileHandleTest.cpp
   HiveConfigTest.cpp
   HiveDataSinkTest.cpp

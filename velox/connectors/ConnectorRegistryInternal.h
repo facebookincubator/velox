@@ -16,20 +16,15 @@
 
 #pragma once
 
-#include <memory>
 #include <string>
-#include <unordered_map>
+
+#include "velox/common/ScopedRegistry.h"
+#include "velox/connectors/Connector.h"
 
 namespace facebook::velox::connector {
 
-class Connector;
-
 // Internal helper shared by Connector.cpp and ConnectorRegistry.cpp.
 // Not part of the public API. Do not include from outside velox/connectors/.
-inline std::unordered_map<std::string, std::shared_ptr<Connector>>&
-connectors() {
-  static std::unordered_map<std::string, std::shared_ptr<Connector>> instance;
-  return instance;
-}
+ScopedRegistry<std::string, Connector>& connectors();
 
 } // namespace facebook::velox::connector

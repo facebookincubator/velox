@@ -24,6 +24,10 @@ namespace facebook::velox::parse {
 struct ParseOptions {
   // Retain legacy behavior by default.
   bool parseDecimalAsDouble = true;
+
+  // TODO: Replace or add a new flag with behavior that matches Presto and Spark
+  // where small integer literals are INTEGER and large ones are BIGINT, instead
+  // of this all-or-nothing flag.
   bool parseIntegerAsBigint = true;
   // Controls whether to parse the values in an IN list as separate arguments or
   // as a single array argument.

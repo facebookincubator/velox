@@ -175,9 +175,8 @@ void TextWriter::flush() {
   bufferedWriterSink_->flush();
 }
 
-std::unique_ptr<dwio::common::FileMetadata> TextWriter::close() {
+void TextWriter::close() {
   bufferedWriterSink_->close();
-  return std::make_unique<TextFileMetadata>();
 }
 
 void TextWriter::abort() {

@@ -322,7 +322,7 @@ void buildScanSplitFromTableWriteResult(
       for (auto bucketColumnIndex : bucketColumnIndices) {
         auto handle = std::make_unique<connector::hive::HiveColumnHandle>(
             tableSchema->nameOf(bucketColumnIndex),
-            connector::hive::HiveColumnHandle::ColumnType::kRegular,
+            connector::hive::FileColumnHandle::ColumnType::kRegular,
             tableSchema->childAt(bucketColumnIndex),
             tableSchema->childAt(bucketColumnIndex));
         bucketConversion.bucketColumnHandles.push_back(std::move(handle));

@@ -18,3 +18,4 @@ rules:
   dangerous-triggers:
     ignore:
       - build-impact-comment.yml
+      - ci-failure-comment.yml

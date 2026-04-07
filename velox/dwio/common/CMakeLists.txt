@@ -88,7 +88,6 @@ velox_add_library(
   DirectInputStream.h
   ErrorTolerance.h
   ExecutorBarrier.h
-  FileMetadata.h
   FileSink.h
   FilterNode.h
   FlatMapHelper.h

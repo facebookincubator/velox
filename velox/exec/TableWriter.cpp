@@ -15,6 +15,7 @@
  */
 
 #include "velox/exec/TableWriter.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/Task.h"
 
@@ -63,7 +64,7 @@ TableWriter::TableWriter(
         &nonReclaimableSection_);
   }
   const auto& connectorId = tableWriteNode->insertTableHandle()->connectorId();
-  connector_ = connector::getConnector(connectorId);
+  connector_ = connector::ConnectorRegistry::tryGet(connectorId);
   connectorQueryCtx_ = operatorCtx_->createConnectorQueryCtx(
       connectorId,
       planNodeId(),

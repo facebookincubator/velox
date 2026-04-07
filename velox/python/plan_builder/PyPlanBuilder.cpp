@@ -138,8 +138,8 @@ PyPlanBuilder& PyPlanBuilder::tableScan(
       }
 
       auto columnType = (name == rowIndexColumnName)
-          ? HiveColumnHandle::ColumnType::kRowIndex
-          : HiveColumnHandle::ColumnType::kRegular;
+          ? FileColumnHandle::ColumnType::kRowIndex
+          : FileColumnHandle::ColumnType::kRegular;
 
       auto columnHandle = std::make_shared<HiveColumnHandle>(
           hiveName, columnType, type, type, std::move(requiredSubfields));
