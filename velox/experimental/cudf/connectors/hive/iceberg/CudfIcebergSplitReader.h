@@ -35,6 +35,8 @@
 #include <cudf/io/datasource.hpp>
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/types.hpp>
+#include <cudf/table/table.hpp>
+#include <cudf/table/table_view.hpp>
 
 #include <list>
 
@@ -52,10 +54,10 @@ namespace velox_iceberg = ::facebook::velox::connector::hive::iceberg;
 /// Iceberg delete semantics:
 ///   - Deletion vectors (V3): applied on the GPU using cuco roaring_bitmap
 ///     and cudf::apply_boolean_mask after reading each chunk.
-///   - Positional deletes (V2): applied after cudf-to-Velox conversion using
-///     upstream PositionalDeleteFileReader.
-///   - Equality deletes (V2): applied after cudf-to-Velox conversion using
-///     upstream EqualityDeleteFileReader.
+///   - Positional deletes (V2): host-side bitmap from upstream
+///     PositionalDeleteFileReader, filtered on GPU via apply_boolean_mask.
+///   - Equality deletes (V2): host-side bitmap from upstream
+///     EqualityDeleteFileReader, filtered on GPU via apply_boolean_mask.
 class CudfIcebergSplitReader : public NvtxHelper {
  public:
   CudfIcebergSplitReader(
@@ -95,8 +97,15 @@ class CudfIcebergSplitReader : public NvtxHelper {
   void loadDeletionVector();
   void setupDeleteFileReaders();
 
-  RowVectorPtr applyPositionalDeletes(RowVectorPtr output);
-  RowVectorPtr applyEqualityDeletes(RowVectorPtr output);
+  std::unique_ptr<cudf::table> applyPositionalDeletes(
+      cudf::table_view input,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr);
+  std::unique_ptr<cudf::table> applyEqualityDeletes(
+      cudf::table_view input,
+      const RowVectorPtr& rowVector,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr);
 
   std::shared_ptr<const velox_iceberg::HiveIcebergSplit> icebergSplit_;
   std::shared_ptr<const velox_hive::HiveTableHandle> tableHandle_;
