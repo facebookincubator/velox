@@ -37,7 +37,12 @@
 
 namespace {
 
-// Static mutex to serialize batches of IO operations across drivers
+/**
+ * @brief Static mutex to serialize batches of IO operations across drivers
+ *
+ * Mutex to ensure no interleaving of IO operations across drivers to ensure
+ * drivers can move ahead without waiting for other drivers to finish their IO.
+ */
 std::mutex& ioBatchMutex() {
   static std::mutex mutex;
   return mutex;
