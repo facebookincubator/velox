@@ -342,17 +342,10 @@ jobs:
 
       - name: Upload build failure artifact
         if: failure()
-        env:
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           mkdir -p /tmp/ci-failure
-          cat > /tmp/ci-failure/comment.md <<EOF
-          :no_entry: **Do not land** — Linux adapters release build failed.
-
-          Please fix the build before merging this PR.
-          Check the **Linux release with adapters** workflow for detailed logs.
-
-          :link: [View build logs](${RUN_URL})
+          cat > /tmp/ci-failure/failure.json <<'EOF'
+          {"job": "Linux release with adapters", "type": "build"}
           EOF
 
       - name: Upload failure comment artifact
@@ -360,7 +353,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ci-failure-adapters-build
-          path: /tmp/ci-failure/comment.md
+          path: /tmp/ci-failure/failure.json
           retention-days: 1
 
   adapters-test-status:
@@ -420,47 +413,29 @@ jobs:
         env:
           FAILED_TESTS: ${{ needs.adapters.outputs.failed-tests }}
           FAILED_CASES: ${{ needs.adapters.outputs.failed-cases }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p /tmp/ci-failure
           if [[ -n "$FAILED_CASES" ]]; then
-            FORMATTED=$(echo "$FAILED_CASES" | sed 's/^/- /')
-            LABEL="test cases"
+            TESTS="$FAILED_CASES"
           elif [[ -n "$FAILED_TESTS" ]]; then
-            FORMATTED=$(echo "$FAILED_TESTS" | sed 's/^/- /')
-            LABEL="tests"
+            TESTS="$FAILED_TESTS"
           else
             echo "No failure details to upload."
             exit 0
           fi
-          # Look up the job ID and "Run Tests" step number for a direct deep link.
-          JOBS_JSON=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs")
-          JOB_ID=$(echo "$JOBS_JSON" | jq -r '[.jobs[] | select(.name | endswith("Linux release with adapters"))][0].id // empty')
-          STEP_NUM=$(echo "$JOBS_JSON" | jq -r '[.jobs[] | select(.name | endswith("Linux release with adapters"))][0].steps[] | select(.name == "Run Tests") | .number // empty')
-          if [[ -n "$JOB_ID" && -n "$STEP_NUM" ]]; then
-            JOB_URL="${RUN_URL}/job/${JOB_ID}#step:${STEP_NUM}:1000"
-          elif [[ -n "$JOB_ID" ]]; then
-            JOB_URL="${RUN_URL}/job/${JOB_ID}"
-          else
-            JOB_URL="${RUN_URL}"
-          fi
-          cat > /tmp/ci-failure/comment.md <<EOF
-          ### :x: Test Failures: Linux adapters release
-
-          The following ${LABEL} failed:
-
-          ${FORMATTED}
-
-          :link: [View failed test logs](${JOB_URL})
-          EOF
+          # Write failure metadata as JSON for the CI failure analysis workflow.
+          jq -n --arg job "Linux release with adapters" \
+                 --arg type "test" \
+                 --arg failed_tests "$TESTS" \
+                 '{job: $job, type: $type, failed_tests: $failed_tests}' \
+                 > /tmp/ci-failure/failure.json
 
       - name: Upload failure comment artifact
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ci-failure-adapters-test
-          path: /tmp/ci-failure/comment.md
+          path: /tmp/ci-failure/failure.json
           retention-days: 1
           if-no-files-found: ignore
 
@@ -690,17 +665,10 @@ jobs:
 
       - name: Upload build failure artifact
         if: failure()
-        env:
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           mkdir -p /tmp/ci-failure
-          cat > /tmp/ci-failure/comment.md <<EOF
-          :no_entry: **Do not land** — Ubuntu debug build failed.
-
-          Please fix the build before merging this PR.
-          Check the **Ubuntu debug with system dependencies** workflow for detailed logs.
-
-          :link: [View build logs](${RUN_URL})
+          cat > /tmp/ci-failure/failure.json <<'EOF'
+          {"job": "Ubuntu debug with system dependencies", "type": "build"}
           EOF
 
       - name: Upload failure comment artifact
@@ -708,7 +676,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ci-failure-ubuntu-debug-build
-          path: /tmp/ci-failure/comment.md
+          path: /tmp/ci-failure/failure.json
           retention-days: 1
 
   ubuntu-debug-test-status:
@@ -768,47 +736,29 @@ jobs:
         env:
           FAILED_TESTS: ${{ needs.ubuntu-debug.outputs.failed-tests }}
           FAILED_CASES: ${{ needs.ubuntu-debug.outputs.failed-cases }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p /tmp/ci-failure
           if [[ -n "$FAILED_CASES" ]]; then
-            FORMATTED=$(echo "$FAILED_CASES" | sed 's/^/- /')
-            LABEL="test cases"
+            TESTS="$FAILED_CASES"
           elif [[ -n "$FAILED_TESTS" ]]; then
-            FORMATTED=$(echo "$FAILED_TESTS" | sed 's/^/- /')
-            LABEL="tests"
+            TESTS="$FAILED_TESTS"
           else
             echo "No failure details to upload."
             exit 0
           fi
-          # Look up the job ID and "Run Tests" step number for a direct deep link.
-          JOBS_JSON=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs")
-          JOB_ID=$(echo "$JOBS_JSON" | jq -r '[.jobs[] | select(.name | endswith("Ubuntu debug with system dependencies"))][0].id // empty')
-          STEP_NUM=$(echo "$JOBS_JSON" | jq -r '[.jobs[] | select(.name | endswith("Ubuntu debug with system dependencies"))][0].steps[] | select(.name == "Run Tests") | .number // empty')
-          if [[ -n "$JOB_ID" && -n "$STEP_NUM" ]]; then
-            JOB_URL="${RUN_URL}/job/${JOB_ID}#step:${STEP_NUM}:1000"
-          elif [[ -n "$JOB_ID" ]]; then
-            JOB_URL="${RUN_URL}/job/${JOB_ID}"
-          else
-            JOB_URL="${RUN_URL}"
-          fi
-          cat > /tmp/ci-failure/comment.md <<EOF
-          ### :x: Test Failures: Ubuntu debug
-
-          The following ${LABEL} failed:
-
-          ${FORMATTED}
-
-          :link: [View failed test logs](${JOB_URL})
-          EOF
+          # Write failure metadata as JSON for the CI failure analysis workflow.
+          jq -n --arg job "Ubuntu debug with system dependencies" \
+                 --arg type "test" \
+                 --arg failed_tests "$TESTS" \
+                 '{job: $job, type: $type, failed_tests: $failed_tests}' \
+                 > /tmp/ci-failure/failure.json
 
       - name: Upload failure comment artifact
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ci-failure-ubuntu-debug-test
-          path: /tmp/ci-failure/comment.md
+          path: /tmp/ci-failure/failure.json
           retention-days: 1
           if-no-files-found: ignore
 
@@ -921,17 +871,10 @@ jobs:
 
       - name: Upload build failure artifact
         if: failure()
-        env:
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           mkdir -p /tmp/ci-failure
-          cat > /tmp/ci-failure/comment.md <<EOF
-          :no_entry: **Do not land** — Fedora debug build failed.
-
-          Please fix the build before merging this PR.
-          Check the **Fedora debug** workflow for detailed logs.
-
-          :link: [View build logs](${RUN_URL})
+          cat > /tmp/ci-failure/failure.json <<'EOF'
+          {"job": "Fedora debug", "type": "build"}
           EOF
 
       - name: Upload failure comment artifact
@@ -939,5 +882,5 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ci-failure-fedora-build
-          path: /tmp/ci-failure/comment.md
+          path: /tmp/ci-failure/failure.json
           retention-days: 1
