@@ -82,6 +82,14 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
  protected:
   virtual std::unique_ptr<CudfSplitReader> createCudfSplitReader();
 
+  /// Convert a ConnectorSplit to CudfHiveConnectorSplit, handling path
+  /// cleaning (file:, s3a: prefixes). Sets split_.
+  void constructCudfHiveSplit(std::shared_ptr<ConnectorSplit> split);
+
+  /// Create the split reader and estimate completed bytes. Assumes split_ is
+  /// already set. Called after constructCudfHiveSplit().
+  void prepareSplit();
+
   std::shared_ptr<CudfHiveConnectorSplit> split_;
   std::shared_ptr<const ::facebook::velox::connector::hive::HiveTableHandle>
       tableHandle_;
@@ -109,24 +117,26 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
 
   std::unique_ptr<CudfSplitReader> cudfSplitReader_;
 
- private:
   bool useExperimentalSplitReader_;
 
+  std::unique_ptr<exec::ExprSet> remainingFilterExprSet_;
+  std::shared_ptr<velox::cudf_velox::CudfExpression> cudfExpressionEvaluator_;
+
+  // Cached combined subfield filter expression owned by 'subfieldTree_'.
+  cudf::ast::expression const* subfieldFilterExpr_{nullptr};
+
+  std::atomic<uint64_t> totalRemainingFilterTime_{0};
+
+ private:
   std::unordered_set<std::string> readColumnSet_;
 
   // Expression evaluator for remaining filter.
   core::ExpressionEvaluator* const expressionEvaluator_;
-  std::unique_ptr<exec::ExprSet> remainingFilterExprSet_;
-  std::shared_ptr<velox::cudf_velox::CudfExpression> cudfExpressionEvaluator_;
 
   // Expression evaluator for subfield filter.
   std::vector<std::unique_ptr<cudf::scalar>> subfieldScalars_;
   cudf::ast::tree subfieldTree_;
   common::SubfieldFilters subfieldFilters_;
-  // Cached combined subfield filter expression owned by 'subfieldTree_'.
-  cudf::ast::expression const* subfieldFilterExpr_{nullptr};
-
-  std::atomic<uint64_t> totalRemainingFilterTime_{0};
 };
 
 } // namespace facebook::velox::cudf_velox::connector::hive

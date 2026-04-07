@@ -18,42 +18,19 @@
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfDeletionVectorReader.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergSplitReader.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
-#include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
-#include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
-#include "velox/common/caching/CacheTTLController.h"
 #include "velox/common/encode/Base64.h"
-#include "velox/common/file/FileSystems.h"
-#include "velox/common/time/Timer.h"
-#include "velox/connectors/hive/BufferedInputBuilder.h"
-#include "velox/connectors/hive/FileHandle.h"
-#include "velox/connectors/hive/HiveConnectorSplit.h"
-#include "velox/connectors/hive/HiveDataSource.h"
-#include "velox/connectors/hive/TableHandle.h"
-#include "velox/connectors/hive/iceberg/EqualityDeleteFileReader.h"
-#include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
-#include "velox/connectors/hive/iceberg/IcebergSplit.h"
-#include "velox/connectors/hive/iceberg/PositionalDeleteFileReader.h"
-#include "velox/dwio/common/BufferUtil.h"
 
-#include <cudf/io/datasource.hpp>
-#include <cudf/io/parquet.hpp>
-#include <cudf/io/types.hpp>
 #include <cudf/null_mask.hpp>
 #include <cudf/stream_compaction.hpp>
-#include <cudf/table/table.hpp>
-#include <cudf/table/table_view.hpp>
 #include <cudf/transform.hpp>
 #include <cudf/unary.hpp>
-#include <cudf/utilities/error.hpp>
 
 #include <rmm/device_buffer.hpp>
-
-#include <nvtx3/nvtx3.hpp>
 
 #include <folly/lang/Bits.h>
 
@@ -89,6 +66,7 @@ bool shouldSkipBySequenceNumber(
 } // namespace
 
 CudfIcebergSplitReader::CudfIcebergSplitReader(
+    std::shared_ptr<CudfHiveConnectorSplit> split,
     std::shared_ptr<const velox_iceberg::HiveIcebergSplit> icebergSplit,
     std::shared_ptr<const velox_hive::HiveTableHandle> tableHandle,
     const RowTypePtr& outputType,
@@ -99,39 +77,84 @@ CudfIcebergSplitReader::CudfIcebergSplitReader(
     const std::shared_ptr<CudfHiveConfig>& cudfHiveConfig,
     const std::shared_ptr<const velox_hive::HiveConfig>& hiveConfig,
     const std::shared_ptr<io::IoStatistics>& ioStatistics,
-    const std::shared_ptr<IoStats>& ioStats)
-    : NvtxHelper(
-          nvtx3::rgb{80, 200, 120},
-          std::nullopt,
-          fmt::format(
-              "[iceberg-split:{}]",
-              icebergSplit ? icebergSplit->filePath : "unknown")),
+    const std::shared_ptr<IoStats>& ioStats,
+    bool useExperimentalReader,
+    cudf::ast::expression const* subfieldFilterExpr,
+    std::unique_ptr<exec::ExprSet>* remainingFilterExprSet,
+    std::shared_ptr<CudfExpression> cudfExpressionEvaluator,
+    std::atomic<uint64_t>* totalRemainingFilterTime)
+    : CudfSplitReader(
+          std::move(split),
+          std::move(tableHandle),
+          outputType,
+          readColumnNames,
+          fileHandleFactory,
+          executor,
+          connectorQueryCtx,
+          cudfHiveConfig,
+          ioStatistics,
+          ioStats,
+          useExperimentalReader,
+          subfieldFilterExpr,
+          remainingFilterExprSet,
+          std::move(cudfExpressionEvaluator),
+          totalRemainingFilterTime),
       icebergSplit_(std::move(icebergSplit)),
-      tableHandle_(std::move(tableHandle)),
-      outputType_(outputType),
-      readColumnNames_(readColumnNames),
-      fileHandleFactory_(fileHandleFactory),
-      executor_(executor),
-      connectorQueryCtx_(connectorQueryCtx),
-      cudfHiveConfig_(cudfHiveConfig),
-      hiveConfig_(hiveConfig),
-      pool_(connectorQueryCtx->memoryPool()),
-      stream_(cudfGlobalStreamPool().get_stream()),
-      ioStatistics_(ioStatistics),
-      ioStats_(ioStats) {}
+      hiveConfig_(hiveConfig) {}
 
 void CudfIcebergSplitReader::prepareSplit() {
-  splitReader_.reset();
-  dataSource_.reset();
   dvReader_.reset();
   positionalDeleteFileReaders_.clear();
   equalityDeleteFileReaders_.clear();
   baseReadOffset_ = 0;
 
+  // Acquire a CUDA stream early — loadDeletionVector() needs it before the
+  // base prepareSplit() would normally set it in createCudfReader().
+  stream_ = cudfGlobalStreamPool().get_stream();
+
   loadDeletionVector();
   setupDeleteFileReaders();
-  setupCudfDataSourceAndOptions();
-  createCudfReader();
+
+  // Call base to setup datasource, options, and create reader
+  CudfSplitReader::prepareSplit();
+}
+
+std::optional<std::unique_ptr<cudf::table>>
+CudfIcebergSplitReader::readNextChunk() {
+  // Call base to read the next chunk (regular or hybrid scan)
+  auto result = CudfSplitReader::readNextChunk();
+  if (!result.has_value()) {
+    return std::nullopt;
+  }
+
+  auto cudfTable = std::move(result.value());
+  auto nRows = cudfTable->num_rows();
+
+  // Apply deletion vector
+  if (dvReader_ && nRows > 0) {
+    cudfTable = dvReader_->applyDeletionVector(
+        cudfTable->view(), baseReadOffset_, stream_, get_output_mr());
+  }
+
+  // Apply positional deletes
+  if (cudfTable->num_rows() > 0 && !positionalDeleteFileReaders_.empty()) {
+    cudfTable =
+        applyPositionalDeletes(cudfTable->view(), stream_, get_temp_mr());
+  }
+
+  // Apply equality deletes
+  if (cudfTable->num_rows() > 0 && !equalityDeleteFileReaders_.empty()) {
+    auto rowVector = with_arrow::toVeloxColumn(
+        cudfTable->view(), pool_, outputType_->names(), stream_, get_temp_mr());
+    stream_.synchronize();
+    VELOX_CHECK_NOT_NULL(
+        rowVector, "Failed to get RowVector for equality delete application.");
+    cudfTable = applyEqualityDeletes(
+        cudfTable->view(), rowVector, stream_, get_output_mr());
+  }
+
+  baseReadOffset_ += nRows;
+  return cudfTable;
 }
 
 void CudfIcebergSplitReader::loadDeletionVector() {
@@ -256,151 +279,6 @@ void CudfIcebergSplitReader::setupDeleteFileReaders() {
           static_cast<int>(deleteFile.content));
     }
   }
-}
-
-void CudfIcebergSplitReader::setupCudfDataSourceAndOptions() {
-  std::string cleanedPath = icebergSplit_->filePath;
-  constexpr std::string_view kFilePrefix = "file:";
-  if (cleanedPath.compare(0, kFilePrefix.size(), kFilePrefix) == 0) {
-    cleanedPath = cleanedPath.substr(kFilePrefix.size());
-  }
-
-  auto sourceInfo = [&]() {
-    if (!cudfHiveConfig_->useBufferedInputSession(
-            connectorQueryCtx_->sessionProperties())) {
-      VLOG(1) << "Using file data source for CudfIcebergSplitReader";
-      return cudf::io::source_info{cleanedPath};
-    }
-
-    auto fileHandleCachePtr = FileHandleCachedPtr{};
-    try {
-      const auto fileHandleKey = FileHandleKey{
-          .filename = icebergSplit_->filePath,
-          .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
-      auto fileProperties = FileProperties{};
-      fileHandleCachePtr = fileHandleFactory_->generate(
-          fileHandleKey, &fileProperties, ioStats_ ? ioStats_.get() : nullptr);
-      VELOX_CHECK_NOT_NULL(fileHandleCachePtr.get());
-    } catch (const VeloxRuntimeError& e) {
-      LOG(WARNING) << fmt::format(
-          "Failed to generate file handle cache for file {}, "
-          "falling back to file data source for CudfIcebergSplitReader",
-          icebergSplit_->filePath);
-      return cudf::io::source_info{cleanedPath};
-    }
-
-    if (auto* cacheTTLController = cache::CacheTTLController::getInstance()) {
-      cacheTTLController->addOpenFileInfo(fileHandleCachePtr->uuid.id());
-    }
-
-    dwio::common::ReaderOptions baseReaderOpts(pool_);
-    auto bufferedInput =
-        velox_hive::BufferedInputBuilder::getInstance()->create(
-            *fileHandleCachePtr,
-            baseReaderOpts,
-            connectorQueryCtx_,
-            ioStatistics_,
-            ioStats_,
-            executor_);
-    if (!bufferedInput) {
-      LOG(WARNING) << fmt::format(
-          "Failed to create buffered input source for file {}, "
-          "falling back to file data source for CudfIcebergSplitReader",
-          icebergSplit_->filePath);
-      return cudf::io::source_info{cleanedPath};
-    }
-    dataSource_ =
-        std::make_unique<BufferedInputDataSource>(std::move(bufferedInput));
-    return cudf::io::source_info{dataSource_.get()};
-  }();
-
-  if (dataSource_ == nullptr) {
-    dataSource_ = std::move(cudf::io::make_datasources(sourceInfo).front());
-  }
-
-  readerOptions_ =
-      cudf::io::parquet_reader_options::builder(std::move(sourceInfo))
-          .use_pandas_metadata(cudfHiveConfig_->isUsePandasMetadata())
-          .use_arrow_schema(cudfHiveConfig_->isUseArrowSchema())
-          .allow_mismatched_pq_schemas(
-              cudfHiveConfig_->isAllowMismatchedCudfHiveSchemas())
-          .timestamp_type(cudfHiveConfig_->timestampType())
-          .build();
-
-  if (icebergSplit_->start != 0) {
-    readerOptions_.set_skip_bytes(icebergSplit_->start);
-  }
-  if (icebergSplit_->length != std::numeric_limits<uint64_t>::max()) {
-    readerOptions_.set_num_bytes(icebergSplit_->length);
-  }
-
-  if (!readColumnNames_.empty()) {
-    readerOptions_.set_column_names(readColumnNames_);
-  }
-}
-
-void CudfIcebergSplitReader::createCudfReader() {
-  splitReader_ = std::make_unique<cudf::io::chunked_parquet_reader>(
-      cudfHiveConfig_->maxChunkReadLimit(),
-      cudfHiveConfig_->maxPassReadLimit(),
-      readerOptions_,
-      stream_,
-      get_output_mr());
-}
-
-std::optional<RowVectorPtr> CudfIcebergSplitReader::next(uint64_t /*size*/) {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
-  VELOX_CHECK(splitReader_, "No split reader present");
-
-  if (!splitReader_->has_next()) {
-    return std::nullopt;
-  }
-
-  auto tableWithMetadata = splitReader_->read_chunk();
-  auto cudfTable = std::move(tableWithMetadata.tbl);
-  auto nRows = cudfTable->num_rows();
-
-  const bool hasPositionalDeletes = !positionalDeleteFileReaders_.empty();
-
-  if (dvReader_ && nRows > 0) {
-    cudfTable = dvReader_->applyDeletionVector(
-        cudfTable->view(), baseReadOffset_, stream_, get_output_mr());
-  }
-
-  if (cudfTable->num_rows() > 0 && !positionalDeleteFileReaders_.empty()) {
-    cudfTable =
-        applyPositionalDeletes(cudfTable->view(), stream_, get_temp_mr());
-  }
-
-  if (cudfTable->num_rows() > 0 && !equalityDeleteFileReaders_.empty()) {
-    auto rowVector = with_arrow::toVeloxColumn(
-        cudfTable->view(), pool_, outputType_->names(), stream_, get_temp_mr());
-    stream_.synchronize();
-    VELOX_CHECK_NOT_NULL(
-        rowVector, "Failed to get RowVector for equality delete application.");
-    cudfTable = applyEqualityDeletes(
-        cudfTable->view(), rowVector, stream_, get_output_mr());
-  }
-
-  auto nRowsAfterDeletes = cudfTable->num_rows();
-  auto output = cudfIsRegistered() ? std::make_shared<CudfVector>(
-                                         pool_,
-                                         outputType_,
-                                         nRowsAfterDeletes,
-                                         std::move(cudfTable),
-                                         stream_)
-                                   : with_arrow::toVeloxColumn(
-                                         cudfTable->view(),
-                                         pool_,
-                                         outputType_->names(),
-                                         stream_,
-                                         get_temp_mr());
-  stream_.synchronize();
-
-  VELOX_CHECK_NOT_NULL(output, "Cudf to Velox conversion yielded a nullptr");
-  completedRows_ += output->size();
-  baseReadOffset_ += nRows;
-  return output;
 }
 
 std::unique_ptr<cudf::table> CudfIcebergSplitReader::applyPositionalDeletes(

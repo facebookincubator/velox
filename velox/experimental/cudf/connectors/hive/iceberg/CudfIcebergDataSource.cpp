@@ -19,8 +19,7 @@
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergSplitReader.h"
 
 #include "velox/common/Casts.h"
-#include "velox/connectors/hive/FileHandle.h"
-#include "velox/connectors/hive/HiveDataSource.h"
+#include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 
 namespace facebook::velox::cudf_velox::connector::hive::iceberg {
@@ -50,18 +49,18 @@ CudfIcebergDataSource::CudfIcebergDataSource(
 
 CudfIcebergDataSource::~CudfIcebergDataSource() = default;
 
-void CudfIcebergDataSource::addSplit(
+void CudfIcebergDataSource::constructCudfIcebergSplit(
     std::shared_ptr<velox_connector::ConnectorSplit> split) {
-  auto icebergSplit =
+  icebergSplit_ =
       std::dynamic_pointer_cast<const velox_iceberg::HiveIcebergSplit>(split);
 
-  if (!icebergSplit) {
+  if (!icebergSplit_) {
     auto hiveSplit = checkedPointerCast<velox_hive::HiveConnectorSplit>(split);
 
     VELOX_CHECK(
         hiveSplit->fileFormat == dwio::common::FileFormat::PARQUET,
         "CudfIcebergDataSource only supports PARQUET format.");
-    icebergSplit = std::make_shared<velox_iceberg::HiveIcebergSplit>(
+    icebergSplit_ = std::make_shared<velox_iceberg::HiveIcebergSplit>(
         hiveSplit->connectorId,
         hiveSplit->filePath,
         hiveSplit->fileFormat,
@@ -76,11 +75,20 @@ void CudfIcebergDataSource::addSplit(
         hiveSplit->infoColumns,
         hiveSplit->properties);
   }
+}
 
-  VLOG(1) << "CudfIcebergDataSource: adding split " << icebergSplit->filePath;
+void CudfIcebergDataSource::addSplit(
+    std::shared_ptr<velox_connector::ConnectorSplit> split) {
+  constructCudfIcebergSplit(split);
+  constructCudfHiveSplit(icebergSplit_);
+  prepareSplit();
+}
 
-  splitReader_ = std::make_unique<CudfIcebergSplitReader>(
-      icebergSplit,
+std::unique_ptr<CudfSplitReader>
+CudfIcebergDataSource::createCudfSplitReader() {
+  return std::make_unique<CudfIcebergSplitReader>(
+      split_,
+      icebergSplit_,
       tableHandle_,
       outputType_,
       readColumnNames_,
@@ -90,56 +98,12 @@ void CudfIcebergDataSource::addSplit(
       cudfHiveConfig_,
       hiveConfig_,
       ioStatistics_,
-      ioStats_);
-  splitReader_->prepareSplit();
-
-  // TODO: `completedBytes_` should be updated in `next()` as we read more and
-  // more table bytes
-  try {
-    const auto fileHandleKey = FileHandleKey{
-        .filename = icebergSplit->filePath,
-        .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
-    auto fileProperties = FileProperties{};
-    auto const fileHandleCachePtr = fileHandleFactory_->generate(
-        fileHandleKey, &fileProperties, ioStats_ ? ioStats_.get() : nullptr);
-    if (fileHandleCachePtr.get() && fileHandleCachePtr.get()->file) {
-      completedBytes_ += fileHandleCachePtr->file->size();
-    }
-  } catch (const std::exception& e) {
-    LOG(WARNING) << "Failed to get file size for " << icebergSplit->filePath
-                 << ": " << e.what();
-  }
-}
-
-std::optional<RowVectorPtr> CudfIcebergDataSource::next(
-    uint64_t size,
-    velox::ContinueFuture& /*future*/) {
-  VELOX_CHECK_NOT_NULL(
-      splitReader_, "No split to process. Call addSplit first.");
-  auto result = splitReader_->next(size);
-  if (!result.has_value()) {
-    return RowVectorPtr(nullptr);
-  }
-  completedRows_ += result.value()->size();
-  return result;
-}
-
-std::unordered_map<std::string, RuntimeMetric>
-CudfIcebergDataSource::getRuntimeStats() {
-  auto res = runtimeStats_.toRuntimeMetricMap();
-  if (splitReader_) {
-    auto splitStats = splitReader_->runtimeStats().toRuntimeMetricMap();
-    res.insert(splitStats.begin(), splitStats.end());
-  }
-  res.insert(
-      {std::string(velox_hive::HiveDataSource::kTotalScanTime),
-       RuntimeMetric(
-           ioStatistics_->totalScanTime(), RuntimeCounter::Unit::kNanos)});
-  const auto& ioStats = ioStats_->stats();
-  for (const auto& storageStats : ioStats) {
-    res.emplace(storageStats.first, storageStats.second);
-  }
-  return res;
+      ioStats_,
+      useExperimentalSplitReader_,
+      subfieldFilterExpr_,
+      &remainingFilterExprSet_,
+      cudfExpressionEvaluator_,
+      &totalRemainingFilterTime_);
 }
 
 } // namespace facebook::velox::cudf_velox::connector::hive::iceberg

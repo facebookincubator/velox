@@ -19,15 +19,17 @@
 #include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
 
 #include "velox/connectors/hive/HiveConfig.h"
+#include "velox/connectors/hive/iceberg/IcebergSplit.h"
 
 namespace facebook::velox::cudf_velox::connector::hive::iceberg {
 
 namespace velox_connector = ::facebook::velox::connector;
 namespace velox_hive = ::facebook::velox::connector::hive;
+namespace velox_iceberg = ::facebook::velox::connector::hive::iceberg;
 
 /// Iceberg-specific data source that extends CudfHiveDataSource.
 ///
-/// Provides Iceberg table format support by creating  CudfIcebergSplitReader
+/// Provides Iceberg table format support by creating CudfIcebergSplitReader
 /// instances that handle:
 /// - GPU-accelerated positional delete files and vectors for row-level deletes.
 /// - GPU-accelerated equality delete files for column-level deletes.
@@ -50,14 +52,15 @@ class CudfIcebergDataSource : public CudfHiveDataSource {
   void addSplit(
       std::shared_ptr<velox_connector::ConnectorSplit> split) override;
 
-  std::optional<RowVectorPtr> next(uint64_t size, velox::ContinueFuture& future)
-      override;
-
-  std::unordered_map<std::string, RuntimeMetric> getRuntimeStats() override;
+ protected:
+  std::unique_ptr<CudfSplitReader> createCudfSplitReader() override;
 
  private:
+  void constructCudfIcebergSplit(
+      std::shared_ptr<velox_connector::ConnectorSplit> split);
+
   std::shared_ptr<const velox_hive::HiveConfig> hiveConfig_;
-  std::unique_ptr<class CudfIcebergSplitReader> splitReader_;
+  std::shared_ptr<const velox_iceberg::HiveIcebergSplit> icebergSplit_;
 };
 
 } // namespace facebook::velox::cudf_velox::connector::hive::iceberg

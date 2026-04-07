@@ -183,44 +183,46 @@ std::unique_ptr<CudfSplitReader> CudfHiveDataSource::createCudfSplitReader() {
       &totalRemainingFilterTime_);
 }
 
-void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
-  split_ = [&]() {
-    // Dynamic cast split to `CudfHiveConnectorSplit`
-    if (std::dynamic_pointer_cast<CudfHiveConnectorSplit>(split)) {
-      return std::dynamic_pointer_cast<CudfHiveConnectorSplit>(split);
-      // Convert `HiveConnectorSplit` to `CudfHiveConnectorSplit`
-    } else if (std::dynamic_pointer_cast<hive::HiveConnectorSplit>(split)) {
-      const auto hiveSplit =
-          std::dynamic_pointer_cast<hive::HiveConnectorSplit>(split);
-      VELOX_CHECK_EQ(
-          hiveSplit->fileFormat,
-          dwio::common::FileFormat::PARQUET,
-          "Unsupported file format for conversion from HiveConnectorSplit to CudfHiveConnectorSplit");
-      // Remove "file:" prefix from the file path if present
-      std::string cleanedPath = hiveSplit->filePath;
-      constexpr std::string_view kFilePrefix = "file:";
-      constexpr std::string_view kS3APrefix = "s3a:";
-      if (cleanedPath.compare(0, kFilePrefix.size(), kFilePrefix) == 0) {
-        cleanedPath = cleanedPath.substr(kFilePrefix.size());
-      } else if (cleanedPath.compare(0, kS3APrefix.size(), kS3APrefix) == 0) {
-        // KvikIO does not support "s3a:" prefix. We need to translate it to
-        // "s3:".
-        cleanedPath.erase(kS3APrefix.size() - 2, 1);
-      }
-      auto cudfHiveSplitBuilder = CudfHiveConnectorSplitBuilder(cleanedPath)
-                                      .start(hiveSplit->start)
-                                      .length(hiveSplit->length)
-                                      .connectorId(hiveSplit->connectorId)
-                                      .splitWeight(hiveSplit->splitWeight);
-      for (auto const& infoColumn : hiveSplit->infoColumns) {
-        cudfHiveSplitBuilder.infoColumn(infoColumn.first, infoColumn.second);
-      }
-      return cudfHiveSplitBuilder.build();
-    } else {
-      VELOX_FAIL("Unsupported split type: {}", split->toString());
-    }
-  }();
+void CudfHiveDataSource::constructCudfHiveSplit(
+    std::shared_ptr<ConnectorSplit> split) {
+  // Dynamic cast split to `CudfHiveConnectorSplit`
+  if (std::dynamic_pointer_cast<CudfHiveConnectorSplit>(split)) {
+    split_ = std::dynamic_pointer_cast<CudfHiveConnectorSplit>(split);
+    return;
+  }
 
+  // Convert `HiveConnectorSplit` to `CudfHiveConnectorSplit`
+  auto hiveSplit = std::dynamic_pointer_cast<hive::HiveConnectorSplit>(split);
+  VELOX_CHECK_NOT_NULL(
+      hiveSplit, "Unsupported split type: {}", split->toString());
+  VELOX_CHECK_EQ(
+      hiveSplit->fileFormat,
+      dwio::common::FileFormat::PARQUET,
+      "Unsupported file format for conversion from HiveConnectorSplit to CudfHiveConnectorSplit");
+
+  // Remove "file:" prefix from the file path if present
+  std::string cleanedPath = hiveSplit->filePath;
+  constexpr std::string_view kFilePrefix = "file:";
+  constexpr std::string_view kS3APrefix = "s3a:";
+  if (cleanedPath.compare(0, kFilePrefix.size(), kFilePrefix) == 0) {
+    cleanedPath = cleanedPath.substr(kFilePrefix.size());
+  } else if (cleanedPath.compare(0, kS3APrefix.size(), kS3APrefix) == 0) {
+    // KvikIO does not support "s3a:" prefix. We need to translate it to "s3:".
+    cleanedPath.erase(kS3APrefix.size() - 2, 1);
+  }
+
+  auto cudfHiveSplitBuilder = CudfHiveConnectorSplitBuilder(cleanedPath)
+                                  .start(hiveSplit->start)
+                                  .length(hiveSplit->length)
+                                  .connectorId(hiveSplit->connectorId)
+                                  .splitWeight(hiveSplit->splitWeight);
+  for (auto const& infoColumn : hiveSplit->infoColumns) {
+    cudfHiveSplitBuilder.infoColumn(infoColumn.first, infoColumn.second);
+  }
+  split_ = cudfHiveSplitBuilder.build();
+}
+
+void CudfHiveDataSource::prepareSplit() {
   VLOG(1) << "Adding split " << split_->toString();
 
   cudfSplitReader_ = createCudfSplitReader();
@@ -243,6 +245,11 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
     LOG(WARNING) << "Failed to get file size for " << split_->filePath << ": "
                  << e.what();
   }
+}
+
+void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
+  constructCudfHiveSplit(std::move(split));
+  prepareSplit();
 }
 
 std::optional<RowVectorPtr> CudfHiveDataSource::next(

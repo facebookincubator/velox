@@ -16,51 +16,35 @@
 
 #pragma once
 
-#include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
-#include "velox/experimental/cudf/connectors/hive/CudfSplitReaderHelpers.h"
+#include "velox/experimental/cudf/connectors/hive/CudfSplitReader.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfDeletionVectorReader.h"
-#include "velox/experimental/cudf/exec/NvtxHelper.h"
 
-#include "velox/common/io/IoStatistics.h"
-#include "velox/connectors/Connector.h"
-#include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConfig.h"
-#include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/EqualityDeleteFileReader.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 #include "velox/connectors/hive/iceberg/PositionalDeleteFileReader.h"
-#include "velox/dwio/common/Statistics.h"
-
-#include <cudf/io/datasource.hpp>
-#include <cudf/io/parquet.hpp>
-#include <cudf/io/types.hpp>
-#include <cudf/table/table.hpp>
-#include <cudf/table/table_view.hpp>
 
 #include <list>
 
 namespace facebook::velox::cudf_velox::connector::hive::iceberg {
-
-using CudfParquetReader = cudf::io::chunked_parquet_reader;
-using CudfParquetReaderPtr = std::unique_ptr<CudfParquetReader>;
 
 namespace velox_hive = ::facebook::velox::connector::hive;
 namespace velox_iceberg = ::facebook::velox::connector::hive::iceberg;
 
 /// GPU-accelerated per-split reader for Iceberg tables.
 ///
-/// Reads parquet data files via cudf's chunked_parquet_reader and handles all
-/// Iceberg delete semantics:
+/// Derives from CudfSplitReader and adds Iceberg delete semantics:
 ///   - Deletion vectors (V3): applied on the GPU using cuco roaring_bitmap
 ///     and cudf::apply_boolean_mask after reading each chunk.
 ///   - Positional deletes (V2): host-side bitmap from upstream
 ///     PositionalDeleteFileReader, filtered on GPU via apply_boolean_mask.
 ///   - Equality deletes (V2): host-side bitmap from upstream
 ///     EqualityDeleteFileReader, filtered on GPU via apply_boolean_mask.
-class CudfIcebergSplitReader : public NvtxHelper {
+class CudfIcebergSplitReader : public CudfSplitReader {
  public:
   CudfIcebergSplitReader(
+      std::shared_ptr<CudfHiveConnectorSplit> split,
       std::shared_ptr<const velox_iceberg::HiveIcebergSplit> icebergSplit,
       std::shared_ptr<const velox_hive::HiveTableHandle> tableHandle,
       const RowTypePtr& outputType,
@@ -71,29 +55,28 @@ class CudfIcebergSplitReader : public NvtxHelper {
       const std::shared_ptr<CudfHiveConfig>& cudfHiveConfig,
       const std::shared_ptr<const velox_hive::HiveConfig>& hiveConfig,
       const std::shared_ptr<io::IoStatistics>& ioStatistics,
-      const std::shared_ptr<IoStats>& ioStats);
+      const std::shared_ptr<IoStats>& ioStats,
+      bool useExperimentalReader,
+      cudf::ast::expression const* subfieldFilterExpr,
+      std::unique_ptr<exec::ExprSet>* remainingFilterExprSet,
+      std::shared_ptr<CudfExpression> cudfExpressionEvaluator,
+      std::atomic<uint64_t>* totalRemainingFilterTime);
 
-  /// Prepare the split: open cudf reader, load DV, set up delete readers.
-  void prepareSplit();
+  void prepareSplit() override;
 
-  /// Read the next chunk and apply all deletes. Returns nullopt when done.
-  std::optional<RowVectorPtr> next(uint64_t size);
+ protected:
+  /// Override to apply Iceberg deletes after reading a chunk.
+  std::optional<std::unique_ptr<cudf::table>> readNextChunk() override;
 
-  bool emptySplit() const {
-    return !splitReader_;
-  }
-
-  dwio::common::RuntimeStatistics& runtimeStats() {
-    return runtimeStats_;
-  }
-
-  size_t completedRows() const {
-    return completedRows_;
-  }
+  /// NOTE: setupCudfDataSourceAndOptions() and createCudfReader() are NOT
+  /// overridden. The base CudfSplitReader implementations (taken from the more
+  /// mature CudfHiveDataSource) handle both Hive and Iceberg cases:
+  ///   - Path cleaning (file:, s3a:) is done in addSplit() when building
+  ///     CudfHiveConnectorSplit, so split_->filePath is already clean.
+  ///   - Subfield filter is safely skipped when subfieldFilterExpr_ is nullptr.
+  ///   - Reader creation is identical between Hive and Iceberg.
 
  private:
-  void setupCudfDataSourceAndOptions();
-  void createCudfReader();
   void loadDeletionVector();
   void setupDeleteFileReaders();
 
@@ -108,33 +91,13 @@ class CudfIcebergSplitReader : public NvtxHelper {
       rmm::device_async_resource_ref mr);
 
   std::shared_ptr<const velox_iceberg::HiveIcebergSplit> icebergSplit_;
-  std::shared_ptr<const velox_hive::HiveTableHandle> tableHandle_;
-  const RowTypePtr outputType_;
-  std::vector<std::string> readColumnNames_;
-
-  FileHandleFactory* fileHandleFactory_;
-  folly::Executor* executor_;
-  const ::facebook::velox::connector::ConnectorQueryCtx* connectorQueryCtx_;
-  std::shared_ptr<CudfHiveConfig> cudfHiveConfig_;
   std::shared_ptr<const velox_hive::HiveConfig> hiveConfig_;
-  memory::MemoryPool* pool_;
-
-  cudf::io::parquet_reader_options readerOptions_;
-  std::shared_ptr<cudf::io::datasource> dataSource_;
-  CudfParquetReaderPtr splitReader_;
-  rmm::cuda_stream_view stream_;
 
   std::unique_ptr<CudfDeletionVectorReader> dvReader_;
-
   std::list<std::unique_ptr<velox_iceberg::PositionalDeleteFileReader>>
       positionalDeleteFileReaders_;
   std::list<std::unique_ptr<velox_iceberg::EqualityDeleteFileReader>>
       equalityDeleteFileReaders_;
-
-  std::shared_ptr<io::IoStatistics> ioStatistics_;
-  std::shared_ptr<IoStats> ioStats_;
-  dwio::common::RuntimeStatistics runtimeStats_;
-  size_t completedRows_{0};
 
   // Tracks the absolute row offset within the data file. Each chunk advances
   // this by the number of rows read (before deletes).
