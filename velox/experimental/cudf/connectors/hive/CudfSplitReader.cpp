@@ -97,6 +97,9 @@ void CudfSplitReader::prepareSplit() {
   hybridScanState_.reset();
   dataSource_.reset();
 
+  // Acquire a CUDA stream
+  stream_ = cudfGlobalStreamPool().get_stream();
+
   // Create a cudf split reader
   if (useExperimentalReader_) {
     createExperimentalReader();
@@ -369,8 +372,6 @@ void CudfSplitReader::setupCudfDataSourceAndOptions() {
 
 void CudfSplitReader::createCudfReader() {
   setupCudfDataSourceAndOptions();
-  stream_ = cudfGlobalStreamPool().get_stream();
-
   // Create a parquet reader
   splitReader_ = std::make_unique<cudf::io::chunked_parquet_reader>(
       cudfHiveConfig_->maxChunkReadLimit(),
@@ -382,8 +383,6 @@ void CudfSplitReader::createCudfReader() {
 
 void CudfSplitReader::createExperimentalReader() {
   setupCudfDataSourceAndOptions();
-  stream_ = cudfGlobalStreamPool().get_stream();
-
   // Create a hybrid scan reader
   nvtxRangePush("hybridScanReader");
   auto const footerBuffer = fetchFooterBytes(dataSource_);

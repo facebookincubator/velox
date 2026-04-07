@@ -81,14 +81,7 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
 
  protected:
   virtual std::unique_ptr<CudfSplitReader> createCudfSplitReader();
-
-  /// Convert a ConnectorSplit to CudfHiveConnectorSplit, handling path
-  /// cleaning (file:, s3a: prefixes). Sets split_.
-  void constructCudfHiveSplit(std::shared_ptr<ConnectorSplit> split);
-
-  /// Create the split reader and estimate completed bytes. Assumes split_ is
-  /// already set. Called after constructCudfHiveSplit().
-  void prepareSplit();
+  virtual void convertSplit(std::shared_ptr<ConnectorSplit> split);
 
   std::shared_ptr<CudfHiveConnectorSplit> split_;
   std::shared_ptr<const ::facebook::velox::connector::hive::HiveTableHandle>

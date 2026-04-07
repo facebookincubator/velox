@@ -108,15 +108,12 @@ void CudfIcebergSplitReader::prepareSplit() {
   equalityDeleteFileReaders_.clear();
   baseReadOffset_ = 0;
 
-  // Acquire a CUDA stream early — loadDeletionVector() needs it before the
-  // base prepareSplit() would normally set it in createCudfReader().
-  stream_ = cudfGlobalStreamPool().get_stream();
+  // Call base to setup stream, datasource, options, and a the cudf reader
+  CudfSplitReader::prepareSplit();
 
+  // Load deletion vector and setup delete file readers
   loadDeletionVector();
   setupDeleteFileReaders();
-
-  // Call base to setup datasource, options, and create reader
-  CudfSplitReader::prepareSplit();
 }
 
 std::optional<std::unique_ptr<cudf::table>>

@@ -47,10 +47,9 @@ CudfIcebergDataSource::CudfIcebergDataSource(
           cudfHiveConfig),
       hiveConfig_(hiveConfig) {}
 
-CudfIcebergDataSource::~CudfIcebergDataSource() = default;
-
-void CudfIcebergDataSource::constructCudfIcebergSplit(
+void CudfIcebergDataSource::convertSplit(
     std::shared_ptr<velox_connector::ConnectorSplit> split) {
+  // Convert ConnectorSplit to `HiveIcebergSplit`
   icebergSplit_ =
       std::dynamic_pointer_cast<const velox_iceberg::HiveIcebergSplit>(split);
 
@@ -75,13 +74,13 @@ void CudfIcebergDataSource::constructCudfIcebergSplit(
         hiveSplit->infoColumns,
         hiveSplit->properties);
   }
-}
 
-void CudfIcebergDataSource::addSplit(
-    std::shared_ptr<velox_connector::ConnectorSplit> split) {
-  constructCudfIcebergSplit(split);
-  constructCudfHiveSplit(icebergSplit_);
-  prepareSplit();
+  VLOG(1) << "Converted split to HiveIcebergSplit: "
+          << icebergSplit_->toString();
+
+  // Convert HiveIcebergSplit to CudfHiveConnectorSplit
+  CudfHiveDataSource::convertSplit(
+      std::const_pointer_cast<velox_iceberg::HiveIcebergSplit>(icebergSplit_));
 }
 
 std::unique_ptr<CudfSplitReader>

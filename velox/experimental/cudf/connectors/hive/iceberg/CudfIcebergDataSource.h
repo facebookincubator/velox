@@ -47,18 +47,16 @@ class CudfIcebergDataSource : public CudfHiveDataSource {
       const std::shared_ptr<CudfHiveConfig>& cudfHiveConfig,
       const std::shared_ptr<const velox_hive::HiveConfig>& hiveConfig);
 
-  ~CudfIcebergDataSource() override;
-
-  void addSplit(
-      std::shared_ptr<velox_connector::ConnectorSplit> split) override;
-
  protected:
+  // Override to create and use CudfIcebergSplitReader instead of
+  // CudfHiveSplitReader
   std::unique_ptr<CudfSplitReader> createCudfSplitReader() override;
 
- private:
-  void constructCudfIcebergSplit(
-      std::shared_ptr<velox_connector::ConnectorSplit> split);
+  // Override to convert ConnectorSplit to `HiveIcebergSplit` and then to
+  // `CudfHiveConnectorSplit`
+  void convertSplit(std::shared_ptr<ConnectorSplit> split) override;
 
+ private:
   std::shared_ptr<const velox_hive::HiveConfig> hiveConfig_;
   std::shared_ptr<const velox_iceberg::HiveIcebergSplit> icebergSplit_;
 };

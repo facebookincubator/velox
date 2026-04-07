@@ -183,8 +183,7 @@ std::unique_ptr<CudfSplitReader> CudfHiveDataSource::createCudfSplitReader() {
       &totalRemainingFilterTime_);
 }
 
-void CudfHiveDataSource::constructCudfHiveSplit(
-    std::shared_ptr<ConnectorSplit> split) {
+void CudfHiveDataSource::convertSplit(std::shared_ptr<ConnectorSplit> split) {
   // Dynamic cast split to `CudfHiveConnectorSplit`
   if (std::dynamic_pointer_cast<CudfHiveConnectorSplit>(split)) {
     split_ = std::dynamic_pointer_cast<CudfHiveConnectorSplit>(split);
@@ -192,9 +191,8 @@ void CudfHiveDataSource::constructCudfHiveSplit(
   }
 
   // Convert `HiveConnectorSplit` to `CudfHiveConnectorSplit`
-  auto hiveSplit = std::dynamic_pointer_cast<hive::HiveConnectorSplit>(split);
-  VELOX_CHECK_NOT_NULL(
-      hiveSplit, "Unsupported split type: {}", split->toString());
+  auto hiveSplit = checkedPointerCast<hive::HiveConnectorSplit>(split);
+
   VELOX_CHECK_EQ(
       hiveSplit->fileFormat,
       dwio::common::FileFormat::PARQUET,
@@ -220,10 +218,12 @@ void CudfHiveDataSource::constructCudfHiveSplit(
     cudfHiveSplitBuilder.infoColumn(infoColumn.first, infoColumn.second);
   }
   split_ = cudfHiveSplitBuilder.build();
+
+  VLOG(1) << "Adding split " << split_->toString();
 }
 
-void CudfHiveDataSource::prepareSplit() {
-  VLOG(1) << "Adding split " << split_->toString();
+void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
+  convertSplit(split);
 
   cudfSplitReader_ = createCudfSplitReader();
   cudfSplitReader_->prepareSplit();
@@ -245,11 +245,6 @@ void CudfHiveDataSource::prepareSplit() {
     LOG(WARNING) << "Failed to get file size for " << split_->filePath << ": "
                  << e.what();
   }
-}
-
-void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
-  constructCudfHiveSplit(std::move(split));
-  prepareSplit();
 }
 
 std::optional<RowVectorPtr> CudfHiveDataSource::next(
