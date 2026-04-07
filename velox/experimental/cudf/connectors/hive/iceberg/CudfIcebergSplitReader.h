@@ -73,6 +73,9 @@ class CudfIcebergSplitReader : public CudfSplitReader {
       rmm::device_async_resource_ref output_mr) override;
 
  private:
+  /// Determine the memory resource to use for the cudf reader.
+  rmm::device_async_resource_ref determineCudfMemoryResource();
+
   /// Load the deletion vector blob from the puffin file.
   void loadDeletionVector();
 

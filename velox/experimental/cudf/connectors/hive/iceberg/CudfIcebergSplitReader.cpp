@@ -118,37 +118,38 @@ void CudfIcebergSplitReader::prepareSplit() {
   CudfSplitReader::prepareSplit();
 }
 
+rmm::device_async_resource_ref
+CudfIcebergSplitReader::determineCudfMemoryResource() {
+  // If we will be applying any deletes, use temporary mr to create the
+  // `chunked_parquet_reader` and when calling `readNextChunk` for the hybrid
+  // scan reader.
+  return (dvReader_ or positionalDeleteFileReaders_.size() or
+          equalityDeleteFileReaders_.size())
+      ? get_temp_mr()
+      : get_output_mr();
+}
+
 void CudfIcebergSplitReader::createCudfReader(
     rmm::device_async_resource_ref output_mr) {
-  // Determine if we will be applying any deletes. If so use the temporary
-  // memory resource
-  const auto mr = (dvReader_ or positionalDeleteFileReaders_.size() or
-                   equalityDeleteFileReaders_.size())
-      ? get_temp_mr()
-      : output_mr;
-  CudfSplitReader::createCudfReader(mr);
+  CudfSplitReader::createCudfReader(determineCudfMemoryResource());
 }
 
 std::optional<std::unique_ptr<cudf::table>>
 CudfIcebergSplitReader::readNextChunk(
     rmm::device_async_resource_ref output_mr) {
-  // Determine the memory resource to use for the table fom cudf reader
-  auto mr = (dvReader_ or positionalDeleteFileReaders_.size() or
-             equalityDeleteFileReaders_.size())
-      ? get_temp_mr()
-      : output_mr;
+  // Determine the memory resource to use for `readNextChunk`
+  auto mr = determineCudfMemoryResource();
 
-  // Call base to read the next chunk (regular or hybrid scan)
-  auto result = CudfSplitReader::readNextChunk(mr);
-  if (not result.has_value()) {
+  // Read the next table chunk from the cuDF reader
+  auto cudfTable = CudfSplitReader::readNextChunk(mr).value_or(nullptr);
+  if (not cudfTable) {
     return std::nullopt;
   }
 
-  // Maintain the unique pointer to the current cudf table
-  auto cudfTable = std::move(result.value());
-
-  // Apply deletion vector
+  // Apply deletion vector, if any
   if (dvReader_ and cudfTable->num_rows() > 0) {
+    // If we will be applying positional or equality deletes later, use the
+    // temporary mr. Otherwise, use the output mr.
     mr =
         positionalDeleteFileReaders_.size() or equalityDeleteFileReaders_.size()
         ? get_temp_mr()
@@ -157,13 +158,15 @@ CudfIcebergSplitReader::readNextChunk(
         cudfTable->view(), baseReadOffset_, stream_, mr);
   }
 
-  // Apply positional deletes
+  // Apply positional deletes, if any
   if (cudfTable->num_rows() > 0 and not positionalDeleteFileReaders_.empty()) {
+    // If we will be applying equality deletes later, use the temporary mr.
+    // Otherwise, use the output mr.
     mr = equalityDeleteFileReaders_.size() ? get_temp_mr() : output_mr;
     cudfTable = applyPositionalDeletes(cudfTable->view(), stream_, mr);
   }
 
-  // Apply equality deletes
+  // Apply equality deletes, if any
   if (cudfTable->num_rows() > 0 and not equalityDeleteFileReaders_.empty()) {
     // Convert the cudf table to a velox row vector
     auto rowVector = with_arrow::toVeloxColumn(
@@ -172,12 +175,14 @@ CudfIcebergSplitReader::readNextChunk(
     VELOX_CHECK_NOT_NULL(
         rowVector,
         "Failed to convert cudf table to row vector for equality delete application.");
+    // Use the output mr as there will be no more deletes after this
     cudfTable =
         applyEqualityDeletes(cudfTable->view(), rowVector, stream_, output_mr);
   }
 
   // Update the base read offset
   baseReadOffset_ += cudfTable->num_rows();
+
   return cudfTable;
 }
 
