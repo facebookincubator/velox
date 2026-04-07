@@ -15,10 +15,13 @@ Your task:
      Find the step that ran the tests or build (usually named "Run Tests", "Build",
      or similar — look for the step whose logs contain the failure output, not the
      status-reporting step). You need the job `id` and step `number` to build a
-     direct link: `https://github.com/{{REPOSITORY}}/actions/runs/{{RUN_ID}}/job/{job_id}#step:{step_number}:{line_number}`
-     where `line_number` is the line within that step's output where the failure
-     appears (e.g., the `[  FAILED  ]` line for test failures, or the `error:` line
-     for build failures). If you cannot determine the exact line, use line 1.
+     direct link: `https://github.com/{{REPOSITORY}}/actions/runs/{{RUN_ID}}/job/{job_id}#step:{step_number}:{ui_line}`
+     To compute `ui_line`: the raw log numbers lines across all steps, but the
+     GitHub UI numbers lines per-step starting from 1. To convert, find the line
+     in the raw log where the test step begins (search for "Test project /__w/")
+     and call that `start_line`. Then find the `[  FAILED  ]` line and call that
+     `failed_line`. The UI line number is `failed_line - start_line + 1`.
+     For build failures, use the first `error:` line instead of `[  FAILED  ]`.
    - Download job logs: `gh api repos/{{REPOSITORY}}/actions/jobs/{job_id}/logs` (returns plain text)
    - If job logs API fails, try: `gh run view {{RUN_ID}} --repo {{REPOSITORY}} --log-failed`
 
