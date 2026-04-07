@@ -1136,8 +1136,9 @@ void IndexLookupJoin::finishInput(InputBatchState& batch) {
   }
 }
 
-void IndexLookupJoin::prepareOutput(vector_size_t numOutputRows) {
-  output_ = createRowVector(pool(), outputType_, numOutputRows);
+RowVectorPtr IndexLookupJoin::prepareOutput(vector_size_t numOutputRows) {
+  std::vector<VectorPtr> children(outputType_->size(), nullptr);
+  return createRowVector(pool(), outputType_, numOutputRows);
 }
 
 RowVectorPtr IndexLookupJoin::produceOutputForInnerJoin(
@@ -1148,22 +1149,22 @@ RowVectorPtr IndexLookupJoin::produceOutputForInnerJoin(
 
   const size_t numOutputRows = std::min<size_t>(
       batch.lookupResult->size() - nextOutputResultRow_, outputBatchSize_);
-  prepareOutput(numOutputRows);
+  auto output = prepareOutput(numOutputRows);
   if (numOutputRows == batch.lookupResult->size()) {
     for (const auto& projection : probeOutputProjections_) {
-      output_->childAt(projection.outputChannel) = BaseVector::wrapInDictionary(
+      output->childAt(projection.outputChannel) = BaseVector::wrapInDictionary(
           nullptr,
           batch.lookupResult->inputHits,
           numOutputRows,
           batch.input->childAt(projection.inputChannel));
     }
     for (const auto& projection : lookupOutputProjections_) {
-      output_->childAt(projection.outputChannel) =
+      output->childAt(projection.outputChannel) =
           batch.lookupResult->output->childAt(projection.inputChannel);
     }
   } else {
     for (const auto& projection : probeOutputProjections_) {
-      output_->childAt(projection.outputChannel) = BaseVector::wrapInDictionary(
+      output->childAt(projection.outputChannel) = BaseVector::wrapInDictionary(
           nullptr,
           Buffer::slice<vector_size_t>(
               batch.lookupResult->inputHits,
@@ -1174,14 +1175,14 @@ RowVectorPtr IndexLookupJoin::produceOutputForInnerJoin(
           batch.input->childAt(projection.inputChannel));
     }
     for (const auto& projection : lookupOutputProjections_) {
-      output_->childAt(projection.outputChannel) =
+      output->childAt(projection.outputChannel) =
           batch.lookupResult->output->childAt(projection.inputChannel)
               ->slice(nextOutputResultRow_, numOutputRows);
     }
   }
   nextOutputResultRow_ += numOutputRows;
   VELOX_CHECK_LE(nextOutputResultRow_, batch.lookupResult->size());
-  return output_;
+  return output;
 }
 
 void IndexLookupJoin::fillOutputMatchRows(
@@ -1292,24 +1293,24 @@ RowVectorPtr IndexLookupJoin::produceOutputForLeftJoin(
     return nullptr;
   }
 
-  prepareOutput(numOutputRows);
+  auto output = prepareOutput(numOutputRows);
   const auto numInputRows = lastProcessedInputRow - startProcessInputRow + 1;
   if (numInputRows == numOutputRows) {
     if (startProcessInputRow == 0 && numInputRows == batch.input->size()) {
       for (const auto& projection : probeOutputProjections_) {
-        output_->childAt(projection.outputChannel) =
+        output->childAt(projection.outputChannel) =
             batch.input->childAt(projection.inputChannel);
       }
     } else {
       for (const auto& projection : probeOutputProjections_) {
-        output_->childAt(projection.outputChannel) =
+        output->childAt(projection.outputChannel) =
             batch.input->childAt(projection.inputChannel)
                 ->slice(startProcessInputRow, numInputRows);
       }
     }
   } else {
     for (const auto& projection : probeOutputProjections_) {
-      output_->childAt(projection.outputChannel) = BaseVector::wrapInDictionary(
+      output->childAt(projection.outputChannel) = BaseVector::wrapInDictionary(
           nullptr,
           probeOutputRowMapping_,
           numOutputRows,
@@ -1319,35 +1320,35 @@ RowVectorPtr IndexLookupJoin::produceOutputForLeftJoin(
 
   if (totalMissedInputRows > 0) {
     for (const auto& projection : lookupOutputProjections_) {
-      output_->childAt(projection.outputChannel) = BaseVector::wrapInDictionary(
+      output->childAt(projection.outputChannel) = BaseVector::wrapInDictionary(
           lookupOutputNulls_,
           lookupOutputRowMapping_,
           numOutputRows,
           batch.lookupResult->output->childAt(projection.inputChannel));
     }
     if (hasMarker_) {
-      output_->childAt(matchOutputChannel_.value()) = matchColumn_;
+      output->childAt(matchOutputChannel_.value()) = matchColumn_;
     }
   } else {
     if (startOutputRow == 0 &&
         numOutputRows == batch.lookupResult->output->size()) {
       for (const auto& projection : lookupOutputProjections_) {
-        output_->childAt(projection.outputChannel) =
+        output->childAt(projection.outputChannel) =
             batch.lookupResult->output->childAt(projection.inputChannel);
       }
     } else {
       for (const auto& projection : lookupOutputProjections_) {
-        output_->childAt(projection.outputChannel) =
+        output->childAt(projection.outputChannel) =
             batch.lookupResult->output->childAt(projection.inputChannel)
                 ->slice(startOutputRow, numOutputRows);
       }
     }
     if (hasMarker_) {
-      output_->childAt(matchOutputChannel_.value()) =
+      output->childAt(matchOutputChannel_.value()) =
           BaseVector::createConstant(BOOLEAN(), true, numOutputRows, pool());
     }
   }
-  return output_;
+  return output;
 }
 
 void IndexLookupJoin::ensureMatchColumn(vector_size_t maxOutputRows) {
@@ -1387,31 +1388,29 @@ RowVectorPtr IndexLookupJoin::produceRemainingOutputForLeftJoin(
       outputBatchSize_, batch.input->size() - startProcessInputRow);
   VELOX_CHECK_GT(numOutputRows, 0);
   VELOX_CHECK_LE(numOutputRows, batch.input->size());
-  prepareOutput(numOutputRows);
+  auto output = prepareOutput(numOutputRows);
   if (numOutputRows != batch.input->size()) {
     for (const auto& projection : probeOutputProjections_) {
-      output_->childAt(projection.outputChannel) =
+      output->childAt(projection.outputChannel) =
           batch.input->childAt(projection.inputChannel)
               ->slice(startProcessInputRow, numOutputRows);
     }
   } else {
     for (const auto& projection : probeOutputProjections_) {
-      output_->childAt(projection.outputChannel) =
+      output->childAt(projection.outputChannel) =
           batch.input->childAt(projection.inputChannel);
     }
   }
   for (const auto& projection : lookupOutputProjections_) {
-    output_->childAt(projection.outputChannel) = BaseVector::createNullConstant(
-        output_->type()->childAt(projection.outputChannel),
-        numOutputRows,
-        pool());
+    output->childAt(projection.outputChannel) = BaseVector::createNullConstant(
+        outputType_->childAt(projection.outputChannel), numOutputRows, pool());
   }
   if (hasMarker_) {
-    output_->childAt(matchOutputChannel_.value()) =
+    output->childAt(matchOutputChannel_.value()) =
         BaseVector::createConstant(BOOLEAN(), false, numOutputRows, pool());
   }
   lastProcessedInputRow_ = lastProcessedInputRow + numOutputRows;
-  return output_;
+  return output;
 }
 
 void IndexLookupJoin::prepareOutputRowMappings(size_t outputBatchSize) {
