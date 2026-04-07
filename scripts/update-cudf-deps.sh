@@ -61,12 +61,12 @@ fetch_github_api() {
     echo "Error: gh api failed" >&2
     echo "Response: $response" >&2
   else
-    local curl_opts="-s --max-time 30 -w %{http_code}"
+    local curl_opts=(-s --max-time 30 -w '%{http_code}')
     if [[ -n $GH_TOKEN ]]; then
-      curl_opts="$curl_opts -H \"Authorization: token $GH_TOKEN\""
+      curl_opts+=(-H "Authorization: token $GH_TOKEN")
     fi
     local raw
-    raw=$(curl $curl_opts "https://api.github.com/${endpoint}" 2>&1)
+    raw=$(curl "${curl_opts[@]}" "https://api.github.com/${endpoint}" 2>&1)
     http_code="${raw: -3}"
     response="${raw%???}"
     if [[ $http_code == "200" ]]; then
