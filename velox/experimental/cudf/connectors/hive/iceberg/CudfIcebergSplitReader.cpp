@@ -66,6 +66,15 @@ namespace velox_iceberg = ::facebook::velox::connector::hive::iceberg;
 
 namespace {
 
+/// Returns true if a delete/update file should be skipped based on sequence
+/// number conflict resolution. Per the Iceberg spec (V2+):
+///   - Equality deletes apply when deleteSeqNum > dataSeqNum (i.e., skip when
+///     deleteSeqNum <= dataSeqNum).
+///   - Positional deletes, deletion vectors, and positional updates apply when
+///     deleteSeqNum >= dataSeqNum (i.e., skip when deleteSeqNum < dataSeqNum),
+///     because same-snapshot positional deletes SHOULD apply.
+///   - A sequence number of 0 means "unassigned" (legacy V1 tables) and
+///     disables filtering (never skip).
 bool shouldSkipBySequenceNumber(
     int64_t fileSeqNum,
     int64_t dataSeqNum,
