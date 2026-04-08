@@ -55,6 +55,8 @@ class CudfHashAggregation : public CudfOperatorBase {
         std::vector<cudf::groupby::aggregation_result>& results,
         rmm::cuda_stream_view stream) = 0;
 
+    virtual ~Aggregator() = default;
+
    protected:
     Aggregator(
         core::AggregationNode::Step step,
