@@ -27,6 +27,7 @@ const auto& kindNames() {
       {IExpr::Kind::kConstant, "Constant"},
       {IExpr::Kind::kLambda, "Lambda"},
       {IExpr::Kind::kSubquery, "Subquery"},
+      {IExpr::Kind::kAggregate, "Aggregate"},
   };
   return kNames;
 }
@@ -87,6 +88,83 @@ std::string CallExpr::toString() const {
   }
   buf += ")";
   return appendAliasIfExists(buf);
+}
+
+bool AggregateCallExpr::operator==(const IExpr& other) const {
+  if (!other.is(Kind::kAggregate)) {
+    return false;
+  }
+
+  auto* otherAgg = other.as<AggregateCallExpr>();
+  if (name() != otherAgg->name() || distinct_ != otherAgg->distinct_) {
+    return false;
+  }
+
+  // Compare filter.
+  if ((filter_ == nullptr) != (otherAgg->filter_ == nullptr)) {
+    return false;
+  }
+  if (filter_ != nullptr && *filter_ != *otherAgg->filter_) {
+    return false;
+  }
+
+  // Compare orderBy.
+  if (orderBy_.size() != otherAgg->orderBy_.size()) {
+    return false;
+  }
+  for (size_t i = 0; i < orderBy_.size(); ++i) {
+    if (orderBy_[i].ascending != otherAgg->orderBy_[i].ascending ||
+        orderBy_[i].nullsFirst != otherAgg->orderBy_[i].nullsFirst ||
+        *orderBy_[i].expr != *otherAgg->orderBy_[i].expr) {
+      return false;
+    }
+  }
+
+  return compareAliasAndInputs(other);
+}
+
+size_t AggregateCallExpr::localHash() const {
+  auto hash = std::hash<std::string>{}(name());
+  hash = bits::hashMix(hash, std::hash<bool>{}(distinct_));
+  if (filter_ != nullptr) {
+    hash = bits::hashMix(hash, filter_->hash());
+  }
+  for (const auto& key : orderBy_) {
+    hash = bits::hashMix(hash, key.expr->hash());
+    hash = bits::hashMix(hash, std::hash<bool>{}(key.ascending));
+    hash = bits::hashMix(hash, std::hash<bool>{}(key.nullsFirst));
+  }
+  return hash;
+}
+
+std::string AggregateCallExpr::toString() const {
+  std::ostringstream out;
+  out << name() << "(";
+  if (distinct_) {
+    out << "DISTINCT ";
+  }
+  for (size_t i = 0; i < inputs().size(); ++i) {
+    if (i > 0) {
+      out << ",";
+    }
+    out << inputs()[i]->toString();
+  }
+  out << ")";
+  if (filter_ != nullptr) {
+    out << " FILTER(WHERE " << filter_->toString() << ")";
+  }
+  if (!orderBy_.empty()) {
+    out << " ORDER BY ";
+    for (size_t i = 0; i < orderBy_.size(); ++i) {
+      if (i > 0) {
+        out << ",";
+      }
+      out << orderBy_[i].expr->toString();
+      out << (orderBy_[i].ascending ? " ASC" : " DESC");
+      out << (orderBy_[i].nullsFirst ? " NULLS FIRST" : " NULLS LAST");
+    }
+  }
+  return appendAliasIfExists(out.str());
 }
 
 bool CastExpr::operator==(const IExpr& other) const {
