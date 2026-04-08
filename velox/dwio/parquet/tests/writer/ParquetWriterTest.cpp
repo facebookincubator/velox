@@ -21,6 +21,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h" // @manual
 #include "velox/core/QueryCtx.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
@@ -52,7 +53,8 @@ class ParquetWriterTest : public ParquetTestBase {
         kHiveConnectorId,
         std::make_shared<config::ConfigBase>(
             std::unordered_map<std::string, std::string>()));
-    connector::registerConnector(hiveConnector);
+    connector::ConnectorRegistry::global().insert(
+        hiveConnector->connectorId(), hiveConnector);
     parquet::registerParquetWriterFactory();
   }
 

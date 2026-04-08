@@ -47,7 +47,8 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
     virtual std::unique_ptr<cudf::column> doReduce(
         cudf::table_view const& input,
         TypePtr const& outputType,
-        rmm::cuda_stream_view stream) = 0;
+        rmm::cuda_stream_view stream,
+        vector_size_t inputRowCount) = 0;
 
     virtual std::unique_ptr<cudf::column> makeOutputColumn(
         std::vector<cudf::groupby::aggregation_result>& results,
@@ -147,7 +148,7 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
 
   // Maximum memory usage for partial aggregation.
   const int64_t maxPartialAggregationMemoryUsage_;
-  // Number of rows received in the input so far.
+  // Number of input rows accumulated since the last output or flush.
   int64_t numInputRows_ = 0;
 
   bool finished_ = false;

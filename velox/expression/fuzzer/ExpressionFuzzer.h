@@ -98,7 +98,7 @@ class ExpressionFuzzer {
     // testing. Use function signature to exclude only a specific signature.
     // ex skipFunctions{
     //   "width_bucket",
-    //   "array_sort(array(T),constant function(T,T,bigint)) -> array(T)"}
+    //   "array_sort(array(T),constant function(T,T,integer)) -> array(T)"}
     std::unordered_set<std::string> skipFunctions;
 
     std::unordered_map<std::string, std::shared_ptr<ExprTransformer>>

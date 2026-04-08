@@ -20,7 +20,9 @@ namespace facebook::velox::common::testutil {
 
 TempFilePath::~TempFilePath() {
   ::unlink(tempPath_.c_str());
-  ::close(fd_);
+  if (fd_ != -1) {
+    ::close(fd_);
+  }
 }
 
 std::shared_ptr<TempFilePath> TempFilePath::create(bool enableFaultInjection) {

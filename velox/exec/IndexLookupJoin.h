@@ -217,8 +217,9 @@ class IndexLookupJoin : public Operator {
   // for output rows without lookup matches.
   void prepareOutputRowMappings(size_t outputBatchSize);
 
-  // Prepare 'output_' for the next output batch with size of 'numOutputRows'.
-  void prepareOutput(vector_size_t numOutputRows);
+  // Creates a new output RowVector with 'numOutputRows' rows and nullptr
+  // children. Callers populate the children before returning it.
+  RowVectorPtr prepareOutput(vector_size_t numOutputRows);
 
   // Invoked to ensure the match column is created to store the output match
   // result for the left join.
@@ -373,8 +374,6 @@ class IndexLookupJoin : public Operator {
   DecodedVector decodedFilterResult_;
   BufferPtr filteredIndices_;
 
-  // The reusable output vector for the join output.
-  RowVectorPtr output_;
   FlatVectorPtr<bool> matchColumn_{nullptr};
   uint64_t* rawMatchValues_{nullptr};
 

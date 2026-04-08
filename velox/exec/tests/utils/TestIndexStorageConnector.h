@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/exec/HashTable.h"
 #include "velox/type/Type.h"
 
@@ -429,7 +430,8 @@ class TestIndexConnectorFactory : public connector::ConnectorFactory {
     TestIndexConnectorFactory factory;
     std::shared_ptr<connector::Connector> connector =
         factory.newConnector(kTestIndexConnectorName, {}, nullptr, cpuExecutor);
-    connector::registerConnector(connector);
+    connector::ConnectorRegistry::global().insert(
+        connector->connectorId(), connector);
   }
 };
 } // namespace facebook::velox::exec::test
