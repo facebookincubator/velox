@@ -19,11 +19,16 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/file/File.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 
+#include <bit>
 #include <cstring>
+#include <type_traits>
 #include <vector>
 
 namespace facebook::velox::cudf_velox::connector::hive::iceberg {
+
+namespace velox_iceberg = ::facebook::velox::connector::hive::iceberg;
 
 namespace {
 
@@ -31,12 +36,25 @@ namespace {
 // DV-v1 envelope constants & helpers
 // ---------------------------------------------------------------------------
 
-static constexpr uint8_t kDvMagic[] = {0xD1, 0xD3, 0x39, 0x64};
-
-constexpr auto readU32BigEndian(const uint8_t* p) {
-  return (static_cast<uint32_t>(p[0]) << 24) |
-      (static_cast<uint32_t>(p[1]) << 16) | (static_cast<uint32_t>(p[2]) << 8) |
-      static_cast<uint32_t>(p[3]);
+/// Reads an integral big endian value from a byte array.
+template <typename T>
+constexpr T readBigEndian(const uint8_t* p)
+  requires(std::is_integral_v<T>)
+{
+  if constexpr (std::endian::native == std::endian::big) {
+    T val;
+    std::memcpy(&val, p, sizeof(val));
+    return val;
+  } else {
+    // TODO(mh): Replace with std::byteswap(std::bit_cast<T>(p)) when C++23 is
+    // available.
+    auto val = T{0};
+    // Fold to unroll shift left and OR ops at compile time
+    [&]<std::size_t... I>(std::index_sequence<I...>) {
+      ((val = static_cast<T>(val << 8) | static_cast<T>(p[I])), ...);
+    }(std::make_index_sequence<sizeof(T)>{});
+    return val;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -329,10 +347,7 @@ std::string normalizeRoaring64ForCuco(const char* data, std::size_t size) {
   return out;
 }
 
-// ---------------------------------------------------------------------------
-// Blob I/O helpers
-// ---------------------------------------------------------------------------
-
+/// Representation of deletion vector v1 (DV-v1) blob source.
 struct BlobSource {
   std::shared_ptr<velox::ReadFile> file;
   uint64_t blobOffset{0};
@@ -341,20 +356,24 @@ struct BlobSource {
   std::size_t payloadSize{0};
 };
 
-BlobSource openAndProbeBlob(
-    const std::string& filePath,
+/// Loads a DV v1 blob from the file.
+BlobSource loadBlobSource(
+    const std::string_view filePath,
     uint64_t fileSizeInBytes,
     const std::unordered_map<int32_t, std::string>& lowerBounds,
     const std::unordered_map<int32_t, std::string>& upperBounds) {
-  BlobSource src;
+  // Start with a raw DV blob source
+  BlobSource source;
 
-  src.blobOffset = 0;
-  src.blobLength = fileSizeInBytes;
+  source.blobOffset = 0;
+  source.blobLength = fileSizeInBytes;
 
+  // Read the envoded DB blob offset and length from the `IcebergDeleteFile`
+  // bounds maps (encoded by the coordinator).
   if (auto it = lowerBounds.find(CudfDeletionVectorReader::kDvOffsetFieldId);
       it != lowerBounds.end()) {
     try {
-      src.blobOffset = std::stoull(it->second);
+      source.blobOffset = std::stoull(it->second);
     } catch (const std::exception& e) {
       VELOX_FAIL(
           "Failed to parse DV blob offset from bounds map: {}", e.what());
@@ -363,82 +382,157 @@ BlobSource openAndProbeBlob(
   if (auto it = upperBounds.find(CudfDeletionVectorReader::kDvLengthFieldId);
       it != upperBounds.end()) {
     try {
-      src.blobLength = std::stoull(it->second);
+      source.blobLength = std::stoull(it->second);
     } catch (const std::exception& e) {
       VELOX_FAIL(
           "Failed to parse DV blob length from bounds map: {}", e.what());
     }
   }
 
+  // Open the puffin file
   auto fs = filesystems::getFileSystem(filePath, nullptr);
-  src.file = fs->openFileForRead(filePath);
+  source.file = fs->openFileForRead(filePath);
+  auto fileSize = source.file->size();
 
-  auto fileSize = src.file->size();
   VELOX_CHECK_LE(
-      src.blobOffset,
+      source.blobOffset,
       fileSize,
       "DV blob offset {} exceeds file size {}.",
-      src.blobOffset,
+      source.blobOffset,
       fileSize);
   VELOX_CHECK_LE(
-      src.blobLength,
-      fileSize - src.blobOffset,
+      source.blobLength,
+      fileSize - source.blobOffset,
       "DV blob range [{}, {}) exceeds file size {}.",
-      src.blobOffset,
-      src.blobOffset + src.blobLength,
+      source.blobOffset,
+      source.blobOffset + source.blobLength,
       fileSize);
 
   // Read just the DV-v1 envelope header (up to 12 bytes) to determine
   // payload offset and size without reading the entire blob.
-  // DV-v1 format: [4B BE combined_length] [4B magic] [payload...] [4B CRC]
-  constexpr std::size_t kEnvelopeHeaderSize = 12;
-  if (src.blobLength >= kEnvelopeHeaderSize) {
-    uint8_t hdr[kEnvelopeHeaderSize];
-    src.file->pread(src.blobOffset, kEnvelopeHeaderSize, hdr);
-    if (std::memcmp(hdr + 4, kDvMagic, 4) == 0) {
-      const auto combinedLength = readU32BigEndian(hdr);
-      if (combinedLength >= 4 &&
-          src.blobLength >= static_cast<uint64_t>(4 + combinedLength + 4)) {
-        src.payloadOffset = 8;
-        src.payloadSize = combinedLength - 4;
-        return src;
-      }
-    }
-  }
 
-  src.payloadOffset = 0;
-  src.payloadSize = src.blobLength;
-  return src;
+  // DV-v1 envelope spec:
+  //   [combined length of magic + payload (4 bytes - Big Endian)]
+  //   [magic (4 bytes)]
+  //   [payload (N bytes)]
+  //   [CRC (4 bytes)]
+
+  constexpr std::size_t kMagicOffset = sizeof(uint32_t);
+  constexpr std::size_t kMagicSize = sizeof(uint32_t);
+  constexpr uint32_t kDvMagic = 0xD1D33964;
+  constexpr std::size_t kCrcSize = sizeof(uint32_t);
+  constexpr std::size_t kCombinedLengthSize = sizeof(uint32_t);
+
+  // Envelope header size: combined length + magic + CRC sizes
+  constexpr std::size_t kEnvelopeHeaderSize =
+      kCombinedLengthSize + kMagicSize + kCrcSize;
+
+  VELOX_CHECK_GE(
+      source.blobLength,
+      kEnvelopeHeaderSize,
+      "DV blob too small: {} < {}",
+      source.blobLength,
+      kEnvelopeHeaderSize);
+
+  // Buffer to read at most the envelope header
+  uint8_t hdr[kEnvelopeHeaderSize];
+  source.file->pread(source.blobOffset, kEnvelopeHeaderSize, hdr);
+
+  const auto combinedLength = readBigEndian<uint32_t>(hdr);
+
+  // Check the combined length and magic
+  VELOX_CHECK_GE(
+      combinedLength,
+      kMagicSize,
+      "DV-v1 combined length too small: {}.",
+      combinedLength);
+  VELOX_CHECK(
+      std::memcmp(
+          hdr + kMagicOffset,
+          reinterpret_cast<const uint8_t*>(&kDvMagic),
+          kMagicSize) == 0,
+      "DV-v1 magic mismatch in Puffin blob.");
+
+  // Expected blob size: combined length + magic + CRC sizes
+  const auto blobSize =
+      static_cast<uint64_t>(kCombinedLengthSize + combinedLength + kCrcSize);
+  VELOX_CHECK_EQ(source.blobLength, blobSize, "DV-v1 blob size mismatch.");
+
+  // Payload offset: sum of combined length and magic size
+  source.payloadOffset = kCombinedLengthSize + kMagicSize;
+  // Payload size: combined length minus magic size
+  source.payloadSize = combinedLength - kMagicSize;
+
+  return source;
 }
 
 } // namespace
+
+CudfDeletionVectorReader::CudfDeletionVectorReader(
+    const velox_iceberg::IcebergDeleteFile& dvFile,
+    uint64_t splitOffset)
+    : dvFile_{dvFile.filePath, dvFile.fileSizeInBytes, dvFile.lowerBounds, dvFile.upperBounds},
+      splitOffset_(splitOffset) {
+  VELOX_CHECK(
+      dvFile.content == velox_iceberg::FileContent::kDeletionVector,
+      "Expected deletion vector file but got content type: {}",
+      static_cast<int>(dvFile.content));
+  VELOX_CHECK_GT(dvFile.recordCount, 0, "Empty deletion vector.");
+
+  static constexpr int64_t kMaxDeletionVectorRecordCount = 10'000'000'000LL;
+  VELOX_CHECK_LE(
+      dvFile.recordCount,
+      kMaxDeletionVectorRecordCount,
+      "Empty deletion vector.");
+}
 
 // ---------------------------------------------------------------------------
 // loadAndInitialize — probe header + single-copy payload read + GPU bitmap
 // ---------------------------------------------------------------------------
 
-void CudfDeletionVectorReader::loadAndInitialize(rmm::cuda_stream_view stream) {
-  auto src =
-      openAndProbeBlob(filePath_, fileSizeInBytes_, lowerBounds_, upperBounds_);
-  const auto payloadFileOffset = src.blobOffset + src.payloadOffset;
-  const auto payloadSize = src.payloadSize;
+void CudfDeletionVectorReader::loadBitmap(rmm::cuda_stream_view stream) {
+  if (loaded_) {
+    return;
+  }
+
+  // Puffin file layout:
+  //   [Magic "PUF1" (4 bytes)]
+  //   [Blob0 (M bytes)]
+  //   [Blob1 (N bytes)]
+  //   [Footer]
+  //   [Footer payload size (4 bytes, little-endian)]
+  //   [Flags (4 bytes)]
+  //   [Magic "PUF1" (4 bytes)]
+
+  auto source = loadBlobSource(
+      dvFile_.filePath,
+      dvFile_.fileSizeInBytes,
+      dvFile_.lowerBounds,
+      dvFile_.upperBounds);
+
+  // Deletion vector payload
+  const auto payloadFileOffset = source.blobOffset + source.payloadOffset;
+  const auto payloadSize = source.payloadSize;
 
   VELOX_CHECK_GE(payloadSize, 4, "Deletion vector payload too small");
 
   // Read a small probe from the start of the payload to determine the
-  // Roaring format and whether normalization is needed.  24 bytes covers:
+  // roaring format and whether normalization is needed.
+  // Reading 24 bytes covers:
   //   - Roaring32 cookie (4B) + numContainers (4B)
   //   - Roaring64 numBuckets (8B) + bucket key (4B) + inner cookie (4B) +
   //     inner numContainers (4B)
   constexpr std::size_t kProbeSize = 24;
   char probe[kProbeSize];
   auto probeBytes = std::min(payloadSize, kProbeSize);
-  src.file->pread(payloadFileOffset, probeBytes, probe);
+  source.file->pread(payloadFileOffset, probeBytes, probe);
 
   uint32_t firstWord;
   std::memcpy(&firstWord, probe, sizeof(uint32_t));
   bool isRawRoaring32 =
       (firstWord == kNoRunCookie) || ((firstWord & kCookieMask) == kRunCookie);
+
+  std::string roaringBitmapPayload;
 
   if (isRawRoaring32) {
     if (roaring32NeedsNormalization(probe, probeBytes)) {
@@ -446,23 +540,23 @@ void CudfDeletionVectorReader::loadAndInitialize(rmm::cuda_stream_view stream) {
       parseRoaring32Cookie(probe, cookie, numContainers);
       if (cookie == kNoRunCookie) {
         injectNoRunOffsetsFromFile(
-            *src.file,
+            *source.file,
             payloadFileOffset,
             payloadSize,
             numContainers,
-            normalizedPayload_);
+            roaringBitmapPayload);
       } else {
         // Run-cookie: must parse full payload to expand runs (tiny payloads).
         std::string tmp(payloadSize, '\0');
-        src.file->pread(payloadFileOffset, payloadSize, tmp.data());
-        normalizedPayload_ = convertRunToNoRun(tmp.data(), numContainers);
+        source.file->pread(payloadFileOffset, payloadSize, tmp.data());
+        roaringBitmapPayload = convertRunToNoRun(tmp.data(), numContainers);
       }
     } else {
-      normalizedPayload_.resize(payloadSize);
-      src.file->pread(
-          payloadFileOffset, payloadSize, normalizedPayload_.data());
+      roaringBitmapPayload.resize(payloadSize);
+      source.file->pread(
+          payloadFileOffset, payloadSize, roaringBitmapPayload.data());
     }
-    buildBitmap<BitmapType::k32Bit>(stream);
+    buildBitmap<BitmapType::k32Bit>(roaringBitmapPayload, stream);
   } else {
     VELOX_CHECK_GT(
         payloadSize,
@@ -485,30 +579,31 @@ void CudfDeletionVectorReader::loadAndInitialize(rmm::cuda_stream_view stream) {
         parseRoaring32Cookie(innerProbe, cookie, numContainers);
         if (cookie == kNoRunCookie) {
           injectNoRunOffsetsFromFile(
-              *src.file,
+              *source.file,
               r32FileOffset,
               r32Size,
               numContainers,
-              normalizedPayload_);
+              roaringBitmapPayload);
         } else {
           std::string tmp(r32Size, '\0');
-          src.file->pread(r32FileOffset, r32Size, tmp.data());
-          normalizedPayload_ = convertRunToNoRun(tmp.data(), numContainers);
+          source.file->pread(r32FileOffset, r32Size, tmp.data());
+          roaringBitmapPayload = convertRunToNoRun(tmp.data(), numContainers);
         }
       } else {
-        normalizedPayload_.resize(r32Size);
-        src.file->pread(r32FileOffset, r32Size, normalizedPayload_.data());
+        roaringBitmapPayload.resize(r32Size);
+        source.file->pread(r32FileOffset, r32Size, roaringBitmapPayload.data());
       }
-      buildBitmap<BitmapType::k32Bit>(stream);
+      buildBitmap<BitmapType::k32Bit>(roaringBitmapPayload, stream);
     } else {
       std::string tmp(payloadSize, '\0');
-      src.file->pread(payloadFileOffset, payloadSize, tmp.data());
+      source.file->pread(payloadFileOffset, payloadSize, tmp.data());
       if (roaring64NeedsNormalization(tmp.data(), tmp.size())) {
-        normalizedPayload_ = normalizeRoaring64ForCuco(tmp.data(), tmp.size());
+        roaringBitmapPayload =
+            normalizeRoaring64ForCuco(tmp.data(), tmp.size());
       } else {
-        normalizedPayload_ = std::move(tmp);
+        roaringBitmapPayload = std::move(tmp);
       }
-      buildBitmap<BitmapType::k64Bit>(stream);
+      buildBitmap<BitmapType::k64Bit>(roaringBitmapPayload, stream);
     }
   }
 }

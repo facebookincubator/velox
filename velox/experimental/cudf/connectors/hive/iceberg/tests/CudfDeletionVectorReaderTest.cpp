@@ -21,6 +21,7 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/testutil/TempFilePath.h"
+#include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 
 #include <cudf/column/column_view.hpp>
 #include <cudf/table/table.hpp>
@@ -34,8 +35,10 @@
 #include <fstream>
 
 using namespace facebook::velox;
-using namespace facebook::velox::cudf_velox::connector::hive::iceberg;
 using namespace facebook::velox::common::testutil;
+using facebook::velox::cudf_velox::connector::hive::iceberg::
+    CudfDeletionVectorReader;
+namespace velox_iceberg = ::facebook::velox::connector::hive::iceberg;
 
 namespace {
 
@@ -178,13 +181,8 @@ std::shared_ptr<TempFilePath> writeDvFile(const std::string& bitmapData) {
 // verifying results.
 // ---------------------------------------------------------------------------
 
-/// Creates the constructor arguments for CudfDeletionVectorReader.
-std::tuple<
-    std::string,
-    uint64_t,
-    std::unordered_map<int32_t, std::string>,
-    std::unordered_map<int32_t, std::string>>
-makeDvReaderArgs(
+/// Creates an IcebergDeleteFile for constructing CudfDeletionVectorReader.
+velox_iceberg::IcebergDeleteFile makeDvDeleteFile(
     const std::string& filePath,
     uint64_t fileSize,
     uint64_t blobOffset = 0,
@@ -195,7 +193,15 @@ makeDvReaderArgs(
       std::to_string(blobOffset);
   upperBounds[CudfDeletionVectorReader::kDvLengthFieldId] =
       std::to_string(blobLength.value_or(fileSize));
-  return {filePath, fileSize, lowerBounds, upperBounds};
+  return velox_iceberg::IcebergDeleteFile(
+      velox_iceberg::FileContent::kDeletionVector,
+      filePath,
+      dwio::common::FileFormat::UNKNOWN,
+      1,
+      fileSize,
+      {},
+      std::move(lowerBounds),
+      std::move(upperBounds));
 }
 
 /// Extracts the remaining row indices from a filtered cudf table.
@@ -268,11 +274,8 @@ TEST_F(CudfDeletionVectorReaderTest, basicArrayContainer) {
   auto tempFile = writeDvFile(bitmapData);
   auto fileSize = static_cast<uint64_t>(bitmapData.size());
 
-  auto [path, fsize, lower, upper] =
-      makeDvReaderArgs(tempFile->getPath(), fileSize);
-  CudfDeletionVectorReader reader(
-      std::move(path), fsize, std::move(lower), std::move(upper));
-  reader.loadAndInitialize(stream_);
+  auto dvDeleteFile = makeDvDeleteFile(tempFile->getPath(), fileSize);
+  CudfDeletionVectorReader reader(dvDeleteFile);
 
   auto table = makeIndexTable(100, stream_, mr_);
   auto rowMask =
@@ -296,11 +299,8 @@ TEST_F(CudfDeletionVectorReaderTest, noDeletesInRange) {
   auto tempFile = writeDvFile(bitmapData);
   auto fileSize = static_cast<uint64_t>(bitmapData.size());
 
-  auto [path, fsize, lower, upper] =
-      makeDvReaderArgs(tempFile->getPath(), fileSize);
-  CudfDeletionVectorReader reader(
-      std::move(path), fsize, std::move(lower), std::move(upper));
-  reader.loadAndInitialize(stream_);
+  auto dvDeleteFile = makeDvDeleteFile(tempFile->getPath(), fileSize);
+  CudfDeletionVectorReader reader(dvDeleteFile);
 
   // Table has 100 rows; deleted positions 1000/2000 are out of range.
   auto table = makeIndexTable(100, stream_, mr_);
@@ -323,11 +323,8 @@ TEST_F(CudfDeletionVectorReaderTest, runContainers) {
   auto tempFile = writeDvFile(bitmapData);
   auto fileSize = static_cast<uint64_t>(bitmapData.size());
 
-  auto [path, fsize, lower, upper] =
-      makeDvReaderArgs(tempFile->getPath(), fileSize);
-  CudfDeletionVectorReader reader(
-      std::move(path), fsize, std::move(lower), std::move(upper));
-  reader.loadAndInitialize(stream_);
+  auto dvDeleteFile = makeDvDeleteFile(tempFile->getPath(), fileSize);
+  CudfDeletionVectorReader reader(dvDeleteFile);
 
   auto table = makeIndexTable(100, stream_, mr_);
   auto rowMask =
@@ -359,11 +356,8 @@ TEST_F(CudfDeletionVectorReaderTest, largePositionsMultipleContainers) {
   auto tempFile = writeDvFile(bitmapData);
   auto fileSize = static_cast<uint64_t>(bitmapData.size());
 
-  auto [path, fsize, lower, upper] =
-      makeDvReaderArgs(tempFile->getPath(), fileSize);
-  CudfDeletionVectorReader reader(
-      std::move(path), fsize, std::move(lower), std::move(upper));
-  reader.loadAndInitialize(stream_);
+  auto dvDeleteFile = makeDvDeleteFile(tempFile->getPath(), fileSize);
+  CudfDeletionVectorReader reader(dvDeleteFile);
 
   auto table = makeIndexTable(66000, stream_, mr_);
   auto rowMask =
@@ -392,11 +386,9 @@ TEST_F(CudfDeletionVectorReaderTest, blobOffset) {
   auto tempFile = writeDvFile(fileContent);
   auto fileSize = static_cast<uint64_t>(fileContent.size());
 
-  auto [path, fsize, lower, upper] =
-      makeDvReaderArgs(tempFile->getPath(), fileSize, 64, bitmapData.size());
-  CudfDeletionVectorReader reader(
-      std::move(path), fsize, std::move(lower), std::move(upper));
-  reader.loadAndInitialize(stream_);
+  auto dvDeleteFile =
+      makeDvDeleteFile(tempFile->getPath(), fileSize, 64, bitmapData.size());
+  CudfDeletionVectorReader reader(dvDeleteFile);
 
   auto table = makeIndexTable(20, stream_, mr_);
   auto rowMask =
@@ -419,11 +411,8 @@ TEST_F(CudfDeletionVectorReaderTest, singlePosition) {
   auto tempFile = writeDvFile(bitmapData);
   auto fileSize = static_cast<uint64_t>(bitmapData.size());
 
-  auto [path, fsize, lower, upper] =
-      makeDvReaderArgs(tempFile->getPath(), fileSize);
-  CudfDeletionVectorReader reader(
-      std::move(path), fsize, std::move(lower), std::move(upper));
-  reader.loadAndInitialize(stream_);
+  auto dvDeleteFile = makeDvDeleteFile(tempFile->getPath(), fileSize);
+  CudfDeletionVectorReader reader(dvDeleteFile);
 
   auto table = makeIndexTable(100, stream_, mr_);
   auto rowMask =
@@ -450,11 +439,8 @@ TEST_F(CudfDeletionVectorReaderTest, consecutivePositions) {
   auto tempFile = writeDvFile(bitmapData);
   auto fileSize = static_cast<uint64_t>(bitmapData.size());
 
-  auto [path, fsize, lower, upper] =
-      makeDvReaderArgs(tempFile->getPath(), fileSize);
-  CudfDeletionVectorReader reader(
-      std::move(path), fsize, std::move(lower), std::move(upper));
-  reader.loadAndInitialize(stream_);
+  auto dvDeleteFile = makeDvDeleteFile(tempFile->getPath(), fileSize);
+  CudfDeletionVectorReader reader(dvDeleteFile);
 
   // Table has 200 rows; first 100 should be deleted.
   auto table = makeIndexTable(200, stream_, mr_);
@@ -478,11 +464,8 @@ TEST_F(CudfDeletionVectorReaderTest, startRowOffset) {
   auto tempFile = writeDvFile(bitmapData);
   auto fileSize = static_cast<uint64_t>(bitmapData.size());
 
-  auto [path, fsize, lower, upper] =
-      makeDvReaderArgs(tempFile->getPath(), fileSize);
-  CudfDeletionVectorReader reader(
-      std::move(path), fsize, std::move(lower), std::move(upper));
-  reader.loadAndInitialize(stream_);
+  auto dvDeleteFile = makeDvDeleteFile(tempFile->getPath(), fileSize);
+  CudfDeletionVectorReader reader(dvDeleteFile);
 
   // Create a 20-row table; startRow=100 means the reader maps row 0 of this
   // chunk to absolute position 100.

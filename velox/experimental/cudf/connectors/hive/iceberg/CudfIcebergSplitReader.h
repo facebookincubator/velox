@@ -96,7 +96,7 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   std::shared_ptr<const velox_hive::HiveConfig> hiveConfig_;
 
   /// cuCollections-accelerated deletion vector (roaring bitmap) reader
-  std::unique_ptr<CudfDeletionVectorReader> dvReader_;
+  std::unique_ptr<CudfDeletionVectorReader> deletionVectorReader_;
 
   /// Positional delete file readers
   std::list<std::unique_ptr<velox_iceberg::PositionalDeleteFileReader>>

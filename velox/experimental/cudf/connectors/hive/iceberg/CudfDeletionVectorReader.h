@@ -25,8 +25,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <string>
-#include <unordered_map>
+#include <string_view>
+
+// Forward declare instead of including the `IcebergDeleteFile.h` here since the
+// header cannot be transitively included in the .cu file.
+namespace facebook::velox::connector::hive::iceberg {
+struct IcebergDeleteFile;
+} // namespace facebook::velox::connector::hive::iceberg
 
 namespace facebook::velox::cudf_velox::connector::hive::iceberg {
 
@@ -43,24 +48,20 @@ namespace facebook::velox::cudf_velox::connector::hive::iceberg {
 class CudfDeletionVectorReader {
  public:
   //! Forward declaration of the opaque cuco roaring bitmap wrapper.
-  struct BitmapImpl;
+  struct RoaringBitmapImpl;
 
   CudfDeletionVectorReader(
-      std::string filePath,
-      uint64_t fileSizeInBytes,
-      std::unordered_map<int32_t, std::string> lowerBounds,
-      std::unordered_map<int32_t, std::string> upperBounds);
+      const velox::connector::hive::iceberg::IcebergDeleteFile& dvFile,
+      uint64_t splitOffset = 0);
 
   ~CudfDeletionVectorReader();
-
   CudfDeletionVectorReader(CudfDeletionVectorReader&&) noexcept;
-  CudfDeletionVectorReader& operator=(CudfDeletionVectorReader&&) noexcept;
-  CudfDeletionVectorReader(const CudfDeletionVectorReader&) = delete;
-  CudfDeletionVectorReader& operator=(const CudfDeletionVectorReader&) = delete;
 
-  /// Reads the DV blob from the Puffin file, strips the DV-v1 envelope, and
-  /// constructs the cuco roaring bitmap on the GPU.
-  void loadAndInitialize(rmm::cuda_stream_view stream);
+  /// Returns true when there is no more data. For DVs this is always true
+  /// after `loadBitmap` has been called.
+  bool noMoreData() const {
+    return loaded_;
+  }
 
   /// Applies the deletion vector to a cudf table chunk.
   ///
@@ -77,6 +78,9 @@ class CudfDeletionVectorReader {
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr);
 
+  /// Field IDs used to encode DV blob offset and length in the
+  /// IcebergDeleteFile bounds maps. The coordinator encodes these when
+  /// building splits from Puffin file metadata.
   static constexpr int32_t kDvOffsetFieldId = 100;
   static constexpr int32_t kDvLengthFieldId = 101;
 
@@ -84,20 +88,43 @@ class CudfDeletionVectorReader {
   /// Bitmap type for the deletion vector.
   enum class BitmapType : uint8_t { k32Bit = 0, k64Bit = 1 };
 
-  /// Constructs the cuco roaring bitmap on the GPU from normalizedPayload_.
-  /// Defined in .cu (requires nvcc for cuco/thrust).
-  /// @tparam use32bit If true, build a 32-bit bitmap; otherwise 64-bit.
-  template <BitmapType Bits>
-  void buildBitmap(rmm::cuda_stream_view stream);
+  /// Constructs cuco roaring bitmap from the normalized roaring bitmap
+  /// payload.
+  /// @tparam Bits Roaring bitmap type to build
+  /// @param roaringBitmapPayload Normalized payload of the roaring bitmap.
+  /// @param stream CUDA stream for bitmap construction
+  template <BitmapType BitSize>
+  void buildBitmap(
+      std::string_view roaringBitmapPayload,
+      rmm::cuda_stream_view stream);
 
-  std::string filePath_;
-  uint64_t fileSizeInBytes_;
-  std::unordered_map<int32_t, std::string> lowerBounds_;
-  std::unordered_map<int32_t, std::string> upperBounds_;
+  /// Loads the deletion vector blob from the Puffin file, strips the DV-v1
+  /// envelope, and constructs the cuco roaring bitmap. Called lazily on the
+  /// first `applyDeletionVector` call.
+  void loadBitmap(rmm::cuda_stream_view stream);
 
-  std::string normalizedPayload_;
-  std::unique_ptr<BitmapImpl> bitmap_;
+  /// Deleter for RoaringBitmapImpl
+  struct RoaringBitmapDeleter {
+    void operator()(RoaringBitmapImpl* p) const;
+  };
+
+  /// Opaque wrapper class for cuco's 32 or 64 bit roaring bitmap
+  std::unique_ptr<RoaringBitmapImpl, RoaringBitmapDeleter> bitmap_;
+
+  /// Device buffer for the row indices vector.
   std::unique_ptr<rmm::device_buffer> rowIndices_;
+
+  /// Deletion vector file metadata.
+  struct {
+    const std::string filePath;
+    const uint64_t fileSizeInBytes;
+    const std::unordered_map<int32_t, std::string> lowerBounds;
+    const std::unordered_map<int32_t, std::string> upperBounds;
+  } dvFile_;
+  uint64_t splitOffset_;
+
+  /// Whether the bitmap has been loaded from the file.
+  bool loaded_{false};
 };
 
 } // namespace facebook::velox::cudf_velox::connector::hive::iceberg

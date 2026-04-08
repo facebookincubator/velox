@@ -103,7 +103,7 @@ CudfIcebergSplitReader::CudfIcebergSplitReader(
       hiveConfig_(hiveConfig) {}
 
 void CudfIcebergSplitReader::prepareSplit() {
-  dvReader_.reset();
+  deletionVectorReader_.reset();
   positionalDeleteFileReaders_.clear();
   equalityDeleteFileReaders_.clear();
   baseReadOffset_ = 0;
@@ -121,7 +121,7 @@ rmm::device_async_resource_ref
 CudfIcebergSplitReader::determineCudfMemoryResource() {
   // If we will be applying any deletes, use temporary mr to read table chunks
   // from cuDF readers. Otherwise, use the output mr.
-  return (dvReader_ or positionalDeleteFileReaders_.size() or
+  return (deletionVectorReader_ or positionalDeleteFileReaders_.size() or
           equalityDeleteFileReaders_.size())
       ? get_temp_mr()
       : get_output_mr();
@@ -148,7 +148,7 @@ CudfIcebergSplitReader::readNextChunk(
   const auto numRows = cudfTable->num_rows();
 
   // Determine if we will be applying any deletes
-  const auto willApplyDeletes = dvReader_ or
+  const auto willApplyDeletes = deletionVectorReader_ or
       positionalDeleteFileReaders_.size() or equalityDeleteFileReaders_.size();
   const auto rowMaskUnallocated = not rowMask_ or rowMask_->size() < numRows;
   if (willApplyDeletes and rowMaskUnallocated) {
@@ -157,19 +157,28 @@ CudfIcebergSplitReader::readNextChunk(
   }
 
   // Apply deletion vector, if any
-  if (dvReader_ and cudfTable->num_rows() > 0) {
+  if (deletionVectorReader_ and cudfTable->num_rows() > 0) {
     // If we will be applying positional or equality deletes later, use the
     // temporary mr. Otherwise, use the output mr.
     mr =
         positionalDeleteFileReaders_.size() or equalityDeleteFileReaders_.size()
         ? get_temp_mr()
         : output_mr;
-    cudfTable = dvReader_->applyDeletionVector(
+    cudfTable = deletionVectorReader_->applyDeletionVector(
         cudfTable->view(), baseReadOffset_, rowMask_, stream_, mr);
+
+    // Reset the deletion vector reader if we have read the entire bitmap.
+    if (deletionVectorReader_->noMoreData()) {
+      deletionVectorReader_.reset();
+    }
   }
 
-  if (positionalDeleteFileReaders_.size() or
-      equalityDeleteFileReaders_.size()) {
+  // Initialize the delete bitmap if we will be applying positional or equality
+  // deletes now
+  const auto willApplyPositionOrEqualityDeletes = cudfTable->num_rows() > 0 and
+      (positionalDeleteFileReaders_.size() or
+       equalityDeleteFileReaders_.size());
+  if (willApplyPositionOrEqualityDeletes) {
     const auto numWords = cudf::num_bitmask_words(numRows);
     const auto numBitmaskBytes = numWords * sizeof(cudf::bitmask_type);
     dwio::common::ensureCapacity<int8_t>(
@@ -214,6 +223,7 @@ CudfIcebergSplitReader::readNextChunk(
 }
 
 void CudfIcebergSplitReader::setupDeleteFileReaders() {
+  // TODO(mh): We currently read a data files as a single split.
   constexpr uint64_t splitOffset = 0;
 
   for (const auto& deleteFile : icebergSplit_->deleteFiles) {
@@ -229,6 +239,8 @@ void CudfIcebergSplitReader::setupDeleteFileReaders() {
       }
 
       // Skip the delete file if all delete positions are before this split.
+      // TODO: Skip delete files where all positions are after the split, if
+      // split row count becomes available.
       if (auto iter = deleteFile.upperBounds.find(
               velox_iceberg::IcebergMetadataColumn::kPosId);
           iter != deleteFile.upperBounds.end()) {
@@ -271,6 +283,9 @@ void CudfIcebergSplitReader::setupDeleteFileReaders() {
         continue;
       }
 
+      // Resolve equalityFieldIds to column names and types. In Iceberg,
+      // field IDs for top-level columns are assigned sequentially starting
+      // from 1, matching the column order in the table schema.
       std::vector<std::string> equalityColumnNames;
       std::vector<TypePtr> equalityColumnTypes;
 
@@ -315,13 +330,8 @@ void CudfIcebergSplitReader::setupDeleteFileReaders() {
               /*isEqualityDelete=*/false)) {
         continue;
       }
-
-      dvReader_ = std::make_unique<CudfDeletionVectorReader>(
-          deleteFile.filePath,
-          deleteFile.fileSizeInBytes,
-          deleteFile.lowerBounds,
-          deleteFile.upperBounds);
-      dvReader_->loadAndInitialize(stream_);
+      deletionVectorReader_ =
+          std::make_unique<CudfDeletionVectorReader>(deleteFile, splitOffset);
     } else {
       VELOX_NYI(
           "Unsupported delete file content type: {}",

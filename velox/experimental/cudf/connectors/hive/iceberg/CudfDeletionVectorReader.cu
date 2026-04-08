@@ -33,11 +33,13 @@ namespace facebook::velox::cudf_velox::connector::hive::iceberg {
 
 namespace {
 
+/// Aliases for cuco's 32 and 64 bit roaring bitmaps.
 using Roaring32BitmapType = cuco::experimental::
     roaring_bitmap<cuda::std::uint32_t, rmm::mr::polymorphic_allocator<char>>;
 using Roaring64BitmapType = cuco::experimental::
     roaring_bitmap<cuda::std::uint64_t, rmm::mr::polymorphic_allocator<char>>;
 
+/// Helper functor to negate a boolean value.
 struct NegateBool {
   __device__ bool operator()(bool b) const {
     return !b;
@@ -46,13 +48,9 @@ struct NegateBool {
 
 } // namespace
 
-// ---------------------------------------------------------------------------
-// BitmapImpl — opaque wrapper kept out of the header.
-// Holds either a 32-bit or 64-bit cuco roaring bitmap depending on whether
-// the input was raw Roaring32 or Roaring64 (inside a DV-v1 Puffin blob).
-// ---------------------------------------------------------------------------
-
-struct CudfDeletionVectorReader::BitmapImpl {
+/// Opaque wrapper class for cuco's 32 or 64 bit roaring bitmap depending on
+/// the input inside a DV-v1 Puffin blob.
+struct CudfDeletionVectorReader::RoaringBitmapImpl {
   std::unique_ptr<Roaring32BitmapType> bitmap32;
   std::unique_ptr<Roaring64BitmapType> bitmap64;
 
@@ -74,48 +72,46 @@ struct CudfDeletionVectorReader::BitmapImpl {
   }
 };
 
-// ---------------------------------------------------------------------------
-// Special members (defined here where BitmapImpl is complete)
-// ---------------------------------------------------------------------------
-
-CudfDeletionVectorReader::CudfDeletionVectorReader(
-    std::string filePath,
-    uint64_t fileSizeInBytes,
-    std::unordered_map<int32_t, std::string> lowerBounds,
-    std::unordered_map<int32_t, std::string> upperBounds)
-    : filePath_(std::move(filePath)),
-      fileSizeInBytes_(fileSizeInBytes),
-      lowerBounds_(std::move(lowerBounds)),
-      upperBounds_(std::move(upperBounds)) {}
+/// RoaringBitmapImpl is now fully defined. Define its deleter, and
+/// CudfDeletionVectorReader's move constructor and destructor here.
+void CudfDeletionVectorReader::RoaringBitmapDeleter::operator()(
+    RoaringBitmapImpl* p) const {
+  delete p;
+}
 
 CudfDeletionVectorReader::~CudfDeletionVectorReader() = default;
 CudfDeletionVectorReader::CudfDeletionVectorReader(
     CudfDeletionVectorReader&&) noexcept = default;
-CudfDeletionVectorReader& CudfDeletionVectorReader::operator=(
-    CudfDeletionVectorReader&&) noexcept = default;
 
-// ---------------------------------------------------------------------------
-// buildBitmap — construct the cuco roaring bitmap from normalizedPayload_
-// ---------------------------------------------------------------------------
-
-template <CudfDeletionVectorReader::BitmapType Bits>
-void CudfDeletionVectorReader::buildBitmap(rmm::cuda_stream_view stream) {
-  bitmap_ = std::make_unique<BitmapImpl>();
+/// Constructs the cuco roaring bitmap on the GPU from the roaringBitmapPayload.
+template <CudfDeletionVectorReader::BitmapType BitSize>
+void CudfDeletionVectorReader::buildBitmap(
+    std::string_view roaringBitmapPayload,
+    rmm::cuda_stream_view stream) {
+  bitmap_ = std::unique_ptr<RoaringBitmapImpl, RoaringBitmapDeleter>(
+      new RoaringBitmapImpl());
   auto const* bytes =
-      reinterpret_cast<cuda::std::byte const*>(normalizedPayload_.data());
-  if constexpr (Bits == BitmapType::k32Bit) {
+      reinterpret_cast<cuda::std::byte const*>(roaringBitmapPayload.data());
+  if constexpr (BitSize == BitmapType::k32Bit) {
     bitmap_->bitmap32 = std::make_unique<Roaring32BitmapType>(
         bytes, rmm::mr::polymorphic_allocator<char>{}, stream);
   } else {
     bitmap_->bitmap64 = std::make_unique<Roaring64BitmapType>(
         bytes, rmm::mr::polymorphic_allocator<char>{}, stream);
   }
+
+  // Mark the roaring bitmap as loaded
+  loaded_ = true;
 }
 
 template void CudfDeletionVectorReader::buildBitmap<
-    CudfDeletionVectorReader::BitmapType::k32Bit>(rmm::cuda_stream_view);
+    CudfDeletionVectorReader::BitmapType::k32Bit>(
+    std::string_view,
+    rmm::cuda_stream_view);
 template void CudfDeletionVectorReader::buildBitmap<
-    CudfDeletionVectorReader::BitmapType::k64Bit>(rmm::cuda_stream_view);
+    CudfDeletionVectorReader::BitmapType::k64Bit>(
+    std::string_view,
+    rmm::cuda_stream_view);
 
 // ---------------------------------------------------------------------------
 // applyDeletionVector — filter deleted rows from a table chunk
@@ -127,8 +123,16 @@ std::unique_ptr<cudf::table> CudfDeletionVectorReader::applyDeletionVector(
     std::shared_ptr<rmm::device_buffer> rowMask,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
-  // Return early if empty table or no bitmap
-  if (table.num_rows() == 0 or not bitmap_ or bitmap_->empty()) {
+  // Return early if empty input table
+  if (table.num_rows() == 0) {
+    return std::make_unique<cudf::table>(table, stream, mr);
+  }
+
+  // Load the cuco roaring bitmap
+  loadBitmap(stream);
+
+  // Return early if no bitmap or empty bitmap
+  if (not bitmap_ or bitmap_->empty()) {
     return std::make_unique<cudf::table>(table, stream, mr);
   }
 
