@@ -212,30 +212,7 @@ jobs:
               echo "flaky=true" >> "$GITHUB_OUTPUT"
             else
               echo "::error::Tests failed consistently on retry."
-              FAILED_TESTS=$(grep -A 1000 'The following tests FAILED:' /tmp/ctest-output.log | grep -E '^\s+[0-9]+ - ' | sed 's/.*- \(.*\) (.*/\1/' | head -20 || true)
-              FAILED_CASES=$(grep -E '^\[  FAILED  \]' /tmp/ctest-output.log | sed 's/\[  FAILED  \] //' | sed 's/ (.*//' | grep '\.' | sort -u | head -20 || true)
-              FAILURE_DETAILS=$(sed -n '/^\[ RUN      \]/,/^\[  FAILED  \]/p' /tmp/ctest-output.log | head -200 || true)
-              if [[ -n "$FAILED_TESTS" ]]; then
-                {
-                  echo 'failed-tests<<EOF'
-                  echo "$FAILED_TESTS"
-                  echo 'EOF'
-                } >> "$GITHUB_OUTPUT"
-              fi
-              if [[ -n "$FAILED_CASES" ]]; then
-                {
-                  echo 'failed-cases<<EOF'
-                  echo "$FAILED_CASES"
-                  echo 'EOF'
-                } >> "$GITHUB_OUTPUT"
-              fi
-              if [[ -n "$FAILURE_DETAILS" ]]; then
-                {
-                  echo 'failure-details<<EOF'
-                  echo "$FAILURE_DETAILS"
-                  echo 'EOF'
-                } >> "$GITHUB_OUTPUT"
-              fi
+              .github/scripts/extract-test-failures.sh /tmp/ctest-output.log
               exit 1
             fi
           fi
@@ -571,30 +548,7 @@ jobs:
               echo "flaky=true" >> "$GITHUB_OUTPUT"
             else
               echo "::error::Tests failed consistently on retry."
-              FAILED_TESTS=$(grep -A 1000 'The following tests FAILED:' /tmp/ctest-output.log | grep -E '^\s+[0-9]+ - ' | sed 's/.*- \(.*\) (.*/\1/' | head -20 || true)
-              FAILED_CASES=$(grep -E '^\[  FAILED  \]' /tmp/ctest-output.log | sed 's/\[  FAILED  \] //' | sed 's/ (.*//' | grep '\.' | sort -u | head -20 || true)
-              FAILURE_DETAILS=$(sed -n '/^\[ RUN      \]/,/^\[  FAILED  \]/p' /tmp/ctest-output.log | head -200 || true)
-              if [[ -n "$FAILED_TESTS" ]]; then
-                {
-                  echo 'failed-tests<<EOF'
-                  echo "$FAILED_TESTS"
-                  echo 'EOF'
-                } >> "$GITHUB_OUTPUT"
-              fi
-              if [[ -n "$FAILED_CASES" ]]; then
-                {
-                  echo 'failed-cases<<EOF'
-                  echo "$FAILED_CASES"
-                  echo 'EOF'
-                } >> "$GITHUB_OUTPUT"
-              fi
-              if [[ -n "$FAILURE_DETAILS" ]]; then
-                {
-                  echo 'failure-details<<EOF'
-                  echo "$FAILURE_DETAILS"
-                  echo 'EOF'
-                } >> "$GITHUB_OUTPUT"
-              fi
+              .github/scripts/extract-test-failures.sh /tmp/ctest-output.log
               exit 1
             fi
           fi
