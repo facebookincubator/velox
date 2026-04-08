@@ -14,9 +14,6 @@
  * limitations under the License.
  */
 
-// TODO: Remove after validating CI build failure reporting (PR #17015).
-#error "Intentional build failure to validate CI build failure reporting"
-
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
 
