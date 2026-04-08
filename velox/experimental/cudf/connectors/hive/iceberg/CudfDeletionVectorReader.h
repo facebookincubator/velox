@@ -66,12 +66,14 @@ class CudfDeletionVectorReader {
   ///
   /// @param table The cudf table chunk to filter.
   /// @param startRow Absolute row index of the first row in this chunk.
+  /// @param rowMask Shared boolean mask buffer on device.
   /// @param stream CUDA stream for kernel launches.
   /// @param mr Device memory resource for the output table.
   /// @return A new cudf table with deleted rows removed.
   std::unique_ptr<cudf::table> applyDeletionVector(
       cudf::table_view const& table,
       std::size_t startRow,
+      std::shared_ptr<rmm::device_buffer> rowMask,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr);
 
@@ -96,7 +98,6 @@ class CudfDeletionVectorReader {
   std::string normalizedPayload_;
   std::unique_ptr<BitmapImpl> bitmap_;
   std::unique_ptr<rmm::device_buffer> rowIndices_;
-  std::unique_ptr<rmm::device_buffer> rowMask_;
 };
 
 } // namespace facebook::velox::cudf_velox::connector::hive::iceberg

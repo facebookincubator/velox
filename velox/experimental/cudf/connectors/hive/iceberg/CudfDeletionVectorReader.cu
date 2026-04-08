@@ -124,12 +124,15 @@ template void CudfDeletionVectorReader::buildBitmap<
 std::unique_ptr<cudf::table> CudfDeletionVectorReader::applyDeletionVector(
     cudf::table_view const& table,
     std::size_t startRow,
+    std::shared_ptr<rmm::device_buffer> rowMask,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
-  auto const numRows = table.num_rows();
-  if (numRows == 0 || !bitmap_ || bitmap_->empty()) {
+  // Return early if empty table or no bitmap
+  if (table.num_rows() == 0 or not bitmap_ or bitmap_->empty()) {
     return std::make_unique<cudf::table>(table, stream, mr);
   }
+
+  const auto numRows = table.num_rows();
 
   // Helper lambda to probe the cuco roaring bitmap (deletion vector)
   auto probeDeletionVector = [&](auto& bitmap) {
@@ -153,16 +156,10 @@ std::unique_ptr<cudf::table> CudfDeletionVectorReader::applyDeletionVector(
 
     // Probe the roaring bitmap and negate output
     auto rowMaskIter = cuda::make_transform_output_iterator(
-        static_cast<bool*>(rowMask_->data()), NegateBool{});
+        static_cast<bool*>(rowMask->data()), NegateBool{});
     bitmap.contains_async(
         rowIndexIter, rowIndexIter + numRows, rowMaskIter, stream);
   };
-
-  // Allocate row mask buffer if needed
-  if (not rowMask_ or rowMask_->size() < numRows * sizeof(bool)) {
-    rowMask_ = std::make_unique<rmm::device_buffer>(
-        numRows * sizeof(bool), stream, mr);
-  }
 
   // Probe the deletion vector
   if (bitmap_->bitmap32) {
@@ -175,7 +172,7 @@ std::unique_ptr<cudf::table> CudfDeletionVectorReader::applyDeletionVector(
   auto rowMaskColumn = cudf::column_view(
       cudf::data_type{cudf::type_id::BOOL8},
       numRows,
-      rowMask_->data(),
+      rowMask->data(),
       nullptr,
       0,
       0);

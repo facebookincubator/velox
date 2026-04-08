@@ -45,8 +45,8 @@ struct IsSurvivingRow {
 std::unique_ptr<cudf::table> applyDeleteBitmap(
     cudf::table_view input,
     const uint8_t* hostBitmap,
-    cudf::bitmask_type* deviceBitmap,
-    bool* deviceRowMask,
+    std::shared_ptr<rmm::device_buffer> deviceBitmap,
+    std::shared_ptr<rmm::device_buffer> rowMask,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref temp_mr,
     rmm::device_async_resource_ref output_mr) {
@@ -56,7 +56,7 @@ std::unique_ptr<cudf::table> applyDeleteBitmap(
 
   // Copy the deletion bitmap to device
   CUDF_CUDA_TRY(cudaMemcpyAsync(
-      deviceBitmap,
+      deviceBitmap->data(),
       hostBitmap,
       numBitmaskBytes,
       cudaMemcpyHostToDevice,
@@ -67,20 +67,21 @@ std::unique_ptr<cudf::table> applyDeleteBitmap(
       rmm::exec_policy_nosync(stream, temp_mr),
       cuda::counting_iterator<cudf::size_type>{0},
       cuda::counting_iterator<cudf::size_type>{numRows},
-      deviceRowMask,
-      IsSurvivingRow{deviceBitmap});
+      static_cast<bool*>(rowMask->data()),
+      IsSurvivingRow{
+          static_cast<const cudf::bitmask_type*>(deviceBitmap->data())});
 
   // Convert the surviving row mask to a column view
-  auto rowMask = cudf::column_view(
+  auto rowMaskCol = cudf::column_view(
       cudf::data_type{cudf::type_id::BOOL8},
       numRows,
-      deviceRowMask,
+      rowMask->data(),
       nullptr,
       0,
       0);
 
   // Apply the boolean mask to the input table
-  return cudf::apply_boolean_mask(input, rowMask, stream, output_mr);
+  return cudf::apply_boolean_mask(input, rowMaskCol, stream, output_mr);
 }
 
 } // namespace facebook::velox::cudf_velox::connector::hive::iceberg

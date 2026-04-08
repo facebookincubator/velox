@@ -275,7 +275,10 @@ TEST_F(CudfDeletionVectorReaderTest, basicArrayContainer) {
   reader.loadAndInitialize(stream_);
 
   auto table = makeIndexTable(100, stream_, mr_);
-  auto filtered = reader.applyDeletionVector(table->view(), 0, stream_, mr_);
+  auto rowMask =
+      std::make_shared<rmm::device_buffer>(100 * sizeof(bool), stream_, mr_);
+  auto filtered =
+      reader.applyDeletionVector(table->view(), 0, rowMask, stream_, mr_);
   stream_.synchronize();
 
   auto survivors = getSurvivorIndices(*filtered);
@@ -301,7 +304,10 @@ TEST_F(CudfDeletionVectorReaderTest, noDeletesInRange) {
 
   // Table has 100 rows; deleted positions 1000/2000 are out of range.
   auto table = makeIndexTable(100, stream_, mr_);
-  auto filtered = reader.applyDeletionVector(table->view(), 0, stream_, mr_);
+  auto rowMask =
+      std::make_shared<rmm::device_buffer>(100 * sizeof(bool), stream_, mr_);
+  auto filtered =
+      reader.applyDeletionVector(table->view(), 0, rowMask, stream_, mr_);
   stream_.synchronize();
 
   EXPECT_EQ(filtered->num_rows(), 100);
@@ -324,7 +330,10 @@ TEST_F(CudfDeletionVectorReaderTest, runContainers) {
   reader.loadAndInitialize(stream_);
 
   auto table = makeIndexTable(100, stream_, mr_);
-  auto filtered = reader.applyDeletionVector(table->view(), 0, stream_, mr_);
+  auto rowMask =
+      std::make_shared<rmm::device_buffer>(100 * sizeof(bool), stream_, mr_);
+  auto filtered =
+      reader.applyDeletionVector(table->view(), 0, rowMask, stream_, mr_);
   stream_.synchronize();
 
   auto survivors = getSurvivorIndices(*filtered);
@@ -357,7 +366,10 @@ TEST_F(CudfDeletionVectorReaderTest, largePositionsMultipleContainers) {
   reader.loadAndInitialize(stream_);
 
   auto table = makeIndexTable(66000, stream_, mr_);
-  auto filtered = reader.applyDeletionVector(table->view(), 0, stream_, mr_);
+  auto rowMask =
+      std::make_shared<rmm::device_buffer>(66000 * sizeof(bool), stream_, mr_);
+  auto filtered =
+      reader.applyDeletionVector(table->view(), 0, rowMask, stream_, mr_);
   stream_.synchronize();
 
   auto survivors = getSurvivorIndices(*filtered);
@@ -387,7 +399,10 @@ TEST_F(CudfDeletionVectorReaderTest, blobOffset) {
   reader.loadAndInitialize(stream_);
 
   auto table = makeIndexTable(20, stream_, mr_);
-  auto filtered = reader.applyDeletionVector(table->view(), 0, stream_, mr_);
+  auto rowMask =
+      std::make_shared<rmm::device_buffer>(20 * sizeof(bool), stream_, mr_);
+  auto filtered =
+      reader.applyDeletionVector(table->view(), 0, rowMask, stream_, mr_);
   stream_.synchronize();
 
   auto survivors = getSurvivorIndices(*filtered);
@@ -411,7 +426,10 @@ TEST_F(CudfDeletionVectorReaderTest, singlePosition) {
   reader.loadAndInitialize(stream_);
 
   auto table = makeIndexTable(100, stream_, mr_);
-  auto filtered = reader.applyDeletionVector(table->view(), 0, stream_, mr_);
+  auto rowMask =
+      std::make_shared<rmm::device_buffer>(100 * sizeof(bool), stream_, mr_);
+  auto filtered =
+      reader.applyDeletionVector(table->view(), 0, rowMask, stream_, mr_);
   stream_.synchronize();
 
   auto survivors = getSurvivorIndices(*filtered);
@@ -440,7 +458,10 @@ TEST_F(CudfDeletionVectorReaderTest, consecutivePositions) {
 
   // Table has 200 rows; first 100 should be deleted.
   auto table = makeIndexTable(200, stream_, mr_);
-  auto filtered = reader.applyDeletionVector(table->view(), 0, stream_, mr_);
+  auto rowMask =
+      std::make_shared<rmm::device_buffer>(200 * sizeof(bool), stream_, mr_);
+  auto filtered =
+      reader.applyDeletionVector(table->view(), 0, rowMask, stream_, mr_);
   stream_.synchronize();
 
   auto survivors = getSurvivorIndices(*filtered);
@@ -466,7 +487,10 @@ TEST_F(CudfDeletionVectorReaderTest, startRowOffset) {
   // Create a 20-row table; startRow=100 means the reader maps row 0 of this
   // chunk to absolute position 100.
   auto table = makeIndexTable(20, stream_, mr_);
-  auto filtered = reader.applyDeletionVector(table->view(), 100, stream_, mr_);
+  auto rowMask =
+      std::make_shared<rmm::device_buffer>(20 * sizeof(bool), stream_, mr_);
+  auto filtered =
+      reader.applyDeletionVector(table->view(), 100, rowMask, stream_, mr_);
   stream_.synchronize();
 
   // Rows at absolute positions 100, 105, 110 correspond to chunk indices

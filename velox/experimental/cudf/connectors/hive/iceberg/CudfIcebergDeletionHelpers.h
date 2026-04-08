@@ -33,8 +33,8 @@ namespace facebook::velox::cudf_velox::connector::hive::iceberg {
 std::unique_ptr<cudf::table> applyDeleteBitmap(
     cudf::table_view input,
     const uint8_t* hostBitmap,
-    cudf::bitmask_type* deviceBitmap,
-    bool* deviceRowMask,
+    std::shared_ptr<rmm::device_buffer> deviceBitmap,
+    std::shared_ptr<rmm::device_buffer> deviceRowMask,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref temp_mr,
     rmm::device_async_resource_ref output_mr);

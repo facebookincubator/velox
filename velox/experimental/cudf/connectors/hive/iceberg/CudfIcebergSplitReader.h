@@ -111,8 +111,8 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   uint64_t baseReadOffset_{0};
 
   BufferPtr deleteBitmap_{nullptr};
-  std::unique_ptr<rmm::device_buffer> deviceDeleteBitmap_;
-  std::unique_ptr<rmm::device_buffer> deviceRowMask_;
+  std::shared_ptr<rmm::device_buffer> deviceDeleteBitmap_;
+  std::shared_ptr<rmm::device_buffer> rowMask_;
 };
 
 } // namespace facebook::velox::cudf_velox::connector::hive::iceberg
