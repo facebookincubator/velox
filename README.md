@@ -1,5 +1,8 @@
 <img src="static/logo.svg" alt="Velox logo" width="50%" align="center" />
 
+[![Linux Build using GCC](https://github.com/facebookincubator/velox/actions/workflows/linux-build.yml/badge.svg)](https://github.com/facebookincubator/velox/actions/workflows/linux-build.yml)
+[![macOS Build](https://github.com/facebookincubator/velox/actions/workflows/macos.yml/badge.svg)](https://github.com/facebookincubator/velox/actions/workflows/macos.yml)
+
 Velox is a composable execution engine distributed as an open source C++
 library. It provides reusable, extensible, and high-performance data processing
 components that can be (re-)used to build data management systems focused on
@@ -68,7 +71,11 @@ found here](velox/examples)
 Developer guides detailing many aspects of the library, in addition to the list
 of available functions [can be found here.](https://facebookincubator.github.io/velox)
 
-Blog posts are available [here](https://velox-lib.io/blog).
+Recent blog posts ([all posts](https://velox-lib.io/blog)):
+
+- [From flaky Axiom CI to a Velox bug fix: a cross-repo debugging story](https://velox-lib.io/blog/debugging-flaky-ci-across-repos) (2026-03-29)
+- [Adaptive Per-Function CPU Time Tracking](https://velox-lib.io/blog/velox-adaptive-cpu-sampling) (2026-03-26)
+- [Accelerating Unicode string processing with SIMD in Velox](https://velox-lib.io/blog/simd-capped-unicode-length) (2026-03-13)
 
 ## Community
 

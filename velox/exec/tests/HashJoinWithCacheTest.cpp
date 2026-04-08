@@ -134,14 +134,20 @@ TEST_F(HashJoinWithCacheTest, sequential) {
 
   // The last driver that finishes building reports the cache miss stat.
   ASSERT_EQ(
-      hashBuildStats1.runtimeStats.count(BaseHashTable::kHashTableCacheMiss), 1)
+      hashBuildStats1.runtimeStats.count(
+          std::string(BaseHashTable::kHashTableCacheMiss)),
+      1)
       << "First task should report cache miss";
   EXPECT_EQ(
-      hashBuildStats1.runtimeStats.at(BaseHashTable::kHashTableCacheMiss).count,
+      hashBuildStats1.runtimeStats
+          .at(std::string(BaseHashTable::kHashTableCacheMiss))
+          .count,
       1)
       << "Exactly one driver should report cache miss (the one that builds)";
   EXPECT_EQ(
-      hashBuildStats1.runtimeStats.count(BaseHashTable::kHashTableCacheHit), 0)
+      hashBuildStats1.runtimeStats.count(
+          std::string(BaseHashTable::kHashTableCacheHit)),
+      0)
       << "First task should not have any cache hits";
 
   // Second task - should reuse the cached table (cache hit).
@@ -154,14 +160,20 @@ TEST_F(HashJoinWithCacheTest, sequential) {
 
   // The last driver that finishes reports the cache hit stat.
   ASSERT_EQ(
-      hashBuildStats2.runtimeStats.count(BaseHashTable::kHashTableCacheHit), 1)
+      hashBuildStats2.runtimeStats.count(
+          std::string(BaseHashTable::kHashTableCacheHit)),
+      1)
       << "Second task should report cache hit";
   EXPECT_EQ(
-      hashBuildStats2.runtimeStats.at(BaseHashTable::kHashTableCacheHit).count,
+      hashBuildStats2.runtimeStats
+          .at(std::string(BaseHashTable::kHashTableCacheHit))
+          .count,
       1)
       << "Exactly one driver should report cache hit (the one after barrier)";
   EXPECT_EQ(
-      hashBuildStats2.runtimeStats.count(BaseHashTable::kHashTableCacheMiss), 0)
+      hashBuildStats2.runtimeStats.count(
+          std::string(BaseHashTable::kHashTableCacheMiss)),
+      0)
       << "Second task should not have any cache misses";
 
   // Clean up cache entry before tasks are destroyed.
@@ -300,15 +312,18 @@ TEST_F(HashJoinWithCacheTest, concurrent) {
     ASSERT_EQ(opStats.count("HashBuild"), 1);
     auto& hashBuildStats = opStats.at("HashBuild");
 
-    if (hashBuildStats.runtimeStats.count(BaseHashTable::kHashTableCacheMiss)) {
+    if (hashBuildStats.runtimeStats.count(
+            std::string(BaseHashTable::kHashTableCacheMiss))) {
       totalCacheMisses +=
-          hashBuildStats.runtimeStats.at(BaseHashTable::kHashTableCacheMiss)
+          hashBuildStats.runtimeStats
+              .at(std::string(BaseHashTable::kHashTableCacheMiss))
               .count;
     }
-    if (hashBuildStats.runtimeStats.count(BaseHashTable::kHashTableCacheHit)) {
-      totalCacheHits +=
-          hashBuildStats.runtimeStats.at(BaseHashTable::kHashTableCacheHit)
-              .count;
+    if (hashBuildStats.runtimeStats.count(
+            std::string(BaseHashTable::kHashTableCacheHit))) {
+      totalCacheHits += hashBuildStats.runtimeStats
+                            .at(std::string(BaseHashTable::kHashTableCacheHit))
+                            .count;
     }
   }
 
@@ -568,6 +583,121 @@ DEBUG_ONLY_TEST_F(HashJoinWithCacheTest, probeOOMWithCachedTable) {
   waitForAllTasksToBeDeleted();
   queryCtx.reset();
   // Cache should be cleaned up by QueryCtx destructor via release callback.
+}
+
+// Verifies that the hash table cache pool has a memory reclaimer that properly
+// suspends the driver thread during memory arbitration. Without a reclaimer,
+// allocations from the cache pool on a driver thread cause:
+// "Driver thread is not suspended under memory arbitration processing".
+DEBUG_ONLY_TEST_F(HashJoinWithCacheTest, cachePoolArbitration) {
+  const std::string queryId =
+      "cachePoolArbitrationTest_" +
+      std::to_string(
+          std::chrono::steady_clock::now().time_since_epoch().count());
+
+  std::vector<RowVectorPtr> buildVectors = makeBatches(10, [&](int32_t) {
+    return makeRowVector(
+        {"u_k", "u_v"},
+        {
+            makeFlatVector<int32_t>(
+                10'000, [](auto row) { return row % 5'000; }),
+            makeFlatVector<int64_t>(10'000, [](auto row) { return row * 10; }),
+        });
+  });
+
+  std::vector<RowVectorPtr> probeVectors = makeBatches(5, [&](int32_t) {
+    return makeRowVector(
+        {"t_k", "t_v"},
+        {
+            makeFlatVector<int32_t>(100, [](auto row) { return row % 5'000; }),
+            makeFlatVector<int64_t>(100, [](auto row) { return row; }),
+        });
+  });
+
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", buildVectors);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto buildPlanNode =
+      PlanBuilder(planNodeIdGenerator).values(buildVectors).planNode();
+  auto probePlanNode =
+      PlanBuilder(planNodeIdGenerator).values(probeVectors).planNode();
+
+  auto outputType = ROW(
+      {"t_k", "t_v", "u_k", "u_v"}, {INTEGER(), BIGINT(), INTEGER(), BIGINT()});
+
+  auto joinNode =
+      core::HashJoinNode::Builder()
+          .id(planNodeIdGenerator->next())
+          .joinType(core::JoinType::kInner)
+          .nullAware(false)
+          .leftKeys(
+              {std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "t_k")})
+          .rightKeys(
+              {std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "u_k")})
+          .left(probePlanNode)
+          .right(buildPlanNode)
+          .outputType(outputType)
+          .useHashTableCache(true)
+          .build();
+  const auto joinNodeId = joinNode->id();
+
+  auto queryCtx = core::QueryCtx::create(
+      driverExecutor_.get(),
+      core::QueryConfig({}),
+      std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>{},
+      cache::AsyncDataCache::getInstance(),
+      nullptr,
+      nullptr,
+      queryId);
+
+  // Tight pool so the large allocation in the TestValue callback triggers
+  // memory arbitration via growCapacity.
+  constexpr int64_t kPoolCapacity = 20 * 1024 * 1024; // 20MB
+  queryCtx->testingOverrideMemoryPool(
+      memory::memoryManager()->addRootPool(
+          queryCtx->queryId(), kPoolCapacity, exec::MemoryReclaimer::create()));
+
+  const auto cacheKey = fmt::format("{}:{}", queryId, joinNodeId);
+
+  std::atomic_bool injected{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::HashBuild::finishHashBuild",
+      std::function<void(exec::HashBuild*)>(([&](exec::HashBuild* hashBuild) {
+        if (injected.exchange(true)) {
+          return;
+        }
+        // Retrieve the cache entry to access the cache pool. Calling get()
+        // with the builder task's own ID returns the existing entry without
+        // side effects.
+        auto task = hashBuild->operatorCtx()->task();
+        ContinueFuture future;
+        auto entry = HashTableCache::instance()->get(
+            cacheKey, task->taskId(), task->queryCtx().get(), &future);
+
+        // Allocate enough from the cache pool to trigger growCapacity.
+        // growCapacity creates a MemoryPoolArbitrationSection on the
+        // requesting pool, which calls pool->enterArbitration(). The
+        // reclaimer's enterArbitration() must suspend the driver thread;
+        // without a reclaimer the driver is not suspended and the
+        // arbitration state check fails.
+        entry->tablePool->allocate(kPoolCapacity);
+      })));
+
+  // The query throws because the allocation exceeds capacity.
+  // With a proper reclaimer on the cache pool, the error is OOM
+  // ("Exceeded memory pool capacity"), not "Driver thread is not suspended".
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(joinNode, duckDbQueryRunner_)
+          .queryCtx(queryCtx)
+          .maxDrivers(1)
+          .copyResults(pool()),
+      "Exceeded memory pool capacity");
+
+  ASSERT_TRUE(injected) << "TestValue injection was not triggered";
+
+  waitForAllTasksToBeDeleted();
+  queryCtx.reset();
 }
 
 } // namespace

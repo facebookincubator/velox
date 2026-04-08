@@ -17,8 +17,8 @@
 #include "velox/exec/fuzzer/WindowFuzzer.h"
 
 #include <boost/random/uniform_int_distribution.hpp>
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/expression/ScopedVarSetter.h"
 
 DEFINE_bool(
@@ -27,6 +27,8 @@ DEFINE_bool(
     "When true, the results of the window aggregation are compared to reference DB results");
 
 namespace facebook::velox::exec::test {
+
+using namespace facebook::velox::common::testutil;
 
 namespace {
 
@@ -628,7 +630,7 @@ void WindowFuzzer::testAlternativePlans(
   }
 
   // With TableScan.
-  auto directory = exec::test::TempDirectoryPath::create();
+  auto directory = TempDirectoryPath::create();
   const auto inputRowType = asRowType(input[0]->type());
   if (isTableScanSupported(inputRowType)) {
     auto splits = makeSplits(input, directory->getPath(), writerPool_);

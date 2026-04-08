@@ -12,8 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(
-  velox_hive_iceberg_splitreader
+set(
+  ICEBERG_SOURCES
+  IcebergConfig.cpp
   IcebergColumnHandle.cpp
   IcebergConnector.cpp
   IcebergDataSink.cpp
@@ -25,6 +26,26 @@ velox_add_library(
   PositionalDeleteFileReader.cpp
   TransformEvaluator.cpp
   TransformExprBuilder.cpp
+)
+
+velox_add_library(
+  velox_hive_iceberg_splitreader
+  ${ICEBERG_SOURCES}
+  HEADERS
+  IcebergColumnHandle.h
+  IcebergConfig.h
+  IcebergConnector.h
+  IcebergDataSink.h
+  IcebergDataSource.h
+  IcebergDeleteFile.h
+  IcebergMetadataColumns.h
+  IcebergPartitionName.h
+  IcebergSplit.h
+  IcebergSplitReader.h
+  PartitionSpec.h
+  PositionalDeleteFileReader.h
+  TransformEvaluator.h
+  TransformExprBuilder.h
 )
 
 velox_link_libraries(

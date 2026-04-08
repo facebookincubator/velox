@@ -618,7 +618,7 @@ target_link_libraries(
   velox_dwio_cache_test
   velox_common_io
   velox_link_libs
-  velox_temp_path
+  velox_test_util
   Folly::folly
   fmt::fmt
   lz4::lz4
@@ -626,3 +626,9 @@ target_link_libraries(
   ZLIB::ZLIB
   ${TEST_LINK_LIBS}
 )
+
+velox_add_library(velox_test_column_statistics_base INTERFACE HEADERS ColumnStatisticsBase.h)
+
+velox_add_library(velox_test-read-file INTERFACE HEADERS TestReadFile.h)
+
+velox_add_library(velox_orc-test INTERFACE HEADERS OrcTest.h)

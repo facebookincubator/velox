@@ -232,6 +232,9 @@ class HiveInsertFileNameGenerator : public FileNameGenerator {
       void* context);
 
   std::string toString() const override;
+
+  /// Replaces potentially unsafe characters in a file name with underscores
+  static void sanitizeFileName(std::string& name);
 };
 
 /// Represents a request for Hive write.
@@ -251,7 +254,9 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
       // engine handles ensuring a 1 to 1 mapping from task to bucket.
       const bool ensureFiles = false,
       std::shared_ptr<const FileNameGenerator> fileNameGenerator =
-          std::make_shared<const HiveInsertFileNameGenerator>());
+          std::make_shared<const HiveInsertFileNameGenerator>(),
+      const std::unordered_map<std::string, std::string>& storageParameters =
+          {});
 
   virtual ~HiveInsertTableHandle() = default;
 
@@ -272,10 +277,19 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
     return storageFormat_;
   }
 
+  /// Format specific options.
   const std::unordered_map<std::string, std::string>& serdeParameters() const {
     return serdeParameters_;
   }
 
+  /// Storage specific options.
+  const std::unordered_map<std::string, std::string>& storageParameters()
+      const {
+    return storageParameters_;
+  }
+
+  /// Avoid this in future usages. Format specific change should go through
+  /// serdeParameters.
   const std::shared_ptr<dwio::common::WriterOptions>& writerOptions() const {
     return writerOptions_;
   }
@@ -330,6 +344,7 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
   const std::shared_ptr<dwio::common::WriterOptions> writerOptions_;
   const bool ensureFiles_;
   const std::shared_ptr<const FileNameGenerator> fileNameGenerator_;
+  const std::unordered_map<std::string, std::string> storageParameters_;
   const std::vector<column_index_t> partitionChannels_;
   const std::vector<column_index_t> nonPartitionChannels_;
 };
@@ -426,6 +441,8 @@ struct HiveFileInfo {
   std::string targetFileName;
   /// Size of the file in bytes.
   uint64_t fileSize{0};
+  /// Number of rows in the file.
+  uint64_t numRows{0};
 };
 
 struct HiveWriterInfo {
@@ -449,8 +466,11 @@ struct HiveWriterInfo {
   const std::shared_ptr<memory::MemoryPool> writerPool;
   const std::shared_ptr<memory::MemoryPool> sinkPool;
   const std::shared_ptr<memory::MemoryPool> sortPool;
-  int64_t numWrittenRows = 0;
-  int64_t inputSizeInBytes = 0;
+  /// Total rows written by this writer across all files.
+  uint64_t numWrittenRows = 0;
+  /// Rows written to the current file; reset to 0 when the file is finalized.
+  uint64_t currentFileWrittenRows{0};
+  uint64_t inputSizeInBytes = 0;
   /// File sequence number for tracking multiple files written due to size-based
   /// splitting. Incremented each time the writer rotates to a new file.
   /// Used to generate sequenced file names (e.g., file_1.orc, file_2.orc).
@@ -510,6 +530,61 @@ struct HiveWriterIdEq {
   bool operator()(const HiveWriterId& lhs, const HiveWriterId& rhs) const {
     return lhs == rhs;
   }
+};
+
+/// JSON field names for the partition update object produced by each writer
+/// and consumed by the Presto coordinator to finalize files and update the
+/// metastore.
+///
+/// JSON structure:
+/// {
+///   "name":                        "<partition key, e.g. ds=2024-01-01>",
+///   "updateMode":                  "NEW" | "APPEND" | "OVERWRITE",
+///   "writePath":                   "<staging directory>",
+///   "targetPath":                  "<final directory>",
+///   "fileWriteInfos": [
+///     {
+///       "writeFileName":           "<temp filename in writePath>",
+///       "targetFileName":          "<final filename in targetPath>",
+///       "fileSize":                <bytes>
+///     }
+///   ],
+///   "rowCount":                    <total rows>,
+///   "inMemoryDataSizeInBytes":     <uncompressed bytes>,
+///   "onDiskDataSizeInBytes":       <compressed bytes on disk>,
+///   "containsNumberedFileNames":   true | false
+/// }
+struct HiveCommitMessage {
+  /// Partition directory name in Hive format (e.g., "ds=2024-01-01/region=us").
+  /// Empty string for unpartitioned tables.
+  static constexpr const char* kName = "name";
+  /// Write mode: "NEW", "APPEND", or "OVERWRITE". Controls how the committer
+  /// handles metastore updates and existing file conflicts.
+  static constexpr const char* kUpdateMode = "updateMode";
+  /// Staging directory where files were written during execution.
+  static constexpr const char* kWritePath = "writePath";
+  /// Final destination directory. Files are renamed from writePath to
+  /// targetPath during commit.
+  static constexpr const char* kTargetPath = "targetPath";
+  /// Array of per-file metadata objects. One entry per file written, including
+  /// rotated files.
+  static constexpr const char* kFileWriteInfos = "fileWriteInfos";
+  /// Temporary filename used during writing (in the staging directory).
+  static constexpr const char* kWriteFileName = "writeFileName";
+  /// Final filename after commit (in the target directory).
+  static constexpr const char* kTargetFileName = "targetFileName";
+  /// Size of individual file in bytes.
+  static constexpr const char* kFileSize = "fileSize";
+  /// Total rows written to this partition across all files.
+  static constexpr const char* kRowCount = "rowCount";
+  /// Uncompressed input data size in bytes.
+  static constexpr const char* kInMemoryDataSizeInBytes =
+      "inMemoryDataSizeInBytes";
+  /// Compressed bytes written to disk.
+  static constexpr const char* kOnDiskDataSizeInBytes = "onDiskDataSizeInBytes";
+  /// Whether filenames follow a numbered sequence from file rotation.
+  static constexpr const char* kContainsNumberedFileNames =
+      "containsNumberedFileNames";
 };
 
 class HiveDataSink : public DataSink {
@@ -701,6 +776,10 @@ class HiveDataSink : public DataSink {
   // the newly created writer in 'writers_'.
   uint32_t appendWriter(const HiveWriterId& id);
 
+  // Creates a writer for the given index using the current file sequence.
+  std::unique_ptr<facebook::velox::dwio::common::Writer> createWriterForIndex(
+      size_t writerIndex);
+
   // Creates and configures WriterOptions based on file format.
   // Sets up compression, schema, and other writer configuration based on the
   // insert table handle and connector settings.
@@ -722,6 +801,7 @@ class HiveDataSink : public DataSink {
 
   std::unique_ptr<facebook::velox::dwio::common::Writer>
   maybeCreateBucketSortWriter(
+      size_t writerIndex,
       std::unique_ptr<facebook::velox::dwio::common::Writer> writer);
 
   // Records a row index for a specific partition. This method maintains the

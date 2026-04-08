@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/exec/Operator.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 
 namespace facebook::velox::exec {
@@ -28,7 +29,12 @@ class CallbackSink : public Operator {
       Consumer consumeCb,
       std::function<BlockingReason(ContinueFuture*)> startedCb = nullptr,
       const std::string& planNodeId = "N/A")
-      : Operator(driverCtx, nullptr, operatorId, planNodeId, "CallbackSink"),
+      : Operator(
+            driverCtx,
+            nullptr,
+            operatorId,
+            planNodeId,
+            OperatorType::kCallbackSink),
         startedCb_{std::move(startedCb)},
         consumeCb_{std::move(consumeCb)} {}
 

@@ -680,22 +680,26 @@ TEST_F(ScaleWriterLocalPartitionTest, unpartitionBasic) {
     if (testData.expectedRebalance) {
       ASSERT_GT(
           planStats.at(exchnangeNodeId)
-              .customStats.at(ScaleWriterLocalPartition::kScaledWriters)
+              .customStats
+              .at(std::string(ScaleWriterLocalPartition::kScaledWriters))
               .sum,
           0);
       ASSERT_LE(
           planStats.at(exchnangeNodeId)
-              .customStats.at(ScaleWriterLocalPartition::kScaledWriters)
+              .customStats
+              .at(std::string(ScaleWriterLocalPartition::kScaledWriters))
               .sum,
           planStats.at(exchnangeNodeId)
-                  .customStats.at(ScaleWriterLocalPartition::kScaledWriters)
+                  .customStats
+                  .at(std::string(ScaleWriterLocalPartition::kScaledWriters))
                   .count *
               (testData.numConsumers - 1));
       ASSERT_GT(nonEmptyConsumers, 1);
     } else {
       ASSERT_EQ(
           planStats.at(exchnangeNodeId)
-              .customStats.count(ScaleWriterLocalPartition::kScaledWriters),
+              .customStats.count(
+                  std::string(ScaleWriterLocalPartition::kScaledWriters)),
           0);
       ASSERT_EQ(nonEmptyConsumers, 1);
     }
@@ -893,40 +897,51 @@ TEST_F(ScaleWriterLocalPartitionTest, partitionBasic) {
       ASSERT_LE(
           planStats.at(exchnangeNodeId)
               .customStats.count(
-                  ScaleWriterPartitioningLocalPartition::kScaledPartitions),
+                  std::string(
+                      ScaleWriterPartitioningLocalPartition::
+                          kScaledPartitions)),
           1);
       if (planStats.at(exchnangeNodeId)
               .customStats.count(
-                  ScaleWriterPartitioningLocalPartition::kScaledPartitions) ==
-          1) {
+                  std::string(
+                      ScaleWriterPartitioningLocalPartition::
+                          kScaledPartitions)) == 1) {
         ASSERT_GT(
             planStats.at(exchnangeNodeId)
                 .customStats
-                .at(ScaleWriterPartitioningLocalPartition::kScaledPartitions)
+                .at(std::string(
+                    ScaleWriterPartitioningLocalPartition::kScaledPartitions))
                 .sum,
             0);
       }
       ASSERT_EQ(
           planStats.at(exchnangeNodeId)
               .customStats.count(
-                  ScaleWriterPartitioningLocalPartition::kRebalanceTriggers),
+                  std::string(
+                      ScaleWriterPartitioningLocalPartition::
+                          kRebalanceTriggers)),
           1);
       ASSERT_GT(
           planStats.at(exchnangeNodeId)
               .customStats
-              .at(ScaleWriterPartitioningLocalPartition::kRebalanceTriggers)
+              .at(std::string(
+                  ScaleWriterPartitioningLocalPartition::kRebalanceTriggers))
               .sum,
           0);
     } else {
       ASSERT_EQ(
           planStats.at(exchnangeNodeId)
               .customStats.count(
-                  ScaleWriterPartitioningLocalPartition::kScaledPartitions),
+                  std::string(
+                      ScaleWriterPartitioningLocalPartition::
+                          kScaledPartitions)),
           0);
       ASSERT_EQ(
           planStats.at(exchnangeNodeId)
               .customStats.count(
-                  ScaleWriterPartitioningLocalPartition::kRebalanceTriggers),
+                  std::string(
+                      ScaleWriterPartitioningLocalPartition::
+                          kRebalanceTriggers)),
           0);
       verifyDisjointPartitionKeys(testController.get());
     }

@@ -29,6 +29,8 @@ std::string planNodeMessage(VeloxException::Type /*exceptionType*/, void* arg) {
 
 class Checker : public PlanNodeVisitor {
  public:
+  explicit Checker(PlanNodeId rootId) : rootId_{std::move(rootId)} {}
+
   void visit(const AggregationNode& node, PlanNodeVisitorContext& ctx)
       const override {
     const auto& rowType = node.sources().at(0)->outputType();
@@ -154,6 +156,11 @@ class Checker : public PlanNodeVisitor {
     visitSources(&node, ctx);
   }
 
+  void visit(const MarkSortedNode& node, PlanNodeVisitorContext& ctx)
+      const override {
+    visitSources(&node, ctx);
+  }
+
   void visit(const MergeExchangeNode& node, PlanNodeVisitorContext& ctx)
       const override {
     visitSources(&node, ctx);
@@ -200,7 +207,11 @@ class Checker : public PlanNodeVisitor {
       checkInputs(expr, rowType);
     }
 
-    verifyOutputNames(node);
+    // The root ProjectNode may have empty or duplicate output names when used
+    // to apply user-specified column aliases (e.g. SELECT 1 as x, 2 as x).
+    if (node.id() != rootId_) {
+      verifyOutputNames(node);
+    }
 
     visitSources(&node, ctx);
   }
@@ -333,13 +344,18 @@ class Checker : public PlanNodeVisitor {
       checkInputs(input, rowType);
     }
   }
+
+  // ID of the root node. Used to skip output name validation on the root
+  // ProjectNode, which may have user-specified aliases that are empty or
+  // duplicated.
+  const PlanNodeId rootId_;
 };
 } // namespace
 
 void PlanConsistencyChecker::check(const core::PlanNodePtr& plan) {
   ExceptionContextSetter exceptionContext({planNodeMessage, (void*)plan.get()});
   PlanNodeVisitorContext ctx;
-  Checker checker;
+  Checker checker{plan->id()};
   plan->accept(checker, ctx);
 }
 }; // namespace facebook::velox::core

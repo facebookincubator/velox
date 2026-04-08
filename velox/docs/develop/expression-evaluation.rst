@@ -371,13 +371,13 @@ depth-first order. For each node a sequence of operations is performed.
 Flat No-Nulls Fast Path
 ```````````````````````
 
-When evaluating simple expressions on short vectors (< 1000 rows), the overhead
-of handling nulls and encodings is visible. To optimize these use cases,
-expression evaluation takes flat-no-nulls fast path
-(Expr::evalFlatNoNulls). This path applies automatically when inputs are flat
-vectors or constants with no nulls and all sub-expressions are guaranteed to
-produce flat-or-constant-no-nulls results given flat-or-constant-no-nulls
-inputs.
+When evaluating simple expressions, the overhead of handling nulls and encodings
+is visible. To optimize these use cases, expression evaluation takes
+flat-no-nulls fast path (Expr::evalFlatNoNulls). This path applies automatically
+when inputs are flat vectors or constants with no nulls and all sub-expressions
+are guaranteed to produce flat-or-constant-no-nulls results given
+flat-or-constant-no-nulls inputs. The optimization can be disabled by setting the
+``expression.eval_flat_no_nulls`` configuration property to false.
 
 An example of a workload that benefits from this optimization is basic arithmetic
 over non-null floats found in many machine learning pre-processing workloads.
@@ -457,3 +457,23 @@ SWITCH expression evaluation goes through the following steps:
 SWITCH expression sets EvalCtx::isFinalSelection flag to false. The expressions
 are expected to use this flag to decide whether the partially populated result
 vector must be preserved or can be overwritten.
+
+Expression Hashing
+``````````````````
+
+Each expression node provides a ``hash()`` method that computes a stable hash
+value for the expression tree. This hash can be used for deduplication
+and expression comparison.
+
+**Stability Guarantee**: Expression hashes are stable across different
+processes, builds, and machines. This is achieved by using a stable hasher
+like ``folly::hasher``.
+
+The hash is computed recursively:
+
+* ``localHash()`` computes a hash for the expression node itself (type name,
+  function name, field name, etc.)
+* ``hash()`` combines ``localHash()`` with the type's hash and the hashes of
+  all input expressions
+
+This enables use cases like expression-based sampling and deduplication.

@@ -16,6 +16,7 @@
 #pragma once
 
 #include <fmt/format.h>
+#include <folly/hash/Hash.h>
 #include <ostream>
 
 #include "velox/common/Enums.h"
@@ -87,6 +88,14 @@ class Subfield {
       return dynamic_cast<const T*>(this);
     }
 
+    template <typename T>
+    const T* asChecked() const {
+      auto* ptr = dynamic_cast<const T*>(this);
+      VELOX_CHECK_NOT_NULL(
+          ptr, "PathElement is not of expected type. Actual kind: {}", kind_);
+      return ptr;
+    }
+
    private:
     const SubfieldKind kind_;
   };
@@ -133,7 +142,7 @@ class Subfield {
     }
 
     size_t hash() const override {
-      return std::hash<std::string>()(name_);
+      return folly::hasher<std::string_view>()(name_);
     }
 
     std::string toString() const override {
@@ -199,7 +208,7 @@ class Subfield {
     }
 
     size_t hash() const override {
-      return std::hash<std::string>()(index_);
+      return folly::hasher<std::string_view>()(index_);
     }
 
     std::string toString() const override;

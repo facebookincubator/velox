@@ -22,8 +22,11 @@ add_library(
   CudfLimit.cpp
   CudfLocalPartition.cpp
   CudfOrderBy.cpp
+  CudfBatchConcat.cpp
   CudfTopN.cpp
   DebugUtil.cpp
+  GpuResources.cpp
+  OperatorAdapters.cpp
   ToCudf.cpp
   Utilities.cpp
   VeloxCudfInterop.cpp

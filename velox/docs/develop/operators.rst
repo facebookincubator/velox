@@ -61,6 +61,7 @@ AssignUniqueIdNode          AssignUniqueId
 WindowNode                  Window
 RowNumberNode               RowNumber
 TopNRowNumberNode           TopNRowNumber
+MixedUnionNode              MixedUnion
 ==========================  ==============================================   ===========================
 
 Plan Nodes
@@ -1017,6 +1018,11 @@ MarkDistinctNode
 The MarkDistinct operator is used to produce aggregate mask columns for aggregations over distinct values, e.g. agg(DISTINCT a).
 Mask is a boolean column set to true for a subset of input rows that collectively represent a set of unique values of 'distinctKeys'.
 
+This operator supports spilling. The spill mechanism follows the same pattern as RowNumber: when memory pressure
+triggers spilling, the hash table contents and future input are partitioned and written to disk. During restore,
+each partition's hash table is rebuilt from the spilled data, preserving knowledge of which keys were already seen.
+Disabled by default; enable with `mark_distinct_spill_enabled` configuration property.
+
 .. list-table::
   :widths: 10 30
   :align: left
@@ -1028,6 +1034,35 @@ Mask is a boolean column set to true for a subset of input rows that collectivel
     - Name of the output mask column.
   * - distinctKeys
     - Names of grouping keys.
+
+MixedUnionNode
+~~~~~~~~~~~~~~
+
+The mixed union operation combines data from multiple input sources concurrently,
+producing a single output stream that interleaves rows from all sources. It does
+not enforce a sort order but does attempt to mix input sources according to
+specified ratios; after exhaustion it continues with remaining sources.
+
+All sources must produce the same output schema.
+
+MixedUnion runs single-threaded. Each source runs on its own pipeline and feeds
+data into the MixedUnion operator via a merge source queue.
+
+This operator performs a UNION ALL. It does not deduplicate rows.
+
+.. list-table::
+  :widths: 10 30
+  :align: left
+  :header-rows: 1
+
+  * - Property
+    - Description
+  * - sources
+    - Two or more input plan nodes. All sources must have the same output type.
+  * - batchSizesPerSource
+    - Optional list of per-source batch sizes that controls how many rows are
+      taken from each source when mixing. If not specified or set to zero for a
+      source, a default batch size is used.
 
 Examples
 --------

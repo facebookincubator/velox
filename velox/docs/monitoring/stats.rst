@@ -104,6 +104,11 @@ These stats are reported only by TableScan operator
    * - numRunningScanThreads
      -
      - The number of running table scan drivers.
+   * - fileFormat.<format>
+     -
+     - The number of splits read for each file format (e.g. fileFormat.dwrf,
+       fileFormat.parquet, fileFormat.nimble). Reported per format encountered
+       during the query.
 
 TableWriter
 -----------
@@ -372,6 +377,9 @@ These stats are reported only by connector data or index sources.
    * - totalRemainingFilterWallNanos
      - nanos
      - The total walltime in nanoseconds that the data or index connector do the remaining filtering.
+   * - totalRemainingFilterCpuNanos
+     - nanos
+     - The total CPU time in nanoseconds that the data or index connector do the remaining filtering.
    * - numIndexFilterConversions
      -
      - The number of index columns that were converted from ScanSpec filters to
@@ -383,3 +391,91 @@ These stats are reported only by connector data or index sources.
      - The number of times a stripe has been loaded during index lookup. This
        metric helps track the I/O efficiency of index-based reads, where lower
        values indicate better stripe reuse across lookups.
+   * - numIndexLookupRequests
+     -
+     - The number of index lookup requests submitted in startLookup(). Each
+       request corresponds to one set of index bounds and may match rows across
+       multiple stripes.
+   * - numIndexLookupStripes
+     -
+     - The total number of stripes that need to be read for all index lookup
+       requests. Multiple requests may share the same stripe, and each shared
+       stripe is counted once per request that needs it.
+   * - numIndexLookupReadSegments
+     -
+     - The total number of read segments across all stripes during index lookup.
+       A read segment is a contiguous row range within a stripe that needs to be
+       read. When filters are present, overlapping request ranges are split at
+       boundaries to enable per-request output tracking. Without filters,
+       overlapping ranges are merged to minimize I/O.
+
+FileBasedDataSource
+-------------------
+These stats are reported by the file-based connector data source (Hive connector).
+
+.. list-table::
+   :widths: 50 25 50
+   :header-rows: 1
+
+   * - Stats
+     - Unit
+     - Description
+   * - skippedSplits
+     -
+     - The number of splits skipped based on file statistics.
+   * - processedSplits
+     -
+     - The number of splits processed.
+   * - skippedSplitBytes
+     - bytes
+     - The total bytes in splits skipped based on file statistics.
+   * - skippedStrides
+     -
+     - The number of strides (row groups) skipped based on statistics.
+   * - processedStrides
+     -
+     - The number of strides (row groups) processed.
+   * - footerBufferOverread
+     - bytes
+     - The number of extra bytes read beyond the footer size due to buffer
+       over-reading.
+   * - numStripes
+     -
+     - The number of stripes read from the file.
+   * - flattenStringDictionaryValues
+     -
+     - The number of rows returned by the string dictionary reader that were
+       flattened instead of keeping dictionary encoding.
+   * - pageLoadTimeNs
+     - nanos
+     - The total time spent loading pages.
+   * - numPrefetch
+     -
+     - The number of prefetch operations issued.
+   * - prefetchBytes
+     - bytes
+     - The total bytes prefetched, including min and max per prefetch operation.
+   * - totalScanTime
+     - nanos
+     - The total wall time spent scanning the file.
+   * - overreadBytes
+     - bytes
+     - The total raw bytes over-read during I/O operations.
+   * - storageReadBytes
+     - bytes
+     - The total bytes read from remote storage, including min and max per read
+       operation.
+   * - numLocalRead
+     -
+     - The number of reads served from the local SSD cache.
+   * - localReadBytes
+     - bytes
+     - The total bytes read from the local SSD cache, including min and max per
+       read operation.
+   * - numRamRead
+     -
+     - The number of reads served from the in-memory (RAM) cache.
+   * - ramReadBytes
+     - bytes
+     - The total bytes read from the in-memory (RAM) cache, including min and
+       max per read operation.

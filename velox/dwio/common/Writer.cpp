@@ -16,6 +16,8 @@
 
 #include "velox/dwio/common/Writer.h"
 
+#include "velox/common/base/Exceptions.h"
+
 namespace facebook::velox::dwio::common {
 
 void Writer::checkStateTransition(State oldState, State newState) {
@@ -80,13 +82,6 @@ bool Writer::isFinishing() const {
 }
 
 void Writer::checkRunning() const {
-  // Typically represents writer misuse.
-  VELOX_USER_CHECK_NE(
-      state_,
-      State::kClosed,
-      "Writer is not running: {}. Write operations are not allowed on a closed writer.",
-      Writer::stateString(state_));
-
   VELOX_CHECK_EQ(
       state_,
       State::kRunning,

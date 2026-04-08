@@ -51,37 +51,6 @@ using ClassPageCount = int32_t;
 /// malloc.
 class MmapAllocator : public MemoryAllocator {
  public:
-  struct Options {
-    ///  Capacity in bytes, default unlimited.
-    uint64_t capacity{kMaxMemory};
-
-    int32_t largestSizeClass{256};
-
-    /// If set true, allocations larger than largest size class size will be
-    /// delegated to ManagedMmapArena. Otherwise a system mmap call will be
-    /// issued for each such allocation.
-    bool useMmapArena = false;
-
-    /// Used to determine MmapArena capacity. The ratio represents system memory
-    /// capacity to single MmapArena capacity ratio.
-    int32_t mmapArenaCapacityRatio = 10;
-
-    /// If not zero, reserve 'smallAllocationReservePct'% of space from
-    /// 'capacity' for ad hoc small allocations. And those allocations are
-    /// delegated to std::malloc.
-    ///
-    /// NOTE: if 'maxMallocBytes' is 0, this value will be disregarded.
-    uint32_t smallAllocationReservePct = 0;
-
-    /// The allocation threshold less than which an allocation is delegated to
-    /// std::malloc().
-    ///
-    /// NOTE: if it is zero, then we don't delegate any allocation std::malloc,
-    /// and 'smallAllocationReservePct' will be automatically set to 0
-    /// disregarding any passed in value.
-    int32_t maxMallocBytes = 3072;
-  };
-
   explicit MmapAllocator(const Options& options);
 
   ~MmapAllocator();

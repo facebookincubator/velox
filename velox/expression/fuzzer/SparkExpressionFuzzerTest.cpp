@@ -25,7 +25,7 @@
 #include "velox/exec/fuzzer/ReferenceQueryRunner.h"
 #include "velox/expression/fuzzer/FuzzerRunner.h"
 #include "velox/expression/fuzzer/SparkSpecialFormSignatureGenerator.h"
-#include "velox/functions/prestosql/fuzzer/FloorAndRoundArgTypesGenerator.h"
+#include "velox/functions/prestosql/fuzzer/FloorCeilRoundArgTypesGenerator.h"
 #include "velox/functions/sparksql/fuzzer/AddSubtractArgTypesGenerator.h"
 #include "velox/functions/sparksql/fuzzer/DivideArgTypesGenerator.h"
 #include "velox/functions/sparksql/fuzzer/MakeTimestampArgTypesGenerator.h"
@@ -88,21 +88,32 @@ int main(int argc, char** argv) {
           {"add", std::make_shared<AddSubtractArgTypesGenerator>(true)},
           {"add_deny_precision_loss",
            std::make_shared<AddSubtractArgTypesGenerator>(false)},
+          {"checked_add", std::make_shared<AddSubtractArgTypesGenerator>(true)},
+          {"checked_add_deny_precision_loss",
+           std::make_shared<AddSubtractArgTypesGenerator>(false)},
           {"subtract", std::make_shared<AddSubtractArgTypesGenerator>(true)},
           {"subtract_deny_precision_loss",
            std::make_shared<AddSubtractArgTypesGenerator>(false)},
+          {"checked_subtract",
+           std::make_shared<AddSubtractArgTypesGenerator>(true)},
+          {"checked_subtract_deny_precision_loss",
+           std::make_shared<AddSubtractArgTypesGenerator>(false)},
           {"multiply", std::make_shared<MultiplyArgTypesGenerator>(true)},
           {"multiply_deny_precision_loss",
+           std::make_shared<MultiplyArgTypesGenerator>(false)},
+          {"checked_multiply",
+           std::make_shared<MultiplyArgTypesGenerator>(true)},
+          {"checked_multiply_deny_precision_loss",
            std::make_shared<MultiplyArgTypesGenerator>(false)},
           {"divide", std::make_shared<DivideArgTypesGenerator>(true)},
           {"divide_deny_precision_loss",
            std::make_shared<DivideArgTypesGenerator>(false)},
           {"ceil",
            std::make_shared<
-               facebook::velox::exec::test::FloorAndRoundArgTypesGenerator>()},
+               facebook::velox::exec::test::FloorCeilRoundArgTypesGenerator>()},
           {"floor",
            std::make_shared<
-               facebook::velox::exec::test::FloorAndRoundArgTypesGenerator>()},
+               facebook::velox::exec::test::FloorCeilRoundArgTypesGenerator>()},
           {"unscaled_value",
            std::make_shared<UnscaledValueArgTypesGenerator>()},
           {"make_timestamp",

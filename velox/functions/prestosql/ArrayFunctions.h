@@ -1028,6 +1028,46 @@ struct ArrayNGramsFunctionString {
   }
 };
 
+/// Splits the input array into chunks of the given size. If the array is not
+/// evenly divisible, the last chunk contains the remaining elements.
+///
+/// array_split_into_chunks(array(T), sz) -> array(array(T))
+template <typename TExecParams, typename T>
+struct ArraySplitIntoChunksFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExecParams);
+
+  static constexpr int32_t kMaxNumChunks = 10'000;
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<velox::Array<velox::Array<T>>>& out,
+      const arg_type<velox::Array<T>>& input,
+      const int32_t& sz) {
+    VELOX_USER_CHECK_GT(
+        sz, 0, "Invalid slice size: {}. Size must be greater than zero.", sz);
+
+    const auto inputSize = input.size();
+    VELOX_USER_CHECK_GT(inputSize, 0, "Cannot split an empty array.");
+
+    VELOX_USER_CHECK_LE(
+        inputSize / sz,
+        kMaxNumChunks,
+        "Cannot split array of size: {} into more than 10000 parts.",
+        inputSize);
+
+    for (auto i = 0; i < inputSize; i += sz) {
+      auto& chunk = out.add_item();
+      const auto end = std::min<int64_t>(i + sz, inputSize);
+      for (auto j = i; j < end; ++j) {
+        if (!input[j].has_value()) {
+          chunk.add_null();
+        } else {
+          chunk.push_back(input[j].value());
+        }
+      }
+    }
+  }
+};
+
 /// This class implements the array union function.
 ///
 /// DEFINITION:

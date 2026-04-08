@@ -359,7 +359,7 @@ class MapFunction : public exec::VectorFunction {
   void checkDuplicateConstantKeys(
       const std::vector<vector_size_t>& sortedIndices,
       const VectorPtr& keysElements) const {
-    static const char* kDuplicateKey =
+    static constexpr const char* kDuplicateKey =
         "Duplicate map keys ({}) are not allowed";
 
     if (auto duplicateIndex = findDuplicateKeys(sortedIndices, keysElements)) {

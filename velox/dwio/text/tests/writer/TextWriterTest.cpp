@@ -17,10 +17,10 @@
 #include "velox/dwio/text/writer/TextWriter.h"
 #include "velox/buffer/Buffer.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/dwio/text/RegisterTextReader.h"
 #include "velox/dwio/text/RegisterTextWriter.h"
 #include "velox/dwio/text/tests/writer/FileReaderUtil.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 #include <gtest/gtest.h>
@@ -28,6 +28,8 @@
 /// TODO: Add fuzzer test.
 
 namespace facebook::velox::text {
+using namespace facebook::velox::common::testutil;
+
 class TextWriterTest : public testing::Test,
                        public velox::test::VectorTestBase {
  public:
@@ -37,7 +39,7 @@ class TextWriterTest : public testing::Test,
     registerTextReaderFactory();
     rootPool_ = memory::memoryManager()->addRootPool("TextWriterTests");
     leafPool_ = rootPool_->addLeafChild("TextWriterTests");
-    tempPath_ = exec::test::TempDirectoryPath::create();
+    tempPath_ = TempDirectoryPath::create();
   }
 
   void TearDown() override {
@@ -64,7 +66,7 @@ class TextWriterTest : public testing::Test,
   constexpr static double kNaN = std::numeric_limits<double>::quiet_NaN();
   std::shared_ptr<memory::MemoryPool> rootPool_;
   std::shared_ptr<memory::MemoryPool> leafPool_;
-  std::shared_ptr<exec::test::TempDirectoryPath> tempPath_;
+  std::shared_ptr<TempDirectoryPath> tempPath_;
 };
 
 TEST_F(TextWriterTest, write) {

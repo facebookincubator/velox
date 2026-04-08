@@ -259,6 +259,8 @@ class BufferInputStream : public ByteInputStream {
     return ranges_;
   }
 
+  // The byte ranges backing this stream. Guaranteed to be non-empty after
+  // construction.
   std::vector<ByteRange> ranges_;
 };
 
@@ -415,7 +417,7 @@ class ByteOutputStream {
         auto* buffer = current_->buffer + (position >> 3);
         auto value = folly::loadUnaligned<uint64_t>(buffer);
         value = (value & mask) | (bits[0] << offset);
-        folly::storeUnaligned(buffer, value);
+        folly::storeUnaligned<uint64_t>(buffer, value);
         current_->position += end;
         return;
       }

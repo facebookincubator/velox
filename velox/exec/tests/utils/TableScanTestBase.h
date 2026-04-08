@@ -17,8 +17,8 @@
 
 #include <fmt/ranges.h>
 
-#include <folly/experimental/EventCount.h>
 #include <folly/synchronization/Baton.h>
+#include <folly/synchronization/EventCount.h>
 #include <folly/synchronization/Latch.h>
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/exec/PlanNodeStats.h"
@@ -26,6 +26,8 @@
 #include "velox/type/Type.h"
 
 namespace facebook::velox::exec::test {
+
+using TempFilePath = common::testutil::TempFilePath;
 
 class TableScanTestBase : public HiveConnectorTestBase {
  protected:

@@ -16,15 +16,28 @@
 
 #pragma once
 
+#include <string_view>
 #include <unordered_map>
 #include "velox/common/base/RuntimeMetrics.h"
 
 namespace facebook::velox::exec {
 
 struct DriverStats {
-  static constexpr const char* kTotalPauseTime = "totalDriverPauseWallNanos";
-  static constexpr const char* kTotalOffThreadTime =
+  static constexpr std::string_view kTotalPauseTime =
+      "totalDriverPauseWallNanos";
+  static constexpr std::string_view kTotalOffThreadTime =
       "totalDriverOffThreadWallNanos";
+
+  /// Number of silent Velox throws during operator execution.
+  static constexpr std::string_view kNumSilentThrow = "numSilentThrow";
+  /// Time an operator spent queued before execution.
+  static constexpr std::string_view kQueuedWallNanos = "queuedWallNanos";
+  /// Number of dynamic filters accepted by an operator.
+  static constexpr std::string_view kDynamicFiltersAccepted =
+      "dynamicFiltersAccepted";
+  /// Number of dynamic filters produced by an operator.
+  static constexpr std::string_view kDynamicFiltersProduced =
+      "dynamicFiltersProduced";
 
   std::unordered_map<std::string, RuntimeMetric> runtimeStats;
 };

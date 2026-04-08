@@ -52,7 +52,8 @@ std::unique_ptr<velox::dwio::common::FileSink> abfsWriteFileSinkGenerator(
         fileSystem->openFileForWrite(fileURI),
         fileURI,
         options.metricLogger,
-        options.stats);
+        options.stats,
+        options.fileSystemStats);
   }
   return nullptr;
 }

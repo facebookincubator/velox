@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/MergeJoin.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/FieldReference.h"
@@ -48,7 +49,7 @@ MergeJoin::MergeJoin(
           joinNode->outputType(),
           operatorId,
           joinNode->id(),
-          "MergeJoin"),
+          OperatorType::kMergeJoin),
       preferredOutputBatchBytes_{
           driverCtx->queryConfig().preferredOutputBatchBytes()},
       preferredOutputBatchRows_{
@@ -1521,9 +1522,11 @@ void MergeJoin::close() {
   {
     auto lockedStats = stats_.wlock();
     lockedStats->addRuntimeStat(
-        "matchedLeftRows", RuntimeCounter(matchedLeftRows_));
+        std::string(MergeJoin::kMatchedLeftRows),
+        RuntimeCounter(matchedLeftRows_));
     lockedStats->addRuntimeStat(
-        "matchedRightRows", RuntimeCounter(matchedRightRows_));
+        std::string(MergeJoin::kMatchedRightRows),
+        RuntimeCounter(matchedRightRows_));
   }
   if (rightSource_) {
     rightSource_->close();

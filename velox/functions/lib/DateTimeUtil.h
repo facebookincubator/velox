@@ -18,6 +18,7 @@
 #include "velox/external/date/date.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/type/Timestamp.h"
+#include "velox/type/TimestampConversion.h"
 #include "velox/type/Type.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
@@ -207,6 +208,21 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
         unit, fromZonedTimestamp, toZonedTimestamp, respectLastDay);
   }
   return diffTimestamp(unit, fromTimestamp, toTimestamp, respectLastDay);
+}
+
+/// Returns toDate - fromDate expressed in terms of unit.
+FOLLY_ALWAYS_INLINE
+int64_t diffDate(
+    const DateTimeUnit unit,
+    const int32_t fromDate,
+    const int32_t toDate) {
+  if (fromDate == toDate) {
+    return 0;
+  }
+  return diffTimestamp(
+      unit,
+      Timestamp((int64_t)fromDate * util::kSecsPerDay, 0),
+      Timestamp((int64_t)toDate * util::kSecsPerDay, 0));
 }
 
 /// Year, quarter or month are not uniformly incremented. Months have different

@@ -16,6 +16,8 @@
 
 #include "velox/exec/EnforceDistinct.h"
 
+#include "velox/exec/OperatorType.h"
+
 namespace facebook::velox::exec {
 
 EnforceDistinct::EnforceDistinct(
@@ -27,7 +29,7 @@ EnforceDistinct::EnforceDistinct(
           planNode->outputType(),
           operatorId,
           planNode->id(),
-          "EnforceDistinct"),
+          OperatorType::kEnforceDistinct),
       errorMessage_{planNode->errorMessage()} {
   const auto& inputType = planNode->sources()[0]->outputType();
 

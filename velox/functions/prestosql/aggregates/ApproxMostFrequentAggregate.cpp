@@ -90,15 +90,12 @@ struct Accumulator<StringView> {
     }
   }
 
- private:
-  // Copies active strings to new storage and frees old storage. Peak memory
-  // is approximately 2x activeBytes + evictedBytes, since both storages coexist
-  // temporarily.
-  void compact() {
-    if (summary.size() == 0) {
-      return;
+  uint64_t compact() {
+    if (summary.size() == 0 || evictedBytes_ == 0) {
+      return 0;
     }
 
+    const auto bytesFreed = evictedBytes_;
     const auto capacity = summary.capacity();
     const auto currentSize = summary.size();
 
@@ -126,6 +123,7 @@ struct Accumulator<StringView> {
     strings = std::move(compactedStrings);
     summary = std::move(compactedSummary);
     evictedBytes_ = 0;
+    return bytesFreed;
   }
 };
 
@@ -310,6 +308,24 @@ struct ApproxMostFrequentAggregate : exec::Aggregate {
 
   void destroyInternal(folly::Range<char**> groups) override {
     destroyAccumulators<Accumulator<T>>(groups);
+  }
+
+  bool supportsCompact() const override {
+    return std::is_same_v<T, StringView>;
+  }
+
+  uint64_t compact(folly::Range<char**> groups) override {
+    if constexpr (!std::is_same_v<T, StringView>) {
+      return 0;
+    } else {
+      uint64_t freedBytes = 0;
+      for (auto* group : groups) {
+        if (isInitialized(group)) {
+          freedBytes += value<Accumulator<T>>(group)->compact();
+        }
+      }
+      return freedBytes;
+    }
   }
 
  private:

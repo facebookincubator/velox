@@ -116,6 +116,7 @@ DECIMAL                 BIGINT if precision <= 18, HUGEINT if precision >= 19
 INTERVAL DAY TO SECOND  BIGINT
 INTERVAL YEAR TO MONTH  INTEGER
 TIME                    BIGINT
+TIME_MICRO_UTC          BIGINT
 ======================  ======================================================
 
 DECIMAL type carries additional `precision`,
@@ -131,8 +132,9 @@ upto 38 precision, with a range of :math:`[-10^{38} + 1, +10^{38} - 1]`.
 All the three values, precision, scale, unscaled value are required to represent a
 decimal value.
 
-TIME type represents time in milliseconds from midnight UTC. Thus min/max value can  range from UTC-14:00 at 00:00:00 to UTC+14:00 at 23:59:59.999 modulo 24 hours.
-TIME type is backed by BIGINT physical type.
+TIME type represents time in milliseconds of local timezone from midnight. Thus min/max value can range from 0 to 23:59:59.999.
+TIME_MICRO_UTC type represents time in microseconds from midnight, timezone unaware. Thus min/max value can range from 00:00:00.000000 to 23:59:59.999999.
+The TIME and TIME_MICRO_UTC types are backed by BIGINT physical type.
 
 Custom Types
 ~~~~~~~~~~~~
@@ -220,7 +222,10 @@ IPPREFIX networks.
 IPPREFIX represents an IPv6 or IPv4 formatted IPv6 address along with a one byte
 prefix length. Its physical type is ROW(HUGEINT, TINYINT). The IPADDRESS is stored in
 the HUGEINT and is in the form defined in `RFC 4291#section-2.5.5.2 <https://datatracker.ietf.org/doc/html/rfc4291.html#section-2.5.5.2>`_.
-The prefix length is stored in the TINYINT.
+The prefix length is stored in the TINYINT. Note that IPv6 prefix lengths go up
+to 128, which overflows TINYINT (int8_t, max 127). Prefix length 128 is stored
+as -128. Code that reads the prefix length must cast to uint8_t to recover the
+correct unsigned value.
 The IP address stored is the canonical(smallest) IP address in the
 subnet range. This type can be used in IP subnet functions.
 
@@ -303,6 +308,12 @@ key differences are listed below.
               (cast('2014-03-08 09:00:00.012345678' as timestamp))
       ) AS t(ts);
       -- 2014-03-08 09:00:00.012345
+
+* Spark operates on the TIME_MICRO_UTC type for "microsecond" precision and timezone unawareness,
+  while Presto uses the standard TIME type.
+  Example::
+
+      SELECT cast('12:30:45.123456' as time)  -- 12:30:45.123456
 
 * In function comparisons, nested null values are handled as values.
   Example::

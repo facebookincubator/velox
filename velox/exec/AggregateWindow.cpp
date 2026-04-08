@@ -150,7 +150,7 @@ class AggregateWindowFunction : public exec::WindowFunction {
         // This is the start of a new incremental aggregation. So the
         // aggregate_ function object should be initialized.
         auto singleGroup = std::vector<vector_size_t>{0};
-        aggregate_->clear();
+        aggregate_->destroy(folly::Range<char**>(&rawSingleGroupRow_, 1));
         aggregate_->initializeNewGroups(&rawSingleGroupRow_, singleGroup);
         aggregateInitialized_ = true;
       }
@@ -257,6 +257,11 @@ class AggregateWindowFunction : public exec::WindowFunction {
   void fillArgVectors(vector_size_t firstRow, vector_size_t lastRow) {
     vector_size_t numFrameRows = lastRow + 1 - firstRow;
     for (int i = 0; i < argIndices_.size(); i++) {
+      // Without the following call to `prepareForReuse`, if the type of
+      // `argVectors_[i]` is VARCHAR, then the string buffers will accumulate
+      // across calculations. As a result, memory consumption will increase over
+      // time. So we call `prepareForReuse` to clear string buffers timely.
+      argVectors_[i]->prepareForReuse();
       argVectors_[i]->resize(numFrameRows);
       // Only non-constant field argument vectors need to be populated. The
       // constant vectors are correctly set during aggregate initialization
@@ -331,7 +336,7 @@ class AggregateWindowFunction : public exec::WindowFunction {
       // TODO : Try to re-use previous computations by advancing and retracting
       // the aggregation based on the frame changes with each row. This would
       // require adding new APIs to the Aggregate framework.
-      aggregate_->clear();
+      aggregate_->destroy(folly::Range<char**>(&rawSingleGroupRow_, 1));
       aggregate_->initializeNewGroups(&rawSingleGroupRow_, kSingleGroup);
       aggregateInitialized_ = true;
 

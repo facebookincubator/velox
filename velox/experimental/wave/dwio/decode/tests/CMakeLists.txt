@@ -14,6 +14,8 @@
 
 add_executable(velox_wave_decode_test GpuDecoderTest.cu)
 
+target_compile_options(velox_wave_decode_test PRIVATE ${VELOX_CUDA_DEBUG_FLAGS})
+
 add_test(velox_wave_decode_test velox_wave_decode_test)
 set_tests_properties(velox_wave_decode_test PROPERTIES LABELS cuda_driver)
 

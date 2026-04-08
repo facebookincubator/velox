@@ -665,6 +665,8 @@ TEST_F(DateTimeFunctionsTest, dayNameDate) {
 
   EXPECT_EQ(std::nullopt, dayName(std::nullopt));
   EXPECT_EQ("Thu", dayName(0)); // 1970-01-01
+  EXPECT_EQ("Wed", dayName(-1)); // 1969-12-31
+  EXPECT_EQ("Tue", dayName(-2)); // 1969-12-30
   EXPECT_EQ("Sun", dayName(parseDate("2023-08-20")));
   EXPECT_EQ("Mon", dayName(parseDate("2023-08-21")));
   EXPECT_EQ("Tue", dayName(parseDate("2023-08-22")));

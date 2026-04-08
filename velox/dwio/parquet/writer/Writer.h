@@ -42,9 +42,13 @@ struct ArrowContext;
 class DefaultFlushPolicy : public dwio::common::FlushPolicy {
  public:
   DefaultFlushPolicy()
-      : rowsInRowGroup_(1'024 * 1'024), bytesInRowGroup_(128 * 1'024 * 1'024) {}
+      : rowsInRowGroup_(kDefaultRowsInGroup),
+        bytesInRowGroup_(kDefaultBytesInRowGroup) {}
   DefaultFlushPolicy(uint64_t rowsInRowGroup, int64_t bytesInRowGroup)
       : rowsInRowGroup_(rowsInRowGroup), bytesInRowGroup_(bytesInRowGroup) {}
+
+  static constexpr uint64_t kDefaultRowsInGroup{1'024 * 1'024};
+  static constexpr int64_t kDefaultBytesInRowGroup{128 * 1'024 * 1'024};
 
   bool shouldFlush(
       const dwio::common::StripeProgress& stripeProgress) override {
@@ -125,35 +129,24 @@ struct WriterOptions : public dwio::common::WriterOptions {
 
   // Parsing session and hive configs.
 
-  // This isn't a typo; session and hive connector config names are different
-  // ('_' vs '-').
-  static constexpr const char* kParquetSessionWriteTimestampUnit =
+  // Session and connector config names differ by '_' vs '-' separators.
+  // Connector keys are inferred from session keys by replacing '_' with '-'.
+  static constexpr const char* kParquetWriteTimestampUnit =
       "hive.parquet.writer.timestamp_unit";
-  static constexpr const char* kParquetHiveConnectorWriteTimestampUnit =
-      "hive.parquet.writer.timestamp-unit";
-  static constexpr const char* kParquetSessionEnableDictionary =
+  static constexpr const char* kParquetEnableDictionary =
       "hive.parquet.writer.enable_dictionary";
-  static constexpr const char* kParquetHiveConnectorEnableDictionary =
-      "hive.parquet.writer.enable-dictionary";
-  static constexpr const char* kParquetSessionDictionaryPageSizeLimit =
+  static constexpr const char* kParquetDictionaryPageSizeLimit =
       "hive.parquet.writer.dictionary_page_size_limit";
-  static constexpr const char* kParquetHiveConnectorDictionaryPageSizeLimit =
-      "hive.parquet.writer.dictionary-page-size-limit";
-  static constexpr const char* kParquetSessionDataPageVersion =
+  static constexpr const char* kParquetDataPageVersion =
       "hive.parquet.writer.datapage_version";
-  static constexpr const char* kParquetHiveConnectorDataPageVersion =
-      "hive.parquet.writer.datapage-version";
-  static constexpr const char* kParquetSessionWritePageSize =
+  static constexpr const char* kParquetWritePageSize =
       "hive.parquet.writer.page_size";
-  static constexpr const char* kParquetHiveConnectorWritePageSize =
-      "hive.parquet.writer.page-size";
-  static constexpr const char* kParquetSessionWriteBatchSize =
+  static constexpr const char* kParquetWriteBatchSize =
       "hive.parquet.writer.batch_size";
-  static constexpr const char* kParquetHiveConnectorWriteBatchSize =
-      "hive.parquet.writer.batch-size";
-  static constexpr const char* kParquetHiveConnectorCreatedBy =
-      "hive.parquet.writer.created-by";
-
+  static constexpr const char* kParquetCreatedBy =
+      "hive.parquet.writer.created_by";
+  static constexpr const char* kParquetMaxTargetFileSize =
+      "max_target_file_size";
   // Serde parameter keys for timestamp settings. These can be set via
   // serdeParameters map to override the default timestamp behavior.
   // The timezone key accepts a timezone string or empty string to disable
@@ -206,7 +199,7 @@ class Writer : public dwio::common::Writer {
 
   // Closes 'this', After close, data can no longer be added and the completed
   // Parquet file is flushed into 'sink' provided at construction. 'sink' stays
-  // live until destruction of 'this'.
+  // live until destruction of 'this'
   void close() override;
 
   void abort() override;

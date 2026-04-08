@@ -123,6 +123,10 @@ GroupingSet::GroupingSet(
     } else {
       distinctAggregations_.push_back(nullptr);
     }
+
+    if (aggregate.function->supportsCompact()) {
+      hasCompactableAggregates_ = true;
+    }
   }
 }
 
@@ -232,6 +236,38 @@ bool GroupingSet::hasSpilled() const {
   return outputSpiller_ != nullptr;
 }
 
+uint64_t GroupingSet::compact() {
+  VELOX_CHECK(hasCompactableAggregates_);
+
+  uint64_t freedBytes = 0;
+
+  if (isGlobal_) {
+    if (globalAggregationInitialized_) {
+      VELOX_CHECK_NOT_NULL(lookup_);
+      VELOX_CHECK_EQ(lookup_->hits.size(), 1);
+      char* group = lookup_->hits[0];
+      for (auto& aggregate : aggregates_) {
+        freedBytes += aggregate.function->compact(folly::Range(&group, 1));
+      }
+    }
+  } else if (table_ != nullptr) {
+    auto* rows = table_->rows();
+    if (rows != nullptr && rows->numRows() > 0) {
+      RowContainerIterator iter;
+      std::vector<char*> groups(1'000);
+      while (const auto numRows = rows->listRows(
+                 &iter, static_cast<int32_t>(groups.size()), groups.data())) {
+        for (auto& aggregate : aggregates_) {
+          freedBytes +=
+              aggregate.function->compact(folly::Range(groups.data(), numRows));
+        }
+      }
+    }
+  }
+
+  return freedBytes;
+}
+
 bool GroupingSet::hasOutput() {
   return noMoreInput_ || remainingInput_;
 }
@@ -240,7 +276,7 @@ void GroupingSet::addInputForActiveRows(
     const RowVectorPtr& input,
     bool mayPushdown) {
   VELOX_CHECK(!isGlobal_);
-  if (!table_) {
+  if (table_ == nullptr) {
     createHashTable();
   }
   ensureInputFits(input);
@@ -607,7 +643,7 @@ bool GroupingSet::getGlobalAggregationOutput(
 
   initializeGlobalAggregation();
 
-  auto groups = lookup_->hits.data();
+  auto* groups = lookup_->hits.data();
   for (int32_t i = 0; i < aggregates_.size(); ++i) {
     if (!aggregates_[i].sortingKeys.empty()) {
       continue;
@@ -934,8 +970,11 @@ void GroupingSet::ensureInputFits(const RowVectorPtr& input) {
   }
   LOG(WARNING) << "Failed to reserve " << succinctBytes(targetIncrementBytes)
                << " for memory pool " << pool_->name()
-               << ", usage: " << succinctBytes(pool_->usedBytes())
-               << ", reservation: " << succinctBytes(pool_->reservedBytes());
+               << ", root pool: " << pool_->root()->name()
+               << ", used: " << succinctBytes(pool_->usedBytes())
+               << ", reservation: " << succinctBytes(pool_->reservedBytes())
+               << ", root pool reservation: "
+               << succinctBytes(pool_->root()->reservedBytes());
 }
 
 void GroupingSet::ensureOutputFits() {
@@ -974,8 +1013,11 @@ void GroupingSet::ensureOutputFits() {
   LOG(WARNING) << "Failed to reserve "
                << succinctBytes(outputBufferSizeToReserve)
                << " for memory pool " << pool_->name()
-               << ", usage: " << succinctBytes(pool_->usedBytes())
-               << ", reservation: " << succinctBytes(pool_->reservedBytes());
+               << ", root pool: " << pool_->root()->name()
+               << ", used: " << succinctBytes(pool_->usedBytes())
+               << ", reservation: " << succinctBytes(pool_->reservedBytes())
+               << ", root pool reservation: "
+               << succinctBytes(pool_->root()->reservedBytes());
 }
 
 RowTypePtr GroupingSet::makeSpillType() const {
@@ -1103,6 +1145,7 @@ bool GroupingSet::getOutputWithSpill(
           false,
           false,
           false,
+          false, // hasCountFlag
           false,
           false,
           pool_);
@@ -1455,6 +1498,7 @@ void GroupingSet::abandonPartialAggregation() {
       false,
       false,
       false,
+      false, // hasCountFlag
       false,
       false,
       pool_);

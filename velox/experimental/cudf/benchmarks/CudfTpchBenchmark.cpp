@@ -22,6 +22,7 @@
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
 
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 
@@ -32,6 +33,7 @@ DECLARE_string(max_coalesced_distance_bytes);
 DECLARE_int32(parquet_prefetch_rowgroups);
 
 using namespace facebook::velox;
+using namespace facebook::velox::common::testutil;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::dwio::common;
@@ -69,7 +71,7 @@ void CudfTpchBenchmark::initialize() {
   TpchBenchmark::initialize();
 
   if (FLAGS_velox_cudf_table_scan) {
-    connector::unregisterConnector(
+    connector::ConnectorRegistry::global().erase(
         facebook::velox::exec::test::kHiveConnectorId);
 
     // Add new values into the cudfHive configuration...
@@ -93,7 +95,8 @@ void CudfTpchBenchmark::initialize() {
         facebook::velox::exec::test::kHiveConnectorId,
         cudfHiveProperties,
         ioExecutor_.get());
-    connector::registerConnector(cudfHiveConnector);
+    connector::ConnectorRegistry::global().insert(
+        cudfHiveConnector->connectorId(), cudfHiveConnector);
   }
 
   cudf_velox::CudfConfig::getInstance().memoryResource =
@@ -136,7 +139,8 @@ CudfTpchBenchmark::listSplits(
   // CudfHiveDataSource outside of this benchmark
   if (FLAGS_velox_cudf_table_scan) {
     // TODO (dm): Instead of this, we can maybe use
-    // makeHiveConnectorSplits(vector<shared_ptr<TempFilePath>>& filePaths)
+    // makeHiveConnectorSplits(vector<shared_ptr<TempFilePath>>&
+    // filePaths)
     std::vector<std::shared_ptr<connector::ConnectorSplit>> result;
     auto temp = HiveConnectorTestBase::makeHiveConnectorSplits(
         path, 1, plan.dataFileFormat);

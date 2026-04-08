@@ -323,3 +323,147 @@ TEST_F(VectorPrepareForReuseTest, dataDependentFlags) {
         createVector, prepareForReuseStatic, SelectivityVector{size});
   }
 }
+
+TEST_F(VectorPrepareForReuseTest, recursivelyReusableFlatVector) {
+  // Single reference flat vector should be reusable.
+  VectorPtr vector = makeFlatVector<int32_t>(100, [](auto row) { return row; });
+  ASSERT_TRUE(BaseVector::recursivelyReusable(vector));
+
+  // Multiple references make it non-reusable.
+  VectorPtr copy = vector;
+  ASSERT_FALSE(BaseVector::recursivelyReusable(vector));
+  ASSERT_FALSE(BaseVector::recursivelyReusable(copy));
+
+  // Release the extra reference.
+  copy.reset();
+  ASSERT_TRUE(BaseVector::recursivelyReusable(vector));
+}
+
+TEST_F(VectorPrepareForReuseTest, recursivelyReusableNullVector) {
+  // Null vector should return false (not reusable because there's nothing to
+  // reuse).
+  VectorPtr nullVector = nullptr;
+  ASSERT_TRUE(BaseVector::recursivelyReusable(nullVector));
+}
+
+TEST_F(VectorPrepareForReuseTest, recursivelyReusableArrayVector) {
+  // Single reference array vector with single reference elements.
+  VectorPtr vector = makeArrayVector<int32_t>(
+      100,
+      [](auto row) { return 1; },
+      [](auto row, auto index) { return row + index; });
+  ASSERT_TRUE(BaseVector::recursivelyReusable(vector));
+
+  // Share the elements - should make it non-reusable.
+  auto* arrayVector = vector->as<ArrayVector>();
+  VectorPtr elementsCopy = arrayVector->elements();
+  ASSERT_FALSE(BaseVector::recursivelyReusable(vector));
+
+  // Release the elements copy.
+  elementsCopy.reset();
+  ASSERT_TRUE(BaseVector::recursivelyReusable(vector));
+}
+
+TEST_F(VectorPrepareForReuseTest, recursivelyReusableRowVector) {
+  // Create children vectors first
+  auto child0 = makeFlatVector<int32_t>(100, [](auto row) { return row; });
+  auto child1 = makeFlatVector<int64_t>(100, [](auto row) { return row * 2; });
+
+  // Create row vector - children are moved in, so row vector owns them
+  VectorPtr vector = std::make_shared<RowVector>(
+      pool(),
+      ROW({{"a", INTEGER()}, {"b", BIGINT()}}),
+      nullptr,
+      100,
+      std::vector<VectorPtr>{child0, child1});
+
+  // At this point, child0 and child1 still hold references
+  // so the row vector is NOT reusable
+  ASSERT_FALSE(BaseVector::recursivelyReusable(vector));
+
+  // Release the external references to children
+  child0.reset();
+  child1.reset();
+  ASSERT_TRUE(BaseVector::recursivelyReusable(vector));
+
+  // Share a child - should make it non-reusable.
+  VectorPtr childCopy = vector->as<RowVector>()->childAt(0);
+  ASSERT_FALSE(BaseVector::recursivelyReusable(vector));
+
+  // Release the child copy.
+  childCopy.reset();
+  ASSERT_TRUE(BaseVector::recursivelyReusable(vector));
+}
+
+TEST_F(VectorPrepareForReuseTest, recursivelyReusableMapVector) {
+  // Use makeMapVector helper which creates a fully owned structure
+  VectorPtr vector =
+      makeMapVector<int32_t, int32_t>({{{{1, 10}, {2, 20}}}, {{{3, 30}}}});
+  ASSERT_TRUE(BaseVector::recursivelyReusable(vector));
+
+  // Share the keys - should make it non-reusable.
+  auto* mapVector = vector->as<MapVector>();
+  VectorPtr keysCopy = mapVector->mapKeys();
+  ASSERT_FALSE(BaseVector::recursivelyReusable(vector));
+
+  // Release the keys copy.
+  keysCopy.reset();
+  ASSERT_TRUE(BaseVector::recursivelyReusable(vector));
+
+  // Share values instead.
+  VectorPtr valuesCopy = mapVector->mapValues();
+  ASSERT_FALSE(BaseVector::recursivelyReusable(vector));
+
+  valuesCopy.reset();
+  ASSERT_TRUE(BaseVector::recursivelyReusable(vector));
+}
+
+TEST_F(VectorPrepareForReuseTest, recursivelyReusableNestedArrayOfRow) {
+  // Test nested structure: Array<Row<int32, int64>>
+  // Sharing deeply nested children makes the whole structure non-reusable.
+  const auto rowType = ROW({{"a", INTEGER()}, {"b", BIGINT()}});
+  constexpr int kNumArrays = 10;
+  constexpr int kElementsPerArray = 5;
+  constexpr int kTotalElements = kNumArrays * kElementsPerArray;
+
+  // Create the rows RowVector as elements for the ArrayVector.
+  auto child0 = makeFlatVector<int32_t>(kTotalElements, [](auto idx) {
+    return (idx / kElementsPerArray) * 10 + (idx % kElementsPerArray);
+  });
+  auto child1 = makeFlatVector<int64_t>(kTotalElements, [](auto idx) {
+    return (idx / kElementsPerArray) * 100 + (idx % kElementsPerArray);
+  });
+  auto rows =
+      makeRowVector(rowType->names(), {std::move(child0), std::move(child1)});
+
+  // Build the ArrayVector on top of rows.
+  VectorPtr vector =
+      makeArrayVector({0, 5, 10, 15, 20, 25, 30, 35, 40, 45}, rows);
+  ASSERT_FALSE(BaseVector::recursivelyReusable(vector));
+
+  rows.reset();
+  ASSERT_TRUE(BaseVector::recursivelyReusable(vector));
+
+  // Share the nested row's child - should make the whole array non-reusable.
+  auto* arrayVector = vector->as<ArrayVector>();
+  auto* rowElements = arrayVector->elements()->as<RowVector>();
+  VectorPtr nestedChildCopy = rowElements->childAt(0);
+  ASSERT_FALSE(BaseVector::recursivelyReusable(vector));
+
+  nestedChildCopy.reset();
+  ASSERT_TRUE(BaseVector::recursivelyReusable(vector));
+}
+
+TEST_F(VectorPrepareForReuseTest, recursivelyReusableDictionaryVector) {
+  // Dictionary vectors are not considered reusable encoding.
+  auto flat = makeFlatVector<int32_t>(100, [](auto row) { return row; });
+  auto indices = makeIndices(100, [](auto row) { return row; });
+  auto dictionary = BaseVector::wrapInDictionary(nullptr, indices, 100, flat);
+
+  ASSERT_FALSE(BaseVector::recursivelyReusable(dictionary));
+
+  flat.reset();
+  ASSERT_FALSE(BaseVector::recursivelyReusable(dictionary));
+  indices.reset();
+  ASSERT_FALSE(BaseVector::recursivelyReusable(dictionary));
+}

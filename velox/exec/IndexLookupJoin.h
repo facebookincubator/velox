@@ -47,39 +47,39 @@ class IndexLookupJoin : public Operator {
   /// Defines lookup runtime stats.
   /// The end-to-end walltime in nanoseconds that the index connector do the
   /// lookup.
-  static inline const std::string kConnectorLookupWallTime{
+  static constexpr std::string_view kConnectorLookupWallTime{
       "connectorLookupWallNanos"};
   /// The cpu time in nanoseconds that the index connector process response from
   /// storage client for followup processing by index join operator.
-  static inline const std::string kConnectorResultPrepareTime{
+  static constexpr std::string_view kConnectorResultPrepareTime{
       "connectorResultPrepareCpuNanos"};
   /// The cpu time in nanoseconds that the storage client process request for
   /// remote storage lookup such as encoding the lookup input data into remotr
   /// storage request.
-  static inline const std::string kClientRequestProcessTime{
+  static constexpr std::string_view kClientRequestProcessTime{
       "clientRequestProcessCpuNanos"};
   /// The walltime in nanoseconds that the storage client wait for the lookup
   /// from remote storage.
-  static inline const std::string kClientLookupWaitWallTime{
+  static constexpr std::string_view kClientLookupWaitWallTime{
       "clientlookupWaitWallNanos"};
   /// The number of split requests sent to remote storage for a client lookup
   /// request.
-  static inline const std::string kClientNumStorageRequests{
+  static constexpr std::string_view kClientNumStorageRequests{
       "clientNumStorageRequests"};
   /// The cpu time in nanoseconds that the storage client process response from
   /// remote storage lookup such as decoding the response data into velox
   /// vectors.
-  static inline const std::string kClientResultProcessTime{
+  static constexpr std::string_view kClientResultProcessTime{
       "clientResultProcessCpuNanos"};
   /// The byte size of the raw result received from the remote storage lookup.
-  static inline const std::string kClientLookupResultRawSize{
+  static constexpr std::string_view kClientLookupResultRawSize{
       "clientLookupResultRawSize"};
   /// The byte size of the result data in velox vectors that are decoded from
   /// the raw data received from the remote storage lookup.
-  static inline const std::string kClientLookupResultSize{
+  static constexpr std::string_view kClientLookupResultSize{
       "clientLookupResultSize"};
   /// The number of lookup results received from remote storage with error.
-  static inline const std::string kClientNumErrorResults{
+  static constexpr std::string_view kClientNumErrorResults{
       "clientNumErrorResults"};
 
  private:
@@ -217,8 +217,9 @@ class IndexLookupJoin : public Operator {
   // for output rows without lookup matches.
   void prepareOutputRowMappings(size_t outputBatchSize);
 
-  // Prepare 'output_' for the next output batch with size of 'numOutputRows'.
-  void prepareOutput(vector_size_t numOutputRows);
+  // Creates a new output RowVector with 'numOutputRows' rows and nullptr
+  // children. Callers populate the children before returning it.
+  RowVectorPtr prepareOutput(vector_size_t numOutputRows);
 
   // Invoked to ensure the match column is created to store the output match
   // result for the left join.
@@ -373,8 +374,6 @@ class IndexLookupJoin : public Operator {
   DecodedVector decodedFilterResult_;
   BufferPtr filteredIndices_;
 
-  // The reusable output vector for the join output.
-  RowVectorPtr output_;
   FlatVectorPtr<bool> matchColumn_{nullptr};
   uint64_t* rawMatchValues_{nullptr};
 
@@ -391,5 +390,18 @@ class IndexLookupJoin : public Operator {
   // after the no-more-splits signal is received (i.e., 'noMoreIndexSplits_' is
   // true).
   std::vector<std::shared_ptr<connector::ConnectorSplit>> indexSplits_;
+
+  // Traces the index splits received by this operator for replay. Set when
+  // tracing is enabled for this operator.
+  std::unique_ptr<trace::TraceSplitWriter> indexSplitTracer_;
+
+  // Creates the index split tracer if input tracing is enabled.
+  void createIndexSplitTracer();
+
+  // Traces the given index split for replay.
+  void traceIndexSplit(const exec::Split& split);
+
+  // Closes and resets the index split tracer.
+  void closeIndexSplitTracer();
 };
 } // namespace facebook::velox::exec

@@ -47,7 +47,8 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
     virtual std::unique_ptr<cudf::column> doReduce(
         cudf::table_view const& input,
         TypePtr const& outputType,
-        rmm::cuda_stream_view stream) = 0;
+        rmm::cuda_stream_view stream,
+        vector_size_t inputRowCount) = 0;
 
     virtual std::unique_ptr<cudf::column> makeOutputColumn(
         std::vector<cudf::groupby::aggregation_result>& results,
@@ -107,6 +108,7 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
       cudf::table_view tableView,
       std::vector<column_index_t> const& groupByKeys,
       std::vector<std::unique_ptr<Aggregator>>& aggregators,
+      TypePtr const& outputType,
       rmm::cuda_stream_view stream);
   CudfVectorPtr doGlobalAggregation(
       cudf::table_view tableView,
@@ -120,10 +122,15 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
 
   std::vector<column_index_t> groupingKeyInputChannels_;
   std::vector<column_index_t> groupingKeyOutputChannels_;
+  std::vector<column_index_t> aggregationInputChannels_;
 
   std::shared_ptr<const core::AggregationNode> aggregationNode_;
   std::vector<std::unique_ptr<Aggregator>> aggregators_;
   std::vector<std::unique_ptr<Aggregator>> intermediateAggregators_;
+  // Used for kSingle streaming: partial-step aggregators (raw -> intermediate)
+  // and final-step aggregators (intermediate -> final).
+  std::vector<std::unique_ptr<Aggregator>> partialAggregators_;
+  std::vector<std::unique_ptr<Aggregator>> finalAggregators_;
 
   // Partial aggregation is the first phase of aggregation. e.g. count(*) when
   // in partial phase will do a count_agg but in the final phase will do a sum
@@ -134,10 +141,14 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
   // Distinct means it's a count distinct on the groupby keys, without any
   // aggregations
   const bool isDistinct_;
+  // Single means it's a single step aggregation (partial + final combined).
+  const bool isSingleStep_;
+  // Streaming aggregation is disabled if companion aggregates are present.
+  bool streamingEnabled_{true};
 
   // Maximum memory usage for partial aggregation.
   const int64_t maxPartialAggregationMemoryUsage_;
-  // Number of rows received in the input so far.
+  // Number of input rows accumulated since the last output or flush.
   int64_t numInputRows_ = 0;
 
   bool finished_ = false;
@@ -151,11 +162,16 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
 
   // This is for partial aggregation to keep reducing the amount of memory it
   // has to hold on to.
-  void computeIntermediateGroupbyPartial(CudfVectorPtr tbl);
+  void computePartialGroupbyStreaming(CudfVectorPtr tbl);
 
-  void computeIntermediateDistinctPartial(CudfVectorPtr tbl);
+  void computePartialDistinctStreaming(CudfVectorPtr tbl);
 
-  CudfVectorPtr partialOutput_;
+  void computeFinalGroupbyStreaming(CudfVectorPtr tbl);
+
+  void computeSingleGroupbyStreaming(CudfVectorPtr tbl);
+
+  CudfVectorPtr bufferedResult_;
+  RowTypePtr bufferedResultType_;
 };
 
 // Step-aware aggregation function registry

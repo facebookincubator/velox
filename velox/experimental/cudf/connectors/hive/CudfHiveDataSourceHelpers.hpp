@@ -25,11 +25,12 @@
 #include <cudf/io/datasource.hpp>
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/parquet_schema.hpp>
+#include <cudf/io/text/byte_range_info.hpp>
 #include <cudf/io/types.hpp>
 
-#include <list>
-#include <string>
-#include <unordered_map>
+#include <rmm/cuda_stream_view.hpp>
+#include <rmm/resource_ref.hpp>
+
 #include <vector>
 
 namespace facebook::velox::cudf_velox::connector::hive {
@@ -64,60 +65,76 @@ class BufferedInputDataSource : public cudf::io::datasource {
       uint8_t* dst,
       rmm::cuda_stream_view stream) override;
 
+  // Use the enqueue API from dwio::common::BufferedInput.
+  // Pass a device buffer to copy to after load.
+  void enqueueForDevice(uint64_t offset, uint64_t size, uint8_t* dst);
+
+  // loads and copies to device.
+  void load(rmm::cuda_stream_view stream);
+
  private:
   void readContiguous(size_t offset, size_t size, uint8_t* dst);
 
   std::shared_ptr<facebook::velox::dwio::common::BufferedInput> input_;
   const size_t fileSize_;
+  std::vector<std::function<void(rmm::cuda_stream_view stream)>>
+      pendingDeviceLoads_;
 };
 
-// ---------------- Internal helper ----------------
-// Convert a filter expression such that all `ast::column_reference`s are
-// replaced with `ast::column_name_reference`s from the selected columns or
-// the schema tree.
-// TODO(mh): Remove this once https://github.com/rapidsai/cudf/pull/20604 is
-// merged
-class referenceToNameConverter
-    : public cudf::ast::detail::expression_transformer {
- public:
-  explicit referenceToNameConverter(
-      std::optional<std::reference_wrapper<const cudf::ast::expression>> expr,
-      const std::vector<cudf::io::parquet::SchemaElement>& schemaTree,
-      cudf::host_span<const std::string> readColumnNames);
+/**
+ * @brief Hybrid scan reader state
+ *
+ * This struct is used to store the column chunk data for the hybrid scan reader
+ * and a once flag to ensure the setup is only done once.
+ */
+struct HybridScanState {
+  HybridScanState() : isHybridScanSetup_(std::make_unique<std::once_flag>()) {}
 
-  std::reference_wrapper<const cudf::ast::expression> visit(
-      const cudf::ast::literal& expr) override;
-
-  std::reference_wrapper<const cudf::ast::expression> visit(
-      const cudf::ast::column_reference& expr) override;
-
-  std::reference_wrapper<const cudf::ast::expression> visit(
-      const cudf::ast::column_name_reference& expr) override;
-
-  std::reference_wrapper<const cudf::ast::expression> visit(
-      const cudf::ast::operation& expr) override;
-
-  // Returns the converted AST expression
-  [[nodiscard]] std::reference_wrapper<const cudf::ast::expression>
-  convertedExpression() const;
-
- private:
-  std::vector<std::reference_wrapper<const cudf::ast::expression>>
-  visitOperands(
-      cudf::host_span<const std::reference_wrapper<const cudf::ast::expression>>
-          operands);
-  cudf::ast::tree convertedExpr_;
-  std::unordered_map<cudf::size_type, std::string> indicesToColumnNames_;
+  std::vector<rmm::device_buffer> columnChunkBuffers_;
+  std::vector<cudf::device_span<uint8_t const>> columnChunkData_;
+  std::unique_ptr<std::once_flag> isHybridScanSetup_;
 };
 
-// Fetch a host buffer containing parquet source footer from a data source.
+/**
+ * @brief Fetches a host buffer of Parquet footer bytes from the input data
+ * source
+ *
+ * @param dataSource Input data source
+ * @return Host buffer containing footer bytes
+ */
 std::unique_ptr<cudf::io::datasource::buffer> fetchFooterBytes(
     std::shared_ptr<cudf::io::datasource> dataSource);
 
-std::vector<std::unique_ptr<cudf::io::datasource>>
-makeDataSourcesFromSourceInfo(
-    const cudf::io::source_info& info,
-    size_t offset = 0,
-    size_t maxSizeEstimate = 0);
+/**
+ * @brief Fetches a host buffer of Parquet page index from the input data source
+ *
+ * @param dataSource Input datasource
+ * @param pageIndexBytes Byte range of page index
+ * @return Host buffer containing page index bytes
+ */
+std::unique_ptr<cudf::io::datasource::buffer> fetchPageIndexBytes(
+    std::shared_ptr<cudf::io::datasource> dataSource,
+    cudf::io::text::byte_range_info const pageIndexBytes);
+
+/**
+ * @brief Fetches a list of byte ranges from a host buffer into device buffers
+ *
+ * @param dataSource Input datasource
+ * @param byteRanges Byte ranges to fetch
+ * @param stream CUDA stream
+ * @param mr Device memory resource
+ *
+ * @return A tuple containing the device buffers, the device spans of the
+ * fetched data, and a future to wait on the read tasks
+ */
+std::tuple<
+    std::vector<rmm::device_buffer>,
+    std::vector<cudf::device_span<uint8_t const>>,
+    std::future<void>>
+fetchByteRangesAsync(
+    std::shared_ptr<cudf::io::datasource> dataSource,
+    cudf::host_span<cudf::io::text::byte_range_info const> byteRanges,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
 
 } // namespace facebook::velox::cudf_velox::connector::hive

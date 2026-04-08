@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 #pragma once
+#include <string_view>
+
 #include <folly/container/F14Map.h>
 
 #include "velox/exec/MergeSource.h"
@@ -44,6 +46,12 @@ namespace facebook::velox::exec {
 /// than one right vector, it gets copied and flattened.
 class MergeJoin : public Operator {
  public:
+  /// Runtime stat keys for merge join.
+  /// Number of left rows matched in merge join.
+  static constexpr std::string_view kMatchedLeftRows = "matchedLeftRows";
+  /// Number of right rows matched in merge join.
+  static constexpr std::string_view kMatchedRightRows = "matchedRightRows";
+
   MergeJoin(
       int32_t operatorId,
       DriverCtx* driverCtx,

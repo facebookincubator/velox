@@ -19,8 +19,16 @@
 #include <fmt/format.h>
 #include <folly/CppAttributes.h>
 #include <limits>
+#include <string_view>
 
 namespace facebook::velox {
+
+/// Converts unsigned bigint to signed, capping at int64_t max if overflow
+/// happens. Could be replaced by 'std::saturate_cast' since C++26.
+inline int64_t saturateCast(uint64_t value) {
+  return static_cast<int64_t>(std::min(
+      value, static_cast<uint64_t>(std::numeric_limits<int64_t>::max())));
+}
 
 struct RuntimeCounter {
   enum class Unit { kNone, kNanos, kBytes };
@@ -35,7 +43,7 @@ struct RuntimeMetric {
   // Sum, min, max have the same unit, count has kNone.
   RuntimeCounter::Unit unit;
   int64_t sum{0};
-  int64_t count{0};
+  uint64_t count{0};
   int64_t min{std::numeric_limits<int64_t>::max()};
   int64_t max{std::numeric_limits<int64_t>::min()};
 
@@ -50,7 +58,7 @@ struct RuntimeMetric {
 
   explicit RuntimeMetric(
       int64_t _sum,
-      int64_t _count,
+      uint64_t _count,
       int64_t _min,
       int64_t _max,
       RuntimeCounter::Unit _unit = RuntimeCounter::Unit::kNone)
@@ -77,7 +85,7 @@ class BaseRuntimeStatWriter {
   virtual ~BaseRuntimeStatWriter() = default;
 
   virtual void addRuntimeStat(
-      const std::string& /* name */,
+      std::string_view /* name */,
       const RuntimeCounter& /* value */) {}
 };
 
@@ -93,7 +101,7 @@ BaseRuntimeStatWriter* getThreadLocalRunTimeStatWriter();
 
 /// Writes runtime counter to the current Operator running on that thread.
 void addThreadLocalRuntimeStat(
-    const std::string& name,
+    std::string_view name,
     const RuntimeCounter& value);
 
 /// Scope guard to conveniently set and revert back the current stat writer.

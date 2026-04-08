@@ -30,6 +30,7 @@
 #include "connectors/hive/storage_adapters/abfs/AzureClientProviderFactories.h"
 #include "connectors/hive/storage_adapters/abfs/AzureClientProviderImpl.h"
 #include "connectors/hive/storage_adapters/abfs/RegisterAbfsFileSystem.h"
+#include "velox/common/testutil/TempFilePath.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsReadFile.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsWriteFile.h"
 #include "velox/connectors/hive/storage_adapters/abfs/RegisterAbfsFileSystem.h"
@@ -37,10 +38,10 @@
 #include "velox/connectors/hive/storage_adapters/abfs/tests/MockDataLakeFileClient.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/exec/tests/utils/PortUtil.h"
-#include "velox/exec/tests/utils/TempFilePath.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::filesystems;
+using namespace facebook::velox::common::testutil;
 using ::facebook::velox::common::Region;
 
 namespace {
@@ -111,8 +112,8 @@ class AbfsFileSystemTest : public testing::Test {
   }
 
  private:
-  static std::shared_ptr<::exec::test::TempFilePath> createFile() {
-    auto tempFile = exec::test::TempFilePath::create();
+  static std::shared_ptr<TempFilePath> createFile() {
+    auto tempFile = TempFilePath::create();
     tempFile->append("aaaaa");
     tempFile->append("bbbbb");
     tempFile->append(std::string(kOneMB, 'c'));

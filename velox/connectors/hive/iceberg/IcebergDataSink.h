@@ -24,41 +24,13 @@
 #include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
+#include "velox/connectors/hive/iceberg/IcebergConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergPartitionName.h"
 #include "velox/connectors/hive/iceberg/PartitionSpec.h"
 #include "velox/connectors/hive/iceberg/TransformEvaluator.h"
 #include "velox/functions/iceberg/Register.h"
 
 namespace facebook::velox::connector::hive::iceberg {
-
-namespace {
-
-IcebergColumnHandlePtr convertToIcebergColumnHandle(
-    const HiveColumnHandlePtr& hiveColumn) {
-  static int32_t fieldIdCounter = 1;
-
-  std::function<parquet::ParquetFieldId(const TypePtr&, int32_t&)> makeField =
-      [&makeField](
-          const TypePtr& type, int32_t& fieldId) -> parquet::ParquetFieldId {
-    const int32_t currentId = fieldId++;
-    std::vector<parquet::ParquetFieldId> children;
-    children.reserve(type->size());
-    for (auto i = 0; i < type->size(); ++i) {
-      children.push_back(makeField(type->childAt(i), fieldId));
-    }
-    return parquet::ParquetFieldId{currentId, children};
-  };
-
-  auto field = makeField(hiveColumn->dataType(), fieldIdCounter);
-
-  return std::make_shared<const IcebergColumnHandle>(
-      hiveColumn->name(),
-      hiveColumn->columnType(),
-      hiveColumn->dataType(),
-      field);
-}
-
-} // namespace
 
 /// Represents a request for Iceberg write.
 class IcebergInsertTableHandle final : public HiveInsertTableHandle {
@@ -108,7 +80,7 @@ class IcebergDataSink : public HiveDataSink {
       const ConnectorQueryCtx* connectorQueryCtx,
       CommitStrategy commitStrategy,
       const std::shared_ptr<const HiveConfig>& hiveConfig,
-      const std::string& functionPrefix);
+      const IcebergConfigPtr& icebergConfig);
 
   /// Generates Iceberg-specific commit messages for all writers containing
   /// metadata about written files. Creates a JSON object for each writer
@@ -142,7 +114,7 @@ class IcebergDataSink : public HiveDataSink {
       const std::vector<column_index_t>& partitionChannels,
       const std::vector<column_index_t>& dataChannels,
       RowTypePtr partitionRowType,
-      const std::string& functionPrefix);
+      const IcebergConfigPtr& icebergConfig);
 
   // Computes partition IDs for each row in the input batch by applying Iceberg
   // partition transforms and generating unique partition identifiers.

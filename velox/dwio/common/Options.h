@@ -475,6 +475,15 @@ class RowReaderOptions {
     passStringBuffersFromDecoder_ = passStringBuffersFromDecoder;
   }
 
+  bool collectColumnStats() const {
+    return collectColumnStats_;
+  }
+
+  RowReaderOptions& setCollectColumnStats(bool collect) {
+    collectColumnStats_ = collect;
+    return *this;
+  }
+
  private:
   uint64_t dataStart_;
   uint64_t dataLength_;
@@ -539,12 +548,14 @@ class RowReaderOptions {
   // NOTE: we will control this option with a session property
   // for prod. Tests are parameterized on both branches.
   bool passStringBuffersFromDecoder_{false};
+  bool collectColumnStats_{false};
 };
 
 /// Options for creating a Reader.
 class ReaderOptions : public io::ReaderOptions {
  public:
-  static constexpr uint64_t kDefaultFooterEstimatedSize = 1024 * 1024; // 1MB
+  static constexpr uint64_t kDefaultFooterSpeculativeIoSize =
+      1024 * 1024; // 1MB
   static constexpr uint64_t kDefaultFilePreloadThreshold =
       1024 * 1024 * 8; // 8MB
 
@@ -596,8 +607,8 @@ class ReaderOptions : public io::ReaderOptions {
     return *this;
   }
 
-  ReaderOptions& setFooterEstimatedSize(uint64_t size) {
-    footerEstimatedSize_ = size;
+  ReaderOptions& setFooterSpeculativeIoSize(uint64_t size) {
+    footerSpeculativeIoSize_ = size;
     return *this;
   }
 
@@ -663,8 +674,8 @@ class ReaderOptions : public io::ReaderOptions {
     return decrypterFactory_;
   }
 
-  uint64_t footerEstimatedSize() const {
-    return footerEstimatedSize_;
+  uint64_t footerSpeculativeIoSize() const {
+    return footerSpeculativeIoSize_;
   }
 
   uint64_t filePreloadThreshold() const {
@@ -699,12 +710,12 @@ class ReaderOptions : public io::ReaderOptions {
     randomSkip_ = std::move(randomSkip);
   }
 
-  bool noCacheRetention() const {
-    return noCacheRetention_;
+  bool cacheable() const {
+    return cacheable_;
   }
 
-  void setNoCacheRetention(bool noCacheRetention) {
-    noCacheRetention_ = noCacheRetention;
+  void setCacheable(bool cacheable) {
+    cacheable_ = cacheable;
   }
 
   const std::shared_ptr<velox::common::ScanSpec>& scanSpec() const {
@@ -723,12 +734,72 @@ class ReaderOptions : public io::ReaderOptions {
     selectiveNimbleReaderEnabled_ = value;
   }
 
+  /// Whether to cache file metadata (footer, stripes, index) in the
+  /// process-wide AsyncDataCache. When enabled, the first reader performs a
+  /// speculative tail read and populates the cache; subsequent readers on the
+  /// same file initialize from the cache with zero additional IO.
+  bool fileMetadataCacheEnabled() const {
+    return fileMetadataCacheEnabled_;
+  }
+
+  void setFileMetadataCacheEnabled(bool value) {
+    fileMetadataCacheEnabled_ = value;
+  }
+
+  /// If true, pins parsed metadata objects (e.g., StripeGroup, IndexGroup) in
+  /// the reader's metadata cache with strong references so they are never
+  /// evicted. This avoids re-reading and re-parsing metadata on every stripe
+  /// access when weak-pointer cache entries would otherwise expire.
+  bool pinFileMetadata() const {
+    return pinFileMetadata_;
+  }
+
+  void setPinFileMetadata(bool value) {
+    pinFileMetadata_ = value;
+  }
+
+  /// Whether to load and initialize the cluster index during file open.
+  /// When true, the cluster index section is preloaded and the structured
+  /// ClusterIndex object is created. Default true.
+  bool loadClusterIndex() const {
+    return loadClusterIndex_;
+  }
+
+  void setLoadClusterIndex(bool value) {
+    loadClusterIndex_ = value;
+  }
+
+  /// Whether to load and initialize the chunk index during file open.
+  /// When true, the chunk index section is preloaded and the structured
+  /// ChunkIndex object is created. Default true.
+  bool loadChunkIndex() const {
+    return loadChunkIndex_;
+  }
+
+  void setLoadChunkIndex(bool value) {
+    loadChunkIndex_ = value;
+  }
+
   bool allowEmptyFile() const {
     return allowEmptyFile_;
   }
 
   void setAllowEmptyFile(bool value) {
     allowEmptyFile_ = value;
+  }
+
+  /// Allows reading INT32 physical type columns as a narrower integer type
+  /// (e.g., INT32 -> TINYINT/SMALLINT). Some Parquet writers store INT_8 and
+  /// INT_16 values as plain INT32 without a converted type annotation. When
+  /// enabled, the value is silently truncated on overflow. When disabled
+  /// (default), only annotated type-matching reads are allowed (e.g.,
+  /// INT_8 -> TINYINT, INT_16 -> SMALLINT, INT_32 -> INTEGER).
+  bool allowInt32Narrowing() const {
+    return allowInt32Narrowing_;
+  }
+
+  void setAllowInt32Narrowing(bool value) {
+    allowInt32Narrowing_ = value;
   }
 
  private:
@@ -738,7 +809,7 @@ class ReaderOptions : public io::ReaderOptions {
   SerDeOptions serDeOptions_;
   std::unordered_map<std::string, std::string> properties_{};
   std::shared_ptr<encryption::DecrypterFactory> decrypterFactory_;
-  uint64_t footerEstimatedSize_{kDefaultFooterEstimatedSize};
+  uint64_t footerSpeculativeIoSize_{kDefaultFooterSpeculativeIoSize};
   uint64_t filePreloadThreshold_{kDefaultFilePreloadThreshold};
   bool fileColumnNamesReadAsLowerCase_{false};
   bool useColumnNamesForColumnMapping_{false};
@@ -748,7 +819,12 @@ class ReaderOptions : public io::ReaderOptions {
   const tz::TimeZone* sessionTimezone_{nullptr};
   bool adjustTimestampToTimezone_{false};
   bool selectiveNimbleReaderEnabled_{false};
+  bool fileMetadataCacheEnabled_{false};
+  bool pinFileMetadata_{false};
+  bool loadClusterIndex_{true};
+  bool loadChunkIndex_{true};
   bool allowEmptyFile_{false};
+  bool allowInt32Narrowing_{false};
 };
 
 struct WriterOptions {

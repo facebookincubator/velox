@@ -26,13 +26,13 @@
 #include "arrow/status.h"
 #include "grpc/grpc.h" // @manual
 #include "velox/common/base/Fs.h"
+#include "velox/common/testutil/TempFilePath.h"
 #include "velox/dwio/common/Arena.h"
 #include "velox/dwio/common/WriterFactory.h"
 #include "velox/dwio/parquet/writer/Writer.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/exec/fuzzer/PrestoSql.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
-#include "velox/exec/tests/utils/TempFilePath.h"
 #include "velox/functions/sparksql/fuzzer/SparkQueryRunnerToSqlPlanNodeVisitor.h"
 #include "velox/functions/sparksql/fuzzer/spark/connect/base.pb.h"
 #include "velox/functions/sparksql/fuzzer/spark/connect/relations.pb.h"
@@ -41,6 +41,7 @@
 using namespace spark::connect;
 
 namespace facebook::velox::functions::sparksql::fuzzer {
+using namespace facebook::velox::common::testutil;
 
 using dwio::common::ArenaCreate;
 
@@ -145,10 +146,10 @@ SparkQueryRunner::executeAndReturnVector(const core::PlanNodePtr& plan) {
       }
 
       auto writerPool = aggregatePool()->addAggregateChild("writer");
-      std::vector<std::shared_ptr<exec::test::TempFilePath>> tempFiles;
+      std::vector<std::shared_ptr<TempFilePath>> tempFiles;
       tempFiles.reserve(inputMap.size());
       for (const auto& [tableName, input] : inputMap) {
-        auto tempFile = exec::test::TempFilePath::create();
+        auto tempFile = TempFilePath::create();
         tempFiles.emplace_back(tempFile);
         const auto& filePath = tempFile->getPath();
         writeToFile(filePath, input, writerPool.get());

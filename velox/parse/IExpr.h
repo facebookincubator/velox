@@ -22,6 +22,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include "velox/common/Enums.h"
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
 
@@ -41,7 +42,10 @@ class IExpr {
     kConstant = 4,
     kLambda = 5,
     kSubquery = 6,
+    kConcat = 7,
   };
+
+  VELOX_DECLARE_EMBEDDED_ENUM_NAME(Kind)
 
   explicit IExpr(
       Kind kind,
@@ -53,6 +57,10 @@ class IExpr {
 
   Kind kind() const {
     return kind_;
+  }
+
+  std::string_view kindName() const {
+    return toName(kind_);
   }
 
   bool is(Kind kind) const {

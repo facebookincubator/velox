@@ -278,8 +278,8 @@ Mathematical Functions
     `spark.partition_id` to each thread (in a deterministic way) .
     ``seed`` must be constant. NULL ``seed`` is identical to zero ``seed``. ::
 
-        SELECT rand(0);    -- 0.5488135024422883
-        SELECT rand(NULL); -- 0.5488135024422883
+        SELECT rand(0);    -- 0.7604953758285915
+        SELECT rand(NULL); -- 0.7604953758285915
 
 .. spark:function:: random() -> double
 

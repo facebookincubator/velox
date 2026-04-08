@@ -102,7 +102,8 @@ std::unique_ptr<velox::dwio::common::FileSink> s3WriteFileSinkGenerator(
         fileSystem->openFileForWrite(fileURI, {{}, options.pool, std::nullopt}),
         fileURI,
         options.metricLogger,
-        options.stats);
+        options.stats,
+        options.fileSystemStats);
   }
   return nullptr;
 }

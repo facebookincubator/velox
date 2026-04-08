@@ -16,9 +16,13 @@
 #include "velox/exec/HashAggregation.h"
 
 #include <optional>
+#include "velox/common/testutil/TestValue.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/PrefixSort.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/Expr.h"
+
+using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
 
@@ -32,15 +36,22 @@ HashAggregation::HashAggregation(
           operatorId,
           aggregationNode->id(),
           aggregationNode->step() == core::AggregationNode::Step::kPartial
-              ? "PartialAggregation"
-              : "Aggregation",
+              ? OperatorType::kPartialAggregation
+              : OperatorType::kAggregation,
           aggregationNode->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId)
+              ? driverCtx->makeSpillConfig(
+                    operatorId,
+                    aggregationNode->step() ==
+                            core::AggregationNode::Step::kPartial
+                        ? OperatorType::kPartialAggregation
+                        : OperatorType::kAggregation)
               : std::nullopt),
       aggregationNode_(aggregationNode),
       isPartialOutput_(isPartialOutput(aggregationNode->step())),
       isGlobal_(aggregationNode->groupingKeys().empty()),
       isDistinct_(!isGlobal_ && aggregationNode->aggregates().empty()),
+      memoryCompactionEnabled_(
+          driverCtx->queryConfig().aggregationMemoryCompactionReclaimEnabled()),
       maxExtendedPartialAggregationMemoryUsage_(
           driverCtx->queryConfig().maxExtendedPartialAggregationMemoryUsage()),
       abandonPartialAggregationMinRows_(
@@ -115,6 +126,8 @@ void HashAggregation::initialize() {
       &operatorCtx_->driverCtx()->queryConfig(),
       operatorCtx_->pool(),
       spillStats_.get());
+
+  hasCompactableAggregates_ = groupingSet_->hasCompactableAggregates();
 
   aggregationNode_.reset();
 }
@@ -220,8 +233,6 @@ void HashAggregation::updateRuntimeStats() {
   const auto& hashers = groupingSet_->hashLookup().hashers;
   uint64_t asRange{0};
   uint64_t asDistinct{0};
-  const auto hashTableStats = groupingSet_->hashTableStats();
-
   auto lockedStats = stats_.wlock();
   auto& runtimeStats = lockedStats->runtimeStats;
 
@@ -235,14 +246,9 @@ void HashAggregation::updateRuntimeStats() {
     }
   }
 
-  runtimeStats[BaseHashTable::kCapacity] =
-      RuntimeMetric(hashTableStats.capacity);
-  runtimeStats[BaseHashTable::kNumRehashes] =
-      RuntimeMetric(hashTableStats.numRehashes);
-  runtimeStats[BaseHashTable::kNumDistinct] =
-      RuntimeMetric(hashTableStats.numDistinct);
-  runtimeStats[BaseHashTable::kNumTombstones] =
-      RuntimeMetric(hashTableStats.numTombstones);
+  if (auto* table = groupingSet_->table()) {
+    table->addRuntimeStats(runtimeStats);
+  }
 }
 
 void HashAggregation::prepareOutput(vector_size_t size) {
@@ -266,10 +272,13 @@ void HashAggregation::resetPartialOutputIfNeed() {
   {
     auto lockedStats = stats_.wlock();
     lockedStats->addRuntimeStat(
-        "flushRowCount", RuntimeCounter(numOutputRows_));
-    lockedStats->addRuntimeStat("flushTimes", RuntimeCounter(1));
+        std::string(HashAggregation::kFlushRowCount),
+        RuntimeCounter(numOutputRows_));
     lockedStats->addRuntimeStat(
-        "partialAggregationPct", RuntimeCounter(aggregationPct));
+        std::string(HashAggregation::kFlushTimes), RuntimeCounter(1));
+    lockedStats->addRuntimeStat(
+        std::string(HashAggregation::kPartialAggregationPct),
+        RuntimeCounter(saturateCast(aggregationPct)));
   }
   groupingSet_->resetTable(/*freeTable=*/false);
   partialFull_ = false;
@@ -293,7 +302,9 @@ void HashAggregation::maybeIncreasePartialAggregationMemoryUsage(
            maxExtendedPartialAggregationMemoryUsage_)) {
     groupingSet_->abandonPartialAggregation();
     pool()->release();
-    addRuntimeStat("abandonedPartialAggregation", RuntimeCounter(1));
+    addRuntimeStat(
+        std::string(HashAggregation::kAbandonedPartialAggregation),
+        RuntimeCounter(1));
     abandonedPartialAggregation_ = true;
     return;
   }
@@ -458,13 +469,37 @@ void HashAggregation::reclaim(
 
   updateEstimatedOutputRowSize();
 
+  // Try lightweight compaction first before spilling.
+  if (memoryCompactionEnabled_) {
+    uint64_t compactedBytes{0};
+    if (hasCompactableAggregates_) {
+      compactedBytes = groupingSet_->compact();
+    }
+    TestValue::adjust(
+        "facebook::velox::exec::HashAggregation::reclaim::compact",
+        &compactedBytes);
+    if (compactedBytes > 0) {
+      stats.reclaimedBytes += compactedBytes;
+      pool()->release();
+      if (compactedBytes >= targetBytes) {
+        return;
+      }
+    }
+  }
+
+  if (!canSpill()) {
+    return;
+  }
+
   if (noMoreInput_) {
     if (groupingSet_->hasSpilled()) {
       LOG(WARNING)
           << "Can't reclaim from aggregation operator which has spilled and is under output processing, pool "
-          << pool()->name()
-          << ", memory usage: " << succinctBytes(pool()->usedBytes())
-          << ", reservation: " << succinctBytes(pool()->reservedBytes());
+          << pool()->name() << ", root pool: " << pool()->root()->name()
+          << ", used: " << succinctBytes(pool()->usedBytes())
+          << ", reservation: " << succinctBytes(pool()->reservedBytes())
+          << ", root pool reservation: "
+          << succinctBytes(pool()->root()->reservedBytes());
       return;
     }
     if (isDistinct_) {

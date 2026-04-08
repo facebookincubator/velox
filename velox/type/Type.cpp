@@ -25,6 +25,7 @@
 #include <typeindex>
 
 #include "velox/external/tzdb/exception.h"
+#include "velox/type/CastRegistry.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/Time.h"
 #include "velox/type/TimestampConversion.h"
@@ -41,8 +42,8 @@ struct hash<facebook::velox::TypeKind> {
 namespace facebook::velox {
 namespace {
 bool isColumnNameRequiringEscaping(const std::string& name) {
-  static const std::string re("^[a-zA-Z_][a-zA-Z0-9_]*$");
-  return !RE2::FullMatch(name, re);
+  static const re2::RE2 pattern("^[a-zA-Z_][a-zA-Z0-9_]*$");
+  return !RE2::FullMatch(name, pattern);
 }
 
 const auto& typeKindNames() {
@@ -265,7 +266,7 @@ void Type::registerSerDe() {
   registry.Register(
       "IntervalYearMonthType", IntervalYearMonthType::deserialize);
   registry.Register("DateType", DateType::deserialize);
-  registry.Register("TimeType", TimeType::deserialize);
+  registry.Register("TimeType", TimeTypeFactory::deserialize);
 }
 
 std::string ArrayType::toString() const {
@@ -1169,7 +1170,11 @@ std::unordered_set<std::string> getCustomTypeNames() {
 
 bool unregisterCustomType(const std::string& name) {
   auto uppercaseName = boost::algorithm::to_upper_copy(name);
-  return typeFactories().erase(uppercaseName) == 1;
+  bool removed = typeFactories().erase(uppercaseName) == 1;
+  if (removed) {
+    CastRulesRegistry::instance().unregisterCastRules(uppercaseName);
+  }
+  return removed;
 }
 
 const CustomTypeFactory* FOLLY_NULLABLE
@@ -1358,6 +1363,7 @@ const SingletonTypeMap& singletonBuiltInTypes() {
       {"INTERVAL YEAR TO MONTH", INTERVAL_YEAR_MONTH()},
       {"DATE", DATE()},
       {"TIME", TIME()},
+      {"TIME MICRO UTC", TIME_MICRO_UTC()},
       {"UNKNOWN", UNKNOWN()},
   };
   return kTypes;
@@ -1508,19 +1514,85 @@ std::string getOpaqueAliasForTypeId(std::type_index typeIndex) {
   return it->second;
 }
 
-folly::dynamic TimeType::serialize() const {
+namespace {
+
+const auto& timePrecisionNames() {
+  static const folly::F14FastMap<TimePrecision, std::string_view> kNames = {
+      {TimePrecision::kMilliseconds, "MILLISECONDS"},
+      {TimePrecision ::kMicroseconds, "MICROSECONDS"}};
+  return kNames;
+}
+
+} // namespace
+
+VELOX_DEFINE_ENUM_NAME(TimePrecision, timePrecisionNames);
+
+namespace {
+
+const auto& typeParameterKindNames() {
+  static const folly::F14FastMap<TypeParameterKind, std::string_view> kNames = {
+      {TypeParameterKind::kType, "kType"},
+      {TypeParameterKind::kLongLiteral, "kLongLiteral"},
+      {TypeParameterKind::kLongEnumLiteral, "kLongEnumLiteral"},
+      {TypeParameterKind::kVarcharEnumLiteral, "kVarcharEnumLiteral"},
+  };
+  return kNames;
+}
+
+} // namespace
+
+VELOX_DEFINE_ENUM_NAME(TypeParameterKind, typeParameterKindNames);
+
+template <TimePrecision kPrecision, bool kLocalTime>
+folly::dynamic TimeType<kPrecision, kLocalTime>::serialize() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["name"] = "TimeType";
   obj["type"] = name();
+  // Only include precision and localTime if they differ from defaults
+  // (milliseconds and local time) for backward compatibility.
+  if (kPrecision != TimePrecision::kMilliseconds) {
+    obj["precision"] = static_cast<int>(kPrecision);
+  }
+  if (!kLocalTime) {
+    obj["localTime"] = kLocalTime;
+  }
   return obj;
 }
 
-StringView TimeType::valueToString(int64_t value, char* const startPos) const {
+// Explicit template instantiations for TimeType.
+template class TimeType<TimePrecision::kMilliseconds, true>;
+template class TimeType<TimePrecision::kMicroseconds, false>;
+
+// static
+TypePtr TimeTypeFactory::deserialize(const folly::dynamic& obj) {
+  // Default to millseconds and local time for backward compatibility.
+  auto precision = obj.get_ptr("precision")
+      ? static_cast<TimePrecision>(obj["precision"].asInt())
+      : TimePrecision::kMilliseconds;
+  bool localTime = obj.get_ptr("localTime") ? obj["localTime"].asBool() : true;
+
+  if (precision == TimePrecision::kMilliseconds) {
+    VELOX_USER_CHECK(
+        localTime,
+        "TimeType with millisecond precision and local time zone is not used.");
+    return static_cast<TypePtr>(TIME());
+  }
+  VELOX_USER_CHECK(
+      !localTime,
+      "TimeType with microsecond precision and UTC time zone is not used.");
+  return static_cast<TypePtr>(TIME_MICRO_UTC());
+}
+
+StringView TimeMilliPrecisionType::valueToString(
+    int64_t value,
+    char* const startPos) const {
   // Ensure the value is within valid TIME range
   VELOX_USER_CHECK(
-      !(value < 0 || value >= 86400000),
-      "TIME value {} is out of range [0, 86400000)",
-      value);
+      !(value < getMin() || value > getMax()),
+      "TIME value {} is out of range [{}, {}]",
+      value,
+      getMin(),
+      getMax());
 
   int64_t hours = value / kMillisInHour;
   int64_t remainingMs = value % kMillisInHour;
@@ -1531,25 +1603,24 @@ StringView TimeType::valueToString(int64_t value, char* const startPos) const {
 
   // TIME is represented as milliseconds since midnight
   // Convert to HH:mm:ss.SSS format
-
   fmt::format_to_n(
       startPos,
-      kTimeToVarcharRowSize,
+      timeToVarcharRowSize(),
       "{:02d}:{:02d}:{:02d}.{:03d}",
       hours,
       minutes,
       seconds,
       millis);
-  return StringView{startPos, kTimeToVarcharRowSize};
+  return StringView{startPos, timeToVarcharRowSize()};
 }
 
-int64_t TimeType::valueToTime(const StringView& timeStr) const {
+int64_t TimeMilliPrecisionType::valueToTime(const StringView& timeStr) const {
   return util::fromTimeString(timeStr).thenOrThrow(
       folly::identity,
       [&](const Status& status) { VELOX_USER_FAIL("{}", status.message()); });
 }
 
-int64_t TimeType::valueToTime(
+int64_t TimeMilliPrecisionType::valueToTime(
     const StringView& timeStr,
     const tz::TimeZone* timeZone,
     int64_t sessionStartTimeMs) const {
@@ -1601,6 +1672,29 @@ int64_t TimeType::valueToTime(
   }
 
   return adjustedTime;
+}
+
+// static
+std::string TimeMicroPrecisionUtcType::toCompactIso8601(int64_t microseconds) {
+  int64_t hours = microseconds / util::kMicrosPerHour;
+  microseconds %= util::kMicrosPerHour;
+  int64_t minutes = microseconds / util::kMicrosPerMinute;
+  microseconds %= util::kMicrosPerMinute;
+  int64_t seconds = microseconds / util::kMicrosPerSec;
+  int64_t remainingMicros = microseconds % util::kMicrosPerSec;
+
+  std::string result = fmt::format("{:02d}:{:02d}", hours, minutes);
+  if (seconds > 0 || remainingMicros > 0) {
+    result += fmt::format(":{:02d}", seconds);
+    if (remainingMicros > 0) {
+      if (remainingMicros % 1000 == 0) {
+        result += fmt::format(".{:03d}", remainingMicros / 1000);
+      } else {
+        result += fmt::format(".{:06d}", remainingMicros);
+      }
+    }
+  }
+  return result;
 }
 
 std::string stringifyTruncatedElementList(

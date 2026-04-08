@@ -102,40 +102,12 @@ TypePtr resolveVectorFunctionWithCoercions(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes,
     std::vector<TypePtr>& coercions) {
-  coercions.clear();
+  if (auto result = resolveVectorFunctionWithMetadataWithCoercions(
+          functionName, argTypes, coercions)) {
+    return result->first;
+  }
 
-  auto optionalType = applyToVectorFunctionEntry<TypePtr>(
-      functionName,
-      [&](const auto& /*name*/, const auto& entry) -> std::optional<TypePtr> {
-        std::vector<std::pair<std::vector<Coercion>, TypePtr>> candidates;
-        for (const auto& signature : entry.signatures) {
-          exec::SignatureBinder binder(*signature, argTypes);
-          std::vector<Coercion> requiredCoercions;
-          if (binder.tryBindWithCoercions(requiredCoercions)) {
-            auto type = binder.tryResolveReturnType();
-            if (!hasCoercion(requiredCoercions)) {
-              coercions.resize(argTypes.size(), nullptr);
-              return type;
-            }
-
-            candidates.emplace_back(requiredCoercions, type);
-          }
-        }
-
-        if (auto index = Coercion::pickLowestCost(candidates)) {
-          const auto& requiredCoercions = candidates[index.value()].first;
-          coercions.reserve(requiredCoercions.size());
-          for (const auto& coercion : requiredCoercions) {
-            coercions.push_back(coercion.type);
-          }
-
-          return candidates[index.value()].second;
-        }
-
-        return std::nullopt;
-      });
-
-  return optionalType.value_or(nullptr);
+  return nullptr;
 }
 
 std::optional<std::pair<TypePtr, VectorFunctionMetadata>>
@@ -152,6 +124,46 @@ resolveVectorFunctionWithMetadata(
             return {{binder.tryResolveReturnType(), entry.metadata}};
           }
         }
+        return std::nullopt;
+      });
+}
+
+std::optional<std::pair<TypePtr, VectorFunctionMetadata>>
+resolveVectorFunctionWithMetadataWithCoercions(
+    const std::string& functionName,
+    const std::vector<TypePtr>& argTypes,
+    std::vector<TypePtr>& coercions) {
+  coercions.clear();
+
+  return applyToVectorFunctionEntry<std::pair<TypePtr, VectorFunctionMetadata>>(
+      functionName,
+      [&](const auto& /*name*/, const auto& entry)
+          -> std::optional<std::pair<TypePtr, VectorFunctionMetadata>> {
+        std::vector<std::pair<std::vector<Coercion>, TypePtr>> candidates;
+        for (const auto& signature : entry.signatures) {
+          exec::SignatureBinder binder(*signature, argTypes);
+          std::vector<Coercion> requiredCoercions;
+          if (binder.tryBindWithCoercions(requiredCoercions)) {
+            auto type = binder.tryResolveReturnType();
+            if (!hasCoercion(requiredCoercions)) {
+              coercions.resize(argTypes.size(), nullptr);
+              return {{type, entry.metadata}};
+            }
+
+            candidates.emplace_back(requiredCoercions, type);
+          }
+        }
+
+        if (auto index = Coercion::pickLowestCost(candidates)) {
+          const auto& requiredCoercions = candidates[index.value()].first;
+          coercions.reserve(requiredCoercions.size());
+          for (const auto& coercion : requiredCoercions) {
+            coercions.push_back(coercion.type);
+          }
+
+          return {{candidates[index.value()].second, entry.metadata}};
+        }
+
         return std::nullopt;
       });
 }

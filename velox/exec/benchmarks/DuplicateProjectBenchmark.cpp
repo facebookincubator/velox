@@ -32,6 +32,7 @@ using namespace facebook::velox::test;
 using namespace facebook::velox::exec::test;
 
 namespace {
+using namespace facebook::velox::common::testutil;
 
 static constexpr int32_t kNumVectors = 50;
 static constexpr int32_t kRowsPerVector = 10'000;
