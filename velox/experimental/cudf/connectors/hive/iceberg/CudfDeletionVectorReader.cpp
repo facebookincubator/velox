@@ -419,7 +419,7 @@ BlobSource loadBlobSource(
 
   constexpr std::size_t kMagicOffset = sizeof(uint32_t);
   constexpr std::size_t kMagicSize = sizeof(uint32_t);
-  constexpr uint32_t kDvMagic = 0xD1D33964;
+  constexpr uint8_t kDvMagic[] = {0xD1, 0xD3, 0x39, 0x64};
   constexpr std::size_t kCrcSize = sizeof(uint32_t);
   constexpr std::size_t kCombinedLengthSize = sizeof(uint32_t);
 
@@ -447,10 +447,7 @@ BlobSource loadBlobSource(
       "DV-v1 combined length too small: {}.",
       combinedLength);
   VELOX_CHECK(
-      std::memcmp(
-          hdr + kMagicOffset,
-          reinterpret_cast<const uint8_t*>(&kDvMagic),
-          kMagicSize) == 0,
+      std::memcmp(hdr + kMagicOffset, kDvMagic, kMagicSize) == 0,
       "DV-v1 magic mismatch in Puffin blob.");
 
   // Expected blob size: combined length + magic + CRC sizes
