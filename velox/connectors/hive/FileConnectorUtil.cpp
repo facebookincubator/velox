@@ -156,8 +156,8 @@ void configureRowReaderOptions(
         fileConfig->parallelUnitLoadCount(sessionProperties));
     rowReaderOptions.setIndexEnabled(
         fileConfig->indexEnabled(sessionProperties));
-    rowReaderOptions.setCollectColumnStats(
-        fileConfig->readerCollectColumnStats(sessionProperties));
+    rowReaderOptions.setCollectColumnCpuMetrics(
+        fileConfig->readerCollectColumnCpuMetrics(sessionProperties));
   }
 }
 
