@@ -99,6 +99,7 @@ jobs:
       flaky: ${{ steps.tests.outputs.flaky }}
       failed-tests: ${{ steps.tests.outputs.failed-tests }}
       failed-cases: ${{ steps.tests.outputs.failed-cases }}
+      failure-details: ${{ steps.tests.outputs.failure-details }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -211,8 +212,9 @@ jobs:
               echo "flaky=true" >> "$GITHUB_OUTPUT"
             else
               echo "::error::Tests failed consistently on retry."
-              FAILED_TESTS=$(grep -A 1000 'The following tests FAILED:' /tmp/ctest-output.log | grep -E '^\s+[0-9]+ - ' | sed 's/.*- \(.*\) (.*/\1/' || true)
-              FAILED_CASES=$(grep -E '^\[  FAILED  \]' /tmp/ctest-output.log | sed 's/\[  FAILED  \] //' | sed 's/ (.*//' | grep '\.' | sort -u || true)
+              FAILED_TESTS=$(grep -A 1000 'The following tests FAILED:' /tmp/ctest-output.log | grep -E '^\s+[0-9]+ - ' | sed 's/.*- \(.*\) (.*/\1/' | head -20 || true)
+              FAILED_CASES=$(grep -E '^\[  FAILED  \]' /tmp/ctest-output.log | sed 's/\[  FAILED  \] //' | sed 's/ (.*//' | grep '\.' | sort -u | head -20 || true)
+              FAILURE_DETAILS=$(sed -n '/^\[ RUN      \]/,/^\[  FAILED  \]/p' /tmp/ctest-output.log | head -200 || true)
               if [[ -n "$FAILED_TESTS" ]]; then
                 {
                   echo 'failed-tests<<EOF'
@@ -224,6 +226,13 @@ jobs:
                 {
                   echo 'failed-cases<<EOF'
                   echo "$FAILED_CASES"
+                  echo 'EOF'
+                } >> "$GITHUB_OUTPUT"
+              fi
+              if [[ -n "$FAILURE_DETAILS" ]]; then
+                {
+                  echo 'failure-details<<EOF'
+                  echo "$FAILURE_DETAILS"
                   echo 'EOF'
                 } >> "$GITHUB_OUTPUT"
               fi
@@ -327,34 +336,24 @@ jobs:
     runs-on: ubuntu-latest
     name: "BUILD: Linux release with adapters"
     steps:
-      - run: |
-          if [[ -z "$BUILD_OUTCOME" || "$BUILD_OUTCOME" == "cancelled" ]]; then
-            echo "Build was cancelled (likely superseded by a newer push). Skipping."
-            exit 0
-          fi
-          if [[ "$BUILD_OUTCOME" != "success" ]]; then
-            echo "::error::Linux adapters release build failed. Do not land this PR until the build is fixed."
-            exit 1
-          fi
-          echo "Build succeeded."
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: Report build status
+        run: .github/scripts/report-build-status.sh "Linux release with adapters"
         env:
           BUILD_OUTCOME: ${{ needs.adapters.outputs.build-outcome }}
 
-      - name: Upload build failure artifact
-        if: failure()
-        run: |
-          mkdir -p /tmp/ci-failure
-          cat > /tmp/ci-failure/failure.json <<'EOF'
-          {"job": "Linux release with adapters", "type": "build"}
-          EOF
-
-      - name: Upload failure comment artifact
+      - name: Upload failure artifact
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ci-failure-adapters-build
           path: /tmp/ci-failure/failure.json
           retention-days: 1
+          if-no-files-found: ignore
 
   adapters-test-status:
     if: always()
@@ -362,74 +361,22 @@ jobs:
     runs-on: ubuntu-latest
     name: "TEST: Linux release with adapters"
     steps:
-      - run: |
-          if [[ -z "$BUILD_OUTCOME" || "$BUILD_OUTCOME" == "cancelled" ]]; then
-            echo "Run was cancelled (likely superseded by a newer push). Skipping."
-            exit 0
-          fi
-          if [[ "$BUILD_OUTCOME" != "success" ]]; then
-            echo "::error::Build failed — tests did not run. Check the 'Linux release with adapters' build job for compiler errors and build logs."
-            exit 1
-          fi
-          if [[ -z "$TEST_OUTCOME" || "$TEST_OUTCOME" == "cancelled" ]]; then
-            echo "Tests were cancelled (likely superseded by a newer push). Skipping."
-            exit 0
-          fi
-          if [[ "$TEST_OUTCOME" != "success" ]]; then
-            if [[ -n "$FAILED_CASES" ]]; then
-              CASE_LIST=$(echo "$FAILED_CASES" | sed 's/^/  - /')
-              CASE_COUNT=$(echo "$FAILED_CASES" | wc -l | tr -d ' ')
-              echo "::error::${CASE_COUNT} test case(s) failed in the Linux adapters release configuration. Failed: $(echo "$FAILED_CASES" | tr '\n' ', ' | sed 's/,$//'). To see the full test output with failure details, click the 'Linux release with adapters' job in the workflow run, then expand the 'Run Tests' step."
-              echo ""
-              echo "Failed test cases:"
-              echo "$CASE_LIST"
-            elif [[ -n "$FAILED_TESTS" ]]; then
-              TEST_LIST=$(echo "$FAILED_TESTS" | sed 's/^/  - /')
-              TEST_COUNT=$(echo "$FAILED_TESTS" | wc -l | tr -d ' ')
-              echo "::error::${TEST_COUNT} test(s) failed in the Linux adapters release configuration. Failed tests: $(echo "$FAILED_TESTS" | tr '\n' ', ' | sed 's/,$//'). To see the full test output with failure details, click the 'Linux release with adapters' job in the workflow run, then expand the 'Run Tests' step."
-              echo ""
-              echo "Failed tests:"
-              echo "$TEST_LIST"
-            else
-              echo "::error::Tests failed in the Linux adapters release configuration but no specific test names were captured. Check the 'Run Tests' step in the 'Linux release with adapters' job for details."
-            fi
-            echo ""
-            echo "To investigate, click the 'Linux release with adapters' job in the workflow run, then expand the 'Run Tests' step for the full ctest output with assertion failures and stack traces."
-            exit 1
-          fi
-          if [[ "$FLAKY" == "true" ]]; then
-            echo "::warning::Some tests were flaky (failed then passed on retry)."
-          fi
-          echo "All tests passed in Linux adapters release."
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: Report test status
+        run: .github/scripts/report-test-status.sh "Linux release with adapters" "Linux adapters release"
         env:
           BUILD_OUTCOME: ${{ needs.adapters.outputs.build-outcome }}
           TEST_OUTCOME: ${{ needs.adapters.outputs.test-outcome }}
           FLAKY: ${{ needs.adapters.outputs.flaky }}
           FAILED_TESTS: ${{ needs.adapters.outputs.failed-tests }}
           FAILED_CASES: ${{ needs.adapters.outputs.failed-cases }}
+          FAILURE_DETAILS: ${{ needs.adapters.outputs.failure-details }}
 
-      - name: Upload test failure artifact
-        if: failure()
-        env:
-          FAILED_TESTS: ${{ needs.adapters.outputs.failed-tests }}
-          FAILED_CASES: ${{ needs.adapters.outputs.failed-cases }}
-        run: |
-          mkdir -p /tmp/ci-failure
-          if [[ -n "$FAILED_CASES" ]]; then
-            TESTS="$FAILED_CASES"
-          elif [[ -n "$FAILED_TESTS" ]]; then
-            TESTS="$FAILED_TESTS"
-          else
-            TESTS=""
-          fi
-          # Write failure metadata as JSON for the CI failure analysis workflow.
-          jq -n --arg job "Linux release with adapters" \
-                 --arg type "test" \
-                 --arg failed_tests "$TESTS" \
-                 '{job: $job, type: $type, failed_tests: $failed_tests}' \
-                 > /tmp/ci-failure/failure.json
-
-      - name: Upload failure comment artifact
+      - name: Upload failure artifact
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -514,6 +461,7 @@ jobs:
       flaky: ${{ steps.tests.outputs.flaky }}
       failed-tests: ${{ steps.tests.outputs.failed-tests }}
       failed-cases: ${{ steps.tests.outputs.failed-cases }}
+      failure-details: ${{ steps.tests.outputs.failure-details }}
     defaults:
       run:
         shell: bash
@@ -623,8 +571,9 @@ jobs:
               echo "flaky=true" >> "$GITHUB_OUTPUT"
             else
               echo "::error::Tests failed consistently on retry."
-              FAILED_TESTS=$(grep -A 1000 'The following tests FAILED:' /tmp/ctest-output.log | grep -E '^\s+[0-9]+ - ' | sed 's/.*- \(.*\) (.*/\1/' || true)
-              FAILED_CASES=$(grep -E '^\[  FAILED  \]' /tmp/ctest-output.log | sed 's/\[  FAILED  \] //' | sed 's/ (.*//' | grep '\.' | sort -u || true)
+              FAILED_TESTS=$(grep -A 1000 'The following tests FAILED:' /tmp/ctest-output.log | grep -E '^\s+[0-9]+ - ' | sed 's/.*- \(.*\) (.*/\1/' | head -20 || true)
+              FAILED_CASES=$(grep -E '^\[  FAILED  \]' /tmp/ctest-output.log | sed 's/\[  FAILED  \] //' | sed 's/ (.*//' | grep '\.' | sort -u | head -20 || true)
+              FAILURE_DETAILS=$(sed -n '/^\[ RUN      \]/,/^\[  FAILED  \]/p' /tmp/ctest-output.log | head -200 || true)
               if [[ -n "$FAILED_TESTS" ]]; then
                 {
                   echo 'failed-tests<<EOF'
@@ -639,6 +588,13 @@ jobs:
                   echo 'EOF'
                 } >> "$GITHUB_OUTPUT"
               fi
+              if [[ -n "$FAILURE_DETAILS" ]]; then
+                {
+                  echo 'failure-details<<EOF'
+                  echo "$FAILURE_DETAILS"
+                  echo 'EOF'
+                } >> "$GITHUB_OUTPUT"
+              fi
               exit 1
             fi
           fi
@@ -649,34 +605,24 @@ jobs:
     runs-on: ubuntu-latest
     name: "BUILD: Ubuntu debug with system dependencies"
     steps:
-      - run: |
-          if [[ -z "$BUILD_OUTCOME" || "$BUILD_OUTCOME" == "cancelled" ]]; then
-            echo "Build was cancelled (likely superseded by a newer push). Skipping."
-            exit 0
-          fi
-          if [[ "$BUILD_OUTCOME" != "success" ]]; then
-            echo "::error::Ubuntu debug build failed. Do not land this PR until the build is fixed."
-            exit 1
-          fi
-          echo "Build succeeded."
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: Report build status
+        run: .github/scripts/report-build-status.sh "Ubuntu debug with system dependencies"
         env:
           BUILD_OUTCOME: ${{ needs.ubuntu-debug.outputs.build-outcome }}
 
-      - name: Upload build failure artifact
-        if: failure()
-        run: |
-          mkdir -p /tmp/ci-failure
-          cat > /tmp/ci-failure/failure.json <<'EOF'
-          {"job": "Ubuntu debug with system dependencies", "type": "build"}
-          EOF
-
-      - name: Upload failure comment artifact
+      - name: Upload failure artifact
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ci-failure-ubuntu-debug-build
           path: /tmp/ci-failure/failure.json
           retention-days: 1
+          if-no-files-found: ignore
 
   ubuntu-debug-test-status:
     if: always()
@@ -684,74 +630,22 @@ jobs:
     runs-on: ubuntu-latest
     name: "TEST: Ubuntu debug with system dependencies"
     steps:
-      - run: |
-          if [[ -z "$BUILD_OUTCOME" || "$BUILD_OUTCOME" == "cancelled" ]]; then
-            echo "Run was cancelled (likely superseded by a newer push). Skipping."
-            exit 0
-          fi
-          if [[ "$BUILD_OUTCOME" != "success" ]]; then
-            echo "::error::Build failed — tests did not run. Check the 'Ubuntu debug with system dependencies' build job for compiler errors and build logs."
-            exit 1
-          fi
-          if [[ -z "$TEST_OUTCOME" || "$TEST_OUTCOME" == "cancelled" ]]; then
-            echo "Tests were cancelled (likely superseded by a newer push). Skipping."
-            exit 0
-          fi
-          if [[ "$TEST_OUTCOME" != "success" ]]; then
-            if [[ -n "$FAILED_CASES" ]]; then
-              CASE_LIST=$(echo "$FAILED_CASES" | sed 's/^/  - /')
-              CASE_COUNT=$(echo "$FAILED_CASES" | wc -l | tr -d ' ')
-              echo "::error::${CASE_COUNT} test case(s) failed in the Ubuntu debug configuration. Failed: $(echo "$FAILED_CASES" | tr '\n' ', ' | sed 's/,$//'). To see the full test output with failure details, click the 'Ubuntu debug with system dependencies' job in the workflow run, then expand the 'Run Tests' step."
-              echo ""
-              echo "Failed test cases:"
-              echo "$CASE_LIST"
-            elif [[ -n "$FAILED_TESTS" ]]; then
-              TEST_LIST=$(echo "$FAILED_TESTS" | sed 's/^/  - /')
-              TEST_COUNT=$(echo "$FAILED_TESTS" | wc -l | tr -d ' ')
-              echo "::error::${TEST_COUNT} test(s) failed in the Ubuntu debug configuration. Failed tests: $(echo "$FAILED_TESTS" | tr '\n' ', ' | sed 's/,$//'). To see the full test output with failure details, click the 'Ubuntu debug with system dependencies' job in the workflow run, then expand the 'Run Tests' step."
-              echo ""
-              echo "Failed tests:"
-              echo "$TEST_LIST"
-            else
-              echo "::error::Tests failed in the Ubuntu debug configuration but no specific test names were captured. Check the 'Run Tests' step in the 'Ubuntu debug with system dependencies' job for details."
-            fi
-            echo ""
-            echo "To investigate, click the 'Ubuntu debug with system dependencies' job in the workflow run, then expand the 'Run Tests' step for the full ctest output with assertion failures and stack traces."
-            exit 1
-          fi
-          if [[ "$FLAKY" == "true" ]]; then
-            echo "::warning::Some tests were flaky (failed then passed on retry)."
-          fi
-          echo "All tests passed in Ubuntu debug."
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: Report test status
+        run: .github/scripts/report-test-status.sh "Ubuntu debug with system dependencies" "Ubuntu debug"
         env:
           BUILD_OUTCOME: ${{ needs.ubuntu-debug.outputs.build-outcome }}
           TEST_OUTCOME: ${{ needs.ubuntu-debug.outputs.test-outcome }}
           FLAKY: ${{ needs.ubuntu-debug.outputs.flaky }}
           FAILED_TESTS: ${{ needs.ubuntu-debug.outputs.failed-tests }}
           FAILED_CASES: ${{ needs.ubuntu-debug.outputs.failed-cases }}
+          FAILURE_DETAILS: ${{ needs.ubuntu-debug.outputs.failure-details }}
 
-      - name: Upload test failure artifact
-        if: failure()
-        env:
-          FAILED_TESTS: ${{ needs.ubuntu-debug.outputs.failed-tests }}
-          FAILED_CASES: ${{ needs.ubuntu-debug.outputs.failed-cases }}
-        run: |
-          mkdir -p /tmp/ci-failure
-          if [[ -n "$FAILED_CASES" ]]; then
-            TESTS="$FAILED_CASES"
-          elif [[ -n "$FAILED_TESTS" ]]; then
-            TESTS="$FAILED_TESTS"
-          else
-            TESTS=""
-          fi
-          # Write failure metadata as JSON for the CI failure analysis workflow.
-          jq -n --arg job "Ubuntu debug with system dependencies" \
-                 --arg type "test" \
-                 --arg failed_tests "$TESTS" \
-                 '{job: $job, type: $type, failed_tests: $failed_tests}' \
-                 > /tmp/ci-failure/failure.json
-
-      - name: Upload failure comment artifact
+      - name: Upload failure artifact
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

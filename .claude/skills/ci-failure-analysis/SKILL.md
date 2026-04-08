@@ -27,7 +27,9 @@ Your task:
 
 2. For TEST failures: Find the gtest failure output — the lines between `[ RUN      ]` and
    `[  FAILED  ]` for each failing test. Extract the assertion message, expected vs actual
-   values, file path, and line number.
+   values, file path, and line number. Also find the test binary name from the ctest output
+   (look for lines like `Start N: <test_name>` followed by the binary path, or search for
+   the binary path in the test output). You will need this for the reproduce command.
 
 3. For BUILD failures: Find compiler `error:` lines with file paths and error messages.
 
@@ -76,6 +78,11 @@ Keep failure details in a code block for readability.
 **Known issues:**
 - If an open issue tracks this failure, link to it
 - If the same test fails on main, note it as a pre-existing/flaky failure
+
+**Reproduce locally:** (for test failures)
+- Show the command to reproduce, e.g.:
+  `./_build/debug/velox/exec/tests/velox_exec_test_group0 --gtest_filter="TestSuite.testCase"`
+  Use the actual binary path from the ctest log output.
 
 **Recommended fix:** (if the failure is related to the PR)
 - Brief suggestion of what to fix
