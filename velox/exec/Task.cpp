@@ -2831,19 +2831,29 @@ void Task::onTaskCompletion() {
     }
 
     for (auto& listener : listeners) {
-      listener->onTaskCompletion(
-          uuid_,
-          taskId_,
-          state,
-          exception,
-          stats,
-          planFragment_,
-          exchangeClientByPlanNode_);
+      try {
+        listener->onTaskCompletion(
+            uuid_,
+            taskId_,
+            state,
+            exception,
+            stats,
+            planFragment_,
+            exchangeClientByPlanNode_);
+      } catch (const std::exception& e) {
+        LOG(ERROR) << "TaskCompletionListener threw for task " << taskId_
+                   << ": " << e.what();
+      }
     }
   });
 
   for (auto& listener : splitListeners_) {
-    listener->onTaskCompletion();
+    try {
+      listener->onTaskCompletion();
+    } catch (const std::exception& e) {
+      LOG(ERROR) << "SplitCompletionListener threw for task " << taskId_ << ": "
+                 << e.what();
+    }
   }
 }
 

@@ -1539,7 +1539,10 @@ uint64_t HiveDataSink::WriterReclaimer::reclaim(
                  << " which is under non-reclaimable section, root pool: "
                  << pool->root()->name()
                  << ", state: " << stateString(dataSink_->state_)
-                 << ", reservation: " << succinctBytes(pool->reservedBytes());
+                 << ", used: " << succinctBytes(pool->usedBytes())
+                 << ", reservation: " << succinctBytes(pool->reservedBytes())
+                 << ", root pool reservation: "
+                 << succinctBytes(pool->root()->reservedBytes());
     ++stats.numNonReclaimableAttempts;
     return 0;
   }
@@ -1553,7 +1556,8 @@ uint64_t HiveDataSink::WriterReclaimer::reclaim(
       ioStats_->rawBytesWritten() - writtenBytesBeforeReclaim;
   addThreadLocalRuntimeStat(
       kEarlyFlushedRawBytes,
-      RuntimeCounter(earlyFlushedRawBytes, RuntimeCounter::Unit::kBytes));
+      RuntimeCounter(
+          saturateCast(earlyFlushedRawBytes), RuntimeCounter::Unit::kBytes));
   if (earlyFlushedRawBytes > 0) {
     RECORD_METRIC_VALUE(
         kMetricFileWriterEarlyFlushedRawBytes, earlyFlushedRawBytes);

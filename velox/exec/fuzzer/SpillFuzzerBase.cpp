@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/exec/fuzzer/RowNumberFuzzerBase.h"
+#include "velox/exec/fuzzer/SpillFuzzerBase.h"
 
 #include <utility>
 #include "velox/common/testutil/TempDirectoryPath.h"
@@ -69,7 +69,27 @@ namespace facebook::velox::exec {
 
 using namespace facebook::velox::common::testutil;
 
-RowNumberFuzzerBase::RowNumberFuzzerBase(
+namespace {
+void compareResults(const RowVectorPtr& expected, const RowVectorPtr& actual) {
+  if (actual != nullptr && expected != nullptr) {
+    try {
+      VELOX_CHECK(
+          test::assertEqualResults({expected}, {actual}),
+          "Logically equivalent plans produced different results");
+    } catch (const VeloxException&) {
+      LOG(ERROR) << "Expected\n"
+                 << expected->toString(0, expected->size()) << "\nActual\n"
+                 << actual->toString(0, actual->size());
+      throw;
+    }
+  } else {
+    VELOX_CHECK(
+        FLAGS_enable_oom_injection, "Got unexpected nullptr for results");
+  }
+}
+} // namespace
+
+SpillFuzzerBase::SpillFuzzerBase(
     size_t initialSeed,
     std::unique_ptr<test::ReferenceQueryRunner> referenceQueryRunner)
     : vectorFuzzer_{getFuzzerOptions(), pool_.get()},
@@ -78,18 +98,21 @@ RowNumberFuzzerBase::RowNumberFuzzerBase(
   seed(initialSeed);
 }
 
-void RowNumberFuzzerBase::setupReadWrite() {
+void SpillFuzzerBase::setupReadWrite() {
   filesystems::registerLocalFileSystem();
   dwrf::registerDwrfReaderFactory();
   dwrf::registerDwrfWriterFactory();
 
-  if (!isRegisteredNamedVectorSerde("Presto")) {
+  if (!isRegisteredNamedVectorSerde(
+          VectorSerde::kindName(VectorSerde::Kind::kPresto))) {
     serializer::presto::PrestoVectorSerde::registerNamedVectorSerde();
   }
-  if (!isRegisteredNamedVectorSerde("CompactRow")) {
+  if (!isRegisteredNamedVectorSerde(
+          VectorSerde::kindName(VectorSerde::Kind::kCompactRow))) {
     serializer::CompactRowVectorSerde::registerNamedVectorSerde();
   }
-  if (!isRegisteredNamedVectorSerde("UnsafeRow")) {
+  if (!isRegisteredNamedVectorSerde(
+          VectorSerde::kindName(VectorSerde::Kind::kUnsafeRow))) {
     serializer::spark::UnsafeRowVectorSerde::registerNamedVectorSerde();
   }
 
@@ -102,20 +125,19 @@ void RowNumberFuzzerBase::setupReadWrite() {
 // Sometimes we generate zero-column input of type ROW({}) or a column of type
 // UNKNOWN(). Such data cannot be written to a file and therefore cannot
 // be tested with TableScan.
-bool RowNumberFuzzerBase::isTableScanSupported(const TypePtr& type) {
-  if (type->kind() == TypeKind::ROW && type->size() == 0) {
-    return false;
-  }
-  if (type->kind() == TypeKind::UNKNOWN) {
-    return false;
-  }
-  if (type->kind() == TypeKind::HUGEINT) {
-    return false;
-  }
-  // Disable testing with TableScan when input contains TIMESTAMP type, due to
-  // the issue #8127.
-  if (type->kind() == TypeKind::TIMESTAMP) {
-    return false;
+bool SpillFuzzerBase::isTableScanSupported(const TypePtr& type) {
+  switch (type->kind()) {
+    case TypeKind::UNKNOWN:
+    case TypeKind::HUGEINT:
+    case TypeKind::TIMESTAMP:
+      return false;
+    case TypeKind::ROW:
+      if (type->size() == 0) {
+        return false;
+      }
+      break;
+    default:
+      break;
   }
 
   for (auto i = 0; i < type->size(); ++i) {
@@ -127,7 +149,7 @@ bool RowNumberFuzzerBase::isTableScanSupported(const TypePtr& type) {
   return true;
 }
 
-void RowNumberFuzzerBase::validateExpectedResults(
+void SpillFuzzerBase::validateExpectedResults(
     const core::PlanNodePtr& plan,
     const std::vector<RowVectorPtr>& input,
     const RowVectorPtr& result) {
@@ -153,7 +175,7 @@ bool isDone(size_t i, T startTime) {
   return i >= FLAGS_steps;
 }
 
-void RowNumberFuzzerBase::run() {
+void SpillFuzzerBase::run() {
   VELOX_USER_CHECK(
       FLAGS_steps > 0 || FLAGS_duration_sec > 0,
       "Either --steps or --duration_sec needs to be greater than zero.");
@@ -174,9 +196,8 @@ void RowNumberFuzzerBase::run() {
   }
 }
 
-RowVectorPtr RowNumberFuzzerBase::execute(
+RowVectorPtr SpillFuzzerBase::execute(
     const PlanWithSplits& plan,
-    const std::shared_ptr<memory::MemoryPool>& pool,
     bool injectSpill,
     bool injectOOM,
     const std::optional<std::string>& spillConfig,
@@ -220,7 +241,7 @@ RowVectorPtr RowNumberFuzzerBase::execute(
   TestScopedSpillInjection scopedSpillInjection(spillPct);
   RowVectorPtr result;
   try {
-    result = builder.copyResults(pool.get());
+    result = builder.copyResults(pool_.get());
   } catch (VeloxRuntimeError& e) {
     if (injectOOM &&
         e.errorCode() == facebook::velox::error_code::kMemCapExceeded &&
@@ -240,50 +261,30 @@ RowVectorPtr RowNumberFuzzerBase::execute(
   return result;
 }
 
-void RowNumberFuzzerBase::testPlan(
+void SpillFuzzerBase::testPlan(
     const PlanWithSplits& plan,
     int32_t testNumber,
     const RowVectorPtr& expected,
     const std::optional<std::string>& spillConfig) {
   LOG(INFO) << "Testing plan #" << testNumber;
 
-  auto actual =
-      execute(plan, pool_, /*injectSpill=*/false, FLAGS_enable_oom_injection);
-  if (actual != nullptr && expected != nullptr) {
-    VELOX_CHECK(
-        test::assertEqualResults({expected}, {actual}),
-        "Logically equivalent plans produced different results");
-  } else {
-    VELOX_CHECK(
-        FLAGS_enable_oom_injection, "Got unexpected nullptr for results");
-  }
+  // Test without spilling first, then with spilling if enabled.
+  const bool testSpill = FLAGS_enable_spill;
+  for (int round = 0; round < (testSpill ? 2 : 1); ++round) {
+    const bool injectSpill = round == 1;
+    if (injectSpill) {
+      LOG(INFO) << "Testing plan #" << testNumber << " with spilling";
+    }
 
-  if (FLAGS_enable_spill) {
-    LOG(INFO) << "Testing plan #" << testNumber << " with spilling";
     const auto fuzzMaxSpillLevel =
         FLAGS_max_spill_level == -1 ? randInt(0, 3) : FLAGS_max_spill_level;
-    actual = execute(
+    auto actual = execute(
         plan,
-        pool_,
-        /*=injectSpill=*/true,
+        injectSpill,
         FLAGS_enable_oom_injection,
-        spillConfig,
-        fuzzMaxSpillLevel);
-    if (actual != nullptr && expected != nullptr) {
-      try {
-        VELOX_CHECK(
-            test::assertEqualResults({expected}, {actual}),
-            "Logically equivalent plans produced different results");
-      } catch (const VeloxException&) {
-        LOG(ERROR) << "Expected\n"
-                   << expected->toString(0, expected->size()) << "\nActual\n"
-                   << actual->toString(0, actual->size());
-        throw;
-      }
-    } else {
-      VELOX_CHECK(
-          FLAGS_enable_oom_injection, "Got unexpected nullptr for results");
-    }
+        injectSpill ? spillConfig : std::nullopt,
+        injectSpill ? fuzzMaxSpillLevel : -1);
+    compareResults(expected, actual);
   }
 }
 

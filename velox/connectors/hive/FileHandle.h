@@ -38,8 +38,8 @@
 namespace facebook::velox {
 
 /// fileReadOps keys for passing table identity (db and table name)
-/// through the file handle layer. Written by the connector (SplitReader) and
-/// read by storage implementations to build per-table access token keys.
+/// through the file handle layer. Written by the connector (FileSplitReader)
+/// and read by storage implementations to build per-table access token keys.
 constexpr std::string_view kDbNameKey = "dbName";
 constexpr std::string_view kTableNameKey = "tableName";
 

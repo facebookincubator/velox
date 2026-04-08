@@ -37,7 +37,7 @@ TEST(FileHandleTest, hiveColumnHandle) {
   ASSERT_EQ(columnHandle->name(), "columnHandle");
   ASSERT_EQ(
       columnHandle->columnType(),
-      connector::hive::HiveColumnHandle::ColumnType::kRegular);
+      connector::hive::FileColumnHandle::ColumnType::kRegular);
   ASSERT_EQ(columnHandle->dataType(), columnType);
   ASSERT_EQ(columnHandle->hiveType(), columnType);
   ASSERT_FALSE(columnHandle->isPartitionKey());

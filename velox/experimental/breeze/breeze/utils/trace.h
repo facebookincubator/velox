@@ -35,7 +35,11 @@
 #define __noinline__ noinline
 #endif
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Warray-bounds"
+#pragma GCC diagnostic ignored "-Wstringop-overflow"
 #include <perfetto.h>
+#pragma GCC diagnostic pop
 
 #include <condition_variable>
 #include <fstream>

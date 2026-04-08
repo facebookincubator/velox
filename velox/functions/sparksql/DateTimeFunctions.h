@@ -435,6 +435,7 @@ struct GetTimestampFunction {
       } else {
         invalidFormat_ = true;
       }
+      isConstantTimeFormat_ = true;
     }
   }
 

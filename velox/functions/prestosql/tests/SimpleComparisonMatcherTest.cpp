@@ -42,6 +42,7 @@ class SimpleComparisonMatcherTest : public testing::Test,
       const RowTypePtr& rowType) {
     parse::ParseOptions options;
     options.functionPrefix = prefix_;
+    options.parseIntegerAsBigint = false;
     auto untyped = parse::DuckSqlExpressionsParser(options).parseExpr(text);
     return core::Expressions::inferTypes(untyped, rowType, execCtx_->pool());
   }
@@ -68,7 +69,7 @@ class TestFunction : public exec::VectorFunction {
                 .typeVariable("T")
                 .returnType("array(T)")
                 .argumentType("array(T)")
-                .argumentType("function(T,T,bigint)")
+                .argumentType("function(T,T,integer)")
                 .build()};
   }
 };
@@ -79,8 +80,7 @@ TEST_F(SimpleComparisonMatcherTest, basic) {
       TestFunction::signatures(),
       std::make_unique<TestFunction>());
 
-  const auto inputType =
-      ROW({"a"}, {ARRAY(ROW({"f", "g"}, {BIGINT(), BIGINT()}))});
+  const auto inputType = ROW({"a"}, {ARRAY(ROW({"f", "g"}, INTEGER()))});
 
   auto checker = std::make_unique<SimpleComparisonChecker>();
 
