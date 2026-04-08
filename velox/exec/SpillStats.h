@@ -20,6 +20,7 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/file/File.h"
+#include "velox/common/process/ProcessBase.h"
 
 namespace facebook::velox::exec {
 
@@ -67,6 +68,9 @@ struct SpillStats {
   std::atomic_uint64_t spillReadTimeNanos{0};
   /// The time spent on deserializing rows read from spilled files.
   std::atomic_uint64_t spillDeserializationTimeNanos{0};
+  /// The CPU time spent on spill operations running on background (non-driver)
+  /// threads.
+  std::atomic_uint64_t spillCpuTimeNanos{0};
   /// Filesystem I/O stats for spill operations.
   IoStats ioStats;
 
@@ -90,7 +94,8 @@ struct SpillStats {
       uint64_t _spillReadBytes,
       uint64_t _spillReads,
       uint64_t _spillReadTimeNanos,
-      uint64_t _spillDeserializationTimeNanos);
+      uint64_t _spillDeserializationTimeNanos,
+      uint64_t _spillCpuTimeNanos);
 
   SpillStats(const SpillStats& other);
 
@@ -110,6 +115,29 @@ struct SpillStats {
 
  private:
   void copyFrom(const SpillStats& other);
+};
+
+class SpillBackgroundCpuTimer {
+ public:
+  explicit SpillBackgroundCpuTimer(SpillStats* stats)
+      : stats_(stats),
+        cpuTimeStart_(stats_ != nullptr ? process::threadCpuNanos() : 0) {}
+
+  ~SpillBackgroundCpuTimer() {
+    if (stats_ != nullptr) {
+      stats_->spillCpuTimeNanos.fetch_add(
+          process::threadCpuNanos() - cpuTimeStart_, std::memory_order_relaxed);
+    }
+  }
+
+  SpillBackgroundCpuTimer(const SpillBackgroundCpuTimer&) = delete;
+  SpillBackgroundCpuTimer& operator=(const SpillBackgroundCpuTimer&) = delete;
+  SpillBackgroundCpuTimer(SpillBackgroundCpuTimer&&) = delete;
+  SpillBackgroundCpuTimer& operator=(SpillBackgroundCpuTimer&&) = delete;
+
+ private:
+  SpillStats* const stats_;
+  const uint64_t cpuTimeStart_;
 };
 
 FOLLY_ALWAYS_INLINE std::ostream& operator<<(

@@ -399,6 +399,13 @@ class QueryConfig {
   static constexpr const char* kLocalMergeSpillEnabled =
       "local_merge_spill_enabled";
 
+  /// If true, track and report CPU time consumed on spill executor background
+  /// threads. When enabled, the time is recorded as a runtime stat
+  /// (`spillBackgroundCpuTimeNanos`) and included in task-level CPU accounting
+  /// (which affects billing). True by default.
+  static constexpr const char* kTrackSpillBackgroundCpuTime =
+      "track_spill_background_cpu_time";
+
   /// Specify the max number of local sources to merge at a time.
   static constexpr const char* kLocalMergeMaxNumMergeSources =
       "local_merge_max_num_merge_sources";
@@ -1313,6 +1320,10 @@ class QueryConfig {
   int32_t spillableReservationGrowthPct() const {
     constexpr int32_t kDefaultPct = 10;
     return get<int32_t>(kSpillableReservationGrowthPct, kDefaultPct);
+  }
+
+  bool trackSpillBackgroundCpuTime() const {
+    return get<bool>(kTrackSpillBackgroundCpuTime, false);
   }
 
   bool queryTraceEnabled() const {

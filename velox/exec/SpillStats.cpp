@@ -53,7 +53,8 @@ SpillStats::SpillStats(
     uint64_t _spillReadBytes,
     uint64_t _spillReads,
     uint64_t _spillReadTimeNanos,
-    uint64_t _spillDeserializationTimeNanos) {
+    uint64_t _spillDeserializationTimeNanos,
+    uint64_t _spillCpuTimeNanos) {
   spillRuns.store(_spillRuns, std::memory_order_relaxed);
   spilledInputBytes.store(_spilledInputBytes, std::memory_order_relaxed);
   spilledBytes.store(_spilledBytes, std::memory_order_relaxed);
@@ -76,6 +77,7 @@ SpillStats::SpillStats(
   spillReadTimeNanos.store(_spillReadTimeNanos, std::memory_order_relaxed);
   spillDeserializationTimeNanos.store(
       _spillDeserializationTimeNanos, std::memory_order_relaxed);
+  spillCpuTimeNanos.store(_spillCpuTimeNanos, std::memory_order_relaxed);
 }
 
 SpillStats::SpillStats(const SpillStats& other) {
@@ -144,6 +146,9 @@ SpillStats& SpillStats::operator+=(const SpillStats& other) {
   spillDeserializationTimeNanos.fetch_add(
       other.spillDeserializationTimeNanos.load(std::memory_order_relaxed),
       std::memory_order_relaxed);
+  spillCpuTimeNanos.fetch_add(
+      other.spillCpuTimeNanos.load(std::memory_order_relaxed),
+      std::memory_order_relaxed);
   ioStats.merge(other.ioStats);
   return *this;
 }
@@ -206,6 +211,9 @@ void SpillStats::copyFrom(const SpillStats& other) {
       std::memory_order_relaxed);
   spillDeserializationTimeNanos.store(
       other.spillDeserializationTimeNanos.load(std::memory_order_relaxed),
+      std::memory_order_relaxed);
+  spillCpuTimeNanos.store(
+      other.spillCpuTimeNanos.load(std::memory_order_relaxed),
       std::memory_order_relaxed);
   ioStats.merge(other.ioStats);
 }
@@ -284,6 +292,10 @@ SpillStats SpillStats::operator-(const SpillStats& other) const {
       spillDeserializationTimeNanos.load(std::memory_order_relaxed) -
           other.spillDeserializationTimeNanos.load(std::memory_order_relaxed),
       std::memory_order_relaxed);
+  result.spillCpuTimeNanos.store(
+      spillCpuTimeNanos.load(std::memory_order_relaxed) -
+          other.spillCpuTimeNanos.load(std::memory_order_relaxed),
+      std::memory_order_relaxed);
   return result;
 }
 
@@ -323,7 +335,9 @@ bool SpillStats::operator==(const SpillStats& other) const {
       spillReadTimeNanos.load(std::memory_order_relaxed) ==
       other.spillReadTimeNanos.load(std::memory_order_relaxed) &&
       spillDeserializationTimeNanos.load(std::memory_order_relaxed) ==
-      other.spillDeserializationTimeNanos.load(std::memory_order_relaxed);
+      other.spillDeserializationTimeNanos.load(std::memory_order_relaxed) &&
+      spillCpuTimeNanos.load(std::memory_order_relaxed) ==
+      other.spillCpuTimeNanos.load(std::memory_order_relaxed);
 }
 
 void SpillStats::reset() {
@@ -345,6 +359,7 @@ void SpillStats::reset() {
   spillReads.store(0, std::memory_order_relaxed);
   spillReadTimeNanos.store(0, std::memory_order_relaxed);
   spillDeserializationTimeNanos.store(0, std::memory_order_relaxed);
+  spillCpuTimeNanos.store(0, std::memory_order_relaxed);
   ioStats = IoStats();
 }
 
@@ -391,7 +406,9 @@ std::string SpillStats::toString() const {
      << "spillReadDeserializationTimeNanos["
      << succinctNanos(
             spillDeserializationTimeNanos.load(std::memory_order_relaxed))
-     << "]";
+     << "] "
+     << "spillCpuTimeNanos["
+     << succinctNanos(spillCpuTimeNanos.load(std::memory_order_relaxed)) << "]";
 
   const auto ioStatsMap = ioStats.stats();
   if (!ioStatsMap.empty()) {
