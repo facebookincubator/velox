@@ -95,6 +95,8 @@ class CudfDeletionVectorReader {
 
   std::string normalizedPayload_;
   std::unique_ptr<BitmapImpl> bitmap_;
+  std::unique_ptr<rmm::device_buffer> rowIndices_;
+  std::unique_ptr<rmm::device_buffer> rowMask_;
 };
 
 } // namespace facebook::velox::cudf_velox::connector::hive::iceberg

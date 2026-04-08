@@ -26,7 +26,7 @@
 #include <rmm/mr/polymorphic_allocator.hpp>
 
 #include <cuco/roaring_bitmap.cuh>
-#include <thrust/iterator/transform_output_iterator.h>
+#include <cuda/iterator>
 #include <thrust/sequence.h>
 
 namespace facebook::velox::cudf_velox::connector::hive::iceberg {
@@ -131,42 +131,57 @@ std::unique_ptr<cudf::table> CudfDeletionVectorReader::applyDeletionVector(
     return std::make_unique<cudf::table>(table, stream, mr);
   }
 
-  auto rowMask = rmm::device_buffer(numRows * sizeof(bool), stream, mr);
-  auto rowMaskIter = thrust::make_transform_output_iterator(
-      static_cast<bool*>(rowMask.data()), NegateBool{});
+  // Helper lambda to probe the cuco roaring bitmap (deletion vector)
+  auto probeDeletionVector = [&](auto& bitmap) {
+    // Deduce the roaring bitmap value type from the reference.
+    using ValueType =
+        typename std::remove_reference_t<decltype(bitmap)>::value_type;
 
-  if (bitmap_->bitmap32) {
-    auto rowIndices =
-        rmm::device_buffer(numRows * sizeof(cuda::std::uint32_t), stream, mr);
-    auto* rowIndicesPtr = static_cast<cuda::std::uint32_t*>(rowIndices.data());
+    // Allocate row index buffer if needed
+    if (!rowIndices_ || rowIndices_->size() < numRows * sizeof(ValueType)) {
+      rowIndices_ = std::make_unique<rmm::device_buffer>(
+          numRows * sizeof(ValueType), stream, mr);
+    }
+
+    // Generate row indices
+    auto rowIndexIter = static_cast<ValueType*>(rowIndices_->data());
     thrust::sequence(
         rmm::exec_policy_nosync(stream),
-        rowIndicesPtr,
-        rowIndicesPtr + numRows,
-        static_cast<cuda::std::uint32_t>(startRow));
-    bitmap_->bitmap32->contains_async(
-        rowIndicesPtr, rowIndicesPtr + numRows, rowMaskIter, stream);
-  } else {
-    auto rowIndices =
-        rmm::device_buffer(numRows * sizeof(cuda::std::uint64_t), stream, mr);
-    auto* rowIndicesPtr = static_cast<cuda::std::uint64_t*>(rowIndices.data());
-    thrust::sequence(
-        rmm::exec_policy_nosync(stream),
-        rowIndicesPtr,
-        rowIndicesPtr + numRows,
-        static_cast<cuda::std::uint64_t>(startRow));
-    bitmap_->bitmap64->contains_async(
-        rowIndicesPtr, rowIndicesPtr + numRows, rowMaskIter, stream);
+        rowIndexIter,
+        rowIndexIter + numRows,
+        static_cast<ValueType>(startRow));
+
+    // Probe the roaring bitmap and negate output
+    auto rowMaskIter = cuda::make_transform_output_iterator(
+        static_cast<bool*>(rowMask_->data()), NegateBool{});
+    bitmap.contains_async(
+        rowIndexIter, rowIndexIter + numRows, rowMaskIter, stream);
+  };
+
+  // Allocate row mask buffer if needed
+  if (not rowMask_ or rowMask_->size() < numRows * sizeof(bool)) {
+    rowMask_ = std::make_unique<rmm::device_buffer>(
+        numRows * sizeof(bool), stream, mr);
   }
 
-  auto maskColumn = cudf::column_view(
+  // Probe the deletion vector
+  if (bitmap_->bitmap32) {
+    probeDeletionVector(*bitmap_->bitmap32);
+  } else {
+    probeDeletionVector(*bitmap_->bitmap64);
+  }
+
+  // Create a column view from the row mask
+  auto rowMaskColumn = cudf::column_view(
       cudf::data_type{cudf::type_id::BOOL8},
       numRows,
-      rowMask.data(),
+      rowMask_->data(),
       nullptr,
+      0,
       0);
 
-  return cudf::apply_boolean_mask(table, maskColumn, stream, mr);
+  // Apply the boolean mask to the table
+  return cudf::apply_boolean_mask(table, rowMaskColumn, stream, mr);
 }
 
 } // namespace facebook::velox::cudf_velox::connector::hive::iceberg
