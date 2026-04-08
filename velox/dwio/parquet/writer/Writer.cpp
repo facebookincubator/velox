@@ -401,17 +401,12 @@ void Writer::flush() {
 }
 
 dwio::common::StripeProgress getStripeProgress(int64_t bufferedBytes) {
-  // Arrow Parquet FileWriter will flush row group based on the row number, so
+  // Arrow Parquet FileWriter will new row group based on the row number, so
   // we only check buffered bytes to flush row group here.
   return dwio::common::StripeProgress{.stripeSizeEstimate = bufferedBytes};
 }
 
 /**
- * This method would cache input `ColumnarBatch` to make the size of row group
- * big. It would flush when:
- * - the cached numRows bigger than `rowsInRowGroup_`
- * - the cached bytes bigger than `bytesInRowGroup_`
- *
  * This method assumes each input `ColumnarBatch` have same schema.
  */
 void Writer::write(const VectorPtr& data) {
