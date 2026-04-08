@@ -95,6 +95,7 @@ jobs:
     outputs:
       cudf-changes: ${{ steps.changes.outputs.cudf }}
       build-outcome: ${{ steps.build.outcome }}
+      build-failure-details: ${{ steps.build-errors.outputs.build-failure-details }}
       test-outcome: ${{ steps.tests.outcome }}
       flaky: ${{ steps.tests.outputs.flaky }}
       failed-tests: ${{ steps.tests.outputs.failed-tests }}
@@ -180,7 +181,20 @@ jobs:
           g++ --version
           # CC/CXX are set to GCC12 in the adapters image build and it needs to be overridden
           # after sourcing GCC14.
-          CC=gcc CXX=g++ make release EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS[*]}"
+          CC=gcc CXX=g++ make release EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS[*]}" 2>&1 | tee /tmp/build-output.log
+
+      - name: Extract build errors
+        id: build-errors
+        if: failure() && steps.build.outcome == 'failure'
+        run: |
+          BUILD_ERRORS=$(grep -E '^.*:(error|fatal error):' /tmp/build-output.log | head -50 || true)
+          if [[ -n $BUILD_ERRORS ]]; then
+            {
+              echo 'build-failure-details<<EOF'
+              echo "$BUILD_ERRORS"
+              echo 'EOF'
+            } >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Ccache after
         run: ccache -s
@@ -322,6 +336,7 @@ jobs:
         run: .github/scripts/report-build-status.sh "Linux release with adapters"
         env:
           BUILD_OUTCOME: ${{ needs.adapters.outputs.build-outcome }}
+          BUILD_FAILURE_DETAILS: ${{ needs.adapters.outputs.build-failure-details }}
 
       - name: Upload failure artifact
         if: failure()
@@ -434,6 +449,7 @@ jobs:
       USE_CLANG: ${{ inputs.use-clang && 'true' || 'false' }}
     outputs:
       build-outcome: ${{ steps.build.outcome }}
+      build-failure-details: ${{ steps.build-errors.outputs.build-failure-details }}
       test-outcome: ${{ steps.tests.outcome }}
       flaky: ${{ steps.tests.outputs.flaky }}
       failed-tests: ${{ steps.tests.outputs.failed-tests }}
@@ -519,7 +535,20 @@ jobs:
             EXTRA_CMAKE_FLAGS+=("-DVELOX_ENABLE_REMOTE_FUNCTIONS=ON")
           fi
           export EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS[*]}"
-          make debug
+          make debug 2>&1 | tee /tmp/build-output.log
+
+      - name: Extract build errors
+        id: build-errors
+        if: failure() && steps.build.outcome == 'failure'
+        run: |
+          BUILD_ERRORS=$(grep -E '^.*:(error|fatal error):' /tmp/build-output.log | head -50 || true)
+          if [[ -n $BUILD_ERRORS ]]; then
+            {
+              echo 'build-failure-details<<EOF'
+              echo "$BUILD_ERRORS"
+              echo 'EOF'
+            } >> "$GITHUB_OUTPUT"
+          fi
 
       - name: CCache after
         run: |
@@ -568,6 +597,7 @@ jobs:
         run: .github/scripts/report-build-status.sh "Ubuntu debug with system dependencies"
         env:
           BUILD_OUTCOME: ${{ needs.ubuntu-debug.outputs.build-outcome }}
+          BUILD_FAILURE_DETAILS: ${{ needs.ubuntu-debug.outputs.build-failure-details }}
 
       - name: Upload failure artifact
         if: failure()

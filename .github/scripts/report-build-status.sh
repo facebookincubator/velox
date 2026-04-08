@@ -18,7 +18,8 @@
 # Usage: report-build-status.sh <job-name>
 #
 # Required environment variables:
-#   BUILD_OUTCOME - build step outcome (success/failure/cancelled)
+#   BUILD_OUTCOME         - build step outcome (success/failure/cancelled)
+#   BUILD_FAILURE_DETAILS - compiler errors extracted from build output (optional)
 
 set -euo pipefail
 
@@ -31,6 +32,14 @@ fi
 
 if [[ $BUILD_OUTCOME != "success" ]]; then
   echo "::error::${JOB_NAME} build failed. Do not land this PR until the build is fixed."
+
+  if [[ -n ${BUILD_FAILURE_DETAILS:-} ]]; then
+    echo ""
+    echo "Build errors:"
+    echo "----------------------------------------"
+    echo "$BUILD_FAILURE_DETAILS"
+    echo "----------------------------------------"
+  fi
 
   # Write failure metadata for the CI failure analysis workflow.
   mkdir -p /tmp/ci-failure
