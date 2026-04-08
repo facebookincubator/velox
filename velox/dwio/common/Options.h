@@ -475,13 +475,18 @@ class RowReaderOptions {
     passStringBuffersFromDecoder_ = passStringBuffersFromDecoder;
   }
 
-  bool collectColumnStats() const {
-    return collectColumnStats_;
+  bool collectColumnCpuMetrics() const {
+    return collectColumnCpuMetrics_;
   }
 
-  RowReaderOptions& setCollectColumnStats(bool collect) {
-    collectColumnStats_ = collect;
+  RowReaderOptions& setCollectColumnCpuMetrics(bool collect) {
+    collectColumnCpuMetrics_ = collect;
     return *this;
+  }
+
+  // Legacy alias — remove after Nimble OSS bumps Velox.
+  RowReaderOptions& setCollectColumnStats(bool collect) {
+    return setCollectColumnCpuMetrics(collect);
   }
 
  private:
@@ -548,7 +553,7 @@ class RowReaderOptions {
   // NOTE: we will control this option with a session property
   // for prod. Tests are parameterized on both branches.
   bool passStringBuffersFromDecoder_{false};
-  bool collectColumnStats_{false};
+  bool collectColumnCpuMetrics_{false};
 };
 
 /// Options for creating a Reader.
