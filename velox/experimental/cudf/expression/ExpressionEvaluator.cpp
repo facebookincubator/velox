@@ -1162,15 +1162,4 @@ void unregisterFunctions() {
   registry.clear();
 }
 
-void unregisterFunctionsWithPrefix(const std::string& prefix) {
-  auto& registry = getCudfFunctionRegistry();
-  for (auto it = registry.begin(); it != registry.end();) {
-    if (it->first.rfind(prefix, 0) == 0) { // key starts with prefix
-      it = registry.erase(it);
-    } else {
-      ++it;
-    }
-  }
-}
-
 } // namespace facebook::velox::cudf_velox

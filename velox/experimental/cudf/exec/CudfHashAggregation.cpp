@@ -1912,20 +1912,6 @@ bool registerStepAwareBuiltinAggregationFunctions(const std::string& prefix) {
       core::AggregationNode::Step::kFinal,
       approxDistinctFinalSignatures);
 
-  // ===== Engine-specific signatures for SUM(REAL) and AVG(REAL) =====
-  // SUM(REAL):
-  //   Spark:  single REAL->DOUBLE, partial REAL->DOUBLE,
-  //           final/intermediate DOUBLE->DOUBLE (already covered above)
-  //   Presto: single REAL->REAL,   partial REAL->DOUBLE,
-  //           final/intermediate DOUBLE->REAL
-  // AVG(REAL):
-  //   Spark:  single REAL->DOUBLE,
-  //           final row(DOUBLE,BIGINT)->DOUBLE (already covered above)
-  //   Presto: single REAL->REAL,
-  //           final row(DOUBLE,BIGINT)->REAL
-  // AVG partial REAL->row(DOUBLE,BIGINT) and intermediate are the same for
-  // both engines and are already registered above.
-  //
   // Note: Engine-specific aggregate functions are now registered separately via
   // registerSparkAggregateFunctions() and registerPrestoAggregateFunctions()
 

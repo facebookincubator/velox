@@ -95,8 +95,6 @@ bool registerBuiltinFunctions(const std::string& prefix);
 
 void unregisterFunctions();
 
-void unregisterFunctionsWithPrefix(const std::string& prefix);
-
 class CudfExpression {
  public:
   virtual ~CudfExpression() = default;
