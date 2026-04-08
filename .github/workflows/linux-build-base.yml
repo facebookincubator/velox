@@ -226,7 +226,7 @@ jobs:
               echo "flaky=true" >> "$GITHUB_OUTPUT"
             else
               echo "::error::Tests failed consistently on retry."
-              .github/scripts/extract-test-failures.sh /tmp/ctest-output.log
+              "$GITHUB_WORKSPACE/.github/scripts/extract-test-failures.sh" /tmp/ctest-output.log
               exit 1
             fi
           fi
@@ -577,7 +577,7 @@ jobs:
               echo "flaky=true" >> "$GITHUB_OUTPUT"
             else
               echo "::error::Tests failed consistently on retry."
-              .github/scripts/extract-test-failures.sh /tmp/ctest-output.log
+              "$GITHUB_WORKSPACE/.github/scripts/extract-test-failures.sh" /tmp/ctest-output.log
               exit 1
             fi
           fi
