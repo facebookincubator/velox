@@ -1399,7 +1399,7 @@ Reader options map to `libcudf parquet_reader_options <https://docs.rapids.ai/ap
    * - parquet.reader.timestamp-type
      - string
      - TIMESTAMP_MILLISECONDS
-     - Timestamp type used to cast all timestamp columns (e.g. TIMESTAMP_SECONDS, TIMESTAMP_MILLISECONDS, TIMESTAMP_MICROSECONDS, TIMESTAMP_NANOSECONDS). Maps to ``set_timestamp_type`` in `libcudf parquet_reader_options <https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet__reader__options>`_. Session property: ``parquet.reader.timestamp_type``.
+     - Timestamp type used to cast all timestamp columns (e.g. TIMESTAMP_DAYS, TIMESTAMP_SECONDS, TIMESTAMP_MILLISECONDS, TIMESTAMP_MICROSECONDS, TIMESTAMP_NANOSECONDS). Maps to ``set_timestamp_type`` in `libcudf parquet_reader_options <https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet__reader__options>`_. Session property: ``parquet.reader.timestamp_type``.
    * - parquet.reader.chunk-read-limit
      - integer
      - 0
@@ -1408,6 +1408,10 @@ Reader options map to `libcudf parquet_reader_options <https://docs.rapids.ai/ap
      - integer
      - 0
      - Limit on the amount of memory (bytes) used for reading and decompressing data; 0 means no limit. This is a hint, not an absolute limit—if a single row group cannot fit within the limit, it will still be loaded. Affects how many row groups can be read at a time by limiting decompression space. Maps to ``pass_read_limit`` in `libcudf hybrid_scan_reader <https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet_1_1experimental_1_1hybrid__scan__reader>`_ (e.g. ``setup_chunking_for_filter_columns``, ``setup_chunking_for_payload_columns``). Session property: ``parquet.reader.pass_read_limit``.
+   * - parquet.reader.convert-strings-to-categories
+     - bool
+     - false
+     - Whether to store string data as categorical type. Session property: ``parquet.reader.convert_strings_to_categories``.
    * - parquet.writer.write-timestamps-as-utc
      - bool
      - true
@@ -1424,3 +1428,7 @@ Reader options map to `libcudf parquet_reader_options <https://docs.rapids.ai/ap
      - bool
      - false
      - Whether to write V2 page headers. Session property: ``parquet.writer.write_v2_page_headers``.
+   * - parquet.immutable-files
+     - bool
+     - false
+     - Whether new data can be inserted into a cuDF Hive file. Appending data to existing files is not supported.
