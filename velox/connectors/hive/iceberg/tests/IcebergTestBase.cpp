@@ -88,7 +88,7 @@ void IcebergTestBase::setupMemoryPools() {
   queryCtx_.reset();
 
   root_ = memory::memoryManager()->addRootPool(
-      "IcebergTest", 1L << 30, exec::MemoryReclaimer::create());
+      "IcebergTest", rootPoolCapacityBytes(), exec::MemoryReclaimer::create());
   opPool_ = root_->addLeafChild("operator");
   connectorPool_ =
       root_->addAggregateChild("connector", exec::MemoryReclaimer::create());
@@ -112,6 +112,12 @@ void IcebergTestBase::setupMemoryPools() {
       "");
 }
 
+void IcebergTestBase::setConnectorSessionProperty(
+    const std::string& key,
+    const std::string& value) {
+  connectorSessionProperties_->set(key, value);
+}
+
 std::vector<RowVectorPtr> IcebergTestBase::createTestData(
     RowTypePtr rowType,
     int32_t numBatches,
@@ -131,13 +137,6 @@ std::vector<RowVectorPtr> IcebergTestBase::createTestData(
   }
 
   return vectors;
-}
-
-void IcebergTestBase::setConnectorSessionProperty(
-    const std::string& key,
-    const std::string& value) {
-  VELOX_CHECK_NOT_NULL(connectorSessionProperties_);
-  connectorSessionProperties_->set(key, value);
 }
 
 std::shared_ptr<IcebergPartitionSpec> IcebergTestBase::createPartitionSpec(
