@@ -25,6 +25,7 @@
 #include "velox/experimental/cudf/exec/CudfLocalPartition.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
 #include "velox/experimental/cudf/exec/CudfTopN.h"
+#include "velox/experimental/cudf/exec/CudfWindow.h"
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/Validation.h"
@@ -45,6 +46,7 @@
 #include "velox/exec/Task.h"
 #include "velox/exec/TopN.h"
 #include "velox/exec/Values.h"
+#include "velox/exec/Window.h"
 
 namespace facebook::velox::cudf_velox {
 
@@ -751,6 +753,93 @@ class CallbackSinkAdapter : public OperatorAdapter {
   }
 };
 
+/// WindowAdapter - Replaces with CudfWindow
+class WindowAdapter : public OperatorAdapter {
+ public:
+  WindowAdapter() : OperatorAdapter("Window") {}
+
+  bool canHandle(const exec::Operator* op) const override {
+    return dynamic_cast<const exec::Window*>(op) != nullptr;
+  }
+
+  bool canRunOnGPU(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& planNode,
+      exec::DriverCtx* /*ctx*/) const override {
+    auto windowNode =
+        std::dynamic_pointer_cast<const core::WindowNode>(planNode);
+    if (!windowNode) {
+      return false;
+    }
+    if (windowNode->partitionKeys().empty()) {
+      return false;
+    }
+
+    static const std::unordered_set<std::string> kSupportedFuncs = {
+        "lag",
+        "lead",
+        "row_number",
+        "rank",
+        "dense_rank",
+        "first_value",
+        "last_value",
+        "sum",
+        "min",
+        "max",
+        "count",
+        "avg"};
+    const auto& prefix = CudfConfig::getInstance().functionNamePrefix;
+    for (const auto& func : windowNode->windowFunctions()) {
+      auto name = func.functionCall->name();
+      auto pos = name.rfind('.');
+      auto baseName = pos == std::string::npos ? name : name.substr(pos + 1);
+      if (!prefix.empty() && baseName.find(prefix) == 0) {
+        baseName = baseName.substr(prefix.size());
+      }
+      if (kSupportedFuncs.find(baseName) == kSupportedFuncs.end()) {
+        return false;
+      }
+      if ((baseName == "lag" || baseName == "lead") &&
+          func.functionCall->inputs().size() > 2) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  bool acceptsGpuInput() const override {
+    return true;
+  }
+
+  bool producesGpuOutput() const override {
+    return true;
+  }
+
+  std::vector<std::unique_ptr<exec::Operator>> createReplacements(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& planNode,
+      exec::DriverCtx* ctx,
+      int32_t operatorId) const override {
+    auto windowPlanNode =
+        std::dynamic_pointer_cast<const core::WindowNode>(planNode);
+
+    std::vector<std::unique_ptr<exec::Operator>> result;
+    result.push_back(
+        std::make_unique<CudfWindow>(operatorId, ctx, windowPlanNode));
+    return result;
+  }
+
+  bool keepStockOperator(
+      const exec::Operator* op,
+      const core::PlanNodePtr& planNode,
+      exec::DriverCtx* ctx) const override {
+    if (!planNode || !ctx || !canHandle(op)) {
+      return false;
+    }
+    return !canRunOnGPU(op, planNode, ctx);
+  }
+};
+
 /// Registration Function
 void registerAllOperatorAdapters() {
   auto& registry = OperatorAdapterRegistry::getInstance();
@@ -772,6 +861,7 @@ void registerAllOperatorAdapters() {
   registry.registerAdapter(std::make_unique<AssignUniqueIdAdapter>());
   registry.registerAdapter(std::make_unique<ValuesAdapter>());
   registry.registerAdapter(std::make_unique<CallbackSinkAdapter>());
+  registry.registerAdapter(std::make_unique<WindowAdapter>());
 }
 
 } // namespace facebook::velox::cudf_velox
