@@ -130,8 +130,9 @@ jobs:
             -e "s|{{RUN_ID}}|${RUN_ID}|g" \
             .claude/skills/ci-failure-analysis/SKILL.md)
 
-          # Failure metadata may contain newlines/special chars — append separately.
-          PROMPT=$(echo "$PROMPT" | sed "s|{{FAILURE_METADATA}}|${FAILURE_METADATA}|g")
+          # Failure metadata may contain newlines/special chars — use bash
+          # parameter expansion instead of sed to handle multiline content.
+          PROMPT="${PROMPT//\{\{FAILURE_METADATA\}\}/${FAILURE_METADATA}}"
 
           {
             echo 'value<<EOF'

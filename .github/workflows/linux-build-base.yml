@@ -420,8 +420,7 @@ jobs:
           elif [[ -n "$FAILED_TESTS" ]]; then
             TESTS="$FAILED_TESTS"
           else
-            echo "No failure details to upload."
-            exit 0
+            TESTS=""
           fi
           # Write failure metadata as JSON for the CI failure analysis workflow.
           jq -n --arg job "Linux release with adapters" \
@@ -743,8 +742,7 @@ jobs:
           elif [[ -n "$FAILED_TESTS" ]]; then
             TESTS="$FAILED_TESTS"
           else
-            echo "No failure details to upload."
-            exit 0
+            TESTS=""
           fi
           # Write failure metadata as JSON for the CI failure analysis workflow.
           jq -n --arg job "Ubuntu debug with system dependencies" \

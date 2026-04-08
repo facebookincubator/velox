@@ -45,9 +45,6 @@ class PlanBuilderTest : public testing::Test,
 };
 
 TEST_F(PlanBuilderTest, invalidSourceNode) {
-  // TODO: Remove after validating CI failure reporting (PR #17015)
-  ASSERT_EQ(1, 0) << "Intentional failure to validate CI failure messaging";
-
   VELOX_ASSERT_THROW(
       PlanBuilder().project({"c0 > 5"}).planNode(),
       "Project cannot be the source node");

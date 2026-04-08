@@ -11,17 +11,8 @@ optionally "failed_tests" (newline-separated test names).
 Your task:
 1. Use `gh api` to download the logs for the failed jobs in this workflow run.
    - List jobs: `gh api repos/{{REPOSITORY}}/actions/runs/{{RUN_ID}}/jobs`
-   - For each job, save its `id` and note the step numbers from the `steps` array.
-     Find the step that ran the tests or build (usually named "Run Tests", "Build",
-     or similar — look for the step whose logs contain the failure output, not the
-     status-reporting step). You need the job `id` and step `number` to build a
-     direct link: `https://github.com/{{REPOSITORY}}/actions/runs/{{RUN_ID}}/job/{job_id}#step:{step_number}:{ui_line}`
-     To compute `ui_line`: the raw log numbers lines across all steps, but the
-     GitHub UI numbers lines per-step starting from 1. To convert, find the line
-     in the raw log where the test step begins (search for "Test project /__w/")
-     and call that `start_line`. Then find the `[  FAILED  ]` line and call that
-     `failed_line`. The UI line number is `failed_line - start_line + 1`.
-     For build failures, use the first `error:` line instead of `[  FAILED  ]`.
+   - Save each failed job's `id` — you will need it for log links.
+     The direct link to a failed job is: `https://github.com/{{REPOSITORY}}/actions/runs/{{RUN_ID}}/job/{job_id}`
    - Download job logs: `gh api repos/{{REPOSITORY}}/actions/jobs/{job_id}/logs` (returns plain text)
    - If job logs API fails, try: `gh run view {{RUN_ID}} --repo {{REPOSITORY}} --log-failed`
 
@@ -49,7 +40,7 @@ Format the comment as follows (use markdown):
 ```
 ## CI Failure Analysis
 
-### <STATUS_EMOJI> <Job Name> — <BUILD|TEST> Failure  [View logs](<step-level link>)
+### <STATUS_EMOJI> <Job Name> — <BUILD|TEST> Failure  [View logs](<link to the specific failed job>)
 
 **Failed tests:** (or **Build errors:** for build failures)
 
@@ -64,7 +55,7 @@ For build failures, show:
 
 Keep failure details in a code block for readability.
 
-(Repeat the above section for each failed job, each with its own step-level link)
+(Repeat the above section for each failed job)
 
 ---
 
