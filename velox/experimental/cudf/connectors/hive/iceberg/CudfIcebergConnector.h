@@ -27,7 +27,7 @@ using namespace facebook::velox::config;
 
 /// Provides GPU-accelerated Iceberg table format support.
 /// - Creates CudfIcebergDataSource instances for reading Iceberg tables with
-///   support for delete files and schema evolution.
+///   support for delete files. Schema evolution is not yet supported.
 class CudfIcebergConnector final
     : public ::facebook::velox::connector::hive::HiveConnector {
  public:

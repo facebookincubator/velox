@@ -31,11 +31,15 @@ namespace velox_iceberg = ::facebook::velox::connector::hive::iceberg;
 ///
 /// Provides Iceberg table format support by creating CudfIcebergSplitReader
 /// instances that handle:
-/// - GPU-accelerated positional delete files and vectors for row-level deletes.
-/// - GPU-accelerated equality delete files for column-level deletes.
+/// - Deletion vectors (V3) for row-level deletes.
+/// - Positional delete files (V2) for row-level deletes.
+/// - Equality delete files for column-level deletes.
+///
+/// The following features are not yet supported:
 /// - Schema evolution with column adaptation.
 /// - Iceberg-specific metadata columns.
-class CudfIcebergDataSource : public CudfHiveDataSource {
+class CudfIcebergDataSource : public ::facebook::velox::cudf_velox::connector::
+                                  hive::CudfHiveDataSource {
  public:
   CudfIcebergDataSource(
       const RowTypePtr& outputType,

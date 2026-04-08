@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfDeletionVectorReader.h"
+#include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergDeletionHelpers.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergSplitReader.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
@@ -24,10 +25,9 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
+#include "velox/dwio/common/BufferUtil.h"
 
 #include <cudf/null_mask.hpp>
-#include <cudf/stream_compaction.hpp>
-#include <cudf/transform.hpp>
 #include <cudf/unary.hpp>
 
 #include <rmm/device_buffer.hpp>
@@ -144,6 +144,9 @@ CudfIcebergSplitReader::readNextChunk(
     return std::nullopt;
   }
 
+  // Number of table rows read by cuDF
+  const auto numRows = cudfTable->num_rows();
+
   // Apply deletion vector, if any
   if (dvReader_ and cudfTable->num_rows() > 0) {
     // If we will be applying positional or equality deletes later, use the
@@ -156,12 +159,35 @@ CudfIcebergSplitReader::readNextChunk(
         cudfTable->view(), baseReadOffset_, stream_, mr);
   }
 
+  if (positionalDeleteFileReaders_.size() or
+      equalityDeleteFileReaders_.size()) {
+    const auto numWords = cudf::num_bitmask_words(numRows);
+    const auto numBitmaskBytes = numWords * sizeof(cudf::bitmask_type);
+    dwio::common::ensureCapacity<int8_t>(
+        deleteBitmap_,
+        numBitmaskBytes,
+        connectorQueryCtx_->memoryPool(),
+        false,
+        true);
+
+    if (not deviceDeleteBitmap_ or
+        deviceDeleteBitmap_->size() < numBitmaskBytes) {
+      deviceDeleteBitmap_ = std::make_unique<rmm::device_buffer>(
+          numBitmaskBytes, stream_, get_temp_mr());
+    }
+
+    if (not deviceRowMask_ or deviceRowMask_->size() < numRows) {
+      deviceRowMask_ =
+          std::make_unique<rmm::device_buffer>(numRows, stream_, get_temp_mr());
+    }
+  }
+
   // Apply positional deletes, if any
   if (cudfTable->num_rows() > 0 and not positionalDeleteFileReaders_.empty()) {
     // If we will be applying equality deletes later, use the temporary mr.
     // Otherwise, use the output mr.
     mr = equalityDeleteFileReaders_.size() ? get_temp_mr() : output_mr;
-    cudfTable = applyPositionalDeletes(cudfTable->view(), stream_, mr);
+    cudfTable = applyPositionalDeletes(cudfTable->view(), mr);
   }
 
   // Apply equality deletes, if any
@@ -174,12 +200,11 @@ CudfIcebergSplitReader::readNextChunk(
         rowVector,
         "Failed to convert cudf table to row vector for equality delete application.");
     // Use the output mr as there will be no more deletes after this
-    cudfTable =
-        applyEqualityDeletes(cudfTable->view(), rowVector, stream_, output_mr);
+    cudfTable = applyEqualityDeletes(cudfTable->view(), rowVector, output_mr);
   }
 
   // Update the base read offset
-  baseReadOffset_ += cudfTable->num_rows();
+  baseReadOffset_ += numRows;
 
   return cudfTable;
 }
@@ -303,19 +328,12 @@ void CudfIcebergSplitReader::setupDeleteFileReaders() {
 
 std::unique_ptr<cudf::table> CudfIcebergSplitReader::applyPositionalDeletes(
     cudf::table_view input,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
+    rmm::device_async_resource_ref output_mr) {
+  // Read positional delete positions into the deleteBitmap_
   const auto numRows = input.num_rows();
-
-  const auto numWords = cudf::num_bitmask_words(numRows);
-  auto numBitmaskBytes = numWords * sizeof(cudf::bitmask_type);
-  BufferPtr deleteBitmap = AlignedBuffer::allocate<int8_t>(
-      numBitmaskBytes, connectorQueryCtx_->memoryPool(), /*initValue=*/0);
-
   for (auto iter = positionalDeleteFileReaders_.begin();
        iter != positionalDeleteFileReaders_.end();) {
-    (*iter)->readDeletePositions(baseReadOffset_, numRows, deleteBitmap);
-
+    (*iter)->readDeletePositions(baseReadOffset_, numRows, deleteBitmap_);
     if ((*iter)->noMoreData()) {
       iter = positionalDeleteFileReaders_.erase(iter);
     } else {
@@ -323,68 +341,51 @@ std::unique_ptr<cudf::table> CudfIcebergSplitReader::applyPositionalDeletes(
     }
   }
 
-  // Copy the delete bitmap to device, convert to bools, then negate:
-  // readDeletePositions sets bits for deleted rows, but apply_boolean_mask
-  // keeps rows where the mask is true (surviving rows).
-  auto* hostBits = deleteBitmap->as<uint8_t>();
+  VELOX_CHECK_NOT_NULL(deleteBitmap_->as<uint8_t>());
 
-  rmm::device_buffer deviceMask(numBitmaskBytes, stream, get_temp_mr());
-  CUDF_CUDA_TRY(cudaMemcpyAsync(
-      deviceMask.data(),
-      hostBits,
-      numBitmaskBytes,
-      cudaMemcpyHostToDevice,
-      stream.value()));
+  VELOX_CHECK_NOT_NULL(deviceDeleteBitmap_->data());
+  VELOX_CHECK_GE(
+      deviceDeleteBitmap_->size(),
+      cudf::num_bitmask_words(numRows) * sizeof(cudf::bitmask_type));
+  VELOX_CHECK_NOT_NULL(deviceRowMask_->data());
+  VELOX_CHECK_GE(deviceRowMask_->size(), numRows);
 
-  auto deletedBools = cudf::mask_to_bools(
-      static_cast<cudf::bitmask_type const*>(deviceMask.data()),
-      0,
-      numRows,
-      stream,
-      get_temp_mr());
-
-  auto survivingBools = cudf::unary_operation(
-      deletedBools->view(), cudf::unary_operator::NOT, stream_, get_temp_mr());
-
-  return cudf::apply_boolean_mask(input, survivingBools->view(), stream, mr);
+  return applyDeleteBitmap(
+      input,
+      deleteBitmap_->as<uint8_t>(),
+      static_cast<cudf::bitmask_type*>(deviceDeleteBitmap_->data()),
+      static_cast<bool*>(deviceRowMask_->data()),
+      stream_,
+      get_temp_mr(),
+      output_mr);
 }
 
 std::unique_ptr<cudf::table> CudfIcebergSplitReader::applyEqualityDeletes(
     cudf::table_view input,
     const RowVectorPtr& rowVector,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
-  const auto numRows = input.num_rows();
-  const auto numWords = cudf::num_bitmask_words(numRows);
-  auto numBitmaskBytes = numWords * sizeof(cudf::bitmask_type);
-  BufferPtr deleteBitmap = AlignedBuffer::allocate<int8_t>(
-      numBitmaskBytes, connectorQueryCtx_->memoryPool(), /*initValue=*/0);
-
+    rmm::device_async_resource_ref output_mr) {
   for (auto& reader : equalityDeleteFileReaders_) {
-    reader->applyDeletes(rowVector, deleteBitmap);
+    reader->applyDeletes(rowVector, deleteBitmap_);
   }
 
-  auto* hostBits = deleteBitmap->as<uint8_t>();
+  VELOX_CHECK_NOT_NULL(deleteBitmap_->as<uint8_t>());
 
-  rmm::device_buffer deviceMask(numBitmaskBytes, stream, get_temp_mr());
-  CUDF_CUDA_TRY(cudaMemcpyAsync(
-      deviceMask.data(),
-      hostBits,
-      numBitmaskBytes,
-      cudaMemcpyHostToDevice,
-      stream.value()));
+  const auto numRows = input.num_rows();
+  VELOX_CHECK_NOT_NULL(deviceDeleteBitmap_->data());
+  VELOX_CHECK_GE(
+      deviceDeleteBitmap_->size(),
+      cudf::num_bitmask_words(numRows) * sizeof(cudf::bitmask_type));
+  VELOX_CHECK_NOT_NULL(deviceRowMask_->data());
+  VELOX_CHECK_GE(deviceRowMask_->size(), numRows);
 
-  auto deletedBools = cudf::mask_to_bools(
-      static_cast<cudf::bitmask_type const*>(deviceMask.data()),
-      0,
-      numRows,
-      stream,
-      get_temp_mr());
-
-  auto survivingBools = cudf::unary_operation(
-      deletedBools->view(), cudf::unary_operator::NOT, stream, get_temp_mr());
-
-  return cudf::apply_boolean_mask(input, survivingBools->view(), stream, mr);
+  return applyDeleteBitmap(
+      input,
+      deleteBitmap_->as<uint8_t>(),
+      static_cast<cudf::bitmask_type*>(deviceDeleteBitmap_->data()),
+      static_cast<bool*>(deviceRowMask_->data()),
+      stream_,
+      get_temp_mr(),
+      output_mr);
 }
 
 } // namespace facebook::velox::cudf_velox::connector::hive::iceberg

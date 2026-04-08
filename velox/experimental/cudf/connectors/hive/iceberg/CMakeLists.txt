@@ -18,10 +18,12 @@ add_library(
   CudfDeletionVectorReader.cu
   CudfIcebergConnector.cpp
   CudfIcebergDataSource.cpp
+  CudfIcebergDeletionHelpers.cu
   CudfIcebergSplitReader.cpp
 )
 
 set_target_properties(velox_cudf_iceberg_connector PROPERTIES CUDA_ARCHITECTURES native)
+# Needed until we remove the use of extended lambda in the cuco roaring bitmap
 target_compile_options(
   velox_cudf_iceberg_connector
   PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--expt-extended-lambda>

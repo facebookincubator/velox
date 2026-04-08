@@ -34,13 +34,13 @@ namespace velox_iceberg = ::facebook::velox::connector::hive::iceberg;
 
 /// GPU-accelerated per-split reader for Iceberg tables.
 ///
-/// Derives from CudfSplitReader and adds Iceberg delete semantics:
-///   - Deletion vectors (V3): applied on the GPU using cuco roaring_bitmap
-///     and cudf::apply_boolean_mask after reading each chunk.
-///   - Positional deletes (V2): host-side bitmap from upstream
-///     PositionalDeleteFileReader, filtered on GPU via apply_boolean_mask.
-///   - Equality deletes (V2): host-side bitmap from upstream
-///     EqualityDeleteFileReader, filtered on GPU via apply_boolean_mask.
+/// Derives from `CudfSplitReader` and adds Iceberg delete semantics:
+///   - Deletion vectors (V3): Roaring bitmap blob read via
+///     `CudfDeletionVectorReader` and applied on GPU using cuco and cudf
+///   - Positional deletes (V2): Host-side bitmap read via upstream
+///     `PositionalDeleteFileReader` and applied on GPU using cudf
+///   - Equality deletes (V2): Host-side bitmap read via upstream
+///     `EqualityDeleteFileReader` and applied on GPU using cudf
 class CudfIcebergSplitReader : public CudfSplitReader {
  public:
   CudfIcebergSplitReader(
@@ -84,15 +84,13 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   /// Apply positional deletes (V2) to the input cudf table.
   std::unique_ptr<cudf::table> applyPositionalDeletes(
       cudf::table_view input,
-      rmm::cuda_stream_view stream,
-      rmm::device_async_resource_ref mr);
+      rmm::device_async_resource_ref output_mr);
 
   /// Apply equality deletes (V2) to the input cudf table.
   std::unique_ptr<cudf::table> applyEqualityDeletes(
       cudf::table_view input,
       const RowVectorPtr& rowVector,
-      rmm::cuda_stream_view stream,
-      rmm::device_async_resource_ref mr);
+      rmm::device_async_resource_ref output_mr);
 
   std::shared_ptr<const velox_iceberg::HiveIcebergSplit> icebergSplit_;
   std::shared_ptr<const velox_hive::HiveConfig> hiveConfig_;
@@ -111,6 +109,10 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   /// Tracks the absolute row offset within the data file. Each chunk advances
   /// this by the number of rows read (before deletes).
   uint64_t baseReadOffset_{0};
+
+  BufferPtr deleteBitmap_{nullptr};
+  std::unique_ptr<rmm::device_buffer> deviceDeleteBitmap_;
+  std::unique_ptr<rmm::device_buffer> deviceRowMask_;
 };
 
 } // namespace facebook::velox::cudf_velox::connector::hive::iceberg
