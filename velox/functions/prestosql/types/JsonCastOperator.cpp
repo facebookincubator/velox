@@ -1265,7 +1265,7 @@ void JsonCastOperator::castFromJson(
 }
 
 bool JsonCastOperator::isSupportedToType(const TypePtr& other) const {
-  if (other->isDate()) {
+  if (other->isDate() || other->isDecimal()) {
     return false;
   }
 
