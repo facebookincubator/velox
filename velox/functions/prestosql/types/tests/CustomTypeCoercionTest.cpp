@@ -16,6 +16,10 @@
 
 #include <gtest/gtest.h>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/prestosql/types/QDigestRegistration.h"
+#include "velox/functions/prestosql/types/QDigestType.h"
+#include "velox/functions/prestosql/types/TDigestRegistration.h"
+#include "velox/functions/prestosql/types/TDigestType.h"
 #include "velox/functions/prestosql/types/TimeWithTimezoneRegistration.h"
 #include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneRegistration.h"
@@ -31,6 +35,8 @@ class CustomTypeCoercionTest : public testing::Test {
   void SetUp() override {
     registerTimestampWithTimeZoneType();
     registerTimeWithTimezoneType();
+    registerQDigestType();
+    registerTDigestType();
   }
 };
 
@@ -66,6 +72,13 @@ TEST_F(CustomTypeCoercionTest, timeWithTimeZone) {
       TypeCoercer::coerceTypeBase(TIME_WITH_TIME_ZONE(), TIME()->name()));
   ASSERT_FALSE(
       TypeCoercer::coerceTypeBase(TIME_WITH_TIME_ZONE(), DATE()->name()));
+}
+
+TEST_F(CustomTypeCoercionTest, digests) {
+  EXPECT_FALSE(
+      TypeCoercer::coerceTypeBase(TDIGEST(DOUBLE()), "QDIGEST").has_value());
+  EXPECT_FALSE(
+      TypeCoercer::coerceTypeBase(QDIGEST(DOUBLE()), "TDIGEST").has_value());
 }
 
 } // namespace
