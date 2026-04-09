@@ -121,10 +121,10 @@ class FileConfig {
 
   /// Whether to collect per-column timing stats (decode/decompress CPU time).
   /// Disabled by default to avoid overhead (~100ns per operation).
-  static constexpr const char* kReaderCollectColumnStats =
-      "hive.reader.collect-column-stats";
-  static constexpr const char* kReaderCollectColumnStatsSession =
-      "hive.reader.collect_column_stats";
+  static constexpr const char* kReaderCollectColumnCpuMetrics =
+      "hive.reader.collect-column-cpu-metrics";
+  static constexpr const char* kReaderCollectColumnCpuMetricsSession =
+      "hive.reader.collect_column_cpu_metrics";
 
   /// Whether to cache file metadata (footer, stripes, index) in the
   /// process-wide AsyncDataCache. When enabled, the first reader performs a
@@ -212,7 +212,7 @@ class FileConfig {
 
   /// Whether to collect per-column timing stats (decode/decompress CPU time).
   /// Disabled by default to avoid overhead (~100ns per operation).
-  bool readerCollectColumnStats(const config::ConfigBase* session) const;
+  bool readerCollectColumnCpuMetrics(const config::ConfigBase* session) const;
 
   /// Whether to cache file metadata in the process-wide AsyncDataCache.
   bool fileMetadataCacheEnabled(const config::ConfigBase* session) const;

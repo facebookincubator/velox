@@ -128,11 +128,11 @@ bool FileConfig::indexEnabled(const config::ConfigBase* session) const {
       kIndexEnabledSession, config_->get<bool>(kIndexEnabled, false));
 }
 
-bool FileConfig::readerCollectColumnStats(
+bool FileConfig::readerCollectColumnCpuMetrics(
     const config::ConfigBase* session) const {
   return session->get<bool>(
-      kReaderCollectColumnStatsSession,
-      config_->get<bool>(kReaderCollectColumnStats, false));
+      kReaderCollectColumnCpuMetricsSession,
+      config_->get<bool>(kReaderCollectColumnCpuMetrics, false));
 }
 
 bool FileConfig::fileMetadataCacheEnabled(
