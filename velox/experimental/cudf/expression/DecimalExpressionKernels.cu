@@ -22,7 +22,8 @@
 #include <cudf/utilities/error.hpp>
 #include <cudf/utilities/memory_resource.hpp>
 
-#include <cuda_runtime.h>
+#include <cub/device/device_for.cuh>
+#include <thrust/iterator/counting_iterator.h>
 
 #include <cstdint>
 
@@ -56,48 +57,6 @@ decimalDivideImpl(__int128_t numerator, __int128_t denom, __int128_t scale) {
   return static_cast<OutT>(quotient);
 }
 
-template <typename InT, typename OutT>
-__global__ void decimalDivideKernel(
-    const InT* lhs,
-    const InT* rhs,
-    OutT* out,
-    int32_t numRows,
-    __int128_t scale) {
-  int32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx >= numRows) {
-    return;
-  }
-  out[idx] = decimalDivideImpl<OutT>(lhs[idx], rhs[idx], scale);
-}
-
-template <typename InColT, typename OutT>
-__global__ void decimalDivideKernelLhsScalar(
-    __int128_t lhsValue,
-    const InColT* rhs,
-    OutT* out,
-    int32_t numRows,
-    __int128_t scale) {
-  int32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx >= numRows) {
-    return;
-  }
-  out[idx] = decimalDivideImpl<OutT>(lhsValue, rhs[idx], scale);
-}
-
-template <typename InColT, typename OutT>
-__global__ void decimalDivideKernelRhsScalar(
-    const InColT* lhs,
-    __int128_t rhsValue,
-    OutT* out,
-    int32_t numRows,
-    __int128_t scale) {
-  int32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx >= numRows) {
-    return;
-  }
-  out[idx] = decimalDivideImpl<OutT>(lhs[idx], rhsValue, scale);
-}
-
 inline __int128_t pow10Int128(int32_t exp) {
   __int128_t value = 1;
   for (int32_t i = 0; i < exp; ++i) {
@@ -105,6 +64,42 @@ inline __int128_t pow10Int128(int32_t exp) {
   }
   return value;
 }
+
+template <typename InT, typename OutT>
+struct DivideFunctor {
+  const InT* lhs;
+  const InT* rhs;
+  OutT* out;
+  __int128_t scale;
+
+  __device__ void operator()(int32_t idx) const {
+    out[idx] = decimalDivideImpl<OutT>(lhs[idx], rhs[idx], scale);
+  }
+};
+
+template <typename InColT, typename OutT>
+struct DivideLhsScalarFunctor {
+  __int128_t lhsValue;
+  const InColT* rhs;
+  OutT* out;
+  __int128_t scale;
+
+  __device__ void operator()(int32_t idx) const {
+    out[idx] = decimalDivideImpl<OutT>(lhsValue, rhs[idx], scale);
+  }
+};
+
+template <typename InColT, typename OutT>
+struct DivideRhsScalarFunctor {
+  const InColT* lhs;
+  __int128_t rhsValue;
+  OutT* out;
+  __int128_t scale;
+
+  __device__ void operator()(int32_t idx) const {
+    out[idx] = decimalDivideImpl<OutT>(lhs[idx], rhsValue, scale);
+  }
+};
 
 template <typename InT, typename OutT>
 void launchDivideKernel(
@@ -116,12 +111,13 @@ void launchDivideKernel(
   if (lhs.size() == 0) {
     return;
   }
-  int32_t blockSize = 256;
-  int32_t gridSize = (lhs.size() + blockSize - 1) / blockSize;
-  auto scale = pow10Int128(aRescale);
-  decimalDivideKernel<<<gridSize, blockSize, 0, stream.value()>>>(
-      lhs.data<InT>(), rhs.data<InT>(), out.data<OutT>(), lhs.size(), scale);
-  CUDF_CUDA_TRY(cudaGetLastError());
+  DivideFunctor<InT, OutT> op{
+      lhs.data<InT>(),
+      rhs.data<InT>(),
+      out.data<OutT>(),
+      pow10Int128(aRescale)};
+  cub::DeviceFor::ForEachN(
+      thrust::counting_iterator<int32_t>(0), lhs.size(), op, stream.value());
 }
 
 template <typename InColT, typename OutT>
@@ -134,12 +130,10 @@ void launchDivideKernelLhsScalar(
   if (rhs.size() == 0) {
     return;
   }
-  int32_t blockSize = 256;
-  int32_t gridSize = (rhs.size() + blockSize - 1) / blockSize;
-  auto scale = pow10Int128(aRescale);
-  decimalDivideKernelLhsScalar<<<gridSize, blockSize, 0, stream.value()>>>(
-      lhsValue, rhs.data<InColT>(), out.data<OutT>(), rhs.size(), scale);
-  CUDF_CUDA_TRY(cudaGetLastError());
+  DivideLhsScalarFunctor<InColT, OutT> op{
+      lhsValue, rhs.data<InColT>(), out.data<OutT>(), pow10Int128(aRescale)};
+  cub::DeviceFor::ForEachN(
+      thrust::counting_iterator<int32_t>(0), rhs.size(), op, stream.value());
 }
 
 template <typename InColT, typename OutT>
@@ -152,12 +146,10 @@ void launchDivideKernelRhsScalar(
   if (lhs.size() == 0) {
     return;
   }
-  int32_t blockSize = 256;
-  int32_t gridSize = (lhs.size() + blockSize - 1) / blockSize;
-  auto scale = pow10Int128(aRescale);
-  decimalDivideKernelRhsScalar<<<gridSize, blockSize, 0, stream.value()>>>(
-      lhs.data<InColT>(), rhsValue, out.data<OutT>(), lhs.size(), scale);
-  CUDF_CUDA_TRY(cudaGetLastError());
+  DivideRhsScalarFunctor<InColT, OutT> op{
+      lhs.data<InColT>(), rhsValue, out.data<OutT>(), pow10Int128(aRescale)};
+  cub::DeviceFor::ForEachN(
+      thrust::counting_iterator<int32_t>(0), lhs.size(), op, stream.value());
 }
 
 __int128_t getDecimalScalarValue(
