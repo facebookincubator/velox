@@ -25,7 +25,7 @@ CTEST_LOG="$1"
 
 FAILED_TESTS=$(grep -A 1000 'The following tests FAILED:' "$CTEST_LOG" | grep -E '^\s+[0-9]+ - ' | sed 's/.*- \(.*\) (.*/\1/' | head -20 || true)
 FAILED_CASES=$(grep -E '^\[  FAILED  \]' "$CTEST_LOG" | sed 's/\[  FAILED  \] //' | sed 's/ (.*//' | grep '\.' | sort -u | head -20 || true)
-FAILURE_DETAILS=$(sed -n '/^\[ RUN      \]/,/^\[  FAILED  \]/p' "$CTEST_LOG" | head -200 || true)
+FAILURE_DETAILS=$(awk '/^\[ RUN      \]/{buf=$0; next} buf{buf=buf"\n"$0} /^\[  FAILED  \]/ && buf{print buf; buf=""} /^\[       OK \]/{buf=""}' "$CTEST_LOG" | head -200 || true)
 
 if [[ -n $FAILED_TESTS ]]; then
   {
