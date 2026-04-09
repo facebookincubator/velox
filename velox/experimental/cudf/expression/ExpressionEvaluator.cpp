@@ -1656,43 +1656,14 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   auto registerBinaryOp = [&](const std::vector<std::string>& aliases,
                               cudf::binary_operator op) {
-    auto decimalBinarySignature = [&](cudf::binary_operator decimalOp) {
-      std::string rPrecisionConstraint;
-      std::string rScaleConstraint;
-      switch (decimalOp) {
-        case cudf::binary_operator::ADD:
-        case cudf::binary_operator::SUB:
-          rPrecisionConstraint =
-              "min(38, max(a_precision - a_scale, b_precision - b_scale) + "
-              "max(a_scale, b_scale) + 1)";
-          rScaleConstraint = "max(a_scale, b_scale)";
-          break;
-        case cudf::binary_operator::MUL:
-          rPrecisionConstraint = "min(38, a_precision + b_precision)";
-          rScaleConstraint = "a_scale + b_scale";
-          break;
-        case cudf::binary_operator::DIV:
-          rPrecisionConstraint =
-              "min(38, a_precision + b_scale + max(0, b_scale - a_scale))";
-          rScaleConstraint = "max(a_scale, b_scale)";
-          break;
-        case cudf::binary_operator::MOD:
-          rPrecisionConstraint =
-              "min(b_precision - b_scale, a_precision - a_scale) + "
-              "max(a_scale, b_scale)";
-          rScaleConstraint = "max(a_scale, b_scale)";
-          break;
-        default:
-          VELOX_FAIL("Unsupported decimal binary operator");
-      }
-
+    auto decimalBinarySignature = [&]() {
       return FunctionSignatureBuilder()
           .integerVariable("a_precision")
           .integerVariable("a_scale")
           .integerVariable("b_precision")
           .integerVariable("b_scale")
-          .integerVariable("r_precision", rPrecisionConstraint)
-          .integerVariable("r_scale", rScaleConstraint)
+          .integerVariable("r_precision")
+          .integerVariable("r_scale")
           .returnType("decimal(r_precision, r_scale)")
           .argumentType("decimal(a_precision, a_scale)")
           .argumentType("decimal(b_precision, b_scale)")
@@ -1711,7 +1682,7 @@ bool registerBuiltinFunctions(const std::string& prefix) {
              .argumentType("double")
              .argumentType("double")
              .build(),
-         decimalBinarySignature(op)});
+         decimalBinarySignature()});
   };
 
   registerBinaryOp(

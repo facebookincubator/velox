@@ -842,6 +842,168 @@ TEST_F(CudfDecimalTest, decimalCastToRealProjection) {
   runAndAssert(false);
 }
 
+// Parameterized test that verifies cudf decimal binary ops match CPU results
+// across different precision/scale combinations
+struct DecimalBinaryParam {
+  std::string name;
+  std::string op;
+  TypePtr aType;
+  TypePtr bType;
+};
+
+class CudfDecimalBinaryTest
+    : public CudfDecimalTest,
+      public testing::WithParamInterface<DecimalBinaryParam> {};
+
+TEST_P(CudfDecimalBinaryTest, cpuGpuMatch) {
+  const auto& param = GetParam();
+
+  VectorPtr aVec;
+  VectorPtr bVec;
+  if (param.aType->equivalent(*DECIMAL(20, 4)) ||
+      param.aType->equivalent(*DECIMAL(20, 3))) {
+    aVec = makeFlatVector<int128_t>({12345, -2500, 100}, param.aType);
+    bVec = makeFlatVector<int128_t>({300, -25, 400}, param.bType);
+  } else {
+    aVec = makeFlatVector<int64_t>({12345, -2500, 100}, param.aType);
+    bVec = makeFlatVector<int64_t>({300, -25, 400}, param.bType);
+  }
+  auto input = makeRowVector({"a", "b"}, {aVec, bVec});
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({param.op + " AS result"})
+                  .planNode();
+
+  unregisterCudf();
+  auto cpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  registerCudf();
+
+  auto gpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    DecimalBinaryOps,
+    CudfDecimalBinaryTest,
+    testing::Values(
+        // Same scale, DECIMAL64.
+        DecimalBinaryParam{
+            "add_same_scale",
+            "a + b",
+            DECIMAL(10, 2),
+            DECIMAL(10, 2)},
+        DecimalBinaryParam{
+            "sub_same_scale",
+            "a - b",
+            DECIMAL(10, 2),
+            DECIMAL(10, 2)},
+        DecimalBinaryParam{
+            "mul_same_scale",
+            "a * b",
+            DECIMAL(10, 2),
+            DECIMAL(10, 2)},
+        DecimalBinaryParam{
+            "div_same_scale",
+            "a / b",
+            DECIMAL(10, 2),
+            DECIMAL(10, 2)},
+        DecimalBinaryParam{
+            "mod_same_scale",
+            "a % b",
+            DECIMAL(10, 2),
+            DECIMAL(10, 2)},
+        // Different scales, DECIMAL64.
+        DecimalBinaryParam{
+            "add_diff_scale",
+            "a + b",
+            DECIMAL(10, 2),
+            DECIMAL(10, 1)},
+        DecimalBinaryParam{
+            "sub_diff_scale",
+            "a - b",
+            DECIMAL(10, 2),
+            DECIMAL(10, 1)},
+        DecimalBinaryParam{
+            "mul_diff_scale",
+            "a * b",
+            DECIMAL(10, 2),
+            DECIMAL(10, 1)},
+        DecimalBinaryParam{
+            "div_diff_scale",
+            "a / b",
+            DECIMAL(10, 2),
+            DECIMAL(10, 1)},
+        DecimalBinaryParam{
+            "mod_diff_scale",
+            "a % b",
+            DECIMAL(10, 2),
+            DECIMAL(10, 1)},
+        // DECIMAL64 inputs, result overflows to DECIMAL128.
+        DecimalBinaryParam{
+            "add_64to128",
+            "a + b",
+            DECIMAL(10, 2),
+            DECIMAL(10, 3)},
+        DecimalBinaryParam{
+            "sub_64to128",
+            "a - b",
+            DECIMAL(10, 2),
+            DECIMAL(10, 3)},
+        DecimalBinaryParam{
+            "mul_64to128",
+            "a * b",
+            DECIMAL(10, 2),
+            DECIMAL(10, 3)},
+        DecimalBinaryParam{
+            "div_64to128",
+            "a / b",
+            DECIMAL(10, 2),
+            DECIMAL(10, 3)},
+        DecimalBinaryParam{
+            "mod_64to128",
+            "a % b",
+            DECIMAL(10, 2),
+            DECIMAL(10, 3)},
+        // Native DECIMAL128 inputs.
+        DecimalBinaryParam{"add_128", "a + b", DECIMAL(20, 4), DECIMAL(20, 4)},
+        DecimalBinaryParam{"sub_128", "a - b", DECIMAL(20, 4), DECIMAL(20, 4)},
+        DecimalBinaryParam{"mul_128", "a * b", DECIMAL(20, 4), DECIMAL(20, 4)},
+        DecimalBinaryParam{"div_128", "a / b", DECIMAL(20, 4), DECIMAL(20, 4)},
+        DecimalBinaryParam{"mod_128", "a % b", DECIMAL(20, 4), DECIMAL(20, 4)},
+        // DECIMAL128 with different scales.
+        DecimalBinaryParam{
+            "add_128_diff",
+            "a + b",
+            DECIMAL(20, 4),
+            DECIMAL(20, 3)},
+        DecimalBinaryParam{
+            "sub_128_diff",
+            "a - b",
+            DECIMAL(20, 4),
+            DECIMAL(20, 3)},
+        DecimalBinaryParam{
+            "mul_128_diff",
+            "a * b",
+            DECIMAL(20, 4),
+            DECIMAL(20, 3)},
+        DecimalBinaryParam{
+            "div_128_diff",
+            "a / b",
+            DECIMAL(20, 4),
+            DECIMAL(20, 3)},
+        DecimalBinaryParam{
+            "mod_128_diff",
+            "a % b",
+            DECIMAL(20, 4),
+            DECIMAL(20, 3)}),
+    [](const testing::TestParamInfo<DecimalBinaryParam>& info) {
+      return info.param.name;
+    });
+
 TEST_F(CudfDecimalTest, decimalDivideRounds) {
   auto rowType = ROW({
       {"a", DECIMAL(10, 2)},
