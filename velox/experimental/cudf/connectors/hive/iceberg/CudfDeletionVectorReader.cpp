@@ -520,10 +520,6 @@ CudfDeletionVectorReader::CudfDeletionVectorReader(
       "Empty deletion vector.");
 }
 
-// ---------------------------------------------------------------------------
-// loadAndInitialize — probe header + single-copy payload read + GPU bitmap
-// ---------------------------------------------------------------------------
-
 void CudfDeletionVectorReader::loadBitmap(rmm::cuda_stream_view stream) {
   if (loaded_) {
     return;

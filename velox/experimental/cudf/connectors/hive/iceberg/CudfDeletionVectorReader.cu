@@ -104,6 +104,7 @@ void CudfDeletionVectorReader::buildBitmap(
   loaded_ = true;
 }
 
+/// Instantiate the template for 32 and 64 bit roaring bitmaps
 template void CudfDeletionVectorReader::buildBitmap<
     CudfDeletionVectorReader::BitmapType::k32Bit>(
     std::string_view,
@@ -112,10 +113,6 @@ template void CudfDeletionVectorReader::buildBitmap<
     CudfDeletionVectorReader::BitmapType::k64Bit>(
     std::string_view,
     rmm::cuda_stream_view);
-
-// ---------------------------------------------------------------------------
-// applyDeletionVector — filter deleted rows from a table chunk
-// ---------------------------------------------------------------------------
 
 std::unique_ptr<cudf::table> CudfDeletionVectorReader::applyDeletionVector(
     cudf::table_view const& table,
