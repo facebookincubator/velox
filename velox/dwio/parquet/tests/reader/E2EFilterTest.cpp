@@ -760,33 +760,30 @@ TEST_F(E2EFilterTest, combineRowGroup) {
 TEST_F(E2EFilterTest, flushRowGroupByBufferedSize) {
   bytesInRowGroup_ = 200;
   rowType_ = ROW({"c0"}, {INTEGER()});
-  std::vector<RowVectorPtr> batches;
-  // Test all the data in one row group.
-  for (int i = 0; i < 10; i++) {
-    batches.push_back(
-        makeRowVector({makeFlatVector<int32_t>({1, 1, 1, 1, 1})}));
-  }
-  writeToMemory(rowType_, batches, false);
   dwio::common::ReaderOptions readerOpts{leafPool_.get()};
-  auto input = std::make_unique<BufferedInput>(
-      std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
-  auto reader = makeReader(readerOpts, std::move(input));
-  auto parquetReader = dynamic_cast<ParquetReader&>(*reader.get());
-  EXPECT_EQ(parquetReader.fileMetaData().numRowGroups(), 1);
-  EXPECT_EQ(parquetReader.numberOfRows(), 50);
 
+  auto testBatches = [&](int numBatches,
+                         int expectedNumRowGroups,
+                         int expectedNumRows) {
+    std::vector<RowVectorPtr> batches;
+    for (int i = 0; i < numBatches; i++) {
+      batches.push_back(
+          makeRowVector({makeFlatVector<int32_t>({1, 1, 1, 1, 1})}));
+    }
+    writeToMemory(rowType_, batches, false);
+    auto input = std::make_unique<BufferedInput>(
+        std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
+    auto reader = makeReader(readerOpts, std::move(input));
+    auto& parquetReader = dynamic_cast<ParquetReader&>(*reader.get());
+    EXPECT_EQ(
+        parquetReader.fileMetaData().numRowGroups(), expectedNumRowGroups);
+    EXPECT_EQ(parquetReader.numberOfRows(), expectedNumRows);
+  };
+
+  // Test all the data in one row group.
+  testBatches(10, 1, 50);
   // Test all the data in two row groups.
-  for (int i = 0; i < 10; i++) {
-    batches.push_back(
-        makeRowVector({makeFlatVector<int32_t>({1, 1, 1, 1, 1})}));
-  }
-  writeToMemory(rowType_, batches, false);
-  input = std::make_unique<BufferedInput>(
-      std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
-  reader = makeReader(readerOpts, std::move(input));
-  parquetReader = dynamic_cast<ParquetReader&>(*reader.get());
-  EXPECT_EQ(parquetReader.fileMetaData().numRowGroups(), 2);
-  EXPECT_EQ(parquetReader.numberOfRows(), 100);
+  testBatches(20, 2, 100);
 }
 
 // Do not create an empty row group in the end of the file.
