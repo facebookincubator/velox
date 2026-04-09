@@ -124,8 +124,10 @@ std::pair<uint32_t, uint32_t> parseRoaring32Cookie(std::string_view roaring32) {
 
 /// Computes the total serialized block size for a block with no-run cookie
 /// (12346) by walking the key-card descriptors to sum up container data sizes.
-std::size_t
-noRunBlockSize(std::string_view r32, uint32_t numContainers, bool hasOffsets) {
+std::size_t noRunBlockSize(
+    std::string_view roaring32,
+    uint32_t numContainers,
+    bool hasOffsets) {
   std::size_t hdr = kNoRunHeaderPrefix + numContainers * kKeyCardDescSize;
   if (hasOffsets) {
     hdr += numContainers * kOffsetEntrySize;
@@ -138,7 +140,7 @@ noRunBlockSize(std::string_view r32, uint32_t numContainers, bool hasOffsets) {
         uint16_t cardMinus1;
         std::memcpy(
             &cardMinus1,
-            r32.data() + kNoRunHeaderPrefix + c * kKeyCardDescSize +
+            roaring32.data() + kNoRunHeaderPrefix + c * kKeyCardDescSize +
                 sizeof(uint16_t),
             sizeof(uint16_t));
         uint32_t card = static_cast<uint32_t>(cardMinus1) + 1;
@@ -150,7 +152,7 @@ noRunBlockSize(std::string_view r32, uint32_t numContainers, bool hasOffsets) {
 
 /// Computes the total serialized block size for a block with run cookie (12347)
 /// by walking each container's run-length data.
-std::size_t runBlockSize(std::string_view r32, uint32_t numContainers) {
+std::size_t runBlockSize(std::string_view roaring32, uint32_t numContainers) {
   // Run bitmap follows the 4-byte cookie, one bit per container.
   std::size_t runBitmapSize = (numContainers + 7) / 8;
   std::size_t kcOffset = kCookieSize + runBitmapSize;
@@ -165,19 +167,19 @@ std::size_t runBlockSize(std::string_view r32, uint32_t numContainers) {
       std::size_t{hdr},
       [&](std::size_t acc, uint32_t c) {
         uint16_t numRuns;
-        std::memcpy(&numRuns, r32.data() + acc, kNumRunsSize);
+        std::memcpy(&numRuns, roaring32.data() + acc, kNumRunsSize);
         return acc + kNumRunsSize + numRuns * kRunPairSize;
       });
 }
 
 /// Computes the total serialized block size for a 32-bit roaring bitmap.
-std::size_t roaring32BlockSize(std::string_view r32) {
-  const auto [cookie, numContainers] = parseRoaring32Cookie(r32);
+std::size_t roaring32BlockSize(std::string_view roaring32) {
+  const auto [cookie, numContainers] = parseRoaring32Cookie(roaring32);
   if ((cookie & kCookieMask) == kRunCookie) {
-    return runBlockSize(r32, numContainers);
+    return runBlockSize(roaring32, numContainers);
   }
   return noRunBlockSize(
-      r32, numContainers, numContainers >= kNoOffsetThreshold);
+      roaring32, numContainers, numContainers >= kNoOffsetThreshold);
 }
 
 /// Checks whether the 32-bit roaring block is normalized for cuco.
@@ -214,21 +216,23 @@ bool is64bitBitmapNormalized(std::string_view payload, uint64_t numKeys) {
         // Skip over the key (4 bytes)
         pos += sizeof(uint32_t);
         // Get the 32 bit roaring bitmap
-        auto r32view = payload.substr(pos);
-        pos += roaring32BlockSize(r32view);
-        return is32bitBitmapNormalized(r32view);
+        auto roaring32view = payload.substr(pos);
+        pos += roaring32BlockSize(roaring32view);
+        return is32bitBitmapNormalized(roaring32view);
       });
 }
 
 /// Injects the missing offset table into a no-run bitmap whose
 /// numContainers < kNoOffsetThreshold. The offset table is placed between
 /// the key-card descriptors and the container data.
-std::string injectNoRunOffsets(std::string_view r32, uint32_t numContainers) {
+std::string injectNoRunOffsets(
+    std::string_view roaring32,
+    uint32_t numContainers) {
   std::size_t headerEnd = kNoRunHeaderPrefix + numContainers * kKeyCardDescSize;
   std::size_t offsetSectionSize = numContainers * kOffsetEntrySize;
   std::string out;
-  out.reserve(r32.size() + offsetSectionSize);
-  out.append(r32.data(), headerEnd);
+  out.reserve(roaring32.size() + offsetSectionSize);
+  out.append(roaring32.data(), headerEnd);
 
   // Compute cumulative offsets; base starts right after the injected offsets.
   uint32_t base = static_cast<uint32_t>(headerEnd + offsetSectionSize);
@@ -237,7 +241,7 @@ std::string injectNoRunOffsets(std::string_view r32, uint32_t numContainers) {
     uint16_t cardMinus1;
     std::memcpy(
         &cardMinus1,
-        r32.data() + kNoRunHeaderPrefix + c * kKeyCardDescSize +
+        roaring32.data() + kNoRunHeaderPrefix + c * kKeyCardDescSize +
             sizeof(uint16_t),
         sizeof(uint16_t));
     uint32_t card = static_cast<uint32_t>(cardMinus1) + 1;
@@ -245,7 +249,7 @@ std::string injectNoRunOffsets(std::string_view r32, uint32_t numContainers) {
                                              : kBitsetContainerBytes;
   }
 
-  out.append(r32.data() + headerEnd, r32.size() - headerEnd);
+  out.append(roaring32.data() + headerEnd, roaring32.size() - headerEnd);
   return out;
 }
 
@@ -256,7 +260,9 @@ std::string injectNoRunOffsets(std::string_view r32, uint32_t numContainers) {
 /// cuco's metadata parser rejects run bitmaps with < 4 containers outright
 /// (the `contains_run_container` device code exists but the host parser
 /// doesn't reach it), so we must convert to array format on the host.
-std::string convertRunToNoRun(std::string_view r32, uint32_t numContainers) {
+std::string convertRunToNoRun(
+    std::string_view roaring32,
+    uint32_t numContainers) {
   // In the run variant the key-card descriptors start after the cookie and
   // the per-container run bitmap.
   std::size_t runBitmapSize = (numContainers + 7) / 8;
@@ -273,18 +279,20 @@ std::string convertRunToNoRun(std::string_view r32, uint32_t numContainers) {
   for (uint32_t c = 0; c < numContainers; ++c) {
     uint16_t key;
     std::memcpy(
-        &key, r32.data() + kcOffset + c * kKeyCardDescSize, sizeof(uint16_t));
+        &key,
+        roaring32.data() + kcOffset + c * kKeyCardDescSize,
+        sizeof(uint16_t));
     containers[c].key = key;
 
     uint16_t numRuns;
-    std::memcpy(&numRuns, r32.data() + dataPos, kNumRunsSize);
+    std::memcpy(&numRuns, roaring32.data() + dataPos, kNumRunsSize);
     dataPos += kNumRunsSize;
     for (uint16_t rr = 0; rr < numRuns; ++rr) {
       uint16_t start, lenMinus1;
-      std::memcpy(&start, r32.data() + dataPos, sizeof(uint16_t));
+      std::memcpy(&start, roaring32.data() + dataPos, sizeof(uint16_t));
       std::memcpy(
           &lenMinus1,
-          r32.data() + dataPos + sizeof(uint16_t),
+          roaring32.data() + dataPos + sizeof(uint16_t),
           sizeof(uint16_t));
       dataPos += kRunPairSize;
       for (uint32_t v = start; v <= static_cast<uint32_t>(start) + lenMinus1;
@@ -357,15 +365,16 @@ std::string normalizeRoaring64(std::string_view data) {
       break;
     }
 
-    auto r32view = data.substr(pos);
-    std::size_t r32Total = roaring32BlockSize(r32view);
+    auto roaring32view = data.substr(pos);
+    std::size_t roaring32Total = roaring32BlockSize(roaring32view);
 
-    if (is32bitBitmapNormalized(r32view)) {
-      normalized.append(r32view.data(), r32Total);
+    if (is32bitBitmapNormalized(roaring32view)) {
+      normalized.append(roaring32view.data(), roaring32Total);
     } else {
-      normalized.append(normalizeRoaring32(r32view.substr(0, r32Total)));
+      normalized.append(
+          normalizeRoaring32(roaring32view.substr(0, roaring32Total)));
     }
-    pos += r32Total;
+    pos += roaring32Total;
   }
 
   return normalized;
