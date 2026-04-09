@@ -35,15 +35,24 @@ namespace velox_iceberg = ::facebook::velox::connector::hive::iceberg;
 
 namespace {
 
+/// Loads a fixed width value from a string view without assuming aligned
+/// memory.
+template <typename T>
+T unalignedLoad(std::string_view payload, std::size_t offset = 0)
+  requires(std::is_integral_v<T>)
+{
+  T value;
+  std::memcpy(&value, payload.data() + offset, sizeof(T));
+  return value;
+}
+
 /// Reads an integral big endian value from a byte array.
 template <typename T>
 constexpr T readBigEndian(const uint8_t* p)
   requires(std::is_integral_v<T>)
 {
   if constexpr (std::endian::native == std::endian::big) {
-    T val;
-    std::memcpy(&val, p, sizeof(val));
-    return val;
+    return unalignedLoad<T>(p);
   } else {
     // TODO(mh): Replace with std::byteswap(std::bit_cast<T>(p)) when C++23 is
     // available.
@@ -55,73 +64,59 @@ constexpr T readBigEndian(const uint8_t* p)
     return val;
   }
 }
-} // namespace
 
-namespace {
-
-// Roaring32 portable layout (no-run variant):
-//   [cookie          4B]  (uint32 == 12346)
-//   [numContainers   4B]  (uint32)
-//   [key-card descriptors  numContainers * 4B]  (key:u16, cardMinus1:u16)
-//   [offset table    numContainers * 4B]  (only if numContainers >= 4)
-//   [container data  variable]
-//
-// Roaring32 portable layout (run variant):
-//   [cookie          4B]  (lower 16 bits == 12347, upper 16 = numContainers-1)
-//   [run bitmap      ceil(numContainers/8) B]
-//   [key-card descriptors  numContainers * 4B]
-//   [offset table    numContainers * 4B]  (only if numContainers >= 4)
-//   [run data        variable]  (numRuns:u16, then numRuns * (start:u16,
-//   len-1:u16))
-
+/// Constants for the 32 bit roaring bitmap cookies.
 constexpr uint32_t kNoRunCookie = 12346;
 constexpr uint32_t kRunCookie = 12347;
 constexpr uint32_t kCookieMask = 0xFFFF;
-constexpr uint32_t kNoOffsetThreshold = 4;
-constexpr uint32_t kMaxArrayContainerCard = 4096;
-constexpr uint32_t kBitsetContainerBytes = 8192;
-
 constexpr std::size_t kCookieSize = sizeof(uint32_t);
-constexpr std::size_t kContainerCountSize = sizeof(uint32_t);
-constexpr std::size_t kNoRunHeaderPrefix = kCookieSize + kContainerCountSize;
-constexpr std::size_t kKeyCardDescSize = sizeof(uint16_t) + sizeof(uint16_t);
-constexpr std::size_t kOffsetEntrySize = sizeof(uint32_t);
-constexpr std::size_t kRunPairSize = sizeof(uint16_t) + sizeof(uint16_t);
-constexpr std::size_t kNumRunsSize = sizeof(uint16_t);
 
-bool isRoaring32Cookie(std::string_view roaring32) {
-  uint32_t cookie{0};
-  std::memcpy(&cookie, roaring32.data(), sizeof(uint32_t));
+/// Checks if there's a valid 32 bit roaring bitmap cookie at the start of the
+/// payload string.
+bool isRoaring32Cookie(std::string_view payload) {
+  auto cookie = unalignedLoad<uint32_t>(payload);
   return cookie == kNoRunCookie or ((cookie & kCookieMask) == kRunCookie);
 }
 
 /// Parses the first bytes of a 32-bit roaring bitmap in portable format to
 /// extract the cookie and container count.
-///
-/// Cookie variants:
 ///   - No-run (cookie == 12346): followed by a 4-byte numContainers field.
 ///   - Run (cookie & 0xFFFF == 12347): upper 16 bits encode numContainers - 1.
-///
-/// @param roaring32 String view over the serialized roaring32 data (>= 4
-/// bytes).
-/// @return A pair of {cookie, numContainers}.
 std::pair<uint32_t, uint32_t> parseRoaring32Cookie(std::string_view payload) {
   VELOX_CHECK_GE(payload.size(), kCookieSize, "Roaring32 block too small");
+  const auto cookie = unalignedLoad<uint32_t>(payload);
 
-  uint32_t cookie{0};
-  std::memcpy(&cookie, payload.data(), sizeof(uint32_t));
   if (cookie == kNoRunCookie) {
-    uint32_t numContainers{0};
-    std::memcpy(
-        &numContainers, payload.data() + sizeof(uint32_t), sizeof(uint32_t));
+    const auto numContainers =
+        unalignedLoad<uint32_t>(payload.substr(kCookieSize));
     return {cookie, numContainers};
-  }
-  if ((cookie & kCookieMask) == kRunCookie) {
+  } else if ((cookie & kCookieMask) == kRunCookie) {
     return {cookie, (cookie >> 16) + 1};
   }
+
   VELOX_FAIL("Invalid 32-bit roaring bitmap cookie: {}", cookie);
 }
 
+/// Constants for the 32 bit roaring bitmap.
+constexpr uint32_t kNoOffsetThreshold = 4;
+constexpr uint32_t kMaxArrayContainerCard = 4096;
+constexpr uint32_t kBitsetContainerBytes = 8192;
+
+constexpr std::size_t kContainerCountSize = sizeof(uint32_t);
+constexpr std::size_t kNoRunHeaderPrefix = kCookieSize + kContainerCountSize;
+constexpr std::size_t kKeyCardDescSize = sizeof(uint16_t) + sizeof(uint16_t);
+constexpr std::size_t kOffsetEntrySize = sizeof(uint32_t);
+
+constexpr std::size_t kRunPairSize = sizeof(uint16_t) + sizeof(uint16_t);
+constexpr std::size_t kNumRunsSize = sizeof(uint16_t);
+
+/// Roaring32 portable layout (no-run variant):
+///   [cookie          4B]  (uint32 == 12346)
+///   [numContainers   4B]  (uint32)
+///   [key-card descriptors  numContainers * 4B]  (key:u16, cardMinus1:u16)
+///   [offset table    numContainers * 4B]  (only if numContainers >= 4)
+///   [container data  variable]
+///
 /// Computes the total serialized block size for a block with no-run cookie
 /// (12346) by walking the key-card descriptors to sum up container data sizes.
 std::size_t noRunBlockSize(
@@ -137,12 +132,9 @@ std::size_t noRunBlockSize(
       cuda::counting_iterator(numContainers),
       std::size_t{hdr},
       [&](std::size_t acc, uint32_t c) {
-        uint16_t cardMinus1;
-        std::memcpy(
-            &cardMinus1,
-            payload.data() + kNoRunHeaderPrefix + c * kKeyCardDescSize +
-                sizeof(uint16_t),
-            sizeof(uint16_t));
+        auto cardMinus1 = unalignedLoad<uint16_t>(
+            payload,
+            kNoRunHeaderPrefix + c * kKeyCardDescSize + sizeof(uint16_t));
         uint32_t card = static_cast<uint32_t>(cardMinus1) + 1;
         return acc +
             ((card <= kMaxArrayContainerCard) ? card * sizeof(uint16_t)
@@ -150,6 +142,14 @@ std::size_t noRunBlockSize(
       });
 }
 
+/// Roaring32 portable layout (run variant):
+///   [cookie          4B]  (lower 16 bits == 12347, upper 16 = numContainers-1)
+///   [run bitmap      ceil(numContainers/8) B]
+///   [key-card descriptors  numContainers * 4B]
+///   [offset table    numContainers * 4B]  (only if numContainers >= 4)
+///   [run data        variable]  (numRuns:u16, then numRuns * (start:u16,
+///   len-1:u16))
+///
 /// Computes the total serialized block size for a block with run cookie (12347)
 /// by walking each container's run-length data.
 std::size_t runBlockSize(std::string_view payload, uint32_t numContainers) {
@@ -166,8 +166,7 @@ std::size_t runBlockSize(std::string_view payload, uint32_t numContainers) {
       cuda::counting_iterator(numContainers),
       std::size_t{hdr},
       [&](std::size_t acc, uint32_t c) {
-        uint16_t numRuns;
-        std::memcpy(&numRuns, payload.data() + acc, kNumRunsSize);
+        auto numRuns = unalignedLoad<uint16_t>(payload, acc);
         return acc + kNumRunsSize + numRuns * kRunPairSize;
       });
 }
@@ -216,9 +215,9 @@ bool is64bitBitmapNormalized(std::string_view payload, uint64_t numKeys) {
         // Skip over the key (4 bytes)
         pos += sizeof(uint32_t);
         // Get the 32 bit roaring bitmap
-        auto roaring32view = payload.substr(pos);
-        pos += roaring32BlockSize(roaring32view);
-        return is32bitBitmapNormalized(roaring32view);
+        auto payload32 = payload.substr(pos);
+        pos += roaring32BlockSize(payload32);
+        return is32bitBitmapNormalized(payload32);
       });
 }
 
@@ -241,12 +240,10 @@ std::string injectNoRunOffsets(
       cuda::counting_iterator<uint32_t>(numContainers),
       [&](auto container) {
         out.append(reinterpret_cast<const char*>(&base), kOffsetEntrySize);
-        uint16_t cardMinus1;
-        std::memcpy(
-            &cardMinus1,
-            payload.data() + kNoRunHeaderPrefix + container * kKeyCardDescSize +
-                sizeof(uint16_t),
-            sizeof(uint16_t));
+        auto cardMinus1 = unalignedLoad<uint16_t>(
+            payload,
+            kNoRunHeaderPrefix + container * kKeyCardDescSize +
+                sizeof(uint16_t));
         uint32_t card = static_cast<uint32_t>(cardMinus1) + 1;
         base += (card <= kMaxArrayContainerCard) ? card * sizeof(uint16_t)
                                                  : kBitsetContainerBytes;
@@ -283,35 +280,25 @@ std::string convertRunToNoRun(
       cuda::counting_iterator<uint32_t>(0),
       cuda::counting_iterator<uint32_t>(numContainers),
       [&](auto container) {
-        uint16_t key;
-        std::memcpy(
-            &key,
-            payload.data() + kcOffset + container * kKeyCardDescSize,
-            sizeof(uint16_t));
-        containers[container].key = key;
-
-        uint16_t numRuns;
-        std::memcpy(&numRuns, payload.data() + dataPos, kNumRunsSize);
+        containers[container].key = unalignedLoad<uint16_t>(
+            payload, kcOffset + container * kKeyCardDescSize);
+        auto numRuns = unalignedLoad<uint16_t>(payload, dataPos);
         dataPos += kNumRunsSize;
         std::for_each(
             cuda::counting_iterator<uint16_t>(0),
             cuda::counting_iterator<uint16_t>(numRuns),
             [&](uint16_t) {
-              uint16_t start, lenMinus1;
-              std::memcpy(&start, payload.data() + dataPos, sizeof(uint16_t));
-              std::memcpy(
-                  &lenMinus1,
-                  payload.data() + dataPos + sizeof(uint16_t),
-                  sizeof(uint16_t));
+              auto start = unalignedLoad<uint16_t>(payload, dataPos);
+              auto lenMinus1 =
+                  unalignedLoad<uint16_t>(payload, dataPos + sizeof(uint16_t));
               dataPos += kRunPairSize;
               auto& vals = containers[container].expandedValues;
-              std::for_each(
+              std::transform(
                   cuda::counting_iterator<uint32_t>(start),
                   cuda::counting_iterator<uint32_t>(
                       static_cast<uint32_t>(start) + lenMinus1 + 1),
-                  [&](uint32_t v) {
-                    vals.push_back(static_cast<uint16_t>(v));
-                  });
+                  std::back_inserter(vals),
+                  [](auto value) { return static_cast<uint16_t>(value); });
             });
       });
 
@@ -366,8 +353,8 @@ std::string normalizeRoaring64(std::string_view payload, uint64_t numKeys) {
 
   std::for_each(
       cuda::counting_iterator<uint64_t>(0),
-      cuda::counting_iterator<uint64_t>(numKeys),
-      [&](uint64_t) {
+      cuda::counting_iterator(numKeys),
+      [&](auto) {
         // Skip over the key (4 bytes)
         if (pos + sizeof(uint32_t) > payload.size()) {
           return;
@@ -590,8 +577,7 @@ void CudfDeletionVectorReader::loadBitmap(rmm::cuda_stream_view stream) {
   //    ...
   //    [Nth Key (4 bytes)]
   //    [Nth 32 bit roaring bitmap]
-  uint64_t numKeys;
-  std::memcpy(&numKeys, payload.data(), sizeof(uint64_t));
+  auto numKeys = unalignedLoad<uint64_t>(payload);
   VELOX_CHECK_GT(numKeys, 0, "Deletion vector has zero keys");
 
   // Single key. Use 32-bit dispatch
