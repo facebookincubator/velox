@@ -474,4 +474,9 @@ TEST_F(PlanBuilderTest, insertTableHandleParameter) {
   testInsertTableHandle(insertHandle);
 }
 
+// TODO: Remove after validating CI failure reporting pipeline.
+TEST_F(PlanBuilderTest, intentionalFailure) {
+  EXPECT_EQ(1, 2) << "Intentional test failure for CI validation";
+}
+
 } // namespace facebook::velox::exec::test
