@@ -174,6 +174,29 @@ std::unique_ptr<cudf::table> normalizeTableToInputRowType(
   return std::make_unique<cudf::table>(std::move(cols));
 }
 
+// True when every column's libcudf type already matches Velox input row type
+// (same rules as normalizeTableToInputRowType); concat can use the view as-is.
+bool tableViewMatchesInputRowType(
+    cudf::table_view view,
+    const RowTypePtr& rowType) {
+  VELOX_CHECK_EQ(
+      static_cast<size_t>(view.num_columns()),
+      rowType->size(),
+      "CudfWindow: column count does not match input row type");
+  for (cudf::size_type i = 0; i < view.num_columns(); ++i) {
+    auto expected = cudf_velox::veloxToCudfDataType(rowType->childAt(i));
+    auto col = view.column(i);
+    const bool typesMatch = (col.type() == expected);
+    const bool stringCompat = !typesMatch &&
+        col.type().id() == cudf::type_id::STRING &&
+        expected.id() == cudf::type_id::STRING;
+    if (!typesMatch && !stringCompat) {
+      return false;
+    }
+  }
+  return true;
+}
+
 } // namespace
 
 cudf::column_view CudfWindow::multiSortKeyStructView(
@@ -463,23 +486,34 @@ RowVectorPtr CudfWindow::getOutput() {
   auto mr = get_output_mr();
   velox::memory::MemoryPool* const outPool = pool();
 
-  // Concatenate all input batches into one table (types aligned per Velox row).
+  // Concatenate all input batches into one table. Skip per-batch normalize when
+  // libcudf types already match the Window input row (avoids identity gather).
   std::vector<std::unique_ptr<cudf::table>> normalizedBatches;
   normalizedBatches.reserve(inputBatches_.size());
   std::vector<cudf::table_view> views;
   views.reserve(inputBatches_.size());
   for (const auto& batch : inputBatches_) {
-    normalizedBatches.push_back(normalizeTableToInputRowType(
-        batch->getTableView(), inputRowType_, stream, mr));
-    views.push_back(normalizedBatches.back()->view());
+    auto batchView = batch->getTableView();
+    if (tableViewMatchesInputRowType(batchView, inputRowType_)) {
+      views.push_back(batchView);
+    } else {
+      normalizedBatches.push_back(normalizeTableToInputRowType(
+          batchView, inputRowType_, stream, mr));
+      views.push_back(normalizedBatches.back()->view());
+    }
   }
   std::unique_ptr<cudf::table> allData;
   if (views.size() == 1) {
-    allData = std::move(normalizedBatches[0]);
+    if (!normalizedBatches.empty()) {
+      allData = std::move(normalizedBatches[0]);
+    } else {
+      // Own a copy: input CudfVector batches are released below.
+      allData = cudf::concatenate(std::vector<cudf::table_view>{views[0]}, stream, mr);
+    }
   } else {
     allData = cudf::concatenate(views, stream, mr);
   }
-  // Drop per-batch tables so peak memory is not concat result + all chunks.
+  // Drop normalized intermediates; release input batches after concat copied data.
   normalizedBatches.clear();
   inputBatches_.clear();
 
