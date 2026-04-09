@@ -51,6 +51,7 @@ allowedCoercions() {
   add(INTEGER(), {BIGINT(), REAL(), DOUBLE()});
   add(BIGINT(), {DOUBLE()});
   add(REAL(), {DOUBLE()});
+  add(DECIMAL(1, 0), {REAL(), DOUBLE()});
   add(DATE(), {TIMESTAMP()});
   add(UNKNOWN(),
       {TINYINT(),

@@ -51,6 +51,31 @@ TEST(TypeCoercerTest, basic) {
   testNoCoercion(ARRAY(TINYINT()), MAP(INTEGER(), REAL()));
 }
 
+TEST(TypeCoercerTest, decimal) {
+  testCoercion(DECIMAL(10, 2), REAL());
+  testCoercion(DECIMAL(10, 2), DOUBLE());
+  testCoercion(DECIMAL(38, 6), REAL());
+  testCoercion(DECIMAL(38, 6), DOUBLE());
+
+  testNoCoercion(DECIMAL(10, 2), VARCHAR());
+  testNoCoercion(DECIMAL(10, 2), BIGINT());
+
+  ASSERT_TRUE(TypeCoercer::coercible(DECIMAL(10, 2), DOUBLE()));
+  ASSERT_TRUE(TypeCoercer::coercible(DECIMAL(10, 2), REAL()));
+  ASSERT_FALSE(TypeCoercer::coercible(DOUBLE(), DECIMAL(10, 2)));
+}
+
+TEST(TypeCoercerTest, decimalLeastCommonSuperType) {
+  VELOX_ASSERT_EQ_TYPES(
+      TypeCoercer::leastCommonSuperType(DECIMAL(10, 2), DOUBLE()), DOUBLE());
+  VELOX_ASSERT_EQ_TYPES(
+      TypeCoercer::leastCommonSuperType(DOUBLE(), DECIMAL(10, 2)), DOUBLE());
+  VELOX_ASSERT_EQ_TYPES(
+      TypeCoercer::leastCommonSuperType(DECIMAL(10, 2), REAL()), REAL());
+  VELOX_ASSERT_EQ_TYPES(
+      TypeCoercer::leastCommonSuperType(REAL(), DECIMAL(10, 2)), REAL());
+}
+
 TEST(TypeCoercerTest, date) {
   testCoercion(DATE(), DATE());
   testCoercion(DATE(), TIMESTAMP());
