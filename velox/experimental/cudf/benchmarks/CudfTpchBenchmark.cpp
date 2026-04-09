@@ -231,7 +231,7 @@ void CudfTpchBenchmark::ensurePreloaded() {
       for (auto& v : gpuVectors) {
         auto cudfVec = std::dynamic_pointer_cast<cudf_velox::CudfVector>(v);
         auto cpuRow = cudf_velox::with_arrow::toVeloxColumn(
-            cudfVec->getTableView(), pool, info.type->names(), stream, mr);
+            cudfVec->getTableView(), pool, info.type, stream, mr);
         cpuVectors.push_back(std::move(cpuRow));
       }
       stream.synchronize();

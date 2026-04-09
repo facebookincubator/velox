@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/exec/TableScan.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
@@ -196,7 +197,7 @@ class PreloadedTableScanAdapter : public OperatorAdapter {
     if (!tableScanNode) {
       return false;
     }
-    auto const& conn = velox::connector::getConnector(
+    auto const& conn = velox::connector::ConnectorRegistry::tryGet(
         tableScanNode->tableHandle()->connectorId());
     return std::dynamic_pointer_cast<
                cudf_velox::connector::hive::CudfHiveConnector>(conn) !=
