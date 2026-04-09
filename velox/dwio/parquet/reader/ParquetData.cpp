@@ -138,7 +138,8 @@ std::pair<int64_t, int64_t> ParquetData::getRowGroupRegion(
   auto rowGroup = fileMetaDataPtr_.rowGroup(index);
 
   VELOX_CHECK_GT(rowGroup.numColumns(), 0);
-  auto fileOffset = rowGroup.hasFileOffset() ? rowGroup.fileOffset()
+  auto fileOffset = (rowGroup.hasFileOffset() && rowGroup.fileOffset() != 0)
+      ? rowGroup.fileOffset()
       : rowGroup.columnChunk(0).hasDictionaryPageOffset()
       ? rowGroup.columnChunk(0).dictionaryPageOffset()
       : rowGroup.columnChunk(0).dataPageOffset();

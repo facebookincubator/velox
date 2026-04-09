@@ -783,10 +783,12 @@ std::string OutputBuffer::toStringLocked() const {
 }
 
 double OutputBuffer::getUtilization() const {
+  std::lock_guard<std::mutex> l(mutex_);
   return bufferedBytes_ / static_cast<double>(maxSize_);
 }
 
 bool OutputBuffer::isOverutilized() const {
+  std::lock_guard<std::mutex> l(mutex_);
   return (bufferedBytes_ > (0.5 * maxSize_)) || atEnd_;
 }
 

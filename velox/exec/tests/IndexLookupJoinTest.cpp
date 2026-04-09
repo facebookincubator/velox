@@ -22,6 +22,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/Connector.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -115,7 +116,7 @@ class IndexLookupJoinTest : public IndexLookupJoinTestBase,
   }
 
   void TearDown() override {
-    connector::unregisterConnector(kTestIndexConnectorName);
+    connector::ConnectorRegistry::global().erase(kTestIndexConnectorName);
     HiveConnectorTestBase::TearDown();
   }
 

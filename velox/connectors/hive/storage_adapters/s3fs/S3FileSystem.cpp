@@ -455,8 +455,8 @@ S3FileSystem::S3FileSystem(
     std::string_view bucketName,
     const std::shared_ptr<const config::ConfigBase> config)
     : FileSystem(config) {
-  S3Config s3Config(bucketName, config);
-  impl_ = std::make_shared<Impl>(s3Config);
+  s3Config_ = std::make_shared<S3Config>(bucketName, config);
+  impl_ = std::make_shared<Impl>(*s3Config_);
 }
 
 std::string S3FileSystem::getLogLevelName() const {
@@ -480,8 +480,8 @@ std::unique_ptr<WriteFile> S3FileSystem::openFileForWrite(
     std::string_view s3Path,
     const FileOptions& options) {
   const auto path = getPath(s3Path);
-  auto s3file =
-      std::make_unique<S3WriteFile>(path, impl_->s3Client(), options.pool);
+  auto s3file = std::make_unique<S3WriteFile>(
+      path, impl_->s3Client(), options.pool, s3Config_->minPartSize());
   return s3file;
 }
 

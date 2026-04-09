@@ -17,6 +17,7 @@
 
 #include <gtest/gtest.h>
 
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 
@@ -33,17 +34,17 @@ class PaimonConnectorTest : public exec::test::HiveConnectorTestBase {
         std::unordered_map<std::string, std::string>{});
     auto connector =
         PaimonConnectorFactory().newConnector(kPaimonConnectorId, config);
-    registerConnector(connector);
+    ConnectorRegistry::global().insert(connector->connectorId(), connector);
   }
 
   void TearDown() override {
-    unregisterConnector(kPaimonConnectorId);
+    ConnectorRegistry::global().erase(kPaimonConnectorId);
     HiveConnectorTestBase::TearDown();
   }
 };
 
 TEST_F(PaimonConnectorTest, connectorRegistration) {
-  auto connector = getConnector(kPaimonConnectorId);
+  auto connector = ConnectorRegistry::tryGet(kPaimonConnectorId);
   ASSERT_NE(connector, nullptr);
   ASSERT_NE(connector->connectorConfig(), nullptr);
 }

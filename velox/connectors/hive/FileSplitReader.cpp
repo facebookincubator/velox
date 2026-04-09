@@ -14,14 +14,13 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/SplitReader.h"
+#include "velox/connectors/hive/FileSplitReader.h"
 
 #include "velox/common/caching/CacheTTLController.h"
 #include "velox/connectors/hive/BufferedInputBuilder.h"
-#include "velox/connectors/hive/HiveConfig.h"
-#include "velox/connectors/hive/HiveConnectorSplit.h"
-#include "velox/connectors/hive/HiveConnectorUtil.h"
-#include "velox/connectors/hive/TableHandle.h"
+#include "velox/connectors/hive/FileConfig.h"
+#include "velox/connectors/hive/FileConnectorSplit.h"
+#include "velox/connectors/hive/FileConnectorUtil.h"
 #include "velox/dwio/common/ReaderFactory.h"
 
 namespace facebook::velox::connector::hive {
@@ -87,12 +86,12 @@ VectorPtr newConstantFromString(
       isDaysSinceEpoch);
 }
 
-std::unique_ptr<SplitReader> SplitReader::create(
-    const std::shared_ptr<hive::HiveConnectorSplit>& hiveSplit,
-    const HiveTableHandlePtr& hiveTableHandle,
-    const std::unordered_map<std::string, HiveColumnHandlePtr>* partitionKeys,
+std::unique_ptr<FileSplitReader> FileSplitReader::create(
+    const std::shared_ptr<const hive::FileConnectorSplit>& fileSplit,
+    const FileTableHandlePtr& tableHandle,
+    const std::unordered_map<std::string, FileColumnHandlePtr>* partitionKeys,
     const ConnectorQueryCtx* connectorQueryCtx,
-    const std::shared_ptr<const HiveConfig>& hiveConfig,
+    const std::shared_ptr<const FileConfig>& fileConfig,
     const RowTypePtr& readerOutputType,
     const std::shared_ptr<io::IoStatistics>& ioStatistics,
     const std::shared_ptr<IoStats>& ioStats,
@@ -100,12 +99,12 @@ std::unique_ptr<SplitReader> SplitReader::create(
     folly::Executor* ioExecutor,
     const std::shared_ptr<common::ScanSpec>& scanSpec,
     const common::SubfieldFilters* subfieldFiltersForValidation) {
-  return std::unique_ptr<SplitReader>(new SplitReader(
-      hiveSplit,
-      hiveTableHandle,
+  return std::unique_ptr<FileSplitReader>(new FileSplitReader(
+      fileSplit,
+      tableHandle,
       partitionKeys,
       connectorQueryCtx,
-      hiveConfig,
+      fileConfig,
       readerOutputType,
       ioStatistics,
       ioStats,
@@ -115,12 +114,12 @@ std::unique_ptr<SplitReader> SplitReader::create(
       subfieldFiltersForValidation));
 }
 
-SplitReader::SplitReader(
-    const std::shared_ptr<const hive::HiveConnectorSplit>& hiveSplit,
-    const HiveTableHandlePtr& hiveTableHandle,
-    const std::unordered_map<std::string, HiveColumnHandlePtr>* partitionKeys,
+FileSplitReader::FileSplitReader(
+    const std::shared_ptr<const hive::FileConnectorSplit>& fileSplit,
+    const FileTableHandlePtr& tableHandle,
+    const std::unordered_map<std::string, FileColumnHandlePtr>* partitionKeys,
     const ConnectorQueryCtx* connectorQueryCtx,
-    const std::shared_ptr<const HiveConfig>& hiveConfig,
+    const std::shared_ptr<const FileConfig>& fileConfig,
     const RowTypePtr& readerOutputType,
     const std::shared_ptr<io::IoStatistics>& ioStatistics,
     const std::shared_ptr<IoStats>& ioStats,
@@ -128,12 +127,11 @@ SplitReader::SplitReader(
     folly::Executor* ioExecutor,
     const std::shared_ptr<common::ScanSpec>& scanSpec,
     const common::SubfieldFilters* subfieldFiltersForValidation)
-    : hiveSplit_(hiveSplit),
-      hiveTableHandle_(hiveTableHandle),
+    : fileSplit_(fileSplit),
+      tableHandle_(tableHandle),
       partitionKeys_(partitionKeys),
-      infoColumns_(nullptr),
       connectorQueryCtx_(connectorQueryCtx),
-      hiveConfig_(hiveConfig),
+      fileConfig_(fileConfig),
       readerOutputType_(readerOutputType),
       ioStatistics_(ioStatistics),
       ioStats_(ioStats),
@@ -145,27 +143,27 @@ SplitReader::SplitReader(
       baseReaderOpts_(connectorQueryCtx->memoryPool()),
       emptySplit_(false) {}
 
-void SplitReader::configureReaderOptions(
+void FileSplitReader::configureReaderOptions(
     std::shared_ptr<velox::random::RandomSkipTracker> randomSkip) {
-  hive::configureReaderOptions(
-      hiveConfig_,
-      connectorQueryCtx_,
-      hiveTableHandle_,
-      hiveSplit_,
-      baseReaderOpts_);
+  configureBaseReaderOptions();
   baseReaderOpts_.setRandomSkip(std::move(randomSkip));
   baseReaderOpts_.setScanSpec(scanSpec_);
-  baseReaderOpts_.setFileFormat(hiveSplit_->fileFormat);
+  baseReaderOpts_.setFileFormat(fileSplit_->fileFormat);
 }
 
-void SplitReader::prepareSplit(
+void FileSplitReader::configureBaseReaderOptions() {
+  hive::configureReaderOptions(
+      fileConfig_,
+      connectorQueryCtx_,
+      tableHandle_,
+      fileSplit_,
+      baseReaderOpts_);
+}
+
+void FileSplitReader::prepareSplit(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
     dwio::common::RuntimeStatistics& runtimeStats,
     const folly::F14FastMap<std::string, std::string>& fileReadOps) {
-  // Validate synthesized column filters early, before creating the reader.
-  // This handles filter-only synthesized columns that are not in the scanSpec.
-  validateSynthesizedColumnFilters();
-
   createReader(fileReadOps);
   if (emptySplit_) {
     return;
@@ -180,118 +178,30 @@ void SplitReader::prepareSplit(
   createRowReader(std::move(metadataFilter), std::move(rowType), std::nullopt);
 }
 
-void SplitReader::validateSynthesizedColumnFilters() const {
-  if (!subfieldFiltersForValidation_ || !infoColumns_) {
-    return;
-  }
-  for (const auto& [subfield, filter] : *subfieldFiltersForValidation_) {
-    const auto& fieldName = subfield.toString();
-    // Check if this is a synthesized column filter.
-    auto infoColIter = hiveSplit_->infoColumns.find(fieldName);
-    if (infoColIter == hiveSplit_->infoColumns.end()) {
-      // Not a synthesized column, skip.
-      continue;
-    }
-    // Validate the filter against the split's value.
-    bool passed = false;
-    const auto& value = infoColIter->second;
-    // Look up the type from the column handles in infoColumns_.
-    auto handleIter = infoColumns_->find(fieldName);
-    VELOX_CHECK(
-        handleIter != infoColumns_->end(),
-        "Column handle for synthesized column '{}' not found in infoColumns",
-        fieldName);
-    TypeKind typeKind = handleIter->second->dataType()->kind();
-    switch (typeKind) {
-      case TypeKind::BIGINT:
-      case TypeKind::INTEGER:
-        passed = common::applyFilter(*filter, folly::to<int64_t>(value));
-        break;
-      case TypeKind::VARCHAR:
-        passed = common::applyFilter(*filter, value);
-        break;
-      default:
-        VELOX_FAIL("Unexpected type for synthesized column '{}'.", fieldName);
-    }
-    VELOX_CHECK(
-        passed,
-        "Synthesized column '{}' failed filter validation. "
-        "Filter: {}, Value: '{}'. Split: {}",
-        fieldName,
-        filter->toString(),
-        value,
-        hiveSplit_->toString());
-  }
-}
-
-void SplitReader::setBucketConversion(
-    std::vector<column_index_t> bucketChannels) {
-  bucketChannels_ = {bucketChannels.begin(), bucketChannels.end()};
-  partitionFunction_ = std::make_unique<HivePartitionFunction>(
-      hiveSplit_->bucketConversion->tableBucketCount,
-      std::move(bucketChannels));
-}
-
-std::vector<BaseVector::CopyRange> SplitReader::bucketConversionRows(
-    const RowVector& vector) {
-  partitions_.clear();
-  partitionFunction_->partition(vector, partitions_);
-  const auto bucketToKeep = *hiveSplit_->tableBucketNumber;
-  const auto partitionBucketCount =
-      hiveSplit_->bucketConversion->partitionBucketCount;
-  std::vector<BaseVector::CopyRange> ranges;
-  for (vector_size_t i = 0; i < vector.size(); ++i) {
-    VELOX_CHECK_EQ((partitions_[i] - bucketToKeep) % partitionBucketCount, 0);
-    if (partitions_[i] == bucketToKeep) {
-      auto& r = ranges.emplace_back();
-      r.sourceIndex = i;
-      r.targetIndex = ranges.size() - 1;
-      r.count = 1;
-    }
-  }
-  return ranges;
-}
-
-void SplitReader::applyBucketConversion(
-    VectorPtr& output,
-    const std::vector<BaseVector::CopyRange>& ranges) {
-  auto filtered =
-      BaseVector::create(output->type(), ranges.size(), output->pool());
-  filtered->copyRanges(output.get(), ranges);
-  output = std::move(filtered);
-}
-
-uint64_t SplitReader::next(uint64_t size, VectorPtr& output) {
-  uint64_t numScanned;
+uint64_t FileSplitReader::next(uint64_t size, VectorPtr& output) {
   if (!baseReaderOpts_.randomSkip()) {
-    numScanned = baseRowReader_->next(size, output);
-  } else {
-    dwio::common::Mutation mutation;
-    mutation.randomSkip = baseReaderOpts_.randomSkip().get();
-    numScanned = baseRowReader_->next(size, output, &mutation);
+    return baseRowReader_->next(size, output);
   }
-  if (numScanned > 0 && output->size() > 0 && partitionFunction_) {
-    applyBucketConversion(
-        output, bucketConversionRows(*output->asChecked<RowVector>()));
-  }
-  return numScanned;
+  dwio::common::Mutation mutation;
+  mutation.randomSkip = baseReaderOpts_.randomSkip().get();
+  return baseRowReader_->next(size, output, &mutation);
 }
 
-void SplitReader::resetFilterCaches() {
+void FileSplitReader::resetFilterCaches() {
   if (baseRowReader_) {
     baseRowReader_->resetFilterCaches();
   }
 }
 
-bool SplitReader::emptySplit() const {
+bool FileSplitReader::emptySplit() const {
   return emptySplit_;
 }
 
-void SplitReader::resetSplit() {
-  hiveSplit_.reset();
+void FileSplitReader::resetSplit() {
+  fileSplit_.reset();
 }
 
-int64_t SplitReader::estimatedRowSize() const {
+int64_t FileSplitReader::estimatedRowSize() const {
   if (!baseRowReader_) {
     return DataSource::kUnknownRowSize;
   }
@@ -300,31 +210,31 @@ int64_t SplitReader::estimatedRowSize() const {
   return size.value_or(DataSource::kUnknownRowSize);
 }
 
-void SplitReader::updateRuntimeStats(
+void FileSplitReader::updateRuntimeStats(
     dwio::common::RuntimeStatistics& stats) const {
   if (baseRowReader_) {
     baseRowReader_->updateRuntimeStats(stats);
   }
 }
 
-bool SplitReader::allPrefetchIssued() const {
+bool FileSplitReader::allPrefetchIssued() const {
   return baseRowReader_ && baseRowReader_->allPrefetchIssued();
 }
 
-void SplitReader::setConnectorQueryCtx(
+void FileSplitReader::setConnectorQueryCtx(
     const ConnectorQueryCtx* connectorQueryCtx) {
   connectorQueryCtx_ = connectorQueryCtx;
 }
 
-std::string SplitReader::toString() const {
+std::string FileSplitReader::toString() const {
   std::string partitionKeys;
   std::for_each(
       partitionKeys_->begin(), partitionKeys_->end(), [&](const auto& column) {
         partitionKeys += " " + column.second->toString();
       });
   return fmt::format(
-      "SplitReader: hiveSplit_{} scanSpec_{} readerOutputType_{} partitionKeys_{} reader{} rowReader{}",
-      hiveSplit_->toString(),
+      "FileSplitReader: fileSplit_{} scanSpec_{} readerOutputType_{} partitionKeys_{} reader{} rowReader{}",
+      fileSplit_->toString(),
       scanSpec_->toString(),
       readerOutputType_->toString(),
       partitionKeys,
@@ -332,23 +242,23 @@ std::string SplitReader::toString() const {
       static_cast<const void*>(baseRowReader_.get()));
 }
 
-void SplitReader::createReader(
+void FileSplitReader::createReader(
     const folly::F14FastMap<std::string, std::string>& fileReadOps) {
   VELOX_CHECK_NE(
       baseReaderOpts_.fileFormat(), dwio::common::FileFormat::UNKNOWN);
 
   FileHandleCachedPtr fileHandleCachePtr;
   FileHandleKey fileHandleKey{
-      .filename = hiveSplit_->filePath,
+      .filename = fileSplit_->filePath,
       .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
 
-  auto fileProperties = hiveSplit_->properties.value_or(FileProperties{});
+  auto fileProperties = fileSplit_->properties.value_or(FileProperties{});
   fileProperties.fileReadOps = fileReadOps;
-  if (!hiveTableHandle_->dbName().empty()) {
-    fileProperties.fileReadOps[kDbNameKey] = hiveTableHandle_->dbName();
+  if (!tableHandle_->dbName().empty()) {
+    fileProperties.fileReadOps[kDbNameKey] = tableHandle_->dbName();
   }
-  if (!hiveTableHandle_->tableName().empty()) {
-    fileProperties.fileReadOps[kTableNameKey] = hiveTableHandle_->tableName();
+  if (!tableHandle_->name().empty()) {
+    fileProperties.fileReadOps[kTableNameKey] = tableHandle_->name();
   }
 
   try {
@@ -357,7 +267,7 @@ void SplitReader::createReader(
     VELOX_CHECK_NOT_NULL(fileHandleCachePtr.get());
   } catch (const VeloxRuntimeError& e) {
     if (e.errorCode() == error_code::kFileNotFound &&
-        hiveConfig_->ignoreMissingFiles(
+        fileConfig_->ignoreMissingFiles(
             connectorQueryCtx_->sessionProperties())) {
       emptySplit_ = true;
       return;
@@ -388,32 +298,32 @@ void SplitReader::createReader(
   }
 }
 
-RowTypePtr SplitReader::getAdaptedRowType() const {
+RowTypePtr FileSplitReader::getAdaptedRowType() const {
   auto& fileType = baseReader_->rowType();
   auto columnTypes = adaptColumns(fileType, baseReaderOpts_.fileSchema());
   auto columnNames = fileType->names();
   return ROW(std::move(columnNames), std::move(columnTypes));
 }
 
-bool SplitReader::filterOnStats(
+bool FileSplitReader::filterOnStats(
     dwio::common::RuntimeStatistics& runtimeStats) const {
   if (testFilters(
           scanSpec_.get(),
           baseReader_.get(),
-          hiveSplit_->filePath,
-          hiveSplit_->partitionKeys,
+          fileSplit_->filePath,
+          fileSplit_->partitionKeys,
           *partitionKeys_,
-          hiveConfig_->readTimestampPartitionValueAsLocalTime(
+          fileConfig_->readTimestampPartitionValueAsLocalTime(
               connectorQueryCtx_->sessionProperties()))) {
     ++runtimeStats.processedSplits;
     return true;
   }
   ++runtimeStats.skippedSplits;
-  runtimeStats.skippedSplitBytes += hiveSplit_->length;
+  runtimeStats.skippedSplitBytes += fileSplit_->length;
   return false;
 }
 
-bool SplitReader::checkIfSplitIsEmpty(
+bool FileSplitReader::checkIfSplitIsEmpty(
     dwio::common::RuntimeStatistics& runtimeStats) {
   // emptySplit_ may already be set if the data file is not found. In this case
   // we don't need to test further.
@@ -427,21 +337,12 @@ bool SplitReader::checkIfSplitIsEmpty(
   return emptySplit_;
 }
 
-void SplitReader::createRowReader(
+void FileSplitReader::createRowReader(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
     RowTypePtr rowType,
     std::optional<bool> rowSizeTrackingEnabled) {
   VELOX_CHECK_NULL(baseRowReader_);
-  configureRowReaderOptions(
-      hiveTableHandle_->tableParameters(),
-      scanSpec_,
-      std::move(metadataFilter),
-      std::move(rowType),
-      hiveSplit_,
-      hiveConfig_,
-      connectorQueryCtx_->sessionProperties(),
-      ioExecutor_,
-      baseRowReaderOpts_);
+  configureBaseRowReaderOptions(std::move(metadataFilter), std::move(rowType));
   baseRowReaderOpts_.setTrackRowSize(
       rowSizeTrackingEnabled.has_value()
           ? *rowSizeTrackingEnabled
@@ -450,7 +351,22 @@ void SplitReader::createRowReader(
   baseRowReader_ = baseReader_->createRowReader(baseRowReaderOpts_);
 }
 
-std::vector<TypePtr> SplitReader::adaptColumns(
+void FileSplitReader::configureBaseRowReaderOptions(
+    std::shared_ptr<common::MetadataFilter> metadataFilter,
+    RowTypePtr rowType) {
+  hive::configureRowReaderOptions(
+      tableHandle_->tableParameters(),
+      scanSpec_,
+      std::move(metadataFilter),
+      std::move(rowType),
+      fileSplit_,
+      fileConfig_,
+      connectorQueryCtx_->sessionProperties(),
+      ioExecutor_,
+      baseRowReaderOpts_);
+}
+
+std::vector<TypePtr> FileSplitReader::adaptColumns(
     const RowTypePtr& fileType,
     const std::shared_ptr<const velox::RowType>& tableSchema) const {
   // Keep track of schema types for columns in file, used by ColumnSelector.
@@ -461,24 +377,9 @@ std::vector<TypePtr> SplitReader::adaptColumns(
     auto* childSpec = childrenSpecs[i].get();
     const std::string& fieldName = childSpec->fieldName();
 
-    if (auto it = hiveSplit_->partitionKeys.find(fieldName);
-        it != hiveSplit_->partitionKeys.end()) {
-      setPartitionValue(childSpec, fieldName, it->second);
-    } else if (auto iter = hiveSplit_->infoColumns.find(fieldName);
-               iter != hiveSplit_->infoColumns.end()) {
-      // Synthesized column filter validation is done in prepareSplit() for
-      // fail-fast behavior before any file I/O. Here we only need to set the
-      // constant value for the column.
-      auto infoColumnType =
-          readerOutputType_->childAt(readerOutputType_->getChildIdx(fieldName));
-      auto constant = newConstantFromString(
-          infoColumnType,
-          iter->second,
-          connectorQueryCtx_->memoryPool(),
-          hiveConfig_->readTimestampPartitionValueAsLocalTime(
-              connectorQueryCtx_->sessionProperties()),
-          false);
-      childSpec->setConstantValue(constant);
+    if (auto partitionIt = fileSplit_->partitionKeys.find(fieldName);
+        partitionIt != fileSplit_->partitionKeys.end()) {
+      setPartitionValue(childSpec, fieldName, partitionIt->second);
     } else if (
         childSpec->columnType() == common::ScanSpec::ColumnType::kRegular) {
       auto fileTypeIdx = fileType->getChildIdxIfExists(fieldName);
@@ -515,7 +416,7 @@ std::vector<TypePtr> SplitReader::adaptColumns(
   return columnTypes;
 }
 
-void SplitReader::setPartitionValue(
+void FileSplitReader::setPartitionValue(
     common::ScanSpec* spec,
     const std::string& partitionKey,
     const std::optional<std::string>& value) const {
@@ -529,7 +430,7 @@ void SplitReader::setPartitionValue(
       type,
       value,
       connectorQueryCtx_->memoryPool(),
-      hiveConfig_->readTimestampPartitionValueAsLocalTime(
+      fileConfig_->readTimestampPartitionValueAsLocalTime(
           connectorQueryCtx_->sessionProperties()),
       it->second->isPartitionDateValueDaysSinceEpoch());
   spec->setConstantValue(constant);
