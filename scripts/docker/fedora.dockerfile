@@ -20,11 +20,13 @@ FROM $base AS base-build
 
 COPY scripts/setup-helper-functions.sh /
 COPY scripts/setup-versions.sh /
+COPY scripts/setup-staging-versions.sh /
 COPY scripts/setup-common.sh /
 COPY scripts/setup-centos9.sh /
 COPY scripts/setup-fedora.sh /
 COPY CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch /
 
+ARG VELOX_STAGING
 ARG VELOX_BUILD_SHARED=ON
 # Building libvelox.so requires folly and gflags to be built shared as well for now
 ENV VELOX_BUILD_SHARED=${VELOX_BUILD_SHARED}
@@ -53,9 +55,12 @@ FROM $base AS fedora
 
 COPY scripts/setup-helper-functions.sh /
 COPY scripts/setup-versions.sh /
+COPY scripts/setup-staging-versions.sh /
 COPY scripts/setup-common.sh /
 COPY scripts/setup-centos9.sh /
 COPY scripts/setup-fedora.sh /
+
+ARG VELOX_STAGING
 
 # This way it's on the PATH and doesn't clash with the version installed in manylinux
 ENV UV_TOOL_BIN_DIR=/usr/local/bin \
