@@ -35,6 +35,10 @@ namespace facebook::velox::cudf_velox {
 /// Rank-like functions (row_number, rank, dense_rank) use
 /// cudf::groupby::scan with cudf::make_rank_aggregation.
 /// Aggregate windows and lag/lead use cudf::grouped_rolling_window.
+///
+/// Future enhancement (PR follow-up): full DECIMAL sort keys and rank/dense_rank
+/// tie-breaking aligned with DuckDB/Presto (e.g. FLOAT64 quantization or
+/// native fixed-point rank paths) when libcudf ordering differs from Velox.
 class CudfWindow : public exec::Operator, public NvtxHelper {
  public:
   CudfWindow(
@@ -64,13 +68,10 @@ class CudfWindow : public exec::Operator, public NvtxHelper {
       const core::WindowNode::Function& func) const;
 
   // Compute row_number/rank/dense_rank via cudf::groupby::scan.
-  // When rankTieKeyAsDouble, single-key rank/dense_rank uses FLOAT64 for
-  // libcudf tie resolution (small-window DECIMAL path; see getOutput()).
   std::unique_ptr<cudf::column> computeRankColumn(
       cudf::table_view const& sortedInput,
       const std::string& baseName,
-      rmm::cuda_stream_view stream,
-      bool rankTieKeyAsDouble) const;
+      rmm::cuda_stream_view stream) const;
 
   // Compute LAG or LEAD via cudf::grouped_rolling_window.
   std::unique_ptr<cudf::column> computeLeadLagColumn(

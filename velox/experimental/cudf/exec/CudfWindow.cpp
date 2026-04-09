@@ -29,7 +29,6 @@
 #include <cudf/copying.hpp>
 #include <cudf/detail/gather.hpp>
 #include <cudf/filling.hpp>
-#include <cudf/fixed_point/fixed_point.hpp>
 #include <cudf/groupby.hpp>
 #include <cudf/reduction.hpp>
 #include <cudf/rolling.hpp>
@@ -134,8 +133,8 @@ std::unique_ptr<cudf::column> materializeColumnSameType(
 // Normalize each incoming GPU batch to the WindowNode's logical row type so
 // libcudf::concatenate is well-defined. Invariant: every batch matches the
 // WindowNode input *Velox* row type. That does not guarantee identical libcudf
-// physical types across batches (e.g. DECIMAL64 vs DECIMAL128 for the same
-// logical DECIMAL, or Arrow import quirks); concatenate requires matching
+// physical types across batches (e.g. width/precision mismatches on fixed types
+// or Arrow import quirks); concatenate requires matching
 // cudf::data_type per column. When types already match, we only materialize
 // (gather) for a stable copy; variable-width columns must match exactly.
 std::unique_ptr<cudf::table> normalizeTableToInputRowType(
@@ -175,19 +174,6 @@ std::unique_ptr<cudf::table> normalizeTableToInputRowType(
   return std::make_unique<cudf::table>(std::move(cols));
 }
 
-// Match integration_tests/test_utils.none_safe_sort_key (floats rounded to 6
-// fractional digits) so global rank() matches DuckDB on TPC-DS Q44.
-std::unique_ptr<cudf::column> float64Quantize6Decimals(
-    cudf::column_view v,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
-  auto decType =
-      cudf::data_type{cudf::type_id::DECIMAL128, numeric::scale_type{-6}};
-  auto dec = cudf::cast(v, decType, stream, mr);
-  return cudf::cast(
-      dec->view(), cudf::data_type{cudf::type_id::FLOAT64}, stream, mr);
-}
-
 } // namespace
 
 cudf::column_view CudfWindow::multiSortKeyStructView(
@@ -214,30 +200,17 @@ cudf::column_view CudfWindow::multiSortKeyStructView(
 std::unique_ptr<cudf::column> CudfWindow::computeRankColumn(
     cudf::table_view const& sortedInput,
     const std::string& baseName,
-    rmm::cuda_stream_view stream,
-    bool rankTieKeyAsDouble) const {
+    rmm::cuda_stream_view stream) const {
   auto mr = get_output_mr();
   auto method = toRankMethod(baseName);
 
   // Build the "values" column for rank tie detection.
-  std::unique_ptr<cudf::column> doubleTieScratch;
   cudf::column_view valuesCol = [&]() -> cudf::column_view {
     if (sortKeyIndices_.empty()) {
       return sortedInput.column(0);
     }
     if (sortKeyIndices_.size() == 1 || baseName == "row_number") {
-      auto v = sortedInput.column(sortKeyIndices_[0]);
-      if (rankTieKeyAsDouble && sortKeyIndices_.size() == 1 &&
-          (baseName == "rank" || baseName == "dense_rank")) {
-        if (v.type().id() == cudf::type_id::FLOAT64) {
-          doubleTieScratch = float64Quantize6Decimals(v, stream, mr);
-        } else {
-          doubleTieScratch = cudf::cast(
-              v, cudf::data_type{cudf::type_id::FLOAT64}, stream, mr);
-        }
-        return doubleTieScratch->view();
-      }
-      return v;
+      return sortedInput.column(sortKeyIndices_[0]);
     }
     return multiSortKeyStructView(sortedInput);
   }();
@@ -249,7 +222,7 @@ std::unique_ptr<cudf::column> CudfWindow::computeRankColumn(
 
   if (partitionKeyIndices_.empty()) {
     // libcudf's unpartitioned rank scan (cudf::scan) can disagree with SQL
-    // engines on edge cases (TPC-DS Q44: 11 vs 10 rows vs DuckDB/Presto). Use
+    // engines on edge cases for global ordering. Use
     // the same groupby rank-scan path as non-empty partitions by ranking
     // within a synthetic single-key partition.
     auto const n = sortedInput.num_rows();
@@ -512,56 +485,14 @@ RowVectorPtr CudfWindow::getOutput() {
 
   auto allView = allData->view();
 
-  const auto& prefix = CudfConfig::getInstance().functionNamePrefix;
-  // DuckDB (integration reference) and libcudf can disagree on DECIMAL
-  // sort/rank ties, and Velox may plan rank_col as DOUBLE while DuckDB keeps
-  // DECIMAL. Re-sort on a FLOAT64 alignment key for small global rank() only
-  // (TPC-DS Q44); skip for very large unpartitioned inputs to limit peak memory.
-  constexpr cudf::size_type kMaxRowsDecimalFloatRankAlign = 131072;
-  bool decimalFloatRankHack = false;
-  std::unique_ptr<cudf::column> decimalRankSortScratch;
-  if (allView.num_rows() <= kMaxRowsDecimalFloatRankAlign &&
-      partitionKeyIndices_.empty() && sortKeyIndices_.size() == 1) {
-    auto skType = allView.column(sortKeyIndices_[0]).type();
-    if (cudf::is_fixed_point(skType) || skType.id() == cudf::type_id::FLOAT64) {
-      decimalFloatRankHack = true;
-      for (const auto& wf : windowNode_->windowFunctions()) {
-        auto b = stripFunctionPrefix(wf.functionCall->name(), prefix);
-        if (b != "rank" && b != "dense_rank") {
-          decimalFloatRankHack = false;
-          break;
-        }
-      }
-    }
-  }
-
-  // 1. Sort by partition keys + sort keys if not already sorted, or re-sort on
-  // FLOAT64 for small-window DECIMAL rank alignment (even if inputsSorted).
+  // 1. Sort by partition keys + sort keys if the plan is not already sorted.
   std::unique_ptr<cudf::table> sortedData;
   cudf::table_view sortedView;
 
-  if (!windowNode_->inputsSorted() || decimalFloatRankHack) {
+  if (!windowNode_->inputsSorted()) {
     std::vector<cudf::size_type> allSortKeys;
     std::vector<cudf::order> allOrders;
     std::vector<cudf::null_order> allNullOrders;
-
-    cudf::table_view sortSource = allView;
-    std::vector<cudf::column_view> augmentedCols;
-    if (decimalFloatRankHack) {
-      auto skCol = allView.column(sortKeyIndices_[0]);
-      if (cudf::is_fixed_point(skCol.type())) {
-        decimalRankSortScratch = cudf::cast(
-            skCol, cudf::data_type{cudf::type_id::FLOAT64}, stream, mr);
-      } else {
-        decimalRankSortScratch = float64Quantize6Decimals(skCol, stream, mr);
-      }
-      augmentedCols.reserve(allView.num_columns() + 1);
-      for (cudf::size_type c = 0; c < allView.num_columns(); ++c) {
-        augmentedCols.push_back(allView.column(c));
-      }
-      augmentedCols.push_back(decimalRankSortScratch->view());
-      sortSource = cudf::table_view(augmentedCols);
-    }
 
     for (auto idx : partitionKeyIndices_) {
       allSortKeys.push_back(idx);
@@ -569,15 +500,13 @@ RowVectorPtr CudfWindow::getOutput() {
       allNullOrders.push_back(cudf::null_order::BEFORE);
     }
     for (size_t i = 0; i < sortKeyIndices_.size(); ++i) {
-      allSortKeys.push_back(
-          decimalFloatRankHack && i == 0 ? allView.num_columns()
-                                         : sortKeyIndices_[i]);
+      allSortKeys.push_back(sortKeyIndices_[i]);
       allOrders.push_back(sortOrders_[i]);
       allNullOrders.push_back(nullOrders_[i]);
     }
 
     {
-      auto keyTable = sortSource.select(allSortKeys);
+      auto keyTable = allView.select(allSortKeys);
       auto indices = cudf::stable_sorted_order(
           keyTable, allOrders, allNullOrders, stream, mr);
       sortedData = cudf::detail::gather(
@@ -602,6 +531,7 @@ RowVectorPtr CudfWindow::getOutput() {
 
   // 3. Evaluate each window function and collect result columns.
   std::vector<std::unique_ptr<cudf::column>> windowResultCols;
+  const auto& prefix = CudfConfig::getInstance().functionNamePrefix;
 
   for (const auto& func : windowNode_->windowFunctions()) {
     const auto baseName =
@@ -609,8 +539,8 @@ RowVectorPtr CudfWindow::getOutput() {
 
     if (baseName == "row_number" || baseName == "rank" ||
         baseName == "dense_rank") {
-      windowResultCols.push_back(computeRankColumn(
-          sortedView, baseName, stream, decimalFloatRankHack));
+      windowResultCols.push_back(
+          computeRankColumn(sortedView, baseName, stream));
     } else if (baseName == "lag" || baseName == "lead") {
       auto inputColIdx = resolveInputColumn(func);
       auto inputCol = sortedView.column(inputColIdx);
