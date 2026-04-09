@@ -105,27 +105,27 @@ bool isRoaring32Cookie(std::string_view roaring32) {
 /// @param roaring32 String view over the serialized roaring32 data (>= 4
 /// bytes).
 /// @return A pair of {cookie, numContainers}.
-std::pair<uint32_t, uint32_t> parseRoaring32Cookie(std::string_view roaring32) {
-  VELOX_CHECK_GE(roaring32.size(), kCookieSize, "Roaring32 block too small");
+std::pair<uint32_t, uint32_t> parseRoaring32Cookie(std::string_view payload) {
+  VELOX_CHECK_GE(payload.size(), kCookieSize, "Roaring32 block too small");
 
   uint32_t cookie{0};
-  std::memcpy(&cookie, roaring32.data(), sizeof(uint32_t));
+  std::memcpy(&cookie, payload.data(), sizeof(uint32_t));
   if (cookie == kNoRunCookie) {
     uint32_t numContainers{0};
     std::memcpy(
-        &numContainers, roaring32.data() + sizeof(uint32_t), sizeof(uint32_t));
+        &numContainers, payload.data() + sizeof(uint32_t), sizeof(uint32_t));
     return {cookie, numContainers};
   }
   if ((cookie & kCookieMask) == kRunCookie) {
     return {cookie, (cookie >> 16) + 1};
   }
-  VELOX_FAIL("Invalid roaring32 cookie: {}", cookie);
+  VELOX_FAIL("Invalid 32-bit roaring bitmap cookie: {}", cookie);
 }
 
 /// Computes the total serialized block size for a block with no-run cookie
 /// (12346) by walking the key-card descriptors to sum up container data sizes.
 std::size_t noRunBlockSize(
-    std::string_view roaring32,
+    std::string_view payload,
     uint32_t numContainers,
     bool hasOffsets) {
   std::size_t hdr = kNoRunHeaderPrefix + numContainers * kKeyCardDescSize;
@@ -140,7 +140,7 @@ std::size_t noRunBlockSize(
         uint16_t cardMinus1;
         std::memcpy(
             &cardMinus1,
-            roaring32.data() + kNoRunHeaderPrefix + c * kKeyCardDescSize +
+            payload.data() + kNoRunHeaderPrefix + c * kKeyCardDescSize +
                 sizeof(uint16_t),
             sizeof(uint16_t));
         uint32_t card = static_cast<uint32_t>(cardMinus1) + 1;
@@ -152,7 +152,7 @@ std::size_t noRunBlockSize(
 
 /// Computes the total serialized block size for a block with run cookie (12347)
 /// by walking each container's run-length data.
-std::size_t runBlockSize(std::string_view roaring32, uint32_t numContainers) {
+std::size_t runBlockSize(std::string_view payload, uint32_t numContainers) {
   // Run bitmap follows the 4-byte cookie, one bit per container.
   std::size_t runBitmapSize = (numContainers + 7) / 8;
   std::size_t kcOffset = kCookieSize + runBitmapSize;
@@ -167,19 +167,19 @@ std::size_t runBlockSize(std::string_view roaring32, uint32_t numContainers) {
       std::size_t{hdr},
       [&](std::size_t acc, uint32_t c) {
         uint16_t numRuns;
-        std::memcpy(&numRuns, roaring32.data() + acc, kNumRunsSize);
+        std::memcpy(&numRuns, payload.data() + acc, kNumRunsSize);
         return acc + kNumRunsSize + numRuns * kRunPairSize;
       });
 }
 
 /// Computes the total serialized block size for a 32-bit roaring bitmap.
-std::size_t roaring32BlockSize(std::string_view roaring32) {
-  const auto [cookie, numContainers] = parseRoaring32Cookie(roaring32);
+std::size_t roaring32BlockSize(std::string_view payload) {
+  const auto [cookie, numContainers] = parseRoaring32Cookie(payload);
   if ((cookie & kCookieMask) == kRunCookie) {
-    return runBlockSize(roaring32, numContainers);
+    return runBlockSize(payload, numContainers);
   }
   return noRunBlockSize(
-      roaring32, numContainers, numContainers >= kNoOffsetThreshold);
+      payload, numContainers, numContainers >= kNoOffsetThreshold);
 }
 
 /// Checks whether the 32-bit roaring block is normalized for cuco.
@@ -187,9 +187,9 @@ std::size_t roaring32BlockSize(std::string_view roaring32) {
 ///     per the portable spec but cuco requires it; must inject dummy offsets.
 ///   - Run cookie (12347): cuco only accepts the no-run portable format;
 ///     must convert run-encoded containers to array/bitset containers.
-bool is32bitBitmapNormalized(std::string_view roaring32) {
+bool is32bitBitmapNormalized(std::string_view payload) {
   // Get the cookie and the number of containers
-  const auto [cookie, numContainers] = parseRoaring32Cookie(roaring32);
+  const auto [cookie, numContainers] = parseRoaring32Cookie(payload);
   if (cookie == kNoRunCookie) {
     return not(numContainers > 0 && numContainers < kNoOffsetThreshold);
   }
@@ -226,30 +226,33 @@ bool is64bitBitmapNormalized(std::string_view payload, uint64_t numKeys) {
 /// numContainers < kNoOffsetThreshold. The offset table is placed between
 /// the key-card descriptors and the container data.
 std::string injectNoRunOffsets(
-    std::string_view roaring32,
+    std::string_view payload,
     uint32_t numContainers) {
   std::size_t headerEnd = kNoRunHeaderPrefix + numContainers * kKeyCardDescSize;
   std::size_t offsetSectionSize = numContainers * kOffsetEntrySize;
   std::string out;
-  out.reserve(roaring32.size() + offsetSectionSize);
-  out.append(roaring32.data(), headerEnd);
+  out.reserve(payload.size() + offsetSectionSize);
+  out.append(payload.data(), headerEnd);
 
   // Compute cumulative offsets; base starts right after the injected offsets.
   uint32_t base = static_cast<uint32_t>(headerEnd + offsetSectionSize);
-  for (uint32_t c = 0; c < numContainers; ++c) {
-    out.append(reinterpret_cast<const char*>(&base), kOffsetEntrySize);
-    uint16_t cardMinus1;
-    std::memcpy(
-        &cardMinus1,
-        roaring32.data() + kNoRunHeaderPrefix + c * kKeyCardDescSize +
-            sizeof(uint16_t),
-        sizeof(uint16_t));
-    uint32_t card = static_cast<uint32_t>(cardMinus1) + 1;
-    base += (card <= kMaxArrayContainerCard) ? card * sizeof(uint16_t)
-                                             : kBitsetContainerBytes;
-  }
+  std::for_each(
+      cuda::counting_iterator<uint32_t>(0),
+      cuda::counting_iterator<uint32_t>(numContainers),
+      [&](auto container) {
+        out.append(reinterpret_cast<const char*>(&base), kOffsetEntrySize);
+        uint16_t cardMinus1;
+        std::memcpy(
+            &cardMinus1,
+            payload.data() + kNoRunHeaderPrefix + container * kKeyCardDescSize +
+                sizeof(uint16_t),
+            sizeof(uint16_t));
+        uint32_t card = static_cast<uint32_t>(cardMinus1) + 1;
+        base += (card <= kMaxArrayContainerCard) ? card * sizeof(uint16_t)
+                                                 : kBitsetContainerBytes;
+      });
 
-  out.append(roaring32.data() + headerEnd, roaring32.size() - headerEnd);
+  out.append(payload.data() + headerEnd, payload.size() - headerEnd);
   return out;
 }
 
@@ -261,7 +264,7 @@ std::string injectNoRunOffsets(
 /// (the `contains_run_container` device code exists but the host parser
 /// doesn't reach it), so we must convert to array format on the host.
 std::string convertRunToNoRun(
-    std::string_view roaring32,
+    std::string_view payload,
     uint32_t numContainers) {
   // In the run variant the key-card descriptors start after the cookie and
   // the per-container run bitmap.
@@ -276,31 +279,41 @@ std::string convertRunToNoRun(
 
   // Run data follows the key-card descriptors (and offsets, if present).
   std::size_t dataPos = kcOffset + numContainers * kKeyCardDescSize;
-  for (uint32_t c = 0; c < numContainers; ++c) {
-    uint16_t key;
-    std::memcpy(
-        &key,
-        roaring32.data() + kcOffset + c * kKeyCardDescSize,
-        sizeof(uint16_t));
-    containers[c].key = key;
+  std::for_each(
+      cuda::counting_iterator<uint32_t>(0),
+      cuda::counting_iterator<uint32_t>(numContainers),
+      [&](auto container) {
+        uint16_t key;
+        std::memcpy(
+            &key,
+            payload.data() + kcOffset + container * kKeyCardDescSize,
+            sizeof(uint16_t));
+        containers[container].key = key;
 
-    uint16_t numRuns;
-    std::memcpy(&numRuns, roaring32.data() + dataPos, kNumRunsSize);
-    dataPos += kNumRunsSize;
-    for (uint16_t rr = 0; rr < numRuns; ++rr) {
-      uint16_t start, lenMinus1;
-      std::memcpy(&start, roaring32.data() + dataPos, sizeof(uint16_t));
-      std::memcpy(
-          &lenMinus1,
-          roaring32.data() + dataPos + sizeof(uint16_t),
-          sizeof(uint16_t));
-      dataPos += kRunPairSize;
-      for (uint32_t v = start; v <= static_cast<uint32_t>(start) + lenMinus1;
-           ++v) {
-        containers[c].expandedValues.push_back(static_cast<uint16_t>(v));
-      }
-    }
-  }
+        uint16_t numRuns;
+        std::memcpy(&numRuns, payload.data() + dataPos, kNumRunsSize);
+        dataPos += kNumRunsSize;
+        std::for_each(
+            cuda::counting_iterator<uint16_t>(0),
+            cuda::counting_iterator<uint16_t>(numRuns),
+            [&](uint16_t) {
+              uint16_t start, lenMinus1;
+              std::memcpy(&start, payload.data() + dataPos, sizeof(uint16_t));
+              std::memcpy(
+                  &lenMinus1,
+                  payload.data() + dataPos + sizeof(uint16_t),
+                  sizeof(uint16_t));
+              dataPos += kRunPairSize;
+              auto& vals = containers[container].expandedValues;
+              std::for_each(
+                  cuda::counting_iterator<uint32_t>(start),
+                  cuda::counting_iterator<uint32_t>(
+                      static_cast<uint32_t>(start) + lenMinus1 + 1),
+                  [&](uint32_t v) {
+                    vals.push_back(static_cast<uint16_t>(v));
+                  });
+            });
+      });
 
   // Emit a no-run portable block with offsets always included.
   std::string out;
@@ -334,48 +347,52 @@ std::string convertRunToNoRun(
 }
 
 /// Normalizes a single 32 bit roaring bitmap for cuco.
-std::string normalizeRoaring32(std::string_view data) {
-  const auto [cookie, numContainers] = parseRoaring32Cookie(data);
+std::string normalizeRoaring32(std::string_view payload) {
+  const auto [cookie, numContainers] = parseRoaring32Cookie(payload);
   if ((cookie & kCookieMask) == kRunCookie) {
-    return convertRunToNoRun(data, numContainers);
+    return convertRunToNoRun(payload, numContainers);
   }
-  std::size_t blockSize = noRunBlockSize(data, numContainers, false);
-  return injectNoRunOffsets(data.substr(0, blockSize), numContainers);
+  std::size_t blockSize = noRunBlockSize(payload, numContainers, false);
+  return injectNoRunOffsets(payload.substr(0, blockSize), numContainers);
 }
 
-/// Walks the Roaring64 portable payload and normalizes each Roaring32 bucket
-/// for cuco.
-std::string normalizeRoaring64(std::string_view data) {
-  VELOX_CHECK_GE(data.size(), sizeof(uint64_t), "Roaring64 payload too small");
-
-  uint64_t numKeys;
-  std::memcpy(&numKeys, data.data(), sizeof(uint64_t));
-
+/// Walks the 64 bit roaring bitmap payload and normalizes each 32 bit
+/// roaring bitmap bucket for cuco.
+std::string normalizeRoaring64(std::string_view payload, uint64_t numKeys) {
   std::string normalized;
-  normalized.reserve(data.size() + numKeys * 16);
-  normalized.append(data.data(), sizeof(uint64_t));
+  normalized.reserve(payload.size() + numKeys * 16);
+  normalized.append(payload.data(), sizeof(uint64_t));
   std::size_t pos = sizeof(uint64_t);
 
-  for (uint64_t b = 0; b < numKeys && pos + 4 <= data.size(); ++b) {
-    normalized.append(data.data() + pos, kCookieSize);
-    pos += kCookieSize;
+  std::for_each(
+      cuda::counting_iterator<uint64_t>(0),
+      cuda::counting_iterator<uint64_t>(numKeys),
+      [&](uint64_t) {
+        // Skip over the key (4 bytes)
+        if (pos + sizeof(uint32_t) > payload.size()) {
+          return;
+        }
+        // Append the cookie
+        normalized.append(payload.data() + pos, kCookieSize);
+        pos += kCookieSize;
 
-    if (pos + 4 > data.size()) {
-      normalized.append(data.data() + pos, data.size() - pos);
-      break;
-    }
+        // TODO(mh): Append the remaining data if less than 4 bytes are left.
+        // Should we throw here instead?
+        if (pos + sizeof(uint32_t) > payload.size()) {
+          normalized.append(payload.data() + pos, payload.size() - pos);
+          return;
+        }
 
-    auto roaring32view = data.substr(pos);
-    std::size_t roaring32Total = roaring32BlockSize(roaring32view);
-
-    if (is32bitBitmapNormalized(roaring32view)) {
-      normalized.append(roaring32view.data(), roaring32Total);
-    } else {
-      normalized.append(
-          normalizeRoaring32(roaring32view.substr(0, roaring32Total)));
-    }
-    pos += roaring32Total;
-  }
+        auto payload32 = payload.substr(pos);
+        const auto blockSize = roaring32BlockSize(payload32);
+        // Append the 32 bit roaring bitmap
+        if (is32bitBitmapNormalized(payload32)) {
+          normalized.append(payload32.data(), blockSize);
+        } else {
+          normalized.append(normalizeRoaring32(payload32.substr(0, blockSize)));
+        }
+        pos += blockSize;
+      });
 
   return normalized;
 }
@@ -595,7 +612,7 @@ void CudfDeletionVectorReader::loadBitmap(rmm::cuda_stream_view stream) {
     if (is64bitBitmapNormalized(payload, numKeys)) {
       buildBitmap<BitmapType::k64Bit>(payload, stream);
     } else {
-      auto normalizedPayload = normalizeRoaring64(payload);
+      auto normalizedPayload = normalizeRoaring64(payload, numKeys);
       buildBitmap<BitmapType::k64Bit>(normalizedPayload, stream);
     }
   }
