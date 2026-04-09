@@ -648,6 +648,7 @@ jobs:
       CCACHE_DIR: ${{ github.workspace }}/ccache
     outputs:
       build-outcome: ${{ steps.build.outcome }}
+      build-failure-details: ${{ steps.build-errors.outputs.build-failure-details }}
     defaults:
       run:
         shell: bash
@@ -715,7 +716,20 @@ jobs:
           uv tool install --force cmake@3.31.1
           dnf install -y -q --setopt=install_weak_deps=False grpc-devel grpc-plugins
           export EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_ENABLE_FAISS=ON"
-          make debug
+          make debug 2>&1 | tee /tmp/build-output.log
+
+      - name: Extract build errors
+        id: build-errors
+        if: failure() && steps.build.outcome == 'failure'
+        run: |
+          BUILD_ERRORS=$(grep -E '^.*:(error|fatal error):' /tmp/build-output.log | head -50 || true)
+          if [[ -n $BUILD_ERRORS ]]; then
+            {
+              echo 'build-failure-details<<EOF'
+              echo "$BUILD_ERRORS"
+              echo 'EOF'
+            } >> "$GITHUB_OUTPUT"
+          fi
 
       - name: CCache after
         run: |
@@ -732,31 +746,22 @@ jobs:
     runs-on: ubuntu-latest
     name: "BUILD: Fedora debug"
     steps:
-      - run: |
-          if [[ -z "$BUILD_OUTCOME" || "$BUILD_OUTCOME" == "cancelled" ]]; then
-            echo "Build was cancelled (likely superseded by a newer push). Skipping."
-            exit 0
-          fi
-          if [[ "$BUILD_OUTCOME" != "success" ]]; then
-            echo "::error::Fedora debug build failed. Do not land this PR until the build is fixed."
-            exit 1
-          fi
-          echo "Build succeeded."
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: Report build status
+        run: .github/scripts/report-build-status.sh "Fedora debug"
         env:
           BUILD_OUTCOME: ${{ needs.fedora-debug.outputs.build-outcome }}
+          BUILD_FAILURE_DETAILS: ${{ needs.fedora-debug.outputs.build-failure-details }}
 
-      - name: Upload build failure artifact
-        if: failure()
-        run: |
-          mkdir -p /tmp/ci-failure
-          cat > /tmp/ci-failure/failure.json <<'EOF'
-          {"job": "Fedora debug", "type": "build"}
-          EOF
-
-      - name: Upload failure comment artifact
+      - name: Upload failure artifact
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ci-failure-fedora-build
           path: /tmp/ci-failure/failure.json
           retention-days: 1
+          if-no-files-found: ignore
