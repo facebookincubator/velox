@@ -92,6 +92,10 @@ class HiveColumnHandle : public FileColumnHandle {
     return hiveType_;
   }
 
+  const TypePtr& schemaType() const override {
+    return hiveType();
+  }
+
   /// Applies to columns of complex types: arrays, maps and structs.  When a
   /// query uses only some of the subfields, the engine provides the complete
   /// list of required subfields and the connector is free to prune the rest.
