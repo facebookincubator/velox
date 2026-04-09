@@ -84,6 +84,25 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     GTest::gtest_main
   )
 
+  add_executable(
+    velox_hive_iceberg_deletion_vector_test
+    DeletionVectorReaderTest.cpp
+  )
+  add_test(
+    velox_hive_iceberg_deletion_vector_test
+    velox_hive_iceberg_deletion_vector_test
+  )
+
+  target_link_libraries(
+    velox_hive_iceberg_deletion_vector_test
+    velox_hive_connector
+    velox_hive_iceberg_splitreader
+    velox_exec_test_lib
+    velox_dwio_common_test_utils
+    GTest::gtest
+    GTest::gtest_main
+  )
+
   if(VELOX_ENABLE_PARQUET)
     target_link_libraries(velox_hive_iceberg_test velox_dwio_parquet_reader)
 
@@ -95,4 +114,65 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
       velox_dwio_parquet_writer
     )
   endif()
+
+  add_executable(
+    velox_hive_iceberg_equality_delete_test
+    EqualityDeleteFileReaderTest.cpp
+  )
+  add_test(
+    velox_hive_iceberg_equality_delete_test
+    velox_hive_iceberg_equality_delete_test
+  )
+
+  target_link_libraries(
+    velox_hive_iceberg_equality_delete_test
+    velox_hive_connector
+    velox_hive_iceberg_splitreader
+    velox_exec_test_lib
+    velox_dwio_common_test_utils
+    GTest::gtest
+    GTest::gtest_main
+  )
+
+  add_executable(
+    velox_hive_iceberg_deletion_vector_writer_test
+    DeletionVectorWriterTest.cpp
+  )
+  add_test(
+    velox_hive_iceberg_deletion_vector_writer_test
+    velox_hive_iceberg_deletion_vector_writer_test
+  )
+
+  target_link_libraries(
+    velox_hive_iceberg_deletion_vector_writer_test
+    velox_hive_connector
+    velox_hive_iceberg_splitreader
+    velox_exec_test_lib
+    velox_dwio_common_test_utils
+    GTest::gtest
+    GTest::gtest_main
+  )
+
+  add_executable(
+    velox_hive_iceberg_dwrf_insert_test
+    IcebergDwrfInsertTest.cpp
+    IcebergTestBase.cpp
+    Main.cpp
+  )
+  add_test(
+    velox_hive_iceberg_dwrf_insert_test
+    velox_hive_iceberg_dwrf_insert_test
+  )
+
+  target_link_libraries(
+    velox_hive_iceberg_dwrf_insert_test
+    velox_hive_connector
+    velox_hive_iceberg_splitreader
+    velox_exec_test_lib
+    velox_dwio_common_test_utils
+    velox_dwio_dwrf_reader
+    velox_dwio_dwrf_writer
+    GTest::gtest
+    GTest::gtest_main
+  )
 endif()

@@ -133,10 +133,12 @@ IcebergInsertTableHandle::IcebergInsertTableHandle(
       "Input columns cannot be empty for Iceberg tables.");
   VELOX_USER_CHECK_NOT_NULL(
       locationHandle_, "Location handle is required for Iceberg tables.");
-  VELOX_USER_CHECK_EQ(
-      tableStorageFormat,
-      dwio::common::FileFormat::PARQUET,
-      "Only Parquet file format is supported when writing Iceberg tables.");
+  VELOX_USER_CHECK(
+      tableStorageFormat == dwio::common::FileFormat::PARQUET ||
+          tableStorageFormat == dwio::common::FileFormat::DWRF ||
+          tableStorageFormat == dwio::common::FileFormat::ORC,
+      "Unsupported file format for writing Iceberg tables: {}",
+      dwio::common::toString(tableStorageFormat));
 }
 
 namespace {
@@ -333,7 +335,11 @@ std::vector<std::string> IcebergDataSink::commitMessage() const {
         ("partitionSpecJson",
           icebergInsertTableHandle->partitionSpec() ?
             icebergInsertTableHandle->partitionSpec()->specId : 0)
-        ("fileFormat", "PARQUET")
+        ("fileFormat",
+          icebergInsertTableHandle->storageFormat() ==
+              dwio::common::FileFormat::PARQUET
+            ? "PARQUET"
+            : "ORC")
         ("content", "DATA");
       // clang-format on
       if (!commitPartitionValue_.empty() &&
@@ -377,7 +383,7 @@ std::string IcebergDataSink::getPartitionName(uint32_t partitionId) const {
 
 uint32_t IcebergDataSink::ensureWriter(const HiveWriterId& id) {
   auto writerId = HiveDataSink::ensureWriter(id);
-  if (commitPartitionValue_[writerId].isNull()) {
+  if (isPartitioned() && commitPartitionValue_[writerId].isNull()) {
     commitPartitionValue_[writerId] = makeCommitPartitionValue(writerId);
   }
   return writerId;
@@ -388,17 +394,39 @@ IcebergDataSink::createWriterOptions() const {
   auto options = HiveDataSink::createWriterOptions();
   // Per Iceberg specification (https://iceberg.apache.org/spec/#parquet):
   // - Timestamps must be stored with microsecond precision.
-  // - Timestamps must NOT be adjusted to UTC timezone; they should be written
-  //   as-is without timezone conversion (empty string disables conversion).
-  //
-  // These settings are passed via serdeParameters to avoid including
-  // parquet-specific headers. The keys must match kParquetSerdeTimestampUnit
-  // and kParquetSerdeTimestampTimezone defined in
-  // velox/dwio/parquet/writer/Writer.h. The value "6" represents microseconds
-  // (TimestampPrecision::kMicroseconds).
+  // - Timestamps must NOT be adjusted to UTC timezone.
   options->serdeParameters["parquet.writer.timestamp.unit"] = "6";
   options->serdeParameters["parquet.writer.timestamp.timezone"] = "";
-  // Re-process configs to apply the serde parameters we just set.
+
+#ifdef VELOX_ENABLE_PARQUET
+  // Inject Parquet field IDs from Iceberg column handles for schema evolution.
+  // Iceberg identifies columns by field ID, not by name or position. Without
+  // field IDs in the Parquet schema, readers cannot correctly match columns
+  // after schema changes (add/drop/rename).
+  auto icebergInsertTableHandle =
+      std::dynamic_pointer_cast<const IcebergInsertTableHandle>(
+          insertTableHandle_);
+  if (icebergInsertTableHandle &&
+      icebergInsertTableHandle->storageFormat() ==
+          dwio::common::FileFormat::PARQUET) {
+    auto parquetOptions =
+        std::dynamic_pointer_cast<parquet::WriterOptions>(options);
+    if (parquetOptions) {
+      std::vector<parquet::ParquetFieldId> fieldIds;
+      for (const auto& column : icebergInsertTableHandle->inputColumns()) {
+        auto icebergColumn =
+            std::dynamic_pointer_cast<const IcebergColumnHandle>(column);
+        if (icebergColumn) {
+          fieldIds.push_back(icebergColumn->field());
+        }
+      }
+      if (!fieldIds.empty()) {
+        parquetOptions->parquetFieldIds = std::move(fieldIds);
+      }
+    }
+  }
+#endif
+
   options->processConfigs(
       *hiveConfig_->config(), *connectorQueryCtx_->sessionProperties());
   return options;
