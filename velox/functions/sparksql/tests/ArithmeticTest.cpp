@@ -16,6 +16,8 @@
 #include <cstdint>
 #include <limits>
 
+#include <folly/ScopeGuard.h>
+
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
@@ -843,6 +845,11 @@ TEST_F(ArithmeticTest, absMinValueOverflow) {
 }
 
 TEST_F(SparkFunctionBaseTest, IntervalDayTimeUnaryMinusAnsi) {
+  auto guard = folly::makeGuard([&] {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+  });
+
   queryCtx_->testingOverrideConfigUnsafe(
       {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
 
@@ -878,6 +885,11 @@ TEST_F(SparkFunctionBaseTest, IntervalDayTimeUnaryMinusAnsi) {
 }
 
 TEST_F(SparkFunctionBaseTest, IntervalYearMonthUnaryMinusAnsi) {
+  auto guard = folly::makeGuard([&] {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+  });
+
   queryCtx_->testingOverrideConfigUnsafe(
       {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
 
@@ -913,6 +925,11 @@ TEST_F(SparkFunctionBaseTest, IntervalYearMonthUnaryMinusAnsi) {
 }
 
 TEST_F(SparkFunctionBaseTest, IntervalDayTimeAddAnsi) {
+  auto guard = folly::makeGuard([&] {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+  });
+
   queryCtx_->testingOverrideConfigUnsafe(
       {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
 
@@ -959,6 +976,11 @@ TEST_F(SparkFunctionBaseTest, IntervalDayTimeAddAnsi) {
 }
 
 TEST_F(SparkFunctionBaseTest, IntervalYearMonthAddAnsi) {
+  auto guard = folly::makeGuard([&] {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+  });
+
   queryCtx_->testingOverrideConfigUnsafe(
       {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
 
@@ -998,6 +1020,11 @@ TEST_F(SparkFunctionBaseTest, IntervalYearMonthAddAnsi) {
 }
 
 TEST_F(SparkFunctionBaseTest, IntervalDayTimeSubtractAnsi) {
+  auto guard = folly::makeGuard([&] {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+  });
+
   queryCtx_->testingOverrideConfigUnsafe(
       {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
 
@@ -1044,6 +1071,11 @@ TEST_F(SparkFunctionBaseTest, IntervalDayTimeSubtractAnsi) {
 }
 
 TEST_F(SparkFunctionBaseTest, IntervalYearMonthSubtractAnsi) {
+  auto guard = folly::makeGuard([&] {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+  });
+
   queryCtx_->testingOverrideConfigUnsafe(
       {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
 
