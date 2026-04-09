@@ -32,6 +32,7 @@ typedef binary IOBuf
 enum PageFormat {
   PRESTO_PAGE = 1,
   SPARK_UNSAFE_ROW = 2,
+  ARROW_IPC = 3,
 }
 
 /// Identifies the remote function being called.

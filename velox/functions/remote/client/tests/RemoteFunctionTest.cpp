@@ -36,6 +36,7 @@
 #include "velox/functions/remote/server/RemoteFunctionService.h"
 #include "velox/functions/remote/utils/RemoteFunctionServiceProvider.h"
 #include "velox/serializers/PrestoSerializer.h"
+#include "velox/type/StringView.h"
 #include "velox/vector/VectorStream.h"
 
 using ::apache::thrift::ThriftServer;
@@ -229,10 +230,8 @@ TEST_P(RemoteFunctionTest, tryErrorCode) {
 }
 
 TEST_P(RemoteFunctionTest, opaque) {
-  // TODO: Support opaque type serialization in SPARK_UNSAFE_ROW
-  if (GetParam() == remote::PageFormat::SPARK_UNSAFE_ROW) {
-    LOG(WARNING)
-        << "opaque type serialization not supported in SPARK_UNSAFE_ROW";
+  // Opaque type serialization not supported in SPARK_UNSAFE_ROW or ARROW_IPC.
+  if (GetParam() != remote::PageFormat::PRESTO_PAGE) {
     return;
   }
   auto inputVector = makeFlatVector<std::shared_ptr<void>>(
@@ -265,6 +264,134 @@ TEST_P(RemoteFunctionTest, connectionError) {
   } catch (const VeloxRuntimeError& e) {
     EXPECT_THAT(e.message(), testing::HasSubstr("Channel is !good()"));
   }
+}
+
+// Arrow IPC-specific tests that exercise type coverage and edge cases beyond
+// the parameterized suite. These use TEST_P but skip non-ARROW_IPC formats.
+TEST_P(RemoteFunctionTest, arrowIpcNullsInBigint) {
+  if (GetParam() != remote::PageFormat::ARROW_IPC) {
+    return;
+  }
+  auto inputVector =
+      makeNullableFlatVector<int64_t>({1, std::nullopt, 3, std::nullopt, 5});
+  auto results = evaluate<SimpleVector<int64_t>>(
+      "remote_plus(c0, c0)", makeRowVector({inputVector}));
+
+  auto expected =
+      makeNullableFlatVector<int64_t>({2, std::nullopt, 6, std::nullopt, 10});
+  assertEqualVectors(expected, results);
+}
+
+TEST_P(RemoteFunctionTest, arrowIpcNullsInDouble) {
+  if (GetParam() != remote::PageFormat::ARROW_IPC) {
+    return;
+  }
+  auto numerator =
+      makeNullableFlatVector<double>({1.0, std::nullopt, 9.0, 16.0});
+  auto denominator = makeNullableFlatVector<double>({1.0, 2.0, 3.0, 4.0});
+  auto results = evaluate<SimpleVector<double>>(
+      "remote_divide(c0, c1)", makeRowVector({numerator, denominator}));
+
+  auto expected = makeNullableFlatVector<double>({1.0, std::nullopt, 3.0, 4.0});
+  assertEqualVectors(expected, results);
+}
+
+TEST_P(RemoteFunctionTest, arrowIpcNullsInString) {
+  if (GetParam() != remote::PageFormat::ARROW_IPC) {
+    return;
+  }
+  auto inputStr = makeNullableFlatVector<StringView>(
+      {"hello"_sv, std::nullopt, "world"_sv, std::nullopt});
+  auto inputPos = makeNullableFlatVector<int32_t>({2, 1, 3, 1});
+  auto results = evaluate<SimpleVector<StringView>>(
+      "remote_substr(c0, c1)", makeRowVector({inputStr, inputPos}));
+
+  auto expected = makeNullableFlatVector<StringView>(
+      {"ello"_sv, std::nullopt, "rld"_sv, std::nullopt});
+  assertEqualVectors(expected, results);
+}
+
+TEST_P(RemoteFunctionTest, arrowIpcLargeBatch) {
+  if (GetParam() != remote::PageFormat::ARROW_IPC) {
+    return;
+  }
+  constexpr int kSize = 10'000;
+  std::vector<int64_t> values(kSize);
+  std::iota(values.begin(), values.end(), 0);
+
+  auto inputVector = makeFlatVector<int64_t>(values);
+  auto results = evaluate<SimpleVector<int64_t>>(
+      "remote_plus(c0, c0)", makeRowVector({inputVector}));
+
+  std::vector<int64_t> expectedValues(kSize);
+  for (int i = 0; i < kSize; i++) {
+    expectedValues[i] = values[i] * 2;
+  }
+  auto expected = makeFlatVector<int64_t>(expectedValues);
+  assertEqualVectors(expected, results);
+}
+
+TEST_P(RemoteFunctionTest, arrowIpcAllNulls) {
+  if (GetParam() != remote::PageFormat::ARROW_IPC) {
+    return;
+  }
+  auto inputVector = makeNullableFlatVector<int64_t>(
+      {std::nullopt, std::nullopt, std::nullopt});
+  auto results = evaluate<SimpleVector<int64_t>>(
+      "remote_plus(c0, c0)", makeRowVector({inputVector}));
+
+  auto expected = makeNullableFlatVector<int64_t>(
+      {std::nullopt, std::nullopt, std::nullopt});
+  assertEqualVectors(expected, results);
+}
+
+TEST_P(RemoteFunctionTest, arrowIpcMixedNullsAcrossColumns) {
+  if (GetParam() != remote::PageFormat::ARROW_IPC) {
+    return;
+  }
+  // Column a has nulls at positions 1,3; column b has nulls at positions 0,2.
+  auto colA =
+      makeNullableFlatVector<int64_t>({1, std::nullopt, 3, std::nullopt});
+  auto colB =
+      makeNullableFlatVector<int64_t>({std::nullopt, 20, std::nullopt, 40});
+  auto results = evaluate<SimpleVector<int64_t>>(
+      "remote_plus(c0, c1)", makeRowVector({colA, colB}));
+
+  // plus propagates nulls: null if either input is null.
+  auto expected = makeNullableFlatVector<int64_t>(
+      {std::nullopt, std::nullopt, std::nullopt, std::nullopt});
+  assertEqualVectors(expected, results);
+}
+
+TEST_P(RemoteFunctionTest, arrowIpcLongStrings) {
+  if (GetParam() != remote::PageFormat::ARROW_IPC) {
+    return;
+  }
+  // Strings longer than 12 bytes (non-inline in Velox StringView).
+  const std::string longStr(256, 'x');
+  const std::string longerStr(4'096, 'y');
+  auto inputStr = makeFlatVector<StringView>(
+      {StringView(longStr), StringView(longerStr), "short"_sv});
+  auto inputPos = makeFlatVector<int32_t>({1, 1, 1});
+  auto results = evaluate<SimpleVector<StringView>>(
+      "remote_substr(c0, c1)", makeRowVector({inputStr, inputPos}));
+
+  // substr(s, 1) returns the full string.
+  auto expected = makeFlatVector<StringView>(
+      {StringView(longStr), StringView(longerStr), "short"_sv});
+  assertEqualVectors(expected, results);
+}
+
+TEST_P(RemoteFunctionTest, arrowIpcSingleRow) {
+  if (GetParam() != remote::PageFormat::ARROW_IPC) {
+    return;
+  }
+  auto inputVector = makeFlatVector<int64_t>({42});
+  auto results = evaluate<SimpleVector<int64_t>>(
+      "remote_plus(c0, c0)", makeRowVector({inputVector}));
+
+  auto expected = makeFlatVector<int64_t>({84});
+  assertEqualVectors(expected, results);
 }
 
 /// Mock implementation of IRemoteFunctionClient for testing without a real
@@ -498,7 +625,8 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     RemoteFunctionTest,
     ::testing::Values(
         remote::PageFormat::PRESTO_PAGE,
-        remote::PageFormat::SPARK_UNSAFE_ROW));
+        remote::PageFormat::SPARK_UNSAFE_ROW,
+        remote::PageFormat::ARROW_IPC));
 
 } // namespace
 } // namespace facebook::velox::functions
