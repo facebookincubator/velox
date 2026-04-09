@@ -965,6 +965,14 @@ void copyIntoFlatMapImmutable(
   auto* targetFlatMap = target->asUnchecked<FlatMapVector>();
 
   auto mapValues = targetFlatMap->mapValues();
+  for (auto& mv : mapValues) {
+    if (mv && mv->size() < size) {
+      auto resized = BaseVector::createEmptyLike(mv.get(), size, options.pool);
+      BaseVector::CopyRange copyRange{0, 0, mv->size()};
+      copyImpl(options, mv, {&copyRange, 1}, resized, true);
+      mv = std::move(resized);
+    }
+  }
   std::vector<BufferPtr> inMaps(targetFlatMap->inMaps().size());
   for (size_t i = 0; i < targetFlatMap->inMaps().size(); ++i) {
     if (targetFlatMap->inMaps()[i]) {
