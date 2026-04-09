@@ -226,6 +226,118 @@ class AggregateCallExpr : public CallExpr {
   const std::vector<SortKey> orderBy_;
 };
 
+/// Window function call with partition keys, ordering, frame, and ignore nulls.
+/// Extends CallExpr so it can be used anywhere a CallExpr is expected (e.g.,
+/// type resolution). Carries window specifications as part of the IExpr tree.
+class WindowCallExpr : public CallExpr {
+ public:
+  enum class WindowType { kRange, kRows, kGroups };
+
+  enum class BoundType {
+    kUnboundedPreceding,
+    kPreceding,
+    kCurrentRow,
+    kFollowing,
+    kUnboundedFollowing,
+  };
+
+  struct Frame {
+    WindowType type;
+    BoundType startType;
+    ExprPtr startValue;
+    BoundType endType;
+    ExprPtr endValue;
+  };
+
+  WindowCallExpr(
+      std::string name,
+      std::vector<ExprPtr> args,
+      std::vector<ExprPtr> partitionKeys,
+      std::vector<SortKey> orderByKeys,
+      std::optional<Frame> frame,
+      bool ignoreNulls,
+      std::optional<std::string> alias = std::nullopt)
+      : CallExpr(
+            IExpr::Kind::kWindow,
+            std::move(name),
+            std::move(args),
+            std::move(alias)),
+        partitionKeys_(std::move(partitionKeys)),
+        orderByKeys_(std::move(orderByKeys)),
+        frame_(std::move(frame)),
+        ignoreNulls_(ignoreNulls) {}
+
+  const std::vector<ExprPtr>& partitionKeys() const {
+    return partitionKeys_;
+  }
+
+  const std::vector<SortKey>& orderByKeys() const {
+    return orderByKeys_;
+  }
+
+  const std::optional<Frame>& frame() const {
+    return frame_;
+  }
+
+  bool isIgnoreNulls() const {
+    return ignoreNulls_;
+  }
+
+  std::string toString() const override;
+
+  ExprPtr replaceInputs(std::vector<ExprPtr> newInputs) const override {
+    VELOX_CHECK(
+        partitionKeys_.empty(),
+        "Cannot replace inputs on WindowCallExpr with partitionKeys");
+    VELOX_CHECK(
+        orderByKeys_.empty(),
+        "Cannot replace inputs on WindowCallExpr with orderByKeys");
+    return std::make_shared<WindowCallExpr>(
+        name(),
+        std::move(newInputs),
+        partitionKeys_,
+        orderByKeys_,
+        frame_,
+        ignoreNulls_,
+        alias());
+  }
+
+  ExprPtr withAlias(const std::string& alias) const override {
+    return std::make_shared<WindowCallExpr>(
+        name(),
+        inputs(),
+        partitionKeys_,
+        orderByKeys_,
+        frame_,
+        ignoreNulls_,
+        alias);
+  }
+
+  ExprPtr dropAlias() const final {
+    return std::make_shared<WindowCallExpr>(
+        name(),
+        inputs(),
+        partitionKeys_,
+        orderByKeys_,
+        frame_,
+        ignoreNulls_,
+        std::nullopt);
+  }
+
+  bool operator==(const IExpr& other) const override;
+
+  VELOX_DEFINE_CLASS_NAME(WindowCallExpr)
+
+ protected:
+  size_t localHash() const override;
+
+ private:
+  const std::vector<ExprPtr> partitionKeys_;
+  const std::vector<SortKey> orderByKeys_;
+  const std::optional<Frame> frame_;
+  const bool ignoreNulls_;
+};
+
 class ConstantExpr : public IExpr,
                      public std::enable_shared_from_this<ConstantExpr> {
  public:

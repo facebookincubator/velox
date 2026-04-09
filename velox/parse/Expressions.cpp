@@ -28,6 +28,7 @@ const auto& kindNames() {
       {IExpr::Kind::kLambda, "Lambda"},
       {IExpr::Kind::kSubquery, "Subquery"},
       {IExpr::Kind::kAggregate, "Aggregate"},
+      {IExpr::Kind::kWindow, "Window"},
   };
   return kNames;
 }
@@ -164,6 +165,176 @@ std::string AggregateCallExpr::toString() const {
       out << (orderBy_[i].nullsFirst ? " NULLS FIRST" : " NULLS LAST");
     }
   }
+  return appendAliasIfExists(out.str());
+}
+
+bool WindowCallExpr::operator==(const IExpr& other) const {
+  if (!other.is(Kind::kWindow)) {
+    return false;
+  }
+
+  auto* otherWin = other.as<WindowCallExpr>();
+  if (name() != otherWin->name() || ignoreNulls_ != otherWin->ignoreNulls_) {
+    return false;
+  }
+
+  // Compare partition keys.
+  if (partitionKeys_.size() != otherWin->partitionKeys_.size()) {
+    return false;
+  }
+  for (size_t i = 0; i < partitionKeys_.size(); ++i) {
+    if (*partitionKeys_[i] != *otherWin->partitionKeys_[i]) {
+      return false;
+    }
+  }
+
+  // Compare order by keys.
+  if (orderByKeys_.size() != otherWin->orderByKeys_.size()) {
+    return false;
+  }
+  for (size_t i = 0; i < orderByKeys_.size(); ++i) {
+    if (orderByKeys_[i].ascending != otherWin->orderByKeys_[i].ascending ||
+        orderByKeys_[i].nullsFirst != otherWin->orderByKeys_[i].nullsFirst ||
+        *orderByKeys_[i].expr != *otherWin->orderByKeys_[i].expr) {
+      return false;
+    }
+  }
+
+  // Compare frame.
+  if (frame_.has_value() != otherWin->frame_.has_value()) {
+    return false;
+  }
+  if (frame_.has_value()) {
+    const auto& frame = frame_.value();
+    const auto& otherFrame = otherWin->frame_.value();
+    if (frame.type != otherFrame.type ||
+        frame.startType != otherFrame.startType ||
+        frame.endType != otherFrame.endType) {
+      return false;
+    }
+    if ((frame.startValue == nullptr) != (otherFrame.startValue == nullptr)) {
+      return false;
+    }
+    if (frame.startValue != nullptr &&
+        *frame.startValue != *otherFrame.startValue) {
+      return false;
+    }
+    if ((frame.endValue == nullptr) != (otherFrame.endValue == nullptr)) {
+      return false;
+    }
+    if (frame.endValue != nullptr && *frame.endValue != *otherFrame.endValue) {
+      return false;
+    }
+  }
+
+  return compareAliasAndInputs(other);
+}
+
+size_t WindowCallExpr::localHash() const {
+  auto hash = std::hash<std::string>{}(name());
+  hash = bits::hashMix(hash, std::hash<bool>{}(ignoreNulls_));
+  for (const auto& key : partitionKeys_) {
+    hash = bits::hashMix(hash, key->hash());
+  }
+  for (const auto& key : orderByKeys_) {
+    hash = bits::hashMix(hash, key.expr->hash());
+    hash = bits::hashMix(hash, std::hash<bool>{}(key.ascending));
+    hash = bits::hashMix(hash, std::hash<bool>{}(key.nullsFirst));
+  }
+  if (frame_.has_value()) {
+    hash =
+        bits::hashMix(hash, std::hash<int>{}(static_cast<int>(frame_->type)));
+    hash = bits::hashMix(
+        hash, std::hash<int>{}(static_cast<int>(frame_->startType)));
+    hash = bits::hashMix(
+        hash, std::hash<int>{}(static_cast<int>(frame_->endType)));
+  }
+  return hash;
+}
+
+std::string WindowCallExpr::toString() const {
+  std::ostringstream out;
+  out << name() << "(";
+  for (size_t i = 0; i < inputs().size(); ++i) {
+    if (i > 0) {
+      out << ",";
+    }
+    out << inputs()[i]->toString();
+  }
+  out << ") OVER (";
+
+  bool needsSpace = false;
+  if (!partitionKeys_.empty()) {
+    out << "PARTITION BY ";
+    for (size_t i = 0; i < partitionKeys_.size(); ++i) {
+      if (i > 0) {
+        out << ",";
+      }
+      out << partitionKeys_[i]->toString();
+    }
+    needsSpace = true;
+  }
+
+  if (!orderByKeys_.empty()) {
+    if (needsSpace) {
+      out << " ";
+    }
+    out << "ORDER BY ";
+    for (size_t i = 0; i < orderByKeys_.size(); ++i) {
+      if (i > 0) {
+        out << ",";
+      }
+      out << orderByKeys_[i].expr->toString();
+      out << (orderByKeys_[i].ascending ? " ASC" : " DESC");
+      out << (orderByKeys_[i].nullsFirst ? " NULLS FIRST" : " NULLS LAST");
+    }
+    needsSpace = true;
+  }
+
+  if (frame_.has_value()) {
+    if (needsSpace) {
+      out << " ";
+    }
+    const auto& frame = frame_.value();
+    switch (frame.type) {
+      case WindowType::kRows:
+        out << "ROWS";
+        break;
+      case WindowType::kRange:
+        out << "RANGE";
+        break;
+      case WindowType::kGroups:
+        out << "GROUPS";
+        break;
+    }
+    out << " BETWEEN ";
+
+    auto formatBound = [&](BoundType boundType, const ExprPtr& value) {
+      switch (boundType) {
+        case BoundType::kUnboundedPreceding:
+          out << "UNBOUNDED PRECEDING";
+          break;
+        case BoundType::kPreceding:
+          out << value->toString() << " PRECEDING";
+          break;
+        case BoundType::kCurrentRow:
+          out << "CURRENT ROW";
+          break;
+        case BoundType::kFollowing:
+          out << value->toString() << " FOLLOWING";
+          break;
+        case BoundType::kUnboundedFollowing:
+          out << "UNBOUNDED FOLLOWING";
+          break;
+      }
+    };
+
+    formatBound(frame.startType, frame.startValue);
+    out << " AND ";
+    formatBound(frame.endType, frame.endValue);
+  }
+
+  out << ")";
   return appendAliasIfExists(out.str());
 }
 
