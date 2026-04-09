@@ -427,7 +427,6 @@ void CudfHashJoinProbe::initializeFilter() {
   if (filterInitialized_ || !joinNode_->filter()) {
     return;
   }
-  filterInitialized_ = true;
 
   // simplify expression
   exec::ExprSet exprs({joinNode_->filter()}, operatorCtx_->execCtx());
@@ -466,6 +465,7 @@ void CudfHashJoinProbe::initializeFilter() {
         leftPrecomputeInstructions_,
         rightPrecomputeInstructions_);
   }
+  filterInitialized_ = true;
 }
 
 bool CudfHashJoinProbe::needsInput() const {
@@ -679,6 +679,8 @@ std::unique_ptr<cudf::table> CudfHashJoinProbe::filteredOutput(
         std::vector<std::unique_ptr<cudf::column>>&&,
         cudf::column_view)> func,
     rmm::cuda_stream_view stream) {
+  VELOX_CHECK(
+      filterInitialized_, "Filter must be initialized before filteredOutput");
   auto leftResult = cudf::gather(
       leftTableView, leftIndicesCol, oobPolicy, stream, get_output_mr());
   auto rightResult = cudf::gather(
@@ -735,6 +737,9 @@ std::unique_ptr<cudf::table> CudfHashJoinProbe::filteredOutputIndices(
     cudf::table_view extendedRightView,
     cudf::join_kind joinKind,
     rmm::cuda_stream_view stream) {
+  VELOX_CHECK(
+      filterInitialized_,
+      "Filter must be initialized before filteredOutputIndices");
   // Use extended views (with precomputed columns) for filter evaluation
   auto [filteredLeftJoinIndices, filteredRightJoinIndices] =
       cudf::filter_join_indices(
