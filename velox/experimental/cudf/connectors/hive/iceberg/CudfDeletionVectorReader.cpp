@@ -537,7 +537,7 @@ void CudfDeletionVectorReader::loadBitmap(rmm::cuda_stream_view stream) {
   //   [Footer payload size (4 bytes, little-endian)]
   //   [Flags (4 bytes)]
   //   [Magic "PUF1" (4 bytes)]
-  auto source = loadBlobSource(
+  const auto source = loadBlobSource(
       dvFile_.filePath,
       dvFile_.fileSizeInBytes,
       dvFile_.lowerBounds,
@@ -545,7 +545,7 @@ void CudfDeletionVectorReader::loadBitmap(rmm::cuda_stream_view stream) {
 
   // Read the payload from the file.
   auto payload = std::string{};
-  payload.resize(payloadSize);
+  payload.resize(source.payloadSize);
   source.file->pread(
       source.payloadFileOffset, source.payloadSize, payload.data());
 
@@ -572,7 +572,7 @@ void CudfDeletionVectorReader::loadBitmap(rmm::cuda_stream_view stream) {
   std::memcpy(&numKeys, payload.data(), sizeof(uint64_t));
   VELOX_CHECK_GT(numKeys, 0, "Deletion vector has zero keys");
 
-  // Single key. Use the 32-bit roaring bitmap directly.
+  // Single key. Use 32-bit dispatch
   if (numKeys == 1) {
     // Skip the numKeys (8 bytes) + first key (4 bytes) prefix to get the
     // roaring32 bitmap.
@@ -586,7 +586,7 @@ void CudfDeletionVectorReader::loadBitmap(rmm::cuda_stream_view stream) {
       buildBitmap<BitmapType::k32Bit>(normalizedPayload, stream);
     }
   } else {
-    // Multiple keys. Convert to 64-bit roaring bitmap.
+    // Multiple keys. Use 64-bit dispatch
     if (is64bitBitmapNormalized(payload, numKeys)) {
       buildBitmap<BitmapType::k64Bit>(payload, stream);
     } else {
