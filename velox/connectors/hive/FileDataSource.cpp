@@ -465,8 +465,15 @@ FileDataSource::getRuntimeStats() {
   }
 
   const auto ioStatsMap = ioStats_->stats();
-  for (const auto& storageStats : ioStatsMap) {
-    res.emplace(storageStats.first, storageStats.second);
+  for (const auto& [key, value] : ioStatsMap) {
+    // IoStats may carry a ReadFile-layer storageReadBytes that reflects the
+    // actual bytes fetched from remote storage. Use it to override the
+    // DWIO-level estimate (IoStatistics).
+    if (key == kStorageReadBytes) {
+      res[std::string(key)] = value;
+    } else {
+      res.emplace(key, value);
+    }
   }
   return res;
 }
