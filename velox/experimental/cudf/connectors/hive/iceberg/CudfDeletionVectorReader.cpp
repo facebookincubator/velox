@@ -284,19 +284,22 @@ std::string convertRunToNoRun(
             payload, kcOffset + container * kKeyCardDescSize);
         auto numRuns = unalignedLoad<uint16_t>(payload, dataPos);
         dataPos += kNumRunsSize;
+        // For each run, extract the start and length and add the values to the
+        // container
         std::for_each(
             cuda::counting_iterator<uint16_t>(0),
             cuda::counting_iterator<uint16_t>(numRuns),
-            [&](uint16_t) {
-              auto start = unalignedLoad<uint16_t>(payload, dataPos);
-              auto lenMinus1 =
-                  unalignedLoad<uint16_t>(payload, dataPos + sizeof(uint16_t));
+            [&](auto) {
+              auto start = static_cast<uint32_t>(
+                  unalignedLoad<uint16_t>(payload, dataPos));
+              auto length =
+                  unalignedLoad<uint16_t>(payload, dataPos + sizeof(uint16_t)) +
+                  1;
               dataPos += kRunPairSize;
               auto& vals = containers[container].expandedValues;
               std::transform(
-                  cuda::counting_iterator<uint32_t>(start),
-                  cuda::counting_iterator<uint32_t>(
-                      static_cast<uint32_t>(start) + lenMinus1 + 1),
+                  cuda::counting_iterator(start),
+                  cuda::counting_iterator(start + length),
                   std::back_inserter(vals),
                   [](auto value) { return static_cast<uint16_t>(value); });
             });
