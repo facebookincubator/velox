@@ -238,6 +238,7 @@ velox_link_libraries(
   velox_common_compression
   velox_core
   velox_connector
+  velox_connector_registry
   velox_expression
   velox_file
   velox_presto_serializer
