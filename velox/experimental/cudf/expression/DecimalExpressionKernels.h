@@ -31,20 +31,23 @@ std::unique_ptr<cudf::column> decimalDivide(
     const cudf::column_view& rhs,
     cudf::data_type outputType,
     int32_t aRescale,
-    rmm::cuda_stream_view stream);
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
 
 std::unique_ptr<cudf::column> decimalDivide(
     const cudf::column_view& lhs,
     const cudf::scalar& rhs,
     cudf::data_type outputType,
     int32_t aRescale,
-    rmm::cuda_stream_view stream);
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
 
 std::unique_ptr<cudf::column> decimalDivide(
     const cudf::scalar& lhs,
     const cudf::column_view& rhs,
     cudf::data_type outputType,
     int32_t aRescale,
-    rmm::cuda_stream_view stream);
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
 
 } // namespace facebook::velox::cudf_velox

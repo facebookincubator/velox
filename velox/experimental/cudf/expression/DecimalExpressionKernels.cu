@@ -180,7 +180,8 @@ std::unique_ptr<cudf::column> decimalDivide(
     const cudf::column_view& rhs,
     cudf::data_type outputType,
     int32_t aRescale,
-    rmm::cuda_stream_view stream) {
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
   CUDF_EXPECTS(lhs.size() == rhs.size(), "Decimal divide requires equal sizes");
   CUDF_EXPECTS(
       lhs.type().id() == rhs.type().id(),
@@ -189,9 +190,9 @@ std::unique_ptr<cudf::column> decimalDivide(
       aRescale >= 0, "Decimal divide requires non-negative rescale factor");
 
   auto [nullMask, nullCount] =
-      cudf::bitmask_and(cudf::table_view({lhs, rhs}), stream);
+      cudf::bitmask_and(cudf::table_view({lhs, rhs}), stream, mr);
   auto out = cudf::make_fixed_width_column(
-      outputType, lhs.size(), std::move(nullMask), nullCount, stream);
+      outputType, lhs.size(), std::move(nullMask), nullCount, stream, mr);
 
   if (lhs.type().id() == cudf::type_id::DECIMAL64) {
     if (outputType.id() == cudf::type_id::DECIMAL64) {
@@ -223,14 +224,15 @@ std::unique_ptr<cudf::column> decimalDivide(
     const cudf::scalar& rhs,
     cudf::data_type outputType,
     int32_t aRescale,
-    rmm::cuda_stream_view stream) {
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
   CUDF_EXPECTS(
       aRescale >= 0, "Decimal divide requires non-negative rescale factor");
 
-  auto nullMask = cudf::copy_bitmask(lhs, stream);
+  auto nullMask = cudf::copy_bitmask(lhs, stream, mr);
   auto nullCount = lhs.null_count();
   auto out = cudf::make_fixed_width_column(
-      outputType, lhs.size(), std::move(nullMask), nullCount, stream);
+      outputType, lhs.size(), std::move(nullMask), nullCount, stream, mr);
 
   auto rhsValue = getDecimalScalarValue(rhs, stream);
 
@@ -264,14 +266,15 @@ std::unique_ptr<cudf::column> decimalDivide(
     const cudf::column_view& rhs,
     cudf::data_type outputType,
     int32_t aRescale,
-    rmm::cuda_stream_view stream) {
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
   CUDF_EXPECTS(
       aRescale >= 0, "Decimal divide requires non-negative rescale factor");
 
-  auto nullMask = cudf::copy_bitmask(rhs, stream);
+  auto nullMask = cudf::copy_bitmask(rhs, stream, mr);
   auto nullCount = rhs.null_count();
   auto out = cudf::make_fixed_width_column(
-      outputType, rhs.size(), std::move(nullMask), nullCount, stream);
+      outputType, rhs.size(), std::move(nullMask), nullCount, stream, mr);
 
   auto lhsValue = getDecimalScalarValue(lhs, stream);
 
