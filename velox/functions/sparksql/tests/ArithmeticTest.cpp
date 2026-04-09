@@ -842,6 +842,246 @@ TEST_F(ArithmeticTest, absMinValueOverflow) {
       abs<int64_t>(std::numeric_limits<int64_t>::min()), "Arithmetic overflow");
 }
 
+TEST_F(SparkFunctionBaseTest, IntervalDayTimeUnaryMinusAnsi) {
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  EXPECT_EQ(
+      evaluateOnce<int64_t>(
+          "unaryminus(c0)", INTERVAL_DAY_TIME(), std::optional<int64_t>(1000)),
+      -1000);
+  EXPECT_EQ(
+      evaluateOnce<int64_t>(
+          "unaryminus(c0)", INTERVAL_DAY_TIME(), std::optional<int64_t>(-1000)),
+      1000);
+  EXPECT_EQ(
+      evaluateOnce<int64_t>(
+          "unaryminus(c0)", INTERVAL_DAY_TIME(), std::optional<int64_t>(0)),
+      0);
+
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int64_t>(
+          "unaryminus(c0)",
+          INTERVAL_DAY_TIME(),
+          std::optional<int64_t>(std::numeric_limits<int64_t>::min())),
+      "Arithmetic overflow: cannot negate minimum interval value");
+
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+
+  EXPECT_EQ(
+      evaluateOnce<int64_t>(
+          "unaryminus(c0)",
+          INTERVAL_DAY_TIME(),
+          std::optional<int64_t>(std::numeric_limits<int64_t>::min())),
+      std::numeric_limits<int64_t>::min());
+}
+
+TEST_F(SparkFunctionBaseTest, IntervalYearMonthUnaryMinusAnsi) {
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "unaryminus(c0)", INTERVAL_YEAR_MONTH(), std::optional<int32_t>(12)),
+      -12);
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "unaryminus(c0)", INTERVAL_YEAR_MONTH(), std::optional<int32_t>(-12)),
+      12);
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "unaryminus(c0)", INTERVAL_YEAR_MONTH(), std::optional<int32_t>(0)),
+      0);
+
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int32_t>(
+          "unaryminus(c0)",
+          INTERVAL_YEAR_MONTH(),
+          std::optional<int32_t>(std::numeric_limits<int32_t>::min())),
+      "Arithmetic overflow: cannot negate minimum interval value");
+
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "unaryminus(c0)",
+          INTERVAL_YEAR_MONTH(),
+          std::optional<int32_t>(std::numeric_limits<int32_t>::min())),
+      std::numeric_limits<int32_t>::min());
+}
+
+TEST_F(SparkFunctionBaseTest, IntervalDayTimeAddAnsi) {
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  EXPECT_EQ(
+      evaluateOnce<int64_t>(
+          "add(c0, c1)",
+          {INTERVAL_DAY_TIME(), INTERVAL_DAY_TIME()},
+          std::optional<int64_t>(1000),
+          std::optional<int64_t>(2000)),
+      3000);
+  EXPECT_EQ(
+      evaluateOnce<int64_t>(
+          "add(c0, c1)",
+          {INTERVAL_DAY_TIME(), INTERVAL_DAY_TIME()},
+          std::optional<int64_t>(-1000),
+          std::optional<int64_t>(500)),
+      -500);
+
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int64_t>(
+          "add(c0, c1)",
+          {INTERVAL_DAY_TIME(), INTERVAL_DAY_TIME()},
+          std::optional<int64_t>(std::numeric_limits<int64_t>::max()),
+          std::optional<int64_t>(1)),
+      "Arithmetic overflow");
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int64_t>(
+          "add(c0, c1)",
+          {INTERVAL_DAY_TIME(), INTERVAL_DAY_TIME()},
+          std::optional<int64_t>(std::numeric_limits<int64_t>::min()),
+          std::optional<int64_t>(-1)),
+      "Arithmetic overflow");
+
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+
+  EXPECT_EQ(
+      evaluateOnce<int64_t>(
+          "add(c0, c1)",
+          {INTERVAL_DAY_TIME(), INTERVAL_DAY_TIME()},
+          std::optional<int64_t>(std::numeric_limits<int64_t>::max()),
+          std::optional<int64_t>(1)),
+      std::numeric_limits<int64_t>::min());
+}
+
+TEST_F(SparkFunctionBaseTest, IntervalYearMonthAddAnsi) {
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "add(c0, c1)",
+          {INTERVAL_YEAR_MONTH(), INTERVAL_YEAR_MONTH()},
+          std::optional<int32_t>(12),
+          std::optional<int32_t>(24)),
+      36);
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "add(c0, c1)",
+          {INTERVAL_YEAR_MONTH(), INTERVAL_YEAR_MONTH()},
+          std::optional<int32_t>(-12),
+          std::optional<int32_t>(6)),
+      -6);
+
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int32_t>(
+          "add(c0, c1)",
+          {INTERVAL_YEAR_MONTH(), INTERVAL_YEAR_MONTH()},
+          std::optional<int32_t>(std::numeric_limits<int32_t>::max()),
+          std::optional<int32_t>(1)),
+      "Arithmetic overflow");
+
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "add(c0, c1)",
+          {INTERVAL_YEAR_MONTH(), INTERVAL_YEAR_MONTH()},
+          std::optional<int32_t>(std::numeric_limits<int32_t>::max()),
+          std::optional<int32_t>(1)),
+      std::numeric_limits<int32_t>::min());
+}
+
+TEST_F(SparkFunctionBaseTest, IntervalDayTimeSubtractAnsi) {
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  EXPECT_EQ(
+      evaluateOnce<int64_t>(
+          "subtract(c0, c1)",
+          {INTERVAL_DAY_TIME(), INTERVAL_DAY_TIME()},
+          std::optional<int64_t>(3000),
+          std::optional<int64_t>(1000)),
+      2000);
+  EXPECT_EQ(
+      evaluateOnce<int64_t>(
+          "subtract(c0, c1)",
+          {INTERVAL_DAY_TIME(), INTERVAL_DAY_TIME()},
+          std::optional<int64_t>(1000),
+          std::optional<int64_t>(2000)),
+      -1000);
+
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int64_t>(
+          "subtract(c0, c1)",
+          {INTERVAL_DAY_TIME(), INTERVAL_DAY_TIME()},
+          std::optional<int64_t>(std::numeric_limits<int64_t>::min()),
+          std::optional<int64_t>(1)),
+      "Arithmetic overflow");
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int64_t>(
+          "subtract(c0, c1)",
+          {INTERVAL_DAY_TIME(), INTERVAL_DAY_TIME()},
+          std::optional<int64_t>(std::numeric_limits<int64_t>::max()),
+          std::optional<int64_t>(-1)),
+      "Arithmetic overflow");
+
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+
+  EXPECT_EQ(
+      evaluateOnce<int64_t>(
+          "subtract(c0, c1)",
+          {INTERVAL_DAY_TIME(), INTERVAL_DAY_TIME()},
+          std::optional<int64_t>(std::numeric_limits<int64_t>::min()),
+          std::optional<int64_t>(1)),
+      std::numeric_limits<int64_t>::max());
+}
+
+TEST_F(SparkFunctionBaseTest, IntervalYearMonthSubtractAnsi) {
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "subtract(c0, c1)",
+          {INTERVAL_YEAR_MONTH(), INTERVAL_YEAR_MONTH()},
+          std::optional<int32_t>(36),
+          std::optional<int32_t>(12)),
+      24);
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "subtract(c0, c1)",
+          {INTERVAL_YEAR_MONTH(), INTERVAL_YEAR_MONTH()},
+          std::optional<int32_t>(12),
+          std::optional<int32_t>(24)),
+      -12);
+
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int32_t>(
+          "subtract(c0, c1)",
+          {INTERVAL_YEAR_MONTH(), INTERVAL_YEAR_MONTH()},
+          std::optional<int32_t>(std::numeric_limits<int32_t>::min()),
+          std::optional<int32_t>(1)),
+      "Arithmetic overflow");
+
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "subtract(c0, c1)",
+          {INTERVAL_YEAR_MONTH(), INTERVAL_YEAR_MONTH()},
+          std::optional<int32_t>(std::numeric_limits<int32_t>::min()),
+          std::optional<int32_t>(1)),
+      std::numeric_limits<int32_t>::max());
+}
+
 class LogNTest : public SparkFunctionBaseTest {
  protected:
   static constexpr double kInf = std::numeric_limits<double>::infinity();

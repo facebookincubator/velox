@@ -118,6 +118,34 @@ void registerMathFunctions(const std::string& prefix) {
       UnaryMinusFunction,
       ShortDecimal<P1, S1>,
       ShortDecimal<P1, S1>>({prefix + "unaryminus"});
+  registerFunction<
+      sparksql::IntervalDayTimeUnaryMinusFunction,
+      IntervalDayTime,
+      IntervalDayTime>({prefix + "unaryminus"});
+  registerFunction<
+      sparksql::IntervalYearMonthUnaryMinusFunction,
+      IntervalYearMonth,
+      IntervalYearMonth>({prefix + "unaryminus"});
+  registerFunction<
+      sparksql::IntervalDayTimeAddFunction,
+      IntervalDayTime,
+      IntervalDayTime,
+      IntervalDayTime>({prefix + "add"});
+  registerFunction<
+      sparksql::IntervalYearMonthAddFunction,
+      IntervalYearMonth,
+      IntervalYearMonth,
+      IntervalYearMonth>({prefix + "add"});
+  registerFunction<
+      sparksql::IntervalDayTimeSubtractFunction,
+      IntervalDayTime,
+      IntervalDayTime,
+      IntervalDayTime>({prefix + "subtract"});
+  registerFunction<
+      sparksql::IntervalYearMonthSubtractFunction,
+      IntervalYearMonth,
+      IntervalYearMonth,
+      IntervalYearMonth>({prefix + "subtract"});
 
   registerDecimalAdd(prefix);
   registerDecimalSubtract(prefix);
