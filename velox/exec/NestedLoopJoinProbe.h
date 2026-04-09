@@ -153,6 +153,19 @@ class NestedLoopJoinProbe : public Operator {
         decodedFilterResult_.valueAt<bool>(i));
   }
 
+  // Processes a decoded filter batch that corresponds to a single probe row.
+  // Returns false if output_ filled up and must be produced immediately.
+  bool addSingleProbeRowOutput(const RowVectorPtr& buildVector);
+
+  // Processes a decoded filter batch that corresponds to multiple probe rows.
+  // This path is used only for small build-side fast paths where a single
+  // build row or build vector can be evaluated against multiple probe rows at
+  // once. filterResultRow_ is a linear offset within that decoded batch, while
+  // filterProbeRow_ stores the first probe row covered by the batch so that the
+  // operator can resume correctly after yielding. Returns false if output_
+  // filled up and must be produced immediately.
+  bool addMultiProbeRowsOutput(const RowVectorPtr& buildVector);
+
   // Generates the next batch of a cross product between probe and build. It
   // should be used as the entry point, and will internally delegate to one of
   // the three functions below.
@@ -195,12 +208,13 @@ class NestedLoopJoinProbe : public Operator {
   // zero-copy (dictionary indices), and build side projections are marked to be
   // copied using `buildCopyRanges_`; they will be copied later on by
   // `copyBuildValues()`.
-  void addOutputRow(vector_size_t buildRow);
+  void addOutputRow();
 
-  // Checks if it is required to add a probe mismatch row, and does it if
-  // needed. The caller needs to ensure there is available space in `output_`
-  // for the new record, which has nulled out build projections.
-  void checkProbeMismatchRow();
+  // Checks if it is required to add a probe mismatch row, does it and return
+  // true if needed, else return false. The caller needs to ensure there is
+  // available space in `output_` for the new record, which has nulled out build
+  // projections.
+  bool checkProbeMismatchRow();
 
   // Add a probe mismatch (only for left/full outer joins). The record is based
   // on the current probeRow and vector (input_) and build projections are null.
@@ -234,6 +248,12 @@ class NestedLoopJoinProbe : public Operator {
   // on buildIndex_'s value).
   bool hasProbedAllBuildData() const {
     return (buildIndex_ >= buildVectors_.value().size());
+  }
+
+  // Whether processing last batch of build data or processed all build data for
+  // the current probe row (based on buildIndex_'s value).
+  bool isLastBuildIndex() const {
+    return buildIndex_ + 1 >= buildVectors_.value().size();
   }
 
   // Cross joins are translated into NLJ's without a join conditition.
@@ -358,7 +378,19 @@ class NestedLoopJoinProbe : public Operator {
   // Index into `buildVectors_` for the build vector being currently processed.
   size_t buildIndex_{0};
 
-  // Row being currently processed from `buildVectors_[buildIndex_]`.
+  // Row being currently processed from `decodedFilterResult_`.
+  // For multi-probe fast paths this is a linear offset within one decoded
+  // batch, not a buildRow_ for the current probe row.
+  vector_size_t filterResultRow_{0};
+
+  // Probe row used to generate the current decodedFilterResult_. This stays
+  // fixed while resuming the same decoded filter batch across multiple calls to
+  // addToOutput(). probeRow_ advances while emitting rows from that batch, so
+  // it cannot be used as the stable batch origin for restoring filterResultRow_
+  // after yield.
+  vector_size_t filterProbeRow_{0};
+
+  // Row being currently processed from `buildVector_[buildIndex_]`.
   vector_size_t buildRow_{0};
 
   // Keep track of the build rows that had matches (only used for right or full

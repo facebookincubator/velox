@@ -57,6 +57,62 @@ class NestedLoopJoinTest : public HiveConnectorTestBase {
     joinTypes_ = std::move(joinTypes);
   }
 
+  RowVectorPtr makeOutputOrderProbeVector() {
+    return makeRowVector(
+        {"probe_ordinal", "l1", "l2"},
+        {
+            makeFlatVector<int64_t>({0, 1, 2, 3, 4, 5}),
+            makeNullableFlatVector<int64_t>({1, 8, 6, std::nullopt, 7, 4}),
+            makeFlatVector<StringView>({"a", "b", "c", "d", "e", "f"}),
+        });
+  }
+
+  std::vector<RowVectorPtr> makeOutputOrderMultiVectorBuild() {
+    return {
+        makeRowVector(
+            {"build_ordinal", "r1", "r2"},
+            {
+                makeFlatVector<int64_t>({0, 1, 2}),
+                makeNullableFlatVector<int64_t>({4, 6, 1}),
+                makeFlatVector<StringView>({"z", "x", "y"}),
+            }),
+        makeRowVector(
+            {"build_ordinal", "r1", "r2"},
+            {
+                makeFlatVector<int64_t>({3, 4, 5}),
+                makeNullableFlatVector<int64_t>({10, std::nullopt, 6}),
+                makeFlatVector<StringView>({"z", "p", "u"}),
+            })};
+  }
+
+  RowVectorPtr makeOutputOrderSingleRowBuild() {
+    return makeRowVector(
+        {"build_ordinal", "r1", "r2"},
+        {
+            makeFlatVector<int64_t>({0}),
+            makeNullableFlatVector<int64_t>({8}),
+            makeFlatVector<StringView>({"c"}),
+        });
+  }
+
+  core::PlanNodePtr makeOutputOrderPlan(
+      const RowVectorPtr& probeVector,
+      const std::vector<RowVectorPtr>& buildVectors,
+      core::JoinType joinType) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    return PlanBuilder(planNodeIdGenerator)
+        .values({probeVector})
+        .nestedLoopJoin(
+            PlanBuilder(planNodeIdGenerator)
+                .values(buildVectors)
+                .project({"build_ordinal", "r1", "r2"})
+                .planNode(),
+            "l1 < r1",
+            {"probe_ordinal", "l1", "l2", "build_ordinal", "r1", "r2"},
+            joinType)
+        .planNode();
+  }
+
   template <typename T>
   VectorPtr sequence(vector_size_t size, T start = 0) {
     return makeFlatVector<int32_t>(
@@ -509,35 +565,150 @@ TEST_F(NestedLoopJoinTest, allTypes) {
   runSingleAndMultiDriverTest(probeVectors, buildVectors);
 }
 
-// Ensures output order follows the probe input order for inner and left joins.
-TEST_F(NestedLoopJoinTest, outputOrder) {
-  auto probeVectors = makeRowVector(
+TEST_F(NestedLoopJoinTest, outputOrderWithSingleBuildVector) {
+  auto probeVector = makeOutputOrderProbeVector();
+  auto buildVectors = makeOutputOrderMultiVectorBuild();
+  const std::vector<uint32_t> sortingKeys = {0, 3};
+  createDuckDbTable("t", {probeVector});
+  createDuckDbTable("u_multi", buildVectors);
+
+  AssertQueryBuilder(
+      makeOutputOrderPlan(probeVector, buildVectors, core::JoinType::kInner),
+      duckDbQueryRunner_)
+      .assertResults(
+          "SELECT probe_ordinal, l1, l2, build_ordinal, r1, r2 "
+          "FROM t JOIN u_multi ON l1 < r1 "
+          "ORDER BY probe_ordinal, build_ordinal",
+          sortingKeys);
+
+  AssertQueryBuilder(
+      makeOutputOrderPlan(probeVector, buildVectors, core::JoinType::kLeft),
+      duckDbQueryRunner_)
+      .assertResults(
+          "SELECT probe_ordinal, l1, l2, build_ordinal, r1, r2 "
+          "FROM t LEFT JOIN u_multi ON l1 < r1 "
+          "ORDER BY probe_ordinal, build_ordinal NULLS LAST",
+          sortingKeys);
+}
+
+TEST_F(NestedLoopJoinTest, outputOrderWithSingleBuildRow) {
+  auto probeVector = makeOutputOrderProbeVector();
+  auto singleRowBuild = makeOutputOrderSingleRowBuild();
+  const std::vector<uint32_t> sortingKeys = {0, 3};
+  createDuckDbTable("t", {probeVector});
+  createDuckDbTable("u_single", {singleRowBuild});
+
+  AssertQueryBuilder(
+      makeOutputOrderPlan(
+          probeVector, {singleRowBuild}, core::JoinType::kInner),
+      duckDbQueryRunner_)
+      .assertResults(
+          "SELECT probe_ordinal, l1, l2, build_ordinal, r1, r2 "
+          "FROM t JOIN u_single ON l1 < r1 "
+          "ORDER BY probe_ordinal, build_ordinal",
+          sortingKeys);
+
+  AssertQueryBuilder(
+      makeOutputOrderPlan(probeVector, {singleRowBuild}, core::JoinType::kLeft),
+      duckDbQueryRunner_)
+      .assertResults(
+          "SELECT probe_ordinal, l1, l2, build_ordinal, r1, r2 "
+          "FROM t LEFT JOIN u_single ON l1 < r1 "
+          "ORDER BY probe_ordinal, build_ordinal NULLS LAST",
+          sortingKeys);
+}
+
+TEST_F(NestedLoopJoinTest, outputOrderWithMultipleBuildVectors) {
+  auto probeVector = makeOutputOrderProbeVector();
+  auto buildVectors = makeOutputOrderMultiVectorBuild();
+  const std::vector<uint32_t> sortingKeys = {0, 3};
+  createDuckDbTable("t", {probeVector});
+  createDuckDbTable("u_multi", buildVectors);
+
+  AssertQueryBuilder(
+      makeOutputOrderPlan(probeVector, buildVectors, core::JoinType::kInner),
+      duckDbQueryRunner_)
+      .config(core::QueryConfig::kMaxOutputBatchRows, "5")
+      .assertResults(
+          "SELECT probe_ordinal, l1, l2, build_ordinal, r1, r2 "
+          "FROM t JOIN u_multi ON l1 < r1 "
+          "ORDER BY probe_ordinal, build_ordinal",
+          sortingKeys);
+
+  AssertQueryBuilder(
+      makeOutputOrderPlan(probeVector, buildVectors, core::JoinType::kLeft),
+      duckDbQueryRunner_)
+      .config(core::QueryConfig::kMaxOutputBatchRows, "5")
+      .assertResults(
+          "SELECT probe_ordinal, l1, l2, build_ordinal, r1, r2 "
+          "FROM t LEFT JOIN u_multi ON l1 < r1 "
+          "ORDER BY probe_ordinal, build_ordinal NULLS LAST",
+          sortingKeys);
+}
+
+TEST_F(NestedLoopJoinTest, addOutputRowWithContinuesBuildRow) {
+  auto probeVector = makeRowVector(
+      {"l1", "l2"},
+      {
+          makeNullableFlatVector<int64_t>({1, 8, 0}),
+          makeFlatVector<StringView>({"a", "b", "c"}),
+      });
+  auto buildVector = makeRowVector(
+      {"r1", "r2"},
+      {
+          makeNullableFlatVector<int64_t>({1, 1, 0}),
+          makeFlatVector<StringView>({"z", "x", "y"}),
+      });
+
+  createDuckDbTable("t", {probeVector});
+  createDuckDbTable("u", {buildVector});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto op =
+      PlanBuilder(planNodeIdGenerator)
+          .values({probeVector})
+          .nestedLoopJoin(
+              PlanBuilder(planNodeIdGenerator).values({buildVector}).planNode(),
+              "l1 = r1",
+              {"l1", "l2", "r1", "r2"},
+              core::JoinType::kLeft)
+          .planNode();
+
+  assertQuery(op, "SELECT l1, l2, r1, r2 FROM t LEFT JOIN u ON l1 = r1");
+}
+
+TEST_F(NestedLoopJoinTest, smallBuildSideOuterJoins) {
+  auto probeVector = makeRowVector(
       {"l1", "l2"},
       {
           makeNullableFlatVector<int64_t>({1, 8, 6, std::nullopt, 7, 4}),
           makeFlatVector<StringView>({"a", "b", "c", "d", "e", "f"}),
       });
-  auto buildVector1 = makeRowVector(
+  auto singleVectorBuild = makeRowVector(
       {"r1", "r2"},
       {
           makeNullableFlatVector<int64_t>({4, 6, 1}),
           makeFlatVector<StringView>({"z", "x", "y"}),
       });
-
-  auto buildVector2 = makeRowVector(
+  auto singleRowBuild = makeRowVector(
       {"r1", "r2"},
       {
-          makeNullableFlatVector<int64_t>({10, std::nullopt, 6}),
-          makeFlatVector<StringView>({"z", "p", "u"}),
+          makeNullableFlatVector<int64_t>({8}),
+          makeFlatVector<StringView>({"c"}),
       });
 
-  const auto createPlan = [&](core::JoinType joinType) {
+  createDuckDbTable("t", {probeVector});
+  createDuckDbTable("u_single_vector", {singleVectorBuild});
+  createDuckDbTable("u_single_row", {singleRowBuild});
+
+  const auto createPlan = [&](const RowVectorPtr& buildVector,
+                              core::JoinType joinType) {
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     return PlanBuilder(planNodeIdGenerator)
-        .values({probeVectors})
+        .values({probeVector})
         .nestedLoopJoin(
             PlanBuilder(planNodeIdGenerator)
-                .values({buildVector1, buildVector2})
+                .values({buildVector})
                 .project({"r1", "r2"})
                 .planNode(),
             "l1 < r1",
@@ -546,33 +717,18 @@ TEST_F(NestedLoopJoinTest, outputOrder) {
         .planNode();
   };
 
-  // Inner.
-  auto results = AssertQueryBuilder(createPlan(core::JoinType::kInner))
-                     .copyResults(pool());
-  auto expectedInner = makeRowVector({
-      makeNullableFlatVector<int64_t>({1, 1, 1, 1, 8, 6, 7, 4, 4, 4}),
-      makeFlatVector<StringView>(
-          {"a", "a", "a", "a", "b", "c", "e", "f", "f", "f"}),
-      makeNullableFlatVector<int64_t>({4, 6, 10, 6, 10, 10, 10, 6, 10, 6}),
-      makeFlatVector<StringView>(
-          {"z", "x", "z", "u", "z", "z", "z", "x", "z", "u"}),
-  });
-  assertEqualVectors(expectedInner, results);
-
-  // Left.
-  results =
-      AssertQueryBuilder(createPlan(core::JoinType::kLeft)).copyResults(pool());
-  auto expectedLeft = makeRowVector({
-      makeNullableFlatVector<int64_t>(
-          {1, 1, 1, 1, 8, 6, std::nullopt, 7, 4, 4, 4}),
-      makeNullableFlatVector<StringView>(
-          {"a", "a", "a", "a", "b", "c", "d", "e", "f", "f", "f"}),
-      makeNullableFlatVector<int64_t>(
-          {4, 6, 10, 6, 10, 10, std::nullopt, 10, 6, 10, 6}),
-      makeNullableFlatVector<StringView>(
-          {"z", "x", "z", "u", "z", "z", std::nullopt, "z", "x", "z", "u"}),
-  });
-  assertEqualVectors(expectedLeft, results);
+  assertQuery(
+      createPlan(singleVectorBuild, core::JoinType::kRight),
+      "SELECT l1, l2, r1, r2 FROM t RIGHT JOIN u_single_vector ON l1 < r1");
+  assertQuery(
+      createPlan(singleVectorBuild, core::JoinType::kFull),
+      "SELECT l1, l2, r1, r2 FROM t FULL JOIN u_single_vector ON l1 < r1");
+  assertQuery(
+      createPlan(singleRowBuild, core::JoinType::kRight),
+      "SELECT l1, l2, r1, r2 FROM t RIGHT JOIN u_single_row ON l1 < r1");
+  assertQuery(
+      createPlan(singleRowBuild, core::JoinType::kFull),
+      "SELECT l1, l2, r1, r2 FROM t FULL JOIN u_single_row ON l1 < r1");
 }
 
 TEST_F(NestedLoopJoinTest, mergeBuildVectors) {
