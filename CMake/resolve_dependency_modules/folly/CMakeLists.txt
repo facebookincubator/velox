@@ -57,6 +57,34 @@ set(FOLLY_HAVE_INT128_T ON)
 
 FetchContent_MakeAvailable(folly)
 
+# folly_base is OBJECT; with CMake 4.x, PRIVATE links to IMPORTED targets may not
+# put INTERFACE_INCLUDE_DIRECTORIES on compile lines. Mirror includes explicitly.
+function(_velox_folly_base_use_dependency dep)
+  if(NOT TARGET ${dep})
+    return()
+  endif()
+  target_link_libraries(folly_base PRIVATE ${dep})
+  get_target_property(_inc ${dep} INTERFACE_INCLUDE_DIRECTORIES)
+  if(_inc AND NOT _inc STREQUAL "_inc-NOTFOUND")
+    target_include_directories(folly_base SYSTEM PRIVATE ${_inc})
+  endif()
+endfunction()
+
+if(TARGET folly_base)
+  if(TARGET fmt::fmt)
+    _velox_folly_base_use_dependency(fmt::fmt)
+  elseif(TARGET fmt::fmt-header-only)
+    _velox_folly_base_use_dependency(fmt::fmt-header-only)
+  endif()
+  _velox_folly_base_use_dependency(glog::glog)
+  _velox_folly_base_use_dependency(double-conversion::double-conversion)
+  # CMake 4.x + OBJECT libs: IMPORTED INTERFACE includes still missing on some
+  # generators; Conda prefix has fmt, glog, double-conversion in one tree.
+  if(DEFINED ENV{CONDA_PREFIX} AND EXISTS "$ENV{CONDA_PREFIX}/include")
+    target_include_directories(folly_base SYSTEM PRIVATE "$ENV{CONDA_PREFIX}/include")
+  endif()
+endif()
+
 # Folly::folly is not valid for FC but we want to match FindFolly
 add_library(Folly::folly ALIAS folly)
 add_library(Folly::follybenchmark ALIAS follybenchmark)

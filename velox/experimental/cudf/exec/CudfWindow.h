@@ -28,9 +28,9 @@ namespace facebook::velox::cudf_velox {
 
 /// GPU-accelerated Window operator using cuDF.
 ///
-/// Each incoming batch is immediately concatenated into an accumulated cudf
-/// table on the GPU in addInput(). Once all input has arrived, getOutput()
-/// sorts (if needed), evaluates the window functions, and returns the result.
+/// Incoming GPU batches are stored in addInput(); getOutput() concatenates
+/// (with per-batch type alignment), sorts if needed, evaluates window
+/// functions, and returns the result.
 ///
 /// Rank-like functions (row_number, rank, dense_rank) use
 /// cudf::groupby::scan with cudf::make_rank_aggregation.

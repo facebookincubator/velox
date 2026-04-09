@@ -42,7 +42,9 @@ struct hash<facebook::velox::TypeKind> {
 namespace facebook::velox {
 namespace {
 bool isColumnNameRequiringEscaping(const std::string& name) {
-  static const re2::RE2 pattern("^[a-zA-Z_][a-zA-Z0-9_]*$");
+  // Global RE2: DuckDB's vendored re2/re2.h (earlier on -I in mono lib) has no
+  // re2:: namespace; system re2 exposes RE2 globally too (using re2::RE2).
+  static const RE2 pattern("^[a-zA-Z_][a-zA-Z0-9_]*$");
   return !RE2::FullMatch(name, pattern);
 }
 

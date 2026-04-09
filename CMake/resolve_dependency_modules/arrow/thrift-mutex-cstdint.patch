@@ -1,0 +1,40 @@
+diff --git a/cpp/cmake_modules/ThirdpartyToolchain.cmake b/cpp/cmake_modules/ThirdpartyToolchain.cmake
+--- a/cpp/cmake_modules/ThirdpartyToolchain.cmake
++++ b/cpp/cmake_modules/ThirdpartyToolchain.cmake
+@@ -1780,7 +1780,9 @@
+   externalproject_add(thrift_ep
+                       ${EP_COMMON_OPTIONS}
+                       URL ${THRIFT_SOURCE_URL}
+                       URL_HASH "SHA256=${ARROW_THRIFT_BUILD_SHA256_CHECKSUM}"
++                      PATCH_COMMAND "${CMAKE_COMMAND}" "-DTHRIFT_SRC=<SOURCE_DIR>" "-P"
++                        "${CMAKE_CURRENT_SOURCE_DIR}/cmake_modules/velox_thrift_mutex_patch.cmake"
+                       BUILD_BYPRODUCTS "${THRIFT_LIB}"
+                       CMAKE_ARGS ${THRIFT_CMAKE_ARGS}
+                       DEPENDS ${THRIFT_DEPENDENCIES})
+diff --git a/cpp/cmake_modules/velox_thrift_mutex_patch.cmake b/cpp/cmake_modules/velox_thrift_mutex_patch.cmake
+new file mode 100644
+index 0000000..a1b2c3d4
+--- /dev/null
++++ b/cpp/cmake_modules/velox_thrift_mutex_patch.cmake
+@@ -0,0 +1,21 @@
++# Velox: Thrift 0.16 Mutex.h uses int64_t without <cstdint>. GCC 15+ libstdc++
++# no longer exposes it via transitive includes.
++if(NOT DEFINED THRIFT_SRC)
++  message(FATAL_ERROR "THRIFT_SRC not set")
++endif()
++set(_mutex "${THRIFT_SRC}/lib/cpp/src/thrift/concurrency/Mutex.h")
++if(NOT EXISTS "${_mutex}")
++  message(FATAL_ERROR "Thrift Mutex.h not found: ${_mutex}")
++endif()
++file(READ "${_mutex}" _buf)
++string(FIND "${_buf}" "#include <cstdint>" _pos)
++if(NOT _pos EQUAL -1)
++  return()
++endif()
++string(REPLACE "#include <memory>"
++       "#include <memory>\n#include <cstdint>" _out "${_buf}")
++if(_out STREQUAL _buf)
++  message(FATAL_ERROR "velox_thrift_mutex_patch: expected #include <memory> in Mutex.h")
++endif()
++file(WRITE "${_mutex}" "${_out}")
++

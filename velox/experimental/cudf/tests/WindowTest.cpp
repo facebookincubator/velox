@@ -17,6 +17,9 @@
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/core/Expressions.h"
+#include "velox/core/PlanNode.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
@@ -24,9 +27,14 @@
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/serializers/PrestoSerializer.h"
+#include "velox/type/Type.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
+#include <fmt/format.h>
+#include <folly/String.h>
 #include <gtest/gtest.h>
+#include <limits>
+#include <sstream>
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -322,6 +330,278 @@ TEST_F(CudfWindowTest, avgWindow) {
       });
 
   AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// Ports of checks from velox/exec/tests/WindowTest.cpp (CPU window tests).
+
+TEST_F(CudfWindowTest, duplicateOrOverlappingKeys) {
+  auto data = makeRowVector(
+      ROW({"a", "b", "c", "d", "e"},
+          {
+              BIGINT(),
+              BIGINT(),
+              BIGINT(),
+              BIGINT(),
+              BIGINT(),
+          }),
+      10);
+
+  auto buildPlan = [&](const std::vector<std::string>& partitionKeys,
+                       const std::vector<std::string>& sortingKeys) {
+    std::ostringstream sql;
+    sql << "row_number() over (";
+    if (!partitionKeys.empty()) {
+      sql << " partition by ";
+      sql << folly::join(", ", partitionKeys);
+    }
+    if (!sortingKeys.empty()) {
+      sql << " order by ";
+      sql << folly::join(", ", sortingKeys);
+    }
+    sql << ")";
+
+    PlanBuilder().values({data}).window({sql.str()}).planNode();
+  };
+
+  VELOX_ASSERT_THROW(
+      buildPlan({"a", "a"}, {"b"}),
+      "Partitioning keys must be unique. Found duplicate key: a");
+
+  VELOX_ASSERT_THROW(
+      buildPlan({"a", "b"}, {"c", "d", "c"}),
+      "Sorting keys must be unique and not overlap with partitioning keys. Found duplicate key: c");
+
+  VELOX_ASSERT_THROW(
+      buildPlan({"a", "b"}, {"c", "b"}),
+      "Sorting keys must be unique and not overlap with partitioning keys. Found duplicate key: b");
+}
+
+TEST_F(CudfWindowTest, missingFunctionSignature) {
+  std::vector<RowVectorPtr> inputRows = {makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3}),
+      makeFlatVector<std::string>({"A", "B", "C"}),
+      makeFlatVector<int64_t>({10, 20, 30}),
+  })};
+
+  auto runWindow = [&](const core::CallTypedExprPtr& callExpr) {
+    core::WindowNode::Frame frame{
+        core::WindowNode::WindowType::kRows,
+        core::WindowNode::BoundType::kUnboundedPreceding,
+        nullptr,
+        core::WindowNode::BoundType::kUnboundedFollowing,
+        nullptr};
+
+    core::WindowNode::Function windowFunction{callExpr, frame, false};
+
+    auto planNode =
+        PlanBuilder()
+            .values(inputRows)
+            .addNode([&](auto nodeId, auto source) -> core::PlanNodePtr {
+              return std::make_shared<core::WindowNode>(
+                  nodeId,
+                  std::vector<core::FieldAccessTypedExprPtr>{
+                      std::make_shared<core::FieldAccessTypedExpr>(
+                          BIGINT(), "c0")},
+                  std::vector<core::FieldAccessTypedExprPtr>{},
+                  std::vector<core::SortOrder>{},
+                  std::vector<std::string>{"w"},
+                  std::vector<core::WindowNode::Function>{windowFunction},
+                  false,
+                  source);
+            })
+            .planNode();
+
+    AssertQueryBuilder(planNode).copyResults(pool());
+  };
+
+  auto callExpr = std::make_shared<core::CallTypedExpr>(
+      BIGINT(),
+      "sum",
+      std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c1"));
+
+  VELOX_ASSERT_THROW(
+      runWindow(callExpr),
+      "Window function signature is not supported: sum(VARCHAR). Supported signatures:");
+
+  callExpr = std::make_shared<core::CallTypedExpr>(
+      VARCHAR(),
+      "sum",
+      std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "c2"));
+
+  VELOX_ASSERT_THROW(
+      runWindow(callExpr),
+      "Unexpected return type for window function sum(BIGINT). Expected BIGINT. Got VARCHAR.");
+}
+
+TEST_F(CudfWindowTest, rowNumberGlobalOrderBy) {
+  auto data = makeRowVector(
+      {"d", "p", "s"},
+      {
+          makeFlatVector<int64_t>({0, 1, 2, 3, 4}),
+          makeFlatVector<int16_t>({1, 1, 2, 2, 2}),
+          makeFlatVector<int32_t>({30, 10, 20, 5, 15}),
+      });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({"row_number() over (order by s)"})
+                  .orderBy({"s ASC NULLS LAST"}, false)
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"d", "p", "s", "w0"},
+      {
+          makeFlatVector<int64_t>({0, 1, 2, 3, 4}),
+          makeFlatVector<int16_t>({1, 1, 2, 2, 2}),
+          makeFlatVector<int32_t>({30, 10, 20, 5, 15}),
+          makeFlatVector<int64_t>({5, 2, 4, 1, 3}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfWindowTest, rankGlobalOrderBy) {
+  auto data = makeRowVector(
+      {"c1"}, {makeFlatVector<int64_t>({1, 1, 1, 2, 2})});
+
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .window({"rank() over (order by c1 rows unbounded preceding)"})
+          .orderBy({"c1 ASC NULLS LAST"}, false)
+          .planNode();
+
+  auto expected = makeRowVector(
+      {"c1", "w0"},
+      {
+          makeFlatVector<int64_t>({1, 1, 1, 2, 2}),
+          makeFlatVector<int64_t>({1, 1, 1, 4, 4}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfWindowTest, rowNumberMultiBatch) {
+  auto data = makeRowVector(
+      {"id", "val"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 2, 2, 2}),
+          makeFlatVector<int64_t>({10, 20, 30, 15, 25, 35}),
+      });
+
+  auto plan = PlanBuilder()
+                  .values(split(data, 3))
+                  .window({"row_number() over (partition by id order by val)"})
+                  .orderBy({"id ASC NULLS LAST", "val ASC NULLS LAST"}, false)
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"id", "val", "w0"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 2, 2, 2}),
+          makeFlatVector<int64_t>({10, 20, 30, 15, 25, 35}),
+          makeFlatVector<int64_t>({1, 2, 3, 1, 2, 3}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfWindowTest, multiFunctionPartitionOrder) {
+  // Same shape as valuesRowsStreamingWindowBuild (CPU) but non-streaming window
+  // and explicit expected vectors (no DuckDB runner).
+  auto data = makeRowVector(
+      {"c0", "c1", "c2", "c3", "c4"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 2, 2}),
+          makeFlatVector<int32_t>({1, 2, 3, 1, 2}),
+          makeFlatVector<int64_t>({1, 1, 1, 2, 2}),
+          makeFlatVector<int32_t>({0, 1, 2, 0, 1}),
+          makeFlatVector<int32_t>({10, 20, 30, 100, 200}),
+      });
+
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .window({
+              "rank() over (partition by c0, c2 order by c1, c3)",
+              "dense_rank() over (partition by c0, c2 order by c1, c3)",
+              "row_number() over (partition by c0, c2 order by c1, c3)",
+              "sum(c4) over (partition by c0, c2 order by c1, c3)",
+          })
+          .orderBy(
+              {"c0 ASC NULLS LAST",
+               "c2 ASC NULLS LAST",
+               "c1 ASC NULLS LAST",
+               "c3 ASC NULLS LAST"},
+              false)
+          .planNode();
+
+  auto expected = makeRowVector(
+      {"c0", "c1", "c2", "c3", "c4", "w0", "w1", "w2", "w3"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 2, 2}),
+          makeFlatVector<int32_t>({1, 2, 3, 1, 2}),
+          makeFlatVector<int64_t>({1, 1, 1, 2, 2}),
+          makeFlatVector<int32_t>({0, 1, 2, 0, 1}),
+          makeFlatVector<int32_t>({10, 20, 30, 100, 200}),
+          makeFlatVector<int64_t>({1, 2, 3, 1, 2}),
+          makeFlatVector<int64_t>({1, 2, 3, 1, 2}),
+          makeFlatVector<int64_t>({1, 2, 3, 1, 2}),
+          makeFlatVector<int64_t>({10, 30, 60, 100, 300}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfWindowTest, rankNaNRangeFrameBounds) {
+  // rank() ignores RANGE frame bounds; port of the rank() loop from
+  // WindowTest.NaNFrameBound (sum+RANGE is not mirrored here).
+  const auto kNan = std::numeric_limits<double>::quiet_NaN();
+  auto data = makeRowVector(
+      {"c0", "s0", "off0", "off1"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 4}),
+          makeFlatVector<double>({1.0, 2.0, 3.0, kNan}),
+          makeFlatVector<double>({0.1, 2.0, 1.9, kNan}),
+          makeFlatVector<double>({kNan, 2.0, kNan, kNan}),
+      });
+
+  const auto makeFrames = [](const std::string& call) {
+    std::vector<std::string> frames;
+
+    std::vector<std::string> orders{"asc", "desc"};
+    std::vector<std::string> bounds{"preceding", "following"};
+    for (const std::string& order : orders) {
+      for (const std::string& startBound : bounds) {
+        for (const std::string& endBound : bounds) {
+          if (startBound == "following" && endBound == "preceding") {
+            continue;
+          }
+          frames.push_back(fmt::format(
+              "{} over (order by s0 {} range between off0 {} and off1 {})",
+              call,
+              order,
+              startBound,
+              endBound));
+          frames.push_back(fmt::format(
+              "{} over (order by s0 {} range between off1 {} and off0 {})",
+              call,
+              order,
+              startBound,
+              endBound));
+        }
+      }
+    }
+    return frames;
+  };
+
+  auto expected =
+      makeRowVector({"w0"}, {makeFlatVector<int64_t>({1, 2, 3, 4})});
+  for (const auto& frame : makeFrames("rank()")) {
+    auto plan =
+        PlanBuilder().values({data}).window({frame}).project({"w0"}).planNode();
+    AssertQueryBuilder(plan).assertResults(expected);
+  }
 }
 
 } // namespace

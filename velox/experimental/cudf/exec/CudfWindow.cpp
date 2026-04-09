@@ -15,6 +15,7 @@
  */
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/CudfWindow.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
@@ -43,24 +44,6 @@
 namespace facebook::velox::cudf_velox {
 
 namespace {
-
-// Extract the base function name from a possibly-prefixed name.
-// Handles both Presto-style "presto.default.lag" and simple "lag".
-std::string getBaseFunctionName(const std::string& fullName) {
-  auto pos = fullName.rfind('.');
-  return pos == std::string::npos ? fullName : fullName.substr(pos + 1);
-}
-
-// Also strip any registered function name prefix (e.g. "spark_" for Spark).
-std::string stripFunctionPrefix(
-    const std::string& name,
-    const std::string& prefix) {
-  auto base = getBaseFunctionName(name);
-  if (!prefix.empty() && base.find(prefix) == 0) {
-    return base.substr(prefix.size());
-  }
-  return base;
-}
 
 cudf::size_type getLeadLagOffset(const core::WindowNode::Function& func) {
   const auto& args = func.functionCall->inputs();
@@ -148,8 +131,13 @@ std::unique_ptr<cudf::column> materializeColumnSameType(
   return std::move(gathered->release()[0]);
 }
 
-// Align each batch to the WindowNode input row type so libcudf::concatenate
-// sees identical column types across batches (e.g. DECIMAL64 vs DECIMAL128).
+// Normalize each incoming GPU batch to the WindowNode's logical row type so
+// libcudf::concatenate is well-defined. Invariant: every batch matches the
+// WindowNode input *Velox* row type. That does not guarantee identical libcudf
+// physical types across batches (e.g. DECIMAL64 vs DECIMAL128 for the same
+// logical DECIMAL, or Arrow import quirks); concatenate requires matching
+// cudf::data_type per column. When types already match, we only materialize
+// (gather) for a stable copy; variable-width columns must match exactly.
 std::unique_ptr<cudf::table> normalizeTableToInputRowType(
     cudf::table_view view,
     const RowTypePtr& rowType,
@@ -228,7 +216,7 @@ std::unique_ptr<cudf::column> CudfWindow::computeRankColumn(
     const std::string& baseName,
     rmm::cuda_stream_view stream,
     bool rankTieKeyAsDouble) const {
-  auto mr = cudf::get_current_device_resource_ref();
+  auto mr = get_output_mr();
   auto method = toRankMethod(baseName);
 
   // Build the "values" column for rank tie detection.
@@ -381,7 +369,7 @@ std::unique_ptr<cudf::column> CudfWindow::computeLeadLagColumn(
     const core::WindowNode::Function& func,
     const std::string& baseName,
     rmm::cuda_stream_view stream) const {
-  auto mr = cudf::get_current_device_resource_ref();
+  auto mr = get_output_mr();
   VELOX_CHECK_LE(
       func.functionCall->inputs().size(),
       2,
@@ -405,7 +393,7 @@ std::unique_ptr<cudf::column> CudfWindow::computeNthValueColumn(
     const core::WindowNode::Function& func,
     const std::string& baseName,
     rmm::cuda_stream_view stream) const {
-  auto mr = cudf::get_current_device_resource_ref();
+  auto mr = get_output_mr();
   auto nullPolicy = func.ignoreNulls ? cudf::null_policy::EXCLUDE
                                      : cudf::null_policy::INCLUDE;
   if (baseName == "first_value") {
@@ -431,7 +419,7 @@ std::unique_ptr<cudf::column> CudfWindow::computeAggregateColumn(
     const core::WindowNode::Function& func,
     const std::string& baseName,
     rmm::cuda_stream_view stream) const {
-  auto mr = cudf::get_current_device_resource_ref();
+  auto mr = get_output_mr();
   std::unique_ptr<cudf::rolling_aggregation> agg;
   if (baseName == "sum") {
     agg = cudf::make_sum_aggregation<cudf::rolling_aggregation>();
@@ -499,8 +487,8 @@ RowVectorPtr CudfWindow::getOutput() {
   }
 
   auto stream = inputBatches_[0]->stream();
-  auto mr = cudf::get_current_device_resource_ref();
-  auto pool = inputBatches_[0]->pool();
+  auto mr = get_output_mr();
+  velox::memory::MemoryPool* const outPool = pool();
 
   // Concatenate all input batches into one table (types aligned per Velox row).
   std::vector<std::unique_ptr<cudf::table>> normalizedBatches;
@@ -528,8 +516,7 @@ RowVectorPtr CudfWindow::getOutput() {
   // DuckDB (integration reference) and libcudf can disagree on DECIMAL
   // sort/rank ties, and Velox may plan rank_col as DOUBLE while DuckDB keeps
   // DECIMAL. Re-sort on a FLOAT64 alignment key for small global rank() only
-  // (TPC-DS Q44); skip for large inputs to avoid OOM (Q49 uses separate CPU
-  // window path).
+  // (TPC-DS Q44); skip for very large unpartitioned inputs to limit peak memory.
   constexpr cudf::size_type kMaxRowsDecimalFloatRankAlign = 131072;
   bool decimalFloatRankHack = false;
   std::unique_ptr<cudf::column> decimalRankSortScratch;
@@ -657,7 +644,7 @@ RowVectorPtr CudfWindow::getOutput() {
 
   finished_ = true;
   return std::make_shared<CudfVector>(
-      pool, outputType_, resultSize, std::move(resultTable), stream);
+      outPool, outputType_, resultSize, std::move(resultTable), stream);
 }
 
 } // namespace facebook::velox::cudf_velox

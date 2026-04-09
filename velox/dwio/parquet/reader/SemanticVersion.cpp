@@ -18,7 +18,7 @@
 
 namespace facebook::velox::parquet {
 
-const re2::RE2 SemanticVersion::pattern_(
+const RE2 SemanticVersion::pattern_(
     "(.*?)\\s+version\\s+(\\d+)\\.(\\d+)\\.(\\d+)");
 
 SemanticVersion::SemanticVersion()
@@ -43,7 +43,7 @@ std::optional<SemanticVersion> SemanticVersion::parse(
     const std::string& input) {
   std::string application_str, major_str, minor_str, patch_str;
 
-  if (re2::RE2::PartialMatch(
+  if (RE2::PartialMatch(
           input,
           pattern_,
           &application_str,
