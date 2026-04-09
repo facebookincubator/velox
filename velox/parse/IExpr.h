@@ -42,6 +42,7 @@ class IExpr {
     kConstant = 4,
     kLambda = 5,
     kSubquery = 6,
+    kConcat = 7,
   };
 
   VELOX_DECLARE_EMBEDDED_ENUM_NAME(Kind)

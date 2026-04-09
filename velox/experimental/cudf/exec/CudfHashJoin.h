@@ -149,11 +149,20 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
 
   exec::BlockingReason isBlocked(ContinueFuture* future) override;
 
+  /// Returns true if the join type is supported by cudf hash join.
+  /// Supported types:
+  /// - Inner, Left, Right, Full joins
+  /// - Left/Right Semi Filter joins
+  /// - Left Semi Project join (excluding null-aware join with filter)
+  /// - Anti join (non-null-aware, or null-aware without filter)
+  /// Note: Right Semi Project, and null-aware left semi-project join with
+  /// filter not yet supported.
   static bool isSupportedJoinType(core::JoinType joinType) {
     return joinType == core::JoinType::kInner ||
         joinType == core::JoinType::kLeft ||
         joinType == core::JoinType::kAnti ||
         joinType == core::JoinType::kLeftSemiFilter ||
+        joinType == core::JoinType::kLeftSemiProject ||
         joinType == core::JoinType::kRight ||
         joinType == core::JoinType::kRightSemiFilter ||
         joinType == core::JoinType::kFull;
@@ -201,6 +210,11 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
   /** @brief Output column positions for right table columns */
   std::vector<size_t> rightColumnOutputIndices_;
   bool finished_{false};
+
+  /// True if any build table has NULL values in join key columns.
+  /// Used for null-aware LEFT SEMI PROJECT to determine match column
+  /// nullability.
+  bool buildSideHasNullKeys_{false};
 
   // Copied from HashProbe.h
   // Indicates whether to skip probe input data processing or not. It only
@@ -286,6 +300,17 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
    * @return Vector of result tables (multiple if build data was batched)
    */
   std::vector<std::unique_ptr<cudf::table>> leftSemiFilterJoin(
+      cudf::table_view leftTableView,
+      rmm::cuda_stream_view stream);
+  /**
+   * @brief Performs left semi project join between probe table and all build
+   * tables. Returns all probe rows with a boolean match column indicating
+   * whether each row has a match on the build side.
+   * @param leftTableView Probe-side table view to join
+   * @param stream CUDA stream for operations
+   * @return Vector of result tables (multiple if build data was batched)
+   */
+  std::vector<std::unique_ptr<cudf::table>> leftSemiProjectJoin(
       cudf::table_view leftTableView,
       rmm::cuda_stream_view stream);
   /**

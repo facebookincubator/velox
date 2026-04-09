@@ -17,6 +17,7 @@
 #include <re2/re2.h>
 #include <filesystem>
 #include "velox/common/memory/SharedArbitrator.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/catalog/fbhive/FileUtils.h"
@@ -412,7 +413,8 @@ void registerHiveConnector(
   auto hiveConnector = factory.newConnector(
       kHiveConnectorId,
       std::make_shared<config::ConfigBase>(std::move(configs)));
-  connector::registerConnector(hiveConnector);
+  connector::ConnectorRegistry::global().insert(
+      hiveConnector->connectorId(), hiveConnector);
 }
 
 std::unique_ptr<ReferenceQueryRunner> setupReferenceQueryRunner(

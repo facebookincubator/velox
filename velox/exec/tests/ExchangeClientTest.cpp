@@ -84,7 +84,8 @@ class ExchangeClientTest : public testing::Test,
         executor_.get(), core::QueryConfig{std::move(config)});
     queryCtx->testingOverrideMemoryPool(
         memory::memoryManager()->addRootPool(queryCtx->queryId()));
-    auto plan = test::PlanBuilder().values({}).planNode();
+    auto plan =
+        test::PlanBuilder().values(std::vector<RowVectorPtr>{}).planNode();
     return Task::create(
         taskId,
         core::PlanFragment{plan},

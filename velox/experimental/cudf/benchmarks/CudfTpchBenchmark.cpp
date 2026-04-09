@@ -28,6 +28,7 @@
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/common/base/SuccinctPrinter.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/PlanNodeStats.h"
@@ -98,7 +99,7 @@ void CudfTpchBenchmark::initialize() {
   TpchBenchmark::initialize();
 
   if (FLAGS_velox_cudf_table_scan) {
-    connector::unregisterConnector(
+    connector::ConnectorRegistry::global().erase(
         facebook::velox::exec::test::kHiveConnectorId);
 
     // Add new values into the cudfHive configuration...
@@ -125,7 +126,8 @@ void CudfTpchBenchmark::initialize() {
         facebook::velox::exec::test::kHiveConnectorId,
         cudfHiveProperties,
         ioExecutor_.get());
-    connector::registerConnector(cudfHiveConnector);
+    connector::ConnectorRegistry::global().insert(
+        cudfHiveConnector->connectorId(), cudfHiveConnector);
   }
 
   cudf_velox::CudfConfig::getInstance().memoryResource =

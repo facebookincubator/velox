@@ -135,7 +135,7 @@ class HiveConnectorTestBase : public OperatorTestBase {
       const std::string& tableName = "hive_table",
       const RowTypePtr& dataColumns = nullptr,
       const std::vector<std::string>& indexColumns = {},
-      const std::unordered_map<std::string, std::string>& tableParameters =
+      const std::unordered_map<std::string, std::string>& storageParameters =
           {}) {
     return std::make_shared<connector::hive::HiveTableHandle>(
         kHiveConnectorId,
@@ -144,7 +144,7 @@ class HiveConnectorTestBase : public OperatorTestBase {
         remainingFilter,
         dataColumns,
         indexColumns,
-        tableParameters);
+        storageParameters);
   }
 
   /// @param name Column name.
@@ -164,8 +164,8 @@ class HiveConnectorTestBase : public OperatorTestBase {
       const TypePtr& dataType,
       const TypePtr& hiveType,
       const std::vector<std::string>& requiredSubfields,
-      connector::hive::HiveColumnHandle::ColumnType columnType =
-          connector::hive::HiveColumnHandle::ColumnType::kRegular);
+      connector::hive::FileColumnHandle::ColumnType columnType =
+          connector::hive::FileColumnHandle::ColumnType::kRegular);
 
   /// @param targetDirectory Final directory of the target table after commit.
   /// @param writeDirectory Write directory of the target table before commit.
@@ -207,7 +207,9 @@ class HiveConnectorTestBase : public OperatorTestBase {
       const std::unordered_map<std::string, std::string>& serdeParameters = {},
       const std::shared_ptr<dwio::common::WriterOptions>& writerOptions =
           nullptr,
-      const bool ensureFiles = false);
+      const bool ensureFiles = false,
+      const std::unordered_map<std::string, std::string>& storageParameters =
+          {});
 
   static std::shared_ptr<connector::hive::HiveInsertTableHandle>
   makeHiveInsertTableHandle(

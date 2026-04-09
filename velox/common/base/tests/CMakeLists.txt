@@ -36,6 +36,7 @@ add_executable(
   StatusTest.cpp
   SuccinctPrinterTest.cpp
 )
+velox_add_test_headers(velox_base_test GTestUtils.h)
 
 add_test(velox_base_test velox_base_test)
 
@@ -80,3 +81,9 @@ target_link_libraries(
   velox_memcpy_meter
   PRIVATE velox_common_base velox_exception velox_time Folly::folly gflags::gflags
 )
+
+velox_add_library(velox_gtest_utils INTERFACE HEADERS GTestUtils.h)
+
+velox_add_library(velox_stats_reporter_utils INTERFACE HEADERS StatsReporterUtils.h)
+
+velox_add_library(velox_float_constants INTERFACE HEADERS FloatConstants.h)

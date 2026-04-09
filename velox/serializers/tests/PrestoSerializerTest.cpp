@@ -18,7 +18,7 @@
 #include <folly/Random.h>
 #include <gtest/gtest.h>
 #include <vector>
-#include "folly/experimental/EventCount.h"
+#include "folly/synchronization/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/ByteStream.h"
 #include "velox/functions/prestosql/types/IPAddressType.h"
@@ -1971,9 +1971,11 @@ class PrestoSerializerBatchEstimateSizeTest : public testing::Test,
     if (!isRegisteredVectorSerde()) {
       serializer::presto::PrestoVectorSerde::registerVectorSerde();
     }
+    ASSERT_EQ(getVectorSerde()->kind(), "Presto");
     if (!isRegisteredNamedVectorSerde("Presto")) {
       serializer::presto::PrestoVectorSerde::registerNamedVectorSerde();
     }
+    ASSERT_EQ(getNamedVectorSerde("Presto")->kind(), "Presto");
 
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }

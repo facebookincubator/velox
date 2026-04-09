@@ -928,19 +928,19 @@ TEST_F(ParquetTableScanTest, rowIndex) {
   connector::ColumnHandleMap assignments;
   assignments["a"] = std::make_shared<connector::hive::HiveColumnHandle>(
       "a",
-      connector::hive::HiveColumnHandle::ColumnType::kRegular,
+      connector::hive::FileColumnHandle::ColumnType::kRegular,
       BIGINT(),
       BIGINT());
   assignments["b"] = std::make_shared<connector::hive::HiveColumnHandle>(
       "b",
-      connector::hive::HiveColumnHandle::ColumnType::kRegular,
+      connector::hive::FileColumnHandle::ColumnType::kRegular,
       DOUBLE(),
       DOUBLE());
   assignments[kPath] = synthesizedColumn(kPath, VARCHAR());
   assignments["_tmp_metadata_row_index"] =
       std::make_shared<connector::hive::HiveColumnHandle>(
           "_tmp_metadata_row_index",
-          connector::hive::HiveColumnHandle::ColumnType::kRowIndex,
+          connector::hive::FileColumnHandle::ColumnType::kRowIndex,
           BIGINT(),
           BIGINT());
 
@@ -1029,13 +1029,13 @@ TEST_F(ParquetTableScanTest, filterNullIcebergPartition) {
           }));
 
   std::shared_ptr<connector::ColumnHandle> c0 = makeColumnHandle(
-      "c0", BIGINT(), BIGINT(), {}, HiveColumnHandle::ColumnType::kRegular);
+      "c0", BIGINT(), BIGINT(), {}, FileColumnHandle::ColumnType::kRegular);
   std::shared_ptr<connector::ColumnHandle> c1 = makeColumnHandle(
       "c1",
       BIGINT(),
       BIGINT(),
       {},
-      HiveColumnHandle::ColumnType::kPartitionKey);
+      FileColumnHandle::ColumnType::kPartitionKey);
 
   const auto filePath =
       getExampleFilePath("icebergNullIcebergPartition.parquet");
@@ -1458,15 +1458,15 @@ TEST_F(ParquetTableScanTest, booleanRle) {
   loadData(schema, vector);
 
   std::shared_ptr<connector::ColumnHandle> c0 = makeColumnHandle(
-      "c0", BOOLEAN(), BOOLEAN(), {}, HiveColumnHandle::ColumnType::kRegular);
+      "c0", BOOLEAN(), BOOLEAN(), {}, FileColumnHandle::ColumnType::kRegular);
   std::shared_ptr<connector::ColumnHandle> c1 = makeColumnHandle(
-      "c1", BOOLEAN(), BOOLEAN(), {}, HiveColumnHandle::ColumnType::kRegular);
+      "c1", BOOLEAN(), BOOLEAN(), {}, FileColumnHandle::ColumnType::kRegular);
   std::shared_ptr<connector::ColumnHandle> c2 = makeColumnHandle(
-      "c2", BOOLEAN(), BOOLEAN(), {}, HiveColumnHandle::ColumnType::kRegular);
+      "c2", BOOLEAN(), BOOLEAN(), {}, FileColumnHandle::ColumnType::kRegular);
   std::shared_ptr<connector::ColumnHandle> c3 = makeColumnHandle(
-      "c3", BOOLEAN(), BOOLEAN(), {}, HiveColumnHandle::ColumnType::kRegular);
+      "c3", BOOLEAN(), BOOLEAN(), {}, FileColumnHandle::ColumnType::kRegular);
   std::shared_ptr<connector::ColumnHandle> c4 = makeColumnHandle(
-      "c4", BOOLEAN(), BOOLEAN(), {}, HiveColumnHandle::ColumnType::kRegular);
+      "c4", BOOLEAN(), BOOLEAN(), {}, FileColumnHandle::ColumnType::kRegular);
 
   assertSelect({makeSplit(file->getPath())}, {"c0"}, "SELECT c0 FROM tmp");
   assertSelect({makeSplit(file->getPath())}, {"c1"}, "SELECT c1 FROM tmp");
@@ -1494,11 +1494,11 @@ TEST_F(ParquetTableScanTest, singleBooleanRle) {
   loadData(schema, vector);
 
   std::shared_ptr<connector::ColumnHandle> c0 = makeColumnHandle(
-      "c0", BOOLEAN(), BOOLEAN(), {}, HiveColumnHandle::ColumnType::kRegular);
+      "c0", BOOLEAN(), BOOLEAN(), {}, FileColumnHandle::ColumnType::kRegular);
   std::shared_ptr<connector::ColumnHandle> c1 = makeColumnHandle(
-      "c1", BOOLEAN(), BOOLEAN(), {}, HiveColumnHandle::ColumnType::kRegular);
+      "c1", BOOLEAN(), BOOLEAN(), {}, FileColumnHandle::ColumnType::kRegular);
   std::shared_ptr<connector::ColumnHandle> c2 = makeColumnHandle(
-      "c2", BOOLEAN(), BOOLEAN(), {}, HiveColumnHandle::ColumnType::kRegular);
+      "c2", BOOLEAN(), BOOLEAN(), {}, FileColumnHandle::ColumnType::kRegular);
 
   assertSelect({makeSplit(file->getPath())}, {"c0"}, "SELECT c0 FROM tmp");
   assertSelect({makeSplit(file->getPath())}, {"c1"}, "SELECT c1 FROM tmp");
@@ -1533,6 +1533,116 @@ TEST_F(ParquetTableScanTest, intToBigintRead) {
   auto rows = result->as<RowVector>();
 
   assertEqualVectors(bigintDataFileVectors->childAt(0), rows->childAt(0));
+}
+
+TEST_F(ParquetTableScanTest, intNarrowingRejectedByDefault) {
+  // Narrowing conversions are rejected when allowInt32Narrowing is false
+  // (default). Each case writes a wider integer column and reads as a narrower
+  // type, expecting an exception from convertType.
+  auto assertNarrowingThrows = [&](const VectorPtr& sourceVector,
+                                   const TypePtr& targetType) {
+    auto vectors = makeRowVector({"c1"}, {sourceVector});
+    auto dataFile = TempFilePath::create();
+    writeToParquetFile(dataFile->getPath(), {vectors}, WriterOptions{});
+    auto rowType = ROW({"c1"}, {targetType});
+    auto op = PlanBuilder()
+                  .startTableScan()
+                  .outputType(rowType)
+                  .dataColumns(rowType)
+                  .endTableScan()
+                  .planNode();
+    VELOX_ASSERT_THROW(
+        AssertQueryBuilder(op)
+            .split(makeSplit(dataFile->getPath()))
+            .copyResults(pool()),
+        "is not allowed for requested type");
+  };
+
+  assertNarrowingThrows(makeFlatVector<int16_t>({1, 2}), TINYINT());
+  assertNarrowingThrows(makeFlatVector<int32_t>({1, 2}), SMALLINT());
+  assertNarrowingThrows(makeFlatVector<int32_t>({1, 2}), TINYINT());
+}
+
+TEST_F(ParquetTableScanTest, intReadWithNarrowerType) {
+  // Reading a wider integer as a narrower one causes unchecked truncation and
+  // two's complement reinterpretation, resulting in values INT_MAX becoming -1.
+  // Only INT32 physical type narrowing is supported (INT_16 -> TINYINT,
+  // INT_32 -> SMALLINT/TINYINT). INT64 -> INT32 is not allowed.
+  RowVectorPtr intVectors = makeRowVector(
+      {"c1", "c2", "c3"},
+      {
+          makeFlatVector<int16_t>(
+              {123,
+               std::numeric_limits<int8_t>::max(),
+               std::numeric_limits<int8_t>::min(),
+               std::numeric_limits<int16_t>::max(),
+               std::numeric_limits<int16_t>::min()}),
+          makeFlatVector<int32_t>(
+              {123,
+               std::numeric_limits<int16_t>::max(),
+               std::numeric_limits<int16_t>::min(),
+               std::numeric_limits<int32_t>::max(),
+               std::numeric_limits<int32_t>::min()}),
+          makeFlatVector<int32_t>(
+              {123,
+               std::numeric_limits<int8_t>::max(),
+               std::numeric_limits<int8_t>::min(),
+               std::numeric_limits<int32_t>::max(),
+               std::numeric_limits<int32_t>::min()}),
+      });
+
+  RowVectorPtr smallerIntVectors = makeRowVector(
+      {"c1", "c2", "c3"},
+      {
+          makeFlatVector<int8_t>({
+              123,
+              std::numeric_limits<int8_t>::max(),
+              std::numeric_limits<int8_t>::min(),
+              -1,
+              0,
+          }),
+          makeFlatVector<int16_t>({
+              123,
+              std::numeric_limits<int16_t>::max(),
+              std::numeric_limits<int16_t>::min(),
+              -1,
+              0,
+          }),
+          makeFlatVector<int8_t>({
+              123,
+              std::numeric_limits<int8_t>::max(),
+              std::numeric_limits<int8_t>::min(),
+              -1,
+              0,
+          }),
+      });
+
+  auto dataFile = TempFilePath::create();
+  WriterOptions options;
+  writeToParquetFile(dataFile->getPath(), {intVectors}, options);
+
+  auto rowType = ROW({"c1", "c2", "c3"}, {TINYINT(), SMALLINT(), TINYINT()});
+  auto op = PlanBuilder()
+                .startTableScan()
+                .outputType(rowType)
+                .dataColumns(rowType)
+                .endTableScan()
+                .planNode();
+
+  auto split = makeSplit(dataFile->getPath());
+  auto result =
+      AssertQueryBuilder(op)
+          .connectorSessionProperty(
+              kHiveConnectorId,
+              connector::hive::HiveConfig::kAllowInt32NarrowingSession,
+              "true")
+          .split(split)
+          .copyResults(pool());
+  auto rows = result->as<RowVector>();
+
+  assertEqualVectors(smallerIntVectors->childAt(0), rows->childAt(0));
+  assertEqualVectors(smallerIntVectors->childAt(1), rows->childAt(1));
+  assertEqualVectors(smallerIntVectors->childAt(2), rows->childAt(2));
 }
 
 TEST_F(ParquetTableScanTest, shortAndLongDecimalReadWithLargerPrecision) {
@@ -1729,6 +1839,50 @@ TEST_F(ParquetTableScanTest, statsBasedFileSkipping) {
   testFileSkipping("c2 = 'z'", 2, 0);
   // Matches both files, no files skipped.
   testFileSkipping("c0 >= 0", 0, 2);
+}
+
+TEST_F(ParquetTableScanTest, fileFormatRuntimeStats) {
+  auto rowType = ROW({"a", "b"}, {BIGINT(), DOUBLE()});
+  auto vector = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int64_t>(100, [](auto row) { return row; }),
+          makeFlatVector<double>(100, [](auto row) { return row * 1.5; }),
+      });
+  std::vector<RowVectorPtr> vectors = {vector};
+
+  // Write one Parquet file and one DWRF file.
+  auto parquetFile = TempFilePath::create();
+  WriterOptions parquetOptions;
+  parquetOptions.memoryPool = rootPool_.get();
+  writeToParquetFile(parquetFile->getPath(), vectors, parquetOptions);
+
+  auto dwrfFile = TempFilePath::create();
+  writeToFile(dwrfFile->getPath(), vectors);
+
+  // DuckDB reference table with data from both files.
+  std::vector<RowVectorPtr> allVectors = {vector, vector};
+  createDuckDbTable(allVectors);
+
+  auto parquetSplit = makeHiveConnectorSplits(
+      parquetFile->getPath(), 1, dwio::common::FileFormat::PARQUET);
+  auto dwrfSplit = makeHiveConnectorSplits(
+      dwrfFile->getPath(), 1, dwio::common::FileFormat::DWRF);
+
+  auto plan = PlanBuilder().tableScan(asRowType(vectors[0]->type())).planNode();
+
+  auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                  .splits({parquetSplit[0], dwrfSplit[0]})
+                  .assertResults("SELECT * FROM tmp");
+
+  auto stats = task->taskStats().pipelineStats[0].operatorStats[0].runtimeStats;
+  ASSERT_EQ(stats.count("fileFormat.parquet"), 1);
+  ASSERT_EQ(stats.at("fileFormat.parquet").sum, 1);
+  ASSERT_EQ(stats.count("fileFormat.dwrf"), 1);
+  ASSERT_EQ(stats.at("fileFormat.dwrf").sum, 1);
+
+  task.reset();
+  waitForAllTasksToBeDeleted();
 }
 
 int main(int argc, char** argv) {

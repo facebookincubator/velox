@@ -100,3 +100,19 @@ class TestPyVeloxPlanBuidler(unittest.TestCase):
         )
         self.assertEqual(str(plan_node), str(plan_clone))
         self.assertEqual(plan_node.to_string(), plan_clone.to_string())
+
+    def test_mark_sorted(self):
+        plan_builder = PlanBuilder()
+        plan_builder.table_scan(ROW(["c0", "c1"], [BIGINT(), BIGINT()]))
+
+        plan_builder.mark_sorted(
+            marker_key="is_sorted",
+            sorting_keys=["c0", "c1 DESC"],
+        )
+        mark_sorted_node = plan_builder.get_plan_node()
+        self.assertEqual(mark_sorted_node.name(), "MarkSorted")
+
+        self.assertEqual(
+            str(mark_sorted_node),
+            "-- MarkSorted[1]\n  -- TableScan[0]\n",
+        )

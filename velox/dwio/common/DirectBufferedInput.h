@@ -239,6 +239,14 @@ class DirectBufferedInput : public BufferedInput {
  protected:
   // Some members are protected to allow custom extended buffered inputs.
   // Regions that are candidates for loading.
+  const StringIdLease fileNum_;
+  const std::shared_ptr<cache::ScanTracker> tracker_;
+  const StringIdLease groupId_;
+  const std::shared_ptr<IoStatistics> ioStatistics_;
+  const std::shared_ptr<velox::IoStats> ioStats_;
+  folly::Executor* const executor_;
+  const uint64_t fileSize_;
+  const io::ReaderOptions options_;
   std::vector<LoadRequest> requests_;
 
   // Distinct coalesced loads in 'coalescedLoads_'.
@@ -300,15 +308,6 @@ class DirectBufferedInput : public BufferedInput {
       pool.reset();
     }
   };
-
-  const StringIdLease fileNum_;
-  const std::shared_ptr<cache::ScanTracker> tracker_;
-  const StringIdLease groupId_;
-  const std::shared_ptr<IoStatistics> ioStatistics_;
-  const std::shared_ptr<velox::IoStats> ioStats_;
-  folly::Executor* const executor_;
-  const uint64_t fileSize_;
-  const io::ReaderOptions options_;
 
   // Coalesced loads spanning multiple streams in one IO.
   folly::Synchronized<folly::F14FastMap<

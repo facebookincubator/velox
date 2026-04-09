@@ -52,6 +52,17 @@ add_library(
   TestUtil.cpp
   XxHasher.cpp
 )
+velox_add_test_headers(
+  velox_dwio_arrow_parquet_writer_test_lib
+  BloomFilter.h
+  BloomFilterReader.h
+  ColumnReader.h
+  ColumnScanner.h
+  FileReader.h
+  Hasher.h
+  TestUtil.h
+  XxHasher.h
+)
 
 target_link_libraries(
   velox_dwio_arrow_parquet_writer_test_lib

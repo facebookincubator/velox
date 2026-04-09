@@ -14,19 +14,17 @@
  * limitations under the License.
  */
 
-#pragma once
+#include "velox/functions/prestosql/types/IPAddressType.h"
 
-#include <cstdint>
-#include <string>
+namespace facebook::velox {
 
-namespace facebook::velox::dwio::common {
+std::string IPAddressType::valueToString(int128_t value) const {
+  auto bytes = ipaddress::toIPv6ByteArray(value);
+  folly::IPAddressV6 v6Addr(bytes);
+  if (v6Addr.isIPv4Mapped()) {
+    return v6Addr.createIPv4().str();
+  }
+  return v6Addr.str();
+}
 
-/// File format specific metadata returned when a writer is closed.
-/// Caller of Writer::close() can do further processing such as aggregate
-/// row group statistics to file level statistics based on the metadata.
-class FileMetadata {
- public:
-  virtual ~FileMetadata() = default;
-};
-
-} // namespace facebook::velox::dwio::common
+} // namespace facebook::velox

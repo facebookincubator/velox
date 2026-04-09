@@ -655,6 +655,11 @@ class PlanBuilder {
       bool parallelizable = false,
       size_t repeatTimes = 1);
 
+  /// Convenience overload that wraps a single RowVectorPtr in a vector.
+  PlanBuilder& values(const RowVectorPtr& value) {
+    return values(std::vector<RowVectorPtr>{value});
+  }
+
   PlanBuilder& filtersAsNode(bool filtersAsNode) {
     filtersAsNode_ = filtersAsNode;
     return *this;
