@@ -35,6 +35,7 @@ Checks: >
   -llvm-include-order,
   -llvm-qualified-auto,
   -llvmlibc-*,
+  -misc-include-cleaner,
   -misc-no-recursion,
   -misc-non-private-member-variables-in-classes,
   -misc-unused-parameters,
