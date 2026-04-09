@@ -23,6 +23,7 @@
 #include "velox/common/Casts.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/CpuWallTimer.h"
+#include "velox/connectors/hive/ExtractionUtils.h"
 #include "velox/connectors/hive/FileConfig.h"
 #include "velox/expression/FieldReference.h"
 
@@ -196,8 +197,160 @@ FileDataSource::FileDataSource(
         *scanSpec_, *remainingFilter, expressionEvaluator_);
   }
 
+  // Detect extraction columns and reconfigure scanSpec_ if needed.
+  bool hasExtractions = false;
+  readColumnTypes = readerOutputType_->children();
+  for (int outputIdx = 0; outputIdx < outputType->size(); ++outputIdx) {
+    const auto& outputName = outputType->nameOf(outputIdx);
+    auto it = assignments.find(outputName);
+    if (it == assignments.end()) {
+      continue;
+    }
+    auto* handle = static_cast<const FileColumnHandle*>(it->second.get());
+    if (!handle->extractions().empty()) {
+      // Column has extraction chains.  Read with schemaType from file, then
+      // apply extraction post-read.  Extractions and requiredSubfields are
+      // mutually exclusive (enforced by the column handle constructor).
+      auto readerIdx = readerOutputType_->getChildIdxIfExists(handle->name());
+      if (readerIdx.has_value()) {
+        readColumnTypes[*readerIdx] = handle->schemaType();
+        extractionColumns_[*readerIdx] = handle;
+        hasExtractions = true;
+      }
+    }
+  }
+
+  if (hasExtractions) {
+    // Rebuild readerOutputType_ with schemaType for extraction columns.
+    readerOutputType_ =
+        ROW(std::vector<std::string>(
+                readerOutputType_->names().begin(),
+                readerOutputType_->names().end()),
+            std::move(readColumnTypes));
+    // Rebuild scanSpec_ with the updated readerOutputType_.
+    scanSpec_ = makeScanSpec(
+        readerOutputType_,
+        subfields_,
+        filters_,
+        /*indexColumns=*/{},
+        tableHandle_->dataColumns(),
+        partitionKeys_,
+        infoColumns_,
+        specialColumns_,
+        fileConfig_->readStatsBasedFilterReorderDisabled(
+            connectorQueryCtx->sessionProperties()),
+        pool_);
+    configureExtractionColumns();
+  }
+
   ioStatistics_ = std::make_shared<io::IoStatistics>();
   ioStats_ = std::make_shared<IoStats>();
+}
+
+void FileDataSource::configureExtractionColumns() {
+  // Configure extraction columns on the ScanSpec.  For each column with
+  // extractions, this:
+  // 1. Sets pruning hints so DWRF/Nimble readers skip unneeded sub-streams.
+  // 2. Sets a transform function on the ScanSpec node so the reader applies
+  //    extraction chains and produces the output type directly.
+  for (auto& [colIdx, handle] : extractionColumns_) {
+    auto* fieldSpec = scanSpec_->childByName(readerOutputType_->nameOf(colIdx));
+    if (!fieldSpec) {
+      continue;
+    }
+    const auto& extractions = handle->extractions();
+    auto extractionOutputType = handle->dataType();
+
+    // For multiple extractions, do NOT call configureExtractionScanSpec --
+    // keep ExtractionType as kNone and use full chains in the transform.
+    // This ensures the text reader (which does not handle ExtractionType
+    // natively) produces correct results.
+    if (extractions.size() == 1) {
+      configureExtractionScanSpec(
+          handle->schemaType(), extractions, *fieldSpec, pool_);
+    }
+    if (extractions.size() == 1) {
+      // Store a full-chain transform so hasTransform() returns true.  This
+      // signals to the delta update path that extraction is configured.
+      // The full chain is captured for PrismSplitReader to replace it.
+      fieldSpec->setTransform(
+          [fullChain = extractions[0].chain](
+              const VectorPtr& input, memory::MemoryPool* pool) -> VectorPtr {
+            return applyExtractionChain(input, fullChain, pool);
+          },
+          extractionOutputType);
+    } else {
+      // Multiple extractions: do NOT set ExtractionType on the ScanSpec.
+      // Use full chains in the transform so the text reader (which does
+      // not handle ExtractionType natively) produces correct results.
+      // TODO: Optimization: for agreeing multiple extractions, set
+      // ExtractionType and use remaining chains.  Requires text reader
+      // to handle ExtractionType natively.
+      struct ExtractionInfo {
+        std::string outputName;
+        std::vector<ExtractionPathElementPtr> chain;
+      };
+
+      std::vector<ExtractionInfo> infos;
+      for (const auto& extraction : extractions) {
+        infos.push_back({extraction.outputName, extraction.chain});
+      }
+      // Always need a transform for multiple extractions to assemble ROW.
+      fieldSpec->setTransform(
+          [infos = std::move(infos)](
+              const VectorPtr& input, memory::MemoryPool* pool) -> VectorPtr {
+            std::vector<VectorPtr> children;
+            std::vector<std::string> names;
+            std::vector<TypePtr> types;
+            children.reserve(infos.size());
+            names.reserve(infos.size());
+            types.reserve(infos.size());
+            for (const auto& info : infos) {
+              VectorPtr extracted;
+              if (info.chain.empty()) {
+                extracted = input;
+              } else {
+                extracted = applyExtractionChain(input, info.chain, pool);
+              }
+              names.push_back(info.outputName);
+              types.push_back(extracted->type());
+              children.push_back(std::move(extracted));
+            }
+            return std::make_shared<RowVector>(
+                pool,
+                ROW(std::move(names), std::move(types)),
+                nullptr,
+                input->size(),
+                std::move(children));
+          },
+          extractionOutputType);
+    }
+  }
+
+  // Build readerProducedType_ -- the actual type the reader will produce.
+  // For extraction columns where the reader handles extraction natively
+  // (ExtractionType != kNone), the output type differs from schemaType.
+  {
+    auto names = readerOutputType_->names();
+    auto types = readerOutputType_->children();
+    bool needsSeparateType = false;
+    for (auto& [colIdx, handle] : extractionColumns_) {
+      auto* fieldSpec =
+          scanSpec_->childByName(readerOutputType_->nameOf(colIdx));
+      if (fieldSpec &&
+          fieldSpec->extractionType() !=
+              common::ScanSpec::ExtractionType::kNone) {
+        VELOX_CHECK_LT(static_cast<size_t>(colIdx), types.size());
+        types[colIdx] = handle->dataType();
+        needsSeparateType = true;
+      }
+    }
+    if (needsSeparateType) {
+      readerProducedType_ =
+          ROW(std::vector<std::string>(names.begin(), names.end()),
+              std::move(types));
+    }
+  }
 }
 
 std::unique_ptr<FileSplitReader> FileDataSource::createSplitReader() {
@@ -253,12 +406,14 @@ std::optional<RowVectorPtr> FileDataSource::next(
 
   // Subclass reader may add extra columns to reader output (e.g. for bucket
   // conversion or delta update).
+  auto& outputRowType =
+      readerProducedType_ ? readerProducedType_ : readerOutputType_;
   auto needsExtraColumn = [&] {
     return output_->asUnchecked<RowVector>()->childrenSize() <
-        readerOutputType_->size();
+        outputRowType->size();
   };
   if (!output_ || needsExtraColumn()) {
-    output_ = BaseVector::create(readerOutputType_, 0, pool_);
+    output_ = BaseVector::create(outputRowType, 0, pool_);
   }
 
   const auto rowsScanned = splitReader_->next(size, output_);
@@ -488,6 +643,8 @@ void FileDataSource::setFromDataSource(
   runtimeStats_.processedSplits += source->runtimeStats_.processedSplits;
   runtimeStats_.skippedSplitBytes += source->runtimeStats_.skippedSplitBytes;
   readerOutputType_ = std::move(source->readerOutputType_);
+  readerProducedType_ = std::move(source->readerProducedType_);
+  extractionColumns_ = std::move(source->extractionColumns_);
   source->scanSpec_->moveAdaptationFrom(*scanSpec_);
   scanSpec_ = std::move(source->scanSpec_);
   metadataFilter_ = std::move(source->metadataFilter_);
