@@ -18,9 +18,9 @@
 
 #include "velox/experimental/cudf/connectors/hive/CudfSplitReader.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfDeletionVectorReader.h"
+#include "velox/experimental/cudf/connectors/hive/iceberg/CudfEqualityDeleteFileReader.h"
 
 #include "velox/connectors/hive/HiveConfig.h"
-#include "velox/connectors/hive/iceberg/EqualityDeleteFileReader.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 #include "velox/connectors/hive/iceberg/PositionalDeleteFileReader.h"
@@ -39,8 +39,8 @@ namespace velox_iceberg = ::facebook::velox::connector::hive::iceberg;
 ///     `CudfDeletionVectorReader` and applied on GPU using cuco and cudf
 ///   - Positional deletes (V2): Host-side bitmap read via upstream
 ///     `PositionalDeleteFileReader` and applied on GPU using cudf
-///   - Equality deletes (V2): Host-side bitmap read via upstream
-///     `EqualityDeleteFileReader` and applied on GPU using cudf
+///   - Equality deletes (V2): Read via `CudfEqualityDeleteFileReader`
+///     and applied on GPU using cudf
 class CudfIcebergSplitReader : public CudfSplitReader {
  public:
   CudfIcebergSplitReader(
@@ -103,7 +103,7 @@ class CudfIcebergSplitReader : public CudfSplitReader {
       positionalDeleteFileReaders_;
 
   /// Equality delete file readers.
-  std::list<std::unique_ptr<velox_iceberg::EqualityDeleteFileReader>>
+  std::list<std::unique_ptr<CudfEqualityDeleteFileReader>>
       equalityDeleteFileReaders_;
 
   /// Tracks the absolute row offset within the data file. Each chunk advances

@@ -34,7 +34,7 @@ std::unique_ptr<cudf::table> applyDeleteBitmap(
     cudf::table_view input,
     const uint8_t* hostBitmap,
     std::shared_ptr<rmm::device_buffer> deviceBitmap,
-    std::shared_ptr<rmm::device_buffer> deviceRowMask,
+    std::shared_ptr<rmm::device_buffer> rowMask,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref temp_mr,
     rmm::device_async_resource_ref output_mr);

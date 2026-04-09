@@ -305,7 +305,7 @@ void CudfIcebergSplitReader::setupDeleteFileReaders() {
 
       if (!equalityColumnNames.empty()) {
         equalityDeleteFileReaders_.push_back(
-            std::make_unique<velox_iceberg::EqualityDeleteFileReader>(
+            std::make_unique<CudfEqualityDeleteFileReader>(
                 deleteFile,
                 equalityColumnNames,
                 equalityColumnTypes,
