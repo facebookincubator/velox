@@ -17,6 +17,7 @@
 #include "velox/functions/prestosql/types/BigintEnumRegistration.h"
 #include "velox/expression/CastExpr.h"
 #include "velox/functions/prestosql/types/BigintEnumType.h"
+#include "velox/type/CastRegistry.h"
 
 namespace facebook::velox {
 namespace {
@@ -132,6 +133,13 @@ class BigintEnumTypeFactory : public CustomTypeFactory {
 
 void registerBigintEnumType() {
   registerCustomType(
-      "bigint_enum", std::make_unique<const BigintEnumTypeFactory>());
+      "BIGINT_ENUM", std::make_unique<const BigintEnumTypeFactory>());
+  registerCastRules({
+      {.fromType = "TINYINT", .toType = "BIGINT_ENUM"},
+      {.fromType = "SMALLINT", .toType = "BIGINT_ENUM"},
+      {.fromType = "INTEGER", .toType = "BIGINT_ENUM"},
+      {.fromType = "BIGINT", .toType = "BIGINT_ENUM"},
+      {.fromType = "BIGINT_ENUM", .toType = "BIGINT"},
+  });
 }
 } // namespace facebook::velox

@@ -401,7 +401,7 @@ class TimestampWithTimeZoneTypeFactory : public CustomTypeFactory {
 
 void registerTimestampWithTimeZoneType() {
   registerCustomType(
-      "timestamp with time zone",
+      "TIMESTAMP WITH TIME ZONE",
       std::make_unique<const TimestampWithTimeZoneTypeFactory>());
   // Lower cost = preferred during overload resolution. TIMESTAMP is closer
   // to TIMESTAMP WITH TIME ZONE than DATE.
@@ -409,37 +409,17 @@ void registerTimestampWithTimeZoneType() {
       {.fromType = "TIMESTAMP",
        .toType = "TIMESTAMP WITH TIME ZONE",
        .implicitAllowed = true,
-       .cost = 1,
-       .validator = {}},
-      {.fromType = "VARCHAR",
-       .toType = "TIMESTAMP WITH TIME ZONE",
-       .implicitAllowed = false,
-       .validator = {}},
+       .cost = 1},
+      {.fromType = "VARCHAR", .toType = "TIMESTAMP WITH TIME ZONE"},
       {.fromType = "DATE",
        .toType = "TIMESTAMP WITH TIME ZONE",
        .implicitAllowed = true,
-       .cost = 2,
-       .validator = {}},
-      {.fromType = "TIME",
-       .toType = "TIMESTAMP WITH TIME ZONE",
-       .implicitAllowed = false,
-       .validator = {}},
-      {.fromType = "TIMESTAMP WITH TIME ZONE",
-       .toType = "TIMESTAMP",
-       .implicitAllowed = false,
-       .validator = {}},
-      {.fromType = "TIMESTAMP WITH TIME ZONE",
-       .toType = "VARCHAR",
-       .implicitAllowed = false,
-       .validator = {}},
-      {.fromType = "TIMESTAMP WITH TIME ZONE",
-       .toType = "DATE",
-       .implicitAllowed = false,
-       .validator = {}},
-      {.fromType = "TIMESTAMP WITH TIME ZONE",
-       .toType = "TIME",
-       .implicitAllowed = false,
-       .validator = {}},
+       .cost = 2},
+      {.fromType = "TIME", .toType = "TIMESTAMP WITH TIME ZONE"},
+      {.fromType = "TIMESTAMP WITH TIME ZONE", .toType = "TIMESTAMP"},
+      {.fromType = "TIMESTAMP WITH TIME ZONE", .toType = "VARCHAR"},
+      {.fromType = "TIMESTAMP WITH TIME ZONE", .toType = "DATE"},
+      {.fromType = "TIMESTAMP WITH TIME ZONE", .toType = "TIME"},
   });
 }
 } // namespace facebook::velox
