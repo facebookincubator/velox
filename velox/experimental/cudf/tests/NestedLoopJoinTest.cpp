@@ -1585,3 +1585,9 @@ TEST_F(CudfNestedLoopJoinTest, leftSemiProjectMultiDriver) {
       "(SELECT 1 FROM UNNEST(ARRAY[3, 7, 3, 7]) AS u(c0) "
       "WHERE t.c0 < u.c0) FROM t");
 }
+
+// TODO: Zero-column build side is not yet supported. cudf::table with zero
+// columns reports num_rows() == 0, causing the operator to treat a non-empty
+// build as empty. Fixing this requires the bridge to carry row counts
+// separately. See CPU NestedLoopJoinTest::zeroColumnBuild for the expected
+// behavior.

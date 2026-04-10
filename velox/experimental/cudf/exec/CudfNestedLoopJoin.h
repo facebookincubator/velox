@@ -94,10 +94,7 @@ class CudfNestedLoopJoinBuild : public exec::Operator, public NvtxHelper {
 
   bool isFinished() override;
 
-  void close() override {
-    inputs_.clear();
-    Operator::close();
-  }
+  void close() override;
 
  private:
   std::shared_ptr<const core::NestedLoopJoinNode> joinNode_;
@@ -200,6 +197,16 @@ class CudfNestedLoopJoinProbe : public exec::Operator, public NvtxHelper {
   /// Ensures build-stream data is visible on the given probe stream.
   void syncBuildStream(rmm::cuda_stream_view probeStream);
 
+  bool isLeftOrFullJoin() const {
+    return joinType_ == core::JoinType::kLeft ||
+        joinType_ == core::JoinType::kFull;
+  }
+
+  bool isRightOrFullJoin() const {
+    return joinType_ == core::JoinType::kRight ||
+        joinType_ == core::JoinType::kFull;
+  }
+
   std::shared_ptr<const core::NestedLoopJoinNode> joinNode_;
   core::JoinType joinType_;
   std::optional<build_data_type> buildData_;
@@ -256,11 +263,14 @@ class CudfNestedLoopJoinProbe : public exec::Operator, public NvtxHelper {
 class CudfNestedLoopJoinBridgeTranslator
     : public exec::Operator::PlanNodeTranslator {
  public:
+  /// Creates a CudfNestedLoopJoinProbe operator for the given plan node.
   std::unique_ptr<exec::Operator>
   toOperator(exec::DriverCtx* ctx, int32_t id, const core::PlanNodePtr& node);
 
+  /// Creates a CudfNestedLoopJoinBridge for the given plan node.
   std::unique_ptr<exec::JoinBridge> toJoinBridge(const core::PlanNodePtr& node);
 
+  /// Returns a supplier that creates CudfNestedLoopJoinBuild operators.
   exec::OperatorSupplier toOperatorSupplier(const core::PlanNodePtr& node);
 };
 
