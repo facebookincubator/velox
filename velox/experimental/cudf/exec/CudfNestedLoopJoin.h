@@ -24,6 +24,7 @@
 #include "velox/exec/Operator.h"
 
 #include <cudf/ast/expressions.hpp>
+#include <cudf/column/column.hpp>
 #include <cudf/scalar/scalar.hpp>
 #include <cudf/table/table.hpp>
 
@@ -106,6 +107,8 @@ class CudfNestedLoopJoinBuild : public exec::Operator, public NvtxHelper {
 
 /// Performs nested loop join using cuDF APIs.
 ///
+/// Supports inner, left, right, full outer, and left semi project joins.
+///
 /// Algorithm (two-path approach for optimal performance):
 ///
 /// Path 1 - No filter (cross join):
@@ -116,15 +119,28 @@ class CudfNestedLoopJoinBuild : public exec::Operator, public NvtxHelper {
 ///   filter on GPU, returning only matching row index pairs, then gathers
 ///   actual data using indices.
 ///
+/// Mismatch handling (left/right joins):
+///   Build data is processed in batches, so we cannot use per-batch left/right
+///   join APIs (a row unmatched in one batch may match a later batch). Instead,
+///   we always use conditional_inner_join per-batch and track mismatches via
+///   GPU-side BOOL8 flag columns:
+///   - Left join: probeMatchedFlags_ tracks probe mismatches per probe batch.
+///     After all build batches, unmatched probe rows are emitted with null
+///     build columns.
+///   - Right join: buildMatchedFlags_ tracks build mismatches across all probe
+///     batches. After all probes finish, the last driver (via allPeersFinished)
+///     merges flags from all peers and emits unmatched build rows with null
+///     probe columns.
+///
 /// Lifecycle:
 /// 1. Constructor - Builds AST filter if join condition exists
-/// 2. isBlocked() - Waits for build data from bridge
+/// 2. isBlocked() - Waits for build data from bridge; for right join, also
+///    blocks on peer probes finishing (allPeersFinished barrier)
 /// 3. addInput() - Receives probe batches one at a time
-/// 4. getOutput() - Performs cross/conditional join, returns results
-///
-/// Current limitations:
-/// - Only inner join supported
-/// - No memory batching for very large cross products (>2^31 rows)
+/// 4. getOutput() - Performs join, returns results (including mismatch rows
+///    for left/right joins)
+/// 5. noMoreInput() - For right join, coordinates multi-driver build mismatch
+///    flag merging
 ///
 /// Thread-safety: Each probe operator processes one batch at a time.
 /// Multiple probe operators can run concurrently on different batches.
@@ -152,20 +168,40 @@ class CudfNestedLoopJoinProbe : public exec::Operator, public NvtxHelper {
   bool isFinished() override;
 
   static bool isSupportedJoinType(core::JoinType joinType) {
-    return joinType == core::JoinType::kInner;
+    return joinType == core::JoinType::kInner ||
+        joinType == core::JoinType::kLeft ||
+        joinType == core::JoinType::kRight ||
+        joinType == core::JoinType::kFull ||
+        joinType == core::JoinType::kLeftSemiProject;
   }
 
  private:
-  // Performs cross join between a single probe batch and a single build batch.
-  // Uses cross_join for unfiltered joins (optimized cartesian product).
-  // Uses conditional_inner_join for filtered joins (only materializes
-  // matches).
-  std::unique_ptr<cudf::table> crossJoinWithBuildBatch(
+  /// Performs inner join between a single probe batch and a single build
+  /// batch. Uses cross_join for unfiltered joins and conditional_inner_join
+  /// for filtered joins. Updates probeMatchedFlags_ for left/full joins and
+  /// buildMatchedFlags_ for right/full joins.
+  std::unique_ptr<cudf::table> joinWithBuildBatch(
       cudf::table_view probeTableView,
       cudf::table_view buildView,
+      size_t buildBatchIndex,
       rmm::cuda_stream_view stream);
 
+  /// Emits probe rows that had no match across all build batches, with null
+  /// build columns. Used for left/full joins after all build batches exhausted.
+  std::unique_ptr<cudf::table> emitProbeMismatchRows(
+      cudf::table_view probeTableView,
+      rmm::cuda_stream_view stream);
+
+  /// Emits build rows that had no match across all probe inputs, with null
+  /// probe columns. Used for right/full joins after all probes finish. Only
+  /// called by the last driver after merging flags from all peers.
+  RowVectorPtr emitBuildMismatchRows(rmm::cuda_stream_view stream);
+
+  /// Ensures build-stream data is visible on the given probe stream.
+  void syncBuildStream(rmm::cuda_stream_view probeStream);
+
   std::shared_ptr<const core::NestedLoopJoinNode> joinNode_;
+  core::JoinType joinType_;
   std::optional<build_data_type> buildData_;
 
   // Filter condition AST (for conditional_inner_join when filter exists).
@@ -180,12 +216,38 @@ class CudfNestedLoopJoinProbe : public exec::Operator, public NvtxHelper {
   std::vector<size_t> probeColumnOutputIndices_;
   std::vector<size_t> buildColumnOutputIndices_;
 
-  // Index into build tables for the current probe input
+  // Probe and build types (cached for null column creation in left joins).
+  RowTypePtr probeType_;
+  RowTypePtr buildType_;
+
+  // Index into build tables for the current probe input.
   size_t buildBatchIdx_{0};
 
   bool finished_{false};
 
-  // CUDA stream synchronization
+  // Probe mismatch tracking for left/full joins: BOOL8 column, one element
+  // per probe row in the current input batch. Updated across build batches
+  // via BITWISE_OR. Reset for each new probe input.
+  std::unique_ptr<cudf::column> probeMatchedFlags_;
+
+  // True when build side has no rows.
+  bool buildEmpty_{false};
+
+  // Build mismatch tracking for right/full joins: BOOL8 column per build
+  // batch. Updated across all probe inputs via BITWISE_OR. Merged from peers
+  // in noMoreInput() before the last driver emits unmatched build rows.
+  std::vector<std::unique_ptr<cudf::column>> buildMatchedFlags_;
+
+  // Multi-driver coordination for right/full join build mismatch emission.
+  bool isLastDriver_{false};
+  ContinueFuture peerFuture_{ContinueFuture::makeEmpty()};
+  bool buildMismatchEmitted_{false};
+
+  // Last CUDA stream used for probing, needed for join_streams in
+  // noMoreInput() to ensure GPU-side ordering before flag merge.
+  std::optional<rmm::cuda_stream_view> lastProbeStream_;
+
+  // CUDA stream synchronization for build data visibility.
   std::optional<rmm::cuda_stream_view> buildStream_;
   std::unique_ptr<CudaEvent> cudaEvent_;
 };

@@ -20,16 +20,25 @@
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/PrecomputeInstruction.h"
 
 #include "velox/exec/Task.h"
 
 #include <cudf/ast/expressions.hpp>
+#include <cudf/binaryop.hpp>
+#include <cudf/column/column_factories.hpp>
+#include <cudf/detail/utilities/stream_pool.hpp>
 #include <cudf/concatenate.hpp>
 #include <cudf/copying.hpp>
+#include <cudf/filling.hpp>
 #include <cudf/join/conditional_join.hpp>
 #include <cudf/join/join.hpp>
+#include <cudf/scalar/scalar_factories.hpp>
+#include <cudf/search.hpp>
+#include <cudf/stream_compaction.hpp>
+#include <cudf/unary.hpp>
 
 namespace facebook::velox::cudf_velox {
 
@@ -212,21 +221,28 @@ CudfNestedLoopJoinProbe::CudfNestedLoopJoinProbe(
           operatorId,
           fmt::format("[{}]", joinNode->id())),
       joinNode_(joinNode) {
-  // Resolve output column order by name. The output type may interleave
-  // probe and build columns in any order (e.g., {"b0", "p0", "p1"}).
-  auto probeType = joinNode_->sources()[0]->outputType();
-  auto buildType = joinNode_->sources()[1]->outputType();
+  joinType_ = joinNode_->joinType();
+  probeType_ = joinNode_->sources()[0]->outputType();
+  buildType_ = joinNode_->sources()[1]->outputType();
 
-  for (size_t i = 0; i < outputType_->size(); ++i) {
+  // For kLeftSemiProject, the last output column is a BOOLEAN match flag
+  // that doesn't exist in probe or build types — skip it during resolution.
+  auto numColumnsToResolve = outputType_->size();
+  if (joinType_ == core::JoinType::kLeftSemiProject) {
+    VELOX_CHECK_GE(numColumnsToResolve, 1);
+    --numColumnsToResolve;
+  }
+
+  for (size_t i = 0; i < numColumnsToResolve; ++i) {
     const auto& name = outputType_->nameOf(i);
-    auto probeIdx = probeType->getChildIdxIfExists(name);
+    auto probeIdx = probeType_->getChildIdxIfExists(name);
     if (probeIdx.has_value()) {
       probeColumnIndicesToGather_.push_back(
           static_cast<cudf::size_type>(probeIdx.value()));
       probeColumnOutputIndices_.push_back(i);
       continue;
     }
-    auto buildIdx = buildType->getChildIdxIfExists(name);
+    auto buildIdx = buildType_->getChildIdxIfExists(name);
     if (buildIdx.has_value()) {
       buildColumnIndicesToGather_.push_back(
           static_cast<cudf::size_type>(buildIdx.value()));
@@ -252,8 +268,8 @@ CudfNestedLoopJoinProbe::CudfNestedLoopJoinProbe(
         exprs.exprs()[0],
         tree_,
         scalars_,
-        probeType,
-        buildType,
+        probeType_,
+        buildType_,
         leftPrecomputeInstructions,
         rightPrecomputeInstructions);
 
@@ -270,6 +286,8 @@ CudfNestedLoopJoinProbe::CudfNestedLoopJoinProbe(
 void CudfNestedLoopJoinProbe::close() {
   Operator::close();
   buildData_.reset();
+  probeMatchedFlags_.reset();
+  buildMatchedFlags_.clear();
   scalars_.clear();
   tree_ = {};
 }
@@ -282,19 +300,121 @@ void CudfNestedLoopJoinProbe::addInput(RowVectorPtr input) {
   VELOX_CHECK_NULL(input_, "Probe input already set");
   input_ = input;
   buildBatchIdx_ = 0;
+  probeMatchedFlags_.reset();
 }
 
 void CudfNestedLoopJoinProbe::noMoreInput() {
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
   Operator::noMoreInput();
+
+  if (joinType_ != core::JoinType::kRight &&
+      joinType_ != core::JoinType::kFull) {
+    return;
+  }
+
+  std::vector<ContinuePromise> promises;
+  std::vector<std::shared_ptr<exec::Driver>> peers;
+
+  if (!operatorCtx_->task()->allPeersFinished(
+          planNodeId(),
+          operatorCtx_->driver(),
+          &peerFuture_,
+          promises,
+          peers)) {
+    return;
+  }
+
+  SCOPE_EXIT {
+    peers.clear();
+    for (auto& promise : promises) {
+      promise.setValue();
+    }
+  };
+
+  isLastDriver_ = true;
+
+  if (!buildEmpty_) {
+    auto stream = cudfGlobalStreamPool().get_stream();
+
+    // GPU stream synchronization: allPeersFinished synchronizes CPU threads
+    // but not GPU streams. A peer's CPU thread may have returned from
+    // getOutput() while its GPU work (updating buildMatchedFlags_) is still
+    // in flight. join_streams establishes GPU-side ordering.
+    std::vector<rmm::cuda_stream_view> inputStreams;
+    if (lastProbeStream_.has_value()) {
+      inputStreams.push_back(lastProbeStream_.value());
+    }
+    for (auto& peer : peers) {
+      if (peer.get() == operatorCtx_->driver()) {
+        continue;
+      }
+      auto op = peer->findOperator(planNodeId());
+      auto* probe = dynamic_cast<CudfNestedLoopJoinProbe*>(op);
+      if (probe != nullptr && probe->lastProbeStream_.has_value()) {
+        inputStreams.push_back(probe->lastProbeStream_.value());
+      }
+    }
+    if (!inputStreams.empty()) {
+      cudf::detail::join_streams(inputStreams, stream);
+    }
+
+    // Merge buildMatchedFlags_ from all peers via BITWISE_OR.
+    for (auto& peer : peers) {
+      if (peer.get() == operatorCtx_->driver()) {
+        continue;
+      }
+      auto op = peer->findOperator(planNodeId());
+      auto* probe = dynamic_cast<CudfNestedLoopJoinProbe*>(op);
+      if (probe == nullptr) {
+        continue;
+      }
+      for (size_t i = 0; i < buildMatchedFlags_.size(); ++i) {
+        auto orResult = cudf::binary_operation(
+            buildMatchedFlags_[i]->view(),
+            probe->buildMatchedFlags_[i]->view(),
+            cudf::binary_operator::BITWISE_OR,
+            cudf::data_type{cudf::type_id::BOOL8},
+            stream,
+            get_temp_mr());
+        stream.synchronize();
+        buildMatchedFlags_[i] = std::move(orResult);
+      }
+    }
+    stream.synchronize();
+  }
 }
 
 bool CudfNestedLoopJoinProbe::isFinished() {
-  return finished_;
+  if (finished_) {
+    return true;
+  }
+  // For right/full join, the last driver must not finish until build mismatch
+  // rows have been emitted. Non-last drivers finish normally.
+  if ((joinType_ == core::JoinType::kRight ||
+       joinType_ == core::JoinType::kFull) &&
+      noMoreInput_ && input_ == nullptr) {
+    if (!isLastDriver_) {
+      return true;
+    }
+    return buildMismatchEmitted_;
+  }
+  return false;
 }
 
 exec::BlockingReason CudfNestedLoopJoinProbe::isBlocked(
     ContinueFuture* future) {
+  // For right/full join: after build data is available, also block on peer
+  // probes finishing (allPeersFinished barrier in noMoreInput).
+  if ((joinType_ == core::JoinType::kRight ||
+       joinType_ == core::JoinType::kFull) &&
+      buildData_.has_value()) {
+    if (!peerFuture_.valid()) {
+      return exec::BlockingReason::kNotBlocked;
+    }
+    *future = std::move(peerFuture_);
+    return exec::BlockingReason::kWaitForJoinProbe;
+  }
+
   if (buildData_.has_value()) {
     return exec::BlockingReason::kNotBlocked;
   }
@@ -312,7 +432,6 @@ exec::BlockingReason CudfNestedLoopJoinProbe::isBlocked(
 
   buildStream_ = bridge->getBuildStream();
 
-  // If the entire build side is empty, no probe batch can produce output.
   bool hasBuildRows = false;
   for (const auto& table : buildData_.value()) {
     if (table->num_rows() > 0) {
@@ -321,38 +440,60 @@ exec::BlockingReason CudfNestedLoopJoinProbe::isBlocked(
     }
   }
   if (!hasBuildRows) {
-    finished_ = true;
+    buildEmpty_ = true;
+    // For inner/right join, empty build produces no output. For left/full
+    // join, probe rows are emitted with null build columns. For
+    // kLeftSemiProject, probe rows are emitted with false match column.
+    if (joinType_ == core::JoinType::kInner ||
+        joinType_ == core::JoinType::kRight) {
+      finished_ = true;
+    }
+  }
+
+  // Initialize build matched flags for right/full join (one BOOL8 column per
+  // build batch, all false).
+  if ((joinType_ == core::JoinType::kRight ||
+       joinType_ == core::JoinType::kFull) &&
+      !buildEmpty_) {
+    auto initStream = cudfGlobalStreamPool().get_stream();
+    buildMatchedFlags_.clear();
+    buildMatchedFlags_.reserve(buildData_.value().size());
+    for (const auto& table : buildData_.value()) {
+      auto numRows = table->num_rows();
+      auto falseScalar = cudf::numeric_scalar<bool>(
+          false, true, initStream, get_temp_mr());
+      buildMatchedFlags_.push_back(cudf::make_column_from_scalar(
+          falseScalar, numRows, initStream, get_temp_mr()));
+    }
+    initStream.synchronize();
   }
 
   return exec::BlockingReason::kNotBlocked;
 }
 
-// Performs a cross join between one probe batch and one build batch.
-// PATH 1 (no filter): cudf::cross_join() for direct cartesian product.
-// PATH 2 (with filter): cudf::conditional_inner_join() evaluates the AST on
-// GPU and returns only matching row indices, then gathers actual data.
-std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::crossJoinWithBuildBatch(
-    cudf::table_view probeTableView,
-    cudf::table_view buildView,
-    rmm::cuda_stream_view stream) {
-  VELOX_NVTX_FUNC_RANGE();
-
-  // Ensure build data is visible on the probe stream before reading it.
-  // Record on the build stream (where data was produced), then make the probe
-  // stream wait. Only needed once since build data doesn't change afterward.
+void CudfNestedLoopJoinProbe::syncBuildStream(
+    rmm::cuda_stream_view probeStream) {
   if (buildStream_.has_value()) {
     if (!cudaEvent_) {
       cudaEvent_ = std::make_unique<CudaEvent>();
     }
-    cudaEvent_->recordFrom(buildStream_.value()).waitOn(stream);
+    cudaEvent_->recordFrom(buildStream_.value()).waitOn(probeStream);
     buildStream_.reset();
   }
+}
+
+std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::joinWithBuildBatch(
+    cudf::table_view probeTableView,
+    cudf::table_view buildView,
+    size_t buildBatchIndex,
+    rmm::cuda_stream_view stream) {
+  VELOX_NVTX_FUNC_RANGE();
+
+  syncBuildStream(stream);
 
   auto numOutputColumns = outputType_->size();
 
   if (hasFilter_) {
-    // PATH 2: Filtered join using conditional_inner_join.
-    // The AST references columns by position in the full probe/build views.
     auto [leftIndices, rightIndices] = cudf::conditional_inner_join(
         probeTableView,
         buildView,
@@ -381,7 +522,69 @@ std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::crossJoinWithBuildBatch(
         nullptr,
         0);
 
-    // Gather only the columns needed for output
+    // Track which probe rows matched for left/full join mismatch handling.
+    // Uses cudf::contains to check which probe row indices [0..N) appear
+    // in the join result, then ORs with accumulated flags.
+    if (joinType_ == core::JoinType::kLeft ||
+        joinType_ == core::JoinType::kFull) {
+      auto numProbeRows = probeTableView.num_rows();
+      auto probeRowSequence = cudf::sequence(
+          numProbeRows,
+          cudf::numeric_scalar<cudf::size_type>(
+              0, true, stream, get_temp_mr()),
+          cudf::numeric_scalar<cudf::size_type>(
+              1, true, stream, get_temp_mr()),
+          stream,
+          get_temp_mr());
+
+      auto matchedInBatch = cudf::contains(
+          leftIndicesView, probeRowSequence->view(), stream, get_temp_mr());
+
+      auto updatedFlags = cudf::binary_operation(
+          probeMatchedFlags_->view(),
+          matchedInBatch->view(),
+          cudf::binary_operator::BITWISE_OR,
+          cudf::data_type{cudf::type_id::BOOL8},
+          stream,
+          get_temp_mr());
+      // binary_operation is async on `stream`; the old column destructs via
+      // cudaFreeAsync on its allocation stream (not `stream`), so the free
+      // can race the kernel. Drain `stream` before the move-assign.
+      stream.synchronize();
+      probeMatchedFlags_ = std::move(updatedFlags);
+    }
+
+    // Track which build rows matched for right/full join mismatch handling.
+    if (joinType_ == core::JoinType::kRight ||
+        joinType_ == core::JoinType::kFull) {
+      auto numBuildRows = buildView.num_rows();
+      auto buildRowSequence = cudf::sequence(
+          numBuildRows,
+          cudf::numeric_scalar<cudf::size_type>(
+              0, true, stream, get_temp_mr()),
+          cudf::numeric_scalar<cudf::size_type>(
+              1, true, stream, get_temp_mr()),
+          stream,
+          get_temp_mr());
+
+      auto matchedInBatch = cudf::contains(
+          rightIndicesView,
+          buildRowSequence->view(),
+          stream,
+          get_temp_mr());
+
+      auto updatedFlags = cudf::binary_operation(
+          buildMatchedFlags_[buildBatchIndex]->view(),
+          matchedInBatch->view(),
+          cudf::binary_operator::BITWISE_OR,
+          cudf::data_type{cudf::type_id::BOOL8},
+          stream,
+          get_temp_mr());
+      stream.synchronize();
+      buildMatchedFlags_[buildBatchIndex] = std::move(updatedFlags);
+    }
+
+    // Gather only the columns needed for output.
     auto probeGatherView = probeTableView.select(probeColumnIndicesToGather_);
     auto buildGatherView = buildView.select(buildColumnIndicesToGather_);
 
@@ -399,7 +602,6 @@ std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::crossJoinWithBuildBatch(
         stream,
         get_output_mr());
 
-    // Place columns at the positions specified by the output type
     std::vector<std::unique_ptr<cudf::column>> outCols(numOutputColumns);
     auto probeCols = gatheredProbe->release();
     auto buildCols = gatheredBuild->release();
@@ -413,9 +615,7 @@ std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::crossJoinWithBuildBatch(
     return std::make_unique<cudf::table>(std::move(outCols));
   }
 
-  // PATH 1: Unfiltered join using cross_join.
-  // Guard against cudf::size_type (int32) overflow: the cross product produces
-  // probe_rows * build_rows output rows.
+  // Unfiltered join using cross_join.
   auto outputRows = static_cast<int64_t>(probeTableView.num_rows()) *
       static_cast<int64_t>(buildView.num_rows());
   VELOX_CHECK_LE(
@@ -426,10 +626,31 @@ std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::crossJoinWithBuildBatch(
       buildView.num_rows(),
       outputRows);
 
-  // cross_join returns [probe_cols..., build_cols...] - reorder to match
-  // the output type which may have a different column order.
   auto crossResult =
       cudf::cross_join(probeTableView, buildView, stream, get_output_mr());
+
+  // Cross join matches every row, so mark all rows as matched for outer joins.
+  if (joinType_ == core::JoinType::kLeft ||
+      joinType_ == core::JoinType::kFull) {
+    auto trueScalar =
+        cudf::numeric_scalar<bool>(true, true, stream, get_temp_mr());
+    auto allMatched = cudf::make_column_from_scalar(
+        trueScalar, probeTableView.num_rows(), stream, get_temp_mr());
+    if (probeMatchedFlags_) {
+      stream.synchronize();
+      probeMatchedFlags_ = std::move(allMatched);
+    } else {
+      probeMatchedFlags_ = std::move(allMatched);
+    }
+  }
+  if (joinType_ == core::JoinType::kRight ||
+      joinType_ == core::JoinType::kFull) {
+    auto trueScalar =
+        cudf::numeric_scalar<bool>(true, true, stream, get_temp_mr());
+    stream.synchronize();
+    buildMatchedFlags_[buildBatchIndex] = cudf::make_column_from_scalar(
+        trueScalar, buildView.num_rows(), stream, get_temp_mr());
+  }
 
   auto allCols = crossResult->release();
   auto numProbeCols = probeTableView.num_columns();
@@ -447,10 +668,136 @@ std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::crossJoinWithBuildBatch(
   return std::make_unique<cudf::table>(std::move(outCols));
 }
 
+std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::emitProbeMismatchRows(
+    cudf::table_view probeTableView,
+    rmm::cuda_stream_view stream) {
+  auto probeGatherView = probeTableView.select(probeColumnIndicesToGather_);
+
+  std::unique_ptr<cudf::table> unmatchedProbe;
+  if (!probeMatchedFlags_) {
+    // No flags means all probe rows are unmatched (empty build case).
+    unmatchedProbe = std::make_unique<cudf::table>(
+        probeGatherView, stream, get_output_mr());
+  } else {
+    auto unmatchedMask = cudf::unary_operation(
+        probeMatchedFlags_->view(),
+        cudf::unary_operator::NOT,
+        stream,
+        get_temp_mr());
+    unmatchedProbe = cudf::apply_boolean_mask(
+        probeGatherView, unmatchedMask->view(), stream, get_output_mr());
+  }
+
+  auto numUnmatched =
+      static_cast<cudf::size_type>(unmatchedProbe->num_rows());
+  if (numUnmatched == 0) {
+    return nullptr;
+  }
+
+  auto numOutputColumns = outputType_->size();
+  std::vector<std::unique_ptr<cudf::column>> outCols(numOutputColumns);
+
+  // Place unmatched probe columns at their output positions.
+  auto probeCols = unmatchedProbe->release();
+  for (size_t i = 0; i < probeColumnOutputIndices_.size(); ++i) {
+    outCols[probeColumnOutputIndices_[i]] = std::move(probeCols[i]);
+  }
+
+  // Create all-null columns for the build side.
+  for (size_t i = 0; i < buildColumnOutputIndices_.size(); ++i) {
+    auto outIdx = buildColumnOutputIndices_[i];
+    auto buildChannel = buildColumnIndicesToGather_[i];
+    auto buildCudfType = veloxToCudfTypeId(buildType_->childAt(buildChannel));
+    auto nullScalar = cudf::make_default_constructed_scalar(
+        cudf::data_type{buildCudfType}, stream, get_temp_mr());
+    outCols[outIdx] = cudf::make_column_from_scalar(
+        *nullScalar, numUnmatched, stream, get_output_mr());
+  }
+
+  return std::make_unique<cudf::table>(std::move(outCols));
+}
+
+RowVectorPtr CudfNestedLoopJoinProbe::emitBuildMismatchRows(
+    rmm::cuda_stream_view stream) {
+  auto& buildTables = buildData_.value();
+  auto numOutputColumns = outputType_->size();
+  std::vector<std::unique_ptr<cudf::table>> toConcat;
+
+  for (size_t i = 0; i < buildTables.size(); ++i) {
+    auto numBuildRows = buildTables[i]->num_rows();
+    if (numBuildRows == 0) {
+      continue;
+    }
+
+    // Invert flags: unmatched = NOT(matched).
+    auto unmatchedMask = cudf::unary_operation(
+        buildMatchedFlags_[i]->view(),
+        cudf::unary_operator::NOT,
+        stream,
+        get_temp_mr());
+
+    // Select unmatched build rows.
+    auto buildGatherView =
+        buildTables[i]->view().select(buildColumnIndicesToGather_);
+    auto unmatchedBuild = cudf::apply_boolean_mask(
+        buildGatherView, unmatchedMask->view(), stream, get_output_mr());
+    auto numUnmatched =
+        static_cast<cudf::size_type>(unmatchedBuild->num_rows());
+    if (numUnmatched == 0) {
+      continue;
+    }
+
+    std::vector<std::unique_ptr<cudf::column>> outCols(numOutputColumns);
+
+    // Create all-null columns for the probe side.
+    for (size_t li = 0; li < probeColumnOutputIndices_.size(); ++li) {
+      auto outIdx = probeColumnOutputIndices_[li];
+      auto probeChannel = probeColumnIndicesToGather_[li];
+      auto probeCudfType =
+          veloxToCudfTypeId(probeType_->childAt(probeChannel));
+      auto nullScalar = cudf::make_default_constructed_scalar(
+          cudf::data_type{probeCudfType}, stream, get_temp_mr());
+      outCols[outIdx] = cudf::make_column_from_scalar(
+          *nullScalar, numUnmatched, stream, get_output_mr());
+    }
+
+    // Place unmatched build columns at their output positions.
+    auto buildCols = unmatchedBuild->release();
+    for (size_t ri = 0; ri < buildColumnOutputIndices_.size(); ++ri) {
+      outCols[buildColumnOutputIndices_[ri]] = std::move(buildCols[ri]);
+    }
+
+    toConcat.push_back(std::make_unique<cudf::table>(std::move(outCols)));
+  }
+
+  if (toConcat.empty()) {
+    finished_ = true;
+    return nullptr;
+  }
+
+  auto out = concatenateTables(std::move(toConcat), stream, get_output_mr());
+  finished_ = true;
+  auto size = static_cast<vector_size_t>(out->num_rows());
+  if (size == 0) {
+    return nullptr;
+  }
+  return std::make_shared<CudfVector>(
+      operatorCtx_->pool(), outputType_, size, std::move(out), stream);
+}
+
 RowVectorPtr CudfNestedLoopJoinProbe::getOutput() {
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
 
   if (!input_) {
+    // Right/full join: after all probe inputs, the last driver emits
+    // unmatched build rows with null probe columns.
+    if ((joinType_ == core::JoinType::kRight ||
+         joinType_ == core::JoinType::kFull) &&
+        noMoreInput_ && isLastDriver_ && !buildMismatchEmitted_) {
+      buildMismatchEmitted_ = true;
+      auto stream = cudfGlobalStreamPool().get_stream();
+      return emitBuildMismatchRows(stream);
+    }
     if (noMoreInput_) {
       finished_ = true;
     }
@@ -464,26 +811,151 @@ RowVectorPtr CudfNestedLoopJoinProbe::getOutput() {
   VELOX_CHECK_NOT_NULL(cudfInput);
   auto stream = cudfInput->stream();
 
-  // Iterate through build batches until we produce a non-empty result or
-  // exhaust all batches. This avoids returning nullptr to the driver loop
-  // when there are still build batches to process.
+  // LeftSemiProject: emit all probe rows with a boolean match column.
+  if (joinType_ == core::JoinType::kLeftSemiProject) {
+    auto probeTableView = cudfInput->getTableView();
+    auto numProbeRows =
+        static_cast<cudf::size_type>(probeTableView.num_rows());
+
+    std::unique_ptr<cudf::column> matchFlags;
+    if (buildEmpty_ || !hasFilter_) {
+      // No filter + non-empty build: all probe rows match (true).
+      // Empty build: no probe rows match (false).
+      auto scalar = cudf::numeric_scalar<bool>(
+          !buildEmpty_, true, stream, get_temp_mr());
+      matchFlags = cudf::make_column_from_scalar(
+          scalar, numProbeRows, stream, get_temp_mr());
+    } else {
+      // Filtered: accumulate matched probe indices across build batches.
+      auto falseScalar =
+          cudf::numeric_scalar<bool>(false, true, stream, get_temp_mr());
+      matchFlags = cudf::make_column_from_scalar(
+          falseScalar, numProbeRows, stream, get_temp_mr());
+
+      for (const auto& buildTable : buildTables) {
+        if (buildTable->num_rows() == 0) {
+          continue;
+        }
+
+        auto matchedIndices = cudf::conditional_left_semi_join(
+            probeTableView,
+            buildTable->view(),
+            tree_.back(),
+            {},
+            stream,
+            get_temp_mr());
+
+        if (matchedIndices->size() > 0) {
+          // Build a sequence [0..numProbeRows) and check which indices
+          // appear in the semi-join result.
+          auto probeRowSequence = cudf::sequence(
+              numProbeRows,
+              cudf::numeric_scalar<cudf::size_type>(
+                  0, true, stream, get_temp_mr()),
+              cudf::numeric_scalar<cudf::size_type>(
+                  1, true, stream, get_temp_mr()),
+              stream,
+              get_temp_mr());
+
+          auto matchedIndicesView = cudf::column_view(
+              cudf::data_type{cudf::type_to_id<cudf::size_type>()},
+              matchedIndices->size(),
+              matchedIndices->data(),
+              nullptr,
+              0);
+
+          auto matchedInBatch = cudf::contains(
+              matchedIndicesView,
+              probeRowSequence->view(),
+              stream,
+              get_temp_mr());
+
+          auto updatedFlags = cudf::binary_operation(
+              matchFlags->view(),
+              matchedInBatch->view(),
+              cudf::binary_operator::BITWISE_OR,
+              cudf::data_type{cudf::type_id::BOOL8},
+              stream,
+              get_temp_mr());
+          stream.synchronize();
+          matchFlags = std::move(updatedFlags);
+        }
+      }
+    }
+
+    // Cast BOOL8 match flags to BOOL for Velox compatibility.
+    auto boolFlags = cudf::cast(
+        matchFlags->view(),
+        cudf::data_type{cudf::type_id::BOOL8},
+        stream,
+        get_output_mr());
+
+    // Assemble output: probe columns at their mapped positions + match column
+    // at the last position.
+    auto probeGatherView = probeTableView.select(probeColumnIndicesToGather_);
+    auto gatheredProbe = std::make_unique<cudf::table>(
+        probeGatherView, stream, get_output_mr());
+    auto probeCols = gatheredProbe->release();
+
+    auto numOutputColumns = outputType_->size();
+    std::vector<std::unique_ptr<cudf::column>> outCols(numOutputColumns);
+    for (size_t i = 0; i < probeColumnOutputIndices_.size(); ++i) {
+      outCols[probeColumnOutputIndices_[i]] = std::move(probeCols[i]);
+    }
+    outCols[numOutputColumns - 1] = std::move(boolFlags);
+
+    auto result = std::make_unique<cudf::table>(std::move(outCols));
+    input_.reset();
+    buildBatchIdx_ = 0;
+
+    if (result->num_rows() == 0) {
+      return nullptr;
+    }
+    auto size = static_cast<vector_size_t>(result->num_rows());
+    return std::make_shared<CudfVector>(
+        operatorCtx_->pool(), outputType_, size, std::move(result), stream);
+  }
+
+  // For left/full join with filter, initialize probe matched flags to
+  // all-false at the start of each new probe batch (buildBatchIdx_ == 0).
+  if ((joinType_ == core::JoinType::kLeft ||
+       joinType_ == core::JoinType::kFull) &&
+      hasFilter_ && buildBatchIdx_ == 0 && !buildEmpty_) {
+    auto numProbeRows =
+        static_cast<cudf::size_type>(cudfInput->getTableView().num_rows());
+    auto falseScalar =
+        cudf::numeric_scalar<bool>(false, true, stream, get_temp_mr());
+    probeMatchedFlags_ = cudf::make_column_from_scalar(
+        falseScalar, numProbeRows, stream, get_temp_mr());
+  }
+
+  // Process build batches. Each iteration joins one batch and returns
+  // matching rows. Matched flags are updated per batch inside
+  // joinWithBuildBatch for left/right joins.
   while (buildBatchIdx_ < buildTables.size()) {
     if (buildTables[buildBatchIdx_]->num_rows() == 0) {
       ++buildBatchIdx_;
       continue;
     }
 
-    auto result = crossJoinWithBuildBatch(
-        cudfInput->getTableView(), buildTables[buildBatchIdx_]->view(), stream);
+    auto result = joinWithBuildBatch(
+        cudfInput->getTableView(),
+        buildTables[buildBatchIdx_]->view(),
+        buildBatchIdx_,
+        stream);
     ++buildBatchIdx_;
 
     if (result->num_rows() > 0) {
-      // Release probe input if all build batches have been processed.
-      if (buildBatchIdx_ >= buildTables.size()) {
+      // For inner/right join, release probe input after the last build batch.
+      // For left/full join, keep input_ alive — mismatch rows follow.
+      if (buildBatchIdx_ >= buildTables.size() &&
+          joinType_ != core::JoinType::kLeft &&
+          joinType_ != core::JoinType::kFull) {
         input_.reset();
         buildBatchIdx_ = 0;
       }
 
+      lastProbeStream_ = stream;
       auto size = static_cast<vector_size_t>(result->num_rows());
       return std::make_shared<CudfVector>(
           operatorCtx_->pool(), outputType_, size, std::move(result), stream);
@@ -491,6 +963,29 @@ RowVectorPtr CudfNestedLoopJoinProbe::getOutput() {
   }
 
   // All build batches exhausted for this probe input.
+  lastProbeStream_ = stream;
+
+  // For left/full join: emit unmatched probe rows with null build columns.
+  if ((joinType_ == core::JoinType::kLeft ||
+       joinType_ == core::JoinType::kFull) &&
+      (hasFilter_ || buildEmpty_)) {
+    auto mismatchResult =
+        emitProbeMismatchRows(cudfInput->getTableView(), stream);
+    input_.reset();
+    buildBatchIdx_ = 0;
+    probeMatchedFlags_.reset();
+    if (mismatchResult && mismatchResult->num_rows() > 0) {
+      auto size = static_cast<vector_size_t>(mismatchResult->num_rows());
+      return std::make_shared<CudfVector>(
+          operatorCtx_->pool(),
+          outputType_,
+          size,
+          std::move(mismatchResult),
+          stream);
+    }
+    return nullptr;
+  }
+
   input_.reset();
   buildBatchIdx_ = 0;
   return nullptr;
