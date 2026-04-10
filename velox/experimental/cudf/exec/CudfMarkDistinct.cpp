@@ -108,7 +108,7 @@ RowVectorPtr CudfMarkDistinct::getOutput() {
         newRowIndicesCol->view(),
         cudf::out_of_bounds_policy::DONT_CHECK,
         stream,
-        outputMr);
+        tempMr);
     seenFilter_ = std::make_unique<cudf::filtered_join>(
         seenKeys_->view(),
         cudf::null_equality::EQUAL,
@@ -162,7 +162,7 @@ RowVectorPtr CudfMarkDistinct::getOutput() {
       // concatenate-per-batch idiom.
       std::vector<cudf::table_view> seenPlusNew = {
           seenKeys_->view(), newKeys->view()};
-      seenKeys_ = cudf::concatenate(seenPlusNew, stream, outputMr);
+      seenKeys_ = cudf::concatenate(seenPlusNew, stream, tempMr);
       seenFilter_ = std::make_unique<cudf::filtered_join>(
           seenKeys_->view(),
           cudf::null_equality::EQUAL,
