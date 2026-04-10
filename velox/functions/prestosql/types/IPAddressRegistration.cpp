@@ -22,6 +22,7 @@
 #include "velox/expression/CastExpr.h"
 #include "velox/functions/prestosql/types/IPAddressType.h"
 #include "velox/functions/prestosql/types/IPPrefixType.h"
+#include "velox/type/CastRegistry.h"
 
 namespace facebook::velox {
 namespace {
@@ -273,6 +274,14 @@ class IPAddressTypeFactory : public CustomTypeFactory {
 
 void registerIPAddressType() {
   registerCustomType(
-      "ipaddress", std::make_unique<const IPAddressTypeFactory>());
+      "IPADDRESS", std::make_unique<const IPAddressTypeFactory>());
+  registerCastRules({
+      {.fromType = "VARCHAR", .toType = "IPADDRESS"},
+      {.fromType = "VARBINARY", .toType = "IPADDRESS"},
+      {.fromType = "IPPREFIX", .toType = "IPADDRESS"},
+      {.fromType = "IPADDRESS", .toType = "VARCHAR"},
+      {.fromType = "IPADDRESS", .toType = "VARBINARY"},
+      {.fromType = "IPADDRESS", .toType = "IPPREFIX"},
+  });
 }
 } // namespace facebook::velox

@@ -19,6 +19,7 @@
 #include "velox/common/fuzzer/ConstrainedGenerators.h"
 #include "velox/expression/CastExpr.h"
 #include "velox/functions/prestosql/types/BingTileType.h"
+#include "velox/type/CastRegistry.h"
 
 namespace facebook::velox {
 
@@ -137,7 +138,11 @@ class BingTileTypeFactory : public CustomTypeFactory {
 } // namespace
 
 void registerBingTileType() {
-  registerCustomType("bingtile", std::make_unique<const BingTileTypeFactory>());
+  registerCustomType("BINGTILE", std::make_unique<const BingTileTypeFactory>());
+  registerCastRules({
+      {.fromType = "BIGINT", .toType = "BINGTILE"},
+      {.fromType = "BINGTILE", .toType = "BIGINT"},
+  });
 }
 
 } // namespace facebook::velox
