@@ -83,6 +83,33 @@ class IndexLookupJoin : public Operator {
       "clientNumErrorResults"};
 
  private:
+  // Intercepts lazy loading stats during index-side operations (getOutput /
+  // startLookup) and accumulates them internally, separating them from
+  // probe-side lazy stats so Driver::processLazyIoStats() correctly attributes
+  // only probe-side stats to the scan operator. Held via shared_ptr so the
+  // stat splitter lambda can outlive the operator and read the final stats.
+  class IndexLazyStatWriter : public BaseRuntimeStatWriter {
+   public:
+    explicit IndexLazyStatWriter(Operator* op) : op_(op) {}
+
+    void addRuntimeStat(std::string_view name, const RuntimeCounter& value)
+        override;
+
+    RuntimeMetric inputBytes{RuntimeCounter::Unit::kBytes};
+    RuntimeMetric cpuNanos{RuntimeCounter::Unit::kNanos};
+    RuntimeMetric wallNanos{RuntimeCounter::Unit::kNanos};
+
+   private:
+    Operator* const op_;
+  };
+
+  // Produces separate OperatorStats for IndexLookupJoin and IndexSource nodes,
+  // reading index-side lazy stats from 'writer'.
+  static std::vector<OperatorStats> splitStats(
+      const OperatorStats& combinedStats,
+      const core::PlanNodeId& indexSourceNodeId,
+      const IndexLazyStatWriter& writer);
+
   using ResultIterator = connector::IndexSource::ResultIterator;
   using Result = connector::IndexSource::Result;
 
@@ -403,5 +430,10 @@ class IndexLookupJoin : public Operator {
 
   // Closes and resets the index split tracer.
   void closeIndexSplitTracer();
+
+  // Intercepts and accumulates index-side lazy loading stats. Held via
+  // shared_ptr so the stat splitter lambda can read the final stats after the
+  // operator is destroyed.
+  std::shared_ptr<IndexLazyStatWriter> indexStatWriter_;
 };
 } // namespace facebook::velox::exec
