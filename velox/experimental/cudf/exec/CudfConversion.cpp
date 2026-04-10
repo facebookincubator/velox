@@ -153,6 +153,13 @@ RowVectorPtr CudfFromVelox::doGetOutput() {
 
   // Return a CudfVector that owns the cudf table
   const auto size = tbl->num_rows();
+
+  // Return nullptr if the cudf table is empty
+  // (can happen if conversion filters out all rows)
+  if (size == 0) {
+    return nullptr;
+  }
+
   return std::make_shared<CudfVector>(
       input->pool(), outputType_, size, std::move(tbl), stream);
 }
