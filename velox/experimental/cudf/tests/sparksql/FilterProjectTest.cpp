@@ -114,73 +114,51 @@ TEST_F(CudfFilterProjectTest, dateAdd) {
   // Account for the last day of a year-month
   EXPECT_EQ(parseDate("2020-02-29"), dateAdd("2019-01-30", 395));
   EXPECT_EQ(parseDate("2020-02-29"), dateAdd("2019-01-30", 395));
+}
 
 // Test unary math functions for Spark
 TEST_F(CudfFilterProjectTest, unaryMathFunctions) {
-  // Trigonometric functions
-  auto sinValue = evaluateOnce<double, double>("sin(c0)", 0.0);
-  EXPECT_DOUBLE_EQ(sinValue.value(), 0.0);
-  
-  auto cosValue = evaluateOnce<double, double>("cos(c0)", 0.0);
-  EXPECT_DOUBLE_EQ(cosValue.value(), 1.0);
-  
-  auto tanValue = evaluateOnce<double, double>("tan(c0)", 0.0);
-  EXPECT_DOUBLE_EQ(tanValue.value(), 0.0);
-  
+  auto testUnaryFunction =
+    [&](std::string expr, double input, double expected) {
+      auto valueOpt = evaluateOnce<double, double>(expr, input);
+      auto value = valueOpt.value();
+      EXPECT_DOUBLE_EQ(value, expected);
+    };
+
+  auto testUnaryFunctionInt =
+      [&](std::string expr, double input, int64_t expected) {
+        auto valueOpt = evaluateOnce<int64_t, double>(expr, input);
+        auto value = valueOpt.value();
+        EXPECT_EQ(value, expected);
+      };
+
   // Inverse trigonometric functions
-  auto asinValue = evaluateOnce<double, double>("asin(c0)", 0.0);
-  EXPECT_DOUBLE_EQ(asinValue.value(), 0.0);
-  
-  auto acosValue = evaluateOnce<double, double>("acos(c0)", 1.0);
-  EXPECT_DOUBLE_EQ(acosValue.value(), 0.0);
-  
-  auto atanValue = evaluateOnce<double, double>("atan(c0)", 0.0);
-  EXPECT_DOUBLE_EQ(atanValue.value(), 0.0);
-  
+  testUnaryFunction("asin(c0)", 0.0, 0.0);
+  testUnaryFunction("acos(c0)", 1.0, 0.0);
+  testUnaryFunction("atan(c0)", 0.0, 0.0);
+
   // Hyperbolic functions (Spark-specific)
-  auto sinhValue = evaluateOnce<double, double>("sinh(c0)", 0.0);
-  EXPECT_DOUBLE_EQ(sinhValue.value(), 0.0);
-  
-  auto coshValue = evaluateOnce<double, double>("cosh(c0)", 0.0);
-  EXPECT_DOUBLE_EQ(coshValue.value(), 1.0);
-  
-  auto asinhValue = evaluateOnce<double, double>("asinh(c0)", 0.0);
-  EXPECT_DOUBLE_EQ(asinhValue.value(), 0.0);
-  
-  auto acoshValue = evaluateOnce<double, double>("acosh(c0)", 1.0);
-  EXPECT_DOUBLE_EQ(acoshValue.value(), 0.0);
-  
-  auto atanhValue = evaluateOnce<double, double>("atanh(c0)", 0.0);
-  EXPECT_DOUBLE_EQ(atanhValue.value(), 0.0);
-  
-  // Exponential and logarithmic functions
-  auto expValue = evaluateOnce<double, double>("exp(c0)", 0.0);
-  EXPECT_DOUBLE_EQ(expValue.value(), 1.0);
-  
-  auto logValue = evaluateOnce<double, double>("log(c0)", 1.0);
-  EXPECT_DOUBLE_EQ(logValue.value(), 0.0);
-  
-  auto sqrtValue = evaluateOnce<double, double>("sqrt(c0)", 4.0);
-  EXPECT_DOUBLE_EQ(sqrtValue.value(), 2.0);
-  
-  auto cbrtValue = evaluateOnce<double, double>("cbrt(c0)", 8.0);
-  EXPECT_DOUBLE_EQ(cbrtValue.value(), 2.0);
-  
+  testUnaryFunction("sinh(c0)", 0.0, 0.0);
+  testUnaryFunction("cosh(c0)", 0.0, 1.0);
+  testUnaryFunction("asinh(c0)", 0.0, 0.0);
+  testUnaryFunction("acosh(c0)", 1.0, 0.0);
+  testUnaryFunction("atanh(c0)", 0.0, 0.0);
+
+  // Exponential and root functions
+  testUnaryFunction("exp(c0)", 0.0, 1.0);
+  testUnaryFunction("sqrt(c0)", 4.0, 2.0);
+  testUnaryFunction("cbrt(c0)", 8.0, 2.0);
+
   // Rounding functions (Spark-specific)
-  auto ceilValue = evaluateOnce<int64_t, double>("ceil(c0)", 3.2);
-  EXPECT_EQ(ceilValue.value(), 4);
-  
-  auto floorValue = evaluateOnce<int64_t, double>("floor(c0)", 3.8);
-  EXPECT_EQ(floorValue.value(), 3);
-  
-  auto rintValue = evaluateOnce<double, double>("rint(c0)", 3.5);
-  EXPECT_DOUBLE_EQ(rintValue.value(), 4.0);
-  
+  testUnaryFunctionInt("ceil(c0)", 3.2, 4);
+  testUnaryFunctionInt("floor(c0)", 3.8, 3);
+  testUnaryFunction("rint(c0)", 3.5, 4.0);
+
   // Absolute value
-  auto absValue = evaluateOnce<double, double>("abs(c0)", -5.5);
-  EXPECT_DOUBLE_EQ(absValue.value(), 5.5);
+  testUnaryFunction("abs(c0)", -5.5, 5.5);
 }
-}
+
+
 
 } // namespace
 } // namespace facebook::velox::cudf_velox

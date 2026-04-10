@@ -1198,53 +1198,37 @@ TEST_F(CudfSimpleFilterProjectTest, castToSmallInt) {
   auto tryCast =
       evaluateOnce<int16_t, int32_t>("try_cast(c0 as smallint)", -214);
   EXPECT_EQ(tryCast, -214);
+}
 
 // Test unary math functions
 TEST_F(CudfSimpleFilterProjectTest, unaryMathFunctions) {
-  // Trigonometric functions
-  auto sinValue = evaluateOnce<double, double>("sin(c0)", 0.0);
-  EXPECT_DOUBLE_EQ(sinValue.value(), 0.0);
-  
-  auto cosValue = evaluateOnce<double, double>("cos(c0)", 0.0);
-  EXPECT_DOUBLE_EQ(cosValue.value(), 1.0);
-  
-  auto tanValue = evaluateOnce<double, double>("tan(c0)", 0.0);
-  EXPECT_DOUBLE_EQ(tanValue.value(), 0.0);
-  
-  // Inverse trigonometric functions
-  auto asinValue = evaluateOnce<double, double>("asin(c0)", 0.0);
-  EXPECT_DOUBLE_EQ(asinValue.value(), 0.0);
-  
-  auto acosValue = evaluateOnce<double, double>("acos(c0)", 1.0);
-  EXPECT_DOUBLE_EQ(acosValue.value(), 0.0);
-  
-  auto atanValue = evaluateOnce<double, double>("atan(c0)", 0.0);
-  EXPECT_DOUBLE_EQ(atanValue.value(), 0.0);
-  
+  auto testUnaryFunction =
+    [&](std::string expr, double input, double expected) {
+      auto valueOpt = evaluateOnce<double, double>(expr, input);
+      EXPECT_DOUBLE_EQ(valueOpt.value(), expected);
+    };
+  // Trigonometric functions (use 0.0 where stable/clean)
+  testUnaryFunction("sin(c0)", 0.0, 0.0);
+  testUnaryFunction("cos(c0)", 0.0, 1.0);
+  testUnaryFunction("tan(c0)", 0.0, 0.0);
+
+  // Inverse trig (use stable inputs)
+  testUnaryFunction("asin(c0)", 0.0, 0.0);
+  testUnaryFunction("acos(c0)", 1.0, 0.0);
+  testUnaryFunction("atan(c0)", 0.0, 0.0);
+
   // Hyperbolic functions
-  auto coshValue = evaluateOnce<double, double>("cosh(c0)", 0.0);
-  EXPECT_DOUBLE_EQ(coshValue.value(), 1.0);
-  
-  auto tanhValue = evaluateOnce<double, double>("tanh(c0)", 0.0);
-  EXPECT_DOUBLE_EQ(tanhValue.value(), 0.0);
-  
-  // Exponential and logarithmic functions
-  auto expValue = evaluateOnce<double, double>("exp(c0)", 0.0);
-  EXPECT_DOUBLE_EQ(expValue.value(), 1.0);
-  
-  auto lnValue = evaluateOnce<double, double>("ln(c0)", 1.0);
-  EXPECT_DOUBLE_EQ(lnValue.value(), 0.0);
-  
-  auto sqrtValue = evaluateOnce<double, double>("sqrt(c0)", 4.0);
-  EXPECT_DOUBLE_EQ(sqrtValue.value(), 2.0);
-  
-  auto cbrtValue = evaluateOnce<double, double>("cbrt(c0)", 8.0);
-  EXPECT_DOUBLE_EQ(cbrtValue.value(), 2.0);
-  
+  testUnaryFunction("cosh(c0)", 0.0, 1.0);
+  testUnaryFunction("tanh(c0)", 0.0, 0.0);
+
+  // Exponential / log / roots
+  testUnaryFunction("exp(c0)", 0.0, 1.0);
+  testUnaryFunction("ln(c0)", 1.0, 0.0);
+  testUnaryFunction("sqrt(c0)", 4.0, 2.0);
+  testUnaryFunction("cbrt(c0)", 8.0, 2.0);
+
   // Absolute value
-  auto absValue = evaluateOnce<double, double>("abs(c0)", -5.5);
-  EXPECT_DOUBLE_EQ(absValue.value(), 5.5);
-}
+  testUnaryFunction("abs(c0)", -5.5, 5.5);
 }
 
 } // namespace
