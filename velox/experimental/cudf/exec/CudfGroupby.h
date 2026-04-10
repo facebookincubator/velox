@@ -17,12 +17,17 @@
 
 #include "velox/experimental/cudf/exec/CudfAggregation.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
+#include "velox/experimental/cudf/exec/PartitionedBufferedState.h"
 
 #include "velox/exec/Operator.h"
 
 #include <cudf/groupby.hpp>
 
+#include <limits>
+
 namespace facebook::velox::cudf_velox {
+
+class GroupbyBufferedStateOps;
 
 struct GroupbyAggregator {
   core::AggregationNode::Step step;
@@ -101,6 +106,8 @@ class CudfGroupby : public exec::Operator, public NvtxHelper {
   bool isFinished() override;
 
  private:
+  friend class GroupbyBufferedStateOps;
+
   CudfVectorPtr doGroupByAggregation(
       cudf::table_view tableView,
       std::vector<column_index_t> const& groupByKeys,
@@ -141,6 +148,9 @@ class CudfGroupby : public exec::Operator, public NvtxHelper {
   TypePtr inputType_;
   RowTypePtr bufferedResultType_;
   CudfVectorPtr bufferedResult_;
+  std::unique_ptr<PartitionedBufferedState> partitionedBufferedState_;
+  size_t maxBufferedRows_{
+      static_cast<size_t>(std::numeric_limits<cudf::size_type>::max())};
 };
 
 } // namespace facebook::velox::cudf_velox

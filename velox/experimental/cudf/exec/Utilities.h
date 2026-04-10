@@ -18,6 +18,8 @@
 
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
+#include <cudf/hashing.hpp>
+#include <cudf/partitioning.hpp>
 #include <cudf/table/table.hpp>
 
 #include <rmm/cuda_stream_view.hpp>
@@ -89,6 +91,15 @@ getConcatenatedTableBatched(
     const TypePtr& tableType,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
+
+[[nodiscard]] std::vector<CudfVectorPtr> hashPartitionTable(
+    const CudfVectorPtr& table,
+    const TypePtr& tableType,
+    std::vector<cudf::size_type> const& partitionKeyIndices,
+    int32_t numPartitions,
+    cudf::hash_id hashId,
+    uint32_t seed,
+    rmm::cuda_stream_view stream);
 
 /**
  * @brief Wrapper for CUDA events used for stream synchronization.

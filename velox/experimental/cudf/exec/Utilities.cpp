@@ -16,12 +16,15 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
+#include <cudf/copying.hpp>
 #include <cudf/column/column_factories.hpp>
 #include <cudf/concatenate.hpp>
 #include <cudf/detail/utilities/stream_pool.hpp>
+#include <cudf/partitioning.hpp>
 #include <cudf/utilities/memory_resource.hpp>
 
 #include <limits>
@@ -177,6 +180,57 @@ std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
 
   // Input tables are deallocated here when 'tables' goes out of scope.
   return outputTables;
+}
+
+std::vector<CudfVectorPtr> hashPartitionTable(
+    const CudfVectorPtr& table,
+    const TypePtr& tableType,
+    std::vector<cudf::size_type> const& partitionKeyIndices,
+    int32_t numPartitions,
+    cudf::hash_id hashId,
+    uint32_t seed,
+    rmm::cuda_stream_view stream) {
+  VELOX_CHECK_NOT_NULL(table);
+  VELOX_CHECK_GT(numPartitions, 0);
+
+  std::vector<rmm::cuda_stream_view> inputStreams{table->stream()};
+  cudf::detail::join_streams(inputStreams, stream);
+
+  auto [partitionedTable, partitionOffsets] = cudf::hash_partition(
+      table->getTableView(),
+      partitionKeyIndices,
+      numPartitions,
+      hashId,
+      seed,
+      stream,
+      get_temp_mr());
+
+  VELOX_CHECK_EQ(partitionOffsets.size(), numPartitions + 1);
+  VELOX_CHECK_EQ(partitionOffsets.front(), 0);
+
+  partitionOffsets.erase(partitionOffsets.begin());
+  partitionOffsets.pop_back();
+
+  auto partitionedViews =
+      cudf::split(partitionedTable->view(), partitionOffsets, stream);
+  std::vector<CudfVectorPtr> partitions(numPartitions);
+  for (int32_t i = 0; i < numPartitions; ++i) {
+    auto partition = partitionedViews[i];
+    if (partition.num_rows() == 0) {
+      continue;
+    }
+
+    partitions[i] = std::make_shared<CudfVector>(
+        table->pool(),
+        tableType,
+        partition.num_rows(),
+        std::make_unique<cudf::table>(partition, stream, get_output_mr()),
+        stream);
+  }
+
+  CudaEvent event(cudaEventDisableTiming);
+  streamsWaitForStream(event, inputStreams, stream);
+  return partitions;
 }
 
 void streamsWaitForStream(

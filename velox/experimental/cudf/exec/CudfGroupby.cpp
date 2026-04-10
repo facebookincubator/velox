@@ -37,9 +37,9 @@
 namespace {
 
 using namespace facebook::velox;
+using cudf_velox::CountInputKind;
 using cudf_velox::get_output_mr;
 using cudf_velox::get_temp_mr;
-using cudf_velox::CountInputKind;
 using cudf_velox::GroupbyAggregator;
 using cudf_velox::ResolvedAggregateInfo;
 
@@ -318,6 +318,88 @@ std::unique_ptr<GroupbyAggregator> createGroupbyAggregator(
 
 namespace facebook::velox::cudf_velox {
 
+class GroupbyBufferedStateOps final
+    : public PartitionedBufferedState::BufferedStateOps {
+ public:
+  explicit GroupbyBufferedStateOps(CudfGroupby& owner) : owner_(owner) {
+    keyIndices_.reserve(owner_.groupingKeyOutputChannels_.size());
+    for (auto keyIndex : owner_.groupingKeyOutputChannels_) {
+      keyIndices_.push_back(static_cast<cudf::size_type>(keyIndex));
+    }
+  }
+
+  CudfVectorPtr compactInputBatch(CudfVectorPtr rawInput) override {
+    auto stream = rawInput->stream();
+    auto permutedInputView = rawInput->getTableView().select(
+        owner_.aggregationInputChannels_.begin(),
+        owner_.aggregationInputChannels_.end());
+
+    auto& compactAggregators = owner_.isSingleStep_
+        ? owner_.partialAggregators_
+        : owner_.intermediateAggregators_;
+    return owner_.doGroupByAggregation(
+        permutedInputView,
+        owner_.groupingKeyOutputChannels_,
+        compactAggregators,
+        owner_.bufferedResultType_,
+        stream);
+  }
+
+  CudfVectorPtr mergeBuffered(CudfVectorPtr left, CudfVectorPtr right)
+      override {
+    if (!left) {
+      return right;
+    }
+    if (!right) {
+      return left;
+    }
+
+    auto stream = left->stream();
+    std::vector<CudfVectorPtr> tablesToConcat;
+    tablesToConcat.push_back(std::move(left));
+    tablesToConcat.push_back(std::move(right));
+    auto concatenatedTable = getConcatenatedTable(
+        std::move(tablesToConcat),
+        owner_.bufferedResultType_,
+        stream,
+        get_temp_mr());
+    return owner_.doGroupByAggregation(
+        concatenatedTable->view(),
+        owner_.groupingKeyOutputChannels_,
+        owner_.intermediateAggregators_,
+        owner_.bufferedResultType_,
+        stream);
+  }
+
+  CudfVectorPtr finalizeLeaf(CudfVectorPtr bufferedLeaf) override {
+    auto stream = bufferedLeaf->stream();
+    auto& finalAggregators =
+        owner_.isSingleStep_ ? owner_.finalAggregators_ : owner_.aggregators_;
+    return owner_.doGroupByAggregation(
+        bufferedLeaf->getTableView(),
+        owner_.groupingKeyOutputChannels_,
+        finalAggregators,
+        owner_.outputType_,
+        stream);
+  }
+
+  TypePtr bufferedType() const override {
+    return owner_.bufferedResultType_;
+  }
+
+  TypePtr outputType() const override {
+    return owner_.outputType_;
+  }
+
+  const std::vector<cudf::size_type>& keyIndices() const override {
+    return keyIndices_;
+  }
+
+ private:
+  CudfGroupby& owner_;
+  std::vector<cudf::size_type> keyIndices_;
+};
+
 std::vector<std::unique_ptr<GroupbyAggregator>> toGroupbyAggregators(
     core::AggregationNode const& aggregationNode,
     core::AggregationNode::Step step,
@@ -488,6 +570,15 @@ void CudfGroupby::initialize() {
           outputType_,
           nullConstants);
     }
+
+    auto const& cudfConfig = CudfConfig::getInstance();
+    maxBufferedRows_ = cudfConfig.batchSizeMaxThreshold.value_or(
+        std::numeric_limits<int32_t>::max());
+    VELOX_CHECK_GT(maxBufferedRows_, 0);
+    if (isFinalOrSingle) {
+      partitionedBufferedState_ = std::make_unique<PartitionedBufferedState>(
+          std::make_unique<GroupbyBufferedStateOps>(*this), maxBufferedRows_);
+    }
   }
 
   // Check that aggregate result type match the output type.
@@ -548,77 +639,11 @@ void CudfGroupby::computePartialGroupbyStreaming(CudfVectorPtr tbl) {
 }
 
 void CudfGroupby::computeFinalGroupbyStreaming(CudfVectorPtr tbl) {
-  auto inputTableStream = tbl->stream();
-  auto permutedInputView = tbl->getTableView().select(
-      aggregationInputChannels_.begin(), aggregationInputChannels_.end());
-
-  if (!bufferedResult_) {
-    auto groupbyOnInput = doGroupByAggregation(
-        permutedInputView,
-        groupingKeyOutputChannels_,
-        intermediateAggregators_,
-        bufferedResultType_,
-        inputTableStream);
-    if (!groupbyOnInput) {
-      return;
-    }
-    bufferedResult_ = groupbyOnInput;
-    return;
-  }
-
-  std::vector<cudf::table_view> tablesToConcat;
-  tablesToConcat.push_back(bufferedResult_->getTableView());
-  tablesToConcat.push_back(permutedInputView);
-
-  auto finalStream = bufferedResult_->stream();
-  cudf::detail::join_streams(
-      std::vector<rmm::cuda_stream_view>{inputTableStream}, finalStream);
-
-  auto concatenatedTable =
-      cudf::concatenate(tablesToConcat, finalStream, get_temp_mr());
-  cudf::detail::join_streams(
-      std::vector<rmm::cuda_stream_view>{finalStream}, inputTableStream);
-  auto compactedOutput = doGroupByAggregation(
-      concatenatedTable->view(),
-      groupingKeyOutputChannels_,
-      intermediateAggregators_,
-      bufferedResultType_,
-      finalStream);
-  bufferedResult_ = compactedOutput;
+  partitionedBufferedState_->addInput(std::move(tbl));
 }
 
 void CudfGroupby::computeSingleGroupbyStreaming(CudfVectorPtr tbl) {
-  auto inputTableStream = tbl->stream();
-  auto permutedInputView = tbl->getTableView().select(
-      aggregationInputChannels_.begin(), aggregationInputChannels_.end());
-  auto groupbyOnInput = doGroupByAggregation(
-      permutedInputView,
-      groupingKeyOutputChannels_,
-      partialAggregators_,
-      bufferedResultType_,
-      inputTableStream);
-
-  if (bufferedResult_) {
-    auto partialOutputStream = bufferedResult_->stream();
-    std::vector<CudfVectorPtr> tablesToConcat;
-    tablesToConcat.push_back(bufferedResult_);
-    tablesToConcat.push_back(groupbyOnInput);
-    auto concatenatedTable = getConcatenatedTable(
-        std::move(tablesToConcat),
-        bufferedResultType_,
-        partialOutputStream,
-        get_temp_mr());
-
-    auto compactedOutput = doGroupByAggregation(
-        concatenatedTable->view(),
-        groupingKeyOutputChannels_,
-        intermediateAggregators_,
-        bufferedResultType_,
-        partialOutputStream);
-    bufferedResult_ = compactedOutput;
-  } else {
-    bufferedResult_ = groupbyOnInput;
-  }
+  partitionedBufferedState_->addInput(std::move(tbl));
 }
 
 void CudfGroupby::addInput(RowVectorPtr input) {
@@ -758,20 +783,12 @@ RowVectorPtr CudfGroupby::getOutput() {
   // At this point isPartialOutput_ is false (handled above) and noMoreInput_
   // is true (guarded by the check above).
   if (streamingEnabled_) {
-    finished_ = true;
-    if (!bufferedResult_) {
-      return nullptr;
+    auto result = partitionedBufferedState_
+        ? partitionedBufferedState_->drainNextOutput()
+        : nullptr;
+    if (!result) {
+      finished_ = true;
     }
-    auto& aggs = isSingleStep_ ? finalAggregators_ : aggregators_;
-    auto stream = bufferedResult_->stream();
-    auto result = doGroupByAggregation(
-        bufferedResult_->getTableView(),
-        groupingKeyOutputChannels_,
-        aggs,
-        outputType_,
-        stream);
-    stream.synchronize();
-    bufferedResult_.reset();
     return result;
   }
 

@@ -44,11 +44,15 @@ class AggregationTest : public OperatorTestBase {
   void SetUp() override {
     OperatorTestBase::SetUp();
     filesystems::registerLocalFileSystem();
+    savedBatchSizeMaxThreshold_ =
+        cudf_velox::CudfConfig::getInstance().batchSizeMaxThreshold;
     cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
   }
 
   void TearDown() override {
+    cudf_velox::CudfConfig::getInstance().batchSizeMaxThreshold =
+        savedBatchSizeMaxThreshold_;
     cudf_velox::unregisterCudf();
     OperatorTestBase::TearDown();
   }
@@ -208,6 +212,10 @@ class AggregationTest : public OperatorTestBase {
     assertQuery(builder.planNode(), "SELECT count(*) FROM tmp WHERE c0 > 0");
   }
 
+  void setBatchSizeMaxThreshold(std::optional<int32_t> maxRows) {
+    cudf_velox::CudfConfig::getInstance().batchSizeMaxThreshold = maxRows;
+  }
+
   RowTypePtr rowType_{
       ROW({"c0", "c1", "c2", "c3", "c4", "c5", "c6"},
           {BIGINT(),
@@ -217,6 +225,7 @@ class AggregationTest : public OperatorTestBase {
            DOUBLE(), // DM: This used to be REAL() but we don't support that
            DOUBLE(),
            VARCHAR()})};
+  std::optional<int32_t> savedBatchSizeMaxThreshold_;
 };
 
 TEST_F(AggregationTest, global) {
@@ -952,6 +961,94 @@ TEST_F(AggregationTest, finalAggregationStreamingMultiKey) {
 
   const auto planStats = toPlanStats(task->taskStats());
   EXPECT_GT(planStats.at(finalAggId).outputRows, 0);
+}
+
+TEST_F(AggregationTest, finalAggregationPartitionedBufferedState) {
+  setBatchSizeMaxThreshold(4);
+  auto vectors = {
+      makeRowVector({makeFlatVector<int64_t>({0, 1}), makeFlatVector<int64_t>({1, 1})}),
+      makeRowVector({makeFlatVector<int64_t>({2, 3}), makeFlatVector<int64_t>({1, 1})}),
+      makeRowVector({makeFlatVector<int64_t>({4, 5}), makeFlatVector<int64_t>({1, 1})}),
+  };
+  createDuckDbTable(vectors);
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .partialAggregation({"c0"}, {"count(1)"})
+                  .finalAggregation()
+                  .planNode();
+
+  AssertQueryBuilder(duckDbQueryRunner_)
+      .config(QueryConfig::kMaxPartialAggregationMemory, 1)
+      .plan(plan)
+      .assertResults("SELECT c0, count(1) FROM tmp GROUP BY 1");
+}
+
+TEST_F(AggregationTest, singleAggregationPartitionedBufferedState) {
+  setBatchSizeMaxThreshold(4);
+  auto vectors = {
+      makeRowVector({makeFlatVector<int64_t>({0, 1}), makeFlatVector<int64_t>({1, 1})}),
+      makeRowVector({makeFlatVector<int64_t>({2, 3}), makeFlatVector<int64_t>({1, 1})}),
+      makeRowVector({makeFlatVector<int64_t>({4, 5}), makeFlatVector<int64_t>({1, 1})}),
+  };
+  createDuckDbTable(vectors);
+
+  auto plan =
+      PlanBuilder().values(vectors).singleAggregation({"c0"}, {"count(1)"}).planNode();
+
+  AssertQueryBuilder(duckDbQueryRunner_)
+      .plan(plan)
+      .assertResults("SELECT c0, count(1) FROM tmp GROUP BY 1");
+}
+
+TEST_F(AggregationTest, finalAggregationRecursivePartitioning) {
+  setBatchSizeMaxThreshold(3);
+  std::vector<RowVectorPtr> vectors;
+  for (int64_t key = 0; key < 6; ++key) {
+    vectors.push_back(makeRowVector(
+        {makeFlatVector<int64_t>({key}), makeFlatVector<int64_t>({1})}));
+  }
+  createDuckDbTable(vectors);
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .partialAggregation({"c0"}, {"count(1)"})
+                  .finalAggregation()
+                  .planNode();
+
+  AssertQueryBuilder(duckDbQueryRunner_)
+      .config(QueryConfig::kMaxPartialAggregationMemory, 1)
+      .plan(plan)
+      .assertResults("SELECT c0, count(1) FROM tmp GROUP BY 1");
+}
+
+TEST_F(AggregationTest, companionAggregatesStayOnNonStreamingPathWithRowCap) {
+  setBatchSizeMaxThreshold(1);
+
+  std::vector<int64_t> keys0{1, 1, 1, 2, 1, 1, 2, 2};
+  std::vector<int64_t> keys1{1, 2, 1, 2, 1, 2, 1, 2};
+  std::vector<int64_t> values{1, 2, 3, 4, 5, 6, 7, 8};
+  auto rowVector = makeRowVector(
+      {makeFlatVector<int64_t>(keys0),
+       makeFlatVector<int64_t>(keys1),
+       makeFlatVector<int64_t>(values)});
+
+  createDuckDbTable({rowVector});
+
+  auto plan =
+      PlanBuilder()
+          .values({rowVector})
+          .singleAggregation({"c2", "c0"}, {"count_partial(c1)"})
+          .localPartition({"c2", "c0"})
+          .singleAggregation({"c0"}, {"count_merge(a0)", "count_partial(c2)"})
+          .localPartition({"c0"})
+          .singleAggregation({"c0"}, {"count_merge(a0)", "count_merge(a1)"})
+          .planNode();
+
+  AssertQueryBuilder(duckDbQueryRunner_)
+      .plan(plan)
+      .assertResults(
+          "SELECT c0, count(c1), count(distinct c2) FROM tmp GROUP BY c0");
 }
 
 class EmptyInputAggregationTest : public AggregationTest {

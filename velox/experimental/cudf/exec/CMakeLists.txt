@@ -30,6 +30,7 @@ add_library(
   DebugUtil.cpp
   GpuResources.cpp
   OperatorAdapters.cpp
+  PartitionedBufferedState.cpp
   ToCudf.cpp
   Utilities.cpp
   VeloxCudfInterop.cpp
