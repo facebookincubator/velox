@@ -50,6 +50,36 @@ inline std::exception_ptr makeBadCastException(
       false));
 }
 
+// Returns true if casting from 'fromType' to 'toType' is a supported fast
+// upcast.
+bool isSupportedFastUpcast(const TypePtr& fromType, const TypePtr& toType) {
+  auto isIntegralType = [](const TypePtr& type) {
+    return type == TINYINT() || type == SMALLINT() || type == INTEGER() ||
+        type == BIGINT();
+  };
+
+  auto isBasicNumericType = [&isIntegralType](const TypePtr& type) {
+    return isIntegralType(type) || type == REAL() || type == DOUBLE();
+  };
+
+  if (isIntegralType(fromType) && isBasicNumericType(toType)) {
+    if (fromType->cppSizeInBytes() < toType->cppSizeInBytes()) {
+      return true;
+    }
+    if (fromType == INTEGER() && toType == REAL()) {
+      return true;
+    }
+    if (fromType == BIGINT() && (toType == REAL() || toType == DOUBLE())) {
+      return true;
+    }
+  }
+
+  if (fromType == REAL() && toType == DOUBLE()) {
+    return true;
+  }
+  return false;
+}
+
 } // namespace
 
 template <typename Func>
@@ -615,6 +645,61 @@ void CastExpr::applyCastPrimitives(
   }
 }
 
+template <TypeKind ToKind, TypeKind FromKind>
+void CastExpr::applyNumericUpcast(
+    const SelectivityVector& rows,
+    const TypePtr& toType,
+    exec::EvalCtx& context,
+    const BaseVector& input,
+    VectorPtr& result) {
+  constexpr auto isNumericTypeKind = [](TypeKind kind) constexpr {
+    return kind == TypeKind::TINYINT || kind == TypeKind::SMALLINT ||
+        kind == TypeKind::INTEGER || kind == TypeKind::BIGINT ||
+        kind == TypeKind::REAL || kind == TypeKind::DOUBLE;
+  };
+
+  if constexpr (isNumericTypeKind(ToKind) && isNumericTypeKind(FromKind)) {
+    using ToNativeType = typename TypeTraits<ToKind>::NativeType;
+    using FromNativeType = typename TypeTraits<FromKind>::NativeType;
+
+    if (input.isConstantEncoding()) {
+      auto constantInput = input.as<ConstantVector<FromNativeType>>();
+      if (constantInput->isNullAt(0)) {
+        result =
+            BaseVector::createNullConstant(toType, rows.end(), context.pool());
+        return;
+      }
+      auto constantValue = static_cast<ToNativeType>(constantInput->valueAt(0));
+      result = std::make_shared<ConstantVector<ToNativeType>>(
+          context.pool(),
+          rows.end(),
+          /*isNull=*/false,
+          toType,
+          std::move(constantValue));
+      return;
+    }
+
+    if (input.isFlatEncoding()) {
+      const auto simpleInput = input.asFlatVector<FromNativeType>();
+      auto flatResult = result->asFlatVector<ToNativeType>();
+
+      const FromNativeType* in =
+          simpleInput->template rawValues<FromNativeType>();
+      ToNativeType* out = flatResult->template mutableRawValues<ToNativeType>();
+
+      rows.applyToSelected([&](auto row) {
+        // Converting large bigint values to float/double directly may lose
+        // precision, but it's consistent with the implementation in
+        // velox/type/Conversions.h.
+        out[row] = static_cast<ToNativeType>(in[row]);
+      });
+      return;
+    }
+  }
+  VELOX_UNSUPPORTED(
+      "Cannot upcast from {} to {}", input.type(), toType->toString());
+}
+
 template <TypeKind ToKind>
 void CastExpr::applyCastPrimitivesDispatch(
     const TypePtr& fromType,
@@ -624,6 +709,19 @@ void CastExpr::applyCastPrimitivesDispatch(
     const BaseVector& input,
     VectorPtr& result) {
   context.ensureWritable(rows, toType, result);
+
+  if (isSupportedFastUpcast(fromType, toType)) {
+    VELOX_DYNAMIC_SCALAR_TEMPLATE_TYPE_DISPATCH(
+        applyNumericUpcast,
+        ToKind,
+        fromType->kind(),
+        rows,
+        toType,
+        context,
+        input,
+        result);
+    return;
+  }
 
   // This already excludes complex types, hugeint and unknown from type kinds.
   VELOX_DYNAMIC_SCALAR_TEMPLATE_TYPE_DISPATCH(
