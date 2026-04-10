@@ -67,6 +67,18 @@ TEST_F(TypedExprSerDeTest, fieldAccess) {
       0);
   testSerde(expression);
   ASSERT_EQ(expression->toString(), "\"ab\"[a]");
+
+  expression = std::make_shared<DereferenceTypedExpr>(
+      INTEGER(),
+      std::make_shared<FieldAccessTypedExpr>(ROW({INTEGER(), VARCHAR()}), "x"),
+      0);
+  ASSERT_EQ(expression->toString(), "\"x\"[0]");
+
+  expression = std::make_shared<DereferenceTypedExpr>(
+      VARCHAR(),
+      std::make_shared<FieldAccessTypedExpr>(ROW({INTEGER(), VARCHAR()}), "x"),
+      1);
+  ASSERT_EQ(expression->toString(), "\"x\"[1]");
 }
 
 TEST_F(TypedExprSerDeTest, constant) {

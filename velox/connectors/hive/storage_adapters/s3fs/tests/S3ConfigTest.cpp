@@ -15,6 +15,7 @@
  */
 
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Config.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/config/Config.h"
 
 #include <gtest/gtest.h>
@@ -38,6 +39,7 @@ TEST(S3ConfigTest, defaultConfig) {
   ASSERT_EQ(s3Config.cacheKey("foo", config), "foo");
   ASSERT_EQ(s3Config.bucket(), "");
   ASSERT_EQ(s3Config.useIMDS(), true);
+  ASSERT_EQ(s3Config.minPartSize(), 10485760);
 }
 
 TEST(S3ConfigTest, overrideConfig) {
@@ -55,7 +57,8 @@ TEST(S3ConfigTest, overrideConfig) {
       {S3Config::baseConfigKey(S3Config::Keys::kIamRoleSessionName), "velox"},
       {S3Config::baseConfigKey(S3Config::Keys::kCredentialsProvider),
        "my-credentials-provider"},
-      {S3Config::baseConfigKey(S3Config::Keys::kIMDSEnabled), "false"}};
+      {S3Config::baseConfigKey(S3Config::Keys::kIMDSEnabled), "false"},
+      {S3Config::baseConfigKey(S3Config::Keys::kMultipartMinPartSize), "20MB"}};
   auto configBase =
       std::make_shared<config::ConfigBase>(std::move(configFromFile));
   auto s3Config = S3Config("bucket", configBase);
@@ -74,6 +77,7 @@ TEST(S3ConfigTest, overrideConfig) {
   ASSERT_EQ(s3Config.bucket(), "bucket");
   ASSERT_EQ(s3Config.credentialsProvider(), "my-credentials-provider");
   ASSERT_EQ(s3Config.useIMDS(), false);
+  ASSERT_EQ(s3Config.minPartSize(), 20971520);
 }
 
 TEST(S3ConfigTest, overrideBucketConfig) {
@@ -99,7 +103,8 @@ TEST(S3ConfigTest, overrideBucketConfig) {
        "my-credentials-provider"},
       {S3Config::bucketConfigKey(S3Config::Keys::kCredentialsProvider, bucket),
        "override-credentials-provider"},
-      {S3Config::baseConfigKey(S3Config::Keys::kIMDSEnabled), "false"}};
+      {S3Config::baseConfigKey(S3Config::Keys::kIMDSEnabled), "false"},
+      {S3Config::baseConfigKey(S3Config::Keys::kMultipartMinPartSize), "20MB"}};
   auto configBase =
       std::make_shared<config::ConfigBase>(std::move(bucketConfigFromFile));
   auto s3Config = S3Config(bucket, configBase);
@@ -120,6 +125,49 @@ TEST(S3ConfigTest, overrideBucketConfig) {
   ASSERT_EQ(s3Config.cacheKey("foo", configBase), "endpoint-foo");
   ASSERT_EQ(s3Config.credentialsProvider(), "override-credentials-provider");
   ASSERT_EQ(s3Config.useIMDS(), false);
+  ASSERT_EQ(s3Config.minPartSize(), 20971520);
+}
+
+TEST(S3ConfigTest, minPartSizeValidation) {
+  // Test that setting min-part-size below 5MB throws an error.
+  std::unordered_map<std::string, std::string> configFromFile = {
+      {S3Config::baseConfigKey(S3Config::Keys::kMultipartMinPartSize), "4MB"}};
+  auto configBase =
+      std::make_shared<config::ConfigBase>(std::move(configFromFile));
+
+  VELOX_ASSERT_THROW(
+      S3Config("bucket", configBase),
+      "The min-part-size S3 configuration must exceed 5MB");
+
+  configFromFile = {
+      {S3Config::baseConfigKey(S3Config::Keys::kMultipartMinPartSize), "10GB"}};
+  configBase = std::make_shared<config::ConfigBase>(std::move(configFromFile));
+  VELOX_ASSERT_THROW(
+      S3Config("bucket", configBase),
+      "The min-part-size S3 configuration must not exceed 5GB");
+}
+
+TEST(S3ConfigTest, minPartSizeValidationBucketConfig) {
+  // Test that setting bucket-specific min-part-size below 5MB throws an error.
+  std::string_view bucket = "testbucket";
+  std::unordered_map<std::string, std::string> configFromFile = {
+      {S3Config::bucketConfigKey(S3Config::Keys::kMultipartMinPartSize, bucket),
+       "3MB"}};
+  auto configBase =
+      std::make_shared<config::ConfigBase>(std::move(configFromFile));
+
+  VELOX_ASSERT_THROW(
+      S3Config(bucket, configBase),
+      "The min-part-size S3 configuration must exceed 5MB");
+
+  configFromFile = {
+      {S3Config::bucketConfigKey(S3Config::Keys::kMultipartMinPartSize, bucket),
+       "10GB"}};
+  configBase = std::make_shared<config::ConfigBase>(std::move(configFromFile));
+
+  VELOX_ASSERT_THROW(
+      S3Config(bucket, configBase),
+      "The min-part-size S3 configuration must not exceed 5GB");
 }
 
 } // namespace

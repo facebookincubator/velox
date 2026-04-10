@@ -354,6 +354,101 @@ TEST_F(ToCudfSelectionTest, unsupportedAggregationInputExpressionsFallsBack) {
   ASSERT_TRUE(wasDefaultHashAggregationUsed(task));
 }
 
+// Non-count constant aggregates are not supported by cuDF aggregation.
+TEST_F(ToCudfSelectionTest, nonCountConstantAggregationFallsBack) {
+  auto vectors = makeVectors(rowType_, 10, 100);
+  createDuckDbTable(vectors);
+
+  auto plan =
+      PlanBuilder()
+          .values(vectors)
+          .aggregation(
+              {}, {"sum(1)"}, {}, core::AggregationNode::Step::kSingle, false)
+          .planNode();
+
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .config("cudf.enabled", true)
+                  .plan(plan)
+                  .assertResults("SELECT sum(1) FROM tmp");
+
+  ASSERT_FALSE(wasCudfAggregationUsed(task));
+  ASSERT_TRUE(wasDefaultHashAggregationUsed(task));
+}
+
+// Test zero-column count(*) should stay on GPU.
+TEST_F(ToCudfSelectionTest, zeroColumnCountStarUsesCudf) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3, 4}),
+  });
+  createDuckDbTable({data});
+
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .filter("c0 > 0")
+          .project({})
+          .aggregation(
+              {}, {"count(*)"}, {}, core::AggregationNode::Step::kSingle, false)
+          .planNode();
+
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .config("cudf.enabled", true)
+                  .plan(plan)
+                  .assertResults("SELECT count(*) FROM tmp WHERE c0 > 0");
+
+  ASSERT_TRUE(wasCudfAggregationUsed(task));
+  ASSERT_FALSE(wasDefaultHashAggregationUsed(task));
+}
+
+// Test zero-column count(constant) should fall back to CPU for now.
+TEST_F(ToCudfSelectionTest, zeroColumnCountConstantFallsBack) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3, 4}),
+  });
+  createDuckDbTable({data});
+
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .filter("c0 > 0")
+          .project({})
+          .aggregation(
+              {}, {"count(1)"}, {}, core::AggregationNode::Step::kSingle, false)
+          .planNode();
+
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .config("cudf.enabled", true)
+                  .plan(plan)
+                  .assertResults("SELECT count(1) FROM tmp WHERE c0 > 0");
+
+  ASSERT_FALSE(wasCudfAggregationUsed(task));
+  ASSERT_TRUE(wasDefaultHashAggregationUsed(task));
+}
+
+// Test count(NULL) runs on cudf GPU (returns 0).
+TEST_F(ToCudfSelectionTest, countNullAggregationUsesGpu) {
+  auto vectors = makeVectors(rowType_, 10, 100);
+  createDuckDbTable(vectors);
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .aggregation(
+                      {},
+                      {"count(null)"},
+                      {},
+                      core::AggregationNode::Step::kSingle,
+                      false)
+                  .planNode();
+
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .config("cudf.enabled", true)
+                  .plan(plan)
+                  .assertResults("SELECT count(NULL) FROM tmp");
+
+  ASSERT_TRUE(wasCudfAggregationUsed(task));
+  ASSERT_FALSE(wasDefaultHashAggregationUsed(task));
+}
+
 // Test CUDF disabled should always use regular aggregation
 TEST_F(ToCudfSelectionTest, cudfDisabledUsesRegularAggregation) {
   auto vectors = makeVectors(rowType_, 10, 100);

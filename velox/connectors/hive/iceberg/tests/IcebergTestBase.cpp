@@ -18,7 +18,7 @@
 
 #include <filesystem>
 
-#include "velox/connectors/hive/TableHandle.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergConnector.h"
@@ -46,7 +46,8 @@ void IcebergTestBase::SetUp() {
       std::make_shared<config::ConfigBase>(
           std::unordered_map<std::string, std::string>()),
       ioExecutor_.get());
-  registerConnector(icebergConnector);
+  ConnectorRegistry::global().insert(
+      icebergConnector->connectorId(), icebergConnector);
 
   connectorSessionProperties_ = std::make_shared<config::ConfigBase>(
       std::unordered_map<std::string, std::string>(), true);
@@ -75,7 +76,7 @@ void IcebergTestBase::TearDown() {
   opPool_.reset();
   root_.reset();
   queryCtx_.reset();
-  unregisterConnector(kIcebergConnectorId);
+  ConnectorRegistry::global().erase(kIcebergConnectorId);
   HiveConnectorTestBase::TearDown();
 }
 
@@ -187,8 +188,8 @@ void addColumnHandles(
         std::make_shared<const IcebergColumnHandle>(
             columnName,
             partitionColumnIds.contains(i)
-                ? HiveColumnHandle::ColumnType::kPartitionKey
-                : HiveColumnHandle::ColumnType::kRegular,
+                ? FileColumnHandle::ColumnType::kPartitionKey
+                : FileColumnHandle::ColumnType::kRegular,
             type,
             field));
   }

@@ -149,12 +149,12 @@ core::IndexLookupConditionPtr createBetweenConditionWithConstants(
 }
 
 // Checks that a HiveColumnHandle is a regular column type.
-void checkColumnHandleIsRegular(const HiveColumnHandle& handle) {
+void checkColumnHandleIsRegular(const FileColumnHandle& handle) {
   VELOX_CHECK_EQ(
       handle.columnType(),
-      HiveColumnHandle::ColumnType::kRegular,
+      FileColumnHandle::ColumnType::kRegular,
       "Expected regular column, got {} for column {}",
-      HiveColumnHandle::columnTypeName(handle.columnType()),
+      FileColumnHandle::columnTypeName(handle.columnType()),
       handle.name());
 }
 

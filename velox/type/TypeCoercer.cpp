@@ -82,8 +82,10 @@ std::optional<Coercion> TypeCoercer::coerceTypeBase(
     return it->second;
   }
 
-  // Fall back to CastRulesRegistry for custom type coercions.
-  if (fromType->size() == 0) {
+  // Fall back to CastRulesRegistry for custom type coercions. Skip
+  // parameterized types — we cannot construct the target type without knowing
+  // its type parameters.
+  if (fromType->size() == 0 && fromType->parameters().empty()) {
     auto toType = getCustomType(toTypeName, {});
     if (toType != nullptr) {
       if (auto cost =

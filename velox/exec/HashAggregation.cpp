@@ -278,7 +278,7 @@ void HashAggregation::resetPartialOutputIfNeed() {
         std::string(HashAggregation::kFlushTimes), RuntimeCounter(1));
     lockedStats->addRuntimeStat(
         std::string(HashAggregation::kPartialAggregationPct),
-        RuntimeCounter(static_cast<int64_t>(aggregationPct)));
+        RuntimeCounter(saturateCast(aggregationPct)));
   }
   groupingSet_->resetTable(/*freeTable=*/false);
   partialFull_ = false;

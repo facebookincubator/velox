@@ -164,8 +164,8 @@ class HiveConnectorTestBase : public OperatorTestBase {
       const TypePtr& dataType,
       const TypePtr& hiveType,
       const std::vector<std::string>& requiredSubfields,
-      connector::hive::HiveColumnHandle::ColumnType columnType =
-          connector::hive::HiveColumnHandle::ColumnType::kRegular);
+      connector::hive::FileColumnHandle::ColumnType columnType =
+          connector::hive::FileColumnHandle::ColumnType::kRegular);
 
   /// @param targetDirectory Final directory of the target table after commit.
   /// @param writeDirectory Write directory of the target table before commit.

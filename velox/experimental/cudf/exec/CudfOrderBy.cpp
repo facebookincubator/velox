@@ -98,7 +98,7 @@ RowVectorPtr CudfOrderBy::getOutput() {
   if (finished_ || !noMoreInput_) {
     return nullptr;
   }
-  finished_ = noMoreInput_;
+  finished_ = true;
   return outputTable_;
 }
 

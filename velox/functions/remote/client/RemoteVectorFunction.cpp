@@ -145,7 +145,7 @@ void RemoteVectorFunction::applyRemote(
         return;
       }
       try {
-        throw std::runtime_error(std::string(errorsVector->valueAt(i)));
+        VELOX_USER_FAIL("{}", errorsVector->valueAt(i));
       } catch (const std::exception&) {
         context.setError(i, std::current_exception());
       }

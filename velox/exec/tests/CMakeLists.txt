@@ -41,87 +41,113 @@ target_link_libraries(
   GTest::gtest_main
 )
 
-# Split velox_exec_test into individual test binaries for parallel execution.
+# Sources are ordered via greedy bin-packing by measured EC2 execution time.
+# With VELOX_TESTS_PER_GROUP=10, CMake takes files positionally in batches of
+# 10 (files 1-10 = group0, 11-20 = group1, etc.).
+#
+# Measured per-file EC2 timings (sequential, 8-core, 30GB):
+#   IndexLookupJoinTest 783s, MultiFragmentTest 599s,
+#   HashJoinTestExtra ~585s, SpillerTest 584s, HashJoinTest ~575s,
+#   TableWriterTest 225s, TableScanTest 189s, IndexLookupJoinTestExtra 188s,
+#   MergeJoinTest 111s, AggregationTest 105s, OutputBufferManagerTest 98s,
+#   ScaleWriterLocalPartitionTest 96s, OrderByTest 71s, TopNRowNumberTest 64s,
+#   HashTableTest 60s, StreamingAggregationTest 58s, ExchangeClientTest 54s,
+#   RowNumberTest 42s.
+#
+# Max group ~784s (bounded by IndexLookupJoinTest.cpp).
 set(
   VELOX_EXEC_TEST_SOURCES
-  AddressableNonNullValueListTest.cpp
-  AggregationTest.cpp
-  AggregateFunctionRegistryTest.cpp
-  ArrowStreamTest.cpp
-  AssignUniqueIdTest.cpp
-  AsyncConnectorTest.cpp
-  ConcatFilesSpillMergeStreamTest.cpp
-  ContainerRowSerdeTest.cpp
-  ColumnStatsCollectorTest.cpp
-  CustomJoinTest.cpp
-  EnforceSingleRowTest.cpp
-  ExchangeClientTest.cpp
-  ExpandTest.cpp
-  FilterProjectTest.cpp
-  FilterToExpressionTest.cpp
-  FunctionResolutionTest.cpp
-  HashBitRangeTest.cpp
-  CountingJoinTest.cpp
-  HashJoinBridgeTest.cpp
-  HashJoinTest.cpp
-  HashPartitionFunctionTest.cpp
-  HashTableTest.cpp
+  # group0 (~784s): IndexLookupJoinTest 783 + 9 lightweight
   IndexLookupJoinTest.cpp
-  LimitTest.cpp
-  LocalPartitionTest.cpp
-  MarkDistinctTest.cpp
-  MarkSortedTest.cpp
-  EnforceDistinctTest.cpp
-  MemoryReclaimerTest.cpp
-  MergeJoinTest.cpp
-  MergeTest.cpp
-  MergerTest.cpp
-  MixedUnionTest.cpp
+  ConcatFilesSpillMergeStreamTest.cpp
   MixedUnionWithTableScanTest.cpp
-  MultiFragmentTest.cpp
-  NestedLoopJoinTest.cpp
-  OrderByTest.cpp
-  OperatorTraceTest.cpp
-  OutputBufferManagerTest.cpp
-  ParallelProjectTest.cpp
-  PartitionedOutputTest.cpp
-  PlanNodeSerdeTest.cpp
-  PlanNodeStatsTest.cpp
-  PlanNodeToStringTest.cpp
-  PlanNodeToSummaryStringTest.cpp
-  PrefixSortTest.cpp
-  PrintPlanWithStatsTest.cpp
-  ProbeOperatorStateTest.cpp
+  MemoryReclaimerTest.cpp
+  EnforceDistinctTest.cpp
   TraceUtilTest.cpp
-  RoundRobinPartitionFunctionTest.cpp
-  RowContainerTest.cpp
-  RowNumberTest.cpp
-  ScaledScanControllerTest.cpp
-  ScaleWriterLocalPartitionTest.cpp
-  SortBufferTest.cpp
+  HashPartitionFunctionTest.cpp
   SpatialIndexTest.cpp
+  ValuesTest.cpp
+  ParallelProjectTest.cpp
+  # group1 (~599s): MultiFragmentTest 599 + 9 lightweight
+  MultiFragmentTest.cpp
+  EnforceSingleRowTest.cpp
+  FilterToExpressionTest.cpp
+  ScaledScanControllerTest.cpp
   HilbertIndexTest.cpp
-  SpillStatsTest.cpp
-  SpillerTest.cpp
-  SpillTest.cpp
+  OperatorTraceTest.cpp
+  LimitTest.cpp
   SplitListenerTest.cpp
+  AddressableNonNullValueListTest.cpp
+  ArrowStreamTest.cpp
+  # group2 (~585s): HashJoinTestExtra ~585 + 9 lightweight
+  HashJoinTestExtra.cpp
+  AggregateFunctionRegistryTest.cpp
+  RoundRobinPartitionFunctionTest.cpp
+  ColumnStatsCollectorTest.cpp
+  MixedUnionTest.cpp
+  ExpandTest.cpp
+  FunctionResolutionTest.cpp
+  SpillStatsTest.cpp
+  MarkSortedTest.cpp
+  PartitionedOutputTest.cpp
+  # group3 (~584s): SpillerTest 584 + 9 lightweight
+  SpillerTest.cpp
+  PlanNodeToSummaryStringTest.cpp
+  CountingJoinTest.cpp
+  CustomJoinTest.cpp
+  TaskListenerTest.cpp
   SplitTest.cpp
   SqlTest.cpp
-  StreamingAggregationTest.cpp
-  StreamingEnforceDistinctTest.cpp
-  TableScanTest.cpp
-  TableWriterTest.cpp
-  TaskListenerTest.cpp
-  ThreadDebugInfoTest.cpp
-  TopNRowNumberTest.cpp
-  TopNTest.cpp
-  UnnestTest.cpp
-  UnorderedStreamReaderTest.cpp
-  ValuesTest.cpp
-  VectorHasherTest.cpp
   WindowFunctionRegistryTest.cpp
+  StreamingEnforceDistinctTest.cpp
+  HashBitRangeTest.cpp
+  # group4 (~575s): HashJoinTest ~575 + 9 lightweight
+  HashJoinTest.cpp
+  SpillTest.cpp
   WindowTest.cpp
+  PrefixSortTest.cpp
+  MergerTest.cpp
+  LocalPartitionTest.cpp
+  PrintPlanWithStatsTest.cpp
+  ProbeOperatorStateTest.cpp
+  MarkDistinctTest.cpp
+  MergeTest.cpp
+  # group5 (~445s): TableWriterTest 225 + OutputBufMgr 98
+  # + TopNRowNumber 64 + StreamingAgg 58
+  TableWriterTest.cpp
+  OutputBufferManagerTest.cpp
+  TopNRowNumberTest.cpp
+  StreamingAggregationTest.cpp
+  ContainerRowSerdeTest.cpp
+  RowContainerTest.cpp
+  TopNTest.cpp
   WriterFuzzerUtilTest.cpp
+  PlanNodeStatsTest.cpp
+  ThreadDebugInfoTest.cpp
+  # group6 (~467s): TableScanTest 189 + AggregationTest 105
+  # + OrderBy 71 + HashTable 60 + RowNumber 42
+  TableScanTest.cpp
+  AggregationTest.cpp
+  OrderByTest.cpp
+  HashTableTest.cpp
+  RowNumberTest.cpp
+  UnnestTest.cpp
+  PlanNodeSerdeTest.cpp
+  HashJoinBridgeTest.cpp
+  SortBufferTest.cpp
+  VectorHasherTest.cpp
+  # group7 (~449s): IndexLookupJoinTestExtra 188
+  # + MergeJoin 111 + ScaleWriter 96 + Exchange 54
+  IndexLookupJoinTestExtra.cpp
+  MergeJoinTest.cpp
+  ScaleWriterLocalPartitionTest.cpp
+  ExchangeClientTest.cpp
+  NestedLoopJoinTest.cpp
+  UnorderedStreamReaderTest.cpp
+  PlanNodeToStringTest.cpp
+  AssignUniqueIdTest.cpp
+  FilterProjectTest.cpp
+  AsyncConnectorTest.cpp
 )
 
 set(

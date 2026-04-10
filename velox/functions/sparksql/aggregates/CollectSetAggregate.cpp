@@ -161,19 +161,10 @@ class SparkCollectSetAggregate
       SBase::clearNull(group);
       auto tracker = SBase::trackRowSize(group);
       auto decodedIndex = SBase::decoded_.index(i);
-      if (ignoreNulls_) {
-        SBase::value(group)->addNonNullValues(
-            *baseArray,
-            decodedIndex,
-            SBase::decodedElements_,
-            SBase::allocator_);
-      } else {
-        SBase::value(group)->addValues(
-            *baseArray,
-            decodedIndex,
-            SBase::decodedElements_,
-            SBase::allocator_);
-      }
+      // Intermediate results already have null filtering applied by the
+      // partial step. Always preserve all elements (including nulls) here.
+      SBase::value(group)->addValues(
+          *baseArray, decodedIndex, SBase::decodedElements_, SBase::allocator_);
     });
   }
 
@@ -193,29 +184,19 @@ class SparkCollectSetAggregate
       }
       SBase::clearNull(group);
       auto decodedIndex = SBase::decoded_.index(i);
-      if (ignoreNulls_) {
-        accumulator->addNonNullValues(
-            *baseArray,
-            decodedIndex,
-            SBase::decodedElements_,
-            SBase::allocator_);
-      } else {
-        accumulator->addValues(
-            *baseArray,
-            decodedIndex,
-            SBase::decodedElements_,
-            SBase::allocator_);
-      }
+      // Intermediate results already have null filtering applied by the
+      // partial step. Always preserve all elements (including nulls) here.
+      accumulator->addValues(
+          *baseArray, decodedIndex, SBase::decodedElements_, SBase::allocator_);
     });
   }
 
  private:
-  // Initialized via setConstantInputs() from the constant boolean argument.
-  // Default is false (conservative: keeps nulls). In partial+final mode,
-  // the final node doesn't receive the boolean constant, so it uses this
-  // default — which is safe because the partial node already handles null
-  // filtering based on the actual constant value.
-  bool ignoreNulls_{false};
+  // Default to true (Spark's default: IGNORE NULLS). Updated by
+  // setConstantInputs() when a 2-arg signature provides explicit value.
+  // Only used in addRawInput (partial/single step); intermediate/final
+  // steps always preserve all elements from the partial output.
+  bool ignoreNulls_{true};
 };
 
 std::unique_ptr<exec::Aggregate> createSetAgg(
