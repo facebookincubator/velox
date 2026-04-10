@@ -19,8 +19,6 @@ NULLIF(a, b) → IF(a = b, NULL, a)
 
 This is exactly what Presto's SQL-to-plan translator does when running on Velox (Prestissimo). It works correctly for deterministic expressions. But there's a subtle, critical bug.
 
-<!-- truncate -->
-
 ## The Bug
 
 Consider this query:
