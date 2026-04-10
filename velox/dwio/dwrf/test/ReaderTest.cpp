@@ -2559,6 +2559,55 @@ TEST_F(TestReader, readFlatMapsAsFlatMaps) {
            {{0, 12}, {1, 13}, {2, 14}, {3, 15}}}));
 }
 
+// Regression test: reading a multi-stripe flatmap file with
+// preserveFlatMapsInMemory=true used to crash when stripes had different
+// key sets. The ScanSpec accumulated stale children across stripes, causing
+// out-of-range access on the reader's children_ vector.
+TEST_F(TestReader, readFlatMapMultiStripeDifferentKeys) {
+  // Stripe 1: keys {0, 1, 2, 3, 4} — 5 keys.
+  auto stripe1 = makeRowVector({makeMapVector<int32_t, float>(
+      {{{0, 1.0f}, {1, 2.0f}, {2, 3.0f}, {3, 4.0f}, {4, 5.0f}},
+       {{0, 6.0f}, {1, 7.0f}, {2, 8.0f}, {3, 9.0f}, {4, 10.0f}}})});
+
+  // Stripe 2: keys {0, 1, 2} — fewer keys than stripe 1.
+  auto stripe2 = makeRowVector({makeMapVector<int32_t, float>(
+      {{{0, 11.0f}, {1, 12.0f}, {2, 13.0f}},
+       {{0, 14.0f}, {1, 15.0f}, {2, 16.0f}},
+       {{0, 17.0f}, {1, 18.0f}, {2, 19.0f}}})});
+
+  auto config = std::make_shared<dwrf::Config>();
+  config->set(dwrf::Config::FLATTEN_MAP, true);
+  config->set(dwrf::Config::MAP_FLAT_COLS, {0});
+
+  // simpleFlushPolicyFactory(true) produces one stripe per batch.
+  auto [writer, reader] =
+      createWriterReader({stripe1, stripe2}, pool(), config);
+  ASSERT_EQ(reader->getNumberOfStripes(), 2);
+
+  auto schema = asRowType(stripe1->type());
+  auto spec = std::make_shared<common::ScanSpec>("<root>");
+  spec->addAllChildFields(*schema);
+
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(spec);
+  rowReaderOpts.setPreserveFlatMapsInMemory(true);
+
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+  VectorPtr batch = BaseVector::create(schema, 0, pool());
+
+  uint64_t totalRows = 0;
+  while (rowReader->next(100, batch) > 0) {
+    auto* rowVec = batch->as<RowVector>();
+    // Trigger lazy loading — this is the pattern that used to crash.
+    for (column_index_t i = 0; i < rowVec->childrenSize(); ++i) {
+      auto& child = rowVec->childAt(i);
+      child = BaseVector::loadedVectorShared(child);
+    }
+    totalRows += batch->size();
+  }
+  EXPECT_EQ(totalRows, 5); // 2 rows from stripe 1 + 3 rows from stripe 2.
+}
+
 TEST_F(TestReader, readStructWithWholeBatchFiltered) {
   // Test reading a struct with a pushdown filter that filters out all rows
   // for a certain batch.
