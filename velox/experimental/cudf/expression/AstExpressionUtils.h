@@ -167,9 +167,62 @@ const std::unordered_map<std::string, Op> binaryOps = [] {
   return merged;
 }();
 
-const std::map<std::string, Op> unaryOps = {
+const std::unordered_map<std::string, Op> prestoUnaryOps = {
     {"not", Op::NOT},
-    {"is_null", Op::IS_NULL}};
+    {"is_null", Op::IS_NULL},
+    // Trigonometric functions
+    {"sin", Op::SIN},
+    {"cos", Op::COS},
+    {"tan", Op::TAN},
+    {"asin", Op::ARCSIN},
+    {"acos", Op::ARCCOS},
+    {"atan", Op::ARCTAN},
+    {"cosh", Op::COSH},
+    {"tanh", Op::TANH},
+    // Exponential and logarithmic functions
+    {"exp", Op::EXP},
+    {"ln", Op::LOG},
+    {"sqrt", Op::SQRT},
+    {"cbrt", Op::CBRT},
+    // Other functions
+    {"abs", Op::ABS},
+};
+
+const std::unordered_map<std::string, Op> sparkUnaryOps = {
+    {"not", Op::NOT},
+    {"is_null", Op::IS_NULL},
+    // Trigonometric functions
+    {"sin", Op::SIN},
+    {"cos", Op::COS},
+    {"tan", Op::TAN},
+    {"asin", Op::ARCSIN},
+    {"acos", Op::ARCCOS},
+    {"atan", Op::ARCTAN},
+    // Hyperbolic functions
+    {"sinh", Op::SINH},
+    {"cosh", Op::COSH},
+    {"acosh", Op::ARCCOSH},
+    {"asinh", Op::ARCSINH},
+    {"atanh", Op::ARCTANH},
+    // Exponential and logarithmic functions
+    {"exp", Op::EXP},
+    {"log", Op::LOG},
+    {"sqrt", Op::SQRT},
+    {"cbrt", Op::CBRT},
+    // Rounding functions
+    {"ceil", Op::CEIL},
+    {"floor", Op::FLOOR},
+    {"rint", Op::RINT},
+    // Other functions
+    {"abs", Op::ABS},
+};
+
+const std::unordered_map<std::string, Op> unaryOps = [] {
+  std::unordered_map<std::string, Op> merged(
+      sparkUnaryOps.begin(), sparkUnaryOps.end());
+  merged.insert(prestoUnaryOps.begin(), prestoUnaryOps.end());
+  return merged;
+}();
 
 namespace detail {
 
