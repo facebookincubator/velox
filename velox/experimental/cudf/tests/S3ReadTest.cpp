@@ -21,6 +21,7 @@
 #include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
 
 #include "velox/common/memory/Memory.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/RegisterS3FileSystem.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/tests/S3Test.h"
@@ -53,12 +54,14 @@ class S3ReadTest : public S3Test, public ::test::VectorTestBase {
         factory;
     auto hiveConnector = factory.newConnector(
         kCudfHiveConnectorId, minioServer_->hiveConfig(), ioExecutor_.get());
-    facebook::velox::connector::registerConnector(hiveConnector);
+    facebook::velox::connector::ConnectorRegistry::global().insert(
+        hiveConnector->connectorId(), hiveConnector);
   }
 
   void TearDown() override {
     filesystems::finalizeS3FileSystem();
-    facebook::velox::connector::unregisterConnector(kCudfHiveConnectorId);
+    facebook::velox::connector::ConnectorRegistry::global().erase(
+        kCudfHiveConnectorId);
     S3Test::TearDown();
   }
 };

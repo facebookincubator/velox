@@ -39,8 +39,10 @@
 namespace {
 
 using namespace facebook::velox;
+using facebook::velox::cudf_velox::CountInputKind;
 using facebook::velox::cudf_velox::get_output_mr;
 using facebook::velox::cudf_velox::get_temp_mr;
+using facebook::velox::cudf_velox::ResolvedAggregateInfo;
 using facebook::velox::cudf_velox::ReduceAggregator;
 
 #define DEFINE_SIMPLE_REDUCE_AGGREGATOR(Name, name)                    \
@@ -55,7 +57,8 @@ using facebook::velox::cudf_velox::ReduceAggregator;
     std::unique_ptr<cudf::column> doReduce(                            \
         cudf::table_view const& input,                                 \
         TypePtr const& outputType,                                     \
-        rmm::cuda_stream_view stream) override {                       \
+        rmm::cuda_stream_view stream,                                  \
+        vector_size_t /*inputRowCount*/) override {                    \
       auto const aggRequest =                                          \
           cudf::make_##name##_aggregation<cudf::reduce_aggregation>(); \
       auto const cudfOutputType =                                      \
@@ -79,22 +82,37 @@ struct ReduceCountAggregator : ReduceAggregator {
   ReduceCountAggregator(
       core::AggregationNode::Step step,
       uint32_t inputIndex,
-      VectorPtr constant,
+      CountInputKind inputKind,
       const TypePtr& resultType)
-      : ReduceAggregator(step, inputIndex, constant, resultType) {}
+      : ReduceAggregator(step, inputIndex, nullptr, resultType),
+        inputKind_(inputKind) {}
 
   std::unique_ptr<cudf::column> doReduce(
       cudf::table_view const& input,
       TypePtr const& outputType,
-      rmm::cuda_stream_view stream) override {
+      rmm::cuda_stream_view stream,
+      vector_size_t inputRowCount) override {
     if (exec::isRawInput(step)) {
-      // For raw input, implement count using size + null count
-      auto inputCol = input.column(constant == nullptr ? inputIndex : 0);
-
-      // count_valid: size - null_count, count_all: just the size
-      int64_t count = constant == nullptr
-          ? inputCol.size() - inputCol.null_count()
-          : inputCol.size();
+      int64_t count;
+      switch (inputKind_) {
+        case CountInputKind::kNullConstant:
+          count = 0;
+          break;
+        case CountInputKind::kCountAll:
+          count = input.num_columns() > 0 ? input.num_rows() : inputRowCount;
+          break;
+        case CountInputKind::kColumn: {
+          VELOX_CHECK_GT(
+              input.num_columns(),
+              0,
+              "count(column) requires at least one input column");
+          auto inputCol = input.column(inputIndex);
+          count = inputCol.size() - inputCol.null_count();
+          break;
+        }
+        default:
+          VELOX_UNREACHABLE();
+      }
 
       auto resultScalar =
           cudf::numeric_scalar<int64_t>(count, true, stream, get_temp_mr());
@@ -116,8 +134,10 @@ struct ReduceCountAggregator : ReduceAggregator {
       return cudf::make_column_from_scalar(
           *resultScalar, 1, stream, get_output_mr());
     }
-    return nullptr;
   }
+
+ private:
+  CountInputKind inputKind_;
 };
 
 struct ReduceMeanAggregator : ReduceAggregator {
@@ -131,7 +151,8 @@ struct ReduceMeanAggregator : ReduceAggregator {
   std::unique_ptr<cudf::column> doReduce(
       cudf::table_view const& input,
       TypePtr const& outputType,
-      rmm::cuda_stream_view stream) override {
+      rmm::cuda_stream_view stream,
+      vector_size_t /*inputRowCount*/) override {
     switch (step) {
       case core::AggregationNode::Step::kSingle: {
         auto const aggRequest =
@@ -251,7 +272,8 @@ struct ApproxDistinctAggregator : ReduceAggregator {
   std::unique_ptr<cudf::column> doReduce(
       cudf::table_view const& input,
       TypePtr const& outputType,
-      rmm::cuda_stream_view stream) override {
+      rmm::cuda_stream_view stream,
+      vector_size_t /*inputRowCount*/) override {
     if (exec::isRawInput(step)) {
       return doPartialReduce(input, stream);
     } else if (step == core::AggregationNode::Step::kIntermediate) {
@@ -425,30 +447,28 @@ struct ApproxDistinctAggregator : ReduceAggregator {
 };
 
 std::unique_ptr<ReduceAggregator> createReduceAggregator(
-    core::AggregationNode::Step step,
-    std::string const& kind,
-    uint32_t inputIndex,
-    VectorPtr constant,
-    const TypePtr& resultType) {
+    const ResolvedAggregateInfo& p) {
+  auto const& kind = p.kind;
   auto prefix = cudf_velox::CudfConfig::getInstance().functionNamePrefix;
   if (kind.rfind(prefix + "sum", 0) == 0) {
     return std::make_unique<ReduceSumAggregator>(
-        step, inputIndex, constant, resultType);
+        p.companionStep, p.inputIndex, p.constant, p.resultType);
   } else if (kind.rfind(prefix + "count", 0) == 0) {
+    VELOX_CHECK(p.countInputKind.has_value());
     return std::make_unique<ReduceCountAggregator>(
-        step, inputIndex, constant, resultType);
+        p.companionStep, p.inputIndex, *p.countInputKind, p.resultType);
   } else if (kind.rfind(prefix + "min", 0) == 0) {
     return std::make_unique<ReduceMinAggregator>(
-        step, inputIndex, constant, resultType);
+        p.companionStep, p.inputIndex, p.constant, p.resultType);
   } else if (kind.rfind(prefix + "max", 0) == 0) {
     return std::make_unique<ReduceMaxAggregator>(
-        step, inputIndex, constant, resultType);
+        p.companionStep, p.inputIndex, p.constant, p.resultType);
   } else if (kind.rfind(prefix + "avg", 0) == 0) {
     return std::make_unique<ReduceMeanAggregator>(
-        step, inputIndex, constant, resultType);
+        p.companionStep, p.inputIndex, p.constant, p.resultType);
   } else if (kind.rfind(prefix + "approx_distinct", 0) == 0) {
     return std::make_unique<ApproxDistinctAggregator>(
-        step, inputIndex, constant, resultType);
+        p.companionStep, p.inputIndex, p.constant, p.resultType);
   } else {
     VELOX_NYI("Reduce aggregation not yet supported, kind: {}", kind);
   }
@@ -468,9 +488,8 @@ std::vector<std::unique_ptr<ReduceAggregator>> toReduceAggregators(
 
   std::vector<std::unique_ptr<ReduceAggregator>> aggregators;
   aggregators.reserve(params.size());
-  for (auto& p : params) {
-    aggregators.push_back(createReduceAggregator(
-        p.companionStep, p.kind, p.inputIndex, p.constant, p.resultType));
+  for (const auto& p : params) {
+    aggregators.push_back(createReduceAggregator(p));
   }
   return aggregators;
 }
@@ -646,7 +665,11 @@ bool canReduceBeEvaluatedByCudf(
       return false;
     }
 
-    // Check input expressions can be evaluated by CUDF, expand the input first
+    if (isCountFunctionName(aggregate.call->name())) {
+      continue;
+    }
+
+    // Check input expressions can be evaluated by cuDF, expand the input first.
     for (const auto& input : aggregate.call->inputs()) {
       auto expandedInput = expandFieldReference(input, sourceNode);
       std::vector<core::TypedExprPtr> exprs = {expandedInput};
@@ -668,9 +691,9 @@ CudfReduce::CudfReduce(
           aggregationNode->outputType(),
           operatorId,
           aggregationNode->id(),
-          aggregationNode->step() == core::AggregationNode::Step::kPartial
-              ? "CudfPartialReduce"
-              : "CudfReduce",
+          std::string{"CudfReduce"} +
+              std::string{
+                  core::AggregationNode::toName(aggregationNode->step())},
           std::nullopt),
       NvtxHelper(
           nvtx3::rgb{34, 139, 34}, // Forest Green
@@ -706,6 +729,7 @@ void CudfReduce::addInput(RowVectorPtr input) {
   if (input->size() == 0) {
     return;
   }
+  numInputRows_ += input->size();
 
   auto cudfInput = std::dynamic_pointer_cast<cudf_velox::CudfVector>(input);
   VELOX_CHECK_NOT_NULL(cudfInput);
@@ -720,7 +744,8 @@ CudfVectorPtr CudfReduce::doGlobalAggregation(
   resultColumns.reserve(aggregators_.size());
   for (auto i = 0; i < aggregators_.size(); i++) {
     resultColumns.push_back(
-        aggregators_[i]->doReduce(tableView, outputType_->childAt(i), stream));
+        aggregators_[i]->doReduce(
+            tableView, outputType_->childAt(i), stream, numInputRows_));
   }
 
   return std::make_shared<cudf_velox::CudfVector>(
@@ -750,7 +775,8 @@ RowVectorPtr CudfReduce::getOutput() {
 
   auto stream = cudfGlobalStreamPool().get_stream();
 
-  auto tbl = getConcatenatedTable(inputs_, inputType_, stream, get_output_mr());
+  auto tbl = getConcatenatedTable(
+      std::move(inputs_), inputType_, stream, get_output_mr());
 
   // Release input data after synchronizing.
   stream.synchronize();
@@ -762,9 +788,15 @@ RowVectorPtr CudfReduce::getOutput() {
 
   VELOX_CHECK_NOT_NULL(tbl);
 
-  auto permutedInputView = tbl->view().select(
-      aggregationInputChannels_.begin(), aggregationInputChannels_.end());
-  return doGlobalAggregation(permutedInputView, stream);
+  auto tableView = tbl->view().num_columns() == 0
+      ? tbl->view()
+      : tbl->view().select(
+            aggregationInputChannels_.begin(), aggregationInputChannels_.end());
+  auto output = doGlobalAggregation(tableView, stream);
+  if (isPartialOutput_ && !noMoreInput_) {
+    numInputRows_ = 0;
+  }
+  return output;
 }
 
 void CudfReduce::noMoreInput() {

@@ -403,7 +403,7 @@ class OutputBuffer {
   // after receiving no-more-broadcast-buffers signal.
   std::vector<std::shared_ptr<SerializedPageBase>> dataToBroadcast_;
 
-  std::mutex mutex_;
+  mutable std::mutex mutex_;
   // Actual data size in 'buffers_'.
   int64_t bufferedBytes_{0};
   // The number of buffered pages which corresponds to 'bufferedBytes_'.

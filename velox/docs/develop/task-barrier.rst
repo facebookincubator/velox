@@ -277,7 +277,7 @@ Delivery (Entering the Barrier)
 
 * **Injection**: The ``requestBarrier`` API directly injects a BarrierSplit into
   the Task's split queue. This split is distinct from regular data splits (e.g.,
-  FileSplit).
+  FileConnectorSplit).
 * **Detection**: The Driver loop responsible for the TableScan fetches the next
   split from the queue. When it pops the BarrierSplit, it does not attempt to
   read data.

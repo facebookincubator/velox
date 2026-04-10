@@ -25,6 +25,7 @@ namespace {
 static constexpr double kInf = std::numeric_limits<double>::infinity();
 static constexpr float kInfF = std::numeric_limits<float>::infinity();
 static constexpr auto kNaN = std::numeric_limits<double>::quiet_NaN();
+static constexpr auto kNaNF = std::numeric_limits<float>::quiet_NaN();
 
 class ComparisonsTest : public SparkFunctionBaseTest {
  protected:
@@ -355,8 +356,6 @@ TEST_F(ComparisonsTest, between) {
   EXPECT_EQ(between<double>(1, std::nullopt, 3), std::nullopt);
   EXPECT_EQ(between<double>(kNaN, std::nullopt, 4), std::nullopt);
   EXPECT_EQ(between<double>(kNaN, 1, 5), false);
-  EXPECT_EQ(between<double>(0, -1, kNaN), false);
-  EXPECT_EQ(between<double>(kNaN, 0, kNaN), false);
   EXPECT_EQ(between<double>(kInf, 0, kInf), true);
   EXPECT_EQ(between<float>(kInfF, 0, kInfF), true);
   EXPECT_EQ(between<double>(kInf, 2.0, 5.0), false);
@@ -364,7 +363,15 @@ TEST_F(ComparisonsTest, between) {
   EXPECT_EQ(between<float>(kInfF, 1.0, 6.0), false);
   EXPECT_EQ(between<float>(-kInfF, 1.0, 6.0), false);
   EXPECT_EQ(between<float>(kInfF, -kInfF, kInfF), true);
-  EXPECT_EQ(between<double>(kInf, -kInf, kNaN), false);
+
+  // Spark NaN semantics: NaN == NaN and NaN > everything.
+  EXPECT_EQ(between<double>(0, -1, kNaN), true);
+  EXPECT_EQ(between<double>(kNaN, 0, kNaN), true);
+  EXPECT_EQ(between<double>(kInf, -kInf, kNaN), true);
+  EXPECT_EQ(between<double>(kNaN, kNaN, kNaN), true);
+  EXPECT_EQ(between<float>(kNaNF, kNaNF, kNaNF), true);
+  EXPECT_EQ(between<float>(0.0f, -1.0f, kNaNF), true);
+  EXPECT_EQ(between<float>(kNaNF, 0.0f, kNaNF), true);
 }
 
 TEST_F(ComparisonsTest, decimal) {

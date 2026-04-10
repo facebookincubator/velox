@@ -83,6 +83,33 @@ class IndexLookupJoin : public Operator {
       "clientNumErrorResults"};
 
  private:
+  // Intercepts lazy loading stats during index-side operations (getOutput /
+  // startLookup) and accumulates them internally, separating them from
+  // probe-side lazy stats so Driver::processLazyIoStats() correctly attributes
+  // only probe-side stats to the scan operator. Held via shared_ptr so the
+  // stat splitter lambda can outlive the operator and read the final stats.
+  class IndexLazyStatWriter : public BaseRuntimeStatWriter {
+   public:
+    explicit IndexLazyStatWriter(Operator* op) : op_(op) {}
+
+    void addRuntimeStat(std::string_view name, const RuntimeCounter& value)
+        override;
+
+    RuntimeMetric inputBytes{RuntimeCounter::Unit::kBytes};
+    RuntimeMetric cpuNanos{RuntimeCounter::Unit::kNanos};
+    RuntimeMetric wallNanos{RuntimeCounter::Unit::kNanos};
+
+   private:
+    Operator* const op_;
+  };
+
+  // Produces separate OperatorStats for IndexLookupJoin and IndexSource nodes,
+  // reading index-side lazy stats from 'writer'.
+  static std::vector<OperatorStats> splitStats(
+      const OperatorStats& combinedStats,
+      const core::PlanNodeId& indexSourceNodeId,
+      const IndexLazyStatWriter& writer);
+
   using ResultIterator = connector::IndexSource::ResultIterator;
   using Result = connector::IndexSource::Result;
 
@@ -217,8 +244,9 @@ class IndexLookupJoin : public Operator {
   // for output rows without lookup matches.
   void prepareOutputRowMappings(size_t outputBatchSize);
 
-  // Prepare 'output_' for the next output batch with size of 'numOutputRows'.
-  void prepareOutput(vector_size_t numOutputRows);
+  // Creates a new output RowVector with 'numOutputRows' rows and nullptr
+  // children. Callers populate the children before returning it.
+  RowVectorPtr prepareOutput(vector_size_t numOutputRows);
 
   // Invoked to ensure the match column is created to store the output match
   // result for the left join.
@@ -373,8 +401,6 @@ class IndexLookupJoin : public Operator {
   DecodedVector decodedFilterResult_;
   BufferPtr filteredIndices_;
 
-  // The reusable output vector for the join output.
-  RowVectorPtr output_;
   FlatVectorPtr<bool> matchColumn_{nullptr};
   uint64_t* rawMatchValues_{nullptr};
 
@@ -391,5 +417,23 @@ class IndexLookupJoin : public Operator {
   // after the no-more-splits signal is received (i.e., 'noMoreIndexSplits_' is
   // true).
   std::vector<std::shared_ptr<connector::ConnectorSplit>> indexSplits_;
+
+  // Traces the index splits received by this operator for replay. Set when
+  // tracing is enabled for this operator.
+  std::unique_ptr<trace::TraceSplitWriter> indexSplitTracer_;
+
+  // Creates the index split tracer if input tracing is enabled.
+  void createIndexSplitTracer();
+
+  // Traces the given index split for replay.
+  void traceIndexSplit(const exec::Split& split);
+
+  // Closes and resets the index split tracer.
+  void closeIndexSplitTracer();
+
+  // Intercepts and accumulates index-side lazy loading stats. Held via
+  // shared_ptr so the stat splitter lambda can read the final stats after the
+  // operator is destroyed.
+  std::shared_ptr<IndexLazyStatWriter> indexStatWriter_;
 };
 } // namespace facebook::velox::exec

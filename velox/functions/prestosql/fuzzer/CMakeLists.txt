@@ -13,6 +13,22 @@
 # limitations under the License.
 
 add_library(velox_aggregation_result_verifier MinMaxByResultVerifier.cpp)
+velox_add_test_headers(
+  velox_aggregation_result_verifier
+  ApproxDistinctResultVerifier.h
+  ApproxPercentileResultVerifier.h
+  ArbitraryResultVerifier.h
+  AverageResultVerifier.h
+  KHyperLogLogResultVerifier.h
+  MinMaxByResultVerifier.h
+  NoisyAvgResultVerifier.h
+  NoisyCountIfResultVerifier.h
+  NoisyCountResultVerifier.h
+  NoisySumResultVerifier.h
+  QDigestAggResultVerifier.h
+  SetDigestResultVerifier.h
+  TDigestAggregateResultVerifier.h
+)
 
 target_link_libraries(
   velox_aggregation_result_verifier
@@ -66,3 +82,32 @@ target_link_libraries(
   GTest::gtest
   GTest::gtest_main
 )
+
+velox_add_library(
+  velox_aggregation_input_generator
+  INTERFACE
+  HEADERS
+  ApproxDistinctInputGenerator.h
+  ApproxPercentileInputGenerator.h
+  ClassificationAggregationInputGenerator.h
+  DivideArgTypesGenerator.h
+  FbDatelistStringMergeAggregationInputGenerator.h
+  FloorCeilRoundArgTypesGenerator.h
+  MapUnionSumInputGenerator.h
+  MinMaxInputGenerator.h
+  ModulusArgTypesGenerator.h
+  MultiplyArgTypesGenerator.h
+  NoisyAvgInputGenerator.h
+  NoisyCountIfInputGenerator.h
+  NoisyCountInputGenerator.h
+  NoisySumInputGenerator.h
+  NumericHistogramInputGenerator.h
+  PlusMinusArgTypesGenerator.h
+  QDigestAggInputGenerator.h
+  SkipIPAddressArgTypesGenerator.h
+  TDigestAggregateInputGenerator.h
+  TruncateArgTypesGenerator.h
+  WindowOffsetInputGenerator.h
+)
+
+velox_add_library(velox_custome_expression_transformer INTERFACE HEADERS SortArrayTransformer.h)

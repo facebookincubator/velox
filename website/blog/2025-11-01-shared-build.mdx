@@ -9,6 +9,8 @@ tags: [tech-blog, packaging]
 
 In this post, I’ll share how we unblocked shared library builds in Velox, the challenges we encountered with our large CMake build system, and the creative solution that let us move forward without disrupting contributors or downstream users.
 
+<!-- truncate -->
+
 ## The State of the Velox Build System
 
 Velox’s codebase was started in Meta’s internal monorepo, which still serves as a source of truth. Changes from pull requests in the Github repository are not merged directly via the web UI. Instead, the changes are imported into the internal review and CI tool [Phabricator](https://developers.facebook.com/blog/post/2022/11/15/meta-developers-workflow-exploring-tools-used-to-code/), as a ‘diff’. There, it has to pass an additional set of CI checks before being merged into the monorepo and in turn, exported to Github as a commit on the ‘main’ branch.

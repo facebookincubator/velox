@@ -36,9 +36,9 @@ CudfDistinct::CudfDistinct(
           aggregationNode->outputType(),
           operatorId,
           aggregationNode->id(),
-          aggregationNode->step() == core::AggregationNode::Step::kPartial
-              ? "CudfPartialDistinct"
-              : "CudfDistinct",
+          std::string{"CudfDistinct"} +
+              std::string{
+                  core::AggregationNode::toName(aggregationNode->step())},
           std::nullopt),
       NvtxHelper(
           nvtx3::rgb{34, 139, 34}, // Forest Green
@@ -203,7 +203,8 @@ RowVectorPtr CudfDistinct::getOutput() {
 
   auto stream = cudfGlobalStreamPool().get_stream();
 
-  auto tbl = getConcatenatedTable(inputs_, inputType_, stream, get_output_mr());
+  auto tbl = getConcatenatedTable(
+      std::exchange(inputs_, {}), inputType_, stream, get_output_mr());
 
   // Release input data after synchronizing.
   stream.synchronize();

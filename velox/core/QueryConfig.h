@@ -87,6 +87,25 @@ class QueryConfig {
   static constexpr const char* kExprTrackCpuUsageForFunctions =
       "expression.track_cpu_usage_for_functions";
 
+  /// Enables adaptive per-function CPU usage sampling. When enabled, each
+  /// function is calibrated over the first 6 batches (1 warmup + 5
+  /// calibration) to measure the overhead of CPU tracking (clock_gettime).
+  /// Functions where tracking overhead exceeds
+  /// kExprAdaptiveCpuSamplingMaxOverheadPct are automatically sampled at a
+  /// rate proportional to their overhead. Functions with low overhead are
+  /// always tracked. Disabled by default.
+  static constexpr const char* kExprAdaptiveCpuSampling =
+      "expression.adaptive_cpu_sampling";
+
+  /// Maximum acceptable overhead percentage for CPU tracking per function.
+  /// Used with kExprAdaptiveCpuSampling. Functions whose CPU tracking overhead
+  /// exceeds this threshold are sampled at a rate of
+  /// ceil(overhead_pct / max_overhead_pct). For example, with max_overhead=1.0,
+  /// a function with 70% tracking overhead is sampled every 70th batch.
+  /// Default: 1.0 (1% overhead target).
+  static constexpr const char* kExprAdaptiveCpuSamplingMaxOverheadPct =
+      "expression.adaptive_cpu_sampling_max_overhead_pct";
+
   /// Controls whether non-deterministic expressions are deduplicated during
   /// compilation. This is intended for testing and debugging purposes. By
   /// default, this is set to true to preserve standard behavior. If set to
@@ -883,6 +902,13 @@ class QueryConfig {
   static constexpr const char* kJoinBuildVectorHasherMaxNumDistinct =
       "join_build_vector_hasher_max_num_distinct";
 
+  /// Batch size threshold for zero-copy optimization in MarkSorted operator.
+  /// For batches smaller than this threshold, the operator holds a reference to
+  /// the entire input batch instead of copying key columns for cross-batch
+  /// comparison.
+  static constexpr const char* kMarkSortedZeroCopyThreshold =
+      "mark_sorted_zero_copy_threshold";
+
   enum class RowSizeTrackingMode {
     DISABLED = 0,
     EXCLUDE_DELTA_SPLITS = 1,
@@ -1380,6 +1406,14 @@ class QueryConfig {
     return get<std::string>(kExprTrackCpuUsageForFunctions, "");
   }
 
+  bool exprAdaptiveCpuSampling() const {
+    return get<bool>(kExprAdaptiveCpuSampling, false);
+  }
+
+  double exprAdaptiveCpuSamplingMaxOverheadPct() const {
+    return get<double>(kExprAdaptiveCpuSamplingMaxOverheadPct, 1.0);
+  }
+
   bool exprDedupNonDeterministic() const {
     return get<bool>(kExprDedupNonDeterministic, true);
   }
@@ -1563,6 +1597,10 @@ class QueryConfig {
 
   uint32_t joinBuildVectorHasherMaxNumDistinct() const {
     return get<uint32_t>(kJoinBuildVectorHasherMaxNumDistinct, 1'000'000);
+  }
+
+  int32_t markSortedZeroCopyThreshold() const {
+    return get<int32_t>(kMarkSortedZeroCopyThreshold, 1000);
   }
 
   template <typename T>

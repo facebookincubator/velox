@@ -20,10 +20,12 @@
 #include "velox/experimental/cudf/exec/CudfGroupby.h"
 #include "velox/experimental/cudf/exec/CudfReduce.h"
 
+#include "velox/core/Expressions.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
 #include "velox/expression/SignatureBinder.h"
 
+#include <algorithm>
 #include <numeric>
 
 namespace facebook::velox::cudf_velox {
@@ -52,6 +54,38 @@ void appendToRegistry(
   registry[name][step].push_back(signature);
 }
 } // namespace
+
+bool isCountFunctionName(std::string_view kind) {
+  auto prefix = CudfConfig::getInstance().functionNamePrefix;
+  return kind.rfind(prefix + "count", 0) == 0;
+}
+
+bool isCountStarAggregate(const core::AggregationNode::Aggregate& aggregate) {
+  return isCountFunctionName(aggregate.call->name()) &&
+      aggregate.call->inputs().empty();
+}
+
+CountInputKind getCountInputKind(
+    const core::AggregationNode::Aggregate& aggregate,
+    const VectorPtr& constant) {
+  if (aggregate.call->inputs().empty()) {
+    return CountInputKind::kCountAll;
+  }
+  if (constant != nullptr) {
+    return constant->isNullAt(0) ? CountInputKind::kNullConstant
+                                 : CountInputKind::kCountAll;
+  }
+  return CountInputKind::kColumn;
+}
+
+bool hasOnlyConstantArguments(const core::CallTypedExpr& call) {
+  return !call.inputs().empty() &&
+      std::all_of(
+          call.inputs().begin(), call.inputs().end(), [](const auto& arg) {
+            return dynamic_cast<const core::ConstantTypedExpr*>(arg.get()) !=
+                nullptr;
+          });
+}
 
 void registerCommonAggregationFunctions(
     StepAwareAggregationRegistry& registry,
@@ -489,6 +523,18 @@ bool isCompanionAggregateName(std::string const& kind) {
   return kind.ends_with("_merge") || kind.ends_with("_partial") ||
       kind.find("_merge_extract") != std::string::npos;
 }
+
+bool isSupportedZeroColumnAggregation(
+    const core::AggregationNode& aggregationNode) {
+  return aggregationNode.groupingKeys().empty() &&
+      !aggregationNode.aggregates().empty() &&
+      std::all_of(
+             aggregationNode.aggregates().begin(),
+             aggregationNode.aggregates().end(),
+             [](const auto& aggregate) {
+               return isCountStarAggregate(aggregate);
+             });
+}
 } // namespace
 
 bool hasCompanionAggregates(
@@ -520,7 +566,10 @@ std::vector<ResolvedAggregateInfo> resolveAggregateInfos(
         aggregate.call->name(),
         static_cast<uint32_t>(numKeys + i),
         constants[i],
-        resultType);
+        resultType,
+        isCountFunctionName(aggregate.call->name())
+            ? std::make_optional(getCountInputKind(aggregate, constants[i]))
+            : std::nullopt);
   }
   return params;
 }
@@ -675,20 +724,34 @@ bool canAggregationBeEvaluatedByRegistry(
     return false;
   }
 
-  // Validate against step-specific signatures from registry
+  if (isCountFunctionName(call.name())) {
+    return true;
+  }
+
+  if (hasOnlyConstantArguments(call)) {
+    return false;
+  }
+
+  // Validate against step-specific signatures from registry.
   return matchTypedCallAgainstSignatures(call, stepIt->second);
 }
 
 bool canBeEvaluatedByCudf(
     const core::AggregationNode& aggregationNode,
     core::QueryCtx* queryCtx) {
+  const core::PlanNode* sourceNode = aggregationNode.sources().empty()
+      ? nullptr
+      : aggregationNode.sources()[0].get();
+
+  if (sourceNode && sourceNode->outputType()->size() == 0 &&
+      !isSupportedZeroColumnAggregation(aggregationNode)) {
+    return false;
+  }
+
   bool isGlobal = aggregationNode.groupingKeys().empty();
   bool isDistinct = !isGlobal && aggregationNode.aggregates().empty();
 
   if (isDistinct) {
-    const core::PlanNode* sourceNode = aggregationNode.sources().empty()
-        ? nullptr
-        : aggregationNode.sources()[0].get();
     return canGroupingKeysBeEvaluatedByCudf(
         aggregationNode.groupingKeys(), sourceNode, queryCtx);
   } else if (isGlobal) {

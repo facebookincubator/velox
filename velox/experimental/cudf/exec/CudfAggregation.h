@@ -20,6 +20,8 @@
 #include "velox/exec/Operator.h"
 #include "velox/expression/FunctionSignature.h"
 
+#include <optional>
+#include <string_view>
 #include <unordered_map>
 
 namespace facebook::velox::cudf_velox {
@@ -63,6 +65,16 @@ core::AggregationNode::Step getCompanionStep(
 
 std::string getOriginalName(const std::string& kind);
 
+enum class CountInputKind {
+  kColumn,
+  kCountAll,
+  kNullConstant,
+};
+
+CountInputKind getCountInputKind(
+    const core::AggregationNode::Aggregate& aggregate,
+    const VectorPtr& constant);
+
 // Resolved per-aggregate parameters shared by groupby and reduce aggregator
 // construction.  Computed once by resolveAggregateInfo and consumed by the
 // type-specific factory in each module.
@@ -72,6 +84,7 @@ struct ResolvedAggregateInfo {
   uint32_t inputIndex;
   VectorPtr constant;
   TypePtr resultType;
+  std::optional<CountInputKind> countInputKind;
 };
 
 // Parse aggregate inputs from the aggregation node and resolve companion steps,
@@ -100,6 +113,13 @@ AggregationInputChannels buildAggregationInputChannels(
     exec::OperatorCtx const& operatorCtx,
     RowTypePtr const& inputRowSchema,
     std::vector<column_index_t> const& groupingKeyInputChannels);
+
+bool isCountFunctionName(std::string_view kind);
+
+bool isCountStarAggregate(
+    const core::AggregationNode::Aggregate& aggregate);
+
+bool hasOnlyConstantArguments(const core::CallTypedExpr& call);
 
 // Returns true if the aggregation node contains companion aggregates
 // (e.g. _merge, _partial, _merge_extract suffixes), which disables streaming.

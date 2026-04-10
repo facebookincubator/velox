@@ -24,15 +24,15 @@ PaimonDataSource::PaimonDataSource(
     FileHandleFactory* fileHandleFactory,
     folly::Executor* ioExecutor,
     const ConnectorQueryCtx* connectorQueryCtx,
-    const std::shared_ptr<HiveConfig>& hiveConfig)
-    : HiveDataSource(
+    const std::shared_ptr<PaimonConfig>& paimonConfig)
+    : FileDataSource(
           outputType,
           tableHandle,
           assignments,
           fileHandleFactory,
           ioExecutor,
           connectorQueryCtx,
-          hiveConfig) {}
+          paimonConfig) {}
 
 void PaimonDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   VELOX_NYI("PaimonDataSource::addSplit");

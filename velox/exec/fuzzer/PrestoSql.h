@@ -23,9 +23,6 @@ namespace facebook::velox::exec::test {
 /// than 0.
 void appendComma(int32_t i, std::stringstream& sql);
 
-/// Return the SQL string of type.
-std::string toTypeSql(const TypePtr& type);
-
 /// Converts input expressions into SQL string and appends to a given
 /// stringstream.
 void toCallInputsSql(

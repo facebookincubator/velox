@@ -21,6 +21,15 @@ add_library(
   UnitLoaderTestTools.cpp
   E2EFilterTestBase.cpp
 )
+velox_add_test_headers(
+  velox_dwio_common_test_utils
+  BatchMaker.h
+  DataFiles.h
+  DataSetBuilder.h
+  E2EFilterTestBase.h
+  FilterGenerator.h
+  UnitLoaderTestTools.h
+)
 
 target_link_libraries(
   velox_dwio_common_test_utils
@@ -44,3 +53,5 @@ target_link_libraries(
 if(CMAKE_COMPILER_IS_GNUCC AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 9)
   target_link_libraries(velox_dwio_common_test_utils stdc++fs)
 endif()
+
+velox_add_library(velox_lib_test_map_builder INTERFACE HEADERS MapBuilder.h)

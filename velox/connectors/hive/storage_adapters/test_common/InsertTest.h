@@ -18,7 +18,9 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/memory/Memory.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/dwio/parquet/RegisterParquetWriter.h"
 #include "velox/exec/TableWriter.h"
@@ -37,7 +39,8 @@ class InsertTest : public velox::test::VectorTestBase {
     connector::hive::HiveConnectorFactory factory;
     auto hiveConnector = factory.newConnector(
         exec::test::kHiveConnectorId, hiveConfig, ioExecutor);
-    connector::registerConnector(hiveConnector);
+    connector::ConnectorRegistry::global().insert(
+        hiveConnector->connectorId(), hiveConnector);
 
     parquet::registerParquetReaderFactory();
     parquet::registerParquetWriterFactory();
@@ -47,7 +50,7 @@ class InsertTest : public velox::test::VectorTestBase {
     parquet::unregisterParquetReaderFactory();
     parquet::unregisterParquetWriterFactory();
 
-    connector::unregisterConnector(exec::test::kHiveConnectorId);
+    connector::ConnectorRegistry::global().erase(exec::test::kHiveConnectorId);
   }
 
   void runInsertTest(
@@ -90,17 +93,23 @@ class InsertTest : public velox::test::VectorTestBase {
     folly::dynamic obj =
         folly::parseJson(std::string_view(details->valueAt(1)));
 
-    ASSERT_EQ(numRows, obj["rowCount"].asInt());
-    auto fileWriteInfos = obj["fileWriteInfos"];
+    ASSERT_EQ(
+        numRows, obj[connector::hive::HiveCommitMessage::kRowCount].asInt());
+    auto fileWriteInfos =
+        obj[connector::hive::HiveCommitMessage::kFileWriteInfos];
     ASSERT_EQ(1, fileWriteInfos.size());
 
-    auto writeFileName = fileWriteInfos[0]["writeFileName"].asString();
+    auto writeFileName =
+        fileWriteInfos[0][connector::hive::HiveCommitMessage::kWriteFileName]
+            .asString();
 
     // Read from 'writeFileName' and verify the data matches the original.
     plan = exec::test::PlanBuilder().tableScan(rowType).planNode();
 
     auto filePath = fmt::format("{}{}", outputDirectory, writeFileName);
-    const int64_t fileSize = fileWriteInfos[0]["fileSize"].asInt();
+    const int64_t fileSize =
+        fileWriteInfos[0][connector::hive::HiveCommitMessage::kFileSize]
+            .asInt();
     auto split = exec::test::HiveConnectorSplitBuilder(filePath)
                      .fileFormat(dwio::common::FileFormat::PARQUET)
                      .length(fileSize)

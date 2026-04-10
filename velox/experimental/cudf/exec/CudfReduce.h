@@ -31,7 +31,8 @@ struct ReduceAggregator {
   virtual std::unique_ptr<cudf::column> doReduce(
       cudf::table_view const& input,
       TypePtr const& outputType,
-      rmm::cuda_stream_view stream) = 0;
+      rmm::cuda_stream_view stream,
+      vector_size_t inputRowCount) = 0;
 
   virtual ~ReduceAggregator() = default;
 
@@ -103,6 +104,8 @@ class CudfReduce : public exec::Operator, public NvtxHelper {
   std::vector<column_index_t> aggregationInputChannels_;
 
   const bool isPartialOutput_;
+  // Number of input rows accumulated since the last output.
+  int64_t numInputRows_ = 0;
 
   bool finished_ = false;
   size_t numAggregates_;

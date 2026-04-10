@@ -20,7 +20,7 @@
 
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
-#include "velox/exec/fuzzer/RowNumberFuzzerBase.h"
+#include "velox/exec/fuzzer/SpillFuzzerBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
@@ -28,7 +28,7 @@ namespace facebook::velox::exec {
 using namespace facebook::velox::common::testutil;
 namespace {
 
-class TopNRowNumberFuzzer : public RowNumberFuzzerBase {
+class TopNRowNumberFuzzer : public SpillFuzzerBase {
  public:
   explicit TopNRowNumberFuzzer(
       size_t initialSeed,
@@ -69,7 +69,7 @@ class TopNRowNumberFuzzer : public RowNumberFuzzerBase {
 TopNRowNumberFuzzer::TopNRowNumberFuzzer(
     size_t initialSeed,
     std::unique_ptr<test::ReferenceQueryRunner> referenceQueryRunner)
-    : RowNumberFuzzerBase(initialSeed, std::move(referenceQueryRunner)) {}
+    : SpillFuzzerBase(initialSeed, std::move(referenceQueryRunner)) {}
 
 std::pair<std::vector<std::string>, std::vector<TypePtr>>
 TopNRowNumberFuzzer::generateKeys(const std::string& prefix) {
@@ -189,8 +189,7 @@ std::vector<RowVectorPtr> TopNRowNumberFuzzer::generateInput(
   return input;
 }
 
-std::pair<RowNumberFuzzerBase::PlanWithSplits, int32_t>
-TopNRowNumberFuzzer::makeDefaultPlan(
+std::pair<PlanWithSplits, int32_t> TopNRowNumberFuzzer::makeDefaultPlan(
     const std::vector<std::string>& partitionKeys,
     const std::vector<std::string>& sortKeys,
     const std::vector<std::string>& allKeys,
@@ -210,7 +209,7 @@ TopNRowNumberFuzzer::makeDefaultPlan(
   return std::make_pair(PlanWithSplits{std::move(plan)}, limit);
 }
 
-RowNumberFuzzerBase::PlanWithSplits TopNRowNumberFuzzer::makePlanWithTableScan(
+PlanWithSplits TopNRowNumberFuzzer::makePlanWithTableScan(
     const std::vector<std::string>& partitionKeys,
     const std::vector<std::string>& sortKeys,
     const std::vector<std::string>& allKeys,
@@ -261,8 +260,7 @@ void TopNRowNumberFuzzer::runSingleIteration() {
   auto [defaultPlan, limit] =
       makeDefaultPlan(partitionKeys, allSortKeys, allKeys, input);
 
-  const auto expected =
-      execute(defaultPlan, pool_, /*injectSpill=*/false, false);
+  const auto expected = execute(defaultPlan, /*injectSpill=*/false, false);
   if (expected != nullptr) {
     validateExpectedResults(defaultPlan.plan, input, expected);
   }

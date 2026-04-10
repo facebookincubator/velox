@@ -18,6 +18,15 @@ velox_add_library(
   XxHasher.cpp
   LevelComparison.cpp
   LevelConversion.cpp
+  HEADERS
+  BitStreamUtilsInternal.h
+  BloomFilter.h
+  Hasher.h
+  LevelComparison.h
+  LevelConversion.h
+  LevelConversionUtil.h
+  RleEncodingInternal.h
+  XxHasher.h
 )
 
 velox_link_libraries(

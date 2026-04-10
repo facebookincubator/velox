@@ -92,6 +92,9 @@ class TimestampWithTimeZoneType final : public BigintType {
     return name();
   }
 
+  /// Formats a packed value as "YYYY-MM-DD HH:MM:SS.mmm <timezone>".
+  std::string valueToString(int64_t value) const;
+
   folly::dynamic serialize() const override {
     folly::dynamic obj = folly::dynamic::object;
     obj["name"] = "Type";

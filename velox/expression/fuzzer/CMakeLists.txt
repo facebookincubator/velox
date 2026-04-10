@@ -13,6 +13,13 @@
 # limitations under the License.
 
 add_library(velox_expression_test_utility ArgumentTypeFuzzer.cpp FuzzerToolkit.cpp)
+velox_add_test_headers(
+  velox_expression_test_utility
+  ArgTypesGenerator.h
+  ArgumentTypeFuzzer.h
+  DecimalArgTypesGeneratorBase.h
+  FuzzerToolkit.h
+)
 
 target_link_libraries(
   velox_expression_test_utility
@@ -32,6 +39,14 @@ add_library(
   ExpressionFuzzerVerifier.cpp
   FuzzerRunner.cpp
   SpecialFormSignatureGenerator.cpp
+)
+velox_add_test_headers(
+  velox_expression_fuzzer
+  ArgValuesGenerators.h
+  ExpressionFuzzer.h
+  ExpressionFuzzerVerifier.h
+  FuzzerRunner.h
+  SpecialFormSignatureGenerator.h
 )
 
 target_link_libraries(
@@ -66,6 +81,7 @@ add_executable(
   SparkExpressionFuzzerTest.cpp
   SparkSpecialFormSignatureGenerator.cpp
 )
+velox_add_test_headers(spark_expression_fuzzer_test SparkSpecialFormSignatureGenerator.h)
 
 target_link_libraries(
   spark_expression_fuzzer_test

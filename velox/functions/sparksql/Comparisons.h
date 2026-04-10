@@ -166,7 +166,9 @@ struct BetweenFunction {
       const TInput& value,
       const TInput& low,
       const TInput& high) {
-    result = value >= low && value <= high;
+    GreaterOrEqual<TInput> gte;
+    LessOrEqual<TInput> lte;
+    result = gte(value, low) && lte(value, high);
   }
 };
 

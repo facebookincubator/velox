@@ -40,6 +40,7 @@
 #include "velox/functions/prestosql/types/IPPrefixType.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/functions/prestosql/types/KHyperLogLogType.h"
+#include "velox/functions/prestosql/types/PrestoTypes.h"
 #include "velox/functions/prestosql/types/QDigestType.h"
 #include "velox/functions/prestosql/types/SetDigestType.h"
 #include "velox/functions/prestosql/types/SfmSketchType.h"
@@ -396,7 +397,7 @@ std::string PrestoQueryRunner::createTable(
   for (auto i = 0; i < inputType->size(); ++i) {
     appendComma(i, nullValues);
     nullValues << fmt::format(
-        "cast(null as {})", toTypeSql(inputType->childAt(i)));
+        "cast(null as {})", PrestoTypes::toSql(inputType->childAt(i)));
   }
 
   execute(fmt::format("DROP TABLE IF EXISTS {}", name));
@@ -541,16 +542,18 @@ std::string PrestoQueryRunner::startQuery(
 
   // Perform the request
   CURLcode res = curl_easy_perform(curl);
+
+  // Clean up CURL resources before checking the result to avoid leaks on
+  // error.
+  curl_slist_free_all(headers);
+  curl_easy_cleanup(curl);
+
   VELOX_CHECK_EQ(
       CURLE_OK,
       res,
       "POST to {} failed: {}",
       coordinatorUri_,
       curl_easy_strerror(res));
-
-  // Cleanup
-  curl_slist_free_all(headers);
-  curl_easy_cleanup(curl);
 
   return response;
 }
@@ -576,12 +579,14 @@ std::string PrestoQueryRunner::fetchNext(const std::string& nextUri) {
 
   // Perform GET request
   CURLcode res = curl_easy_perform(curl);
-  VELOX_CHECK_EQ(
-      CURLE_OK, res, "Get request failed: {}", curl_easy_strerror(res));
 
-  // Cleanup
+  // Clean up CURL resources before checking the result to avoid leaks on
+  // error.
   curl_slist_free_all(headers);
   curl_easy_cleanup(curl);
+
+  VELOX_CHECK_EQ(
+      CURLE_OK, res, "Get request failed: {}", curl_easy_strerror(res));
 
   return response;
 }
