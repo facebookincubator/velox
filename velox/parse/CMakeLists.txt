@@ -13,9 +13,11 @@
 # limitations under the License.
 velox_add_library(
   velox_parse_expression
+  ExprRewriter.cpp
   Expressions.cpp
   SqlExpressionsParser.cpp
   HEADERS
+  ExprRewriter.h
   Expressions.h
   IExpr.h
   SqlExpressionsParser.h

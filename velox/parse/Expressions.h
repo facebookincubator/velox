@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/common/Enums.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/parse/IExpr.h"
 #include "velox/type/Variant.h"
@@ -233,6 +234,8 @@ class WindowCallExpr : public CallExpr {
  public:
   enum class WindowType { kRange, kRows, kGroups };
 
+  VELOX_DECLARE_EMBEDDED_ENUM_NAME(WindowType);
+
   enum class BoundType {
     kUnboundedPreceding,
     kPreceding,
@@ -240,6 +243,8 @@ class WindowCallExpr : public CallExpr {
     kFollowing,
     kUnboundedFollowing,
   };
+
+  VELOX_DECLARE_EMBEDDED_ENUM_NAME(BoundType);
 
   struct Frame {
     WindowType type;
@@ -502,5 +507,8 @@ class ConcatExpr : public IExpr {
  private:
   const std::vector<std::string> fieldNames_;
 };
+
+using AggregateCallExprPtr = std::shared_ptr<const AggregateCallExpr>;
+using WindowCallExprPtr = std::shared_ptr<const WindowCallExpr>;
 
 } // namespace facebook::velox::core
