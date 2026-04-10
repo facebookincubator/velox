@@ -542,7 +542,7 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     if ((name == "ceil" || name == "floor") && expr->type()->kind() == TypeKind::BIGINT) {
       return tree.push(Operation{Op::CAST_TO_INT64, op2});
     }
-    return op1;
+    return op2;
   } else if (name == "isnotnull") {
     VELOX_CHECK_EQ(len, 1);
     auto const& op1 = pushExprToTree(expr->inputs()[0]);
