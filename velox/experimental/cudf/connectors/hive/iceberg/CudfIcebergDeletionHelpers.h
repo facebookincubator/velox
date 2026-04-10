@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <cudf/column/column_view.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/table/table_view.hpp>
 #include <cudf/types.hpp>
@@ -38,5 +39,15 @@ std::unique_ptr<cudf::table> applyDeleteBitmap(
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref temp_mr,
     rmm::device_async_resource_ref output_mr);
+
+/// GPU-side helper: Applies a boolean delete column (true = deleted) to the
+/// existing row mask (true = surviving). For each row i:
+///   rowMask[i] = rowMask[i] AND NOT deleteColumn[i]
+/// Null entries in deleteColumn are treated as "not deleted" (row survives).
+void applyEqualityDeleteColumn(
+    cudf::column_view deleteColumn,
+    std::shared_ptr<rmm::device_buffer> rowMask,
+    cudf::size_type numRows,
+    rmm::cuda_stream_view stream);
 
 } // namespace facebook::velox::cudf_velox::connector::hive::iceberg

@@ -86,10 +86,9 @@ class CudfIcebergSplitReader : public CudfSplitReader {
       cudf::table_view input,
       rmm::device_async_resource_ref output_mr);
 
-  /// Apply equality deletes (V2) to the input cudf table.
+  /// Apply equality deletes (V2) to the input cudf table on GPU.
   std::unique_ptr<cudf::table> applyEqualityDeletes(
       cudf::table_view input,
-      const RowVectorPtr& rowVector,
       rmm::device_async_resource_ref output_mr);
 
   std::shared_ptr<const velox_iceberg::HiveIcebergSplit> icebergSplit_;

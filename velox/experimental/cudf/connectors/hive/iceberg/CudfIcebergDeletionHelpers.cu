@@ -26,6 +26,7 @@
 
 #include <cuda/iterator>
 #include <thrust/for_each.h>
+#include <thrust/transform.h>
 
 namespace facebook::velox::cudf_velox::connector::hive::iceberg {
 
@@ -37,6 +38,27 @@ struct IsSurvivingRow {
   const cudf::bitmask_type* bitmask;
   __device__ bool operator()(cudf::size_type index) const noexcept {
     return not cudf::bit_is_set(bitmask, index);
+  }
+};
+
+/// Functor that ANDs the existing surviving flag with NOT(isDeleted).
+/// Null entries in the delete column (indicated by the null bitmask) are
+/// treated as "not deleted" so the row survives.
+struct ApplyDeletePredicate {
+  const bool* deleteData;
+  const cudf::bitmask_type* nullMask;
+  bool hasNulls;
+
+  __device__ bool operator()(cudf::size_type index, bool survives)
+      const noexcept {
+    if (!survives) {
+      return false;
+    }
+    bool isDeleted = deleteData[index];
+    if (hasNulls && nullMask != nullptr && !cudf::bit_is_set(nullMask, index)) {
+      isDeleted = false;
+    }
+    return !isDeleted;
   }
 };
 
@@ -82,6 +104,29 @@ std::unique_ptr<cudf::table> applyDeleteBitmap(
 
   // Apply the boolean mask to the input table
   return cudf::apply_boolean_mask(input, rowMaskCol, stream, output_mr);
+}
+
+void applyEqualityDeleteColumn(
+    cudf::column_view deleteColumn,
+    std::shared_ptr<rmm::device_buffer> rowMask,
+    cudf::size_type numRows,
+    rmm::cuda_stream_view stream) {
+  auto* maskData = static_cast<bool*>(rowMask->data());
+  const auto* deleteData = deleteColumn.data<bool>();
+  const auto* nullMask = deleteColumn.null_mask();
+  const bool hasNulls = deleteColumn.has_nulls();
+
+  ApplyDeletePredicate pred{deleteData, nullMask, hasNulls};
+
+  thrust::transform(
+      rmm::exec_policy_nosync(stream),
+      cuda::counting_iterator<cudf::size_type>{0},
+      cuda::counting_iterator<cudf::size_type>{numRows},
+      maskData,
+      maskData,
+      [pred] __device__(cudf::size_type index, bool survives) {
+        return pred(index, survives);
+      });
 }
 
 } // namespace facebook::velox::cudf_velox::connector::hive::iceberg
