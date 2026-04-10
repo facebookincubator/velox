@@ -33,8 +33,9 @@ NimbleEncoding::NimbleEncoding(std::string_view encodingData, bool encodeNulls)
   encodingType_ = encoding::peek<uint8_t, EncodingType>(encodingData_.data());
   dataType_ = encoding::peek<uint8_t, DataType>(
       encodingData_.data() + Encoding::kDataTypeOffset);
-  numValues_ = encoding::peek<uint32_t>(
-      encodingData_.data() + Encoding::kRowCountOffset);
+  const char* pos = encodingData_.data() + Encoding::kRowCountOffset;
+  numValues_ = encoding::readVarint32(pos);
+  prefixSize_ = pos - encodingData_.data();
 }
 
 NimbleEncoding::NimbleEncoding(
@@ -45,6 +46,7 @@ NimbleEncoding::NimbleEncoding(
       encodingType_(encodingType),
       dataType_(dataType),
       numValues_(numValues),
+      prefixSize_(0),
       encodeNulls_(false) {}
 
 uint8_t NimbleEncoding::childrenCount() const {
