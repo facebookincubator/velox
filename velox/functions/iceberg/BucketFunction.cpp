@@ -18,6 +18,7 @@
 #include "velox/functions/Macros.h"
 #include "velox/functions/Registerer.h"
 #include "velox/functions/iceberg/Murmur3Hash32.h"
+#include "velox/type/DecimalUtil.h"
 
 namespace facebook::velox::functions::iceberg {
 namespace {

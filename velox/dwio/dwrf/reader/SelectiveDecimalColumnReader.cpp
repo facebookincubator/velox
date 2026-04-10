@@ -15,6 +15,7 @@
  */
 
 #include "velox/dwio/dwrf/reader/SelectiveDecimalColumnReader.h"
+#include "velox/type/DecimalUtil.h"
 
 namespace facebook::velox::dwrf {
 

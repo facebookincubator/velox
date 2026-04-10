@@ -21,6 +21,7 @@
 #include "velox/functions/lib/CheckedArithmeticImpl.h"
 #include "velox/functions/lib/aggregates/DecimalAggregate.h"
 #include "velox/functions/lib/aggregates/SimpleNumericAggregate.h"
+#include "velox/type/DecimalUtil.h"
 
 namespace facebook::velox::functions::aggregate {
 

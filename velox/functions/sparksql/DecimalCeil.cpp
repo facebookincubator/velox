@@ -16,6 +16,7 @@
 
 #include "velox/functions/Macros.h"
 #include "velox/functions/Registerer.h"
+#include "velox/type/DecimalUtil.h"
 
 namespace facebook::velox::functions::sparksql {
 namespace {

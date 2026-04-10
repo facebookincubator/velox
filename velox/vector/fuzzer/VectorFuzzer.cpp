@@ -24,6 +24,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/fuzzer/Utils.h"
 #include "velox/functions/prestosql/types/IPPrefixType.h"
+#include "velox/type/DecimalUtil.h"
 #include "velox/type/Timestamp.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/FlatVector.h"

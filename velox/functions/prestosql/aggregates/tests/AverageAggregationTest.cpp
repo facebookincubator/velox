@@ -20,6 +20,7 @@
 #include "velox/functions/lib/aggregates/DecimalAggregate.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/parse/TypeResolver.h"
+#include "velox/type/DecimalUtil.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 using namespace facebook::velox::exec::test;

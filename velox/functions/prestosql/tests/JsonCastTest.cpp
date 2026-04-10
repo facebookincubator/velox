@@ -19,6 +19,7 @@
 #include "velox/functions/prestosql/json/JsonStringUtil.h"
 #include "velox/functions/prestosql/tests/CastBaseTest.h"
 #include "velox/functions/prestosql/types/JsonType.h"
+#include "velox/type/DecimalUtil.h"
 
 using namespace facebook::velox;
 

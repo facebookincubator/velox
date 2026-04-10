@@ -18,6 +18,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/SumTestBase.h"
+#include "velox/type/DecimalUtil.h"
 #include "velox/vector/AggregationHook.h"
 
 using facebook::velox::exec::test::PlanBuilder;

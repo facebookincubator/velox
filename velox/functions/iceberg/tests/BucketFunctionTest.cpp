@@ -16,6 +16,7 @@
 #include "velox/functions/iceberg/BucketFunction.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/iceberg/tests/IcebergFunctionBaseTest.h"
+#include "velox/type/DecimalUtil.h"
 
 #include <gtest/gtest.h>
 

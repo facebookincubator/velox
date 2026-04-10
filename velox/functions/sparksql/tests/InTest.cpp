@@ -19,6 +19,7 @@
 #include "velox/core/Expressions.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
+#include "velox/type/DecimalUtil.h"
 
 #include <stdint.h>
 

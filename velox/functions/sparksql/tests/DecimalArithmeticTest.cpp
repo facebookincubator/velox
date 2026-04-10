@@ -20,6 +20,7 @@
 #include "velox/core/Expressions.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
+#include "velox/type/DecimalUtil.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;

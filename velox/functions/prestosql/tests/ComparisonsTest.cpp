@@ -23,6 +23,7 @@
 #include "velox/functions/prestosql/types/IPAddressType.h"
 #include "velox/functions/prestosql/types/IPPrefixType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/type/DecimalUtil.h"
 #include "velox/type/tests/utils/CustomTypesForTesting.h"
 #include "velox/type/tz/TimeZoneMap.h"
 

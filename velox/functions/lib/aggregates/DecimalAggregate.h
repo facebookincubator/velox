@@ -18,6 +18,7 @@
 
 #include "velox/common/base/IOUtils.h"
 #include "velox/exec/Aggregate.h"
+#include "velox/type/DecimalUtil.h"
 #include "velox/type/HugeInt.h"
 #include "velox/vector/FlatVector.h"
 
