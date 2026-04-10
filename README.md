@@ -239,6 +239,13 @@ Run `make` in the root directory to compile the sources. For development, use
 `make debug` to build a non-optimized debug version, or `make release` to build
 an optimized version.  Use `make unittest` to build and run tests.
 
+Four test suites use grouped binaries on Linux CI to reduce link times
+(`velox/exec/tests`, `velox/functions/prestosql/aggregates/tests`,
+`velox/common/caching/tests`, `velox/serializers/tests`). All other suites use
+individual binaries on all platforms. On macOS, grouping is off by default. To
+disable grouping on Linux, pass `-DVELOX_ENABLE_GROUPED_TESTS=OFF` via
+`EXTRA_CMAKE_FLAGS`.
+
 Note that,
 * Velox requires a compiler at the minimum GCC 11.0 or Clang 15.0.
 * Velox requires the CPU to support instruction sets:
