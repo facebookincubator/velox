@@ -21,6 +21,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/vector/arrow/ArrowSchemaMetadata.h"
 #include "velox/vector/arrow/Bridge.h"
 
 namespace facebook::velox::test {
@@ -61,6 +62,31 @@ class ArrowBridgeSchemaExportTest : public testing::Test {
     EXPECT_EQ(nullptr, arrowSchema.metadata);
     EXPECT_EQ(arrowSchema.flags | ARROW_FLAG_NULLABLE, ARROW_FLAG_NULLABLE);
 
+    EXPECT_EQ(0, arrowSchema.n_children);
+    EXPECT_EQ(nullptr, arrowSchema.children);
+    EXPECT_EQ(nullptr, arrowSchema.dictionary);
+    EXPECT_NE(nullptr, arrowSchema.release);
+  }
+
+  void testTimestampScalarType(
+      const TypePtr& type,
+      const char* arrowFormat,
+      const ArrowOptions& options = ArrowOptions{}) {
+    ArrowSchema arrowSchema;
+    exportToArrow(type, arrowSchema, options);
+
+    EXPECT_STREQ(arrowFormat, arrowSchema.format);
+    if (type->equivalent(*TIMESTAMP())) {
+      ASSERT_EQ(nullptr, arrowSchema.metadata);
+    } else {
+      ASSERT_NE(nullptr, arrowSchema.metadata);
+      auto metadataValue =
+          findValue(arrowSchema.metadata, kVeloxTimestampTypeMetadataKey);
+      ASSERT_TRUE(metadataValue.has_value());
+      EXPECT_EQ(kVeloxTimestampUtcMetadataValue, metadataValue.value());
+    }
+
+    EXPECT_EQ(arrowSchema.flags | ARROW_FLAG_NULLABLE, ARROW_FLAG_NULLABLE);
     EXPECT_EQ(0, arrowSchema.n_children);
     EXPECT_EQ(nullptr, arrowSchema.children);
     EXPECT_EQ(nullptr, arrowSchema.dictionary);
@@ -207,32 +233,44 @@ TEST_F(ArrowBridgeSchemaExportTest, scalar) {
   testScalarType(VARBINARY(), "z");
 
   // Test default timezone
-  testScalarType(
+  testTimestampScalarType(
       TIMESTAMP(), "tss:", {.timestampUnit = TimestampUnit::kSecond});
-  testScalarType(TIMESTAMP(), "tsm:", {.timestampUnit = TimestampUnit::kMilli});
-  testScalarType(TIMESTAMP(), "tsu:", {.timestampUnit = TimestampUnit::kMicro});
-  testScalarType(TIMESTAMP(), "tsn:", {.timestampUnit = TimestampUnit::kNano});
+  testTimestampScalarType(
+      TIMESTAMP(), "tsm:", {.timestampUnit = TimestampUnit::kMilli});
+  testTimestampScalarType(
+      TIMESTAMP(), "tsu:", {.timestampUnit = TimestampUnit::kMicro});
+  testTimestampScalarType(
+      TIMESTAMP(), "tsn:", {.timestampUnit = TimestampUnit::kNano});
+  testTimestampScalarType(
+      TIMESTAMP_UTC(), "tsn:", {.timestampUnit = TimestampUnit::kNano});
 
   testScalarType(VARCHAR(), "vu", {.exportToStringView = true});
   testScalarType(VARBINARY(), "vz", {.exportToStringView = true});
 
   // Test specific timezone
-  testScalarType(
+  testTimestampScalarType(
       TIMESTAMP(),
       "tss:+01:0",
       {.timestampUnit = TimestampUnit::kSecond, .timestampTimeZone = "+01:0"});
-  testScalarType(
+  testTimestampScalarType(
       TIMESTAMP(),
       "tsm:+01:0",
       {.timestampUnit = TimestampUnit::kMilli, .timestampTimeZone = "+01:0"});
-  testScalarType(
+  testTimestampScalarType(
       TIMESTAMP(),
       "tsu:+01:0",
       {.timestampUnit = TimestampUnit::kMicro, .timestampTimeZone = "+01:0"});
-  testScalarType(
+  testTimestampScalarType(
       TIMESTAMP(),
       "tsn:+01:0",
       {.timestampUnit = TimestampUnit::kNano, .timestampTimeZone = "+01:0"});
+
+  // TIMESTAMP_UTC is timezone-agnostic and ignores timestampTimeZone option.
+  testTimestampScalarType(
+      TIMESTAMP_UTC(),
+      "tsu:",
+      {.timestampUnit = TimestampUnit::kMicro,
+       .timestampTimeZone = "Europe/Paris"});
 
   testScalarType(DATE(), "tdD");
   testScalarType(INTERVAL_YEAR_MONTH(), "tiM");
@@ -316,6 +354,16 @@ class ArrowBridgeSchemaImportTest : public ArrowBridgeSchemaExportTest {
  protected:
   TypePtr testSchemaImport(const char* format) {
     auto arrowSchema = makeArrowSchema(format);
+    auto type = importFromArrow(arrowSchema);
+    arrowSchema.release(&arrowSchema);
+    return type;
+  }
+
+  TypePtr testTimestampUtcSchemaImport(const char* format) {
+    auto arrowSchema = makeArrowSchema(format);
+    auto metadataValue = encodeSingleKeyValue(
+        kVeloxTimestampTypeMetadataKey, kVeloxTimestampUtcMetadataValue);
+    arrowSchema.metadata = metadataValue.data();
     auto type = importFromArrow(arrowSchema);
     arrowSchema.release(&arrowSchema);
     return type;
@@ -426,6 +474,7 @@ TEST_F(ArrowBridgeSchemaImportTest, scalar) {
 
   // Temporal.
   EXPECT_EQ(*TIMESTAMP(), *testSchemaImport("tsn:"));
+  EXPECT_EQ(*TIMESTAMP_UTC(), *testTimestampUtcSchemaImport("tsn:"));
   EXPECT_EQ(*DATE(), *testSchemaImport("tdD"));
   EXPECT_EQ(*INTERVAL_YEAR_MONTH(), *testSchemaImport("tiM"));
 
@@ -538,6 +587,8 @@ TEST_F(ArrowBridgeSchemaTest, roundtrip) {
   roundtripTest(VARCHAR());
   roundtripTest(VARCHAR(), {.exportToStringView = true});
   roundtripTest(REAL());
+  roundtripTest(TIMESTAMP());
+  roundtripTest(TIMESTAMP_UTC());
   roundtripTest(ARRAY(DOUBLE()));
   roundtripTest(ARRAY(ARRAY(ARRAY(ARRAY(VARBINARY())))));
   roundtripTest(MAP(VARCHAR(), REAL()));

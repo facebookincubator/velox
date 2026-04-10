@@ -25,6 +25,7 @@
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/VectorTypeUtils.h"
 #include "velox/vector/arrow/Abi.h"
+#include "velox/vector/arrow/ArrowSchemaMetadata.h"
 
 namespace facebook::velox {
 
@@ -145,6 +146,9 @@ struct VeloxToArrowSchemaBridgeHolder {
   // format.
   std::string formatBuffer;
 
+  // Buffer required to keep ArrowSchema.metadata alive.
+  std::string metadataBuffer;
+
   void setChildAtIndex(
       size_t index,
       std::unique_ptr<ArrowSchema>&& child,
@@ -161,6 +165,18 @@ struct VeloxToArrowSchemaBridgeHolder {
     schema.children[index] = childrenOwned[index].get();
   }
 };
+
+TypePtr importTimestampTypeFromArrow(
+    const char* format,
+    const ArrowSchema& arrowSchema) {
+  const auto metadataValue =
+      findValue(arrowSchema.metadata, kVeloxTimestampTypeMetadataKey);
+  if (metadataValue.has_value() &&
+      metadataValue.value() == kVeloxTimestampUtcMetadataValue) {
+    return TIMESTAMP_UTC();
+  }
+  return TIMESTAMP();
+}
 
 // Release function for ArrowArray. Arrow standard requires it to recurse down
 // to children and dictionary arrays, and set release and private_data to null
@@ -231,6 +247,7 @@ static void releaseArrowSchema(ArrowSchema* arrowSchema) {
 }
 
 const char* exportArrowFormatTimestampStr(
+    const TypePtr& type,
     const ArrowOptions& options,
     std::string& formatBuffer) {
   switch (options.timestampUnit) {
@@ -250,7 +267,10 @@ const char* exportArrowFormatTimestampStr(
       VELOX_UNREACHABLE();
   }
 
-  if (options.timestampTimeZone.has_value()) {
+  // TimestampUtcType is timezone-agnostic, which never carries timezone
+  // information. The TimestampType represents local time, so we include the
+  // timezone information if it's provided in options.
+  if (type->equivalent(*TIMESTAMP()) && options.timestampTimeZone.has_value()) {
     formatBuffer += options.timestampTimeZone.value();
   }
 
@@ -322,7 +342,7 @@ const char* exportArrowFormatStr(
     case TypeKind::UNKNOWN:
       return "n"; // NullType
     case TypeKind::TIMESTAMP:
-      return exportArrowFormatTimestampStr(options, formatBuffer);
+      return exportArrowFormatTimestampStr(type, options, formatBuffer);
     // Complex/nested types.
     case TypeKind::ARRAY:
       static_assert(sizeof(vector_size_t) == 4);
@@ -1395,7 +1415,7 @@ TypePtr importFromArrowImpl(
 
     case 't': // temporal types.
       if (format[1] == 's') {
-        return TIMESTAMP();
+        return importTimestampTypeFromArrow(format, arrowSchema);
       }
       if (format[1] == 'd' && format[2] == 'D') {
         return DATE();
@@ -1492,14 +1512,21 @@ void exportToArrow(
 
   arrowSchema.name = nullptr;
 
-  // No additional metadata for now.
-  arrowSchema.metadata = nullptr;
-
   // All supported types are semantically nullable.
   arrowSchema.flags = ARROW_FLAG_NULLABLE;
 
   // Allocate private data buffer holder and recurse down to children types.
   auto bridgeHolder = std::make_unique<VeloxToArrowSchemaBridgeHolder>();
+
+  if (type->equivalent(*TIMESTAMP_UTC())) {
+    // Velox's TIMESTAMP_UTC type does not have a direct equivalent in Arrow, so
+    // we encode the timezone-agnostic information in the metadata.
+    bridgeHolder->metadataBuffer = encodeSingleKeyValue(
+        kVeloxTimestampTypeMetadataKey, kVeloxTimestampUtcMetadataValue);
+    arrowSchema.metadata = bridgeHolder->metadataBuffer.data();
+  } else {
+    arrowSchema.metadata = nullptr;
+  }
 
   if (vec->encoding() == VectorEncoding::Simple::DICTIONARY) {
     arrowSchema.n_children = 0;
