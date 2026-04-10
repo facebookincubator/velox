@@ -19,8 +19,63 @@
 #include "velox/connectors/hive/FileConfig.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
+#include "velox/connectors/hive/iceberg/IcebergSplit.h"
+#include "velox/connectors/hive/iceberg/IcebergSplitReader.h"
 
 namespace facebook::velox::connector::hive {
+
+std::unique_ptr<FileSplitReader> HiveSplitReader::create(
+    const std::shared_ptr<const HiveConnectorSplit>& hiveSplit,
+    const FileTableHandlePtr& tableHandle,
+    const std::unordered_map<std::string, FileColumnHandlePtr>* partitionKeys,
+    const ConnectorQueryCtx* connectorQueryCtx,
+    const std::shared_ptr<const FileConfig>& fileConfig,
+    const RowTypePtr& readerOutputType,
+    const std::shared_ptr<io::IoStatistics>& ioStatistics,
+    const std::shared_ptr<IoStats>& ioStats,
+    FileHandleFactory* fileHandleFactory,
+    folly::Executor* ioExecutor,
+    const std::shared_ptr<common::ScanSpec>& scanSpec,
+    const std::unordered_map<std::string, FileColumnHandlePtr>* infoColumns,
+    std::vector<column_index_t> bucketChannels,
+    const common::SubfieldFilters* subfieldFiltersForValidation) {
+  // Create the SplitReader based on hiveSplit->customSplitInfo["table_format"]
+  if (hiveSplit->customSplitInfo.count("table_format") > 0 &&
+      hiveSplit->customSplitInfo.at("table_format") == "hive-iceberg") {
+    auto icebergSplit =
+        std::dynamic_pointer_cast<const iceberg::HiveIcebergSplit>(hiveSplit);
+    VELOX_CHECK_NOT_NULL(
+        icebergSplit,
+        "Expected HiveIcebergSplit for table_format=hive-iceberg");
+    return std::make_unique<iceberg::IcebergSplitReader>(
+        icebergSplit,
+        tableHandle,
+        partitionKeys,
+        connectorQueryCtx,
+        fileConfig,
+        readerOutputType,
+        ioStatistics,
+        ioStats,
+        fileHandleFactory,
+        ioExecutor,
+        scanSpec);
+  } else {
+    return std::make_unique<HiveSplitReader>(
+        hiveSplit,
+        tableHandle,
+        partitionKeys,
+        connectorQueryCtx,
+        fileConfig,
+        readerOutputType,
+        ioStatistics,
+        ioStats,
+        fileHandleFactory,
+        ioExecutor,
+        scanSpec,
+	      infoColumns,
+        std::move(bucketChannels));
+  }
+}
 
 HiveSplitReader::HiveSplitReader(
     const std::shared_ptr<const HiveConnectorSplit>& hiveSplit,
