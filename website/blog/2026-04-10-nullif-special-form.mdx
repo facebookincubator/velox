@@ -1,0 +1,76 @@
+---
+slug: nullif-special-form
+title: Why NULLIF Must Be a Special Form
+authors: [mbasmanova, peterenescu, bikramSingh91]
+tags: [tech-blog, expressions]
+---
+
+## What is NULLIF?
+
+`NULLIF(a, b)` is a SQL standard function that returns NULL if `a` equals `b`, otherwise returns `a`. It's commonly used to avoid division by zero (`x / NULLIF(y, 0)`) or to convert sentinel values to NULLs.
+
+## The Naive Implementation
+
+The textbook rewrite is simple:
+
+```
+NULLIF(a, b) → IF(a = b, NULL, a)
+```
+
+This is exactly what Presto's SQL-to-plan translator does when running on Velox (Prestissimo). It works correctly for deterministic expressions. But there's a subtle, critical bug.
+
+## The Bug
+
+Consider this query:
+
+```sql
+SELECT nullif(rand() < 0.5, true), count(*)
+FROM unnest(sequence(1, 10))
+GROUP BY 1;
+```
+
+`nullif(x, true)` should return NULL when x is true and FALSE when x is false. TRUE should never appear in the output.
+
+But with the `IF` rewrite:
+
+```
+IF(rand() < 0.5 = true, NULL, rand() < 0.5)
+```
+
+The expression `rand() < 0.5` appears **twice** in the expression tree. Velox evaluates each occurrence independently. When `rand()` returns different values for the two evaluations, you get impossible results. For example: the first `rand()` returns 0.7, so the condition `0.7 < 0.5 = true` is FALSE — we take the else branch. But the second `rand()` returns 0.3, so the else value `0.3 < 0.5` is TRUE. The result is TRUE, which `nullif(x, true)` should never produce.
+
+Actual results from Prestissimo:
+
+```
+ _col0 | _col1
+-------+-------
+ NULL  |     4
+ true  |     4    ← should never happen
+ false |     2
+```
+
+## Why This Happens in Prestissimo
+
+Velox has a common subexpression elimination (CSE) mechanism that can detect when the same expression appears multiple times and evaluate it only once. However, CSE correctly skips non-deterministic expressions — evaluating `rand()` once and reusing the result would change the semantics of queries that intentionally use multiple independent random values. So when Presto's planner duplicates `rand() < 0.5` into both the condition and the else branch of `IF`, Velox evaluates each occurrence independently, producing different random values.
+
+The root cause is that Velox doesn't have a native `NULLIF` implementation, forcing Prestissimo to use the `IF` rewrite. Adding `NULLIF` to Velox would eliminate the need for the rewrite entirely.
+
+## Why Not a Simple Rewrite or a Regular Function?
+
+The `IF` rewrite is broken for non-deterministic expressions, as shown above. What about making `NULLIF` a regular function instead? A regular function receives pre-evaluated arguments, so there's no duplication problem.
+
+But `NULLIF` has a type complication: the types of `a` and `b` may differ. Per the SQL spec, the comparison uses the common supertype (`equal(cast(a as common_type), cast(b as common_type))`), but `NULLIF` must return `a`'s **original value in its original type**, not a cast-back version. For example, `NULLIF(tinyint_col, bigint_col)` casts both to BIGINT for comparison, but returns the original TINYINT value — not the BIGINT value cast back to TINYINT. A regular function would receive arguments already cast to a common type, losing `a`'s original value.
+
+One possible workaround: rewrite `NULLIF(a, b)` as `cast(nullif_function(cast(a as common_type), cast(b as common_type)) as typeof(a))`, where `nullif_function` is a regular same-typed function. The cast back to `typeof(a)` is lossless for integer, decimal, and varchar coercions since the value originated from the narrower type. However, when the common type is `real` or `double` (e.g., `NULLIF(bigint_col, 1.5)`), the round-trip can lose precision. In practice, comparing floating point values for equality is unreliable anyway, so rejecting `NULLIF` with a float/double common type at planning time may be acceptable.
+
+If exact value preservation is required in all cases, a **special form** is needed — a built-in expression type (like `IF`, `COALESCE`, `TRY`) that controls its own evaluation and type handling. Velox already has several special forms for similar reasons, where a construct's semantics cannot be expressed through simple function calls or rewrites.
+
+See [#17110](https://github.com/facebookincubator/velox/issues/17110) for more details and discussion.
+
+## The General Lesson
+
+Any time a SQL construct needs to use the same expression value in multiple places, it cannot be safely rewritten into a tree that duplicates that expression. This applies whenever the expression is non-deterministic (`rand()`, `uuid()`) or has side effects.
+
+`NULLIF` is not the only construct with this problem. The same class of bug affects `CASE` expressions with non-deterministic operands (see [#17115](https://github.com/facebookincubator/velox/issues/17115)).
+
+The SQL standard defines NULLIF, COALESCE, and CASE with single-evaluation semantics. When implementing a SQL engine, these semantics must be preserved through special forms that control evaluation order and multiplicity.
