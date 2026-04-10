@@ -19,6 +19,7 @@
 #include "velox/common/fuzzer/ConstrainedGenerators.h"
 #include "velox/functions/prestosql/types/JsonCastOperator.h"
 #include "velox/functions/prestosql/types/JsonType.h"
+#include "velox/type/CastRegistry.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox {
@@ -63,6 +64,33 @@ class JsonTypeFactory : public CustomTypeFactory {
 } // namespace
 
 void registerJsonType() {
-  registerCustomType("json", std::make_unique<const JsonTypeFactory>());
+  registerCustomType("JSON", std::make_unique<const JsonTypeFactory>());
+  // Register primitive cast rules only. Container types (ARRAY, MAP, ROW)
+  // are cross-type casts (e.g. ARRAY -> JSON), which the registry cannot
+  // resolve via its same-base-type recursive logic. These are handled at
+  // runtime by JsonCastOperator::isSupportedFromType/isSupportedToType.
+  registerCastRules({
+      // TO JSON (from primitive types).
+      {.fromType = "UNKNOWN", .toType = "JSON"},
+      {.fromType = "BOOLEAN", .toType = "JSON"},
+      {.fromType = "TINYINT", .toType = "JSON"},
+      {.fromType = "SMALLINT", .toType = "JSON"},
+      {.fromType = "INTEGER", .toType = "JSON"},
+      {.fromType = "BIGINT", .toType = "JSON"},
+      {.fromType = "REAL", .toType = "JSON"},
+      {.fromType = "DOUBLE", .toType = "JSON"},
+      {.fromType = "VARCHAR", .toType = "JSON"},
+      {.fromType = "TIMESTAMP", .toType = "JSON"},
+      // FROM JSON (to primitive types).
+      // Note: JSON -> TIMESTAMP is not supported in Presto.
+      {.fromType = "JSON", .toType = "BOOLEAN"},
+      {.fromType = "JSON", .toType = "TINYINT"},
+      {.fromType = "JSON", .toType = "SMALLINT"},
+      {.fromType = "JSON", .toType = "INTEGER"},
+      {.fromType = "JSON", .toType = "BIGINT"},
+      {.fromType = "JSON", .toType = "REAL"},
+      {.fromType = "JSON", .toType = "DOUBLE"},
+      {.fromType = "JSON", .toType = "VARCHAR"},
+  });
 }
 } // namespace facebook::velox
