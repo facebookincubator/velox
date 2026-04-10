@@ -5,8 +5,10 @@ The workflow run ID is {{RUN_ID}}.
 Failure metadata (JSON array of failed jobs):
 {{FAILURE_METADATA}}
 
-Each entry has: "job" (job name), "type" ("build" or "test"), and
-optionally "failed_tests" (newline-separated test names).
+Each entry has: "job" (job name), "type" ("build", "test", or "unknown"), and
+optionally "failed_tests" (newline-separated test names). A type of "unknown"
+means no structured failure metadata was available (e.g., Fuzzer Jobs) — you
+must determine the failure type from the job logs.
 
 Your task:
 1. Use `gh api` to download the logs for the failed jobs in this workflow run.
@@ -33,18 +35,29 @@ Your task:
 
 3. For BUILD failures: Find compiler `error:` lines with file paths and error messages.
 
-4. Get the PR diff: `gh pr diff {{PR_NUMBER}} --repo {{REPOSITORY}}`
+4. For FUZZER failures (from the "Fuzzer Jobs" workflow): Fuzzers run via
+   `run-fuzzer-parallel.sh` which launches multiple instances in parallel.
+   Look for crash reports, assertion failures (VELOX_CHECK, VELOX_FAIL),
+   segfaults, or timeouts in the logs. Key information to extract:
+   - The fuzzer name (e.g., "Presto Fuzzer", "Join Fuzzer", "Spark Expression Fuzzer")
+   - The error message or assertion failure
+   - The seed value (from `--seed` flag or log output) for reproduction
+   - The file and line number from stack traces
+   - The reproduce command uses the fuzzer binary with `--seed <seed>` flag
+
+5. Get the PR diff: `gh pr diff {{PR_NUMBER}} --repo {{REPOSITORY}}`
    Determine if the failures are likely caused by the PR changes.
 
-5. Search open issues for known failures:
+6. Search open issues for known failures:
    `gh issue list --repo {{REPOSITORY}} --search "<test_name>" --state open --limit 5`
    Check if any failing test has a known open issue.
 
-6. Check if the same tests fail on the main branch (pre-existing flaky test):
-   `gh run list --repo {{REPOSITORY}} --branch main --workflow "Linux Build using GCC" --limit 3 --json conclusion,databaseId`
-   If recent main runs also failed, note this.
+7. Check if the same failures occur on the main branch (pre-existing/flaky):
+   `gh run list --repo {{REPOSITORY}} --branch main --workflow "<workflow_name>" --limit 3 --json conclusion,databaseId`
+   Use the appropriate workflow name: "Linux Build using GCC" for build/test
+   failures, "Fuzzer Jobs" for fuzzer failures.
 
-7. Post a SINGLE comment on the PR with your analysis using:
+8. Post a SINGLE comment on the PR with your analysis using:
    `gh pr comment {{PR_NUMBER}} --repo {{REPOSITORY}} --body "<comment>"`
 
 Format the comment as follows (use markdown):
