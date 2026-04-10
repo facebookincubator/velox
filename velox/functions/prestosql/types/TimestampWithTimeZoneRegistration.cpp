@@ -248,36 +248,6 @@ class TimestampWithTimeZoneCastOperator final : public exec::CastOperator {
     return {std::shared_ptr<const CastOperator>{}, &kInstance};
   }
 
-  bool isSupportedFromType(const TypePtr& other) const override {
-    switch (other->kind()) {
-      case TypeKind::TIMESTAMP:
-        return true;
-      case TypeKind::VARCHAR:
-        return true;
-      case TypeKind::INTEGER:
-        return other->isDate();
-      case TypeKind::BIGINT:
-        return other->equivalent(*TIME());
-      default:
-        return false;
-    }
-  }
-
-  bool isSupportedToType(const TypePtr& other) const override {
-    switch (other->kind()) {
-      case TypeKind::TIMESTAMP:
-        return true;
-      case TypeKind::VARCHAR:
-        return true;
-      case TypeKind::INTEGER:
-        return other->isDate();
-      case TypeKind::BIGINT:
-        return other->equivalent(*TIME());
-      default:
-        return false;
-    }
-  }
-
   void castTo(
       const BaseVector& input,
       exec::EvalCtx& context,

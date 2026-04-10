@@ -52,14 +52,6 @@ struct UuidParser<TypeKind::VARBINARY> {
 
 class UuidCastOperator : public exec::CastOperator {
  public:
-  bool isSupportedFromType(const TypePtr& other) const override {
-    return VARCHAR()->equivalent(*other) || VARBINARY()->equivalent(*other);
-  }
-
-  bool isSupportedToType(const TypePtr& other) const override {
-    return VARCHAR()->equivalent(*other) || VARBINARY()->equivalent(*other);
-  }
-
   void castTo(
       const BaseVector& input,
       exec::EvalCtx& context,

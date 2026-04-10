@@ -1169,57 +1169,7 @@ simdjson::error_code castFromJsonOneRow(
   return simdjson::SUCCESS;
 }
 
-bool isSupportedBasicType(const TypePtr& type) {
-  switch (type->kind()) {
-    case TypeKind::BOOLEAN:
-    case TypeKind::BIGINT:
-    case TypeKind::INTEGER:
-    case TypeKind::SMALLINT:
-    case TypeKind::TINYINT:
-    case TypeKind::DOUBLE:
-    case TypeKind::REAL:
-    case TypeKind::VARCHAR:
-      return true;
-    default:
-      return false;
-  }
-}
 } // namespace
-
-bool JsonCastOperator::isSupportedFromType(const TypePtr& other) const {
-  if (isSupportedBasicType(other)) {
-    return true;
-  }
-
-  switch (other->kind()) {
-    case TypeKind::UNKNOWN:
-    case TypeKind::TIMESTAMP:
-      return true;
-    case TypeKind::ARRAY:
-      return isSupportedFromType(other->childAt(0));
-    case TypeKind::ROW:
-      for (const auto& child : other->as<TypeKind::ROW>().children()) {
-        if (!isSupportedFromType(child)) {
-          return false;
-        }
-      }
-      return true;
-    case TypeKind::MAP:
-      if (other->childAt(1)->isUnknown()) {
-        if (other->childAt(0)->isUnknown()) {
-          return true;
-        }
-        return isSupportedBasicType(other->childAt(0)) &&
-            !isJsonType(other->childAt(0));
-      }
-
-      return (
-          isSupportedBasicType(other->childAt(0)) &&
-          isSupportedFromType(other->childAt(1)));
-    default:
-      return false;
-  }
-}
 
 template <TypeKind kind>
 void JsonCastOperator::castFromJson(
@@ -1262,35 +1212,6 @@ void JsonCastOperator::castFromJson(
       [&](vector_size_t row) INLINE_LAMBDA { writer.commitNull(); });
 
   writer.finish();
-}
-
-bool JsonCastOperator::isSupportedToType(const TypePtr& other) const {
-  if (other->isDate()) {
-    return false;
-  }
-
-  if (isSupportedBasicType(other)) {
-    return true;
-  }
-
-  switch (other->kind()) {
-    case TypeKind::ARRAY:
-      return isSupportedToType(other->childAt(0));
-    case TypeKind::ROW:
-      for (const auto& child : other->as<TypeKind::ROW>().children()) {
-        if (!isSupportedToType(child)) {
-          return false;
-        }
-      }
-      return true;
-    case TypeKind::MAP:
-      return (
-          isSupportedBasicType(other->childAt(0)) &&
-          isSupportedToType(other->childAt(1)) &&
-          !isJsonType(other->childAt(0)));
-    default:
-      return false;
-  }
 }
 
 /// Converts an input vector of a supported type to Json type. The

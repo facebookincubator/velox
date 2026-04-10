@@ -30,17 +30,6 @@ class BigintEnumCastOperator : public exec::CastOperator {
     return kInstance;
   }
 
-  // Casting is supported from all integer types.
-  bool isSupportedFromType(const TypePtr& other) const override {
-    return BIGINT()->equivalent(*other) || TINYINT()->equivalent(*other) ||
-        SMALLINT()->equivalent(*other) || INTEGER()->equivalent(*other);
-  }
-
-  // Casting is only supported to BIGINT type.
-  bool isSupportedToType(const TypePtr& other) const override {
-    return BIGINT()->equivalent(*other);
-  }
-
   void castTo(
       const BaseVector& input,
       exec::EvalCtx& context,

@@ -30,16 +30,6 @@ class VarcharEnumCastOperator : public exec::CastOperator {
     return kInstance;
   }
 
-  // Casting is only supported from VARCHAR type.
-  bool isSupportedFromType(const TypePtr& other) const override {
-    return VARCHAR()->equivalent(*other);
-  }
-
-  // Casting is only supported to VARCHAR type.
-  bool isSupportedToType(const TypePtr& other) const override {
-    return VARCHAR()->equivalent(*other);
-  }
-
   void castTo(
       const BaseVector& input,
       exec::EvalCtx& context,

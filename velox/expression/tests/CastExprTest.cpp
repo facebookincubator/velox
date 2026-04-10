@@ -2852,14 +2852,6 @@ class BigintTypeWithCustomComparisonCastOperator final
     return {std::shared_ptr<const CastOperator>{}, &kInstance};
   }
 
-  bool isSupportedFromType(const TypePtr& other) const override {
-    return true;
-  }
-
-  bool isSupportedToType(const TypePtr& other) const override {
-    return true;
-  }
-
   void castTo(
       const BaseVector& input,
       exec::EvalCtx& context,
