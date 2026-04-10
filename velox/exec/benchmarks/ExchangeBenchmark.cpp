@@ -67,6 +67,12 @@ struct LocalPartitionWaitStats {
   std::vector<int64_t> wallMs;
 };
 
+struct ExchangeRunStats {
+  int64_t wallUs = 0;
+  PlanNodeStats partitionedOutputStats;
+  PlanNodeStats exchangeStats;
+};
+
 void sortByMax(std::vector<RuntimeMetric>& metrics) {
   std::sort(
       metrics.begin(),
@@ -86,6 +92,18 @@ void sortByAndPrintMax(
             << "\n Max: " << metrics.front().toString()
             << "\n Median: " << metrics[metrics.size() / 2].toString()
             << "\n Min: " << metrics.back().toString() << std::endl;
+}
+
+void printExchangeStats(
+    const std::string& datasetName,
+    const std::string& modeName,
+    const ExchangeRunStats& stats) {
+  std::cout << "-----------------------------" << datasetName << " ("
+            << modeName << ")-----------------------------" << std::endl;
+  std::cout << "Wall Time (ms): " << succinctMicros(stats.wallUs) << std::endl;
+  std::cout << "PartitionOutput: " << stats.partitionedOutputStats.toString()
+            << std::endl;
+  std::cout << "Exchange: " << stats.exchangeStats.toString() << std::endl;
 }
 
 class ExchangeBenchmark : public VectorTestBase {
@@ -120,6 +138,7 @@ class ExchangeBenchmark : public VectorTestBase {
       std::vector<RowVectorPtr>& vectors,
       int32_t width,
       int32_t taskWidth,
+      bool useOptimizedPartitionedOutput,
       int64_t& wallUs,
       PlanNodeStats& partitionedOutputStats,
       PlanNodeStats& exchangeStats) {
@@ -373,7 +392,7 @@ int32_t ExchangeBenchmark::iteration_;
 
 std::unique_ptr<ExchangeBenchmark> bm;
 
-void runBenchmarks() {
+void runBenchmarks(bool optimizedPartitionedOutputEnabled = false) {
   std::vector<std::string> flatNames = {"c0"};
   std::vector<TypePtr> flatTypes = {BIGINT()};
   std::vector<TypePtr> typeSelection = {
@@ -438,75 +457,51 @@ void runBenchmarks() {
   std::vector<RowVectorPtr> struct1k(
       bm->makeRows(structType, 100, 1000, FLAGS_dict_pct));
 
-  int64_t flat10KWallUs;
-  PlanNodeStats partitionedOutputStatsFlat10K;
-  PlanNodeStats exchangeStatsFlat10K;
-  folly::addBenchmark(__FILE__, "exchangeFlat10k", [&]() {
-    bm->run(
-        flat10k,
-        FLAGS_width,
-        FLAGS_task_width,
-        flat10KWallUs,
-        partitionedOutputStatsFlat10K,
-        exchangeStatsFlat10K);
-    return 1;
-  });
+  std::vector<std::pair<std::string, std::vector<RowVectorPtr>*>> exchangeCases{
+      {"Flat10K", &flat10k},
+      {"Flat50", &flat50},
+      {"Deep10K", &deep10k},
+      {"Deep50", &deep50},
+      {"Struct1K", &struct1k}};
 
-  int64_t flat50KWallUs;
-  PlanNodeStats partitionedOutputStatsFlat50;
-  PlanNodeStats exchangeStatsFlat50;
-  folly::addBenchmark(__FILE__, "exchangeFlat50", [&]() {
-    bm->run(
-        flat50,
-        FLAGS_width,
-        FLAGS_task_width,
-        flat50KWallUs,
-        partitionedOutputStatsFlat50,
-        exchangeStatsFlat50);
-    return 1;
-  });
+  std::vector<ExchangeRunStats> normalPartitionedOutputStats(
+      exchangeCases.size());
+  std::vector<ExchangeRunStats> optimizedPartitionedOutputStats(
+      exchangeCases.size());
 
-  int64_t deep10KWallUs;
-  PlanNodeStats partitionedOutputStatsDeep10K;
-  PlanNodeStats exchangeStatsDeep10K;
-  folly::addBenchmark(__FILE__, "exchangeDeep10k", [&]() {
-    bm->run(
-        deep10k,
-        FLAGS_width,
-        FLAGS_task_width,
-        deep10KWallUs,
-        partitionedOutputStatsDeep10K,
-        exchangeStatsDeep10K);
-    return 1;
-  });
-
-  int64_t deep50KWallUs;
-  PlanNodeStats partitionedOutputStatsDeep50;
-  PlanNodeStats exchangeStatsDeep50;
-  folly::addBenchmark(__FILE__, "exchangeDeep50", [&]() {
-    bm->run(
-        deep50,
-        FLAGS_width,
-        FLAGS_task_width,
-        deep50KWallUs,
-        partitionedOutputStatsDeep50,
-        exchangeStatsDeep50);
-    return 1;
-  });
-
-  int64_t stuct1KWallUs;
-  PlanNodeStats partitionedOutputStatsStruct1K;
-  PlanNodeStats exchangeStatsStruct1K;
-  folly::addBenchmark(__FILE__, "exchangeStruct1K", [&]() {
-    bm->run(
-        struct1k,
-        FLAGS_width,
-        FLAGS_task_width,
-        stuct1KWallUs,
-        partitionedOutputStatsStruct1K,
-        exchangeStatsStruct1K);
-    return 1;
-  });
+  for (size_t i = 0; i < exchangeCases.size(); ++i) {
+    const auto& name = exchangeCases[i].first;
+    folly::addBenchmark(
+        __FILE__,
+        fmt::format("exchange{}_normalPartitionedOutput", name),
+        [&, i]() {
+          bm->run(
+              *exchangeCases[i].second,
+              FLAGS_width,
+              FLAGS_task_width,
+              false,
+              normalPartitionedOutputStats[i].wallUs,
+              normalPartitionedOutputStats[i].partitionedOutputStats,
+              normalPartitionedOutputStats[i].exchangeStats);
+          return 1;
+        });
+    if (optimizedPartitionedOutputEnabled) {
+      folly::addBenchmark(
+          __FILE__,
+          fmt::format("exchange{}_optimizedPartitionedOutput", name),
+          [&, i]() {
+            bm->run(
+                *exchangeCases[i].second,
+                FLAGS_width,
+                FLAGS_task_width,
+                true,
+                optimizedPartitionedOutputStats[i].wallUs,
+                optimizedPartitionedOutputStats[i].partitionedOutputStats,
+                optimizedPartitionedOutputStats[i].exchangeStats);
+            return 1;
+          });
+    }
+  }
 
   int64_t localPartitionWallUs;
   PlanNodeStats localPartitionStatsFlat10K;
@@ -524,45 +519,16 @@ void runBenchmarks() {
 
   folly::runBenchmarks();
 
-  std::cout
-      << "----------------------------------Flat10K----------------------------------"
-      << std::endl;
-  std::cout << "Wall Time (ms): " << succinctMicros(flat10KWallUs) << std::endl;
-  std::cout << "PartitionOutput: " << partitionedOutputStatsFlat10K.toString()
-            << std::endl;
-  std::cout << "Exchange: " << exchangeStatsFlat10K.toString() << std::endl;
-
-  std::cout
-      << "----------------------------------Flat50K----------------------------------"
-      << std::endl;
-  std::cout << "Wall Time (ms): " << succinctMicros(flat50KWallUs) << std::endl;
-  std::cout << "PartitionOutput: " << partitionedOutputStatsFlat50.toString()
-            << std::endl;
-  std::cout << "Exchange: " << exchangeStatsFlat10K.toString() << std::endl;
-
-  std::cout
-      << "----------------------------------Deep10K----------------------------------"
-      << std::endl;
-  std::cout << "Wall Time (ms): " << succinctMicros(deep10KWallUs) << std::endl;
-  std::cout << "PartitionOutput: " << partitionedOutputStatsDeep10K.toString()
-            << std::endl;
-  std::cout << "Exchange: " << exchangeStatsDeep10K.toString() << std::endl;
-
-  std::cout
-      << "----------------------------------Deep50K----------------------------------"
-      << std::endl;
-  std::cout << "Wall Time (ms): " << succinctMicros(deep50KWallUs) << std::endl;
-  std::cout << "PartitionOutput: " << partitionedOutputStatsDeep50.toString()
-            << std::endl;
-  std::cout << "Exchange: " << exchangeStatsDeep50.toString() << std::endl;
-
-  std::cout
-      << "----------------------------------Struct1K---------------------------------"
-      << std::endl;
-  std::cout << "Wall Time (ms): " << succinctMicros(stuct1KWallUs) << std::endl;
-  std::cout << "PartitionOutput: " << partitionedOutputStatsStruct1K.toString()
-            << std::endl;
-  std::cout << "Exchange: " << exchangeStatsStruct1K.toString() << std::endl;
+  for (size_t i = 0; i < exchangeCases.size(); ++i) {
+    printExchangeStats(
+        exchangeCases[i].first, "normal", normalPartitionedOutputStats[i]);
+    if (optimizedPartitionedOutputEnabled) {
+      printExchangeStats(
+          exchangeCases[i].first,
+          "optimized",
+          optimizedPartitionedOutputStats[i]);
+    }
+  }
 
   std::cout
       << "--------------------------------LocalFlat10K-------------------------------"
