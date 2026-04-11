@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/fuzzer/FuzzerConnector.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
@@ -28,11 +29,12 @@ class FuzzerConnectorTestBase : public exec::test::OperatorTestBase {
     OperatorTestBase::SetUp();
     connector::fuzzer::FuzzerConnectorFactory factory;
     auto fuzzerConnector = factory.newConnector(kFuzzerConnectorId, nullptr);
-    connector::registerConnector(fuzzerConnector);
+    connector::ConnectorRegistry::global().insert(
+        fuzzerConnector->connectorId(), fuzzerConnector);
   }
 
   void TearDown() override {
-    connector::unregisterConnector(kFuzzerConnectorId);
+    connector::ConnectorRegistry::global().erase(kFuzzerConnectorId);
     OperatorTestBase::TearDown();
   }
 

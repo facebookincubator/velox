@@ -55,6 +55,12 @@ class TableWriteMerge : public Operator {
   void close() override;
 
  private:
+  // Processes a batch of statistics rows.
+  void addStatisticsInput(const RowVectorPtr& input);
+
+  // Processes a batch of data rows (row counts, fragments, commit context).
+  void addDataInput(const RowVectorPtr& input);
+
   // Creates non-last output with fragments and last commit context only.
   RowVectorPtr createFragmentsOutput();
 
@@ -64,9 +70,6 @@ class TableWriteMerge : public Operator {
 
   // Creates the last output and fragment columns must be null.
   RowVectorPtr createLastOutput();
-
-  // Check if the input is statistics input.
-  bool isStatistics(RowVectorPtr input);
 
   std::unique_ptr<ColumnStatsCollector> statsCollector_;
   bool finished_{false};

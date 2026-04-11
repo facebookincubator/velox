@@ -339,7 +339,7 @@ void SelectiveFlatMapColumnReaderHelper<T, KeyNode, FormatData>::read(
     reader_.advanceFieldReader(child, offset);
   }
   for (auto* child : reader_.children_) {
-    child->read(offset, activeRows, mapNulls);
+    child->readWithTiming(offset, activeRows, mapNulls);
     child->addParentNulls(offset, mapNulls, rows);
   }
   reader_.lazyVectorReadOffset_ = offset;

@@ -55,7 +55,7 @@ OperatorTraceInputWriter::OperatorTraceInputWriter(
       traceDir_(std::move(traceDir)),
       fs_(filesystems::getFileSystem(traceDir_, nullptr)),
       pool_(pool),
-      serde_(getNamedVectorSerde(VectorSerde::Kind::kPresto)),
+      serde_(getNamedVectorSerde("Presto")),
       updateAndCheckTraceLimitCB_(std::move(updateAndCheckTraceLimitCB)) {
   traceFile_ = fs_->openFileForWrite(getOpTraceInputFilePath(traceDir_));
   VELOX_CHECK_NOT_NULL(traceFile_);
@@ -152,9 +152,9 @@ std::unique_ptr<folly::IOBuf> OperatorTraceSplitWriter::serialize(
   auto ioBuf =
       folly::IOBuf::create(sizeof(length) + split.size() + sizeof(crc32));
   folly::io::Appender appender(ioBuf.get(), 0);
-  appender.writeLE(length);
+  appender.writeLE<uint32_t>(length);
   appender.push(reinterpret_cast<const uint8_t*>(split.data()), length);
-  appender.writeLE(crc32);
+  appender.writeLE<uint32_t>(crc32);
   return ioBuf;
 }
 

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergConnector.h"
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -243,6 +244,28 @@ TEST_F(IcebergInsertTest, partitionMultiColumns) {
     exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(vectors);
   }
 }
+
+TEST_F(IcebergInsertTest, maxTargetFileSizeRotation) {
+  setConnectorSessionProperty(HiveConfig::kMaxTargetFileSizeSession, "4KB");
+
+  const auto outputPath = TempDirectoryPath::create()->getPath();
+  const auto rowType = ROW({"c0", "c1"}, {BIGINT(), VARCHAR()});
+  const auto vectors = createTestData(rowType, 10, 1'000);
+  const auto dataSink = createDataSinkAndAppendData(vectors, outputPath);
+  const auto commitTasks = dataSink->close();
+
+  ASSERT_EQ(listFiles(outputPath).size(), 5);
+
+  auto splits = createSplitsForDirectory(outputPath);
+  auto plan = exec::test::PlanBuilder()
+                  .startTableScan()
+                  .connectorId(test::kIcebergConnectorId)
+                  .outputType(rowType)
+                  .endTableScan()
+                  .planNode();
+  exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(vectors);
+}
+
 #endif
 
 } // namespace

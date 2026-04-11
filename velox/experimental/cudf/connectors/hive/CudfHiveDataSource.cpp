@@ -102,17 +102,26 @@ CudfHiveDataSource::CudfHiveDataSource(
   // Copy subfield filters
   for (const auto& [k, v] : tableHandle_->subfieldFilters()) {
     subfieldFilters_.emplace(k.clone(), v->clone());
-    // Add fields in the filter to the columns to read if not there
-    for (const auto& [field, _] : subfieldFilters_) {
-      if (readColumnSet_.count(field.toString()) == 0) {
-        readColumnSet_.emplace(field.toString());
-        readColumnNames_.emplace_back(field.toString());
-      }
-    }
   }
 
-  // Create remaining filter
-  auto remainingFilter = tableHandle_->remainingFilter();
+  // Extract additional simple filters from remainingFilter (same as CPU path).
+  // This extracts single-column filters like "col = 'X'" or "col <> 'Y'" from
+  // complex expressions and adds them to subfieldFilters_ for pushdown.
+  double sampleRate = 1.0;
+  auto remainingFilter =
+      facebook::velox::connector::hive::extractFiltersFromRemainingFilter(
+          tableHandle_->remainingFilter(),
+          expressionEvaluator_,
+          subfieldFilters_,
+          sampleRate);
+
+  // Add fields in the filter to the columns to read if not there
+  for (const auto& [field, _] : subfieldFilters_) {
+    if (readColumnSet_.count(field.toString()) == 0) {
+      readColumnSet_.emplace(field.toString());
+      readColumnNames_.emplace_back(field.toString());
+    }
+  }
   if (remainingFilter) {
     remainingFilterExprSet_ = expressionEvaluator_->compile(remainingFilter);
     for (const auto& field : remainingFilterExprSet_->distinctFields()) {
@@ -326,11 +335,7 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
       ? std::make_shared<CudfVector>(
             pool_, outputType_, nRows, std::move(cudfTable), stream_)
       : with_arrow::toVeloxColumn(
-            cudfTable->view(),
-            pool_,
-            outputType_->names(),
-            stream_,
-            get_temp_mr());
+            cudfTable->view(), pool_, outputType_, stream_, get_temp_mr());
   stream_.synchronize();
 
   // Check if conversion yielded a nullptr
@@ -573,7 +578,7 @@ CudfHiveDataSource::getRuntimeStats() {
       {std::string(connector::hive::HiveDataSource::kTotalScanTime),
        RuntimeMetric(
            ioStatistics_->totalScanTime(), RuntimeCounter::Unit::kNanos)},
-      {Connector::kTotalRemainingFilterTime,
+      {std::string(Connector::kTotalRemainingFilterTime),
        RuntimeMetric(
            totalRemainingFilterTime_.load(std::memory_order_relaxed),
            RuntimeCounter::Unit::kNanos)},

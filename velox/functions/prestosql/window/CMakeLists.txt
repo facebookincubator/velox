@@ -21,6 +21,8 @@ velox_add_library(
   FirstLastValue.cpp
   LeadLag.cpp
   WindowFunctionsRegistration.cpp
+  HEADERS
+  WindowFunctionsRegistration.h
 )
 
 velox_link_libraries(velox_window velox_buffer velox_exec velox_functions_window Folly::folly)

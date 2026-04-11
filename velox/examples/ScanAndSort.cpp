@@ -18,6 +18,7 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/common/FileSink.h"
@@ -92,7 +93,8 @@ int main(int argc, char** argv) {
       kHiveConnectorId,
       std::make_shared<config::ConfigBase>(
           std::unordered_map<std::string, std::string>()));
-  connector::registerConnector(hiveConnector);
+  connector::ConnectorRegistry::global().insert(
+      hiveConnector->connectorId(), hiveConnector);
 
   // To be able to read local files, we need to register the local file
   // filesystem. We also need to register the dwrf reader factory as well as a
@@ -126,7 +128,7 @@ int main(int argc, char** argv) {
 
   std::shared_ptr<folly::Executor> executor(
       std::make_shared<folly::CPUThreadPoolExecutor>(
-          folly::hardware_concurrency()));
+          folly::available_concurrency()));
 
   // Task is the top-level execution concept. A task needs a taskId (as a
   // string), the plan fragment to execute, a destination (only used for

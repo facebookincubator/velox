@@ -16,7 +16,10 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/Mutation.h"
+#include "velox/dwio/parquet/reader/ParquetStatsContext.h"
+#include "velox/dwio/parquet/reader/SemanticVersion.h"
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
+#include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
@@ -1163,6 +1166,33 @@ TEST_F(ParquetReaderTest, filterRowGroups) {
   EXPECT_EQ(reader->numberOfRows(), 10ULL);
 }
 
+TEST_F(ParquetReaderTest, shouldIgnoreStatsForParquetMRVersions) {
+  SemanticVersion v181("parquet-mr", 1, 8, 1);
+  ParquetStatsContext ctx181{std::optional<SemanticVersion>(v181)};
+  EXPECT_TRUE(ctx181.shouldIgnoreStatistics(thrift::Type::BYTE_ARRAY))
+      << "ParquetStatsContext(parquet-mr 1.8.1) should ignore string stats";
+
+  SemanticVersion v182("parquet-mr", 1, 8, 2);
+  ParquetStatsContext ctx182{std::optional<SemanticVersion>(v182)};
+  EXPECT_FALSE(ctx182.shouldIgnoreStatistics(thrift::Type::BYTE_ARRAY))
+      << "ParquetStatsContext(parquet-mr 1.8.2) should not ignore string stats";
+}
+
+// This test is to verify filterRowGroups() doesn't fail if offset is 0
+TEST_F(ParquetReaderTest, filterRowGroupsWithZeroOffset) {
+  auto rowType = ROW({"IDX"}, {INTEGER()});
+  const dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+  const std::string zeroOffsetPath(
+      getExampleFilePath("zero_offset_row_group.parquet"));
+
+  auto reader = createReader(zeroOffsetPath, readerOpts);
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(makeScanSpec(rowType));
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  EXPECT_EQ(reader->numberOfRows(), 1L);
+}
+
 TEST_F(ParquetReaderTest, parseLongTagged) {
   // This is a case for long with annonation read
   const std::string sample(getExampleFilePath("tagged_long.parquet"));
@@ -1198,7 +1228,7 @@ TEST_F(ParquetReaderTest, preloadSmallFile) {
   const auto fileSize = file->size();
   ASSERT_TRUE(
       fileSize <= dwio::common::ReaderOptions::kDefaultFilePreloadThreshold ||
-      fileSize <= dwio::common::ReaderOptions::kDefaultFooterEstimatedSize);
+      fileSize <= dwio::common::ReaderOptions::kDefaultFooterSpeculativeIoSize);
 
   // Check the whole file already loaded.
   ASSERT_EQ(file->bytesRead(), fileSize);
@@ -1792,322 +1822,186 @@ TEST_F(ParquetReaderTest, readerWithSchema) {
   EXPECT_EQ(reader.rowType()->toString(), schema->toString());
 }
 
-// Comprehensive test matrix covering all combinations:
-// - Nulls: No nulls, With nulls
-// - Dictionary: Enabled, Disabled
-// - Filter: None, IsNull, IsNotNull, Value filter
-// - Density: Dense (no deletions), Non-dense (with deletions/mutations)
+TEST_F(ParquetReaderTest, columnStatistics) {
+  auto data = makeRowVector(
+      {"a", "b", "c"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+          makeFlatVector<double>({1.1, 2.2, 3.3, 4.4, 5.5}),
+          makeFlatVector<std::string>({"aaa", "bbb", "ccc", "ddd", "eee"}),
+      });
 
-enum class FloatToDoubleFilter {
-  kNone,
-  kIsNull,
-  kIsNotNull,
-  kGreaterThanOrEqual, // Value filter: greater than or equal to a threshold
-  kMultiRange, // MultiRange filter: a < X OR a > Y
-};
-
-struct FloatToDoubleSpec {
-  std::vector<std::optional<float>> values;
-  std::vector<int64_t> ids;
-  bool enableDictionary{true};
-  FloatToDoubleFilter filter{FloatToDoubleFilter::kNone};
-  std::optional<double> filterValue; // Value for value-based filters
-  std::optional<double> filterLowerValue; // Lower bound for MultiRange filter
-  std::optional<double> filterUpperValue; // Upper bound for MultiRange filter
-  std::vector<vector_size_t> deletedRows;
-};
-
-struct FloatToDoubleTestParam {
-  bool hasNulls;
-  bool enableDictionary;
-  FloatToDoubleFilter filter;
-  bool isDense;
-
-  std::string toString() const {
-    return fmt::format(
-        "Nulls_{}_Dict_{}_Filter_{}_Dense_{}",
-        hasNulls ? "Yes" : "No",
-        enableDictionary ? "Yes" : "No",
-        filterName(filter),
-        isDense ? "Yes" : "No");
-  }
-
-  static std::string filterName(FloatToDoubleFilter filter) {
-    switch (filter) {
-      case FloatToDoubleFilter::kNone:
-        return "None";
-      case FloatToDoubleFilter::kIsNull:
-        return "IsNull";
-      case FloatToDoubleFilter::kIsNotNull:
-        return "IsNotNull";
-      case FloatToDoubleFilter::kGreaterThanOrEqual:
-        return "GreaterThanOrEqual";
-      case FloatToDoubleFilter::kMultiRange:
-        return "MultiRange";
-      default:
-        return "Unknown";
-    }
-  }
-};
-
-class FloatToDoubleEvolutionTest
-    : public ParquetReaderTest,
-      public testing::WithParamInterface<FloatToDoubleTestParam> {
- public:
-  static std::vector<FloatToDoubleTestParam> getTestParams() {
-    std::vector<FloatToDoubleTestParam> params;
-    for (bool hasNulls : {false, true}) {
-      for (bool enableDictionary : {false, true}) {
-        // When hasNulls is false, only test kNone, kGreaterThanOrEqual, and
-        // kMultiRange filter (kIsNull would match nothing, kIsNotNull is
-        // equivalent to kNone)
-        std::vector<FloatToDoubleFilter> filters;
-        if (hasNulls) {
-          filters = {
-              FloatToDoubleFilter::kNone,
-              FloatToDoubleFilter::kIsNull,
-              FloatToDoubleFilter::kIsNotNull,
-              FloatToDoubleFilter::kGreaterThanOrEqual,
-              FloatToDoubleFilter::kMultiRange};
-        } else {
-          filters = {
-              FloatToDoubleFilter::kNone,
-              FloatToDoubleFilter::kGreaterThanOrEqual,
-              FloatToDoubleFilter::kMultiRange};
-        }
-
-        for (auto filter : filters) {
-          for (bool isDense : {true, false}) {
-            params.push_back({hasNulls, enableDictionary, filter, isDense});
-          }
-        }
-      }
-    }
-    return params;
-  }
-
-  void runFloatToDoubleScenario(const FloatToDoubleSpec& spec);
-};
-
-void FloatToDoubleEvolutionTest::runFloatToDoubleScenario(
-    const FloatToDoubleSpec& spec) {
-  ASSERT_EQ(spec.values.size(), spec.ids.size());
-  const vector_size_t numRows = spec.ids.size();
-
-  auto floatVector = makeNullableFlatVector<float>(spec.values);
-  auto idVector =
-      makeFlatVector<int64_t>(numRows, [&](auto row) { return spec.ids[row]; });
-
-  RowVectorPtr writeData = makeRowVector({floatVector, idVector});
-  RowTypePtr writeSchema = ROW({"float_col", "id"}, {REAL(), BIGINT()});
-
-  auto sink = std::make_unique<MemorySink>(
-      1024 * 1024, dwio::common::FileSink::Options{.pool = leafPool_.get()});
-  auto sinkPtr = sink.get();
-
-  parquet::WriterOptions writerOptions;
-  writerOptions.memoryPool = leafPool_.get();
-  writerOptions.enableDictionary = spec.enableDictionary;
-
-  auto writer = std::make_unique<facebook::velox::parquet::Writer>(
-      std::move(sink), writerOptions, rootPool_, writeSchema);
-  writer->write(writeData);
-  writer->close();
-
-  RowTypePtr readSchema = ROW({"float_col", "id"}, {DOUBLE(), BIGINT()});
-
+  auto* sink = write(data);
   dwio::common::ReaderOptions readerOptions{leafPool_.get()};
-  readerOptions.setFileSchema(readSchema);
+  auto reader = createReaderInMemory(*sink, readerOptions);
+  const auto& schema = reader->typeWithId();
 
-  std::string dataBuf(sinkPtr->data(), sinkPtr->size());
-  auto file = std::make_shared<InMemoryReadFile>(std::move(dataBuf));
-  auto buffer = std::make_unique<dwio::common::BufferedInput>(
-      file, readerOptions.memoryPool());
-  auto reader =
-      std::make_unique<ParquetReader>(std::move(buffer), readerOptions);
+  // Root ROW type — no stats for non-leaf.
+  EXPECT_EQ(reader->columnStatistics(schema->id()), nullptr);
 
-  RowReaderOptions rowReaderOpts;
-  rowReaderOpts.select(
-      std::make_shared<facebook::velox::dwio::common::ColumnSelector>(
-          readSchema, readSchema->names()));
-  auto scanSpec = makeScanSpec(readSchema);
+  // Out of range.
+  EXPECT_EQ(reader->columnStatistics(schema->maxId() + 1), nullptr);
 
-  // Apply IsNull or IsNotNull filter if specified
-  switch (spec.filter) {
-    case FloatToDoubleFilter::kNone:
-      break;
-    case FloatToDoubleFilter::kIsNull: {
-      auto* floatChild =
-          scanSpec->getOrCreateChild(common::Subfield("float_col"));
-      floatChild->setFilter(exec::isNull());
-      break;
-    }
-    case FloatToDoubleFilter::kIsNotNull: {
-      auto* floatChild =
-          scanSpec->getOrCreateChild(common::Subfield("float_col"));
-      floatChild->setFilter(exec::isNotNull());
-      break;
-    }
-    case FloatToDoubleFilter::kGreaterThanOrEqual: {
-      ASSERT_TRUE(spec.filterValue.has_value());
-      auto* floatChild =
-          scanSpec->getOrCreateChild(common::Subfield("float_col"));
-      floatChild->setFilter(
-          exec::greaterThanOrEqualDouble(spec.filterValue.value()));
-      break;
-    }
-    case FloatToDoubleFilter::kMultiRange: {
-      ASSERT_TRUE(spec.filterLowerValue.has_value());
-      ASSERT_TRUE(spec.filterUpperValue.has_value());
-      auto* floatChild =
-          scanSpec->getOrCreateChild(common::Subfield("float_col"));
-      // Create a MultiRange filter: a < lower OR a > upper
-      floatChild->setFilter(
-          exec::orFilter(
-              exec::lessThanDouble(spec.filterLowerValue.value()),
-              exec::greaterThanDouble(spec.filterUpperValue.value())));
-      break;
-    }
+  // BIGINT column.
+  {
+    auto stats = reader->columnStatistics(schema->childByName("a")->id());
+    ASSERT_NE(stats, nullptr);
+    EXPECT_EQ(stats->getNumberOfValues(), 5);
+    EXPECT_FALSE(stats->hasNull().value());
+    auto* intStats =
+        dynamic_cast<dwio::common::IntegerColumnStatistics*>(stats.get());
+    ASSERT_NE(intStats, nullptr);
+    EXPECT_EQ(intStats->getMinimum(), 1);
+    EXPECT_EQ(intStats->getMaximum(), 5);
   }
 
-  rowReaderOpts.setScanSpec(scanSpec);
+  // DOUBLE column.
+  {
+    auto stats = reader->columnStatistics(schema->childByName("b")->id());
+    ASSERT_NE(stats, nullptr);
+    EXPECT_EQ(stats->getNumberOfValues(), 5);
+    EXPECT_FALSE(stats->hasNull().value());
+    auto* doubleStats =
+        dynamic_cast<dwio::common::DoubleColumnStatistics*>(stats.get());
+    ASSERT_NE(doubleStats, nullptr);
+    EXPECT_EQ(doubleStats->getMinimum(), 1.1);
+    EXPECT_EQ(doubleStats->getMaximum(), 5.5);
+  }
+
+  // VARCHAR column.
+  {
+    auto stats = reader->columnStatistics(schema->childByName("c")->id());
+    ASSERT_NE(stats, nullptr);
+    EXPECT_EQ(stats->getNumberOfValues(), 5);
+    EXPECT_FALSE(stats->hasNull().value());
+    auto* stringStats =
+        dynamic_cast<dwio::common::StringColumnStatistics*>(stats.get());
+    ASSERT_NE(stringStats, nullptr);
+    EXPECT_EQ(stringStats->getMinimum(), "aaa");
+    EXPECT_EQ(stringStats->getMaximum(), "eee");
+  }
+}
+
+TEST_F(ParquetReaderTest, columnStatisticsWithNulls) {
+  auto data = makeRowVector(
+      {"a"},
+      {
+          makeNullableFlatVector<int64_t>(
+              {1, std::nullopt, 3, std::nullopt, 5}),
+      });
+
+  auto* sink = write(data);
+  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  auto reader = createReaderInMemory(*sink, readerOptions);
+  const auto& schema = reader->typeWithId();
+
+  auto stats = reader->columnStatistics(schema->childByName("a")->id());
+  ASSERT_NE(stats, nullptr);
+  EXPECT_EQ(stats->getNumberOfValues(), 3);
+  EXPECT_TRUE(stats->hasNull().value());
+  auto* intStats =
+      dynamic_cast<dwio::common::IntegerColumnStatistics*>(stats.get());
+  ASSERT_NE(intStats, nullptr);
+  EXPECT_EQ(intStats->getMinimum(), 1);
+  EXPECT_EQ(intStats->getMaximum(), 5);
+}
+
+TEST_F(ParquetReaderTest, columnStatisticsMultipleRowGroups) {
+  // Use a small flush size to force multiple row groups.
+  parquet::WriterOptions writerOptions;
+  writerOptions.memoryPool = rootPool_.get();
+  writerOptions.flushPolicyFactory = []() {
+    return std::make_unique<parquet::LambdaFlushPolicy>(
+        /*rowsInRowGroup=*/5,
+        /*bytesInRowGroup=*/1'024 * 1'024,
+        []() { return false; });
+  };
+
+  auto data = makeRowVector(
+      {"a"},
+      {
+          makeFlatVector<int64_t>({10, 20, 30, 40, 50, 1, 2, 3, 4, 5}),
+      });
+
+  auto* sink = write(data, writerOptions);
+  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  auto reader = createReaderInMemory(*sink, readerOptions);
+
+  // Verify we have multiple row groups.
+  ASSERT_GT(reader->fileMetaData().numRowGroups(), 1);
+
+  const auto& schema = reader->typeWithId();
+  auto stats = reader->columnStatistics(schema->childByName("a")->id());
+  ASSERT_NE(stats, nullptr);
+  EXPECT_EQ(stats->getNumberOfValues(), 10);
+  EXPECT_FALSE(stats->hasNull().value());
+  auto* intStats =
+      dynamic_cast<dwio::common::IntegerColumnStatistics*>(stats.get());
+  ASSERT_NE(intStats, nullptr);
+  // Global min/max across all row groups.
+  EXPECT_EQ(intStats->getMinimum(), 1);
+  EXPECT_EQ(intStats->getMaximum(), 50);
+}
+
+TEST_F(ParquetReaderTest, readTimeMillis) {
+  // Write TIME data using the parquet writer.
+  // The writer exports Velox TIME as Arrow time32 with milliseconds unit,
+  // which maps to Parquet TIME_MILLIS (INT32).
+  const auto rowType = ROW({"time_col"}, {TIME()});
+
+  auto data = makeRowVector(
+      rowType->names(),
+      {makeNullableFlatVector<int64_t>(
+          {1, 1'000, 3'600'000, std::nullopt, 43'200'000, 86'399'999},
+          TIME())});
+  auto sink = write(data);
+
+  dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+  auto reader = createReaderInMemory(*sink, readerOpts);
+
+  EXPECT_EQ(reader->numberOfRows(), 6ULL);
+
+  auto type = reader->typeWithId();
+  EXPECT_EQ(type->size(), 1ULL);
+  auto col0 = type->childAt(0);
+  EXPECT_TRUE(col0->type()->isTime());
+
+  auto rowReaderOpts = getReaderOpts(rowType);
+  rowReaderOpts.setScanSpec(makeScanSpec(rowType));
   auto rowReader = reader->createRowReader(rowReaderOpts);
 
-  std::vector<bool> deletedFlags(numRows, false);
-  for (auto index : spec.deletedRows) {
-    ASSERT_LT(index, numRows);
-    deletedFlags[index] = true;
-  }
-
-  std::vector<vector_size_t> expectedIndices;
-  expectedIndices.reserve(numRows);
-  for (vector_size_t row = 0; row < numRows; ++row) {
-    if (deletedFlags[row]) {
-      continue;
-    }
-
-    bool passes = false;
-    switch (spec.filter) {
-      case FloatToDoubleFilter::kNone:
-        passes = true;
-        break;
-      case FloatToDoubleFilter::kIsNull:
-        passes = !spec.values[row].has_value();
-        break;
-      case FloatToDoubleFilter::kIsNotNull:
-        passes = spec.values[row].has_value();
-        break;
-      case FloatToDoubleFilter::kGreaterThanOrEqual:
-        passes = spec.values[row].has_value() &&
-            static_cast<double>(*spec.values[row]) >= spec.filterValue.value();
-        break;
-      case FloatToDoubleFilter::kMultiRange:
-        passes = spec.values[row].has_value() &&
-            (static_cast<double>(*spec.values[row]) <
-                 spec.filterLowerValue.value() ||
-             static_cast<double>(*spec.values[row]) >
-                 spec.filterUpperValue.value());
-        break;
-    }
-
-    if (passes) {
-      expectedIndices.push_back(row);
-    }
-  }
-
-  std::vector<std::optional<double>> expectedDoubles(expectedIndices.size());
-  for (size_t i = 0; i < expectedIndices.size(); ++i) {
-    const auto originalIndex = expectedIndices[i];
-    if (!spec.values[originalIndex].has_value()) {
-      expectedDoubles[i] = std::nullopt;
-    } else {
-      expectedDoubles[i] = static_cast<double>(*spec.values[originalIndex]);
-    }
-  }
-
-  auto expectedFloat = makeNullableFlatVector<double>(expectedDoubles);
-  auto expectedId = makeFlatVector<int64_t>(
-      expectedIndices.size(),
-      [&](auto row) { return spec.ids[expectedIndices[row]]; });
-  RowVectorPtr expected = makeRowVector({expectedFloat, expectedId});
-
-  if (spec.deletedRows.empty() && spec.filter != FloatToDoubleFilter::kIsNull &&
-      spec.filter != FloatToDoubleFilter::kIsNotNull &&
-      spec.filter != FloatToDoubleFilter::kGreaterThanOrEqual &&
-      spec.filter != FloatToDoubleFilter::kMultiRange) {
-    assertReadWithReaderAndExpected(
-        readSchema, *rowReader, expected, *leafPool_);
-    return;
-  }
-
-  VectorPtr result = BaseVector::create(readSchema, 0, leafPool_.get());
-  vector_size_t scanned = 0;
-  std::vector<uint64_t> deleted(bits::nwords(numRows), 0);
-  if (spec.deletedRows.empty()) {
-    scanned = rowReader->next(numRows, result);
-  } else {
-    for (auto index : spec.deletedRows) {
-      bits::setBit(deleted.data(), index);
-    }
-    dwio::common::Mutation mutation;
-    mutation.deletedRows = deleted.data();
-    scanned = rowReader->next(numRows, result, &mutation);
-  }
-
-  EXPECT_GT(scanned, 0);
-  EXPECT_GE(scanned, expected->size());
-  ASSERT_TRUE(result != nullptr);
-  auto rowVector = result->as<RowVector>();
-  ASSERT_TRUE(rowVector != nullptr);
-  ASSERT_EQ(rowVector->size(), expected->size());
-  assertEqualVectorPart(expected, result, 0);
+  assertReadWithReaderAndExpected(rowType, *rowReader, data, *leafPool_);
 }
 
-TEST_P(FloatToDoubleEvolutionTest, readFloatToDouble) {
-  const auto& param = GetParam();
-  FloatToDoubleSpec spec;
-  constexpr vector_size_t kSize = 200;
-  spec.enableDictionary = param.enableDictionary;
-  spec.values.resize(kSize);
-  spec.ids.resize(kSize);
+TEST_F(ParquetReaderTest, readTimeWithMultipleColumns) {
+  const auto rowType =
+      ROW({"id", "time_col", "name"}, {INTEGER(), TIME(), VARCHAR()});
 
-  for (vector_size_t row = 0; row < kSize; ++row) {
-    if (param.hasNulls && row % 5 == 0) {
-      spec.values[row] = std::nullopt;
-    } else {
-      // Use a value pattern that works for both dictionary and direct encoding
-      float val =
-          static_cast<float>(row % 10) * 1.1f + static_cast<float>(row) * 0.01f;
-      spec.values[row] = val;
-    }
-    spec.ids[row] = row;
-  }
+  auto data = makeRowVector(
+      rowType->names(),
+      {
+          makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
+          makeFlatVector<int64_t>(
+              {0, 1'000, 3'600'000, 43'200'000, 86'399'999}, TIME()),
+          makeFlatVector<StringView>({"a", "b", "c", "d", "e"}),
+      });
 
-  spec.filter = param.filter;
+  auto sink = write(data);
 
-  // Set filter value for value-based filters
-  if (param.filter == FloatToDoubleFilter::kGreaterThanOrEqual) {
-    // Filter values greater than or equal to 5.0 (this should match
-    // approximately half the rows)
-    spec.filterValue = 5.0;
-  } else if (param.filter == FloatToDoubleFilter::kMultiRange) {
-    // Filter values < 3.0 OR > 7.0
-    spec.filterLowerValue = 3.0;
-    spec.filterUpperValue = 7.0;
-  }
+  dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+  auto reader = createReaderInMemory(*sink, readerOpts);
 
-  if (!param.isDense) {
-    // Add some deleted rows scattered throughout
-    spec.deletedRows = {5, 20, 55, 99, 150, 199};
-  }
+  EXPECT_EQ(reader->numberOfRows(), 5ULL);
 
-  runFloatToDoubleScenario(spec);
+  auto type = reader->typeWithId();
+  EXPECT_EQ(type->size(), 3ULL);
+  EXPECT_EQ(type->childAt(0)->type()->kind(), TypeKind::INTEGER);
+  EXPECT_TRUE(type->childAt(1)->type()->isTime());
+  EXPECT_EQ(type->childAt(2)->type()->kind(), TypeKind::VARCHAR);
+
+  auto rowReaderOpts = getReaderOpts(rowType);
+  rowReaderOpts.setScanSpec(makeScanSpec(rowType));
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  assertReadWithReaderAndExpected(rowType, *rowReader, data, *leafPool_);
 }
-
-INSTANTIATE_TEST_SUITE_P(
-    FloatToDoubleEvolution,
-    FloatToDoubleEvolutionTest,
-    testing::ValuesIn(FloatToDoubleEvolutionTest::getTestParams()),
-    [](const testing::TestParamInfo<FloatToDoubleTestParam>& info) {
-      return info.param.toString();
-    });

@@ -18,7 +18,7 @@
 #include <folly/Random.h>
 #include <gtest/gtest.h>
 #include <vector>
-#include "folly/experimental/EventCount.h"
+#include "folly/synchronization/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
@@ -52,9 +52,9 @@ class SerializedPageFileTest : public ::testing::TestWithParam<TestParams>,
     const auto& params = GetParam();
 
     deregisterVectorSerde();
-    deregisterNamedVectorSerde(VectorSerde::Kind::kPresto);
-    deregisterNamedVectorSerde(VectorSerde::Kind::kCompactRow);
-    deregisterNamedVectorSerde(VectorSerde::Kind::kUnsafeRow);
+    deregisterNamedVectorSerde("Presto");
+    deregisterNamedVectorSerde("CompactRow");
+    deregisterNamedVectorSerde("UnsafeRow");
 
     setupSerde(params.serdeType);
     filesystems::registerLocalFileSystem();
@@ -64,9 +64,9 @@ class SerializedPageFileTest : public ::testing::TestWithParam<TestParams>,
 
   void TearDown() override {
     deregisterVectorSerde();
-    deregisterNamedVectorSerde(VectorSerde::Kind::kPresto);
-    deregisterNamedVectorSerde(VectorSerde::Kind::kCompactRow);
-    deregisterNamedVectorSerde(VectorSerde::Kind::kUnsafeRow);
+    deregisterNamedVectorSerde("Presto");
+    deregisterNamedVectorSerde("CompactRow");
+    deregisterNamedVectorSerde("UnsafeRow");
   }
 
   void setupSerde(SerdeType serdeType) {
@@ -74,17 +74,17 @@ class SerializedPageFileTest : public ::testing::TestWithParam<TestParams>,
       case SerdeType::kPresto:
         serializer::presto::PrestoVectorSerde::registerVectorSerde();
         serializer::presto::PrestoVectorSerde::registerNamedVectorSerde();
-        serde_ = getNamedVectorSerde(VectorSerde::Kind::kPresto);
+        serde_ = getNamedVectorSerde("Presto");
         break;
       case SerdeType::kCompactRow:
         serializer::CompactRowVectorSerde::registerVectorSerde();
         serializer::CompactRowVectorSerde::registerNamedVectorSerde();
-        serde_ = getNamedVectorSerde(VectorSerde::Kind::kCompactRow);
+        serde_ = getNamedVectorSerde("CompactRow");
         break;
       case SerdeType::kUnsafeRow:
         serializer::spark::UnsafeRowVectorSerde::registerVectorSerde();
         serializer::spark::UnsafeRowVectorSerde::registerNamedVectorSerde();
-        serde_ = getNamedVectorSerde(VectorSerde::Kind::kUnsafeRow);
+        serde_ = getNamedVectorSerde("UnsafeRow");
         break;
     }
   }

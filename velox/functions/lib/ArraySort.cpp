@@ -430,12 +430,12 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> signatures(
 
   if (withComparator) {
     signatures.push_back(
-        // array(T), function(T,T,bigint) -> array(T)
+        // array(T), function(T,T,integer) -> array(T)
         exec::FunctionSignatureBuilder()
             .typeVariable("T")
             .returnType("array(T)")
             .argumentType("array(T)")
-            .constantArgumentType("function(T,T,bigint)")
+            .constantArgumentType("function(T,T,integer)")
             .build());
   }
   return signatures;
@@ -533,7 +533,7 @@ core::TypedExprPtr rewriteArraySortCall(
   if (lambda->signature()->size() != 2) {
     return nullptr;
   }
-  static const std::string kNotSupported =
+  static constexpr const char* kNotSupported =
       "array_sort with comparator lambda that cannot be rewritten "
       "into a transform is not supported: {}";
 

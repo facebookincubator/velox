@@ -23,11 +23,14 @@
 #include <type_traits>
 #include <utility>
 #include "velox/common/time/CpuWallTimer.h"
+#include "velox/dwio/common/Options.h"
+#include "velox/dwio/common/TypeWithId.h"
 #include "velox/dwio/common/UnitLoader.h"
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/io/IoStatistics.h"
+#include "velox/type/Type.h"
 
 namespace facebook::velox::dwio::common {
 
@@ -139,6 +142,12 @@ class ColumnStatistics {
     VELOX_CHECK(
         !numDistinct_.has_value(), "numDistinct_ can be set only once.");
     numDistinct_ = count;
+  }
+
+  /// Returns true if there are no non-null values (value count is known to be
+  /// zero).
+  bool isAllNull() const {
+    return valueCount_.has_value() && valueCount_.value() == 0;
   }
 
   /**
@@ -569,23 +578,31 @@ auto withDecompressStats(io::IoCounter* counter, F&& func)
 /// different types of measurements (decompression, encoding, etc.).
 /// Can be used by any file format reader (DWRF, Nimble, Parquet, etc.).
 struct ColumnMetrics {
+  explicit ColumnMetrics(TypeKind type = TypeKind::INVALID) : typeKind(type) {}
+
+  TypeKind typeKind;
   io::IoCounter decompressCPUTimeNanos;
+  io::IoCounter decodeCPUTimeNanos;
 
   /// Merges stats from another ColumnMetrics instance.
   void merge(const ColumnMetrics& other) {
     decompressCPUTimeNanos.merge(other.decompressCPUTimeNanos);
+    decodeCPUTimeNanos.merge(other.decodeCPUTimeNanos);
   }
 };
 
 /// Thread-safe collection of per-column metrics keyed by nodeId.
 /// Can be used by any file format reader (DWRF, Nimble, Parquet, etc.).
 struct ColumnMetricsSet {
-  /// Gets or creates a ColumnMetrics for a column.
-  ColumnMetrics* getOrCreate(uint32_t nodeId) {
+  /// Gets or creates a ColumnMetrics for a column. Sets typeKind when creating.
+  ColumnMetrics* getOrCreate(
+      uint32_t nodeId,
+      TypeKind typeKind = TypeKind::INVALID) {
     auto locked = map_.wlock();
     auto it = locked->find(nodeId);
     if (it == locked->end()) {
-      it = locked->emplace(nodeId, std::make_unique<ColumnMetrics>()).first;
+      it = locked->emplace(nodeId, std::make_unique<ColumnMetrics>(typeKind))
+               .first;
     }
     return it->second.get();
   }
@@ -599,6 +616,7 @@ struct ColumnMetricsSet {
       if (it == dstLocked->end()) {
         it =
             dstLocked->emplace(nodeId, std::make_unique<ColumnMetrics>()).first;
+        it->second->typeKind = srcStats->typeKind;
       }
       it->second->merge(*srcStats);
     }
@@ -609,24 +627,40 @@ struct ColumnMetricsSet {
       std::unordered_map<std::string, RuntimeMetric>& result) const {
     auto statsLocked = map_.rlock();
     for (const auto& [nodeId, stats] : *statsLocked) {
-      const auto& counter = stats->decompressCPUTimeNanos;
-      if (counter.count() == 0) {
-        continue;
+      // Export decompression timing.
+      const auto& decompressCounter = stats->decompressCPUTimeNanos;
+      if (decompressCounter.count() > 0) {
+        result.emplace(
+            fmt::format(
+                "column_{}.{}.decompressCPUTimeNanos",
+                nodeId,
+                TypeKindName::toName(stats->typeKind)),
+            RuntimeMetric{
+                saturateCast(decompressCounter.sum()),
+                decompressCounter.count(),
+                saturateCast(decompressCounter.min()),
+                saturateCast(decompressCounter.max()),
+                RuntimeCounter::Unit::kNanos});
       }
-      result.emplace(
-          fmt::format("column_{}.decompressCPUTimeNanos", nodeId),
-          RuntimeMetric{
-              static_cast<int64_t>(counter.sum()),
-              static_cast<int64_t>(counter.count()),
-              static_cast<int64_t>(counter.min()),
-              static_cast<int64_t>(counter.max()),
-              RuntimeCounter::Unit::kNanos});
+      // Export decode timing.
+      const auto& decodeCounter = stats->decodeCPUTimeNanos;
+      if (decodeCounter.count() > 0) {
+        result.emplace(
+            fmt::format(
+                "column_{}.{}.decodeCPUTimeNanos",
+                nodeId,
+                TypeKindName::toName(stats->typeKind)),
+            RuntimeMetric{
+                saturateCast(decodeCounter.sum()),
+                decodeCounter.count(),
+                saturateCast(decodeCounter.min()),
+                saturateCast(decodeCounter.max()),
+                RuntimeCounter::Unit::kNanos});
+      }
     }
   }
 
  private:
-  // Per-column stats keyed by nodeId. Uses unique_ptr because IoCounter
-  // contains std::atomic and is not copyable.
   folly::Synchronized<
       folly::F14FastMap<uint32_t, std::unique_ptr<ColumnMetrics>>>
       map_;
@@ -643,6 +677,18 @@ struct ColumnReaderStatistics {
   // Per-column decompression metrics. Only populated when column stats
   // collection is enabled.
   std::optional<ColumnMetricsSet> columnMetricsSet;
+
+  /// Initializes column stats collection for the given schema if enabled in
+  /// options. Recursively registers metrics for all columns in the type tree.
+  void initColumnStatsCollection(
+      const TypeWithId& schema,
+      const RowReaderOptions& options) {
+    if (!options.collectColumnCpuMetrics()) {
+      return;
+    }
+    columnMetricsSet.emplace();
+    registerColumnMetricsImpl(schema);
+  }
 
   /// Merges all stats from another ColumnReaderStatistics instance.
   void mergeFrom(const ColumnReaderStatistics& other) {
@@ -676,6 +722,16 @@ struct ColumnReaderStatistics {
     }
     if (columnMetricsSet) {
       columnMetricsSet->toRuntimeMetrics(result);
+    }
+  }
+
+ private:
+  void registerColumnMetricsImpl(const TypeWithId& node) {
+    columnMetricsSet->getOrCreate(node.id(), node.type()->kind());
+    for (uint32_t i = 0; i < node.size(); ++i) {
+      if (const auto* child = node.childAt(i).get()) {
+        registerColumnMetricsImpl(*child);
+      }
     }
   }
 };

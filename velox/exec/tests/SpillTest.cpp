@@ -45,7 +45,7 @@ class TestRuntimeStatWriter : public BaseRuntimeStatWriter {
       std::unordered_map<std::string, RuntimeMetric>& stats)
       : stats_{stats} {}
 
-  void addRuntimeStat(const std::string& name, const RuntimeCounter& value)
+  void addRuntimeStat(std::string_view name, const RuntimeCounter& value)
       override {
     addOperatorRuntimeStats(name, value, stats_);
   }
@@ -78,6 +78,10 @@ struct TestParam {
         enablePrefixSort);
   }
 };
+
+inline void PrintTo(const TestParam& param, std::ostream* os) {
+  *os << param.toString();
+}
 
 class SpillTest : public ::testing::TestWithParam<uint32_t>,
                   public facebook::velox::test::VectorTestBase {
@@ -129,7 +133,7 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
       facebook::velox::serializer::presto::PrestoVectorSerde::
           registerVectorSerde();
     }
-    if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kPresto)) {
+    if (!isRegisteredNamedVectorSerde("Presto")) {
       facebook::velox::serializer::presto::PrestoVectorSerde::
           registerNamedVectorSerde();
     }

@@ -57,7 +57,8 @@ Window::Window(
   if (spillConfig == nullptr &&
       operatorCtx_->driverCtx()->queryConfig().windowSpillEnabled()) {
     auto lockedStats = stats_.wlock();
-    lockedStats->runtimeStats.emplace(kSpillNotSupported, RuntimeMetric(1));
+    lockedStats->runtimeStats.emplace(
+        std::string(kSpillNotSupported), RuntimeMetric(1));
   }
   if (windowNode->inputsSorted()) {
     if (supportRowsStreaming()) {
@@ -278,8 +279,11 @@ void Window::reclaim(
     // TODO Add support for spilling after noMoreInput().
     LOG(WARNING)
         << "Can't reclaim from window operator which has started producing output: "
-        << pool()->name() << ", usage: " << succinctBytes(pool()->usedBytes())
-        << ", reservation: " << succinctBytes(pool()->reservedBytes());
+        << pool()->name() << ", root pool: " << pool()->root()->name()
+        << ", used: " << succinctBytes(pool()->usedBytes())
+        << ", reservation: " << succinctBytes(pool()->reservedBytes())
+        << ", root pool reservation: "
+        << succinctBytes(pool()->root()->reservedBytes());
     return;
   }
 

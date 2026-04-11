@@ -68,6 +68,12 @@ class QueryConfig {
   static constexpr const char* kExprEvalSimplified =
       "expression.eval_simplified";
 
+  /// Whether to enable the FlatNoNulls fast path for expression evaluation.
+  /// When enabled, expressions skip null checking and vector decoding when all
+  /// inputs are flat-encoded with no nulls. True by default.
+  static constexpr const char* kExprEvalFlatNoNulls =
+      "expression.eval_flat_no_nulls";
+
   /// Whether to track CPU usage for individual expressions (supported by call
   /// and cast expressions). False by default. Can be expensive when processing
   /// small batches, e.g. < 10K rows.
@@ -80,6 +86,25 @@ class QueryConfig {
   /// only specific functions need to be monitored.
   static constexpr const char* kExprTrackCpuUsageForFunctions =
       "expression.track_cpu_usage_for_functions";
+
+  /// Enables adaptive per-function CPU usage sampling. When enabled, each
+  /// function is calibrated over the first 6 batches (1 warmup + 5
+  /// calibration) to measure the overhead of CPU tracking (clock_gettime).
+  /// Functions where tracking overhead exceeds
+  /// kExprAdaptiveCpuSamplingMaxOverheadPct are automatically sampled at a
+  /// rate proportional to their overhead. Functions with low overhead are
+  /// always tracked. Disabled by default.
+  static constexpr const char* kExprAdaptiveCpuSampling =
+      "expression.adaptive_cpu_sampling";
+
+  /// Maximum acceptable overhead percentage for CPU tracking per function.
+  /// Used with kExprAdaptiveCpuSampling. Functions whose CPU tracking overhead
+  /// exceeds this threshold are sampled at a rate of
+  /// ceil(overhead_pct / max_overhead_pct). For example, with max_overhead=1.0,
+  /// a function with 70% tracking overhead is sampled every 70th batch.
+  /// Default: 1.0 (1% overhead target).
+  static constexpr const char* kExprAdaptiveCpuSamplingMaxOverheadPct =
+      "expression.adaptive_cpu_sampling_max_overhead_pct";
 
   /// Controls whether non-deterministic expressions are deduplicated during
   /// compilation. This is intended for testing and debugging purposes. By
@@ -362,6 +387,10 @@ class QueryConfig {
   static constexpr const char* kRowNumberSpillEnabled =
       "row_number_spill_enabled";
 
+  /// MarkDistinct spilling flag, only applies if "spill_enabled" flag is set.
+  static constexpr const char* kMarkDistinctSpillEnabled =
+      "mark_distinct_spill_enabled";
+
   /// TopNRowNumber spilling flag, only applies if "spill_enabled" flag is set.
   static constexpr const char* kTopNRowNumberSpillEnabled =
       "topn_row_number_spill_enabled";
@@ -446,6 +475,12 @@ class QueryConfig {
   static constexpr const char* kHashJoinSpillFileCreateConfig =
       "hash_join_spill_file_create_config";
 
+  /// Config used to create row number spill files. This config is provided to
+  /// underlying file system and the config is free form. The form should be
+  /// defined by the underlying file system.
+  static constexpr const char* kRowNumberSpillFileCreateConfig =
+      "row_number_spill_file_create_config";
+
   /// Default offset spill start partition bit.
   /// 'kSpillNumPartitionBits' together to
   /// calculate the spilling partition number for join spill or aggregation
@@ -507,6 +542,10 @@ class QueryConfig {
   static constexpr const char* kSparkBloomFilterMaxNumBits =
       "spark.bloom_filter.max_num_bits";
 
+  /// The max number of items to use for the bloom filter.
+  static constexpr const char* kSparkBloomFilterMaxNumItems =
+      "spark.bloom_filter.max_num_items";
+
   /// The current spark partition id.
   static constexpr const char* kSparkPartitionId = "spark.partition_id";
 
@@ -550,6 +589,11 @@ class QueryConfig {
   /// filter) and push down to upstream operators.
   static constexpr const char* kHashProbeDynamicFilterPushdownEnabled =
       "hash_probe_dynamic_filter_pushdown_enabled";
+
+  /// Whether hash probe can generate dynamic filter for string types and
+  /// push down to upstream operators.
+  static constexpr const char* kHashProbeStringDynamicFilterPushdownEnabled =
+      "hash_probe_string_dynamic_filter_pushdown_enabled";
 
   /// The maximum byte size of Bloom filter that can be generated from hash
   /// probe.  When set to 0, no Bloom filter will be generated.  To achieve
@@ -827,7 +871,8 @@ class QueryConfig {
 
   /// If this is true, then the unnest operator might split output for each
   /// input batch based on the output batch size control. Otherwise, it produces
-  /// a single output for each input batch.
+  /// a single output for each input batch. This can be overridden on a per
+  /// operator basis by the splitOutput parameter in the UnnestPlanNode.
   static constexpr const char* kUnnestSplitOutput = "unnest_split_output";
 
   /// Priority of the query in the memory pool reclaimer. Lower value means
@@ -856,6 +901,13 @@ class QueryConfig {
   /// join HashBuild.
   static constexpr const char* kJoinBuildVectorHasherMaxNumDistinct =
       "join_build_vector_hasher_max_num_distinct";
+
+  /// Batch size threshold for zero-copy optimization in MarkSorted operator.
+  /// For batches smaller than this threshold, the operator holds a reference to
+  /// the entire input batch instead of copying key columns for cross-batch
+  /// comparison.
+  static constexpr const char* kMarkSortedZeroCopyThreshold =
+      "mark_sorted_zero_copy_threshold";
 
   enum class RowSizeTrackingMode {
     DISABLED = 0,
@@ -1126,6 +1178,10 @@ class QueryConfig {
     return get<bool>(kExprEvalSimplified, false);
   }
 
+  bool exprEvalFlatNoNulls() const {
+    return get<bool>(kExprEvalFlatNoNulls, true);
+  }
+
   bool parallelOutputJoinBuildRowsEnabled() const {
     return get<bool>(kParallelOutputJoinBuildRowsEnabled, false);
   }
@@ -1164,6 +1220,10 @@ class QueryConfig {
 
   bool rowNumberSpillEnabled() const {
     return get<bool>(kRowNumberSpillEnabled, true);
+  }
+
+  bool markDistinctSpillEnabled() const {
+    return get<bool>(kMarkDistinctSpillEnabled, false);
   }
 
   bool topNRowNumberSpillEnabled() const {
@@ -1241,6 +1301,10 @@ class QueryConfig {
     return get<std::string>(kHashJoinSpillFileCreateConfig, "");
   }
 
+  std::string rowNumberSpillFileCreateConfig() const {
+    return get<std::string>(kRowNumberSpillFileCreateConfig, "");
+  }
+
   int32_t minSpillableReservationPct() const {
     constexpr int32_t kDefaultPct = 5;
     return get<int32_t>(kMinSpillableReservationPct, kDefaultPct);
@@ -1300,17 +1364,14 @@ class QueryConfig {
     return get<int64_t>(kSparkBloomFilterNumBits, kDefault);
   }
 
-  // Spark kMaxNumBits is 67'108'864, but velox has memory limit sizeClassSizes
-  // 256, so decrease it to not over memory limit.
   int64_t sparkBloomFilterMaxNumBits() const {
-    constexpr int64_t kDefault = 4'096 * 1024;
-    auto value = get<int64_t>(kSparkBloomFilterMaxNumBits, kDefault);
-    VELOX_USER_CHECK_LE(
-        value,
-        kDefault,
-        "{} cannot exceed the default value",
-        kSparkBloomFilterMaxNumBits);
-    return value;
+    constexpr int64_t kDefault = 67'108'864;
+    return get<int64_t>(kSparkBloomFilterMaxNumBits, kDefault);
+  }
+
+  int64_t sparkBloomFilterMaxNumItems() const {
+    constexpr int64_t kDefault = 4'000'000L;
+    return get<int64_t>(kSparkBloomFilterMaxNumItems, kDefault);
   }
 
   int32_t sparkPartitionId() const {
@@ -1345,6 +1406,14 @@ class QueryConfig {
     return get<std::string>(kExprTrackCpuUsageForFunctions, "");
   }
 
+  bool exprAdaptiveCpuSampling() const {
+    return get<bool>(kExprAdaptiveCpuSampling, false);
+  }
+
+  double exprAdaptiveCpuSamplingMaxOverheadPct() const {
+    return get<double>(kExprAdaptiveCpuSamplingMaxOverheadPct, 1.0);
+  }
+
   bool exprDedupNonDeterministic() const {
     return get<bool>(kExprDedupNonDeterministic, true);
   }
@@ -1368,6 +1437,10 @@ class QueryConfig {
 
   bool hashProbeDynamicFilterPushdownEnabled() const {
     return get<bool>(kHashProbeDynamicFilterPushdownEnabled, true);
+  }
+
+  bool hashProbeStringDynamicFilterPushdownEnabled() const {
+    return get<bool>(kHashProbeStringDynamicFilterPushdownEnabled, false);
   }
 
   uint64_t hashProbeBloomFilterPushdownMaxSize() const {
@@ -1524,6 +1597,10 @@ class QueryConfig {
 
   uint32_t joinBuildVectorHasherMaxNumDistinct() const {
     return get<uint32_t>(kJoinBuildVectorHasherMaxNumDistinct, 1'000'000);
+  }
+
+  int32_t markSortedZeroCopyThreshold() const {
+    return get<int32_t>(kMarkSortedZeroCopyThreshold, 1000);
   }
 
   template <typename T>

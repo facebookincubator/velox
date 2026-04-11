@@ -192,6 +192,12 @@ class SignatureBinder : private SignatureBinderBase {
  private:
   bool tryBind(bool allowCoercions, std::vector<Coercion>& coercions);
 
+  /// Pre-binds type variables to their least common super type across all
+  /// arguments. Runs before the main binding loop. Only binds type variables,
+  /// not integer variables (e.g. decimal precision/scale) — those are bound
+  /// later by tryBind. Does not check base type name match since coercion may
+  /// change the base type. Returns false if a type variable conflict is found
+  /// that would prevent binding; true otherwise.
   bool tryBindVariablesWithCoercion(
       const exec::TypeSignature& typeSignature,
       const TypePtr& actualType);

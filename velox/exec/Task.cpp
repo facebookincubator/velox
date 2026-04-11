@@ -138,6 +138,8 @@ void addRunningTimeOperatorMetrics(exec::OperatorStats& op) {
       RuntimeMetric(op.getOutputTiming.wallNanos, RuntimeCounter::Unit::kNanos);
   op.runtimeStats[std::string(OperatorStats::kRunningFinishWallNanos)] =
       RuntimeMetric(op.finishTiming.wallNanos, RuntimeCounter::Unit::kNanos);
+  op.runtimeStats[std::string(OperatorStats::kRunningIsBlockedWallNanos)] =
+      RuntimeMetric(op.isBlockedTiming.wallNanos, RuntimeCounter::Unit::kNanos);
 }
 
 void buildSplitStates(
@@ -2829,19 +2831,29 @@ void Task::onTaskCompletion() {
     }
 
     for (auto& listener : listeners) {
-      listener->onTaskCompletion(
-          uuid_,
-          taskId_,
-          state,
-          exception,
-          stats,
-          planFragment_,
-          exchangeClientByPlanNode_);
+      try {
+        listener->onTaskCompletion(
+            uuid_,
+            taskId_,
+            state,
+            exception,
+            stats,
+            planFragment_,
+            exchangeClientByPlanNode_);
+      } catch (const std::exception& e) {
+        LOG(ERROR) << "TaskCompletionListener threw for task " << taskId_
+                   << ": " << e.what();
+      }
     }
   });
 
   for (auto& listener : splitListeners_) {
-    listener->onTaskCompletion();
+    try {
+      listener->onTaskCompletion();
+    } catch (const std::exception& e) {
+      LOG(ERROR) << "SplitCompletionListener threw for task " << taskId_ << ": "
+                 << e.what();
+    }
   }
 }
 

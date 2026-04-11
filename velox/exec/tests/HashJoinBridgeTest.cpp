@@ -50,6 +50,11 @@ struct TestParam {
   int32_t numBuilders{1};
 };
 
+inline void PrintTo(const TestParam& param, std::ostream* os) {
+  *os << fmt::format(
+      "probers:{}_builders:{}", param.numProbers, param.numBuilders);
+}
+
 class HashJoinBridgeTest : public testing::Test,
                            public testing::WithParamInterface<TestParam> {
  public:
@@ -97,7 +102,7 @@ class HashJoinBridgeTest : public testing::Test,
           std::make_unique<VectorHasher>(rowType_->childAt(channel), channel));
     }
     return HashTable<true>::createForJoin(
-        std::move(keyHashers), {}, true, false, 1'000, pool_.get());
+        std::move(keyHashers), {}, true, false, false, 1'000, pool_.get());
   }
 
   std::vector<ContinueFuture> createEmptyFutures(int32_t count) {

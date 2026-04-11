@@ -17,21 +17,22 @@
 #pragma once
 
 #include "velox/connectors/Connector.h"
-#include "velox/connectors/hive/SplitReader.h"
+#include "velox/connectors/hive/FileSplitReader.h"
 #include "velox/connectors/hive/iceberg/PositionalDeleteFileReader.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
+struct HiveIcebergSplit;
 struct IcebergDeleteFile;
 
-class IcebergSplitReader : public SplitReader {
+class IcebergSplitReader : public FileSplitReader {
  public:
   IcebergSplitReader(
-      const std::shared_ptr<const hive::HiveConnectorSplit>& hiveSplit,
-      const HiveTableHandlePtr& hiveTableHandle,
-      const HiveColumnHandleMap* partitionKeys,
+      const std::shared_ptr<const HiveIcebergSplit>& icebergSplit,
+      const FileTableHandlePtr& tableHandle,
+      const std::unordered_map<std::string, FileColumnHandlePtr>* partitionKeys,
       const ConnectorQueryCtx* connectorQueryCtx,
-      const std::shared_ptr<const HiveConfig>& hiveConfig,
+      const std::shared_ptr<const FileConfig>& fileConfig,
       const RowTypePtr& readerOutputType,
       const std::shared_ptr<io::IoStatistics>& ioStatistics,
       const std::shared_ptr<IoStats>& ioStats,
@@ -71,7 +72,7 @@ class IcebergSplitReader : public SplitReader {
   ///
   /// 1. Info columns (e.g., $path, $data_sequence_number, $deleted)
   ///    These are virtual columns that provide metadata about the file itself.
-  ///    Values are read from hiveSplit_->infoColumns map and set as constant
+  ///    Values are read from the split's infoColumns map and set as constant
   ///    values in the scanSpec so they're materialized for all rows.
   ///
   /// 2. Regular columns present in File:
@@ -81,7 +82,7 @@ class IcebergSplitReader : public SplitReader {
   ///
   /// 3. Columns missing from File:
   ///    a) Partition columns (hive-migrated tables):
-  ///       Column is marked as partition key in hiveSplit_->partitionKeys.
+  ///       Column is marked as partition key in splitPartitionKeys_.
   ///       In Hive-written Iceberg tables, partition column values are stored
   ///       in partition metadata, not in the data file itself. Value is read
   ///       from partition metadata and set as a constant.
@@ -92,6 +93,8 @@ class IcebergSplitReader : public SplitReader {
   std::vector<TypePtr> adaptColumns(
       const RowTypePtr& fileType,
       const RowTypePtr& tableSchema) const override;
+
+  const std::shared_ptr<const HiveIcebergSplit> icebergSplit_;
 
   // The read offset to the beginning of the split in number of rows for the
   // current batch for the base data file

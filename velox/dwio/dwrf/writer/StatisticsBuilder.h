@@ -16,426 +16,136 @@
 
 #pragma once
 
-#include <velox/common/base/Exceptions.h>
-#include <velox/common/hyperloglog/SparseHll.h>
+#include "velox/dwio/common/StatisticsBuilder.h"
 #include "velox/dwio/dwrf/common/Config.h"
 #include "velox/dwio/dwrf/common/Statistics.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
-#include "velox/type/Type.h"
 
 namespace facebook::velox::dwrf {
 
-namespace {
-inline bool isEmpty(const dwio::common::ColumnStatistics& stats) {
-  auto valueCount = stats.getNumberOfValues();
-  return valueCount.has_value() && valueCount.value() == 0;
-}
+// Re-export common types into dwrf namespace for backward compatibility.
+using dwio::stats::StatisticsBuilderOptions;
 
-template <typename T>
-static void
-addWithOverflowCheck(std::optional<T>& to, T value, uint64_t count) {
-  if (to.has_value()) {
-    // check overflow. Value is only valid when not overflow
-    T result;
-    auto overflow = __builtin_mul_overflow(value, count, &result);
-    if (!overflow) {
-      overflow = __builtin_add_overflow(to.value(), result, &to.value());
-    }
-    if (overflow) {
-      to.reset();
-    }
-  }
-}
-
-template <typename T>
-static void mergeWithOverflowCheck(
-    std::optional<T>& to,
-    const std::optional<T>& from) {
-  if (to.has_value()) {
-    if (from.has_value()) {
-      auto overflow =
-          __builtin_add_overflow(to.value(), from.value(), &to.value());
-      if (overflow) {
-        to.reset();
-      }
-    } else {
-      to.reset();
-    }
-  }
-}
-
-inline dwio::common::KeyInfo constructKey(const dwrf::proto::KeyInfo& keyInfo) {
-  if (keyInfo.has_intkey()) {
-    return dwio::common::KeyInfo{keyInfo.intkey()};
-  } else if (keyInfo.has_byteskey()) {
-    return dwio::common::KeyInfo{keyInfo.byteskey()};
-  }
-  VELOX_UNREACHABLE("Illegal null key info");
-}
-} // namespace
-
-struct StatisticsBuilderOptions {
-  explicit StatisticsBuilderOptions(
-      uint32_t stringLengthLimit,
-      std::optional<uint64_t> initialSize = std::nullopt,
-      bool countDistincts = false,
-      HashStringAllocator* allocator = nullptr)
-      : stringLengthLimit{stringLengthLimit},
-        initialSize{initialSize},
-        countDistincts(countDistincts),
-        allocator(allocator) {}
-
-  uint32_t stringLengthLimit;
-  std::optional<uint64_t> initialSize;
-  bool countDistincts{false};
-  HashStringAllocator* allocator;
-
-  StatisticsBuilderOptions withoutNumDistinct() const {
-    return StatisticsBuilderOptions(stringLengthLimit, initialSize);
-  }
-
-  static StatisticsBuilderOptions fromConfig(const Config& config) {
-    return StatisticsBuilderOptions{config.get(Config::STRING_STATS_LIMIT)};
-  }
-};
-
-/*
- * Base class for stats builder. Stats builder is used in writer and file merge
- * to collect and merge stats.
- * It can also be used for gathering stats in ad hoc sampling. In this case it
- * may also count distinct values if enabled in 'options'.
- */
-class StatisticsBuilder : public virtual dwio::common::ColumnStatistics {
+/// DWRF-specific StatisticsBuilder that adds proto serialization and
+/// proto-based build() on top of the common StatisticsBuilder.
+class StatisticsBuilder : public virtual dwio::stats::StatisticsBuilder {
  public:
-  /// Constructs with 'options'.
   explicit StatisticsBuilder(const StatisticsBuilderOptions& options)
-      : options_{options}, arena_(std::make_unique<google::protobuf::Arena>()) {
-    init();
-  }
+      : dwio::stats::StatisticsBuilder(options),
+        arena_(std::make_unique<google::protobuf::Arena>()) {}
 
   ~StatisticsBuilder() override = default;
 
-  void setHasNull() {
-    hasNull_ = true;
-  }
-
-  void increaseValueCount(uint64_t count = 1) {
-    if (valueCount_.has_value()) {
-      valueCount_.value() += count;
-    }
-  }
-
-  void increaseRawSize(uint64_t rawSize) {
-    if (rawSize_.has_value()) {
-      rawSize_.value() += rawSize;
-    }
-  }
-
-  void clearRawSize() {
-    rawSize_.reset();
-  }
-
-  void ensureSize() {
-    if (!size_.has_value()) {
-      size_ = 0;
-    }
-  }
-
-  void incrementSize(uint64_t size) {
-    if (LIKELY(size_.has_value())) {
-      addWithOverflowCheck(size_, size, /*count=*/1);
-    }
-  }
-
-  template <typename T>
-  void addHash(const T& data) {
-    if (hll_) {
-      hll_->insertHash(folly::hasher<T>()(data));
-    }
-  }
-
-  int64_t cardinality() const {
-    VELOX_CHECK_NOT_NULL(hll_);
-    return hll_->cardinality();
-  }
-
-  /*
-   * Merge stats of same type. This is used in writer to aggregate file level
-   * stats.
-   */
-  virtual void merge(
-      const dwio::common::ColumnStatistics& other,
-      bool ignoreSize = false);
-
-  /*
-   * Reset. Used in the place where row index entry level stats in captured.
-   */
-  virtual void reset() {
-    init();
-  }
-
-  /*
-   * Write stats to proto
-   */
+  /// Serializes statistics to a proto wrapper.
   virtual void toProto(ColumnStatisticsWriteWrapper& stats) const;
 
-  std::unique_ptr<dwio::common::ColumnStatistics> build() const;
+  /// Builds a read-only ColumnStatistics by round-tripping through proto.
+  std::unique_ptr<dwio::common::ColumnStatistics> build() const override;
 
+  /// Creates a DWRF-specific StatisticsBuilder for the given type. For MAP
+  /// type, returns a MapStatisticsBuilder.
   static std::unique_ptr<StatisticsBuilder> create(
       const Type& type,
       const StatisticsBuilderOptions& options);
 
-  // for the given type tree, create the a list of stat builders
+  /// For the given type tree, creates a list of DWRF stat builders.
   static void createTree(
       std::vector<std::unique_ptr<StatisticsBuilder>>& statBuilders,
       const Type& type,
       const StatisticsBuilderOptions& options);
 
- private:
-  void init() {
-    valueCount_ = 0;
-    hasNull_ = false;
-    rawSize_ = 0;
-    size_ = options_.initialSize;
-    if (options_.countDistincts) {
-      hll_ = std::make_shared<common::hll::SparseHll<>>(options_.allocator);
-    }
+  /// Creates StatisticsBuilderOptions from a DWRF Config.
+  static StatisticsBuilderOptions optionsFromConfig(const Config& config) {
+    return StatisticsBuilderOptions{config.get(Config::STRING_STATS_LIMIT)};
   }
 
- protected:
-  StatisticsBuilderOptions options_;
-  std::shared_ptr<common::hll::SparseHll<>> hll_;
+ private:
   std::unique_ptr<google::protobuf::Arena> arena_;
 };
 
 class BooleanStatisticsBuilder : public StatisticsBuilder,
-                                 public dwio::common::BooleanColumnStatistics {
+                                 public dwio::stats::BooleanStatisticsBuilder {
  public:
   explicit BooleanStatisticsBuilder(const StatisticsBuilderOptions& options)
-      : StatisticsBuilder{options.withoutNumDistinct()} {
-    init();
-  }
+      : dwio::stats::StatisticsBuilder{options.dropNumDistinct()},
+        StatisticsBuilder{options.dropNumDistinct()},
+        dwio::stats::BooleanStatisticsBuilder{options} {}
 
   ~BooleanStatisticsBuilder() override = default;
 
-  void addValues(bool value, uint64_t count = 1) {
-    increaseValueCount(count);
-    if (trueCount_.has_value() && value) {
-      trueCount_.value() += count;
-    }
-  }
-
-  void merge(
-      const dwio::common::ColumnStatistics& other,
-      bool ignoreSize = false) override;
-
-  void reset() override {
-    StatisticsBuilder::reset();
-    init();
+  std::unique_ptr<dwio::common::ColumnStatistics> build() const override {
+    return StatisticsBuilder::build();
   }
 
   void toProto(ColumnStatisticsWriteWrapper& stats) const override;
-
- private:
-  void init() {
-    trueCount_ = 0;
-  }
 };
 
 class IntegerStatisticsBuilder : public StatisticsBuilder,
-                                 public dwio::common::IntegerColumnStatistics {
+                                 public dwio::stats::IntegerStatisticsBuilder {
  public:
   explicit IntegerStatisticsBuilder(const StatisticsBuilderOptions& options)
-      : StatisticsBuilder{options} {
-    init();
-  }
+      : dwio::stats::StatisticsBuilder{options},
+        StatisticsBuilder{options},
+        dwio::stats::IntegerStatisticsBuilder{options} {}
 
   ~IntegerStatisticsBuilder() override = default;
 
-  void addValues(int64_t value, uint64_t count = 1) {
-    increaseValueCount(count);
-    if (min_.has_value() && value < min_.value()) {
-      min_ = value;
-    }
-    if (max_.has_value() && value > max_.value()) {
-      max_ = value;
-    }
-    addWithOverflowCheck(sum_, value, count);
-    addHash(value);
-  }
-
-  void merge(
-      const dwio::common::ColumnStatistics& other,
-      bool ignoreSize = false) override;
-
-  void reset() override {
-    StatisticsBuilder::reset();
-    init();
+  std::unique_ptr<dwio::common::ColumnStatistics> build() const override {
+    return StatisticsBuilder::build();
   }
 
   void toProto(ColumnStatisticsWriteWrapper& stats) const override;
-
- private:
-  void init() {
-    min_ = std::numeric_limits<int64_t>::max();
-    max_ = std::numeric_limits<int64_t>::min();
-    sum_ = 0;
-  }
 };
 
-static_assert(
-    std::numeric_limits<double>::has_infinity,
-    "infinity not defined");
-
 class DoubleStatisticsBuilder : public StatisticsBuilder,
-                                public dwio::common::DoubleColumnStatistics {
+                                public dwio::stats::DoubleStatisticsBuilder {
  public:
   explicit DoubleStatisticsBuilder(const StatisticsBuilderOptions& options)
-      : StatisticsBuilder{options} {
-    init();
-  }
+      : dwio::stats::StatisticsBuilder{options},
+        StatisticsBuilder{options},
+        dwio::stats::DoubleStatisticsBuilder{options} {}
 
   ~DoubleStatisticsBuilder() override = default;
 
-  void addValues(double value, uint64_t count = 1) {
-    increaseValueCount(count);
-    // min/max/sum is defined only when none of the values added is NaN
-    if (std::isnan(value)) {
-      clear();
-      return;
-    }
-
-    if (min_.has_value() && value < min_.value()) {
-      min_ = value;
-    }
-    if (max_.has_value() && value > max_.value()) {
-      max_ = value;
-    }
-    addHash(value);
-    // value * count sometimes is not same as adding values (count) times. So
-    // add in a loop
-    if (sum_.has_value()) {
-      for (uint64_t i = 0; i < count; ++i) {
-        sum_.value() += value;
-      }
-      if (std::isnan(sum_.value())) {
-        sum_.reset();
-      }
-    }
-  }
-
-  void merge(
-      const dwio::common::ColumnStatistics& other,
-      bool ignoreSize = false) override;
-
-  void reset() override {
-    StatisticsBuilder::reset();
-    init();
+  std::unique_ptr<dwio::common::ColumnStatistics> build() const override {
+    return StatisticsBuilder::build();
   }
 
   void toProto(ColumnStatisticsWriteWrapper& stats) const override;
-
- private:
-  void init() {
-    min_ = std::numeric_limits<double>::infinity();
-    max_ = -std::numeric_limits<double>::infinity();
-    sum_ = 0;
-  }
-
-  void clear() {
-    min_.reset();
-    max_.reset();
-    sum_.reset();
-  }
 };
 
 class StringStatisticsBuilder : public StatisticsBuilder,
-                                public dwio::common::StringColumnStatistics {
+                                public dwio::stats::StringStatisticsBuilder {
  public:
   explicit StringStatisticsBuilder(const StatisticsBuilderOptions& options)
-      : StatisticsBuilder{options}, lengthLimit_{options.stringLengthLimit} {
-    init();
-  }
+      : dwio::stats::StatisticsBuilder{options},
+        StatisticsBuilder{options},
+        dwio::stats::StringStatisticsBuilder{options} {}
 
   ~StringStatisticsBuilder() override = default;
 
-  void addValues(std::string_view value, uint64_t count = 1) {
-    // min_/max_ is not initialized with default that can be compared against
-    // easily. So we need to capture whether self is empty and handle
-    // differently.
-    auto isSelfEmpty = isEmpty(*this);
-    increaseValueCount(count);
-    if (isSelfEmpty) {
-      min_ = value;
-      max_ = value;
-    } else {
-      if (min_.has_value() && value < std::string_view{min_.value()}) {
-        min_ = value;
-      }
-      if (max_.has_value() && value > std::string_view{max_.value()}) {
-        max_ = value;
-      }
-    }
-    addHash(value);
-
-    addWithOverflowCheck<uint64_t>(length_, value.size(), count);
-  }
-
-  void merge(
-      const dwio::common::ColumnStatistics& other,
-      bool ignoreSize = false) override;
-
-  void reset() override {
-    StatisticsBuilder::reset();
-    init();
+  std::unique_ptr<dwio::common::ColumnStatistics> build() const override {
+    return StatisticsBuilder::build();
   }
 
   void toProto(ColumnStatisticsWriteWrapper& stats) const override;
-
- private:
-  uint32_t lengthLimit_;
-
-  void init() {
-    min_.reset();
-    max_.reset();
-    length_ = 0;
-  }
-
-  bool shouldKeep(const std::optional<std::string>& val) const {
-    return val.has_value() && val.value().size() <= lengthLimit_;
-  }
 };
 
 class BinaryStatisticsBuilder : public StatisticsBuilder,
-                                public dwio::common::BinaryColumnStatistics {
+                                public dwio::stats::BinaryStatisticsBuilder {
  public:
   explicit BinaryStatisticsBuilder(const StatisticsBuilderOptions& options)
-      : StatisticsBuilder{options.withoutNumDistinct()} {
-    init();
-  }
+      : dwio::stats::StatisticsBuilder{options.dropNumDistinct()},
+        StatisticsBuilder{options.dropNumDistinct()},
+        dwio::stats::BinaryStatisticsBuilder{options} {}
 
   ~BinaryStatisticsBuilder() override = default;
 
-  void addValues(uint64_t length, uint64_t count = 1) {
-    increaseValueCount(count);
-    addWithOverflowCheck(length_, length, count);
-  }
-
-  void merge(
-      const dwio::common::ColumnStatistics& other,
-      bool ignoreSize = false) override;
-
-  void reset() override {
-    StatisticsBuilder::reset();
-    init();
+  std::unique_ptr<dwio::common::ColumnStatistics> build() const override {
+    return StatisticsBuilder::build();
   }
 
   void toProto(ColumnStatisticsWriteWrapper& stats) const override;
-
- private:
-  void init() {
-    length_ = 0;
-  }
 };
 
 class MapStatisticsBuilder : public StatisticsBuilder,
@@ -444,7 +154,8 @@ class MapStatisticsBuilder : public StatisticsBuilder,
   MapStatisticsBuilder(
       const Type& type,
       const StatisticsBuilderOptions& options)
-      : StatisticsBuilder{options},
+      : dwio::stats::StatisticsBuilder{options},
+        StatisticsBuilder{options},
         valueType_{type.as<velox::TypeKind::MAP>().valueType()} {
     init();
     hll_.reset();
@@ -454,20 +165,9 @@ class MapStatisticsBuilder : public StatisticsBuilder,
 
   void addValues(
       const dwrf::proto::KeyInfo& keyInfo,
-      const StatisticsBuilder& stats) {
-    // Since addValues is called once per key info per stride,
-    // it's ok to just construct the key struct per call.
-    auto& keyStats = getKeyStats(constructKey(keyInfo));
-    keyStats.merge(stats, /*ignoreSize=*/true);
-  }
+      const StatisticsBuilder& stats);
 
-  void incrementSize(const dwrf::proto::KeyInfo& keyInfo, uint64_t size) {
-    // Since incrementSize is called once per key info per stripe,
-    // it's ok to just construct the key struct per call.
-    auto& keyStats = getKeyStats(constructKey(keyInfo));
-    keyStats.ensureSize();
-    keyStats.incrementSize(size);
-  }
+  void incrementSize(const dwrf::proto::KeyInfo& keyInfo, uint64_t size);
 
   void merge(
       const dwio::common::ColumnStatistics& other,
@@ -479,6 +179,10 @@ class MapStatisticsBuilder : public StatisticsBuilder,
   }
 
   void toProto(ColumnStatisticsWriteWrapper& stats) const override;
+
+  /// Converts a proto KeyInfo to a dwio::common::KeyInfo.
+  static dwio::common::KeyInfo constructKey(
+      const dwrf::proto::KeyInfo& keyInfo);
 
  private:
   void init() {

@@ -17,6 +17,7 @@ velox_add_library(
   ArrayConcatRegistration.cpp
   ArrayFunctionsRegistration.cpp
   ArrayNGramsRegistration.cpp
+  ArraySplitIntoChunksRegistration.cpp
   BinaryFunctionsRegistration.cpp
   BingTileFunctionsRegistration.cpp
   BitwiseFunctionsRegistration.cpp
@@ -42,6 +43,8 @@ velox_add_library(
   TDigestFunctionsRegistration.cpp
   QDigestFunctionsRegistration.cpp
   URLFunctionsRegistration.cpp
+  HEADERS
+  RegistrationFunctions.h
 )
 
 if(VELOX_ENABLE_GEO)

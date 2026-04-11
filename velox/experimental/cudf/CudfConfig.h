@@ -16,6 +16,9 @@
 
 #pragma once
 
+#include <cudf/types.hpp>
+
+#include <optional>
 #include <string>
 #include <unordered_map>
 
@@ -40,6 +43,15 @@ struct CudfConfig {
   static constexpr const char* kCudfOutputMr{"cudf.output_mr"};
   static constexpr const char* kCudfAllowCpuFallback{"cudf.allow_cpu_fallback"};
   static constexpr const char* kCudfLogFallback{"cudf.log_fallback"};
+  static constexpr const char* kCudfBatchSizeMinThreshold{
+      "cudf.batch_size_min_threshold"};
+  static constexpr const char* kCudfBatchSizeMaxThreshold{
+      "cudf.batch_size_max_threshold"};
+  static constexpr const char* kCudfConcatOptimizationEnabled{
+      "cudf.concat_optimization_enabled"};
+  // The value could be either spark or presto.
+  static constexpr const char* kCudfFunctionEngine{"cudf.function_engine"};
+  static constexpr const char* kCudfTimestampUnit{"cudf.timestamp_unit"};
 
   /// Query session configs for the cuDF Operators.
   static constexpr const char* kCudfTopNBatchSize{"cudf.topk_batch_size"};
@@ -77,10 +89,10 @@ struct CudfConfig {
   /// Register all the functions with the functionNamePrefix.
   std::string functionNamePrefix;
 
-  /// Enable AST in expression evaluation
+  /// Enable AST in expression evaluation.
   bool astExpressionEnabled{true};
 
-  /// Enable JIT in expression evaluation
+  /// Enable JIT in expression evaluation.
   bool jitExpressionEnabled{true};
 
   /// Priority of AST expression. Expression with higher priority is chosen for
@@ -98,8 +110,34 @@ struct CudfConfig {
   /// Whether to log a reason for falling back to Velox CPU execution.
   bool logFallback{true};
 
+  /// Whether to insert CudfBatchConcat operators before supported Cudf
+  /// operators.
+  /// This can improve performance by reducing the number of cuda kernel
+  /// launches on addInput of certain operators by collecting a minimum number
+  /// of rows before concatenating and passing on to the next operator.
+  /// This batch size is determined by batchSizeMinThreshold and
+  /// batchSizeMaxThreshold
+  bool concatOptimizationEnabled{false};
+
+  /// Minimum rows to accumulate before GPU-side concatenation in
+  /// `CudfBatchConcat` (default 100k).
+  int32_t batchSizeMinThreshold{100000};
+
+  /// Maximum rows allowed in a concatenated batch (user configurable).
+  /// When not set, cuDF's own `size_type::max()` is used.
+  std::optional<int32_t> batchSizeMaxThreshold;
   // Query config key for the TopN batch size in the cuDF TopN operator.
   int32_t topNBatchSize{5};
+
+  // Register the Spark or Presto functions, the value could be either spark or
+  // presto.
+  std::string functionEngine{"presto"};
+
+  /// Timestamp unit for cuDF timestamp types.
+  /// Can be configured via kCudfTimestampUnit with string values:
+  /// "s" (seconds), "ms" (milliseconds), "us" (microseconds), "ns"
+  /// (nanoseconds).
+  cudf::type_id timestampUnit = cudf::type_id::TIMESTAMP_NANOSECONDS;
 };
 
 } // namespace facebook::velox::cudf_velox

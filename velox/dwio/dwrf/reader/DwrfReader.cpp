@@ -268,9 +268,8 @@ DwrfRowReader::DwrfRowReader(
       columnReaderStats_(
           std::make_shared<dwio::common::ColumnReaderStatistics>()),
       currentUnit_{nullptr} {
-  if (options_.collectColumnStats()) {
-    columnReaderStats_->columnMetricsSet.emplace();
-  }
+  columnReaderStats_->initColumnStatsCollection(
+      *getReader().schemaWithId(), options_);
   const auto& fileFooter = getReader().footer();
   const uint32_t numberOfStripes = fileFooter.stripesSize();
   currentStripe_ = numberOfStripes;
@@ -1051,8 +1050,8 @@ uint64_t DwrfReader::getMemoryUse(
 
   // Do we need even more memory to read the footer or the metadata?
   const auto footerLength = readerBase.postScript().footerLength();
-  if (memoryBytes < footerLength + readerBase.footerEstimatedSize()) {
-    memoryBytes = footerLength + readerBase.footerEstimatedSize();
+  if (memoryBytes < footerLength + readerBase.footerSpeculativeIoSize()) {
+    memoryBytes = footerLength + readerBase.footerSpeculativeIoSize();
   }
 
   // Account for firstRowOfStripe.

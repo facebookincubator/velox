@@ -79,14 +79,14 @@ BlockingReason Destination::advance(
   createVectorStreamGroup(output);
 
   const auto rows = folly::Range(&rows_[firstRow], rowIdx_ - firstRow);
-  if (serde_->kind() == VectorSerde::Kind::kCompactRow) {
+  if (serde_->kind() == "CompactRow") {
     VELOX_CHECK_NOT_NULL(outputCompactRow);
     current_->append(*outputCompactRow, rows, sizes);
-  } else if (serde_->kind() == VectorSerde::Kind::kUnsafeRow) {
+  } else if (serde_->kind() == "UnsafeRow") {
     VELOX_CHECK_NOT_NULL(outputUnsafeRow);
     current_->append(*outputUnsafeRow, rows, sizes);
   } else {
-    VELOX_CHECK_EQ(serde_->kind(), VectorSerde::Kind::kPresto);
+    VELOX_CHECK_EQ(serde_->kind(), "Presto");
     current_->append(output, rows, scratch);
   }
 
@@ -274,9 +274,9 @@ void PartitionedOutput::initializeInput(RowVectorPtr input) {
     output_->childAt(i)->loadedVector();
   }
 
-  if (serde_->kind() == VectorSerde::Kind::kCompactRow) {
+  if (serde_->kind() == "CompactRow") {
     outputCompactRow_ = std::make_unique<row::CompactRow>(output_);
-  } else if (serde_->kind() == VectorSerde::Kind::kUnsafeRow) {
+  } else if (serde_->kind() == "UnsafeRow") {
     outputUnsafeRow_ = std::make_unique<row::UnsafeRowFast>(output_);
   }
 }
@@ -319,16 +319,16 @@ void PartitionedOutput::estimateRowSizes() {
   raw_vector<vector_size_t> storage(pool());
   const auto numbers = iota(numInput, storage);
   const auto rows = folly::Range(numbers, numInput);
-  if (serde_->kind() == VectorSerde::Kind::kCompactRow) {
+  if (serde_->kind() == "CompactRow") {
     VELOX_CHECK_NOT_NULL(outputCompactRow_);
     serde_->estimateSerializedSize(
         outputCompactRow_.get(), rows, sizePointers_.data());
-  } else if (serde_->kind() == VectorSerde::Kind::kUnsafeRow) {
+  } else if (serde_->kind() == "UnsafeRow") {
     VELOX_CHECK_NOT_NULL(outputUnsafeRow_);
     serde_->estimateSerializedSize(
         outputUnsafeRow_.get(), rows, sizePointers_.data());
   } else {
-    VELOX_CHECK_EQ(serde_->kind(), VectorSerde::Kind::kPresto);
+    VELOX_CHECK_EQ(serde_->kind(), "Presto");
     serde_->estimateSerializedSize(
         output_.get(), rows, sizePointers_.data(), scratch_);
   }
@@ -511,7 +511,8 @@ void PartitionedOutput::close() {
     auto lockedStats = stats_.wlock();
     lockedStats->addRuntimeStat(
         Operator::kShuffleSerdeKind,
-        RuntimeCounter(static_cast<int64_t>(serde_->kind())));
+        RuntimeCounter(
+            static_cast<int64_t>(VectorSerde::kindByName(serde_->kind()))));
     lockedStats->addRuntimeStat(
         Operator::kShuffleCompressionKind,
         RuntimeCounter(static_cast<int64_t>(serdeOptions_->compressionKind)));

@@ -189,6 +189,7 @@ TopNRowNumber::TopNRowNumber(
         false, // allowDuplicates
         false, // isJoinBuild
         false, // hasProbedFlag
+        false, // hasCountFlag
         0, // minTableSizeForParallelJoinBuild
         pool());
     partitionOffset_ = table_->rows()->columnAt(numKeys).offset();
@@ -980,8 +981,11 @@ void TopNRowNumber::reclaim(
     // TODO Add support for spilling after noMoreInput().
     LOG(WARNING)
         << "Can't reclaim from topNRowNumber operator which has started producing output: "
-        << pool()->name() << ", usage: " << succinctBytes(pool()->usedBytes())
-        << ", reservation: " << succinctBytes(pool()->reservedBytes());
+        << pool()->name() << ", root pool: " << pool()->root()->name()
+        << ", used: " << succinctBytes(pool()->usedBytes())
+        << ", reservation: " << succinctBytes(pool()->reservedBytes())
+        << ", root pool reservation: "
+        << succinctBytes(pool()->root()->reservedBytes());
     return;
   }
 
@@ -1050,8 +1054,11 @@ void TopNRowNumber::ensureInputFits(const RowVectorPtr& input) {
 
   LOG(WARNING) << "Failed to reserve " << succinctBytes(targetIncrementBytes)
                << " for memory pool " << pool()->name()
-               << ", usage: " << succinctBytes(pool()->usedBytes())
-               << ", reservation: " << succinctBytes(pool()->reservedBytes());
+               << ", root pool: " << pool()->root()->name()
+               << ", used: " << succinctBytes(pool()->usedBytes())
+               << ", reservation: " << succinctBytes(pool()->reservedBytes())
+               << ", root pool reservation: "
+               << succinctBytes(pool()->root()->reservedBytes());
 }
 
 void TopNRowNumber::spill() {

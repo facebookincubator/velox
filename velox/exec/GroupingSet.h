@@ -149,6 +149,12 @@ class GroupingSet {
     return table_ ? table_->rows()->numRows() : 0;
   }
 
+  /// Returns the underlying hash table, or nullptr if it has not been created
+  /// yet.
+  BaseHashTable* table() const {
+    return table_.get();
+  }
+
   /// Frees hash tables and other state when giving up partial aggregation as
   /// non-productive. Must be called before toIntermediate() is used.
   void abandonPartialAggregation();

@@ -282,6 +282,21 @@ Array Functions
     Returns true if value matches at least one of the elements of the array.
     Supports BOOLEAN, REAL, DOUBLE, BIGINT, VARCHAR, TIMESTAMP, DATE, DECIMAL input types.
 
+.. spark:function:: sequence(start, stop) -> array(T)
+                    sequence(start, stop, step) -> array(T)
+
+    Generates an array of elements from ``start`` to ``stop``, incrementing by
+    ``step`` (default 1 if ``start <= stop``, otherwise -1).
+
+    Supports tinyint, smallint, integer, and bigint types for start, stop, and
+    step, preserving the input type in the result array. Also supports date
+    inputs with day-to-second or year-to-month interval step, and timestamp
+    inputs with interval step. ::
+
+        SELECT sequence(1, 5); -- [1, 2, 3, 4, 5]
+        SELECT sequence(5, 1); -- [5, 4, 3, 2, 1]
+        SELECT sequence(1, 10, 3); -- [1, 4, 7, 10]
+
 .. spark:function:: shuffle(array(E), seed) -> array(E)
 
     Generates a random permutation of the given ``array`` using a seed derived

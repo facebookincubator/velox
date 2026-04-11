@@ -35,6 +35,7 @@
 #include <cudf/round.hpp>
 #include <cudf/strings/attributes.hpp>
 #include <cudf/strings/case.hpp>
+#include <cudf/strings/combine.hpp>
 #include <cudf/strings/contains.hpp>
 #include <cudf/strings/convert/convert_datetime.hpp>
 #include <cudf/strings/convert/convert_integers.hpp>
@@ -214,14 +215,10 @@ class SplitFunction : public CudfFunction {
   SplitFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
     using velox::exec::ConstantExpr;
 
-    auto stream = cudf::get_default_stream();
-    auto mr = cudf::get_current_device_resource_ref();
-
     auto delimiterExpr =
         std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[1]);
     VELOX_CHECK_NOT_NULL(delimiterExpr, "split delimiter must be a constant");
-    delimiterScalar_ = std::make_unique<cudf::string_scalar>(
-        delimiterExpr->value()->toString(0), true, stream, mr);
+    delimiter_ = delimiterExpr->value()->toString(0);
 
     auto limitExpr =
         std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr->inputs()[2]);
@@ -238,12 +235,13 @@ class SplitFunction : public CudfFunction {
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
+    cudf::string_scalar delimiterScalar(delimiter_, true, stream, mr);
     return cudf::strings::split_record(
-        inputCol, *delimiterScalar_, maxSplitCount_, stream, mr);
+        inputCol, delimiterScalar, maxSplitCount_, stream, mr);
   };
 
  private:
-  std::unique_ptr<cudf::string_scalar> delimiterScalar_;
+  std::string delimiter_;
   cudf::size_type maxSplitCount_;
 };
 
@@ -688,24 +686,18 @@ class SubstrFunction : public CudfFunction {
         expr->inputs().size(), 2, "substr expects at least 2 inputs");
     VELOX_CHECK_LE(expr->inputs().size(), 3, "substr expects at most 3 inputs");
 
-    auto stream = cudf::get_default_stream();
-    auto mr = cudf::get_current_device_resource_ref();
-
     auto startExpr = std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[1]);
     VELOX_CHECK_NOT_NULL(startExpr, "substr start must be a constant");
 
     auto startValue =
         startExpr->value()->as<SimpleVector<int64_t>>()->valueAt(0);
-    cudf::size_type adjustedStart = static_cast<cudf::size_type>(startValue);
+    start_ = static_cast<cudf::size_type>(startValue);
     if (startValue >= 1) {
       // cuDF indexing starts at 0.
       // Presto indexing starts at 1.
       // Positive indices need to substract 1.
-      adjustedStart = static_cast<cudf::size_type>(startValue - 1);
+      start_ = static_cast<cudf::size_type>(startValue - 1);
     }
-
-    startScalar_ = std::make_unique<cudf::numeric_scalar<cudf::size_type>>(
-        adjustedStart, true, stream, mr);
 
     if (expr->inputs().size() > 2) {
       auto lengthExpr =
@@ -717,18 +709,9 @@ class SubstrFunction : public CudfFunction {
       // cuDF uses indices [begin, end).
       // Presto uses length as the length of the substring.
       // We compute the end as start + length.
-      cudf::size_type endPosition =
-          adjustedStart + static_cast<cudf::size_type>(lengthValue);
-
-      endScalar_ = std::make_unique<cudf::numeric_scalar<cudf::size_type>>(
-          endPosition, true, stream, mr);
-    } else {
-      endScalar_ = std::make_unique<cudf::numeric_scalar<cudf::size_type>>(
-          0, false, stream, mr);
+      end_ = start_ + static_cast<cudf::size_type>(lengthValue);
+      hasEnd_ = true;
     }
-
-    stepScalar_ = std::make_unique<cudf::numeric_scalar<cudf::size_type>>(
-        1, true, stream, mr);
   }
 
   ColumnOrView eval(
@@ -736,14 +719,18 @@ class SubstrFunction : public CudfFunction {
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
+    cudf::numeric_scalar<cudf::size_type> startScalar(start_, true, stream, mr);
+    cudf::numeric_scalar<cudf::size_type> endScalar(
+        hasEnd_ ? end_ : 0, hasEnd_, stream, mr);
+    cudf::numeric_scalar<cudf::size_type> stepScalar(1, true, stream, mr);
     return cudf::strings::slice_strings(
-        inputCol, *startScalar_, *endScalar_, *stepScalar_, stream, mr);
+        inputCol, startScalar, endScalar, stepScalar, stream, mr);
   }
 
  private:
-  std::unique_ptr<cudf::numeric_scalar<cudf::size_type>> startScalar_;
-  std::unique_ptr<cudf::numeric_scalar<cudf::size_type>> endScalar_;
-  std::unique_ptr<cudf::numeric_scalar<cudf::size_type>> stepScalar_;
+  cudf::size_type start_{0};
+  cudf::size_type end_{0};
+  bool hasEnd_{false};
 };
 
 class CoalesceFunction : public CudfFunction {
@@ -762,6 +749,18 @@ class CoalesceFunction : public CudfFunction {
           literalScalar_ = makeScalarFromConstantExpr(c);
           numColumnsBeforeLiteral_ = i;
           break;
+        }
+      } else if (input->distinctFields().empty() && !input->inputs().empty()) {
+        // Handle constant expressions that weren't folded (e.g., cast of
+        // literal).
+        if (auto innerConst =
+                std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
+                    input->inputs()[0])) {
+          if (!innerConst->value()->isNullAt(0)) {
+            literalScalar_ = makeScalarFromConstantExpr(innerConst);
+            numColumnsBeforeLiteral_ = i;
+            break;
+          }
         }
       }
     }
@@ -1212,14 +1211,10 @@ class StartswithFunction : public CudfFunction {
     using velox::exec::ConstantExpr;
     VELOX_CHECK_EQ(expr->inputs().size(), 2, "startswith expects 2 inputs");
 
-    auto stream = cudf::get_default_stream();
-    auto mr = cudf::get_current_device_resource_ref();
-
     auto patternExpr =
         std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[1]);
     VELOX_CHECK_NOT_NULL(patternExpr, "startswith pattern must be a constant");
-    pattern_ = std::make_unique<cudf::string_scalar>(
-        patternExpr->value()->toString(0), true, stream, mr);
+    pattern_ = patternExpr->value()->toString(0);
   }
 
   ColumnOrView eval(
@@ -1227,11 +1222,12 @@ class StartswithFunction : public CudfFunction {
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
-    return cudf::strings::starts_with(inputCol, *pattern_, stream, mr);
+    cudf::string_scalar patternScalar(pattern_, true, stream, mr);
+    return cudf::strings::starts_with(inputCol, patternScalar, stream, mr);
   }
 
  private:
-  std::unique_ptr<cudf::string_scalar> pattern_;
+  std::string pattern_;
 };
 
 class EndswithFunction : public CudfFunction {
@@ -1240,14 +1236,10 @@ class EndswithFunction : public CudfFunction {
     using velox::exec::ConstantExpr;
     VELOX_CHECK_EQ(expr->inputs().size(), 2, "endswith expects 2 inputs");
 
-    auto stream = cudf::get_default_stream();
-    auto mr = cudf::get_current_device_resource_ref();
-
     auto patternExpr =
         std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[1]);
     VELOX_CHECK_NOT_NULL(patternExpr, "endswith pattern must be a constant");
-    pattern_ = std::make_unique<cudf::string_scalar>(
-        patternExpr->value()->toString(0), true, stream, mr);
+    pattern_ = patternExpr->value()->toString(0);
   }
 
   ColumnOrView eval(
@@ -1255,11 +1247,12 @@ class EndswithFunction : public CudfFunction {
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
-    return cudf::strings::ends_with(inputCol, *pattern_, stream, mr);
+    cudf::string_scalar patternScalar(pattern_, true, stream, mr);
+    return cudf::strings::ends_with(inputCol, patternScalar, stream, mr);
   }
 
  private:
-  std::unique_ptr<cudf::string_scalar> pattern_;
+  std::string pattern_;
 };
 
 class ContainsFunction : public CudfFunction {
@@ -1268,14 +1261,10 @@ class ContainsFunction : public CudfFunction {
     using velox::exec::ConstantExpr;
     VELOX_CHECK_EQ(expr->inputs().size(), 2, "contains expects 2 inputs");
 
-    auto stream = cudf::get_default_stream();
-    auto mr = cudf::get_current_device_resource_ref();
-
     auto patternExpr =
         std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[1]);
     VELOX_CHECK_NOT_NULL(patternExpr, "contains pattern must be a constant");
-    pattern_ = std::make_unique<cudf::string_scalar>(
-        patternExpr->value()->toString(0), true, stream, mr);
+    pattern_ = patternExpr->value()->toString(0);
   }
 
   ColumnOrView eval(
@@ -1283,11 +1272,84 @@ class ContainsFunction : public CudfFunction {
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
-    return cudf::strings::contains(inputCol, *pattern_, stream, mr);
+    cudf::string_scalar patternScalar(pattern_, true, stream, mr);
+    return cudf::strings::contains(inputCol, patternScalar, stream, mr);
   }
 
  private:
-  std::unique_ptr<cudf::string_scalar> pattern_;
+  std::string pattern_;
+};
+
+class ConcatFunction : public CudfFunction {
+ public:
+  explicit ConcatFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    using velox::exec::ConstantExpr;
+    numInputs_ = expr->inputs().size();
+    VELOX_CHECK_GE(numInputs_, 2, "concat expects at least 2 inputs");
+
+    // Scan inputs for literals and store strings in map by input index.
+    for (size_t i = 0; i < numInputs_; ++i) {
+      if (auto constant =
+              std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[i])) {
+        inputIndexToLiteral_[i] = constant->value()->toString(0);
+      }
+    }
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    // Validate sizes.
+    VELOX_CHECK_EQ(
+        inputColumns.size() + inputIndexToLiteral_.size(),
+        numInputs_,
+        "Unexpected number of input columns");
+
+    // If there is at least one input column, fetch its size as the output size.
+    // If there are no input columns, this means that all the inputs are
+    // literals, and the output size will be 1.
+    const size_t outputSize =
+        inputColumns.empty() ? 1u : asView(inputColumns[0]).size();
+
+    // Iterate the inputs, building a vector of column views, either a literal
+    // from the map, or the next input column. We also keep a vector of the
+    // columns created for literals, so that they persist while their views
+    // are used in the concatenation.
+    std::vector<cudf::column_view> columnViews;
+    std::vector<std::unique_ptr<cudf::column>> literalColumns;
+    size_t nextInputColumnIndex = 0u;
+    for (size_t i = 0; i < numInputs_; ++i) {
+      auto it = inputIndexToLiteral_.find(i);
+      if (it == inputIndexToLiteral_.end()) {
+        // No literal for this input. Use the next input column.
+        auto& column = inputColumns[nextInputColumnIndex++];
+        columnViews.push_back(asView(column));
+      } else {
+        // Create a column of the literal repeated for the entire output size.
+        auto const& literal = it->second;
+        cudf::string_scalar scalar(literal, true, stream, mr);
+        auto col =
+            cudf::make_column_from_scalar(scalar, outputSize, stream, mr);
+        columnViews.push_back(col->view());
+        literalColumns.emplace_back(std::move(col));
+      }
+    }
+
+    // Concatenate the columns, nulls as empty strings, no separators.
+    cudf::string_scalar emptyString("", true, stream, mr);
+    return cudf::strings::concatenate(
+        cudf::table_view(columnViews),
+        emptyString,
+        emptyString,
+        cudf::strings::separator_on_nulls::YES,
+        stream,
+        mr);
+  }
+
+ private:
+  std::map<int, std::string> inputIndexToLiteral_;
+  size_t numInputs_{0};
 };
 
 bool registerCudfFunction(
@@ -1323,6 +1385,23 @@ std::shared_ptr<CudfFunction> createCudfFunction(
   }
   return nullptr;
 }
+
+void registerSparkFunctions(const std::string& prefix) {
+  using exec::FunctionSignatureBuilder;
+
+  registerCudfFunction(
+      prefix + "hash_with_seed",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<HashFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("bigint")
+           .constantArgumentType("integer")
+           .argumentType("any")
+           .build()});
+}
+
+void registerPrestoFunctions(const std::string& prefix) {}
 
 bool registerBuiltinFunctions(const std::string& prefix) {
   using exec::FunctionSignatureBuilder;
@@ -1447,18 +1526,6 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .typeVariable("T")
            .returnType("boolean")
            .argumentType("T")
-           .build()});
-
-  registerCudfFunction(
-      prefix + "hash_with_seed",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<HashFunction>(expr);
-      },
-      {FunctionSignatureBuilder()
-           .returnType("bigint")
-           .constantArgumentType("integer")
-           .argumentType("any")
-           .variableArity()
            .build()});
 
   registerCudfFunction(
@@ -1660,6 +1727,17 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .constantArgumentType("varchar")
            .build()});
 
+  registerCudfFunction(
+      prefix + "concat",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<ConcatFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("varchar")
+           .argumentType("varchar")
+           .variableArity("varchar")
+           .build()});
+
   // No prefix because switch and if are special form
   registerCudfFunctions(
       {"switch", "if"},
@@ -1792,6 +1870,11 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .argumentType("T")
            .build()});
 
+  if (CudfConfig::getInstance().functionEngine == "spark") {
+    registerSparkFunctions(prefix);
+  } else {
+    registerPrestoFunctions(prefix);
+  }
   return true;
 }
 

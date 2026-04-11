@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/common/base/Portability.h"
+#include "velox/common/base/RuntimeMetrics.h"
 #include "velox/exec/OneWayStatusFlag.h"
 #include "velox/exec/RowContainer.h"
 #include "velox/exec/VectorHasher.h"
@@ -140,33 +141,38 @@ class BaseHashTable {
 
   /// The name of the runtime stats collected and reported by operators that use
   /// the HashTable (HashBuild, HashAggregation).
-  static inline const std::string kCapacity{"hashtable.capacity"};
-  static inline const std::string kNumRehashes{"hashtable.numRehashes"};
-  static inline const std::string kNumDistinct{"hashtable.numDistinct"};
-  static inline const std::string kNumTombstones{"hashtable.numTombstones"};
+  static constexpr std::string_view kCapacity{"hashtable.capacity"};
+  static constexpr std::string_view kNumRehashes{"hashtable.numRehashes"};
+  static constexpr std::string_view kNumDistinct{"hashtable.numDistinct"};
+  static constexpr std::string_view kNumTombstones{"hashtable.numTombstones"};
+  static constexpr std::string_view kHashMode{"hashtable.hashMode"};
 
   /// The same as above but only reported by the HashBuild operator.
-  static inline const std::string kBuildWallNanos{"hashtable.buildWallNanos"};
-  static inline const std::string kParallelJoinPartitionWallNanos{
+  static constexpr std::string_view kBuildWallNanos{"hashtable.buildWallNanos"};
+  static constexpr std::string_view kParallelJoinPartitionWallNanos{
       "hashtable.parallelJoinPartitionWallNanos"};
-  static inline const std::string kParallelJoinPartitionCpuNanos{
+  static constexpr std::string_view kParallelJoinPartitionCpuNanos{
       "hashtable.parallelJoinPartitionCpuNanos"};
-  static inline const std::string kParallelJoinBuildWallNanos{
+  static constexpr std::string_view kParallelJoinBuildWallNanos{
       "hashtable.parallelJoinBuildWallNanos"};
-  static inline const std::string kParallelJoinBuildCpuNanos{
+  static constexpr std::string_view kParallelJoinBuildCpuNanos{
       "hashtable.parallelJoinBuildCpuNanos"};
-  static inline const std::string kParallelJoinBloomFilterPartitionWallNanos{
+  static constexpr std::string_view kParallelJoinBloomFilterPartitionWallNanos{
       "hashtable.parallelJoinBloomFilterPartitionWallNanos"};
-  static inline const std::string kParallelJoinBloomFilterPartitionCpuNanos{
+  static constexpr std::string_view kParallelJoinBloomFilterPartitionCpuNanos{
       "hashtable.parallelJoinBloomFilterPartitionCpuNanos"};
-  static inline const std::string kParallelJoinBloomFilterBuildWallNanos{
+  static constexpr std::string_view kParallelJoinBloomFilterBuildWallNanos{
       "hashtable.parallelJoinBloomFilterBuildWallNanos"};
-  static inline const std::string kParallelJoinBloomFilterBuildCpuNanos{
+  static constexpr std::string_view kParallelJoinBloomFilterBuildCpuNanos{
       "hashtable.parallelJoinBloomFilterBuildCpuNanos"};
-  static inline const std::string kVectorHasherMergeCpuNanos{
+  static constexpr std::string_view kVectorHasherMergeCpuNanos{
       "hashtable.vectorHasherMergeCpuNanos"};
-  static inline const std::string kHashTableCacheHit{"hashtable.cacheHit"};
-  static inline const std::string kHashTableCacheMiss{"hashtable.cacheMiss"};
+  static constexpr std::string_view kHashTableCacheHit{"hashtable.cacheHit"};
+  static constexpr std::string_view kHashTableCacheMiss{"hashtable.cacheMiss"};
+
+  /// Populates 'runtimeStats' with hash table stats.
+  virtual void addRuntimeStats(
+      std::unordered_map<std::string, RuntimeMetric>& runtimeStats) const = 0;
 
   /// Returns the string of the given 'mode'.
   static std::string modeString(HashMode mode);
@@ -544,6 +550,7 @@ class HashTable : public BaseHashTable {
       bool allowDuplicates,
       bool isJoinBuild,
       bool hasProbedFlag,
+      bool hasCountFlag,
       uint32_t minTableSizeForParallelJoinBuild,
       memory::MemoryPool* pool,
       uint64_t bloomFilterMaxSize = 0);
@@ -561,6 +568,7 @@ class HashTable : public BaseHashTable {
         false, // allowDuplicates
         false, // isJoinBuild
         false, // hasProbedFlag
+        false, // hasCountFlag
         0, // minTableSizeForParallelJoinBuild
         pool);
   }
@@ -570,6 +578,7 @@ class HashTable : public BaseHashTable {
       const std::vector<TypePtr>& dependentTypes,
       bool allowDuplicates,
       bool hasProbedFlag,
+      bool hasCountFlag,
       uint32_t minTableSizeForParallelJoinBuild,
       memory::MemoryPool* pool,
       uint64_t bloomFilterMaxSize = 0) {
@@ -580,6 +589,7 @@ class HashTable : public BaseHashTable {
         allowDuplicates,
         true, // isJoinBuild
         hasProbedFlag,
+        hasCountFlag,
         minTableSizeForParallelJoinBuild,
         pool,
         bloomFilterMaxSize);
@@ -681,6 +691,19 @@ class HashTable : public BaseHashTable {
 
   HashMode hashMode() const override {
     return hashMode_;
+  }
+
+  void addRuntimeStats(
+      std::unordered_map<std::string, RuntimeMetric>& runtimeStats)
+      const override {
+    runtimeStats[std::string(kCapacity)] = RuntimeMetric(capacity_);
+    runtimeStats[std::string(kHashMode)] =
+        RuntimeMetric(static_cast<int64_t>(hashMode_));
+    runtimeStats[std::string(kNumRehashes)] = RuntimeMetric(numRehashes_);
+    runtimeStats[std::string(kNumDistinct)] = RuntimeMetric(numDistinct_);
+    if (numTombstones_ != 0) {
+      runtimeStats[std::string(kNumTombstones)] = RuntimeMetric(numTombstones_);
+    }
   }
 
   void decideHashMode(

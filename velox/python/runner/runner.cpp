@@ -34,7 +34,7 @@ PYBIND11_MODULE(runner, m) {
   // is about to exit.
   static auto rootPool = velox::memory::memoryManager()->addRootPool();
   static auto executor = std::make_shared<folly::CPUThreadPoolExecutor>(
-      folly::hardware_concurrency());
+      folly::available_concurrency());
 
   // TaskIterator iterates over Vectors.
   py::module::import("pyvelox.vector");

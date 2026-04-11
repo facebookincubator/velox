@@ -24,7 +24,9 @@
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
@@ -74,7 +76,7 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
     setupMemoryPools();
 
     spillExecutor_ = std::make_unique<folly::IOThreadPoolExecutor>(
-        folly::hardware_concurrency());
+        folly::available_concurrency());
   }
 
   void TearDown() override {
@@ -167,7 +169,7 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
             connector::hive::LocationHandle::TableType::kNew),
         fileFormat,
         CompressionKind::CompressionKind_ZSTD,
-        {},
+        {}, // serdeParameters
         writerOptions,
         ensureFiles);
   }
@@ -1290,7 +1292,7 @@ TEST_F(HiveDataSinkTest, ensureFilesUnsupported) {
           dwio::common::FileFormat::DWRF,
           CompressionKind::CompressionKind_ZSTD,
           {}, // serdeParameters
-          nullptr, // writeOptions
+          nullptr, // writerOptions
           true // ensureFiles
           ),
       "ensureFiles is not supported with partition keys in the data");
@@ -1313,7 +1315,7 @@ TEST_F(HiveDataSinkTest, ensureFilesUnsupported) {
           dwio::common::FileFormat::DWRF,
           CompressionKind::CompressionKind_ZSTD,
           {}, // serdeParameters
-          nullptr, // writeOptions
+          nullptr, // writerOptions
           true // ensureFiles
           ),
       "ensureFiles is not supported with bucketing");
@@ -1344,16 +1346,52 @@ TEST_F(HiveDataSinkTest, fileRotationBasic) {
   ASSERT_EQ(partitions.size(), 1);
 
   const auto partitionJson = folly::parseJson(partitions[0]);
-  ASSERT_TRUE(partitionJson.count("fileWriteInfos") > 0);
-  const auto& fileWriteInfos = partitionJson["fileWriteInfos"];
+  ASSERT_TRUE(partitionJson.count(HiveCommitMessage::kFileWriteInfos) > 0);
+  const auto& fileWriteInfos =
+      partitionJson[HiveCommitMessage::kFileWriteInfos];
   ASSERT_GT(fileWriteInfos.size(), 1);
 
   for (size_t i = 0; i < fileWriteInfos.size(); ++i) {
-    ASSERT_TRUE(fileWriteInfos[i].count("writeFileName") > 0);
-    ASSERT_TRUE(fileWriteInfos[i].count("targetFileName") > 0);
-    ASSERT_TRUE(fileWriteInfos[i].count("fileSize") > 0);
-    ASSERT_GT(fileWriteInfos[i]["fileSize"].asInt(), 0);
+    ASSERT_TRUE(fileWriteInfos[i].count(HiveCommitMessage::kWriteFileName) > 0);
+    ASSERT_TRUE(
+        fileWriteInfos[i].count(HiveCommitMessage::kTargetFileName) > 0);
+    ASSERT_TRUE(fileWriteInfos[i].count(HiveCommitMessage::kFileSize) > 0);
+    ASSERT_GT(fileWriteInfos[i][HiveCommitMessage::kFileSize].asInt(), 0);
   }
+  createDuckDbTable(vectors);
+  verifyWrittenData(outputDirectory->getPath(), stats.numWrittenFiles);
+}
+
+TEST_F(HiveDataSinkTest, fileRotationNoEmptyTrailingFile) {
+  const auto outputDirectory = TempDirectoryPath::create();
+
+  std::unordered_map<std::string, std::string> connectorConfig;
+  connectorConfig.emplace("max-target-file-size", "1KB");
+  connectorConfig.emplace("hive.orc.writer.stripe-max-size", "1KB");
+  connectorConfig_ = std::make_shared<HiveConfig>(
+      std::make_shared<config::ConfigBase>(std::move(connectorConfig)));
+
+  auto dataSink = createDataSink(rowType_, outputDirectory->getPath());
+
+  const auto vectors = createVectors(2000, 10);
+  for (const auto& vector : vectors) {
+    dataSink->appendData(vector);
+  }
+
+  ASSERT_TRUE(dataSink->finish());
+  const auto partitions = dataSink->close();
+  const auto stats = dataSink->stats();
+
+  ASSERT_EQ(partitions.size(), 1);
+  const auto partitionJson = folly::parseJson(partitions[0]);
+  ASSERT_TRUE(partitionJson.count(HiveCommitMessage::kFileWriteInfos) > 0);
+  const auto& fileWriteInfos =
+      partitionJson[HiveCommitMessage::kFileWriteInfos];
+  ASSERT_EQ(fileWriteInfos.size(), 5);
+
+  const auto filePaths = listFiles(outputDirectory->getPath());
+  ASSERT_EQ(filePaths.size(), fileWriteInfos.size());
+  ASSERT_EQ(filePaths.size(), stats.numWrittenFiles);
   createDuckDbTable(vectors);
   verifyWrittenData(outputDirectory->getPath(), stats.numWrittenFiles);
 }
@@ -1396,8 +1434,9 @@ TEST_F(HiveDataSinkTest, fileRotationDisabledForBucketedTables) {
 
   for (const auto& partition : partitions) {
     const auto partitionJson = folly::parseJson(partition);
-    ASSERT_TRUE(partitionJson.count("fileWriteInfos") > 0);
-    const auto& fileWriteInfos = partitionJson["fileWriteInfos"];
+    ASSERT_TRUE(partitionJson.count(HiveCommitMessage::kFileWriteInfos) > 0);
+    const auto& fileWriteInfos =
+        partitionJson[HiveCommitMessage::kFileWriteInfos];
     ASSERT_EQ(fileWriteInfos.size(), 1);
   }
 
@@ -1430,29 +1469,30 @@ TEST_F(HiveDataSinkTest, fileRotationDisabledByDefault) {
 
   // Verify partition update has correct file info
   const auto partitionJson = folly::parseJson(partitions[0]);
-  ASSERT_TRUE(partitionJson.count("fileWriteInfos") > 0);
-  const auto& fileWriteInfos = partitionJson["fileWriteInfos"];
+  ASSERT_TRUE(partitionJson.count(HiveCommitMessage::kFileWriteInfos) > 0);
+  const auto& fileWriteInfos =
+      partitionJson[HiveCommitMessage::kFileWriteInfos];
   ASSERT_EQ(fileWriteInfos.size(), 1)
       << "Should have exactly 1 file entry when rotation disabled";
 
   // Verify file info fields
   const auto& fileInfo = fileWriteInfos[0];
-  ASSERT_TRUE(fileInfo.count("writeFileName") > 0);
-  ASSERT_TRUE(fileInfo.count("targetFileName") > 0);
-  ASSERT_TRUE(fileInfo.count("fileSize") > 0);
-  ASSERT_FALSE(fileInfo["writeFileName"].asString().empty());
-  ASSERT_FALSE(fileInfo["targetFileName"].asString().empty());
+  ASSERT_TRUE(fileInfo.count(HiveCommitMessage::kWriteFileName) > 0);
+  ASSERT_TRUE(fileInfo.count(HiveCommitMessage::kTargetFileName) > 0);
+  ASSERT_TRUE(fileInfo.count(HiveCommitMessage::kFileSize) > 0);
+  ASSERT_FALSE(fileInfo[HiveCommitMessage::kWriteFileName].asString().empty());
+  ASSERT_FALSE(fileInfo[HiveCommitMessage::kTargetFileName].asString().empty());
 
   const auto reportedFileSize =
-      static_cast<uint64_t>(fileInfo["fileSize"].asInt());
+      static_cast<uint64_t>(fileInfo[HiveCommitMessage::kFileSize].asInt());
   ASSERT_GT(reportedFileSize, 0);
 
   // File size in fileWriteInfos should match stats.numWrittenBytes
   ASSERT_EQ(reportedFileSize, stats.numWrittenBytes);
 
   // onDiskDataSizeInBytes should also match
-  const auto onDiskBytes =
-      static_cast<uint64_t>(partitionJson["onDiskDataSizeInBytes"].asInt());
+  const auto onDiskBytes = static_cast<uint64_t>(
+      partitionJson[HiveCommitMessage::kOnDiskDataSizeInBytes].asInt());
   ASSERT_EQ(onDiskBytes, stats.numWrittenBytes);
 
   // Verify actual file on disk matches reported size
@@ -1508,8 +1548,8 @@ TEST_F(HiveDataSinkTest, fileRotationIoStatsAccumulation) {
 
   ASSERT_EQ(partitions.size(), 1);
   const auto partitionJson = folly::parseJson(partitions[0]);
-  const auto onDiskBytes =
-      static_cast<uint64_t>(partitionJson["onDiskDataSizeInBytes"].asInt());
+  const auto onDiskBytes = static_cast<uint64_t>(
+      partitionJson[HiveCommitMessage::kOnDiskDataSizeInBytes].asInt());
   ASSERT_EQ(onDiskBytes, statsAfterClose.numWrittenBytes);
 
   createDuckDbTable(vectors);
@@ -1544,7 +1584,8 @@ TEST_F(HiveDataSinkTest, fileRotationFileInfoConsistency) {
   ASSERT_EQ(partitions.size(), 1);
 
   const auto partitionJson = folly::parseJson(partitions[0]);
-  const auto& fileWriteInfos = partitionJson["fileWriteInfos"];
+  const auto& fileWriteInfos =
+      partitionJson[HiveCommitMessage::kFileWriteInfos];
 
   // Verify file count matches
   ASSERT_EQ(fileWriteInfos.size(), stats.numWrittenFiles);
@@ -1558,8 +1599,9 @@ TEST_F(HiveDataSinkTest, fileRotationFileInfoConsistency) {
   uint64_t totalReportedSize = 0;
   for (size_t i = 0; i < fileWriteInfos.size(); ++i) {
     const auto& info = fileWriteInfos[i];
-    const auto fileName = info["writeFileName"].asString();
-    const auto fileSize = static_cast<uint64_t>(info["fileSize"].asInt());
+    const auto fileName = info[HiveCommitMessage::kWriteFileName].asString();
+    const auto fileSize =
+        static_cast<uint64_t>(info[HiveCommitMessage::kFileSize].asInt());
     reportedFiles[fileName] = fileSize;
     totalReportedSize += fileSize;
 
@@ -1569,8 +1611,8 @@ TEST_F(HiveDataSinkTest, fileRotationFileInfoConsistency) {
   }
 
   // Verify onDiskDataSizeInBytes matches sum of file sizes
-  const auto onDiskBytes =
-      static_cast<uint64_t>(partitionJson["onDiskDataSizeInBytes"].asInt());
+  const auto onDiskBytes = static_cast<uint64_t>(
+      partitionJson[HiveCommitMessage::kOnDiskDataSizeInBytes].asInt());
   ASSERT_EQ(onDiskBytes, totalReportedSize);
   ASSERT_EQ(onDiskBytes, stats.numWrittenBytes);
 
@@ -1683,17 +1725,18 @@ TEST_F(HiveDataSinkTest, fileRotationWithPartitionedTable) {
   uint32_t totalFilesFromPartitions = 0;
   for (const auto& partition : partitions) {
     const auto partitionJson = folly::parseJson(partition);
-    ASSERT_TRUE(partitionJson.count("fileWriteInfos") > 0);
-    const auto& fileWriteInfos = partitionJson["fileWriteInfos"];
+    ASSERT_TRUE(partitionJson.count(HiveCommitMessage::kFileWriteInfos) > 0);
+    const auto& fileWriteInfos =
+        partitionJson[HiveCommitMessage::kFileWriteInfos];
     ASSERT_GT(fileWriteInfos.size(), 0);
     totalFilesFromPartitions += fileWriteInfos.size();
 
     // Verify each file has valid info
     for (const auto& fileInfo : fileWriteInfos) {
-      ASSERT_TRUE(fileInfo.count("writeFileName") > 0);
-      ASSERT_TRUE(fileInfo.count("targetFileName") > 0);
-      ASSERT_TRUE(fileInfo.count("fileSize") > 0);
-      ASSERT_GT(fileInfo["fileSize"].asInt(), 0);
+      ASSERT_TRUE(fileInfo.count(HiveCommitMessage::kWriteFileName) > 0);
+      ASSERT_TRUE(fileInfo.count(HiveCommitMessage::kTargetFileName) > 0);
+      ASSERT_TRUE(fileInfo.count(HiveCommitMessage::kFileSize) > 0);
+      ASSERT_GT(fileInfo[HiveCommitMessage::kFileSize].asInt(), 0);
     }
   }
 
@@ -1805,7 +1848,7 @@ TEST_F(HiveDataSinkTest, raceWithCacheEviction) {
   auto cacheCleaner = std::async(std::launch::async, [&] {
     auto cache = cache::AsyncDataCache::getInstance();
     auto hiveConnector = std::dynamic_pointer_cast<HiveConnector>(
-        getConnector(exec::test::kHiveConnectorId));
+        ConnectorRegistry::tryGet(exec::test::kHiveConnectorId));
     while (!stop) {
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
       cache->clear();
@@ -1897,6 +1940,17 @@ TEST_F(HiveDataSinkTest, sharedWriterOptionsWithMultipleWriters) {
   createDuckDbTable(vectors);
   verifyWrittenData(
       outputDirectory->getPath(), static_cast<uint32_t>(partitions.size()));
+}
+
+TEST_F(HiveDataSinkTest, sanitizeFileName) {
+  auto sanitizeFileName = [](std::string fileName) {
+    HiveInsertFileNameGenerator::sanitizeFileName(fileName);
+    return fileName;
+  };
+  ASSERT_EQ(sanitizeFileName("abc"), "abc");
+  ASSERT_EQ(sanitizeFileName("abc_.-ABC012"), "abc_.-ABC012");
+  ASSERT_EQ(sanitizeFileName("abc_.-ABC012\\/"), "abc_.-ABC012__");
+  ASSERT_EQ(sanitizeFileName("local://abc/bcd/"), "local___abc_bcd_");
 }
 
 } // namespace

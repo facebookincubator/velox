@@ -114,10 +114,14 @@ uint64_t SortingWriter::reclaim(
 
   if (!isRunning() && !isFinishing()) {
     LOG(WARNING) << "Can't reclaim from a not running hive sort writer pool: "
-                 << sortPool_->name() << ", state: " << state()
-                 << "used memory: " << succinctBytes(sortPool_->usedBytes())
-                 << ", reserved memory: "
-                 << succinctBytes(sortPool_->reservedBytes());
+                 << sortPool_->name()
+                 << ", root pool: " << sortPool_->root()->name()
+                 << ", state: " << state()
+                 << ", used: " << succinctBytes(sortPool_->usedBytes())
+                 << ", reservation: "
+                 << succinctBytes(sortPool_->reservedBytes())
+                 << ", root pool reservation: "
+                 << succinctBytes(sortPool_->root()->reservedBytes());
     ++stats.numNonReclaimableAttempts;
     return 0;
   }
