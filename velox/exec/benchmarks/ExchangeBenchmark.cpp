@@ -32,13 +32,7 @@
 DEFINE_int32(width, 16, "Number of parties in shuffle");
 DEFINE_int32(task_width, 4, "Number of threads in each task in shuffle");
 
-DEFINE_int32(num_local_tasks, 8, "Number of concurrent local shuffles");
-DEFINE_int32(num_local_repeat, 8, "Number of repeats of local exchange query");
 DEFINE_int32(flat_batch_mb, 1, "MB in a 10k row flat batch.");
-DEFINE_int64(
-    local_exchange_buffer_mb,
-    32,
-    "task-wide buffer in local exchange");
 DEFINE_int64(exchange_buffer_mb, 32, "task-wide buffer in remote exchange");
 DEFINE_int32(dict_pct, 0, "Percentage of columns wrapped in dictionary");
 // Add the following definitions to allow Clion runs
@@ -59,40 +53,11 @@ using namespace facebook::velox::test;
 
 namespace {
 
-struct LocalPartitionWaitStats {
-  int64_t totalProducerWaitMs = 0;
-  int64_t totalConsumerWaitMs = 0;
-  std::vector<RuntimeMetric> consumerWaitMs;
-  std::vector<RuntimeMetric> producerWaitMs;
-  std::vector<int64_t> wallMs;
-};
-
 struct ExchangeRunStats {
   int64_t wallUs = 0;
   PlanNodeStats partitionedOutputStats;
   PlanNodeStats exchangeStats;
 };
-
-void sortByMax(std::vector<RuntimeMetric>& metrics) {
-  std::sort(
-      metrics.begin(),
-      metrics.end(),
-      [](const RuntimeMetric& left, const RuntimeMetric& right) {
-        return left.max > right.max;
-      });
-}
-
-void sortByAndPrintMax(
-    const char* title,
-    int64_t total,
-    std::vector<RuntimeMetric>& metrics) {
-  sortByMax(metrics);
-  VELOX_CHECK(!metrics.empty());
-  std::cout << title << "\n Total " << succinctNanos(total)
-            << "\n Max: " << metrics.front().toString()
-            << "\n Median: " << metrics[metrics.size() / 2].toString()
-            << "\n Min: " << metrics.back().toString() << std::endl;
-}
 
 void printExchangeStats(
     const std::string& datasetName,
@@ -239,106 +204,6 @@ class ExchangeBenchmark : public VectorTestBase {
 
         auto& taskExchangeStats = planStats.at(exchangeId);
         exchangeStats += taskExchangeStats;
-      }
-    };
-  }
-
-  void runLocal(
-      std::vector<RowVectorPtr>& vectors,
-      int32_t taskWidth,
-      int32_t numTasks,
-      int64_t& localPartitionWallUs,
-      PlanNodeStats& partitionedOutputStats,
-      LocalPartitionWaitStats& localPartitionWaitStats) {
-    assert(!vectors.empty());
-
-    core::PlanNodePtr plan;
-    core::PlanNodeId localPartitionId1;
-    core::PlanNodeId localPartitionId2;
-    std::vector<std::shared_ptr<Task>> tasks;
-    std::vector<std::thread> threads;
-
-    RowVectorPtr expected;
-
-    BENCHMARK_SUSPEND {
-      std::vector<std::string> aggregates = {"count(1)"};
-      auto& rowType = vectors[0]->type()->as<TypeKind::ROW>();
-      for (auto i = 1; i < rowType.size(); ++i) {
-        aggregates.push_back(fmt::format("checksum({})", rowType.nameOf(i)));
-      }
-
-      // plan: Agg/kSingle(4) <-- LocalPartition/Gather(3) <-- Agg/kGather(2)
-      // <-- LocalPartition/kRepartition(1) <-- Values(0)
-      plan = exec::test::PlanBuilder()
-                 .values(vectors, true)
-                 .localPartition({"c0"})
-                 .capturePlanNodeId(localPartitionId1)
-                 .singleAggregation({}, aggregates)
-                 .localPartition(std::vector<std::string>{})
-                 .capturePlanNodeId(localPartitionId2)
-                 .singleAggregation({}, {"sum(a0)"})
-                 .planNode();
-
-      threads.reserve(numTasks);
-      expected = makeRowVector({makeFlatVector<int64_t>(1, [&](auto /*row*/) {
-        return vectors.size() * vectors[0]->size() * taskWidth;
-      })});
-    };
-
-    auto startMicros = getCurrentTimeMicro();
-    std::mutex mutex;
-    for (int32_t i = 0; i < numTasks; ++i) {
-      threads.push_back(std::thread([&]() {
-        for (auto repeat = 0; repeat < FLAGS_num_local_repeat; ++repeat) {
-          auto task =
-              exec::test::AssertQueryBuilder(plan)
-                  .config(
-                      core::QueryConfig::kMaxLocalExchangeBufferSize,
-                      fmt::format("{}", FLAGS_local_exchange_buffer_mb << 20))
-                  .maxDrivers(taskWidth)
-                  .assertResults(expected);
-          {
-            std::lock_guard<std::mutex> l(mutex);
-            tasks.push_back(task);
-          }
-        }
-      }));
-    }
-    for (auto& thread : threads) {
-      thread.join();
-    }
-
-    BENCHMARK_SUSPEND {
-      localPartitionWallUs = getCurrentTimeMicro() - startMicros;
-
-      std::vector<core::PlanNodeId> localPartitionNodeIds{
-          localPartitionId1, localPartitionId2};
-
-      localPartitionWaitStats.totalProducerWaitMs = 0;
-      localPartitionWaitStats.totalConsumerWaitMs = 0;
-      for (const auto& task : tasks) {
-        auto taskStats = task->taskStats();
-        localPartitionWaitStats.wallMs.push_back(
-            taskStats.executionEndTimeMs - taskStats.executionStartTimeMs);
-        auto planStats = toPlanStats(taskStats);
-
-        for (const auto& nodeId : localPartitionNodeIds) {
-          auto& taskLocalPartition1Stats = planStats.at(nodeId);
-          partitionedOutputStats += taskLocalPartition1Stats;
-
-          auto& taskLocalPartition1RuntimeStats =
-              taskLocalPartition1Stats.customStats;
-          localPartitionWaitStats.producerWaitMs.push_back(
-              taskLocalPartition1RuntimeStats
-                  ["blockedWaitForProducerWallNanos"]);
-          localPartitionWaitStats.consumerWaitMs.push_back(
-              taskLocalPartition1RuntimeStats
-                  ["blockedWaitForConsumerWallNanos"]);
-          localPartitionWaitStats.totalProducerWaitMs +=
-              localPartitionWaitStats.producerWaitMs.back().sum;
-          localPartitionWaitStats.totalConsumerWaitMs +=
-              localPartitionWaitStats.consumerWaitMs.back().sum;
-        }
       }
     };
   }
@@ -503,20 +368,6 @@ void runBenchmarks(bool optimizedPartitionedOutputEnabled = false) {
     }
   }
 
-  int64_t localPartitionWallUs;
-  PlanNodeStats localPartitionStatsFlat10K;
-  LocalPartitionWaitStats localPartitionWaitStats;
-  folly::addBenchmark(__FILE__, "localFlat10k", [&]() {
-    bm->runLocal(
-        flat10k,
-        FLAGS_width,
-        FLAGS_num_local_tasks,
-        localPartitionWallUs,
-        localPartitionStatsFlat10K,
-        localPartitionWaitStats);
-    return 1;
-  });
-
   folly::runBenchmarks();
 
   for (size_t i = 0; i < exchangeCases.size(); ++i) {
@@ -529,32 +380,6 @@ void runBenchmarks(bool optimizedPartitionedOutputEnabled = false) {
           optimizedPartitionedOutputStats[i]);
     }
   }
-
-  std::cout
-      << "--------------------------------LocalFlat10K-------------------------------"
-      << std::endl;
-  std::cout << "Wall Time (ms): " << "\n Total: "
-            << succinctMicros(localPartitionWallUs)
-            << "\n Max: " << localPartitionWaitStats.wallMs.back()
-            << "\n Median: "
-            << localPartitionWaitStats
-                   .wallMs[localPartitionWaitStats.wallMs.size() / 2]
-            << "\n Min: " << localPartitionWaitStats.wallMs.front()
-            << std::endl;
-  std::cout << "LocalPartition: " << localPartitionStatsFlat10K.toString()
-            << std::endl;
-  sortByAndPrintMax(
-      "Producer Wait Time (ms)",
-      localPartitionWaitStats.totalProducerWaitMs,
-      localPartitionWaitStats.producerWaitMs);
-  sortByAndPrintMax(
-      "Consumer Wait Time (ms)",
-      localPartitionWaitStats.totalConsumerWaitMs,
-      localPartitionWaitStats.consumerWaitMs);
-  std::sort(
-      localPartitionWaitStats.wallMs.begin(),
-      localPartitionWaitStats.wallMs.end());
-  assert(!localPartitionWaitStats.wallMs.empty());
 }
 
 } // namespace
