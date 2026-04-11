@@ -54,15 +54,15 @@ depending on the order of input values.</p>
 <section id="general-aggregate-functions">
 <h2>General Aggregate Functions<a class="headerlink" href="#general-aggregate-functions" title="Link to this heading">¶</a></h2>
 <dl class="py function">
-<dt class="sig sig-object py" id="arbitrary">
-<span class="sig-name descname"><span class="pre">arbitrary</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#arbitrary" title="Link to this definition">¶</a></dt>
-<dd><p>Returns an arbitrary non-null value of <code class="docutils literal notranslate"><span class="pre">x</span></code>, if one exists.</p>
-</dd></dl>
-
-<dl class="py function">
 <dt class="sig sig-object py" id="any_value">
 <span class="sig-name descname"><span class="pre">any_value</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#any_value" title="Link to this definition">¶</a></dt>
 <dd><p>This is an alias for <a class="reference internal" href="#arbitrary" title="arbitrary"><code class="xref py py-func docutils literal notranslate"><span class="pre">arbitrary()</span></code></a>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="arbitrary">
+<span class="sig-name descname"><span class="pre">arbitrary</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#arbitrary" title="Link to this definition">¶</a></dt>
+<dd><p>Returns an arbitrary non-null value of <code class="docutils literal notranslate"><span class="pre">x</span></code>, if one exists.</p>
 </dd></dl>
 
 <dl class="py function">
@@ -147,14 +147,6 @@ it returns 0.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="histogram">
-<span class="sig-name descname"><span class="pre">histogram</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#histogram" title="Link to this definition">¶</a></dt>
-<dd><p>Returns a map containing the count of the number of times
-each input value occurs. Supports integral, floating-point,
-boolean, timestamp, and date input types.</p>
-</dd></dl>
-
-<dl class="py function">
 <dt class="sig sig-object py" id="geometric_mean">
 <span class="sig-name descname"><span class="pre">geometric_mean</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">bigint</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#geometric_mean" title="Link to this definition">¶</a></dt>
 <dt class="sig sig-object py">
@@ -165,29 +157,11 @@ boolean, timestamp, and date input types.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="max_by">
-<span class="sig-name descname"><span class="pre">max_by</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#max_by" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the value of <code class="docutils literal notranslate"><span class="pre">x</span></code> associated with the maximum value of <code class="docutils literal notranslate"><span class="pre">y</span></code> over all input values.
-<code class="docutils literal notranslate"><span class="pre">y</span></code> must be an orderable type.</p>
-</dd></dl>
-
-<dl class="py function">
-<dt class="sig sig-object py">
-<span class="sig-name descname"><span class="pre">max_by</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">x,</span> <span class="pre">y,</span> <span class="pre">n)</span> <span class="pre">-&gt;</span> <span class="pre">array([same</span> <span class="pre">as</span> <span class="pre">x]</span></em><span class="sig-paren">)</span></dt>
-<dd><p>Returns n values of <code class="docutils literal notranslate"><span class="pre">x</span></code> associated with the n largest values of <code class="docutils literal notranslate"><span class="pre">y</span></code> in descending order of <code class="docutils literal notranslate"><span class="pre">y</span></code>.</p>
-</dd></dl>
-
-<dl class="py function">
-<dt class="sig sig-object py" id="min_by">
-<span class="sig-name descname"><span class="pre">min_by</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#min_by" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the value of <code class="docutils literal notranslate"><span class="pre">x</span></code> associated with the minimum value of <code class="docutils literal notranslate"><span class="pre">y</span></code> over all input values.
-<code class="docutils literal notranslate"><span class="pre">y</span></code> must be an orderable type.</p>
-</dd></dl>
-
-<dl class="py function">
-<dt class="sig sig-object py">
-<span class="sig-name descname"><span class="pre">min_by</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">x,</span> <span class="pre">y,</span> <span class="pre">n)</span> <span class="pre">-&gt;</span> <span class="pre">array([same</span> <span class="pre">as</span> <span class="pre">x]</span></em><span class="sig-paren">)</span></dt>
-<dd><p>Returns n values of <code class="docutils literal notranslate"><span class="pre">x</span></code> associated with the n smallest values of <code class="docutils literal notranslate"><span class="pre">y</span></code> in ascending order of <code class="docutils literal notranslate"><span class="pre">y</span></code>.</p>
+<dt class="sig sig-object py" id="histogram">
+<span class="sig-name descname"><span class="pre">histogram</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#histogram" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a map containing the count of the number of times
+each input value occurs. Supports integral, floating-point,
+boolean, timestamp, and date input types.</p>
 </dd></dl>
 
 <dl class="py function">
@@ -211,6 +185,19 @@ For REAL and DOUBLE types, NaN is considered greater than Infinity.</p>
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="max_by">
+<span class="sig-name descname"><span class="pre">max_by</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#max_by" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the value of <code class="docutils literal notranslate"><span class="pre">x</span></code> associated with the maximum value of <code class="docutils literal notranslate"><span class="pre">y</span></code> over all input values.
+<code class="docutils literal notranslate"><span class="pre">y</span></code> must be an orderable type.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">max_by</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">x,</span> <span class="pre">y,</span> <span class="pre">n)</span> <span class="pre">-&gt;</span> <span class="pre">array([same</span> <span class="pre">as</span> <span class="pre">x]</span></em><span class="sig-paren">)</span></dt>
+<dd><p>Returns n values of <code class="docutils literal notranslate"><span class="pre">x</span></code> associated with the n largest values of <code class="docutils literal notranslate"><span class="pre">y</span></code> in descending order of <code class="docutils literal notranslate"><span class="pre">y</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="min">
 <span class="sig-name descname"><span class="pre">min</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#min" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the minimum value of all input values.
@@ -228,6 +215,19 @@ For REAL and DOUBLE types, NaN is considered greater than Infinity.</p>
 Currently not supported for ARRAY, MAP, and ROW input types.
 Nulls are not included in output array.
 For REAL and DOUBLE types, NaN is considered greater than Infinity.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="min_by">
+<span class="sig-name descname"><span class="pre">min_by</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#min_by" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the value of <code class="docutils literal notranslate"><span class="pre">x</span></code> associated with the minimum value of <code class="docutils literal notranslate"><span class="pre">y</span></code> over all input values.
+<code class="docutils literal notranslate"><span class="pre">y</span></code> must be an orderable type.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">min_by</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">x,</span> <span class="pre">y,</span> <span class="pre">n)</span> <span class="pre">-&gt;</span> <span class="pre">array([same</span> <span class="pre">as</span> <span class="pre">x]</span></em><span class="sig-paren">)</span></dt>
+<dd><p>Returns n values of <code class="docutils literal notranslate"><span class="pre">x</span></code> associated with the n smallest values of <code class="docutils literal notranslate"><span class="pre">y</span></code> in ascending order of <code class="docutils literal notranslate"><span class="pre">y</span></code>.</p>
 </dd></dl>
 
 <dl class="py function">
@@ -908,12 +908,6 @@ value. <code class="docutils literal notranslate"><span class="pre">x</span></co
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="variance">
-<span class="sig-name descname"><span class="pre">variance</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#variance" title="Link to this definition">¶</a></dt>
-<dd><p>This is an alias for <a class="reference internal" href="#var_samp" title="var_samp"><code class="xref py py-func docutils literal notranslate"><span class="pre">var_samp()</span></code></a>.</p>
-</dd></dl>
-
-<dl class="py function">
 <dt class="sig sig-object py" id="var_pop">
 <span class="sig-name descname"><span class="pre">var_pop</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#var_pop" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the population variance of all input values.</p>
@@ -923,6 +917,12 @@ value. <code class="docutils literal notranslate"><span class="pre">x</span></co
 <dt class="sig sig-object py" id="var_samp">
 <span class="sig-name descname"><span class="pre">var_samp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#var_samp" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the sample variance of all input values.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="variance">
+<span class="sig-name descname"><span class="pre">variance</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#variance" title="Link to this definition">¶</a></dt>
+<dd><p>This is an alias for <a class="reference internal" href="#var_samp" title="var_samp"><code class="xref py py-func docutils literal notranslate"><span class="pre">var_samp()</span></code></a>.</p>
 </dd></dl>
 
 </section>
@@ -1202,8 +1202,8 @@ In Journal of Computer and System Sciences, 31:182-209, 1985</p>
     <ul>
 <li><a class="reference internal" href="#">Aggregate Functions</a><ul>
 <li><a class="reference internal" href="#general-aggregate-functions">General Aggregate Functions</a><ul>
-<li><a class="reference internal" href="#arbitrary"><code class="docutils literal notranslate"><span class="pre">arbitrary()</span></code></a></li>
 <li><a class="reference internal" href="#any_value"><code class="docutils literal notranslate"><span class="pre">any_value()</span></code></a></li>
+<li><a class="reference internal" href="#arbitrary"><code class="docutils literal notranslate"><span class="pre">arbitrary()</span></code></a></li>
 <li><a class="reference internal" href="#array_agg"><code class="docutils literal notranslate"><span class="pre">array_agg()</span></code></a></li>
 <li><a class="reference internal" href="#avg"><code class="docutils literal notranslate"><span class="pre">avg()</span></code></a></li>
 <li><a class="reference internal" href="#bool_and"><code class="docutils literal notranslate"><span class="pre">bool_and()</span></code></a></li>
@@ -1213,12 +1213,12 @@ In Journal of Computer and System Sciences, 31:182-209, 1985</p>
 <li><a class="reference internal" href="#count_if"><code class="docutils literal notranslate"><span class="pre">count_if()</span></code></a></li>
 <li><a class="reference internal" href="#entropy"><code class="docutils literal notranslate"><span class="pre">entropy()</span></code></a></li>
 <li><a class="reference internal" href="#every"><code class="docutils literal notranslate"><span class="pre">every()</span></code></a></li>
-<li><a class="reference internal" href="#histogram"><code class="docutils literal notranslate"><span class="pre">histogram()</span></code></a></li>
 <li><a class="reference internal" href="#geometric_mean"><code class="docutils literal notranslate"><span class="pre">geometric_mean()</span></code></a></li>
-<li><a class="reference internal" href="#max_by"><code class="docutils literal notranslate"><span class="pre">max_by()</span></code></a></li>
-<li><a class="reference internal" href="#min_by"><code class="docutils literal notranslate"><span class="pre">min_by()</span></code></a></li>
+<li><a class="reference internal" href="#histogram"><code class="docutils literal notranslate"><span class="pre">histogram()</span></code></a></li>
 <li><a class="reference internal" href="#max"><code class="docutils literal notranslate"><span class="pre">max()</span></code></a></li>
+<li><a class="reference internal" href="#max_by"><code class="docutils literal notranslate"><span class="pre">max_by()</span></code></a></li>
 <li><a class="reference internal" href="#min"><code class="docutils literal notranslate"><span class="pre">min()</span></code></a></li>
+<li><a class="reference internal" href="#min_by"><code class="docutils literal notranslate"><span class="pre">min_by()</span></code></a></li>
 <li><a class="reference internal" href="#multimap_agg"><code class="docutils literal notranslate"><span class="pre">multimap_agg()</span></code></a></li>
 <li><a class="reference internal" href="#reduce_agg"><code class="docutils literal notranslate"><span class="pre">reduce_agg()</span></code></a></li>
 <li><a class="reference internal" href="#set_agg"><code class="docutils literal notranslate"><span class="pre">set_agg()</span></code></a></li>
@@ -1280,9 +1280,9 @@ In Journal of Computer and System Sciences, 31:182-209, 1985</p>
 <li><a class="reference internal" href="#stddev"><code class="docutils literal notranslate"><span class="pre">stddev()</span></code></a></li>
 <li><a class="reference internal" href="#stddev_pop"><code class="docutils literal notranslate"><span class="pre">stddev_pop()</span></code></a></li>
 <li><a class="reference internal" href="#stddev_samp"><code class="docutils literal notranslate"><span class="pre">stddev_samp()</span></code></a></li>
-<li><a class="reference internal" href="#variance"><code class="docutils literal notranslate"><span class="pre">variance()</span></code></a></li>
 <li><a class="reference internal" href="#var_pop"><code class="docutils literal notranslate"><span class="pre">var_pop()</span></code></a></li>
 <li><a class="reference internal" href="#var_samp"><code class="docutils literal notranslate"><span class="pre">var_samp()</span></code></a></li>
+<li><a class="reference internal" href="#variance"><code class="docutils literal notranslate"><span class="pre">variance()</span></code></a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#noisy-aggregate-functions">Noisy Aggregate Functions</a><ul>
