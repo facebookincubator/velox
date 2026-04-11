@@ -35,67 +35,32 @@ using facebook::velox::common::testutil::TestValue;
 namespace facebook::velox::exec {
 using IndexSource = connector::IndexSource;
 
-void IndexLookupJoin::IndexLazyStatWriter::addRuntimeStat(
+void IndexLookupJoin::IndexStatWriter::addRuntimeStat(
     std::string_view name,
     const RuntimeCounter& value) {
-  if (name == LazyVector::kInputBytes) {
-    inputBytes.addValue(value.value);
-  } else if (name == LazyVector::kCpuNanos) {
-    cpuNanos.addValue(value.value);
-  } else if (name == LazyVector::kWallNanos) {
-    wallNanos.addValue(value.value);
+  auto lockedStats = runtimeStats_.wlock();
+  auto it = lockedStats->find(std::string(name));
+  if (it != lockedStats->end()) {
+    it->second.addValue(value.value);
   } else {
-    // For any other stats emitted during index-side operations, add 'index'
-    // prefix to attribute them to the index side.
-    std::string prefixedName = "index";
-    if (!name.empty()) {
-      prefixedName +=
-          static_cast<char>(std::toupper(static_cast<unsigned char>(name[0])));
-      prefixedName += name.substr(1);
-    }
-    op_->Operator::addRuntimeStat(prefixedName, value);
+    RuntimeMetric metric(value.unit);
+    metric.addValue(value.value);
+    lockedStats->emplace(std::string(name), std::move(metric));
   }
 }
 
+void IndexLookupJoin::IndexStatWriter::setRuntimeStat(
+    const std::string& name,
+    const RuntimeMetric& metric) {
+  runtimeStats_.wlock()->insert_or_assign(name, metric);
+}
+
+std::unordered_map<std::string, RuntimeMetric>
+IndexLookupJoin::IndexStatWriter::runtimeStats() const {
+  return *runtimeStats_.rlock();
+}
+
 namespace {
-
-// Records IndexSource input stats (lookup keys sent to connector).
-void recordIndexSourceInputStats(
-    folly::Synchronized<OperatorStats>& stats,
-    const RowVectorPtr& lookupInput) {
-  auto lockedStats = stats.wlock();
-  lockedStats->addRuntimeStat(
-      IndexSource::kInputPositions,
-      RuntimeCounter(
-          static_cast<int64_t>(lookupInput->size()),
-          RuntimeCounter::Unit::kNone));
-  lockedStats->addRuntimeStat(
-      IndexSource::kInputBytes,
-      RuntimeCounter(
-          static_cast<int64_t>(lookupInput->estimateFlatSize()),
-          RuntimeCounter::Unit::kBytes));
-}
-
-// Records IndexSource output stats (rows received from connector, before join
-// filter).
-void recordIndexSourceOutputStats(
-    folly::Synchronized<OperatorStats>& stats,
-    const IndexSource::Result& lookupResult) {
-  auto lockedStats = stats.wlock();
-  lockedStats->addRuntimeStat(
-      IndexSource::kOutputPositions,
-      RuntimeCounter(
-          static_cast<int64_t>(lookupResult.size()),
-          RuntimeCounter::Unit::kNone));
-  lockedStats->addRuntimeStat(
-      IndexSource::kOutputBytes,
-      RuntimeCounter(
-          static_cast<int64_t>(lookupResult.output->estimateFlatSize()),
-          RuntimeCounter::Unit::kBytes));
-  lockedStats->addRuntimeStat(
-      IndexSource::kOutputVectors,
-      RuntimeCounter(1, RuntimeCounter::Unit::kNone));
-}
 
 void duplicateJoinKeyCheck(
     const std::vector<core::FieldAccessTypedExprPtr>& keys) {
@@ -244,16 +209,29 @@ inline RowVectorPtr createRowVector(
       pool, type, nullptr, numRows, std::move(children));
 }
 
+// Extracts a runtime stat from the map, removes it, and returns its sum value.
+// Returns 0 if the stat is not found.
+int64_t extractStatSum(
+    std::unordered_map<std::string, RuntimeMetric>& stats,
+    const std::string& name) {
+  auto it = stats.find(name);
+  if (it == stats.end()) {
+    return 0;
+  }
+  const auto value = it->second.sum;
+  stats.erase(it);
+  return value;
+}
+
 } // namespace
 
 // static
 std::vector<OperatorStats> IndexLookupJoin::splitStats(
     const OperatorStats& combinedStats,
     const core::PlanNodeId& indexSourceNodeId,
-    const IndexLazyStatWriter& writer) {
-  // Create stats for the IndexSource node. These represent the lookup side
-  // of the join which is processed internally by IndexLookupJoin but should
-  // be reported as a separate plan node.
+    const IndexStatWriter& indexSourceStatWriter) {
+  // Create stats for the IndexSource node from the accumulated index source
+  // runtime stats.
   OperatorStats indexSourceStats;
   indexSourceStats.operatorId = combinedStats.operatorId;
   indexSourceStats.pipelineId = combinedStats.pipelineId;
@@ -261,79 +239,44 @@ std::vector<OperatorStats> IndexLookupJoin::splitStats(
   indexSourceStats.operatorType = "IndexSource";
   indexSourceStats.numDrivers = combinedStats.numDrivers;
 
-  // The backgroundTiming contains the lookup time from the index source.
-  // Use this as the CPU/wall time for IndexSource.
-  indexSourceStats.addInputTiming = combinedStats.backgroundTiming;
-  indexSourceStats.getOutputTiming.count = combinedStats.backgroundTiming.count;
+  // Populate IndexSource runtime stats from the writer's accumulated map.
+  indexSourceStats.runtimeStats = indexSourceStatWriter.runtimeStats();
 
-  // Use the tracked IndexSource stats. These are stored as runtime stats so
-  // they aggregate correctly across multiple drivers.
-  auto getTrackedStat = [&](std::string_view name) -> uint64_t {
-    auto it = combinedStats.runtimeStats.find(std::string(name));
-    if (it != combinedStats.runtimeStats.end()) {
-      return static_cast<uint64_t>(it->second.sum);
-    }
-    return 0;
-  };
-
-  // Input stats (lookup keys sent to connector).
-  indexSourceStats.inputPositions =
-      getTrackedStat(IndexSource::kInputPositions);
-  indexSourceStats.inputBytes = getTrackedStat(IndexSource::kInputBytes);
-
-  // Output stats (rows received from connector, before join filter).
+  // Extract standard operator stats from runtime stats into OperatorStats
+  // fields so they show up in PlanNodeStats (inputRows, outputRows, etc.).
   indexSourceStats.outputPositions =
-      getTrackedStat(IndexSource::kOutputPositions);
-  indexSourceStats.outputBytes = getTrackedStat(IndexSource::kOutputBytes);
-  indexSourceStats.outputVectors = getTrackedStat(IndexSource::kOutputVectors);
+      extractStatSum(indexSourceStats.runtimeStats, "outputPositions");
+  indexSourceStats.outputBytes =
+      extractStatSum(indexSourceStats.runtimeStats, "outputBytes");
+  indexSourceStats.outputVectors =
+      extractStatSum(indexSourceStats.runtimeStats, "outputVectors");
+  indexSourceStats.inputPositions =
+      extractStatSum(indexSourceStats.runtimeStats, "inputPositions");
+  indexSourceStats.inputBytes =
+      extractStatSum(indexSourceStats.runtimeStats, "inputBytes");
 
-  // Copy runtime stats to IndexSource - these include connector lookup metrics.
-  // Remove the internal tracking stats that were only used for splitting.
-  indexSourceStats.runtimeStats = combinedStats.runtimeStats;
-  indexSourceStats.runtimeStats.erase(
-      std::string(IndexSource::kInputPositions));
-  indexSourceStats.runtimeStats.erase(std::string(IndexSource::kInputBytes));
-  indexSourceStats.runtimeStats.erase(
-      std::string(IndexSource::kOutputPositions));
-  indexSourceStats.runtimeStats.erase(std::string(IndexSource::kOutputBytes));
-  indexSourceStats.runtimeStats.erase(std::string(IndexSource::kOutputVectors));
-  // Remove probe-side lazy loading stats from IndexSource — they belong to
-  // the scan operator (transferred by Driver::processLazyIoStats).
-  indexSourceStats.runtimeStats.erase(std::string(LazyVector::kInputBytes));
-  indexSourceStats.runtimeStats.erase(std::string(LazyVector::kCpuNanos));
-  indexSourceStats.runtimeStats.erase(std::string(LazyVector::kWallNanos));
-  // Write index-side lazy loading stats (accumulated by IndexLazyStatWriter)
-  // to IndexSource under standard lazy stat names.
-  if (writer.inputBytes.count > 0) {
-    indexSourceStats.runtimeStats[std::string(LazyVector::kInputBytes)] =
-        writer.inputBytes;
-  }
-  if (writer.cpuNanos.count > 0) {
-    indexSourceStats.runtimeStats[std::string(LazyVector::kCpuNanos)] =
-        writer.cpuNanos;
-  }
-  if (writer.wallNanos.count > 0) {
-    indexSourceStats.runtimeStats[std::string(LazyVector::kWallNanos)] =
-        writer.wallNanos;
+  // Populate IndexSource addInputTiming from lookup timing stats recorded by
+  // recordConnectorStats into the writer.
+  const auto lookupCount =
+      extractStatSum(indexSourceStats.runtimeStats, "lookupCount");
+  const auto lookupWallNanos =
+      extractStatSum(indexSourceStats.runtimeStats, "lookupWallNanos");
+  const auto lookupCpuNanos =
+      extractStatSum(indexSourceStats.runtimeStats, "lookupCpuNanos");
+  if (lookupCount > 0) {
+    indexSourceStats.addInputTiming = CpuWallTiming{
+        static_cast<uint64_t>(lookupCount),
+        static_cast<uint64_t>(lookupWallNanos),
+        static_cast<uint64_t>(lookupCpuNanos)};
   }
 
-  // Create stats for the IndexLookupJoin node. This is the main join operator
-  // that receives probe input from the left side and performs the join logic.
+  // Create stats for the IndexLookupJoin node.
   auto joinStats = combinedStats;
 
-  // Clear backgroundTiming from join stats since it's now attributed to
-  // IndexSource. This avoids double counting when aggregating CPU/wall time
-  // across operators.
-  joinStats.backgroundTiming.clear();
-
-  // Remove the internal tracking stats that were only used for splitting.
-  joinStats.runtimeStats.erase(std::string(IndexSource::kInputPositions));
-  joinStats.runtimeStats.erase(std::string(IndexSource::kInputBytes));
-  joinStats.runtimeStats.erase(std::string(IndexSource::kOutputPositions));
-  joinStats.runtimeStats.erase(std::string(IndexSource::kOutputBytes));
-  joinStats.runtimeStats.erase(std::string(IndexSource::kOutputVectors));
-  // Remove probe-side lazy loading stats from join stats — they have been
-  // transferred to the scan operator by Driver::processLazyIoStats().
+  // Remove residual probe-side lazy loading stats from join stats. These
+  // accumulate in every non-scan operator's runtimeStats and are normally
+  // harmless, but splitStats copies combinedStats to create the join node
+  // entry, so we must erase them to avoid exposing them on the join node.
   joinStats.runtimeStats.erase(std::string(LazyVector::kInputBytes));
   joinStats.runtimeStats.erase(std::string(LazyVector::kCpuNanos));
   joinStats.runtimeStats.erase(std::string(LazyVector::kWallNanos));
@@ -386,7 +329,7 @@ IndexLookupJoin::IndexLookupJoin(
           1 + driverCtx->queryConfig().indexLookupJoinMaxPrefetchBatches()),
       isIndexSplitCollector_{driverCtx->partitionId == 0},
       joinNode_{joinNode},
-      indexStatWriter_(std::make_shared<IndexLazyStatWriter>(this)) {
+      indexStatWriter_(std::make_shared<IndexStatWriter>()) {
   duplicateJoinKeyCheck(joinNode_->leftKeys());
   duplicateJoinKeyCheck(joinNode_->rightKeys());
 
@@ -395,11 +338,11 @@ IndexLookupJoin::IndexLookupJoin(
   // (not initialize()) because operator stats are copied to task stats before
   // initialize() is called.
   stats_.withWLock([&](auto& stats) {
-    stats.setStatSplitter(
-        [indexSourceId = indexSourceNodeId_,
-         writer = indexStatWriter_](const auto& combinedStats) {
-          return splitStats(combinedStats, indexSourceId, *writer);
-        });
+    stats.setStatSplitter([indexSourceId = indexSourceNodeId_,
+                           indexSourceStatWriter =
+                               indexStatWriter_](const auto& combinedStats) {
+      return splitStats(combinedStats, indexSourceId, *indexSourceStatWriter);
+    });
   });
 }
 
@@ -830,6 +773,7 @@ void IndexLookupJoin::addInput(RowVectorPtr input) {
   ensureInputLoaded(batch);
   decodeAndDetectNonNullKeys(batch);
   prepareLookup(batch);
+  recordIndexSourceInputStats(batch);
   // startLookup may trigger index-side lazy loading via mergeLookupResults()
   // when sync lookups return multiple partial results. Redirect those stats to
   // index-specific names.
@@ -1057,8 +1001,6 @@ void IndexLookupJoin::startLookup(InputBatchState& batch) {
     return;
   }
 
-  recordIndexSourceInputStats(stats_, batch.lookupInput);
-
   // Create the lookup result iterator.
   batch.lookupResultIter =
       indexSource_->lookup(connector::IndexSource::Request{batch.lookupInput});
@@ -1120,10 +1062,43 @@ RowVectorPtr IndexLookupJoin::produceRemainingOutput(InputBatchState& batch) {
   return nullptr;
 }
 
+void IndexLookupJoin::recordIndexSourceInputStats(
+    const InputBatchState& batch) {
+  if (batch.lookupInput == nullptr || batch.lookupInput->size() == 0) {
+    return;
+  }
+  indexStatWriter_->addRuntimeStat(
+      "inputPositions",
+      RuntimeCounter(
+          static_cast<int64_t>(batch.lookupInput->size()),
+          RuntimeCounter::Unit::kNone));
+  indexStatWriter_->addRuntimeStat(
+      "inputBytes",
+      RuntimeCounter(
+          static_cast<int64_t>(batch.lookupInput->estimateFlatSize()),
+          RuntimeCounter::Unit::kBytes));
+}
+
+void IndexLookupJoin::recordIndexSourceOutputStats(
+    const InputBatchState& batch) {
+  indexStatWriter_->addRuntimeStat(
+      "outputPositions",
+      RuntimeCounter(
+          static_cast<int64_t>(batch.lookupResult->size()),
+          RuntimeCounter::Unit::kNone));
+  indexStatWriter_->addRuntimeStat(
+      "outputBytes",
+      RuntimeCounter(
+          static_cast<int64_t>(batch.lookupResult->output->estimateFlatSize()),
+          RuntimeCounter::Unit::kBytes));
+  indexStatWriter_->addRuntimeStat(
+      "outputVectors", RuntimeCounter(1, RuntimeCounter::Unit::kNone));
+}
+
 void IndexLookupJoin::prepareLookupResult(InputBatchState& batch) {
   VELOX_CHECK_NOT_NULL(batch.lookupResult);
 
-  recordIndexSourceOutputStats(stats_, *batch.lookupResult);
+  recordIndexSourceOutputStats(batch);
 
   if (rawLookupInputHitIndices_ != nullptr) {
     return;
@@ -1653,26 +1628,36 @@ void IndexLookupJoin::recordConnectorStats() {
     // in that case.
     return;
   }
-  auto lockedStats = stats_.wlock();
   auto connectorStats = indexSource_->runtimeStats();
   for (auto& [name, value] : connectorStats) {
-    lockedStats->runtimeStats.erase(name);
-    lockedStats->runtimeStats.emplace(name, std::move(value));
+    indexStatWriter_->setRuntimeStat(name, value);
   }
+
+  // Record lookup timing into the index stat writer. splitStats extracts these
+  // to populate the IndexSource node's addInputTiming.
   if (connectorStats.count(std::string(kConnectorLookupWallTime)) != 0) {
-    const CpuWallTiming backgroundTiming{
-        static_cast<uint64_t>(
-            connectorStats[std::string(kConnectorLookupWallTime)].count),
-        static_cast<uint64_t>(
-            connectorStats[std::string(kConnectorLookupWallTime)].sum),
-        // NOTE: this might not be accurate as it doesn't include the time
-        // spent inside the index storage client.
-        static_cast<uint64_t>(
-            connectorStats[std::string(kConnectorResultPrepareTime)].sum) +
-            connectorStats[std::string(kClientRequestProcessTime)].sum +
-            connectorStats[std::string(kClientResultProcessTime)].sum};
-    lockedStats->backgroundTiming.clear();
-    lockedStats->backgroundTiming.add(backgroundTiming);
+    const auto& lookupWallTime =
+        connectorStats[std::string(kConnectorLookupWallTime)];
+    indexStatWriter_->addRuntimeStat(
+        "lookupCount",
+        RuntimeCounter(
+            static_cast<int64_t>(lookupWallTime.count),
+            RuntimeCounter::Unit::kNone));
+    indexStatWriter_->addRuntimeStat(
+        "lookupWallNanos",
+        RuntimeCounter(
+            static_cast<int64_t>(lookupWallTime.sum),
+            RuntimeCounter::Unit::kNanos));
+    // NOTE: this might not be accurate as it doesn't include the time
+    // spent inside the index storage client.
+    indexStatWriter_->addRuntimeStat(
+        "lookupCpuNanos",
+        RuntimeCounter(
+            static_cast<int64_t>(
+                connectorStats[std::string(kConnectorResultPrepareTime)].sum +
+                connectorStats[std::string(kClientRequestProcessTime)].sum +
+                connectorStats[std::string(kClientResultProcessTime)].sum),
+            RuntimeCounter::Unit::kNanos));
   }
 }
 } // namespace facebook::velox::exec
