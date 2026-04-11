@@ -880,6 +880,10 @@ struct DriverFactory {
   /// based on this pipeline.
   std::vector<core::PlanNodeId> needsSpatialJoinBridges() const;
 
+  /// Returns plan node IDs for which IndexLookupJoin Bridges must be created
+  /// based on this pipeline.
+  std::vector<core::PlanNodeId> needsIndexLookupJoinBridges() const;
+
   static std::vector<DriverAdapter> adapters;
 };
 

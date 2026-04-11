@@ -384,6 +384,7 @@ IndexLookupJoin::IndexLookupJoin(
               lookupTableHandle_->connectorId())),
       maxNumInputBatches_(
           1 + driverCtx->queryConfig().indexLookupJoinMaxPrefetchBatches()),
+      isIndexSplitCollector_{driverCtx->partitionId == 0},
       joinNode_{joinNode},
       indexStatWriter_(std::make_shared<IndexLazyStatWriter>(this)) {
   duplicateJoinKeyCheck(joinNode_->leftKeys());
@@ -424,6 +425,13 @@ void IndexLookupJoin::initialize() {
       lookupTableHandle_,
       lookupColumnHandles_,
       connectorQueryCtx_.get());
+
+  if (lookupTableHandle_->needsIndexSplit()) {
+    auto* driverCtx = operatorCtx_->driverCtx();
+    joinBridge_ = driverCtx->task->getIndexLookupJoinBridge(
+        driverCtx->splitGroupId, planNodeId());
+    VELOX_CHECK_NOT_NULL(joinBridge_);
+  }
 
   createIndexSplitTracer();
 }
@@ -711,6 +719,9 @@ bool IndexLookupJoin::collectIndexSplits(ContinueFuture* future) {
     if (!split.hasConnectorSplit()) {
       noMoreIndexSplits_ = true;
       VELOX_CHECK(!indexSplits_.empty());
+      // Publish splits to the bridge for followers before consuming locally.
+      VELOX_CHECK_NOT_NULL(joinBridge_);
+      joinBridge_->setIndexSplits(indexSplits_);
       indexSource_->addSplits(std::move(indexSplits_));
       return true;
     }
@@ -718,6 +729,20 @@ bool IndexLookupJoin::collectIndexSplits(ContinueFuture* future) {
     traceIndexSplit(split);
     indexSplits_.push_back(std::move(split.connectorSplit));
   }
+}
+
+bool IndexLookupJoin::waitForIndexSplits(ContinueFuture* future) {
+  VELOX_CHECK(needsIndexSplits());
+  VELOX_CHECK(!isIndexSplitCollector_);
+  VELOX_CHECK(indexSplits_.empty());
+
+  auto splits = joinBridge_->splitsOrFuture(future);
+  if (splits.empty()) {
+    return false;
+  }
+  noMoreIndexSplits_ = true;
+  indexSource_->addSplits(std::move(splits));
+  return true;
 }
 
 bool IndexLookupJoin::startDrain() {
@@ -748,9 +773,16 @@ bool IndexLookupJoin::needsInput() const {
 BlockingReason IndexLookupJoin::isBlocked(ContinueFuture* future) {
   // Handle split collection for index sources that require splits.
   if (needsIndexSplits()) {
-    if (!collectIndexSplits(future)) {
-      VELOX_CHECK(future->valid());
-      return BlockingReason::kWaitForSplit;
+    if (isIndexSplitCollector_) {
+      if (!collectIndexSplits(future)) {
+        VELOX_CHECK(future->valid());
+        return BlockingReason::kWaitForSplit;
+      }
+    } else {
+      if (!waitForIndexSplits(future)) {
+        VELOX_CHECK(future->valid());
+        return BlockingReason::kWaitForIndexSplits;
+      }
     }
   }
 
