@@ -16,6 +16,7 @@ add_library(
   velox_cudf_exec
   CudfAssignUniqueId.cpp
   CudfConversion.cpp
+  CudfEnforceSingleRow.cpp
   CudfFilterProject.cpp
   CudfHashAggregation.cpp
   CudfHashJoin.cpp
