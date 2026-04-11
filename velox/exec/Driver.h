@@ -285,13 +285,13 @@ constexpr const char* kOpMethodAddInput = "addInput";
 constexpr const char* kOpMethodNoMoreInput = "noMoreInput";
 constexpr const char* kOpMethodIsFinished = "isFinished";
 
-/// Same as the structure below, but does not have atomic members.
-/// Used to return the status from the struct with atomics.
+/// Non-atomic snapshot of OpCallStatus, used to return a consistent status from
+/// OpCallStatus which uses atomic members internally.
 struct OpCallStatusRaw {
   /// Time (ms) when the operator call started.
   size_t timeStartMs{0};
-  /// Id of the operator, method of which is currently running. It is index into
-  /// the vector of Driver's operators.
+  /// Id of the operator, method of which is currently running. It is the index
+  /// into the vector of Driver's operators.
   int32_t opId{0};
   /// Method of the operator, which is currently running.
   const char* method{kOpMethodNone};
@@ -305,14 +305,15 @@ struct OpCallStatusRaw {
 };
 
 /// Structure holds the information about the current operator call the driver
-/// is in. Can be used to detect deadlocks and otherwise blocked calls.
-/// If timeStartMs is zero, then we aren't in an operator call.
-struct OpCallStatus {
+/// is in. Can be used to detect deadlocks and otherwise blocked calls. If
+/// 'timeStartMs_' is zero, then we aren't in an operator call.
+class OpCallStatus {
+ public:
   OpCallStatus() {}
 
   /// The status accessor.
   OpCallStatusRaw operator()() const {
-    return OpCallStatusRaw{timeStartMs, opId, method};
+    return OpCallStatusRaw{timeStartMs_, opId_, method_};
   }
 
   void start(int32_t operatorId, const char* operatorMethod);
@@ -320,12 +321,12 @@ struct OpCallStatus {
 
  private:
   /// Time (ms) when the operator call started.
-  std::atomic_size_t timeStartMs{0};
-  /// Id of the operator, method of which is currently running. It is index into
-  /// the vector of Driver's operators.
-  std::atomic_int32_t opId{0};
+  std::atomic_size_t timeStartMs_{0};
+  /// Id of the operator, method of which is currently running. It is the index
+  /// into the vector of Driver's operators.
+  std::atomic_int32_t opId_{0};
   /// Method of the operator, which is currently running.
-  std::atomic<const char*> method{kOpMethodNone};
+  std::atomic<const char*> method_{kOpMethodNone};
 };
 
 struct PushdownFilters {
