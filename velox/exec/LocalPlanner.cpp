@@ -478,7 +478,7 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
   std::vector<std::unique_ptr<Operator>> operators;
   operators.reserve(planNodes.size());
 
-  for (int32_t i = 0; i < planNodes.size(); i++) {
+  for (int32_t i = 0; i < planNodes.size(); ++i) {
     // Id of the Operator being made. This is not the same as 'i'
     // because some PlanNodes may get fused.
     auto id = operators.size();
@@ -829,6 +829,21 @@ std::vector<core::PlanNodeId> DriverFactory::needsSpatialJoinBridges() const {
     }
   }
 
+  return planNodeIds;
+}
+
+std::vector<core::PlanNodeId> DriverFactory::needsIndexLookupJoinBridges()
+    const {
+  std::vector<core::PlanNodeId> planNodeIds;
+  for (const auto& planNode : planNodes) {
+    if (auto joinNode =
+            std::dynamic_pointer_cast<const core::IndexLookupJoinNode>(
+                planNode)) {
+      if (joinNode->needsIndexSplit()) {
+        planNodeIds.emplace_back(joinNode->id());
+      }
+    }
+  }
   return planNodeIds;
 }
 
