@@ -29,14 +29,6 @@ namespace {
 
 class P4HyperLogLogCastOperator : public exec::CastOperator {
  public:
-  bool isSupportedFromType(const TypePtr& other) const override {
-    return other->equivalent(*HYPERLOGLOG());
-  }
-
-  bool isSupportedToType(const TypePtr& other) const override {
-    return other->equivalent(*HYPERLOGLOG());
-  }
-
   void castTo(
       const BaseVector& input,
       exec::EvalCtx& context,

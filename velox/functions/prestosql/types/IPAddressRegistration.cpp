@@ -28,36 +28,6 @@ namespace facebook::velox {
 namespace {
 class IPAddressCastOperator : public exec::CastOperator {
  public:
-  bool isSupportedFromType(const TypePtr& other) const override {
-    switch (other->kind()) {
-      case TypeKind::VARBINARY:
-      case TypeKind::VARCHAR:
-        return true;
-      case TypeKind::ROW:
-        if (isIPPrefixType(other)) {
-          return true;
-        }
-        [[fallthrough]];
-      default:
-        return false;
-    }
-  }
-
-  bool isSupportedToType(const TypePtr& other) const override {
-    switch (other->kind()) {
-      case TypeKind::VARBINARY:
-      case TypeKind::VARCHAR:
-        return true;
-      case TypeKind::ROW:
-        if (isIPPrefixType(other)) {
-          return true;
-        }
-        [[fallthrough]];
-      default:
-        return false;
-    }
-  }
-
   void castTo(
       const BaseVector& input,
       exec::EvalCtx& context,

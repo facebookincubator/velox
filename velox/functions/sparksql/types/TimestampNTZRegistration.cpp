@@ -33,21 +33,6 @@ class TimestampNTZCastOperator final : public exec::CastOperator {
     return {std::shared_ptr<const CastOperator>{}, &kInstance};
   }
 
-  // Returns true if casting from other type to TIMESTAMP_NTZ type is supported.
-  bool isSupportedFromType(const TypePtr& other) const override {
-    switch (other->kind()) {
-      case TypeKind::VARCHAR:
-        return true;
-      default:
-        return false;
-    }
-  }
-
-  // Return true if casting from TIMESTAMP_NTZ type to other type is supported.
-  bool isSupportedToType(const TypePtr& other) const override {
-    return false;
-  }
-
   // Casts the input vector to the TIMESTAMP_NTZ type.
   void castTo(
       const BaseVector& input,
