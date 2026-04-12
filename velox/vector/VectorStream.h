@@ -206,15 +206,23 @@ class RowIterator {
 
 class VectorSerde {
  public:
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  /// Deprecated: Use named serde registration instead.
   enum class Kind {
     kPresto,
     kCompactRow,
     kUnsafeRow,
   };
 
+  /// Deprecated: Use named serde registration instead.
   static std::string kindName(Kind type);
 
+  /// Deprecated: Use named serde registration instead.
   static Kind kindByName(const std::string& name);
+
+  /// Deprecated: Use named serde registration instead.
+  virtual Kind kind() const = 0;
+#endif
 
   virtual ~VectorSerde() = default;
 
@@ -239,9 +247,12 @@ class VectorSerde {
     float minCompressionRatio{0.8};
   };
 
+#ifndef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  /// Deprecated: Use named serde registration instead.
   const std::string& kind() const {
     return kind_;
   }
+#endif
 
   virtual void estimateSerializedSize(
       const BaseVector* /*vector*/,
@@ -352,12 +363,19 @@ class VectorSerde {
   }
 
  protected:
+#ifndef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  /// Deprecated: Use named serde registration instead.
   explicit VectorSerde(std::string kind) : kind_(std::move(kind)) {}
 
+  /// Deprecated: Use named serde registration instead.
   const std::string kind_;
+#endif
 };
 
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+/// Deprecated: Use named serde registration instead.
 std::ostream& operator<<(std::ostream& out, VectorSerde::Kind kind);
+#endif
 
 /// Register/deregister the "default" vector serde.
 void registerVectorSerde(std::unique_ptr<VectorSerde> serdeToRegister);
@@ -533,6 +551,8 @@ RowVectorPtr IOBufToRowVector(
 
 } // namespace facebook::velox
 
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+/// Deprecated: Use named serde registration instead.
 template <>
 struct fmt::formatter<facebook::velox::VectorSerde::Kind>
     : formatter<std::string> {
@@ -541,3 +561,4 @@ struct fmt::formatter<facebook::velox::VectorSerde::Kind>
         facebook::velox::VectorSerde::kindName(s), ctx);
   }
 };
+#endif

@@ -21,7 +21,15 @@ namespace facebook::velox::serializer::spark {
 
 class UnsafeRowVectorSerde : public VectorSerde {
  public:
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  UnsafeRowVectorSerde() = default;
+
+  Kind kind() const override {
+    return Kind::kUnsafeRow;
+  }
+#else
   UnsafeRowVectorSerde() : VectorSerde(kSerdeKind) {}
+#endif
 
   void estimateSerializedSize(
       const row::UnsafeRowFast* unsafeRow,

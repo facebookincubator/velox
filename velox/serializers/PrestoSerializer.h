@@ -88,7 +88,15 @@ class PrestoVectorSerde : public VectorSerde {
     bool preserveEncodings{false};
   };
 
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  PrestoVectorSerde() = default;
+
+  Kind kind() const override {
+    return Kind::kPresto;
+  }
+#else
   PrestoVectorSerde() : VectorSerde(kSerdeKind) {}
+#endif
 
   /// Adds the serialized sizes of the rows of 'vector' in 'ranges[i]' to
   /// '*sizes[i]'.

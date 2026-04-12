@@ -22,7 +22,15 @@ namespace facebook::velox::serializer {
 
 class CompactRowVectorSerde : public VectorSerde {
  public:
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  CompactRowVectorSerde() = default;
+
+  Kind kind() const override {
+    return Kind::kCompactRow;
+  }
+#else
   CompactRowVectorSerde() : VectorSerde(kSerdeKind) {}
+#endif
 
   void estimateSerializedSize(
       const row::CompactRow* compactRow,
