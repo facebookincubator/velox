@@ -66,6 +66,18 @@ Throws an exception if the predicate fails for one or more elements and returns 
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">none_match(array(T),</span> <span class="pre">function(T,</span> <span class="pre">boolean))</span> <span class="pre">→</span> <span class="pre">boolean</span></span></dt>
+<dd><p>Returns whether no elements of an array match the given predicate.</p>
+<blockquote>
+<div><p>Returns true if none of the elements matches the predicate (a special case is when the array is empty);
+Returns false if one or more elements match;
+Returns NULL if the predicate function returns NULL for one or more elements and false for all other elements.
+Throws an exception if the predicate fails for one or more elements and returns false or NULL for the rest.</p>
+</div></blockquote>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="array_average">
 <span class="sig-name descname"><span class="pre">array_average</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(double)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#array_average" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the average of all non-null elements of the array. If there are no non-null elements, returns null.</p>
@@ -92,6 +104,20 @@ For REAL and DOUBLE, NANs (Not-a-Number) are considered equal.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">array_distinct</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">]);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">]</span>
 <span class="n">SELECT</span> <span class="n">array_distinct</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">]);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">]</span>
 <span class="n">SELECT</span> <span class="n">array_distinct</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="n">NULL</span><span class="p">]);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">NULL</span><span class="p">]</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="array_split_into_chunks">
+<span class="sig-name descname"><span class="pre">array_split_into_chunks</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(T)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sz)</span> <span class="pre">-&gt;</span> <span class="pre">array(array(T)</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#array_split_into_chunks" title="Link to this definition">¶</a></dt>
+<dd><p>Returns an array of arrays splitting the input array into chunks of given
+length. The last chunk will be shorter than the chunk length if the array’s
+length is not an integer multiple of the chunk length. Ignores null inputs,
+but not elements.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">array_split_into_chunks</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">],</span> <span class="mi">2</span><span class="p">);</span> <span class="o">--</span> <span class="p">[[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="p">[</span><span class="mi">5</span><span class="p">]]</span>
+<span class="n">SELECT</span> <span class="n">array_split_into_chunks</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="mi">5</span><span class="p">);</span> <span class="o">--</span> <span class="p">[[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">]]</span>
+<span class="n">SELECT</span> <span class="n">array_split_into_chunks</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="s1">&#39;a&#39;</span><span class="p">,</span> <span class="s1">&#39;b&#39;</span><span class="p">,</span> <span class="s1">&#39;c&#39;</span><span class="p">],</span> <span class="mi">2</span><span class="p">);</span> <span class="o">--</span> <span class="p">[[</span><span class="s1">&#39;a&#39;</span><span class="p">,</span> <span class="s1">&#39;b&#39;</span><span class="p">],</span> <span class="p">[</span><span class="s1">&#39;c&#39;</span><span class="p">]]</span>
 </pre></div>
 </div>
 </dd></dl>
@@ -184,16 +210,6 @@ Returns NULL if array contains a NULL value.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="array_max_by">
-<span class="sig-name descname"><span class="pre">array_max_by</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(T)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">function(T</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">U))</span> <span class="pre">-&gt;</span> <span class="pre">T(</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#array_max_by" title="Link to this definition">¶</a></dt>
-<dd><p>Applies the provided function to each element, and returns the element that gives the maximum value.
-<code class="docutils literal notranslate"><span class="pre">U</span></code> can be any orderable type.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">array_max_by</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="s1">&#39;a&#39;</span><span class="p">,</span> <span class="s1">&#39;bbb&#39;</span><span class="p">,</span> <span class="s1">&#39;cc&#39;</span><span class="p">],</span> <span class="n">x</span> <span class="o">-&gt;</span> <span class="n">LENGTH</span><span class="p">(</span><span class="n">x</span><span class="p">))</span> <span class="o">--</span> <span class="s1">&#39;bbb&#39;</span>
-</pre></div>
-</div>
-</dd></dl>
-
-<dl class="py function">
 <dt class="sig sig-object py" id="array_min">
 <span class="sig-name descname"><span class="pre">array_min</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">E</span></span></span><a class="headerlink" href="#array_min" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the minimum value of input array.
@@ -206,6 +222,16 @@ Returns NULL if array contains a NULL value.</p>
 <span class="n">SELECT</span> <span class="n">array_min</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="n">nan</span><span class="p">(),</span> <span class="n">NULL</span><span class="p">]);</span> <span class="o">--</span> <span class="n">NULL</span>
 <span class="n">SELECT</span> <span class="n">array_min</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[{</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">2</span><span class="p">,</span> <span class="o">-</span><span class="mi">3</span><span class="p">,</span> <span class="n">nan</span><span class="p">()]);</span> <span class="o">--</span> <span class="o">-</span><span class="mi">1</span>
 <span class="n">SELECT</span> <span class="n">array_min</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[{</span><span class="n">infinity</span><span class="p">(),</span> <span class="n">nan</span><span class="p">()]);</span> <span class="o">--</span> <span class="n">Infinity</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="array_max_by">
+<span class="sig-name descname"><span class="pre">array_max_by</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(T)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">function(T</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">U))</span> <span class="pre">-&gt;</span> <span class="pre">T(</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#array_max_by" title="Link to this definition">¶</a></dt>
+<dd><p>Applies the provided function to each element, and returns the element that gives the maximum value.
+<code class="docutils literal notranslate"><span class="pre">U</span></code> can be any orderable type.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">array_max_by</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="s1">&#39;a&#39;</span><span class="p">,</span> <span class="s1">&#39;bbb&#39;</span><span class="p">,</span> <span class="s1">&#39;cc&#39;</span><span class="p">],</span> <span class="n">x</span> <span class="o">-&gt;</span> <span class="n">LENGTH</span><span class="p">(</span><span class="n">x</span><span class="p">))</span> <span class="o">--</span> <span class="s1">&#39;bbb&#39;</span>
 </pre></div>
 </div>
 </dd></dl>
@@ -224,6 +250,21 @@ Returns NULL if array contains a NULL value.</p>
 <dt class="sig sig-object py" id="array_normalize">
 <span class="sig-name descname"><span class="pre">array_normalize</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">E)</span> <span class="pre">-&gt;</span> <span class="pre">array(E</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#array_normalize" title="Link to this definition">¶</a></dt>
 <dd><p>Normalizes array <code class="docutils literal notranslate"><span class="pre">x</span></code> by dividing each element by the p-norm of the array. It is equivalent to <code class="docutils literal notranslate"><span class="pre">TRANSFORM(array,</span> <span class="pre">v</span> <span class="pre">-&gt;</span> <span class="pre">v</span> <span class="pre">/</span> <span class="pre">REDUCE(array,</span> <span class="pre">0,</span> <span class="pre">(a,</span> <span class="pre">v)</span> <span class="pre">-&gt;</span> <span class="pre">a</span> <span class="pre">+</span> <span class="pre">POW(ABS(v),</span> <span class="pre">p),</span> <span class="pre">a</span> <span class="pre">-&gt;</span> <span class="pre">POW(a,</span> <span class="pre">1</span> <span class="pre">/</span> <span class="pre">p))</span></code>, but the reduce part is only executed once. Returns null if the array is null or there are null array elements. If <code class="docutils literal notranslate"><span class="pre">p</span></code> is 0, then the input array is returned. Only REAL and DOUBLE types are supported.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="arrays_overlap">
+<span class="sig-name descname"><span class="pre">arrays_overlap</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#arrays_overlap" title="Link to this definition">¶</a></dt>
+<dd><p>Tests if arrays <code class="docutils literal notranslate"><span class="pre">x</span></code> and <code class="docutils literal notranslate"><span class="pre">y</span></code> have any non-null elements in common.
+Returns null if there are no non-null elements in common but either array contains null.
+For REAL and DOUBLE, NANs (Not-a-Number) are considered equal.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="arrays_union">
+<span class="sig-name descname"><span class="pre">arrays_union</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array</span></span></span><a class="headerlink" href="#arrays_union" title="Link to this definition">¶</a></dt>
+<dd><p>Returns an array of the elements in the union of x and y, without duplicates.
+For REAL and DOUBLE, NANs (Not-a-Number) are considered equal.</p>
 </dd></dl>
 
 <dl class="py function">
@@ -318,20 +359,6 @@ null values.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="array_split_into_chunks">
-<span class="sig-name descname"><span class="pre">array_split_into_chunks</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(T)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sz)</span> <span class="pre">-&gt;</span> <span class="pre">array(array(T)</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#array_split_into_chunks" title="Link to this definition">¶</a></dt>
-<dd><p>Returns an array of arrays splitting the input array into chunks of given
-length. The last chunk will be shorter than the chunk length if the array’s
-length is not an integer multiple of the chunk length. Ignores null inputs,
-but not elements.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">array_split_into_chunks</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">],</span> <span class="mi">2</span><span class="p">);</span> <span class="o">--</span> <span class="p">[[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="p">[</span><span class="mi">5</span><span class="p">]]</span>
-<span class="n">SELECT</span> <span class="n">array_split_into_chunks</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="mi">5</span><span class="p">);</span> <span class="o">--</span> <span class="p">[[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">]]</span>
-<span class="n">SELECT</span> <span class="n">array_split_into_chunks</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="s1">&#39;a&#39;</span><span class="p">,</span> <span class="s1">&#39;b&#39;</span><span class="p">,</span> <span class="s1">&#39;c&#39;</span><span class="p">],</span> <span class="mi">2</span><span class="p">);</span> <span class="o">--</span> <span class="p">[[</span><span class="s1">&#39;a&#39;</span><span class="p">,</span> <span class="s1">&#39;b&#39;</span><span class="p">],</span> <span class="p">[</span><span class="s1">&#39;c&#39;</span><span class="p">]]</span>
-</pre></div>
-</div>
-</dd></dl>
-
-<dl class="py function">
 <dt class="sig sig-object py" id="array_subset">
 <span class="sig-name descname"><span class="pre">array_subset</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(T)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">array(int))</span> <span class="pre">-&gt;</span> <span class="pre">array(T</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#array_subset" title="Link to this definition">¶</a></dt>
 <dd><p>Returns an array containing elements from the input array at the specified 1-based indices.
@@ -343,6 +370,37 @@ The output maintains the order of the indices array.</p>
 <span class="n">SELECT</span> <span class="n">array_subset</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="n">ARRAY</span><span class="p">[</span><span class="mi">2</span><span class="p">]);</span> <span class="o">--</span> <span class="p">[</span><span class="n">NULL</span><span class="p">]</span>
 <span class="n">SELECT</span> <span class="n">array_subset</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">]);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">]</span>
 <span class="n">SELECT</span> <span class="n">array_subset</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="n">ARRAY</span><span class="p">[</span><span class="mi">5</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">]);</span> <span class="o">--</span> <span class="p">[]</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="l2_norm">
+<span class="sig-name descname"><span class="pre">l2_norm</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(T)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#l2_norm" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the Euclidean norm (L2 norm) of an array of numeric values.
+The L2 norm is calculated as the square root of the sum of squares of all elements: sqrt(sum(x^2)).
+Returns 0.0 for empty arrays. Null elements are skipped in the calculation.
+Supports integer and floating point types.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">l2_norm</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]);</span> <span class="o">--</span> <span class="mf">5.0</span>
+<span class="n">SELECT</span> <span class="n">l2_norm</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">]);</span> <span class="o">--</span> <span class="mf">3.0</span>
+<span class="n">SELECT</span> <span class="n">l2_norm</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mf">3.0</span><span class="p">,</span> <span class="mf">4.0</span><span class="p">]);</span> <span class="o">--</span> <span class="mf">5.0</span>
+<span class="n">SELECT</span> <span class="n">l2_norm</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[]);</span> <span class="o">--</span> <span class="mf">0.0</span>
+<span class="n">SELECT</span> <span class="n">l2_norm</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="mi">4</span><span class="p">]);</span> <span class="o">--</span> <span class="mf">5.0</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="id1">
+<span class="sig-name descname"><span class="pre">l2_norm</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">map(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#id1" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the Euclidean norm (L2 norm) of the values in a map.
+The L2 norm is calculated as the square root of the sum of squares of all values: sqrt(sum(v^2)).
+Keys are ignored; only values are used in the calculation.
+Returns 0.0 for empty maps. Null values are skipped in the calculation.
+Supports maps with numeric value types (integer or floating point).</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">l2_norm</span><span class="p">(</span><span class="n">MAP</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="s1">&#39;a&#39;</span><span class="p">,</span> <span class="s1">&#39;b&#39;</span><span class="p">],</span> <span class="n">ARRAY</span><span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]));</span> <span class="o">--</span> <span class="mf">5.0</span>
+<span class="n">SELECT</span> <span class="n">l2_norm</span><span class="p">(</span><span class="n">MAP</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="n">ARRAY</span><span class="p">[</span><span class="mf">3.0</span><span class="p">,</span> <span class="mf">4.0</span><span class="p">]));</span> <span class="o">--</span> <span class="mf">5.0</span>
+<span class="n">SELECT</span> <span class="n">l2_norm</span><span class="p">(</span><span class="n">MAP</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[],</span> <span class="n">ARRAY</span><span class="p">[]));</span> <span class="o">--</span> <span class="mf">0.0</span>
 </pre></div>
 </div>
 </dd></dl>
@@ -364,21 +422,6 @@ If <code class="docutils literal notranslate"><span class="pre">n</span></code> 
 <span class="n">SELECT</span> <span class="n">array_top_n</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="s1">&#39;a&#39;</span><span class="p">,</span> <span class="s1">&#39;zzz&#39;</span><span class="p">,</span> <span class="s1">&#39;zz&#39;</span><span class="p">,</span> <span class="s1">&#39;b&#39;</span><span class="p">,</span> <span class="s1">&#39;g&#39;</span><span class="p">,</span> <span class="s1">&#39;f&#39;</span><span class="p">],</span> <span class="mi">3</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="s1">&#39;zzz&#39;</span><span class="p">,</span> <span class="s1">&#39;zz&#39;</span><span class="p">,</span> <span class="s1">&#39;g&#39;</span><span class="p">]</span>
 </pre></div>
 </div>
-</dd></dl>
-
-<dl class="py function">
-<dt class="sig sig-object py" id="arrays_overlap">
-<span class="sig-name descname"><span class="pre">arrays_overlap</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#arrays_overlap" title="Link to this definition">¶</a></dt>
-<dd><p>Tests if arrays <code class="docutils literal notranslate"><span class="pre">x</span></code> and <code class="docutils literal notranslate"><span class="pre">y</span></code> have any non-null elements in common.
-Returns null if there are no non-null elements in common but either array contains null.
-For REAL and DOUBLE, NANs (Not-a-Number) are considered equal.</p>
-</dd></dl>
-
-<dl class="py function">
-<dt class="sig sig-object py" id="arrays_union">
-<span class="sig-name descname"><span class="pre">arrays_union</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array</span></span></span><a class="headerlink" href="#arrays_union" title="Link to this definition">¶</a></dt>
-<dd><p>Returns an array of the elements in the union of x and y, without duplicates.
-For REAL and DOUBLE, NANs (Not-a-Number) are considered equal.</p>
 </dd></dl>
 
 <dl class="py function">
@@ -438,8 +481,8 @@ For empty integer arrays, returns 0. For empty floating-point arrays, returns Na
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id1">
-<span class="sig-name descname"><span class="pre">dot_product</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">map(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">map(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint/double</span></span></span><a class="headerlink" href="#id1" title="Link to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="id2">
+<span class="sig-name descname"><span class="pre">dot_product</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">map(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">map(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint/double</span></span></span><a class="headerlink" href="#id2" title="Link to this definition">¶</a></dt>
 <dd><p>Computes the dot product of two maps. For maps, the dot product is computed by
 multiplying values with matching keys and summing the results. Keys present in only
 one map contribute zero to the result. If either map is null, returns null.
@@ -528,37 +571,6 @@ the end of the array, until the start of the array.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="l2_norm">
-<span class="sig-name descname"><span class="pre">l2_norm</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(T)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#l2_norm" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the Euclidean norm (L2 norm) of an array of numeric values.
-The L2 norm is calculated as the square root of the sum of squares of all elements: sqrt(sum(x^2)).
-Returns 0.0 for empty arrays. Null elements are skipped in the calculation.
-Supports integer and floating point types.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">l2_norm</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]);</span> <span class="o">--</span> <span class="mf">5.0</span>
-<span class="n">SELECT</span> <span class="n">l2_norm</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">]);</span> <span class="o">--</span> <span class="mf">3.0</span>
-<span class="n">SELECT</span> <span class="n">l2_norm</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mf">3.0</span><span class="p">,</span> <span class="mf">4.0</span><span class="p">]);</span> <span class="o">--</span> <span class="mf">5.0</span>
-<span class="n">SELECT</span> <span class="n">l2_norm</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[]);</span> <span class="o">--</span> <span class="mf">0.0</span>
-<span class="n">SELECT</span> <span class="n">l2_norm</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="mi">4</span><span class="p">]);</span> <span class="o">--</span> <span class="mf">5.0</span>
-</pre></div>
-</div>
-</dd></dl>
-
-<dl class="py function">
-<dt class="sig sig-object py" id="id2">
-<span class="sig-name descname"><span class="pre">l2_norm</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">map(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#id2" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the Euclidean norm (L2 norm) of the values in a map.
-The L2 norm is calculated as the square root of the sum of squares of all values: sqrt(sum(v^2)).
-Keys are ignored; only values are used in the calculation.
-Returns 0.0 for empty maps. Null values are skipped in the calculation.
-Supports maps with numeric value types (integer or floating point).</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">l2_norm</span><span class="p">(</span><span class="n">MAP</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="s1">&#39;a&#39;</span><span class="p">,</span> <span class="s1">&#39;b&#39;</span><span class="p">],</span> <span class="n">ARRAY</span><span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]));</span> <span class="o">--</span> <span class="mf">5.0</span>
-<span class="n">SELECT</span> <span class="n">l2_norm</span><span class="p">(</span><span class="n">MAP</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="n">ARRAY</span><span class="p">[</span><span class="mf">3.0</span><span class="p">,</span> <span class="mf">4.0</span><span class="p">]));</span> <span class="o">--</span> <span class="mf">5.0</span>
-<span class="n">SELECT</span> <span class="n">l2_norm</span><span class="p">(</span><span class="n">MAP</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[],</span> <span class="n">ARRAY</span><span class="p">[]));</span> <span class="o">--</span> <span class="mf">0.0</span>
-</pre></div>
-</div>
-</dd></dl>
-
-<dl class="py function">
 <dt class="sig sig-object py" id="ngrams">
 <span class="sig-name descname"><span class="pre">ngrams</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(T)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">n)</span> <span class="pre">-&gt;</span> <span class="pre">array(array(T)</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#ngrams" title="Link to this definition">¶</a></dt>
 <dd><p>Returns <a class="reference external" href="https://en.wikipedia.org/wiki/N-gram">n-grams</a>  for the array.
@@ -572,18 +584,6 @@ result array contains input array as the only item.</p>
 <span class="n">SELECT</span> <span class="n">ngrams</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="s2">&quot;foo&quot;</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="s2">&quot;bar&quot;</span><span class="p">],</span> <span class="mi">2</span><span class="p">);</span> <span class="o">--</span> <span class="p">[[</span><span class="s2">&quot;foo&quot;</span><span class="p">,</span> <span class="n">NULL</span><span class="p">],</span> <span class="p">[</span><span class="n">NULL</span><span class="p">,</span> <span class="s2">&quot;bar&quot;</span><span class="p">]]</span>
 </pre></div>
 </div>
-</dd></dl>
-
-<dl class="py function">
-<dt class="sig sig-object py">
-<span class="sig-name descname"><span class="pre">none_match(array(T),</span> <span class="pre">function(T,</span> <span class="pre">boolean))</span> <span class="pre">→</span> <span class="pre">boolean</span></span></dt>
-<dd><p>Returns whether no elements of an array match the given predicate.</p>
-<blockquote>
-<div><p>Returns true if none of the elements matches the predicate (a special case is when the array is empty);
-Returns false if one or more elements match;
-Returns NULL if the predicate function returns NULL for one or more elements and false for all other elements.
-Throws an exception if the predicate fails for one or more elements and returns false or NULL for the rest.</p>
-</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
@@ -611,17 +611,6 @@ identity function (<code class="docutils literal notranslate"><span class="pre">
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="remove_nulls">
-<span class="sig-name descname"><span class="pre">remove_nulls</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array</span></span></span><a class="headerlink" href="#remove_nulls" title="Link to this definition">¶</a></dt>
-<dd><p>Remove null values from an array <code class="docutils literal notranslate"><span class="pre">array</span></code></p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">remove_nulls</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="n">NULL</span><span class="p">]);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">]</span>
-<span class="n">SELECT</span> <span class="n">remove_nulls</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="n">true</span><span class="p">,</span> <span class="n">false</span><span class="p">,</span> <span class="n">NULL</span><span class="p">]);</span> <span class="o">--</span> <span class="p">[</span><span class="n">true</span><span class="p">,</span> <span class="n">false</span><span class="p">]</span>
-<span class="n">SELECT</span> <span class="n">remove_nulls</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="n">NULL</span><span class="p">,</span> <span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="mi">3</span><span class="p">]]);</span> <span class="o">--</span> <span class="p">[[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">null</span><span class="p">,</span> <span class="mi">3</span><span class="p">]]</span>
-</pre></div>
-</div>
-</dd></dl>
-
-<dl class="py function">
 <dt class="sig sig-object py" id="repeat">
 <span class="sig-name descname"><span class="pre">repeat</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">element</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">count</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#repeat" title="Link to this definition">¶</a></dt>
 <dd><p>Repeat <code class="docutils literal notranslate"><span class="pre">element</span></code> for <code class="docutils literal notranslate"><span class="pre">count</span></code> times. <code class="docutils literal notranslate"><span class="pre">count</span></code> cannot be negative and must be less than or equal to 10000.</p>
@@ -631,21 +620,6 @@ identity function (<code class="docutils literal notranslate"><span class="pre">
 <dt class="sig sig-object py" id="reverse">
 <span class="sig-name descname"><span class="pre">reverse</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E))</span> <span class="pre">-&gt;</span> <span class="pre">array(E</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#reverse" title="Link to this definition">¶</a></dt>
 <dd><p>Returns an array which has the reversed order of the input array.</p>
-</dd></dl>
-
-<dl class="py function">
-<dt class="sig sig-object py" id="sequence">
-<span class="sig-name descname"><span class="pre">sequence</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">start</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">stop</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array</span></span></span><a class="headerlink" href="#sequence" title="Link to this definition">¶</a></dt>
-<dd><p>Generate a sequence of integers from start to stop, incrementing by 1 if start is less than or equal to stop,
-otherwise -1.</p>
-</dd></dl>
-
-<dl class="py function">
-<dt class="sig sig-object py">
-<span class="sig-name descname"><span class="pre">sequence</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">start</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">stop</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">step</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array</span></span></span></dt>
-<dd><blockquote>
-<div><p>Generate a sequence of integers from start to stop, incrementing by step.</p>
-</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
@@ -664,6 +638,21 @@ otherwise -1.</p>
 <span class="sig-name descname"><span class="pre">slice</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">start</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">length)</span> <span class="pre">-&gt;</span> <span class="pre">array(E</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#slice" title="Link to this definition">¶</a></dt>
 <dd><p>Returns a subarray starting from index <code class="docutils literal notranslate"><span class="pre">start``(or</span> <span class="pre">starting</span> <span class="pre">from</span> <span class="pre">the</span> <span class="pre">end</span>
 <span class="pre">if</span> <span class="pre">``start</span></code> is negative) with a length of <code class="docutils literal notranslate"><span class="pre">length</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="sequence">
+<span class="sig-name descname"><span class="pre">sequence</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">start</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">stop</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array</span></span></span><a class="headerlink" href="#sequence" title="Link to this definition">¶</a></dt>
+<dd><p>Generate a sequence of integers from start to stop, incrementing by 1 if start is less than or equal to stop,
+otherwise -1.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">sequence</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">start</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">stop</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">step</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array</span></span></span></dt>
+<dd><blockquote>
+<div><p>Generate a sequence of integers from start to stop, incrementing by step.</p>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
@@ -714,6 +703,17 @@ This is useful for transformations that need to know the position of each elemen
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="remove_nulls">
+<span class="sig-name descname"><span class="pre">remove_nulls</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array</span></span></span><a class="headerlink" href="#remove_nulls" title="Link to this definition">¶</a></dt>
+<dd><p>Remove null values from an array <code class="docutils literal notranslate"><span class="pre">array</span></code></p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">remove_nulls</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="n">NULL</span><span class="p">]);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">]</span>
+<span class="n">SELECT</span> <span class="n">remove_nulls</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="n">true</span><span class="p">,</span> <span class="n">false</span><span class="p">,</span> <span class="n">NULL</span><span class="p">]);</span> <span class="o">--</span> <span class="p">[</span><span class="n">true</span><span class="p">,</span> <span class="n">false</span><span class="p">]</span>
+<span class="n">SELECT</span> <span class="n">remove_nulls</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="n">NULL</span><span class="p">,</span> <span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="mi">3</span><span class="p">]]);</span> <span class="o">--</span> <span class="p">[[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">null</span><span class="p">,</span> <span class="mi">3</span><span class="p">]]</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="zip">
 <span class="sig-name descname"><span class="pre">zip</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(T)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">array(U)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">..)</span> <span class="pre">-&gt;</span> <span class="pre">array(row(T</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">U</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...)</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#zip" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the merge of the given arrays, element-wise into a single array of rows.
@@ -754,6 +754,7 @@ longer array, before applying <code class="docutils literal notranslate"><span c
 <li><a class="reference internal" href="#array_average"><code class="docutils literal notranslate"><span class="pre">array_average()</span></code></a></li>
 <li><a class="reference internal" href="#array_cum_sum"><code class="docutils literal notranslate"><span class="pre">array_cum_sum()</span></code></a></li>
 <li><a class="reference internal" href="#array_distinct"><code class="docutils literal notranslate"><span class="pre">array_distinct()</span></code></a></li>
+<li><a class="reference internal" href="#array_split_into_chunks"><code class="docutils literal notranslate"><span class="pre">array_split_into_chunks()</span></code></a></li>
 <li><a class="reference internal" href="#array_duplicates"><code class="docutils literal notranslate"><span class="pre">array_duplicates()</span></code></a></li>
 <li><a class="reference internal" href="#array_except"><code class="docutils literal notranslate"><span class="pre">array_except()</span></code></a></li>
 <li><a class="reference internal" href="#array_frequency"><code class="docutils literal notranslate"><span class="pre">array_frequency()</span></code></a></li>
@@ -761,46 +762,45 @@ longer array, before applying <code class="docutils literal notranslate"><span c
 <li><a class="reference internal" href="#array_intersect"><code class="docutils literal notranslate"><span class="pre">array_intersect()</span></code></a></li>
 <li><a class="reference internal" href="#array_join"><code class="docutils literal notranslate"><span class="pre">array_join()</span></code></a></li>
 <li><a class="reference internal" href="#array_max"><code class="docutils literal notranslate"><span class="pre">array_max()</span></code></a></li>
-<li><a class="reference internal" href="#array_max_by"><code class="docutils literal notranslate"><span class="pre">array_max_by()</span></code></a></li>
 <li><a class="reference internal" href="#array_min"><code class="docutils literal notranslate"><span class="pre">array_min()</span></code></a></li>
+<li><a class="reference internal" href="#array_max_by"><code class="docutils literal notranslate"><span class="pre">array_max_by()</span></code></a></li>
 <li><a class="reference internal" href="#array_min_by"><code class="docutils literal notranslate"><span class="pre">array_min_by()</span></code></a></li>
 <li><a class="reference internal" href="#array_normalize"><code class="docutils literal notranslate"><span class="pre">array_normalize()</span></code></a></li>
+<li><a class="reference internal" href="#arrays_overlap"><code class="docutils literal notranslate"><span class="pre">arrays_overlap()</span></code></a></li>
+<li><a class="reference internal" href="#arrays_union"><code class="docutils literal notranslate"><span class="pre">arrays_union()</span></code></a></li>
 <li><a class="reference internal" href="#array_position"><code class="docutils literal notranslate"><span class="pre">array_position()</span></code></a></li>
 <li><a class="reference internal" href="#array_remove"><code class="docutils literal notranslate"><span class="pre">array_remove()</span></code></a></li>
 <li><a class="reference internal" href="#array_sort"><code class="docutils literal notranslate"><span class="pre">array_sort()</span></code></a></li>
 <li><a class="reference internal" href="#array_sort_desc"><code class="docutils literal notranslate"><span class="pre">array_sort_desc()</span></code></a></li>
 <li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">array_sort_desc()</span></code></a></li>
-<li><a class="reference internal" href="#array_split_into_chunks"><code class="docutils literal notranslate"><span class="pre">array_split_into_chunks()</span></code></a></li>
 <li><a class="reference internal" href="#array_subset"><code class="docutils literal notranslate"><span class="pre">array_subset()</span></code></a></li>
+<li><a class="reference internal" href="#l2_norm"><code class="docutils literal notranslate"><span class="pre">l2_norm()</span></code></a></li>
+<li><a class="reference internal" href="#id1"><code class="docutils literal notranslate"><span class="pre">l2_norm()</span></code></a></li>
 <li><a class="reference internal" href="#array_sum"><code class="docutils literal notranslate"><span class="pre">array_sum()</span></code></a></li>
 <li><a class="reference internal" href="#array_top_n"><code class="docutils literal notranslate"><span class="pre">array_top_n()</span></code></a></li>
-<li><a class="reference internal" href="#arrays_overlap"><code class="docutils literal notranslate"><span class="pre">arrays_overlap()</span></code></a></li>
-<li><a class="reference internal" href="#arrays_union"><code class="docutils literal notranslate"><span class="pre">arrays_union()</span></code></a></li>
 <li><a class="reference internal" href="#cardinality"><code class="docutils literal notranslate"><span class="pre">cardinality()</span></code></a></li>
 <li><a class="reference internal" href="#combinations"><code class="docutils literal notranslate"><span class="pre">combinations()</span></code></a></li>
 <li><a class="reference internal" href="#concat"><code class="docutils literal notranslate"><span class="pre">concat()</span></code></a></li>
 <li><a class="reference internal" href="#contains"><code class="docutils literal notranslate"><span class="pre">contains()</span></code></a></li>
 <li><a class="reference internal" href="#dot_product"><code class="docutils literal notranslate"><span class="pre">dot_product()</span></code></a></li>
-<li><a class="reference internal" href="#id1"><code class="docutils literal notranslate"><span class="pre">dot_product()</span></code></a></li>
+<li><a class="reference internal" href="#id2"><code class="docutils literal notranslate"><span class="pre">dot_product()</span></code></a></li>
 <li><a class="reference internal" href="#element_at"><code class="docutils literal notranslate"><span class="pre">element_at()</span></code></a></li>
 <li><a class="reference internal" href="#filter"><code class="docutils literal notranslate"><span class="pre">filter()</span></code></a></li>
 <li><a class="reference internal" href="#find_first"><code class="docutils literal notranslate"><span class="pre">find_first()</span></code></a></li>
 <li><a class="reference internal" href="#find_first_index"><code class="docutils literal notranslate"><span class="pre">find_first_index()</span></code></a></li>
 <li><a class="reference internal" href="#flatten"><code class="docutils literal notranslate"><span class="pre">flatten()</span></code></a></li>
-<li><a class="reference internal" href="#l2_norm"><code class="docutils literal notranslate"><span class="pre">l2_norm()</span></code></a></li>
-<li><a class="reference internal" href="#id2"><code class="docutils literal notranslate"><span class="pre">l2_norm()</span></code></a></li>
 <li><a class="reference internal" href="#ngrams"><code class="docutils literal notranslate"><span class="pre">ngrams()</span></code></a></li>
 <li><a class="reference internal" href="#reduce"><code class="docutils literal notranslate"><span class="pre">reduce()</span></code></a></li>
-<li><a class="reference internal" href="#remove_nulls"><code class="docutils literal notranslate"><span class="pre">remove_nulls()</span></code></a></li>
 <li><a class="reference internal" href="#repeat"><code class="docutils literal notranslate"><span class="pre">repeat()</span></code></a></li>
 <li><a class="reference internal" href="#reverse"><code class="docutils literal notranslate"><span class="pre">reverse()</span></code></a></li>
-<li><a class="reference internal" href="#sequence"><code class="docutils literal notranslate"><span class="pre">sequence()</span></code></a></li>
 <li><a class="reference internal" href="#shuffle"><code class="docutils literal notranslate"><span class="pre">shuffle()</span></code></a></li>
 <li><a class="reference internal" href="#slice"><code class="docutils literal notranslate"><span class="pre">slice()</span></code></a></li>
+<li><a class="reference internal" href="#sequence"><code class="docutils literal notranslate"><span class="pre">sequence()</span></code></a></li>
 <li><a class="reference internal" href="#subscript"><code class="docutils literal notranslate"><span class="pre">subscript()</span></code></a></li>
 <li><a class="reference internal" href="#transform"><code class="docutils literal notranslate"><span class="pre">transform()</span></code></a></li>
 <li><a class="reference internal" href="#transform_with_index"><code class="docutils literal notranslate"><span class="pre">transform_with_index()</span></code></a></li>
 <li><a class="reference internal" href="#trim_array"><code class="docutils literal notranslate"><span class="pre">trim_array()</span></code></a></li>
+<li><a class="reference internal" href="#remove_nulls"><code class="docutils literal notranslate"><span class="pre">remove_nulls()</span></code></a></li>
 <li><a class="reference internal" href="#zip"><code class="docutils literal notranslate"><span class="pre">zip()</span></code></a></li>
 <li><a class="reference internal" href="#zip_with"><code class="docutils literal notranslate"><span class="pre">zip_with()</span></code></a></li>
 </ul>
