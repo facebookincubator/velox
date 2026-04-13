@@ -1081,6 +1081,39 @@ TEST_P(EncodedVectorCopyTest, fuzzer) {
   }
 }
 
+TEST_P(EncodedVectorCopyTest, flatMapImmutableTargetGrow) {
+  auto source = vectorMaker_.flatMapVector<int64_t, int64_t>({
+      {{3, 300}, {4, 400}},
+      {{3, 500}},
+  });
+
+  VectorPtr target = vectorMaker_.flatMapVector<int64_t, int64_t>({
+      {{1, 10}, {2, 20}},
+      {{1, 30}},
+  });
+  auto immutableTarget = target;
+
+  BaseVector::CopyRange range = {0, 2, 2};
+  copy(source, folly::Range(&range, 1), immutableTarget);
+
+  ASSERT_EQ(immutableTarget->size(), 4);
+  auto* resultFlatMap = immutableTarget->asUnchecked<FlatMapVector>();
+  for (column_index_t i = 0; i < resultFlatMap->numDistinctKeys(); ++i) {
+    ASSERT_GE(resultFlatMap->mapValuesAt(i)->size(), resultFlatMap->size())
+        << "Map value vector at channel " << i
+        << " is shorter than FlatMapVector length";
+  }
+
+  auto sliced = immutableTarget->slice(0, 4);
+  auto expected = makeMapVector<int64_t, int64_t>({
+      {{1, 10}, {2, 20}},
+      {{1, 30}},
+      {{3, 300}, {4, 400}},
+      {{3, 500}},
+  });
+  test::assertEqualVectors(expected, sliced);
+}
+
 TEST_P(EncodedVectorCopyTest, fuzzerFlatMapEncoded) {
   VectorFuzzer::Options fuzzerOptions;
   fuzzerOptions.allowLazyVector = reuseSource();

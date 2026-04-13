@@ -386,13 +386,13 @@ void Driver::enqueueInternal() {
   }
 
 void OpCallStatus::start(int32_t operatorId, const char* operatorMethod) {
-  timeStartMs = getCurrentTimeMs();
-  opId = operatorId;
-  method = operatorMethod;
+  timeStartMs_ = getCurrentTimeMs();
+  opId_ = operatorId;
+  method_ = operatorMethod;
 }
 
 void OpCallStatus::stop() {
-  timeStartMs = 0;
+  timeStartMs_ = 0;
 }
 
 size_t OpCallStatusRaw::callDuration() const {

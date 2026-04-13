@@ -29,6 +29,12 @@ struct ParseOptions {
   // single array argument.
   bool parseInListAsArray = true;
 
+  // DuckDB defaults the window frame end bound to CURRENT ROW even when ORDER
+  // BY is absent. The SQL standard requires UNBOUNDED FOLLOWING in that case.
+  // When true, corrects this default. Cannot distinguish defaulted from
+  // explicit frames, so an explicit CURRENT ROW may be incorrectly overridden.
+  bool correctWindowFrameDefault = false;
+
   /// SQL functions could be registered with different prefixes by the user.
   /// This parameter is the registered prefix of presto or spark functions,
   /// which helps generate the correct Velox expression.
@@ -51,11 +57,12 @@ std::vector<core::ExprPtr> parseMultipleExpressions(
     const ParseOptions& options);
 
 /// Parses aggregate function call expression with optional ORDER by clause.
+/// Always returns an AggregateCallExpr.
 /// Examples:
 ///     sum(a)
 ///     sum(a) as s
 ///     array_agg(x ORDER BY y DESC)
-parse::AggregateExpr parseAggregateExpr(
+core::AggregateCallExprPtr parseAggregateExpr(
     const std::string& exprString,
     const ParseOptions& options);
 
@@ -63,18 +70,15 @@ parse::AggregateExpr parseAggregateExpr(
 // Uses ASC NULLS LAST as the default sort order.
 parse::OrderByClause parseOrderByExpr(const std::string& exprString);
 
-// Parses a WINDOW function SQL string using DuckDB's internal postgresql-based
-// parser. Window Functions are executed by Velox Window PlanNodes and not the
-// expression evaluation. So we cannot use an IExpr based API. The structures
-// below capture all the metadata needed from the window function SQL string
-// for usage in the WindowNode plan node.
-parse::WindowExpr parseWindowExpr(
+/// Parses a WINDOW function SQL string. Returns a WindowCallExpr.
+core::WindowCallExprPtr parseWindowExpr(
     const std::string& windowString,
     const ParseOptions& options);
 
 /// Parses a SQL expression that can be either a scalar expression or a window
-/// function. Returns the appropriate type based on the parsed result.
-std::variant<core::ExprPtr, parse::WindowExpr> parseScalarOrWindowExpr(
+/// function. Returns a WindowCallExpr (kWindow kind) for window functions,
+/// or a regular ExprPtr for scalar expressions.
+core::ExprPtr parseScalarOrWindowExpr(
     const std::string& exprString,
     const ParseOptions& options);
 

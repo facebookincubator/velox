@@ -15,9 +15,10 @@
 name: CI Failure Comment
 
 # This workflow runs in the context of the base repo (not the fork) and has
-# write access to post PR comments. It is triggered when the Linux Build
-# workflow completes and uses Claude to analyze failure logs, correlate with
-# the PR diff and open issues, and post a rich diagnostic comment.
+# write access to post PR comments. It is triggered when the Linux Build or
+# Fuzzer Jobs workflow completes with a failure and uses Claude to analyze
+# failure logs, correlate with the PR diff and open issues, and post a rich
+# diagnostic comment.
 #
 # Security: This workflow never checks out or executes PR code. It reads
 # failure metadata from artifacts uploaded by our own status jobs, then uses
@@ -28,13 +29,13 @@ on:
   workflow_dispatch:
     inputs:
       run_id:
-        description: Workflow run ID to analyze (from a failed Linux Build run)
+        description: Workflow run ID to analyze (from a failed CI run)
         required: true
       pr_number:
         description: PR number to comment on
         required: true
   workflow_run:
-    workflows: [Linux Build using GCC]
+    workflows: [Linux Build using GCC, Fuzzer Jobs]
     types:
       - completed
 
@@ -48,9 +49,10 @@ permissions:
 jobs:
   analyze-and-comment:
     if: >
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.event == 'pull_request' &&
-       github.event.workflow_run.conclusion == 'failure')
+      github.repository == 'facebookincubator/velox' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.event == 'pull_request' &&
+        github.event.workflow_run.conclusion == 'failure'))
     runs-on: ubuntu-latest
     steps:
       - name: Get PR number
@@ -91,28 +93,39 @@ jobs:
       - name: Collect failure metadata
         if: steps.pr.outputs.number
         id: metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ inputs.run_id || github.event.workflow_run.id }}
         run: |
           FAILURES_DIR="/tmp/ci-failures"
-          if [ ! -d "$FAILURES_DIR" ] || [ -z "$(ls -A "$FAILURES_DIR" 2>/dev/null)" ]; then
-            echo "No failure artifacts found."
-            echo "has_failures=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Collect all failure.json contents into a single JSON array.
-          METADATA="["
-          FIRST=true
-          for entry in "$FAILURES_DIR"/ci-failure-*/failure.json; do
-            if [ -f "$entry" ]; then
-              if [ "$FIRST" = true ]; then
-                FIRST=false
-              else
-                METADATA="$METADATA,"
+          if [ -d "$FAILURES_DIR" ] && [ -n "$(ls -A "$FAILURES_DIR" 2>/dev/null)" ]; then
+            # Collect all failure.json contents into a single JSON array.
+            METADATA="["
+            FIRST=true
+            for entry in "$FAILURES_DIR"/ci-failure-*/failure.json; do
+              if [ -f "$entry" ]; then
+                if [ "$FIRST" = true ]; then
+                  FIRST=false
+                else
+                  METADATA="$METADATA,"
+                fi
+                METADATA="$METADATA$(cat "$entry")"
               fi
-              METADATA="$METADATA$(cat "$entry")"
+            done
+            METADATA="$METADATA]"
+          else
+            # No failure artifacts — build metadata from failed jobs in the run.
+            # This handles workflows (e.g., Fuzzer Jobs) that don't upload
+            # ci-failure-* artifacts.
+            METADATA=$(gh api "repos/${REPO}/actions/runs/${RUN_ID}/jobs" \
+              --paginate --jq '[.jobs[] | select(.conclusion == "failure") | {job: .name, type: "unknown"}]')
+            if [ "$METADATA" = "[]" ] || [ -z "$METADATA" ]; then
+              echo "No failure artifacts or failed jobs found."
+              echo "has_failures=false" >> "$GITHUB_OUTPUT"
+              exit 0
             fi
-          done
-          METADATA="$METADATA]"
+          fi
 
           echo "has_failures=true" >> "$GITHUB_OUTPUT"
           {

@@ -73,8 +73,19 @@ struct Coercion {
 
 class TypeCoercer {
  public:
+  /// Checks if 'fromType' can be implicitly converted to 'toType'.
+  ///
+  /// Prefer this over the string overload when the target type is available,
+  /// as it avoids reconstructing the type from a name (which can throw for
+  /// parametric custom types like BigintEnum).
+  ///
+  /// @return "to" type and cost if conversion is possible.
+  static std::optional<Coercion> coerceTypeBase(
+      const TypePtr& fromType,
+      const TypePtr& toType);
+
   /// Checks if the base of 'fromType' can be implicitly converted to a type
-  /// with the given name.
+  /// with the given name. Used by SignatureBinder which only has a type name.
   ///
   /// @return "to" type and cost if conversion is possible.
   static std::optional<Coercion> coerceTypeBase(
