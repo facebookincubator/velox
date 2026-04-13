@@ -25,20 +25,25 @@ class S3Client;
 
 namespace facebook::velox::filesystems {
 
+class S3Config;
+
 /// S3WriteFile uses the Apache Arrow implementation as a reference.
 /// AWS C++ SDK allows streaming writes via the MultiPart upload API.
 /// Multipart upload allows you to upload a single object as a set of parts.
 /// Each part is a contiguous portion of the object's data.
 /// While AWS and Minio support different sizes for each
-/// part (only requiring a minimum of 5MB), Cloudflare R2 requires that every
-/// part be exactly equal (except for the last part). We set this to 10 MiB, so
-/// that in combination with the maximum number of parts of 10,000, this gives a
-/// file limit of 100k MiB (or about 98 GiB).
-/// (see https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html)
-/// (for rational, see: https://github.com/apache/arrow/issues/34363)
-/// You can upload these object parts independently and in any order.
-/// After all parts of your object are uploaded, Amazon S3 assembles these parts
-/// and creates the object.
+/// part (only requiring a minimum of 5MB - but not enforced), Apache Ozone
+/// enforces the minimum 5MB (smaller parts are ignored), and Cloudflare R2
+/// requires that every part be exactly equal (except for the last part). We set
+/// this to minPartSize (default 10MB), so that in combination with the maximum
+/// number of parts of 10,000, this gives a file limit of 100k MiB (or about 98
+/// GiB).
+/// (for rationale, see: https://github.com/apache/arrow/issues/34363)
+/// For AWS limits see
+/// https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html). You can
+/// upload these object parts independently and in any order. After all parts of
+/// your object are uploaded, Amazon S3 assembles these parts and creates the
+/// object.
 /// https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpuoverview.html
 /// https://github.com/apache/arrow/blob/main/cpp/src/arrow/filesystem/s3fs.cc
 /// S3WriteFile is not thread-safe.
@@ -50,7 +55,8 @@ class S3WriteFile : public WriteFile {
   S3WriteFile(
       std::string_view path,
       Aws::S3::S3Client* client,
-      memory::MemoryPool* pool);
+      memory::MemoryPool* pool,
+      const std::shared_ptr<S3Config>& s3Config);
 
   /// Appends data to the end of the file.
   /// Uploads a part on reaching part size limit.
@@ -69,6 +75,8 @@ class S3WriteFile : public WriteFile {
   int numPartsUploaded() const;
 
  protected:
+  void createMultipartUploadRequest();
+
   class Impl;
   std::shared_ptr<Impl> impl_;
 };

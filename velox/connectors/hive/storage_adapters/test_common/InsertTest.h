@@ -18,6 +18,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/memory/Memory.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/dwio/parquet/RegisterParquetReader.h"
@@ -38,7 +39,8 @@ class InsertTest : public velox::test::VectorTestBase {
     connector::hive::HiveConnectorFactory factory;
     auto hiveConnector = factory.newConnector(
         exec::test::kHiveConnectorId, hiveConfig, ioExecutor);
-    connector::registerConnector(hiveConnector);
+    connector::ConnectorRegistry::global().insert(
+        hiveConnector->connectorId(), hiveConnector);
 
     parquet::registerParquetReaderFactory();
     parquet::registerParquetWriterFactory();
@@ -48,7 +50,7 @@ class InsertTest : public velox::test::VectorTestBase {
     parquet::unregisterParquetReaderFactory();
     parquet::unregisterParquetWriterFactory();
 
-    connector::unregisterConnector(exec::test::kHiveConnectorId);
+    connector::ConnectorRegistry::global().erase(exec::test::kHiveConnectorId);
   }
 
   void runInsertTest(

@@ -146,9 +146,12 @@ void SortWindowBuild::ensureInputFits(const RowVectorPtr& input) {
 
   LOG(WARNING) << "Failed to reserve " << succinctBytes(targetIncrementBytes)
                << " for memory pool " << data_->pool()->name()
-               << ", usage: " << succinctBytes(data_->pool()->usedBytes())
+               << ", root pool: " << data_->pool()->root()->name()
+               << ", used: " << succinctBytes(data_->pool()->usedBytes())
                << ", reservation: "
-               << succinctBytes(data_->pool()->reservedBytes());
+               << succinctBytes(data_->pool()->reservedBytes())
+               << ", root pool reservation: "
+               << succinctBytes(data_->pool()->root()->reservedBytes());
 }
 
 void SortWindowBuild::ensureSortFits() {

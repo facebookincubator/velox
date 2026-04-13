@@ -72,7 +72,7 @@ std::unique_ptr<cudf::table> makeEmptyTable(TypePtr const& inputType) {
 }
 
 std::unique_ptr<cudf::table> getConcatenatedTable(
-    std::vector<CudfVectorPtr>& tables,
+    std::vector<CudfVectorPtr>&& tables,
     const TypePtr& tableType,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
@@ -102,15 +102,16 @@ std::unique_ptr<cudf::table> getConcatenatedTable(
   auto output = cudf::concatenate(tableViews, stream, mr);
 
   // Order input deallocations after the concatenate read.
-  auto const outputStreams = std::vector<rmm::cuda_stream_view>{stream};
-  for (auto& s : inputStreams) {
-    cudf::detail::join_streams(outputStreams, s);
-  }
+  // Since memory resources are stream-ordered, deallocations
+  // on inputStreams will be ordered after the concatenate completes.
+  CudaEvent event(cudaEventDisableTiming);
+  streamsWaitForStream(event, inputStreams, stream);
+  // Input tables are deallocated here when 'tables' goes out of scope.
   return output;
 }
 
 std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
-    std::vector<CudfVectorPtr>& tables,
+    std::vector<CudfVectorPtr>&& tables,
     const TypePtr& tableType,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
@@ -167,11 +168,14 @@ std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
             stream,
             mr));
   }
-  // Order input deallocations after the concatenate reads.
-  auto const outputStreams = std::vector<rmm::cuda_stream_view>{stream};
-  for (auto& s : inputStreams) {
-    cudf::detail::join_streams(outputStreams, s);
-  }
+  // Order input deallocations after the concatenate reads by making all input
+  // streams wait for the output stream.
+  // Since memory resources are stream-ordered, deallocations
+  // on inputStreams will be ordered after the concatenate completes.
+  CudaEvent event(cudaEventDisableTiming);
+  streamsWaitForStream(event, inputStreams, stream);
+
+  // Input tables are deallocated here when 'tables' goes out of scope.
   return outputTables;
 }
 

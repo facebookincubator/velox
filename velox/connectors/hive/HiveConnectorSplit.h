@@ -17,10 +17,8 @@
 
 #include <optional>
 #include <unordered_map>
-#include "velox/connectors/Connector.h"
-#include "velox/connectors/hive/FileProperties.h"
+#include "velox/connectors/hive/FileConnectorSplit.h"
 #include "velox/connectors/hive/TableHandle.h"
-#include "velox/dwio/common/Options.h"
 
 namespace facebook::velox::connector::hive {
 
@@ -42,31 +40,17 @@ struct RowIdProperties {
   std::string tableGuid;
 };
 
-struct HiveConnectorSplit : public connector::ConnectorSplit {
-  const std::string filePath;
-  dwio::common::FileFormat fileFormat;
-  const uint64_t start;
-  const uint64_t length;
+struct HiveConnectorSplit : public FileConnectorSplit {
+  /// Synthesized columns like $path, $file_size associated with the split.
+  std::unordered_map<std::string, std::string> infoColumns;
 
-  /// Mapping from partition keys to values. Values are specified as strings
-  /// formatted the same way as CAST(x as VARCHAR). Null values are specified as
-  /// std::nullopt. Date values must be formatted using ISO 8601 as YYYY-MM-DD.
-  /// All scalar types and date type are supported.
-  const std::unordered_map<std::string, std::optional<std::string>>
-      partitionKeys;
+  /// Format-specific reader parameters (e.g., ORC serde options from Hive
+  /// metastore).
+  std::unordered_map<std::string, std::string> serdeParameters;
+
   std::optional<int32_t> tableBucketNumber;
   std::unordered_map<std::string, std::string> customSplitInfo;
   std::shared_ptr<std::string> extraFileInfo;
-  // Parameters that are provided as the serialization options.
-  std::unordered_map<std::string, std::string> serdeParameters;
-
-  /// These represent columns like $file_size, $file_modified_time that are
-  /// associated with the HiveSplit.
-  std::unordered_map<std::string, std::string> infoColumns;
-
-  /// These represent file properties like file size that are used while opening
-  /// the file handle.
-  std::optional<FileProperties> properties;
 
   std::optional<RowIdProperties> rowIdProperties;
 
@@ -91,28 +75,27 @@ struct HiveConnectorSplit : public connector::ConnectorSplit {
       std::optional<RowIdProperties> _rowIdProperties = std::nullopt,
       const std::optional<HiveBucketConversion>& _bucketConversion =
           std::nullopt)
-      : ConnectorSplit(connectorId, splitWeight, cacheable),
-        filePath(_filePath),
-        fileFormat(_fileFormat),
-        start(_start),
-        length(_length),
-        partitionKeys(_partitionKeys),
+      : FileConnectorSplit(
+            connectorId,
+            _filePath,
+            _fileFormat,
+            _start,
+            _length,
+            splitWeight,
+            cacheable,
+            std::move(_properties),
+            _partitionKeys),
+        infoColumns(_infoColumns),
+        serdeParameters(_serdeParameters),
         tableBucketNumber(_tableBucketNumber),
         customSplitInfo(_customSplitInfo),
         extraFileInfo(_extraFileInfo),
-        serdeParameters(_serdeParameters),
-        infoColumns(_infoColumns),
-        properties(_properties),
         rowIdProperties(_rowIdProperties),
         bucketConversion(_bucketConversion) {}
 
   ~HiveConnectorSplit() = default;
 
-  uint64_t size() const override;
-
   std::string toString() const override;
-
-  std::string getFileName() const;
 
   folly::dynamic serialize() const override;
 

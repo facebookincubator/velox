@@ -55,6 +55,7 @@ add_executable(
   VariadicViewTest.cpp
   VectorReaderTest.cpp
 )
+velox_add_test_headers(velox_expression_test SpecialFormRewriteTestBase.h)
 if(VELOX_ENABLE_GEO)
   target_compile_definitions(velox_expression_test PRIVATE VELOX_ENABLE_GEO)
 endif()
@@ -93,6 +94,7 @@ target_link_libraries(
 )
 
 add_library(velox_expression_verifier ExpressionVerifier.cpp)
+velox_add_test_headers(velox_expression_verifier ExpressionVerifier.h)
 
 target_link_libraries(
   velox_expression_verifier
@@ -104,6 +106,7 @@ target_link_libraries(
 )
 
 add_library(velox_expression_runner ExpressionRunner.cpp)
+velox_add_test_headers(velox_expression_runner ExpressionRunner.h)
 target_link_libraries(
   velox_expression_runner
   velox_expression_verifier

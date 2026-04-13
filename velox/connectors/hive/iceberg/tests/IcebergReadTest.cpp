@@ -19,6 +19,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/iceberg/IcebergConnector.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
@@ -58,11 +59,12 @@ class HiveIcebergTest : public HiveConnectorTestBase {
         std::make_shared<config::ConfigBase>(
             std::unordered_map<std::string, std::string>()),
         ioExecutor_.get());
-    connector::registerConnector(icebergConnector);
+    connector::ConnectorRegistry::global().insert(
+        icebergConnector->connectorId(), icebergConnector);
   }
 
   void TearDown() override {
-    connector::unregisterConnector(kIcebergConnectorId);
+    connector::ConnectorRegistry::global().erase(kIcebergConnectorId);
     HiveConnectorTestBase::TearDown();
   }
 
@@ -316,8 +318,8 @@ class HiveIcebergTest : public HiveConnectorTestBase {
       const auto& columnName = rowType->nameOf(i);
       const auto& columnType = rowType->childAt(i);
       auto columnHandleType = partitionIndices.contains(i)
-          ? HiveColumnHandle::ColumnType::kPartitionKey
-          : HiveColumnHandle::ColumnType::kRegular;
+          ? FileColumnHandle::ColumnType::kPartitionKey
+          : FileColumnHandle::ColumnType::kRegular;
 
       assignments.insert(
           {columnName,

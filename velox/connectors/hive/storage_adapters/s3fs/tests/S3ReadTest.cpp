@@ -18,6 +18,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/memory/Memory.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/RegisterS3FileSystem.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/tests/S3Test.h"
@@ -43,14 +44,15 @@ class S3ReadTest : public S3Test, public ::test::VectorTestBase {
     connector::hive::HiveConnectorFactory factory;
     auto hiveConnector =
         factory.newConnector(kHiveConnectorId, minioServer_->hiveConfig());
-    connector::registerConnector(hiveConnector);
+    connector::ConnectorRegistry::global().insert(
+        hiveConnector->connectorId(), hiveConnector);
     parquet::registerParquetReaderFactory();
   }
 
   void TearDown() override {
     parquet::unregisterParquetReaderFactory();
     filesystems::finalizeS3FileSystem();
-    connector::unregisterConnector(kHiveConnectorId);
+    connector::ConnectorRegistry::global().erase(kHiveConnectorId);
     S3Test::TearDown();
   }
 };

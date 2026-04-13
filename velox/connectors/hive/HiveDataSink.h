@@ -254,7 +254,9 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
       // engine handles ensuring a 1 to 1 mapping from task to bucket.
       const bool ensureFiles = false,
       std::shared_ptr<const FileNameGenerator> fileNameGenerator =
-          std::make_shared<const HiveInsertFileNameGenerator>());
+          std::make_shared<const HiveInsertFileNameGenerator>(),
+      const std::unordered_map<std::string, std::string>& storageParameters =
+          {});
 
   virtual ~HiveInsertTableHandle() = default;
 
@@ -275,10 +277,19 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
     return storageFormat_;
   }
 
+  /// Format specific options.
   const std::unordered_map<std::string, std::string>& serdeParameters() const {
     return serdeParameters_;
   }
 
+  /// Storage specific options.
+  const std::unordered_map<std::string, std::string>& storageParameters()
+      const {
+    return storageParameters_;
+  }
+
+  /// Avoid this in future usages. Format specific change should go through
+  /// serdeParameters.
   const std::shared_ptr<dwio::common::WriterOptions>& writerOptions() const {
     return writerOptions_;
   }
@@ -333,6 +344,7 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
   const std::shared_ptr<dwio::common::WriterOptions> writerOptions_;
   const bool ensureFiles_;
   const std::shared_ptr<const FileNameGenerator> fileNameGenerator_;
+  const std::unordered_map<std::string, std::string> storageParameters_;
   const std::vector<column_index_t> partitionChannels_;
   const std::vector<column_index_t> nonPartitionChannels_;
 };
@@ -772,12 +784,13 @@ class HiveDataSink : public DataSink {
   // Sets up compression, schema, and other writer configuration based on the
   // insert table handle and connector settings.
   // The no-argument overload uses the last writer's info (for appendWriter).
-  std::shared_ptr<dwio::common::WriterOptions> createWriterOptions() const;
+  virtual std::shared_ptr<dwio::common::WriterOptions> createWriterOptions()
+      const;
 
   // Creates WriterOptions for a specific writer index. Use this overload
   // during writer rotation to ensure the correct writer's memory pool and
   // nonReclaimableSection are used.
-  virtual std::shared_ptr<dwio::common::WriterOptions> createWriterOptions(
+  std::shared_ptr<dwio::common::WriterOptions> createWriterOptions(
       size_t writerIndex) const;
 
   // Returns the Hive partition directory name for the given partition ID.
@@ -825,14 +838,14 @@ class HiveDataSink : public DataSink {
   /// Rotates the writer at the given index to a new file. This is called when
   /// the current file exceeds maxTargetFileBytes_. The old writer is closed
   /// and a new writer is created for the same partition/bucket.
-  virtual void rotateWriter(size_t index);
+  void rotateWriter(size_t index);
 
   /// Finalizes the current file for the writer at the given index.
   /// Captures file stats and adds the file info to writtenFiles.
   /// Called by rotateWriter() and closeInternal().
   void finalizeWriterFile(size_t index);
 
-  virtual void closeInternal();
+  void closeInternal();
 
   // IMPORTANT NOTE: these are passed to writers as raw pointers. HiveDataSink
   // owns the lifetime of these objects, and therefore must destroy them last.

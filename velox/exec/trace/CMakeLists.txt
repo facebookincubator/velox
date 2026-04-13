@@ -12,7 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(velox_trace Trace.cpp TraceUtil.cpp)
+velox_add_library(
+  velox_trace
+  Trace.cpp
+  TraceUtil.cpp
+  HEADERS
+  Trace.h
+  TraceCtx.h
+  TraceUtil.h
+  TraceWriter.h
+)
 
 velox_link_libraries(
   velox_trace

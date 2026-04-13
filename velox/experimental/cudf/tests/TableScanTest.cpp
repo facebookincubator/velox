@@ -178,7 +178,10 @@ class TableScanTest : public virtual CudfHiveConnectorTestBase {
            REAL()})};
 };
 
-TEST_F(TableScanTest, allColumns) {
+class TableScanTestParameterized : public TableScanTest,
+                                   public testing::WithParamInterface<bool> {};
+
+TEST_P(TableScanTestParameterized, allColumns) {
   auto vectors = makeVectors(10, 1'000);
   auto filePath = TempFilePath::create();
   writeToFile(filePath->getPath(), vectors, "c");
@@ -213,6 +216,14 @@ TEST_F(TableScanTest, allColumns) {
         // ASSERT_LT(0, it->second.customStats.at("ioWaitWallNanos").sum);
       };
 
+  const bool useBufferedInput = GetParam();
+  auto config = std::unordered_map<std::string, std::string>{
+      {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
+           kUseBufferedInput,
+       useBufferedInput ? "true" : "false"}};
+  resetCudfHiveConnector(
+      std::make_shared<config::ConfigBase>(std::move(config)));
+
   // Test scan all columns with CudfHiveConnectorSplits
   {
     auto splits = makeCudfHiveConnectorSplits({filePath});
@@ -221,46 +232,46 @@ TEST_F(TableScanTest, allColumns) {
 
   // Test scan all columns with HiveConnectorSplits
   {
-    // Lambda to create HiveConnectorSplits from file paths
-    auto makeHiveConnectorSplits =
-        [&](const std::vector<std::shared_ptr<TempFilePath>>& filePaths) {
-          std::vector<
-              std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
-              splits;
-          for (const auto& filePath : filePaths) {
-            splits.push_back(
-                facebook::velox::connector::hive::HiveConnectorSplitBuilder(
-                    filePath->getPath())
-                    .connectorId(kCudfHiveConnectorId)
-                    .fileFormat(dwio::common::FileFormat::PARQUET)
-                    .build());
-          }
-          return splits;
-        };
-
-    auto splits = makeHiveConnectorSplits({filePath});
+    std::vector<std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
+        splits;
+    splits.push_back(
+        facebook::velox::connector::hive::HiveConnectorSplitBuilder(
+            filePath->getPath())
+            .connectorId(kCudfHiveConnectorId)
+            .fileFormat(dwio::common::FileFormat::PARQUET)
+            .build());
     testScanAllColumns(splits);
   }
 }
 
-TEST_F(TableScanTest, allColumnsUsingFileDataSource) {
+TEST_P(TableScanTestParameterized, allColumnsUsingExperimentalReader) {
   auto vectors = makeVectors(10, 1'000);
   auto filePath = TempFilePath::create();
   writeToFile(filePath->getPath(), vectors, "c");
 
   createDuckDbTable(vectors);
-  auto plan = tableScanNode();
+  const std::string duckDbSql =
+      "SELECT * FROM tmp UNION ALL "
+      "SELECT * FROM tmp UNION ALL "
+      "SELECT * FROM tmp UNION ALL "
+      "SELECT * FROM tmp UNION ALL "
+      "SELECT * FROM tmp";
 
-  const std::string duckDbSql = "SELECT * FROM tmp";
+  auto splits = makeCudfHiveConnectorSplits(
+      {filePath, filePath, filePath, filePath, filePath});
 
-  // Reset the CudfHiveConnector config to not buffered input data source
+  auto useBufferedInput = GetParam();
   auto config = std::unordered_map<std::string, std::string>{
       {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
+           kUseExperimentalCudfReader,
+       "true"},
+      {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
            kUseBufferedInput,
-       "false"}};
+       useBufferedInput ? "true" : "false"}};
   resetCudfHiveConnector(
       std::make_shared<config::ConfigBase>(std::move(config)));
-  auto splits = makeCudfHiveConnectorSplits({filePath});
+
+  auto plan = tableScanNode();
   auto task = AssertQueryBuilder(duckDbQueryRunner_)
                   .plan(plan)
                   .splits(splits)
@@ -282,72 +293,13 @@ TEST_F(TableScanTest, allColumnsUsingFileDataSource) {
   // ASSERT_LT(0, it->second.customStats.at("ioWaitWallNanos").sum);
 }
 
-TEST_F(TableScanTest, allColumnsUsingExperimentalReader) {
-  auto vectors = makeVectors(10, 1'000);
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), vectors, "c");
-
-  createDuckDbTable(vectors);
-  const std::string duckDbSql =
-      "SELECT * FROM tmp UNION ALL "
-      "SELECT * FROM tmp UNION ALL "
-      "SELECT * FROM tmp UNION ALL "
-      "SELECT * FROM tmp UNION ALL "
-      "SELECT * FROM tmp";
-
-  auto splits = makeCudfHiveConnectorSplits(
-      {filePath, filePath, filePath, filePath, filePath});
-
-  // Helper to test scan all columns for the given splits
-  auto testScanAllColumnsUsingExperimentalReader =
-      [&](const core::PlanNodePtr& plan) {
-        auto task = AssertQueryBuilder(duckDbQueryRunner_)
-                        .plan(plan)
-                        .splits(splits)
-                        .assertResults(duckDbSql);
-
-        // A quick sanity check for memory usage reporting. Check that peak
-        // total memory usage for the project node is > 0.
-        auto planStats = toPlanStats(task->taskStats());
-        auto scanNodeId = plan->id();
-        auto it = planStats.find(scanNodeId);
-        ASSERT_TRUE(it != planStats.end());
-        // TODO (dm): enable this test once we start to track gpu memory
-        // ASSERT_TRUE(it->second.peakMemoryBytes > 0);
-
-        //  Verifies there is no dynamic filter stats.
-        ASSERT_TRUE(it->second.dynamicFilterStats.empty());
-
-        // TODO: We are not writing any customStats yet so disable this check
-        // ASSERT_LT(0, it->second.customStats.at("ioWaitWallNanos").sum);
-      };
-
-  // Reset the CudfHiveConnector config to use the experimental cudf reader
-  auto config = std::unordered_map<std::string, std::string>{
-      {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
-           kUseExperimentalCudfReader,
-       "true"}};
-  resetCudfHiveConnector(
-      std::make_shared<config::ConfigBase>(std::move(config)));
-
-  // Test scan all columns with buffered input datasource(s)
-  {
-    auto plan = tableScanNode();
-    testScanAllColumnsUsingExperimentalReader(plan);
-  }
-
-  // Test scan all columns with kvikIO datasource(s)
-  {
-    config.insert(
-        {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
-             kUseBufferedInput,
-         "false"});
-    resetCudfHiveConnector(
-        std::make_shared<config::ConfigBase>(std::move(config)));
-    auto plan = tableScanNode();
-    testScanAllColumnsUsingExperimentalReader(plan);
-  }
-}
+INSTANTIATE_TEST_SUITE_P(
+    ,
+    TableScanTestParameterized,
+    testing::Bool(),
+    [](const testing::TestParamInfo<bool>& info) {
+      return info.param ? "BufferedInput" : "FileDataSource";
+    });
 
 TEST_F(TableScanTest, directBufferInputRawInputBytes) {
   constexpr int kSize = 10;

@@ -377,7 +377,11 @@ class DereferenceTypedExpr : public ITypedExpr {
   }
 
   std::string toString() const override {
-    return fmt::format("{}[{}]", inputs()[0]->toString(), name());
+    const auto& fieldName = name();
+    if (fieldName.empty()) {
+      return fmt::format("{}[{}]", inputs()[0]->toString(), index_);
+    }
+    return fmt::format("{}[{}]", inputs()[0]->toString(), fieldName);
   }
 
   size_t localHash() const override {
