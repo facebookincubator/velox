@@ -84,7 +84,9 @@ CudfFromVelox::CudfFromVelox(
           nvtx3::rgb{255, 140, 0}, // Orange
           NvtxMethodFlag::kAll,
           std::nullopt,
-          std::nullopt) {}
+          std::nullopt),
+      timestampTimeZone_(driverCtx->queryConfig().get<std::string>(
+          facebook::velox::core::QueryConfig::kSessionTimezone)) {}
 
 void CudfFromVelox::doAddInput(RowVectorPtr input) {
   if (input->size() > 0) {
