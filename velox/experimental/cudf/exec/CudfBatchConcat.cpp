@@ -44,7 +44,7 @@ void CudfBatchConcat::addInput(RowVectorPtr input) {
   VELOX_CHECK_NOT_NULL(cudfVector, "CudfBatchConcat expects CudfVector input");
 
   // Push input cudf table to buffer
-  currentNumRows_ += cudfVector->cudfRowCount();
+  currentNumRows_ += cudfVector->getTableView().num_rows();
   buffer_.push_back(std::move(cudfVector));
 }
 

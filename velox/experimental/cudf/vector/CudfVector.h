@@ -63,16 +63,6 @@ class CudfVector : public RowVector {
     return tabView_;
   }
 
-  /// Row count for GPU kernels and compaction. libcudf reports \c num_rows() as
-  /// 0 when the table has no columns, but Velox may still use this vector for
-  /// N literal-only rows (ROW() with size N). In that case use \c BaseVector::size().
-  [[nodiscard]] cudf::size_type cudfRowCount() const noexcept {
-    if (tabView_.num_columns() > 0) {
-      return tabView_.num_rows();
-    }
-    return static_cast<cudf::size_type>(BaseVector::size());
-  }
-
   /// Releases ownership of the underlying table.
   /// If constructed from packed_table, materializes a table from the view
   /// first (which copies the data).

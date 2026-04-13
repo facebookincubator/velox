@@ -37,19 +37,7 @@ project(velox)
 # prefix path
 if(DEFINED ENV{CONDA_PREFIX})
   if(NOT DEFINED ENV{VELOX_DEPENDENCY_SOURCE} OR "$ENV{VELOX_DEPENDENCY_SOURCE}" STREQUAL "CONDA")
-    # Headers and libraries follow the active env (CONDA_PREFIX). When
-    # MINIFORGE_HOME is set, prepend it so find_package prefers that canonical
-    # prefix (e.g. /raid/... vs /home/nfs/... for the same install) and the
-    # status line matches what you configured in the shell.
-    if(DEFINED ENV{MINIFORGE_HOME} AND IS_DIRECTORY "$ENV{MINIFORGE_HOME}")
-      list(PREPEND CMAKE_PREFIX_PATH "$ENV{MINIFORGE_HOME}")
-      message(
-        STATUS
-        "Using Conda environment: $ENV{MINIFORGE_HOME} (CONDA_PREFIX=$ENV{CONDA_PREFIX})"
-      )
-    else()
-      message(STATUS "Using Conda environment: $ENV{CONDA_PREFIX}")
-    endif()
+    message(STATUS "Using Conda environment: $ENV{CONDA_PREFIX}")
     set(CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH FALSE)
     list(APPEND CMAKE_PREFIX_PATH "$ENV{CONDA_PREFIX}")
     # Override in case it was set to CONDA
@@ -59,18 +47,6 @@ if(DEFINED ENV{CONDA_PREFIX})
     AND NOT "$ENV{VELOX_DEPENDENCY_SOURCE}" STREQUAL "CONDA"
   )
     message(STATUS "Overriding Conda environment: $ENV{CONDA_PREFIX}")
-  endif()
-  # FetchContent deps (Folly, gRPC, RMM, …) often compile without full target
-  # propagation; SYSTEM keeps warnings down. Needed for fmt/glog/absl/protobuf
-  # when those packages live under the conda prefix.
-  if(IS_DIRECTORY "$ENV{CONDA_PREFIX}/include")
-    include_directories(SYSTEM "$ENV{CONDA_PREFIX}/include")
-    # FetchContent subprojects (Folly, gRPC, RMM, …) may not inherit directory
-    # includes; force -isystem onto every CXX compile line.
-    set(_velox_conda_inc "$ENV{CONDA_PREFIX}/include")
-    add_compile_options(
-      "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-isystem ${_velox_conda_inc}>"
-    )
   endif()
 endif()
 
@@ -197,17 +173,6 @@ option(
 )
 option(VELOX_SIMDJSON_SKIPUTF8VALIDATION "Skip simdjson utf8 validation in JSON parsing" OFF)
 option(VELOX_ENABLE_FAISS "Build faiss vector search support" OFF)
-
-option(VELOX_ENABLE_WAVE "Build Wave GPU backend." OFF)
-option(VELOX_ENABLE_CUDF "Build experimental cuDF (GPU) backend." OFF)
-option(
-  VELOX_ENABLE_GPU
-  "Alias for VELOX_ENABLE_CUDF (cuDF backend). Prefer -DVELOX_ENABLE_CUDF=ON."
-  OFF
-)
-if(VELOX_ENABLE_GPU)
-  set(VELOX_ENABLE_CUDF ON CACHE BOOL "Build experimental cuDF (GPU) backend." FORCE)
-endif()
 
 # Explicitly force compilers to generate colored output. Compilers usually do
 # this by default if they detect the output is a terminal, but this assumption
@@ -517,36 +482,6 @@ if(VELOX_ENABLE_WAVE OR VELOX_ENABLE_CUDF)
     set(VELOX_CUDA_DEBUG_FLAGS "$<$<COMPILE_LANGUAGE:CUDA>:-G>")
   endif()
   find_package(CUDAToolkit REQUIRED)
-  # Conda CUDA: libcudart lives under $CONDA_PREFIX/lib but full toolkit headers
-  # (including cufile.h batch/stream APIs) often live only under
-  # $CONDA_PREFIX/targets/<triplet>/include. $CONDA_PREFIX/include may ship a
-  # slimmer cufile.h — if that path is first, KvikIO fails on cuFileBatchIO* /
-  # cuFileReadAsync. Prepend the targets include so it wins in -I / -isystem order.
-  if(DEFINED ENV{CONDA_PREFIX})
-    file(GLOB _velox_conda_cuda_target_dirs "$ENV{CONDA_PREFIX}/targets/*")
-    foreach(_d IN LISTS _velox_conda_cuda_target_dirs)
-      if(EXISTS "${_d}/include/cuda_runtime_api.h" OR EXISTS "${_d}/include/cuda.h")
-        set(_velox_conda_cuda_inc "${_d}/include")
-        list(FIND CUDAToolkit_INCLUDE_DIRS "${_velox_conda_cuda_inc}" _velox_cuda_inc_hit)
-        if(NOT _velox_cuda_inc_hit EQUAL -1)
-          list(REMOVE_ITEM CUDAToolkit_INCLUDE_DIRS "${_velox_conda_cuda_inc}")
-        endif()
-        list(PREPEND CUDAToolkit_INCLUDE_DIRS "${_velox_conda_cuda_inc}")
-        break()
-      endif()
-    endforeach()
-  endif()
-  # Host C++ in nested _deps trees (RMM, KvikIO, jitify) must see cuda.h /
-  # cuda_runtime_api.h; directory scope survives FetchContent better than
-  # target_include_directories on some generators.
-  foreach(_velox_cuda_sys_inc IN LISTS CUDAToolkit_INCLUDE_DIRS)
-    if(_velox_cuda_sys_inc)
-      include_directories(SYSTEM "${_velox_cuda_sys_inc}")
-      add_compile_options(
-        "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-isystem ${_velox_cuda_sys_inc}>"
-      )
-    endif()
-  endforeach()
   # Suppress deprecated GPU targets warning for CUDA 12.8.x
   if(
     CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 12.8.0
@@ -691,9 +626,7 @@ endif()
 if(${VELOX_BUILD_MINIMAL_WITH_DWIO} OR ${VELOX_ENABLE_HIVE_CONNECTOR} OR VELOX_ENABLE_GCS)
   # Locate or build protobuf.
   velox_set_source(Protobuf)
-  # CONFIG loads the full protobuf CMake export (e.g. libupb / plugin targets on
-  # Protobuf 5+). MODULE or a partial import breaks a later find_package from gRPC.
-  velox_resolve_dependency(Protobuf 3.21.7 CONFIG REQUIRED)
+  velox_resolve_dependency(Protobuf 3.21.7 REQUIRED)
   include_directories(${Protobuf_INCLUDE_DIRS})
 endif()
 
@@ -702,11 +635,6 @@ velox_resolve_dependency(simdjson 4.1.0)
 
 velox_set_source(FastFloat)
 velox_resolve_dependency(FastFloat)
-
-# Folly's object library needs double-conversion headers on the compile line; find
-# the package before FetchContent_MakeAvailable(folly) so we can attach the
-# imported target in resolve_dependency_modules/folly/CMakeLists.txt.
-find_package(double-conversion 3.1.5 REQUIRED)
 
 velox_set_source(folly)
 velox_resolve_dependency(folly)
@@ -792,6 +720,7 @@ if(CMAKE_HOST_SYSTEM_NAME MATCHES "Darwin")
 endif()
 find_package(BISON 3.0.4 REQUIRED)
 find_package(FLEX 2.5.13 REQUIRED)
+find_package(double-conversion 3.1.5 REQUIRED)
 
 include_directories(SYSTEM velox)
 include_directories(SYSTEM velox/external)
@@ -834,14 +763,3 @@ if(VELOX_ENABLE_GEO)
 endif()
 
 add_subdirectory(velox)
-
-# gRPC headers (and Abseil APIs they use) warn under GCC 14+; Velox compiles
-# many TUs with -Werror via transitive includes (e.g. Arrow/Flight paths).
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND TARGET velox AND TARGET grpc)
-  target_compile_options(
-    velox
-    PRIVATE
-    -Wno-error=deprecated-declarations
-    -Wno-error=attributes
-  )
-endif()

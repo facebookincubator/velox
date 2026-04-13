@@ -95,8 +95,7 @@ if(VELOX_ENABLE_ARROW)
     BUILD_BYPRODUCTS ${ARROW_LIBDIR}/libarrow.a ${ARROW_LIBDIR}/libarrow_testing.a ${THRIFT_LIB}
     PATCH_COMMAND
       git apply ${CMAKE_CURRENT_LIST_DIR}/cmake-compatibility.patch && git apply
-      ${CMAKE_CURRENT_LIST_DIR}/thrift-download.patch && git apply
-      ${CMAKE_CURRENT_LIST_DIR}/thrift-mutex-cstdint.patch
+      ${CMAKE_CURRENT_LIST_DIR}/thrift-download.patch
   )
 
   add_library(arrow STATIC IMPORTED GLOBAL)

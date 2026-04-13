@@ -16,13 +16,10 @@ include_guard(GLOBAL)
 velox_set_source(absl)
 velox_resolve_dependency(absl CONFIG REQUIRED)
 
-# 1.48.x does not build codegen against Protobuf 6+ (absl::string_view APIs,
-# header moves, protobuf::util::Status). Use a release aligned with Protobuf
-# 25+ for conda/system protobuf package builds.
-set(VELOX_GRPC_BUILD_VERSION 1.66.2)
+set(VELOX_GRPC_BUILD_VERSION 1.48.1)
 set(
   VELOX_GRPC_BUILD_SHA256_CHECKSUM
-  1343e2d0c4cbd36cbfbbe4c7305a5529a7a044212c57b9dbfd929a6ceda285f4
+  320366665d19027cda87b2368c03939006a37e0388bfd1091c8d2a96fbc93bd8
 )
 string(
   CONCAT
@@ -54,54 +51,6 @@ set(gRPC_SSL_PROVIDER "package" CACHE STRING "Provider of ssl library")
 set(gRPC_PROTOBUF_PROVIDER "package" CACHE STRING "Provider of protobuf library")
 set(gRPC_INSTALL ON CACHE BOOL "Generate installation target")
 FetchContent_MakeAvailable(gRPC)
-
-# Velox builds with strict warnings; newer GCC (e.g. 14+) treats gRPC's
-# GPR_ATTRIBUTE_ALWAYS_INLINE_FUNCTION without `inline` as -Wattributes, and
-# flags some chttp2 slice writes as -Wstringop-overflow. gRPC 1.66 also hits
-# Abseil deprecation warnings with newer conda Abseil (-Wdeprecated-declarations).
-# Those are third-party noise when -Werror is inherited from the parent project.
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-  foreach(_velox_grpc_tgt IN ITEMS grpc "grpc++" gpr)
-    if(TARGET ${_velox_grpc_tgt})
-      target_compile_options(
-        ${_velox_grpc_tgt}
-        PRIVATE
-        -Wno-error=attributes
-        -Wno-error=stringop-overflow
-        -Wno-error=deprecated-declarations
-      )
-    endif()
-  endforeach()
-endif()
-
-# With high -j, gRPC can compile gpr / codegen before Abseil or protobuf headers
-# are available in the build interface. Serialize against those providers.
-if(TARGET gpr)
-  foreach(
-    _velox_grpc_absl
-    absl::base
-    absl::strings
-    absl::str_format
-    absl::status
-    absl::time
-    absl::synchronization
-    absl::flat_hash_map
-    absl::optional
-    absl::variant
-  )
-    if(TARGET ${_velox_grpc_absl})
-      add_dependencies(gpr ${_velox_grpc_absl})
-    endif()
-  endforeach()
-endif()
-if(TARGET grpc_plugin_support)
-  if(TARGET protobuf::libprotobuf)
-    add_dependencies(grpc_plugin_support protobuf::libprotobuf)
-  elseif(TARGET libprotobuf)
-    add_dependencies(grpc_plugin_support libprotobuf)
-  endif()
-endif()
-
 add_library(gRPC::grpc ALIAS grpc)
 add_library(gRPC::grpc++ ALIAS grpc++)
 add_executable(gRPC::grpc_cpp_plugin ALIAS grpc_cpp_plugin)

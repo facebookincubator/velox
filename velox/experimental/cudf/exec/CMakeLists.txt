@@ -25,7 +25,6 @@ add_library(
   CudfOrderBy.cpp
   CudfBatchConcat.cpp
   CudfTopN.cpp
-  CudfWindow.cpp
   DebugUtil.cpp
   GpuResources.cpp
   OperatorAdapters.cpp
@@ -40,7 +39,6 @@ target_link_libraries(
   PRIVATE
     arrow
     velox_arrow_bridge
-    velox_connector_registry
     velox_exception
     velox_common_base
     velox_cudf_vector

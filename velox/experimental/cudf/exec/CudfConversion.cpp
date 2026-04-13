@@ -155,15 +155,8 @@ RowVectorPtr CudfFromVelox::getOutput() {
 
   VELOX_CHECK_NOT_NULL(tbl);
 
-  // Return a CudfVector that owns the cudf table. libcudf keeps num_rows() at 0
-  // when there are no columns; Velox ROW() batches can still have N > 0 rows.
-  const auto size = tbl->num_columns() > 0
-      ? tbl->num_rows()
-      : static_cast<vector_size_t>(input->size());
-  VELOX_CHECK_EQ(
-      static_cast<vector_size_t>(input->size()),
-      size,
-      "Velox row count must match cudf batch for empty-column ROW()");
+  // Return a CudfVector that owns the cudf table
+  const auto size = tbl->num_rows();
   return std::make_shared<CudfVector>(
       input->pool(), outputType_, size, std::move(tbl), stream);
 }

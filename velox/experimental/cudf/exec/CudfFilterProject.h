@@ -47,6 +47,14 @@ class CudfFilterProject : public exec::Operator, public NvtxHelper {
 
   RowVectorPtr getOutput() override;
 
+  void filter(
+      std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
+      rmm::cuda_stream_view stream);
+
+  std::vector<std::unique_ptr<cudf::column>> project(
+      std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
+      rmm::cuda_stream_view stream);
+
   exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
     return exec::BlockingReason::kNotBlocked;
   }
@@ -61,16 +69,6 @@ class CudfFilterProject : public exec::Operator, public NvtxHelper {
 
  private:
   bool allInputProcessed();
-
-  /// padOnlyRowCount: when the input table has no columns, build a UINT8 padding
-  /// column of this many rows for expression eval, then drop it. If \p
-  /// perRowFilterMask is set (size == padOnlyRowCount), apply it to each computed
-  /// projection column (empty-input filter path).
-  std::vector<std::unique_ptr<cudf::column>> runProjectImpl(
-      std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
-      const std::optional<cudf::column_view>& perRowFilterMask,
-      cudf::size_type padOnlyRowCount,
-      rmm::cuda_stream_view stream);
 
   // If true exprs_[0] is a filter and the other expressions are projections
   const bool hasFilter_{false};

@@ -5185,14 +5185,6 @@ class WindowNode : public PlanNode {
     return windowFunctions_;
   }
 
-  /// When true, every input batch to this Window node is already ordered by
-  /// partition keys (in declaration order) and then by sortingKeys with the
-  /// corresponding sortingOrders, within this operator's input stream. It is a
-  /// per-pipeline / per-driver guarantee: batches must appear in an order such
-  /// that concatenating them preserves that global ordering (same contract the
-  /// CPU RowsStreamingWindowBuild / PartitionStreamingWindowBuild rely on).
-  /// Clients must not set this unless the preceding plan guarantees that order;
-  /// setting it incorrectly skips a sort in GPU window and yields wrong results.
   bool inputsSorted() const {
     return inputsSorted_;
   }

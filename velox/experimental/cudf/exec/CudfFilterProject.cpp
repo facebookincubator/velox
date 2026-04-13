@@ -26,15 +26,11 @@
 #include "velox/expression/FieldReference.h"
 
 #include <cudf/aggregation.hpp>
-#include <cudf/column/column.hpp>
-#include <cudf/column/column_factories.hpp>
 #include <cudf/reduction.hpp>
-#include <cudf/scalar/scalar_factories.hpp>
 #include <cudf/stream_compaction.hpp>
 #include <cudf/unary.hpp>
 
 #include <iostream>
-#include <optional>
 #include <unordered_map>
 
 namespace facebook::velox::cudf_velox {
@@ -104,30 +100,6 @@ std::vector<exec::OperatorStats> splitStats(
   projectStats.inputVectors = filterStats.outputVectors;
 
   return {std::move(projectStats), std::move(filterStats)};
-}
-
-std::unique_ptr<cudf::column> materializeColumnOrView(
-    ColumnOrView&& result,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
-  return std::visit(
-      [&](auto&& h) -> std::unique_ptr<cudf::column> {
-        using T = std::decay_t<decltype(h)>;
-        if constexpr (std::is_same_v<T, cudf::column_view>) {
-          return std::make_unique<cudf::column>(h, stream, mr);
-        } else {
-          return std::move(h);
-        }
-      },
-      std::move(result));
-}
-
-std::unique_ptr<cudf::column> makePaddingUInt8Column(
-    cudf::size_type numRows,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
-  auto zero = cudf::numeric_scalar<uint8_t>(0, true, stream, mr);
-  return cudf::make_column_from_scalar(zero, numRows, stream, mr);
 }
 
 } // namespace
@@ -272,91 +244,21 @@ RowVectorPtr CudfFilterProject::getOutput() {
 
   auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input_);
   VELOX_CHECK_NOT_NULL(cudfInput);
-  const vector_size_t batchNumRows = cudfInput->size();
-  velox::memory::MemoryPool* pool = cudfInput->pool();
   auto stream = cudfInput->stream();
-  auto inputTable = cudfInput->release();
-  auto inputTableColumns = inputTable->release();
-
-  std::optional<cudf::column_view> perRowFilterMask;
-  std::unique_ptr<cudf::column> filterMaskOwner;
+  auto inputTableColumns = cudfInput->release()->release();
+  auto outputSize = input_->size();
 
   if (hasFilter_) {
-    std::vector<cudf::column_view> filterInputViews;
-    filterInputViews.reserve(inputTableColumns.size());
-    for (auto& col : inputTableColumns) {
-      filterInputViews.push_back(col->view());
-    }
-    std::unique_ptr<cudf::column> padForFilter;
-    if (filterInputViews.empty() &&
-        static_cast<cudf::size_type>(batchNumRows) > 0) {
-      padForFilter =
-          makePaddingUInt8Column(batchNumRows, stream, get_temp_mr());
-      filterInputViews.push_back(padForFilter->view());
-    }
-
-    ColumnOrView filterResult = filterEvaluator_->eval(
-        filterInputViews, stream, get_temp_mr(), true);
-    stream.synchronize();
-    auto filterCol =
-        materializeColumnOrView(std::move(filterResult), stream, get_temp_mr());
-    auto filterColumnView = filterCol->view();
-
-    bool shouldApplyFilter = [&]() {
-      if (filterColumnView.has_nulls()) {
-        return true;
-      }
-      auto isAllTrue = cudf::reduce(
-          filterColumnView,
-          *cudf::make_all_aggregation<cudf::reduce_aggregation>(),
-          cudf::data_type(cudf::type_id::BOOL8),
-          stream,
-          get_temp_mr());
-      using ScalarType = cudf::scalar_type_t<bool>;
-      auto result = static_cast<ScalarType*>(isAllTrue.get());
-      return !(result->is_valid(stream) && result->value(stream));
-    }();
-
-    if (shouldApplyFilter) {
-      if (inputTableColumns.empty()) {
-        filterMaskOwner = std::move(filterCol);
-        perRowFilterMask = filterMaskOwner->view();
-      } else {
-        auto filterTable =
-            std::make_unique<cudf::table>(std::move(inputTableColumns));
-        auto filteredTable = cudf::apply_boolean_mask(
-            *filterTable, filterColumnView, stream, get_output_mr());
-        inputTableColumns = filteredTable->release();
-      }
-    }
+    filter(inputTableColumns, stream);
   }
-
-  const cudf::size_type padOnlyRowCount =
-      static_cast<cudf::size_type>(batchNumRows);
-
-  auto outputColumns = runProjectImpl(
-      inputTableColumns, perRowFilterMask, padOnlyRowCount, stream);
+  if (!inputTableColumns.empty()) {
+    outputSize = inputTableColumns.front()->size();
+  }
+  auto outputColumns = project(inputTableColumns, stream);
 
   auto outputTable = std::make_unique<cudf::table>(std::move(outputColumns));
   auto const numColumns = outputTable->num_columns();
-  vector_size_t size = 0;
-  if (numColumns > 0) {
-    size = static_cast<vector_size_t>(outputTable->num_rows());
-  } else if (!inputTableColumns.empty()) {
-    size = static_cast<vector_size_t>(inputTableColumns.front()->size());
-  } else if (perRowFilterMask.has_value()) {
-    auto padTmp =
-        makePaddingUInt8Column(padOnlyRowCount, stream, get_temp_mr());
-    auto shrunk = cudf::apply_boolean_mask(
-        cudf::table_view({padTmp->view()}),
-        *perRowFilterMask,
-        stream,
-        get_output_mr());
-    size = static_cast<vector_size_t>(shrunk->num_rows());
-  } else {
-    size = batchNumRows;
-  }
-
+  auto const size = numColumns > 0 ? outputTable->num_rows() : outputSize;
   if (CudfConfig::getInstance().debugEnabled) {
     VLOG(1) << "cudfProject Output: " << size << " rows, " << numColumns
             << " columns";
@@ -366,70 +268,95 @@ RowVectorPtr CudfFilterProject::getOutput() {
     return nullptr;
   }
   auto cudfOutput = std::make_shared<CudfVector>(
-      pool, outputType_, size, std::move(outputTable), stream);
+      input_->pool(), outputType_, size, std::move(outputTable), stream);
   input_.reset();
   return cudfOutput;
 }
 
-std::vector<std::unique_ptr<cudf::column>> CudfFilterProject::runProjectImpl(
+void CudfFilterProject::filter(
     std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
-    const std::optional<cudf::column_view>& perRowFilterMask,
-    cudf::size_type padOnlyRowCount,
+    rmm::cuda_stream_view stream) {
+  // Evaluate the Filter
+  std::vector<cudf::column_view> inputViews;
+  inputViews.reserve(inputTableColumns.size());
+  for (auto& col : inputTableColumns) {
+    inputViews.push_back(col->view());
+  }
+  auto filterColumn =
+      filterEvaluator_->eval(inputViews, stream, get_temp_mr(), true);
+  auto filterColumnView = asView(filterColumn);
+  bool shouldApplyFilter = [&]() {
+    if (filterColumnView.has_nulls()) {
+      return true;
+    }
+    // check if all values in filterColumnView are true
+    auto isAllTrue = cudf::reduce(
+        filterColumnView,
+        *cudf::make_all_aggregation<cudf::reduce_aggregation>(),
+        cudf::data_type(cudf::type_id::BOOL8),
+        stream,
+        get_temp_mr());
+    using ScalarType = cudf::scalar_type_t<bool>;
+    auto result = static_cast<ScalarType*>(isAllTrue.get());
+    // If filter is not all true, apply the filter
+    return !(result->is_valid(stream) && result->value(stream));
+  }();
+  if (shouldApplyFilter) {
+    auto filterTable =
+        std::make_unique<cudf::table>(std::move(inputTableColumns));
+    auto filteredTable = cudf::apply_boolean_mask(
+        *filterTable, filterColumnView, stream, get_output_mr());
+    inputTableColumns = filteredTable->release();
+  }
+}
+
+std::vector<std::unique_ptr<cudf::column>> CudfFilterProject::project(
+    std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
     rmm::cuda_stream_view stream) {
   std::vector<cudf::column_view> inputViews;
   inputViews.reserve(inputTableColumns.size());
   for (auto& col : inputTableColumns) {
     inputViews.push_back(col->view());
   }
-  std::unique_ptr<cudf::column> padForProject;
-  if (inputViews.empty() && padOnlyRowCount > 0) {
-    padForProject =
-        makePaddingUInt8Column(padOnlyRowCount, stream, get_temp_mr());
-    inputViews.push_back(padForProject->view());
-  }
-
-  if (perRowFilterMask.has_value()) {
-    VELOX_CHECK_EQ(
-        perRowFilterMask->size(),
-        padOnlyRowCount,
-        "Filter mask row count must match padding row count for empty input");
-  }
-
-  std::vector<std::unique_ptr<cudf::column>> computedProjections;
-  computedProjections.reserve(projectEvaluators_.size());
+  std::vector<ColumnOrView> columns;
   for (auto& projectEvaluator : projectEvaluators_) {
-    ColumnOrView projResult =
-        projectEvaluator->eval(inputViews, stream, get_output_mr(), true);
-    std::unique_ptr<cudf::column> col =
-        materializeColumnOrView(std::move(projResult), stream, get_output_mr());
-    if (perRowFilterMask.has_value()) {
-      auto single = cudf::table_view({col->view()});
-      auto masked =
-          cudf::apply_boolean_mask(single, *perRowFilterMask, stream, get_output_mr());
-      auto released = masked->release();
-      VELOX_CHECK_EQ(released.size(), 1u);
-      col = std::move(released[0]);
-    }
-    computedProjections.push_back(std::move(col));
+    columns.push_back(
+        projectEvaluator->eval(inputViews, stream, get_output_mr(), true));
   }
 
+  // Rearrange columns to match outputType_
   std::vector<std::unique_ptr<cudf::column>> outputColumns(outputType_->size());
+  // computed resultProjections
   for (int i = 0; i < resultProjections_.size(); i++) {
-    outputColumns[resultProjections_[i].outputChannel] =
-        std::move(computedProjections[i]);
+    auto& columnOrView = columns[i];
+    if (std::holds_alternative<std::unique_ptr<cudf::column>>(columnOrView)) {
+      // Move the owned column
+      outputColumns[resultProjections_[i].outputChannel] =
+          std::move(std::get<std::unique_ptr<cudf::column>>(columnOrView));
+    } else {
+      // Materialize the column_view into an owned column
+      auto view = std::get<cudf::column_view>(columnOrView);
+      outputColumns[resultProjections_[i].outputChannel] =
+          std::make_unique<cudf::column>(view, stream, get_output_mr());
+    }
   }
 
+  // Count occurrences of each inputChannel, and move columns if they occur only
+  // once
   std::unordered_map<column_index_t, int> inputChannelCount;
   for (const auto& identity : identityProjections_) {
     inputChannelCount[identity.inputChannel]++;
   }
 
+  // identityProjections (input to output copy)
   for (auto const& identity : identityProjections_) {
     VELOX_CHECK_NOT_NULL(inputTableColumns[identity.inputChannel]);
     if (inputChannelCount[identity.inputChannel] == 1) {
+      // Move the column if it occurs only once
       outputColumns[identity.outputChannel] =
           std::move(inputTableColumns[identity.inputChannel]);
     } else {
+      // Otherwise, copy the column and decrement the count
       outputColumns[identity.outputChannel] = std::make_unique<cudf::column>(
           *inputTableColumns[identity.inputChannel], stream, get_output_mr());
     }

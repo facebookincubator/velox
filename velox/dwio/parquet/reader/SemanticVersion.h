@@ -48,8 +48,7 @@ class SemanticVersion {
   int minorVersion_;
   int patchVersion_;
 
-  // Global RE2 (DuckDB vendored re2/re2.h has no re2::; system re2 adds using).
-  static const RE2 pattern_;
+  static const re2::RE2 pattern_;
 };
 
 } // namespace facebook::velox::parquet

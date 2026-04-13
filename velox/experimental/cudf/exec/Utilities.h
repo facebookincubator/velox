@@ -23,28 +23,8 @@
 #include <rmm/cuda_stream_view.hpp>
 
 #include <memory>
-#include <string>
 
 namespace facebook::velox::cudf_velox {
-
-/// Extract the base function name from a possibly qualified name
-/// (e.g. \c "presto.default.lag" -> \c "lag").
-[[nodiscard]] inline std::string getBaseFunctionName(
-    const std::string& fullName) {
-  auto pos = fullName.rfind('.');
-  return pos == std::string::npos ? fullName : fullName.substr(pos + 1);
-}
-
-/// Strip registered engine prefix (e.g. \c spark_) after \ref getBaseFunctionName.
-[[nodiscard]] inline std::string stripFunctionPrefix(
-    const std::string& fullName,
-    const std::string& prefix) {
-  auto base = getBaseFunctionName(fullName);
-  if (!prefix.empty() && base.find(prefix) == 0) {
-    return base.substr(prefix.size());
-  }
-  return base;
-}
 
 // Concatenate a vector of cuDF tables into a single table
 [[nodiscard]] std::unique_ptr<cudf::table> concatenateTables(

@@ -27,25 +27,15 @@ set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 velox_resolve_dependency_url(DUCKDB)
 
 message(STATUS "Building DuckDB from source")
-# DuckDB FSST libfsst.hpp typedefs u8/u32 from stdint types without <cstdint>.
-# GCC 14+ may not pull those typedefs in via other headers. We patch after extract.
-# Use a CMake script (not git apply): FetchContent's patch step cwd is unreliable,
-# and unified diffs break on whitespace/CRLF differences in the license block.
-if(DEFINED FETCHCONTENT_BASE_DIR)
-  cmake_path(SET _velox_duckdb_src NORMALIZE
-             "${FETCHCONTENT_BASE_DIR}/duckdb-src")
-else()
-  cmake_path(SET _velox_duckdb_src NORMALIZE
-             "${CMAKE_BINARY_DIR}/_deps/duckdb-src")
-endif()
+# We need remove-ccache.patch to remove adding ccache to the build command
+# twice. Velox already does this.
 FetchContent_Declare(
   duckdb
   URL ${VELOX_DUCKDB_SOURCE_URL}
   URL_HASH ${VELOX_DUCKDB_BUILD_SHA256_CHECKSUM}
   PATCH_COMMAND
-    ${CMAKE_COMMAND}
-    -DVELOX_DUCKDB_SRC=${_velox_duckdb_src}
-    -P ${CMAKE_CURRENT_LIST_DIR}/duckdb/patch_fsst_cstdint.cmake
+    git apply ${CMAKE_CURRENT_LIST_DIR}/duckdb/remove-ccache.patch && git apply
+    ${CMAKE_CURRENT_LIST_DIR}/duckdb/re2.patch
 )
 
 # DuckDB uses git commands to retrieve version information during the build,
