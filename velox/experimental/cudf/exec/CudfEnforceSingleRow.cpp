@@ -95,7 +95,7 @@ RowVectorPtr CudfEnforceSingleRow::getOutput() {
     return nullptr;
   }
 
-  return input_;
+  return std::move(input_);
 }
 
 bool CudfEnforceSingleRow::isFinished() {
