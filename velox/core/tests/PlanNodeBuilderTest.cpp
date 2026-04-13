@@ -671,6 +671,7 @@ TEST_F(PlanNodeBuilderTest, hashJoinNode) {
   const auto verify = [&](const std::shared_ptr<const HashJoinNode>& node) {
     EXPECT_EQ(node->id(), id);
     EXPECT_EQ(node->isNullAware(), nullAware);
+    EXPECT_FALSE(node->isNullAsValue());
     EXPECT_EQ(node->joinType(), joinType);
     EXPECT_EQ(node->leftKeys(), leftKeys);
     EXPECT_EQ(node->rightKeys(), rightKeys);
