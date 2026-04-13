@@ -17,6 +17,8 @@
 #pragma once
 
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/expression/PrecomputeInstruction.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/core/PlanNode.h"
@@ -216,6 +218,11 @@ class CudfNestedLoopJoinProbe : public exec::Operator, public NvtxHelper {
   bool hasFilter_{false};
   cudf::ast::tree tree_;
   std::vector<std::unique_ptr<cudf::scalar>> scalars_;
+  // Precompute instructions for expressions not directly representable in cuDF
+  // AST. These sub-expressions are evaluated into extra columns appended to
+  // each table view before it is passed to cuDF join APIs.
+  std::vector<PrecomputeInstruction> leftPrecomputeInstructions_;
+  std::vector<PrecomputeInstruction> rightPrecomputeInstructions_;
 
   // Output column mapping resolved by name from the output type.
   // Handles arbitrary column ordering (e.g., {"b0", "p0"}).
@@ -237,6 +244,14 @@ class CudfNestedLoopJoinProbe : public exec::Operator, public NvtxHelper {
 
   // True when build side has no rows.
   bool buildEmpty_{false};
+
+  // Cached precomputed columns for the build table (populated once in
+  // isBlocked() when rightPrecomputeInstructions_ is non-empty). Kept alive
+  // alongside buildExtendedView_ which holds non-owning views into them.
+  std::vector<ColumnOrView> buildPrecomputed_;
+  // Extended build table view: original build columns + precomputed columns.
+  // Valid only when buildPrecomputed_ is non-empty.
+  cudf::table_view buildExtendedView_{};
 
   // Build mismatch tracking for right/full joins: BOOL8 column, one element
   // per build row. Updated across all probe inputs via BITWISE_OR. Merged from

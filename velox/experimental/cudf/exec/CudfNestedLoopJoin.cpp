@@ -22,6 +22,7 @@
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
+#include "velox/experimental/cudf/expression/AstExpressionUtils.h"
 #include "velox/experimental/cudf/expression/PrecomputeInstruction.h"
 
 #include "velox/exec/Task.h"
@@ -41,6 +42,29 @@
 #include <cudf/unary.hpp>
 
 namespace facebook::velox::cudf_velox {
+
+namespace {
+
+// Appends precomputed columns to a table view for filter AST evaluation.
+// TODO: Consolidate with the identical helper in CudfHashJoin.cpp.
+cudf::table_view createExtendedTableView(
+    cudf::table_view originalView,
+    std::vector<ColumnOrView>& precomputedColumns) {
+  if (precomputedColumns.empty()) {
+    return originalView;
+  }
+  std::vector<cudf::column_view> allViews;
+  allViews.reserve(originalView.num_columns() + precomputedColumns.size());
+  for (cudf::size_type i = 0; i < originalView.num_columns(); ++i) {
+    allViews.push_back(originalView.column(i));
+  }
+  for (auto& col : precomputedColumns) {
+    allViews.push_back(asView(col));
+  }
+  return cudf::table_view(allViews);
+}
+
+} // namespace
 
 void CudfNestedLoopJoinBridge::setData(
     std::optional<CudfNestedLoopJoinBridge::build_data_type> data) {
@@ -267,25 +291,14 @@ CudfNestedLoopJoinProbe::CudfNestedLoopJoinProbe(
     // Convert Velox expression to cuDF AST expression tree.
     // The AST will be passed to cudf::conditional_inner_join() for GPU
     // evaluation.
-    std::vector<PrecomputeInstruction> leftPrecomputeInstructions;
-    std::vector<PrecomputeInstruction> rightPrecomputeInstructions;
-
     createAstTree(
         exprs.exprs()[0],
         tree_,
         scalars_,
         probeType_,
         buildType_,
-        leftPrecomputeInstructions,
-        rightPrecomputeInstructions);
-
-    // Precompute instructions handle expressions not supported by cuDF AST
-    // (e.g., complex functions). Not implemented yet for nested loop join.
-    if (!leftPrecomputeInstructions.empty() ||
-        !rightPrecomputeInstructions.empty()) {
-      VELOX_NYI(
-          "Filters that require precomputation are not yet supported for NestedLoopJoin");
-    }
+        leftPrecomputeInstructions_,
+        rightPrecomputeInstructions_);
   }
 }
 
@@ -294,6 +307,7 @@ void CudfNestedLoopJoinProbe::close() {
   buildData_.reset();
   probeMatchedFlags_.reset();
   buildMatchedFlags_.reset();
+  buildPrecomputed_.clear();
   scalars_.clear();
   tree_ = {};
 }
@@ -461,6 +475,22 @@ exec::BlockingReason CudfNestedLoopJoinProbe::isBlocked(
     initStream.synchronize();
   }
 
+  // Precompute build-side sub-expressions for filter evaluation (once, here,
+  // since the build table is fixed for the lifetime of this probe operator).
+  if (hasFilter_ && !rightPrecomputeInstructions_.empty() && !buildEmpty_) {
+    auto precomputeStream = cudfGlobalStreamPool().get_stream();
+    auto buildColumnViews = tableViewToColumnViews(buildData_.value()->view());
+    buildPrecomputed_ = precomputeSubexpressions(
+        buildColumnViews,
+        rightPrecomputeInstructions_,
+        scalars_,
+        buildType_,
+        precomputeStream);
+    buildExtendedView_ =
+        createExtendedTableView(buildData_.value()->view(), buildPrecomputed_);
+    precomputeStream.synchronize();
+  }
+
   return exec::BlockingReason::kNotBlocked;
 }
 
@@ -485,10 +515,28 @@ std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::joinWithBuildBatch(
 
   auto numOutputColumns = outputType_->size();
 
+  // Extend probe view with precomputed columns for filter AST evaluation.
+  std::vector<ColumnOrView> leftPrecomputed;
+  cudf::table_view extendedProbeView = probeTableView;
+  if (hasFilter_ && !leftPrecomputeInstructions_.empty()) {
+    auto probeColumnViews = tableViewToColumnViews(probeTableView);
+    leftPrecomputed = precomputeSubexpressions(
+        probeColumnViews,
+        leftPrecomputeInstructions_,
+        scalars_,
+        probeType_,
+        stream);
+    extendedProbeView =
+        createExtendedTableView(probeTableView, leftPrecomputed);
+  }
+  // Use cached extended build view if build-side precompute was needed.
+  const cudf::table_view& extendedBuildView =
+      buildPrecomputed_.empty() ? buildView : buildExtendedView_;
+
   if (hasFilter_) {
     auto [leftIndices, rightIndices] = cudf::conditional_inner_join(
-        probeTableView,
-        buildView,
+        extendedProbeView,
+        extendedBuildView,
         tree_.back(),
         std::nullopt,
         stream,
@@ -782,9 +830,27 @@ RowVectorPtr CudfNestedLoopJoinProbe::getOutput() {
       matchFlags = cudf::make_column_from_scalar(
           falseScalar, numProbeRows, stream, get_temp_mr());
 
+      // Extend probe view with precomputed columns if needed.
+      std::vector<ColumnOrView> leftPrecomputed;
+      cudf::table_view extendedProbeView = probeTableView;
+      if (!leftPrecomputeInstructions_.empty()) {
+        auto probeColumnViews = tableViewToColumnViews(probeTableView);
+        leftPrecomputed = precomputeSubexpressions(
+            probeColumnViews,
+            leftPrecomputeInstructions_,
+            scalars_,
+            probeType_,
+            stream);
+        extendedProbeView =
+            createExtendedTableView(probeTableView, leftPrecomputed);
+      }
+      const cudf::table_view& extendedBuildView = buildPrecomputed_.empty()
+          ? buildData_.value()->view()
+          : buildExtendedView_;
+
       auto matchedIndices = cudf::conditional_left_semi_join(
-          probeTableView,
-          buildData_.value()->view(),
+          extendedProbeView,
+          extendedBuildView,
           tree_.back(),
           {},
           stream,
