@@ -101,7 +101,7 @@ vector_size_t FlatMapVector::sizeAt(vector_size_t index) const {
 
   for (vector_size_t i = 0; i < numDistinctKeys(); i++) {
     if (i < inMaps_.size() && inMaps_[i] != nullptr) {
-      size += bits::isBitSet(inMaps_[i]->asMutable<uint64_t>(), index);
+      size += bits::isBitSet(inMaps_[i]->as<uint64_t>(), index);
     } else {
       // By default assume the key exists.
       ++size;

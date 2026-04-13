@@ -18,8 +18,10 @@
 
 #include "velox/common/base/RandomUtil.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/connectors/hive/FileColumnHandle.h"
+#include "velox/connectors/hive/FileConnectorSplit.h"
 #include "velox/connectors/hive/FileHandle.h"
-#include "velox/connectors/hive/HivePartitionFunction.h"
+#include "velox/connectors/hive/FileTableHandle.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Reader.h"
 
@@ -77,21 +79,16 @@ VectorPtr newConstantFromString(
     bool isLocalTimestamp,
     bool isDaysSinceEpoch);
 
-struct HiveConnectorSplit;
-class HiveTableHandle;
-class HiveColumnHandle;
-class HiveConfig;
+class FileConfig;
 
-class SplitReader {
+class FileSplitReader {
  public:
-  static std::unique_ptr<SplitReader> create(
-      const std::shared_ptr<hive::HiveConnectorSplit>& hiveSplit,
-      const std::shared_ptr<const HiveTableHandle>& hiveTableHandle,
-      const std::unordered_map<
-          std::string,
-          std::shared_ptr<const HiveColumnHandle>>* partitionKeys,
+  static std::unique_ptr<FileSplitReader> create(
+      const std::shared_ptr<const hive::FileConnectorSplit>& fileSplit,
+      const FileTableHandlePtr& tableHandle,
+      const std::unordered_map<std::string, FileColumnHandlePtr>* partitionKeys,
       const ConnectorQueryCtx* connectorQueryCtx,
-      const std::shared_ptr<const HiveConfig>& hiveConfig,
+      const std::shared_ptr<const FileConfig>& fileConfig,
       const RowTypePtr& readerOutputType,
       const std::shared_ptr<io::IoStatistics>& ioStatistics,
       const std::shared_ptr<IoStats>& ioStats,
@@ -100,7 +97,7 @@ class SplitReader {
       const std::shared_ptr<common::ScanSpec>& scanSpec,
       const common::SubfieldFilters* subfieldFiltersForValidation = nullptr);
 
-  virtual ~SplitReader() = default;
+  virtual ~FileSplitReader() = default;
 
   void configureReaderOptions(
       std::shared_ptr<random::RandomSkipTracker> randomSkip);
@@ -130,18 +127,6 @@ class SplitReader {
 
   void setConnectorQueryCtx(const ConnectorQueryCtx* connectorQueryCtx);
 
-  void setBucketConversion(std::vector<column_index_t> bucketChannels);
-
-  /// Sets the info columns map for synthesized column filter validation.
-  /// Must be called before prepareSplit() if synthesized column filter
-  /// validation is needed.
-  void setInfoColumns(
-      const std::unordered_map<
-          std::string,
-          std::shared_ptr<const HiveColumnHandle>>* infoColumns) {
-    infoColumns_ = infoColumns;
-  }
-
   const RowTypePtr& readerOutputType() const {
     return readerOutputType_;
   }
@@ -149,14 +134,12 @@ class SplitReader {
   std::string toString() const;
 
  protected:
-  SplitReader(
-      const std::shared_ptr<const hive::HiveConnectorSplit>& hiveSplit,
-      const std::shared_ptr<const HiveTableHandle>& hiveTableHandle,
-      const std::unordered_map<
-          std::string,
-          std::shared_ptr<const HiveColumnHandle>>* partitionKeys,
+  FileSplitReader(
+      const std::shared_ptr<const hive::FileConnectorSplit>& fileSplit,
+      const FileTableHandlePtr& tableHandle,
+      const std::unordered_map<std::string, FileColumnHandlePtr>* partitionKeys,
       const ConnectorQueryCtx* connectorQueryCtx,
-      const std::shared_ptr<const HiveConfig>& hiveConfig,
+      const std::shared_ptr<const FileConfig>& fileConfig,
       const RowTypePtr& readerOutputType,
       const std::shared_ptr<io::IoStatistics>& ioStatistics,
       const std::shared_ptr<IoStats>& ioStats,
@@ -179,7 +162,7 @@ class SplitReader {
   // function.
   bool filterOnStats(dwio::common::RuntimeStatistics& runtimeStats) const;
 
-  /// Check if the hiveSplit_ is empty. The split is considered empty when
+  /// Check if the fileSplit_ is empty. The split is considered empty when
   ///   1) The data file is missing but the user chooses to ignore it
   ///   2) The file does not contain any rows
   ///   3) The data in the file does not pass the filters. The test is based on
@@ -194,17 +177,6 @@ class SplitReader {
       RowTypePtr rowType,
       std::optional<bool> rowSizeTrackingEnabled);
 
-  const folly::F14FastSet<column_index_t>& bucketChannels() const {
-    return bucketChannels_;
-  }
-
-  std::vector<BaseVector::CopyRange> bucketConversionRows(
-      const RowVector& vector);
-
-  void applyBucketConversion(
-      VectorPtr& output,
-      const std::vector<BaseVector::CopyRange>& ranges);
-
   /// Sets a constant partition value on the scanSpec for a partition column.
   /// Converts the partition key string value to the appropriate type and sets
   /// it as a constant value in the scanSpec, so the column will be filled
@@ -217,11 +189,21 @@ class SplitReader {
       const std::string& partitionKey,
       const std::optional<std::string>& value) const;
 
-  /// Validates synthesized column filters against the split's info column
-  /// values. This handles filter-only synthesized columns that are not in the
-  /// scanSpec by checking them early before any file I/O.
-  /// Throws if any synthesized column filter fails validation.
-  void validateSynthesizedColumnFilters() const;
+  /// Virtual hook called by configureReaderOptions() to set format-specific
+  /// reader options on baseReaderOpts_. The base implementation calls the
+  /// generic configureReaderOptions() from FileConnectorUtil. Subclasses
+  /// (e.g., HiveSplitReader) override to call the Hive-specific version
+  /// that also applies serde options.
+  virtual void configureBaseReaderOptions();
+
+  /// Virtual hook called by createRowReader() to set format-specific row
+  /// reader options on baseRowReaderOpts_. The base implementation calls the
+  /// generic configureRowReaderOptions() from FileConnectorUtil. Subclasses
+  /// (e.g., HiveSplitReader) override to call the Hive-specific version
+  /// that also applies serde parameters.
+  virtual void configureBaseRowReaderOptions(
+      std::shared_ptr<common::MetadataFilter> metadataFilter,
+      RowTypePtr rowType);
 
  private:
   /// Different table formats may have different meatadata columns.
@@ -231,18 +213,13 @@ class SplitReader {
       const RowTypePtr& tableSchema) const;
 
  protected:
-  std::shared_ptr<const HiveConnectorSplit> hiveSplit_;
-  const std::shared_ptr<const HiveTableHandle> hiveTableHandle_;
-  const std::unordered_map<
-      std::string,
-      std::shared_ptr<const HiveColumnHandle>>* const partitionKeys_;
-  // Column handles for synthesized columns (e.g., $path, $file_size).
-  // Set via setInfoColumns() and used in validateSynthesizedColumnFilters().
-  const std::unordered_map<
-      std::string,
-      std::shared_ptr<const HiveColumnHandle>>* infoColumns_;
+  std::shared_ptr<const FileConnectorSplit> fileSplit_;
+  const FileTableHandlePtr tableHandle_;
+  const std::unordered_map<std::string, FileColumnHandlePtr>* const
+      partitionKeys_;
+
   const ConnectorQueryCtx* connectorQueryCtx_;
-  const std::shared_ptr<const HiveConfig> hiveConfig_;
+  const std::shared_ptr<const FileConfig> fileConfig_;
 
   RowTypePtr readerOutputType_;
   const std::shared_ptr<io::IoStatistics> ioStatistics_;
@@ -251,21 +228,17 @@ class SplitReader {
   folly::Executor* const ioExecutor_;
   memory::MemoryPool* const pool_;
 
-  std::shared_ptr<common::ScanSpec> scanSpec_;
+  const std::shared_ptr<common::ScanSpec> scanSpec_;
   // Subfield filters from HiveDataSource, includes both original
-  // subfieldFilters and filters extracted from remainingFilter. Used to
-  // validate synthesized column filters in prepareSplit() and adaptColumns().
-  const common::SubfieldFilters* subfieldFiltersForValidation_;
+  // subfieldFilters and filters extracted from remainingFilter. Used by
+  // subclasses (e.g., HiveSplitReader) for synthesized column filter
+  // validation.
+  const common::SubfieldFilters* const subfieldFiltersForValidation_;
   std::unique_ptr<dwio::common::Reader> baseReader_;
   std::unique_ptr<dwio::common::RowReader> baseRowReader_;
   dwio::common::ReaderOptions baseReaderOpts_;
   dwio::common::RowReaderOptions baseRowReaderOpts_;
   bool emptySplit_;
-
- private:
-  folly::F14FastSet<column_index_t> bucketChannels_;
-  std::unique_ptr<HivePartitionFunction> partitionFunction_;
-  std::vector<uint32_t> partitions_;
 };
 
 } // namespace facebook::velox::connector::hive

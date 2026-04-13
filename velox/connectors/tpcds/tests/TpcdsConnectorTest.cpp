@@ -17,6 +17,7 @@
 #include "velox/connectors/tpcds/TpcdsConnector.h"
 #include <folly/init/Init.h>
 #include "gtest/gtest.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -35,11 +36,12 @@ class TpcdsConnectorTest : public exec::test::OperatorTestBase {
         kTpcdsConnectorId,
         std::make_shared<config::ConfigBase>(
             std::unordered_map<std::string, std::string>()));
-    connector::registerConnector(connector);
+    connector::ConnectorRegistry::global().insert(
+        connector->connectorId(), connector);
   }
 
   void TearDown() override {
-    connector::unregisterConnector(kTpcdsConnectorId);
+    connector::ConnectorRegistry::global().erase(kTpcdsConnectorId);
     OperatorTestBase::TearDown();
   }
 

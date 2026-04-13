@@ -16,7 +16,14 @@
 add_subdirectory(utils)
 add_subdirectory(dsdgen)
 
-velox_add_library(velox_tpcds_gen TpcdsGen.cpp DSDGenIterator.cpp)
+velox_add_library(
+  velox_tpcds_gen
+  TpcdsGen.cpp
+  DSDGenIterator.cpp
+  HEADERS
+  DSDGenIterator.h
+  TpcdsGen.h
+)
 velox_include_directories(
   velox_tpcds_gen
   PUBLIC "$<BUILD_LOCAL_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/dsdgen/include>"

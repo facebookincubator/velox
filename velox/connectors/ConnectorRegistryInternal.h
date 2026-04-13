@@ -16,17 +16,15 @@
 
 #pragma once
 
-#include <cstdint>
 #include <string>
 
-namespace facebook::velox::dwio::common {
+#include "velox/common/ScopedRegistry.h"
+#include "velox/connectors/Connector.h"
 
-/// File format specific metadata returned when a writer is closed.
-/// Caller of Writer::close() can do further processing such as aggregate
-/// row group statistics to file level statistics based on the metadata.
-class FileMetadata {
- public:
-  virtual ~FileMetadata() = default;
-};
+namespace facebook::velox::connector {
 
-} // namespace facebook::velox::dwio::common
+// Internal helper shared by Connector.cpp and ConnectorRegistry.cpp.
+// Not part of the public API. Do not include from outside velox/connectors/.
+ScopedRegistry<std::string, Connector>& connectors();
+
+} // namespace facebook::velox::connector

@@ -35,6 +35,7 @@ const auto& blockingReasonNames() {
       {BlockingReason::kWaitForArbitration, "kWaitForArbitration"},
       {BlockingReason::kWaitForScanScaleUp, "kWaitForScanScaleUp"},
       {BlockingReason::kWaitForIndexLookup, "kWaitForIndexLookup"},
+      {BlockingReason::kWaitForIndexSplits, "kWaitForIndexSplits"},
       {BlockingReason::kWaitForRPC, "kWaitForRPC"},
   };
   return kNames;

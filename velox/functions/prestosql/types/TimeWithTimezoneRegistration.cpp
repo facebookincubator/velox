@@ -19,6 +19,7 @@
 #include "velox/external/tzdb/time_zone.h"
 #include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
 #include "velox/functions/prestosql/types/fuzzer_utils/TimeWithTimezoneInputGenerator.h"
+#include "velox/type/CastRegistry.h"
 #include "velox/type/Time.h"
 #include "velox/type/Type.h"
 #include "velox/type/tz/TimeZoneMap.h"
@@ -157,28 +158,6 @@ class TimeWithTimeZoneCastOperator final : public exec::CastOperator {
     return {std::shared_ptr<const CastOperator>{}, &kInstance};
   }
 
-  bool isSupportedFromType(const TypePtr& other) const override {
-    switch (other->kind()) {
-      case TypeKind::BIGINT:
-        return other->equivalent(*TIME());
-      case TypeKind::VARCHAR:
-        return true;
-      default:
-        return false;
-    }
-  }
-
-  bool isSupportedToType(const TypePtr& other) const override {
-    switch (other->kind()) {
-      case TypeKind::BIGINT:
-        return other->equivalent(*TIME());
-      case TypeKind::VARCHAR:
-        return true;
-      default:
-        return false;
-    }
-  }
-
   void castTo(
       const BaseVector& input,
       exec::EvalCtx& context,
@@ -288,8 +267,16 @@ class TimeWithTimezoneTypeFactory : public CustomTypeFactory {
 
 void registerTimeWithTimezoneType() {
   registerCustomType(
-      "time with time zone",
+      "TIME WITH TIME ZONE",
       std::make_unique<const TimeWithTimezoneTypeFactory>());
+  registerCastRules({
+      {.fromType = "TIME",
+       .toType = "TIME WITH TIME ZONE",
+       .implicitAllowed = true},
+      {.fromType = "VARCHAR", .toType = "TIME WITH TIME ZONE"},
+      {.fromType = "TIME WITH TIME ZONE", .toType = "TIME"},
+      {.fromType = "TIME WITH TIME ZONE", .toType = "VARCHAR"},
+  });
 }
 
 } // namespace facebook::velox

@@ -798,7 +798,7 @@ void Writer::flush() {
   flushInternal(false);
 }
 
-std::unique_ptr<dwio::common::FileMetadata> Writer::close() {
+void Writer::close() {
   checkRunning();
   auto exitGuard = folly::makeGuard([this]() {
     flushPolicy_->onClose();
@@ -806,7 +806,6 @@ std::unique_ptr<dwio::common::FileMetadata> Writer::close() {
   });
   flushInternal(true);
   writerBase_->close();
-  return std::make_unique<DwrfFileMetadata>();
 }
 
 void Writer::abort() {
@@ -860,13 +859,22 @@ uint64_t Writer::MemoryReclaimer::reclaim(
     LOG(WARNING)
         << "Can't reclaim from dwrf writer which is under non-reclaimable "
            "section: "
-        << pool->name();
+        << pool->name() << ", root pool: " << pool->root()->name()
+        << ", used: " << succinctBytes(pool->usedBytes())
+        << ", reservation: " << succinctBytes(pool->reservedBytes())
+        << ", root pool reservation: "
+        << succinctBytes(pool->root()->reservedBytes());
     ++stats.numNonReclaimableAttempts;
     return 0;
   }
   if (!writer_->isRunning()) {
     LOG(WARNING) << "Can't reclaim from a not running dwrf writer: "
-                 << pool->name() << ", state: " << writer_->state();
+                 << pool->name() << ", root pool: " << pool->root()->name()
+                 << ", state: " << writer_->state()
+                 << ", used: " << succinctBytes(pool->usedBytes())
+                 << ", reservation: " << succinctBytes(pool->reservedBytes())
+                 << ", root pool reservation: "
+                 << succinctBytes(pool->root()->reservedBytes());
     ++stats.numNonReclaimableAttempts;
     return 0;
   }

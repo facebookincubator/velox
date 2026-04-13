@@ -36,7 +36,8 @@ std::unique_ptr<cudf::table> toCudfTable(
     const facebook::velox::RowVectorPtr& veloxTable,
     facebook::velox::memory::MemoryPool* pool,
     rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr);
+    rmm::device_async_resource_ref mr,
+    std::optional<std::string> timestampTimeZone = std::nullopt);
 
 facebook::velox::RowVectorPtr toVeloxColumn(
     const cudf::table_view& table,
@@ -45,6 +46,7 @@ facebook::velox::RowVectorPtr toVeloxColumn(
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
 
+// Accepts a Velox TypePtr for recursive metadata construction.
 facebook::velox::RowVectorPtr toVeloxColumn(
     const cudf::table_view& table,
     facebook::velox::memory::MemoryPool* pool,
@@ -56,7 +58,7 @@ facebook::velox::RowVectorPtr toVeloxColumn(
 facebook::velox::RowVectorPtr toVeloxColumn(
     const cudf::table_view& table,
     facebook::velox::memory::MemoryPool* pool,
-    const std::vector<std::string>& columnNames,
+    const TypePtr& type,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
 

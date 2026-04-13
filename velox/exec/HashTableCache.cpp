@@ -19,6 +19,7 @@
 #include <fmt/format.h>
 
 #include "velox/core/QueryCtx.h"
+#include "velox/exec/MemoryReclaimer.h"
 
 namespace facebook::velox::exec {
 
@@ -44,7 +45,11 @@ std::shared_ptr<HashTableCacheEntry> HashTableCache::get(
     auto entry = std::make_shared<HashTableCacheEntry>(
         key,
         taskId,
-        queryPool->addLeafChild(fmt::format("cached_table_{}", key)));
+        // Add memory reclaimer that is not reclaimable.
+        queryPool->addLeafChild(
+            fmt::format("cached_table_{}", key),
+            /* threadsafe */ true,
+            exec::MemoryReclaimer::create()));
     tables_.insert({key, entry});
 
     // Register callback to clean up this cache entry when QueryCtx is

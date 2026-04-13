@@ -24,3 +24,5 @@ target_link_libraries(
   GTest::gtest
   GTest::gtest_main
 )
+
+velox_add_library(velox_fuzzer_connector_lib INTERFACE HEADERS FuzzerConnectorTestBase.h)

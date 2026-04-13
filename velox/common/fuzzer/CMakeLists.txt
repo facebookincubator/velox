@@ -12,11 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(velox_common_fuzzer_util Utils.cpp)
+velox_add_library(velox_common_fuzzer_util Utils.cpp HEADERS Utils.h)
 
 velox_link_libraries(velox_common_fuzzer_util velox_type velox_exception)
 
-velox_add_library(velox_constrained_input_generators ConstrainedGenerators.cpp)
+velox_add_library(
+  velox_constrained_input_generators
+  ConstrainedGenerators.cpp
+  HEADERS
+  ConstrainedGenerators.h
+)
 
 velox_link_libraries(
   velox_constrained_input_generators

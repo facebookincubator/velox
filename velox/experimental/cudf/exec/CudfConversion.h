@@ -58,6 +58,7 @@ class CudfFromVelox : public CudfOperatorBase {
   void doClose() override;
 
  private:
+  const std::optional<std::string> timestampTimeZone_;
   std::vector<RowVectorPtr> inputs_;
   std::size_t currentOutputSize_ = 0;
   bool finished_ = false;

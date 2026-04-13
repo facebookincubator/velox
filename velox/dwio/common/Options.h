@@ -475,13 +475,18 @@ class RowReaderOptions {
     passStringBuffersFromDecoder_ = passStringBuffersFromDecoder;
   }
 
-  bool collectColumnStats() const {
-    return collectColumnStats_;
+  bool collectColumnCpuMetrics() const {
+    return collectColumnCpuMetrics_;
   }
 
-  RowReaderOptions& setCollectColumnStats(bool collect) {
-    collectColumnStats_ = collect;
+  RowReaderOptions& setCollectColumnCpuMetrics(bool collect) {
+    collectColumnCpuMetrics_ = collect;
     return *this;
+  }
+
+  // Legacy alias — remove after Nimble OSS bumps Velox.
+  RowReaderOptions& setCollectColumnStats(bool collect) {
+    return setCollectColumnCpuMetrics(collect);
   }
 
  private:
@@ -548,7 +553,7 @@ class RowReaderOptions {
   // NOTE: we will control this option with a session property
   // for prod. Tests are parameterized on both branches.
   bool passStringBuffersFromDecoder_{false};
-  bool collectColumnStats_{false};
+  bool collectColumnCpuMetrics_{false};
 };
 
 /// Options for creating a Reader.
@@ -746,6 +751,18 @@ class ReaderOptions : public io::ReaderOptions {
     fileMetadataCacheEnabled_ = value;
   }
 
+  /// If true, pins parsed metadata objects (e.g., StripeGroup, IndexGroup) in
+  /// the reader's metadata cache with strong references so they are never
+  /// evicted. This avoids re-reading and re-parsing metadata on every stripe
+  /// access when weak-pointer cache entries would otherwise expire.
+  bool pinFileMetadata() const {
+    return pinFileMetadata_;
+  }
+
+  void setPinFileMetadata(bool value) {
+    pinFileMetadata_ = value;
+  }
+
   /// Whether to load and initialize the cluster index during file open.
   /// When true, the cluster index section is preloaded and the structured
   /// ClusterIndex object is created. Default true.
@@ -776,6 +793,20 @@ class ReaderOptions : public io::ReaderOptions {
     allowEmptyFile_ = value;
   }
 
+  /// Allows reading INT32 physical type columns as a narrower integer type
+  /// (e.g., INT32 -> TINYINT/SMALLINT). Some Parquet writers store INT_8 and
+  /// INT_16 values as plain INT32 without a converted type annotation. When
+  /// enabled, the value is silently truncated on overflow. When disabled
+  /// (default), only annotated type-matching reads are allowed (e.g.,
+  /// INT_8 -> TINYINT, INT_16 -> SMALLINT, INT_32 -> INTEGER).
+  bool allowInt32Narrowing() const {
+    return allowInt32Narrowing_;
+  }
+
+  void setAllowInt32Narrowing(bool value) {
+    allowInt32Narrowing_ = value;
+  }
+
  private:
   uint64_t tailLocation_;
   FileFormat fileFormat_;
@@ -794,9 +825,11 @@ class ReaderOptions : public io::ReaderOptions {
   bool adjustTimestampToTimezone_{false};
   bool selectiveNimbleReaderEnabled_{false};
   bool fileMetadataCacheEnabled_{false};
+  bool pinFileMetadata_{false};
   bool loadClusterIndex_{true};
   bool loadChunkIndex_{true};
   bool allowEmptyFile_{false};
+  bool allowInt32Narrowing_{false};
 };
 
 struct WriterOptions {

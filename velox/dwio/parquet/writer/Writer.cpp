@@ -526,22 +526,16 @@ void Writer::newRowGroup(int32_t numRows) {
   PARQUET_THROW_NOT_OK(arrowContext_->writer->newRowGroup(numRows));
 }
 
-std::unique_ptr<dwio::common::FileMetadata> Writer::close() {
+void Writer::close() {
   flush();
 
-  std::unique_ptr<ParquetFileMetadata> parquetFileMetadata;
   if (arrowContext_->writer) {
     PARQUET_THROW_NOT_OK(arrowContext_->writer->close());
-    parquetFileMetadata = std::make_unique<ParquetFileMetadata>(
-        arrowContext_->writer->metadata());
     arrowContext_->writer.reset();
   }
-
   PARQUET_THROW_NOT_OK(stream_->Close());
 
   arrowContext_->stagingChunks.clear();
-
-  return parquetFileMetadata;
 }
 
 void Writer::abort() {

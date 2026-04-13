@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
@@ -352,6 +353,183 @@ TEST_F(ToCudfSelectionTest, unsupportedAggregationInputExpressionsFallsBack) {
 
   ASSERT_FALSE(wasCudfAggregationUsed(task));
   ASSERT_TRUE(wasDefaultHashAggregationUsed(task));
+}
+
+// Non-count constant aggregates are not supported by cuDF aggregation.
+TEST_F(ToCudfSelectionTest, nonCountConstantAggregationFallsBack) {
+  auto vectors = makeVectors(rowType_, 10, 100);
+  createDuckDbTable(vectors);
+
+  auto plan =
+      PlanBuilder()
+          .values(vectors)
+          .aggregation(
+              {}, {"sum(1)"}, {}, core::AggregationNode::Step::kSingle, false)
+          .planNode();
+
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .config("cudf.enabled", true)
+                  .plan(plan)
+                  .assertResults("SELECT sum(1) FROM tmp");
+
+  ASSERT_FALSE(wasCudfAggregationUsed(task));
+  ASSERT_TRUE(wasDefaultHashAggregationUsed(task));
+}
+
+// Test zero-column count(*) should stay on GPU.
+TEST_F(ToCudfSelectionTest, zeroColumnCountStarUsesCudf) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3, 4}),
+  });
+  createDuckDbTable({data});
+
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .filter("c0 > 0")
+          .project({})
+          .aggregation(
+              {}, {"count(*)"}, {}, core::AggregationNode::Step::kSingle, false)
+          .planNode();
+
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .config("cudf.enabled", true)
+                  .plan(plan)
+                  .assertResults("SELECT count(*) FROM tmp WHERE c0 > 0");
+
+  ASSERT_TRUE(wasCudfAggregationUsed(task));
+  ASSERT_FALSE(wasDefaultHashAggregationUsed(task));
+}
+
+// Test zero-column count(constant) should use cudf GPU.
+TEST_F(ToCudfSelectionTest, zeroColumnCountConstantUsesGpu) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3, 4}),
+  });
+  createDuckDbTable({data});
+
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .filter("c0 > 0")
+          .project({})
+          .aggregation(
+              {}, {"count(1)"}, {}, core::AggregationNode::Step::kSingle, false)
+          .planNode();
+
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .config("cudf.enabled", true)
+                  .plan(plan)
+                  .assertResults("SELECT count(1) FROM tmp WHERE c0 > 0");
+
+  ASSERT_TRUE(wasCudfAggregationUsed(task));
+  ASSERT_FALSE(wasDefaultHashAggregationUsed(task));
+}
+
+// Count-only aggregation plans (single and partial/final) should use
+// CudfAggregation.
+TEST_F(ToCudfSelectionTest, countAggregatesOnlyUsesCudf) {
+  auto vectors = makeVectors(rowType_, 10, 100);
+  createDuckDbTable(vectors);
+
+  auto assertCountUsesCudf = [this](
+                                 const core::PlanNodePtr& plan,
+                                 const std::string& duckSql,
+                                 const char* caseLabel) {
+    SCOPED_TRACE(caseLabel);
+    auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                    .config("cudf.enabled", true)
+                    .plan(plan)
+                    .assertResults(duckSql);
+    ASSERT_TRUE(wasCudfAggregationUsed(task));
+    ASSERT_FALSE(wasDefaultHashAggregationUsed(task));
+  };
+
+  assertCountUsesCudf(
+      PlanBuilder()
+          .values(vectors)
+          .aggregation(
+              {}, {"count(*)"}, {}, core::AggregationNode::Step::kSingle, false)
+          .planNode(),
+      "SELECT count(*) FROM tmp",
+      "global count(*) kSingle");
+
+  assertCountUsesCudf(
+      PlanBuilder()
+          .values(vectors)
+          .aggregation(
+              {},
+              {"count(c0)"},
+              {},
+              core::AggregationNode::Step::kSingle,
+              false)
+          .planNode(),
+      "SELECT count(c0) FROM tmp",
+      "global count(c0) kSingle");
+
+  assertCountUsesCudf(
+      PlanBuilder()
+          .values(vectors)
+          .aggregation(
+              {"c0"},
+              {"count(c2)"},
+              {},
+              core::AggregationNode::Step::kSingle,
+              false)
+          .planNode(),
+      "SELECT c0, count(c2) FROM tmp GROUP BY c0",
+      "group by c0, count(c2) kSingle");
+
+  assertCountUsesCudf(
+      PlanBuilder()
+          .values(vectors)
+          .partialAggregation({}, {"count(*)"})
+          .finalAggregation()
+          .planNode(),
+      "SELECT count(*) FROM tmp",
+      "global count(*) partial+final");
+
+  assertCountUsesCudf(
+      PlanBuilder()
+          .values(vectors)
+          .partialAggregation({"c0"}, {"count(c2)"})
+          .finalAggregation()
+          .planNode(),
+      "SELECT c0, count(c2) FROM tmp GROUP BY c0",
+      "group by c0, count(c2) partial+final");
+
+  assertCountUsesCudf(
+      PlanBuilder()
+          .values(vectors)
+          .partialAggregation({"c0"}, {"count(*)"})
+          .finalAggregation()
+          .planNode(),
+      "SELECT c0, count(*) FROM tmp GROUP BY c0",
+      "group by c0, count(*) partial+final");
+}
+
+// Test count(NULL) runs on cudf GPU (returns 0).
+TEST_F(ToCudfSelectionTest, countNullAggregationUsesGpu) {
+  auto vectors = makeVectors(rowType_, 10, 100);
+  createDuckDbTable(vectors);
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .aggregation(
+                      {},
+                      {"count(null)"},
+                      {},
+                      core::AggregationNode::Step::kSingle,
+                      false)
+                  .planNode();
+
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .config("cudf.enabled", true)
+                  .plan(plan)
+                  .assertResults("SELECT count(NULL) FROM tmp");
+
+  ASSERT_TRUE(wasCudfAggregationUsed(task));
+  ASSERT_FALSE(wasDefaultHashAggregationUsed(task));
 }
 
 // Test CUDF disabled should always use regular aggregation

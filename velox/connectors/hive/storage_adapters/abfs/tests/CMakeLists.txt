@@ -22,6 +22,7 @@ add_executable(
   AzuriteServer.cpp
   MockDataLakeFileClient.cpp
 )
+velox_add_test_headers(velox_abfs_test AzuriteServer.h MockDataLakeFileClient.h)
 
 add_test(velox_abfs_test velox_abfs_test)
 target_link_libraries(

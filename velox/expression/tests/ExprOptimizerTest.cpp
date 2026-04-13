@@ -205,11 +205,11 @@ TEST_F(ExprOptimizerTest, lambdas) {
 TEST_F(ExprOptimizerTest, rewritesWithConstantFolding) {
   auto type = ROW({"c0"}, {ARRAY(VARCHAR())});
   testExpression(
-      "array_sort(c0, (x, y) -> if(length(x) < length(y), (-1 * 1), if(length(x) = length(y), abs(0), (2 / 2))))",
+      "array_sort(c0, (x, y) -> if(length(x) < length(y), (-1 * 1)::integer, if(length(x) = length(y), abs(0)::integer, (2 / 2)::integer)))",
       "array_sort(c0, x -> length(x))",
       type);
   testExpression(
-      "array_sort(c0, (x, y) -> if(length(x) < length(y), abs(-1), if(length(x) > length(y), -4 / 3, 0 / 3)))",
+      "array_sort(c0, (x, y) -> if(length(x) < length(y), abs(-1)::integer, if(length(x) > length(y), (-4 / 3)::integer, (0 / 3)::integer)))",
       "array_sort_desc(c0, x -> length(x))",
       type);
 
