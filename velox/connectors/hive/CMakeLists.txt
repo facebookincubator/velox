@@ -22,6 +22,8 @@ velox_add_library(
   velox_hive_connector
   OBJECT
   BufferedInputBuilder.cpp
+  ExtractionUtils.cpp
+  ExtractionUtils.h
   FileColumnHandle.cpp
   FileConfig.cpp
   FileConnectorUtil.cpp

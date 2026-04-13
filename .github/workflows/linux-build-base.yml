@@ -95,8 +95,12 @@ jobs:
     outputs:
       cudf-changes: ${{ steps.changes.outputs.cudf }}
       build-outcome: ${{ steps.build.outcome }}
+      build-failure-details: ${{ steps.build-errors.outputs.build-failure-details }}
       test-outcome: ${{ steps.tests.outcome }}
       flaky: ${{ steps.tests.outputs.flaky }}
+      failed-tests: ${{ steps.tests.outputs.failed-tests }}
+      failed-cases: ${{ steps.tests.outputs.failed-cases }}
+      failure-details: ${{ steps.tests.outputs.failure-details }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -177,7 +181,20 @@ jobs:
           g++ --version
           # CC/CXX are set to GCC12 in the adapters image build and it needs to be overridden
           # after sourcing GCC14.
-          CC=gcc CXX=g++ make release EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS[*]}"
+          CC=gcc CXX=g++ make release EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS[*]}" 2>&1 | tee /tmp/build-output.log
+
+      - name: Extract build errors
+        id: build-errors
+        if: failure() && steps.build.outcome == 'failure'
+        run: |
+          BUILD_ERRORS=$(grep -E '^.*:(error|fatal error):' /tmp/build-output.log | head -50 || true)
+          if [[ -n $BUILD_ERRORS ]]; then
+            {
+              echo 'build-failure-details<<EOF'
+              echo "$BUILD_ERRORS"
+              echo 'EOF'
+            } >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Ccache after
         run: ccache -s
@@ -199,7 +216,7 @@ jobs:
           ulimit -n 65536
           if ctest -j 24 --timeout 900 --label-exclude cuda_driver \
                --output-on-failure --no-tests=error \
-               --output-junit test-results.xml; then
+               --output-junit test-results.xml 2>&1 | tee /tmp/ctest-output.log; then
             echo "All tests passed on first run."
           else
             echo "::warning::Some tests failed. Retrying failed tests..."
@@ -209,6 +226,7 @@ jobs:
               echo "flaky=true" >> "$GITHUB_OUTPUT"
             else
               echo "::error::Tests failed consistently on retry."
+              "$GITHUB_WORKSPACE/.github/scripts/extract-test-failures.sh" /tmp/ctest-output.log
               exit 1
             fi
           fi
@@ -307,40 +325,57 @@ jobs:
     if: always()
     needs: adapters
     runs-on: ubuntu-latest
-    name: "BUILD: Linux adapters release"
+    name: "BUILD: Linux release with adapters"
     steps:
-      - run: |
-          if [[ "$BUILD_OUTCOME" != "success" ]]; then
-            echo "Build failed or was cancelled."
-            exit 1
-          fi
-          echo "Build succeeded."
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: Report build status
+        run: .github/scripts/report-build-status.sh "Linux release with adapters"
         env:
           BUILD_OUTCOME: ${{ needs.adapters.outputs.build-outcome }}
+          BUILD_FAILURE_DETAILS: ${{ needs.adapters.outputs.build-failure-details }}
+
+      - name: Upload failure artifact
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-failure-adapters-build
+          path: /tmp/ci-failure/failure.json
+          retention-days: 1
+          if-no-files-found: ignore
 
   adapters-test-status:
     if: always()
     needs: adapters
     runs-on: ubuntu-latest
-    name: "TEST: Linux adapters release"
+    name: "TEST: Linux release with adapters"
     steps:
-      - run: |
-          if [[ "$BUILD_OUTCOME" != "success" ]]; then
-            echo "Build failed — tests did not run."
-            exit 1
-          fi
-          if [[ "$TEST_OUTCOME" != "success" ]]; then
-            echo "Tests failed."
-            exit 1
-          fi
-          if [[ "$FLAKY" == "true" ]]; then
-            echo "::warning::Some tests were flaky (failed then passed on retry)."
-          fi
-          echo "Tests passed."
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: Report test status
+        run: .github/scripts/report-test-status.sh "Linux release with adapters" "Linux adapters release"
         env:
           BUILD_OUTCOME: ${{ needs.adapters.outputs.build-outcome }}
           TEST_OUTCOME: ${{ needs.adapters.outputs.test-outcome }}
           FLAKY: ${{ needs.adapters.outputs.flaky }}
+          FAILED_TESTS: ${{ needs.adapters.outputs.failed-tests }}
+          FAILED_CASES: ${{ needs.adapters.outputs.failed-cases }}
+          FAILURE_DETAILS: ${{ needs.adapters.outputs.failure-details }}
+
+      - name: Upload failure artifact
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-failure-adapters-test
+          path: /tmp/ci-failure/failure.json
+          retention-days: 1
+          if-no-files-found: ignore
 
   cudf-tests:
     runs-on: 4-core-ubuntu-gpu-t4
@@ -414,8 +449,12 @@ jobs:
       USE_CLANG: ${{ inputs.use-clang && 'true' || 'false' }}
     outputs:
       build-outcome: ${{ steps.build.outcome }}
+      build-failure-details: ${{ steps.build-errors.outputs.build-failure-details }}
       test-outcome: ${{ steps.tests.outcome }}
       flaky: ${{ steps.tests.outputs.flaky }}
+      failed-tests: ${{ steps.tests.outputs.failed-tests }}
+      failed-cases: ${{ steps.tests.outputs.failed-cases }}
+      failure-details: ${{ steps.tests.outputs.failure-details }}
     defaults:
       run:
         shell: bash
@@ -496,7 +535,20 @@ jobs:
             EXTRA_CMAKE_FLAGS+=("-DVELOX_ENABLE_REMOTE_FUNCTIONS=ON")
           fi
           export EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS[*]}"
-          make debug
+          make debug 2>&1 | tee /tmp/build-output.log
+
+      - name: Extract build errors
+        id: build-errors
+        if: failure() && steps.build.outcome == 'failure'
+        run: |
+          BUILD_ERRORS=$(grep -E '^.*:(error|fatal error):' /tmp/build-output.log | head -50 || true)
+          if [[ -n $BUILD_ERRORS ]]; then
+            {
+              echo 'build-failure-details<<EOF'
+              echo "$BUILD_ERRORS"
+              echo 'EOF'
+            } >> "$GITHUB_OUTPUT"
+          fi
 
       - name: CCache after
         run: |
@@ -515,7 +567,7 @@ jobs:
           ulimit -n 65536
           cd _build/debug
           if ctest -j 24 --timeout 1800 --output-on-failure --no-tests=error \
-               --output-junit test-results.xml; then
+               --output-junit test-results.xml 2>&1 | tee /tmp/ctest-output.log; then
             echo "All tests passed on first run."
           else
             echo "::warning::Some tests failed. Retrying failed tests..."
@@ -525,6 +577,7 @@ jobs:
               echo "flaky=true" >> "$GITHUB_OUTPUT"
             else
               echo "::error::Tests failed consistently on retry."
+              "$GITHUB_WORKSPACE/velox/.github/scripts/extract-test-failures.sh" /tmp/ctest-output.log
               exit 1
             fi
           fi
@@ -533,40 +586,57 @@ jobs:
     if: always()
     needs: ubuntu-debug
     runs-on: ubuntu-latest
-    name: "BUILD: Ubuntu debug"
+    name: "BUILD: Ubuntu debug with system dependencies"
     steps:
-      - run: |
-          if [[ "$BUILD_OUTCOME" != "success" ]]; then
-            echo "Build failed or was cancelled."
-            exit 1
-          fi
-          echo "Build succeeded."
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: Report build status
+        run: .github/scripts/report-build-status.sh "Ubuntu debug with system dependencies"
         env:
           BUILD_OUTCOME: ${{ needs.ubuntu-debug.outputs.build-outcome }}
+          BUILD_FAILURE_DETAILS: ${{ needs.ubuntu-debug.outputs.build-failure-details }}
+
+      - name: Upload failure artifact
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-failure-ubuntu-debug-build
+          path: /tmp/ci-failure/failure.json
+          retention-days: 1
+          if-no-files-found: ignore
 
   ubuntu-debug-test-status:
     if: always()
     needs: ubuntu-debug
     runs-on: ubuntu-latest
-    name: "TEST: Ubuntu debug"
+    name: "TEST: Ubuntu debug with system dependencies"
     steps:
-      - run: |
-          if [[ "$BUILD_OUTCOME" != "success" ]]; then
-            echo "Build failed — tests did not run."
-            exit 1
-          fi
-          if [[ "$TEST_OUTCOME" != "success" ]]; then
-            echo "Tests failed."
-            exit 1
-          fi
-          if [[ "$FLAKY" == "true" ]]; then
-            echo "::warning::Some tests were flaky (failed then passed on retry)."
-          fi
-          echo "Tests passed."
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: Report test status
+        run: .github/scripts/report-test-status.sh "Ubuntu debug with system dependencies" "Ubuntu debug"
         env:
           BUILD_OUTCOME: ${{ needs.ubuntu-debug.outputs.build-outcome }}
           TEST_OUTCOME: ${{ needs.ubuntu-debug.outputs.test-outcome }}
           FLAKY: ${{ needs.ubuntu-debug.outputs.flaky }}
+          FAILED_TESTS: ${{ needs.ubuntu-debug.outputs.failed-tests }}
+          FAILED_CASES: ${{ needs.ubuntu-debug.outputs.failed-cases }}
+          FAILURE_DETAILS: ${{ needs.ubuntu-debug.outputs.failure-details }}
+
+      - name: Upload failure artifact
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-failure-ubuntu-debug-test
+          path: /tmp/ci-failure/failure.json
+          retention-days: 1
+          if-no-files-found: ignore
 
   fedora-debug:
     runs-on: 32-core-ubuntu
@@ -663,10 +733,30 @@ jobs:
     name: "BUILD: Fedora debug"
     steps:
       - run: |
+          if [[ -z "$BUILD_OUTCOME" || "$BUILD_OUTCOME" == "cancelled" ]]; then
+            echo "Build was cancelled (likely superseded by a newer push). Skipping."
+            exit 0
+          fi
           if [[ "$BUILD_OUTCOME" != "success" ]]; then
-            echo "Build failed or was cancelled."
+            echo "::error::Fedora debug build failed. Do not land this PR until the build is fixed."
             exit 1
           fi
           echo "Build succeeded."
         env:
           BUILD_OUTCOME: ${{ needs.fedora-debug.outputs.build-outcome }}
+
+      - name: Upload build failure artifact
+        if: failure()
+        run: |
+          mkdir -p /tmp/ci-failure
+          jq -n --arg job "Fedora debug" --arg type "build" \
+            '{job: $job, type: $type}' \
+            > /tmp/ci-failure/failure.json
+
+      - name: Upload failure comment artifact
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-failure-fedora-build
+          path: /tmp/ci-failure/failure.json
+          retention-days: 1
