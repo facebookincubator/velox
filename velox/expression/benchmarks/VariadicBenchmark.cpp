@@ -160,7 +160,7 @@ class VariadicBenchmark : public functions::test::FunctionBenchmarkBase {
       auto other = compileExpression(
           fmt::format("{}(c0, c1, c2, c3, c4)", name), input->type());
       if (!hasSameResults(exprSetRef, other, input)) {
-        VELOX_UNREACHABLE(fmt::format("testing failed at function {}", name));
+        VELOX_UNREACHABLE("Testing failed at function: {}", name);
       }
     }
   }
