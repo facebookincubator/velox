@@ -160,14 +160,8 @@ TpcdsBenchmark::listSplits(
 }
 
 void TpcdsBenchmark::runQuery(int32_t queryId) {
-  auto veloxPlan = queryBuilder_->getQueryPlan(queryId, planDir_, pool_.get());
-  // Convert VeloxPlan to TpchPlan (structurally identical) for
-  // QueryBenchmarkBase::run().
-  TpchPlan tpchPlan;
-  tpchPlan.plan = std::move(veloxPlan.plan);
-  tpchPlan.dataFiles = std::move(veloxPlan.dataFiles);
-  tpchPlan.dataFileFormat = veloxPlan.dataFileFormat;
-  run(tpchPlan, queryConfigs_);
+  auto plan = queryBuilder_->getQueryPlan(queryId, planDir_, pool_.get());
+  run(plan, queryConfigs_);
 }
 
 void TpcdsBenchmark::runMain(
@@ -176,14 +170,10 @@ void TpcdsBenchmark::runMain(
   if (FLAGS_run_query_verbose == -1) {
     folly::runBenchmarks();
   } else {
-    auto veloxPlan = queryBuilder_->getQueryPlan(
+    auto plan = queryBuilder_->getQueryPlan(
         FLAGS_run_query_verbose, planDir_, pool_.get());
-    TpchPlan tpchPlan;
-    tpchPlan.plan = std::move(veloxPlan.plan);
-    tpchPlan.dataFiles = std::move(veloxPlan.dataFiles);
-    tpchPlan.dataFileFormat = veloxPlan.dataFileFormat;
 
-    auto [cursor, actualResults] = run(tpchPlan, queryConfigs_);
+    auto [cursor, actualResults] = run(plan, queryConfigs_);
     VELOX_CHECK(cursor, "Query terminated with error. Exiting");
     auto task = cursor->task();
     ensureTaskCompletion(task.get());
@@ -210,7 +200,7 @@ void TpcdsBenchmark::runMain(
                stats.numTotalSplits,
                stats.numFinishedSplits)
         << std::endl;
-    out << printPlanWithStats(*tpchPlan.plan, stats, FLAGS_include_custom_stats)
+    out << printPlanWithStats(*plan.plan, stats, FLAGS_include_custom_stats)
         << std::endl;
   }
 }

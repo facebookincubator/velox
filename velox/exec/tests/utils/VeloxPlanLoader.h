@@ -23,8 +23,8 @@
 namespace facebook::velox::exec::test {
 
 /// Contains a deserialized Velox query plan and optional data files keyed on
-/// source plan node ID. Structurally identical to TpchPlan; works with
-/// AssertQueryBuilder (plan + optional splits).
+/// source plan node ID. TpchPlan (in TpchQueryBuilder.h) is a type alias for
+/// this struct.
 struct VeloxPlan {
   core::PlanNodePtr plan;
   std::unordered_map<core::PlanNodeId, std::vector<std::string>> dataFiles;
