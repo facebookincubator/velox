@@ -21,6 +21,7 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include <glog/logging.h>
+#include <type_traits>
 
 namespace facebook::velox::cudf_velox {
 
@@ -37,13 +38,15 @@ enum NvtxMethodFlag : uint8_t {
 };
 
 inline NvtxMethodFlag operator|(NvtxMethodFlag a, NvtxMethodFlag b) {
+  using EnumT = std::underlying_type_t<NvtxMethodFlag>;
   return static_cast<NvtxMethodFlag>(
-      static_cast<uint8_t>(a) | static_cast<uint8_t>(b));
+      static_cast<EnumT>(a) | static_cast<EnumT>(b));
 }
 
 inline NvtxMethodFlag operator&(NvtxMethodFlag a, NvtxMethodFlag b) {
+  using EnumT = std::underlying_type_t<NvtxMethodFlag>;
   return static_cast<NvtxMethodFlag>(
-      static_cast<uint8_t>(a) & static_cast<uint8_t>(b));
+      static_cast<EnumT>(a) & static_cast<EnumT>(b));
 }
 
 /// The user defined operator will inherit this operator, the operator accepts
