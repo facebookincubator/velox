@@ -15,10 +15,14 @@
  */
 #pragma once
 
+#include <string>
+
 #include "velox/benchmarks/QueryBenchmarkBase.h"
 #include "velox/exec/tests/utils/TpcdsQueryBuilder.h"
 
 DECLARE_string(plan_path);
+
+inline const std::string kPrestoHiveConnectorId = "hive";
 
 class TpcdsBenchmark : public facebook::velox::QueryBenchmarkBase {
  public:

@@ -81,7 +81,7 @@ void CudfTpcdsBenchmark::initialize() {
 
   if (!FLAGS_cudf_properties.empty()) {
     auto path = std::filesystem::path(FLAGS_cudf_properties);
-    VELOX_CHECK(
+    VELOX_USER_CHECK(
         std::filesystem::exists(path),
         "Properties file not found: {}",
         FLAGS_cudf_properties);
@@ -95,6 +95,10 @@ void CudfTpcdsBenchmark::initialize() {
       }
       LOG(INFO) << "Setting property " << line;
       const auto delimiterPos = line.find('=');
+      if (delimiterPos == std::string::npos) {
+        LOG(WARNING) << "Skipping malformed config line (no '='): " << line;
+        continue;
+      }
       const auto name = line.substr(0, delimiterPos);
       const auto value = line.substr(delimiterPos + 1);
       properties.emplace(name, value);
@@ -109,7 +113,6 @@ void CudfTpcdsBenchmark::initialize() {
     // CudfTpcdsQueryBuilder can register CudfHiveConnector under the plan's
     // connector ID instead. The query builder handles this when getQueryPlan()
     // is called.
-    const std::string kPrestoHiveConnectorId = "hive";
     if (connector::ConnectorRegistry::tryGet(kPrestoHiveConnectorId) !=
         nullptr) {
       connector::ConnectorRegistry::global().erase(kPrestoHiveConnectorId);

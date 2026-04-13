@@ -90,7 +90,7 @@ void TpcdsQueryBuilder::initialize(const std::string& dataPath) {
     std::sort(files.begin(), files.end());
   }
 
-  VELOX_CHECK(
+  VELOX_USER_CHECK(
       !tableDataFiles_.empty(),
       "No table subdirectories found in data path: {}",
       dataPath);

@@ -148,7 +148,6 @@ set(
   AssignUniqueIdTest.cpp
   FilterProjectTest.cpp
   AsyncConnectorTest.cpp
-  VeloxPlanLoaderTest.cpp
 )
 
 set(

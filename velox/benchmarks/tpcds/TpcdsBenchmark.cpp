@@ -93,7 +93,6 @@ void TpcdsBenchmark::initialize() {
   // Presto-dumped plans use connector ID "hive", while the base class
   // registers under kHiveConnectorId ("test-hive"). Register a properly
   // configured connector under "hive" so both the plan and splits match.
-  const std::string kPrestoHiveConnectorId = "hive";
   if (connector::ConnectorRegistry::tryGet(kPrestoHiveConnectorId) == nullptr) {
     auto properties = makeConnectorProperties();
     connector::hive::HiveConnectorFactory factory;
@@ -114,8 +113,6 @@ void TpcdsBenchmark::shutdown() {
     queryBuilder_->shutdown();
     queryBuilder_.reset();
   }
-  // Unregister the "hive" connector we registered in initialize().
-  const std::string kPrestoHiveConnectorId = "hive";
   if (connector::ConnectorRegistry::tryGet(kPrestoHiveConnectorId) != nullptr) {
     connector::ConnectorRegistry::global().erase(kPrestoHiveConnectorId);
   }
@@ -187,10 +184,7 @@ void TpcdsBenchmark::runMain(
     tpchPlan.dataFileFormat = veloxPlan.dataFileFormat;
 
     auto [cursor, actualResults] = run(tpchPlan, queryConfigs_);
-    if (!cursor) {
-      LOG(ERROR) << "Query terminated with error. Exiting";
-      exit(1);
-    }
+    VELOX_CHECK(cursor, "Query terminated with error. Exiting");
     auto task = cursor->task();
     ensureTaskCompletion(task.get());
     if (FLAGS_include_results) {

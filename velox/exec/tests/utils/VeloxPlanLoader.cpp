@@ -88,7 +88,7 @@ std::string VeloxPlanLoader::pathForQuery(int queryId) const {
   if (fs::exists(path)) {
     return path;
   }
-  VELOX_FAIL("Plan file does not exist: {}", path);
+  VELOX_USER_FAIL("Plan file does not exist: {}", path);
 }
 
 void VeloxPlanLoader::maybeStripPartitionedOutput(
