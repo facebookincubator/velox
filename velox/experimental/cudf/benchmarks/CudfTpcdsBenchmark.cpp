@@ -40,8 +40,6 @@ using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::dwio::common;
 
-DEFINE_bool(cudf_enabled, false, "Enable CuDF GPU acceleration for TPC-DS");
-
 DEFINE_uint64(
     cudf_chunk_read_limit,
     0,
@@ -153,20 +151,12 @@ void CudfTpcdsBenchmark::shutdown() {
 
 int main(int argc, char** argv) {
   std::string kUsage(
-      "This program benchmarks TPC-DS queries. Run with "
-      "'--helpon=TpcdsBenchmark' or '--helpon=CudfTpcdsBenchmark' for "
-      "available options.\n"
+      "This program benchmarks TPC-DS queries with CuDF GPU acceleration.\n"
       "  --data_path        Path to TPC-DS data directory\n"
       "  --plan_path        Path to plan JSON directory\n"
-      "  --cudf_enabled     Enable CuDF GPU acceleration\n"
       "  --cudf_properties  Path to CudfConfig properties file\n");
   gflags::SetUsageMessage(kUsage);
   folly::Init init{&argc, &argv, false};
-
-  if (FLAGS_cudf_enabled) {
-    tpcdsBenchmark = std::make_unique<CudfTpcdsBenchmark>();
-  } else {
-    tpcdsBenchmark = std::make_unique<TpcdsBenchmark>();
-  }
+  tpcdsBenchmark = std::make_unique<CudfTpcdsBenchmark>();
   tpcdsBenchmarkMain();
 }

@@ -14,28 +14,17 @@
  * limitations under the License.
  */
 
-#pragma once
+#include <folly/init/Init.h>
+#include <gflags/gflags.h>
 
 #include "velox/benchmarks/tpcds/TpcdsBenchmark.h"
 
-#include <memory>
-#include <string>
-#include <vector>
-
-/// CuDF-accelerated TPC-DS benchmark. Extends TpcdsBenchmark by:
-/// - Replacing the HiveConnector with CudfHiveConnector.
-/// - Registering cuDF GPU operator replacements.
-/// - Adding CuDF-specific configuration flags.
-class CudfTpcdsBenchmark : public TpcdsBenchmark {
- public:
-  void initialize() override;
-
-  std::shared_ptr<facebook::velox::config::ConfigBase> makeConnectorProperties()
-      override;
-
-  void shutdown() override;
-
- protected:
-  /// Creates CudfTpcdsQueryBuilder and calls enableCudf().
-  void initQueryBuilder() override;
-};
+int main(int argc, char** argv) {
+  std::string kUsage(
+      "This program benchmarks TPC-DS queries. Run "
+      "'velox_tpcds_benchmark -helpon=TpcdsBenchmark' for available options.\n");
+  gflags::SetUsageMessage(kUsage);
+  folly::Init init{&argc, &argv, false};
+  tpcdsBenchmark = std::make_unique<TpcdsBenchmark>();
+  tpcdsBenchmarkMain();
+}

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/benchmarks/TpcdsBenchmark.h"
+#include "velox/benchmarks/tpcds/TpcdsBenchmark.h"
 
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"

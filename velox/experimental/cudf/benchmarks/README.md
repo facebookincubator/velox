@@ -4,19 +4,26 @@ Benchmark binaries for TPC-H and TPC-DS queries with optional CuDF GPU accelerat
 
 ## Binaries
 
-| Binary | Benchmark | Source |
-|--------|-----------|--------|
-| `velox_cudf_tpch_benchmark` | TPC-H (Q1-Q22) | `CudfTpchBenchmark.cpp` |
-| `velox_cudf_tpcds_benchmark` | TPC-DS (Q1-Q99) | `CudfTpcdsBenchmark.cpp` |
+| Binary | Benchmark | Mode | Source |
+|--------|-----------|------|--------|
+| `velox_tpch_benchmark` | TPC-H (Q1-Q22) | CPU | `velox/benchmarks/tpch/` |
+| `velox_cudf_tpch_benchmark` | TPC-H (Q1-Q22) | GPU | `CudfTpchBenchmark.cpp` |
+| `velox_tpcds_benchmark` | TPC-DS (Q1-Q99) | CPU | `velox/benchmarks/tpcds/` |
+| `velox_cudf_tpcds_benchmark` | TPC-DS (Q1-Q99) | GPU | `CudfTpcdsBenchmark.cpp` |
 
-Both binaries support CPU-only (Hive) and GPU-accelerated (CuDF) modes.
+CPU binaries use HiveConnector. GPU binaries use CudfHiveConnector and register
+cuDF GPU operator replacements.
 
 ## Build
 
 ```bash
+# GPU binaries (requires CUDA)
 CUDA_ARCHITECTURES="native" EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_BENCHMARKS=ON" make cudf
 cd _build/release
 ninja velox_cudf_tpch_benchmark velox_cudf_tpcds_benchmark
+
+# CPU-only binaries (no CUDA required)
+ninja velox_tpch_benchmark velox_tpcds_benchmark
 ```
 
 ---
@@ -30,12 +37,11 @@ Generate TPC-H parquet data using the [velox-testing](https://github.com/rapidsa
 ### Run
 
 ```bash
-# CPU (Hive) - all queries
-./velox_cudf_tpch_benchmark --data_path=/path/to/tpch/sf100 --data_format=parquet
+# CPU - all queries
+./velox_tpch_benchmark --data_path=/path/to/tpch/sf100 --data_format=parquet
 
 # GPU (CuDF) - all queries
-./velox_cudf_tpch_benchmark --data_path=/path/to/tpch/sf100 --data_format=parquet \
-  --velox_cudf_table_scan=true
+./velox_cudf_tpch_benchmark --data_path=/path/to/tpch/sf100 --data_format=parquet
 ```
 
 ---
@@ -72,19 +78,19 @@ Each subdirectory contains parquet files for that table.
 
 ### 3. Run
 
-**CPU (Hive) - all queries (folly benchmark mode):**
+**CPU - all queries (folly benchmark mode):**
 
 ```bash
-./velox_cudf_tpcds_benchmark \
+./velox_tpcds_benchmark \
   --data_path=/path/to/tpcds/sf100 \
   --plan_path=/path/to/VeloxPlans/presto/tpcds/sf100 \
   --data_format=parquet
 ```
 
-**CPU (Hive) - single query with stats:**
+**CPU - single query with stats:**
 
 ```bash
-./velox_cudf_tpcds_benchmark \
+./velox_tpcds_benchmark \
   --data_path=/path/to/tpcds/sf100 \
   --plan_path=/path/to/VeloxPlans/presto/tpcds/sf100 \
   --data_format=parquet \
@@ -97,8 +103,7 @@ Each subdirectory contains parquet files for that table.
 ./velox_cudf_tpcds_benchmark \
   --data_path=/path/to/tpcds/sf100 \
   --plan_path=/path/to/VeloxPlans/presto/tpcds/sf100 \
-  --data_format=parquet \
-  --cudf_enabled
+  --data_format=parquet
 ```
 
 **GPU (CuDF) - single query with stats:**
@@ -108,11 +113,12 @@ Each subdirectory contains parquet files for that table.
   --data_path=/path/to/tpcds/sf100 \
   --plan_path=/path/to/VeloxPlans/presto/tpcds/sf100 \
   --data_format=parquet \
-  --cudf_enabled \
   --run_query_verbose=1
 ```
 
 ### TPC-DS Flags
+
+These flags are shared by both CPU and GPU binaries:
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -123,11 +129,12 @@ Each subdirectory contains parquet files for that table.
 | `--num_drivers` | `4` | Number of parallel drivers |
 | `--include_results` | `false` | Print query results |
 
-### CuDF-specific Flags (with `--cudf_enabled`)
+### CuDF Flags (GPU binaries only)
+
+These flags apply to `velox_cudf_tpch_benchmark` and `velox_cudf_tpcds_benchmark`:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--cudf_enabled` | `false` | Enable CuDF GPU acceleration |
 | `--cudf_chunk_read_limit` | `0` | Chunk read limit for cuDF parquet reader |
 | `--cudf_pass_read_limit` | `0` | Pass read limit for cuDF parquet reader |
 | `--cudf_gpu_batch_size_rows` | `100000` | GPU batch size in rows |
