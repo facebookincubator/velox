@@ -685,7 +685,8 @@ struct IntervalDayTimeUnaryMinusFunction {
     const bool isMinValue =
         FOLLY_UNLIKELY(a == std::numeric_limits<int64_t>::min());
     VELOX_SPARK_USER_RETURN_IF_ANSI(
-        isMinValue, "Arithmetic overflow: cannot negate minimum interval value");
+        isMinValue,
+        "Arithmetic overflow: cannot negate minimum interval value");
     result = isMinValue ? a : -a;
     return Status::OK();
   }
@@ -710,7 +711,8 @@ struct IntervalYearMonthUnaryMinusFunction {
     const bool isMinValue =
         FOLLY_UNLIKELY(a == std::numeric_limits<int32_t>::min());
     VELOX_SPARK_USER_RETURN_IF_ANSI(
-        isMinValue, "Arithmetic overflow: cannot negate minimum interval value");
+        isMinValue,
+        "Arithmetic overflow: cannot negate minimum interval value");
     result = isMinValue ? a : -a;
     return Status::OK();
   }
@@ -736,7 +738,10 @@ struct IntervalDayTimeAddFunction {
   call(int64_t& result, const int64_t& a, const int64_t& b) {
     int64_t res;
     VELOX_SPARK_USER_RETURN_IF_ANSI(
-        __builtin_add_overflow(a, b, &res), "Arithmetic overflow: {} + {}", a, b);
+        __builtin_add_overflow(a, b, &res),
+        "Arithmetic overflow: {} + {}",
+        a,
+        b);
     result = ansiEnabled_ ? res : (a + b);
     return Status::OK();
   }
@@ -762,7 +767,10 @@ struct IntervalDayTimeSubtractFunction {
   call(int64_t& result, const int64_t& a, const int64_t& b) {
     int64_t res;
     VELOX_SPARK_USER_RETURN_IF_ANSI(
-        __builtin_sub_overflow(a, b, &res), "Arithmetic overflow: {} - {}", a, b);
+        __builtin_sub_overflow(a, b, &res),
+        "Arithmetic overflow: {} - {}",
+        a,
+        b);
     result = ansiEnabled_ ? res : (a - b);
     return Status::OK();
   }
@@ -788,7 +796,10 @@ struct IntervalYearMonthAddFunction {
   call(int32_t& result, const int32_t& a, const int32_t& b) {
     int32_t res;
     VELOX_SPARK_USER_RETURN_IF_ANSI(
-        __builtin_add_overflow(a, b, &res), "Arithmetic overflow: {} + {}", a, b);
+        __builtin_add_overflow(a, b, &res),
+        "Arithmetic overflow: {} + {}",
+        a,
+        b);
     result = ansiEnabled_ ? res : (a + b);
     return Status::OK();
   }
@@ -814,7 +825,10 @@ struct IntervalYearMonthSubtractFunction {
   call(int32_t& result, const int32_t& a, const int32_t& b) {
     int32_t res;
     VELOX_SPARK_USER_RETURN_IF_ANSI(
-        __builtin_sub_overflow(a, b, &res), "Arithmetic overflow: {} - {}", a, b);
+        __builtin_sub_overflow(a, b, &res),
+        "Arithmetic overflow: {} - {}",
+        a,
+        b);
     result = ansiEnabled_ ? res : (a - b);
     return Status::OK();
   }
