@@ -51,6 +51,13 @@ VectorPtr newConstantFromStringImpl(
         pool, 1, false, type, std::move(days));
   }
 
+  if (type->equivalent(*TIMESTAMP_UTC())) {
+    int64_t micros = folly::to<int64_t>(value.value());
+    Timestamp value = Timestamp::fromMicros(micros);
+    return std::make_shared<ConstantVector<Timestamp>>(
+        pool, 1, false, type, std::move(value));
+  }
+
   if constexpr (std::is_same_v<T, StringView>) {
     return std::make_shared<ConstantVector<StringView>>(
         pool, 1, false, type, StringView(value.value()));
