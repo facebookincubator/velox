@@ -304,7 +304,7 @@ bool CudfNestedLoopJoinProbe::needsInput() const {
 
 void CudfNestedLoopJoinProbe::addInput(RowVectorPtr input) {
   VELOX_CHECK_NULL(input_, "Probe input already set");
-  input_ = input;
+  input_ = std::move(input);
   buildBatchIdx_ = 0;
   probeMatchedFlags_.reset();
 }

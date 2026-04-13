@@ -35,7 +35,6 @@
 namespace facebook::velox::cudf_velox {
 
 class CudaEvent;
-class CudfExpression;
 
 /// Coordinates data transfer from build to probe operators for nested loop
 /// join. Build operators accumulate batches, then one operator transfers them
