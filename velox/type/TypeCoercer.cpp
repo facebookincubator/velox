@@ -51,6 +51,7 @@ allowedCoercions() {
   add(INTEGER(), {BIGINT(), REAL(), DOUBLE()});
   add(BIGINT(), {DOUBLE()});
   add(REAL(), {DOUBLE()});
+  add(DECIMAL(1, 0), {REAL(), DOUBLE()});
   add(DATE(), {TIMESTAMP()});
   add(UNKNOWN(),
       {TINYINT(),
@@ -70,6 +71,29 @@ allowedCoercions() {
 // static
 std::optional<Coercion> TypeCoercer::coerceTypeBase(
     const TypePtr& fromType,
+    const TypePtr& toType) {
+  if (fromType->name() == toType->name()) {
+    return Coercion{.type = fromType, .cost = 0};
+  }
+
+  // Check built-in coercions first.
+  static const auto kAllowedCoercions = allowedCoercions();
+  auto it = kAllowedCoercions.find({fromType->name(), toType->name()});
+  if (it != kAllowedCoercions.end()) {
+    return it->second;
+  }
+
+  // Check CastRulesRegistry directly — no type reconstruction needed.
+  if (auto cost = CastRulesRegistry::instance().canCoerce(fromType, toType)) {
+    return Coercion{.type = toType, .cost = *cost};
+  }
+
+  return std::nullopt;
+}
+
+// static
+std::optional<Coercion> TypeCoercer::coerceTypeBase(
+    const TypePtr& fromType,
     const std::string& toTypeName) {
   static const auto kAllowedCoercions = allowedCoercions();
   if (fromType->name() == toTypeName) {
@@ -82,10 +106,15 @@ std::optional<Coercion> TypeCoercer::coerceTypeBase(
     return it->second;
   }
 
-  // Fall back to CastRulesRegistry for custom type coercions.
-  if (fromType->size() == 0) {
-    auto toType = getCustomType(toTypeName, {});
-    if (toType != nullptr) {
+  // Fall back to CastRulesRegistry for custom type coercions. Skip
+  // parameterized types — we cannot construct the target type without knowing
+  // its type parameters.
+  // getCustomType() returns nullptr for built-in types. Callers must not
+  // pass parametric custom type names (e.g., "BIGINT_ENUM") because their
+  // factories throw when called with empty parameters. SignatureBinder
+  // guards against this by checking typeSignature.parameters().empty().
+  if (fromType->size() == 0 && fromType->parameters().empty()) {
+    if (auto toType = getCustomType(toTypeName, {})) {
       if (auto cost =
               CastRulesRegistry::instance().canCoerce(fromType, toType)) {
         return Coercion{.type = std::move(toType), .cost = *cost};
@@ -108,7 +137,7 @@ std::optional<int32_t> TypeCoercer::coercible(
   }
 
   if (fromType->size() == 0) {
-    if (auto coercion = TypeCoercer::coerceTypeBase(fromType, toType->name())) {
+    if (auto coercion = TypeCoercer::coerceTypeBase(fromType, toType)) {
       return coercion->cost;
     }
 
@@ -179,11 +208,11 @@ TypePtr TypeCoercer::leastCommonSuperType(const TypePtr& a, const TypePtr& b) {
   }
 
   if (a->size() == 0) {
-    if (TypeCoercer::coerceTypeBase(a, b->name())) {
+    if (TypeCoercer::coerceTypeBase(a, b)) {
       return b;
     }
 
-    if (TypeCoercer::coerceTypeBase(b, a->name())) {
+    if (TypeCoercer::coerceTypeBase(b, a)) {
       return a;
     }
 

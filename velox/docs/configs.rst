@@ -859,8 +859,8 @@ Each query can override the config by setting corresponding query session proper
        strong references so they are never evicted. This avoids re-reading and re-parsing metadata on every stripe
        access when weak-pointer cache entries would otherwise expire. Can be used independently of
        file-metadata-cache-enabled. Currently only supported by Nimble format.
-   * - hive.reader.collect-column-stats
-     - hive.reader.collect_column_stats
+   * - hive.reader.collect-column-cpu-metrics
+     - hive.reader.collect_column_cpu_metrics
      - bool
      - false
      - If true, enables collection of per-column timing statistics during file reading. This includes

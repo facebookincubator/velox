@@ -17,6 +17,7 @@ add_library(
   CudfAssignUniqueId.cpp
   CudfBatchConcat.cpp
   CudfConversion.cpp
+  CudfEnforceSingleRow.cpp
   CudfFilterProject.cpp
   CudfHashAggregation.cpp
   CudfHashJoin.cpp

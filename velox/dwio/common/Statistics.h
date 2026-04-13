@@ -683,7 +683,7 @@ struct ColumnReaderStatistics {
   void initColumnStatsCollection(
       const TypeWithId& schema,
       const RowReaderOptions& options) {
-    if (!options.collectColumnStats()) {
+    if (!options.collectColumnCpuMetrics()) {
       return;
     }
     columnMetricsSet.emplace();

@@ -45,7 +45,7 @@ TEST(FileConfigTest, defaultConfig) {
   EXPECT_FALSE(config.readStatsBasedFilterReorderDisabled(emptySession.get()));
   EXPECT_FALSE(config.preserveFlatMapsInMemory(emptySession.get()));
   EXPECT_FALSE(config.indexEnabled(emptySession.get()));
-  EXPECT_FALSE(config.readerCollectColumnStats(emptySession.get()));
+  EXPECT_FALSE(config.readerCollectColumnCpuMetrics(emptySession.get()));
   EXPECT_FALSE(config.fileMetadataCacheEnabled(emptySession.get()));
   EXPECT_FALSE(config.pinFileMetadata(emptySession.get()));
   EXPECT_EQ(config.orcFooterSpeculativeIoSize(emptySession.get()), 256UL << 10);
@@ -68,7 +68,7 @@ TEST(FileConfigTest, overrideConfig) {
       {FileConfig::kReadStatsBasedFilterReorderDisabled, "true"},
       {FileConfig::kPreserveFlatMapsInMemory, "true"},
       {FileConfig::kIndexEnabled, "true"},
-      {FileConfig::kReaderCollectColumnStats, "true"},
+      {FileConfig::kReaderCollectColumnCpuMetrics, "true"},
       {FileConfig::kFileMetadataCacheEnabled, "true"},
       {FileConfig::kPinFileMetadata, "true"},
       {FileConfig::kOrcFooterSpeculativeIoSize, std::to_string(512UL << 10)},
@@ -91,7 +91,7 @@ TEST(FileConfigTest, overrideConfig) {
   EXPECT_TRUE(config.readStatsBasedFilterReorderDisabled(emptySession.get()));
   EXPECT_TRUE(config.preserveFlatMapsInMemory(emptySession.get()));
   EXPECT_TRUE(config.indexEnabled(emptySession.get()));
-  EXPECT_TRUE(config.readerCollectColumnStats(emptySession.get()));
+  EXPECT_TRUE(config.readerCollectColumnCpuMetrics(emptySession.get()));
   EXPECT_TRUE(config.fileMetadataCacheEnabled(emptySession.get()));
   EXPECT_TRUE(config.pinFileMetadata(emptySession.get()));
   EXPECT_EQ(config.orcFooterSpeculativeIoSize(emptySession.get()), 512UL << 10);
@@ -115,7 +115,7 @@ TEST(FileConfigTest, overrideSession) {
       {FileConfig::kReadStatsBasedFilterReorderDisabledSession, "true"},
       {FileConfig::kPreserveFlatMapsInMemorySession, "true"},
       {FileConfig::kIndexEnabledSession, "true"},
-      {FileConfig::kReaderCollectColumnStatsSession, "true"},
+      {FileConfig::kReaderCollectColumnCpuMetricsSession, "true"},
       {FileConfig::kFileMetadataCacheEnabledSession, "true"},
       {FileConfig::kPinFileMetadataSession, "true"},
       {FileConfig::kOrcFooterSpeculativeIoSizeSession,
@@ -137,7 +137,7 @@ TEST(FileConfigTest, overrideSession) {
   EXPECT_TRUE(config.readStatsBasedFilterReorderDisabled(session.get()));
   EXPECT_TRUE(config.preserveFlatMapsInMemory(session.get()));
   EXPECT_TRUE(config.indexEnabled(session.get()));
-  EXPECT_TRUE(config.readerCollectColumnStats(session.get()));
+  EXPECT_TRUE(config.readerCollectColumnCpuMetrics(session.get()));
   EXPECT_TRUE(config.fileMetadataCacheEnabled(session.get()));
   EXPECT_TRUE(config.pinFileMetadata(session.get()));
   EXPECT_EQ(config.orcFooterSpeculativeIoSize(session.get()), 128UL << 10);
