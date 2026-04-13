@@ -8,12 +8,33 @@ import torch
 
 # Importing _torchwave registers the torchwave delegate handler with the
 # nativert KernelFactory, so PyModelRunner can dispatch to it.
-from velox.experimental.torchwave._torchwave import DelegateExecutor
+from velox.experimental.torchwave._torchwave import (
+    DelegateExecutor,
+    register_elementwise_op,
+)
 from velox.experimental.torchwave.lower import (
     lower_to_torchwave,
     package_nativert_with_torchwave_delegate,
 )
 from velox.experimental.torchwave.tests.element_test import ElementTestPreproc
+
+# Register add_standalone as an alias of add.Tensor in the PyTorch dispatcher
+# (nativert registry). Same signature and implementation, different torchwave
+# Metadata (isStandalone = true).
+_aten_lib = torch.library.Library("aten", "FRAGMENT")
+_aten_lib.define(
+    "add_standalone.Tensor(Tensor self, Tensor other, *, Scalar alpha=1) -> Tensor"
+)
+_aten_lib.impl(
+    "add_standalone.Tensor",
+    lambda self, other, *, alpha=1: torch.add(self, other, alpha=alpha),
+)
+
+# Register in torchwave registry with isStandalone=true, reusing the "add"
+# CUDA function name so the same elementwise kernel is generated.
+register_elementwise_op(
+    "torch.ops.aten.add_standalone.Tensor", "add", True, ["alpha"]
+)
 
 
 class DelegateExecutorTest(unittest.TestCase):
@@ -98,7 +119,7 @@ class DelegateExecutorTest(unittest.TestCase):
     def test_nativert_delegate(self) -> None:
         """Lowers to torchwave delegate, packages as .pt2, runs via nativert
         ModelRunner to exercise the full delegate registration path."""
-        from torch._C._nativert import PyModelRunner
+        from torch._C._nativert import PyModelRunner  # pyre-fixme[21]
 
         MODEL_NAME = "model"
         eager_outputs = self.module(*self.inputs)
@@ -119,6 +140,7 @@ class DelegateExecutorTest(unittest.TestCase):
                 delegate_ep,
             )
 
+            # pyre-fixme[16]: `torch._C` has no attribute `_nativert`.
             model_runner = PyModelRunner(
                 pt2_path, f"{MODEL_NAME}-torchwave"
             )

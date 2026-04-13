@@ -19,27 +19,143 @@
 #include "velox/experimental/torchwave/Executor.h"
 #include "velox/experimental/torchwave/ParallelExpr.h"
 #include "velox/experimental/torchwave/Utils.h"
+#include "velox/experimental/torchwave/WaveConfig.h"
 
 #include <ATen/ATen.h>
+#include <c10/util/StringUtil.h>
+#include <gflags/gflags.h>
 #include <algorithm>
 #include <fstream>
 #include <sstream>
 
 #include "velox/experimental/wave/common/GpuArena.h"
 
+DECLARE_bool(print_timing);
+
 namespace torch::wave {
+
+int64_t SizeExpr::numElements(FrameP frame, nativert::ValueId* largestOut)
+    const {
+  int64_t result = 0;
+  // Combine direct values.
+  for (auto valueId : values) {
+    auto& ivalue = frame->getIValue(valueId);
+    int64_t n = ivalue.isTensor() ? ivalue.toTensor().numel() : ivalue.toInt();
+    if (op == SizeShortcut::kMax) {
+      if (n > result) {
+        result = n;
+        if (largestOut) {
+          *largestOut = valueId;
+        }
+      }
+    } else {
+      result += n;
+    }
+  }
+  // Combine recursive sub-expressions.
+  for (auto& child : args) {
+    int64_t n = child.numElements(frame, largestOut);
+    if (op == SizeShortcut::kMax) {
+      if (n > result) {
+        result = n;
+      }
+    } else {
+      result += n;
+    }
+  }
+  return result;
+}
+
+SizeExpr SizeExpr::toActual(
+    const FormalToActual& bindings,
+    const IdToValueMap& idToValue) const {
+  SizeExpr result;
+  result.op = op;
+  result.values.reserve(values.size());
+  for (auto valueId : values) {
+    auto it = bindings.find(valueId);
+    auto actualId = it != bindings.end() ? it->second : valueId;
+    TORCH_CHECK(
+        idToValue.count(actualId),
+        "Actual value id ",
+        actualId,
+        " not found in graph");
+    result.values.push_back(actualId);
+  }
+  result.args.reserve(args.size());
+  for (auto& child : args) {
+    result.args.push_back(child.toActual(bindings, idToValue));
+  }
+  return result;
+}
 
 namespace {
 
+void makeConstantIndicesImpl(
+    NodeCP node,
+    const std::unordered_set<ValueCP>& inputs,
+    std::unordered_set<NodeCP>& visited,
+    int32_t& ordinal,
+    int32_t& numAttrsSeen,
+    std::unordered_map<int32_t, int32_t>& result) {
+  if (!visited.insert(node).second) {
+    return;
+  }
+  auto myOrdinal = ordinal++;
+  for (const auto& input : node->inputs()) {
+    if (inputs.count(input.value)) {
+      continue;
+    }
+    auto* producer = input.value->producer();
+    if (producer) {
+      makeConstantIndicesImpl(
+          producer, inputs, visited, ordinal, numAttrsSeen, result);
+    }
+  }
+  const auto& attrs = node->attributes();
+  if (!attrs.empty()) {
+    result[myOrdinal] = numAttrsSeen;
+    numAttrsSeen += attrs.size();
+  }
+}
+
+int32_t nodeOrdinalImpl(
+    NodeCP node,
+    NodeCP target,
+    const std::unordered_set<ValueCP>& inputs,
+    std::unordered_set<NodeCP>& visited,
+    int32_t& ordinal) {
+  if (!visited.insert(node).second) {
+    return -1;
+  }
+  auto myOrdinal = ordinal++;
+  if (node == target) {
+    return myOrdinal;
+  }
+  for (const auto& input : node->inputs()) {
+    if (inputs.count(input.value)) {
+      continue;
+    }
+    auto* producer = input.value->producer();
+    if (producer) {
+      auto result = nodeOrdinalImpl(producer, target, inputs, visited, ordinal);
+      if (result >= 0) {
+        return result;
+      }
+    }
+  }
+  return -1;
+}
+
 bool isAllElementwise(
-    const nativert::Node* node,
-    const std::unordered_set<const nativert::Value*>& subgraphInputs,
-    std::unordered_set<const nativert::Node*>& visited) {
+    NodeCP node,
+    const std::unordered_set<ValueCP>& subgraphInputs,
+    std::unordered_set<NodeCP>& visited) {
   if (!visited.insert(node).second) {
     return true;
   }
   auto* meta = Registry::metadata(node->target());
-  if (!meta || !meta->elementWise) {
+  if (!meta || !meta->elementwise) {
     return false;
   }
   for (auto& input : node->inputs()) {
@@ -59,10 +175,10 @@ bool isAllElementwise(
 }
 
 void collectDeduppedInputs(
-    const nativert::Node* node,
-    const std::unordered_set<const nativert::Value*>& subgraphInputs,
-    std::unordered_set<const nativert::Value*>& seen,
-    std::vector<const nativert::Value*>& result) {
+    NodeCP node,
+    const std::unordered_set<ValueCP>& subgraphInputs,
+    std::unordered_set<ValueCP>& seen,
+    std::vector<ValueCP>& result) {
   for (auto& input : node->inputs()) {
     auto* value = input.value;
     if (subgraphInputs.count(value) || !value->producer()) {
@@ -76,28 +192,48 @@ void collectDeduppedInputs(
 }
 
 void collectAttrOffsets(
-    const nativert::Node* node,
-    const std::unordered_set<const nativert::Value*>& inputs,
-    std::unordered_set<const nativert::Node*>& visited,
+    NodeCP node,
+    const std::unordered_set<ValueCP>& inputs,
+    std::unordered_set<NodeCP>& visited,
     int32_t& offset,
     std::unordered_map<
-        std::pair<const nativert::Node*, std::string>,
+        std::pair<NodeCP, std::string>,
         int32_t,
         KernelOperation::NodeAttrHash>& attrOffsets) {
   forEachSortedAttribute(
-      node,
-      inputs,
-      visited,
-      [&](const nativert::Node* n, const nativert::Attribute& attr) {
+      node, inputs, visited, [&](NodeCP n, const nativert::Attribute& attr) {
         attrOffsets[{n, attr.name}] = offset;
         offset += 8;
       });
 }
 
+bool hasAlwaysSingleBlock(
+    NodeCP node,
+    const std::unordered_set<ValueCP>& inputs,
+    std::unordered_set<NodeCP>& visited) {
+  if (!visited.insert(node).second) {
+    return false;
+  }
+  auto* meta = Registry::metadata(node->target());
+  if (meta && meta->alwaysSingleBlock) {
+    return true;
+  }
+  for (const auto& input : node->inputs()) {
+    if (inputs.count(input.value)) {
+      continue;
+    }
+    auto* producer = input.value->producer();
+    if (producer && hasAlwaysSingleBlock(producer, inputs, visited)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 float sumNodeCosts(
-    const nativert::Node* node,
-    const std::unordered_set<const nativert::Value*>& inputs,
-    std::unordered_set<const nativert::Node*>& visited) {
+    NodeCP node,
+    const std::unordered_set<ValueCP>& inputs,
+    std::unordered_set<NodeCP>& visited) {
   if (!visited.insert(node).second) {
     return 0;
   }
@@ -120,9 +256,9 @@ float sumNodeCosts(
 
 void kernelExprImpl(
     std::stringstream& ss,
-    const nativert::Node* node,
-    const std::unordered_set<const nativert::Value*>& inputSet,
-    const std::unordered_set<const nativert::Value*>& outputSet) {
+    NodeCP node,
+    const std::unordered_set<ValueCP>& inputSet,
+    const std::unordered_set<ValueCP>& outputSet) {
   if (node->inputs().empty() && node->attributes().empty()) {
     ss << node->target();
     return;
@@ -154,11 +290,11 @@ void kernelExprImpl(
 }
 
 void makeBindingsImpl(
-    const nativert::Node* formalNode,
-    const nativert::Node* actualNode,
-    const std::unordered_set<const nativert::Value*>& formalInputs,
-    const std::unordered_set<const nativert::Value*>& outputValues,
-    std::unordered_set<const nativert::Node*>& visited,
+    NodeCP formalNode,
+    NodeCP actualNode,
+    const std::unordered_set<ValueCP>& formalInputs,
+    const std::unordered_set<ValueCP>& outputValues,
+    std::unordered_set<NodeCP>& visited,
     FormalToActual& bindings) {
   if (!visited.insert(formalNode).second) {
     return;
@@ -206,6 +342,55 @@ void fillTensorParam(const at::Tensor& tensor, void* dest) {
   }
 }
 
+/// Converts a c10::IValue default value to a nativert::Constant.
+nativert::Constant iValueToConstant(const c10::IValue& iv) {
+  if (iv.isNone()) {
+    return nativert::None{};
+  }
+  if (iv.isBool()) {
+    return iv.toBool();
+  }
+  if (iv.isInt()) {
+    return iv.toInt();
+  }
+  if (iv.isDouble()) {
+    return iv.toDouble();
+  }
+  if (iv.isString()) {
+    return iv.toStringRef();
+  }
+  if (iv.isIntList()) {
+    return iv.toIntVector();
+  }
+  if (iv.isDoubleList()) {
+    return iv.toDoubleVector();
+  }
+  if (iv.isBoolList()) {
+    auto list = iv.toBoolList();
+    std::vector<bool> result;
+    result.reserve(list.size());
+    for (bool b : list) {
+      result.push_back(b);
+    }
+    return result;
+  }
+  if (iv.isDevice()) {
+    return iv.toDevice();
+  }
+  TORCH_CHECK(
+      false, "iValueToConstant: unsupported IValue type: ", iv.tagKind());
+}
+
+/// Looks up the FunctionSchema for an aten node target like
+/// "torch.ops.aten.add.Tensor". Returns nullptr for non-aten ops.
+const c10::FunctionSchema* findSchema(std::string_view target) {
+  auto atoms = c10::split(target, '.');
+  if (atoms.size() < 3 || atoms[atoms.size() - 3] != "aten") {
+    return nullptr;
+  }
+  return findFunctionSchema(target);
+}
+
 void fillScalarParam(const c10::IValue& ivalue, void* dest) {
   if (ivalue.isInt()) {
     *reinterpret_cast<int64_t*>(dest) = ivalue.toInt();
@@ -218,127 +403,296 @@ void fillScalarParam(const c10::IValue& ivalue, void* dest) {
   }
 }
 
-} // namespace
-
-std::vector<std::vector<Dim>> elementwiseOutputShape(
-    const std::vector<const nativert::Value*>& inputs,
-    const nativert::Node* /*node*/,
-    nativert::ExecutionFrame& frame,
-    FormalToActual map) {
-  int64_t maxNumel = -1;
-  std::vector<Dim> bestShape;
-  for (const auto* input : inputs) {
-    auto it = map.find(input->id());
-    TORCH_CHECK(
-        it != map.end(),
-        "Input value %v",
-        input->id(),
-        " not found in FormalToActual map");
-    auto actualId = it->second;
-    auto tensor = frame.getTensor(actualId);
-    auto numel = tensor.numel();
-    if (numel > maxNumel) {
-      maxNumel = numel;
-      auto sizes = tensor.sizes();
-      bestShape.assign(sizes.begin(), sizes.end());
+void subgraphToStringImpl(
+    std::stringstream& ss,
+    NodeCP node,
+    const std::unordered_set<ValueCP>& inputSet) {
+  ss << node->target();
+  const auto& nodeInputs = node->inputs();
+  if (nodeInputs.empty()) {
+    return;
+  }
+  ss << "(";
+  for (size_t i = 0; i < nodeInputs.size(); ++i) {
+    if (i > 0) {
+      ss << ", ";
+    }
+    auto* value = nodeInputs[i].value;
+    auto* producer = value->producer();
+    if (!producer || inputSet.count(value)) {
+      ss << "%" << value->id();
+    } else {
+      subgraphToStringImpl(ss, producer, inputSet);
     }
   }
-  return {bestShape};
+  ss << ")";
 }
 
-void makeGrid(
-    const std::vector<OpInvocation>& ops,
-    const std::vector<int64_t>& numElements,
-    std::vector<BlockInfo>& blocks,
-    std::vector<int32_t>& opIndices,
-    std::vector<OpInvocation*>& nextOps) {
+} // namespace
+
+std::unordered_map<int32_t, int32_t> Subgraph::makeConstantIndices() const {
+  std::unordered_set<ValueCP> inputSet(inputs.begin(), inputs.end());
+  std::unordered_set<NodeCP> visited;
+  int32_t ordinal = 0;
+  int32_t numAttrsSeen = 0;
+  std::unordered_map<int32_t, int32_t> result;
+  makeConstantIndicesImpl(
+      root, inputSet, visited, ordinal, numAttrsSeen, result);
+  return result;
+}
+
+int32_t Subgraph::nodeOrdinal(NodeCP node) const {
+  std::unordered_set<ValueCP> inputSet(inputs.begin(), inputs.end());
+  std::unordered_set<NodeCP> visited;
+  int32_t ordinal = 0;
+  return nodeOrdinalImpl(root, node, inputSet, visited, ordinal);
+}
+
+std::string Subgraph::toString() const {
+  std::unordered_set<ValueCP> inputSet(inputs.begin(), inputs.end());
+  std::stringstream ss;
+  subgraphToStringImpl(ss, root, inputSet);
+  return ss.str();
+}
+
+at::Tensor paramTensor(
+    ValueCP value,
+    nativert::ExecutionFrame& frame,
+    const FormalToActual& map) {
+  auto it = map.find(value->id());
+  TORCH_CHECK(
+      it != map.end(),
+      "Input value %v",
+      value->id(),
+      " not found in FormalToActual map");
+  return frame.getTensor(it->second);
+}
+
+int64_t paramSymInt(
+    ValueCP value,
+    nativert::ExecutionFrame& frame,
+    const FormalToActual& map) {
+  auto it = map.find(value->id());
+  TORCH_CHECK(
+      it != map.end(),
+      "Input value %v",
+      value->id(),
+      " not found in FormalToActual map");
+  return frame.getSymInt(it->second);
+}
+
+std::vector<std::vector<Dim>> elementwiseInputShape(
+    NodeCP node,
+    nativert::ExecutionFrame& frame,
+    FormalToActual map,
+    int32_t ordinal) {
+  std::vector<int64_t> bestShape;
+  int64_t bestNumel = -1;
+
+  std::function<void(ValueCP)> trace = [&](ValueCP v) {
+    auto it = map.find(v->id());
+    if (it != map.end()) {
+      auto& ivalue = frame.getIValue(it->second);
+      if (ivalue.isTensor()) {
+        auto numel = ivalue.toTensor().numel();
+        if (numel > bestNumel) {
+          bestNumel = numel;
+          auto sizes = ivalue.toTensor().sizes();
+          bestShape.assign(sizes.begin(), sizes.end());
+        }
+        return;
+      }
+    }
+    auto* producer = v->producer();
+    if (!producer) {
+      return;
+    }
+    auto* meta = Registry::metadata(producer->target());
+    if (meta && meta->elementwise) {
+      for (const auto& input : producer->inputs()) {
+        trace(input.value);
+      }
+    }
+  };
+
+  trace(node->inputs()[ordinal].value);
+
+  TORCH_CHECK(
+      bestNumel >= 0, "elementwiseInputShape: no tensor found in frame");
+  return {std::vector<Dim>(bestShape.begin(), bestShape.end())};
+}
+
+int32_t makeGrid(
+    const std::vector<LaunchData>& launches,
+    StepVectors& sv,
+    int32_t maxBlocksPerSM) {
   const int32_t blockSize = 256;
 
-  // Compute cost per op: numElements * unitCost.
-  std::vector<float> costs(ops.size());
+  // Compute cost per launch: numElements * unitCost.
+  sv.costs.resize(launches.size());
   float totalCost = 0;
-  for (size_t i = 0; i < ops.size(); ++i) {
-    costs[i] = static_cast<float>(numElements[i]) * ops[i].op()->unitCost();
-    totalCost += costs[i];
+  for (size_t i = 0; i < launches.size(); ++i) {
+    sv.costs[i] = static_cast<float>(launches[i].numElements) *
+        launches[i].launch->op->unitCost();
+    totalCost += sv.costs[i];
   }
 
-  // Max blocks each op could use.
-  std::vector<int32_t> maxBlocks(ops.size());
-  for (size_t i = 0; i < ops.size(); ++i) {
-    maxBlocks[i] =
-        static_cast<int32_t>((numElements[i] + blockSize - 1) / blockSize);
-    if (maxBlocks[i] < 1) {
-      maxBlocks[i] = 1;
+  // Max blocks each launch could use.
+  sv.maxBlocks.resize(launches.size());
+  const int32_t elementsPerBlock = blockSize * 4;
+  for (size_t i = 0; i < launches.size(); ++i) {
+    sv.maxBlocks[i] = static_cast<int32_t>(
+        (launches[i].numElements + elementsPerBlock - 1) / elementsPerBlock);
+    if (sv.maxBlocks[i] < 1) {
+      sv.maxBlocks[i] = 1;
     }
   }
 
-  // Target blocks from device SM count.
-  int32_t numSMs = 100;
-  auto* device = facebook::velox::wave::currentDevice();
-  if (device) {
-    numSMs = device->numSM;
+  // Target blocks from device SM count and kernel occupancy.
+  int32_t numSMs = WaveConfig::get().numSms;
+  if (numSMs == 0) {
+    numSMs = 100;
+    auto* device = facebook::velox::wave::currentDevice();
+    if (device) {
+      numSMs = device->numSM;
+    }
   }
-  int32_t targetBlocks = numSMs * 4;
+  int32_t blocksPerSM = maxBlocksPerSM > 0 ? maxBlocksPerSM : 4;
+  int32_t targetBlocks = numSMs * blocksPerSM;
 
-  // Assign blocks pro rata by cost, at least 1 per op, capped by maxBlocks.
-  std::vector<int32_t> numBlocksPerOp(ops.size());
+  // Assign blocks pro rata by cost, at least 1 per launch, capped by
+  // maxBlocks.
+  sv.numBlocksPerLaunch.resize(launches.size());
   int32_t totalAssigned = 0;
-  for (size_t i = 0; i < ops.size(); ++i) {
-    float fraction = (totalCost > 0) ? costs[i] / totalCost : 1.0f / ops.size();
+  for (size_t i = 0; i < launches.size(); ++i) {
+    // Operations marked alwaysSingleBlock always get exactly one block.
+    if (launches[i].launch->op && launches[i].launch->op->alwaysSingleBlock()) {
+      sv.numBlocksPerLaunch[i] = 1;
+      totalAssigned += 1;
+      continue;
+    }
+    float fraction =
+        (totalCost > 0) ? sv.costs[i] / totalCost : 1.0f / launches.size();
     int32_t assigned =
         std::max(1, static_cast<int32_t>(fraction * targetBlocks + 0.5f));
-    assigned = std::min(assigned, maxBlocks[i]);
+    assigned = std::min(assigned, sv.maxBlocks[i]);
     // Round down blocks so all but the last process a multiple of blockSize
     // elements.
     if (assigned > 1) {
-      auto elemsPerBlock = (numElements[i] + assigned - 1) / assigned;
-      auto alignedElems = roundUp(elemsPerBlock, blockSize);
+      auto elemsPerBlock = (launches[i].numElements + assigned - 1) / assigned;
+      auto alignedElems = roundUp(elemsPerBlock, elementsPerBlock);
       assigned = std::max(
           1,
           static_cast<int32_t>(
-              (numElements[i] + alignedElems - 1) / alignedElems));
+              (launches[i].numElements + alignedElems - 1) / alignedElems));
     }
-    numBlocksPerOp[i] = assigned;
+    sv.numBlocksPerLaunch[i] = assigned;
     totalAssigned += assigned;
   }
 
-  // Fill blocks and opIndices.
-  blocks.resize(totalAssigned);
-  opIndices.resize(totalAssigned);
+  // Fill blocks and launchIndices.
+  sv.blocks.resize(totalAssigned);
+  sv.launchIndices.resize(totalAssigned);
   int32_t blockIdx = 0;
-  for (size_t i = 0; i < ops.size(); ++i) {
-    auto opCode = ops[i].op()->opCodes()[0];
-    auto nBlocks = numBlocksPerOp[i];
-    auto elements = numElements[i];
-    // Align elements per block to a multiple of blockSize so all but the last
-    // block process a blockSize-aligned number of elements.
-    auto rawElemsPerBlock = (elements + nBlocks - 1) / nBlocks;
-    auto alignedElems = roundUp(rawElemsPerBlock, blockSize);
+  for (size_t i = 0; i < launches.size(); ++i) {
+    auto opCode = launches[i].launch->op->opCode();
+    auto nBlocks = sv.numBlocksPerLaunch[i];
     for (int32_t b = 0; b < nBlocks; ++b) {
-      auto& info = blocks[blockIdx];
+      auto& info = sv.blocks[blockIdx];
       info.op = opCode;
       info.blockInOp = b;
       info.numBlocksInOp = nBlocks;
-      auto startRow = static_cast<int64_t>(b) * alignedElems;
-      auto endRow = std::min(startRow + alignedElems, elements);
-      info.rowsForBlock = static_cast<int32_t>(endRow - startRow);
-      info.rowIdx = 0;
       info.params = nullptr;
-      info.returnData = nullptr;
-      info.debug = nullptr;
-      opIndices[blockIdx] = static_cast<int32_t>(i);
+      sv.launchIndices[blockIdx] = static_cast<int32_t>(i);
       ++blockIdx;
     }
   }
+  return blockSize;
+}
 
-  nextOps.clear();
+// --- Launch ---
+
+std::string Launch::toString() const {
+  if (op) {
+    return "kernel: " + op->toString();
+  }
+  if (standalone) {
+    Subgraph sg;
+    sg.root = standalone;
+    for (const auto& input : standalone->inputs()) {
+      sg.inputs.push_back(input.value);
+    }
+    return "standalone " + sg.toString();
+  }
+  return "";
+}
+
+// --- ProjectOperation ---
+
+ProjectOperation::ProjectOperation(const Subgraph& sg, CompileCtx& ctx)
+    : subgraph_(sg) {}
+
+namespace {
+
+void printLaunchGrid(
+    std::stringstream& ss,
+    const LaunchGrid& grid,
+    const char* heading) {
+  if (heading) {
+    ss << heading << "\n";
+  }
+  for (size_t step = 0; step < grid.size(); ++step) {
+    ss << "Step" << step << "\n";
+    for (size_t lane = 0; lane < grid[step].size(); ++lane) {
+      ss << "  Lane " << lane << ": ";
+      const auto& launch = grid[step][lane];
+      if (launch.op) {
+        ss << launch.op->toString();
+        ss << "    Params: (";
+        for (size_t i = 0; i < launch.values.size(); ++i) {
+          if (i > 0) {
+            ss << ", ";
+          }
+          ss << "%v" << launch.values[i]->id();
+        }
+        ss << ")\n";
+        if (!launch.constantIndices.empty()) {
+          ss << "    ConstantIndices: (";
+          for (size_t i = 0; i < launch.constantIndices.size(); ++i) {
+            if (i > 0) {
+              ss << ", ";
+            }
+            ss << launch.constantIndices[i];
+          }
+          ss << ")\n";
+        }
+      } else if (launch.standalone) {
+        ss << "Standalone: " << launch.standalone->toString() << "\n";
+      }
+    }
+  }
+}
+
+} // namespace
+
+std::string ProjectOperation::toString() const {
+  std::stringstream ss;
+  printLaunchGrid(ss, grid_, nullptr);
+  if (!singleBlockGrid_.empty()) {
+    printLaunchGrid(ss, singleBlockGrid_, "Single Block Variant");
+  }
+  return ss.str();
 }
 
 // --- KernelOperation ---
 
-KernelOperation::KernelOperation(const Subgraph& sg, int32_t opCode)
+KernelOperation::KernelOperation(
+    const Subgraph& sg,
+    int32_t opCode,
+    const CompileCtx& compileCtx)
     : opCode_{opCode},
       expr_{sg.root},
+      compileCtx_{compileCtx},
       inputs_{sg.inputs.begin(), sg.inputs.end()},
       orderedInputs_{sg.inputs},
       numInputs_(sg.inputs.size()) {
@@ -353,18 +707,26 @@ KernelOperation::KernelOperation(const Subgraph& sg, int32_t opCode)
     }
   }
 
+  if (!sg.root) {
+    constantAreaOffset_ = offset;
+    return;
+  }
+
   // Collect and assign offsets to outputs.
-  std::vector<const nativert::Value*> outputValues;
-  setOutputs(sg.root, inputs_, outputValues, outputReserve_);
+  std::vector<ValueCP> outputValues;
+  setOutputs(sg.root, inputs_, outputValues, outputDescs_, true);
 
   // Compute unit cost before adding outputs to inputs_: 10 per input/output +
   // sum of node costs from registry.
-  std::unordered_set<const nativert::Node*> costVisited;
+  std::unordered_set<NodeCP> costVisited;
   unitCost_ = 10.0f * (numInputs_ + outputValues.size());
   unitCost_ += sumNodeCosts(sg.root, inputs_, costVisited);
 
+  // Check if any node in the subgraph has alwaysSingleBlock set.
+  std::unordered_set<NodeCP> asbVisited;
+  alwaysSingleBlock_ = hasAlwaysSingleBlock(sg.root, inputs_, asbVisited);
+
   for (auto* value : outputValues) {
-    inputs_.insert(value);
     orderedInputs_.push_back(value);
     paramOffsets_[value] = offset;
     if (value->type().kind() == nativert::Type::Kind::Tensor) {
@@ -377,37 +739,28 @@ KernelOperation::KernelOperation(const Subgraph& sg, int32_t opCode)
   constantAreaOffset_ = offset;
 
   // Assign offsets to attributes.
-  std::unordered_set<const nativert::Node*> visited;
+  std::unordered_set<NodeCP> visited;
   collectAttrOffsets(sg.root, inputs_, visited, offset, attrOffsets_);
 
-  // For all-elementwise kernel ops, set numElements_ to get the numel of the
-  // output tensor.
-  std::unordered_set<const nativert::Node*> ewVisited;
+  // For all-elementwise kernel ops, mark the output as byLargestInput.
+  std::unordered_set<NodeCP> ewVisited;
   if (!outputValues.empty() && isAllElementwise(sg.root, inputs_, ewVisited)) {
-    auto outputId = outputValues[0]->id();
-    numElements_ = [outputId](
-                       nativert::ExecutionFrame& frame,
-                       const FormalToActual& map) -> int64_t {
-      auto it = map.find(outputId);
-      TORCH_CHECK(
-          it != map.end(),
-          "Output value %v",
-          outputId,
-          " not found in FormalToActual map");
-      return frame.getTensor(it->second).numel();
-    };
+    TORCH_CHECK(
+        outputDescs_.size() == 1,
+        "All-elementwise op should have exactly one output");
+    outputDescs_[0].byLargestInput = true;
   }
+
+  sizeExpr_ = makeSizeExpr(sg.root, inputs_);
 }
 
-int32_t KernelOperation::paramOffset(const nativert::Value* value) const {
+int32_t KernelOperation::paramOffset(ValueCP value) const {
   auto it = paramOffsets_.find(value);
   TORCH_CHECK(it != paramOffsets_.end(), "Value not found in paramOffsets");
   return it->second;
 }
 
-int32_t KernelOperation::attrOffset(
-    const nativert::Node* node,
-    std::string_view attr) const {
+int32_t KernelOperation::attrOffset(NodeCP node, std::string_view attr) const {
   auto it = attrOffsets_.find({node, std::string(attr)});
   TORCH_CHECK(
       it != attrOffsets_.end(),
@@ -418,12 +771,22 @@ int32_t KernelOperation::attrOffset(
   return it->second;
 }
 
-int64_t KernelOperation::numElements(
+int64_t KernelOperation::largestInput(
     nativert::ExecutionFrame& frame,
     const FormalToActual& map) const {
-  TORCH_CHECK(
-      numElements_ != nullptr, "numElements_ not set for KernelOperation");
-  return numElements_(frame, map);
+  int64_t largest = 0;
+  for (int32_t i = 0; i < numInputs_; ++i) {
+    auto* formalValue = orderedInputs_[i];
+    auto it = map.find(formalValue->id());
+    auto actualId = it != map.end() ? it->second : formalValue->id();
+    const auto& ivalue = frame.getIValue(actualId);
+    if (ivalue.isTensor()) {
+      largest = std::max(largest, ivalue.toTensor().numel());
+    } else {
+      largest = std::max(largest, static_cast<int64_t>(1));
+    }
+  }
+  return largest;
 }
 
 void KernelOperation::addSharedDeclaration(const std::string& decl) {
@@ -439,105 +802,209 @@ void KernelOperation::setCode(std::stringstream& code) {
   code.clear();
 }
 
-void KernelOperation::setOutputs(
-    const nativert::Node* node,
-    const std::unordered_set<const nativert::Value*>& subgraphInputs,
-    std::vector<const nativert::Value*>& outputValues,
-    std::vector<OutputReserveFunc>& outputReserves) {
-  std::unordered_set<const nativert::Node*> visited;
-  if (isAllElementwise(node, subgraphInputs, visited)) {
-    outputValues.push_back(node->outputs()[0]);
-    std::unordered_set<const nativert::Value*> seen;
-    std::vector<const nativert::Value*> deduppedInputs;
-    collectDeduppedInputs(node, subgraphInputs, seen, deduppedInputs);
-    outputReserves.push_back([deduppedInputs = std::move(deduppedInputs)](
-                                 const nativert::Node* n,
-                                 nativert::ExecutionFrame& frame,
-                                 FormalToActual map) {
-      return elementwiseOutputShape(deduppedInputs, n, frame, map);
-    });
-    return;
+SizeExpr KernelOperation::makeSizeExpr(
+    NodeCP node,
+    const std::unordered_set<ValueCP>& subgraphInputs) {
+  // Check if the entire subtree rooted here is elementwise.
+  std::unordered_set<NodeCP> ewVisited;
+  if (isAllElementwise(node, subgraphInputs, ewVisited)) {
+    // Collect all distinct leaf Values reachable from this node.
+    std::unordered_set<ValueCP> seen;
+    std::vector<ValueCP> leaves;
+    collectDeduppedInputs(node, subgraphInputs, seen, leaves);
+    std::vector<nativert::ValueId> leafIds;
+    leafIds.reserve(leaves.size());
+    for (auto* v : leaves) {
+      leafIds.push_back(v->id());
+    }
+    return SizeExpr{SizeShortcut::kMax, std::move(leafIds), {}};
   }
 
-  for (auto& input : node->inputs()) {
-    auto* value = input.value;
+  auto* meta = Registry::metadata(node->target());
+  TORCH_CHECK(meta, "No metadata for: ", node->target());
+
+  SizeExpr result;
+  result.op = meta->sizeShortcut;
+
+  // Recurse on the inputs indicated by meta->sizeArgs.
+  const auto& sizeArgs = meta->sizeArgs;
+  for (size_t i = 0; i < sizeArgs.ordinal.size(); ++i) {
+    auto ordinal = sizeArgs.ordinal[i];
+    auto* value = node->inputs()[ordinal].value;
+
+    // If this input is a subgraph leaf or has no producer, it's a terminal
+    // Value.
+    if (subgraphInputs.count(value) || !value->producer()) {
+      bool isList = i < sizeArgs.isList.size() && sizeArgs.isList[i];
+      if (isList) {
+        for (auto* elem : value->getListElements()) {
+          result.values.push_back(elem->id());
+        }
+      } else {
+        result.values.push_back(value->id());
+      }
+    } else {
+      // Recurse into the producer subtree.
+      auto child = makeSizeExpr(value->producer(), subgraphInputs);
+      // Flatten if child has the same op.
+      if (child.op == result.op) {
+        result.values.insert(
+            result.values.end(), child.values.begin(), child.values.end());
+        result.args.insert(
+            result.args.end(),
+            std::make_move_iterator(child.args.begin()),
+            std::make_move_iterator(child.args.end()));
+      } else {
+        result.args.push_back(std::move(child));
+      }
+    }
+  }
+
+  return result;
+}
+
+OutputDesc KernelOperation::makeOutputDesc(
+    const ArgumentMeta& returnMeta,
+    NodeCP node,
+    const std::unordered_set<ValueCP>& subgraphInputs) {
+  OutputDesc desc;
+  desc.shapeSetOnDevice = returnMeta.shapeSetOnDevice;
+  desc.neededOnHost = returnMeta.neededOnHost;
+  desc.sizeExpr.op = returnMeta.sizeShortcut;
+
+  // Expand sizeArgs ordinals to ValueIds from the node's inputs.
+  const auto& sizeArgs = returnMeta.sizeArgs;
+  for (size_t j = 0; j < sizeArgs.ordinal.size(); ++j) {
+    auto ordinal = sizeArgs.ordinal[j];
+    auto* value = node->inputs()[ordinal].value;
+    bool isList = j < sizeArgs.isList.size() && sizeArgs.isList[j];
+    if (isList) {
+      for (auto* elem : value->getListElements()) {
+        desc.sizeExpr.values.push_back(elem->id());
+      }
+    } else {
+      desc.sizeExpr.values.push_back(value->id());
+    }
+  }
+
+  if (returnMeta.reserveShape) {
+    auto reserveShape = returnMeta.reserveShape;
+    desc.reserveShape = [node, reserveShape](
+                            NodeCP /*unused*/,
+                            nativert::ExecutionFrame& frame,
+                            FormalToActual map) {
+      return reserveShape(node, frame, map);
+    };
+  }
+
+  return desc;
+}
+
+void KernelOperation::setOutputs(
+    NodeCP node,
+    const std::unordered_set<ValueCP>& subgraphInputs,
+    std::vector<ValueCP>& outputValues,
+    std::vector<OutputDesc>& outputDescs,
+    bool inMemory) {
+  auto* meta = Registry::metadata(node->target());
+
+  // Recurse into producers. Pass inMemory based on whether the corresponding
+  // argument expects a memory-backed value.
+  const auto& inputs = node->inputs();
+  for (size_t i = 0; i < inputs.size(); ++i) {
+    auto* value = inputs[i].value;
     if (subgraphInputs.count(value)) {
       continue;
     }
     auto* producer = value->producer();
     if (producer) {
-      setOutputs(producer, subgraphInputs, outputValues, outputReserves);
+      bool inputInMemory = meta && i < meta->argumentMeta.size() &&
+          !meta->argumentMeta[i].isRegister;
+      setOutputs(
+          producer, subgraphInputs, outputValues, outputDescs, inputInMemory);
     }
   }
 
-  auto* meta = Registry::metadata(node->target());
   if (!meta) {
     return;
   }
-  const auto& outputs = node->outputs();
+
+  // Add outputs that need memory allocation: either because the return
+  // metadata says so, or because the caller requires memory-backed results.
+  const auto& outputs = compileCtx_.outputs(node);
   for (size_t i = 0; i < meta->returnMeta.size() && i < outputs.size(); ++i) {
-    if (!meta->returnMeta[i].isRegister) {
+    if (!meta->returnMeta[i].isRegister || inMemory) {
       outputValues.push_back(outputs[i]);
-      auto reserveShape = meta->returnMeta[i].reserveShape;
-      outputReserves.push_back(
-          [node, reserveShape](
-              const nativert::Node* /*unused*/,
-              nativert::ExecutionFrame& frame,
-              FormalToActual map) { return reserveShape(node, frame, map); });
+      if (meta->returnMeta[i].reserveShape ||
+          meta->returnMeta[i].sizeShortcut != SizeShortcut::kNone) {
+        outputDescs.push_back(
+            makeOutputDesc(meta->returnMeta[i], node, subgraphInputs));
+      } else {
+        // Register-typed output forced to memory (e.g. elementwise root).
+        // Reserve shape from the largest input.
+        std::unordered_set<ValueCP> seen;
+        std::vector<ValueCP> deduppedInputs;
+        collectDeduppedInputs(node, subgraphInputs, seen, deduppedInputs);
+        OutputDesc desc;
+        desc.shapeSetOnDevice = meta->returnMeta[i].shapeSetOnDevice;
+        desc.neededOnHost = meta->returnMeta[i].neededOnHost;
+        desc.sizeExpr.op = SizeShortcut::kMax;
+        for (auto* v : deduppedInputs) {
+          desc.sizeExpr.values.push_back(v->id());
+        }
+        outputDescs.push_back(std::move(desc));
+      }
     }
   }
 }
 
 std::string KernelOperation::toString() const {
   std::stringstream ss;
-  std::unordered_set<const nativert::Value*> inputSet(
+  std::unordered_set<ValueCP> inputSet(
       orderedInputs_.begin(), orderedInputs_.begin() + numInputs_);
-  std::unordered_set<const nativert::Value*> outputSet(
+  std::unordered_set<ValueCP> outputSet(
       orderedInputs_.begin() + numInputs_, orderedInputs_.end());
 
   // Print output-producing nodes as separate assignment lines, dependencies
   // first.
-  std::unordered_set<const nativert::Node*> printed;
-  std::function<void(const nativert::Node*)> printNode =
-      [&](const nativert::Node* node) {
-        if (!printed.insert(node).second) {
-          return;
-        }
-        // Recurse into producers that themselves have outputs in outputSet.
-        for (const auto& input : node->inputs()) {
-          auto* producer = input.value->producer();
-          if (producer && !inputSet.count(input.value) &&
-              outputSet.count(input.value)) {
-            printNode(producer);
-          }
-        }
+  std::unordered_set<NodeCP> printed;
+  std::function<void(NodeCP)> printNode = [&](NodeCP node) {
+    if (!printed.insert(node).second) {
+      return;
+    }
+    // Recurse into producers that themselves have outputs in outputSet.
+    for (const auto& input : node->inputs()) {
+      auto* producer = input.value->producer();
+      if (producer && !inputSet.count(input.value) &&
+          outputSet.count(input.value)) {
+        printNode(producer);
+      }
+    }
 
-        // Collect this node's outputs that are in the output set.
-        std::vector<const nativert::Value*> nodeOutputs;
-        for (const auto* v : node->outputs()) {
-          if (outputSet.count(v)) {
-            nodeOutputs.push_back(v);
-          }
+    // Collect this node's outputs that are in the output set.
+    std::vector<ValueCP> nodeOutputs;
+    for (const auto* v : node->outputs()) {
+      if (outputSet.count(v)) {
+        nodeOutputs.push_back(v);
+      }
+    }
+    if (!nodeOutputs.empty()) {
+      ss << "(";
+      for (size_t i = 0; i < nodeOutputs.size(); ++i) {
+        if (i > 0) {
+          ss << ", ";
         }
-        if (!nodeOutputs.empty()) {
-          ss << "(";
-          for (size_t i = 0; i < nodeOutputs.size(); ++i) {
-            if (i > 0) {
-              ss << ", ";
-            }
-            ss << "%v" << nodeOutputs[i]->id();
-          }
-          ss << ") = ";
-        }
-        kernelExprImpl(ss, node, inputSet, outputSet);
-        ss << "\n";
-      };
+        ss << "%v" << nodeOutputs[i]->id();
+      }
+      ss << ") = ";
+    }
+    kernelExprImpl(ss, node, inputSet, outputSet);
+    ss << "\n";
+  };
 
   printNode(expr_);
 
-  for (auto code : opCode_) {
-    ss << "opCode = " << code << ":\n";
-  }
+  ss << "opCode = " << opCode_ << ":\n";
   ss << text_ << "\n";
 
   return ss.str();
@@ -545,191 +1012,218 @@ std::string KernelOperation::toString() const {
 
 // --- OpInvocation ---
 
-OpInvocation::OpInvocation(
-    KernelOperation* op,
-    const Subgraph& sg,
-    std::vector<const c10::IValue*> constants,
-    int32_t startOffset)
-    : op_{op},
-      values_{op->orderedInputs()},
-      constants_{std::move(constants)},
-      paramOffset_{startOffset},
-      paramSize_{
-          op->constantAreaOffset() +
-          static_cast<int32_t>(constants_.size()) * 8} {
-  Subgraph formalSg;
-  formalSg.root = op->expr();
-  formalSg.inputs.assign(values_.begin(), values_.begin() + op->numInputs());
-  makeBindings(formalSg, sg);
-}
-
-void OpInvocation::makeBindings(
+FormalToActual makeBindings(
     const Subgraph& formalSg,
-    const Subgraph& actualSg) {
-  const auto& orderedInputs = op_->orderedInputs();
-  auto numInputs = op_->numInputs();
-  std::unordered_set<const nativert::Value*> formalInputs(
+    const Subgraph& actualSg,
+    const KernelOperation& op) {
+  FormalToActual bindings;
+  const auto& orderedInputs = op.orderedInputs();
+  auto numInputs = op.numInputs();
+  std::unordered_set<ValueCP> formalInputs(
       formalSg.inputs.begin(), formalSg.inputs.end());
   // Map formal input values to actual input values.
   for (size_t i = 0; i < formalSg.inputs.size() && i < actualSg.inputs.size();
        ++i) {
-    bindings_[formalSg.inputs[i]->id()] = actualSg.inputs[i]->id();
+    bindings[formalSg.inputs[i]->id()] = actualSg.inputs[i]->id();
   }
-  std::unordered_set<const nativert::Value*> outputValues(
+  std::unordered_set<ValueCP> outputValues(
       orderedInputs.begin() + numInputs, orderedInputs.end());
-  if (outputValues.empty()) {
-    return;
+  if (!outputValues.empty()) {
+    std::unordered_set<NodeCP> visited;
+    makeBindingsImpl(
+        formalSg.root,
+        actualSg.root,
+        formalInputs,
+        outputValues,
+        visited,
+        bindings);
   }
-  std::unordered_set<const nativert::Node*> visited;
-  makeBindingsImpl(
-      formalSg.root,
-      actualSg.root,
-      formalInputs,
-      outputValues,
-      visited,
-      bindings_);
+  return bindings;
 }
 
-int64_t OpInvocation::allocateOutput(
-    nativert::ExecutionFrame& frame,
-    const ValueTypes& types) {
-  const auto& reserves = op_->outputReserves();
-  const auto& orderedInputs = op_->orderedInputs();
-  auto numInputs = op_->numInputs();
-  for (size_t i = 0; i < reserves.size(); ++i) {
-    auto* formalValue = orderedInputs[numInputs + i];
-    auto shapes = reserves[i](nullptr, frame, bindings_);
-    TORCH_CHECK(
-        !shapes.empty(),
-        "OutputReserveFunc returned empty shapes for output ",
-        i);
-    auto* meta = types.types[formalValue->id()];
-    TORCH_CHECK(
-        meta != nullptr,
-        "No TensorMeta for output value %v",
-        formalValue->id());
-    auto dtype = meta->dtype();
-    auto it = bindings_.find(formalValue->id());
-    TORCH_CHECK(
-        it != bindings_.end(),
-        "Output value %v",
-        formalValue->id(),
-        " not found in bindings");
-    auto actualId = it->second;
-    std::vector<int64_t> dims(shapes[0].begin(), shapes[0].end());
-    const auto& existing = frame.getIValue(actualId);
-    if (existing.isTensor() && existing.toTensor().is_cuda()) {
-      auto tensor = existing.toTensor();
-      tensor.resize_(dims);
-    } else {
-      auto tensor =
-          at::empty(dims, at::TensorOptions().dtype(dtype).device(at::kCUDA));
-      frame.setIValue(actualId, std::move(tensor));
+namespace {
+
+/// Builds a node-to-node map by walking formal and actual subgraphs in
+/// parallel. Recursion stops at subgraph inputs.
+void makeNodeMap(
+    const Subgraph& formalSg,
+    const Subgraph& actualSg,
+    std::unordered_map<NodeCP, NodeCP>& nodeMap) {
+  std::unordered_set<ValueCP> formalInputSet(
+      formalSg.inputs.begin(), formalSg.inputs.end());
+  std::function<void(NodeCP, NodeCP)> walk = [&](NodeCP formalNode,
+                                                 NodeCP actualNode) {
+    if (!nodeMap.emplace(formalNode, actualNode).second) {
+      return;
     }
-  }
-  return op_->numElements(frame, bindings_);
-}
-
-void OpInvocation::fillParams(
-    nativert::ExecutionFrame& frame,
-    uint8_t* paramBase) {
-  const auto& orderedInputs = op_->orderedInputs();
-  auto numInputs = op_->numInputs();
-
-  // Fill input params.
-  for (int32_t i = 0; i < numInputs; ++i) {
-    auto* formalValue = orderedInputs[i];
-    auto offset = op_->paramOffset(formalValue);
-    auto* dest = paramBase + offset;
-    auto it = bindings_.find(formalValue->id());
-    auto actualId = it != bindings_.end() ? it->second : formalValue->id();
-    const auto& ivalue = frame.getIValue(actualId);
-    if (ivalue.isTensor()) {
-      fillTensorParam(ivalue.toTensor(), dest);
-    } else {
-      fillScalarParam(ivalue, dest);
+    const auto& fi = formalNode->inputs();
+    const auto& ai = actualNode->inputs();
+    for (size_t i = 0; i < fi.size(); ++i) {
+      if (formalInputSet.count(fi[i].value)) {
+        continue;
+      }
+      auto* fp = fi[i].value->producer();
+      auto* ap = ai[i].value->producer();
+      if (fp && ap) {
+        walk(fp, ap);
+      }
     }
-  }
-
-  // Fill output params.
-  for (size_t i = numInputs; i < orderedInputs.size(); ++i) {
-    auto* formalValue = orderedInputs[i];
-    auto offset = op_->paramOffset(formalValue);
-    auto* dest = paramBase + offset;
-    auto it = bindings_.find(formalValue->id());
-    TORCH_CHECK(
-        it != bindings_.end(),
-        "Output value %v",
-        formalValue->id(),
-        " not found in bindings");
-    auto actualId = it->second;
-    const auto& ivalue = frame.getIValue(actualId);
-    TORCH_CHECK(ivalue.isTensor(), "Expected tensor for output param");
-    fillTensorParam(ivalue.toTensor(), dest);
-  }
-
-  // Fill constant params.
-  auto constantOffset = op_->constantAreaOffset();
-  for (const auto* c : constants_) {
-    auto* dest = paramBase + constantOffset;
-    fillScalarParam(*c, dest);
-    constantOffset += 8;
+  };
+  if (formalSg.root && actualSg.root) {
+    walk(formalSg.root, actualSg.root);
   }
 }
 
-std::string OpInvocation::toString() const {
-  std::stringstream ss;
-  for (auto code : op_->opCodes()) {
-    ss << "opCode=" << code;
+/// Builds bindings by walking formal and actual subgraphs in parallel.
+/// Maps all inputs positionally and all node outputs by parallel tree walk.
+FormalToActual makeSubgraphBindings(
+    const Subgraph& formalSg,
+    const Subgraph& actualSg) {
+  TORCH_CHECK(
+      formalSg.inputs.size() == actualSg.inputs.size(),
+      "Input count mismatch: formal=",
+      formalSg.inputs.size(),
+      " actual=",
+      actualSg.inputs.size());
+  FormalToActual bindings;
+  for (size_t i = 0; i < formalSg.inputs.size(); ++i) {
+    bindings[formalSg.inputs[i]->id()] = actualSg.inputs[i]->id();
   }
-  ss << " inputs=(";
-  for (size_t i = 0; i < values_.size(); ++i) {
-    if (i > 0) {
-      ss << ", ";
+  std::unordered_set<ValueCP> formalInputSet(
+      formalSg.inputs.begin(), formalSg.inputs.end());
+  std::unordered_set<NodeCP> visited;
+  std::function<void(NodeCP, NodeCP)> walk = [&](NodeCP formalNode,
+                                                 NodeCP actualNode) {
+    if (!visited.insert(formalNode).second) {
+      return;
     }
-    ss << "%v" << values_[i]->id();
-  }
-  ss << ")";
-  // Print outputs from bindings.
-  const auto& orderedInputs = op_->orderedInputs();
-  auto numInputs = op_->numInputs();
-  if (static_cast<size_t>(numInputs) < orderedInputs.size()) {
-    ss << " outputs=(";
-    bool first = true;
-    for (size_t i = numInputs; i < orderedInputs.size(); ++i) {
-      if (!first) {
-        ss << ", ";
+    const auto& fo = formalNode->outputs();
+    const auto& ao = actualNode->outputs();
+    TORCH_CHECK(
+        fo.size() == ao.size(),
+        "Output count mismatch at node ",
+        formalNode->target());
+    for (size_t i = 0; i < fo.size(); ++i) {
+      bindings[fo[i]->id()] = ao[i]->id();
+    }
+    const auto& fi = formalNode->inputs();
+    const auto& ai = actualNode->inputs();
+    TORCH_CHECK(
+        fi.size() == ai.size(),
+        "Input count mismatch at node ",
+        formalNode->target());
+    for (size_t i = 0; i < fi.size(); ++i) {
+      if (formalInputSet.count(fi[i].value)) {
+        continue;
       }
-      first = false;
-      auto it = bindings_.find(orderedInputs[i]->id());
-      if (it != bindings_.end()) {
-        ss << "%v" << it->second;
-      } else {
-        ss << "%v" << orderedInputs[i]->id();
+      auto* fp = fi[i].value->producer();
+      auto* ap = ai[i].value->producer();
+      if (fp && ap) {
+        walk(fp, ap);
       }
     }
-    ss << ")";
+  };
+  if (formalSg.root && actualSg.root) {
+    walk(formalSg.root, actualSg.root);
   }
-  if (!constants_.empty()) {
-    ss << " constants=(";
-    for (size_t i = 0; i < constants_.size(); ++i) {
-      if (i > 0) {
-        ss << ", ";
-      }
-      ss << ivalueToString(*constants_[i]);
+  return bindings;
+}
+
+} // namespace
+
+OpInvocation::OpInvocation(
+    ProjectOperation* projectOp,
+    const Subgraph& sg,
+    std::deque<c10::IValue>& storage)
+    : projectOp_{projectOp} {
+  const auto& formalSg = projectOp->subgraph();
+  bindings_ = makeSubgraphBindings(formalSg, sg);
+  constants_ = listConstants(sg, storage);
+  makeNodeMap(formalSg, sg, nodeMap_);
+}
+
+// --- LaunchData ---
+
+LaunchData::LaunchData(
+    const Launch& launch,
+    OpInvocation& op,
+    const IdToValueMap& idToValue)
+    : launch(&launch), op(&op), numElements(0) {
+  const auto& bindings = op.bindings();
+
+  auto translateId = [&](ValueCP formal) -> nativert::ValueId {
+    auto it = bindings.find(formal->id());
+    auto actualId = it != bindings.end() ? it->second : formal->id();
+    return actualId;
+  };
+
+  if (!launch.op) {
+    // Standalone: translate node via nodeMap, inputs and outputs via bindings.
+    auto nodeIt = op.nodeMap().find(launch.standalone);
+    TORCH_CHECK(
+        nodeIt != op.nodeMap().end(), "Standalone node not found in nodeMap");
+    standalone = nodeIt->second;
+    for (auto& input : launch.standalone->inputs()) {
+      actualInputs.push_back(translateId(input.value));
     }
-    ss << ")";
+    for (auto* output : launch.standalone->outputs()) {
+      actualOutputs.push_back(translateId(output));
+    }
+  } else {
+    // Kernel op: translate sizeExpr, inputs, outputs, and output descs.
+    auto* kernelOp = launch.op;
+    sizeExpr = kernelOp->sizeExpr().toActual(bindings, idToValue);
+
+    const auto& orderedInputs = kernelOp->orderedInputs();
+    auto nInputs = kernelOp->numInputs();
+    for (int32_t i = 0; i < nInputs; ++i) {
+      actualInputs.push_back(translateId(orderedInputs[i]));
+    }
+    for (size_t i = nInputs; i < orderedInputs.size(); ++i) {
+      actualOutputs.push_back(translateId(orderedInputs[i]));
+    }
+
+    const auto& outputDescs = kernelOp->outputDescs();
+    for (size_t i = 0; i < outputDescs.size(); ++i) {
+      const auto& desc = outputDescs[i];
+      OutputDesc actualDesc = desc;
+      actualDesc.sizeExpr = desc.sizeExpr.toActual(bindings, idToValue);
+      if (desc.storageFrom) {
+        actualDesc.storageFrom = idToValue.at(translateId(desc.storageFrom));
+      }
+      if (actualDesc.shapeSetOnDevice || actualDesc.neededOnHost) {
+        returnValues.push_back(actualOutputs[i]);
+        auto outputValueId = actualOutputs[i];
+        auto outputValueIt = idToValue.find(outputValueId);
+        TORCH_CHECK(
+            outputValueIt != idToValue.end(),
+            "Output value id not found in idToValue: ",
+            outputValueId);
+        returnTypes.push_back(outputValueIt->second->type().kind());
+      }
+      actualOutputDescs.push_back(std::move(actualDesc));
+    }
+
+    // Record the type kind from each output Value.
+    for (size_t i = 0; i < actualOutputs.size(); ++i) {
+      auto outputId = actualOutputs[i];
+      auto it = idToValue.find(outputId);
+      TORCH_CHECK(
+          it != idToValue.end(),
+          "Output value id not found in idToValue: ",
+          outputId);
+      actualOutputTypes.push_back(it->second->type().kind());
+    }
   }
-  ss << "\n";
-  return ss.str();
 }
 
 // --- CompositeKernel ---
 
 CompositeKernel::CompositeKernel(
-    std::vector<std::unique_ptr<KernelOperation>>&& ops,
+    std::vector<std::unique_ptr<ProjectOperation>>&& ops,
+    std::vector<std::unique_ptr<KernelOperation>>&& kernelOps,
     const std::unordered_set<std::string>& includes)
-    : ops_(std::move(ops)) {
+    : ops_(std::move(ops)), kernelOpStorage_(std::move(kernelOps)) {
   auto kernelId = CompileCtx::nextKernelId();
   auto kernelName = "torchwave" + std::to_string(kernelId);
   auto entryPoint = "torch::wave::" + kernelName;
@@ -742,24 +1236,25 @@ CompositeKernel::CompositeKernel(
   ss << "\nnamespace torch::wave {\n\n"
      << "__global__ void " << kernelName << "(TorchWaveParams params) {\n"
      << "  ENTRY;\n";
+  eltTrace(
+      ss,
+      "\"entry blockIdx %d op %d blockInOp %d\\n\", blockIdx.x, blockInfo.op, blockInfo.blockInOp");
   std::unordered_set<std::string> emittedDecls;
-  for (const auto& op : ops_) {
-    for (const auto& decl : op->sharedDeclarations()) {
+  for (const auto& kop : kernelOpStorage_) {
+    for (const auto& decl : kop->sharedDeclarations()) {
       if (emittedDecls.insert(decl).second) {
         ss << decl;
       }
     }
   }
   ss << "  switch (blockInfo.op) {\n";
-  for (const auto& op : ops_) {
-    for (auto opCode : op->opCodes()) {
-      ss << "    case " << opCode << ": {\n"
-         << op->code() << "      break;\n"
-         << "    }\n";
-    }
+  for (const auto& kop : kernelOpStorage_) {
+    ss << "    case " << kop->opCode() << ": {\n"
+       << kop->code() << "      break;\n"
+       << "    }\n";
   }
   ss << "  }\n"
-     << "  __syncthreads();\n"
+     << "  LEAVE();\n"
      << "}\n\n"
      << "} // namespace torch::wave\n";
 
@@ -787,6 +1282,23 @@ CompositeKernel::CompositeKernel(
           spec.headers = nullptr;
           return spec;
         });
+
+    LOG(INFO) << "Kernel " << kernelName << ": " << kernel_->info(0).toString();
+
+    // Warmup launch: run one block of 1 thread with op=-1 (no-op) to absorb
+    // first-launch overhead from the CUDA runtime.
+    {
+      Timer warmup("warmup", FLAGS_print_timing);
+      TorchWaveParams params;
+      memset(&params, 0, sizeof(params));
+      params.info = nullptr;
+      params.debugInfo = nullptr;
+      params.inlineInfo[0].op = -1;
+      void* args[] = {&params};
+      facebook::velox::wave::Stream stream;
+      kernel_->launch(0, 1, 1, 0, &stream, args);
+      stream.wait();
+    }
   }
 }
 
@@ -808,8 +1320,8 @@ void CompositeKernel::launch(
 
 std::string CompositeKernel::toString() const {
   std::stringstream ss;
-  for (const auto& op : ops_) {
-    ss << op->toString();
+  for (const auto& kop : kernelOpStorage_) {
+    ss << kop->toString();
   }
   auto info = kernelInfo();
   if (info.numRegs > 0) {
@@ -818,86 +1330,577 @@ std::string CompositeKernel::toString() const {
   return ss.str();
 }
 
+namespace {
+
+void fillLaunchParams(
+    LaunchData& launch,
+    nativert::ExecutionFrame& frame,
+    uint8_t* paramBase,
+    int32_t& returnBegin,
+    int32_t& returnEnd) {
+  if (!launch.tensorsInFrame.empty() || !launch.scalarsInFrame.empty()) {
+    // Cached path: fill only variable tensors and scalars, skip constants.
+    for (size_t i = 0; i < launch.tensorsInFrame.size(); ++i) {
+      fillTensorParam(
+          frame.getIValue(launch.tensorsInFrame[i]).toTensor(),
+          paramBase + launch.tensorOffsets[i]);
+    }
+    for (size_t i = 0; i < launch.scalarsInFrame.size(); ++i) {
+      fillScalarParam(
+          frame.getIValue(launch.scalarsInFrame[i]),
+          paramBase + launch.scalarOffsets[i]);
+    }
+    if (!launch.returnValues.empty()) {
+      if (returnBegin == -1) {
+        returnBegin = launch.returnOffsets.front();
+      }
+      auto lastType = launch.returnTypes.back();
+      int32_t lastSize =
+          lastType == nativert::Type::Kind::Tensor ? sizeof(Tensor) : 8;
+      returnEnd = launch.returnOffsets.back() + lastSize;
+    }
+    return;
+  }
+
+  auto* kernelOp = launch.launch->op;
+  const auto& orderedInputs = kernelOp->orderedInputs();
+  auto numInputs = kernelOp->numInputs();
+
+  // Fill input params, recording tensor/scalar values and their offsets.
+  int32_t returnCounter = 0;
+  for (int32_t i = 0; i < numInputs; ++i) {
+    auto offset = kernelOp->paramOffset(orderedInputs[i]);
+    auto* dest = paramBase + offset;
+    auto actualId = launch.actualInputs[i];
+    const auto& ivalue = frame.getIValue(actualId);
+    if (ivalue.isTensor()) {
+      fillTensorParam(ivalue.toTensor(), dest);
+      launch.tensorsInFrame.push_back(actualId);
+      launch.tensorOffsets.push_back(offset);
+    } else {
+      fillScalarParam(ivalue, dest);
+      launch.scalarsInFrame.push_back(actualId);
+      launch.scalarOffsets.push_back(offset);
+    }
+    if (returnCounter < static_cast<int32_t>(launch.returnValues.size()) &&
+        actualId == launch.returnValues[returnCounter]) {
+      launch.returnOffsets.push_back(offset);
+      if (returnBegin == -1) {
+        returnBegin = offset;
+      }
+      returnEnd = offset +
+          (ivalue.isTensor() ? static_cast<int32_t>(sizeof(Tensor)) : 8);
+      ++returnCounter;
+    }
+  }
+
+  // Fill output params, recording values and offsets.
+  for (size_t i = 0; i < launch.actualOutputs.size(); ++i) {
+    auto offset = kernelOp->paramOffset(orderedInputs[numInputs + i]);
+    auto* dest = paramBase + offset;
+    auto actualId = launch.actualOutputs[i];
+    bool isTensorOutput = i < launch.actualOutputTypes.size() &&
+        launch.actualOutputTypes[i] == nativert::Type::Kind::Tensor;
+    if (isTensorOutput) {
+      const auto& ivalue = frame.getIValue(actualId);
+      TORCH_CHECK(ivalue.isTensor(), "Expected tensor for output param");
+      fillTensorParam(ivalue.toTensor(), dest);
+      launch.tensorsInFrame.push_back(actualId);
+      launch.tensorOffsets.push_back(offset);
+    } else {
+      // Non-tensor output: write a 64-bit zero placeholder.
+      *reinterpret_cast<int64_t*>(dest) = 0;
+      launch.scalarsInFrame.push_back(actualId);
+      launch.scalarOffsets.push_back(offset);
+    }
+    if (returnCounter < static_cast<int32_t>(launch.returnValues.size()) &&
+        actualId == launch.returnValues[returnCounter]) {
+      launch.returnOffsets.push_back(offset);
+      if (returnBegin == -1) {
+        returnBegin = offset;
+      }
+      returnEnd =
+          offset + (isTensorOutput ? static_cast<int32_t>(sizeof(Tensor)) : 8);
+      ++returnCounter;
+    }
+  }
+
+  // Fill constant params (first time only, constants don't change).
+  auto constantOffset = kernelOp->constantAreaOffset();
+  const auto& opConstants = launch.op->constants();
+  for (auto idx : launch.launch->constantIndices) {
+    auto* dest = paramBase + constantOffset;
+    fillScalarParam(*opConstants[idx], dest);
+    constantOffset += 8;
+  }
+}
+
+void allocateLaunchOutputs(
+    const LaunchData& launch,
+    nativert::ExecutionFrame& frame,
+    const ValueTypes& types,
+    nativert::ValueId largestId) {
+  const auto& descs = launch.actualOutputDescs;
+  const auto& actualOutputs = launch.actualOutputs;
+  const auto& outputTypes = launch.actualOutputTypes;
+
+  // Shortcut: if largestId is set, resize tensor outputs to match it.
+  if (largestId >= 0) {
+    auto dims = frame.getIValue(largestId).toTensor().sizes();
+    for (size_t i = 0; i < descs.size(); ++i) {
+      // Skip non-tensor outputs.
+      if (i < outputTypes.size() &&
+          outputTypes[i] != nativert::Type::Kind::Tensor) {
+        continue;
+      }
+      auto actualId = actualOutputs[i];
+      auto& existing = frame.getIValue(actualId);
+      if (existing.isTensor() && existing.toTensor().is_cuda()) {
+        auto& tensor = existing.toTensor();
+        if (tensor.sizes() != dims) {
+          tensor.resize_(dims);
+        }
+      } else {
+        auto* meta = types.types[actualId];
+        if (!meta) {
+          continue;
+        }
+        auto tensor = at::empty(
+            dims, at::TensorOptions().dtype(meta->dtype()).device(at::kCUDA));
+        frame.setIValue(actualId, std::move(tensor));
+      }
+    }
+    return;
+  }
+
+  const auto& bindings = launch.op->bindings();
+  for (size_t i = 0; i < descs.size(); ++i) {
+    // Skip non-tensor outputs.
+    if (i < outputTypes.size() &&
+        outputTypes[i] != nativert::Type::Kind::Tensor) {
+      continue;
+    }
+    auto actualId = actualOutputs[i];
+    std::vector<int64_t> dims;
+    if (descs[i].reserveShape) {
+      auto shapes = descs[i].reserveShape(nullptr, frame, bindings);
+      TORCH_CHECK(
+          !shapes.empty(),
+          "OutputReserveFunc returned empty shapes for output ",
+          i);
+      dims.assign(shapes[0].begin(), shapes[0].end());
+    } else if (descs[i].sizeExpr.op != SizeShortcut::kNone) {
+      dims = {descs[i].sizeExpr.numElements(&frame)};
+    } else {
+      continue;
+    }
+    auto& existing = frame.getIValue(actualId);
+    if (existing.isTensor() && existing.toTensor().is_cuda()) {
+      auto& tensor = existing.toTensor();
+      if (tensor.sizes() != dims) {
+        tensor.resize_(dims);
+      }
+    } else {
+      auto* meta = types.types[actualId];
+      if (!meta) {
+        continue;
+      }
+      auto tensor = at::empty(
+          dims, at::TensorOptions().dtype(meta->dtype()).device(at::kCUDA));
+      frame.setIValue(actualId, std::move(tensor));
+    }
+  }
+}
+
+int32_t launchParamSize(const LaunchData& launch) {
+  return launch.launch->op->constantAreaOffset() +
+      static_cast<int32_t>(launch.launch->constantIndices.size()) * 8;
+}
+
+facebook::velox::wave::WaveBufferPtr& getOrAllocateBuffer(
+    std::vector<std::vector<facebook::velox::wave::WaveBufferPtr>>& buffers,
+    int32_t sequenceNumber,
+    int32_t stepIdx,
+    int64_t requiredBytes,
+    facebook::velox::wave::GpuArena* arena) {
+  if (static_cast<int32_t>(buffers.size()) <= sequenceNumber) {
+    buffers.resize(sequenceNumber + 1);
+  }
+  auto& steps = buffers[sequenceNumber];
+  if (static_cast<int32_t>(steps.size()) <= stepIdx) {
+    steps.resize(stepIdx + 1);
+  }
+  auto& buffer = steps[stepIdx];
+  if (!buffer || buffer->capacity() < static_cast<size_t>(requiredBytes)) {
+    buffer = arena->allocateBytes(requiredBytes);
+  }
+  return buffer;
+}
+
+StepVectors& getStepVectors(
+    std::vector<std::vector<StepVectors>>& allSteps,
+    int32_t sequenceNumber,
+    int32_t stepIdx) {
+  if (static_cast<int32_t>(allSteps.size()) <= sequenceNumber) {
+    allSteps.resize(sequenceNumber + 1);
+  }
+  auto& steps = allSteps[sequenceNumber];
+  if (static_cast<int32_t>(steps.size()) <= stepIdx) {
+    steps.resize(stepIdx + 1);
+  }
+  return steps[stepIdx];
+}
+
+// Returns true if every launch's numElements falls within the cached
+// [sizesLower, sizesUpper] bounds.
+bool gridSizesMatch(
+    const std::vector<LaunchData>& launches,
+    const StepVectors& sv) {
+  if (!sv.hasGridCache || launches.size() != sv.sizesLower.size()) {
+    return false;
+  }
+  for (size_t i = 0; i < launches.size(); ++i) {
+    auto n = launches[i].numElements;
+    if (n < sv.sizesLower[i] || n > sv.sizesUpper[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Updates the cached size bounds to [size - size/8, size + size/8] for each
+// launch.
+void updateGridSizeBounds(
+    const std::vector<LaunchData>& launches,
+    StepVectors& sv) {
+  sv.sizesLower.resize(launches.size());
+  sv.sizesUpper.resize(launches.size());
+  for (size_t i = 0; i < launches.size(); ++i) {
+    auto n = launches[i].numElements;
+    auto margin = n / 8;
+    sv.sizesLower[i] = n - margin;
+    sv.sizesUpper[i] = n + margin;
+  }
+  sv.hasGridCache = true;
+}
+
+} // namespace
+
 // --- CompositeInvocation ---
 
-void CompositeInvocation::execute(ExecutionState& state) {
-  auto& frame = state.frame;
-  const auto& types = *state.valueTypes;
-
-  // 1. Allocate outputs and collect numElements per op.
-  std::vector<int64_t> numElements;
-  numElements.reserve(ops.size());
-  for (auto& op : ops) {
-    numElements.push_back(op.allocateOutput(frame, types));
-  }
-
-  // 2. Build the grid.
-  std::vector<BlockInfo> blocks;
-  std::vector<int32_t> opIndices;
-  std::vector<OpInvocation*> nextOps;
-  makeGrid(ops, numElements, blocks, opIndices, nextOps);
-
-  // 3. Compute total param bytes and track per-op param offsets relative to
-  //    the start of the pinned buffer.
-  auto numBlocks = blocks.size();
-  auto blockInfoBytes = static_cast<int64_t>(numBlocks) * sizeof(BlockInfo);
-  std::vector<int64_t> opParamOffsets(ops.size());
-  int64_t paramCursor = blockInfoBytes;
+void CompositeInvocation::gatherLaunches(
+    const ExecutionState& state,
+    std::vector<GridChoice>& grids,
+    int32_t stepIdx,
+    StepVectors& sv) {
+  const auto& idToValue = state.waveGraph->idToValue();
+  int32_t kernelIdx = 0;
+  int32_t standaloneIdx = 0;
+  sv.gridChanged = false;
   for (size_t i = 0; i < ops.size(); ++i) {
-    opParamOffsets[i] = paramCursor;
-    paramCursor += ops[i].paramSize();
+    auto* grid = grids[i].grid;
+    if (stepIdx >= static_cast<int32_t>(grid->size())) {
+      continue;
+    }
+    auto& step = (*grid)[stepIdx];
+    for (size_t j = 0; j < step.size(); ++j) {
+      auto& launch = step[j];
+      if (launch.op != nullptr) {
+        bool isNew = kernelIdx >= static_cast<int32_t>(sv.kernels.size());
+        if (isNew) {
+          sv.kernels.emplace_back(launch, ops[i], idToValue);
+        }
+        auto& data = sv.kernels[kernelIdx];
+        bool hasByLargestInput = !data.launch->op->outputDescs().empty() &&
+            data.launch->op->outputDescs()[0].byLargestInput;
+        nativert::ValueId largestId = -1;
+        data.numElements = data.sizeExpr.numElements(
+            state.frame, hasByLargestInput ? &largestId : nullptr);
+
+        if (launch.op->isGridChoice()) {
+          auto* projectOp = ops[i].projectOp();
+          bool wantSingleBlock;
+          if (WaveConfig::get().useSingleBlock.has_value()) {
+            wantSingleBlock = *WaveConfig::get().useSingleBlock;
+          } else {
+            wantSingleBlock =
+                data.numElements <= projectOp->singleBlockMaxSize();
+          }
+          if (wantSingleBlock != grids[i].singleBlock) {
+            if (wantSingleBlock) {
+              grids[i].grid = &projectOp->singleBlockGrid();
+            } else {
+              grids[i].grid = &projectOp->grid();
+            }
+            grids[i].singleBlock = wantSingleBlock;
+            if (!isNew) {
+              sv.gridChanged = true;
+            }
+            // Reassign LaunchData from the new grid's launch.
+            auto& newLaunch = (*grids[i].grid)[stepIdx][j];
+            data = LaunchData(newLaunch, ops[i], idToValue);
+            largestId = -1;
+            data.numElements = data.sizeExpr.numElements(
+                state.frame, hasByLargestInput ? &largestId : nullptr);
+          }
+        }
+
+        allocateLaunchOutputs(data, *state.frame, *state.valueTypes, largestId);
+        ++kernelIdx;
+      } else {
+        if (standaloneIdx >= static_cast<int32_t>(sv.standalones.size())) {
+          sv.standalones.emplace_back(launch, ops[i], idToValue);
+        }
+        ++standaloneIdx;
+      }
+    }
   }
-  auto totalPinnedBytes = paramCursor;
+}
 
-  // 4. Allocate pinned host buffer: BlockInfos + params.
-  auto pinnedBuffer = state.pinnedArena->allocateBytes(totalPinnedBytes);
-  auto* pinnedBase = pinnedBuffer->as<uint8_t>();
+void invalidateStepVectors(std::vector<StepVectors>& steps, int32_t stepIdx) {
+  for (auto i = stepIdx; i < static_cast<int32_t>(steps.size()); ++i) {
+    auto& sv = steps[i];
+    sv.hasGridCache = false;
+    sv.hasLaunchCache = false;
+    for (auto& data : sv.kernels) {
+      data.tensorsInFrame.clear();
+      data.tensorOffsets.clear();
+      data.scalarsInFrame.clear();
+      data.scalarOffsets.clear();
+    }
+  }
+}
 
-  // 5. Copy BlockInfos to beginning of pinned buffer.
-  if (!blocks.empty()) {
-    memcpy(pinnedBase, blocks.data(), blockInfoBytes);
+void CompositeInvocation::processReturnData(
+    StepVectors& sv,
+    nativert::ExecutionFrame& frame,
+    uint8_t* pinnedBase) {
+  for (size_t i = 0; i < sv.kernels.size(); ++i) {
+    auto& data = sv.kernels[i];
+    if (data.returnValues.empty()) {
+      continue;
+    }
+    for (size_t j = 0; j < data.returnValues.size(); ++j) {
+      auto actualId = data.returnValues[j];
+      auto absOffset = sv.paramOffsets[i] + data.returnOffsets[j];
+      auto typeKind = data.returnTypes[j];
+      if (typeKind == nativert::Type::Kind::Tensor) {
+        auto* t = reinterpret_cast<Tensor*>(pinnedBase + absOffset);
+        auto& tensor = frame.getIValue(actualId).toTensor();
+        std::vector<int64_t> newDims(t->rank);
+        for (int d = 0; d < t->rank; ++d) {
+          newDims[d] = t->dims[d];
+        }
+        tensor.resize_(newDims);
+      } else if (typeKind == nativert::Type::Kind::SymFloat) {
+        frame.setIValue(
+            actualId,
+            c10::IValue(*reinterpret_cast<double*>(pinnedBase + absOffset)));
+      } else if (typeKind == nativert::Type::Kind::SymBool) {
+        frame.setIValue(
+            actualId,
+            c10::IValue(
+                *reinterpret_cast<int64_t*>(pinnedBase + absOffset) != 0));
+      } else {
+        // SymInt and other non-tensor types: read as int64.
+        frame.setIValue(
+            actualId,
+            c10::IValue(*reinterpret_cast<int64_t*>(pinnedBase + absOffset)));
+      }
+    }
+  }
+}
+
+void CompositeInvocation::execute(ExecutionState& state) {
+  Timer ex("comp inv execute", FLAGS_print_timing);
+  auto& frame = *state.frame;
+
+  auto& sv0 = getStepVectors(state.stepVectors, sequenceNumber, 0);
+  auto& gridChoices = sv0.gridChoices;
+  if (gridChoices.empty()) {
+    for (auto& op : ops) {
+      gridChoices.push_back({0, false, &op.projectOp()->grid()});
+    }
   }
 
-  // 6. Fill params from frame values after the BlockInfos.
-  for (size_t opIdx = 0; opIdx < ops.size(); ++opIdx) {
-    ops[opIdx].fillParams(frame, pinnedBase + opParamOffsets[opIdx]);
+  int32_t blockSize;
+  for (int32_t stepIdx = 0;; ++stepIdx) {
+    auto& sv = getStepVectors(state.stepVectors, sequenceNumber, stepIdx);
+    // Re-fetch since the resize above may have invalidated the reference.
+    auto& gridChoices = state.stepVectors[sequenceNumber][0].gridChoices;
+
+    {
+      Timer t("gather", FLAGS_print_timing);
+      gatherLaunches(state, gridChoices, stepIdx, sv);
+    }
+    if (sv.gridChanged) {
+      invalidateStepVectors(state.stepVectors[sequenceNumber], stepIdx);
+    }
+    if (sv.kernels.empty() && sv.standalones.empty()) {
+      break;
+    }
+
+    if (!sv.standalones.empty()) {
+      runStandalones(
+          sv.standalones,
+          state,
+          *state.kernelMap,
+          *state.standaloneIndices,
+          *state.standaloneStats);
+    }
+
+    if (sv.kernels.empty()) {
+      continue;
+    }
+
+    {
+      Timer t("grid", FLAGS_print_timing);
+      // Reuse previous makeGrid result if sizes are within cached bounds.
+      if (gridSizesMatch(sv.kernels, sv)) {
+        blockSize = sv.cachedBlockSize;
+      } else {
+        blockSize = makeGrid(sv.kernels, sv, kernelInfo.maxOccupancy0);
+        TORCH_CHECK(
+            (blockSize & (blockSize - 1)) == 0,
+            "Block size must be a power of two, got ",
+            blockSize);
+        sv.cachedBlockSize = blockSize;
+        updateGridSizeBounds(sv.kernels, sv);
+      }
+    }
+
+    // Compute total param bytes and track per-launch param offsets.
+    auto numBlocks = sv.blocks.size();
+    auto blockInfoBytes = static_cast<int64_t>(numBlocks) * sizeof(BlockInfo);
+
+    int64_t totalPinnedBytes;
+    int64_t totalAllocBytes;
+    uint8_t* pinnedBase;
+    uint8_t* deviceBase;
+    {
+      Timer t("alloc outputs", FLAGS_print_timing);
+      sv.paramOffsets.resize(sv.kernels.size());
+      int64_t paramCursor = blockInfoBytes;
+      for (size_t i = 0; i < sv.kernels.size(); ++i) {
+        sv.paramOffsets[i] = paramCursor;
+        paramCursor += launchParamSize(sv.kernels[i]);
+      }
+      totalPinnedBytes = paramCursor;
+
+      // Allocate extra space for per-block DebugInfo at the end of the buffer.
+      auto debugInfoBytes = static_cast<int64_t>(numBlocks) * sizeof(DebugInfo);
+      totalAllocBytes = totalPinnedBytes + debugInfoBytes;
+
+      // Get or allocate pinned and device buffers.
+      auto& pinnedBuffer = getOrAllocateBuffer(
+          state.pinnedBuffers,
+          sequenceNumber,
+          stepIdx,
+          totalAllocBytes,
+          state.pinnedArena);
+      auto& deviceBuffer = getOrAllocateBuffer(
+          state.deviceBuffers,
+          sequenceNumber,
+          stepIdx,
+          totalAllocBytes,
+          state.deviceArena);
+      pinnedBase = pinnedBuffer->as<uint8_t>();
+      deviceBase = deviceBuffer->as<uint8_t>();
+    }
+
+    auto* deviceDebugBase =
+        reinterpret_cast<DebugInfo*>(deviceBase + totalPinnedBytes);
+    int32_t returnBegin = -1;
+    int32_t returnEnd = -1;
+    {
+      Timer t("fill params", FLAGS_print_timing);
+      // Copy BlockInfos to beginning of pinned buffer.
+      if (!sv.blocks.empty()) {
+        memcpy(pinnedBase, sv.blocks.data(), blockInfoBytes);
+      }
+
+      // Fill params for each kernel launch.
+      for (size_t i = 0; i < sv.kernels.size(); ++i) {
+        int32_t rb = -1;
+        int32_t re = -1;
+        fillLaunchParams(
+            sv.kernels[i], frame, pinnedBase + sv.paramOffsets[i], rb, re);
+        if (rb >= 0) {
+          if (returnBegin == -1) {
+            returnBegin = sv.paramOffsets[i] + rb;
+          }
+          returnEnd = sv.paramOffsets[i] + re;
+        }
+      }
+
+      // Patch BlockInfo params and debugInfo pointers to device-side addresses.
+      auto* pinnedBlocks = reinterpret_cast<BlockInfo*>(pinnedBase);
+      for (size_t b = 0; b < numBlocks; ++b) {
+        auto idx = sv.launchIndices[b];
+        pinnedBlocks[b].params = deviceBase + sv.paramOffsets[idx];
+        pinnedBlocks[b].debugInfo = deviceDebugBase + b;
+      }
+    }
+
+    // Record debug info locations for later D2H transfer.
+    state.launchDebugInfos->push_back(
+        {reinterpret_cast<DebugInfo*>(pinnedBase + totalPinnedBytes),
+         deviceDebugBase,
+         static_cast<int32_t>(numBlocks)});
+
+    {
+      Timer t("launch1", FLAGS_print_timing);
+      // H2D transfer — only the params region, not the debug info area.
+      auto* stream = state.stream.get();
+      stream->hostToDeviceAsync(deviceBase, pinnedBase, totalPinnedBytes);
+
+      TorchWaveParams params;
+      params.info = reinterpret_cast<BlockInfo*>(deviceBase);
+      params.debugInfo = deviceDebugBase;
+      void* args[] = {&params};
+
+      kernel->launch(
+          static_cast<int32_t>(numBlocks), blockSize, 0, stream, args);
+      if (returnBegin >= 0) {
+        stream->deviceToHostAsync(
+            pinnedBase + returnBegin,
+            deviceBase + returnBegin,
+            returnEnd - returnBegin);
+	stream->wait();
+      }
+    }
+
+    if (returnBegin >= 0) {
+      processReturnData(sv, frame, pinnedBase);
+    }
   }
-
-  // 7. Allocate device memory.
-  auto deviceBuffer = state.deviceArena->allocateBytes(totalPinnedBytes);
-  auto* deviceBase = deviceBuffer->as<uint8_t>();
-
-  // 8. Patch BlockInfo params pointers to point to the device-side param
-  //    area for the corresponding op (will be valid after H2D copy).
-  auto* pinnedBlocks = reinterpret_cast<BlockInfo*>(pinnedBase);
-  for (size_t b = 0; b < numBlocks; ++b) {
-    auto opIdx = opIndices[b];
-    pinnedBlocks[b].params = deviceBase + opParamOffsets[opIdx];
-  }
-
-  // 9. Get a stream and enqueue H2D transfer.
-  auto stream = state.streamPool->get();
-  stream->hostToDeviceAsync(deviceBase, pinnedBase, totalPinnedBytes);
-
-  // 10. Launch the composite kernel on the same stream.
-  const int32_t blockSize = 256;
-  TorchWaveParams params;
-  params.info = reinterpret_cast<BlockInfo*>(deviceBase);
-  void* args[] = {&params};
-  kernel->launch(
-      static_cast<int32_t>(numBlocks), blockSize, 0, stream.get(), args);
-
-  // 11. Wait for the kernel to complete and return the stream to the pool.
-  stream->wait();
-  state.streamPool->put(std::move(stream));
 }
 
 std::string CompositeInvocation::toString() const {
   std::stringstream ss;
-  ss << "CompositeKernel:\n" << kernel->toString();
+
+  // Collect distinct ProjectOperations.
+  std::vector<ProjectOperation*> projectOps;
+  std::unordered_map<ProjectOperation*, int32_t> projectOpIndex;
+  for (const auto& op : ops) {
+    auto* po = op.projectOp();
+    if (projectOpIndex.find(po) == projectOpIndex.end()) {
+      projectOpIndex[po] = static_cast<int32_t>(projectOps.size());
+      projectOps.push_back(po);
+    }
+  }
+
+  // Print each distinct ProjectOperation.
+  for (size_t i = 0; i < projectOps.size(); ++i) {
+    ss << "ProjectOperation " << i << ":\n";
+    ss << projectOps[i]->toString();
+  }
+
+  // Print OpInvocations with their ProjectOperation ordinal.
   ss << "Invocations:\n";
   for (const auto& op : ops) {
-    ss << "  " << op.toString();
+    auto it = projectOpIndex.find(op.projectOp());
+    ss << "  ProjectOp " << it->second << ": ";
   }
   return ss.str();
 }
@@ -905,47 +1908,71 @@ std::string CompositeInvocation::toString() const {
 // --- CompiledNode ---
 
 void CompiledNode::execute(ExecutionState& state) {
-  for (auto& group : kernels_) {
-    for (auto& invocation : group) {
-      invocation->execute(state);
-    }
-  }
+  kernels_->execute(state);
 }
 
 std::string CompiledNode::toString() const {
   std::stringstream ss;
-  // Find the length of the longest inner vector.
-  size_t maxWaves = 0;
-  for (const auto& inner : kernels_) {
-    maxWaves = std::max(maxWaves, inner.size());
-  }
-
-  for (size_t wave = 0; wave < maxWaves; ++wave) {
-    if (wave > 0) {
-      ss << "\n";
-    }
-    ss << "Wave " << wave << ":\n";
-    for (size_t g = 0; g < kernels_.size(); ++g) {
-      if (wave < kernels_[g].size()) {
-        if (g > 0) {
-          ss << "\n";
-        }
-        ss << "Group " << g << ":\n";
-        ss << kernels_[g][wave]->toString();
-      }
-    }
-  }
+  ss << "CompositeInvocation:\n" << kernels_->toString();
   return ss.str();
 }
 
 // --- WaveGraph ---
 
-WaveGraph::WaveGraph(nativert::Graph& graph, const ValueTypes& types) {
-  normalizeDefaults(graph);
+void WaveGraph::normalizeAndAnnotateGraph() {
+  for (auto& node : graph_->nodes()) {
+    const auto* schema = findSchema(node.target());
+    if (schema) {
+      for (const auto& schemaArg : schema->arguments()) {
+        if (!schemaArg.default_value()) {
+          continue;
+        }
+        if (node.tryGetInput(schemaArg.name())) {
+          continue;
+        }
+        if (node.tryGetAttribute(schemaArg.name())) {
+          continue;
+        }
+        node.addAttribute(
+            nativert::Attribute{
+                std::string(schemaArg.name()),
+                iValueToConstant(*schemaArg.default_value())});
+      }
+    }
+    const auto* md = Registry::metadata(node.target());
+    if (md && md->makeMultiKernelVariant) {
+      auto* lastNode = md->makeMultiKernelVariant(&node, this);
+      std::vector<ValueCP> inputs;
+      inputs.reserve(node.inputs().size());
+      for (const auto& input : node.inputs()) {
+        inputs.push_back(input.value);
+      }
+      std::vector<const nativert::TensorMeta*> inputTypes;
+      inputTypes.reserve(inputs.size());
+      for (const auto* value : inputs) {
+        auto id = value->id();
+        inputTypes.push_back(
+            id < static_cast<int>(types_.types.size()) ? types_.types[id]
+                                                       : nullptr);
+      }
+      multiKernelVariants_[&node] = Subgraph{
+          .root = lastNode,
+          .inputs = std::move(inputs),
+          .inputTypes = std::move(inputTypes)};
+    }
+  }
+}
+
+WaveGraph::WaveGraph(nativert::Graph& graph, ValueTypes types)
+    : types_(std::move(types)), graph_(&graph) {
+  normalizeAndAnnotateGraph();
+  for (auto* v : graph.values()) {
+    idToValue_[v->id()] = v;
+  }
   ParallelNodes parallelNodes;
   auto* lastProjectNode = parallelNodes.makeParallelNodes(graph);
 
-  CompileCtx ctx(types);
+  CompileCtx ctx(*this);
 
   // Collect nodes from last to first, then reverse to get leafmost first.
   std::vector<ProjectNode*> ordered;
@@ -960,6 +1987,54 @@ WaveGraph::WaveGraph(nativert::Graph& graph, const ValueTypes& types) {
       nodes_.push_back(std::move(compiled));
     }
   }
+
+  // Build standaloneIndices_ by walking all launches across all compiled nodes.
+  for (const auto& node : nodes_) {
+    const auto* inv = node->kernels();
+    if (!inv) {
+      continue;
+    }
+    for (const auto& op : inv->ops) {
+      auto* projectOp = op.projectOp();
+      auto scanGrid = [&](LaunchGrid& grid) {
+        for (const auto& step : grid) {
+          for (const auto& launch : step) {
+            if (launch.standalone) {
+              auto it = op.nodeMap().find(launch.standalone);
+              if (it != op.nodeMap().end()) {
+                auto* actualNode = it->second;
+                if (standaloneIndices_.find(actualNode) ==
+                    standaloneIndices_.end()) {
+                  standaloneIndices_[actualNode] =
+                      static_cast<int32_t>(standaloneIndices_.size());
+                }
+              }
+            }
+          }
+        }
+      };
+      scanGrid(projectOp->grid());
+      scanGrid(projectOp->singleBlockGrid());
+    }
+  }
+  standaloneStats_.resize(standaloneIndices_.size());
+}
+
+WaveGraph::~WaveGraph() = default;
+
+std::unique_ptr<ExecutionState> WaveGraph::getState() {
+  std::lock_guard<std::mutex> lock(statePoolMutex_);
+  if (!statePool_.empty()) {
+    auto state = std::move(statePool_.back());
+    statePool_.pop_back();
+    return state;
+  }
+  return std::make_unique<ExecutionState>();
+}
+
+void WaveGraph::returnState(std::unique_ptr<ExecutionState> state) {
+  std::lock_guard<std::mutex> lock(statePoolMutex_);
+  statePool_.push_back(std::move(state));
 }
 
 std::string WaveGraph::toString() const {
@@ -972,6 +2047,139 @@ std::string WaveGraph::toString() const {
     ss << nodes_[i]->toString();
   }
   return ss.str();
+}
+
+namespace {
+
+torch::_export::ScalarType toExportScalarType(c10::ScalarType dtype) {
+  switch (dtype) {
+    case c10::ScalarType::Byte:
+      return torch::_export::ScalarType::BYTE;
+    case c10::ScalarType::Char:
+      return torch::_export::ScalarType::CHAR;
+    case c10::ScalarType::Short:
+      return torch::_export::ScalarType::SHORT;
+    case c10::ScalarType::Int:
+      return torch::_export::ScalarType::INT;
+    case c10::ScalarType::Long:
+      return torch::_export::ScalarType::LONG;
+    case c10::ScalarType::Half:
+      return torch::_export::ScalarType::HALF;
+    case c10::ScalarType::Float:
+      return torch::_export::ScalarType::FLOAT;
+    case c10::ScalarType::Double:
+      return torch::_export::ScalarType::DOUBLE;
+    case c10::ScalarType::ComplexHalf:
+      return torch::_export::ScalarType::COMPLEXHALF;
+    case c10::ScalarType::ComplexFloat:
+      return torch::_export::ScalarType::COMPLEXFLOAT;
+    case c10::ScalarType::ComplexDouble:
+      return torch::_export::ScalarType::COMPLEXDOUBLE;
+    case c10::ScalarType::Bool:
+      return torch::_export::ScalarType::BOOL;
+    case c10::ScalarType::BFloat16:
+      return torch::_export::ScalarType::BFLOAT16;
+    case c10::ScalarType::UInt16:
+      return torch::_export::ScalarType::UINT16;
+    case c10::ScalarType::Float8_e4m3fn:
+      return torch::_export::ScalarType::FLOAT8E4M3FN;
+    case c10::ScalarType::Float8_e5m2:
+      return torch::_export::ScalarType::FLOAT8E5M2;
+    case c10::ScalarType::Float8_e4m3fnuz:
+      return torch::_export::ScalarType::FLOAT8E4M3FNUZ;
+    case c10::ScalarType::Float8_e5m2fnuz:
+      return torch::_export::ScalarType::FLOAT8E5M2FNUZ;
+    default:
+      TORCH_CHECK(false, "unsupported scalar type ", static_cast<int>(dtype));
+  }
+}
+
+} // namespace
+
+void WaveGraph::registerTensorMeta(ValueCP value, c10::ScalarType dtype) {
+  torch::_export::TensorMeta exportMeta;
+  exportMeta.set_dtype(toExportScalarType(dtype));
+  exportMeta.set_layout(torch::_export::Layout::Strided);
+  exportMeta.set_requires_grad(false);
+  torch::_export::Device device;
+  device.set_type("cuda");
+  device.set_index(0);
+  exportMeta.set_device(std::move(device));
+  torch::_export::SymInt zero;
+  zero.set_as_int(0);
+  exportMeta.set_storage_offset(std::move(zero));
+
+  auto meta = std::make_unique<nativert::TensorMeta>(exportMeta);
+  auto* metaPtr = meta.get();
+  metaStorage_.push_back(std::move(meta));
+
+  auto id = value->id();
+  if (id >= static_cast<int>(types_.types.size())) {
+    types_.types.resize(id + 1, nullptr);
+  }
+  types_.types[id] = metaPtr;
+}
+
+nativert::Value* WaveGraph::newTensorValue(
+    nativert::Node* node,
+    std::string_view name,
+    c10::ScalarType dtype) {
+  auto* value =
+      node->addOutput(name, nativert::Type(nativert::Type::Kind::Tensor));
+  registerTensorMeta(value, dtype);
+  createdValueDtypes_[value] = dtype;
+  return value;
+}
+
+nativert::Value* WaveGraph::newScalarValue(
+    nativert::Node* node,
+    std::string_view name,
+    c10::ScalarType dtype) {
+  nativert::Type::Kind kind;
+  switch (dtype) {
+    case c10::ScalarType::Float:
+    case c10::ScalarType::Double:
+    case c10::ScalarType::Half:
+    case c10::ScalarType::BFloat16:
+      kind = nativert::Type::Kind::SymFloat;
+      break;
+    case c10::ScalarType::Bool:
+      kind = nativert::Type::Kind::SymBool;
+      break;
+    default:
+      kind = nativert::Type::Kind::SymInt;
+      break;
+  }
+  auto* value = node->addOutput(name, nativert::Type(kind));
+  auto id = value->id();
+  if (id >= static_cast<int>(types_.types.size())) {
+    types_.types.resize(id + 1, nullptr);
+  }
+  createdValueDtypes_[value] = dtype;
+  return value;
+}
+
+bool WaveGraph::isCreatedValue(ValueCP value) const {
+  return createdValueDtypes_.count(value) > 0;
+}
+
+nativert::Value* WaveGraph::duplicateValue(ValueCP original) {
+  if (!placeholderNode_) {
+    placeholderNode_ = graph_->createNode("tw.placeholder", {});
+  }
+  auto it = createdValueDtypes_.find(original);
+  TORCH_CHECK(
+      it != createdValueDtypes_.end(),
+      "Cannot duplicate: value not tracked by newTensorValue/newScalarValue");
+  auto dtype = it->second;
+  nativert::Value* result;
+  if (original->type().kind() == nativert::Type::Kind::Tensor) {
+    result = newTensorValue(placeholderNode_, original->name(), dtype);
+  } else {
+    result = newScalarValue(placeholderNode_, original->name(), dtype);
+  }
+  idToValue_[result->id()] = result;
+  return result;
 }
 
 } // namespace torch::wave

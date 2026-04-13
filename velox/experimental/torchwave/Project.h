@@ -22,16 +22,27 @@
 #include <unordered_set>
 #include <vector>
 
-#include <torch/nativert/graph/Graph.h>
+#include "velox/experimental/torchwave/Registry.h"
 
 namespace torch::wave {
+
+using PlanObjectSet = std::unordered_set<NodeCP>;
+
+/// Produces a human-readable expression string for a node. For a non-function
+/// node, returns the target (with attributes if present). For a function node,
+/// prints target(arg1, arg2, ...) where each arg is either a literal shape, a
+/// border node target, or a recursive expression.
+std::string nodeExprString(
+    NodeCP node,
+    const nativert::Graph& graph,
+    PlanObjectSet& border);
 
 class ProjectNode {
  public:
   ProjectNode(
-      std::vector<const nativert::Node*> nodes,
-      std::unordered_set<const nativert::Node*> inputs,
-      std::unordered_set<const nativert::Node*> leafInputs,
+      std::vector<NodeCP> nodes,
+      std::unordered_set<NodeCP> inputs,
+      std::unordered_set<NodeCP> leafInputs,
       ProjectNode* input,
       int32_t id)
       : nodes_{std::move(nodes)},
@@ -46,17 +57,17 @@ class ProjectNode {
 
   std::string toString(
       const nativert::Graph& graph,
-      std::unordered_set<const nativert::Node*>& border) const;
+      PlanObjectSet& border) const;
 
-  const std::vector<const nativert::Node*>& nodes() const {
+  const std::vector<NodeCP>& nodes() const {
     return nodes_;
   }
 
-  const std::unordered_set<const nativert::Node*>& inputs() const {
+  const std::unordered_set<NodeCP>& inputs() const {
     return inputs_;
   }
 
-  const std::unordered_set<const nativert::Node*>& leafInputs() const {
+  const std::unordered_set<NodeCP>& leafInputs() const {
     return leafInputs_;
   }
 
@@ -68,9 +79,9 @@ class ProjectNode {
       std::unordered_map<std::string, int32_t>& counts) const;
 
  private:
-  std::vector<const nativert::Node*> nodes_;
-  std::unordered_set<const nativert::Node*> inputs_;
-  std::unordered_set<const nativert::Node*> leafInputs_;
+  std::vector<NodeCP> nodes_;
+  std::unordered_set<NodeCP> inputs_;
+  std::unordered_set<NodeCP> leafInputs_;
   ProjectNode* input_;
   int32_t id_;
 };

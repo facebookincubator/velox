@@ -33,10 +33,11 @@ struct Tensor {
 /// checked at a delay, so return status that requires action on host side must
 /// be sent in returnStatus, not here.
 struct DebugInfo {
-  int32_t code;
-  int32_t line;
-  char message[80];
-  int64_t extra[2];
+  int64_t clocks{0};
+  int32_t op{0};
+  int32_t line{0};
+  int64_t extra[2] = {};
+  char message[20] = {};
 };
 
 /// Each TB fetches its instructions from BlockInfo at blockIdx.x. Copied at
@@ -45,36 +46,31 @@ struct BlockInfo {
   /// kernel dependent op code for this block.
   int32_t op;
 
+  /// The first blockIdx.x in grid that should execute this op.
+  int32_t firstBlockIdx;
+
   /// Index of this block within the blocks with for the same op.
   int32_t blockInOp;
 
   /// Number of blocks for this op.
   int32_t numBlocksInOp;
 
-  /// Number of data items to process in this block. Suppose 2 blocks of 256
-  /// with 600 elements to process, the first would have 512 and the next would
-  /// have 88.
-  int32_t rowsForBlock;
-
-  /// Index of row processed by lane 0 of this block. The block increments this
-  /// by blockDim.x on each iteration until this is >= rowsForBlock.
-  int32_t rowIdx{0};
   /// Pointer to per-op params, format depends on 'op'.
   void* params;
 
-  // Pointer to per block return status. If not nullptr, the block must write a
-  // per-block status to pass to host here. For example, for stream compaction,
-  // the result length for data processed by this block. Consolidated with
-  // return data of other blocks for single D to H transfer.
-  void* returnData;
+  DebugInfo* debugInfo;
 
-  DebugInfo* debug;
+  /// clock64() at start of block.
+  int64_t start;
 };
 
 struct TorchWaveParams {
   // Pointer to BlockInfo for blockIdx.x 0. gridDim.x consecutive BlockInfos. If
   // nullptr the BlockInfos are in inlineInfo.
   BlockInfo* info;
+  DebugInfo* debugInfo;
+  int32_t extraCounter{0};
+  int32_t numExtraBlocks{0};
   BlockInfo inlineInfo[100];
 };
 

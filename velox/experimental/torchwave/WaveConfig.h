@@ -17,34 +17,28 @@
 #pragma once
 
 #include <cstdint>
-#include <memory>
-#include <string>
-#include <unordered_map>
-#include <unordered_set>
-#include <vector>
-
-#include "velox/experimental/torchwave/Project.h"
+#include <optional>
 
 namespace torch::wave {
 
-using ExprCP = NodeCP;
+struct WaveConfig {
+  int32_t blockSize{256};
+  int32_t singleBlockPathBlockSize{1024};
+  bool allStandalone{false};
+  int32_t numStandaloneThreads{0};
 
-class ParallelNodes {
- public:
-  ProjectNode* makeParallelProject(
-      ProjectNode* input,
-      const PlanObjectSet& topExprs,
-      std::vector<ExprCP> orderedExprs = {});
+  /// If non-zero, use this as the number of SMs instead of reading from the
+  /// device.
+  int32_t numSms{0};
 
-  ProjectNode* makeParallelNodes(const nativert::Graph& graph);
+  /// If set, forces the grid choice between single-block and multi-block
+  /// variants. If nullopt, the choice is made based on input size.
+  std::optional<bool> useSingleBlock;
 
- private:
-  std::vector<std::unique_ptr<ProjectNode>> projectNodes_;
-  int32_t nextId_{0};
+  static WaveConfig& get() {
+    static WaveConfig instance;
+    return instance;
+  }
 };
-
-void printSet(PlanObjectSet& set);
-
-void printRefcount(std::unordered_map<ExprCP, int32_t>& refCount, int32_t min);
 
 } // namespace torch::wave
