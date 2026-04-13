@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
 #include "velox/experimental/cudf/tests/utils/CudfTpcdsQueryBuilder.h"
 
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
 
 // Forward-declare registerCudf/unregisterCudf to avoid pulling in ToCudf.h
@@ -51,7 +52,8 @@ void CudfTpcdsQueryBuilder::registerHiveConnector(
 
   connector::hive::CudfHiveConnectorFactory factory;
   auto c = factory.newConnector(connectorId, properties, ioExecutor_);
-  facebook::velox::connector::registerConnector(c);
+  ::facebook::velox::connector::ConnectorRegistry::global().insert(
+      c->connectorId(), c);
 
   LOG(INFO) << "CudfTpcdsQueryBuilder: registered CudfHiveConnector under ID '"
             << connectorId << "'";

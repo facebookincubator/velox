@@ -104,10 +104,6 @@ TEST_F(VeloxPlanLoaderTest, getQueryPlanLoadsAndDeserializes) {
       std::cout << "TableScanNode: " << tableScanNode->toString(true, true)
                 << std::endl;
     }
-#ifndef NDEBUG
-    std::cout << "TPCDS Plan for Q" << queryId << ":" << std::endl
-              << plan.plan->toString(true, true) << std::endl;
-#endif
   }
 }
 

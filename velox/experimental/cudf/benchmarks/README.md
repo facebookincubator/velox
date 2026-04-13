@@ -131,10 +131,8 @@ Each subdirectory contains parquet files for that table.
 | `--cudf_chunk_read_limit` | `0` | Chunk read limit for cuDF parquet reader |
 | `--cudf_pass_read_limit` | `0` | Pass read limit for cuDF parquet reader |
 | `--cudf_gpu_batch_size_rows` | `100000` | GPU batch size in rows |
-| `--cudf_memory_resource` | `async` | RMM memory resource type |
-| `--cudf_memory_percent` | `50` | Percentage of GPU memory to allocate for pool memory resource only |
 | `--velox_cudf_table_scan` | `true` | Use CuDF table scan |
-| `--cudf_debug_enabled` | `false` | Enable debug printing |
+| `--cudf_properties` | `""` | Path to a CudfConfig properties file (key=value per line). See `CudfConfig.h` for available keys |
 
 ---
 

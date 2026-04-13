@@ -31,9 +31,6 @@ struct VeloxPlan {
   dwio::common::FileFormat dataFileFormat{dwio::common::FileFormat::PARQUET};
 };
 
-/// Backward-compatible alias.
-using TpcdsPlan = VeloxPlan;
-
 /// Generic loader for Velox plan JSON files (e.g. dumped from a Presto
 /// worker's plan-dump-dir). Not specific to any benchmark suite -- works for
 /// TPC-DS, TPC-H, or any arbitrary single-node query plan.
@@ -85,8 +82,5 @@ class VeloxPlanLoader {
   /// PartitionedOutputNode, replace it with its single child.
   void maybeStripPartitionedOutput(core::PlanNodePtr& plan) const;
 };
-
-/// Backward-compatible alias.
-using TpcdsPlanFromJson = VeloxPlanLoader;
 
 } // namespace facebook::velox::exec::test

@@ -58,7 +58,9 @@ velox_add_test_headers(
   TableWriterTestBase.h
   TestIndexStorageConnector.h
   TpchQueryBuilder.h
+  TpcdsQueryBuilder.h
   VectorTestUtil.h
+  VeloxPlanLoader.h
 )
 
 target_link_libraries(

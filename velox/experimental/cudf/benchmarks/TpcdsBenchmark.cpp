@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/benchmarks/TpcdsBenchmark.h"
 
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/exec/PartitionFunction.h"
@@ -92,13 +93,14 @@ void TpcdsBenchmark::initialize() {
   // Presto-dumped plans use connector ID "hive", while the base class
   // registers under kHiveConnectorId ("test-hive"). Register a properly
   // configured connector under "hive" so both the plan and splits match.
-  const std::string prestoConnectorId = "hive";
-  if (!connector::hasConnector(prestoConnectorId)) {
+  const std::string kPrestoHiveConnectorId = "hive";
+  if (connector::ConnectorRegistry::tryGet(kPrestoHiveConnectorId) == nullptr) {
     auto properties = makeConnectorProperties();
     connector::hive::HiveConnectorFactory factory;
-    auto hiveConnector =
-        factory.newConnector(prestoConnectorId, properties, ioExecutor_.get());
-    connector::registerConnector(hiveConnector);
+    auto hiveConnector = factory.newConnector(
+        kPrestoHiveConnectorId, properties, ioExecutor_.get());
+    connector::ConnectorRegistry::global().insert(
+        hiveConnector->connectorId(), hiveConnector);
   }
 
   planDir_ = FLAGS_plan_path;
@@ -113,9 +115,9 @@ void TpcdsBenchmark::shutdown() {
     queryBuilder_.reset();
   }
   // Unregister the "hive" connector we registered in initialize().
-  const std::string prestoConnectorId = "hive";
-  if (connector::hasConnector(prestoConnectorId)) {
-    connector::unregisterConnector(prestoConnectorId);
+  const std::string kPrestoHiveConnectorId = "hive";
+  if (connector::ConnectorRegistry::tryGet(kPrestoHiveConnectorId) != nullptr) {
+    connector::ConnectorRegistry::global().erase(kPrestoHiveConnectorId);
   }
   pool_.reset();
   QueryBenchmarkBase::shutdown();

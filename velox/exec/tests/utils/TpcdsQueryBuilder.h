@@ -93,12 +93,6 @@ class TpcdsQueryBuilder {
       const std::string& connectorId,
       folly::Executor* ioExecutor = nullptr);
 
-  /// Try to find data files for a table name. First tries exact match,
-  /// then strips any schema prefix (e.g. "tpcds.store_sales" ->
-  /// "store_sales").
-  const std::vector<std::string>* findDataFiles(
-      const std::string& tableName) const;
-
   dwio::common::FileFormat format_;
   /// Connector ID auto-detected from the plan's TableScan nodes.
   std::string connectorId_;
