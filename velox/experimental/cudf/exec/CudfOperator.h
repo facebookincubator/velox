@@ -57,7 +57,43 @@ class CudfOperator : public NvtxHelper {
       : NvtxHelper(color, operatorId, fmt::format("[{}]", nodeId)) {}
 };
 
-/// Built-in operators extend this class and override do* methods.
+/// Base class for all built-in cuDF operators in Velox.
+///
+/// All cuDF operators MUST extend this class rather than extending
+/// exec::Operator and NvtxHelper directly. This class implements the template
+/// method pattern:
+/// the public operator interface methods (addInput, getOutput, noMoreInput,
+/// close) are marked final and must NOT be overridden by derived classes.
+/// Instead, derived classes should ONLY override the corresponding protected
+/// do* virtual methods:
+///   - doAddInput()    -- receives input rows; called by addInput()
+///   - doGetOutput()   -- produces output rows; called by getOutput()
+///   - doNoMoreInput() -- signals end of input; called by noMoreInput()
+///                        (defaults to Operator::noMoreInput())
+///   - doClose()       -- releases resources; called by close()
+///                        (defaults to Operator::close())
+///
+/// This design ensures that NVTX profiling ranges are applied uniformly
+/// across all operators without each subclass having to manage them. The
+/// nvtxMethods bitmask (NvtxMethodFlag) lets operators suppress NVTX ranges
+/// for do* methods they do not override, keeping nsys profiles clean.
+///
+/// Example:
+///   class MyCudfOperator : public CudfOperatorBase {
+///    public:
+///     MyCudfOperator(int32_t operatorId, exec::DriverCtx* ctx,
+///                    RowTypePtr outputType, const core::PlanNodeId& nodeId)
+///         : CudfOperatorBase(
+///               operatorId, ctx, outputType, nodeId, "MyCudfOperator",
+///               std::nullopt,
+///               NvtxMethodFlag::kAddInput | NvtxMethodFlag::kGetOutput) {}
+///
+///     bool needsInput() const override { return !noMoreInput_; }
+///
+///    protected:
+///     void doAddInput(RowVectorPtr input) override { /* process input */ }
+///     RowVectorPtr doGetOutput() override { /* return output or nullptr */ }
+///   };
 class CudfOperatorBase : public exec::Operator, public NvtxHelper {
  public:
   CudfOperatorBase(
