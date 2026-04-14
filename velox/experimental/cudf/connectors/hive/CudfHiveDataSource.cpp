@@ -57,8 +57,8 @@ CudfHiveDataSource::CudfHiveDataSource(
       fileHandleFactory_(fileHandleFactory),
       executor_(executor),
       connectorQueryCtx_(connectorQueryCtx),
-      pool_(connectorQueryCtx->memoryPool()),
       outputType_(outputType),
+      pool_(connectorQueryCtx->memoryPool()),
       expressionEvaluator_(connectorQueryCtx->expressionEvaluator()) {
   // Set up column projection if needed
   auto readColumnTypes = outputType_->children();
@@ -87,7 +87,7 @@ CudfHiveDataSource::CudfHiveDataSource(
   // Extract additional simple filters from remainingFilter (same as CPU path).
   // This extracts single-column filters like "col = 'X'" or "col <> 'Y'" from
   // complex expressions and adds them to subfieldFilters_ for pushdown.
-  double sampleRate = 1.0;
+  double sampleRate = tableHandle_->sampleRate();
   auto remainingFilter =
       facebook::velox::connector::hive::extractFiltersFromRemainingFilter(
           tableHandle_->remainingFilter(),

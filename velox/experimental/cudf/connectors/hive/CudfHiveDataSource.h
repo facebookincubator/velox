@@ -97,8 +97,6 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   folly::Executor* const executor_;
   const ConnectorQueryCtx* const connectorQueryCtx_;
 
-  memory::MemoryPool* const pool_;
-
   // Columns to read.
   std::vector<std::string> readColumnNames_;
 
@@ -108,6 +106,14 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   // The row type for the data source output, not including filter-only columns.
   const RowTypePtr outputType_;
 
+  bool useExperimentalCudfReader_;
+
+  // Cached combined subfield filter expression owned by 'subfieldTree_'.
+  cudf::ast::expression const* subfieldFilterExpr_{nullptr};
+
+ private:
+  memory::MemoryPool* const pool_;
+
   size_t completedRows_{0};
   size_t completedBytes_{0};
 
@@ -115,17 +121,11 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
 
   std::unique_ptr<CudfSplitReader> cudfSplitReader_;
 
-  bool useExperimentalCudfReader_;
-
   std::unique_ptr<exec::ExprSet> remainingFilterExprSet_;
   std::shared_ptr<velox::cudf_velox::CudfExpression> cudfExpressionEvaluator_;
 
-  // Cached combined subfield filter expression owned by 'subfieldTree_'.
-  cudf::ast::expression const* subfieldFilterExpr_{nullptr};
-
   std::atomic<uint64_t> totalRemainingFilterTime_{0};
 
- private:
   std::unordered_set<std::string> readColumnSet_;
 
   // Expression evaluator for remaining filter.
