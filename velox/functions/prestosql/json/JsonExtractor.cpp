@@ -104,7 +104,7 @@ class JsonExtractor {
 };
 
 thread_local std::unordered_map<std::string, std::shared_ptr<JsonExtractor>>
-    JsonExtractor::kExtractorCache;
+    JsonExtractor::kExtractorCache(JsonExtractor::kMaxCacheNum);
 thread_local JsonPathTokenizer JsonExtractor::kTokenizer;
 
 void extractObject(
