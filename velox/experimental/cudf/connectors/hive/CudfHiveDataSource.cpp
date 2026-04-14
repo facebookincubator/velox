@@ -19,14 +19,22 @@
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnectorSplit.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
+#include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/SubfieldFiltersToAst.h"
+#include "velox/experimental/cudf/vector/CudfVector.h"
 
+#include "velox/common/time/Timer.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/expression/FieldReference.h"
+
+#include <cudf/stream_compaction.hpp>
 
 namespace facebook::velox::cudf_velox::connector::hive {
 
@@ -177,10 +185,7 @@ std::unique_ptr<CudfSplitReader> CudfHiveDataSource::createCudfSplitReader() {
       ioStatistics_,
       ioStats_,
       useExperimentalCudfReader_,
-      subfieldFilterExpr_,
-      &remainingFilterExprSet_,
-      cudfExpressionEvaluator_,
-      &totalRemainingFilterTime_);
+      subfieldFilterExpr_);
 }
 
 void CudfHiveDataSource::convertSplit(std::shared_ptr<ConnectorSplit> split) {
@@ -227,7 +232,7 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   convertSplit(split);
 
   cudfSplitReader_ = createCudfSplitReader();
-  cudfSplitReader_->prepareSplit();
+  cudfSplitReader_->prepareSplit(runtimeStats_);
 
   // TODO: `completedBytes_` should be updated in `next()` as we read more and
   // more table bytes
@@ -252,23 +257,62 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
     uint64_t size,
     velox::ContinueFuture& /* future */) {
   VELOX_CHECK_NOT_NULL(split_, "No split present. Call addSplit() first.");
-  VELOX_CHECK_NOT_NULL(
-      cudfSplitReader_, "No split reader present. Call addSplit() first.");
-  auto result = cudfSplitReader_->next(size);
-  if (!result.has_value()) {
+  VELOX_CHECK_NOT_NULL(cudfSplitReader_, "No split to process.");
+  auto chunkOpt = cudfSplitReader_->next(size);
+  if (!chunkOpt.has_value()) {
     return nullptr;
   }
-  completedRows_ += result.value()->size();
-  return result;
+  auto cudfTable = std::move(chunkOpt.value());
+  auto stream = cudfSplitReader_->stream();
+
+  uint64_t filterTimeUs{0};
+  if (remainingFilterExprSet_) {
+    MicrosecondTimer filterTimer(&filterTimeUs);
+    auto cudfTableColumns = cudfTable->release();
+    std::vector<cudf::column_view> inputViews;
+    inputViews.reserve(cudfTableColumns.size());
+    for (auto& col : cudfTableColumns) {
+      inputViews.push_back(col->view());
+    }
+    auto filterResult =
+        cudfExpressionEvaluator_->eval(inputViews, stream, get_temp_mr());
+    auto originalTable =
+        std::make_unique<cudf::table>(std::move(cudfTableColumns));
+    cudfTable = cudf::apply_boolean_mask(
+        *originalTable, asView(filterResult), stream, get_output_mr());
+  }
+  totalRemainingFilterTime_.fetch_add(
+      filterTimeUs * 1000, std::memory_order_relaxed);
+
+  const auto nRows = cudfTable->num_rows();
+
+  if (outputType_->size() < cudfTable->num_columns()) {
+    auto cudfTableColumns = cudfTable->release();
+    std::vector<std::unique_ptr<cudf::column>> outputColumns;
+    outputColumns.reserve(outputType_->size());
+    std::move(
+        cudfTableColumns.begin(),
+        cudfTableColumns.begin() + outputType_->size(),
+        std::back_inserter(outputColumns));
+    cudfTable = std::make_unique<cudf::table>(std::move(outputColumns));
+  }
+
+  auto output = cudfIsRegistered()
+      ? std::make_shared<CudfVector>(
+            pool_, outputType_, nRows, std::move(cudfTable), stream)
+      : with_arrow::toVeloxColumn(
+            cudfTable->view(), pool_, outputType_, stream, get_temp_mr());
+  stream.synchronize();
+
+  VELOX_CHECK_NOT_NULL(output, "Cudf to Velox conversion yielded a nullptr");
+
+  completedRows_ += output->size();
+  return output;
 }
 
 std::unordered_map<std::string, RuntimeMetric>
 CudfHiveDataSource::getRuntimeStats() {
   auto result = runtimeStats_.toRuntimeMetricMap();
-  if (cudfSplitReader_) {
-    auto splitStats = cudfSplitReader_->runtimeStats().toRuntimeMetricMap();
-    result.insert(splitStats.begin(), splitStats.end());
-  }
   result.insert({
       {std::string(connector::hive::HiveDataSource::kTotalScanTime),
        RuntimeMetric(

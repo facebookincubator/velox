@@ -20,7 +20,6 @@
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnectorSplit.h"
 #include "velox/experimental/cudf/connectors/hive/CudfSplitReaderHelpers.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
-#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/common/io/IoStatistics.h"
 #include "velox/common/io/Options.h"
@@ -34,8 +33,6 @@
 #include <cudf/io/experimental/hybrid_scan.hpp>
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/types.hpp>
-
-#include <atomic>
 
 namespace facebook::velox::cudf_velox::connector::hive {
 
@@ -63,47 +60,43 @@ class CudfSplitReader : public NvtxHelper {
       const std::shared_ptr<io::IoStatistics>& ioStatistics,
       const std::shared_ptr<IoStats>& ioStats,
       bool useExperimentalCudfReader,
-      cudf::ast::expression const* subfieldFilterExpr,
-      std::unique_ptr<exec::ExprSet>* remainingFilterExprSet,
-      std::shared_ptr<CudfExpression> cudfExpressionEvaluator,
-      std::atomic<uint64_t>* totalRemainingFilterTime);
+      cudf::ast::expression const* subfieldFilterExpr);
 
   virtual ~CudfSplitReader() = default;
 
   /// Prepare the split: open cudf reader, set up data source and options.
-  virtual void prepareSplit();
+  /// @param runtimeStats Reference to the DataSource's runtime statistics
+  virtual void prepareSplit(dwio::common::RuntimeStatistics& runtimeStats);
 
-  /// Read the next chunk, apply filters, convert to Velox. Returns nullopt
-  /// when done.
-  virtual std::optional<RowVectorPtr> next(uint64_t size);
+  /// Read the next raw cudf table chunk. Returns nullopt when done.
+  virtual std::optional<std::unique_ptr<cudf::table>> next(uint64_t size);
 
+  /// Check if the split is empty.
   bool emptySplit() const;
 
-  // Clear splitReaders and datasources after split has been fully processed.
+  /// Clear splitReaders and datasources after split has been fully processed.
   void resetSplit();
 
-  dwio::common::RuntimeStatistics& runtimeStats();
+  /// Get the stream.
+  rmm::cuda_stream_view stream() const {
+    return stream_;
+  }
 
  protected:
+  /// Create the chunked parquet reader.
+  virtual void createCudfReader(rmm::device_async_resource_ref output_mr);
+
   /// Setup the cuDF data source
   void setupCudfDataSource();
 
   /// Setup the cuDF reader options
   void setupReaderOptions();
 
-  /// Create the chunked parquet reader.
-  virtual void createCudfReader(rmm::device_async_resource_ref output_mr);
-
   /// Create the experimental hybrid scan reader.
   void createExperimentalReader();
 
   /// Read the next raw chunk from the parquet reader (regular or hybrid).
-  /// Base implementation reads via chunked_parquet_reader or
-  /// hybrid_scan_reader. Returns nullopt when no more data.
-  /// Virtual so CudfIcebergSplitReader can override to apply deletes after
-  /// reading (DV, positional, equality). The base next() calls this hook,
-  /// then applies remaining filter, column trimming, scan timing, and
-  /// Velox conversion — all shared between Hive and Iceberg.
+  /// Returns nullopt when no more data.
   virtual std::optional<std::unique_ptr<cudf::table>> readNextChunk(
       rmm::device_async_resource_ref output_mr);
 
@@ -125,28 +118,22 @@ class CudfSplitReader : public NvtxHelper {
   CudfParquetReaderPtr splitReader_;
   CudfHybridScanReaderPtr exptSplitReader_;
   std::unique_ptr<HybridScanState> hybridScanState_;
-  bool useExperimentalCudfReader_;
+  bool useExperimentalCudfReader_{false};
   rmm::cuda_stream_view stream_;
 
   std::shared_ptr<io::IoStatistics> ioStatistics_;
   std::shared_ptr<IoStats> ioStats_;
-  dwio::common::RuntimeStatistics runtimeStats_;
 
   dwio::common::ReaderOptions baseReaderOpts_;
 
  private:
   cudf::ast::expression const* subfieldFilterExpr_;
-  std::unique_ptr<exec::ExprSet>* remainingFilterExprSet_;
-  std::shared_ptr<CudfExpression> cudfExpressionEvaluator_;
-  std::atomic<uint64_t>* totalRemainingFilterTime_;
 
-  // Callback data for total scan timing calculation.
   struct TotalScanTimeCallbackData {
     uint64_t startTimeUs;
     std::shared_ptr<io::IoStatistics> ioStatistics;
   };
 
-  // Host callback function to calculate total scan time.
   static void totalScanTimeCalculator(void* userData);
 };
 

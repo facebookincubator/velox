@@ -18,10 +18,6 @@
 #include "velox/experimental/cudf/connectors/hive/CudfSplitReader.h"
 #include "velox/experimental/cudf/connectors/hive/CudfSplitReaderHelpers.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
-#include "velox/experimental/cudf/exec/ToCudf.h"
-#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
-#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
-#include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/common/caching/CacheTTLController.h"
 #include "velox/common/time/Timer.h"
@@ -31,16 +27,13 @@
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/TableHandle.h"
 
-#include <cudf/column/column_factories.hpp>
 #include <cudf/io/datasource.hpp>
 #include <cudf/io/experimental/hybrid_scan.hpp>
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/text/byte_range_info.hpp>
 #include <cudf/io/types.hpp>
-#include <cudf/stream_compaction.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/table/table_view.hpp>
-#include <cudf/transform.hpp>
 
 #include <cuda_runtime.h>
 #include <nvtx3/nvtx3.hpp>
@@ -64,10 +57,7 @@ CudfSplitReader::CudfSplitReader(
     const std::shared_ptr<io::IoStatistics>& ioStatistics,
     const std::shared_ptr<IoStats>& ioStats,
     bool useExperimentalCudfReader,
-    cudf::ast::expression const* subfieldFilterExpr,
-    std::unique_ptr<exec::ExprSet>* remainingFilterExprSet,
-    std::shared_ptr<CudfExpression> cudfExpressionEvaluator,
-    std::atomic<uint64_t>* totalRemainingFilterTime)
+    cudf::ast::expression const* subfieldFilterExpr)
     : NvtxHelper(
           nvtx3::rgb{80, 171, 241},
           std::nullopt,
@@ -81,20 +71,18 @@ CudfSplitReader::CudfSplitReader(
       connectorQueryCtx_(connectorQueryCtx),
       cudfHiveConfig_(cudfHiveConfig),
       pool_(connectorQueryCtx->memoryPool()),
-      useExperimentalCudfReader_(useExperimentalCudfReader),
       ioStatistics_(ioStatistics),
       ioStats_(ioStats),
+      useExperimentalCudfReader_(useExperimentalCudfReader),
       baseReaderOpts_(pool_),
-      subfieldFilterExpr_(subfieldFilterExpr),
-      remainingFilterExprSet_(remainingFilterExprSet),
-      cudfExpressionEvaluator_(std::move(cudfExpressionEvaluator)),
-      totalRemainingFilterTime_(totalRemainingFilterTime) {}
+      subfieldFilterExpr_(subfieldFilterExpr) {}
 
-void CudfSplitReader::prepareSplit() {
+void CudfSplitReader::prepareSplit(
+    dwio::common::RuntimeStatistics& /*runtimeStats*/) {
   // Reset existing split and split readers, if any
   resetSplit();
 
-  // Acquire a CUDA stream
+  // Acquire a stream from the global stream pool
   stream_ = cudfGlobalStreamPool().get_stream();
 
   // Create a cuDF split reader
@@ -106,7 +94,8 @@ void CudfSplitReader::prepareSplit() {
   }
 }
 
-std::optional<RowVectorPtr> CudfSplitReader::next(uint64_t /*size*/) {
+std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::next(
+    uint64_t /*size*/) {
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
   VELOX_CHECK(
       splitReader_ or exptSplitReader_,
@@ -128,57 +117,7 @@ std::optional<RowVectorPtr> CudfSplitReader::next(uint64_t /*size*/) {
   cudaLaunchHostFunc(
       stream_.value(), &CudfSplitReader::totalScanTimeCalculator, callbackData);
 
-  uint64_t filterTimeUs{0};
-  // Apply remaining filter if present
-  if (remainingFilterExprSet_) {
-    MicrosecondTimer filterTimer(&filterTimeUs);
-    auto cudfTableColumns = cudfTable->release();
-    // Filter may need additional computed columns
-    std::vector<cudf::column_view> inputViews;
-    inputViews.reserve(cudfTableColumns.size());
-    for (auto& col : cudfTableColumns) {
-      inputViews.push_back(col->view());
-    }
-    auto filterResult =
-        cudfExpressionEvaluator_->eval(inputViews, stream_, get_temp_mr());
-    auto originalTable =
-        std::make_unique<cudf::table>(std::move(cudfTableColumns));
-    // Keep only rows where the filter is true
-    cudfTable = cudf::apply_boolean_mask(
-        *originalTable, asView(filterResult), stream_, get_output_mr());
-  }
-  totalRemainingFilterTime_->fetch_add(
-      filterTimeUs * 1000, std::memory_order_relaxed);
-
-  // Output RowVectorPtr
-  const auto nRows = cudfTable->num_rows();
-
-  // keep only outputType_.size() columns in cudfTable_
-  if (outputType_->size() < cudfTable->num_columns()) {
-    auto cudfTableColumns = cudfTable->release();
-    std::vector<std::unique_ptr<cudf::column>> originalColumns;
-    originalColumns.reserve(outputType_->size());
-    std::move(
-        cudfTableColumns.begin(),
-        cudfTableColumns.begin() + outputType_->size(),
-        std::back_inserter(originalColumns));
-    cudfTable = std::make_unique<cudf::table>(std::move(originalColumns));
-  }
-
-  // TODO (dm): Should we only enable table scan if cudf is registered?
-  // Earlier we could enable cudf table scans without using other cudf operators
-  // We still can, but I'm wondering if this is the right thing to do
-  auto output = cudfIsRegistered()
-      ? std::make_shared<CudfVector>(
-            pool_, outputType_, nRows, std::move(cudfTable), stream_)
-      : with_arrow::toVeloxColumn(
-            cudfTable->view(), pool_, outputType_, stream_, get_temp_mr());
-  stream_.synchronize();
-
-  // Check if conversion yielded a nullptr
-  VELOX_CHECK_NOT_NULL(output, "Cudf to Velox conversion yielded a nullptr");
-
-  return output;
+  return cudfTable;
 }
 
 std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk(
@@ -265,10 +204,6 @@ void CudfSplitReader::resetSplit() {
   exptSplitReader_.reset();
   hybridScanState_.reset();
   dataSource_.reset();
-}
-
-dwio::common::RuntimeStatistics& CudfSplitReader::runtimeStats() {
-  return runtimeStats_;
 }
 
 void CudfSplitReader::setupCudfDataSource() {
