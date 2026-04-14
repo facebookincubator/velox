@@ -204,10 +204,10 @@ TEST_F(CudfAggregationSelectionTest, complexGroupbyClauseExpressions) {
           .project(
               {"c0",
                "c1",
-               "xxhash64_internal(c0) AS hash_c0"}) // xxhash64_internal is
+               "to_big_endian_64(c0) AS endian_c0"}) // to_big_endian_64 is
                                                     // unsupported by CUDF
           .aggregation(
-              {"xxhash64_internal_c0"},
+              {"endian_c0"},
               {"sum(c1)"},
               {},
               core::AggregationNode::Step::kSingle,
