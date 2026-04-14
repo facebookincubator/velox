@@ -71,12 +71,6 @@ class CudfSplitReader : public NvtxHelper {
   /// Read the next raw cudf table chunk. Returns nullopt when done.
   virtual std::optional<std::unique_ptr<cudf::table>> next(uint64_t size);
 
-  /// Check if the split is empty.
-  bool emptySplit() const;
-
-  /// Clear splitReaders and datasources after split has been fully processed.
-  void resetSplit();
-
   /// Get the stream.
   rmm::cuda_stream_view stream() const {
     return stream_;
@@ -88,6 +82,9 @@ class CudfSplitReader : public NvtxHelper {
 
   /// Setup the cuDF data source
   void setupCudfDataSource();
+
+  /// Clear splitReaders and datasources after split has been fully processed.
+  void resetSplit();
 
   /// Read the next raw chunk from the parquet reader (regular or hybrid).
   /// Returns nullopt when no more data.

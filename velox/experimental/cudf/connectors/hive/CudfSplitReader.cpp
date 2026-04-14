@@ -78,7 +78,7 @@ CudfSplitReader::CudfSplitReader(
       subfieldFilterExpr_(subfieldFilterExpr) {}
 
 void CudfSplitReader::prepareSplit(
-    dwio::common::RuntimeStatistics& /*runtimeStats*/) {
+    dwio::common::RuntimeStatistics& runtimeStats) {
   // Reset existing split and split readers, if any
   resetSplit();
 
@@ -92,6 +92,9 @@ void CudfSplitReader::prepareSplit(
   } else {
     createCudfReader(get_output_mr());
   }
+
+  // Update runtime stats
+  runtimeStats.processedSplits++;
 }
 
 std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::next(
@@ -193,10 +196,6 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk(
 
   auto tableWithMetadata = exptSplitReader_->materialize_all_columns_chunk();
   return std::move(tableWithMetadata.tbl);
-}
-
-bool CudfSplitReader::emptySplit() const {
-  return !splitReader_ && !exptSplitReader_;
 }
 
 void CudfSplitReader::resetSplit() {
