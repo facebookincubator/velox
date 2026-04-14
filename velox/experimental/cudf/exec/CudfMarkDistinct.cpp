@@ -110,10 +110,7 @@ RowVectorPtr CudfMarkDistinct::getOutput() {
         stream,
         tempMr);
     seenFilter_ = std::make_unique<cudf::filtered_join>(
-        seenKeys_->view(),
-        cudf::null_equality::EQUAL,
-        cudf::set_as_build_table::RIGHT,
-        stream);
+        seenKeys_->view(), cudf::null_equality::EQUAL, stream);
 
   } else {
     // Subsequent batch: probe the persistent filter — no hash table rebuild.
@@ -164,10 +161,7 @@ RowVectorPtr CudfMarkDistinct::getOutput() {
           seenKeys_->view(), newKeys->view()};
       seenKeys_ = cudf::concatenate(seenPlusNew, stream, tempMr);
       seenFilter_ = std::make_unique<cudf::filtered_join>(
-          seenKeys_->view(),
-          cudf::null_equality::EQUAL,
-          cudf::set_as_build_table::RIGHT,
-          stream);
+          seenKeys_->view(), cudf::null_equality::EQUAL, stream);
     }
   }
 
