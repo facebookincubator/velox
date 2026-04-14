@@ -47,6 +47,7 @@ velox_add_library(
   HashTable.cpp
   HashTableCache.cpp
   IndexLookupJoin.cpp
+  IndexLookupJoinBridge.cpp
   JoinBridge.cpp
   Limit.cpp
   LocalPartition.cpp
@@ -153,6 +154,7 @@ velox_add_library(
   HashTableCache.h
   HilbertIndex.h
   IndexLookupJoin.h
+  IndexLookupJoinBridge.h
   JoinBridge.h
   Limit.h
   LocalPartition.h
@@ -238,6 +240,7 @@ velox_link_libraries(
   velox_common_compression
   velox_core
   velox_connector
+  velox_connector_registry
   velox_expression
   velox_file
   velox_presto_serializer

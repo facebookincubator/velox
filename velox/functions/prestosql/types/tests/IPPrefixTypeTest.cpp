@@ -29,7 +29,6 @@ class IPPrefixTypeTest : public testing::Test, public TypeTestBase {
 TEST_F(IPPrefixTypeTest, basic) {
   ASSERT_STREQ(IPPREFIX()->name(), "IPPREFIX");
   ASSERT_STREQ(IPPREFIX()->kindName(), "ROW");
-  ASSERT_EQ(IPPREFIX()->name(), "IPPREFIX");
   ASSERT_TRUE(IPPREFIX()->parameters().empty());
 
   ASSERT_TRUE(hasType("IPPREFIX"));

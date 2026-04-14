@@ -49,7 +49,7 @@ struct CastRule {
   int32_t cost{1};
 
   /// Optional validator for parameter-aware type checks.
-  CastValidator validator;
+  CastValidator validator{};
 
   /// Compare rules by type names, implicitAllowed, and cost. Excludes
   /// 'validator' because std::function has no meaningful equality semantics.

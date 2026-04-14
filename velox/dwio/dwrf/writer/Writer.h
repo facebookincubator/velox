@@ -19,7 +19,6 @@
 #include <iterator>
 #include <limits>
 
-#include "velox/dwio/common/FileMetadata.h"
 #include "velox/dwio/common/Writer.h"
 #include "velox/dwio/common/WriterFactory.h"
 #include "velox/dwio/dwrf/common/Encryption.h"
@@ -30,9 +29,6 @@
 #include "velox/exec/MemoryReclaimer.h"
 
 namespace facebook::velox::dwrf {
-
-/// DWRF-specific file metadata wrapper. Currently a placeholder.
-class DwrfFileMetadata : public dwio::common::FileMetadata {};
 
 struct WriterOptions : public dwio::common::WriterOptions {
   std::shared_ptr<const Config> config = std::make_shared<Config>();
@@ -90,7 +86,7 @@ class Writer : public dwio::common::Writer {
     return true;
   }
 
-  virtual std::unique_ptr<dwio::common::FileMetadata> close() override;
+  virtual void close() override;
 
   virtual void abort() override;
 

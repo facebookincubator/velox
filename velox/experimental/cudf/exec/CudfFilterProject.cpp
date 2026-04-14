@@ -263,13 +263,13 @@ RowVectorPtr CudfFilterProject::getOutput() {
     VLOG(1) << "cudfProject Output: " << size << " rows, " << numColumns
             << " columns";
   }
-
+  if (size == 0) {
+    input_.reset();
+    return nullptr;
+  }
   auto cudfOutput = std::make_shared<CudfVector>(
       input_->pool(), outputType_, size, std::move(outputTable), stream);
   input_.reset();
-  if (size == 0) {
-    return nullptr;
-  }
   return cudfOutput;
 }
 

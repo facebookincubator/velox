@@ -15,9 +15,11 @@
 velox_add_library(
   velox_buffer
   Buffer.cpp
+  BufferPool.cpp
   StringViewBufferHolder.cpp
   HEADERS
   Buffer.h
+  BufferPool.h
   StringViewBufferHolder.h
 )
 

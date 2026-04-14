@@ -179,7 +179,7 @@ std::unordered_set<std::string> skipFunctions = {
     "uniqueness_distribution(khyperloglog,bigint) -> map(bigint,double)",
     "merge_khll(array(khyperloglog)) -> khyperloglog",
     // Fuzzer cannot generate valid 'comparator' lambda.
-    "array_sort(array(T),constant function(T,T,bigint)) -> array(T)",
+    "array_sort(array(T),constant function(T,T,integer)) -> array(T)",
     "array_sort(array(T),constant function(T,U)) -> array(T)",
     "array_sort_desc(array(T),constant function(T,U)) -> array(T)",
     "split_to_map(varchar,varchar,varchar,function(varchar,varchar,varchar,varchar)) -> map(varchar,varchar)",
