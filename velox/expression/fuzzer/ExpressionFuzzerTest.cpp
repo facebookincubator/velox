@@ -308,6 +308,7 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "map_values_in_range", // Velox-only function, not available in Presto
     "map_values_all_match", // Velox-only function, not available in Presto
     "map_values_any_match", // Velox-only function, not available in Presto
+    "map_values_none_match", // Velox-only function, not available in Presto
     "transform_with_index", // Velox-only function, not available in Presto
     "dot_product", // Velox-only function, not available in Presto
     "remap_keys", // Velox-only function, not available in Presto
