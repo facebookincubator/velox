@@ -839,12 +839,15 @@ void OutputBuffer::Stats::add(const Stats& other) {
 
   bufferedBytes += other.bufferedBytes;
   bufferedPages += other.bufferedPages;
-  totalBytesSent += other.totalBytesSent;
   totalRowsSent += other.totalRowsSent;
   totalPagesSent += other.totalPagesSent;
-  averageBufferTimeMs = (averageBufferTimeMs * totalBytesSent +
-                         other.averageBufferTimeMs * other.totalBytesSent) /
-      (totalBytesSent + other.totalBytesSent);
+  const auto totalWeight = totalBytesSent + other.totalBytesSent;
+  averageBufferTimeMs = totalWeight > 0
+      ? (averageBufferTimeMs * totalBytesSent +
+         other.averageBufferTimeMs * other.totalBytesSent) /
+          totalWeight
+      : 0;
+  totalBytesSent += other.totalBytesSent;
   numTopBuffers += other.numTopBuffers;
   buffersStats.insert(
       buffersStats.end(), other.buffersStats.begin(), other.buffersStats.end());

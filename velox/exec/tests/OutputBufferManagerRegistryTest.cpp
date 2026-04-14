@@ -288,5 +288,104 @@ TEST_F(OutputBufferManagerRegistryFixture, queryScopedOverrideWithGetAll) {
   OutputBufferManagerRegistry::unregisterAll();
 }
 
+TEST(OutputBufferManagerRegistryTest, statsAdd) {
+  OutputBuffer::Stats a(
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      /*_noMoreBuffers=*/false,
+      /*_noMoreData=*/false,
+      /*_finished=*/false,
+      /*_bufferedBytes=*/100,
+      /*_bufferedPages=*/10,
+      /*_totalBytesSent=*/1000,
+      /*_totalRowsSent=*/50,
+      /*_totalPagesSent=*/5,
+      /*_averageBufferTimeMs=*/200,
+      /*_numTopBuffers=*/2,
+      /*_buffersStats=*/{});
+
+  OutputBuffer::Stats b(
+      core::PartitionedOutputNode::Kind::kBroadcast,
+      /*_noMoreBuffers=*/true,
+      /*_noMoreData=*/true,
+      /*_finished=*/true,
+      /*_bufferedBytes=*/300,
+      /*_bufferedPages=*/30,
+      /*_totalBytesSent=*/3000,
+      /*_totalRowsSent=*/150,
+      /*_totalPagesSent=*/15,
+      /*_averageBufferTimeMs=*/400,
+      /*_numTopBuffers=*/6,
+      /*_buffersStats=*/{});
+
+  a.add(b);
+
+  EXPECT_EQ(a.kind, core::PartitionedOutputNode::Kind::kBroadcast);
+  EXPECT_TRUE(a.noMoreBuffers);
+  EXPECT_TRUE(a.noMoreData);
+  EXPECT_TRUE(a.finished);
+  EXPECT_EQ(a.bufferedBytes, 400);
+  EXPECT_EQ(a.bufferedPages, 40);
+  EXPECT_EQ(a.totalBytesSent, 4000);
+  EXPECT_EQ(a.totalRowsSent, 200);
+  EXPECT_EQ(a.totalPagesSent, 20);
+  EXPECT_EQ(a.numTopBuffers, 8);
+
+  // Weighted average: (200*1000 + 400*3000) / (1000+3000) = 1400000/4000 = 350
+  EXPECT_EQ(a.averageBufferTimeMs, 350);
+}
+
+TEST(OutputBufferManagerRegistryTest, statsAddZeroBytes) {
+  OutputBuffer::Stats a(
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      false,
+      false,
+      false,
+      /*_bufferedBytes=*/0,
+      /*_bufferedPages=*/0,
+      /*_totalBytesSent=*/0,
+      /*_totalRowsSent=*/0,
+      /*_totalPagesSent=*/0,
+      /*_averageBufferTimeMs=*/0,
+      /*_numTopBuffers=*/0,
+      /*_buffersStats=*/{});
+
+  OutputBuffer::Stats b(
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      false,
+      false,
+      false,
+      /*_bufferedBytes=*/0,
+      /*_bufferedPages=*/0,
+      /*_totalBytesSent=*/0,
+      /*_totalRowsSent=*/0,
+      /*_totalPagesSent=*/0,
+      /*_averageBufferTimeMs=*/0,
+      /*_numTopBuffers=*/0,
+      /*_buffersStats=*/{});
+
+  a.add(b);
+  EXPECT_EQ(a.averageBufferTimeMs, 0);
+  EXPECT_EQ(a.totalBytesSent, 0);
+}
+
+TEST_F(OutputBufferManagerRegistryFixture, createWithNullParentIsolation) {
+  auto globalMgr = std::make_shared<MockOutputBufferManager>();
+  OutputBufferManagerRegistry::global().insert("obm", globalMgr);
+
+  auto isolated = OutputBufferManagerRegistry::create(nullptr);
+  EXPECT_EQ(isolated->find("obm"), nullptr);
+
+  auto localMgr = std::make_shared<MockOutputBufferManager>();
+  isolated->insert("local-obm", localMgr);
+  EXPECT_EQ(isolated->find("local-obm"), localMgr);
+  EXPECT_EQ(OutputBufferManagerRegistry::tryGet("local-obm"), nullptr);
+
+  auto snap = isolated->snapshot();
+  EXPECT_EQ(snap.size(), 1);
+  EXPECT_EQ(snap[0].first, "local-obm");
+
+  OutputBufferManagerRegistry::unregisterAll();
+}
+
 } // namespace
 } // namespace facebook::velox::exec
