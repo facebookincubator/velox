@@ -92,7 +92,7 @@ RowVectorPtr CudfEnforceSingleRow::doGetOutput() {
     return nullptr;
   }
 
-  return input_;
+  return std::exchange(input_, nullptr);
 }
 
 bool CudfEnforceSingleRow::isFinished() {
