@@ -69,10 +69,10 @@ CudfSplitReader::CudfSplitReader(
       fileHandleFactory_(fileHandleFactory),
       executor_(executor),
       connectorQueryCtx_(connectorQueryCtx),
-      cudfHiveConfig_(cudfHiveConfig),
-      pool_(connectorQueryCtx->memoryPool()),
       ioStatistics_(ioStatistics),
       ioStats_(ioStats),
+      cudfHiveConfig_(cudfHiveConfig),
+      pool_(connectorQueryCtx->memoryPool()),
       useExperimentalCudfReader_(useExperimentalCudfReader),
       baseReaderOpts_(pool_),
       subfieldFilterExpr_(subfieldFilterExpr) {}

@@ -89,12 +89,6 @@ class CudfSplitReader : public NvtxHelper {
   /// Setup the cuDF data source
   void setupCudfDataSource();
 
-  /// Setup the cuDF reader options
-  void setupReaderOptions();
-
-  /// Create the experimental hybrid scan reader.
-  void createExperimentalReader();
-
   /// Read the next raw chunk from the parquet reader (regular or hybrid).
   /// Returns nullopt when no more data.
   virtual std::optional<std::unique_ptr<cudf::table>> readNextChunk(
@@ -109,24 +103,32 @@ class CudfSplitReader : public NvtxHelper {
   FileHandleFactory* fileHandleFactory_;
   folly::Executor* executor_;
   const ConnectorQueryCtx* connectorQueryCtx_;
+
+  std::shared_ptr<io::IoStatistics> ioStatistics_;
+  std::shared_ptr<IoStats> ioStats_;
+
+  std::shared_ptr<cudf::io::datasource> dataSource_;
+  rmm::cuda_stream_view stream_;
+
+ private:
+  /// Setup the cuDF reader options
+  void setupReaderOptions();
+
+  /// Create the experimental hybrid scan reader.
+  void createExperimentalReader();
+
   std::shared_ptr<CudfHiveConfig> cudfHiveConfig_;
   memory::MemoryPool* pool_;
 
   // cuDF split reader stuff.
   cudf::io::parquet_reader_options readerOptions_;
-  std::shared_ptr<cudf::io::datasource> dataSource_;
   CudfParquetReaderPtr splitReader_;
   CudfHybridScanReaderPtr exptSplitReader_;
   std::unique_ptr<HybridScanState> hybridScanState_;
-  bool useExperimentalCudfReader_{false};
-  rmm::cuda_stream_view stream_;
-
-  std::shared_ptr<io::IoStatistics> ioStatistics_;
-  std::shared_ptr<IoStats> ioStats_;
+  bool useExperimentalCudfReader_;
 
   dwio::common::ReaderOptions baseReaderOpts_;
 
- private:
   cudf::ast::expression const* subfieldFilterExpr_;
 
   struct TotalScanTimeCallbackData {
