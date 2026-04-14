@@ -44,11 +44,12 @@ class CountingJoinTest : public OperatorTestBase {
                             .planNode(),
                         "",
                         {"c0"},
-                        joinType)
+                        joinType,
+                        /*nullAware=*/false,
+                        /*nullAsValue=*/true)
                     .planNode();
-    assertEqualResults(
-        {makeRowVector({makeFlatVector<int32_t>(expected)})},
-        {AssertQueryBuilder(plan).copyResults(pool())});
+    AssertQueryBuilder(plan).assertResults(
+        makeRowVector({makeFlatVector<int32_t>(expected)}));
   }
 };
 
@@ -128,11 +129,12 @@ TEST_F(CountingJoinTest, multipleProbeBatches) {
                 PlanBuilder(planNodeIdGenerator).values(buildVector).planNode(),
                 "",
                 {"c0"},
-                joinType)
+                joinType,
+                /*nullAware=*/false,
+                /*nullAsValue=*/true)
             .planNode();
-    assertEqualResults(
-        {makeRowVector({makeFlatVector<int32_t>(expected)})},
-        {AssertQueryBuilder(plan).copyResults(pool())});
+    AssertQueryBuilder(plan).assertResults(
+        makeRowVector({makeFlatVector<int32_t>(expected)}));
   };
 
   // Probe: {1:3, 2:3, 3:3}, Build: {1:1, 2:2, 3:1}
@@ -164,18 +166,20 @@ TEST_F(CountingJoinTest, multipleKeys) {
               PlanBuilder(planNodeIdGenerator).values(buildVector).planNode(),
               "",
               {"c0", "c1"},
-              core::JoinType::kCountingAnti)
+              core::JoinType::kCountingAnti,
+              /*nullAware=*/false,
+              /*nullAsValue=*/true)
           .planNode();
 
   auto expected = makeRowVector({
       makeFlatVector<int32_t>({1, 2}),
       makeFlatVector<int32_t>({20, 10}),
   });
-  assertEqualResults(
-      {expected}, {AssertQueryBuilder(plan).copyResults(pool())});
+  AssertQueryBuilder(plan).assertResults(expected);
 }
 
-// Null join keys never match anything (including other nulls).
+// Null join keys match each other with nullAsValue (IS NOT DISTINCT FROM
+// semantics), as required by SQL set operations (EXCEPT ALL, INTERSECT ALL).
 TEST_F(CountingJoinTest, nullKeys) {
   // Probe: {1, null, 1, null, 2}, Build: {1, null, 3}
   auto probeVector = makeRowVector(
@@ -185,31 +189,34 @@ TEST_F(CountingJoinTest, nullKeys) {
 
   auto test = [&](core::JoinType joinType,
                   const std::vector<std::optional<int32_t>>& expected) {
+    SCOPED_TRACE(core::JoinTypeName::toName(joinType));
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto plan =
-        PlanBuilder(planNodeIdGenerator)
-            .values(probeVector)
-            .hashJoin(
-                {"c0"},
-                {"u0"},
-                PlanBuilder(planNodeIdGenerator).values(buildVector).planNode(),
-                "",
-                {"c0"},
-                joinType)
-            .planNode();
-    assertEqualResults(
-        {makeRowVector({makeNullableFlatVector<int32_t>(expected)})},
-        {AssertQueryBuilder(plan).copyResults(pool())});
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .values({probeVector})
+                    .hashJoin(
+                        {"c0"},
+                        {"u0"},
+                        PlanBuilder(planNodeIdGenerator)
+                            .values({buildVector})
+                            .planNode(),
+                        "",
+                        {"c0"},
+                        joinType,
+                        /*nullAware=*/false,
+                        /*nullAsValue=*/true)
+                    .planNode();
+    AssertQueryBuilder(plan).assertResults(
+        makeRowVector({makeNullableFlatVector<int32_t>(expected)}));
   };
 
-  // EXCEPT ALL: non-null key 1 appears twice on probe and once on build, so one
-  // copy is removed. Key 2 has no build match. Null keys have no match and pass
-  // through.
-  test(core::JoinType::kCountingAnti, {1, std::nullopt, std::nullopt, 2});
+  // EXCEPT ALL: null keys match. Probe has 2 nulls, build has 1 null, so 1
+  // null passes through. Key 1 appears twice on probe, once on build, so 1
+  // copy passes through. Key 2 has no build match.
+  test(core::JoinType::kCountingAnti, {1, std::nullopt, 2});
 
-  // INTERSECT ALL: non-null key 1 appears twice on probe and once on build, so
-  // one copy is kept. Null keys have no match and are excluded.
-  test(core::JoinType::kCountingLeftSemiFilter, {1});
+  // INTERSECT ALL: null keys match. min(2, 1) = 1 null kept.
+  // Key 1: min(2, 1) = 1. Key 2: no match.
+  test(core::JoinType::kCountingLeftSemiFilter, {1, std::nullopt});
 }
 
 // Verifies that the build side deduplicates rows and stores only distinct keys.
@@ -233,7 +240,9 @@ TEST_F(CountingJoinTest, buildSideDedup) {
                           .planNode(),
                       "",
                       {"c0"},
-                      core::JoinType::kCountingAnti)
+                      core::JoinType::kCountingAnti,
+                      /*nullAware=*/false,
+                      /*nullAsValue=*/true)
                   .planNode();
 
   auto expected =
@@ -284,7 +293,9 @@ TEST_F(CountingJoinTest, multipleBuildDrivers) {
                             .planNode(),
                         "",
                         probeKeys,
-                        joinType)
+                        joinType,
+                        /*nullAware=*/false,
+                        /*nullAsValue=*/true)
                     .planNode();
     auto task = AssertQueryBuilder(plan)
                     .maxDrivers(kNumDrivers)

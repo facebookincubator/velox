@@ -3292,6 +3292,12 @@ class AbstractJoinNode : public PlanNode {
 /// EXISTS.
 class HashJoinNode : public AbstractJoinNode {
  public:
+  /// @param nullAware Applies to semi and anti joins only. When true, the
+  /// join semantic is IN / NOT IN (three-valued NULL logic). When false, the
+  /// join semantic is EXISTS / NOT EXISTS.
+  /// @param nullAsValue When true, join keys use IS NOT DISTINCT FROM
+  /// semantics where NULL equals NULL. Used to implement SQL set operations
+  /// (EXCEPT, INTERSECT). Mutually exclusive with nullAware.
   HashJoinNode(
       const PlanNodeId& id,
       JoinType joinType,
@@ -3302,7 +3308,8 @@ class HashJoinNode : public AbstractJoinNode {
       PlanNodePtr left,
       PlanNodePtr right,
       RowTypePtr outputType,
-      bool useHashTableCache = false)
+      bool useHashTableCache = false,
+      bool nullAsValue = false)
       : AbstractJoinNode(
             id,
             joinType,
@@ -3313,8 +3320,13 @@ class HashJoinNode : public AbstractJoinNode {
             std::move(right),
             std::move(outputType)),
         nullAware_{nullAware},
+        nullAsValue_{nullAsValue},
         useHashTableCache_{useHashTableCache} {
     validate();
+
+    VELOX_USER_CHECK(
+        !nullAware || !nullAsValue,
+        "nullAware and nullAsValue are mutually exclusive");
 
     if (isCountingJoin()) {
       VELOX_USER_CHECK(
@@ -3344,11 +3356,17 @@ class HashJoinNode : public AbstractJoinNode {
     explicit Builder(const HashJoinNode& other)
         : AbstractJoinNode::Builder<HashJoinNode, Builder>(other) {
       nullAware_ = other.isNullAware();
+      nullAsValue_ = other.isNullAsValue();
       useHashTableCache_ = other.useHashTableCache();
     }
 
     Builder& nullAware(bool value) {
       nullAware_ = value;
+      return *this;
+    }
+
+    Builder& nullAsValue(bool value) {
+      nullAsValue_ = value;
       return *this;
     }
 
@@ -3384,11 +3402,13 @@ class HashJoinNode : public AbstractJoinNode {
           left_.value(),
           right_.value(),
           outputType_.value(),
-          useHashTableCache_.value_or(false));
+          useHashTableCache_.value_or(false),
+          nullAsValue_.value_or(false));
     }
 
    private:
     std::optional<bool> nullAware_;
+    std::optional<bool> nullAsValue_;
     std::optional<bool> useHashTableCache_;
   };
 
@@ -3416,6 +3436,13 @@ class HashJoinNode : public AbstractJoinNode {
     return nullAware_;
   }
 
+  /// Returns true when join keys use IS NOT DISTINCT FROM semantics where
+  /// NULL equals NULL. Used to implement SQL set operations (EXCEPT,
+  /// INTERSECT).
+  bool isNullAsValue() const {
+    return nullAsValue_;
+  }
+
   /// Returns whether hash table caching is enabled for broadcast joins.
   /// Only used by Presto-on-Spark.
   bool useHashTableCache() const {
@@ -3430,6 +3457,7 @@ class HashJoinNode : public AbstractJoinNode {
   void addDetails(std::stringstream& stream) const override;
 
   const bool nullAware_;
+  const bool nullAsValue_;
   const bool useHashTableCache_;
 };
 
