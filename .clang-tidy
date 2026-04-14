@@ -61,6 +61,10 @@ Checks: >
 
 HeaderFilterRegex: '.*'
 
+# Exclude cudf folder from clang-tidy checks
+# CUDA files are not supported by clang-tidy
+ExcludeHeaderFilterRegex: '.*/cudf/.*'
+
 WarningsAsErrors: ''
 
 CheckOptions:
