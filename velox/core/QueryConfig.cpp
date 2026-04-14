@@ -22,6 +22,15 @@
 
 namespace facebook::velox::core {
 
+namespace detail {
+
+std::vector<config::ConfigProperty>& queryConfigProperties() {
+  static std::vector<config::ConfigProperty> kProperties;
+  return kProperties;
+}
+
+} // namespace detail
+
 QueryConfig::QueryConfig(std::unordered_map<std::string, std::string> values)
     : QueryConfig{
           ConfigTag{},
