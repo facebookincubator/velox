@@ -251,10 +251,12 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
 std::optional<RowVectorPtr> CudfHiveDataSource::next(
     uint64_t size,
     velox::ContinueFuture& /* future */) {
-  VELOX_CHECK_NOT_NULL(cudfSplitReader_, "No split to process.");
+  VELOX_CHECK_NOT_NULL(split_, "No split present. Call addSplit() first.");
+  VELOX_CHECK_NOT_NULL(
+      cudfSplitReader_, "No split reader present. Call addSplit() first.");
   auto result = cudfSplitReader_->next(size);
   if (!result.has_value()) {
-    return RowVectorPtr{nullptr};
+    return nullptr;
   }
   completedRows_ += result.value()->size();
   return result;
@@ -262,12 +264,12 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
 
 std::unordered_map<std::string, RuntimeMetric>
 CudfHiveDataSource::getRuntimeStats() {
-  auto res = runtimeStats_.toRuntimeMetricMap();
+  auto result = runtimeStats_.toRuntimeMetricMap();
   if (cudfSplitReader_) {
     auto splitStats = cudfSplitReader_->runtimeStats().toRuntimeMetricMap();
-    res.insert(splitStats.begin(), splitStats.end());
+    result.insert(splitStats.begin(), splitStats.end());
   }
-  res.insert({
+  result.insert({
       {std::string(connector::hive::HiveDataSource::kTotalScanTime),
        RuntimeMetric(
            ioStatistics_->totalScanTime(), RuntimeCounter::Unit::kNanos)},
@@ -278,9 +280,9 @@ CudfHiveDataSource::getRuntimeStats() {
   });
   const auto& ioStats = ioStats_->stats();
   for (const auto& storageStats : ioStats) {
-    res.emplace(storageStats.first, storageStats.second);
+    result.emplace(storageStats.first, storageStats.second);
   }
-  return res;
+  return result;
 }
 
 } // namespace facebook::velox::cudf_velox::connector::hive

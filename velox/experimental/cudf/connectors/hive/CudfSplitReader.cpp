@@ -91,7 +91,7 @@ CudfSplitReader::CudfSplitReader(
       totalRemainingFilterTime_(totalRemainingFilterTime) {}
 
 void CudfSplitReader::prepareSplit() {
-  // Split reader already exists, reset
+  // Reset existing split reader and datasource if existing
   splitReader_.reset();
   exptSplitReader_.reset();
   hybridScanState_.reset();
@@ -111,8 +111,9 @@ void CudfSplitReader::prepareSplit() {
 
 std::optional<RowVectorPtr> CudfSplitReader::next(uint64_t /*size*/) {
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
-  // Basic sanity checks
-  VELOX_CHECK(splitReader_ or exptSplitReader_, "No split reader present");
+  VELOX_CHECK(
+      splitReader_ or exptSplitReader_,
+      "No Cudf Split reader present. Call prepareSplit() first.");
 
   // Record start time before reading chunk
   auto startTimeUs = getCurrentTimeMicro();
@@ -132,7 +133,7 @@ std::optional<RowVectorPtr> CudfSplitReader::next(uint64_t /*size*/) {
 
   uint64_t filterTimeUs{0};
   // Apply remaining filter if present
-  if (remainingFilterExprSet_ && *remainingFilterExprSet_) {
+  if (remainingFilterExprSet_) {
     MicrosecondTimer filterTimer(&filterTimeUs);
     auto cudfTableColumns = cudfTable->release();
     // Filter may need additional computed columns
