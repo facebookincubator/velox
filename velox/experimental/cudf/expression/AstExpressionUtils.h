@@ -404,7 +404,7 @@ cudf::ast::expression const& AstContext::addPrecomputeInstruction(
           sideIdx, columnIndex, instruction, fieldName, node);
     }
   }
-  VELOX_FAIL("Field not found, " + name);
+  VELOX_FAIL("Field not found: {}", name);
 }
 
 /// Handles logical AND/OR expressions with multiple inputs by converting them
@@ -569,7 +569,7 @@ cudf::ast::expression const& AstContext::pushExprToTree(
         }
       }
     }
-    VELOX_FAIL("Field not found, " + name);
+    VELOX_FAIL("Field not found: {}", name);
   } else if (!allowPureAstOnly && canBeEvaluatedByCudf(expr, /*deep=*/false)) {
     // Shallow check: only verify this operation is supported
     // Children will be recursively handled by createCudfExpression
@@ -582,7 +582,7 @@ cudf::ast::expression const& AstContext::pushExprToTree(
         createCudfExpression(expr, inputRowSchema[sideIdx], kAstEvaluatorName);
     return addPrecomputeInstructionOnSide(sideIdx, 0, name, "", node);
   } else {
-    VELOX_FAIL("Unsupported expression: " + name);
+    VELOX_FAIL("Unsupported expression: {}", name);
   }
 }
 
@@ -640,7 +640,7 @@ std::vector<ColumnOrView> precomputeSubexpressions(
           nested_dependent_column_indices[0]);
       precomputedColumns.push_back(view);
     } else {
-      VELOX_FAIL("Unsupported precompute operation " + ins_name);
+      VELOX_FAIL("Unsupported precompute operation {}", ins_name);
     }
   }
 

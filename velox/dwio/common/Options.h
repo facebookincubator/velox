@@ -53,6 +53,7 @@ enum class FileFormat {
   ORC = 9,
   SST = 10, // rocksdb sst format
   FLUX = 11,
+  AVRO = 12,
 };
 
 FileFormat toFileFormat(std::string_view s);
