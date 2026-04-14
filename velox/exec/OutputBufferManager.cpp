@@ -31,12 +31,13 @@ const std::shared_ptr<OutputBufferManager>& OutputBufferManager::getInstanceRef(
     const Options& options) {
   static const std::shared_ptr<OutputBufferManager> instance =
       std::make_shared<OutputBufferManager>(options);
-  static const bool registered = [] {
+  if (!outputBufferManagers().find(
+          std::string(OutputBufferManagerRegistry::kDefaultId))) {
     outputBufferManagers().insert(
-        std::string(OutputBufferManagerRegistry::kDefaultId), instance);
-    return true;
-  }();
-  (void)registered;
+        std::string(OutputBufferManagerRegistry::kDefaultId),
+        instance,
+        /*overwrite=*/true);
+  }
   return instance;
 }
 
