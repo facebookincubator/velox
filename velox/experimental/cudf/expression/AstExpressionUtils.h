@@ -201,13 +201,13 @@ const std::unordered_map<std::string, Op> sparkUnaryOps = {
     // Hyperbolic functions
     {"sinh", Op::SINH},
     {"cosh", Op::COSH},
-    {"tanh", Op::TANH},      
+    {"tanh", Op::TANH},
     {"asinh", Op::ARCSINH},
     {"acosh", Op::ARCCOSH},
     {"atanh", Op::ARCTANH},
     // Exponential and logarithmic functions
     {"exp", Op::EXP},
-    {"log", Op::LOG},           
+    {"log", Op::LOG},
     {"ln", Op::LOG},
     // Root functions
     {"sqrt", Op::SQRT},
@@ -539,7 +539,8 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     auto const& op1 = pushExprToTree(expr->inputs()[0]);
     // Spark result type is different with presto, presto is same with cudf
     const auto& op2 = tree.push(Operation{unaryOps.at(name), op1});
-    if ((name == "ceil" || name == "floor") && expr->type()->kind() == TypeKind::BIGINT) {
+    if ((name == "ceil" || name == "floor") &&
+        expr->type()->kind() == TypeKind::BIGINT) {
       return tree.push(Operation{Op::CAST_TO_INT64, op2});
     }
     return op2;

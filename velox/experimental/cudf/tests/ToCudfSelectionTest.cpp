@@ -283,22 +283,24 @@ TEST_F(ToCudfSelectionTest, complexGroupingKeyExpressionsFallsBack) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
 
-  auto plan = PlanBuilder()
-                  .values(vectors)
-                  .project({"c0", "c1", "c2", "xxhash64_internal(c0) AS complex_key"})
-                  .aggregation(
-                      {"complex_key"},
-                      {"sum(c2)"},
-                      {},
-                      core::AggregationNode::Step::kSingle,
-                      false)
-                  .planNode();
+  auto plan =
+      PlanBuilder()
+          .values(vectors)
+          .project({"c0", "c1", "c2", "xxhash64_internal(c0) AS complex_key"})
+          .aggregation(
+              {"complex_key"},
+              {"sum(c2)"},
+              {},
+              core::AggregationNode::Step::kSingle,
+              false)
+          .planNode();
 
   auto task =
       AssertQueryBuilder(duckDbQueryRunner_)
           .config("cudf.enabled", true)
           .plan(plan)
-          .assertResults("SELECT xxhash64_internal(c0), sum(c2) FROM tmp GROUP BY abs(c0)");
+          .assertResults(
+              "SELECT xxhash64_internal(c0), sum(c2) FROM tmp GROUP BY abs(c0)");
 
   ASSERT_FALSE(wasCudfAggregationUsed(task));
   ASSERT_TRUE(wasDefaultHashAggregationUsed(task));

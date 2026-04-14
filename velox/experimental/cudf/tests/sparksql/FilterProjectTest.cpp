@@ -119,11 +119,11 @@ TEST_F(CudfFilterProjectTest, dateAdd) {
 // Test unary math functions for Spark
 TEST_F(CudfFilterProjectTest, unaryMathFunctions) {
   auto testUnaryFunction =
-    [&](std::string expr, double input, double expected) {
-      auto valueOpt = evaluateOnce<double, double>(expr, input);
-      auto value = valueOpt.value();
-      EXPECT_DOUBLE_EQ(value, expected);
-    };
+      [&](std::string expr, double input, double expected) {
+        auto valueOpt = evaluateOnce<double, double>(expr, input);
+        auto value = valueOpt.value();
+        EXPECT_DOUBLE_EQ(value, expected);
+      };
 
   auto testUnaryFunctionInt =
       [&](std::string expr, double input, int64_t expected) {
@@ -157,8 +157,6 @@ TEST_F(CudfFilterProjectTest, unaryMathFunctions) {
   // Absolute value
   testUnaryFunction("abs(c0)", -5.5, 5.5);
 }
-
-
 
 } // namespace
 } // namespace facebook::velox::cudf_velox

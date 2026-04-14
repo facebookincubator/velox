@@ -202,7 +202,10 @@ TEST_F(CudfAggregationSelectionTest, complexGroupbyClauseExpressions) {
               makeFlatVector<int64_t>({10, 20, 30, 40, 50}),
           })})
           .project(
-              {"c0", "c1", "xxhash64_internal(c0) AS hash_c0"}) // xxhash64_internal is unsupported by CUDF
+              {"c0",
+               "c1",
+               "xxhash64_internal(c0) AS hash_c0"}) // xxhash64_internal is
+                                                    // unsupported by CUDF
           .aggregation(
               {"xxhash64_internal_c0"},
               {"sum(c1)"},

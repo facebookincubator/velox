@@ -1203,10 +1203,10 @@ TEST_F(CudfSimpleFilterProjectTest, castToSmallInt) {
 // Test unary math functions
 TEST_F(CudfSimpleFilterProjectTest, unaryMathFunctions) {
   auto testUnaryFunction =
-    [&](std::string expr, double input, double expected) {
-      auto valueOpt = evaluateOnce<double, double>(expr, input);
-      EXPECT_DOUBLE_EQ(valueOpt.value(), expected);
-    };
+      [&](std::string expr, double input, double expected) {
+        auto valueOpt = evaluateOnce<double, double>(expr, input);
+        EXPECT_DOUBLE_EQ(valueOpt.value(), expected);
+      };
   // Trigonometric functions (use 0.0 where stable/clean)
   testUnaryFunction("sin(c0)", 0.0, 0.0);
   testUnaryFunction("cos(c0)", 0.0, 1.0);
