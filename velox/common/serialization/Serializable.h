@@ -280,6 +280,7 @@ class ISerializable {
 
     VELOX_USER_CHECK(array.isArray());
     std::vector<deserializeValType> exprs;
+    exprs.reserve(array.size());
     for (auto& obj : array) {
       exprs.push_back(
           ISerializable::deserialize<typename T::value_type>(obj, context));
