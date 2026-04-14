@@ -45,8 +45,9 @@ struct VeloxPlan {
 class VeloxPlanLoader {
  public:
   /// @param planDirectory  Directory containing plan JSON files.
-  /// @param pool           Memory pool for plan deserialization (creates one
-  ///                       if nullptr).
+  /// @param pool           Memory pool for plan deserialization. If nullptr,
+  ///                       a leaf pool is created from the global
+  ///                       MemoryManager (which must already be initialized).
   /// @param stripPartitionedOutput  If true, strip PartitionedOutput root.
   VeloxPlanLoader(
       const std::string& planDirectory,

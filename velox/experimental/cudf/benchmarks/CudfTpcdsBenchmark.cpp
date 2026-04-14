@@ -77,7 +77,7 @@ void CudfTpcdsBenchmark::initialize() {
   // initQueryBuilder() -> registerCudf(), which bakes the prefix into the
   // step-aware aggregation registry.
   auto& config = cudf_velox::CudfConfig::getInstance();
-  config.functionNamePrefix = "presto.default.";
+  config.functionNamePrefix = kPrestoFunctionNamespacePrefix;
 
   if (!FLAGS_cudf_properties.empty()) {
     auto path = std::filesystem::path(FLAGS_cudf_properties);

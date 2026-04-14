@@ -24,6 +24,8 @@ DECLARE_string(plan_path);
 
 inline const std::string kPrestoHiveConnectorId = "hive";
 
+static constexpr const char* kPrestoFunctionNamespacePrefix = "presto.default.";
+
 class TpcdsBenchmark : public facebook::velox::QueryBenchmarkBase {
  public:
   void initialize() override;

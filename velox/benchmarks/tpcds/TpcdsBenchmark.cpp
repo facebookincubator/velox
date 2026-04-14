@@ -77,10 +77,11 @@ void TpcdsBenchmark::initQueryBuilder() {
 void TpcdsBenchmark::initialize() {
   QueryBenchmarkBase::initialize();
 
-  // TPC-DS plans from Presto use "presto.default." prefix for functions.
-  functions::prestosql::registerAllScalarFunctions("presto.default.");
-  aggregate::prestosql::registerAllAggregateFunctions("presto.default.");
-  window::prestosql::registerAllWindowFunctions("presto.default.");
+  functions::prestosql::registerAllScalarFunctions(
+      kPrestoFunctionNamespacePrefix);
+  aggregate::prestosql::registerAllAggregateFunctions(
+      kPrestoFunctionNamespacePrefix);
+  window::prestosql::registerAllWindowFunctions(kPrestoFunctionNamespacePrefix);
 
   // Register serialization/deserialization for plan nodes.
   Type::registerSerDe();
