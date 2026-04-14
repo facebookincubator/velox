@@ -1488,7 +1488,7 @@ TEST_F(Re2FunctionsTest, tryException) {
   }
 }
 
-// Make sure we do not compile more than "expression.max_compiled_regexes".
+// LRUCache supports compile more than "expression.max_compiled_regexes".
 TEST_F(Re2FunctionsTest, likeRegexLimit) {
   const auto maxCompiledRegexes =
       core::QueryConfig({}).exprMaxCompiledRegexes();
@@ -1547,25 +1547,17 @@ TEST_F(Re2FunctionsTest, likeRegexLimit) {
   verifyNoRegexCompilationForPattern(PatternKind::kSuffix);
   verifyNoRegexCompilationForPattern(PatternKind::kSubstring);
 
-  // Over maxCompiledRegexes, all require regex, will fail.
+  // Over maxCompiledRegexes, all require regex, will pass because of LRUCache.
   for (auto i = 0; i < aboveMaxCompiledRegexes; i++) {
     std::string localPattern =
         fmt::format("b%[0-9]+.*{}.*{}.*[0-9]+", 'c' + i, 'c' + i);
     flatPattern->set(i, StringView(localPattern));
   }
+  result = evaluate("like(c0, c1)", makeRowVector({input, pattern}));
+  assertEqualVectors(makeConstant(false, aboveMaxCompiledRegexes), result);
 
-  VELOX_ASSERT_THROW(
-      evaluate("like(c0, c1)", makeRowVector({input, pattern})),
-      "Max number of regex reached");
-
-  // First maxCompiledRegexes rows should return false, the rest raise and error
-  // and become null.
   result = evaluate("try(like(c0, c1))", makeRowVector({input, pattern}));
-  auto expected = makeFlatVector<bool>(
-      aboveMaxCompiledRegexes,
-      [](auto /*row*/) { return false; },
-      [&](auto row) { return row >= maxCompiledRegexes; });
-  assertEqualVectors(expected, result);
+  assertEqualVectors(makeConstant(false, aboveMaxCompiledRegexes), result);
 
   // All are complex but the same, should pass.
   for (auto i = 0; i < aboveMaxCompiledRegexes; i++) {
@@ -1616,7 +1608,7 @@ TEST_F(Re2FunctionsTest, regexExtractAllLarge) {
       "No group 4611686018427387904 in regex '(\\d+)([a-z]+)")
 }
 
-// Make sure we do not compile more than "expression.max_compiled_regexes".
+// LRUCache supports compile more than "expression.max_compiled_regexes".
 TEST_F(Re2FunctionsTest, limit) {
   const auto maxCompiledRegexes =
       core::QueryConfig({}).exprMaxCompiledRegexes();
@@ -1637,27 +1629,19 @@ TEST_F(Re2FunctionsTest, limit) {
           }),
   });
 
-  VELOX_ASSERT_THROW(
-      evaluate("regexp_extract(c0, c1)", data), "Max number of regex reached");
+  ASSERT_NO_THROW(evaluate("regexp_extract(c0, c1)", data));
   ASSERT_NO_THROW(evaluate("regexp_extract(c0, c2)", data));
 
-  VELOX_ASSERT_THROW(
-      evaluate("regexp_extract(c0, c1, 1)", data),
-      "Max number of regex reached");
+  ASSERT_NO_THROW(evaluate("regexp_extract(c0, c1, 1)", data));
   ASSERT_NO_THROW(evaluate("regexp_extract(c0, c2, 1)", data));
 
-  VELOX_ASSERT_THROW(
-      evaluate("regexp_extract_all(c0, c1)", data),
-      "Max number of regex reached");
+  ASSERT_NO_THROW(evaluate("regexp_extract_all(c0, c1)", data));
   ASSERT_NO_THROW(evaluate("regexp_extract_all(c0, c2)", data));
 
-  VELOX_ASSERT_THROW(
-      evaluate("regexp_extract_all(c0, c1, 1)", data),
-      "Max number of regex reached");
+  ASSERT_NO_THROW(evaluate("regexp_extract_all(c0, c1, 1)", data));
   ASSERT_NO_THROW(evaluate("regexp_extract_all(c0, c2, 1)", data));
 
-  VELOX_ASSERT_THROW(
-      evaluate("regexp_like(c0, c1)", data), "Max number of regex reached");
+  ASSERT_NO_THROW(evaluate("regexp_like(c0, c1)", data));
   ASSERT_NO_THROW(evaluate("regexp_like(c0, c2)", data));
 }
 
