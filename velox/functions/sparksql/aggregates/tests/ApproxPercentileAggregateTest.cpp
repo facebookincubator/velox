@@ -382,6 +382,37 @@ TEST_F(ApproxPercentileAggregateTest, partialFinalGroupBy) {
   AssertQueryBuilder(plan).assertResults(expectedResult);
 }
 
+TEST_F(ApproxPercentileAggregateTest, partialFinalAbandon) {
+  std::vector<RowVectorPtr> data = {
+      makeRowVector({
+          makeFlatVector<int32_t>(150, [](auto row) { return row; }),
+          makeFlatVector<int32_t>(150, [](auto row) { return row; }),
+      }),
+      makeRowVector({
+          makeFlatVector<int32_t>(150, [](auto row) { return row; }),
+          makeFlatVector<int32_t>(150, [](auto row) { return row; }),
+      }),
+  };
+
+  createDuckDbTable(data);
+
+  auto plan = PlanBuilder()
+                  .values(data)
+                  .partialAggregation(
+                      {"c0"},
+                      {"spark_approx_percentile(c1, 0.5)",
+                       "spark_approx_percentile(c1, 0.5, 10000)"})
+                  .finalAggregation()
+                  .planNode();
+
+  AssertQueryBuilder(duckDbQueryRunner_)
+      .config(core::QueryConfig::kAbandonPartialAggregationMinRows, "100")
+      .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "50")
+      .maxDrivers(1)
+      .plan(plan)
+      .assertResults("SELECT c0, c0, c0 FROM tmp GROUP BY 1");
+}
+
 // Test final aggregation accuracy by merging multiple partial results.
 TEST_F(ApproxPercentileAggregateTest, finalAggregateAccuracy) {
   auto batch = makeRowVector(
