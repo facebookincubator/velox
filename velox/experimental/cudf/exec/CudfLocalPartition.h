@@ -57,7 +57,7 @@ class CudfLocalPartition : public CudfOperatorBase {
 
  protected:
   void doAddInput(RowVectorPtr input) override;
-  
+
   RowVectorPtr doGetOutput() override {
     return nullptr;
   }

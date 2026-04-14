@@ -160,7 +160,6 @@ class CudfHashJoinProbe : public CudfOperatorBase {
   }
 
   bool isFinished() override;
- 
 
  protected:
   void doAddInput(RowVectorPtr input) override;

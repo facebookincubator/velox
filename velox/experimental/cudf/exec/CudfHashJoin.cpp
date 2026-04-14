@@ -1601,7 +1601,6 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::antiJoin(
 }
 
 RowVectorPtr CudfHashJoinProbe::doGetOutput() {
-
   if (finished_ or !hashObject_.has_value()) {
     return nullptr;
   }

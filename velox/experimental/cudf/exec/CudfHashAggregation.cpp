@@ -1390,7 +1390,6 @@ CudfVectorPtr CudfHashAggregation::releaseAndResetPartialOutput() {
 }
 
 RowVectorPtr CudfHashAggregation::doGetOutput() {
-
   // Handle partial groupby and distinct.
   if (isPartialOutput_ && !isGlobal_ && streamingEnabled_) {
     if (bufferedResult_ &&

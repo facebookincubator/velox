@@ -15,12 +15,15 @@
  */
 #pragma once
 
+#include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/NvtxHelper.h"
+
 #include "velox/common/base/SpillConfig.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Operator.h"
-#include "velox/experimental/cudf/CudfConfig.h"
-#include "velox/experimental/cudf/exec/NvtxHelper.h"
+
 #include <glog/logging.h>
+
 #include <type_traits>
 
 namespace facebook::velox::cudf_velox {
@@ -108,7 +111,8 @@ class CudfOperatorBase : public exec::Operator, public NvtxHelper {
       std::optional<nvtx3::color> color = std::nullopt,
       NvtxMethodFlag nvtxMethods = NvtxMethodFlag::kAll,
       std::optional<common::SpillConfig> spillConfig = std::nullopt,
-      std::optional<std::shared_ptr<const core::PlanNode>> planNode = std::nullopt)
+      std::optional<std::shared_ptr<const core::PlanNode>> planNode =
+          std::nullopt)
       : Operator(
             driverCtx,
             outputType,
