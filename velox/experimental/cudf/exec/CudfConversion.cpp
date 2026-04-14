@@ -145,13 +145,11 @@ RowVectorPtr CudfFromVelox::getOutput() {
   // Get a stream from the global stream pool
   auto stream = cudfGlobalStreamPool().get_stream();
 
-  // Convert RowVector to cudf table
+  // Convert RowVector to cudf table.  toCudfTable synchronizes the stream
+  // internally before releasing Arrow host buffers, so no additional sync
+  // is needed here.
   auto tbl = with_arrow::toCudfTable(
       input, input->pool(), stream, get_output_mr(), timestampTimeZone_);
-
-  // Synchronize to ensure toCudfTable finishes reading from input's CPU buffers
-  // before input goes out of scope
-  stream.synchronize();
 
   VELOX_CHECK_NOT_NULL(tbl);
 
