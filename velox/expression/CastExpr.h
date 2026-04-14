@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <fmt/format.h>
+
 #include "velox/common/base/Status.h"
 #include "velox/expression/CastHooks.h"
 #include "velox/expression/ExprConstants.h"
@@ -376,7 +378,7 @@ class CastExpr : public SpecialForm {
       bool& wrapException) const {
     if (castResult.hasError()) {
       const auto errorDetails =
-          errorPrefix + " " + castResult.error().message();
+          fmt::format("{} {}", errorPrefix, castResult.error().message());
       setCastError(row, context, result, wrapException, errorDetails);
     } else {
       result->set(row, castResult.value());
