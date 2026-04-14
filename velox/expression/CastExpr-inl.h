@@ -205,16 +205,6 @@ void CastExpr::applyCastKernel(
         }
         return;
       }
-      if constexpr (ToKind == TypeKind::REAL) {
-        const auto castResult = hooks_->castStringToReal(inputRowValue);
-        setResultOrError(castResult, row);
-        return;
-      }
-      if constexpr (ToKind == TypeKind::DOUBLE) {
-        const auto castResult = hooks_->castStringToDouble(inputRowValue);
-        setResultOrError(castResult, row);
-        return;
-      }
 
       if constexpr (
           ToKind == TypeKind::TINYINT || ToKind == TypeKind::SMALLINT ||

@@ -63,15 +63,20 @@ exec::ExprPtr SparkCastCallToSpecialForm::constructSpecialForm(
   const bool isTryCast =
       !config.sparkAnsiEnabled() || !isAnsiSupported(fromType, type);
 
-  // For ANSI-supported casts, CAST mirrors TRY_CAST when ANSI is disabled.
-  // The distinction is controlled by the 'allowOverflow' flag in
-  // SparkCastHooks.
+  // Only string->timestamp needs CAST policy under ANSI mode while preserving
+  // the old behavior for other cast families.
+  const bool isStringToTimestampCast =
+      fromType->isVarchar() && type->isTimestamp();
+
+  const bool allowOverflowForHooks =
+      isStringToTimestampCast ? !isTryCast : isTryCast;
+
   return std::make_shared<SparkCastExpr>(
       type,
       std::move(compiledChildren[0]),
       trackCpuUsage,
       isTryCast,
-      std::make_shared<SparkCastHooks>(config, isTryCast));
+      std::make_shared<SparkCastHooks>(config, allowOverflowForHooks));
 }
 
 exec::ExprPtr SparkTryCastCallToSpecialForm::constructSpecialForm(
@@ -85,7 +90,6 @@ exec::ExprPtr SparkTryCastCallToSpecialForm::constructSpecialForm(
       "TRY_CAST statements expect exactly 1 argument, received {}.",
       compiledChildren.size());
 
-  // TRY_CAST always uses allowOverflow=false to return NULL on cast failures.
   return std::make_shared<SparkCastExpr>(
       type,
       std::move(compiledChildren[0]),
