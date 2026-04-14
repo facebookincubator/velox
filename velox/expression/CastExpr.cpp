@@ -123,25 +123,13 @@ VectorPtr CastExpr::castToDate(
         try {
           const auto result =
               hooks_->castStringToDate(inputVector->valueAt(row));
-          if (result.hasError()) {
-            wrapException = false;
-            if (setNullInResultAtError()) {
-              resultFlatVector->setNull(row, true);
-            } else {
-              if (context.captureErrorDetails()) {
-                context.setStatus(
-                    row,
-                    Status::UserError(
-                        "{} {}",
-                        makeErrorMessage(input, row, DATE()),
-                        result.error().message()));
-              } else {
-                context.setStatus(row, Status::UserError());
-              }
-            }
-          } else {
-            resultFlatVector->set(row, result.value());
-          }
+          setResultOrError(
+              row,
+              result,
+              makeErrorMessage(input, row, DATE()),
+              context,
+              resultFlatVector,
+              wrapException);
         } catch (const VeloxUserError& ue) {
           if (!wrapException) {
             throw;

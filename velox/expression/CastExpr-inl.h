@@ -133,31 +133,25 @@ void CastExpr::applyCastKernel(
     FlatVector<typename TypeTraits<ToKind>::NativeType>* result) {
   bool wrapException = true;
   auto setError = [&](const std::string& details) INLINE_LAMBDA {
-    if (setNullInResultAtError()) {
-      result->setNull(row, true);
-    } else {
-      wrapException = false;
-      if (context.captureErrorDetails()) {
-        const auto errorDetails =
-            makeErrorMessage(*input, row, result->type(), details);
-        context.setStatus(row, Status::UserError("{}", errorDetails));
-      } else {
-        context.setStatus(row, Status::UserError());
-      }
-    }
+    const auto errorDetails = context.captureErrorDetails()
+        ? makeErrorMessage(*input, row, result->type(), details)
+        : std::string{};
+    setCastError(row, context, result, wrapException, errorDetails);
   };
 
   // If castResult has an error, set the error in context. Otherwise, set the
   // value in castResult directly to result. This lambda should be called only
   // when ToKind is primitive and is not VARCHAR or VARBINARY.
-  auto setResultOrError = [&](const auto& castResult, vector_size_t row)
-                              INLINE_LAMBDA {
-                                if (castResult.hasError()) {
-                                  setError(castResult.error().message());
-                                } else {
-                                  result->set(row, castResult.value());
-                                }
-                              };
+  auto setResultOrStatus = [&](const auto& castResult,
+                               vector_size_t row) INLINE_LAMBDA {
+    setResultOrError(
+        row,
+        castResult,
+        makeErrorMessage(*input, row, result->type()),
+        context,
+        result,
+        wrapException);
+  };
 
   try {
     auto inputRowValue = input->valueAt(row);
@@ -168,14 +162,14 @@ void CastExpr::applyCastKernel(
         ToKind == TypeKind::TIMESTAMP) {
       const auto castResult =
           hooks_->castIntToTimestamp((int64_t)inputRowValue);
-      setResultOrError(castResult, row);
+      setResultOrStatus(castResult, row);
       return;
     }
 
     if constexpr (
         (FromKind == TypeKind::BOOLEAN) && ToKind == TypeKind::TIMESTAMP) {
       const auto castResult = hooks_->castBooleanToTimestamp(inputRowValue);
-      setResultOrError(castResult, row);
+      setResultOrStatus(castResult, row);
       return;
     }
 
@@ -184,7 +178,7 @@ void CastExpr::applyCastKernel(
          ToKind == TypeKind::INTEGER || ToKind == TypeKind::BIGINT) &&
         FromKind == TypeKind::TIMESTAMP) {
       const auto castResult = hooks_->castTimestampToInt(inputRowValue);
-      setResultOrError(castResult, row);
+      setResultOrStatus(castResult, row);
       return;
     }
 
@@ -218,17 +212,17 @@ void CastExpr::applyCastKernel(
       }
       if constexpr (ToKind == TypeKind::TIMESTAMP) {
         const auto castResult = hooks_->castStringToTimestamp(inputRowValue);
-        setResultOrError(castResult, row);
+        setResultOrStatus(castResult, row);
         return;
       }
       if constexpr (ToKind == TypeKind::REAL) {
         const auto castResult = hooks_->castStringToReal(inputRowValue);
-        setResultOrError(castResult, row);
+        setResultOrStatus(castResult, row);
         return;
       }
       if constexpr (ToKind == TypeKind::DOUBLE) {
         const auto castResult = hooks_->castStringToDouble(inputRowValue);
-        setResultOrError(castResult, row);
+        setResultOrStatus(castResult, row);
         return;
       }
 
