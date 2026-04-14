@@ -57,16 +57,11 @@ TEST_F(CudfExpandTest, simpleConstant) {
   children.push_back(makeNullConstant(TypeKind::INTEGER, 3));
   auto expected = makeRowVector(children);
 
-  auto plan = PlanBuilder(pool())
-                  .values({data})
-                  .expand(
-                      {{"k1",
-                        "k2",
-                        "a",
-                        "b",
-                        "100 as c",
-                        "null::integer as d"}})
-                  .planNode();
+  auto plan =
+      PlanBuilder(pool())
+          .values({data})
+          .expand({{"k1", "k2", "a", "b", "100 as c", "null::integer as d"}})
+          .planNode();
 
   assertQuery(plan, expected);
 }
@@ -167,21 +162,19 @@ TEST_F(CudfExpandTest, countDistinct) {
 }
 
 TEST_F(CudfExpandTest, duplicateColumnProjection) {
-  // Test case where the same input column is projected to multiple output columns
+  // Test case where the same input column is projected to multiple output
+  // columns
   auto data = makeRowVectorData(100);
 
   createDuckDbTable({data});
 
   // Project k1 to both output columns c1 and c2
-  auto plan =
-      PlanBuilder()
-          .values({data})
-          .expand({{"k1 as c1", "k1 as c2", "a", "b", "0 as gid"}})
-          .planNode();
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .expand({{"k1 as c1", "k1 as c2", "a", "b", "0 as gid"}})
+                  .planNode();
 
-  assertQuery(
-      plan,
-      "SELECT k1 as c1, k1 as c2, a, b, 0 as gid FROM tmp");
+  assertQuery(plan, "SELECT k1 as c1, k1 as c2, a, b, 0 as gid FROM tmp");
 }
 
 TEST_F(CudfExpandTest, invalidUseCases) {
@@ -200,4 +193,3 @@ TEST_F(CudfExpandTest, invalidUseCases) {
       PlanBuilder().values({data}).expand({}),
       "projections must not be empty.");
 }
-

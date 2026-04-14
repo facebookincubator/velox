@@ -265,7 +265,6 @@ inline std::optional<StringView> constantVarcharValue(
   return StringView(value.value<TypeKind::VARCHAR>());
 }
 
-
 template <TypeKind kind>
 std::unique_ptr<cudf::scalar> makeScalarFromVariant(
     const TypePtr& type,
@@ -285,7 +284,7 @@ inline std::unique_ptr<cudf::scalar> makeScalarFromVariant(
     const TypePtr& type,
     const variant& var) {
   return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-    makeScalarFromVariant, type->kind(), type, var);
+      makeScalarFromVariant, type->kind(), type, var);
 }
 
 template <TypeKind kind>

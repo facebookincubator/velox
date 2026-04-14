@@ -62,4 +62,3 @@ class CudfExpand : public exec::Operator, public NvtxHelper {
 };
 
 } // namespace facebook::velox::cudf_velox
-
