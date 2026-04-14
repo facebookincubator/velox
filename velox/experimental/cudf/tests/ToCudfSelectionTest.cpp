@@ -286,21 +286,22 @@ TEST_F(ToCudfSelectionTest, complexGroupingKeyExpressionsFallsBack) {
   // - Group 1 (c0=1): sum(c2) = 100 + 300 = 400
   // - Group 2 (c0=2): sum(c2) = 200 + 400 = 600
   auto input = makeRowVector({
-      makeFlatVector<int64_t>({1, 2, 1, 2}),         // c0
-      makeFlatVector<int16_t>({10, 20, 30, 40}),     // c1
+      makeFlatVector<int64_t>({1, 2, 1, 2}), // c0
+      makeFlatVector<int16_t>({10, 20, 30, 40}), // c1
       makeFlatVector<int32_t>({100, 200, 300, 400}), // c2
   });
 
-  auto plan = PlanBuilder()
-                  .values({input})
-                  .project({"c0", "c1", "c2", "to_big_endian_64(c0) AS complex_key"})
-                  .aggregation(
-                      {"complex_key"},
-                      {"sum(c2)"},
-                      {},
-                      core::AggregationNode::Step::kSingle,
-                      false)
-                  .planNode();
+  auto plan =
+      PlanBuilder()
+          .values({input})
+          .project({"c0", "c1", "c2", "to_big_endian_64(c0) AS complex_key"})
+          .aggregation(
+              {"complex_key"},
+              {"sum(c2)"},
+              {},
+              core::AggregationNode::Step::kSingle,
+              false)
+          .planNode();
 
   std::shared_ptr<Task> task;
   AssertQueryBuilder(plan).config("cudf.enabled", true).countResults(task);

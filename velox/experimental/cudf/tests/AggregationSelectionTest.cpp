@@ -205,7 +205,7 @@ TEST_F(CudfAggregationSelectionTest, complexGroupbyClauseExpressions) {
               {"c0",
                "c1",
                "to_big_endian_64(c0) AS endian_c0"}) // to_big_endian_64 is
-                                                    // unsupported by CUDF
+                                                     // unsupported by CUDF
           .aggregation(
               {"endian_c0"},
               {"sum(c1)"},
