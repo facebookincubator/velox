@@ -232,6 +232,59 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
     return false;
   }
 
+  bool supportsToIntermediate() const override {
+    return true;
+  }
+
+  void toIntermediate(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      VectorPtr& result) const override {
+    auto* self = const_cast<ApproxPercentileAggregateBase*>(this);
+    if (rows.hasSelections()) {
+      self->decodeArguments(rows, args);
+    }
+    const auto numRows = rows.size();
+
+    std::vector<detail::KllSketch<T, std::allocator<T>>> sketches;
+    sketches.reserve(numRows);
+    detail::KllSketchAccumulator<T> kProbe(allocator_, fixedRandomSeed_);
+    AccuracyPolicy::setOnAccumulator(&kProbe, self->accuracy_);
+    const auto sketchK = kProbe.getSketch().k();
+
+    for (vector_size_t row = 0; row < numRows; ++row) {
+      if (!rows.isValid(row) || self->decodedValue_.isNullAt(row)) {
+        sketches.emplace_back();
+        continue;
+      }
+
+      int64_t count = 1;
+
+      if constexpr (kHasWeight) {
+        if (self->hasWeight_) {
+          if (self->decodedWeight_.isNullAt(row)) {
+            sketches.emplace_back();
+            continue;
+          }
+          count = self->decodedWeight_.template valueAt<int64_t>(row);
+          self->checkWeight(count);
+        }
+      }
+
+      const auto value = self->decodedValue_.template valueAt<T>(row);
+      sketches.push_back(
+          detail::KllSketch<T, std::allocator<T>>::fromRepeatedValue(
+              value,
+              count,
+              sketchK,
+              std::allocator<T>(),
+              detail::getRandomSeed(fixedRandomSeed_)));
+    }
+
+    auto resultPtr = &result;
+    self->writeIntermediateFromSketches(sketches, numRows, resultPtr);
+  }
+
   void addRawInput(
       char** groups,
       const SelectivityVector& rows,
@@ -394,122 +447,7 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
               fixedRandomSeed_));
     }
 
-    VELOX_CHECK(result);
-    auto rowResult = (*result)->as<RowVector>();
-    VELOX_CHECK(rowResult);
-    auto pool = rowResult->pool();
-
-    // percentiles_ can be uninitialized during an intermediate aggregation step
-    // when all input intermediate states are nulls. Result should be nulls in
-    // this case.
-    using Idx = ApproxPercentileIntermediateTypeChildIndex;
-    if (!percentiles_) {
-      rowResult->ensureWritable(SelectivityVector{numGroups});
-      // rowResult->childAt(i) for i = kPercentiles, kPercentilesIsArray, and
-      // kAccuracy are expected to be constant in addIntermediateResults.
-      rowResult->childAt(static_cast<int>(Idx::kPercentiles)) =
-          BaseVector::createNullConstant(ARRAY(DOUBLE()), numGroups, pool);
-      rowResult->childAt(static_cast<int>(Idx::kPercentilesIsArray)) =
-          BaseVector::createNullConstant(BOOLEAN(), numGroups, pool);
-      rowResult->childAt(static_cast<int>(Idx::kAccuracy)) =
-          BaseVector::createNullConstant(
-              CppToType<AccuracyIntermediateType>::create(), numGroups, pool);
-
-      // Set nulls for all rows.
-      auto rawNulls = rowResult->mutableRawNulls();
-      bits::fillBits(rawNulls, 0, rowResult->size(), bits::kNull);
-      return;
-    }
-    auto& values = percentiles_->values;
-    auto size = values.size();
-    auto elements =
-        BaseVector::create<FlatVector<double>>(DOUBLE(), size, pool);
-    std::copy(values.begin(), values.end(), elements->mutableRawValues());
-    auto array = std::make_shared<ArrayVector>(
-        pool,
-        ARRAY(DOUBLE()),
-        nullptr,
-        1,
-        AlignedBuffer::allocate<vector_size_t>(1, pool, 0),
-        AlignedBuffer::allocate<vector_size_t>(1, pool, size),
-        std::move(elements));
-    rowResult->childAt(static_cast<int>(Idx::kPercentiles)) =
-        BaseVector::wrapInConstant(numGroups, 0, std::move(array));
-    rowResult->childAt(static_cast<int>(Idx::kPercentilesIsArray)) =
-        std::make_shared<ConstantVector<bool>>(
-            pool,
-            numGroups,
-            false,
-            BOOLEAN(),
-            static_cast<bool&&>(percentiles_->isArray));
-
-    bool isDefaultAccuracy = AccuracyPolicy::isDefaultAccuracy(accuracy_);
-    auto accuracyIntermediateValue = accuracy_;
-    rowResult->childAt(static_cast<int>(Idx::kAccuracy)) =
-        std::make_shared<ConstantVector<AccuracyIntermediateType>>(
-            pool,
-            numGroups,
-            isDefaultAccuracy,
-            CppToType<AccuracyIntermediateType>::create(),
-            std::move(accuracyIntermediateValue));
-    auto k =
-        rowResult->childAt(static_cast<int>(Idx::kK))->asFlatVector<int32_t>();
-    auto n =
-        rowResult->childAt(static_cast<int>(Idx::kN))->asFlatVector<int64_t>();
-    auto minValue =
-        rowResult->childAt(static_cast<int>(Idx::kMinValue))->asFlatVector<T>();
-    auto maxValue =
-        rowResult->childAt(static_cast<int>(Idx::kMaxValue))->asFlatVector<T>();
-    auto items =
-        rowResult->childAt(static_cast<int>(Idx::kItems))->as<ArrayVector>();
-    auto levels =
-        rowResult->childAt(static_cast<int>(Idx::kLevels))->as<ArrayVector>();
-
-    rowResult->resize(numGroups);
-    k->resize(numGroups);
-    n->resize(numGroups);
-    minValue->resize(numGroups);
-    maxValue->resize(numGroups);
-    items->resize(numGroups);
-    levels->resize(numGroups);
-
-    auto itemsElements = items->elements()->asFlatVector<T>();
-    auto levelsElements = levels->elements()->asFlatVector<int32_t>();
-    size_t itemsCount = 0;
-    vector_size_t levelsCount = 0;
-    for (auto& sketch : sketches) {
-      auto v = sketch.toView();
-      itemsCount += v.items.size();
-      levelsCount += v.levels.size();
-    }
-    VELOX_CHECK_LE(itemsCount, std::numeric_limits<vector_size_t>::max());
-    itemsElements->resetNulls();
-    itemsElements->resize(itemsCount);
-    levelsElements->resetNulls();
-    levelsElements->resize(levelsCount);
-
-    auto rawItems = itemsElements->mutableRawValues();
-    auto rawLevels = levelsElements->mutableRawValues();
-    itemsCount = 0;
-    levelsCount = 0;
-    for (int i = 0; i < sketches.size(); ++i) {
-      auto v = sketches[i].toView();
-      if (v.n == 0) {
-        rowResult->setNull(i, true);
-      } else {
-        rowResult->setNull(i, false);
-        k->set(i, v.k);
-        n->set(i, v.n);
-        minValue->set(i, v.minValue);
-        maxValue->set(i, v.maxValue);
-        std::copy(v.items.begin(), v.items.end(), rawItems + itemsCount);
-        items->setOffsetAndSize(i, itemsCount, v.items.size());
-        itemsCount += v.items.size();
-        std::copy(v.levels.begin(), v.levels.end(), rawLevels + levelsCount);
-        levels->setOffsetAndSize(i, levelsCount, v.levels.size());
-        levelsCount += v.levels.size();
-      }
-    }
+    writeIntermediateFromSketches(sketches, numGroups, result);
   }
 
  protected:
@@ -902,6 +840,128 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
       if (!views.empty()) {
         auto tracker = trackRowSize(group);
         accumulator->append(views);
+      }
+    }
+  }
+
+  void writeIntermediateFromSketches(
+      const std::vector<detail::KllSketch<T, std::allocator<T>>>& sketches,
+      int32_t numGroups,
+      VectorPtr* result) const {
+    VELOX_CHECK(result);
+    auto rowResult = (*result)->as<RowVector>();
+    VELOX_CHECK(rowResult);
+    auto pool = rowResult->pool();
+
+    // percentiles_ can be uninitialized during an intermediate aggregation step
+    // when all input intermediate states are nulls. Result should be nulls in
+    // this case.
+    using Idx = ApproxPercentileIntermediateTypeChildIndex;
+    if (!percentiles_) {
+      rowResult->ensureWritable(SelectivityVector{numGroups});
+      // rowResult->childAt(i) for i = kPercentiles, kPercentilesIsArray, and
+      // kAccuracy are expected to be constant in addIntermediateResults.
+      rowResult->childAt(static_cast<int>(Idx::kPercentiles)) =
+          BaseVector::createNullConstant(ARRAY(DOUBLE()), numGroups, pool);
+      rowResult->childAt(static_cast<int>(Idx::kPercentilesIsArray)) =
+          BaseVector::createNullConstant(BOOLEAN(), numGroups, pool);
+      rowResult->childAt(static_cast<int>(Idx::kAccuracy)) =
+          BaseVector::createNullConstant(
+              CppToType<AccuracyIntermediateType>::create(), numGroups, pool);
+
+      // Set nulls for all rows.
+      auto rawNulls = rowResult->mutableRawNulls();
+      bits::fillBits(rawNulls, 0, rowResult->size(), bits::kNull);
+      return;
+    }
+    auto& values = percentiles_->values;
+    auto size = values.size();
+    auto elements =
+        BaseVector::create<FlatVector<double>>(DOUBLE(), size, pool);
+    std::copy(values.begin(), values.end(), elements->mutableRawValues());
+    auto array = std::make_shared<ArrayVector>(
+        pool,
+        ARRAY(DOUBLE()),
+        nullptr,
+        1,
+        AlignedBuffer::allocate<vector_size_t>(1, pool, 0),
+        AlignedBuffer::allocate<vector_size_t>(1, pool, size),
+        std::move(elements));
+    rowResult->childAt(static_cast<int>(Idx::kPercentiles)) =
+        BaseVector::wrapInConstant(numGroups, 0, std::move(array));
+    rowResult->childAt(static_cast<int>(Idx::kPercentilesIsArray)) =
+        std::make_shared<ConstantVector<bool>>(
+            pool,
+            numGroups,
+            false,
+            BOOLEAN(),
+            static_cast<bool>(percentiles_->isArray));
+
+    bool isDefaultAccuracy = AccuracyPolicy::isDefaultAccuracy(accuracy_);
+    auto accuracyIntermediateValue = accuracy_;
+    rowResult->childAt(static_cast<int>(Idx::kAccuracy)) =
+        std::make_shared<ConstantVector<AccuracyIntermediateType>>(
+            pool,
+            numGroups,
+            isDefaultAccuracy,
+            CppToType<AccuracyIntermediateType>::create(),
+            std::move(accuracyIntermediateValue));
+    auto k =
+        rowResult->childAt(static_cast<int>(Idx::kK))->asFlatVector<int32_t>();
+    auto n =
+        rowResult->childAt(static_cast<int>(Idx::kN))->asFlatVector<int64_t>();
+    auto minValue =
+        rowResult->childAt(static_cast<int>(Idx::kMinValue))->asFlatVector<T>();
+    auto maxValue =
+        rowResult->childAt(static_cast<int>(Idx::kMaxValue))->asFlatVector<T>();
+    auto items =
+        rowResult->childAt(static_cast<int>(Idx::kItems))->as<ArrayVector>();
+    auto levels =
+        rowResult->childAt(static_cast<int>(Idx::kLevels))->as<ArrayVector>();
+
+    rowResult->resize(numGroups);
+    k->resize(numGroups);
+    n->resize(numGroups);
+    minValue->resize(numGroups);
+    maxValue->resize(numGroups);
+    items->resize(numGroups);
+    levels->resize(numGroups);
+
+    auto itemsElements = items->elements()->asFlatVector<T>();
+    auto levelsElements = levels->elements()->asFlatVector<int32_t>();
+    size_t itemsCount = 0;
+    vector_size_t levelsCount = 0;
+    for (auto& sketch : sketches) {
+      auto v = sketch.toView();
+      itemsCount += v.items.size();
+      levelsCount += v.levels.size();
+    }
+    VELOX_CHECK_LE(itemsCount, std::numeric_limits<vector_size_t>::max());
+    itemsElements->resetNulls();
+    itemsElements->resize(itemsCount);
+    levelsElements->resetNulls();
+    levelsElements->resize(levelsCount);
+
+    auto rawItems = itemsElements->mutableRawValues();
+    auto rawLevels = levelsElements->mutableRawValues();
+    itemsCount = 0;
+    levelsCount = 0;
+    for (int i = 0; i < sketches.size(); ++i) {
+      auto v = sketches[i].toView();
+      if (v.n == 0) {
+        rowResult->setNull(i, true);
+      } else {
+        rowResult->setNull(i, false);
+        k->set(i, v.k);
+        n->set(i, v.n);
+        minValue->set(i, v.minValue);
+        maxValue->set(i, v.maxValue);
+        std::copy(v.items.begin(), v.items.end(), rawItems + itemsCount);
+        items->setOffsetAndSize(i, itemsCount, v.items.size());
+        itemsCount += v.items.size();
+        std::copy(v.levels.begin(), v.levels.end(), rawLevels + levelsCount);
+        levels->setOffsetAndSize(i, levelsCount, v.levels.size());
+        levelsCount += v.levels.size();
       }
     }
   }
