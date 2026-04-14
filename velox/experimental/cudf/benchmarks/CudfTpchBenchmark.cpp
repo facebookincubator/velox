@@ -67,7 +67,7 @@ DEFINE_string(
 void CudfTpchBenchmark::initialize() {
   if (!FLAGS_cudf_properties.empty()) {
     auto path = std::filesystem::path(FLAGS_cudf_properties);
-    VELOX_CHECK(
+    VELOX_USER_CHECK(
         std::filesystem::exists(path),
         "Properties file not found: {}",
         FLAGS_cudf_properties);
@@ -81,6 +81,10 @@ void CudfTpchBenchmark::initialize() {
       }
       LOG(INFO) << "Setting property " << line;
       const auto delimiterPos = line.find('=');
+      if (delimiterPos == std::string::npos) {
+        LOG(WARNING) << "Skipping malformed config line (no '='): " << line;
+        continue;
+      }
       const auto name = line.substr(0, delimiterPos);
       const auto value = line.substr(delimiterPos + 1);
       properties.emplace(name, value);
