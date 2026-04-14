@@ -3325,7 +3325,9 @@ folly::dynamic Task::toJson() const {
       }
     }
   }
-  obj["bufferManagers"] = bufferManagers;
+  if (!bufferManagers.empty()) {
+    obj["bufferManagers"] = bufferManagers;
+  }
 
   folly::dynamic exchangeClients = folly::dynamic::object;
   for (const auto& [id, client] : exchangeClientByPlanNode_) {
