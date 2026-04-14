@@ -105,6 +105,10 @@ TEST(OutputBufferManagerRegistryTest, registryOperations) {
 }
 
 TEST(OutputBufferManagerRegistryTest, selfRegistration) {
+  // Calling getInstanceRef() triggers self-registration into the global
+  // registry, even if a prior test cleared it via unregisterAll().
+  auto instance = OutputBufferManager::getInstanceRef();
+
   auto defaultMgr = OutputBufferManagerRegistry::tryGet(
       std::string(OutputBufferManagerRegistry::kDefaultId));
   EXPECT_NE(defaultMgr, nullptr);
