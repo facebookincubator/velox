@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
-
 #include "velox/experimental/cudf/exec/CudfExpand.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstUtils.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
-#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+
 #include "velox/expression/Expr.h"
 
 #include <cudf/column/column.hpp>
@@ -87,7 +87,8 @@ void CudfExpand::initialize() {
     for (const auto& constant : projections) {
       if (constant) {
         VELOX_CHECK(!constant->hasValueVector());
-        constantOutput.push_back(makeScalarFromVariant(constant->type(), constant->value()));
+        constantOutput.push_back(
+            makeScalarFromVariant(constant->type(), constant->value()));
       } else {
         constantOutput.push_back(nullptr);
       }
@@ -133,7 +134,7 @@ RowVectorPtr CudfExpand::getOutput() {
     // Last projection: move columns from input table when possible
     auto inputTable = cudfInput->release();
     auto inputColumns = inputTable->release();
-    
+
     // Count how many times each input column is used in this projection
     std::vector<int> columnUseCount(inputColumns.size(), 0);
     for (auto i = 0; i < numColumns; ++i) {
@@ -141,42 +142,46 @@ RowVectorPtr CudfExpand::getOutput() {
         columnUseCount[rowProjection[i]]++;
       }
     }
-    
+
     // Track remaining uses for each column
     std::vector<int> columnRemainingUses = columnUseCount;
-    
+
     for (auto i = 0; i < numColumns; ++i) {
       if (rowProjection[i] == kConstantChannel) {
         const auto& scalar = constantProjection[i];
         outputColumns.push_back(
-            cudf::make_column_from_scalar(*scalar, numInput, stream, get_output_mr()));
+            cudf::make_column_from_scalar(
+                *scalar, numInput, stream, get_output_mr()));
       } else {
         auto colIdx = rowProjection[i];
         columnRemainingUses[colIdx]--;
-        
+
         if (columnRemainingUses[colIdx] == 0) {
           // Last use of this column, can move
           outputColumns.push_back(std::move(inputColumns[colIdx]));
         } else {
           // Not the last use, must copy
           outputColumns.push_back(
-              std::make_unique<cudf::column>(*inputColumns[colIdx], stream, get_output_mr()));
+              std::make_unique<cudf::column>(
+                  *inputColumns[colIdx], stream, get_output_mr()));
         }
       }
     }
   } else {
     // Not last projection: copy columns from table view
     auto inputTableView = cudfInput->getTableView();
-    
+
     for (auto i = 0; i < numColumns; ++i) {
       if (rowProjection[i] == kConstantChannel) {
         const auto& scalar = constantProjection[i];
         outputColumns.push_back(
-            cudf::make_column_from_scalar(*scalar, numInput, stream, get_output_mr()));
+            cudf::make_column_from_scalar(
+                *scalar, numInput, stream, get_output_mr()));
       } else {
         auto inputColumn = inputTableView.column(rowProjection[i]);
         outputColumns.push_back(
-            std::make_unique<cudf::column>(inputColumn, stream, get_output_mr()));
+            std::make_unique<cudf::column>(
+                inputColumn, stream, get_output_mr()));
       }
     }
   }
@@ -194,4 +199,3 @@ RowVectorPtr CudfExpand::getOutput() {
 }
 
 } // namespace facebook::velox::cudf_velox
-
