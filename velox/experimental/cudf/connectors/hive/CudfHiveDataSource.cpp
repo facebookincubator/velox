@@ -297,6 +297,9 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
     cudfTable = std::make_unique<cudf::table>(std::move(outputColumns));
   }
 
+  // TODO (dm): Should we only enable table scan if cudf is registered?
+  // Earlier we could enable cudf table scans without using other cudf operators
+  // We still can, but I'm wondering if this is the right thing to do
   auto output = cudfIsRegistered()
       ? std::make_shared<CudfVector>(
             pool_, outputType_, nRows, std::move(cudfTable), stream)
@@ -307,6 +310,9 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
   VELOX_CHECK_NOT_NULL(output, "Cudf to Velox conversion yielded a nullptr");
 
   completedRows_ += output->size();
+
+  // TODO: Update `completedBytes_` here instead of in `addSplit()`
+
   return output;
 }
 
