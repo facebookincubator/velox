@@ -455,7 +455,9 @@ class SsdFile {
   // Returns [offset, size] of contiguous space for storing data of a number of
   // contiguous 'pins' starting with the pin at index 'begin'.  Returns nullopt
   // if there is no space. The space does not necessarily cover all the pins, so
-  // multiple calls starting at the first unwritten pin may be needed.
+  // multiple calls starting at the first unwritten pin may be needed. On
+  // success, the region is pinned to prevent eviction while the caller writes
+  // without holding 'mutex_'. The caller must call unpinRegion() when done.
   std::optional<std::pair<uint64_t, int32_t>> getSpace(
       const std::vector<CachePin>& pins,
       int32_t begin);

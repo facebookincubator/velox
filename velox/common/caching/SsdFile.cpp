@@ -276,8 +276,12 @@ std::optional<std::pair<uint64_t, int32_t>> SsdFile::getSpace(
       // At least some pins got space from this region. If the region is full
       // the next call will get space from another region.
       regionSizes_[region] += toWrite;
-      return std::make_pair<uint64_t, int32_t>(
-          region * kRegionSize + offset, toWrite);
+      // Pin the region to prevent eviction while the caller writes to it
+      // without holding 'mutex_'. The caller must call unpinRegion() after
+      // the write and entry registration are complete.
+      const auto fileOffset = region * kRegionSize + offset;
+      pinRegionLocked(fileOffset);
+      return std::pair<uint64_t, int32_t>(fileOffset, toWrite);
     }
 
     tracker_.regionFilled(region);
@@ -392,6 +396,14 @@ void SsdFile::write(std::vector<CachePin>& pins) {
     }
 
     auto [offset, available] = space.value();
+    // getSpace() pins the region to prevent eviction during the unlocked
+    // disk write below. Unpin on all exit paths via SCOPE_EXIT. We save
+    // the original offset since 'offset' is modified during entry
+    // registration.
+    const auto regionStartOffset = offset;
+    SCOPE_EXIT {
+      unpinRegion(regionStartOffset);
+    };
     int32_t numWrittenEntries = 0;
     uint64_t writeOffset = offset;
     int32_t writeLength = 0;
