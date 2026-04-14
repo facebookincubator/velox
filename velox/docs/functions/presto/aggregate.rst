@@ -17,13 +17,13 @@ depending on the order of input values.
 General Aggregate Functions
 ---------------------------
 
-.. function:: arbitrary(x) -> [same as x]
-
-    Returns an arbitrary non-null value of ``x``, if one exists.
-
 .. function:: any_value(x) -> [same as x]
 
     This is an alias for :func:`arbitrary`.
+
+.. function:: arbitrary(x) -> [same as x]
+
+    Returns an arbitrary non-null value of ``x``, if one exists.
 
 .. function:: array_agg(x) -> array<[same as x]>
 
@@ -89,37 +89,17 @@ General Aggregate Functions
 
     This is an alias for :func:`bool_and`.
 
-.. function:: histogram(x)
-
-    Returns a map containing the count of the number of times
-    each input value occurs. Supports integral, floating-point,
-    boolean, timestamp, and date input types.
-
 .. function:: geometric_mean(bigint) -> double
               geometric_mean(double) -> double
               geometric_mean(real) -> real
 
     Returns the `geometric mean <https://en.wikipedia.org/wiki/Geometric_mean>`_ of all input values.
 
-.. function:: max_by(x, y) -> [same as x]
+.. function:: histogram(x)
 
-    Returns the value of ``x`` associated with the maximum value of ``y`` over all input values.
-    ``y`` must be an orderable type.
-
-.. function:: max_by(x, y, n) -> array([same as x])
-    :noindex:
-
-    Returns n values of ``x`` associated with the n largest values of ``y`` in descending order of ``y``.
-
-.. function:: min_by(x, y) -> [same as x]
-
-    Returns the value of ``x`` associated with the minimum value of ``y`` over all input values.
-    ``y`` must be an orderable type.
-
-.. function:: min_by(x, y, n) -> array([same as x])
-    :noindex:
-
-    Returns n values of ``x`` associated with the n smallest values of ``y`` in ascending order of ``y``.
+    Returns a map containing the count of the number of times
+    each input value occurs. Supports integral, floating-point,
+    boolean, timestamp, and date input types.
 
 .. function:: max(x) -> [same as x]
 
@@ -138,6 +118,16 @@ General Aggregate Functions
     Nulls are not included in the output array.
     For REAL and DOUBLE types, NaN is considered greater than Infinity.
 
+.. function:: max_by(x, y) -> [same as x]
+
+    Returns the value of ``x`` associated with the maximum value of ``y`` over all input values.
+    ``y`` must be an orderable type.
+
+.. function:: max_by(x, y, n) -> array([same as x])
+    :noindex:
+
+    Returns n values of ``x`` associated with the n largest values of ``y`` in descending order of ``y``.
+
 .. function:: min(x) -> [same as x]
 
     Returns the minimum value of all input values.
@@ -154,6 +144,16 @@ General Aggregate Functions
     Currently not supported for ARRAY, MAP, and ROW input types.
     Nulls are not included in output array.
     For REAL and DOUBLE types, NaN is considered greater than Infinity.
+
+.. function:: min_by(x, y) -> [same as x]
+
+    Returns the value of ``x`` associated with the minimum value of ``y`` over all input values.
+    ``y`` must be an orderable type.
+
+.. function:: min_by(x, y, n) -> array([same as x])
+    :noindex:
+
+    Returns n values of ``x`` associated with the n smallest values of ``y`` in ascending order of ``y``.
 
 .. function:: multimap_agg(K key, V value) -> map(K,array(V))
 
@@ -764,10 +764,6 @@ Statistical Aggregate Functions
 
     Returns the sample standard deviation of all input values.
 
-.. function:: variance(x) -> double
-
-    This is an alias for :func:`var_samp`.
-
 .. function:: var_pop(x) -> double
 
     Returns the population variance of all input values.
@@ -775,6 +771,10 @@ Statistical Aggregate Functions
 .. function:: var_samp(x) -> double
 
     Returns the sample variance of all input values.
+
+.. function:: variance(x) -> double
+
+    This is an alias for :func:`var_samp`.
 
 Noisy Aggregate Functions
 -------------------------

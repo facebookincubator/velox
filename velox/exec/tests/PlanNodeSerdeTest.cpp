@@ -537,6 +537,22 @@ TEST_F(PlanNodeSerdeTest, hashJoin) {
              .planNode();
 
   testSerde(plan);
+
+  // nullAsValue join (used for EXCEPT/INTERSECT).
+  plan = PlanBuilder(planNodeIdGenerator)
+             .values({probe})
+             .hashJoin(
+                 {"t0"},
+                 {"u0"},
+                 PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+                 "",
+                 {"t0", "t1"},
+                 core::JoinType::kAnti,
+                 /*nullAware=*/false,
+                 /*nullAsValue=*/true)
+             .planNode();
+
+  testSerde(plan);
 }
 
 TEST_F(PlanNodeSerdeTest, topN) {

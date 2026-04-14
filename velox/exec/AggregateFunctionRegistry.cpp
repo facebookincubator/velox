@@ -85,11 +85,10 @@ TypePtr resolveIntermediateType(
       }
     }
 
-    std::stringstream error;
-    error << "Aggregate function signature is not supported: "
-          << toString(name, argTypes)
-          << ". Supported signatures: " << toString(signatures.value()) << ".";
-    VELOX_USER_FAIL(error.str());
+    VELOX_USER_FAIL(
+        "Aggregate function signature is not supported: {}. Supported signatures: {}.",
+        toString(name, argTypes),
+        toString(signatures.value()));
   } else {
     VELOX_USER_FAIL("Aggregate function not registered: {}", name);
   }

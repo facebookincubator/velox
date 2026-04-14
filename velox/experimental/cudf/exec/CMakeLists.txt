@@ -15,6 +15,7 @@
 add_library(
   velox_cudf_exec
   CudfAssignUniqueId.cpp
+  CudfBatchConcat.cpp
   CudfConversion.cpp
   CudfEnforceSingleRow.cpp
   CudfFilterProject.cpp
@@ -22,8 +23,8 @@ add_library(
   CudfHashJoin.cpp
   CudfLimit.cpp
   CudfLocalPartition.cpp
+  CudfMarkDistinct.cpp
   CudfOrderBy.cpp
-  CudfBatchConcat.cpp
   CudfTopN.cpp
   DebugUtil.cpp
   GpuResources.cpp
