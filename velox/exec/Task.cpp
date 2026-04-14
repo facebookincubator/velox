@@ -3044,14 +3044,12 @@ TaskStats Task::taskStats() const {
     if (auto mgr = weakMgr.lock()) {
       maxUtilization = std::max(maxUtilization, mgr->getUtilization(taskId_));
       anyOverutilized = anyOverutilized || mgr->isOverutilized(taskId_);
-      if (!taskStats.outputBufferStats.has_value()) {
-        auto s = mgr->stats(taskId_);
-        if (s.has_value()) {
-          if (taskStats.outputBufferStats.has_value()) {
-            taskStats.outputBufferStats->add(s.value());
-          } else {
-            taskStats.outputBufferStats = s;
-          }
+      auto s = mgr->stats(taskId_);
+      if (s.has_value()) {
+        if (taskStats.outputBufferStats.has_value()) {
+          taskStats.outputBufferStats->add(s.value());
+        } else {
+          taskStats.outputBufferStats = s;
         }
       }
     }
