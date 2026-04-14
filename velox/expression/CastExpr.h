@@ -17,7 +17,6 @@
 #pragma once
 
 #include <fmt/format.h>
-
 #include "velox/common/base/Status.h"
 #include "velox/expression/CastHooks.h"
 #include "velox/expression/ExprConstants.h"
