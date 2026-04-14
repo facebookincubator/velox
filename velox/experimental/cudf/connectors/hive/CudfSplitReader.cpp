@@ -91,11 +91,8 @@ CudfSplitReader::CudfSplitReader(
       totalRemainingFilterTime_(totalRemainingFilterTime) {}
 
 void CudfSplitReader::prepareSplit() {
-  // Reset existing split reader and datasource if existing
-  splitReader_.reset();
-  exptSplitReader_.reset();
-  hybridScanState_.reset();
-  dataSource_.reset();
+  // Reset existing split and split readers, if any
+  resetSplit();
 
   // Acquire a CUDA stream
   stream_ = cudfGlobalStreamPool().get_stream();
