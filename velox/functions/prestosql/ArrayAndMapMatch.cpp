@@ -267,6 +267,7 @@ class MapValuesMatchFunction
   }
 };
 
+class AllValuesMatchFunction : public MapValuesMatchFunction<true, false> {};
 class AnyValuesMatchFunction : public MapValuesMatchFunction<false, true> {};
 class NoValuesMatchFunction : public MapValuesMatchFunction<true, true> {};
 
@@ -358,5 +359,11 @@ VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
     valuesSignatures(),
     exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
     std::make_unique<NoValuesMatchFunction>());
+
+VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
+    udf_map_values_all_match,
+    valuesSignatures(),
+    exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
+    std::make_unique<AllValuesMatchFunction>());
 
 } // namespace facebook::velox::functions
