@@ -19,9 +19,11 @@
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 
 #include "velox/common/base/SpillConfig.h"
+#include "velox/common/base/VeloxException.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Operator.h"
 
+#include <cuda_runtime.h>
 #include <glog/logging.h>
 
 #include <type_traits>
@@ -128,24 +130,29 @@ class CudfOperatorBase : public exec::Operator, public NvtxHelper {
     VELOX_NVTX_OPERATOR_FUNC_RANGE_IF(
         nvtxMethods_ & NvtxMethodFlag::kAddInput, className_);
     doAddInput(std::move(input));
+    checkCudaLastError("addInput");
   }
 
   RowVectorPtr getOutput() final {
     VELOX_NVTX_OPERATOR_FUNC_RANGE_IF(
         nvtxMethods_ & NvtxMethodFlag::kGetOutput, className_);
-    return doGetOutput();
+    auto output = doGetOutput();
+    checkCudaLastError("getOutput");
+    return output;
   }
 
   void noMoreInput() final {
     VELOX_NVTX_OPERATOR_FUNC_RANGE_IF(
         nvtxMethods_ & NvtxMethodFlag::kNoMoreInput, className_);
     doNoMoreInput();
+    checkCudaLastError("noMoreInput");
   }
 
   void close() final {
     VELOX_NVTX_OPERATOR_FUNC_RANGE_IF(
         nvtxMethods_ & NvtxMethodFlag::kClose, className_);
     doClose();
+    checkCudaLastError("close");
   }
 
  protected:
@@ -162,6 +169,19 @@ class CudfOperatorBase : public exec::Operator, public NvtxHelper {
   }
 
  private:
+  void checkCudaLastError(const char* methodName) const {
+    if (CudfConfig::getInstance().debugEnabled) {
+      auto err = cudaGetLastError();
+      VELOX_CHECK_EQ(
+          err,
+          cudaSuccess,
+          "CUDA error detected after {} in operator {}: {}",
+          methodName,
+          className_,
+          cudaGetErrorString(err));
+    }
+  }
+
   const std::string className_;
   const NvtxMethodFlag nvtxMethods_;
 };
