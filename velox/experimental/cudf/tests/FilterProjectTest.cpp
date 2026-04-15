@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
@@ -24,6 +25,7 @@
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
+#include "velox/type/Time.h"
 
 
 using namespace facebook::velox;
@@ -782,6 +784,131 @@ TEST_F(CudfFilterProjectTest, dateBetweenAndNullSemantics) {
     SCOPED_TRACE(filter);
     assertFilterMatchesVelox(vectors, filter);
   }
+}
+
+TEST_F(CudfFilterProjectTest, datePlusIntervalOneDay) {
+
+  auto data = makeRowVector(
+      {"event_date", "interval_val"},
+      {makeFlatVector<int32_t>(
+           {toDateDays("2025-01-01"),
+            toDateDays("2025-02-28"),
+            toDateDays("2024-02-29")},
+           DATE()),
+       makeConstant<int64_t>(kMillisInDay, 3, INTERVAL_DAY_TIME())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"plus(event_date, interval_val) AS result"})
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {makeFlatVector<int32_t>(
+          {toDateDays("2025-01-02"),
+           toDateDays("2025-03-01"),
+           toDateDays("2024-03-01")},
+          DATE())});
+  assertQuery(plan, expected);
+}
+
+TEST_F(CudfFilterProjectTest, datePlusIntervalMultipleDays) {
+
+  auto data = makeRowVector(
+      {"event_date", "interval_val"},
+      {makeFlatVector<int32_t>(
+           {toDateDays("2025-01-01"), toDateDays("2024-02-29")}, DATE()),
+       makeConstant<int64_t>(365 * kMillisInDay, 2, INTERVAL_DAY_TIME())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"plus(event_date, interval_val) AS result"})
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {makeFlatVector<int32_t>(
+          {toDateDays("2026-01-01"), toDateDays("2025-02-28")}, DATE())});
+  assertQuery(plan, expected);
+}
+
+TEST_F(CudfFilterProjectTest, datePlusIntervalNegative) {
+
+  auto data = makeRowVector(
+      {"event_date", "interval_val"},
+      {makeFlatVector<int32_t>(
+           {toDateDays("2025-01-10"), toDateDays("2025-03-01")}, DATE()),
+       makeConstant<int64_t>(-3 * kMillisInDay, 2, INTERVAL_DAY_TIME())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"plus(event_date, interval_val) AS result"})
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {makeFlatVector<int32_t>(
+          {toDateDays("2025-01-07"), toDateDays("2025-02-26")}, DATE())});
+  assertQuery(plan, expected);
+}
+
+TEST_F(CudfFilterProjectTest, datePlusIntervalZero) {
+  auto data = makeRowVector(
+      {"event_date", "interval_val"},
+      {makeFlatVector<int32_t>({toDateDays("2025-06-15")}, DATE()),
+       makeConstant<int64_t>(0, 1, INTERVAL_DAY_TIME())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"plus(event_date, interval_val) AS result"})
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {makeFlatVector<int32_t>({toDateDays("2025-06-15")}, DATE())});
+  assertQuery(plan, expected);
+}
+
+TEST_F(CudfFilterProjectTest, datePlusIntervalNullHandling) {
+
+  auto data = makeRowVector(
+      {"event_date", "interval_val"},
+      {makeNullableFlatVector<int32_t>(
+           {toDateDays("2025-01-01"), std::nullopt, toDateDays("2025-03-01")},
+           DATE()),
+       makeNullableFlatVector<int64_t>(
+           {kMillisInDay, kMillisInDay, std::nullopt},
+           INTERVAL_DAY_TIME())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"plus(event_date, interval_val) AS result"})
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {makeNullableFlatVector<int32_t>(
+          {toDateDays("2025-01-02"), std::nullopt, std::nullopt}, DATE())});
+  assertQuery(plan, expected);
+}
+
+TEST_F(CudfFilterProjectTest, datePlusIntervalRejectsSubDayInterval) {
+
+
+  auto data = makeRowVector(
+      {"event_date", "interval_val"},
+      {makeFlatVector<int32_t>({toDateDays("2025-01-01")}, DATE()),
+       makeConstant<int64_t>(
+           kMillisInDay + 12 * kMillisInHour, 1, INTERVAL_DAY_TIME())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"plus(event_date, interval_val) AS result"})
+                  .planNode();
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "Cannot add hours, minutes, seconds or milliseconds to a date");
 }
 
 TEST_F(CudfFilterProjectTest, extractTimestampComponents) {

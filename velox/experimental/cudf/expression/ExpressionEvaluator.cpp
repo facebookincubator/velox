@@ -24,10 +24,13 @@
 #include "velox/expression/FieldReference.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/expression/SignatureBinder.h"
+#include "velox/type/Time.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 
+#include <cudf/aggregation.hpp>
 #include <cudf/binaryop.hpp>
+#include <cudf/reduction.hpp>
 #include <cudf/column/column_factories.hpp>
 #include <cudf/copying.hpp>
 #include <cudf/datetime.hpp>
@@ -148,62 +151,6 @@ static bool matchCallAgainstSignatures(
 }
 
 
-std::string normalizeDateTruncUnit(std::string unit) {
-  if (unit.size() >= 2 && unit.front() == '\'' && unit.back() == '\'') {
-    unit = unit.substr(1, unit.size() - 2);
-  }
-  folly::toLowerAscii(unit);
-  return unit;
-}
-
-enum class DateTruncUnit {
-  kSecond,
-  kMinute,
-  kHour,
-  kDay,
-  kWeek,
-  kMonth,
-  kQuarter,
-  kYear
-};
-
-DateTruncUnit
-parseDateTruncUnit(const std::string& unit, bool isTimestamp, bool isDate) {
-  if (unit == "second") {
-    VELOX_CHECK(isTimestamp, "date_trunc second requires timestamp input");
-    return DateTruncUnit::kSecond;
-  }
-  if (unit == "minute") {
-    VELOX_CHECK(isTimestamp, "date_trunc minute requires timestamp input");
-    return DateTruncUnit::kMinute;
-  }
-  if (unit == "hour") {
-    VELOX_CHECK(isTimestamp, "date_trunc hour requires timestamp input");
-    return DateTruncUnit::kHour;
-  }
-  if (unit == "day") {
-    return DateTruncUnit::kDay;
-  }
-  if (unit == "week") {
-    return DateTruncUnit::kWeek;
-  }
-  if (unit == "month") {
-    return DateTruncUnit::kMonth;
-  }
-  if (unit == "quarter") {
-    return DateTruncUnit::kQuarter;
-  }
-  if (unit == "year") {
-    return DateTruncUnit::kYear;
-  }
-  VELOX_CHECK(
-      false,
-      "date_trunc does not support unit '{}' for {} input",
-      unit,
-      isTimestamp ? "timestamp" : (isDate ? "date" : "unknown"));
-  return DateTruncUnit::kDay;
-}
-
 } // namespace
 
 class SplitFunction : public CudfFunction {
@@ -305,6 +252,84 @@ class DateAddFunction : public CudfFunction {
 
  private:
   std::unique_ptr<cudf::scalar> value_;
+};
+
+// Presto implementation of plus(DATE, INTERVAL DAY TO SECOND) -> DATE.
+class DatePlusIntervalFunction : public CudfFunction {
+
+ public:
+  DatePlusIntervalFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    VELOX_CHECK_EQ(
+        expr->inputs().size(),
+        2,
+        "plus(date, interval) expects exactly 2 inputs");
+    VELOX_CHECK(
+        expr->inputs()[0]->type()->isDate(),
+        "First argument to plus must be a date");
+    VELOX_CHECK(
+        expr->inputs()[1]->type()->isIntervalDayTime(),
+        "Second argument to plus must be an interval day to second");
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    auto dateCol = asView(inputColumns[0]);
+    auto intervalCol = asView(inputColumns[1]);
+
+    // Validate that all intervals are whole days.
+    auto divisor = cudf::numeric_scalar<int64_t>(kMillisInDay, true, stream);
+    auto remainder = cudf::binary_operation(
+        intervalCol,
+        divisor,
+        cudf::binary_operator::MOD,
+        cudf::data_type(cudf::type_id::INT64),
+        stream,
+        mr);
+    auto zero = cudf::numeric_scalar<int64_t>(0, true, stream);
+    auto isWholeDays = cudf::binary_operation(
+        remainder->view(),
+        zero,
+        cudf::binary_operator::EQUAL,
+        cudf::data_type(cudf::type_id::BOOL8),
+        stream,
+        mr);
+    auto allWholeDays = cudf::reduce(
+        isWholeDays->view(),
+        *cudf::make_all_aggregation<cudf::reduce_aggregation>(),
+        cudf::data_type(cudf::type_id::BOOL8),
+        stream,
+        mr);
+    auto* result =
+        static_cast<cudf::scalar_type_t<bool>*>(allWholeDays.get());
+    VELOX_USER_CHECK(
+        result->is_valid(stream) && result->value(stream),
+        "Cannot add hours, minutes, seconds or milliseconds to a date");
+
+    // Divide millis by kMillisInDay to get days.
+    auto daysInt = cudf::binary_operation(
+        intervalCol,
+        divisor,
+        cudf::binary_operator::DIV,
+        cudf::data_type(cudf::type_id::INT32),
+        stream,
+        mr);
+
+    // Cast days to duration_days and add to date.
+    auto daysDuration = cudf::cast(
+        daysInt->view(),
+        cudf::data_type(cudf::type_id::DURATION_DAYS),
+        stream,
+        mr);
+    return cudf::binary_operation(
+        dateCol,
+        daysDuration->view(),
+        cudf::binary_operator::ADD,
+        cudf::data_type(cudf::type_id::TIMESTAMP_DAYS),
+        stream,
+        mr);
+  }
 };
 
 class CardinalityFunction : public CudfFunction {
@@ -1149,6 +1174,60 @@ class DateTruncFunction : public CudfFunction {
   }
 
  private:
+  enum class DateTruncUnit {
+    kSecond,
+    kMinute,
+    kHour,
+    kDay,
+    kWeek,
+    kMonth,
+    kQuarter,
+    kYear
+  };
+
+  static std::string normalizeDateTruncUnit(std::string unit) {
+    if (unit.size() >= 2 && unit.front() == '\'' && unit.back() == '\'') {
+      unit = unit.substr(1, unit.size() - 2);
+    }
+    folly::toLowerAscii(unit);
+    return unit;
+  }
+
+  static DateTruncUnit
+  parseDateTruncUnit(const std::string& unit, bool isTimestamp, bool isDate) {
+    if (unit == "second") {
+      VELOX_CHECK(isTimestamp, "date_trunc second requires timestamp input");
+      return DateTruncUnit::kSecond;
+    }
+    if (unit == "minute") {
+      VELOX_CHECK(isTimestamp, "date_trunc minute requires timestamp input");
+      return DateTruncUnit::kMinute;
+    }
+    if (unit == "hour") {
+      VELOX_CHECK(isTimestamp, "date_trunc hour requires timestamp input");
+      return DateTruncUnit::kHour;
+    }
+    if (unit == "day") {
+      return DateTruncUnit::kDay;
+    }
+    if (unit == "week") {
+      return DateTruncUnit::kWeek;
+    }
+    if (unit == "month") {
+      return DateTruncUnit::kMonth;
+    }
+    if (unit == "quarter") {
+      return DateTruncUnit::kQuarter;
+    }
+    if (unit == "year") {
+      return DateTruncUnit::kYear;
+    }
+    VELOX_FAIL(
+        "date_trunc does not support unit '{}' for {} input",
+        unit,
+        isTimestamp ? "timestamp" : (isDate ? "date" : "unknown"));
+  }
+
   DateTruncUnit unit_;
   bool isTimestamp_{false};
   bool isDate_{false};
@@ -1423,9 +1502,74 @@ void registerSparkFunctions(const std::string& prefix) {
            .constantArgumentType("integer")
            .argumentType("any")
            .build()});
+
+  registerCudfFunction(
+      prefix + "date_add",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<DateAddFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("date")
+           .argumentType("date")
+           .constantArgumentType("tinyint")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("date")
+           .argumentType("date")
+           .constantArgumentType("smallint")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("date")
+           .argumentType("date")
+           .constantArgumentType("integer")
+           .build()});
+
+  registerCudfFunction(
+      prefix + "date_trunc",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<DateTruncFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("timestamp")
+           .constantArgumentType("varchar")
+           .argumentType("timestamp")
+           .build()},
+      true,
+      DateTruncFunction::canEvaluate);
 }
 
-void registerPrestoFunctions(const std::string& prefix) {}
+void registerPrestoFunctions(const std::string& prefix) {
+  using exec::FunctionSignatureBuilder;
+
+  registerCudfFunction(
+      prefix + "plus",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<DatePlusIntervalFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("date")
+           .argumentType("date")
+           .argumentType("interval day to second")
+           .build()});
+
+  registerCudfFunction(
+      prefix + "date_trunc",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<DateTruncFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("timestamp")
+           .constantArgumentType("varchar")
+           .argumentType("timestamp")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("date")
+           .constantArgumentType("varchar")
+           .argumentType("date")
+           .build()},
+      true,
+      DateTruncFunction::canEvaluate);
+}
 
 bool registerBuiltinFunctions(const std::string& prefix) {
   using exec::FunctionSignatureBuilder;
@@ -1785,46 +1929,6 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       {
           // Cast needs special handling dynamically using cudf.
       });
-
-  registerCudfFunction(
-      prefix + "date_add",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<DateAddFunction>(expr);
-      },
-      {FunctionSignatureBuilder()
-           .returnType("date")
-           .argumentType("date")
-           .constantArgumentType("tinyint")
-           .build(),
-       FunctionSignatureBuilder()
-           .returnType("date")
-           .argumentType("date")
-           .constantArgumentType("smallint")
-           .build(),
-       FunctionSignatureBuilder()
-           .returnType("date")
-           .argumentType("date")
-           .constantArgumentType("integer")
-           .build()});
-
-
-  registerCudfFunction(
-      prefix + "date_trunc",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<DateTruncFunction>(expr);
-      },
-      {FunctionSignatureBuilder()
-           .returnType("timestamp")
-           .constantArgumentType("varchar")
-           .argumentType("timestamp")
-           .build(),
-       FunctionSignatureBuilder()
-           .returnType("date")
-           .constantArgumentType("varchar")
-           .argumentType("date")
-           .build()},
-      true,
-      DateTruncFunction::canEvaluate);
 
   registerCudfFunction(
       prefix + "divide",

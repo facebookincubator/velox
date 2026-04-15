@@ -116,5 +116,35 @@ TEST_F(CudfFilterProjectTest, dateAdd) {
   EXPECT_EQ(parseDate("2020-02-29"), dateAdd("2019-01-30", 395));
 }
 
+TEST_F(CudfFilterProjectTest, dateTruncTimestamp) {
+  auto timestamps = makeFlatVector<Timestamp>(
+      {Timestamp(1609459200, 0), // 2021-01-01 00:00:00
+       Timestamp(1709183167, 0), // 2024-02-29 05:06:07
+       Timestamp(1736942461, 123000000)}, // 2025-01-15 12:01:01.123
+      TIMESTAMP());
+  auto data = makeRowVector({"event_ts"}, {timestamps});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> units{
+      "second", "minute", "hour", "day", "week", "month", "quarter", "year"};
+  for (const auto& unit : units) {
+    SCOPED_TRACE(unit);
+    auto projection =
+        fmt::format("date_trunc('{}', event_ts) AS result", unit);
+
+    auto cudfPlan =
+        PlanBuilder().values(vectors).project({projection}).planNode();
+    auto cudfResult = AssertQueryBuilder(cudfPlan).copyResults(pool());
+
+    cudf_velox::unregisterCudf();
+    auto cpuPlan =
+        PlanBuilder().values(vectors).project({projection}).planNode();
+    auto cpuResult = AssertQueryBuilder(cpuPlan).copyResults(pool());
+    cudf_velox::registerCudf();
+
+    facebook::velox::test::assertEqualVectors(cpuResult, cudfResult);
+  }
+}
+
 } // namespace
 } // namespace facebook::velox::cudf_velox
