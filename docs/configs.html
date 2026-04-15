@@ -898,21 +898,27 @@ Each query can override the config by setting corresponding query session proper
 <col style="width: 53.8%" />
 </colgroup>
 <thead>
-<tr class="row-odd"><th class="head"><p>user</p></th>
-<th class="head"></th>
-<th class="head"><p>string</p></th>
-<th class="head"><p>“”</p></th>
-<th class="head"><p>The user of the query. Used for storage logging.</p></th>
+<tr class="row-odd"><th class="head"><p>Configuration Property Name</p></th>
+<th class="head"><p>Session Property Name</p></th>
+<th class="head"><p>Type</p></th>
+<th class="head"><p>Default Value</p></th>
+<th class="head"><p>Description</p></th>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>source</p></td>
+<tr class="row-even"><td><p>user</p></td>
+<td></td>
+<td><p>string</p></td>
+<td><p>“”</p></td>
+<td><p>The user of the query. Used for storage logging.</p></td>
+</tr>
+<tr class="row-odd"><td><p>source</p></td>
 <td></td>
 <td><p>string</p></td>
 <td><p>“”</p></td>
 <td><p>The source of the query. Used for storage access and logging.</p></td>
 </tr>
-<tr class="row-odd"><td><p>schema</p></td>
+<tr class="row-even"><td><p>schema</p></td>
 <td></td>
 <td><p>string</p></td>
 <td><p>“”</p></td>
@@ -925,6 +931,13 @@ Each query can override the config by setting corresponding query session proper
 <h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Link to this heading">¶</a></h2>
 <p>Hive Connector config is initialized on velox runtime startup and is shared among queries as the default config.
 Each query can override the config by setting corresponding query session properties such as in Prestissimo.</p>
+<p>Configuration property names use kebab-case (e.g., <code class="docutils literal notranslate"><span class="pre">max-bucket-count</span></code>).
+Session property names use snake_case (e.g., <code class="docutils literal notranslate"><span class="pre">max_bucket_count</span></code>).
+Properties without a session property name in the table below are fixed for the lifetime of the process
+and cannot be modified per query.</p>
+<p>Properties of type <code class="docutils literal notranslate"><span class="pre">capacity</span></code> accept human-readable size strings such as <code class="docutils literal notranslate"><span class="pre">512kB</span></code>, <code class="docutils literal notranslate"><span class="pre">128MB</span></code>, <code class="docutils literal notranslate"><span class="pre">1GB</span></code>, etc.
+Properties of type <code class="docutils literal notranslate"><span class="pre">integer</span></code> with byte-valued defaults (shown as <code class="docutils literal notranslate"><span class="pre">256KB</span></code>, <code class="docutils literal notranslate"><span class="pre">8MB</span></code>, etc. for readability)
+must be specified as raw byte counts.</p>
 <table class="docutils align-default">
 <colgroup>
 <col style="width: 15.4%" />
@@ -942,14 +955,14 @@ Each query can override the config by setting corresponding query session proper
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>hive.max-partitions-per-writers</p></td>
-<td></td>
+<tr class="row-even"><td><p>max-partitions-per-writers</p></td>
+<td><p>max_partitions_per_writers</p></td>
 <td><p>integer</p></td>
-<td><p>100</p></td>
+<td><p>128</p></td>
 <td><p>Maximum number of (bucketed) partitions per a single table writer instance.</p></td>
 </tr>
-<tr class="row-odd"><td><p>hive.max-bucket-count</p></td>
-<td><p>hive.max_bucket_count</p></td>
+<tr class="row-odd"><td><p>max-bucket-count</p></td>
+<td><p>max_bucket_count</p></td>
 <td><p>integer</p></td>
 <td><p>100000</p></td>
 <td><p>Maximum number of buckets that a table writer is allowed to write to.</p></td>
@@ -963,7 +976,7 @@ the update mode field of the table writer operator output. <code class="docutils
 sets the update mode to indicate overwriting a partition if exists. <code class="docutils literal notranslate"><span class="pre">ERROR</span></code> sets the update mode to indicate
 error throwing if writing to an existing partition.</p></td>
 </tr>
-<tr class="row-odd"><td><p>hive.immutable-partitions</p></td>
+<tr class="row-odd"><td><p>immutable-partitions</p></td>
 <td></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
@@ -1006,7 +1019,7 @@ For queries that write to fixed partitions, this check should happen much earlie
 </tr>
 <tr class="row-odd"><td><p>max-coalesced-distance</p></td>
 <td></td>
-<td><p>integer</p></td>
+<td><p>capacity</p></td>
 <td><p>512KB</p></td>
 <td><p>Maximum distance in capacity units between chunks to be fetched that may be coalesced into a single request.</p></td>
 </tr>
@@ -1038,13 +1051,13 @@ disabled if files are not immutable, i.e. file content may change while file pat
 </tr>
 <tr class="row-even"><td><p>sort-writer-max-output-bytes</p></td>
 <td><p>sort_writer_max_output_bytes</p></td>
-<td><p>string</p></td>
+<td><p>capacity</p></td>
 <td><p>10MB</p></td>
 <td><p>Maximum bytes for sort writer in one batch of output. This is to limit the memory usage of sort writer.</p></td>
 </tr>
 <tr class="row-odd"><td><p>max-target-file-size</p></td>
 <td><p>max_target_file_size</p></td>
-<td><p>string</p></td>
+<td><p>capacity</p></td>
 <td><p>0B</p></td>
 <td><p>Maximum target file size for writers. When a file exceeds this size during writing, the writer
 closes the current file and starts writing to a new file. Accepts human-readable values like
@@ -1067,8 +1080,8 @@ and also skip staging to the ssd cache. This helps to prevent the cache space po
 from the one-time table scan by large batch query when mixed running with interactive
 query which has high data locality.</p></td>
 </tr>
-<tr class="row-even"><td><p>hive.reader.stats_based_filter_reorder_disabaled</p></td>
-<td><p>hive.reader.stats_based_filter_reorder_disabaled</p></td>
+<tr class="row-even"><td><p>stats-based-filter-reorder-disabled</p></td>
+<td><p>stats_based_filter_reorder_disabled</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>If true, disable the stats based filter reordering during the read processing, and the
@@ -1076,20 +1089,20 @@ filter execution order is totally determined by the filter type. Otherwise, the 
 reader will dynamically adjust the filter execution order based on the past filter
 execution stats.</p></td>
 </tr>
-<tr class="row-odd"><td><p>hive.reader.timestamp-partition-value-as-local-time</p></td>
-<td><p>hive.reader.timestamp_partition_value_as_local_time</p></td>
+<tr class="row-odd"><td><p>reader.timestamp-partition-value-as-local-time</p></td>
+<td><p>reader.timestamp_partition_value_as_local_time</p></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
 <td><p>Reads timestamp partition value as local time if true. Otherwise, reads as UTC.</p></td>
 </tr>
-<tr class="row-even"><td><p>hive.preserve-flat-maps-in-memory</p></td>
-<td><p>hive.preserve_flat_maps_in_memory</p></td>
+<tr class="row-even"><td><p>preserve-flat-maps-in-memory</p></td>
+<td><p>preserve_flat_maps_in_memory</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>Whether to preserve flat maps in memory as FlatMapVectors instead of converting them to MapVectors. This is only applied during data reading inside the DWRF and Nimble readers, not during downstream processing like expression evaluation etc.</p></td>
 </tr>
-<tr class="row-odd"><td><p>hive.max-rows-per-index-request</p></td>
-<td><p>hive.max_rows_per_index_request</p></td>
+<tr class="row-odd"><td><p>max-rows-per-index-request</p></td>
+<td><p>max_rows_per_index_request</p></td>
 <td><p>integer</p></td>
 <td><p>0</p></td>
 <td><p>Maximum number of output rows to return per index lookup request. The limit is applied to the actual output rows
@@ -1112,8 +1125,8 @@ strong references so they are never evicted. This avoids re-reading and re-parsi
 access when weak-pointer cache entries would otherwise expire. Can be used independently of
 file-metadata-cache-enabled. Currently only supported by Nimble format.</p></td>
 </tr>
-<tr class="row-even"><td><p>hive.reader.collect-column-cpu-metrics</p></td>
-<td><p>hive.reader.collect_column_cpu_metrics</p></td>
+<tr class="row-even"><td><p>reader.collect-column-cpu-metrics</p></td>
+<td><p>reader.collect_column_cpu_metrics</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>If true, enables collection of per-column timing statistics during file reading. This includes
@@ -1121,7 +1134,7 @@ decompression and decode CPU time metrics for each column, reported as runtime m
 <code class="docutils literal notranslate"><span class="pre">column_&lt;nodeId&gt;.&lt;type&gt;.decompressCPUTimeNanos</span></code> and <code class="docutils literal notranslate"><span class="pre">column_&lt;nodeId&gt;.&lt;type&gt;.decodeCPUTimeNanos</span></code>.
 Useful for performance analysis and identifying slow columns.</p></td>
 </tr>
-<tr class="row-odd"><td><p>hive.orc.footer-speculative-io-size</p></td>
+<tr class="row-odd"><td><p>orc.footer-speculative-io-size</p></td>
 <td><p>orc_footer_speculative_io_size</p></td>
 <td><p>integer</p></td>
 <td><p>256KB</p></td>
@@ -1129,7 +1142,7 @@ Useful for performance analysis and identifying slow columns.</p></td>
 of the file to load the footer and nearby metadata in a single IO operation.
 Set to 0 for adaptive mode.</p></td>
 </tr>
-<tr class="row-even"><td><p>hive.parquet.footer-speculative-io-size</p></td>
+<tr class="row-even"><td><p>parquet.footer-speculative-io-size</p></td>
 <td><p>parquet_footer_speculative_io_size</p></td>
 <td><p>integer</p></td>
 <td><p>256KB</p></td>
@@ -1137,7 +1150,7 @@ Set to 0 for adaptive mode.</p></td>
 of the file to load the footer and nearby metadata in a single IO operation.
 Set to 0 for adaptive mode.</p></td>
 </tr>
-<tr class="row-odd"><td><p>hive.nimble.footer-speculative-io-size</p></td>
+<tr class="row-odd"><td><p>nimble.footer-speculative-io-size</p></td>
 <td><p>nimble_footer_speculative_io_size</p></td>
 <td><p>integer</p></td>
 <td><p>8MB</p></td>
@@ -1442,27 +1455,27 @@ These semantics are similar to the <a class="reference external" href="https://h
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>hive.gcs.endpoint</p></td>
+<tr class="row-even"><td><p>gcs.endpoint</p></td>
 <td><p>string</p></td>
 <td></td>
 <td><p>The GCS storage URI.</p></td>
 </tr>
-<tr class="row-odd"><td><p>hive.gcs.json-key-file-path</p></td>
+<tr class="row-odd"><td><p>gcs.json-key-file-path</p></td>
 <td><p>string</p></td>
 <td></td>
 <td><p>The GCS service account configuration JSON key file.</p></td>
 </tr>
-<tr class="row-even"><td><p>hive.gcs.max-retry-count</p></td>
+<tr class="row-even"><td><p>gcs.max-retry-count</p></td>
 <td><p>integer</p></td>
 <td></td>
 <td><p>The GCS maximum retry counter of transient errors.</p></td>
 </tr>
-<tr class="row-odd"><td><p>hive.gcs.max-retry-time</p></td>
+<tr class="row-odd"><td><p>gcs.max-retry-time</p></td>
 <td><p>string</p></td>
 <td></td>
 <td><p>The GCS maximum time allowed to retry transient errors.</p></td>
 </tr>
-<tr class="row-even"><td><p>hive.gcs.auth.access-token-provider</p></td>
+<tr class="row-even"><td><p>gcs.auth.access-token-provider</p></td>
 <td><p>string</p></td>
 <td></td>
 <td><p>A custom OAuth credential provider, if specified, will be used to create the client in favor of other
