@@ -18,10 +18,7 @@
 #include <optional>
 #include <string>
 #include "velox/common/base/Exceptions.h"
-
-namespace facebook::velox::config {
-class ConfigBase;
-}
+#include "velox/common/config/Config.h"
 
 namespace facebook::velox::connector::hive {
 
@@ -32,19 +29,19 @@ namespace facebook::velox::connector::hive {
 class FileConfig {
  public:
   /// Maps table field names to file field names using names, not indices.
-  static constexpr const char* kOrcUseColumnNames = "hive.orc.use-column-names";
+  static constexpr const char* kOrcUseColumnNames = "orc.use-column-names";
   static constexpr const char* kOrcUseColumnNamesSession =
       "orc_use_column_names";
 
   /// Maps table field names to file field names using names, not indices.
   static constexpr const char* kParquetUseColumnNames =
-      "hive.parquet.use-column-names";
+      "parquet.use-column-names";
   static constexpr const char* kParquetUseColumnNamesSession =
       "parquet_use_column_names";
 
   /// Allows reading INT32 physical type columns as a narrower integer type.
   static constexpr const char* kAllowInt32Narrowing =
-      "hive.parquet.allow-int32-narrowing";
+      "parquet.allow-int32-narrowing";
   static constexpr const char* kAllowInt32NarrowingSession =
       "allow_int32_narrowing";
 
@@ -91,15 +88,14 @@ class FileConfig {
       "parallel_unit_load_count";
 
   // The unit for reading timestamps from files.
-  static constexpr const char* kReadTimestampUnit =
-      "hive.reader.timestamp-unit";
+  static constexpr const char* kReadTimestampUnit = "reader.timestamp-unit";
   static constexpr const char* kReadTimestampUnitSession =
-      "hive.reader.timestamp_unit";
+      "reader.timestamp_unit";
 
   static constexpr const char* kReadTimestampPartitionValueAsLocalTime =
-      "hive.reader.timestamp-partition-value-as-local-time";
+      "reader.timestamp-partition-value-as-local-time";
   static constexpr const char* kReadTimestampPartitionValueAsLocalTimeSession =
-      "hive.reader.timestamp_partition_value_as_local_time";
+      "reader.timestamp_partition_value_as_local_time";
 
   static constexpr const char* kReadStatsBasedFilterReorderDisabled =
       "stats-based-filter-reorder-disabled";
@@ -109,9 +105,9 @@ class FileConfig {
   /// Whether to preserve flat maps in memory as FlatMapVectors instead of
   /// converting them to MapVectors.
   static constexpr const char* kPreserveFlatMapsInMemory =
-      "hive.preserve-flat-maps-in-memory";
+      "preserve-flat-maps-in-memory";
   static constexpr const char* kPreserveFlatMapsInMemorySession =
-      "hive.preserve_flat_maps_in_memory";
+      "preserve_flat_maps_in_memory";
 
   /// Whether to use the cluster index for filter-based row pruning.
   /// When enabled, filters from ScanSpec are converted to index bounds for
@@ -122,9 +118,9 @@ class FileConfig {
   /// Whether to collect per-column timing stats (decode/decompress CPU time).
   /// Disabled by default to avoid overhead (~100ns per operation).
   static constexpr const char* kReaderCollectColumnCpuMetrics =
-      "hive.reader.collect-column-cpu-metrics";
+      "reader.collect-column-cpu-metrics";
   static constexpr const char* kReaderCollectColumnCpuMetricsSession =
-      "hive.reader.collect_column_cpu_metrics";
+      "reader.collect_column_cpu_metrics";
 
   /// Whether to cache file metadata (footer, stripes, index) in the
   /// process-wide AsyncDataCache. When enabled, the first reader performs a
@@ -148,15 +144,15 @@ class FileConfig {
   /// metadata in a single IO operation. Format-specific configs with different
   /// defaults: ORC/Parquet default to 256KB, Nimble defaults to 8MB.
   static constexpr const char* kOrcFooterSpeculativeIoSize =
-      "hive.orc.footer-speculative-io-size";
+      "orc.footer-speculative-io-size";
   static constexpr const char* kOrcFooterSpeculativeIoSizeSession =
       "orc_footer_speculative_io_size";
   static constexpr const char* kParquetFooterSpeculativeIoSize =
-      "hive.parquet.footer-speculative-io-size";
+      "parquet.footer-speculative-io-size";
   static constexpr const char* kParquetFooterSpeculativeIoSizeSession =
       "parquet_footer_speculative_io_size";
   static constexpr const char* kNimbleFooterSpeculativeIoSize =
-      "hive.nimble.footer-speculative-io-size";
+      "nimble.footer-speculative-io-size";
   static constexpr const char* kNimbleFooterSpeculativeIoSizeSession =
       "nimble_footer_speculative_io_size";
 
@@ -233,6 +229,38 @@ class FileConfig {
   }
 
  protected:
+  static constexpr const char* kLegacyPrefix = "hive.";
+
+  // Looks up a config value by 'key', falling back to 'hive.' + key if not
+  // found. Used during migration away from redundant 'hive.' prefix in
+  // config keys.
+  template <typename T>
+  T configValue(const std::string& key, const T& defaultValue) const {
+    if (auto val = config_->get<T>(key)) {
+      return val.value();
+    }
+    return config_->get<T>(std::string(kLegacyPrefix) + key, defaultValue);
+  }
+
+  // Looks up a session property by 'sessionKey' (then 'hive.' + sessionKey),
+  // falling back to connector config by 'configKey' (then 'hive.' + configKey).
+  // Used during migration away from redundant 'hive.' prefix in property
+  // names.
+  template <typename T>
+  T sessionValue(
+      const config::ConfigBase* session,
+      const std::string& sessionKey,
+      const std::string& configKey,
+      const T& defaultValue) const {
+    if (auto val = session->get<T>(sessionKey)) {
+      return val.value();
+    }
+    if (auto val = session->get<T>(std::string(kLegacyPrefix) + sessionKey)) {
+      return val.value();
+    }
+    return configValue<T>(configKey, defaultValue);
+  }
+
   std::shared_ptr<const config::ConfigBase> config_;
 };
 

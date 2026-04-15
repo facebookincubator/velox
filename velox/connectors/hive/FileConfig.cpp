@@ -21,20 +21,20 @@ namespace facebook::velox::connector::hive {
 
 bool FileConfig::isOrcUseColumnNames(const config::ConfigBase* session) const {
   return session->get<bool>(
-      kOrcUseColumnNamesSession, config_->get<bool>(kOrcUseColumnNames, false));
+      kOrcUseColumnNamesSession, configValue<bool>(kOrcUseColumnNames, false));
 }
 
 bool FileConfig::isParquetUseColumnNames(
     const config::ConfigBase* session) const {
   return session->get<bool>(
       kParquetUseColumnNamesSession,
-      config_->get<bool>(kParquetUseColumnNames, false));
+      configValue<bool>(kParquetUseColumnNames, false));
 }
 
 bool FileConfig::allowInt32Narrowing(const config::ConfigBase* session) const {
   return session->get<bool>(
       kAllowInt32NarrowingSession,
-      config_->get<bool>(kAllowInt32Narrowing, false));
+      configValue<bool>(kAllowInt32Narrowing, false));
 }
 
 bool FileConfig::isFileColumnNamesReadAsLowerCase(
@@ -93,9 +93,8 @@ uint64_t FileConfig::filePreloadThreshold() const {
 }
 
 uint8_t FileConfig::readTimestampUnit(const config::ConfigBase* session) const {
-  const auto unit = session->get<uint8_t>(
-      kReadTimestampUnitSession,
-      config_->get<uint8_t>(kReadTimestampUnit, 3 /*milli*/));
+  const auto unit = sessionValue<uint8_t>(
+      session, kReadTimestampUnitSession, kReadTimestampUnit, 3 /*milli*/);
   VELOX_CHECK(
       unit == 3 || unit == 6 /*micro*/ || unit == 9 /*nano*/,
       "Invalid timestamp unit.");
@@ -104,9 +103,11 @@ uint8_t FileConfig::readTimestampUnit(const config::ConfigBase* session) const {
 
 bool FileConfig::readTimestampPartitionValueAsLocalTime(
     const config::ConfigBase* session) const {
-  return session->get<bool>(
+  return sessionValue<bool>(
+      session,
       kReadTimestampPartitionValueAsLocalTimeSession,
-      config_->get<bool>(kReadTimestampPartitionValueAsLocalTime, true));
+      kReadTimestampPartitionValueAsLocalTime,
+      true);
 }
 
 bool FileConfig::readStatsBasedFilterReorderDisabled(
@@ -118,9 +119,11 @@ bool FileConfig::readStatsBasedFilterReorderDisabled(
 
 bool FileConfig::preserveFlatMapsInMemory(
     const config::ConfigBase* session) const {
-  return session->get<bool>(
+  return sessionValue<bool>(
+      session,
       kPreserveFlatMapsInMemorySession,
-      config_->get<bool>(kPreserveFlatMapsInMemory, false));
+      kPreserveFlatMapsInMemory,
+      false);
 }
 
 bool FileConfig::indexEnabled(const config::ConfigBase* session) const {
@@ -130,9 +133,11 @@ bool FileConfig::indexEnabled(const config::ConfigBase* session) const {
 
 bool FileConfig::readerCollectColumnCpuMetrics(
     const config::ConfigBase* session) const {
-  return session->get<bool>(
+  return sessionValue<bool>(
+      session,
       kReaderCollectColumnCpuMetricsSession,
-      config_->get<bool>(kReaderCollectColumnCpuMetrics, false));
+      kReaderCollectColumnCpuMetrics,
+      false);
 }
 
 bool FileConfig::fileMetadataCacheEnabled(
@@ -151,21 +156,21 @@ uint64_t FileConfig::orcFooterSpeculativeIoSize(
     const config::ConfigBase* session) const {
   return session->get<uint64_t>(
       kOrcFooterSpeculativeIoSizeSession,
-      config_->get<uint64_t>(kOrcFooterSpeculativeIoSize, 256UL << 10));
+      configValue<uint64_t>(kOrcFooterSpeculativeIoSize, 256UL << 10));
 }
 
 uint64_t FileConfig::parquetFooterSpeculativeIoSize(
     const config::ConfigBase* session) const {
   return session->get<uint64_t>(
       kParquetFooterSpeculativeIoSizeSession,
-      config_->get<uint64_t>(kParquetFooterSpeculativeIoSize, 256UL << 10));
+      configValue<uint64_t>(kParquetFooterSpeculativeIoSize, 256UL << 10));
 }
 
 uint64_t FileConfig::nimbleFooterSpeculativeIoSize(
     const config::ConfigBase* session) const {
   return session->get<uint64_t>(
       kNimbleFooterSpeculativeIoSizeSession,
-      config_->get<uint64_t>(kNimbleFooterSpeculativeIoSize, 8UL << 20));
+      configValue<uint64_t>(kNimbleFooterSpeculativeIoSize, 8UL << 20));
 }
 
 } // namespace facebook::velox::connector::hive

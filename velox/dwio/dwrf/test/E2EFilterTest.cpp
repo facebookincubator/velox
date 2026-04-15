@@ -503,6 +503,32 @@ TEST_F(E2EFilterTest, mutationCornerCases) {
   testMutationCornerCases();
 }
 
+// Verify processedStrides counts actual strides read, not stripes loaded.
+// With multi-stride data, processedStrides + skippedStrides must equal the
+// total number of strides across all stripes.
+TEST_F(E2EFilterTest, processedStridesCount) {
+  rowType_ = test::DataSetBuilder::makeRowType("long_val:bigint", false);
+  filterGenerator_ = std::make_unique<FilterGenerator>(rowType_, seed_);
+  auto customize = [&]() {};
+  auto batches = makeDataset(customize, true, false);
+  writeToMemory(rowType_, batches, true);
+  std::vector<std::string> filterable = {"long_val"};
+  testRowGroupSkip(batches, filterable);
+
+  const auto totalRows = kBatchCount * kBatchSize;
+  const auto totalStrides = (totalRows + kRowsInGroup - 1) / kRowsInGroup;
+  // With 4 batches x 25,000 rows in one stripe and kRowsInGroup=10,000,
+  // totalStrides is 10. The filter must skip some and process the rest.
+  // processedStrides > 1 proves we count per stride, not per stripe
+  // (the old bug gave processedStrides=1 for a single stripe).
+  EXPECT_EQ(10, totalStrides);
+  EXPECT_GT(runtimeStats_.skippedStrides, 0);
+  EXPECT_GT(runtimeStats_.processedStrides, 1);
+  EXPECT_EQ(
+      totalStrides,
+      runtimeStats_.skippedStrides + runtimeStats_.processedStrides);
+}
+
 // Define main so that gflags get processed.
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);

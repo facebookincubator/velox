@@ -158,28 +158,6 @@ class TimeWithTimeZoneCastOperator final : public exec::CastOperator {
     return {std::shared_ptr<const CastOperator>{}, &kInstance};
   }
 
-  bool isSupportedFromType(const TypePtr& other) const override {
-    switch (other->kind()) {
-      case TypeKind::BIGINT:
-        return other->equivalent(*TIME());
-      case TypeKind::VARCHAR:
-        return true;
-      default:
-        return false;
-    }
-  }
-
-  bool isSupportedToType(const TypePtr& other) const override {
-    switch (other->kind()) {
-      case TypeKind::BIGINT:
-        return other->equivalent(*TIME());
-      case TypeKind::VARCHAR:
-        return true;
-      default:
-        return false;
-    }
-  }
-
   void castTo(
       const BaseVector& input,
       exec::EvalCtx& context,
@@ -289,25 +267,15 @@ class TimeWithTimezoneTypeFactory : public CustomTypeFactory {
 
 void registerTimeWithTimezoneType() {
   registerCustomType(
-      "time with time zone",
+      "TIME WITH TIME ZONE",
       std::make_unique<const TimeWithTimezoneTypeFactory>());
   registerCastRules({
       {.fromType = "TIME",
        .toType = "TIME WITH TIME ZONE",
-       .implicitAllowed = true,
-       .validator = {}},
-      {.fromType = "VARCHAR",
-       .toType = "TIME WITH TIME ZONE",
-       .implicitAllowed = false,
-       .validator = {}},
-      {.fromType = "TIME WITH TIME ZONE",
-       .toType = "TIME",
-       .implicitAllowed = false,
-       .validator = {}},
-      {.fromType = "TIME WITH TIME ZONE",
-       .toType = "VARCHAR",
-       .implicitAllowed = false,
-       .validator = {}},
+       .implicitAllowed = true},
+      {.fromType = "VARCHAR", .toType = "TIME WITH TIME ZONE"},
+      {.fromType = "TIME WITH TIME ZONE", .toType = "TIME"},
+      {.fromType = "TIME WITH TIME ZONE", .toType = "VARCHAR"},
   });
 }
 

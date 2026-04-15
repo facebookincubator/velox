@@ -421,8 +421,9 @@ VectorPtr BaseVector::createInternal(
   auto kind = type->kind();
   switch (kind) {
     case TypeKind::ROW: {
-      std::vector<VectorPtr> children;
       auto& rowType = type->as<TypeKind::ROW>();
+      std::vector<VectorPtr> children;
+      children.reserve(rowType.size());
       // Children are reserved the parent size and accessible for those rows.
       for (int32_t i = 0; i < rowType.size(); ++i) {
         children.push_back(create(rowType.childAt(i), size, pool));
@@ -1053,6 +1054,9 @@ struct VariantToVector<TypeKind::ROW> {
     for (size_t i = 0; i < data.size(); ++i) {
       if (data[i].isNull()) {
         bits::setNull(rawNulls, i, true);
+        for (auto j{0u}; j < childCount; ++j) {
+          children[j].push_back(Variant::null(type->childAt(j)->kind()));
+        }
         continue;
       }
       const auto& row = data[i].row();
