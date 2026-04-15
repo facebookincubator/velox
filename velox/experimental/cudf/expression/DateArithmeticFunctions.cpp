@@ -13,17 +13,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/experimental/cudf/expression/DateArithmeticFunctions.h"
-
 #include "velox/experimental/cudf/expression/AstUtils.h"
+#include "velox/experimental/cudf/expression/DateArithmeticFunctions.h"
 
 #include "velox/expression/ConstantExpr.h"
 #include "velox/type/Time.h"
 
 #include <cudf/aggregation.hpp>
 #include <cudf/binaryop.hpp>
-#include <cudf/unary.hpp>
 #include <cudf/reduction.hpp>
+#include <cudf/unary.hpp>
 
 namespace facebook::velox::cudf_velox {
 
@@ -35,8 +34,7 @@ DateAddFunction::DateAddFunction(
       expr->inputs()[0]->type()->isDate(),
       "First argument to date_add must be a date");
   VELOX_CHECK_NULL(
-      std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
-          expr->inputs()[0]));
+      std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr->inputs()[0]));
   value_ = makeScalarFromConstantExpr(
       expr->inputs()[1], cudf::type_id::DURATION_DAYS);
 }
@@ -99,8 +97,7 @@ ColumnOrView DatePlusIntervalFunction::eval(
       cudf::data_type(cudf::type_id::BOOL8),
       stream,
       mr);
-  auto* result =
-      static_cast<cudf::scalar_type_t<bool>*>(allWholeDays.get());
+  auto* result = static_cast<cudf::scalar_type_t<bool>*>(allWholeDays.get());
   VELOX_USER_CHECK(
       result->is_valid(stream) && result->value(stream),
       "Cannot add hours, minutes, seconds or milliseconds to a date");

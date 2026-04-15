@@ -17,12 +17,12 @@
 
 #include "velox/expression/ConstantExpr.h"
 
-#include <folly/String.h>
-
 #include <cudf/binaryop.hpp>
-#include <cudf/unary.hpp>
 #include <cudf/column/column_factories.hpp>
 #include <cudf/datetime.hpp>
+#include <cudf/unary.hpp>
+
+#include <folly/String.h>
 
 namespace facebook::velox::cudf_velox {
 
@@ -76,8 +76,8 @@ bool DateTruncFunction::canEvaluate(
   if (expr->inputs().size() != 2) {
     return false;
   }
-  auto unitExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
-      expr->inputs()[0]);
+  auto unitExpr =
+      std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr->inputs()[0]);
   if (!unitExpr || unitExpr->value()->isNullAt(0)) {
     return false;
   }
@@ -91,8 +91,8 @@ bool DateTruncFunction::canEvaluate(
   if (unit == "second" || unit == "minute" || unit == "hour") {
     return isTimestamp;
   }
-  if (unit == "day" || unit == "week" || unit == "month" ||
-      unit == "quarter" || unit == "year") {
+  if (unit == "day" || unit == "week" || unit == "month" || unit == "quarter" ||
+      unit == "year") {
     return true;
   }
   return false;
@@ -193,10 +193,7 @@ ColumnOrView DateTruncFunction::eval(
     case DateTruncUnit::kYear: {
       auto dayCol = castToDay(inputCol);
       auto dayOfMonth = cudf::datetime::extract_datetime_component(
-          dayCol->view(),
-          cudf::datetime::datetime_component::DAY,
-          stream,
-          mr);
+          dayCol->view(), cudf::datetime::datetime_component::DAY, stream, mr);
       auto dayOfMonthInt = castToInt32(dayOfMonth->view());
       auto oneScalar = makeScalar(1);
       auto dayOffset = cudf::binary_operation(

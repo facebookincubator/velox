@@ -15,14 +15,14 @@
  */
 #pragma once
 
+#include "velox/experimental/cudf/CudfConfig.h"
+
 #include "velox/expression/ConstantExpr.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/SimpleVector.h"
 #include "velox/vector/VectorTypeUtils.h"
-
-#include "velox/experimental/cudf/CudfConfig.h"
 
 #include <cudf/ast/expressions.hpp>
 #include <cudf/scalar/scalar.hpp>

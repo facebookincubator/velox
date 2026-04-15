@@ -13,8 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <folly/String.h>
-
 #include "velox/experimental/cudf/exec/Validation.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstUtils.h"
@@ -32,12 +30,12 @@
 
 #include <cudf/aggregation.hpp>
 #include <cudf/binaryop.hpp>
-#include <cudf/reduction.hpp>
 #include <cudf/column/column_factories.hpp>
 #include <cudf/copying.hpp>
 #include <cudf/datetime.hpp>
 #include <cudf/hashing.hpp>
 #include <cudf/lists/count_elements.hpp>
+#include <cudf/reduction.hpp>
 #include <cudf/replace.hpp>
 #include <cudf/round.hpp>
 #include <cudf/strings/attributes.hpp>
@@ -53,6 +51,8 @@
 #include <cudf/table/table.hpp>
 #include <cudf/transform.hpp>
 #include <cudf/unary.hpp>
+
+#include <folly/String.h>
 
 #include <cctype>
 
@@ -151,7 +151,6 @@ static bool matchCallAgainstSignatures(
   }
   return false;
 }
-
 
 } // namespace
 
@@ -1255,7 +1254,6 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .variableArity("T")
            .build()});
 
-
   registerCudfFunction(
       "and",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
@@ -1267,7 +1265,6 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .argumentType("boolean")
            .argumentType("boolean")
            .build()});
-
 
   registerCudfFunction(
       "or",
@@ -1281,7 +1278,6 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .argumentType("boolean")
            .build()});
 
-
   registerCudfFunction(
       "not",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
@@ -1291,7 +1287,6 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .returnType("boolean")
            .argumentType("boolean")
            .build()});
-
 
   registerCudfFunction(
       "is_null",
@@ -1303,7 +1298,6 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .returnType("boolean")
            .argumentType("T")
            .build()});
-
 
   registerCudfFunction(
       "isnotnull",

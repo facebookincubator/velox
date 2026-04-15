@@ -129,8 +129,7 @@ TEST_F(CudfFilterProjectTest, dateTruncTimestamp) {
       "second", "minute", "hour", "day", "week", "month", "quarter", "year"};
   for (const auto& unit : units) {
     SCOPED_TRACE(unit);
-    auto projection =
-        fmt::format("date_trunc('{}', event_ts) AS result", unit);
+    auto projection = fmt::format("date_trunc('{}', event_ts) AS result", unit);
 
     auto cudfPlan =
         PlanBuilder().values(vectors).project({projection}).planNode();
