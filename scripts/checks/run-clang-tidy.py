@@ -46,7 +46,7 @@ def git_changed_lines(commit):
         if match:
             matched_file = match.group(1)
             # Exclude all files in cudf directories
-            if 'cudf/' not in matched_file:
+            if "cudf/" not in matched_file:
                 file = matched_file
 
         match = re.match(r"^@@", line)
@@ -75,7 +75,7 @@ def tidy(args):
 
     # Exclude all files in cudf directories
     # as clang-tidy doesn't support CUDA compiler flags and CUDA headers
-    files = [file for file in files if 'cudf/' not in file ]
+    files = [file for file in files if "cudf/" not in file]
 
     in_gha = os.environ.get("GITHUB_ACTIONS") is not None
     changed_lines = git_changed_lines(args.commit)
