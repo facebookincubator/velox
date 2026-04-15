@@ -15,6 +15,7 @@
 add_executable(velox_cudf_aggregation_test Main.cpp AggregationTest.cpp)
 add_executable(velox_cudf_assign_unique_id_test Main.cpp AssignUniqueIdTest.cpp)
 add_executable(velox_cudf_config_test Main.cpp ConfigTest.cpp)
+add_executable(velox_cudf_enforce_single_row_test Main.cpp EnforceSingleRowTest.cpp)
 add_executable(velox_cudf_expression_selection_test Main.cpp ExpressionEvaluatorSelectionTest.cpp)
 add_executable(velox_cudf_decimal_expression_test Main.cpp DecimalExpressionTest.cpp)
 add_executable(velox_cudf_filter_project_test Main.cpp FilterProjectTest.cpp)
@@ -37,9 +38,9 @@ add_executable(
 
 # Disabling writer tests until we re-add writing ability to CudfHiveConnector
 # add_executable(velox_cudf_table_write_test Main.cpp TableWriteTest.cpp)
+add_executable(velox_cudf_mark_distinct_test Main.cpp MarkDistinctTest.cpp)
 add_executable(velox_cudf_topn_test Main.cpp TopNTest.cpp)
 add_executable(velox_cudf_batch_concat_test Main.cpp BatchConcatTest.cpp)
-add_executable(velox_cudf_interop_test Main.cpp InteropTest.cpp)
 
 add_test(
   NAME velox_cudf_aggregation_test
@@ -56,6 +57,12 @@ add_test(
 add_test(
   NAME velox_cudf_config_test
   COMMAND velox_cudf_config_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+add_test(
+  NAME velox_cudf_enforce_single_row_test
+  COMMAND velox_cudf_enforce_single_row_test
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
@@ -128,6 +135,12 @@ add_test(
 # )
 
 add_test(
+  NAME velox_cudf_mark_distinct_test
+  COMMAND velox_cudf_mark_distinct_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+add_test(
   NAME velox_cudf_topn_test
   COMMAND velox_cudf_topn_test
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
@@ -135,12 +148,6 @@ add_test(
 add_test(
   NAME velox_cudf_batch_concat_test
   COMMAND velox_cudf_batch_concat_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-)
-
-add_test(
-  NAME velox_cudf_interop_test
-  COMMAND velox_cudf_interop_test
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
@@ -167,6 +174,7 @@ set_tests_properties(velox_cudf_order_by_test PROPERTIES LABELS cuda_driver TIME
 set_tests_properties(velox_cudf_aggregation_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 set_tests_properties(velox_cudf_assign_unique_id_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 set_tests_properties(velox_cudf_config_test PROPERTIES LABELS cuda_driver TIMEOUT 300)
+set_tests_properties(velox_cudf_enforce_single_row_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 set_tests_properties(
   velox_cudf_expression_selection_test
   PROPERTIES LABELS cuda_driver TIMEOUT 3000
@@ -183,6 +191,7 @@ endif()
 set_tests_properties(velox_cudf_subfield_filter_ast_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 set_tests_properties(velox_cudf_table_scan_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 # set_tests_properties(velox_cudf_table_write_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
+set_tests_properties(velox_cudf_mark_distinct_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 set_tests_properties(velox_cudf_topn_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 set_tests_properties(
   velox_cudf_aggregation_selection_test
@@ -194,7 +203,6 @@ set_tests_properties(
   PROPERTIES LABELS cuda_driver TIMEOUT 3000
 )
 set_tests_properties(velox_cudf_batch_concat_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
-set_tests_properties(velox_cudf_interop_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 
 target_link_libraries(
   velox_cudf_aggregation_test
@@ -219,6 +227,16 @@ target_link_libraries(
 )
 
 target_link_libraries(velox_cudf_config_test velox_cudf_exec Folly::folly gtest gtest_main)
+
+target_link_libraries(
+  velox_cudf_enforce_single_row_test
+  velox_cudf_exec
+  velox_exec
+  velox_exec_test_lib
+  velox_test_util
+  gtest
+  gtest_main
+)
 
 target_link_libraries(
   velox_cudf_expression_selection_test
@@ -348,6 +366,16 @@ target_link_libraries(
 # )
 
 target_link_libraries(
+  velox_cudf_mark_distinct_test
+  velox_cudf_exec
+  velox_exec
+  velox_exec_test_lib
+  velox_test_util
+  gtest
+  gtest_main
+)
+
+target_link_libraries(
   velox_cudf_topn_test
   velox_cudf_exec
   velox_exec
@@ -401,16 +429,6 @@ target_link_libraries(
   gtest_main
   fmt::fmt
   velox_cudf_exec
-)
-
-target_link_libraries(
-  velox_cudf_interop_test
-  velox_cudf_exec
-  velox_exec
-  velox_exec_test_lib
-  velox_test_util
-  gtest
-  gtest_main
 )
 
 add_subdirectory(utils)

@@ -167,13 +167,13 @@ void CudfHiveConnectorTestBase::writeToFile(
     const std::string& filePath,
     const std::vector<RowVectorPtr>& vectors,
     std::string prefix) {
+  auto stream = cudf::get_default_stream();
   // Convert all RowVectorPtrs to cudf tables
   std::vector<std::unique_ptr<cudf::table>> cudfTables;
   cudfTables.reserve(vectors.size());
   for (const auto& vector : vectors) {
     VELOX_CHECK_NOT_NULL(vector);
     if (vector->size()) {
-      auto stream = cudf::get_default_stream();
       auto cudfTable = with_arrow::toCudfTable(
           vector,
           vector->pool(),
@@ -197,7 +197,7 @@ void CudfHiveConnectorTestBase::writeToFile(
   auto options = cudf::io::chunked_parquet_writer_options::builder(sinkInfo)
                      .metadata(tableInputMetadata)
                      .build();
-  cudf::io::chunked_parquet_writer writer(options);
+  cudf::io::chunked_parquet_writer writer(options, stream);
 
   // Write all table chunks
   for (const auto& table : cudfTables) {
@@ -212,7 +212,7 @@ void CudfHiveConnectorTestBase::writeToFile(
     const std::string& filePath,
     RowVectorPtr vector,
     std::string prefix) {
-  auto const sinkInfo = cudf::io::sink_info(filePath);
+  const auto sinkInfo = cudf::io::sink_info(filePath);
   VELOX_CHECK_NOT_NULL(vector);
   auto stream = cudf::get_default_stream();
   auto cudfTable = with_arrow::toCudfTable(
@@ -224,7 +224,7 @@ void CudfHiveConnectorTestBase::writeToFile(
       cudf::io::parquet_writer_options::builder(sinkInfo, cudfTable->view())
           .metadata(tableInputMetadata)
           .build();
-  cudf::io::write_parquet(options);
+  cudf::io::write_parquet(options, stream);
 }
 
 std::vector<std::shared_ptr<facebook::velox::connector::ConnectorSplit>>

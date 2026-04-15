@@ -22,20 +22,13 @@
 #include "velox/functions/prestosql/types/HyperLogLogType.h"
 #include "velox/functions/prestosql/types/P4HyperLogLogType.h"
 #include "velox/functions/prestosql/types/fuzzer_utils/P4HyperLogLogInputGenerator.h"
+#include "velox/type/CastRegistry.h"
 
 namespace facebook::velox {
 namespace {
 
 class P4HyperLogLogCastOperator : public exec::CastOperator {
  public:
-  bool isSupportedFromType(const TypePtr& other) const override {
-    return other->equivalent(*HYPERLOGLOG());
-  }
-
-  bool isSupportedToType(const TypePtr& other) const override {
-    return other->equivalent(*HYPERLOGLOG());
-  }
-
   void castTo(
       const BaseVector& input,
       exec::EvalCtx& context,
@@ -160,6 +153,10 @@ class P4HyperLogLogTypeFactory : public CustomTypeFactory {
 } // namespace
 void registerP4HyperLogLogType() {
   registerCustomType(
-      "p4hyperloglog", std::make_unique<const P4HyperLogLogTypeFactory>());
+      "P4HYPERLOGLOG", std::make_unique<const P4HyperLogLogTypeFactory>());
+  registerCastRules({
+      {.fromType = "HYPERLOGLOG", .toType = "P4HYPERLOGLOG"},
+      {.fromType = "P4HYPERLOGLOG", .toType = "HYPERLOGLOG"},
+  });
 }
 } // namespace facebook::velox

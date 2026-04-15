@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include "velox/experimental/cudf/exec/NvtxHelper.h"
+#include "velox/experimental/cudf/exec/CudfOperator.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/exec/Operator.h"
@@ -30,7 +30,7 @@ namespace facebook::velox::cudf_velox {
 // Forward declaration
 struct CudfFunctionSpec;
 
-class CudfHashAggregation : public exec::Operator, public NvtxHelper {
+class CudfHashAggregation : public CudfOperatorBase {
  public:
   struct Aggregator {
     core::AggregationNode::Step step;
@@ -77,21 +77,25 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
 
   void initialize() override;
 
-  void addInput(RowVectorPtr input) override;
-
-  RowVectorPtr getOutput() override;
-
   bool needsInput() const override {
     return !noMoreInput_;
   }
-
-  void noMoreInput() override;
 
   exec::BlockingReason isBlocked(ContinueFuture* /* unused */) override {
     return exec::BlockingReason::kNotBlocked;
   }
 
   bool isFinished() override;
+
+ protected:
+  /// Derived classes implement the actual addInput logic.
+  void doAddInput(RowVectorPtr input) override;
+
+  /// Derived classes implement the actual getOutput logic.
+  RowVectorPtr doGetOutput() override;
+
+  /// Derived classes implement the actual noMoreInput logic.
+  void doNoMoreInput() override;
 
  private:
   // Setups the projections for accessing grouping keys stored in grouping

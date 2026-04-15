@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 #pragma once
+
+#include "velox/exec/IndexLookupJoinBridge.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/VectorHasher.h"
 
@@ -83,6 +85,33 @@ class IndexLookupJoin : public Operator {
       "clientNumErrorResults"};
 
  private:
+  // Intercepts runtime stats emitted during index-side operations (getOutput /
+  // startLookup) and accumulates them into a local map, separating them from
+  // probe-side stats so Driver::processLazyIoStats() correctly attributes
+  // only probe-side stats to the scan operator. Held via shared_ptr so the
+  // stat splitter lambda can outlive the operator and read the final stats.
+  class IndexStatWriter : public BaseRuntimeStatWriter {
+   public:
+    void addRuntimeStat(std::string_view name, const RuntimeCounter& value)
+        override;
+
+    // Sets a runtime metric in the index source stats map. Thread-safe.
+    void setRuntimeStat(const std::string& name, const RuntimeMetric& metric);
+
+    // Returns a snapshot of the accumulated index source runtime stats.
+    std::unordered_map<std::string, RuntimeMetric> runtimeStats() const;
+
+   private:
+    folly::Synchronized<std::unordered_map<std::string, RuntimeMetric>>
+        runtimeStats_;
+  };
+
+  // Produces separate OperatorStats for IndexLookupJoin and IndexSource nodes.
+  static std::vector<OperatorStats> splitStats(
+      const OperatorStats& combinedStats,
+      const core::PlanNodeId& indexSourceNodeId,
+      const IndexStatWriter& indexSourceStatWriter);
+
   using ResultIterator = connector::IndexSource::ResultIterator;
   using Result = connector::IndexSource::Result;
 
@@ -158,7 +187,13 @@ class IndexLookupJoin : public Operator {
   // Collects splits for the index source until no more splits signal is
   // received. Returns true if all splits have been collected and the index
   // source is ready. Returns false if we are still waiting for splits.
+  // Only called by the split collector operator (partitionId == 0).
   bool collectIndexSplits(ContinueFuture* future);
+
+  // Waits for the split collector to share index splits via the bridge.
+  // Returns true if splits are available and have been added to the index
+  // source. Returns false if we are still waiting for splits.
+  bool waitForIndexSplits(ContinueFuture* future);
 
   // Applies the join filter directly on the lookup result, updating the
   // lookup result to only include rows that pass the filter. Returns true if
@@ -242,6 +277,12 @@ class IndexLookupJoin : public Operator {
   // input rows.
   void prepareLookupResult(InputBatchState& batch);
 
+  // Records index source input stats from the lookup keys.
+  void recordIndexSourceInputStats(const InputBatchState& batch);
+
+  // Records index source output stats from the lookup result.
+  void recordIndexSourceOutputStats(const InputBatchState& batch);
+
   // Invoked at operator close to record the lookup stats.
   void recordConnectorStats();
 
@@ -298,6 +339,10 @@ class IndexLookupJoin : public Operator {
   const std::shared_ptr<connector::ConnectorQueryCtx> connectorQueryCtx_;
   const std::shared_ptr<connector::Connector> connector_;
   const size_t maxNumInputBatches_;
+
+  // True if this operator (partitionId == 0) is responsible for collecting
+  // index splits from the task and sharing them via the bridge.
+  const bool isIndexSplitCollector_;
 
   // The lookup join plan node used to initialize this operator and reset after
   // that.
@@ -381,6 +426,10 @@ class IndexLookupJoin : public Operator {
   // driver wait completes.
   std::optional<size_t> blockWaitStartNs_;
 
+  // The bridge for sharing index splits across operators in the same pipeline.
+  // Null if the index source does not need splits.
+  std::shared_ptr<IndexLookupJoinBridge> joinBridge_;
+
   // Split collection state for index sources that require splits.
   // True if we have received the no-more-splits signal for the index source.
   bool noMoreIndexSplits_{false};
@@ -403,5 +452,10 @@ class IndexLookupJoin : public Operator {
 
   // Closes and resets the index split tracer.
   void closeIndexSplitTracer();
+
+  // Intercepts and accumulates index source runtime stats. Held via
+  // shared_ptr so the stat splitter lambda can read the final stats after the
+  // operator is destroyed.
+  std::shared_ptr<IndexStatWriter> indexStatWriter_;
 };
 } // namespace facebook::velox::exec
