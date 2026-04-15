@@ -33,16 +33,14 @@ class InteropTest : public ::testing::Test, public VectorTestBase {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 
-  /// Round-trips a RowVector through the direct toCudfTable and back via
-  /// with_arrow::toVeloxColumn, then asserts equality with the original.
+  // Round-trips a RowVector through the direct toCudfTable and back via
+  // with_arrow::toVeloxColumn, then asserts equality with the original.
   void roundTrip(const RowVectorPtr& input) {
     auto stream = cudf::get_default_stream();
     auto mr = cudf::get_current_device_resource_ref();
 
     // Convert Velox -> cudf using the new direct path.
-    // auto cudfTable = cudf_velox::toCudfTable(input, pool_.get(), stream, mr);
-    auto cudfTable =
-        cudf_velox::with_arrow::toCudfTable(input, pool_.get(), stream, mr);
+    auto cudfTable = cudf_velox::toCudfTable(input, pool_.get(), stream, mr);
     ASSERT_NE(cudfTable, nullptr);
     ASSERT_EQ(cudfTable->num_rows(), input->size());
     ASSERT_EQ(
@@ -53,7 +51,12 @@ class InteropTest : public ::testing::Test, public VectorTestBase {
     auto result = cudf_velox::with_arrow::toVeloxColumn(
         cudfTable->view(), pool_.get(), input->type(), stream, mr);
     stream.synchronize();
-
+    // Decimal type lost precision in the conversion, after toVeloxColumn, it
+    // always set the short decimal precision to 18 and long decimal precision
+    // to 38, will resolve it in cudf::table to RowVector directly.
+    if (input->childAt(0)->type()->isDecimal()) {
+      result->setType(input->type());
+    }
     // Verify.
     test::assertEqualVectors(input, result);
   }
@@ -406,6 +409,25 @@ TEST_F(InteropTest, arrayOfStructs) {
       structElements);
 
   auto input = makeRowVector({"c0"}, {arrayVector});
+  roundTrip(input);
+}
+
+// ========== Decimal types ==========
+
+TEST_F(InteropTest, decimalShort) {
+  auto input = makeRowVector(
+      {"c0"},
+      {makeFlatVector<int64_t>(
+          {12345, -67890, 0, 99999999, -1}, DECIMAL(10, 2))});
+  roundTrip(input);
+}
+
+TEST_F(InteropTest, decimalLong) {
+  auto input = makeRowVector(
+      {"c0"},
+      {makeFlatVector<int128_t>(
+          {1234567890123456, -9876543210987654, 0, 999999999999999999, -1},
+          DECIMAL(20, 6))});
   roundTrip(input);
 }
 

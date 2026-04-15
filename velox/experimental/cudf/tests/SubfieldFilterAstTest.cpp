@@ -67,7 +67,7 @@ class SubfieldFilterAstTest : public OperatorTestBase {
     auto mr = cudf::get_current_device_resource_ref();
 
     {
-      auto cudfTable = cudf_velox::with_arrow::toCudfTable(
+      auto cudfTable = cudf_velox::toCudfTable(
           vector, pool_.get(), stream, cudf::get_current_device_resource_ref());
       ASSERT_NE(cudfTable, nullptr);
 
@@ -601,7 +601,7 @@ TEST_F(SubfieldFilterAstTest, MultipleSubfieldFilters) {
   auto stream = cudf::get_default_stream();
   auto mr = cudf::get_current_device_resource_ref();
 
-  auto cudfTable = cudf_velox::with_arrow::toCudfTable(
+  auto cudfTable = cudf_velox::toCudfTable(
       vec, pool_.get(), stream, cudf::get_current_device_resource_ref());
   ASSERT_NE(cudfTable, nullptr);
   auto cudfResult =

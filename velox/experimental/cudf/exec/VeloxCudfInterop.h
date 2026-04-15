@@ -31,14 +31,8 @@ cudf::type_id veloxToCudfTypeId(const TypePtr& type);
 cudf::data_type veloxToCudfDataType(const TypePtr& type);
 
 namespace with_arrow {
-
-std::unique_ptr<cudf::table> toCudfTable(
-    const facebook::velox::RowVectorPtr& veloxTable,
-    facebook::velox::memory::MemoryPool* pool,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr,
-    std::optional<std::string> timestampTimeZone = std::nullopt);
-
+// String types are converted to varchar. Use the overload with outputType if
+// you want to convert to varbinary instead.
 facebook::velox::RowVectorPtr toVeloxColumn(
     const cudf::table_view& table,
     facebook::velox::memory::MemoryPool* pool,
@@ -46,22 +40,26 @@ facebook::velox::RowVectorPtr toVeloxColumn(
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
 
-// Accepts a Velox TypePtr for recursive metadata construction.
-facebook::velox::RowVectorPtr toVeloxColumn(
-    const cudf::table_view& table,
-    facebook::velox::memory::MemoryPool* pool,
-    const facebook::velox::RowTypePtr& outputType,
-    std::string namePrefix,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr);
-
+/// Accepts a Velox TypePtr for recursive metadata construction.
+/// The outputType decides if the cudf string type converts to varbinary or
+/// varchar.
 facebook::velox::RowVectorPtr toVeloxColumn(
     const cudf::table_view& table,
     facebook::velox::memory::MemoryPool* pool,
     const TypePtr& type,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
-
 } // namespace with_arrow
+
+/// Converts a Velox RowVector to a cudf table by directly reading from
+/// Velox vector buffers and copying to GPU. This avoids the overhead of
+/// Arrow serialization/deserialization. Supports flat scalar types, strings,
+/// and complex/nested types (ARRAY as LIST, ROW as STRUCT.
+std::unique_ptr<cudf::table> toCudfTable(
+    const facebook::velox::RowVectorPtr& veloxTable,
+    facebook::velox::memory::MemoryPool* pool,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr,
+    std::optional<std::string> timestampTimeZone = std::nullopt);
 
 } // namespace facebook::velox::cudf_velox
