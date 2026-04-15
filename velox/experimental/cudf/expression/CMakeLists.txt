@@ -16,6 +16,8 @@ add_library(
   velox_cudf_expression
   AstExpression.cpp
   AstTypeUtils.cpp
+  DateArithmeticFunctions.cpp
+  DateTruncFunction.cpp
   ExpressionEvaluator.cpp
   JitExpression.cpp
   SubfieldFiltersToAst.cpp
