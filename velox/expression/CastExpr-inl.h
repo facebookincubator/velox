@@ -159,6 +159,25 @@ void CastExpr::applyCastKernel(
                                 }
                               };
 
+  auto setResultErrorOrException = [&](const auto& castResult, vector_size_t row)
+                                      INLINE_LAMBDA {
+                                        if (castResult.hasError()) {
+                                          if (setNullInResultAtError()) {
+                                            result->setNull(row, true);
+                                          } else {
+                                            context.setVeloxExceptionError(
+                                                row,
+                                                makeBadCastException(
+                                                    result->type(),
+                                                    *input,
+                                                    row,
+                                                    castResult.error().message()));
+                                          }
+                                        } else {
+                                          result->set(row, castResult.value());
+                                        }
+                                      };
+
   try {
     auto inputRowValue = input->valueAt(row);
 
@@ -218,21 +237,17 @@ void CastExpr::applyCastKernel(
       }
       if constexpr (ToKind == TypeKind::TIMESTAMP) {
         const auto castResult = hooks_->castStringToTimestamp(inputRowValue);
-        if (castResult.hasError()) {
-          if (setNullInResultAtError()) {
-            result->setNull(row, true);
-          } else {
-            context.setVeloxExceptionError(
-                row,
-                makeBadCastException(
-                    result->type(),
-                    *input,
-                    row,
-                    castResult.error().message()));
-          }
-        } else {
-          result->set(row, castResult.value());
-        }
+        setResultErrorOrException(castResult, row);
+        return;
+      }
+      if constexpr (ToKind == TypeKind::REAL) {
+        const auto castResult = hooks_->castStringToReal(inputRowValue);
+        setResultOrError(castResult, row);
+        return;
+      }
+      if constexpr (ToKind == TypeKind::DOUBLE) {
+        const auto castResult = hooks_->castStringToDouble(inputRowValue);
+        setResultOrError(castResult, row);
         return;
       }
 
