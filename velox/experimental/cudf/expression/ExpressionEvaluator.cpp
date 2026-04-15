@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <folly/String.h>
+
 #include "velox/experimental/cudf/exec/Validation.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstUtils.h"
@@ -145,18 +147,12 @@ static bool matchCallAgainstSignatures(
   return false;
 }
 
-bool endsWith(const std::string& value, const std::string& suffix) {
-  return value.size() >= suffix.size() &&
-      value.compare(value.size() - suffix.size(), suffix.size(), suffix) == 0;
-}
 
 std::string normalizeDateTruncUnit(std::string unit) {
   if (unit.size() >= 2 && unit.front() == '\'' && unit.back() == '\'') {
     unit = unit.substr(1, unit.size() - 2);
   }
-  for (auto& ch : unit) {
-    ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-  }
+  folly::toLowerAscii(unit);
   return unit;
 }
 
@@ -948,6 +944,32 @@ class YearOfWeekFunction : public CudfFunction {
 
 class DateTruncFunction : public CudfFunction {
  public:
+  static bool canEvaluate(const std::shared_ptr<velox::exec::Expr>& expr) {
+    if (expr->inputs().size() != 2) {
+      return false;
+    }
+    auto unitExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
+        expr->inputs()[0]);
+    if (!unitExpr || unitExpr->value()->isNullAt(0)) {
+      return false;
+    }
+    auto unit = normalizeDateTruncUnit(unitExpr->value()->toString(0));
+    const auto& inputType = expr->inputs()[1]->type();
+    const bool isTimestamp = inputType->isTimestamp();
+    const bool isDate = inputType->isDate();
+    if (!isTimestamp && !isDate) {
+      return false;
+    }
+    if (unit == "second" || unit == "minute" || unit == "hour") {
+      return isTimestamp;
+    }
+    if (unit == "day" || unit == "week" || unit == "month" ||
+        unit == "quarter" || unit == "year") {
+      return true;
+    }
+    return false;
+  }
+
   explicit DateTruncFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
     using velox::exec::ConstantExpr;
     VELOX_CHECK_EQ(
@@ -1356,12 +1378,14 @@ bool registerCudfFunction(
     const std::string& name,
     CudfFunctionFactory factory,
     const std::vector<exec::FunctionSignaturePtr>& signatures,
-    bool overwrite) {
+    bool overwrite,
+    CudfCanEvaluate canEvaluate) {
   auto& registry = getCudfFunctionRegistry();
   if (!overwrite && registry.find(name) != registry.end()) {
     return false;
   }
-  registry[name] = CudfFunctionSpec{std::move(factory), signatures};
+  registry[name] =
+      CudfFunctionSpec{std::move(factory), signatures, std::move(canEvaluate)};
   return true;
 }
 
@@ -1798,7 +1822,9 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .returnType("date")
            .constantArgumentType("varchar")
            .argumentType("date")
-           .build()});
+           .build()},
+      true,
+      DateTruncFunction::canEvaluate);
 
   registerCudfFunction(
       prefix + "divide",
@@ -1962,51 +1988,19 @@ bool FunctionExpression::canEvaluate(std::shared_ptr<velox::exec::Expr> expr) {
     return cudf::is_supported_cast(src, dst);
   }
 
-  if (opName == "and" || opName == "or") {
-    if (expr->inputs().size() < 2) {
-      return false;
-    }
-    for (const auto& input : expr->inputs()) {
-      if (input->type()->kind() != TypeKind::BOOLEAN) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  if (endsWith(opName, "date_trunc")) {
-    if (expr->inputs().size() != 2) {
-      return false;
-    }
-    auto unitExpr =
-        std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr->inputs()[0]);
-    if (!unitExpr || unitExpr->value()->isNullAt(0)) {
-      return false;
-    }
-    auto unit = normalizeDateTruncUnit(unitExpr->value()->toString(0));
-    const auto& inputType = expr->inputs()[1]->type();
-    const bool isTimestamp = inputType->isTimestamp();
-    const bool isDate = inputType->isDate();
-    if (!isTimestamp && !isDate) {
-      return false;
-    }
-    if (unit == "second" || unit == "minute" || unit == "hour") {
-      return isTimestamp;
-    }
-    if (unit == "day" || unit == "week" || unit == "month" ||
-        unit == "quarter" || unit == "year") {
-      return true;
-    }
-    return false;
-  }
-
   auto& registry = getCudfFunctionRegistry();
   auto it = registry.find(expr->name());
   if (it == registry.end()) {
     return false;
   }
   const auto& spec = it->second;
-  return matchCallAgainstSignatures(*expr, spec.signatures);
+  if (!matchCallAgainstSignatures(*expr, spec.signatures)) {
+    return false;
+  }
+  if (spec.canEvaluate) {
+    return spec.canEvaluate(expr);
+  }
+  return true;
 }
 
 bool canBeEvaluatedByCudf(std::shared_ptr<velox::exec::Expr> expr, bool deep) {

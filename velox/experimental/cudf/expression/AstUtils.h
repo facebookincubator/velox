@@ -22,6 +22,8 @@
 #include "velox/vector/SimpleVector.h"
 #include "velox/vector/VectorTypeUtils.h"
 
+#include "velox/experimental/cudf/CudfConfig.h"
+
 #include <cudf/ast/expressions.hpp>
 #include <cudf/scalar/scalar.hpp>
 #include <cudf/types.hpp>
@@ -89,10 +91,20 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
   // cheap (one-time cost per scalar) and guarantees the memory is
   // available on every stream.
   if constexpr (std::is_same_v<T, Timestamp>) {
-    using CudfTimestampType = cudf::timestamp_ns;
-    auto nanos = isNull ? 0 : value.toNanos();
-    return std::make_unique<cudf::timestamp_scalar<CudfTimestampType>>(
-        CudfTimestampType{cudf::duration_ns{nanos}}, !isNull, stream, mr);
+    const auto& engine = CudfConfig::getInstance().functionEngine;
+    if (engine == "spark") {
+      using CudfTimestampType = cudf::timestamp_us;
+      auto micros = isNull ? 0 : value.toMicros();
+      return std::make_unique<cudf::timestamp_scalar<CudfTimestampType>>(
+          CudfTimestampType{cudf::duration_us{micros}}, !isNull, stream, mr);
+    } else if (engine == "presto") {
+      using CudfTimestampType = cudf::timestamp_ns;
+      auto nanos = isNull ? 0 : value.toNanos();
+      return std::make_unique<cudf::timestamp_scalar<CudfTimestampType>>(
+          CudfTimestampType{cudf::duration_ns{nanos}}, !isNull, stream, mr);
+    } else {
+      VELOX_FAIL("Unsupported function engine: {}", engine);
+    }
   } else if constexpr (cudf::is_fixed_width<T>()) {
     if (type->isDecimal()) {
       VELOX_FAIL("Decimal not supported");

@@ -229,7 +229,7 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
   // Reject expressions with types not yet supported in AST/JIT.
   // TODO: Implement TIMESTAMP and DECIMAL support in AST and JIT.
   if (containsAstUnsupportedType(expr)) {
-    LOG(WARNING) << "Expression not supported by AST/JIT: " << expr->toString();
+    LOG(INFO) << "Expression not supported by AST/JIT: " << expr->toString();
     return false;
   }
 

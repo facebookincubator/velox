@@ -25,7 +25,6 @@
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
 
-#include <folly/ScopeGuard.h>
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -468,10 +467,8 @@ class CudfFilterProjectTest : public OperatorTestBase {
     auto cudfResult = runFilterPlan(input, filter, projections);
 
     cudf_velox::unregisterCudf();
-    SCOPE_EXIT {
-      cudf_velox::registerCudf();
-    };
     auto veloxResult = runFilterPlan(input, filter, projections);
+    cudf_velox::registerCudf();
     facebook::velox::test::assertEqualVectors(cudfResult, veloxResult);
   }
 
@@ -482,10 +479,8 @@ class CudfFilterProjectTest : public OperatorTestBase {
   void assertPlanMatchesVelox(const core::PlanNodePtr& plan) {
     auto cudfResult = runPlan(plan);
     cudf_velox::unregisterCudf();
-    SCOPE_EXIT {
-      cudf_velox::registerCudf();
-    };
     auto veloxResult = runPlan(plan);
+    cudf_velox::registerCudf();
     facebook::velox::test::assertEqualVectors(cudfResult, veloxResult);
   }
 
