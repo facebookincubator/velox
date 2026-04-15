@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "velox/experimental/cudf/exec/NvtxHelper.h"
+#include "velox/experimental/cudf/exec/CudfOperator.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/exec/Operator.h"
@@ -26,7 +26,7 @@
 
 namespace facebook::velox::cudf_velox {
 
-class CudfOrderBy : public exec::Operator, public NvtxHelper {
+class CudfOrderBy : public CudfOperatorBase {
  public:
   CudfOrderBy(
       int32_t operatorId,
@@ -37,12 +37,6 @@ class CudfOrderBy : public exec::Operator, public NvtxHelper {
     return !finished_;
   }
 
-  void addInput(RowVectorPtr input) override;
-
-  void noMoreInput() override;
-
-  RowVectorPtr getOutput() override;
-
   exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
     return exec::BlockingReason::kNotBlocked;
   }
@@ -51,7 +45,11 @@ class CudfOrderBy : public exec::Operator, public NvtxHelper {
     return finished_;
   }
 
-  void close() override;
+ protected:
+  void doAddInput(RowVectorPtr input) override;
+  RowVectorPtr doGetOutput() override;
+  void doNoMoreInput() override;
+  void doClose() override;
 
  private:
   CudfVectorPtr outputTable_;
