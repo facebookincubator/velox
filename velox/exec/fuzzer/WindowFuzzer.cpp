@@ -83,12 +83,20 @@ std::string WindowFuzzer::generateKRowsFrameBound(
 
   constexpr int64_t kMax = std::numeric_limits<int64_t>::max();
   constexpr int64_t kMin = std::numeric_limits<int64_t>::min();
-  // For frames with kPreceding, kFollowing bounds, pick a valid k, in the
-  // range of 1 to 10, 70% of times. Test for random k values remaining times.
-  int64_t minKValue, maxKValue;
+  // For frames with kPreceding, kFollowing bounds:
+  // - 70%: pick a valid k in the range [1, 10].
+  // - 20%: pick a valid k in the full positive range [1, INT64_MAX].
+  // - 10%: pick from the full range [INT64_MIN, INT64_MAX] to exercise
+  //   invalid (negative/zero) offsets and verify both Velox and the reference
+  //   DB reject them consistently.
+  int64_t minKValue;
+  int64_t maxKValue;
   if (vectorFuzzer_.coinToss(0.7)) {
     minKValue = 1;
     maxKValue = 10;
+  } else if (vectorFuzzer_.coinToss(2.0 / 3.0)) {
+    minKValue = 1;
+    maxKValue = kMax;
   } else {
     minKValue = kMin;
     maxKValue = kMax;

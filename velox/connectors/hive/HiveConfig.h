@@ -112,7 +112,7 @@ class HiveConfig : public FileConfig {
   /// Sort Writer will exit finish() method after this many milliseconds even if
   /// it has not completed its work yet. Zero means no time limit.
   static constexpr const char* kSortWriterFinishTimeSliceLimitMs =
-      "sort-writer_finish_time_slice_limit_ms";
+      "sort-writer-finish-time-slice-limit-ms";
   static constexpr const char* kSortWriterFinishTimeSliceLimitMsSession =
       "sort_writer_finish_time_slice_limit_ms";
 

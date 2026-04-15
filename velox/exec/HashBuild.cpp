@@ -64,6 +64,7 @@ HashBuild::HashBuild(
       joinNode_(std::move(joinNode)),
       joinType_{joinNode_->joinType()},
       nullAware_{joinNode_->isNullAware()},
+      nullAsValue_{joinNode_->isNullAsValue()},
       needProbedFlagSpill_{needRightSideJoin(joinType_)},
       dropDuplicates_(joinNode_->canDropDuplicates()),
       vectorHasherMaxNumDistinct_(
@@ -249,7 +250,7 @@ void HashBuild::setupTable() {
     // Right semi join needs to tag build rows that were probed.
     const bool needProbedFlag = joinNode_->isRightSemiFilterJoin();
     const bool hasCountFlag = joinNode_->isCountingJoin();
-    if (isLeftNullAwareJoinWithFilter(joinNode_)) {
+    if (nullAsValue_ || isLeftNullAwareJoinWithFilter(joinNode_)) {
       // We need to check null key rows in build side in case of null-aware anti
       // or left semi project join with filter set.
       table_ = HashTable<false>::createForJoin(
@@ -452,7 +453,7 @@ void HashBuild::addInput(RowVectorPtr input) {
   }
 
   if (!isRightJoin(joinType_) && !isFullJoin(joinType_) &&
-      !isRightSemiProjectJoin(joinType_) &&
+      !isRightSemiProjectJoin(joinType_) && !nullAsValue_ &&
       !isLeftNullAwareJoinWithFilter(joinNode_)) {
     deselectRowsWithNulls(hashers, activeRows_);
     if (nullAware_ && !joinHasNullKeys_ &&

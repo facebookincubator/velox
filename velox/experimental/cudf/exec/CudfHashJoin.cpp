@@ -78,7 +78,7 @@ cudf::table_view createExtendedTableView(
 
 } // namespace
 
-void CudfHashJoinProbe::close() {
+void CudfHashJoinProbe::doClose() {
   Operator::close();
   filterEvaluator_.reset();
   scalars_.clear();
@@ -140,26 +140,19 @@ CudfHashJoinBuild::CudfHashJoinBuild(
     exec::DriverCtx* driverCtx,
     std::shared_ptr<const core::HashJoinNode> joinNode)
     // TODO check outputType should be set or not?
-    : exec::Operator(
+    : CudfOperatorBase(
+          operatorId,
           driverCtx,
-          nullptr, // joinNode->sources(),
-          operatorId,
+          nullptr, // outputType
           joinNode->id(),
-          "CudfHashJoinBuild"),
-      NvtxHelper(
+          "CudfHashJoinBuild",
           nvtx3::rgb{65, 105, 225}, // Royal Blue
-          operatorId,
-          fmt::format("[{}]", joinNode->id())),
-      joinNode_(joinNode) {
-  if (CudfConfig::getInstance().debugEnabled) {
-    VLOG(2) << "CudfHashJoinBuild constructor";
-  }
-}
+          NvtxMethodFlag::kAll,
+          std::nullopt, // spillConfig
+          joinNode),
+      joinNode_(joinNode) {}
 
-void CudfHashJoinBuild::addInput(RowVectorPtr input) {
-  if (CudfConfig::getInstance().debugEnabled) {
-    VLOG(2) << "Calling CudfHashJoinBuild::addInput";
-  }
+void CudfHashJoinBuild::doAddInput(RowVectorPtr input) {
   // Queue inputs, process all at once.
   if (input->size() > 0) {
     auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
@@ -177,21 +170,14 @@ void CudfHashJoinBuild::addInput(RowVectorPtr input) {
 }
 
 bool CudfHashJoinBuild::needsInput() const {
-  if (CudfConfig::getInstance().debugEnabled) {
-    VLOG(2) << "Calling CudfHashJoinBuild::needsInput";
-  }
   return !noMoreInput_;
 }
 
-RowVectorPtr CudfHashJoinBuild::getOutput() {
+RowVectorPtr CudfHashJoinBuild::doGetOutput() {
   return nullptr;
 }
 
-void CudfHashJoinBuild::noMoreInput() {
-  if (CudfConfig::getInstance().debugEnabled) {
-    VLOG(2) << "Calling CudfHashJoinBuild::noMoreInput";
-  }
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+void CudfHashJoinBuild::doNoMoreInput() {
   Operator::noMoreInput();
   std::vector<ContinuePromise> promises;
   std::vector<std::shared_ptr<exec::Driver>> peers;
@@ -317,23 +303,20 @@ CudfHashJoinProbe::CudfHashJoinProbe(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
     std::shared_ptr<const core::HashJoinNode> joinNode)
-    : exec::Operator(
+    : CudfOperatorBase(
+          operatorId,
           driverCtx,
           joinNode->outputType(),
-          operatorId,
           joinNode->id(),
-          "CudfHashJoinProbe"),
-      NvtxHelper(
+          "CudfHashJoinProbe",
           nvtx3::rgb{0, 128, 128}, // Teal
-          operatorId,
-          fmt::format("[{}]", joinNode->id())),
+          NvtxMethodFlag::kAll,
+          std::nullopt, // spillConfig
+          joinNode),
       joinNode_(joinNode),
       probeType_(joinNode_->sources()[0]->outputType()),
       buildType_(joinNode_->sources()[1]->outputType()),
       cudaEvent_(std::make_unique<CudaEvent>(cudaEventDisableTiming)) {
-  if (CudfConfig::getInstance().debugEnabled) {
-    VLOG(2) << "CudfHashJoinProbe constructor";
-  }
   auto const& leftKeys = joinNode_->leftKeys(); // probe keys
   auto const& rightKeys = joinNode_->rightKeys(); // build keys
 
@@ -463,16 +446,13 @@ CudfHashJoinProbe::CudfHashJoinProbe(
 }
 
 bool CudfHashJoinProbe::needsInput() const {
-  if (CudfConfig::getInstance().debugEnabled) {
-    VLOG(2) << "Calling CudfHashJoinProbe::needsInput";
-  }
   if (joinNode_->isRightSemiFilterJoin()) {
     return !noMoreInput_;
   }
   return !noMoreInput_ && !finished_ && input_ == nullptr;
 }
 
-void CudfHashJoinProbe::addInput(RowVectorPtr input) {
+void CudfHashJoinProbe::doAddInput(RowVectorPtr input) {
   if (skipInput_) {
     VELOX_CHECK_NULL(input_);
     return;
@@ -500,11 +480,7 @@ void CudfHashJoinProbe::addInput(RowVectorPtr input) {
   }
 }
 
-void CudfHashJoinProbe::noMoreInput() {
-  if (CudfConfig::getInstance().debugEnabled) {
-    VLOG(2) << "Calling CudfHashJoinProbe::noMoreInput";
-  }
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+void CudfHashJoinProbe::doNoMoreInput() {
   Operator::noMoreInput();
   if (!joinNode_->isRightJoin() && !joinNode_->isRightSemiFilterJoin() &&
       !joinNode_->isFullJoin()) {
@@ -1624,12 +1600,7 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::antiJoin(
   return cudfOutputs;
 }
 
-RowVectorPtr CudfHashJoinProbe::getOutput() {
-  if (CudfConfig::getInstance().debugEnabled) {
-    VLOG(2) << "Calling CudfHashJoinProbe::getOutput";
-  }
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
-
+RowVectorPtr CudfHashJoinProbe::doGetOutput() {
   if (finished_ or !hashObject_.has_value()) {
     return nullptr;
   }
