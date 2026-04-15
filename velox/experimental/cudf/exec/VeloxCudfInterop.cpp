@@ -453,7 +453,7 @@ struct DispatchColumn {
 
     // Build offsets (int32_t[numRows+1]) and concatenated chars on CPU.
     // Use shared_ptr for automatic lifetime management with CUDA stream.
-    auto offsets = std::make_shared<rmm::host_vector<int32_t>>(numRows + 1);
+    auto offsets = std::make_shared<std::vector<int32_t>>(numRows + 1);
     int64_t totalChars = 0;
     for (int32_t i = 0; i < numRows; ++i) {
       (*offsets)[i] = static_cast<int32_t>(totalChars);
@@ -468,7 +468,7 @@ struct DispatchColumn {
     (*offsets)[numRows] = totalChars;
 
     // Build contiguous chars buffer.
-    auto chars = std::make_shared<rmm::host_vector<char>>(totalChars);
+    auto chars = std::make_shared<std::vector<char>>(totalChars);
     for (int32_t i = 0; i < numRows; ++i) {
       if (!vector.isNullAt(i)) {
         auto sv = flatVector->valueAt(i);
