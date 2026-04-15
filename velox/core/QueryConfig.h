@@ -955,15 +955,6 @@ class QueryConfig {
       true,
       "Ignore null fields when generating JSON string.");
 
-  /// If true, collect_list aggregate function will ignore nulls in the input.
-  VELOX_QUERY_CONFIG(
-      kSparkCollectListIgnoreNulls,
-      sparkCollectListIgnoreNulls,
-      "spark.collect_list.ignore_nulls",
-      bool,
-      true,
-      "Ignore nulls in collect_list aggregate function.");
-
   /// The number of local parallel table writer operators per task.
   VELOX_QUERY_CONFIG(
       kTaskWriterCount,

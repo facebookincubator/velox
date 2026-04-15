@@ -762,10 +762,12 @@ class SimpleAggregateAdapter : public Aggregate {
     }
   }
 
+ protected:
+  std::unique_ptr<FUNC> fn_;
+
+ private:
   std::vector<DecodedVector> inputDecoded_;
   DecodedVector intermediateDecoded_;
-
-  std::unique_ptr<FUNC> fn_;
 };
 
 } // namespace facebook::velox::exec
