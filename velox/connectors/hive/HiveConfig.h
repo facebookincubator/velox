@@ -46,29 +46,27 @@ class HiveConfig : public FileConfig {
       "max_partitions_per_writers";
 
   /// Maximum number of buckets allowed to output by the table writers.
-  static constexpr const char* kMaxBucketCount = "hive.max-bucket-count";
-  static constexpr const char* kMaxBucketCountSession = "hive.max_bucket_count";
+  static constexpr const char* kMaxBucketCount = "max-bucket-count";
+  static constexpr const char* kMaxBucketCountSession = "max_bucket_count";
 
   /// Whether new data can be inserted into an unpartition table.
   /// Velox currently does not support appending data to existing partitions.
-  static constexpr const char* kImmutablePartitions =
-      "hive.immutable-partitions";
+  static constexpr const char* kImmutablePartitions = "immutable-partitions";
 
   /// The GCS storage endpoint server.
-  static constexpr const char* kGcsEndpoint = "hive.gcs.endpoint";
+  static constexpr const char* kGcsEndpoint = "gcs.endpoint";
 
   /// The GCS service account configuration JSON key file.
-  static constexpr const char* kGcsCredentialsPath =
-      "hive.gcs.json-key-file-path";
+  static constexpr const char* kGcsCredentialsPath = "gcs.json-key-file-path";
 
   /// The GCS maximum retry counter of transient errors.
-  static constexpr const char* kGcsMaxRetryCount = "hive.gcs.max-retry-count";
+  static constexpr const char* kGcsMaxRetryCount = "gcs.max-retry-count";
 
   /// The GCS maximum time allowed to retry transient errors.
-  static constexpr const char* kGcsMaxRetryTime = "hive.gcs.max-retry-time";
+  static constexpr const char* kGcsMaxRetryTime = "gcs.max-retry-time";
 
   static constexpr const char* kGcsAuthAccessTokenProvider =
-      "hive.gcs.auth.access-token-provider";
+      "gcs.auth.access-token-provider";
 
   static constexpr const char* kPartitionPathAsLowerCaseSession =
       "partition_path_as_lower_case";
@@ -95,7 +93,7 @@ class HiveConfig : public FileConfig {
   /// file system through hive connector and data sink. The config is free form.
   /// The form should be defined by the underlying file system.
   static constexpr const char* kWriteFileCreateConfig =
-      "hive.write_file_create_config";
+      "write-file-create-config";
 
   /// Maximum number of rows for sort writer in one batch of output.
   static constexpr const char* kSortWriterMaxOutputRows =
@@ -127,9 +125,9 @@ class HiveConfig : public FileConfig {
   /// The limit is applied to the actual output rows after filtering.
   /// 0 means no limit (default).
   static constexpr const char* kMaxRowsPerIndexRequest =
-      "hive.max-rows-per-index-request";
+      "max-rows-per-index-request";
   static constexpr const char* kMaxRowsPerIndexRequestSession =
-      "hive.max_rows_per_index_request";
+      "max_rows_per_index_request";
 
   static constexpr const char* kUser = "user";
   static constexpr const char* kSource = "source";
