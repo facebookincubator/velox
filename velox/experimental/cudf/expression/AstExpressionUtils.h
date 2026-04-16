@@ -501,6 +501,22 @@ cudf::ast::expression const& AstContext::pushExprToTree(
 
   const auto name =
       stripPrefix(expr->name(), CudfConfig::getInstance().functionNamePrefix);
+
+  if (!detail::isAstExprSupported(expr)) {
+    if (canBeEvaluatedByCudf(expr, /*deep=*/false)) {
+      // Shallow check: only verify this operation is supported
+      // Children will be recursively handled by createCudfExpression
+      // Determine which side this expression references
+      int sideIdx = findExpressionSide(expr);
+      if (sideIdx < 0) {
+        sideIdx = 0; // Default to left side if no fields found
+      }
+      auto node = createCudfExpression(expr, inputRowSchema[sideIdx]);
+      return addPrecomputeInstructionOnSide(sideIdx, 0, name, "", node);
+    }
+    VELOX_FAIL("Unsupported expression: {}", name);
+  }
+
   auto len = expr->inputs().size();
   auto& type = expr->type();
 
@@ -632,19 +648,8 @@ cudf::ast::expression const& AstContext::pushExprToTree(
       }
     }
     VELOX_FAIL("Field not found: {}", name);
-  } else if (!allowPureAstOnly && canBeEvaluatedByCudf(expr, /*deep=*/false)) {
-    // Shallow check: only verify this operation is supported
-    // Children will be recursively handled by createCudfExpression
-    // Determine which side this expression references
-    int sideIdx = findExpressionSide(expr);
-    if (sideIdx < 0) {
-      sideIdx = 0; // Default to left side if no fields found
-    }
-    auto node =
-        createCudfExpression(expr, inputRowSchema[sideIdx], kAstEvaluatorName);
-    return addPrecomputeInstructionOnSide(sideIdx, 0, name, "", node);
   } else {
-    VELOX_FAIL("Unsupported expression: {}", name);
+    VELOX_UNREACHABLE("Unsupported expression: {}", name);
   }
 }
 
