@@ -110,6 +110,7 @@ UcxExchangeClient::next(int consumerId, bool* atEnd, ContinueFuture* future) {
           << consumerId;
   PackedTableWithStreamPtr data;
   ContinuePromise stalePromise = ContinuePromise::makeEmpty();
+  std::vector<std::shared_ptr<UcxExchangeSource>> sourcesToResume;
   {
     std::lock_guard<std::mutex> l(queue_->mutex());
     if (closed_) {
@@ -160,20 +161,21 @@ UcxExchangeClient::next(int consumerId, bool* atEnd, ContinueFuture* future) {
       }
     }
 
-    // Wake up backpressured sources when queue drains sufficiently.
-    // Sources go dormant (not in work queue) when the queue exceeds the
-    // high water mark. We resume them here on the consumer thread.
-    // The CAS inside resumeFromBackpressure() ensures each source is
-    // woken exactly once per dormant period.
+    // Collect sources that need resuming while holding the lock.
+    // We call resumeFromBackpressure() outside the lock to avoid a
+    // lock-ordering hazard: it acquires WorkQueue::mutex_ via
+    // addToWorkQueue(), and holding queue_->mutex_ here would impose
+    // queue_->mutex_ → WorkQueue::mutex_ ordering.
     if (data != nullptr &&
         queue_->size() <= UcxExchangeSource::kBackpressureLowWaterMark) {
-      for (auto& source : sources_) {
-        source->resumeFromBackpressure();
-      }
+      sourcesToResume.assign(sources_.begin(), sources_.end());
     }
   }
 
-  // Outside of lock
+  // Outside of lock: resume backpressured sources and fulfill stale promise.
+  for (auto& source : sourcesToResume) {
+    source->resumeFromBackpressure();
+  }
   if (stalePromise.valid()) {
     stalePromise.setValue();
   }
