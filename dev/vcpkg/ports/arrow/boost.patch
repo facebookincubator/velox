@@ -1,0 +1,18 @@
+diff --git a/cpp/src/arrow/testing/process.cc b/cpp/src/arrow/testing/process.cc
+index 133768ff01..7a0793f2d8 100644
+--- a/cpp/src/arrow/testing/process.cc
++++ b/cpp/src/arrow/testing/process.cc
+@@ -18,9 +18,9 @@
+ #include "arrow/testing/process.h"
+ #include "arrow/result.h"
+
+-#define BOOST_PROCESS_AVAILABLE
+-#ifdef __EMSCRIPTEN__
+-#  undef BOOST_PROCESS_AVAILABLE
++
++#ifdef ARROW_ENABLE_THREADING
++#  define BOOST_PROCESS_AVAILABLE
+ #endif
+
+ #ifdef BOOST_PROCESS_AVAILABLE
+~

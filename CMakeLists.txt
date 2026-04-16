@@ -33,6 +33,27 @@ endif()
 # Set the project name.
 project(velox)
 
+# vcpkg integration support
+# When using vcpkg, CMAKE_TOOLCHAIN_FILE should be set to vcpkg.cmake
+# and VELOX_DEPENDENCY_SOURCE should be set to VCPKG
+if(DEFINED CMAKE_TOOLCHAIN_FILE AND CMAKE_TOOLCHAIN_FILE MATCHES "vcpkg")
+  message(STATUS "Using vcpkg toolchain: ${CMAKE_TOOLCHAIN_FILE}")
+  set(VELOX_DEPENDENCY_SOURCE "VCPKG" CACHE STRING "Use vcpkg for dependencies")
+  # Set vcpkg manifest directory if not already set
+  if(NOT DEFINED VCPKG_MANIFEST_DIR)
+    set(VCPKG_MANIFEST_DIR "${PROJECT_SOURCE_DIR}/dev/vcpkg" CACHE PATH "vcpkg manifest directory")
+  endif()
+  message(STATUS "vcpkg manifest directory: ${VCPKG_MANIFEST_DIR}")
+
+  # Enable ccache for Velox build when using vcpkg
+  find_program(CCACHE_PROGRAM ccache)
+  if(CCACHE_PROGRAM)
+    set(CMAKE_C_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+    set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+    message(STATUS "Using ccache for Velox build: ${CCACHE_PROGRAM}")
+  endif()
+endif()
+
 # If we are in an active conda env disable search in system paths and add env to
 # prefix path
 if(DEFINED ENV{CONDA_PREFIX})
@@ -354,7 +375,7 @@ endif()
 # http://mirror.informatimago.com/next/developer.apple.com/releasenotes/DeveloperTools/TwoLevelNamespaces.html
 # Enables -flat_namespace so type_info can be deduplicated across .so boundaries
 if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
-  add_link_options("-Wl,-flat_namespace")
+  add_link_options("-Wl,-flat_namespace" "-Wl,-undefined,dynamic_lookup")
 endif()
 
 if(UNIX AND NOT APPLE)
