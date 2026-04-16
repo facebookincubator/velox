@@ -25,32 +25,35 @@ namespace facebook::velox::cudf_velox {
 const std::string kAstEvaluatorName = "ast";
 
 cudf::ast::expression const& createAstTree(
-    const std::shared_ptr<velox::exec::Expr>& expr,
+    const core::TypedExprPtr& expr,
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const RowTypePtr& inputRowSchema,
-    std::vector<PrecomputeInstruction>& precomputeInstructions);
+    std::vector<PrecomputeInstruction>& precomputeInstructions,
+    CudfExprCtx exprCtx);
 
 cudf::ast::expression const& createAstTree(
-    const std::shared_ptr<velox::exec::Expr>& expr,
+    const core::TypedExprPtr& expr,
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const RowTypePtr& leftRowSchema,
     const RowTypePtr& rightRowSchema,
     std::vector<PrecomputeInstruction>& leftPrecomputeInstructions,
-    std::vector<PrecomputeInstruction>& rightPrecomputeInstructions);
+    std::vector<PrecomputeInstruction>& rightPrecomputeInstructions,
+    CudfExprCtx exprCtx);
 
-// Evaluates the expression tree
+/// Evaluates an expression tree using cudf AST.
 class ASTExpression : public CudfExpression {
  public:
   ASTExpression() = default;
-  // Converts velox expressions to cudf::ast::tree, scalars and
-  // precompute instructions and stores them
-  ASTExpression(
-      std::shared_ptr<velox::exec::Expr> expr,
-      const RowTypePtr& inputRowSchema);
 
-  // Evaluates the expression tree for the given input columns
+  /// Convert velox core::TypedExpr to cudf::ast::tree, scalars and precompute
+  /// instructions.
+  ASTExpression(
+      const core::TypedExprPtr& expr,
+      const RowTypePtr& inputRowSchema,
+      CudfExprCtx exprCtx);
+
   ColumnOrView eval(
       std::vector<cudf::column_view> inputColumnViews,
       rmm::cuda_stream_view stream,
@@ -59,12 +62,12 @@ class ASTExpression : public CudfExpression {
 
   void close() override;
 
-  // Check if this specific operation (not its children) can be evaluated by
-  // ASTExpression
-  static bool canEvaluate(std::shared_ptr<velox::exec::Expr> expr);
+  /// Check if this specific operation (not its children) can be evaluated by
+  /// ASTExpression.
+  static bool canEvaluate(const core::TypedExprPtr& expr);
 
  private:
-  std::shared_ptr<velox::exec::Expr> expr_;
+  core::TypedExprPtr expr_;
 
   cudf::ast::tree cudfTree_;
   std::vector<std::unique_ptr<cudf::scalar>> scalars_;
@@ -73,6 +76,7 @@ class ASTExpression : public CudfExpression {
   // <dependent_column_index, "instruction", new_column_index>
   std::vector<PrecomputeInstruction> precomputeInstructions_;
   RowTypePtr inputRowSchema_;
+  CudfExprCtx exprCtx_;
 
   friend class JitExpression;
 };

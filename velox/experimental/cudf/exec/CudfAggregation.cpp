@@ -368,8 +368,7 @@ bool canGroupingKeysBeEvaluatedByCudf(
   // Check grouping key expressions (with expansion)
   for (const auto& groupingKey : groupingKeys) {
     auto expandedKey = expandFieldReference(groupingKey, sourceNode);
-    std::vector<core::TypedExprPtr> exprs = {expandedKey};
-    if (!canBeEvaluatedByCudf(exprs, queryCtx)) {
+    if (!canBeEvaluatedByCudf(expandedKey)) {
       return false;
     }
   }

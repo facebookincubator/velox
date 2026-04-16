@@ -18,7 +18,7 @@
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/SparkFunctions.h"
 
-#include "velox/expression/ConstantExpr.h"
+#include "velox/common/memory/Memory.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/vector/BaseVector.h"
 
@@ -35,15 +35,13 @@ namespace {
 // function.
 class DateAddFunction : public CudfFunction {
  public:
-  DateAddFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+  DateAddFunction(const core::TypedExprPtr& expr) {
     VELOX_CHECK_EQ(
         expr->inputs().size(), 2, "date_add function expects exactly 2 inputs");
     VELOX_CHECK(
         expr->inputs()[0]->type()->isDate(),
         "First argument to date_add must be a date");
-    VELOX_CHECK_NULL(
-        std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
-            expr->inputs()[0]));
+    VELOX_CHECK(!expr->inputs()[0]->isConstantKind());
     // The date_add second argument could be int8_t, int16_t, int32_t.
     value_ = makeScalarFromConstantExpr(
         expr->inputs()[1], cudf::type_id::DURATION_DAYS);
@@ -69,13 +67,19 @@ class DateAddFunction : public CudfFunction {
 
 class HashFunction : public CudfFunction {
  public:
-  HashFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
-    using velox::exec::ConstantExpr;
-    VELOX_CHECK_GE(expr->inputs().size(), 2, "hash expects at least 2 inputs");
-    auto seedExpr = std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[0]);
-    VELOX_CHECK_NOT_NULL(seedExpr, "hash seed must be a constant");
-    int32_t seedValue =
-        seedExpr->value()->as<SimpleVector<int32_t>>()->valueAt(0);
+  HashFunction(const core::TypedExprPtr& expr) {
+    VELOX_CHECK_EQ(
+        expr->inputs().size(),
+        2,
+        "hash_with_seed expects exactly 2 inputs");
+    VELOX_CHECK(
+        expr->inputs()[0]->isConstantKind(), "hash seed must be a constant");
+    const auto* c =
+        expr->inputs()[0]->asUnchecked<core::ConstantTypedExpr>();
+    auto vec = c->hasValueVector()
+        ? c->valueVector()
+        : c->toConstantVector(memory::memoryManager()->tracePool());
+    int32_t seedValue = vec->as<SimpleVector<int32_t>>()->valueAt(0);
     VELOX_CHECK_GE(seedValue, 0);
     seedValue_ = seedValue;
   }
@@ -113,7 +117,7 @@ void registerSparkFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "hash_with_seed",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+      [](const std::string&, const core::TypedExprPtr& expr) {
         return std::make_shared<HashFunction>(expr);
       },
       {FunctionSignatureBuilder()
@@ -124,7 +128,7 @@ void registerSparkFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "date_add",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+      [](const std::string&, const core::TypedExprPtr& expr) {
         return std::make_shared<DateAddFunction>(expr);
       },
       {FunctionSignatureBuilder()

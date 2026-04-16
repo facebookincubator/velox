@@ -37,6 +37,7 @@
 #include "velox/experimental/cudf/exec/Validation.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
+#include "velox/common/memory/Memory.h"
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/exec/AssignUniqueId.h"
 #include "velox/exec/CallbackSink.h"
@@ -59,6 +60,18 @@
 #include "velox/exec/Values.h"
 
 namespace facebook::velox::cudf_velox {
+namespace {
+
+bool canExpressionBeEvaluatedByCudf(
+    const core::TypedExprPtr& expr,
+    exec::DriverCtx* ctx) {
+  return canBeEvaluatedByCudf(
+      expr,
+      ctx->task->queryCtx().get(),
+      memory::memoryManager()->tracePool());
+}
+
+} // namespace
 
 /// OperatorAdapterRegistry Implementation
 OperatorAdapterRegistry& OperatorAdapterRegistry::getInstance() {
@@ -185,8 +198,7 @@ class FilterProjectAdapter : public OperatorAdapter {
 
     // Check filter separately
     if (filterNode) {
-      if (!canBeEvaluatedByCudf(
-              {filterNode->filter()}, ctx->task->queryCtx().get())) {
+      if (!canExpressionBeEvaluatedByCudf(filterNode->filter(), ctx)) {
         LOG_FALLBACK(
             "FilterProject filter cannot be evaluated by cuDF, PlanNode id: {}",
             planNode->id());
@@ -196,12 +208,13 @@ class FilterProjectAdapter : public OperatorAdapter {
 
     // Check projects separately
     if (projectPlanNode) {
-      if (!canBeEvaluatedByCudf(
-              projectPlanNode->projections(), ctx->task->queryCtx().get())) {
-        LOG_FALLBACK(
-            "FilterProject projections cannot be evaluated by cuDF, PlanNode id: {}",
-            planNode->id());
-        return false;
+      for (const auto& projection : projectPlanNode->projections()) {
+        if (!canExpressionBeEvaluatedByCudf(projection, ctx)) {
+          LOG_FALLBACK(
+              "FilterProject projections cannot be evaluated by cuDF, PlanNode id: {}",
+              planNode->id());
+          return false;
+        }
       }
     }
     return true;
@@ -352,8 +365,7 @@ class CudfHashJoinBaseAdapter : public OperatorAdapter {
     }
 
     if (joinPlanNode->filter()) {
-      if (!canBeEvaluatedByCudf(
-              {joinPlanNode->filter()}, ctx->task->queryCtx().get())) {
+      if (!canExpressionBeEvaluatedByCudf(joinPlanNode->filter(), ctx)) {
         LOG_FALLBACK(
             "HashJoin join filter cannot be evaluated by cuDF, PlanNode id: {}",
             planNode->id());
@@ -460,8 +472,7 @@ class CudfNestedLoopJoinBaseAdapter : public OperatorAdapter {
 
     // Check if join condition can be evaluated on GPU
     if (joinPlanNode->joinCondition()) {
-      if (!canBeEvaluatedByCudf(
-              {joinPlanNode->joinCondition()}, ctx->task->queryCtx().get())) {
+      if (!canExpressionBeEvaluatedByCudf(joinPlanNode->joinCondition(), ctx)) {
         LOG_FALLBACK(
             "NestedLoopJoin filter cannot be evaluated by cuDF, PlanNode id: {}",
             planNode->id());

@@ -22,6 +22,7 @@
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#include "velox/experimental/cudf/expression/CudfExpressionCompiler.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/SubfieldFiltersToAst.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
@@ -113,8 +114,11 @@ CudfHiveDataSource::CudfHiveDataSource(
     }
 
     auto const remainingFilterType = getTableRowType();
-    cudfExpressionEvaluator_ = velox::cudf_velox::createCudfExpression(
-        remainingFilterExprSet_->exprs()[0], remainingFilterType);
+    cudfExpressionEvaluator_ = [&] {
+      CudfExpressionCompiler compiler(
+          remainingFilterType, CudfExprCtx{nullptr, pool_});
+      return compiler.compile(remainingFilter);
+    }();
     // TODO(kn): Get column names and subfields from remaining filter and add to
     // readColumnNames_
   }

@@ -16,7 +16,9 @@
 
 #pragma once
 
-#include "velox/expression/Expr.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluatorRegistry.h"
+
+#include "velox/core/Expressions.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/type/Type.h"
 
@@ -25,7 +27,10 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <variant>
 #include <vector>
 
@@ -72,7 +77,7 @@ class CudfFunction {
 
 using CudfFunctionFactory = std::function<std::shared_ptr<CudfFunction>(
     const std::string& name,
-    const std::shared_ptr<velox::exec::Expr>& expr)>;
+    const core::TypedExprPtr& expr)>;
 
 struct CudfFunctionSpec {
   CudfFunctionFactory factory;
@@ -96,7 +101,7 @@ void registerCudfFunctions(
 /// signature.
 std::shared_ptr<CudfFunction> createCudfFunction(
     const std::string& name,
-    const std::shared_ptr<velox::exec::Expr>& expr);
+    const core::TypedExprPtr& expr);
 
 bool registerBuiltinFunctions(const std::string& prefix);
 
@@ -116,34 +121,12 @@ class CudfExpression {
 
 using CudfExpressionPtr = std::shared_ptr<CudfExpression>;
 
-using CudfExpressionEvaluatorCanEvaluate =
-    std::function<bool(std::shared_ptr<velox::exec::Expr> expr)>;
-using CudfExpressionEvaluatorCreate =
-    std::function<std::shared_ptr<CudfExpression>(
-        std::shared_ptr<velox::exec::Expr> expr,
-        const RowTypePtr& inputRowSchema)>;
-
-// Register a CudfExpression evaluator.
-// - name: unique identifier (e.g., "ast", "function", "my_custom").
-// - priority: higher number = higher priority.
-// - canEvaluate: shallow check whether evaluator can handle current expr root.
-// - create: factory to build the evaluator node.
-// - overwrite: replace existing registration with the same name if true.
-bool registerCudfExpressionEvaluator(
-    const std::string& name,
-    int priority,
-    CudfExpressionEvaluatorCanEvaluate canEvaluate,
-    CudfExpressionEvaluatorCreate create,
-    bool overwrite = true);
-
 class FunctionExpression : public CudfExpression {
  public:
   static std::shared_ptr<FunctionExpression> create(
-      const std::shared_ptr<velox::exec::Expr>& expr,
-      const RowTypePtr& inputRowSchema);
-
-  // TODO (dm): A storage for keeping results in case this is a multiply
-  // referenced subexpression (to do CSE)
+      const core::TypedExprPtr& expr,
+      const RowTypePtr& inputRowSchema,
+      CudfExprCtx exprCtx);
 
   ColumnOrView eval(
       std::vector<cudf::column_view> inputColumnViews,
@@ -153,21 +136,26 @@ class FunctionExpression : public CudfExpression {
 
   void close() override;
 
-  // Check if this specific operation can be evaluated by FunctionExpression
-  // (does not recursively check children)
-  static bool canEvaluate(std::shared_ptr<velox::exec::Expr> expr);
+  /// Check if this specific operation can be evaluated by FunctionExpression.
+  /// Does not recursively check children.
+  static bool canEvaluate(const core::TypedExprPtr& expr);
 
  private:
-  std::shared_ptr<velox::exec::Expr> expr_;
+  core::TypedExprPtr expr_;
   std::shared_ptr<CudfFunction> function_;
   std::vector<std::shared_ptr<CudfExpression>> subexpressions_;
 
   RowTypePtr inputRowSchema_;
 };
 
+/// Create a CudfExpression from a TypedExpr, selecting the best evaluator.
+/// Delegates to CudfExpressionCompiler::compileSubExpression and does not
+/// optimize the expression. Prefer constructing a CudfExpressionCompiler
+/// directly in operator code and calling compile() at top-level entry points.
 std::shared_ptr<CudfExpression> createCudfExpression(
-    std::shared_ptr<velox::exec::Expr> expr,
-    const RowTypePtr& inputRowSchema);
+    const core::TypedExprPtr& expr,
+    const RowTypePtr& inputRowSchema,
+    CudfExprCtx exprCtx);
 
 /// Lightweight check if an expression tree is supported by any CUDF evaluator
 /// without initializing CudfExpression objects.
@@ -175,8 +163,104 @@ std::shared_ptr<CudfExpression> createCudfExpression(
 /// \param deep If true, recursively check all children in the expression tree;
 ///             if false, only check if the top-level operation is supported
 ///             (useful when delegating to subexpressions)
+bool canBeEvaluatedByCudf(const core::TypedExprPtr& expr, bool deep = true);
+
 bool canBeEvaluatedByCudf(
-    std::shared_ptr<velox::exec::Expr> expr,
+    const core::TypedExprPtr& expr,
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool,
     bool deep = true);
+
+/// Return the best CudfExpressionEvaluatorEntry for the given expression,
+/// or nullptr if no evaluator can handle it.
+const CudfExpressionEvaluatorEntry* findBestEvaluator(
+    const core::TypedExprPtr& expr);
+
+/// Extract the full field path from a field access / dereference chain.
+/// Returns nullopt for non-field expressions.
+inline std::optional<std::vector<std::string>> extractFieldPath(
+    const core::TypedExprPtr& expr) {
+  if (expr == nullptr) {
+    return std::nullopt;
+  }
+
+  if (expr->isFieldAccessKind()) {
+    const auto* field = expr->asUnchecked<core::FieldAccessTypedExpr>();
+    if (field->inputs().empty() || field->inputs()[0]->isInputKind()) {
+      return std::vector<std::string>{field->name()};
+    }
+
+    auto path = extractFieldPath(field->inputs()[0]);
+    if (!path.has_value()) {
+      return std::nullopt;
+    }
+    path->push_back(field->name());
+    return path;
+  }
+
+  if (expr->isDereferenceKind()) {
+    const auto* dereference = expr->asUnchecked<core::DereferenceTypedExpr>();
+    auto path = extractFieldPath(dereference->inputs()[0]);
+    if (!path.has_value()) {
+      return std::nullopt;
+    }
+    path->push_back(dereference->name());
+    return path;
+  }
+
+  return std::nullopt;
+}
+
+/// Return the root (top-level) field name, or nullopt.
+inline std::optional<std::string> rootFieldName(
+    const core::TypedExprPtr& expr) {
+  auto path = extractFieldPath(expr);
+  if (!path.has_value() || path->empty()) {
+    return std::nullopt;
+  }
+  return path->front();
+}
+
+/// True if the expression is a direct input field reference (possibly nested).
+inline bool isInputFieldReference(const core::TypedExprPtr& expr) {
+  return rootFieldName(expr).has_value();
+}
+
+/// Collect all top-level input field names referenced by an expression tree.
+inline void collectReferencedInputFields(
+    const core::TypedExprPtr& expr,
+    std::unordered_set<std::string>& fields,
+    const std::unordered_set<std::string>& lambdaInputs = {}) {
+  if (expr == nullptr) {
+    return;
+  }
+
+  if (auto root = rootFieldName(expr);
+      root.has_value() && !lambdaInputs.count(*root)) {
+    fields.insert(*root);
+  }
+
+  if (expr->isLambdaKind()) {
+    const auto* lambda = expr->asUnchecked<core::LambdaTypedExpr>();
+    auto scopedLambdaInputs = lambdaInputs;
+    for (const auto& name : lambda->signature()->names()) {
+      scopedLambdaInputs.insert(name);
+    }
+    collectReferencedInputFields(lambda->body(), fields, scopedLambdaInputs);
+    return;
+  }
+
+  for (const auto& input : expr->inputs()) {
+    collectReferencedInputFields(input, fields, lambdaInputs);
+  }
+}
+
+/// Return the set of top-level input field names referenced by the expression.
+inline std::unordered_set<std::string> referencedInputFields(
+    const core::TypedExprPtr& expr) {
+  std::unordered_set<std::string> fields;
+  collectReferencedInputFields(expr, fields);
+  return fields;
+}
 
 } // namespace facebook::velox::cudf_velox

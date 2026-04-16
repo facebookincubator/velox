@@ -14,14 +14,16 @@
  * limitations under the License.
  */
 #include "velox/experimental/cudf/expression/AstExpressionUtils.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluatorRegistry.h"
 #include "velox/experimental/cudf/expression/JitExpression.h"
 
 namespace facebook::velox::cudf_velox {
 
 JitExpression::JitExpression(
-    std::shared_ptr<velox::exec::Expr> expr,
-    const RowTypePtr& inputRowSchema)
-    : expr_{expr, inputRowSchema} {}
+    const core::TypedExprPtr& expr,
+  const RowTypePtr& inputRowSchema,
+  CudfExprCtx exprCtx)
+  : expr_{expr, inputRowSchema, exprCtx} {}
 
 void JitExpression::close() {
   expr_.close();
@@ -75,7 +77,7 @@ ColumnOrView JitExpression::eval(
   return result;
 }
 
-bool JitExpression::canEvaluate(std::shared_ptr<velox::exec::Expr> expr) {
+bool JitExpression::canEvaluate(const core::TypedExprPtr& expr) {
   return ASTExpression::canEvaluate(expr);
 }
 
@@ -83,11 +85,13 @@ void registerJitEvaluator(int priority) {
   registerCudfExpressionEvaluator(
       kJitEvaluatorName,
       priority,
-      [](std::shared_ptr<velox::exec::Expr> expr) {
+      [](const core::TypedExprPtr& expr) {
         return JitExpression::canEvaluate(expr);
       },
-      [](std::shared_ptr<velox::exec::Expr> expr, const RowTypePtr& row) {
-        return std::make_shared<JitExpression>(std::move(expr), row);
+      [](const core::TypedExprPtr& expr,
+         const RowTypePtr& row,
+         CudfExprCtx exprCtx) {
+        return std::make_shared<JitExpression>(expr, row, exprCtx);
       },
       /*overwrite=*/false);
 }
