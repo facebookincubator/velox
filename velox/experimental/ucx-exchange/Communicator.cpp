@@ -114,8 +114,12 @@ void Communicator::run() {
           << CudfConfig::getInstance().ucxxBlockingPolling << std::endl;
 
   running_.store(true);
-  // Force CUDA context creation
-  cudaFree(0);
+  // Force CUDA context creation.
+  auto cudaStatus = cudaFree(0);
+  VELOX_CHECK(
+      cudaStatus == cudaSuccess,
+      "Failed to initialize CUDA context: {}",
+      cudaGetErrorString(cudaStatus));
 
   // create the UCXX context, worker, listener-context etc.
   if (CudfConfig::getInstance().ucxxBlockingPolling) {
@@ -152,7 +156,11 @@ void Communicator::run() {
 
         // GPU memory usage via CUDA runtime.
         size_t gpuFree = 0, gpuTotal = 0;
-        cudaMemGetInfo(&gpuFree, &gpuTotal);
+        auto memStatus = cudaMemGetInfo(&gpuFree, &gpuTotal);
+        if (memStatus != cudaSuccess) {
+          LOG(WARNING) << "cudaMemGetInfo failed: "
+                       << cudaGetErrorString(memStatus);
+        }
         size_t gpuUsedMB = (gpuTotal - gpuFree) / (1024 * 1024);
         size_t gpuFreeMB = gpuFree / (1024 * 1024);
         size_t gpuTotalMB = gpuTotal / (1024 * 1024);
