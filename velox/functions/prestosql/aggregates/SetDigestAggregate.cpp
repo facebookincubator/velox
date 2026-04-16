@@ -304,7 +304,7 @@ std::vector<exec::AggregateRegistrationResult> registerMakeSetDigest(
   for (const auto& inputType : inputTypes) {
     signatures.push_back(
         exec::AggregateFunctionSignatureBuilder()
-            .returnType("varbinary")
+            .returnType("SetDigest")
             .intermediateType("varbinary")
             .argumentType(inputType)
             .build());

@@ -25,6 +25,7 @@
 #include <folly/portability/SysSyscall.h>
 
 #include "velox/common/base/Counters.h"
+#include "velox/common/base/Portability.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/core/PlanFragment.h"
@@ -104,10 +105,10 @@ struct ThreadState {
   std::atomic<bool> isTerminated{false};
   /// True if there is a future outstanding that will schedule this on an
   /// executor thread when some promise is realized.
-  bool hasBlockingFuture{false};
+  tsan_atomic<bool> hasBlockingFuture{false};
   /// Timestamp in microseconds when the driver became blocked. Used to record
   /// blocked time when the driver is terminated while still blocked.
-  uint64_t blockingStartUs{0};
+  tsan_atomic<uint64_t> blockingStartUs{0};
   /// The number of suspension requests on a on-thread driver. If > 0, this
   /// driver thread is in a (recursive) section waiting for RPC or memory
   /// strategy decision. The thread is not supposed to access its memory, which
@@ -172,8 +173,8 @@ struct ThreadState {
     obj["tid"] = tid.load();
     obj["isTerminated"] = isTerminated.load();
     obj["isEnqueued"] = isEnqueued.load();
-    obj["hasBlockingFuture"] = hasBlockingFuture;
-    obj["blockingStartUs"] = blockingStartUs;
+    obj["hasBlockingFuture"] = tsanAtomicValue(hasBlockingFuture);
+    obj["blockingStartUs"] = tsanAtomicValue(blockingStartUs);
     obj["isSuspended"] = suspended();
     obj["startExecTime"] = startExecTimeMs;
     return obj;
@@ -285,13 +286,13 @@ constexpr const char* kOpMethodAddInput = "addInput";
 constexpr const char* kOpMethodNoMoreInput = "noMoreInput";
 constexpr const char* kOpMethodIsFinished = "isFinished";
 
-/// Same as the structure below, but does not have atomic members.
-/// Used to return the status from the struct with atomics.
+/// Non-atomic snapshot of OpCallStatus, used to return a consistent status from
+/// OpCallStatus which uses atomic members internally.
 struct OpCallStatusRaw {
   /// Time (ms) when the operator call started.
   size_t timeStartMs{0};
-  /// Id of the operator, method of which is currently running. It is index into
-  /// the vector of Driver's operators.
+  /// Id of the operator, method of which is currently running. It is the index
+  /// into the vector of Driver's operators.
   int32_t opId{0};
   /// Method of the operator, which is currently running.
   const char* method{kOpMethodNone};
@@ -305,14 +306,15 @@ struct OpCallStatusRaw {
 };
 
 /// Structure holds the information about the current operator call the driver
-/// is in. Can be used to detect deadlocks and otherwise blocked calls.
-/// If timeStartMs is zero, then we aren't in an operator call.
-struct OpCallStatus {
+/// is in. Can be used to detect deadlocks and otherwise blocked calls. If
+/// 'timeStartMs_' is zero, then we aren't in an operator call.
+class OpCallStatus {
+ public:
   OpCallStatus() {}
 
   /// The status accessor.
   OpCallStatusRaw operator()() const {
-    return OpCallStatusRaw{timeStartMs, opId, method};
+    return OpCallStatusRaw{timeStartMs_, opId_, method_};
   }
 
   void start(int32_t operatorId, const char* operatorMethod);
@@ -320,12 +322,12 @@ struct OpCallStatus {
 
  private:
   /// Time (ms) when the operator call started.
-  std::atomic_size_t timeStartMs{0};
-  /// Id of the operator, method of which is currently running. It is index into
-  /// the vector of Driver's operators.
-  std::atomic_int32_t opId{0};
+  std::atomic_size_t timeStartMs_{0};
+  /// Id of the operator, method of which is currently running. It is the index
+  /// into the vector of Driver's operators.
+  std::atomic_int32_t opId_{0};
   /// Method of the operator, which is currently running.
-  std::atomic<const char*> method{kOpMethodNone};
+  std::atomic<const char*> method_{kOpMethodNone};
 };
 
 struct PushdownFilters {
@@ -705,7 +707,7 @@ class Driver : public std::enable_shared_from_this<Driver> {
 
   std::vector<std::unique_ptr<Operator>> operators_; // NOLINT
 
-  BlockingReason blockingReason_{BlockingReason::kNotBlocked};
+  tsan_atomic<BlockingReason> blockingReason_{BlockingReason::kNotBlocked};
 
   // Stores the operator where the driver was last blocked. Note that the driver
   // always resumes at the leaf (consumer) to prioritize getting data out of the
@@ -878,6 +880,10 @@ struct DriverFactory {
   /// Returns plan node IDs for which Spatial Join Bridges must be created
   /// based on this pipeline.
   std::vector<core::PlanNodeId> needsSpatialJoinBridges() const;
+
+  /// Returns plan node IDs for which IndexLookupJoin Bridges must be created
+  /// based on this pipeline.
+  std::vector<core::PlanNodeId> needsIndexLookupJoinBridges() const;
 
   static std::vector<DriverAdapter> adapters;
 };

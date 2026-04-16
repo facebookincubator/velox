@@ -18,11 +18,13 @@
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
 #include "velox/experimental/cudf/exec/CudfAssignUniqueId.h"
 #include "velox/experimental/cudf/exec/CudfBatchConcat.h"
+#include "velox/experimental/cudf/exec/CudfEnforceSingleRow.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/CudfHashAggregation.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
 #include "velox/experimental/cudf/exec/CudfLimit.h"
 #include "velox/experimental/cudf/exec/CudfLocalPartition.h"
+#include "velox/experimental/cudf/exec/CudfMarkDistinct.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
 #include "velox/experimental/cudf/exec/CudfTopN.h"
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
@@ -33,12 +35,14 @@
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/exec/AssignUniqueId.h"
 #include "velox/exec/CallbackSink.h"
+#include "velox/exec/EnforceSingleRow.h"
 #include "velox/exec/FilterProject.h"
 #include "velox/exec/HashAggregation.h"
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/HashProbe.h"
 #include "velox/exec/Limit.h"
 #include "velox/exec/LocalPartition.h"
+#include "velox/exec/MarkDistinct.h"
 #include "velox/exec/OrderBy.h"
 #include "velox/exec/StreamingAggregation.h"
 #include "velox/exec/TableScan.h"
@@ -711,6 +715,88 @@ class ValuesAdapter : public OperatorAdapter {
   }
 };
 
+/// MarkDistinctAdapter - Replaces with CudfMarkDistinct
+class MarkDistinctAdapter : public OperatorAdapter {
+ public:
+  MarkDistinctAdapter() : OperatorAdapter("MarkDistinct") {}
+
+  bool canHandle(const exec::Operator* op) const override {
+    return dynamic_cast<const exec::MarkDistinct*>(op) != nullptr;
+  }
+
+  bool canRunOnGPU(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& planNode,
+      exec::DriverCtx* /*ctx*/) const override {
+    return std::dynamic_pointer_cast<const core::MarkDistinctNode>(planNode) !=
+        nullptr;
+  }
+
+  bool acceptsGpuInput() const override {
+    return true;
+  }
+
+  bool producesGpuOutput() const override {
+    return true;
+  }
+
+  std::vector<std::unique_ptr<exec::Operator>> createReplacements(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& planNode,
+      exec::DriverCtx* ctx,
+      int32_t operatorId) const override {
+    auto markDistinctPlanNode =
+        std::dynamic_pointer_cast<const core::MarkDistinctNode>(planNode);
+
+    std::vector<std::unique_ptr<exec::Operator>> result;
+    result.push_back(
+        std::make_unique<CudfMarkDistinct>(
+            operatorId, ctx, markDistinctPlanNode));
+    return result;
+  }
+};
+
+/// EnforceSingleRowAdapter - Replaces with CudfEnforceSingleRow
+class EnforceSingleRowAdapter : public OperatorAdapter {
+ public:
+  EnforceSingleRowAdapter() : OperatorAdapter("EnforceSingleRow") {}
+
+  bool canHandle(const exec::Operator* op) const override {
+    return dynamic_cast<const exec::EnforceSingleRow*>(op) != nullptr;
+  }
+
+  bool canRunOnGPU(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& planNode,
+      exec::DriverCtx* /*ctx*/) const override {
+    return std::dynamic_pointer_cast<const core::EnforceSingleRowNode>(
+               planNode) != nullptr;
+  }
+
+  bool acceptsGpuInput() const override {
+    return true;
+  }
+
+  bool producesGpuOutput() const override {
+    return true;
+  }
+
+  std::vector<std::unique_ptr<exec::Operator>> createReplacements(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& planNode,
+      exec::DriverCtx* ctx,
+      int32_t operatorId) const override {
+    auto enforceSingleRowPlanNode =
+        std::dynamic_pointer_cast<const core::EnforceSingleRowNode>(planNode);
+
+    std::vector<std::unique_ptr<exec::Operator>> result;
+    result.push_back(
+        std::make_unique<CudfEnforceSingleRow>(
+            operatorId, ctx, enforceSingleRowPlanNode));
+    return result;
+  }
+};
+
 /// CallbackSinkAdapter - Keeps original operator
 class CallbackSinkAdapter : public OperatorAdapter {
  public:
@@ -770,6 +856,8 @@ void registerAllOperatorAdapters() {
   registry.registerAdapter(std::make_unique<LocalPartitionAdapter>());
   registry.registerAdapter(std::make_unique<LocalExchangeAdapter>());
   registry.registerAdapter(std::make_unique<AssignUniqueIdAdapter>());
+  registry.registerAdapter(std::make_unique<MarkDistinctAdapter>());
+  registry.registerAdapter(std::make_unique<EnforceSingleRowAdapter>());
   registry.registerAdapter(std::make_unique<ValuesAdapter>());
   registry.registerAdapter(std::make_unique<CallbackSinkAdapter>());
 }

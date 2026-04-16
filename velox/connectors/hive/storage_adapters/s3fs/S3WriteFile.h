@@ -25,6 +25,8 @@ class S3Client;
 
 namespace facebook::velox::filesystems {
 
+class S3Config;
+
 /// S3WriteFile uses the Apache Arrow implementation as a reference.
 /// AWS C++ SDK allows streaming writes via the MultiPart upload API.
 /// Multipart upload allows you to upload a single object as a set of parts.
@@ -54,7 +56,7 @@ class S3WriteFile : public WriteFile {
       std::string_view path,
       Aws::S3::S3Client* client,
       memory::MemoryPool* pool,
-      size_t minPartSize);
+      const std::shared_ptr<S3Config>& s3Config);
 
   /// Appends data to the end of the file.
   /// Uploads a part on reaching part size limit.

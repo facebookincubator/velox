@@ -1776,6 +1776,36 @@ TEST_P(ParameterizedExprTest, switchExprWithNull) {
   assertEqualVectors(expected, result);
 }
 
+// Verify that computePropagatesNulls iterates over all then-clauses when
+// checking null propagation. Uses a 3-WHEN CASE where the 3rd then-clause
+// (coalesce) does not propagate nulls. Null rows matching that clause must
+// return the coalesce result (0), not NULL.
+TEST_P(ParameterizedExprTest, switchPropagatesNullsAllThenClauses) {
+  auto c0 = makeNullableFlatVector<int64_t>({1, 2, std::nullopt, std::nullopt});
+  auto input = makeRowVector({c0});
+
+  // The 3rd then-clause uses coalesce, which does not propagate nulls. When
+  // c0 is null, cond1 and cond2 are false, cond3 (IS NULL) is true, and the
+  // result should be coalesce(null, 0) = 0.
+  auto result = evaluate(
+      "case when c0 = 1 then c0 + 10 "
+      "when c0 = 2 then c0 + 20 "
+      "when c0 is null then coalesce(c0, cast(0 as bigint)) end",
+      input);
+
+  auto expected = makeNullableFlatVector<int64_t>({11, 22, 0, 0});
+  assertEqualVectors(expected, result);
+
+  // Verify propagatesNulls is false since the 3rd then-clause (coalesce) does
+  // not propagate nulls.
+  auto typedExpr = parseExpression(
+      "case when c0 = 1 then c0 + 10 "
+      "when c0 = 2 then c0 + 20 "
+      "when c0 is null then coalesce(c0, cast(0 as bigint)) end",
+      ROW({"c0"}, {BIGINT()}));
+  EXPECT_FALSE(propagatesNulls(typedExpr));
+}
+
 TEST_P(ParameterizedExprTest, ifWithConstant) {
   vector_size_t size = 4;
 

@@ -26,11 +26,15 @@ Options:
   --pr <pr-number>     Update only cudf from a specific PR
   --commit <sha>       Update all dependencies using cudf commit and compatible versions
 
+Environment Variables:
+  GH_TOKEN         GitHub personal access token for higher API rate limits via curl (optional)
+
 Examples:
   $0 --branch main
   $0 --branch release/26.02
   $0 --pr 12345
   $0 --commit abc123def456
+  GH_TOKEN=github_pat_xxx $0 --branch main
 EOF
 }
 
@@ -43,20 +47,70 @@ ARG="${2:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CMAKE_FILE="$SCRIPT_DIR/../CMake/resolve_dependency_modules/cudf.cmake"
 
+# Use gh CLI if available or fall back to curl supporting GitHub token for higher rate limits.
+GH_TOKEN="${GH_TOKEN:-}"
+
+fetch_github_api() {
+  local endpoint=$1
+  local response http_code
+  if command -v gh &>/dev/null; then
+    if response=$(gh api "${endpoint}" 2>&1); then
+      echo "$response"
+      return 0
+    fi
+    echo "Error: gh api failed" >&2
+    echo "Response: $response" >&2
+  else
+    local curl_opts=(-s --max-time 30 -w '%{http_code}')
+    if [[ -n $GH_TOKEN ]]; then
+      curl_opts+=(-H "Authorization: token $GH_TOKEN")
+    fi
+    local raw
+    raw=$(curl "${curl_opts[@]}" "https://api.github.com/${endpoint}" 2>&1)
+    http_code="${raw: -3}"
+    response="${raw%???}"
+    if [[ $http_code == "200" ]]; then
+      echo "$response"
+      return 0
+    fi
+    echo "Error: GitHub API returned HTTP $http_code for $endpoint" >&2
+  fi
+  echo "" >&2
+  echo "SOLUTION: Authenticate to get 5,000 requests/hour:" >&2
+  if command -v gh &>/dev/null; then
+    echo "  gh auth login" >&2
+  else
+    echo "  export GH_TOKEN=gh_pat_xx" >&2
+    echo "  Get a token at: https://github.com/settings/personal-access-tokens/new  (access: public repo)" >&2
+  fi
+  return 1
+}
+
 get_commit_info() {
   local repo=$1 branch=$2
-  curl -sf "https://api.github.com/repos/rapidsai/${repo}/commits/${branch}" |
-    jq -r '[.sha, .commit.committer.date[:10]] | join(" ")'
+  local response
+  response=$(fetch_github_api "repos/rapidsai/${repo}/commits/${branch}") || return 1
+  echo "$response" | jq -r '[.sha, .commit.committer.date[:10]] | join(" ")' 2>/dev/null || {
+    echo "Error: Failed to parse JSON response from $repo" >&2
+    return 1
+  }
 }
 
 get_commit_before_date() {
   local repo=$1 until_date=$2
-  curl -sf "https://api.github.com/repos/rapidsai/${repo}/commits?sha=main&until=${until_date}&per_page=1" |
-    jq -r '.[0] | [.sha, .commit.committer.date[:10]] | join(" ")'
+  local response
+  response=$(fetch_github_api "repos/rapidsai/${repo}/commits?sha=main&until=${until_date}&per_page=1") || return 1
+  echo "$response" | jq -r '.[0] | [.sha, .commit.committer.date[:10]] | join(" ")' 2>/dev/null || {
+    echo "Error: Failed to parse response for $repo before $until_date" >&2
+    return 1
+  }
 }
 
 get_sha256() {
-  curl -sL "https://github.com/rapidsai/$1/archive/$2.tar.gz" | sha256sum | cut -d' ' -f1
+  curl -sL --max-time 30 "https://github.com/rapidsai/$1/archive/$2.tar.gz" | sha256sum | cut -d' ' -f1 || {
+    echo "Error: Failed to compute SHA256 for $1:$2" >&2
+    return 1
+  }
 }
 
 get_version() {
@@ -64,8 +118,12 @@ get_version() {
   if [[ $branch =~ ^release/([0-9]+\.[0-9]+)$ ]]; then
     echo "${BASH_REMATCH[1]}"
   else
-    curl -sf "https://raw.githubusercontent.com/rapidsai/cudf/${branch}/VERSION" |
-      grep -oP '^[0-9]+\.[0-9]+'
+    local response
+    response=$(fetch_github_api "repos/rapidsai/cudf/contents/VERSION?ref=${branch}") || return 1
+    echo "$response" | jq -r '.content' | base64 -d | grep -oP '^[0-9]+\.[0-9]+' || {
+      echo "Error: Failed to parse VERSION file from branch $branch" >&2
+      return 1
+    }
   fi
 }
 
@@ -89,16 +147,16 @@ update_dependency() {
 
 if [[ $MODE == "--pr" ]]; then
   echo "Fetching cuDF PR #${ARG}..."
-  PR_INFO=$(curl -sf "https://api.github.com/repos/rapidsai/cudf/pulls/${ARG}")
+  PR_INFO=$(fetch_github_api "repos/rapidsai/cudf/pulls/${ARG}") || exit 1
   SHA=$(echo "$PR_INFO" | jq -r '.head.sha')
   BASE=$(echo "$PR_INFO" | jq -r '.base.ref')
-  VERSION=$(get_version "$BASE")
-  DATE=$(curl -sf "https://api.github.com/repos/rapidsai/cudf/commits/${SHA}" | jq -r '.commit.committer.date[:10]')
+  VERSION=$(get_version "$BASE") || exit 1
+  DATE=$(fetch_github_api "repos/rapidsai/cudf/commits/${SHA}" | jq -r '.commit.committer.date[:10]') || exit 1
 
   echo "  Base: $BASE (version $VERSION)"
   echo "  Commit: ${SHA:0:7} from $DATE"
   echo "  Computing SHA256..."
-  CHECKSUM=$(get_sha256 "cudf" "$SHA")
+  CHECKSUM=$(get_sha256 "cudf" "$SHA") || exit 1
   echo "  SHA256: $CHECKSUM"
   echo
 
@@ -107,11 +165,11 @@ if [[ $MODE == "--pr" ]]; then
 
 elif [[ $MODE == "--commit" ]]; then
   echo "Fetching cuDF commit ${ARG:0:7}..."
-  COMMIT_INFO=$(curl -sf "https://api.github.com/repos/rapidsai/cudf/commits/${ARG}")
+  COMMIT_INFO=$(fetch_github_api "repos/rapidsai/cudf/commits/${ARG}") || exit 1
   SHA=$(echo "$COMMIT_INFO" | jq -r '.sha')
   DATE=$(echo "$COMMIT_INFO" | jq -r '.commit.committer.date[:10]')
   TIMESTAMP=$(echo "$COMMIT_INFO" | jq -r '.commit.committer.date')
-  VERSION=$(curl -sf "https://raw.githubusercontent.com/rapidsai/cudf/${SHA}/VERSION" | grep -oP '^[0-9]+\.[0-9]+')
+  VERSION=$(fetch_github_api "repos/rapidsai/cudf/contents/VERSION?ref=${SHA}" | jq -r '.content' | base64 -d | grep -oP '^[0-9]+\.[0-9]+') || exit 1
 
   echo "  Commit: ${SHA:0:7} from $DATE"
   echo "  Version: $VERSION"
@@ -127,10 +185,10 @@ elif [[ $MODE == "--commit" ]]; then
   for dep in rapids_cmake rmm kvikio; do
     repo=${dep//_/-}
     echo "Fetching $repo..."
-    read -r commit date < <(get_commit_before_date "$repo" "$TIMESTAMP")
+    read -r commit date < <(get_commit_before_date "$repo" "$TIMESTAMP") || exit 1
     echo "  Commit: ${commit:0:7} from $date"
     echo "  Computing SHA256..."
-    checksum=$(get_sha256 "$repo" "$commit")
+    checksum=$(get_sha256 "$repo" "$commit") || exit 1
     echo "  SHA256: $checksum"
 
     COMMITS[$dep]=$commit
@@ -140,7 +198,7 @@ elif [[ $MODE == "--commit" ]]; then
   done
 
   echo "Computing SHA256 for cudf..."
-  CHECKSUMS[cudf]=$(get_sha256 "cudf" "$SHA")
+  CHECKSUMS[cudf]=$(get_sha256 "cudf" "$SHA") || exit 1
   echo "  SHA256: ${CHECKSUMS[cudf]}"
   echo
 
@@ -155,7 +213,7 @@ elif [[ $MODE == "--commit" ]]; then
   done
 
 elif [[ $MODE == "--branch" ]]; then
-  VERSION=$(get_version "$ARG")
+  VERSION=$(get_version "$ARG") || exit 1
   echo "Updating cuDF dependencies from branch $ARG (version $VERSION)"
   echo
 
@@ -165,10 +223,10 @@ elif [[ $MODE == "--branch" ]]; then
     repo=${dep//_/-}
     echo "Fetching $repo..."
 
-    read -r commit date < <(get_commit_info "$repo" "$ARG")
+    read -r commit date < <(get_commit_info "$repo" "$ARG") || exit 1
     echo "  Commit: ${commit:0:7} from $date"
     echo "  Computing SHA256..."
-    checksum=$(get_sha256 "$repo" "$commit")
+    checksum=$(get_sha256 "$repo" "$commit") || exit 1
     echo "  SHA256: $checksum"
 
     COMMITS[$dep]=$commit
