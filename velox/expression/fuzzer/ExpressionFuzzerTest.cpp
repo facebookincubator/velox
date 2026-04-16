@@ -130,6 +130,8 @@ std::unordered_map<std::string, std::shared_ptr<ArgValuesGenerator>>
          std::make_shared<TDigestArgValuesGenerator>("destructure_tdigest")},
         {"trimmed_mean",
          std::make_shared<TDigestArgValuesGenerator>("trimmed_mean")},
+        {"winsorized_mean",
+         std::make_shared<TDigestArgValuesGenerator>("winsorized_mean")},
         {"hash_counts",
          std::make_shared<SetDigestArgValuesGenerator>("hash_counts")},
         {"cardinality",
@@ -174,6 +176,7 @@ std::unordered_set<std::string> skipFunctions = {
     "construct_tdigest",
     "destructure_tdigest",
     "trimmed_mean",
+    "winsorized_mean",
     // Fuzzer and the underlying engine are confused about SetDigest functions
     // (since KHLL is a user defined type), and tries to pass a
     // VARBINARY (since KHLL's implementation uses an
