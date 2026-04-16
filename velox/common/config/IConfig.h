@@ -31,6 +31,14 @@ namespace facebook::velox::config {
 /// externally managed system configuration.
 class IConfig {
  public:
+  // Do not inline this member function as lambda. Otherwise, a GCC bug
+  // https://gcc.gnu.org/bugzilla/show_bug.cgi?id=103186 might be triggered
+  // with GCC 11.1 and 11.2.
+  template <typename T>
+  static T defaultToT(std::string /* unused */, std::string value) {
+    return folly::to<T>(value);
+  }
+
   template <typename T>
   std::optional<T> get(
       const std::string& key,
@@ -61,13 +69,6 @@ class IConfig {
 
  private:
   virtual std::optional<std::string> access(const std::string& key) const = 0;
-  // Do not inline this member function as lambda. Otherwise, a GCC bug
-  // https://gcc.gnu.org/bugzilla/show_bug.cgi?id=103186 might be triggered
-  // with GCC 11.1 and 11.2.
-  template <typename T>
-  static T defaultToT(std::string /* unused */, std::string value) {
-    return folly::to<T>(value);
-  }
 };
 
 } // namespace facebook::velox::config
