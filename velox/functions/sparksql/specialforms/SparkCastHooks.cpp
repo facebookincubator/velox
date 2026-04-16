@@ -18,6 +18,7 @@
 #include "velox/functions/lib/string/StringImpl.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/tz/TimeZoneMap.h"
+#include <cmath>
 
 namespace facebook::velox::functions::sparksql {
 
@@ -83,10 +84,28 @@ Expected<int64_t> SparkCastHooks::castTimestampToInt(
 
 Expected<std::optional<Timestamp>> SparkCastHooks::castDoubleToTimestamp(
     double value) const {
-  if (FOLLY_UNLIKELY(std::isnan(value) || std::isinf(value))) {
-    return std::nullopt;
+  if (!config_.sparkAnsiEnabled()) {
+    if (FOLLY_UNLIKELY(std::isnan(value) || std::isinf(value))) {
+      return std::nullopt;
+    }
+    return castNumberToTimestamp(value);
   }
-  return castNumberToTimestamp(value);
+
+  if (FOLLY_UNLIKELY(std::isnan(value) || std::isinf(value))) {
+    return folly::makeUnexpected(Status::UserError(
+        "Cannot cast a non-finite floating-point value to TIMESTAMP."));
+  }
+
+  const long double micros =
+      static_cast<long double>(value) * Timestamp::kMicrosecondsInSecond;
+
+  if (micros > static_cast<long double>(std::numeric_limits<int64_t>::max()) ||
+      micros < static_cast<long double>(std::numeric_limits<int64_t>::min())) {
+    return folly::makeUnexpected(Status::UserError(
+        "Cannot cast floating-point value to TIMESTAMP because the result overflows."));
+  }
+
+  return Timestamp::fromMicrosNoError(static_cast<int64_t>(micros));
 }
 
 Expected<Timestamp> SparkCastHooks::castBooleanToTimestamp(bool val) const {
