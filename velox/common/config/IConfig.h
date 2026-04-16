@@ -32,12 +32,15 @@ namespace facebook::velox::config {
 class IConfig {
  public:
   template <typename T>
+  std::optional<T> get(const std::string& key) const {
+    return get<T>(
+        key, std::function<T(std::string, std::string)>(defaultConverter<T>));
+  }
+
+  template <typename T>
   std::optional<T> get(
       const std::string& key,
-      const std::function<T(std::string, std::string)>& toT =
-          [](auto /* unused */, auto value) {
-            return folly::to<T>(value);
-          }) const {
+      const std::function<T(std::string, std::string)>& toT) const {
     if (auto val = access(key)) {
       return toT(key, *val);
     }
@@ -45,13 +48,18 @@ class IConfig {
   }
 
   template <typename T>
+  T get(const std::string& key, const T& defaultValue) const {
+    return get<T>(
+        key,
+        defaultValue,
+        std::function<T(std::string, std::string)>(defaultConverter<T>));
+  }
+
+  template <typename T>
   T get(
       const std::string& key,
       const T& defaultValue,
-      const std::function<T(std::string, std::string)>& toT =
-          [](auto /* unused */, auto value) {
-            return folly::to<T>(value);
-          }) const {
+      const std::function<T(std::string, std::string)>& toT) const {
     if (auto val = access(key)) {
       return toT(key, *val);
     }
@@ -64,6 +72,13 @@ class IConfig {
   virtual ~IConfig() = default;
 
  private:
+  template <typename T>
+  static T defaultConverter(
+      std::string /* unused */,
+      const std::string& value) {
+    return folly::to<T>(value);
+  }
+
   virtual std::optional<std::string> access(const std::string& key) const = 0;
 };
 
