@@ -15,6 +15,7 @@
  */
 
 #include "velox/experimental/cudf/expression/AstUtils.h"
+#include "velox/experimental/cudf/expression/DateTruncFunction.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/SparkFunctions.h"
 
@@ -142,6 +143,19 @@ void registerSparkFunctions(const std::string& prefix) {
            .argumentType("date")
            .constantArgumentType("integer")
            .build()});
+
+  registerCudfFunction(
+      prefix + "date_trunc",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<DateTruncFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("timestamp")
+           .constantArgumentType("varchar")
+           .argumentType("timestamp")
+           .build()},
+      true,
+      DateTruncFunction::canEvaluate);
 }
 
 } // namespace facebook::velox::cudf_velox
