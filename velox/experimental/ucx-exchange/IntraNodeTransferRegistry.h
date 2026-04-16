@@ -16,7 +16,6 @@
 #pragma once
 
 #include <cudf/contiguous_split.hpp>
-#include <condition_variable>
 #include <future>
 #include <map>
 #include <memory>
@@ -50,13 +49,13 @@ struct IntraNodeTransferResult {
 };
 
 /// @brief Entry in the intra-node transfer registry containing the data and
-/// synchronization primitives. The server publishes data and waits for
-/// retrieval; the source waits for data availability and retrieves it.
+/// synchronization primitives. The server publishes data via publish() and
+/// waits on retrievedPromise; the source polls via poll() and fulfils the
+/// promise on retrieval.
 struct IntraNodeTransferEntry {
   std::shared_ptr<cudf::packed_columns> data;
   bool atEnd{false}; // True if this is the end-of-stream marker
   std::promise<void> retrievedPromise; // Server waits on this after publishing
-  std::condition_variable dataAvailable; // Source waits on this for data
   std::mutex entryMutex;
   bool ready{false}; // True when data is ready to retrieve
 };
@@ -68,8 +67,7 @@ struct IntraNodeTransferEntry {
 /// without going through UCXX network transfers.
 ///
 /// The server publishes packed_columns data to the registry, and the source
-/// retrieves it directly. Synchronization is handled via futures/promises
-/// and condition variables.
+/// polls for it. Synchronization is handled via futures/promises.
 class IntraNodeTransferRegistry {
  public:
   /// @brief Get the singleton instance of the registry.
@@ -99,24 +97,6 @@ class IntraNodeTransferRegistry {
   /// @return nullopt if not ready, or IntraNodeTransferResult if ready.
   ///         Data is nullptr when atEnd is true.
   [[nodiscard]] std::optional<IntraNodeTransferResult> poll(
-      const IntraNodeTransferKey& key);
-
-  /// @brief Wait for and retrieve data from intra-node transfer registry.
-  /// Source calls this - blocks until data is available or timeout.
-  /// WARNING: This can block, use with caution on single-threaded contexts.
-  /// @param key The unique key identifying this transfer
-  /// @param timeout Maximum time to wait for data
-  /// @return IntraNodeTransferResult. Data is nullptr if atEnd or timeout.
-  [[nodiscard]] IntraNodeTransferResult waitFor(
-      const IntraNodeTransferKey& key,
-      std::chrono::milliseconds timeout);
-
-  /// @brief Retrieve data from intra-node transfer registry (legacy method).
-  /// Called by UcxExchangeSource when isIntraNodeTransfer is true.
-  /// The entry is removed from the registry and the promise is fulfilled.
-  /// @param key The unique key identifying this transfer
-  /// @return The shared data, or nullptr if not found
-  std::shared_ptr<cudf::packed_columns> retrieve(
       const IntraNodeTransferKey& key);
 
   /// @brief Cancel all pending transfers for a task.

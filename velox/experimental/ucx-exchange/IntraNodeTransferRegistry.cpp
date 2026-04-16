@@ -80,9 +80,6 @@ std::future<void> IntraNodeTransferRegistry::publish(
     future = entry->retrievedPromise.get_future();
   }
 
-  // Notify waiting source
-  entry->dataAvailable.notify_one();
-
   VLOG(2) << "[INTRA-REG] publish: task=" << key.taskId
           << " dest=" << key.destination << " seq=" << key.sequenceNumber
           << " atEnd=" << atEnd << " entryExisted=" << entryExisted
@@ -149,90 +146,6 @@ std::optional<IntraNodeTransferResult> IntraNodeTransferRegistry::poll(
           << " atEnd=" << result.atEnd;
 
   return result;
-}
-
-IntraNodeTransferResult IntraNodeTransferRegistry::waitFor(
-    const IntraNodeTransferKey& key,
-    std::chrono::milliseconds timeout) {
-  std::shared_ptr<IntraNodeTransferEntry> entry;
-
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-
-    // Check if entry already exists (server may have published)
-    auto it = registry_.find(key);
-    if (it != registry_.end()) {
-      entry = it->second;
-    } else {
-      // Create entry so server can find it when it publishes
-      entry = std::make_shared<IntraNodeTransferEntry>();
-      registry_[key] = entry;
-    }
-  }
-
-  // FIX: Hold the entry lock for the entire wait and retrieval operation
-  // to prevent race conditions. Previously, the lock was released before
-  // accessing entry->data, entry->atEnd, and entry->retrievedPromise.
-  IntraNodeTransferResult result;
-  {
-    std::unique_lock<std::mutex> entryLock(entry->entryMutex);
-    if (!entry->ready) {
-      auto status = entry->dataAvailable.wait_for(
-          entryLock, timeout, [&entry]() { return entry->ready; });
-      if (!status) {
-        // Timeout - return empty result
-        VLOG(0) << "Timeout waiting for intra-node transfer: " << key.taskId
-                << " dest=" << key.destination << " seq=" << key.sequenceNumber;
-        return {nullptr, false};
-      }
-    }
-
-    // Data is ready, retrieve it while holding the lock
-    result.data = std::move(entry->data);
-    result.atEnd = entry->atEnd;
-
-    // Fulfill the promise to notify the server while still holding entry lock
-    entry->retrievedPromise.set_value();
-  }
-
-  // Remove entry from registry (after releasing entry lock but before
-  // returning)
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    registry_.erase(key);
-  }
-
-  VLOG(3) << "Retrieved intra-node transfer (wait): " << key.taskId
-          << " dest=" << key.destination << " seq=" << key.sequenceNumber
-          << " atEnd=" << result.atEnd;
-
-  return result;
-}
-
-std::shared_ptr<cudf::packed_columns> IntraNodeTransferRegistry::retrieve(
-    const IntraNodeTransferKey& key) {
-  std::lock_guard<std::mutex> lock(mutex_);
-
-  auto it = registry_.find(key);
-  if (it == registry_.end()) {
-    VLOG(0) << "Intra-node transfer entry not found: " << key.taskId
-            << " dest=" << key.destination << " seq=" << key.sequenceNumber;
-    return nullptr;
-  }
-
-  auto entry = it->second;
-  auto data = std::move(entry->data);
-
-  // Fulfill the promise to notify the server that data has been retrieved
-  entry->retrievedPromise.set_value();
-
-  // Remove the entry from the registry
-  registry_.erase(it);
-
-  VLOG(3) << "Retrieved intra-node transfer: " << key.taskId
-          << " dest=" << key.destination << " seq=" << key.sequenceNumber;
-
-  return data;
 }
 
 void IntraNodeTransferRegistry::cancelTask(const std::string& taskId) {
