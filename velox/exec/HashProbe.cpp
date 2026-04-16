@@ -128,6 +128,7 @@ HashProbe::HashProbe(
       joinNode_(std::move(joinNode)),
       joinType_{joinNode_->joinType()},
       nullAware_{joinNode_->isNullAware()},
+      nullAsValue_{joinNode_->isNullAsValue()},
       probeType_(joinNode_->sources()[0]->outputType()),
       canOutputBuildRowsInParallel_(
           driverCtx->queryConfig().parallelOutputJoinBuildRowsEnabled() &&
@@ -690,7 +691,9 @@ void HashProbe::decodeAndDetectNonNullKeys() {
     hashers_[i]->decode(*key, nonNullInputRows_);
   }
 
-  deselectRowsWithNulls(hashers_, nonNullInputRows_);
+  if (!nullAsValue_) {
+    deselectRowsWithNulls(hashers_, nonNullInputRows_);
+  }
   if (isRightSemiProjectJoin(joinType_) &&
       nonNullInputRows_.countSelected() < input_->size()) {
     probeSideHasNullKeys_ = true;

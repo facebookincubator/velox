@@ -225,6 +225,47 @@ following best practices:
    your PR. If a component or API does not have a corresponding
    unit test suite, please consider improving the codebase by first adding a
    new unit test suite to ensure the existing behavior is correct.
+   * **Common test workflows**:
+     ```bash
+     # Run all tests in parallel.
+     cd _build/debug && ctest -j 8
+
+     # Run all test binaries whose ctest name matches a regex.
+     # On Linux this matches velox_exec_test_group0 … _group7.
+     # On macOS this matches velox_exec_test_ValuesTest,
+     # velox_exec_test_HashJoinTest, etc.
+     cd _build/debug && ctest -R velox_exec
+
+     # Run a single test binary by name (works on macOS where each
+     # test file produces its own binary).
+     cd _build/debug && ctest -R ValuesTest
+     ```
+   * **Re-running a CI failure locally**: CI reports a failure in
+   `velox_exec_test_group3` with `ValuesTest.empty`. On Linux, run the grouped
+   binary directly. On macOS, the grouped binary does not exist — use the
+   per-file binary instead:
+     ```bash
+     # Linux (grouped binary)
+     _build/debug/velox/exec/tests/velox_exec_test_group3 --gtest_filter="ValuesTest.empty"
+     # macOS (per-file binary)
+     _build/debug/velox/exec/tests/velox_exec_test_ValuesTest --gtest_filter="ValuesTest.empty"
+     ```
+   * **Test binary structure**: Four test suites (`velox/exec/tests`,
+   `velox/functions/prestosql/aggregates/tests`, `velox/common/caching/tests`,
+   `velox/serializers/tests`) use grouped binaries on Linux CI (e.g.,
+   `velox_exec_test_group0` through `_group7`) to reduce link times. All other
+   suites use individual binaries on all platforms. On macOS, grouping is off
+   by default and each test file gets its own binary (e.g.,
+   `velox_exec_test_ValuesTest`). To disable grouping on Linux, pass
+   `-DVELOX_ENABLE_GROUPED_TESTS=OFF` to CMake.
+   * **Adding a test to a grouped suite**: Add the source file to the `SOURCES`
+   list in the relevant `velox_add_grouped_tests()` call in `CMakeLists.txt`.
+   It is automatically assigned to a group on Linux and gets its own binary on
+   macOS. For new test suites, use `velox_add_grouped_tests` when the suite
+   has many test files (10+) that link against large libraries like velox
+   core — each individual binary pays the full link cost, so grouping
+   significantly reduces total CI build time. For suites with only a few
+   test files or lightweight dependencies, use `add_executable` / `add_test`.
 
 4. **Code Comments**: Appropriately add comments to your code and document APIs.
    * As a library, Velox code is optimized for the reader, not the writer.

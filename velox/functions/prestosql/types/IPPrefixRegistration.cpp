@@ -21,33 +21,12 @@
 #include "velox/common/fuzzer/ConstrainedGenerators.h"
 #include "velox/expression/CastExpr.h"
 #include "velox/functions/prestosql/types/IPPrefixType.h"
+#include "velox/type/CastRegistry.h"
 
 namespace facebook::velox {
 namespace {
 class IPPrefixCastOperator : public exec::CastOperator {
  public:
-  bool isSupportedFromType(const TypePtr& other) const override {
-    switch (other->kind()) {
-      case TypeKind::VARCHAR:
-        return true;
-      case TypeKind::HUGEINT:
-        return isIPAddressType(other);
-      default:
-        return false;
-    }
-  }
-
-  bool isSupportedToType(const TypePtr& other) const override {
-    switch (other->kind()) {
-      case TypeKind::VARCHAR:
-        return true;
-      case TypeKind::HUGEINT:
-        return isIPAddressType(other);
-      default:
-        return false;
-    }
-  }
-
   void castTo(
       const BaseVector& input,
       exec::EvalCtx& context,
@@ -191,6 +170,12 @@ class IPPrefixTypeFactory : public CustomTypeFactory {
 } // namespace
 
 void registerIPPrefixType() {
-  registerCustomType("ipprefix", std::make_unique<const IPPrefixTypeFactory>());
+  registerCustomType("IPPREFIX", std::make_unique<const IPPrefixTypeFactory>());
+  registerCastRules({
+      {.fromType = "VARCHAR", .toType = "IPPREFIX"},
+      {.fromType = "IPADDRESS", .toType = "IPPREFIX"},
+      {.fromType = "IPPREFIX", .toType = "VARCHAR"},
+      {.fromType = "IPPREFIX", .toType = "IPADDRESS"},
+  });
 }
 } // namespace facebook::velox

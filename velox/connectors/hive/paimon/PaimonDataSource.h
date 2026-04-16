@@ -20,11 +20,22 @@
 
 namespace facebook::velox::connector::hive::paimon {
 
+class PaimonConnectorSplit;
+
 /// Paimon-specific data source that extends FileDataSource.
 ///
-/// Handles PaimonConnectorSplit which may contain multiple data files
-/// in a single logical split (one per LSM-tree level in a bucket).
-/// Currently only supports append-only tables with rawConvertible=true.
+/// Acts as an orchestrator that selects the right reading strategy based on
+/// split properties:
+///
+///   rawConvertible=true (append-only or fully-compacted primary-key):
+///     Creates a PaimonSplitReader that handles multi-file iteration,
+///     deletion vectors, and _rowkind internally. FileDataSource::next()
+///     drives the read loop — no override needed.
+///
+///   rawConvertible=false (primary-key with overlapping keys):
+///     Merge path. A PaimonMergeReader opens all files simultaneously and
+///     performs a sorted merge by primary key, deduplicating by sequence
+///     number. Not yet implemented.
 class PaimonDataSource : public FileDataSource {
  public:
   PaimonDataSource(
@@ -38,8 +49,15 @@ class PaimonDataSource : public FileDataSource {
 
   void addSplit(std::shared_ptr<ConnectorSplit> split) override;
 
-  std::optional<RowVectorPtr> next(uint64_t size, velox::ContinueFuture& future)
-      override;
+ protected:
+  /// Creates a PaimonSplitReader with all data files from the Paimon split.
+  /// Called by FileDataSource::addSplit() during split initialization.
+  std::unique_ptr<FileSplitReader> createSplitReader() override;
+
+ private:
+  // The original Paimon split. Stored so createSplitReader() can access
+  // the full list of data files.
+  std::shared_ptr<PaimonConnectorSplit> paimonSplit_;
 };
 
 } // namespace facebook::velox::connector::hive::paimon

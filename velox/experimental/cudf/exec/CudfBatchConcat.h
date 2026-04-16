@@ -26,7 +26,7 @@
 
 namespace facebook::velox::cudf_velox {
 
-class CudfBatchConcat : public exec::Operator, public CudfOperator {
+class CudfBatchConcat : public CudfOperatorBase {
  public:
   CudfBatchConcat(
       int32_t operatorId,
@@ -38,15 +38,15 @@ class CudfBatchConcat : public exec::Operator, public CudfOperator {
         currentNumRows_ < targetRows_;
   }
 
-  void addInput(RowVectorPtr input) override;
-
-  RowVectorPtr getOutput() override;
-
   exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
     return exec::BlockingReason::kNotBlocked;
   }
 
   bool isFinished() override;
+
+ protected:
+  void doAddInput(RowVectorPtr input) override;
+  RowVectorPtr doGetOutput() override;
 
  private:
   exec::DriverCtx* const driverCtx_;

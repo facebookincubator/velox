@@ -269,14 +269,26 @@ function(velox_sources TARGET)
   endif()
 endfunction()
 
+# Group test sources into batched binaries to reduce link target count on CI.
+# On macOS, defaults to OFF so each test source gets its own binary and
+# individual tests are discoverable via 'ctest -R <TestName>'.
+if(APPLE)
+  option(VELOX_ENABLE_GROUPED_TESTS "Group test sources into batched binaries" OFF)
+else()
+  option(VELOX_ENABLE_GROUPED_TESTS "Group test sources into batched binaries" ON)
+endif()
+
 # Number of test source files per grouped test binary. Controls the trade-off
 # between link time (fewer groups = faster linking) and ctest parallelism
-# (more groups = more parallel test processes). Set to 1 for per-file binaries.
+# (more groups = more parallel test processes). Ignored when
+# VELOX_ENABLE_GROUPED_TESTS is OFF.
 set(VELOX_TESTS_PER_GROUP 10 CACHE STRING "Number of test source files per grouped test binary")
 
 # Creates grouped test binaries from a list of test sources. Groups tests into
 # batches of VELOX_TESTS_PER_GROUP to reduce link target count while
-# maintaining ctest parallelism.
+# maintaining ctest parallelism. When VELOX_ENABLE_GROUPED_TESTS is OFF, each
+# source file becomes its own binary named after the source file (without
+# extension), making individual tests discoverable via 'ctest -R <TestName>'.
 #
 # Usage:
 #   velox_add_grouped_tests(
@@ -291,6 +303,18 @@ function(velox_add_grouped_tests)
 
   if(NOT ARG_WORKING_DIRECTORY)
     set(ARG_WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+  endif()
+
+  if(NOT VELOX_ENABLE_GROUPED_TESTS)
+    # Create one binary per source file, named after the source file.
+    foreach(_source IN LISTS ARG_SOURCES)
+      get_filename_component(_name ${_source} NAME_WE)
+      set(_target "${ARG_PREFIX}_${_name}")
+      add_executable(${_target} ${_source} ${ARG_EXTRA_SOURCES})
+      add_test(NAME ${_target} COMMAND ${_target} WORKING_DIRECTORY ${ARG_WORKING_DIRECTORY})
+      target_link_libraries(${_target} ${ARG_DEPS})
+    endforeach()
+    return()
   endif()
 
   list(LENGTH ARG_SOURCES _num_sources)

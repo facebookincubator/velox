@@ -19,6 +19,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -29,7 +30,7 @@
 
 namespace facebook::velox::exec {
 
-std::string sanitizeName(const std::string& name);
+std::string sanitizeName(std::string_view name);
 
 /// Return a list of primitive type names.
 const std::vector<std::string> primitiveTypeNames();
