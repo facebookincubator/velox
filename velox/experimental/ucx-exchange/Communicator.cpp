@@ -240,10 +240,12 @@ void Communicator::run() {
 void Communicator::stop() {
   running_.store(false);
   signalWorker();
+  // Only log fields that are safe to read from an outside thread.
+  // endpoints_ is only accessed from the Communicator thread, so reading
+  // it here would be a data race.
   VLOG(3) << "In Communicator::stop "
           << " elements_.size(): " << elements_.size()
-          << " endpoints_.size(): " << endpoints_.size()
-          << " workQueue_._size(): " << workQueue_.size();
+          << " workQueue_.size(): " << workQueue_.size();
 }
 
 void Communicator::registerCommElement(std::shared_ptr<CommElement> comms) {
