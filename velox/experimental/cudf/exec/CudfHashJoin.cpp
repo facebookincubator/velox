@@ -418,13 +418,12 @@ CudfHashJoinProbe::CudfHashJoinProbe(
               << rightColumnIndicesToGather_[i];
     }
   }
-
-  // Note: Filter initialization is deferred to initializeFilter() to avoid
-  // memory allocations during driver initialization, which Velox disallows.
 }
 
-void CudfHashJoinProbe::initializeFilter() {
-  if (filterInitialized_ || !joinNode_->filter()) {
+void CudfHashJoinProbe::initialize() {
+  Operator::initialize();
+
+  if (!joinNode_->filter()) {
     return;
   }
 
@@ -465,7 +464,6 @@ void CudfHashJoinProbe::initializeFilter() {
         leftPrecomputeInstructions_,
         rightPrecomputeInstructions_);
   }
-  filterInitialized_ = true;
 }
 
 bool CudfHashJoinProbe::needsInput() const {
@@ -479,10 +477,6 @@ bool CudfHashJoinProbe::needsInput() const {
 }
 
 void CudfHashJoinProbe::addInput(RowVectorPtr input) {
-  // Initialize filter on first input (deferred from constructor to avoid
-  // memory allocations during driver initialization).
-  initializeFilter();
-
   if (skipInput_) {
     VELOX_CHECK_NULL(input_);
     return;
@@ -680,7 +674,7 @@ std::unique_ptr<cudf::table> CudfHashJoinProbe::filteredOutput(
         cudf::column_view)> func,
     rmm::cuda_stream_view stream) {
   VELOX_CHECK(
-      filterInitialized_, "Filter must be initialized before filteredOutput");
+      isInitialized(), "Filter must be initialized before filteredOutput");
   auto leftResult = cudf::gather(
       leftTableView, leftIndicesCol, oobPolicy, stream, get_output_mr());
   auto rightResult = cudf::gather(
@@ -738,7 +732,7 @@ std::unique_ptr<cudf::table> CudfHashJoinProbe::filteredOutputIndices(
     cudf::join_kind joinKind,
     rmm::cuda_stream_view stream) {
   VELOX_CHECK(
-      filterInitialized_,
+      isInitialized(),
       "Filter must be initialized before filteredOutputIndices");
   // Use extended views (with precomputed columns) for filter evaluation
   auto [filteredLeftJoinIndices, filteredRightJoinIndices] =
@@ -1645,10 +1639,6 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
   }
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
 
-  // Initialize filter if not already done (deferred from constructor to avoid
-  // memory allocations during driver initialization).
-  initializeFilter();
-
   if (finished_ or !hashObject_.has_value()) {
     return nullptr;
   }
@@ -1825,10 +1815,6 @@ bool CudfHashJoinProbe::skipProbeOnEmptyBuild() const {
 }
 
 exec::BlockingReason CudfHashJoinProbe::isBlocked(ContinueFuture* future) {
-  // Initialize filter if not already done (deferred from constructor to avoid
-  // memory allocations during driver initialization).
-  initializeFilter();
-
   if ((joinNode_->isRightJoin() || joinNode_->isRightSemiFilterJoin() ||
        joinNode_->isFullJoin()) &&
       hashObject_.has_value()) {

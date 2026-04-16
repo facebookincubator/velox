@@ -135,6 +135,8 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
       exec::DriverCtx* driverCtx,
       std::shared_ptr<const core::HashJoinNode> joinNode);
 
+  void initialize() override;
+
   bool needsInput() const override;
 
   void addInput(RowVectorPtr input) override;
@@ -176,8 +178,6 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
   std::optional<hash_type> hashObject_;
 
   // Filter related members
-  /** @brief Whether filter has been initialized (deferred from constructor) */
-  bool filterInitialized_{false};
   /** @brief CUDF AST tree for join filter evaluation */
   cudf::ast::tree tree_;
   /** @brief Scalar values used in filter expressions */
@@ -258,14 +258,6 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
   std::optional<rmm::cuda_stream_view> lastProbeStream_;
 
   static constexpr auto oobPolicy = cudf::out_of_bounds_policy::NULLIFY;
-
-  /**
-   * @brief Lazily initializes filter-related state.
-   *
-   * This is deferred from the constructor to avoid memory allocations during
-   * driver initialization, which Velox disallows.
-   */
-  void initializeFilter();
 
   /**
    * @brief Performs inner join between probe table and all build tables.
