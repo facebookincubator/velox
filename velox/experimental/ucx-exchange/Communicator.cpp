@@ -388,15 +388,22 @@ void Communicator::listenerCallback(ucp_conn_request_h conn_request) {
     endpoint->setCloseCallback(EndpointRef::onClose, epRef);
   }
   // Add this endpoint reference to the list of endpoints.
+  // NOTE: This runs inside a UCX listener callback (during worker progress),
+  // so we must not throw — throwing from a UCX callback is undefined behavior.
   unsigned long val = std::strtoul(port_str, nullptr, 10);
-  VELOX_CHECK(
-      val <= static_cast<unsigned long>(std::numeric_limits<uint16_t>::max()),
-      "Port out of range for uint16_t!");
+  if (val > static_cast<unsigned long>(std::numeric_limits<uint16_t>::max())) {
+    LOG(ERROR) << "listenerCallback: port out of range for uint16_t: " << val;
+    return;
+  }
 
   uint16_t port = static_cast<uint16_t>(val);
   HostPort hp(ip_str, port);
   auto res = endpoints_.insert(std::pair{hp, epRef});
-  VELOX_CHECK(res.second, "Endpoint already exists!");
+  if (!res.second) {
+    LOG(ERROR) << "listenerCallback: endpoint already exists for " << ip_str
+               << ":" << port;
+    return;
+  }
   acceptor_.registerEndpointRef(epRef);
 }
 
