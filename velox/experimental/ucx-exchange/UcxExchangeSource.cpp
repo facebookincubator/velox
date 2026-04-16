@@ -293,7 +293,7 @@ void UcxExchangeSource::enqueue(PackedTableWithStreamPtr data) {
 }
 
 void UcxExchangeSource::deliverEndMarker() {
-  if (!registered_) {
+  if (!registered_.load(std::memory_order_acquire)) {
     // Never registered with queue -- don't deliver end marker to avoid
     // spurious numCompleted_ increments.
     return;

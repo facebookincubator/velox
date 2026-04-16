@@ -89,7 +89,7 @@ class UcxExchangeSource
   /// source. Without this, deliverEndMarker() will not enqueue the nullptr
   /// (preventing spurious numCompleted_ increments for unregistered sources).
   void setRegistered() {
-    registered_ = true;
+    registered_.store(true, std::memory_order_release);
   }
 
   /// @brief Called by UcxExchangeClient::next() on the consumer (driver)
@@ -286,8 +286,9 @@ class UcxExchangeSource
   /// @brief True only after addSourceLocked() has been called for this source.
   /// Prevents deliverEndMarker() from incrementing numCompleted_ for sources
   /// that were never registered with the queue (e.g., created after client
-  /// close).
-  bool registered_{false};
+  /// close). Atomic because setRegistered() is called on the driver thread
+  /// while deliverEndMarker() reads it on the Communicator thread.
+  std::atomic<bool> registered_{false};
 
   /// True if the server detected that this source is on the same node.
   /// Set from the isIntraNodeTransfer flag in HandshakeResponse, which the
