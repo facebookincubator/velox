@@ -54,7 +54,7 @@ Geometry type is a plane. The shortest path between two points on the plane is a
 straight line. That means calculations on geometries (areas, distances, lengths,
 intersections, etc) can be calculated using cartesian mathematics and straight
 line vectors.</p>
-<p>Functions that begin with the <a href="#id12"><span class="problematic" id="id13">ST_</span></a> prefix are compliant with the <a href="#id14"><span class="problematic" id="id15">`SQL/MM Part 3:
+<p>Functions that begin with the <a href="#id11"><span class="problematic" id="id12">ST_</span></a> prefix are compliant with the <a href="#id13"><span class="problematic" id="id14">`SQL/MM Part 3:
 Spatial`_</span></a> specification`. As such, many Geometry functions assume that
 geometries that are operated on are both simple and valid. Functions may raise
 an exception or return an arbitrary value for non-simple or non-valid
@@ -337,14 +337,14 @@ returns null.</p>
 <dl class="py function">
 <dt class="sig sig-object py" id="ST_IsValid">
 <span class="sig-name descname"><span class="pre">ST_IsValid</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">valid:</span> <span class="pre">bool</span></span></span><a class="headerlink" href="#ST_IsValid" title="Link to this definition">¶</a></dt>
-<dd><p>Returns if <code class="docutils literal notranslate"><span class="pre">geometry</span></code> is valid, according to <a href="#id16"><span class="problematic" id="id17">`SQL/MM Part 3: Spatial`_</span></a>.
+<dd><p>Returns if <code class="docutils literal notranslate"><span class="pre">geometry</span></code> is valid, according to <a href="#id15"><span class="problematic" id="id16">`SQL/MM Part 3: Spatial`_</span></a>.
 Examples of non-valid geometries include Polygons with self-intersecting shells.</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="ST_IsSimple">
 <span class="sig-name descname"><span class="pre">ST_IsSimple</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">simple:</span> <span class="pre">bool</span></span></span><a class="headerlink" href="#ST_IsSimple" title="Link to this definition">¶</a></dt>
-<dd><p>Returns if <code class="docutils literal notranslate"><span class="pre">geometry</span></code> is simple, according to <a href="#id18"><span class="problematic" id="id19">`SQL/MM Part 3: Spatial`_</span></a>.
+<dd><p>Returns if <code class="docutils literal notranslate"><span class="pre">geometry</span></code> is simple, according to <a href="#id17"><span class="problematic" id="id18">`SQL/MM Part 3: Spatial`_</span></a>.
 Examples of non-simple geometries include LineStrings with self-intersections,
 Polygons with empty rings for holes, and more.</p>
 </dd></dl>
@@ -841,101 +841,6 @@ the dissolved covering would be [“0”, “10”]. Zoom levels from 0 to 23 ar
 </dd></dl>
 
 </section>
-<section id="s2-cell-functions">
-<h2>S2 Cell Functions<a class="headerlink" href="#s2-cell-functions" title="Link to this heading">¶</a></h2>
-<p><a class="reference external" href="http://s2geometry.io/">S2 Geometry</a> is a library for spherical geometry that
-decomposes the Earth’s surface into a hierarchy of cells. Unlike planar tiling
-systems (e.g., Bing Tiles), S2 cells have near-uniform area across all latitudes.</p>
-<p>Each cell is identified by a 64-bit <strong>cell ID</strong> (stored as <code class="docutils literal notranslate"><span class="pre">BIGINT</span></code>), which
-encodes both the cell’s position and level in the hierarchy. Cells are organized
-in 31 levels (0–30), where level 0 cells are the largest (covering roughly 1/6
-of Earth’s surface) and level 30 cells are the smallest (sub-centimeter).</p>
-<p>Cells can also be represented as compact hexadecimal <strong>tokens</strong> (e.g.,
-<code class="docutils literal notranslate"><span class="pre">'8085808b'</span></code>), which are shorter and human-readable. Use
-<code class="docutils literal notranslate"><span class="pre">s2_cell_from_token</span></code> and <code class="docutils literal notranslate"><span class="pre">s2_cell_to_token</span></code> to convert between the two
-representations.</p>
-<p>All functions operate on cell IDs (<code class="docutils literal notranslate"><span class="pre">BIGINT</span></code>) rather than tokens because cell
-IDs support direct integer comparison, efficient equi-joins and GROUP BY, and
-compose without casting (e.g., <code class="docutils literal notranslate"><span class="pre">s2_cell_contains(s2_cell_parent(id,</span> <span class="pre">10),</span> <span class="pre">id)</span></code>).
-Tokens are useful for human-readable output and interop with external systems
-that use the token format.</p>
-<dl class="py function">
-<dt class="sig sig-object py" id="s2_cell_area_sq_km">
-<span class="sig-name descname"><span class="pre">s2_cell_area_sq_km</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">cell_id</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bigint</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">area:</span> <span class="pre">double</span></span></span><a class="headerlink" href="#s2_cell_area_sq_km" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the area of the S2 cell in square kilometers.
-Returns an error if the cell ID is invalid.</p>
-</dd></dl>
-
-<dl class="py function">
-<dt class="sig sig-object py" id="s2_cell_contains">
-<span class="sig-name descname"><span class="pre">s2_cell_contains</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">parent_cell_id</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bigint</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">child_cell_id</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bigint</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#s2_cell_contains" title="Link to this definition">¶</a></dt>
-<dd><p>Returns <code class="docutils literal notranslate"><span class="pre">true</span></code> if the first S2 cell contains the second. Containment is
-hierarchical: a cell contains all of its descendants at finer levels.
-Returns an error if either cell ID is invalid.</p>
-</dd></dl>
-
-<dl class="py function">
-<dt class="sig sig-object py" id="s2_cell_from_token">
-<span class="sig-name descname"><span class="pre">s2_cell_from_token</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">cell_token</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">varchar</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">cell_id:</span> <span class="pre">bigint</span></span></span><a class="headerlink" href="#s2_cell_from_token" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the 64-bit S2 cell ID for the given cell token. The
-<code class="docutils literal notranslate"><span class="pre">cell_token</span></code> is a compact hexadecimal representation of the S2 cell.
-Returns an error if the cell token is invalid.</p>
-</dd></dl>
-
-<dl class="py function">
-<dt class="sig sig-object py" id="s2_cell_level">
-<span class="sig-name descname"><span class="pre">s2_cell_level</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">cell_id</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bigint</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">level:</span> <span class="pre">integer</span></span></span><a class="headerlink" href="#s2_cell_level" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the level of the S2 cell, from 0 (coarsest) to 30 (finest).
-Returns an error if the cell ID is invalid.</p>
-</dd></dl>
-
-<dl class="py function">
-<dt class="sig sig-object py" id="s2_cell_parent">
-<span class="sig-name descname"><span class="pre">s2_cell_parent</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">cell_id</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bigint</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">level</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">integer</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">parent_id:</span> <span class="pre">bigint</span></span></span><a class="headerlink" href="#s2_cell_parent" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the parent S2 cell ID at the given <code class="docutils literal notranslate"><span class="pre">level</span></code>. If the cell is
-already at or above the given level, returns the same cell ID. The
-<code class="docutils literal notranslate"><span class="pre">level</span></code> must be in the <code class="docutils literal notranslate"><span class="pre">[0,</span> <span class="pre">30]</span></code> range. Returns an error if the cell
-ID is invalid or the level is out of range.</p>
-</dd></dl>
-
-<dl class="py function">
-<dt class="sig sig-object py" id="s2_cell_to_token">
-<span class="sig-name descname"><span class="pre">s2_cell_to_token</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">cell_id</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bigint</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">cell_token:</span> <span class="pre">varchar</span></span></span><a class="headerlink" href="#s2_cell_to_token" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the compact hexadecimal token representation of the S2 cell.
-Returns an error if the cell ID is invalid.</p>
-</dd></dl>
-
-<dl class="py function">
-<dt class="sig sig-object py" id="s2_cells">
-<span class="sig-name descname"><span class="pre">s2_cells</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry:</span> <span class="pre">Geometry</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">level:</span> <span class="pre">integer)</span> <span class="pre">-&gt;</span> <span class="pre">cell_ids:</span> <span class="pre">array(bigint</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#s2_cells" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the set of S2 cell IDs that cover the given geometry at a fixed
-<code class="docutils literal notranslate"><span class="pre">level</span></code>. All returned cells are at the same level. Supports Point,
-LineString, Polygon, and their Multi variants. Empty geometries return an
-empty array, null geometries return null. The <code class="docutils literal notranslate"><span class="pre">level</span></code> must be in the
-<code class="docutils literal notranslate"><span class="pre">[0,</span> <span class="pre">30]</span></code> range.</p>
-</dd></dl>
-
-<dl class="py function">
-<dt class="sig sig-object py" id="id11">
-<span class="sig-name descname"><span class="pre">s2_cells</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry:</span> <span class="pre">Geometry</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">min_level:</span> <span class="pre">integer</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_level:</span> <span class="pre">integer</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_cells:</span> <span class="pre">integer)</span> <span class="pre">-&gt;</span> <span class="pre">cell_ids:</span> <span class="pre">array(bigint</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#id11" title="Link to this definition">¶</a></dt>
-<dd><p>Returns a compact set of S2 cell IDs at mixed levels that cover the given
-geometry, similar to <code class="docutils literal notranslate"><span class="pre">geometry_to_dissolved_bing_tiles</span></code>. The coverer uses
-large cells (at <code class="docutils literal notranslate"><span class="pre">min_level</span></code>) for interiors and small cells (up to
-<code class="docutils literal notranslate"><span class="pre">max_level</span></code>) for boundaries, targeting at most <code class="docutils literal notranslate"><span class="pre">max_cells</span></code> cells. This
-is useful for compact spatial indexing of regions like cities or countries.
-Both levels must be in the <code class="docutils literal notranslate"><span class="pre">[0,</span> <span class="pre">30]</span></code> range with <code class="docutils literal notranslate"><span class="pre">min_level</span> <span class="pre">&lt;=</span> <span class="pre">max_level</span></code>,
-and <code class="docutils literal notranslate"><span class="pre">max_cells</span></code> must be &gt;= 1. Empty geometries return an empty array,
-null geometries return null.</p>
-<p>Note: <code class="docutils literal notranslate"><span class="pre">max_cells</span></code> is a soft limit. Up to 6 cells may be returned
-regardless of <code class="docutils literal notranslate"><span class="pre">max_cells</span></code> if the region intersects multiple cube faces
-of the S2 projection. <code class="docutils literal notranslate"><span class="pre">min_level</span></code> takes priority over <code class="docutils literal notranslate"><span class="pre">max_cells</span></code> —
-cells below <code class="docutils literal notranslate"><span class="pre">min_level</span></code> are never used even if this causes more cells
-to be returned. If <code class="docutils literal notranslate"><span class="pre">max_cells</span></code> is less than 4, the covering area may be
-significantly larger than the original region. A value of 8 or higher is
-recommended for a reasonable approximation.</p>
-</dd></dl>
-
-</section>
 </section>
 
 
@@ -1055,17 +960,6 @@ recommended for a reasonable approximation.</p>
 <li><a class="reference internal" href="#bing_tile_quadkey"><code class="docutils literal notranslate"><span class="pre">bing_tile_quadkey()</span></code></a></li>
 <li><a class="reference internal" href="#geometry_to_bing_tiles"><code class="docutils literal notranslate"><span class="pre">geometry_to_bing_tiles()</span></code></a></li>
 <li><a class="reference internal" href="#geometry_to_dissolved_bing_tiles"><code class="docutils literal notranslate"><span class="pre">geometry_to_dissolved_bing_tiles()</span></code></a></li>
-</ul>
-</li>
-<li><a class="reference internal" href="#s2-cell-functions">S2 Cell Functions</a><ul>
-<li><a class="reference internal" href="#s2_cell_area_sq_km"><code class="docutils literal notranslate"><span class="pre">s2_cell_area_sq_km()</span></code></a></li>
-<li><a class="reference internal" href="#s2_cell_contains"><code class="docutils literal notranslate"><span class="pre">s2_cell_contains()</span></code></a></li>
-<li><a class="reference internal" href="#s2_cell_from_token"><code class="docutils literal notranslate"><span class="pre">s2_cell_from_token()</span></code></a></li>
-<li><a class="reference internal" href="#s2_cell_level"><code class="docutils literal notranslate"><span class="pre">s2_cell_level()</span></code></a></li>
-<li><a class="reference internal" href="#s2_cell_parent"><code class="docutils literal notranslate"><span class="pre">s2_cell_parent()</span></code></a></li>
-<li><a class="reference internal" href="#s2_cell_to_token"><code class="docutils literal notranslate"><span class="pre">s2_cell_to_token()</span></code></a></li>
-<li><a class="reference internal" href="#s2_cells"><code class="docutils literal notranslate"><span class="pre">s2_cells()</span></code></a></li>
-<li><a class="reference internal" href="#id11"><code class="docutils literal notranslate"><span class="pre">s2_cells()</span></code></a></li>
 </ul>
 </li>
 </ul>
