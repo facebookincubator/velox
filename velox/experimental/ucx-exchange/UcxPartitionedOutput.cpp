@@ -318,7 +318,7 @@ void UcxPartitionedOutput::equalPartition(
   std::vector<cudf::size_type> offsets;
   cudf::size_type size = tableView.num_rows();
   for (int i = 1; i < numPartitions_; ++i) {
-    cudf::size_type idx = size / (numPartitions_ / (double)i);
+    cudf::size_type idx = size * i / numPartitions_;
     offsets.push_back(idx);
   }
   splitAndEnqueue(tableView, offsets, stream);
