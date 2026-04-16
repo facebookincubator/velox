@@ -19,7 +19,8 @@
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/common/base/Exceptions.h"
-#include "velox/expression/ConstantExpr.h"
+#include "velox/common/memory/Memory.h"
+#include "velox/core/Expressions.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
 
@@ -47,16 +48,19 @@
 namespace facebook::velox::cudf_velox {
 namespace {
 
-int64_t readConstantIntegralValue(const velox::exec::ConstantExpr& expr) {
+int64_t readConstantIntegralValue(const core::ConstantTypedExpr& expr) {
+  const auto vec = expr.hasValueVector()
+      ? expr.valueVector()
+      : expr.toConstantVector(memory::memoryManager()->tracePool());
   switch (expr.type()->kind()) {
     case TypeKind::TINYINT:
-      return expr.value()->as<SimpleVector<int8_t>>()->valueAt(0);
+      return vec->as<SimpleVector<int8_t>>()->valueAt(0);
     case TypeKind::SMALLINT:
-      return expr.value()->as<SimpleVector<int16_t>>()->valueAt(0);
+      return vec->as<SimpleVector<int16_t>>()->valueAt(0);
     case TypeKind::INTEGER:
-      return expr.value()->as<SimpleVector<int32_t>>()->valueAt(0);
+      return vec->as<SimpleVector<int32_t>>()->valueAt(0);
     case TypeKind::BIGINT:
-      return expr.value()->as<SimpleVector<int64_t>>()->valueAt(0);
+      return vec->as<SimpleVector<int64_t>>()->valueAt(0);
     default:
       VELOX_UNSUPPORTED(
           "Unsupported array access index type {}", expr.type()->toString());
@@ -485,12 +489,8 @@ std::unique_ptr<cudf::column> makeRepeatedArrayColumn(
 // so validation and extraction can stay in one implementation.
 class ArrayAccessFunction : public CudfFunction {
  public:
-  ArrayAccessFunction(
-      const std::shared_ptr<velox::exec::Expr>& expr,
-      ArrayAccessPolicy policy)
+  ArrayAccessFunction(const core::TypedExprPtr& expr, ArrayAccessPolicy policy)
       : policy_(policy) {
-    using velox::exec::ConstantExpr;
-
     VELOX_CHECK_EQ(
         expr->inputs().size(), 2, "array access expects exactly 2 inputs");
 
@@ -499,8 +499,12 @@ class ArrayAccessFunction : public CudfFunction {
     // which arises in Q70's ROLLUP bitmask projection. Cache the Velox vector
     // so we can convert it to a cuDF lists column at eval time.
     if (auto constArrayExpr =
-            std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[0])) {
-      constantArrayVector_ = constArrayExpr->value();
+            std::dynamic_pointer_cast<const core::ConstantTypedExpr>(
+                expr->inputs()[0])) {
+      constantArrayVector_ = constArrayExpr->hasValueVector()
+          ? constArrayExpr->valueVector()
+          : constArrayExpr->toConstantVector(
+                memory::memoryManager()->tracePool());
     }
 
     // Literal indices are not passed as input columns during evaluation. Cache
@@ -509,9 +513,13 @@ class ArrayAccessFunction : public CudfFunction {
     // null behavior returns null for them instead of calling the vector
     // function, so leave constantIndex_ empty and produce an all-null result.
     if (auto indexExpr =
-            std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[1])) {
+            std::dynamic_pointer_cast<const core::ConstantTypedExpr>(
+                expr->inputs()[1])) {
       indexIsLiteral_ = true;
-      if (!indexExpr->value()->isNullAt(0)) {
+      const auto vec = indexExpr->hasValueVector()
+          ? indexExpr->valueVector()
+          : indexExpr->toConstantVector(memory::memoryManager()->tracePool());
+      if (!vec->isNullAt(0)) {
         constantIndex_ = readConstantIntegralValue(*indexExpr);
       }
     }
@@ -632,7 +640,7 @@ class ArrayAccessFunction : public CudfFunction {
 } // namespace
 
 std::shared_ptr<CudfFunction> makeArrayAccessFunction(
-    const std::shared_ptr<velox::exec::Expr>& expr,
+    const core::TypedExprPtr& expr,
     ArrayAccessPolicy policy) {
   return std::make_shared<ArrayAccessFunction>(expr, policy);
 }

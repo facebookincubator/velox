@@ -13,17 +13,22 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
-#include "velox/experimental/cudf/expression/CommonFunctions.h"
-#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+namespace facebook::velox::core {
+class QueryCtx;
+} // namespace facebook::velox::core
 
-#include <memory>
+namespace facebook::velox::memory {
+class MemoryPool;
+} // namespace facebook::velox::memory
 
 namespace facebook::velox::cudf_velox {
 
-std::shared_ptr<CudfFunction> makeArrayAccessFunction(
-    const core::TypedExprPtr& expr,
-    ArrayAccessPolicy policy);
+struct CudfExprCtx {
+  core::QueryCtx* queryCtx;
+  memory::MemoryPool* pool;
+};
 
 } // namespace facebook::velox::cudf_velox

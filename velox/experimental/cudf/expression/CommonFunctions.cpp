@@ -44,8 +44,7 @@ void registerArrayAccessFunction(
     std::vector<exec::FunctionSignaturePtr> signatures) {
   registerCudfFunction(
       name,
-      [policy](
-          const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+      [policy](const std::string&, const core::TypedExprPtr& expr) {
         return makeArrayAccessFunction(expr, policy);
       },
       signatures);

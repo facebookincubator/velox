@@ -16,7 +16,8 @@
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/expression/prestosql/DatePlusIntervalFunction.h"
 
-#include "velox/expression/ConstantExpr.h"
+#include "velox/common/memory/Memory.h"
+#include "velox/core/Expressions.h"
 #include "velox/type/Time.h"
 #include "velox/vector/ConstantVector.h"
 
@@ -59,7 +60,7 @@ void checkAllTrue(
 } // namespace
 
 DatePlusIntervalFunction::DatePlusIntervalFunction(
-    const std::shared_ptr<velox::exec::Expr>& expr) {
+    const core::TypedExprPtr& expr) {
   VELOX_CHECK_EQ(
       expr->inputs().size(),
       2,
@@ -78,9 +79,12 @@ DatePlusIntervalFunction::DatePlusIntervalFunction(
   // convert to a duration_days scalar. A constant-null interval leaves both
   // durationDaysLiteral_ and the column-path scalars unset; eval() short-
   // circuits to an all-null result.
-  if (auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
-          expr->inputs()[1])) {
-    auto constValue = constExpr->value();
+  if (expr->inputs()[1]->isConstantKind()) {
+    const auto* constExpr =
+        expr->inputs()[1]->asUnchecked<core::ConstantTypedExpr>();
+    const auto constValue = constExpr->hasValueVector()
+        ? constExpr->valueVector()
+        : constExpr->toConstantVector(memory::memoryManager()->tracePool());
     if (!constValue->isNullAt(0)) {
       auto millis = constValue->as<ConstantVector<int64_t>>()->value();
       VELOX_USER_CHECK_EQ(

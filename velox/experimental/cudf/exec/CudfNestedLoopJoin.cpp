@@ -291,20 +291,18 @@ void CudfNestedLoopJoinProbe::initialize() {
     return;
   }
 
-  exec::ExprSet exprs({joinNode_->joinCondition()}, operatorCtx_->execCtx());
-  VELOX_CHECK_EQ(exprs.exprs().size(), 1);
-
-  // Convert Velox expression to cuDF AST expression tree.
+  // Convert Velox typed expression to cuDF AST expression tree.
   // The AST will be passed to cudf::conditional_inner_join() for GPU
   // evaluation.
   createAstTree(
-      exprs.exprs()[0],
+      joinNode_->joinCondition(),
       tree_,
       scalars_,
       probeType_,
       buildType_,
       leftPrecomputeInstructions_,
-      rightPrecomputeInstructions_);
+      rightPrecomputeInstructions_,
+      CudfExprCtx{operatorCtx_->execCtx()->queryCtx(), operatorCtx_->pool()});
 
   // Set hasFilter_ only after the AST has been fully built so that a throw
   // from createAstTree() does not leave the operator marked as having a filter
