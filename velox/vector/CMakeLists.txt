@@ -21,6 +21,7 @@ velox_add_library(
   FlatMapVector.cpp
   FlatVector.cpp
   LazyVector.cpp
+  MapConcat.cpp
   SelectivityVector.cpp
   SequenceVector.cpp
   SimpleVector.cpp
@@ -50,6 +51,7 @@ velox_add_library(
   FlatVector.h
   FunctionVector.h
   LazyVector.h
+  MapConcat.h
   NullsBuilder.h
   SelectivityVector.h
   SequenceVector-inl.h
