@@ -15,9 +15,8 @@
  */
 #include <cstring>
 
-#include "velox/common/memory/HashStringAllocator.h"
 #include "velox/exec/Aggregate.h"
-#include "velox/functions/lib/TDigest.h"
+#include "velox/functions/prestosql/aggregates/TDigestAccumulator.h"
 #include "velox/vector/FlatVector.h"
 
 using namespace facebook::velox::exec;
@@ -35,16 +34,6 @@ constexpr double kMaxCompression{1'000.0};
 // This ensures quantile bounds survive partial-to-final distributed
 // aggregation.
 constexpr size_t kQuantileBoundsHeaderSize{2 * sizeof(double)};
-
-// Accumulates a TDigest sketch for computing the winsorized mean of a set of
-// values. Stores the TDigest and the optional compression parameter.
-struct WinsorizedMeanAccumulator {
-  explicit WinsorizedMeanAccumulator(HashStringAllocator* allocator)
-      : digest(StlAllocator<double>(allocator)) {}
-
-  double compression{0.0};
-  facebook::velox::functions::TDigest<StlAllocator<double>> digest;
-};
 
 // Velox aggregate function implementing approx_winsorized_mean using
 // TDigest-based quantile estimation. Builds a TDigest in a single pass,
@@ -79,19 +68,19 @@ class ApproxWinsorizedMeanAggregate : public exec::Aggregate {
       : exec::Aggregate(resultType), hasCompression_{hasCompression} {}
 
   int32_t accumulatorFixedWidthSize() const override {
-    return sizeof(WinsorizedMeanAccumulator);
+    return sizeof(TDigestAccumulator);
   }
 
   int32_t accumulatorAlignmentSize() const override {
-    return alignof(WinsorizedMeanAccumulator);
+    return alignof(TDigestAccumulator);
   }
 
   bool isFixedSize() const override {
     return false;
   }
 
-  WinsorizedMeanAccumulator* getAccumulator(char* group) {
-    return value<WinsorizedMeanAccumulator>(group);
+  TDigestAccumulator* getAccumulator(char* group) {
+    return value<TDigestAccumulator>(group);
   }
 
   // Decodes raw input columns: args[0]=value, args[1]=lower, args[2]=upper,
@@ -135,7 +124,7 @@ class ApproxWinsorizedMeanAggregate : public exec::Aggregate {
   // Validates compression is positive, at most kMaxCompression, and consistent
   // across rows. Clamps to kMinCompression and applies to the accumulator.
   void checkAndSetCompression(
-      WinsorizedMeanAccumulator* accumulator,
+      TDigestAccumulator* accumulator,
       vector_size_t row) {
     double compressionValue = decodedCompression_.valueAt<double>(row);
     VELOX_USER_CHECK(
@@ -237,7 +226,7 @@ class ApproxWinsorizedMeanAggregate : public exec::Aggregate {
         return;
       }
 
-      WinsorizedMeanAccumulator* accumulator;
+      TDigestAccumulator* accumulator;
       if constexpr (kSingleGroup) {
         accumulator = getAccumulator(group);
       } else {
@@ -340,14 +329,14 @@ class ApproxWinsorizedMeanAggregate : public exec::Aggregate {
     exec::Aggregate::setAllNulls(groups, indices);
     for (auto i : indices) {
       auto group = groups[i];
-      new (group + offset_) WinsorizedMeanAccumulator(allocator_);
+      new (group + offset_) TDigestAccumulator(allocator_);
     }
   }
 
   void destroyInternal(folly::Range<char**> groups) override {
     for (auto group : groups) {
       if (isInitialized(group)) {
-        value<WinsorizedMeanAccumulator>(group)->~WinsorizedMeanAccumulator();
+        value<TDigestAccumulator>(group)->~TDigestAccumulator();
       }
     }
   }
