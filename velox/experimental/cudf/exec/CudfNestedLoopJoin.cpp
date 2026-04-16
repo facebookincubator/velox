@@ -115,21 +115,21 @@ CudfNestedLoopJoinBuild::CudfNestedLoopJoinBuild(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
     std::shared_ptr<const core::NestedLoopJoinNode> joinNode)
-    : exec::Operator(
+    : CudfOperatorBase(
+          operatorId,
           driverCtx,
           nullptr,
-          operatorId,
           joinNode->id(),
-          "CudfNestedLoopJoinBuild"),
-      NvtxHelper(
+          "CudfNestedLoopJoinBuild",
           nvtx3::rgb{65, 105, 225}, // Royal Blue
-          operatorId,
-          fmt::format("[{}]", joinNode->id())),
+          NvtxMethodFlag::kNoMoreInput,
+          std::nullopt,
+          joinNode),
       joinNode_(joinNode) {}
 
 // Accumulates input batches in memory.
 // All batches are kept as CudfVectors (GPU memory) until join completes.
-void CudfNestedLoopJoinBuild::addInput(RowVectorPtr input) {
+void CudfNestedLoopJoinBuild::doAddInput(RowVectorPtr input) {
   if (input->size() > 0) {
     auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
     VELOX_CHECK_NOT_NULL(cudfInput);
@@ -141,7 +141,7 @@ bool CudfNestedLoopJoinBuild::needsInput() const {
   return !noMoreInput_;
 }
 
-RowVectorPtr CudfNestedLoopJoinBuild::getOutput() {
+RowVectorPtr CudfNestedLoopJoinBuild::doGetOutput() {
   return nullptr;
 }
 
@@ -153,8 +153,7 @@ RowVectorPtr CudfNestedLoopJoinBuild::getOutput() {
 // - allPeersFinished() chooses ONE operator to collect and transfer data
 // - Other operators just return and mark themselves finished
 // - The chosen operator collects data from all peers and sets it on the bridge
-void CudfNestedLoopJoinBuild::noMoreInput() {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+void CudfNestedLoopJoinBuild::doNoMoreInput() {
   Operator::noMoreInput();
 
   std::vector<ContinuePromise> promises;
@@ -225,7 +224,7 @@ bool CudfNestedLoopJoinBuild::isFinished() {
   return !future_.valid() && noMoreInput_;
 }
 
-void CudfNestedLoopJoinBuild::close() {
+void CudfNestedLoopJoinBuild::doClose() {
   inputs_.clear();
   Operator::close();
 }
@@ -240,16 +239,16 @@ CudfNestedLoopJoinProbe::CudfNestedLoopJoinProbe(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
     std::shared_ptr<const core::NestedLoopJoinNode> joinNode)
-    : exec::Operator(
+    : CudfOperatorBase(
+          operatorId,
           driverCtx,
           joinNode->outputType(),
-          operatorId,
           joinNode->id(),
-          "CudfNestedLoopJoinProbe"),
-      NvtxHelper(
+          "CudfNestedLoopJoinProbe",
           nvtx3::rgb{0, 128, 128}, // Teal
-          operatorId,
-          fmt::format("[{}]", joinNode->id())),
+          NvtxMethodFlag::kGetOutput | NvtxMethodFlag::kNoMoreInput,
+          std::nullopt,
+          joinNode),
       joinNode_(joinNode) {
   joinType_ = joinNode_->joinType();
   probeType_ = joinNode_->sources()[0]->outputType();
@@ -302,7 +301,7 @@ CudfNestedLoopJoinProbe::CudfNestedLoopJoinProbe(
   }
 }
 
-void CudfNestedLoopJoinProbe::close() {
+void CudfNestedLoopJoinProbe::doClose() {
   Operator::close();
   buildData_.reset();
   probeMatchedFlags_.reset();
@@ -317,14 +316,13 @@ bool CudfNestedLoopJoinProbe::needsInput() const {
       buildData_.has_value();
 }
 
-void CudfNestedLoopJoinProbe::addInput(RowVectorPtr input) {
+void CudfNestedLoopJoinProbe::doAddInput(RowVectorPtr input) {
   VELOX_CHECK_NULL(input_, "Probe input already set");
   input_ = std::move(input);
   probeMatchedFlags_.reset();
 }
 
-void CudfNestedLoopJoinProbe::noMoreInput() {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+void CudfNestedLoopJoinProbe::doNoMoreInput() {
   Operator::noMoreInput();
 
   if (!isRightOrFullJoin()) {
@@ -786,9 +784,7 @@ RowVectorPtr CudfNestedLoopJoinProbe::emitBuildMismatchRows(
       operatorCtx_->pool(), outputType_, size, std::move(out), stream);
 }
 
-RowVectorPtr CudfNestedLoopJoinProbe::getOutput() {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
-
+RowVectorPtr CudfNestedLoopJoinProbe::doGetOutput() {
   if (!input_) {
     // Right/full join: after all probe inputs, the last driver emits
     // unmatched build rows with null probe columns.

@@ -16,14 +16,13 @@
 
 #pragma once
 
-#include "velox/experimental/cudf/exec/NvtxHelper.h"
+#include "velox/experimental/cudf/exec/CudfOperator.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/PrecomputeInstruction.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/core/PlanNode.h"
 #include "velox/exec/JoinBridge.h"
-#include "velox/exec/Operator.h"
 
 #include <cudf/ast/expressions.hpp>
 #include <cudf/column/column.hpp>
@@ -79,26 +78,24 @@ class CudfNestedLoopJoinBridge : public exec::JoinBridge {
 ///
 /// Memory: All build-side data is kept in GPU memory until the join completes.
 /// For very large build sides, this could be memory-intensive.
-class CudfNestedLoopJoinBuild : public exec::Operator, public NvtxHelper {
+class CudfNestedLoopJoinBuild : public CudfOperatorBase {
  public:
   CudfNestedLoopJoinBuild(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
       std::shared_ptr<const core::NestedLoopJoinNode> joinNode);
 
-  void addInput(RowVectorPtr input) override;
-
   bool needsInput() const override;
-
-  RowVectorPtr getOutput() override;
-
-  void noMoreInput() override;
 
   exec::BlockingReason isBlocked(ContinueFuture* future) override;
 
   bool isFinished() override;
 
-  void close() override;
+ protected:
+  void doAddInput(RowVectorPtr input) override;
+  RowVectorPtr doGetOutput() override;
+  void doNoMoreInput() override;
+  void doClose() override;
 
  private:
   std::shared_ptr<const core::NestedLoopJoinNode> joinNode_;
@@ -145,7 +142,7 @@ class CudfNestedLoopJoinBuild : public exec::Operator, public NvtxHelper {
 ///
 /// Thread-safety: Each probe operator processes one batch at a time.
 /// Multiple probe operators can run concurrently on different batches.
-class CudfNestedLoopJoinProbe : public exec::Operator, public NvtxHelper {
+class CudfNestedLoopJoinProbe : public CudfOperatorBase {
  public:
   using build_data_type = CudfNestedLoopJoinBridge::build_data_type;
 
@@ -155,14 +152,6 @@ class CudfNestedLoopJoinProbe : public exec::Operator, public NvtxHelper {
       std::shared_ptr<const core::NestedLoopJoinNode> joinNode);
 
   bool needsInput() const override;
-
-  void addInput(RowVectorPtr input) override;
-
-  void noMoreInput() override;
-
-  RowVectorPtr getOutput() override;
-
-  void close() override;
 
   exec::BlockingReason isBlocked(ContinueFuture* future) override;
 
@@ -175,6 +164,12 @@ class CudfNestedLoopJoinProbe : public exec::Operator, public NvtxHelper {
         joinType == core::JoinType::kFull ||
         joinType == core::JoinType::kLeftSemiProject;
   }
+
+ protected:
+  void doAddInput(RowVectorPtr input) override;
+  RowVectorPtr doGetOutput() override;
+  void doNoMoreInput() override;
+  void doClose() override;
 
  private:
   /// Joins a single probe batch against the build table. Uses cross_join for
