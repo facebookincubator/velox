@@ -1304,7 +1304,8 @@ class PlanBuilder {
       const std::string& filter,
       const std::vector<std::string>& outputLayout,
       core::JoinType joinType = core::JoinType::kInner,
-      bool nullAware = false);
+      bool nullAware = false,
+      bool nullAsValue = false);
 
   /// Add a MergeJoinNode to join two inputs using one or more join keys and an
   /// optional filter. The caller is responsible to ensure that inputs are

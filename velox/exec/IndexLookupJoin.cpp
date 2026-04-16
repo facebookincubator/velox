@@ -324,6 +324,7 @@ IndexLookupJoin::IndexLookupJoin(
           spillConfig_.has_value() ? &(spillConfig_.value()) : nullptr)},
       connector_(
           connector::ConnectorRegistry::tryGet(
+              *driverCtx->task->queryCtx(),
               lookupTableHandle_->connectorId())),
       maxNumInputBatches_(
           1 + driverCtx->queryConfig().indexLookupJoinMaxPrefetchBatches()),

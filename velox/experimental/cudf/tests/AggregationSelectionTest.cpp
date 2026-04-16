@@ -202,9 +202,12 @@ TEST_F(CudfAggregationSelectionTest, complexGroupbyClauseExpressions) {
               makeFlatVector<int64_t>({10, 20, 30, 40, 50}),
           })})
           .project(
-              {"c0", "c1", "abs(c0) AS abs_c0"}) // abs is unsupported by CUDF
+              {"c0",
+               "c1",
+               "to_big_endian_64(c0) AS endian_c0"}) // to_big_endian_64 is
+                                                     // unsupported by CUDF
           .aggregation(
-              {"abs_c0"},
+              {"endian_c0"},
               {"sum(c1)"},
               {},
               core::AggregationNode::Step::kSingle,
