@@ -159,7 +159,6 @@ void CastExpr::applyCastKernel(
                                 }
                               };
 
-
   try {
     auto inputRowValue = input->valueAt(row);
 
