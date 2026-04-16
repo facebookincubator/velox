@@ -199,6 +199,12 @@ TEST_F(GetJsonObjectTest, incompleteJson) {
           R"({"my": {"info": {"name": "Alice", "age": "5", "id": "001"}}},)",
           "$['my']['info']"),
       R"({"name": "Alice", "age": "5", "id": "001"})");
+
+  // Incomplete json with wildcard.
+  EXPECT_EQ(getJsonObject(R"({"a":[1,2]},)", "$.a[*]"), "[1,2]");
+  EXPECT_EQ(getJsonObject(R"({"a":[1,2],})", "$.a[*]"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"a":[1,2,]})", "$.a[*]"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"a":[1,2,,3]})", "$.a[*]"), std::nullopt);
 }
 
 TEST_F(GetJsonObjectTest, number) {
@@ -233,6 +239,95 @@ TEST_F(GetJsonObjectTest, number) {
           R"({"nested": {"num": -1234567890123456789012345678901234567890 }})",
           "$.nested.num"),
       "-1234567890123456789012345678901234567890");
+}
+
+TEST_F(GetJsonObjectTest, wildcard) {
+  const std::string json =
+      R"({"store":{"fruit":[{"weight":8,"type":"apple"},{"weight":9,"type":"pear"}],)"
+      R"("basket":[[1,2,{"b":"y","a":"x"}],[3,4],[5,6]],)"
+      R"("book":[{"author":"Nigel Rees","title":"Sayings of the Century","category":"reference","price":8.95},)"
+      R"({"author":"Herman Melville","title":"Moby Dick","category":"fiction","price":8.99,"isbn":"0-553-21311-3"},)"
+      R"({"author":"J. R. R. Tolkien","title":"The Lord of the Rings","category":"fiction",)"
+      R"("reader":[{"age":25,"name":"bob"},{"age":26,"name":"jack"}],"price":22.99,"isbn":"0-395-19395-8"}],)"
+      R"("bicycle":{"price":19.95,"color":"red"}},"email":"amy@only_for_json_udf_test.net","owner":"amy","zip code":"94025","fb:testid":"1234"})";
+
+  EXPECT_EQ(
+      getJsonObject(json, "$.store.book[*]"),
+      R"([{"author":"Nigel Rees","title":"Sayings of the Century","category":"reference","price":8.95},)"
+      R"({"author":"Herman Melville","title":"Moby Dick","category":"fiction","price":8.99,"isbn":"0-553-21311-3"},)"
+      R"({"author":"J. R. R. Tolkien","title":"The Lord of the Rings","category":"fiction",)"
+      R"("reader":[{"age":25,"name":"bob"},{"age":26,"name":"jack"}],"price":22.99,"isbn":"0-395-19395-8"}])");
+  EXPECT_EQ(
+      getJsonObject(json, "$.store.book[*].category"),
+      R"(["reference","fiction","fiction"])");
+  EXPECT_EQ(
+      getJsonObject(json, "$.store.book[*].isbn"),
+      R"(["0-553-21311-3","0-395-19395-8"])");
+  EXPECT_EQ(
+      getJsonObject(json, "$.store.book[*].reader"),
+      R"([{"age":25,"name":"bob"},{"age":26,"name":"jack"}])");
+
+  EXPECT_EQ(getJsonObject(json, "$.store.book[*].reader[0].age"), "25");
+  EXPECT_EQ(getJsonObject(json, "$.store.book[*].reader[*].age"), "[25,26]");
+  EXPECT_EQ(
+      getJsonObject(json, "$.store.basket[*]"),
+      R"([[1,2,{"b":"y","a":"x"}],[3,4],[5,6]])");
+  EXPECT_EQ(
+      getJsonObject(json, "$.store.basket[0][*]"),
+      R"([1,2,{"b":"y","a":"x"}])");
+  EXPECT_EQ(
+      getJsonObject(json, "$.store.basket[*][*]"),
+      R"([1,2,{"b":"y","a":"x"},3,4,5,6])");
+  EXPECT_EQ(getJsonObject(json, "$.store.basket[0][*].b"), R"(["y"])");
+
+  // Number result for wildcard.
+  EXPECT_EQ(
+      getJsonObject(R"([{"a":1}, {"b":2}, {"a":3e-2}])", "$[*].a"), "[1,0.03]");
+  EXPECT_EQ(getJsonObject(R"({"a":[{"f":21e3}]})", "$.a[*].f"), "21000.0");
+  EXPECT_EQ(
+      getJsonObject(R"({"a":[{"f":21e3},{"f":-21E-3}]})", "$.a[*].f"),
+      "[21000.0,-0.021]");
+  EXPECT_EQ(getJsonObject(R"({"a":[{"i":-0}]})", "$.a[*].i"), "0");
+  EXPECT_EQ(getJsonObject(R"([21e3,-0])", "$[*]"), "[21000.0,0]");
+}
+
+TEST_F(GetJsonObjectTest, wildcardNested) {
+  EXPECT_EQ(getJsonObject(R"([1,null,2])", "$[*]"), "[1,null,2]");
+  EXPECT_EQ(getJsonObject(R"({"a":[1,2,3]})", "$.a[*]"), "[1,2,3]");
+  EXPECT_EQ(getJsonObject(R"({"a":[{"12": 1}]})", "$.a[*].12"), "1");
+  EXPECT_EQ(getJsonObject(R"({"a":[{"12": 1}]})", "$.a[*]['12']"), "1");
+  EXPECT_EQ(getJsonObject(R"({"a":[1]})", "$.a[*]"), "1");
+  EXPECT_EQ(getJsonObject(R"({"a":[]})", "$.a[*]"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"a":"hello"})", "$.a[*]"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"a":123})", "$.a[*]"), std::nullopt);
+
+  EXPECT_EQ(
+      getJsonObject(R"({"a":[{"x":1},{"y":2}]})", "$.a[*]"),
+      R"([{"x":1},{"y":2}])");
+  EXPECT_EQ(
+      getJsonObject(R"({"a":[{"b":1},{"c":2},{"b":3}]})", "$.a[*].b"), "[1,3]");
+  EXPECT_EQ(getJsonObject(R"({"a":[{"b":1},{"c":2}]})", "$.a[*].b"), "1");
+  EXPECT_EQ(
+      getJsonObject(R"({"a":[{"b":"x"},{"b":"y"}]})", "$.a[*].b"),
+      R"(["x","y"])");
+  EXPECT_EQ(
+      getJsonObject(R"({"a":[{"b":[1,2]},{"b":[3]}]})", "$.a[*].b[*]"),
+      "[[1,2],[3]]");
+  EXPECT_EQ(getJsonObject(R"([1,2,3])", "$[*]"), "[1,2,3]");
+  EXPECT_EQ(
+      getJsonObject(R"({"a":[1,"str",true]})", "$.a[*]"), R"([1,"str",true])");
+  EXPECT_EQ(
+      getJsonObject(R"({"a":[{"b":1},{"b":2}]})", "$['a'][*].b"), "[1,2]");
+  EXPECT_EQ(
+      getJsonObject(
+          R"({"a":{"b":[{"c":[10,20]},{"c":[30]}]}})", "$.a.b[*].c[*]"),
+      "[[10,20],[30]]");
+  EXPECT_EQ(
+      getJsonObject(R"({"a":[{"b":[1]},{"b":[]}]})", "$.a[*].b[*]"), "[1],[]");
+  EXPECT_EQ(getJsonObject(R"({"a":[[],[]]})", "$.a[0][*]"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"a":[[1,2],[3,4]]})", "$.a[*][*]"), "[1,2,3,4]");
+  EXPECT_EQ(
+      getJsonObject(R"({"a":[[1,2],3,[4,5]]})", "$.a[*][*]"), "[1,2,3,4,5]");
 }
 
 } // namespace

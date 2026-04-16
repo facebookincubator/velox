@@ -28,6 +28,77 @@
 namespace facebook::velox::functions::sparksql {
 
 namespace detail {
+template <typename T>
+bool appendSparkFormattedValue(
+    T& rawResult,
+    std::string& out,
+    bool quoteString) {
+  simdjson::ondemand::json_type type;
+  if (rawResult.type().get(type)) {
+    return false;
+  }
+
+  switch (type) {
+    case simdjson::ondemand::json_type::null:
+      out.append("null");
+      return true;
+    case simdjson::ondemand::json_type::number:
+      switch (rawResult.get_number_type()) {
+        case simdjson::ondemand::number_type::floating_point_number: {
+          double numberResult;
+          if (rawResult.get_double().get(numberResult)) {
+            return false;
+          }
+          out.append(
+              util::Converter<TypeKind::VARCHAR>::tryCast(numberResult)
+                  .value());
+          return true;
+        }
+        default: {
+          std::string_view intResult = trimToken(rawResult.raw_json_token());
+          // Spark uses Jackson to parse JSON, which does not preserve the
+          // negative sign for -0. See the implementation here:
+          // https://github.com/FasterXML/jackson-core/blob/jackson-core-2.19.2/src/main/java/com/fasterxml/jackson/core/util/TextBuffer.java#L699-L702
+          if (intResult == "-0") {
+            intResult = "0";
+          }
+          out.append(intResult);
+          // Advance the simdjson parsing position.
+          return !rawResult.get_double().error();
+        }
+      }
+    case simdjson::ondemand::json_type::boolean: {
+      bool boolResult;
+      if (rawResult.get_bool().get(boolResult)) {
+        return false;
+      }
+      out.append(boolResult ? "true" : "false");
+      return true;
+    }
+    case simdjson::ondemand::json_type::string:
+      if (!quoteString) {
+        std::string_view stringResult;
+        if (rawResult.get_string().get(stringResult)) {
+          return false;
+        }
+        out.append(stringResult);
+        return true;
+      }
+      [[fallthrough]];
+    case simdjson::ondemand::json_type::object:
+    case simdjson::ondemand::json_type::array: {
+      std::string_view raw;
+      if (simdjson::to_json_string(rawResult).get(raw)) {
+        return false;
+      }
+      out.append(raw);
+      return true;
+    }
+    default:
+      return false;
+  }
+}
+
 // Normalizes the JSON path to be Spark-compatible.
 //
 // Rules applied:
@@ -166,6 +237,336 @@ class JsonPathNormalizer {
   State state_{State::kAfterDollar};
 };
 
+// Parses a normalized path string into tokens and evaluates the path
+// against a simdjson document.
+class GetJsonObjectEvaluator {
+ private:
+  struct NamedToken {
+    std::string name;
+  };
+
+  struct IndexToken {
+    int64_t index;
+  };
+
+  struct WildcardToken {};
+
+  using PathToken = std::variant<NamedToken, IndexToken, WildcardToken>;
+
+  enum class WriteStyle { kRaw, kQuoted, kFlatten };
+
+ public:
+  explicit GetJsonObjectEvaluator(const std::string& normalizedPath) {
+    parse(normalizedPath);
+  }
+
+  template <typename T>
+  bool evaluate(T& doc, std::string& out, WriteStyle style = WriteStyle::kRaw) {
+    try {
+      return evaluatePath(doc, out, style, tokens_, 0);
+    } catch (const simdjson::simdjson_error&) {
+      out.clear();
+      return false;
+    }
+  }
+
+ private:
+  FOLLY_ALWAYS_INLINE void throwIfError(simdjson::error_code error) {
+    if (error != simdjson::SUCCESS) {
+      throw simdjson::simdjson_error(error);
+    }
+  }
+
+  void parse(const std::string& normalizedPath) {
+    size_t i = 0;
+    while (i < normalizedPath.size()) {
+      if (normalizedPath[i] == '.') {
+        i++;
+        size_t start = i;
+        while (i < normalizedPath.size() && normalizedPath[i] != '.' &&
+               normalizedPath[i] != '[') {
+          i++;
+        }
+        if (i > start) {
+          tokens_.emplace_back(
+              NamedToken{normalizedPath.substr(start, i - start)});
+        }
+      } else if (normalizedPath[i] == '[') {
+        i++;
+        if (i < normalizedPath.size() && normalizedPath[i] == '*') {
+          tokens_.emplace_back(WildcardToken{});
+          i += 2; // skip '*]'
+        } else {
+          size_t start = i;
+          while (i < normalizedPath.size() && normalizedPath[i] != ']') {
+            i++;
+          }
+          std::string content = normalizedPath.substr(start, i - start);
+          bool isNum = !content.empty();
+          for (char c : content) {
+            if (!std::isdigit(static_cast<unsigned char>(c))) {
+              isNum = false;
+              break;
+            }
+          }
+          if (isNum) {
+            tokens_.emplace_back(IndexToken{std::stoll(content)});
+          } else {
+            tokens_.emplace_back(NamedToken{content});
+          }
+          if (i < normalizedPath.size()) {
+            i++; // skip ']'
+          }
+        }
+      } else {
+        i++;
+      }
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE void appendCommaIfNeeded(std::string& out) {
+    if (!out.empty() && out.back() != '[') {
+      out += ',';
+    }
+  }
+
+  // Emits the current JSON subtree according to Spark's write style rules.
+  // - kRaw: writes string leaves without quotes
+  // - kFlatten: flattens an array into its parent output
+  // - all other cases: copy the current subtree verbatim.
+  template <typename T>
+  bool writeMatchedValue(
+      T& val,
+      std::string& out,
+      WriteStyle style,
+      const std::vector<PathToken>& tokens,
+      size_t tokenIdx) {
+    simdjson::ondemand::json_type type;
+    throwIfError(val.type().get(type));
+
+    if (type == simdjson::ondemand::json_type::array &&
+        style == WriteStyle::kFlatten) {
+      simdjson::ondemand::array arr;
+      throwIfError(val.get_array().get(arr));
+      bool dirty = false;
+      for (auto elem : arr) {
+        throwIfError(elem.error());
+        auto elemVal = elem.value_unsafe();
+        dirty |= evaluatePath(elemVal, out, style, tokens, tokenIdx);
+      }
+      return dirty;
+    }
+
+    appendCommaIfNeeded(out);
+    return appendSparkFormattedValue(val, out, style != WriteStyle::kRaw);
+  }
+
+  template <typename T>
+  bool evaluateNamedToken(
+      T& val,
+      std::string& out,
+      WriteStyle style,
+      const std::vector<PathToken>& tokens,
+      size_t tokenIdx,
+      simdjson::ondemand::json_type type) {
+    if (type != simdjson::ondemand::json_type::object || val.is_null()) {
+      return false;
+    }
+
+    const auto& name = std::get<NamedToken>(tokens[tokenIdx]).name;
+    simdjson::ondemand::object object;
+    throwIfError(val.get_object().get(object));
+    bool dirty = false;
+    for (auto field : object) {
+      throwIfError(field.error());
+      std::string_view key;
+      throwIfError(field.unescaped_key().get(key));
+      if (dirty || key != name) {
+        continue;
+      }
+      simdjson::ondemand::value fieldValue;
+      throwIfError(field.value().get(fieldValue));
+      if (fieldValue.is_null()) {
+        continue;
+      }
+      dirty = evaluatePath(fieldValue, out, style, tokens, tokenIdx + 1);
+    }
+    return dirty;
+  }
+
+  template <typename T>
+  bool evaluateIndexToken(
+      T& val,
+      std::string& out,
+      WriteStyle style,
+      const std::vector<PathToken>& tokens,
+      size_t tokenIdx,
+      simdjson::ondemand::json_type type) {
+    if (val.is_null()) {
+      return false;
+    }
+    int64_t targetIdx = std::get<IndexToken>(tokens[tokenIdx]).index;
+    bool nextIsWildcard =
+        (tokenIdx + 1 < tokens.size() &&
+         std::holds_alternative<WildcardToken>(tokens[tokenIdx + 1]));
+    WriteStyle nextStyle = nextIsWildcard ? WriteStyle::kQuoted : style;
+
+    if (type == simdjson::ondemand::json_type::array) {
+      simdjson::ondemand::array arr;
+      throwIfError(val.get_array().get(arr));
+      int64_t idx = 0;
+      bool dirty = false;
+      for (auto elem : arr) {
+        throwIfError(elem.error());
+        if (idx == targetIdx) {
+          auto elemVal = elem.value_unsafe();
+          if (elemVal.is_null()) {
+            return false;
+          }
+          dirty = evaluatePath(elemVal, out, nextStyle, tokens, tokenIdx + 1);
+        }
+        idx++;
+      }
+      return dirty;
+    }
+
+    if (type == simdjson::ondemand::json_type::object) {
+      auto fieldName = std::to_string(targetIdx);
+      simdjson::ondemand::object object;
+      throwIfError(val.get_object().get(object));
+      bool dirty = false;
+      for (auto field : object) {
+        throwIfError(field.error());
+        std::string_view key;
+        throwIfError(field.unescaped_key().get(key));
+        if (dirty || key != fieldName) {
+          continue;
+        }
+        simdjson::ondemand::value fieldValue;
+        throwIfError(field.value().get(fieldValue));
+        if (fieldValue.is_null()) {
+          continue;
+        }
+        dirty = evaluatePath(fieldValue, out, nextStyle, tokens, tokenIdx + 1);
+      }
+      return dirty;
+    }
+
+    return false;
+  }
+
+  template <typename T>
+  bool evaluateWildcardToken(
+      T& val,
+      std::string& out,
+      WriteStyle style,
+      const std::vector<PathToken>& tokens,
+      size_t tokenIdx,
+      simdjson::ondemand::json_type type) {
+    if (type != simdjson::ondemand::json_type::array || val.is_null()) {
+      return false;
+    }
+
+    simdjson::ondemand::array arr;
+    throwIfError(val.get_array().get(arr));
+
+    bool isDoubleWildcard =
+        (tokenIdx + 1 < tokens.size() &&
+         std::holds_alternative<WildcardToken>(tokens[tokenIdx + 1]));
+
+    if (isDoubleWildcard) {
+      std::string buffer;
+      bool dirty = false;
+      for (auto elem : arr) {
+        throwIfError(elem.error());
+        auto elemVal = elem.value_unsafe();
+        dirty |= evaluatePath(
+            elemVal, buffer, WriteStyle::kFlatten, tokens, tokenIdx + 2);
+      }
+      if (dirty) {
+        appendCommaIfNeeded(out);
+        out += '[';
+        out += buffer;
+        out += ']';
+      }
+      return dirty;
+    }
+
+    if (style != WriteStyle::kQuoted) {
+      WriteStyle nextStyle = (style == WriteStyle::kFlatten)
+          ? WriteStyle::kFlatten
+          : WriteStyle::kQuoted;
+      std::string buffer;
+      int dirty = 0;
+      for (auto elem : arr) {
+        throwIfError(elem.error());
+        auto elemVal = elem.value_unsafe();
+        dirty += evaluatePath(elemVal, buffer, nextStyle, tokens, tokenIdx + 1);
+      }
+      if (dirty > 1) {
+        appendCommaIfNeeded(out);
+        out += '[';
+        out += buffer;
+        out += ']';
+      } else if (dirty == 1) {
+        appendCommaIfNeeded(out);
+        out += buffer;
+      }
+      return dirty > 0;
+    }
+
+    appendCommaIfNeeded(out);
+    out += '[';
+    int dirty = 0;
+    for (auto elem : arr) {
+      throwIfError(elem.error());
+      auto elemVal = elem.value_unsafe();
+      dirty +=
+          evaluatePath(elemVal, out, WriteStyle::kQuoted, tokens, tokenIdx + 1);
+    }
+    out += ']';
+    return dirty > 0;
+  }
+
+  // Recursively evaluates the normalized path against the current JSON node.
+  // The recursion has two stages:
+  // 1. If all path tokens have been consumed, emit the current subtree using
+  //    Spark-compatible write rules.
+  // 2. Otherwise dispatch to the current token handler:
+  //    NamedToken scans object fields in order, IndexToken scans array/object
+  //    entries in order, and WildcardToken expands array elements with Spark's
+  //    flattening and single-element elision behavior.
+  // Any simdjson parse failure while consuming the current container throws and
+  // is converted to "no result" by evaluate().
+  template <typename T>
+  bool evaluatePath(
+      T& val,
+      std::string& out,
+      WriteStyle style,
+      const std::vector<PathToken>& tokens,
+      size_t tokenIdx) {
+    if (tokenIdx >= tokens.size()) {
+      return writeMatchedValue(val, out, style, tokens, tokenIdx);
+    }
+
+    const auto& token = tokens[tokenIdx];
+    simdjson::ondemand::json_type type;
+    throwIfError(val.type().get(type));
+
+    if (std::holds_alternative<NamedToken>(token)) {
+      return evaluateNamedToken(val, out, style, tokens, tokenIdx, type);
+    }
+
+    if (std::holds_alternative<IndexToken>(token)) {
+      return evaluateIndexToken(val, out, style, tokens, tokenIdx, type);
+    }
+
+    return evaluateWildcardToken(val, out, style, tokens, tokenIdx, type);
+  }
+
+  std::vector<PathToken> tokens_;
+};
+
 } // namespace detail
 
 /// Parses a JSON string and returns the value at the specified path.
@@ -185,6 +586,9 @@ struct GetJsonObjectFunction {
       const arg_type<Varchar>* jsonPath) {
     if (jsonPath != nullptr && checkJsonPath(*jsonPath)) {
       jsonPath_ = pathNormalizer_.normalize(*jsonPath);
+      if (hasWildcard(jsonPath_.value())) {
+        evaluator_.emplace(detail::GetJsonObjectEvaluator(jsonPath_.value()));
+      }
     }
   }
 
@@ -208,21 +612,41 @@ struct GetJsonObjectFunction {
       result.append(json);
       return true;
     }
+
     simdjson::ondemand::document jsonDoc;
     simdjson::padded_string paddedJson(json.data(), json.size());
     if (simdjsonParseIncomplete(paddedJson).get(jsonDoc)) {
       return false;
     }
+    if (hasWildcard(formattedJsonPath)) {
+      std::optional<detail::GetJsonObjectEvaluator> localEvaluator;
+      auto& evaluator = jsonPath_.has_value()
+          ? evaluator_.value()
+          : localEvaluator.emplace(formattedJsonPath);
+      std::string out;
+      bool matched = evaluator.evaluate(jsonDoc, out);
+      if (!matched || out.empty()) {
+        return false;
+      }
+      result.append(out);
+      return true;
+    }
+
     try {
       // Can return error result or throw exception possibly.
       auto rawResult = jsonDoc.at_path(formattedJsonPath);
       if (rawResult.error()) {
         return false;
       }
-
-      if (!extractStringResult(rawResult, result)) {
+      if (rawResult.type() == simdjson::ondemand::json_type::null) {
         return false;
       }
+
+      std::string out;
+      if (!detail::appendSparkFormattedValue(rawResult, out, false)) {
+        return false;
+      }
+      result.append(out);
     } catch (simdjson::simdjson_error&) {
       return false;
     }
@@ -239,73 +663,6 @@ struct GetJsonObjectFunction {
   FOLLY_ALWAYS_INLINE bool checkJsonPath(StringView jsonPath) {
     // Spark requires the first char in jsonPath is '$'.
     return std::string_view{jsonPath}.starts_with('$');
-  }
-
-  // Extracts a string representation from a simdjson result. Handles various
-  // JSON types including numbers, booleans, strings, objects, and arrays.
-  // Returns true if the conversion is successful. Otherwise, returns false.
-  bool extractStringResult(
-      simdjson::simdjson_result<simdjson::ondemand::value> rawResult,
-      out_type<Varchar>& result) {
-    std::stringstream ss;
-    switch (rawResult.type()) {
-      // For number and bool types, we need to explicitly get the value
-      // for specific types instead of using `ss << rawResult`. Thus, we
-      // can make simdjson's internal parsing position moved and then we
-      // can check the validity of ending character.
-      case simdjson::ondemand::json_type::number: {
-        switch (rawResult.get_number_type()) {
-          case simdjson::ondemand::number_type::floating_point_number: {
-            double numberResult;
-            if (!rawResult.get_double().get(numberResult)) {
-              result.append(
-                  util::Converter<TypeKind::VARCHAR>::tryCast(numberResult)
-                      .value());
-              return true;
-            }
-            return false;
-          }
-          default: {
-            std::string_view intResult = trimToken(rawResult.raw_json_token());
-            // Spark uses Jackson to parse JSON, which does not preserve the
-            // negative sign for -0. See the implementation here:
-            // https://github.com/FasterXML/jackson-core/blob/jackson-core-2.19.2/src/main/java/com/fasterxml/jackson/core/util/TextBuffer.java#L699-L702
-            if (intResult == "-0") {
-              intResult = "0";
-            }
-            result.append(intResult);
-            // Advance the simdjson parsing position.
-            return !rawResult.get_double().error();
-          }
-        }
-      }
-      case simdjson::ondemand::json_type::boolean: {
-        bool boolResult;
-        if (!rawResult.get_bool().get(boolResult)) {
-          result.append(boolResult ? "true" : "false");
-          return true;
-        }
-        return false;
-      }
-      case simdjson::ondemand::json_type::string: {
-        std::string_view stringResult;
-        if (!rawResult.get_string().get(stringResult)) {
-          result.append(stringResult);
-          return true;
-        }
-        return false;
-      }
-      // For nested case, e.g., for "{"my": {"hello": 10}}",
-      // "$.my" will return an object type.
-      case simdjson::ondemand::json_type::object:
-      case simdjson::ondemand::json_type::array: {
-        ss << rawResult;
-        result.append(ss.str());
-        return true;
-      }
-      default:
-        return false;
-    }
   }
 
   // Checks whether the obtained result is followed by valid char. Because
@@ -384,8 +741,15 @@ struct GetJsonObjectFunction {
     return (uc - '0' < 10U) || ((uc | 0x20) - 'a' < 6U);
   }
 
+  FOLLY_ALWAYS_INLINE bool hasWildcard(const std::string& path) {
+    return path.find("[*]") != std::string::npos;
+  }
+
   // Used for constant json path.
   std::optional<std::string> jsonPath_;
+
+  // Cached evaluator for constant paths.
+  std::optional<detail::GetJsonObjectEvaluator> evaluator_;
 
   detail::JsonPathNormalizer pathNormalizer_;
 };
