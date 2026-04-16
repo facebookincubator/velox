@@ -208,12 +208,8 @@ class UcxExchangeSource
 
   /// @brief For intra-node transfer: handles data retrieved from registry.
   /// @param data The packed_columns from registry (nullptr if atEnd or error)
-  /// @param producerStream The CUDA stream on which the data was produced
   /// @param atEnd True if this is end-of-stream
-  void onIntraNodeData(
-      std::shared_ptr<cudf::packed_columns> data,
-      rmm::cuda_stream_view producerStream,
-      bool atEnd);
+  void onIntraNodeData(std::shared_ptr<cudf::packed_columns> data, bool atEnd);
 
   /// @brief Sets the new state of this exchange source using
   /// sequential consistency. Logs transitions at VLOG(2).

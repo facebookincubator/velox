@@ -693,14 +693,11 @@ void UcxExchangeSource::waitForIntraNodeData() {
   }
 
   intraNodePollCount_ = 0;
-  // Pass the stream along with the data so the consumer can synchronize if
-  // needed
-  onIntraNodeData(std::move(result->data), result->stream, result->atEnd);
+  onIntraNodeData(std::move(result->data), result->atEnd);
 }
 
 void UcxExchangeSource::onIntraNodeData(
     std::shared_ptr<cudf::packed_columns> data,
-    rmm::cuda_stream_view producerStream,
     bool atEnd) {
   // Check if close() was called
   if (closed_.load(std::memory_order_acquire)) {

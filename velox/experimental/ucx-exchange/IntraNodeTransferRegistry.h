@@ -16,7 +16,6 @@
 #pragma once
 
 #include <cudf/contiguous_split.hpp>
-#include <rmm/cuda_stream_view.hpp>
 #include <condition_variable>
 #include <future>
 #include <map>
@@ -44,11 +43,9 @@ struct IntraNodeTransferKey {
   }
 };
 
-/// @brief Result from intra-node transfer containing data, stream, and end
-/// marker.
+/// @brief Result from intra-node transfer containing data and end marker.
 struct IntraNodeTransferResult {
   std::shared_ptr<cudf::packed_columns> data;
-  rmm::cuda_stream_view stream; // Stream on which data was produced
   bool atEnd{false}; // True if this is the end-of-stream marker
 };
 
@@ -57,8 +54,6 @@ struct IntraNodeTransferResult {
 /// retrieval; the source waits for data availability and retrieves it.
 struct IntraNodeTransferEntry {
   std::shared_ptr<cudf::packed_columns> data;
-  rmm::cuda_stream_view stream{
-      rmm::cuda_stream_default}; // Stream data was produced on
   bool atEnd{false}; // True if this is the end-of-stream marker
   std::promise<void> retrievedPromise; // Server waits on this after publishing
   std::condition_variable dataAvailable; // Source waits on this for data
@@ -87,16 +82,15 @@ class IntraNodeTransferRegistry {
 
   /// @brief Publish data for intra-node transfer with condition variable
   /// signaling. Server calls this to make data available to the source.
+  /// The producer must synchronize its CUDA stream before calling publish()
+  /// so that the GPU data is ready when the consumer reads it.
   /// @param key The unique key identifying this transfer (taskId, dest, seq)
   /// @param data The packed_columns data to share (nullptr for atEnd)
-  /// @param stream The CUDA stream on which the data was produced. Consumer
-  ///        must synchronize with this stream before using the data.
   /// @param atEnd True if this is the end-of-stream marker
   /// @return A future that completes when source has retrieved the data
   [[nodiscard]] std::future<void> publish(
       const IntraNodeTransferKey& key,
       std::shared_ptr<cudf::packed_columns> data,
-      rmm::cuda_stream_view stream,
       bool atEnd);
 
   /// @brief Non-blocking poll for intra-node transfer data.

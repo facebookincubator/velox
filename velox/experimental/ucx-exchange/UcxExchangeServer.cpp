@@ -252,12 +252,10 @@ void UcxExchangeServer::sendData() {
 
       IntraNodeTransferKey key{
           partitionKey_.taskId, partitionKey_.destination, sequenceNumber_};
-      // Stream value is unused: the consumer (UcxExchangeSource::
-      // onIntraNodeData) allocates its own pool stream for downstream ops.
       // dataPtr_ is already a shared_ptr, pass directly to share ownership.
       intraNodeRetrieveFuture_ =
           IntraNodeTransferRegistry::getInstance()->publish(
-              key, dataPtr_, rmm::cuda_stream_default, /*atEnd=*/false);
+              key, dataPtr_, /*atEnd=*/false);
       dataPtr_.reset();
       intraNodeAtEndPublished_ = false;
 
@@ -275,7 +273,7 @@ void UcxExchangeServer::sendData() {
           partitionKey_.taskId, partitionKey_.destination, sequenceNumber_};
       intraNodeRetrieveFuture_ =
           IntraNodeTransferRegistry::getInstance()->publish(
-              key, nullptr, rmm::cuda_stream_default, /*atEnd=*/true);
+              key, nullptr, /*atEnd=*/true);
       intraNodeAtEndPublished_ = true;
 
       queueMgr_->deleteResults(partitionKey_.taskId, partitionKey_.destination);

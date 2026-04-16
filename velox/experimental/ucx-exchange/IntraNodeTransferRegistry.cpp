@@ -32,7 +32,6 @@ IntraNodeTransferRegistry::getInstance() {
 std::future<void> IntraNodeTransferRegistry::publish(
     const IntraNodeTransferKey& key,
     std::shared_ptr<cudf::packed_columns> data,
-    rmm::cuda_stream_view stream,
     bool atEnd) {
   std::shared_ptr<IntraNodeTransferEntry> entry;
   std::future<void> future;
@@ -75,7 +74,6 @@ std::future<void> IntraNodeTransferRegistry::publish(
   {
     std::lock_guard<std::mutex> entryLock(entry->entryMutex);
     entry->data = std::move(data);
-    entry->stream = stream;
     entry->atEnd = atEnd;
     entry->ready = true;
     // Get the future while holding the lock to avoid race with consumer
@@ -104,7 +102,7 @@ std::optional<IntraNodeTransferResult> IntraNodeTransferRegistry::poll(
     if (cancelledTasks_.count(key.taskId)) {
       VLOG(2) << "[INTRA-REG] poll cancelled: task=" << key.taskId
               << " dest=" << key.destination << " seq=" << key.sequenceNumber;
-      return IntraNodeTransferResult{nullptr, rmm::cuda_stream_default, true};
+      return IntraNodeTransferResult{nullptr, true};
     }
 
     auto it = registry_.find(key);
@@ -133,7 +131,6 @@ std::optional<IntraNodeTransferResult> IntraNodeTransferRegistry::poll(
 
     // Data is ready, retrieve it while holding the lock
     result.data = std::move(entry->data);
-    result.stream = entry->stream;
     result.atEnd = entry->atEnd;
 
     // Fulfill the promise to notify the server while still holding entry lock
@@ -186,13 +183,12 @@ IntraNodeTransferResult IntraNodeTransferRegistry::waitFor(
         // Timeout - return empty result
         VLOG(0) << "Timeout waiting for intra-node transfer: " << key.taskId
                 << " dest=" << key.destination << " seq=" << key.sequenceNumber;
-        return {nullptr, rmm::cuda_stream_default, false};
+        return {nullptr, false};
       }
     }
 
     // Data is ready, retrieve it while holding the lock
     result.data = std::move(entry->data);
-    result.stream = entry->stream;
     result.atEnd = entry->atEnd;
 
     // Fulfill the promise to notify the server while still holding entry lock
