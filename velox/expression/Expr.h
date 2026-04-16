@@ -115,6 +115,7 @@ enum class SpecialFormKind : int32_t {
   kTry = 6,
   kAnd = 7,
   kOr = 8,
+  kNullIf = 9,
   kCustom = 999,
 };
 

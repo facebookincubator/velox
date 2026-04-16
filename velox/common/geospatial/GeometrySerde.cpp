@@ -62,6 +62,15 @@ std::unique_ptr<geos::geom::Geometry> GeometryDeserializer::readGeometry(
   }
 }
 
+std::unique_ptr<geos::geom::Geometry> GeometryDeserializer::deserializeNonEmpty(
+    const StringView& geometry) {
+  auto envelope = deserializeEnvelope(geometry);
+  if (envelope->isNull()) {
+    return nullptr;
+  }
+  return deserialize(geometry);
+}
+
 const std::unique_ptr<geos::geom::Envelope>
 GeometryDeserializer::deserializeEnvelope(const StringView& geometry) {
   velox::common::InputByteStream inputStream(geometry.data());
