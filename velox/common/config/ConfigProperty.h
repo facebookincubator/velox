@@ -19,6 +19,7 @@
 #include <string>
 #include <vector>
 
+#include <fmt/format.h>
 #include "velox/common/Enums.h"
 
 namespace facebook::velox::config {
@@ -46,5 +47,46 @@ struct ConfigProperty {
   /// Human-readable description of the property.
   std::string description;
 };
+
+namespace detail {
+
+template <typename T>
+constexpr ConfigPropertyType configPropertyTypeOf() {
+  if constexpr (std::is_same_v<T, bool>) {
+    return ConfigPropertyType::kBoolean;
+  } else if constexpr (std::is_integral_v<T>) {
+    return ConfigPropertyType::kInteger;
+  } else if constexpr (std::is_floating_point_v<T>) {
+    return ConfigPropertyType::kDouble;
+  } else {
+    return ConfigPropertyType::kString;
+  }
+}
+
+template <typename T>
+std::string configPropertyDefaultToString(const T& value) {
+  if constexpr (std::is_same_v<T, bool>) {
+    return value ? "true" : "false";
+  } else if constexpr (std::is_arithmetic_v<T>) {
+    return fmt::format("{}", value);
+  } else {
+    return std::string(value);
+  }
+}
+
+} // namespace detail
+
+/// Registers a property from a traits struct into a vector.
+/// The traits struct must have: key, type, defaultValue, description.
+template <typename PropertyTraits>
+void registerConfigProperty(std::vector<ConfigProperty>& registry) {
+  registry.push_back({
+      PropertyTraits::key,
+      detail::configPropertyTypeOf<typename PropertyTraits::type>(),
+      detail::configPropertyDefaultToString<typename PropertyTraits::type>(
+          PropertyTraits::defaultValue),
+      PropertyTraits::description,
+  });
+}
 
 } // namespace facebook::velox::config

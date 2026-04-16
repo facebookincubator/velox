@@ -15,10 +15,9 @@
  */
 
 #include "velox/connectors/hive/HiveConfig.h"
-#include "velox/common/config/Config.h"
-#include "velox/core/QueryConfig.h"
 
 #include <boost/algorithm/string.hpp>
+#include "velox/common/config/Config.h"
 
 namespace facebook::velox::connector::hive {
 
@@ -38,6 +37,34 @@ stringToInsertExistingPartitionsBehavior(const std::string& strValue) {
 }
 
 } // namespace
+
+const std::vector<config::ConfigProperty>& HiveConfig::registeredProperties() {
+  static const std::vector<config::ConfigProperty> kProperties = [] {
+    // Start with FileConfig properties.
+    auto properties = FileConfig::registeredProperties();
+#define VELOX_HIVE_CONFIG_REGISTER(constName) \
+  config::registerConfigProperty<HiveConfig::constName##Property>(properties)
+
+    VELOX_HIVE_CONFIG_REGISTER(kInsertExistingPartitionsBehaviorSession);
+    VELOX_HIVE_CONFIG_REGISTER(kSortWriterMaxOutputBytesSession);
+    VELOX_HIVE_CONFIG_REGISTER(kMaxTargetFileSizeSession);
+    VELOX_HIVE_CONFIG_REGISTER(kMaxPartitionsPerWritersSession);
+    VELOX_HIVE_CONFIG_REGISTER(kAllowNullPartitionKeysSession);
+    VELOX_HIVE_CONFIG_REGISTER(kPartitionPathAsLowerCaseSession);
+    VELOX_HIVE_CONFIG_REGISTER(kSortWriterMaxOutputRowsSession);
+    VELOX_HIVE_CONFIG_REGISTER(kSortWriterFinishTimeSliceLimitMsSession);
+    VELOX_HIVE_CONFIG_REGISTER(kUser);
+    VELOX_HIVE_CONFIG_REGISTER(kSource);
+    VELOX_HIVE_CONFIG_REGISTER(kSchema);
+    VELOX_HIVE_CONFIG_REGISTER(kMaxBucketCountSession);
+    VELOX_HIVE_CONFIG_REGISTER(kMaxRowsPerIndexRequestSession);
+
+#undef VELOX_HIVE_CONFIG_REGISTER
+
+    return properties;
+  }();
+  return kProperties;
+}
 
 // static
 std::string HiveConfig::insertExistingPartitionsBehaviorString(
@@ -60,54 +87,39 @@ HiveConfig::insertExistingPartitionsBehavior(
       config_->get<std::string>(kInsertExistingPartitionsBehavior, "ERROR")));
 }
 
-uint32_t HiveConfig::maxPartitionsPerWriters(
-    const config::ConfigBase* session) const {
-  return session->get<uint32_t>(
-      kMaxPartitionsPerWritersSession,
-      config_->get<uint32_t>(kMaxPartitionsPerWriters, 128));
-}
-
-uint32_t HiveConfig::maxBucketCount(const config::ConfigBase* session) const {
-  return session->get<uint32_t>(
-      kMaxBucketCountSession, config_->get<uint32_t>(kMaxBucketCount, 100'000));
-}
-
 bool HiveConfig::immutablePartitions() const {
-  return config_->get<bool>(kImmutablePartitions, false);
+  return configValue<bool>(kImmutablePartitions, false);
 }
 
 std::string HiveConfig::gcsEndpoint() const {
-  return config_->get<std::string>(kGcsEndpoint, std::string(""));
+  return configValue<std::string>(kGcsEndpoint, std::string(""));
 }
 
 std::string HiveConfig::gcsCredentialsPath() const {
-  return config_->get<std::string>(kGcsCredentialsPath, std::string(""));
+  return configValue<std::string>(kGcsCredentialsPath, std::string(""));
 }
 
 std::optional<int> HiveConfig::gcsMaxRetryCount() const {
-  return static_cast<std::optional<int>>(config_->get<int>(kGcsMaxRetryCount));
+  if (auto val = config_->get<int>(kGcsMaxRetryCount)) {
+    return val;
+  }
+  return config_->get<int>(std::string(kLegacyPrefix) + kGcsMaxRetryCount);
 }
 
 std::optional<std::string> HiveConfig::gcsMaxRetryTime() const {
-  return static_cast<std::optional<std::string>>(
-      config_->get<std::string>(kGcsMaxRetryTime));
+  if (auto val = config_->get<std::string>(kGcsMaxRetryTime)) {
+    return val;
+  }
+  return config_->get<std::string>(
+      std::string(kLegacyPrefix) + kGcsMaxRetryTime);
 }
 
 std::optional<std::string> HiveConfig::gcsAuthAccessTokenProvider() const {
-  return static_cast<std::optional<std::string>>(
-      config_->get<std::string>(kGcsAuthAccessTokenProvider));
-}
-
-bool HiveConfig::isPartitionPathAsLowerCase(
-    const config::ConfigBase* session) const {
-  return session->get<bool>(kPartitionPathAsLowerCaseSession, true);
-}
-
-bool HiveConfig::allowNullPartitionKeys(
-    const config::ConfigBase* session) const {
-  return session->get<bool>(
-      kAllowNullPartitionKeysSession,
-      config_->get<bool>(kAllowNullPartitionKeys, true));
+  if (auto val = config_->get<std::string>(kGcsAuthAccessTokenProvider)) {
+    return val;
+  }
+  return config_->get<std::string>(
+      std::string(kLegacyPrefix) + kGcsAuthAccessTokenProvider);
 }
 
 int32_t HiveConfig::numCacheFileHandles() const {
@@ -123,14 +135,11 @@ bool HiveConfig::isFileHandleCacheEnabled() const {
 }
 
 std::string HiveConfig::writeFileCreateConfig() const {
-  return config_->get<std::string>(kWriteFileCreateConfig, "");
-}
-
-uint32_t HiveConfig::sortWriterMaxOutputRows(
-    const config::ConfigBase* session) const {
-  return session->get<uint32_t>(
-      kSortWriterMaxOutputRowsSession,
-      config_->get<uint32_t>(kSortWriterMaxOutputRows, 1024));
+  // Legacy key used snake_case: "hive.write_file_create_config".
+  if (auto val = config_->get<std::string>(kWriteFileCreateConfig)) {
+    return val.value();
+  }
+  return config_->get<std::string>("hive.write_file_create_config", "");
 }
 
 uint64_t HiveConfig::sortWriterMaxOutputBytes(
@@ -142,12 +151,6 @@ uint64_t HiveConfig::sortWriterMaxOutputBytes(
       config::CapacityUnit::BYTE);
 }
 
-uint64_t HiveConfig::sortWriterFinishTimeSliceLimitMs(
-    const config::ConfigBase* session) const {
-  return session->get<uint64_t>(
-      kSortWriterFinishTimeSliceLimitMsSession,
-      config_->get<uint64_t>(kSortWriterFinishTimeSliceLimitMs, 5'000));
-}
 uint64_t HiveConfig::maxTargetFileSizeBytes(
     const config::ConfigBase* session) const {
   return config::toCapacity(
@@ -155,27 +158,6 @@ uint64_t HiveConfig::maxTargetFileSizeBytes(
           kMaxTargetFileSizeSession,
           config_->get<std::string>(kMaxTargetFileSize, "0B")),
       config::CapacityUnit::BYTE);
-}
-
-uint32_t HiveConfig::maxRowsPerIndexRequest(
-    const config::ConfigBase* session) const {
-  return session->get<uint32_t>(
-      kMaxRowsPerIndexRequestSession,
-      config_->get<uint32_t>(kMaxRowsPerIndexRequest, 0));
-}
-
-std::string HiveConfig::user(const config::ConfigBase* session) const {
-  return session->get<std::string>(kUser, config_->get<std::string>(kUser, ""));
-}
-
-std::string HiveConfig::source(const config::ConfigBase* session) const {
-  return session->get<std::string>(
-      kSource, config_->get<std::string>(kSource, ""));
-}
-
-std::string HiveConfig::schema(const config::ConfigBase* session) const {
-  return session->get<std::string>(
-      kSchema, config_->get<std::string>(kSchema, ""));
 }
 
 } // namespace facebook::velox::connector::hive
