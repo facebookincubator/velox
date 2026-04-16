@@ -187,7 +187,10 @@ jobs:
         id: build-errors
         if: failure() && steps.build.outcome == 'failure'
         run: |
-          BUILD_ERRORS=$(grep -E '^.*:(error|fatal error):' /tmp/build-output.log | head -50 || true)
+          # Strip ANSI escape sequences before grepping — the build uses
+          # -fdiagnostics-color=always which embeds SGR and erase (ESC[K)
+          # codes that prevent matching literal ': error:'.
+          BUILD_ERRORS=$(sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' /tmp/build-output.log | grep -E ' (error|fatal error):' | head -50 || true)
           if [[ -n $BUILD_ERRORS ]]; then
             {
               echo 'build-failure-details<<EOF'
@@ -541,7 +544,10 @@ jobs:
         id: build-errors
         if: failure() && steps.build.outcome == 'failure'
         run: |
-          BUILD_ERRORS=$(grep -E '^.*:(error|fatal error):' /tmp/build-output.log | head -50 || true)
+          # Strip ANSI escape sequences before grepping — the build uses
+          # -fdiagnostics-color=always which embeds SGR and erase (ESC[K)
+          # codes that prevent matching literal ': error:'.
+          BUILD_ERRORS=$(sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' /tmp/build-output.log | grep -E ' (error|fatal error):' | head -50 || true)
           if [[ -n $BUILD_ERRORS ]]; then
             {
               echo 'build-failure-details<<EOF'

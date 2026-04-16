@@ -175,6 +175,7 @@ jobs:
         uses: izaitsevfb/claude-code-action@ececd56fb999d06b4dd2477437bc408938295d76 # forked-pr-fix
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ github.token }}
           claude_args: --model claude-opus-4-6 --allowedTools Bash Read Grep Glob
           prompt: ${{ steps.prompt.outputs.value }}
         env:
