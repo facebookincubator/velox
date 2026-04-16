@@ -159,7 +159,8 @@ class UcxExchangeQueue {
   }
 
   std::vector<ContinuePromise> clearAllPromisesLocked() {
-    std::vector<ContinuePromise> promises(promises_.size());
+    std::vector<ContinuePromise> promises;
+    promises.reserve(promises_.size());
     auto it = promises_.begin();
     while (it != promises_.end()) {
       promises.push_back(std::move(it->second));
