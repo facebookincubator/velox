@@ -256,7 +256,10 @@ struct MetadataMsg {
     }
 
     // Deserialize bool `atEnd` (stored as a single byte: 1 for true, 0 for
-    // false)
+    // false).
+    if (ptr + 1 > endPtr) {
+      throw std::runtime_error("Insufficient data for atEnd flag");
+    }
     record.atEnd = (*ptr != 0);
 
     return record;
