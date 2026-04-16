@@ -1178,8 +1178,20 @@ TEST_F(SparkCastExprTest, tryCastStringToTimestampInvalid) {
   }
 }
 
-TEST_F(SparkCastExprTestAnsiOn, stringToTimestamp) {
+TEST_F(SparkCastExprTestAnsiOn, stringToTimestampValid) {
   testStringToTimestamp();
+}
+
+TEST_F(SparkCastExprTestAnsiOn, stringToTimestampInvalidThrows) {
+  auto testInvalidTimestamp = [this](const std::string& value) {
+    auto input = makeRowVector({makeFlatVector<std::string>({value})});
+    VELOX_ASSERT_THROW(
+        (evaluate<SimpleVector<Timestamp>>("cast(c0 as timestamp)", input)),
+        "Unable to parse timestamp value");
+  };
+
+  testInvalidTimestamp("INVALID");
+  testInvalidTimestamp("2012-Oct-01");
 }
 
 TEST_F(SparkCastExprTestAnsiOn, stringToDate) {
