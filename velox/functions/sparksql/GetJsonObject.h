@@ -18,6 +18,8 @@
 
 #include <folly/Likely.h>
 #include <cstring>
+#include <string>
+#include <vector>
 
 #include "velox/core/QueryConfig.h"
 #include "velox/functions/Macros.h"
@@ -247,7 +249,6 @@ struct GetJsonObjectFunction {
   bool extractStringResult(
       simdjson::simdjson_result<simdjson::ondemand::value> rawResult,
       out_type<Varchar>& result) {
-    std::stringstream ss;
     switch (rawResult.type()) {
       // For number and bool types, we need to explicitly get the value
       // for specific types instead of using `ss << rawResult`. Thus, we
@@ -296,11 +297,26 @@ struct GetJsonObjectFunction {
         return false;
       }
       // For nested case, e.g., for "{"my": {"hello": 10}}",
-      // "$.my" will return an object type.
+      // "$.my" will return an object type. Use simdjson::minify on a padded
+      // copy of the raw sub-JSON so output matches Spark-style compact text
+      // (no insignificant whitespace), without a full DOM parse.
       case simdjson::ondemand::json_type::object:
       case simdjson::ondemand::json_type::array: {
-        ss << rawResult;
-        result.append(ss.str());
+        std::string_view slice;
+        if (simdjson::to_json_string(rawResult).get(slice)) {
+          return false;
+        }
+        simdjson::padded_string padded(slice.data(), slice.size());
+        std::string minified;
+        minified.resize(padded.size());
+        size_t dstLen = 0;
+        if (simdjson::minify(
+                padded.data(), padded.size(), minified.data(), dstLen) !=
+            simdjson::SUCCESS) {
+          return false;
+        }
+        minified.resize(dstLen);
+        result.append(minified);
         return true;
       }
       default:

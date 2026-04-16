@@ -91,24 +91,24 @@ TEST_F(GetJsonObjectTest, basic) {
       getJsonObject(R"({"my": {"hello": true}})", "$.my.  hello"), "true");
   EXPECT_EQ(getJsonObject(R"({"a$ ": {"b": 10}})", "$.a$ .b"), "10");
   EXPECT_EQ(getJsonObject(R"({"a$. b": {"c": 10}})", "$.a$. b"), std::nullopt);
-  // Json object as result.
+  // Json object as result (minified to match Spark-style compact JSON).
   EXPECT_EQ(
       getJsonObject(
           R"({"my": {"info": {"name": "Alice", "age": "5", "id": "001"}}})",
           "$.my.info"),
-      R"({"name": "Alice", "age": "5", "id": "001"})");
+      R"({"name":"Alice","age":"5","id":"001"})");
   EXPECT_EQ(
       getJsonObject(
           R"({"my": {"info": {"name": "Alice", "age": "5", "id": "001"}}})",
           "$['my']['info']"),
-      R"({"name": "Alice", "age": "5", "id": "001"})");
+      R"({"name":"Alice","age":"5","id":"001"})");
 
   // Array as result.
   EXPECT_EQ(
       getJsonObject(
           R"([{"my": {"info": {"name": "Alice"}}}, {"other": ["v1", "v2"]}])",
           "$[1].other"),
-      R"(["v1", "v2"])");
+      R"(["v1","v2"])");
   // Array element as result.
   EXPECT_EQ(
       getJsonObject(
@@ -198,7 +198,7 @@ TEST_F(GetJsonObjectTest, incompleteJson) {
       getJsonObject(
           R"({"my": {"info": {"name": "Alice", "age": "5", "id": "001"}}},)",
           "$['my']['info']"),
-      R"({"name": "Alice", "age": "5", "id": "001"})");
+      R"({"name":"Alice","age":"5","id":"001"})");
 }
 
 TEST_F(GetJsonObjectTest, number) {
