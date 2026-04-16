@@ -306,6 +306,9 @@ extern void registerVarPopAggregate(
 extern void registerTDigestAggregate(
     const std::vector<std::string>& names,
     bool overwrite);
+extern void registerApproxWinsorizedMeanAggregate(
+    const std::vector<std::string>& names,
+    bool overwrite);
 extern void registerKHyperLogLogAggregates(
     const std::vector<std::string>& names,
     bool withCompanionFunctions,
@@ -463,6 +466,8 @@ void registerAllAggregateFunctions(
   registerVarPopAggregate(
       {prefix + kVarPop}, withCompanionFunctions, overwrite);
   registerTDigestAggregate({prefix + kTDigestAgg}, overwrite);
+  registerApproxWinsorizedMeanAggregate(
+      {prefix + kApproxWinsorizedMean}, overwrite);
   registerNoisyApproxSfmAggregate(
       {prefix + kNoisyApproxSetSfm},
       {prefix + kNoisyApproxDistinctSfm},
