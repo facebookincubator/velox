@@ -15,43 +15,43 @@
  */
 
 #include "velox/connectors/hive/FileConfig.h"
+
 #include "velox/common/config/Config.h"
 
 namespace facebook::velox::connector::hive {
 
-bool FileConfig::isOrcUseColumnNames(const config::ConfigBase* session) const {
-  return session->get<bool>(
-      kOrcUseColumnNamesSession, configValue<bool>(kOrcUseColumnNames, false));
-}
+const std::vector<config::ConfigProperty>& FileConfig::registeredProperties() {
+  static const std::vector<config::ConfigProperty> kProperties = [] {
+    std::vector<config::ConfigProperty> properties;
+#define VELOX_HIVE_CONFIG_REGISTER(constName) \
+  config::registerConfigProperty<FileConfig::constName##Property>(properties)
 
-bool FileConfig::isParquetUseColumnNames(
-    const config::ConfigBase* session) const {
-  return session->get<bool>(
-      kParquetUseColumnNamesSession,
-      configValue<bool>(kParquetUseColumnNames, false));
-}
+    VELOX_HIVE_CONFIG_REGISTER(kOrcUseColumnNamesSession);
+    VELOX_HIVE_CONFIG_REGISTER(kParquetUseColumnNamesSession);
+    VELOX_HIVE_CONFIG_REGISTER(kAllowInt32NarrowingSession);
+    VELOX_HIVE_CONFIG_REGISTER(kReadTimestampPartitionValueAsLocalTimeSession);
+    VELOX_HIVE_CONFIG_REGISTER(kPreserveFlatMapsInMemorySession);
+    VELOX_HIVE_CONFIG_REGISTER(kReaderCollectColumnCpuMetricsSession);
+    VELOX_HIVE_CONFIG_REGISTER(kOrcFooterSpeculativeIoSizeSession);
+    VELOX_HIVE_CONFIG_REGISTER(kParquetFooterSpeculativeIoSizeSession);
+    VELOX_HIVE_CONFIG_REGISTER(kNimbleFooterSpeculativeIoSizeSession);
+    VELOX_HIVE_CONFIG_REGISTER(kFileColumnNamesReadAsLowerCaseSession);
+    VELOX_HIVE_CONFIG_REGISTER(kIgnoreMissingFilesSession);
+    VELOX_HIVE_CONFIG_REGISTER(kMaxCoalescedBytesSession);
+    VELOX_HIVE_CONFIG_REGISTER(kLoadQuantumSession);
+    VELOX_HIVE_CONFIG_REGISTER(kReadStatsBasedFilterReorderDisabledSession);
+    VELOX_HIVE_CONFIG_REGISTER(kIndexEnabledSession);
+    VELOX_HIVE_CONFIG_REGISTER(kFileMetadataCacheEnabledSession);
+    VELOX_HIVE_CONFIG_REGISTER(kPinFileMetadataSession);
+    VELOX_HIVE_CONFIG_REGISTER(kMaxCoalescedDistanceSession);
+    VELOX_HIVE_CONFIG_REGISTER(kParallelUnitLoadCountSession);
+    VELOX_HIVE_CONFIG_REGISTER(kReadTimestampUnitSession);
 
-bool FileConfig::allowInt32Narrowing(const config::ConfigBase* session) const {
-  return session->get<bool>(
-      kAllowInt32NarrowingSession,
-      configValue<bool>(kAllowInt32Narrowing, false));
-}
+#undef VELOX_HIVE_CONFIG_REGISTER
 
-bool FileConfig::isFileColumnNamesReadAsLowerCase(
-    const config::ConfigBase* session) const {
-  return session->get<bool>(
-      kFileColumnNamesReadAsLowerCaseSession,
-      config_->get<bool>(kFileColumnNamesReadAsLowerCase, false));
-}
-
-bool FileConfig::ignoreMissingFiles(const config::ConfigBase* session) const {
-  return session->get<bool>(kIgnoreMissingFilesSession, false);
-}
-
-int64_t FileConfig::maxCoalescedBytes(const config::ConfigBase* session) const {
-  return session->get<int64_t>(
-      kMaxCoalescedBytesSession,
-      config_->get<int64_t>(kMaxCoalescedBytes, 128 << 20)); // 128MB
+    return properties;
+  }();
+  return kProperties;
 }
 
 int32_t FileConfig::maxCoalescedDistanceBytes(
@@ -83,11 +83,6 @@ size_t FileConfig::parallelUnitLoadCount(
   return count;
 }
 
-int32_t FileConfig::loadQuantum(const config::ConfigBase* session) const {
-  return session->get<int32_t>(
-      kLoadQuantumSession, config_->get<int32_t>(kLoadQuantum, 8 << 20));
-}
-
 uint64_t FileConfig::filePreloadThreshold() const {
   return config_->get<uint64_t>(kFilePreloadThreshold, 8UL << 20);
 }
@@ -99,78 +94,6 @@ uint8_t FileConfig::readTimestampUnit(const config::ConfigBase* session) const {
       unit == 3 || unit == 6 /*micro*/ || unit == 9 /*nano*/,
       "Invalid timestamp unit.");
   return unit;
-}
-
-bool FileConfig::readTimestampPartitionValueAsLocalTime(
-    const config::ConfigBase* session) const {
-  return sessionValue<bool>(
-      session,
-      kReadTimestampPartitionValueAsLocalTimeSession,
-      kReadTimestampPartitionValueAsLocalTime,
-      true);
-}
-
-bool FileConfig::readStatsBasedFilterReorderDisabled(
-    const config::ConfigBase* session) const {
-  return session->get<bool>(
-      kReadStatsBasedFilterReorderDisabledSession,
-      config_->get<bool>(kReadStatsBasedFilterReorderDisabled, false));
-}
-
-bool FileConfig::preserveFlatMapsInMemory(
-    const config::ConfigBase* session) const {
-  return sessionValue<bool>(
-      session,
-      kPreserveFlatMapsInMemorySession,
-      kPreserveFlatMapsInMemory,
-      false);
-}
-
-bool FileConfig::indexEnabled(const config::ConfigBase* session) const {
-  return session->get<bool>(
-      kIndexEnabledSession, config_->get<bool>(kIndexEnabled, false));
-}
-
-bool FileConfig::readerCollectColumnCpuMetrics(
-    const config::ConfigBase* session) const {
-  return sessionValue<bool>(
-      session,
-      kReaderCollectColumnCpuMetricsSession,
-      kReaderCollectColumnCpuMetrics,
-      false);
-}
-
-bool FileConfig::fileMetadataCacheEnabled(
-    const config::ConfigBase* session) const {
-  return session->get<bool>(
-      kFileMetadataCacheEnabledSession,
-      config_->get<bool>(kFileMetadataCacheEnabled, false));
-}
-
-bool FileConfig::pinFileMetadata(const config::ConfigBase* session) const {
-  return session->get<bool>(
-      kPinFileMetadataSession, config_->get<bool>(kPinFileMetadata, false));
-}
-
-uint64_t FileConfig::orcFooterSpeculativeIoSize(
-    const config::ConfigBase* session) const {
-  return session->get<uint64_t>(
-      kOrcFooterSpeculativeIoSizeSession,
-      configValue<uint64_t>(kOrcFooterSpeculativeIoSize, 256UL << 10));
-}
-
-uint64_t FileConfig::parquetFooterSpeculativeIoSize(
-    const config::ConfigBase* session) const {
-  return session->get<uint64_t>(
-      kParquetFooterSpeculativeIoSizeSession,
-      configValue<uint64_t>(kParquetFooterSpeculativeIoSize, 256UL << 10));
-}
-
-uint64_t FileConfig::nimbleFooterSpeculativeIoSize(
-    const config::ConfigBase* session) const {
-  return session->get<uint64_t>(
-      kNimbleFooterSpeculativeIoSizeSession,
-      configValue<uint64_t>(kNimbleFooterSpeculativeIoSize, 8UL << 20));
 }
 
 } // namespace facebook::velox::connector::hive
