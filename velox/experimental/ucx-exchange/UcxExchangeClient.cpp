@@ -188,8 +188,11 @@ UcxExchangeClient::~UcxExchangeClient() {
 
 std::string UcxExchangeClient::toString() const {
   std::stringstream out;
-  for (auto& source : sources_) {
-    out << source->toString() << std::endl;
+  {
+    std::lock_guard<std::mutex> l(queue_->mutex());
+    for (auto& source : sources_) {
+      out << source->toString() << std::endl;
+    }
   }
   return out.str();
 }
@@ -200,8 +203,11 @@ folly::dynamic UcxExchangeClient::toJson() const {
   obj["closed"] = closed_;
   folly::dynamic clientsObj = folly::dynamic::object;
   int index = 0;
-  for (auto& source : sources_) {
-    clientsObj[std::to_string(index++)] = source->toJson();
+  {
+    std::lock_guard<std::mutex> l(queue_->mutex());
+    for (auto& source : sources_) {
+      clientsObj[std::to_string(index++)] = source->toJson();
+    }
   }
   obj["clients"] = clientsObj;
   return obj;
