@@ -468,24 +468,11 @@ class EvalCtx {
   }
 
   // Copy "rows" of localResult into results if "result" is partially populated
-  // and must be preserved. Copy localResult pointer into result otherwise.
+  // and must be preserved.  Copy localResult pointer into result otherwise.
   void moveOrCopyResult(
       const VectorPtr& localResult,
       const SelectivityVector& rows,
-      VectorPtr& result) const {
-#ifndef NDEBUG
-    if (localResult != nullptr) {
-      // Make sure local/temporary vectors have consistent state.
-      localResult->validate();
-    }
-#endif
-    if (resultShouldBePreserved(result, rows)) {
-      BaseVector::ensureWritable(rows, result->type(), result->pool(), result);
-      result->copy(localResult.get(), rows, nullptr);
-    } else {
-      result = localResult;
-    }
-  }
+      VectorPtr& result) const;
 
   /// Adds nulls from 'rawNulls' to positions of 'result' given by
   /// 'rows'. Ensures that '*result' is writable, of sufficient size

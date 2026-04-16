@@ -1776,6 +1776,133 @@ TEST_P(ParameterizedExprTest, switchExprWithNull) {
   assertEqualVectors(expected, result);
 }
 
+// Verify that IF with a constant ARRAY result (ELSE branch) works correctly.
+// Exercises the moveOrCopyResult fast path when result is a constant
+// complex-type.
+TEST_P(ParameterizedExprTest, switchConstantArrayResult) {
+  vector_size_t size = 100;
+  auto c0 = makeFlatVector<int32_t>(size, [](auto row) { return row; });
+  auto c1 = makeArrayVector<double>(
+      size,
+      [](auto /*row*/) { return 10; },
+      [](auto row, auto idx) { return row * 10.0 + idx; },
+      [](auto row) { return row % 10 != 0; });
+  auto input = makeRowVector({c0, c1});
+
+  // if(is_null(c1), constant_default, c1)
+  // The constant default is the ELSE, so result starts as constant.
+  // The fast path wraps the result in a dictionary.
+  auto result = evaluate(
+      "if(c1 is null, array_constructor(0.0e0, 0.0e0, 0.0e0, 0.0e0, 0.0e0, "
+      "0.0e0, 0.0e0, 0.0e0, 0.0e0, 0.0e0), c1)",
+      input);
+
+  // Verify the fast path produced a dictionary (not a flat copy).
+  ASSERT_EQ(result->encoding(), VectorEncoding::Simple::DICTIONARY);
+
+  auto expected = makeArrayVector<double>(
+      size,
+      [](auto) { return 10; },
+      [](auto row, auto idx) {
+        if (row % 10 == 0) {
+          return row * 10.0 + idx;
+        }
+        return 0.0;
+      });
+  assertEqualVectors(expected, result);
+}
+
+// Verify that IF with a constant ARRAY source (THEN branch) works correctly.
+// Exercises the moveOrCopyResult fast path when localResult is a constant
+// complex-type.
+TEST_P(ParameterizedExprTest, switchConstantArraySource) {
+  vector_size_t size = 100;
+  auto c0 = makeFlatVector<int32_t>(size, [](auto row) { return row; });
+  auto c1 = makeArrayVector<double>(
+      size,
+      [](auto /*row*/) { return 10; },
+      [](auto row, auto idx) { return row * 10.0 + idx; },
+      [](auto row) { return row % 10 != 0; });
+  auto input = makeRowVector({c0, c1});
+
+  // if(c1 is not null, c1, constant_default)
+  // The constant default is the THEN for null rows, so localResult is
+  // constant when overwriting selected rows of a non-constant result.
+  // The fast path wraps the result in a dictionary.
+  auto result = evaluate(
+      "if(c1 is not null, c1, array_constructor(0.0e0, 0.0e0, 0.0e0, 0.0e0, "
+      "0.0e0, 0.0e0, 0.0e0, 0.0e0, 0.0e0, 0.0e0))",
+      input);
+
+  // Verify the fast path produced a dictionary (not a flat copy).
+  ASSERT_EQ(result->encoding(), VectorEncoding::Simple::DICTIONARY);
+
+  auto expected = makeArrayVector<double>(
+      size,
+      [](auto) { return 10; },
+      [](auto row, auto idx) {
+        if (row % 10 == 0) {
+          return row * 10.0 + idx;
+        }
+        return 0.0;
+      });
+  assertEqualVectors(expected, result);
+}
+
+// Verify that an empty constant array produces a flat result (no dictionary),
+// since flattening an empty array is cheap.
+TEST_P(ParameterizedExprTest, switchEmptyConstantArrayIsFlat) {
+  vector_size_t size = 100;
+  auto c0 = makeFlatVector<int32_t>(size, [](auto row) { return row; });
+  auto c1 = makeArrayVector<double>(
+      size,
+      [](auto /*row*/) { return 10; },
+      [](auto row, auto idx) { return row * 10.0 + idx; },
+      [](auto row) { return row % 10 != 0; });
+  auto input = makeRowVector({c0, c1});
+
+  // if(is_null(c1), empty_array, c1)
+  auto result = evaluate(
+      "if(c1 is null, cast(array_constructor() as double[]), c1)", input);
+
+  // Empty constant array is cheap to flatten — result should be flat, not
+  // dictionary.
+  ASSERT_NE(result->encoding(), VectorEncoding::Simple::DICTIONARY);
+
+  auto expected = makeArrayVector<double>(
+      size,
+      [](auto row) { return row % 10 == 0 ? 10 : 0; },
+      [](auto row, auto idx) { return row * 10.0 + idx; });
+  assertEqualVectors(expected, result);
+}
+
+// Verify that a null constant array does not trigger the dictionary fast path.
+TEST_P(ParameterizedExprTest, switchNullConstantArrayIsFlat) {
+  vector_size_t size = 100;
+  // c0: 0..99 (all non-null), c1: array of 10 doubles (all non-null).
+  auto c0 = makeFlatVector<int32_t>(size, [](auto row) { return row; });
+  auto c1 = makeArrayVector<double>(
+      size,
+      [](auto /*row*/) { return 10; },
+      [](auto row, auto idx) { return row * 10.0 + idx; });
+  auto input = makeRowVector({c0, c1});
+
+  // if(c0 < 10, c1, cast(null as double[]))
+  // ~90% of rows get null, ~10% keep c1 data.
+  auto result = evaluate("if(c0 < 10, c1, cast(null as double[]))", input);
+
+  // Null constant is cheap to flatten — result should not be dictionary.
+  ASSERT_NE(result->encoding(), VectorEncoding::Simple::DICTIONARY);
+
+  auto expected = makeArrayVector<double>(
+      size,
+      [](auto /*row*/) { return 10; },
+      [](auto row, auto idx) { return row * 10.0 + idx; },
+      // Rows >= 10 are null.
+      [](auto row) { return row >= 10; });
+  assertEqualVectors(expected, result);
+}
+
 // Verify that computePropagatesNulls iterates over all then-clauses when
 // checking null propagation. Uses a 3-WHEN CASE where the 3rd then-clause
 // (coalesce) does not propagate nulls. Null rows matching that clause must
@@ -4044,7 +4171,7 @@ TEST_P(ParameterizedExprTest, cseUnderTryWithIf) {
   // errors when combined with TRY. In this case a VectorFunction sizes the
   // result based on rows.end(), can throw user exceptions, and doesn't resize
   // the result Vector to include rows that produced exceptions. If that
-  // funciton is evaluated as part of CSE, e.g. on both sides of an if
+  // function is evaluated as part of CSE, e.g. on both sides of an if
   // statement, and the last row produces an exception, the result Vector will
   // be smaller than rows.size(). This test validates that in CSE we can
   // tolerate this and does not rely on the fact the result Vector is at least

@@ -474,4 +474,119 @@ VectorEncoding::Simple EvalCtx::wrapEncoding() const {
   return !peeledEncoding_ ? VectorEncoding::Simple::FLAT
                           : peeledEncoding_->wrapEncoding();
 }
+
+namespace {
+
+// Returns true if flattening 'v' would be expensive because it is a constant
+// encoding of a complex type (ARRAY, MAP, or wide ROW) and the constant
+// covers more rows than the non-constant side ('constantRows' >
+// 'totalRows' - 'constantRows').
+bool isExpensiveConstant(
+    const BaseVector& v,
+    vector_size_t constantRows,
+    vector_size_t totalRows) {
+  if (!v.isConstantEncoding() || constantRows <= totalRows - constantRows) {
+    return false;
+  }
+  const auto& type = *v.type();
+  if (type.isArray() || type.isMap()) {
+    // Only worth it when the constant array/map is non-empty.  An empty
+    // constant is cheap to flatten (just offsets/sizes, no element copies).
+    if (v.isNullAt(0)) {
+      return false;
+    }
+    auto* wrapped = v.wrappedVector();
+    auto idx = v.wrappedIndex(0);
+    return wrapped->asUnchecked<ArrayVectorBase>()->sizeAt(idx) > 0;
+  }
+  return type.isRow() && type.asRow().size() > 10;
+}
+
+// Build a dictionary result that combines data rows from 'dataSource' with a
+// single appended constant row from 'constant'.  'selectedRows' indicates
+// which rows come from dataSource; all other rows map to the constant.
+//
+// 'base' is the flat vector that will back the dictionary.  It must already
+// contain the data rows from dataSource (copied by the caller) and be sized
+// to dictSize + 1.  This function appends the constant at position dictSize
+// and builds the index mapping.
+VectorPtr buildDictWithConstant(
+    VectorPtr base,
+    const BaseVector& constant,
+    const SelectivityVector& selectedRows,
+    vector_size_t dictSize,
+    memory::MemoryPool* pool) {
+  auto appendIndex = dictSize;
+  auto constantIndex = static_cast<vector_size_t>(constant.wrappedIndex(0));
+  auto* constantBase = constant.wrappedVector();
+
+  VELOX_CHECK(
+      !constant.isNullAt(0),
+      "buildDictWithConstant should not be called with a null constant");
+  base->copy(constantBase, appendIndex, constantIndex, 1);
+
+  auto indices = allocateIndices(dictSize, pool);
+  auto* rawIndices = indices->asMutable<vector_size_t>();
+  // Default: all rows map to the constant.
+  std::fill(rawIndices, rawIndices + dictSize, appendIndex);
+  // Selected rows use identity mapping (their own data).
+  selectedRows.applyToSelected(
+      [&](vector_size_t row) { rawIndices[row] = row; });
+
+  return BaseVector::wrapInDictionary(
+      nullptr, indices, dictSize, std::move(base));
+}
+
+} // namespace
+
+void EvalCtx::moveOrCopyResult(
+    const VectorPtr& localResult,
+    const SelectivityVector& rows,
+    VectorPtr& result) const {
+#ifndef NDEBUG
+  if (localResult != nullptr) {
+    localResult->validate();
+  }
+#endif
+  if (resultShouldBePreserved(result, rows)) {
+    auto totalRows = std::max<vector_size_t>(result->size(), rows.end());
+    auto selectedRows = rows.countSelected();
+    // When result is constant, the constant covers totalRows - selectedRows.
+    if (isExpensiveConstant(*result, totalRows - selectedRows, totalRows)) {
+      // Result is constant; localResult has data for selected rows.
+      auto dictSize = totalRows;
+      auto newResult =
+          BaseVector::create(result->type(), dictSize + 1, result->pool());
+      newResult->copy(localResult.get(), rows, nullptr);
+
+      result = buildDictWithConstant(
+          std::move(newResult), *result, rows, dictSize, result->pool());
+    } else if (
+        localResult &&
+        // When localResult is constant, the constant covers selectedRows.
+        isExpensiveConstant(*localResult, selectedRows, totalRows)) {
+      // localResult is constant; result has data for other rows.
+      BaseVector::ensureWritable(rows, result->type(), result->pool(), result);
+      auto* pool = result->pool();
+      auto dictSize = result->size();
+      result->resize(dictSize + 1);
+
+      // Invert: selected rows should map to the constant, others keep
+      // identity.  Build a complement selectivity for the non-selected rows.
+      SelectivityVector nonSelectedRows(dictSize, true);
+      rows.applyToSelected(
+          [&](vector_size_t row) { nonSelectedRows.setValid(row, false); });
+      nonSelectedRows.updateBounds();
+
+      result = buildDictWithConstant(
+          std::move(result), *localResult, nonSelectedRows, dictSize, pool);
+    } else {
+      BaseVector::ensureWritable(rows, result->type(), result->pool(), result);
+      result->copy(localResult.get(), rows, nullptr);
+    }
+  } else {
+    result = localResult;
+  }
+}
+
 } // namespace facebook::velox::exec
