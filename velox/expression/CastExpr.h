@@ -98,14 +98,7 @@ class CastExpr : public SpecialForm {
 
   std::string toSql(std::vector<VectorPtr>*) const override;
 
- private:
-  /// Apply the cast after generating the input vectors
-  /// @param rows The list of rows being processed
-  /// @param input The input vector to be casted
-  /// @param context The context
-  /// @param fromType the input type
-  /// @param toType the target type
-  /// @param result The result vector
+  /// Casts 'input' from 'fromType' to 'toType' for selected 'rows'.
   void apply(
       const SelectivityVector& rows,
       const VectorPtr& input,
@@ -114,6 +107,7 @@ class CastExpr : public SpecialForm {
       const TypePtr& toType,
       VectorPtr& result);
 
+ private:
   VectorPtr applyMap(
       const SelectivityVector& rows,
       const MapVector* input,

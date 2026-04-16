@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/connectors/hive/FileConfig.h"
+#include "velox/connectors/hive/HiveConfigMacrosDefine.h"
 
 namespace facebook::velox::connector::hive {
 
@@ -24,6 +25,10 @@ namespace facebook::velox::connector::hive {
 /// Hive table format concerns.
 class HiveConfig : public FileConfig {
  public:
+  /// Returns all registered session-overridable properties from both
+  /// FileConfig and HiveConfig.
+  static const std::vector<config::ConfigProperty>& registeredProperties();
+
   enum class InsertExistingPartitionsBehavior {
     kError,
     kOverwrite,
@@ -32,22 +37,128 @@ class HiveConfig : public FileConfig {
   static std::string insertExistingPartitionsBehaviorString(
       InsertExistingPartitionsBehavior behavior);
 
-  /// Behavior on insert into existing partitions.
-  static constexpr const char* kInsertExistingPartitionsBehaviorSession =
-      "insert_existing_partitions_behavior";
+  // --- VELOX_HIVE_CONFIG_PROPERTY properties ---
+
+  VELOX_HIVE_CONFIG_PROPERTY(
+      kInsertExistingPartitionsBehaviorSession,
+      "insert_existing_partitions_behavior",
+      std::string,
+      "ERROR",
+      "Behavior when inserting into existing partitions: ERROR, OVERWRITE.")
   static constexpr const char* kInsertExistingPartitionsBehavior =
       "insert-existing-partitions-behavior";
 
-  /// Maximum number of (bucketed) partitions per a single table writer
-  /// instance.
+  VELOX_HIVE_CONFIG_PROPERTY(
+      kSortWriterMaxOutputBytesSession,
+      "sort_writer_max_output_bytes",
+      std::string,
+      "10MB",
+      "Maximum output bytes for sort writer.")
+  static constexpr const char* kSortWriterMaxOutputBytes =
+      "sort-writer-max-output-bytes";
+
+  VELOX_HIVE_CONFIG_PROPERTY(
+      kMaxTargetFileSizeSession,
+      "max_target_file_size",
+      std::string,
+      "0B",
+      "Maximum target file size. 0 means no limit.")
+  static constexpr const char* kMaxTargetFileSize = "max-target-file-size";
+
+  // --- VELOX_HIVE_CONFIG properties ---
+
+  VELOX_HIVE_CONFIG(
+      kMaxPartitionsPerWritersSession,
+      maxPartitionsPerWriters,
+      "max_partitions_per_writers",
+      uint32_t,
+      128,
+      "Maximum partitions per writer.")
   static constexpr const char* kMaxPartitionsPerWriters =
       "max-partitions-per-writers";
-  static constexpr const char* kMaxPartitionsPerWritersSession =
-      "max_partitions_per_writers";
 
-  /// Maximum number of buckets allowed to output by the table writers.
-  static constexpr const char* kMaxBucketCount = "max-bucket-count";
-  static constexpr const char* kMaxBucketCountSession = "max_bucket_count";
+  VELOX_HIVE_CONFIG(
+      kAllowNullPartitionKeysSession,
+      allowNullPartitionKeys,
+      "allow_null_partition_keys",
+      bool,
+      true,
+      "Allow null partition keys.")
+  static constexpr const char* kAllowNullPartitionKeys =
+      "allow-null-partition-keys";
+
+  VELOX_HIVE_CONFIG_PROPERTY(
+      kPartitionPathAsLowerCaseSession,
+      "partition_path_as_lower_case",
+      bool,
+      true,
+      "Write partition path segments as lower case.")
+  bool isPartitionPathAsLowerCase(const config::ConfigBase* session) const {
+    return session->get<bool>(
+        kPartitionPathAsLowerCaseSession,
+        kPartitionPathAsLowerCaseSessionProperty::defaultValue);
+  }
+
+  VELOX_HIVE_CONFIG(
+      kSortWriterMaxOutputRowsSession,
+      sortWriterMaxOutputRows,
+      "sort_writer_max_output_rows",
+      uint32_t,
+      1024,
+      "Maximum output rows for sort writer.")
+  static constexpr const char* kSortWriterMaxOutputRows =
+      "sort-writer-max-output-rows";
+
+  VELOX_HIVE_CONFIG(
+      kSortWriterFinishTimeSliceLimitMsSession,
+      sortWriterFinishTimeSliceLimitMs,
+      "sort_writer_finish_time_slice_limit_ms",
+      uint64_t,
+      5000,
+      "Time slice limit in ms for sort writer finish. 0 means no limit.")
+  static constexpr const char* kSortWriterFinishTimeSliceLimitMs =
+      "sort-writer-finish-time-slice-limit-ms";
+
+  VELOX_HIVE_CONFIG(kUser, user, "user", std::string, "", "User of the query.")
+
+  VELOX_HIVE_CONFIG(
+      kSource,
+      source,
+      "source",
+      std::string,
+      "",
+      "Source of the query.")
+
+  VELOX_HIVE_CONFIG(
+      kSchema,
+      schema,
+      "schema",
+      std::string,
+      "",
+      "Schema of the query.")
+
+  // --- VELOX_HIVE_CONFIG_LEGACY properties ---
+
+  VELOX_HIVE_CONFIG_LEGACY(
+      kMaxBucketCountSession,
+      kMaxBucketCount,
+      maxBucketCount,
+      "max_bucket_count",
+      "max-bucket-count",
+      uint32_t,
+      100'000,
+      "Maximum bucket count.")
+
+  VELOX_HIVE_CONFIG_LEGACY(
+      kMaxRowsPerIndexRequestSession,
+      kMaxRowsPerIndexRequest,
+      maxRowsPerIndexRequest,
+      "max_rows_per_index_request",
+      "max-rows-per-index-request",
+      uint32_t,
+      0,
+      "Maximum rows per index lookup request. 0 means no limit.")
+  // --- Server-only properties (no macro) ---
 
   /// Whether new data can be inserted into an unpartition table.
   /// Velox currently does not support appending data to existing partitions.
@@ -68,14 +179,6 @@ class HiveConfig : public FileConfig {
   static constexpr const char* kGcsAuthAccessTokenProvider =
       "gcs.auth.access-token-provider";
 
-  static constexpr const char* kPartitionPathAsLowerCaseSession =
-      "partition_path_as_lower_case";
-
-  static constexpr const char* kAllowNullPartitionKeys =
-      "allow-null-partition-keys";
-  static constexpr const char* kAllowNullPartitionKeysSession =
-      "allow_null_partition_keys";
-
   /// Maximum number of entries in the file handle cache.
   static constexpr const char* kNumCacheFileHandles = "num_cached_file_handles";
 
@@ -95,50 +198,8 @@ class HiveConfig : public FileConfig {
   static constexpr const char* kWriteFileCreateConfig =
       "write-file-create-config";
 
-  /// Maximum number of rows for sort writer in one batch of output.
-  static constexpr const char* kSortWriterMaxOutputRows =
-      "sort-writer-max-output-rows";
-  static constexpr const char* kSortWriterMaxOutputRowsSession =
-      "sort_writer_max_output_rows";
-
-  /// Maximum bytes for sort writer in one batch of output.
-  static constexpr const char* kSortWriterMaxOutputBytes =
-      "sort-writer-max-output-bytes";
-  static constexpr const char* kSortWriterMaxOutputBytesSession =
-      "sort_writer_max_output_bytes";
-
-  /// Sort Writer will exit finish() method after this many milliseconds even if
-  /// it has not completed its work yet. Zero means no time limit.
-  static constexpr const char* kSortWriterFinishTimeSliceLimitMs =
-      "sort-writer-finish-time-slice-limit-ms";
-  static constexpr const char* kSortWriterFinishTimeSliceLimitMsSession =
-      "sort_writer_finish_time_slice_limit_ms";
-
-  /// Maximum target file size. When a file exceeds this size during writing,
-  /// the writer will close the current file and start writing to a new file.
-  /// Accepts human-readable values like "1GB". Zero means no limit (default).
-  static constexpr const char* kMaxTargetFileSize = "max-target-file-size";
-  static constexpr const char* kMaxTargetFileSizeSession =
-      "max_target_file_size";
-
-  /// Maximum number of output rows to return per index lookup request.
-  /// The limit is applied to the actual output rows after filtering.
-  /// 0 means no limit (default).
-  static constexpr const char* kMaxRowsPerIndexRequest =
-      "max-rows-per-index-request";
-  static constexpr const char* kMaxRowsPerIndexRequestSession =
-      "max_rows_per_index_request";
-
-  static constexpr const char* kUser = "user";
-  static constexpr const char* kSource = "source";
-  static constexpr const char* kSchema = "schema";
-
   InsertExistingPartitionsBehavior insertExistingPartitionsBehavior(
       const config::ConfigBase* session) const;
-
-  uint32_t maxPartitionsPerWriters(const config::ConfigBase* session) const;
-
-  uint32_t maxBucketCount(const config::ConfigBase* session) const;
 
   bool immutablePartitions() const;
 
@@ -152,10 +213,6 @@ class HiveConfig : public FileConfig {
 
   std::optional<std::string> gcsAuthAccessTokenProvider() const;
 
-  bool isPartitionPathAsLowerCase(const config::ConfigBase* session) const;
-
-  bool allowNullPartitionKeys(const config::ConfigBase* session) const;
-
   int32_t numCacheFileHandles() const;
 
   uint64_t fileHandleExpirationDurationMs() const;
@@ -166,30 +223,14 @@ class HiveConfig : public FileConfig {
 
   std::string writeFileCreateConfig() const;
 
-  uint32_t sortWriterMaxOutputRows(const config::ConfigBase* session) const;
-
   uint64_t sortWriterMaxOutputBytes(const config::ConfigBase* session) const;
-
-  uint64_t sortWriterFinishTimeSliceLimitMs(
-      const config::ConfigBase* session) const;
 
   uint64_t maxTargetFileSizeBytes(const config::ConfigBase* session) const;
 
-  /// Returns the maximum number of rows to read per index lookup request.
-  /// 0 means no limit (default).
-  uint32_t maxRowsPerIndexRequest(const config::ConfigBase* session) const;
-
-  /// User of the query. Used for storage logging.
-  std::string user(const config::ConfigBase* session) const;
-
-  /// Source of the query. Used for storage access and logging.
-  std::string source(const config::ConfigBase* session) const;
-
-  /// Schema of the query. Used for storage logging.
-  std::string schema(const config::ConfigBase* session) const;
-
-  HiveConfig(std::shared_ptr<const config::ConfigBase> config)
+  explicit HiveConfig(std::shared_ptr<const config::ConfigBase> config)
       : FileConfig(std::move(config)) {}
 };
 
 } // namespace facebook::velox::connector::hive
+
+#include "velox/connectors/hive/HiveConfigMacrosUndef.h"

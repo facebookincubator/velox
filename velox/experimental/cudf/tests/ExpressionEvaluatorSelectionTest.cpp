@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/JitExpression.h"
+#include "velox/experimental/cudf/expression/SparkFunctions.h"
 #include "velox/experimental/cudf/tests/utils/ExpressionTestUtil.h"
 
 #include "velox/common/memory/Memory.h"
@@ -48,8 +49,8 @@ class CudfExpressionSelectionTest : public ::testing::Test {
     pool_ = memory::memoryManager()->addLeafPool("", false);
     queryCtx_ = core::QueryCtx::create();
     execCtx_ = std::make_unique<core::ExecCtx>(pool_.get(), queryCtx_.get());
-    CudfConfig::getInstance().functionEngine = "spark";
     cudf_velox::registerCudf();
+    cudf_velox::registerSparkFunctions("");
     rowType_ = ROW({
         {"a", BIGINT()},
         {"b", BIGINT()},
@@ -63,6 +64,7 @@ class CudfExpressionSelectionTest : public ::testing::Test {
   }
 
   void TearDown() override {
+    cudf_velox::unregisterFunctions();
     cudf_velox::unregisterCudf();
     execCtx_.reset();
     queryCtx_.reset();

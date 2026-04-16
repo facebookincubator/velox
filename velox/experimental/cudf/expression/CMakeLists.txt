@@ -20,6 +20,8 @@ add_library(
   DateTruncFunction.cpp
   ExpressionEvaluator.cpp
   JitExpression.cpp
+  PrestoFunctions.cpp
+  SparkFunctions.cpp
   SubfieldFiltersToAst.cpp
 )
 

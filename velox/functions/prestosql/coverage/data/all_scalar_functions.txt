@@ -260,6 +260,13 @@ rgb
 round
 rpad
 rtrim
+s2_cell_area_sq_km
+s2_cell_contains
+s2_cell_from_token
+s2_cell_level
+s2_cell_parent
+s2_cell_to_token
+s2_cells
 scale_qdigest
 second
 secure_rand

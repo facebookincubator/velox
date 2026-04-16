@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-#include <fmt/format.h>
 #include <re2/re2.h>
 
 #include "velox/common/config/Config.h"
@@ -23,53 +22,11 @@
 
 namespace facebook::velox::core {
 
-namespace {
-
-// Maps C++ types to ConfigPropertyType.
-template <typename T>
-constexpr config::ConfigPropertyType configPropertyTypeOf() {
-  if constexpr (std::is_same_v<T, bool>) {
-    return config::ConfigPropertyType::kBoolean;
-  } else if constexpr (std::is_integral_v<T>) {
-    return config::ConfigPropertyType::kInteger;
-  } else if constexpr (std::is_floating_point_v<T>) {
-    return config::ConfigPropertyType::kDouble;
-  } else {
-    return config::ConfigPropertyType::kString;
-  }
-}
-
-// Converts a default value to its string representation.
-template <typename T>
-std::string configPropertyDefaultToString(const T& value) {
-  if constexpr (std::is_same_v<T, bool>) {
-    return value ? "true" : "false";
-  } else if constexpr (std::is_arithmetic_v<T>) {
-    return fmt::format("{}", value);
-  } else {
-    return std::string(value);
-  }
-}
-
-// Registers a property from its traits struct.
-template <typename PropertyTraits>
-void registerProperty(std::vector<config::ConfigProperty>& registry) {
-  registry.push_back({
-      PropertyTraits::key,
-      configPropertyTypeOf<typename PropertyTraits::type>(),
-      configPropertyDefaultToString<typename PropertyTraits::type>(
-          PropertyTraits::defaultValue),
-      PropertyTraits::description,
-  });
-}
-
-} // namespace
-
 const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
   static const std::vector<config::ConfigProperty> kProperties = [] {
     std::vector<config::ConfigProperty> properties;
 #define VELOX_REGISTER_QUERY_CONFIG(constName) \
-  registerProperty<QueryConfig::constName##Property>(properties)
+  config::registerConfigProperty<QueryConfig::constName##Property>(properties)
 
     // Memory.
     VELOX_REGISTER_QUERY_CONFIG(kQueryMaxMemoryPerNode);
