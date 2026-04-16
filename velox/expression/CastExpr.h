@@ -376,11 +376,8 @@ class CastExpr : public SpecialForm {
       TResult* result,
       bool& wrapException) const {
     if (castResult.hasError()) {
-      auto errorDetails = errorPrefix;
-      if (!errorDetails.empty() && errorDetails.back() != ' ') {
-        errorDetails.push_back(' ');
-      }
-      errorDetails.append(castResult.error().message());
+      const auto errorDetails =
+          fmt::format("{} {}", errorPrefix, castResult.error().message());
       setCastError(row, context, result, wrapException, errorDetails);
     } else {
       result->set(row, castResult.value());
