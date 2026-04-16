@@ -672,6 +672,52 @@ TEST_F(TDigestTest, winsorizedMeanEqualBounds) {
       digest.winsorizedMean(0.5, 0.5), digest.estimateQuantile(0.5), kSumError);
 }
 
+TEST_F(TDigestTest, trimmedMeanNarrowRangeSmallDigest) {
+  // Both bounds within a single centroid — old trimmedMean had a special early
+  // return for this case. Verify the shared helper produces the same result.
+  TDigest digest;
+  std::vector<int16_t> positions;
+  digest.add(positions, 10.0);
+  digest.add(positions, 20.0);
+  digest.add(positions, 30.0);
+  digest.compress(positions);
+  // Narrow range around the median.
+  double trimmed{digest.trimmedMean(0.4, 0.6)};
+  ASSERT_FALSE(std::isnan(trimmed));
+  // The result should be close to the median value (20).
+  ASSERT_NEAR(trimmed, 20.0, 10.0);
+}
+
+TEST_F(TDigestTest, trimmedMeanSingleElement) {
+  // Single-element digest — trimmedMean should return that element for any
+  // valid range.
+  TDigest digest;
+  std::vector<int16_t> positions;
+  digest.add(positions, 42.0);
+  digest.compress(positions);
+  ASSERT_EQ(digest.trimmedMean(0.1, 0.9), 42.0);
+  ASSERT_EQ(digest.trimmedMean(0.0, 1.0), 42.0);
+  ASSERT_EQ(digest.trimmedMean(0.0, 0.5), 42.0);
+}
+
+TEST_F(TDigestTest, trimmedMeanVsWinsorizedMeanConsistency) {
+  // For uniform data, trimmedMean and winsorizedMean should be close since
+  // tails are symmetric. Verify both use the shared helper correctly.
+  constexpr int N{10'000};
+  TDigest digest;
+  std::vector<int16_t> positions;
+  for (int i = 0; i < N; ++i) {
+    digest.add(positions, i);
+  }
+  digest.compress(positions);
+  double trimmed{digest.trimmedMean(0.1, 0.9)};
+  double winsorized{digest.winsorizedMean(0.1, 0.9)};
+  // Both should be close to the true mean (4999.5) for uniform data.
+  double trueMean{(N - 1) / 2.0};
+  ASSERT_NEAR(trimmed, trueMean, trueMean * 0.02);
+  ASSERT_NEAR(winsorized, trueMean, trueMean * 0.02);
+}
+
 TEST_F(TDigestTest, winsorizedMeanInvalid) {
   TDigest digest;
   std::vector<int16_t> positions;

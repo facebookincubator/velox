@@ -114,6 +114,7 @@ velox_add_library(
   SetDigestAggregate.h
   SumAggregate.h
   SumDataSizeForStatsAggregate.h
+  TDigestAccumulator.h
   VarianceAggregates.h
   VectorSumAggregate.h
 )
