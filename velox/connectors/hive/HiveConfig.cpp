@@ -68,34 +68,43 @@ uint32_t HiveConfig::maxPartitionsPerWriters(
 }
 
 uint32_t HiveConfig::maxBucketCount(const config::ConfigBase* session) const {
-  return session->get<uint32_t>(
-      kMaxBucketCountSession, config_->get<uint32_t>(kMaxBucketCount, 100'000));
+  return sessionValue<uint32_t>(
+      session, kMaxBucketCountSession, kMaxBucketCount, 100'000);
 }
 
 bool HiveConfig::immutablePartitions() const {
-  return config_->get<bool>(kImmutablePartitions, false);
+  return configValue<bool>(kImmutablePartitions, false);
 }
 
 std::string HiveConfig::gcsEndpoint() const {
-  return config_->get<std::string>(kGcsEndpoint, std::string(""));
+  return configValue<std::string>(kGcsEndpoint, std::string(""));
 }
 
 std::string HiveConfig::gcsCredentialsPath() const {
-  return config_->get<std::string>(kGcsCredentialsPath, std::string(""));
+  return configValue<std::string>(kGcsCredentialsPath, std::string(""));
 }
 
 std::optional<int> HiveConfig::gcsMaxRetryCount() const {
-  return static_cast<std::optional<int>>(config_->get<int>(kGcsMaxRetryCount));
+  if (auto val = config_->get<int>(kGcsMaxRetryCount)) {
+    return val;
+  }
+  return config_->get<int>(std::string(kLegacyPrefix) + kGcsMaxRetryCount);
 }
 
 std::optional<std::string> HiveConfig::gcsMaxRetryTime() const {
-  return static_cast<std::optional<std::string>>(
-      config_->get<std::string>(kGcsMaxRetryTime));
+  if (auto val = config_->get<std::string>(kGcsMaxRetryTime)) {
+    return val;
+  }
+  return config_->get<std::string>(
+      std::string(kLegacyPrefix) + kGcsMaxRetryTime);
 }
 
 std::optional<std::string> HiveConfig::gcsAuthAccessTokenProvider() const {
-  return static_cast<std::optional<std::string>>(
-      config_->get<std::string>(kGcsAuthAccessTokenProvider));
+  if (auto val = config_->get<std::string>(kGcsAuthAccessTokenProvider)) {
+    return val;
+  }
+  return config_->get<std::string>(
+      std::string(kLegacyPrefix) + kGcsAuthAccessTokenProvider);
 }
 
 bool HiveConfig::isPartitionPathAsLowerCase(
@@ -123,7 +132,11 @@ bool HiveConfig::isFileHandleCacheEnabled() const {
 }
 
 std::string HiveConfig::writeFileCreateConfig() const {
-  return config_->get<std::string>(kWriteFileCreateConfig, "");
+  // Legacy key used snake_case: "hive.write_file_create_config".
+  if (auto val = config_->get<std::string>(kWriteFileCreateConfig)) {
+    return val.value();
+  }
+  return config_->get<std::string>("hive.write_file_create_config", "");
 }
 
 uint32_t HiveConfig::sortWriterMaxOutputRows(
@@ -159,9 +172,8 @@ uint64_t HiveConfig::maxTargetFileSizeBytes(
 
 uint32_t HiveConfig::maxRowsPerIndexRequest(
     const config::ConfigBase* session) const {
-  return session->get<uint32_t>(
-      kMaxRowsPerIndexRequestSession,
-      config_->get<uint32_t>(kMaxRowsPerIndexRequest, 0));
+  return sessionValue<uint32_t>(
+      session, kMaxRowsPerIndexRequestSession, kMaxRowsPerIndexRequest, 0);
 }
 
 std::string HiveConfig::user(const config::ConfigBase* session) const {

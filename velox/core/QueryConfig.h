@@ -15,11 +15,58 @@
  */
 #pragma once
 
-#include "velox/common/compression/Compression.h"
 #include "velox/common/config/Config.h"
+#include "velox/common/config/ConfigProperty.h"
 #include "velox/vector/TypeAliases.h"
 
 namespace facebook::velox::core {
+
+/// Macros for defining query config properties.
+///
+/// To add a new property, add two lines (order doesn't matter, but
+/// grouping related properties together helps readability):
+///
+/// 1. In QueryConfig.h (inside the class body):
+///   VELOX_QUERY_CONFIG(kSpillEnabled, spillEnabled, "spill_enabled",
+///       bool, false, "Global enable spilling flag.");
+///
+/// 2. In QueryConfig.cpp (inside registeredProperties()):
+///   VELOX_REGISTER_QUERY_CONFIG(kSpillEnabled);
+///
+/// VELOX_QUERY_CONFIG generates:
+///   - struct kSpillEnabledProperty {
+///         using type = bool;
+///         static constexpr const char* key = "spill_enabled";
+///         static constexpr auto defaultValue = false;
+///         static constexpr const char* description = "Global enable...";
+///     };
+///   - static constexpr const char* kSpillEnabled = "spill_enabled"
+///   - bool spillEnabled() const {
+///         return get<bool>(kSpillEnabled, false);
+///     }
+///
+/// VELOX_QUERY_CONFIG_PROPERTY generates the same but without the accessor.
+/// Used for legacy properties with custom accessor logic (capacity parsing,
+/// validation, clamping). New properties should use VELOX_QUERY_CONFIG and
+/// put validation in QueryConfig::validateConfig() and
+/// QueryConfigProvider::normalize().
+/// TODO: Unify validateConfig() and normalize() into a single validation path.
+#define VELOX_QUERY_CONFIG_PROPERTY(                 \
+    constName, keyStr, CppType, defaultVal, desc)    \
+  struct constName##Property {                       \
+    using type = CppType;                            \
+    static constexpr const char* key = keyStr;       \
+    static constexpr auto defaultValue = defaultVal; \
+    static constexpr const char* description = desc; \
+  };                                                 \
+  static constexpr const char* constName = keyStr;
+
+#define VELOX_QUERY_CONFIG(                                                 \
+    constName, accessorName, keyStr, CppType, defaultVal, desc)             \
+  VELOX_QUERY_CONFIG_PROPERTY(constName, keyStr, CppType, defaultVal, desc) \
+  CppType accessorName() const {                                            \
+    return get<CppType>(constName, defaultVal);                             \
+  }
 
 /// A simple wrapper around velox::IConfig. Defines constants for query
 /// config properties and accessor methods.
@@ -37,1066 +84,1399 @@ class QueryConfig {
       ConfigTag /*tag*/,
       std::shared_ptr<const config::IConfig> config);
 
+  /// Returns all registered query config properties.
+  static const std::vector<config::ConfigProperty>& registeredProperties();
+
   /// Maximum memory that a query can use on a single host.
-  static constexpr const char* kQueryMaxMemoryPerNode =
-      "query_max_memory_per_node";
+  VELOX_QUERY_CONFIG_PROPERTY(
+      kQueryMaxMemoryPerNode,
+      "query_max_memory_per_node",
+      std::string,
+      "0B",
+      "Maximum memory that a query can use on a single host.")
 
   /// User provided session timezone. Stores a string with the actual timezone
   /// name, e.g: "America/Los_Angeles".
-  static constexpr const char* kSessionTimezone = "session_timezone";
+  VELOX_QUERY_CONFIG(
+      kSessionTimezone,
+      sessionTimezone,
+      "session_timezone",
+      std::string,
+      "",
+      "Session timezone name, e.g. 'America/Los_Angeles'.")
 
   /// Session start time in milliseconds since Unix epoch. This represents when
   /// the query session began execution. Used for functions that need to know
   /// the session start time (e.g., current_date, localtime).
-  static constexpr const char* kSessionStartTime = "start_time";
+  VELOX_QUERY_CONFIG(
+      kSessionStartTime,
+      sessionStartTimeMs,
+      "start_time",
+      int64_t,
+      0,
+      "Session start time in milliseconds since Unix epoch.")
 
   /// If true, timezone-less timestamp conversions (e.g. string to timestamp,
   /// when the string does not specify a timezone) will be adjusted to the user
   /// provided session timezone (if any).
-  ///
-  /// For instance:
-  ///
-  ///  if this option is true and user supplied "America/Los_Angeles",
-  ///  "1970-01-01" will be converted to -28800 instead of 0.
-  ///
-  /// False by default.
-  static constexpr const char* kAdjustTimestampToTimezone =
-      "adjust_timestamp_to_session_timezone";
+  VELOX_QUERY_CONFIG(
+      kAdjustTimestampToTimezone,
+      adjustTimestampToTimezone,
+      "adjust_timestamp_to_session_timezone",
+      bool,
+      false,
+      "Adjust timezone-less timestamp conversions to session timezone.")
 
   /// Whether to use the simplified expression evaluation path. False by
   /// default.
-  static constexpr const char* kExprEvalSimplified =
-      "expression.eval_simplified";
+  VELOX_QUERY_CONFIG(
+      kExprEvalSimplified,
+      exprEvalSimplified,
+      "expression.eval_simplified",
+      bool,
+      false,
+      "Use simplified expression evaluation path.")
 
   /// Whether to enable the FlatNoNulls fast path for expression evaluation.
   /// When enabled, expressions skip null checking and vector decoding when all
   /// inputs are flat-encoded with no nulls. True by default.
-  static constexpr const char* kExprEvalFlatNoNulls =
-      "expression.eval_flat_no_nulls";
+  VELOX_QUERY_CONFIG(
+      kExprEvalFlatNoNulls,
+      exprEvalFlatNoNulls,
+      "expression.eval_flat_no_nulls",
+      bool,
+      true,
+      "Enable FlatNoNulls fast path for expression evaluation.")
 
   /// Whether to track CPU usage for individual expressions (supported by call
   /// and cast expressions). False by default. Can be expensive when processing
   /// small batches, e.g. < 10K rows.
-  static constexpr const char* kExprTrackCpuUsage =
-      "expression.track_cpu_usage";
+  VELOX_QUERY_CONFIG(
+      kExprTrackCpuUsage,
+      exprTrackCpuUsage,
+      "expression.track_cpu_usage",
+      bool,
+      false,
+      "Track CPU usage for individual expressions.")
 
   /// Takes a comma separated list of function names to track CPU usage for.
   /// Only applicable when kExprTrackCpuUsage is set to false. Is empty by
-  /// default. This allows fine-grained control over CPU tracking overhead when
-  /// only specific functions need to be monitored.
-  static constexpr const char* kExprTrackCpuUsageForFunctions =
-      "expression.track_cpu_usage_for_functions";
+  /// default.
+  VELOX_QUERY_CONFIG(
+      kExprTrackCpuUsageForFunctions,
+      exprTrackCpuUsageForFunctions,
+      "expression.track_cpu_usage_for_functions",
+      std::string,
+      "",
+      "Comma-separated function names to track CPU usage for.")
 
   /// Enables adaptive per-function CPU usage sampling. When enabled, each
   /// function is calibrated over the first 6 batches (1 warmup + 5
   /// calibration) to measure the overhead of CPU tracking (clock_gettime).
-  /// Functions where tracking overhead exceeds
-  /// kExprAdaptiveCpuSamplingMaxOverheadPct are automatically sampled at a
-  /// rate proportional to their overhead. Functions with low overhead are
-  /// always tracked. Disabled by default.
-  static constexpr const char* kExprAdaptiveCpuSampling =
-      "expression.adaptive_cpu_sampling";
+  VELOX_QUERY_CONFIG(
+      kExprAdaptiveCpuSampling,
+      exprAdaptiveCpuSampling,
+      "expression.adaptive_cpu_sampling",
+      bool,
+      false,
+      "Enable adaptive per-function CPU usage sampling.")
 
   /// Maximum acceptable overhead percentage for CPU tracking per function.
-  /// Used with kExprAdaptiveCpuSampling. Functions whose CPU tracking overhead
-  /// exceeds this threshold are sampled at a rate of
-  /// ceil(overhead_pct / max_overhead_pct). For example, with max_overhead=1.0,
-  /// a function with 70% tracking overhead is sampled every 70th batch.
-  /// Default: 1.0 (1% overhead target).
-  static constexpr const char* kExprAdaptiveCpuSamplingMaxOverheadPct =
-      "expression.adaptive_cpu_sampling_max_overhead_pct";
+  /// Used with kExprAdaptiveCpuSampling.
+  VELOX_QUERY_CONFIG(
+      kExprAdaptiveCpuSamplingMaxOverheadPct,
+      exprAdaptiveCpuSamplingMaxOverheadPct,
+      "expression.adaptive_cpu_sampling_max_overhead_pct",
+      double,
+      1.0,
+      "Maximum acceptable overhead percentage for CPU tracking per function.")
 
   /// Controls whether non-deterministic expressions are deduplicated during
-  /// compilation. This is intended for testing and debugging purposes. By
-  /// default, this is set to true to preserve standard behavior. If set to
-  /// false, non-deterministic functions (such as rand()) will not be
-  /// deduplicated. Since non-deterministic functions may yield different
-  /// outputs on each call, disabling deduplication guarantees that the function
-  /// is executed only when the original expression is evaluated, rather than
-  /// being triggered for every deduplicated instance. This ensures each
-  /// invocation corresponds directly to the actual expression, maintaining
-  /// independent behavior for each call.
-  static constexpr const char* kExprDedupNonDeterministic =
-      "expression.dedup_non_deterministic";
+  /// compilation. If set to false, non-deterministic functions (such as
+  /// rand()) will not be deduplicated.
+  VELOX_QUERY_CONFIG(
+      kExprDedupNonDeterministic,
+      exprDedupNonDeterministic,
+      "expression.dedup_non_deterministic",
+      bool,
+      true,
+      "Deduplicate non-deterministic expressions during compilation.")
 
   /// Whether to track CPU usage for stages of individual operators. True by
   /// default. Can be expensive when processing small batches, e.g. < 10K rows.
-  static constexpr const char* kOperatorTrackCpuUsage =
-      "track_operator_cpu_usage";
+  VELOX_QUERY_CONFIG(
+      kOperatorTrackCpuUsage,
+      operatorTrackCpuUsage,
+      "track_operator_cpu_usage",
+      bool,
+      true,
+      "Track CPU usage for stages of individual operators.")
 
   /// Flags used to configure the CAST operator:
-
-  static constexpr const char* kLegacyCast = "legacy_cast";
+  VELOX_QUERY_CONFIG(
+      kLegacyCast,
+      isLegacyCast,
+      "legacy_cast",
+      bool,
+      false,
+      "Use legacy CAST behavior.")
 
   /// This flag makes the Row conversion to by applied in a way that the casting
   /// row field are matched by name instead of position.
-  static constexpr const char* kCastMatchStructByName =
-      "cast_match_struct_by_name";
+  VELOX_QUERY_CONFIG(
+      kCastMatchStructByName,
+      isMatchStructByName,
+      "cast_match_struct_by_name",
+      bool,
+      false,
+      "Match Row fields by name instead of position in CAST.")
 
   /// Reduce() function will throw an error if encountered an array of size
   /// greater than this.
-  static constexpr const char* kExprMaxArraySizeInReduce =
-      "expression.max_array_size_in_reduce";
+  VELOX_QUERY_CONFIG(
+      kExprMaxArraySizeInReduce,
+      exprMaxArraySizeInReduce,
+      "expression.max_array_size_in_reduce",
+      uint64_t,
+      100'000,
+      "Maximum array size allowed in reduce() function.")
 
   /// Controls maximum number of compiled regular expression patterns per
   /// function instance per thread of execution.
-  static constexpr const char* kExprMaxCompiledRegexes =
-      "expression.max_compiled_regexes";
+  VELOX_QUERY_CONFIG(
+      kExprMaxCompiledRegexes,
+      exprMaxCompiledRegexes,
+      "expression.max_compiled_regexes",
+      uint64_t,
+      100,
+      "Maximum compiled regex patterns per function instance per thread.")
 
   /// Used for backpressure to block local exchange producers when the local
   /// exchange buffer reaches or exceeds this size.
-  static constexpr const char* kMaxLocalExchangeBufferSize =
-      "max_local_exchange_buffer_size";
+  VELOX_QUERY_CONFIG(
+      kMaxLocalExchangeBufferSize,
+      maxLocalExchangeBufferSize,
+      "max_local_exchange_buffer_size",
+      uint64_t,
+      32UL << 20,
+      "Max local exchange buffer size in bytes for backpressure.")
 
   /// Limits the number of partitions created by a local exchange.
-  /// Partitioning data too granularly can lead to poor performance.
-  /// This setting allows increasing the task concurrency for all
-  /// pipelines except the ones that require a local partitioning.
-  /// Affects the number of drivers for pipelines containing
-  /// LocalPartitionNode and cannot exceed the maximum number of
-  /// pipeline drivers configured for the task.
-  static constexpr const char* kMaxLocalExchangePartitionCount =
-      "max_local_exchange_partition_count";
+  VELOX_QUERY_CONFIG(
+      kMaxLocalExchangePartitionCount,
+      maxLocalExchangePartitionCount,
+      "max_local_exchange_partition_count",
+      uint32_t,
+      std::numeric_limits<uint32_t>::max(),
+      "Maximum number of partitions in local exchange.")
 
   /// Minimum number of local exchange output partitions to use buffered
   /// partitioning.
-  ///
-  /// When the number of output partitions is low, it is preferred to process
-  /// one input vector at a time. For example, with 10 output partitions
-  /// splitting a single 100KB input vector into 10 10KB vectors is acceptable.
-  /// However, when the number of output partitions is high it may result in a
-  /// large number of tiny vectors generated. For example, with 100 output
-  /// partitions splitting a single 100KB input vector results in 100 1KB
-  /// vectors. Exchanging and processing tiny vectors may negatively impact
-  /// performance. To avoid this, buffered partitioning is used to accumulate
-  /// larger vectors.
-  static constexpr const char*
-      kMinLocalExchangePartitionCountToUsePartitionBuffer =
-          "min_local_exchange_partition_count_to_use_partition_buffer";
+  VELOX_QUERY_CONFIG(
+      kMinLocalExchangePartitionCountToUsePartitionBuffer,
+      minLocalExchangePartitionCountToUsePartitionBuffer,
+      "min_local_exchange_partition_count_to_use_partition_buffer",
+      uint32_t,
+      33,
+      "Minimum output partitions to use buffered partitioning.")
 
   /// Maximum size in bytes to accumulate for a single partition of a local
   /// exchange before flushing.
-  ///
-  /// The total amount of memory used by a single
-  /// local exchange operator is the sum of the sizes of all partitions. For
-  /// example, if the number of downstream pipeline drivers is 10 and the max
-  /// local exchange partition buffer size is 100KB, then the total memory used
-  /// by a single local exchange operator is 1MB. The total memory needed to
-  /// perform a local exchange is equal to the single local exchange
-  /// operator memory multiplied by the number of upstream pipeline drivers. For
-  /// example, if the number of upstream pipeline drivers is 10 the total memory
-  /// used by the local exchange operator is 10MB.
-  static constexpr const char* kMaxLocalExchangePartitionBufferSize =
-      "max_local_exchange_partition_buffer_size";
+  VELOX_QUERY_CONFIG(
+      kMaxLocalExchangePartitionBufferSize,
+      maxLocalExchangePartitionBufferSize,
+      "max_local_exchange_partition_buffer_size",
+      uint64_t,
+      64UL * 1024,
+      "Max bytes to accumulate per local exchange partition.")
 
   /// Try to preserve the encoding of the input vector when copying it to the
   /// buffer.
-  static constexpr const char* kLocalExchangePartitionBufferPreserveEncoding =
-      "local_exchange_partition_buffer_preserve_encoding";
+  VELOX_QUERY_CONFIG(
+      kLocalExchangePartitionBufferPreserveEncoding,
+      localExchangePartitionBufferPreserveEncoding,
+      "local_exchange_partition_buffer_preserve_encoding",
+      bool,
+      false,
+      "Preserve encoding of input vector in partition buffer.")
 
   /// Maximum number of vectors buffered in each local merge source before
   /// blocking to wait for consumers.
-  static constexpr const char* kLocalMergeSourceQueueSize =
-      "local_merge_source_queue_size";
+  VELOX_QUERY_CONFIG(
+      kLocalMergeSourceQueueSize,
+      localMergeSourceQueueSize,
+      "local_merge_source_queue_size",
+      uint32_t,
+      2,
+      "Maximum vectors buffered in each local merge source.")
 
   /// Maximum size in bytes to accumulate in ExchangeQueue. Enforced
   /// approximately, not strictly.
-  static constexpr const char* kMaxExchangeBufferSize =
-      "exchange.max_buffer_size";
+  VELOX_QUERY_CONFIG(
+      kMaxExchangeBufferSize,
+      maxExchangeBufferSize,
+      "exchange.max_buffer_size",
+      uint64_t,
+      32UL << 20,
+      "Maximum bytes to accumulate in ExchangeQueue.")
 
   /// Maximum size in bytes to accumulate among all sources of the merge
   /// exchange. Enforced approximately, not strictly.
-  static constexpr const char* kMaxMergeExchangeBufferSize =
-      "merge_exchange.max_buffer_size";
+  VELOX_QUERY_CONFIG(
+      kMaxMergeExchangeBufferSize,
+      maxMergeExchangeBufferSize,
+      "merge_exchange.max_buffer_size",
+      uint64_t,
+      128UL << 20,
+      "Maximum bytes to accumulate among all merge exchange sources.")
 
   /// The minimum number of bytes to accumulate in the ExchangeQueue
-  /// before unblocking a consumer. This is used to avoid creating tiny
-  /// batches which may have a negative impact on performance when the
-  /// cost of creating vectors is high (for example, when there are many
-  /// columns). To avoid latency degradation, the exchange client unblocks a
-  /// consumer when 1% of the data size observed so far is accumulated.
-  static constexpr const char* kMinExchangeOutputBatchBytes =
-      "min_exchange_output_batch_bytes";
+  /// before unblocking a consumer.
+  VELOX_QUERY_CONFIG(
+      kMinExchangeOutputBatchBytes,
+      minExchangeOutputBatchBytes,
+      "min_exchange_output_batch_bytes",
+      uint64_t,
+      2UL << 20,
+      "Minimum bytes to accumulate before unblocking an exchange consumer.")
 
-  static constexpr const char* kMaxPartialAggregationMemory =
-      "max_partial_aggregation_memory";
+  VELOX_QUERY_CONFIG(
+      kMaxPartialAggregationMemory,
+      maxPartialAggregationMemoryUsage,
+      "max_partial_aggregation_memory",
+      uint64_t,
+      1L << 24,
+      "Maximum memory for partial aggregation.")
 
-  static constexpr const char* kMaxExtendedPartialAggregationMemory =
-      "max_extended_partial_aggregation_memory";
+  VELOX_QUERY_CONFIG(
+      kMaxExtendedPartialAggregationMemory,
+      maxExtendedPartialAggregationMemoryUsage,
+      "max_extended_partial_aggregation_memory",
+      uint64_t,
+      1L << 26,
+      "Maximum memory for extended partial aggregation.")
 
-  static constexpr const char* kAbandonPartialAggregationMinRows =
-      "abandon_partial_aggregation_min_rows";
+  VELOX_QUERY_CONFIG(
+      kAbandonPartialAggregationMinRows,
+      abandonPartialAggregationMinRows,
+      "abandon_partial_aggregation_min_rows",
+      int32_t,
+      100'000,
+      "Minimum input rows before checking whether to abandon partial aggregation.")
 
-  static constexpr const char* kAbandonPartialAggregationMinPct =
-      "abandon_partial_aggregation_min_pct";
+  VELOX_QUERY_CONFIG(
+      kAbandonPartialAggregationMinPct,
+      abandonPartialAggregationMinPct,
+      "abandon_partial_aggregation_min_pct",
+      int32_t,
+      80,
+      "Abandon partial aggregation if reduction percentage exceeds this.")
 
   /// Memory threshold in bytes for triggering string compaction during
-  /// global aggregation. When total string storage exceeds this limit with
-  /// high unused memory ratio, compaction is triggered to reclaim dead strings.
-  /// Disabled by default (0).
-  ///
-  /// NOTE: currently only applies to approx_most_frequent aggregate with
-  /// StringView type during global aggregation. May extend to other types.
-  static constexpr const char* kAggregationCompactionBytesThreshold =
-      "aggregation_compaction_bytes_threshold";
+  /// global aggregation. Disabled by default (0).
+  VELOX_QUERY_CONFIG(
+      kAggregationCompactionBytesThreshold,
+      aggregationCompactionBytesThreshold,
+      "aggregation_compaction_bytes_threshold",
+      uint64_t,
+      0,
+      "Memory threshold in bytes for triggering string compaction during aggregation.")
 
   /// Ratio of unused (evicted) bytes to total bytes that triggers compaction.
-  /// Value is between 0.0 and 1.0. Default is 0.25.
-  ///
-  /// NOTE: currently only applies to approx_most_frequent aggregate with
-  /// StringView type during global aggregation. May extend to other types.
-  static constexpr const char* kAggregationCompactionUnusedMemoryRatio =
-      "aggregation_compaction_unused_memory_ratio";
+  VELOX_QUERY_CONFIG(
+      kAggregationCompactionUnusedMemoryRatio,
+      aggregationCompactionUnusedMemoryRatio,
+      "aggregation_compaction_unused_memory_ratio",
+      double,
+      0.25,
+      "Ratio of unused bytes to total bytes that triggers compaction.")
 
   /// If true, enables lightweight memory compaction before spilling during
-  /// memory reclaim in aggregation. When enabled, the aggregation operator
-  /// will try to compact aggregate function state (e.g., free dead strings)
-  /// before resorting to spilling.
-  /// Disabled by default.
-  static constexpr const char* kAggregationMemoryCompactionReclaimEnabled =
-      "aggregation_memory_compaction_reclaim_enabled";
+  /// memory reclaim in aggregation.
+  VELOX_QUERY_CONFIG(
+      kAggregationMemoryCompactionReclaimEnabled,
+      aggregationMemoryCompactionReclaimEnabled,
+      "aggregation_memory_compaction_reclaim_enabled",
+      bool,
+      false,
+      "Enable memory compaction before spilling during aggregation reclaim.")
 
-  static constexpr const char* kAbandonPartialTopNRowNumberMinRows =
-      "abandon_partial_topn_row_number_min_rows";
+  VELOX_QUERY_CONFIG(
+      kAbandonPartialTopNRowNumberMinRows,
+      abandonPartialTopNRowNumberMinRows,
+      "abandon_partial_topn_row_number_min_rows",
+      int32_t,
+      100'000,
+      "Minimum rows before checking whether to abandon partial TopN row number.")
 
-  static constexpr const char* kAbandonPartialTopNRowNumberMinPct =
-      "abandon_partial_topn_row_number_min_pct";
+  VELOX_QUERY_CONFIG(
+      kAbandonPartialTopNRowNumberMinPct,
+      abandonPartialTopNRowNumberMinPct,
+      "abandon_partial_topn_row_number_min_pct",
+      int32_t,
+      80,
+      "Abandon partial TopN row number if reduction percentage exceeds this.")
 
   /// Number of input rows to receive before starting to check whether to
-  /// abandon building a HashTable without duplicates in HashBuild for left
-  /// semi/anti join.
-  static constexpr const char* kAbandonDedupHashMapMinRows =
-      "abandon_dedup_hashmap_min_rows";
+  /// abandon building a HashTable without duplicates in HashBuild.
+  VELOX_QUERY_CONFIG(
+      kAbandonDedupHashMapMinRows,
+      abandonHashBuildDedupMinRows,
+      "abandon_dedup_hashmap_min_rows",
+      int32_t,
+      100'000,
+      "Minimum rows before checking whether to abandon dedup hash map.")
 
   /// Abandons building a HashTable without duplicates in HashBuild for left
-  /// semi/anti join if the percentage of distinct keys in the HashTable exceeds
-  /// this threshold. Zero means 'disable this optimization'.
-  static constexpr const char* kAbandonDedupHashMapMinPct =
-      "abandon_dedup_hashmap_min_pct";
+  /// semi/anti join if the percentage of distinct keys exceeds this threshold.
+  VELOX_QUERY_CONFIG(
+      kAbandonDedupHashMapMinPct,
+      abandonHashBuildDedupMinPct,
+      "abandon_dedup_hashmap_min_pct",
+      int32_t,
+      0,
+      "Abandon dedup hash map if distinct key percentage exceeds this. 0 disables.")
 
-  static constexpr const char* kMaxElementsSizeInRepeatAndSequence =
-      "max_elements_size_in_repeat_and_sequence";
+  VELOX_QUERY_CONFIG(
+      kMaxElementsSizeInRepeatAndSequence,
+      maxElementsSizeInRepeatAndSequence,
+      "max_elements_size_in_repeat_and_sequence",
+      int32_t,
+      10'000,
+      "Maximum elements size in repeat and sequence functions.")
 
-  /// If true, the PartitionedOutput operator will flush rows eagerly, without
-  /// waiting until buffers reach certain size. Default is false.
-  static constexpr const char* kPartitionedOutputEagerFlush =
-      "partitioned_output_eager_flush";
+  /// If true, the PartitionedOutput operator will flush rows eagerly.
+  VELOX_QUERY_CONFIG(
+      kPartitionedOutputEagerFlush,
+      partitionedOutputEagerFlush,
+      "partitioned_output_eager_flush",
+      bool,
+      false,
+      "Flush PartitionedOutput rows eagerly without buffering.")
 
   /// The maximum number of bytes to buffer in PartitionedOutput operator to
   /// avoid creating tiny SerializedPages.
-  ///
-  /// For PartitionedOutputNode::Kind::kPartitioned, PartitionedOutput operator
-  /// would buffer up to that number of bytes / number of destinations for each
-  /// destination before producing a SerializedPage.
-  static constexpr const char* kMaxPartitionedOutputBufferSize =
-      "max_page_partitioning_buffer_size";
+  VELOX_QUERY_CONFIG(
+      kMaxPartitionedOutputBufferSize,
+      maxPartitionedOutputBufferSize,
+      "max_page_partitioning_buffer_size",
+      uint64_t,
+      32UL << 20,
+      "Maximum bytes to buffer in PartitionedOutput operator.")
 
   /// The maximum size in bytes for the task's buffered output.
-  ///
-  /// The producer Drivers are blocked when the buffered size exceeds
-  /// this. The Drivers are resumed when the buffered size goes below
-  /// OutputBufferManager::kContinuePct % of this.
-  static constexpr const char* kMaxOutputBufferSize = "max_output_buffer_size";
+  VELOX_QUERY_CONFIG(
+      kMaxOutputBufferSize,
+      maxOutputBufferSize,
+      "max_output_buffer_size",
+      uint64_t,
+      32UL << 20,
+      "Maximum size in bytes for the task's buffered output.")
 
   /// Preferred size of batches in bytes to be returned by operators from
-  /// Operator::getOutput. It is used when an estimate of average row size is
-  /// known. Otherwise kPreferredOutputBatchRows is used.
-  static constexpr const char* kPreferredOutputBatchBytes =
-      "preferred_output_batch_bytes";
+  /// Operator::getOutput.
+  VELOX_QUERY_CONFIG(
+      kPreferredOutputBatchBytes,
+      preferredOutputBatchBytes,
+      "preferred_output_batch_bytes",
+      uint64_t,
+      10UL << 20,
+      "Preferred size of output batches in bytes.")
 
   /// Preferred number of rows to be returned by operators from
-  /// Operator::getOutput. It is used when an estimate of average row size is
-  /// not known. When the estimate of average row size is known,
-  /// kPreferredOutputBatchBytes is used.
-  static constexpr const char* kPreferredOutputBatchRows =
-      "preferred_output_batch_rows";
+  /// Operator::getOutput. Used when average row size is not known.
+  VELOX_QUERY_CONFIG_PROPERTY(
+      kPreferredOutputBatchRows,
+      "preferred_output_batch_rows",
+      uint32_t,
+      1024,
+      "Preferred number of rows in output batches.")
 
   /// Max number of rows that could be return by operators from
-  /// Operator::getOutput. It is used when an estimate of average row size is
-  /// known and kPreferredOutputBatchBytes is used to compute the number of
-  /// output rows.
-  static constexpr const char* kMaxOutputBatchRows = "max_output_batch_rows";
+  /// Operator::getOutput.
+  VELOX_QUERY_CONFIG_PROPERTY(
+      kMaxOutputBatchRows,
+      "max_output_batch_rows",
+      uint32_t,
+      10000,
+      "Maximum number of rows in output batches.")
 
-  /// Initial output batch size in rows for MergeJoin operator. When non-zero,
-  /// the batch size starts at this value and is dynamically adjusted based on
-  /// the average row size of previous output batches. When zero (default),
-  /// dynamic adjustment is disabled and the batch size is fixed at
-  /// preferredOutputBatchRows.
-  static constexpr const char* kMergeJoinOutputBatchStartSize =
-      "merge_join_output_batch_start_size";
+  /// Initial output batch size in rows for MergeJoin operator.
+  VELOX_QUERY_CONFIG_PROPERTY(
+      kMergeJoinOutputBatchStartSize,
+      "merge_join_output_batch_start_size",
+      uint32_t,
+      0,
+      "Initial output batch size in rows for MergeJoin. 0 disables dynamic adjustment.")
 
   /// TableScan operator will exit getOutput() method after this many
   /// milliseconds even if it has no data to return yet. Zero means 'no time
   /// limit'.
-  static constexpr const char* kTableScanGetOutputTimeLimitMs =
-      "table_scan_getoutput_time_limit_ms";
+  VELOX_QUERY_CONFIG(
+      kTableScanGetOutputTimeLimitMs,
+      tableScanGetOutputTimeLimitMs,
+      "table_scan_getoutput_time_limit_ms",
+      uint32_t,
+      5'000,
+      "Time limit in ms for TableScan getOutput(). 0 means no limit.")
 
   /// If non-zero, overrides the number of rows in each output batch produced
-  /// by the TableScan operator, bypassing the dynamic batch size calculation.
-  /// Zero means 'no override'.
-  static constexpr const char* kTableScanOutputBatchRowsOverride =
-      "table_scan_output_batch_rows_override";
+  /// by the TableScan operator. Zero means 'no override'.
+  VELOX_QUERY_CONFIG(
+      kTableScanOutputBatchRowsOverride,
+      tableScanOutputBatchRowsOverride,
+      "table_scan_output_batch_rows_override",
+      uint32_t,
+      0,
+      "Override number of rows in TableScan output batches. 0 means no override.")
 
   /// If false, the 'group by' code is forced to use generic hash mode
   /// hashtable.
-  static constexpr const char* kHashAdaptivityEnabled =
-      "hash_adaptivity_enabled";
+  VELOX_QUERY_CONFIG(
+      kHashAdaptivityEnabled,
+      hashAdaptivityEnabled,
+      "hash_adaptivity_enabled",
+      bool,
+      true,
+      "Enable hash adaptivity for group-by hash mode selection.")
 
   /// If true, the conjunction expression can reorder inputs based on the time
   /// taken to calculate them.
-  static constexpr const char* kAdaptiveFilterReorderingEnabled =
-      "adaptive_filter_reordering_enabled";
+  VELOX_QUERY_CONFIG(
+      kAdaptiveFilterReorderingEnabled,
+      adaptiveFilterReorderingEnabled,
+      "adaptive_filter_reordering_enabled",
+      bool,
+      true,
+      "Allow conjunction to reorder inputs based on evaluation time.")
 
   /// If true, allow hash probe drivers to generate build-side rows in parallel.
-  static constexpr const char* kParallelOutputJoinBuildRowsEnabled =
-      "parallel_output_join_build_rows_enabled";
+  VELOX_QUERY_CONFIG(
+      kParallelOutputJoinBuildRowsEnabled,
+      parallelOutputJoinBuildRowsEnabled,
+      "parallel_output_join_build_rows_enabled",
+      bool,
+      false,
+      "Allow hash probe drivers to generate build-side rows in parallel.")
 
   /// Global enable spilling flag.
-  static constexpr const char* kSpillEnabled = "spill_enabled";
+  VELOX_QUERY_CONFIG(
+      kSpillEnabled,
+      spillEnabled,
+      "spill_enabled",
+      bool,
+      false,
+      "Global enable spilling flag.")
 
   /// Aggregation spilling flag, only applies if "spill_enabled" flag is set.
-  static constexpr const char* kAggregationSpillEnabled =
-      "aggregation_spill_enabled";
+  VELOX_QUERY_CONFIG(
+      kAggregationSpillEnabled,
+      aggregationSpillEnabled,
+      "aggregation_spill_enabled",
+      bool,
+      true,
+      "Enable aggregation spilling. Requires spill_enabled.")
 
   /// Join spilling flag, only applies if "spill_enabled" flag is set.
-  static constexpr const char* kJoinSpillEnabled = "join_spill_enabled";
+  VELOX_QUERY_CONFIG(
+      kJoinSpillEnabled,
+      joinSpillEnabled,
+      "join_spill_enabled",
+      bool,
+      true,
+      "Enable join spilling. Requires spill_enabled.")
 
   /// Config to enable hash join spill for mixed grouped execution mode.
-  static constexpr const char* kMixedGroupedModeHashJoinSpillEnabled =
-      "mixed_grouped_mode_hash_join_spill_enabled";
+  VELOX_QUERY_CONFIG(
+      kMixedGroupedModeHashJoinSpillEnabled,
+      mixedGroupedModeHashJoinSpillEnabled,
+      "mixed_grouped_mode_hash_join_spill_enabled",
+      bool,
+      false,
+      "Enable hash join spill for mixed grouped execution mode.")
 
   /// OrderBy spilling flag, only applies if "spill_enabled" flag is set.
-  static constexpr const char* kOrderBySpillEnabled = "order_by_spill_enabled";
+  VELOX_QUERY_CONFIG(
+      kOrderBySpillEnabled,
+      orderBySpillEnabled,
+      "order_by_spill_enabled",
+      bool,
+      true,
+      "Enable order-by spilling. Requires spill_enabled.")
 
   /// Window spilling flag, only applies if "spill_enabled" flag is set.
-  static constexpr const char* kWindowSpillEnabled = "window_spill_enabled";
+  VELOX_QUERY_CONFIG(
+      kWindowSpillEnabled,
+      windowSpillEnabled,
+      "window_spill_enabled",
+      bool,
+      true,
+      "Enable window spilling. Requires spill_enabled.")
 
   /// When processing spilled window data, read batches of whole partitions
-  /// having at least that many rows. Set to 1 to read one whole partition at a
-  /// time. Each driver processing the Window operator will process that much
-  /// data at once.
-  static constexpr const char* kWindowSpillMinReadBatchRows =
-      "window_spill_min_read_batch_rows";
+  /// having at least that many rows.
+  VELOX_QUERY_CONFIG(
+      kWindowSpillMinReadBatchRows,
+      windowSpillMinReadBatchRows,
+      "window_spill_min_read_batch_rows",
+      uint32_t,
+      1'000,
+      "Minimum rows to read per batch when processing spilled window data.")
 
   /// If true, the memory arbitrator will reclaim memory from table writer by
-  /// flushing its buffered data to disk. only applies if "spill_enabled" flag
-  /// is set.
-  static constexpr const char* kWriterSpillEnabled = "writer_spill_enabled";
+  /// flushing its buffered data to disk. Requires spill_enabled.
+  VELOX_QUERY_CONFIG(
+      kWriterSpillEnabled,
+      writerSpillEnabled,
+      "writer_spill_enabled",
+      bool,
+      true,
+      "Enable writer spilling by flushing buffered data to disk.")
 
   /// RowNumber spilling flag, only applies if "spill_enabled" flag is set.
-  static constexpr const char* kRowNumberSpillEnabled =
-      "row_number_spill_enabled";
+  VELOX_QUERY_CONFIG(
+      kRowNumberSpillEnabled,
+      rowNumberSpillEnabled,
+      "row_number_spill_enabled",
+      bool,
+      true,
+      "Enable RowNumber spilling. Requires spill_enabled.")
 
   /// MarkDistinct spilling flag, only applies if "spill_enabled" flag is set.
-  static constexpr const char* kMarkDistinctSpillEnabled =
-      "mark_distinct_spill_enabled";
+  VELOX_QUERY_CONFIG(
+      kMarkDistinctSpillEnabled,
+      markDistinctSpillEnabled,
+      "mark_distinct_spill_enabled",
+      bool,
+      false,
+      "Enable MarkDistinct spilling. Requires spill_enabled.")
 
   /// TopNRowNumber spilling flag, only applies if "spill_enabled" flag is set.
-  static constexpr const char* kTopNRowNumberSpillEnabled =
-      "topn_row_number_spill_enabled";
+  VELOX_QUERY_CONFIG(
+      kTopNRowNumberSpillEnabled,
+      topNRowNumberSpillEnabled,
+      "topn_row_number_spill_enabled",
+      bool,
+      true,
+      "Enable TopNRowNumber spilling. Requires spill_enabled.")
 
   /// LocalMerge spilling flag, only applies if "spill_enabled" flag is set.
-  static constexpr const char* kLocalMergeSpillEnabled =
-      "local_merge_spill_enabled";
+  VELOX_QUERY_CONFIG(
+      kLocalMergeSpillEnabled,
+      localMergeSpillEnabled,
+      "local_merge_spill_enabled",
+      bool,
+      false,
+      "Enable LocalMerge spilling. Requires spill_enabled.")
 
   /// Specify the max number of local sources to merge at a time.
+  /// Uses std::numeric_limits<uint32_t>::max() as default.
   static constexpr const char* kLocalMergeMaxNumMergeSources =
       "local_merge_max_num_merge_sources";
 
-  /// The max row numbers to fill and spill for each spill run. This is used to
-  /// cap the memory used for spilling. If it is zero, then there is no limit
-  /// and spilling might run out of memory.
-  /// Based on offline test results, the default value is set to 12 million rows
-  /// which uses ~128MB memory when to fill a spill run.
-  static constexpr const char* kMaxSpillRunRows = "max_spill_run_rows";
+  /// The max row numbers to fill and spill for each spill run. Default is
+  /// 12 million rows which uses ~128MB memory.
+  VELOX_QUERY_CONFIG(
+      kMaxSpillRunRows,
+      maxSpillRunRows,
+      "max_spill_run_rows",
+      uint64_t,
+      12UL << 20,
+      "Maximum rows to fill and spill per spill run. 0 means no limit.")
 
-  /// The max spill bytes limit set for each query. This is used to cap the
-  /// storage used for spilling. If it is zero, then there is no limit and
-  /// spilling might exhaust the storage or takes too long to run. The default
-  /// value is set to 100 GB.
-  static constexpr const char* kMaxSpillBytes = "max_spill_bytes";
+  /// The max spill bytes limit set for each query. Default is 100 GB.
+  VELOX_QUERY_CONFIG(
+      kMaxSpillBytes,
+      maxSpillBytes,
+      "max_spill_bytes",
+      uint64_t,
+      100UL << 30,
+      "Maximum total spill bytes per query. 0 means no limit.")
 
   /// The max allowed spilling level with zero being the initial spilling level.
-  /// This only applies for hash build spilling which might trigger recursive
-  /// spilling when the build table is too big. If it is set to -1, then there
-  /// is no limit and then some extreme large query might run out of spilling
-  /// partition bits (see kSpillPartitionBits) at the end. The max spill level
-  /// is used in production to prevent some bad user queries from using too much
-  /// io and cpu resources.
-  static constexpr const char* kMaxSpillLevel = "max_spill_level";
+  VELOX_QUERY_CONFIG(
+      kMaxSpillLevel,
+      maxSpillLevel,
+      "max_spill_level",
+      int32_t,
+      1,
+      "Maximum allowed spilling level. -1 means no limit.")
 
   /// The max allowed spill file size. If it is zero, then there is no limit.
-  static constexpr const char* kMaxSpillFileSize = "max_spill_file_size";
+  VELOX_QUERY_CONFIG(
+      kMaxSpillFileSize,
+      maxSpillFileSize,
+      "max_spill_file_size",
+      uint64_t,
+      0,
+      "Maximum spill file size. 0 means no limit.")
 
-  static constexpr const char* kSpillCompressionKind =
-      "spill_compression_codec";
+  VELOX_QUERY_CONFIG(
+      kSpillCompressionKind,
+      spillCompressionKind,
+      "spill_compression_codec",
+      std::string,
+      "none",
+      "Compression codec for spill data.")
 
-  /// The max number of files to merge at a time when merging sorted files into
-  /// a single ordered stream. 0 means unlimited. This is used to reduce memory
-  /// pressure by capping the number of open files when merging spilled sorted
-  /// files to avoid using too much memory and causing OOM. Note that this is
-  /// only applicable for ordered spill.
-  static constexpr const char* kSpillNumMaxMergeFiles =
-      "spill_num_max_merge_files";
+  /// The max number of files to merge at a time when merging sorted spilled
+  /// files. 0 means unlimited.
+  VELOX_QUERY_CONFIG(
+      kSpillNumMaxMergeFiles,
+      spillNumMaxMergeFiles,
+      "spill_num_max_merge_files",
+      uint32_t,
+      0,
+      "Maximum files to merge at a time when merging sorted spill files. 0 means unlimited.")
 
-  /// Enable the prefix sort or fallback to timsort in spill. The prefix sort is
-  /// faster than std::sort but requires the memory to build normalized prefix
-  /// keys, which might have potential risk of running out of server memory.
-  static constexpr const char* kSpillPrefixSortEnabled =
-      "spill_prefixsort_enabled";
+  /// Enable the prefix sort or fallback to timsort in spill.
+  VELOX_QUERY_CONFIG(
+      kSpillPrefixSortEnabled,
+      spillPrefixSortEnabled,
+      "spill_prefixsort_enabled",
+      bool,
+      false,
+      "Enable prefix sort in spill instead of timsort.")
 
-  /// Specifies spill write buffer size in bytes. The spiller tries to buffer
-  /// serialized spill data up to the specified size before write to storage
-  /// underneath for io efficiency. If it is set to zero, then spill write
-  /// buffering is disabled.
-  static constexpr const char* kSpillWriteBufferSize =
-      "spill_write_buffer_size";
+  /// Specifies spill write buffer size in bytes. 0 disables buffering.
+  VELOX_QUERY_CONFIG(
+      kSpillWriteBufferSize,
+      spillWriteBufferSize,
+      "spill_write_buffer_size",
+      uint64_t,
+      1L << 20,
+      "Spill write buffer size in bytes. 0 disables buffering.")
 
-  /// Specifies the buffer size in bytes to read from one spilled file. If the
-  /// underlying filesystem supports async read, we do read-ahead with double
-  /// buffering, which doubles the buffer used to read from each spill file.
-  static constexpr const char* kSpillReadBufferSize = "spill_read_buffer_size";
+  /// Specifies the buffer size in bytes to read from one spilled file.
+  VELOX_QUERY_CONFIG(
+      kSpillReadBufferSize,
+      spillReadBufferSize,
+      "spill_read_buffer_size",
+      uint64_t,
+      1L << 20,
+      "Buffer size in bytes to read from one spilled file.")
 
-  /// Config used to create spill files. This config is provided to underlying
-  /// file system and the config is free form. The form should be defined by the
-  /// underlying file system.
-  static constexpr const char* kSpillFileCreateConfig =
-      "spill_file_create_config";
+  /// Config used to create spill files.
+  VELOX_QUERY_CONFIG(
+      kSpillFileCreateConfig,
+      spillFileCreateConfig,
+      "spill_file_create_config",
+      std::string,
+      "",
+      "Config for creating spill files, passed to underlying file system.")
 
-  /// Config used to create aggregation spill files. This config is provided to
-  /// underlying file system and the config is free form. The form should be
-  /// defined by the underlying file system.
-  static constexpr const char* kAggregationSpillFileCreateConfig =
-      "aggregation_spill_file_create_config";
+  /// Config used to create aggregation spill files.
+  VELOX_QUERY_CONFIG(
+      kAggregationSpillFileCreateConfig,
+      aggregationSpillFileCreateConfig,
+      "aggregation_spill_file_create_config",
+      std::string,
+      "",
+      "Config for creating aggregation spill files.")
 
-  /// Config used to create hash join spill files. This config is provided to
-  /// underlying file system and the config is free form. The form should be
-  /// defined by the underlying file system.
-  static constexpr const char* kHashJoinSpillFileCreateConfig =
-      "hash_join_spill_file_create_config";
+  /// Config used to create hash join spill files.
+  VELOX_QUERY_CONFIG(
+      kHashJoinSpillFileCreateConfig,
+      hashJoinSpillFileCreateConfig,
+      "hash_join_spill_file_create_config",
+      std::string,
+      "",
+      "Config for creating hash join spill files.")
 
-  /// Config used to create row number spill files. This config is provided to
-  /// underlying file system and the config is free form. The form should be
-  /// defined by the underlying file system.
-  static constexpr const char* kRowNumberSpillFileCreateConfig =
-      "row_number_spill_file_create_config";
+  /// Config used to create row number spill files.
+  VELOX_QUERY_CONFIG(
+      kRowNumberSpillFileCreateConfig,
+      rowNumberSpillFileCreateConfig,
+      "row_number_spill_file_create_config",
+      std::string,
+      "",
+      "Config for creating row number spill files.")
 
   /// Default offset spill start partition bit.
-  /// 'kSpillNumPartitionBits' together to
-  /// calculate the spilling partition number for join spill or aggregation
-  /// spill.
-  static constexpr const char* kSpillStartPartitionBit =
-      "spiller_start_partition_bit";
+  VELOX_QUERY_CONFIG(
+      kSpillStartPartitionBit,
+      spillStartPartitionBit,
+      "spiller_start_partition_bit",
+      uint8_t,
+      48,
+      "Start partition bit offset for spilling.")
 
-  /// Default number of spill partition bits. It is the number of bits used to
-  /// calculate the spill partition number for hash join and RowNumber. The
-  /// number of spill partitions will be power of two.
-  ///
-  /// NOTE: as for now, we only support up to 8-way spill partitioning.
-  static constexpr const char* kSpillNumPartitionBits =
-      "spiller_num_partition_bits";
+  /// Default number of spill partition bits. Max 3 (8-way partitioning).
+  VELOX_QUERY_CONFIG_PROPERTY(
+      kSpillNumPartitionBits,
+      "spiller_num_partition_bits",
+      uint8_t,
+      3,
+      "Number of bits for spill partition calculation.")
 
   /// The minimal available spillable memory reservation in percentage of the
-  /// current memory usage. Suppose the current memory usage size of M,
-  /// available memory reservation size of N and min reservation percentage of
-  /// P, if M * P / 100 > N, then spiller operator needs to grow the memory
-  /// reservation with percentage of spillableReservationGrowthPct(). This
-  /// ensures we have sufficient amount of memory reservation to process the
-  /// large input outlier.
-  static constexpr const char* kMinSpillableReservationPct =
-      "min_spillable_reservation_pct";
+  /// current memory usage.
+  VELOX_QUERY_CONFIG(
+      kMinSpillableReservationPct,
+      minSpillableReservationPct,
+      "min_spillable_reservation_pct",
+      int32_t,
+      5,
+      "Minimum available spillable memory reservation as percentage of usage.")
 
-  /// The spillable memory reservation growth percentage of the previous memory
-  /// reservation size. 10 means exponential growth along a series of integer
-  /// powers of 11/10. The reservation grows by this much until it no longer
-  /// can, after which it starts spilling.
-  static constexpr const char* kSpillableReservationGrowthPct =
-      "spillable_reservation_growth_pct";
+  /// The spillable memory reservation growth percentage.
+  VELOX_QUERY_CONFIG(
+      kSpillableReservationGrowthPct,
+      spillableReservationGrowthPct,
+      "spillable_reservation_growth_pct",
+      int32_t,
+      10,
+      "Spillable memory reservation growth percentage.")
 
   /// Minimum memory footprint size required to reclaim memory from a file
   /// writer by flushing its buffered data to disk.
-  static constexpr const char* kWriterFlushThresholdBytes =
-      "writer_flush_threshold_bytes";
+  VELOX_QUERY_CONFIG(
+      kWriterFlushThresholdBytes,
+      writerFlushThresholdBytes,
+      "writer_flush_threshold_bytes",
+      uint64_t,
+      96L << 20,
+      "Minimum memory footprint to reclaim from a file writer by flushing.")
 
   /// If true, array_agg() aggregation function will ignore nulls in the input.
-  static constexpr const char* kPrestoArrayAggIgnoreNulls =
-      "presto.array_agg.ignore_nulls";
+  VELOX_QUERY_CONFIG(
+      kPrestoArrayAggIgnoreNulls,
+      prestoArrayAggIgnoreNulls,
+      "presto.array_agg.ignore_nulls",
+      bool,
+      false,
+      "If true, array_agg() ignores nulls in the input.")
 
-  /// If true, Spark function's behavior is ANSI-compliant, e.g. throws runtime
-  /// exception instead of returning null on invalid inputs. It affects only
-  /// functions explicitly marked as "ANSI compliant".
-  /// Note: This feature is still under development to achieve full ANSI
-  /// compliance. Users can refer to the Spark function documentation to verify
-  /// the current support status of a specific function.
-  static constexpr const char* kSparkAnsiEnabled = "spark.ansi_enabled";
+  /// If true, Spark function's behavior is ANSI-compliant.
+  VELOX_QUERY_CONFIG(
+      kSparkAnsiEnabled,
+      sparkAnsiEnabled,
+      "spark.ansi_enabled",
+      bool,
+      false,
+      "Enable ANSI-compliant behavior for Spark functions.")
 
   /// The default number of expected items for the bloomfilter.
-  static constexpr const char* kSparkBloomFilterExpectedNumItems =
-      "spark.bloom_filter.expected_num_items";
+  VELOX_QUERY_CONFIG(
+      kSparkBloomFilterExpectedNumItems,
+      sparkBloomFilterExpectedNumItems,
+      "spark.bloom_filter.expected_num_items",
+      int64_t,
+      1'000'000L,
+      "Default number of expected items for the Spark bloom filter.")
 
   /// The default number of bits to use for the bloom filter.
-  static constexpr const char* kSparkBloomFilterNumBits =
-      "spark.bloom_filter.num_bits";
+  VELOX_QUERY_CONFIG(
+      kSparkBloomFilterNumBits,
+      sparkBloomFilterNumBits,
+      "spark.bloom_filter.num_bits",
+      int64_t,
+      8'388'608L,
+      "Default number of bits for the Spark bloom filter.")
 
   /// The max number of bits to use for the bloom filter.
-  static constexpr const char* kSparkBloomFilterMaxNumBits =
-      "spark.bloom_filter.max_num_bits";
+  VELOX_QUERY_CONFIG(
+      kSparkBloomFilterMaxNumBits,
+      sparkBloomFilterMaxNumBits,
+      "spark.bloom_filter.max_num_bits",
+      int64_t,
+      67'108'864,
+      "Maximum number of bits for the Spark bloom filter.")
 
   /// The max number of items to use for the bloom filter.
-  static constexpr const char* kSparkBloomFilterMaxNumItems =
-      "spark.bloom_filter.max_num_items";
+  VELOX_QUERY_CONFIG(
+      kSparkBloomFilterMaxNumItems,
+      sparkBloomFilterMaxNumItems,
+      "spark.bloom_filter.max_num_items",
+      int64_t,
+      4'000'000L,
+      "Maximum number of items for the Spark bloom filter.")
 
-  /// The current spark partition id.
+  /// The current spark partition id. No default (throws if not set).
   static constexpr const char* kSparkPartitionId = "spark.partition_id";
 
   /// If true, simple date formatter is used for time formatting and parsing.
-  /// Joda date formatter is used by default.
-  static constexpr const char* kSparkLegacyDateFormatter =
-      "spark.legacy_date_formatter";
+  VELOX_QUERY_CONFIG(
+      kSparkLegacyDateFormatter,
+      sparkLegacyDateFormatter,
+      "spark.legacy_date_formatter",
+      bool,
+      false,
+      "Use simple date formatter instead of Joda for Spark.")
 
-  /// If true, Spark statistical aggregation functions including skewness,
-  /// kurtosis, stddev, stddev_samp, variance, var_samp, covar_samp and corr
-  /// will return NaN instead of NULL when dividing by zero during expression
-  /// evaluation.
-  static constexpr const char* kSparkLegacyStatisticalAggregate =
-      "spark.legacy_statistical_aggregate";
+  /// If true, Spark statistical aggregation functions return NaN instead of
+  /// NULL when dividing by zero.
+  VELOX_QUERY_CONFIG(
+      kSparkLegacyStatisticalAggregate,
+      sparkLegacyStatisticalAggregate,
+      "spark.legacy_statistical_aggregate",
+      bool,
+      false,
+      "Return NaN instead of NULL for Spark statistical aggregation on divide-by-zero.")
 
   /// If true, ignore null fields when generating JSON string.
-  /// If false, null fields are included with a null value.
-  static constexpr const char* kSparkJsonIgnoreNullFields =
-      "spark.json_ignore_null_fields";
+  VELOX_QUERY_CONFIG(
+      kSparkJsonIgnoreNullFields,
+      sparkJsonIgnoreNullFields,
+      "spark.json_ignore_null_fields",
+      bool,
+      true,
+      "Ignore null fields when generating JSON string in Spark.")
 
   /// If true, collect_list aggregate function will ignore nulls in the input.
-  /// Defaults to true to match Spark's default behavior. Set to false to
-  /// include nulls (RESPECT NULLS). Introduced in Spark 4.2 (SPARK-55256).
-  static constexpr const char* kSparkCollectListIgnoreNulls =
-      "spark.collect_list.ignore_nulls";
+  VELOX_QUERY_CONFIG(
+      kSparkCollectListIgnoreNulls,
+      sparkCollectListIgnoreNulls,
+      "spark.collect_list.ignore_nulls",
+      bool,
+      true,
+      "If true, Spark collect_list() ignores nulls in the input.")
 
   /// The number of local parallel table writer operators per task.
-  static constexpr const char* kTaskWriterCount = "task_writer_count";
+  VELOX_QUERY_CONFIG(
+      kTaskWriterCount,
+      taskWriterCount,
+      "task_writer_count",
+      uint32_t,
+      4,
+      "Number of local parallel table writer operators per task.")
 
   /// The number of local parallel table writer operators per task for
-  /// partitioned writes. If not set, use "task_writer_count".
+  /// partitioned writes. If not set, use "task_writer_count". No default.
   static constexpr const char* kTaskPartitionedWriterCount =
       "task_partitioned_writer_count";
 
   /// If true, finish the hash probe on an empty build table for a specific set
   /// of hash joins.
-  static constexpr const char* kHashProbeFinishEarlyOnEmptyBuild =
-      "hash_probe_finish_early_on_empty_build";
+  VELOX_QUERY_CONFIG(
+      kHashProbeFinishEarlyOnEmptyBuild,
+      hashProbeFinishEarlyOnEmptyBuild,
+      "hash_probe_finish_early_on_empty_build",
+      bool,
+      false,
+      "Finish hash probe early on empty build table.")
 
-  /// Whether hash probe can generate any dynamic filter (including Bloom
-  /// filter) and push down to upstream operators.
-  static constexpr const char* kHashProbeDynamicFilterPushdownEnabled =
-      "hash_probe_dynamic_filter_pushdown_enabled";
+  /// Whether hash probe can generate any dynamic filter and push down to
+  /// upstream operators.
+  VELOX_QUERY_CONFIG(
+      kHashProbeDynamicFilterPushdownEnabled,
+      hashProbeDynamicFilterPushdownEnabled,
+      "hash_probe_dynamic_filter_pushdown_enabled",
+      bool,
+      true,
+      "Enable dynamic filter generation and pushdown from hash probe.")
 
-  /// Whether hash probe can generate dynamic filter for string types and
-  /// push down to upstream operators.
-  static constexpr const char* kHashProbeStringDynamicFilterPushdownEnabled =
-      "hash_probe_string_dynamic_filter_pushdown_enabled";
+  /// Whether hash probe can generate dynamic filter for string types.
+  VELOX_QUERY_CONFIG(
+      kHashProbeStringDynamicFilterPushdownEnabled,
+      hashProbeStringDynamicFilterPushdownEnabled,
+      "hash_probe_string_dynamic_filter_pushdown_enabled",
+      bool,
+      false,
+      "Enable dynamic filter pushdown for string types from hash probe.")
 
-  /// The maximum byte size of Bloom filter that can be generated from hash
-  /// probe.  When set to 0, no Bloom filter will be generated.  To achieve
-  /// optimal performance, this should not be too larger than the CPU cache size
-  /// on the host.
-  static constexpr const char* kHashProbeBloomFilterPushdownMaxSize =
-      "hash_probe_bloom_filter_pushdown_max_size";
+  /// The maximum byte size of Bloom filter from hash probe. 0 = disabled.
+  VELOX_QUERY_CONFIG(
+      kHashProbeBloomFilterPushdownMaxSize,
+      hashProbeBloomFilterPushdownMaxSize,
+      "hash_probe_bloom_filter_pushdown_max_size",
+      uint64_t,
+      0,
+      "Maximum byte size of Bloom filter from hash probe. 0 disables.")
 
   /// The minimum number of table rows that can trigger the parallel hash join
   /// table build.
-  static constexpr const char* kMinTableRowsForParallelJoinBuild =
-      "min_table_rows_for_parallel_join_build";
+  VELOX_QUERY_CONFIG(
+      kMinTableRowsForParallelJoinBuild,
+      minTableRowsForParallelJoinBuild,
+      "min_table_rows_for_parallel_join_build",
+      uint32_t,
+      1'000,
+      "Minimum table rows to trigger parallel hash join table build.")
 
-  /// If set to true, then during execution of tasks, the output vectors of
-  /// every operator are validated for consistency. This is an expensive check
-  /// so should only be used for debugging. It can help debug issues where
-  /// malformed vector cause failures or crashes by helping identify which
-  /// operator is generating them.
-  static constexpr const char* kValidateOutputFromOperators =
-      "debug.validate_output_from_operators";
+  /// If set to true, validate output vectors of every operator for consistency.
+  VELOX_QUERY_CONFIG(
+      kValidateOutputFromOperators,
+      validateOutputFromOperators,
+      "debug.validate_output_from_operators",
+      bool,
+      false,
+      "Validate output vectors from every operator for consistency.")
 
-  /// If true, enable caches in expression evaluation for performance, including
-  /// ExecCtx::vectorPool_, ExecCtx::decodedVectorPool_,
-  /// ExecCtx::selectivityVectorPool_, Expr::baseDictionary_,
-  /// Expr::dictionaryCache_, and Expr::cachedDictionaryIndices_. Otherwise,
-  /// disable the caches.
-  static constexpr const char* kEnableExpressionEvaluationCache =
-      "enable_expression_evaluation_cache";
+  /// If true, enable caches in expression evaluation for performance.
+  VELOX_QUERY_CONFIG(
+      kEnableExpressionEvaluationCache,
+      isExpressionEvaluationCacheEnabled,
+      "enable_expression_evaluation_cache",
+      bool,
+      true,
+      "Enable caches in expression evaluation for performance.")
 
   /// For a given shared subexpression, the maximum distinct sets of inputs we
-  /// cache results for. Lambdas can call the same expression with different
-  /// inputs many times, causing the results we cache to explode in size.
-  /// Putting a limit contains the memory usage.
-  static constexpr const char* kMaxSharedSubexprResultsCached =
-      "max_shared_subexpr_results_cached";
+  /// cache results for.
+  VELOX_QUERY_CONFIG(
+      kMaxSharedSubexprResultsCached,
+      maxSharedSubexprResultsCached,
+      "max_shared_subexpr_results_cached",
+      uint32_t,
+      10,
+      "Maximum distinct input sets to cache for shared subexpressions.")
 
   /// Maximum number of splits to preload. Set to 0 to disable preloading.
-  static constexpr const char* kMaxSplitPreloadPerDriver =
-      "max_split_preload_per_driver";
+  VELOX_QUERY_CONFIG(
+      kMaxSplitPreloadPerDriver,
+      maxSplitPreloadPerDriver,
+      "max_split_preload_per_driver",
+      int32_t,
+      2,
+      "Maximum number of splits to preload. 0 disables preloading.")
 
   /// If not zero, specifies the cpu time slice limit in ms that a driver thread
-  /// can continuously run without yielding. If it is zero, then there is no
-  /// limit.
-  static constexpr const char* kDriverCpuTimeSliceLimitMs =
-      "driver_cpu_time_slice_limit_ms";
+  /// can continuously run without yielding.
+  VELOX_QUERY_CONFIG(
+      kDriverCpuTimeSliceLimitMs,
+      driverCpuTimeSliceLimitMs,
+      "driver_cpu_time_slice_limit_ms",
+      uint32_t,
+      0,
+      "CPU time slice limit in ms before yielding. 0 means no limit.")
 
-  /// Window operator can be configured to sub-divide window partitions on each
-  /// thread of execution into groups of partitions for sequential processing.
-  /// This setting specifies how many sub-partitions to create for each thread.
-  static constexpr const char* kWindowNumSubPartitions =
-      "window_num_sub_partitions";
+  /// Window operator sub-partition count per thread.
+  VELOX_QUERY_CONFIG(
+      kWindowNumSubPartitions,
+      windowNumSubPartitions,
+      "window_num_sub_partitions",
+      uint32_t,
+      1,
+      "Number of sub-partitions per thread in Window operator.")
 
-  /// Maximum number of bytes to use for the normalized key in prefix-sort. Use
-  /// 0 to disable prefix-sort.
-  static constexpr const char* kPrefixSortNormalizedKeyMaxBytes =
-      "prefixsort_normalized_key_max_bytes";
+  /// Maximum number of bytes to use for the normalized key in prefix-sort.
+  VELOX_QUERY_CONFIG(
+      kPrefixSortNormalizedKeyMaxBytes,
+      prefixSortNormalizedKeyMaxBytes,
+      "prefixsort_normalized_key_max_bytes",
+      uint32_t,
+      128,
+      "Maximum bytes for normalized key in prefix-sort. 0 disables.")
 
-  /// Minimum number of rows to use prefix-sort. The default value has been
-  /// derived using micro-benchmarking.
-  static constexpr const char* kPrefixSortMinRows = "prefixsort_min_rows";
+  /// Minimum number of rows to use prefix-sort.
+  VELOX_QUERY_CONFIG(
+      kPrefixSortMinRows,
+      prefixSortMinRows,
+      "prefixsort_min_rows",
+      uint32_t,
+      128,
+      "Minimum rows to use prefix-sort.")
 
   /// Maximum number of bytes to be stored in prefix-sort buffer for a string
   /// key.
-  static constexpr const char* kPrefixSortMaxStringPrefixLength =
-      "prefixsort_max_string_prefix_length";
+  VELOX_QUERY_CONFIG(
+      kPrefixSortMaxStringPrefixLength,
+      prefixSortMaxStringPrefixLength,
+      "prefixsort_max_string_prefix_length",
+      uint32_t,
+      16,
+      "Maximum bytes stored in prefix-sort buffer for a string key.")
 
   /// Enable query tracing flag.
-  static constexpr const char* kQueryTraceEnabled = "query_trace_enabled";
+  VELOX_QUERY_CONFIG(
+      kQueryTraceEnabled,
+      queryTraceEnabled,
+      "query_trace_enabled",
+      bool,
+      false,
+      "Enable query tracing.")
 
   /// Base dir of a query to store tracing data.
-  static constexpr const char* kQueryTraceDir = "query_trace_dir";
+  VELOX_QUERY_CONFIG(
+      kQueryTraceDir,
+      queryTraceDir,
+      "query_trace_dir",
+      std::string,
+      "",
+      "Base directory for storing query trace data.")
 
   /// The plan node id whose input data will be traced.
-  /// Empty string if only want to trace the query metadata.
-  static constexpr const char* kQueryTraceNodeId = "query_trace_node_id";
+  VELOX_QUERY_CONFIG(
+      kQueryTraceNodeId,
+      queryTraceNodeId,
+      "query_trace_node_id",
+      std::string,
+      "",
+      "Plan node id whose input data will be traced.")
 
   /// The max trace bytes limit. Tracing is disabled if zero.
-  static constexpr const char* kQueryTraceMaxBytes = "query_trace_max_bytes";
+  VELOX_QUERY_CONFIG(
+      kQueryTraceMaxBytes,
+      queryTraceMaxBytes,
+      "query_trace_max_bytes",
+      uint64_t,
+      0,
+      "Maximum trace bytes. Tracing disabled if zero.")
 
-  /// The regexp of traced task id. We only enable trace on a task if its id
-  /// matches.
-  static constexpr const char* kQueryTraceTaskRegExp =
-      "query_trace_task_reg_exp";
+  /// The regexp of traced task id.
+  VELOX_QUERY_CONFIG(
+      kQueryTraceTaskRegExp,
+      queryTraceTaskRegExp,
+      "query_trace_task_reg_exp",
+      std::string,
+      "",
+      "Regexp for task ids to enable tracing on.")
 
-  /// If true, we only collect the input trace for a given operator but without
-  /// the actual execution.
-  static constexpr const char* kQueryTraceDryRun = "query_trace_dry_run";
+  /// If true, only collect input trace without actual execution.
+  VELOX_QUERY_CONFIG(
+      kQueryTraceDryRun,
+      queryTraceDryRun,
+      "query_trace_dry_run",
+      bool,
+      false,
+      "Collect input trace without actual execution.")
 
-  /// Config used to create operator trace directory. This config is provided to
-  /// underlying file system and the config is free form. The form should be
-  /// defined by the underlying file system.
-  static constexpr const char* kOpTraceDirectoryCreateConfig =
-      "op_trace_directory_create_config";
+  /// Config used to create operator trace directory.
+  VELOX_QUERY_CONFIG(
+      kOpTraceDirectoryCreateConfig,
+      opTraceDirectoryCreateConfig,
+      "op_trace_directory_create_config",
+      std::string,
+      "",
+      "Config for creating operator trace directory.")
 
   /// Disable optimization in expression evaluation to peel common dictionary
   /// layer from inputs.
-  static constexpr const char* kDebugDisableExpressionWithPeeling =
-      "debug_disable_expression_with_peeling";
+  VELOX_QUERY_CONFIG(
+      kDebugDisableExpressionWithPeeling,
+      debugDisableExpressionsWithPeeling,
+      "debug_disable_expression_with_peeling",
+      bool,
+      false,
+      "Disable dictionary peeling optimization in expression evaluation.")
 
   /// Disable optimization in expression evaluation to re-use cached results for
   /// common sub-expressions.
-  static constexpr const char* kDebugDisableCommonSubExpressions =
-      "debug_disable_common_sub_expressions";
+  VELOX_QUERY_CONFIG(
+      kDebugDisableCommonSubExpressions,
+      debugDisableCommonSubExpressions,
+      "debug_disable_common_sub_expressions",
+      bool,
+      false,
+      "Disable common sub-expression caching in expression evaluation.")
 
   /// Disable optimization in expression evaluation to re-use cached results
-  /// between subsequent input batches that are dictionary encoded and have the
-  /// same alphabet(underlying flat vector).
-  static constexpr const char* kDebugDisableExpressionWithMemoization =
-      "debug_disable_expression_with_memoization";
+  /// between subsequent dictionary-encoded input batches.
+  VELOX_QUERY_CONFIG(
+      kDebugDisableExpressionWithMemoization,
+      debugDisableExpressionsWithMemoization,
+      "debug_disable_expression_with_memoization",
+      bool,
+      false,
+      "Disable dictionary memoization in expression evaluation.")
 
   /// Disable optimization in expression evaluation to delay loading of lazy
   /// inputs unless required.
-  static constexpr const char* kDebugDisableExpressionWithLazyInputs =
-      "debug_disable_expression_with_lazy_inputs";
+  VELOX_QUERY_CONFIG(
+      kDebugDisableExpressionWithLazyInputs,
+      debugDisableExpressionsWithLazyInputs,
+      "debug_disable_expression_with_lazy_inputs",
+      bool,
+      false,
+      "Disable lazy input loading optimization in expression evaluation.")
 
-  /// Fix the random seed used to create data structure used in
-  /// approx_percentile.  This makes the query result deterministic on single
-  /// node; multi-node partial aggregation is still subject to non-determinism
-  /// due to non-deterministic merge order.
+  /// Fix the random seed used in approx_percentile. No default (optional).
   static constexpr const char*
       kDebugAggregationApproxPercentileFixedRandomSeed =
           "debug_aggregation_approx_percentile_fixed_random_seed";
 
-  /// When debug is enabled for memory manager, this is used to match the memory
-  /// pools that need allocation callsites tracking. Default to track nothing.
-  static constexpr const char* kDebugMemoryPoolNameRegex =
-      "debug_memory_pool_name_regex";
+  /// Regex to match memory pools for allocation callsite tracking.
+  VELOX_QUERY_CONFIG(
+      kDebugMemoryPoolNameRegex,
+      debugMemoryPoolNameRegex,
+      "debug_memory_pool_name_regex",
+      std::string,
+      "",
+      "Regex to match memory pools for allocation callsite tracking.")
 
-  /// Warning threshold in bytes for debug memory pools. When set to a
-  /// non-zero value, a warning will be logged once per memory pool when
-  /// allocations cause the pool to exceed this threshold. This is useful for
-  /// identifying memory usage patterns during debugging. Requires allocation
-  /// tracking to be enabled via `debug_memory_pool_name_regex` for the pool. A
-  /// value of 0 means no warning threshold is enforced.
-  static constexpr const char* kDebugMemoryPoolWarnThresholdBytes =
-      "debug_memory_pool_warn_threshold_bytes";
+  /// Warning threshold in bytes for debug memory pools. Uses toCapacity
+  /// for parsing.
+  VELOX_QUERY_CONFIG_PROPERTY(
+      kDebugMemoryPoolWarnThresholdBytes,
+      "debug_memory_pool_warn_threshold_bytes",
+      std::string,
+      "0B",
+      "Warning threshold in bytes for debug memory pools.")
 
-  /// Some lambda functions over arrays and maps are evaluated in batches of the
-  /// underlying elements that comprise the arrays/maps. This is done to make
-  /// the batch size manageable as array vectors can have thousands of elements
-  /// each and hit scaling limits as implementations typically expect
-  /// BaseVectors to a couple of thousand entries. This lets up tune those batch
-  /// sizes.
-  static constexpr const char* kDebugLambdaFunctionEvaluationBatchSize =
-      "debug_lambda_function_evaluation_batch_size";
+  /// Batch size for lambda function evaluation over arrays and maps.
+  VELOX_QUERY_CONFIG(
+      kDebugLambdaFunctionEvaluationBatchSize,
+      debugLambdaFunctionEvaluationBatchSize,
+      "debug_lambda_function_evaluation_batch_size",
+      int32_t,
+      10'000,
+      "Batch size for lambda function evaluation over arrays and maps.")
 
-  /// The UDF `bing_tile_children` generates the children of a Bing tile based
-  /// on a specified target zoom level. The number of children produced is
-  /// determined by the difference between the target zoom level and the zoom
-  /// level of the input tile. This configuration limits the number of children
-  /// by capping the maximum zoom level difference, with a default value set
-  /// to 5. This cap is necessary to prevent excessively large array outputs,
-  /// which can exceed the size limits of the elements vector in the Velox array
-  /// vector.
-  static constexpr const char* kDebugBingTileChildrenMaxZoomShift =
-      "debug_bing_tile_children_max_zoom_shift";
+  /// Max zoom level difference for bing_tile_children UDF.
+  VELOX_QUERY_CONFIG(
+      kDebugBingTileChildrenMaxZoomShift,
+      debugBingTileChildrenMaxZoomShift,
+      "debug_bing_tile_children_max_zoom_shift",
+      uint8_t,
+      7,
+      "Maximum zoom level difference for bing_tile_children.")
 
-  /// Temporary flag to control whether selective Nimble reader should be used
-  /// in this query or not.  Will be removed after the selective Nimble reader
-  /// is fully rolled out.
-  static constexpr const char* kSelectiveNimbleReaderEnabled =
-      "selective_nimble_reader_enabled";
+  /// Temporary flag to control whether selective Nimble reader should be used.
+  VELOX_QUERY_CONFIG(
+      kSelectiveNimbleReaderEnabled,
+      selectiveNimbleReaderEnabled,
+      "selective_nimble_reader_enabled",
+      bool,
+      true,
+      "Enable selective Nimble reader.")
 
-  /// The max ratio of a query used memory to its max capacity, and the scale
-  /// writer exchange stops scaling writer processing if the query's current
-  /// memory usage exceeds this ratio. The value is in the range of (0, 1].
-  static constexpr const char* kScaleWriterRebalanceMaxMemoryUsageRatio =
-      "scaled_writer_rebalance_max_memory_usage_ratio";
+  /// The max ratio of query memory usage to max capacity for scale writer
+  /// exchange to stop scaling.
+  VELOX_QUERY_CONFIG(
+      kScaleWriterRebalanceMaxMemoryUsageRatio,
+      scaleWriterRebalanceMaxMemoryUsageRatio,
+      "scaled_writer_rebalance_max_memory_usage_ratio",
+      double,
+      0.7,
+      "Max memory usage ratio before scale writer exchange stops scaling.")
 
-  /// The max number of logical table partitions that can be assigned to a
-  /// single table writer thread. The logical table partition is used by local
-  /// exchange writer for writer scaling, and multiple physical table
-  /// partitions can be mapped to the same logical table partition based on the
-  /// hash value of calculated partitioned ids.
-  static constexpr const char* kScaleWriterMaxPartitionsPerWriter =
-      "scaled_writer_max_partitions_per_writer";
+  /// The max number of logical table partitions per writer thread.
+  VELOX_QUERY_CONFIG(
+      kScaleWriterMaxPartitionsPerWriter,
+      scaleWriterMaxPartitionsPerWriter,
+      "scaled_writer_max_partitions_per_writer",
+      uint32_t,
+      128,
+      "Max logical table partitions per table writer thread.")
 
-  /// Minimum amount of data processed by a logical table partition to trigger
-  /// writer scaling if it is detected as overloaded by scale wrirer exchange.
-  static constexpr const char*
-      kScaleWriterMinPartitionProcessedBytesRebalanceThreshold =
-          "scaled_writer_min_partition_processed_bytes_rebalance_threshold";
+  /// Minimum data processed per partition to trigger writer scaling.
+  VELOX_QUERY_CONFIG(
+      kScaleWriterMinPartitionProcessedBytesRebalanceThreshold,
+      scaleWriterMinPartitionProcessedBytesRebalanceThreshold,
+      "scaled_writer_min_partition_processed_bytes_rebalance_threshold",
+      uint64_t,
+      128 << 20,
+      "Minimum bytes processed per partition to trigger writer scaling.")
 
-  /// Minimum amount of data processed by all the logical table partitions to
-  /// trigger skewed partition rebalancing by scale writer exchange.
-  static constexpr const char* kScaleWriterMinProcessedBytesRebalanceThreshold =
-      "scaled_writer_min_processed_bytes_rebalance_threshold";
+  /// Minimum total data processed to trigger skewed partition rebalancing.
+  VELOX_QUERY_CONFIG(
+      kScaleWriterMinProcessedBytesRebalanceThreshold,
+      scaleWriterMinProcessedBytesRebalanceThreshold,
+      "scaled_writer_min_processed_bytes_rebalance_threshold",
+      uint64_t,
+      256 << 20,
+      "Minimum total bytes processed to trigger skewed partition rebalancing.")
 
-  /// If true, enables the scaled table scan processing. For each table scan
-  /// plan node, a scan controller is used to control the number of running scan
-  /// threads based on the query memory usage. It keeps increasing the number of
-  /// running threads until the query memory usage exceeds the threshold defined
-  /// by 'table_scan_scale_up_memory_usage_ratio'.
-  static constexpr const char* kTableScanScaledProcessingEnabled =
-      "table_scan_scaled_processing_enabled";
+  /// If true, enables the scaled table scan processing.
+  VELOX_QUERY_CONFIG(
+      kTableScanScaledProcessingEnabled,
+      tableScanScaledProcessingEnabled,
+      "table_scan_scaled_processing_enabled",
+      bool,
+      false,
+      "Enable scaled table scan processing based on memory usage.")
 
-  /// The query memory usage ratio used by scan controller to decide if it can
-  /// increase the number of running scan threads. When the query memory usage
-  /// is below this ratio, the scan controller keeps increasing the running scan
-  /// thread for scale up, and stop once exceeds this ratio. The value is in the
-  /// range of [0, 1].
-  ///
-  /// NOTE: this only applies if 'table_scan_scaled_processing_enabled' is true.
-  static constexpr const char* kTableScanScaleUpMemoryUsageRatio =
-      "table_scan_scale_up_memory_usage_ratio";
+  /// The query memory usage ratio for scan controller to decide if it can
+  /// increase running scan threads.
+  VELOX_QUERY_CONFIG(
+      kTableScanScaleUpMemoryUsageRatio,
+      tableScanScaleUpMemoryUsageRatio,
+      "table_scan_scale_up_memory_usage_ratio",
+      double,
+      0.7,
+      "Memory usage ratio threshold for scaling up scan threads.")
 
-  /// Specifies the shuffle compression kind which is defined by
-  /// CompressionKind. If it is CompressionKind_NONE, then no compression.
-  static constexpr const char* kShuffleCompressionKind =
-      "shuffle_compression_codec";
+  /// Specifies the shuffle compression kind.
+  VELOX_QUERY_CONFIG(
+      kShuffleCompressionKind,
+      shuffleCompressionKind,
+      "shuffle_compression_codec",
+      std::string,
+      "none",
+      "Compression codec for shuffle data.")
 
-  /// If a key is found in multiple given maps, by default that key's value in
-  /// the resulting map comes from the last one of those maps. When true, throw
-  /// exception on duplicate map key.
-  static constexpr const char* kThrowExceptionOnDuplicateMapKeys =
-      "throw_exception_on_duplicate_map_keys";
+  /// When true, throw exception on duplicate map key.
+  VELOX_QUERY_CONFIG(
+      kThrowExceptionOnDuplicateMapKeys,
+      throwExceptionOnDuplicateMapKeys,
+      "throw_exception_on_duplicate_map_keys",
+      bool,
+      false,
+      "Throw exception on duplicate map keys.")
 
-  /// Specifies the max number of input batches to prefetch to do index lookup
-  /// ahead. If it is zero, then process one input batch at a time.
-  static constexpr const char* kIndexLookupJoinMaxPrefetchBatches =
-      "index_lookup_join_max_prefetch_batches";
+  /// Max number of input batches to prefetch for index lookup. 0 = disabled.
+  VELOX_QUERY_CONFIG(
+      kIndexLookupJoinMaxPrefetchBatches,
+      indexLookupJoinMaxPrefetchBatches,
+      "index_lookup_join_max_prefetch_batches",
+      uint32_t,
+      0,
+      "Maximum input batches to prefetch for index lookup. 0 disables.")
 
-  /// If this is true, then the index join operator might split output for each
-  /// input batch based on the output batch size control. Otherwise, it tries to
-  /// produce a single output for each input batch.
-  static constexpr const char* kIndexLookupJoinSplitOutput =
-      "index_lookup_join_split_output";
+  /// If true, index join operator may split output per input batch.
+  VELOX_QUERY_CONFIG(
+      kIndexLookupJoinSplitOutput,
+      indexLookupJoinSplitOutput,
+      "index_lookup_join_split_output",
+      bool,
+      true,
+      "Allow index join operator to split output based on batch size.")
 
   // Max wait time for exchange request in seconds.
-  static constexpr const char* kRequestDataSizesMaxWaitSec =
-      "request_data_sizes_max_wait_sec";
+  VELOX_QUERY_CONFIG(
+      kRequestDataSizesMaxWaitSec,
+      requestDataSizesMaxWaitSec,
+      "request_data_sizes_max_wait_sec",
+      int32_t,
+      10,
+      "Maximum wait time for exchange request in seconds.")
 
-  /// In streaming aggregation, wait until we have enough number of output rows
-  /// to produce a batch of size specified by this. If set to 0, then
-  /// Operator::outputBatchRows will be used as the min output batch rows.
-  static constexpr const char* kStreamingAggregationMinOutputBatchRows =
-      "streaming_aggregation_min_output_batch_rows";
+  /// In streaming aggregation, min output rows before producing a batch.
+  VELOX_QUERY_CONFIG(
+      kStreamingAggregationMinOutputBatchRows,
+      streamingAggregationMinOutputBatchRows,
+      "streaming_aggregation_min_output_batch_rows",
+      int32_t,
+      0,
+      "Minimum rows to accumulate before producing streaming aggregation output. 0 uses default.")
 
   /// TODO: Remove after dependencies are cleaned up.
-  static constexpr const char* kStreamingAggregationEagerFlush =
-      "streaming_aggregation_eager_flush";
+  VELOX_QUERY_CONFIG(
+      kStreamingAggregationEagerFlush,
+      streamingAggregationEagerFlush,
+      "streaming_aggregation_eager_flush",
+      bool,
+      false,
+      "Enable eager flush for streaming aggregation.")
 
   // If true, skip request data size if there is only single source.
-  // This is used to optimize the Presto-on-Spark use case where each
-  // exchange client has only one shuffle partition source.
-  static constexpr const char* kSkipRequestDataSizeWithSingleSourceEnabled =
-      "skip_request_data_size_with_single_source_enabled";
+  VELOX_QUERY_CONFIG(
+      kSkipRequestDataSizeWithSingleSourceEnabled,
+      singleSourceExchangeOptimizationEnabled,
+      "skip_request_data_size_with_single_source_enabled",
+      bool,
+      false,
+      "Skip request data size check with single exchange source.")
 
   /// If true, exchange clients defer data fetching until next() is called.
-  /// This enables waiter tasks using cached hash tables to skip I/O entirely
-  /// when the table is already cached. If false (default), exchange clients
-  /// start fetching data immediately when remote tasks are added.
-  static constexpr const char* kExchangeLazyFetchingEnabled =
-      "exchange_lazy_fetching_enabled";
+  VELOX_QUERY_CONFIG(
+      kExchangeLazyFetchingEnabled,
+      exchangeLazyFetchingEnabled,
+      "exchange_lazy_fetching_enabled",
+      bool,
+      false,
+      "Defer exchange data fetching until next() is called.")
 
-  /// If this is true, then it allows you to get the struct field names
-  /// as json element names when casting a row to json.
-  static constexpr const char* kFieldNamesInJsonCastEnabled =
-      "field_names_in_json_cast_enabled";
+  /// If true, use struct field names as JSON element names when casting row to
+  /// json.
+  VELOX_QUERY_CONFIG(
+      kFieldNamesInJsonCastEnabled,
+      isFieldNamesInJsonCastEnabled,
+      "field_names_in_json_cast_enabled",
+      bool,
+      false,
+      "Use struct field names as JSON element names in CAST to JSON.")
 
-  /// If this is true, then operators that evaluate expressions will track
-  /// stats for expressions that are not special forms and return them as
-  /// part of their operator stats. Tracking these stats can be expensive
-  /// (especially if operator stats are retrieved frequently) and this allows
-  /// the user to explicitly enable it.
-  static constexpr const char* kOperatorTrackExpressionStats =
-      "operator_track_expression_stats";
+  /// If true, operators track stats for non-special-form expressions.
+  VELOX_QUERY_CONFIG(
+      kOperatorTrackExpressionStats,
+      operatorTrackExpressionStats,
+      "operator_track_expression_stats",
+      bool,
+      false,
+      "Track expression stats in operators that evaluate expressions.")
 
-  /// If this is true, enable the operator input/output batch size stats
-  /// collection in driver execution. This can be expensive for data types with
-  /// a large number of columns (e.g., ROW types) as it calls estimateFlatSize()
-  /// which recursively calculates sizes for all child vectors.
-  static constexpr const char* kEnableOperatorBatchSizeStats =
-      "enable_operator_batch_size_stats";
+  /// If true, enable operator input/output batch size stats collection.
+  VELOX_QUERY_CONFIG(
+      kEnableOperatorBatchSizeStats,
+      enableOperatorBatchSizeStats,
+      "enable_operator_batch_size_stats",
+      bool,
+      true,
+      "Enable input/output batch size stats collection in driver execution.")
 
-  /// If this is true, then the unnest operator might split output for each
-  /// input batch based on the output batch size control. Otherwise, it produces
-  /// a single output for each input batch. This can be overridden on a per
-  /// operator basis by the splitOutput parameter in the UnnestPlanNode.
-  static constexpr const char* kUnnestSplitOutput = "unnest_split_output";
+  /// If true, the unnest operator may split output per input batch.
+  VELOX_QUERY_CONFIG(
+      kUnnestSplitOutput,
+      unnestSplitOutput,
+      "unnest_split_output",
+      bool,
+      true,
+      "Allow unnest operator to split output based on batch size.")
 
-  /// Priority of the query in the memory pool reclaimer. Lower value means
-  /// higher priority. This is used in global arbitration victim selection.
-  static constexpr const char* kQueryMemoryReclaimerPriority =
-      "query_memory_reclaimer_priority";
+  /// Priority of the query in the memory pool reclaimer. Lower means higher
+  /// priority.
+  VELOX_QUERY_CONFIG(
+      kQueryMemoryReclaimerPriority,
+      queryMemoryReclaimerPriority,
+      "query_memory_reclaimer_priority",
+      int32_t,
+      std::numeric_limits<int32_t>::max(),
+      "Query priority in memory pool reclaimer. Lower means higher priority.")
 
-  /// The max number of input splits to listen to by SplitListener per table
-  /// scan node per worker. It's up to the SplitListener implementation to
-  /// respect this config.
-  static constexpr const char* kMaxNumSplitsListenedTo =
-      "max_num_splits_listened_to";
+  /// The max number of input splits to listen to by SplitListener.
+  VELOX_QUERY_CONFIG(
+      kMaxNumSplitsListenedTo,
+      maxNumSplitsListenedTo,
+      "max_num_splits_listened_to",
+      int32_t,
+      0,
+      "Max input splits to listen to by SplitListener per scan node per worker.")
 
-  /// Source of the query. Used by Presto to identify the file system username.
-  static constexpr const char* kSource = "source";
+  /// Source of the query.
+  VELOX_QUERY_CONFIG(
+      kSource,
+      source,
+      "source",
+      std::string,
+      "",
+      "Source of the query.")
 
-  /// Client tags of the query. Used by Presto to identify the file system
-  /// username.
-  static constexpr const char* kClientTags = "client_tags";
+  /// Client tags of the query.
+  VELOX_QUERY_CONFIG(
+      kClientTags,
+      clientTags,
+      "client_tags",
+      std::string,
+      "",
+      "Client tags of the query.")
 
-  /// Enable (reader) row size tracker as a fallback to file level row size
-  /// estimates.
-  static constexpr const char* kRowSizeTrackingMode = "row_size_tracking_mode";
+  /// Enable (reader) row size tracker. Uses enum stored as int32_t.
+  VELOX_QUERY_CONFIG_PROPERTY(
+      kRowSizeTrackingMode,
+      "row_size_tracking_mode",
+      int32_t,
+      2,
+      "Row size tracking mode: 0=disabled, 1=exclude delta splits, 2=enabled for all.")
 
   /// Maximum number of distinct values to keep when merging vector hashers in
   /// join HashBuild.
-  static constexpr const char* kJoinBuildVectorHasherMaxNumDistinct =
-      "join_build_vector_hasher_max_num_distinct";
+  VELOX_QUERY_CONFIG(
+      kJoinBuildVectorHasherMaxNumDistinct,
+      joinBuildVectorHasherMaxNumDistinct,
+      "join_build_vector_hasher_max_num_distinct",
+      uint32_t,
+      1'000'000,
+      "Max distinct values to keep when merging vector hashers in join HashBuild.")
 
   /// Batch size threshold for zero-copy optimization in MarkSorted operator.
-  /// For batches smaller than this threshold, the operator holds a reference to
-  /// the entire input batch instead of copying key columns for cross-batch
-  /// comparison.
-  static constexpr const char* kMarkSortedZeroCopyThreshold =
-      "mark_sorted_zero_copy_threshold";
+  VELOX_QUERY_CONFIG(
+      kMarkSortedZeroCopyThreshold,
+      markSortedZeroCopyThreshold,
+      "mark_sorted_zero_copy_threshold",
+      int32_t,
+      1000,
+      "Batch size threshold for zero-copy in MarkSorted operator.")
 
-  enum class RowSizeTrackingMode {
-    DISABLED = 0,
-    EXCLUDE_DELTA_SPLITS = 1,
-    ENABLED_FOR_ALL = 2,
-  };
+  // --- Hand-written accessors for properties that need custom logic ---
 
-  bool selectiveNimbleReaderEnabled() const {
-    return get<bool>(kSelectiveNimbleReaderEnabled, true);
-  }
-
-  RowSizeTrackingMode rowSizeTrackingMode() const {
-    return get<RowSizeTrackingMode>(
-        kRowSizeTrackingMode, RowSizeTrackingMode::ENABLED_FOR_ALL);
-  }
-
-  bool debugDisableExpressionsWithPeeling() const {
-    return get<bool>(kDebugDisableExpressionWithPeeling, false);
-  }
-
-  bool debugDisableCommonSubExpressions() const {
-    return get<bool>(kDebugDisableCommonSubExpressions, false);
-  }
-
-  bool debugDisableExpressionsWithMemoization() const {
-    return get<bool>(kDebugDisableExpressionWithMemoization, false);
-  }
-
-  bool debugDisableExpressionsWithLazyInputs() const {
-    return get<bool>(kDebugDisableExpressionWithLazyInputs, false);
-  }
-
-  std::string debugMemoryPoolNameRegex() const {
-    return get<std::string>(kDebugMemoryPoolNameRegex, "");
-  }
-
-  uint64_t debugMemoryPoolWarnThresholdBytes() const {
-    return config::toCapacity(
-        get<std::string>(kDebugMemoryPoolWarnThresholdBytes, "0B"),
-        config::CapacityUnit::BYTE);
-  }
-
-  std::optional<uint32_t> debugAggregationApproxPercentileFixedRandomSeed()
-      const {
-    return get<uint32_t>(kDebugAggregationApproxPercentileFixedRandomSeed);
-  }
-
-  int32_t debugLambdaFunctionEvaluationBatchSize() const {
-    return get<int32_t>(kDebugLambdaFunctionEvaluationBatchSize, 10'000);
-  }
-
-  uint8_t debugBingTileChildrenMaxZoomShift() const {
-    return get<uint8_t>(kDebugBingTileChildrenMaxZoomShift, 7);
-  }
+  // Generated by VELOX_QUERY_CONFIG for simple properties above.
 
   uint64_t queryMaxMemoryPerNode() const {
     return config::toCapacity(
         get<std::string>(kQueryMaxMemoryPerNode, "0B"),
         config::CapacityUnit::BYTE);
-  }
-
-  uint64_t maxPartialAggregationMemoryUsage() const {
-    static constexpr uint64_t kDefault = 1L << 24;
-    return get<uint64_t>(kMaxPartialAggregationMemory, kDefault);
-  }
-
-  uint64_t maxExtendedPartialAggregationMemoryUsage() const {
-    static constexpr uint64_t kDefault = 1L << 26;
-    return get<uint64_t>(kMaxExtendedPartialAggregationMemory, kDefault);
-  }
-
-  int32_t abandonPartialAggregationMinRows() const {
-    return get<int32_t>(kAbandonPartialAggregationMinRows, 100'000);
-  }
-
-  int32_t abandonPartialAggregationMinPct() const {
-    return get<int32_t>(kAbandonPartialAggregationMinPct, 80);
-  }
-
-  uint64_t aggregationCompactionBytesThreshold() const {
-    return get<uint64_t>(kAggregationCompactionBytesThreshold, 0);
-  }
-
-  double aggregationCompactionUnusedMemoryRatio() const {
-    return get<double>(kAggregationCompactionUnusedMemoryRatio, 0.25);
-  }
-
-  bool aggregationMemoryCompactionReclaimEnabled() const {
-    return get<bool>(kAggregationMemoryCompactionReclaimEnabled, false);
-  }
-
-  int32_t abandonPartialTopNRowNumberMinRows() const {
-    return get<int32_t>(kAbandonPartialTopNRowNumberMinRows, 100'000);
-  }
-
-  int32_t abandonPartialTopNRowNumberMinPct() const {
-    return get<int32_t>(kAbandonPartialTopNRowNumberMinPct, 80);
-  }
-
-  int32_t abandonHashBuildDedupMinRows() const {
-    return get<int32_t>(kAbandonDedupHashMapMinRows, 100'000);
-  }
-
-  int32_t abandonHashBuildDedupMinPct() const {
-    return get<int32_t>(kAbandonDedupHashMapMinPct, 0);
-  }
-
-  int32_t maxElementsSizeInRepeatAndSequence() const {
-    return get<int32_t>(kMaxElementsSizeInRepeatAndSequence, 10'000);
-  }
-
-  uint64_t maxSpillRunRows() const {
-    static constexpr uint64_t kDefault = 12UL << 20;
-    return get<uint64_t>(kMaxSpillRunRows, kDefault);
-  }
-
-  uint64_t maxSpillBytes() const {
-    static constexpr uint64_t kDefault = 100UL << 30;
-    return get<uint64_t>(kMaxSpillBytes, kDefault);
-  }
-
-  bool partitionedOutputEagerFlush() const {
-    return get<bool>(kPartitionedOutputEagerFlush, false);
-  }
-
-  uint64_t maxPartitionedOutputBufferSize() const {
-    static constexpr uint64_t kDefault = 32UL << 20;
-    return get<uint64_t>(kMaxPartitionedOutputBufferSize, kDefault);
-  }
-
-  uint64_t maxOutputBufferSize() const {
-    static constexpr uint64_t kDefault = 32UL << 20;
-    return get<uint64_t>(kMaxOutputBufferSize, kDefault);
-  }
-
-  uint64_t maxLocalExchangeBufferSize() const {
-    static constexpr uint64_t kDefault = 32UL << 20;
-    return get<uint64_t>(kMaxLocalExchangeBufferSize, kDefault);
-  }
-
-  uint32_t maxLocalExchangePartitionCount() const {
-    // defaults to unlimited
-    static constexpr uint32_t kDefault = std::numeric_limits<uint32_t>::max();
-    return get<uint32_t>(kMaxLocalExchangePartitionCount, kDefault);
-  }
-
-  uint32_t minLocalExchangePartitionCountToUsePartitionBuffer() const {
-    // Use non buffering mode if the partition count 32 or less
-    // The default value is 32 is chosen rather conservatively. A
-    // significant performance degradation of a non-buffered approach is
-    // observed after 16 partitions.
-    static constexpr uint64_t kDefault = 33;
-    return get<uint32_t>(
-        kMinLocalExchangePartitionCountToUsePartitionBuffer, kDefault);
-  }
-
-  uint64_t maxLocalExchangePartitionBufferSize() const {
-    /// The default partition buffer size is 64KB.
-    static constexpr uint64_t kDefault = 64UL * 1024;
-    return get<uint64_t>(kMaxLocalExchangePartitionBufferSize, kDefault);
-  }
-
-  bool localExchangePartitionBufferPreserveEncoding() const {
-    /// Trying to preserve encoding can be expensive. Disabled by default.
-    return get<bool>(kLocalExchangePartitionBufferPreserveEncoding, false);
-  }
-
-  uint32_t localMergeSourceQueueSize() const {
-    return get<uint32_t>(kLocalMergeSourceQueueSize, 2);
-  }
-
-  uint64_t maxExchangeBufferSize() const {
-    static constexpr uint64_t kDefault = 32UL << 20;
-    return get<uint64_t>(kMaxExchangeBufferSize, kDefault);
-  }
-
-  uint64_t maxMergeExchangeBufferSize() const {
-    static constexpr uint64_t kDefault = 128UL << 20;
-    return get<uint64_t>(kMaxMergeExchangeBufferSize, kDefault);
-  }
-
-  uint64_t minExchangeOutputBatchBytes() const {
-    static constexpr uint64_t kDefault = 2UL << 20;
-    return get<uint64_t>(kMinExchangeOutputBatchBytes, kDefault);
-  }
-
-  uint64_t preferredOutputBatchBytes() const {
-    static constexpr uint64_t kDefault = 10UL << 20;
-    return get<uint64_t>(kPreferredOutputBatchBytes, kDefault);
   }
 
   vector_size_t preferredOutputBatchRows() const {
@@ -1118,122 +1498,6 @@ class QueryConfig {
     return batchRows;
   }
 
-  uint32_t tableScanGetOutputTimeLimitMs() const {
-    return get<uint64_t>(kTableScanGetOutputTimeLimitMs, 5'000);
-  }
-
-  uint32_t tableScanOutputBatchRowsOverride() const {
-    return get<uint32_t>(kTableScanOutputBatchRowsOverride, 0);
-  }
-
-  bool hashAdaptivityEnabled() const {
-    return get<bool>(kHashAdaptivityEnabled, true);
-  }
-
-  uint32_t writeStrideSize() const {
-    static constexpr uint32_t kDefault = 100'000;
-    return kDefault;
-  }
-
-  bool flushPerBatch() const {
-    static constexpr bool kDefault = true;
-    return kDefault;
-  }
-
-  bool adaptiveFilterReorderingEnabled() const {
-    return get<bool>(kAdaptiveFilterReorderingEnabled, true);
-  }
-
-  bool isLegacyCast() const {
-    return get<bool>(kLegacyCast, false);
-  }
-
-  bool isMatchStructByName() const {
-    return get<bool>(kCastMatchStructByName, false);
-  }
-
-  uint64_t exprMaxArraySizeInReduce() const {
-    return get<uint64_t>(kExprMaxArraySizeInReduce, 100'000);
-  }
-
-  uint64_t exprMaxCompiledRegexes() const {
-    return get<uint64_t>(kExprMaxCompiledRegexes, 100);
-  }
-
-  bool adjustTimestampToTimezone() const {
-    return get<bool>(kAdjustTimestampToTimezone, false);
-  }
-
-  std::string sessionTimezone() const {
-    return get<std::string>(kSessionTimezone, "");
-  }
-
-  /// Returns the session start time in milliseconds since Unix epoch.
-  /// If not set, returns 0 (or epoch).
-  int64_t sessionStartTimeMs() const {
-    return get<int64_t>(kSessionStartTime, 0);
-  }
-
-  bool exprEvalSimplified() const {
-    return get<bool>(kExprEvalSimplified, false);
-  }
-
-  bool exprEvalFlatNoNulls() const {
-    return get<bool>(kExprEvalFlatNoNulls, true);
-  }
-
-  bool parallelOutputJoinBuildRowsEnabled() const {
-    return get<bool>(kParallelOutputJoinBuildRowsEnabled, false);
-  }
-
-  bool spillEnabled() const {
-    return get<bool>(kSpillEnabled, false);
-  }
-
-  bool aggregationSpillEnabled() const {
-    return get<bool>(kAggregationSpillEnabled, true);
-  }
-
-  bool joinSpillEnabled() const {
-    return get<bool>(kJoinSpillEnabled, true);
-  }
-
-  bool mixedGroupedModeHashJoinSpillEnabled() const {
-    return get<bool>(kMixedGroupedModeHashJoinSpillEnabled, false);
-  }
-
-  bool orderBySpillEnabled() const {
-    return get<bool>(kOrderBySpillEnabled, true);
-  }
-
-  bool windowSpillEnabled() const {
-    return get<bool>(kWindowSpillEnabled, true);
-  }
-
-  uint32_t windowSpillMinReadBatchRows() const {
-    return get<uint32_t>(kWindowSpillMinReadBatchRows, 1'000);
-  }
-
-  bool writerSpillEnabled() const {
-    return get<bool>(kWriterSpillEnabled, true);
-  }
-
-  bool rowNumberSpillEnabled() const {
-    return get<bool>(kRowNumberSpillEnabled, true);
-  }
-
-  bool markDistinctSpillEnabled() const {
-    return get<bool>(kMarkDistinctSpillEnabled, false);
-  }
-
-  bool topNRowNumberSpillEnabled() const {
-    return get<bool>(kTopNRowNumberSpillEnabled, true);
-  }
-
-  bool localMergeSpillEnabled() const {
-    return get<bool>(kLocalMergeSpillEnabled, false);
-  }
-
   uint32_t localMergeMaxNumMergeSources() const {
     const auto maxNumMergeSources = get<uint32_t>(
         kLocalMergeMaxNumMergeSources, std::numeric_limits<uint32_t>::max());
@@ -1241,137 +1505,11 @@ class QueryConfig {
     return maxNumMergeSources;
   }
 
-  int32_t maxSpillLevel() const {
-    return get<int32_t>(kMaxSpillLevel, 1);
-  }
-
-  uint8_t spillStartPartitionBit() const {
-    constexpr uint8_t kDefaultStartBit = 48;
-    return get<uint8_t>(kSpillStartPartitionBit, kDefaultStartBit);
-  }
-
   uint8_t spillNumPartitionBits() const {
     constexpr uint8_t kDefaultBits = 3;
     constexpr uint8_t kMaxBits = 3;
     return std::min(
         kMaxBits, get<uint8_t>(kSpillNumPartitionBits, kDefaultBits));
-  }
-
-  uint64_t writerFlushThresholdBytes() const {
-    return get<uint64_t>(kWriterFlushThresholdBytes, 96L << 20);
-  }
-
-  uint64_t maxSpillFileSize() const {
-    constexpr uint64_t kDefaultMaxFileSize = 0;
-    return get<uint64_t>(kMaxSpillFileSize, kDefaultMaxFileSize);
-  }
-
-  std::string spillCompressionKind() const {
-    return get<std::string>(kSpillCompressionKind, "none");
-  }
-
-  uint32_t spillNumMaxMergeFiles() const {
-    constexpr uint32_t kDefaultMergeFiles = 0;
-    return get<uint32_t>(kSpillNumMaxMergeFiles, kDefaultMergeFiles);
-  }
-
-  bool spillPrefixSortEnabled() const {
-    return get<bool>(kSpillPrefixSortEnabled, false);
-  }
-
-  uint64_t spillWriteBufferSize() const {
-    // The default write buffer size set to 1MB.
-    return get<uint64_t>(kSpillWriteBufferSize, 1L << 20);
-  }
-
-  uint64_t spillReadBufferSize() const {
-    // The default read buffer size set to 1MB.
-    return get<uint64_t>(kSpillReadBufferSize, 1L << 20);
-  }
-
-  std::string spillFileCreateConfig() const {
-    return get<std::string>(kSpillFileCreateConfig, "");
-  }
-
-  std::string aggregationSpillFileCreateConfig() const {
-    return get<std::string>(kAggregationSpillFileCreateConfig, "");
-  }
-
-  std::string hashJoinSpillFileCreateConfig() const {
-    return get<std::string>(kHashJoinSpillFileCreateConfig, "");
-  }
-
-  std::string rowNumberSpillFileCreateConfig() const {
-    return get<std::string>(kRowNumberSpillFileCreateConfig, "");
-  }
-
-  int32_t minSpillableReservationPct() const {
-    constexpr int32_t kDefaultPct = 5;
-    return get<int32_t>(kMinSpillableReservationPct, kDefaultPct);
-  }
-
-  int32_t spillableReservationGrowthPct() const {
-    constexpr int32_t kDefaultPct = 10;
-    return get<int32_t>(kSpillableReservationGrowthPct, kDefaultPct);
-  }
-
-  bool queryTraceEnabled() const {
-    return get<bool>(kQueryTraceEnabled, false);
-  }
-
-  std::string queryTraceDir() const {
-    // The default query trace dir, empty by default.
-    return get<std::string>(kQueryTraceDir, "");
-  }
-
-  std::string queryTraceNodeId() const {
-    // The default query trace node ID, empty by default.
-    return get<std::string>(kQueryTraceNodeId, "");
-  }
-
-  uint64_t queryTraceMaxBytes() const {
-    return get<uint64_t>(kQueryTraceMaxBytes, 0);
-  }
-
-  std::string queryTraceTaskRegExp() const {
-    // The default query trace task regexp, empty by default.
-    return get<std::string>(kQueryTraceTaskRegExp, "");
-  }
-
-  bool queryTraceDryRun() const {
-    return get<bool>(kQueryTraceDryRun, false);
-  }
-
-  std::string opTraceDirectoryCreateConfig() const {
-    return get<std::string>(kOpTraceDirectoryCreateConfig, "");
-  }
-
-  bool prestoArrayAggIgnoreNulls() const {
-    return get<bool>(kPrestoArrayAggIgnoreNulls, false);
-  }
-
-  bool sparkAnsiEnabled() const {
-    return get<bool>(kSparkAnsiEnabled, false);
-  }
-
-  int64_t sparkBloomFilterExpectedNumItems() const {
-    constexpr int64_t kDefault = 1'000'000L;
-    return get<int64_t>(kSparkBloomFilterExpectedNumItems, kDefault);
-  }
-
-  int64_t sparkBloomFilterNumBits() const {
-    constexpr int64_t kDefault = 8'388'608L;
-    return get<int64_t>(kSparkBloomFilterNumBits, kDefault);
-  }
-
-  int64_t sparkBloomFilterMaxNumBits() const {
-    constexpr int64_t kDefault = 67'108'864;
-    return get<int64_t>(kSparkBloomFilterMaxNumBits, kDefault);
-  }
-
-  int64_t sparkBloomFilterMaxNumItems() const {
-    constexpr int64_t kDefault = 4'000'000L;
-    return get<int64_t>(kSparkBloomFilterMaxNumItems, kDefault);
   }
 
   int32_t sparkPartitionId() const {
@@ -1382,225 +1520,31 @@ class QueryConfig {
     return value;
   }
 
-  bool sparkLegacyDateFormatter() const {
-    return get<bool>(kSparkLegacyDateFormatter, false);
-  }
-
-  bool sparkLegacyStatisticalAggregate() const {
-    return get<bool>(kSparkLegacyStatisticalAggregate, false);
-  }
-
-  bool sparkJsonIgnoreNullFields() const {
-    return get<bool>(kSparkJsonIgnoreNullFields, true);
-  }
-
-  bool sparkCollectListIgnoreNulls() const {
-    return get<bool>(kSparkCollectListIgnoreNulls, true);
-  }
-
-  bool exprTrackCpuUsage() const {
-    return get<bool>(kExprTrackCpuUsage, false);
-  }
-
-  std::string exprTrackCpuUsageForFunctions() const {
-    return get<std::string>(kExprTrackCpuUsageForFunctions, "");
-  }
-
-  bool exprAdaptiveCpuSampling() const {
-    return get<bool>(kExprAdaptiveCpuSampling, false);
-  }
-
-  double exprAdaptiveCpuSamplingMaxOverheadPct() const {
-    return get<double>(kExprAdaptiveCpuSamplingMaxOverheadPct, 1.0);
-  }
-
-  bool exprDedupNonDeterministic() const {
-    return get<bool>(kExprDedupNonDeterministic, true);
-  }
-
-  bool operatorTrackCpuUsage() const {
-    return get<bool>(kOperatorTrackCpuUsage, true);
-  }
-
-  uint32_t taskWriterCount() const {
-    return get<uint32_t>(kTaskWriterCount, 4);
-  }
-
   uint32_t taskPartitionedWriterCount() const {
     return get<uint32_t>(kTaskPartitionedWriterCount)
         .value_or(taskWriterCount());
   }
 
-  bool hashProbeFinishEarlyOnEmptyBuild() const {
-    return get<bool>(kHashProbeFinishEarlyOnEmptyBuild, false);
+  std::optional<uint32_t> debugAggregationApproxPercentileFixedRandomSeed()
+      const {
+    return get<uint32_t>(kDebugAggregationApproxPercentileFixedRandomSeed);
   }
 
-  bool hashProbeDynamicFilterPushdownEnabled() const {
-    return get<bool>(kHashProbeDynamicFilterPushdownEnabled, true);
+  uint64_t debugMemoryPoolWarnThresholdBytes() const {
+    return config::toCapacity(
+        get<std::string>(kDebugMemoryPoolWarnThresholdBytes, "0B"),
+        config::CapacityUnit::BYTE);
   }
 
-  bool hashProbeStringDynamicFilterPushdownEnabled() const {
-    return get<bool>(kHashProbeStringDynamicFilterPushdownEnabled, false);
-  }
+  enum class RowSizeTrackingMode {
+    DISABLED = 0,
+    EXCLUDE_DELTA_SPLITS = 1,
+    ENABLED_FOR_ALL = 2,
+  };
 
-  uint64_t hashProbeBloomFilterPushdownMaxSize() const {
-    return get<uint64_t>(kHashProbeBloomFilterPushdownMaxSize, 0);
-  }
-
-  uint32_t minTableRowsForParallelJoinBuild() const {
-    return get<uint32_t>(kMinTableRowsForParallelJoinBuild, 1'000);
-  }
-
-  bool validateOutputFromOperators() const {
-    return get<bool>(kValidateOutputFromOperators, false);
-  }
-
-  bool isExpressionEvaluationCacheEnabled() const {
-    return get<bool>(kEnableExpressionEvaluationCache, true);
-  }
-
-  uint32_t maxSharedSubexprResultsCached() const {
-    // 10 was chosen as a default as there are cases where a shared
-    // subexpression can be called in 2 different places and a particular
-    // argument may be peeled in one and not peeled in another. 10 is large
-    // enough to handle this happening for a few arguments in different
-    // combinations.
-    //
-    // For example, when the UDF at the root of a shared subexpression does not
-    // have default null behavior and takes an input that is dictionary encoded
-    // with nulls set in the DictionaryVector. That dictionary
-    // encoding may be peeled depending on whether or not there is a UDF above
-    // it in the expression tree that has default null behavior and takes the
-    // same input as an argument.
-    return get<uint32_t>(kMaxSharedSubexprResultsCached, 10);
-  }
-
-  int32_t maxSplitPreloadPerDriver() const {
-    return get<int32_t>(kMaxSplitPreloadPerDriver, 2);
-  }
-
-  uint32_t driverCpuTimeSliceLimitMs() const {
-    return get<uint32_t>(kDriverCpuTimeSliceLimitMs, 0);
-  }
-
-  uint32_t windowNumSubPartitions() const {
-    return get<uint32_t>(kWindowNumSubPartitions, 1);
-  }
-
-  uint32_t prefixSortNormalizedKeyMaxBytes() const {
-    return get<uint32_t>(kPrefixSortNormalizedKeyMaxBytes, 128);
-  }
-
-  uint32_t prefixSortMinRows() const {
-    return get<uint32_t>(kPrefixSortMinRows, 128);
-  }
-
-  uint32_t prefixSortMaxStringPrefixLength() const {
-    return get<uint32_t>(kPrefixSortMaxStringPrefixLength, 16);
-  }
-
-  double scaleWriterRebalanceMaxMemoryUsageRatio() const {
-    return get<double>(kScaleWriterRebalanceMaxMemoryUsageRatio, 0.7);
-  }
-
-  uint32_t scaleWriterMaxPartitionsPerWriter() const {
-    return get<uint32_t>(kScaleWriterMaxPartitionsPerWriter, 128);
-  }
-
-  uint64_t scaleWriterMinPartitionProcessedBytesRebalanceThreshold() const {
-    return get<uint64_t>(
-        kScaleWriterMinPartitionProcessedBytesRebalanceThreshold, 128 << 20);
-  }
-
-  uint64_t scaleWriterMinProcessedBytesRebalanceThreshold() const {
-    return get<uint64_t>(
-        kScaleWriterMinProcessedBytesRebalanceThreshold, 256 << 20);
-  }
-
-  bool tableScanScaledProcessingEnabled() const {
-    return get<bool>(kTableScanScaledProcessingEnabled, false);
-  }
-
-  double tableScanScaleUpMemoryUsageRatio() const {
-    return get<double>(kTableScanScaleUpMemoryUsageRatio, 0.7);
-  }
-
-  uint32_t indexLookupJoinMaxPrefetchBatches() const {
-    return get<uint32_t>(kIndexLookupJoinMaxPrefetchBatches, 0);
-  }
-
-  bool indexLookupJoinSplitOutput() const {
-    return get<bool>(kIndexLookupJoinSplitOutput, true);
-  }
-
-  std::string shuffleCompressionKind() const {
-    return get<std::string>(kShuffleCompressionKind, "none");
-  }
-
-  int32_t requestDataSizesMaxWaitSec() const {
-    return get<int32_t>(kRequestDataSizesMaxWaitSec, 10);
-  }
-
-  bool throwExceptionOnDuplicateMapKeys() const {
-    return get<bool>(kThrowExceptionOnDuplicateMapKeys, false);
-  }
-
-  /// TODO: Remove after dependencies are cleaned up.
-  bool streamingAggregationEagerFlush() const {
-    return get<bool>(kStreamingAggregationEagerFlush, false);
-  }
-
-  int32_t streamingAggregationMinOutputBatchRows() const {
-    return get<int32_t>(kStreamingAggregationMinOutputBatchRows, 0);
-  }
-
-  bool singleSourceExchangeOptimizationEnabled() const {
-    return get<bool>(kSkipRequestDataSizeWithSingleSourceEnabled, false);
-  }
-
-  bool exchangeLazyFetchingEnabled() const {
-    return get<bool>(kExchangeLazyFetchingEnabled, false);
-  }
-
-  bool isFieldNamesInJsonCastEnabled() const {
-    return get<bool>(kFieldNamesInJsonCastEnabled, false);
-  }
-
-  bool operatorTrackExpressionStats() const {
-    return get<bool>(kOperatorTrackExpressionStats, false);
-  }
-
-  bool enableOperatorBatchSizeStats() const {
-    return get<bool>(kEnableOperatorBatchSizeStats, true);
-  }
-
-  bool unnestSplitOutput() const {
-    return get<bool>(kUnnestSplitOutput, true);
-  }
-
-  int32_t queryMemoryReclaimerPriority() const {
-    return get<int32_t>(
-        kQueryMemoryReclaimerPriority, std::numeric_limits<int32_t>::max());
-  }
-
-  int32_t maxNumSplitsListenedTo() const {
-    return get<int32_t>(kMaxNumSplitsListenedTo, 0);
-  }
-
-  std::string source() const {
-    return get<std::string>(kSource, "");
-  }
-
-  std::string clientTags() const {
-    return get<std::string>(kClientTags, "");
-  }
-
-  uint32_t joinBuildVectorHasherMaxNumDistinct() const {
-    return get<uint32_t>(kJoinBuildVectorHasherMaxNumDistinct, 1'000'000);
-  }
-
-  int32_t markSortedZeroCopyThreshold() const {
-    return get<int32_t>(kMarkSortedZeroCopyThreshold, 1000);
+  RowSizeTrackingMode rowSizeTrackingMode() const {
+    return get<RowSizeTrackingMode>(
+        kRowSizeTrackingMode, RowSizeTrackingMode::ENABLED_FOR_ALL);
   }
 
   template <typename T>
@@ -1629,4 +1573,8 @@ class QueryConfig {
 
   std::shared_ptr<const config::IConfig> config_;
 };
+
+#undef VELOX_QUERY_CONFIG
+#undef VELOX_QUERY_CONFIG_PROPERTY
+
 } // namespace facebook::velox::core

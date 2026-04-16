@@ -93,6 +93,8 @@ void registerCudfFunctions(
 
 bool registerBuiltinFunctions(const std::string& prefix);
 
+void unregisterFunctions();
+
 class CudfExpression {
  public:
   virtual ~CudfExpression() = default;

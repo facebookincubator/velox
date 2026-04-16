@@ -25,6 +25,7 @@
 #include <folly/portability/SysSyscall.h>
 
 #include "velox/common/base/Counters.h"
+#include "velox/common/base/Portability.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/core/PlanFragment.h"
@@ -104,10 +105,10 @@ struct ThreadState {
   std::atomic<bool> isTerminated{false};
   /// True if there is a future outstanding that will schedule this on an
   /// executor thread when some promise is realized.
-  bool hasBlockingFuture{false};
+  tsan_atomic<bool> hasBlockingFuture{false};
   /// Timestamp in microseconds when the driver became blocked. Used to record
   /// blocked time when the driver is terminated while still blocked.
-  uint64_t blockingStartUs{0};
+  tsan_atomic<uint64_t> blockingStartUs{0};
   /// The number of suspension requests on a on-thread driver. If > 0, this
   /// driver thread is in a (recursive) section waiting for RPC or memory
   /// strategy decision. The thread is not supposed to access its memory, which
@@ -172,8 +173,8 @@ struct ThreadState {
     obj["tid"] = tid.load();
     obj["isTerminated"] = isTerminated.load();
     obj["isEnqueued"] = isEnqueued.load();
-    obj["hasBlockingFuture"] = hasBlockingFuture;
-    obj["blockingStartUs"] = blockingStartUs;
+    obj["hasBlockingFuture"] = tsanAtomicValue(hasBlockingFuture);
+    obj["blockingStartUs"] = tsanAtomicValue(blockingStartUs);
     obj["isSuspended"] = suspended();
     obj["startExecTime"] = startExecTimeMs;
     return obj;
@@ -706,7 +707,7 @@ class Driver : public std::enable_shared_from_this<Driver> {
 
   std::vector<std::unique_ptr<Operator>> operators_; // NOLINT
 
-  BlockingReason blockingReason_{BlockingReason::kNotBlocked};
+  tsan_atomic<BlockingReason> blockingReason_{BlockingReason::kNotBlocked};
 
   // Stores the operator where the driver was last blocked. Note that the driver
   // always resumes at the leaf (consumer) to prioritize getting data out of the

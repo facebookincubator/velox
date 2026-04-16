@@ -166,6 +166,13 @@ std::unique_ptr<cudf::table> toCudfTable(
       arrowOptions);
   auto tbl = cudf::from_arrow(&arrowSchema, &arrowArray, stream, mr);
 
+  // Synchronize before releasing Arrow resources.  cudf::from_arrow uses
+  // cudaMemcpyBatchAsync (CUDA 13.0+) with cudaMemcpySrcAccessOrderStream,
+  // which defers reading the host source buffers until the stream reaches
+  // each copy.  The Arrow arrays must therefore stay alive until the stream
+  // has executed those copies.
+  stream.synchronize();
+
   // Release Arrow resources
   if (arrowArray.release) {
     arrowArray.release(&arrowArray);
