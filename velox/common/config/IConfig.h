@@ -35,9 +35,7 @@ class IConfig {
   std::optional<T> get(
       const std::string& key,
       const std::function<T(std::string, std::string)>& toT =
-          [](auto /* unused */, auto value) {
-            return folly::to<T>(value);
-          }) const {
+          defaultToT<T>) const {
     if (auto val = access(key)) {
       return toT(key, *val);
     }
@@ -49,9 +47,7 @@ class IConfig {
       const std::string& key,
       const T& defaultValue,
       const std::function<T(std::string, std::string)>& toT =
-          [](auto /* unused */, auto value) {
-            return folly::to<T>(value);
-          }) const {
+          defaultToT<T>) const {
     if (auto val = access(key)) {
       return toT(key, *val);
     }
@@ -65,6 +61,13 @@ class IConfig {
 
  private:
   virtual std::optional<std::string> access(const std::string& key) const = 0;
+  // Do not inline this member function as lambda. Otherwise, a GCC bug
+  // https://gcc.gnu.org/bugzilla/show_bug.cgi?id=103186 might be triggered
+  // with GCC 11.1 and 11.2.
+  template <typename T>
+  static T defaultToT(std::string /* unused */, std::string value) {
+    return folly::to<T>(value);
+  }
 };
 
 } // namespace facebook::velox::config
