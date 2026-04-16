@@ -14,6 +14,7 @@
 
 add_library(
   velox_cudf_exec
+  AggregationRegistry.cpp
   CudfAssignUniqueId.cpp
   CudfBatchConcat.cpp
   CudfConversion.cpp
@@ -29,6 +30,8 @@ add_library(
   DebugUtil.cpp
   GpuResources.cpp
   OperatorAdapters.cpp
+  PrestoAggregateFunctions.cpp
+  SparkAggregateFunctions.cpp
   ToCudf.cpp
   Utilities.cpp
   VeloxCudfInterop.cpp

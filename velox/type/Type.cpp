@@ -461,29 +461,25 @@ const RowType::NameToIndex* RowType::ensureNameToIndex() const {
 }
 
 namespace {
-template <typename T>
-std::string makeFieldNotFoundErrorMessage(
-    const T& name,
+std::string formatAvailableFields(
     const std::vector<std::string>& availableNames) {
   static constexpr auto kMaxFields = 50;
 
   const auto numAvailable = availableNames.size();
 
-  std::stringstream errorMessage;
-  errorMessage << "Field not found: " << name << ". Available fields are: ";
+  std::stringstream result;
   for (auto i = 0; i < numAvailable && i < kMaxFields; ++i) {
     if (i > 0) {
-      errorMessage << ", ";
+      result << ", ";
     }
-    errorMessage << availableNames[i];
+    result << availableNames[i];
   }
 
   if (numAvailable > kMaxFields) {
-    errorMessage << ", ..." << (numAvailable - kMaxFields) << " more";
+    result << ", ..." << (numAvailable - kMaxFields) << " more";
   }
 
-  errorMessage << ".";
-  return errorMessage.str();
+  return result.str();
 }
 } // namespace
 
@@ -491,7 +487,10 @@ const TypePtr& RowType::findChild(std::string_view name) const {
   if (auto i = getChildIdxIfExists(name)) {
     return children_[*i];
   }
-  VELOX_USER_FAIL(makeFieldNotFoundErrorMessage(name, names_));
+  VELOX_USER_FAIL(
+      "Field not found: {}. Available fields are: {}.",
+      name,
+      formatAvailableFields(names_));
 }
 
 bool RowType::isOrderable() const {
@@ -515,7 +514,10 @@ bool RowType::containsChild(std::string_view name) const {
 uint32_t RowType::getChildIdx(std::string_view name) const {
   auto index = getChildIdxIfExists(name);
   if (!index.has_value()) {
-    VELOX_USER_FAIL(makeFieldNotFoundErrorMessage(name, names_));
+    VELOX_USER_FAIL(
+        "Field not found: {}. Available fields are: {}.",
+        name,
+        formatAvailableFields(names_));
   }
   return index.value();
 }

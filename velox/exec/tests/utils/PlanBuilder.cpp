@@ -2183,24 +2183,21 @@ PlanBuilder& PlanBuilder::unnest(
 
 namespace {
 std::string throwWindowFunctionDoesntExist(const std::string& name) {
-  std::stringstream error;
-  error << "Window function doesn't exist: " << name << ".";
   if (exec::windowFunctions().empty()) {
-    error << " Registry of window functions is empty. "
-             "Make sure to register some window functions.";
+    VELOX_USER_FAIL(
+        "Registry of window functions is empty. Make sure to register some window functions.");
   }
-  VELOX_USER_FAIL(error.str());
+  VELOX_USER_FAIL("Window function doesn't exist: {}.", name);
 }
 
 std::string throwWindowFunctionSignatureNotSupported(
     const std::string& name,
     const std::vector<TypePtr>& types,
     const std::vector<FunctionSignaturePtr>& signatures) {
-  std::stringstream error;
-  error << "Window function signature is not supported: "
-        << toString(name, types)
-        << ". Supported signatures: " << toString(signatures) << ".";
-  VELOX_USER_FAIL(error.str());
+  VELOX_USER_FAIL(
+      "Window function signature is not supported: {}. Supported signatures: {}.",
+      toString(name, types),
+      toString(signatures));
 }
 
 TypePtr resolveWindowType(
@@ -2395,11 +2392,11 @@ PlanBuilder& PlanBuilder::window(
 
   auto errorOnMismatch = [&](const std::string& windowString,
                              const std::string& mismatchTypeString) -> void {
-    std::stringstream error;
-    error << "Window function invocations " << windowString << " and "
-          << windowFunctions[0] << " do not match " << mismatchTypeString
-          << " clauses.";
-    VELOX_USER_FAIL(error.str());
+    VELOX_USER_FAIL(
+        "Window function invocations {} and {} do not match {} clauses.",
+        windowString,
+        windowFunctions[0],
+        mismatchTypeString);
   };
 
   WindowTypeResolver windowResolver;
