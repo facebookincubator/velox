@@ -187,10 +187,8 @@ set_tests_properties(
   PROPERTIES LABELS cuda_driver TIMEOUT 3000
 )
 set_tests_properties(velox_cudf_filter_project_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
-set_tests_properties(velox_cudf_hash_join_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 set_tests_properties(velox_cudf_limit_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 set_tests_properties(velox_cudf_local_partition_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
-set_tests_properties(velox_cudf_order_by_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 if(VELOX_ENABLE_S3)
   set_tests_properties(velox_cudf_s3_read_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 endif()
