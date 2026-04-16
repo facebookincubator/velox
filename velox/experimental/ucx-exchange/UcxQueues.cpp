@@ -169,11 +169,6 @@ bool UcxOutputQueue::initialize(
   }
   kind_ = kind;
   numDrivers_ = numDrivers;
-  // Release fence: ensure kind_ and numDrivers_ are visible before task_
-  // is published. Concurrent lock-free readers (e.g. isBroadcast() via
-  // kind()) use task_ != nullptr as the "initialized" signal, so kind_
-  // must be committed to memory first.
-  std::atomic_thread_fence(std::memory_order_release);
   task_ = task;
   maxSize_ = task_->queryCtx()->queryConfig().maxOutputBufferSize();
   continueSize_ = (maxSize_ * kContinuePct) / 100;
@@ -182,6 +177,11 @@ bool UcxOutputQueue::initialize(
     // create the destination queues inside the vector using emplace_back.
     queues_.emplace_back(std::make_unique<UcxDestinationQueue>());
   }
+  // Publish the initialized flag last with release semantics. Lock-free
+  // readers (canUseIntraNode → isInitialized) use an acquire load, so
+  // all writes above (kind_, task_, queues_, etc.) are guaranteed visible
+  // once they observe initialized_ == true.
+  initialized_.store(true, std::memory_order_release);
   return true;
 }
 

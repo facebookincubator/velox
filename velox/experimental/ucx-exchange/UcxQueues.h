@@ -16,6 +16,7 @@
 #pragma once
 
 #include <cudf/contiguous_split.hpp>
+#include <atomic>
 #include <deque>
 #include <functional>
 #include <memory>
@@ -159,8 +160,12 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
 
   /// Returns true if this queue has been initialized via initializeTask()
   /// (not just a placeholder created by early getData() calls).
+  /// Uses an acquire load so that all fields written before the release
+  /// store in initialize() (kind_, numDrivers_, task_, etc.) are visible
+  /// to the caller. This makes lock-free reads from canUseIntraNode()
+  /// safe across threads.
   bool isInitialized() const {
-    return task_ != nullptr;
+    return initialized_.load(std::memory_order_acquire);
   }
 
   /// @brief When we understand the final number of split groups (for grouped
@@ -268,6 +273,11 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   // The output mode (partitioned, broadcast, etc.)
   core::PartitionedOutputNode::Kind kind_{
       core::PartitionedOutputNode::Kind::kPartitioned};
+
+  // Set to true at the end of initialize() with memory_order_release.
+  // Lock-free readers (canUseIntraNode) load with memory_order_acquire
+  // so that all fields written before the store are visible.
+  std::atomic<bool> initialized_{false};
 
   // For broadcast: stores data for late-arriving destinations that need
   // backfill. Cleared once noMoreQueues_ is set.
