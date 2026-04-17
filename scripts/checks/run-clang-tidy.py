@@ -44,7 +44,10 @@ def git_changed_lines(commit):
 
         match = re.match(r"^\+\+\+ b/(.*(\.cpp|\.h|\.hpp))$", line)
         if match:
-            file = match.group(1)
+            matched_file = match.group(1)
+            # Exclude all files in cudf directories
+            if "cudf/" not in matched_file:
+                file = matched_file
 
         match = re.match(r"^@@", line)
         if match and file != "" and len(fields) >= 3:
@@ -70,8 +73,11 @@ def tidy(args):
     files = util.input_files(args.files)
     files = [file for file in files if re.match(r".*(\.cpp|\.h|\.hpp)$", file)]
 
-    in_gha = os.environ.get("GITHUB_ACTIONS") is not None
+    # Exclude all files in cudf directories
+    # as clang-tidy doesn't support CUDA compiler flags and CUDA headers
+    files = [file for file in files if "cudf/" not in file]
 
+    in_gha = os.environ.get("GITHUB_ACTIONS") is not None
     changed_lines = git_changed_lines(args.commit)
 
     line_filter = json.dumps(
