@@ -52,10 +52,6 @@ std::vector<std::unique_ptr<ReduceAggregator>> toReduceAggregators(
     TypePtr const& outputType,
     std::vector<VectorPtr> const& constants);
 
-StepAwareAggregationRegistry& getReduceAggregationRegistry();
-
-bool registerReduceAggregationFunctions(const std::string& prefix);
-
 bool canReduceBeEvaluatedByCudf(
     const core::AggregationNode& aggregationNode,
     core::QueryCtx* queryCtx);

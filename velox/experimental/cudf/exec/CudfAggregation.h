@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/experimental/cudf/exec/AggregationRegistry.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/exec/Operator.h"
@@ -22,32 +23,8 @@
 
 #include <optional>
 #include <string_view>
-#include <unordered_map>
 
 namespace facebook::velox::cudf_velox {
-
-// Step-aware aggregation function registry
-// Map of function name -> Map of step -> signatures
-using StepAwareAggregationRegistry = std::unordered_map<
-    std::string,
-    std::unordered_map<
-        core::AggregationNode::Step,
-        std::vector<exec::FunctionSignaturePtr>>>;
-
-// Register aggregation function signatures for a specific step in the given
-// registry.
-bool registerAggregationFunctionForStep(
-    StepAwareAggregationRegistry& registry,
-    const std::string& name,
-    core::AggregationNode::Step step,
-    const std::vector<exec::FunctionSignaturePtr>& signatures,
-    bool overwrite = true);
-
-// Register the common aggregation functions (sum, count, min, max, avg) plus
-// engine-specific SUM(REAL)/AVG(REAL) signatures into the given registry.
-void registerCommonAggregationFunctions(
-    StepAwareAggregationRegistry& registry,
-    const std::string& prefix);
 
 /// \brief Convert companion function to step for the aggregation function
 ///

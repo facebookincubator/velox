@@ -57,11 +57,6 @@ std::vector<std::unique_ptr<GroupbyAggregator>> toGroupbyAggregators(
     TypePtr const& outputType,
     std::vector<VectorPtr> const& constants);
 
-// Groupby-specific aggregation registry
-StepAwareAggregationRegistry& getGroupbyAggregationRegistry();
-
-bool registerGroupbyAggregationFunctions(const std::string& prefix);
-
 // Groupby-specific validation
 bool canGroupbyBeEvaluatedByCudf(
     const core::AggregationNode& aggregationNode,

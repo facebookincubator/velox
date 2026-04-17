@@ -20,6 +20,7 @@
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
 #include "velox/experimental/cudf/exec/CudfOperator.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
+#include "velox/experimental/cudf/exec/PrestoAggregateFunctions.h"
 #include "velox/experimental/cudf/exec/CudfReduce.h"
 #include "velox/experimental/cudf/exec/CudfTopN.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
@@ -307,8 +308,7 @@ void registerCudf() {
 
   auto prefix = CudfConfig::getInstance().functionNamePrefix;
   registerBuiltinFunctions(prefix);
-  registerGroupbyAggregationFunctions(prefix);
-  registerReduceAggregationFunctions(prefix);
+  registerPrestoAggregateFunctions(prefix);
 
   CUDF_FUNC_RANGE();
   cudaFree(nullptr); // Initialize CUDA context at startup

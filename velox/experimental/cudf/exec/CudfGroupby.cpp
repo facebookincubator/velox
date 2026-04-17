@@ -334,17 +334,6 @@ std::vector<std::unique_ptr<GroupbyAggregator>> toGroupbyAggregators(
   return aggregators;
 }
 
-StepAwareAggregationRegistry& getGroupbyAggregationRegistry() {
-  static StepAwareAggregationRegistry registry;
-  return registry;
-}
-
-bool registerGroupbyAggregationFunctions(const std::string& prefix) {
-  auto& registry = getGroupbyAggregationRegistry();
-  registerCommonAggregationFunctions(registry, prefix);
-  return true;
-}
-
 bool canGroupbyAggregationBeEvaluatedByCudf(
     const core::CallTypedExpr& call,
     core::AggregationNode::Step step,
