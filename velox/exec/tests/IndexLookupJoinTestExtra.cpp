@@ -24,6 +24,7 @@
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/IndexLookupJoin.h"
+#include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
@@ -1664,6 +1665,323 @@ DEBUG_ONLY_TEST_P(IndexLookupJoinTest, noNeedsIndexSplitSplitOperationFails) {
     queryThread.join();
   }
 }
+// Verifies that when multiple drivers are waiting for index splits (the
+// collector waiting for splits from the task, followers waiting on the bridge),
+// aborting the task unblocks all drivers and the task terminates cleanly.
+DEBUG_ONLY_TEST_P(IndexLookupJoinTest, abortDuringIndexSplitWait) {
+  if (GetParam().serialExecution || !GetParam().needsIndexSplit) {
+    return;
+  }
+
+  keyType_ = ROW({"u0"}, {BIGINT()});
+  valueType_ = ROW({"u1", "u2"}, {BIGINT(), VARCHAR()});
+  tableType_ = concat(keyType_, valueType_);
+  probeType_ = ROW({"t0", "t1", "t2"}, {BIGINT(), BIGINT(), VARCHAR()});
+
+  IndexTableData tableData;
+  generateIndexTableData({100}, tableData, pool_);
+  const auto probeVectors =
+      generateProbeInput(3, 100, 1, tableData, pool_, {"t0"});
+  const auto probeFiles = createProbeFiles(probeVectors);
+
+  const auto indexTable = TestIndexTable::create(
+      /*numEqualJoinKeys=*/1,
+      tableData.keyVectors,
+      tableData.valueVectors,
+      *pool());
+  const auto indexTableHandle = makeIndexTableHandle(
+      indexTable, GetParam().asyncLookup, /*needsIndexSplit=*/true);
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  const auto indexScanNode = makeIndexScanNode(
+      planNodeIdGenerator,
+      indexTableHandle,
+      makeScanOutputType({"u0", "u1", "u2"}),
+      makeIndexColumnHandles({"u0", "u1", "u2"}));
+  auto plan = makeLookupPlan(
+      planNodeIdGenerator,
+      indexScanNode,
+      {"t0"},
+      {"u0"},
+      {},
+      /*filter=*/"",
+      /*hasMarker=*/false,
+      core::JoinType::kLeft,
+      {"t0", "t1", "u1", "u2"});
+
+  const int numDrivers = 4;
+
+  // Use TestValue to capture the task when the collector enters
+  // collectIndexSplits, and hold it there until the test signals.
+  folly::EventCount collectSplitWait;
+  std::atomic_bool collectSplitReached{false};
+  folly::EventCount collectUnblockWait;
+  std::atomic_bool collectUnblockFlag{false};
+  std::mutex mutex;
+  std::shared_ptr<Task> task;
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::IndexLookupJoin::collectIndexSplits",
+      std::function<void(const IndexLookupJoin*)>(
+          [&](const IndexLookupJoin* op) {
+            {
+              std::lock_guard<std::mutex> lock(mutex);
+              if (task == nullptr) {
+                task = op->operatorCtx()->task();
+                collectSplitReached = true;
+                collectSplitWait.notifyAll();
+              }
+            }
+            // Hold the collector here until the test signals.
+            collectUnblockWait.await([&] { return collectUnblockFlag.load(); });
+          }));
+
+  // Run the query in a separate thread. Don't provide index splits so the
+  // collector blocks.
+  std::thread queryThread([&] {
+    VELOX_ASSERT_THROW(
+        AssertQueryBuilder(duckDbQueryRunner_)
+            .plan(plan)
+            .splits(probeScanNodeId_, makeHiveConnectorSplits(probeFiles))
+            .maxDrivers(numDrivers)
+            .copyResults(pool()),
+        "Aborted");
+  });
+
+  // Wait for the collector to enter collectIndexSplits.
+  collectSplitWait.await([&] { return collectSplitReached.load(); });
+
+  // Wait until all non-collector drivers are off-thread (blocked on the
+  // bridge). The collector is held by the TestValue callback above.
+  while (true) {
+    int offThreadCount = 0;
+    task->testingVisitDrivers([&](Driver* driver) {
+      if (!driver->isOnThread()) {
+        ++offThreadCount;
+      }
+    });
+    // All followers (numDrivers - 1) should be off-thread.
+    if (offThreadCount >= numDrivers - 1) {
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10)); // NOLINT
+  }
+
+  // Abort the task while all drivers are blocked.
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    ASSERT_NE(task, nullptr);
+    ASSERT_EQ(task->state(), TaskState::kRunning);
+    task->requestAbort();
+  }
+
+  // Wait for all follower drivers to finish. The collector is still held by
+  // the TestValue callback, so only 1 driver (the collector) should remain.
+  while (true) {
+    int aliveCount = 0;
+    task->testingVisitDrivers([&](Driver*) { ++aliveCount; });
+    if (aliveCount == 1) {
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10)); // NOLINT
+  }
+
+  // Release the collector from the TestValue callback.
+  collectUnblockFlag = true;
+  collectUnblockWait.notifyAll();
+
+  queryThread.join();
+
+  // Verify the task terminated properly.
+  ASSERT_TRUE(waitForTaskAborted(task.get()));
+}
+
+TEST_P(IndexLookupJoinTest, multiDriverWithIndexSplits) {
+  if (GetParam().serialExecution || !GetParam().needsIndexSplit) {
+    return;
+  }
+  IndexTableData tableData;
+  generateIndexTableData({100, 1, 1}, tableData, pool_);
+  const int numProbeSplits{5};
+  const auto probeVectors = generateProbeInput(
+      numProbeSplits,
+      256,
+      1,
+      tableData,
+      pool_,
+      {"t0", "t1", "t2"},
+      GetParam().hasNullKeys,
+      {},
+      {},
+      100);
+  const auto probeFiles = createProbeFiles(probeVectors);
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", {tableData.tableVectors});
+
+  const auto indexTable = TestIndexTable::create(
+      /*numEqualJoinKeys=*/3,
+      tableData.keyVectors,
+      tableData.valueVectors,
+      *pool());
+  const auto indexTableHandle = makeIndexTableHandle(
+      indexTable, GetParam().asyncLookup, GetParam().needsIndexSplit);
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  const auto indexScanNode = makeIndexScanNode(
+      planNodeIdGenerator,
+      indexTableHandle,
+      makeScanOutputType({"u0", "u1", "u2", "u3", "u5"}),
+      makeIndexColumnHandles({"u0", "u1", "u2", "u3", "u5"}));
+
+  for (const auto joinType : {core::JoinType::kInner, core::JoinType::kLeft}) {
+    SCOPED_TRACE(
+        fmt::format("joinType: {}", core::JoinTypeName::toName(joinType)));
+    const auto duckDbSql = joinType == core::JoinType::kInner
+        ? "SELECT u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND t.c2 = u.c2"
+        : "SELECT u.c3, t.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND t.c1 = u.c1 AND t.c2 = u.c2";
+    auto plan = makeLookupPlan(
+        planNodeIdGenerator,
+        indexScanNode,
+        {"t0", "t1", "t2"},
+        {"u0", "u1", "u2"},
+        {},
+        /*filter=*/"",
+        /*hasMarker=*/false,
+        joinType,
+        {"u3", "t5"});
+
+    for (int numDrivers : {2, 4}) {
+      SCOPED_TRACE(fmt::format("numDrivers: {}", numDrivers));
+      auto task = runLookupQuery(
+          plan,
+          probeFiles,
+          /*serialExecution=*/false,
+          /*barrierExecution=*/false,
+          100,
+          GetParam().numPrefetches,
+          GetParam().needsIndexSplit,
+          duckDbSql,
+          numDrivers);
+      auto taskStats = toPlanStats(task->taskStats());
+      ASSERT_EQ(taskStats.at(joinNodeId_).numDrivers, numDrivers);
+    }
+  }
+}
+
+// Verifies IndexLookupJoin works correctly with grouped execution where the
+// probe side is grouped. Each split group creates its own set of drivers with
+// partitionId 0..numDrivers-1, and the partitionId==0 driver in each group
+// acts as the split collector for that group's index splits.
+TEST_P(IndexLookupJoinTest, groupedExecution) {
+  if (GetParam().serialExecution || !GetParam().needsIndexSplit) {
+    return;
+  }
+  IndexTableData tableData;
+  generateIndexTableData({100, 1, 1}, tableData, pool_);
+  const int numProbeSplitsPerGroup{2};
+  const int numSplitGroups{3};
+  const int numDrivers{2};
+  const auto probeVectors = generateProbeInput(
+      numProbeSplitsPerGroup * numSplitGroups,
+      256,
+      1,
+      tableData,
+      pool_,
+      {"t0", "t1", "t2"},
+      GetParam().hasNullKeys,
+      {},
+      {},
+      100);
+  const auto probeFiles = createProbeFiles(probeVectors);
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", {tableData.tableVectors});
+
+  const auto indexTable = TestIndexTable::create(
+      /*numEqualJoinKeys=*/3,
+      tableData.keyVectors,
+      tableData.valueVectors,
+      *pool());
+  const auto indexTableHandle = makeIndexTableHandle(
+      indexTable, GetParam().asyncLookup, GetParam().needsIndexSplit);
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  const auto indexScanNode = makeIndexScanNode(
+      planNodeIdGenerator,
+      indexTableHandle,
+      makeScanOutputType({"u0", "u1", "u2", "u3", "u5"}),
+      makeIndexColumnHandles({"u0", "u1", "u2", "u3", "u5"}));
+
+  for (const auto joinType : {core::JoinType::kInner, core::JoinType::kLeft}) {
+    SCOPED_TRACE(
+        fmt::format("joinType: {}", core::JoinTypeName::toName(joinType)));
+    auto outputLayout = std::vector<std::string>{"u3", "t5"};
+    auto plan = PlanBuilder(planNodeIdGenerator, pool())
+                    .tableScan(probeType_)
+                    .capturePlanNodeId(probeScanNodeId_)
+                    .startIndexLookupJoin()
+                    .leftKeys({"t0", "t1", "t2"})
+                    .rightKeys({"u0", "u1", "u2"})
+                    .indexSource(indexScanNode)
+                    .outputLayout(outputLayout)
+                    .joinType(joinType)
+                    .endIndexLookupJoin()
+                    .capturePlanNodeId(joinNodeId_)
+                    .partitionedOutput({}, 1, outputLayout)
+                    .planFragment();
+
+    plan.executionStrategy = core::ExecutionStrategy::kGrouped;
+    plan.groupedExecutionLeafNodeIds.emplace(probeScanNodeId_);
+    plan.numSplitGroups = numSplitGroups;
+
+    auto queryCtx = core::QueryCtx::create(executor_.get());
+    std::unordered_map<std::string, std::string> configs;
+    configs[QueryConfig::kIndexLookupJoinMaxPrefetchBatches] =
+        std::to_string(GetParam().numPrefetches);
+    queryCtx->testingOverrideConfigUnsafe(std::move(configs));
+
+    auto task = exec::Task::create(
+        "grouped-index-lookup-join",
+        std::move(plan),
+        0,
+        std::move(queryCtx),
+        Task::ExecutionMode::kParallel);
+    task->start(numDrivers, /*concurrentSplitGroups=*/2);
+
+    // Add probe splits with group IDs.
+    int fileIdx = 0;
+    for (int group = 0; group < numSplitGroups; ++group) {
+      for (int j = 0; j < numProbeSplitsPerGroup; ++j) {
+        task->addSplit(
+            probeScanNodeId_,
+            Split(
+                makeHiveConnectorSplit(probeFiles[fileIdx++]->getPath()),
+                group));
+      }
+      task->noMoreSplitsForGroup(probeScanNodeId_, group);
+    }
+    task->noMoreSplits(probeScanNodeId_);
+
+    // Add one index split per group so each group's collector finds its split.
+    for (int group = 0; group < numSplitGroups; ++group) {
+      task->addSplit(
+          indexScanNodeId_,
+          Split(
+              std::make_shared<TestIndexConnectorSplit>(
+                  kTestIndexConnectorName),
+              group));
+      task->noMoreSplitsForGroup(indexScanNodeId_, group);
+    }
+
+    // Consume output via OutputBufferManager.
+    auto outputBufferManager = exec::OutputBufferManager::getInstanceRef();
+    outputBufferManager->deleteResults(task->taskId(), 0);
+
+    waitForTaskCompletion(task.get());
+    ASSERT_EQ(task->state(), TaskState::kFinished);
+
+    auto taskStats = toPlanStats(task->taskStats());
+    ASSERT_EQ(
+        taskStats.at(joinNodeId_).numDrivers, numDrivers * numSplitGroups);
+  }
+}
+
 } // namespace
 
 VELOX_INSTANTIATE_TEST_SUITE_P(

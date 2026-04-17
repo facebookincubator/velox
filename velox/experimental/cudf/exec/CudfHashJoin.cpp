@@ -78,7 +78,7 @@ cudf::table_view createExtendedTableView(
 
 } // namespace
 
-void CudfHashJoinProbe::close() {
+void CudfHashJoinProbe::doClose() {
   Operator::close();
   filterEvaluator_.reset();
   scalars_.clear();
@@ -140,26 +140,19 @@ CudfHashJoinBuild::CudfHashJoinBuild(
     exec::DriverCtx* driverCtx,
     std::shared_ptr<const core::HashJoinNode> joinNode)
     // TODO check outputType should be set or not?
-    : exec::Operator(
+    : CudfOperatorBase(
+          operatorId,
           driverCtx,
-          nullptr, // joinNode->sources(),
-          operatorId,
+          nullptr, // outputType
           joinNode->id(),
-          "CudfHashJoinBuild"),
-      NvtxHelper(
+          "CudfHashJoinBuild",
           nvtx3::rgb{65, 105, 225}, // Royal Blue
-          operatorId,
-          fmt::format("[{}]", joinNode->id())),
-      joinNode_(joinNode) {
-  if (CudfConfig::getInstance().debugEnabled) {
-    VLOG(2) << "CudfHashJoinBuild constructor";
-  }
-}
+          NvtxMethodFlag::kAll,
+          std::nullopt, // spillConfig
+          joinNode),
+      joinNode_(joinNode) {}
 
-void CudfHashJoinBuild::addInput(RowVectorPtr input) {
-  if (CudfConfig::getInstance().debugEnabled) {
-    VLOG(2) << "Calling CudfHashJoinBuild::addInput";
-  }
+void CudfHashJoinBuild::doAddInput(RowVectorPtr input) {
   // Queue inputs, process all at once.
   if (input->size() > 0) {
     auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
@@ -177,21 +170,14 @@ void CudfHashJoinBuild::addInput(RowVectorPtr input) {
 }
 
 bool CudfHashJoinBuild::needsInput() const {
-  if (CudfConfig::getInstance().debugEnabled) {
-    VLOG(2) << "Calling CudfHashJoinBuild::needsInput";
-  }
   return !noMoreInput_;
 }
 
-RowVectorPtr CudfHashJoinBuild::getOutput() {
+RowVectorPtr CudfHashJoinBuild::doGetOutput() {
   return nullptr;
 }
 
-void CudfHashJoinBuild::noMoreInput() {
-  if (CudfConfig::getInstance().debugEnabled) {
-    VLOG(2) << "Calling CudfHashJoinBuild::noMoreInput";
-  }
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+void CudfHashJoinBuild::doNoMoreInput() {
   Operator::noMoreInput();
   std::vector<ContinuePromise> promises;
   std::vector<std::shared_ptr<exec::Driver>> peers;
@@ -317,23 +303,20 @@ CudfHashJoinProbe::CudfHashJoinProbe(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
     std::shared_ptr<const core::HashJoinNode> joinNode)
-    : exec::Operator(
+    : CudfOperatorBase(
+          operatorId,
           driverCtx,
           joinNode->outputType(),
-          operatorId,
           joinNode->id(),
-          "CudfHashJoinProbe"),
-      NvtxHelper(
+          "CudfHashJoinProbe",
           nvtx3::rgb{0, 128, 128}, // Teal
-          operatorId,
-          fmt::format("[{}]", joinNode->id())),
+          NvtxMethodFlag::kAll,
+          std::nullopt, // spillConfig
+          joinNode),
       joinNode_(joinNode),
       probeType_(joinNode_->sources()[0]->outputType()),
       buildType_(joinNode_->sources()[1]->outputType()),
       cudaEvent_(std::make_unique<CudaEvent>(cudaEventDisableTiming)) {
-  if (CudfConfig::getInstance().debugEnabled) {
-    VLOG(2) << "CudfHashJoinProbe constructor";
-  }
   auto const& leftKeys = joinNode_->leftKeys(); // probe keys
   auto const& rightKeys = joinNode_->rightKeys(); // build keys
 
@@ -418,14 +401,51 @@ CudfHashJoinProbe::CudfHashJoinProbe(
               << rightColumnIndicesToGather_[i];
     }
   }
-
-  // Note: Filter initialization is deferred to initializeFilter() to avoid
-  // memory allocations during driver initialization, which Velox disallows.
 }
 
-void CudfHashJoinProbe::initializeFilter() {
-  if (filterInitialized_ || !joinNode_->filter()) {
+void CudfHashJoinProbe::initialize() {
+  Operator::initialize();
+
+  if (!joinNode_->filter()) {
     return;
+  }
+
+  // simplify expression
+  exec::ExprSet exprs({joinNode_->filter()}, operatorCtx_->execCtx());
+  VELOX_CHECK_EQ(exprs.exprs().size(), 1);
+
+  // Create a reusable evaluator for the filter column. This is expensive to
+  // build, and the expression + input schema are stable for the lifetime of
+  // the operator instance.
+  std::vector<velox::RowTypePtr> filterRowTypes{probeType_, buildType_};
+  filterEvaluator_ = createCudfExpression(
+      exprs.exprs()[0], facebook::velox::type::concatRowTypes(filterRowTypes));
+
+  // We don't need to get tables that contain conditional comparison columns
+  // We'll pass the entire table. The ast will handle finding the required
+  // columns. This is required because we build the ast with whole row schema
+  // and the column locations in that schema translate to column locations
+  // in whole tables
+
+  // create ast tree
+  if (joinNode_->isRightJoin() || joinNode_->isRightSemiFilterJoin()) {
+    createAstTree(
+        exprs.exprs()[0],
+        tree_,
+        scalars_,
+        buildType_,
+        probeType_,
+        rightPrecomputeInstructions_,
+        leftPrecomputeInstructions_);
+  } else {
+    createAstTree(
+        exprs.exprs()[0],
+        tree_,
+        scalars_,
+        probeType_,
+        buildType_,
+        leftPrecomputeInstructions_,
+        rightPrecomputeInstructions_);
   }
   filterInitialized_ = true;
 
@@ -480,20 +500,13 @@ void CudfHashJoinProbe::initializeFilter() {
 }
 
 bool CudfHashJoinProbe::needsInput() const {
-  if (CudfConfig::getInstance().debugEnabled) {
-    VLOG(2) << "Calling CudfHashJoinProbe::needsInput";
-  }
   if (joinNode_->isRightSemiFilterJoin()) {
     return !noMoreInput_;
   }
   return !noMoreInput_ && !finished_ && input_ == nullptr;
 }
 
-void CudfHashJoinProbe::addInput(RowVectorPtr input) {
-  // Initialize filter on first input (deferred from constructor to avoid
-  // memory allocations during driver initialization).
-  initializeFilter();
-
+void CudfHashJoinProbe::doAddInput(RowVectorPtr input) {
   if (skipInput_) {
     VELOX_CHECK_NULL(input_);
     return;
@@ -521,11 +534,7 @@ void CudfHashJoinProbe::addInput(RowVectorPtr input) {
   }
 }
 
-void CudfHashJoinProbe::noMoreInput() {
-  if (CudfConfig::getInstance().debugEnabled) {
-    VLOG(2) << "Calling CudfHashJoinProbe::noMoreInput";
-  }
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+void CudfHashJoinProbe::doNoMoreInput() {
   Operator::noMoreInput();
   if (!joinNode_->isRightJoin() && !joinNode_->isRightSemiFilterJoin() &&
       !joinNode_->isFullJoin()) {
@@ -690,6 +699,8 @@ std::unique_ptr<cudf::table> CudfHashJoinProbe::filteredOutput(
         std::vector<std::unique_ptr<cudf::column>>&&,
         cudf::column_view)> func,
     rmm::cuda_stream_view stream) {
+  VELOX_CHECK(
+      isInitialized(), "Filter must be initialized before filteredOutput");
   auto leftResult = cudf::gather(
       leftTableView, leftIndicesCol, oobPolicy, stream, get_output_mr());
   auto rightResult = cudf::gather(
@@ -746,6 +757,9 @@ std::unique_ptr<cudf::table> CudfHashJoinProbe::filteredOutputIndices(
     cudf::table_view extendedRightView,
     cudf::join_kind joinKind,
     rmm::cuda_stream_view stream) {
+  VELOX_CHECK(
+      isInitialized(),
+      "Filter must be initialized before filteredOutputIndices");
   // Use extended views (with precomputed columns) for filter evaluation
   auto [filteredLeftJoinIndices, filteredRightJoinIndices] =
       cudf::filter_join_indices(
@@ -1284,7 +1298,6 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::leftSemiFilterJoin(
       cudf::filtered_join filter_join(
           rightTableView.select(rightKeyIndices_),
           cudf::null_equality::UNEQUAL,
-          cudf::set_as_build_table::RIGHT,
           stream);
       leftJoinIndices = filter_join.semi_join(
           leftTableView.select(leftKeyIndices_), stream, get_temp_mr());
@@ -1608,7 +1621,6 @@ CudfHashJoinProbe::rightSemiFilterJoin(
     cudf::filtered_join filter_join(
         leftTableView.select(leftKeyIndices_),
         cudf::null_equality::UNEQUAL,
-        cudf::set_as_build_table::RIGHT,
         stream);
     rightJoinIndices = filter_join.semi_join(
         rightTableView.select(rightKeyIndices_), stream, get_temp_mr());
@@ -1690,7 +1702,6 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::antiJoin(
       cudf::filtered_join filter_join(
           rightTableView.select(rightKeyIndices_),
           cudf::null_equality::UNEQUAL,
-          cudf::set_as_build_table::RIGHT,
           stream);
       leftJoinIndices = filter_join.anti_join(
           leftTableView.select(leftKeyIndices_), stream, get_temp_mr());
@@ -1711,16 +1722,7 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::antiJoin(
   return cudfOutputs;
 }
 
-RowVectorPtr CudfHashJoinProbe::getOutput() {
-  if (CudfConfig::getInstance().debugEnabled) {
-    VLOG(2) << "Calling CudfHashJoinProbe::getOutput";
-  }
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
-
-  // Initialize filter if not already done (deferred from constructor to avoid
-  // memory allocations during driver initialization).
-  initializeFilter();
-
+RowVectorPtr CudfHashJoinProbe::doGetOutput() {
   if (finished_ or !hashObject_.has_value()) {
     return nullptr;
   }

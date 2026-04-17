@@ -11,11 +11,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
 set(
   ICEBERG_SOURCES
-  IcebergConfig.cpp
+  DeletionVectorReader.cpp
+  EqualityDeleteFileReader.cpp
   IcebergColumnHandle.cpp
+  IcebergConfig.cpp
   IcebergConnector.cpp
   IcebergDataSink.cpp
   IcebergDataSource.cpp
@@ -32,6 +33,8 @@ velox_add_library(
   velox_hive_iceberg_splitreader
   ${ICEBERG_SOURCES}
   HEADERS
+  DeletionVectorReader.h
+  EqualityDeleteFileReader.h
   IcebergColumnHandle.h
   IcebergConfig.h
   IcebergConnector.h

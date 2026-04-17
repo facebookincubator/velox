@@ -35,6 +35,9 @@ ARG VELOX_BUILD_SHARED=ON
 # gflags is always both shared and static turned on.
 ENV VELOX_BUILD_SHARED=${VELOX_BUILD_SHARED}
 
+ARG ARM_BUILD_TARGET=local
+ENV ARM_BUILD_TARGET=${ARM_BUILD_TARGET}
+
 RUN mkdir build
 WORKDIR /build
 
@@ -117,6 +120,9 @@ COPY scripts/setup-versions.sh /
 COPY scripts/setup-common.sh /
 COPY scripts/setup-centos9.sh /
 COPY scripts/setup-centos-adapters.sh /
+
+ARG ARM_BUILD_TARGET=local
+ENV ARM_BUILD_TARGET=${ARM_BUILD_TARGET}
 
 RUN mkdir build
 WORKDIR /build
