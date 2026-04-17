@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "velox/connectors/hive/HiveDataSink.h"
+#include "velox/connectors/hive/HiveInsertTableHandle.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergConfig.h"
@@ -143,19 +144,12 @@ class IcebergDataSink : public HiveDataSink {
   // (e.g., "date_year=2023/id_bucket=5").
   std::string getPartitionName(uint32_t partitionId) const override;
 
-  // Ensures a writer exists for the given writer ID and returns its index.
-  // If the writer doesn't exist, creates it by calling appendWriter().
-  // Additionally, extracts and stores the transformed partition values for
-  // the writer in commitPartitionValue_ if not already set, which will be
-  // included in the commit message as "partitionDataJson".
-  uint32_t ensureWriter(const HiveWriterId& id) override;
-
   // Creates writer options configured for Iceberg table writes. Extends the
   // base HiveDataSink writer options with Iceberg-specific settings:
   // - Sets timestamp timezone to nullopt (UTC) for Iceberg compliance.
   // - Sets timestamp precision to microseconds.
-  std::shared_ptr<dwio::common::WriterOptions> createWriterOptions()
-      const override;
+  std::shared_ptr<dwio::common::WriterOptions> createWriterOptions(
+      const HiveWriterInfo* writerInfo) const override;
 
   // Extracts partition values for a specific writer to be included in the
   // commit message. Converts the transformed partition values from columnar

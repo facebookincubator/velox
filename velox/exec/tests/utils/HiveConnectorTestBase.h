@@ -18,6 +18,7 @@
 #include "velox/common/testutil/TempFilePath.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveDataSink.h"
+#include "velox/connectors/hive/HiveInsertTableHandle.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/dwio/dwrf/common/Config.h"
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"

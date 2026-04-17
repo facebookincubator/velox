@@ -20,6 +20,7 @@
 #include "velox/connectors/hive/HiveConfigProvider.h"
 #include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/connectors/hive/HiveDataSource.h"
+#include "velox/connectors/hive/HiveInsertTableHandle.h"
 #include "velox/connectors/hive/HiveIndexSource.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
 

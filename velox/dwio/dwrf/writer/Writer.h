@@ -49,6 +49,10 @@ struct WriterOptions : public dwio::common::WriterOptions {
   void processConfigs(
       const config::ConfigBase& connectorConfig,
       const config::ConfigBase& session) override;
+
+  std::shared_ptr<dwio::common::WriterOptions> clone() const override {
+    return std::make_shared<WriterOptions>(*this);
+  }
 };
 
 class Writer : public dwio::common::Writer {

@@ -861,6 +861,12 @@ struct WriterOptions {
       const config::ConfigBase& connectorConfig,
       const config::ConfigBase& session) {}
 
+  // Creates a deep copy of this writer options object, preserving the dynamic
+  // type for derived options classes.
+  virtual std::shared_ptr<WriterOptions> clone() const {
+    return std::make_shared<WriterOptions>(*this);
+  }
+
   virtual ~WriterOptions() = default;
 };
 

@@ -21,6 +21,7 @@ add_subdirectory(paimon)
 velox_add_library(
   velox_hive_connector
   OBJECT
+  BucketSortingWriter.cpp
   BufferedInputBuilder.cpp
   ExtractionUtils.cpp
   ExtractionUtils.h
@@ -39,9 +40,13 @@ velox_add_library(
   HiveDataSink.cpp
   HiveDataSource.cpp
   HiveIndexSource.cpp
+  HiveInsertTableHandle.cpp
   HivePartitionName.cpp
   HiveSplitReader.cpp
+  HiveWriterTypes.cpp
   PartitionIdGenerator.cpp
+  PartitionWriter.cpp
+  RotationWriter.cpp
   TableHandle.cpp
   HEADERS
   BufferedInputBuilder.h
@@ -62,13 +67,17 @@ velox_add_library(
   HiveConnector.h
   HiveConnectorSplit.h
   HiveConnectorUtil.h
+  HiveCommitMessage.h
   HiveDataSink.h
   HiveDataSource.h
   HiveIndexSource.h
+  HiveInsertTableHandle.h
   HivePartitionFunction.h
   HivePartitionName.h
   HiveSplitReader.h
+  HiveWriterTypes.h
   IndexReader.h
+  PartitionWriterInterface.h
   PartitionIdGenerator.h
   TableHandle.h
 )
