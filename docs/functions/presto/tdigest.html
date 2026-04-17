@@ -164,59 +164,6 @@ Both quantile values must be between zero and one (inclusive), and <code class="
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="winsorized_mean">
-<span class="sig-name descname"><span class="pre">winsorized_mean</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">digest:</span> <span class="pre">tdigest&lt;double&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">low_quantile:</span> <span class="pre">double</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">high_quantile:</span> <span class="pre">double</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#winsorized_mean" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the Winsorized mean from the T-digest <code class="docutils literal notranslate"><span class="pre">digest</span></code>. Values below
-<code class="docutils literal notranslate"><span class="pre">low_quantile</span></code> are replaced with the boundary value at that quantile.
-Values above <code class="docutils literal notranslate"><span class="pre">high_quantile</span></code> are replaced with the boundary value at
-that quantile. The mean is then computed on all values including the
-replaced tails. Both quantile values must be between zero and one
-(inclusive), and <code class="docutils literal notranslate"><span class="pre">low_quantile</span></code> must be less than or equal to
-<code class="docutils literal notranslate"><span class="pre">high_quantile</span></code>.</p>
-<p>Unlike <a class="reference internal" href="#trimmed_mean" title="trimmed_mean"><code class="xref py py-func docutils literal notranslate"><span class="pre">trimmed_mean()</span></code></a> which excludes tail values entirely,
-<code class="docutils literal notranslate"><span class="pre">winsorized_mean</span></code> replaces them with the boundary values, keeping the
-total count unchanged.</p>
-</dd></dl>
-
-<dl class="py function">
-<dt class="sig sig-object py" id="approx_winsorized_mean">
-<span class="sig-name descname"><span class="pre">approx_winsorized_mean</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">double</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">low_quantile</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">double</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">high_quantile</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">double</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#approx_winsorized_mean" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the approximate Winsorized mean of all input values of <code class="docutils literal notranslate"><span class="pre">x</span></code>
-using a T-digest sketch. This is a single-pass aggregate that replaces
-values below <code class="docutils literal notranslate"><span class="pre">low_quantile</span></code> with the boundary value at that quantile,
-and values above <code class="docutils literal notranslate"><span class="pre">high_quantile</span></code> with the boundary value at that
-quantile, then computes the mean.</p>
-<p><code class="docutils literal notranslate"><span class="pre">low_quantile</span></code> and <code class="docutils literal notranslate"><span class="pre">high_quantile</span></code> must be constants between zero and
-one (inclusive), and <code class="docutils literal notranslate"><span class="pre">low_quantile</span></code> must be less than or equal to
-<code class="docutils literal notranslate"><span class="pre">high_quantile</span></code>. The default compression factor is <code class="docutils literal notranslate"><span class="pre">100</span></code>.</p>
-<p>This function replaces the common two-pass pattern of computing percentile
-thresholds with <code class="docutils literal notranslate"><span class="pre">approx_percentile</span></code> and then capping values with
-<code class="docutils literal notranslate"><span class="pre">LEAST</span></code>/<code class="docutils literal notranslate"><span class="pre">GREATEST</span></code> before computing <code class="docutils literal notranslate"><span class="pre">AVG</span></code>.</p>
-<p>Example:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">--</span> <span class="n">Old</span> <span class="n">two</span><span class="o">-</span><span class="k">pass</span> <span class="n">pattern</span><span class="p">:</span>
-<span class="n">WITH</span> <span class="n">t</span> <span class="n">AS</span> <span class="p">(</span>
-    <span class="n">SELECT</span> <span class="n">APPROX_PERCENTILE</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="mf">0.99</span><span class="p">)</span> <span class="n">AS</span> <span class="n">thresh</span> <span class="n">FROM</span> <span class="n">data</span>
-<span class="p">)</span>
-<span class="n">SELECT</span> <span class="n">AVG</span><span class="p">(</span><span class="n">LEAST</span><span class="p">(</span><span class="n">data</span><span class="o">.</span><span class="n">x</span><span class="p">,</span> <span class="n">t</span><span class="o">.</span><span class="n">thresh</span><span class="p">))</span> <span class="n">FROM</span> <span class="n">data</span><span class="p">,</span> <span class="n">t</span><span class="p">;</span>
-
-<span class="o">--</span> <span class="n">New</span> <span class="n">single</span><span class="o">-</span><span class="k">pass</span> <span class="n">equivalent</span><span class="p">:</span>
-<span class="n">SELECT</span> <span class="n">approx_winsorized_mean</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.99</span><span class="p">)</span> <span class="n">FROM</span> <span class="n">data</span><span class="p">;</span>
-</pre></div>
-</div>
-</dd></dl>
-
-<dl class="py function">
-<dt class="sig sig-object py">
-<span class="sig-name descname"><span class="pre">approx_winsorized_mean</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">double</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">low_quantile</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">double</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">high_quantile</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">double</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">compression</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">double</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span></dt>
-<dd><blockquote>
-<div><p>Like the above, but with a specified compression factor. <code class="docutils literal notranslate"><span class="pre">compression</span></code>
-must be a positive constant. The default is <code class="docutils literal notranslate"><span class="pre">100</span></code>, maximum is <code class="docutils literal notranslate"><span class="pre">1000</span></code>,
-and values lower than <code class="docutils literal notranslate"><span class="pre">10</span></code> are rounded to <code class="docutils literal notranslate"><span class="pre">10</span></code>. Higher compression
-means more accuracy at the cost of more memory.</p>
-</div></blockquote>
-</dd></dl>
-
-<dl class="py function">
 <dt class="sig sig-object py" id="value_at_quantile">
 <span class="sig-name descname"><span class="pre">value_at_quantile</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">digest:</span> <span class="pre">tdigest&lt;double&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">quantile:</span> <span class="pre">double</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#value_at_quantile" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the approximate percentile value from the T-digest <code class="docutils literal notranslate"><span class="pre">digest</span></code> at the given <code class="docutils literal notranslate"><span class="pre">quantile</span></code>.
@@ -255,8 +202,6 @@ All quantile values must be between zero and one (inclusive).</p>
 <li><a class="reference internal" href="#scale_tdigest"><code class="docutils literal notranslate"><span class="pre">scale_tdigest()</span></code></a></li>
 <li><a class="reference internal" href="#tdigest_agg"><code class="docutils literal notranslate"><span class="pre">tdigest_agg()</span></code></a></li>
 <li><a class="reference internal" href="#trimmed_mean"><code class="docutils literal notranslate"><span class="pre">trimmed_mean()</span></code></a></li>
-<li><a class="reference internal" href="#winsorized_mean"><code class="docutils literal notranslate"><span class="pre">winsorized_mean()</span></code></a></li>
-<li><a class="reference internal" href="#approx_winsorized_mean"><code class="docutils literal notranslate"><span class="pre">approx_winsorized_mean()</span></code></a></li>
 <li><a class="reference internal" href="#value_at_quantile"><code class="docutils literal notranslate"><span class="pre">value_at_quantile()</span></code></a></li>
 <li><a class="reference internal" href="#values_at_quantiles"><code class="docutils literal notranslate"><span class="pre">values_at_quantiles()</span></code></a></li>
 </ul>
