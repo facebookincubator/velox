@@ -435,20 +435,12 @@ inline bool expressionSpansBothSides(
   }
 
   // Expression needs precomputation - check if it spans both sides
-  int foundSide = -1;
+  bool hasLeft = false, hasRight = false;
   for (const auto* field : expr->distinctFields()) {
-    int fieldSide = -1;
-    if (leftSchema->containsChild(field->field())) {
-      fieldSide = 0;
-    } else if (rightSchema->containsChild(field->field())) {
-      fieldSide = 1;
-    }
-    if (fieldSide >= 0) {
-      if (foundSide == -1) {
-        foundSide = fieldSide;
-      } else if (foundSide != fieldSide) {
-        return true; // Non-AST expression spans both sides
-      }
+    hasLeft |= leftSchema->containsChild(field->field());
+    hasRight |= rightSchema->containsChild(field->field());
+    if (hasLeft && hasRight) {
+      return true;
     }
   }
   return false;
