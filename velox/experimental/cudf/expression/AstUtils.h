@@ -183,7 +183,7 @@ cudf::ast::literal makeScalarAndLiteral(
 }
 
 template <TypeKind kind>
-cudf::ast::literal makeLiteralFromVector(
+cudf::ast::literal makeScalarAndLiteralFromVector(
     const VectorPtr& vector,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     size_t atIndex = 0) {
