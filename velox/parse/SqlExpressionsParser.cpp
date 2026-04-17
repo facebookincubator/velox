@@ -17,30 +17,6 @@
 
 namespace facebook::velox::parse {
 
-namespace {
-const auto& windowTypeNames() {
-  static const folly::F14FastMap<WindowType, std::string_view> kNames = {
-      {WindowType::kRows, "ROWS"},
-      {WindowType::kRange, "RANGE"},
-  };
-  return kNames;
-}
-
-const auto& boundTypeNames() {
-  static const folly::F14FastMap<BoundType, std::string_view> kNames = {
-      {BoundType::kCurrentRow, "CURRENT ROW"},
-      {BoundType::kUnboundedPreceding, "UNBOUNDED PRECEDING"},
-      {BoundType::kUnboundedFollowing, "UNBOUNDED FOLLOWING"},
-      {BoundType::kPreceding, "PRECEDING"},
-      {BoundType::kFollowing, "FOLLOWING"},
-  };
-  return kNames;
-}
-} // namespace
-
-VELOX_DEFINE_ENUM_NAME(WindowType, windowTypeNames);
-VELOX_DEFINE_ENUM_NAME(BoundType, boundTypeNames);
-
 std::string OrderByClause::toString() const {
   return fmt::format(
       "{} {} NULLS {}",

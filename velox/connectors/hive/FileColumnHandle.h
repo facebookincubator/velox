@@ -185,8 +185,17 @@ class FileColumnHandle : public ColumnHandle {
 
   virtual ColumnType columnType() const = 0;
 
-  /// The target data type for this column in the output.
-  virtual const TypePtr& dataType() const = 0;
+  /// The type of this column as defined in the table schema (metastore).
+  /// May differ from dataType() when extraction changes the output type.
+  /// Subclasses must provide this.
+  virtual const TypePtr& schemaType() const = 0;
+
+  /// The target data type for this column in the output.  Defaults to
+  /// schemaType() (no extraction or type coercion).  Override when the
+  /// output type differs from the table schema type.
+  virtual const TypePtr& dataType() const {
+    return schemaType();
+  }
 
   /// Subfields required by the query for pruning complex types.
   virtual const std::vector<common::Subfield>& requiredSubfields() const = 0;

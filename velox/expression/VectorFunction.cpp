@@ -217,7 +217,7 @@ getVectorFunctionWithMetadata(
 /// with the given name will be replaced.
 /// Returns true iff an insertion actually happened
 bool registerStatefulVectorFunction(
-    const std::string& name,
+    std::string_view name,
     std::vector<FunctionSignaturePtr> signatures,
     VectorFunctionFactory factory,
     VectorFunctionMetadata metadata,
@@ -243,7 +243,7 @@ bool registerStatefulVectorFunction(
 
 // Returns true iff an insertion actually happened
 bool registerVectorFunction(
-    const std::string& name,
+    std::string_view name,
     std::vector<FunctionSignaturePtr> signatures,
     std::unique_ptr<VectorFunction> func,
     VectorFunctionMetadata metadata,

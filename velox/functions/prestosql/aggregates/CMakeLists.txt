@@ -17,6 +17,7 @@ velox_add_library(
   ApproxDistinctAggregate.cpp
   ApproxMostFrequentAggregate.cpp
   ApproxPercentileAggregate.cpp
+  ApproxWinsorizedMeanAggregate.cpp
   ArbitraryAggregate.cpp
   ArrayAggAggregate.cpp
   AverageAggregate.cpp
@@ -113,6 +114,7 @@ velox_add_library(
   SetDigestAggregate.h
   SumAggregate.h
   SumDataSizeForStatsAggregate.h
+  TDigestAccumulator.h
   VarianceAggregates.h
   VectorSumAggregate.h
 )

@@ -73,31 +73,25 @@ void BlockSplitBloomFilter::init(const uint8_t* bitset, uint32_t numBytes) {
 }
 
 static void validateBloomFilterHeader(const thrift::BloomFilterHeader& header) {
-  std::stringstream error;
   if (!header.algorithm.__isset.BLOCK) {
-    error << "Unsupported Bloom filter algorithm: ";
-    error << header.algorithm;
-    VELOX_FAIL(error.str());
+    VELOX_FAIL("Unsupported Bloom filter algorithm");
   }
 
   if (!header.hash.__isset.XXHASH) {
-    error << "Unsupported Bloom filter hash: ", error << header.hash;
-    VELOX_FAIL(error.str());
+    VELOX_FAIL("Unsupported Bloom filter hash");
   }
 
   if (!header.compression.__isset.UNCOMPRESSED) {
-    error << "Unsupported Bloom filter compression: ",
-        error << header.compression;
-    VELOX_FAIL(error.str());
+    VELOX_FAIL("Unsupported Bloom filter compression");
   }
 
   if (header.numBytes <= 0 ||
       static_cast<uint32_t>(header.numBytes) >
           BloomFilter::kMaximumBloomFilterBytes) {
-    error << "Bloom filter size is incorrect: " << header.numBytes
-          << ". Must be in range (" << 0 << ", "
-          << BloomFilter::kMaximumBloomFilterBytes << "].";
-    VELOX_FAIL(error.str());
+    VELOX_FAIL(
+        "Bloom filter size is incorrect: {}. Must be in range (0, {}].",
+        header.numBytes,
+        BloomFilter::kMaximumBloomFilterBytes);
   }
 }
 
@@ -188,9 +182,7 @@ void BlockSplitBloomFilter::writeTo(
     memBuffer->resetBuffer();
     header.write(protocol.get());
   } catch (std::exception& e) {
-    std::stringstream ss;
-    ss << "Couldn't serialize thrift: " << e.what() << "\n";
-    VELOX_FAIL(ss.str());
+    VELOX_FAIL("Couldn't serialize thrift: {}", e.what());
   }
   uint8_t* outBuffer;
   uint32_t outLength;

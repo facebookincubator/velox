@@ -175,7 +175,8 @@ class IndexLookupJoinTestBase : public HiveConnectorTestBase {
       int maxBatchRows,
       int numPrefetchBatches,
       bool needsIndexSplit,
-      const std::string& duckDbVerifySql);
+      const std::string& duckDbVerifySql,
+      int maxDrivers = 1);
 
   /// Verifies the results of the index lookup join query with and without match
   /// column.

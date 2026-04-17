@@ -495,6 +495,75 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoinWithNull) {
   }
 }
 
+// Verifies that nullAsValue flag makes NULL keys match each other in anti and
+// left semi filter joins, as required by SQL set operations (EXCEPT,
+// INTERSECT).
+TEST_P(MultiThreadedHashJoinTest, nullAsValueAntiJoin) {
+  // Probe: (1, null), (2, 3). Build: (1, null), (2, 4).
+  // With nullAsValue, (1, null) matches on both keys and is anti-joined away.
+  // (2, 3) does not match (2, 4) because 3 != 4, so it passes through.
+  auto probeVector = makeRowVector(
+      {"c0", "c1"},
+      {makeNullableFlatVector<int32_t>({1, 2}),
+       makeNullableFlatVector<int32_t>({std::nullopt, 3})});
+  auto buildVector = makeRowVector(
+      {"u0", "u1"},
+      {makeNullableFlatVector<int32_t>({1, 2}),
+       makeNullableFlatVector<int32_t>({std::nullopt, 4})});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({probeVector})
+          .hashJoin(
+              {"c0", "c1"},
+              {"u0", "u1"},
+              PlanBuilder(planNodeIdGenerator).values({buildVector}).planNode(),
+              "",
+              {"c0", "c1"},
+              core::JoinType::kAnti,
+              /*nullAware=*/false,
+              /*nullAsValue=*/true)
+          .planNode();
+  AssertQueryBuilder(plan).assertResults(makeRowVector(
+      {"c0", "c1"},
+      {makeNullableFlatVector<int32_t>({2}),
+       makeNullableFlatVector<int32_t>({3})}));
+}
+
+TEST_P(MultiThreadedHashJoinTest, nullAsValueSemiJoin) {
+  // Probe: (1, null), (2, 3). Build: (1, null), (2, 4).
+  // With nullAsValue, (1, null) matches and passes through semi join.
+  // (2, 3) does not match (2, 4), so it is filtered out.
+  auto probeVector = makeRowVector(
+      {"c0", "c1"},
+      {makeNullableFlatVector<int32_t>({1, 2}),
+       makeNullableFlatVector<int32_t>({std::nullopt, 3})});
+  auto buildVector = makeRowVector(
+      {"u0", "u1"},
+      {makeNullableFlatVector<int32_t>({1, 2}),
+       makeNullableFlatVector<int32_t>({std::nullopt, 4})});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({probeVector})
+          .hashJoin(
+              {"c0", "c1"},
+              {"u0", "u1"},
+              PlanBuilder(planNodeIdGenerator).values({buildVector}).planNode(),
+              "",
+              {"c0", "c1"},
+              core::JoinType::kLeftSemiFilter,
+              /*nullAware=*/false,
+              /*nullAsValue=*/true)
+          .planNode();
+  AssertQueryBuilder(plan).assertResults(makeRowVector(
+      {"c0", "c1"},
+      {makeNullableFlatVector<int32_t>({1}),
+       makeNullableFlatVector<int32_t>({std::nullopt})}));
+}
+
 TEST_P(MultiThreadedHashJoinTest, rightSemiJoinFilterWithLargeOutput) {
   // Build the identical left and right vectors to generate large join
   // outputs.

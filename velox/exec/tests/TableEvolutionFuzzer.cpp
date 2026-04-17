@@ -271,10 +271,9 @@ std::vector<std::vector<RowVectorPtr>> runTaskCursors(
     });
   }
   std::vector<std::vector<RowVectorPtr>> results;
-  constexpr std::chrono::seconds kTaskTimeout(10);
   results.reserve(futures.size());
   for (auto& future : futures) {
-    results.push_back(std::move(future).get(kTaskTimeout));
+    results.push_back(std::move(future).get());
   }
   return results;
 }
