@@ -2831,11 +2831,14 @@ TEST_P(IndexLookupJoinTest, scanStatsNotInflated) {
   EXPECT_GT(scanStats.inputBytes, 0);
   EXPECT_EQ(scanStats.inputBytes, scanStats.outputBytes);
 
-  // Verify that lazy loading stats are NOT present on the join node —
-  // probe-side stats are transferred to the scan by
-  // Driver::processLazyIoStats(), and index-side stats are accumulated by
-  // IndexLazyStatWriter and written to the IndexSource node directly by
-  // splitStats().
+  // Verify that lazy loading stats are NOT present on the join node.
+  // Probe-side lazy stats accumulate in every non-scan operator's
+  // runtimeStats when lazy vectors are loaded. processLazyIoStats transfers
+  // timing deltas to the scan but doesn't erase the accumulated stats.
+  // For most operators this is harmless — the stats just sit in runtimeStats.
+  // But IndexLookupJoin's splitStats copies combinedStats to create the join
+  // node stats, so we must explicitly erase them to avoid exposing residual
+  // lazy stats on the join node.
   const auto& joinStats = taskStats.at(joinNodeId_);
   EXPECT_EQ(
       joinStats.customStats.count(std::string(LazyVector::kInputBytes)), 0);

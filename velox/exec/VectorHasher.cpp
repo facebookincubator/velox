@@ -429,7 +429,7 @@ void VectorHasher::lookupValueIdsTyped(
     return;
   }
 
-  if (decoded.isIdentityMapping()) {
+  if (decoded.isIdentityMapping() && !decoded.mayHaveNulls()) {
     if (Kind == TypeKind::BIGINT && isRange_) {
       lookupIdsRangeSimd<int64_t>(decoded, rows, result);
       rows.updateBounds();

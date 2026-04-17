@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include "velox/experimental/cudf/CudfNoDefaults.h"
+
 #include "velox/expression/ConstantExpr.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
@@ -76,8 +78,8 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
     T value,
     bool isNull,
     std::optional<cudf::type_id> toType = std::nullopt) {
-  auto stream = cudf::get_default_stream();
-  auto mr = cudf::get_current_device_resource_ref();
+  auto stream = cudf::get_default_stream(cudf::allow_default_stream);
+  auto mr = get_temp_mr();
 
   // Scalars are constructed once at init time but later consumed on
   // an arbitrary per-batch CUDA stream.  The underlying device_buffer
@@ -140,7 +142,7 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
     stream.synchronize();
     return scalar;
   }
-  VELOX_NYI("Scalar creation not implemented for type " + type->toString());
+  VELOX_NYI("Scalar creation not implemented for type {}", type->toString());
 }
 
 template <TypeKind Kind>
@@ -175,7 +177,7 @@ cudf::ast::literal makeScalarAndLiteral(
     scalars.emplace_back(std::move(scalar));
     return makeLiteralFromScalar<T>(*(scalars.back()), type);
   }
-  VELOX_NYI("Scalar creation not implemented for type " + type->toString());
+  VELOX_NYI("Scalar creation not implemented for type {}", type->toString());
 }
 
 } // namespace facebook::velox::cudf_velox

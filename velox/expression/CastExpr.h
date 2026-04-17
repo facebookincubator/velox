@@ -28,14 +28,6 @@ class CastOperator {
  public:
   virtual ~CastOperator() = default;
 
-  /// Determines whether the cast operator supports casting to the custom type
-  /// from the other type.
-  virtual bool isSupportedFromType(const TypePtr& other) const = 0;
-
-  /// Determines whether the cast operator supports casting from the custom type
-  /// to the other type.
-  virtual bool isSupportedToType(const TypePtr& other) const = 0;
-
   /// Casts an input vector to the custom type. This function should not throw
   /// when processing input rows, but report errors via context.setError().
   /// @param input The flat or constant input vector
@@ -313,6 +305,15 @@ class CastExpr : public SpecialForm {
       const SelectivityVector& rows,
       exec::EvalCtx& context,
       const BaseVector& input);
+
+  // Casts basic numeric types to wider types.
+  template <TypeKind ToKind, TypeKind FromKind>
+  void applyNumericUpcast(
+      const SelectivityVector& rows,
+      const TypePtr& toType,
+      exec::EvalCtx& context,
+      const BaseVector& input,
+      VectorPtr& result);
 
   bool isTryCast() const {
     return isTryCast_;

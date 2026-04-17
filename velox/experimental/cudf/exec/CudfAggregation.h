@@ -116,9 +116,6 @@ AggregationInputChannels buildAggregationInputChannels(
 
 bool isCountFunctionName(std::string_view kind);
 
-bool isCountStarAggregate(
-    const core::AggregationNode::Aggregate& aggregate);
-
 bool hasOnlyConstantArguments(const core::CallTypedExpr& call);
 
 // Returns true if the aggregation node contains companion aggregates

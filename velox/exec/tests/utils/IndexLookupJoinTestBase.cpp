@@ -438,12 +438,14 @@ std::shared_ptr<Task> IndexLookupJoinTestBase::runLookupQuery(
     int maxOutputRows,
     int numPrefetchBatches,
     bool needsIndexSplit,
-    const std::string& duckDbVerifySql) {
+    const std::string& duckDbVerifySql,
+    int maxDrivers) {
   AssertQueryBuilder queryBuilder(duckDbQueryRunner_);
   queryBuilder.plan(plan)
       .splits(probeScanNodeId_, makeHiveConnectorSplits(probeFiles))
       .serialExecution(serialExecution)
       .barrierExecution(barrierExecution)
+      .maxDrivers(maxDrivers)
       .config(QueryConfig::kMaxOutputBatchRows, std::to_string(maxOutputRows))
       .config(
           QueryConfig::kIndexLookupJoinMaxPrefetchBatches,

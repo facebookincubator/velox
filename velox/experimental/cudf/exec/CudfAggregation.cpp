@@ -60,11 +60,6 @@ bool isCountFunctionName(std::string_view kind) {
   return kind.rfind(prefix + "count", 0) == 0;
 }
 
-bool isCountStarAggregate(const core::AggregationNode::Aggregate& aggregate) {
-  return isCountFunctionName(aggregate.call->name()) &&
-      aggregate.call->inputs().empty();
-}
-
 CountInputKind getCountInputKind(
     const core::AggregationNode::Aggregate& aggregate,
     const VectorPtr& constant) {
@@ -385,102 +380,6 @@ void registerCommonAggregationFunctions(
       prefix + "avg",
       core::AggregationNode::Step::kIntermediate,
       avgIntermediateSignatures);
-
-  // ===== Engine-specific signatures for SUM(REAL) and AVG(REAL) =====
-  // SUM(REAL):
-  //   Spark:  single REAL->DOUBLE, partial REAL->DOUBLE,
-  //           final/intermediate DOUBLE->DOUBLE (already covered above)
-  //   Presto: single REAL->REAL,   partial REAL->DOUBLE,
-  //           final/intermediate DOUBLE->REAL
-  // AVG(REAL):
-  //   Spark:  single REAL->DOUBLE,
-  //           final row(DOUBLE,BIGINT)->DOUBLE (already covered above)
-  //   Presto: single REAL->REAL,
-  //           final row(DOUBLE,BIGINT)->REAL
-  // AVG partial REAL->row(DOUBLE,BIGINT) and intermediate are the same for
-  // both engines and are already registered above.
-
-  if (CudfConfig::getInstance().functionEngine == "spark") {
-    // Spark: SUM(REAL) -> DOUBLE, AVG(REAL) -> DOUBLE
-    appendToRegistry(
-        registry,
-        prefix + "sum",
-        core::AggregationNode::Step::kSingle,
-        FunctionSignatureBuilder()
-            .returnType("double")
-            .argumentType("real")
-            .build());
-    appendToRegistry(
-        registry,
-        prefix + "sum",
-        core::AggregationNode::Step::kPartial,
-        FunctionSignatureBuilder()
-            .returnType("double")
-            .argumentType("real")
-            .build());
-    // SUM final/intermediate: DOUBLE->DOUBLE already registered.
-
-    appendToRegistry(
-        registry,
-        prefix + "avg",
-        core::AggregationNode::Step::kSingle,
-        FunctionSignatureBuilder()
-            .returnType("double")
-            .argumentType("real")
-            .build());
-    // AVG final: row(DOUBLE,BIGINT)->DOUBLE already registered.
-  } else {
-    // Presto (default): SUM(REAL) -> REAL, AVG(REAL) -> REAL
-    appendToRegistry(
-        registry,
-        prefix + "sum",
-        core::AggregationNode::Step::kSingle,
-        FunctionSignatureBuilder()
-            .returnType("real")
-            .argumentType("real")
-            .build());
-    appendToRegistry(
-        registry,
-        prefix + "sum",
-        core::AggregationNode::Step::kPartial,
-        FunctionSignatureBuilder()
-            .returnType("double")
-            .argumentType("real")
-            .build());
-    appendToRegistry(
-        registry,
-        prefix + "sum",
-        core::AggregationNode::Step::kFinal,
-        FunctionSignatureBuilder()
-            .returnType("real")
-            .argumentType("double")
-            .build());
-    appendToRegistry(
-        registry,
-        prefix + "sum",
-        core::AggregationNode::Step::kIntermediate,
-        FunctionSignatureBuilder()
-            .returnType("real")
-            .argumentType("double")
-            .build());
-
-    appendToRegistry(
-        registry,
-        prefix + "avg",
-        core::AggregationNode::Step::kSingle,
-        FunctionSignatureBuilder()
-            .returnType("real")
-            .argumentType("real")
-            .build());
-    appendToRegistry(
-        registry,
-        prefix + "avg",
-        core::AggregationNode::Step::kFinal,
-        FunctionSignatureBuilder()
-            .returnType("real")
-            .argumentType("row(double,bigint)")
-            .build());
-  }
 }
 
 core::AggregationNode::Step getCompanionStep(
@@ -526,13 +425,16 @@ bool isCompanionAggregateName(std::string const& kind) {
 
 bool isSupportedZeroColumnAggregation(
     const core::AggregationNode& aggregationNode) {
+  // Zero-column input: only global prefixed `count` aggregates (same as
+  // createAggregator). No GROUP BY keys.
   return aggregationNode.groupingKeys().empty() &&
       !aggregationNode.aggregates().empty() &&
       std::all_of(
              aggregationNode.aggregates().begin(),
              aggregationNode.aggregates().end(),
              [](const auto& aggregate) {
-               return isCountStarAggregate(aggregate);
+               return isCountFunctionName(
+                   aggregate.call->name());
              });
 }
 } // namespace

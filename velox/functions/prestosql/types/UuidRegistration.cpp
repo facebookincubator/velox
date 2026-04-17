@@ -22,6 +22,7 @@
 
 #include "velox/expression/CastExpr.h"
 #include "velox/functions/prestosql/types/UuidType.h"
+#include "velox/type/CastRegistry.h"
 
 namespace facebook::velox {
 namespace {
@@ -51,14 +52,6 @@ struct UuidParser<TypeKind::VARBINARY> {
 
 class UuidCastOperator : public exec::CastOperator {
  public:
-  bool isSupportedFromType(const TypePtr& other) const override {
-    return VARCHAR()->equivalent(*other) || VARBINARY()->equivalent(*other);
-  }
-
-  bool isSupportedToType(const TypePtr& other) const override {
-    return VARCHAR()->equivalent(*other) || VARBINARY()->equivalent(*other);
-  }
-
   void castTo(
       const BaseVector& input,
       exec::EvalCtx& context,
@@ -160,6 +153,12 @@ class UuidTypeFactory : public CustomTypeFactory {
 } // namespace
 
 void registerUuidType() {
-  registerCustomType("uuid", std::make_unique<const UuidTypeFactory>());
+  registerCustomType("UUID", std::make_unique<const UuidTypeFactory>());
+  registerCastRules({
+      {.fromType = "VARCHAR", .toType = "UUID"},
+      {.fromType = "VARBINARY", .toType = "UUID"},
+      {.fromType = "UUID", .toType = "VARCHAR"},
+      {.fromType = "UUID", .toType = "VARBINARY"},
+  });
 }
 } // namespace facebook::velox

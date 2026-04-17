@@ -2143,6 +2143,24 @@ TEST_P(DistinctAggregationTest, spillingForAggrsWithDistinct) {
   testPlan(
       plan,
       "SELECT c1, min(c0), count(c2), count(DISTINCT c0), covar_pop(DISTINCT c5, c5), array_agg(c0 ORDER BY c0) FROM tmp GROUP BY c1");
+
+  // Single aggregate with mixed column and constant inputs.
+  // Tests that constant inputs are properly filtered from the accumulator
+  // during spilling and spliced back during extraction.
+  plan = PlanBuilder()
+             .values(vectors)
+             .singleAggregation({"c1"}, {"covar_pop(DISTINCT c5, 1.0)"}, {})
+             .capturePlanNodeId(aggrNodeId)
+             .planNode();
+  testPlan(plan, "SELECT c1, covar_pop(DISTINCT c5, 1.0) FROM tmp GROUP BY c1");
+
+  // All-constant distinct inputs.
+  plan = PlanBuilder()
+             .values(vectors)
+             .singleAggregation({"c1"}, {"sum(DISTINCT 3)"}, {})
+             .capturePlanNodeId(aggrNodeId)
+             .planNode();
+  testPlan(plan, "SELECT c1, sum(DISTINCT 3) FROM tmp GROUP BY c1");
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
@@ -3539,6 +3557,99 @@ TEST_F(AggregationTest, distinctHang) {
   AssertQueryBuilder(plan, duckDbQueryRunner_)
       .config(QueryConfig::kMaxPartialAggregationMemory, 400000)
       .assertResults("SELECT distinct c0, c1 FROM tmp");
+}
+
+TEST_F(AggregationTest, distinctWithConstantInput) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 1, 2, 2, 3}),
+      makeFlatVector<int64_t>({10, 20, 30, 40, 50}),
+      makeFlatVector<double>({0.1, 0.2, 0.3, 0.4, 0.5}),
+  });
+  createDuckDbTable({data});
+
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .singleAggregation(
+              {"c0"}, {"max_by(DISTINCT c1, 1)", "corr(DISTINCT 0.5, c2)"})
+          .planNode();
+
+  assertQuery(
+      plan,
+      "SELECT c0, max_by(DISTINCT c1, 1), corr(DISTINCT 0.5, c2) FROM tmp GROUP BY c0");
+
+  // All-constant distinct inputs.
+  plan = PlanBuilder()
+             .values({data})
+             .singleAggregation({"c0"}, {"sum(DISTINCT 3)"})
+             .planNode();
+
+  assertQuery(plan, "SELECT c0, sum(DISTINCT 3) FROM tmp GROUP BY c0");
+
+  // All-constant distinct inputs with a filter.
+  plan = PlanBuilder()
+             .values({data})
+             .project({"c0", "c1", "c2", "c1 > 1 as mask"})
+             .singleAggregation({"c0"}, {"sum(DISTINCT 3)"}, {"mask"})
+             .planNode();
+
+  assertQuery(
+      plan,
+      "SELECT c0, sum(DISTINCT 3) FILTER (WHERE c1 > 1) FROM tmp GROUP BY c0");
+
+  // All-constant distinct inputs together with column distinct inputs.
+  plan = PlanBuilder()
+             .values({data})
+             .singleAggregation({"c0"}, {"sum(DISTINCT 1)", "count(c1)"})
+             .planNode();
+
+  assertQuery(
+      plan, "SELECT c0, sum(DISTINCT 1), count(c1) FROM tmp GROUP BY c0");
+
+  // Global aggregation with constant distinct input.
+  plan = PlanBuilder()
+             .values({data})
+             .project({"c0", "c1", "c2", "c1 > 1 as mask"})
+             .singleAggregation(
+                 {},
+                 {"max_by(DISTINCT c1, 1)",
+                  "sum(DISTINCT 3)",
+                  "sum(DISTINCT 3)",
+                  "count(c1)"},
+                 {"", "", "mask", ""})
+             .planNode();
+
+  assertQuery(
+      plan,
+      "SELECT max_by(DISTINCT c1, 1), sum(DISTINCT 3), sum(DISTINCT 3) FILTER (WHERE c1 > 1), count(c1) FROM tmp");
+
+  // Mixed empty and non-empty groups.
+  plan = PlanBuilder()
+             .values({data})
+             .project({"c0", "c1 > 25 as mask"})
+             .singleAggregation({"c0"}, {"sum(DISTINCT 3)"}, {"mask"})
+             .planNode();
+  assertQuery(
+      plan,
+      "SELECT c0, sum(DISTINCT 3) FILTER (WHERE c1 > 25) FROM tmp GROUP BY c0");
+
+  // Group-by with all groups empty.
+  plan = PlanBuilder()
+             .values({data})
+             .project({"c0", "c1 > 100 as mask"})
+             .singleAggregation({"c0"}, {"sum(DISTINCT 3)"}, {"mask"})
+             .planNode();
+  assertQuery(
+      plan,
+      "SELECT c0, sum(DISTINCT 3) FILTER (WHERE c1 > 100) FROM tmp GROUP BY c0");
+
+  // Global with empty group.
+  plan = PlanBuilder()
+             .values({data})
+             .project({"c1 > 100 as mask"})
+             .singleAggregation({}, {"sum(DISTINCT 3)"}, {"mask"})
+             .planNode();
+  assertQuery(plan, "SELECT sum(DISTINCT 3) FILTER (WHERE c1 > 100) FROM tmp");
 }
 
 // Trigger memory pool allocation at HashAggregation::populateAggregateInputs by
