@@ -261,6 +261,128 @@ class CardinalityFunction : public CudfFunction {
   }
 };
 
+class LogicalFunction : public CudfFunction {
+ public:
+  LogicalFunction(
+      const std::shared_ptr<velox::exec::Expr>& expr,
+      cudf::binary_operator op)
+      : op_(op) {
+    VELOX_CHECK_GE(
+        expr->inputs().size(), 2, "Logical function expects at least 2 inputs");
+    literals_.reserve(expr->inputs().size());
+    for (const auto& input : expr->inputs()) {
+      auto constExpr =
+          std::dynamic_pointer_cast<velox::exec::ConstantExpr>(input);
+      if (constExpr) {
+        literals_.push_back(VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+            createCudfScalar,
+            constExpr->value()->typeKind(),
+            constExpr->value()));
+      } else {
+        literals_.push_back(nullptr);
+      }
+    }
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    size_t rowCount = 0;
+    if (!inputColumns.empty()) {
+      rowCount = asView(inputColumns[0]).size();
+    }
+    if (rowCount == 0 && inputColumns.empty()) {
+      rowCount = 1;
+    }
+
+    std::vector<std::unique_ptr<cudf::column>> literalColumns;
+    literalColumns.reserve(literals_.size());
+    std::vector<cudf::column_view> operands;
+    operands.reserve(literals_.size());
+
+    size_t columnIndex = 0;
+    for (const auto& literal : literals_) {
+      if (literal) {
+        auto column =
+            cudf::make_column_from_scalar(*literal, rowCount, stream, mr);
+        operands.push_back(column->view());
+        literalColumns.push_back(std::move(column));
+      } else {
+        VELOX_CHECK_LT(columnIndex, inputColumns.size());
+        operands.push_back(asView(inputColumns[columnIndex++]));
+      }
+    }
+
+    VELOX_CHECK(!operands.empty());
+    if (operands.size() == 1) {
+      if (!literalColumns.empty()) {
+        return std::move(literalColumns[0]);
+      }
+      return operands[0];
+    }
+
+    auto result = cudf::binary_operation(
+        operands[0], operands[1], op_, kBoolType, stream, mr);
+    for (size_t i = 2; i < operands.size(); ++i) {
+      result = cudf::binary_operation(
+          result->view(), operands[i], op_, kBoolType, stream, mr);
+    }
+    return result;
+  }
+
+ private:
+  static constexpr cudf::data_type kBoolType{cudf::type_id::BOOL8};
+  const cudf::binary_operator op_;
+  std::vector<std::unique_ptr<cudf::scalar>> literals_;
+};
+
+class NotFunction : public CudfFunction {
+ public:
+  explicit NotFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    VELOX_CHECK_EQ(expr->inputs().size(), 1, "not expects 1 input");
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    VELOX_CHECK_EQ(inputColumns.size(), 1, "not expects 1 input");
+    return cudf::unary_operation(
+        asView(inputColumns[0]), cudf::unary_operator::NOT, stream, mr);
+  }
+};
+
+class IsNullFunction : public CudfFunction {
+ public:
+  explicit IsNullFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    VELOX_CHECK_EQ(expr->inputs().size(), 1, "is_null expects 1 input");
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    VELOX_CHECK_EQ(inputColumns.size(), 1, "is_null expects 1 input");
+    return cudf::is_null(asView(inputColumns[0]), stream, mr);
+  }
+};
+
+class IsNotNullFunction : public CudfFunction {
+ public:
+  explicit IsNotNullFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    VELOX_CHECK_EQ(expr->inputs().size(), 1, "isnotnull expects 1 input");
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    VELOX_CHECK_EQ(inputColumns.size(), 1, "isnotnull expects 1 input");
+    return cudf::is_valid(asView(inputColumns[0]), stream, mr);
+  }
+};
+
 class RoundFunction : public CudfFunction {
  public:
   explicit RoundFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
@@ -945,6 +1067,62 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .returnType("T")
            .argumentType("T")
            .variableArity("T")
+           .build()});
+
+  registerCudfFunction(
+      "and",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<LogicalFunction>(
+            expr, cudf::binary_operator::LOGICAL_AND);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("boolean")
+           .argumentType("boolean")
+           .argumentType("boolean")
+           .build()});
+
+  registerCudfFunction(
+      "or",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<LogicalFunction>(
+            expr, cudf::binary_operator::LOGICAL_OR);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("boolean")
+           .argumentType("boolean")
+           .argumentType("boolean")
+           .build()});
+
+  registerCudfFunction(
+      "not",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<NotFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("boolean")
+           .argumentType("boolean")
+           .build()});
+
+  registerCudfFunction(
+      "is_null",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<IsNullFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .typeVariable("T")
+           .returnType("boolean")
+           .argumentType("T")
+           .build()});
+
+  registerCudfFunction(
+      "isnotnull",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<IsNotNullFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .typeVariable("T")
+           .returnType("boolean")
+           .argumentType("T")
            .build()});
 
   registerCudfFunction(
