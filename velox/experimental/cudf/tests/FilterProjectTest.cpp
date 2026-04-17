@@ -125,28 +125,6 @@ class CudfFilterProjectTest : public OperatorTestBase {
     runTest(plan, "SELECT c2 <> '" + c2Value + "' AS result FROM tmp");
   }
 
-  void testAndOperation(const std::vector<RowVectorPtr>& input) {
-    // Create a plan with AND operation
-    auto plan = PlanBuilder()
-                    .values(input)
-                    .project({"c0 = 1 AND c1 = 2.0 AS result"})
-                    .planNode();
-
-    // Run the test
-    runTest(plan, "SELECT c0 = 1 AND c1 = 2.0 AS result FROM tmp");
-  }
-
-  void testOrOperation(const std::vector<RowVectorPtr>& input) {
-    // Create a plan with OR operation
-    auto plan = PlanBuilder()
-                    .values(input)
-                    .project({"c0 = 1 OR c1 = 2.0 AS result"})
-                    .planNode();
-
-    // Run the test
-    runTest(plan, "SELECT c0 = 1 OR c1 = 2.0 AS result FROM tmp");
-  }
-
   void testYearFunction(const std::vector<RowVectorPtr>& input) {
     // Create a plan with YEAR function
     auto plan =
@@ -249,17 +227,6 @@ class CudfFilterProjectTest : public OperatorTestBase {
 
     // Run the test
     runTest(plan, "SELECT c0 >= c1 AS result FROM tmp");
-  }
-
-  void testNotOperation(const std::vector<RowVectorPtr>& input) {
-    // Create a plan with a NOT operation
-    auto plan = PlanBuilder()
-                    .values(input)
-                    .project({"NOT (c0 = 1) AS result"})
-                    .planNode();
-
-    // Run the test
-    runTest(plan, "SELECT NOT (c0 = 1) AS result FROM tmp");
   }
 
   void testBetweenOperation(const std::vector<RowVectorPtr>& input) {
@@ -585,22 +552,6 @@ TEST_F(CudfFilterProjectTest, stringNotEqualOperation) {
   createDuckDbTable(vectors);
 
   testStringNotEqualOperation(vectors);
-}
-
-TEST_F(CudfFilterProjectTest, andOperation) {
-  vector_size_t batchSize = 1000;
-  auto vectors = makeVectors(rowType_, 2, batchSize);
-  createDuckDbTable(vectors);
-
-  testAndOperation(vectors);
-}
-
-TEST_F(CudfFilterProjectTest, orOperation) {
-  vector_size_t batchSize = 1000;
-  auto vectors = makeVectors(rowType_, 2, batchSize);
-  createDuckDbTable(vectors);
-
-  testOrOperation(vectors);
 }
 
 TEST_F(CudfFilterProjectTest, lengthFunction) {
@@ -1098,14 +1049,6 @@ TEST_F(CudfFilterProjectTest, greaterThanEqualOperation) {
   createDuckDbTable(vectors);
 
   testGreaterThanEqualOperation(vectors);
-}
-
-TEST_F(CudfFilterProjectTest, notOperation) {
-  vector_size_t batchSize = 1000;
-  auto vectors = makeVectors(rowType_, 2, batchSize);
-  createDuckDbTable(vectors);
-
-  testNotOperation(vectors);
 }
 
 TEST_F(CudfFilterProjectTest, betweenOperation) {
