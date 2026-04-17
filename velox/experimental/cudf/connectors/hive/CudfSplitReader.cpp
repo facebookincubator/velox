@@ -270,7 +270,8 @@ void CudfSplitReader::setupCudfDataSource() {
 
 void CudfSplitReader::setupReaderOptions() {
   VELOX_CHECK_NOT_NULL(
-      dataSource_, "CudfSplitReader failed to setup a cuDF datasource");
+      dataSource_,
+      "CudfSplitReader does not have a datasource. Call setupCudfDataSource() first");
   auto sourceInfo = cudf::io::source_info{dataSource_.get()};
 
   // Reader options
