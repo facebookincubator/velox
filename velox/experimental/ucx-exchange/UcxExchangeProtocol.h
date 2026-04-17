@@ -15,15 +15,17 @@
  */
 #pragma once
 
-#include <cuda_runtime.h>
 #include <cinttypes>
-#include <cstring>
 #include <memory>
-#include <stdexcept>
+#include <string>
 #include <vector>
-#include "velox/common/base/Exceptions.h"
 
 /// Definitions needed for the Ucx exchange protocol.
+///
+/// Byte order: all multi-byte fields are serialized with std::memcpy, which
+/// preserves host byte order. The protocol assumes matching endianness between
+/// peers (little-endian on x86 and ARM). Cross-endian transfers are not
+/// supported.
 
 namespace facebook::velox::ucx_exchange {
 
@@ -129,141 +131,11 @@ struct MetadataMsg {
     return totalSize;
   }
 
-  // serializes the metadata record.
-  std::pair<std::shared_ptr<uint8_t>, size_t> serialize() {
-    uint32_t totalSize = getSerializedSize();
+  /// Serializes this metadata record into a newly allocated buffer.
+  std::pair<std::shared_ptr<uint8_t>, size_t> serialize();
 
-    // Validate that the serialized size fits in the maximum allowed buffer.
-    // The receiver allocates kMaxMetaBufSize; sender must not exceed this.
-    VELOX_CHECK_LE(
-        totalSize,
-        kMaxMetaBufSize,
-        "Metadata serialized size ({}) exceeds maximum buffer size ({}). "
-        "This can happen with extremely wide tables. "
-        "Consider reducing table width or increasing kMaxMetaBufSize.",
-        totalSize,
-        kMaxMetaBufSize);
-
-    // Allocate exact size needed - no wasted memory for small metadata.
-    auto deleter = [](uint8_t* p) { delete[] p; };
-    std::shared_ptr<uint8_t> buffer(new uint8_t[totalSize], deleter);
-
-    uint8_t* ptr = buffer.get();
-
-    // Write the magic number.
-    std::memcpy(ptr, &kMagicNumber, sizeof(kMagicNumber));
-    ptr += sizeof(kMagicNumber);
-
-    // Write the size of the metadata.
-    std::memcpy(ptr, &totalSize, sizeof(totalSize));
-    ptr += sizeof(totalSize);
-
-    // Serialize cudfMetadata size.
-    WireLengthType cudfSize = cudfMetadata ? cudfMetadata->size() : 0;
-    std::memcpy(ptr, &cudfSize, sizeof(cudfSize));
-    ptr += sizeof(cudfSize);
-
-    // If data exists, serialize each byte.
-    if (cudfSize > 0) {
-      std::memcpy(ptr, cudfMetadata->data(), cudfSize);
-      ptr += cudfSize;
-    }
-
-    // Serialize dataSizeBytes.
-    std::memcpy(ptr, &dataSizeBytes, sizeof(dataSizeBytes));
-    ptr += sizeof(dataSizeBytes);
-
-    // Serialize number of remainingBytes elements.
-    WireLengthType numRemaining = remainingBytes.size();
-    std::memcpy(ptr, &numRemaining, sizeof(numRemaining));
-    ptr += sizeof(numRemaining);
-
-    // Serialize remainingBytes elements.
-    if (numRemaining > 0) {
-      auto bytesSize = numRemaining * sizeof(remainingBytes[0]);
-      std::memcpy(ptr, remainingBytes.data(), bytesSize);
-      ptr += bytesSize;
-    }
-
-    // Serialize atEnd bool as 0/1.
-    uint8_t atEndByte = atEnd ? 1 : 0;
-    *ptr = atEndByte;
-
-    return std::make_pair<std::shared_ptr<uint8_t>, size_t>(
-        std::move(buffer), totalSize);
-  }
-
-  // Deserialization function that constructs a MetadataMsg from a
-  // buffer that points to a serialized metadata.
-  static MetadataMsg deserializeMetadataMsg(const uint8_t* buffer) {
-    // We'll use a pointer to scan through the memory.
-    const uint8_t* ptr = buffer;
-
-    MetadataMsg record;
-
-    // Extract magic number.
-    uint32_t magicNumber = 0;
-    std::memcpy(&magicNumber, ptr, sizeof(magicNumber));
-    VELOX_CHECK_EQ(magicNumber, kMagicNumber);
-    ptr += sizeof(magicNumber);
-
-    // Extract the total size.
-    uint32_t totalSize = 0;
-    std::memcpy(&totalSize, ptr, sizeof(totalSize));
-    ptr += sizeof(totalSize);
-
-    const uint8_t* endPtr = buffer + totalSize;
-
-    // Deserialize cudfMetadata:
-    // First read the size of the metadata.
-    WireLengthType metaSize = 0;
-    if (ptr + sizeof(metaSize) > endPtr)
-      throw std::runtime_error("Insufficient data for cudfMetadata size");
-    std::memcpy(&metaSize, ptr, sizeof(metaSize));
-    ptr += sizeof(metaSize);
-
-    // Allocate a vector of the correct size.
-    record.cudfMetadata = std::make_unique<std::vector<uint8_t>>(metaSize);
-    if (metaSize > 0) {
-      if (ptr + metaSize > endPtr)
-        throw std::runtime_error("Insufficient data for cudfMetadata bytes");
-      std::memcpy(record.cudfMetadata->data(), ptr, metaSize);
-      ptr += metaSize;
-    }
-
-    // Deserialize dataSizeBytes.
-    if (ptr + sizeof(record.dataSizeBytes) > endPtr)
-      throw std::runtime_error("Insufficient data for dataSizeBytes");
-    std::memcpy(&record.dataSizeBytes, ptr, sizeof(record.dataSizeBytes));
-    ptr += sizeof(record.dataSizeBytes);
-
-    // Deserialize remainingBytes vector:
-    // Start with the count of elements.
-    WireLengthType numRemaining = 0;
-    if (ptr + sizeof(numRemaining) > endPtr)
-      throw std::runtime_error("Insufficient data for remainingBytes count");
-    std::memcpy(&numRemaining, ptr, sizeof(numRemaining));
-    ptr += sizeof(numRemaining);
-
-    // Reserve space in the vector and read each element.
-    record.remainingBytes.resize(numRemaining);
-    if (numRemaining > 0) {
-      auto bytesSize = numRemaining * sizeof(record.remainingBytes[0]);
-      if (ptr + bytesSize > endPtr)
-        throw std::runtime_error("Insufficient data for remainingBytes values");
-      std::memcpy(record.remainingBytes.data(), ptr, bytesSize);
-      ptr += bytesSize;
-    }
-
-    // Deserialize bool `atEnd` (stored as a single byte: 1 for true, 0 for
-    // false).
-    if (ptr + 1 > endPtr) {
-      throw std::runtime_error("Insufficient data for atEnd flag");
-    }
-    record.atEnd = (*ptr != 0);
-
-    return record;
-  }
+  /// Deserializes a MetadataMsg from a buffer produced by serialize().
+  static MetadataMsg deserializeMetadataMsg(const uint8_t* buffer);
 };
 
 } // namespace facebook::velox::ucx_exchange
