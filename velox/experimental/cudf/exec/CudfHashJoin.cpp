@@ -411,6 +411,10 @@ void CudfHashJoinProbe::initialize() {
     return;
   }
 
+  // simplify expression
+  exec::ExprSet exprs({joinNode_->filter()}, operatorCtx_->execCtx());
+  VELOX_CHECK_EQ(exprs.exprs().size(), 1);
+
   // For now we disable AST-based filtering (and force precomputation)
   // if the filter expression contains decimal types, using the same
   // shallow search as used for regular expression evaluation.
