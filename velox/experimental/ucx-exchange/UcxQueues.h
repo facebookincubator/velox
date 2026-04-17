@@ -285,10 +285,10 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
 
   /// If 'queuedBytes_' > 'maxSize_', each producer is blocked after adding
   /// data.
-  uint64_t maxSize_;
+  uint64_t maxSize_{0};
   // When 'queuedBytes_' goes below 'continueSize_', blocked producers are
   // resumed.
-  uint64_t continueSize_;
+  uint64_t continueSize_{0};
 
   // Total number of drivers expected to produce results. This number will
   // decrease in the end of grouped execution, when we understand the real
