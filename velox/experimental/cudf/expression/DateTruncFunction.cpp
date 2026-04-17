@@ -16,59 +16,22 @@
 #include "velox/experimental/cudf/expression/DateTruncFunction.h"
 
 #include "velox/expression/ConstantExpr.h"
+#include "velox/functions/lib/TimeUtils.h"
 
 #include <cudf/binaryop.hpp>
 #include <cudf/column/column_factories.hpp>
 #include <cudf/datetime.hpp>
 #include <cudf/unary.hpp>
 
-#include <folly/String.h>
-
 namespace facebook::velox::cudf_velox {
 
-std::string DateTruncFunction::normalizeDateTruncUnit(std::string unit) {
+using functions::DateTimeUnit;
+
+std::string DateTruncFunction::stripQuotes(std::string unit) {
   if (unit.size() >= 2 && unit.front() == '\'' && unit.back() == '\'') {
     unit = unit.substr(1, unit.size() - 2);
   }
-  folly::toLowerAscii(unit);
   return unit;
-}
-
-DateTruncFunction::DateTruncUnit DateTruncFunction::parseDateTruncUnit(
-    const std::string& unit,
-    bool isTimestamp,
-    bool isDate) {
-  if (unit == "second") {
-    VELOX_CHECK(isTimestamp, "date_trunc second requires timestamp input");
-    return DateTruncUnit::kSecond;
-  }
-  if (unit == "minute") {
-    VELOX_CHECK(isTimestamp, "date_trunc minute requires timestamp input");
-    return DateTruncUnit::kMinute;
-  }
-  if (unit == "hour") {
-    VELOX_CHECK(isTimestamp, "date_trunc hour requires timestamp input");
-    return DateTruncUnit::kHour;
-  }
-  if (unit == "day") {
-    return DateTruncUnit::kDay;
-  }
-  if (unit == "week") {
-    return DateTruncUnit::kWeek;
-  }
-  if (unit == "month") {
-    return DateTruncUnit::kMonth;
-  }
-  if (unit == "quarter") {
-    return DateTruncUnit::kQuarter;
-  }
-  if (unit == "year") {
-    return DateTruncUnit::kYear;
-  }
-  VELOX_FAIL(
-      "date_trunc does not support unit '{}' for {} input",
-      unit,
-      isTimestamp ? "timestamp" : (isDate ? "date" : "unknown"));
 }
 
 bool DateTruncFunction::canEvaluate(
@@ -76,23 +39,30 @@ bool DateTruncFunction::canEvaluate(
   if (expr->inputs().size() != 2) {
     return false;
   }
-  auto unitExpr =
-      std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr->inputs()[0]);
+  auto unitExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
+      expr->inputs()[0]);
   if (!unitExpr || unitExpr->value()->isNullAt(0)) {
     return false;
   }
-  auto unit = normalizeDateTruncUnit(unitExpr->value()->toString(0));
+  auto unitStr = stripQuotes(unitExpr->value()->toString(0));
+  auto unit = functions::fromDateTimeUnitString(
+      StringView(unitStr), false);
+  if (!unit.has_value()) {
+    return false;
+  }
   const auto& inputType = expr->inputs()[1]->type();
   const bool isTimestamp = inputType->isTimestamp();
   const bool isDate = inputType->isDate();
   if (!isTimestamp && !isDate) {
     return false;
   }
-  if (unit == "second" || unit == "minute" || unit == "hour") {
+  if (*unit == DateTimeUnit::kSecond || *unit == DateTimeUnit::kMinute ||
+      *unit == DateTimeUnit::kHour) {
     return isTimestamp;
   }
-  if (unit == "day" || unit == "week" || unit == "month" || unit == "quarter" ||
-      unit == "year") {
+  if (*unit == DateTimeUnit::kDay || *unit == DateTimeUnit::kWeek ||
+      *unit == DateTimeUnit::kMonth || *unit == DateTimeUnit::kQuarter ||
+      *unit == DateTimeUnit::kYear) {
     return true;
   }
   return false;
@@ -111,10 +81,17 @@ DateTruncFunction::DateTruncFunction(
   VELOX_CHECK(
       isTimestamp_ || isDate_,
       "date_trunc only supports date or timestamp inputs");
-  unit_ = parseDateTruncUnit(
-      normalizeDateTruncUnit(unitExpr->value()->toString(0)),
-      isTimestamp_,
-      isDate_);
+  auto unitStr = stripQuotes(unitExpr->value()->toString(0));
+  auto parsed = functions::fromDateTimeUnitString(
+      StringView(unitStr), true);
+  VELOX_CHECK(parsed.has_value(), "Invalid date_trunc unit: {}", unitStr);
+  unit_ = *parsed;
+
+  // Validate time-only units require timestamp input.
+  if (unit_ == DateTimeUnit::kSecond || unit_ == DateTimeUnit::kMinute ||
+      unit_ == DateTimeUnit::kHour) {
+    VELOX_CHECK(isTimestamp_, "date_trunc {} requires timestamp input", unitStr);
+  }
 }
 
 ColumnOrView DateTruncFunction::eval(
@@ -149,20 +126,20 @@ ColumnOrView DateTruncFunction::eval(
   };
 
   switch (unit_) {
-    case DateTruncUnit::kSecond:
+    case DateTimeUnit::kSecond:
       return cudf::datetime::floor_datetimes(
           inputCol, cudf::datetime::rounding_frequency::SECOND, stream, mr);
-    case DateTruncUnit::kMinute:
+    case DateTimeUnit::kMinute:
       return cudf::datetime::floor_datetimes(
           inputCol, cudf::datetime::rounding_frequency::MINUTE, stream, mr);
-    case DateTruncUnit::kHour:
+    case DateTimeUnit::kHour:
       return cudf::datetime::floor_datetimes(
           inputCol, cudf::datetime::rounding_frequency::HOUR, stream, mr);
-    case DateTruncUnit::kDay: {
+    case DateTimeUnit::kDay: {
       auto dayCol = castToDay(inputCol);
       return castDaysToOutput(std::move(dayCol));
     }
-    case DateTruncUnit::kWeek: {
+    case DateTimeUnit::kWeek: {
       auto dayCol = castToDay(inputCol);
       auto dowCol = cudf::datetime::extract_datetime_component(
           dayCol->view(),
@@ -188,12 +165,15 @@ ColumnOrView DateTruncFunction::eval(
           mr);
       return castDaysToOutput(std::move(weekStartDay));
     }
-    case DateTruncUnit::kMonth:
-    case DateTruncUnit::kQuarter:
-    case DateTruncUnit::kYear: {
+    case DateTimeUnit::kMonth:
+    case DateTimeUnit::kQuarter:
+    case DateTimeUnit::kYear: {
       auto dayCol = castToDay(inputCol);
       auto dayOfMonth = cudf::datetime::extract_datetime_component(
-          dayCol->view(), cudf::datetime::datetime_component::DAY, stream, mr);
+          dayCol->view(),
+          cudf::datetime::datetime_component::DAY,
+          stream,
+          mr);
       auto dayOfMonthInt = castToInt32(dayOfMonth->view());
       auto oneScalar = makeScalar(1);
       auto dayOffset = cudf::binary_operation(
@@ -212,7 +192,7 @@ ColumnOrView DateTruncFunction::eval(
           stream,
           mr);
 
-      if (unit_ == DateTruncUnit::kMonth) {
+      if (unit_ == DateTimeUnit::kMonth) {
         return castDaysToOutput(std::move(monthStartDay));
       }
 
@@ -231,7 +211,7 @@ ColumnOrView DateTruncFunction::eval(
           mr);
 
       std::unique_ptr<cudf::column> monthsToSubtract;
-      if (unit_ == DateTruncUnit::kYear) {
+      if (unit_ == DateTimeUnit::kYear) {
         monthsToSubtract = std::move(monthIndex);
       } else {
         auto threeScalar = makeScalar(3);
@@ -270,6 +250,8 @@ ColumnOrView DateTruncFunction::eval(
           monthStartDay->view(), negMonths->view(), stream, mr);
       return castDaysToOutput(std::move(truncated));
     }
+    default:
+      break;
   }
   VELOX_UNREACHABLE();
 }

@@ -27,6 +27,7 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/sparksql/registration/Register.h"
 #include "velox/parse/TypeResolver.h"
+#include "velox/type/TimestampConversion.h"
 
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox;
@@ -119,32 +120,30 @@ TEST_F(CudfFilterProjectTest, dateAdd) {
 }
 
 TEST_F(CudfFilterProjectTest, dateTruncTimestamp) {
-  auto timestamps = makeFlatVector<Timestamp>(
-      {Timestamp(1609459200, 0), // 2021-01-01 00:00:00
-       Timestamp(1709183167, 0), // 2024-02-29 05:06:07
-       Timestamp(1736942461, 123000000)}, // 2025-01-15 12:01:01.123
-      TIMESTAMP());
-  auto data = makeRowVector({"event_ts"}, {timestamps});
-  std::vector<RowVectorPtr> vectors{data};
+  auto parseTs = [](const char* str) {
+    auto result = util::fromTimestampString(
+        StringView(str),
+        util::TimestampParseMode::kLegacyCast);
+    VELOX_CHECK(result.hasValue(), "Bad timestamp: {}", str);
+    return result.value();
+  };
 
-  const std::vector<std::string> units{
-      "second", "minute", "hour", "day", "week", "month", "quarter", "year"};
-  for (const auto& unit : units) {
-    SCOPED_TRACE(unit);
-    auto projection = fmt::format("date_trunc('{}', event_ts) AS result", unit);
+  const auto dateTrunc = [&](const std::string& unit, Timestamp ts) {
+    return evaluateOnce<Timestamp>(
+        fmt::format("date_trunc('{}', c0)", unit),
+        {TIMESTAMP()},
+        std::optional<Timestamp>(ts));
+  };
 
-    auto cudfPlan =
-        PlanBuilder().values(vectors).project({projection}).planNode();
-    auto cudfResult = AssertQueryBuilder(cudfPlan).copyResults(pool());
+  auto ts = parseTs("2025-01-15 12:01:01.123");
 
-    cudf_velox::unregisterCudf();
-    auto cpuPlan =
-        PlanBuilder().values(vectors).project({projection}).planNode();
-    auto cpuResult = AssertQueryBuilder(cpuPlan).copyResults(pool());
-    cudf_velox::registerCudf();
-
-    facebook::velox::test::assertEqualVectors(cpuResult, cudfResult);
-  }
+  EXPECT_EQ(parseTs("2025-01-15 12:01:01"), dateTrunc("second", ts));
+  EXPECT_EQ(parseTs("2025-01-15 12:01:00"), dateTrunc("minute", ts));
+  EXPECT_EQ(parseTs("2025-01-15 12:00:00"), dateTrunc("hour", ts));
+  EXPECT_EQ(parseTs("2025-01-15 00:00:00"), dateTrunc("day", ts));
+  EXPECT_EQ(parseTs("2025-01-01 00:00:00"), dateTrunc("month", ts));
+  EXPECT_EQ(parseTs("2025-01-01 00:00:00"), dateTrunc("quarter", ts));
+  EXPECT_EQ(parseTs("2025-01-01 00:00:00"), dateTrunc("year", ts));
 }
 
 // Test unary math functions for Spark

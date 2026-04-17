@@ -365,7 +365,7 @@ class LogicalFunction : public CudfFunction {
     size_t columnIndex = 0;
     for (const auto& literal : literals_) {
       if (literal) {
-        auto column = cudf::make_column_from_scalar(*literal, rowCount, stream);
+        auto column = cudf::make_column_from_scalar(*literal, rowCount, stream, mr);
         operands.push_back(column->view());
         literalColumns.push_back(std::move(column));
       } else {

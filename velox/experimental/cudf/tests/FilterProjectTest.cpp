@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/expression/PrestoFunctions.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
 
@@ -47,12 +48,15 @@ class CudfFilterProjectTest : public OperatorTestBase {
     filesystems::registerLocalFileSystem();
     cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
+    cudf_velox::registerPrestoFunctions(
+        cudf_velox::CudfConfig::getInstance().functionNamePrefix);
     rng_.seed(123);
 
     rowType_ = ROW({{"c0", INTEGER()}, {"c1", DOUBLE()}, {"c2", VARCHAR()}});
   }
 
   void TearDown() override {
+    cudf_velox::unregisterFunctions();
     cudf_velox::unregisterCudf();
     OperatorTestBase::TearDown();
   }

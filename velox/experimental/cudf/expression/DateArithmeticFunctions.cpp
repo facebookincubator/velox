@@ -75,7 +75,7 @@ ColumnOrView DatePlusIntervalFunction::eval(
   auto intervalCol = asView(inputColumns[1]);
 
   // Validate that all intervals are whole days.
-  auto divisor = cudf::numeric_scalar<int64_t>(kMillisInDay, true, stream);
+  auto divisor = cudf::numeric_scalar<int64_t>(kMillisInDay, true, stream, mr);
   auto remainder = cudf::binary_operation(
       intervalCol,
       divisor,
@@ -83,7 +83,7 @@ ColumnOrView DatePlusIntervalFunction::eval(
       cudf::data_type(cudf::type_id::INT64),
       stream,
       mr);
-  auto zero = cudf::numeric_scalar<int64_t>(0, true, stream);
+  auto zero = cudf::numeric_scalar<int64_t>(0, true, stream, mr);
   auto isWholeDays = cudf::binary_operation(
       remainder->view(),
       zero,

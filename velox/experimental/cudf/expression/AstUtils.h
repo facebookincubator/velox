@@ -91,19 +91,21 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
   // cheap (one-time cost per scalar) and guarantees the memory is
   // available on every stream.
   if constexpr (std::is_same_v<T, Timestamp>) {
-    const auto& engine = CudfConfig::getInstance().functionEngine;
-    if (engine == "spark") {
+    auto unit = CudfConfig::getInstance().timestampUnit;
+    if (unit == cudf::type_id::TIMESTAMP_MICROSECONDS) {
       using CudfTimestampType = cudf::timestamp_us;
       auto micros = isNull ? 0 : value.toMicros();
       return std::make_unique<cudf::timestamp_scalar<CudfTimestampType>>(
           CudfTimestampType{cudf::duration_us{micros}}, !isNull, stream, mr);
-    } else if (engine == "presto") {
+    } else if (unit == cudf::type_id::TIMESTAMP_NANOSECONDS) {
       using CudfTimestampType = cudf::timestamp_ns;
       auto nanos = isNull ? 0 : value.toNanos();
       return std::make_unique<cudf::timestamp_scalar<CudfTimestampType>>(
           CudfTimestampType{cudf::duration_ns{nanos}}, !isNull, stream, mr);
     } else {
-      VELOX_FAIL("Unsupported function engine: {}", engine);
+      VELOX_FAIL(
+          "Unsupported timestamp unit: {}",
+          static_cast<int32_t>(unit));
     }
   } else if constexpr (cudf::is_fixed_width<T>()) {
     if (type->isDecimal()) {

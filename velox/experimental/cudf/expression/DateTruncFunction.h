@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+#include "velox/functions/lib/DateTimeFormatter.h"
 
 namespace facebook::velox::cudf_velox {
 
@@ -34,23 +35,10 @@ class DateTruncFunction : public CudfFunction {
       rmm::device_async_resource_ref mr) const override;
 
  private:
-  enum class DateTruncUnit {
-    kSecond,
-    kMinute,
-    kHour,
-    kDay,
-    kWeek,
-    kMonth,
-    kQuarter,
-    kYear
-  };
+  /// Strips surrounding single quotes from unit strings if present.
+  static std::string stripQuotes(std::string unit);
 
-  static std::string normalizeDateTruncUnit(std::string unit);
-
-  static DateTruncUnit
-  parseDateTruncUnit(const std::string& unit, bool isTimestamp, bool isDate);
-
-  DateTruncUnit unit_;
+  functions::DateTimeUnit unit_;
   bool isTimestamp_{false};
   bool isDate_{false};
 };

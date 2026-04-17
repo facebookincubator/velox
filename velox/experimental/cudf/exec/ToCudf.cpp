@@ -26,6 +26,8 @@
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/expression/PrestoFunctions.h"
+#include "velox/experimental/cudf/expression/SparkFunctions.h"
 #include "velox/experimental/cudf/expression/JitExpression.h"
 
 #include "folly/Conv.h"
@@ -306,6 +308,8 @@ void registerCudf() {
 
   auto prefix = CudfConfig::getInstance().functionNamePrefix;
   registerBuiltinFunctions(prefix);
+  registerSparkFunctions(prefix);
+  registerPrestoFunctions(prefix);
   registerStepAwareBuiltinAggregationFunctions(prefix);
 
   CUDF_FUNC_RANGE();
