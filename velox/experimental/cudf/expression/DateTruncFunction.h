@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+
 #include "velox/functions/lib/DateTimeFormatter.h"
 
 namespace facebook::velox::cudf_velox {

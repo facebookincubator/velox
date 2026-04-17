@@ -17,6 +17,7 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
+
 #include "velox/expression/ConstantExpr.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/Type.h"
@@ -103,9 +104,7 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
       return std::make_unique<cudf::timestamp_scalar<CudfTimestampType>>(
           CudfTimestampType{cudf::duration_ns{nanos}}, !isNull, stream, mr);
     } else {
-      VELOX_FAIL(
-          "Unsupported timestamp unit: {}",
-          static_cast<int32_t>(unit));
+      VELOX_FAIL("Unsupported timestamp unit: {}", static_cast<int32_t>(unit));
     }
   } else if constexpr (cudf::is_fixed_width<T>()) {
     if (type->isDecimal()) {

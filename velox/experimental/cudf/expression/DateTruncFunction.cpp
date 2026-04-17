@@ -39,14 +39,13 @@ bool DateTruncFunction::canEvaluate(
   if (expr->inputs().size() != 2) {
     return false;
   }
-  auto unitExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
-      expr->inputs()[0]);
+  auto unitExpr =
+      std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr->inputs()[0]);
   if (!unitExpr || unitExpr->value()->isNullAt(0)) {
     return false;
   }
   auto unitStr = stripQuotes(unitExpr->value()->toString(0));
-  auto unit = functions::fromDateTimeUnitString(
-      StringView(unitStr), false);
+  auto unit = functions::fromDateTimeUnitString(StringView(unitStr), false);
   if (!unit.has_value()) {
     return false;
   }
@@ -82,15 +81,15 @@ DateTruncFunction::DateTruncFunction(
       isTimestamp_ || isDate_,
       "date_trunc only supports date or timestamp inputs");
   auto unitStr = stripQuotes(unitExpr->value()->toString(0));
-  auto parsed = functions::fromDateTimeUnitString(
-      StringView(unitStr), true);
+  auto parsed = functions::fromDateTimeUnitString(StringView(unitStr), true);
   VELOX_CHECK(parsed.has_value(), "Invalid date_trunc unit: {}", unitStr);
   unit_ = *parsed;
 
   // Validate time-only units require timestamp input.
   if (unit_ == DateTimeUnit::kSecond || unit_ == DateTimeUnit::kMinute ||
       unit_ == DateTimeUnit::kHour) {
-    VELOX_CHECK(isTimestamp_, "date_trunc {} requires timestamp input", unitStr);
+    VELOX_CHECK(
+        isTimestamp_, "date_trunc {} requires timestamp input", unitStr);
   }
 }
 
@@ -170,10 +169,7 @@ ColumnOrView DateTruncFunction::eval(
     case DateTimeUnit::kYear: {
       auto dayCol = castToDay(inputCol);
       auto dayOfMonth = cudf::datetime::extract_datetime_component(
-          dayCol->view(),
-          cudf::datetime::datetime_component::DAY,
-          stream,
-          mr);
+          dayCol->view(), cudf::datetime::datetime_component::DAY, stream, mr);
       auto dayOfMonthInt = castToInt32(dayOfMonth->view());
       auto oneScalar = makeScalar(1);
       auto dayOffset = cudf::binary_operation(

@@ -122,8 +122,7 @@ TEST_F(CudfFilterProjectTest, dateAdd) {
 TEST_F(CudfFilterProjectTest, dateTruncTimestamp) {
   auto parseTs = [](const char* str) {
     auto result = util::fromTimestampString(
-        StringView(str),
-        util::TimestampParseMode::kLegacyCast);
+        StringView(str), util::TimestampParseMode::kLegacyCast);
     VELOX_CHECK(result.hasValue(), "Bad timestamp: {}", str);
     return result.value();
   };
