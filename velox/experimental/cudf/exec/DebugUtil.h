@@ -16,11 +16,12 @@
 
 #pragma once
 
-#include <cuda_runtime.h>
-
-#include "velox/common/base/Exceptions.h"
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
+
+#include "velox/common/base/Exceptions.h"
+
+#include <cuda_runtime.h>
 
 namespace facebook::velox::cudf_velox {
 
@@ -29,9 +30,7 @@ inline void checkCudaErrorInDebug() {
   if (CudfConfig::getInstance().debugEnabled) {
     cudaError_t err = cudaGetLastError();
     VELOX_CHECK(
-        err == cudaSuccess,
-        "CUDA error detected: {}",
-        cudaGetErrorString(err));
+        err == cudaSuccess, "CUDA error detected: {}", cudaGetErrorString(err));
   }
 }
 
