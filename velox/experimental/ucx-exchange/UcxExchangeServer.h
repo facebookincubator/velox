@@ -130,7 +130,11 @@ class UcxExchangeServer
 
   std::atomic<ServerState> state_;
   std::shared_ptr<cudf::packed_columns> dataPtr_{nullptr};
-  std::recursive_mutex dataMutex_; // mutex for above ptr.
+  /// Protects dataPtr_. Must be recursive because sendData() holds the lock
+  /// when calling tagSend(), and for small messages UCX completes inline via
+  /// its fast-completion path, firing the sendComplete() callback on the same
+  /// thread while the lock is still held.
+  std::recursive_mutex dataMutex_;
   std::atomic<bool> closed_{false};
 
   /// Future for intra-node transfer - signaled when source retrieves data.
