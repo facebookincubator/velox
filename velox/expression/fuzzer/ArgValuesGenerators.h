@@ -205,4 +205,32 @@ class SetDigestArgValuesGenerator : public ArgValuesGenerator {
  private:
   std::string functionName_;
 };
+/// Generates valid S2 cell ID arguments for s2_cell_* functions.
+/// Picks random face, position, and level to construct valid cell IDs via
+/// S2CellOp::cellIdFromFacePositionLevel. Also constrains the level
+/// argument to [0, 30] when present.
+class S2CellIdArgValuesGenerator : public ArgValuesGenerator {
+ public:
+  ~S2CellIdArgValuesGenerator() override = default;
+
+  std::vector<core::TypedExprPtr> generate(
+      const CallableSignature& signature,
+      const VectorFuzzer::Options& options,
+      FuzzerGenerator& rng,
+      ExpressionFuzzerState& state) override;
+};
+
+/// Generates valid hex token arguments for s2_cell_from_token.
+/// Constructs a random valid cell ID, then converts it to a token string.
+class S2CellTokenArgValuesGenerator : public ArgValuesGenerator {
+ public:
+  ~S2CellTokenArgValuesGenerator() override = default;
+
+  std::vector<core::TypedExprPtr> generate(
+      const CallableSignature& signature,
+      const VectorFuzzer::Options& options,
+      FuzzerGenerator& rng,
+      ExpressionFuzzerState& state) override;
+};
+
 } // namespace facebook::velox::fuzzer
