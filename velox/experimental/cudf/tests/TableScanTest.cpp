@@ -218,7 +218,7 @@ class TableScanTestParameterized : public TableScanTest,
 TEST_P(TableScanTestParameterized, allColumns) {
   auto vectors = makeVectors(10, 1'000);
   auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), vectors, "c");
+  writeToFile(filePath->getPath(), vectors);
 
   createDuckDbTable(vectors);
   auto plan = tableScanNode();
@@ -281,7 +281,7 @@ TEST_P(TableScanTestParameterized, allColumns) {
 TEST_P(TableScanTestParameterized, allColumnsUsingExperimentalReader) {
   auto vectors = makeVectors(10, 1'000);
   auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), vectors, "c");
+  writeToFile(filePath->getPath(), vectors);
 
   createDuckDbTable(vectors);
   const std::string duckDbSql =
@@ -344,7 +344,7 @@ TEST_F(TableScanTest, directBufferInputRawInputBytes) {
   });
   auto filePath = TempFilePath::create();
   createDuckDbTable({vector});
-  writeToFile(filePath->getPath(), {vector}, "c");
+  writeToFile(filePath->getPath(), {vector});
 
   auto tableHandle = makeTableHandle();
   auto plan = PlanBuilder(pool_.get())
@@ -396,7 +396,7 @@ TEST_F(TableScanTest, directBufferInputRawInputBytes) {
 TEST_F(TableScanTest, columnAliases) {
   auto vectors = makeVectors(1, 1'000);
   auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), vectors, "c");
+  writeToFile(filePath->getPath(), vectors);
   createDuckDbTable(vectors);
 
   std::string tableName = "t";
@@ -717,7 +717,7 @@ TEST_F(TableScanTest, remainingFilterExtraction) {
   auto rowType = ROW({"c0", "c1", "c2"}, {BIGINT(), BIGINT(), DOUBLE()});
   auto vectors = makeVectors(5, 1'000, rowType);
   auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), vectors, "c");
+  writeToFile(filePath->getPath(), vectors);
   createDuckDbTable(vectors);
 
   auto assignments =

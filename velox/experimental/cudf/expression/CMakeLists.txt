@@ -18,6 +18,8 @@ add_library(
   DecimalExpressionKernels.cu
   ExpressionEvaluator.cpp
   JitExpression.cpp
+  PrestoFunctions.cpp
+  SparkFunctions.cpp
   SubfieldFiltersToAst.cpp
   DecimalTypeCheck.cpp
 )
