@@ -92,7 +92,9 @@ TableScan::TableScan(
           operatorType(),
           tableHandle_->connectorId())),
       connector_(
-          connector::ConnectorRegistry::tryGet(tableHandle_->connectorId())),
+          connector::ConnectorRegistry::tryGet(
+              *driverCtx->task->queryCtx(),
+              tableHandle_->connectorId())),
       getOutputTimeLimitMs_(
           driverCtx_->queryConfig().tableScanGetOutputTimeLimitMs()),
       outputBatchRowsOverride_(

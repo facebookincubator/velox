@@ -192,8 +192,8 @@ void SwitchExpr::computePropagatesNulls() {
   // - All "then" clauses and optional "else" clause use the same inputs.
   // - All "condition" clauses use a subset of "then"/"else" inputs.
 
-  for (auto i = 0; i < numCases_; i += 2) {
-    if (!inputs_[i + 1]->propagatesNulls()) {
+  for (auto i = 0; i < numCases_; ++i) {
+    if (!inputs_[i * 2 + 1]->propagatesNulls()) {
       propagatesNulls_ = false;
       return;
     }

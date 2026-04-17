@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/expression/SparkFunctions.h"
 #include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -39,11 +40,12 @@ class CudfFilterProjectTest : public CudfFunctionBaseTest {
     parse::registerTypeResolver();
     functions::sparksql::registerFunctions("");
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
-    CudfConfig::getInstance().functionEngine = "spark";
     cudf_velox::registerCudf();
+    cudf_velox::registerSparkFunctions("");
   }
 
   static void TearDownTestCase() {
+    cudf_velox::unregisterFunctions();
     cudf_velox::unregisterCudf();
   }
 
@@ -114,6 +116,48 @@ TEST_F(CudfFilterProjectTest, dateAdd) {
   // Account for the last day of a year-month
   EXPECT_EQ(parseDate("2020-02-29"), dateAdd("2019-01-30", 395));
   EXPECT_EQ(parseDate("2020-02-29"), dateAdd("2019-01-30", 395));
+}
+
+// Test unary math functions for Spark
+TEST_F(CudfFilterProjectTest, unaryMathFunctions) {
+  auto testUnaryFunction =
+      [&](std::string expr, double input, double expected) {
+        auto valueOpt = evaluateOnce<double, double>(expr, input);
+        auto value = valueOpt.value();
+        EXPECT_DOUBLE_EQ(value, expected);
+      };
+
+  auto testUnaryFunctionInt =
+      [&](std::string expr, double input, int64_t expected) {
+        auto valueOpt = evaluateOnce<int64_t, double>(expr, input);
+        auto value = valueOpt.value();
+        EXPECT_EQ(value, expected);
+      };
+
+  // Inverse trigonometric functions
+  testUnaryFunction("asin(c0)", 0.0, 0.0);
+  testUnaryFunction("acos(c0)", 1.0, 0.0);
+  testUnaryFunction("atan(c0)", 0.0, 0.0);
+
+  // Hyperbolic functions (Spark-specific)
+  testUnaryFunction("sinh(c0)", 0.0, 0.0);
+  testUnaryFunction("cosh(c0)", 0.0, 1.0);
+  testUnaryFunction("asinh(c0)", 0.0, 0.0);
+  testUnaryFunction("acosh(c0)", 1.0, 0.0);
+  testUnaryFunction("atanh(c0)", 0.0, 0.0);
+
+  // Exponential and root functions
+  testUnaryFunction("exp(c0)", 0.0, 1.0);
+  testUnaryFunction("sqrt(c0)", 4.0, 2.0);
+  testUnaryFunction("cbrt(c0)", 8.0, 2.0);
+
+  // Rounding functions (Spark-specific)
+  testUnaryFunctionInt("ceil(c0)", 3.2, 4);
+  testUnaryFunctionInt("floor(c0)", 3.8, 3);
+  testUnaryFunction("rint(c0)", 3.5, 4.0);
+
+  // Absolute value
+  testUnaryFunction("abs(c0)", -5.5, 5.5);
 }
 
 } // namespace

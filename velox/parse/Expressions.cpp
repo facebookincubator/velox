@@ -18,6 +18,30 @@
 namespace facebook::velox::core {
 
 namespace {
+const auto& windowTypeNames() {
+  static const folly::F14FastMap<WindowCallExpr::WindowType, std::string_view>
+      kNames = {
+          {WindowCallExpr::WindowType::kRows, "ROWS"},
+          {WindowCallExpr::WindowType::kRange, "RANGE"},
+          {WindowCallExpr::WindowType::kGroups, "GROUPS"},
+      };
+  return kNames;
+}
+
+const auto& boundTypeNames() {
+  static const folly::F14FastMap<WindowCallExpr::BoundType, std::string_view>
+      kNames = {
+          {WindowCallExpr::BoundType::kCurrentRow, "CURRENT ROW"},
+          {WindowCallExpr::BoundType::kUnboundedPreceding,
+           "UNBOUNDED PRECEDING"},
+          {WindowCallExpr::BoundType::kUnboundedFollowing,
+           "UNBOUNDED FOLLOWING"},
+          {WindowCallExpr::BoundType::kPreceding, "PRECEDING"},
+          {WindowCallExpr::BoundType::kFollowing, "FOLLOWING"},
+      };
+  return kNames;
+}
+
 const auto& kindNames() {
   static const folly::F14FastMap<IExpr::Kind, std::string_view> kNames = {
       {IExpr::Kind::kInput, "Input"},
@@ -35,6 +59,8 @@ const auto& kindNames() {
 } // namespace
 
 VELOX_DEFINE_EMBEDDED_ENUM_NAME(IExpr, Kind, kindNames)
+VELOX_DEFINE_EMBEDDED_ENUM_NAME(WindowCallExpr, WindowType, windowTypeNames);
+VELOX_DEFINE_EMBEDDED_ENUM_NAME(WindowCallExpr, BoundType, boundTypeNames);
 
 bool FieldAccessExpr::operator==(const IExpr& other) const {
   if (!other.is(Kind::kFieldAccess)) {

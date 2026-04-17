@@ -19,6 +19,8 @@ short-lived functions may add up to substantial overhead. Without a detailed
 per-function CPU usage breakdown, you may be left guessing — or worse,
 optimizing the wrong thing.
 
+<!-- truncate -->
+
 Velox supports CPU usage tracking through the `expression.track_cpu_usage` query
 config. When enabled, every function invocation is wrapped in a `CpuWallTimer`
 — an RAII guard that makes the `clock_gettime()` system call at entry and exit,

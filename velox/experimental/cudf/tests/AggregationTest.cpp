@@ -15,6 +15,8 @@
  */
 
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/AggregationRegistry.h"
+#include "velox/experimental/cudf/exec/PrestoAggregateFunctions.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
@@ -48,12 +50,14 @@ class AggregationTest : public OperatorTestBase {
         cudf_velox::CudfConfig::getInstance().batchSizeMaxThreshold;
     cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
+    cudf_velox::registerPrestoAggregateFunctions("");
   }
 
   void TearDown() override {
     cudf_velox::CudfConfig::getInstance().batchSizeMaxThreshold =
         savedBatchSizeMaxThreshold_;
     cudf_velox::unregisterCudf();
+    cudf_velox::unregisterAggregateFunctions();
     OperatorTestBase::TearDown();
   }
 
