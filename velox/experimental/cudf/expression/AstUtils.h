@@ -62,16 +62,6 @@ cudf::ast::literal makeLiteralFromScalar(
   }
 }
 
-template <TypeKind kind>
-variant getVariant(const VectorPtr& vector, size_t atIndex = 0) {
-  using T = typename facebook::velox::KindToFlatVector<kind>::WrapperType;
-  if constexpr (!std::is_same_v<T, ComplexType>) {
-    return vector->as<SimpleVector<T>>()->valueAt(atIndex);
-  } else {
-    return Variant();
-  }
-}
-
 template <typename T>
 std::unique_ptr<cudf::scalar> makeScalarFromValue(
     const TypePtr& type,
