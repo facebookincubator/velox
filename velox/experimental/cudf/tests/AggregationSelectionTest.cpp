@@ -131,6 +131,14 @@ TEST_F(CudfAggregationSelectionTest, supportedAggregationFunctions) {
   ASSERT_TRUE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
 }
 
+// Test stddev_samp is supported
+TEST_F(CudfAggregationSelectionTest, stddevSampSupported) {
+  auto aggregationNode =
+      createAggregationNode({"c0"}, {"stddev_samp(c1)", "stddev_samp(c5)"});
+
+  ASSERT_TRUE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
+}
+
 // Test unsupported aggregation functions
 TEST_F(CudfAggregationSelectionTest, unsupportedAggregationFunctions) {
   auto aggregationNode =
