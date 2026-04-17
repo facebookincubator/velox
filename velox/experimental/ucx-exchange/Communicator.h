@@ -194,11 +194,12 @@ class Communicator {
   // the communicator thread.
   WorkQueue<CommElement> workQueue_;
 
-  // The map that maintains the shared endpoints. Only accessed from the
-  // Communicator thread: assocEndpointRef() runs via comms->process() in the
-  // main loop, listenerCallback() fires during worker_->progress() /
-  // progressWorkerEvent() in the same loop, and removeEndpointRef() runs from
-  // deferred endpoint cleanup also in the main loop. No mutex is needed.
+  // Protects endpoints_. Must be recursive because removeEndpointRef() holds
+  // the lock and calls closeBlocking(), which progresses the worker and can
+  // fire listenerCallback() re-entrantly — that callback also locks this mutex.
+  std::recursive_mutex endpointsMutex_;
+
+  // Shared endpoints keyed by remote host:port.
   std::map<HostPort, std::shared_ptr<EndpointRef>> endpoints_;
 
   /// @brief Signals the UCXX worker to wake up from a blocking

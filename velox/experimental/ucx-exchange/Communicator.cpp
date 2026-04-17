@@ -175,11 +175,16 @@ void Communicator::run() {
           }
         }
 
+        size_t numEndpoints;
+        {
+          std::lock_guard<std::recursive_mutex> lock(endpointsMutex_);
+          numEndpoints = endpoints_.size();
+        }
         VLOG(2) << "[COMM-HEARTBEAT] workQueue=" << workQueue_.size()
                 << " elements=" << elements_.size()
                 << " (servers=" << numServers << " sources=" << numSources
                 << ")"
-                << " endpoints=" << endpoints_.size()
+                << " endpoints=" << numEndpoints
                 << " deferredCleanup=" << deferredEndpointCleanup_.size()
                 << " deferredRequests=" << deferredRequests_.size()
                 << " workItemsProcessed=" << workItemsProcessed_
@@ -291,6 +296,7 @@ void Communicator::unregister(std::shared_ptr<CommElement> comms) {
 std::shared_ptr<EndpointRef> Communicator::assocEndpointRef(
     std::shared_ptr<CommElement> comms,
     HostPort hostPort) {
+  std::lock_guard<std::recursive_mutex> lock(endpointsMutex_);
   auto it = endpoints_.find(hostPort);
   if (it != endpoints_.end()) {
     std::shared_ptr<EndpointRef> ep = it->second;
@@ -307,7 +313,6 @@ std::shared_ptr<EndpointRef> Communicator::assocEndpointRef(
     epRef = std::make_shared<EndpointRef>(ep);
     epRef->addCommElem(comms);
     if (CudfConfig::getInstance().ucxxErrorHandling) {
-      // register on close callback.
       ep->setCloseCallback(EndpointRef::onClose, epRef);
     }
     endpoints_.insert(std::pair{hostPort, epRef});
@@ -316,12 +321,14 @@ std::shared_ptr<EndpointRef> Communicator::assocEndpointRef(
 }
 
 void Communicator::removeEndpointRef(std::shared_ptr<EndpointRef> ep) {
+  std::lock_guard<std::recursive_mutex> lock(endpointsMutex_);
   VLOG(3) << "In Communicator::removeEndpointRef for Communicator with port = "
           << Communicator::getInstance()->port_;
 
   // Close the endpoint if it's still alive.
-  // NOTE: This calls closeBlocking() which progresses the worker internally.
-  // Therefore, this method must NOT be called from within a UCX callback.
+  // NOTE: This calls closeBlocking() which progresses the worker internally,
+  // which can fire listenerCallback() re-entrantly — hence the recursive mutex.
+  // This method must NOT be called from within a UCX callback.
   // Use deferEndpointCleanup() from callbacks instead.
   if (ep->endpoint_ && ep->endpoint_->isAlive()) {
     VLOG(3) << "In Communicator::removeEndpointRef call closeBlocking";
@@ -329,7 +336,7 @@ void Communicator::removeEndpointRef(std::shared_ptr<EndpointRef> ep) {
   }
   for (auto it = endpoints_.begin(); it != endpoints_.end();) {
     if (it->second == ep) {
-      it = endpoints_.erase(it); // erase returns the next iterator
+      it = endpoints_.erase(it);
     } else {
       ++it;
     }
@@ -406,11 +413,14 @@ void Communicator::listenerCallback(ucp_conn_request_h conn_request) {
 
   uint16_t port = static_cast<uint16_t>(val);
   HostPort hp(ip_str, port);
-  auto res = endpoints_.insert(std::pair{hp, epRef});
-  if (!res.second) {
-    LOG(ERROR) << "listenerCallback: endpoint already exists for " << ip_str
-               << ":" << port;
-    return;
+  {
+    std::lock_guard<std::recursive_mutex> lock(endpointsMutex_);
+    auto res = endpoints_.insert(std::pair{hp, epRef});
+    if (!res.second) {
+      LOG(ERROR) << "listenerCallback: endpoint already exists for " << ip_str
+                 << ":" << port;
+      return;
+    }
   }
   acceptor_.registerEndpointRef(epRef);
 }
