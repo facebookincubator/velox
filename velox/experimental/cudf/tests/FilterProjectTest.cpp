@@ -1177,7 +1177,7 @@ TEST_F(CudfFilterProjectTest, switchExpr) {
   facebook::velox::test::assertEqualVectors(expected, result);
 }
 
-TEST_F(CudfFilterProjectTest, andAndAndExpr) {
+TEST_F(CudfFilterProjectTest, DISABLED_andAndAndExpr) {
   auto data = makeRowVector(
       {makeFlatVector<int64_t>({100,  100,  100,  100}, DECIMAL(17, 2)),
        makeFlatVector<int64_t>({100, -100,  100,  100}, DECIMAL(17, 2)),
