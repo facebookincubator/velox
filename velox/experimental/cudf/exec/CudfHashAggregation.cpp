@@ -649,8 +649,8 @@ struct StddevSampAggregator : cudf_velox::CudfHashAggregation::Aggregator {
         if (countView.type() != cudfCountType) {
           count = cudf::cast(countView, cudfCountType, stream, get_output_mr());
         } else {
-          count =
-              std::make_unique<cudf::column>(countView, stream, get_output_mr());
+          count = std::make_unique<cudf::column>(
+              countView, stream, get_output_mr());
         }
         if (meanView.type() != cudfMeanType) {
           mean = cudf::cast(meanView, cudfMeanType, stream, get_output_mr());
@@ -695,7 +695,8 @@ struct StddevSampAggregator : cudf_velox::CudfHashAggregation::Aggregator {
             get_output_mr());
 
         // count - 1
-        auto one = cudf::numeric_scalar<double>(1.0, true, stream, get_temp_mr());
+        auto one =
+            cudf::numeric_scalar<double>(1.0, true, stream, get_temp_mr());
         auto countMinus1 = cudf::binary_operation(
             *countDouble,
             one,
@@ -715,10 +716,7 @@ struct StddevSampAggregator : cudf_velox::CudfHashAggregation::Aggregator {
 
         // sqrt(variance)
         auto stddev = cudf::unary_operation(
-            *variance,
-            cudf::unary_operator::SQRT,
-            stream,
-            get_output_mr());
+            *variance, cudf::unary_operator::SQRT, stream, get_output_mr());
 
         // Set NULL where count < 2
         // Cast count to int64 for comparison
@@ -727,7 +725,8 @@ struct StddevSampAggregator : cudf_velox::CudfHashAggregation::Aggregator {
             cudf::data_type{cudf::type_id::INT64},
             stream,
             get_output_mr());
-        auto two = cudf::numeric_scalar<int64_t>(2, true, stream, get_temp_mr());
+        auto two =
+            cudf::numeric_scalar<int64_t>(2, true, stream, get_temp_mr());
         auto validMask = cudf::binary_operation(
             *countInt,
             two,
@@ -739,7 +738,8 @@ struct StddevSampAggregator : cudf_velox::CudfHashAggregation::Aggregator {
         // Apply mask: where count < 2, result is NULL
         auto nullScalar =
             cudf::numeric_scalar<double>(0.0, false, stream, get_temp_mr());
-        // copy_if_else(lhs, rhs, mask): where mask is true, use lhs; else use rhs
+        // copy_if_else(lhs, rhs, mask): where mask is true, use lhs; else use
+        // rhs
         return cudf::copy_if_else(
             *stddev, nullScalar, *validMask, stream, get_output_mr());
       }

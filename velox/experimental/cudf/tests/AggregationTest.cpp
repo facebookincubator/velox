@@ -1430,7 +1430,8 @@ TEST_F(AggregationTest, stddevSampSingleGrouped) {
   auto data = makeRowVector({
       makeFlatVector<int64_t>({0, 0, 0, 1, 1, 2, 2, 2, 2}), // c0 - key
       makeFlatVector<int64_t>({1, 2, 3, 4, 6, 10, 20, 30, 40}), // c1 - bigint
-      makeFlatVector<double>({1.0, 2.0, 3.0, 4.0, 6.0, 10.0, 20.0, 30.0, 40.0}), // c2 - double
+      makeFlatVector<double>(
+          {1.0, 2.0, 3.0, 4.0, 6.0, 10.0, 20.0, 30.0, 40.0}), // c2 - double
   });
   createDuckDbTable({data});
 
@@ -1567,10 +1568,8 @@ TEST_F(AggregationTest, stddevSampAllNulls) {
   // Group 1: has values -> should compute normally
   auto data = makeRowVector({
       makeFlatVector<int64_t>({0, 0, 1, 1}),
-      makeNullableFlatVector<int64_t>(
-          {std::nullopt, std::nullopt, 1, 2}),
-      makeNullableFlatVector<double>(
-          {std::nullopt, std::nullopt, 1.0, 2.0}),
+      makeNullableFlatVector<int64_t>({std::nullopt, std::nullopt, 1, 2}),
+      makeNullableFlatVector<double>({std::nullopt, std::nullopt, 1.0, 2.0}),
   });
   createDuckDbTable({data});
 
