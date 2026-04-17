@@ -303,6 +303,9 @@ CudfHiveDataSource::getRuntimeStats() {
 }
 
 const RowTypePtr CudfHiveDataSource::getTableRowType() {
+  if (cachedTableRowType_) {
+    return cachedTableRowType_;
+  }
   if (tableHandle_->dataColumns()) {
     std::vector<std::string> names;
     std::vector<TypePtr> types;
@@ -311,9 +314,11 @@ const RowTypePtr CudfHiveDataSource::getTableRowType() {
       names.emplace_back(std::move(name));
       types.push_back(parsedType);
     }
-    return ROW(std::move(names), std::move(types));
+    cachedTableRowType_ = ROW(std::move(names), std::move(types));
+    return cachedTableRowType_;
   }
-  return outputType_;
+  cachedTableRowType_ = outputType_;
+  return cachedTableRowType_;
 }
 
 } // namespace facebook::velox::cudf_velox::connector::hive
