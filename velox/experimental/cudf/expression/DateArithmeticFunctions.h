@@ -17,6 +17,8 @@
 
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
+#include <cudf/scalar/scalar.hpp>
+
 namespace facebook::velox::cudf_velox {
 
 /// Spark date_add(date, integer) -> date.
@@ -35,8 +37,8 @@ class DateAddFunction : public CudfFunction {
 };
 
 /// plus(DATE, INTERVAL DAY TO SECOND) -> DATE.
-/// Used by TPC-DS and Presto for date + interval arithmetic.
 /// Converts the interval from milliseconds to days and adds to the date.
+/// Handles both constant and column interval inputs.
 class DatePlusIntervalFunction : public CudfFunction {
  public:
   explicit DatePlusIntervalFunction(
@@ -46,6 +48,10 @@ class DatePlusIntervalFunction : public CudfFunction {
       std::vector<ColumnOrView>& inputColumns,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override;
+
+ private:
+  /// Pre-computed duration scalar for constant interval inputs.
+  std::unique_ptr<cudf::scalar> durationDaysLiteral_;
 };
 
 } // namespace facebook::velox::cudf_velox

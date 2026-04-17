@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/core/Expressions.h"
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
@@ -1659,6 +1660,72 @@ TEST_F(CudfFilterProjectTest, coalesceStopsAtFirstLiteral) {
                   .planNode();
 
   runTest(plan, "SELECT coalesce(c0, 100, c1) AS result FROM tmp");
+}
+
+TEST_F(CudfFilterProjectTest, datePlusIntervalColumn) {
+  auto data = makeRowVector(
+      {"event_date", "interval_val"},
+      {makeFlatVector<int32_t>(
+           {toDateDays("2025-01-01"),
+            toDateDays("2025-02-28"),
+            toDateDays("2024-02-29")},
+           DATE()),
+       makeConstant<int64_t>(kMillisInDay, 3, INTERVAL_DAY_TIME())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"plus(event_date, interval_val) AS result"})
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {makeFlatVector<int32_t>(
+          {toDateDays("2025-01-02"),
+           toDateDays("2025-03-01"),
+           toDateDays("2024-03-01")},
+          DATE())});
+  assertQuery(plan, expected);
+}
+
+TEST_F(CudfFilterProjectTest, datePlusIntervalConstantLiteral) {
+  auto data = makeRowVector(
+      {"event_date"},
+      {makeFlatVector<int32_t>(
+          {toDateDays("2025-01-01"),
+           toDateDays("2025-02-28"),
+           toDateDays("2024-02-29")},
+          DATE())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  // Build expression tree programmatically with a constant interval literal,
+  // matching how a query planner delivers date + INTERVAL '1' DAY.
+  auto dateField =
+      std::make_shared<core::FieldAccessTypedExpr>(DATE(), "event_date");
+  auto intervalConst = std::make_shared<core::ConstantTypedExpr>(
+      INTERVAL_DAY_TIME(), variant(static_cast<int64_t>(kMillisInDay)));
+  auto plusExpr = std::make_shared<core::CallTypedExpr>(
+      DATE(),
+      std::vector<core::TypedExprPtr>{dateField, intervalConst},
+      "plus");
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .addNode([&](auto nodeId, auto source) {
+                    return std::make_shared<core::ProjectNode>(
+                        nodeId,
+                        std::vector<std::string>{"result"},
+                        std::vector<core::TypedExprPtr>{plusExpr},
+                        source);
+                  })
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {makeFlatVector<int32_t>(
+          {toDateDays("2025-01-02"),
+           toDateDays("2025-03-01"),
+           toDateDays("2024-03-01")},
+          DATE())});
+  assertQuery(plan, expected);
 }
 
 TEST_F(CudfFilterProjectTest, switchExpr) {

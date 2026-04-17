@@ -65,6 +65,25 @@ DatePlusIntervalFunction::DatePlusIntervalFunction(
   VELOX_CHECK(
       expr->inputs()[1]->type()->isIntervalDayTime(),
       "Second argument to plus must be an interval day to second");
+
+  // If the interval is a constant, extract it at construction time and
+  // convert to a duration_days scalar.
+  if (auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
+          expr->inputs()[1])) {
+    auto constValue = constExpr->value();
+    auto millis = constValue->as<ConstantVector<int64_t>>()->value();
+    VELOX_USER_CHECK_EQ(
+        millis % kMillisInDay,
+        0,
+        "Cannot add hours, minutes, seconds or milliseconds to a date");
+    auto days = static_cast<int32_t>(millis / kMillisInDay);
+    auto stream = cudf::get_default_stream(cudf::allow_default_stream);
+    auto mr = get_temp_mr();
+    durationDaysLiteral_ =
+        std::make_unique<cudf::duration_scalar<cudf::duration_D>>(
+            days, true, stream, mr);
+    stream.synchronize();
+  }
 }
 
 ColumnOrView DatePlusIntervalFunction::eval(
@@ -72,6 +91,18 @@ ColumnOrView DatePlusIntervalFunction::eval(
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) const {
   auto dateCol = asView(inputColumns[0]);
+
+  if (durationDaysLiteral_) {
+    return cudf::binary_operation(
+        dateCol,
+        *durationDaysLiteral_,
+        cudf::binary_operator::ADD,
+        cudf::data_type(cudf::type_id::TIMESTAMP_DAYS),
+        stream,
+        mr);
+  }
+
+  // Column interval path: interval arrives as a column of millis.
   auto intervalCol = asView(inputColumns[1]);
 
   // Validate that all intervals are whole days.
@@ -102,7 +133,6 @@ ColumnOrView DatePlusIntervalFunction::eval(
       result->is_valid(stream) && result->value(stream),
       "Cannot add hours, minutes, seconds or milliseconds to a date");
 
-  // Divide millis by kMillisInDay to get days.
   auto daysInt = cudf::binary_operation(
       intervalCol,
       divisor,
@@ -111,7 +141,6 @@ ColumnOrView DatePlusIntervalFunction::eval(
       stream,
       mr);
 
-  // Cast days to duration_days and add to date.
   auto daysDuration = cudf::cast(
       daysInt->view(),
       cudf::data_type(cudf::type_id::DURATION_DAYS),
