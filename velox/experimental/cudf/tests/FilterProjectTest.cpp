@@ -13,13 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/core/Expressions.h"
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
 #include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/core/Expressions.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
@@ -1678,12 +1678,11 @@ TEST_F(CudfFilterProjectTest, datePlusIntervalColumn) {
                   .project({"plus(event_date, interval_val) AS result"})
                   .planNode();
 
-  auto expected = makeRowVector(
-      {makeFlatVector<int32_t>(
-          {toDateDays("2025-01-02"),
-           toDateDays("2025-03-01"),
-           toDateDays("2024-03-01")},
-          DATE())});
+  auto expected = makeRowVector({makeFlatVector<int32_t>(
+      {toDateDays("2025-01-02"),
+       toDateDays("2025-03-01"),
+       toDateDays("2024-03-01")},
+      DATE())});
   assertQuery(plan, expected);
 }
 
@@ -1719,12 +1718,11 @@ TEST_F(CudfFilterProjectTest, datePlusIntervalConstantLiteral) {
                   })
                   .planNode();
 
-  auto expected = makeRowVector(
-      {makeFlatVector<int32_t>(
-          {toDateDays("2025-01-02"),
-           toDateDays("2025-03-01"),
-           toDateDays("2024-03-01")},
-          DATE())});
+  auto expected = makeRowVector({makeFlatVector<int32_t>(
+      {toDateDays("2025-01-02"),
+       toDateDays("2025-03-01"),
+       toDateDays("2024-03-01")},
+      DATE())});
   assertQuery(plan, expected);
 }
 
