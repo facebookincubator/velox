@@ -37,9 +37,9 @@
 namespace {
 
 using namespace facebook::velox;
+using cudf_velox::CountInputKind;
 using cudf_velox::get_output_mr;
 using cudf_velox::get_temp_mr;
-using cudf_velox::CountInputKind;
 using cudf_velox::GroupbyAggregator;
 using cudf_velox::ResolvedAggregateInfo;
 
@@ -411,19 +411,18 @@ CudfGroupby::CudfGroupby(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
     std::shared_ptr<core::AggregationNode const> const& aggregationNode)
-    : Operator(
+    : CudfOperatorBase(
+          operatorId,
           driverCtx,
           aggregationNode->outputType(),
-          operatorId,
           aggregationNode->id(),
           std::string{"CudfGroupby"} +
               std::string{
                   core::AggregationNode::toName(aggregationNode->step())},
-          std::nullopt),
-      NvtxHelper(
           nvtx3::rgb{34, 139, 34}, // Forest Green
-          operatorId,
-          fmt::format("[{}]", aggregationNode->id())),
+          NvtxMethodFlag::kAddInput | NvtxMethodFlag::kGetOutput,
+          std::nullopt,
+          aggregationNode),
       aggregationNode_(aggregationNode),
       isPartialOutput_(
           exec::isPartialOutput(aggregationNode->step()) &&
@@ -621,8 +620,7 @@ void CudfGroupby::computeSingleGroupbyStreaming(CudfVectorPtr tbl) {
   }
 }
 
-void CudfGroupby::addInput(RowVectorPtr input) {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+void CudfGroupby::doAddInput(RowVectorPtr input) {
   if (input->size() == 0) {
     return;
   }
@@ -722,9 +720,7 @@ CudfVectorPtr CudfGroupby::releaseAndResetBufferedResult() {
   return std::move(bufferedResult_);
 }
 
-RowVectorPtr CudfGroupby::getOutput() {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
-
+RowVectorPtr CudfGroupby::doGetOutput() {
   // Handle partial streaming groupby.
   if (isPartialOutput_ && streamingEnabled_) {
     if (bufferedResult_ &&
@@ -804,7 +800,7 @@ RowVectorPtr CudfGroupby::getOutput() {
       stream);
 }
 
-void CudfGroupby::noMoreInput() {
+void CudfGroupby::doNoMoreInput() {
   Operator::noMoreInput();
   if (isPartialOutput_ && inputs_.empty()) {
     finished_ = true;

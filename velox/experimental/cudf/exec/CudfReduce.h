@@ -16,9 +16,7 @@
 #pragma once
 
 #include "velox/experimental/cudf/exec/CudfAggregation.h"
-#include "velox/experimental/cudf/exec/NvtxHelper.h"
-
-#include "velox/exec/Operator.h"
+#include "velox/experimental/cudf/exec/CudfOperator.h"
 
 namespace facebook::velox::cudf_velox {
 
@@ -68,7 +66,7 @@ bool canReduceAggregationBeEvaluatedByCudf(
     const std::vector<TypePtr>& rawInputTypes,
     core::QueryCtx* queryCtx);
 
-class CudfReduce : public exec::Operator, public NvtxHelper {
+class CudfReduce : public CudfOperatorBase {
  public:
   CudfReduce(
       int32_t operatorId,
@@ -77,21 +75,22 @@ class CudfReduce : public exec::Operator, public NvtxHelper {
 
   void initialize() override;
 
-  void addInput(RowVectorPtr input) override;
-
-  RowVectorPtr getOutput() override;
-
   bool needsInput() const override {
     return !noMoreInput_;
   }
-
-  void noMoreInput() override;
 
   exec::BlockingReason isBlocked(ContinueFuture* /* unused */) override {
     return exec::BlockingReason::kNotBlocked;
   }
 
   bool isFinished() override;
+
+ protected:
+  void doAddInput(RowVectorPtr input) override;
+
+  RowVectorPtr doGetOutput() override;
+
+  void doNoMoreInput() override;
 
  private:
   CudfVectorPtr doGlobalAggregation(

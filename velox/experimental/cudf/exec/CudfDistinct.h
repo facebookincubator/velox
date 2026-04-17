@@ -16,11 +16,11 @@
 #pragma once
 
 #include "velox/experimental/cudf/exec/CudfAggregation.h"
-#include "velox/experimental/cudf/exec/NvtxHelper.h"
+#include "velox/experimental/cudf/exec/CudfOperator.h"
 
 namespace facebook::velox::cudf_velox {
 
-class CudfDistinct : public exec::Operator, public NvtxHelper {
+class CudfDistinct : public CudfOperatorBase {
  public:
   CudfDistinct(
       int32_t operatorId,
@@ -29,21 +29,22 @@ class CudfDistinct : public exec::Operator, public NvtxHelper {
 
   void initialize() override;
 
-  void addInput(RowVectorPtr input) override;
-
-  RowVectorPtr getOutput() override;
-
   bool needsInput() const override {
     return !noMoreInput_;
   }
-
-  void noMoreInput() override;
 
   exec::BlockingReason isBlocked(ContinueFuture* /* unused */) override {
     return exec::BlockingReason::kNotBlocked;
   }
 
   bool isFinished() override;
+
+ protected:
+  void doAddInput(RowVectorPtr input) override;
+
+  RowVectorPtr doGetOutput() override;
+
+  void doNoMoreInput() override;
 
  private:
   CudfVectorPtr getDistinctKeys(

@@ -42,8 +42,8 @@ using namespace facebook::velox;
 using facebook::velox::cudf_velox::CountInputKind;
 using facebook::velox::cudf_velox::get_output_mr;
 using facebook::velox::cudf_velox::get_temp_mr;
-using facebook::velox::cudf_velox::ResolvedAggregateInfo;
 using facebook::velox::cudf_velox::ReduceAggregator;
+using facebook::velox::cudf_velox::ResolvedAggregateInfo;
 
 #define DEFINE_SIMPLE_REDUCE_AGGREGATOR(Name, name)                    \
   struct Reduce##Name##Aggregator : ReduceAggregator {                 \
@@ -686,19 +686,18 @@ CudfReduce::CudfReduce(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
     std::shared_ptr<core::AggregationNode const> const& aggregationNode)
-    : Operator(
+    : CudfOperatorBase(
+          operatorId,
           driverCtx,
           aggregationNode->outputType(),
-          operatorId,
           aggregationNode->id(),
           std::string{"CudfReduce"} +
               std::string{
                   core::AggregationNode::toName(aggregationNode->step())},
-          std::nullopt),
-      NvtxHelper(
           nvtx3::rgb{34, 139, 34}, // Forest Green
-          operatorId,
-          fmt::format("[{}]", aggregationNode->id())),
+          NvtxMethodFlag::kAddInput | NvtxMethodFlag::kGetOutput,
+          std::nullopt,
+          aggregationNode),
       aggregationNode_(aggregationNode),
       isPartialOutput_(
           exec::isPartialOutput(aggregationNode->step()) &&
@@ -724,8 +723,7 @@ void CudfReduce::initialize() {
   aggregationNode_.reset();
 }
 
-void CudfReduce::addInput(RowVectorPtr input) {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+void CudfReduce::doAddInput(RowVectorPtr input) {
   if (input->size() == 0) {
     return;
   }
@@ -756,9 +754,7 @@ CudfVectorPtr CudfReduce::doGlobalAggregation(
       stream);
 }
 
-RowVectorPtr CudfReduce::getOutput() {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
-
+RowVectorPtr CudfReduce::doGetOutput() {
   if (finished_) {
     return nullptr;
   }
@@ -799,7 +795,7 @@ RowVectorPtr CudfReduce::getOutput() {
   return output;
 }
 
-void CudfReduce::noMoreInput() {
+void CudfReduce::doNoMoreInput() {
   Operator::noMoreInput();
   if (isPartialOutput_ && inputs_.empty()) {
     finished_ = true;

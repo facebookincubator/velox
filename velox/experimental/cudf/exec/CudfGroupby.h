@@ -16,9 +16,7 @@
 #pragma once
 
 #include "velox/experimental/cudf/exec/CudfAggregation.h"
-#include "velox/experimental/cudf/exec/NvtxHelper.h"
-
-#include "velox/exec/Operator.h"
+#include "velox/experimental/cudf/exec/CudfOperator.h"
 
 #include <cudf/groupby.hpp>
 
@@ -75,7 +73,7 @@ bool canGroupbyAggregationBeEvaluatedByCudf(
     const std::vector<TypePtr>& rawInputTypes,
     core::QueryCtx* queryCtx);
 
-class CudfGroupby : public exec::Operator, public NvtxHelper {
+class CudfGroupby : public CudfOperatorBase {
  public:
   CudfGroupby(
       int32_t operatorId,
@@ -84,21 +82,22 @@ class CudfGroupby : public exec::Operator, public NvtxHelper {
 
   void initialize() override;
 
-  void addInput(RowVectorPtr input) override;
-
-  RowVectorPtr getOutput() override;
-
   bool needsInput() const override {
     return !noMoreInput_;
   }
-
-  void noMoreInput() override;
 
   exec::BlockingReason isBlocked(ContinueFuture* /* unused */) override {
     return exec::BlockingReason::kNotBlocked;
   }
 
   bool isFinished() override;
+
+ protected:
+  void doAddInput(RowVectorPtr input) override;
+
+  RowVectorPtr doGetOutput() override;
+
+  void doNoMoreInput() override;
 
  private:
   CudfVectorPtr doGroupByAggregation(

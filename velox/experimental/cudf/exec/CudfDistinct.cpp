@@ -31,19 +31,18 @@ CudfDistinct::CudfDistinct(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
     std::shared_ptr<core::AggregationNode const> const& aggregationNode)
-    : Operator(
+    : CudfOperatorBase(
+          operatorId,
           driverCtx,
           aggregationNode->outputType(),
-          operatorId,
           aggregationNode->id(),
           std::string{"CudfDistinct"} +
               std::string{
                   core::AggregationNode::toName(aggregationNode->step())},
-          std::nullopt),
-      NvtxHelper(
           nvtx3::rgb{34, 139, 34}, // Forest Green
-          operatorId,
-          fmt::format("[{}]", aggregationNode->id())),
+          NvtxMethodFlag::kAddInput | NvtxMethodFlag::kGetOutput,
+          std::nullopt,
+          aggregationNode),
       aggregationNode_(aggregationNode),
       isPartialOutput_(
           exec::isPartialOutput(aggregationNode->step()) &&
@@ -103,8 +102,7 @@ void CudfDistinct::computePartialDistinctStreaming(CudfVectorPtr tbl) {
   }
 }
 
-void CudfDistinct::addInput(RowVectorPtr input) {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+void CudfDistinct::doAddInput(RowVectorPtr input) {
   if (input->size() == 0) {
     return;
   }
@@ -167,9 +165,7 @@ CudfVectorPtr CudfDistinct::releaseAndResetBufferedResult() {
   return std::move(bufferedResult_);
 }
 
-RowVectorPtr CudfDistinct::getOutput() {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
-
+RowVectorPtr CudfDistinct::doGetOutput() {
   if (isPartialOutput_) {
     if (bufferedResult_ &&
         bufferedResult_->estimateFlatSize() >
@@ -219,7 +215,7 @@ RowVectorPtr CudfDistinct::getOutput() {
   return getDistinctKeys(tbl->view(), groupingKeyInputChannels_, stream);
 }
 
-void CudfDistinct::noMoreInput() {
+void CudfDistinct::doNoMoreInput() {
   Operator::noMoreInput();
   if (isPartialOutput_ && inputs_.empty()) {
     finished_ = true;
