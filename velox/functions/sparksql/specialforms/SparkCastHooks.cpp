@@ -93,16 +93,20 @@ Expected<std::optional<Timestamp>> SparkCastHooks::castDoubleToTimestamp(
 
   if (FOLLY_UNLIKELY(std::isnan(value) || std::isinf(value))) {
     return folly::makeUnexpected(Status::UserError(
-        "Cannot cast a non-finite floating-point value to TIMESTAMP."));
+        "The value cannot be cast to TIMESTAMP because it is malformed."));
   }
+
+  static constexpr long double kMaxTimestampMicros =
+      static_cast<long double>(std::numeric_limits<int64_t>::max());
+  static constexpr long double kMinTimestampMicros =
+      static_cast<long double>(std::numeric_limits<int64_t>::min());
 
   const long double micros =
       static_cast<long double>(value) * Timestamp::kMicrosecondsInSecond;
 
-  if (micros > static_cast<long double>(std::numeric_limits<int64_t>::max()) ||
-      micros < static_cast<long double>(std::numeric_limits<int64_t>::min())) {
+  if (micros > kMaxTimestampMicros || micros < kMinTimestampMicros) {
     return folly::makeUnexpected(Status::UserError(
-        "Cannot cast floating-point value to TIMESTAMP because the result overflows."));
+        "The value cannot be cast to TIMESTAMP due to an overflow."));
   }
 
   return Timestamp::fromMicrosNoError(static_cast<int64_t>(micros));
