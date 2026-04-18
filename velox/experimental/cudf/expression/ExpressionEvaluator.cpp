@@ -327,7 +327,8 @@ class LogicalFunction : public CudfFunction {
             constExpr->value()->typeKind(),
             TypeKind::BOOLEAN,
             "Logical function only supports boolean literals");
-        literals_.push_back(createCudfScalar<TypeKind::BOOLEAN>(constExpr->value()));
+        literals_.push_back(
+            createCudfScalar<TypeKind::BOOLEAN>(constExpr->value()));
       } else {
         literals_.push_back(nullptr);
       }

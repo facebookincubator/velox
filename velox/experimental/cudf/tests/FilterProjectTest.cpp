@@ -1179,9 +1179,9 @@ TEST_F(CudfFilterProjectTest, switchExpr) {
 
 TEST_F(CudfFilterProjectTest, DISABLED_andAndAndExpr) {
   auto data = makeRowVector(
-      {makeFlatVector<int64_t>({100,  100,  100,  100}, DECIMAL(17, 2)),
-       makeFlatVector<int64_t>({100, -100,  100,  100}, DECIMAL(17, 2)),
-       makeFlatVector<int64_t>({100, -100, -100,  100}, DECIMAL(17, 2)),
+      {makeFlatVector<int64_t>({100, 100, 100, 100}, DECIMAL(17, 2)),
+       makeFlatVector<int64_t>({100, -100, 100, 100}, DECIMAL(17, 2)),
+       makeFlatVector<int64_t>({100, -100, -100, 100}, DECIMAL(17, 2)),
        makeFlatVector<int64_t>({100, -100, -100, -100}, DECIMAL(17, 2))});
   auto plan =
       PlanBuilder()
@@ -1192,17 +1192,16 @@ TEST_F(CudfFilterProjectTest, DISABLED_andAndAndExpr) {
   auto result = AssertQueryBuilder(plan).copyResults(pool());
 
   auto expected = makeRowVector({
-      makeNullableFlatVector<bool>(
-          {true, false, false, false}),
+      makeNullableFlatVector<bool>({true, false, false, false}),
   });
   facebook::velox::test::assertEqualVectors(expected, result);
 }
 
 TEST_F(CudfFilterProjectTest, DISABLED_andAndAndWithDecimalDivideBelowExpr) {
   auto data = makeRowVector(
-      {makeFlatVector<int64_t>({100,  100,  100,  100}, DECIMAL(17, 2)),
-       makeFlatVector<int64_t>({100, -100,  100,  100}, DECIMAL(17, 2)),
-       makeFlatVector<int64_t>({100, -100, -100,  100}, DECIMAL(17, 2)),
+      {makeFlatVector<int64_t>({100, 100, 100, 100}, DECIMAL(17, 2)),
+       makeFlatVector<int64_t>({100, -100, 100, 100}, DECIMAL(17, 2)),
+       makeFlatVector<int64_t>({100, -100, -100, 100}, DECIMAL(17, 2)),
        makeFlatVector<int64_t>({100, -100, -100, -100}, DECIMAL(17, 2))});
   auto plan =
       PlanBuilder()
@@ -1213,8 +1212,7 @@ TEST_F(CudfFilterProjectTest, DISABLED_andAndAndWithDecimalDivideBelowExpr) {
   auto result = AssertQueryBuilder(plan).copyResults(pool());
 
   auto expected = makeRowVector({
-      makeNullableFlatVector<bool>(
-          {true, false, false, false}),
+      makeNullableFlatVector<bool>({true, false, false, false}),
   });
   facebook::velox::test::assertEqualVectors(expected, result);
 }
