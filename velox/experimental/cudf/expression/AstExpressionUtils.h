@@ -167,9 +167,65 @@ const std::unordered_map<std::string, Op> binaryOps = [] {
   return merged;
 }();
 
-const std::map<std::string, Op> unaryOps = {
+const std::unordered_map<std::string, Op> prestoUnaryOps = {
     {"not", Op::NOT},
-    {"is_null", Op::IS_NULL}};
+    {"is_null", Op::IS_NULL},
+    // Trigonometric functions
+    {"sin", Op::SIN},
+    {"cos", Op::COS},
+    {"tan", Op::TAN},
+    {"asin", Op::ARCSIN},
+    {"acos", Op::ARCCOS},
+    {"atan", Op::ARCTAN},
+    {"cosh", Op::COSH},
+    {"tanh", Op::TANH},
+    // Exponential and logarithmic functions
+    {"exp", Op::EXP},
+    {"ln", Op::LOG},
+    {"sqrt", Op::SQRT},
+    {"cbrt", Op::CBRT},
+    // Other functions
+    {"abs", Op::ABS},
+};
+
+const std::unordered_map<std::string, Op> sparkUnaryOps = {
+    {"not", Op::NOT},
+    {"is_null", Op::IS_NULL},
+    // Trigonometric functions
+    {"sin", Op::SIN},
+    {"cos", Op::COS},
+    {"tan", Op::TAN},
+    {"asin", Op::ARCSIN},
+    {"acos", Op::ARCCOS},
+    {"atan", Op::ARCTAN},
+    // Hyperbolic functions
+    {"sinh", Op::SINH},
+    {"cosh", Op::COSH},
+    {"tanh", Op::TANH},
+    {"asinh", Op::ARCSINH},
+    {"acosh", Op::ARCCOSH},
+    {"atanh", Op::ARCTANH},
+    // Exponential and logarithmic functions
+    {"exp", Op::EXP},
+    {"log", Op::LOG},
+    {"ln", Op::LOG},
+    // Root functions
+    {"sqrt", Op::SQRT},
+    {"cbrt", Op::CBRT},
+    // Rounding functions
+    {"ceil", Op::CEIL},
+    {"floor", Op::FLOOR},
+    {"rint", Op::RINT},
+    // Other functions
+    {"abs", Op::ABS},
+};
+
+const std::unordered_map<std::string, Op> unaryOps = [] {
+  std::unordered_map<std::string, Op> merged(
+      sparkUnaryOps.begin(), sparkUnaryOps.end());
+  merged.insert(prestoUnaryOps.begin(), prestoUnaryOps.end());
+  return merged;
+}();
 
 namespace detail {
 
@@ -481,7 +537,13 @@ cudf::ast::expression const& AstContext::pushExprToTree(
   } else if (unaryOps.find(name) != unaryOps.end()) {
     VELOX_CHECK_EQ(len, 1);
     auto const& op1 = pushExprToTree(expr->inputs()[0]);
-    return tree.push(Operation{unaryOps.at(name), op1});
+    // Spark result type is different with presto, presto is same with cudf
+    const auto& op2 = tree.push(Operation{unaryOps.at(name), op1});
+    if ((name == "ceil" || name == "floor") &&
+        expr->type()->kind() == TypeKind::BIGINT) {
+      return tree.push(Operation{Op::CAST_TO_INT64, op2});
+    }
+    return op2;
   } else if (name == "isnotnull") {
     VELOX_CHECK_EQ(len, 1);
     auto const& op1 = pushExprToTree(expr->inputs()[0]);

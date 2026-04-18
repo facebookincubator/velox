@@ -18,6 +18,7 @@
 
 #include <folly/lang/Bits.h>
 
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
@@ -27,6 +28,29 @@
 using namespace facebook::velox::dwio::common;
 
 namespace facebook::velox::connector::hive::iceberg {
+namespace {
+
+/// Returns true if a delete/update file should be skipped based on sequence
+/// number conflict resolution. Per the Iceberg spec (V2+):
+///   - Equality deletes apply when deleteSeqNum > dataSeqNum (i.e., skip when
+///     deleteSeqNum <= dataSeqNum).
+///   - Positional deletes, deletion vectors, and positional updates apply when
+///     deleteSeqNum >= dataSeqNum (i.e., skip when deleteSeqNum < dataSeqNum),
+///     because same-snapshot positional deletes SHOULD apply.
+///   - A sequence number of 0 means "unassigned" (legacy V1 tables) and
+///     disables filtering (never skip).
+bool shouldSkipBySequenceNumber(
+    int64_t deleteFileSeqNum,
+    int64_t dataSeqNum,
+    bool isEqualityDelete) {
+  if (deleteFileSeqNum <= 0 || dataSeqNum <= 0) {
+    return false;
+  }
+  return isEqualityDelete ? (deleteFileSeqNum <= dataSeqNum)
+                          : (deleteFileSeqNum < dataSeqNum);
+}
+
+} // namespace
 
 IcebergSplitReader::IcebergSplitReader(
     const std::shared_ptr<const HiveIcebergSplit>& icebergSplit,
@@ -77,11 +101,20 @@ void IcebergSplitReader::prepareSplit(
   baseReadOffset_ = 0;
   splitOffset_ = baseRowReader_->nextRowNumber();
   positionalDeleteFileReaders_.clear();
+  deletionVectorReaders_.clear();
+  equalityDeleteFileReaders_.clear();
 
   const auto& deleteFiles = icebergSplit_->deleteFiles;
   for (const auto& deleteFile : deleteFiles) {
     if (deleteFile.content == FileContent::kPositionalDeletes) {
       if (deleteFile.recordCount > 0) {
+        if (shouldSkipBySequenceNumber(
+                deleteFile.dataSequenceNumber,
+                icebergSplit_->dataSequenceNumber,
+                /*isEqualityDelete=*/false)) {
+          continue;
+        }
+
         // Skip the delete file if all delete positions are before this split.
         // TODO: Skip delete files where all positions are after the split, if
         // split row count becomes available.
@@ -115,8 +148,75 @@ void IcebergSplitReader::prepareSplit(
                 splitOffset_,
                 fileSplit_->connectorId));
       }
+    } else if (deleteFile.content == FileContent::kEqualityDeletes) {
+      if (deleteFile.recordCount > 0 && !deleteFile.equalityFieldIds.empty()) {
+        if (shouldSkipBySequenceNumber(
+                deleteFile.dataSequenceNumber,
+                icebergSplit_->dataSequenceNumber,
+                /*isEqualityDelete=*/true)) {
+          continue;
+        }
+
+        // Resolve equalityFieldIds to column names and types. In Iceberg,
+        // field IDs for top-level columns are assigned sequentially starting
+        // from 1, matching the column order in the table schema.
+        std::vector<std::string> equalityColumnNames;
+        std::vector<TypePtr> equalityColumnTypes;
+
+        const auto& dataColumns = tableHandle_->dataColumns();
+        VELOX_CHECK(
+            dataColumns != nullptr,
+            "Iceberg equality delete file '{}' cannot be processed because "
+            "table data columns are not available in HiveTableHandle.",
+            deleteFile.filePath);
+        for (const auto& eqFieldId : deleteFile.equalityFieldIds) {
+          // Field IDs are 1-based sequential for non-evolved schemas.
+          auto colIdx = static_cast<uint32_t>(eqFieldId - 1);
+          VELOX_CHECK_LT(
+              colIdx,
+              dataColumns->size(),
+              "Equality delete field ID {} out of range. This may indicate "
+              "schema evolution with non-sequential field IDs, which is "
+              "not yet supported.",
+              eqFieldId);
+          equalityColumnNames.push_back(dataColumns->nameOf(colIdx));
+          equalityColumnTypes.push_back(dataColumns->childAt(colIdx));
+        }
+
+        if (!equalityColumnNames.empty()) {
+          equalityDeleteFileReaders_.push_back(
+              std::make_unique<EqualityDeleteFileReader>(
+                  deleteFile,
+                  equalityColumnNames,
+                  equalityColumnTypes,
+                  fileSplit_->filePath,
+                  fileHandleFactory_,
+                  connectorQueryCtx_,
+                  ioExecutor_,
+                  fileConfig_,
+                  ioStatistics_,
+                  ioStats_,
+                  runtimeStats,
+                  fileSplit_->connectorId));
+        }
+      }
+    } else if (deleteFile.content == FileContent::kDeletionVector) {
+      if (deleteFile.recordCount > 0) {
+        if (shouldSkipBySequenceNumber(
+                deleteFile.dataSequenceNumber,
+                icebergSplit_->dataSequenceNumber,
+                /*isEqualityDelete=*/false)) {
+          continue;
+        }
+
+        deletionVectorReaders_.push_back(
+            std::make_unique<DeletionVectorReader>(
+                deleteFile, splitOffset_, connectorQueryCtx_->memoryPool()));
+      }
     } else {
-      VELOX_NYI();
+      VELOX_NYI(
+          "Unsupported delete file content type: {}",
+          static_cast<int>(deleteFile.content));
     }
   }
 }
@@ -137,7 +237,8 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
     return 0;
   }
 
-  if (!positionalDeleteFileReaders_.empty()) {
+  if (!positionalDeleteFileReaders_.empty() ||
+      !deletionVectorReaders_.empty()) {
     auto numBytes = bits::nbytes(actualSize);
     dwio::common::ensureCapacity<int8_t>(
         deleteBitmap_, numBytes, connectorQueryCtx_->memoryPool(), false, true);
@@ -152,6 +253,17 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
         ++iter;
       }
     }
+
+    for (auto iter = deletionVectorReaders_.begin();
+         iter != deletionVectorReaders_.end();) {
+      (*iter)->readDeletePositions(baseReadOffset_, actualSize, deleteBitmap_);
+
+      if ((*iter)->noMoreData()) {
+        iter = deletionVectorReaders_.erase(iter);
+      } else {
+        ++iter;
+      }
+    }
   }
 
   mutation.deletedRows = deleteBitmap_ && deleteBitmap_->size() > 0
@@ -159,6 +271,71 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
       : nullptr;
 
   auto rowsScanned = baseRowReader_->next(actualSize, output, &mutation);
+
+  // Apply equality deletes after reading base data. Unlike positional deletes
+  // (which set bits before reading), equality deletes require the data values
+  // to be available for comparison.
+  if (rowsScanned > 0 && !equalityDeleteFileReaders_.empty()) {
+    auto outputRowVector = std::dynamic_pointer_cast<RowVector>(output);
+    VELOX_CHECK_NOT_NULL(
+        outputRowVector, "Output must be a RowVector for equality deletes.");
+
+    auto numRows = outputRowVector->size();
+
+    // Use a separate bitmap for equality deletes to track which rows to
+    // remove from the output.
+    BufferPtr eqDeleteBitmap = AlignedBuffer::allocate<bool>(
+        numRows, connectorQueryCtx_->memoryPool());
+    std::memset(
+        eqDeleteBitmap->asMutable<uint8_t>(), 0, eqDeleteBitmap->size());
+
+    for (auto& reader : equalityDeleteFileReaders_) {
+      reader->applyDeletes(outputRowVector, eqDeleteBitmap);
+    }
+
+    // Count surviving rows and compact the output if any rows were deleted.
+    auto* eqBitmap = eqDeleteBitmap->as<uint8_t>();
+    vector_size_t numDeleted = 0;
+    for (vector_size_t i = 0; i < numRows; ++i) {
+      if (bits::isBitSet(eqBitmap, i)) {
+        ++numDeleted;
+      }
+    }
+
+    if (numDeleted > 0) {
+      vector_size_t numSurviving = numRows - numDeleted;
+      if (numSurviving == 0) {
+        // All rows in this batch were deleted by equality deletes. Do not
+        // return 0 here — that would be interpreted as end-of-split and
+        // prematurely stop scanning remaining rows in the data file.
+        // Instead, set output to an empty vector and return the original
+        // scanned count so the caller continues reading.
+        output = BaseVector::create(
+            outputRowVector->type(), 0, connectorQueryCtx_->memoryPool());
+      } else {
+        // Build a list of surviving row ranges and use it to compact.
+        std::vector<BaseVector::CopyRange> ranges;
+        ranges.reserve(numSurviving);
+        vector_size_t targetIdx = 0;
+        for (vector_size_t i = 0; i < numRows; ++i) {
+          if (!bits::isBitSet(eqBitmap, i)) {
+            ranges.push_back({i, targetIdx++, 1});
+          }
+        }
+
+        auto newOutput = BaseVector::create(
+            outputRowVector->type(),
+            numSurviving,
+            connectorQueryCtx_->memoryPool());
+        newOutput->copyRanges(outputRowVector.get(), ranges);
+        newOutput->resize(numSurviving);
+        output = newOutput;
+        rowsScanned = numSurviving;
+      }
+    }
+
+    return rowsScanned;
+  }
 
   return rowsScanned;
 }

@@ -1200,4 +1200,35 @@ TEST_F(CudfSimpleFilterProjectTest, castToSmallInt) {
   EXPECT_EQ(tryCast, -214);
 }
 
+// Test unary math functions
+TEST_F(CudfSimpleFilterProjectTest, unaryMathFunctions) {
+  auto testUnaryFunction =
+      [&](std::string expr, double input, double expected) {
+        auto valueOpt = evaluateOnce<double, double>(expr, input);
+        EXPECT_DOUBLE_EQ(valueOpt.value(), expected);
+      };
+  // Trigonometric functions (use 0.0 where stable/clean)
+  testUnaryFunction("sin(c0)", 0.0, 0.0);
+  testUnaryFunction("cos(c0)", 0.0, 1.0);
+  testUnaryFunction("tan(c0)", 0.0, 0.0);
+
+  // Inverse trig (use stable inputs)
+  testUnaryFunction("asin(c0)", 0.0, 0.0);
+  testUnaryFunction("acos(c0)", 1.0, 0.0);
+  testUnaryFunction("atan(c0)", 0.0, 0.0);
+
+  // Hyperbolic functions
+  testUnaryFunction("cosh(c0)", 0.0, 1.0);
+  testUnaryFunction("tanh(c0)", 0.0, 0.0);
+
+  // Exponential / log / roots
+  testUnaryFunction("exp(c0)", 0.0, 1.0);
+  testUnaryFunction("ln(c0)", 1.0, 0.0);
+  testUnaryFunction("sqrt(c0)", 4.0, 2.0);
+  testUnaryFunction("cbrt(c0)", 8.0, 2.0);
+
+  // Absolute value
+  testUnaryFunction("abs(c0)", -5.5, 5.5);
+}
+
 } // namespace
