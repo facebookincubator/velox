@@ -20,6 +20,7 @@ add_library(
   CudfConversion.cpp
   CudfEnforceSingleRow.cpp
   CudfFilterProject.cpp
+  CudfGroupId.cpp
   CudfHashAggregation.cpp
   CudfHashJoin.cpp
   CudfLimit.cpp
