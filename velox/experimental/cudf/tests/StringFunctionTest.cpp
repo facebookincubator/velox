@@ -182,9 +182,12 @@ TEST_F(CudfStringFunctionTest, likeUnicode) {
   assertQuery(plan, "SELECT c0 LIKE '%f\xc3\xa9' AS result FROM tmp");
 }
 
-// cuDF's _ wildcard matches a single byte rather than a single Unicode code
-// point, so multi-byte characters like é cause a mismatch with DuckDB.
-// Leaving this test disabled for now, pending further investigation.
+// DuckDB single-char wildcard `_` behaves different from cuDF (and hence from
+// the SQL standard) with multi-byte UTF-8 characters, treating each byte as a
+// separate character. The first and third rows of this test therefore fail
+// comparison with the DuckDB result, even though they match the pattern
+// according to the SQL standard. Leaving this test disabled for now, pending
+// further investigation.
 TEST_F(CudfStringFunctionTest, DISABLED_likeUnicodeSingleCharWildcard) {
   auto input = makeRowVector(
       {makeFlatVector<std::string>({"caf\xc3\xa9", "cafe", "caf\xc3\xa9s"})});
