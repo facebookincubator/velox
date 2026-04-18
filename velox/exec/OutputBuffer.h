@@ -255,6 +255,9 @@ class OutputBuffer {
     /// Stats of the OutputBuffer's destinations.
     std::vector<DestinationBuffer::Stats> buffersStats;
 
+    /// Merges 'other' into this Stats by accumulating counters (bytes, rows,
+    /// pages) and appending per-destination buffer stats. Used to aggregate
+    /// statistics across multiple output buffer managers for a single task.
     void add(const Stats& other);
     std::string toString() const;
   };
