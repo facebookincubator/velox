@@ -117,6 +117,8 @@ class OutputBufferManager : public IOutputBufferManager {
 
   std::string toString();
 
+  /// Returns a human-readable representation of the output buffer state for
+  /// the task identified by 'taskId', or an empty string if no buffer exists.
   std::string toString(const std::string& taskId) override;
 
   // Gets the memory utilization ratio for the output buffer from a task of
