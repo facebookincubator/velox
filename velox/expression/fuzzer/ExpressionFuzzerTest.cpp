@@ -64,6 +64,8 @@ using facebook::velox::fuzzer::FuzzerRunner;
 using facebook::velox::fuzzer::JsonExtractArgValuesGenerator;
 using facebook::velox::fuzzer::JsonParseArgValuesGenerator;
 using facebook::velox::fuzzer::QDigestArgValuesGenerator;
+using facebook::velox::fuzzer::S2CellIdArgValuesGenerator;
+using facebook::velox::fuzzer::S2CellTokenArgValuesGenerator;
 using facebook::velox::fuzzer::SetDigestArgValuesGenerator;
 using facebook::velox::fuzzer::TDigestArgValuesGenerator;
 using facebook::velox::fuzzer::UnifiedDigestArgValuesGenerator;
@@ -128,6 +130,8 @@ std::unordered_map<std::string, std::shared_ptr<ArgValuesGenerator>>
          std::make_shared<TDigestArgValuesGenerator>("destructure_tdigest")},
         {"trimmed_mean",
          std::make_shared<TDigestArgValuesGenerator>("trimmed_mean")},
+        {"winsorized_mean",
+         std::make_shared<TDigestArgValuesGenerator>("winsorized_mean")},
         {"hash_counts",
          std::make_shared<SetDigestArgValuesGenerator>("hash_counts")},
         {"cardinality",
@@ -136,7 +140,14 @@ std::unordered_map<std::string, std::shared_ptr<ArgValuesGenerator>>
          std::make_shared<SetDigestArgValuesGenerator>("jaccard_index")},
         {"intersection_cardinality",
          std::make_shared<SetDigestArgValuesGenerator>(
-             "intersection_cardinality")}};
+             "intersection_cardinality")},
+        {"s2_cell_area_sq_km", std::make_shared<S2CellIdArgValuesGenerator>()},
+        {"s2_cell_contains", std::make_shared<S2CellIdArgValuesGenerator>()},
+        {"s2_cell_level", std::make_shared<S2CellIdArgValuesGenerator>()},
+        {"s2_cell_parent", std::make_shared<S2CellIdArgValuesGenerator>()},
+        {"s2_cell_to_token", std::make_shared<S2CellIdArgValuesGenerator>()},
+        {"s2_cell_from_token",
+         std::make_shared<S2CellTokenArgValuesGenerator>()}};
 
 // TODO: List of the functions that at some point crash or fail and need to
 // be fixed before we can enable.
@@ -165,6 +176,7 @@ std::unordered_set<std::string> skipFunctions = {
     "construct_tdigest",
     "destructure_tdigest",
     "trimmed_mean",
+    "winsorized_mean",
     // Fuzzer and the underlying engine are confused about SetDigest functions
     // (since KHLL is a user defined type), and tries to pass a
     // VARBINARY (since KHLL's implementation uses an
@@ -297,6 +309,7 @@ std::unordered_set<std::string> skipFunctions = {
     "convex_hull_agg",
     "geometry_union_agg",
     "localtime",
+    "s2_cells",
 };
 
 std::unordered_set<std::string> skipFunctionsSOT = {
@@ -483,6 +496,13 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "uniqueness_distribution(khyperloglog,bigint) -> map(bigint,double)",
     "merge_khll(array(khyperloglog)) -> khyperloglog",
     "pmod", // Not available in Presto
+    // S2 functions are not registered in the Presto instance used for fuzzing.
+    "s2_cell_area_sq_km",
+    "s2_cell_contains",
+    "s2_cell_from_token",
+    "s2_cell_level",
+    "s2_cell_parent",
+    "s2_cell_to_token",
 };
 
 int main(int argc, char** argv) {

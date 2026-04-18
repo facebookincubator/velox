@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/exec/AggregationRegistry.h"
+#include "velox/experimental/cudf/exec/SparkAggregateFunctions.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -36,10 +38,12 @@ class AggregationTest : public AggregationTestBase {
     // with spark_ to align with sparksql AverageAggregationTest, the
     // function name overwrite may not work well in some condition.
     cudf_velox::registerCudf();
+    cudf_velox::registerSparkAggregateFunctions("");
   }
 
   void TearDown() override {
     cudf_velox::unregisterCudf();
+    cudf_velox::unregisterAggregateFunctions();
   }
 };
 

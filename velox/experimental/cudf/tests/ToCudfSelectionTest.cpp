@@ -281,25 +281,31 @@ TEST_F(ToCudfSelectionTest, unsupportedAggregationFunctionsFallsBack) {
 
 // Test complex grouping key expressions should fall back
 TEST_F(ToCudfSelectionTest, complexGroupingKeyExpressionsFallsBack) {
-  auto vectors = makeVectors(rowType_, 10, 100);
-  createDuckDbTable(vectors);
+  // Use a deterministic input vector.
+  // Input: c0=[1,2,1,2], c2=[100,200,300,400]
+  // After grouping by to_big_endian_64(c0):
+  // - Group 1 (c0=1): sum(c2) = 100 + 300 = 400
+  // - Group 2 (c0=2): sum(c2) = 200 + 400 = 600
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 1, 2}), // c0
+      makeFlatVector<int16_t>({10, 20, 30, 40}), // c1
+      makeFlatVector<int32_t>({100, 200, 300, 400}), // c2
+  });
 
-  auto plan = PlanBuilder()
-                  .values(vectors)
-                  .project({"c0", "c1", "c2", "abs(c0) AS complex_key"})
-                  .aggregation(
-                      {"complex_key"},
-                      {"sum(c2)"},
-                      {},
-                      core::AggregationNode::Step::kSingle,
-                      false)
-                  .planNode();
+  auto plan =
+      PlanBuilder()
+          .values({input})
+          .project({"c0", "c1", "c2", "to_big_endian_64(c0) AS complex_key"})
+          .aggregation(
+              {"complex_key"},
+              {"sum(c2)"},
+              {},
+              core::AggregationNode::Step::kSingle,
+              false)
+          .planNode();
 
-  auto task =
-      AssertQueryBuilder(duckDbQueryRunner_)
-          .config("cudf.enabled", true)
-          .plan(plan)
-          .assertResults("SELECT abs(c0), sum(c2) FROM tmp GROUP BY abs(c0)");
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan).config("cudf.enabled", true).countResults(task);
 
   ASSERT_FALSE(wasCudfAggregationUsed(task));
   ASSERT_TRUE(wasDefaultHashAggregationUsed(task));

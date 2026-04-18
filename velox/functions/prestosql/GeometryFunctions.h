@@ -1951,14 +1951,14 @@ struct GeometryToBingTilesFunction {
     if (zoom < 0 || zoom > 23) {
       return Status::UserError("Zoom level must be between 0 and 23");
     }
-    auto envelope =
-        common::geospatial::GeometryDeserializer::deserializeEnvelope(geometry);
-    if (envelope->isNull()) {
+    auto geom =
+        common::geospatial::GeometryDeserializer::deserializeNonEmpty(geometry);
+    if (!geom) {
       return Status::OK();
     }
 
     std::vector<int64_t> covering;
-    auto geom = common::geospatial::GeometryDeserializer::deserialize(geometry);
+    const auto* envelope = geom->getEnvelopeInternal();
 
     if (geom->getGeometryTypeId() == geos::geom::GeometryTypeId::GEOS_POINT) {
       covering = geospatial::getMinimalTilesCoveringGeometry(*envelope, zoom);
