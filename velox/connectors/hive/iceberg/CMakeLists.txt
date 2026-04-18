@@ -14,6 +14,7 @@
 set(
   ICEBERG_SOURCES
   DeletionVectorReader.cpp
+  DeletionVectorWriter.cpp
   EqualityDeleteFileReader.cpp
   IcebergColumnHandle.cpp
   IcebergConfig.cpp
@@ -34,6 +35,7 @@ velox_add_library(
   ${ICEBERG_SOURCES}
   HEADERS
   DeletionVectorReader.h
+  DeletionVectorWriter.h
   EqualityDeleteFileReader.h
   IcebergColumnHandle.h
   IcebergConfig.h
