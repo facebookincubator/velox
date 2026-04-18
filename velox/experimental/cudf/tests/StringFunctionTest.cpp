@@ -594,7 +594,7 @@ TEST_F(CudfStringExprTest, concatWithNullArg) {
       "concat(c0, c1)",
       std::optional<std::string>("hello"),
       std::optional<std::string>(std::nullopt));
-  // DuckDB and cudf treat nulls as empty strings in concat.
+  // Velox CPU, DuckDB, and cudf treat nulls as empty strings here.
   EXPECT_EQ(result.value(), "hello");
 }
 
