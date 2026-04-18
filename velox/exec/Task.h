@@ -1457,6 +1457,13 @@ class Task : public std::enable_shared_from_this<Task> {
   // ungrouped execution we use the [0] entry in this vector.
   std::unordered_map<uint32_t, SplitGroupState> splitGroupStates_;
 
+  // Output buffer managers that handle this task's partitioned output, keyed
+  // by registry name (e.g. "default"). A task may have multiple managers when
+  // the query is configured with heterogeneous output paths (e.g. CPU and GPU
+  // output queues each managed by a different IOutputBufferManager). Lifecycle
+  // calls (init, update, stats, remove) are dispatched to every manager in
+  // the vector. Stored as weak_ptr to break the reference cycle through
+  // OutputBuffer::task_ which holds a shared_ptr<Task>.
   std::vector<std::pair<std::string, std::weak_ptr<IOutputBufferManager>>>
       bufferManagers_;
 
