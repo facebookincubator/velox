@@ -105,7 +105,6 @@ class ArrowDataBufferSink : public ::arrow::io::OutputStream {
 struct ArrowContext {
   std::unique_ptr<FileWriter> writer;
   std::shared_ptr<WriterProperties> properties;
-  bool needsNewRowGroup = true;
 };
 
 Compression::type getArrowParquetCompression(
@@ -396,8 +395,10 @@ Writer::Writer(
           std::move(schema)} {}
 
 void Writer::flush() {
+  if (arrowContext_->writer) {
+    PARQUET_THROW_NOT_OK(arrowContext_->writer->finishRowGroup());
+  }
   PARQUET_THROW_NOT_OK(stream_->Flush());
-  arrowContext_->needsNewRowGroup = true;
 }
 
 dwio::common::StripeProgress getStripeProgress(int64_t bufferedBytes) {
@@ -466,10 +467,6 @@ void Writer::write(const VectorPtr& data) {
             arrowProperties));
   }
 
-  if (arrowContext_->needsNewRowGroup) {
-    arrowContext_->writer->newBufferedRowGroup();
-    arrowContext_->needsNewRowGroup = false;
-  }
   arrowContext_->writer->writeRecordBatch(*recordBatch);
 
   if (flushPolicy_->shouldFlush(getStripeProgress(

@@ -346,10 +346,16 @@ class FileWriterImpl : public FileWriter {
     if (!closed_) {
       // Make idempotent.
       closed_ = true;
-      if (rowGroupWriter_ != nullptr) {
-        PARQUET_CATCH_NOT_OK(rowGroupWriter_->close());
-      }
+      PARQUET_CATCH_NOT_OK(finishRowGroup());
       PARQUET_CATCH_NOT_OK(writer_->close());
+    }
+    return Status::OK();
+  }
+
+  ::arrow::Status finishRowGroup() override {
+    if (rowGroupWriter_ != nullptr) {
+      PARQUET_CATCH_NOT_OK(rowGroupWriter_->close());
+      rowGroupWriter_ = nullptr;
     }
     return Status::OK();
   }

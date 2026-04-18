@@ -436,11 +436,7 @@ class FileSerializer : public ParquetFileWriter::Contents {
       // If any functions here raise an exception, we set isOpen_ to be false
       // so that this does not get called again (possibly causing segfault).
       isOpen_ = false;
-      if (rowGroupWriter_) {
-        numRows_ += rowGroupWriter_->numRows();
-        rowGroupWriter_->close();
-      }
-      rowGroupWriter_.reset();
+      finishRowGroup();
 
       writePageIndex();
 
@@ -472,10 +468,16 @@ class FileSerializer : public ParquetFileWriter::Contents {
     return properties_;
   }
 
-  RowGroupWriter* appendRowGroup(bool bufferedRowGroup) {
+  void finishRowGroup() override {
     if (rowGroupWriter_) {
+      numRows_ += rowGroupWriter_->numRows();
       rowGroupWriter_->close();
+      rowGroupWriter_.reset();
     }
+  }
+
+  RowGroupWriter* appendRowGroup(bool bufferedRowGroup) {
+    finishRowGroup();
     numRowGroups_++;
     auto rgMetadata = metadata_->appendRowGroup();
     if (pageIndexBuilder_) {
@@ -769,6 +771,12 @@ RowGroupWriter* ParquetFileWriter::appendRowGroup() {
 
 RowGroupWriter* ParquetFileWriter::appendBufferedRowGroup() {
   return contents_->appendBufferedRowGroup();
+}
+
+void ParquetFileWriter::finishRowGroup() {
+  if (contents_) {
+    contents_->finishRowGroup();
+  }
 }
 
 RowGroupWriter* ParquetFileWriter::appendRowGroup(int64_t numRows) {

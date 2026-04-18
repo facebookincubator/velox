@@ -174,6 +174,8 @@ class PARQUET_EXPORT ParquetFileWriter {
     virtual RowGroupWriter* appendRowGroup() = 0;
     virtual RowGroupWriter* appendBufferedRowGroup() = 0;
 
+    virtual void finishRowGroup() = 0;
+
     virtual int64_t numRows() const = 0;
     virtual int numColumns() const = 0;
     virtual int numRowGroups() const = 0;
@@ -242,6 +244,12 @@ class PARQUET_EXPORT ParquetFileWriter {
   /// only valid until the next call to appendRowGroup() or
   /// appendBufferedRowGroup() or close().
   RowGroupWriter* appendBufferedRowGroup();
+
+  /// Finalize the current row group if one is active. Pages and column
+  /// metadata of the buffered row group are serialized to the underlying
+  /// sink and the active RowGroupWriter is destroyed.
+  /// No-op if there is no active row group.
+  void finishRowGroup();
 
   /// \brief Add key-value metadata to the file.
   /// \param[in] keyValueMetadata The metadata to add.
