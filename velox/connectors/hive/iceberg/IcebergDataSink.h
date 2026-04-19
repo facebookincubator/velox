@@ -32,6 +32,31 @@
 
 namespace facebook::velox::connector::hive::iceberg {
 
+class IcebergSortingColumn : public ISerializable {
+ public:
+  IcebergSortingColumn(
+      const std::string& sortColumn,
+      const core::SortOrder& sortOrder);
+
+  const std::string& sortColumn() const {
+    return sortColumn_;
+  }
+
+  core::SortOrder sortOrder() const {
+    return sortOrder_;
+  }
+
+  folly::dynamic serialize() const override;
+
+  static std::shared_ptr<IcebergSortingColumn> deserialize(
+      const folly::dynamic& obj,
+      void* context);
+
+ private:
+  const std::string sortColumn_;
+  const core::SortOrder sortOrder_;
+};
+
 /// Represents a request for Iceberg write.
 class IcebergInsertTableHandle final : public HiveInsertTableHandle {
  public:
@@ -51,13 +76,16 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
   /// @param compressionKind Optional compression to apply to data files.
   /// @param serdeParameters Additional serialization/deserialization parameters
   /// for the file format.
+  /// @param sortedBy Optional list of columns to sort.
   IcebergInsertTableHandle(
       std::vector<IcebergColumnHandlePtr> inputColumns,
       LocationHandlePtr locationHandle,
       dwio::common::FileFormat tableStorageFormat,
       IcebergPartitionSpecPtr partitionSpec,
       std::optional<common::CompressionKind> compressionKind = {},
-      const std::unordered_map<std::string, std::string>& serdeParameters = {});
+      const std::unordered_map<std::string, std::string>& serdeParameters = {},
+      const std::vector<std::shared_ptr<const IcebergSortingColumn>>& sortedBy =
+          {});
 
   /// Returns the Iceberg partition specification that defines how the table
   /// is partitioned.
@@ -65,8 +93,14 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
     return partitionSpec_;
   }
 
+  const std::vector<std::shared_ptr<const IcebergSortingColumn>> sortedBy()
+      const {
+    return sortedBy_;
+  }
+
  private:
   const IcebergPartitionSpecPtr partitionSpec_;
+  const std::vector<std::shared_ptr<const IcebergSortingColumn>>& sortedBy_;
 };
 
 using IcebergInsertTableHandlePtr =

@@ -69,6 +69,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     PartitionValueFormatterTest.cpp
     TransformE2ETest.cpp
     TransformTest.cpp
+    IcebergSortOrderTest.cpp
   )
   velox_add_test_headers(velox_hive_iceberg_insert_test IcebergTestBase.h)
 
