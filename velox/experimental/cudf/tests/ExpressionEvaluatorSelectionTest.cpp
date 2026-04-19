@@ -185,6 +185,30 @@ TEST_F(CudfExpressionSelectionTest, signatureArityAndConstantsSubstr) {
   ASSERT_FALSE(canBeEvaluatedByCudf(badConst, /*deep=*/true));
 }
 
+TEST_F(CudfExpressionSelectionTest, signatureArrayElementAt) {
+  auto arrayRowType = ROW({
+      {"arr", ARRAY(INTEGER())},
+      {"idx_bigint", BIGINT()},
+      {"idx_integer", INTEGER()},
+  });
+
+  auto bigintExpr =
+      compileExecExpr("element_at(arr, idx_bigint)", arrayRowType, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(bigintExpr, /*deep=*/true));
+
+  auto integerExpr = compileExecExpr(
+      "element_at(arr, idx_integer)", arrayRowType, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(integerExpr, /*deep=*/true));
+
+  auto mapRowType = ROW({
+      {"m", MAP(INTEGER(), INTEGER())},
+      {"idx_bigint", BIGINT()},
+  });
+  auto mapExpr =
+      compileExecExpr("element_at(m, idx_bigint)", mapRowType, execCtx_.get());
+  ASSERT_FALSE(canBeEvaluatedByCudf(mapExpr, /*deep=*/true));
+}
+
 TEST_F(CudfExpressionSelectionTest, signatureCastsInDivide) {
   // OK: numeric args are castable to double
   auto ok = compileExecExpr("divide(a, b)", rowType_, execCtx_.get());

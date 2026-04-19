@@ -1231,4 +1231,63 @@ TEST_F(CudfSimpleFilterProjectTest, unaryMathFunctions) {
   testUnaryFunction("abs(c0)", -5.5, 5.5);
 }
 
+TEST_F(CudfSimpleFilterProjectTest, elementAtArrayConstantIndex) {
+  auto arrays = makeNullableArrayVector<int32_t>({
+      {{10, 20, 30}},
+      {{4, 5}},
+      std::nullopt,
+      {{7, std::nullopt, 9}},
+  });
+
+  auto result =
+      evaluate<SimpleVector<int32_t>>("element_at(c0, 2)", makeRowVector({arrays}));
+  auto expected = makeNullableFlatVector<int32_t>(
+      {20, 5, std::nullopt, std::nullopt});
+
+  test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, elementAtArrayVariableIntegerIndex) {
+  auto arrays = makeNullableArrayVector<int32_t>({
+      {{1, 2, 3}},
+      {{4, std::nullopt, 6}},
+      std::nullopt,
+      {{7, 8}},
+      {{9, 10, 11}},
+  });
+  auto indices = makeNullableFlatVector<int32_t>(
+      {3, -2, std::nullopt, 4, -4});
+
+  auto result = evaluate<SimpleVector<int32_t>>(
+      "element_at(c0, c1)", makeRowVector({arrays, indices}));
+  auto expected = makeNullableFlatVector<int32_t>(
+      {3, std::nullopt, std::nullopt, std::nullopt, std::nullopt});
+
+  test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, elementAtArrayNegativeConstantIndex) {
+  auto arrays = makeNullableArrayVector<int32_t>({
+      {{1, 2, 3}},
+      {{4, std::nullopt, 6}},
+      std::nullopt,
+      {{7}},
+  });
+
+  auto result = evaluate<SimpleVector<int32_t>>(
+      "element_at(c0, -1)", makeRowVector({arrays}));
+  auto expected = makeNullableFlatVector<int32_t>(
+      {3, 6, std::nullopt, 7});
+
+  test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, elementAtArrayRejectsZeroIndex) {
+  auto arrays = makeArrayVector<int32_t>({{1, 2, 3}});
+
+  VELOX_ASSERT_THROW(
+      evaluate("element_at(c0, 0)", makeRowVector({arrays})),
+      "SQL array indices start at 1. Got 0.");
+}
+
 } // namespace

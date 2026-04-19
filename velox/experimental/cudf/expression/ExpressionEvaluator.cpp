@@ -30,7 +30,9 @@
 #include <cudf/copying.hpp>
 #include <cudf/datetime.hpp>
 #include <cudf/hashing.hpp>
+#include <cudf/lists/extract.hpp>
 #include <cudf/lists/count_elements.hpp>
+#include <cudf/null_mask.hpp>
 #include <cudf/replace.hpp>
 #include <cudf/round.hpp>
 #include <cudf/strings/attributes.hpp>
@@ -43,6 +45,7 @@
 #include <cudf/table/table.hpp>
 #include <cudf/transform.hpp>
 #include <cudf/unary.hpp>
+#include <cudf/utilities/error.hpp>
 
 namespace facebook::velox::cudf_velox {
 namespace {
@@ -140,6 +143,153 @@ static bool matchCallAgainstSignatures(
   return false;
 }
 
+template <typename T>
+std::vector<T> copyFixedWidthColumnToHost(
+    cudf::column_view const& column,
+    rmm::cuda_stream_view stream) {
+  std::vector<T> hostValues(column.size());
+  if (column.size() == 0) {
+    return hostValues;
+  }
+
+  CUDF_CUDA_TRY(cudaMemcpyAsync(
+      hostValues.data(),
+      column.begin<T>(),
+      sizeof(T) * column.size(),
+      cudaMemcpyDeviceToHost,
+      stream.value()));
+  stream.synchronize();
+  return hostValues;
+}
+
+std::vector<char> copyNullMaskToHost(
+    cudf::column_view const& column,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  if (!column.nullable()) {
+    return {};
+  }
+
+  auto nulls = cudf::is_null(column, stream, mr);
+  std::vector<char> hostNulls(column.size());
+  if (column.size() == 0) {
+    return hostNulls;
+  }
+
+  CUDF_CUDA_TRY(cudaMemcpyAsync(
+      hostNulls.data(),
+      nulls->view().begin<bool>(),
+      sizeof(bool) * column.size(),
+      cudaMemcpyDeviceToHost,
+      stream.value()));
+  stream.synchronize();
+  return hostNulls;
+}
+
+bool isNullAt(const std::vector<char>& hostNulls, cudf::size_type row) {
+  return !hostNulls.empty() && hostNulls[row] != 0;
+}
+
+int64_t readConstantIntegralValue(const velox::exec::ConstantExpr& expr) {
+  switch (expr.type()->kind()) {
+    case TypeKind::TINYINT:
+      return expr.value()->as<SimpleVector<int8_t>>()->valueAt(0);
+    case TypeKind::SMALLINT:
+      return expr.value()->as<SimpleVector<int16_t>>()->valueAt(0);
+    case TypeKind::INTEGER:
+      return expr.value()->as<SimpleVector<int32_t>>()->valueAt(0);
+    case TypeKind::BIGINT:
+      return expr.value()->as<SimpleVector<int64_t>>()->valueAt(0);
+    default:
+      VELOX_UNSUPPORTED(
+          "Unsupported array access index type {}",
+          expr.type()->toString());
+  }
+}
+
+struct ArrayAccessPolicy {
+  bool allowNegativeIndices;
+  bool nullOnNegativeIndices;
+  bool allowOutOfBound;
+  bool indexStartsAtOne;
+};
+
+std::optional<cudf::size_type> normalizeArrayIndex(
+    int64_t index,
+    cudf::size_type arraySize,
+    const ArrayAccessPolicy& policy) {
+  if (policy.indexStartsAtOne && index == 0) {
+    VELOX_USER_FAIL("SQL array indices start at 1. Got 0.");
+  }
+
+  if (index < 0) {
+    if (!policy.allowNegativeIndices) {
+      if (policy.nullOnNegativeIndices) {
+        return std::nullopt;
+      }
+      VELOX_USER_FAIL(
+          "Array subscript index cannot be negative, Index: {}", index);
+    }
+
+    if (policy.nullOnNegativeIndices) {
+      return std::nullopt;
+    }
+  }
+
+  const auto normalized = [&]() -> int64_t {
+    if (index < 0) {
+      return static_cast<int64_t>(arraySize) + index;
+    }
+    return policy.indexStartsAtOne ? index - 1 : index;
+  }();
+
+  if (normalized < 0 || normalized >= arraySize) {
+    if (policy.allowOutOfBound) {
+      return std::nullopt;
+    }
+
+    VELOX_USER_FAIL(
+        "Array subscript index out of bounds, Index: {} Array size: {}",
+        index,
+        arraySize);
+  }
+
+  return static_cast<cudf::size_type>(normalized);
+}
+
+std::unique_ptr<cudf::column> sanitizeBoolMask(
+    cudf::column_view mask,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  auto falseScalar = cudf::numeric_scalar<bool>(false, true, stream, mr);
+  return cudf::replace_nulls(mask, falseScalar, stream, mr);
+}
+
+std::unique_ptr<cudf::column> combineBoolMasks(
+    cudf::column_view lhs,
+    cudf::column_view rhs,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  return cudf::binary_operation(
+      lhs,
+      rhs,
+      cudf::binary_operator::BITWISE_OR,
+      cudf::data_type{cudf::type_id::BOOL8},
+      stream,
+      mr);
+}
+
+std::unique_ptr<cudf::column> applyNullMask(
+    cudf::column_view col,
+    cudf::column_view nullMask,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  auto nullScalar = cudf::make_default_constructed_scalar(col.type(), stream, mr);
+  nullScalar->set_valid_async(false, stream);
+  stream.synchronize();
+  return cudf::copy_if_else(*nullScalar, col, nullMask, stream, mr);
+}
+
 } // namespace
 
 class SplitFunction : public CudfFunction {
@@ -221,6 +371,226 @@ class CardinalityFunction : public CudfFunction {
     auto inputCol = asView(inputColumns[0]);
     return cudf::lists::count_elements(inputCol, stream, mr);
   }
+};
+
+// Shared array-access machinery for ARRAY index access. element_at uses this
+// today, and subscript / array_get can reuse it with different index policies.
+class ArrayAccessFunction : public CudfFunction {
+ public:
+  ArrayAccessFunction(
+      const std::shared_ptr<velox::exec::Expr>& expr,
+      ArrayAccessPolicy policy)
+      : policy_(policy) {
+    using velox::exec::ConstantExpr;
+
+    VELOX_CHECK_EQ(
+        expr->inputs().size(), 2, "array access expects exactly 2 inputs");
+    VELOX_CHECK_NULL(
+        std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[0]),
+        "array access input must not be a constant");
+
+    auto indexExpr = std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[1]);
+    hasConstantIndex_ = indexExpr != nullptr;
+    if (indexExpr == nullptr) {
+      return;
+    }
+
+    if (indexExpr->value()->isNullAt(0)) {
+      constantIndexIsNull_ = true;
+      return;
+    }
+
+    constantIndex_ = readConstantIntegralValue(*indexExpr);
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    VELOX_CHECK_GE(
+        inputColumns.size(),
+        1,
+        "array access requires a non-literal input");
+
+    auto listsView = cudf::lists_column_view(asView(inputColumns[0]));
+    auto sizes = cudf::lists::count_elements(listsView, stream, mr);
+
+    auto rawIndexColumn =
+        prepareRawIndexColumn(inputColumns, listsView.size(), stream, mr);
+    auto rawIndexView = asView(rawIndexColumn);
+
+    // libcudf returns null for invalid list access. Presto subscript and
+    // siblings differ in how they want to handle these rows, so validate under
+    // the function policy first and then use the GPU primitive.
+    validateIndices(rawIndexView, sizes->view(), stream, mr);
+    auto zeroBased = normalizeIndices(rawIndexView, sizes->view(), stream, mr);
+    return cudf::lists::extract_list_element(
+        listsView, zeroBased->view(), stream, mr);
+  }
+
+ protected:
+  const ArrayAccessPolicy policy_;
+
+ private:
+  ColumnOrView prepareRawIndexColumn(
+      std::vector<ColumnOrView>& inputColumns,
+      cudf::size_type numRows,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const {
+    if (!hasConstantIndex_) {
+      VELOX_CHECK_EQ(
+          inputColumns.size(),
+          2,
+          "non-constant array access expects exactly 2 input columns");
+      return asView(inputColumns[1]);
+    }
+
+    auto constantScalar = cudf::numeric_scalar<int64_t>(
+        constantIndex_.value_or(0), !constantIndexIsNull_, stream, mr);
+    return cudf::make_column_from_scalar(constantScalar, numRows, stream, mr);
+  }
+
+  void validateIndices(
+      cudf::column_view const& rawIndexView,
+      cudf::column_view const& sizesView,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const {
+    auto hostSizes = copyFixedWidthColumnToHost<cudf::size_type>(sizesView, stream);
+    auto hostListNulls = copyNullMaskToHost(sizesView, stream, mr);
+    auto hostIndices = copyFixedWidthColumnToHost<int64_t>(rawIndexView, stream);
+    auto hostIndexNulls = copyNullMaskToHost(rawIndexView, stream, mr);
+
+    for (cudf::size_type row = 0; row < rawIndexView.size(); ++row) {
+      if (isNullAt(hostListNulls, row) || isNullAt(hostIndexNulls, row)) {
+        continue;
+      }
+      normalizeArrayIndex(hostIndices[row], hostSizes[row], policy_);
+    }
+  }
+
+  std::unique_ptr<cudf::column> normalizeIndices(
+      cudf::column_view const& rawIndexView,
+      cudf::column_view const& sizesView,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const {
+    auto sizes64 =
+        cudf::cast(sizesView, cudf::data_type{cudf::type_id::INT64}, stream, mr);
+    auto indices64 = cudf::cast(
+        rawIndexView, cudf::data_type{cudf::type_id::INT64}, stream, mr);
+
+    auto zero64 = cudf::numeric_scalar<int64_t>(0, true, stream, mr);
+    auto one64 = cudf::numeric_scalar<int64_t>(1, true, stream, mr);
+
+    std::unique_ptr<cudf::column> positiveNormalized;
+    if (policy_.indexStartsAtOne) {
+      positiveNormalized = cudf::binary_operation(
+          indices64->view(),
+          one64,
+          cudf::binary_operator::SUB,
+          cudf::data_type{cudf::type_id::INT64},
+          stream,
+          mr);
+    } else {
+      positiveNormalized = std::move(indices64);
+    }
+
+    std::unique_ptr<cudf::column> normalized;
+    if (policy_.allowNegativeIndices && !policy_.nullOnNegativeIndices) {
+      auto negativeMask = sanitizeBoolMask(
+          cudf::binary_operation(
+              positiveNormalized->view(),
+              zero64,
+              cudf::binary_operator::LESS,
+              cudf::data_type{cudf::type_id::BOOL8},
+              stream,
+              mr)
+              ->view(),
+          stream,
+          mr);
+      auto negativeNormalized = cudf::binary_operation(
+          rawIndexView,
+          sizes64->view(),
+          cudf::binary_operator::ADD,
+          cudf::data_type{cudf::type_id::INT64},
+          stream,
+          mr);
+      normalized = cudf::copy_if_else(
+          negativeNormalized->view(),
+          positiveNormalized->view(),
+          negativeMask->view(),
+          stream,
+          mr);
+    } else {
+      normalized = std::move(positiveNormalized);
+    }
+
+    std::unique_ptr<cudf::column> invalidMask;
+    if (policy_.nullOnNegativeIndices) {
+      invalidMask = sanitizeBoolMask(
+          cudf::binary_operation(
+              rawIndexView,
+              zero64,
+              cudf::binary_operator::LESS,
+              cudf::data_type{cudf::type_id::BOOL8},
+              stream,
+              mr)
+              ->view(),
+          stream,
+          mr);
+    }
+
+    if (policy_.allowOutOfBound) {
+      auto ltZero = sanitizeBoolMask(
+          cudf::binary_operation(
+              normalized->view(),
+              zero64,
+              cudf::binary_operator::LESS,
+              cudf::data_type{cudf::type_id::BOOL8},
+              stream,
+              mr)
+              ->view(),
+          stream,
+          mr);
+      auto geSize = sanitizeBoolMask(
+          cudf::binary_operation(
+              normalized->view(),
+              sizes64->view(),
+              cudf::binary_operator::GREATER_EQUAL,
+              cudf::data_type{cudf::type_id::BOOL8},
+              stream,
+              mr)
+              ->view(),
+          stream,
+          mr);
+      auto outOfBound = combineBoolMasks(ltZero->view(), geSize->view(), stream, mr);
+      invalidMask = invalidMask == nullptr
+          ? std::move(outOfBound)
+          : combineBoolMasks(invalidMask->view(), outOfBound->view(), stream, mr);
+    }
+
+    if (invalidMask != nullptr) {
+      normalized = applyNullMask(normalized->view(), invalidMask->view(), stream, mr);
+    }
+
+    return cudf::cast(
+        normalized->view(), cudf::data_type{cudf::type_id::INT32}, stream, mr);
+  }
+
+  bool hasConstantIndex_{false};
+  bool constantIndexIsNull_{false};
+  std::optional<int64_t> constantIndex_;
+};
+
+class ElementAtFunction final : public ArrayAccessFunction {
+ public:
+  explicit ElementAtFunction(const std::shared_ptr<velox::exec::Expr>& expr)
+      : ArrayAccessFunction(
+            expr,
+            ArrayAccessPolicy{
+                true,
+                false,
+                true,
+                true}) {}
 };
 
 class RoundFunction : public CudfFunction {
@@ -800,6 +1170,24 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       {FunctionSignatureBuilder()
            .returnType("integer")
            .argumentType("array(any)")
+           .build()});
+
+  registerCudfFunction(
+      prefix + "element_at",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<ElementAtFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .typeVariable("T")
+           .returnType("T")
+           .argumentType("array(T)")
+           .argumentType("integer")
+           .build(),
+       FunctionSignatureBuilder()
+           .typeVariable("T")
+           .returnType("T")
+           .argumentType("array(T)")
+           .argumentType("bigint")
            .build()});
 
   registerCudfFunctions(
