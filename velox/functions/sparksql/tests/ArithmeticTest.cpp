@@ -16,8 +16,6 @@
 #include <cstdint>
 #include <limits>
 
-#include <folly/ScopeGuard.h>
-
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
@@ -844,15 +842,22 @@ TEST_F(ArithmeticTest, absMinValueOverflow) {
       abs<int64_t>(std::numeric_limits<int64_t>::min()), "Arithmetic overflow");
 }
 
-TEST_F(SparkFunctionBaseTest, IntervalDayTimeUnaryMinusAnsi) {
-  auto guard = folly::makeGuard([&] {
+class IntervalArithmeticAnsiTest : public SparkFunctionBaseTest {
+ protected:
+  void SetUp() override {
+    SparkFunctionBaseTest::SetUp();
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+  }
+
+  void TearDown() override {
     queryCtx_->testingOverrideConfigUnsafe(
         {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
-  });
+    SparkFunctionBaseTest::TearDown();
+  }
+};
 
-  queryCtx_->testingOverrideConfigUnsafe(
-      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
-
+TEST_F(IntervalArithmeticAnsiTest, IntervalDayTimeUnaryMinusAnsi) {
   EXPECT_EQ(
       evaluateOnce<int64_t>(
           "unaryminus(c0)", INTERVAL_DAY_TIME(), std::optional<int64_t>(1000)),
@@ -884,15 +889,7 @@ TEST_F(SparkFunctionBaseTest, IntervalDayTimeUnaryMinusAnsi) {
       std::numeric_limits<int64_t>::min());
 }
 
-TEST_F(SparkFunctionBaseTest, IntervalYearMonthUnaryMinusAnsi) {
-  auto guard = folly::makeGuard([&] {
-    queryCtx_->testingOverrideConfigUnsafe(
-        {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
-  });
-
-  queryCtx_->testingOverrideConfigUnsafe(
-      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
-
+TEST_F(IntervalArithmeticAnsiTest, IntervalYearMonthUnaryMinusAnsi) {
   EXPECT_EQ(
       evaluateOnce<int32_t>(
           "unaryminus(c0)", INTERVAL_YEAR_MONTH(), std::optional<int32_t>(12)),
@@ -924,15 +921,7 @@ TEST_F(SparkFunctionBaseTest, IntervalYearMonthUnaryMinusAnsi) {
       std::numeric_limits<int32_t>::min());
 }
 
-TEST_F(SparkFunctionBaseTest, IntervalDayTimeAddAnsi) {
-  auto guard = folly::makeGuard([&] {
-    queryCtx_->testingOverrideConfigUnsafe(
-        {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
-  });
-
-  queryCtx_->testingOverrideConfigUnsafe(
-      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
-
+TEST_F(IntervalArithmeticAnsiTest, IntervalDayTimeAddAnsi) {
   EXPECT_EQ(
       evaluateOnce<int64_t>(
           "add(c0, c1)",
@@ -975,15 +964,7 @@ TEST_F(SparkFunctionBaseTest, IntervalDayTimeAddAnsi) {
       std::numeric_limits<int64_t>::min());
 }
 
-TEST_F(SparkFunctionBaseTest, IntervalYearMonthAddAnsi) {
-  auto guard = folly::makeGuard([&] {
-    queryCtx_->testingOverrideConfigUnsafe(
-        {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
-  });
-
-  queryCtx_->testingOverrideConfigUnsafe(
-      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
-
+TEST_F(IntervalArithmeticAnsiTest, IntervalYearMonthAddAnsi) {
   EXPECT_EQ(
       evaluateOnce<int32_t>(
           "add(c0, c1)",
@@ -1019,15 +1000,7 @@ TEST_F(SparkFunctionBaseTest, IntervalYearMonthAddAnsi) {
       std::numeric_limits<int32_t>::min());
 }
 
-TEST_F(SparkFunctionBaseTest, IntervalDayTimeSubtractAnsi) {
-  auto guard = folly::makeGuard([&] {
-    queryCtx_->testingOverrideConfigUnsafe(
-        {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
-  });
-
-  queryCtx_->testingOverrideConfigUnsafe(
-      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
-
+TEST_F(IntervalArithmeticAnsiTest, IntervalDayTimeSubtractAnsi) {
   EXPECT_EQ(
       evaluateOnce<int64_t>(
           "subtract(c0, c1)",
@@ -1070,15 +1043,7 @@ TEST_F(SparkFunctionBaseTest, IntervalDayTimeSubtractAnsi) {
       std::numeric_limits<int64_t>::max());
 }
 
-TEST_F(SparkFunctionBaseTest, IntervalYearMonthSubtractAnsi) {
-  auto guard = folly::makeGuard([&] {
-    queryCtx_->testingOverrideConfigUnsafe(
-        {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
-  });
-
-  queryCtx_->testingOverrideConfigUnsafe(
-      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
-
+TEST_F(IntervalArithmeticAnsiTest, IntervalYearMonthSubtractAnsi) {
   EXPECT_EQ(
       evaluateOnce<int32_t>(
           "subtract(c0, c1)",
