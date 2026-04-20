@@ -28,9 +28,6 @@
 
 namespace facebook::velox::functions::sparksql {
 
-#define VELOX_SPARK_USER_RETURN_IF_ANSI(expr, ...) \
-  VELOX_USER_RETURN((ansiEnabled_) && (expr), ##__VA_ARGS__)
-
 // The abs implementation is used for primitive types except for decimal type.
 template <typename TExec>
 struct AbsFunction {
@@ -704,8 +701,8 @@ struct IntervalDayTimeAddFunction {
   FOLLY_ALWAYS_INLINE Status
   call(int64_t& result, const int64_t& a, const int64_t& b) {
     int64_t res;
-    VELOX_SPARK_USER_RETURN_IF_ANSI(
-        __builtin_add_overflow(a, b, &res),
+    VELOX_USER_RETURN(
+        ansiEnabled_ && __builtin_add_overflow(a, b, &res),
         "Arithmetic overflow: {} + {}",
         a,
         b);
@@ -733,8 +730,8 @@ struct IntervalDayTimeSubtractFunction {
   FOLLY_ALWAYS_INLINE Status
   call(int64_t& result, const int64_t& a, const int64_t& b) {
     int64_t res;
-    VELOX_SPARK_USER_RETURN_IF_ANSI(
-        __builtin_sub_overflow(a, b, &res),
+    VELOX_USER_RETURN(
+        ansiEnabled_ && __builtin_sub_overflow(a, b, &res),
         "Arithmetic overflow: {} - {}",
         a,
         b);
@@ -762,8 +759,8 @@ struct IntervalYearMonthAddFunction {
   FOLLY_ALWAYS_INLINE Status
   call(int32_t& result, const int32_t& a, const int32_t& b) {
     int32_t res;
-    VELOX_SPARK_USER_RETURN_IF_ANSI(
-        __builtin_add_overflow(a, b, &res),
+    VELOX_USER_RETURN(
+        ansiEnabled_ && __builtin_add_overflow(a, b, &res),
         "Arithmetic overflow: {} + {}",
         a,
         b);
@@ -791,8 +788,8 @@ struct IntervalYearMonthSubtractFunction {
   FOLLY_ALWAYS_INLINE Status
   call(int32_t& result, const int32_t& a, const int32_t& b) {
     int32_t res;
-    VELOX_SPARK_USER_RETURN_IF_ANSI(
-        __builtin_sub_overflow(a, b, &res),
+    VELOX_USER_RETURN(
+        ansiEnabled_ && __builtin_sub_overflow(a, b, &res),
         "Arithmetic overflow: {} - {}",
         a,
         b);
@@ -803,7 +800,5 @@ struct IntervalYearMonthSubtractFunction {
  private:
   bool ansiEnabled_ = false;
 };
-
-#undef VELOX_SPARK_USER_RETURN_IF_ANSI
 
 } // namespace facebook::velox::functions::sparksql
