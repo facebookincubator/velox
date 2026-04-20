@@ -503,6 +503,8 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "s2_cell_level",
     "s2_cell_parent",
     "s2_cell_to_token",
+    "ip_version", // New function, pending Presto Java implementation
+    "ip_prefix_masklen", // New function, pending Presto Java implementation
 };
 
 int main(int argc, char** argv) {

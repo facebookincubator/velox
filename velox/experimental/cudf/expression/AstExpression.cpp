@@ -125,9 +125,7 @@ ColumnOrView ASTExpression::eval(
 }
 
 bool ASTExpression::canEvaluate(std::shared_ptr<velox::exec::Expr> expr) {
-  return std::dynamic_pointer_cast<velox::exec::FieldReference>(expr) !=
-      nullptr ||
-      detail::isAstExprSupported(expr);
+  return detail::isAstExprSupported(expr);
 }
 
 void registerAstEvaluator(int priority) {
