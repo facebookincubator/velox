@@ -1290,6 +1290,34 @@ TEST_F(CudfDecimalTest, decimalArithmeticWithScalarLeft) {
   facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
 }
 
+TEST_F(CudfDecimalTest, decimalDivideNullScalar) {
+  auto input = makeRowVector(
+      {"a"},
+      {
+          makeFlatVector<int64_t>({500, -250, 100}, DECIMAL(10, 2)),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({
+                      "a / CAST(NULL AS DECIMAL(10, 2)) AS div_null_r",
+                      "CAST(NULL AS DECIMAL(10, 2)) / a AS div_null_l",
+                  })
+                  .planNode();
+
+  unregisterCudf();
+  auto cpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  registerCudf();
+
+  auto gpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+
+  facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
+}
+
 // Velox comparison functions require both arguments to have the same type
 // (Generic<T1>, Generic<T1>), so raw different-scale comparisons fail at the
 // type-resolution stage before cuDF evaluation.
