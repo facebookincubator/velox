@@ -25,7 +25,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <string_view>
+#include <unordered_map>
 
 // Forward declare instead of including the `IcebergDeleteFile.h` here since the
 // header cannot be transitively included in the .cu file.
