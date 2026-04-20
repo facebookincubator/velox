@@ -32,96 +32,157 @@ using namespace facebook::velox::test;
 namespace facebook::velox::cudf_velox {
 namespace {
 
+struct TableLeafState final : public PartitionedBufferedState::LeafState {
+  explicit TableLeafState(PartitionedBufferedState::InputChunk chunk)
+      : chunk(std::move(chunk)) {}
+
+  PartitionedBufferedState::InputChunk chunk;
+};
+
 class IdentityBufferedStateOps final
-    : public PartitionedBufferedState::BufferedStateOps {
+    : public PartitionedBufferedState::LeafStateOps {
  public:
   IdentityBufferedStateOps(memory::MemoryPool* pool, RowTypePtr rowType)
       : pool_(pool), rowType_(std::move(rowType)), keyIndices_{0} {}
 
-  CudfVectorPtr compactInputBatch(CudfVectorPtr rawInput) override {
-    return rawInput;
+  PartitionedBufferedState::InputChunk prepareInput(
+      CudfVectorPtr rawInput) override {
+    return makeOwnedChunk(std::move(rawInput));
   }
 
-  CudfVectorPtr mergeBuffered(CudfVectorPtr left, CudfVectorPtr right) override {
-    if (!left) {
-      return right;
-    }
-    if (!right) {
-      return left;
-    }
-
-    auto stream = left->stream();
-    std::vector<CudfVectorPtr> tables;
-    tables.push_back(std::move(left));
-    tables.push_back(std::move(right));
-    auto mergedTable =
-        getConcatenatedTable(std::move(tables), rowType_, stream, get_output_mr());
-    return std::make_shared<CudfVector>(
-        pool_, rowType_, mergedTable->num_rows(), std::move(mergedTable), stream);
+  size_t estimatedMergedRowUpperBound(
+      const PartitionedBufferedState::LeafState& leaf,
+      const PartitionedBufferedState::InputChunk& input) const override {
+    return asLeaf(leaf).chunk.size() + input.size();
   }
 
-  CudfVectorPtr finalizeLeaf(CudfVectorPtr bufferedLeaf) override {
-    return bufferedLeaf;
+  std::unique_ptr<PartitionedBufferedState::LeafState> createLeaf(
+      PartitionedBufferedState::InputChunk input) override {
+    return std::make_unique<TableLeafState>(std::move(input));
   }
 
-  TypePtr bufferedType() const override {
-    return rowType_;
+  void addInputToLeaf(
+      PartitionedBufferedState::LeafState& leaf,
+      PartitionedBufferedState::InputChunk input) override {
+    auto& tableLeaf = asLeaf(leaf);
+    tableLeaf.chunk = mergeChunks(std::move(tableLeaf.chunk), std::move(input));
   }
 
-  TypePtr outputType() const override {
-    return rowType_;
+  size_t leafRowCount(
+      const PartitionedBufferedState::LeafState& leaf) const override {
+    return asLeaf(leaf).chunk.size();
   }
 
-  const std::vector<cudf::size_type>& keyIndices() const override {
-    return keyIndices_;
-  }
-
- private:
-  memory::MemoryPool* pool_;
-  RowTypePtr rowType_;
-  std::vector<cudf::size_type> keyIndices_;
-};
-
-class LambdaHashPartitioner final
-    : public PartitionedBufferedState::HashPartitioner {
- public:
-  using ExtractKeys = std::function<std::vector<int64_t>(const CudfVectorPtr&)>;
-  using MakeTable = std::function<CudfVectorPtr(const std::vector<int64_t>&)>;
-  using PartitionFn = std::function<int32_t(int64_t, uint32_t, int32_t)>;
-
-  LambdaHashPartitioner(
-      ExtractKeys extractKeys,
-      MakeTable makeTable,
-      PartitionFn partitionFn)
-      : extractKeys_(std::move(extractKeys)),
-        makeTable_(std::move(makeTable)),
-        partitionFn_(std::move(partitionFn)) {}
-
-  std::vector<CudfVectorPtr> partition(
-      const CudfVectorPtr& input,
-      const TypePtr& /* tableType */,
-      const PartitionedBufferedState::PartitionSpec& spec) const override {
+  std::vector<PartitionedBufferedState::InputChunk> partitionInput(
+      PartitionedBufferedState::InputChunk input,
+      const PartitionedBufferedState::PartitionSpec& spec) override {
     std::vector<std::vector<int64_t>> buckets(spec.numPartitions);
-    for (auto key : extractKeys_(input)) {
+    for (auto key : extractKeys(input)) {
       auto bucket = partitionFn_(key, spec.seed, spec.numPartitions);
       VELOX_CHECK_GE(bucket, 0);
       VELOX_CHECK_LT(bucket, spec.numPartitions);
       buckets[bucket].push_back(key);
     }
 
-    std::vector<CudfVectorPtr> partitions(spec.numPartitions);
+    std::vector<PartitionedBufferedState::InputChunk> partitions(
+        spec.numPartitions);
     for (int32_t i = 0; i < spec.numPartitions; ++i) {
       if (!buckets[i].empty()) {
-        partitions[i] = makeTable_(buckets[i]);
+        partitions[i] = makeChunk_(buckets[i]);
       }
     }
     return partitions;
   }
 
+  std::vector<std::unique_ptr<PartitionedBufferedState::LeafState>>
+  repartitionLeaf(
+      std::unique_ptr<PartitionedBufferedState::LeafState> leaf,
+      const PartitionedBufferedState::PartitionSpec& spec) override {
+    auto tableLeaf =
+        std::unique_ptr<TableLeafState>(static_cast<TableLeafState*>(leaf.release()));
+    auto partitions = partitionInput(std::move(tableLeaf->chunk), spec);
+
+    std::vector<std::unique_ptr<PartitionedBufferedState::LeafState>> leaves(
+        spec.numPartitions);
+    for (int32_t i = 0; i < spec.numPartitions; ++i) {
+      if (!partitions[i].empty()) {
+        leaves[i] = std::make_unique<TableLeafState>(std::move(partitions[i]));
+      }
+    }
+    return leaves;
+  }
+
+  CudfVectorPtr finalizeLeaf(
+      std::unique_ptr<PartitionedBufferedState::LeafState> leaf) override {
+    auto tableLeaf =
+        std::unique_ptr<TableLeafState>(static_cast<TableLeafState*>(leaf.release()));
+    return tableLeaf->chunk.owner;
+  }
+
+  const std::vector<cudf::size_type>& keyIndices() const override {
+    return keyIndices_;
+  }
+
+  void setPartitioning(
+      std::function<std::vector<int64_t>(const PartitionedBufferedState::InputChunk&)>
+          extractKeys,
+      std::function<PartitionedBufferedState::InputChunk(const std::vector<int64_t>&)>
+          makeChunk,
+      std::function<int32_t(int64_t, uint32_t, int32_t)> partitionFn) {
+    extractKeys_ = std::move(extractKeys);
+    makeChunk_ = std::move(makeChunk);
+    partitionFn_ = std::move(partitionFn);
+  }
+
  private:
-  ExtractKeys extractKeys_;
-  MakeTable makeTable_;
-  PartitionFn partitionFn_;
+  memory::MemoryPool* pool_;
+  RowTypePtr rowType_;
+  std::vector<cudf::size_type> keyIndices_;
+
+  std::function<std::vector<int64_t>(const PartitionedBufferedState::InputChunk&)>
+      extractKeys_;
+  std::function<PartitionedBufferedState::InputChunk(const std::vector<int64_t>&)>
+      makeChunk_;
+  std::function<int32_t(int64_t, uint32_t, int32_t)> partitionFn_;
+
+  TableLeafState& asLeaf(PartitionedBufferedState::LeafState& leaf) const {
+    return static_cast<TableLeafState&>(leaf);
+  }
+
+  const TableLeafState& asLeaf(
+      const PartitionedBufferedState::LeafState& leaf) const {
+    return static_cast<const TableLeafState&>(leaf);
+  }
+
+  PartitionedBufferedState::InputChunk makeOwnedChunk(CudfVectorPtr owner) const {
+    return PartitionedBufferedState::InputChunk{
+        owner->pool(), rowType_, owner->getTableView(), owner->stream(), std::move(owner)};
+  }
+
+  PartitionedBufferedState::InputChunk mergeChunks(
+      PartitionedBufferedState::InputChunk left,
+      PartitionedBufferedState::InputChunk right) const {
+    if (left.empty()) {
+      return right;
+    }
+    if (right.empty()) {
+      return left;
+    }
+
+    auto stream = left.stream;
+    std::vector<cudf::table_view> views{left.view, right.view};
+    std::vector<rmm::cuda_stream_view> inputStreams{left.stream, right.stream};
+    auto mergedTable =
+        concatenateViews(views, inputStreams, stream, get_output_mr());
+    auto merged = std::make_shared<CudfVector>(
+        pool_, rowType_, mergedTable->num_rows(), std::move(mergedTable), stream);
+    return makeOwnedChunk(std::move(merged));
+  }
+
+  std::vector<int64_t> extractKeys(
+      const PartitionedBufferedState::InputChunk& input) const {
+    return extractKeys_(input);
+  }
 };
 
 class PartitionedBufferedStateTest : public ::testing::Test, public VectorTestBase {
@@ -147,10 +208,17 @@ class PartitionedBufferedStateTest : public ::testing::Test, public VectorTestBa
         pool_.get(), rowType_, row->size(), std::move(table), stream);
   }
 
-  std::vector<int64_t> toKeys(const CudfVectorPtr& vector) {
-    auto stream = vector->stream();
+  PartitionedBufferedState::InputChunk makeChunk(
+      const std::vector<int64_t>& keys) {
+    auto vector = makeCudfVector(keys);
+    return PartitionedBufferedState::InputChunk{
+        vector->pool(), rowType_, vector->getTableView(), vector->stream(), std::move(vector)};
+  }
+
+  std::vector<int64_t> toKeys(const PartitionedBufferedState::InputChunk& input) {
+    auto stream = input.stream;
     auto row = with_arrow::toVeloxColumn(
-        vector->getTableView(), pool_.get(), rowType_, "", stream, get_output_mr());
+        input.view, pool_.get(), rowType_, "", stream, get_output_mr());
     stream.synchronize();
 
     std::vector<int64_t> keys;
@@ -165,7 +233,12 @@ class PartitionedBufferedStateTest : public ::testing::Test, public VectorTestBa
   std::vector<std::vector<int64_t>> drainAll(PartitionedBufferedState& state) {
     std::vector<std::vector<int64_t>> outputs;
     while (auto output = state.drainNextOutput()) {
-      auto keys = toKeys(output);
+      auto keys = toKeys(PartitionedBufferedState::InputChunk{
+          output->pool(),
+          rowType_,
+          output->getTableView(),
+          output->stream(),
+          output});
       std::sort(keys.begin(), keys.end());
       outputs.push_back(std::move(keys));
     }
@@ -178,16 +251,15 @@ class PartitionedBufferedStateTest : public ::testing::Test, public VectorTestBa
 };
 
 TEST_F(PartitionedBufferedStateTest, mergesLeafDirectlyBelowCap) {
+  auto ops = std::make_unique<IdentityBufferedStateOps>(pool_.get(), rowType_);
+  ops->setPartitioning(
+      [&](const PartitionedBufferedState::InputChunk& input) { return toKeys(input); },
+      [&](const std::vector<int64_t>& keys) { return makeChunk(keys); },
+      [](int64_t key, uint32_t /* seed */, int32_t numPartitions) {
+        return static_cast<int32_t>(key % numPartitions);
+      });
   PartitionedBufferedState state(
-      std::make_unique<IdentityBufferedStateOps>(pool_.get(), rowType_),
-      10,
-      std::make_unique<LambdaHashPartitioner>(
-          [&](const CudfVectorPtr& input) { return toKeys(input); },
-          [&](const std::vector<int64_t>& keys) { return makeCudfVector(keys); },
-          [](int64_t key, uint32_t /* seed */, int32_t numPartitions) {
-            return static_cast<int32_t>(key % numPartitions);
-          }),
-      0);
+      std::move(ops), 10, 0);
 
   state.addInput(makeCudfVector({1, 2}));
   state.addInput(makeCudfVector({3, 4}));
@@ -198,16 +270,15 @@ TEST_F(PartitionedBufferedStateTest, mergesLeafDirectlyBelowCap) {
 }
 
 TEST_F(PartitionedBufferedStateTest, topLevelSplitKeepsRoutingStable) {
+  auto ops = std::make_unique<IdentityBufferedStateOps>(pool_.get(), rowType_);
+  ops->setPartitioning(
+      [&](const PartitionedBufferedState::InputChunk& input) { return toKeys(input); },
+      [&](const std::vector<int64_t>& keys) { return makeChunk(keys); },
+      [](int64_t key, uint32_t /* seed */, int32_t numPartitions) {
+        return static_cast<int32_t>(key % numPartitions);
+      });
   PartitionedBufferedState state(
-      std::make_unique<IdentityBufferedStateOps>(pool_.get(), rowType_),
-      3,
-      std::make_unique<LambdaHashPartitioner>(
-          [&](const CudfVectorPtr& input) { return toKeys(input); },
-          [&](const std::vector<int64_t>& keys) { return makeCudfVector(keys); },
-          [](int64_t key, uint32_t /* seed */, int32_t numPartitions) {
-            return static_cast<int32_t>(key % numPartitions);
-          }),
-      0);
+      std::move(ops), 3, 0);
 
   state.addInput(makeCudfVector({0, 2}));
   state.addInput(makeCudfVector({1, 3}));
@@ -220,17 +291,16 @@ TEST_F(PartitionedBufferedStateTest, topLevelSplitKeepsRoutingStable) {
 }
 
 TEST_F(PartitionedBufferedStateTest, overflowingChildSplitsAgain) {
+  auto ops = std::make_unique<IdentityBufferedStateOps>(pool_.get(), rowType_);
+  ops->setPartitioning(
+      [&](const PartitionedBufferedState::InputChunk& input) { return toKeys(input); },
+      [&](const std::vector<int64_t>& keys) { return makeChunk(keys); },
+      [](int64_t key, uint32_t seed, int32_t numPartitions) {
+        auto value = seed == 0 ? key : key / 10;
+        return static_cast<int32_t>(value % numPartitions);
+      });
   PartitionedBufferedState state(
-      std::make_unique<IdentityBufferedStateOps>(pool_.get(), rowType_),
-      2,
-      std::make_unique<LambdaHashPartitioner>(
-          [&](const CudfVectorPtr& input) { return toKeys(input); },
-          [&](const std::vector<int64_t>& keys) { return makeCudfVector(keys); },
-          [](int64_t key, uint32_t seed, int32_t numPartitions) {
-            auto value = seed == 0 ? key : key / 10;
-            return static_cast<int32_t>(value % numPartitions);
-          }),
-      0);
+      std::move(ops), 2, 0);
 
   state.addInput(makeCudfVector({0, 10}));
   state.addInput(makeCudfVector({20, 1}));
@@ -243,16 +313,15 @@ TEST_F(PartitionedBufferedStateTest, overflowingChildSplitsAgain) {
 }
 
 TEST_F(PartitionedBufferedStateTest, noProgressSplitFailsFast) {
+  auto ops = std::make_unique<IdentityBufferedStateOps>(pool_.get(), rowType_);
+  ops->setPartitioning(
+      [&](const PartitionedBufferedState::InputChunk& input) { return toKeys(input); },
+      [&](const std::vector<int64_t>& keys) { return makeChunk(keys); },
+      [](int64_t /* key */, uint32_t /* seed */, int32_t /* numPartitions */) {
+        return 0;
+      });
   PartitionedBufferedState state(
-      std::make_unique<IdentityBufferedStateOps>(pool_.get(), rowType_),
-      2,
-      std::make_unique<LambdaHashPartitioner>(
-          [&](const CudfVectorPtr& input) { return toKeys(input); },
-          [&](const std::vector<int64_t>& keys) { return makeCudfVector(keys); },
-          [](int64_t /* key */, uint32_t /* seed */, int32_t /* numPartitions */) {
-            return 0;
-          }),
-      0);
+      std::move(ops), 2, 0);
 
   VELOX_ASSERT_THROW(state.addInput(makeCudfVector({1, 2, 3})), "made no progress");
 }

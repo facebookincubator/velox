@@ -15,7 +15,6 @@
  */
 
 #include "velox/experimental/cudf/exec/PartitionedBufferedState.h"
-
 #include "velox/experimental/cudf/exec/Utilities.h"
 
 #include <limits>
@@ -23,13 +22,9 @@
 namespace facebook::velox::cudf_velox {
 namespace {
 
-size_t rowCount(const CudfVectorPtr& table) {
-  return table ? static_cast<size_t>(table->size()) : 0;
-}
-
 bool nodeEmpty(const PartitionedBufferedState::Node& node) {
   if (node.isLeaf()) {
-    return node.leafData == nullptr;
+    return node.leafState == nullptr;
   }
 
   for (const auto& child : node.children) {
@@ -40,43 +35,17 @@ bool nodeEmpty(const PartitionedBufferedState::Node& node) {
   return true;
 }
 
-class CudfHashPartitioner final
-    : public PartitionedBufferedState::HashPartitioner {
- public:
-  std::vector<CudfVectorPtr> partition(
-      const CudfVectorPtr& input,
-      const TypePtr& tableType,
-      const PartitionedBufferedState::PartitionSpec& spec) const override {
-    if (!input) {
-      return std::vector<CudfVectorPtr>(spec.numPartitions);
-    }
-    return hashPartitionTable(
-        input,
-        tableType,
-        spec.keyIndices,
-        spec.numPartitions,
-        spec.hashId,
-        spec.seed,
-        input->stream());
-  }
-};
-
 } // namespace
 
 PartitionedBufferedState::PartitionedBufferedState(
-    std::unique_ptr<BufferedStateOps> ops,
+    std::unique_ptr<LeafStateOps> ops,
     size_t maxRowsPerLeaf,
-    std::unique_ptr<HashPartitioner> partitioner,
     uint32_t initialHashSeed)
     : ops_(std::move(ops)),
-      partitioner_(
-          partitioner ? std::move(partitioner)
-                      : std::make_unique<CudfHashPartitioner>()),
       maxRowsPerLeaf_(maxRowsPerLeaf),
       root_(std::make_unique<Node>()),
       nextHashSeed_(initialHashSeed) {
   VELOX_CHECK_NOT_NULL(ops_);
-  VELOX_CHECK_NOT_NULL(partitioner_);
   VELOX_CHECK_GT(maxRowsPerLeaf_, 0);
 }
 
@@ -85,8 +54,8 @@ void PartitionedBufferedState::addInput(CudfVectorPtr rawInput) {
     return;
   }
 
-  auto compacted = ops_->compactInputBatch(std::move(rawInput));
-  if (!compacted || compacted->size() == 0) {
+  auto compacted = ops_->prepareInput(std::move(rawInput));
+  if (compacted.empty()) {
     return;
   }
 
@@ -101,49 +70,63 @@ bool PartitionedBufferedState::empty() const {
   return nodeEmpty(*root_);
 }
 
-void PartitionedBufferedState::insert(Node& node, CudfVectorPtr bufferedInput) {
-  if (!bufferedInput || bufferedInput->size() == 0) {
+void PartitionedBufferedState::insert(Node& node, InputChunk bufferedInput) {
+  if (bufferedInput.empty()) {
     return;
   }
 
   if (!node.isLeaf()) {
-    auto partitions = partitionInput(bufferedInput, *node.split);
+    auto partitions = partitionInput(std::move(bufferedInput), *node.split);
     VELOX_CHECK_EQ(partitions.size(), node.children.size());
     for (size_t i = 0; i < partitions.size(); ++i) {
-      if (partitions[i]) {
+      if (!partitions[i].empty()) {
         insert(*node.children[i], std::move(partitions[i]));
       }
     }
     return;
   }
 
-  const auto totalRows = rowCount(node.leafData) + rowCount(bufferedInput);
-  if (totalRows <= maxRowsPerLeaf_) {
-    node.leafData = node.leafData
-        ? ops_->mergeBuffered(node.leafData, std::move(bufferedInput))
-        : std::move(bufferedInput);
+  if (!node.leafState) {
+    node.leafState = ops_->createLeaf(std::move(bufferedInput));
+    if (node.leafState) {
+      node.leafRows = ops_->leafRowCount(*node.leafState);
+      ensureLeafWithinLimit(node);
+    }
     return;
   }
 
-  splitLeaf(node, std::move(bufferedInput));
+  const auto projectedRows =
+      ops_->estimatedMergedRowUpperBound(*node.leafState, bufferedInput);
+  if (projectedRows > maxRowsPerLeaf_) {
+    splitLeaf(node, std::move(bufferedInput));
+    return;
+  }
+
+  ops_->addInputToLeaf(*node.leafState, std::move(bufferedInput));
+  node.leafRows = ops_->leafRowCount(*node.leafState);
+  ensureLeafWithinLimit(node);
 }
 
-void PartitionedBufferedState::splitLeaf(
-    Node& node,
-    CudfVectorPtr bufferedInput) {
-  VELOX_CHECK(node.isLeaf());
-  VELOX_CHECK(bufferedInput);
+void PartitionedBufferedState::splitLeaf(Node& node) {
+  splitLeaf(node, InputChunk{});
+}
 
-  const auto totalRows = rowCount(node.leafData) + rowCount(bufferedInput);
+void PartitionedBufferedState::splitLeaf(Node& node, InputChunk bufferedInput) {
+  VELOX_CHECK(node.isLeaf());
+  VELOX_CHECK(node.leafState || !bufferedInput.empty());
+
+  const auto totalRows = node.leafRows + bufferedInput.size();
   auto spec = makePartitionSpec(totalRows);
 
-  auto stored = std::move(node.leafData);
-  auto storedPartitions = partitionInput(stored, spec);
-  auto incomingPartitions = partitionInput(bufferedInput, spec);
+  auto storedPartitions = node.leafState
+      ? ops_->repartitionLeaf(std::move(node.leafState), spec)
+      : std::vector<std::unique_ptr<LeafState>>(spec.numPartitions);
+  auto incomingPartitions = partitionInput(std::move(bufferedInput), spec);
 
   size_t nonEmptyChildren = 0;
   for (size_t i = 0; i < incomingPartitions.size(); ++i) {
-    if (rowCount(storedPartitions[i]) + rowCount(incomingPartitions[i]) > 0) {
+    if ((storedPartitions[i] && ops_->leafRowCount(*storedPartitions[i]) > 0) ||
+        !incomingPartitions[i].empty()) {
       ++nonEmptyChildren;
     }
   }
@@ -157,6 +140,7 @@ void PartitionedBufferedState::splitLeaf(
       maxRowsPerLeaf_,
       spec.numPartitions);
 
+  node.leafRows = 0;
   node.split = spec;
   node.children.clear();
   node.children.reserve(spec.numPartitions);
@@ -166,9 +150,12 @@ void PartitionedBufferedState::splitLeaf(
 
   for (size_t i = 0; i < node.children.size(); ++i) {
     if (storedPartitions[i]) {
-      insert(*node.children[i], std::move(storedPartitions[i]));
+      auto& child = *node.children[i];
+      child.leafRows = ops_->leafRowCount(*storedPartitions[i]);
+      child.leafState = std::move(storedPartitions[i]);
+      ensureLeafWithinLimit(child);
     }
-    if (incomingPartitions[i]) {
+    if (!incomingPartitions[i].empty()) {
       insert(*node.children[i], std::move(incomingPartitions[i]));
     }
   }
@@ -187,11 +174,12 @@ CudfVectorPtr PartitionedBufferedState::drainNextOutput(Node& node) {
     return nullptr;
   }
 
-  if (!node.leafData) {
+  if (!node.leafState) {
     return nullptr;
   }
 
-  return ops_->finalizeLeaf(std::move(node.leafData));
+  node.leafRows = 0;
+  return ops_->finalizeLeaf(std::move(node.leafState));
 }
 
 PartitionedBufferedState::PartitionSpec
@@ -200,8 +188,8 @@ PartitionedBufferedState::makePartitionSpec(size_t totalRows) {
 
   const auto requiredPartitions =
       (totalRows + maxRowsPerLeaf_ - 1) / maxRowsPerLeaf_;
-  const auto numPartitions = std::max<size_t>(
-      2, std::min(requiredPartitions, totalRows));
+  const auto numPartitions =
+      std::max<size_t>(2, std::min(requiredPartitions, totalRows));
   VELOX_CHECK_LE(numPartitions, std::numeric_limits<int32_t>::max());
 
   return PartitionSpec{
@@ -211,11 +199,18 @@ PartitionedBufferedState::makePartitionSpec(size_t totalRows) {
       nextHashSeed_++};
 }
 
-std::vector<CudfVectorPtr> PartitionedBufferedState::partitionInput(
-    const CudfVectorPtr& input,
-    const PartitionSpec& spec) const {
-  return input ? partitioner_->partition(input, ops_->bufferedType(), spec)
-               : std::vector<CudfVectorPtr>(spec.numPartitions);
+void PartitionedBufferedState::ensureLeafWithinLimit(Node& node) {
+  if (node.isLeaf() && node.leafState && node.leafRows > maxRowsPerLeaf_) {
+    splitLeaf(node);
+  }
+}
+
+std::vector<PartitionedBufferedState::InputChunk>
+PartitionedBufferedState::partitionInput(
+    InputChunk input,
+    const PartitionSpec& spec) {
+  return input.empty() ? std::vector<InputChunk>(spec.numPartitions)
+                       : ops_->partitionInput(std::move(input), spec);
 }
 
 } // namespace facebook::velox::cudf_velox

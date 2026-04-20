@@ -113,6 +113,21 @@ std::unique_ptr<cudf::table> getConcatenatedTable(
   return output;
 }
 
+std::unique_ptr<cudf::table> concatenateViews(
+    const std::vector<cudf::table_view>& tableViews,
+    const std::vector<rmm::cuda_stream_view>& inputStreams,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  VELOX_CHECK_GT(tableViews.size(), 0);
+
+  cudf::detail::join_streams(inputStreams, stream);
+  auto output = cudf::concatenate(tableViews, stream, mr);
+
+  CudaEvent event(cudaEventDisableTiming);
+  streamsWaitForStream(event, inputStreams, stream);
+  return output;
+}
+
 std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
     std::vector<CudfVectorPtr>&& tables,
     const TypePtr& tableType,
@@ -191,13 +206,35 @@ std::vector<CudfVectorPtr> hashPartitionTable(
     uint32_t seed,
     rmm::cuda_stream_view stream) {
   VELOX_CHECK_NOT_NULL(table);
+  return hashPartitionTable(
+      table->getTableView(),
+      table->pool(),
+      tableType,
+      table->stream(),
+      partitionKeyIndices,
+      numPartitions,
+      hashId,
+      seed,
+      stream);
+}
+
+std::vector<CudfVectorPtr> hashPartitionTable(
+    cudf::table_view tableView,
+    memory::MemoryPool* pool,
+    const TypePtr& tableType,
+    rmm::cuda_stream_view inputStream,
+    std::vector<cudf::size_type> const& partitionKeyIndices,
+    int32_t numPartitions,
+    cudf::hash_id hashId,
+    uint32_t seed,
+    rmm::cuda_stream_view stream) {
   VELOX_CHECK_GT(numPartitions, 0);
 
-  std::vector<rmm::cuda_stream_view> inputStreams{table->stream()};
+  std::vector<rmm::cuda_stream_view> inputStreams{inputStream};
   cudf::detail::join_streams(inputStreams, stream);
 
   auto [partitionedTable, partitionOffsets] = cudf::hash_partition(
-      table->getTableView(),
+      tableView,
       partitionKeyIndices,
       numPartitions,
       hashId,
@@ -221,7 +258,7 @@ std::vector<CudfVectorPtr> hashPartitionTable(
     }
 
     partitions[i] = std::make_shared<CudfVector>(
-        table->pool(),
+        pool,
         tableType,
         partition.num_rows(),
         std::make_unique<cudf::table>(partition, stream, get_output_mr()),
