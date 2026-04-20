@@ -54,6 +54,8 @@
 #include <cudf/unary.hpp>
 #include <cudf/utilities/traits.hpp>
 
+#include <memory>
+
 namespace facebook::velox::cudf_velox {
 namespace {
 
@@ -121,6 +123,27 @@ std::unique_ptr<cudf::scalar> castDecimalScalar(
     cudf::data_type targetType,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
+  if (!src.is_valid(stream)) {
+    VELOX_CHECK(
+        targetType.id() == cudf::type_id::DECIMAL64 ||
+            targetType.id() == cudf::type_id::DECIMAL128,
+        "castDecimalScalar: target must be DECIMAL64 or DECIMAL128");
+    if (targetType.id() == cudf::type_id::DECIMAL128) {
+      return std::make_unique<cudf::fixed_point_scalar<numeric::decimal128>>(
+          0,
+          numeric::scale_type{targetType.scale()},
+          false,
+          stream,
+          mr);
+    }
+    return std::make_unique<cudf::fixed_point_scalar<numeric::decimal64>>(
+        0,
+        numeric::scale_type{targetType.scale()},
+        false,
+        stream,
+        mr);
+  }
+
   __int128_t rep;
   if (src.type().id() == cudf::type_id::DECIMAL64) {
     auto const& dec =
