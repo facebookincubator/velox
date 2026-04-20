@@ -822,8 +822,7 @@ bool registerCudfFunction(
   if (!overwrite && !registry[name].empty()) {
     return false;
   }
-  registry[name].push_back(
-      CudfFunctionSpec{std::move(factory), signatures});
+  registry[name].push_back(CudfFunctionSpec{std::move(factory), signatures});
   return true;
 }
 

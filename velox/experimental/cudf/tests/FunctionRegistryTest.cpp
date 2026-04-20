@@ -71,13 +71,14 @@ std::shared_ptr<exec::Expr> makeCall(
   std::vector<std::shared_ptr<exec::Expr>> inputs;
   inputs.reserve(argTypes.size());
   for (const auto& argType : argTypes) {
-    inputs.push_back(std::make_shared<exec::Expr>(
-        argType,
-        std::vector<std::shared_ptr<exec::Expr>>{},
-        "field",
-        /*specialFormKind=*/std::nullopt,
-        /*supportsFlatNoNullsFastPath=*/false,
-        /*trackCpuUsage=*/false));
+    inputs.push_back(
+        std::make_shared<exec::Expr>(
+            argType,
+            std::vector<std::shared_ptr<exec::Expr>>{},
+            "field",
+            /*specialFormKind=*/std::nullopt,
+            /*supportsFlatNoNullsFastPath=*/false,
+            /*trackCpuUsage=*/false));
   }
   return std::make_shared<exec::Expr>(
       returnType,
@@ -142,7 +143,8 @@ TEST_F(FunctionRegistryTest, multipleSignaturesDispatchByInputTypes) {
   EXPECT_EQ(tagOf(createCudfFunction(name, dateExpr)), "date_interval");
 }
 
-// Function registration whose types don't match any registered spec returns nullptr.
+// Function registration whose types don't match any registered spec returns
+// nullptr.
 TEST_F(FunctionRegistryTest, noMatchingSignatureReturnsNull) {
   const std::string name = "regtest_nomatch";
 
@@ -247,12 +249,15 @@ TEST_F(FunctionRegistryTest, canEvaluateMultipleSignatures) {
            .argumentType("interval day to second")
            .build()});
 
-  EXPECT_TRUE(FunctionExpression::canEvaluate(
-      makeCall(name, DOUBLE(), {DOUBLE(), DOUBLE()})));
-  EXPECT_TRUE(FunctionExpression::canEvaluate(
-      makeCall(name, DATE(), {DATE(), INTERVAL_DAY_TIME()})));
-  EXPECT_FALSE(FunctionExpression::canEvaluate(
-      makeCall(name, VARCHAR(), {VARCHAR(), VARCHAR()})));
+  EXPECT_TRUE(
+      FunctionExpression::canEvaluate(
+          makeCall(name, DOUBLE(), {DOUBLE(), DOUBLE()})));
+  EXPECT_TRUE(
+      FunctionExpression::canEvaluate(
+          makeCall(name, DATE(), {DATE(), INTERVAL_DAY_TIME()})));
+  EXPECT_FALSE(
+      FunctionExpression::canEvaluate(
+          makeCall(name, VARCHAR(), {VARCHAR(), VARCHAR()})));
 }
 
 // `FieldReference` expression, no registry setup. Test that `canEvaluate`
@@ -267,10 +272,11 @@ TEST_F(FunctionRegistryTest, canEvaluateFieldReference) {
 // `canEvaluate` dispatches these through `cudf::is_supported_cast` rather
 // than through the normal signature-matching path.
 TEST_F(FunctionRegistryTest, canEvaluateCastExpression) {
-  EXPECT_TRUE(FunctionExpression::canEvaluate(
-      makeCall("cast", BIGINT(), {DOUBLE()})));
-  EXPECT_TRUE(FunctionExpression::canEvaluate(
-      makeCall("try_cast", BIGINT(), {DOUBLE()})));
+  EXPECT_TRUE(
+      FunctionExpression::canEvaluate(makeCall("cast", BIGINT(), {DOUBLE()})));
+  EXPECT_TRUE(
+      FunctionExpression::canEvaluate(
+          makeCall("try_cast", BIGINT(), {DOUBLE()})));
 }
 
 // Two function registrations under the same name with identical signatures,
@@ -382,10 +388,8 @@ TEST_F(FunctionRegistryTest, registerAliasesOverwriteFalse) {
       {sig},
       /*overwrite=*/false);
 
-  auto originalExpr =
-      makeCall(alreadyThere, DOUBLE(), {DOUBLE(), DOUBLE()});
-  EXPECT_EQ(
-      tagOf(createCudfFunction(alreadyThere, originalExpr)), "original");
+  auto originalExpr = makeCall(alreadyThere, DOUBLE(), {DOUBLE(), DOUBLE()});
+  EXPECT_EQ(tagOf(createCudfFunction(alreadyThere, originalExpr)), "original");
 
   auto freshExpr = makeCall(fresh, DOUBLE(), {DOUBLE(), DOUBLE()});
   EXPECT_EQ(tagOf(createCudfFunction(fresh, freshExpr)), "new");
