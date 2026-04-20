@@ -16,26 +16,21 @@
 
 #pragma once
 
-#include <string_view>
-
-#include <torch/nativert/graph/Graph.h>
-#include <torch/nativert/graph/TensorMeta.h>
+#include <string>
+#include <vector>
 
 namespace torch::wave {
 
-void printTensorMeta(
-    std::string_view name,
-    const torch::nativert::TensorMeta& tm);
+/// Registers a NamedTuple type so the pickle reader can deserialize it.
+/// 'qualifiedName' is the fully qualified Python type name (e.g.
+/// "module.ClassName"). 'fieldNames' lists fields in declaration order.
+void registerNamedTuple(
+    const std::string& qualifiedName,
+    std::vector<std::string> fieldNames);
 
-void printModelParams(const torch::nativert::Graph& graph);
-
-void printGraphView(
-    torch::nativert::Graph& graph,
-    bool optimize = false,
-    bool valueMeta = false);
-
-/// Builds ValueTypes from the graph's tensor metadata, constructs a WaveGraph,
-/// and prints the compiled result to stdout.
-void compileGraph(torch::nativert::Graph& graph);
+/// Reads a .pt file and prints the position, name, shape, and dtype of each
+/// serialized tensor. Supports NamedTuple types registered via
+/// registerNamedTuple.
+void describePt(const std::string& path);
 
 } // namespace torch::wave

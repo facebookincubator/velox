@@ -16,9 +16,12 @@ add_library(
   torch_wave
   Builtins.cpp
   Compile.cpp
-  Execute.cpp
+  CompiledOp.cpp
+  DelegateExecutor.cpp
   Executor.cpp
-  NativertSerialization.cpp
+  GraphOptimizer.cpp
+  KernelHandlerRegistration.cpp
+  NativertDelegateExecutor.cpp
   ParallelExpr.cpp
   Project.cpp
   Pt2Load.cpp

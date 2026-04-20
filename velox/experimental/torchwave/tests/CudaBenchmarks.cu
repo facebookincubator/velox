@@ -21,7 +21,14 @@
 
 #include <ATen/ATen.h>
 #include <ATen/cuda/CUDAContext.h>
+#include <gflags/gflags.h>
 #include "velox/experimental/gpu/Common.h"
+
+DEFINE_int32(
+    complex_path,
+    0,
+    "0: simple kernel, 1: complex kernel with contiguous inputs, "
+    "2: complex kernel with non-contiguous inputs");
 
 namespace torch::wave {
 constexpr int32_t kBlockSize = 256;
@@ -32,10 +39,13 @@ constexpr int32_t kBlockSize = 256;
 
 namespace torch::wave {
 
+// Original simple kernel: no init, uses numEl()/isFastPathTensor(), no slow
+// path.
 __global__ void torchwave0(TorchWaveParams params) {
   ENTRY;
   __shared__ uint32_t size;
   __shared__ uint32_t isFastPath0;
+  constexpr int32_t kT = sizeof(Tensor);
   switch (blockInfo.op) {
     case 3: {
       if (threadIdx.x == 0) {
@@ -44,7 +54,7 @@ __global__ void torchwave0(TorchWaveParams params) {
         size = numEl(*temp);
         isFastPath0 |= isFastPathTensor(*temp);
         uint32_t size2;
-        temp = param<Tensor>(blockInfo, 40);
+        temp = param<Tensor>(blockInfo, kT);
         size2 = numEl(*temp);
         isFastPath0 |= isFastPathTensor(*temp) << 1;
         if (size2 != size) {
@@ -58,15 +68,15 @@ __global__ void torchwave0(TorchWaveParams params) {
       }
       __syncthreads();
       int64_t* b0 = storage<int64_t>(param<Tensor>(blockInfo, 0));
-      int64_t* b1 = storage<int64_t>(param<Tensor>(blockInfo, 40));
-      int64_t* b2 = storage<int64_t>(param<Tensor>(blockInfo, 80));
-      int64_t attr120 = *param<int64_t>(blockInfo, 120);
+      int64_t* b1 = storage<int64_t>(param<Tensor>(blockInfo, kT));
+      int64_t* b2 = storage<int64_t>(param<Tensor>(blockInfo, 2 * kT));
+      int64_t attr = *param<int64_t>(blockInfo, 3 * kT);
       if (isFastPath0 == 0x3) {
         for (uint32_t idx =
                  blockInfo.blockInOp * blockDim.x + threadIdx.x;
              idx < size;
              idx += blockInfo.numBlocksInOp * blockDim.x) {
-          int64_t result0 = __add(b0[idx], b1[idx], attr120);
+          int64_t result0 = __add(b0[idx], b1[idx], attr);
           b2[idx] = result0;
         }
       } else {
@@ -75,6 +85,81 @@ __global__ void torchwave0(TorchWaveParams params) {
             __LINE__,
             isFastPath0);
         __trap();
+      }
+      break;
+    }
+  }
+  LEAVE();
+}
+
+// Complex path kernel: init<true>(), reads temp->numEl/contiguous, has
+// complexIdx slow path.
+__global__ void torchwave1(TorchWaveParams params) {
+  ENTRY;
+  __shared__ uint32_t size;
+  __shared__ uint32_t isFastPath0;
+  constexpr int32_t kT = sizeof(Tensor);
+  switch (blockInfo.op) {
+    case 3: {
+      {
+        static int32_t paramOffsets[] = {0, kT, 2 * kT};
+        for (auto i = threadIdx.x;
+             i < sizeof(paramOffsets) / sizeof(paramOffsets[0]);
+             i += blockDim.x) {
+          param<Tensor>(blockInfo, paramOffsets[i])->init<true>();
+        }
+      }
+      __syncthreads();
+      {
+        if (threadIdx.x == 0) {
+          isFastPath0 = 0;
+          Tensor* temp = param<Tensor>(blockInfo, 0);
+          size = temp->numEl;
+          isFastPath0 |= temp->contiguous;
+          uint32_t size2;
+          temp = param<Tensor>(blockInfo, kT);
+          size2 = temp->numEl;
+          isFastPath0 |= (uint32_t)temp->contiguous << 1;
+          if (size2 != size) {
+            if (size2 > size) {
+              isFastPath0 &= ~((1 << 1) - 1);
+              size = size2;
+            } else {
+              isFastPath0 &= ~(1 << 1);
+            }
+          }
+        }
+        __syncthreads();
+        int64_t* b0 = storage<int64_t>(param<Tensor>(blockInfo, 0));
+        int64_t* b1 = storage<int64_t>(param<Tensor>(blockInfo, kT));
+        int64_t* b2 = storage<int64_t>(param<Tensor>(blockInfo, 2 * kT));
+        int64_t attr = *param<int64_t>(blockInfo, 3 * kT);
+        if (isFastPath0 == 0x3) {
+          for (uint32_t idx =
+                   blockInfo.blockInOp * blockDim.x + threadIdx.x;
+               idx < size;
+               idx += blockInfo.numBlocksInOp * blockDim.x) {
+            int64_t result0 = __add(b0[idx], b1[idx], attr);
+            b2[idx] = result0;
+          }
+        } else {
+          for (uint32_t idx =
+                   blockInfo.blockInOp * blockDim.x + threadIdx.x;
+               idx < size;
+               idx += blockInfo.numBlocksInOp * blockDim.x) {
+            int64_t result0 = __add(
+                b0[complexIdx(
+                    isFastPath0 & (1 << 0),
+                    param<Tensor>(blockInfo, 0),
+                    idx)],
+                b1[complexIdx(
+                    isFastPath0 & (1 << 1),
+                    param<Tensor>(blockInfo, kT),
+                    idx)],
+                attr);
+            b2[idx] = result0;
+          }
+        }
       }
       break;
     }
@@ -102,6 +187,35 @@ static void fillTensorParam(const at::Tensor& tensor, Tensor* t) {
     t->dims[i] = i < tensor.dim() ? tensor.size(i) : 0;
     t->strides[i] = i < tensor.dim() ? tensor.stride(i) : 0;
   }
+  t->numEl = tensor.numel();
+  t->contiguous = true;
+  t->status = Tensor::kUninited;
+}
+
+// Fills a Tensor param for the complex path kernel. For nonContiguous, creates
+// a 2D tensor with reversed strides (column-major): dims=[dataSize/16, 16],
+// strides=[1, dataSize/16].
+static void fillTensorParamComplex(
+    void* storagePtr,
+    Tensor* t,
+    int32_t dataSize,
+    bool nonContiguous) {
+  memset(t, 0, sizeof(Tensor));
+  t->storage = storagePtr;
+  if (nonContiguous) {
+    t->rank = 2;
+    t->dims[0] = dataSize / 16;
+    t->dims[1] = 16;
+    t->strides[0] = 1;
+    t->strides[1] = dataSize / 16;
+    t->status = Tensor::kUninited;
+  } else {
+    t->rank = 1;
+    t->dims[0] = dataSize;
+    t->strides[0] = 1;
+    t->numEl = dataSize;
+    t->contiguous = true;
+  }
 }
 
 struct Trial {
@@ -110,11 +224,16 @@ struct Trial {
   double micros;
 };
 
-int main() {
-  constexpr int32_t kMaxSize = 1 << 24;
-  constexpr int32_t kElementSize = sizeof(int64_t); // 8
+int main(int argc, char** argv) {
+  gflags::ParseCommandLineFlags(&argc, &argv, true);
 
-  // Base tensors: 2 inputs + 1 output, each 1<<20 int64_t elements on GPU.
+  constexpr int32_t kMaxSize = 1 << 24;
+  constexpr int32_t kElementSize = sizeof(int64_t);
+  const bool useComplexKernel = FLAGS_complex_path > 0;
+  const bool nonContiguous = FLAGS_complex_path == 2;
+  constexpr int32_t tensorStride = sizeof(Tensor);
+
+  // Base tensors: 2 inputs + 1 output, each kMaxSize int64_t elements on GPU.
   auto b0 = at::randint(
       0,
       100,
@@ -128,31 +247,61 @@ int main() {
   auto b2 = at::zeros(
       {kMaxSize}, at::TensorOptions().dtype(at::kLong).device(at::kCUDA));
 
-  // Param block: 3 Tensors (offsets 0, 40, 80) + 2 int64_t attrs at 120, 128.
-  // sizeof(Tensor) == 40. Total: 3*40 + 2*8 = 136 bytes.
-  constexpr int32_t kParamSize = 3 * 40 + 2 * 8;
+  // Param block: 3 Tensors + 1 attr (int64_t).
+  int32_t kParamSize = 3 * tensorStride + 1 * 8;
   auto paramBlock = allocateManagedArray<char>(kParamSize);
   memset(paramBlock.get(), 0, kParamSize);
 
-  // Both attrs set to 1.
-  *reinterpret_cast<int64_t*>(paramBlock.get() + 120) = 1;
-  *reinterpret_cast<int64_t*>(paramBlock.get() + 128) = 1;
+  // Attr set to 1.
+  *reinterpret_cast<int64_t*>(paramBlock.get() + 3 * tensorStride) = 1;
 
   // Pre-allocate device BlockInfo for max block count.
   int32_t maxBlocks = (kMaxSize + kBlockSize - 1) / kBlockSize;
   auto blockInfoHost = allocateManagedArray<BlockInfo>(maxBlocks);
   auto blockInfoDev = allocateDeviceMemory<BlockInfo>(maxBlocks);
 
+  // Select kernel function pointer.
+  auto kernelFunc = useComplexKernel ? torchwave1 : torchwave0;
+
   std::vector<Trial> trials;
+
+  printf(
+      "Mode: complex_path=%d (%s kernel, %s inputs)\n",
+      FLAGS_complex_path,
+      useComplexKernel ? "complex" : "simple",
+      nonContiguous ? "non-contiguous" : "contiguous");
 
   // Warmup: one kernel launch to initialize CUDA runtime.
   {
-    auto v0 = b0.slice(0, 0, kBlockSize);
-    auto v1 = b1.slice(0, 0, kBlockSize);
-    auto v2 = b2.slice(0, 0, kBlockSize);
-    fillTensorParam(v0, reinterpret_cast<Tensor*>(paramBlock.get() + 0));
-    fillTensorParam(v1, reinterpret_cast<Tensor*>(paramBlock.get() + 40));
-    fillTensorParam(v2, reinterpret_cast<Tensor*>(paramBlock.get() + 80));
+    int32_t warmupSize = kBlockSize;
+    auto v0 = b0.slice(0, 0, warmupSize);
+    auto v1 = b1.slice(0, 0, warmupSize);
+    auto v2 = b2.slice(0, 0, warmupSize);
+
+    if (useComplexKernel) {
+      fillTensorParamComplex(
+          v0.data_ptr(),
+          reinterpret_cast<Tensor*>(paramBlock.get() + 0 * tensorStride),
+          warmupSize,
+          nonContiguous);
+      fillTensorParamComplex(
+          v1.data_ptr(),
+          reinterpret_cast<Tensor*>(paramBlock.get() + 1 * tensorStride),
+          warmupSize,
+          nonContiguous);
+      fillTensorParamComplex(
+          v2.data_ptr(),
+          reinterpret_cast<Tensor*>(paramBlock.get() + 2 * tensorStride),
+          warmupSize,
+          false);
+    } else {
+      fillTensorParam(
+          v0, reinterpret_cast<Tensor*>(paramBlock.get() + 0 * tensorStride));
+      fillTensorParam(
+          v1, reinterpret_cast<Tensor*>(paramBlock.get() + 1 * tensorStride));
+      fillTensorParam(
+          v2, reinterpret_cast<Tensor*>(paramBlock.get() + 2 * tensorStride));
+    }
 
     memset(&blockInfoHost[0], 0, sizeof(BlockInfo));
     blockInfoHost[0].op = 3;
@@ -169,26 +318,44 @@ int main() {
     TorchWaveParams twParams;
     memset(&twParams, 0, sizeof(twParams));
     twParams.info = blockInfoDev.get();
-    torchwave0<<<1, kBlockSize>>>(twParams);
+    kernelFunc<<<1, kBlockSize>>>(twParams);
     cudaDeviceSynchronize();
   }
 
-  // Benchmark: data sizes from 256 to 1<<20 in powers of two.
+  // Benchmark: data sizes from 256 to kMaxSize in powers of two.
   for (int32_t dataSize = 256; dataSize <= kMaxSize; dataSize *= 2) {
-    // Create views over the base tensors.
     auto v0 = b0.slice(0, 0, dataSize);
     auto v1 = b1.slice(0, 0, dataSize);
     auto v2 = b2.slice(0, 0, dataSize);
 
-    // Fill tensor params for this data size.
-    fillTensorParam(v0, reinterpret_cast<Tensor*>(paramBlock.get() + 0));
-    fillTensorParam(v1, reinterpret_cast<Tensor*>(paramBlock.get() + 40));
-    fillTensorParam(v2, reinterpret_cast<Tensor*>(paramBlock.get() + 80));
+    if (useComplexKernel) {
+      fillTensorParamComplex(
+          v0.data_ptr(),
+          reinterpret_cast<Tensor*>(paramBlock.get() + 0 * tensorStride),
+          dataSize,
+          nonContiguous);
+      fillTensorParamComplex(
+          v1.data_ptr(),
+          reinterpret_cast<Tensor*>(paramBlock.get() + 1 * tensorStride),
+          dataSize,
+          nonContiguous);
+      fillTensorParamComplex(
+          v2.data_ptr(),
+          reinterpret_cast<Tensor*>(paramBlock.get() + 2 * tensorStride),
+          dataSize,
+          false);
+    } else {
+      fillTensorParam(
+          v0, reinterpret_cast<Tensor*>(paramBlock.get() + 0 * tensorStride));
+      fillTensorParam(
+          v1, reinterpret_cast<Tensor*>(paramBlock.get() + 1 * tensorStride));
+      fillTensorParam(
+          v2, reinterpret_cast<Tensor*>(paramBlock.get() + 2 * tensorStride));
+    }
 
     int32_t startBlocks = (dataSize + kBlockSize - 1) / kBlockSize;
 
     for (int32_t numBlocks = startBlocks; numBlocks >= 1; numBlocks /= 2) {
-      // Fill BlockInfo: all blocks have op=3, same params.
       for (int32_t i = 0; i < numBlocks; ++i) {
         memset(&blockInfoHost[i], 0, sizeof(BlockInfo));
         blockInfoHost[i].op = 3;
@@ -207,9 +374,8 @@ int main() {
       memset(&twParams, 0, sizeof(twParams));
       twParams.info = blockInfoDev.get();
 
-      // Timed run: includes launch + sync.
       auto start = std::chrono::high_resolution_clock::now();
-      torchwave0<<<numBlocks, kBlockSize>>>(twParams);
+      kernelFunc<<<numBlocks, kBlockSize>>>(twParams);
       cudaDeviceSynchronize();
       auto end = std::chrono::high_resolution_clock::now();
 
@@ -266,6 +432,17 @@ int main() {
       maxGBpsVal,
       trials[maxIdx].dataSize,
       trials[maxIdx].numBlocks);
+
+  // Print kernel info.
+  cudaFuncAttributes attrs;
+  cudaFuncGetAttributes(&attrs, kernelFunc);
+  printf(
+      "\nKernel: %s  regs=%d  sharedMem=%zu  localMem=%zu  maxThreads=%d\n",
+      useComplexKernel ? "torchwave1 (complex)" : "torchwave0 (simple)",
+      attrs.numRegs,
+      attrs.sharedSizeBytes,
+      attrs.localSizeBytes,
+      attrs.maxThreadsPerBlock);
 
   return 0;
 }

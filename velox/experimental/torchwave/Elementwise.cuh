@@ -22,13 +22,13 @@ namespace torch::wave {
 
 // Binary arithmetic.
 
-template <typename T>
-__device__ inline T __add(T a1, T a2, T alpha) {
+template <typename T, typename TAlpha>
+__device__ inline T __add(T a1, T a2, TAlpha alpha) {
   return a1 + a2 * alpha;
 }
 
-template <typename T>
-__device__ inline T __sub(T a1, T a2, T alpha) {
+template <typename T, typename TAlpha>
+__device__ inline T __sub(T a1, T a2, TAlpha alpha) {
   return a1 - a2 * alpha;
 }
 
@@ -390,6 +390,38 @@ __device__ inline T __minimum(T a1, T a2) {
 template <typename T>
 __device__ inline T __maximum(T a1, T a2) {
   return a1 > a2 ? a1 : a2;
+}
+
+// Item.
+
+template <typename T>
+__device__ inline T __item(Tensor* self) {
+  return *storage<T>(self);
+}
+
+// Where.
+
+template <typename T>
+__device__ inline T __where(bool c, T x, T y) {
+  return c ? x : y;
+}
+
+// Zero.
+
+__device__ inline int32_t __zero() {
+  return 0;
+}
+
+// Arange.
+
+template <typename T>
+__device__ inline T __arange_start(int64_t idx, T start) {
+  return idx + start;
+}
+
+template <typename T>
+__device__ inline T __arange(int64_t idx) {
+  return __arange_start<T>(idx, T(0));
 }
 
 // Shape query.

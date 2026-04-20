@@ -89,9 +89,62 @@ std::string ivalueToString(const c10::IValue& value);
 /// Returns the CUDA type string for a c10::ScalarType.
 std::string cudaTypeString(c10::ScalarType dtype);
 
+/// Returns the CUDA type string for a ScalarType name string like
+/// "ScalarType::Long".
+std::string cudaTypeFromScalarTypeName(const std::string& name);
+
+/// Returns the CUDA type string from a dtype attribute, which may hold a
+/// std::string (e.g. "Float") or a c10::ScalarType enum.
+std::string cudaTypeFromDtype(const nativert::Attribute& attr);
+
+/// Returns the ScalarType name (e.g. "Float") from a dtype attribute, which
+/// may hold a std::string or a c10::ScalarType enum.
+std::string dtypeName(const nativert::Attribute& attr);
+
+/// Returns an identifier-safe suffix for a c10::ScalarType, e.g.
+/// Float → "Float", Int → "Int32", Long → "Int64".
+std::string cudaTypeIdSuffix(c10::ScalarType dtype);
+
 /// Visits sorted attributes of each node reachable from 'node' in dependency
 /// order. Skips values in 'inputs' and already-visited nodes. Calls
 /// func(node, attr) for each attribute in alphabetical order per node.
+// Calls 'func(node, attr)' for each non-string, non-device attribute of
+// 'node', sorted by name.
+template <typename Func>
+void forEachSortedAttribute(NodeCP node, Func&& func) {
+  const auto& attrs = node->attributes();
+  if (attrs.empty()) {
+    return;
+  }
+  auto* meta = Registry::metadata(node->target());
+  std::vector<const nativert::Attribute*> sorted;
+  sorted.reserve(attrs.size());
+  for (const auto& attr : attrs) {
+    if (std::holds_alternative<std::string>(attr.value) ||
+        std::holds_alternative<c10::Device>(attr.value) ||
+        attr.name == "dtype") {
+      continue;
+    }
+    if (meta && !meta->templateAttrs.empty() &&
+        std::find(
+            meta->templateAttrs.begin(),
+            meta->templateAttrs.end(),
+            attr.name) != meta->templateAttrs.end()) {
+      continue;
+    }
+    sorted.push_back(&attr);
+  }
+  std::sort(sorted.begin(), sorted.end(), [](const auto* lhs, const auto* rhs) {
+    return lhs->name < rhs->name;
+  });
+  for (const auto* attr : sorted) {
+    func(node, *attr);
+  }
+}
+
+// Recursive variant: walks the dependency graph depth-first (dependencies
+// before the node itself), skipping values in 'inputs' and already-visited
+// nodes.
 template <typename Func>
 void forEachSortedAttribute(
     NodeCP node,
@@ -110,21 +163,7 @@ void forEachSortedAttribute(
       forEachSortedAttribute(producer, inputs, visited, func);
     }
   }
-  const auto& attrs = node->attributes();
-  if (attrs.empty()) {
-    return;
-  }
-  std::vector<const nativert::Attribute*> sorted;
-  sorted.reserve(attrs.size());
-  for (const auto& attr : attrs) {
-    sorted.push_back(&attr);
-  }
-  std::sort(sorted.begin(), sorted.end(), [](const auto* a, const auto* b) {
-    return a->name < b->name;
-  });
-  for (const auto* attr : sorted) {
-    func(node, *attr);
-  }
+  forEachSortedAttribute(node, func);
 }
 
 /// RAII timer that prints elapsed microseconds on destruction.
@@ -154,5 +193,9 @@ class Timer {
   bool enable_;
   std::chrono::high_resolution_clock::time_point start_;
 };
+
+/// Sets device attributes on all nodes in 'graph' to CUDA (current device) or
+/// CPU. Uses nativert's Placement API to rewrite c10::Device attributes.
+void setGraphDevice(nativert::Graph* graph, bool isCuda);
 
 } // namespace torch::wave

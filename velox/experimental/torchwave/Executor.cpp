@@ -201,24 +201,12 @@ WaveGraphExecutor::WaveGraphExecutor(
     kernelMap_[k->node()] = k.get();
   }
   ValueTypes valueTypes;
-  initValueTypes(valueTypes);
+  initValueTypes(graph_, valueTypes, metaStore_);
   waveGraph_ = std::make_unique<WaveGraph>(graph, std::move(valueTypes));
   framePool_ = std::make_unique<Pool<nativert::ExecutionFrame>>(
       [this]() { return makeDeviceFrame(); });
 }
 
-void WaveGraphExecutor::initValueTypes(ValueTypes& valueTypes) {
-  const auto& tensorValuesMeta = graph_.tensorValuesMeta();
-  valueTypes.types.resize(graph_.values().size(), nullptr);
-  for (const auto* value : graph_.values()) {
-    auto it = tensorValuesMeta.find(std::string{value->name()});
-    if (it != tensorValuesMeta.end()) {
-      auto meta = std::make_unique<nativert::TensorMeta>(it->second);
-      valueTypes.types[value->id()] = meta.get();
-      metaStore_.push_back(std::move(meta));
-    }
-  }
-}
 
 std::unique_ptr<nativert::ExecutionFrame> WaveGraphExecutor::makeFrame() {
   return std::make_unique<nativert::ExecutionFrame>(
@@ -314,6 +302,13 @@ std::vector<c10::IValue> WaveGraphExecutor::executeWithPrefilledFrame(
 void WaveGraphExecutor::executeWave(
     nativert::ExecutionFrame& frame,
     WaveGraph& waveGraph) {
+  // Ensure the thread's CUDA device is set for tensor allocation.
+  auto* waveDevice = facebook::velox::wave::currentDevice();
+  if (!waveDevice) {
+    waveDevice = facebook::velox::wave::getDevice();
+  }
+  facebook::velox::wave::setDevice(waveDevice);
+
   Timer w("top exec", FLAGS_print_timing);
   auto* g = globals();
   launchDebugInfos_.clear();

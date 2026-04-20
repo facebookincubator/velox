@@ -22,6 +22,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "velox/experimental/torchwave/CompiledOp.h"
 #include "velox/experimental/torchwave/Registry.h"
 
 namespace torch::wave {
@@ -35,7 +36,8 @@ using PlanObjectSet = std::unordered_set<NodeCP>;
 std::string nodeExprString(
     NodeCP node,
     const nativert::Graph& graph,
-    PlanObjectSet& border);
+    PlanObjectSet& border,
+    const ValueTypes* types = nullptr);
 
 class ProjectNode {
  public:
@@ -57,7 +59,8 @@ class ProjectNode {
 
   std::string toString(
       const nativert::Graph& graph,
-      PlanObjectSet& border) const;
+      PlanObjectSet& border,
+      const ValueTypes* valueTypes = nullptr) const;
 
   const std::vector<NodeCP>& nodes() const {
     return nodes_;

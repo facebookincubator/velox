@@ -15,6 +15,7 @@
  */
 
 #include "velox/experimental/torchwave/Registry.h"
+#include "velox/experimental/torchwave/CompiledOp.h"
 #include "velox/experimental/torchwave/Utils.h"
 
 #include <c10/util/StringUtil.h>
@@ -24,6 +25,42 @@ namespace torch::wave {
 std::unordered_map<std::string, Metadata>& Registry::registry() {
   static std::unordered_map<std::string, Metadata> map;
   return map;
+}
+
+bool Metadata::isStandalone(NodeCP node, const ValueTypes& types) const {
+  if (isStandalone_) {
+    return true;
+  }
+  if (only1d) {
+    for (const auto& input : node->inputs()) {
+      auto* value = input.value;
+      if (value->type().kind() != nativert::Type::Kind::Tensor) {
+        continue;
+      }
+      auto r = types.rank(value);
+      if (r < 0 || r > 1) {
+        return true;
+      }
+    }
+  }
+  if (isStandaloneFunc) {
+    return isStandaloneFunc(node, types);
+  }
+  return false;
+}
+
+void Metadata::defaultInputMeta() {
+  TORCH_CHECK(functionSchema, "defaultInputMeta requires functionSchema");
+  if (argumentMeta.empty()) {
+    argumentMeta.resize(functionSchema->arguments().size());
+  }
+}
+
+void Metadata::defaultOutputMeta() {
+  TORCH_CHECK(functionSchema, "defaultOutputMeta requires functionSchema");
+  if (returnMeta.empty()) {
+    returnMeta.resize(functionSchema->returns().size());
+  }
 }
 
 void Registry::registerMetadata(std::string_view op, Metadata metadata) {
@@ -139,7 +176,7 @@ void Registry::registerElementwiseOp(
   md.functionSchema = schema;
   md.sizeArgs.ordinal = {0};
   md.inPlaceIfLastUse = true;
-  md.isStandalone = isStandalone;
+  md.isStandalone_ = isStandalone;
   md.argumentMeta.resize(
       schema->arguments().size(), ArgumentMeta{.isRegister = true});
   md.returnMeta = {ArgumentMeta{.isRegister = true}};

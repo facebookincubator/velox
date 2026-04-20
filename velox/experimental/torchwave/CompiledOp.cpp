@@ -17,12 +17,14 @@
 #include "velox/experimental/torchwave/CompiledOp.h"
 #include "velox/experimental/torchwave/Compile.h"
 #include "velox/experimental/torchwave/Executor.h"
+#include "velox/experimental/torchwave/GraphOptimizer.h"
 #include "velox/experimental/torchwave/ParallelExpr.h"
 #include "velox/experimental/torchwave/Utils.h"
 #include "velox/experimental/torchwave/WaveConfig.h"
 
 #include <ATen/ATen.h>
 #include <c10/util/StringUtil.h>
+#include <folly/ScopeGuard.h>
 #include <gflags/gflags.h>
 #include <algorithm>
 #include <fstream>
@@ -31,6 +33,10 @@
 #include "velox/experimental/wave/common/GpuArena.h"
 
 DECLARE_bool(print_timing);
+DEFINE_bool(
+    debug_single_ops,
+    false,
+    "Launch kernel once per block for debugging, waiting after each launch");
 
 namespace torch::wave {
 
@@ -338,8 +344,11 @@ void fillTensorParam(const at::Tensor& tensor, void* dest) {
   t->rank = tensor.dim();
   for (int i = 0; i < 3; ++i) {
     t->dims[i] = i < tensor.dim() ? tensor.size(i) : 0;
-    t->strides[i] = i < tensor.dim() ? tensor.stride(i) : 0;
+    t->strides[i] =
+        i < tensor.dim() ? (tensor.size(i) == 1 ? 0 : tensor.stride(i)) : 0;
   }
+  t->numEl = tensor.numel();
+  t->status = Tensor::kUninited;
 }
 
 /// Converts a c10::IValue default value to a nativert::Constant.
@@ -448,7 +457,7 @@ int32_t Subgraph::nodeOrdinal(NodeCP node) const {
   return nodeOrdinalImpl(root, node, inputSet, visited, ordinal);
 }
 
-std::string Subgraph::toString() const {
+std::string Subgraph::toString(Listing mode) const {
   std::unordered_set<ValueCP> inputSet(inputs.begin(), inputs.end());
   std::stringstream ss;
   subgraphToStringImpl(ss, root, inputSet);
@@ -612,9 +621,9 @@ int32_t makeGrid(
 
 // --- Launch ---
 
-std::string Launch::toString() const {
+std::string Launch::toString(Listing mode) const {
   if (op) {
-    return "kernel: " + op->toString();
+    return "kernel: " + op->toString(mode);
   }
   if (standalone) {
     Subgraph sg;
@@ -622,7 +631,7 @@ std::string Launch::toString() const {
     for (const auto& input : standalone->inputs()) {
       sg.inputs.push_back(input.value);
     }
-    return "standalone " + sg.toString();
+    return "standalone " + sg.toString(mode);
   }
   return "";
 }
@@ -637,7 +646,8 @@ namespace {
 void printLaunchGrid(
     std::stringstream& ss,
     const LaunchGrid& grid,
-    const char* heading) {
+    const char* heading,
+    Listing mode) {
   if (heading) {
     ss << heading << "\n";
   }
@@ -647,7 +657,7 @@ void printLaunchGrid(
       ss << "  Lane " << lane << ": ";
       const auto& launch = grid[step][lane];
       if (launch.op) {
-        ss << launch.op->toString();
+        ss << launch.op->toString(mode);
         ss << "    Params: (";
         for (size_t i = 0; i < launch.values.size(); ++i) {
           if (i > 0) {
@@ -675,11 +685,11 @@ void printLaunchGrid(
 
 } // namespace
 
-std::string ProjectOperation::toString() const {
+std::string ProjectOperation::toString(Listing mode) const {
   std::stringstream ss;
-  printLaunchGrid(ss, grid_, nullptr);
+  printLaunchGrid(ss, grid_, nullptr, mode);
   if (!singleBlockGrid_.empty()) {
-    printLaunchGrid(ss, singleBlockGrid_, "Single Block Variant");
+    printLaunchGrid(ss, singleBlockGrid_, "Single Block Variant", mode);
   }
   return ss.str();
 }
@@ -752,6 +762,16 @@ KernelOperation::KernelOperation(
   }
 
   sizeExpr_ = makeSizeExpr(sg.root, inputs_);
+}
+
+std::vector<int32_t> KernelOperation::tensorParamOffsets() const {
+  std::vector<int32_t> offsets;
+  for (const auto* value : orderedInputs_) {
+    if (value->type().kind() == nativert::Type::Kind::Tensor) {
+      offsets.push_back(paramOffsets_.at(value));
+    }
+  }
+  return offsets;
 }
 
 int32_t KernelOperation::paramOffset(ValueCP value) const {
@@ -958,7 +978,7 @@ void KernelOperation::setOutputs(
   }
 }
 
-std::string KernelOperation::toString() const {
+std::string KernelOperation::toString(Listing mode) const {
   std::stringstream ss;
   std::unordered_set<ValueCP> inputSet(
       orderedInputs_.begin(), orderedInputs_.begin() + numInputs_);
@@ -1004,8 +1024,10 @@ std::string KernelOperation::toString() const {
 
   printNode(expr_);
 
-  ss << "opCode = " << opCode_ << ":\n";
-  ss << text_ << "\n";
+  if (mode == kCode) {
+    ss << "opCode = " << opCode_ << ":\n";
+    ss << text_ << "\n";
+  }
 
   return ss.str();
 }
@@ -1191,14 +1213,19 @@ LaunchData::LaunchData(
       if (desc.storageFrom) {
         actualDesc.storageFrom = idToValue.at(translateId(desc.storageFrom));
       }
+      // Non-tensor outputs (scalars, SymInt, etc.) must be read back to host.
+      auto outputValueId = actualOutputs[i];
+      auto outputValueIt = idToValue.find(outputValueId);
+      TORCH_CHECK(
+          outputValueIt != idToValue.end(),
+          "Output value id not found in idToValue: ",
+          outputValueId);
+      if (outputValueIt->second->type().kind() !=
+          nativert::Type::Kind::Tensor) {
+        actualDesc.neededOnHost = true;
+      }
       if (actualDesc.shapeSetOnDevice || actualDesc.neededOnHost) {
         returnValues.push_back(actualOutputs[i]);
-        auto outputValueId = actualOutputs[i];
-        auto outputValueIt = idToValue.find(outputValueId);
-        TORCH_CHECK(
-            outputValueIt != idToValue.end(),
-            "Output value id not found in idToValue: ",
-            outputValueId);
         returnTypes.push_back(outputValueIt->second->type().kind());
       }
       actualOutputDescs.push_back(std::move(actualDesc));
@@ -1249,8 +1276,24 @@ CompositeKernel::CompositeKernel(
   }
   ss << "  switch (blockInfo.op) {\n";
   for (const auto& kop : kernelOpStorage_) {
-    ss << "    case " << kop->opCode() << ": {\n"
-       << kop->code() << "      break;\n"
+    ss << "    case " << kop->opCode() << ": {\n";
+    auto offsets = kop->tensorParamOffsets();
+    if (!offsets.empty()) {
+      ss << "  {\n    static int32_t paramOffsets[] = {";
+      for (size_t i = 0; i < offsets.size(); ++i) {
+        if (i > 0) {
+          ss << ", ";
+        }
+        ss << offsets[i];
+      }
+      ss << "};\n"
+         << "    for (auto i = threadIdx.x; i < sizeof(paramOffsets) / sizeof(paramOffsets[0]); i += blockDim.x) {\n"
+         << "      param<Tensor>(blockInfo, paramOffsets[i])->init<true>();\n"
+         << "    }\n"
+         << "  }\n"
+         << "  __syncthreads();\n";
+    }
+    ss << kop->code() << "      break;\n"
        << "    }\n";
   }
   ss << "  }\n"
@@ -1318,10 +1361,10 @@ void CompositeKernel::launch(
   kernel_->launch(0, numBlocks, numThreads, sharedMemory, stream, args);
 }
 
-std::string CompositeKernel::toString() const {
+std::string CompositeKernel::toString(Listing mode) const {
   std::stringstream ss;
   for (const auto& kop : kernelOpStorage_) {
-    ss << kop->toString();
+    ss << kop->toString(mode);
   }
   auto info = kernelInfo();
   if (info.numRegs > 0) {
@@ -1850,24 +1893,18 @@ void CompositeInvocation::execute(ExecutionState& state) {
 
     {
       Timer t("launch1", FLAGS_print_timing);
-      // H2D transfer — only the params region, not the debug info area.
-      auto* stream = state.stream.get();
-      stream->hostToDeviceAsync(deviceBase, pinnedBase, totalPinnedBytes);
-
-      TorchWaveParams params;
-      params.info = reinterpret_cast<BlockInfo*>(deviceBase);
-      params.debugInfo = deviceDebugBase;
-      void* args[] = {&params};
-
-      kernel->launch(
-          static_cast<int32_t>(numBlocks), blockSize, 0, stream, args);
-      if (returnBegin >= 0) {
-        stream->deviceToHostAsync(
-            pinnedBase + returnBegin,
-            deviceBase + returnBegin,
-            returnEnd - returnBegin);
-	stream->wait();
-      }
+      launch(
+          static_cast<int32_t>(numBlocks),
+          blockSize,
+          pinnedBase,
+          deviceBase,
+          totalPinnedBytes,
+          returnBegin,
+          returnEnd,
+          deviceDebugBase,
+          state.stream.get(),
+          sv,
+          stepIdx);
     }
 
     if (returnBegin >= 0) {
@@ -1876,7 +1913,81 @@ void CompositeInvocation::execute(ExecutionState& state) {
   }
 }
 
-std::string CompositeInvocation::toString() const {
+void CompositeInvocation::launch(
+    int32_t numBlocks,
+    int32_t blockSize,
+    uint8_t* pinnedBase,
+    uint8_t* deviceBase,
+    int64_t totalPinnedBytes,
+    int32_t returnBegin,
+    int32_t returnEnd,
+    DebugInfo* deviceDebugBase,
+    facebook::velox::wave::Stream* stream,
+    const StepVectors& sv,
+    int32_t stepIdx) {
+  TorchWaveParams params;
+  params.info = reinterpret_cast<BlockInfo*>(deviceBase);
+  params.debugInfo = deviceDebugBase;
+  void* args[] = {&params};
+
+  auto* pinnedBlocks = reinterpret_cast<BlockInfo*>(pinnedBase);
+
+  if (FLAGS_debug_single_ops) {
+    // Save original opcodes.
+    std::vector<int32_t> originalOps(numBlocks);
+    for (int32_t b = 0; b < numBlocks; ++b) {
+      originalOps[b] = pinnedBlocks[b].op;
+    }
+
+    for (int32_t active = 0; active < numBlocks; ++active) {
+      // Set all blocks to no-op except the active one.
+      for (int32_t b = 0; b < numBlocks; ++b) {
+        pinnedBlocks[b].op = (b == active) ? originalOps[b] : -1;
+      }
+      try {
+        stream->hostToDeviceAsync(deviceBase, pinnedBase, totalPinnedBytes);
+        kernel->launch(numBlocks, blockSize, 0, stream, args);
+        if (returnBegin >= 0) {
+          stream->deviceToHostAsync(
+              pinnedBase + returnBegin,
+              deviceBase + returnBegin,
+              returnEnd - returnBegin);
+        }
+        stream->wait();
+      } catch (const std::exception& e) {
+        auto opCode = originalOps[active];
+        auto launchIdx = sv.launchIndices[active];
+        std::string opText;
+        if (launchIdx < static_cast<int32_t>(sv.kernels.size()) &&
+            sv.kernels[launchIdx].launch && sv.kernels[launchIdx].launch->op) {
+          opText = sv.kernels[launchIdx].launch->op->toString();
+        }
+        LOG(ERROR) << "debug_single_ops: block " << active << " opCode "
+                   << opCode << " blockInOp "
+                   << pinnedBlocks[active].blockInOp << " stepIdx " << stepIdx
+                   << " op: " << opText << " error: " << e.what();
+        throw;
+      }
+    }
+
+    // Restore original opcodes.
+    for (int32_t b = 0; b < numBlocks; ++b) {
+      pinnedBlocks[b].op = originalOps[b];
+    }
+  } else {
+    stream->hostToDeviceAsync(deviceBase, pinnedBase, totalPinnedBytes);
+    kernel->launch(numBlocks, blockSize, 0, stream, args);
+    if (returnBegin >= 0) {
+      stream->deviceToHostAsync(
+          pinnedBase + returnBegin,
+          deviceBase + returnBegin,
+          returnEnd - returnBegin);
+      stream->wait();
+    }
+  }
+}
+
+std::string CompositeInvocation::toString(Listing mode, int32_t ordinal) const {
   std::stringstream ss;
 
   // Collect distinct ProjectOperations.
@@ -1890,18 +2001,24 @@ std::string CompositeInvocation::toString() const {
     }
   }
 
-  // Print each distinct ProjectOperation.
-  for (size_t i = 0; i < projectOps.size(); ++i) {
-    ss << "ProjectOperation " << i << ":\n";
-    ss << projectOps[i]->toString();
+  // Print OpInvocations with their ProjectOperation ordinal and bindings.
+  for (size_t i = 0; i < ops.size(); ++i) {
+    auto it = projectOpIndex.find(ops[i].projectOp());
+    ss << ordinal << "." << i << ": ProjectOp " << it->second;
+    const auto& bindings = ops[i].bindings();
+    for (const auto& [formalId, actualId] : bindings) {
+      ss << " %" << formalId << " = %" << actualId;
+    }
+    ss << "\n";
   }
 
-  // Print OpInvocations with their ProjectOperation ordinal.
-  ss << "Invocations:\n";
-  for (const auto& op : ops) {
-    auto it = projectOpIndex.find(op.projectOp());
-    ss << "  ProjectOp " << it->second << ": ";
+  // Print distinct ops with their grids.
+  ss << "\nDistinct Ops\n";
+  for (size_t i = 0; i < projectOps.size(); ++i) {
+    ss << "Op " << ordinal << "." << i << "\n";
+    ss << projectOps[i]->toString(mode);
   }
+
   return ss.str();
 }
 
@@ -1911,9 +2028,25 @@ void CompiledNode::execute(ExecutionState& state) {
   kernels_->execute(state);
 }
 
-std::string CompiledNode::toString() const {
+std::string CompiledNode::toString(Listing mode, int32_t ordinal) const {
   std::stringstream ss;
-  ss << "CompositeInvocation:\n" << kernels_->toString();
+  if (mode == kExprs) {
+    // Collect distinct ProjectOperations and count invocations.
+    std::vector<ProjectOperation*> projectOps;
+    std::unordered_map<ProjectOperation*, int32_t> invocationCount;
+    for (const auto& op : kernels_->ops) {
+      auto* po = op.projectOp();
+      if (invocationCount[po]++ == 0) {
+        projectOps.push_back(po);
+      }
+    }
+    for (auto* po : projectOps) {
+      ss << invocationCount[po] << "x "
+         << po->subgraph().toString(mode) << "\n";
+    }
+  } else {
+    ss << kernels_->toString(mode, ordinal);
+  }
   return ss.str();
 }
 
@@ -1922,6 +2055,10 @@ std::string CompiledNode::toString() const {
 void WaveGraph::normalizeAndAnnotateGraph() {
   for (auto& node : graph_->nodes()) {
     const auto* schema = findSchema(node.target());
+    bool resolveDtype =
+        (node.target() == "torch.ops.aten.sum.default" ||
+         node.target() == "torch.ops.aten.cumsum.default") &&
+        !node.inputs().empty();
     if (schema) {
       for (const auto& schemaArg : schema->arguments()) {
         if (!schemaArg.default_value()) {
@@ -1933,12 +2070,31 @@ void WaveGraph::normalizeAndAnnotateGraph() {
         if (node.tryGetAttribute(schemaArg.name())) {
           continue;
         }
+        auto defaultVal = iValueToConstant(*schemaArg.default_value());
+        // For sum/cumsum, resolve dtype=None to the concrete output type.
+        // PyTorch promotes integer inputs to int64 when dtype is unspecified.
+        // The kernels handle the cast inline via separate TIn/TOut template
+        // parameters.
+        if (resolveDtype && schemaArg.name() == "dtype" &&
+            std::holds_alternative<nativert::None>(defaultVal)) {
+          auto* selfInput = node.inputs()[0].value;
+          auto inputId = selfInput->id();
+          if (inputId < static_cast<int>(types_.types.size()) &&
+              types_.types[inputId]) {
+            auto inputDtype = types_.types[inputId]->dtype();
+            auto outDtype =
+                c10::isIntegralType(inputDtype, /*includeBool=*/true)
+                ? c10::ScalarType::Long
+                : inputDtype;
+            defaultVal = std::string(c10::toString(outDtype));
+          }
+        }
         node.addAttribute(
             nativert::Attribute{
-                std::string(schemaArg.name()),
-                iValueToConstant(*schemaArg.default_value())});
+                std::string(schemaArg.name()), std::move(defaultVal)});
       }
     }
+
     const auto* md = Registry::metadata(node.target());
     if (md && md->makeMultiKernelVariant) {
       auto* lastNode = md->makeMultiKernelVariant(&node, this);
@@ -1963,12 +2119,37 @@ void WaveGraph::normalizeAndAnnotateGraph() {
   }
 }
 
+static thread_local WaveGraph* threadWaveGraph{nullptr};
+
+WaveGraph*& waveGraph() {
+  return threadWaveGraph;
+}
+
+const Metadata* nodeMeta(NodeCP node) {
+  auto* graph = waveGraph();
+  TORCH_CHECK(graph, "No WaveGraph on this thread");
+  auto& infos = graph->nodeInfos();
+  auto it = infos.find(node);
+  if (it != infos.end()) {
+    return it->second.metadata;
+  }
+  auto* meta = Registry::metadata(node->target());
+  infos[node] = NodeInfo{meta};
+  return meta;
+}
+
 WaveGraph::WaveGraph(nativert::Graph& graph, ValueTypes types)
     : types_(std::move(types)), graph_(&graph) {
+  waveGraph() = this;
+  SCOPE_EXIT {
+    waveGraph() = nullptr;
+  };
   normalizeAndAnnotateGraph();
   for (auto* v : graph.values()) {
     idToValue_[v->id()] = v;
   }
+  optimizer_ = std::make_unique<Optimizer>(types_);
+  optimizer_->optimizeGraph(graph_);
   ParallelNodes parallelNodes;
   auto* lastProjectNode = parallelNodes.makeParallelNodes(graph);
 
@@ -2018,6 +2199,12 @@ WaveGraph::WaveGraph(nativert::Graph& graph, ValueTypes types)
     }
   }
   standaloneStats_.resize(standaloneIndices_.size());
+  optimizer_.reset();
+}
+
+void WaveGraph::optimizeNode(const nativert::Node* node) {
+  TORCH_CHECK(optimizer_, "optimizeNode called outside WaveGraph construction");
+  optimizer_->optimizeNode(node);
 }
 
 WaveGraph::~WaveGraph() = default;
@@ -2037,14 +2224,14 @@ void WaveGraph::returnState(std::unique_ptr<ExecutionState> state) {
   statePool_.push_back(std::move(state));
 }
 
-std::string WaveGraph::toString() const {
+std::string WaveGraph::toString(Listing mode) const {
   std::stringstream ss;
   for (size_t i = 0; i < nodes_.size(); ++i) {
     if (i > 0) {
       ss << "\n";
     }
     ss << "Node " << i << ":\n";
-    ss << nodes_[i]->toString();
+    ss << nodes_[i]->toString(mode, i);
   }
   return ss.str();
 }
@@ -2124,8 +2311,9 @@ nativert::Value* WaveGraph::newTensorValue(
     nativert::Node* node,
     std::string_view name,
     c10::ScalarType dtype) {
+  auto uname = uniqueName(name);
   auto* value =
-      node->addOutput(name, nativert::Type(nativert::Type::Kind::Tensor));
+      node->addOutput(uname, nativert::Type(nativert::Type::Kind::Tensor));
   registerTensorMeta(value, dtype);
   createdValueDtypes_[value] = dtype;
   return value;
@@ -2150,7 +2338,8 @@ nativert::Value* WaveGraph::newScalarValue(
       kind = nativert::Type::Kind::SymInt;
       break;
   }
-  auto* value = node->addOutput(name, nativert::Type(kind));
+  auto uname = uniqueName(name);
+  auto* value = node->addOutput(uname, nativert::Type(kind));
   auto id = value->id();
   if (id >= static_cast<int>(types_.types.size())) {
     types_.types.resize(id + 1, nullptr);
@@ -2180,6 +2369,28 @@ nativert::Value* WaveGraph::duplicateValue(ValueCP original) {
   }
   idToValue_[result->id()] = result;
   return result;
+}
+
+void initValueTypes(
+    const nativert::Graph& graph,
+    ValueTypes& types,
+    std::vector<std::unique_ptr<nativert::TensorMeta>>& metaStore) {
+  const auto& tensorValuesMeta = graph.tensorValuesMeta();
+  auto numValues = graph.values().size();
+  types.types.resize(numValues, nullptr);
+  types.constraints.resize(numValues);
+  for (const auto* value : graph.values()) {
+    if (value == nullptr) {
+      continue;
+    }
+    auto it = tensorValuesMeta.find(std::string{value->name()});
+    if (it != tensorValuesMeta.end()) {
+      auto meta = std::make_unique<nativert::TensorMeta>(it->second);
+      types.constraints[value->id()].rank = meta->dim();
+      types.types[value->id()] = meta.get();
+      metaStore.push_back(std::move(meta));
+    }
+  }
 }
 
 } // namespace torch::wave

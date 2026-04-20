@@ -17,6 +17,7 @@
 #pragma once
 
 #include <deque>
+#include <fmt/format.h>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -26,6 +27,7 @@
 #include <vector>
 
 #include <ATen/core/ivalue.h>
+#include <folly/container/F14Map.h>
 
 #include <torch/nativert/graph/Graph.h>
 #include <torch/nativert/graph/TensorMeta.h>
@@ -38,7 +40,10 @@ namespace torch::wave {
 class CompileCtx;
 struct ExecutionState;
 class OpInvocation;
+class Optimizer;
 struct StepVectors;
+
+enum Listing { kExprs = 0, kGrids, kCode };
 
 /// Map from Value::id() to Value*, pre-built from the graph for fast lookups.
 using IdToValueMap = std::unordered_map<int32_t, ValueCP>;
@@ -109,7 +114,7 @@ struct Subgraph {
   /// Returns a human-readable expression string for this subgraph.
   /// Nodes are printed as target(arg1, arg2, ...) recursively, stopping at
   /// inputs_ which are printed as %id.
-  std::string toString() const;
+  std::string toString(Listing mode = kExprs) const;
 };
 
 /// Collects scalar constants from a subgraph's nodes into 'storage' and
@@ -193,6 +198,9 @@ class KernelOperation {
     return sharedDeclarations_;
   }
 
+  /// Returns the param offsets of all tensor-type values (inputs and outputs).
+  std::vector<int32_t> tensorParamOffsets() const;
+
   bool alwaysSingleBlock() const {
     return alwaysSingleBlock_;
   }
@@ -209,7 +217,7 @@ class KernelOperation {
     return sizeExpr_;
   }
 
-  std::string toString() const;
+  std::string toString(Listing mode = kExprs) const;
 
   // Hash for (Node*, attrName) pairs used as keys in attrOffsets_.
   struct NodeAttrHash {
@@ -322,7 +330,7 @@ struct Launch {
   /// Returns "kernel: <op toString>" for fused ops or
   /// "standalone <subgraph toString>" for standalone nodes where the subgraph
   /// root is the standalone node and inputs are its direct inputs.
-  std::string toString() const;
+  std::string toString(Listing mode = kExprs) const;
 };
 
 /// Represents a grid of parallel / consecutive operations for completing a
@@ -359,7 +367,7 @@ class ProjectOperation {
     return singleBlockMaxSize_;
   }
 
-  std::string toString() const;
+  std::string toString(Listing mode = kExprs) const;
 
   /// Values created during grid generation (e.g. multikernel variant
   /// intermediates) that are not part of the original subgraph.
@@ -387,10 +395,32 @@ class ProjectOperation {
   std::vector<ValueCP> extraValues_;
 };
 
+struct ValueConstraint {
+  int8_t rank{-1};
+};
+
 struct ValueTypes {
   /// Tensor metadata for tensor type values, indexed by Value id().
   std::vector<const nativert::TensorMeta*> types;
+  std::vector<ValueConstraint> constraints;
+
+  int8_t rank(ValueCP value) const {
+    auto id = value->id();
+    TORCH_CHECK(
+        id >= 0 && static_cast<size_t>(id) < constraints.size(),
+        "Value id out of range: ",
+        id);
+    return constraints[id].rank;
+  }
 };
+
+/// Populates 'types' from the graph's tensor metadata. Sizes types and
+/// constraints to graph.values().size(), then fills entries from
+/// tensorValuesMeta. Allocated TensorMeta objects are appended to 'metaStore'.
+void initValueTypes(
+    const nativert::Graph& graph,
+    ValueTypes& types,
+    std::vector<std::unique_ptr<nativert::TensorMeta>>& metaStore);
 
 struct ActualParameter {
   ValueCP value;
@@ -453,7 +483,7 @@ class CompositeKernel {
   /// default KernelInfo if no GPU is available.
   facebook::velox::wave::KernelInfo kernelInfo() const;
 
-  std::string toString() const;
+  std::string toString(Listing mode = kExprs) const;
 
  private:
   std::unique_ptr<facebook::velox::wave::CompiledKernel> kernel_;
@@ -504,6 +534,21 @@ struct CompositeInvocation {
   /// copies params to pinned+device memory, and enqueues the H2D transfer.
   void execute(ExecutionState& state);
 
+  /// Launches the kernel. In debug_single_ops mode, launches once per block
+  /// with all other blocks' opcodes set to -1 and waits after each launch.
+  void launch(
+      int32_t numBlocks,
+      int32_t blockSize,
+      uint8_t* pinnedBase,
+      uint8_t* deviceBase,
+      int64_t totalPinnedBytes,
+      int32_t returnBegin,
+      int32_t returnEnd,
+      DebugInfo* deviceDebugBase,
+      facebook::velox::wave::Stream* stream,
+      const StepVectors& sv,
+      int32_t stepIdx);
+
   /// Collects LaunchData from all OpInvocations at the given step index.
   /// Launches with a non-null kernel op go into 'kernels', others into
   /// 'standalones'.
@@ -519,7 +564,7 @@ struct CompositeInvocation {
       nativert::ExecutionFrame& frame,
       uint8_t* pinnedBase);
 
-  std::string toString() const;
+  std::string toString(Listing mode = kExprs, int32_t ordinal = 0) const;
 
   std::unique_ptr<CompositeKernel> kernel;
   std::vector<OpInvocation> ops;
@@ -547,7 +592,7 @@ class CompiledNode {
     return kernels_.get();
   }
 
-  std::string toString() const;
+  std::string toString(Listing mode = kExprs, int32_t ordinal = 0) const;
 
  private:
   // The outer array represents parallel launchable sequences kernels. The inner
@@ -558,6 +603,17 @@ class CompiledNode {
 struct StandaloneStats {
   int64_t micros{0};
 };
+
+struct NodeInfo {
+  const Metadata* metadata;
+};
+
+/// Returns a thread-local reference to the current WaveGraph being compiled.
+WaveGraph*& waveGraph();
+
+/// Returns the Metadata for 'node', caching the result in the current
+/// WaveGraph's nodeInfos map.
+const Metadata* nodeMeta(NodeCP node);
 
 /// Top level container for result of compiling a FX Graph to torch::wave.
 /// Multiple Executors can share the same WaveGraph.
@@ -624,10 +680,20 @@ class WaveGraph {
   /// multiKernelVariants_ for nodes that have one.
   void normalizeAndAnnotateGraph();
 
+  /// Propagates constraints for the outputs of 'node' using the shared
+  /// Optimizer instance. The optimizer's visited set ensures main-graph
+  /// nodes are not re-traversed.
+  void optimizeNode(const nativert::Node* node);
+
   /// Returns the multikernel variant subgraph for 'node', or nullptr if none.
   const Subgraph* multiKernelVariant(NodeCP node) const {
     auto it = multiKernelVariants_.find(node);
     return it != multiKernelVariants_.end() ? &it->second : nullptr;
+  }
+
+  /// Returns a unique name by appending _NN to the given name.
+  std::string uniqueName(std::string_view name) {
+    return fmt::format("{}_{}", name, nextValueId_++);
   }
 
   /// Returns the next composite invocation sequence number, starting at 0.
@@ -655,7 +721,11 @@ class WaveGraph {
     return standaloneStats_;
   }
 
-  std::string toString() const;
+  folly::F14FastMap<NodeCP, NodeInfo>& nodeInfos() {
+    return nodeInfos_;
+  }
+
+  std::string toString(Listing mode = kExprs) const;
 
  private:
   // The executable graph. the nodes are executed sequentially. Each node has
@@ -685,6 +755,9 @@ class WaveGraph {
   // generating the multiblock case of a ProjectOperation.
   std::unordered_map<NodeCP, Subgraph> multiKernelVariants_;
 
+  // Counter for generating unique value names via uniqueName().
+  int32_t nextValueId_{0};
+
   // Counter for assigning sequence numbers to CompositeInvocations.
   int32_t nextCompositeInvocationId_{0};
 
@@ -696,6 +769,13 @@ class WaveGraph {
 
   // ValueIds of outputs whose Metadata has shapeSetOnDevice or neededOnHost.
   std::unordered_set<nativert::ValueId> syncableValueIds_;
+
+  // Cached Metadata lookups keyed by node pointer.
+  folly::F14FastMap<NodeCP, NodeInfo> nodeInfos_;
+
+  // Alive during construction only. Retains visited set so multikernel
+  // variant nodes reuse the main-graph pass.
+  std::unique_ptr<Optimizer> optimizer_;
 
   // Pool of reusable ExecutionState objects.
   std::mutex statePoolMutex_;

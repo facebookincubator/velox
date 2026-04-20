@@ -137,7 +137,8 @@ class CompileCtx {
   std::string elementwiseExpr(
       NodeCP node,
       const KernelOperation& op,
-      const std::vector<ValueCP>& inputs);
+      const std::vector<ValueCP>& inputs,
+      bool slowPath = false);
 
   void addInclude(std::string_view header);
 
@@ -175,18 +176,14 @@ class CompileCtx {
   std::string declareTemp(ValueCP value);
 
   Subgraph
-  extractSubgraph(NodeCP node, const NodeSet& inputs, const NodeSet& placed);
+  extractSubgraph(NodeCP node, const NodeSet& inputs, NodeSet& placed);
 
   bool isElementWise(const nativert::Node& node, const NodeSet& placed = {})
       const;
 
-  bool hasBarrier(const nativert::Node& node, const NodeSet& placed = {}) const;
-
   bool isSingleBlock(const nativert::Node& node, const NodeSet& placed = {})
       const;
 
-  bool hasStandalone(const nativert::Node& node, const NodeSet& placed = {})
-      const;
 
   bool isMultikernel(const nativert::Node& node, const NodeSet& placed = {})
       const;
@@ -242,7 +239,8 @@ class CompileCtx {
       const std::unordered_set<ValueCP>& inputSet,
       const std::vector<ValueCP>& inputs,
       const KernelOperation& op,
-      std::stringstream& ss);
+      std::stringstream& ss,
+      bool slowPath);
 
   /// Marks matching kernel ops in grid_ and singleBlockGrid_ as grid choices.
   void setGridChoice(ProjectOperation* projectOp);
@@ -261,6 +259,7 @@ class CompileCtx {
   int32_t declareCounter_{0};
   const std::unordered_set<NodeCP>* inputs_;
   NodeSet placed_;
+  NodeSet placedBeforeNode_;
 
   // Offset of param corresponding to Value in the kernel's BlockInfo::params.
   std::unordered_map<ValueCP, int32_t> valueParamOffset_;

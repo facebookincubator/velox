@@ -54,7 +54,7 @@ bool CompileCtx::allReachable(
   if (!visited.insert(&node).second) {
     return true;
   }
-  auto* meta = Registry::metadata(node.target());
+  auto* meta = nodeMeta(&node);
   if (!meta || !predicate(*meta)) {
     return false;
   }
@@ -80,8 +80,8 @@ bool CompileCtx::anyReachable(
   if (!visited.insert(&node).second) {
     return false;
   }
-  auto* meta = Registry::metadata(node.target());
-  if (meta && predicate(*meta)) {
+  auto* meta = nodeMeta(&node);
+  if (meta && predicate(*meta, &node)) {
     return true;
   }
   for (auto& input : node.inputs()) {
@@ -102,12 +102,15 @@ namespace {
 void extractSubgraphInputs(
     NodeCP node,
     const CompileCtx::NodeSet& inputs,
-    const CompileCtx::NodeSet& placed,
+    CompileCtx::NodeSet& placed,
     std::unordered_set<ValueCP>& seen,
     std::vector<ValueCP>& result) {
   for (auto& input : node->inputs()) {
     auto* value = input.value;
     auto* producer = value->producer();
+    if (producer && producer->target() == "prim.Input") {
+      placed.insert(producer);
+    }
     if (!producer || inputs.count(producer) || placed.count(producer)) {
       if (seen.insert(value).second) {
         result.push_back(value);
@@ -198,6 +201,28 @@ bool subgraphNodesMatch(
   if (left->target() != right->target()) {
     return false;
   }
+  // dtype attributes must match when present.
+  const auto* lDtype = left->tryGetAttribute("dtype");
+  const auto* rDtype = right->tryGetAttribute("dtype");
+  if ((lDtype != nullptr) != (rDtype != nullptr)) {
+    return false;
+  }
+  if (lDtype && lDtype->value != rDtype->value) {
+    return false;
+  }
+  auto* meta = nodeMeta(left);
+  if (meta) {
+    for (const auto& attrName : meta->templateAttrs) {
+      const auto* lAttr = left->tryGetAttribute(attrName);
+      const auto* rAttr = right->tryGetAttribute(attrName);
+      if ((lAttr != nullptr) != (rAttr != nullptr)) {
+        return false;
+      }
+      if (lAttr && lAttr->value != rAttr->value) {
+        return false;
+      }
+    }
+  }
   auto& li = left->inputs();
   auto& ri = right->inputs();
   if (li.size() != ri.size()) {
@@ -248,6 +273,23 @@ void hashSubgraphNode(
     size_t& hash) {
   auto h = std::hash<std::string_view>{}(node->target());
   hash ^= h + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+  // Include dtype attribute in hash if present.
+  const auto* dtypeAttr = node->tryGetAttribute("dtype");
+  if (dtypeAttr && std::holds_alternative<std::string>(dtypeAttr->value)) {
+    auto dh =
+        std::hash<std::string>{}(std::get<std::string>(dtypeAttr->value));
+    hash ^= dh + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+  }
+  auto* meta = nodeMeta(node);
+  if (meta) {
+    for (const auto& attrName : meta->templateAttrs) {
+      const auto* attr = node->tryGetAttribute(attrName);
+      if (attr) {
+        auto ah = std::hash<std::string>{}(constantToString(attr->value));
+        hash ^= ah + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+      }
+    }
+  }
   for (auto& input : node->inputs()) {
     if (inputs.count(input.value)) {
       continue;
@@ -264,7 +306,7 @@ void hashSubgraphNode(
 Subgraph CompileCtx::extractSubgraph(
     NodeCP node,
     const NodeSet& inputs,
-    const NodeSet& placed) {
+    NodeSet& placed) {
   Subgraph sg;
   sg.root = node;
   std::unordered_set<ValueCP> seen;
@@ -309,13 +351,6 @@ bool CompileCtx::isElementWise(
       visited);
 }
 
-bool CompileCtx::hasBarrier(const nativert::Node& node, const NodeSet& placed)
-    const {
-  NodeSet visited;
-  return anyReachable(
-      node, placed, [](const Metadata& m) { return m.hasBarrier; }, visited);
-}
-
 bool CompileCtx::isSingleBlock(
     const nativert::Node& node,
     const NodeSet& placed) const {
@@ -329,13 +364,6 @@ bool CompileCtx::isSingleBlock(
       visited);
 }
 
-bool CompileCtx::hasStandalone(
-    const nativert::Node& node,
-    const NodeSet& placed) const {
-  NodeSet visited;
-  return anyReachable(
-      node, placed, [](const Metadata& m) { return m.isStandalone; }, visited);
-}
 
 bool CompileCtx::isMultikernel(
     const nativert::Node& node,
@@ -344,7 +372,9 @@ bool CompileCtx::isMultikernel(
   return anyReachable(
       node,
       placed,
-      [](const Metadata& m) { return m.makeMultiKernelVariant != nullptr; },
+      [](const Metadata& m, NodeCP) {
+        return m.makeMultiKernelVariant != nullptr;
+      },
       visited);
 }
 
@@ -356,10 +386,13 @@ ProjectOperation* CompileCtx::makeProjectionOperation(const Subgraph& sg) {
 
   // Check if any node in the subgraph has singleBlockIfFused.
   NodeSet visited;
+  auto& types = waveGraph_.types();
   bool hasSingleBlock = anyReachable(
       *sg.root,
       placed_,
-      [](const Metadata& m) { return m.singleBlockIfFused; },
+      [&types](const Metadata& m, NodeCP node) {
+        return m.singleBlockIfFused && !m.isStandalone(node, types);
+      },
       visited);
   if (hasSingleBlock) {
     setIsSingleBlock(true);
@@ -444,11 +477,12 @@ NodeCP CompileCtx::getMultiBlockVariant(NodeCP node, WaveGraph* waveGraph) {
     return nullptr;
   }
   originalNode_[variant->root] = node;
+  waveGraph->optimizeNode(variant->root);
   return variant->root;
 }
 
 void CompileCtx::newGrid() {
-  placed_.clear();
+  placed_ = placedBeforeNode_;
   grid_.clear();
 }
 
@@ -472,9 +506,9 @@ Context CompileCtx::placeKernels(NodeCP node, Context context) {
       node = variantRoot;
     }
   }
-  auto* meta = Registry::metadata(node->target());
+  auto* meta = nodeMeta(node);
   auto thisContext =
-      (!meta || meta->isStandalone || WaveConfig::get().allStandalone)
+      (!meta || meta->isStandalone(node, types_) || WaveConfig::get().allStandalone)
       ? Context::kStandalone
       : Context::kFused;
   std::vector<NodeCP> standaloneInputs;
@@ -699,7 +733,7 @@ void CompileCtx::generateElementwiseBorderImpl(
     if (!visited.insert(producer).second) {
       continue;
     }
-    auto* meta = Registry::metadata(producer->target());
+    auto* meta = nodeMeta(producer);
     if (meta && meta->elementwise) {
       generateElementwiseBorderImpl(producer, opInputs, visited);
     } else {
@@ -724,7 +758,7 @@ void CompileCtx::generateElementwiseBorder(NodeCP node) {
 
 void CompileCtx::functionLoop(NodeCP node) {
   auto& op = *generatingOp_;
-  auto* meta = Registry::metadata(node->target());
+  auto* meta = nodeMeta(node);
   TORCH_CHECK(meta, "No metadata for: ", node->target());
 
   // Find the size argument.
@@ -735,10 +769,6 @@ void CompileCtx::functionLoop(NodeCP node) {
 
   // Add shared declaration for size.
   op.addSharedDeclaration("  __shared__ uint32_t size;\n");
-
-  // Compute size from the tensor.
-  code_ << "  size = numEl(*" << param(sizeValue, op) << ");\n";
-  code_ << "  __syncthreads();\n";
 
   // Set up input and output specs for makeCall.
   const auto& inputs = node->inputs();
@@ -756,9 +786,22 @@ void CompileCtx::functionLoop(NodeCP node) {
     resultSpecs.push_back(rs);
   }
 
-  // Generate the loop with the call inside.
-  code_
-      << "    for (uint32_t idx = blockInfo.blockInOp * blockDim.x + threadIdx.x; idx < size; idx += blockInfo.numBlocksInOp * blockDim.x) {\n";
+  // Compute size (and optionally rounded) on thread 0, then sync.
+  if (meta->hasBarrier) {
+    op.addSharedDeclaration("  __shared__ uint32_t rounded;\n");
+    code_ << "  if (threadIdx.x == 0) {\n"
+          << "    size = numEl(*" << param(sizeValue, op) << ");\n"
+          << "    rounded = roundUpPwr2(size, blockDim.x);\n"
+          << "  }\n"
+          << "  __syncthreads();\n"
+          << "    for (uint32_t idx = blockInfo.blockInOp * blockDim.x + threadIdx.x; idx < rounded; idx += blockInfo.numBlocksInOp * blockDim.x) {\n";
+  } else {
+    code_ << "  if (threadIdx.x == 0) {\n"
+          << "    size = numEl(*" << param(sizeValue, op) << ");\n"
+          << "  }\n"
+          << "  __syncthreads();\n"
+          << "    for (uint32_t idx = blockInfo.blockInOp * blockDim.x + threadIdx.x; idx < size; idx += blockInfo.numBlocksInOp * blockDim.x) {\n";
+  }
   code_ << "  " << makeCall(node, inputSpecs, resultSpecs) << "\n";
   code_ << "    }\n";
 }
@@ -767,7 +810,7 @@ void CompileCtx::fusedCode(NodeCP node, std::vector<ResultSpec>& resultSpecs) {
   if (placed_.count(node)) {
     return;
   }
-  auto* meta = Registry::metadata(node->target());
+  auto* meta = nodeMeta(node);
   TORCH_CHECK(meta, "No metadata for node: ", node->target());
 
   if (meta->elementwise) {
@@ -864,7 +907,7 @@ void CompileCtx::fusedCode(NodeCP node, std::vector<ResultSpec>& resultSpecs) {
 
   auto callStmt = makeCall(node, callInputSpecs, resultSpecs);
   if (!subgraphs.empty()) {
-    generateElementwise(subgraphs, ewResultSpecs, callStmt, true);
+    generateElementwise(subgraphs, ewResultSpecs, callStmt, meta->hasBarrier);
   }
   placed_.insert(node);
 }
@@ -903,8 +946,8 @@ void CompileCtx::generateElementwise(
     code_ << "    isFastPath" << i << " = 0;\n";
   }
   code_ << "    Tensor* temp = " << param(leafInputs[0], op)
-        << ";\n    size = numEl(*temp);\n"
-        << "    isFastPath0 |= isFastPathTensor(*temp);\n";
+        << ";\n    size = temp->numEl;\n"
+        << "    isFastPath0 |= temp->contiguous;\n";
   if (leafInputs.size() > 1) {
     code_ << "    uint32_t size2;\n";
   }
@@ -912,8 +955,8 @@ void CompileCtx::generateElementwise(
     auto W = valueIdx / 32;
     auto B = valueIdx % 32;
     code_ << "    temp = " << param(leafInputs[valueIdx], op) << ";\n"
-          << "    size2 = numEl(*temp);\n"
-          << "    isFastPath" << W << " |= isFastPathTensor(*temp) << " << B
+          << "    size2 = temp->numEl;\n"
+          << "    isFastPath" << W << " |= (uint32_t)temp->contiguous << " << B
           << ";\n"
           << "    if (size2 != size) {\n"
           << "      if (size2 > size) {\n";
@@ -935,8 +978,13 @@ void CompileCtx::generateElementwise(
   // Declare tensor storage for all unique inputs.
   for (size_t i = 0; i < allInputs.size(); ++i) {
     auto tp = cudaType(allInputs[i]);
-    code_ << "  " << tp << "* b" << i << " = storage<" << tp << ">("
-          << param(allInputs[i], op) << ");\n";
+    if (allInputs[i]->type().kind() == nativert::Type::Kind::Tensor) {
+      code_ << "  " << tp << "* b" << i << " = storage<" << tp << ">("
+            << param(allInputs[i], op) << ");\n";
+    } else {
+      code_ << "  " << tp << "* b" << i << " = "
+            << param(allInputs[i], op) << ";\n";
+    }
   }
 
   // Declare attributes for all subgraph roots.
@@ -988,7 +1036,12 @@ void CompileCtx::generateElementwise(
         auto it =
             std::find(allInputs.begin(), allInputs.end(), resultSpecs[s].value);
         auto id = it - allInputs.begin();
-        code_ << "        b" << id << "[idx] = result" << s << ";\n";
+        if (resultSpecs[s].value->type().kind() ==
+            nativert::Type::Kind::Tensor) {
+          code_ << "        b" << id << "[idx] = result" << s << ";\n";
+        } else {
+          code_ << "        b" << id << "[0] = result" << s << ";\n";
+        }
       } else {
         code_ << "        " << resultSpecs[s].variable << " = result" << s
               << ";\n";
@@ -1012,8 +1065,13 @@ void CompileCtx::generateElementwise(
             std::find(allInputs.begin(), allInputs.end(), resultSpecs[s].value);
         auto id = it - allInputs.begin();
         auto tp = cudaType(resultSpecs[s].value);
-        code_ << "      " << tp << " result" << s << " = " << expr << ";\n"
-              << "      b" << id << "[idx] = result" << s << ";\n";
+        code_ << "      " << tp << " result" << s << " = " << expr << ";\n";
+        if (resultSpecs[s].value->type().kind() ==
+            nativert::Type::Kind::Tensor) {
+          code_ << "      b" << id << "[idx] = result" << s << ";\n";
+        } else {
+          code_ << "      b" << id << "[0] = result" << s << ";\n";
+        }
       } else {
         auto tp = cudaType(allInputs[0]);
         code_ << "      " << tp << " result" << s << " = " << expr << ";\n"
@@ -1027,11 +1085,72 @@ void CompileCtx::generateElementwise(
     code_ << "    }\n";
   }
 
-  code_
-      << "  } else {\n"
-      << "    printf(\"Unimplemented slow path %d isFastPath0=%u\\n\", __LINE__, isFastPath0);\n"
-      << "    __trap();\n"
-      << "  }\n";
+  code_ << "  } else {\n";
+  if (fullBlockResult) {
+    code_
+        << "    uint32_t rounded = roundUpPwr2(size, blockDim.x);\n"
+        << "    for (uint32_t idx = blockInfo.blockInOp * blockDim.x + threadIdx.x; idx < rounded; idx += blockInfo.numBlocksInOp * blockDim.x) {\n";
+    for (size_t s = 0; s < subgraphs.size(); ++s) {
+      auto tp = resultSpecs[s].value ? cudaType(resultSpecs[s].value)
+                                     : cudaType(allInputs[0]);
+      code_ << "      " << tp << " result" << s << ";\n";
+    }
+    code_ << "      if (idx < size) {\n";
+    for (size_t s = 0; s < subgraphs.size(); ++s) {
+      auto expr =
+          elementwiseExpr(subgraphs[s].root, op, allInputs, true);
+      code_ << "        result" << s << " = " << expr << ";\n";
+      if (resultSpecs[s].value) {
+        auto it =
+            std::find(allInputs.begin(), allInputs.end(), resultSpecs[s].value);
+        auto id = it - allInputs.begin();
+        if (resultSpecs[s].value->type().kind() ==
+            nativert::Type::Kind::Tensor) {
+          code_ << "        b" << id << "[idx] = result" << s << ";\n";
+        } else {
+          code_ << "        b" << id << "[0] = result" << s << ";\n";
+        }
+      } else {
+        code_ << "        " << resultSpecs[s].variable << " = result" << s
+              << ";\n";
+      }
+    }
+    code_ << "      }\n";
+    if (!resultStmt.empty()) {
+      code_ << "      " << resultStmt << "\n";
+    }
+    code_ << "    }\n";
+  } else {
+    code_
+        << "    for (uint32_t idx = blockInfo.blockInOp * blockDim.x + threadIdx.x; idx < size; idx += blockInfo.numBlocksInOp * blockDim.x) {\n";
+    for (size_t s = 0; s < subgraphs.size(); ++s) {
+      auto expr =
+          elementwiseExpr(subgraphs[s].root, op, allInputs, true);
+      if (resultSpecs[s].value) {
+        auto it =
+            std::find(allInputs.begin(), allInputs.end(), resultSpecs[s].value);
+        auto id = it - allInputs.begin();
+        auto tp = cudaType(resultSpecs[s].value);
+        code_ << "      " << tp << " result" << s << " = " << expr << ";\n";
+        if (resultSpecs[s].value->type().kind() ==
+            nativert::Type::Kind::Tensor) {
+          code_ << "      b" << id << "[idx] = result" << s << ";\n";
+        } else {
+          code_ << "      b" << id << "[0] = result" << s << ";\n";
+        }
+      } else {
+        auto tp = cudaType(allInputs[0]);
+        code_ << "      " << tp << " result" << s << " = " << expr << ";\n"
+              << "       " << resultSpecs[s].variable << " = result" << s
+              << ";\n";
+      }
+    }
+    if (!resultStmt.empty()) {
+      code_ << "      " << resultStmt << "\n";
+    }
+    code_ << "    }\n";
+  }
+  code_ << "  }\n";
   code_ << "  }\n";
 }
 
@@ -1039,7 +1158,7 @@ namespace {
 
 std::string cudaAttrType(const nativert::Constant& c) {
   return std::visit(
-      [](const auto& v) -> std::string {
+      [&c](const auto& v) -> std::string {
         using T = std::decay_t<decltype(v)>;
         if constexpr (std::is_same_v<T, bool>) {
           return "bool";
@@ -1047,8 +1166,16 @@ std::string cudaAttrType(const nativert::Constant& c) {
           return "int64_t";
         } else if constexpr (std::is_same_v<T, double>) {
           return "double";
+        } else if constexpr (
+            std::is_same_v<T, c10::ScalarType> ||
+            std::is_same_v<T, c10::MemoryFormat> ||
+            std::is_same_v<T, c10::Layout>) {
+          return "int64_t";
         } else {
-          TORCH_CHECK(false, "Unsupported attribute type for CUDA");
+          TORCH_CHECK(
+              false,
+              "Unsupported attribute type for CUDA: ",
+              constantToString(c));
         }
       },
       c);
@@ -1087,7 +1214,7 @@ std::string CompileCtx::makeCall(
     std::vector<ResultSpec> inputs,
     std::vector<ResultSpec> outputs) {
   auto& op = *generatingOp_;
-  auto* meta = Registry::metadata(node->target());
+  auto* meta = nodeMeta(node);
   TORCH_CHECK(meta, "No metadata for: ", node->target());
 
   if (!meta->headerFile.empty()) {
@@ -1100,7 +1227,8 @@ std::string CompileCtx::makeCall(
   ss << meta->deviceFunc;
 
   // Type template parameters from dtypes of node inputs at specified indices.
-  if (meta->hasBlockSizeTemplateParam || !meta->typeTemplateParams.empty()) {
+  if (meta->hasBlockSizeTemplateParam || !meta->typeTemplateParams.empty() ||
+      meta->hasDtypeTemplateParam || !meta->templateAttrs.empty()) {
     const auto& nodeInputs = node->inputs();
     ss << "<";
     bool firstTp = true;
@@ -1115,6 +1243,24 @@ std::string CompileCtx::makeCall(
       firstTp = false;
       auto idx = meta->typeTemplateParams[i];
       ss << cudaType(nodeInputs[idx].value);
+    }
+    if (meta->hasDtypeTemplateParam) {
+      if (!firstTp) {
+        ss << ", ";
+      }
+      firstTp = false;
+      const auto* dtypeAttr = node->tryGetAttribute("dtype");
+      TORCH_CHECK(dtypeAttr, node->target(), ": missing dtype attribute");
+      ss << cudaTypeFromDtype(*dtypeAttr);
+    }
+    for (const auto& attrName : meta->templateAttrs) {
+      if (!firstTp) {
+        ss << ", ";
+      }
+      firstTp = false;
+      const auto* attr = node->tryGetAttribute(attrName);
+      TORCH_CHECK(attr, node->target(), ": missing template attribute ", attrName);
+      ss << constantToString(attr->value);
     }
     ss << ">";
   }
@@ -1131,6 +1277,9 @@ std::string CompileCtx::makeCall(
 
   // Inputs.
   for (size_t i = 0; i < inputs.size(); ++i) {
+    if (i < meta->argumentMeta.size() && meta->argumentMeta[i].linkOnly) {
+      continue;
+    }
     comma();
     if (inputs[i].value && inputs[i].variable.empty() &&
         i < meta->argumentMeta.size() && meta->argumentMeta[i].isRegister) {
@@ -1144,6 +1293,9 @@ std::string CompileCtx::makeCall(
 
   // Outputs.
   for (size_t i = 0; i < outputs.size(); ++i) {
+    if (i < meta->returnMeta.size() && meta->returnMeta[i].linkOnly) {
+      continue;
+    }
     comma();
     if (outputs[i].value && outputs[i].variable.empty() &&
         i < meta->returnMeta.size() && meta->returnMeta[i].isRegister) {
@@ -1160,30 +1312,42 @@ std::string CompileCtx::makeCall(
     }
   }
 
-  // Attributes in alphabetic order.
-  const auto& attrs = node->attributes();
-  if (!attrs.empty()) {
-    std::vector<const nativert::Attribute*> sorted;
-    sorted.reserve(attrs.size());
-    for (const auto& attr : attrs) {
-      sorted.push_back(&attr);
-    }
-    std::sort(sorted.begin(), sorted.end(), [](const auto* a, const auto* b) {
-      return a->name < b->name;
-    });
-    for (const auto* attr : sorted) {
-      comma();
-      auto off = op.attrOffset(node, attr->name);
-      auto tp = cudaAttrType(attr->value);
-      ss << "*param<" << tp << ">(blockInfo, " << off << ")";
-    }
-  }
+  // Attributes in alphabetic order. dtype and device are filtered by
+  // forEachSortedAttribute (dtype is a template param, device is metadata).
+  forEachSortedAttribute(node, [&](NodeCP, const nativert::Attribute& attr) {
+    comma();
+    auto off = op.attrOffset(node, attr.name);
+    auto tp = cudaAttrType(attr.value);
+    ss << "*param<" << tp << ">(blockInfo, " << off << ")";
+  });
 
   // Shared declarations: declare in the kernel and pass as arguments.
   for (const auto& [type, name] : meta->sharedDecls) {
     op.addSharedDeclaration("  __shared__ " + type + " " + name + ";\n");
     comma();
     ss << name;
+  }
+
+  // Dynamic shared declarations: type from input dtype, name suffixed by type.
+  // Ordinal -1 means use the resolved dtype attribute instead of an input.
+  for (const auto& [ordinal, baseName] : meta->dynamicSharedDecls) {
+    std::string tp;
+    std::string suffix;
+    if (ordinal >= 0) {
+      auto* value = node->inputs()[ordinal].value;
+      tp = cudaType(value);
+      suffix = cudaTypeIdSuffix(types_.types[value->id()]->dtype());
+    } else {
+      const auto* dtypeAttr = node->tryGetAttribute("dtype");
+      TORCH_CHECK(dtypeAttr, node->target(), ": missing dtype attribute");
+      tp = cudaTypeFromDtype(*dtypeAttr);
+      suffix = dtypeName(*dtypeAttr);
+    }
+    auto varName = baseName + suffix;
+    op.addSharedDeclaration(
+        "  __shared__ " + tp + " " + varName + ";\n");
+    comma();
+    ss << varName;
   }
 
   // If not elementwise and has register inputs, pass idx and size before
@@ -1218,12 +1382,44 @@ void CompileCtx::elementwiseExprImpl(
     const std::unordered_set<ValueCP>& inputSet,
     const std::vector<ValueCP>& inputs,
     const KernelOperation& op,
-    std::stringstream& ss) {
+    std::stringstream& ss,
+    bool slowPath) {
   placed_.insert(node);
-  auto* meta = Registry::metadata(node->target());
+  auto* meta = nodeMeta(node);
   TORCH_CHECK(
       meta && meta->elementwise, "Not an elementwise op: ", node->target());
   const auto& ew = *meta->elementwise;
+
+  if (meta->generateCall) {
+    std::vector<std::string> args;
+    for (const auto& input : node->inputs()) {
+      auto* value = input.value;
+      if (inputSet.count(value)) {
+        auto it = std::find(inputs.begin(), inputs.end(), value);
+        TORCH_CHECK(
+            it != inputs.end(), "Input value not found in inputs vector");
+        auto valueIdx = it - inputs.begin();
+        std::stringstream argSs;
+        if (slowPath) {
+          argSs << "b" << valueIdx << "[complexIdx(isFastPath"
+                << valueIdx / 32 << " & (1 << " << valueIdx % 32 << "), "
+                << param(value, op) << ", idx)]";
+        } else {
+          argSs << "b" << valueIdx << "[idx]";
+        }
+        args.push_back(argSs.str());
+      } else {
+        auto* producer = value->producer();
+        TORCH_CHECK(producer, "Non-input value has no producer");
+        std::stringstream argSs;
+        elementwiseExprImpl(producer, inputSet, inputs, op, argSs, slowPath);
+        args.push_back(argSs.str());
+      }
+    }
+    meta->generateCall(ss, node, std::move(args));
+    return;
+  }
+
   // Convert "--func" to "__func".
   std::string funcName = ew.functionName;
   TORCH_CHECK(
@@ -1232,23 +1428,50 @@ void CompileCtx::elementwiseExprImpl(
       funcName);
   funcName[0] = '_';
   funcName[1] = '_';
-  ss << funcName << "(";
+  ss << funcName;
+  if (!meta->typeTemplateParams.empty()) {
+    ss << "<";
+    const auto& nodeInputs = node->inputs();
+    for (size_t i = 0; i < meta->typeTemplateParams.size(); ++i) {
+      if (i > 0) {
+        ss << ", ";
+      }
+      auto idx = meta->typeTemplateParams[i];
+      ss << cudaType(nodeInputs[idx].value);
+    }
+    ss << ">";
+  }
+  ss << "(";
   bool first = true;
-  for (const auto& input : node->inputs()) {
-    auto* value = input.value;
+  if (ew.hasIdxArg) {
+    ss << "idx";
+    first = false;
+  }
+  for (size_t i = 0; i < node->inputs().size(); ++i) {
+    auto* value = node->inputs()[i].value;
     if (!first) {
       ss << ", ";
     }
     first = false;
-    if (inputSet.count(value)) {
+    bool isWhole = i < meta->argumentMeta.size() &&
+        meta->argumentMeta[i].wholeTensor;
+    if (isWhole) {
+      ss << param(value, op);
+    } else if (inputSet.count(value)) {
       auto it = std::find(inputs.begin(), inputs.end(), value);
       TORCH_CHECK(it != inputs.end(), "Input value not found in inputs vector");
       auto valueIdx = it - inputs.begin();
-      ss << "b" << valueIdx << "[idx]";
+      if (slowPath) {
+        ss << "b" << valueIdx << "[complexIdx(isFastPath" << valueIdx / 32
+           << " & (1 << " << valueIdx % 32 << "), " << param(value, op)
+           << ", idx)]";
+      } else {
+        ss << "b" << valueIdx << "[idx]";
+      }
     } else {
       auto* producer = value->producer();
       TORCH_CHECK(producer, "Non-input value has no producer");
-      elementwiseExprImpl(producer, inputSet, inputs, op, ss);
+      elementwiseExprImpl(producer, inputSet, inputs, op, ss, slowPath);
     }
   }
   for (const auto& attrName : ew.attributeArgs) {
@@ -1265,11 +1488,12 @@ void CompileCtx::elementwiseExprImpl(
 std::string CompileCtx::elementwiseExpr(
     NodeCP node,
     const KernelOperation& op,
-    const std::vector<ValueCP>& inputs) {
+    const std::vector<ValueCP>& inputs,
+    bool slowPath) {
   addInclude("velox/experimental/torchwave/Elementwise.cuh");
   std::unordered_set<ValueCP> inputSet(inputs.begin(), inputs.end());
   std::stringstream ss;
-  elementwiseExprImpl(node, inputSet, inputs, op, ss);
+  elementwiseExprImpl(node, inputSet, inputs, op, ss, slowPath);
   return ss.str();
 }
 
@@ -1321,7 +1545,7 @@ std::string CompileCtx::makeElementRef(ValueCP value, const KernelOperation& op)
   auto off = op.paramOffset(value);
   if (value->type().kind() == nativert::Type::Kind::Tensor) {
     return fmt::format(
-        "elementRef<{}>(param<Tensor>(blockInfo, {}), idx)",
+        "elementRef<{}>(param<Tensor>(blockInfo, {}), idx, size)",
         cudaType(value),
         off);
   }
@@ -1347,16 +1571,14 @@ void addDuplicateExtraBindings(
 }
 
 std::unique_ptr<CompiledNode> CompileCtx::compileNode(ProjectNode& project) {
+  placedBeforeNode_ = placed_;
   inputs_ = &project.inputs();
   auto& nodes = project.nodes();
-  bool allInput = std::all_of(nodes.begin(), nodes.end(), [](const auto* node) {
-    return node->target() == "prim.Input";
-  });
-  if (allInput) {
-    return nullptr;
-  }
   for (size_t i = 0; i < nodes.size(); ++i) {
     auto* node = nodes[i];
+    if (node->target() == "prim.Input" || placed_.count(node)) {
+      continue;
+    }
     auto sg = extractSubgraph(node, project.inputs(), placed_);
     auto it = projectOps_.find(sg);
     if (it != projectOps_.end()) {
@@ -1379,6 +1601,9 @@ std::unique_ptr<CompiledNode> CompileCtx::compileNode(ProjectNode& project) {
       }
     }
   }
+  if (ops_.empty()) {
+    return nullptr;
+  }
   auto compositeKernel = std::make_unique<CompositeKernel>(
       std::move(opStorage_), std::move(kernelOpStorage_), includes_);
   auto invocation = std::make_unique<CompositeInvocation>();
@@ -1387,6 +1612,7 @@ std::unique_ptr<CompiledNode> CompileCtx::compileNode(ProjectNode& project) {
   invocation->ops = std::move(ops_);
   invocation->ivalueStorage = std::move(ivalueStorage_);
   invocation->sequenceNumber = waveGraph_.nextCompositeInvocationId();
+  placed_.insert(nodes.begin(), nodes.end());
   return std::make_unique<CompiledNode>(std::move(invocation));
 }
 

@@ -17,6 +17,7 @@
 #pragma once
 
 #include <optional>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -35,6 +36,8 @@ using ValueCP = const nativert::Value*;
 using FrameP = nativert::ExecutionFrame*;
 
 class WaveGraph;
+struct ValueConstraint;
+struct ValueTypes;
 
 /// Describes element-wise operations like binary and unary arithmetic.
 struct ElementwiseOp {
@@ -46,6 +49,9 @@ struct ElementwiseOp {
   /// Attribute names that map to extra args in the CUDA function, e.g.
   /// {"alpha"} for add/sub, {"min", "max"} for clamp.
   std::vector<std::string> attributeArgs;
+
+  /// If true, idx is passed as the first argument before inputs and attributes.
+  bool hasIdxArg{false};
 };
 
 /// Common cases of determining output size: kNone is a custom function, kMax is
@@ -86,6 +92,15 @@ struct ArgumentMeta {
   /// the kernel completes. Introduces a queued D to H transfer and a host side
   /// sync.
   bool neededOnHost{false};
+
+  /// This input/output does not correspond to an actual input or output but
+  /// exists only to create an ordering dependency between kernels that depend
+  /// on device side results from another.
+  bool linkOnly{false};
+
+  /// Marks that for an elementwise operation, we want the whole tensor as
+  /// opposed to its element for this lane.
+  bool wholeTensor{false};
 
   SizeShortcut sizeShortcut{SizeShortcut::kNone};
 
@@ -148,12 +163,52 @@ struct Metadata {
   bool inPlaceIfLastUse{false};
 
   /// True if must be launched as its own kernel sequence  with no fusion.
-  bool isStandalone{false};
+  bool isStandalone_{false};
+
+  /// If true, the op only supports 1-d (flat) inputs. Falls back to standalone
+  /// when any input has rank > 1 or unknown rank.
+  bool only1d{false};
+
+  /// If set, called to determine standalone status when isStandalone_ is false.
+  std::function<bool(NodeCP, const ValueTypes&)> isStandaloneFunc;
+
+  bool isStandalone(NodeCP node, const ValueTypes& types) const;
 
   /// Unit cost for scheduling, e.g. proportional block assignment.
   float cost{1.0f};
 
+  /// If set, the output is a view over the argument at this ordinal.
+  std::optional<int32_t> viewOfArg;
+
+  bool isView() const {
+    return viewOfArg.has_value();
+  }
+
+  /// If set, the output rank is taken from the input at this ordinal. Takes
+  /// precedence over outputConstraints and the elementwise default.
+  std::optional<int32_t> rankArgument;
+
+  /// Returns output constraints given a node and its input constraints in
+  /// ValueTypes. If set, called during graph optimization to propagate rank and
+  /// other constraints from inputs to outputs.
+  std::function<
+      std::vector<ValueConstraint>(NodeCP node, const ValueTypes& types)>
+      outputConstraints;
+
+  /// Called after setting output constraints during optimization. If it returns
+  /// non-empty, each pair's first Value is replaced by the second in all uses.
+  std::function<std::vector<std::pair<ValueCP, ValueCP>>(
+      NodeCP node,
+      ValueTypes& types)>
+      maybeReplace;
+
   std::unique_ptr<ElementwiseOp> elementwise;
+
+  /// Custom code generation for elementwise ops. If set, elementwiseExprImpl
+  /// generates each input as a string and calls this instead of the default
+  /// function call pattern.
+  std::function<void(std::stringstream&, NodeCP, std::vector<std::string> args)>
+      generateCall;
 
   /// device side header to include in the NVRTC translation unit.
   std::string headerFile;
@@ -168,6 +223,13 @@ struct Metadata {
   /// function.
   std::vector<std::pair<std::string, std::string>> sharedDecls;
 
+  /// Like sharedDecls but the type is determined at compile time from the dtype
+  /// of the input at the given ordinal. Each entry is (argument ordinal,
+  /// base name). The variable name is base name + type suffix (e.g.
+  /// "counter" + "Float" → "counterFloat") to avoid collisions when multiple
+  /// types appear in one translation unit.
+  std::vector<std::pair<int32_t, std::string>> dynamicSharedDecls;
+
   /// Ordinals of arguments whose dtype appears as a template parameter of the
   /// device func, set according to the dtype of the arg at the ordinal.
   std::vector<int32_t> typeTemplateParams;
@@ -175,6 +237,16 @@ struct Metadata {
   /// If true, the device function takes WaveConfig::blockSize as its first
   /// template parameter.
   bool hasBlockSizeTemplateParam{false};
+
+  /// If true, the resolved dtype attribute is emitted as an additional type
+  /// template parameter after typeTemplateParams. Used for sum/cumsum where the
+  /// kernel reads in TIn and accumulates/writes in TOut.
+  bool hasDtypeTemplateParam{false};
+
+  /// Attribute names whose values are emitted as template parameters after
+  /// typeTemplateParams and hasDtypeTemplateParam, in list order. These
+  /// attributes are skipped by forEachSortedAttribute.
+  std::vector<std::string> templateAttrs;
 
   /// Returns true if any argument has isRegister set.
   bool hasRegisterInputs() const {
@@ -185,6 +257,14 @@ struct Metadata {
     }
     return false;
   }
+
+  /// Fills argumentMeta with default ArgumentMeta{} for each schema argument
+  /// if argumentMeta is empty. Requires functionSchema to be set.
+  void defaultInputMeta();
+
+  /// Fills returnMeta with default ArgumentMeta{} for each schema return
+  /// if returnMeta is empty. Requires functionSchema to be set.
+  void defaultOutputMeta();
 
   bool isKernelBreak(bool isSingleBlock) const {
     for (auto& rm : returnMeta) {
