@@ -909,6 +909,13 @@ class SummarizeExprVisitor : public ITypedExprVisitor {
     myCtx.expressionCounts()["lambda"]++;
     expr.body()->accept(*this, ctx);
   }
+
+  void visit(const NullIfTypedExpr& expr, ITypedExprVisitorContext& ctx)
+      const override {
+    auto& myCtx = static_cast<Context&>(ctx);
+    myCtx.expressionCounts()["nullif"]++;
+    visitInputs(expr, ctx);
+  }
 };
 
 void appendCounts(
