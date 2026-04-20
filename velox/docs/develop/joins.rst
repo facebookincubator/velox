@@ -6,8 +6,10 @@ Velox supports inner, left, right, full outer, left semi filter, left semi
 project, right semi filter, right semi project, anti, and counting hash joins
 using either partitioned or broadcast distribution strategies. Semi project and
 anti joins support additional null-aware flag to distinguish between IN
-(null aware) and EXISTS (regular) semantics. Counting joins implement EXCEPT ALL
-and INTERSECT ALL semantics. Velox also supports cross joins.
+(null aware) and EXISTS (regular) semantics. Anti, left semi filter, and
+counting joins support a null-as-value flag that enables IS NOT DISTINCT FROM
+semantics for join keys (NULL equals NULL), used to implement SQL set operations
+(EXCEPT, INTERSECT, EXCEPT ALL, INTERSECT ALL). Velox also supports cross joins.
 
 Velox also supports inner and left merge join for the case where join inputs are
 sorted on the join keys. Right, full, left semi, right semi, and anti merge joins
@@ -31,6 +33,12 @@ kAnti, or kCountingAnti.
 kLeftSemiProject, kRightSemiProject and kAnti joins support an additional
 nullAware flag to distinguish between IN (null aware) and EXISTS (regular)
 semantics. See :doc:`Anti joins <anti-join>` for detailed semantics.
+
+kAnti, kLeftSemiFilter, kCountingAnti, and kCountingLeftSemiFilter joins support
+an additional nullAsValue flag that makes join keys use IS NOT DISTINCT FROM
+semantics where NULL equals NULL. This is used to implement SQL set operations
+(EXCEPT, INTERSECT, EXCEPT ALL, INTERSECT ALL) which require NULLs to match.
+The nullAsValue and nullAware flags are mutually exclusive.
 
 Filter is optional. If specified it can be any expression over the results of
 the join. This expression will be evaluated using the same expression

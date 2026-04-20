@@ -862,9 +862,9 @@ void HiveIndexSource::addSplits(
     if (factory != nullptr) {
       createCustomIndexReader(*factory, std::move(hiveSplit));
     } else {
-      VELOX_CHECK_EQ(
-          hiveSplit->fileFormat,
-          dwio::common::FileFormat::NIMBLE,
+      VELOX_CHECK(
+          hiveSplit->fileFormat == dwio::common::FileFormat::NIMBLE ||
+              hiveSplit->fileFormat == dwio::common::FileFormat::SST,
           "No IndexReaderFactory registered for format: {}",
           dwio::common::toString(hiveSplit->fileFormat));
       createFileIndexReader(std::move(hiveSplit));
