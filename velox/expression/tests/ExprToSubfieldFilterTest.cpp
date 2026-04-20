@@ -129,6 +129,30 @@ TEST_F(ExprToSubfieldFilterTest, neq) {
   VELOX_ASSERT_FILTER(bigintOr(lessThan(42), greaterThan(42)), filter);
 }
 
+TEST_F(ExprToSubfieldFilterTest, neqBoundary) {
+  {
+    auto call = parseCallExpr("a <> 9223372036854775807", ROW("a", BIGINT()));
+    auto [subfield, filter] = leafCallToSubfieldFilter(call);
+
+    ASSERT_TRUE(filter);
+    validateSubfield(subfield, {"a"});
+
+    VELOX_ASSERT_FILTER(lessThan(std::numeric_limits<int64_t>::max()), filter);
+  }
+
+  {
+    auto call =
+        parseCallExpr("a <> -9223372036854775807 - 1", ROW("a", BIGINT()));
+    auto [subfield, filter] = leafCallToSubfieldFilter(call);
+
+    ASSERT_TRUE(filter);
+    validateSubfield(subfield, {"a"});
+
+    VELOX_ASSERT_FILTER(
+        greaterThan(std::numeric_limits<int64_t>::min()), filter);
+  }
+}
+
 TEST_F(ExprToSubfieldFilterTest, lte) {
   auto call = parseCallExpr("a <= 42", ROW("a", BIGINT()));
   auto [subfield, filter] = leafCallToSubfieldFilter(call);
