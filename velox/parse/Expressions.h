@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/common/Enums.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/parse/IExpr.h"
 #include "velox/type/Variant.h"
@@ -134,8 +135,212 @@ class CallExpr : public IExpr {
 
   VELOX_DEFINE_CLASS_NAME(CallExpr)
 
+ protected:
+  // For subclasses that use a different Kind (e.g., AggregateCallExpr).
+  CallExpr(
+      Kind kind,
+      std::string name,
+      std::vector<ExprPtr> inputs,
+      std::optional<std::string> alias)
+      : IExpr{kind, std::move(inputs), std::move(alias)},
+        name_{std::move(name)} {
+    VELOX_USER_CHECK(!name_.empty());
+  }
+
  private:
   const std::string name_;
+};
+
+/// Sort specification for ORDER BY clauses in aggregate and window functions.
+struct SortKey {
+  ExprPtr expr;
+  bool ascending;
+  bool nullsFirst;
+};
+
+/// An aggregate function call with DISTINCT, FILTER, and ORDER BY options.
+/// Extends CallExpr so it can be used anywhere a CallExpr is expected (e.g.,
+/// type resolution). Carries options as part of the IExpr tree so they
+/// survive expression composition.
+class AggregateCallExpr : public CallExpr {
+ public:
+  AggregateCallExpr(
+      std::string name,
+      std::vector<ExprPtr> args,
+      bool distinct,
+      ExprPtr filter,
+      std::vector<SortKey> orderBy,
+      std::optional<std::string> alias = std::nullopt)
+      : CallExpr(
+            IExpr::Kind::kAggregate,
+            std::move(name),
+            std::move(args),
+            std::move(alias)),
+        distinct_(distinct),
+        filter_(std::move(filter)),
+        orderBy_(std::move(orderBy)) {}
+
+  bool isDistinct() const {
+    return distinct_;
+  }
+
+  const ExprPtr& filter() const {
+    return filter_;
+  }
+
+  const std::vector<SortKey>& orderBy() const {
+    return orderBy_;
+  }
+
+  std::string toString() const override;
+
+  ExprPtr replaceInputs(std::vector<ExprPtr> newInputs) const override {
+    VELOX_CHECK_NULL(
+        filter_, "Cannot replace inputs on AggregateCallExpr with filter");
+    VELOX_CHECK(
+        orderBy_.empty(),
+        "Cannot replace inputs on AggregateCallExpr with orderBy");
+    return std::make_shared<AggregateCallExpr>(
+        name(), std::move(newInputs), distinct_, filter_, orderBy_, alias());
+  }
+
+  ExprPtr withAlias(const std::string& alias) const override {
+    return std::make_shared<AggregateCallExpr>(
+        name(), inputs(), distinct_, filter_, orderBy_, alias);
+  }
+
+  ExprPtr dropAlias() const final {
+    return std::make_shared<AggregateCallExpr>(
+        name(), inputs(), distinct_, filter_, orderBy_, std::nullopt);
+  }
+
+  bool operator==(const IExpr& other) const override;
+
+  VELOX_DEFINE_CLASS_NAME(AggregateCallExpr)
+
+ protected:
+  size_t localHash() const override;
+
+ private:
+  const bool distinct_;
+  const ExprPtr filter_;
+  const std::vector<SortKey> orderBy_;
+};
+
+/// Window function call with partition keys, ordering, frame, and ignore nulls.
+/// Extends CallExpr so it can be used anywhere a CallExpr is expected (e.g.,
+/// type resolution). Carries window specifications as part of the IExpr tree.
+class WindowCallExpr : public CallExpr {
+ public:
+  enum class WindowType { kRange, kRows, kGroups };
+
+  VELOX_DECLARE_EMBEDDED_ENUM_NAME(WindowType);
+
+  enum class BoundType {
+    kUnboundedPreceding,
+    kPreceding,
+    kCurrentRow,
+    kFollowing,
+    kUnboundedFollowing,
+  };
+
+  VELOX_DECLARE_EMBEDDED_ENUM_NAME(BoundType);
+
+  struct Frame {
+    WindowType type;
+    BoundType startType;
+    ExprPtr startValue;
+    BoundType endType;
+    ExprPtr endValue;
+  };
+
+  WindowCallExpr(
+      std::string name,
+      std::vector<ExprPtr> args,
+      std::vector<ExprPtr> partitionKeys,
+      std::vector<SortKey> orderByKeys,
+      std::optional<Frame> frame,
+      bool ignoreNulls,
+      std::optional<std::string> alias = std::nullopt)
+      : CallExpr(
+            IExpr::Kind::kWindow,
+            std::move(name),
+            std::move(args),
+            std::move(alias)),
+        partitionKeys_(std::move(partitionKeys)),
+        orderByKeys_(std::move(orderByKeys)),
+        frame_(std::move(frame)),
+        ignoreNulls_(ignoreNulls) {}
+
+  const std::vector<ExprPtr>& partitionKeys() const {
+    return partitionKeys_;
+  }
+
+  const std::vector<SortKey>& orderByKeys() const {
+    return orderByKeys_;
+  }
+
+  const std::optional<Frame>& frame() const {
+    return frame_;
+  }
+
+  bool isIgnoreNulls() const {
+    return ignoreNulls_;
+  }
+
+  std::string toString() const override;
+
+  ExprPtr replaceInputs(std::vector<ExprPtr> newInputs) const override {
+    VELOX_CHECK(
+        partitionKeys_.empty(),
+        "Cannot replace inputs on WindowCallExpr with partitionKeys");
+    VELOX_CHECK(
+        orderByKeys_.empty(),
+        "Cannot replace inputs on WindowCallExpr with orderByKeys");
+    return std::make_shared<WindowCallExpr>(
+        name(),
+        std::move(newInputs),
+        partitionKeys_,
+        orderByKeys_,
+        frame_,
+        ignoreNulls_,
+        alias());
+  }
+
+  ExprPtr withAlias(const std::string& alias) const override {
+    return std::make_shared<WindowCallExpr>(
+        name(),
+        inputs(),
+        partitionKeys_,
+        orderByKeys_,
+        frame_,
+        ignoreNulls_,
+        alias);
+  }
+
+  ExprPtr dropAlias() const final {
+    return std::make_shared<WindowCallExpr>(
+        name(),
+        inputs(),
+        partitionKeys_,
+        orderByKeys_,
+        frame_,
+        ignoreNulls_,
+        std::nullopt);
+  }
+
+  bool operator==(const IExpr& other) const override;
+
+  VELOX_DEFINE_CLASS_NAME(WindowCallExpr)
+
+ protected:
+  size_t localHash() const override;
+
+ private:
+  const std::vector<ExprPtr> partitionKeys_;
+  const std::vector<SortKey> orderByKeys_;
+  const std::optional<Frame> frame_;
+  const bool ignoreNulls_;
 };
 
 class ConstantExpr : public IExpr,
@@ -302,5 +507,8 @@ class ConcatExpr : public IExpr {
  private:
   const std::vector<std::string> fieldNames_;
 };
+
+using AggregateCallExprPtr = std::shared_ptr<const AggregateCallExpr>;
+using WindowCallExprPtr = std::shared_ptr<const WindowCallExpr>;
 
 } // namespace facebook::velox::core

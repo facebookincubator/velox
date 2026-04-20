@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
+#include "velox/experimental/cudf/exec/AggregationRegistry.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/CudfHashAggregation.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
@@ -129,12 +130,6 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
   static bool isCountFunctionName(std::string_view kind) {
     auto prefix = cudf_velox::CudfConfig::getInstance().functionNamePrefix;
     return kind.rfind(prefix + "count", 0) == 0;
-  }
-
-  static bool isCountStarAggregate(
-      const core::AggregationNode::Aggregate& aggregate) {
-    return isCountFunctionName(aggregate.call->name()) &&
-        aggregate.call->inputs().empty();
   }
 
   static CountInputKind getInputKind(
@@ -955,17 +950,16 @@ CudfHashAggregation::CudfHashAggregation(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
     std::shared_ptr<core::AggregationNode const> const& aggregationNode)
-    : Operator(
+    : CudfOperatorBase(
+          operatorId,
           driverCtx,
           aggregationNode->outputType(),
-          operatorId,
           aggregationNode->id(),
           makeCudfAggregationOperatorName(aggregationNode->step()),
-          std::nullopt),
-      NvtxHelper(
           nvtx3::rgb{34, 139, 34}, // Forest Green
-          operatorId,
-          fmt::format("[{}]", aggregationNode->id())),
+          NvtxMethodFlag::kAll,
+          std::nullopt,
+          aggregationNode),
       aggregationNode_(aggregationNode),
       isPartialOutput_(
           exec::isPartialOutput(aggregationNode->step()) &&
@@ -1244,8 +1238,7 @@ void CudfHashAggregation::computeSingleGroupbyStreaming(CudfVectorPtr tbl) {
   }
 }
 
-void CudfHashAggregation::addInput(RowVectorPtr input) {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+void CudfHashAggregation::doAddInput(RowVectorPtr input) {
   if (input->size() == 0) {
     return;
   }
@@ -1397,9 +1390,7 @@ CudfVectorPtr CudfHashAggregation::releaseAndResetPartialOutput() {
   return std::exchange(bufferedResult_, nullptr);
 }
 
-RowVectorPtr CudfHashAggregation::getOutput() {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
-
+RowVectorPtr CudfHashAggregation::doGetOutput() {
   // Handle partial groupby and distinct.
   if (isPartialOutput_ && !isGlobal_ && streamingEnabled_) {
     if (bufferedResult_ &&
@@ -1513,7 +1504,7 @@ RowVectorPtr CudfHashAggregation::getOutput() {
   }
 }
 
-void CudfHashAggregation::noMoreInput() {
+void CudfHashAggregation::doNoMoreInput() {
   Operator::noMoreInput();
   if (isPartialOutput_ && inputs_.empty()) {
     finished_ = true;
@@ -1522,12 +1513,6 @@ void CudfHashAggregation::noMoreInput() {
 
 bool CudfHashAggregation::isFinished() {
   return finished_;
-}
-
-// Step-aware aggregation registry implementation
-StepAwareAggregationRegistry& getStepAwareAggregationRegistry() {
-  static StepAwareAggregationRegistry registry;
-  return registry;
 }
 
 bool registerAggregationFunctionForStep(
@@ -1545,16 +1530,6 @@ bool registerAggregationFunctionForStep(
   registry[name][step] = signatures;
   return true;
 }
-
-namespace {
-void appendRegisterAggregationFunctionForStep(
-    const std::string& name,
-    core::AggregationNode::Step step,
-    const exec::FunctionSignaturePtr& signature) {
-  auto& registry = getStepAwareAggregationRegistry();
-  registry[name][step].push_back(signature);
-}
-} // namespace
 
 // Register step-aware builtin aggregation functions
 bool registerStepAwareBuiltinAggregationFunctions(const std::string& prefix) {
@@ -1933,92 +1908,8 @@ bool registerStepAwareBuiltinAggregationFunctions(const std::string& prefix) {
       core::AggregationNode::Step::kFinal,
       approxDistinctFinalSignatures);
 
-  // ===== Engine-specific signatures for SUM(REAL) and AVG(REAL) =====
-  // SUM(REAL):
-  //   Spark:  single REAL->DOUBLE, partial REAL->DOUBLE,
-  //           final/intermediate DOUBLE->DOUBLE (already covered above)
-  //   Presto: single REAL->REAL,   partial REAL->DOUBLE,
-  //           final/intermediate DOUBLE->REAL
-  // AVG(REAL):
-  //   Spark:  single REAL->DOUBLE,
-  //           final row(DOUBLE,BIGINT)->DOUBLE (already covered above)
-  //   Presto: single REAL->REAL,
-  //           final row(DOUBLE,BIGINT)->REAL
-  // AVG partial REAL->row(DOUBLE,BIGINT) and intermediate are the same for
-  // both engines and are already registered above.
-
-  if (CudfConfig::getInstance().functionEngine == "spark") {
-    // Spark: SUM(REAL) -> DOUBLE, AVG(REAL) -> DOUBLE
-    appendRegisterAggregationFunctionForStep(
-        prefix + "sum",
-        core::AggregationNode::Step::kSingle,
-        FunctionSignatureBuilder()
-            .returnType("double")
-            .argumentType("real")
-            .build());
-    appendRegisterAggregationFunctionForStep(
-        prefix + "sum",
-        core::AggregationNode::Step::kPartial,
-        FunctionSignatureBuilder()
-            .returnType("double")
-            .argumentType("real")
-            .build());
-    // SUM final/intermediate: DOUBLE->DOUBLE already registered.
-
-    appendRegisterAggregationFunctionForStep(
-        prefix + "avg",
-        core::AggregationNode::Step::kSingle,
-        FunctionSignatureBuilder()
-            .returnType("double")
-            .argumentType("real")
-            .build());
-    // AVG final: row(DOUBLE,BIGINT)->DOUBLE already registered.
-  } else {
-    // Presto (default): SUM(REAL) -> REAL, AVG(REAL) -> REAL
-    appendRegisterAggregationFunctionForStep(
-        prefix + "sum",
-        core::AggregationNode::Step::kSingle,
-        FunctionSignatureBuilder()
-            .returnType("real")
-            .argumentType("real")
-            .build());
-    appendRegisterAggregationFunctionForStep(
-        prefix + "sum",
-        core::AggregationNode::Step::kPartial,
-        FunctionSignatureBuilder()
-            .returnType("double")
-            .argumentType("real")
-            .build());
-    appendRegisterAggregationFunctionForStep(
-        prefix + "sum",
-        core::AggregationNode::Step::kFinal,
-        FunctionSignatureBuilder()
-            .returnType("real")
-            .argumentType("double")
-            .build());
-    appendRegisterAggregationFunctionForStep(
-        prefix + "sum",
-        core::AggregationNode::Step::kIntermediate,
-        FunctionSignatureBuilder()
-            .returnType("real")
-            .argumentType("double")
-            .build());
-
-    appendRegisterAggregationFunctionForStep(
-        prefix + "avg",
-        core::AggregationNode::Step::kSingle,
-        FunctionSignatureBuilder()
-            .returnType("real")
-            .argumentType("real")
-            .build());
-    appendRegisterAggregationFunctionForStep(
-        prefix + "avg",
-        core::AggregationNode::Step::kFinal,
-        FunctionSignatureBuilder()
-            .returnType("real")
-            .argumentType("row(double,bigint)")
-            .build());
-  }
+  // Note: Engine-specific aggregate functions are now registered separately via
+  // registerSparkAggregateFunctions() and registerPrestoAggregateFunctions()
 
   return true;
 }
@@ -2051,15 +1942,16 @@ namespace {
 
 bool isSupportedZeroColumnAggregation(
     const core::AggregationNode& aggregationNode) {
-  // Zero-column aggregation only supports global count(*) — no GROUP BY keys,
-  // and every aggregate must be count(*).
+  // Zero-column input: only global prefixed `count` aggregates (same as
+  // createAggregator). No GROUP BY keys.
   return aggregationNode.groupingKeys().empty() &&
       !aggregationNode.aggregates().empty() &&
       std::all_of(
              aggregationNode.aggregates().begin(),
              aggregationNode.aggregates().end(),
              [](const auto& aggregate) {
-               return CountAggregator::isCountStarAggregate(aggregate);
+               return CountAggregator::isCountFunctionName(
+                   aggregate.call->name());
              });
 }
 

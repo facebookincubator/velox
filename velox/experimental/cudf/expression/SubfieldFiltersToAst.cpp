@@ -334,8 +334,8 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
   using Op = cudf::ast::ast_operator;
   using Operation = cudf::ast::operation;
 
-  auto stream = cudf::get_default_stream();
-  auto mr = cudf::get_current_device_resource_ref();
+  auto stream = cudf::get_default_stream(cudf::allow_default_stream);
+  auto mr = get_temp_mr();
 
   switch (filter.kind()) {
     case common::FilterKind::kBigintRange: {

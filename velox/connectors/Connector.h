@@ -23,6 +23,7 @@
 #include "velox/common/base/SpillConfig.h"
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/caching/ScanTracker.h"
+#include "velox/common/config/ConfigProvider.h"
 #include "velox/common/file/TokenProvider.h"
 #include "velox/common/future/VeloxPromise.h"
 #include "velox/core/ExpressionEvaluator.h"
@@ -413,15 +414,6 @@ class IndexSource {
   virtual std::shared_ptr<ResultIterator> lookup(const Request& request) = 0;
 
   virtual std::unordered_map<std::string, RuntimeMetric> runtimeStats() = 0;
-
-  /// Defines stat names for IndexSource operator stats tracking.
-  static constexpr std::string_view kOutputPositions{
-      "indexSourceOutputPositions"};
-  static constexpr std::string_view kOutputBytes{"indexSourceOutputBytes"};
-  static constexpr std::string_view kOutputVectors{"indexSourceOutputVectors"};
-  static constexpr std::string_view kInputPositions{
-      "indexSourceInputPositions"};
-  static constexpr std::string_view kInputBytes{"indexSourceInputBytes"};
 };
 
 /// Collection of context data for use in a DataSource, IndexSource or DataSink.
@@ -620,6 +612,12 @@ class Connector {
 
   const std::shared_ptr<const config::ConfigBase>& connectorConfig() const {
     return config_;
+  }
+
+  /// Returns the config provider for this connector's session properties,
+  /// or nullptr if the connector has no session-overridable properties.
+  virtual const config::ConfigProvider* configProvider() const {
+    return nullptr;
   }
 
   /// Returns true if this connector would accept a filter dynamically

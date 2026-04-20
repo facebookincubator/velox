@@ -16,6 +16,7 @@
 
 #include "velox/connectors/hive/storage_adapters/s3fs/S3WriteFile.h"
 #include "velox/common/base/StatsReporter.h"
+#include "velox/connectors/hive/storage_adapters/s3fs/S3Config.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Counters.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Util.h"
 #include "velox/dwio/common/DataBuffer.h"
@@ -40,8 +41,8 @@ class S3WriteFile::Impl {
       std::string_view path,
       Aws::S3::S3Client* client,
       memory::MemoryPool* pool,
-      size_t minPartSize)
-      : client_(client), pool_(pool), minPartSize_(minPartSize) {
+      const std::shared_ptr<S3Config>& s3Config)
+      : client_(client), pool_(pool), minPartSize_(s3Config->minPartSize()) {
     VELOX_CHECK_NOT_NULL(client);
     VELOX_CHECK_NOT_NULL(pool);
     getBucketAndKeyFromPath(path, bucket_, key_);
@@ -144,8 +145,8 @@ class S3WriteFile::Impl {
   // No-op.
   void flush() {
     VELOX_CHECK(!closed(), "File is closed");
-    /// currentPartSize must be less than minPartSize_ since
-    /// append() would have already flushed after reaching minPartSize_.
+    /// currentPartSize must be less than minPartSize since
+    /// append() would have already flushed after reaching minPartSize.
     VELOX_CHECK_LT(currentPart_->size(), minPartSize_);
   }
 
@@ -236,7 +237,7 @@ class S3WriteFile::Impl {
   }
 
   void uploadPart(const std::string_view part, bool isLast = false) {
-    // Only the last part can be less than minPartSize_.
+    // Only the last part can be less than minPartSize.
     VELOX_CHECK(isLast || (!isLast && (part.size() == minPartSize_)));
     // Upload the part.
     {
@@ -272,15 +273,15 @@ class S3WriteFile::Impl {
   std::string bucket_;
   std::string key_;
   size_t fileSize_ = -1;
-  size_t minPartSize_;
+  const size_t minPartSize_;
 };
 
 S3WriteFile::S3WriteFile(
     std::string_view path,
     Aws::S3::S3Client* client,
     memory::MemoryPool* pool,
-    size_t minPartSize) {
-  impl_ = std::make_shared<Impl>(path, client, pool, minPartSize);
+    const std::shared_ptr<S3Config>& s3Config) {
+  impl_ = std::make_shared<Impl>(path, client, pool, s3Config);
 }
 
 void S3WriteFile::append(std::string_view data) {

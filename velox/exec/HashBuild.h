@@ -268,6 +268,8 @@ class HashBuild final : public Operator {
 
   const bool nullAware_;
 
+  const bool nullAsValue_;
+
   // Sets to true for join type which needs right side join processing. The hash
   // table spiller then needs to record the probed flag, and the spilled input
   // reader also needs to restore the recorded probed flag. This is used to

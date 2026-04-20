@@ -84,12 +84,10 @@ std::optional<int32_t> CastRulesRegistry::castCostImpl(
   const auto fromName = fromType->name();
   const auto toName = toType->name();
 
-  // For leaf types (primitives and custom types), look up rule directly.
-  if (fromType->size() == 0 && toType->size() == 0) {
-    auto rule = findRule(fromName, toName);
-    if (!rule) {
-      return std::nullopt;
-    }
+  // Try direct rule lookup first. This handles primitives and custom types
+  // including those with children like IPPREFIX (which extends RowType).
+  auto rule = findRule(fromName, toName);
+  if (rule) {
     if (requireImplicit && !rule->implicitAllowed) {
       return std::nullopt;
     }
@@ -99,9 +97,9 @@ std::optional<int32_t> CastRulesRegistry::castCostImpl(
     return requireImplicit ? rule->cost : 0;
   }
 
-  // For container types (ARRAY, MAP, ROW) with the same base type,
-  // recursively check children and sum costs.
-  if (fromName == toName) {
+  // No explicit rule. For container types (ARRAY, MAP, ROW) with the same
+  // base type, recursively check children and sum costs.
+  if (fromName == toName && fromType->size() > 0) {
     if (fromType->size() != toType->size()) {
       return std::nullopt;
     }

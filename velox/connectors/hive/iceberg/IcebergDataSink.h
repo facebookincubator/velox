@@ -91,7 +91,9 @@ class IcebergDataSink : public HiveDataSink {
   /// - fileSizeInBytes: raw bytes written to disk.
   /// - metrics: object with recordCount (number of rows written).
   /// - partitionSpecJson: partition specification.
-  /// - fileFormat: storage format (e.g., "PARQUET").
+  /// - fileFormat: storage format. Either "PARQUET" or "ORC". DWRF files
+  ///   are reported as "ORC" because Iceberg's file-format vocabulary has
+  ///   no DWRF enum.
   /// - content: file content type ("DATA" for data files).
   ///
   /// See
