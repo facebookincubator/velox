@@ -59,7 +59,7 @@ SelectiveListColumnReader::SelectiveListColumnReader(
           fileType,
           params,
           scanSpec),
-      length_(makeLengthDecoder(*fileType_, params, *memoryPool_)) {
+      length_(makeLengthDecoder(*fileType_, params, *pool_)) {
   EncodingKey encodingKey{fileType_->id(), params.flatMapContext().sequence};
   auto& stripe = params.stripeStreams();
   // count the number of selected sub-columns
@@ -133,7 +133,7 @@ SelectiveMapColumnReader::SelectiveMapColumnReader(
           fileType,
           params,
           scanSpec),
-      length_(makeLengthDecoder(*fileType_, params, *memoryPool_)) {
+      length_(makeLengthDecoder(*fileType_, params, *pool_)) {
   makeMapChildrenReaders(
       *fileType_,
       *requestedType_,
@@ -156,7 +156,7 @@ SelectiveMapAsStructColumnReader::SelectiveMapAsStructColumnReader(
           fileType,
           params,
           scanSpec),
-      length_(makeLengthDecoder(*fileType_, params, *memoryPool_)) {
+      length_(makeLengthDecoder(*fileType_, params, *pool_)) {
   makeMapChildrenReaders(
       *fileType_,
       *requestedType_,

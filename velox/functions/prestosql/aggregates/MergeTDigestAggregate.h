@@ -17,39 +17,11 @@
 #pragma once
 
 #include "velox/exec/Aggregate.h"
-#include "velox/functions/lib/TDigest.h"
+#include "velox/functions/prestosql/aggregates/TDigestAccumulator.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::aggregate::prestosql {
-
-// TDigest accumulator for merge operations
-struct TDigestAccumulator {
-  explicit TDigestAccumulator(HashStringAllocator* allocator)
-      : digest_(StlAllocator<double>(allocator)) {}
-
-  void mergeWith(
-      StringView serialized,
-      HashStringAllocator* /*allocator*/,
-      std::vector<int16_t>& positions) {
-    if (serialized.empty()) {
-      return;
-    }
-    digest_.mergeDeserialized(positions, serialized.data());
-  }
-
-  int64_t serializedSize(std::vector<int16_t>& positions) {
-    digest_.compress(positions);
-    return digest_.serializedByteSize();
-  }
-
-  void serialize(char* outputBuffer) {
-    digest_.serialize(outputBuffer);
-  }
-
- private:
-  facebook::velox::functions::TDigest<StlAllocator<double>> digest_;
-};
 
 class MergeTDigestAggregate : public exec::Aggregate {
  public:
@@ -98,15 +70,16 @@ class MergeTDigestAggregate : public exec::Aggregate {
         [&](TDigestAccumulator* accumulator,
             FlatVector<StringView>* result,
             vector_size_t index) {
-          auto size = accumulator->serializedSize(positions);
+          accumulator->digest.compress(positions);
+          auto size = accumulator->digest.serializedByteSize();
           StringView serialized;
           if (StringView::isInline(size)) {
             std::string buffer(size, '\0');
-            accumulator->serialize(buffer.data());
+            accumulator->digest.serialize(buffer.data());
             serialized = StringView::makeInline(buffer);
           } else {
             char* rawBuffer = flatResult->getRawStringBufferWithSpace(size);
-            accumulator->serialize(rawBuffer);
+            accumulator->digest.serialize(rawBuffer);
             serialized = StringView(rawBuffer, size);
           }
           result->setNoCopy(index, serialized);
@@ -191,8 +164,11 @@ class MergeTDigestAggregate : public exec::Aggregate {
       const vector_size_t row,
       std::vector<int16_t>& positions) {
     auto serialized = decodedTDigest_.valueAt<StringView>(row);
-    TDigestAccumulator* accumulator = value<TDigestAccumulator>(group);
-    accumulator->mergeWith(serialized, allocator_, positions);
+    if (serialized.empty()) {
+      return;
+    }
+    auto* accumulator = value<TDigestAccumulator>(group);
+    accumulator->digest.mergeDeserialized(positions, serialized.data());
   }
 
   template <typename ExtractResult, typename ExtractFunc>
