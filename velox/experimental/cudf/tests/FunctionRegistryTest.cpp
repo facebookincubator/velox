@@ -353,9 +353,11 @@ TEST_F(FunctionRegistryTest, unregisteredNameReturnsNullAndFalse) {
 
 // `cast` call whose source/destination types `cudf::is_supported_cast`
 // rejects. Test that `canEvaluate` returns false instead of falling through
-// to the registry.
+// to the registry. Destination must be non-fixed-width to be rejected, since
+// cuDF's check only requires the destination to be fixed-width for non-fixed-
+// point casts.
 TEST_F(FunctionRegistryTest, canEvaluateCastUnsupportedTypes) {
-  auto unsupportedCast = makeCall("cast", INTEGER(), {ROW({DOUBLE()})});
+  auto unsupportedCast = makeCall("cast", ROW({DOUBLE()}), {INTEGER()});
   EXPECT_FALSE(FunctionExpression::canEvaluate(unsupportedCast));
 }
 
