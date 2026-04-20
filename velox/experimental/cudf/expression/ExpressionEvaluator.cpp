@@ -1133,16 +1133,12 @@ bool canBeEvaluatedByCudf(std::shared_ptr<velox::exec::Expr> expr, bool deep) {
 
 std::shared_ptr<CudfExpression> createCudfExpression(
     std::shared_ptr<velox::exec::Expr> expr,
-    const RowTypePtr& inputRowSchema,
-    std::optional<std::string> except) {
+    const RowTypePtr& inputRowSchema) {
   ensureBuiltinExpressionEvaluatorsRegistered();
   const auto& registry = getCudfExpressionEvaluatorRegistry();
 
   const CudfExpressionEvaluatorEntry* best = nullptr;
   for (const auto& [name, entry] : registry) {
-    if (except && name == *except) {
-      continue;
-    }
     if (entry.canEvaluate && entry.canEvaluate(expr)) {
       if (best == nullptr || entry.priority > best->priority) {
         best = &entry;
