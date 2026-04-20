@@ -146,18 +146,37 @@ struct PModFloatFunction {
   }
 };
 
-template <typename T>
+template <typename TExec>
 struct UnaryMinusFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE bool call(TInput& result, const TInput a) {
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& config,
+      const TInput* /*a*/) {
+    ansiEnabled_ = config.sparkAnsiEnabled();
+    const auto inputKind = inputTypes.at(0)->kind();
+    intervalInput_ = inputKind == TypeKind::INTERVAL_DAY_TIME ||
+        inputKind == TypeKind::INTERVAL_YEAR_MONTH;
+  }
+
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE Status call(TInput& result, const TInput a) {
     if constexpr (std::is_integral_v<TInput>) {
-      // Avoid undefined integer overflow.
-      result = a == std::numeric_limits<TInput>::min() ? a : -a;
+      const bool isMinValue =
+          FOLLY_UNLIKELY(a == std::numeric_limits<TInput>::min());
+      VELOX_USER_RETURN(
+          ansiEnabled_ && intervalInput_ && isMinValue,
+          "Arithmetic overflow: cannot negate minimum interval value");
+      result = isMinValue ? a : -a;
     } else {
       result = -a;
     }
-    return true;
+    return Status::OK();
   }
+
+ private:
+  bool ansiEnabled_ = false;
+  bool intervalInput_ = false;
 };
 
 template <typename T>
@@ -667,58 +686,6 @@ struct CheckedIntegralDivideFunction {
     result = a / b;
     return Status::OK();
   }
-};
-
-// Unary minus for IntervalDayTime (milliseconds stored as int64_t).
-template <typename TExec>
-struct IntervalDayTimeUnaryMinusFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(TExec);
-
-  FOLLY_ALWAYS_INLINE void initialize(
-      const std::vector<TypePtr>& /*inputTypes*/,
-      const core::QueryConfig& config,
-      const int64_t* /*a*/) {
-    ansiEnabled_ = config.sparkAnsiEnabled();
-  }
-
-  FOLLY_ALWAYS_INLINE Status call(int64_t& result, const int64_t& a) {
-    const bool isMinValue =
-        FOLLY_UNLIKELY(a == std::numeric_limits<int64_t>::min());
-    VELOX_SPARK_USER_RETURN_IF_ANSI(
-        isMinValue,
-        "Arithmetic overflow: cannot negate minimum interval value");
-    result = isMinValue ? a : -a;
-    return Status::OK();
-  }
-
- private:
-  bool ansiEnabled_ = false;
-};
-
-// Unary minus for IntervalYearMonth (months stored as int32_t).
-template <typename TExec>
-struct IntervalYearMonthUnaryMinusFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(TExec);
-
-  FOLLY_ALWAYS_INLINE void initialize(
-      const std::vector<TypePtr>& /*inputTypes*/,
-      const core::QueryConfig& config,
-      const int32_t* /*a*/) {
-    ansiEnabled_ = config.sparkAnsiEnabled();
-  }
-
-  FOLLY_ALWAYS_INLINE Status call(int32_t& result, const int32_t& a) {
-    const bool isMinValue =
-        FOLLY_UNLIKELY(a == std::numeric_limits<int32_t>::min());
-    VELOX_SPARK_USER_RETURN_IF_ANSI(
-        isMinValue,
-        "Arithmetic overflow: cannot negate minimum interval value");
-    result = isMinValue ? a : -a;
-    return Status::OK();
-  }
-
- private:
-  bool ansiEnabled_ = false;
 };
 
 // Add for IntervalDayTime.
