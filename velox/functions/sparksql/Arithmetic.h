@@ -151,9 +151,9 @@ struct UnaryMinusFunction {
       const core::QueryConfig& config,
       const TInput* /*a*/) {
     ansiEnabled_ = config.sparkAnsiEnabled();
-    const auto inputKind = inputTypes.at(0)->kind();
-    intervalInput_ = inputKind == TypeKind::INTERVAL_DAY_TIME ||
-        inputKind == TypeKind::INTERVAL_YEAR_MONTH;
+    const auto& inputType = inputTypes.at(0);
+    intervalInput_ =
+        inputType->isIntervalDayTime() || inputType->isIntervalYearMonth();
   }
 
   template <typename TInput>
