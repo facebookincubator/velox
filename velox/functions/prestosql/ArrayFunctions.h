@@ -607,7 +607,8 @@ struct ArrayFrequencyFunction {
   }
 
  private:
-  folly::F14FastMap<arg_type<T>, int> frequencyCount_;
+  typename util::floating_point::HashMapNaNAwareTypeTraits<arg_type<T>, int>::
+      Type frequencyCount_;
 };
 
 template <typename TExecParams, typename T>
