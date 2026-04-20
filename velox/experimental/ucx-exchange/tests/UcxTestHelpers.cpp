@@ -78,10 +78,12 @@ std::shared_ptr<facebook::velox::exec::Task> createExchangeTask(
     facebook::velox::RowTypePtr rowType,
     int partitionId,
     core::PlanNodeId& exchangeNodeId) {
-  auto planFragment = exec::test::PlanBuilder()
-                          .exchange(rowType, VectorSerde::Kind::kCompactRow)
-                          .capturePlanNodeId(exchangeNodeId)
-                          .planFragment();
+  auto planFragment =
+      exec::test::PlanBuilder()
+          .exchange(
+              rowType, VectorSerde::kindName(VectorSerde::Kind::kCompactRow))
+          .capturePlanNodeId(exchangeNodeId)
+          .planFragment();
 
   std::unordered_map<std::string, std::string> configSettings;
   auto queryCtx = core::QueryCtx::create(

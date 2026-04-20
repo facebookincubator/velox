@@ -1380,6 +1380,101 @@ TEST_P(UcxExchangeTest, batchAccumulationTest) {
   }
 }
 
+// Regression test: aborting a source task while UCXX tagRecv requests are
+// in-flight must not crash.  Before the deferred-request-cleanup fix,
+// UcxExchangeSource::cleanUp() would destroy the request (and its GPU
+// buffer) while UCX was still using it, causing cudaErrorIllegalAddress in
+// ucp_mem_type_unpack.  The fix moves outstanding requests to
+// Communicator::deferredRequests_ so buffers stay alive until UCX finishes.
+TEST_P(UcxExchangeTest, deferredRequestCleanupOnTaskAbort) {
+  // This test doesn't use parameters — run only for the first param set.
+  {
+    ExchangeTestParams p = GetParam();
+    if (p.numSrcDrivers != 1 || p.numDstDrivers != 1 || p.numPartitions != 1 ||
+        p.numChunks != 100 || p.numUpstreamTasks != 1 ||
+        p.tableType != TableType::NARROW) {
+      GTEST_SKIP() << "deferredRequestCleanupOnTaskAbort: runs only once";
+    }
+  }
+
+  // Ensure intra-node is disabled so we exercise the UCXX path (tagRecv).
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const bool origIntraNode = config.intraNodeExchange;
+  config.intraNodeExchange = false;
+
+  const std::string taskPrefix = getUniqueTaskPrefix();
+  const std::string srcTaskId = taskPrefix + "srcActiveTransfer";
+  const std::string sinkTaskId = taskPrefix + "sinkAborted";
+  const int numPartitions = 1;
+  const int partitionId = 0;
+  const int numDrivers = 1;
+  // Enough data to keep UCXX transfers actively in-flight when we abort.
+  const int numChunks = 50;
+  const int numRowsPerChunk = 100000;
+
+  auto rowType = UcxTestData::kTestRowType;
+
+  // 1. Create and initialize source task with data to send.
+  auto srcTask = createSourceTask(srcTaskId, pool_, rowType);
+  queueManager_->initializeTask(
+      srcTask,
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      numPartitions,
+      numDrivers);
+
+  auto sourceMock = std::make_shared<UcxPartitionedOutputMock>(
+      srcTaskId, numDrivers, numPartitions, numChunks, numRowsPerChunk);
+
+  // 2. Create sink task with exchange plan node.
+  core::PlanNodeId exchangeNodeId;
+  auto sinkTask =
+      createExchangeTask(sinkTaskId, rowType, partitionId, exchangeNodeId);
+  auto sinkDriver =
+      std::make_shared<SinkDriverMock>(sinkTask, /*numDrivers=*/1);
+
+  std::vector<exec::Split> splits;
+  splits.emplace_back(remoteSplit(srcTaskId, partitionId));
+  sinkDriver->addSplits(splits);
+
+  // 3. Start source (enqueues data) and sink (begins receiving via UCXX).
+  sourceMock->run();
+  sinkDriver->run();
+
+  // 4. Wait for UCXX transfers to be actively in-flight.
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+  // 5. Abort the source task while transfers are in-flight.
+  //    This triggers UcxExchangeServer::close() which cancels tagSend,
+  //    and eventually UcxExchangeSource::cleanUp() which must defer
+  //    the request (with its GPU buffer) to Communicator::deferredRequests_.
+  srcTask->requestAbort();
+  queueManager_->removeTask(srcTaskId);
+
+  // 6. Wait for the sink driver to complete (it should detect the abort
+  //    and finish, not crash with cudaErrorIllegalAddress).
+  auto future =
+      std::async(std::launch::async, [&]() { sinkDriver->joinThreads(); });
+  auto status = future.wait_for(std::chrono::seconds(15));
+
+  if (status != std::future_status::ready) {
+    sinkTask->requestAbort();
+    future.wait();
+    FAIL() << "Sink driver did not complete within 15s after source abort"
+           << " — possible hang in UCXX request cleanup";
+  }
+
+  // 7. Join source mock threads.
+  sourceMock->joinThreads();
+
+  // 8. Allow Communicator's event loop to sweep deferred requests.
+  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+  // If we reach here without crashing, the deferred cleanup is working.
+  VLOG(0) << "deferredRequestCleanupOnTaskAbort: completed without crash";
+
+  config.intraNodeExchange = origIntraNode;
+}
+
 std::shared_ptr<UcxOutputQueueManager> UcxExchangeTest::queueManager_;
 std::shared_ptr<std::thread> UcxExchangeTest::communicatorThread_;
 std::shared_ptr<Communicator> UcxExchangeTest::communicator_;
