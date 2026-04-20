@@ -24,6 +24,7 @@
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/dwio/common/BufferedInput.h"
@@ -168,7 +169,7 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
             connector::hive::LocationHandle::TableType::kNew),
         fileFormat,
         CompressionKind::CompressionKind_ZSTD,
-        {},
+        {}, // serdeParameters
         writerOptions,
         ensureFiles);
   }
@@ -1291,7 +1292,7 @@ TEST_F(HiveDataSinkTest, ensureFilesUnsupported) {
           dwio::common::FileFormat::DWRF,
           CompressionKind::CompressionKind_ZSTD,
           {}, // serdeParameters
-          nullptr, // writeOptions
+          nullptr, // writerOptions
           true // ensureFiles
           ),
       "ensureFiles is not supported with partition keys in the data");
@@ -1314,7 +1315,7 @@ TEST_F(HiveDataSinkTest, ensureFilesUnsupported) {
           dwio::common::FileFormat::DWRF,
           CompressionKind::CompressionKind_ZSTD,
           {}, // serdeParameters
-          nullptr, // writeOptions
+          nullptr, // writerOptions
           true // ensureFiles
           ),
       "ensureFiles is not supported with bucketing");
@@ -1847,7 +1848,7 @@ TEST_F(HiveDataSinkTest, raceWithCacheEviction) {
   auto cacheCleaner = std::async(std::launch::async, [&] {
     auto cache = cache::AsyncDataCache::getInstance();
     auto hiveConnector = std::dynamic_pointer_cast<HiveConnector>(
-        getConnector(exec::test::kHiveConnectorId));
+        ConnectorRegistry::tryGet(exec::test::kHiveConnectorId));
     while (!stop) {
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
       cache->clear();

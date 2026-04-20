@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+velox_add_library(velox_prefixsort INTERFACE HEADERS PrefixSortAlgorithm.h PrefixSortEncoder.h)
+
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 elseif(${VELOX_BUILD_TEST_UTILS})

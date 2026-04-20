@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+add_subdirectory(resources)
 add_subdirectory(utils)
 
 add_executable(
@@ -144,7 +145,7 @@ add_executable(
 )
 
 if(VELOX_ENABLE_GEO)
-  target_sources(velox_functions_test PRIVATE GeometryFunctionsTest.cpp)
+  target_sources(velox_functions_test PRIVATE GeometryFunctionsTest.cpp S2FunctionsTest.cpp)
 endif()
 
 if(VELOX_ENABLE_FAISS)
@@ -173,3 +174,5 @@ target_link_libraries(
   GTest::gmock
   GTest::gmock_main
 )
+
+velox_add_library(velox_cast_base_test_helper INTERFACE HEADERS CastBaseTest.h)

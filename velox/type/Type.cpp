@@ -25,6 +25,7 @@
 #include <typeindex>
 
 #include "velox/external/tzdb/exception.h"
+#include "velox/type/CastRegistry.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/Time.h"
 #include "velox/type/TimestampConversion.h"
@@ -41,8 +42,8 @@ struct hash<facebook::velox::TypeKind> {
 namespace facebook::velox {
 namespace {
 bool isColumnNameRequiringEscaping(const std::string& name) {
-  static const std::string re("^[a-zA-Z_][a-zA-Z0-9_]*$");
-  return !RE2::FullMatch(name, re);
+  static const re2::RE2 pattern("^[a-zA-Z_][a-zA-Z0-9_]*$");
+  return !RE2::FullMatch(name, pattern);
 }
 
 const auto& typeKindNames() {
@@ -460,29 +461,25 @@ const RowType::NameToIndex* RowType::ensureNameToIndex() const {
 }
 
 namespace {
-template <typename T>
-std::string makeFieldNotFoundErrorMessage(
-    const T& name,
+std::string formatAvailableFields(
     const std::vector<std::string>& availableNames) {
   static constexpr auto kMaxFields = 50;
 
   const auto numAvailable = availableNames.size();
 
-  std::stringstream errorMessage;
-  errorMessage << "Field not found: " << name << ". Available fields are: ";
+  std::stringstream result;
   for (auto i = 0; i < numAvailable && i < kMaxFields; ++i) {
     if (i > 0) {
-      errorMessage << ", ";
+      result << ", ";
     }
-    errorMessage << availableNames[i];
+    result << availableNames[i];
   }
 
   if (numAvailable > kMaxFields) {
-    errorMessage << ", ..." << (numAvailable - kMaxFields) << " more";
+    result << ", ..." << (numAvailable - kMaxFields) << " more";
   }
 
-  errorMessage << ".";
-  return errorMessage.str();
+  return result.str();
 }
 } // namespace
 
@@ -490,7 +487,10 @@ const TypePtr& RowType::findChild(std::string_view name) const {
   if (auto i = getChildIdxIfExists(name)) {
     return children_[*i];
   }
-  VELOX_USER_FAIL(makeFieldNotFoundErrorMessage(name, names_));
+  VELOX_USER_FAIL(
+      "Field not found: {}. Available fields are: {}.",
+      name,
+      formatAvailableFields(names_));
 }
 
 bool RowType::isOrderable() const {
@@ -514,7 +514,10 @@ bool RowType::containsChild(std::string_view name) const {
 uint32_t RowType::getChildIdx(std::string_view name) const {
   auto index = getChildIdxIfExists(name);
   if (!index.has_value()) {
-    VELOX_USER_FAIL(makeFieldNotFoundErrorMessage(name, names_));
+    VELOX_USER_FAIL(
+        "Field not found: {}. Available fields are: {}.",
+        name,
+        formatAvailableFields(names_));
   }
   return index.value();
 }
@@ -1169,7 +1172,11 @@ std::unordered_set<std::string> getCustomTypeNames() {
 
 bool unregisterCustomType(const std::string& name) {
   auto uppercaseName = boost::algorithm::to_upper_copy(name);
-  return typeFactories().erase(uppercaseName) == 1;
+  bool removed = typeFactories().erase(uppercaseName) == 1;
+  if (removed) {
+    CastRulesRegistry::instance().unregisterCastRules(uppercaseName);
+  }
+  return removed;
 }
 
 const CustomTypeFactory* FOLLY_NULLABLE

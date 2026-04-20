@@ -20,8 +20,8 @@
 #include <memory>
 
 #include "velox/connectors/Connector.h"
+#include "velox/connectors/hive/FileConfig.h"
 #include "velox/connectors/hive/FileHandle.h"
-#include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
@@ -60,7 +60,7 @@ class PositionalDeleteFileReader {
   /// @param connectorQueryCtx Query context providing memory pool, session
   ///   properties, and filesystem token.
   /// @param executor Executor for async I/O operations.
-  /// @param hiveConfig Hive connector configuration.
+  /// @param fileConfig Hive connector configuration.
   /// @param ioStatistics Shared I/O statistics counters.
   /// @param ioStats Shared I/O stats tracker.
   /// @param runtimeStats Runtime statistics to record skipped bytes when the
@@ -75,7 +75,7 @@ class PositionalDeleteFileReader {
       FileHandleFactory* fileHandleFactory,
       const ConnectorQueryCtx* connectorQueryCtx,
       folly::Executor* executor,
-      const std::shared_ptr<const HiveConfig>& hiveConfig,
+      const std::shared_ptr<const FileConfig>& fileConfig,
       const std::shared_ptr<io::IoStatistics>& ioStatistics,
       const std::shared_ptr<IoStats>& ioStats,
       dwio::common::RuntimeStatistics& runtimeStats,
@@ -124,18 +124,18 @@ class PositionalDeleteFileReader {
   const std::string baseFilePath_;
   FileHandleFactory* const fileHandleFactory_;
   folly::Executor* const executor_;
-  const ConnectorQueryCtx* connectorQueryCtx_;
-  const std::shared_ptr<const HiveConfig> hiveConfig_;
+  const ConnectorQueryCtx* const connectorQueryCtx_;
+  const std::shared_ptr<const FileConfig> fileConfig_;
   const std::shared_ptr<io::IoStatistics> ioStatistics_;
   const std::shared_ptr<IoStats> ioStats_;
   memory::MemoryPool* const pool_;
 
   // Iceberg metadata column descriptors for the delete file schema.
-  std::shared_ptr<IcebergMetadataColumn> filePathColumn_;
-  std::shared_ptr<IcebergMetadataColumn> posColumn_;
+  const std::shared_ptr<IcebergMetadataColumn> filePathColumn_;
+  const std::shared_ptr<IcebergMetadataColumn> posColumn_;
 
   // Row number offset of the current split within the base data file.
-  uint64_t splitOffset_;
+  const uint64_t splitOffset_;
 
   // Internal split and row reader for the delete file. Reset to nullptr when
   // the delete file is fully consumed or skipped by testFilters().

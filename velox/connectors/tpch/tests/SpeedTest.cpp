@@ -19,6 +19,7 @@
 #include <chrono>
 
 #include "velox/common/memory/Memory.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/tpch/TpchConnector.h"
 #include "velox/connectors/tpch/TpchConnectorSplit.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -61,11 +62,12 @@ class TpchSpeedTest {
         kTpchConnectorId_,
         std::make_shared<config::ConfigBase>(
             std::unordered_map<std::string, std::string>()));
-    connector::registerConnector(tpchConnector);
+    connector::ConnectorRegistry::global().insert(
+        tpchConnector->connectorId(), tpchConnector);
   }
 
   ~TpchSpeedTest() {
-    connector::unregisterConnector(kTpchConnectorId_);
+    connector::ConnectorRegistry::global().erase(kTpchConnectorId_);
   }
 
   void run(tpch::Table table, size_t scaleFactor, size_t numSplits) {

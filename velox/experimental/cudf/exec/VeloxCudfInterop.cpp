@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
@@ -93,7 +94,7 @@ cudf::data_type veloxToCudfDataType(const TypePtr& type) {
     case TypeKind::VARBINARY:
       return cudf::data_type{cudf::type_id::STRING};
     case TypeKind::TIMESTAMP:
-      return cudf::data_type{cudf::type_id::TIMESTAMP_NANOSECONDS};
+      return cudf::data_type{CudfConfig::getInstance().timestampUnit};
     // case TypeKind::HUGEINT: return cudf::type_id::DURATION_DAYS;
     // TODO: DATE was converted to a logical type:
     // https://github.com/facebookincubator/velox/commit/e480f5c03a6c47897ef4488bd56918a89719f908
@@ -123,13 +124,33 @@ std::unique_ptr<cudf::table> toCudfTable(
     const facebook::velox::RowVectorPtr& veloxTable,
     facebook::velox::memory::MemoryPool* pool,
     rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
+    rmm::device_async_resource_ref mr,
+    std::optional<std::string> timestampTimeZone) {
+  TimestampUnit unit;
+  switch (CudfConfig::getInstance().timestampUnit) {
+    case cudf::type_id::TIMESTAMP_NANOSECONDS:
+      unit = TimestampUnit::kNano;
+      break;
+    case cudf::type_id::TIMESTAMP_MICROSECONDS:
+      unit = TimestampUnit::kMicro;
+      break;
+    case cudf::type_id::TIMESTAMP_MILLISECONDS:
+      unit = TimestampUnit::kMilli;
+      break;
+    case cudf::type_id::TIMESTAMP_SECONDS:
+      unit = TimestampUnit::kSecond;
+      break;
+    default:
+      VELOX_UNSUPPORTED();
+  }
   // Need to flattenDictionary and flattenConstant, otherwise we observe issues
   // in the null mask. Also, libcudf does not support Arrow binary, so we export
   // VARBINARY as UTF-8.
   ArrowOptions arrowOptions{
       .flattenDictionary = true,
       .flattenConstant = true,
+      .timestampUnit = unit,
+      .timestampTimeZone = timestampTimeZone,
       .exportVarbinaryAsString = true,
       .useDecimalTypeWidth = true};
   ArrowArray arrowArray;
@@ -144,6 +165,13 @@ std::unique_ptr<cudf::table> toCudfTable(
       arrowSchema,
       arrowOptions);
   auto tbl = cudf::from_arrow(&arrowSchema, &arrowArray, stream, mr);
+
+  // Synchronize before releasing Arrow resources.  cudf::from_arrow uses
+  // cudaMemcpyBatchAsync (CUDA 13.0+) with cudaMemcpySrcAccessOrderStream,
+  // which defers reading the host source buffers until the stream reaches
+  // each copy.  The Arrow arrays must therefore stay alive until the stream
+  // has executed those copies.
+  stream.synchronize();
 
   // Release Arrow resources
   if (arrowArray.release) {
@@ -246,6 +274,38 @@ getMetadata(Iterator begin, Iterator end, const std::string& namePrefix) {
   return metadata;
 }
 
+// Recursively generate metadata using exact names from Velox RowType.
+cudf::column_metadata getMetadataWithName(
+    const facebook::velox::TypePtr& type,
+    const std::string& name) {
+  cudf::column_metadata meta(name);
+  if (type->kind() == facebook::velox::TypeKind::ROW) {
+    auto rowType =
+        std::dynamic_pointer_cast<const facebook::velox::RowType>(type);
+    for (size_t i = 0; i < rowType->size(); ++i) {
+      meta.children_meta.push_back(
+          getMetadataWithName(rowType->childAt(i), rowType->nameOf(i)));
+    }
+  } else if (type->kind() == facebook::velox::TypeKind::ARRAY) {
+    // cudf::lists_column_view::child_column_index is 1, the first metadata is
+    // offsets
+    meta.children_meta.emplace_back(cudf::column_metadata(name + "_offsets"));
+    meta.children_meta.push_back(
+        getMetadataWithName(type->childAt(0), "element"));
+  }
+  return meta;
+}
+
+std::vector<cudf::column_metadata> getMetadataWithName(
+    const RowTypePtr& rowType) {
+  std::vector<cudf::column_metadata> metadata;
+  for (size_t i = 0; i < rowType->size(); ++i) {
+    metadata.push_back(
+        getMetadataWithName(rowType->childAt(i), rowType->nameOf(i)));
+  }
+  return metadata;
+}
+
 } // namespace
 
 facebook::velox::RowVectorPtr toVeloxColumn(
@@ -269,18 +329,23 @@ facebook::velox::RowVectorPtr toVeloxColumn(
   return toVeloxColumn(table, pool, metadata, &outputType, stream, mr);
 }
 
+// New overload: Accepts a Velox TypePtr for recursive metadata construction.
 RowVectorPtr toVeloxColumn(
     const cudf::table_view& table,
     memory::MemoryPool* pool,
-    const std::vector<std::string>& columnNames,
+    const TypePtr& type,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
-  std::vector<cudf::column_metadata> metadata;
-  for (auto name : columnNames) {
-    metadata.emplace_back(cudf::column_metadata(name));
-  }
-  return toVeloxColumn(table, pool, metadata, nullptr, stream, mr);
+  // Recursively generate metadata using Velox type names for all columns.
+  // This assumes 'type' is a RowType and its children match the cudf table
+  // columns.
+  auto rowType =
+      std::dynamic_pointer_cast<const facebook::velox::RowType>(type);
+  VELOX_CHECK_NOT_NULL(rowType);
+  auto metadata = getMetadataWithName(rowType);
+  return toVeloxColumn(table, pool, metadata, &rowType, stream, mr);
 }
 
 } // namespace with_arrow
+
 } // namespace facebook::velox::cudf_velox

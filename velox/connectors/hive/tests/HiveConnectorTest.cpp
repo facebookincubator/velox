@@ -19,6 +19,7 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/connectors/hive/ExtractionUtils.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
@@ -798,7 +799,7 @@ TEST_F(HiveConnectorTest, disjuncts) {
 
 /// A mock filesystem that delegates to the local filesystem but captures
 /// the FileOptions::fileReadOps passed to openFileForRead. Used to verify
-/// that SplitReader::createReader() propagates table identity (dbName,
+/// that FileSplitReader::createReader() propagates table identity (dbName,
 /// tableName) into fileReadOps.
 class CapturingFileSystem : public filesystems::FileSystem {
  public:
@@ -898,14 +899,15 @@ TEST_F(HiveConnectorTest, fileReadOpsTableIdentityPropagation) {
       /*dbName=*/"test_db");
 
   // Build the split using the capturing filesystem scheme so that
-  // openFileForRead captures the fileReadOps populated by SplitReader.
+  // openFileForRead captures the fileReadOps populated by FileSplitReader.
   auto split = exec::test::HiveConnectorSplitBuilder(
                    fmt::format("capture:{}", filePath->getPath()))
                    .fileFormat(dwio::common::FileFormat::DWRF)
                    .build();
 
   // Build and run a table scan. This exercises the full pipeline:
-  // SplitReader::createReader() -> FileHandleGenerator -> CapturingFileSystem.
+  // FileSplitReader::createReader() -> FileHandleGenerator ->
+  // CapturingFileSystem.
   auto plan = PlanBuilder()
                   .startTableScan()
                   .outputType(rowType)
@@ -917,10 +919,341 @@ TEST_F(HiveConnectorTest, fileReadOpsTableIdentityPropagation) {
   auto result = AssertQueryBuilder(plan).split(split).copyResults(pool_.get());
   ASSERT_EQ(result->size(), 3);
 
-  // Verify that SplitReader propagated dbName and tableName into fileReadOps.
+  // Verify that FileSplitReader propagated dbName and tableName into
+  // fileReadOps.
   auto& captured = CapturingFileSystem::capturedFileReadOps();
   ASSERT_EQ(captured.at(std::string(kDbNameKey)), "test_db");
   ASSERT_EQ(captured.at(std::string(kTableNameKey)), "test_table");
+}
+
+/// Verifies that getRuntimeStats() merge logic allows IoStats (ReadFile-layer)
+/// to override the storageReadBytes value from IoStatistics (DWIO-level).
+TEST_F(HiveConnectorTest, ioStatsOverridesStorageReadBytes) {
+  // Step 1: Simulate DWIO-level IoStatistics with an inaccurate estimate.
+  auto ioStatistics = std::make_shared<io::IoStatistics>();
+  ioStatistics->read().increment(200); // DWIO estimate (undercounts gaps)
+
+  // Step 2: Simulate ReadFile-layer IoStats with ground-truth values.
+  IoStats ioStats;
+  ioStats.addCounter(
+      std::string(FileDataSource::kStorageReadBytes),
+      RuntimeCounter(50, RuntimeCounter::Unit::kBytes));
+  ioStats.addCounter(
+      "extentCacheHitBytes", RuntimeCounter(250, RuntimeCounter::Unit::kBytes));
+
+  // Replicate the merge logic from FileDataSource::getRuntimeStats().
+  std::unordered_map<std::string, RuntimeMetric> res;
+
+  // IoStatistics inserts first (Step 2 in getRuntimeStats).
+  res.insert(
+      {std::string(FileDataSource::kStorageReadBytes),
+       RuntimeMetric(
+           ioStatistics->read().sum(),
+           ioStatistics->read().count(),
+           ioStatistics->read().min(),
+           ioStatistics->read().max(),
+           RuntimeCounter::Unit::kBytes)});
+
+  // IoStats merge (Step 3 in getRuntimeStats) -- override storageReadBytes.
+  const auto ioStatsMap = ioStats.stats();
+  for (const auto& [key, value] : ioStatsMap) {
+    if (key == FileDataSource::kStorageReadBytes) {
+      res[std::string(key)] = value;
+    } else {
+      res.emplace(key, value);
+    }
+  }
+
+  // Ground-truth storageReadBytes from IoStats should override DWIO estimate.
+  ASSERT_EQ(res.at("storageReadBytes").sum, 50);
+  ASSERT_EQ(res.at("storageReadBytes").unit, RuntimeCounter::Unit::kBytes);
+  // extentCacheHitBytes should be added as a new diagnostic counter.
+  ASSERT_EQ(res.at("extentCacheHitBytes").sum, 250);
+}
+
+/// Verifies that without IoStats override, storageReadBytes retains the
+/// IoStatistics value.
+TEST_F(HiveConnectorTest, storageReadBytesWithoutOverride) {
+  auto ioStatistics = std::make_shared<io::IoStatistics>();
+  ioStatistics->read().increment(200);
+
+  // IoStats has unrelated counters only -- no storageReadBytes.
+  IoStats ioStats;
+  ioStats.addCounter(
+      "wsInRegionReadBytes", RuntimeCounter(300, RuntimeCounter::Unit::kBytes));
+
+  std::unordered_map<std::string, RuntimeMetric> res;
+  res.insert(
+      {std::string(FileDataSource::kStorageReadBytes),
+       RuntimeMetric(
+           ioStatistics->read().sum(),
+           ioStatistics->read().count(),
+           ioStatistics->read().min(),
+           ioStatistics->read().max(),
+           RuntimeCounter::Unit::kBytes)});
+
+  const auto ioStatsMap = ioStats.stats();
+  for (const auto& [key, value] : ioStatsMap) {
+    if (key == FileDataSource::kStorageReadBytes) {
+      res[std::string(key)] = value;
+    } else {
+      res.emplace(key, value);
+    }
+  }
+
+  // storageReadBytes should retain the IoStatistics value.
+  ASSERT_EQ(res.at("storageReadBytes").sum, 200);
+  // Unrelated IoStats counters should still be added.
+  ASSERT_EQ(res.at("wsInRegionReadBytes").sum, 300);
+}
+
+// --- ScanSpec extraction pushdown tests (file reader layer) ---
+
+TEST_F(HiveConnectorTest, extractionScanSpecMapKeepsBothChildren) {
+  // Map readers read keys and values together, so extraction from maps
+  // does not prune map children.  The extraction is applied post-read.
+  auto hiveType = MAP(VARCHAR(), BIGINT());
+  auto rowType = ROW({{"col", hiveType}});
+  auto scanSpec = makeScanSpec(
+      rowType,
+      /*outputSubfields=*/{},
+      /*subfieldFilters=*/{},
+      /*indexColumns=*/{},
+      /*dataColumns=*/nullptr,
+      /*partitionKeys=*/{},
+      /*infoColumns=*/{},
+      /*specialColumns=*/{},
+      /*disableStatsBasedFilterReorder=*/false,
+      pool_.get());
+
+  // MapKeys extraction -- map children should still be readable.
+  std::vector<NamedExtraction> extractions = {
+      {"keys",
+       {ExtractionPathElement::simple(ExtractionStep::kMapKeys)},
+       ARRAY(VARCHAR())}};
+
+  auto* colSpec = scanSpec->childByName("col");
+  ASSERT_NE(colSpec, nullptr);
+  configureExtractionScanSpec(hiveType, extractions, *colSpec, pool_.get());
+
+  auto* keysSpec = colSpec->childByName(ScanSpec::kMapKeysFieldName);
+  ASSERT_NE(keysSpec, nullptr);
+  ASSERT_FALSE(keysSpec->isConstant());
+  auto* valuesSpec = colSpec->childByName(ScanSpec::kMapValuesFieldName);
+  ASSERT_NE(valuesSpec, nullptr);
+  ASSERT_FALSE(valuesSpec->isConstant());
+}
+
+TEST_F(HiveConnectorTest, extractionScanSpecSizeKeepsBothChildren) {
+  // Size extraction on a map -- map children should still be readable
+  // (extraction is post-read).
+  auto hiveType = MAP(VARCHAR(), BIGINT());
+  auto rowType = ROW({{"col", hiveType}});
+  auto scanSpec = makeScanSpec(
+      rowType,
+      /*outputSubfields=*/{},
+      /*subfieldFilters=*/{},
+      /*indexColumns=*/{},
+      /*dataColumns=*/nullptr,
+      /*partitionKeys=*/{},
+      /*infoColumns=*/{},
+      /*specialColumns=*/{},
+      /*disableStatsBasedFilterReorder=*/false,
+      pool_.get());
+
+  std::vector<NamedExtraction> extractions = {
+      {"sz", {ExtractionPathElement::simple(ExtractionStep::kSize)}, BIGINT()}};
+
+  auto* colSpec = scanSpec->childByName("col");
+  configureExtractionScanSpec(hiveType, extractions, *colSpec, pool_.get());
+
+  auto* keysSpec = colSpec->childByName(ScanSpec::kMapKeysFieldName);
+  ASSERT_FALSE(keysSpec->isConstant());
+  auto* valuesSpec = colSpec->childByName(ScanSpec::kMapValuesFieldName);
+  ASSERT_FALSE(valuesSpec->isConstant());
+}
+
+TEST_F(HiveConnectorTest, extractionScanSpecStructFieldPruning) {
+  // Extraction with StructField should prune unneeded fields.
+  auto hiveType = ROW({{"x", INTEGER()}, {"y", DOUBLE()}, {"z", VARCHAR()}});
+  auto rowType = ROW({{"col", hiveType}});
+  auto scanSpec = makeScanSpec(
+      rowType,
+      /*outputSubfields=*/{},
+      /*subfieldFilters=*/{},
+      /*indexColumns=*/{},
+      /*dataColumns=*/nullptr,
+      /*partitionKeys=*/{},
+      /*infoColumns=*/{},
+      /*specialColumns=*/{},
+      /*disableStatsBasedFilterReorder=*/false,
+      pool_.get());
+
+  std::vector<NamedExtraction> extractions = {
+      {"col_x", {ExtractionPathElement::structField("x")}, INTEGER()}};
+
+  auto* colSpec = scanSpec->childByName("col");
+  configureExtractionScanSpec(hiveType, extractions, *colSpec, pool_.get());
+
+  // x should be readable, y and z should be constant null.
+  ASSERT_FALSE(colSpec->childByName("x")->isConstant());
+  ASSERT_TRUE(colSpec->childByName("y")->isConstant());
+  ASSERT_TRUE(colSpec->childByName("z")->isConstant());
+}
+
+TEST_F(HiveConnectorTest, scanSpecTransformApplied) {
+  // Verify that a transform set on ScanSpec is callable and produces
+  // the correct output type.
+  auto hiveType = MAP(VARCHAR(), BIGINT());
+  auto scanSpec = std::make_shared<ScanSpec>("col");
+  scanSpec->addFieldRecursively("col", *hiveType, 0);
+
+  auto* colSpec = scanSpec->childByName("col");
+  ASSERT_NE(colSpec, nullptr);
+  ASSERT_FALSE(colSpec->hasTransform());
+
+  // Set a MapKeys extraction transform.
+  auto chain = std::vector<ExtractionPathElementPtr>{
+      ExtractionPathElement::simple(ExtractionStep::kMapKeys)};
+  colSpec->setTransform(
+      [chain](const VectorPtr& input, memory::MemoryPool* pool) -> VectorPtr {
+        return applyExtractionChain(input, chain, pool);
+      },
+      ARRAY(VARCHAR()));
+
+  ASSERT_TRUE(colSpec->hasTransform());
+
+  // Create a test MapVector and apply the transform.
+  auto keys = makeFlatVector<StringView>({"a", "b", "c"});
+  auto values = makeFlatVector<int64_t>({1, 2, 3});
+  auto mapVector = makeMapVector({0, 2}, keys, values);
+
+  auto result = colSpec->transform()(mapVector, pool_.get());
+  ASSERT_TRUE(result->type()->isArray());
+  ASSERT_EQ(result->size(), 2);
+  auto* array = result->as<ArrayVector>();
+  ASSERT_EQ(array->sizeAt(0), 2);
+  ASSERT_EQ(array->sizeAt(1), 1);
+}
+
+TEST_F(HiveConnectorTest, extractionScanSpecMapKeyFilterString) {
+  // kMapKeyFilter with string keys should set an IN filter on the keys
+  // ScanSpec.  ExtractionType should remain kNone since kMapKeyFilter is
+  // type-preserving.
+  auto hiveType = MAP(VARCHAR(), BIGINT());
+  auto rowType = ROW({{"col", hiveType}});
+  auto scanSpec = makeScanSpec(
+      rowType,
+      /*outputSubfields=*/{},
+      /*subfieldFilters=*/{},
+      /*indexColumns=*/{},
+      /*dataColumns=*/nullptr,
+      /*partitionKeys=*/{},
+      /*infoColumns=*/{},
+      /*specialColumns=*/{},
+      /*disableStatsBasedFilterReorder=*/false,
+      pool_.get());
+
+  std::vector<NamedExtraction> extractions = {
+      {"filtered",
+       {ExtractionPathElement::mapKeyFilter(
+           std::vector<std::string>{"a", "b"})},
+       hiveType}};
+
+  auto* colSpec = scanSpec->childByName("col");
+  ASSERT_NE(colSpec, nullptr);
+  configureExtractionScanSpec(hiveType, extractions, *colSpec, pool_.get());
+
+  // ExtractionType should remain kNone.
+  ASSERT_EQ(colSpec->extractionType(), ScanSpec::ExtractionType::kNone);
+
+  // Keys ScanSpec should have an IN filter set.
+  auto* keysSpec = colSpec->childByName(ScanSpec::kMapKeysFieldName);
+  ASSERT_NE(keysSpec, nullptr);
+  ASSERT_NE(keysSpec->filter(), nullptr);
+  // Filter should pass "a" and "b" but not "c".
+  ASSERT_TRUE(keysSpec->filter()->testStringView(StringView("a")));
+  ASSERT_TRUE(keysSpec->filter()->testStringView(StringView("b")));
+  ASSERT_FALSE(keysSpec->filter()->testStringView(StringView("c")));
+}
+
+TEST_F(HiveConnectorTest, extractionScanSpecMapKeyFilterInt) {
+  // kMapKeyFilter with integer keys should set an IN filter on the keys
+  // ScanSpec.
+  auto hiveType = MAP(BIGINT(), VARCHAR());
+  auto rowType = ROW({{"col", hiveType}});
+  auto scanSpec = makeScanSpec(
+      rowType,
+      /*outputSubfields=*/{},
+      /*subfieldFilters=*/{},
+      /*indexColumns=*/{},
+      /*dataColumns=*/nullptr,
+      /*partitionKeys=*/{},
+      /*infoColumns=*/{},
+      /*specialColumns=*/{},
+      /*disableStatsBasedFilterReorder=*/false,
+      pool_.get());
+
+  std::vector<NamedExtraction> extractions = {
+      {"filtered",
+       {ExtractionPathElement::mapKeyFilter(std::vector<int64_t>{10, 20, 30})},
+       hiveType}};
+
+  auto* colSpec = scanSpec->childByName("col");
+  ASSERT_NE(colSpec, nullptr);
+  configureExtractionScanSpec(hiveType, extractions, *colSpec, pool_.get());
+
+  // ExtractionType should remain kNone.
+  ASSERT_EQ(colSpec->extractionType(), ScanSpec::ExtractionType::kNone);
+
+  // Keys ScanSpec should have an IN filter set.
+  auto* keysSpec = colSpec->childByName(ScanSpec::kMapKeysFieldName);
+  ASSERT_NE(keysSpec, nullptr);
+  ASSERT_NE(keysSpec->filter(), nullptr);
+  // Filter should pass 10, 20, 30 but not 5.
+  ASSERT_TRUE(keysSpec->filter()->testInt64(10));
+  ASSERT_TRUE(keysSpec->filter()->testInt64(20));
+  ASSERT_TRUE(keysSpec->filter()->testInt64(30));
+  ASSERT_FALSE(keysSpec->filter()->testInt64(5));
+}
+
+TEST_F(HiveConnectorTest, extractionScanSpecMapKeyFilterThenMapKeys) {
+  // kMapKeyFilter followed by kMapKeys should set a filter on keys and then
+  // configure kKeys extraction on the remaining chain.
+  auto hiveType = MAP(VARCHAR(), BIGINT());
+  auto rowType = ROW({{"col", hiveType}});
+  auto scanSpec = makeScanSpec(
+      rowType,
+      /*outputSubfields=*/{},
+      /*subfieldFilters=*/{},
+      /*indexColumns=*/{},
+      /*dataColumns=*/nullptr,
+      /*partitionKeys=*/{},
+      /*infoColumns=*/{},
+      /*specialColumns=*/{},
+      /*disableStatsBasedFilterReorder=*/false,
+      pool_.get());
+
+  std::vector<NamedExtraction> extractions = {
+      {"keys",
+       {ExtractionPathElement::mapKeyFilter(std::vector<std::string>{"x", "y"}),
+        ExtractionPathElement::simple(ExtractionStep::kMapKeys)},
+       ARRAY(VARCHAR())}};
+
+  auto* colSpec = scanSpec->childByName("col");
+  ASSERT_NE(colSpec, nullptr);
+  configureExtractionScanSpec(hiveType, extractions, *colSpec, pool_.get());
+
+  // Filter should be set on keys.
+  auto* keysSpec = colSpec->childByName(ScanSpec::kMapKeysFieldName);
+  ASSERT_NE(keysSpec, nullptr);
+  ASSERT_NE(keysSpec->filter(), nullptr);
+  ASSERT_TRUE(keysSpec->filter()->testStringView(StringView("x")));
+  ASSERT_FALSE(keysSpec->filter()->testStringView(StringView("z")));
+
+  // After stripping kMapKeyFilter, remaining chain is [kMapKeys], so
+  // kKeys extraction should be set.
+  ASSERT_EQ(colSpec->extractionType(), ScanSpec::ExtractionType::kKeys);
 }
 
 } // namespace

@@ -20,6 +20,7 @@
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/functions/prestosql/types/fuzzer_utils/TimestampWithTimeZoneInputGenerator.h"
+#include "velox/type/CastRegistry.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox {
@@ -247,36 +248,6 @@ class TimestampWithTimeZoneCastOperator final : public exec::CastOperator {
     return {std::shared_ptr<const CastOperator>{}, &kInstance};
   }
 
-  bool isSupportedFromType(const TypePtr& other) const override {
-    switch (other->kind()) {
-      case TypeKind::TIMESTAMP:
-        return true;
-      case TypeKind::VARCHAR:
-        return true;
-      case TypeKind::INTEGER:
-        return other->isDate();
-      case TypeKind::BIGINT:
-        return other->equivalent(*TIME());
-      default:
-        return false;
-    }
-  }
-
-  bool isSupportedToType(const TypePtr& other) const override {
-    switch (other->kind()) {
-      case TypeKind::TIMESTAMP:
-        return true;
-      case TypeKind::VARCHAR:
-        return true;
-      case TypeKind::INTEGER:
-        return other->isDate();
-      case TypeKind::BIGINT:
-        return other->equivalent(*TIME());
-      default:
-        return false;
-    }
-  }
-
   void castTo(
       const BaseVector& input,
       exec::EvalCtx& context,
@@ -386,7 +357,6 @@ class TimestampWithTimeZoneTypeFactory : public CustomTypeFactory {
     return TIMESTAMP_WITH_TIME_ZONE();
   }
 
-  // Type casting from and to TimestampWithTimezone is not supported yet.
   exec::CastOperatorPtr getCastOperator() const override {
     return TimestampWithTimeZoneCastOperator::get();
   }
@@ -401,7 +371,25 @@ class TimestampWithTimeZoneTypeFactory : public CustomTypeFactory {
 
 void registerTimestampWithTimeZoneType() {
   registerCustomType(
-      "timestamp with time zone",
+      "TIMESTAMP WITH TIME ZONE",
       std::make_unique<const TimestampWithTimeZoneTypeFactory>());
+  // Lower cost = preferred during overload resolution. TIMESTAMP is closer
+  // to TIMESTAMP WITH TIME ZONE than DATE.
+  registerCastRules({
+      {.fromType = "TIMESTAMP",
+       .toType = "TIMESTAMP WITH TIME ZONE",
+       .implicitAllowed = true,
+       .cost = 1},
+      {.fromType = "VARCHAR", .toType = "TIMESTAMP WITH TIME ZONE"},
+      {.fromType = "DATE",
+       .toType = "TIMESTAMP WITH TIME ZONE",
+       .implicitAllowed = true,
+       .cost = 2},
+      {.fromType = "TIME", .toType = "TIMESTAMP WITH TIME ZONE"},
+      {.fromType = "TIMESTAMP WITH TIME ZONE", .toType = "TIMESTAMP"},
+      {.fromType = "TIMESTAMP WITH TIME ZONE", .toType = "VARCHAR"},
+      {.fromType = "TIMESTAMP WITH TIME ZONE", .toType = "DATE"},
+      {.fromType = "TIMESTAMP WITH TIME ZONE", .toType = "TIME"},
+  });
 }
 } // namespace facebook::velox

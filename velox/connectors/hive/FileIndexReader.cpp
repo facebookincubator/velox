@@ -18,7 +18,7 @@
 
 #include "velox/common/Casts.h"
 #include "velox/connectors/hive/BufferedInputBuilder.h"
-#include "velox/connectors/hive/HiveConfig.h"
+#include "velox/connectors/hive/FileConfig.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/TableHandle.h"
@@ -74,7 +74,7 @@ FileIndexReader::FileIndexReader(
     std::shared_ptr<const HiveConnectorSplit> hiveSplit,
     const std::shared_ptr<const HiveTableHandle>& hiveTableHandle,
     const ConnectorQueryCtx* connectorQueryCtx,
-    const std::shared_ptr<const HiveConfig>& hiveConfig,
+    const std::shared_ptr<const FileConfig>& fileConfig,
     const std::shared_ptr<common::ScanSpec>& scanSpec,
     const std::vector<core::IndexLookupConditionPtr>& indexLookupConditions,
     const RowTypePtr& requestType,
@@ -86,7 +86,7 @@ FileIndexReader::FileIndexReader(
     uint32_t maxRowsPerRequest)
     : tableHandle_{hiveTableHandle},
       connectorQueryCtx_{connectorQueryCtx},
-      hiveConfig_{hiveConfig},
+      fileConfig_{fileConfig},
       fileHandleFactory_{fileHandleFactory},
       requestType_{requestType},
       outputType_{outputType},
@@ -247,7 +247,12 @@ std::unique_ptr<dwio::common::Reader> FileIndexReader::createFileReader() {
 
   dwio::common::ReaderOptions readerOpts(connectorQueryCtx_->memoryPool());
   hive::configureReaderOptions(
-      hiveConfig_, connectorQueryCtx_, tableHandle_, hiveSplit_, readerOpts);
+      fileConfig_,
+      connectorQueryCtx_,
+      tableHandle_,
+      hiveSplit_,
+      hiveSplit_->serdeParameters,
+      readerOpts);
   readerOpts.setScanSpec(scanSpec_);
   readerOpts.setFileFormat(hiveSplit_->fileFormat);
   VELOX_CHECK_NULL(readerOpts.randomSkip());
@@ -281,8 +286,9 @@ FileIndexReader::createIndexReader() {
   VELOX_CHECK_NOT_NULL(fileReader_);
   VELOX_CHECK(
       hiveSplit_->fileFormat == dwio::common::FileFormat::NIMBLE ||
-          hiveSplit_->fileFormat == dwio::common::FileFormat::FLUX,
-      "FileIndexReader only supports Nimble and Flux file formats");
+          hiveSplit_->fileFormat == dwio::common::FileFormat::FLUX ||
+          hiveSplit_->fileFormat == dwio::common::FileFormat::SST,
+      "FileIndexReader only supports Nimble, Flux and SST file formats");
 
   dwio::common::RowReaderOptions rowReaderOpts;
   configureRowReaderOptions(
@@ -291,14 +297,17 @@ FileIndexReader::createIndexReader() {
       /*metadataFilter=*/nullptr,
       outputType_,
       hiveSplit_,
-      hiveConfig_,
+      hiveSplit_->serdeParameters,
+      fileConfig_,
       connectorQueryCtx_->sessionProperties(),
       ioExecutor_,
       rowReaderOpts);
-  rowReaderOpts.setIndexEnabled(true);
-  // Disable eager first stripe load since FileIndexReader loads stripes
-  // on-demand based on index lookup results.
-  rowReaderOpts.setEagerFirstStripeLoad(false);
+  if (hiveSplit_->fileFormat != dwio::common::FileFormat::SST) {
+    rowReaderOpts.setIndexEnabled(true);
+    // Disable eager first stripe load since FileIndexReader loads stripes
+    // on-demand based on index lookup results.
+    rowReaderOpts.setEagerFirstStripeLoad(false);
+  }
   return fileReader_->createIndexReader(rowReaderOpts);
 }
 

@@ -45,9 +45,9 @@ responsible for both **driver** threads and I/O threads.
 Multiple Process Executor Use Case
 ----------------------------------
 
-This use case is used by Spark + `Gluten <https://github.com/oap-project/gluten>`_
+This use case is used by Spark + `Gluten <https://github.com/apache/gluten>`_
 and it differs from the Presto use case where parallelism is concerned. Spark
-uses multiple processes where each process is a Gluten+Velox query processor.
+uses multiple processes where each process is a Gluten + Velox query processor.
 Spark scales by using many Linux processes for query processing. In this case
 this means that the **drivers** are outside of Velox and Gluten and is defined
 by the Spark configuration and number of workers. Gluten takes on the role of

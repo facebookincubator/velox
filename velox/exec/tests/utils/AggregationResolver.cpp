@@ -22,15 +22,13 @@
 namespace facebook::velox::exec::test {
 namespace {
 std::string throwAggregateFunctionDoesntExist(const std::string& name) {
-  std::stringstream error;
-  error << "Aggregate function doesn't exist: " << name << ".";
   exec::aggregateFunctions().withRLock([&](const auto& functionsMap) {
     if (functionsMap.empty()) {
-      error << " Registry of aggregate functions is empty. "
-               "Make sure to register some aggregate functions.";
+      VELOX_USER_FAIL(
+          "Registry of aggregate functions is empty. Make sure to register some aggregate functions.");
     }
   });
-  VELOX_USER_FAIL(error.str());
+  VELOX_USER_FAIL("Aggregate function doesn't exist: {}.", name);
 }
 
 std::string throwAggregateFunctionSignatureNotSupported(
@@ -38,11 +36,10 @@ std::string throwAggregateFunctionSignatureNotSupported(
     const std::vector<TypePtr>& types,
     const std::vector<std::shared_ptr<AggregateFunctionSignature>>&
         signatures) {
-  std::stringstream error;
-  error << "Aggregate function signature is not supported: "
-        << toString(name, types)
-        << ". Supported signatures: " << toString(signatures) << ".";
-  VELOX_USER_FAIL(error.str());
+  VELOX_USER_FAIL(
+      "Aggregate function signature is not supported: {}. Supported signatures: {}.",
+      toString(name, types),
+      toString(signatures));
 }
 } // namespace
 

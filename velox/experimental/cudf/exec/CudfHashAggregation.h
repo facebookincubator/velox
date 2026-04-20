@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include "velox/experimental/cudf/exec/NvtxHelper.h"
+#include "velox/experimental/cudf/exec/CudfOperator.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/exec/Operator.h"
@@ -30,7 +30,7 @@ namespace facebook::velox::cudf_velox {
 // Forward declaration
 struct CudfFunctionSpec;
 
-class CudfHashAggregation : public exec::Operator, public NvtxHelper {
+class CudfHashAggregation : public CudfOperatorBase {
  public:
   struct Aggregator {
     core::AggregationNode::Step step;
@@ -47,7 +47,8 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
     virtual std::unique_ptr<cudf::column> doReduce(
         cudf::table_view const& input,
         TypePtr const& outputType,
-        rmm::cuda_stream_view stream) = 0;
+        rmm::cuda_stream_view stream,
+        vector_size_t inputRowCount) = 0;
 
     virtual std::unique_ptr<cudf::column> makeOutputColumn(
         std::vector<cudf::groupby::aggregation_result>& results,
@@ -76,21 +77,25 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
 
   void initialize() override;
 
-  void addInput(RowVectorPtr input) override;
-
-  RowVectorPtr getOutput() override;
-
   bool needsInput() const override {
     return !noMoreInput_;
   }
-
-  void noMoreInput() override;
 
   exec::BlockingReason isBlocked(ContinueFuture* /* unused */) override {
     return exec::BlockingReason::kNotBlocked;
   }
 
   bool isFinished() override;
+
+ protected:
+  /// Derived classes implement the actual addInput logic.
+  void doAddInput(RowVectorPtr input) override;
+
+  /// Derived classes implement the actual getOutput logic.
+  RowVectorPtr doGetOutput() override;
+
+  /// Derived classes implement the actual noMoreInput logic.
+  void doNoMoreInput() override;
 
  private:
   // Setups the projections for accessing grouping keys stored in grouping
@@ -147,7 +152,7 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
 
   // Maximum memory usage for partial aggregation.
   const int64_t maxPartialAggregationMemoryUsage_;
-  // Number of rows received in the input so far.
+  // Number of input rows accumulated since the last output or flush.
   int64_t numInputRows_ = 0;
 
   bool finished_ = false;
@@ -172,17 +177,6 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
   CudfVectorPtr bufferedResult_;
   RowTypePtr bufferedResultType_;
 };
-
-// Step-aware aggregation function registry
-// Map of function name -> Map of step -> signatures
-using StepAwareAggregationRegistry = std::unordered_map<
-    std::string,
-    std::unordered_map<
-        core::AggregationNode::Step,
-        std::vector<exec::FunctionSignaturePtr>>>;
-
-// Get the step-aware aggregation registry
-StepAwareAggregationRegistry& getStepAwareAggregationRegistry();
 
 // Register aggregation function signatures for a specific step
 bool registerAggregationFunctionForStep(

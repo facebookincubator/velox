@@ -16,5 +16,14 @@ if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()
 
-velox_add_library(velox_common_config Config.cpp)
+velox_add_library(velox_common_config Config.cpp HEADERS Config.h IConfig.h)
 velox_link_libraries(velox_common_config PUBLIC velox_common_base velox_exception PRIVATE re2::re2)
+
+velox_add_library(
+  velox_config_property
+  ConfigProperty.cpp
+  HEADERS
+  ConfigProperty.h
+  ConfigProvider.h
+)
+velox_link_libraries(velox_config_property PUBLIC velox_enums velox_exception)

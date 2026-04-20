@@ -13,6 +13,7 @@
 # limitations under the License.
 
 add_executable(velox_gcs_file_test GcsUtilTest.cpp GcsFileSystemTest.cpp)
+velox_add_test_headers(velox_gcs_file_test GcsEmulator.h)
 add_test(velox_gcs_file_test velox_gcs_file_test)
 target_link_libraries(
   velox_gcs_file_test

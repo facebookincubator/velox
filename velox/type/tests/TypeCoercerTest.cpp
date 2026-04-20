@@ -17,6 +17,7 @@
 #include "velox/type/TypeCoercer.h"
 #include <gtest/gtest.h>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/type/CastRegistry.h"
 
 namespace facebook::velox {
 namespace {
@@ -48,6 +49,31 @@ TEST(TypeCoercerTest, basic) {
 
   testBaseCoercion(ARRAY(TINYINT()));
   testNoCoercion(ARRAY(TINYINT()), MAP(INTEGER(), REAL()));
+}
+
+TEST(TypeCoercerTest, decimal) {
+  testCoercion(DECIMAL(10, 2), REAL());
+  testCoercion(DECIMAL(10, 2), DOUBLE());
+  testCoercion(DECIMAL(38, 6), REAL());
+  testCoercion(DECIMAL(38, 6), DOUBLE());
+
+  testNoCoercion(DECIMAL(10, 2), VARCHAR());
+  testNoCoercion(DECIMAL(10, 2), BIGINT());
+
+  ASSERT_TRUE(TypeCoercer::coercible(DECIMAL(10, 2), DOUBLE()));
+  ASSERT_TRUE(TypeCoercer::coercible(DECIMAL(10, 2), REAL()));
+  ASSERT_FALSE(TypeCoercer::coercible(DOUBLE(), DECIMAL(10, 2)));
+}
+
+TEST(TypeCoercerTest, decimalLeastCommonSuperType) {
+  VELOX_ASSERT_EQ_TYPES(
+      TypeCoercer::leastCommonSuperType(DECIMAL(10, 2), DOUBLE()), DOUBLE());
+  VELOX_ASSERT_EQ_TYPES(
+      TypeCoercer::leastCommonSuperType(DOUBLE(), DECIMAL(10, 2)), DOUBLE());
+  VELOX_ASSERT_EQ_TYPES(
+      TypeCoercer::leastCommonSuperType(DECIMAL(10, 2), REAL()), REAL());
+  VELOX_ASSERT_EQ_TYPES(
+      TypeCoercer::leastCommonSuperType(REAL(), DECIMAL(10, 2)), REAL());
 }
 
 TEST(TypeCoercerTest, date) {
@@ -216,6 +242,12 @@ TEST(TypeCoercerTest, leastCommonSuperType) {
   ASSERT_TRUE(
       TypeCoercer::leastCommonSuperType(
           MAP(INTEGER(), REAL()), ROW({INTEGER(), REAL()})) == nullptr);
+}
+
+TEST(TypeCoercerTest, parametricBuiltinTargetDoesNotThrow) {
+  // Parametric built-in factories throw on empty params. Verify graceful
+  // handling.
+  EXPECT_EQ(TypeCoercer::coerceTypeBase(BIGINT(), "ARRAY"), std::nullopt);
 }
 
 } // namespace

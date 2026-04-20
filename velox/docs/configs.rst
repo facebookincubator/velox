@@ -286,6 +286,22 @@ Expression Evaluation Configuration
        ``expression.track_cpu_usage`` is set to false. Function names are case-insensitive and will be normalized
        to lowercase. This allows fine-grained control over CPU tracking overhead when only specific functions need to
        be monitored.
+   * - expression.adaptive_cpu_sampling
+     - boolean
+     - false
+     - Enables adaptive per-function CPU usage sampling. Each function is calibrated over 6 batches (1 warmup + 5
+       calibration) to measure the overhead of CPU tracking (clock_gettime) relative to the function's execution time.
+       The timer overhead is measured once per ExprSet and shared across all functions. Functions where tracking overhead
+       is acceptable are always tracked; functions where overhead exceeds ``expression.adaptive_cpu_sampling_max_overhead_pct``
+       are sampled at a rate proportional to their overhead. Sampled timing stats are extrapolated to approximate
+       full-population values.
+   * - expression.adaptive_cpu_sampling_max_overhead_pct
+     - float
+     - 1.0
+     - Maximum acceptable CPU tracking overhead percentage per function, used with ``expression.adaptive_cpu_sampling``.
+       Functions whose tracking overhead exceeds this threshold are sampled at a rate of
+       ceil(overhead_pct / max_overhead_pct). For example, with max_overhead=1.0, a function with 70% tracking overhead
+       is sampled every 70th batch, bounding its effective overhead to ~1%. Must be greater than 0.
    * - legacy_cast
      - bool
      - false
@@ -667,6 +683,11 @@ Each query can override the config by setting corresponding query session proper
    :widths: 20 20 10 10 70
    :header-rows: 1
 
+   * - Configuration Property Name
+     - Session Property Name
+     - Type
+     - Default Value
+     - Description
    * - user
      -
      - string
@@ -688,6 +709,15 @@ Hive Connector
 Hive Connector config is initialized on velox runtime startup and is shared among queries as the default config.
 Each query can override the config by setting corresponding query session properties such as in Prestissimo.
 
+Configuration property names use kebab-case (e.g., ``max-bucket-count``).
+Session property names use snake_case (e.g., ``max_bucket_count``).
+Properties without a session property name in the table below are fixed for the lifetime of the process
+and cannot be modified per query.
+
+Properties of type ``capacity`` accept human-readable size strings such as ``512kB``, ``128MB``, ``1GB``, etc.
+Properties of type ``integer`` with byte-valued defaults (shown as ``256KB``, ``8MB``, etc. for readability)
+must be specified as raw byte counts.
+
 .. list-table::
    :widths: 20 20 10 10 70
    :header-rows: 1
@@ -697,13 +727,13 @@ Each query can override the config by setting corresponding query session proper
      - Type
      - Default Value
      - Description
-   * - hive.max-partitions-per-writers
-     -
+   * - max-partitions-per-writers
+     - max_partitions_per_writers
      - integer
-     - 100
+     - 128
      - Maximum number of (bucketed) partitions per a single table writer instance.
-   * - hive.max-bucket-count
-     - hive.max_bucket_count
+   * - max-bucket-count
+     - max_bucket_count
      - integer
      - 100000
      - Maximum number of buckets that a table writer is allowed to write to.
@@ -715,7 +745,7 @@ Each query can override the config by setting corresponding query session proper
        the update mode field of the table writer operator output. ``OVERWRITE``
        sets the update mode to indicate overwriting a partition if exists. ``ERROR`` sets the update mode to indicate
        error throwing if writing to an existing partition.
-   * - hive.immutable-partitions
+   * - immutable-partitions
      -
      - bool
      - false
@@ -752,7 +782,7 @@ Each query can override the config by setting corresponding query session proper
      - Maximum size in bytes to coalesce requests to be fetched in a single request.
    * - max-coalesced-distance
      -
-     - integer
+     - capacity
      - 512KB
      - Maximum distance in capacity units between chunks to be fetched that may be coalesced into a single request.
    * - load-quantum
@@ -779,9 +809,17 @@ Each query can override the config by setting corresponding query session proper
      - Maximum number of rows for sort writer in one batch of output. This is to limit the memory usage of sort writer.
    * - sort-writer-max-output-bytes
      - sort_writer_max_output_bytes
-     - string
+     - capacity
      - 10MB
      - Maximum bytes for sort writer in one batch of output. This is to limit the memory usage of sort writer.
+   * - max-target-file-size
+     - max_target_file_size
+     - capacity
+     - 0B
+     - Maximum target file size for writers. When a file exceeds this size during writing, the writer
+       closes the current file and starts writing to a new file. Accepts human-readable values like
+       "1GB". Zero means no limit (default). File rotation is not supported for bucketed tables or
+       sorted writes.
    * - file-preload-threshold
      -
      - integer
@@ -796,26 +834,26 @@ Each query can override the config by setting corresponding query session proper
        and also skip staging to the ssd cache. This helps to prevent the cache space pollution
        from the one-time table scan by large batch query when mixed running with interactive
        query which has high data locality.
-   * - hive.reader.stats_based_filter_reorder_disabaled
-     - hive.reader.stats_based_filter_reorder_disabaled
+   * - stats-based-filter-reorder-disabled
+     - stats_based_filter_reorder_disabled
      - bool
      - false
      - If true, disable the stats based filter reordering during the read processing, and the
        filter execution order is totally determined by the filter type. Otherwise, the file
        reader will dynamically adjust the filter execution order based on the past filter
        execution stats.
-   * - hive.reader.timestamp-partition-value-as-local-time
-     - hive.reader.timestamp_partition_value_as_local_time
+   * - reader.timestamp-partition-value-as-local-time
+     - reader.timestamp_partition_value_as_local_time
      - bool
      - true
      - Reads timestamp partition value as local time if true. Otherwise, reads as UTC.
-   * - hive.preserve-flat-maps-in-memory
-     - hive.preserve_flat_maps_in_memory
+   * - preserve-flat-maps-in-memory
+     - preserve_flat_maps_in_memory
      - bool
      - false
      - Whether to preserve flat maps in memory as FlatMapVectors instead of converting them to MapVectors. This is only applied during data reading inside the DWRF and Nimble readers, not during downstream processing like expression evaluation etc.
-   * - hive.max-rows-per-index-request
-     - hive.max_rows_per_index_request
+   * - max-rows-per-index-request
+     - max_rows_per_index_request
      - integer
      - 0
      - Maximum number of output rows to return per index lookup request. The limit is applied to the actual output rows
@@ -827,29 +865,37 @@ Each query can override the config by setting corresponding query session proper
      - Whether to cache file metadata (footer, stripes, index) in the process-wide AsyncDataCache. When enabled,
        the first reader performs a speculative tail read and populates the cache; subsequent readers on the same file
        serve metadata from cache with zero file IO. Currently only supported by Nimble format.
-   * - hive.reader.collect-column-stats
-     - hive.reader.collect_column_stats
+   * - pin-file-metadata
+     - pin_file_metadata
+     - bool
+     - false
+     - Whether to pin parsed metadata objects (e.g., StripeGroup, IndexGroup) in the reader's metadata cache with
+       strong references so they are never evicted. This avoids re-reading and re-parsing metadata on every stripe
+       access when weak-pointer cache entries would otherwise expire. Can be used independently of
+       file-metadata-cache-enabled. Currently only supported by Nimble format.
+   * - reader.collect-column-cpu-metrics
+     - reader.collect_column_cpu_metrics
      - bool
      - false
      - If true, enables collection of per-column timing statistics during file reading. This includes
        decompression and decode CPU time metrics for each column, reported as runtime metrics in the format
        ``column_<nodeId>.<type>.decompressCPUTimeNanos`` and ``column_<nodeId>.<type>.decodeCPUTimeNanos``.
        Useful for performance analysis and identifying slow columns.
-   * - hive.orc.footer-speculative-io-size
+   * - orc.footer-speculative-io-size
      - orc_footer_speculative_io_size
      - integer
      - 256KB
      - Speculative tail-read size in bytes when opening ORC files. Controls how many bytes are read from the end
        of the file to load the footer and nearby metadata in a single IO operation.
        Set to 0 for adaptive mode.
-   * - hive.parquet.footer-speculative-io-size
+   * - parquet.footer-speculative-io-size
      - parquet_footer_speculative_io_size
      - integer
      - 256KB
      - Speculative tail-read size in bytes when opening Parquet files. Controls how many bytes are read from the end
        of the file to load the footer and nearby metadata in a single IO operation.
        Set to 0 for adaptive mode.
-   * - hive.nimble.footer-speculative-io-size
+   * - nimble.footer-speculative-io-size
      - nimble_footer_speculative_io_size
      - integer
      - 8MB
@@ -948,7 +994,7 @@ Each query can override the config by setting corresponding query session proper
      - 1024
      - Batch size used when writing into Parquet through Arrow bridge.
    * - hive.parquet.writer.created-by
-     -
+     - hive.parquet.writer.created_by
      - string
      - parquet-cpp-velox version 0.0.0
      - Created-by value used when writing to Parquet.
@@ -1054,6 +1100,14 @@ Each query can override the config by setting corresponding query session proper
      - true
      - AWS Instance Metadata Service (IMDS) is an AWS EC2 instance component used by applications to securely access metadata.
        We must disable it on other instances to avoid high first-time read latency from S3 compatible object storages.
+   * - hive.s3.min-part-size
+     - string
+     - 10MB
+     - Minimum multi-part upload part size. The smallest allowed value is 5MB. The largest allowed value is 5GB.
+       If a file is less than this size, the file is sent as a single put request.
+       Otherwise, the file is split into multiple equal sized chunks of this part size excluding the last chunk.
+       The `AWS specification <https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html> `_ limits the part size between 5MB and 5GB.
+       Some S3 backend providers enforce these limits strictly.
 
 Bucket Level Configuration
 """"""""""""""""""""""""""
@@ -1073,23 +1127,23 @@ These semantics are similar to the `Apache Hadoop-Aws module <https://hadoop.apa
      - Type
      - Default Value
      - Description
-   * - hive.gcs.endpoint
+   * - gcs.endpoint
      - string
      -
      - The GCS storage URI.
-   * - hive.gcs.json-key-file-path
+   * - gcs.json-key-file-path
      - string
      -
      - The GCS service account configuration JSON key file.
-   * - hive.gcs.max-retry-count
+   * - gcs.max-retry-count
      - integer
      -
      - The GCS maximum retry counter of transient errors.
-   * - hive.gcs.max-retry-time
+   * - gcs.max-retry-time
      - string
      -
      - The GCS maximum time allowed to retry transient errors.
-   * - hive.gcs.auth.access-token-provider
+   * - gcs.auth.access-token-provider
      - string
      -
      - A custom OAuth credential provider, if specified, will be used to create the client in favor of other
@@ -1314,7 +1368,3 @@ Note: These configurations are experimental and subject to change.
      - bool
      - true
      - If true, log a reason for falling back to Velox CPU execution, when an operation is not supported in cuDF execution.
-   * - cudf.function_engine
-     - string
-     - presto
-     - Register the function for a specific engine. The optional values are presto or spark.

@@ -1,0 +1,182 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: CI Failure Comment
+
+# This workflow runs in the context of the base repo (not the fork) and has
+# write access to post PR comments. It is triggered when the Linux Build or
+# Fuzzer Jobs workflow completes with a failure and uses Claude to analyze
+# failure logs, correlate with the PR diff and open issues, and post a rich
+# diagnostic comment.
+#
+# Security: This workflow never checks out or executes PR code. It reads
+# failure metadata from artifacts uploaded by our own status jobs, then uses
+# Claude with read-only gh CLI access to fetch logs and produce comments.
+#
+# zizmor:disable:dangerous-triggers -- only reads artifacts and posts comments, no PR code execution.
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Workflow run ID to analyze (from a failed CI run)
+        required: true
+      pr_number:
+        description: PR number to comment on
+        required: true
+  workflow_run:
+    workflows: [Linux Build using GCC, Fuzzer Jobs]
+    types:
+      - completed
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  actions: read
+  id-token: write
+
+jobs:
+  analyze-and-comment:
+    if: >
+      github.repository == 'facebookincubator/velox' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.event == 'pull_request' &&
+        github.event.workflow_run.conclusion == 'failure'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get PR number
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_OWNER: ${{ github.event.workflow_run.head_repository.owner.login }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          INPUT_PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          # For workflow_dispatch, use the provided PR number directly.
+          if [ -n "$INPUT_PR_NUMBER" ]; then
+            echo "number=$INPUT_PR_NUMBER" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          pr_number=$(gh api \
+            "/repos/${REPO}/pulls?head=${HEAD_OWNER}:${HEAD_BRANCH}&state=open" \
+            -q '.[0].number // empty')
+
+          if [ -z "$pr_number" ]; then
+            echo "No open PR found for branch ${HEAD_BRANCH}"
+            exit 0
+          fi
+          echo "number=$pr_number" >> "$GITHUB_OUTPUT"
+
+      - name: Download failure artifacts
+        if: steps.pr.outputs.number
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.run_id || github.event.workflow_run.id }}
+          pattern: ci-failure-*
+          path: /tmp/ci-failures
+          merge-multiple: false
+
+      - name: Collect failure metadata
+        if: steps.pr.outputs.number
+        id: metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ inputs.run_id || github.event.workflow_run.id }}
+        run: |
+          FAILURES_DIR="/tmp/ci-failures"
+          if [ -d "$FAILURES_DIR" ] && [ -n "$(ls -A "$FAILURES_DIR" 2>/dev/null)" ]; then
+            # Collect all failure.json contents into a single JSON array.
+            METADATA="["
+            FIRST=true
+            for entry in "$FAILURES_DIR"/ci-failure-*/failure.json; do
+              if [ -f "$entry" ]; then
+                if [ "$FIRST" = true ]; then
+                  FIRST=false
+                else
+                  METADATA="$METADATA,"
+                fi
+                METADATA="$METADATA$(cat "$entry")"
+              fi
+            done
+            METADATA="$METADATA]"
+          else
+            # No failure artifacts — build metadata from failed jobs in the run.
+            # This handles workflows (e.g., Fuzzer Jobs) that don't upload
+            # ci-failure-* artifacts.
+            METADATA=$(gh api "repos/${REPO}/actions/runs/${RUN_ID}/jobs" \
+              --paginate --jq '[.jobs[] | select(.conclusion == "failure") | {job: .name, type: "unknown"}]')
+            if [ "$METADATA" = "[]" ] || [ -z "$METADATA" ]; then
+              echo "No failure artifacts or failed jobs found."
+              echo "has_failures=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+
+          echo "has_failures=true" >> "$GITHUB_OUTPUT"
+          {
+            echo 'failure_metadata<<EOF'
+            echo "$METADATA"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout for Claude context and prompt
+        if: steps.metadata.outputs.has_failures == 'true'
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          sparse-checkout: |
+            CLAUDE.md
+            .claude/CLAUDE.md
+            .claude/skills/ci-failure-analysis/SKILL.md
+          persist-credentials: false
+
+      - name: Prepare analysis prompt
+        if: steps.metadata.outputs.has_failures == 'true'
+        id: prompt
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ inputs.run_id || github.event.workflow_run.id }}
+          FAILURE_METADATA: ${{ steps.metadata.outputs.failure_metadata }}
+        run: |
+          # Read the prompt template and interpolate variables.
+          PROMPT=$(sed \
+            -e "s|{{PR_NUMBER}}|${PR_NUMBER}|g" \
+            -e "s|{{REPOSITORY}}|${REPOSITORY}|g" \
+            -e "s|{{RUN_ID}}|${RUN_ID}|g" \
+            .claude/skills/ci-failure-analysis/SKILL.md)
+
+          # Failure metadata may contain newlines/special chars — use bash
+          # parameter expansion instead of sed to handle multiline content.
+          PROMPT="${PROMPT//\{\{FAILURE_METADATA\}\}/${FAILURE_METADATA}}"
+
+          {
+            echo 'value<<EOF'
+            echo "$PROMPT"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Analyze failures with Claude
+        if: steps.metadata.outputs.has_failures == 'true'
+        uses: izaitsevfb/claude-code-action@ececd56fb999d06b4dd2477437bc408938295d76 # forked-pr-fix
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ github.token }}
+          claude_args: --model claude-opus-4-6 --allowedTools Bash Read Grep Glob
+          prompt: ${{ steps.prompt.outputs.value }}
+        env:
+          GH_TOKEN: ${{ github.token }}

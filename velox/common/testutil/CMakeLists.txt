@@ -19,6 +19,13 @@ velox_add_library(
   RandomSeed.cpp
   TempFilePath.cpp
   TempDirectoryPath.cpp
+  HEADERS
+  OptionalEmpty.h
+  RandomSeed.h
+  ScopedTestTime.h
+  TempDirectoryPath.h
+  TempFilePath.h
+  TestValue.h
 )
 
 velox_link_libraries(velox_test_util PUBLIC velox_exception Folly::folly PRIVATE glog::glog)

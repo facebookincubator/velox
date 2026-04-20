@@ -3,10 +3,13 @@ Joins
 =====
 
 Velox supports inner, left, right, full outer, left semi filter, left semi
-project, right semi filter, right semi project, and anti hash joins using
-either partitioned or broadcast distribution strategies. Semi project and
+project, right semi filter, right semi project, anti, and counting hash joins
+using either partitioned or broadcast distribution strategies. Semi project and
 anti joins support additional null-aware flag to distinguish between IN
-(null aware) and EXISTS (regular) semantics. Velox also supports cross joins.
+(null aware) and EXISTS (regular) semantics. Anti, left semi filter, and
+counting joins support a null-as-value flag that enables IS NOT DISTINCT FROM
+semantics for join keys (NULL equals NULL), used to implement SQL set operations
+(EXCEPT, INTERSECT, EXCEPT ALL, INTERSECT ALL). Velox also supports cross joins.
 
 Velox also supports inner and left merge join for the case where join inputs are
 sorted on the join keys. Right, full, left semi, right semi, and anti merge joins
@@ -29,15 +32,13 @@ kAnti, or kCountingAnti.
 
 kLeftSemiProject, kRightSemiProject and kAnti joins support an additional
 nullAware flag to distinguish between IN (null aware) and EXISTS (regular)
-semantics.
+semantics. See :doc:`Anti joins <anti-join>` for detailed semantics.
 
-kCountingAnti and kCountingLeftSemiFilter are multiset variants of kAnti and
-kLeftSemiFilter. The build side deduplicates keys and stores a per-key count.
-On probe, each match decrements the count. kCountingAnti emits a probe row when
-the count reaches zero or no match is found (EXCEPT ALL semantics).
-kCountingLeftSemiFilter emits a probe row while the count is greater than zero
-(INTERSECT ALL semantics). Counting joins do not support extra filter or
-null-aware mode. Spilling is not yet supported.
+kAnti, kLeftSemiFilter, kCountingAnti, and kCountingLeftSemiFilter joins support
+an additional nullAsValue flag that makes join keys use IS NOT DISTINCT FROM
+semantics where NULL equals NULL. This is used to implement SQL set operations
+(EXCEPT, INTERSECT, EXCEPT ALL, INTERSECT ALL) which require NULLs to match.
+The nullAsValue and nullAware flags are mutually exclusive.
 
 Filter is optional. If specified it can be any expression over the results of
 the join. This expression will be evaluated using the same expression
@@ -128,7 +129,7 @@ HashProbe operator gets access to via a special mechanism: JoinBridge.
     :align: center
 
 Both HashBuild and HashAggregation operators use the same data structure for the
-hash table: `velox::exec::HashTable <hash-table.html>`_. The payload, the non-join key columns
+hash table: :doc:`HashTable <hash-table>`. The payload, the non-join key columns
 referred to as dependent columns, are stored row-wise in the RowContainer.
 
 Using the hash table in join and aggregation allows for a future optimization
@@ -210,7 +211,8 @@ allows for dynamic filter pushdown while partitioned execution does not.
 HashJoinNode supports a ``useHashTableCache`` flag (used only by Presto-on-Spark)
 that enables caching of the hash table built for broadcast joins. When enabled,
 the first task to build the hash table stores it in a global cache, and subsequent
-tasks from same query reuse the cached table instead of rebuilding it.
+tasks from same query reuse the cached table instead of rebuilding it. See
+:doc:`Broadcast Build Caching <hash-table-caching>` for details.
 
 PartitionedOutput operator and OutputBufferManager support
 broadcasting the results of the plan evaluation. This functionality is enabled
@@ -232,7 +234,7 @@ regular anti join is used for queries with NOT EXISTS <subquery> clause.
 
 Broadly-speaking anti join returns probe-side rows which have no match on
 the build side. However, the exact semantics are a bit tricky. These are
-described in detail in :doc:`Anti joins <../develop/anti-join>`.
+described in detail in :doc:`Anti joins <anti-join>`.
 
 At a high level, null-aware anti join without extra filter behaves as follows:
 
@@ -263,7 +265,7 @@ only if the whole build side is empty, allowing to implement semantic
 safe because that row cannot possibly match anything on these destinations.
 
 Semi Joins
-----------
+~~~~~~~~~~
 
 Semi filter joins are used for queries with IN <subquery> and EXISTS <subquery>
 clauses. Left semi filter join should be used when cardinality of the outer
@@ -320,13 +322,63 @@ configuring exec::HashTable to set the "allowDuplicates" flag to false. This
 optimization reduces memory usage of the hash table in case the build side
 contains duplicate join keys.
 
+Counting Joins
+~~~~~~~~~~~~~~
+
+Counting joins (kCountingAnti and kCountingLeftSemiFilter) are multiset variants
+of kAnti and kLeftSemiFilter used to implement EXCEPT ALL and INTERSECT ALL
+respectively.
+
+EXCEPT and INTERSECT treat both inputs as sets: they remove duplicates and
+return distinct rows. EXCEPT ALL and INTERSECT ALL preserve duplicates and
+operate on multisets: each row is considered independently.
+
+.. code-block:: sql
+
+    -- EXCEPT removes duplicates:
+    -- {A, A, A, B, B} EXCEPT {A, C} = {A, B}    (just "is A present?")
+
+    -- EXCEPT ALL counts duplicates:
+    -- {A, A, A, B, B} EXCEPT ALL {A, C} = {A, A, B, B}    (remove one A)
+
+    -- INTERSECT removes duplicates:
+    -- {A, A, A, B, B} INTERSECT {A, A, C} = {A}    (just "is A present?")
+
+    -- INTERSECT ALL counts duplicates:
+    -- {A, A, A, B, B} INTERSECT ALL {A, A, C} = {A, A}    (keep min count)
+
+EXCEPT ALL and INTERSECT ALL cannot be implemented using regular semi and anti
+joins because those only check for the existence of a match, not the number of
+matches. Counting joins solve this by tracking per-key counts.
+
+The build side deduplicates keys and stores a per-key count. Unlike semi and
+anti joins which skip duplicate keys entirely (see `Skipping Duplicate Keys`_
+above), counting joins keep exactly one entry per key with a count of how many
+times that key appeared.
+
+On probe, each match decrements the count. kCountingAnti emits a probe row when
+the count reaches zero or no match is found (EXCEPT ALL semantics).
+kCountingLeftSemiFilter emits a probe row while the count is greater than zero
+(INTERSECT ALL semantics). Counting joins do not support extra filter or
+null-aware mode. Spilling is not yet supported.
+
+Because the probe side modifies per-key counts in the hash table (decrementing
+on each match), it must run either single-threaded or with the probe input
+partitioned on join keys across threads. Without partitioning, multiple probe
+threads could decrement the same key's count concurrently, producing incorrect
+results. The build side can run multi-threaded: each build driver constructs its
+own hash table, and these are merged by summing per-key counts for duplicate
+keys.
+
 Execution Statistics
 ~~~~~~~~~~~~~~~~~~~~
 
-HashBuild operator reports the range and number of distinct values for each join
-key if these are not too large and allow for array-based join or use of
-normalized keys.
+HashBuild operator reports the hash table mode, the range and number of distinct
+values for each join key if these are not too large and allow for array-based
+join or use of normalized keys.
 
+* hashtable.hashMode - the hash mode of the table: 0 for kHash, 1 for kArray,
+  2 for kNormalizedKey
 * rangeKey<N> - the range of values for the join key #N
 * distinctKey<N> - the number of distinct values for the join key #N
 
@@ -353,18 +405,19 @@ to HiveConnector.
 Memory Layout
 -------------
 
-Inside hash table we keep the row values in `RowContainer`.  This is a row-wise
-storage and each row consists the following components:
+The :doc:`hash table <hash-table>` stores row values in RowContainer. This is
+a row-wise storage and each row consists of the following components:
 
 1. Null flags (1 bit per item) for
     1. Keys (only if nullable)
     2. Dependants
-2. Has-probed flag (1 bit)
+2. Has-probed flag (1 bit, right and full outer joins only)
 3. Free flag (1 bit)
 4. Keys
 5. Dependants
 6. Variable size (32 bit)
-7. Next offset (64 bit pointer)
+7. Next offset (64 bit pointer, joins that allow duplicate keys)
+8. Count (32 bit, counting joins only, mutually exclusive with Next offset)
 
 
 Merge Join Implementation
@@ -391,5 +444,6 @@ pipeline. CallbackSink is installed at the end of the right-side pipeline.
 Usage Examples
 --------------
 
-Check out velox/exec/tests/HashJoinTest.cpp and MergeJoinTest.cpp for examples
-of how to build and execute a plan with a hash or merge join.
+Check out velox/exec/tests/HashJoinTest.cpp, CountingJoinTest.cpp, and
+MergeJoinTest.cpp for examples of how to build and execute a plan with a hash,
+counting, or merge join.

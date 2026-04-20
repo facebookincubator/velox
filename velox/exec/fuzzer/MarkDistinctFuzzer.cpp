@@ -20,14 +20,14 @@
 
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
-#include "velox/exec/fuzzer/RowNumberFuzzerBase.h"
+#include "velox/exec/fuzzer/SpillFuzzerBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
 namespace facebook::velox::exec {
 using namespace facebook::velox::common::testutil;
 namespace {
 
-class MarkDistinctFuzzer : public RowNumberFuzzerBase {
+class MarkDistinctFuzzer : public SpillFuzzerBase {
  public:
   explicit MarkDistinctFuzzer(
       size_t initialSeed,
@@ -68,7 +68,7 @@ class MarkDistinctFuzzer : public RowNumberFuzzerBase {
 MarkDistinctFuzzer::MarkDistinctFuzzer(
     size_t initialSeed,
     std::unique_ptr<test::ReferenceQueryRunner> referenceQueryRunner)
-    : RowNumberFuzzerBase(initialSeed, std::move(referenceQueryRunner)) {
+    : SpillFuzzerBase(initialSeed, std::move(referenceQueryRunner)) {
   vectorFuzzer_.getMutableOptions().timestampPrecision =
       fuzzer::FuzzerTimestampPrecision::kMilliSeconds;
 }
@@ -109,7 +109,7 @@ std::vector<RowVectorPtr> MarkDistinctFuzzer::generateInput(
   return input;
 }
 
-RowNumberFuzzerBase::PlanWithSplits MarkDistinctFuzzer::makeDefaultPlan(
+PlanWithSplits MarkDistinctFuzzer::makeDefaultPlan(
     const std::string& groupKey,
     const std::string& distinctKey,
     const std::vector<RowVectorPtr>& input) {
@@ -127,7 +127,7 @@ RowNumberFuzzerBase::PlanWithSplits MarkDistinctFuzzer::makeDefaultPlan(
   return PlanWithSplits{std::move(plan)};
 }
 
-RowNumberFuzzerBase::PlanWithSplits MarkDistinctFuzzer::makePlanWithTableScan(
+PlanWithSplits MarkDistinctFuzzer::makePlanWithTableScan(
     const RowTypePtr& type,
     const std::string& groupKey,
     const std::string& distinctKey,
@@ -181,8 +181,7 @@ void MarkDistinctFuzzer::runSingleIteration() {
   const auto& distinctKey = allNames[1];
 
   auto defaultPlan = makeDefaultPlan(groupKey, distinctKey, input);
-  const auto expected =
-      execute(defaultPlan, pool_, /*injectSpill=*/false, false);
+  const auto expected = execute(defaultPlan, /*injectSpill=*/false, false);
 
   // Validate against DuckDB using an equivalent plan without MarkDistinct.
   // DuckDB cannot translate MarkDistinctNode to SQL, so we build a reference

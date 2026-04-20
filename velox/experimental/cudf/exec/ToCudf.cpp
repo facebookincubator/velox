@@ -413,8 +413,20 @@ void CudfConfig::initialize(
   if (config.find(kCudfTopNBatchSize) != config.end()) {
     topNBatchSize = folly::to<int32_t>(config[kCudfTopNBatchSize]);
   }
-  if (config.find(kCudfFunctionEngine) != config.end()) {
-    functionEngine = config[kCudfFunctionEngine];
+  if (config.find(kCudfTimestampUnit) != config.end()) {
+    const auto& unit = config[kCudfTimestampUnit];
+    if (unit == "s") {
+      timestampUnit = cudf::type_id::TIMESTAMP_SECONDS;
+    } else if (unit == "ms") {
+      timestampUnit = cudf::type_id::TIMESTAMP_MILLISECONDS;
+    } else if (unit == "us") {
+      timestampUnit = cudf::type_id::TIMESTAMP_MICROSECONDS;
+    } else if (unit == "ns") {
+      timestampUnit = cudf::type_id::TIMESTAMP_NANOSECONDS;
+    } else {
+      VELOX_FAIL(
+          "Invalid timestamp unit: {}. Valid values are: s, ms, us, ns", unit);
+    }
   }
 }
 

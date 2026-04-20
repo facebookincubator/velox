@@ -542,16 +542,18 @@ std::string PrestoQueryRunner::startQuery(
 
   // Perform the request
   CURLcode res = curl_easy_perform(curl);
+
+  // Clean up CURL resources before checking the result to avoid leaks on
+  // error.
+  curl_slist_free_all(headers);
+  curl_easy_cleanup(curl);
+
   VELOX_CHECK_EQ(
       CURLE_OK,
       res,
       "POST to {} failed: {}",
       coordinatorUri_,
       curl_easy_strerror(res));
-
-  // Cleanup
-  curl_slist_free_all(headers);
-  curl_easy_cleanup(curl);
 
   return response;
 }
@@ -577,12 +579,14 @@ std::string PrestoQueryRunner::fetchNext(const std::string& nextUri) {
 
   // Perform GET request
   CURLcode res = curl_easy_perform(curl);
-  VELOX_CHECK_EQ(
-      CURLE_OK, res, "Get request failed: {}", curl_easy_strerror(res));
 
-  // Cleanup
+  // Clean up CURL resources before checking the result to avoid leaks on
+  // error.
   curl_slist_free_all(headers);
   curl_easy_cleanup(curl);
+
+  VELOX_CHECK_EQ(
+      CURLE_OK, res, "Get request failed: {}", curl_easy_strerror(res));
 
   return response;
 }

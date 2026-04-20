@@ -15,6 +15,7 @@
 add_executable(
   velox_presto_types_test
   BingTileTypeTest.cpp
+  CustomTypeCoercionTest.cpp
   HyperLogLogTypeTest.cpp
   JsonTypeTest.cpp
   KHyperLogLogTypeTest.cpp
@@ -29,6 +30,7 @@ add_executable(
   IPPrefixTypeTest.cpp
   PrestoTypesTest.cpp
 )
+velox_add_test_headers(velox_presto_types_test TypeTestBase.h)
 
 if(VELOX_ENABLE_GEO)
   target_sources(

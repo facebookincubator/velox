@@ -15,6 +15,7 @@ add_subdirectory(utils)
 
 add_executable(
   velox_type_test
+  CastRegistryTest.cpp
   ConversionsTest.cpp
   DecimalTest.cpp
   FilterTest.cpp
@@ -123,3 +124,5 @@ if(VELOX_ENABLE_BENCHMARKS)
     glog::glog
   )
 endif()
+
+velox_add_library(velox_type_filter_builder INTERFACE HEADERS SubfieldFiltersBuilder.h)

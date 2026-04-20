@@ -149,12 +149,12 @@ core::IndexLookupConditionPtr createBetweenConditionWithConstants(
 }
 
 // Checks that a HiveColumnHandle is a regular column type.
-void checkColumnHandleIsRegular(const HiveColumnHandle& handle) {
+void checkColumnHandleIsRegular(const FileColumnHandle& handle) {
   VELOX_CHECK_EQ(
       handle.columnType(),
-      HiveColumnHandle::ColumnType::kRegular,
+      FileColumnHandle::ColumnType::kRegular,
       "Expected regular column, got {} for column {}",
-      HiveColumnHandle::columnTypeName(handle.columnType()),
+      FileColumnHandle::columnTypeName(handle.columnType()),
       handle.name());
 }
 
@@ -862,9 +862,9 @@ void HiveIndexSource::addSplits(
     if (factory != nullptr) {
       createCustomIndexReader(*factory, std::move(hiveSplit));
     } else {
-      VELOX_CHECK_EQ(
-          hiveSplit->fileFormat,
-          dwio::common::FileFormat::NIMBLE,
+      VELOX_CHECK(
+          hiveSplit->fileFormat == dwio::common::FileFormat::NIMBLE ||
+              hiveSplit->fileFormat == dwio::common::FileFormat::SST,
           "No IndexReaderFactory registered for format: {}",
           dwio::common::toString(hiveSplit->fileFormat));
       createFileIndexReader(std::move(hiveSplit));

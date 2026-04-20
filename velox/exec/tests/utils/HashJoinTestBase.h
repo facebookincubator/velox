@@ -17,7 +17,7 @@
 #include <re2/re2.h>
 
 #include <fmt/format.h>
-#include "folly/experimental/EventCount.h"
+#include "folly/synchronization/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
@@ -400,6 +400,11 @@ class HashJoinBuilder {
     return *this;
   }
 
+  HashJoinBuilder& nullAsValue(bool nullAsValue) {
+    nullAsValue_ = nullAsValue;
+    return *this;
+  }
+
   HashJoinBuilder& joinFilter(const std::string& joinFilter) {
     joinFilter_ = joinFilter;
     return *this;
@@ -566,7 +571,8 @@ class HashJoinBuilder {
                   joinFilter_,
                   joinOutputLayout_,
                   joinType_,
-                  nullAware_)
+                  nullAware_,
+                  nullAsValue_)
               .capturePlanNode<core::HashJoinNode>(joinNode)
               .optionalProject(outputProjections_)
               .planNode();
@@ -804,6 +810,7 @@ class HashJoinBuilder {
   int32_t numDrivers_{1};
   core::JoinType joinType_{core::JoinType::kInner};
   bool nullAware_{false};
+  bool nullAsValue_{false};
   std::string referenceQuery_;
 
   RowTypePtr probeType_;
