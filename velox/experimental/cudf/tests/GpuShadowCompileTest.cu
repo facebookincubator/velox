@@ -14,88 +14,114 @@
  * limitations under the License.
  */
 
-// Compile-time test: verifies that Velox function headers can be
-// compiled by nvcc when the gpu_shadows/ directory is on the include
-// path BEFORE the Velox source root.
+// Compile-time test: verifies that Velox function headers compile under
+// nvcc when the gpu_shadows/ directory precedes the Velox source root
+// on the include path.
 //
-// This .cu file is compiled by nvcc as CUDA C++.  It includes the
-// real Velox Arithmetic.h header, which transitively pulls in Macros.h,
-// Exceptions.h, CPortability.h, etc.  Shadow headers intercept those
-// and replace them with GPU-compatible stubs.
-//
-// The functions themselves are instantiated on the host side only here.
-// Later PRs (GpuSimpleFunctionAdapter) will add __device__ annotations
-// and call them from kernels.
+// Functions are instantiated on the host side.  Later PRs
+// (GpuSimpleFunctionAdapter) will call them from __device__ kernels.
 
 #include "velox/experimental/cudf/functions/GpuExec.h"
 #include "velox/functions/prestosql/Arithmetic.h"
-
-namespace {
+#include "velox/functions/prestosql/Comparisons.h"
+// sparksql/Arithmetic.h deferred -- requires ToHexUtil host-only dependency
+// sparksql/Comparisons.h deferred -- mixes VectorFunction factories
 
 using namespace facebook::velox::gpu;
 
-// Verify that PlusFunction can be instantiated with GpuExec.
-void hostSidePlusTest() {
+namespace {
+
+// --- Presto Arithmetic ---
+void verifyPlusFunction() {
   facebook::velox::functions::PlusFunction<GpuExec> fn;
-  double result = 0;
-  fn.call(result, 1.0, 2.0);
-  (void)result;
+  double r = 0;
+  fn.call(r, 1.0, 2.0);
+  (void)r;
 }
 
-// Verify MinusFunction instantiation.
-void hostSideMinusTest() {
+void verifyMinusFunction() {
   facebook::velox::functions::MinusFunction<GpuExec> fn;
-  double result = 0;
-  fn.call(result, 5.0, 3.0);
-  (void)result;
+  int64_t r = 0;
+  fn.call(r, int64_t{5}, int64_t{3});
+  (void)r;
 }
 
-// Verify MultiplyFunction instantiation.
-void hostSideMultiplyTest() {
+void verifyMultiplyFunction() {
   facebook::velox::functions::MultiplyFunction<GpuExec> fn;
-  double result = 0;
-  fn.call(result, 2.0, 3.0);
-  (void)result;
+  float r = 0;
+  fn.call(r, 2.0f, 3.0f);
+  (void)r;
 }
 
-// Verify DivideFunction instantiation.
-void hostSideDivideTest() {
+void verifyDivideFunction() {
   facebook::velox::functions::DivideFunction<GpuExec> fn;
-  double result = 0;
-  fn.call(result, 6.0, 2.0);
-  (void)result;
+  double r = 0;
+  fn.call(r, 6.0, 2.0);
+  (void)r;
 }
 
-// Verify CeilFunction instantiation.
-void hostSideCeilTest() {
+void verifyCeilFunction() {
   facebook::velox::functions::CeilFunction<GpuExec> fn;
-  double result = 0;
-  fn.call(result, 1.5);
-  (void)result;
+  double r = 0;
+  fn.call(r, 1.5);
+  (void)r;
 }
 
-// Verify FloorFunction instantiation.
-void hostSideFloorTest() {
+void verifyFloorFunction() {
   facebook::velox::functions::FloorFunction<GpuExec> fn;
-  double result = 0;
-  fn.call(result, 1.5);
-  (void)result;
+  int64_t r = 0;
+  fn.call(r, int64_t{5});
+  (void)r;
 }
 
-// Verify AbsFunction instantiation.
-void hostSideAbsTest() {
+void verifyAbsFunction() {
   facebook::velox::functions::AbsFunction<GpuExec> fn;
-  double result = 0;
-  fn.call(result, -5.0);
-  (void)result;
+  double r = 0;
+  fn.call(r, -5.0);
+  (void)r;
 }
 
-// Verify NegateFunction instantiation.
-void hostSideNegateTest() {
+void verifyNegateFunction() {
   facebook::velox::functions::NegateFunction<GpuExec> fn;
-  double result = 0;
-  fn.call(result, 5.0);
-  (void)result;
+  int32_t r = 0;
+  fn.call(r, int32_t{5});
+  (void)r;
+}
+
+void verifyModulusFunction() {
+  facebook::velox::functions::ModulusFunction<GpuExec> fn;
+  int64_t r = 0;
+  fn.call(r, int64_t{10}, int64_t{3});
+  (void)r;
+}
+
+// --- Presto Comparisons ---
+void verifyLtFunction() {
+  facebook::velox::functions::LtFunction<GpuExec> fn;
+  bool r = false;
+  fn.call(r, 1.0, 2.0);
+  (void)r;
+}
+
+void verifyGtFunction() {
+  facebook::velox::functions::GtFunction<GpuExec> fn;
+  bool r = false;
+  fn.call(r, 3.0, 1.0);
+  (void)r;
+}
+
+void verifyEqFunction() {
+  facebook::velox::functions::EqFunction<GpuExec> fn;
+  bool r = false;
+  fn.call(r, 42, 42);
+  (void)r;
+}
+
+void verifyNeqFunction() {
+  facebook::velox::functions::NeqFunction<GpuExec> fn;
+  bool r = false;
+  fn.call(r, 1, 2);
+  (void)r;
 }
 
 } // namespace
