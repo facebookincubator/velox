@@ -100,8 +100,10 @@ bool registerCudfExpressionEvaluator(
   return true;
 }
 
-std::unordered_map<std::string, CudfFunctionSpec>& getCudfFunctionRegistry() {
-  static std::unordered_map<std::string, CudfFunctionSpec> registry;
+std::unordered_map<std::string, std::vector<CudfFunctionSpec>>&
+getCudfFunctionRegistry() {
+  static std::unordered_map<std::string, std::vector<CudfFunctionSpec>>
+      registry;
   return registry;
 }
 
@@ -817,10 +819,11 @@ bool registerCudfFunction(
     const std::vector<exec::FunctionSignaturePtr>& signatures,
     bool overwrite) {
   auto& registry = getCudfFunctionRegistry();
-  if (!overwrite && registry.find(name) != registry.end()) {
+  if (!overwrite && !registry[name].empty()) {
     return false;
   }
-  registry[name] = CudfFunctionSpec{std::move(factory), signatures};
+  registry[name].push_back(
+      CudfFunctionSpec{std::move(factory), signatures});
   return true;
 }
 
@@ -839,8 +842,16 @@ std::shared_ptr<CudfFunction> createCudfFunction(
     const std::shared_ptr<velox::exec::Expr>& expr) {
   auto& registry = getCudfFunctionRegistry();
   auto it = registry.find(name);
-  if (it != registry.end()) {
-    return it->second.factory(name, expr);
+  if (it == registry.end()) {
+    return nullptr;
+  }
+  for (const auto& spec : it->second) {
+    // Empty signatures matching must be allowed to handle
+    // the special case of cast
+    if (spec.signatures.empty() ||
+        matchCallAgainstSignatures(*expr, spec.signatures)) {
+      return spec.factory(name, expr);
+    }
   }
   return nullptr;
 }
@@ -1218,8 +1229,13 @@ bool FunctionExpression::canEvaluate(std::shared_ptr<velox::exec::Expr> expr) {
   if (it == registry.end()) {
     return false;
   }
-  const auto& spec = it->second;
-  return matchCallAgainstSignatures(*expr, spec.signatures);
+  for (const auto& spec : it->second) {
+    if (spec.signatures.empty() ||
+        matchCallAgainstSignatures(*expr, spec.signatures)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 bool canBeEvaluatedByCudf(std::shared_ptr<velox::exec::Expr> expr, bool deep) {
