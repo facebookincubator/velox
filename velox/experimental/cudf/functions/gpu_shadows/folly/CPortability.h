@@ -20,7 +20,11 @@
 #pragma once
 
 #ifndef FOLLY_ALWAYS_INLINE
+#ifdef __CUDACC__
+#define FOLLY_ALWAYS_INLINE __host__ __device__ inline
+#else
 #define FOLLY_ALWAYS_INLINE inline
+#endif
 #endif
 
 #ifndef FOLLY_NOINLINE
