@@ -42,7 +42,7 @@ class SelectiveRepeatedColumnReader : public SelectiveColumnReader {
       velox::common::ScanSpec& scanSpec,
       std::shared_ptr<const dwio::common::TypeWithId> type)
       : SelectiveColumnReader(requestedType, std::move(type), params, scanSpec),
-        nestedRowsHolder_(memoryPool_) {}
+        nestedRowsHolder_(pool_) {}
 
   /// Reads 'numLengths' next lengths into 'result'. If 'nulls' is
   /// non-null, each kNull bit signifies a null with a length of 0 to
@@ -62,7 +62,7 @@ class SelectiveRepeatedColumnReader : public SelectiveColumnReader {
   /// Creates a struct if '*result' is empty and 'type' is a row.
   void prepareStructResult(const TypePtr& type, VectorPtr* result) {
     if (!*result && type->kind() == TypeKind::ROW) {
-      *result = BaseVector::create(type, 0, memoryPool_);
+      *result = BaseVector::create(type, 0, pool_);
     }
   }
 
