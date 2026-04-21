@@ -23,10 +23,27 @@
 #include <cudf/types.hpp>
 #include <cudf/utilities/bit.hpp>
 
+#include <type_traits>
+
 namespace facebook::velox::gpu {
 
+namespace detail {
+
+template <typename FnType, typename ReturnType, typename... ArgTypes>
+using CallReturnType = decltype(std::declval<FnType>().call(
+    std::declval<ReturnType&>(),
+    std::declval<ArgTypes>()...));
+
+template <typename FnType, typename ReturnType, typename... ArgTypes>
+inline constexpr bool kCallReturnsBool =
+    std::is_same_v<CallReturnType<FnType, ReturnType, ArgTypes...>, bool>;
+
+} // namespace detail
+
 // Default-null kernel: skips rows where any input is null or row is inactive.
-// For each active, non-null row, calls FnType::call(result, args...).
+// For each active non-null row, calls FnType::call(result, args...).
+// Handles both void-returning call() and bool-returning call() (nullable
+// result). When call() returns false the output row is marked null.
 template <typename FnType, typename ReturnType, typename... ArgTypes>
 __global__ void gpuSimpleFunctionKernel(
     GpuColumnWriter<ReturnType> output,
@@ -38,12 +55,10 @@ __global__ void gpuSimpleFunctionKernel(
   if (row >= numRows)
     return;
 
-  // Skip inactive rows
   if (activeRows && !cudf::bit_is_set(activeRows, row)) {
     return;
   }
 
-  // Skip rows with any null input
   if (combinedNullBitmask && !cudf::bit_is_set(combinedNullBitmask, row)) {
     output.setNull(row);
     return;
@@ -51,9 +66,19 @@ __global__ void gpuSimpleFunctionKernel(
 
   FnType fn;
   ReturnType result{};
-  fn.call(result, inputs.read(row)...);
-  output.write(row, result);
-  output.setValid(row);
+  if constexpr (detail::kCallReturnsBool<FnType, ReturnType, ArgTypes...>) {
+    bool notNull = fn.call(result, inputs.read(row)...);
+    if (notNull) {
+      output.write(row, result);
+      output.setValid(row);
+    } else {
+      output.setNull(row);
+    }
+  } else {
+    fn.call(result, inputs.read(row)...);
+    output.write(row, result);
+    output.setValid(row);
+  }
 }
 
 // Host-side adapter that launches the kernel for a given function type.
