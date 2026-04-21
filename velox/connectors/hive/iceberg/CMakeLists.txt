@@ -14,6 +14,7 @@
 set(
   ICEBERG_SOURCES
   DeletionVectorReader.cpp
+  DeletionVectorWriter.cpp
   EqualityDeleteFileReader.cpp
   IcebergColumnHandle.cpp
   IcebergConfig.cpp
@@ -27,6 +28,7 @@ set(
   PositionalDeleteFileReader.cpp
   TransformEvaluator.cpp
   TransformExprBuilder.cpp
+  WriterOptionsAdapter.cpp
 )
 
 velox_add_library(
@@ -34,6 +36,7 @@ velox_add_library(
   ${ICEBERG_SOURCES}
   HEADERS
   DeletionVectorReader.h
+  DeletionVectorWriter.h
   EqualityDeleteFileReader.h
   IcebergColumnHandle.h
   IcebergConfig.h
@@ -49,12 +52,14 @@ velox_add_library(
   PositionalDeleteFileReader.h
   TransformEvaluator.h
   TransformExprBuilder.h
+  WriterOptionsAdapter.h
 )
 
 velox_link_libraries(
   velox_hive_iceberg_splitreader
   velox_connector
   velox_functions_iceberg
+  velox_dwio_dwrf_writer
   Folly::folly
 )
 

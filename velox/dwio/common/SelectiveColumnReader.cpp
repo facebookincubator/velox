@@ -47,17 +47,17 @@ SelectiveColumnReader::SelectiveColumnReader(
     std::shared_ptr<const dwio::common::TypeWithId> fileType,
     dwio::common::FormatParams& params,
     velox::common::ScanSpec& scanSpec)
-    : memoryPool_(&params.pool()),
+    : pool_(&params.pool()),
       requestedType_(requestedType),
       fileType_(fileType),
       formatData_(params.toFormatData(fileType, scanSpec)),
       scanSpec_(&scanSpec),
-      outputRows_(memoryPool_),
-      valueRows_(memoryPool_),
-      outerNonNullRows_(memoryPool_),
-      innerNonNullRows_(memoryPool_) {
-  scanState_.rowsCopy = raw_vector<vector_size_t>(memoryPool_);
-  scanState_.filterCache = raw_vector<uint8_t>(memoryPool_);
+      outputRows_(pool_),
+      valueRows_(pool_),
+      outerNonNullRows_(pool_),
+      innerNonNullRows_(pool_) {
+  scanState_.rowsCopy = raw_vector<vector_size_t>(pool_);
+  scanState_.filterCache = raw_vector<uint8_t>(pool_);
   // Initialize per-column metrics if collection is enabled.
   if (params.runtimeStatistics().columnMetricsSet) {
     columnMetrics_ = params.runtimeStatistics().columnMetricsSet->getOrCreate(
@@ -150,8 +150,8 @@ void SelectiveColumnReader::prepareNulls(
       resultNulls_->capacity() >= bits::nbytes(numRows) + simd::kPadding) {
     resultNulls_->setSize(bits::nbytes(numRows));
   } else {
-    resultNulls_ = AlignedBuffer::allocate<bool>(
-        numRows + (simd::kPadding * 8), memoryPool_);
+    resultNulls_ =
+        AlignedBuffer::allocate<bool>(numRows + (simd::kPadding * 8), pool_);
     rawResultNulls_ = resultNulls_->asMutable<uint64_t>();
   }
   anyNulls_ = false;
@@ -171,7 +171,7 @@ const uint64_t* SelectiveColumnReader::shouldMoveNulls(const RowSet& rows) {
     if (!(resultNulls_ && resultNulls_->unique() &&
           resultNulls_->capacity() >= rows.size() + simd::kPadding)) {
       resultNulls_ = AlignedBuffer::allocate<bool>(
-          rows.size() + (simd::kPadding * 8), memoryPool_);
+          rows.size() + (simd::kPadding * 8), pool_);
       rawResultNulls_ = resultNulls_->asMutable<uint64_t>();
     }
     moveFrom = nullsInReadRange_->as<uint64_t>();
@@ -387,8 +387,7 @@ void SelectiveColumnReader::getFlatValues<int8_t, bool>(
   constexpr int32_t kWidth = xsimd::batch<int8_t>::size;
   VELOX_CHECK_EQ(valueSize_, sizeof(int8_t));
   compactScalarValues<int8_t, int8_t>(rows, isFinal);
-  auto boolValues =
-      AlignedBuffer::allocate<bool>(numValues_, memoryPool_, false);
+  auto boolValues = AlignedBuffer::allocate<bool>(numValues_, pool_, false);
   auto rawBytes = values_->as<int8_t>();
   auto zero = xsimd::broadcast<int8_t>(0);
   if constexpr (kWidth == 32) {
@@ -406,7 +405,7 @@ void SelectiveColumnReader::getFlatValues<int8_t, bool>(
     }
   }
   *result = std::make_shared<FlatVector<bool>>(
-      memoryPool_,
+      pool_,
       type,
       resultNulls(),
       numValues_,
@@ -457,7 +456,7 @@ char* SelectiveColumnReader::copyStringValue(std::string_view value) {
   uint64_t size = value.size();
   if (stringBuffers_.empty() || rawStringUsed_ + size > rawStringSize_) {
     auto bytes = std::max(size, kStringBufferSize);
-    BufferPtr buffer = AlignedBuffer::allocate<char>(bytes, memoryPool_);
+    BufferPtr buffer = AlignedBuffer::allocate<char>(bytes, pool_);
     // Use the preferred size instead of the requested one to improve memory
     // efficiency.
     buffer->setSize(buffer->capacity());
