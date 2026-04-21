@@ -112,25 +112,9 @@ RowVectorPtr CudfGroupId::doGetOutput() {
   const auto& mapping = groupingKeyMappings_[groupingSetIndex_];
   std::vector<std::unique_ptr<cudf::column>> outputColumns(outputType_->size());
 
-  // Track how many more times each input column will be used
-  // This helps us decide whether to move or copy
-  std::unordered_map<column_index_t, int> inputColumnUsageCount;
-
-  // Count usage for remaining grouping sets (including current one)
-  for (size_t setIdx = groupingSetIndex_; setIdx < numGroupingSets_; ++setIdx) {
-    const auto& setMapping = groupingKeyMappings_[setIdx];
-    for (size_t i = 0; i < numGroupingKeys_; ++i) {
-      if (setMapping[i] != kMissingGroupingKey) {
-        inputColumnUsageCount[setMapping[i]]++;
-      }
-    }
-  }
-
-  // Count usage for aggregation inputs (used in all remaining sets)
-  size_t remainingSets = numGroupingSets_ - groupingSetIndex_;
-  for (auto inputIdx : aggregationInputs_) {
-    inputColumnUsageCount[inputIdx] += remainingSets;
-  }
+  // Only move columns on the last grouping set; otherwise copy since
+  // inputColumns_ is reused across multiple getOutput() calls.
+  const bool isLastGroupingSet = (groupingSetIndex_ == numGroupingSets_ - 1);
 
   // Fill in grouping keys
   for (size_t i = 0; i < numGroupingKeys_; ++i) {
@@ -143,12 +127,11 @@ RowVectorPtr CudfGroupId::doGetOutput() {
           cudf::make_column_from_scalar(*nullScalar, numRows, stream, outputMr);
     } else {
       auto inputIdx = mapping[i];
-      inputColumnUsageCount[inputIdx]--;
-      if (inputColumnUsageCount[inputIdx] == 0) {
-        // Last use - move the column
+      if (isLastGroupingSet) {
+        // Last grouping set - safe to move the column
         outputColumns[i] = std::move(inputColumns_[inputIdx]);
       } else {
-        // Will be needed again - copy the column
+        // More grouping sets to come - copy the column
         outputColumns[i] = std::make_unique<cudf::column>(
             *inputColumns_[inputIdx], stream, outputMr);
       }
@@ -159,12 +142,11 @@ RowVectorPtr CudfGroupId::doGetOutput() {
   for (size_t i = 0; i < aggregationInputs_.size(); ++i) {
     auto inputIdx = aggregationInputs_[i];
     auto outputIdx = numGroupingKeys_ + i;
-    inputColumnUsageCount[inputIdx]--;
-    if (inputColumnUsageCount[inputIdx] == 0) {
-      // Last use - move the column
+    if (isLastGroupingSet) {
+      // Last grouping set - safe to move the column
       outputColumns[outputIdx] = std::move(inputColumns_[inputIdx]);
     } else {
-      // Will be needed again - copy the column
+      // More grouping sets to come - copy the column
       outputColumns[outputIdx] = std::make_unique<cudf::column>(
           *inputColumns_[inputIdx], stream, outputMr);
     }

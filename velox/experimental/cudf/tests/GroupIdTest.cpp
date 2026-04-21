@@ -348,21 +348,20 @@ TEST_F(CudfGroupIdTest, globalGroupingSet) {
   createDuckDbTable({input});
 
   // GROUPING SETS ((k1), ())
-  auto plan =
-      PlanBuilder()
-          .values({input})
-          .groupId({"k1"}, {{"k1"}, {}}, {"a"})
-          .singleAggregation({"k1", "group_id"}, {"sum(a) as sum_a"})
-          .project({"k1", "sum_a"})
-          .planNode();
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .groupId({"k1"}, {{"k1"}, {}}, {"a"})
+                  .singleAggregation({"k1", "group_id"}, {"sum(a) as sum_a"})
+                  .project({"k1", "sum_a"})
+                  .planNode();
 
   assertQuery(
       plan, "SELECT k1, sum(a) FROM tmp GROUP BY GROUPING SETS ((k1), ())");
 }
 
-// Test: Column reuse across multiple grouping sets (exercises copy vs move logic)
-// When a column appears in multiple grouping sets, it must be copied for earlier
-// sets and can only be moved on the last use.
+// Test: Column reuse across multiple grouping sets (exercises copy vs move
+// logic) When a column appears in multiple grouping sets, it must be copied for
+// earlier sets and can only be moved on the last use.
 TEST_F(CudfGroupIdTest, columnReuseAcrossGroupingSets) {
   auto input = makeRowVector(
       {"k1", "a"},
@@ -376,13 +375,12 @@ TEST_F(CudfGroupIdTest, columnReuseAcrossGroupingSets) {
   // k1 appears in both grouping sets, so it must be copied for the first set
   // and moved for the second set. The aggregation input 'a' also appears in
   // both outputs, requiring similar copy/move handling.
-  auto plan =
-      PlanBuilder()
-          .values({input})
-          .groupId({"k1"}, {{"k1"}, {"k1"}}, {"a"})
-          .singleAggregation({"k1", "group_id"}, {"sum(a) as sum_a"})
-          .project({"k1", "sum_a"})
-          .planNode();
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .groupId({"k1"}, {{"k1"}, {"k1"}}, {"a"})
+                  .singleAggregation({"k1", "group_id"}, {"sum(a) as sum_a"})
+                  .project({"k1", "sum_a"})
+                  .planNode();
 
   // Both grouping sets include k1, so we get the same grouping twice
   // with different group_id values (0 and 1)
@@ -391,4 +389,40 @@ TEST_F(CudfGroupIdTest, columnReuseAcrossGroupingSets) {
       "SELECT k1, sum(a) FROM tmp GROUP BY k1 "
       "UNION ALL "
       "SELECT k1, sum(a) FROM tmp GROUP BY k1");
+}
+
+// Test: Same input column mapped to multiple output columns within a grouping
+// set. This exercises the case where a single input column (o_key) is aliased
+// to multiple output columns (o_key and o_key_1), and both appear in the same
+// grouping set. The column must be copied, not moved, even within a single
+// getOutput() call.
+TEST_F(CudfGroupIdTest, sameInputMultipleOutputsInGroupingSet) {
+  auto input = makeRowVector(
+      {"k1", "a"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3}),
+          makeFlatVector<int64_t>({10, 20, 30}),
+      });
+
+  createDuckDbTable({input});
+
+  // k1 is aliased to both k1 and k1_copy in the output.
+  // In grouping set 0, both k1 and k1_copy are included, meaning the same
+  // input column must be used twice in the same output row.
+  auto plan =
+      PlanBuilder()
+          .values({input})
+          .groupId(
+              {"k1", "k1 as k1_copy"},
+              {{"k1", "k1_copy"}, {"k1"}, {"k1_copy"}},
+              {"a"})
+          .singleAggregation({"k1", "k1_copy", "group_id"}, {"sum(a) as sum_a"})
+          .project({"k1", "k1_copy", "sum_a"})
+          .planNode();
+
+  assertQuery(
+      plan,
+      "SELECT k1, k1_copy, sum(a) FROM ("
+      "  SELECT k1, k1 as k1_copy, a FROM tmp"
+      ") GROUP BY GROUPING SETS ((k1, k1_copy), (k1), (k1_copy))");
 }
