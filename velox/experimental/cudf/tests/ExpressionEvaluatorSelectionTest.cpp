@@ -186,11 +186,6 @@ TEST_F(CudfExpressionSelectionTest, signatureAllowsColumnArgsStartswith) {
   auto okColumn =
       compileExecExpr("startswith(name, name)", rowType_, execCtx_.get());
   ASSERT_TRUE(canBeEvaluatedByCudf(okColumn, /*deep=*/true));
-
-  // Bad: with two constants there is no input column to infer output row count.
-  auto badAllConstant =
-      compileExecExpr("startswith('ab', 'a')", rowType_, execCtx_.get());
-  ASSERT_FALSE(canBeEvaluatedByCudf(badAllConstant, /*deep=*/true));
 }
 
 TEST_F(CudfExpressionSelectionTest, signatureArityAndConstantsSubstr) {

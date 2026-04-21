@@ -1159,15 +1159,6 @@ bool FunctionExpression::canEvaluate(std::shared_ptr<velox::exec::Expr> expr) {
     return cudf::is_supported_cast(src, dst);
   }
 
-  if (
-      opName == "startswith" && expr->inputs().size() == 2 &&
-      expr->inputs()[0]->name() == "literal" &&
-      expr->inputs()[1]->name() == "literal") {
-    // The function path only sees subexpression columns, so a fully constant
-    // startswith has no input column to infer the output row count from.
-    return false;
-  }
-
   auto& registry = getCudfFunctionRegistry();
   auto it = registry.find(expr->name());
   if (it == registry.end()) {
