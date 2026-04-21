@@ -15,10 +15,9 @@
  */
 
 #include "velox/connectors/hive/HiveConfig.h"
-#include "velox/common/config/Config.h"
-#include "velox/core/QueryConfig.h"
 
 #include <boost/algorithm/string.hpp>
+#include "velox/common/config/Config.h"
 
 namespace facebook::velox::connector::hive {
 
@@ -39,6 +38,34 @@ stringToInsertExistingPartitionsBehavior(const std::string& strValue) {
 
 } // namespace
 
+const std::vector<config::ConfigProperty>& HiveConfig::registeredProperties() {
+  static const std::vector<config::ConfigProperty> kProperties = [] {
+    // Start with FileConfig properties.
+    auto properties = FileConfig::registeredProperties();
+#define VELOX_HIVE_CONFIG_REGISTER(constName) \
+  config::registerConfigProperty<HiveConfig::constName##Property>(properties)
+
+    VELOX_HIVE_CONFIG_REGISTER(kInsertExistingPartitionsBehaviorSession);
+    VELOX_HIVE_CONFIG_REGISTER(kSortWriterMaxOutputBytesSession);
+    VELOX_HIVE_CONFIG_REGISTER(kMaxTargetFileSizeSession);
+    VELOX_HIVE_CONFIG_REGISTER(kMaxPartitionsPerWritersSession);
+    VELOX_HIVE_CONFIG_REGISTER(kAllowNullPartitionKeysSession);
+    VELOX_HIVE_CONFIG_REGISTER(kPartitionPathAsLowerCaseSession);
+    VELOX_HIVE_CONFIG_REGISTER(kSortWriterMaxOutputRowsSession);
+    VELOX_HIVE_CONFIG_REGISTER(kSortWriterFinishTimeSliceLimitMsSession);
+    VELOX_HIVE_CONFIG_REGISTER(kUser);
+    VELOX_HIVE_CONFIG_REGISTER(kSource);
+    VELOX_HIVE_CONFIG_REGISTER(kSchema);
+    VELOX_HIVE_CONFIG_REGISTER(kMaxBucketCountSession);
+    VELOX_HIVE_CONFIG_REGISTER(kMaxRowsPerIndexRequestSession);
+
+#undef VELOX_HIVE_CONFIG_REGISTER
+
+    return properties;
+  }();
+  return kProperties;
+}
+
 // static
 std::string HiveConfig::insertExistingPartitionsBehaviorString(
     InsertExistingPartitionsBehavior behavior) {
@@ -58,18 +85,6 @@ HiveConfig::insertExistingPartitionsBehavior(
   return stringToInsertExistingPartitionsBehavior(session->get<std::string>(
       kInsertExistingPartitionsBehaviorSession,
       config_->get<std::string>(kInsertExistingPartitionsBehavior, "ERROR")));
-}
-
-uint32_t HiveConfig::maxPartitionsPerWriters(
-    const config::ConfigBase* session) const {
-  return session->get<uint32_t>(
-      kMaxPartitionsPerWritersSession,
-      config_->get<uint32_t>(kMaxPartitionsPerWriters, 128));
-}
-
-uint32_t HiveConfig::maxBucketCount(const config::ConfigBase* session) const {
-  return sessionValue<uint32_t>(
-      session, kMaxBucketCountSession, kMaxBucketCount, 100'000);
 }
 
 bool HiveConfig::immutablePartitions() const {
@@ -107,18 +122,6 @@ std::optional<std::string> HiveConfig::gcsAuthAccessTokenProvider() const {
       std::string(kLegacyPrefix) + kGcsAuthAccessTokenProvider);
 }
 
-bool HiveConfig::isPartitionPathAsLowerCase(
-    const config::ConfigBase* session) const {
-  return session->get<bool>(kPartitionPathAsLowerCaseSession, true);
-}
-
-bool HiveConfig::allowNullPartitionKeys(
-    const config::ConfigBase* session) const {
-  return session->get<bool>(
-      kAllowNullPartitionKeysSession,
-      config_->get<bool>(kAllowNullPartitionKeys, true));
-}
-
 int32_t HiveConfig::numCacheFileHandles() const {
   return config_->get<int32_t>(kNumCacheFileHandles, 20'000);
 }
@@ -139,13 +142,6 @@ std::string HiveConfig::writeFileCreateConfig() const {
   return config_->get<std::string>("hive.write_file_create_config", "");
 }
 
-uint32_t HiveConfig::sortWriterMaxOutputRows(
-    const config::ConfigBase* session) const {
-  return session->get<uint32_t>(
-      kSortWriterMaxOutputRowsSession,
-      config_->get<uint32_t>(kSortWriterMaxOutputRows, 1024));
-}
-
 uint64_t HiveConfig::sortWriterMaxOutputBytes(
     const config::ConfigBase* session) const {
   return config::toCapacity(
@@ -155,12 +151,6 @@ uint64_t HiveConfig::sortWriterMaxOutputBytes(
       config::CapacityUnit::BYTE);
 }
 
-uint64_t HiveConfig::sortWriterFinishTimeSliceLimitMs(
-    const config::ConfigBase* session) const {
-  return session->get<uint64_t>(
-      kSortWriterFinishTimeSliceLimitMsSession,
-      config_->get<uint64_t>(kSortWriterFinishTimeSliceLimitMs, 5'000));
-}
 uint64_t HiveConfig::maxTargetFileSizeBytes(
     const config::ConfigBase* session) const {
   return config::toCapacity(
@@ -168,26 +158,6 @@ uint64_t HiveConfig::maxTargetFileSizeBytes(
           kMaxTargetFileSizeSession,
           config_->get<std::string>(kMaxTargetFileSize, "0B")),
       config::CapacityUnit::BYTE);
-}
-
-uint32_t HiveConfig::maxRowsPerIndexRequest(
-    const config::ConfigBase* session) const {
-  return sessionValue<uint32_t>(
-      session, kMaxRowsPerIndexRequestSession, kMaxRowsPerIndexRequest, 0);
-}
-
-std::string HiveConfig::user(const config::ConfigBase* session) const {
-  return session->get<std::string>(kUser, config_->get<std::string>(kUser, ""));
-}
-
-std::string HiveConfig::source(const config::ConfigBase* session) const {
-  return session->get<std::string>(
-      kSource, config_->get<std::string>(kSource, ""));
-}
-
-std::string HiveConfig::schema(const config::ConfigBase* session) const {
-  return session->get<std::string>(
-      kSchema, config_->get<std::string>(kSchema, ""));
 }
 
 } // namespace facebook::velox::connector::hive
