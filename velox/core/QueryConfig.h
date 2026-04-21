@@ -1222,12 +1222,6 @@ class QueryConfig {
       7,
       "Maximum zoom level difference for bing_tile_children.")
 
-  /// Deprecated: moved to FileConfig::kSelectiveNimbleReaderEnabledSession.
-  /// Kept temporarily for backward compatibility with downstream code.
-  /// TODO: Remove once all references are updated.
-  static constexpr const char* kSelectiveNimbleReaderEnabled =
-      "selective_nimble_reader_enabled";
-
   /// The max ratio of query memory usage to max capacity for scale writer
   /// exchange to stop scaling.
   VELOX_QUERY_CONFIG(
