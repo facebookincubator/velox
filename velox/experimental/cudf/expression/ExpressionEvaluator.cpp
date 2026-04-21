@@ -339,13 +339,8 @@ class LogicalFunction : public CudfFunction {
       std::vector<ColumnOrView>& inputColumns,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
-    size_t rowCount = 0;
-    if (!inputColumns.empty()) {
-      rowCount = asView(inputColumns[0]).size();
-    }
-    if (rowCount == 0 && inputColumns.empty()) {
-      rowCount = 1;
-    }
+    const size_t rowCount =
+        inputColumns.empty() ? 1 : asView(inputColumns[0]).size();
 
     std::vector<std::unique_ptr<cudf::column>> literalColumns;
     literalColumns.reserve(literals_.size());
