@@ -533,14 +533,6 @@ class ConnectorQueryCtx {
     return cancellationToken_;
   }
 
-  bool selectiveNimbleReaderEnabled() const {
-    return selectiveNimbleReaderEnabled_;
-  }
-
-  void setSelectiveNimbleReaderEnabled(bool value) {
-    selectiveNimbleReaderEnabled_ = value;
-  }
-
   core::QueryConfig::RowSizeTrackingMode rowSizeTrackingMode() const {
     return rowSizeTrackingEnabled_;
   }
@@ -570,7 +562,6 @@ class ConnectorQueryCtx {
   const bool adjustTimestampToTimezone_;
   const folly::CancellationToken cancellationToken_;
   const std::shared_ptr<filesystems::TokenProvider> fsTokenProvider_;
-  bool selectiveNimbleReaderEnabled_{false};
   core::QueryConfig::RowSizeTrackingMode rowSizeTrackingEnabled_{
       core::QueryConfig::RowSizeTrackingMode::ENABLED_FOR_ALL};
 };

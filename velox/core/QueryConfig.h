@@ -1222,14 +1222,11 @@ class QueryConfig {
       7,
       "Maximum zoom level difference for bing_tile_children.")
 
-  /// Temporary flag to control whether selective Nimble reader should be used.
-  VELOX_QUERY_CONFIG(
-      kSelectiveNimbleReaderEnabled,
-      selectiveNimbleReaderEnabled,
-      "selective_nimble_reader_enabled",
-      bool,
-      true,
-      "Enable selective Nimble reader.")
+  /// Deprecated: moved to FileConfig::kSelectiveNimbleReaderEnabledSession.
+  /// Kept temporarily for backward compatibility with downstream code.
+  /// TODO: Remove once all references are updated.
+  static constexpr const char* kSelectiveNimbleReaderEnabled =
+      "selective_nimble_reader_enabled";
 
   /// The max ratio of query memory usage to max capacity for scale writer
   /// exchange to stop scaling.
