@@ -224,6 +224,22 @@ class EvalCtx {
       const RowVector* row,
       bool lazyDereference = false);
 
+  /// Creates an EvalCtx with a pre-computed inputFlatNoNulls flag, skipping
+  /// the per-column loop when the caller has already computed the flag via
+  /// computeInputFlatNoNulls(). Intended for multi-threaded use cases where
+  /// the same RowVector is evaluated across many EvalCtx instances (each bound
+  /// to a different ExprSet), so the flag can be computed once and shared.
+  EvalCtx(
+      core::ExecCtx* execCtx,
+      ExprSet* exprSet,
+      const RowVector* row,
+      bool inputFlatNoNulls,
+      bool lazyDereference);
+
+  /// Computes the inputFlatNoNulls flag for a RowVector. Returns true if all
+  /// children are flat or constant encoded and have no nulls.
+  static bool computeInputFlatNoNulls(const RowVector& row);
+
   /// For testing only.
   explicit EvalCtx(core::ExecCtx* execCtx);
 
@@ -632,7 +648,7 @@ class EvalCtx {
 
   // If isFinalSelection_ is false, the set of rows for the upper-most IF or
   // OR. Used to determine the set of rows for loading lazy vectors.
-  const SelectivityVector* finalSelection_;
+  const SelectivityVector* finalSelection_{nullptr};
 
   // Stores exceptions encountered during expression evaluation.
   // If 'captureErrorDetails()' is false, stores flags indicating which rows had

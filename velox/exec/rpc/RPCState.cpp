@@ -44,6 +44,7 @@ void RPCState::setMaxPendingRows(int64_t maxPendingRows) {
 
 void RPCState::setMaxPendingBatches(int64_t maxPendingBatches) {
   maxPendingBatches_ = maxPendingBatches;
+  effectiveMaxPendingBatches_ = maxPendingBatches;
 }
 
 // ===== Input batch storage =====
@@ -340,9 +341,33 @@ bool RPCState::isFinished() {
 bool RPCState::isUnderBackpressure() {
   std::lock_guard<std::mutex> l(mutex_);
   if (streamingMode_ == RPCStreamingMode::kBatch) {
-    return static_cast<int64_t>(pendingBatches_.size()) >= maxPendingBatches_;
+    return static_cast<int64_t>(pendingBatches_.size()) >=
+        effectiveMaxPendingBatches_;
   }
   return numPendingRows_ >= maxPendingRows_;
+}
+
+void RPCState::onBatchSuccess(int64_t increment) {
+  std::lock_guard<std::mutex> l(mutex_);
+  if (effectiveMaxPendingBatches_ < maxPendingBatches_) {
+    effectiveMaxPendingBatches_ =
+        std::min(effectiveMaxPendingBatches_ + increment, maxPendingBatches_);
+    RPC_STATE_LOG(INFO) << "RPC congestion: batch success, window increased to "
+                        << effectiveMaxPendingBatches_ << "/"
+                        << maxPendingBatches_;
+  }
+}
+
+void RPCState::onBatchError() {
+  std::lock_guard<std::mutex> l(mutex_);
+  auto prev = effectiveMaxPendingBatches_;
+  effectiveMaxPendingBatches_ =
+      std::max<int64_t>(effectiveMaxPendingBatches_ / 2, 1);
+  if (effectiveMaxPendingBatches_ < prev) {
+    RPC_STATE_LOG(WARNING)
+        << "RPC congestion: batch error, window decreased from " << prev
+        << " to " << effectiveMaxPendingBatches_;
+  }
 }
 
 void RPCState::notifyWaitersLocked() {
