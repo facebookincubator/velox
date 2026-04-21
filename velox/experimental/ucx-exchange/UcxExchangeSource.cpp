@@ -453,7 +453,7 @@ void UcxExchangeSource::onMetadata(
     setState(ReceiverState::Done);
     communicator_->addToWorkQueue(getSelfPtr());
   } else {
-    VELOX_CHECK(arg != nullptr, "Didn't get metadata");
+    VELOX_CHECK_NOT_NULL(arg, "Didn't get metadata");
 
     // arg contains the actual serialized metadata, deserialize the metadata
     std::shared_ptr<std::vector<uint8_t>> metadataMsg =

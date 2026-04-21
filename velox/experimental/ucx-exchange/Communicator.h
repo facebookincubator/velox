@@ -123,7 +123,7 @@ class Communicator {
   /// Must only be called from the Communicator thread.
   void deferRequestCleanup(std::shared_ptr<ucxx::Request> request);
 
-  // Returns the URL of the coordinator.
+  /// Returns the URL of the coordinator.
   [[nodiscard]] const std::string& getCoordinatorUrl();
 
   /// @brief Get the listener's bound IP address.

@@ -23,11 +23,11 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/ucx-exchange/CommElement.h"
 #include "velox/experimental/ucx-exchange/EndpointRef.h"
+#include "velox/experimental/ucx-exchange/UcxExchangeModules.h"
 #include "velox/experimental/ucx-exchange/UcxExchangeServer.h"
 #include "velox/experimental/ucx-exchange/UcxExchangeSource.h"
 
 #include <glog/logging.h>
-#include "UcxExchangeModules.h"
 
 using namespace facebook::velox::cudf_velox;
 
@@ -70,18 +70,17 @@ std::shared_ptr<Communicator> Communicator::initAndGet(
       *future = instancePtr_->promise_.getSemiFuture();
     }
   });
-  VELOX_CHECK(
-      instancePtr_->port_ == port,
+  VELOX_CHECK_EQ(
+      instancePtr_->port_,
+      port,
       "Cannot initialize communicator again with different port");
   return instancePtr_;
 }
 
 /* static */
 std::shared_ptr<Communicator> Communicator::getInstance() {
-  if (!instancePtr_) {
-    throw std::logic_error(
-        "Communicator not initialized. Call init(port) first.");
-  }
+  VELOX_CHECK_NOT_NULL(
+      instancePtr_, "Communicator not initialized. Call init(port) first.");
   return instancePtr_;
 }
 
@@ -241,8 +240,7 @@ void Communicator::run() {
         worker_->progress();
       }
     } catch (ucxx::IOError& e) {
-      std::cerr << "In Communicator main loop UCXX Exception: " << e.what()
-                << std::endl;
+      LOG(ERROR) << "In Communicator main loop UCXX Exception: " << e.what();
       throw;
     }
   }

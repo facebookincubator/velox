@@ -19,12 +19,11 @@
 #include <cudf/table/table.hpp>
 #include <cudf/types.hpp>
 #include <folly/Executor.h>
+#include <folly/experimental/EventCount.h>
 #include <gtest/gtest.h>
 #include <rmm/device_buffer.hpp>
 #include <memory>
 #include <vector>
-#include "UcxTestHelpers.h"
-#include "folly/experimental/EventCount.h"
 #include "velox/common/memory/MemoryPool.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/experimental/ucx-exchange/tests/UcxTestHelpers.h"

@@ -36,6 +36,10 @@ struct Acceptor {
   void registerEndpointRef(std::shared_ptr<EndpointRef> endpointRef);
 
   // Maps the lower-layer UCP endpoint handle to an endpoint reference.
+  // Accessed only from the Communicator main loop thread: writes happen in
+  // registerEndpointRef() (called from listenerCallback during
+  // worker_->progress()), and reads happen in cStyleAMCallback (also fired
+  // during worker_->progress()). No mutex needed.
   std::map<ucp_ep_h, std::shared_ptr<EndpointRef>> handleToEndpointRef_;
 };
 

@@ -123,9 +123,8 @@ void UcxExchangeServer::process() {
                     << " Found data for client: "
                     << self->partitionKey_.toString();
             std::lock_guard<std::recursive_mutex> lock(self->dataMutex_);
-            VELOX_CHECK(
-                self->dataPtr_ == nullptr,
-                "Data pointer exists: Illegal state!");
+            VELOX_CHECK_NULL(
+                self->dataPtr_, "Data pointer exists: Illegal state!");
             self->dataPtr_ = std::move(data);
             self->setState(ServerState::DataReady);
             self->communicator_->addToWorkQueue(self);
@@ -429,7 +428,7 @@ void UcxExchangeServer::sendComplete(
   }
   if (status == UCS_OK) {
     std::lock_guard<std::recursive_mutex> lock(dataMutex_);
-    VELOX_CHECK(dataPtr_ != nullptr, "dataPtr_ is null");
+    VELOX_CHECK_NOT_NULL(dataPtr_, "dataPtr_ is null");
 
     auto end = std::chrono::high_resolution_clock::now();
     auto duration = end - sendStart_;

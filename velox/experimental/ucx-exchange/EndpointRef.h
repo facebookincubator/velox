@@ -30,7 +30,7 @@ namespace facebook::velox::ucx_exchange {
 /// is done, it notifies the endpoint. Access to the communicators_ set is
 /// protected by commMutex_. The onClose callback defers all work to the
 /// Communicator main loop thread via deferEndpointCleanup().
-class EndpointRef : std::enable_shared_from_this<EndpointRef> {
+class EndpointRef : public std::enable_shared_from_this<EndpointRef> {
  public:
   EndpointRef(
       const std::shared_ptr<ucxx::Endpoint> endpoint,

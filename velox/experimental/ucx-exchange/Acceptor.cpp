@@ -27,12 +27,12 @@ namespace facebook::velox::ucx_exchange {
 void Acceptor::cStyleAMCallback(
     std::shared_ptr<ucxx::Request> request,
     ucp_ep_h ep) {
-  VELOX_CHECK(request, "AMCallback called with nullptr request!");
+  VELOX_CHECK_NOT_NULL(request, "AMCallback called with nullptr request!");
   VELOX_CHECK(
       request->isCompleted(), "AMCallback called with incomplete request!");
   auto buffer =
       std::dynamic_pointer_cast<ucxx::Buffer>(request->getRecvBuffer());
-  VELOX_CHECK(buffer != nullptr, "AMCallback: failed to get receive buffer.");
+  VELOX_CHECK_NOT_NULL(buffer, "AMCallback: failed to get receive buffer.");
   // Validate buffer size BEFORE casting to prevent reading past buffer bounds.
   VELOX_CHECK_GE(
       buffer->getSize(),

@@ -112,13 +112,13 @@ class UcxExchangeSource
   /// min:  1.16GB'
   folly::F14FastMap<std::string, RuntimeMetric> metrics() const;
 
-  std::string toString() {
+  std::string toString() const {
     std::stringstream out;
     out << "@" << taskId_ << " - @" << partitionKey_.toString();
     return out.str();
   }
 
-  folly::dynamic toJson() {
+  folly::dynamic toJson() const {
     folly::dynamic obj = folly::dynamic::object;
     obj["remoteTaskId"] = partitionKey_.taskId;
     obj["destination"] = partitionKey_.destination;

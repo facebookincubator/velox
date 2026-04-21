@@ -90,7 +90,7 @@ void UcxPartitionedOutput::addInput(RowVectorPtr input) {
           << " addInput";
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
   auto cudfVector = std::dynamic_pointer_cast<CudfVector>(input);
-  VELOX_CHECK(cudfVector, "Input must be a CudfVector");
+  VELOX_CHECK_NOT_NULL(cudfVector, "Input must be a CudfVector");
   VELOX_CHECK(
       !future_.valid() || future_.hasValue(),
       "addInput with outstanding future!");
@@ -300,8 +300,8 @@ void UcxPartitionedOutput::hashPartition(
       cudf::DEFAULT_HASH_SEED,
       stream);
 
-  VELOX_CHECK(partitionOffsets.size() == numPartitions_ + 1);
-  VELOX_CHECK(partitionOffsets[0] == 0);
+  VELOX_CHECK_EQ(partitionOffsets.size(), numPartitions_ + 1);
+  VELOX_CHECK_EQ(partitionOffsets[0], 0);
 
   // Erase first element since it's always 0 and we don't need it.
   partitionOffsets.erase(partitionOffsets.begin());

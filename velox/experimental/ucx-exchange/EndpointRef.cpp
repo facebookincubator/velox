@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 #include "velox/experimental/ucx-exchange/EndpointRef.h"
-#include "Communicator.h"
+#include "velox/experimental/ucx-exchange/Communicator.h"
 
 namespace facebook::velox::ucx_exchange {
 
