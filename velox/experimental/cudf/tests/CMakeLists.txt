@@ -496,6 +496,41 @@ add_test(
 
 set_tests_properties(velox_cudf_gpu_adapter_all_variants_test PROPERTIES LABELS cuda_driver TIMEOUT 300)
 
+# GPU Function Registry test: registration, lookup, cuDF column execution
+add_executable(velox_cudf_gpu_registry_test GpuRegistryTest.cu)
+
+set_target_properties(
+  velox_cudf_gpu_registry_test PROPERTIES
+  CUDA_STANDARD 20
+  CUDA_SEPARABLE_COMPILATION ON
+)
+
+target_include_directories(
+  velox_cudf_gpu_registry_test BEFORE PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../functions/gpu_shadows
+)
+
+target_compile_options(
+  velox_cudf_gpu_registry_test PRIVATE
+  $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
+)
+
+target_link_libraries(
+  velox_cudf_gpu_registry_test
+  velox_cudf_gpu_registry
+  cudf::cudf
+  gtest
+  gtest_main
+)
+
+add_test(
+  NAME velox_cudf_gpu_registry_test
+  COMMAND velox_cudf_gpu_registry_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+set_tests_properties(velox_cudf_gpu_registry_test PROPERTIES LABELS cuda_driver TIMEOUT 300)
+
 # GpuColumnIO device test: round-trip read/write via CUDA kernels
 add_executable(velox_cudf_gpu_column_io_test GpuColumnIOTest.cu)
 
