@@ -23,6 +23,7 @@
 
 #include "velox/common/base/Doubles.h"
 #include "velox/common/base/Status.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/lib/ToHex.h"
 
