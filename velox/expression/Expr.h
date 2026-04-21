@@ -20,6 +20,7 @@
 #include <vector>
 
 #include <folly/container/F14Map.h>
+#include <folly/container/small_vector.h>
 
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/core/ExpressionEvaluator.h"
@@ -695,9 +696,9 @@ class Expr {
 
    private:
     // Used as a key in a map that keeps track of cached results.
-    std::vector<const BaseVector*> inputVectors_;
+    folly::small_vector<const BaseVector*, 4> inputVectors_;
     // Used to check if inputs have expired.
-    std::vector<std::weak_ptr<BaseVector>> inputWeakVectors_;
+    folly::small_vector<std::weak_ptr<BaseVector>, 4> inputWeakVectors_;
   };
 
   struct SharedResults {
