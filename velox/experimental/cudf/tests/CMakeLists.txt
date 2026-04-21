@@ -462,6 +462,40 @@ add_test(
 
 set_tests_properties(velox_cudf_gpu_adapter_test PROPERTIES LABELS cuda_driver TIMEOUT 300)
 
+# GpuSimpleFunctionAdapter all-variants test: unary, ternary, bool-returning call()
+add_executable(velox_cudf_gpu_adapter_all_variants_test GpuAdapterAllVariantsTest.cu)
+
+set_target_properties(
+  velox_cudf_gpu_adapter_all_variants_test PROPERTIES
+  CUDA_STANDARD 20
+  CUDA_SEPARABLE_COMPILATION ON
+)
+
+target_include_directories(
+  velox_cudf_gpu_adapter_all_variants_test BEFORE PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../functions/gpu_shadows
+)
+
+target_compile_options(
+  velox_cudf_gpu_adapter_all_variants_test PRIVATE
+  $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
+)
+
+target_link_libraries(
+  velox_cudf_gpu_adapter_all_variants_test
+  cudf::cudf
+  gtest
+  gtest_main
+)
+
+add_test(
+  NAME velox_cudf_gpu_adapter_all_variants_test
+  COMMAND velox_cudf_gpu_adapter_all_variants_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+set_tests_properties(velox_cudf_gpu_adapter_all_variants_test PROPERTIES LABELS cuda_driver TIMEOUT 300)
+
 # GpuColumnIO device test: round-trip read/write via CUDA kernels
 add_executable(velox_cudf_gpu_column_io_test GpuColumnIOTest.cu)
 
