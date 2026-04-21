@@ -50,8 +50,6 @@ struct HostPort {
 };
 
 class Communicator {
-  friend Acceptor;
-
  public:
   const ucxx::AmReceiverCallbackOwnerType kAmCallbackOwner = "velox";
   const ucxx::AmReceiverCallbackIdType kAmCallbackId = 123;
@@ -145,6 +143,13 @@ class Communicator {
     return workerId_;
   }
 
+  /// Looks up the EndpointRef associated with a raw UCP endpoint handle.
+  /// Used by the Acceptor's active-message callback to resolve the endpoint
+  /// that received a handshake request.
+  /// @returns The EndpointRef or nullptr if no mapping exists for the handle.
+  [[nodiscard]] std::shared_ptr<EndpointRef> findEndpointRefByHandle(
+      ucp_ep_h handle);
+
  private:
   Communicator() =
       default; // Private constructor to prevent direct instantiation
@@ -152,10 +157,10 @@ class Communicator {
   Communicator(const Communicator&) = delete; // Prevent copying
   Communicator& operator=(const Communicator&) = delete; // Prevent assignment
 
-  /// @brief The callback method that is invoked when a client connects.
+  // Invoked when a client connects to the listener.
   void listenerCallback(ucp_conn_request_h conn_request);
 
-  /// @brief Wrapper to map the callback to the listener method.
+  // Wrapper to map the C-style callback to the listener method.
   static void cStyleListenerCallback(
       ucp_conn_request_h conn_request,
       void* arg);
@@ -202,14 +207,14 @@ class Communicator {
   // Shared endpoints keyed by remote host:port.
   std::map<HostPort, std::shared_ptr<EndpointRef>> endpoints_;
 
-  /// @brief Signals the UCXX worker to wake up from a blocking
-  /// progressWorkerEvent() call. Thread-safe. No-op if worker_ is null
-  /// or if not in blocking progress mode.
+  // Signals the UCXX worker to wake up from a blocking
+  // progressWorkerEvent() call. Thread-safe. No-op if worker_ is null
+  // or if not in blocking progress mode.
   void signalWorker();
 
-  /// A random unique identifier for this Communicator instance (process).
-  /// Generated once at initialization. Used by the Acceptor to determine
-  /// if a connecting source is in the same process (intra-node transfer).
+  // A random unique identifier for this Communicator instance (process).
+  // Generated once at initialization. Used by the Acceptor to determine
+  // if a connecting source is in the same process (intra-node transfer).
   uint64_t workerId_{0};
 
   // Queue of endpoints that need cleanup, populated by callbacks.
@@ -217,10 +222,10 @@ class Communicator {
   // so they defer cleanup to the main loop via this queue.
   WorkQueue<EndpointRef> deferredEndpointCleanup_;
 
-  /// Cancelled UCXX requests whose GPU buffers may still be referenced by
-  /// UCX internals. Held alive here until isCompleted() returns true,
-  /// ensuring the GPU buffers (owned via the request's arg shared_ptr)
-  /// are not freed prematurely.
+  // Cancelled UCXX requests whose GPU buffers may still be referenced by
+  // UCX internals. Held alive here until isCompleted() returns true,
+  // ensuring the GPU buffers (owned via the request's arg shared_ptr)
+  // are not freed prematurely.
   std::vector<std::shared_ptr<ucxx::Request>> deferredRequests_;
 
   // Heartbeat state for diagnostic logging.

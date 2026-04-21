@@ -47,11 +47,8 @@ void Acceptor::cStyleAMCallback(
   // handshake.
   std::shared_ptr<Communicator> communicator = Communicator::getInstance();
 
-  auto it = communicator->acceptor_.handleToEndpointRef_.find(ep);
-  VELOX_CHECK(
-      it != communicator->acceptor_.handleToEndpointRef_.end(),
-      "Could not find endpoint reference");
-  std::shared_ptr<EndpointRef> epRef = it->second;
+  auto epRef = communicator->findEndpointRefByHandle(ep);
+  VELOX_CHECK_NOT_NULL(epRef, "Could not find endpoint reference");
 
   const PartitionKey key = {handshakePtr->taskId, handshakePtr->destination};
 

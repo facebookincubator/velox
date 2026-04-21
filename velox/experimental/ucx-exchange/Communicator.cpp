@@ -357,6 +357,15 @@ void Communicator::deferRequestCleanup(std::shared_ptr<ucxx::Request> request) {
   }
 }
 
+std::shared_ptr<EndpointRef> Communicator::findEndpointRefByHandle(
+    ucp_ep_h handle) {
+  auto it = acceptor_.handleToEndpointRef_.find(handle);
+  if (it != acceptor_.handleToEndpointRef_.end()) {
+    return it->second;
+  }
+  return nullptr;
+}
+
 const std::string& Communicator::getCoordinatorUrl() {
   return coordinatorURL_;
 }

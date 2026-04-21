@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/common/Enums.h"
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/exec/Exchange.h"
 #include "velox/experimental/ucx-exchange/CommElement.h"
@@ -62,6 +63,20 @@ class UcxExchangeSource
     : public CommElement,
       public std::enable_shared_from_this<UcxExchangeSource> {
  public:
+  // Public for logging and the VELOX_DEFINE_EMBEDDED_ENUM_NAME names map.
+  enum class ReceiverState : uint32_t {
+    Created,
+    WaitingForHandshakeComplete,
+    WaitingForHandshakeResponse,
+    ReadyToReceive,
+    WaitingForMetadata,
+    WaitingForData,
+    WaitingForIntraNodeData,
+    Done,
+  };
+
+  VELOX_DECLARE_EMBEDDED_ENUM_NAME(ReceiverState);
+
   virtual ~UcxExchangeSource() = default;
 
   // factory method to create a UCX exchange source.
@@ -127,17 +142,6 @@ class UcxExchangeSource
   }
 
  private:
-  enum class ReceiverState : uint32_t {
-    Created,
-    WaitingForHandshakeComplete,
-    WaitingForHandshakeResponse, // Waiting for server's HandshakeResponse
-    ReadyToReceive,
-    WaitingForMetadata,
-    WaitingForData,
-    WaitingForIntraNodeData, // Intra-node transfer: waiting on registry
-    Done
-  };
-
   struct DataAndMetadata {
     MetadataMsg metadata;
     std::unique_ptr<rmm::device_buffer> dataBuf;
@@ -221,25 +225,7 @@ class UcxExchangeSource
     return state_.load(std::memory_order_seq_cst);
   }
 
-  static std::string getStateAsString(ReceiverState s) {
-    const std::string stateMap[] = {
-        "Created",
-        "WaitingForHandshakeComplete",
-        "WaitingForHandshakeResponse",
-        "ReadyToReceive",
-        "WaitingForMetadata",
-        "WaitingForData",
-        "WaitingForIntraNodeData",
-        "Done"};
-    return stateMap[static_cast<uint32_t>(s)];
-  }
-
-  std::string getStateAsString() {
-    return getStateAsString(state_.load());
-  }
-
-  /// @brief Remove the state associated with the source called by the
-  /// state-machine
+  // Removes the state associated with the source, called by the state-machine.
   void cleanUp();
 
   /// @brief Delivers the nullptr end-of-stream marker to the queue exactly

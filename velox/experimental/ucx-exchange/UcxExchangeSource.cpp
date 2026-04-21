@@ -27,11 +27,40 @@
 using namespace facebook::velox::exec;
 namespace facebook::velox::ucx_exchange {
 
+namespace {
+const folly::F14FastMap<UcxExchangeSource::ReceiverState, std::string_view>&
+receiverStateNames() {
+  static const folly::F14FastMap<
+      UcxExchangeSource::ReceiverState,
+      std::string_view>
+      kNames = {
+          {UcxExchangeSource::ReceiverState::Created, "Created"},
+          {UcxExchangeSource::ReceiverState::WaitingForHandshakeComplete,
+           "WaitingForHandshakeComplete"},
+          {UcxExchangeSource::ReceiverState::WaitingForHandshakeResponse,
+           "WaitingForHandshakeResponse"},
+          {UcxExchangeSource::ReceiverState::ReadyToReceive, "ReadyToReceive"},
+          {UcxExchangeSource::ReceiverState::WaitingForMetadata,
+           "WaitingForMetadata"},
+          {UcxExchangeSource::ReceiverState::WaitingForData, "WaitingForData"},
+          {UcxExchangeSource::ReceiverState::WaitingForIntraNodeData,
+           "WaitingForIntraNodeData"},
+          {UcxExchangeSource::ReceiverState::Done, "Done"},
+      };
+  return kNames;
+}
+} // namespace
+
+VELOX_DEFINE_EMBEDDED_ENUM_NAME(
+    UcxExchangeSource,
+    ReceiverState,
+    receiverStateNames)
+
 void UcxExchangeSource::setState(ReceiverState newState) {
   auto oldState = state_.exchange(newState, std::memory_order_seq_cst);
   VLOG(2) << (isIntraNodeTransfer_ ? "[INTRA]" : "[REMOTE]") << " [ExSrc "
           << toString() << " seq=" << sequenceNumber_ << "] "
-          << getStateAsString(oldState) << " -> " << getStateAsString(newState);
+          << toName(oldState) << " -> " << toName(newState);
 }
 
 // This constructor is private.
@@ -369,7 +398,7 @@ void UcxExchangeSource::onHandshake(
   // Guard against replayed callbacks from UCP wireup replay.
   if (getState() != ReceiverState::WaitingForHandshakeComplete) {
     VLOG(2) << toString() << " onHandshake called in state "
-            << getStateAsString() << ", ignoring (possible UCXX replay)";
+            << toName(getState()) << ", ignoring (possible UCXX replay)";
     return;
   }
   if (status != UCS_OK) {
@@ -435,7 +464,7 @@ void UcxExchangeSource::onMetadata(
   // Guard against replayed callbacks from UCP wireup replay.
   if (getState() != ReceiverState::WaitingForMetadata) {
     VLOG(2) << toString() << " onMetadata called in state "
-            << getStateAsString() << ", ignoring (possible UCXX replay)";
+            << toName(getState()) << ", ignoring (possible UCXX replay)";
     return;
   }
   VLOG(3) << toString() << " + onMetadata " << ucs_status_string(status);
@@ -546,7 +575,7 @@ void UcxExchangeSource::onData(ucs_status_t status, std::shared_ptr<void> arg) {
   }
   // Guard against replayed callbacks from UCP wireup replay.
   if (getState() != ReceiverState::WaitingForData) {
-    VLOG(2) << toString() << " onData called in state " << getStateAsString()
+    VLOG(2) << toString() << " onData called in state " << toName(getState())
             << ", ignoring (possible UCXX replay)";
     return;
   }
@@ -634,7 +663,7 @@ void UcxExchangeSource::onHandshakeResponse(
   // Guard against replayed callbacks from UCP wireup replay.
   if (getState() != ReceiverState::WaitingForHandshakeResponse) {
     VLOG(2) << toString() << " onHandshakeResponse called in state "
-            << getStateAsString() << ", ignoring (possible UCXX replay)";
+            << toName(getState()) << ", ignoring (possible UCXX replay)";
     return;
   }
 
@@ -783,7 +812,7 @@ bool UcxExchangeSource::setStateIf(
   }
   VLOG(2) << (isIntraNodeTransfer_ ? "[INTRA]" : "[REMOTE]") << " [ExSrc "
           << toString() << " seq=" << sequenceNumber_ << "] "
-          << getStateAsString(expected) << " -> " << getStateAsString(desired);
+          << toName(expected) << " -> " << toName(desired);
   return true;
 }
 

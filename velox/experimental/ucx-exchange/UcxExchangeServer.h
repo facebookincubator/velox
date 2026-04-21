@@ -25,6 +25,7 @@
 #include <future>
 #include <memory>
 #include <tuple>
+#include "velox/common/Enums.h"
 #include "velox/experimental/ucx-exchange/CommElement.h"
 #include "velox/experimental/ucx-exchange/EndpointRef.h"
 #include "velox/experimental/ucx-exchange/PartitionKey.h"
@@ -35,6 +36,19 @@ class UcxExchangeServer
     : public CommElement,
       public std::enable_shared_from_this<UcxExchangeServer> {
  public:
+  // Public for logging and the VELOX_DEFINE_EMBEDDED_ENUM_NAME names map.
+  enum class ServerState : uint32_t {
+    Created,
+    ReadyToTransfer,
+    WaitingForDataFromQueue,
+    DataReady,
+    WaitingForSendComplete,
+    WaitingForIntraNodeRetrieve,
+    Done,
+  };
+
+  VELOX_DECLARE_EMBEDDED_ENUM_NAME(ServerState);
+
   /// @brief Factory method to create a UcxExchangeServer.
   /// @param communicator The Communicator instance.
   /// @param endpointRef The endpoint reference for UCXX communication.
@@ -63,17 +77,6 @@ class UcxExchangeServer
   }
 
  private:
-  enum class ServerState : uint32_t {
-    Created,
-    ReadyToTransfer,
-    WaitingForDataFromQueue,
-    DataReady,
-    WaitingForSendComplete,
-    WaitingForIntraNodeRetrieve, // Intra-node transfer: waiting for source to
-                                 // retrieve
-    Done
-  };
-
   explicit UcxExchangeServer(
       const std::shared_ptr<Communicator> communicator,
       std::shared_ptr<EndpointRef> endpointRef,
@@ -101,22 +104,6 @@ class UcxExchangeServer
   /// @brief Returns the state.
   ServerState getState() {
     return state_.load(std::memory_order_seq_cst);
-  }
-
-  static std::string getStateAsString(ServerState s) {
-    const std::string stateMap[] = {
-        "Created",
-        "ReadyToTransfer",
-        "WaitingForDataFromQueue",
-        "DataReady",
-        "WaitingForSendComplete",
-        "WaitingForIntraNodeRetrieve",
-        "Done"};
-    return stateMap[static_cast<uint32_t>(s)];
-  }
-
-  std::string getStateAsString() {
-    return getStateAsString(state_.load());
   }
 
   const PartitionKey partitionKey_;

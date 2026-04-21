@@ -24,6 +24,33 @@
 
 namespace facebook::velox::ucx_exchange {
 
+namespace {
+const folly::F14FastMap<UcxExchangeServer::ServerState, std::string_view>&
+serverStateNames() {
+  static const folly::
+      F14FastMap<UcxExchangeServer::ServerState, std::string_view>
+          kNames = {
+              {UcxExchangeServer::ServerState::Created, "Created"},
+              {UcxExchangeServer::ServerState::ReadyToTransfer,
+               "ReadyToTransfer"},
+              {UcxExchangeServer::ServerState::WaitingForDataFromQueue,
+               "WaitingForDataFromQueue"},
+              {UcxExchangeServer::ServerState::DataReady, "DataReady"},
+              {UcxExchangeServer::ServerState::WaitingForSendComplete,
+               "WaitingForSendComplete"},
+              {UcxExchangeServer::ServerState::WaitingForIntraNodeRetrieve,
+               "WaitingForIntraNodeRetrieve"},
+              {UcxExchangeServer::ServerState::Done, "Done"},
+          };
+  return kNames;
+}
+} // namespace
+
+VELOX_DEFINE_EMBEDDED_ENUM_NAME(
+    UcxExchangeServer,
+    ServerState,
+    serverStateNames)
+
 // Context wrappers for UCXX tagSend callbackData. These decouple the
 // ucxx::Request lifetime (which must survive for UCP wireup replay) from
 // the buffer lifetime (which should be freed promptly after DMA completes).
@@ -45,7 +72,7 @@ void UcxExchangeServer::setState(ServerState newState) {
   auto oldState = state_.exchange(newState, std::memory_order_seq_cst);
   VLOG(2) << (isIntraNodeTransfer_ ? "[INTRA]" : "[REMOTE]") << " [ExSrv "
           << partitionKey_.toString() << " seq=" << sequenceNumber_ << "] "
-          << getStateAsString(oldState) << " -> " << getStateAsString(newState);
+          << toName(oldState) << " -> " << toName(newState);
 }
 
 // This constructor is private
