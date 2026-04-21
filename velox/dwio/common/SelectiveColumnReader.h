@@ -257,7 +257,7 @@ class SelectiveColumnReader {
   uint64_t* mutableNulls(int32_t size) {
     if (!resultNulls_->unique()) {
       resultNulls_ = AlignedBuffer::allocate<bool>(
-          numValues_ + size, memoryPool_, bits::kNotNull);
+          numValues_ + size, pool_, bits::kNotNull);
       rawResultNulls_ = resultNulls_->asMutable<uint64_t>();
     }
     if (resultNulls_->capacity() * 8 < numValues_ + size) {
@@ -518,7 +518,7 @@ class SelectiveColumnReader {
   }
 
   memory::MemoryPool* memoryPool() const {
-    return memoryPool_;
+    return pool_;
   }
 
  protected:
@@ -643,7 +643,7 @@ class SelectiveColumnReader {
     return scanSpec_->hasFilter() || hasDeletion();
   }
 
-  memory::MemoryPool* const memoryPool_;
+  memory::MemoryPool* const pool_;
 
   // The requested data type
   const TypePtr requestedType_;

@@ -602,6 +602,40 @@ struct IsPrivateIPFunction {
   }
 };
 
+template <typename T>
+struct IPVersionFromIPAddressFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<int64_t>& result,
+      const arg_type<IPAddress>& ip) {
+    result = isIPv4(*ip) ? 4 : 6;
+  }
+};
+
+template <typename T>
+struct IPVersionFromIPPrefixFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<int64_t>& result,
+      const arg_type<IPPrefix>& ipPrefix) {
+    result = isIPv4(*ipPrefix.template at<0>()) ? 4 : 6;
+  }
+};
+
+template <typename T>
+struct IPPrefixMaskLenFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<int64_t>& result,
+      const arg_type<IPPrefix>& ipPrefix) {
+    result =
+        static_cast<int64_t>(static_cast<uint8_t>(*ipPrefix.template at<1>()));
+  }
+};
+
 void registerIPAddressFunctions(const std::string& prefix) {
   registerIPAddressType();
   registerIPPrefixType();
@@ -625,6 +659,12 @@ void registerIPAddressFunctions(const std::string& prefix) {
       {prefix + "ip_prefix_subnets"});
   registerFunction<IsPrivateIPFunction, bool, IPAddress>(
       {prefix + "is_private_ip"});
+  registerFunction<IPVersionFromIPAddressFunction, int64_t, IPAddress>(
+      {prefix + "ip_version"});
+  registerFunction<IPVersionFromIPPrefixFunction, int64_t, IPPrefix>(
+      {prefix + "ip_version"});
+  registerFunction<IPPrefixMaskLenFunction, int64_t, IPPrefix>(
+      {prefix + "ip_prefix_masklen"});
 }
 
 } // namespace facebook::velox::functions

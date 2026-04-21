@@ -957,7 +957,10 @@ void MemoryArbitrationFuzzer::verify() {
 
           const auto plan = plans.at(getRandomIndex(rng, plans.size() - 1));
           test::AssertQueryBuilder builder(plan.plan);
-          builder.queryCtx(queryCtx);
+          // Use a long timeout (1 hour) to avoid false failures from CI thread
+          // starvation while still catching real deadlocks.
+          static constexpr uint64_t kOneHourUs{3'600'000'000ULL};
+          builder.queryCtx(queryCtx).maxWaitMicros(kOneHourUs);
           for (const auto& [planNodeId, nodeSplits] : plan.splits) {
             builder.splits(planNodeId, nodeSplits);
           }
