@@ -428,6 +428,35 @@ target_link_libraries(
   gtest_main
 )
 
+# GpuColumnIO device test: round-trip read/write via CUDA kernels
+add_executable(velox_cudf_gpu_column_io_test GpuColumnIOTest.cu)
+
+set_target_properties(
+  velox_cudf_gpu_column_io_test PROPERTIES
+  CUDA_STANDARD 20
+  CUDA_SEPARABLE_COMPILATION ON
+)
+
+target_compile_options(
+  velox_cudf_gpu_column_io_test PRIVATE
+  $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
+)
+
+target_link_libraries(
+  velox_cudf_gpu_column_io_test
+  cudf::cudf
+  gtest
+  gtest_main
+)
+
+add_test(
+  NAME velox_cudf_gpu_column_io_test
+  COMMAND velox_cudf_gpu_column_io_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+set_tests_properties(velox_cudf_gpu_column_io_test PROPERTIES LABELS cuda_driver TIMEOUT 300)
+
 # CUDA compile test: verify that Velox function headers compile under nvcc
 # with shadow headers. This is a compile-only target (no runtime test).
 # The shadow include path MUST come before the Velox source root so that
