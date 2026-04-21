@@ -3157,17 +3157,15 @@ TEST_F(HashJoinTest, semiProjectWithFilter) {
   for (const auto& filter : filters) {
     auto plan = makePlan(true /*nullAware*/, filter);
 
-    // null-aware left semi project not supported
-    VELOX_ASSERT_THROW(
-        HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
-            .planNode(plan)
-            .referenceQuery(
-                fmt::format(
-                    "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE {}) FROM t",
-                    filter))
-            .injectSpill(false)
-            .run(),
-        "Replacement with cuDF operator failed");
+    // null-aware left semi project with filter now supported
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .planNode(plan)
+        .referenceQuery(
+            fmt::format(
+                "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE {}) FROM t",
+                filter))
+        .injectSpill(false)
+        .run();
 
     plan = makePlan(false /*nullAware*/, filter);
 
@@ -3179,6 +3177,361 @@ TEST_F(HashJoinTest, semiProjectWithFilter) {
             fmt::format(
                 "SELECT t0, t1, EXISTS (SELECT * FROM u WHERE (u0 is not null OR t0 is not null) AND u0 = t0 AND {}) FROM t",
                 filter))
+        .injectSpill(false)
+        .run();
+  }
+}
+
+// Comprehensive edge case tests for null-aware left semi project with filter
+TEST_F(HashJoinTest, nullAwareSemiProjectWithFilterEdgeCases) {
+  // Test 1: Empty build side with null-aware + filter
+  // All results should be FALSE (not NULL) since there's nothing to match
+  {
+    auto probeVectors = makeBatches(1, [&](auto) {
+      return makeRowVector(
+          {"t0", "t1"},
+          {
+              makeNullableFlatVector<int32_t>({1, 2, std::nullopt, 4}),
+              makeFlatVector<int64_t>({10, 20, 30, 40}),
+          });
+    });
+
+    auto buildVectors = makeBatches(1, [&](auto) {
+      return makeRowVector(
+          {"u0", "u1"},
+          {
+              makeNullableFlatVector<int32_t>({}),
+              makeFlatVector<int64_t>({}),
+          });
+    });
+
+    createDuckDbTable("t", probeVectors);
+    createDuckDbTable("u", buildVectors);
+
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .values(probeVectors)
+                    .hashJoin(
+                        {"t0"},
+                        {"u0"},
+                        PlanBuilder(planNodeIdGenerator)
+                            .values(buildVectors)
+                            .planNode(),
+                        "t1 > u1",
+                        {"t0", "t1", "match"},
+                        core::JoinType::kLeftSemiProject,
+                        true /* nullAware */)
+                    .planNode();
+
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .planNode(plan)
+        .referenceQuery(
+            "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE t1 > u1) FROM t")
+        .injectSpill(false)
+        .run();
+  }
+
+  // Test 2: All probe keys are NULL with filter
+  // Tests Type B indeterminate logic exclusively
+  {
+    auto probeVectors = makeBatches(1, [&](auto) {
+      return makeRowVector(
+          {"t0", "t1"},
+          {
+              makeNullableFlatVector<int32_t>(
+                  {std::nullopt, std::nullopt, std::nullopt}),
+              makeFlatVector<int64_t>({10, 20, 30}),
+          });
+    });
+
+    auto buildVectors = makeBatches(1, [&](auto) {
+      return makeRowVector(
+          {"u0", "u1"},
+          {
+              makeNullableFlatVector<int32_t>({1, 2, std::nullopt}),
+              makeFlatVector<int64_t>({15, 25, 35}),
+          });
+    });
+
+    createDuckDbTable("t", probeVectors);
+    createDuckDbTable("u", buildVectors);
+
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .values(probeVectors)
+                    .hashJoin(
+                        {"t0"},
+                        {"u0"},
+                        PlanBuilder(planNodeIdGenerator)
+                            .values(buildVectors)
+                            .planNode(),
+                        "t1 < u1",
+                        {"t0", "t1", "match"},
+                        core::JoinType::kLeftSemiProject,
+                        true /* nullAware */)
+                    .planNode();
+
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .planNode(plan)
+        .referenceQuery(
+            "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE t1 < u1) FROM t")
+        .injectSpill(false)
+        .run();
+  }
+
+  // Test 3: All build keys are NULL with filter
+  // Tests Type A indeterminate logic (non-null probe keys that don't match
+  // because build has only NULL keys, but filter passes for some pairs)
+  {
+    auto probeVectors = makeBatches(1, [&](auto) {
+      return makeRowVector(
+          {"t0", "t1"},
+          {
+              makeNullableFlatVector<int32_t>({1, 2, 3, std::nullopt}),
+              makeFlatVector<int64_t>({10, 20, 30, 5}),
+          });
+    });
+
+    auto buildVectors = makeBatches(1, [&](auto) {
+      return makeRowVector(
+          {"u0", "u1"},
+          {
+              makeNullableFlatVector<int32_t>(
+                  {std::nullopt, std::nullopt, std::nullopt}),
+              makeFlatVector<int64_t>({15, 25, 35}),
+          });
+    });
+
+    createDuckDbTable("t", probeVectors);
+    createDuckDbTable("u", buildVectors);
+
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .values(probeVectors)
+                    .hashJoin(
+                        {"t0"},
+                        {"u0"},
+                        PlanBuilder(planNodeIdGenerator)
+                            .values(buildVectors)
+                            .planNode(),
+                        "t1 < u1",
+                        {"t0", "t1", "match"},
+                        core::JoinType::kLeftSemiProject,
+                        true /* nullAware */)
+                    .planNode();
+
+    // For this test:
+    // - Probe keys {1, 2, 3} have no key match (build has only NULL keys)
+    //   Filter t1 < u1 passes for (10<15, 20<25, 30<35), so these are
+    //   indeterminate (NULL)
+    // - Probe key NULL with t1=5: filter 5 < {15,25,35} all pass, so
+    //   indeterminate (NULL)
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .planNode(plan)
+        .referenceQuery(
+            "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE t1 < u1) FROM t")
+        .injectSpill(false)
+        .run();
+  }
+
+  // Test 4: No nulls at all with null-aware + filter
+  // Should behave like non-null-aware: all TRUE or FALSE, no NULLs
+  {
+    auto probeVectors = makeBatches(1, [&](auto) {
+      return makeRowVector(
+          {"t0", "t1"},
+          {
+              makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
+              makeFlatVector<int64_t>({10, 20, 30, 40, 50}),
+          });
+    });
+
+    auto buildVectors = makeBatches(1, [&](auto) {
+      return makeRowVector(
+          {"u0", "u1"},
+          {
+              makeFlatVector<int32_t>({1, 2, 3}),
+              makeFlatVector<int64_t>({15, 25, 35}),
+          });
+    });
+
+    createDuckDbTable("t", probeVectors);
+    createDuckDbTable("u", buildVectors);
+
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .values(probeVectors)
+                    .hashJoin(
+                        {"t0"},
+                        {"u0"},
+                        PlanBuilder(planNodeIdGenerator)
+                            .values(buildVectors)
+                            .planNode(),
+                        "t1 < u1",
+                        {"t0", "t1", "match"},
+                        core::JoinType::kLeftSemiProject,
+                        true /* nullAware */)
+                    .planNode();
+
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .planNode(plan)
+        .referenceQuery(
+            "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE t1 < u1) FROM t")
+        .injectSpill(false)
+        .run();
+  }
+
+  // Test 5: Filter that always fails (1 = 0)
+  // All results should be FALSE (or NULL for null-key probe rows)
+  {
+    auto probeVectors = makeBatches(1, [&](auto) {
+      return makeRowVector(
+          {"t0", "t1"},
+          {
+              makeNullableFlatVector<int32_t>({1, 2, std::nullopt, 4}),
+              makeFlatVector<int64_t>({10, 20, 30, 40}),
+          });
+    });
+
+    auto buildVectors = makeBatches(1, [&](auto) {
+      return makeRowVector(
+          {"u0", "u1"},
+          {
+              makeNullableFlatVector<int32_t>({1, 2, std::nullopt}),
+              makeFlatVector<int64_t>({15, 25, 35}),
+          });
+    });
+
+    createDuckDbTable("t", probeVectors);
+    createDuckDbTable("u", buildVectors);
+
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .values(probeVectors)
+                    .hashJoin(
+                        {"t0"},
+                        {"u0"},
+                        PlanBuilder(planNodeIdGenerator)
+                            .values(buildVectors)
+                            .planNode(),
+                        "1 = 0", // Always false filter
+                        {"t0", "t1", "match"},
+                        core::JoinType::kLeftSemiProject,
+                        true /* nullAware */)
+                    .planNode();
+
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .planNode(plan)
+        .referenceQuery(
+            "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE 1 = 0) FROM t")
+        .injectSpill(false)
+        .run();
+  }
+
+  // Test 6: Filter that always passes (1 = 1)
+  // Should behave like no filter case
+  {
+    auto probeVectors = makeBatches(1, [&](auto) {
+      return makeRowVector(
+          {"t0", "t1"},
+          {
+              makeNullableFlatVector<int32_t>({1, 2, std::nullopt, 4}),
+              makeFlatVector<int64_t>({10, 20, 30, 40}),
+          });
+    });
+
+    auto buildVectors = makeBatches(1, [&](auto) {
+      return makeRowVector(
+          {"u0", "u1"},
+          {
+              makeNullableFlatVector<int32_t>({1, 2, std::nullopt}),
+              makeFlatVector<int64_t>({15, 25, 35}),
+          });
+    });
+
+    createDuckDbTable("t", probeVectors);
+    createDuckDbTable("u", buildVectors);
+
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .values(probeVectors)
+                    .hashJoin(
+                        {"t0"},
+                        {"u0"},
+                        PlanBuilder(planNodeIdGenerator)
+                            .values(buildVectors)
+                            .planNode(),
+                        "1 = 1", // Always true filter
+                        {"t0", "t1", "match"},
+                        core::JoinType::kLeftSemiProject,
+                        true /* nullAware */)
+                    .planNode();
+
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .planNode(plan)
+        .referenceQuery(
+            "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE 1 = 1) FROM t")
+        .injectSpill(false)
+        .run();
+  }
+
+  // Test 7: Multiple build batches with different null distributions
+  // Some batches have null keys, some don't
+  {
+    auto probeVectors = makeBatches(1, [&](auto) {
+      return makeRowVector(
+          {"t0", "t1"},
+          {
+              makeNullableFlatVector<int32_t>({1, 2, 3, std::nullopt, 5}),
+              makeFlatVector<int64_t>({10, 20, 30, 40, 50}),
+          });
+    });
+
+    // First batch: no nulls
+    std::vector<RowVectorPtr> buildVectors;
+    buildVectors.push_back(makeRowVector(
+        {"u0", "u1"},
+        {
+            makeFlatVector<int32_t>({1, 2}),
+            makeFlatVector<int64_t>({15, 25}),
+        }));
+    // Second batch: has nulls
+    buildVectors.push_back(makeRowVector(
+        {"u0", "u1"},
+        {
+            makeNullableFlatVector<int32_t>({3, std::nullopt}),
+            makeFlatVector<int64_t>({35, 45}),
+        }));
+    // Third batch: no nulls again
+    buildVectors.push_back(makeRowVector(
+        {"u0", "u1"},
+        {
+            makeFlatVector<int32_t>({5}),
+            makeFlatVector<int64_t>({55}),
+        }));
+
+    createDuckDbTable("t", probeVectors);
+    createDuckDbTable("u", buildVectors);
+
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .values(probeVectors)
+                    .hashJoin(
+                        {"t0"},
+                        {"u0"},
+                        PlanBuilder(planNodeIdGenerator)
+                            .values(buildVectors)
+                            .planNode(),
+                        "t1 < u1",
+                        {"t0", "t1", "match"},
+                        core::JoinType::kLeftSemiProject,
+                        true /* nullAware */)
+                    .planNode();
+
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .planNode(plan)
+        .referenceQuery(
+            "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE t1 < u1) FROM t")
         .injectSpill(false)
         .run();
   }
