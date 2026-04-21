@@ -428,6 +428,28 @@ target_link_libraries(
   gtest_main
 )
 
+# CUDA compile test: verify that Velox function headers compile under nvcc
+# with shadow headers. This is a compile-only target (no runtime test).
+# The shadow include path MUST come before the Velox source root so that
+# gpu_shadows/velox/... intercepts the real Velox headers.
+add_library(velox_cudf_shadow_compile_test OBJECT GpuShadowCompileTest.cu)
+
+set_target_properties(
+  velox_cudf_shadow_compile_test PROPERTIES
+  CUDA_STANDARD 20
+  CUDA_SEPARABLE_COMPILATION ON
+)
+
+target_include_directories(
+  velox_cudf_shadow_compile_test BEFORE PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../functions/gpu_shadows
+)
+
+target_compile_options(
+  velox_cudf_shadow_compile_test PRIVATE
+  $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
+)
+
 add_subdirectory(utils)
 
 if(${VELOX_ENABLE_SPARK_FUNCTIONS})

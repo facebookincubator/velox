@@ -12,4 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Header-only for now; CUDA library targets will be added in later PRs.
+# Header-only interface library that provides the gpu_shadows/ include
+# path to any target that links against it.
+
+add_library(velox_cudf_gpu_shadows INTERFACE)
+
+target_include_directories(
+  velox_cudf_gpu_shadows
+  BEFORE
+  INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/gpu_shadows
+)
