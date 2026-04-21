@@ -204,9 +204,11 @@ void CudfHashJoinBuild::doNoMoreInput() {
   };
 
   if (CudfConfig::getInstance().debugEnabled) {
-    VLOG(1) << "CudfHashJoinBuild: build batches";
-    VLOG(1) << "Build batches number of columns: "
-            << inputs_[0]->getTableView().num_columns();
+    VLOG(1) << "CudfHashJoinBuild: build batches count: " << inputs_.size();
+    if (!inputs_.empty()) {
+      VLOG(1) << "Build batches number of columns: "
+              << inputs_[0]->getTableView().num_columns();
+    }
     for (auto i = 0; i < inputs_.size(); i++) {
       VLOG(1) << "Build batch " << i
               << ": number of rows: " << inputs_[i]->getTableView().num_rows();
@@ -224,7 +226,7 @@ void CudfHashJoinBuild::doNoMoreInput() {
   for (auto const& tbl : tbls) {
     VELOX_CHECK_NOT_NULL(tbl);
   }
-  if (CudfConfig::getInstance().debugEnabled) {
+  if (CudfConfig::getInstance().debugEnabled && !tbls.empty()) {
     VLOG(1) << "Build table number of columns: " << tbls[0]->num_columns();
     for (auto i = 0; i < tbls.size(); i++) {
       VLOG(1) << "Build table " << i
