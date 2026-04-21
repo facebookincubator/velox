@@ -23,12 +23,13 @@ target_include_directories(
   INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/gpu_shadows
 )
 
-# GPU function registry and dispatch (host-side, compiled with g++)
+# GPU function registry, dispatch, and expression evaluator (host-side)
 add_library(
   velox_cudf_gpu_registry
   GpuFunctionRegistry.cpp
   CudfFallbackFunction.cpp
   GpuFunctionDispatch.cpp
+  GpuExprEvaluator.cpp
 )
 
 target_link_libraries(
