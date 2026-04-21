@@ -130,18 +130,10 @@ std::unique_ptr<cudf::scalar> castDecimalScalar(
         "castDecimalScalar: target must be DECIMAL64 or DECIMAL128");
     if (targetType.id() == cudf::type_id::DECIMAL128) {
       return std::make_unique<cudf::fixed_point_scalar<numeric::decimal128>>(
-          0,
-          numeric::scale_type{targetType.scale()},
-          false,
-          stream,
-          mr);
+          0, numeric::scale_type{targetType.scale()}, false, stream, mr);
     }
     return std::make_unique<cudf::fixed_point_scalar<numeric::decimal64>>(
-        0,
-        numeric::scale_type{targetType.scale()},
-        false,
-        stream,
-        mr);
+        0, numeric::scale_type{targetType.scale()}, false, stream, mr);
   }
 
   __int128_t rep;

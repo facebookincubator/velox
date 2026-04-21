@@ -166,7 +166,8 @@ __int128_t getDecimalScalarValue(
   return static_cast<__int128_t>(dec.value(stream));
 }
 
-/// Column of \p outputType with \p size rows, all null (e.g. NULL scalar operand).
+/// Column of \p outputType with \p size rows, all null (e.g. NULL scalar
+/// operand).
 std::unique_ptr<cudf::column> makeAllNullDecimalColumn(
     cudf::data_type outputType,
     cudf::size_type size,
