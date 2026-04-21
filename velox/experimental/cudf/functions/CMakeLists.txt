@@ -37,3 +37,29 @@ target_link_libraries(
   PUBLIC
   cudf::cudf
 )
+
+# Presto function registrations (CUDA, compiled with nvcc)
+add_library(velox_cudf_gpu_presto_functions GpuPrestoFunctions.cu)
+
+set_target_properties(
+  velox_cudf_gpu_presto_functions PROPERTIES
+  CUDA_STANDARD 20
+  CUDA_SEPARABLE_COMPILATION ON
+)
+
+target_include_directories(
+  velox_cudf_gpu_presto_functions BEFORE PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/gpu_shadows
+)
+
+target_compile_options(
+  velox_cudf_gpu_presto_functions PRIVATE
+  $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
+)
+
+target_link_libraries(
+  velox_cudf_gpu_presto_functions
+  PUBLIC
+  velox_cudf_gpu_registry
+  cudf::cudf
+)
