@@ -914,7 +914,7 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       "and",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
         return std::make_shared<LogicalFunction>(
-            expr, cudf::binary_operator::LOGICAL_AND);
+            expr, cudf::binary_operator::NULL_LOGICAL_AND);
       },
       {FunctionSignatureBuilder()
            .returnType("boolean")
@@ -926,7 +926,7 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       "or",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
         return std::make_shared<LogicalFunction>(
-            expr, cudf::binary_operator::LOGICAL_OR);
+            expr, cudf::binary_operator::NULL_LOGICAL_OR);
       },
       {FunctionSignatureBuilder()
            .returnType("boolean")
