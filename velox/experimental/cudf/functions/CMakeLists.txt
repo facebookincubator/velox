@@ -22,3 +22,12 @@ target_include_directories(
   BEFORE
   INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/gpu_shadows
 )
+
+# GPU function registry (host-side, compiled with g++)
+add_library(velox_cudf_gpu_registry GpuFunctionRegistry.cpp)
+
+target_link_libraries(
+  velox_cudf_gpu_registry
+  PUBLIC
+  cudf::cudf
+)
