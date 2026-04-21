@@ -1271,4 +1271,99 @@ TEST_F(CudfSimpleFilterProjectTest, unaryMathFunctions) {
   testUnaryFunction("abs(c0)", -5.5, 5.5);
 }
 
+TEST_F(CudfSimpleFilterProjectTest, nullLogicalAnd) {
+  const auto rowType = ROW({{"c0", BOOLEAN()}, {"c1", BOOLEAN()}});
+  // All 9 combinations of {true, false, null} x {true, false, null}.
+  auto c0 = makeNullableFlatVector<bool>({
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      std::nullopt,
+      std::nullopt,
+      std::nullopt,
+  });
+  auto c1 = makeNullableFlatVector<bool>({
+      true,
+      false,
+      std::nullopt,
+      true,
+      false,
+      std::nullopt,
+      true,
+      false,
+      std::nullopt,
+  });
+  auto input = makeRowVector({c0, c1});
+  auto exprSet = compileExpression("c0 AND c1", rowType);
+  auto expected =
+      this->functions::test::FunctionBaseTest::evaluate(*exprSet, input);
+  auto actual = evaluate(*exprSet, input);
+  facebook::velox::test::assertEqualVectors(expected, actual);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, nullLogicalOr) {
+  const auto rowType = ROW({{"c0", BOOLEAN()}, {"c1", BOOLEAN()}});
+  auto c0 = makeNullableFlatVector<bool>({
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      std::nullopt,
+      std::nullopt,
+      std::nullopt,
+  });
+  auto c1 = makeNullableFlatVector<bool>({
+      true,
+      false,
+      std::nullopt,
+      true,
+      false,
+      std::nullopt,
+      true,
+      false,
+      std::nullopt,
+  });
+  auto input = makeRowVector({c0, c1});
+  auto exprSet = compileExpression("c0 OR c1", rowType);
+  auto expected =
+      this->functions::test::FunctionBaseTest::evaluate(*exprSet, input);
+  auto actual = evaluate(*exprSet, input);
+  facebook::velox::test::assertEqualVectors(expected, actual);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, nullLogicalAndThreeArg) {
+  const auto rowType =
+      ROW({{"c0", BOOLEAN()}, {"c1", BOOLEAN()}, {"c2", BOOLEAN()}});
+  // (true AND null) AND false -> false; (null AND true) AND false -> false.
+  auto c0 = makeNullableFlatVector<bool>({true, std::nullopt, false});
+  auto c1 = makeNullableFlatVector<bool>({std::nullopt, true, true});
+  auto c2 = makeNullableFlatVector<bool>({false, false, true});
+  auto input = makeRowVector({c0, c1, c2});
+  auto exprSet = compileExpression("c0 AND c1 AND c2", rowType);
+  auto expected =
+      this->functions::test::FunctionBaseTest::evaluate(*exprSet, input);
+  auto actual = evaluate(*exprSet, input);
+  facebook::velox::test::assertEqualVectors(expected, actual);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, nullLogicalOrThreeArg) {
+  const auto rowType =
+      ROW({{"c0", BOOLEAN()}, {"c1", BOOLEAN()}, {"c2", BOOLEAN()}});
+  // (false OR null) OR true -> true; (null OR false) OR true -> true.
+  auto c0 = makeNullableFlatVector<bool>({false, std::nullopt, std::nullopt});
+  auto c1 = makeNullableFlatVector<bool>({std::nullopt, false, false});
+  auto c2 = makeNullableFlatVector<bool>({true, true, true});
+  auto input = makeRowVector({c0, c1, c2});
+  auto exprSet = compileExpression("c0 OR c1 OR c2", rowType);
+  auto expected =
+      this->functions::test::FunctionBaseTest::evaluate(*exprSet, input);
+  auto actual = evaluate(*exprSet, input);
+  facebook::velox::test::assertEqualVectors(expected, actual);
+}
+
 } // namespace
