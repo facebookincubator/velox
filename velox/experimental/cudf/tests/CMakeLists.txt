@@ -550,6 +550,35 @@ add_test(
 
 set_tests_properties(velox_cudf_gpu_fallback_test PROPERTIES LABELS cuda_driver TIMEOUT 300)
 
+# Bitmask operations + special forms test
+add_executable(velox_cudf_gpu_bitmask_ops_test GpuBitmaskOpsTest.cu)
+
+set_target_properties(
+  velox_cudf_gpu_bitmask_ops_test PROPERTIES
+  CUDA_STANDARD 20
+  CUDA_SEPARABLE_COMPILATION ON
+)
+
+target_compile_options(
+  velox_cudf_gpu_bitmask_ops_test PRIVATE
+  $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
+)
+
+target_link_libraries(
+  velox_cudf_gpu_bitmask_ops_test
+  cudf::cudf
+  gtest
+  gtest_main
+)
+
+add_test(
+  NAME velox_cudf_gpu_bitmask_ops_test
+  COMMAND velox_cudf_gpu_bitmask_ops_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+set_tests_properties(velox_cudf_gpu_bitmask_ops_test PROPERTIES LABELS cuda_driver TIMEOUT 300)
+
 # GpuColumnIO device test: round-trip read/write via CUDA kernels
 add_executable(velox_cudf_gpu_column_io_test GpuColumnIOTest.cu)
 
