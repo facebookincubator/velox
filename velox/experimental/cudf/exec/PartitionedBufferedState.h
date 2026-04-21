@@ -20,14 +20,103 @@
 #include <cudf/hashing.hpp>
 #include <cudf/partitioning.hpp>
 
+#include <deque>
 #include <memory>
 #include <optional>
 #include <vector>
 
 namespace facebook::velox::cudf_velox {
 
-// Owns a recursive hash-partition tree for operators that must buffer or
-// partitioned state until all input is received.
+struct PartitionSpec {
+  int32_t numPartitions;
+  std::vector<cudf::size_type> keyIndices;
+  cudf::hash_id hashId{cudf::hash_id::HASH_MURMUR3};
+  uint32_t seed{cudf::DEFAULT_HASH_SEED};
+};
+
+struct InputChunk {
+  InputChunk() : stream(rmm::cuda_stream_default) {}
+
+  InputChunk(
+      memory::MemoryPool* pool,
+      TypePtr type,
+      cudf::table_view view,
+      rmm::cuda_stream_view stream,
+      CudfVectorPtr owner)
+      : pool(pool),
+        type(std::move(type)),
+        view(view),
+        stream(stream),
+        owner(std::move(owner)) {}
+
+  memory::MemoryPool* pool{nullptr};
+  TypePtr type;
+  cudf::table_view view;
+  rmm::cuda_stream_view stream;
+  CudfVectorPtr owner;
+
+  size_t size() const {
+    return static_cast<size_t>(view.num_rows());
+  }
+
+  bool empty() const {
+    return size() == 0;
+  }
+};
+
+// Serve as the opaque base type for strategy-owned leaf state.
+class BufferedState {
+ public:
+  virtual ~BufferedState() = default;
+};
+
+class BufferedStateOps {
+ public:
+  virtual ~BufferedStateOps() = default;
+
+  // Convert one raw input batch into a prepared chunk that PBS can route.
+  virtual InputChunk prepareInput(CudfVectorPtr rawInput) = 0;
+
+  // Return a cheap, conservative upper bound on the row count after adding
+  // `input` to `leaf`.
+  virtual size_t estimatedMergedRowUpperBound(
+      const BufferedState& leaf,
+      const InputChunk& input) const = 0;
+
+  // Create a new leaf from the first chunk routed to it.
+  virtual std::unique_ptr<BufferedState> createLeaf(InputChunk input) = 0;
+
+  // Absorb one prepared chunk into an existing leaf.
+  virtual void addInputToLeaf(BufferedState& leaf, InputChunk input) = 0;
+
+  // Report the logical row count PBS should track for this leaf.
+  virtual size_t leafRowCount(const BufferedState& leaf) const = 0;
+
+  // Report the approximate flat size of this leaf state in bytes.
+  // TODO (dm): This should be part of BufferedState
+  virtual uint64_t leafFlatSize(const BufferedState& leaf) const = 0;
+
+  // Partition one prepared chunk according to an internal node's partition
+  // spec and return one child chunk per partition.
+  virtual std::vector<InputChunk> partitionInput(
+      InputChunk input,
+      const PartitionSpec& spec) = 0;
+
+  // Split one overflowing leaf into child leaves according to `spec` and
+  // return one child state per partition.
+  virtual std::vector<std::unique_ptr<BufferedState>> repartitionLeaf(
+      std::unique_ptr<BufferedState> leaf,
+      const PartitionSpec& spec) = 0;
+
+  // Finalize one leaf and return one output batch.
+  virtual CudfVectorPtr finalizeLeaf(std::unique_ptr<BufferedState> leaf) = 0;
+
+  // Return partition-key indices in the prepared input schema.
+  virtual const std::vector<cudf::size_type>& keyIndices() const = 0;
+};
+
+// Owns a recursive hash-partition tree for operators that must buffer grouped
+// state until all input is received.
 //
 // PBS only manages the partition tree and leaf row limits. It does not know
 // the concrete type of state stored in a leaf. The caller supplies a
@@ -46,8 +135,8 @@ namespace facebook::velox::cudf_velox {
 // one finalized leaf at a time at the end.
 //
 // Typical usage:
-// 1. Define a `LeafStateOps` implementation for the operator.
-// 2. Store any operator-specific state inside a `LeafState` subclass.
+// 1. Define a `BufferedStateOps` implementation for the operator.
+// 2. Store any operator-specific state inside a `BufferedState` subclass.
 // 3. Construct PBS with that strategy and a max leaf row count.
 // 4. Call `addInput()` for each incoming `CudfVector`.
 // 5. At the end, call `drainNextOutput()` until it returns `nullptr`.
@@ -57,51 +146,9 @@ namespace facebook::velox::cudf_velox {
 // groupby to avoid eager materialization when a permuted view is sufficient.
 class PartitionedBufferedState {
  public:
-  struct PartitionSpec {
-    int32_t numPartitions;
-    std::vector<cudf::size_type> keyIndices;
-    cudf::hash_id hashId{cudf::hash_id::HASH_MURMUR3};
-    uint32_t seed{cudf::DEFAULT_HASH_SEED};
-  };
-
-  struct InputChunk {
-    InputChunk() : stream(rmm::cuda_stream_default) {}
-
-    InputChunk(
-        memory::MemoryPool* pool,
-        TypePtr type,
-        cudf::table_view view,
-        rmm::cuda_stream_view stream,
-        CudfVectorPtr owner)
-        : pool(pool),
-          type(std::move(type)),
-          view(view),
-          stream(stream),
-          owner(std::move(owner)) {}
-
-    memory::MemoryPool* pool{nullptr};
-    TypePtr type;
-    cudf::table_view view;
-    rmm::cuda_stream_view stream;
-    CudfVectorPtr owner;
-
-    size_t size() const {
-      return static_cast<size_t>(view.num_rows());
-    }
-
-    bool empty() const {
-      return size() == 0;
-    }
-  };
-
-  class LeafState {
-   public:
-    virtual ~LeafState() = default;
-  };
-
   struct Node {
     size_t leafRows{0};
-    std::unique_ptr<LeafState> leafState;
+    std::unique_ptr<BufferedState> leafState;
     std::optional<PartitionSpec> split;
     std::vector<std::unique_ptr<Node>> children;
 
@@ -110,49 +157,8 @@ class PartitionedBufferedState {
     }
   };
 
-  class LeafStateOps {
-   public:
-    virtual ~LeafStateOps() = default;
-
-    // Convert one raw input batch into a prepared chunk that PBS can route.
-    virtual InputChunk prepareInput(CudfVectorPtr rawInput) = 0;
-
-    // Return a cheap, conservative upper bound on the row count after adding
-    // `input` to `leaf`.
-    virtual size_t estimatedMergedRowUpperBound(
-        const LeafState& leaf,
-        const InputChunk& input) const = 0;
-
-    // Create a new leaf from the first chunk routed to it.
-    virtual std::unique_ptr<LeafState> createLeaf(InputChunk input) = 0;
-
-    // Absorb one prepared chunk into an existing leaf.
-    virtual void addInputToLeaf(LeafState& leaf, InputChunk input) = 0;
-
-    // Report the logical row count PBS should track for this leaf.
-    virtual size_t leafRowCount(const LeafState& leaf) const = 0;
-
-    // Partition one prepared chunk according to an internal node's partition
-    // spec and return one child chunk per partition.
-    virtual std::vector<InputChunk> partitionInput(
-        InputChunk input,
-        const PartitionSpec& spec) = 0;
-
-    // Split one overflowing leaf into child leaves according to `spec` and
-    // return one child state per partition.
-    virtual std::vector<std::unique_ptr<LeafState>> repartitionLeaf(
-        std::unique_ptr<LeafState> leaf,
-        const PartitionSpec& spec) = 0;
-
-    // Finalize one leaf and return one output batch.
-    virtual CudfVectorPtr finalizeLeaf(std::unique_ptr<LeafState> leaf) = 0;
-
-    // Return partition-key indices in the prepared input schema.
-    virtual const std::vector<cudf::size_type>& keyIndices() const = 0;
-  };
-
   PartitionedBufferedState(
-      std::unique_ptr<LeafStateOps> ops,
+      std::unique_ptr<BufferedStateOps> ops,
       size_t maxRowsPerLeaf,
       uint32_t initialHashSeed = cudf::DEFAULT_HASH_SEED);
 
@@ -179,10 +185,44 @@ class PartitionedBufferedState {
       InputChunk input,
       const PartitionSpec& spec);
 
-  std::unique_ptr<LeafStateOps> ops_;
+  std::unique_ptr<BufferedStateOps> ops_;
   const size_t maxRowsPerLeaf_;
   std::unique_ptr<Node> root_;
   uint32_t nextHashSeed_;
+};
+
+// Owns one active leaf for operators that may flush early instead of
+// repartitioning on overflow.
+//
+// Use this manager for partial and intermediate aggregation steps. It reuses
+// the same `BufferedStateOps` contract as PBS, but emits a leaf when it becomes
+// full instead of splitting it into child partitions.
+class FlushableBufferedState {
+ public:
+  FlushableBufferedState(
+      std::unique_ptr<BufferedStateOps> ops,
+      size_t flushRowLimit,
+      uint64_t flushByteLimit);
+
+  void addInput(CudfVectorPtr rawInput);
+
+  CudfVectorPtr getOutput(bool noMoreInput);
+
+  bool empty() const;
+
+ private:
+  bool shouldFlushActiveLeaf() const;
+
+  CudfVectorPtr popPendingOutput();
+
+  void finalizeActiveLeaf();
+
+  std::unique_ptr<BufferedStateOps> ops_;
+  const size_t flushRowLimit_;
+  const uint64_t flushByteLimit_;
+  size_t currentLeafRows_{0};
+  std::unique_ptr<BufferedState> currentLeaf_;
+  std::deque<CudfVectorPtr> pendingOutputs_;
 };
 
 } // namespace facebook::velox::cudf_velox

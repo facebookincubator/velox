@@ -38,7 +38,7 @@ bool nodeEmpty(const PartitionedBufferedState::Node& node) {
 } // namespace
 
 PartitionedBufferedState::PartitionedBufferedState(
-    std::unique_ptr<LeafStateOps> ops,
+    std::unique_ptr<BufferedStateOps> ops,
     size_t maxRowsPerLeaf,
     uint32_t initialHashSeed)
     : ops_(std::move(ops)),
@@ -120,7 +120,7 @@ void PartitionedBufferedState::splitLeaf(Node& node, InputChunk bufferedInput) {
 
   auto storedPartitions = node.leafState
       ? ops_->repartitionLeaf(std::move(node.leafState), spec)
-      : std::vector<std::unique_ptr<LeafState>>(spec.numPartitions);
+      : std::vector<std::unique_ptr<BufferedState>>(spec.numPartitions);
   auto incomingPartitions = partitionInput(std::move(bufferedInput), spec);
 
   size_t nonEmptyChildren = 0;
@@ -182,8 +182,7 @@ CudfVectorPtr PartitionedBufferedState::drainNextOutput(Node& node) {
   return ops_->finalizeLeaf(std::move(node.leafState));
 }
 
-PartitionedBufferedState::PartitionSpec
-PartitionedBufferedState::makePartitionSpec(size_t totalRows) {
+PartitionSpec PartitionedBufferedState::makePartitionSpec(size_t totalRows) {
   VELOX_CHECK_GT(totalRows, maxRowsPerLeaf_);
 
   const auto requiredPartitions =
@@ -205,12 +204,112 @@ void PartitionedBufferedState::ensureLeafWithinLimit(Node& node) {
   }
 }
 
-std::vector<PartitionedBufferedState::InputChunk>
-PartitionedBufferedState::partitionInput(
+std::vector<InputChunk> PartitionedBufferedState::partitionInput(
     InputChunk input,
     const PartitionSpec& spec) {
   return input.empty() ? std::vector<InputChunk>(spec.numPartitions)
                        : ops_->partitionInput(std::move(input), spec);
+}
+
+FlushableBufferedState::FlushableBufferedState(
+    std::unique_ptr<BufferedStateOps> ops,
+    size_t flushRowLimit,
+    uint64_t flushByteLimit)
+    : ops_(std::move(ops)),
+      flushRowLimit_(flushRowLimit),
+      flushByteLimit_(flushByteLimit) {
+  VELOX_CHECK_NOT_NULL(ops_);
+  VELOX_CHECK_GT(flushRowLimit_, 0);
+}
+
+void FlushableBufferedState::addInput(CudfVectorPtr rawInput) {
+  if (!rawInput || rawInput->size() == 0) {
+    return;
+  }
+
+  auto chunk = ops_->prepareInput(std::move(rawInput));
+  if (chunk.empty()) {
+    return;
+  }
+
+  if (!currentLeaf_) {
+    currentLeaf_ = ops_->createLeaf(std::move(chunk));
+    if (currentLeaf_) {
+      currentLeafRows_ = ops_->leafRowCount(*currentLeaf_);
+      if (currentLeafRows_ > flushRowLimit_) {
+        finalizeActiveLeaf();
+      }
+    }
+    return;
+  }
+
+  const auto projectedRows =
+      ops_->estimatedMergedRowUpperBound(*currentLeaf_, chunk);
+  if (projectedRows > flushRowLimit_) {
+    finalizeActiveLeaf();
+    currentLeaf_ = ops_->createLeaf(std::move(chunk));
+    if (currentLeaf_) {
+      currentLeafRows_ = ops_->leafRowCount(*currentLeaf_);
+      if (currentLeafRows_ > flushRowLimit_) {
+        finalizeActiveLeaf();
+      }
+    }
+    return;
+  }
+
+  ops_->addInputToLeaf(*currentLeaf_, std::move(chunk));
+  currentLeafRows_ = ops_->leafRowCount(*currentLeaf_);
+  if (currentLeafRows_ > flushRowLimit_) {
+    finalizeActiveLeaf();
+  }
+}
+
+bool FlushableBufferedState::shouldFlushActiveLeaf() const {
+  return currentLeaf_ && ops_->leafFlatSize(*currentLeaf_) > flushByteLimit_;
+}
+
+CudfVectorPtr FlushableBufferedState::getOutput(bool noMoreInput) {
+  if (auto output = popPendingOutput()) {
+    return output;
+  }
+
+  if (shouldFlushActiveLeaf()) {
+    finalizeActiveLeaf();
+    return popPendingOutput();
+  }
+
+  if (noMoreInput && currentLeaf_) {
+    finalizeActiveLeaf();
+    return popPendingOutput();
+  }
+
+  return nullptr;
+}
+
+bool FlushableBufferedState::empty() const {
+  return !currentLeaf_ && pendingOutputs_.empty();
+}
+
+CudfVectorPtr FlushableBufferedState::popPendingOutput() {
+  if (pendingOutputs_.empty()) {
+    return nullptr;
+  }
+
+  auto output = std::move(pendingOutputs_.front());
+  pendingOutputs_.pop_front();
+  return output;
+}
+
+void FlushableBufferedState::finalizeActiveLeaf() {
+  if (!currentLeaf_) {
+    return;
+  }
+
+  currentLeafRows_ = 0;
+  auto output = ops_->finalizeLeaf(std::move(currentLeaf_));
+  if (output) {
+    pendingOutputs_.push_back(std::move(output));
+  }
 }
 
 } // namespace facebook::velox::cudf_velox

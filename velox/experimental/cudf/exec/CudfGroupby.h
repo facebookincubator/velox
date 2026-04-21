@@ -109,7 +109,7 @@ class CudfGroupby : public CudfOperatorBase {
       TypePtr const& outputType,
       rmm::cuda_stream_view stream);
 
-  CudfVectorPtr releaseAndResetBufferedResult();
+  CudfVectorPtr releasePartialOutput(CudfVectorPtr output);
 
   void computePartialGroupbyStreaming(CudfVectorPtr tbl);
   void computeFinalGroupbyStreaming(CudfVectorPtr tbl);
@@ -141,7 +141,7 @@ class CudfGroupby : public CudfOperatorBase {
   std::vector<CudfVectorPtr> inputs_;
   TypePtr inputType_;
   RowTypePtr bufferedResultType_;
-  CudfVectorPtr bufferedResult_;
+  std::unique_ptr<FlushableBufferedState> flushableBufferedState_;
   std::unique_ptr<PartitionedBufferedState> partitionedBufferedState_;
   size_t maxBufferedRows_{
       static_cast<size_t>(std::numeric_limits<cudf::size_type>::max())};
