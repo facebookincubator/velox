@@ -15,13 +15,21 @@
  */
 
 // GPU shadow for velox/type/SimpleFunctionApi.h
-// Provides IntegerVariable tag types and P1/S1..P4/S4 aliases
-// used by decimal function signatures.
+// Provides type variable tags, decimal parameter aliases, and Generic<>
+// used by function signatures.  No Velox core dependencies.
 #pragma once
 
 #include <cstddef>
 
 namespace facebook::velox {
+
+template <size_t id>
+struct TypeVariable {};
+
+using T1 = TypeVariable<1>;
+using T2 = TypeVariable<2>;
+using T3 = TypeVariable<3>;
+using T4 = TypeVariable<4>;
 
 template <size_t id>
 struct IntegerVariable {};
@@ -34,5 +42,15 @@ using S1 = IntegerVariable<5>;
 using S2 = IntegerVariable<6>;
 using S3 = IntegerVariable<7>;
 using S4 = IntegerVariable<8>;
+
+struct AnyType {};
+
+template <
+    typename T = AnyType,
+    bool comparable = false,
+    bool orderable = false>
+struct Generic {};
+
+using Any = Generic<>;
 
 } // namespace facebook::velox
