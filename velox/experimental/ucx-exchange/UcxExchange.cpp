@@ -31,7 +31,7 @@ UcxExchange::UcxExchange(
     DriverCtx* driverCtx,
     const std::shared_ptr<const core::PlanNode>& planNode,
     std::shared_ptr<UcxExchangeClient> ucxExchangeClient,
-    const std::string& operatorType)
+    std::string_view operatorType)
     : SourceOperator(
           driverCtx,
           planNode->outputType(),

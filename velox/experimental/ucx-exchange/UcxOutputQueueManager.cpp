@@ -61,14 +61,14 @@ void UcxOutputQueueManager::initializeTask(
 }
 
 void UcxOutputQueueManager::updateOutputBuffers(
-    const std::string& taskId,
+    std::string_view taskId,
     int numBuffers,
     bool noMoreBuffers) {
   getQueue(taskId)->updateOutputBuffers(numBuffers, noMoreBuffers);
 }
 
 void UcxOutputQueueManager::enqueue(
-    const std::string& taskId,
+    std::string_view taskId,
     int destination,
     std::unique_ptr<cudf::packed_columns> txData,
     int numRows) {
@@ -76,21 +76,21 @@ void UcxOutputQueueManager::enqueue(
 }
 
 bool UcxOutputQueueManager::checkBlocked(
-    const std::string& taskId,
+    std::string_view taskId,
     ContinueFuture* future) {
   return getQueue(taskId)->checkBlocked(future);
 }
 
-void UcxOutputQueueManager::noMoreData(const std::string& taskId) {
+void UcxOutputQueueManager::noMoreData(std::string_view taskId) {
   getQueue(taskId)->noMoreData();
 }
 
-bool UcxOutputQueueManager::isFinished(const std::string& taskId) {
+bool UcxOutputQueueManager::isFinished(std::string_view taskId) {
   return getQueue(taskId)->isFinished();
 }
 
 void UcxOutputQueueManager::deleteResults(
-    const std::string& taskId,
+    std::string_view taskId,
     int destination) {
   if (auto queue = getQueueIfExists(taskId)) {
     queue->deleteResults(destination);
@@ -98,20 +98,21 @@ void UcxOutputQueueManager::deleteResults(
 }
 
 void UcxOutputQueueManager::getData(
-    const std::string& taskId,
+    std::string_view taskId,
     int destination,
     UcxDataAvailableCallback notify) {
   std::shared_ptr<UcxOutputQueue> outputQueue;
   bool taskRemoved = false;
+  std::string taskIdStr{taskId};
   queues_.withLock([&](auto& queues) {
-    auto it = queues.find(taskId);
+    auto it = queues.find(taskIdStr);
     if (it == queues.end()) {
       // Check if the task was already removed. If so, don't re-create a
       // placeholder — the task is dead and any server calling getData() is a
       // stale leftover. Re-creating would produce an undersized queue that
       // crashes when deleteResults() is called for other destinations.
       if (removedTasks_.withLock(
-              [&](auto& removed) { return removed.count(taskId) > 0; })) {
+              [&](auto& removed) { return removed.count(taskIdStr) > 0; })) {
         VLOG(2) << "[QUEUE-MGR] task=" << taskId << " dest=" << destination
                 << " getData ignored (task already removed)";
         taskRemoved = true;
@@ -123,7 +124,7 @@ void UcxOutputQueueManager::getData(
           << "[QUEUE-MGR] task=" << taskId << " dest=" << destination
           << " creating placeholder queue (server arrived before task init)";
       outputQueue = std::make_shared<UcxOutputQueue>(nullptr, destination, 0);
-      queues[taskId] = outputQueue;
+      queues[taskIdStr] = outputQueue;
     } else {
       // queue exists.
       outputQueue = it->second;
@@ -139,28 +140,31 @@ void UcxOutputQueueManager::getData(
   outputQueue->getData(destination, notify);
 }
 
-bool UcxOutputQueueManager::canUseIntraNode(const std::string& taskId) {
+bool UcxOutputQueueManager::canUseIntraNode(std::string_view taskId) {
   auto queue = getQueueIfExists(taskId);
   return queue && queue->isInitialized() &&
       queue->kind() != core::PartitionedOutputNode::Kind::kBroadcast;
 }
 
-void UcxOutputQueueManager::removeTask(const std::string& taskId) {
+void UcxOutputQueueManager::removeTask(std::string_view taskId) {
+  std::string taskIdStr{taskId};
   auto queue =
       queues_.withLock([&](auto& queues) -> std::shared_ptr<UcxOutputQueue> {
-        auto it = queues.find(taskId);
+        auto it = queues.find(taskIdStr);
         if (it == queues.end()) {
           // Already removed. Clear any stale "removed" state so the task ID
           // can be reused.
-          removedTasks_.withLock([&](auto& removed) { removed.erase(taskId); });
+          removedTasks_.withLock(
+              [&](auto& removed) { removed.erase(taskIdStr); });
           return nullptr;
         }
         auto taskQueue = it->second;
-        queues.erase(taskId);
+        queues.erase(it);
         // Insert into removedTasks_ while still holding the queues_ lock
         // to prevent getData() from seeing a gap between erase and insert,
         // which would cause it to create a zombie placeholder queue.
-        removedTasks_.withLock([&](auto& removed) { removed.insert(taskId); });
+        removedTasks_.withLock(
+            [&](auto& removed) { removed.insert(taskIdStr); });
         return taskQueue;
       });
   VLOG(2) << "[QUEUE-MGR] removeTask=" << taskId
@@ -174,17 +178,19 @@ void UcxOutputQueueManager::removeTask(const std::string& taskId) {
 }
 
 std::shared_ptr<UcxOutputQueue> UcxOutputQueueManager::getQueueIfExists(
-    const std::string& taskId) {
+    std::string_view taskId) {
+  std::string taskIdStr{taskId};
   return queues_.withLock([&](auto& queues) {
-    auto it = queues.find(taskId);
+    auto it = queues.find(taskIdStr);
     return it == queues.end() ? nullptr : it->second;
   });
 }
 
 std::shared_ptr<UcxOutputQueue> UcxOutputQueueManager::getQueue(
-    const std::string& taskId) {
+    std::string_view taskId) {
+  std::string taskIdStr{taskId};
   return queues_.withLock([&](auto& queues) {
-    auto it = queues.find(taskId);
+    auto it = queues.find(taskIdStr);
     VELOX_CHECK(
         it != queues.end(), "Output cudf queue for task not found: {}", taskId);
     return it->second;
@@ -192,7 +198,7 @@ std::shared_ptr<UcxOutputQueue> UcxOutputQueueManager::getQueue(
 }
 
 std::optional<exec::OutputBuffer::Stats> UcxOutputQueueManager::stats(
-    const std::string& taskId) {
+    std::string_view taskId) {
   auto queue = getQueueIfExists(taskId);
   if (queue != nullptr) {
     return queue->stats();

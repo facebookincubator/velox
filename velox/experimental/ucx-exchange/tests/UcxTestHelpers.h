@@ -21,6 +21,7 @@
 #include <cudf/types.hpp>
 #include <folly/Executor.h>
 #include <memory>
+#include <string_view>
 #include <vector>
 #include "velox/common/memory/MemoryPool.h"
 #include "velox/core/QueryCtx.h"
@@ -52,7 +53,7 @@ const facebook::velox::RowTypePtr kTestRowType =
 /// @param rowType The row type to use for the task
 /// @return Shared pointer to the created Task
 std::shared_ptr<facebook::velox::exec::Task> createSourceTask(
-    const std::string& taskId,
+    std::string_view taskId,
     std::shared_ptr<facebook::velox::memory::MemoryPool> pool,
     facebook::velox::RowTypePtr rowType,
     uint64_t kMaxOutputBufferSize = FOUR_GBYTES);
@@ -68,7 +69,7 @@ std::shared_ptr<facebook::velox::exec::Task> createSourceTask(
 /// exchange node in this task's plan fragment.
 /// @return Shared pointer to the created Task
 std::shared_ptr<facebook::velox::exec::Task> createExchangeTask(
-    const std::string& taskId,
+    std::string_view taskId,
     facebook::velox::RowTypePtr rowType,
     int partitionId,
     core::PlanNodeId& exchangeNodeId);
@@ -86,7 +87,7 @@ std::shared_ptr<facebook::velox::exec::Task> createExchangeTask(
 /// @param kMaxOutputBufferSize Maximum output buffer size
 /// @return Shared pointer to the created Task
 std::shared_ptr<facebook::velox::exec::Task> createPartitionedOutputTask(
-    const std::string& taskId,
+    std::string_view taskId,
     std::shared_ptr<facebook::velox::memory::MemoryPool> pool,
     facebook::velox::RowTypePtr rowType,
     int numPartitions,

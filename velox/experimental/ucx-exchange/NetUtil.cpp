@@ -22,12 +22,13 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 
 #include <glog/logging.h>
 
 // Helper: resolve a hostname/IP string into a set of stringified addresses
-static std::set<std::string> resolveHost(const std::string& host) {
+static std::set<std::string> resolveHost(std::string_view host) {
   std::set<std::string> results;
   addrinfo hints{}, *res, *p;
 
@@ -35,7 +36,8 @@ static std::set<std::string> resolveHost(const std::string& host) {
   hints.ai_socktype = SOCK_STREAM; // Any type is fine
   hints.ai_flags = AI_ADDRCONFIG; // Use configured address families
 
-  int status = getaddrinfo(host.c_str(), nullptr, &hints, &res);
+  std::string hostStr{host};
+  int status = getaddrinfo(hostStr.c_str(), nullptr, &hints, &res);
   if (status != 0) {
     // Could not resolve
     return results;
@@ -63,7 +65,7 @@ static std::set<std::string> resolveHost(const std::string& host) {
 }
 
 // Main function: check if two hosts resolve to a common address
-bool isSameHost(const std::string& h1, const std::string& h2) {
+bool isSameHost(std::string_view h1, std::string_view h2) {
   auto set1 = resolveHost(h1);
   auto set2 = resolveHost(h2);
 

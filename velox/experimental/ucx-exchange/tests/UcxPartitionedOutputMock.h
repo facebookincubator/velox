@@ -26,7 +26,7 @@ namespace facebook::velox::ucx_exchange {
 class UcxPartitionedOutputMock {
  public:
   UcxPartitionedOutputMock(
-      const std::string& taskId,
+      std::string_view taskId,
       const uint32_t numDrivers,
       const size_t numPartitions,
       const uint32_t numDataChunks,

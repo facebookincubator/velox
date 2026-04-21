@@ -81,8 +81,8 @@ class UcxExchangeSource
 
   // factory method to create a UCX exchange source.
   static std::shared_ptr<UcxExchangeSource> create(
-      const std::string& taskId,
-      const std::string& url,
+      std::string_view taskId,
+      std::string_view url,
       const std::shared_ptr<UcxExchangeQueue>& queue);
 
   bool supportsMetrics() const {
@@ -160,14 +160,14 @@ class UcxExchangeSource
   /// available
   explicit UcxExchangeSource(
       const std::shared_ptr<Communicator> communicator,
-      const std::string& taskId,
-      const std::string& host,
+      std::string_view taskId,
+      std::string_view host,
       uint16_t port,
       const PartitionKey& partitionKey,
       const std::shared_ptr<UcxExchangeQueue> queue);
 
   // Extracts taskId and destinationId from the path part of the task URL
-  static PartitionKey extractTaskAndDestinationId(const std::string& path);
+  static PartitionKey extractTaskAndDestinationId(std::string_view path);
 
   /// @return A shared pointer to itself.
   std::shared_ptr<UcxExchangeSource> getSelfPtr();

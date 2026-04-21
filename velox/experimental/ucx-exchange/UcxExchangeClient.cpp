@@ -20,12 +20,12 @@
 
 namespace facebook::velox::ucx_exchange {
 
-void UcxExchangeClient::addRemoteTaskId(const std::string& remoteTaskId) {
+void UcxExchangeClient::addRemoteTaskId(std::string_view remoteTaskId) {
   std::shared_ptr<UcxExchangeSource> toClose;
   {
     std::lock_guard<std::mutex> l(queue_->mutex());
 
-    bool duplicate = !remoteTaskIds_.insert(remoteTaskId).second;
+    bool duplicate = !remoteTaskIds_.insert(std::string{remoteTaskId}).second;
     if (duplicate) {
       // Do not add sources twice. Presto protocol may add duplicate sources
       // and the task updates have no guarantees of arriving in order.

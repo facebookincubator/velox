@@ -47,7 +47,7 @@ class UcxOutputQueueManagerTest : public testing::Test {
   }
 
   std::shared_ptr<Task> initializeTask(
-      const std::string& taskId,
+      std::string_view taskId,
       int numDestinations,
       int numDrivers,
       bool cleanup = true,
@@ -74,22 +74,22 @@ class UcxOutputQueueManagerTest : public testing::Test {
     return cols;
   }
 
-  void enqueue(const std::string& taskId, vector_size_t size) {
+  void enqueue(std::string_view taskId, vector_size_t size) {
     enqueue(taskId, 0, size);
   }
 
   // Returns the enqueued page byte size.
-  void enqueue(const std::string& taskId, int destination, vector_size_t size) {
+  void enqueue(std::string_view taskId, int destination, vector_size_t size) {
     auto data = makePackedColumns(size);
     queueManager_->enqueue(taskId, destination, std::move(data), size);
   }
 
-  void noMoreData(const std::string& taskId) {
+  void noMoreData(std::string_view taskId) {
     queueManager_->noMoreData(taskId);
   }
 
   void fetch(
-      const std::string& taskId,
+      std::string_view taskId,
       int destination,
       bool expectedEndMarker = false) {
     bool receivedData = false;
@@ -119,7 +119,7 @@ class UcxOutputQueueManagerTest : public testing::Test {
     };
   }
 
-  void fetchEndMarker(const std::string& taskId, int destination) {
+  void fetchEndMarker(std::string_view taskId, int destination) {
     bool receivedData = false;
     queueManager_->getData(
         taskId, destination, receiveEndMarker(destination, receivedData));
@@ -127,12 +127,12 @@ class UcxOutputQueueManagerTest : public testing::Test {
     queueManager_->deleteResults(taskId, destination);
   }
 
-  void deleteResults(const std::string& taskId, int destination) {
+  void deleteResults(std::string_view taskId, int destination) {
     queueManager_->deleteResults(taskId, destination);
   }
 
   void registerForEndMarker(
-      const std::string& taskId,
+      std::string_view taskId,
       int destination,
       bool& receivedEndMarker) {
     receivedEndMarker = false;
@@ -153,7 +153,7 @@ class UcxOutputQueueManagerTest : public testing::Test {
   }
 
   void registerForData(
-      const std::string& taskId,
+      std::string_view taskId,
       int destination,
       bool& receivedData) {
     receivedData = false;
@@ -163,7 +163,7 @@ class UcxOutputQueueManagerTest : public testing::Test {
   }
 
   void dataFetcher(
-      const std::string& taskId,
+      std::string_view taskId,
       int destination,
       int64_t& fetchedPackedColumns,
       bool earlyTermination) {

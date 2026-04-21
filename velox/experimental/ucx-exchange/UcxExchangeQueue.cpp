@@ -150,7 +150,7 @@ PackedTableWithStreamPtr UcxExchangeQueue::dequeueLocked(
   return data;
 }
 
-void UcxExchangeQueue::setError(const std::string& error) {
+void UcxExchangeQueue::setError(std::string_view error) {
   std::vector<ContinuePromise> promises;
   {
     std::lock_guard<std::mutex> l(mutex_);

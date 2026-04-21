@@ -22,7 +22,7 @@
 
 namespace facebook::velox::ucx_exchange {
 
-uint32_t fnv1a_32(const std::string& s) {
+uint32_t fnv1a_32(std::string_view s) {
   uint32_t hash = 0x811C9DC5u; // FNV offset basis
   for (unsigned char c : s) {
     hash ^= c;

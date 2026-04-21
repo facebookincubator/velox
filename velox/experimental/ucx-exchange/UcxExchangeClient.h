@@ -50,7 +50,7 @@ class UcxExchangeClient
   // upstream task. If 'close' has been called already, creates an exchange
   // source and immediately closes it to notify the upstream task that data is
   // no longer needed. Repeated calls with the same 'taskId' are ignored.
-  void addRemoteTaskId(const std::string& remoteTaskId);
+  void addRemoteTaskId(std::string_view remoteTaskId);
 
   void noMoreRemoteTasks();
 

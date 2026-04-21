@@ -188,10 +188,12 @@ class UcxExchangeTest : public testing::TestWithParam<ExchangeTestParams> {
         "UcxTestMemoryPool");
   }
 
-  exec::Split remoteSplit(const std::string& taskId, int partitionId) {
-    std::string remoteUrl =
-        "http://127.0.0.1:" + std::to_string(kCommunicatorPort - 3) +
-        "/v1/task/" + taskId + "/results/" + std::to_string(partitionId);
+  exec::Split remoteSplit(std::string_view taskId, int partitionId) {
+    std::string remoteUrl = fmt::format(
+        "http://127.0.0.1:{}/v1/task/{}/results/{}",
+        kCommunicatorPort - 3,
+        taskId,
+        partitionId);
     return exec::Split(
         std::make_shared<facebook::velox::exec::RemoteConnectorSplit>(
             remoteUrl));

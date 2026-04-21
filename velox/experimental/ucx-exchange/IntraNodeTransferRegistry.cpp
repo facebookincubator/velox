@@ -148,12 +148,12 @@ std::optional<IntraNodeTransferResult> IntraNodeTransferRegistry::poll(
   return result;
 }
 
-void IntraNodeTransferRegistry::cancelTask(const std::string& taskId) {
+void IntraNodeTransferRegistry::cancelTask(std::string_view taskId) {
   std::vector<std::shared_ptr<IntraNodeTransferEntry>> entriesToFulfill;
 
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    cancelledTasks_.insert(taskId);
+    cancelledTasks_.insert(std::string{taskId});
 
     // Clean up any existing registry entries for this task so servers
     // waiting on the retrieved-promise don't hang.
@@ -185,9 +185,9 @@ void IntraNodeTransferRegistry::cancelTask(const std::string& taskId) {
           << " entriesCleaned=" << entriesToFulfill.size();
 }
 
-void IntraNodeTransferRegistry::clearCancelledTask(const std::string& taskId) {
+void IntraNodeTransferRegistry::clearCancelledTask(std::string_view taskId) {
   std::lock_guard<std::mutex> lock(mutex_);
-  cancelledTasks_.erase(taskId);
+  cancelledTasks_.erase(std::string{taskId});
 }
 
 } // namespace facebook::velox::ucx_exchange

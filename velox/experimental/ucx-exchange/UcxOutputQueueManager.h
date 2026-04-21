@@ -18,6 +18,7 @@
 #include <cudf/contiguous_split.hpp>
 #include <velox/exec/Task.h>
 #include <functional>
+#include <string_view>
 #include <unordered_set>
 #include "velox/experimental/ucx-exchange/UcxQueues.h"
 
@@ -53,7 +54,7 @@ class UcxOutputQueueManager {
   /// For broadcast mode, new destinations are backfilled with previously
   /// broadcast data.
   void updateOutputBuffers(
-      const std::string& taskId,
+      std::string_view taskId,
       int numBuffers,
       bool noMoreBuffers);
 
@@ -64,7 +65,7 @@ class UcxOutputQueueManager {
   /// @param txData The data to enqueue.
   /// @param numRows The number of rows in the data.
   void enqueue(
-      const std::string& taskId,
+      std::string_view taskId,
       int destination,
       std::unique_ptr<cudf::packed_columns> txData,
       int32_t numRows);
@@ -74,17 +75,17 @@ class UcxOutputQueueManager {
   /// @param taskId The unique task Id.
   /// @param future Output parameter - populated with a future if blocked.
   /// @return True if blocked (queue over capacity), false otherwise.
-  bool checkBlocked(const std::string& taskId, ContinueFuture* future);
+  bool checkBlocked(std::string_view taskId, ContinueFuture* future);
 
   /// @brief Indicates that no more data will be coming for this task.
-  void noMoreData(const std::string& taskId);
+  void noMoreData(std::string_view taskId);
 
   /// @returns true if noMoreData has been called and all the accumulated data
   /// have been fetched and acknowledged.
-  bool isFinished(const std::string& taskId);
+  bool isFinished(std::string_view taskId);
 
   /// @brief
-  void deleteResults(const std::string& taskId, int destination);
+  void deleteResults(std::string_view taskId, int destination);
 
   /// @brief Asynchronously returns the head of the queue. If data is available,
   /// the callback function is triggered immediately and true is returned.
@@ -96,7 +97,7 @@ class UcxOutputQueueManager {
   /// @param destination The destination.
   /// @param notify The callback function.
   void getData(
-      const std::string& taskId,
+      std::string_view taskId,
       int destination,
       UcxDataAvailableCallback notify);
 
@@ -105,23 +106,23 @@ class UcxOutputQueueManager {
   /// from early sink connections) or if the task uses broadcast mode
   /// (broadcast shares packed_columns across destinations — the intra-node
   /// source's destructive move would corrupt data for other servers).
-  bool canUseIntraNode(const std::string& taskId);
+  bool canUseIntraNode(std::string_view taskId);
 
   /// @brief Removes the queue for the given task from the queue manager.
   /// Calls "terminate" on the queue to awake waiting producers.
-  void removeTask(const std::string& taskId);
+  void removeTask(std::string_view taskId);
 
   /// @brief Returns the queue statistics of the queue associated with the given
   /// task. Returns nullopt when the specified output queue doesn't exist.
-  std::optional<exec::OutputBuffer::Stats> stats(const std::string& taskId);
+  std::optional<exec::OutputBuffer::Stats> stats(std::string_view taskId);
 
  private:
   // Retrieves the queue for a task if it exists.
   // Returns NULL if task not found.
-  std::shared_ptr<UcxOutputQueue> getQueueIfExists(const std::string& taskId);
+  std::shared_ptr<UcxOutputQueue> getQueueIfExists(std::string_view taskId);
 
   // Throws an exception if queue doesn't exist.
-  std::shared_ptr<UcxOutputQueue> getQueue(const std::string& taskId);
+  std::shared_ptr<UcxOutputQueue> getQueue(std::string_view taskId);
 
   folly::Synchronized<
       std::unordered_map<std::string, std::shared_ptr<UcxOutputQueue>>,

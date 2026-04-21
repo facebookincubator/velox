@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <random>
 #include <string>
+#include <string_view>
 #include "velox/common/future/VeloxPromise.h"
 #include "velox/experimental/ucx-exchange/Acceptor.h"
 #include "velox/experimental/ucx-exchange/CommElement.h"
@@ -61,7 +62,7 @@ class Communicator {
   /// is running and ready to accept connections.
   [[nodiscard]] static std::shared_ptr<Communicator> initAndGet(
       uint16_t port,
-      const std::string& coordinatorURL,
+      std::string_view coordinatorURL,
       ContinueFuture* future = nullptr);
 
   /// @brief Method to get the Communicator reference

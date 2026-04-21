@@ -27,7 +27,7 @@ using namespace facebook::velox::core;
 namespace facebook::velox::ucx_exchange {
 
 std::shared_ptr<Task> createSourceTask(
-    const std::string& taskId,
+    std::string_view taskId,
     std::shared_ptr<memory::MemoryPool> pool,
     RowTypePtr rowType,
     uint64_t kMaxOutputBufferSize) {
@@ -64,7 +64,7 @@ std::shared_ptr<Task> createSourceTask(
       executor.get(), core::QueryConfig(std::move(configSettings)));
 
   auto task = Task::create(
-      taskId,
+      std::string{taskId},
       std::move(planFragment),
       0, // partition number, irrelevant here; will be set by the test.
       std::move(queryCtx),
@@ -74,7 +74,7 @@ std::shared_ptr<Task> createSourceTask(
 }
 
 std::shared_ptr<facebook::velox::exec::Task> createExchangeTask(
-    const std::string& taskId,
+    std::string_view taskId,
     facebook::velox::RowTypePtr rowType,
     int partitionId,
     core::PlanNodeId& exchangeNodeId) {
@@ -90,7 +90,7 @@ std::shared_ptr<facebook::velox::exec::Task> createExchangeTask(
       nullptr, core::QueryConfig(std::move(configSettings)));
 
   auto task = Task::create(
-      taskId,
+      std::string{taskId},
       std::move(planFragment),
       partitionId,
       std::move(queryCtx),
@@ -99,7 +99,7 @@ std::shared_ptr<facebook::velox::exec::Task> createExchangeTask(
 }
 
 std::shared_ptr<Task> createPartitionedOutputTask(
-    const std::string& taskId,
+    std::string_view taskId,
     std::shared_ptr<memory::MemoryPool> pool,
     RowTypePtr rowType,
     int numPartitions,
@@ -141,7 +141,7 @@ std::shared_ptr<Task> createPartitionedOutputTask(
       executor.get(), core::QueryConfig(std::move(configSettings)));
 
   auto task = Task::create(
-      taskId,
+      std::string{taskId},
       std::move(planFragment),
       0, // partition number
       std::move(queryCtx),

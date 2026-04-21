@@ -18,6 +18,7 @@
 #include <cinttypes>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 /// Definitions needed for the Ucx exchange protocol.
@@ -44,7 +45,7 @@ constexpr uint64_t DATA_TAG = 0x03000000;
 constexpr uint64_t HANDSHAKE_RESPONSE_TAG = 0x04000000;
 
 // Implementation of the fowler-noll-vo hash function for 32 bits.
-uint32_t fnv1a_32(const std::string& s);
+uint32_t fnv1a_32(std::string_view s);
 
 // Gets the tag used for metadata communication
 // Note: taskHash and sequenceNumber are implicitly converted to 64 bits.

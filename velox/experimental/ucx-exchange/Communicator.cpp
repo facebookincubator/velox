@@ -40,7 +40,7 @@ std::shared_ptr<Communicator> Communicator::instancePtr_ = nullptr;
 /* static */
 std::shared_ptr<Communicator> Communicator::initAndGet(
     uint16_t port,
-    const std::string& coordinatorURL,
+    std::string_view coordinatorURL,
     ContinueFuture* future) {
   if (!FLAGS_velox_ucx_exchange) {
     return nullptr;

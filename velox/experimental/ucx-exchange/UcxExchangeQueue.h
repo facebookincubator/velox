@@ -77,7 +77,7 @@ class UcxExchangeQueue {
   /// If data is permanently not available, e.g. the source cannot be
   /// contacted, this registers an error message and causes the reading
   /// Exchanges to throw with the message.
-  void setError(const std::string& error);
+  void setError(std::string_view error);
 
   bool isInError() {
     return !error_.empty();

@@ -39,7 +39,7 @@ class UcxExchange : public SourceOperator, public cudf_velox::NvtxHelper {
       DriverCtx* driverCtx,
       const std::shared_ptr<const core::PlanNode>& planNode,
       std::shared_ptr<UcxExchangeClient> ucxExchangeClient,
-      const std::string& operatorType = "UcxExchange");
+      std::string_view operatorType = "UcxExchange");
 
   ~UcxExchange() override;
 

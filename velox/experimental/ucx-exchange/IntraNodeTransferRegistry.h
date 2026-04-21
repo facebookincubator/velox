@@ -22,6 +22,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 
 namespace facebook::velox::ucx_exchange {
@@ -103,13 +104,13 @@ class IntraNodeTransferRegistry {
   /// Called when a producing task is removed. Subsequent poll() calls for
   /// this taskId will return an atEnd result instead of nullopt.
   /// @param taskId The task to cancel
-  void cancelTask(const std::string& taskId);
+  void cancelTask(std::string_view taskId);
 
   /// @brief Remove a task from the cancelled set.
   /// Called when a task ID is (re)initialized, so that the cancelledTasks_
   /// set does not grow unboundedly across queries.
   /// @param taskId The task to clear from the cancelled set
-  void clearCancelledTask(const std::string& taskId);
+  void clearCancelledTask(std::string_view taskId);
 
  private:
   IntraNodeTransferRegistry() = default;

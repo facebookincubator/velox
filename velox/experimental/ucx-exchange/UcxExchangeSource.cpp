@@ -66,8 +66,8 @@ void UcxExchangeSource::setState(ReceiverState newState) {
 // This constructor is private.
 UcxExchangeSource::UcxExchangeSource(
     const std::shared_ptr<Communicator> communicator,
-    const std::string& taskId,
-    const std::string& host,
+    std::string_view taskId,
+    std::string_view host,
     uint16_t port,
     const PartitionKey& partitionKey,
     const std::shared_ptr<UcxExchangeQueue> queue)
@@ -83,8 +83,8 @@ UcxExchangeSource::UcxExchangeSource(
 
 /*static*/
 std::shared_ptr<UcxExchangeSource> UcxExchangeSource::create(
-    const std::string& taskId,
-    const std::string& url,
+    std::string_view taskId,
+    std::string_view url,
     const std::shared_ptr<UcxExchangeQueue>& queue) {
   folly::Uri uri(url);
   // Note that there is no distinct schema for the UCXX exchange.
@@ -278,7 +278,7 @@ folly::F14FastMap<std::string, RuntimeMetric> UcxExchangeSource::metrics()
 
 // private methods ---
 PartitionKey UcxExchangeSource::extractTaskAndDestinationId(
-    const std::string& path) {
+    std::string_view path) {
   // The URL path has the form: /v1/task/<taskId>/results/<destinationId>"
   std::vector<folly::StringPiece> components;
   folly::split('/', path, components, true);
@@ -291,8 +291,7 @@ PartitionKey UcxExchangeSource::extractTaskAndDestinationId(
   try {
     destinationId = static_cast<uint32_t>(std::stoul(components[4].str()));
   } catch (const std::exception& e) {
-    std::string msg = "Illegal destination in task URL: " + path;
-    VELOX_UNSUPPORTED(msg);
+    VELOX_UNSUPPORTED("Illegal destination in task URL: {}", path);
   }
 
   return PartitionKey{components[2].str(), destinationId};
