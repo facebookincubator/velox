@@ -1928,6 +1928,7 @@ TEST_P(IndexLookupJoinTest, groupedExecution) {
 
     plan.executionStrategy = core::ExecutionStrategy::kGrouped;
     plan.groupedExecutionLeafNodeIds.emplace(probeScanNodeId_);
+    plan.groupedExecutionLeafNodeIds.emplace(indexScanNodeId_);
     plan.numSplitGroups = numSplitGroups;
 
     auto queryCtx = core::QueryCtx::create(executor_.get());
@@ -1937,7 +1938,7 @@ TEST_P(IndexLookupJoinTest, groupedExecution) {
     queryCtx->testingOverrideConfigUnsafe(std::move(configs));
 
     auto task = exec::Task::create(
-        "grouped-index-lookup-join",
+        fmt::format("grouped-index-lookup-join-{}", joinType),
         std::move(plan),
         0,
         std::move(queryCtx),
@@ -1980,6 +1981,60 @@ TEST_P(IndexLookupJoinTest, groupedExecution) {
     ASSERT_EQ(
         taskStats.at(joinNodeId_).numDrivers, numDrivers * numSplitGroups);
   }
+}
+
+// Verifies that grouped execution leaf validation passes when the index
+// source node ID is in groupedExecutionLeafNodeIds. Without the validation
+// exclusion in collectIndexLookupSourceIds, Task::start() would reject the
+// plan because it cannot find the index source node in any driver factory.
+TEST_P(IndexLookupJoinTest, groupedExecutionLeafValidation) {
+  if (GetParam().serialExecution) {
+    return;
+  }
+
+  const auto indexTableHandle = makeIndexTableHandle(
+      nullptr, GetParam().asyncLookup, GetParam().needsIndexSplit);
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  const auto indexScanNode = makeIndexScanNode(
+      planNodeIdGenerator,
+      indexTableHandle,
+      makeScanOutputType({"u0", "u1", "u2", "u3", "u5"}),
+      makeIndexColumnHandles({"u0", "u1", "u2", "u3", "u5"}));
+
+  auto outputLayout = std::vector<std::string>{"u3", "t5"};
+  auto plan = PlanBuilder(planNodeIdGenerator, pool())
+                  .tableScan(probeType_)
+                  .capturePlanNodeId(probeScanNodeId_)
+                  .startIndexLookupJoin()
+                  .leftKeys({"t0", "t1", "t2"})
+                  .rightKeys({"u0", "u1", "u2"})
+                  .indexSource(indexScanNode)
+                  .outputLayout(outputLayout)
+                  .joinType(core::JoinType::kInner)
+                  .endIndexLookupJoin()
+                  .capturePlanNodeId(joinNodeId_)
+                  .partitionedOutput({}, 1, outputLayout)
+                  .planFragment();
+
+  plan.executionStrategy = core::ExecutionStrategy::kGrouped;
+  plan.groupedExecutionLeafNodeIds.emplace(probeScanNodeId_);
+  plan.groupedExecutionLeafNodeIds.emplace(indexScanNodeId_);
+  plan.numSplitGroups = 1;
+
+  auto queryCtx = core::QueryCtx::create(executor_.get());
+  auto task = exec::Task::create(
+      "grouped-execution-leaf-validation",
+      std::move(plan),
+      0,
+      std::move(queryCtx),
+      Task::ExecutionMode::kParallel);
+
+  // Task::start() runs validateGroupedExecutionLeafNodes which would throw
+  // if the index source node ID is not excluded from validation.
+  ASSERT_NO_THROW(task->start(1));
+
+  task->requestAbort().wait();
+  ASSERT_TRUE(waitForTaskAborted(task.get()));
 }
 
 } // namespace

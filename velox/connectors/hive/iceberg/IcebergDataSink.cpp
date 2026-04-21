@@ -29,6 +29,7 @@
 #include "velox/connectors/hive/PartitionIdGenerator.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/TransformExprBuilder.h"
+#include "velox/connectors/hive/iceberg/WriterOptionsAdapter.h"
 #include "velox/exec/OperatorUtils.h"
 
 namespace facebook::velox::connector::hive::iceberg {
@@ -133,10 +134,10 @@ IcebergInsertTableHandle::IcebergInsertTableHandle(
       "Input columns cannot be empty for Iceberg tables.");
   VELOX_USER_CHECK_NOT_NULL(
       locationHandle_, "Location handle is required for Iceberg tables.");
-  VELOX_USER_CHECK_EQ(
-      tableStorageFormat,
-      dwio::common::FileFormat::PARQUET,
-      "Only Parquet file format is supported when writing Iceberg tables.");
+  VELOX_USER_CHECK(
+      isSupportedFileFormat(tableStorageFormat),
+      "Unsupported file format for writing Iceberg tables: {}",
+      dwio::common::toString(tableStorageFormat));
 }
 
 namespace {
@@ -333,7 +334,8 @@ std::vector<std::string> IcebergDataSink::commitMessage() const {
         ("partitionSpecJson",
           icebergInsertTableHandle->partitionSpec() ?
             icebergInsertTableHandle->partitionSpec()->specId : 0)
-        ("fileFormat", "PARQUET")
+        ("fileFormat",
+          toManifestFormatString(icebergInsertTableHandle->storageFormat()))
         ("content", "DATA");
       // clang-format on
       if (!commitPartitionValue_.empty() &&
@@ -377,7 +379,7 @@ std::string IcebergDataSink::getPartitionName(uint32_t partitionId) const {
 
 uint32_t IcebergDataSink::ensureWriter(const HiveWriterId& id) {
   auto writerId = HiveDataSink::ensureWriter(id);
-  if (commitPartitionValue_[writerId].isNull()) {
+  if (isPartitioned() && commitPartitionValue_[writerId].isNull()) {
     commitPartitionValue_[writerId] = makeCommitPartitionValue(writerId);
   }
   return writerId;
@@ -386,21 +388,25 @@ uint32_t IcebergDataSink::ensureWriter(const HiveWriterId& id) {
 std::shared_ptr<dwio::common::WriterOptions>
 IcebergDataSink::createWriterOptions() const {
   auto options = HiveDataSink::createWriterOptions();
-  // Per Iceberg specification (https://iceberg.apache.org/spec/#parquet):
-  // - Timestamps must be stored with microsecond precision.
-  // - Timestamps must NOT be adjusted to UTC timezone; they should be written
-  //   as-is without timezone conversion (empty string disables conversion).
-  //
-  // These settings are passed via serdeParameters to avoid including
-  // parquet-specific headers. The keys must match kParquetSerdeTimestampUnit
-  // and kParquetSerdeTimestampTimezone defined in
-  // velox/dwio/parquet/writer/Writer.h. The value "6" represents microseconds
-  // (TimestampPrecision::kMicroseconds).
-  options->serdeParameters["parquet.writer.timestamp.unit"] = "6";
-  options->serdeParameters["parquet.writer.timestamp.timezone"] = "";
-  // Re-process configs to apply the serde parameters we just set.
+  auto icebergInsertTableHandle =
+      std::dynamic_pointer_cast<const IcebergInsertTableHandle>(
+          insertTableHandle_);
+  const auto storageFormat = icebergInsertTableHandle
+      ? icebergInsertTableHandle->storageFormat()
+      : dwio::common::FileFormat::UNKNOWN;
+
+  // Format support is enforced in the constructor; the adapter must not
+  // be null here.
+  auto adapter = createWriterOptionsAdapter(storageFormat);
+  VELOX_CHECK_NOT_NULL(
+      adapter,
+      "Unsupported file format for Iceberg writer: {}",
+      dwio::common::toString(storageFormat));
+
+  adapter->applyPreConfigs(*options);
   options->processConfigs(
       *hiveConfig_->config(), *connectorQueryCtx_->sessionProperties());
+  adapter->applyPostConfigs(*options);
   return options;
 }
 
