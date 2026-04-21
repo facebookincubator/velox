@@ -531,6 +531,25 @@ add_test(
 
 set_tests_properties(velox_cudf_gpu_registry_test PROPERTIES LABELS cuda_driver TIMEOUT 300)
 
+# cuDF Fallback + Dispatch test
+add_executable(velox_cudf_gpu_fallback_test GpuFallbackTest.cpp)
+
+target_link_libraries(
+  velox_cudf_gpu_fallback_test
+  velox_cudf_gpu_registry
+  cudf::cudf
+  gtest
+  gtest_main
+)
+
+add_test(
+  NAME velox_cudf_gpu_fallback_test
+  COMMAND velox_cudf_gpu_fallback_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+set_tests_properties(velox_cudf_gpu_fallback_test PROPERTIES LABELS cuda_driver TIMEOUT 300)
+
 # GpuColumnIO device test: round-trip read/write via CUDA kernels
 add_executable(velox_cudf_gpu_column_io_test GpuColumnIOTest.cu)
 
