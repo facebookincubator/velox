@@ -320,6 +320,21 @@ TEST_F(ArithmeticTest, UnaryMinusOverflow) {
   EXPECT_TRUE(std::isnan(unaryminus<double>(kNan).value_or(0)));
 }
 
+TEST_F(ArithmeticTest, UnaryMinusOverflowAnsi) {
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  VELOX_ASSERT_THROW(unaryminus<int8_t>(INT8_MIN), "Arithmetic overflow");
+  VELOX_ASSERT_THROW(unaryminus<int16_t>(INT16_MIN), "Arithmetic overflow");
+  VELOX_ASSERT_THROW(unaryminus<int32_t>(INT32_MIN), "Arithmetic overflow");
+  VELOX_ASSERT_THROW(unaryminus<int64_t>(INT64_MIN), "Arithmetic overflow");
+
+  EXPECT_EQ(unaryminus<float>(-kInf), kInf);
+  EXPECT_TRUE(std::isnan(unaryminus<float>(kNan).value_or(0)));
+  EXPECT_EQ(unaryminus<double>(-kInf), kInf);
+  EXPECT_TRUE(std::isnan(unaryminus<double>(kNan).value_or(0)));
+}
+
 TEST_F(ArithmeticTest, Divide) {
   // Null cases.
   EXPECT_EQ(divide(std::nullopt, std::nullopt), std::nullopt);
@@ -876,7 +891,7 @@ TEST_F(IntervalArithmeticAnsiTest, IntervalDayTimeUnaryMinusAnsi) {
           "unaryminus(c0)",
           INTERVAL_DAY_TIME(),
           std::optional<int64_t>(std::numeric_limits<int64_t>::min())),
-      "Arithmetic overflow: cannot negate minimum interval value");
+      "Arithmetic overflow");
 
   queryCtx_->testingOverrideConfigUnsafe(
       {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
@@ -908,7 +923,7 @@ TEST_F(IntervalArithmeticAnsiTest, IntervalYearMonthUnaryMinusAnsi) {
           "unaryminus(c0)",
           INTERVAL_YEAR_MONTH(),
           std::optional<int32_t>(std::numeric_limits<int32_t>::min())),
-      "Arithmetic overflow: cannot negate minimum interval value");
+      "Arithmetic overflow");
 
   queryCtx_->testingOverrideConfigUnsafe(
       {{core::QueryConfig::kSparkAnsiEnabled, "false"}});

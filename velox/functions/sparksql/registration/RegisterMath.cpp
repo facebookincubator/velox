@@ -123,22 +123,22 @@ void registerMathFunctions(const std::string& prefix) {
   registerFunction<UnaryMinusFunction, IntervalYearMonth, IntervalYearMonth>(
       {prefix + "unaryminus"});
   registerFunction<
-      IntervalDayTimeAddFunction,
+      PlusFunction,
       IntervalDayTime,
       IntervalDayTime,
       IntervalDayTime>({prefix + "add"});
   registerFunction<
-      IntervalYearMonthAddFunction,
+      PlusFunction,
       IntervalYearMonth,
       IntervalYearMonth,
       IntervalYearMonth>({prefix + "add"});
   registerFunction<
-      IntervalDayTimeSubtractFunction,
+      MinusFunction,
       IntervalDayTime,
       IntervalDayTime,
       IntervalDayTime>({prefix + "subtract"});
   registerFunction<
-      IntervalYearMonthSubtractFunction,
+      MinusFunction,
       IntervalYearMonth,
       IntervalYearMonth,
       IntervalYearMonth>({prefix + "subtract"});

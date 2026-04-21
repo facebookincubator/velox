@@ -147,13 +147,10 @@ template <typename TExec>
 struct UnaryMinusFunction {
   template <typename TInput>
   FOLLY_ALWAYS_INLINE void initialize(
-      const std::vector<TypePtr>& inputTypes,
+      const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
       const TInput* /*a*/) {
     ansiEnabled_ = config.sparkAnsiEnabled();
-    const auto& inputType = inputTypes.at(0);
-    intervalInput_ =
-        inputType->isIntervalDayTime() || inputType->isIntervalYearMonth();
   }
 
   template <typename TInput>
@@ -162,8 +159,7 @@ struct UnaryMinusFunction {
       const bool isMinValue =
           FOLLY_UNLIKELY(a == std::numeric_limits<TInput>::min());
       VELOX_USER_RETURN(
-          ansiEnabled_ && intervalInput_ && isMinValue,
-          "Arithmetic overflow: cannot negate minimum interval value");
+          ansiEnabled_ && isMinValue, "Arithmetic overflow: unaryminus({})", a);
       result = isMinValue ? a : -a;
     } else {
       result = -a;
@@ -173,7 +169,64 @@ struct UnaryMinusFunction {
 
  private:
   bool ansiEnabled_ = false;
-  bool intervalInput_ = false;
+};
+
+template <typename TExec>
+struct PlusFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const TInput* /*a*/,
+      const TInput* /*b*/) {
+    ansiEnabled_ = config.sparkAnsiEnabled();
+  }
+
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE Status
+  call(TInput& result, const TInput& a, const TInput& b) {
+    if constexpr (std::is_integral_v<TInput>) {
+      TInput res;
+      const bool overflow = __builtin_add_overflow(a, b, &res);
+      VELOX_USER_RETURN(
+          ansiEnabled_ && overflow, "Arithmetic overflow: {} + {}", a, b);
+      result = res;
+    } else {
+      result = a + b;
+    }
+    return Status::OK();
+  }
+
+ private:
+  bool ansiEnabled_ = false;
+};
+
+template <typename TExec>
+struct MinusFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const TInput* /*a*/,
+      const TInput* /*b*/) {
+    ansiEnabled_ = config.sparkAnsiEnabled();
+  }
+
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE Status
+  call(TInput& result, const TInput& a, const TInput& b) {
+    if constexpr (std::is_integral_v<TInput>) {
+      const bool overflow = __builtin_sub_overflow(a, b, &result);
+      VELOX_USER_RETURN(
+          ansiEnabled_ && overflow, "Arithmetic overflow: {} - {}", a, b);
+    } else {
+      result = a - b;
+    }
+    return Status::OK();
+  }
+
+ private:
+  bool ansiEnabled_ = false;
 };
 
 template <typename T>
@@ -683,122 +736,6 @@ struct CheckedIntegralDivideFunction {
     result = a / b;
     return Status::OK();
   }
-};
-
-// Add for IntervalDayTime.
-template <typename TExec>
-struct IntervalDayTimeAddFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(TExec);
-
-  FOLLY_ALWAYS_INLINE void initialize(
-      const std::vector<TypePtr>& /*inputTypes*/,
-      const core::QueryConfig& config,
-      const int64_t* /*a*/,
-      const int64_t* /*b*/) {
-    ansiEnabled_ = config.sparkAnsiEnabled();
-  }
-
-  FOLLY_ALWAYS_INLINE Status
-  call(int64_t& result, const int64_t& a, const int64_t& b) {
-    int64_t res;
-    VELOX_USER_RETURN(
-        ansiEnabled_ && __builtin_add_overflow(a, b, &res),
-        "Arithmetic overflow: {} + {}",
-        a,
-        b);
-    result = ansiEnabled_ ? res : (a + b);
-    return Status::OK();
-  }
-
- private:
-  bool ansiEnabled_ = false;
-};
-
-// Subtract for IntervalDayTime.
-template <typename TExec>
-struct IntervalDayTimeSubtractFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(TExec);
-
-  FOLLY_ALWAYS_INLINE void initialize(
-      const std::vector<TypePtr>& /*inputTypes*/,
-      const core::QueryConfig& config,
-      const int64_t* /*a*/,
-      const int64_t* /*b*/) {
-    ansiEnabled_ = config.sparkAnsiEnabled();
-  }
-
-  FOLLY_ALWAYS_INLINE Status
-  call(int64_t& result, const int64_t& a, const int64_t& b) {
-    int64_t res;
-    VELOX_USER_RETURN(
-        ansiEnabled_ && __builtin_sub_overflow(a, b, &res),
-        "Arithmetic overflow: {} - {}",
-        a,
-        b);
-    result = ansiEnabled_ ? res : (a - b);
-    return Status::OK();
-  }
-
- private:
-  bool ansiEnabled_ = false;
-};
-
-// Add for IntervalYearMonth.
-template <typename TExec>
-struct IntervalYearMonthAddFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(TExec);
-
-  FOLLY_ALWAYS_INLINE void initialize(
-      const std::vector<TypePtr>& /*inputTypes*/,
-      const core::QueryConfig& config,
-      const int32_t* /*a*/,
-      const int32_t* /*b*/) {
-    ansiEnabled_ = config.sparkAnsiEnabled();
-  }
-
-  FOLLY_ALWAYS_INLINE Status
-  call(int32_t& result, const int32_t& a, const int32_t& b) {
-    int32_t res;
-    VELOX_USER_RETURN(
-        ansiEnabled_ && __builtin_add_overflow(a, b, &res),
-        "Arithmetic overflow: {} + {}",
-        a,
-        b);
-    result = ansiEnabled_ ? res : (a + b);
-    return Status::OK();
-  }
-
- private:
-  bool ansiEnabled_ = false;
-};
-
-// Subtract for IntervalYearMonth.
-template <typename TExec>
-struct IntervalYearMonthSubtractFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(TExec);
-
-  FOLLY_ALWAYS_INLINE void initialize(
-      const std::vector<TypePtr>& /*inputTypes*/,
-      const core::QueryConfig& config,
-      const int32_t* /*a*/,
-      const int32_t* /*b*/) {
-    ansiEnabled_ = config.sparkAnsiEnabled();
-  }
-
-  FOLLY_ALWAYS_INLINE Status
-  call(int32_t& result, const int32_t& a, const int32_t& b) {
-    int32_t res;
-    VELOX_USER_RETURN(
-        ansiEnabled_ && __builtin_sub_overflow(a, b, &res),
-        "Arithmetic overflow: {} - {}",
-        a,
-        b);
-    result = ansiEnabled_ ? res : (a - b);
-    return Status::OK();
-  }
-
- private:
-  bool ansiEnabled_ = false;
 };
 
 } // namespace facebook::velox::functions::sparksql
