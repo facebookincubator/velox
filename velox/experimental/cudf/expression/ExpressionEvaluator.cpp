@@ -334,6 +334,10 @@ class LogicalFunction : public CudfFunction {
           const bool v = boolConst->valueAt(0);
           if ((op_ == cudf::binary_operator::NULL_LOGICAL_AND && !v) ||
               (op_ == cudf::binary_operator::NULL_LOGICAL_OR && v)) {
+            // If we encounter non-null false (for AND) or true (for OR), we
+            // know what the final result must be, although it will still need
+            // to be expanded to a column the same size as the input columns. No
+            // need to continue capturing literals in that case.
             shortCircuitScalar_ =
                 createCudfScalar<TypeKind::BOOLEAN>(constExpr->value());
             break;
@@ -351,45 +355,84 @@ class LogicalFunction : public CudfFunction {
       std::vector<ColumnOrView>& inputColumns,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
+    // If there are no input columns, the result is a scalar.
     const size_t rowCount =
         inputColumns.empty() ? 1 : asView(inputColumns[0]).size();
 
+    // If we determined a short-circuit result in the constructor, we
+    // return it directly here, expanded to the size of the input
+    // columns if not all the inputs are literals.
     if (shortCircuitScalar_) {
       return cudf::make_column_from_scalar(
           *shortCircuitScalar_, rowCount, stream, mr);
     }
 
-    std::vector<std::unique_ptr<cudf::column>> literalColumns;
-    literalColumns.reserve(literals_.size());
-    std::vector<cudf::column_view> operands;
+    // Now build the vector of actual operands, each of which is either a
+    // pre-computed literal or an input column.
+    struct Operand {
+      const cudf::scalar* scalar;
+      cudf::column_view column;
+    };
+    std::vector<Operand> operands;
     operands.reserve(literals_.size());
-
     size_t columnIndex = 0;
     for (const auto& literal : literals_) {
       if (literal) {
-        auto column =
-            cudf::make_column_from_scalar(*literal, rowCount, stream, mr);
-        operands.push_back(column->view());
-        literalColumns.push_back(std::move(column));
+        operands.push_back(Operand{literal.get(), {}});
       } else {
         VELOX_CHECK_LT(columnIndex, inputColumns.size());
-        operands.push_back(asView(inputColumns[columnIndex++]));
+        operands.push_back(
+            Operand{nullptr, asView(inputColumns[columnIndex++])});
       }
     }
 
+    // There must be at least one operand.
     VELOX_CHECK(!operands.empty());
+
+    // If there is only one operand, we can return it directly,
+    // again expanded to the size of the input columns if needed.
     if (operands.size() == 1) {
-      if (!literalColumns.empty()) {
-        return std::move(literalColumns[0]);
+      const auto& only = operands[0];
+      if (only.scalar) {
+        return cudf::make_column_from_scalar(
+            *only.scalar, rowCount, stream, mr);
       }
-      return operands[0];
+      return ColumnOrView(only.column);
     }
 
-    auto result = cudf::binary_operation(
-        operands[0], operands[1], op_, kBoolType, stream, mr);
-    for (size_t i = 2; i < operands.size(); ++i) {
+    // If we get this far, we have at least two operands. We can
+    // now compute the result by iterating over the operands and
+    // applying the binary operator to each pair of operands.
+    const auto& left = operands[0];
+    const auto& right = operands[1];
+    std::unique_ptr<cudf::column> result;
+    if (left.scalar && right.scalar) {
+      // This case may still happen even in the case where a short-circuit
+      // result was not determined in the constructor, for example, if the
+      // inputs are 'true OR true' or 'false AND false'.
+      auto tmp =
+          cudf::make_column_from_scalar(*left.scalar, rowCount, stream, mr);
       result = cudf::binary_operation(
-          result->view(), operands[i], op_, kBoolType, stream, mr);
+          tmp->view(), *right.scalar, op_, kBoolType, stream, mr);
+    } else if (left.scalar) {
+      result = cudf::binary_operation(
+          *left.scalar, right.column, op_, kBoolType, stream, mr);
+    } else if (right.scalar) {
+      result = cudf::binary_operation(
+          left.column, *right.scalar, op_, kBoolType, stream, mr);
+    } else {
+      result = cudf::binary_operation(
+          left.column, right.column, op_, kBoolType, stream, mr);
+    }
+    for (size_t i = 2; i < operands.size(); ++i) {
+      const auto& next = operands[i];
+      if (next.scalar) {
+        result = cudf::binary_operation(
+            result->view(), *next.scalar, op_, kBoolType, stream, mr);
+      } else {
+        result = cudf::binary_operation(
+            result->view(), next.column, op_, kBoolType, stream, mr);
+      }
     }
     return result;
   }
