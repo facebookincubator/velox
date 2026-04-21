@@ -140,6 +140,22 @@ class CudfFilterProjectTest : public OperatorTestBase {
     runTest(plan, "SELECT c0 = 1 OR c1 = 2.0 AS result FROM tmp");
   }
 
+  void testLogicalShortCircuitWithLiterals(const std::vector<RowVectorPtr>& input) {
+    // Constant false as first conjunct: LogicalFunction short-circuits to false.
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"false AND (c0 = 1) AS result"})
+                    .planNode();
+    runTest(plan, "SELECT false AND (c0 = 1) AS result FROM tmp");
+
+    // Constant true as first disjunct: LogicalFunction short-circuits to true.
+    plan = PlanBuilder()
+               .values(input)
+               .project({"true OR (c0 = 1) AS result"})
+               .planNode();
+    runTest(plan, "SELECT true OR (c0 = 1) AS result FROM tmp");
+  }
+
   void testYearFunction(const std::vector<RowVectorPtr>& input) {
     // Create a plan with YEAR function
     auto plan =
@@ -507,6 +523,14 @@ TEST_F(CudfFilterProjectTest, orOperation) {
   createDuckDbTable(vectors);
 
   testOrOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, logicalShortCircuitWithLiterals) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testLogicalShortCircuitWithLiterals(vectors);
 }
 
 TEST_F(CudfFilterProjectTest, lengthFunction) {

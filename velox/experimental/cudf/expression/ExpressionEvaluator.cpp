@@ -24,6 +24,7 @@
 #include "velox/expression/SignatureBinder.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
+#include "velox/vector/ConstantVector.h"
 
 #include <cudf/binaryop.hpp>
 #include <cudf/column/column_factories.hpp>
@@ -327,6 +328,17 @@ class LogicalFunction : public CudfFunction {
             constExpr->value()->typeKind(),
             TypeKind::BOOLEAN,
             "Logical function only supports boolean literals");
+        auto boolConst = constExpr->value()->as<ConstantVector<bool>>();
+        VELOX_CHECK_NOT_NULL(boolConst);
+        if (!shortCircuitScalar_ && !boolConst->isNullAt(0)) {
+          const bool v = boolConst->valueAt(0);
+          if ((op_ == cudf::binary_operator::NULL_LOGICAL_AND && !v) ||
+              (op_ == cudf::binary_operator::NULL_LOGICAL_OR && v)) {
+            shortCircuitScalar_ =
+                createCudfScalar<TypeKind::BOOLEAN>(constExpr->value());
+            break;
+          }
+        }
         literals_.push_back(
             createCudfScalar<TypeKind::BOOLEAN>(constExpr->value()));
       } else {
@@ -341,6 +353,11 @@ class LogicalFunction : public CudfFunction {
       rmm::device_async_resource_ref mr) const override {
     const size_t rowCount =
         inputColumns.empty() ? 1 : asView(inputColumns[0]).size();
+
+    if (shortCircuitScalar_) {
+      return cudf::make_column_from_scalar(
+          *shortCircuitScalar_, rowCount, stream, mr);
+    }
 
     std::vector<std::unique_ptr<cudf::column>> literalColumns;
     literalColumns.reserve(literals_.size());
@@ -380,6 +397,7 @@ class LogicalFunction : public CudfFunction {
  private:
   static constexpr cudf::data_type kBoolType{cudf::type_id::BOOL8};
   const cudf::binary_operator op_;
+  std::unique_ptr<cudf::scalar> shortCircuitScalar_;
   std::vector<std::unique_ptr<cudf::scalar>> literals_;
 };
 
