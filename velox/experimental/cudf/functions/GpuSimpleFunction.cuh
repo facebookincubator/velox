@@ -66,7 +66,9 @@ inline cudf::type_id typeToId<double>() {
   return cudf::type_id::FLOAT64;
 }
 
-__global__ void combineNullMasks(
+// Defined as a static __global__ to avoid ODR violations when this header
+// is compiled into multiple translation units.
+static __global__ void combineNullMasks(
     cudf::bitmask_type* output,
     const cudf::bitmask_type* const* masks,
     int numMasks,
