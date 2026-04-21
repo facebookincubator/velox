@@ -23,6 +23,7 @@
 #include "velox/experimental/cudf/expression/AstUtils.h"
 // TODO(kn): in another PR
 // #include "velox/experimental/cudf/CudfNoDefaults.h"
+#include "velox/experimental/cudf/expression/DecimalTypeCheck.h"
 
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/FieldReference.h"
@@ -281,6 +282,18 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
   using velox::exec::FieldReference;
   using Op = cudf::ast::ast_operator;
 
+  // For now, AST does not support expressions with DECIMAL output, or immediate
+  // DECIMAL inputs.
+  // @TODO implement DECIMAL in AST and JIT
+  if (containsDecimalType(expr, false)) {
+    if (cudf_velox::CudfConfig::getInstance().debugEnabled) {
+      LOG(WARNING)
+          << "Expression contains DECIMAL type, which is not supported by AST/JIT: "
+          << expr->toString();
+    }
+    return false;
+  }
+
   const auto name =
       stripPrefix(expr->name(), CudfConfig::getInstance().functionNamePrefix);
   const auto len = expr->inputs().size();
@@ -288,7 +301,7 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
   // Literals and field references are always supported
   auto isSupportedLiteral = [&](const TypePtr& type) {
     try {
-      auto cudfType = cudf::data_type(veloxToCudfTypeId(type));
+      auto cudfType = veloxToCudfDataType(type);
       return cudf::is_fixed_width(cudfType) ||
           cudfType.id() == cudf::type_id::STRING;
     } catch (...) {
@@ -316,8 +329,7 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
   inputCudfDataTypes.reserve(len);
   for (const auto& input : expr->inputs()) {
     try {
-      inputCudfDataTypes.push_back(
-          cudf::data_type(veloxToCudfTypeId(input->type())));
+      inputCudfDataTypes.push_back(veloxToCudfDataType(input->type()));
     } catch (...) {
       return false;
     }
@@ -442,7 +454,11 @@ cudf::ast::expression const& AstContext::addPrecomputeInstructionOnSide(
     auto nestedIndices = getNestedColumnIndices(
         inputRowSchema[sideIdx].get()->childAt(columnIndex), fieldName);
     precomputeInstructions[sideIdx].get().emplace_back(
-        columnIndex, instruction, newColumnIndex, nestedIndices, node);
+        columnIndex,
+        instruction,
+        newColumnIndex,
+        std::move(nestedIndices),
+        node);
   }
   auto side = static_cast<cudf::ast::table_reference>(sideIdx);
   return tree.push(cudf::ast::column_reference(newColumnIndex, side));
