@@ -359,3 +359,36 @@ TEST_F(CudfGroupIdTest, globalGroupingSet) {
   assertQuery(
       plan, "SELECT k1, sum(a) FROM tmp GROUP BY GROUPING SETS ((k1), ())");
 }
+
+// Test: Column reuse across multiple grouping sets (exercises copy vs move logic)
+// When a column appears in multiple grouping sets, it must be copied for earlier
+// sets and can only be moved on the last use.
+TEST_F(CudfGroupIdTest, columnReuseAcrossGroupingSets) {
+  auto input = makeRowVector(
+      {"k1", "a"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 4}),
+          makeFlatVector<int64_t>({10, 20, 30, 40}),
+      });
+
+  createDuckDbTable({input});
+
+  // k1 appears in both grouping sets, so it must be copied for the first set
+  // and moved for the second set. The aggregation input 'a' also appears in
+  // both outputs, requiring similar copy/move handling.
+  auto plan =
+      PlanBuilder()
+          .values({input})
+          .groupId({"k1"}, {{"k1"}, {"k1"}}, {"a"})
+          .singleAggregation({"k1", "group_id"}, {"sum(a) as sum_a"})
+          .project({"k1", "sum_a"})
+          .planNode();
+
+  // Both grouping sets include k1, so we get the same grouping twice
+  // with different group_id values (0 and 1)
+  assertQuery(
+      plan,
+      "SELECT k1, sum(a) FROM tmp GROUP BY k1 "
+      "UNION ALL "
+      "SELECT k1, sum(a) FROM tmp GROUP BY k1");
+}
