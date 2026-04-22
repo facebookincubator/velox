@@ -204,9 +204,6 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     VELOX_REGISTER_QUERY_CONFIG(kDebugLambdaFunctionEvaluationBatchSize);
     VELOX_REGISTER_QUERY_CONFIG(kDebugBingTileChildrenMaxZoomShift);
 
-    // Nimble.
-    VELOX_REGISTER_QUERY_CONFIG(kSelectiveNimbleReaderEnabled);
-
     // Scale writer.
     VELOX_REGISTER_QUERY_CONFIG(kScaleWriterRebalanceMaxMemoryUsageRatio);
     VELOX_REGISTER_QUERY_CONFIG(kScaleWriterMaxPartitionsPerWriter);
