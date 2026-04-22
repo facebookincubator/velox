@@ -34,7 +34,10 @@ if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()
 
+velox_add_library(velox_enums_declare INTERFACE HEADERS EnumsDeclare.h)
+
 velox_add_library(velox_enums INTERFACE HEADERS Enums.h)
+velox_link_libraries(velox_enums INTERFACE velox_enums_declare)
 
 velox_add_library(velox_casts INTERFACE HEADERS Casts.h)
 

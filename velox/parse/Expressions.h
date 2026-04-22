@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include "velox/common/Enums.h"
+#include "velox/common/EnumsDeclare.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/parse/IExpr.h"
 #include "velox/type/Variant.h"

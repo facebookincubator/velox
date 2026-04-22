@@ -16,6 +16,8 @@
 
 #include "velox/core/ITypedExpr.h"
 
+#include "velox/common/Enums.h"
+
 namespace facebook::velox::core {
 
 namespace {
