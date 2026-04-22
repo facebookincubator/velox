@@ -16,15 +16,17 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 
 #include "velox/benchmarks/QueryBenchmarkBase.h"
 #include "velox/exec/tests/utils/TpcdsQueryBuilder.h"
 
 DECLARE_string(plan_path);
 
-inline const std::string kPrestoHiveConnectorId = "hive";
+inline constexpr std::string_view kPrestoHiveConnectorId = "hive";
 
-static constexpr const char* kPrestoFunctionNamespacePrefix = "presto.default.";
+inline constexpr std::string_view kPrestoFunctionNamespacePrefix =
+    "presto.default.";
 
 class TpcdsBenchmark : public facebook::velox::QueryBenchmarkBase {
  public:

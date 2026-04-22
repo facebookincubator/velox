@@ -77,11 +77,10 @@ void TpcdsBenchmark::initQueryBuilder() {
 void TpcdsBenchmark::initialize() {
   QueryBenchmarkBase::initialize();
 
-  functions::prestosql::registerAllScalarFunctions(
-      kPrestoFunctionNamespacePrefix);
-  aggregate::prestosql::registerAllAggregateFunctions(
-      kPrestoFunctionNamespacePrefix);
-  window::prestosql::registerAllWindowFunctions(kPrestoFunctionNamespacePrefix);
+  const std::string prestoPrefix{kPrestoFunctionNamespacePrefix};
+  functions::prestosql::registerAllScalarFunctions(prestoPrefix);
+  aggregate::prestosql::registerAllAggregateFunctions(prestoPrefix);
+  window::prestosql::registerAllWindowFunctions(prestoPrefix);
 
   // Register serialization/deserialization for plan nodes.
   Type::registerSerDe();
@@ -94,11 +93,12 @@ void TpcdsBenchmark::initialize() {
   // Presto-dumped plans use connector ID "hive", while the base class
   // registers under kHiveConnectorId ("test-hive"). Register a properly
   // configured connector under "hive" so both the plan and splits match.
-  if (connector::ConnectorRegistry::tryGet(kPrestoHiveConnectorId) == nullptr) {
+  const std::string prestoConnectorId{kPrestoHiveConnectorId};
+  if (connector::ConnectorRegistry::tryGet(prestoConnectorId) == nullptr) {
     auto properties = makeConnectorProperties();
     connector::hive::HiveConnectorFactory factory;
-    auto hiveConnector = factory.newConnector(
-        kPrestoHiveConnectorId, properties, ioExecutor_.get());
+    auto hiveConnector =
+        factory.newConnector(prestoConnectorId, properties, ioExecutor_.get());
     connector::ConnectorRegistry::global().insert(
         hiveConnector->connectorId(), hiveConnector);
   }
@@ -114,8 +114,9 @@ void TpcdsBenchmark::shutdown() {
     queryBuilder_->shutdown();
     queryBuilder_.reset();
   }
-  if (connector::ConnectorRegistry::tryGet(kPrestoHiveConnectorId) != nullptr) {
-    connector::ConnectorRegistry::global().erase(kPrestoHiveConnectorId);
+  const std::string prestoConnectorId{kPrestoHiveConnectorId};
+  if (connector::ConnectorRegistry::tryGet(prestoConnectorId) != nullptr) {
+    connector::ConnectorRegistry::global().erase(prestoConnectorId);
   }
   pool_.reset();
   QueryBenchmarkBase::shutdown();

@@ -108,21 +108,21 @@ void CudfTpcdsBenchmark::initialize() {
 
   TpcdsBenchmark::initialize();
 
+  const std::string prestoConnectorId{kPrestoHiveConnectorId};
   if (FLAGS_velox_cudf_table_scan) {
     // The base class registered a HiveConnector. Unregister it so the
     // CudfTpcdsQueryBuilder can register CudfHiveConnector under the plan's
     // connector ID instead. The query builder handles this when getQueryPlan()
     // is called.
-    if (connector::ConnectorRegistry::tryGet(kPrestoHiveConnectorId) !=
-        nullptr) {
-      connector::ConnectorRegistry::global().erase(kPrestoHiveConnectorId);
+    if (connector::ConnectorRegistry::tryGet(prestoConnectorId) != nullptr) {
+      connector::ConnectorRegistry::global().erase(prestoConnectorId);
     }
 
     // Re-register with CuDF properties.
     auto properties = makeConnectorProperties();
     cudf_velox::connector::hive::CudfHiveConnectorFactory cudfHiveFactory;
     auto cudfHiveConnector = cudfHiveFactory.newConnector(
-        kPrestoHiveConnectorId, properties, ioExecutor_.get());
+        prestoConnectorId, properties, ioExecutor_.get());
     connector::ConnectorRegistry::global().insert(
         cudfHiveConnector->connectorId(), cudfHiveConnector);
   }
