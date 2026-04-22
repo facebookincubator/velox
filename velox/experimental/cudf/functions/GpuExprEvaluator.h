@@ -68,6 +68,11 @@ struct GpuExprNode {
   // Holds shared_ptr<exec::Expr> and shared_ptr<RowType> respectively.
   std::shared_ptr<void> fallbackExpr;
   std::shared_ptr<void> fallbackSchema;
+
+  // For kFunctionCall with stateful functions: owns a per-expression function
+  // instance created by GpuStatefulFunctionFactory with constants baked in.
+  // When set, evalFunctionCall uses this directly instead of dispatch.
+  std::unique_ptr<GpuVectorFunction> ownedFunction;
 };
 
 using CpuFallbackFn = std::function<std::unique_ptr<cudf::column>(

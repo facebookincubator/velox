@@ -36,6 +36,10 @@
 
 #include <atomic>
 
+namespace {
+std::atomic<uint64_t> constExtractPoolCounter{0};
+} // namespace
+
 namespace facebook::velox::gpu {
 void registerAllPrestoGpuFunctions() __attribute__((weak));
 } // namespace facebook::velox::gpu
@@ -212,6 +216,93 @@ std::unique_ptr<gpu::GpuExprNode> convertExpr(
           resultTypeId, convertExpr(inputs.at(0), schema));
     }
     return buildCpuFallback();
+  }
+
+  // -- Stateful function dispatch: for functions with constant arguments --
+  // Mirrors Velox CPU's VectorFunctionFactory pattern: extract constant values
+  // from ConstantExpr children, pass them to the factory at compile time,
+  // and the factory bakes them into the function instance.
+  {
+    bool hasConstant = false;
+    for (const auto& input : inputs) {
+      if (std::dynamic_pointer_cast<velox::exec::ConstantExpr>(input)) {
+        hasConstant = true;
+        break;
+      }
+    }
+
+    if (hasConstant &&
+        gpu::GpuFunctionRegistry::instance().hasStatefulFunction(name)) {
+      std::vector<gpu::GpuFunctionArg> gpuArgs;
+      gpuArgs.reserve(inputs.size());
+      std::vector<std::unique_ptr<gpu::GpuExprNode>> nonConstChildren;
+
+      for (const auto& input : inputs) {
+        auto typeId = veloxTypeToCudfTypeId(input->type());
+        if (auto cexpr =
+                std::dynamic_pointer_cast<velox::exec::ConstantExpr>(input)) {
+          auto value = cexpr->value();
+          std::shared_ptr<cudf::column> deviceCol;
+          std::optional<std::string> constStr;
+          if (value && !value->isNullAt(0)) {
+            // Extract host-side string for scalar string constants.
+            if (value->typeKind() == TypeKind::VARCHAR ||
+                value->typeKind() == TypeKind::VARBINARY) {
+              auto sv =
+                  value->as<SimpleVector<StringView>>()->valueAt(0);
+              constStr = std::string(sv.data(), sv.size());
+            }
+
+            // For ARRAY constants (e.g. IN-list), extract the elements
+            // as a flat vector and transfer those to device.
+            VectorPtr toTransfer = value;
+            TypePtr transferType = value->type();
+            if (value->typeKind() == TypeKind::ARRAY) {
+              auto constInput = value->as<ConstantVector<ComplexType>>();
+              auto arrayVec = constInput->valueVector()->as<ArrayVector>();
+              auto offset = arrayVec->offsetAt(constInput->index());
+              auto size = arrayVec->sizeAt(constInput->index());
+              toTransfer = arrayVec->elements()->slice(offset, size);
+              transferType = toTransfer->type();
+              typeId = veloxTypeToCudfTypeId(transferType);
+            }
+
+            auto pool = velox::memory::memoryManager()->addLeafPool(
+                fmt::format(
+                    "gpu_sfi_const_{}",
+                    constExtractPoolCounter.fetch_add(1)));
+            auto constRow = std::make_shared<RowVector>(
+                pool.get(),
+                ROW({"_c"}, {transferType}),
+                nullptr,
+                toTransfer->size(),
+                std::vector<VectorPtr>{toTransfer});
+            auto constTable = with_arrow::toCudfTable(
+                constRow,
+                pool.get(),
+                rmm::cuda_stream_default,
+                cudf::get_current_device_resource_ref());
+            rmm::cuda_stream_default.synchronize();
+            auto cols = constTable->release();
+            deviceCol = std::move(cols[0]);
+          }
+          gpuArgs.push_back(
+              {typeId, std::move(deviceCol), std::move(constStr)});
+        } else {
+          gpuArgs.push_back({typeId, nullptr, std::nullopt});
+          nonConstChildren.push_back(convertExpr(input, schema));
+        }
+      }
+
+      auto fn = gpu::GpuFunctionRegistry::instance().resolveStatefulFunction(
+          name, gpuArgs);
+      if (fn) {
+        auto node = gpu::makeFunctionCall(
+            name, resultTypeId, std::move(nonConstChildren));
+        node->ownedFunction = std::move(fn);
+        return node;
+      }
+    }
   }
 
   // -- Regular function call: check GPU dispatch availability --

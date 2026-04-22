@@ -20,10 +20,11 @@
 
 #include <cudf/binaryop.hpp>
 #include <cudf/column/column_view.hpp>
-#include <cudf/scalar/scalar_factories.hpp>
 #include <cudf/datetime.hpp>
 #include <cudf/hashing.hpp>
 #include <cudf/scalar/scalar.hpp>
+#include <cudf/scalar/scalar_factories.hpp>
+#include <cudf/search.hpp>
 #include <cudf/strings/attributes.hpp>
 #include <cudf/strings/case.hpp>
 #include <cudf/strings/combine.hpp>
@@ -327,23 +328,33 @@ void registerCudfDateTimeFunctions() {
   using DC = cudf::datetime::datetime_component;
 
   auto registerExtract = [](const std::string& name, DC component) {
-    // date_type is TIMESTAMP_DAYS (INT32) for DATE
     for (auto dateType :
          {cudf::type_id::TIMESTAMP_DAYS,
           cudf::type_id::TIMESTAMP_SECONDS,
           cudf::type_id::TIMESTAMP_MILLISECONDS}) {
-      registerCudfLibFn(
-          name,
-          cudf::type_id::INT32,
-          {dateType},
-          [component](
-              const std::vector<cudf::column_view>& inputs,
-              cudf::size_type,
-              rmm::cuda_stream_view stream,
-              rmm::device_async_resource_ref mr) {
-            return cudf::datetime::extract_datetime_component(
-                inputs[0], component, stream, mr);
-          });
+      // cuDF extract returns INT16; Velox expects BIGINT (INT64).
+      // Register for both INT32 and INT64 return types, casting as needed.
+      for (auto retType :
+           {cudf::type_id::INT16, cudf::type_id::INT32,
+            cudf::type_id::INT64}) {
+        registerCudfLibFn(
+            name,
+            retType,
+            {dateType},
+            [component, retType](
+                const std::vector<cudf::column_view>& inputs,
+                cudf::size_type,
+                rmm::cuda_stream_view stream,
+                rmm::device_async_resource_ref mr) {
+              auto result = cudf::datetime::extract_datetime_component(
+                  inputs[0], component, stream, mr);
+              if (retType != cudf::type_id::INT16) {
+                return cudf::cast(
+                    result->view(), cudf::data_type{retType}, stream, mr);
+              }
+              return result;
+            });
+      }
     }
   };
 
@@ -382,6 +393,88 @@ void registerCudfHashFunctions() {
         cudf::table_view tv(inputs);
         return cudf::hashing::sha256(tv, stream, mr);
       });
+}
+
+// -- Stateful Functions (constant arguments baked at compile time) --
+
+namespace {
+
+// IN predicate: wraps cudf::contains(haystack, needles).
+// The constant IN-list (haystack) is baked in at creation time.
+class GpuInFunction : public GpuVectorFunction {
+ public:
+  explicit GpuInFunction(std::shared_ptr<cudf::column> inList)
+      : inList_(std::move(inList)) {}
+
+  std::unique_ptr<cudf::column> apply(
+      const std::vector<cudf::column_view>& inputs,
+      cudf::size_type /*numRows*/,
+      const cudf::bitmask_type* /*activeRows*/,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) override {
+    // inputs[0] = the data column (needles)
+    // inList_ = the constant values to search in (haystack)
+    return cudf::contains(inList_->view(), inputs[0], stream, mr);
+  }
+
+ private:
+  std::shared_ptr<cudf::column> inList_;
+};
+
+// LIKE pattern matching: wraps cudf::strings::like(input, pattern, escape).
+// The constant pattern (and optional escape char) are baked in at creation time.
+class GpuLikeFunction : public GpuVectorFunction {
+ public:
+  GpuLikeFunction(std::string pattern, std::string escape)
+      : pattern_(std::move(pattern)), escape_(std::move(escape)) {}
+
+  std::unique_ptr<cudf::column> apply(
+      const std::vector<cudf::column_view>& inputs,
+      cudf::size_type /*numRows*/,
+      const cudf::bitmask_type* /*activeRows*/,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) override {
+    cudf::strings_column_view scv(inputs[0]);
+    return cudf::strings::like(scv, pattern_, escape_, stream, mr);
+  }
+
+ private:
+  std::string pattern_;
+  std::string escape_;
+};
+
+std::unique_ptr<GpuVectorFunction> makeInFactory(
+    const std::string& /*name*/,
+    const std::vector<GpuFunctionArg>& inputArgs) {
+  if (inputArgs.size() < 2 || !inputArgs[1].constantValue) {
+    return nullptr;
+  }
+  return std::make_unique<GpuInFunction>(inputArgs[1].constantValue);
+}
+
+std::unique_ptr<GpuVectorFunction> makeLikeFactory(
+    const std::string& /*name*/,
+    const std::vector<GpuFunctionArg>& inputArgs) {
+  if (inputArgs.size() < 2 || !inputArgs[1].constantString) {
+    return nullptr;
+  }
+
+  std::string pattern = *inputArgs[1].constantString;
+
+  std::string escape;
+  if (inputArgs.size() >= 3 && inputArgs[2].constantString) {
+    escape = *inputArgs[2].constantString;
+  }
+
+  return std::make_unique<GpuLikeFunction>(std::move(pattern), std::move(escape));
+}
+
+} // namespace
+
+void registerCudfStatefulFunctions() {
+  auto& registry = GpuFunctionRegistry::instance();
+  registry.registerStatefulFunction("in", makeInFactory);
+  registry.registerStatefulFunction("like", makeLikeFactory);
 }
 
 } // namespace facebook::velox::gpu
