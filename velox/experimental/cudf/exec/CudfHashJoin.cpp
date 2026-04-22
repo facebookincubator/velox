@@ -1109,9 +1109,9 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::fullJoin(
   auto& hbs = hashObject_.value().second;
 
   // For now, AST support is necessary to filter join output
-  VELOX_NYI(
-      !joinNode_->filter() || useAstFilter_,
-      "Full join requires AST support for filtering");
+  if (joinNode_->filter() && !useAstFilter_) {
+    VELOX_NYI("Full join requires AST support for filtering");
+  }
 
   for (auto i = 0; i < rightTables.size(); i++) {
     auto rightTableView = rightTables[i]->view();
@@ -1363,9 +1363,9 @@ CudfHashJoinProbe::leftSemiProjectJoin(
   std::vector<std::unique_ptr<cudf::table>> cudfOutputs;
 
   // For now, AST support is necessary to filter join output
-  VELOX_NYI(
-      !joinNode_->filter() || useAstFilter_,
-      "Left semi project join requires AST support for filtering");
+  if (joinNode_->filter() && !useAstFilter_) {
+    VELOX_NYI("Left semi project join requires AST support for filtering");
+  }
 
   auto& rightTables = hashObject_.value().first;
   auto& hbs = hashObject_.value().second;
