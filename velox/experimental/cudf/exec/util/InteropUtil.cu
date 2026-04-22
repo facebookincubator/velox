@@ -75,7 +75,8 @@ void convertTimestamps(
     case cudf::type_id::TIMESTAMP_NANOSECONDS:
       thrust::transform(
           rmm::exec_policy_nosync(stream),
-          thrust::counting_iterator<cudf::size_type>(0),
+          cuda::counting_iterator<cudf::size_type>(0),
+          cuda::counting_iterator<cudf::size_type>(numRows),
           thrust::counting_iterator<cudf::size_type>(numRows),
           dOutput,
           [dTimestampsTyped, dMask] __device__(auto idx) -> int64_t {
