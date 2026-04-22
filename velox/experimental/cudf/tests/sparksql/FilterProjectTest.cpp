@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/expression/SparkFunctions.h"
 #include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
+#include "velox/experimental/cudf/tests/utils/ExpressionTestUtil.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
@@ -116,6 +117,132 @@ TEST_F(CudfFilterProjectTest, dateAdd) {
   // Account for the last day of a year-month
   EXPECT_EQ(parseDate("2020-02-29"), dateAdd("2019-01-30", 395));
   EXPECT_EQ(parseDate("2020-02-29"), dateAdd("2019-01-30", 395));
+}
+
+TEST_F(CudfFilterProjectTest, startswith) {
+  auto input = makeNullableFlatVector<std::string>(
+      {"abc", "zabc", std::nullopt, "ab", "", "xyz", "abz"});
+  auto data = makeRowVector({input});
+
+  auto plan = PlanBuilder()
+                  .setParseOptions(options_)
+                  .values({data})
+                  .project({"startswith(c0, 'ab') AS c1"})
+                  .planNode();
+
+  auto expected = makeRowVector({
+      makeNullableFlatVector<bool>(
+          {true, false, std::nullopt, true, false, false, true}),
+  });
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfFilterProjectTest, startswithNullPattern) {
+  auto input = makeNullableFlatVector<std::string>(
+      {"abc", "zabc", std::nullopt, "ab", "", "xyz", "abz"});
+  auto data = makeRowVector({input});
+
+  auto plan = PlanBuilder()
+                  .setParseOptions(options_)
+                  .values({data})
+                  .project({"startswith(c0, cast(null as varchar)) AS c1"})
+                  .planNode();
+
+  auto expected = makeRowVector({
+      makeNullableFlatVector<bool>({
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+      }),
+  });
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfFilterProjectTest, startswithEmptyPattern) {
+  auto input = makeNullableFlatVector<std::string>(
+      {"abc", "zabc", std::nullopt, "ab", "", "xyz", "abz"});
+  auto data = makeRowVector({input});
+
+  auto plan = PlanBuilder()
+                  .setParseOptions(options_)
+                  .values({data})
+                  .project({"startswith(c0, '') AS c1"})
+                  .planNode();
+
+  auto expected = makeRowVector({
+      makeNullableFlatVector<bool>(
+          {true, true, std::nullopt, true, true, true, true}),
+  });
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfFilterProjectTest, startswithColumnPattern) {
+  auto input = makeNullableFlatVector<std::string>(
+      {"abc", "zabc", std::nullopt, "ab", "", "xyz", "abz"});
+  auto pattern = makeNullableFlatVector<std::string>(
+      {"ab", "ab", "ab", std::nullopt, "", "yz", "zz"});
+  auto data = makeRowVector({input, pattern});
+
+  auto plan = PlanBuilder()
+                  .setParseOptions(options_)
+                  .values({data})
+                  .project({"startswith(c0, c1) AS c2"})
+                  .planNode();
+
+  auto expected = makeRowVector({
+      makeNullableFlatVector<bool>(
+          {true, false, std::nullopt, std::nullopt, true, false, false}),
+  });
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfFilterProjectTest, startswithConstantInput) {
+  auto pattern =
+      makeNullableFlatVector<std::string>({"a", "ab", std::nullopt, "", "abc"});
+  auto data = makeRowVector({pattern});
+  auto typed = test_utils::parseAndInferTypedExpr(
+      "startswith('ab', c0)", data->rowType(), &execCtx_, options_);
+  exec::ExprSet exprSet({typed}, &execCtx_, /*enableConstantFolding*/ false);
+
+  auto result = evaluate(exprSet, data);
+  auto expected =
+      makeNullableFlatVector<bool>({true, true, std::nullopt, true, false});
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfFilterProjectTest, startswithColumnPatternNullInput) {
+  auto input = makeNullableFlatVector<std::string>({std::nullopt});
+  auto pattern = makeNullableFlatVector<std::string>({"ab"});
+  auto data = makeRowVector({input, pattern});
+
+  auto plan = PlanBuilder()
+                  .setParseOptions(options_)
+                  .values({data})
+                  .project({"startswith(c0, c1) AS c2"})
+                  .planNode();
+
+  auto expected = makeRowVector({makeNullableFlatVector<bool>({std::nullopt})});
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfFilterProjectTest, startswithColumnPatternNullPattern) {
+  auto input = makeNullableFlatVector<std::string>({"ab"});
+  auto pattern = makeNullableFlatVector<std::string>({std::nullopt});
+  auto data = makeRowVector({input, pattern});
+
+  auto plan = PlanBuilder()
+                  .setParseOptions(options_)
+                  .values({data})
+                  .project({"startswith(c0, c1) AS c2"})
+                  .planNode();
+
+  auto expected = makeRowVector({makeNullableFlatVector<bool>({std::nullopt})});
+  AssertQueryBuilder(plan).assertResults(expected);
 }
 
 // Test unary math functions for Spark
