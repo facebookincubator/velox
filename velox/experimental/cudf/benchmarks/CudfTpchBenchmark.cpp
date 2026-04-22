@@ -28,9 +28,6 @@
 
 #include <experimental/cudf/connectors/hive/CudfHiveConnector.h>
 
-#include <filesystem>
-#include <fstream>
-
 DECLARE_int64(max_coalesced_bytes);
 DECLARE_string(max_coalesced_distance_bytes);
 DECLARE_int32(parquet_prefetch_rowgroups);
@@ -66,30 +63,8 @@ DEFINE_string(
 
 void CudfTpchBenchmark::initialize() {
   if (!FLAGS_cudf_properties.empty()) {
-    auto path = std::filesystem::path(FLAGS_cudf_properties);
-    VELOX_USER_CHECK(
-        std::filesystem::exists(path),
-        "Properties file not found: {}",
-        FLAGS_cudf_properties);
-    std::unordered_map<std::string, std::string> properties;
-    std::string line;
-    std::ifstream configFile(path);
-    while (std::getline(configFile, line)) {
-      line.erase(std::remove_if(line.begin(), line.end(), isspace), line.end());
-      if (line.empty() || line[0] == '#') {
-        continue;
-      }
-      LOG(INFO) << "Setting property " << line;
-      const auto delimiterPos = line.find('=');
-      if (delimiterPos == std::string::npos) {
-        LOG(WARNING) << "Skipping malformed config line (no '='): " << line;
-        continue;
-      }
-      const auto name = line.substr(0, delimiterPos);
-      const auto value = line.substr(delimiterPos + 1);
-      properties.emplace(name, value);
-    }
-    cudf_velox::CudfConfig::getInstance().initialize(std::move(properties));
+    cudf_velox::CudfConfig::getInstance().initialize(
+        cudf_velox::loadPropertiesFile(FLAGS_cudf_properties));
   }
 
   TpchBenchmark::initialize();
