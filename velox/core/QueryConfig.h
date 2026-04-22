@@ -1296,6 +1296,15 @@ class QueryConfig {
       "none",
       "Compression codec for shuffle data.")
 
+  /// Minimum serialized page size in bytes to attempt shuffle compression.
+  VELOX_QUERY_CONFIG(
+      kMinShuffleCompressionPageSizeBytes,
+      minShuffleCompressionPageSizeBytes,
+      "min_shuffle_compression_page_size_bytes",
+      int32_t,
+      0,
+      "Minimum serialized page size in bytes to attempt shuffle compression.")
+
   /// When true, throw exception on duplicate map key.
   VELOX_QUERY_CONFIG(
       kThrowExceptionOnDuplicateMapKeys,
