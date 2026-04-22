@@ -140,8 +140,10 @@ class CudfFilterProjectTest : public OperatorTestBase {
     runTest(plan, "SELECT c0 = 1 OR c1 = 2.0 AS result FROM tmp");
   }
 
-  void testLogicalShortCircuitWithLiterals(const std::vector<RowVectorPtr>& input) {
-    // Constant false as first conjunct: LogicalFunction short-circuits to false.
+  void testLogicalShortCircuitWithLiterals(
+      const std::vector<RowVectorPtr>& input) {
+    // Constant false as first conjunct: LogicalFunction short-circuits to
+    // false.
     auto plan = PlanBuilder()
                     .values(input)
                     .project({"false AND (c0 = 1) AS result"})
@@ -156,15 +158,15 @@ class CudfFilterProjectTest : public OperatorTestBase {
     runTest(plan, "SELECT true OR (c0 = 1) AS result FROM tmp");
   }
 
-  void testLogicalAndOrLiteralsAndMixed(const std::vector<RowVectorPtr>& input) {
-    // Literal-only (exercises LogicalFunction scalar/scalar and broadcast paths).
+  void testLogicalAndOrLiteralsAndMixed(
+      const std::vector<RowVectorPtr>& input) {
+    // Literal-only (exercises LogicalFunction scalar/scalar and broadcast
+    // paths).
     auto plan = PlanBuilder()
                     .values(input)
                     .project({"true AND false AS r1", "true OR false AS r2"})
                     .planNode();
-    runTest(
-        plan,
-        "SELECT true AND false AS r1, true OR false AS r2 FROM tmp");
+    runTest(plan, "SELECT true AND false AS r1, true OR false AS r2 FROM tmp");
 
     plan = PlanBuilder()
                .values(input)
@@ -1632,10 +1634,7 @@ TEST_F(CudfSimpleFilterProjectTest, logicalOrAllLiterals) {
   const auto rowType = ROW({{"c0", BOOLEAN()}});
   auto input = makeRowVector({makeFlatVector<bool>({true})});
   for (const auto& expr :
-       {"true OR true",
-        "true OR false",
-        "false OR true",
-        "false OR false"}) {
+       {"true OR true", "true OR false", "false OR true", "false OR false"}) {
     auto exprSet = compileExpression(expr, rowType);
     auto expected =
         this->functions::test::FunctionBaseTest::evaluate(*exprSet, input);
@@ -1646,14 +1645,11 @@ TEST_F(CudfSimpleFilterProjectTest, logicalOrAllLiterals) {
 
 TEST_F(CudfSimpleFilterProjectTest, logicalAndColumnWithLiteral) {
   const auto rowType = ROW({{"c0", BOOLEAN()}});
-  auto c0 = makeNullableFlatVector<bool>(
-      {true, false, std::nullopt, std::nullopt});
+  auto c0 =
+      makeNullableFlatVector<bool>({true, false, std::nullopt, std::nullopt});
   auto input = makeRowVector({c0});
   for (const auto& expr :
-       {"c0 AND true",
-        "true AND c0",
-        "c0 AND false",
-        "false AND c0"}) {
+       {"c0 AND true", "true AND c0", "c0 AND false", "false AND c0"}) {
     auto exprSet = compileExpression(expr, rowType);
     auto expected =
         this->functions::test::FunctionBaseTest::evaluate(*exprSet, input);
@@ -1664,14 +1660,11 @@ TEST_F(CudfSimpleFilterProjectTest, logicalAndColumnWithLiteral) {
 
 TEST_F(CudfSimpleFilterProjectTest, logicalOrColumnWithLiteral) {
   const auto rowType = ROW({{"c0", BOOLEAN()}});
-  auto c0 = makeNullableFlatVector<bool>(
-      {true, false, std::nullopt, std::nullopt});
+  auto c0 =
+      makeNullableFlatVector<bool>({true, false, std::nullopt, std::nullopt});
   auto input = makeRowVector({c0});
   for (const auto& expr :
-       {"c0 OR true",
-        "true OR c0",
-        "c0 OR false",
-        "false OR c0"}) {
+       {"c0 OR true", "true OR c0", "c0 OR false", "false OR c0"}) {
     auto exprSet = compileExpression(expr, rowType);
     auto expected =
         this->functions::test::FunctionBaseTest::evaluate(*exprSet, input);
@@ -1681,8 +1674,7 @@ TEST_F(CudfSimpleFilterProjectTest, logicalOrColumnWithLiteral) {
 }
 
 TEST_F(CudfSimpleFilterProjectTest, logicalAndThreeArgLiteralsMixed) {
-  const auto rowType =
-      ROW({{"c0", BOOLEAN()}, {"c1", BOOLEAN()}});
+  const auto rowType = ROW({{"c0", BOOLEAN()}, {"c1", BOOLEAN()}});
   auto c0 = makeNullableFlatVector<bool>({true, false, std::nullopt});
   auto c1 = makeNullableFlatVector<bool>({false, true, true});
   auto input = makeRowVector({c0, c1});
@@ -1700,8 +1692,7 @@ TEST_F(CudfSimpleFilterProjectTest, logicalAndThreeArgLiteralsMixed) {
 }
 
 TEST_F(CudfSimpleFilterProjectTest, logicalOrThreeArgLiteralsMixed) {
-  const auto rowType =
-      ROW({{"c0", BOOLEAN()}, {"c1", BOOLEAN()}});
+  const auto rowType = ROW({{"c0", BOOLEAN()}, {"c1", BOOLEAN()}});
   auto c0 = makeNullableFlatVector<bool>({false, true, std::nullopt});
   auto c1 = makeNullableFlatVector<bool>({false, false, true});
   auto input = makeRowVector({c0, c1});
