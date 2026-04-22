@@ -38,7 +38,7 @@ struct DeviceTimestamp {
   int64_t seconds_;
   uint64_t nanos_;
 
-  __device__ int64_t getSeconds() const {
+  __device__ int64_t seconds() const {
     return seconds_;
   }
   __device__ uint64_t nanos() const {
