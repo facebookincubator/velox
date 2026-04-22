@@ -24,6 +24,8 @@
 #include "velox/common/process/ThreadDebugInfo.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/expression/CastExpr.h"
+
+#include "velox/common/EnumDefine.h"
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/ExprCompiler.h"

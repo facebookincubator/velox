@@ -15,6 +15,8 @@
  */
 #include "velox/common/config/ConfigProperty.h"
 
+#include "velox/common/EnumDefine.h"
+
 namespace facebook::velox::config {
 
 namespace {
