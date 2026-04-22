@@ -249,6 +249,7 @@ void registerAllPrestoGpuFunctions() {
   registerCudfStringFunctions();
   registerCudfDateTimeFunctions();
   registerCudfHashFunctions();
+  registerCudfStatefulFunctions();
 }
 
 } // namespace facebook::velox::gpu

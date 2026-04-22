@@ -24,5 +24,6 @@ namespace facebook::velox::gpu {
 void registerCudfStringFunctions();
 void registerCudfDateTimeFunctions();
 void registerCudfHashFunctions();
+void registerCudfStatefulFunctions();
 
 } // namespace facebook::velox::gpu

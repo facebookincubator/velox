@@ -98,6 +98,15 @@ GpuExprEvaluator::EvalResult GpuExprEvaluator::evalFunctionCall(
     argTypes.push_back(childViews.back().type().id());
   }
 
+  // If the node has a stateful function with constants baked in, use it
+  // directly (mirrors Velox CPU's VectorFunctionFactory pattern).
+  if (node.ownedFunction) {
+    auto col = node.ownedFunction->apply(
+        childViews, input.num_rows(), nullptr, stream, mr);
+    auto view = col->view();
+    return {std::move(col), view};
+  }
+
   auto dispatch = dispatchGpuFunction(
       node.functionName, node.resultType, argTypes);
 
@@ -106,7 +115,6 @@ GpuExprEvaluator::EvalResult GpuExprEvaluator::evalFunctionCall(
         "No GPU implementation found for function: " + node.functionName);
   }
 
-  // Retain owned to keep the function object alive through apply().
   auto ownedFn = std::move(dispatch.owned);
   GpuVectorFunction* fn = ownedFn ? ownedFn.get() : dispatch.function;
 

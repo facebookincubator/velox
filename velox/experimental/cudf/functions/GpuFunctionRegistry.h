@@ -15,11 +15,13 @@
  */
 #pragma once
 
+#include <cudf/column/column.hpp>
 #include <cudf/types.hpp>
 
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -37,6 +39,27 @@ struct GpuFunctionKey {
   }
 };
 
+class GpuVectorFunction;
+
+// Mirrors Velox's VectorFunctionArg: describes one argument to a GPU function.
+// For constant arguments (e.g. pattern in LIKE, values in IN), constantValue
+// holds a cuDF column containing the constant data on device.
+// For scalar string constants (e.g. LIKE pattern), constantString stores the
+// host-side value to avoid unnecessary D-to-H transfers.
+struct GpuFunctionArg {
+  cudf::type_id type;
+  std::shared_ptr<cudf::column> constantValue;
+  std::optional<std::string> constantString;
+};
+
+// Mirrors Velox's VectorFunctionFactory: receives the function name and
+// argument descriptors (including constants) at compile time, returns a
+// GpuVectorFunction instance with constants baked in.
+using GpuStatefulFunctionFactory = std::function<
+    std::unique_ptr<GpuVectorFunction>(
+        const std::string& name,
+        const std::vector<GpuFunctionArg>& inputArgs)>;
+
 struct GpuFunctionKeyHash {
   size_t operator()(const GpuFunctionKey& key) const {
     size_t h = std::hash<std::string>{}(key.name);
@@ -50,8 +73,6 @@ struct GpuFunctionKeyHash {
   }
 };
 
-class GpuVectorFunction;
-
 using GpuFunctionFactory =
     std::function<std::unique_ptr<GpuVectorFunction>()>;
 
@@ -64,6 +85,21 @@ class GpuFunctionRegistry {
   GpuVectorFunction* resolveFunction(const GpuFunctionKey& key) const;
 
   bool hasFunction(const GpuFunctionKey& key) const;
+
+  // Stateful function support: register a factory keyed by name only.
+  // The factory receives constant argument descriptors and produces a
+  // per-expression function instance with constants baked in.
+  void registerStatefulFunction(
+      const std::string& name,
+      GpuStatefulFunctionFactory factory);
+
+  // Try to create a stateful function instance. Returns nullptr if no
+  // stateful factory is registered for the given name.
+  std::unique_ptr<GpuVectorFunction> resolveStatefulFunction(
+      const std::string& name,
+      const std::vector<GpuFunctionArg>& inputArgs) const;
+
+  bool hasStatefulFunction(const std::string& name) const;
 
   size_t size() const;
 
@@ -80,6 +116,8 @@ class GpuFunctionRegistry {
       resolved_;
   std::unordered_map<GpuFunctionKey, GpuFunctionFactory, GpuFunctionKeyHash>
       factories_;
+  std::unordered_map<std::string, GpuStatefulFunctionFactory>
+      statefulFactories_;
 };
 
 } // namespace facebook::velox::gpu
