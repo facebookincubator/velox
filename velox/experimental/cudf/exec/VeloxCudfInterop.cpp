@@ -17,16 +17,28 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#include "velox/experimental/cudf/exec/util/InteropUtil.h"
 
+#include "velox/common/base/BitUtil.h"
+#include "velox/common/base/Nulls.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
+#include "velox/vector/FlatVector.h"
 #include "velox/vector/arrow/Bridge.h"
 
+#include <cudf/column/column.hpp>
+#include <cudf/column/column_factories.hpp>
+#include <cudf/column/column_view.hpp>
 #include <cudf/interop.hpp>
+#include <cudf/null_mask.hpp>
+#include <cudf/strings/strings_column_view.hpp>
 #include <cudf/table/table.hpp>
+#include <cudf/table/table_view.hpp>
+#include <cudf/transform.hpp>
 #include <cudf/types.hpp>
+#include <cudf/utilities/bit.hpp>
 #include <cudf/utilities/error.hpp>
 
 #include <rmm/cuda_stream_view.hpp>
@@ -119,70 +131,6 @@ cudf::data_type veloxToCudfDataType(const TypePtr& type) {
 }
 
 namespace with_arrow {
-
-std::unique_ptr<cudf::table> toCudfTable(
-    const facebook::velox::RowVectorPtr& veloxTable,
-    facebook::velox::memory::MemoryPool* pool,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr,
-    std::optional<std::string> timestampTimeZone) {
-  TimestampUnit unit;
-  switch (CudfConfig::getInstance().timestampUnit) {
-    case cudf::type_id::TIMESTAMP_NANOSECONDS:
-      unit = TimestampUnit::kNano;
-      break;
-    case cudf::type_id::TIMESTAMP_MICROSECONDS:
-      unit = TimestampUnit::kMicro;
-      break;
-    case cudf::type_id::TIMESTAMP_MILLISECONDS:
-      unit = TimestampUnit::kMilli;
-      break;
-    case cudf::type_id::TIMESTAMP_SECONDS:
-      unit = TimestampUnit::kSecond;
-      break;
-    default:
-      VELOX_UNSUPPORTED();
-  }
-  // Need to flattenDictionary and flattenConstant, otherwise we observe issues
-  // in the null mask. Also, libcudf does not support Arrow binary, so we export
-  // VARBINARY as UTF-8.
-  ArrowOptions arrowOptions{
-      .flattenDictionary = true,
-      .flattenConstant = true,
-      .timestampUnit = unit,
-      .timestampTimeZone = timestampTimeZone,
-      .exportVarbinaryAsString = true,
-      .useDecimalTypeWidth = true};
-  ArrowArray arrowArray;
-  exportToArrow(
-      std::dynamic_pointer_cast<facebook::velox::BaseVector>(veloxTable),
-      arrowArray,
-      pool,
-      arrowOptions);
-  ArrowSchema arrowSchema;
-  exportToArrow(
-      std::dynamic_pointer_cast<facebook::velox::BaseVector>(veloxTable),
-      arrowSchema,
-      arrowOptions);
-  auto tbl = cudf::from_arrow(&arrowSchema, &arrowArray, stream, mr);
-
-  // Synchronize before releasing Arrow resources.  cudf::from_arrow uses
-  // cudaMemcpyBatchAsync (CUDA 13.0+) with cudaMemcpySrcAccessOrderStream,
-  // which defers reading the host source buffers until the stream reaches
-  // each copy.  The Arrow arrays must therefore stay alive until the stream
-  // has executed those copies.
-  stream.synchronize();
-
-  // Release Arrow resources
-  if (arrowArray.release) {
-    arrowArray.release(&arrowArray);
-  }
-  if (arrowSchema.release) {
-    arrowSchema.release(&arrowSchema);
-  }
-  return tbl;
-}
-
 namespace {
 
 void setArrowFormatBackToVarbinary(ArrowSchema* schema, const TypePtr& type) {
@@ -252,7 +200,6 @@ RowVectorPtr toVeloxColumn(
   }
 
   auto veloxTable = importFromArrowAsOwner(schemaCopy, arrayCopy, pool);
-
   // BaseVector to RowVector
   auto castedPtr =
       std::dynamic_pointer_cast<facebook::velox::RowVector>(veloxTable);
@@ -318,17 +265,6 @@ facebook::velox::RowVectorPtr toVeloxColumn(
   return toVeloxColumn(table, pool, metadata, nullptr, stream, mr);
 }
 
-facebook::velox::RowVectorPtr toVeloxColumn(
-    const cudf::table_view& table,
-    facebook::velox::memory::MemoryPool* pool,
-    const facebook::velox::RowTypePtr& outputType,
-    std::string namePrefix,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
-  auto metadata = getMetadata(table.begin(), table.end(), namePrefix);
-  return toVeloxColumn(table, pool, metadata, &outputType, stream, mr);
-}
-
 // New overload: Accepts a Velox TypePtr for recursive metadata construction.
 RowVectorPtr toVeloxColumn(
     const cudf::table_view& table,
@@ -347,5 +283,540 @@ RowVectorPtr toVeloxColumn(
 }
 
 } // namespace with_arrow
+
+namespace {
+std::unique_ptr<cudf::table> toCudfTableArrow(
+    const VectorPtr& veloxTable,
+    facebook::velox::memory::MemoryPool* pool,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr,
+    std::optional<std::string> timestampTimeZone) {
+  TimestampUnit unit;
+  switch (CudfConfig::getInstance().timestampUnit) {
+    case cudf::type_id::TIMESTAMP_NANOSECONDS:
+      unit = TimestampUnit::kNano;
+      break;
+    case cudf::type_id::TIMESTAMP_MICROSECONDS:
+      unit = TimestampUnit::kMicro;
+      break;
+    case cudf::type_id::TIMESTAMP_MILLISECONDS:
+      unit = TimestampUnit::kMilli;
+      break;
+    case cudf::type_id::TIMESTAMP_SECONDS:
+      unit = TimestampUnit::kSecond;
+      break;
+    default:
+      VELOX_UNSUPPORTED();
+  }
+  // Need to flattenDictionary and flattenConstant, otherwise we observe issues
+  // in the null mask. Also, libcudf does not support Arrow binary, so we export
+  // VARBINARY as UTF-8.
+  ArrowOptions arrowOptions{
+      .flattenDictionary = true,
+      .flattenConstant = true,
+      .timestampUnit = unit,
+      .timestampTimeZone = timestampTimeZone,
+      .exportVarbinaryAsString = true,
+      .useDecimalTypeWidth = true};
+  ArrowArray arrowArray;
+  exportToArrow(veloxTable, arrowArray, pool, arrowOptions);
+  ArrowSchema arrowSchema;
+  exportToArrow(veloxTable, arrowSchema, arrowOptions);
+  auto tbl = cudf::from_arrow(&arrowSchema, &arrowArray, stream, mr);
+
+  // Synchronize before releasing Arrow resources.  cudf::from_arrow uses
+  // cudaMemcpyBatchAsync (CUDA 13.0+) with cudaMemcpySrcAccessOrderStream,
+  // which defers reading the host source buffers until the stream reaches
+  // each copy.  The Arrow arrays must therefore stay alive until the stream
+  // has executed those copies.
+  stream.synchronize();
+
+  // Release Arrow resources
+  if (arrowArray.release) {
+    arrowArray.release(&arrowArray);
+  }
+  if (arrowSchema.release) {
+    arrowSchema.release(&arrowSchema);
+  }
+  return tbl;
+}
+
+/// Holds the CUDA stream and memory resource used throughout the Velox-to-cudf
+/// direct conversion, avoiding repetitive parameter passing.
+struct DispatchColumn {
+  rmm::cuda_stream_view stream;
+  rmm::device_async_resource_ref mr;
+  std::optional<std::string> timestampTimeZone;
+
+  /// Copies the Velox null bitmask to a GPU device buffer. Velox and cudf both
+  /// use a validity bitmask where bit=1 means valid (not null), so no
+  /// conversion is needed. Returns an empty buffer if there are no nulls.
+  std::unique_ptr<rmm::device_buffer> copyNullMask(
+      const BaseVector& input,
+      int32_t nullCount) const {
+    if (nullCount == 0) {
+      return std::make_unique<rmm::device_buffer>(0, stream, mr);
+    }
+    // Velox stores null bits as uint64_t words; compute byte size needed.
+    const auto* rawNulls = input.rawNulls();
+
+    auto const numRows = static_cast<cudf::size_type>(input.size());
+    auto const paddedWords = cudf::bitmask_allocation_size_bytes(numRows) /
+        sizeof(cudf::bitmask_type);
+    auto const copySize = bits::nbytes(numRows);
+
+    auto mask =
+        rmm::device_uvector<cudf::bitmask_type>(paddedWords, stream, mr);
+    CUDF_CUDA_TRY(cudaMemcpyAsync(
+        mask.data(), rawNulls, copySize, cudaMemcpyDefault, stream.value()));
+    return std::make_unique<rmm::device_buffer>(mask.release());
+  }
+
+  /// Returns the null count for a Velox vector. Uses Velox's cached value if
+  /// available, otherwise counts from the raw bitmap.
+  static cudf::size_type getNullCount(const BaseVector& vector) {
+    auto nullCount = vector.getNullCount();
+    if (nullCount.has_value()) {
+      return static_cast<cudf::size_type>(nullCount.value());
+    }
+    const auto* rawNulls = vector.rawNulls();
+    if (rawNulls == nullptr) {
+      return 0;
+    }
+    return static_cast<cudf::size_type>(
+        bits::countNulls(rawNulls, 0, vector.size()));
+  }
+
+  /// GPU-accelerated version: builds offsets column directly on device from
+  /// sizes array using Thrust inclusive_scan (prefix sum).
+  std::unique_ptr<cudf::column> makeOffsetsColumnFromSizes(
+      const int32_t* rawSizes,
+      cudf::size_type numRows) const {
+    // Copy sizes to device
+    auto dSizes = rmm::device_uvector<int32_t>(numRows, stream, mr);
+    CUDF_CUDA_TRY(cudaMemcpyAsync(
+        dSizes.data(),
+        rawSizes,
+        numRows * sizeof(int32_t),
+        cudaMemcpyHostToDevice,
+        stream.value()));
+
+    // Use utility function to compute offsets on GPU
+    return util::computeOffsetsFromSizes(dSizes.data(), numRows, stream, mr);
+  }
+
+  /// Reads a flat scalar column from a Velox FlatVector and creates a cudf
+  /// column by copying the data buffers to GPU. This mirrors the pattern from
+  /// GpuBufferBatchResizer::DispatchColumn::readFlatColumn.
+  template <TypeKind Kind>
+  std::unique_ptr<cudf::column> readColumn(
+      const BaseVector& vector,
+      const TypePtr& type) const {
+    using T = typename TypeTraits<Kind>::NativeType;
+    const auto numRows = vector.size();
+
+    auto* flatVector = vector.as<FlatVector<T>>();
+    VELOX_CHECK_NOT_NULL(
+        flatVector, "Expected FlatVector for direct conversion");
+
+    // Copy values buffer to GPU.
+    const auto* rawValues = flatVector->rawValues();
+    const size_t valueBytes = numRows * sizeof(T);
+    rmm::device_buffer dataBuf(valueBytes, stream, mr);
+    CUDF_CUDA_TRY(cudaMemcpyAsync(
+        dataBuf.data(),
+        rawValues,
+        valueBytes,
+        cudaMemcpyHostToDevice,
+        stream.value()));
+
+    // Copy null mask to GPU.
+    auto nullCount = getNullCount(vector);
+    auto nullBuf = copyNullMask(vector, nullCount);
+
+    auto cudfType = veloxToCudfDataType(type);
+    return std::make_unique<cudf::column>(
+        cudfType, numRows, std::move(dataBuf), std::move(*nullBuf), nullCount);
+  }
+
+  // Converts a Velox FlatVector<StringView> to a cudf STRING column.
+  // Because we don't know the StringView is in which stringBuffers, so we
+  // cannot implement as Arrow to no copy. Velox must copy all the CPU buffers
+  // to GPU buffers, and then make string column.
+  std::unique_ptr<cudf::column> readStringColumn(
+      const BaseVector& vector) const {
+    const auto numRows = vector.size();
+
+    auto* flatVector = vector.as<FlatVector<StringView>>();
+    VELOX_CHECK_NOT_NULL(
+        flatVector, "Expected FlatVector<StringView> for direct conversion");
+
+    // Build offsets (int32_t[numRows+1]) and concatenated chars on CPU.
+    // Use shared_ptr for automatic lifetime management with CUDA stream.
+    auto offsets = std::make_shared<std::vector<int32_t>>(numRows + 1);
+    int64_t totalChars = 0;
+    for (int32_t i = 0; i < numRows; ++i) {
+      (*offsets)[i] = static_cast<int32_t>(totalChars);
+      if (!vector.isNullAt(i)) {
+        totalChars += flatVector->valueAt(i).size();
+      }
+    }
+    VELOX_CHECK_LE(
+        totalChars,
+        std::numeric_limits<int32_t>::max(),
+        "Total string length exceeds int32 max");
+    (*offsets)[numRows] = totalChars;
+
+    // Build contiguous chars buffer.
+    auto chars = std::make_shared<std::vector<char>>(totalChars);
+    for (int32_t i = 0; i < numRows; ++i) {
+      if (!vector.isNullAt(i)) {
+        auto sv = flatVector->valueAt(i);
+        std::memcpy(chars->data() + (*offsets)[i], sv.data(), sv.size());
+      }
+    }
+
+    rmm::device_buffer offsetBuf(offsets->size() * sizeof(int32_t), stream, mr);
+    CUDF_CUDA_TRY(cudaMemcpyAsync(
+        offsetBuf.data(),
+        offsets->data(),
+        offsets->size() * sizeof(int32_t),
+        cudaMemcpyHostToDevice,
+        stream.value()));
+
+    // Schedule cleanup of offsets buffer after copy completes
+    CUDF_CUDA_TRY(cudaLaunchHostFunc(
+        stream.value(),
+        [](void* p) {
+          auto sp = static_cast<std::shared_ptr<void>*>(p);
+          delete sp; // refcount drops here
+        },
+        new std::shared_ptr<void>(offsets)));
+
+    auto offsetsColumn = std::make_unique<cudf::column>(
+        cudf::data_type{cudf::type_id::INT32},
+        static_cast<cudf::size_type>(offsets->size()),
+        std::move(offsetBuf),
+        rmm::device_buffer{0, stream, mr},
+        0);
+
+    // Copy chars to GPU.
+    rmm::device_buffer charsBuf(totalChars, stream, mr);
+    if (totalChars > 0) {
+      CUDF_CUDA_TRY(cudaMemcpyAsync(
+          charsBuf.data(),
+          chars->data(),
+          totalChars,
+          cudaMemcpyHostToDevice,
+          stream.value()));
+
+      // Schedule cleanup of chars buffer after copy completes
+      CUDF_CUDA_TRY(cudaLaunchHostFunc(
+          stream.value(),
+          [](void* p) {
+            auto sp = static_cast<std::shared_ptr<void>*>(p);
+            delete sp; // refcount drops here
+          },
+          new std::shared_ptr<void>(chars)));
+    }
+
+    // No need to synchronize - cudaLaunchHostFunc ensures buffers stay alive
+
+    // Copy null mask and get null count.
+    auto nullCount = getNullCount(vector);
+    auto nullBuf = copyNullMask(vector, nullCount);
+
+    return cudf::make_strings_column(
+        numRows,
+        std::move(offsetsColumn),
+        std::move(charsBuf),
+        nullCount,
+        std::move(*nullBuf));
+  }
+
+  template <typename Vector>
+  bool isCompact(const Vector& vec) const {
+    for (vector_size_t i = 1; i < vec.size(); ++i) {
+      if (vec.offsetAt(i - 1) + vec.sizeAt(i - 1) != vec.offsetAt(i)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /// Converts a Velox ArrayVector to a cudf LIST column.
+  /// Velox stores lists with separate offsets and sizes arrays, while cudf uses
+  /// Arrow-style cumulative offsets (length = numRows + 1). We compute the
+  /// cumulative offsets from Velox's (offset, size) pairs and recursively
+  /// convert the elements child vector.
+  std::unique_ptr<cudf::column> readArrayColumn(
+      const VectorPtr& vector,
+      const TypePtr& type,
+      memory::MemoryPool* pool) const {
+    const auto numRows = vector->size();
+    auto* arrayVector = vector->as<ArrayVector>();
+    VELOX_CHECK_NOT_NULL(
+        arrayVector, "Expected ArrayVector for direct conversion");
+    if (!isCompact(*arrayVector) &&
+        arrayVector->elements()->type()->isPrimitiveType()) {
+      auto* rawOffsets = arrayVector->rawOffsets();
+      auto* rawSizes = arrayVector->rawSizes();
+
+      // Step 1: build compact offsets using GPU-accelerated prefix sum
+      auto offsetsColumn = makeOffsetsColumnFromSizes(rawSizes, numRows);
+
+      // Compute total elements for gather indices
+      int32_t totalElements = 0;
+      for (int i = 0; i < numRows; ++i) {
+        totalElements += rawSizes[i];
+      }
+      // Step 2: gather elements into contiguous buffer
+      auto elements = BaseVector::loadedVectorShared(arrayVector->elements());
+      // Create indices for gather
+      std::vector<vector_size_t> gatherIndices;
+      gatherIndices.reserve(totalElements);
+      for (int i = 0; i < numRows; ++i) {
+        auto offset = rawOffsets[i];
+        auto size = rawSizes[i];
+        for (int j = 0; j < size; ++j) {
+          gatherIndices.push_back(offset + j);
+        }
+      }
+      // Wrap indices into a Velox buffer/vector
+      auto indexBuffer =
+          AlignedBuffer::allocate<vector_size_t>(gatherIndices.size(), pool);
+      std::memcpy(
+          indexBuffer->asMutable<vector_size_t>(),
+          gatherIndices.data(),
+          gatherIndices.size() * sizeof(vector_size_t));
+      // Use Velox dictionary to compact
+      auto compactElements = BaseVector::wrapInDictionary(
+          BufferPtr(nullptr), indexBuffer, gatherIndices.size(), elements);
+      // Now convert compacted child
+      BaseVector::flattenVector(compactElements);
+      auto childColumn = convertColumn(compactElements, type->childAt(0), pool);
+      auto nullCount = getNullCount(*vector);
+      auto nullBuf = copyNullMask(*vector, nullCount);
+      return cudf::make_lists_column(
+          numRows,
+          std::move(offsetsColumn),
+          std::move(childColumn),
+          nullCount,
+          std::move(*nullBuf));
+    }
+
+    if (!isCompact(*arrayVector)) {
+      // Non-compact: accumulate only for non-null rows, always set offset for
+      // each row. Need to reorder all the row, fallback to with arrow
+      // conversion Wrap the vector in a RowVector for Arrow conversion
+      auto rowType = ROW({type});
+      std::vector<VectorPtr> children = {vector};
+      auto rowVector = std::make_shared<RowVector>(
+          pool, rowType, nullptr, vector->size(), children);
+      auto columns =
+          toCudfTableArrow(rowVector, pool, stream, mr, timestampTimeZone)
+              ->release();
+      return std::move(columns[0]);
+    }
+    // If compact, use GPU-accelerated offsets generation from sizes
+    auto offsetsColumn =
+        makeOffsetsColumnFromSizes(arrayVector->rawSizes(), numRows);
+    auto elements = arrayVector->elements();
+    auto childColumn = convertColumn(elements, type->childAt(0), pool);
+
+    auto nullCount = getNullCount(*vector);
+    auto nullBuf = copyNullMask(*vector, nullCount);
+    return cudf::make_lists_column(
+        numRows,
+        std::move(offsetsColumn),
+        std::move(childColumn),
+        nullCount,
+        std::move(*nullBuf));
+  }
+
+  /// Converts a Velox RowVector to a cudf STRUCT column.
+  /// Recursively converts each child column and assembles them into a struct.
+  std::unique_ptr<cudf::column> readStructColumn(
+      const BaseVector& vector,
+      const TypePtr& type,
+      memory::MemoryPool* pool) const {
+    const auto numRows = vector.size();
+
+    auto* rowVector = vector.as<RowVector>();
+    VELOX_CHECK_NOT_NULL(
+        rowVector, "Expected RowVector for direct struct conversion");
+
+    const auto numChildren = rowVector->childrenSize();
+    std::vector<std::unique_ptr<cudf::column>> childColumns;
+    childColumns.reserve(numChildren);
+
+    for (auto i = 0; i < numChildren; ++i) {
+      const auto& child = rowVector->childAt(i);
+      auto childType = type->childAt(i);
+      childColumns.push_back(convertColumn(child, childType, pool));
+    }
+
+    auto nullCount = getNullCount(vector);
+    auto nullBuf = copyNullMask(vector, nullCount);
+
+    return cudf::make_structs_column(
+        numRows,
+        std::move(childColumns),
+        nullCount,
+        std::move(*nullBuf),
+        stream,
+        mr);
+  }
+
+  /// Converts any Velox vector to a cudf column by dispatching on TypeKind.
+  std::unique_ptr<cudf::column> convertColumn(
+      const VectorPtr& vector,
+      const TypePtr& type,
+      memory::MemoryPool* pool) const {
+    switch (type->kind()) {
+      case TypeKind::BOOLEAN:
+        return readBooleanColumn(*vector, type);
+      case TypeKind::TINYINT:
+        return readColumn<TypeKind::TINYINT>(*vector, type);
+      case TypeKind::SMALLINT:
+        return readColumn<TypeKind::SMALLINT>(*vector, type);
+      case TypeKind::INTEGER:
+        return readColumn<TypeKind::INTEGER>(*vector, type);
+      case TypeKind::BIGINT:
+        return readColumn<TypeKind::BIGINT>(*vector, type);
+      case TypeKind::HUGEINT:
+        return readColumn<TypeKind::HUGEINT>(*vector, type);
+      case TypeKind::REAL:
+        return readColumn<TypeKind::REAL>(*vector, type);
+      case TypeKind::DOUBLE:
+        return readColumn<TypeKind::DOUBLE>(*vector, type);
+      case TypeKind::TIMESTAMP:
+        return readTimestampColumn(*vector, type);
+      case TypeKind::VARCHAR:
+      case TypeKind::VARBINARY:
+        return readStringColumn(*vector);
+      case TypeKind::ARRAY:
+        return readArrayColumn(vector, type, pool);
+      case TypeKind::ROW:
+        return readStructColumn(*vector, type, pool);
+      default:
+        VELOX_FAIL(
+            "Unsupported Velox type for direct cudf conversion: {}",
+            type->toString());
+    }
+  }
+
+ private:
+  /// Specialization for BOOLEAN: Velox stores booleans as bit-packed uint64_t
+  /// arrays, and cudf BOOL8 stores them as one byte per value (int8_t).
+  /// Optimized GPU-accelerated version using cuDF's mask_to_bools to expand
+  /// bit-packed representation directly on GPU.
+  std::unique_ptr<cudf::column> readBooleanColumn(
+      const BaseVector& vector,
+      const TypePtr& type) const {
+    const auto numRows = vector.size();
+    auto* flatVector = vector.as<FlatVector<bool>>();
+    VELOX_CHECK_NOT_NULL(
+        flatVector, "Expected FlatVector<bool> for direct conversion");
+    // Copy null mask to device (bit-packed boolean data)
+    auto nullCount = getNullCount(vector);
+    auto nullBuf = copyNullMask(vector, nullCount);
+    auto dataBuffer = flatVector->rawValues<uint8_t>();
+    auto const dataWords = cudf::num_bitmask_words(numRows);
+    auto const copySize = bits::nbytes(numRows);
+
+    auto data = rmm::device_uvector<cudf::bitmask_type>(dataWords, stream, mr);
+    CUDF_CUDA_TRY(cudaMemcpyAsync(
+        data.data(), dataBuffer, copySize, cudaMemcpyDefault, stream.value()));
+
+    // Use cudf::mask_to_bools to expand bit-packed mask to BOOL8 column
+    auto boolColumn = cudf::mask_to_bools(
+        static_cast<cudf::bitmask_type*>(data.data()),
+        0,
+        static_cast<cudf::size_type>(numRows),
+        stream,
+        mr);
+
+    // Set null mask for nulls in the original vector
+    boolColumn->set_null_mask(std::move(*nullBuf), nullCount);
+    return boolColumn;
+  }
+
+  /// Fully GPU-accelerated version: copies Timestamp array to GPU and uses
+  /// Thrust transform to convert to nanoseconds directly on device.
+  std::unique_ptr<cudf::column> readTimestampColumn(
+      const BaseVector& vector,
+      const TypePtr& type) const {
+    const auto numRows = vector.size();
+    auto* flatVector = vector.as<FlatVector<Timestamp>>();
+    VELOX_CHECK_NOT_NULL(
+        flatVector, "Expected FlatVector<Timestamp> for direct conversion");
+
+    // Copy Timestamp array to device
+    const auto* rawTimestamps = flatVector->rawValues();
+    auto dTimestamps = rmm::device_uvector<Timestamp>(numRows, stream, mr);
+    CUDF_CUDA_TRY(cudaMemcpyAsync(
+        dTimestamps.data(),
+        rawTimestamps,
+        numRows * sizeof(Timestamp),
+        cudaMemcpyHostToDevice,
+        stream.value()));
+
+    // Copy null mask to device
+    auto nullCount = getNullCount(vector);
+    auto nullBuf = copyNullMask(vector, nullCount);
+    auto dMask = static_cast<cudf::bitmask_type*>(nullBuf->data());
+
+    auto dValues = rmm::device_uvector<int64_t>(numRows, stream, mr);
+
+    util::convertTimestamps(
+        dTimestamps.data(),
+        dMask,
+        dValues.data(),
+        numRows,
+        CudfConfig::getInstance().timestampUnit,
+        timestampTimeZone ? std::optional<std::string_view>(*timestampTimeZone)
+                          : std::nullopt,
+        stream);
+
+    auto cudfType = veloxToCudfDataType(type);
+    return std::make_unique<cudf::column>(
+        cudfType, numRows, dValues.release(), std::move(*nullBuf), nullCount);
+  }
+};
+
+} // namespace
+
+std::unique_ptr<cudf::table> toCudfTable(
+    const facebook::velox::RowVectorPtr& veloxTable,
+    facebook::velox::memory::MemoryPool* pool,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr,
+    std::optional<std::string> timestampTimeZone) {
+  const auto numColumns = veloxTable->childrenSize();
+
+  // Flatten dictionary and constant encodings to get flat vectors.
+  // This matches what the Arrow path does with ArrowOptions{true, true}.
+  VectorPtr flattenTarget = veloxTable;
+  BaseVector::flattenVector(flattenTarget);
+  auto flatRow = std::dynamic_pointer_cast<RowVector>(flattenTarget);
+
+  const auto& rowType = flatRow->type()->as<TypeKind::ROW>();
+
+  DispatchColumn dispatcher{stream, mr, std::move(timestampTimeZone)};
+
+  std::vector<std::unique_ptr<cudf::column>> cudfColumns;
+  cudfColumns.reserve(numColumns);
+
+  for (auto i = 0; i < numColumns; ++i) {
+    auto child = flatRow->childAt(i);
+    const auto& colType = rowType.childAt(i);
+    auto column = dispatcher.convertColumn(child, colType, pool);
+    cudfColumns.push_back(std::move(column));
+  }
+  stream.synchronize();
+
+  return std::make_unique<cudf::table>(std::move(cudfColumns));
+}
 
 } // namespace facebook::velox::cudf_velox

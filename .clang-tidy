@@ -59,7 +59,7 @@ Checks: >
   -readability-qualified-auto,
   -zircon-*,
 
-HeaderFilterRegex: '.*'
+HeaderFilterRegex: '^(?!.*/cudf/).*$'
 
 WarningsAsErrors: ''
 
