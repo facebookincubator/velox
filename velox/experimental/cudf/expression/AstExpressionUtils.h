@@ -558,7 +558,8 @@ cudf::ast::expression const& AstContext::pushExprToTree(
       // Determine which side this expression references
       int sideIdx = findExpressionSide(expr);
       if (sideIdx == -2) {
-        // Expression spans both sides of the join - cannot precompute on one side
+        // Expression spans both sides of the join - cannot precompute on one
+        // side
         VELOX_FAIL(
             "Expression spans both join sides and cannot be precomputed: " +
             name);
