@@ -3540,6 +3540,64 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     MultiThreadedHashJoinTest,
     testing::ValuesIn(MultiThreadedHashJoinTest::getTestParams()));
 
+// Join filter with a `DATE`-vs-`DATE+INTERVAL` comparison:
+// `t_date > plus(u_date, u_interval)`. The root `gt(DATE, DATE)` is
+// AST-supported, so AST accepts the expression at the top level. AST then
+// recurses into `plus(DATE, INTERVAL)` (cuDF types `TIMESTAMP_DAYS + INT64`),
+// which cuDF AST cannot evaluate. Without an upfront per-node AST-support
+// check in `pushExprToTree`, AST keeps going and fails on the mixed-type ADD.
+// With the check in place, the nested `plus` call routes through
+// `DatePlusIntervalFunction` as a precompute instruction.
+TEST_F(HashJoinTest, innerJoinWithDatePlusIntervalFilter) {
+  constexpr int64_t kMillisInDay = 24LL * 60 * 60 * 1000;
+  const auto baseDate = DATE()->toDays("2025-01-01");
+
+  std::vector<RowVectorPtr> probeVectors = makeBatches(2, [&](int32_t batch) {
+    return makeRowVector(
+        {"t_k", "t_date"},
+        {
+            makeFlatVector<int64_t>(
+                50, [batch](auto row) { return row + batch; }),
+            makeFlatVector<int32_t>(
+                50,
+                [&](auto row) { return baseDate + static_cast<int32_t>(row); },
+                nullptr,
+                DATE()),
+        });
+  });
+
+  std::vector<RowVectorPtr> buildVectors = makeBatches(2, [&](int32_t batch) {
+    return makeRowVector(
+        {"u_k", "u_date", "u_interval"},
+        {
+            makeFlatVector<int64_t>(
+                50, [batch](auto row) { return row + batch; }),
+            makeFlatVector<int32_t>(
+                50,
+                [&](auto row) { return baseDate + static_cast<int32_t>(row); },
+                nullptr,
+                DATE()),
+            makeConstant<int64_t>(5 * kMillisInDay, 50, INTERVAL_DAY_TIME()),
+        });
+  });
+
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", buildVectors);
+
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .injectSpill(false)
+      .probeKeys({"t_k"})
+      .probeVectors(std::move(probeVectors))
+      .buildKeys({"u_k"})
+      .buildVectors(std::move(buildVectors))
+      .joinFilter("t_date > plus(u_date, u_interval)")
+      .joinOutputLayout({"t_k", "t_date", "u_k", "u_date"})
+      .referenceQuery(
+          "SELECT t.t_k, t.t_date, u.u_k, u.u_date FROM t, u "
+          "WHERE t.t_k = u.u_k AND t.t_date > u.u_date + INTERVAL '5' DAY")
+      .run();
+}
+
 // TODO: try to parallelize the following test cases if possible.
 TEST_F(HashJoinTest, memory) {
   // Measures memory allocation in a 1:n hash join followed by
