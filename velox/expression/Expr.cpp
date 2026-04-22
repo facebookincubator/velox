@@ -151,6 +151,7 @@ Expr::Expr(
       trackCpuUsage_{trackCpuUsage} {
   constantInputs_.reserve(inputs_.size());
   inputIsConstant_.reserve(inputs_.size());
+  inputValues_.reserve(inputs_.size());
   for (auto& expr : inputs_) {
     if (auto constantExpr = expr->as<ConstantExpr>()) {
       constantInputs_.emplace_back(constantExpr->value());
