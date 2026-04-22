@@ -221,6 +221,7 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
 
     // Shuffle.
     VELOX_REGISTER_QUERY_CONFIG(kShuffleCompressionKind);
+    VELOX_REGISTER_QUERY_CONFIG(kMinShuffleCompressionPageSizeBytes);
 
     // Map.
     VELOX_REGISTER_QUERY_CONFIG(kThrowExceptionOnDuplicateMapKeys);
