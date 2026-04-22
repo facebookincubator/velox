@@ -87,7 +87,7 @@ void configureReaderOptions(
   readerOptions.setAdjustTimestampToTimezone(
       connectorQueryCtx->adjustTimestampToTimezone());
   readerOptions.setSelectiveNimbleReaderEnabled(
-      connectorQueryCtx->selectiveNimbleReaderEnabled());
+      fileConfig->selectiveNimbleReaderEnabled(sessionProperties));
   readerOptions.setFileMetadataCacheEnabled(
       fileConfig->fileMetadataCacheEnabled(sessionProperties));
   readerOptions.setPinFileMetadata(

@@ -203,6 +203,14 @@ class FileConfig {
       "Pin parsed metadata objects in reader cache.")
   static constexpr const char* kPinFileMetadata = "pin-file-metadata";
 
+  VELOX_HIVE_CONFIG(
+      kSelectiveNimbleReaderEnabledSession,
+      selectiveNimbleReaderEnabled,
+      "selective_nimble_reader_enabled",
+      bool,
+      true,
+      "Enable selective Nimble reader.")
+
   // --- VELOX_HIVE_CONFIG_PROPERTY properties ---
 
   VELOX_HIVE_CONFIG_PROPERTY(
