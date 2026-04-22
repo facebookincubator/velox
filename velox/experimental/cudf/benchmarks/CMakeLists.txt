@@ -20,3 +20,15 @@ target_link_libraries(
   velox_cudf_exec_test_lib
   velox_tpch_benchmark_lib
 )
+
+add_executable(velox_cudf_interop_benchmark CudfInteropBenchmark.cpp)
+
+target_link_libraries(
+  velox_cudf_interop_benchmark
+  velox_cudf_exec
+  velox_vector
+  velox_memory
+  Folly::folly
+  Folly::follybenchmark
+  velox_vector_fuzzer
+)
