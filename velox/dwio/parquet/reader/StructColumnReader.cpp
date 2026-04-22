@@ -186,7 +186,7 @@ void StructColumnReader::setNullsFromRepDefs(PageReader& pageReader) {
   auto repDefRange = pageReader.repDefRange();
   int32_t numRepDefs = repDefRange.second - repDefRange.first;
   dwio::common::ensureCapacity<uint64_t>(
-      nullsInReadRange_, bits::nwords(numRepDefs), memoryPool_);
+      nullsInReadRange_, bits::nwords(numRepDefs), pool_);
   auto numStructs = pageReader.getLengthsAndNulls(
       levelMode_,
       levelInfo_,

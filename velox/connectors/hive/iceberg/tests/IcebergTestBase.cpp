@@ -93,6 +93,15 @@ void IcebergTestBase::setupMemoryPools() {
   connectorPool_ =
       root_->addAggregateChild("connector", exec::MemoryReclaimer::create());
 
+  recreateConnectorQueryCtx(/*sessionTimezone=*/"", false);
+}
+
+void IcebergTestBase::recreateConnectorQueryCtx(
+    const std::string& sessionTimezone,
+    bool adjustTimestampToTimezone) {
+  connectorQueryCtx_.reset();
+  queryCtx_.reset();
+
   queryCtx_ = core::QueryCtx::create(nullptr, core::QueryConfig({}));
   auto expressionEvaluator = std::make_unique<exec::SimpleExpressionEvaluator>(
       queryCtx_.get(), opPool_.get());
@@ -109,7 +118,8 @@ void IcebergTestBase::setupMemoryPools() {
       "task.IcebergTest",
       "planNodeId.IcebergTest",
       0,
-      "");
+      sessionTimezone,
+      adjustTimestampToTimezone);
 }
 
 std::vector<RowVectorPtr> IcebergTestBase::createTestData(

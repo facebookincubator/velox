@@ -134,6 +134,8 @@ class CudfHashJoinProbe : public CudfOperatorBase {
       exec::DriverCtx* driverCtx,
       std::shared_ptr<const core::HashJoinNode> joinNode);
 
+  void initialize() override;
+
   bool needsInput() const override;
 
   bool skipProbeOnEmptyBuild() const;
@@ -207,6 +209,7 @@ class CudfHashJoinProbe : public CudfOperatorBase {
   /** @brief Output column positions for right table columns */
   std::vector<size_t> rightColumnOutputIndices_;
   bool finished_{false};
+  bool useAstFilter_{true};
 
   /// True if any build table has NULL values in join key columns.
   /// Used for null-aware LEFT SEMI PROJECT to determine match column
@@ -253,6 +256,7 @@ class CudfHashJoinProbe : public CudfOperatorBase {
   std::optional<rmm::cuda_stream_view> lastProbeStream_;
 
   static constexpr auto oobPolicy = cudf::out_of_bounds_policy::NULLIFY;
+
   /**
    * @brief Performs inner join between probe table and all build tables.
    * @param leftTable Probe-side table to join
