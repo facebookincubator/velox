@@ -19,12 +19,15 @@
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#include "velox/experimental/cudf/functions/CudfFallbackFunction.h"
 #include "velox/experimental/cudf/functions/GpuFunctionDispatch.h"
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/FieldReference.h"
 #include "velox/type/Type.h"
 #include "velox/vector/ComplexVector.h"
+
+#include <cudf/unary.hpp>
 
 #include <cudf/table/table.hpp>
 
@@ -109,15 +112,7 @@ std::unique_ptr<gpu::GpuExprNode> convertExpr(
     auto typeId = veloxTypeToCudfTypeId(expr->type());
 
     if (value->isNullAt(0)) {
-      LOG(WARNING) << "[GPU SFI] CPU fallback (compile): null literal '"
-                   << expr->toString() << "'";
-      auto typedExpr = exprToTypedExpr(expr);
-      return gpu::makeCpuFallback(
-          typeId,
-          std::shared_ptr<void>(
-              std::make_shared<core::TypedExprPtr>(std::move(typedExpr))),
-          std::static_pointer_cast<void>(
-              std::const_pointer_cast<RowType>(schema)));
+      return gpu::makeLiteralNull(typeId);
     }
 
     switch (expr->type()->kind()) {
@@ -132,9 +127,8 @@ std::unique_ptr<gpu::GpuExprNode> convertExpr(
         return gpu::makeLiteralInt64(
             value->as<SimpleVector<int64_t>>()->valueAt(0));
       case TypeKind::INTEGER:
-        return gpu::makeLiteralInt64(
-            static_cast<int64_t>(
-                value->as<SimpleVector<int32_t>>()->valueAt(0)));
+        return gpu::makeLiteralInt32(
+            value->as<SimpleVector<int32_t>>()->valueAt(0));
       case TypeKind::SMALLINT:
         return gpu::makeLiteralInt64(
             static_cast<int64_t>(
@@ -143,13 +137,12 @@ std::unique_ptr<gpu::GpuExprNode> convertExpr(
         return gpu::makeLiteralInt64(
             static_cast<int64_t>(
                 value->as<SimpleVector<int8_t>>()->valueAt(0)));
-      case TypeKind::BOOLEAN: {
-        auto node = std::make_unique<gpu::GpuExprNode>();
-        node->kind = gpu::GpuExprNodeKind::kLiteral;
-        node->resultType = cudf::type_id::BOOL8;
-        node->literalBool =
-            value->as<SimpleVector<bool>>()->valueAt(0);
-        return node;
+      case TypeKind::BOOLEAN:
+        return gpu::makeLiteralBool(
+            value->as<SimpleVector<bool>>()->valueAt(0));
+      case TypeKind::VARCHAR: {
+        auto sv = value->as<SimpleVector<StringView>>()->valueAt(0);
+        return gpu::makeLiteralString(std::string(sv.data(), sv.size()));
       }
       default:
         LOG(WARNING) << "[GPU SFI] CPU fallback (compile): unsupported "
@@ -165,22 +158,25 @@ std::unique_ptr<gpu::GpuExprNode> convertExpr(
     }
   }
 
-  // Function call: check if GPU dispatch is available.
   auto resultTypeId = veloxTypeToCudfTypeId(expr->type());
   const auto& inputs = expr->inputs();
+  const auto& name = expr->name();
 
-  std::vector<cudf::type_id> argTypes;
-  argTypes.reserve(inputs.size());
-  for (const auto& input : inputs) {
-    argTypes.push_back(veloxTypeToCudfTypeId(input->type()));
-  }
+  // Lambda to recursively convert all children.
+  auto convertChildren =
+      [&]() -> std::vector<std::unique_ptr<gpu::GpuExprNode>> {
+    std::vector<std::unique_ptr<gpu::GpuExprNode>> ch;
+    ch.reserve(inputs.size());
+    for (const auto& input : inputs) {
+      ch.push_back(convertExpr(input, schema));
+    }
+    return ch;
+  };
 
-  bool gpuAvailable =
-      canDispatchOnGpu(expr->name(), resultTypeId, argTypes);
-
-  if (!gpuAvailable) {
-    LOG(WARNING) << "[GPU SFI] CPU fallback (compile): no GPU impl for '"
-                 << expr->name() << "' -- " << expr->toString();
+  // Lambda to build a CPU-fallback node for this expression.
+  auto buildCpuFallback = [&]() -> std::unique_ptr<gpu::GpuExprNode> {
+    LOG(WARNING) << "[GPU SFI] CPU fallback (compile): '" << name
+                 << "' -- " << expr->toString();
     auto typedExpr = exprToTypedExpr(expr);
     return gpu::makeCpuFallback(
         resultTypeId,
@@ -188,17 +184,49 @@ std::unique_ptr<gpu::GpuExprNode> convertExpr(
             std::make_shared<core::TypedExprPtr>(std::move(typedExpr))),
         std::static_pointer_cast<void>(
             std::const_pointer_cast<RowType>(schema)));
+  };
+
+  // -- Special forms handled natively on GPU --
+
+  if (name == "and") {
+    return gpu::makeAnd(convertChildren());
+  }
+  if (name == "or") {
+    return gpu::makeOr(convertChildren());
+  }
+  if (name == "not") {
+    return gpu::makeNot(convertExpr(inputs.at(0), schema));
+  }
+  if (name == "switch" || name == "if") {
+    return gpu::makeSwitch(resultTypeId, convertChildren());
+  }
+  if (name == "coalesce") {
+    return gpu::makeCoalesce(resultTypeId, convertChildren());
+  }
+  if (name == "cast" || name == "try_cast") {
+    auto childTypeId = veloxTypeToCudfTypeId(inputs.at(0)->type());
+    cudf::data_type from{childTypeId};
+    cudf::data_type to{resultTypeId};
+    if (cudf::is_supported_cast(from, to)) {
+      return gpu::makeCast(
+          resultTypeId, convertExpr(inputs.at(0), schema));
+    }
+    return buildCpuFallback();
   }
 
-  // Recursively convert children.
-  std::vector<std::unique_ptr<gpu::GpuExprNode>> children;
-  children.reserve(inputs.size());
+  // -- Regular function call: check GPU dispatch availability --
+
+  std::vector<cudf::type_id> argTypes;
+  argTypes.reserve(inputs.size());
   for (const auto& input : inputs) {
-    children.push_back(convertExpr(input, schema));
+    argTypes.push_back(veloxTypeToCudfTypeId(input->type()));
   }
 
-  return gpu::makeFunctionCall(
-      expr->name(), resultTypeId, std::move(children));
+  if (!canDispatchOnGpu(name, resultTypeId, argTypes)) {
+    return buildCpuFallback();
+  }
+
+  return gpu::makeFunctionCall(name, resultTypeId, convertChildren());
 }
 
 } // namespace
@@ -305,6 +333,7 @@ void registerGpuSfiEvaluator(int priority) {
     return;
   }
   gpu::registerAllPrestoGpuFunctions();
+  gpu::CudfFallbackRegistry::instance().registerDefaults();
   registerCudfExpressionEvaluator(
       kGpuSfiEvaluatorName,
       priority,
