@@ -53,6 +53,11 @@ DEFINE_int32(
     run_query_verbose,
     -1,
     "Run a given query and print execution statistics");
+DEFINE_bool(
+    filters_as_node,
+    false,
+    "Build TPC-H plans with filters as separate FilterNodes instead of "
+    "pushing them into the connector handle.");
 DEFINE_int32(
     io_meter_column_pct,
     0,
@@ -61,8 +66,8 @@ DEFINE_int32(
     "are scanned");
 
 void TpchBenchmark::initQueryBuilder() {
-  queryBuilder_ =
-      std::make_shared<TpchQueryBuilder>(toFileFormat(FLAGS_data_format));
+  queryBuilder_ = std::make_shared<TpchQueryBuilder>(
+      toFileFormat(FLAGS_data_format), FLAGS_filters_as_node);
   queryBuilder_->initialize(FLAGS_data_path);
 }
 
@@ -84,7 +89,7 @@ void TpchBenchmark::runMain(
   } else {
     auto queryPlan = FLAGS_io_meter_column_pct > 0
         ? queryBuilder_->getIoMeterPlan(FLAGS_io_meter_column_pct)
-        : queryBuilder_->getQueryPlan(FLAGS_run_query_verbose);
+        : transformPlan(queryBuilder_->getQueryPlan(FLAGS_run_query_verbose));
     auto [cursor, actualResults] = run(queryPlan, queryConfigs_);
     if (!cursor) {
       LOG(ERROR) << "Query terminated with error. Exiting";

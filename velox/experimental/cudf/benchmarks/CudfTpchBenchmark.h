@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/benchmarks/tpch/TpchBenchmark.h"
+#include "velox/common/memory/Memory.h"
 
 #include <memory>
 #include <string>
@@ -36,4 +37,9 @@ class CudfTpchBenchmark : public TpchBenchmark {
       const facebook::velox::exec::test::TpchPlan& plan) override;
 
   void shutdown() override;
+
+ private:
+  void ensurePreloaded();
+  bool preloaded_ = false;
+  std::shared_ptr<facebook::velox::memory::MemoryPool> preloadPool_;
 };

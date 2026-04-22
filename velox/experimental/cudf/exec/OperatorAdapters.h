@@ -110,8 +110,12 @@ class OperatorAdapterRegistry {
   /// Get the singleton instance of the registry.
   static OperatorAdapterRegistry& getInstance();
 
-  /// Register an adapter with the registry.
-  void registerAdapter(std::unique_ptr<OperatorAdapter> adapter);
+  /// Register an adapter with the registry. If an adapter with the same name
+  /// already exists and overwrite is false, returns false and does nothing.
+  /// If overwrite is true, the existing adapter is replaced.
+  bool registerAdapter(
+      std::unique_ptr<OperatorAdapter> adapter,
+      bool overwrite = false);
 
   /// Find an adapter that can handle the given operator. Returns a pointer
   /// to the adapter, or nullptr if none found.
