@@ -1290,10 +1290,16 @@ TEST_F(CudfSimpleFilterProjectTest, roundDouble) {
   AssertQueryBuilder(plan).assertResults(expected);
 
   // Corner cases: IEEE-754 half-way values and representation artifacts.
-  // The cuDF workaround casts double -> DECIMAL128 before rounding, so the
-  // result reflects the actual binary value of the input (e.g. 2.675 is
-  // really 2.6749999999999998 and 1.005 is really 1.0049999999999999).
+  // The FLOAT64 round path JIT-compiles Velox CPU's round algorithm
+  // (std::round(x * factor) / factor), so the result depends on the actual
+  // binary value of the input and on any rounding introduced by the factor
+  // multiply. For example, 2.675 is stored as 2.6749999999999998 but
+  // multiplied by 100 lands on the exactly-representable 267.5 tie, which
+  // std::round rounds away from zero to 268 -> 2.68. By contrast, 1.005 is
+  // stored as 1.0049999999999999 and multiplied by 100 falls just below
+  // 100.5, which rounds down to 100 -> 1.00.
   data = makeRowVector({makeFlatVector<double>({
+      // HALF_UP ties at integer magnitudes.
       2.5,
       3.5,
       -2.5,
@@ -1303,6 +1309,15 @@ TEST_F(CudfSimpleFilterProjectTest, roundDouble) {
       0.3,
       1.005,
       1.0000000000000002,
+      0.0,
+      0.5,
+      -0.5,
+      -1.5,
+      -2.675,
+      -1.6,
+      -1.645,
+      0.125,
+      1e-10,
       999999999999999.5,
   })});
   plan = PlanBuilder()
@@ -1320,12 +1335,19 @@ TEST_F(CudfSimpleFilterProjectTest, roundDouble) {
       0.0,
       1.0,
       1.0,
+      0.0,
+      1.0,
+      -1.0,
+      -2.0,
+      -3.0,
+      -2.0,
+      -2.0,
+      0.0,
+      0.0,
       1e15,
   })});
   AssertQueryBuilder(plan).assertResults(expected);
 
-  // Same inputs at scale=2 exercise the binary representation artifacts:
-  // 2.675 -> 2.67 (not 2.68) and 1.005 -> 1.00 (not 1.01).
   plan = PlanBuilder()
              .setParseOptions(options)
              .values({data})
@@ -1336,11 +1358,20 @@ TEST_F(CudfSimpleFilterProjectTest, roundDouble) {
       3.5,
       -2.5,
       -3.5,
-      2.67,
+      2.68,
       0.1,
       0.3,
       1.0,
       1.0,
+      0.0,
+      0.5,
+      -0.5,
+      -1.5,
+      -2.68,
+      -1.6,
+      -1.65,
+      0.13,
+      0.0,
       999999999999999.5,
   })});
   AssertQueryBuilder(plan).assertResults(expected);

@@ -247,21 +247,51 @@ class RoundFunction : public CudfFunction {
     auto inputTypeId = inputCol.type().id();
 
     if (inputTypeId == cudf::type_id::FLOAT64) {
-      // round_decimal does not support floating-point types directly.
-      // Cast to DECIMAL128, round, then cast back.
-      int32_t decimalScale = -(std::max(scale_, 0) + 15);
-      // The maximum scale for DECIMAL128 in cuDF is 38, so we clamp it to that.
-      decimalScale = std::max(decimalScale, -38);
-      auto decimalType =
-          cudf::data_type(cudf::type_id::DECIMAL128, decimalScale);
-      auto decimalCol = cudf::cast(inputCol, decimalType, stream, mr);
-      auto rounded = cudf::round_decimal(
-          decimalCol->view(),
-          scale_,
-          cudf::rounding_method::HALF_UP,
+      // JIT-compile a CUDA UDF that mirrors the Velox CPU round implementation
+      // (see velox/functions/prestosql/ArithmeticImpl.h). This makes
+      // Velox-cuDF produce bit-identical results to the Velox CPU path for
+      // round(double, scale) (e.g. round(2.675, 2) == 2.68) by relying on the
+      // same `round(x * factor) / factor` trick. `scale_` is baked into the
+      // UDF source as a literal so nvrtc can fold all constants at JIT time;
+      // kernels are cached per distinct `scale_` by cuDF's JIT cache.
+      const std::string factorLiteral = "1e" + std::to_string(scale_);
+      const std::string udf = std::string(R"***(
+__device__ void velox_round_double(double* out, double number) {
+  if (!isfinite(number)) { *out = number; return; }
+  const int decimals = )***") +
+          std::to_string(scale_) + R"***(;
+  if (decimals == 0) { *out = round(number); return; }
+  const double factor = )***" +
+          factorLiteral + R"***(;
+  if (decimals < 0) {
+    *out = round(number * factor) / factor;
+    return;
+  }
+  const double truncated = trunc(number);
+  const double fraction = number - truncated;
+  if (fraction == 0.0) { *out = number; return; }
+  // Threshold matches Velox CPU: for small magnitudes the factor-multiply
+  // path has less precision loss than the truncate + fraction path.
+  if (fabs(number) < 17592186044415.0) {
+    *out = round(number * factor) / factor;
+    return;
+  }
+  const double roundedFractions = round(fraction * factor) / factor;
+  *out = truncated + roundedFractions;
+}
+)***";
+      const cudf::transform_input transformInputs[] = {inputCol};
+      return cudf::transform_extended(
+          transformInputs,
+          udf,
+          cudf::data_type{cudf::type_id::FLOAT64},
+          cudf::udf_source_type::CUDA,
+          std::nullopt,
+          cudf::null_aware::NO,
+          std::nullopt,
+          cudf::output_nullability::PRESERVE,
           stream,
           mr);
-      return cudf::cast(rounded->view(), inputCol.type(), stream, mr);
     }
 
     return cudf::round_decimal(
