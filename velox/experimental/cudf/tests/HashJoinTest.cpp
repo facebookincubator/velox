@@ -3540,7 +3540,7 @@ TEST_P(MultiThreadedHashJoinTest, leftJoinWithStringFunctionFilter) {
 // 1. CASE WHEN (switch) is not natively supported in cuDF AST
 // 2. The expression references columns from both probe and build sides
 TEST_P(MultiThreadedHashJoinTest, innerJoinWithCaseFilterSpanningBothSides) {
-  // Create probe vectors with positive and negative values
+  // Create probe vectors with positive and negative values, including nulls
   std::vector<RowVectorPtr> probeVectors = makeBatches(3, [&](int32_t batch) {
     return makeRowVector(
         {"t0", "t_val"},
@@ -3548,11 +3548,14 @@ TEST_P(MultiThreadedHashJoinTest, innerJoinWithCaseFilterSpanningBothSides) {
             makeFlatVector<int64_t>(
                 100, [batch](auto row) { return row + batch * 100; }),
             makeFlatVector<double>(
-                100, [](auto row) { return static_cast<double>(row) - 50.0; }),
+                100,
+                [](auto row) { return static_cast<double>(row) - 50.0; },
+                [](auto row) { return row % 20 == 0; }),
         });
   });
 
-  // Create build vectors - u_val is always positive to avoid division issues
+  // Create build vectors - u_val is always positive to avoid division issues,
+  // including nulls to test null propagation through apply_boolean_mask
   std::vector<RowVectorPtr> buildVectors = makeBatches(2, [&](int32_t batch) {
     return makeRowVector(
         {"u0", "u_val"},
@@ -3560,7 +3563,9 @@ TEST_P(MultiThreadedHashJoinTest, innerJoinWithCaseFilterSpanningBothSides) {
             makeFlatVector<int64_t>(
                 50, [batch](auto row) { return row * 2 + batch * 100; }),
             makeFlatVector<double>(
-                50, [](auto row) { return static_cast<double>(row) + 1.0; }),
+                50,
+                [](auto row) { return static_cast<double>(row) + 1.0; },
+                [](auto row) { return row % 15 == 0; }),
         });
   });
 

@@ -430,7 +430,7 @@ struct AstContext {
 /// 1. Cannot be represented natively in cuDF AST (need precomputation)
 /// 2. AND reference fields from both sides of a join
 /// Returns true only if such problematic sub-expressions exist.
-inline bool expressionSpansBothSides(
+inline bool hasNonAstSubexprSpanningBothSides(
     const std::shared_ptr<velox::exec::Expr>& expr,
     const RowTypePtr& leftSchema,
     const RowTypePtr& rightSchema) {
@@ -439,7 +439,7 @@ inline bool expressionSpansBothSides(
   if (detail::isAstExprSupported(expr)) {
     // Recursively check children
     for (const auto& child : expr->inputs()) {
-      if (expressionSpansBothSides(child, leftSchema, rightSchema)) {
+      if (hasNonAstSubexprSpanningBothSides(child, leftSchema, rightSchema)) {
         return true;
       }
     }

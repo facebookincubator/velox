@@ -442,8 +442,8 @@ void CudfHashJoinProbe::initialize() {
   // Check if the filter expression spans both join sides (e.g., switch
   // expressions referencing columns from both probe and build). If so, we
   // cannot use AST-based filtering and must fall back to filterEvaluator_.
-  if (expressionSpansBothSides(exprs.exprs()[0], probeType_, buildType_)) {
-    LOG(INFO) << "Filter expression spans both join sides, using "
+  if (hasNonAstSubexprSpanningBothSides(exprs.exprs()[0], probeType_, buildType_)) {
+    VLOG(1) << "Filter expression spans both join sides, using "
                  "filterEvaluator_ instead of AST";
     useAstFilter_ = false;
     return;
@@ -868,11 +868,6 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::leftJoin(
     rmm::cuda_stream_view stream) {
   std::vector<std::unique_ptr<cudf::table>> cudfOutputs;
 
-  // For now, only inner join supports filters that span both sides
-  VELOX_CHECK(
-      !joinNode_->filter() || useAstFilter_,
-      "Left join with filter expression spanning both sides is not yet supported");
-
   auto& rightTables = hashObject_.value().first;
   auto& hbs = hashObject_.value().second;
 
@@ -967,11 +962,6 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::rightJoin(
     cudf::table_view leftTableView,
     rmm::cuda_stream_view stream) {
   std::vector<std::unique_ptr<cudf::table>> cudfOutputs;
-
-  // For now, only inner join supports filters that span both sides
-  VELOX_CHECK(
-      !joinNode_->filter() || useAstFilter_,
-      "Right join with filter expression spanning both sides is not yet supported");
 
   auto& rightTables = hashObject_.value().first;
   auto& hbs = hashObject_.value().second;
@@ -1115,13 +1105,13 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::fullJoin(
     rmm::cuda_stream_view stream) {
   std::vector<std::unique_ptr<cudf::table>> cudfOutputs;
 
-  // For now, only inner join supports filters that span both sides
-  VELOX_CHECK(
-      !joinNode_->filter() || useAstFilter_,
-      "Full join with filter expression spanning both sides is not yet supported");
-
   auto& rightTables = hashObject_.value().first;
   auto& hbs = hashObject_.value().second;
+
+  // For now, AST support is necessary to filter join output
+  VELOX_NYI(
+      !joinNode_->filter() || useAstFilter_,
+      "Full join requires AST support for filtering");
 
   for (auto i = 0; i < rightTables.size(); i++) {
     auto rightTableView = rightTables[i]->view();
@@ -1261,11 +1251,6 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::leftSemiFilterJoin(
     rmm::cuda_stream_view stream) {
   std::vector<std::unique_ptr<cudf::table>> cudfOutputs;
 
-  // For now, only inner join supports filters that span both sides
-  VELOX_CHECK(
-      !joinNode_->filter() || useAstFilter_,
-      "Left semi join with filter expression spanning both sides is not yet supported");
-
   auto& rightTables = hashObject_.value().first;
 
   for (auto i = 0; i < rightTables.size(); i++) {
@@ -1377,10 +1362,10 @@ CudfHashJoinProbe::leftSemiProjectJoin(
     rmm::cuda_stream_view stream) {
   std::vector<std::unique_ptr<cudf::table>> cudfOutputs;
 
-  // For now, only inner join supports filters that span both sides
-  VELOX_CHECK(
+  // For now, AST support is necessary to filter join output
+  VELOX_NYI(
       !joinNode_->filter() || useAstFilter_,
-      "Left semi project join with filter expression spanning both sides is not yet supported");
+      "Left semi project join requires AST support for filtering");
 
   auto& rightTables = hashObject_.value().first;
   auto& hbs = hashObject_.value().second;
@@ -1581,11 +1566,6 @@ CudfHashJoinProbe::rightSemiFilterJoin(
     rmm::cuda_stream_view stream) {
   std::vector<std::unique_ptr<cudf::table>> cudfOutputs;
 
-  // For now, only inner join supports filters that span both sides
-  VELOX_CHECK(
-      !joinNode_->filter() || useAstFilter_,
-      "Right semi filter join with filter expression spanning both sides is not yet supported");
-
   auto& rightTables = hashObject_.value().first;
   auto rightTableView = rightTables[0]->view();
 
@@ -1632,11 +1612,6 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::antiJoin(
     cudf::table_view leftTableViewParam,
     rmm::cuda_stream_view stream) {
   std::vector<std::unique_ptr<cudf::table>> cudfOutputs;
-
-  // For now, only inner join supports filters that span both sides
-  VELOX_CHECK(
-      !joinNode_->filter() || useAstFilter_,
-      "Anti join with filter expression spanning both sides is not yet supported");
 
   auto& rightTables = hashObject_.value().first;
 
