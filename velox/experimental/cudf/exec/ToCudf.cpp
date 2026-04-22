@@ -27,6 +27,7 @@
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/JitExpression.h"
+#include "velox/experimental/cudf/exec/GpuSfiExpression.h"
 
 #include "folly/Conv.h"
 #include "velox/exec/Driver.h"
@@ -339,6 +340,11 @@ void registerCudf() {
     registerJitEvaluator(CudfConfig::getInstance().jitExpressionPriority);
   }
 
+  if (CudfConfig::getInstance().gpuSfiExpressionEnabled) {
+    registerGpuSfiEvaluator(
+        CudfConfig::getInstance().gpuSfiExpressionPriority);
+  }
+
   isCudfRegistered = true;
 }
 
@@ -403,6 +409,14 @@ void CudfConfig::initialize(
   if (config.find(kCudfAstExpressionPriority) != config.end()) {
     astExpressionPriority =
         folly::to<int32_t>(config[kCudfAstExpressionPriority]);
+  }
+  if (config.find(kCudfGpuSfiExpressionEnabled) != config.end()) {
+    gpuSfiExpressionEnabled =
+        folly::to<bool>(config[kCudfGpuSfiExpressionEnabled]);
+  }
+  if (config.find(kCudfGpuSfiExpressionPriority) != config.end()) {
+    gpuSfiExpressionPriority =
+        folly::to<int32_t>(config[kCudfGpuSfiExpressionPriority]);
   }
   if (config.find(kCudfAllowCpuFallback) != config.end()) {
     allowCpuFallback = folly::to<bool>(config[kCudfAllowCpuFallback]);

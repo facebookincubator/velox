@@ -40,6 +40,10 @@ struct CudfConfig {
       "cudf.jit_expression_enabled"};
   static constexpr const char* kCudfJitExpressionPriority{
       "cudf.jit_expression_priority"};
+  static constexpr const char* kCudfGpuSfiExpressionEnabled{
+      "cudf.gpu_sfi_expression_enabled"};
+  static constexpr const char* kCudfGpuSfiExpressionPriority{
+      "cudf.gpu_sfi_expression_priority"};
   static constexpr const char* kCudfOutputMr{"cudf.output_mr"};
   static constexpr const char* kCudfAllowCpuFallback{"cudf.allow_cpu_fallback"};
   static constexpr const char* kCudfLogFallback{"cudf.log_fallback"};
@@ -103,6 +107,14 @@ struct CudfConfig {
 
   /// Priority of JIT expression.
   int jitExpressionPriority{101};
+
+  /// Enable GPU SFI (Simple Function Interface) expression evaluator.
+  /// When enabled, Velox simple functions compiled for GPU are used for
+  /// expression evaluation with the highest priority.
+  bool gpuSfiExpressionEnabled{true};
+
+  /// Priority of GPU SFI expression evaluator.
+  int gpuSfiExpressionPriority{200};
 
   /// Whether to log a reason for falling back to Velox CPU execution.
   bool logFallback{true};

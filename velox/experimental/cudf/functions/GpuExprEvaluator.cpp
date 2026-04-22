@@ -50,6 +50,8 @@ GpuExprEvaluator::EvalResult GpuExprEvaluator::evalNode(
       return evalFunctionCall(node, input, stream, mr);
     case GpuExprNodeKind::kLiteral:
       return evalLiteral(node, input.num_rows(), stream, mr);
+    case GpuExprNodeKind::kCpuFallback:
+      return evalCpuFallback(node, input, stream, mr);
   }
   throw std::runtime_error("Unknown GpuExprNode kind");
 }
@@ -88,8 +90,11 @@ GpuExprEvaluator::EvalResult GpuExprEvaluator::evalFunctionCall(
         "No GPU implementation found for function: " + node.functionName);
   }
 
-  auto col = dispatch.function->apply(
-      childViews, input.num_rows(), nullptr, stream, mr);
+  // Retain owned to keep the function object alive through apply().
+  auto ownedFn = std::move(dispatch.owned);
+  GpuVectorFunction* fn = ownedFn ? ownedFn.get() : dispatch.function;
+
+  auto col = fn->apply(childViews, input.num_rows(), nullptr, stream, mr);
   auto view = col->view();
   return {std::move(col), view};
 }
@@ -164,6 +169,32 @@ std::unique_ptr<GpuExprNode> makeLiteralInt64(int64_t value) {
   node->resultType = cudf::type_id::INT64;
   node->literalInt64 = value;
   return node;
+}
+
+std::unique_ptr<GpuExprNode> makeCpuFallback(
+    cudf::type_id resultType,
+    std::shared_ptr<void> fallbackExpr,
+    std::shared_ptr<void> fallbackSchema) {
+  auto node = std::make_unique<GpuExprNode>();
+  node->kind = GpuExprNodeKind::kCpuFallback;
+  node->resultType = resultType;
+  node->fallbackExpr = std::move(fallbackExpr);
+  node->fallbackSchema = std::move(fallbackSchema);
+  return node;
+}
+
+GpuExprEvaluator::EvalResult GpuExprEvaluator::evalCpuFallback(
+    const GpuExprNode& node,
+    const cudf::table_view& input,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  if (!cpuFallbackHandler_) {
+    throw std::runtime_error(
+        "kCpuFallback node encountered but no CPU fallback handler is set");
+  }
+  auto col = cpuFallbackHandler_(node, input, stream, mr);
+  auto view = col->view();
+  return {std::move(col), view};
 }
 
 } // namespace facebook::velox::gpu

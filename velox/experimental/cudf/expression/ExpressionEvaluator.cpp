@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/Validation.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstUtils.h"
@@ -1138,18 +1139,29 @@ std::shared_ptr<CudfExpression> createCudfExpression(
   const auto& registry = getCudfExpressionEvaluatorRegistry();
 
   const CudfExpressionEvaluatorEntry* best = nullptr;
+  std::string bestName;
   for (const auto& [name, entry] : registry) {
     if (entry.canEvaluate && entry.canEvaluate(expr)) {
       if (best == nullptr || entry.priority > best->priority) {
         best = &entry;
+        bestName = name;
       }
     }
   }
 
   if (best != nullptr) {
+    if (CudfConfig::getInstance().debugEnabled) {
+      LOG(INFO) << "createCudfExpression: evaluator='" << bestName
+                << "' (priority=" << best->priority
+                << ") for: " << expr->toString();
+    }
     return best->create(expr, inputRowSchema);
   }
 
+  if (CudfConfig::getInstance().debugEnabled) {
+    LOG(INFO) << "createCudfExpression: evaluator='FunctionExpression'"
+              << " (default) for: " << expr->toString();
+  }
   return FunctionExpression::create(expr, inputRowSchema);
 }
 
