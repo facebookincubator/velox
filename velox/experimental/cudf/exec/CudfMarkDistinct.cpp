@@ -25,24 +25,22 @@
 #include <cudf/stream_compaction.hpp>
 #include <cudf/utilities/error.hpp>
 
-#include <fmt/format.h>
-
 namespace facebook::velox::cudf_velox {
 
 CudfMarkDistinct::CudfMarkDistinct(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
     const std::shared_ptr<const core::MarkDistinctNode>& planNode)
-    : exec::Operator(
+    : CudfOperatorBase(
+          operatorId,
           driverCtx,
           planNode->outputType(),
-          operatorId,
           planNode->id(),
-          "CudfMarkDistinct"),
-      NvtxHelper(
+          "CudfMarkDistinct",
           nvtx3::rgb{255, 165, 0}, // Orange
-          operatorId,
-          fmt::format("[{}]", planNode->id())) {
+          NvtxMethodFlag::kAddInput | NvtxMethodFlag::kGetOutput,
+          std::nullopt,
+          planNode) {
   const auto& inputType = planNode->sources()[0]->outputType();
   for (const auto& key : planNode->distinctKeys()) {
     auto idx = inputType->getChildIdx(key->name());
@@ -50,15 +48,12 @@ CudfMarkDistinct::CudfMarkDistinct(
   }
 }
 
-void CudfMarkDistinct::addInput(RowVectorPtr input) {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+void CudfMarkDistinct::doAddInput(RowVectorPtr input) {
   VELOX_CHECK_NULL(input_);
   input_ = std::move(input);
 }
 
-RowVectorPtr CudfMarkDistinct::getOutput() {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
-
+RowVectorPtr CudfMarkDistinct::doGetOutput() {
   if (input_ == nullptr) {
     return nullptr;
   }
@@ -110,10 +105,7 @@ RowVectorPtr CudfMarkDistinct::getOutput() {
         stream,
         tempMr);
     seenFilter_ = std::make_unique<cudf::filtered_join>(
-        seenKeys_->view(),
-        cudf::null_equality::EQUAL,
-        cudf::set_as_build_table::RIGHT,
-        stream);
+        seenKeys_->view(), cudf::null_equality::EQUAL, stream);
 
   } else {
     // Subsequent batch: probe the persistent filter — no hash table rebuild.
@@ -164,10 +156,7 @@ RowVectorPtr CudfMarkDistinct::getOutput() {
           seenKeys_->view(), newKeys->view()};
       seenKeys_ = cudf::concatenate(seenPlusNew, stream, tempMr);
       seenFilter_ = std::make_unique<cudf::filtered_join>(
-          seenKeys_->view(),
-          cudf::null_equality::EQUAL,
-          cudf::set_as_build_table::RIGHT,
-          stream);
+          seenKeys_->view(), cudf::null_equality::EQUAL, stream);
     }
   }
 

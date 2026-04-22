@@ -11,11 +11,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
 set(
   ICEBERG_SOURCES
-  IcebergConfig.cpp
+  DeletionVectorReader.cpp
+  DeletionVectorWriter.cpp
+  EqualityDeleteFileReader.cpp
   IcebergColumnHandle.cpp
+  IcebergConfig.cpp
   IcebergConnector.cpp
   IcebergDataSink.cpp
   IcebergDataSource.cpp
@@ -26,12 +28,16 @@ set(
   PositionalDeleteFileReader.cpp
   TransformEvaluator.cpp
   TransformExprBuilder.cpp
+  WriterOptionsAdapter.cpp
 )
 
 velox_add_library(
   velox_hive_iceberg_splitreader
   ${ICEBERG_SOURCES}
   HEADERS
+  DeletionVectorReader.h
+  DeletionVectorWriter.h
+  EqualityDeleteFileReader.h
   IcebergColumnHandle.h
   IcebergConfig.h
   IcebergConnector.h
@@ -46,12 +52,14 @@ velox_add_library(
   PositionalDeleteFileReader.h
   TransformEvaluator.h
   TransformExprBuilder.h
+  WriterOptionsAdapter.h
 )
 
 velox_link_libraries(
   velox_hive_iceberg_splitreader
   velox_connector
   velox_functions_iceberg
+  velox_dwio_dwrf_writer
   Folly::folly
 )
 

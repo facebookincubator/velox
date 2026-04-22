@@ -80,7 +80,7 @@ void prepareResult(
 void SelectiveRepeatedColumnReader::ensureAllLengthsBuffer(vector_size_t size) {
   if (!allLengthsHolder_ ||
       allLengthsHolder_->capacity() < size * sizeof(vector_size_t)) {
-    allLengthsHolder_ = allocateIndices(size, memoryPool_);
+    allLengthsHolder_ = allocateIndices(size, pool_);
     allLengths_ = allLengthsHolder_->asMutable<vector_size_t>();
   }
 }
@@ -266,7 +266,7 @@ void SelectiveListColumnReader::getValues(
     const RowSet& rows,
     VectorPtr* result) {
   VELOX_DCHECK_NOT_NULL(result);
-  prepareResult(*result, requestedType_, rows.size(), memoryPool_);
+  prepareResult(*result, requestedType_, rows.size(), pool_);
   auto* resultArray = result->get()->asUnchecked<ArrayVector>();
   makeOffsetsAndSizes(rows, *resultArray);
   setComplexNulls(rows, *result);
@@ -370,7 +370,7 @@ void SelectiveMapColumnReader::getValues(
       !result->get() || result->get()->type()->isMap(),
       "Expect MAP result vector, got {}",
       result->get()->type()->toString());
-  prepareResult(*result, requestedType_, rows.size(), memoryPool_);
+  prepareResult(*result, requestedType_, rows.size(), pool_);
   auto* resultMap = result->get()->asUnchecked<MapVector>();
   makeOffsetsAndSizes(rows, *resultMap);
   setComplexNulls(rows, *result);

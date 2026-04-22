@@ -577,7 +577,7 @@ void SelectiveStructColumnReaderBase::getValues(
                 this, children_[index], numReads_),
             resultRow->type()->childAt(channel),
             rows.size(),
-            memoryPool_,
+            pool_,
             childResult);
       }
       continue;
@@ -622,7 +622,7 @@ void SelectiveStructColumnReaderBase::getValues(
         makeColumnLoader(index),
         resultRow->type()->childAt(channel),
         rows.size(),
-        memoryPool_,
+        pool_,
         childResult);
   }
   resultRow->updateContainsLazyNotLoaded();

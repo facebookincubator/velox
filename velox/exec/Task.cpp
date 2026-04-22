@@ -130,6 +130,25 @@ inline size_t numSourceNodes(const core::PlanNode* planNode) {
   return !indexNode->needsIndexSplit() ? 1 : indexNode->sources().size();
 }
 
+// Collects IDs of IndexLookupJoinNode's lookup source (index) TableScanNodes.
+// These nodes are NOT separate pipeline leaves in Velox's LocalPlanner
+// (it only plans the probe source) and must be excluded from
+// groupedExecutionLeafNodeIds validation.
+void collectIndexSourceIds(
+    const core::PlanNodePtr& node,
+    std::unordered_set<core::PlanNodeId>& indexSourceIds) {
+  if (auto indexJoin =
+          std::dynamic_pointer_cast<const core::IndexLookupJoinNode>(node)) {
+    indexSourceIds.insert(indexJoin->lookupSource()->id());
+    // Only recurse into the probe side (sources()[0]), not the lookup source.
+    collectIndexSourceIds(indexJoin->sources()[0], indexSourceIds);
+    return;
+  }
+  for (const auto& source : node->sources()) {
+    collectIndexSourceIds(source, indexSourceIds);
+  }
+}
+
 // Add 'running time' metrics from CpuWallTiming structures to have them
 // available aggregated per thread.
 void addRunningTimeOperatorMetrics(exec::OperatorStats& op) {
@@ -1262,9 +1281,20 @@ void Task::validateGroupedExecutionLeafNodes() {
         !planFragment_.groupedExecutionLeafNodeIds.empty(),
         "groupedExecutionLeafNodeIds must not be empty in "
         "grouped execution mode");
+
+    // Collect IndexLookupJoin lookup source node IDs. These are in
+    // groupedExecutionLeafNodeIds (for coordinator-side grouped split
+    // scheduling) but are NOT separate pipeline leaves in Velox —
+    // IndexLookupJoin manages the index source internally.
+    std::unordered_set<core::PlanNodeId> indexSourceIds;
+    collectIndexSourceIds(planFragment_.planNode, indexSourceIds);
+
     // Check that each node designated as the grouped execution leaf node
     // existing in a pipeline that will run grouped execution.
     for (const auto& leafNodeId : planFragment_.groupedExecutionLeafNodeIds) {
+      if (indexSourceIds.count(leafNodeId)) {
+        continue;
+      }
       bool found{false};
       for (auto& factory : driverFactories_) {
         if (leafNodeId == factory->leafNodeId()) {

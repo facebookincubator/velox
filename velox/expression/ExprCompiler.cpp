@@ -22,6 +22,7 @@
 #include "velox/expression/ExprUtils.h"
 #include "velox/expression/FieldReference.h"
 #include "velox/expression/LambdaExpr.h"
+#include "velox/expression/NullIfExpr.h"
 #include "velox/expression/RowConstructor.h"
 #include "velox/expression/SimpleFunctionRegistry.h"
 #include "velox/expression/SpecialFormRegistry.h"
@@ -421,6 +422,15 @@ ExprPtr compileRewrittenExpression(
     case core::ExprKind::kCast: {
       result = compileCast(
           expr, compiledInputs, trackCpuUsage, ctx.queryCtx->queryConfig());
+      break;
+    }
+    case core::ExprKind::kNullIf: {
+      const auto* nullIf = expr->asUnchecked<core::NullIfTypedExpr>();
+      result = NullIfExpr::create(
+          std::move(compiledInputs),
+          nullIf->commonType(),
+          trackCpuUsage,
+          ctx.queryCtx->queryConfig());
       break;
     }
     case core::ExprKind::kCall: {
