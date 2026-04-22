@@ -28,6 +28,7 @@
 
 #include <rmm/cuda_stream_view.hpp>
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <variant>
@@ -39,6 +40,7 @@ enum class GpuExprNodeKind {
   kFieldAccess,
   kFunctionCall,
   kLiteral,
+  kCpuFallback,
 };
 
 struct GpuExprNode {
@@ -53,10 +55,25 @@ struct GpuExprNode {
   double literalDouble{0.0};
   int64_t literalInt64{0};
   bool literalBool{false};
+
+  // For kCpuFallback: type-erased pointers to avoid Velox header deps here.
+  // Holds shared_ptr<exec::Expr> and shared_ptr<RowType> respectively.
+  std::shared_ptr<void> fallbackExpr;
+  std::shared_ptr<void> fallbackSchema;
 };
+
+using CpuFallbackFn = std::function<std::unique_ptr<cudf::column>(
+    const GpuExprNode& node,
+    const cudf::table_view& input,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr)>;
 
 class GpuExprEvaluator {
  public:
+  void setCpuFallbackHandler(CpuFallbackFn handler) {
+    cpuFallbackHandler_ = std::move(handler);
+  }
+
   std::unique_ptr<cudf::column> evaluate(
       const GpuExprNode& expr,
       const cudf::table_view& input,
@@ -90,6 +107,14 @@ class GpuExprEvaluator {
       cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr);
+
+  EvalResult evalCpuFallback(
+      const GpuExprNode& node,
+      const cudf::table_view& input,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr);
+
+  CpuFallbackFn cpuFallbackHandler_;
 };
 
 std::unique_ptr<GpuExprNode> makeFieldAccess(
@@ -103,5 +128,10 @@ std::unique_ptr<GpuExprNode> makeFunctionCall(
 
 std::unique_ptr<GpuExprNode> makeLiteralDouble(double value);
 std::unique_ptr<GpuExprNode> makeLiteralInt64(int64_t value);
+
+std::unique_ptr<GpuExprNode> makeCpuFallback(
+    cudf::type_id resultType,
+    std::shared_ptr<void> fallbackExpr,
+    std::shared_ptr<void> fallbackSchema);
 
 } // namespace facebook::velox::gpu

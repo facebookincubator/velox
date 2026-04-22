@@ -18,5 +18,6 @@ target_link_libraries(
   velox_cudf_tpch_benchmark
   velox_cudf_exec
   velox_cudf_exec_test_lib
+  velox_cudf_gpu_presto_functions
   velox_tpch_benchmark_lib
 )

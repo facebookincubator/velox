@@ -412,6 +412,29 @@ target_link_libraries(
   velox_cudf_exec
 )
 
+# GPU SFI Integration test: bridge between CudfExpression pipeline and GPU SFI engine
+add_executable(velox_cudf_gpu_sfi_integration_test Main.cpp GpuSfiIntegrationTest.cpp)
+
+add_test(
+  NAME velox_cudf_gpu_sfi_integration_test
+  COMMAND velox_cudf_gpu_sfi_integration_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+set_tests_properties(velox_cudf_gpu_sfi_integration_test PROPERTIES LABELS cuda_driver TIMEOUT 300)
+
+target_link_libraries(
+  velox_cudf_gpu_sfi_integration_test
+  velox_cudf_exec
+  velox_cudf_gpu_presto_functions
+  velox_exec
+  velox_exec_test_lib
+  velox_test_util
+  gtest
+  gtest_main
+  Folly::folly
+)
+
 add_executable(velox_cudf_gpu_types_test GpuTypesTest.cpp)
 
 add_test(
