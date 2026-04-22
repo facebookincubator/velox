@@ -88,32 +88,32 @@ uint64_t hashValueDispatch(
     const exec::GenericView& value,
     const TypePtr& type) {
   using T = typename TypeTraits<kind>::NativeType;
-  if constexpr (kind == TypeKind::TINYINT) {
-    return ::facebook::velox::functions::sparksql::XxHash64::hashInt32(
-        static_cast<int32_t>(value.template castTo<T>()), kXxHash64Seed);
-  } else if constexpr (kind == TypeKind::SMALLINT) {
+  if constexpr (kind == TypeKind::TINYINT || kind == TypeKind::SMALLINT) {
     return ::facebook::velox::functions::sparksql::XxHash64::hashInt32(
         static_cast<int32_t>(value.template castTo<T>()), kXxHash64Seed);
   } else if constexpr (kind == TypeKind::INTEGER) {
     return ::facebook::velox::functions::sparksql::XxHash64::hashInt32(
         value.template castTo<T>(), kXxHash64Seed);
-  } else if constexpr (kind == TypeKind::BIGINT) {
+  }
+  if constexpr (kind == TypeKind::BIGINT) {
     return ::facebook::velox::functions::sparksql::XxHash64::hashInt64(
         value.template castTo<T>(), kXxHash64Seed);
-  } else if constexpr (kind == TypeKind::REAL) {
+  }
+  if constexpr (kind == TypeKind::REAL) {
     return ::facebook::velox::functions::sparksql::XxHash64::hashFloat(
         value.template castTo<T>(), kXxHash64Seed);
-  } else if constexpr (kind == TypeKind::DOUBLE) {
+  }
+  if constexpr (kind == TypeKind::DOUBLE) {
     return ::facebook::velox::functions::sparksql::XxHash64::hashDouble(
         value.template castTo<T>(), kXxHash64Seed);
-  } else if constexpr (kind == TypeKind::TIMESTAMP) {
+  }
+  if constexpr (kind == TypeKind::TIMESTAMP) {
     return ::facebook::velox::functions::sparksql::XxHash64::hashTimestamp(
         value.template castTo<T>(), kXxHash64Seed);
-  } else {
-    VELOX_UNSUPPORTED(
-        "Unsupported type for approx_count_distinct_for_intervals: {}",
-        type->toString());
   }
+  VELOX_UNSUPPORTED(
+      "Unsupported type for approx_count_distinct_for_intervals: {}",
+      type->toString());
 }
 
 template <>
