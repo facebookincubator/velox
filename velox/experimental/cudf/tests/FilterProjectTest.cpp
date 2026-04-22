@@ -156,6 +156,53 @@ class CudfFilterProjectTest : public OperatorTestBase {
     runTest(plan, "SELECT true OR (c0 = 1) AS result FROM tmp");
   }
 
+  void testLogicalAndOrLiteralsAndMixed(const std::vector<RowVectorPtr>& input) {
+    // Literal-only (exercises LogicalFunction scalar/scalar and broadcast paths).
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"true AND false AS r1", "true OR false AS r2"})
+                    .planNode();
+    runTest(
+        plan,
+        "SELECT true AND false AS r1, true OR false AS r2 FROM tmp");
+
+    plan = PlanBuilder()
+               .values(input)
+               .project(
+                   {"false AND true AS r1",
+                    "false OR true AS r2",
+                    "true AND true AS r3",
+                    "false OR false AS r4"})
+               .planNode();
+    runTest(
+        plan,
+        "SELECT false AND true AS r1, false OR true AS r2, true AND true AS r3, false OR false AS r4 FROM tmp");
+
+    // Literal on the left or right of a column predicate.
+    plan = PlanBuilder()
+               .values(input)
+               .project(
+                   {"(c0 = 1) AND true AS r1",
+                    "true AND (c0 = 1) AS r2",
+                    "(c0 = 1) OR false AS r3",
+                    "false OR (c0 = 1) AS r4"})
+               .planNode();
+    runTest(
+        plan,
+        "SELECT (c0 = 1) AND true AS r1, true AND (c0 = 1) AS r2, (c0 = 1) OR false AS r3, false OR (c0 = 1) AS r4 FROM tmp");
+
+    // Three-way mix: literals and columns interleaved.
+    plan = PlanBuilder()
+               .values(input)
+               .project(
+                   {"(c0 = 1) AND true AND (c1 = 2.0) AS r1",
+                    "false OR (c0 = 1) OR (c1 = 2.0) AS r2"})
+               .planNode();
+    runTest(
+        plan,
+        "SELECT (c0 = 1) AND true AND (c1 = 2.0) AS r1, false OR (c0 = 1) OR (c1 = 2.0) AS r2 FROM tmp");
+  }
+
   void testYearFunction(const std::vector<RowVectorPtr>& input) {
     // Create a plan with YEAR function
     auto plan =
@@ -651,6 +698,14 @@ TEST_F(CudfFilterProjectTest, logicalShortCircuitWithLiterals) {
   createDuckDbTable(vectors);
 
   testLogicalShortCircuitWithLiterals(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, logicalAndOrLiteralsAndMixed) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testLogicalAndOrLiteralsAndMixed(vectors);
 }
 
 TEST_F(CudfFilterProjectTest, lengthFunction) {
@@ -1555,6 +1610,112 @@ TEST_F(CudfSimpleFilterProjectTest, nullLogicalOrThreeArg) {
       this->functions::test::FunctionBaseTest::evaluate(*exprSet, input);
   auto actual = evaluate(*exprSet, input);
   facebook::velox::test::assertEqualVectors(expected, actual);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, logicalAndAllLiterals) {
+  const auto rowType = ROW({{"c0", BOOLEAN()}});
+  auto input = makeRowVector({makeFlatVector<bool>({true})});
+  for (const auto& expr :
+       {"true AND true",
+        "true AND false",
+        "false AND true",
+        "false AND false"}) {
+    auto exprSet = compileExpression(expr, rowType);
+    auto expected =
+        this->functions::test::FunctionBaseTest::evaluate(*exprSet, input);
+    auto actual = evaluate(*exprSet, input);
+    facebook::velox::test::assertEqualVectors(expected, actual);
+  }
+}
+
+TEST_F(CudfSimpleFilterProjectTest, logicalOrAllLiterals) {
+  const auto rowType = ROW({{"c0", BOOLEAN()}});
+  auto input = makeRowVector({makeFlatVector<bool>({true})});
+  for (const auto& expr :
+       {"true OR true",
+        "true OR false",
+        "false OR true",
+        "false OR false"}) {
+    auto exprSet = compileExpression(expr, rowType);
+    auto expected =
+        this->functions::test::FunctionBaseTest::evaluate(*exprSet, input);
+    auto actual = evaluate(*exprSet, input);
+    facebook::velox::test::assertEqualVectors(expected, actual);
+  }
+}
+
+TEST_F(CudfSimpleFilterProjectTest, logicalAndColumnWithLiteral) {
+  const auto rowType = ROW({{"c0", BOOLEAN()}});
+  auto c0 = makeNullableFlatVector<bool>(
+      {true, false, std::nullopt, std::nullopt});
+  auto input = makeRowVector({c0});
+  for (const auto& expr :
+       {"c0 AND true",
+        "true AND c0",
+        "c0 AND false",
+        "false AND c0"}) {
+    auto exprSet = compileExpression(expr, rowType);
+    auto expected =
+        this->functions::test::FunctionBaseTest::evaluate(*exprSet, input);
+    auto actual = evaluate(*exprSet, input);
+    facebook::velox::test::assertEqualVectors(expected, actual);
+  }
+}
+
+TEST_F(CudfSimpleFilterProjectTest, logicalOrColumnWithLiteral) {
+  const auto rowType = ROW({{"c0", BOOLEAN()}});
+  auto c0 = makeNullableFlatVector<bool>(
+      {true, false, std::nullopt, std::nullopt});
+  auto input = makeRowVector({c0});
+  for (const auto& expr :
+       {"c0 OR true",
+        "true OR c0",
+        "c0 OR false",
+        "false OR c0"}) {
+    auto exprSet = compileExpression(expr, rowType);
+    auto expected =
+        this->functions::test::FunctionBaseTest::evaluate(*exprSet, input);
+    auto actual = evaluate(*exprSet, input);
+    facebook::velox::test::assertEqualVectors(expected, actual);
+  }
+}
+
+TEST_F(CudfSimpleFilterProjectTest, logicalAndThreeArgLiteralsMixed) {
+  const auto rowType =
+      ROW({{"c0", BOOLEAN()}, {"c1", BOOLEAN()}});
+  auto c0 = makeNullableFlatVector<bool>({true, false, std::nullopt});
+  auto c1 = makeNullableFlatVector<bool>({false, true, true});
+  auto input = makeRowVector({c0, c1});
+  for (const auto& expr :
+       {"c0 AND true AND c1",
+        "true AND c0 AND c1",
+        "c0 AND c1 AND false",
+        "false AND c0 AND c1"}) {
+    auto exprSet = compileExpression(expr, rowType);
+    auto expected =
+        this->functions::test::FunctionBaseTest::evaluate(*exprSet, input);
+    auto actual = evaluate(*exprSet, input);
+    facebook::velox::test::assertEqualVectors(expected, actual);
+  }
+}
+
+TEST_F(CudfSimpleFilterProjectTest, logicalOrThreeArgLiteralsMixed) {
+  const auto rowType =
+      ROW({{"c0", BOOLEAN()}, {"c1", BOOLEAN()}});
+  auto c0 = makeNullableFlatVector<bool>({false, true, std::nullopt});
+  auto c1 = makeNullableFlatVector<bool>({false, false, true});
+  auto input = makeRowVector({c0, c1});
+  for (const auto& expr :
+       {"c0 OR false OR c1",
+        "false OR c0 OR c1",
+        "c0 OR c1 OR true",
+        "true OR c0 OR c1"}) {
+    auto exprSet = compileExpression(expr, rowType);
+    auto expected =
+        this->functions::test::FunctionBaseTest::evaluate(*exprSet, input);
+    auto actual = evaluate(*exprSet, input);
+    facebook::velox::test::assertEqualVectors(expected, actual);
+  }
 }
 
 TEST_F(CudfFilterProjectTest, andAndAndExpr) {
