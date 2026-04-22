@@ -26,6 +26,7 @@
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/FlatVector.h"
+#include "velox/vector/LazyVector.h"
 #include "velox/vector/arrow/Bridge.h"
 
 #include <cudf/column/column.hpp>
@@ -351,7 +352,7 @@ struct DispatchColumn {
   /// Copies the Velox null bitmask to a GPU device buffer. Velox and cudf both
   /// use a validity bitmask where bit=1 means valid (not null), so no
   /// conversion is needed. Returns an empty buffer if there are no nulls.
-  std::unique_ptr<rmm::device_buffer> copyNullMask(
+  inline std::unique_ptr<rmm::device_buffer> copyNullMask(
       const BaseVector& input,
       int32_t nullCount) const {
     if (nullCount == 0) {
@@ -375,34 +376,13 @@ struct DispatchColumn {
   /// Returns the null count for a Velox vector. Uses Velox's cached value if
   /// available, otherwise counts from the raw bitmap.
   static cudf::size_type getNullCount(const BaseVector& vector) {
-    auto nullCount = vector.getNullCount();
-    if (nullCount.has_value()) {
-      return static_cast<cudf::size_type>(nullCount.value());
-    }
-    const auto* rawNulls = vector.rawNulls();
-    if (rawNulls == nullptr) {
+    if (vector.nulls()) {
       return 0;
     }
-    return static_cast<cudf::size_type>(
-        bits::countNulls(rawNulls, 0, vector.size()));
-  }
-
-  /// GPU-accelerated version: builds offsets column directly on device from
-  /// sizes array using Thrust inclusive_scan (prefix sum).
-  std::unique_ptr<cudf::column> makeOffsetsColumnFromSizes(
-      const int32_t* rawSizes,
-      cudf::size_type numRows) const {
-    // Copy sizes to device
-    auto dSizes = rmm::device_uvector<int32_t>(numRows, stream, mr);
-    CUDF_CUDA_TRY(cudaMemcpyAsync(
-        dSizes.data(),
-        rawSizes,
-        numRows * sizeof(int32_t),
-        cudaMemcpyHostToDevice,
-        stream.value()));
-
-    // Use utility function to compute offsets on GPU
-    return util::computeOffsetsFromSizes(dSizes.data(), numRows, stream, mr);
+    if (auto nullCount = vector.getNullCount()) {
+      return *nullCount;
+    }
+    return BaseVector::countNulls(vector.nulls(), vector.size()); 
   }
 
   /// Reads a flat scalar column from a Velox FlatVector and creates a cudf
@@ -563,13 +543,8 @@ struct DispatchColumn {
       auto* rawSizes = arrayVector->rawSizes();
 
       // Step 1: build compact offsets using GPU-accelerated prefix sum
-      auto offsetsColumn = makeOffsetsColumnFromSizes(rawSizes, numRows);
+      auto [offsetsColumn, totalElements] = makeOffsetsColumnFromSizes(rawSizes, numRows, stream, mr);
 
-      // Compute total elements for gather indices
-      int32_t totalElements = 0;
-      for (int i = 0; i < numRows; ++i) {
-        totalElements += rawSizes[i];
-      }
       // Step 2: gather elements into contiguous buffer
       auto elements = BaseVector::loadedVectorShared(arrayVector->elements());
       // Create indices for gather
@@ -620,7 +595,7 @@ struct DispatchColumn {
     }
     // If compact, use GPU-accelerated offsets generation from sizes
     auto offsetsColumn =
-        makeOffsetsColumnFromSizes(arrayVector->rawSizes(), numRows);
+        makeOffsetsColumnFromSizes(arrayVector->rawSizes(), numRows, stream, mr).first;
     auto elements = arrayVector->elements();
     auto childColumn = convertColumn(elements, type->childAt(0), pool);
 
@@ -769,7 +744,7 @@ struct DispatchColumn {
 
     auto dValues = rmm::device_uvector<int64_t>(numRows, stream, mr);
 
-    util::convertTimestamps(
+    convertTimestamps(
         dTimestamps.data(),
         dMask,
         dValues.data(),
@@ -794,14 +769,23 @@ std::unique_ptr<cudf::table> toCudfTable(
     rmm::device_async_resource_ref mr,
     std::optional<std::string> timestampTimeZone) {
   const auto numColumns = veloxTable->childrenSize();
+  const auto numRows = veloxTable->size();
 
   // Flatten dictionary and constant encodings to get flat vectors.
   // This matches what the Arrow path does with ArrowOptions{true, true}.
-  VectorPtr flattenTarget = veloxTable;
-  BaseVector::flattenVector(flattenTarget);
-  auto flatRow = std::dynamic_pointer_cast<RowVector>(flattenTarget);
+  for (auto& child : veloxTable->children()) {
+    facebook::velox::BaseVector::flattenVector(child);
+    if (child->isLazy()) {
+      child = child->as<facebook::velox::LazyVector>()->loadedVectorShared();
+      VELOX_DCHECK_NOT_NULL(child);
+    }
+    // In case of output from Limit, RowVector size can be smaller than its children size.
+    if (child->size() > numRows) {
+      child = child->slice(0, numRows);
+    }
+  }
 
-  const auto& rowType = flatRow->type()->as<TypeKind::ROW>();
+  const auto& rowType = veloxTable->type()->as<TypeKind::ROW>();
 
   DispatchColumn dispatcher{stream, mr, std::move(timestampTimeZone)};
 
@@ -809,7 +793,7 @@ std::unique_ptr<cudf::table> toCudfTable(
   cudfColumns.reserve(numColumns);
 
   for (auto i = 0; i < numColumns; ++i) {
-    auto child = flatRow->childAt(i);
+    auto child = veloxTable->childAt(i);
     const auto& colType = rowType.childAt(i);
     auto column = dispatcher.convertColumn(child, colType, pool);
     cudfColumns.push_back(std::move(column));
@@ -817,6 +801,17 @@ std::unique_ptr<cudf::table> toCudfTable(
   stream.synchronize();
 
   return std::make_unique<cudf::table>(std::move(cudfColumns));
+}
+
+namespace with_arrow {
+std::unique_ptr<cudf::table> toCudfTable(
+    const facebook::velox::RowVectorPtr& veloxTable,
+    facebook::velox::memory::MemoryPool* pool,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr,
+    std::optional<std::string> timestampTimeZone) {
+  return toCudfTableArrow(veloxTable, pool, stream, mr, timestampTimeZone);
+  }
 }
 
 } // namespace facebook::velox::cudf_velox

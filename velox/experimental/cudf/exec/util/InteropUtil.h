@@ -25,7 +25,7 @@
 
 #include <memory>
 
-namespace facebook::velox::cudf_velox::util {
+namespace facebook::velox::cudf_velox {
 
 /// Convert Timestamp array to the configured cuDF timestamp representation on
 /// GPU.
@@ -38,13 +38,13 @@ void convertTimestamps(
     std::optional<std::string_view> timestampTimeZone,
     rmm::cuda_stream_view stream);
 
-/// Compute prefix sum (inclusive scan) on GPU using CUB
-std::unique_ptr<cudf::column> computeOffsetsFromSizes(
-    const int32_t* dSizes,
+std::pair<std::unique_ptr<cudf::column>, cudf::size_type>
+makeOffsetsColumnFromSizes(
+    const int32_t* rawSizes,
     cudf::size_type numRows,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
 
-} // namespace facebook::velox::cudf_velox::util
+} // namespace facebook::velox::cudf_velox
 
 // Made with Bob

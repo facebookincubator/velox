@@ -35,8 +35,24 @@ class CudfInteropBenchmark {
 
   std::unique_ptr<cudf::table> veloxToCudf(const RowVectorPtr& data) {
     // Ensure the vector is flat before exporting.
+    folly::BenchmarkSuspender suspender;
     VectorPtr flatData = data;
     BaseVector::flattenVector(flatData);
+    suspender.dismiss();
+    auto cudfTable = toCudfTable(
+        std::static_pointer_cast<RowVector>(flatData), pool_.get(), stream, mr);
+    stream.synchronize();
+    VELOX_CHECK_NOT_NULL(cudfTable);
+    VELOX_CHECK_EQ(cudfTable->num_rows(), flatData->size());
+    return cudfTable;
+  }
+
+  std::unique_ptr<cudf::table> veloxToCudfArrow(const RowVectorPtr& data) {
+    // Ensure the vector is flat before exporting.
+    folly::BenchmarkSuspender suspender;
+    VectorPtr flatData = data;
+    BaseVector::flattenVector(flatData);
+    suspender.dismiss();
     auto cudfTable = with_arrow::toCudfTable(
         std::static_pointer_cast<RowVector>(flatData), pool_.get(), stream, mr);
     stream.synchronize();
@@ -65,9 +81,7 @@ class CudfInteropBenchmark {
     BaseVector::flattenVector(flatData);
     suspender.dismiss();
 
-    auto stream = cudf::get_default_stream();
-    auto mr = cudf::get_current_device_resource_ref();
-    auto cudfTable = with_arrow::toCudfTable(
+    auto cudfTable = toCudfTable(
         std::static_pointer_cast<RowVector>(flatData), pool_.get(), stream, mr);
     stream.synchronize();
     VELOX_CHECK_NOT_NULL(cudfTable);
@@ -142,6 +156,18 @@ size_t iters = 2000;
       benchmark.veloxToCudf(data);                \
     }                                             \
   }                                               \
+                                                \
+  BENCHMARK_RELATIVE(velox_to_cudf_arrow_##name) {               \
+    CudfInteropBenchmark benchmark;               \
+                                                  \
+    folly::BenchmarkSuspender suspender;          \
+    auto data = benchmark.makeData(rowType);      \
+    suspender.dismiss();                          \
+                                                  \
+    for (auto i = 0; i < iters; ++i) {            \
+      benchmark.veloxToCudfArrow(data);                \
+    }                                             \
+  }                                               \
                                                   \
   BENCHMARK(cudf_to_velox_##name) {               \
     CudfInteropBenchmark benchmark;               \
@@ -165,6 +191,18 @@ size_t iters = 2000;
                                                   \
     for (auto i = 0; i < iters; ++i) {            \
       benchmark.veloxToCudf(data);                \
+    }                                             \
+  }                                               \
+                                                  \
+  BENCHMARK_RELATIVE(velox_to_cudf_non_null_arrow_##name) {      \
+    CudfInteropBenchmark benchmark;               \
+                                                  \
+    folly::BenchmarkSuspender suspender;          \
+    auto data = benchmark.makeData(rowType, 0);   \
+    suspender.dismiss();                          \
+                                                  \
+    for (auto i = 0; i < iters; ++i) {            \
+      benchmark.veloxToCudfArrow(data);                \
     }                                             \
   }                                               \
                                                   \

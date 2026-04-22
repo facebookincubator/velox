@@ -20,17 +20,20 @@
 #include <cudf/strings/strings_column_view.hpp>
 #include <cudf/utilities/bit.hpp>
 #include <cudf/utilities/error.hpp>
+#include <cudf/detail/sizes_to_offsets_iterator.cuh>
+
+#include <cuda/iterator>
 
 #include <rmm/exec_policy.hpp>
 
-#include <thrust/iterator/counting_iterator.h>
+
 #include <thrust/scan.h>
 #include <thrust/transform.h>
 
 #include <optional>
 #include <string_view>
 
-namespace facebook::velox::cudf_velox::util {
+namespace facebook::velox::cudf_velox {
 
 // DeviceTimestamp matches Velox Timestamp layout for device code
 // Avoids including velox/type/Timestamp.h which may conflict with folly
@@ -77,59 +80,58 @@ void convertTimestamps(
           rmm::exec_policy_nosync(stream),
           cuda::counting_iterator<cudf::size_type>(0),
           cuda::counting_iterator<cudf::size_type>(numRows),
-          thrust::counting_iterator<cudf::size_type>(numRows),
           dOutput,
           [dTimestampsTyped, dMask] __device__(auto idx) -> int64_t {
             if (dMask && !cudf::bit_is_set(dMask, idx)) {
               return int64_t{};
             }
             auto const& ts = dTimestampsTyped[idx];
-            return ts.getSeconds() * kNanosPerSecond +
-                static_cast<int64_t>(ts.getNanos());
+            return ts.seconds() * kNanosPerSecond +
+                static_cast<int64_t>(ts.nanos());
           });
       break;
     case cudf::type_id::TIMESTAMP_MICROSECONDS:
       thrust::transform(
           rmm::exec_policy_nosync(stream),
-          thrust::counting_iterator<cudf::size_type>(0),
-          thrust::counting_iterator<cudf::size_type>(numRows),
+          cuda::counting_iterator<cudf::size_type>(0),
+          cuda::counting_iterator<cudf::size_type>(numRows),
           dOutput,
           [dTimestampsTyped, dMask] __device__(auto idx) -> int64_t {
             if (dMask && !cudf::bit_is_set(dMask, idx)) {
               return int64_t{};
             }
             auto const& ts = dTimestampsTyped[idx];
-            return ts.getSeconds() * kMicrosPerSecond +
-                static_cast<int64_t>(ts.getNanos() / 1000);
+            return ts.seconds() * kMicrosPerSecond +
+                static_cast<int64_t>(ts.nanos() / 1000);
           });
       break;
     case cudf::type_id::TIMESTAMP_MILLISECONDS:
       thrust::transform(
           rmm::exec_policy_nosync(stream),
-          thrust::counting_iterator<cudf::size_type>(0),
-          thrust::counting_iterator<cudf::size_type>(numRows),
+          cuda::counting_iterator<cudf::size_type>(0),
+          cuda::counting_iterator<cudf::size_type>(numRows),
           dOutput,
           [dTimestampsTyped, dMask] __device__(auto idx) -> int64_t {
             if (dMask && !cudf::bit_is_set(dMask, idx)) {
               return int64_t{};
             }
             auto const& ts = dTimestampsTyped[idx];
-            return ts.getSeconds() * kMillisPerSecond +
-                static_cast<int64_t>(ts.getNanos() / 1000000);
+            return ts.seconds() * kMillisPerSecond +
+                static_cast<int64_t>(ts.nanos() / 1000000);
           });
       break;
     case cudf::type_id::TIMESTAMP_SECONDS:
       thrust::transform(
           rmm::exec_policy_nosync(stream),
-          thrust::counting_iterator<cudf::size_type>(0),
-          thrust::counting_iterator<cudf::size_type>(numRows),
+          cuda::counting_iterator<cudf::size_type>(0),
+          cuda::counting_iterator<cudf::size_type>(numRows),
           dOutput,
           [dTimestampsTyped, dMask] __device__(auto idx) -> int64_t {
             if (dMask && !cudf::bit_is_set(dMask, idx)) {
               return int64_t{};
             }
             auto const& ts = dTimestampsTyped[idx];
-            return ts.getSeconds();
+            return ts.seconds();
           });
       break;
     default:
@@ -137,34 +139,47 @@ void convertTimestamps(
   }
 }
 
-std::unique_ptr<cudf::column> computeOffsetsFromSizes(
-    const int32_t* dSizes,
+std::pair<std::unique_ptr<cudf::column>, cudf::size_type>
+makeOffsetsColumnFromSizes(
+    const int32_t* rawSizes,
     cudf::size_type numRows,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
-  // Allocate offsets buffer (numRows + 1)
-  auto dOffsets = rmm::device_uvector<int32_t>(numRows + 1, stream, mr);
 
-  // Set first offset to 0
-  CUDF_CUDA_TRY(
-      cudaMemsetAsync(dOffsets.data(), 0, sizeof(int32_t), stream.value()));
+    if (numRows == 0)
+    {
+        return {
+            cudf::make_empty_column(cudf::type_id::INT32),
+            cudf::size_type{0}
+        };
+    }
 
-  // Use Thrust inclusive_scan to compute prefix sum: offsets[i+1] =
-  // sum(sizes[0..i])
-  thrust::inclusive_scan(
-      rmm::exec_policy_nosync(stream),
-      dSizes,
-      dSizes + numRows,
-      dOffsets.data() + 1);
+    // 1. host → device
+    rmm::device_uvector<int32_t> d_sizes(numRows, stream);
 
-  return std::make_unique<cudf::column>(
-      cudf::data_type{cudf::type_id::INT32},
-      numRows + 1,
-      dOffsets.release(),
-      rmm::device_buffer{0, stream, mr},
-      0);
+    CUDF_CUDA_TRY(cudaMemcpyAsync(
+        d_sizes.data(),
+        rawSizes,
+        numRows * sizeof(int32_t),
+        cudaMemcpyHostToDevice,
+        stream.value()));
+
+    auto sizes_itr = thrust::make_counting_iterator(0);
+
+    auto transform_itr =
+        cuda::proclaim_return_type<cudf::size_type>(
+            [d_sizes = d_sizes.data()] __device__ (cudf::size_type i) {
+                return static_cast<cudf::size_type>(d_sizes[i]);
+            });
+
+    auto begin = thrust::make_transform_iterator(sizes_itr, transform_itr);
+    auto end   = begin + numRows;
+
+    auto [offsets_column, bytes] =
+        cudf::detail::make_offsets_child_column(
+            begin, end, stream, mr);
+
+    return {std::move(offsets_column), bytes};
 }
 
-} // namespace facebook::velox::cudf_velox::util
-
-// Made with Bob
+} // namespace facebook::velox::cudf_velox

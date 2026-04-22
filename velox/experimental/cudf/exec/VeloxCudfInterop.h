@@ -31,6 +31,14 @@ cudf::type_id veloxToCudfTypeId(const TypePtr& type);
 cudf::data_type veloxToCudfDataType(const TypePtr& type);
 
 namespace with_arrow {
+
+    std::unique_ptr<cudf::table> toCudfTable(
+    const facebook::velox::RowVectorPtr& veloxTable,
+    facebook::velox::memory::MemoryPool* pool,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr,
+    std::optional<std::string> timestampTimeZone = std::nullopt);
+    
 // String types are converted to varchar. Use the overload with outputType if
 // you want to convert to varbinary instead.
 facebook::velox::RowVectorPtr toVeloxColumn(
