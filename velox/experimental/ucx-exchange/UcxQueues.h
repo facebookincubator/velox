@@ -267,6 +267,10 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
       std::shared_ptr<cudf::packed_columns> data,
       std::vector<UcxDataAvailable>& dataAvailableCbs);
 
+  void enqueueArbitraryOutputLocked(
+      std::shared_ptr<cudf::packed_columns> data,
+      std::vector<UcxDataAvailable>& dataAvailableCbs);
+
   // Reference to the task that owns this UcxQueue.
   std::shared_ptr<exec::Task> task_{nullptr};
 
@@ -282,6 +286,13 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   // For broadcast: stores data for late-arriving destinations that need
   // backfill. Cleared once noMoreQueues_ is set.
   std::vector<std::shared_ptr<cudf::packed_columns>> dataToBroadcast_;
+
+  // For arbitrary: shared pool of data that any consumer can pull from.
+  std::deque<std::shared_ptr<cudf::packed_columns>> arbitraryBuffer_;
+
+  // For arbitrary: round-robin index for distributing data to waiting
+  // consumers.
+  int32_t nextArbitraryLoadIndex_{0};
 
   /// If 'queuedBytes_' > 'maxSize_', each producer is blocked after adding
   /// data.

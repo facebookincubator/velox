@@ -670,3 +670,278 @@ TEST_F(UcxOutputQueueManagerTest, broadcastEndMarkerToLateDestination) {
   EXPECT_TRUE(queueManager_->isFinished(taskId));
   queueManager_->removeTask(taskId);
 }
+
+// --- Arbitrary tests ---
+
+// Basic arbitrary: enqueue data, consumers pull from shared pool (no
+// duplication). Each batch goes to exactly one consumer.
+TEST_F(UcxOutputQueueManagerTest, arbitraryBasic) {
+  const vector_size_t size = 100;
+  const std::string taskId = "arbitrary0";
+  const int numDestinations = 3;
+
+  auto task = initializeTask(
+      taskId,
+      1 /* numDestinations (plan node uses 1) */,
+      1 /* numDrivers */,
+      true /* cleanup */,
+      core::PartitionedOutputNode::Kind::kArbitrary);
+
+  EXPECT_FALSE(queueManager_->isFinished(taskId));
+
+  // Grow to the actual number of consumers.
+  queueManager_->updateOutputBuffers(taskId, numDestinations, true);
+
+  // Enqueue 3 batches (all to destination 0, as the operator does).
+  enqueue(taskId, 0, size);
+  enqueue(taskId, 0, size);
+  enqueue(taskId, 0, size);
+
+  // Each consumer gets exactly one batch.
+  for (int dest = 0; dest < numDestinations; ++dest) {
+    fetch(taskId, dest);
+  }
+
+  noMoreData(taskId);
+
+  for (int dest = 0; dest < numDestinations; ++dest) {
+    fetchEndMarker(taskId, dest);
+  }
+
+  EXPECT_TRUE(queueManager_->isFinished(taskId));
+  queueManager_->removeTask(taskId);
+}
+
+// Arbitrary: late destination receives only future data, no backfill.
+TEST_F(UcxOutputQueueManagerTest, arbitraryLateDestination) {
+  const vector_size_t size = 50;
+  const std::string taskId = "arbitrary1";
+
+  auto task = initializeTask(
+      taskId,
+      1 /* numDestinations */,
+      1 /* numDrivers */,
+      true /* cleanup */,
+      core::PartitionedOutputNode::Kind::kArbitrary);
+
+  // Enqueue 2 batches before a second consumer arrives.
+  enqueue(taskId, 0, size);
+  enqueue(taskId, 0, size);
+
+  // Destination 0 consumes both batches.
+  fetch(taskId, 0);
+  fetch(taskId, 0);
+
+  // Add a late destination. It gets NO backfill (unlike broadcast).
+  queueManager_->updateOutputBuffers(taskId, 2, false);
+
+  // Enqueue 1 more batch — the late consumer should get it.
+  enqueue(taskId, 0, size);
+  fetch(taskId, 1);
+
+  queueManager_->updateOutputBuffers(taskId, 2, true);
+  noMoreData(taskId);
+
+  fetchEndMarker(taskId, 0);
+  fetchEndMarker(taskId, 1);
+
+  EXPECT_TRUE(queueManager_->isFinished(taskId));
+  queueManager_->removeTask(taskId);
+}
+
+// Arbitrary: isFinished requires noMoreQueues signal.
+TEST_F(UcxOutputQueueManagerTest, arbitraryNotFinishedWithoutNoMoreQueues) {
+  const std::string taskId = "arbitrary2";
+
+  auto task = initializeTask(
+      taskId,
+      1 /* numDestinations */,
+      1 /* numDrivers */,
+      true /* cleanup */,
+      core::PartitionedOutputNode::Kind::kArbitrary);
+
+  queueManager_->updateOutputBuffers(taskId, 2, false);
+
+  noMoreData(taskId);
+
+  fetchEndMarker(taskId, 0);
+  fetchEndMarker(taskId, 1);
+
+  // Not finished because noMoreQueues hasn't been signaled.
+  EXPECT_FALSE(queueManager_->isFinished(taskId));
+
+  queueManager_->updateOutputBuffers(taskId, 2, true);
+
+  EXPECT_TRUE(queueManager_->isFinished(taskId));
+  queueManager_->removeTask(taskId);
+}
+
+// Arbitrary: concurrent multi-fetcher stress test. Total consumed must equal
+// total produced; individual consumer counts may vary (demand-driven).
+TEST_F(UcxOutputQueueManagerTest, arbitraryMultiFetchers) {
+  const vector_size_t size = 10;
+  const std::string taskId = "arbitrary3";
+  const int numDestinations = 5;
+
+  initializeTask(
+      taskId,
+      1 /* numDestinations */,
+      1 /* numDrivers */,
+      true /* cleanup */,
+      core::PartitionedOutputNode::Kind::kArbitrary);
+
+  queueManager_->updateOutputBuffers(taskId, numDestinations, true);
+
+  std::vector<std::thread> threads;
+  std::vector<int64_t> fetchedPackedColumns(numDestinations, 0);
+
+  for (int i = 0; i < numDestinations; ++i) {
+    threads.emplace_back([&, i]() {
+      dataFetcher(
+          taskId, i, fetchedPackedColumns.at(i), false /* earlyTermination */);
+    });
+  }
+
+  const int totalPackedColumns = 100;
+  for (int i = 0; i < totalPackedColumns; ++i) {
+    enqueue(taskId, 0, size);
+    if (folly::Random().oneIn(4)) {
+      std::this_thread::sleep_for(std::chrono::microseconds(5)); // NOLINT
+    }
+  }
+  noMoreData(taskId);
+
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  int64_t totalFetched = 0;
+  for (int i = 0; i < numDestinations; ++i) {
+    totalFetched += fetchedPackedColumns[i];
+  }
+  ASSERT_EQ(totalFetched, totalPackedColumns);
+
+  queueManager_->removeTask(taskId);
+}
+
+// All consumers delete before drain: the checkIfDone drain must not loop
+// infinitely when every destination queue has been deleted.
+TEST_F(UcxOutputQueueManagerTest, arbitraryAllDeletedBeforeDrain) {
+  const vector_size_t size = 10;
+  const std::string taskId = "arbitrary4";
+
+  auto task = initializeTask(
+      taskId,
+      1 /* numDestinations */,
+      1 /* numDrivers */,
+      true /* cleanup */,
+      core::PartitionedOutputNode::Kind::kArbitrary);
+
+  queueManager_->updateOutputBuffers(taskId, 3, true);
+
+  // Enqueue batches — they sit in the shared arbitrary buffer.
+  enqueue(taskId, 0, size);
+  enqueue(taskId, 0, size);
+  enqueue(taskId, 0, size);
+
+  // Delete all destination queues before any data is consumed.
+  deleteResults(taskId, 0);
+  deleteResults(taskId, 1);
+  deleteResults(taskId, 2);
+
+  // noMoreData triggers checkIfDone which drains the arbitrary buffer.
+  // Must not hang.
+  noMoreData(taskId);
+
+  EXPECT_TRUE(queueManager_->isFinished(taskId));
+  queueManager_->removeTask(taskId);
+}
+
+// Terminate with data in arbitraryBuffer: pending callbacks must fire with
+// nullptr and the queue must not leak or hang.
+TEST_F(UcxOutputQueueManagerTest, arbitraryTerminateWithBufferedData) {
+  const vector_size_t size = 10;
+  const std::string taskId = "arbitrary5";
+
+  auto task = initializeTask(
+      taskId,
+      1 /* numDestinations */,
+      1 /* numDrivers */,
+      true /* cleanup */,
+      core::PartitionedOutputNode::Kind::kArbitrary);
+
+  queueManager_->updateOutputBuffers(taskId, 2, true);
+
+  // Enqueue data that sits in the shared pool.
+  enqueue(taskId, 0, size);
+  enqueue(taskId, 0, size);
+
+  // Register callbacks on both destinations (consumers waiting for data).
+  bool callback0Fired = false;
+  bool callback0Nullptr = false;
+  bool callback1Fired = false;
+  bool callback1Nullptr = false;
+
+  // Destination 0 should get data immediately from the arbitrary buffer.
+  queueManager_->getData(
+      taskId,
+      0,
+      [&callback0Fired, &callback0Nullptr](
+          std::shared_ptr<cudf::packed_columns> data,
+          std::vector<int64_t> /*remainingBytes*/) {
+        callback0Fired = true;
+        callback0Nullptr = (data == nullptr);
+      });
+  EXPECT_TRUE(callback0Fired);
+  EXPECT_FALSE(callback0Nullptr);
+
+  // Destination 1 should also get data immediately.
+  queueManager_->getData(
+      taskId,
+      1,
+      [&callback1Fired, &callback1Nullptr](
+          std::shared_ptr<cudf::packed_columns> data,
+          std::vector<int64_t> /*remainingBytes*/) {
+        callback1Fired = true;
+        callback1Nullptr = (data == nullptr);
+      });
+  EXPECT_TRUE(callback1Fired);
+  EXPECT_FALSE(callback1Nullptr);
+
+  // Enqueue more data, then register callbacks that will be pending.
+  enqueue(taskId, 0, size);
+  callback0Fired = false;
+  callback1Fired = false;
+  queueManager_->getData(
+      taskId,
+      0,
+      [&callback0Fired, &callback0Nullptr](
+          std::shared_ptr<cudf::packed_columns> data,
+          std::vector<int64_t> /*remainingBytes*/) {
+        callback0Fired = true;
+        callback0Nullptr = (data == nullptr);
+      });
+  // Destination 0 should get the data immediately.
+  EXPECT_TRUE(callback0Fired);
+  EXPECT_FALSE(callback0Nullptr);
+
+  // Destination 1 has no data — callback is installed but pending.
+  queueManager_->getData(
+      taskId,
+      1,
+      [&callback1Fired, &callback1Nullptr](
+          std::shared_ptr<cudf::packed_columns> data,
+          std::vector<int64_t> /*remainingBytes*/) {
+        callback1Fired = true;
+        callback1Nullptr = (data == nullptr);
+      });
+  EXPECT_FALSE(callback1Fired);
+
+  // Simulate task failure: abort then remove (which calls terminate).
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+
+  // Pending callback must have fired with nullptr (end-of-stream).
+  EXPECT_TRUE(callback1Fired);
+  EXPECT_TRUE(callback1Nullptr);
+}
