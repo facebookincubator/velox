@@ -8493,4 +8493,22 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashTableCleanupAfterProbeFinish) {
   ASSERT_TRUE(tableEmpty);
 }
 
+TEST_F(HashJoinTest, emptyBuildWithDebugEnabled) {
+  cudf_velox::CudfConfig::getInstance().debugEnabled = true;
+  SCOPE_EXIT {
+    cudf_velox::CudfConfig::getInstance().debugEnabled = false;
+  };
+
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .injectSpill(false)
+      .numDrivers(1)
+      .keyTypes({BIGINT()})
+      .probeVectors(100, 5)
+      .buildVectors(0, 5)
+      .referenceQuery(
+          "SELECT t_k0, t_data, u_k0, u_data FROM t, u WHERE t_k0 = u_k0")
+      .checkSpillStats(false)
+      .run();
+}
+
 } // namespace
