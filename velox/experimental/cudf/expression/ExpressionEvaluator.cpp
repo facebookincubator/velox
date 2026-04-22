@@ -680,6 +680,10 @@ class BinaryFunction : public CudfFunction {
   std::unique_ptr<cudf::scalar> right_;
 };
 
+// @TODO 4/22/26
+// Simplify or remove the logic in this class that handles constant-folding or
+// short-circuiting of logical operations, once the cuDF expression optimizer
+// enhancements land (Velox PR #17108, see also Velox Issue #17307).
 class LogicalFunction : public CudfFunction {
  public:
   LogicalFunction(
