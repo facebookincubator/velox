@@ -146,7 +146,7 @@ RowVectorPtr CudfFromVelox::doGetOutput() {
   // Convert RowVector to cudf table.  toCudfTable synchronizes the stream
   // internally before releasing Arrow host buffers, so no additional sync
   // is needed here.
-  auto tbl = with_arrow::toCudfTable(
+  auto tbl = toCudfTable(
       input, input->pool(), stream, get_output_mr(), timestampTimeZone_);
 
   VELOX_CHECK_NOT_NULL(tbl);
@@ -211,7 +211,7 @@ RowVectorPtr CudfToVelox::convertFrontToVelox() {
   auto stream = cudfVector->stream();
   auto tableView = cudfVector->getTableView();
   auto output = with_arrow::toVeloxColumn(
-      tableView, pool(), outputType_, "", stream, get_temp_mr());
+      tableView, pool(), outputType_, stream, get_temp_mr());
   stream.synchronize();
   output->setType(outputType_);
   return output;
@@ -309,7 +309,7 @@ RowVectorPtr CudfToVelox::doGetOutput() {
           std::move(toConcat), outputType_, stream, get_temp_mr());
       auto tableView = concatTable->view();
       veloxBuffer_ = with_arrow::toVeloxColumn(
-          tableView, pool(), outputType_, "", stream, get_temp_mr());
+          tableView, pool(), outputType_, stream, get_temp_mr());
       stream.synchronize();
       veloxBuffer_->setType(outputType_);
       veloxOffset_ = 0;

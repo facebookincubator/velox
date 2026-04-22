@@ -32,7 +32,7 @@ class CudfFunctionBaseTest : public velox::functions::test::FunctionBaseTest {
 
     VELOX_CHECK(!rows.has_value());
     auto stream = cudf::get_default_stream();
-    auto cudfTable = velox::cudf_velox::with_arrow::toCudfTable(
+    auto cudfTable = velox::cudf_velox::toCudfTable(
         input, pool_.get(), stream, cudf::get_current_device_resource_ref());
     auto filterEvaluator =
         createCudfExpression({exprSet.exprs()[0]}, input->rowType());

@@ -158,8 +158,7 @@ void CudfHiveDataSink::appendData(RowVectorPtr input) {
 
   // Convert the input RowVectorPtr to cudf::table
   auto stream = cudfGlobalStreamPool().get_stream();
-  auto cudfInput =
-      with_arrow::toCudfTable(input, input->pool(), stream, get_temp_mr());
+  auto cudfInput = toCudfTable(input, input->pool(), stream, get_temp_mr());
   stream.synchronize();
   VELOX_CHECK_NOT_NULL(
       cudfInput, "Failed to convert input RowVectorPtr to cudf::table");

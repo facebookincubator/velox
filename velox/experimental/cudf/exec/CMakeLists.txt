@@ -49,6 +49,9 @@ target_link_libraries(
     velox_exec
     velox_cudf_hive_connector
     velox_cudf_expression
+    velox_cudf_exec_util
 )
 
 target_compile_options(velox_cudf_exec PRIVATE -Wno-missing-field-initializers)
+
+add_subdirectory(util)
