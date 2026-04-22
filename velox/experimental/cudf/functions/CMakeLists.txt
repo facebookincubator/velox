@@ -30,6 +30,7 @@ add_library(
   CudfFallbackFunction.cpp
   GpuFunctionDispatch.cpp
   GpuExprEvaluator.cpp
+  CudfLibraryFunctions.cpp
 )
 
 target_link_libraries(

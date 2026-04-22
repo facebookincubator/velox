@@ -41,6 +41,12 @@ enum class GpuExprNodeKind {
   kFunctionCall,
   kLiteral,
   kCpuFallback,
+  kAnd,
+  kOr,
+  kNot,
+  kSwitch,
+  kCoalesce,
+  kCast,
 };
 
 struct GpuExprNode {
@@ -55,6 +61,8 @@ struct GpuExprNode {
   double literalDouble{0.0};
   int64_t literalInt64{0};
   bool literalBool{false};
+  bool literalIsNull{false};
+  std::string literalString;
 
   // For kCpuFallback: type-erased pointers to avoid Velox header deps here.
   // Holds shared_ptr<exec::Expr> and shared_ptr<RowType> respectively.
@@ -114,6 +122,42 @@ class GpuExprEvaluator {
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr);
 
+  EvalResult evalAnd(
+      const GpuExprNode& node,
+      const cudf::table_view& input,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr);
+
+  EvalResult evalOr(
+      const GpuExprNode& node,
+      const cudf::table_view& input,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr);
+
+  EvalResult evalNot(
+      const GpuExprNode& node,
+      const cudf::table_view& input,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr);
+
+  EvalResult evalSwitch(
+      const GpuExprNode& node,
+      const cudf::table_view& input,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr);
+
+  EvalResult evalCoalesce(
+      const GpuExprNode& node,
+      const cudf::table_view& input,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr);
+
+  EvalResult evalCast(
+      const GpuExprNode& node,
+      const cudf::table_view& input,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr);
+
   CpuFallbackFn cpuFallbackHandler_;
 };
 
@@ -128,10 +172,30 @@ std::unique_ptr<GpuExprNode> makeFunctionCall(
 
 std::unique_ptr<GpuExprNode> makeLiteralDouble(double value);
 std::unique_ptr<GpuExprNode> makeLiteralInt64(int64_t value);
+std::unique_ptr<GpuExprNode> makeLiteralBool(bool value);
+std::unique_ptr<GpuExprNode> makeLiteralString(const std::string& value);
+std::unique_ptr<GpuExprNode> makeLiteralInt32(int32_t value);
+std::unique_ptr<GpuExprNode> makeLiteralNull(cudf::type_id type);
 
 std::unique_ptr<GpuExprNode> makeCpuFallback(
     cudf::type_id resultType,
     std::shared_ptr<void> fallbackExpr,
     std::shared_ptr<void> fallbackSchema);
+
+std::unique_ptr<GpuExprNode> makeAnd(
+    std::vector<std::unique_ptr<GpuExprNode>> children);
+std::unique_ptr<GpuExprNode> makeOr(
+    std::vector<std::unique_ptr<GpuExprNode>> children);
+std::unique_ptr<GpuExprNode> makeNot(
+    std::unique_ptr<GpuExprNode> child);
+std::unique_ptr<GpuExprNode> makeSwitch(
+    cudf::type_id resultType,
+    std::vector<std::unique_ptr<GpuExprNode>> children);
+std::unique_ptr<GpuExprNode> makeCoalesce(
+    cudf::type_id resultType,
+    std::vector<std::unique_ptr<GpuExprNode>> children);
+std::unique_ptr<GpuExprNode> makeCast(
+    cudf::type_id targetType,
+    std::unique_ptr<GpuExprNode> child);
 
 } // namespace facebook::velox::gpu
