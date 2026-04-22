@@ -26,6 +26,7 @@ TEST(ConfigTest, CudfConfig) {
       {CudfConfig::kCudfDebugEnabled, "true"},
       {CudfConfig::kCudfMemoryResource, "arena"},
       {CudfConfig::kCudfMemoryPercent, "25"},
+      {CudfConfig::kCudfStreamingGroupbyApiEnabled, "true"},
       {CudfConfig::kCudfFunctionNamePrefix, "presto"},
       {CudfConfig::kCudfAllowCpuFallback, "false"}};
 
@@ -35,6 +36,7 @@ TEST(ConfigTest, CudfConfig) {
   ASSERT_EQ(config.debugEnabled, true);
   ASSERT_EQ(config.memoryResource, "arena");
   ASSERT_EQ(config.memoryPercent, 25);
+  ASSERT_EQ(config.streamingGroupbyApiEnabled, true);
   ASSERT_EQ(config.functionNamePrefix, "presto");
   ASSERT_EQ(config.allowCpuFallback, false);
 }

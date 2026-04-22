@@ -40,10 +40,15 @@ class ToCudfSelectionTest : public OperatorTestBase {
   void SetUp() override {
     OperatorTestBase::SetUp();
     filesystems::registerLocalFileSystem();
+    savedStreamingGroupbyApiEnabled_ =
+        cudf_velox::CudfConfig::getInstance().streamingGroupbyApiEnabled;
+    cudf_velox::CudfConfig::getInstance().streamingGroupbyApiEnabled = false;
     cudf_velox::registerCudf();
   }
 
   void TearDown() override {
+    cudf_velox::CudfConfig::getInstance().streamingGroupbyApiEnabled =
+        savedStreamingGroupbyApiEnabled_;
     cudf_velox::unregisterCudf();
     OperatorTestBase::TearDown();
   }
@@ -85,6 +90,17 @@ class ToCudfSelectionTest : public OperatorTestBase {
     return false;
   }
 
+  bool wasStreamingGroupbyApiUsed(
+      const std::shared_ptr<exec::Task>& task,
+      const core::PlanNodeId& planNodeId) {
+    auto const planStats = toPlanStats(task->taskStats());
+    auto it = planStats.find(planNodeId);
+    if (it == planStats.end()) {
+      return false;
+    }
+    return it->second.customStats.count("streamingGroupbyApiUsed") > 0;
+  }
+
   RowTypePtr rowType_{
       ROW({"c0", "c1", "c2", "c3", "c4", "c5", "c6"},
           {BIGINT(),
@@ -94,6 +110,7 @@ class ToCudfSelectionTest : public OperatorTestBase {
            DOUBLE(),
            DOUBLE(),
            VARCHAR()})};
+  bool savedStreamingGroupbyApiEnabled_{false};
 };
 
 // Test supported aggregation should use CUDF
@@ -564,6 +581,104 @@ TEST_F(ToCudfSelectionTest, cudfDisabledUsesRegularAggregation) {
 
   ASSERT_FALSE(wasCudfAggregationUsed(task));
   ASSERT_TRUE(wasDefaultHashAggregationUsed(task));
+}
+
+TEST_F(ToCudfSelectionTest, streamingGroupbyApiOffByDefault) {
+  auto vectors = makeVectors(rowType_, 10, 100);
+  createDuckDbTable(vectors);
+
+  core::PlanNodeId partialAggId;
+  core::PlanNodeId finalAggId;
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .partialAggregation({"c0"}, {"sum(c1)", "avg(c4)"})
+                  .capturePlanNodeId(partialAggId)
+                  .finalAggregation()
+                  .capturePlanNodeId(finalAggId)
+                  .planNode();
+
+  auto task =
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .config("cudf.enabled", true)
+          .plan(plan)
+          .assertResults("SELECT c0, sum(c1), avg(c4) FROM tmp GROUP BY c0");
+
+  ASSERT_FALSE(wasStreamingGroupbyApiUsed(task, partialAggId));
+  ASSERT_FALSE(wasStreamingGroupbyApiUsed(task, finalAggId));
+}
+
+TEST_F(ToCudfSelectionTest, streamingGroupbyApiEligiblePartialFinalUsesNewPath) {
+  cudf_velox::CudfConfig::getInstance().streamingGroupbyApiEnabled = true;
+
+  auto vectors = makeVectors(rowType_, 10, 100);
+  createDuckDbTable(vectors);
+
+  core::PlanNodeId partialAggId;
+  core::PlanNodeId finalAggId;
+  auto plan =
+      PlanBuilder()
+          .values(vectors)
+          .partialAggregation({"c0"}, {"sum(c1)", "count(c2)", "max(c3)", "avg(c4)"})
+          .capturePlanNodeId(partialAggId)
+          .finalAggregation()
+          .capturePlanNodeId(finalAggId)
+          .planNode();
+
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .config("cudf.enabled", true)
+                  .plan(plan)
+                  .assertResults(
+                      "SELECT c0, sum(c1), count(c2), max(c3), avg(c4) FROM tmp GROUP BY c0");
+
+  ASSERT_TRUE(wasStreamingGroupbyApiUsed(task, partialAggId));
+  ASSERT_TRUE(wasStreamingGroupbyApiUsed(task, finalAggId));
+}
+
+TEST_F(ToCudfSelectionTest, streamingGroupbyApiSkipsSingleAggregation) {
+  cudf_velox::CudfConfig::getInstance().streamingGroupbyApiEnabled = true;
+
+  auto vectors = makeVectors(rowType_, 10, 100);
+  createDuckDbTable(vectors);
+
+  core::PlanNodeId singleAggId;
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .singleAggregation({"c0"}, {"sum(c1)", "avg(c4)"})
+                  .capturePlanNodeId(singleAggId)
+                  .planNode();
+
+  auto task =
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .config("cudf.enabled", true)
+          .plan(plan)
+          .assertResults("SELECT c0, sum(c1), avg(c4) FROM tmp GROUP BY c0");
+
+  ASSERT_FALSE(wasStreamingGroupbyApiUsed(task, singleAggId));
+}
+
+TEST_F(ToCudfSelectionTest, streamingGroupbyApiSkipsNonFixedWidthValueAggs) {
+  cudf_velox::CudfConfig::getInstance().streamingGroupbyApiEnabled = true;
+
+  auto vectors = makeVectors(rowType_, 10, 100);
+  createDuckDbTable(vectors);
+
+  core::PlanNodeId partialAggId;
+  core::PlanNodeId finalAggId;
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .partialAggregation({"c0"}, {"min(c6)"})
+                  .capturePlanNodeId(partialAggId)
+                  .finalAggregation()
+                  .capturePlanNodeId(finalAggId)
+                  .planNode();
+
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .config("cudf.enabled", true)
+                  .plan(plan)
+                  .assertResults("SELECT c0, min(c6) FROM tmp GROUP BY c0");
+
+  ASSERT_FALSE(wasStreamingGroupbyApiUsed(task, partialAggId));
+  ASSERT_FALSE(wasStreamingGroupbyApiUsed(task, finalAggId));
 }
 
 } // namespace facebook::velox::exec::test
