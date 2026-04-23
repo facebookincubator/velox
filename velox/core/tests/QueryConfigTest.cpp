@@ -168,8 +168,9 @@ TEST_F(QueryConfigTest, expressionEvaluationRelatedConfigs) {
             std::make_shared<core::ExecCtx>(pool.get(), queryCtx.get());
         auto evalCtx = std::make_shared<exec::EvalCtx>(execCtx.get());
 
+        SelectivityVector rows(100, true);
         ASSERT_EQ(
-            evalCtx->peelingEnabled(),
+            evalCtx->peelingEnabled(rows),
             !queryConfig.debugDisableExpressionsWithPeeling());
         ASSERT_EQ(
             evalCtx->sharedSubExpressionReuseEnabled(),
@@ -203,6 +204,24 @@ TEST_F(QueryConfigTest, expressionEvaluationRelatedConfigs) {
   testConfig(createConfig(false, true, false, false));
   testConfig(createConfig(false, false, true, false));
   testConfig(createConfig(false, false, false, true));
+
+  // Verify minRowsForPeeling: peeling is suppressed when the number of
+  // selected rows is below the threshold.
+  {
+    auto queryCtx = core::QueryCtx::create(
+        nullptr, QueryConfig({{core::QueryConfig::kMinRowsForPeeling, "50"}}));
+    auto execCtx = std::make_shared<core::ExecCtx>(pool.get(), queryCtx.get());
+    auto evalCtx = std::make_shared<exec::EvalCtx>(execCtx.get());
+
+    SelectivityVector belowThreshold(30, true);
+    ASSERT_FALSE(evalCtx->peelingEnabled(belowThreshold));
+
+    SelectivityVector atThreshold(50, true);
+    ASSERT_TRUE(evalCtx->peelingEnabled(atThreshold));
+
+    SelectivityVector aboveThreshold(100, true);
+    ASSERT_TRUE(evalCtx->peelingEnabled(aboveThreshold));
+  }
 }
 
 TEST_F(QueryConfigTest, sessionStartTime) {
