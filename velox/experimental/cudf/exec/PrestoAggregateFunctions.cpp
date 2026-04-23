@@ -27,7 +27,8 @@ void registerPrestoAggregateFunctions(const std::string& prefix) {
   unregisterAggregateFunctions();
   registerCommonAggregationFunctions(getGroupbyAggregationRegistry(), prefix);
   registerCommonAggregationFunctions(getReduceAggregationRegistry(), prefix);
-  registerReduceOnlyAggregationFunctions(getReduceAggregationRegistry(), prefix);
+  registerReduceOnlyAggregationFunctions(
+      getReduceAggregationRegistry(), prefix);
 
   // Presto (default): SUM(REAL) -> REAL, AVG(REAL) -> REAL.
   appendGroupbyAggregationFunctionForStep(
