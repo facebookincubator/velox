@@ -125,6 +125,12 @@ bool SparkCastCallToSpecialForm::isAnsiSupported(
       // decimal points) instead of returning NULL.
       return true;
     }
+    // String to float/double casts support ANSI mode: invalid format strings
+    // throw instead of returning NULL. Overflow values like "1e39" produce
+    // Infinity per Spark semantics.
+    if (isFloatingPointType(toType)) {
+      return true;
+    }
   }
   if (fromType->isTimestamp() && isIntegralType(toType)) {
     return true;
