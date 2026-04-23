@@ -75,14 +75,14 @@ class CudfLogicalFunctionsTest : public OperatorTestBase {
   }
 };
 
-// NotFunction: negation of a boolean column — the base column-only path.
+// NotFunction: negation of a boolean column. Base column-only path.
 TEST_F(CudfLogicalFunctionsTest, notColumn) {
   auto data = makeRowVector(
       {"a"}, {makeFlatVector<bool>({true, false, true, false})});
   runProject({data}, "NOT a AS r", "SELECT NOT a AS r FROM tmp");
 }
 
-// NotFunction: negation of a comparison — `NotFunction` wraps the comparison
+// NotFunction: negation of a comparison. `NotFunction` wraps the comparison
 // result, which itself comes from a nested FunctionExpression path.
 TEST_F(CudfLogicalFunctionsTest, notComparison) {
   auto data = makeRowVector(
@@ -91,7 +91,7 @@ TEST_F(CudfLogicalFunctionsTest, notComparison) {
       {data}, "NOT (c0 = 3) AS r", "SELECT NOT (c0 = 3) AS r FROM tmp");
 }
 
-// NotFunction: null row — cudf::unary_operation with NOT should propagate
+// NotFunction: null row. `cudf::unary_operation` with `NOT` should propagate
 // null through untouched.
 TEST_F(CudfLogicalFunctionsTest, notWithNullRows) {
   auto data = makeRowVector(
@@ -101,7 +101,7 @@ TEST_F(CudfLogicalFunctionsTest, notWithNullRows) {
   runProject({data}, "NOT a AS r", "SELECT NOT a AS r FROM tmp");
 }
 
-// IsNullFunction: nullable INTEGER column — mix of nulls and non-nulls.
+// IsNullFunction: nullable INTEGER column with a mix of nulls and non-nulls.
 TEST_F(CudfLogicalFunctionsTest, isNullInteger) {
   auto data = makeRowVector(
       {"c0"},
@@ -110,7 +110,7 @@ TEST_F(CudfLogicalFunctionsTest, isNullInteger) {
   runProject({data}, "c0 IS NULL AS r", "SELECT c0 IS NULL AS r FROM tmp");
 }
 
-// IsNullFunction: nullable VARCHAR column — exercises string-typed input.
+// IsNullFunction: nullable VARCHAR column. Exercises string-typed input.
 TEST_F(CudfLogicalFunctionsTest, isNullVarchar) {
   auto data = makeRowVector(
       {"c0"},
@@ -119,14 +119,14 @@ TEST_F(CudfLogicalFunctionsTest, isNullVarchar) {
   runProject({data}, "c0 IS NULL AS r", "SELECT c0 IS NULL AS r FROM tmp");
 }
 
-// IsNullFunction: column with no nulls — result is all false.
+// IsNullFunction: column with no nulls. Result is all false.
 TEST_F(CudfLogicalFunctionsTest, isNullNoNulls) {
   auto data = makeRowVector(
       {"c0"}, {makeFlatVector<int32_t>({1, 2, 3, 4, 5})});
   runProject({data}, "c0 IS NULL AS r", "SELECT c0 IS NULL AS r FROM tmp");
 }
 
-// IsNotNullFunction: nullable INTEGER column — inverse of IS NULL.
+// IsNotNullFunction: nullable INTEGER column. Inverse of IS NULL.
 TEST_F(CudfLogicalFunctionsTest, isNotNullInteger) {
   auto data = makeRowVector(
       {"c0"},
@@ -146,7 +146,7 @@ TEST_F(CudfLogicalFunctionsTest, isNotNullVarchar) {
       {data}, "c0 IS NOT NULL AS r", "SELECT c0 IS NOT NULL AS r FROM tmp");
 }
 
-// Composition: NOT wrapping IS NULL — exercises NotFunction operating on the
+// Composition: NOT wrapping IS NULL. Exercises NotFunction operating on the
 // column produced by IsNullFunction.
 TEST_F(CudfLogicalFunctionsTest, notOfIsNull) {
   auto data = makeRowVector(
