@@ -27,7 +27,6 @@
 #include <cudf/column/column_factories.hpp>
 #include <cudf/concatenate.hpp>
 #include <cudf/copying.hpp>
-#include <cudf/detail/gather.hpp>
 #include <cudf/filling.hpp>
 #include <cudf/groupby.hpp>
 #include <cudf/reduction.hpp>
@@ -543,7 +542,7 @@ RowVectorPtr CudfWindow::getOutput() {
       auto keyTable = allView.select(allSortKeys);
       auto indices = cudf::stable_sorted_order(
           keyTable, allOrders, allNullOrders, stream, mr);
-      sortedData = cudf::detail::gather(
+      sortedData = cudf::gather(
           allView,
           indices->view(),
           cudf::out_of_bounds_policy::DONT_CHECK,

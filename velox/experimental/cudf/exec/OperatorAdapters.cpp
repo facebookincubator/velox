@@ -895,16 +895,6 @@ class WindowAdapter : public OperatorAdapter {
         std::make_unique<CudfWindow>(operatorId, ctx, windowPlanNode));
     return result;
   }
-
-  bool keepStockOperator(
-      const exec::Operator* op,
-      const core::PlanNodePtr& planNode,
-      exec::DriverCtx* ctx) const override {
-    if (!planNode || !ctx || !canHandle(op)) {
-      return false;
-    }
-    return !canRunOnGPU(op, planNode, ctx);
-  }
 };
 
 /// Registration Function

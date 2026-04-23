@@ -27,6 +27,7 @@ add_library(
   CudfMarkDistinct.cpp
   CudfOrderBy.cpp
   CudfTopN.cpp
+  CudfWindow.cpp
   DebugUtil.cpp
   GpuResources.cpp
   OperatorAdapters.cpp

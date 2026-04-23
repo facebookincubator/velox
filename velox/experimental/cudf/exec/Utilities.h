@@ -180,4 +180,14 @@ void streamsWaitForStream(
     CudaEvent& event,
     const std::vector<rmm::cuda_stream_view>& streams,
     rmm::cuda_stream_view stream);
+
+// Extract the base function name from a possibly-prefixed name.
+// Handles both Presto-style "presto.default.lag" and simple "lag".
+std::string getBaseFunctionName(const std::string& fullName);
+
+// Also strip any registered function name prefix (e.g. "spark_" for Spark).
+std::string stripFunctionPrefix(
+    const std::string& name,
+    const std::string& prefix);
+
 } // namespace facebook::velox::cudf_velox
