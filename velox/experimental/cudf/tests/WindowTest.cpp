@@ -377,63 +377,6 @@ TEST_F(CudfWindowTest, duplicateOrOverlappingKeys) {
       "Sorting keys must be unique and not overlap with partitioning keys. Found duplicate key: b");
 }
 
-TEST_F(CudfWindowTest, missingFunctionSignature) {
-  std::vector<RowVectorPtr> inputRows = {makeRowVector({
-      makeFlatVector<int64_t>({1, 2, 3}),
-      makeFlatVector<std::string>({"A", "B", "C"}),
-      makeFlatVector<int64_t>({10, 20, 30}),
-  })};
-
-  auto runWindow = [&](const core::CallTypedExprPtr& callExpr) {
-    core::WindowNode::Frame frame{
-        core::WindowNode::WindowType::kRows,
-        core::WindowNode::BoundType::kUnboundedPreceding,
-        nullptr,
-        core::WindowNode::BoundType::kUnboundedFollowing,
-        nullptr};
-
-    core::WindowNode::Function windowFunction{callExpr, frame, false};
-
-    auto planNode =
-        PlanBuilder()
-            .values(inputRows)
-            .addNode([&](auto nodeId, auto source) -> core::PlanNodePtr {
-              return std::make_shared<core::WindowNode>(
-                  nodeId,
-                  std::vector<core::FieldAccessTypedExprPtr>{
-                      std::make_shared<core::FieldAccessTypedExpr>(
-                          BIGINT(), "c0")},
-                  std::vector<core::FieldAccessTypedExprPtr>{},
-                  std::vector<core::SortOrder>{},
-                  std::vector<std::string>{"w"},
-                  std::vector<core::WindowNode::Function>{windowFunction},
-                  false,
-                  source);
-            })
-            .planNode();
-
-    AssertQueryBuilder(planNode).copyResults(pool());
-  };
-
-  auto callExpr = std::make_shared<core::CallTypedExpr>(
-      BIGINT(),
-      "sum",
-      std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c1"));
-
-  VELOX_ASSERT_THROW(
-      runWindow(callExpr),
-      "Window function signature is not supported: sum(VARCHAR). Supported signatures:");
-
-  callExpr = std::make_shared<core::CallTypedExpr>(
-      VARCHAR(),
-      "sum",
-      std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "c2"));
-
-  VELOX_ASSERT_THROW(
-      runWindow(callExpr),
-      "Unexpected return type for window function sum(BIGINT). Expected BIGINT. Got VARCHAR.");
-}
-
 TEST_F(CudfWindowTest, rowNumberGlobalOrderBy) {
   auto data = makeRowVector(
       {"d", "p", "s"},

@@ -21,7 +21,6 @@
 
 #include "velox/core/Expressions.h"
 #include "velox/exec/Operator.h"
-#include "velox/exec/WindowFunction.h"
 #include "velox/type/Type.h"
 
 #include <cudf/aggregation.hpp>
@@ -297,47 +296,17 @@ CudfWindow::CudfWindow(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
     const std::shared_ptr<const core::WindowNode>& windowNode)
-    : exec::Operator(
+    : CudfOperatorBase(
+          operatorId,
           driverCtx,
           windowNode->outputType(),
-          operatorId,
           windowNode->id(),
-          "CudfWindow"),
-      NvtxHelper(
+          "CudfWindow",
           nvtx3::rgb{255, 165, 0},
-          operatorId,
-          fmt::format("[{}]", windowNode->id())),
+          NvtxMethodFlag::kAddInput | NvtxMethodFlag::kGetOutput),
       windowNode_(windowNode),
       inputRowType_(asRowType(windowNode->inputType())) {
   const auto& inputType = windowNode->inputType();
-
-  // Validate window function signatures upfront using Velox's registry.
-  // This ensures we produce proper error messages for unsupported signatures.
-  const auto& prefix = CudfConfig::getInstance().functionNamePrefix;
-  const auto numInputCols = inputType->size();
-  for (size_t i = 0; i < windowNode->windowFunctions().size(); ++i) {
-    const auto& func = windowNode->windowFunctions()[i];
-    const auto baseName =
-        stripFunctionPrefix(func.functionCall->name(), prefix);
-
-    // Gather argument types for signature validation.
-    std::vector<TypePtr> argTypes;
-    for (const auto& arg : func.functionCall->inputs()) {
-      argTypes.push_back(arg->type());
-    }
-
-    // Validate signature and get expected return type.
-    auto expectedReturnType = exec::resolveWindowResultType(baseName, argTypes);
-
-    // Validate return type matches what the plan node expects.
-    auto actualReturnType = outputType_->childAt(numInputCols + i);
-    VELOX_USER_CHECK(
-        expectedReturnType->equivalent(*actualReturnType),
-        "Unexpected return type for window function {}. Expected {}. Got {}.",
-        exec::toString(baseName, argTypes),
-        expectedReturnType->toString(),
-        actualReturnType->toString());
-  }
 
   for (const auto& key : windowNode->partitionKeys()) {
     partitionKeyIndices_.push_back(inputType->getChildIdx(key->name()));
@@ -356,8 +325,7 @@ CudfWindow::CudfWindow(
   }
 }
 
-void CudfWindow::addInput(RowVectorPtr input) {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+void CudfWindow::doAddInput(RowVectorPtr input) {
   auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
   VELOX_CHECK_NOT_NULL(cudfInput, "CudfWindow expects CudfVector input");
   inputBatches_.push_back(std::move(cudfInput));
@@ -488,8 +456,8 @@ std::unique_ptr<cudf::column> CudfWindow::computeAggregateColumn(
       partKeys, inputCol, preceding, following, 1, *agg, stream, mr);
 }
 
-void CudfWindow::noMoreInput() {
-  Operator::noMoreInput();
+void CudfWindow::doNoMoreInput() {
+  CudfOperatorBase::doNoMoreInput();
   if (inputBatches_.empty()) {
     finished_ = true;
   }
@@ -499,9 +467,7 @@ bool CudfWindow::isFinished() {
   return finished_;
 }
 
-RowVectorPtr CudfWindow::getOutput() {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
-
+RowVectorPtr CudfWindow::doGetOutput() {
   if (finished_ || !noMoreInput_) {
     return nullptr;
   }

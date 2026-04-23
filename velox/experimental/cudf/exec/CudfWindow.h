@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include "velox/experimental/cudf/exec/NvtxHelper.h"
+#include "velox/experimental/cudf/exec/CudfOperator.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/exec/Operator.h"
@@ -57,7 +57,7 @@ namespace facebook::velox::cudf_velox {
 /// Future enhancement (PR follow-up): DECIMAL sort keys and rank/dense_rank
 /// tie-breaking vs DuckDB/Presto (plan-level alignment or fixed-point rank).
 /// libcudf release notes should be checked periodically for order-aware APIs.
-class CudfWindow : public exec::Operator, public NvtxHelper {
+class CudfWindow : public CudfOperatorBase {
  public:
   CudfWindow(
       int32_t operatorId,
@@ -102,17 +102,18 @@ class CudfWindow : public exec::Operator, public NvtxHelper {
     return !noMoreInput_;
   }
 
-  void addInput(RowVectorPtr input) override;
-
-  RowVectorPtr getOutput() override;
-
-  void noMoreInput() override;
-
   exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
     return exec::BlockingReason::kNotBlocked;
   }
 
   bool isFinished() override;
+
+ protected:
+  void doAddInput(RowVectorPtr input) override;
+
+  RowVectorPtr doGetOutput() override;
+
+  void doNoMoreInput() override;
 
  private:
   // Resolve the input column index for a window function's first argument.
