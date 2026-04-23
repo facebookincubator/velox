@@ -14,8 +14,10 @@
  * limitations under the License.
  */
 #include "velox/type/Subfield.h"
+
 #include <boost/algorithm/string/replace.hpp>
 #include <folly/container/F14Map.h>
+#include "velox/common/EnumDefine.h"
 #include "velox/type/Tokenizer.h"
 
 namespace facebook::velox::common {
