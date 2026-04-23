@@ -166,6 +166,17 @@ class FilterProjectAdapter : public OperatorAdapter {
         std::dynamic_pointer_cast<const core::ProjectNode>(planNode);
     auto filterNode = filterProjectOp->filterNode();
 
+    if (projectPlanNode) {
+      if (projectPlanNode->sources()[0]->outputType()->size() == 0) {
+        if (filterNode || !projectPlanNode->projections().empty()) {
+          LOG_FALLBACK(
+              "FilterProject empty input type with filter or projections, PlanNode id: {}",
+              planNode->id());
+          return false;
+        }
+      }
+    }
+
     // Check filter separately
     if (filterNode) {
       if (!canBeEvaluatedByCudf(
@@ -846,28 +857,12 @@ class WindowAdapter : public OperatorAdapter {
     if (!windowNode) {
       return false;
     }
-    static const std::unordered_set<std::string> kSupportedFuncs = {
-        "lag",
-        "lead",
-        "row_number",
-        "rank",
-        "dense_rank",
-        "first_value",
-        "last_value",
-        "sum",
-        "min",
-        "max",
-        "count",
-        "avg"};
     const auto& prefix = CudfConfig::getInstance().functionNamePrefix;
     for (const auto& func : windowNode->windowFunctions()) {
       const auto baseName =
           stripFunctionPrefix(func.functionCall->name(), prefix);
-      if (kSupportedFuncs.find(baseName) == kSupportedFuncs.end()) {
-        return false;
-      }
-      if ((baseName == "lag" || baseName == "lead") &&
-          func.functionCall->inputs().size() > 2) {
+      if (!CudfWindow::isSupportedWindowFunction(
+              baseName, func.functionCall->inputs().size())) {
         return false;
       }
     }

@@ -64,6 +64,37 @@ class CudfWindow : public exec::Operator, public NvtxHelper {
       exec::DriverCtx* driverCtx,
       const std::shared_ptr<const core::WindowNode>& windowNode);
 
+  /// Returns true if the window function is supported by CudfWindow.
+  /// Supported functions:
+  /// - Ranking: row_number, rank, dense_rank
+  /// - Value: lag, lead (with up to 2 arguments), first_value, last_value
+  /// - Aggregate: sum, min, max, count, avg
+  static bool isSupportedWindowFunction(
+      const std::string& baseName,
+      size_t numArgs) {
+    static const std::unordered_set<std::string> kSupportedFuncs = {
+        "lag",
+        "lead",
+        "row_number",
+        "rank",
+        "dense_rank",
+        "first_value",
+        "last_value",
+        "sum",
+        "min",
+        "max",
+        "count",
+        "avg"};
+    if (kSupportedFuncs.find(baseName) == kSupportedFuncs.end()) {
+      return false;
+    }
+    // lag/lead only support up to 2 arguments (value, offset)
+    if ((baseName == "lag" || baseName == "lead") && numArgs > 2) {
+      return false;
+    }
+    return true;
+  }
+
   bool needsInput() const override {
     return !noMoreInput_;
   }
