@@ -1478,6 +1478,17 @@ class CudfSimpleFilterProjectTest : public cudf_velox::CudfFunctionBaseTest {
   static void TearDownTestCase() {
     cudf_velox::unregisterCudf();
   }
+
+  void assertExpressionMatchesCpu(
+      const std::string& expr,
+      const RowVectorPtr& input,
+      const RowTypePtr& rowType) {
+    auto exprSet = compileExpression(expr, rowType);
+    auto expected =
+        functions::test::FunctionBaseTest::evaluate(*exprSet, input);
+    auto actual = evaluate(*exprSet, input);
+    facebook::velox::test::assertEqualVectors(expected, actual);
+  }
 };
 
 TEST_F(CudfSimpleFilterProjectTest, castToSmallInt) {
@@ -1545,11 +1556,7 @@ TEST_F(CudfSimpleFilterProjectTest, nullLogicalAnd) {
       std::nullopt,
   });
   auto input = makeRowVector({c0, c1});
-  auto exprSet = compileExpression("c0 AND c1", rowType);
-  auto expected =
-      this->functions::test::FunctionBaseTest::evaluate(*exprSet, input);
-  auto actual = evaluate(*exprSet, input);
-  facebook::velox::test::assertEqualVectors(expected, actual);
+  assertExpressionMatchesCpu("c0 AND c1", input, rowType);
 }
 
 TEST_F(CudfSimpleFilterProjectTest, nullLogicalOr) {
@@ -1577,11 +1584,7 @@ TEST_F(CudfSimpleFilterProjectTest, nullLogicalOr) {
       std::nullopt,
   });
   auto input = makeRowVector({c0, c1});
-  auto exprSet = compileExpression("c0 OR c1", rowType);
-  auto expected =
-      this->functions::test::FunctionBaseTest::evaluate(*exprSet, input);
-  auto actual = evaluate(*exprSet, input);
-  facebook::velox::test::assertEqualVectors(expected, actual);
+  assertExpressionMatchesCpu("c0 OR c1", input, rowType);
 }
 
 TEST_F(CudfSimpleFilterProjectTest, nullLogicalAndThreeArg) {
@@ -1592,11 +1595,7 @@ TEST_F(CudfSimpleFilterProjectTest, nullLogicalAndThreeArg) {
   auto c1 = makeNullableFlatVector<bool>({std::nullopt, true, true});
   auto c2 = makeNullableFlatVector<bool>({false, false, true});
   auto input = makeRowVector({c0, c1, c2});
-  auto exprSet = compileExpression("c0 AND c1 AND c2", rowType);
-  auto expected =
-      this->functions::test::FunctionBaseTest::evaluate(*exprSet, input);
-  auto actual = evaluate(*exprSet, input);
-  facebook::velox::test::assertEqualVectors(expected, actual);
+  assertExpressionMatchesCpu("c0 AND c1 AND c2", input, rowType);
 }
 
 TEST_F(CudfSimpleFilterProjectTest, nullLogicalOrThreeArg) {
@@ -1607,11 +1606,7 @@ TEST_F(CudfSimpleFilterProjectTest, nullLogicalOrThreeArg) {
   auto c1 = makeNullableFlatVector<bool>({std::nullopt, false, false});
   auto c2 = makeNullableFlatVector<bool>({true, true, true});
   auto input = makeRowVector({c0, c1, c2});
-  auto exprSet = compileExpression("c0 OR c1 OR c2", rowType);
-  auto expected =
-      this->functions::test::FunctionBaseTest::evaluate(*exprSet, input);
-  auto actual = evaluate(*exprSet, input);
-  facebook::velox::test::assertEqualVectors(expected, actual);
+  assertExpressionMatchesCpu("c0 OR c1 OR c2", input, rowType);
 }
 
 TEST_F(CudfSimpleFilterProjectTest, logicalAndAllLiterals) {
@@ -1622,11 +1617,7 @@ TEST_F(CudfSimpleFilterProjectTest, logicalAndAllLiterals) {
         "true AND false",
         "false AND true",
         "false AND false"}) {
-    auto exprSet = compileExpression(expr, rowType);
-    auto expected =
-        this->functions::test::FunctionBaseTest::evaluate(*exprSet, input);
-    auto actual = evaluate(*exprSet, input);
-    facebook::velox::test::assertEqualVectors(expected, actual);
+    assertExpressionMatchesCpu(expr, input, rowType);
   }
 }
 
@@ -1635,11 +1626,7 @@ TEST_F(CudfSimpleFilterProjectTest, logicalOrAllLiterals) {
   auto input = makeRowVector({makeFlatVector<bool>({true})});
   for (const auto& expr :
        {"true OR true", "true OR false", "false OR true", "false OR false"}) {
-    auto exprSet = compileExpression(expr, rowType);
-    auto expected =
-        this->functions::test::FunctionBaseTest::evaluate(*exprSet, input);
-    auto actual = evaluate(*exprSet, input);
-    facebook::velox::test::assertEqualVectors(expected, actual);
+    assertExpressionMatchesCpu(expr, input, rowType);
   }
 }
 
@@ -1650,11 +1637,7 @@ TEST_F(CudfSimpleFilterProjectTest, logicalAndColumnWithLiteral) {
   auto input = makeRowVector({c0});
   for (const auto& expr :
        {"c0 AND true", "true AND c0", "c0 AND false", "false AND c0"}) {
-    auto exprSet = compileExpression(expr, rowType);
-    auto expected =
-        this->functions::test::FunctionBaseTest::evaluate(*exprSet, input);
-    auto actual = evaluate(*exprSet, input);
-    facebook::velox::test::assertEqualVectors(expected, actual);
+    assertExpressionMatchesCpu(expr, input, rowType);
   }
 }
 
@@ -1665,11 +1648,7 @@ TEST_F(CudfSimpleFilterProjectTest, logicalOrColumnWithLiteral) {
   auto input = makeRowVector({c0});
   for (const auto& expr :
        {"c0 OR true", "true OR c0", "c0 OR false", "false OR c0"}) {
-    auto exprSet = compileExpression(expr, rowType);
-    auto expected =
-        this->functions::test::FunctionBaseTest::evaluate(*exprSet, input);
-    auto actual = evaluate(*exprSet, input);
-    facebook::velox::test::assertEqualVectors(expected, actual);
+    assertExpressionMatchesCpu(expr, input, rowType);
   }
 }
 
@@ -1683,11 +1662,7 @@ TEST_F(CudfSimpleFilterProjectTest, logicalAndThreeArgLiteralsMixed) {
         "true AND c0 AND c1",
         "c0 AND c1 AND false",
         "false AND c0 AND c1"}) {
-    auto exprSet = compileExpression(expr, rowType);
-    auto expected =
-        this->functions::test::FunctionBaseTest::evaluate(*exprSet, input);
-    auto actual = evaluate(*exprSet, input);
-    facebook::velox::test::assertEqualVectors(expected, actual);
+    assertExpressionMatchesCpu(expr, input, rowType);
   }
 }
 
@@ -1701,11 +1676,7 @@ TEST_F(CudfSimpleFilterProjectTest, logicalOrThreeArgLiteralsMixed) {
         "false OR c0 OR c1",
         "c0 OR c1 OR true",
         "true OR c0 OR c1"}) {
-    auto exprSet = compileExpression(expr, rowType);
-    auto expected =
-        this->functions::test::FunctionBaseTest::evaluate(*exprSet, input);
-    auto actual = evaluate(*exprSet, input);
-    facebook::velox::test::assertEqualVectors(expected, actual);
+    assertExpressionMatchesCpu(expr, input, rowType);
   }
 }
 
