@@ -69,6 +69,9 @@ class CudfWindow : public exec::Operator, public NvtxHelper {
   /// - Ranking: row_number, rank, dense_rank
   /// - Value: lag, lead (with up to 2 arguments), first_value, last_value
   /// - Aggregate: sum, min, max, count, avg
+  /// Unsupported functions:
+  /// - nth_value, ntile, cume_dist, percent_rank
+  /// - lag/lead with default value (3rd argument)
   static bool isSupportedWindowFunction(
       const std::string& baseName,
       size_t numArgs) {
