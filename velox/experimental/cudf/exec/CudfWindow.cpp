@@ -496,8 +496,8 @@ RowVectorPtr CudfWindow::getOutput() {
     if (tableViewMatchesInputRowType(batchView, inputRowType_)) {
       views.push_back(batchView);
     } else {
-      normalizedBatches.push_back(normalizeTableToInputRowType(
-          batchView, inputRowType_, stream, mr));
+      normalizedBatches.push_back(
+          normalizeTableToInputRowType(batchView, inputRowType_, stream, mr));
       views.push_back(normalizedBatches.back()->view());
     }
   }
@@ -507,12 +507,14 @@ RowVectorPtr CudfWindow::getOutput() {
       allData = std::move(normalizedBatches[0]);
     } else {
       // Own a copy: input CudfVector batches are released below.
-      allData = cudf::concatenate(std::vector<cudf::table_view>{views[0]}, stream, mr);
+      allData = cudf::concatenate(
+          std::vector<cudf::table_view>{views[0]}, stream, mr);
     }
   } else {
     allData = cudf::concatenate(views, stream, mr);
   }
-  // Drop normalized intermediates; release input batches after concat copied data.
+  // Drop normalized intermediates; release input batches after concat copied
+  // data.
   normalizedBatches.clear();
   inputBatches_.clear();
 

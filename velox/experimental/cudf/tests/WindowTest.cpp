@@ -33,6 +33,7 @@
 #include <fmt/format.h>
 #include <folly/String.h>
 #include <gtest/gtest.h>
+
 #include <limits>
 #include <sstream>
 
@@ -461,8 +462,7 @@ TEST_F(CudfWindowTest, rowNumberGlobalOrderBy) {
 }
 
 TEST_F(CudfWindowTest, rankGlobalOrderBy) {
-  auto data = makeRowVector(
-      {"c1"}, {makeFlatVector<int64_t>({1, 1, 1, 2, 2})});
+  auto data = makeRowVector({"c1"}, {makeFlatVector<int64_t>({1, 1, 1, 2, 2})});
 
   auto plan =
       PlanBuilder()
@@ -519,22 +519,21 @@ TEST_F(CudfWindowTest, multiFunctionPartitionOrder) {
           makeFlatVector<int32_t>({10, 20, 30, 100, 200}),
       });
 
-  auto plan =
-      PlanBuilder()
-          .values({data})
-          .window({
-              "rank() over (partition by c0, c2 order by c1, c3)",
-              "dense_rank() over (partition by c0, c2 order by c1, c3)",
-              "row_number() over (partition by c0, c2 order by c1, c3)",
-              "sum(c4) over (partition by c0, c2 order by c1, c3)",
-          })
-          .orderBy(
-              {"c0 ASC NULLS LAST",
-               "c2 ASC NULLS LAST",
-               "c1 ASC NULLS LAST",
-               "c3 ASC NULLS LAST"},
-              false)
-          .planNode();
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({
+                      "rank() over (partition by c0, c2 order by c1, c3)",
+                      "dense_rank() over (partition by c0, c2 order by c1, c3)",
+                      "row_number() over (partition by c0, c2 order by c1, c3)",
+                      "sum(c4) over (partition by c0, c2 order by c1, c3)",
+                  })
+                  .orderBy(
+                      {"c0 ASC NULLS LAST",
+                       "c2 ASC NULLS LAST",
+                       "c1 ASC NULLS LAST",
+                       "c3 ASC NULLS LAST"},
+                      false)
+                  .planNode();
 
   auto expected = makeRowVector(
       {"c0", "c1", "c2", "c3", "c4", "w0", "w1", "w2", "w3"},
@@ -577,18 +576,20 @@ TEST_F(CudfWindowTest, rankNaNRangeFrameBounds) {
           if (startBound == "following" && endBound == "preceding") {
             continue;
           }
-          frames.push_back(fmt::format(
-              "{} over (order by s0 {} range between off0 {} and off1 {})",
-              call,
-              order,
-              startBound,
-              endBound));
-          frames.push_back(fmt::format(
-              "{} over (order by s0 {} range between off1 {} and off0 {})",
-              call,
-              order,
-              startBound,
-              endBound));
+          frames.push_back(
+              fmt::format(
+                  "{} over (order by s0 {} range between off0 {} and off1 {})",
+                  call,
+                  order,
+                  startBound,
+                  endBound));
+          frames.push_back(
+              fmt::format(
+                  "{} over (order by s0 {} range between off1 {} and off0 {})",
+                  call,
+                  order,
+                  startBound,
+                  endBound));
         }
       }
     }
