@@ -34,6 +34,8 @@ class HiveConnector : public Connector {
       std::shared_ptr<const config::ConfigBase> config,
       folly::Executor* executor);
 
+  const config::ConfigProvider* configProvider() const override;
+
   bool canAddDynamicFilter() const override {
     return true;
   }

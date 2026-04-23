@@ -27,6 +27,7 @@
 #include "velox/common/time/Timer.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/HashJoinBridge.h"
+#include "velox/exec/IndexLookupJoinBridge.h"
 #include "velox/exec/LocalPlanner.h"
 #include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/NestedLoopJoinBuild.h"
@@ -127,6 +128,25 @@ inline size_t numSourceNodes(const core::PlanNode* planNode) {
       checkedPointerCast<const core::IndexLookupJoinNode>(planNode);
   VELOX_CHECK_EQ(indexNode->sources().size(), 2);
   return !indexNode->needsIndexSplit() ? 1 : indexNode->sources().size();
+}
+
+// Collects IDs of IndexLookupJoinNode's lookup source (index) TableScanNodes.
+// These nodes are NOT separate pipeline leaves in Velox's LocalPlanner
+// (it only plans the probe source) and must be excluded from
+// groupedExecutionLeafNodeIds validation.
+void collectIndexSourceIds(
+    const core::PlanNodePtr& node,
+    std::unordered_set<core::PlanNodeId>& indexSourceIds) {
+  if (auto indexJoin =
+          std::dynamic_pointer_cast<const core::IndexLookupJoinNode>(node)) {
+    indexSourceIds.insert(indexJoin->lookupSource()->id());
+    // Only recurse into the probe side (sources()[0]), not the lookup source.
+    collectIndexSourceIds(indexJoin->sources()[0], indexSourceIds);
+    return;
+  }
+  for (const auto& source : node->sources()) {
+    collectIndexSourceIds(source, indexSourceIds);
+  }
 }
 
 // Add 'running time' metrics from CpuWallTiming structures to have them
@@ -519,6 +539,8 @@ void Task::init(std::optional<common::SpillDiskOptions>&& spillDiskOpts) {
     VELOX_CHECK_EQ(factory->numDrivers, 1);
     numDriversPerLeafNode_[factory->leafNodeId()] = factory->numDrivers;
   }
+
+  initDriverLifecycleStatsLocked();
 
   // Create drivers.
   createSplitGroupStateLocked(kUngroupedGroupId);
@@ -1040,6 +1062,8 @@ void Task::createDriverFactoriesLocked(uint32_t maxDrivers) {
         factory->inputDriver, factory->outputDriver);
   }
 
+  initDriverLifecycleStatsLocked();
+
   validateGroupedExecutionLeafNodes();
 }
 
@@ -1261,9 +1285,20 @@ void Task::validateGroupedExecutionLeafNodes() {
         !planFragment_.groupedExecutionLeafNodeIds.empty(),
         "groupedExecutionLeafNodeIds must not be empty in "
         "grouped execution mode");
+
+    // Collect IndexLookupJoin lookup source node IDs. These are in
+    // groupedExecutionLeafNodeIds (for coordinator-side grouped split
+    // scheduling) but are NOT separate pipeline leaves in Velox —
+    // IndexLookupJoin manages the index source internally.
+    std::unordered_set<core::PlanNodeId> indexSourceIds;
+    collectIndexSourceIds(planFragment_.planNode, indexSourceIds);
+
     // Check that each node designated as the grouped execution leaf node
     // existing in a pipeline that will run grouped execution.
     for (const auto& leafNodeId : planFragment_.groupedExecutionLeafNodeIds) {
+      if (indexSourceIds.count(leafNodeId)) {
+        continue;
+      }
       bool found{false};
       for (auto& factory : driverFactories_) {
         if (leafNodeId == factory->leafNodeId()) {
@@ -1313,6 +1348,8 @@ void Task::createSplitGroupStateLocked(uint32_t splitGroupId) {
         splitGroupId, factory->needsNestedLoopJoinBridges());
     addSpatialJoinBridgesLocked(
         splitGroupId, factory->needsSpatialJoinBridges());
+    addIndexLookupJoinBridgesLocked(
+        splitGroupId, factory->needsIndexLookupJoinBridges());
     addCustomJoinBridgesLocked(splitGroupId, factory->planNodes);
 
     core::PlanNodeId tableScanNodeId;
@@ -2354,6 +2391,26 @@ void Task::addSpatialJoinBridgesLocked(
   }
 }
 
+void Task::addIndexLookupJoinBridgesLocked(
+    uint32_t splitGroupId,
+    const std::vector<core::PlanNodeId>& planNodeIds) {
+  auto& splitGroupState = splitGroupStates_[splitGroupId];
+  for (const auto& planNodeId : planNodeIds) {
+    auto const inserted =
+        splitGroupState.bridges
+            .emplace(planNodeId, std::make_shared<IndexLookupJoinBridge>())
+            .second;
+    VELOX_CHECK(
+        inserted, "Join bridge for node {} is already present", planNodeId);
+  }
+}
+
+std::shared_ptr<IndexLookupJoinBridge> Task::getIndexLookupJoinBridge(
+    uint32_t splitGroupId,
+    const core::PlanNodeId& planNodeId) {
+  return getJoinBridgeInternal<IndexLookupJoinBridge>(splitGroupId, planNodeId);
+}
+
 std::shared_ptr<HashJoinBridge> Task::getHashJoinBridge(
     uint32_t splitGroupId,
     const core::PlanNodeId& planNodeId) {
@@ -2677,6 +2734,37 @@ void Task::addDriverStats(int pipelineId, DriverStats stats) {
   taskStats_.pipelineStats[pipelineId].driverStats.push_back(std::move(stats));
 }
 
+void Task::initDriverLifecycleStatsLocked() {
+  pipelineLifecycleStats_.resize(driverFactories_.size());
+  for (size_t i = 0; i < driverFactories_.size(); ++i) {
+    auto& pls = pipelineLifecycleStats_[i];
+    const auto& leafNode = driverFactories_[i]->planNodes.front();
+    pls.sourceOperatorType = leafNode->name();
+    pls.sourcePlanNodeId = leafNode->id();
+    pls.driverTimes.resize(driverFactories_[i]->numDrivers);
+  }
+}
+
+void Task::addDriverLifecycleStats(
+    uint32_t pipelineId,
+    uint32_t driverIndex,
+    uint64_t queuedNanos,
+    uint64_t onThreadNanos,
+    uint64_t blockedNanos) {
+  std::lock_guard<std::timed_mutex> l(mutex_);
+  if (pipelineId >= pipelineLifecycleStats_.size()) {
+    return;
+  }
+  auto& pls = pipelineLifecycleStats_[pipelineId];
+  if (pls.driverTimes.empty()) {
+    return;
+  }
+  const auto idx = driverIndex % pls.driverTimes.size();
+  pls.driverTimes[idx].queuedNanos += queuedNanos;
+  pls.driverTimes[idx].onThreadNanos += onThreadNanos;
+  pls.driverTimes[idx].blockedNanos += blockedNanos;
+}
+
 TaskStats Task::taskStats() const {
   std::lock_guard<std::timed_mutex> l(mutex_);
 
@@ -2730,6 +2818,41 @@ TaskStats Task::taskStats() const {
   if (taskStats.longestRunningOpCallMs < 30000) {
     taskStats.longestRunningOpCall.clear();
     taskStats.longestRunningOpCallMs = 0;
+  }
+
+  // Emit per-pipeline driver lifecycle timing. Merged into the first
+  // existing DriverStats entry for each pipeline to avoid inflating the
+  // driverStats vector. Each logical driver index contributes one sample,
+  // giving proper sum/count/min/max aggregation.
+  for (size_t i = 0; i < pipelineLifecycleStats_.size(); ++i) {
+    const auto& pls = pipelineLifecycleStats_[i];
+    if (pls.driverTimes.empty()) {
+      continue;
+    }
+    auto& pipeDriverStats = taskStats.pipelineStats[i].driverStats;
+    if (pipeDriverStats.empty()) {
+      pipeDriverStats.emplace_back();
+    }
+    auto& targetStats = pipeDriverStats[0].runtimeStats;
+    const auto prefix = fmt::format(
+        "P{}-{}.{}", i, pls.sourceOperatorType, pls.sourcePlanNodeId);
+    const auto queuedKey = fmt::format("{}.driverQueuedWallNanos", prefix);
+    const auto onThreadKey = fmt::format("{}.driverOnThreadWallNanos", prefix);
+    const auto blockedKey = fmt::format("{}.driverBlockedWallNanos", prefix);
+    for (const auto& timing : pls.driverTimes) {
+      auto addOrMerge = [&targetStats](const std::string& key, uint64_t nanos) {
+        const auto value = saturateCast(nanos);
+        auto it = targetStats.find(key);
+        if (it != targetStats.end()) {
+          it->second.merge(RuntimeMetric(value, RuntimeCounter::Unit::kNanos));
+        } else {
+          targetStats[key] = RuntimeMetric(value, RuntimeCounter::Unit::kNanos);
+        }
+      };
+      addOrMerge(queuedKey, timing.queuedNanos);
+      addOrMerge(onThreadKey, timing.onThreadNanos);
+      addOrMerge(blockedKey, timing.blockedNanos);
+    }
   }
 
   auto bufferManager = bufferManager_.lock();

@@ -695,18 +695,44 @@ class CustomDirectBufferedInput
     VELOX_NYI("Not implemented in CustomBufferedInputBuilder");
   }
 
+  std::unique_ptr<facebook::velox::dwio::common::BufferedInput> clone()
+      const override {
+    return std::unique_ptr<facebook::velox::dwio::common::BufferedInput>(
+        new CustomDirectBufferedInput(
+            input_,
+            fileNum_,
+            tracker_,
+            groupId_,
+            ioStatistics_,
+            ioStats_,
+            executor_,
+            options_));
+  }
+
  protected:
   // Expose protected members to verify their accessibility.
   using facebook::velox::dwio::common::DirectBufferedInput::coalescedLoads_;
-  using facebook::velox::dwio::common::DirectBufferedInput::executor_;
-  using facebook::velox::dwio::common::DirectBufferedInput::fileNum_;
-  using facebook::velox::dwio::common::DirectBufferedInput::fileSize_;
-  using facebook::velox::dwio::common::DirectBufferedInput::groupId_;
-  using facebook::velox::dwio::common::DirectBufferedInput::ioStatistics_;
-  using facebook::velox::dwio::common::DirectBufferedInput::ioStats_;
-  using facebook::velox::dwio::common::DirectBufferedInput::options_;
   using facebook::velox::dwio::common::DirectBufferedInput::requests_;
-  using facebook::velox::dwio::common::DirectBufferedInput::tracker_;
+
+ private:
+  CustomDirectBufferedInput(
+      std::shared_ptr<facebook::velox::dwio::common::ReadFileInputStream> input,
+      facebook::velox::StringIdLease fileNum,
+      std::shared_ptr<facebook::velox::cache::ScanTracker> tracker,
+      facebook::velox::StringIdLease groupId,
+      std::shared_ptr<facebook::velox::io::IoStatistics> ioStatistics,
+      std::shared_ptr<facebook::velox::IoStats> ioStats,
+      folly::Executor* executor,
+      const facebook::velox::io::ReaderOptions& readerOptions)
+      : DirectBufferedInput(
+            std::move(input),
+            std::move(fileNum),
+            std::move(tracker),
+            std::move(groupId),
+            std::move(ioStatistics),
+            std::move(ioStats),
+            executor,
+            readerOptions) {}
 };
 
 class CustomBufferedInputBuilder

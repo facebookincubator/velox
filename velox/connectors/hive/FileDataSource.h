@@ -141,9 +141,24 @@ class FileDataSource : public DataSource {
     return metadataFilter_;
   }
 
+  // Actual type produced by the reader after extraction pushdown.  Differs
+  // from readerOutputType_ when the reader handles extraction natively
+  // (e.g., MapKeys -> ARRAY).  Null if no extraction pushdown is active.
+  RowTypePtr readerProducedType_;
+
+  // Output columns that have extraction chains.  Maps output column index to
+  // the column handle.  These columns are read with schemaType and transformed
+  // post-read using the extraction chains.
+  folly::F14FastMap<column_index_t, const FileColumnHandle*> extractionColumns_;
+
   dwio::common::RuntimeStatistics runtimeStats_;
 
  private:
+  // Configure extraction columns on the ScanSpec and build
+  // readerProducedType_.  Called from the constructor after scanSpec_ is
+  // created.
+  void configureExtractionColumns();
+
   /// Adds the information from column handle to the corresponding fields in
   /// this object.
   void processColumnHandle(const FileColumnHandlePtr& handle);

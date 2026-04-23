@@ -19,6 +19,7 @@
 #include "velox/expression/CastExpr.h"
 #include "velox/functions/sparksql/types/TimestampNTZCastUtil.h"
 #include "velox/functions/sparksql/types/TimestampNTZType.h"
+#include "velox/type/CastRegistry.h"
 
 namespace facebook::velox::functions::sparksql {
 namespace {
@@ -30,21 +31,6 @@ class TimestampNTZCastOperator final : public exec::CastOperator {
   static std::shared_ptr<const CastOperator> get() {
     VELOX_CONSTEXPR_SINGLETON TimestampNTZCastOperator kInstance;
     return {std::shared_ptr<const CastOperator>{}, &kInstance};
-  }
-
-  // Returns true if casting from other type to TIMESTAMP_NTZ type is supported.
-  bool isSupportedFromType(const TypePtr& other) const override {
-    switch (other->kind()) {
-      case TypeKind::VARCHAR:
-        return true;
-      default:
-        return false;
-    }
-  }
-
-  // Return true if casting from TIMESTAMP_NTZ type to other type is supported.
-  bool isSupportedToType(const TypePtr& other) const override {
-    return false;
   }
 
   // Casts the input vector to the TIMESTAMP_NTZ type.
@@ -105,7 +91,10 @@ class TimestampNTZTypeFactory : public CustomTypeFactory {
 
 void registerTimestampNTZType() {
   registerCustomType(
-      "timestamp_ntz", std::make_unique<const TimestampNTZTypeFactory>());
+      "TIMESTAMP_NTZ", std::make_unique<const TimestampNTZTypeFactory>());
+  registerCastRules({
+      {.fromType = "VARCHAR", .toType = "TIMESTAMP_NTZ"},
+  });
 }
 
 } // namespace facebook::velox::functions::sparksql

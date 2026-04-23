@@ -271,7 +271,11 @@ std::shared_ptr<connector::IndexSource::ResultIterator> TestIndexSource::lookup(
   checkNotFailed();
   VELOX_CHECK(!tableHandle_->needsIndexSplit() || !splits_.empty());
   const auto numInputRows = request.input->size();
-  auto& hashTable = tableHandle_->indexTable()->table;
+  auto* indexTable = tableHandle_->indexTable().get();
+  auto& hashTable = indexTable->table;
+  // Serialize access to the shared hash table. The hashers contain stateful
+  // DecodedVectors that are not thread-safe for concurrent access.
+  std::lock_guard<std::mutex> l(indexTable->mutex);
   auto lookup = std::make_unique<HashLookup>(hashTable->hashers(), pool_.get());
   SelectivityVector activeRows(numInputRows);
   VELOX_CHECK(activeRows.isAllSelected());
