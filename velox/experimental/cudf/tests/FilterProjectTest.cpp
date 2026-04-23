@@ -196,52 +196,116 @@ class CudfFilterProjectTest : public OperatorTestBase {
     runTest(plan, "SELECT c2 LIKE '%test%' AS result FROM tmp");
   }
 
+  void testAddOperation(const std::vector<RowVectorPtr>& input) {
+    auto plan =
+        PlanBuilder().values(input).project({"c0 + c1 AS result"}).planNode();
+    runTest(plan, "SELECT c0 + c1 AS result FROM tmp");
+
+    plan =
+        PlanBuilder().values(input).project({"1.0 + c1 AS result"}).planNode();
+    runTest(plan, "SELECT 1.0 + c1 AS result FROM tmp");
+  }
+
+  void testSubtractOperation(const std::vector<RowVectorPtr>& input) {
+    auto plan =
+        PlanBuilder().values(input).project({"c0 - c1 AS result"}).planNode();
+    runTest(plan, "SELECT c0 - c1 AS result FROM tmp");
+
+    plan =
+        PlanBuilder().values(input).project({"c1 - 1.0 AS result"}).planNode();
+    runTest(plan, "SELECT c1 - 1.0 AS result FROM tmp");
+  }
+
+  void testMultiplyColumnColumn(const std::vector<RowVectorPtr>& input) {
+    auto plan =
+        PlanBuilder().values(input).project({"c0 * c1 AS result"}).planNode();
+    runTest(plan, "SELECT c0 * c1 AS result FROM tmp");
+
+    plan =
+        PlanBuilder().values(input).project({"c1 * 2.0 AS result"}).planNode();
+    runTest(plan, "SELECT c1 * 2.0 AS result FROM tmp");
+  }
+
+  void testDivideScalarVariants(const std::vector<RowVectorPtr>& input) {
+    auto plan =
+        PlanBuilder().values(input).project({"c1 / 2.0 AS result"}).planNode();
+    runTest(plan, "SELECT c1 / 2.0 AS result FROM tmp");
+
+    plan = PlanBuilder()
+               .values(input)
+               .project({"100.0 / c1 AS result"})
+               .planNode();
+    runTest(plan, "SELECT 100.0 / c1 AS result FROM tmp");
+  }
+
+  void testModuloOperation(const std::vector<RowVectorPtr>& input) {
+    auto plan =
+        PlanBuilder().values(input).project({"c0 % 10 AS result"}).planNode();
+    runTest(plan, "SELECT c0 % 10 AS result FROM tmp");
+  }
+
   void testLessThanOperation(const std::vector<RowVectorPtr>& input) {
-    // Create a plan with a less than operation
     auto plan =
         PlanBuilder().values(input).project({"c0 < c1 AS result"}).planNode();
-
-    // Run the test
     runTest(plan, "SELECT c0 < c1 AS result FROM tmp");
 
-    // compare against literals
     plan = PlanBuilder().values(input).project({"c0 < 1 AS result"}).planNode();
-
-    // Run the test
     runTest(plan, "SELECT c0 < 1 AS result FROM tmp");
+
+    plan = PlanBuilder().values(input).project({"1 < c0 AS result"}).planNode();
+    runTest(plan, "SELECT 1 < c0 AS result FROM tmp");
   }
 
   void testGreaterThanOperation(const std::vector<RowVectorPtr>& input) {
-    // Create a plan with a greater than operation
     auto plan =
         PlanBuilder().values(input).project({"c0 > c1 AS result"}).planNode();
-
-    // Run the test
     runTest(plan, "SELECT c0 > c1 AS result FROM tmp");
 
-    // compare against literals
     plan = PlanBuilder().values(input).project({"c0 > 1 AS result"}).planNode();
-
-    // Run the test
     runTest(plan, "SELECT c0 > 1 AS result FROM tmp");
+
+    plan = PlanBuilder().values(input).project({"1 > c0 AS result"}).planNode();
+    runTest(plan, "SELECT 1 > c0 AS result FROM tmp");
   }
 
   void testLessThanEqualOperation(const std::vector<RowVectorPtr>& input) {
-    // Create a plan with a less than equal operation
     auto plan =
         PlanBuilder().values(input).project({"c0 <= c1 AS result"}).planNode();
-
-    // Run the test
     runTest(plan, "SELECT c0 <= c1 AS result FROM tmp");
+
+    plan =
+        PlanBuilder().values(input).project({"c0 <= 1 AS result"}).planNode();
+    runTest(plan, "SELECT c0 <= 1 AS result FROM tmp");
+
+    plan =
+        PlanBuilder().values(input).project({"1 <= c0 AS result"}).planNode();
+    runTest(plan, "SELECT 1 <= c0 AS result FROM tmp");
   }
 
   void testGreaterThanEqualOperation(const std::vector<RowVectorPtr>& input) {
-    // Create a plan with a greater than equal operation
     auto plan =
         PlanBuilder().values(input).project({"c0 >= c1 AS result"}).planNode();
-
-    // Run the test
     runTest(plan, "SELECT c0 >= c1 AS result FROM tmp");
+
+    plan =
+        PlanBuilder().values(input).project({"c0 >= 1 AS result"}).planNode();
+    runTest(plan, "SELECT c0 >= 1 AS result FROM tmp");
+
+    plan =
+        PlanBuilder().values(input).project({"1 >= c0 AS result"}).planNode();
+    runTest(plan, "SELECT 1 >= c0 AS result FROM tmp");
+  }
+
+  void testEqualScalarLeft(const std::vector<RowVectorPtr>& input) {
+    auto plan =
+        PlanBuilder().values(input).project({"1 = c0 AS result"}).planNode();
+    runTest(plan, "SELECT 1 = c0 AS result FROM tmp");
+  }
+
+  void testNotEqualScalarLeft(const std::vector<RowVectorPtr>& input) {
+    auto plan =
+        PlanBuilder().values(input).project({"1 <> c0 AS result"}).planNode();
+    runTest(plan, "SELECT 1 <> c0 AS result FROM tmp");
   }
 
   void testNotOperation(const std::vector<RowVectorPtr>& input) {
@@ -477,6 +541,62 @@ TEST_F(CudfFilterProjectTest, multiplyAndMinusOperation) {
   testMultiplyAndMinusOperation(vectors);
 }
 
+TEST_F(CudfFilterProjectTest, addOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testAddOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, subtractOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testSubtractOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, multiplyColumnColumn) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testMultiplyColumnColumn(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, divideScalarVariants) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testDivideScalarVariants(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, moduloOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testModuloOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, equalScalarLeft) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testEqualScalarLeft(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, notEqualScalarLeft) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testNotEqualScalarLeft(vectors);
+}
+
 TEST_F(CudfFilterProjectTest, stringEqualOperation) {
   vector_size_t batchSize = 1000;
   auto vectors = makeVectors(rowType_, 2, batchSize);
@@ -686,14 +806,25 @@ TEST_F(CudfFilterProjectTest, round) {
   AssertQueryBuilder(plan).assertResults(expected);
 }
 
-// TODO (dm): Enable after adding decimal support to velox-cudf
-TEST_F(CudfFilterProjectTest, DISABLED_roundDecimal) {
+TEST_F(CudfFilterProjectTest, roundDecimal) {
   parse::ParseOptions options;
   options.parseIntegerAsBigint = false;
 
+  // Note that the underlying cudf::round_decimal function returns
+  // a value with the specified scale, and rounds the internal integer
+  // value accordingly, e.g. rounding 41.2389 to 2 decimal places
+  // results in an internal integer value of 4124 with a scale of 2.
+  //
+  // When the specified scale is non-zero, Velox inserts extra casts
+  // to restore the original scale. However, when the specified scale
+  // is zero, Velox does NOT do that, and the result has a scale of 0.
+
+  // Input values 41.2389 and -45.6789 as DECIMAL(10, 4).
   auto decimalData = makeRowVector(
       {makeFlatVector<int64_t>({412389, -456789}, DECIMAL(10, 4))});
 
+  // Round to 2 decimal places.
+  // Expected values are 41.24 and -45.68 as DECIMAL(10, 4).
   auto plan = PlanBuilder()
                   .setParseOptions(options)
                   .values({decimalData})
@@ -703,15 +834,19 @@ TEST_F(CudfFilterProjectTest, DISABLED_roundDecimal) {
       {makeFlatVector<int64_t>({412400, -456800}, DECIMAL(10, 4))});
   AssertQueryBuilder(plan).assertResults(decimalExpected);
 
+  // Round to 0 decimal places.
+  // Expected values are 41.0 and -46.0 as DECIMAL(10, 0).
   plan = PlanBuilder()
              .setParseOptions(options)
              .values({decimalData})
              .project({"round(c0) as c1"})
              .planNode();
-  decimalExpected = makeRowVector(
-      {makeFlatVector<int64_t>({410000, -460000}, DECIMAL(10, 4))});
+  decimalExpected =
+      makeRowVector({makeFlatVector<int64_t>({41, -46}, DECIMAL(10, 0))});
   AssertQueryBuilder(plan).assertResults(decimalExpected);
 
+  // Round to -1 decimal places.
+  // Expected values are 40.0 and -50.0 as DECIMAL(10, 4).
   plan = PlanBuilder()
              .setParseOptions(options)
              .values({decimalData})
@@ -1175,6 +1310,78 @@ TEST_F(CudfFilterProjectTest, switchExpr) {
           {45676567.78 / 123.4, 6789098767.90876 / 124.5, std::nullopt}),
   });
   facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfFilterProjectTest, greatestLeastAllColumns) {
+  auto data = makeRowVector({
+      makeFlatVector<double>({1.0, 5.0, -3.0}),
+      makeFlatVector<double>({4.0, 2.0, -1.0}),
+      makeFlatVector<double>({3.0, 3.0, -2.0}),
+  });
+  createDuckDbTable({data});
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .project({"greatest(c0, c1, c2) AS g", "least(c0, c1, c2) AS l"})
+          .planNode();
+  assertQuery(plan, "SELECT greatest(c0, c1, c2), least(c0, c1, c2) FROM tmp");
+}
+
+TEST_F(CudfFilterProjectTest, greatestLeastMixed) {
+  auto data = makeRowVector({
+      makeFlatVector<double>({1.0, 10.0, -3.0}),
+      makeFlatVector<double>({4.0, 2.0, -1.0}),
+  });
+  createDuckDbTable({data});
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .project({"greatest(c0, 5.0, c1) AS g", "least(c0, 0.0, c1) AS l"})
+          .planNode();
+  assertQuery(
+      plan, "SELECT greatest(c0, 5.0, c1), least(c0, 0.0, c1) FROM tmp");
+}
+
+TEST_F(CudfFilterProjectTest, greatestLeastAllLiterals) {
+  auto data = makeRowVector({makeFlatVector<double>({0.0})});
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .project(
+              {"greatest(1.0, 3.0, 2.0) AS g", "least(1.0, 3.0, 2.0) AS l"})
+          .planNode();
+  auto expected = makeRowVector({
+      makeFlatVector<double>({3.0}),
+      makeFlatVector<double>({1.0}),
+  });
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfFilterProjectTest, greatestLeastWithNulls) {
+  auto data = makeRowVector({
+      makeNullableFlatVector<double>({1.0, std::nullopt, std::nullopt}),
+      makeNullableFlatVector<double>({std::nullopt, 2.0, std::nullopt}),
+      makeNullableFlatVector<double>({3.0, std::nullopt, std::nullopt}),
+  });
+  createDuckDbTable({data});
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .project({"greatest(c0, c1, c2) AS g", "least(c0, c1, c2) AS l"})
+          .planNode();
+  assertQuery(plan, "SELECT greatest(c0, c1, c2), least(c0, c1, c2) FROM tmp");
+}
+
+TEST_F(CudfFilterProjectTest, betweenDouble) {
+  auto data = makeRowVector({
+      makeFlatVector<double>({-1.0, 0.5, 1.5, 3.0}),
+  });
+  createDuckDbTable({data});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .project({"c0 BETWEEN 0.0 AND 2.0 AS result"})
+                  .planNode();
+  assertQuery(plan, "SELECT c0 BETWEEN 0.0 AND 2.0 AS result FROM tmp");
 }
 
 class CudfSimpleFilterProjectTest : public cudf_velox::CudfFunctionBaseTest {

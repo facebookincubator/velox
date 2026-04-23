@@ -128,6 +128,13 @@ class AssertQueryBuilder {
     return *this;
   }
 
+  /// Set the maximum time to wait for task completion after all results have
+  /// been consumed. Default is 5 seconds.
+  AssertQueryBuilder& maxWaitMicros(uint64_t maxWaitMicros) {
+    maxWaitMicros_ = maxWaitMicros;
+    return *this;
+  }
+
   /// Spilling directory, if not empty, then the task's spilling directory would
   /// be built from it.
   AssertQueryBuilder& spillDirectory(const std::string& dir) {
@@ -221,6 +228,9 @@ class AssertQueryBuilder {
   bool addSplitWithSequence_{false};
   // The sequence Id to be used when addSplitWithSequence_ is true.
   int32_t sequenceId_{0};
+  // Maximum time in microseconds to wait for task completion after all results
+  // have been consumed.
+  uint64_t maxWaitMicros_{5'000'000};
 };
 
 } // namespace facebook::velox::exec::test
