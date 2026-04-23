@@ -49,10 +49,10 @@ class CudfLogicalFunctionsTest : public OperatorTestBase {
     cudf_velox::registerCudfExpressionEvaluator(
         cudf_velox::kAstEvaluatorName,
         /*priority=*/0,
-        [](std::shared_ptr<velox::exec::Expr> expr) {
+        [](std::shared_ptr<exec::Expr> expr) {
           return cudf_velox::ASTExpression::canEvaluate(expr);
         },
-        [](std::shared_ptr<velox::exec::Expr> expr, const RowTypePtr& row) {
+        [](std::shared_ptr<exec::Expr> expr, const RowTypePtr& row) {
           return std::make_shared<cudf_velox::ASTExpression>(
               std::move(expr), row);
         },
