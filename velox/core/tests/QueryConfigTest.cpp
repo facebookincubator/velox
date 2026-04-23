@@ -208,8 +208,10 @@ TEST_F(QueryConfigTest, expressionEvaluationRelatedConfigs) {
   // Verify minRowsForPeeling: peeling is suppressed when the number of
   // selected rows is below the threshold.
   {
-    auto queryCtx = core::QueryCtx::create(
-        nullptr, QueryConfig({{core::QueryConfig::kMinRowsForPeeling, "50"}}));
+    std::unordered_map<std::string, std::string> configData(
+        {{core::QueryConfig::kMinRowsForPeeling, "50"}});
+    auto queryCtx =
+        core::QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
     auto execCtx = std::make_shared<core::ExecCtx>(pool.get(), queryCtx.get());
     auto evalCtx = std::make_shared<exec::EvalCtx>(execCtx.get());
 
