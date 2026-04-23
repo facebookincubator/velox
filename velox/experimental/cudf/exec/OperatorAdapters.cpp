@@ -863,6 +863,10 @@ class WindowAdapter : public OperatorAdapter {
           stripFunctionPrefix(func.functionCall->name(), prefix);
       if (!CudfWindow::isSupportedWindowFunction(
               baseName, func.functionCall->inputs().size())) {
+        LOG_FALLBACK(
+            "Unsupported window function: {}, PlanNode id: {}",
+            func.functionCall->name(),
+            planNode->id());
         return false;
       }
     }
