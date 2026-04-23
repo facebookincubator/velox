@@ -189,8 +189,7 @@ TEST_F(CudfExpressionSelectionTest, signatureAllowsColumnArgsStartswith) {
 
 TEST_F(CudfExpressionSelectionTest, signatureAllowsColumnArgsEndswith) {
   // OK: pattern is a constant
-  auto ok =
-      compileExecExpr("endswith(name, 'ab')", rowType_, execCtx_.get());
+  auto ok = compileExecExpr("endswith(name, 'ab')", rowType_, execCtx_.get());
   ASSERT_TRUE(canBeEvaluatedByCudf(ok, /*deep=*/true));
 
   // OK: the input can also be a constant.

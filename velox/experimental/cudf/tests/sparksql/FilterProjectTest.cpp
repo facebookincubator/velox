@@ -351,8 +351,8 @@ TEST_F(CudfFilterProjectTest, endswithConstantInput) {
   exec::ExprSet exprSet({typed}, &execCtx_, /*enableConstantFolding*/ false);
 
   auto result = evaluate(exprSet, data);
-  auto expected = makeNullableFlatVector<bool>(
-      {true, true, std::nullopt, true, false});
+  auto expected =
+      makeNullableFlatVector<bool>({true, true, std::nullopt, true, false});
   facebook::velox::test::assertEqualVectors(expected, result);
 }
 
@@ -384,8 +384,7 @@ TEST_F(CudfFilterProjectTest, endswithColumnPatternNullInput) {
                   .project({"endswith(c0, c1) AS c2"})
                   .planNode();
 
-  auto expected =
-      makeRowVector({makeNullableFlatVector<bool>({std::nullopt})});
+  auto expected = makeRowVector({makeNullableFlatVector<bool>({std::nullopt})});
   AssertQueryBuilder(plan).assertResults(expected);
 }
 
@@ -400,8 +399,7 @@ TEST_F(CudfFilterProjectTest, endswithColumnPatternNullPattern) {
                   .project({"endswith(c0, c1) AS c2"})
                   .planNode();
 
-  auto expected =
-      makeRowVector({makeNullableFlatVector<bool>({std::nullopt})});
+  auto expected = makeRowVector({makeNullableFlatVector<bool>({std::nullopt})});
   AssertQueryBuilder(plan).assertResults(expected);
 }
 

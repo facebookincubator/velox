@@ -1155,9 +1155,9 @@ class LikeFunction : public CudfFunction {
   std::string pattern_;
 };
 
-class BinaryStringMatchFunction : public CudfFunction {
+class StringPatternPredicateFunction : public CudfFunction {
  public:
-  explicit BinaryStringMatchFunction(
+  explicit StringPatternPredicateFunction(
       const std::shared_ptr<velox::exec::Expr>& expr,
       std::string_view functionName) {
     using velox::exec::ConstantExpr;
@@ -1216,14 +1216,14 @@ class BinaryStringMatchFunction : public CudfFunction {
             nullScalar, inputCol.size(), stream, mr);
       }
       cudf::string_scalar patternScalar(pattern_, true, stream, mr);
-      return evalWithScalar(inputCol, patternScalar, stream, mr);
+      return evaluateMatch(inputCol, patternScalar, stream, mr);
     }
 
     auto patternCol = asView(inputColumns[nextInput]);
-    auto result = evalWithColumn(inputCol, patternCol, stream, mr);
-    // Restore Spark null semantics for column/column evaluation: cuDF can
-    // return a valid false when the pattern row is null, but Spark expects the
-    // result to be null if either side is null.
+    auto result = evaluateMatch(inputCol, patternCol, stream, mr);
+    // Match Velox CPU null propagation for column/column evaluation: libcudf
+    // can return a valid false when the pattern row is null, but Velox returns
+    // null if either side is null.
     auto [nullMask, nullCount] =
         cudf::bitmask_and(cudf::table_view({inputCol, patternCol}), stream, mr);
     result->set_null_mask(std::move(nullMask), nullCount);
@@ -1231,13 +1231,13 @@ class BinaryStringMatchFunction : public CudfFunction {
   }
 
  protected:
-  virtual std::unique_ptr<cudf::column> evalWithScalar(
+  virtual std::unique_ptr<cudf::column> evaluateMatch(
       cudf::column_view inputCol,
       cudf::string_scalar const& patternScalar,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const = 0;
 
-  virtual std::unique_ptr<cudf::column> evalWithColumn(
+  virtual std::unique_ptr<cudf::column> evaluateMatch(
       cudf::column_view inputCol,
       cudf::column_view patternCol,
       rmm::cuda_stream_view stream,
@@ -1251,13 +1251,13 @@ class BinaryStringMatchFunction : public CudfFunction {
   std::string pattern_;
 };
 
-class StartswithFunction : public BinaryStringMatchFunction {
+class StartswithFunction : public StringPatternPredicateFunction {
  public:
   explicit StartswithFunction(const std::shared_ptr<velox::exec::Expr>& expr)
-      : BinaryStringMatchFunction(expr, "startswith") {}
+      : StringPatternPredicateFunction(expr, "startswith") {}
 
  protected:
-  std::unique_ptr<cudf::column> evalWithScalar(
+  std::unique_ptr<cudf::column> evaluateMatch(
       cudf::column_view inputCol,
       cudf::string_scalar const& patternScalar,
       rmm::cuda_stream_view stream,
@@ -1265,7 +1265,7 @@ class StartswithFunction : public BinaryStringMatchFunction {
     return cudf::strings::starts_with(inputCol, patternScalar, stream, mr);
   }
 
-  std::unique_ptr<cudf::column> evalWithColumn(
+  std::unique_ptr<cudf::column> evaluateMatch(
       cudf::column_view inputCol,
       cudf::column_view patternCol,
       rmm::cuda_stream_view stream,
@@ -1274,13 +1274,13 @@ class StartswithFunction : public BinaryStringMatchFunction {
   }
 };
 
-class EndswithFunction : public BinaryStringMatchFunction {
+class EndswithFunction : public StringPatternPredicateFunction {
  public:
   explicit EndswithFunction(const std::shared_ptr<velox::exec::Expr>& expr)
-      : BinaryStringMatchFunction(expr, "endswith") {}
+      : StringPatternPredicateFunction(expr, "endswith") {}
 
  protected:
-  std::unique_ptr<cudf::column> evalWithScalar(
+  std::unique_ptr<cudf::column> evaluateMatch(
       cudf::column_view inputCol,
       cudf::string_scalar const& patternScalar,
       rmm::cuda_stream_view stream,
@@ -1288,7 +1288,7 @@ class EndswithFunction : public BinaryStringMatchFunction {
     return cudf::strings::ends_with(inputCol, patternScalar, stream, mr);
   }
 
-  std::unique_ptr<cudf::column> evalWithColumn(
+  std::unique_ptr<cudf::column> evaluateMatch(
       cudf::column_view inputCol,
       cudf::column_view patternCol,
       rmm::cuda_stream_view stream,
