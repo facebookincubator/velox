@@ -605,4 +605,216 @@ TEST_F(CudfWindowTest, rankNaNRangeFrameBounds) {
   }
 }
 
+// =============================================================================
+// Tests ported from velox/exec/tests/WindowTest.cpp
+// =============================================================================
+
+// Disabled: Spilling is not yet implemented in cudf
+TEST_F(CudfWindowTest, DISABLED_spill) {
+  const vector_size_t size = 1'000;
+  auto data = makeRowVector(
+      {"d", "p", "s"},
+      {
+          // Payload.
+          makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+          // Partition key.
+          makeFlatVector<int16_t>(size, [](auto row) { return row % 11; }),
+          // Sorting key.
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({"row_number() over (partition by p order by s)"})
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"d", "p", "s", "w0"},
+      {
+          makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+          makeFlatVector<int16_t>(size, [](auto row) { return row % 11; }),
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+          // row_number results would need to be computed
+          makeFlatVector<int64_t>(size, [](auto) { return 0; }),
+      });
+
+  // Note: Full spill testing requires spill infrastructure not available in
+  // cudf
+  GTEST_SKIP() << "Spilling not implemented in cudf";
+}
+
+// Disabled: Spilling is not yet implemented in cudf
+TEST_F(CudfWindowTest, DISABLED_spillBatchReadTinyPartitions) {
+  GTEST_SKIP() << "Spilling not implemented in cudf";
+}
+
+// Disabled: Spilling is not yet implemented in cudf
+TEST_F(CudfWindowTest, DISABLED_spillBatchReadHugePartitions) {
+  GTEST_SKIP() << "Spilling not implemented in cudf";
+}
+
+// Disabled: Spilling is not yet implemented in cudf
+TEST_F(CudfWindowTest, DISABLED_spillUnsupported) {
+  GTEST_SKIP() << "Spilling not implemented in cudf";
+}
+
+// Disabled: Streaming window is not yet implemented in cudf
+TEST_F(CudfWindowTest, DISABLED_rowBasedStreamingWindowOOM) {
+  GTEST_SKIP() << "Streaming window not implemented in cudf";
+}
+
+// Disabled: Pre-partitioned sort build is not yet implemented in cudf
+TEST_F(CudfWindowTest, DISABLED_prePartitionedSortBuild) {
+  const vector_size_t size = 1'000;
+  const int numPartitions = 37;
+  auto data = makeRowVector(
+      {"p", "s"},
+      {
+          // Partition key.
+          makeFlatVector<int16_t>(
+              size, [](auto row) { return row % numPartitions; }),
+          // Sorting key.
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      });
+
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .window({"row_number() over (partition by p order by s desc)"})
+          .planNode();
+
+  GTEST_SKIP() << "Pre-partitioned sort build not implemented in cudf";
+}
+
+// Disabled: Pre-partitioned sort build is not yet implemented in cudf
+TEST_F(CudfWindowTest, DISABLED_prePartitionedSortBuildSkewed) {
+  GTEST_SKIP() << "Pre-partitioned sort build not implemented in cudf";
+}
+
+// Disabled: Spilling is not yet implemented in cudf
+TEST_F(CudfWindowTest, DISABLED_prePartitionedBuildWithSpill) {
+  GTEST_SKIP() << "Spilling not implemented in cudf";
+}
+
+// Disabled: Negative frame arguments use regr_count which is not supported in
+// cudf
+TEST_F(CudfWindowTest, DISABLED_negativeFrameArg) {
+  const vector_size_t size = 1'000;
+
+  auto sizeAt = [](vector_size_t row) { return row % 5; };
+  auto keyAt = [](vector_size_t row) { return row % 11; };
+  auto keys = makeArrayVector<float>(size, sizeAt, keyAt);
+  auto data = makeRowVector(
+      {"c0", "c1", "p0", "p1", "k0", "row_number"},
+      {
+          // Payload.
+          makeFlatVector<float>(size, [](auto row) { return row; }),
+          makeFlatVector<float>(size, [](auto row) { return row; }),
+          // Partition key.
+          keys,
+          makeFlatVector<std::string>(
+              size, [](auto row) { return fmt::format("{}", row + 20); }),
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+          // Sorting key.
+          makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+      });
+
+  struct {
+    std::string fragmentStart;
+    std::string fragmentEnd;
+
+    std::string debugString() const {
+      if (fragmentStart[0] == '-') {
+        return fmt::format(
+            "Window frame {} offset must not be negative", fragmentStart);
+      } else {
+        return fmt::format(
+            "Window frame {} offset must not be negative", fragmentEnd);
+      }
+    }
+  } testSettings[] = {
+      {"k0", "-1"}, // Negative end
+      {"-1", "k0"}, // Negative start
+      {"-1", "-3"} // Negative start, negative end
+  };
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    const auto& startOffset = testData.fragmentStart;
+    const auto& endOffset = testData.fragmentEnd;
+    auto plan =
+        PlanBuilder()
+            .values({data})
+            .window({fmt::format(
+                "regr_count(c0, c1) over (partition by p0, p1 order by row_number ROWS between {} PRECEDING and {} FOLLOWING)",
+                startOffset,
+                endOffset)})
+            .planNode();
+    VELOX_ASSERT_USER_THROW(
+        AssertQueryBuilder(plan).copyResults(pool()), testData.debugString());
+  }
+}
+
+// Disabled: RANGE frames with column offsets are not yet supported in cudf
+TEST_F(CudfWindowTest, DISABLED_NaNFrameBound) {
+  const auto kNan = std::numeric_limits<double>::quiet_NaN();
+  auto data = makeRowVector(
+      {"c0", "s0", "off0", "off1"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 4}),
+          makeFlatVector<double>({1.0, 2.0, 3.0, kNan}),
+          makeFlatVector<double>({0.1, 2.0, 1.9, kNan}),
+          makeFlatVector<double>({kNan, 2.0, kNan, kNan}),
+      });
+
+  const auto makeFrames = [](const std::string& call) {
+    std::vector<std::string> frames;
+
+    std::vector<std::string> orders{"asc", "desc"};
+    std::vector<std::string> bounds{"preceding", "following"};
+    for (const std::string& order : orders) {
+      for (const std::string& startBound : bounds) {
+        for (const std::string& endBound : bounds) {
+          // Frames starting from following and ending at preceding are not
+          // allowed.
+          if (startBound == "following" && endBound == "preceding") {
+            continue;
+          }
+          frames.push_back(
+              fmt::format(
+                  "{} over (order by s0 {} range between off0 {} and off1 {})",
+                  call,
+                  order,
+                  startBound,
+                  endBound));
+          frames.push_back(
+              fmt::format(
+                  "{} over (order by s0 {} range between off1 {} and off0 {})",
+                  call,
+                  order,
+                  startBound,
+                  endBound));
+        }
+      }
+    }
+    return frames;
+  };
+
+  auto expected = makeRowVector(
+      {makeNullableFlatVector<int64_t>({std::nullopt, 2, std::nullopt, 4})});
+  for (const auto& frame : makeFrames("sum(c0)")) {
+    auto plan =
+        PlanBuilder().values({data}).window({frame}).project({"w0"}).planNode();
+    AssertQueryBuilder(plan).assertResults(expected);
+  }
+
+  // rank() should not be affected by the frames, so added this test to ensure
+  // rank() produces correct results even if the frame bounds contain NaN.
+  expected = makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4})});
+  for (const auto& frame : makeFrames("rank()")) {
+    auto plan =
+        PlanBuilder().values({data}).window({frame}).project({"w0"}).planNode();
+    AssertQueryBuilder(plan).assertResults(expected);
+  }
+}
+
 } // namespace

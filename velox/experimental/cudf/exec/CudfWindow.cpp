@@ -21,6 +21,7 @@
 
 #include "velox/core/Expressions.h"
 #include "velox/exec/Operator.h"
+#include "velox/exec/WindowFunction.h"
 #include "velox/type/Type.h"
 
 #include <cudf/aggregation.hpp>
@@ -309,6 +310,34 @@ CudfWindow::CudfWindow(
       windowNode_(windowNode),
       inputRowType_(asRowType(windowNode->inputType())) {
   const auto& inputType = windowNode->inputType();
+
+  // Validate window function signatures upfront using Velox's registry.
+  // This ensures we produce proper error messages for unsupported signatures.
+  const auto& prefix = CudfConfig::getInstance().functionNamePrefix;
+  const auto numInputCols = inputType->size();
+  for (size_t i = 0; i < windowNode->windowFunctions().size(); ++i) {
+    const auto& func = windowNode->windowFunctions()[i];
+    const auto baseName =
+        stripFunctionPrefix(func.functionCall->name(), prefix);
+
+    // Gather argument types for signature validation.
+    std::vector<TypePtr> argTypes;
+    for (const auto& arg : func.functionCall->inputs()) {
+      argTypes.push_back(arg->type());
+    }
+
+    // Validate signature and get expected return type.
+    auto expectedReturnType = exec::resolveWindowResultType(baseName, argTypes);
+
+    // Validate return type matches what the plan node expects.
+    auto actualReturnType = outputType_->childAt(numInputCols + i);
+    VELOX_USER_CHECK(
+        expectedReturnType->equivalent(*actualReturnType),
+        "Unexpected return type for window function {}. Expected {}. Got {}.",
+        exec::toString(baseName, argTypes),
+        expectedReturnType->toString(),
+        actualReturnType->toString());
+  }
 
   for (const auto& key : windowNode->partitionKeys()) {
     partitionKeyIndices_.push_back(inputType->getChildIdx(key->name()));
@@ -599,9 +628,17 @@ RowVectorPtr CudfWindow::getOutput() {
   }
 
   // 4. Build the output table: input columns + window result columns.
+  // Cast window result columns to expected output types if needed.
   auto& dataOwner = sortedData ? sortedData : allData;
   auto sortedCols = dataOwner->release();
-  for (auto& wc : windowResultCols) {
+  const auto numInputCols = inputRowType_->size();
+  for (size_t i = 0; i < windowResultCols.size(); ++i) {
+    auto& wc = windowResultCols[i];
+    auto expectedType =
+        veloxToCudfDataType(outputType_->childAt(numInputCols + i));
+    if (wc->type() != expectedType) {
+      wc = cudf::cast(wc->view(), expectedType, stream, mr);
+    }
     sortedCols.push_back(std::move(wc));
   }
   auto resultTable = std::make_unique<cudf::table>(std::move(sortedCols));
