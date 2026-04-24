@@ -164,7 +164,7 @@ class CudfWindow : public CudfOperatorBase {
   std::vector<cudf::order> sortOrders_;
   std::vector<cudf::null_order> nullOrders_;
 
-  std::vector<std::shared_ptr<CudfVector>> inputBatches_;
+  std::vector<CudfVectorPtr> inputBatches_;
 
   // Scratch storage for multiSortKeyStructView children.
   mutable std::vector<cudf::column_view> sortKeyStructChildren_;

@@ -326,9 +326,12 @@ CudfWindow::CudfWindow(
 }
 
 void CudfWindow::doAddInput(RowVectorPtr input) {
-  auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
-  VELOX_CHECK_NOT_NULL(cudfInput, "CudfWindow expects CudfVector input");
-  inputBatches_.push_back(std::move(cudfInput));
+  // Queue inputs, process all at once.
+  if (input->size() > 0) {
+    auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
+    VELOX_CHECK_NOT_NULL(cudfInput, "CudfWindow expects CudfVector input");
+    inputBatches_.push_back(std::move(cudfInput));
+  }
 }
 
 cudf::size_type CudfWindow::resolveInputColumn(
