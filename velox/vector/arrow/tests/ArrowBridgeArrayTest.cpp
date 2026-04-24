@@ -558,6 +558,107 @@ TEST_F(ArrowBridgeArrayExportTest, flatTimestamp) {
       VeloxUserError);
 }
 
+TEST_F(ArrowBridgeArrayExportTest, parentNullsMaskTimestampOverflow) {
+  const int64_t overflowingSeconds =
+      std::numeric_limits<int64_t>::max() / 1'000;
+  const auto overflowingTimestamp = Timestamp(overflowingSeconds, 0);
+
+  auto makeTimestampVector = [&]() {
+    return vectorMaker_.flatVector<Timestamp>(
+        {Timestamp(1, 0), overflowingTimestamp, Timestamp(2, 0)});
+  };
+
+  auto makeOffsets = [&]() { return makeBuffer<vector_size_t>({0, 1, 2}); };
+  auto makeSizes = [&]() { return makeBuffer<vector_size_t>({1, 1, 1}); };
+
+  auto assertExportsWithoutOverflow = [&](const VectorPtr& vector) {
+    for (const auto unit : {TimestampUnit::kMicro, TimestampUnit::kNano}) {
+      options_.timestampUnit = unit;
+
+      ArrowArray arrowArray;
+      ASSERT_NO_THROW(
+          velox::exportToArrow(vector, arrowArray, pool_.get(), options_));
+      arrowArray.release(&arrowArray);
+    }
+  };
+
+  VectorPtr vector;
+
+  // ROW<ts: TIMESTAMP>
+  vector = vectorMaker_.rowVector({"ts"}, {makeTimestampVector()});
+  vector->setNull(1, true);
+  vector->setNullCount(1);
+  assertExportsWithoutOverflow(vector);
+
+  // ROW<inner: ROW<ts: TIMESTAMP>>
+  auto innerStruct = vectorMaker_.rowVector({"ts"}, {makeTimestampVector()});
+  vector = vectorMaker_.rowVector({"inner"}, {innerStruct});
+  vector->setNull(1, true);
+  vector->setNullCount(1);
+  assertExportsWithoutOverflow(vector);
+
+  // ROW<items: ARRAY<TIMESTAMP>>
+  auto arrayChild = std::make_shared<ArrayVector>(
+      pool_.get(),
+      ARRAY(TIMESTAMP()),
+      nullptr,
+      3,
+      makeOffsets(),
+      makeSizes(),
+      makeTimestampVector());
+  vector = vectorMaker_.rowVector({"items"}, {arrayChild});
+  vector->setNull(1, true);
+  vector->setNullCount(1);
+  assertExportsWithoutOverflow(vector);
+
+  // ROW<items: MAP<INTEGER, TIMESTAMP>>
+  auto mapChild = std::make_shared<MapVector>(
+      pool_.get(),
+      MAP(INTEGER(), TIMESTAMP()),
+      nullptr,
+      3,
+      makeOffsets(),
+      makeSizes(),
+      vectorMaker_.flatVector<int32_t>({0, 1, 2}),
+      makeTimestampVector());
+  vector = vectorMaker_.rowVector({"items"}, {mapChild});
+  vector->setNull(1, true);
+  vector->setNullCount(1);
+  assertExportsWithoutOverflow(vector);
+
+  // ARRAY<ROW<ts: TIMESTAMP>>
+  auto elements = vectorMaker_.rowVector({"ts"}, {makeTimestampVector()});
+  auto arrayNulls =
+      AlignedBuffer::allocate<bool>(3, pool_.get(), bits::kNotNull);
+  bits::setNull(arrayNulls->asMutable<uint64_t>(), 1, true);
+  vector = std::make_shared<ArrayVector>(
+      pool_.get(),
+      ARRAY(elements->type()),
+      arrayNulls,
+      3,
+      makeOffsets(),
+      makeSizes(),
+      elements,
+      1);
+  assertExportsWithoutOverflow(vector);
+
+  // MAP<INTEGER, ROW<ts: TIMESTAMP>>
+  auto values = vectorMaker_.rowVector({"ts"}, {makeTimestampVector()});
+  auto mapNulls = AlignedBuffer::allocate<bool>(3, pool_.get(), bits::kNotNull);
+  bits::setNull(mapNulls->asMutable<uint64_t>(), 1, true);
+  vector = std::make_shared<MapVector>(
+      pool_.get(),
+      MAP(INTEGER(), values->type()),
+      mapNulls,
+      3,
+      makeOffsets(),
+      makeSizes(),
+      vectorMaker_.flatVector<int32_t>({0, 1, 2}),
+      values,
+      1);
+  assertExportsWithoutOverflow(vector);
+}
+
 TEST_F(ArrowBridgeArrayExportTest, flatTime) {
   std::vector<std::optional<int64_t>> inputData = {
       0L,
