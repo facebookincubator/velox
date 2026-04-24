@@ -20,47 +20,52 @@
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
-set(GPU_PORTABLE_DIR   ${CMAKE_CURRENT_SOURCE_DIR})
-set(GPU_PORTABLE_BIN   ${CMAKE_CURRENT_BINARY_DIR})
-set(GPU_PORTABLE_VENV  ${GPU_PORTABLE_BIN}/venv)
-set(GPU_PORTABLE_PY    ${GPU_PORTABLE_VENV}/bin/python3)
-set(GPU_PORTABLE_REQS  ${GPU_PORTABLE_DIR}/requirements.txt)
-set(GPU_PORTABLE_EXTR  ${GPU_PORTABLE_DIR}/extractor.py)
+set(GPU_PORTABLE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
+set(GPU_PORTABLE_BIN ${CMAKE_CURRENT_BINARY_DIR})
+set(GPU_PORTABLE_VENV ${GPU_PORTABLE_BIN}/venv)
+set(GPU_PORTABLE_PY ${GPU_PORTABLE_VENV}/bin/python3)
+set(GPU_PORTABLE_REQS ${GPU_PORTABLE_DIR}/requirements.txt)
+set(GPU_PORTABLE_EXTR ${GPU_PORTABLE_DIR}/extractor.py)
 set(GPU_PORTABLE_STAMP ${GPU_PORTABLE_VENV}/.installed.stamp)
 
 # Provision the venv and install pinned deps. Reruns when requirements.txt
 # is newer than the stamp so version bumps propagate on next configure.
-if(NOT EXISTS ${GPU_PORTABLE_STAMP}
-   OR ${GPU_PORTABLE_REQS} IS_NEWER_THAN ${GPU_PORTABLE_STAMP})
-  message(STATUS
+if(NOT EXISTS ${GPU_PORTABLE_STAMP} OR ${GPU_PORTABLE_REQS} IS_NEWER_THAN ${GPU_PORTABLE_STAMP})
+  message(
+    STATUS
     "gpu_portable: provisioning venv at ${GPU_PORTABLE_VENV} "
-    "using ${Python3_EXECUTABLE}")
+    "using ${Python3_EXECUTABLE}"
+  )
   file(REMOVE_RECURSE ${GPU_PORTABLE_VENV})
   execute_process(
     COMMAND ${Python3_EXECUTABLE} -m venv ${GPU_PORTABLE_VENV}
     RESULT_VARIABLE _rc
-    ERROR_VARIABLE _err)
+    ERROR_VARIABLE _err
+  )
   if(NOT _rc EQUAL 0)
-    message(FATAL_ERROR
+    message(
+      FATAL_ERROR
       "gpu_portable: failed to create venv at ${GPU_PORTABLE_VENV}\n"
       "  interpreter: ${Python3_EXECUTABLE}\n"
       "  exit code: ${_rc}\n"
       "  stderr:\n${_err}\n"
       "Check that Python3 venv support is installed "
-      "(e.g. python3-venv on Debian/Ubuntu).")
+      "(e.g. python3-venv on Debian/Ubuntu)."
+    )
   endif()
 
-  message(STATUS
-    "gpu_portable: installing deps from ${GPU_PORTABLE_REQS}")
+  message(STATUS "gpu_portable: installing deps from ${GPU_PORTABLE_REQS}")
   execute_process(
-    COMMAND ${GPU_PORTABLE_PY} -m pip install
-            --disable-pip-version-check --require-virtualenv
-            -r ${GPU_PORTABLE_REQS}
+    COMMAND
+      ${GPU_PORTABLE_PY} -m pip install --disable-pip-version-check --require-virtualenv -r
+      ${GPU_PORTABLE_REQS}
     RESULT_VARIABLE _rc
     OUTPUT_VARIABLE _out
-    ERROR_VARIABLE  _err)
+    ERROR_VARIABLE _err
+  )
   if(NOT _rc EQUAL 0)
-    message(FATAL_ERROR
+    message(
+      FATAL_ERROR
       "gpu_portable: pip install failed\n"
       "  requirements: ${GPU_PORTABLE_REQS}\n"
       "  venv:         ${GPU_PORTABLE_VENV}\n"
@@ -69,20 +74,23 @@ if(NOT EXISTS ${GPU_PORTABLE_STAMP}
       "  stderr:\n${_err}\n"
       "This step needs network access at configure time. To retry "
       "by hand:\n"
-      "  ${GPU_PORTABLE_PY} -m pip install -r ${GPU_PORTABLE_REQS}")
+      "  ${GPU_PORTABLE_PY} -m pip install -r ${GPU_PORTABLE_REQS}"
+    )
   endif()
 
   # Verify imports cleanly so downstream build steps don't fail cryptically.
   execute_process(
-    COMMAND ${GPU_PORTABLE_PY} -c
-            "import tree_sitter, tree_sitter_cpp"
+    COMMAND ${GPU_PORTABLE_PY} -c "import tree_sitter, tree_sitter_cpp"
     RESULT_VARIABLE _rc
-    ERROR_VARIABLE  _err)
+    ERROR_VARIABLE _err
+  )
   if(NOT _rc EQUAL 0)
-    message(FATAL_ERROR
+    message(
+      FATAL_ERROR
       "gpu_portable: tree-sitter deps installed but not importable\n"
       "  venv:   ${GPU_PORTABLE_VENV}\n"
-      "  stderr:\n${_err}")
+      "  stderr:\n${_err}"
+    )
   endif()
 
   file(TOUCH ${GPU_PORTABLE_STAMP})
@@ -115,34 +123,52 @@ endif()
 #   TEMPLATE_VALUES  (list) picks the concrete value for each template
 #                    non-type parameter, e.g. "alwaysRoundNegDec=false".
 function(velox_add_gpu_portable)
-  set(one_value   OUTPUT SOURCE FUNC WRAPPER_NAME OUT_PARAM)
+  set(
+    one_value
+    OUTPUT
+    SOURCE
+    FUNC
+    WRAPPER_NAME
+    OUT_PARAM
+  )
   set(multi_value TEMPLATE_TYPES TEMPLATE_VALUES INPUT_PARAMS BAKED_PARAMS)
   cmake_parse_arguments(ARG "" "${one_value}" "${multi_value}" ${ARGN})
 
-  foreach(required OUTPUT SOURCE FUNC WRAPPER_NAME OUT_PARAM)
+  foreach(
+    required
+    OUTPUT
+    SOURCE
+    FUNC
+    WRAPPER_NAME
+    OUT_PARAM
+  )
     if(NOT ARG_${required})
-      message(FATAL_ERROR
-        "velox_add_gpu_portable: missing required argument ${required}")
+      message(FATAL_ERROR "velox_add_gpu_portable: missing required argument ${required}")
     endif()
   endforeach()
   if(ARG_UNPARSED_ARGUMENTS)
-    message(FATAL_ERROR
-      "velox_add_gpu_portable: unknown arguments: ${ARG_UNPARSED_ARGUMENTS}")
+    message(FATAL_ERROR "velox_add_gpu_portable: unknown arguments: ${ARG_UNPARSED_ARGUMENTS}")
   endif()
   if(NOT EXISTS ${ARG_SOURCE})
-    message(FATAL_ERROR
-      "velox_add_gpu_portable(${ARG_OUTPUT}): SOURCE not found: ${ARG_SOURCE}")
+    message(FATAL_ERROR "velox_add_gpu_portable(${ARG_OUTPUT}): SOURCE not found: ${ARG_SOURCE}")
   endif()
 
   set(wrapped ${GPU_PORTABLE_BIN}/${ARG_WRAPPER_NAME}.cu)
-  set(header  ${GPU_PORTABLE_BIN}/${ARG_OUTPUT})
+  set(header ${GPU_PORTABLE_BIN}/${ARG_OUTPUT})
 
-  set(wrap_args
-      --input        "${ARG_SOURCE}"
-      --func         "${ARG_FUNC}"
-      --wrapper-name "${ARG_WRAPPER_NAME}"
-      --out-param    "${ARG_OUT_PARAM}"
-      --output       "${wrapped}")
+  set(
+    wrap_args
+    --input
+    "${ARG_SOURCE}"
+    --func
+    "${ARG_FUNC}"
+    --wrapper-name
+    "${ARG_WRAPPER_NAME}"
+    --out-param
+    "${ARG_OUT_PARAM}"
+    --output
+    "${wrapped}"
+  )
   foreach(p IN LISTS ARG_TEMPLATE_TYPES)
     list(APPEND wrap_args --template-type "${p}")
   endforeach()
@@ -156,25 +182,30 @@ function(velox_add_gpu_portable)
     list(APPEND wrap_args --baked-param "${p}")
   endforeach()
 
-  set(embed_args
-      --source       "${wrapped}"
-      --wrapper-name "${ARG_WRAPPER_NAME}"
-      --output       "${header}")
+  set(
+    embed_args
+    --source
+    "${wrapped}"
+    --wrapper-name
+    "${ARG_WRAPPER_NAME}"
+    --output
+    "${header}"
+  )
   foreach(p IN LISTS ARG_BAKED_PARAMS)
     list(APPEND embed_args --baked-param "${p}")
   endforeach()
 
   add_custom_command(
-    OUTPUT  ${header}
+    OUTPUT ${header}
     BYPRODUCTS ${wrapped}
-    COMMAND ${GPU_PORTABLE_PY} ${GPU_PORTABLE_EXTR} wrap  ${wrap_args}
+    COMMAND ${GPU_PORTABLE_PY} ${GPU_PORTABLE_EXTR} wrap ${wrap_args}
     COMMAND ${GPU_PORTABLE_PY} ${GPU_PORTABLE_EXTR} embed ${embed_args}
     DEPENDS ${ARG_SOURCE} ${GPU_PORTABLE_EXTR} ${GPU_PORTABLE_STAMP}
     COMMENT "[gpu_portable] ${ARG_FUNC} -> ${ARG_OUTPUT}"
-    VERBATIM)
+    VERBATIM
+  )
 
-  set_property(GLOBAL APPEND PROPERTY
-    VELOX_CUDF_GPU_PORTABLE_HEADERS ${header})
+  set_property(GLOBAL APPEND PROPERTY VELOX_CUDF_GPU_PORTABLE_HEADERS ${header})
 endfunction()
 
 # --- Registrations ---
@@ -188,7 +219,8 @@ velox_add_gpu_portable(
   TEMPLATE_VALUES  alwaysRoundNegDec=false
   OUT_PARAM        "double* out"
   INPUT_PARAMS     "double number"
-  BAKED_PARAMS     "int decimals")
+  BAKED_PARAMS     "int decimals"
+)
 
 # --- Aggregate codegen target ---
 

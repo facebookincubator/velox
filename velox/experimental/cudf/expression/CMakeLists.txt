@@ -33,9 +33,7 @@ target_link_libraries(
 # Generated gpu_portable headers live under PROJECT_BINARY_DIR so that
 # sources include them via the same "velox/experimental/cudf/..." path they
 # would use if the header were checked in.
-target_include_directories(
-  velox_cudf_expression
-  PRIVATE ${PROJECT_BINARY_DIR})
+target_include_directories(velox_cudf_expression PRIVATE ${PROJECT_BINARY_DIR})
 add_dependencies(velox_cudf_expression velox_cudf_gpu_portable_gen)
 
 target_compile_options(velox_cudf_expression PRIVATE -Wno-missing-field-initializers)

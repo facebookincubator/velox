@@ -1542,25 +1542,8 @@ TEST_F(CudfSimpleFilterProjectTest, roundDouble) {
              .project({"round(c0) as c1"})
              .planNode();
   expected = makeRowVector({makeFlatVector<double>({
-      3.0,
-      4.0,
-      -3.0,
-      -4.0,
-      3.0,
-      0.0,
-      0.0,
-      1.0,
-      1.0,
-      0.0,
-      1.0,
-      -1.0,
-      -2.0,
-      -3.0,
-      -2.0,
-      -2.0,
-      0.0,
-      0.0,
-      1e15,
+      3.0, 4.0,  -3.0, -4.0, 3.0,  0.0,  0.0, 1.0, 1.0,  0.0,
+      1.0, -1.0, -2.0, -3.0, -2.0, -2.0, 0.0, 0.0, 1e15,
   })});
   AssertQueryBuilder(plan).assertResults(expected);
 
@@ -1708,9 +1691,8 @@ TEST_F(CudfSimpleFilterProjectTest, roundDoubleFuzz) {
   auto data = makeRowVector({inputVector});
 
   for (int32_t scale : scales) {
-    std::string expr =
-        (scale == 0) ? "round(c0) as c1"
-                     : fmt::format("round(c0, {}) as c1", scale);
+    std::string expr = (scale == 0) ? "round(c0) as c1"
+                                    : fmt::format("round(c0, {}) as c1", scale);
     auto plan = PlanBuilder()
                     .setParseOptions(options)
                     .values({data})
@@ -1731,8 +1713,8 @@ TEST_F(CudfSimpleFilterProjectTest, roundDoubleFuzz) {
       }
       const uint64_t drift = ulpDiff(expected, got);
       EXPECT_LE(drift, kMaxUlpDrift)
-          << "round fuzz mismatch: input=" << std::hexfloat << x
-          << " (decimal " << std::defaultfloat << x << ")"
+          << "round fuzz mismatch: input=" << std::hexfloat << x << " (decimal "
+          << std::defaultfloat << x << ")"
           << " scale=" << scale << " expected=" << std::hexfloat << expected
           << " got=" << got << std::defaultfloat << " ulp=" << drift;
     }

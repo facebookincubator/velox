@@ -1,4 +1,17 @@
 #!/usr/bin/env python3
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 """GPU-portable extractor: lift a simple Velox CPU function into a
 self-contained __device__ function that cuDF's transform_extended can JIT.
 
@@ -103,6 +116,7 @@ def _walk_preorder(node):
 
 # ---- Editor ----
 
+
 @dataclass
 class Edit:
     start: int
@@ -152,9 +166,24 @@ def _node_text(node, src: bytes) -> str:
 # ---- Transforms ----
 
 _STD_CMATH_NAMES = {
-    "isfinite", "isnan", "isinf", "round", "trunc", "ceil", "floor",
-    "pow", "fabs", "abs", "sqrt", "sin", "cos", "tan", "exp",
-    "log", "log2", "log10",
+    "isfinite",
+    "isnan",
+    "isinf",
+    "round",
+    "trunc",
+    "ceil",
+    "floor",
+    "pow",
+    "fabs",
+    "abs",
+    "sqrt",
+    "sin",
+    "cos",
+    "tan",
+    "exp",
+    "log",
+    "log2",
+    "log10",
 }
 
 
@@ -215,8 +244,10 @@ def xform_rewrite_returns(body, editor, src, out_name):
             continue  # bare `return;`
         # Replace the `return` keyword with `{ *<out> =`.
         editor.replace(
-            return_kw.start_byte, return_kw.end_byte,
-            f"{{ *{out_name} =", origin="rewrite_returns_prefix",
+            return_kw.start_byte,
+            return_kw.end_byte,
+            f"{{ *{out_name} =",
+            origin="rewrite_returns_prefix",
         )
         # Insert ` return; }` after the `;` (or after the expr if no `;`).
         after = semicolon.end_byte if semicolon is not None else expr.end_byte
@@ -236,7 +267,7 @@ def xform_strip_std_cmath(body, editor, src):
         fn_text = _node_text(fn, src)
         if not fn_text.startswith("std::"):
             continue
-        suffix = fn_text[len("std::"):]
+        suffix = fn_text[len("std::") :]
         if suffix not in _STD_CMATH_NAMES:
             continue
         editor.replace_node(fn, suffix, origin="strip_std_cmath")
@@ -294,8 +325,10 @@ def cmd_locate(args):
         sys.exit(f"Not found: {args.func}")
     print(f"found function_definition '{args.func}'")
     print(f"bytes: [{node.start_byte}, {node.end_byte})")
-    print(f"lines: {node.start_point[0] + 1}:{node.start_point[1] + 1} -> "
-          f"{node.end_point[0] + 1}:{node.end_point[1] + 1}")
+    print(
+        f"lines: {node.start_point[0] + 1}:{node.start_point[1] + 1} -> "
+        f"{node.end_point[0] + 1}:{node.end_point[1] + 1}"
+    )
 
 
 def cmd_extract(args):
@@ -328,8 +361,7 @@ def cmd_wrap(args):
     template_types = dict(kv.split("=", 1) for kv in (args.template_type or []))
     template_values = dict(kv.split("=", 1) for kv in (args.template_value or []))
 
-    out_type, out_name = _parse_param(args.out_param)
-    input_params = [_parse_param(p) for p in (args.input_param or [])]
+    _, out_name = _parse_param(args.out_param)
     baked_params = [_parse_param(p) for p in (args.baked_param or [])]
 
     # Wrapper signature is out + inputs. Baked params are compile-time
