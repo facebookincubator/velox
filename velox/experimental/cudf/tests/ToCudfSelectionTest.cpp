@@ -62,7 +62,10 @@ class ToCudfSelectionTest : public OperatorTestBase {
     auto stats = task->taskStats();
     for (const auto& pipelineStats : stats.pipelineStats) {
       for (const auto& operatorStats : pipelineStats.operatorStats) {
-        if (operatorStats.operatorType.starts_with("CudfAggregation")) {
+        if (operatorStats.operatorType.starts_with("CudfAggregation") ||
+            operatorStats.operatorType.starts_with("CudfGroupby") ||
+            operatorStats.operatorType.starts_with("CudfReduce") ||
+            operatorStats.operatorType.starts_with("CudfDistinct")) {
           return true;
         }
       }
