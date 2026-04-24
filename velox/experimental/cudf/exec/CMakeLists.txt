@@ -20,15 +20,18 @@ add_library(
   CudfConversion.cpp
   CudfEnforceSingleRow.cpp
   CudfFilterProject.cpp
-  CudfHashAggregation.cpp
-  DecimalAggregationKernels.cu
+  CudfDistinct.cpp
+  CudfGroupby.cpp
+  CudfAggregation.cpp
   CudfHashJoin.cpp
+  CudfReduce.cpp
   CudfLimit.cpp
   CudfLocalPartition.cpp
   CudfMarkDistinct.cpp
   CudfOrderBy.cpp
   CudfTopN.cpp
   DebugUtil.cpp
+  DecimalAggregationKernels.cu
   GpuResources.cpp
   OperatorAdapters.cpp
   PrestoAggregateFunctions.cpp
