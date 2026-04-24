@@ -749,8 +749,10 @@ TEST_F(UcxOutputQueueManagerTest, arbitraryLateDestination) {
   queueManager_->removeTask(taskId);
 }
 
-// Arbitrary: isFinished requires noMoreQueues signal.
-TEST_F(UcxOutputQueueManagerTest, arbitraryNotFinishedWithoutNoMoreQueues) {
+// Arbitrary: isFinished does not require noMoreQueues — once all destination
+// queues are consumed (null), it is finished. This matches
+// OutputBuffer::isFinishedLocked() which only gates broadcast on noMoreBuffers.
+TEST_F(UcxOutputQueueManagerTest, arbitraryFinishedWithoutNoMoreQueues) {
   const std::string taskId = "arbitrary2";
 
   auto task = initializeTask(
@@ -764,14 +766,12 @@ TEST_F(UcxOutputQueueManagerTest, arbitraryNotFinishedWithoutNoMoreQueues) {
 
   noMoreData(taskId);
 
+  // Not finished: destination 1 has not consumed its end marker yet.
   fetchEndMarker(taskId, 0);
-  fetchEndMarker(taskId, 1);
-
-  // Not finished because noMoreQueues hasn't been signaled.
   EXPECT_FALSE(queueManager_->isFinished(taskId));
 
-  queueManager_->updateOutputBuffers(taskId, 2, true);
-
+  // Once all destinations have consumed, finished — even without noMoreQueues.
+  fetchEndMarker(taskId, 1);
   EXPECT_TRUE(queueManager_->isFinished(taskId));
   queueManager_->removeTask(taskId);
 }
