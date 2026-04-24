@@ -1344,26 +1344,22 @@ void ExchangeNode::addDetails(std::stringstream& stream) const {
 }
 
 namespace {
-const auto& exchangeTransportTypeNames() {
-  static const folly::F14FastMap<ExchangeNode::TransportType, std::string_view>
-      kNames = {
-          {ExchangeNode::TransportType::kHttp, "HTTP"},
-          {ExchangeNode::TransportType::kUcx, "UCX"},
-      };
+const auto& transportTypeNames() {
+  static const folly::F14FastMap<TransportType, std::string_view> kNames = {
+      {TransportType::kHttp, "HTTP"},
+      {TransportType::kUcx, "UCX"},
+  };
   return kNames;
 }
 } // namespace
 
-VELOX_DEFINE_EMBEDDED_ENUM_NAME(
-    ExchangeNode,
-    TransportType,
-    exchangeTransportTypeNames)
+VELOX_DEFINE_ENUM_NAME(TransportType, transportTypeNames)
 
 folly::dynamic ExchangeNode::serialize() const {
   auto obj = PlanNode::serialize();
   obj["outputType"] = ExchangeNode::outputType()->serialize();
   obj["serdeKind"] = serdeKind_;
-  obj["transportType"] = toName(transportType_);
+  obj["transportType"] = TransportTypeName::toName(transportType_);
   return obj;
 }
 
@@ -1376,7 +1372,7 @@ void ExchangeNode::accept(
 // static
 PlanNodePtr ExchangeNode::create(const folly::dynamic& obj, void* context) {
   auto transportType = obj.count("transportType")
-      ? toTransportType(obj["transportType"].asString())
+      ? TransportTypeName::toTransportType(obj["transportType"].asString())
       : TransportType::kHttp;
   return std::make_shared<ExchangeNode>(
       deserializePlanNodeId(obj),
@@ -3220,7 +3216,7 @@ folly::dynamic MergeExchangeNode::serialize() const {
   obj["sortingKeys"] = ISerializable::serialize(sortingKeys_);
   obj["sortingOrders"] = serializeSortingOrders(sortingOrders_);
   obj["serdeKind"] = serdeKind();
-  obj["transportType"] = toName(transportType());
+  obj["transportType"] = TransportTypeName::toName(transportType());
   return obj;
 }
 
@@ -3239,7 +3235,7 @@ PlanNodePtr MergeExchangeNode::create(
   const auto sortingOrders = deserializeSortingOrders(obj["sortingOrders"]);
   const auto serdeKind = obj["serdeKind"].asString();
   auto transportType = obj.count("transportType")
-      ? toTransportType(obj["transportType"].asString())
+      ? TransportTypeName::toTransportType(obj["transportType"].asString())
       : TransportType::kHttp;
   return std::make_shared<MergeExchangeNode>(
       deserializePlanNodeId(obj),
@@ -3442,23 +3438,6 @@ const auto& partitionKindNames() {
 
 VELOX_DEFINE_EMBEDDED_ENUM_NAME(PartitionedOutputNode, Kind, partitionKindNames)
 
-namespace {
-const auto& partitionedOutputTransportTypeNames() {
-  static const folly::
-      F14FastMap<PartitionedOutputNode::TransportType, std::string_view>
-          kNames = {
-              {PartitionedOutputNode::TransportType::kHttp, "HTTP"},
-              {PartitionedOutputNode::TransportType::kUcx, "UCX"},
-          };
-  return kNames;
-}
-} // namespace
-
-VELOX_DEFINE_EMBEDDED_ENUM_NAME(
-    PartitionedOutputNode,
-    TransportType,
-    partitionedOutputTransportTypeNames)
-
 void PartitionedOutputNode::addDetails(std::stringstream& stream) const {
   if (kind_ == Kind::kBroadcast) {
     stream << "BROADCAST";
@@ -3492,7 +3471,7 @@ folly::dynamic PartitionedOutputNode::serialize() const {
   obj["partitionFunctionSpec"] = partitionFunctionSpec_->serialize();
   obj["serdeKind"] = serdeKind_;
   obj["outputType"] = outputType_->serialize();
-  obj["transportType"] = toName(transportType_);
+  obj["transportType"] = TransportTypeName::toName(transportType_);
   return obj;
 }
 
@@ -3507,7 +3486,7 @@ PlanNodePtr PartitionedOutputNode::create(
     const folly::dynamic& obj,
     void* context) {
   auto transportType = obj.count("transportType")
-      ? toTransportType(obj["transportType"].asString())
+      ? TransportTypeName::toTransportType(obj["transportType"].asString())
       : TransportType::kHttp;
   return std::make_shared<PartitionedOutputNode>(
       deserializePlanNodeId(obj),

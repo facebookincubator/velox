@@ -2176,13 +2176,13 @@ class GroupIdNode : public PlanNode {
 
 using GroupIdNodePtr = std::shared_ptr<const GroupIdNode>;
 
+/// Transport mechanism for exchange data transfer.
+enum class TransportType { kHttp, kUcx };
+
+VELOX_DECLARE_ENUM_NAME(TransportType);
+
 class ExchangeNode : public PlanNode {
  public:
-  /// Transport mechanism for exchange data transfer.
-  enum class TransportType { kHttp, kUcx };
-
-  VELOX_DECLARE_EMBEDDED_ENUM_NAME(TransportType)
-
   ExchangeNode(
       const PlanNodeId& id,
       RowTypePtr type,
@@ -2752,11 +2752,6 @@ class PartitionedOutputNode : public PlanNode {
   };
 
   VELOX_DECLARE_EMBEDDED_ENUM_NAME(Kind)
-
-  /// Transport mechanism for exchange data transfer.
-  enum class TransportType { kHttp, kUcx };
-
-  VELOX_DECLARE_EMBEDDED_ENUM_NAME(TransportType)
 
   PartitionedOutputNode(
       const PlanNodeId& id,
