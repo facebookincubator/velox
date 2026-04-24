@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/expression/AstUtils.h"
 #include "velox/experimental/cudf/expression/DecimalExpressionKernels.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/gpu_portable/Round.h"
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/expression/ConstantExpr.h"
@@ -369,43 +370,14 @@ class RoundFunction : public CudfFunction {
     auto inputTypeId = inputCol.type().id();
 
     if (inputTypeId == cudf::type_id::FLOAT64) {
-      // JIT-compile a CUDA UDF that mirrors the Velox CPU round implementation
-      // (see velox/functions/prestosql/ArithmeticImpl.h). This makes
-      // Velox-cuDF produce bit-identical results to the Velox CPU path for
-      // round(double, scale) (e.g. round(2.675, 2) == 2.68) by relying on the
-      // same `round(x * factor) / factor` trick. `scale_` is baked into the
-      // UDF source as a literal so nvrtc can fold all constants at JIT time;
-      // kernels are cached per distinct `scale_` by cuDF's JIT cache.
-      const std::string factorLiteral = "1e" + std::to_string(scale_);
-      const std::string udf = std::string(R"***(
-__device__ void velox_round_double(double* out, double number) {
-  if (!isfinite(number)) { *out = number; return; }
-  const int decimals = )***") +
-          std::to_string(scale_) + R"***(;
-  if (decimals == 0) { *out = round(number); return; }
-  const double factor = )***" +
-          factorLiteral + R"***(;
-  if (decimals < 0) {
-    *out = round(number * factor) / factor;
-    return;
-  }
-  const double truncated = trunc(number);
-  const double fraction = number - truncated;
-  if (fraction == 0.0) { *out = number; return; }
-  // Threshold matches Velox CPU: for small magnitudes the factor-multiply
-  // path has less precision loss than the truncate + fraction path.
-  if (fabs(number) < 17592186044415.0) {
-    *out = round(number * factor) / factor;
-    return;
-  }
-  const double roundedFractions = round(fraction * factor) / factor;
-  *out = truncated + roundedFractions;
-}
-)***";
+      // For double inputs, we dispatch to a GPU-portable mirror of Velox's
+      // CPU round implementation so that Velox-cuDF matches CPU semantics
+      // bit-for-bit (e.g. `round(2.675, 2) == 2.68`). See the comment at the
+      // top of `gpu_portable/Round.h` for the parity contract.
       const cudf::transform_input transformInputs[] = {inputCol};
       return cudf::transform_extended(
           transformInputs,
-          udf,
+          gpu_portable::velox_round_double_source(scale_),
           cudf::data_type{cudf::type_id::FLOAT64},
           cudf::udf_source_type::CUDA,
           std::nullopt,

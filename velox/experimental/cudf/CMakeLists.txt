@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+add_subdirectory(gpu_portable)
 add_subdirectory(exec)
 add_subdirectory(connectors)
 add_subdirectory(vector)

@@ -1,0 +1,7 @@
+# Pinned Python deps for the GPU-portable extractor.
+# Consumed by velox/experimental/cudf/gpu_portable/CMakeLists.txt, which
+# provisions a venv under the build tree and installs this file into it.
+# Bump versions intentionally; the CMake build reprovisions when this file
+# changes.
+tree-sitter==0.23.2
+tree-sitter-cpp==0.23.4
