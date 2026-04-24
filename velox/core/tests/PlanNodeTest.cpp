@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/core/PlanNode.h"
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
@@ -748,6 +749,7 @@ TEST_F(PlanNodeTest, exchangeNodeTransportTypeSerialization) {
     auto deserialized = std::dynamic_pointer_cast<const ExchangeNode>(
         ExchangeNode::create(serialized, nullptr));
     ASSERT_EQ(deserialized->transportType(), TransportType::kUcx);
+    ASSERT_THAT(node->toString(/*detailed=*/true), testing::HasSubstr("UCX"));
   }
 
   // Round-trip with kHttp transport.
@@ -759,6 +761,9 @@ TEST_F(PlanNodeTest, exchangeNodeTransportTypeSerialization) {
     auto deserialized = std::dynamic_pointer_cast<const ExchangeNode>(
         ExchangeNode::create(serialized, nullptr));
     ASSERT_EQ(deserialized->transportType(), TransportType::kHttp);
+    ASSERT_THAT(
+        node->toString(/*detailed=*/true),
+        testing::Not(testing::HasSubstr("UCX")));
   }
 
   // Backward compatibility: missing transportType field defaults to kHttp.
@@ -797,6 +802,7 @@ TEST_F(PlanNodeTest, mergeExchangeNodeTransportTypeSerialization) {
     auto deserialized = std::dynamic_pointer_cast<const MergeExchangeNode>(
         MergeExchangeNode::create(serialized, nullptr));
     ASSERT_EQ(deserialized->transportType(), TransportType::kUcx);
+    ASSERT_THAT(node->toString(/*detailed=*/true), testing::HasSubstr("UCX"));
   }
 
   // Round-trip with kHttp transport.
@@ -813,6 +819,9 @@ TEST_F(PlanNodeTest, mergeExchangeNodeTransportTypeSerialization) {
     auto deserialized = std::dynamic_pointer_cast<const MergeExchangeNode>(
         MergeExchangeNode::create(serialized, nullptr));
     ASSERT_EQ(deserialized->transportType(), TransportType::kHttp);
+    ASSERT_THAT(
+        node->toString(/*detailed=*/true),
+        testing::Not(testing::HasSubstr("UCX")));
   }
 
   // Backward compatibility: missing transportType field defaults to kHttp.
@@ -849,6 +858,7 @@ TEST_F(PlanNodeTest, partitionedOutputNodeTransportTypeSerialization) {
     auto deserialized = std::dynamic_pointer_cast<const PartitionedOutputNode>(
         PartitionedOutputNode::create(serialized, pool_.get()));
     ASSERT_EQ(deserialized->transportType(), TransportType::kUcx);
+    ASSERT_THAT(node->toString(/*detailed=*/true), testing::HasSubstr("UCX"));
   }
 
   // Round-trip with kHttp transport.
@@ -860,6 +870,9 @@ TEST_F(PlanNodeTest, partitionedOutputNodeTransportTypeSerialization) {
     auto deserialized = std::dynamic_pointer_cast<const PartitionedOutputNode>(
         PartitionedOutputNode::create(serialized, pool_.get()));
     ASSERT_EQ(deserialized->transportType(), TransportType::kHttp);
+    ASSERT_THAT(
+        node->toString(/*detailed=*/true),
+        testing::Not(testing::HasSubstr("UCX")));
   }
 
   // Backward compatibility: missing transportType field defaults to kHttp.

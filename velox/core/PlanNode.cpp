@@ -1341,6 +1341,9 @@ const std::vector<PlanNodePtr>& ExchangeNode::sources() const {
 
 void ExchangeNode::addDetails(std::stringstream& stream) const {
   addVectorSerdeKind(serdeKind_, stream);
+  if (transportType_ != TransportType::kHttp) {
+    stream << ", " << transportType_;
+  }
 }
 
 namespace {
@@ -3208,6 +3211,9 @@ void MergeExchangeNode::addDetails(std::stringstream& stream) const {
   addSortingKeys(sortingKeys_, sortingOrders_, stream);
   stream << ", ";
   addVectorSerdeKind(serdeKind(), stream);
+  if (transportType() != TransportType::kHttp) {
+    stream << ", " << transportType();
+  }
 }
 
 folly::dynamic MergeExchangeNode::serialize() const {
@@ -3460,6 +3466,9 @@ void PartitionedOutputNode::addDetails(std::stringstream& stream) const {
 
   stream << " ";
   addVectorSerdeKind(serdeKind_, stream);
+  if (transportType_ != TransportType::kHttp) {
+    stream << ", " << transportType_;
+  }
 }
 
 folly::dynamic PartitionedOutputNode::serialize() const {
