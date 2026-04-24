@@ -55,6 +55,7 @@
 #include <cudf/unary.hpp>
 #include <cudf/utilities/traits.hpp>
 
+#include <cmath>
 #include <memory>
 
 namespace facebook::velox::cudf_velox {
@@ -373,18 +374,12 @@ class RoundFunction : public CudfFunction {
       // (see velox/functions/prestosql/ArithmeticImpl.h). This makes
       // Velox-cuDF produce bit-identical results to the Velox CPU path for
       // round(double, scale) (e.g. round(2.675, 2) == 2.68) by relying on the
-      // same `round(x * factor) / factor` trick. `scale_` is baked into the
-      // UDF source as a literal so nvrtc can fold all constants at JIT time;
-      // kernels are cached per distinct `scale_` by cuDF's JIT cache.
-      const std::string factorLiteral = "1e" + std::to_string(scale_);
-      const std::string udf = std::string(R"***(
-__device__ void velox_round_double(double* out, double number) {
+      // same `round(x * factor) / factor` trick.
+      static constexpr char const* kUdf = R"***(
+__device__ void velox_round_double(
+    double* out, double number, int decimals, double factor) {
   if (!isfinite(number)) { *out = number; return; }
-  const int decimals = )***") +
-          std::to_string(scale_) + R"***(;
   if (decimals == 0) { *out = round(number); return; }
-  const double factor = )***" +
-          factorLiteral + R"***(;
   if (decimals < 0) {
     *out = round(number * factor) / factor;
     return;
@@ -402,10 +397,26 @@ __device__ void velox_round_double(double* out, double number) {
   *out = truncated + roundedFractions;
 }
 )***";
-      const cudf::transform_input transformInputs[] = {inputCol};
+
+      // Materialize decimals and factor as 1-element device columns so the
+      // UDF receives them as scalar-broadcast values (cuDF's
+      // scalar_column_view convention for transform_extended).
+      cudf::numeric_scalar<int32_t> decimalsScalar(scale_, true, stream, mr);
+      cudf::numeric_scalar<double> factorScalar(
+          std::pow(10.0, static_cast<double>(scale_)), true, stream, mr);
+      auto decimalsCol =
+          cudf::make_column_from_scalar(decimalsScalar, 1, stream, mr);
+      auto factorCol =
+          cudf::make_column_from_scalar(factorScalar, 1, stream, mr);
+
+      const cudf::transform_input transformInputs[] = {
+          inputCol,
+          cudf::scalar_column_view(decimalsCol->view()),
+          cudf::scalar_column_view(factorCol->view()),
+      };
       return cudf::transform_extended(
           transformInputs,
-          udf,
+          kUdf,
           cudf::data_type{cudf::type_id::FLOAT64},
           cudf::udf_source_type::CUDA,
           std::nullopt,
