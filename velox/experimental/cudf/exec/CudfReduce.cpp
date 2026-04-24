@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/exec/CudfAggregation.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/CudfReduce.h"
+#include "velox/experimental/cudf/exec/DecimalAggregationKernels.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
@@ -27,6 +28,7 @@
 #include "velox/exec/AggregateFunctionRegistry.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/Expr.h"
+#include "velox/type/Type.h"
 
 #include <cudf/binaryop.hpp>
 #include <cudf/column/column_factories.hpp>
@@ -251,6 +253,169 @@ struct ReduceMeanAggregator : ReduceAggregator {
   }
 };
 
+struct ReduceDecimalSumOrAvgAggregator : ReduceAggregator {
+  ReduceDecimalSumOrAvgAggregator(
+      core::AggregationNode::Step step,
+      uint32_t inputIndex,
+      VectorPtr constant,
+      const TypePtr& resultType,
+      bool isAvg)
+      : ReduceAggregator(step, inputIndex, constant, resultType),
+        isAvg_(isAvg) {}
+
+  std::unique_ptr<cudf::column> doReduce(
+      cudf::table_view const& input,
+      TypePtr const& outputType,
+      rmm::cuda_stream_view stream,
+      vector_size_t /*inputRowCount*/) override {
+    if (step == core::AggregationNode::Step::kSingle && isAvg_) {
+      auto const sumAgg =
+          cudf::make_sum_aggregation<cudf::reduce_aggregation>();
+      cudf::column_view inputCol = input.column(inputIndex);
+      auto sumScalar = cudf::reduce(
+          inputCol,
+          *sumAgg,
+          inputCol.type(),
+          stream,
+          get_temp_mr());
+      auto countAgg = cudf::make_count_aggregation<cudf::reduce_aggregation>(
+          cudf::null_policy::EXCLUDE);
+      auto countScalar = cudf::reduce(
+          inputCol,
+          *countAgg,
+          cudf::data_type{cudf::type_id::INT64},
+          stream,
+          get_temp_mr());
+      auto sumCol = cudf::make_column_from_scalar(
+          *sumScalar, 1, stream, get_output_mr());
+      auto countCol = cudf::make_column_from_scalar(
+          *countScalar, 1, stream, get_output_mr());
+      return computeAvgColumn(std::move(sumCol), std::move(countCol), stream);
+    }
+    std::unique_ptr<cudf::column> stringDecodedSum;
+    auto const aggRequest =
+        cudf::make_sum_aggregation<cudf::reduce_aggregation>();
+    cudf::column_view inputCol = input.column(inputIndex);
+    if (step == core::AggregationNode::Step::kPartial) {
+      auto sumScalar = cudf::reduce(
+          inputCol,
+          *aggRequest,
+          inputCol.type(),
+          stream,
+          get_temp_mr());
+      auto countAgg = cudf::make_count_aggregation<cudf::reduce_aggregation>(
+          cudf::null_policy::EXCLUDE);
+      auto countScalar = cudf::reduce(
+          inputCol,
+          *countAgg,
+          cudf::data_type{cudf::type_id::INT64},
+          stream,
+          get_temp_mr());
+      auto sumCol = cudf::make_column_from_scalar(
+          *sumScalar, 1, stream, get_output_mr());
+      auto countCol = cudf::make_column_from_scalar(
+          *countScalar, 1, stream, get_output_mr());
+      return cudf_velox::serializeDecimalSumState(
+          sumCol->view(),
+          countCol->view(),
+          stream,
+          get_output_mr());
+    }
+    if (step == core::AggregationNode::Step::kIntermediate &&
+        inputCol.type().id() == cudf::type_id::STRING) {
+      auto scale = outputType->isDecimal()
+          ? getDecimalPrecisionScale(*outputType).second
+          : 0;
+      auto decoded = cudf_velox::deserializeDecimalSumStateWithCount(
+          inputCol, scale, stream, get_output_mr());
+      auto sumScalar = cudf::reduce(
+          decoded.sum->view(),
+          *aggRequest,
+          decoded.sum->view().type(),
+          stream,
+          get_temp_mr());
+      auto countScalar = cudf::reduce(
+          decoded.count->view(),
+          *aggRequest,
+          cudf::data_type{cudf::type_id::INT64},
+          stream,
+          get_temp_mr());
+      auto sumCol = cudf::make_column_from_scalar(
+          *sumScalar, 1, stream, get_output_mr());
+      auto countCol = cudf::make_column_from_scalar(
+          *countScalar, 1, stream, get_output_mr());
+      return cudf_velox::serializeDecimalSumState(
+          sumCol->view(),
+          countCol->view(),
+          stream,
+          get_output_mr());
+    }
+    if (step == core::AggregationNode::Step::kFinal &&
+        inputCol.type().id() == cudf::type_id::STRING) {
+      auto scale = getDecimalPrecisionScale(*outputType).second;
+      if (isAvg_) {
+        auto sumAndCount = cudf_velox::deserializeDecimalSumStateWithCount(
+            inputCol, scale, stream, get_output_mr());
+        auto sumScalar = cudf::reduce(
+            sumAndCount.sum->view(),
+            *aggRequest,
+            sumAndCount.sum->view().type(),
+            stream,
+            get_temp_mr());
+        auto countScalar = cudf::reduce(
+            sumAndCount.count->view(),
+            *aggRequest,
+            cudf::data_type{cudf::type_id::INT64},
+            stream,
+            get_temp_mr());
+        auto sumCol = cudf::make_column_from_scalar(
+            *sumScalar, 1, stream, get_output_mr());
+        auto countCol = cudf::make_column_from_scalar(
+            *countScalar, 1, stream, get_output_mr());
+        return computeAvgColumn(std::move(sumCol), std::move(countCol), stream);
+      }
+      stringDecodedSum = cudf_velox::deserializeDecimalSumState(
+          inputCol, scale, stream, get_output_mr());
+      inputCol = stringDecodedSum->view();
+    }
+    auto const cudfOutType = cudf_velox::veloxToCudfDataType(outputType);
+    std::unique_ptr<cudf::column> castedInput;
+    if (outputType->isDecimal() && inputCol.type() != cudfOutType) {
+      castedInput = cudf::cast(
+          inputCol, cudfOutType, stream, get_output_mr());
+      inputCol = castedInput->view();
+    }
+    auto const resultScalar = cudf::reduce(
+        inputCol, *aggRequest, cudfOutType, stream, get_temp_mr());
+    return cudf::make_column_from_scalar(
+        *resultScalar, 1, stream, get_output_mr());
+  }
+
+ private:
+  std::unique_ptr<cudf::column> computeAvgColumn(
+      std::unique_ptr<cudf::column> sum,
+      std::unique_ptr<cudf::column> count,
+      rmm::cuda_stream_view stream) const {
+    if (count->type().id() != cudf::type_id::INT64) {
+      count = cudf::cast(
+          *count,
+          cudf::data_type{cudf::type_id::INT64},
+          stream,
+          get_output_mr());
+    }
+    auto avgCol = cudf_velox::computeDecimalAverage(
+        sum->view(), count->view(), stream, get_output_mr());
+    auto const cudfOutType = cudf_velox::veloxToCudfDataType(resultType);
+    if (avgCol->type() != cudfOutType) {
+      avgCol = cudf::cast(
+          avgCol->view(), cudfOutType, stream, get_output_mr());
+    }
+    return avgCol;
+  }
+
+  const bool isAvg_{false};
+};
+
 struct ApproxDistinctAggregator : ReduceAggregator {
   static constexpr cudf::null_policy kNullPolicy = cudf::null_policy::EXCLUDE;
   static constexpr cudf::nan_policy kNanPolicy = cudf::nan_policy::NAN_IS_VALID;
@@ -451,6 +616,10 @@ std::unique_ptr<ReduceAggregator> createReduceAggregator(
   auto const& kind = p.kind;
   auto prefix = cudf_velox::CudfConfig::getInstance().functionNamePrefix;
   if (kind.rfind(prefix + "sum", 0) == 0) {
+    if (p.isDecimalInput) {
+      return std::make_unique<ReduceDecimalSumOrAvgAggregator>(
+          p.companionStep, p.inputIndex, p.constant, p.resultType, false);
+    }
     return std::make_unique<ReduceSumAggregator>(
         p.companionStep, p.inputIndex, p.constant, p.resultType);
   } else if (kind.rfind(prefix + "count", 0) == 0) {
@@ -464,6 +633,10 @@ std::unique_ptr<ReduceAggregator> createReduceAggregator(
     return std::make_unique<ReduceMaxAggregator>(
         p.companionStep, p.inputIndex, p.constant, p.resultType);
   } else if (kind.rfind(prefix + "avg", 0) == 0) {
+    if (p.isDecimalInput) {
+      return std::make_unique<ReduceDecimalSumOrAvgAggregator>(
+          p.companionStep, p.inputIndex, p.constant, p.resultType, true);
+    }
     return std::make_unique<ReduceMeanAggregator>(
         p.companionStep, p.inputIndex, p.constant, p.resultType);
   } else if (kind.rfind(prefix + "approx_distinct", 0) == 0) {
