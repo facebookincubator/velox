@@ -112,6 +112,40 @@ VectorPtr RowReader::projectColumns(
     }
   }
 
+  // Apply post-read transforms for column extraction pushdown.
+  // This runs after filtering/dictionary wrapping so the vectors have the
+  // correct row count.  If a child has more elements than the output size
+  // (e.g., text reader pre-allocates), slice it first.
+  bool hasTransforms = false;
+  for (auto& childSpec : spec.children()) {
+    if (!childSpec->projectOut() || !childSpec->hasTransform()) {
+      continue;
+    }
+    auto i = childSpec->channel();
+    if (children[i]) {
+      auto child = children[i];
+      if (child->size() > size) {
+        child = child->slice(0, size);
+      }
+      children[i] = childSpec->transform()(child, input->pool());
+      hasTransforms = true;
+    }
+  }
+
+  // Rebuild rowType if transforms changed any child types.
+  if (hasTransforms) {
+    auto rowNames = rowType->asRow().names();
+    std::vector<TypePtr> rowTypes;
+    rowTypes.reserve(numColumns);
+    for (column_index_t i = 0; i < numColumns; ++i) {
+      rowTypes.push_back(
+          children[i] ? children[i]->type() : rowType->childAt(i));
+    }
+    rowType =
+        ROW(std::vector<std::string>(rowNames.begin(), rowNames.end()),
+            std::move(rowTypes));
+  }
+
   return std::make_shared<RowVector>(
       input->pool(), rowType, outputNulls, size, std::move(children));
 }

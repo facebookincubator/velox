@@ -22,7 +22,7 @@
 #include <cudf/table/table.hpp>
 #include <cudf/types.hpp>
 #include <folly/Executor.h>
-#include <folly/experimental/EventCount.h>
+#include <folly/synchronization/EventCount.h>
 #include <gtest/gtest-param-test.h>
 #include <gtest/gtest.h>
 #include <rmm/device_buffer.hpp>

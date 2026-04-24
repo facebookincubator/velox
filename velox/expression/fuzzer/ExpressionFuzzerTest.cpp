@@ -17,6 +17,7 @@
 #include <folly/init/Init.h>
 #include <unordered_set>
 
+#include "velox/core/QueryConfig.h"
 #include "velox/exec/fuzzer/PrestoQueryRunner.h"
 #include "velox/expression/fuzzer/ArgTypesGenerator.h"
 #include "velox/expression/fuzzer/ArgValuesGenerators.h"
@@ -543,8 +544,10 @@ int main(int argc, char** argv) {
       initialSeed,
       skipFunctions,
       exprTransformers,
-      {{"session_timezone", "America/Los_Angeles"},
-       {"adjust_timestamp_to_session_timezone", "true"}},
+      {{facebook::velox::core::QueryConfig::kSessionTimezone,
+        "America/Los_Angeles"},
+       {facebook::velox::core::QueryConfig::kAdjustTimestampToTimezone, "true"},
+       {facebook::velox::core::QueryConfig::kMinRowsForPeeling, "50"}},
       argTypesGenerators,
       argValuesGenerators,
       referenceQueryRunner,
