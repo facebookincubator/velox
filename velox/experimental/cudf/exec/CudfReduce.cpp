@@ -47,33 +47,32 @@ using facebook::velox::cudf_velox::get_temp_mr;
 using facebook::velox::cudf_velox::ReduceAggregator;
 using facebook::velox::cudf_velox::ResolvedAggregateInfo;
 
-#define DEFINE_SIMPLE_REDUCE_AGGREGATOR(Name, name)                    \
-  struct Reduce##Name##Aggregator : ReduceAggregator {                 \
-    Reduce##Name##Aggregator(                                          \
-        core::AggregationNode::Step step,                              \
-        uint32_t inputIndex,                                           \
-        VectorPtr constant,                                            \
-        const TypePtr& resultType)                                     \
-        : ReduceAggregator(step, inputIndex, constant, resultType) {}  \
-                                                                       \
-    std::unique_ptr<cudf::column> doReduce(                            \
-        cudf::table_view const& input,                                 \
-        TypePtr const& outputType,                                     \
-        rmm::cuda_stream_view stream,                                  \
-        vector_size_t /*inputRowCount*/) override {                    \
-      auto const aggRequest =                                          \
-          cudf::make_##name##_aggregation<cudf::reduce_aggregation>(); \
-      auto const cudfOutputType =                                      \
-          cudf_velox::veloxToCudfDataType(outputType);                 \
-      auto const resultScalar = cudf::reduce(                          \
-          input.column(inputIndex),                                    \
-          *aggRequest,                                                 \
-          cudfOutputType,                                              \
-          stream,                                                      \
-          get_temp_mr());                                              \
-      return cudf::make_column_from_scalar(                            \
-          *resultScalar, 1, stream, get_output_mr());                  \
-    }                                                                  \
+#define DEFINE_SIMPLE_REDUCE_AGGREGATOR(Name, name)                            \
+  struct Reduce##Name##Aggregator : ReduceAggregator {                         \
+    Reduce##Name##Aggregator(                                                  \
+        core::AggregationNode::Step step,                                      \
+        uint32_t inputIndex,                                                   \
+        VectorPtr constant,                                                    \
+        const TypePtr& resultType)                                             \
+        : ReduceAggregator(step, inputIndex, constant, resultType) {}          \
+                                                                               \
+    std::unique_ptr<cudf::column> doReduce(                                    \
+        cudf::table_view const& input,                                         \
+        TypePtr const& outputType,                                             \
+        rmm::cuda_stream_view stream,                                          \
+        vector_size_t /*inputRowCount*/) override {                            \
+      auto const aggRequest =                                                  \
+          cudf::make_##name##_aggregation<cudf::reduce_aggregation>();         \
+      auto const cudfOutputType = cudf_velox::veloxToCudfDataType(outputType); \
+      auto const resultScalar = cudf::reduce(                                  \
+          input.column(inputIndex),                                            \
+          *aggRequest,                                                         \
+          cudfOutputType,                                                      \
+          stream,                                                              \
+          get_temp_mr());                                                      \
+      return cudf::make_column_from_scalar(                                    \
+          *resultScalar, 1, stream, get_output_mr());                          \
+    }                                                                          \
   };
 
 DEFINE_SIMPLE_REDUCE_AGGREGATOR(Sum, sum)
@@ -159,8 +158,7 @@ struct ReduceMeanAggregator : ReduceAggregator {
       case core::AggregationNode::Step::kSingle: {
         auto const aggRequest =
             cudf::make_mean_aggregation<cudf::reduce_aggregation>();
-        auto const cudfOutputType =
-            cudf_velox::veloxToCudfDataType(outputType);
+        auto const cudfOutputType = cudf_velox::veloxToCudfDataType(outputType);
         auto const resultScalar = cudf::reduce(
             input.column(inputIndex),
             *aggRequest,
@@ -175,10 +173,8 @@ struct ReduceMeanAggregator : ReduceAggregator {
         auto const& rowType = outputType->asRow();
         auto const sumType = rowType.childAt(0);
         auto const countType = rowType.childAt(1);
-        auto const cudfSumType =
-            cudf_velox::veloxToCudfDataType(sumType);
-        auto const cudfCountType =
-            cudf_velox::veloxToCudfDataType(countType);
+        auto const cudfSumType = cudf_velox::veloxToCudfDataType(sumType);
+        auto const cudfCountType = cudf_velox::veloxToCudfDataType(countType);
 
         // sum
         auto const aggRequest =
@@ -237,8 +233,7 @@ struct ReduceMeanAggregator : ReduceAggregator {
             countCol, *countAggRequest, countCol.type(), stream, get_temp_mr());
 
         // divide the sums by the counts
-        auto const cudfOutputType =
-            cudf_velox::veloxToCudfDataType(outputType);
+        auto const cudfOutputType = cudf_velox::veloxToCudfDataType(outputType);
         return cudf::binary_operation(
             *sumResultCol,
             *countResultScalar,
@@ -273,11 +268,7 @@ struct ReduceDecimalSumOrAvgAggregator : ReduceAggregator {
           cudf::make_sum_aggregation<cudf::reduce_aggregation>();
       cudf::column_view inputCol = input.column(inputIndex);
       auto sumScalar = cudf::reduce(
-          inputCol,
-          *sumAgg,
-          inputCol.type(),
-          stream,
-          get_temp_mr());
+          inputCol, *sumAgg, inputCol.type(), stream, get_temp_mr());
       auto countAgg = cudf::make_count_aggregation<cudf::reduce_aggregation>(
           cudf::null_policy::EXCLUDE);
       auto countScalar = cudf::reduce(
@@ -286,8 +277,8 @@ struct ReduceDecimalSumOrAvgAggregator : ReduceAggregator {
           cudf::data_type{cudf::type_id::INT64},
           stream,
           get_temp_mr());
-      auto sumCol = cudf::make_column_from_scalar(
-          *sumScalar, 1, stream, get_output_mr());
+      auto sumCol =
+          cudf::make_column_from_scalar(*sumScalar, 1, stream, get_output_mr());
       auto countCol = cudf::make_column_from_scalar(
           *countScalar, 1, stream, get_output_mr());
       return computeAvgColumn(std::move(sumCol), std::move(countCol), stream);
@@ -298,11 +289,7 @@ struct ReduceDecimalSumOrAvgAggregator : ReduceAggregator {
     cudf::column_view inputCol = input.column(inputIndex);
     if (step == core::AggregationNode::Step::kPartial) {
       auto sumScalar = cudf::reduce(
-          inputCol,
-          *aggRequest,
-          inputCol.type(),
-          stream,
-          get_temp_mr());
+          inputCol, *aggRequest, inputCol.type(), stream, get_temp_mr());
       auto countAgg = cudf::make_count_aggregation<cudf::reduce_aggregation>(
           cudf::null_policy::EXCLUDE);
       auto countScalar = cudf::reduce(
@@ -311,15 +298,12 @@ struct ReduceDecimalSumOrAvgAggregator : ReduceAggregator {
           cudf::data_type{cudf::type_id::INT64},
           stream,
           get_temp_mr());
-      auto sumCol = cudf::make_column_from_scalar(
-          *sumScalar, 1, stream, get_output_mr());
+      auto sumCol =
+          cudf::make_column_from_scalar(*sumScalar, 1, stream, get_output_mr());
       auto countCol = cudf::make_column_from_scalar(
           *countScalar, 1, stream, get_output_mr());
       return cudf_velox::serializeDecimalSumState(
-          sumCol->view(),
-          countCol->view(),
-          stream,
-          get_output_mr());
+          sumCol->view(), countCol->view(), stream, get_output_mr());
     }
     if (step == core::AggregationNode::Step::kIntermediate &&
         inputCol.type().id() == cudf::type_id::STRING) {
@@ -340,15 +324,12 @@ struct ReduceDecimalSumOrAvgAggregator : ReduceAggregator {
           cudf::data_type{cudf::type_id::INT64},
           stream,
           get_temp_mr());
-      auto sumCol = cudf::make_column_from_scalar(
-          *sumScalar, 1, stream, get_output_mr());
+      auto sumCol =
+          cudf::make_column_from_scalar(*sumScalar, 1, stream, get_output_mr());
       auto countCol = cudf::make_column_from_scalar(
           *countScalar, 1, stream, get_output_mr());
       return cudf_velox::serializeDecimalSumState(
-          sumCol->view(),
-          countCol->view(),
-          stream,
-          get_output_mr());
+          sumCol->view(), countCol->view(), stream, get_output_mr());
     }
     if (step == core::AggregationNode::Step::kFinal &&
         inputCol.type().id() == cudf::type_id::STRING) {
@@ -381,12 +362,11 @@ struct ReduceDecimalSumOrAvgAggregator : ReduceAggregator {
     auto const cudfOutType = cudf_velox::veloxToCudfDataType(outputType);
     std::unique_ptr<cudf::column> castedInput;
     if (outputType->isDecimal() && inputCol.type() != cudfOutType) {
-      castedInput = cudf::cast(
-          inputCol, cudfOutType, stream, get_output_mr());
+      castedInput = cudf::cast(inputCol, cudfOutType, stream, get_output_mr());
       inputCol = castedInput->view();
     }
-    auto const resultScalar = cudf::reduce(
-        inputCol, *aggRequest, cudfOutType, stream, get_temp_mr());
+    auto const resultScalar =
+        cudf::reduce(inputCol, *aggRequest, cudfOutType, stream, get_temp_mr());
     return cudf::make_column_from_scalar(
         *resultScalar, 1, stream, get_output_mr());
   }
@@ -407,8 +387,7 @@ struct ReduceDecimalSumOrAvgAggregator : ReduceAggregator {
         sum->view(), count->view(), stream, get_output_mr());
     auto const cudfOutType = cudf_velox::veloxToCudfDataType(resultType);
     if (avgCol->type() != cudfOutType) {
-      avgCol = cudf::cast(
-          avgCol->view(), cudfOutType, stream, get_output_mr());
+      avgCol = cudf::cast(avgCol->view(), cudfOutType, stream, get_output_mr());
     }
     return avgCol;
   }
