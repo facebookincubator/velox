@@ -512,6 +512,7 @@ class ExecCtx {
           !queryConfig.debugDisableExpressionsWithMemoization() &&
           exprEvalCacheEnabled;
       peelingEnabled = !queryConfig.debugDisableExpressionsWithPeeling();
+      minRowsForPeeling = queryConfig.minRowsForPeeling();
       sharedSubExpressionReuseEnabled =
           !queryConfig.debugDisableCommonSubExpressions();
       deferredLazyLoadingEnabled =
@@ -531,6 +532,9 @@ class ExecCtx {
     bool dictionaryMemoizationEnabled;
     /// True if peeling is enabled during experssion evaluation.
     bool peelingEnabled;
+    /// Minimum number of rows required for peeling to be applied during
+    /// expression evaluation.
+    int32_t minRowsForPeeling;
     /// True if shared subexpression reuse is enabled during experssion
     /// evaluation.
     bool sharedSubExpressionReuseEnabled;
