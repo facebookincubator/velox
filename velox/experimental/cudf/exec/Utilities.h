@@ -18,6 +18,8 @@
 
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
+#include <cudf/hashing.hpp>
+#include <cudf/partitioning.hpp>
 #include <cudf/table/table.hpp>
 
 #include <rmm/cuda_stream_view.hpp>
@@ -57,6 +59,12 @@ namespace facebook::velox::cudf_velox {
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
 
+[[nodiscard]] std::unique_ptr<cudf::table> concatenateViews(
+    const std::vector<cudf::table_view>& tableViews,
+    const std::vector<rmm::cuda_stream_view>& inputStreams,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
+
 /**
  * @brief Concatenates multiple CUDF tables with automatic batching based on
  * size limits.
@@ -89,6 +97,26 @@ getConcatenatedTableBatched(
     const TypePtr& tableType,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
+
+[[nodiscard]] std::vector<CudfVectorPtr> hashPartitionTable(
+    const CudfVectorPtr& table,
+    const TypePtr& tableType,
+    std::vector<cudf::size_type> const& partitionKeyIndices,
+    int32_t numPartitions,
+    cudf::hash_id hashId,
+    uint32_t seed,
+    rmm::cuda_stream_view stream);
+
+[[nodiscard]] std::vector<CudfVectorPtr> hashPartitionTable(
+    cudf::table_view tableView,
+    memory::MemoryPool* pool,
+    const TypePtr& tableType,
+    rmm::cuda_stream_view inputStream,
+    std::vector<cudf::size_type> const& partitionKeyIndices,
+    int32_t numPartitions,
+    cudf::hash_id hashId,
+    uint32_t seed,
+    rmm::cuda_stream_view stream);
 
 /**
  * @brief Wrapper for CUDA events used for stream synchronization.

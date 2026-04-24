@@ -16,12 +16,15 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
+#include <cudf/copying.hpp>
 #include <cudf/column/column_factories.hpp>
 #include <cudf/concatenate.hpp>
 #include <cudf/detail/utilities/stream_pool.hpp>
+#include <cudf/partitioning.hpp>
 #include <cudf/utilities/memory_resource.hpp>
 
 #include <limits>
@@ -110,6 +113,21 @@ std::unique_ptr<cudf::table> getConcatenatedTable(
   return output;
 }
 
+std::unique_ptr<cudf::table> concatenateViews(
+    const std::vector<cudf::table_view>& tableViews,
+    const std::vector<rmm::cuda_stream_view>& inputStreams,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  VELOX_CHECK_GT(tableViews.size(), 0);
+
+  cudf::detail::join_streams(inputStreams, stream);
+  auto output = cudf::concatenate(tableViews, stream, mr);
+
+  CudaEvent event(cudaEventDisableTiming);
+  streamsWaitForStream(event, inputStreams, stream);
+  return output;
+}
+
 std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
     std::vector<CudfVectorPtr>&& tables,
     const TypePtr& tableType,
@@ -177,6 +195,79 @@ std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
 
   // Input tables are deallocated here when 'tables' goes out of scope.
   return outputTables;
+}
+
+std::vector<CudfVectorPtr> hashPartitionTable(
+    const CudfVectorPtr& table,
+    const TypePtr& tableType,
+    std::vector<cudf::size_type> const& partitionKeyIndices,
+    int32_t numPartitions,
+    cudf::hash_id hashId,
+    uint32_t seed,
+    rmm::cuda_stream_view stream) {
+  VELOX_CHECK_NOT_NULL(table);
+  return hashPartitionTable(
+      table->getTableView(),
+      table->pool(),
+      tableType,
+      table->stream(),
+      partitionKeyIndices,
+      numPartitions,
+      hashId,
+      seed,
+      stream);
+}
+
+std::vector<CudfVectorPtr> hashPartitionTable(
+    cudf::table_view tableView,
+    memory::MemoryPool* pool,
+    const TypePtr& tableType,
+    rmm::cuda_stream_view inputStream,
+    std::vector<cudf::size_type> const& partitionKeyIndices,
+    int32_t numPartitions,
+    cudf::hash_id hashId,
+    uint32_t seed,
+    rmm::cuda_stream_view stream) {
+  VELOX_CHECK_GT(numPartitions, 0);
+
+  std::vector<rmm::cuda_stream_view> inputStreams{inputStream};
+  cudf::detail::join_streams(inputStreams, stream);
+
+  auto [partitionedTable, partitionOffsets] = cudf::hash_partition(
+      tableView,
+      partitionKeyIndices,
+      numPartitions,
+      hashId,
+      seed,
+      stream,
+      get_temp_mr());
+
+  VELOX_CHECK_EQ(partitionOffsets.size(), numPartitions + 1);
+  VELOX_CHECK_EQ(partitionOffsets.front(), 0);
+
+  partitionOffsets.erase(partitionOffsets.begin());
+  partitionOffsets.pop_back();
+
+  auto partitionedViews =
+      cudf::split(partitionedTable->view(), partitionOffsets, stream);
+  std::vector<CudfVectorPtr> partitions(numPartitions);
+  for (int32_t i = 0; i < numPartitions; ++i) {
+    auto partition = partitionedViews[i];
+    if (partition.num_rows() == 0) {
+      continue;
+    }
+
+    partitions[i] = std::make_shared<CudfVector>(
+        pool,
+        tableType,
+        partition.num_rows(),
+        std::make_unique<cudf::table>(partition, stream, get_output_mr()),
+        stream);
+  }
+
+  CudaEvent event(cudaEventDisableTiming);
+  streamsWaitForStream(event, inputStreams, stream);
+  return partitions;
 }
 
 void streamsWaitForStream(

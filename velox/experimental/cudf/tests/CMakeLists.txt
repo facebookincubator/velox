@@ -12,7 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_cudf_aggregation_test Main.cpp AggregationTest.cpp)
+add_executable(
+  velox_cudf_aggregation_test
+  Main.cpp
+  AggregationTest.cpp
+  PartitionedBufferedStateTest.cpp
+)
 add_executable(velox_cudf_assign_unique_id_test Main.cpp AssignUniqueIdTest.cpp)
 add_executable(velox_cudf_config_test Main.cpp ConfigTest.cpp)
 add_executable(velox_cudf_enforce_single_row_test Main.cpp EnforceSingleRowTest.cpp)
