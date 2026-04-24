@@ -52,13 +52,10 @@ class Base32 {
       const char* input,
       const size_t inputSize);
 
-  // Padding character used in encoding.
-  static const char kPadding = '=';
-
   // Constants defining the size in bytes of binary and encoded blocks for
-  // Base32 encoding. Size of a binary block in bytes (5 bytes = 40 bits)
+  // Base32 encoding. Size of a binary block in bytes (5 bytes = 40 bits).
   static const int kBinaryBlockByteSize = 5;
-  // Size of an encoded block in bytes (8 bytes = 40 bits)
+  // Size of an encoded block in bytes (8 bytes = 40 bits).
   static const int kEncodedBlockByteSize = 8;
 
  private:

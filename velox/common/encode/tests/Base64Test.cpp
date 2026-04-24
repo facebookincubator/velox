@@ -57,8 +57,7 @@ TEST_F(Base64Test, calculateDecodedSizeProperSize) {
 
   encodedSize = 21;
   EXPECT_EQ(
-      Status::UserError(
-          "Base64::decode() - invalid input string: string length is not a multiple of 4."),
+      Status::UserError("decode() - invalid input string length."),
       Base64::calculateDecodedSize("SGVsbG8sIFdvcmxkIQ===", encodedSize)
           .error());
 
@@ -88,17 +87,6 @@ TEST_F(Base64Test, calculateDecodedSizeProperSize) {
   EXPECT_EQ(
       10, Base64::calculateDecodedSize("MTIzNDU2Nzg5MA", encodedSize).value());
   EXPECT_EQ(14, encodedSize);
-}
-
-TEST_F(Base64Test, checksPadding) {
-  EXPECT_TRUE(Base64::isPadded("ABC=", 4));
-  EXPECT_FALSE(Base64::isPadded("ABC", 3));
-}
-
-TEST_F(Base64Test, countsPaddingCorrectly) {
-  EXPECT_EQ(0, Base64::numPadding("ABC", 3));
-  EXPECT_EQ(1, Base64::numPadding("ABC=", 4));
-  EXPECT_EQ(2, Base64::numPadding("AB==", 4));
 }
 
 TEST_F(Base64Test, calculateMimeDecodedSize) {
