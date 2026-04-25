@@ -29,15 +29,22 @@ struct TableInsertPartitionInfo {
   /// ['start', 'end') specifies the insert range of this table partition.
   PartitionBoundIndexType start;
   PartitionBoundIndexType end;
-  /// Used to contains the overflowed rows which can't be inserted into the
-  /// given table partition range.
+  /// Holds overflowed rows that can't be inserted into the given table
+  /// partition range. Re-inserted serially after all partitions finish.
   std::vector<char*>& overflows;
+  /// Hashes of the rows in 'overflows', stored 1:1. Carried through so
+  /// the serial re-insertion phase does not need to re-hash overflow rows.
+  std::vector<uint64_t>& overflowHashes;
 
   TableInsertPartitionInfo(
       PartitionBoundIndexType _start,
       PartitionBoundIndexType _end,
-      std::vector<char*>& _overflows)
-      : start(_start), end(_end), overflows(_overflows) {
+      std::vector<char*>& _overflows,
+      std::vector<uint64_t>& _overflowHashes)
+      : start(_start),
+        end(_end),
+        overflows(_overflows),
+        overflowHashes(_overflowHashes) {
     VELOX_CHECK_GE(start, 0);
     VELOX_CHECK_LT(start, end);
   }
@@ -47,9 +54,10 @@ struct TableInsertPartitionInfo {
     return index >= start && index < end;
   }
 
-  /// Adds 'row' falls outside of this partititon range into 'overflows'.
-  void addOverflow(char* row) {
+  /// Records 'row' (with its already-computed 'hash') as an overflow.
+  void addOverflow(char* row, uint64_t hash) {
     overflows.push_back(row);
+    overflowHashes.push_back(hash);
   }
 };
 
@@ -1002,12 +1010,14 @@ class HashTable : public BaseHashTable {
   void parallelJoinBuild();
 
   // Inserts the rows in 'partition' from this and 'otherTables' into 'this'.
-  // The rows that would have gone past the end of the partition are returned in
-  // 'overflow'.
+  // The rows that would have gone past the end of the partition are returned
+  // in 'overflow', along with their already-computed hashes in
+  // 'overflowHashes' so the caller can re-insert without re-hashing.
   void buildJoinPartition(
       uint8_t partition,
       const std::vector<std::unique_ptr<RowPartitions>>& rowPartitions,
-      std::vector<char*>& overflow);
+      std::vector<char*>& overflow,
+      std::vector<uint64_t>& overflowHashes);
 
   // Assigns a partition to each row of 'subtable' in RowPartitions of
   // subtable's RowContainer. If 'hashMode_' is kNormalizedKeys, records the
