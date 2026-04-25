@@ -21,6 +21,7 @@
 
 #include <cudf/groupby.hpp>
 
+#include <deque>
 #include <limits>
 #include <optional>
 #include <string>
@@ -205,7 +206,7 @@ class CudfGroupby : public CudfOperatorBase {
   CudfVectorPtr finalizeStreamingBufferedOutput(
       CudfVectorPtr bufferedOutput) const;
 
-  CudfVectorPtr releasePartialOutput(CudfVectorPtr output);
+  CudfVectorPtr releasePartialOutput(CudfVectorPtr output, int64_t inputRows);
 
   void computePartialGroupbyStreaming(CudfVectorPtr tbl);
   void computeFinalGroupbyStreaming(CudfVectorPtr tbl);
@@ -236,6 +237,7 @@ class CudfGroupby : public CudfOperatorBase {
   bool ignoreNullKeys_;
 
   std::vector<CudfVectorPtr> inputs_;
+  std::deque<std::pair<CudfVectorPtr, int64_t>> pendingPartialOutputs_;
   TypePtr inputType_;
   RowTypePtr bufferedResultType_;
   RowTypePtr streamingPreparedType_;

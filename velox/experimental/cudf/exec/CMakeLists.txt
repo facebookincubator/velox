@@ -41,6 +41,8 @@ add_library(
   VeloxCudfInterop.cpp
 )
 
+target_compile_options(velox_cudf_exec PRIVATE -g -O0)
+
 target_link_libraries(
   velox_cudf_exec
   PUBLIC cudf::cudf

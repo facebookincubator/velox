@@ -27,6 +27,8 @@ class CudfTpchBenchmark : public TpchBenchmark {
  public:
   void initialize() override;
 
+  void runHighCardinalityGroupBy();
+
   std::shared_ptr<facebook::velox::config::ConfigBase> makeConnectorProperties()
       override;
 

@@ -120,7 +120,7 @@ struct CudfConfig {
 
   /// Enable the cuDF streaming_groupby API inside CudfGroupby for eligible
   /// grouped partial/final aggregations.
-  bool streamingGroupbyApiEnabled{false};
+  bool streamingGroupbyApiEnabled{true};
 
   /// Minimum rows to accumulate before GPU-side concatenation in
   /// `CudfBatchConcat` (default 100k).

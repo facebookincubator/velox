@@ -1490,7 +1490,7 @@ void CudfGroupby::initialize() {
     streamingGroupbyApiEnabled_ =
         canUseStreamingGroupbyApi(inputRowSchema, aggregationInput.constants);
 
-    if (streamingGroupbyApiEnabled_) {
+    if (streamingGroupbyApiEnabled_ && !isPartialOutput_) {
       auto const outputRowType = asRowType(outputType_);
       streamingPreparedColumns_.clear();
       streamingGroupbyAggregators_ = toStreamingGroupbyAggregators(
@@ -1543,12 +1543,7 @@ void CudfGroupby::initialize() {
             maxBufferedRows_);
       }
     } else if (isPartialOutput_) {
-      if (streamingGroupbyApiEnabled_) {
-        flushableBufferedState_ = std::make_unique<FlushableBufferedState>(
-            std::make_unique<StreamingGroupbyBufferedStateOps>(*this),
-            maxBufferedRows_,
-            maxPartialAggregationMemoryUsage_);
-      } else {
+      if (!streamingGroupbyApiEnabled_) {
         flushableBufferedState_ = std::make_unique<FlushableBufferedState>(
             std::make_unique<BufferedGroupbyStateOps>(*this),
             maxBufferedRows_,
@@ -1571,7 +1566,24 @@ void CudfGroupby::initialize() {
 }
 
 void CudfGroupby::computePartialGroupbyStreaming(CudfVectorPtr tbl) {
-  flushableBufferedState_->addInput(std::move(tbl));
+  if (!streamingGroupbyApiEnabled_) {
+    flushableBufferedState_->addInput(std::move(tbl));
+    return;
+  }
+
+  auto const inputRows = tbl->size();
+  auto stream = tbl->stream();
+  auto permutedInputView = tbl->getTableView().select(
+      aggregationInputChannels_.begin(), aggregationInputChannels_.end());
+  auto output = doGroupByAggregation(
+      permutedInputView,
+      groupingKeyOutputChannels_,
+      aggregators_,
+      outputType_,
+      stream);
+  if (output) {
+    pendingPartialOutputs_.emplace_back(std::move(output), inputRows);
+  }
 }
 
 void CudfGroupby::computeFinalGroupbyStreaming(CudfVectorPtr tbl) {
@@ -1586,13 +1598,15 @@ void CudfGroupby::doAddInput(RowVectorPtr input) {
   if (input->size() == 0) {
     return;
   }
-  numInputRows_ += input->size();
 
   auto cudfInput = std::dynamic_pointer_cast<cudf_velox::CudfVector>(input);
   VELOX_CHECK_NOT_NULL(cudfInput);
 
   if (streamingEnabled_) {
     if (isPartialOutput_) {
+      if (!streamingGroupbyApiEnabled_) {
+        numInputRows_ += input->size();
+      }
       computePartialGroupbyStreaming(cudfInput);
       return;
     } else if (isSingleStep_) {
@@ -1605,6 +1619,9 @@ void CudfGroupby::doAddInput(RowVectorPtr input) {
   }
 
   // Handle non-streaming cases.
+  if (isPartialOutput_) {
+    numInputRows_ += input->size();
+  }
   inputs_.push_back(std::move(cudfInput));
 }
 
@@ -1660,10 +1677,12 @@ CudfVectorPtr CudfGroupby::doGroupByAggregation(
       pool(), outputType, numRows, std::move(resultTable), stream);
 }
 
-CudfVectorPtr CudfGroupby::releasePartialOutput(CudfVectorPtr output) {
+CudfVectorPtr CudfGroupby::releasePartialOutput(
+    CudfVectorPtr output,
+    int64_t inputRows) {
   auto numOutputRows = output->size();
   const double aggregationPct =
-      numOutputRows == 0 ? 0 : (numOutputRows * 1.0) / numInputRows_ * 100;
+      inputRows == 0 ? 0 : (numOutputRows * 1.0) / inputRows * 100;
   {
     auto lockedStats = stats_.wlock();
     lockedStats->addRuntimeStat(
@@ -1675,20 +1694,33 @@ CudfVectorPtr CudfGroupby::releasePartialOutput(CudfVectorPtr output) {
         std::string(exec::HashAggregation::kPartialAggregationPct),
         RuntimeCounter(aggregationPct));
   }
-
-  numInputRows_ = 0;
   return output;
 }
 
 RowVectorPtr CudfGroupby::doGetOutput() {
   // Handle partial streaming groupby.
   if (isPartialOutput_ && streamingEnabled_) {
+    if (streamingGroupbyApiEnabled_) {
+      if (!pendingPartialOutputs_.empty()) {
+        auto [output, inputRows] = std::move(pendingPartialOutputs_.front());
+        pendingPartialOutputs_.pop_front();
+        return releasePartialOutput(std::move(output), inputRows);
+      }
+
+      if (noMoreInput_) {
+        finished_ = true;
+      }
+      return nullptr;
+    }
+
     if (!flushableBufferedState_) {
       return nullptr;
     }
 
     if (auto output = flushableBufferedState_->getOutput(noMoreInput_)) {
-      return releasePartialOutput(std::move(output));
+      auto released = releasePartialOutput(std::move(output), numInputRows_);
+      numInputRows_ = 0;
+      return released;
     }
 
     if (noMoreInput_) {

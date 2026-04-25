@@ -1422,7 +1422,7 @@ TEST_F(
           .assertResults(
               "SELECT c0, sum(c2), count(c1), min(c3), max(c5), avg(c4) FROM tmp GROUP BY c0");
 
-  ASSERT_TRUE(wasStreamingGroupbyApiUsed(task, partialAggId));
+  ASSERT_FALSE(wasStreamingGroupbyApiUsed(task, partialAggId));
   ASSERT_TRUE(wasStreamingGroupbyApiUsed(task, finalAggId));
 }
 
@@ -1445,7 +1445,7 @@ TEST_F(StreamingGroupbyApiAggregationTest, partialFinalStreamingGroupbyApiMultiK
           .assertResults(
               "SELECT c0, c6, sum(c4), avg(c5), count(c1) FROM tmp GROUP BY c0, c6");
 
-  ASSERT_TRUE(wasStreamingGroupbyApiUsed(task, partialAggId));
+  ASSERT_FALSE(wasStreamingGroupbyApiUsed(task, partialAggId));
   ASSERT_TRUE(wasStreamingGroupbyApiUsed(task, finalAggId));
 }
 
@@ -1488,8 +1488,7 @@ TEST_F(
                   .planNode())
           .assertResults("SELECT c0, sum(c1), avg(c4) FROM tmp GROUP BY c0");
 
-  ASSERT_TRUE(wasStreamingGroupbyApiUsed(task, partialAggId));
-  ASSERT_GE(streamingGroupbyApiRebuilds(task, partialAggId), 0);
+  ASSERT_FALSE(wasStreamingGroupbyApiUsed(task, partialAggId));
 }
 
 TEST_F(

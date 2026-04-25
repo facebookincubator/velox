@@ -630,7 +630,7 @@ TEST_F(ToCudfSelectionTest, streamingGroupbyApiEligiblePartialFinalUsesNewPath) 
                   .assertResults(
                       "SELECT c0, sum(c1), count(c2), max(c3), avg(c4) FROM tmp GROUP BY c0");
 
-  ASSERT_TRUE(wasStreamingGroupbyApiUsed(task, partialAggId));
+  ASSERT_FALSE(wasStreamingGroupbyApiUsed(task, partialAggId));
   ASSERT_TRUE(wasStreamingGroupbyApiUsed(task, finalAggId));
 }
 

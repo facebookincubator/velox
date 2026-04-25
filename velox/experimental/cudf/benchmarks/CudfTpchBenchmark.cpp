@@ -30,12 +30,16 @@
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/dwio/common/ColumnSelector.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/tpch/gen/TpchGen.h"
 
 #include <experimental/cudf/connectors/hive/CudfHiveConnector.h>
+
+#include <limits>
 
 DECLARE_string(data_path);
 DECLARE_string(data_format);
@@ -49,10 +53,71 @@ using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::dwio::common;
 
+namespace {
+
+constexpr const char* kLineitem = "lineitem";
+
+exec::test::TpchPlan makeHighCardinalityGroupByPlan(memory::MemoryPool* pool) {
+  auto format = toFileFormat(FLAGS_data_format);
+  auto lineitemStdCols =
+      tpch::getTableSchema(tpch::Table::TBL_LINEITEM)->names();
+  auto lineitemInfo = cudf_velox::readTableInfo(
+      kLineitem, FLAGS_data_path, lineitemStdCols, format, pool);
+  VELOX_CHECK(
+      !lineitemInfo.dataFiles.empty(),
+      "No lineitem data files found under {}",
+      FLAGS_data_path);
+
+  const auto lineitemRowType = ColumnSelector(
+                                   lineitemInfo.type,
+                                   std::vector<std::string>{
+                                       "l_orderkey",
+                                       "l_linenumber",
+                                       "l_quantity",
+                                       "l_extendedprice",
+                                       "l_discount"})
+                                   .buildSelectedReordered();
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId lineitemScanId;
+  auto plan =
+      PlanBuilder(planNodeIdGenerator, pool)
+          .tableScan(
+              kLineitem, lineitemRowType, lineitemInfo.fileColumnNames, {})
+          .captureScanNodeId(lineitemScanId)
+          .partialAggregation(
+              {"l_orderkey", "l_linenumber"},
+              {"sum(l_extendedprice) AS sum_extendedprice",
+               "count(1) AS row_count",
+               "min(l_quantity) AS min_quantity",
+               "max(l_discount) AS max_discount"})
+          .localPartition({"l_orderkey", "l_linenumber"})
+          .finalAggregation()
+          .planNode();
+
+  exec::test::TpchPlan tpchPlan;
+  tpchPlan.plan = std::move(plan);
+  tpchPlan.dataFiles[lineitemScanId] = lineitemInfo.dataFiles;
+  tpchPlan.dataFileFormat = format;
+  return tpchPlan;
+}
+
+} // namespace
+
 DEFINE_bool(
     cudf_use_buffered_input,
     false,
     "Use buffered input for CudfHive connector (kUseBufferedInput).");
+
+DEFINE_bool(
+    cudf_use_experimental_groupby_api,
+    false,
+    "Use experimental groupby API for CudfGroupby.");
+
+DEFINE_int32(
+    cudf_batch_size_max_threshold,
+    std::numeric_limits<cudf::size_type>::max(),
+    "Batch size max threshold for cudf operators.");
 
 DEFINE_uint64(
     cudf_chunk_read_limit,
@@ -134,6 +199,10 @@ void CudfTpchBenchmark::initialize() {
       FLAGS_cudf_memory_resource;
   cudf_velox::CudfConfig::getInstance().memoryPercent =
       FLAGS_cudf_memory_percent;
+  cudf_velox::CudfConfig::getInstance().streamingGroupbyApiEnabled =
+      FLAGS_cudf_use_experimental_groupby_api;
+  cudf_velox::CudfConfig::getInstance().batchSizeMaxThreshold =
+      FLAGS_cudf_batch_size_max_threshold;
 
   cudf_velox::CudfConfig::getInstance().debugEnabled = FLAGS_cudf_debug_enabled;
   // Enable cuDF operators
@@ -186,6 +255,12 @@ CudfTpchBenchmark::listSplits(
   }
 
   return TpchBenchmark::listSplits(path, numSplitsPerFile, plan);
+}
+
+void CudfTpchBenchmark::runHighCardinalityGroupBy() {
+  auto pool = memory::memoryManager()->addLeafPool();
+  auto plan = makeHighCardinalityGroupByPlan(pool.get());
+  run(plan, queryConfigs_);
 }
 
 void CudfTpchBenchmark::ensurePreloaded() {
@@ -249,4 +324,10 @@ void CudfTpchBenchmark::shutdown() {
   preloadPool_.reset();
   cudf_velox::unregisterCudf();
   TpchBenchmark::shutdown();
+}
+
+BENCHMARK(highCardinalityGroupBy) {
+  auto* cudfBenchmark = dynamic_cast<CudfTpchBenchmark*>(benchmark.get());
+  VELOX_CHECK_NOT_NULL(cudfBenchmark);
+  cudfBenchmark->runHighCardinalityGroupBy();
 }
