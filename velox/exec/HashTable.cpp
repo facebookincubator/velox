@@ -1057,10 +1057,6 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
     driverCtx = driverThreadCtx->driverCtx();
   }
 
-  const auto getTable = [this](size_t i) INLINE_LAMBDA {
-    return i == 0 ? this : otherTables_[i - 1].get();
-  };
-
   const auto runStep = [&](auto& steps, auto&& work, bool runInCurrentThread) {
     auto step = std::make_shared<AsyncSource<bool>>([work = std::move(work)] {
       work();
@@ -1082,13 +1078,13 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
   // concurrency issues.
   rowPartitions.reserve(numPartitions);
   for (auto i = 0; i < numPartitions; ++i) {
-    auto* table = getTable(i);
-    rowPartitions.push_back(table->rows()->createRowPartitions(*rows_->pool()));
+    rowPartitions.push_back(
+        tableAt(i)->rows()->createRowPartitions(*rows_->pool()));
   }
 
   // The parallel table partitioning step.
   for (auto i = 0; i < numPartitions; ++i) {
-    auto* table = getTable(i);
+    auto* table = tableAt(i);
     bool last = i == numPartitions - 1;
     runStep(
         partitionSteps,
@@ -1142,7 +1138,7 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
       hashers_[i]->setBloomFilter(filter);
       for (auto j = 0; j < numPartitions; ++j) {
         bool last = j == numPartitions - 1;
-        auto* rows = getTable(j)->rows();
+        auto* rows = tableAt(j)->rows();
         rowPartitions[j]->reset();
         runStep(
             bloomFilterPartitionSteps,
@@ -1195,7 +1191,7 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
     VELOX_CHECK_EQ(overflows.size(), overflowHashes.size());
     insertForJoin(
         overflows.data(), overflowHashes.data(), overflows.size(), nullptr);
-    auto* table = i == 0 ? this : otherTables_[i - 1].get();
+    auto* table = tableAt(i);
     VELOX_CHECK_EQ(table->rows()->numRows(), table->numParallelBuildRows_);
   }
 }
@@ -1264,7 +1260,7 @@ void HashTable<ignoreNullKeys>::buildJoinPartition(
       overflow,
       overflowHashes};
   for (auto i = 0; i < numPartitions; ++i) {
-    auto* table = i == 0 ? this : otherTables_[i - 1].get();
+    auto* table = tableAt(i);
     RowContainerIterator iter;
     while (
         const auto numRows = table->rows_->listPartitionRows(
@@ -1283,7 +1279,7 @@ void HashTable<true>::buildBloomFilterPartition(
     const std::vector<std::unique_ptr<RowPartitions>>& rowPartitions) {
   char* rows[kHashBatchSize];
   for (auto i = 0; i < 1 + otherTables_.size(); ++i) {
-    auto* table = i == 0 ? this : otherTables_[i - 1].get();
+    auto* table = tableAt(i);
     auto rowColumn = table->rows_->columnAt(columnIndex);
     auto* filter = checkedPointerCast<common::BigintValuesUsingBloomFilter>(
         hashers_[columnIndex]->getBloomFilter().get());
@@ -1567,7 +1563,7 @@ void HashTable<ignoreNullKeys>::rehash(
   for (int32_t i = 0; i <= otherTables_.size(); ++i) {
     RowContainerIterator iterator;
     int32_t numGroups;
-    auto* table = i == 0 ? this : otherTables_[i - 1].get();
+    auto* table = tableAt(i);
     do {
       numGroups = table->rows()->listRows(&iterator, kHashBatchSize, groups);
       if (!insertBatch(

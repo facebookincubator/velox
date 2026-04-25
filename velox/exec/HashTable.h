@@ -1179,6 +1179,11 @@ class HashTable : public BaseHashTable {
     }
   }
 
+  // Returns the i-th sub-table participating in parallel join build.
+  inline HashTable<ignoreNullKeys>* tableAt(size_t idx) {
+    return idx == 0 ? this : otherTables_[idx - 1].get();
+  }
+
   // We don't want any overlap in the bit ranges used by bucket index and those
   // used by spill partitioning; otherwise because we receive data from only one
   // partition, the overlapped bits would be the same and only a fraction of the
