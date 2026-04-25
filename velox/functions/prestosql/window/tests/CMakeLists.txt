@@ -49,3 +49,21 @@ add_executable(velox_windows_agg_test AggregateWindowTest.cpp ${CMAKE_WINDOW_TES
 add_test(NAME velox_windows_agg_test COMMAND velox_windows_agg_test WORKING_DIRECTORY .)
 
 target_link_libraries(velox_windows_agg_test ${CMAKE_WINDOW_TEST_LINK_LIBRARIES})
+
+add_executable(
+  velox_windows_approx_winsorize_test
+  ApproxWinsorizeTest.cpp
+  ${CMAKE_WINDOW_TEST_MAIN_FILES}
+)
+
+add_test(
+  NAME velox_windows_approx_winsorize_test
+  COMMAND velox_windows_approx_winsorize_test
+  WORKING_DIRECTORY .
+)
+
+target_link_libraries(
+  velox_windows_approx_winsorize_test
+  ${CMAKE_WINDOW_TEST_LINK_LIBRARIES}
+  velox_functions_aggregates_test_lib
+)

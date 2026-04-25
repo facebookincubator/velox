@@ -17,6 +17,7 @@ endif()
 
 velox_add_library(
   velox_window
+  ApproxWinsorize.cpp
   CumeDist.cpp
   FirstLastValue.cpp
   LeadLag.cpp
@@ -25,4 +26,11 @@ velox_add_library(
   WindowFunctionsRegistration.h
 )
 
-velox_link_libraries(velox_window velox_buffer velox_exec velox_functions_window Folly::folly)
+velox_link_libraries(
+  velox_window
+  velox_buffer
+  velox_exec
+  velox_functions_window
+  velox_tdigest
+  Folly::folly
+)

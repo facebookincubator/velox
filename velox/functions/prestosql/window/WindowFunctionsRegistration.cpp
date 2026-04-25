@@ -20,6 +20,7 @@ namespace facebook::velox::window {
 
 namespace prestosql {
 
+extern void registerApproxWinsorize(const std::string& name);
 extern void registerCumeDist(const std::string& name);
 extern void registerNtileBigint(const std::string& name);
 extern void registerFirstValue(const std::string& name);
@@ -28,6 +29,7 @@ extern void registerLag(const std::string& name);
 extern void registerLead(const std::string& name);
 
 void registerAllWindowFunctions(const std::string& prefix) {
+  registerApproxWinsorize(prefix + "approx_winsorize");
   functions::window::registerRowNumberBigint(prefix + "row_number");
   functions::window::registerRankBigint(prefix + "rank");
   functions::window::registerDenseRankBigint(prefix + "dense_rank");
