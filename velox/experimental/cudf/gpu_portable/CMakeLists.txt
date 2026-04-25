@@ -123,6 +123,15 @@ endif()
 #   TEMPLATE_VALUES  (list) picks the concrete value for each template
 #                    non-type parameter, e.g. "alwaysRoundNegDec=false".
 function(velox_add_gpu_portable)
+  # FRAGMENT_GROUP: when set, the call emits a getter-only fragment (no
+  # boilerplate) instead of a standalone header. The fragment path is
+  # accumulated under the named group's global property; a later call to
+  # velox_combine_gpu_portable_fragments(GROUP <same name> OUTPUT <h>)
+  # collects all the group's fragments into one combined header. Used to
+  # land template-unrolled instantiations of the same CPU function in a
+  # single header (the general pattern: "1 registration -> 1 header"
+  # holds, except for template unrolling where it's "N variants -> 1
+  # combined header").
   set(
     one_value
     OUTPUT
@@ -130,8 +139,19 @@ function(velox_add_gpu_portable)
     FUNC
     WRAPPER_NAME
     OUT_PARAM
+    OUT_ASSIGN_NAME
+    OUT_WRAP
+    FRAGMENT_GROUP
   )
-  set(multi_value TEMPLATE_TYPES TEMPLATE_VALUES INPUT_PARAMS BAKED_PARAMS)
+  set(
+    multi_value
+    TEMPLATE_TYPES
+    TEMPLATE_VALUES
+    INPUT_PARAMS
+    BAKED_PARAMS
+    REPLACE_EXPRS
+    INPUT_ADAPTS
+  )
   cmake_parse_arguments(ARG "" "${one_value}" "${multi_value}" ${ARGN})
 
   foreach(
@@ -154,7 +174,11 @@ function(velox_add_gpu_portable)
   endif()
 
   set(wrapped ${GPU_PORTABLE_BIN}/${ARG_WRAPPER_NAME}.cu)
-  set(header ${GPU_PORTABLE_BIN}/${ARG_OUTPUT})
+  if(ARG_FRAGMENT_GROUP)
+    set(header ${GPU_PORTABLE_BIN}/${ARG_OUTPUT}.frag)
+  else()
+    set(header ${GPU_PORTABLE_BIN}/${ARG_OUTPUT})
+  endif()
 
   set(
     wrap_args
@@ -181,6 +205,18 @@ function(velox_add_gpu_portable)
   foreach(p IN LISTS ARG_BAKED_PARAMS)
     list(APPEND wrap_args --baked-param "${p}")
   endforeach()
+  if(ARG_OUT_ASSIGN_NAME)
+    list(APPEND wrap_args --out-assign-name "${ARG_OUT_ASSIGN_NAME}")
+  endif()
+  if(ARG_OUT_WRAP)
+    list(APPEND wrap_args --out-wrap "${ARG_OUT_WRAP}")
+  endif()
+  foreach(p IN LISTS ARG_REPLACE_EXPRS)
+    list(APPEND wrap_args --replace-expr "${p}")
+  endforeach()
+  foreach(p IN LISTS ARG_INPUT_ADAPTS)
+    list(APPEND wrap_args --input-adapt "${p}")
+  endforeach()
 
   set(
     embed_args
@@ -194,6 +230,9 @@ function(velox_add_gpu_portable)
   foreach(p IN LISTS ARG_BAKED_PARAMS)
     list(APPEND embed_args --baked-param "${p}")
   endforeach()
+  if(ARG_FRAGMENT_GROUP)
+    list(APPEND embed_args --fragment)
+  endif()
 
   add_custom_command(
     OUTPUT ${header}
@@ -205,7 +244,54 @@ function(velox_add_gpu_portable)
     VERBATIM
   )
 
-  set_property(GLOBAL APPEND PROPERTY VELOX_CUDF_GPU_PORTABLE_HEADERS ${header})
+  if(ARG_FRAGMENT_GROUP)
+    set_property(GLOBAL APPEND
+      PROPERTY VELOX_CUDF_GPU_PORTABLE_FRAGMENTS_${ARG_FRAGMENT_GROUP}
+      ${header})
+  else()
+    set_property(GLOBAL APPEND PROPERTY VELOX_CUDF_GPU_PORTABLE_HEADERS ${header})
+  endif()
+endfunction()
+
+# Combines all fragments accumulated under FRAGMENT_GROUP into a single
+# header. Run once per group, after all per-variant velox_add_gpu_portable
+# calls have registered their fragments.
+function(velox_combine_gpu_portable_fragments)
+  set(one_value GROUP OUTPUT SOURCE_PATH)
+  cmake_parse_arguments(ARG "" "${one_value}" "" ${ARGN})
+  foreach(required GROUP OUTPUT)
+    if(NOT ARG_${required})
+      message(FATAL_ERROR
+        "velox_combine_gpu_portable_fragments: missing ${required}")
+    endif()
+  endforeach()
+
+  get_property(fragments GLOBAL
+    PROPERTY VELOX_CUDF_GPU_PORTABLE_FRAGMENTS_${ARG_GROUP})
+  if(NOT fragments)
+    message(FATAL_ERROR
+      "velox_combine_gpu_portable_fragments: group '${ARG_GROUP}' has no fragments")
+  endif()
+
+  set(combined ${GPU_PORTABLE_BIN}/${ARG_OUTPUT})
+  set(combine_args --output "${combined}")
+  if(ARG_SOURCE_PATH)
+    list(APPEND combine_args --source-path "${ARG_SOURCE_PATH}")
+  endif()
+  foreach(f IN LISTS fragments)
+    list(APPEND combine_args --fragment "${f}")
+  endforeach()
+
+  add_custom_command(
+    OUTPUT ${combined}
+    COMMAND ${GPU_PORTABLE_PY} ${GPU_PORTABLE_EXTR} combine ${combine_args}
+    DEPENDS ${fragments} ${GPU_PORTABLE_EXTR} ${GPU_PORTABLE_STAMP}
+    COMMENT "[gpu_portable] combine ${ARG_GROUP} -> ${ARG_OUTPUT}"
+    VERBATIM
+  )
+
+  set_property(GLOBAL APPEND PROPERTY
+    VELOX_CUDF_GPU_PORTABLE_HEADERS ${combined})
 endfunction()
 
 # --- Registrations ---
@@ -220,6 +306,49 @@ velox_add_gpu_portable(
   OUT_PARAM        "double* out"
   INPUT_PARAMS     "double number"
   BAKED_PARAMS     "int decimals"
+)
+
+# Lift DecimalUtil::divideWithRoundUp. C++ templates don't survive into
+# the JIT'd source: each (R, A, B) instantiation needs its own concrete
+# emission, even though the body is identical across them. This is a
+# general pattern -- whenever you lift a templated CPU function and need
+# more than one instantiation on the GPU, expect to wrap the per-variant
+# velox_add_gpu_portable() call in a small helper function like the one
+# below to fold the per-variant boilerplate. The variants get accumulated
+# under FRAGMENT_GROUP and stitched into one combined header by the
+# trailing velox_combine_gpu_portable_fragments() call -- so the final
+# output stays as one DecimalDivide.h despite N instantiations.
+#
+# Semantic deltas vs the CPU source that the transforms bake in:
+#  - overflow wraps silently (CPU throws via checkedMultiply),
+#  - division by zero is undefined (CPU throws VELOX_USER_CHECK_NE; the
+#    caller must ensure b != 0).
+function(velox_add_decimal_divide variant in_int out_int in_dec out_dec)
+  velox_add_gpu_portable(
+    OUTPUT           DecimalDivide_${variant}.h
+    FRAGMENT_GROUP   decimal_divide
+    SOURCE           ${CMAKE_SOURCE_DIR}/velox/type/DecimalUtil.h
+    FUNC             divideWithRoundUp
+    WRAPPER_NAME     velox_decimal_divide_${variant}
+    TEMPLATE_TYPES   R=${out_int} A=${in_int} B=${in_int}
+    OUT_PARAM        "numeric::${out_dec}* out"
+    INPUT_PARAMS     "numeric::${in_dec} a_in" "numeric::${in_dec} b_in"
+    INPUT_ADAPTS     "${in_int} a=a_in.value()" "${in_int} b=b_in.value()"
+    OUT_WRAP         "numeric::${out_dec}{VALUE, numeric::scale_type{0}}"
+    BAKED_PARAMS     "bool noRoundUp" "__int128_t pow10_aRescale"
+    OUT_ASSIGN_NAME  r
+    REPLACE_EXPRS    "DecimalUtil::kPowersOfTen[aRescale]=pow10_aRescale"
+  )
+endfunction()
+
+velox_add_decimal_divide(int64_int64   int64_t    int64_t    decimal64  decimal64)
+velox_add_decimal_divide(int64_int128  int64_t    __int128_t decimal64  decimal128)
+velox_add_decimal_divide(int128_int128 __int128_t __int128_t decimal128 decimal128)
+
+velox_combine_gpu_portable_fragments(
+  GROUP        decimal_divide
+  OUTPUT       DecimalDivide.h
+  SOURCE_PATH  velox/type/DecimalUtil.h::divideWithRoundUp
 )
 
 # --- Aggregate codegen target ---

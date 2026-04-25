@@ -15,7 +15,7 @@
 add_library(
   velox_cudf_expression
   AstExpression.cpp
-  DecimalExpressionKernels.cu
+  DecimalExpressionKernels.cpp
   ExpressionEvaluator.cpp
   JitExpression.cpp
   PrestoFunctions.cpp

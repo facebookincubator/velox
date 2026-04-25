@@ -18,6 +18,11 @@ add_executable(velox_cudf_config_test Main.cpp ConfigTest.cpp)
 add_executable(velox_cudf_enforce_single_row_test Main.cpp EnforceSingleRowTest.cpp)
 add_executable(velox_cudf_expression_selection_test Main.cpp ExpressionEvaluatorSelectionTest.cpp)
 add_executable(velox_cudf_decimal_expression_test Main.cpp DecimalExpressionTest.cpp)
+add_executable(
+  velox_cudf_decimal_divide_gpu_portable_test
+  Main.cpp
+  DecimalDivideGpuPortableTest.cpp
+)
 add_executable(velox_cudf_filter_project_test Main.cpp FilterProjectTest.cpp)
 add_executable(velox_cudf_hash_join_test HashJoinTest.cpp Main.cpp)
 add_executable(velox_cudf_limit_test Main.cpp LimitTest.cpp)
@@ -75,6 +80,12 @@ add_test(
 add_test(
   NAME velox_cudf_decimal_expression_test
   COMMAND velox_cudf_decimal_expression_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+add_test(
+  NAME velox_cudf_decimal_divide_gpu_portable_test
+  COMMAND velox_cudf_decimal_divide_gpu_portable_test
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
@@ -180,6 +191,10 @@ set_tests_properties(
   PROPERTIES LABELS cuda_driver TIMEOUT 3000
 )
 set_tests_properties(velox_cudf_decimal_expression_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
+set_tests_properties(
+  velox_cudf_decimal_divide_gpu_portable_test
+  PROPERTIES LABELS cuda_driver TIMEOUT 300
+)
 set_tests_properties(velox_cudf_filter_project_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 set_tests_properties(velox_cudf_hash_join_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 set_tests_properties(velox_cudf_limit_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
@@ -258,6 +273,29 @@ target_link_libraries(
   velox_test_util
   gtest
   gtest_main
+)
+
+target_link_libraries(
+  velox_cudf_decimal_divide_gpu_portable_test
+  velox_cudf_exec
+  velox_cudf_expression
+  velox_exec
+  velox_exec_test_lib
+  velox_functions_test_lib
+  velox_test_util
+  gtest
+  gtest_main
+)
+# The generated gpu_portable headers live under PROJECT_BINARY_DIR. Match
+# the include path that velox_cudf_expression uses, and depend on the
+# codegen target so Round.h / DecimalDivide.h exist before this test
+# compiles.
+target_include_directories(
+  velox_cudf_decimal_divide_gpu_portable_test
+  PRIVATE ${PROJECT_BINARY_DIR}
+)
+add_dependencies(
+  velox_cudf_decimal_divide_gpu_portable_test velox_cudf_gpu_portable_gen
 )
 
 target_link_libraries(
