@@ -2040,13 +2040,10 @@ void addStats(
     std::unordered_map<std::string, exec::ExprStats>& stats,
     std::unordered_set<const exec::Expr*>& uniqueExprs,
     bool excludeSpecialForm) {
-  auto it = uniqueExprs.find(&expr);
-  if (it != uniqueExprs.end()) {
+  if (!uniqueExprs.insert(&expr).second) {
     // Common sub-expression. Skip to avoid double counting.
     return;
   }
-
-  uniqueExprs.insert(&expr);
 
   bool excludeSplFormExpr = excludeSpecialForm && expr.isSpecialForm();
   // Do not aggregate empty stats.
