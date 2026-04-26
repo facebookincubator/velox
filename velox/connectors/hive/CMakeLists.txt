@@ -32,6 +32,7 @@ velox_add_library(
   FileIndexReader.cpp
   FileSplitReader.cpp
   HiveConfig.cpp
+  HiveConfigProvider.cpp
   HiveConnector.cpp
   HiveConnectorSplit.cpp
   HiveConnectorUtil.cpp
@@ -55,6 +56,9 @@ velox_add_library(
   FileSplitReader.h
   FileTableHandle.h
   HiveConfig.h
+  HiveConfigMacrosDefine.h
+  HiveConfigMacrosUndef.h
+  HiveConfigProvider.h
   HiveConnector.h
   HiveConnectorSplit.h
   HiveConnectorUtil.h

@@ -96,6 +96,7 @@ services:
       args:
         - SPARK_VERSION=3.5.1
       dockerfile: scripts/docker/java.dockerfile
+      target: spark-server
 
   fedora:
     extends: base-block

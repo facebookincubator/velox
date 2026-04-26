@@ -16,6 +16,8 @@
 
 #include "velox/connectors/hive/iceberg/PartitionSpec.h"
 
+#include "velox/common/EnumDefine.h"
+
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 namespace facebook::velox::connector::hive::iceberg {

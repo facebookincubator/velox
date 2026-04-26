@@ -286,8 +286,9 @@ FileIndexReader::createIndexReader() {
   VELOX_CHECK_NOT_NULL(fileReader_);
   VELOX_CHECK(
       hiveSplit_->fileFormat == dwio::common::FileFormat::NIMBLE ||
-          hiveSplit_->fileFormat == dwio::common::FileFormat::FLUX,
-      "FileIndexReader only supports Nimble and Flux file formats");
+          hiveSplit_->fileFormat == dwio::common::FileFormat::FLUX ||
+          hiveSplit_->fileFormat == dwio::common::FileFormat::SST,
+      "FileIndexReader only supports Nimble, Flux and SST file formats");
 
   dwio::common::RowReaderOptions rowReaderOpts;
   configureRowReaderOptions(
@@ -301,16 +302,22 @@ FileIndexReader::createIndexReader() {
       connectorQueryCtx_->sessionProperties(),
       ioExecutor_,
       rowReaderOpts);
-  rowReaderOpts.setIndexEnabled(true);
-  // Disable eager first stripe load since FileIndexReader loads stripes
-  // on-demand based on index lookup results.
-  rowReaderOpts.setEagerFirstStripeLoad(false);
+  if (hiveSplit_->fileFormat != dwio::common::FileFormat::SST) {
+    rowReaderOpts.setIndexEnabled(true);
+    // Disable eager first stripe load since FileIndexReader loads stripes
+    // on-demand based on index lookup results.
+    rowReaderOpts.setEagerFirstStripeLoad(false);
+  }
   return fileReader_->createIndexReader(rowReaderOpts);
 }
 
 void FileIndexReader::startLookup(
     const Request& request,
     const Options& options) {
+  // Empty files have no cluster index, so indexReader_ is null.
+  if (indexReader_ == nullptr) {
+    return;
+  }
   VELOX_CHECK(
       !indexReader_->hasNext(),
       "Previous request not finished. Call next() first.");
@@ -407,11 +414,12 @@ serializer::IndexBounds FileIndexReader::buildRequestIndexBounds(
 }
 
 bool FileIndexReader::hasNext() {
-  return indexReader_->hasNext();
+  return indexReader_ != nullptr && indexReader_->hasNext();
 }
 
 std::unique_ptr<FileIndexReader::Result> FileIndexReader::next(
     vector_size_t maxOutputRows) {
+  VELOX_CHECK_NOT_NULL(indexReader_);
   return indexReader_->next(maxOutputRows);
 }
 

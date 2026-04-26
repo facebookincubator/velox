@@ -101,6 +101,7 @@ add_executable(
   MapKeysAndValuesTest.cpp
   MapKeysByTopNValuesTest.cpp
   MapMatchTest.cpp
+  MapValuesMatchTest.cpp
   MapAppendTest.cpp
   MapUpdateTest.cpp
   MapTest.cpp
@@ -145,7 +146,7 @@ add_executable(
 )
 
 if(VELOX_ENABLE_GEO)
-  target_sources(velox_functions_test PRIVATE GeometryFunctionsTest.cpp)
+  target_sources(velox_functions_test PRIVATE GeometryFunctionsTest.cpp S2FunctionsTest.cpp)
 endif()
 
 if(VELOX_ENABLE_FAISS)

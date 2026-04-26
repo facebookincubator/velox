@@ -64,6 +64,7 @@ HashBuild::HashBuild(
       joinNode_(std::move(joinNode)),
       joinType_{joinNode_->joinType()},
       nullAware_{joinNode_->isNullAware()},
+      nullAsValue_{joinNode_->isNullAsValue()},
       needProbedFlagSpill_{needRightSideJoin(joinType_)},
       dropDuplicates_(joinNode_->canDropDuplicates()),
       vectorHasherMaxNumDistinct_(
@@ -205,6 +206,13 @@ bool HashBuild::receivedCachedHashTable() {
   if (!useHashTableCache() || future_.valid()) {
     return false;
   }
+  // Builder task drivers coordinate via allPeersFinished and should fall
+  // through to the kWaitForProbe path in isBlocked(). Only waiter task
+  // drivers (different taskId than the builder) should enter here.
+  VELOX_CHECK_NOT_NULL(cacheEntry_);
+  if (hashTableCacheBuilderTask()) {
+    return false;
+  }
   // We were waiting on cached table from another task.
   // Ensure that table is ready.
   VELOX_CHECK(
@@ -249,7 +257,7 @@ void HashBuild::setupTable() {
     // Right semi join needs to tag build rows that were probed.
     const bool needProbedFlag = joinNode_->isRightSemiFilterJoin();
     const bool hasCountFlag = joinNode_->isCountingJoin();
-    if (isLeftNullAwareJoinWithFilter(joinNode_)) {
+    if (nullAsValue_ || isLeftNullAwareJoinWithFilter(joinNode_)) {
       // We need to check null key rows in build side in case of null-aware anti
       // or left semi project join with filter set.
       table_ = HashTable<false>::createForJoin(
@@ -452,7 +460,7 @@ void HashBuild::addInput(RowVectorPtr input) {
   }
 
   if (!isRightJoin(joinType_) && !isFullJoin(joinType_) &&
-      !isRightSemiProjectJoin(joinType_) &&
+      !isRightSemiProjectJoin(joinType_) && !nullAsValue_ &&
       !isLeftNullAwareJoinWithFilter(joinNode_)) {
     deselectRowsWithNulls(hashers, activeRows_);
     if (nullAware_ && !joinHasNullKeys_ &&
@@ -811,7 +819,19 @@ bool HashBuild::finishHashBuild() {
   // build pipeline.
   if (!operatorCtx_->task()->allPeersFinished(
           planNodeId(), operatorCtx_->driver(), &future_, promises, peers)) {
-    setState(State::kWaitForBuild);
+    if (useHashTableCache() && !hashTableCacheBuilderTask()) {
+      // Waiter task non-last driver: no partial table was built (we used the
+      // cached table). Nothing to contribute — finish immediately. Clear the
+      // future since allPeersFinished() set it but we don't need to wait.
+      VELOX_CHECK_NULL(
+          table_, "Waiter task should not have built a partial hash table");
+      future_ = folly::SemiFuture<folly::Unit>::makeEmpty();
+      setState(State::kFinish);
+    } else {
+      // Builder task non-last driver: the last driver needs our partial
+      // table. Wait in kWaitForBuild until it has moved our table out.
+      setState(State::kWaitForBuild);
+    }
     return false;
   }
 

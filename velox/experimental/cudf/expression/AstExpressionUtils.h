@@ -23,6 +23,7 @@
 #include "velox/experimental/cudf/expression/AstUtils.h"
 // TODO(kn): in another PR
 // #include "velox/experimental/cudf/CudfNoDefaults.h"
+#include "velox/experimental/cudf/expression/DecimalTypeCheck.h"
 
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/FieldReference.h"
@@ -167,9 +168,65 @@ const std::unordered_map<std::string, Op> binaryOps = [] {
   return merged;
 }();
 
-const std::map<std::string, Op> unaryOps = {
+const std::unordered_map<std::string, Op> prestoUnaryOps = {
     {"not", Op::NOT},
-    {"is_null", Op::IS_NULL}};
+    {"is_null", Op::IS_NULL},
+    // Trigonometric functions
+    {"sin", Op::SIN},
+    {"cos", Op::COS},
+    {"tan", Op::TAN},
+    {"asin", Op::ARCSIN},
+    {"acos", Op::ARCCOS},
+    {"atan", Op::ARCTAN},
+    {"cosh", Op::COSH},
+    {"tanh", Op::TANH},
+    // Exponential and logarithmic functions
+    {"exp", Op::EXP},
+    {"ln", Op::LOG},
+    {"sqrt", Op::SQRT},
+    {"cbrt", Op::CBRT},
+    // Other functions
+    {"abs", Op::ABS},
+};
+
+const std::unordered_map<std::string, Op> sparkUnaryOps = {
+    {"not", Op::NOT},
+    {"is_null", Op::IS_NULL},
+    // Trigonometric functions
+    {"sin", Op::SIN},
+    {"cos", Op::COS},
+    {"tan", Op::TAN},
+    {"asin", Op::ARCSIN},
+    {"acos", Op::ARCCOS},
+    {"atan", Op::ARCTAN},
+    // Hyperbolic functions
+    {"sinh", Op::SINH},
+    {"cosh", Op::COSH},
+    {"tanh", Op::TANH},
+    {"asinh", Op::ARCSINH},
+    {"acosh", Op::ARCCOSH},
+    {"atanh", Op::ARCTANH},
+    // Exponential and logarithmic functions
+    {"exp", Op::EXP},
+    {"log", Op::LOG},
+    {"ln", Op::LOG},
+    // Root functions
+    {"sqrt", Op::SQRT},
+    {"cbrt", Op::CBRT},
+    // Rounding functions
+    {"ceil", Op::CEIL},
+    {"floor", Op::FLOOR},
+    {"rint", Op::RINT},
+    // Other functions
+    {"abs", Op::ABS},
+};
+
+const std::unordered_map<std::string, Op> unaryOps = [] {
+  std::unordered_map<std::string, Op> merged(
+      sparkUnaryOps.begin(), sparkUnaryOps.end());
+  merged.insert(prestoUnaryOps.begin(), prestoUnaryOps.end());
+  return merged;
+}();
 
 namespace detail {
 
@@ -225,6 +282,18 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
   using velox::exec::FieldReference;
   using Op = cudf::ast::ast_operator;
 
+  // For now, AST does not support expressions with DECIMAL output, or immediate
+  // DECIMAL inputs.
+  // @TODO implement DECIMAL in AST and JIT
+  if (containsDecimalType(expr, false)) {
+    if (cudf_velox::CudfConfig::getInstance().debugEnabled) {
+      LOG(WARNING)
+          << "Expression contains DECIMAL type, which is not supported by AST/JIT: "
+          << expr->toString();
+    }
+    return false;
+  }
+
   const auto name =
       stripPrefix(expr->name(), CudfConfig::getInstance().functionNamePrefix);
   const auto len = expr->inputs().size();
@@ -232,7 +301,7 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
   // Literals and field references are always supported
   auto isSupportedLiteral = [&](const TypePtr& type) {
     try {
-      auto cudfType = cudf::data_type(veloxToCudfTypeId(type));
+      auto cudfType = veloxToCudfDataType(type);
       return cudf::is_fixed_width(cudfType) ||
           cudfType.id() == cudf::type_id::STRING;
     } catch (...) {
@@ -260,8 +329,7 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
   inputCudfDataTypes.reserve(len);
   for (const auto& input : expr->inputs()) {
     try {
-      inputCudfDataTypes.push_back(
-          cudf::data_type(veloxToCudfTypeId(input->type())));
+      inputCudfDataTypes.push_back(veloxToCudfDataType(input->type()));
     } catch (...) {
       return false;
     }
@@ -386,7 +454,11 @@ cudf::ast::expression const& AstContext::addPrecomputeInstructionOnSide(
     auto nestedIndices = getNestedColumnIndices(
         inputRowSchema[sideIdx].get()->childAt(columnIndex), fieldName);
     precomputeInstructions[sideIdx].get().emplace_back(
-        columnIndex, instruction, newColumnIndex, nestedIndices, node);
+        columnIndex,
+        instruction,
+        newColumnIndex,
+        std::move(nestedIndices),
+        node);
   }
   auto side = static_cast<cudf::ast::table_reference>(sideIdx);
   return tree.push(cudf::ast::column_reference(newColumnIndex, side));
@@ -404,7 +476,7 @@ cudf::ast::expression const& AstContext::addPrecomputeInstruction(
           sideIdx, columnIndex, instruction, fieldName, node);
     }
   }
-  VELOX_FAIL("Field not found, " + name);
+  VELOX_FAIL("Field not found: {}", name);
 }
 
 /// Handles logical AND/OR expressions with multiple inputs by converting them
@@ -445,6 +517,22 @@ cudf::ast::expression const& AstContext::pushExprToTree(
 
   const auto name =
       stripPrefix(expr->name(), CudfConfig::getInstance().functionNamePrefix);
+
+  if (!detail::isAstExprSupported(expr)) {
+    if (canBeEvaluatedByCudf(expr, /*deep=*/false)) {
+      // Shallow check: only verify this operation is supported
+      // Children will be recursively handled by createCudfExpression
+      // Determine which side this expression references
+      int sideIdx = findExpressionSide(expr);
+      if (sideIdx < 0) {
+        sideIdx = 0; // Default to left side if no fields found
+      }
+      auto node = createCudfExpression(expr, inputRowSchema[sideIdx]);
+      return addPrecomputeInstructionOnSide(sideIdx, 0, name, "", node);
+    }
+    VELOX_FAIL("Unsupported expression: {}", name);
+  }
+
   auto len = expr->inputs().size();
   auto& type = expr->type();
 
@@ -481,7 +569,13 @@ cudf::ast::expression const& AstContext::pushExprToTree(
   } else if (unaryOps.find(name) != unaryOps.end()) {
     VELOX_CHECK_EQ(len, 1);
     auto const& op1 = pushExprToTree(expr->inputs()[0]);
-    return tree.push(Operation{unaryOps.at(name), op1});
+    // Spark result type is different with presto, presto is same with cudf
+    const auto& op2 = tree.push(Operation{unaryOps.at(name), op1});
+    if ((name == "ceil" || name == "floor") &&
+        expr->type()->kind() == TypeKind::BIGINT) {
+      return tree.push(Operation{Op::CAST_TO_INT64, op2});
+    }
+    return op2;
   } else if (name == "isnotnull") {
     VELOX_CHECK_EQ(len, 1);
     auto const& op1 = pushExprToTree(expr->inputs()[0]);
@@ -569,20 +663,9 @@ cudf::ast::expression const& AstContext::pushExprToTree(
         }
       }
     }
-    VELOX_FAIL("Field not found, " + name);
-  } else if (!allowPureAstOnly && canBeEvaluatedByCudf(expr, /*deep=*/false)) {
-    // Shallow check: only verify this operation is supported
-    // Children will be recursively handled by createCudfExpression
-    // Determine which side this expression references
-    int sideIdx = findExpressionSide(expr);
-    if (sideIdx < 0) {
-      sideIdx = 0; // Default to left side if no fields found
-    }
-    auto node =
-        createCudfExpression(expr, inputRowSchema[sideIdx], kAstEvaluatorName);
-    return addPrecomputeInstructionOnSide(sideIdx, 0, name, "", node);
+    VELOX_FAIL("Field not found: {}", name);
   } else {
-    VELOX_FAIL("Unsupported expression: " + name);
+    VELOX_UNREACHABLE("Unsupported expression: {}", name);
   }
 }
 
@@ -640,7 +723,7 @@ std::vector<ColumnOrView> precomputeSubexpressions(
           nested_dependent_column_indices[0]);
       precomputedColumns.push_back(view);
     } else {
-      VELOX_FAIL("Unsupported precompute operation " + ins_name);
+      VELOX_FAIL("Unsupported precompute operation {}", ins_name);
     }
   }
 

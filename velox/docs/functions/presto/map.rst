@@ -120,6 +120,27 @@ Map Functions
         SELECT map_values_in_range(MAP(ARRAY[1, 2], ARRAY[null, 50]), 0, 100); -- {1 -> null, 2 -> 50}
         SELECT map_values_in_range(MAP(ARRAY[1, 2, 3], ARRAY[5, 50, 500]), 10, 100); -- {2 -> 50}
 
+.. function:: map_values_all_match(x(K,V), function(V, boolean)) -> boolean
+
+    Returns true if all values in the given map match the predicate and false otherwise. NULL if the predicate function returns NULL for one or more values and true for all other values. Equivalent to ``all_match(map_values(x), predicate)`` but avoids materializing the intermediate array. ::
+
+        SELECT map_values_all_match(map(array['a', 'b', 'c'], array[1, 2, 3]), x -> x > 0); -- true
+        SELECT map_values_all_match(map(array['a', 'b', 'c'], array[1, 2, 3]), x -> x > 1); -- false
+
+.. function:: map_values_any_match(x(K,V), function(V, boolean)) -> boolean
+
+    Returns true if one or more values in the given map match the predicate and false otherwise. NULL if the predicate function returns NULL for one or more values and false for all other values. Equivalent to ``any_match(map_values(x), predicate)`` but avoids materializing the intermediate array. ::
+
+        SELECT map_values_any_match(map(array['a', 'b', 'c'], array[1, 2, 3]), x -> x = 1); -- true
+        SELECT map_values_any_match(map(array['a', 'b', 'c'], array[1, 2, 3]), x -> x = 5); -- false
+
+.. function:: map_values_none_match(x(K,V), function(V, boolean)) -> boolean
+
+    Returns true if no values in the given map match the predicate and false otherwise. NULL if the predicate function returns NULL for one or more values and false for all other values. Equivalent to ``none_match(map_values(x), predicate)`` but avoids materializing the intermediate array. ::
+
+        SELECT map_values_none_match(map(array['a', 'b', 'c'], array[1, 2, 3]), x -> x = 5); -- true
+        SELECT map_values_none_match(map(array['a', 'b', 'c'], array[1, 2, 3]), x -> x = 1); -- false
+
 .. function:: map_remove_null_values(map(K,V)) -> map(K,V)
 
     Returns a map by removing all the keys in input map with null values. If input

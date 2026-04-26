@@ -105,6 +105,55 @@ Functions
     Returns the mean of values between ``low_quantile`` and ``high_quantile`` (inclusive) from the T-digest ``digest``.
     Both quantile values must be between zero and one (inclusive), and ``low_quantile`` must be less than or equal to ``high_quantile``.
 
+.. function:: winsorized_mean(digest: tdigest<double>, low_quantile: double, high_quantile: double) -> double
+
+    Returns the Winsorized mean from the T-digest ``digest``. Values below
+    ``low_quantile`` are replaced with the boundary value at that quantile.
+    Values above ``high_quantile`` are replaced with the boundary value at
+    that quantile. The mean is then computed on all values including the
+    replaced tails. Both quantile values must be between zero and one
+    (inclusive), and ``low_quantile`` must be less than or equal to
+    ``high_quantile``.
+
+    Unlike :func:`trimmed_mean` which excludes tail values entirely,
+    ``winsorized_mean`` replaces them with the boundary values, keeping the
+    total count unchanged.
+
+.. function:: approx_winsorized_mean(x: double, low_quantile: double, high_quantile: double) -> double
+
+    Returns the approximate Winsorized mean of all input values of ``x``
+    using a T-digest sketch. This is a single-pass aggregate that replaces
+    values below ``low_quantile`` with the boundary value at that quantile,
+    and values above ``high_quantile`` with the boundary value at that
+    quantile, then computes the mean.
+
+    ``low_quantile`` and ``high_quantile`` must be constants between zero and
+    one (inclusive), and ``low_quantile`` must be less than or equal to
+    ``high_quantile``. The default compression factor is ``100``.
+
+    This function replaces the common two-pass pattern of computing percentile
+    thresholds with ``approx_percentile`` and then capping values with
+    ``LEAST``/``GREATEST`` before computing ``AVG``.
+
+    Example::
+
+        -- Old two-pass pattern:
+        WITH t AS (
+            SELECT APPROX_PERCENTILE(x, 0.99) AS thresh FROM data
+        )
+        SELECT AVG(LEAST(data.x, t.thresh)) FROM data, t;
+
+        -- New single-pass equivalent:
+        SELECT approx_winsorized_mean(x, 0.0, 0.99) FROM data;
+
+.. function:: approx_winsorized_mean(x: double, low_quantile: double, high_quantile: double, compression: double) -> double
+   :noindex:
+
+    Like the above, but with a specified compression factor. ``compression``
+    must be a positive constant. The default is ``100``, maximum is ``1000``,
+    and values lower than ``10`` are rounded to ``10``. Higher compression
+    means more accuracy at the cost of more memory.
+
 .. function:: value_at_quantile(digest: tdigest<double>, quantile: double) -> double
 
     Returns the approximate percentile value from the T-digest ``digest`` at the given ``quantile``.

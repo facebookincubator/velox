@@ -34,18 +34,17 @@ class MapFilterFunction : public FilterFunctionBase {
   void buildInMapSelectivityVector(
       SelectivityVector& rowsToFilterOn,
       BufferPtr flattenedInMap,
-      BufferPtr inMap,
+      const uint64_t* inMapBits,
       vector_size_t inMapSize,
       const SelectivityVector& rows,
       const vector_size_t* decodedIndices) const {
     // Flatten inMap buffer.
     auto* mutableFlattedInMap = flattenedInMap->asMutable<uint64_t>();
     bits::fillBits(mutableFlattedInMap, 0, inMapSize, false);
-    auto* mutableInMap = inMap ? inMap->asMutable<uint64_t>() : nullptr;
     rows.applyToSelected([&](vector_size_t row) {
       // If inMap is null, short circuit and set bit because key is present in
       // all rows.
-      if (!inMap || bits::isBitSet(mutableInMap, decodedIndices[row])) {
+      if (!inMapBits || bits::isBitSet(inMapBits, decodedIndices[row])) {
         bits::setBit(mutableFlattedInMap, decodedIndices[row]);
       }
     });
@@ -57,8 +56,50 @@ class MapFilterFunction : public FilterFunctionBase {
     rowsToFilterOn.updateBounds();
   }
 
+  enum class UniformResult { kAllTrue, kAllFalse, kMixed };
+
+  // Adds a fast path for detecting uniform lambda results (all-true or
+  // all-false) across in-map rows using O(N/64) word-level bitmap comparison,
+  // avoiding per-row decoding when the result is uniform.
+  UniformResult detectUniformResult(
+      const VectorPtr& lambdaResultBits,
+      const SelectivityVector& rowsToFilterOn) const {
+    if (lambdaResultBits->isConstantEncoding()) {
+      bool passAll = !lambdaResultBits->isNullAt(0) &&
+          lambdaResultBits->asUnchecked<ConstantVector<bool>>()->valueAt(0);
+      return passAll ? UniformResult::kAllTrue : UniformResult::kAllFalse;
+    }
+
+    if (lambdaResultBits->isFlatEncoding() &&
+        !lambdaResultBits->mayHaveNulls()) {
+      auto* resultBits = lambdaResultBits->asUnchecked<FlatVector<bool>>()
+                             ->template rawValues<uint64_t>();
+      auto* inMapBits = rowsToFilterOn.asRange().bits();
+      bool allTrue = true;
+      bool anyTrue = false;
+      bits::forEachWord(
+          0, rowsToFilterOn.end(), [&](int32_t idx, uint64_t mask) {
+            auto masked = resultBits[idx] & inMapBits[idx] & mask;
+            if (masked) {
+              anyTrue = true;
+            }
+            if (masked != (inMapBits[idx] & mask)) {
+              allTrue = false;
+            }
+          });
+      if (!anyTrue) {
+        return UniformResult::kAllFalse;
+      }
+      if (allTrue) {
+        return UniformResult::kAllTrue;
+      }
+    }
+
+    return UniformResult::kMixed;
+  }
+
   // Apply filter function to vector of encoding FlatMapVector. Because the
-  // entirety of the map values are stored in in a list of vectors (one vector
+  // entirety of the map values are stored in a list of vectors (one vector
   // per key), we will need to apply the filter function on each vector and
   // associated inMap buffer. Additionally, we will have to reduce the number of
   // distinct keys stored in the FlatMapVector if they key list changes.
@@ -115,10 +156,14 @@ class MapFilterFunction : public FilterFunctionBase {
         buildInMapSelectivityVector(
             rowsToFilterOn,
             flattenedInMap,
-            flatMap.inMaps()[channel],
+            flatMap.rawInMapsAt(channel),
             flatMap.size(),
             *entry.rows,
             decodedMap.indices());
+
+        if (!rowsToFilterOn.hasSelections()) {
+          continue;
+        }
 
         // Call lambda function and decode its output bit vector. We will
         // use it to determine what will persist to the final result vector.
@@ -135,8 +180,25 @@ class MapFilterFunction : public FilterFunctionBase {
             },
             decodedIndices,
             &lambdaResultBits);
-        bitsDecoder.get()->decode(*lambdaResultBits);
 
+        auto uniform = detectUniformResult(lambdaResultBits, rowsToFilterOn);
+        if (uniform == UniformResult::kAllFalse) {
+          continue;
+        }
+        if (uniform == UniformResult::kAllTrue) {
+          rawIndices[numDistinct++] = channel;
+          filteredMapValues.push_back(mapValues[channel]);
+          auto newInMap =
+              AlignedBuffer::allocate<bool>(numRows, context.pool(), 0);
+          memcpy(
+              newInMap->asMutable<void>(),
+              flattenedInMap->as<void>(),
+              bits::nbytes(numRows));
+          filteredInMaps.push_back(std::move(newInMap));
+          continue;
+        }
+
+        bitsDecoder.get()->decode(*lambdaResultBits, rowsToFilterOn);
         bool isFilteredIn = false;
         entry.rows->applyToSelected([&](vector_size_t row) {
           row = decodedMap.indices()[row];
@@ -147,8 +209,7 @@ class MapFilterFunction : public FilterFunctionBase {
             // vector and define a new filtered inMap buffer. Let's also note
             // the index of this key for key filtering.
             if (!isFilteredIn) {
-              filteredMapValues.push_back(
-                  BaseVector::copy(*mapValues[channel]));
+              filteredMapValues.push_back(mapValues[channel]);
               filteredInMaps.push_back(
                   AlignedBuffer::allocate<bool>(numRows, context.pool(), 0));
               filteredInMap = filteredInMaps.back()->asMutable<uint64_t>();
