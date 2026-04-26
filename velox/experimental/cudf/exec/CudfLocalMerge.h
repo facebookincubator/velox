@@ -16,12 +16,11 @@
 
 #pragma once
 
-#include "velox/experimental/cudf/exec/NvtxHelper.h"
+#include "velox/experimental/cudf/exec/CudfOperator.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/exec/MergeSource.h"
-#include "velox/exec/Operator.h"
 
 #include <cudf/types.hpp>
 
@@ -31,10 +30,10 @@ namespace facebook::velox::cudf_velox {
 /// draining all MergeSource queues (which carry CudfVectors as RowVectorPtrs),
 /// then performing a k-way sorted merge via cudf::merge() on the GPU.
 ///
-/// Inherits from SourceOperator (not from Merge) because the base Merge class's
-/// SourceMerger/TreeOfLosers/SourceStream all require CPU child vectors that
-/// CudfVector does not have.
-class CudfLocalMerge : public exec::SourceOperator, public NvtxHelper {
+/// Inherits from CudfSourceOperatorBase (not from Merge) because the base
+/// Merge class's SourceMerger/TreeOfLosers/SourceStream all require CPU child
+/// vectors that CudfVector does not have.
+class CudfLocalMerge : public CudfSourceOperatorBase {
  public:
   CudfLocalMerge(
       int32_t operatorId,
@@ -45,9 +44,10 @@ class CudfLocalMerge : public exec::SourceOperator, public NvtxHelper {
 
   bool isFinished() override;
 
-  RowVectorPtr getOutput() override;
+ protected:
+  RowVectorPtr doGetOutput() override;
 
-  void close() override;
+  void doClose() override;
 
  private:
   void addMergeSources();

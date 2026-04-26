@@ -32,7 +32,6 @@
 #include "velox/experimental/cudf/exec/CudfReduce.h"
 #include "velox/experimental/cudf/exec/CudfTopN.h"
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
-#include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/Validation.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
@@ -826,9 +825,15 @@ class CallbackSinkAdapter : public OperatorAdapter {
       const exec::Operator* /*op*/,
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* /*ctx*/) const override {
-    return planNode &&
+    auto supported = planNode &&
         std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode) !=
-        nullptr;
+            nullptr;
+    if (!supported) {
+      LOG_FALLBACK(
+          "CallbackSink operator not supported on cuDF, PlanNode id: {}",
+          planNode ? planNode->id() : "null");
+    }
+    return supported;
   }
 
   bool acceptsGpuInput() const override {
@@ -849,6 +854,51 @@ class CallbackSinkAdapter : public OperatorAdapter {
 
   bool keepOperator() const override {
     return true;
+  }
+};
+
+/// LocalMergeAdapter - Keeps original operator
+class LocalMergeAdapter : public OperatorAdapter {
+ public:
+  LocalMergeAdapter() : OperatorAdapter("LocalMerge") {}
+
+  bool canHandle(const exec::Operator* op) const override {
+    return dynamic_cast<const exec::LocalMerge*>(op) != nullptr;
+  }
+
+  bool canRunOnGPU(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& planNode,
+      exec::DriverCtx* /*ctx*/) const override {
+    return planNode &&
+        std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode) !=
+        nullptr;
+  }
+
+  bool acceptsGpuInput() const override {
+    return false;
+  }
+
+  bool producesGpuOutput() const override {
+    return true;
+  }
+
+  std::vector<std::unique_ptr<exec::Operator>> createReplacements(
+      const exec::Operator* op,
+      const core::PlanNodePtr& planNode,
+      exec::DriverCtx* ctx,
+      int32_t operatorId) const override {
+    auto localMergePlanNode =
+        std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode);
+
+    std::vector<std::unique_ptr<exec::Operator>> result;
+    result.push_back(
+        std::make_unique<CudfLocalMerge>(operatorId, ctx, localMergePlanNode));
+    return result;
+  }
+
+  bool keepOperator() const override {
+    return false;
   }
 };
 

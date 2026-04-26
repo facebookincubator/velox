@@ -15,6 +15,7 @@
  */
 
 #include "velox/experimental/cudf/exec/CudfLocalMerge.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 
 #include "velox/exec/Task.h"
@@ -27,16 +28,13 @@ CudfLocalMerge::CudfLocalMerge(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
     const std::shared_ptr<const core::LocalMergeNode>& localMergeNode)
-    : exec::SourceOperator(
+    : CudfSourceOperatorBase(
+          operatorId,
           driverCtx,
           localMergeNode->outputType(),
-          operatorId,
           localMergeNode->id(),
-          "CudfLocalMerge"),
-      NvtxHelper(
-          nvtx3::rgb{0, 206, 209}, // Dark Turquoise
-          operatorId,
-          fmt::format("[{}]", localMergeNode->id())),
+          "CudfLocalMerge",
+          nvtx3::rgb{0, 206, 209}), // Dark Turquoise
       cudaEvent_(std::make_unique<CudaEvent>(cudaEventDisableTiming)) {
   VELOX_CHECK_EQ(
       operatorCtx_->driverCtx()->driverId,
@@ -104,9 +102,7 @@ bool CudfLocalMerge::isFinished() {
   return finished_;
 }
 
-RowVectorPtr CudfLocalMerge::getOutput() {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
-
+RowVectorPtr CudfLocalMerge::doGetOutput() {
   if (finished_) {
     return nullptr;
   }
@@ -167,7 +163,8 @@ RowVectorPtr CudfLocalMerge::getOutput() {
       if (it->size() == 1) {
         return std::move(it->front());
       }
-      auto concatenated = getConcatenatedTable(*it, outputType_, stream);
+      auto concatenated =
+          getConcatenatedTable(std::move(*it), outputType_, stream, mr);
       auto numRows = concatenated->num_rows();
       return std::make_shared<CudfVector>(
           pool(), outputType_, numRows, std::move(concatenated), stream);
@@ -197,12 +194,12 @@ RowVectorPtr CudfLocalMerge::getOutput() {
       pool(), outputType_, numRows, std::move(mergedTable), stream);
 }
 
-void CudfLocalMerge::close() {
+void CudfLocalMerge::doClose() {
   for (auto& source : sources_) {
     source->close();
   }
   sourceData_.clear();
-  exec::Operator::close();
+  CudfSourceOperatorBase::doClose();
 }
 
 } // namespace facebook::velox::cudf_velox

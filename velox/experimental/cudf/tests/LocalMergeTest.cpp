@@ -14,10 +14,8 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
-#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"

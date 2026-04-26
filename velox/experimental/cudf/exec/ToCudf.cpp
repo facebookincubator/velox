@@ -16,15 +16,8 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
-#include "velox/experimental/cudf/exec/CudfGroupby.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
-#include "velox/experimental/cudf/exec/CudfLimit.h"
-#include "velox/experimental/cudf/exec/CudfLocalMerge.h"
-#include "velox/experimental/cudf/exec/CudfLocalPartition.h"
 #include "velox/experimental/cudf/exec/CudfOperator.h"
-#include "velox/experimental/cudf/exec/CudfOrderBy.h"
-#include "velox/experimental/cudf/exec/CudfReduce.h"
-#include "velox/experimental/cudf/exec/CudfTopN.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
 #include "velox/experimental/cudf/exec/PrestoAggregateFunctions.h"
@@ -34,21 +27,10 @@
 #include "velox/experimental/cudf/expression/JitExpression.h"
 
 #include "folly/Conv.h"
-#include "velox/exec/Driver.h"
-#include "velox/exec/FilterProject.h"
-#include "velox/exec/HashAggregation.h"
-#include "velox/exec/HashBuild.h"
-#include "velox/exec/HashProbe.h"
-#include "velox/exec/Limit.h"
-#include "velox/exec/Merge.h"
-#include "velox/exec/Operator.h"
-#include "velox/exec/Values.h"
 
 #include <cudf/detail/nvtx/ranges.hpp>
 
 #include <cuda.h>
-
-#include <iostream>
 
 static const std::string kCudfAdapterName = "cuDF";
 
@@ -75,6 +57,15 @@ core::PlanNodePtr CompileState::getPlanNode(const core::PlanNodeId& id) const {
   return driverFactory_.consumerNode;
 }
 
+core::PlanNodePtr CompileState::resolveOperatorPlanNode(
+    const exec::Operator* op) const {
+  const auto& id = op->planNodeId();
+  if (!id.empty() && id != "N/A") {
+    return getPlanNode(id);
+  }
+  return driverFactory_.consumerNode;
+}
+
 bool CompileState::compile(bool allowCpuFallback) {
   auto operators = driver_.operators();
 
@@ -92,12 +83,6 @@ bool CompileState::compile(bool allowCpuFallback) {
   bool replacementsMade = false;
   auto ctx = driver_.driverCtx();
 
-  // Helper to check if planNodeId is valid (some operators like CallbackSink
-  // have "N/A")
-  auto isValidPlanNodeId = [](const core::PlanNodeId& id) {
-    return !id.empty() && id != "N/A";
-  };
-
   // Use adapter registry for GPU Operator Replacement
   auto& registry = OperatorAdapterRegistry::getInstance();
 
@@ -107,17 +92,12 @@ bool CompileState::compile(bool allowCpuFallback) {
   };
 
   auto getOperatorProperties =
-      [&registry, this, &isValidPlanNodeId, ctx](const exec::Operator* op) {
+      [&registry, this, ctx](const exec::Operator* op) {
         OperatorProperties props;
         auto adapter = registry.findAdapter(op);
         props.adapter = adapter;
         if (adapter) {
-          core::PlanNodePtr planNode = nullptr;
-          if (isValidPlanNodeId(op->planNodeId())) {
-            planNode = getPlanNode(op->planNodeId());
-          } else if (driverFactory_.consumerNode) {
-            planNode = driverFactory_.consumerNode;
-          }
+          auto planNode = resolveOperatorPlanNode(op);
           if (planNode) {
             static_cast<OperatorAdapter::Properties&>(props) =
                 adapter->properties(op, planNode, ctx);
@@ -161,11 +141,7 @@ bool CompileState::compile(bool allowCpuFallback) {
 
     auto id = oper->operatorId();
 
-    // Cache planNode for this operator (avoid multiple lookups)
-    core::PlanNodePtr planNode = nullptr;
-    if (isValidPlanNodeId(oper->planNodeId())) {
-      planNode = getPlanNode(oper->planNodeId());
-    }
+    auto planNode = resolveOperatorPlanNode(oper);
 
     if (previousOperatorIsNotGpu and thisOpProps.acceptsGpuInput and planNode) {
       replaceOp.push_back(
@@ -247,9 +223,9 @@ bool CompileState::compile(bool allowCpuFallback) {
                    << (allowCpuFallback ? "Falling back to CPU execution"
                                         : "No fallback allowed");
       LOG(WARNING) << "Replacement Failed Operator: " << oper->toString();
-      auto planNode = getPlanNode(oper->planNodeId());
-      LOG(WARNING) << "Replacement Failed PlanNode: "
-                   << planNode->toString(true, false);
+      LOG(WARNING) << "Replacement Failed PlanNode: " << planNode
+          ? planNode->toString(true, false)
+          : "null";
     }
     if (!allowCpuFallback) {
       // condition is if GPU replacement success or if CPU operators itself is
