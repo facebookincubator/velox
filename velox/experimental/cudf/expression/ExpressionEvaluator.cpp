@@ -57,6 +57,7 @@
 
 #include <cmath>
 #include <memory>
+#include <mutex>
 
 namespace facebook::velox::cudf_velox {
 namespace {
@@ -398,21 +399,30 @@ __device__ void velox_round_double(
 }
 )***";
 
-      // Materialize decimals and factor as 1-element device columns so the
-      // UDF receives them as scalar-broadcast values (cuDF's
-      // scalar_column_view convention for transform_extended).
-      cudf::numeric_scalar<int32_t> decimalsScalar(scale_, true, stream, mr);
-      cudf::numeric_scalar<double> factorScalar(
-          std::pow(10.0, static_cast<double>(scale_)), true, stream, mr);
-      auto decimalsCol =
-          cudf::make_column_from_scalar(decimalsScalar, 1, stream, mr);
-      auto factorCol =
-          cudf::make_column_from_scalar(factorScalar, 1, stream, mr);
+      // The scale-derived `decimals` and `factor` values are constants for
+      // the lifetime of this RoundFunction. Build them on the device once
+      // (lazily, on the first eval's stream/mr) and reuse the same
+      // numeric_scalars across batches. Each eval then only constructs two
+      // non-owning column_views over those scalars' device storage and wraps
+      // them in scalar_column_view -- no per-batch device allocations.
+      ensureScalarsBuilt(stream, mr);
+      const cudf::column_view decimalsView{
+          cudf::data_type{cudf::type_id::INT32},
+          /*size=*/1,
+          decimalsScalar_->data(),
+          /*null_mask=*/nullptr,
+          /*null_count=*/0};
+      const cudf::column_view factorView{
+          cudf::data_type{cudf::type_id::FLOAT64},
+          1,
+          factorScalar_->data(),
+          nullptr,
+          0};
 
       const cudf::transform_input transformInputs[] = {
           inputCol,
-          cudf::scalar_column_view(decimalsCol->view()),
-          cudf::scalar_column_view(factorCol->view()),
+          cudf::scalar_column_view(decimalsView),
+          cudf::scalar_column_view(factorView),
       };
       return cudf::transform_extended(
           transformInputs,
@@ -432,7 +442,24 @@ __device__ void velox_round_double(
   }
 
  private:
+  // Lazily allocate the per-instance scalar broadcasts on first use. The
+  // numeric_scalars are bound to the stream/mr seen on the first eval, which
+  // matches Velox-cuDF's single-stream-per-operator execution model.
+  void ensureScalarsBuilt(
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const {
+    std::call_once(scalarsInit_, [&] {
+      decimalsScalar_ = std::make_unique<cudf::numeric_scalar<int32_t>>(
+          scale_, true, stream, mr);
+      factorScalar_ = std::make_unique<cudf::numeric_scalar<double>>(
+          std::pow(10.0, static_cast<double>(scale_)), true, stream, mr);
+    });
+  }
+
   int32_t scale_ = 0;
+  mutable std::once_flag scalarsInit_;
+  mutable std::unique_ptr<cudf::numeric_scalar<int32_t>> decimalsScalar_;
+  mutable std::unique_ptr<cudf::numeric_scalar<double>> factorScalar_;
 };
 
 class BinaryFunction : public CudfFunction {
