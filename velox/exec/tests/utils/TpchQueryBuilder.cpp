@@ -184,6 +184,8 @@ TpchPlan TpchQueryBuilder::getQueryPlan(int queryId) const {
       return getQ21Plan();
     case 22:
       return getQ22Plan();
+    case 23:
+      return getQ23Plan();
     default:
       VELOX_NYI("TPC-H query {} is not supported yet", queryId);
   }
@@ -2462,6 +2464,39 @@ TpchPlan TpchQueryBuilder::getQ22Plan() const {
   context.dataFiles[ordersScanNodeId] = getTableFilePaths(kOrders);
   context.dataFiles[customerScanNodeId] = getTableFilePaths(kCustomer);
   context.dataFiles[customerScanNodeIdWithKey] = getTableFilePaths(kCustomer);
+  context.dataFileFormat = format_;
+  return context;
+}
+
+TpchPlan TpchQueryBuilder::getQ23Plan() const {
+  std::vector<std::string> lineitemColumns = {
+      "l_orderkey", "l_linenumber", "l_quantity", "l_extendedprice"};
+
+  const auto lineitemSelectedRowType = getRowType(kLineitem, lineitemColumns);
+  const auto& lineitemFileColumns = getFileColumnNames(kLineitem);
+
+  core::PlanNodeId lineitemScanNodeId;
+
+  auto plan =
+      PlanBuilder(pool_.get())
+          .filtersAsNode(filtersAsNode_)
+          .tableScan(kLineitem, lineitemSelectedRowType, lineitemFileColumns)
+          .captureScanNodeId(lineitemScanNodeId)
+          .partialAggregation(
+              {"l_orderkey", "l_linenumber"},
+              {"sum(l_quantity) AS sum_quantity",
+               "sum(l_extendedprice) AS sum_extendedprice",
+               "count(0) AS line_count"})
+          .localPartition(std::vector<std::string>{})
+          .finalAggregation()
+          // Keep this benchmark focused on high-cardinality aggregation rather
+          // than GPU-to-CPU transfer of the row-cardinality result.
+          .limit(0, 1024, false)
+          .planNode();
+
+  TpchPlan context;
+  context.plan = std::move(plan);
+  context.dataFiles[lineitemScanNodeId] = getTableFilePaths(kLineitem);
   context.dataFileFormat = format_;
   return context;
 }
