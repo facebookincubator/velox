@@ -88,17 +88,21 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
       const std::vector<std::string>& subfieldFilters,
       const std::string& remainingFilter,
       const std::string& sql,
+      const RowTypePtr& dataColumn = nullptr,
       const connector::ColumnHandleMap& assignments = {}) {
     auto rowType = getRowType(std::move(outputColumnNames));
     parse::ParseOptions options;
     options.parseDecimalAsDouble = false;
 
-    auto plan =
-        PlanBuilder(pool_.get())
-            .setParseOptions(options)
-            .tableScan(
-                rowType, subfieldFilters, remainingFilter, nullptr, assignments)
-            .planNode();
+    auto plan = PlanBuilder(pool_.get())
+                    .setParseOptions(options)
+                    .tableScan(
+                        rowType,
+                        subfieldFilters,
+                        remainingFilter,
+                        dataColumn,
+                        assignments)
+                    .planNode();
 
     AssertQueryBuilder(plan, duckDbQueryRunner_)
         .connectorSessionProperty(
@@ -224,7 +228,9 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
     writer->close();
   }
 
-  void testTimestampRead(const WriterOptions& options) {
+  void testTimestampRead(
+      const WriterOptions& options,
+      bool readAsTimestampUtc = false) {
     auto stringToTimestamp = [](std::string_view view) {
       return util::fromTimestampString(
                  view.data(),
@@ -246,60 +252,88 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
         "2000-09-12 22:36:29",
         "2007-12-12 04:27:56.999",
     };
+
     std::vector<Timestamp> values;
+    std::vector<Timestamp> expectedValues;
     values.reserve(views.size());
     for (auto view : views) {
-      values.emplace_back(stringToTimestamp(view));
+      auto ts = stringToTimestamp(view);
+      values.emplace_back(ts);
+      if (options.parquetWriteTimestampUnit ==
+          TimestampPrecision::kMilliseconds) {
+        expectedValues.emplace_back(Timestamp::fromMillis(ts.toMillis()));
+      } else {
+        expectedValues.emplace_back(ts);
+      }
     }
 
-    auto vector = makeRowVector(
-        {"t"},
-        {
-            makeFlatVector<Timestamp>(values),
-        });
-    auto schema = asRowType(vector->type());
     auto file = TempFilePath::create();
-    writeToParquetFile(file->getPath(), {vector}, options);
-    loadData(schema, vector);
+    writeToParquetFile(
+        file->getPath(),
+        {makeRowVector(
+            {"t"},
+            {
+                makeFlatVector<Timestamp>(values),
+            })},
+        options);
+    loadData(
+        ROW({"t"}, {readAsTimestampUtc ? TIMESTAMP_UTC() : TIMESTAMP()}),
+        makeRowVector(
+            {"t"},
+            {
+                makeFlatVector<Timestamp>(expectedValues),
+            }));
 
+    const auto dataColumns = ROW({"t"}, {TIMESTAMP()});
     assertSelectWithFilter(
-        {makeSplit(file->getPath())}, {"t"}, {}, "", "SELECT t from tmp");
+        {makeSplit(file->getPath())},
+        {"t"},
+        {},
+        "",
+        "SELECT t from tmp",
+        dataColumns);
     assertSelectWithFilter(
         {makeSplit(file->getPath())},
         {"t"},
         {},
         "t < TIMESTAMP '2000-09-12 22:36:29'",
-        "SELECT t from tmp where t < TIMESTAMP '2000-09-12 22:36:29'");
+        "SELECT t from tmp where t < TIMESTAMP '2000-09-12 22:36:29'",
+        dataColumns);
     assertSelectWithFilter(
         {makeSplit(file->getPath())},
         {"t"},
         {},
         "t <= TIMESTAMP '2000-09-12 22:36:29'",
-        "SELECT t from tmp where t <= TIMESTAMP '2000-09-12 22:36:29'");
+        "SELECT t from tmp where t <= TIMESTAMP '2000-09-12 22:36:29'",
+        dataColumns);
     assertSelectWithFilter(
         {makeSplit(file->getPath())},
         {"t"},
         {},
         "t > TIMESTAMP '1980-01-24 00:23:07'",
-        "SELECT t from tmp where t > TIMESTAMP '1980-01-24 00:23:07'");
+        "SELECT t from tmp where t > TIMESTAMP '1980-01-24 00:23:07'",
+        dataColumns);
     assertSelectWithFilter(
         {makeSplit(file->getPath())},
         {"t"},
         {},
         "t >= TIMESTAMP '1980-01-24 00:23:07'",
-        "SELECT t from tmp where t >= TIMESTAMP '1980-01-24 00:23:07'");
+        "SELECT t from tmp where t >= TIMESTAMP '1980-01-24 00:23:07'",
+        dataColumns);
     assertSelectWithFilter(
         {makeSplit(file->getPath())},
         {"t"},
         {},
         "t == TIMESTAMP '2022-12-23 03:56:01'",
-        "SELECT t from tmp where t == TIMESTAMP '2022-12-23 03:56:01'");
+        "SELECT t from tmp where t == TIMESTAMP '2022-12-23 03:56:01'",
+        dataColumns);
     assertSelectWithFilter(
         {makeSplit(file->getPath())},
         {"t"},
         {},
         "not(eq(t, TIMESTAMP '2000-09-12 22:36:29'))",
-        "SELECT t from tmp where t != TIMESTAMP '2000-09-12 22:36:29'");
+        "SELECT t from tmp where t != TIMESTAMP '2000-09-12 22:36:29'",
+        dataColumns);
   }
 
  private:
@@ -1048,6 +1082,7 @@ TEST_F(ParquetTableScanTest, filterNullIcebergPartition) {
       {"c1 IS NOT NULL"},
       "",
       "SELECT c0, c1 FROM tmp WHERE c1 IS NOT NULL",
+      nullptr,
       connector::ColumnHandleMap{{"c0", c0}, {"c1", c1}});
 
   assertSelectWithFilter(
@@ -1059,6 +1094,7 @@ TEST_F(ParquetTableScanTest, filterNullIcebergPartition) {
       {"c1 IS NULL"},
       "",
       "SELECT c0, c1 FROM tmp WHERE c1 IS NULL",
+      nullptr,
       connector::ColumnHandleMap{{"c0", c0}, {"c1", c1}});
 }
 
@@ -1183,6 +1219,38 @@ TEST_F(ParquetTableScanTest, timestampPrecisionMicrosecond) {
     });
     assertEqualResults({expected}, {result});
   }
+}
+
+TEST_F(ParquetTableScanTest, timestampUtcPlainMicro) {
+  parquet::WriterOptions options;
+  options.writeInt96AsTimestamp = false;
+  options.enableDictionary = false;
+  options.parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
+  testTimestampRead(options, true);
+}
+
+TEST_F(ParquetTableScanTest, timestampUtcDictionaryMicro) {
+  parquet::WriterOptions options;
+  options.writeInt96AsTimestamp = false;
+  options.enableDictionary = true;
+  options.parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
+  testTimestampRead(options, true);
+}
+
+TEST_F(ParquetTableScanTest, timestampUtcPlainMilli) {
+  parquet::WriterOptions options;
+  options.writeInt96AsTimestamp = false;
+  options.enableDictionary = false;
+  options.parquetWriteTimestampUnit = TimestampPrecision::kMilliseconds;
+  testTimestampRead(options, true);
+}
+
+TEST_F(ParquetTableScanTest, timestampUtcDictionaryMilli) {
+  parquet::WriterOptions options;
+  options.writeInt96AsTimestamp = false;
+  options.enableDictionary = true;
+  options.parquetWriteTimestampUnit = TimestampPrecision::kMilliseconds;
+  testTimestampRead(options, true);
 }
 
 TEST_F(ParquetTableScanTest, testColumnNotExists) {
@@ -1412,6 +1480,201 @@ TEST_F(ParquetTableScanTest, schemaMatch) {
   assertEqualVectors(rows->childAt(0), dataFileVectors->childAt(0));
   assertEqualVectors(rows->childAt(1), dataFileVectors->childAt(1));
   assertEqualVectors(rows->childAt(2), nullVector);
+}
+
+TEST_F(ParquetTableScanTest, structMatchByName) {
+  const auto assertSelectUseColumnNames =
+      [this](
+          const std::string& filePath,
+          const RowTypePtr& outputType,
+          const std::string& sql,
+          const std::string& remainingFilter = "") {
+        const auto plan =
+            PlanBuilder().tableScan(outputType, {}, remainingFilter).planNode();
+        AssertQueryBuilder(plan, duckDbQueryRunner_)
+            .connectorSessionProperty(
+                kHiveConnectorId,
+                HiveConfig::kParquetUseColumnNamesSession,
+                "true")
+            .split(makeSplit(filePath))
+            .assertResults(sql);
+      };
+
+  std::vector<int64_t> values = {2};
+  const auto id = makeFlatVector<int64_t>(values);
+  const auto name = makeRowVector(
+      {"first", "last"},
+      {
+          makeFlatVector<std::string>({"Janet"}),
+          makeFlatVector<std::string>({"Jones"}),
+      });
+  const auto address = makeFlatVector<std::string>({"567 Maple Drive"});
+  auto vector = makeRowVector({"id", "name", "address"}, {id, name, address});
+
+  WriterOptions options;
+  auto file = TempFilePath::create();
+  writeToParquetFile(file->getPath(), {vector}, options);
+
+  loadData(asRowType(vector->type()), vector);
+  assertSelect(
+      {makeSplit(file->getPath())},
+      {"id", "name", "address"},
+      "SELECT id, name, address from tmp");
+
+  // Add one non-existing subfield 'middle' to the 'name' field and rename filed
+  // 'address'.
+  auto rowType =
+      ROW({"id", "name", "email"},
+          {BIGINT(),
+           ROW({"first", "middle", "last"}, {VARCHAR(), VARCHAR(), VARCHAR()}),
+           VARCHAR()});
+  loadData(rowType, vector);
+  assertSelectUseColumnNames(
+      file->getPath(), rowType, "SELECT 2, ('Janet', null, 'Jones'), null");
+
+  // Filter pushdown on the non-existing field.
+  assertSelectUseColumnNames(
+      file->getPath(),
+      rowType,
+      "SELECT * from tmp where false",
+      "not(is_null(name.middle))");
+
+  // Rename subfields of the 'name' field.
+  rowType =
+      ROW({"id", "name", "address"},
+          {BIGINT(), ROW({"a", "b"}, {VARCHAR(), VARCHAR()}), VARCHAR()});
+  loadData(rowType, vector);
+  assertSelectUseColumnNames(
+      file->getPath(), rowType, "SELECT 2, null, '567 Maple Drive'");
+
+  // Filter pushdown on the NULL subfield.
+  assertSelectUseColumnNames(
+      file->getPath(),
+      rowType,
+      "SELECT * from tmp where false",
+      "not(is_null(name))");
+
+  // Deletion of one subfield from the 'name' field.
+  rowType =
+      ROW({"id", "name", "address"},
+          {BIGINT(), ROW({"full"}, {VARCHAR()}), VARCHAR()});
+  loadData(rowType, vector);
+  assertSelectUseColumnNames(
+      file->getPath(), rowType, "SELECT 2, null, '567 Maple Drive'");
+
+  // Filter pushdown on the non-existing subfield.
+  assertSelectUseColumnNames(
+      file->getPath(),
+      rowType,
+      "SELECT * from tmp where false",
+      "not(is_null(name.full))");
+
+  // No subfield in the 'name' field.
+  rowType = ROW({"id", "name", "address"}, {BIGINT(), ROW({}, {}), VARCHAR()});
+  loadData(rowType, vector);
+  assertSelectUseColumnNames(
+      file->getPath(), rowType, "SELECT 2, null, '567 Maple Drive'");
+
+  // Case sensitivity when matching by name.
+  vector = makeRowVector(
+      {"id", "name", "address"},
+      {id,
+       makeRowVector(
+           {"FIRST", "LAST"},
+           {
+               makeFlatVector<std::string>({"Janet"}),
+               makeFlatVector<std::string>({"Jones"}),
+           }),
+       address});
+  file = TempFilePath::create();
+  writeToParquetFile(file->getPath(), {vector}, options);
+
+  rowType =
+      ROW({"id", "name", "address"},
+          {BIGINT(),
+           ROW({"first", "middle", "last"}, {VARCHAR(), VARCHAR(), VARCHAR()}),
+           VARCHAR()});
+  loadData(rowType, vector);
+  assertSelectUseColumnNames(
+      file->getPath(), rowType, "SELECT 2, null, '567 Maple Drive'");
+
+  // Case insensitivity when matching by name and reading as lower case.
+  auto plan = PlanBuilder().tableScan(rowType, {}, "", rowType).planNode();
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .connectorSessionProperty(
+          kHiveConnectorId, HiveConfig::kParquetUseColumnNamesSession, "true")
+      .connectorSessionProperty(
+          kHiveConnectorId,
+          HiveConfig::kFileColumnNamesReadAsLowerCaseSession,
+          "true")
+      .split(makeSplit(file->getPath()))
+      .assertResults("SELECT 2, ('Janet', null, 'Jones'), '567 Maple Drive'");
+}
+
+TEST_F(ParquetTableScanTest, structMatchByIndex) {
+  std::vector<int64_t> values = {2};
+  const auto id = makeFlatVector<int64_t>(values);
+  const auto name = makeRowVector(
+      {"first", "last"},
+      {
+          makeFlatVector<std::string>({"Janet"}),
+          makeFlatVector<std::string>({"Jones"}),
+      });
+  const auto address = makeFlatVector<std::string>({"567 Maple Drive"});
+  const auto vector =
+      makeRowVector({"id", "name", "address"}, {id, name, address});
+
+  WriterOptions options;
+  const auto file = TempFilePath::create();
+  writeToParquetFile(file->getPath(), {vector}, options);
+
+  loadData(asRowType(vector->type()), vector);
+  assertSelect(
+      {makeSplit(file->getPath())},
+      {"id", "name", "address"},
+      "SELECT id, name, address from tmp");
+
+  // Add one nonexisting subfield 'middle' to the 'name' field.
+  auto rowType =
+      ROW({"id", "name", "address"},
+          {BIGINT(),
+           ROW({"first", "middle", "last"}, {VARCHAR(), VARCHAR(), VARCHAR()}),
+           VARCHAR()});
+  loadData(rowType, vector);
+  assertSelectWithDataColumns(
+      {makeSplit(file->getPath())},
+      {"id", "name", "address"},
+      rowType,
+      "SELECT 2, ('Janet', 'Jones', null), '567 Maple Drive'");
+
+  // Rename subfields of the 'name' field.
+  rowType =
+      ROW({"id", "name", "address"},
+          {BIGINT(), ROW({"a", "b"}, {VARCHAR(), VARCHAR()}), VARCHAR()});
+  loadData(rowType, vector);
+  assertSelectWithDataColumns(
+      {makeSplit(file->getPath())},
+      {"id", "name", "address"},
+      rowType,
+      "SELECT 2, ('Janet', 'Jones'), '567 Maple Drive'");
+
+  // Deletion of one subfield from the 'name' field.
+  rowType =
+      ROW({"id", "name", "address"},
+          {BIGINT(), ROW({"full"}, {VARCHAR()}), VARCHAR()});
+  loadData(rowType, vector);
+  EXPECT_THROW(
+      assertSelectWithDataColumns(
+          {makeSplit(file->getPath())}, {"id", "name", "address"}, rowType, ""),
+      VeloxRuntimeError);
+
+  // No subfield in the 'name' field.
+  rowType = ROW({"id", "name", "address"}, {BIGINT(), ROW({}, {}), VARCHAR()});
+  loadData(rowType, vector);
+  EXPECT_THROW(
+      assertSelectWithDataColumns(
+          {makeSplit(file->getPath())}, {"id", "name", "address"}, rowType, ""),
+      VeloxRuntimeError);
 }
 
 TEST_F(ParquetTableScanTest, deltaByteArray) {

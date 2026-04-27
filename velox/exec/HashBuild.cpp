@@ -48,6 +48,25 @@ BlockingReason fromStateToBlockingReason(HashBuild::State state) {
 }
 } // namespace
 
+void HashBuild::setReusableHashTable(
+    std::shared_ptr<core::OpaqueHashTable> opaqueHashTable) {
+  joinBridge_->start();
+  setState(State::kFinish);
+
+  if (joinNode_->joinHasNullKeys() && isAntiJoin(joinType_) && nullAware_ &&
+      !joinNode_->filter()) {
+    joinBridge_->setAntiJoinHasNullKeys();
+    return;
+  }
+
+  auto reusableHashTable =
+      std::reinterpret_pointer_cast<exec::BaseHashTable>(opaqueHashTable);
+
+  joinBridge_->setHashTable(
+      std::move(reusableHashTable), {}, joinNode_->joinHasNullKeys(), nullptr);
+  reuseHashTable_ = true;
+}
+
 HashBuild::HashBuild(
     int32_t operatorId,
     DriverCtx* driverCtx,
@@ -81,6 +100,12 @@ HashBuild::HashBuild(
   VELOX_CHECK_NOT_NULL(joinBridge_);
 
   joinBridge_->addBuilder();
+
+  if (auto opaqueHashTable = joinNode_->reusableHashTable()) {
+    TestValue::adjust("facebook::velox::exec::HashBuild::HashBuild", this);
+    setReusableHashTable(opaqueHashTable);
+    return;
+  }
 
   const auto& inputType = joinNode_->sources()[1]->outputType();
 
@@ -123,7 +148,7 @@ HashBuild::HashBuild(
 void HashBuild::initialize() {
   Operator::initialize();
 
-  if (setupCachedHashTable()) {
+  if (setupCachedHashTable() || reuseHashTable_) {
     return;
   }
 

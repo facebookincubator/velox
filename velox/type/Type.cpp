@@ -268,6 +268,7 @@ void Type::registerSerDe() {
   registry.Register(
       "IntervalYearMonthType", IntervalYearMonthType::deserialize);
   registry.Register("DateType", DateType::deserialize);
+  registry.Register("TimestampType", TimestampSerDe::deserialize);
   registry.Register("TimeType", TimeTypeFactory::deserialize);
 }
 
@@ -1026,6 +1027,10 @@ VELOX_DEFINE_SCALAR_ACCESSOR(VARBINARY);
 
 #undef VELOX_DEFINE_SCALAR_ACCESSOR
 
+TypePtr TIMESTAMP_UTC() {
+  return TimestampUtcType::get();
+}
+
 TypePtr UNKNOWN() {
   return TypeFactory<TypeKind::UNKNOWN>::create();
 }
@@ -1363,6 +1368,7 @@ const SingletonTypeMap& singletonBuiltInTypes() {
       {"VARCHAR", VARCHAR()},
       {"VARBINARY", VARBINARY()},
       {"TIMESTAMP", TIMESTAMP()},
+      {"TIMESTAMP UTC", TIMESTAMP_UTC()},
       {"INTERVAL DAY TO SECOND", INTERVAL_DAY_TIME()},
       {"INTERVAL YEAR TO MONTH", INTERVAL_YEAR_MONTH()},
       {"DATE", DATE()},
@@ -1546,6 +1552,27 @@ const auto& typeParameterKindNames() {
 } // namespace
 
 VELOX_DEFINE_ENUM_NAME(TypeParameterKind, typeParameterKindNames);
+
+// static
+folly::dynamic TimestampSerDe::serialize(bool localTime) {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = "TimestampType";
+  obj["type"] = TypeTraits<TypeKind::TIMESTAMP>::name;
+  if (!localTime) {
+    obj["localTime"] = false;
+  }
+  return obj;
+}
+
+// static
+TypePtr TimestampSerDe::deserialize(const folly::dynamic& obj) {
+  const bool localTime =
+      obj.get_ptr("localTime") ? obj["localTime"].asBool() : true;
+  if (localTime) {
+    return static_cast<TypePtr>(TimestampType::get());
+  }
+  return static_cast<TypePtr>(TimestampUtcType::get());
+}
 
 template <TimePrecision kPrecision, bool kLocalTime>
 folly::dynamic TimeType<kPrecision, kLocalTime>::serialize() const {

@@ -1396,9 +1396,57 @@ using BigintType = ScalarType<TypeKind::BIGINT>;
 using HugeintType = ScalarType<TypeKind::HUGEINT>;
 using RealType = ScalarType<TypeKind::REAL>;
 using DoubleType = ScalarType<TypeKind::DOUBLE>;
-using TimestampType = ScalarType<TypeKind::TIMESTAMP>;
 using VarcharType = ScalarType<TypeKind::VARCHAR>;
 using VarbinaryType = ScalarType<TypeKind::VARBINARY>;
+
+struct TimestampSerDe {
+  static folly::dynamic serialize(bool localTime = true);
+  static TypePtr deserialize(const folly::dynamic& obj);
+};
+
+class TimestampType final : public ScalarType<TypeKind::TIMESTAMP> {
+ public:
+  static std::shared_ptr<const TimestampType> get() {
+    VELOX_CONSTEXPR_SINGLETON TimestampType kInstance;
+    return {std::shared_ptr<const TimestampType>{}, &kInstance};
+  }
+
+  folly::dynamic serialize() const override {
+    return TimestampSerDe::serialize();
+  }
+
+ private:
+  constexpr TimestampType() = default;
+};
+
+// Timestamp type that is not timezone-aware.
+class TimestampUtcType final : public ScalarType<TypeKind::TIMESTAMP> {
+ public:
+  static std::shared_ptr<const TimestampUtcType> get() {
+    VELOX_CONSTEXPR_SINGLETON TimestampUtcType kInstance;
+    return {std::shared_ptr<const TimestampUtcType>{}, &kInstance};
+  }
+
+  const char* name() const override {
+    return "TIMESTAMP UTC";
+  }
+
+  bool equivalent(const Type& other) const override {
+    // Pointer comparison works since this type is a singleton.
+    return this == &other;
+  }
+
+  std::string toString() const override {
+    return name();
+  }
+
+  folly::dynamic serialize() const override {
+    return TimestampSerDe::serialize(false);
+  }
+
+ private:
+  constexpr TimestampUtcType() = default;
+};
 
 constexpr long kMillisInSecond = 1000;
 constexpr long kMillisInMinute = 60 * kMillisInSecond;
@@ -2218,6 +2266,8 @@ VELOX_SCALAR_ACCESSOR(DOUBLE);
 VELOX_SCALAR_ACCESSOR(TIMESTAMP);
 VELOX_SCALAR_ACCESSOR(VARCHAR);
 VELOX_SCALAR_ACCESSOR(VARBINARY);
+
+TypePtr TIMESTAMP_UTC();
 
 TypePtr UNKNOWN();
 

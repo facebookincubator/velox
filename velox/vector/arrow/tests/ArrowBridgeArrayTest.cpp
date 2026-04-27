@@ -23,6 +23,7 @@
 #include "velox/common/base/Nulls.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/QueryCtx.h"
+#include "velox/vector/arrow/ArrowSchemaMetadata.h"
 #include "velox/vector/arrow/Bridge.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -555,6 +556,32 @@ TEST_F(ArrowBridgeArrayExportTest, flatTimestamp) {
   // starting around 2263-01-01 should overflow and throw a user exception.
   EXPECT_THROW(
       testFlatVector<Timestamp>({Timestamp(9246211200, 0)}, TIMESTAMP()),
+      VeloxUserError);
+}
+
+TEST_F(ArrowBridgeArrayExportTest, flatTimestampUtc) {
+  for (TimestampUnit unit :
+       {TimestampUnit::kSecond,
+        TimestampUnit::kMilli,
+        TimestampUnit::kMicro,
+        TimestampUnit::kNano}) {
+    options_.timestampUnit = unit;
+    testFlatVector<Timestamp>(
+        {
+            Timestamp(0, 0),
+            std::nullopt,
+            Timestamp(1699300965, 12'349),
+            Timestamp(-2208960000, 0), // 1900-01-01
+            Timestamp(3155788800, 999'999'999),
+            std::nullopt,
+        },
+        TIMESTAMP_UTC());
+  }
+
+  // Out of range. If nanosecond precision is represented in Arrow, timestamps
+  // starting around 2263-01-01 should overflow and throw a user exception.
+  EXPECT_THROW(
+      testFlatVector<Timestamp>({Timestamp(9246211200, 0)}, TIMESTAMP_UTC()),
       VeloxUserError);
 }
 
@@ -1394,6 +1421,26 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
          std::nullopt});
   }
 
+  void testImportTimestampUtc() {
+    std::vector<std::optional<int64_t>> inputValues = {
+        0,
+        std::nullopt,
+        Timestamp::kMaxSeconds,
+    };
+
+    ArrowContextHolder holder;
+    auto arrowArray = fillArrowArray(inputValues, holder);
+    auto arrowSchema = makeArrowSchema("tsn:");
+    auto metadata = encodeSingleKeyValue(
+        kVeloxTimestampTypeMetadataKey, kVeloxTimestampUtcMetadataValue);
+    arrowSchema.metadata = metadata.data();
+
+    auto output = importFromArrow(arrowSchema, arrowArray, pool_.get());
+    EXPECT_TRUE(output->type()->equivalent(*TIMESTAMP_UTC()));
+    assertTimestampVectorContent(
+        inputValues, output, arrowArray.null_count, arrowSchema.format);
+  }
+
   template <typename TOutput, typename TInput>
   void testImportWithoutNullsBuffer(
       std::vector<std::optional<TInput>> inputValues,
@@ -2024,6 +2071,10 @@ TEST_F(ArrowBridgeArrayImportAsViewerTest, scalar) {
   testImportScalar();
 }
 
+TEST_F(ArrowBridgeArrayImportAsViewerTest, timestampUtc) {
+  testImportTimestampUtc();
+}
+
 TEST_F(ArrowBridgeArrayImportAsViewerTest, without_nulls_buffer) {
   std::vector<std::optional<int64_t>> inputValues = {1, 2, 3, 4, 5};
   testImportWithoutNullsBuffer<int64_t>(inputValues, "l");
@@ -2128,6 +2179,10 @@ class ArrowBridgeArrayImportAsOwnerTest
 
 TEST_F(ArrowBridgeArrayImportAsOwnerTest, scalar) {
   testImportScalar();
+}
+
+TEST_F(ArrowBridgeArrayImportAsOwnerTest, timestampUtc) {
+  testImportTimestampUtc();
 }
 
 TEST_F(ArrowBridgeArrayImportAsOwnerTest, without_nulls_buffer) {
