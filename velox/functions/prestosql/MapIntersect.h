@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/core/QueryConfig.h"
 #include "velox/expression/ComplexViewTypes.h"
 #include "velox/functions/Udf.h"
 #include "velox/type/FloatingPointUtil.h"
@@ -119,6 +120,136 @@ struct MapIntersectVarcharFunction {
       searchKeys_.clear();
       for (const auto& key : keys.skipNulls()) {
         searchKeys_.emplace(key);
+      }
+    }
+
+    if (searchKeys_.empty()) {
+      return;
+    }
+
+    for (const auto& entry : inputMap) {
+      if (!searchKeys_.contains(entry.first)) {
+        continue;
+      }
+
+      if (!entry.second.has_value()) {
+        auto& keyWriter = out.add_null();
+        keyWriter.copy_from(entry.first);
+      } else {
+        auto [keyWriter, valueWriter] = out.add_item();
+        keyWriter.copy_from(entry.first);
+        valueWriter.copy_from(entry.second.value());
+      }
+    }
+  }
+
+ private:
+  bool constantSearchKeys_{false};
+  folly::F14FastSet<StringView> searchKeys_;
+  std::vector<std::string> searchKeyStrings_;
+};
+
+/// Fast path for constant primitive type keys when the second argument is a
+/// map: map_intersect(m, map(...)). Only the keys of the second map are used;
+/// its values are ignored.
+template <typename TExec, typename Key>
+struct MapIntersectMapPrimitiveFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& /*config*/,
+      const arg_type<Map<Key, Generic<T1>>>* /*inputMap*/,
+      const arg_type<Map<Key, Generic<T2>>>* keysMap) {
+    if (keysMap != nullptr) {
+      constantSearchKeys_ = true;
+      addKeysFromMap(*keysMap);
+    }
+  }
+
+  void call(
+      out_type<Map<Key, Generic<T1>>>& out,
+      const arg_type<Map<Key, Generic<T1>>>& inputMap,
+      const arg_type<Map<Key, Generic<T2>>>& keysMap) {
+    if (keysMap.empty()) {
+      return;
+    }
+
+    if (!constantSearchKeys_) {
+      searchKeys_.clear();
+      addKeysFromMap(keysMap);
+    }
+
+    if (searchKeys_.empty()) {
+      return;
+    }
+
+    for (const auto& entry : inputMap) {
+      if (!searchKeys_.contains(entry.first)) {
+        continue;
+      }
+
+      if (!entry.second.has_value()) {
+        auto& keyWriter = out.add_null();
+        keyWriter = entry.first;
+      } else {
+        auto [keyWriter, valueWriter] = out.add_item();
+        keyWriter = entry.first;
+        valueWriter.copy_from(entry.second.value());
+      }
+    }
+  }
+
+ private:
+  void addKeysFromMap(const arg_type<Map<Key, Generic<T2>>>& keysMap) {
+    for (const auto& entry : keysMap) {
+      searchKeys_.emplace(entry.first);
+    }
+  }
+
+  bool constantSearchKeys_{false};
+  util::floating_point::HashSetNaNAware<arg_type<Key>> searchKeys_;
+};
+
+/// Fast path for constant string keys when the second argument is a map:
+/// map_intersect(m, map(...)).
+template <typename TExec>
+struct MapIntersectMapVarcharFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& /*config*/,
+      const arg_type<Map<Varchar, Generic<T1>>>* /*inputMap*/,
+      const arg_type<Map<Varchar, Generic<T2>>>* keysMap) {
+    if (keysMap != nullptr) {
+      constantSearchKeys_ = true;
+
+      searchKeyStrings_.reserve(keysMap->size());
+      for (const auto& entry : *keysMap) {
+        const auto& key = entry.first;
+        if (key.isInline()) {
+          searchKeys_.emplace(key);
+        } else if (!searchKeys_.contains(key)) {
+          searchKeyStrings_.push_back(key.str());
+          searchKeys_.emplace(StringView(searchKeyStrings_.back()));
+        }
+      }
+    }
+  }
+
+  void call(
+      out_type<Map<Varchar, Generic<T1>>>& out,
+      const arg_type<Map<Varchar, Generic<T1>>>& inputMap,
+      const arg_type<Map<Varchar, Generic<T2>>>& keysMap) {
+    if (keysMap.empty()) {
+      return;
+    }
+
+    if (!constantSearchKeys_) {
+      searchKeys_.clear();
+      for (const auto& entry : keysMap) {
+        searchKeys_.emplace(entry.first);
       }
     }
 

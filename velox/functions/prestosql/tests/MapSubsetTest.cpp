@@ -291,5 +291,115 @@ TEST_F(MapSubsetTest, timestampWithTimeZone) {
   assertEqualVectors(expectedWithRowKeys, result);
 }
 
+TEST_F(MapSubsetTest, bigintKeyMapSecondArg) {
+  auto data = makeRowVector({
+      makeMapVectorFromJson<int64_t, int32_t>({
+          "{1:10, 2:20, 3:null, 4:40, 5:50, 6:60}",
+          "{1:10, 2:20, 4:40, 5:50}",
+          "{}",
+          "{2:20, 4:40, 6:60}",
+      }),
+      // The values of the second map are intentionally unrelated to the input
+      // map to verify that only the keys are used.
+      makeMapVectorFromJson<int64_t, std::string>({
+          "{1:\"a\", 3:\"b\", 5:\"c\"}",
+          "{1:\"a\", 3:\"b\", 5:\"c\", 7:\"d\"}",
+          "{3:\"a\", 5:\"b\"}",
+          "{1:\"a\", 3:\"b\"}",
+      }),
+  });
+
+  auto expected = makeMapVectorFromJson<int64_t, int32_t>({
+      "{1:10, 3:null, 5:50}",
+      "{1:10, 5:50}",
+      "{}",
+      "{}",
+  });
+
+  // Non-constant second arg.
+  auto result = evaluate("map_subset(c0, c1)", data);
+  assertEqualVectors(expected, result);
+
+  // Constant second arg.
+  result = evaluate(
+      "map_subset(c0, map(array[1, 3, 5], array['a', 'b', 'c']))", data);
+  assertEqualVectors(expected, result);
+
+  // Empty second map. Expect empty maps.
+  result =
+      evaluate("map_subset(c0, cast(map() as map(bigint, varchar)))", data);
+  expected = makeMapVectorFromJson<int64_t, int32_t>({"{}", "{}", "{}", "{}"});
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(MapSubsetTest, varcharKeyMapSecondArg) {
+  auto data = makeRowVector({
+      makeMapVectorFromJson<std::string, int32_t>({
+          "{\"apple\": 1, \"banana\": 2, \"Cucurbitaceae\": null, \"date\": 4, \"eggplant\": 5, \"fig\": 6}",
+          "{\"banana\": 2, \"orange\": 4}",
+          "{\"banana\": 2, \"fig\": 4, \"date\": 5}",
+      }),
+      makeMapVectorFromJson<std::string, int64_t>({
+          "{\"apple\": 1, \"Cucurbitaceae\": 2, \"fig\": 3}",
+          "{\"apple\": 1, \"Cucurbitaceae\": 2, \"date\": 3, \"eggplant\": 4}",
+          "{\"fig\": 1}",
+      }),
+  });
+
+  auto expected = makeMapVectorFromJson<std::string, int32_t>({
+      "{\"apple\": 1, \"Cucurbitaceae\": null, \"fig\": 6}",
+      "{}",
+      "{\"fig\": 4}",
+  });
+
+  // Non-constant second arg.
+  auto result = evaluate("map_subset(c0, c1)", data);
+  assertEqualVectors(expected, result);
+
+  // Constant second arg with a long key value (not inline) to exercise the
+  // string ownership path.
+  result = evaluate(
+      "map_subset(c0, map(array['apple', 'some very looooong name', 'fig', 'Cucurbitaceae'], array[1, 2, 3, 4]))",
+      data);
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(MapSubsetTest, complexKeyMapSecondArg) {
+  // Map keys are arrays; second arg is a map with the same complex key type.
+  auto data = makeRowVector({
+      makeMapVector(
+          {0, 2},
+          makeArrayVectorFromJson<int32_t>({
+              "[1, 2, 3]",
+              "[4, 5]",
+              "[]",
+              "[1, 2]",
+          }),
+          makeFlatVector<std::string>(
+              {"apple", "orange", "Cucurbitaceae", "date"})),
+      makeMapVector(
+          {0, 2},
+          makeArrayVectorFromJson<int32_t>({
+              "[1, 2, 3]",
+              "[4, 5, 6]",
+              "[1, 2, 3]",
+              "[]",
+          }),
+          makeFlatVector<int64_t>({100, 200, 300, 400})),
+  });
+
+  auto result = evaluate("map_subset(c0, c1)", data);
+
+  auto expected = makeMapVector(
+      {0, 1},
+      makeArrayVectorFromJson<int32_t>({
+          "[1, 2, 3]",
+          "[]",
+      }),
+      makeFlatVector<std::string>({"apple", "Cucurbitaceae"}));
+
+  assertEqualVectors(expected, result);
+}
+
 } // namespace
 } // namespace facebook::velox::functions

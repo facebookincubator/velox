@@ -378,5 +378,83 @@ TEST_F(MapExceptFuzzerTest, fuzzLargeVectors) {
        .iterations = 5});
 }
 
+TEST_F(MapExceptTest, bigintKeyMapSecondArg) {
+  auto data = makeRowVector({
+      makeMapVectorFromJson<int64_t, int32_t>({
+          "{1:10, 2:20, 3:null, 4:40, 5:50, 6:60}",
+          "{1:10, 2:20, 4:40, 5:50}",
+          "{}",
+          "{2:20, 4:40, 6:60}",
+      }),
+      // The values of the second map are intentionally unrelated to the input
+      // map to verify that only the keys are used.
+      makeMapVectorFromJson<int64_t, std::string>({
+          "{1:\"a\", 3:\"b\", 5:\"c\"}",
+          "{1:\"a\", 3:\"b\", 5:\"c\", 7:\"d\"}",
+          "{3:\"a\", 5:\"b\"}",
+          "{1:\"a\", 3:\"b\"}",
+      }),
+  });
+
+  auto expected = makeMapVectorFromJson<int64_t, int32_t>({
+      "{2:20, 4:40, 6:60}",
+      "{2:20, 4:40}",
+      "{}",
+      "{2:20, 4:40, 6:60}",
+  });
+
+  // Non-constant second arg.
+  auto result = evaluate("map_except(c0, c1)", data);
+  assertEqualVectors(expected, result);
+
+  // Constant second arg.
+  result = evaluate(
+      "map_except(c0, map(array[1, 3, 5], array['a', 'b', 'c']))", data);
+  assertEqualVectors(expected, result);
+
+  // Empty second map. Expect all map entries returned.
+  result =
+      evaluate("map_except(c0, cast(map() as map(bigint, varchar)))", data);
+  expected = makeMapVectorFromJson<int64_t, int32_t>({
+      "{1:10, 2:20, 3:null, 4:40, 5:50, 6:60}",
+      "{1:10, 2:20, 4:40, 5:50}",
+      "{}",
+      "{2:20, 4:40, 6:60}",
+  });
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(MapExceptTest, varcharKeyMapSecondArg) {
+  auto data = makeRowVector({
+      makeMapVectorFromJson<std::string, int32_t>({
+          R"({"apple": 1, "banana": 2, "Cucurbitaceae": null, "date": 4, "eggplant": 5, "fig": 6})",
+          R"({"banana": 2, "orange": 4})",
+          R"({"banana": 2, "fig": 4, "date": 5})",
+      }),
+      makeMapVectorFromJson<std::string, int64_t>({
+          R"({"apple": 1, "Cucurbitaceae": 2, "fig": 3})",
+          R"({"apple": 1, "Cucurbitaceae": 2, "date": 3, "eggplant": 4})",
+          R"({"fig": 1})",
+      }),
+  });
+
+  auto expected = makeMapVectorFromJson<std::string, int32_t>({
+      R"({"banana": 2, "date": 4, "eggplant": 5})",
+      R"({"banana": 2, "orange": 4})",
+      R"({"banana": 2, "date": 5})",
+  });
+
+  // Non-constant second arg.
+  auto result = evaluate("map_except(c0, c1)", data);
+  assertEqualVectors(expected, result);
+
+  // Constant second arg with a long key value (not inline) to exercise the
+  // string ownership path.
+  result = evaluate(
+      "map_except(c0, map(array['apple', 'some very looooong name', 'fig', 'Cucurbitaceae'], array[1, 2, 3, 4]))",
+      data);
+  assertEqualVectors(expected, result);
+}
+
 } // namespace
 } // namespace facebook::velox::functions
