@@ -42,18 +42,21 @@ struct InputChunk {
       TypePtr type,
       cudf::table_view view,
       rmm::cuda_stream_view stream,
-      CudfVectorPtr owner)
+      CudfVectorPtr owner,
+      std::shared_ptr<cudf::table> tableOwner = nullptr)
       : pool(pool),
         type(std::move(type)),
         view(view),
         stream(stream),
-        owner(std::move(owner)) {}
+        owner(std::move(owner)),
+        tableOwner(std::move(tableOwner)) {}
 
   memory::MemoryPool* pool{nullptr};
   TypePtr type;
   cudf::table_view view;
   rmm::cuda_stream_view stream;
   CudfVectorPtr owner;
+  std::shared_ptr<cudf::table> tableOwner;
 
   size_t size() const {
     return static_cast<size_t>(view.num_rows());
@@ -97,15 +100,17 @@ class BufferedStateOps {
   virtual uint64_t leafFlatSize(const BufferedState& leaf) const = 0;
 
   // Partition one prepared chunk according to an internal node's partition
-  // spec and return one child chunk per partition.
+  // spec and return one child chunk per partition. The input remains valid so
+  // PBS can retry with a different seed if partitioning makes no progress.
   virtual std::vector<InputChunk> partitionInput(
-      InputChunk input,
+      const InputChunk& input,
       const PartitionSpec& spec) = 0;
 
   // Split one overflowing leaf into child leaves according to `spec` and
-  // return one child state per partition.
+  // return one child state per partition. The leaf remains valid so PBS can
+  // retry with a different seed if partitioning makes no progress.
   virtual std::vector<std::unique_ptr<BufferedState>> repartitionLeaf(
-      std::unique_ptr<BufferedState> leaf,
+      const BufferedState& leaf,
       const PartitionSpec& spec) = 0;
 
   // Finalize one leaf and return one output batch.
@@ -182,7 +187,7 @@ class PartitionedBufferedState {
   void ensureLeafWithinLimit(Node& node);
 
   std::vector<InputChunk> partitionInput(
-      InputChunk input,
+      const InputChunk& input,
       const PartitionSpec& spec);
 
   std::unique_ptr<BufferedStateOps> ops_;

@@ -31,6 +31,7 @@
 #include <cudf/binaryop.hpp>
 #include <cudf/column/column_factories.hpp>
 #include <cudf/concatenate.hpp>
+#include <cudf/copying.hpp>
 #include <cudf/detail/utilities/stream_pool.hpp>
 #include <cudf/unary.hpp>
 
@@ -397,38 +398,56 @@ class GroupbyBufferedStateOps final : public BufferedStateOps {
   }
 
   std::vector<InputChunk> partitionInput(
-      InputChunk input,
+      const InputChunk& input,
       const PartitionSpec& spec) override {
     if (input.empty()) {
       return std::vector<InputChunk>(spec.numPartitions);
     }
 
-    auto partitions = hashPartitionTable(
+    std::vector<rmm::cuda_stream_view> inputStreams{input.stream};
+    cudf::detail::join_streams(inputStreams, input.stream);
+
+    auto [partitionedTable, partitionOffsets] = cudf::hash_partition(
         input.view,
-        input.pool,
-        input.type,
-        input.stream,
         spec.keyIndices,
         spec.numPartitions,
         spec.hashId,
         spec.seed,
-        input.stream);
+        input.stream,
+        get_output_mr());
 
+    VELOX_CHECK_EQ(partitionOffsets.size(), spec.numPartitions + 1);
+    VELOX_CHECK_EQ(partitionOffsets.front(), 0);
+
+    partitionOffsets.erase(partitionOffsets.begin());
+    partitionOffsets.pop_back();
+
+    auto partitionedTableOwner =
+        std::shared_ptr<cudf::table>(std::move(partitionedTable));
+    auto partitionViews = cudf::split(
+        partitionedTableOwner->view(), partitionOffsets, input.stream);
     std::vector<InputChunk> chunks(spec.numPartitions);
     for (int32_t i = 0; i < spec.numPartitions; ++i) {
-      if (partitions[i]) {
-        chunks[i] = makeOwnedChunk(std::move(partitions[i]), input.type);
+      auto partition = partitionViews[i];
+      if (partition.num_rows() > 0) {
+        chunks[i] = makeBorrowedChunk(
+            input.pool,
+            input.type,
+            partition,
+            input.stream,
+            partitionedTableOwner);
       }
     }
+
+    CudaEvent event(cudaEventDisableTiming);
+    streamsWaitForStream(event, inputStreams, input.stream);
     return chunks;
   }
 
   std::vector<std::unique_ptr<BufferedState>> repartitionLeaf(
-      std::unique_ptr<BufferedState> leaf,
+      const BufferedState& leaf,
       const PartitionSpec& spec) override {
-    auto groupbyLeaf = std::unique_ptr<GroupbyLeafState>(
-        static_cast<GroupbyLeafState*>(leaf.release()));
-    auto partitions = partitionInput(std::move(groupbyLeaf->chunk), spec);
+    auto partitions = partitionInput(asLeafState(leaf).chunk, spec);
 
     std::vector<std::unique_ptr<BufferedState>> leaves(spec.numPartitions);
     for (int32_t i = 0; i < spec.numPartitions; ++i) {
@@ -487,6 +506,16 @@ class GroupbyBufferedStateOps final : public BufferedStateOps {
       cudf::table_view view) const {
     return InputChunk{
         owner->pool(), type, view, owner->stream(), std::move(owner)};
+  }
+
+  InputChunk makeBorrowedChunk(
+      memory::MemoryPool* pool,
+      const TypePtr& type,
+      cudf::table_view view,
+      rmm::cuda_stream_view stream,
+      std::shared_ptr<cudf::table> tableOwner) const {
+    return InputChunk{
+        pool, type, view, stream, nullptr, std::move(tableOwner)};
   }
 
   InputChunk mergeChunks(InputChunk left, InputChunk right) const {

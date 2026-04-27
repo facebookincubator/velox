@@ -20,7 +20,6 @@
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
-#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 #include <algorithm>
@@ -72,7 +71,7 @@ class IdentityBufferedStateOps final : public BufferedStateOps {
   }
 
   std::vector<InputChunk> partitionInput(
-      InputChunk input,
+      const InputChunk& input,
       const PartitionSpec& spec) override {
     std::vector<std::vector<int64_t>> buckets(spec.numPartitions);
     for (auto key : extractKeys(input)) {
@@ -92,11 +91,9 @@ class IdentityBufferedStateOps final : public BufferedStateOps {
   }
 
   std::vector<std::unique_ptr<BufferedState>> repartitionLeaf(
-      std::unique_ptr<BufferedState> leaf,
+      const BufferedState& leaf,
       const PartitionSpec& spec) override {
-    auto tableLeaf = std::unique_ptr<TableLeafState>(
-        static_cast<TableLeafState*>(leaf.release()));
-    auto partitions = partitionInput(std::move(tableLeaf->chunk), spec);
+    auto partitions = partitionInput(asLeaf(leaf).chunk, spec);
 
     std::vector<std::unique_ptr<BufferedState>> leaves(spec.numPartitions);
     for (int32_t i = 0; i < spec.numPartitions; ++i) {
@@ -308,18 +305,28 @@ TEST_F(PartitionedBufferedStateTest, overflowingChildSplitsAgain) {
   EXPECT_TRUE(state.empty());
 }
 
-TEST_F(PartitionedBufferedStateTest, noProgressSplitFailsFast) {
+TEST_F(PartitionedBufferedStateTest, noProgressSplitRetriesNewSeeds) {
   auto ops = std::make_unique<IdentityBufferedStateOps>(pool_.get(), rowType_);
+  std::vector<uint32_t> seeds;
   ops->setPartitioning(
       [&](const InputChunk& input) { return toKeys(input); },
       [&](const std::vector<int64_t>& keys) { return makeChunk(keys); },
-      [](int64_t /* key */, uint32_t /* seed */, int32_t /* numPartitions */) {
-        return 0;
+      [&](int64_t key, uint32_t seed, int32_t numPartitions) {
+        if (seeds.empty() || seeds.back() != seed) {
+          seeds.push_back(seed);
+        }
+        if (seed < 2) {
+          return 0;
+        }
+        return static_cast<int32_t>(key % numPartitions);
       });
   PartitionedBufferedState state(std::move(ops), 2, 0);
 
-  VELOX_ASSERT_THROW(
-      state.addInput(makeCudfVector({1, 2, 3})), "made no progress");
+  state.addInput(makeCudfVector({1, 2, 3}));
+
+  EXPECT_EQ(seeds, (std::vector<uint32_t>{0, 1, 2}));
+  EXPECT_EQ(drainAll(state), (std::vector<std::vector<int64_t>>{{1, 3}, {2}}));
+  EXPECT_TRUE(state.empty());
 }
 
 } // namespace
