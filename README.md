@@ -73,9 +73,9 @@ of available functions [can be found here.](https://facebookincubator.github.io/
 
 Recent blog posts ([all posts](https://velox-lib.io/blog)):
 
+- [Axiom: Composable Query Engines Built on Velox](https://velox-lib.io/blog/axiom-composable-query-engines) (2026-04-23)
 - [Why NULLIF Must Be a Special Form](https://velox-lib.io/blog/nullif-special-form) (2026-04-10)
 - [From flaky Axiom CI to a Velox bug fix: a cross-repo debugging story](https://velox-lib.io/blog/debugging-flaky-ci-across-repos) (2026-03-29)
-- [Adaptive Per-Function CPU Time Tracking](https://velox-lib.io/blog/velox-adaptive-cpu-sampling) (2026-03-26)
 
 ## Community
 

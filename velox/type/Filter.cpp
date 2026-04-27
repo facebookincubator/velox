@@ -22,6 +22,8 @@
 
 #include "velox/type/Filter.h"
 
+#include "velox/common/EnumDefine.h"
+
 namespace facebook::velox::common {
 
 namespace {

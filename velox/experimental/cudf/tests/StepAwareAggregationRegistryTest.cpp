@@ -15,7 +15,10 @@
  */
 
 #include "velox/experimental/cudf/exec/AggregationRegistry.h"
-#include "velox/experimental/cudf/exec/CudfHashAggregation.h"
+#include "velox/experimental/cudf/exec/CudfGroupby.h"
+#include "velox/experimental/cudf/exec/CudfReduce.h"
+#include "velox/experimental/cudf/exec/PrestoAggregateFunctions.h"
+#include "velox/experimental/cudf/exec/SparkAggregateFunctions.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
@@ -24,9 +27,37 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+
 using namespace facebook::velox;
 
 namespace facebook::velox::cudf_velox {
+
+namespace {
+
+bool hasSingleArgSignature(
+    const StepAwareAggregationRegistry& registry,
+    const std::string& name,
+    core::AggregationNode::Step step,
+    const std::string& returnType,
+    const std::string& argumentType) {
+  auto fnIt = registry.find(name);
+  if (fnIt == registry.end()) {
+    return false;
+  }
+  auto stepIt = fnIt->second.find(step);
+  if (stepIt == fnIt->second.end()) {
+    return false;
+  }
+  return std::any_of(
+      stepIt->second.begin(), stepIt->second.end(), [&](const auto& sig) {
+        return sig->returnType().baseName() == returnType &&
+            sig->argumentTypes().size() == 1 &&
+            sig->argumentTypes()[0].baseName() == argumentType;
+      });
+}
+
+} // namespace
 
 class StepAwareAggregationRegistryTest : public ::testing::Test {
  protected:
@@ -39,29 +70,52 @@ class StepAwareAggregationRegistryTest : public ::testing::Test {
 
   void TearDown() override {
     unregisterCudf();
+    unregisterAggregateFunctions();
   }
 
   std::shared_ptr<core::QueryCtx> queryCtx_;
 };
 
-TEST_F(StepAwareAggregationRegistryTest, allFunctionsAreRegistered) {
-  auto& registry = getStepAwareAggregationRegistry();
+TEST_F(StepAwareAggregationRegistryTest, allFunctionsAreRegisteredInGroupby) {
+  auto& registry = getGroupbyAggregationRegistry();
 
-  // Check that all expected functions are registered
+  // Check that all expected groupby functions are registered
   EXPECT_TRUE(registry.find("avg") != registry.end())
-      << "avg function should be registered";
+      << "avg function should be registered in groupby registry";
   EXPECT_TRUE(registry.find("sum") != registry.end())
-      << "sum function should be registered";
+      << "sum function should be registered in groupby registry";
   EXPECT_TRUE(registry.find("count") != registry.end())
-      << "count function should be registered";
+      << "count function should be registered in groupby registry";
   EXPECT_TRUE(registry.find("min") != registry.end())
-      << "min function should be registered";
+      << "min function should be registered in groupby registry";
   EXPECT_TRUE(registry.find("max") != registry.end())
-      << "max function should be registered";
+      << "max function should be registered in groupby registry";
+  // approx_distinct should NOT be in the groupby registry
+  EXPECT_TRUE(registry.find("approx_distinct") == registry.end())
+      << "approx_distinct should NOT be registered in groupby registry";
+}
+
+TEST_F(StepAwareAggregationRegistryTest, allFunctionsAreRegisteredInReduce) {
+  auto& registry = getReduceAggregationRegistry();
+
+  // Check that all expected reduce functions are registered
+  EXPECT_TRUE(registry.find("avg") != registry.end())
+      << "avg function should be registered in reduce registry";
+  EXPECT_TRUE(registry.find("sum") != registry.end())
+      << "sum function should be registered in reduce registry";
+  EXPECT_TRUE(registry.find("count") != registry.end())
+      << "count function should be registered in reduce registry";
+  EXPECT_TRUE(registry.find("min") != registry.end())
+      << "min function should be registered in reduce registry";
+  EXPECT_TRUE(registry.find("max") != registry.end())
+      << "max function should be registered in reduce registry";
+  // approx_distinct should be in the reduce registry
+  EXPECT_TRUE(registry.find("approx_distinct") != registry.end())
+      << "approx_distinct should be registered in reduce registry";
 }
 
 TEST_F(StepAwareAggregationRegistryTest, allStepsAreRegisteredForAvg) {
-  auto& registry = getStepAwareAggregationRegistry();
+  auto& registry = getGroupbyAggregationRegistry();
 
   // Check that all steps are registered for avg
   auto& avgSteps = registry["avg"];
@@ -81,7 +135,7 @@ TEST_F(StepAwareAggregationRegistryTest, allStepsAreRegisteredForAvg) {
 }
 
 TEST_F(StepAwareAggregationRegistryTest, avgHasSignaturesForAllSteps) {
-  auto& registry = getStepAwareAggregationRegistry();
+  auto& registry = getGroupbyAggregationRegistry();
   auto& avgSteps = registry["avg"];
 
   // Test that all steps have signatures
@@ -98,7 +152,7 @@ TEST_F(StepAwareAggregationRegistryTest, avgHasSignaturesForAllSteps) {
 }
 
 TEST_F(StepAwareAggregationRegistryTest, avgPartialStepHasRowReturnTypes) {
-  auto& registry = getStepAwareAggregationRegistry();
+  auto& registry = getGroupbyAggregationRegistry();
   auto& avgSteps = registry["avg"];
   auto& partialSigs = avgSteps[core::AggregationNode::Step::kPartial];
 
@@ -114,7 +168,7 @@ TEST_F(StepAwareAggregationRegistryTest, avgPartialStepHasRowReturnTypes) {
 }
 
 TEST_F(StepAwareAggregationRegistryTest, avgFinalStepHasRowInputTypes) {
-  auto& registry = getStepAwareAggregationRegistry();
+  auto& registry = getGroupbyAggregationRegistry();
   auto& avgSteps = registry["avg"];
   auto& finalSigs = avgSteps[core::AggregationNode::Step::kFinal];
 
@@ -137,14 +191,22 @@ TEST_F(StepAwareAggregationRegistryTest, avgSingleStepValidation) {
           std::make_shared<core::FieldAccessTypedExpr>(DOUBLE(), "input")},
       "avg");
 
-  bool singleStepSupported = canAggregationBeEvaluatedByCudf(
+  bool groupbySupported = canGroupbyAggregationBeEvaluatedByCudf(
       *avgSingleCall,
       core::AggregationNode::Step::kSingle,
       {DOUBLE()},
       queryCtx_.get());
 
-  EXPECT_TRUE(singleStepSupported)
-      << "Single step avg(DOUBLE) should be supported";
+  bool reduceSupported = canReduceAggregationBeEvaluatedByCudf(
+      *avgSingleCall,
+      core::AggregationNode::Step::kSingle,
+      {DOUBLE()},
+      queryCtx_.get());
+
+  EXPECT_TRUE(groupbySupported)
+      << "Single step avg(DOUBLE) should be supported for groupby";
+  EXPECT_TRUE(reduceSupported)
+      << "Single step avg(DOUBLE) should be supported for reduce";
 }
 
 TEST_F(StepAwareAggregationRegistryTest, avgPartialStepValidation) {
@@ -154,13 +216,13 @@ TEST_F(StepAwareAggregationRegistryTest, avgPartialStepValidation) {
           std::make_shared<core::FieldAccessTypedExpr>(DOUBLE(), "input")},
       "avg");
 
-  bool partialStepSupported = canAggregationBeEvaluatedByCudf(
+  bool groupbySupported = canGroupbyAggregationBeEvaluatedByCudf(
       *avgPartialCall,
       core::AggregationNode::Step::kPartial,
       {DOUBLE()},
       queryCtx_.get());
 
-  EXPECT_TRUE(partialStepSupported)
+  EXPECT_TRUE(groupbySupported)
       << "Partial step avg(DOUBLE) should be supported";
 }
 
@@ -173,13 +235,13 @@ TEST_F(StepAwareAggregationRegistryTest, avgFinalStepValidation) {
               rowType, "intermediate")},
       "avg");
 
-  bool finalStepSupported = canAggregationBeEvaluatedByCudf(
+  bool groupbySupported = canGroupbyAggregationBeEvaluatedByCudf(
       *avgFinalCall,
       core::AggregationNode::Step::kFinal,
       {rowType},
       queryCtx_.get());
 
-  EXPECT_TRUE(finalStepSupported)
+  EXPECT_TRUE(groupbySupported)
       << "Final step avg(ROW(DOUBLE,BIGINT)) should be supported";
 }
 
@@ -191,22 +253,22 @@ TEST_F(StepAwareAggregationRegistryTest, sumStepConsistency) {
           std::make_shared<core::FieldAccessTypedExpr>(DOUBLE(), "input")},
       "sum");
 
-  bool sumSingle = canAggregationBeEvaluatedByCudf(
+  bool sumSingle = canGroupbyAggregationBeEvaluatedByCudf(
       *sumCall,
       core::AggregationNode::Step::kSingle,
       {DOUBLE()},
       queryCtx_.get());
-  bool sumPartial = canAggregationBeEvaluatedByCudf(
+  bool sumPartial = canGroupbyAggregationBeEvaluatedByCudf(
       *sumCall,
       core::AggregationNode::Step::kPartial,
       {DOUBLE()},
       queryCtx_.get());
-  bool sumFinal = canAggregationBeEvaluatedByCudf(
+  bool sumFinal = canGroupbyAggregationBeEvaluatedByCudf(
       *sumCall,
       core::AggregationNode::Step::kFinal,
       {DOUBLE()},
       queryCtx_.get());
-  bool sumIntermediate = canAggregationBeEvaluatedByCudf(
+  bool sumIntermediate = canGroupbyAggregationBeEvaluatedByCudf(
       *sumCall,
       core::AggregationNode::Step::kIntermediate,
       {DOUBLE()},
@@ -232,22 +294,22 @@ TEST_F(StepAwareAggregationRegistryTest, countStepConsistency) {
           std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "input")},
       "count");
 
-  bool countSingle = canAggregationBeEvaluatedByCudf(
+  bool countSingle = canGroupbyAggregationBeEvaluatedByCudf(
       *countRawCall,
       core::AggregationNode::Step::kSingle,
       {DOUBLE()},
       queryCtx_.get());
-  bool countPartial = canAggregationBeEvaluatedByCudf(
+  bool countPartial = canGroupbyAggregationBeEvaluatedByCudf(
       *countRawCall,
       core::AggregationNode::Step::kPartial,
       {DOUBLE()},
       queryCtx_.get());
-  bool countFinal = canAggregationBeEvaluatedByCudf(
+  bool countFinal = canGroupbyAggregationBeEvaluatedByCudf(
       *countIntermediateCall,
       core::AggregationNode::Step::kFinal,
       {BIGINT()},
       queryCtx_.get());
-  bool countIntermediate = canAggregationBeEvaluatedByCudf(
+  bool countIntermediate = canGroupbyAggregationBeEvaluatedByCudf(
       *countIntermediateCall,
       core::AggregationNode::Step::kIntermediate,
       {BIGINT()},
@@ -268,22 +330,22 @@ TEST_F(StepAwareAggregationRegistryTest, minStepConsistency) {
           std::make_shared<core::FieldAccessTypedExpr>(DOUBLE(), "input")},
       "min");
 
-  bool minSingle = canAggregationBeEvaluatedByCudf(
+  bool minSingle = canGroupbyAggregationBeEvaluatedByCudf(
       *minCall,
       core::AggregationNode::Step::kSingle,
       {DOUBLE()},
       queryCtx_.get());
-  bool minPartial = canAggregationBeEvaluatedByCudf(
+  bool minPartial = canGroupbyAggregationBeEvaluatedByCudf(
       *minCall,
       core::AggregationNode::Step::kPartial,
       {DOUBLE()},
       queryCtx_.get());
-  bool minFinal = canAggregationBeEvaluatedByCudf(
+  bool minFinal = canGroupbyAggregationBeEvaluatedByCudf(
       *minCall,
       core::AggregationNode::Step::kFinal,
       {DOUBLE()},
       queryCtx_.get());
-  bool minIntermediate = canAggregationBeEvaluatedByCudf(
+  bool minIntermediate = canGroupbyAggregationBeEvaluatedByCudf(
       *minCall,
       core::AggregationNode::Step::kIntermediate,
       {DOUBLE()},
@@ -303,22 +365,22 @@ TEST_F(StepAwareAggregationRegistryTest, maxStepConsistency) {
           std::make_shared<core::FieldAccessTypedExpr>(DOUBLE(), "input")},
       "max");
 
-  bool maxSingle = canAggregationBeEvaluatedByCudf(
+  bool maxSingle = canGroupbyAggregationBeEvaluatedByCudf(
       *maxCall,
       core::AggregationNode::Step::kSingle,
       {DOUBLE()},
       queryCtx_.get());
-  bool maxPartial = canAggregationBeEvaluatedByCudf(
+  bool maxPartial = canGroupbyAggregationBeEvaluatedByCudf(
       *maxCall,
       core::AggregationNode::Step::kPartial,
       {DOUBLE()},
       queryCtx_.get());
-  bool maxFinal = canAggregationBeEvaluatedByCudf(
+  bool maxFinal = canGroupbyAggregationBeEvaluatedByCudf(
       *maxCall,
       core::AggregationNode::Step::kFinal,
       {DOUBLE()},
       queryCtx_.get());
-  bool maxIntermediate = canAggregationBeEvaluatedByCudf(
+  bool maxIntermediate = canGroupbyAggregationBeEvaluatedByCudf(
       *maxCall,
       core::AggregationNode::Step::kIntermediate,
       {DOUBLE()},
@@ -328,6 +390,165 @@ TEST_F(StepAwareAggregationRegistryTest, maxStepConsistency) {
   EXPECT_TRUE(maxPartial) << "Max partial step should be supported";
   EXPECT_TRUE(maxFinal) << "Max final step should be supported";
   EXPECT_TRUE(maxIntermediate) << "Max intermediate step should be supported";
+}
+
+TEST_F(
+    StepAwareAggregationRegistryTest,
+    prestoRegistrationPopulatesRealSignaturesInBothPhysicalRegistries) {
+  registerPrestoAggregateFunctions("");
+
+  EXPECT_TRUE(hasSingleArgSignature(
+      getGroupbyAggregationRegistry(),
+      "sum",
+      core::AggregationNode::Step::kSingle,
+      "real",
+      "real"));
+  EXPECT_TRUE(hasSingleArgSignature(
+      getReduceAggregationRegistry(),
+      "sum",
+      core::AggregationNode::Step::kSingle,
+      "real",
+      "real"));
+}
+
+TEST_F(
+    StepAwareAggregationRegistryTest,
+    sparkRegistrationReplacesPrestoSignaturesInBothPhysicalRegistries) {
+  registerPrestoAggregateFunctions("");
+  registerSparkAggregateFunctions("");
+
+  EXPECT_TRUE(hasSingleArgSignature(
+      getGroupbyAggregationRegistry(),
+      "sum",
+      core::AggregationNode::Step::kSingle,
+      "double",
+      "real"));
+  EXPECT_TRUE(hasSingleArgSignature(
+      getReduceAggregationRegistry(),
+      "sum",
+      core::AggregationNode::Step::kSingle,
+      "double",
+      "real"));
+  EXPECT_FALSE(hasSingleArgSignature(
+      getGroupbyAggregationRegistry(),
+      "sum",
+      core::AggregationNode::Step::kSingle,
+      "real",
+      "real"));
+  EXPECT_FALSE(hasSingleArgSignature(
+      getReduceAggregationRegistry(),
+      "sum",
+      core::AggregationNode::Step::kSingle,
+      "real",
+      "real"));
+}
+
+TEST_F(
+    StepAwareAggregationRegistryTest,
+    appendGroupbySignatureOnlyAffectsGroupbyRegistryAndValidation) {
+  unregisterAggregateFunctions();
+
+  appendGroupbyAggregationFunctionForStep(
+      "custom_groupby",
+      core::AggregationNode::Step::kSingle,
+      exec::FunctionSignatureBuilder()
+          .returnType("double")
+          .argumentType("double")
+          .build());
+
+  auto customCall = std::make_shared<core::CallTypedExpr>(
+      DOUBLE(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(DOUBLE(), "input")},
+      "custom_groupby");
+
+  EXPECT_TRUE(hasSingleArgSignature(
+      getGroupbyAggregationRegistry(),
+      "custom_groupby",
+      core::AggregationNode::Step::kSingle,
+      "double",
+      "double"));
+  EXPECT_EQ(
+      getReduceAggregationRegistry().find("custom_groupby"),
+      getReduceAggregationRegistry().end());
+  EXPECT_TRUE(canGroupbyAggregationBeEvaluatedByCudf(
+      *customCall,
+      core::AggregationNode::Step::kSingle,
+      {DOUBLE()},
+      queryCtx_.get()));
+  EXPECT_FALSE(canReduceAggregationBeEvaluatedByCudf(
+      *customCall,
+      core::AggregationNode::Step::kSingle,
+      {DOUBLE()},
+      queryCtx_.get()));
+}
+
+TEST_F(
+    StepAwareAggregationRegistryTest,
+    appendReduceSignatureOnlyAffectsReduceRegistryAndValidation) {
+  unregisterAggregateFunctions();
+
+  appendReduceAggregationFunctionForStep(
+      "custom_reduce",
+      core::AggregationNode::Step::kSingle,
+      exec::FunctionSignatureBuilder()
+          .returnType("double")
+          .argumentType("double")
+          .build());
+
+  auto customCall = std::make_shared<core::CallTypedExpr>(
+      DOUBLE(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(DOUBLE(), "input")},
+      "custom_reduce");
+
+  EXPECT_TRUE(hasSingleArgSignature(
+      getReduceAggregationRegistry(),
+      "custom_reduce",
+      core::AggregationNode::Step::kSingle,
+      "double",
+      "double"));
+  EXPECT_EQ(
+      getGroupbyAggregationRegistry().find("custom_reduce"),
+      getGroupbyAggregationRegistry().end());
+  EXPECT_TRUE(canReduceAggregationBeEvaluatedByCudf(
+      *customCall,
+      core::AggregationNode::Step::kSingle,
+      {DOUBLE()},
+      queryCtx_.get()));
+  EXPECT_FALSE(canGroupbyAggregationBeEvaluatedByCudf(
+      *customCall,
+      core::AggregationNode::Step::kSingle,
+      {DOUBLE()},
+      queryCtx_.get()));
+}
+
+TEST_F(
+    StepAwareAggregationRegistryTest,
+    customSignaturesAreDiscardedWhenEngineRegistriesAreRebuilt) {
+  appendGroupbyAggregationFunctionForStep(
+      "custom_groupby",
+      core::AggregationNode::Step::kSingle,
+      exec::FunctionSignatureBuilder()
+          .returnType("double")
+          .argumentType("double")
+          .build());
+  appendReduceAggregationFunctionForStep(
+      "custom_reduce",
+      core::AggregationNode::Step::kSingle,
+      exec::FunctionSignatureBuilder()
+          .returnType("double")
+          .argumentType("double")
+          .build());
+
+  registerSparkAggregateFunctions("");
+
+  EXPECT_EQ(
+      getGroupbyAggregationRegistry().find("custom_groupby"),
+      getGroupbyAggregationRegistry().end());
+  EXPECT_EQ(
+      getReduceAggregationRegistry().find("custom_reduce"),
+      getReduceAggregationRegistry().end());
 }
 
 } // namespace facebook::velox::cudf_velox

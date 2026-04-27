@@ -23,9 +23,15 @@
 
 namespace facebook::velox::exec {
 
-inline std::unique_ptr<common::BigintRange> lessThan(
+inline std::unique_ptr<common::Filter> lessThan(
     int64_t max,
     bool nullAllowed = false) {
+  if (max == std::numeric_limits<int64_t>::min()) {
+    if (nullAllowed) {
+      return std::make_unique<common::IsNull>();
+    }
+    return std::make_unique<common::AlwaysFalse>();
+  }
   return std::make_unique<common::BigintRange>(
       std::numeric_limits<int64_t>::min(), max - 1, nullAllowed);
 }
@@ -37,9 +43,15 @@ inline std::unique_ptr<common::BigintRange> lessThanOrEqual(
       std::numeric_limits<int64_t>::min(), max, nullAllowed);
 }
 
-inline std::unique_ptr<common::BigintRange> greaterThan(
+inline std::unique_ptr<common::Filter> greaterThan(
     int64_t min,
     bool nullAllowed = false) {
+  if (min == std::numeric_limits<int64_t>::max()) {
+    if (nullAllowed) {
+      return std::make_unique<common::IsNull>();
+    }
+    return std::make_unique<common::AlwaysFalse>();
+  }
   return std::make_unique<common::BigintRange>(
       min + 1, std::numeric_limits<int64_t>::max(), nullAllowed);
 }
@@ -185,29 +197,16 @@ between(int64_t min, int64_t max, bool nullAllowed = false) {
   return std::make_unique<common::BigintRange>(min, max, nullAllowed);
 }
 
-inline std::unique_ptr<common::BigintMultiRange> bigintOr(
-    std::unique_ptr<common::BigintRange> a,
-    std::unique_ptr<common::BigintRange> b,
-    bool nullAllowed = false) {
-  std::vector<std::unique_ptr<common::BigintRange>> filters;
-  filters.emplace_back(std::move(a));
-  filters.emplace_back(std::move(b));
-  return std::make_unique<common::BigintMultiRange>(
-      std::move(filters), nullAllowed);
-}
+std::unique_ptr<common::Filter> bigintOr(
+    std::unique_ptr<common::Filter> a,
+    std::unique_ptr<common::Filter> b,
+    bool nullAllowed = false);
 
-inline std::unique_ptr<common::BigintMultiRange> bigintOr(
-    std::unique_ptr<common::BigintRange> a,
-    std::unique_ptr<common::BigintRange> b,
-    std::unique_ptr<common::BigintRange> c,
-    bool nullAllowed = false) {
-  std::vector<std::unique_ptr<common::BigintRange>> filters;
-  filters.emplace_back(std::move(a));
-  filters.emplace_back(std::move(b));
-  filters.emplace_back(std::move(c));
-  return std::make_unique<common::BigintMultiRange>(
-      std::move(filters), nullAllowed);
-}
+std::unique_ptr<common::Filter> bigintOr(
+    std::unique_ptr<common::Filter> a,
+    std::unique_ptr<common::Filter> b,
+    std::unique_ptr<common::Filter> c,
+    bool nullAllowed = false);
 
 inline std::unique_ptr<common::BytesValues> equal(
     const std::string& value,
@@ -351,9 +350,15 @@ orFilter(std::unique_ptr<T> a, std::unique_ptr<T> b, bool nullAllowed = false) {
   return std::make_unique<common::MultiRange>(std::move(filters), nullAllowed);
 }
 
-inline std::unique_ptr<common::HugeintRange> lessThanHugeint(
+inline std::unique_ptr<common::Filter> lessThanHugeint(
     int128_t max,
     bool nullAllowed = false) {
+  if (max == std::numeric_limits<int128_t>::min()) {
+    if (nullAllowed) {
+      return std::make_unique<common::IsNull>();
+    }
+    return std::make_unique<common::AlwaysFalse>();
+  }
   return std::make_unique<common::HugeintRange>(
       std::numeric_limits<int128_t>::min(), max - 1, nullAllowed);
 }
@@ -365,9 +370,15 @@ inline std::unique_ptr<common::HugeintRange> lessThanOrEqualHugeint(
       std::numeric_limits<int128_t>::min(), max, nullAllowed);
 }
 
-inline std::unique_ptr<common::HugeintRange> greaterThanHugeint(
+inline std::unique_ptr<common::Filter> greaterThanHugeint(
     int128_t min,
     bool nullAllowed = false) {
+  if (min == std::numeric_limits<int128_t>::max()) {
+    if (nullAllowed) {
+      return std::make_unique<common::IsNull>();
+    }
+    return std::make_unique<common::AlwaysFalse>();
+  }
   return std::make_unique<common::HugeintRange>(
       min + 1, std::numeric_limits<int128_t>::max(), nullAllowed);
 }
@@ -401,9 +412,15 @@ between(const Timestamp& min, const Timestamp& max, bool nullAllowed = false) {
   return std::make_unique<common::TimestampRange>(min, max, nullAllowed);
 }
 
-inline std::unique_ptr<common::TimestampRange> lessThan(
+inline std::unique_ptr<common::Filter> lessThan(
     Timestamp max,
     bool nullAllowed = false) {
+  if (max == std::numeric_limits<Timestamp>::min()) {
+    if (nullAllowed) {
+      return std::make_unique<common::IsNull>();
+    }
+    return std::make_unique<common::AlwaysFalse>();
+  }
   --max;
   return std::make_unique<common::TimestampRange>(
       std::numeric_limits<Timestamp>::min(), max, nullAllowed);
@@ -416,9 +433,15 @@ inline std::unique_ptr<common::TimestampRange> lessThanOrEqual(
       std::numeric_limits<Timestamp>::min(), max, nullAllowed);
 }
 
-inline std::unique_ptr<common::TimestampRange> greaterThan(
+inline std::unique_ptr<common::Filter> greaterThan(
     Timestamp min,
     bool nullAllowed = false) {
+  if (min == std::numeric_limits<Timestamp>::max()) {
+    if (nullAllowed) {
+      return std::make_unique<common::IsNull>();
+    }
+    return std::make_unique<common::AlwaysFalse>();
+  }
   ++min;
   return std::make_unique<common::TimestampRange>(
       min, std::numeric_limits<Timestamp>::max(), nullAllowed);
