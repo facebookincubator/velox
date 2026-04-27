@@ -87,6 +87,9 @@ target_link_libraries(velox_functions_prestosql_benchmarks_map_concat ${BENCHMAR
 add_executable(velox_functions_prestosql_benchmarks_map_input MapInputBenchmark.cpp)
 target_link_libraries(velox_functions_prestosql_benchmarks_map_input ${BENCHMARK_DEPENDENCIES})
 
+add_executable(velox_functions_prestosql_benchmarks_map_intersect MapIntersectBenchmark.cpp)
+target_link_libraries(velox_functions_prestosql_benchmarks_map_intersect ${BENCHMARK_DEPENDENCIES})
+
 add_executable(velox_functions_benchmarks_url URLBenchmark.cpp)
 target_link_libraries(velox_functions_benchmarks_url ${BENCHMARK_DEPENDENCIES})
 
