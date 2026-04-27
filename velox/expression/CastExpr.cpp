@@ -126,7 +126,8 @@ VectorPtr CastExpr::castToDate(
           setResultOrError(
               row,
               result,
-              // Preserve legacy cast-to-date error formatting ("<prefix>.  <details>").
+              // Preserve legacy cast-to-date error formatting ("<prefix>.
+              // <details>").
               makeErrorMessage(input, row, DATE()) + " ",
               context,
               resultFlatVector,
