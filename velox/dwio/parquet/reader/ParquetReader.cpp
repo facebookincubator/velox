@@ -75,6 +75,50 @@ bool isCompatible(
        isCompatibleFunc(requestedType->asArray().elementType()));
 }
 
+// Velox ROW used to interpret *direct* children of the current Parquet node:
+// either the requested type is ROW, or it is an unannotated ARRAY<ROW>
+// (repeated group without LIST) and this node is that repeated group.
+RowTypePtr rowTypeForDirectParquetFieldMapping(
+    const TypePtr& requestedType,
+    bool parentParquetNodeIsRepeated) {
+  if (!requestedType) {
+    return nullptr;
+  }
+  if (requestedType->isRow()) {
+    return std::dynamic_pointer_cast<const velox::RowType>(requestedType);
+  }
+  if (requestedType->isArray() && parentParquetNodeIsRepeated &&
+      requestedType->asArray().elementType()->isRow()) {
+    return std::dynamic_pointer_cast<const velox::RowType>(
+        requestedType->asArray().elementType());
+  }
+  return nullptr;
+}
+
+// Annotated 3-level LIST<struct>: one repeated child, then one optional group
+// that contains every struct column. Used to fix index mapping (first field
+// type wrongly assigned to the envelope) and to skip narrowing on that group.
+bool parquetChildIsListStructEnvelopeIndexMode(
+    bool mapChildrenByName,
+    const RowTypePtr& tableRow,
+    int32_t childIndex,
+    int32_t parquetParentNumChildren,
+    const thrift::SchemaElement& parquetChild) {
+  if (mapChildrenByName || !tableRow) {
+    return false;
+  }
+  if (childIndex < 0 || childIndex >= static_cast<int32_t>(tableRow->size())) {
+    return false;
+  }
+  if (parquetParentNumChildren != 1 || parquetChild.__isset.type) {
+    return false;
+  }
+  if (!parquetChild.__isset.num_children) {
+    return false;
+  }
+  return parquetChild.num_children == static_cast<int32_t>(tableRow->size());
+}
+
 // Checks if a decimal type has enough integer precision to hold all values
 // of the given Parquet physical int type.
 bool hasEnoughDecimalPrecision(const TypePtr& type, int32_t minIntegerDigits) {
@@ -431,52 +475,113 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
 
       TypePtr childRequestedType = nullptr;
       bool followChild = true;
+      // Set in Step 1 when index-based mapping appends a field name to
+      // columnNames for this child; used by Step 4 to roll back that append
+      // when the child is later recognized as a LIST wrapper, not a real field.
+      bool pushedMappedNameForIndexChild = false;
+      const bool mapChildrenByName = options_.useColumnNamesForColumnMapping();
 
-      {
-        RowTypePtr requestedRowType = nullptr;
-        if (requestedType) {
-          if (requestedType->isRow()) {
-            requestedRowType =
-                std::dynamic_pointer_cast<const velox::RowType>(requestedType);
-          } else if (
-              requestedType->isArray() && isRepeated &&
-              requestedType->asArray().elementType()->isRow()) {
-            // Handle the case of unannotated array of structs (repeated group
-            // without LIST annotation).
-            requestedRowType = std::dynamic_pointer_cast<const velox::RowType>(
-                requestedType->asArray().elementType());
+      // Step 1 — Table ROW (or legacy repeated ARRAY<ROW>) vs each Parquet
+      // child: pick the Velox field type for this child (name or index).
+      RowTypePtr rowForDirectFields =
+          rowTypeForDirectParquetFieldMapping(requestedType, isRepeated);
+      if (rowForDirectFields) {
+        if (mapChildrenByName) {
+          if (const auto idx =
+                  rowForDirectFields->getChildIdxIfExists(childName)) {
+            childRequestedType = rowForDirectFields->childAt(*idx);
           }
-        }
-
-        if (requestedRowType) {
-          if (options_.useColumnNamesForColumnMapping()) {
-            auto fileTypeIdx = requestedRowType->getChildIdxIfExists(childName);
-            if (fileTypeIdx.has_value()) {
-              childRequestedType = requestedRowType->childAt(*fileTypeIdx);
-            }
-          } else {
-            // Handle schema evolution.
-            if (i < requestedRowType->size()) {
-              columnNames.push_back(requestedRowType->nameOf(i));
-              childRequestedType = requestedRowType->childAt(i);
-            } else {
-              followChild = false;
-            }
-          }
+        } else if (i < rowForDirectFields->size()) {
+          columnNames.push_back(rowForDirectFields->nameOf(i));
+          pushedMappedNameForIndexChild = true;
+          childRequestedType = rowForDirectFields->childAt(i);
+        } else {
+          followChild = false;
         }
       }
 
-      // Handling elements of ARRAY/MAP
+      // Step 2 — Annotated LIST<ROW<...>>: the repeated "bag"/"list" child is
+      // not a struct column; attach the element ROW when name does not match
+      // any field (by name) or for the first physical child (by index).
+      if (!childRequestedType && requestedType && requestedType->isArray() &&
+          requestedType->asArray().elementType()->isRow()) {
+        const auto elementRow = std::dynamic_pointer_cast<const velox::RowType>(
+            requestedType->asArray().elementType());
+        if (mapChildrenByName) {
+          if (!elementRow->getChildIdxIfExists(childName)) {
+            childRequestedType = requestedType->asArray().elementType();
+          }
+        } else if (i == 0) {
+          childRequestedType = requestedType->asArray().elementType();
+        }
+      }
+
+      // Step 3 — No table type at this depth: inherit ARRAY element type or
+      // MAP key/value types from the parent (e.g. column-name mapping).
       if (!requestedType && parentRequestedType) {
-        if (parentRequestedType->isArray()) {
+        if (parentRequestedType->isArray() &&
+            schemaElement.__isset.num_children &&
+            schemaElement.num_children == 1) {
           childRequestedType = parentRequestedType->asArray().elementType();
         } else if (parentRequestedType->isMap()) {
-          auto mapType = parentRequestedType->asMap();
+          const auto mapType = parentRequestedType->asMap();
           // Processing map keys
           if (i == 0) {
             childRequestedType = mapType.keyType();
           } else {
             childRequestedType = mapType.valueType();
+          }
+        }
+      }
+
+      // Step 4 — Index mode, LIST<struct>: if we mapped the first *field* type
+      // onto the optional envelope group, replace with the full element ROW.
+      const auto& parquetChild = schema[schemaIdx];
+      RowTypePtr tableRow = requestedType && requestedType->isRow()
+          ? std::dynamic_pointer_cast<const velox::RowType>(requestedType)
+          : nullptr;
+      const bool listStructEnvelope = parquetChildIsListStructEnvelopeIndexMode(
+          mapChildrenByName,
+          tableRow,
+          i,
+          schemaElement.num_children,
+          parquetChild);
+      if (listStructEnvelope && childRequestedType == tableRow->childAt(i)) {
+        childRequestedType = requestedType;
+        if (pushedMappedNameForIndexChild && !columnNames.empty()) {
+          columnNames.pop_back();
+          pushedMappedNameForIndexChild = false;
+        }
+      }
+
+      // Step 5 — If we still have a ROW, narrow to the single field that this
+      // Parquet child represents (skip index narrow on the LIST envelope from
+      // step 4: it already is the full element ROW).
+      if (childRequestedType && childRequestedType->isRow()) {
+        const auto narrowRow =
+            std::dynamic_pointer_cast<const velox::RowType>(childRequestedType);
+        const bool parquetChildIsGroup = !parquetChild.__isset.type;
+        const bool groupHoldsWholeStructRow = parquetChildIsGroup &&
+            parquetChild.__isset.num_children &&
+            parquetChild.num_children ==
+                static_cast<int32_t>(narrowRow->size());
+        if (mapChildrenByName) {
+          if (const auto idx = narrowRow->getChildIdxIfExists(childName)) {
+            childRequestedType = narrowRow->childAt(*idx);
+          }
+        } else {
+          const bool arrayRowListBagWrapper = requestedType &&
+              requestedType->isArray() &&
+              requestedType->asArray().elementType()->isRow() &&
+              parquetChildIsGroup && parquetChild.__isset.num_children &&
+              parquetChild.num_children == 1 &&
+              (childName == "list" || childName == "bag" ||
+               childName == "array");
+          const bool skipIndexNarrow =
+              (listStructEnvelope && requestedType == childRequestedType) ||
+              groupHoldsWholeStructRow || arrayRowListBagWrapper;
+          if (!skipIndexNarrow && i < narrowRow->size()) {
+            childRequestedType = narrowRow->childAt(i);
           }
         }
       }
