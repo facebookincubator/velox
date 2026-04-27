@@ -314,6 +314,111 @@ TEST_F(MapIntersectTest, basicTest) {
   assertEqualVectors(expected, result);
 }
 
+TEST_F(MapIntersectTest, mapSecondArgInteger) {
+  auto inputMap = makeMapVector<int32_t, int32_t>({
+      {{1, 10}, {2, 20}, {3, 30}, {4, 40}},
+      {{5, 50}, {6, 60}, {7, 70}},
+      {},
+      {{8, 80}, {9, 90}},
+  });
+
+  // The second map's values are intentionally unrelated to verify only keys are
+  // used.
+  auto keysMap = makeMapVector<int32_t, int64_t>({
+      {{1, 100}, {3, 300}},
+      {{5, 500}, {7, 700}, {8, 800}},
+      {{1, 100}, {2, 200}},
+      {{8, 800}, {9, 900}, {10, 1000}},
+  });
+
+  auto expected = makeMapVector<int32_t, int32_t>({
+      {{1, 10}, {3, 30}},
+      {{5, 50}, {7, 70}},
+      {},
+      {{8, 80}, {9, 90}},
+  });
+
+  testMapIntersect("map_intersect(c0, c1)", {inputMap, keysMap}, expected);
+}
+
+TEST_F(MapIntersectTest, mapSecondArgConstant) {
+  auto inputMap = makeMapVector<int32_t, int32_t>({
+      {{1, 10}, {2, 20}, {3, 30}, {4, 40}, {5, 50}},
+      {{1, 100}, {2, 200}, {3, 300}},
+  });
+
+  auto expected = makeMapVector<int32_t, int32_t>({
+      {{1, 10}, {3, 30}, {5, 50}},
+      {{1, 100}, {3, 300}},
+  });
+
+  auto result = evaluate(
+      "map_intersect(c0, map(array[cast(1 as integer), cast(3 as integer), cast(5 as integer)], array['a', 'b', 'c']))",
+      makeRowVector({inputMap}));
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(MapIntersectTest, mapSecondArgEmpty) {
+  auto inputMap = makeMapVector<int32_t, int32_t>({
+      {{1, 10}, {2, 20}, {3, 30}},
+      {{4, 40}, {5, 50}},
+  });
+
+  auto keysMap = makeMapVector<int32_t, int32_t>({
+      {},
+      {},
+  });
+
+  auto expected = makeMapVector<int32_t, int32_t>({
+      {},
+      {},
+  });
+
+  testMapIntersect("map_intersect(c0, c1)", {inputMap, keysMap}, expected);
+}
+
+TEST_F(MapIntersectTest, mapSecondArgVarcharKey) {
+  auto inputMap = makeMapVector<StringView, int32_t>({
+      {{"apple", 1}, {"banana", 2}, {"cherry", 3}, {"date", 4}},
+      {{"hello", 10}, {"world", 20}},
+  });
+
+  auto keysMap = makeMapVector<StringView, int32_t>({
+      {{"banana", 0}, {"date", 0}, {"apple", 0}},
+      {{"hello", 0}, {"foo", 0}},
+  });
+
+  auto expected = makeMapVector<StringView, int32_t>({
+      {{"apple", 1}, {"banana", 2}, {"date", 4}},
+      {{"hello", 10}},
+  });
+
+  testMapIntersect("map_intersect(c0, c1)", {inputMap, keysMap}, expected);
+}
+
+TEST_F(MapIntersectTest, mapSecondArgNullArguments) {
+  auto inputMap =
+      makeMapVector<int32_t, int32_t>({{{1, 10}, {2, 20}, {3, 30}}});
+  auto keysMap = makeMapVector<int32_t, int32_t>({{{1, 0}, {2, 0}}});
+
+  auto nullMap =
+      BaseVector::createNullConstant(MAP(INTEGER(), INTEGER()), 1, pool());
+  auto nullKeysMap =
+      BaseVector::createNullConstant(MAP(INTEGER(), INTEGER()), 1, pool());
+
+  auto result1 =
+      evaluate("map_intersect(c0, c1)", makeRowVector({nullMap, keysMap}));
+  auto expected1 =
+      BaseVector::createNullConstant(MAP(INTEGER(), INTEGER()), 1, pool());
+  assertEqualVectors(expected1, result1);
+
+  auto result2 =
+      evaluate("map_intersect(c0, c1)", makeRowVector({inputMap, nullKeysMap}));
+  auto expected2 =
+      BaseVector::createNullConstant(MAP(INTEGER(), INTEGER()), 1, pool());
+  assertEqualVectors(expected2, result2);
+}
+
 } // namespace
 
 class MapIntersectFuzzerTest : public test::FunctionBaseTest {

@@ -162,6 +162,150 @@ struct MapSubsetVarcharFunction {
   std::vector<std::string> searchKeyStrings_;
 };
 
+/// Fast path for constant primitive type keys when the second argument is a
+/// map: map_subset(m, map(...)). Only the keys of the second map are used; its
+/// values are ignored.
+template <typename TExec, typename Key>
+struct MapSubsetMapPrimitiveFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& /*config*/,
+      const arg_type<Map<Key, Generic<T1>>>* /*inputMap*/,
+      const arg_type<Map<Key, Generic<T2>>>* keysMap) {
+    if (keysMap != nullptr) {
+      constantSearchKeys_ = true;
+      addKeysFromMap(*keysMap);
+    }
+  }
+
+  void call(
+      out_type<Map<Key, Generic<T1>>>& out,
+      const arg_type<Map<Key, Generic<T1>>>& inputMap,
+      const arg_type<Map<Key, Generic<T2>>>& keysMap) {
+    if (keysMap.empty()) {
+      return;
+    }
+
+    if (!constantSearchKeys_) {
+      searchKeys_.clear();
+      addKeysFromMap(keysMap);
+    }
+
+    if (searchKeys_.empty()) {
+      return;
+    }
+
+    auto toFind = searchKeys_.size();
+
+    for (const auto& entry : inputMap) {
+      if (!searchKeys_.contains(entry.first)) {
+        continue;
+      }
+
+      if (!entry.second.has_value()) {
+        auto& keyWriter = out.add_null();
+        keyWriter = entry.first;
+      } else {
+        auto [keyWriter, valueWriter] = out.add_item();
+        keyWriter = entry.first;
+        valueWriter.copy_from(entry.second.value());
+      }
+
+      --toFind;
+      if (toFind == 0) {
+        break;
+      }
+    }
+  }
+
+ private:
+  void addKeysFromMap(const arg_type<Map<Key, Generic<T2>>>& keysMap) {
+    for (const auto& entry : keysMap) {
+      searchKeys_.emplace(entry.first);
+    }
+  }
+
+  bool constantSearchKeys_{false};
+  util::floating_point::HashSetNaNAware<arg_type<Key>> searchKeys_;
+};
+
+/// Fast path for constant string keys when the second argument is a map:
+/// map_subset(m, map(...)).
+template <typename TExec>
+struct MapSubsetMapVarcharFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& /*config*/,
+      const arg_type<Map<Varchar, Generic<T1>>>* /*inputMap*/,
+      const arg_type<Map<Varchar, Generic<T2>>>* keysMap) {
+    if (keysMap != nullptr) {
+      constantSearchKeys_ = true;
+
+      searchKeyStrings_.reserve(keysMap->size());
+      for (const auto& entry : *keysMap) {
+        const auto& key = entry.first;
+        if (key.isInline()) {
+          searchKeys_.emplace(key);
+        } else if (!searchKeys_.contains(key)) {
+          searchKeyStrings_.push_back(key.str());
+          searchKeys_.emplace(StringView(searchKeyStrings_.back()));
+        }
+      }
+    }
+  }
+
+  void call(
+      out_type<Map<Varchar, Generic<T1>>>& out,
+      const arg_type<Map<Varchar, Generic<T1>>>& inputMap,
+      const arg_type<Map<Varchar, Generic<T2>>>& keysMap) {
+    if (keysMap.empty()) {
+      return;
+    }
+
+    if (!constantSearchKeys_) {
+      searchKeys_.clear();
+      for (const auto& entry : keysMap) {
+        searchKeys_.emplace(entry.first);
+      }
+    }
+
+    if (searchKeys_.empty()) {
+      return;
+    }
+
+    auto toFind = searchKeys_.size();
+
+    for (const auto& entry : inputMap) {
+      if (!searchKeys_.contains(entry.first)) {
+        continue;
+      }
+
+      if (!entry.second.has_value()) {
+        auto& keyWriter = out.add_null();
+        keyWriter.copy_from(entry.first);
+      } else {
+        auto [keyWriter, valueWriter] = out.add_item();
+        keyWriter.copy_from(entry.first);
+        valueWriter.copy_from(entry.second.value());
+      }
+
+      --toFind;
+      if (toFind == 0) {
+        break;
+      }
+    }
+  }
+
+ private:
+  bool constantSearchKeys_{false};
+  folly::F14FastSet<StringView> searchKeys_;
+  std::vector<std::string> searchKeyStrings_;
+};
+
 struct MapSubsetFunctionEqualComparator {
   bool operator()(const exec::GenericView& lhs, const exec::GenericView& rhs)
       const {
@@ -198,6 +342,60 @@ struct MapSubsetFunction {
     searchKeys_.clear();
     for (const auto& key : keys.skipNulls()) {
       searchKeys_.emplace(key);
+    }
+
+    if (searchKeys_.empty()) {
+      return;
+    }
+
+    auto toFind = searchKeys_.size();
+
+    for (const auto& entry : inputMap) {
+      if (!searchKeys_.contains(entry.first)) {
+        continue;
+      }
+
+      if (!entry.second.has_value()) {
+        auto& keyWriter = out.add_null();
+        keyWriter.copy_from(entry.first);
+      } else {
+        auto [keyWriter, valueWriter] = out.add_item();
+        keyWriter.copy_from(entry.first);
+        valueWriter.copy_from(entry.second.value());
+      }
+
+      --toFind;
+      if (toFind == 0) {
+        break;
+      }
+    }
+  }
+
+ private:
+  folly::F14FastSet<
+      exec::GenericView,
+      std::hash<exec::GenericView>,
+      MapSubsetFunctionEqualComparator>
+      searchKeys_;
+};
+
+/// Generic implementation when the second argument is a map. Doesn't provide
+/// an optimization for constant search keys.
+template <typename TExec>
+struct MapSubsetMapFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  void call(
+      out_type<Map<Generic<T1>, Generic<T2>>>& out,
+      const arg_type<Map<Generic<T1>, Generic<T2>>>& inputMap,
+      const arg_type<Map<Generic<T1>, Any>>& keysMap) {
+    if (keysMap.empty()) {
+      return;
+    }
+
+    searchKeys_.clear();
+    for (const auto& entry : keysMap) {
+      searchKeys_.emplace(entry.first);
     }
 
     if (searchKeys_.empty()) {

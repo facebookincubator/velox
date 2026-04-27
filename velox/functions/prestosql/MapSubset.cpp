@@ -27,6 +27,15 @@ void registerMapSubsetPrimitive(const std::string& name) {
       Array<T>>({name});
 }
 
+template <typename T>
+void registerMapSubsetMapPrimitive(const std::string& name) {
+  registerFunction<
+      ParameterBinder<MapSubsetMapPrimitiveFunction, T>,
+      Map<T, Generic<T1>>,
+      Map<T, Generic<T1>>,
+      Map<T, Generic<T2>>>({name});
+}
+
 void registerMapSubset(const std::string& name) {
   registerMapSubsetPrimitive<bool>(name);
   registerMapSubsetPrimitive<int8_t>(name);
@@ -49,5 +58,29 @@ void registerMapSubset(const std::string& name) {
       Map<Generic<T1>, Generic<T2>>,
       Map<Generic<T1>, Generic<T2>>,
       Array<Generic<T1>>>({name});
+
+  // Overloads with a Map as the second argument. Only the keys of the second
+  // map are used for the membership decision; its values are ignored.
+  registerMapSubsetMapPrimitive<bool>(name);
+  registerMapSubsetMapPrimitive<int8_t>(name);
+  registerMapSubsetMapPrimitive<int16_t>(name);
+  registerMapSubsetMapPrimitive<int32_t>(name);
+  registerMapSubsetMapPrimitive<int64_t>(name);
+  registerMapSubsetMapPrimitive<float>(name);
+  registerMapSubsetMapPrimitive<double>(name);
+  registerMapSubsetMapPrimitive<Timestamp>(name);
+  registerMapSubsetMapPrimitive<Date>(name);
+
+  registerFunction<
+      MapSubsetMapVarcharFunction,
+      Map<Varchar, Generic<T1>>,
+      Map<Varchar, Generic<T1>>,
+      Map<Varchar, Generic<T2>>>({name});
+
+  registerFunction<
+      MapSubsetMapFunction,
+      Map<Generic<T1>, Generic<T2>>,
+      Map<Generic<T1>, Generic<T2>>,
+      Map<Generic<T1>, Any>>({name});
 }
 } // namespace facebook::velox::functions

@@ -84,6 +84,15 @@ void registerMapIntersectPrimitive(const std::string& prefix) {
       Array<T>>({prefix + "map_intersect"});
 }
 
+template <typename T>
+void registerMapIntersectMapPrimitive(const std::string& prefix) {
+  registerFunction<
+      ParameterBinder<MapIntersectMapPrimitiveFunction, T>,
+      Map<T, Generic<T1>>,
+      Map<T, Generic<T1>>,
+      Map<T, Generic<T2>>>({prefix + "map_intersect"});
+}
+
 void registerMapIntersect(const std::string& prefix) {
   registerMapIntersectPrimitive<bool>(prefix);
   registerMapIntersectPrimitive<int8_t>(prefix);
@@ -100,6 +109,24 @@ void registerMapIntersect(const std::string& prefix) {
       Map<Varchar, Generic<T1>>,
       Map<Varchar, Generic<T1>>,
       Array<Varchar>>({prefix + "map_intersect"});
+
+  // Overloads with a Map as the second argument. Only the keys of the second
+  // map are used; its values are ignored.
+  registerMapIntersectMapPrimitive<bool>(prefix);
+  registerMapIntersectMapPrimitive<int8_t>(prefix);
+  registerMapIntersectMapPrimitive<int16_t>(prefix);
+  registerMapIntersectMapPrimitive<int32_t>(prefix);
+  registerMapIntersectMapPrimitive<int64_t>(prefix);
+  registerMapIntersectMapPrimitive<float>(prefix);
+  registerMapIntersectMapPrimitive<double>(prefix);
+  registerMapIntersectMapPrimitive<Timestamp>(prefix);
+  registerMapIntersectMapPrimitive<Date>(prefix);
+
+  registerFunction<
+      MapIntersectMapVarcharFunction,
+      Map<Varchar, Generic<T1>>,
+      Map<Varchar, Generic<T1>>,
+      Map<Varchar, Generic<T2>>>({prefix + "map_intersect"});
 }
 
 template <typename T>
@@ -109,6 +136,15 @@ void registerMapExceptPrimitive(const std::string& prefix) {
       Map<T, Generic<T1>>,
       Map<T, Generic<T1>>,
       Array<T>>({prefix + "map_except"});
+}
+
+template <typename T>
+void registerMapExceptMapPrimitive(const std::string& prefix) {
+  registerFunction<
+      ParameterBinder<MapExceptMapPrimitiveFunction, T>,
+      Map<T, Generic<T1>>,
+      Map<T, Generic<T1>>,
+      Map<T, Generic<T2>>>({prefix + "map_except"});
 }
 
 void registerMapExcept(const std::string& prefix) {
@@ -127,6 +163,24 @@ void registerMapExcept(const std::string& prefix) {
       Map<Varchar, Generic<T1>>,
       Map<Varchar, Generic<T1>>,
       Array<Varchar>>({prefix + "map_except"});
+
+  // Overloads with a Map as the second argument. Only the keys of the second
+  // map are used; its values are ignored.
+  registerMapExceptMapPrimitive<bool>(prefix);
+  registerMapExceptMapPrimitive<int8_t>(prefix);
+  registerMapExceptMapPrimitive<int16_t>(prefix);
+  registerMapExceptMapPrimitive<int32_t>(prefix);
+  registerMapExceptMapPrimitive<int64_t>(prefix);
+  registerMapExceptMapPrimitive<float>(prefix);
+  registerMapExceptMapPrimitive<double>(prefix);
+  registerMapExceptMapPrimitive<Timestamp>(prefix);
+  registerMapExceptMapPrimitive<Date>(prefix);
+
+  registerFunction<
+      MapExceptMapVarcharFunction,
+      Map<Varchar, Generic<T1>>,
+      Map<Varchar, Generic<T1>>,
+      Map<Varchar, Generic<T2>>>({prefix + "map_except"});
 }
 
 template <typename T>
