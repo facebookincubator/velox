@@ -30,9 +30,13 @@
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/VectorPool.h"
 
-namespace facebook::velox::exec::trace {
+namespace facebook::velox::exec {
+class VectorFunction;
+struct VectorFunctionMetadata;
+namespace trace {
 class TraceCtx;
-}
+} // namespace trace
+} // namespace facebook::velox::exec
 
 namespace facebook::velox::core {
 
@@ -85,6 +89,23 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   using TraceCtxProvider = std::function<std::unique_ptr<exec::trace::TraceCtx>(
       core::QueryCtx&,
       const core::PlanFragment&)>;
+
+  /// Callback that optionally wraps a resolved VectorFunction before it is
+  /// handed to an Expr node. Enables cross-cutting concerns like monitoring
+  /// or access control without modifying function implementations.
+  ///
+  /// Returns both the (possibly wrapped) VectorFunction and updated metadata.
+  /// Decorators that alter behavioral properties (e.g. wrapping a deterministic
+  /// function in a non-deterministic wrapper) must return updated metadata to
+  /// avoid incorrect CSE optimization.
+  ///
+  /// The returned VectorFunction must not be null.
+  using FunctionDecorator = std::function<std::pair<
+      std::shared_ptr<exec::VectorFunction>,
+      exec::VectorFunctionMetadata>(
+      std::string_view name,
+      std::shared_ptr<exec::VectorFunction> original,
+      const exec::VectorFunctionMetadata& metadata)>;
 
   ~QueryCtx();
 
@@ -191,6 +212,11 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
       return *this;
     }
 
+    Builder& functionDecorator(FunctionDecorator decorator) {
+      functionDecorator_ = std::move(decorator);
+      return *this;
+    }
+
     /// Constructs and returns a QueryCtx with the configured parameters.
     ///
     /// @return Shared pointer to the newly created QueryCtx instance
@@ -208,6 +234,8 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     std::shared_ptr<filesystems::TokenProvider> tokenProvider_;
     std::deque<ReleaseCallback> releaseCallbacks_;
     TraceCtxProvider traceCtxProvider_;
+    // Optional callback to wrap resolved VectorFunction instances.
+    FunctionDecorator functionDecorator_;
   };
 
   /// Generates a unique memory pool name for a query.
@@ -321,6 +349,17 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     traceCtxProvider_ = std::move(provider);
   }
 
+  /// Returns the function decorator, if set.
+  const FunctionDecorator& functionDecorator() const {
+    return functionDecorator_;
+  }
+
+  /// Sets an optional decorator applied to each resolved VectorFunction
+  /// during expression compilation.
+  void setFunctionDecorator(FunctionDecorator decorator) {
+    functionDecorator_ = std::move(decorator);
+  }
+
   /// Store a per-query registry override. Each subsystem defines its own key
   /// (e.g., "connectors", "vectorFunctions"). The registry is stored as a
   /// type-erased shared_ptr; callers must use the same type T for setRegistry
@@ -394,7 +433,8 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
       folly::Executor* spillExecutor = nullptr,
       const std::string& queryId = "",
       std::shared_ptr<filesystems::TokenProvider> tokenProvider = {},
-      TraceCtxProvider traceCtxProvider = nullptr);
+      TraceCtxProvider traceCtxProvider = nullptr,
+      FunctionDecorator functionDecorator = nullptr);
 
   class MemoryReclaimer : public memory::MemoryReclaimer {
    public:
@@ -476,6 +516,9 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
 
   // A function that constructs a custom trace ctx object.
   TraceCtxProvider traceCtxProvider_;
+
+  // Optional callback to wrap resolved VectorFunction instances.
+  FunctionDecorator functionDecorator_;
 
   // Type-erased registry entry for per-query overrides.
   struct RegistryEntry {
