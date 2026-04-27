@@ -12,16 +12,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_subdirectory(exec)
-add_subdirectory(connectors)
-add_subdirectory(vector)
-add_subdirectory(expression)
-add_subdirectory(functions)
-
-if(VELOX_BUILD_TESTING)
-  add_subdirectory(tests)
-endif()
-
-if(VELOX_ENABLE_BENCHMARKS)
-  add_subdirectory(benchmarks)
-endif()
+# Header-only for now; CUDA library targets will be added in later PRs.
