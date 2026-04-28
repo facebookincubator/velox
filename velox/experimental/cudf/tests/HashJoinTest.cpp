@@ -77,6 +77,29 @@ class MultiThreadedHashJoinTest
   }
 };
 
+TEST_F(HashJoinTest, countStarOverInnerJoinWithZeroColumnOutput) {
+  auto probe = makeRowVector({"k"}, {makeFlatVector<int32_t>({1, 2, 2, 3})});
+  auto build = makeRowVector({"u_k"}, {makeFlatVector<int32_t>({2, 2, 4})});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({probe})
+          .hashJoin(
+              {"k"},
+              {"u_k"},
+              PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+              "",
+              {},
+              core::JoinType::kInner)
+          .partialAggregation({}, {"count(*)"})
+          .finalAggregation()
+          .planNode();
+
+  auto expected = makeRowVector({makeFlatVector<int64_t>({4})});
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
 TEST_P(MultiThreadedHashJoinTest, bigintArray) {
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .injectSpill(false)

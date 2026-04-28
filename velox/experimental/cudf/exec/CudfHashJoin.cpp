@@ -652,6 +652,9 @@ std::unique_ptr<cudf::table> CudfHashJoinProbe::unfilteredOutput(
   for (int i = 0; i < rightColumnOutputIndices_.size(); i++) {
     joinedCols[rightColumnOutputIndices_[i]] = std::move(rightCols[i]);
   }
+  if (outputType_->size() == 0) {
+    zeroColumnOutputRows_ += leftIndicesCol.size();
+  }
   if (buildStream_.has_value()) {
     // Ensure deallocation of build table happens after probe gathers
     cudaEvent_->recordFrom(stream).waitOn(buildStream_.value());
@@ -698,6 +701,9 @@ std::unique_ptr<cudf::table> CudfHashJoinProbe::filteredOutput(
   auto filterColumn = asView(filterColumns);
 
   joinedCols = func(std::move(joinedCols), filterColumn);
+  if (outputType_->size() == 0 && !joinedCols.empty()) {
+    zeroColumnOutputRows_ += joinedCols[0]->size();
+  }
 
   auto filteredjoinedCols =
       std::vector<std::unique_ptr<cudf::column>>(outputType_->names().size());
@@ -1677,6 +1683,7 @@ RowVectorPtr CudfHashJoinProbe::doGetOutput() {
       auto& rightTables = hashObject_.value().first;
       auto stream = cudfGlobalStreamPool().get_stream();
       std::vector<std::unique_ptr<cudf::table>> toConcat;
+      vector_size_t unmatchedRows = 0;
       for (size_t i = 0; i < rightTables.size(); ++i) {
         auto& rightTable = rightTables[i];
         auto n = rightTable->num_rows();
@@ -1701,6 +1708,7 @@ RowVectorPtr CudfHashJoinProbe::doGetOutput() {
         if (m == 0) {
           continue;
         }
+        unmatchedRows += m;
 
         // Build left null columns
         std::vector<std::unique_ptr<cudf::column>> outCols(outputType_->size());
@@ -1738,8 +1746,8 @@ RowVectorPtr CudfHashJoinProbe::doGetOutput() {
         auto out =
             concatenateTables(std::move(toConcat), stream, get_output_mr());
         finished_ = true;
-        auto size = out->num_rows();
-        if (out->num_columns() == 0 || size == 0) {
+        auto size = outputType_->size() == 0 ? unmatchedRows : out->num_rows();
+        if (size == 0) {
           return nullptr;
         }
         return std::make_shared<CudfVector>(
@@ -1753,6 +1761,7 @@ RowVectorPtr CudfHashJoinProbe::doGetOutput() {
   auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input_);
   VELOX_CHECK_NOT_NULL(cudfInput);
   auto stream = cudfInput->stream();
+  zeroColumnOutputRows_ = 0;
   // Use getTableView() to avoid expensive materialization for packed_table.
   // cudfInput is staying alive until the table view is no longer needed.
   auto leftTableView = cudfInput->getTableView();
@@ -1823,16 +1832,13 @@ RowVectorPtr CudfHashJoinProbe::doGetOutput() {
 
   auto cudfOutput =
       concatenateTables(std::move(cudfOutputs), stream, get_output_mr());
-  auto const size = cudfOutput->num_rows();
-  if (cudfOutput->num_columns() == 0 or size == 0) {
+  auto const size =
+      outputType_->size() == 0 ? zeroColumnOutputRows_ : cudfOutput->num_rows();
+  if (size == 0) {
     return nullptr;
   }
   return std::make_shared<CudfVector>(
-      pool(),
-      outputType_,
-      cudfOutput->num_rows(),
-      std::move(cudfOutput),
-      stream);
+      pool(), outputType_, size, std::move(cudfOutput), stream);
 }
 
 bool CudfHashJoinProbe::skipProbeOnEmptyBuild() const {

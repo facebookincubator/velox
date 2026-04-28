@@ -209,6 +209,7 @@ class CudfHashJoinProbe : public CudfOperatorBase {
   /** @brief Output column positions for right table columns */
   std::vector<size_t> rightColumnOutputIndices_;
   bool finished_{false};
+  vector_size_t zeroColumnOutputRows_{0};
   bool useAstFilter_{true};
 
   /// True if any build table has NULL values in join key columns.
