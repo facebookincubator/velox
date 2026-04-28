@@ -727,6 +727,32 @@ TEST_P(CountAggregationStepsTest, countStarVsCountColumnGroupByNulls) {
       GetParam());
 }
 
+TEST_P(CountAggregationStepsTest, countNullConstantMarkerForIntersectShape) {
+  auto data = makeRowVector({
+      makeFlatVector<StringView>({"left_only", "left_only", "both"}),
+  });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .project({
+                      "true AS left_marker",
+                      "cast(null AS boolean) AS right_marker",
+                      "c0 AS key",
+                  })
+                  .partialAggregation(
+                      {"key"}, {"count(left_marker)", "count(right_marker)"})
+                  .finalAggregation()
+                  .filter("a0 >= 1 AND a1 = 0")
+                  .project({"key", "a0"})
+                  .planNode();
+
+  auto expected = makeRowVector({
+      makeFlatVector<StringView>({"left_only", "both"}),
+      makeFlatVector<int64_t>({2, 1}),
+  });
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
 TEST_P(CountAggregationStepsTest, countConstantGlobalNulls) {
   auto data = makeRowVector({
       makeNullableFlatVector<int64_t>({1, std::nullopt, 2, std::nullopt}),
