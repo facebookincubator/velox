@@ -123,8 +123,7 @@ Device* setDriverDevice(int32_t deviceId) {
 
 Device* currentDevice() {
   CUcontext ctx;
-  CU_CHECK(cuCtxGetCurrent(&ctx));
-  if (!ctx) {
+  if (CUDA_SUCCESS != cuCtxGetCurrent(&ctx)) {
     return nullptr;
   }
   for (auto i = 0; i < contexts.size(); ++i) {
