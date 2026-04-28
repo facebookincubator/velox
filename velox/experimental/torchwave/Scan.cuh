@@ -21,21 +21,22 @@
 namespace torch::wave {
 
 template <int32_t kBlockSize, typename T, typename Func>
-__device__ T reduce(T input, Func func, T* temp) {
+__device__ T reduce(T input, Func func, void* temp) {
   constexpr int32_t kNumWarps = kBlockSize / kWarpThreads;
 
+  auto* tempT = static_cast<T*>(temp);
   // Warp-level reduce.
   T warpResult = facebook::velox::wave::WarpReduce<T>().reduce(input, func);
 
   // Lane 0 of each warp stores its result in temp.
   if (threadIdx.x % kWarpThreads == 0) {
-    temp[threadIdx.x / kWarpThreads] = warpResult;
+    tempT[threadIdx.x / kWarpThreads] = warpResult;
   }
   __syncthreads();
 
   // First warp reduces the warp-level results.
   if (threadIdx.x < kWarpThreads) {
-    T val = threadIdx.x < kNumWarps ? temp[threadIdx.x] : T{};
+    T val = threadIdx.x < kNumWarps ? tempT[threadIdx.x] : T{};
     warpResult =
         facebook::velox::wave::WarpReduce<T, kNumWarps>().reduce(val, func);
   }
@@ -47,7 +48,7 @@ __device__ void masked_select(
     T input,
     bool flag,
     Tensor* output,
-    Int32X32& temp,
+    void* temp,
     uint32_t& counter,
     uint32_t idx,
     uint32_t size,
@@ -64,7 +65,7 @@ __device__ void masked_select(
       threadIdx.x == 0 ? static_cast<uint32_t>(flag) + counter
                        : static_cast<uint32_t>(flag),
       &counter,
-      &temp[0]);
+      static_cast<uint32_t*>(temp));
   if (flag) {
     out[sum - 1] = input;
   }
@@ -79,7 +80,7 @@ __device__ void masked_select(
     Tensor* input,
     Tensor* mask,
     Tensor* output,
-    Int32X32& temp,
+    void* temp,
     uint32_t& counter,
     uint32_t idx,
     uint32_t size,
@@ -102,7 +103,7 @@ __device__ void masked_select_head(
     Tensor* input,
     Tensor* mask,
     Tensor* output,
-    Int32X32& temp,
+    void* temp,
     uint32_t& size,
     uint32_t& rounded,
     BlockInfo& block) {
@@ -118,7 +119,7 @@ __device__ void masked_select_head(
        idx += block.numBlocksInOp * blockDim.x) {
     uint32_t flag = (idx < size) ? static_cast<uint32_t>(flags[idx]) : 0;
     auto count = reduce<kBlockSize, uint32_t>(
-        flag, [](uint32_t a, uint32_t b) { return a + b; }, &temp[0]);
+        flag, [](uint32_t a, uint32_t b) { return a + b; }, temp);
     if (threadIdx.x == 0) {
       out[blockIdx] = count;
       blockIdx += block.numBlocksInOp;
@@ -126,11 +127,11 @@ __device__ void masked_select_head(
   }
 }
 
-template <int32_t kBlockSize>
+template <int32_t kBlockSize, typename T = int32_t>
 __device__ void add_sizes(
     Tensor* input,
-    int32_t* output,
-    Int32X32& temp,
+    T* output,
+    void* temp,
     uint32_t& size,
     uint32_t& rounded,
     uint32_t& counter,
@@ -141,14 +142,14 @@ __device__ void add_sizes(
     rounded = roundUpPwr2(size, kBlockSize);
   }
   __syncthreads();
-  int32_t* in = storage<int32_t>(input);
+  T* in = storage<T>(input);
   for (uint32_t idx = threadIdx.x; idx < rounded; idx += blockDim.x) {
-    int32_t val = (idx < size) ? in[idx] : 0;
+    T val = (idx < size) ? in[idx] : T(0);
     if (threadIdx.x == 0) {
       val += counter;
     }
-    int32_t sum = facebook::velox::wave::inclusiveSum<int32_t, kBlockSize>(
-        val, nullptr, reinterpret_cast<int32_t*>(&temp[0]));
+    T sum = facebook::velox::wave::inclusiveSum<T, kBlockSize>(
+        val, nullptr, static_cast<T*>(temp));
     if (idx < size) {
       in[idx] = sum;
     }
@@ -157,9 +158,22 @@ __device__ void add_sizes(
     }
     __syncthreads();
   }
-  if (threadIdx.x == 0) {
+  if (threadIdx.x == 0 && output) {
     *output = counter;
   }
+}
+
+// Overload without output argument for use as middle stage of cumsum.
+template <int32_t kBlockSize, typename T = int32_t>
+__device__ void add_sizes(
+    Tensor* input,
+    void* temp,
+    uint32_t& size,
+    uint32_t& rounded,
+    uint32_t& counter,
+    BlockInfo& block) {
+  add_sizes<kBlockSize, T>(
+      input, static_cast<T*>(nullptr), temp, size, rounded, counter, block);
 }
 
 template <int32_t kBlockSize, typename T>
@@ -169,7 +183,7 @@ __device__ void masked_select_final(
     Tensor* counts,
     int32_t* total,
     Tensor* output,
-    Int32X32& temp,
+    void* temp,
     uint32_t& size,
     uint32_t& rounded,
     BlockInfo& block) {
@@ -192,7 +206,7 @@ __device__ void masked_select_final(
       val += base;
     }
     int32_t sum = facebook::velox::wave::inclusiveSum<int32_t, kBlockSize>(
-        val, nullptr, reinterpret_cast<int32_t*>(&temp[0]));
+        val, nullptr, static_cast<int32_t*>(temp));
     if (flag) {
       out[sum - 1] = in[idx];
     }
@@ -200,6 +214,329 @@ __device__ void masked_select_final(
       output->dims[0] = sum;
     }
     blockIdx += block.numBlocksInOp;
+  }
+}
+
+// Single-block cumulative sum. Writes inclusive prefix sum of
+// input into output. Iterates over the full length of the input.
+// TIn is the input element type, TOut is the accumulation/output type.
+// Calling convention: (input, output, dim_attr, shared..., blockInfo).
+template <int32_t kBlockSize, typename TIn, typename TOut, int32_t dim = 0>
+__device__ void cumsum(
+    Tensor* input,
+    Tensor* output,
+    void* temp,
+    uint32_t& size,
+    uint32_t& rounded,
+    TOut& counter,
+    BlockInfo& /*block*/) {
+  static_assert(dim == 0, "Only dim 0 is supported");
+  if (threadIdx.x == 0) {
+    size = numEl(*input);
+    counter = 0;
+    rounded = roundUpPwr2(size, kBlockSize);
+  }
+  __syncthreads();
+  TIn* in = storage<TIn>(input);
+  TOut* out = storage<TOut>(output);
+  for (uint32_t idx = threadIdx.x; idx < rounded; idx += blockDim.x) {
+    TOut val = (idx < size) ? static_cast<TOut>(in[idx]) : TOut(0);
+    if (threadIdx.x == 0) {
+      val += counter;
+    }
+    TOut sum = facebook::velox::wave::inclusiveSum<TOut, kBlockSize>(
+        val, nullptr, static_cast<TOut*>(temp));
+    if (idx < size) {
+      out[idx] = sum;
+    }
+    if (threadIdx.x == blockDim.x - 1) {
+      counter = sum;
+    }
+    __syncthreads();
+  }
+}
+
+// Three-stage cumsum, stage 1: compute per-block sums.
+// TIn is the input element type, TOut is the accumulation type.
+template <int32_t kBlockSize, typename TIn, typename TOut>
+__device__ void cumsum_head(
+    Tensor* input,
+    Tensor* output,
+    void* temp,
+    uint32_t& size,
+    uint32_t& rounded,
+    BlockInfo& block) {
+  if (threadIdx.x == 0) {
+    size = numEl(*input);
+    rounded = roundUpPwr2(size, kBlockSize);
+  }
+  __syncthreads();
+  TIn* in = storage<TIn>(input);
+  TOut* out = storage<TOut>(output);
+  uint32_t blockIdx = block.blockInOp;
+  for (uint32_t idx = block.blockInOp * blockDim.x + threadIdx.x; idx < rounded;
+       idx += block.numBlocksInOp * blockDim.x) {
+    TOut val = (idx < size) ? static_cast<TOut>(in[idx]) : TOut(0);
+    auto sum = reduce<kBlockSize, TOut>(
+        val, [](TOut a, TOut b) { return a + b; }, temp);
+    if (threadIdx.x == 0) {
+      out[blockIdx] = sum;
+      blockIdx += block.numBlocksInOp;
+    }
+  }
+}
+
+// Three-stage cumsum, stage 3: compute final inclusive prefix sum using
+// per-block prefix sums from add_sizes.
+// TIn is the input element type, TOut is the accumulation/output type.
+// Calling convention: (input, counts, output, dim_attr, shared..., blockInfo).
+template <int32_t kBlockSize, typename TIn, typename TOut, int32_t dim = 0>
+__device__ void cumsum_final(
+    Tensor* input,
+    Tensor* counts,
+    Tensor* output,
+    void* temp,
+    uint32_t& size,
+    uint32_t& rounded,
+    BlockInfo& block) {
+  static_assert(dim == 0, "Only dim 0 is supported");
+  if (threadIdx.x == 0) {
+    size = numEl(*input);
+    rounded = roundUpPwr2(size, kBlockSize);
+  }
+  __syncthreads();
+  TIn* in = storage<TIn>(input);
+  TOut* cnt = storage<TOut>(counts);
+  TOut* out = storage<TOut>(output);
+  uint32_t blockIdx = block.blockInOp;
+  for (uint32_t idx = block.blockInOp * blockDim.x + threadIdx.x; idx < rounded;
+       idx += block.numBlocksInOp * blockDim.x) {
+    TOut val = (idx < size) ? static_cast<TOut>(in[idx]) : TOut(0);
+    TOut base = blockIdx == 0 ? TOut(0) : cnt[blockIdx - 1];
+    if (threadIdx.x == 0) {
+      val += base;
+    }
+    TOut sum = facebook::velox::wave::inclusiveSum<TOut, kBlockSize>(
+        val, nullptr, static_cast<TOut*>(temp));
+    if (idx < size) {
+      out[idx] = sum;
+    }
+    blockIdx += block.numBlocksInOp;
+  }
+}
+
+// Single-block exclusive prefix sum. Output has size+1 elements.
+// out[0] = 0, out[i+1] = sum(in[0..i]).
+template <int32_t kBlockSize, typename TIn, typename TOut>
+__device__ void exclusive_sum(
+    Tensor* input,
+    Tensor* output,
+    void* temp,
+    uint32_t& size,
+    uint32_t& rounded,
+    TOut& counter,
+    BlockInfo& /*block*/) {
+  if (threadIdx.x == 0) {
+    size = numEl(*input);
+    counter = 0;
+    rounded = roundUpPwr2(size, kBlockSize);
+  }
+  __syncthreads();
+  TIn* in = storage<TIn>(input);
+  TOut* out = storage<TOut>(output);
+  if (threadIdx.x == 0) {
+    out[0] = TOut(0);
+  }
+  for (uint32_t idx = threadIdx.x; idx < rounded; idx += blockDim.x) {
+    TOut val = (idx < size) ? static_cast<TOut>(in[idx]) : TOut(0);
+    if (threadIdx.x == 0) {
+      val += counter;
+    }
+    TOut sum = facebook::velox::wave::inclusiveSum<TOut, kBlockSize>(
+        val, nullptr, static_cast<TOut*>(temp));
+    if (idx < size) {
+      out[idx + 1] = sum;
+    }
+    if (threadIdx.x == blockDim.x - 1) {
+      counter = sum;
+    }
+    __syncthreads();
+  }
+}
+
+// Multi-block exclusive sum, stage 1: per-block sums (same as cumsum_head).
+template <int32_t kBlockSize, typename TIn, typename TOut>
+__device__ void exclusive_sum_head(
+    Tensor* input,
+    Tensor* output,
+    void* temp,
+    uint32_t& size,
+    uint32_t& rounded,
+    BlockInfo& block) {
+  cumsum_head<kBlockSize, TIn, TOut>(input, output, temp, size, rounded, block);
+}
+
+// Multi-block exclusive sum, stage 3: final exclusive prefix sum.
+// Output has size+1 elements: out[0]=0, out[i+1]=sum(in[0..i]).
+template <int32_t kBlockSize, typename TIn, typename TOut>
+__device__ void exclusive_sum_final(
+    Tensor* input,
+    Tensor* counts,
+    Tensor* output,
+    void* temp,
+    uint32_t& size,
+    uint32_t& rounded,
+    BlockInfo& block) {
+  if (threadIdx.x == 0) {
+    size = numEl(*input);
+    rounded = roundUpPwr2(size, kBlockSize);
+  }
+  __syncthreads();
+  TIn* in = storage<TIn>(input);
+  TOut* cnt = storage<TOut>(counts);
+  TOut* out = storage<TOut>(output);
+  uint32_t blockIdx = block.blockInOp;
+  for (uint32_t idx = block.blockInOp * blockDim.x + threadIdx.x; idx < rounded;
+       idx += block.numBlocksInOp * blockDim.x) {
+    TOut val = (idx < size) ? static_cast<TOut>(in[idx]) : TOut(0);
+    TOut base = blockIdx == 0 ? TOut(0) : cnt[blockIdx - 1];
+    if (threadIdx.x == 0) {
+      val += base;
+      out[idx] = base;
+    }
+    TOut sum = facebook::velox::wave::inclusiveSum<TOut, kBlockSize>(
+        val, nullptr, static_cast<TOut*>(temp));
+    if (idx < size) {
+      out[idx + 1] = sum;
+    }
+    blockIdx += block.numBlocksInOp;
+  }
+}
+
+// repeat_interleave final stage: for each element i in self, writes self[i]
+// into output[prefix[i-1]..prefix[i]). prefix is the inclusive prefix sum of
+// the repeats tensor.
+template <int32_t kBlockSize, typename T>
+__device__ void repeat_interleave_final(
+    Tensor* input,
+    Tensor* prefix,
+    int32_t* /*total*/,
+    Tensor* output,
+    uint32_t& size,
+    uint32_t& rounded,
+    BlockInfo& block) {
+  if (threadIdx.x == 0) {
+    size = numEl(*input);
+    rounded = roundUpPwr2(size, kBlockSize);
+  }
+  __syncthreads();
+  T* in = storage<T>(input);
+  int32_t* pfx = storage<int32_t>(prefix);
+  T* out = storage<T>(output);
+  for (uint32_t idx = block.blockInOp * blockDim.x + threadIdx.x; idx < rounded;
+       idx += block.numBlocksInOp * blockDim.x) {
+    if (idx < size) {
+      int32_t start = idx == 0 ? 0 : pfx[idx - 1];
+      int32_t end = pfx[idx];
+      T val = in[idx];
+      for (int32_t j = start; j < end; ++j) {
+        out[j] = val;
+      }
+    }
+  }
+}
+
+// Multi-block sum reduction, stage 1: per-block reduction.
+// Each block reduces its chunk of the input and writes one TOut value.
+template <int32_t kBlockSize, typename TIn, typename TOut>
+__device__ void tw_sum_head(
+    Tensor* input,
+    Tensor* output,
+    void* temp,
+    uint32_t& size,
+    uint32_t& rounded,
+    BlockInfo& block) {
+  if (threadIdx.x == 0) {
+    size = numEl(*input);
+    rounded = roundUpPwr2(size, kBlockSize);
+  }
+  __syncthreads();
+  TIn* in = storage<TIn>(input);
+  TOut* out = storage<TOut>(output);
+  uint32_t blockIdx = block.blockInOp;
+  for (uint32_t idx = block.blockInOp * blockDim.x + threadIdx.x; idx < rounded;
+       idx += block.numBlocksInOp * blockDim.x) {
+    TOut val = (idx < size) ? static_cast<TOut>(in[idx]) : TOut(0);
+    auto sum = reduce<kBlockSize, TOut>(
+        val, [](TOut a, TOut b) { return a + b; }, temp);
+    if (threadIdx.x == 0) {
+      out[blockIdx] = sum;
+      blockIdx += block.numBlocksInOp;
+    }
+  }
+}
+
+// Single-block sum reduction over a tensor. Reduces all elements of input
+// into a scalar stored in output. counterT accumulates intermediate sums
+// across iterations. TIn is the input element type, TOut is the
+// accumulation/output type.
+// Calling convention: (input, output, shared..., blockInfo).
+template <int32_t kBlockSize, typename TIn, typename TOut>
+__device__ void tw_sum_tensor(
+    Tensor* input,
+    Tensor* output,
+    void* temp,
+    uint32_t& size,
+    uint32_t& rounded,
+    TOut& counterT,
+    BlockInfo& /*block*/) {
+  if (threadIdx.x == 0) {
+    size = numEl(*input);
+    rounded = roundUpPwr2(size, kBlockSize);
+    counterT = TOut(0);
+  }
+  __syncthreads();
+  TIn* in = storage<TIn>(input);
+  for (uint32_t idx = threadIdx.x; idx < rounded; idx += blockDim.x) {
+    TOut val = (idx < size) ? static_cast<TOut>(in[idx]) : TOut(0);
+    auto blockSum = reduce<kBlockSize, TOut>(
+        val, [](TOut a, TOut b) { return a + b; }, temp);
+    if (threadIdx.x == 0) {
+      counterT += blockSum;
+    }
+    __syncthreads();
+  }
+  if (threadIdx.x == 0) {
+    *storage<TOut>(output) = counterT;
+  }
+}
+
+// Register-input overload: called per-lane from the caller's loop.
+// Accumulates block-reduced sums across iterations. On the last iteration
+// (idx at the last stride-aligned position), lane 0 writes the total to output.
+// TIn is the input element type, TOut is the accumulation/output type.
+template <int32_t kBlockSize, typename TIn, typename TOut>
+__device__ void tw_sum(
+    TIn in,
+    Tensor* output,
+    void* temp,
+    TOut& counterT,
+    uint32_t idx,
+    uint32_t size,
+    BlockInfo& /*block*/) {
+  if (idx == 0) {
+    counterT = TOut(0);
+  }
+  __syncthreads();
+  TOut val = static_cast<TOut>(in);
+  auto blockSum =
+      reduce<kBlockSize, TOut>(val, [](TOut a, TOut b) { return a + b; }, temp);
+  if (threadIdx.x == 0) {
+    counterT += blockSum;
+  }
+  __syncthreads();
+  if (threadIdx.x == 0 && idx + kBlockSize >= size) {
+    *storage<TOut>(output) = counterT;
   }
 }
 

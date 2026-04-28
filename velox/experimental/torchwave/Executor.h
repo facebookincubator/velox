@@ -224,12 +224,13 @@ class WaveGraphExecutor : public nativert::GraphExecutorBase {
   /// Launch::toString for standalone nodes.
   std::vector<std::pair<std::string, int64_t>> getStandaloneStats() const;
 
+  WaveGraph* waveGraph() const {
+    return waveGraph_.get();
+  }
+
  private:
   /// Runs the WaveGraph on the given frame.
   void executeWave(nativert::ExecutionFrame& frame, WaveGraph& waveGraph);
-
-  /// Builds ValueTypes from the graph's tensor metadata.
-  void initValueTypes(ValueTypes& valueTypes);
 
   std::shared_ptr<nativert::Weights> weights_;
 

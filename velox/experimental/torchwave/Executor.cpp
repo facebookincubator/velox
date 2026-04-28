@@ -43,6 +43,19 @@ GlobalResources* globals() {
 
 bool initialized = false;
 
+int64_t storageExtentBytes(const at::Tensor& t) {
+  if (t.numel() == 0) {
+    return 0;
+  }
+  int64_t maxOffset = 0;
+  for (int64_t d = 0; d < t.dim(); d++) {
+    if (t.size(d) > 1) {
+      maxOffset += (t.size(d) - 1) * t.stride(d);
+    }
+  }
+  return (maxOffset + 1) * t.element_size();
+}
+
 } // namespace
 
 void initialize() {
@@ -83,11 +96,12 @@ void tensorsToDevice(
   auto deviceId = facebook::velox::wave::currentDevice()->deviceId;
   auto device = c10::Device(c10::kCUDA, deviceId);
 
-  // Compute total bytes needed across all tensors.
+  // Compute total storage bytes needed. For non-contiguous tensors, the storage
+  // extent (first to last element) can exceed numel * element_size.
   int64_t totalBytes = 0;
   std::vector<int64_t> sizes(in.size());
   for (size_t i = 0; i < in.size(); ++i) {
-    sizes[i] = in[i].nbytes();
+    sizes[i] = storageExtentBytes(in[i]);
     totalBytes += sizes[i];
   }
 
@@ -101,12 +115,15 @@ void tensorsToDevice(
     offset += sizes[i];
   }
 
-  // Allocate device tensors via PyTorch and async copy from pinned memory.
+  // Allocate device storage and async copy, preserving original strides.
   out.resize(in.size());
   offset = 0;
   for (size_t i = 0; i < in.size(); ++i) {
-    out[i] = at::empty(in[i].sizes(), in[i].options().device(device));
-    stream.hostToDeviceAsync(out[i].data_ptr(), pinnedBase + offset, sizes[i]);
+    int64_t numElements = sizes[i] / in[i].element_size();
+    auto deviceFlat = at::empty({numElements}, in[i].options().device(device));
+    stream.hostToDeviceAsync(
+        deviceFlat.data_ptr(), pinnedBase + offset, sizes[i]);
+    out[i] = deviceFlat.as_strided(in[i].sizes(), in[i].strides());
     offset += sizes[i];
   }
 
@@ -121,7 +138,7 @@ void tensorsToHost(
   int64_t totalBytes = 0;
   std::vector<int64_t> sizes(in.size());
   for (size_t i = 0; i < in.size(); ++i) {
-    sizes[i] = in[i].nbytes();
+    sizes[i] = storageExtentBytes(in[i]);
     totalBytes += sizes[i];
   }
 
@@ -201,23 +218,10 @@ WaveGraphExecutor::WaveGraphExecutor(
     kernelMap_[k->node()] = k.get();
   }
   ValueTypes valueTypes;
-  initValueTypes(valueTypes);
+  initValueTypes(graph_, valueTypes, metaStore_);
   waveGraph_ = std::make_unique<WaveGraph>(graph, std::move(valueTypes));
   framePool_ = std::make_unique<Pool<nativert::ExecutionFrame>>(
       [this]() { return makeDeviceFrame(); });
-}
-
-void WaveGraphExecutor::initValueTypes(ValueTypes& valueTypes) {
-  const auto& tensorValuesMeta = graph_.tensorValuesMeta();
-  valueTypes.types.resize(graph_.values().size(), nullptr);
-  for (const auto* value : graph_.values()) {
-    auto it = tensorValuesMeta.find(std::string{value->name()});
-    if (it != tensorValuesMeta.end()) {
-      auto meta = std::make_unique<nativert::TensorMeta>(it->second);
-      valueTypes.types[value->id()] = meta.get();
-      metaStore_.push_back(std::move(meta));
-    }
-  }
 }
 
 std::unique_ptr<nativert::ExecutionFrame> WaveGraphExecutor::makeFrame() {
@@ -314,6 +318,13 @@ std::vector<c10::IValue> WaveGraphExecutor::executeWithPrefilledFrame(
 void WaveGraphExecutor::executeWave(
     nativert::ExecutionFrame& frame,
     WaveGraph& waveGraph) {
+  // Ensure the thread's CUDA device is set for tensor allocation.
+  auto* waveDevice = facebook::velox::wave::currentDevice();
+  if (!waveDevice) {
+    waveDevice = facebook::velox::wave::getDevice();
+  }
+  facebook::velox::wave::setDevice(waveDevice);
+
   Timer w("top exec", FLAGS_print_timing);
   auto* g = globals();
   launchDebugInfos_.clear();

@@ -21,6 +21,7 @@
 #include <ATen/core/dispatch/Dispatcher.h>
 #include <c10/util/StringUtil.h>
 #include <fmt/format.h>
+#include <torch/nativert/executor/Placement.h>
 
 namespace torch::wave {
 
@@ -185,6 +186,91 @@ std::string cudaTypeString(c10::ScalarType dtype) {
     default:
       TORCH_CHECK(false, "Unsupported dtype ", c10::toString(dtype));
   }
+}
+
+std::string cudaTypeFromScalarTypeName(const std::string& name) {
+  // Strip optional "ScalarType::" prefix.
+  std::string typeName = name;
+  auto pos = typeName.find("::");
+  if (pos != std::string::npos) {
+    typeName = typeName.substr(pos + 2);
+  }
+  static const std::unordered_map<std::string, std::string> kMap = {
+      {"Float", "float"},
+      {"Double", "double"},
+      {"Half", "__half"},
+      {"BFloat16", "__nv_bfloat16"},
+      {"Int", "int32_t"},
+      {"Long", "int64_t"},
+      {"Short", "int16_t"},
+      {"Char", "int8_t"},
+      {"Byte", "uint8_t"},
+      {"Bool", "bool"},
+  };
+  auto it = kMap.find(typeName);
+  TORCH_CHECK(it != kMap.end(), "Unsupported ScalarType name: ", name);
+  return it->second;
+}
+
+std::string cudaTypeFromDtype(const nativert::Attribute& attr) {
+  if (std::holds_alternative<std::string>(attr.value)) {
+    return cudaTypeFromScalarTypeName(std::get<std::string>(attr.value));
+  }
+  if (std::holds_alternative<c10::ScalarType>(attr.value)) {
+    return cudaTypeString(std::get<c10::ScalarType>(attr.value));
+  }
+  TORCH_CHECK(false, "dtype attribute is neither string nor ScalarType");
+}
+
+std::string dtypeName(const nativert::Attribute& attr) {
+  if (std::holds_alternative<std::string>(attr.value)) {
+    auto name = std::get<std::string>(attr.value);
+    auto pos = name.find("::");
+    return pos != std::string::npos ? name.substr(pos + 2) : name;
+  }
+  if (std::holds_alternative<c10::ScalarType>(attr.value)) {
+    return c10::toString(std::get<c10::ScalarType>(attr.value));
+  }
+  TORCH_CHECK(false, "dtype attribute is neither string nor ScalarType");
+}
+
+std::string cudaTypeIdSuffix(c10::ScalarType dtype) {
+  switch (dtype) {
+    case c10::ScalarType::Float:
+      return "Float";
+    case c10::ScalarType::Double:
+      return "Double";
+    case c10::ScalarType::Half:
+      return "Half";
+    case c10::ScalarType::BFloat16:
+      return "BFloat16";
+    case c10::ScalarType::Int:
+      return "Int32";
+    case c10::ScalarType::Long:
+      return "Int64";
+    case c10::ScalarType::Short:
+      return "Int16";
+    case c10::ScalarType::Char:
+      return "Int8";
+    case c10::ScalarType::Byte:
+      return "UInt8";
+    case c10::ScalarType::Bool:
+      return "Bool";
+    default:
+      TORCH_CHECK(false, "Unsupported dtype ", c10::toString(dtype));
+  }
+}
+
+void setGraphDevice(nativert::Graph* graph, bool isCuda) {
+  c10::Device target = isCuda
+      ? c10::Device(
+            c10::kCUDA,
+            facebook::velox::wave::currentDevice()
+                ? facebook::velox::wave::currentDevice()->deviceId
+                : 0)
+      : c10::Device(c10::kCPU);
+  nativert::Placement placement(target);
+  graph->applyDevicePlacement(placement);
 }
 
 } // namespace torch::wave

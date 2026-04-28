@@ -25,6 +25,7 @@
 #include <caffe2/caffe2/serialize/file_adapter.h>
 #include <caffe2/serialize/inline_container.h> // @manual=//caffe2/caffe2/serialize:inline_container
 #include "velox/experimental/torchwave/Compile.h"
+#include "velox/experimental/torchwave/DescribePt.h"
 #include "velox/experimental/torchwave/Executor.h"
 #include "velox/experimental/torchwave/GraphView.h"
 #include "velox/experimental/torchwave/Pt2Load.h"
@@ -44,11 +45,22 @@ DEFINE_bool(
     false,
     "List model names found in the package and exit");
 DEFINE_bool(compile, false, "Compile the graph");
+DEFINE_bool(optimize, false, "Optimize graph before printing");
+DEFINE_bool(value_meta, false, "Show value type and rank annotations");
+DEFINE_string(
+    describe_pt,
+    "",
+    "Path to a .pt file to describe tensor contents");
 
 int main(int argc, char** argv) {
   folly::Init init(&argc, &argv);
 
   torch::wave::initialize();
+
+  if (!FLAGS_describe_pt.empty()) {
+    torch::wave::describePt(FLAGS_describe_pt);
+    return 0;
+  }
 
   if (FLAGS_pt2.empty()) {
     std::cerr << "Error: --pt2 is required\n";
@@ -87,7 +99,7 @@ int main(int argc, char** argv) {
     }
 
     if (FLAGS_print_graph) {
-      torch::wave::printGraphView(graph);
+      torch::wave::printGraphView(graph, FLAGS_optimize, FLAGS_value_meta);
     }
 
     if (FLAGS_compile) {

@@ -96,6 +96,11 @@ class CompileCtx {
   /// originalNode_, we return the original node's outputs instead.
   const std::vector<nativert::Value*>& outputs(NodeCP node) const;
 
+  /// Returns the executable form of 'node'. In single block mode, returns
+  /// 'node' unchanged. Otherwise, returns the root of the multikernel variant
+  /// if one exists (creating it on first call), or 'node' itself.
+  NodeCP executableNode(NodeCP node);
+
   /// Calls Metadata::makeMultiKernelVariant and records the mapping from the
   /// variant root back to the original node in originalNode_.
   NodeCP getMultiBlockVariant(NodeCP node, WaveGraph* waveGraph);
@@ -130,6 +135,10 @@ class CompileCtx {
   /// result specs set to the output Values of the node.
   void generateElementwiseBorder(NodeCP node);
 
+  void generateIndexToOffset(
+      const ElementExpr& ee,
+      const std::vector<ValueCP>& allInputs);
+
   void fusedCode(NodeCP node, std::vector<ResultSpec>& resultSpecs);
 
   void functionLoop(NodeCP node);
@@ -137,7 +146,8 @@ class CompileCtx {
   std::string elementwiseExpr(
       NodeCP node,
       const KernelOperation& op,
-      const std::vector<ValueCP>& inputs);
+      const std::vector<ValueCP>& inputs,
+      bool slowPath = false);
 
   void addInclude(std::string_view header);
 
@@ -174,18 +184,12 @@ class CompileCtx {
   /// scalar type like int32_t, float, bool).
   std::string declareTemp(ValueCP value);
 
-  Subgraph
-  extractSubgraph(NodeCP node, const NodeSet& inputs, const NodeSet& placed);
+  Subgraph extractSubgraph(NodeCP node, const NodeSet& inputs, NodeSet& placed);
 
   bool isElementWise(const nativert::Node& node, const NodeSet& placed = {})
       const;
 
-  bool hasBarrier(const nativert::Node& node, const NodeSet& placed = {}) const;
-
   bool isSingleBlock(const nativert::Node& node, const NodeSet& placed = {})
-      const;
-
-  bool hasStandalone(const nativert::Node& node, const NodeSet& placed = {})
       const;
 
   bool isMultikernel(const nativert::Node& node, const NodeSet& placed = {})
@@ -242,7 +246,8 @@ class CompileCtx {
       const std::unordered_set<ValueCP>& inputSet,
       const std::vector<ValueCP>& inputs,
       const KernelOperation& op,
-      std::stringstream& ss);
+      std::stringstream& ss,
+      bool slowPath);
 
   /// Marks matching kernel ops in grid_ and singleBlockGrid_ as grid choices.
   void setGridChoice(ProjectOperation* projectOp);
@@ -261,6 +266,7 @@ class CompileCtx {
   int32_t declareCounter_{0};
   const std::unordered_set<NodeCP>* inputs_;
   NodeSet placed_;
+  NodeSet placedBeforeNode_;
 
   // Offset of param corresponding to Value in the kernel's BlockInfo::params.
   std::unordered_map<ValueCP, int32_t> valueParamOffset_;
@@ -293,6 +299,12 @@ class CompileCtx {
   // Maps a multiblock variant root node back to the original node whose
   // outputs it logically produces.
   std::unordered_map<NodeCP, NodeCP> originalNode_;
+
+  // Maps an original node to its executable form (multikernel variant root,
+  // or the node itself if no variant exists).
+  std::unordered_map<NodeCP, NodeCP> executableNode_;
+
+  const ElementExpr* currentElementExpr_{nullptr};
 };
 
 } // namespace torch::wave

@@ -25,6 +25,7 @@
 #include <torch/nativert/graph/TensorMeta.h>
 
 #include "velox/experimental/torchwave/Executor.h"
+#include "velox/experimental/torchwave/GraphOptimizer.h"
 #include "velox/experimental/torchwave/ParallelExpr.h"
 
 namespace torch::wave {
@@ -81,7 +82,10 @@ void printModelParams(const torch::nativert::Graph& graph) {
   }
 }
 
-void printGraphView(const torch::nativert::Graph& graph) {
+void printGraphView(
+    torch::nativert::Graph& graph,
+    bool optimize,
+    bool valueMeta) {
   initialize();
   std::cout << "\nGraph Signature:\n";
   std::cout << graph.signature() << "\n";
@@ -94,6 +98,15 @@ void printGraphView(const torch::nativert::Graph& graph) {
     std::cout << nodeIdx++ << ": " << node.toString() << "\n";
   }
 
+  ValueTypes types;
+  std::vector<std::unique_ptr<torch::nativert::TensorMeta>> metaStore;
+  if (optimize || valueMeta) {
+    initValueTypes(graph, types, metaStore);
+    Optimizer optimizer(types);
+    optimizer.optimizeGraph(&graph);
+  }
+
+  const ValueTypes* typesPtr = (valueMeta) ? &types : nullptr;
   std::cout << "\nProject Nodes:\n";
   torch::wave::ParallelNodes parallelNodes;
   auto* lastProjectNode = parallelNodes.makeParallelNodes(graph);
@@ -104,7 +117,7 @@ void printGraphView(const torch::nativert::Graph& graph) {
   std::reverse(projectNodeList.begin(), projectNodeList.end());
   torch::wave::PlanObjectSet border;
   for (const auto* pn : projectNodeList) {
-    std::cout << pn->toString(graph, border);
+    std::cout << pn->toString(graph, border, typesPtr);
     border.insert(pn->nodes().begin(), pn->nodes().end());
   }
 
@@ -167,18 +180,9 @@ void printGraphView(const torch::nativert::Graph& graph) {
 }
 
 void compileGraph(torch::nativert::Graph& graph) {
-  const auto& tensorValuesMeta = graph.tensorValuesMeta();
   ValueTypes types;
-  types.types.resize(graph.values().size(), nullptr);
   std::vector<std::unique_ptr<torch::nativert::TensorMeta>> metaStore;
-  for (const auto* value : graph.values()) {
-    auto it = tensorValuesMeta.find(std::string{value->name()});
-    if (it != tensorValuesMeta.end()) {
-      auto meta = std::make_unique<torch::nativert::TensorMeta>(it->second);
-      types.types[value->id()] = meta.get();
-      metaStore.push_back(std::move(meta));
-    }
-  }
+  initValueTypes(graph, types, metaStore);
   WaveGraph waveGraph(graph, types);
   std::cout << waveGraph.toString() << "\n";
 }

@@ -26,6 +26,8 @@
 #include "velox/experimental/torchwave/Project.h"
 #include "velox/experimental/torchwave/Utils.h"
 
+#include <torch/nativert/graph/Graph.h>
+
 namespace torch::wave {
 
 namespace {
@@ -39,6 +41,64 @@ bool isCallExpr(NodeCP node) {
     }
   }
   return false;
+}
+
+char dtypeLetter(c10::ScalarType dtype) {
+  switch (dtype) {
+    case c10::ScalarType::Float:
+      return 'f';
+    case c10::ScalarType::Double:
+      return 'd';
+    case c10::ScalarType::Half:
+      return 'h';
+    case c10::ScalarType::BFloat16:
+      return 'B';
+    case c10::ScalarType::Long:
+      return 'L';
+    case c10::ScalarType::Int:
+      return 'I';
+    case c10::ScalarType::Short:
+      return 'S';
+    case c10::ScalarType::Byte:
+      return 'U';
+    case c10::ScalarType::Char:
+      return 'C';
+    case c10::ScalarType::Bool:
+      return 'b';
+    default:
+      return '?';
+  }
+}
+
+// Formats a type annotation for a single value, e.g. "(2Df)" or "(?L)" or
+// "(L)".
+void formatValueType(
+    std::stringstream& ss,
+    ValueCP value,
+    const ValueTypes& types) {
+  if (value == nullptr) {
+    return;
+  }
+  auto kind = value->type().kind();
+  if (kind == nativert::Type::Kind::Tensor) {
+    auto r = types.rank(value);
+    auto id = value->id();
+    char dl = '?';
+    if (static_cast<size_t>(id) < types.types.size() && types.types[id]) {
+      dl = dtypeLetter(types.types[id]->dtype());
+    }
+    if (r < 0) {
+      ss << "(?" << dl << ")";
+    } else {
+      ss << "(" << static_cast<int>(r) << "D" << dl << ")";
+    }
+  } else if (kind == nativert::Type::Kind::SymInt) {
+    ss << "(L)";
+  } else if (kind == nativert::Type::Kind::SymFloat) {
+    ss << "(f)";
+  } else if (kind == nativert::Type::Kind::SymBool) {
+    ss << "(b)";
+  }
 }
 
 // Formats a leaf value using tensor metadata from the graph.
@@ -78,7 +138,8 @@ void nodeExprStringImpl(
     std::stringstream& ss,
     NodeCP node,
     const nativert::Graph& graph,
-    PlanObjectSet& border) {
+    PlanObjectSet& border,
+    const ValueTypes* types) {
   if (!isCallExpr(node)) {
     ss << node->target();
     if (!node->attributes().empty()) {
@@ -108,11 +169,20 @@ void nodeExprStringImpl(
     auto* producer = value->producer();
 
     if (producer == nullptr || producer == node) {
+      if (types) {
+        formatValueType(ss, value, *types);
+      }
       ss << leafValueString(value->name(), graph);
     } else if (border.count(producer)) {
+      if (types) {
+        formatValueType(ss, value, *types);
+      }
       ss << "%" << value->id();
     } else {
-      nodeExprStringImpl(ss, producer, graph, border);
+      if (types) {
+        formatValueType(ss, value, *types);
+      }
+      nodeExprStringImpl(ss, producer, graph, border, types);
     }
   }
   for (const auto& attr : node->attributes()) {
@@ -171,15 +241,39 @@ void formatOutputIds(std::stringstream& ss, NodeCP node) {
 std::string nodeExprString(
     NodeCP node,
     const nativert::Graph& graph,
-    PlanObjectSet& border) {
+    PlanObjectSet& border,
+    const ValueTypes* types) {
   std::stringstream ss;
-  nodeExprStringImpl(ss, node, graph, border);
+  nodeExprStringImpl(ss, node, graph, border, types);
   return ss.str();
 }
 
+namespace {
+
+void formatValueMeta(
+    std::stringstream& ss,
+    NodeCP node,
+    const ValueTypes& types) {
+  const auto& outputs = node->outputs();
+  if (outputs.size() > 1) {
+    ss << "*";
+  }
+  for (const auto* value : outputs) {
+    if (value == nullptr) {
+      ss << "<null>";
+      continue;
+    }
+    formatValueType(ss, value, types);
+  }
+  ss << " ";
+}
+
+} // namespace
+
 std::string ProjectNode::toString(
     const nativert::Graph& graph,
-    PlanObjectSet& border) const {
+    PlanObjectSet& border,
+    const ValueTypes* valueTypes) const {
   std::stringstream ss;
   PlanObjectSet localBorder(inputs_.begin(), inputs_.end());
   localBorder.insert(border.begin(), border.end());
@@ -187,7 +281,15 @@ std::string ProjectNode::toString(
   for (int32_t i = 0; i < static_cast<int32_t>(nodes_.size()); ++i) {
     ss << fmt::format("  {}.{}: ", id_, i);
     formatOutputIds(ss, nodes_[i]);
-    ss << " = " << nodeExprString(nodes_[i], graph, localBorder) << "\n";
+    if (localBorder.count(nodes_[i])) {
+      ss << "\n";
+    } else {
+      ss << " = ";
+      if (valueTypes) {
+        formatValueMeta(ss, nodes_[i], *valueTypes);
+      }
+      ss << nodeExprString(nodes_[i], graph, localBorder, valueTypes) << "\n";
+    }
   }
   if (input_ != nullptr) {
     ss << fmt::format("  input: ProjectNode {}\n", input_->id());

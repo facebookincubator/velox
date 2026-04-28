@@ -52,6 +52,8 @@ void fillTensorParam(const at::Tensor& tensor, Tensor* t) {
     t->dims[i] = i < tensor.dim() ? tensor.size(i) : 0;
     t->strides[i] = i < tensor.dim() ? tensor.stride(i) : 0;
   }
+  t->numEl = tensor.numel();
+  t->status = Tensor::kUninited;
 }
 
 __global__ void maskedSelectKernel(TorchWaveParams params) {
@@ -77,7 +79,7 @@ __global__ void maskedSelectKernel(TorchWaveParams params) {
         param<Tensor>(blockInfo, 0),
         param<Tensor>(blockInfo, sizeof(Tensor)),
         param<Tensor>(blockInfo, 2 * sizeof(Tensor)),
-        temp,
+        (void*)temp,
         counter,
         idx,
         size,
@@ -153,7 +155,7 @@ __global__ void maskedSelectHeadKernel(TorchWaveParams params) {
       param<Tensor>(blockInfo, 0),
       param<Tensor>(blockInfo, sizeof(Tensor)),
       param<Tensor>(blockInfo, 2 * sizeof(Tensor)),
-      temp,
+      (void*)temp,
       size,
       rounded,
       blockInfo);
@@ -189,7 +191,7 @@ __global__ void addSizesKernel(TorchWaveParams params) {
   add_sizes<kBlockSize>(
       param<Tensor>(blockInfo, 0),
       param<int32_t>(blockInfo, sizeof(Tensor)),
-      temp,
+      (void*)temp,
       size,
       rounded,
       counter,
@@ -231,7 +233,7 @@ __global__ void maskedSelectFinalKernel(TorchWaveParams params) {
       param<Tensor>(blockInfo, 2 * sizeof(Tensor)),
       param<int32_t>(blockInfo, 3 * sizeof(Tensor)),
       param<Tensor>(blockInfo, kOutputTensorOffset),
-      temp,
+      (void*)temp,
       size,
       rounded,
       blockInfo);
@@ -392,6 +394,215 @@ TEST_F(KernelTest, maskedSelectThreeKernel) {
        i < std::min(totalCount, static_cast<int32_t>(expected.size()));
        ++i) {
     EXPECT_EQ(outputData[i], expected[i]) << "Mismatch at index " << i;
+  }
+}
+
+// --- Cumsum kernels ---
+
+__global__ void cumsumKernel(TorchWaveParams params) {
+  __shared__ BlockInfo blockInfo;
+  __shared__ Int32X32 temp;
+  __shared__ uint32_t size;
+  __shared__ uint32_t rounded;
+  __shared__ int32_t counter;
+
+  if (threadIdx.x == 0) {
+    blockInfo =
+        params.info ? params.info[blockIdx.x] : params.inlineInfo[blockIdx.x];
+  }
+  __syncthreads();
+
+  cumsum<kBlockSize, int32_t, int32_t>(
+      param<Tensor>(blockInfo, 0),
+      param<Tensor>(blockInfo, sizeof(Tensor)),
+      (void*)temp,
+      size,
+      rounded,
+      counter,
+      blockInfo);
+}
+
+__global__ void cumsumHeadKernel(TorchWaveParams params) {
+  __shared__ BlockInfo blockInfo;
+  __shared__ Int32X32 temp;
+  __shared__ uint32_t size;
+  __shared__ uint32_t rounded;
+
+  if (threadIdx.x == 0) {
+    blockInfo =
+        params.info ? params.info[blockIdx.x] : params.inlineInfo[blockIdx.x];
+  }
+  __syncthreads();
+
+  cumsum_head<kBlockSize, int32_t, int32_t>(
+      param<Tensor>(blockInfo, 0),
+      param<Tensor>(blockInfo, sizeof(Tensor)),
+      (void*)temp,
+      size,
+      rounded,
+      blockInfo);
+}
+
+__global__ void cumsumFinalKernel(TorchWaveParams params) {
+  __shared__ BlockInfo blockInfo;
+  __shared__ Int32X32 temp;
+  __shared__ uint32_t size;
+  __shared__ uint32_t rounded;
+
+  if (threadIdx.x == 0) {
+    blockInfo =
+        params.info ? params.info[blockIdx.x] : params.inlineInfo[blockIdx.x];
+  }
+  __syncthreads();
+
+  cumsum_final<kBlockSize, int32_t, int32_t>(
+      param<Tensor>(blockInfo, 0),
+      param<Tensor>(blockInfo, sizeof(Tensor)),
+      param<Tensor>(blockInfo, 2 * sizeof(Tensor)),
+      (void*)temp,
+      size,
+      rounded,
+      blockInfo);
+}
+
+TEST_F(KernelTest, cumsumSingleBlock) {
+  constexpr int32_t kSize = 200;
+
+  auto input = at::randint(
+      0, 10, {kSize}, at::TensorOptions().dtype(at::kInt).device(at::kCUDA));
+  auto output =
+      at::zeros({kSize}, at::TensorOptions().dtype(at::kInt).device(at::kCUDA));
+
+  auto params = allocateManagedArray<Tensor>(2);
+  fillTensorParam(input, &params[0]);
+  fillTensorParam(output, &params[1]);
+
+  TorchWaveParams twParams;
+  memset(&twParams, 0, sizeof(twParams));
+  auto& bi = twParams.inlineInfo[0];
+  bi.numBlocksInOp = 1;
+  bi.params = params.get();
+
+  cumsumKernel<<<1, kBlockSize>>>(twParams);
+  cudaDeviceSynchronize();
+
+  auto inputCpu = input.cpu();
+  auto outputCpu = output.cpu();
+  auto* inData = inputCpu.data_ptr<int32_t>();
+  auto* outData = outputCpu.data_ptr<int32_t>();
+
+  int32_t sum = 0;
+  for (int i = 0; i < kSize; ++i) {
+    sum += inData[i];
+    EXPECT_EQ(outData[i], sum) << "Inclusive mismatch at " << i;
+  }
+}
+
+TEST_F(KernelTest, cumsumThreeStage) {
+  constexpr int32_t kSize = 100000;
+  constexpr int32_t kNumBlocks = (kSize + kBlockSize - 1) / kBlockSize;
+  constexpr int32_t kGridBlocks = (kNumBlocks + 1) / 2;
+
+  auto input = at::randint(
+      0, 10, {kSize}, at::TensorOptions().dtype(at::kInt).device(at::kCUDA));
+  auto counts = at::zeros(
+      {kNumBlocks}, at::TensorOptions().dtype(at::kInt).device(at::kCUDA));
+  auto output =
+      at::zeros({kSize}, at::TensorOptions().dtype(at::kInt).device(at::kCUDA));
+
+  auto inputCpu = input.cpu();
+  auto* inData = inputCpu.data_ptr<int32_t>();
+
+  // --- Stage 1: cumsum_head ---
+  auto headParams = allocateManagedArray<Tensor>(2);
+  fillTensorParam(input, &headParams[0]);
+  fillTensorParam(counts, &headParams[1]);
+
+  auto headBlockInfo = allocateManagedArray<BlockInfo>(kGridBlocks);
+  for (int i = 0; i < kGridBlocks; ++i) {
+    memset(&headBlockInfo[i], 0, sizeof(BlockInfo));
+    headBlockInfo[i].blockInOp = i;
+    headBlockInfo[i].numBlocksInOp = kGridBlocks;
+    headBlockInfo[i].params = headParams.get();
+  }
+
+  auto headBlockInfoDev = allocateDeviceMemory<BlockInfo>(kGridBlocks);
+  cudaMemcpy(
+      headBlockInfoDev.get(),
+      headBlockInfo.get(),
+      kGridBlocks * sizeof(BlockInfo),
+      cudaMemcpyHostToDevice);
+
+  TorchWaveParams headTwParams;
+  memset(&headTwParams, 0, sizeof(headTwParams));
+  headTwParams.info = headBlockInfoDev.get();
+
+  cumsumHeadKernel<<<kGridBlocks, kBlockSize>>>(headTwParams);
+  cudaDeviceSynchronize();
+
+  // Verify per-block sums.
+  auto countsCpu = counts.cpu();
+  auto* countData = countsCpu.data_ptr<int32_t>();
+  std::vector<int32_t> expectedBlockSums(kNumBlocks);
+  for (int b = 0; b < kNumBlocks; ++b) {
+    int32_t s = 0;
+    for (int i = b * kBlockSize; i < std::min((b + 1) * kBlockSize, kSize);
+         ++i) {
+      s += inData[i];
+    }
+    expectedBlockSums[b] = s;
+    EXPECT_EQ(countData[b], s) << "Head: block " << b << " sum mismatch";
+  }
+
+  // --- Stage 2: add_sizes ---
+  auto addSizesParams =
+      allocateManagedArray<char>(sizeof(Tensor) + sizeof(int32_t));
+  fillTensorParam(counts, reinterpret_cast<Tensor*>(addSizesParams.get()));
+  *reinterpret_cast<int32_t*>(addSizesParams.get() + sizeof(Tensor)) = 0;
+
+  TorchWaveParams addSizesTwParams;
+  memset(&addSizesTwParams, 0, sizeof(addSizesTwParams));
+  auto& addBi = addSizesTwParams.inlineInfo[0];
+  addBi.numBlocksInOp = 1;
+  addBi.params = addSizesParams.get();
+
+  addSizesKernel<<<1, kBlockSize>>>(addSizesTwParams);
+  cudaDeviceSynchronize();
+
+  // --- Stage 3: cumsum_final ---
+  auto finalParams = allocateManagedArray<Tensor>(3);
+  fillTensorParam(input, &finalParams[0]);
+  fillTensorParam(counts, &finalParams[1]);
+  fillTensorParam(output, &finalParams[2]);
+
+  auto finalBlockInfo = allocateManagedArray<BlockInfo>(kGridBlocks);
+  for (int i = 0; i < kGridBlocks; ++i) {
+    memset(&finalBlockInfo[i], 0, sizeof(BlockInfo));
+    finalBlockInfo[i].blockInOp = i;
+    finalBlockInfo[i].numBlocksInOp = kGridBlocks;
+    finalBlockInfo[i].params = finalParams.get();
+  }
+
+  auto finalBlockInfoDev = allocateDeviceMemory<BlockInfo>(kGridBlocks);
+  cudaMemcpy(
+      finalBlockInfoDev.get(),
+      finalBlockInfo.get(),
+      kGridBlocks * sizeof(BlockInfo),
+      cudaMemcpyHostToDevice);
+
+  TorchWaveParams finalTwParams;
+  memset(&finalTwParams, 0, sizeof(finalTwParams));
+  finalTwParams.info = finalBlockInfoDev.get();
+
+  cumsumFinalKernel<<<kGridBlocks, kBlockSize>>>(finalTwParams);
+  cudaDeviceSynchronize();
+
+  auto outputCpu = output.cpu();
+  auto* outData = outputCpu.data_ptr<int32_t>();
+  int32_t sum = 0;
+  for (int i = 0; i < kSize; ++i) {
+    sum += inData[i];
+    EXPECT_EQ(outData[i], sum) << "3-stage mismatch at " << i;
   }
 }
 

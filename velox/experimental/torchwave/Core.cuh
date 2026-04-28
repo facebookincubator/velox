@@ -37,16 +37,37 @@ __device__ inline T* storage(const Tensor* tensor) {
   return reinterpret_cast<T*>(tensor->storage);
 }
 
-__device__ inline bool isFastPathTensor(const Tensor& tensor) {
-  return tensor.rank == 1 && tensor.strides[0] == 1;
-}
-
 template <typename T>
-__device__ inline T& elementRef(Tensor* t, int32_t idx) {
-  return storage<T>(t)[idx];
+__device__ inline T elementRef(Tensor* t, uint32_t idx, uint32_t size) {
+  return idx < size ? storage<T>(t)[idx] : T();
 }
 
-using Int32X32 = uint32_t[32];
+__device__ inline void copyTensorHead(const Tensor* in, Tensor* out) {
+  out->storage = in->storage;
+  out->rank = in->rank;
+  for (int i = 0; i < kMaxDims; ++i) {
+    out->dims[i] = in->dims[i];
+    out->strides[i] = in->strides[i];
+  }
+}
+
+__device__ inline uint32_t
+complexIdx(bool fast, const Tensor* t, uint32_t idx) {
+  if (!fast) {
+    return t->indexToOffset(idx);
+  }
+  return idx;
+}
+
+struct Int32X32 {
+  uint64_t data[32];
+  __host__ __device__ operator void*() {
+    return static_cast<void*>(data);
+  }
+  __host__ __device__ operator void*() const {
+    return const_cast<void*>(static_cast<const void*>(data));
+  }
+};
 
 #define ENTRY                                                                  \
   __shared__ BlockInfo blockInfo;                                              \
@@ -81,5 +102,27 @@ template <typename T, typename U>
 __host__ __device__ constexpr inline T roundUpPwr2(T x, U y) {
   return (x + (y - 1)) & ~(y - 1);
 }
+
+__device__ inline void traceTensor(const BlockInfo& block, int32_t offset) {
+  auto* t = param<Tensor>(block, offset);
+  printf(
+      "offset=%d storage=%p rank=%d dims=[%d,%d,%d] strides=[%d,%d,%d]\n",
+      offset,
+      t->storage,
+      t->rank,
+      t->dims[0],
+      t->dims[1],
+      t->dims[2],
+      t->strides[0],
+      t->strides[1],
+      t->strides[2]);
+}
+
+#define TRACE0(__x)         \
+  do {                      \
+    if (threadIdx.x == 0) { \
+      __x;                  \
+    }                       \
+  } while (0)
 
 } // namespace torch::wave
