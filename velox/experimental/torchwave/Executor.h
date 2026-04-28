@@ -52,34 +52,132 @@ void tensorsToHost(
     std::vector<at::Tensor>& out,
     facebook::velox::wave::Stream& stream);
 
-/// Holds runtime state for executing a WaveGraph.
+/// Debug info pointers for a single kernel launch, linking the pinned (host)
+/// and device copies so that getDebugInfo() can queue D2H transfers.
+struct LaunchDebugInfo {
+  DebugInfo* pinnedInfo;
+  DebugInfo* deviceInfo;
+  int32_t numBlocks;
+};
+
+/// Preallocated vectors reused across executions for a given
+/// (compositeInvocation, stepIdx) pair.  Avoids per-step heap allocation
+/// in CompositeInvocation::execute and makeGrid.
+struct StepVectors {
+  // Used by CompositeInvocation::execute / gatherLaunches.
+  std::vector<LaunchData> kernels;
+  std::vector<LaunchData> standalones;
+  std::vector<int64_t> paramOffsets;
+
+  // Precomputed largestInput per kernel launch for step 0, populated by
+  // selectGrid so that gatherLaunches avoids recomputing it.
+  std::vector<int64_t> inputSizes;
+
+  // Used by makeGrid (output).
+  std::vector<BlockInfo> blocks;
+  std::vector<int32_t> launchIndices;
+
+  // Used by makeGrid (internal temporaries).
+  std::vector<float> costs;
+  std::vector<int32_t> maxBlocks;
+  std::vector<int32_t> numBlocksPerLaunch;
+
+  // Output of selectGrid, recycled across executions.
+  std::vector<GridChoice> gridChoices;
+
+  // Cached size bounds for makeGrid reuse. If every launch's numElements falls
+  // within [sizesLower[i], sizesUpper[i]], the previous makeGrid result
+  // (blocks, launchIndices, numBlocksPerLaunch) can be reused.
+  std::vector<int64_t> sizesLower;
+  std::vector<int64_t> sizesUpper;
+  int32_t cachedBlockSize{0};
+
+  // Bitmap of grid choices from selectGrid (1 = singleBlock, 0 = default).
+  // Used to detect when grid choice changed, invalidating all step caches.
+  uint64_t gridChoiceBitmap{0};
+
+  /// True if sizes matched so that makeGrid results can be reused.
+  bool hasGridCache{false};
+
+  /// True if grid choice matched so that Values and their frame offset in
+  /// LaunchData can be reused. If false, these are reconstructed when
+  /// constructing the frame.
+  bool hasLaunchCache{false};
+
+  /// Set by gatherLaunches when an existing LaunchData's grid is switched
+  /// (e.g. from default to single-block) due to isGridChoice.
+  bool gridChanged{false};
+};
+
+/// Holds runtime state for executing a WaveGraph.  Pooled by WaveGraph
+/// so that reusable buffers survive across calls.
 struct ExecutionState {
-  nativert::ExecutionFrame& frame;
+  FrameP frame{nullptr};
   const ValueTypes* valueTypes{nullptr};
+  WaveGraph* waveGraph{nullptr};
   facebook::velox::wave::GpuArena* deviceArena{nullptr};
   facebook::velox::wave::GpuArena* pinnedArena{nullptr};
   facebook::velox::wave::GpuArena* managedArena{nullptr};
   StreamPool* streamPool{nullptr};
   EventPool* eventPool{nullptr};
+
+  /// Reusable CUDA stream, obtained from streamPool at the start of execution
+  /// and returned on scope exit.
+  std::unique_ptr<facebook::velox::wave::Stream> stream;
+
+  const std::unordered_map<NodeCP, nativert::OpKernel*>* kernelMap{nullptr};
+  const std::unordered_map<NodeCP, int32_t>* standaloneIndices{nullptr};
+  std::vector<StandaloneStats>* standaloneStats{nullptr};
+
+  /// Per-launch debug info collected during execution (owned by executor).
+  std::vector<LaunchDebugInfo>* launchDebugInfos{nullptr};
+
+  /// Reusable device buffers indexed by [sequenceNumber][stepIdx].
+  std::vector<std::vector<facebook::velox::wave::WaveBufferPtr>> deviceBuffers;
+  /// Reusable pinned buffers indexed by [sequenceNumber][stepIdx].
+  std::vector<std::vector<facebook::velox::wave::WaveBufferPtr>> pinnedBuffers;
+  /// Preallocated per-step vectors indexed by [sequenceNumber][stepIdx].
+  std::vector<std::vector<StepVectors>> stepVectors;
 };
 
-/// Builds BlockInfo grid for a set of OpInvocations given their numElements.
-/// Populates 'blocks' with the BlockInfo array, 'opIndices' with the op index
-/// for each block, and clears 'nextOps'.
-void makeGrid(
-    const std::vector<OpInvocation>& ops,
-    const std::vector<int64_t>& numElements,
-    std::vector<BlockInfo>& blocks,
-    std::vector<int32_t>& opIndices,
-    std::vector<OpInvocation*>& nextOps);
+/// Runs standalone launches by mapping each formal node to the actual node
+/// via OpInvocation::nodeMap(), executing it via the corresponding OpKernel,
+/// and recording timing in standaloneStats.
+void runStandalones(
+    const std::vector<LaunchData>& standalones,
+    ExecutionState& state,
+    const std::unordered_map<NodeCP, nativert::OpKernel*>& kernelMap,
+    const std::unordered_map<NodeCP, int32_t>& standaloneIndices,
+    std::vector<StandaloneStats>& standaloneStats);
 
-/// Computes output shapes for elementwise operations given the dedupped input
-/// values' shapes.
-std::vector<std::vector<Dim>> elementwiseOutputShape(
-    const std::vector<const nativert::Value*>& inputs,
-    const nativert::Node* node,
+/// Builds BlockInfo grid for a set of LaunchData entries. Uses preallocated
+/// vectors in 'sv' (blocks, launchIndices, costs, maxBlocks,
+/// numBlocksPerLaunch). Returns the block size (threads per block).
+int32_t makeGrid(
+    const std::vector<LaunchData>& launches,
+    StepVectors& sv,
+    int32_t maxBlocksPerSM = 0);
+
+/// Looks up 'value' in 'map' and returns the corresponding tensor from 'frame'.
+at::Tensor paramTensor(
+    ValueCP value,
     nativert::ExecutionFrame& frame,
-    FormalToActual map);
+    const FormalToActual& map);
+
+/// Returns the shape of the largest tensor reachable from
+/// node->inputs()[ordinal] by tracing through elementwise producers that have
+/// no frame entry. Stops at values that exist in the frame.
+std::vector<std::vector<Dim>> elementwiseInputShape(
+    NodeCP node,
+    nativert::ExecutionFrame& frame,
+    FormalToActual map,
+    int32_t ordinal);
+
+/// Looks up 'value' in 'map' and returns the corresponding SymInt from 'frame'.
+int64_t paramSymInt(
+    ValueCP value,
+    nativert::ExecutionFrame& frame,
+    const FormalToActual& map);
 
 /// Executes a WaveGraph as a GraphExecutorBase subclass, allowing it to
 /// be used wherever the standard nativert executors are used.
@@ -115,24 +213,40 @@ class WaveGraphExecutor : public nativert::GraphExecutorBase {
   /// Returns 'frame' to the pool after clearing non-persistent values.
   void returnFrame(std::unique_ptr<nativert::ExecutionFrame> frame);
 
+  /// Returns per-block DebugInfo from the most recent execution. Transfers
+  /// device-side debug info to host. The outer vector has one element per
+  /// kernel launch; the inner vector has one DebugInfo per block in that
+  /// launch.
+  std::vector<std::vector<DebugInfo>> getDebugInfo();
+
+  /// Returns standalone execution stats: pairs of (node string, micros)
+  /// from the most recent execution. The node string is formatted as in
+  /// Launch::toString for standalone nodes.
+  std::vector<std::pair<std::string, int64_t>> getStandaloneStats() const;
+
  private:
   /// Runs the WaveGraph on the given frame.
-  void executeWave(nativert::ExecutionFrame& frame, const WaveGraph& waveGraph);
+  void executeWave(nativert::ExecutionFrame& frame, WaveGraph& waveGraph);
 
   /// Builds ValueTypes from the graph's tensor metadata.
-  void initValueTypes();
+  void initValueTypes(ValueTypes& valueTypes);
 
   std::shared_ptr<nativert::Weights> weights_;
 
-  /// Stable storage for TensorMeta objects referenced by valueTypes_.
+  /// Stable storage for TensorMeta objects referenced by the initial
+  /// ValueTypes passed to WaveGraph.
   std::vector<std::unique_ptr<nativert::TensorMeta>> metaStore_;
-
-  ValueTypes valueTypes_;
 
   std::unique_ptr<WaveGraph> waveGraph_;
 
+  /// Maps each nativert Node to its OpKernel, built once at construction.
+  std::unordered_map<NodeCP, nativert::OpKernel*> kernelMap_;
+
   /// Pool of device-side ExecutionFrames with persistent tensors on GPU.
   std::unique_ptr<Pool<nativert::ExecutionFrame>> framePool_;
+
+  /// Per-launch debug info from the most recent execution.
+  std::vector<LaunchDebugInfo> launchDebugInfos_;
 };
 
 } // namespace torch::wave

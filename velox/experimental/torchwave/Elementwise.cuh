@@ -392,4 +392,10 @@ __device__ inline T __maximum(T a1, T a2) {
   return a1 > a2 ? a1 : a2;
 }
 
+// Shape query.
+
+__device__ inline int64_t __sym_size(Tensor* self, int64_t dim) {
+  return self->dims[self->rank - 1 - dim];
+}
+
 } // namespace torch::wave

@@ -17,6 +17,8 @@
 #pragma once
 
 #include <algorithm>
+#include <chrono>
+#include <cstdio>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -29,6 +31,7 @@
 #include <aten/src/ATen/core/function_schema.h>
 #include <torch/nativert/graph/Graph.h>
 
+#include "velox/experimental/torchwave/Registry.h"
 #include "velox/experimental/wave/common/Cuda.h"
 
 namespace torch::wave {
@@ -91,9 +94,9 @@ std::string cudaTypeString(c10::ScalarType dtype);
 /// func(node, attr) for each attribute in alphabetical order per node.
 template <typename Func>
 void forEachSortedAttribute(
-    const nativert::Node* node,
-    const std::unordered_set<const nativert::Value*>& inputs,
-    std::unordered_set<const nativert::Node*>& visited,
+    NodeCP node,
+    const std::unordered_set<ValueCP>& inputs,
+    std::unordered_set<NodeCP>& visited,
     Func&& func) {
   if (!visited.insert(node).second) {
     return;
@@ -123,5 +126,33 @@ void forEachSortedAttribute(
     func(node, *attr);
   }
 }
+
+/// RAII timer that prints elapsed microseconds on destruction.
+class Timer {
+ public:
+  explicit Timer(const char* label, bool enable = true)
+      : label_(label), enable_(enable) {
+    if (enable_) {
+      start_ = std::chrono::high_resolution_clock::now();
+    }
+  }
+
+  ~Timer() {
+    if (enable_) {
+      auto us = std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::high_resolution_clock::now() - start_)
+                    .count();
+      printf("%s %ld us\n", label_, us);
+    }
+  }
+
+  Timer(const Timer&) = delete;
+  Timer& operator=(const Timer&) = delete;
+
+ private:
+  const char* label_;
+  bool enable_;
+  std::chrono::high_resolution_clock::time_point start_;
+};
 
 } // namespace torch::wave

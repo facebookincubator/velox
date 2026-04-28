@@ -17,8 +17,12 @@
 #include "velox/experimental/torchwave/Executor.h"
 
 #include <ATen/ATen.h>
+#include <gflags/gflags.h>
+#include <chrono>
 #include "velox/experimental/wave/common/Cuda.h"
 #include "velox/experimental/wave/common/GpuArena.h"
+
+DEFINE_bool(print_timing, false, "Print timing for wave graph execution");
 
 namespace torch::wave {
 
@@ -157,6 +161,35 @@ void tensorsToHost(
   }
 }
 
+void runStandalones(
+    const std::vector<LaunchData>& standalones,
+    ExecutionState& state,
+    const std::unordered_map<NodeCP, nativert::OpKernel*>& kernelMap,
+    const std::unordered_map<NodeCP, int32_t>& standaloneIndices,
+    std::vector<StandaloneStats>& standaloneStats) {
+  using Clock = std::chrono::high_resolution_clock;
+  for (const auto& data : standalones) {
+    auto* actualNode = data.standalone;
+
+    auto kernelIt = kernelMap.find(actualNode);
+    TORCH_CHECK(
+        kernelIt != kernelMap.end(),
+        "No kernel for node ",
+        actualNode->target());
+
+    auto start = Clock::now();
+    kernelIt->second->compute(*state.frame);
+    auto us = std::chrono::duration_cast<std::chrono::microseconds>(
+                  Clock::now() - start)
+                  .count();
+
+    auto idxIt = standaloneIndices.find(actualNode);
+    if (idxIt != standaloneIndices.end()) {
+      standaloneStats[idxIt->second].micros += us;
+    }
+  }
+}
+
 WaveGraphExecutor::WaveGraphExecutor(
     nativert::Graph& graph,
     std::vector<std::unique_ptr<nativert::OpKernel>> nodeKernels,
@@ -164,20 +197,24 @@ WaveGraphExecutor::WaveGraphExecutor(
     std::shared_ptr<nativert::Weights> weights)
     : GraphExecutorBase(graph, std::move(nodeKernels), executorConfig),
       weights_(std::move(weights)) {
-  initValueTypes();
-  waveGraph_ = std::make_unique<WaveGraph>(graph, valueTypes_);
+  for (auto& k : nodeKernels_) {
+    kernelMap_[k->node()] = k.get();
+  }
+  ValueTypes valueTypes;
+  initValueTypes(valueTypes);
+  waveGraph_ = std::make_unique<WaveGraph>(graph, std::move(valueTypes));
   framePool_ = std::make_unique<Pool<nativert::ExecutionFrame>>(
       [this]() { return makeDeviceFrame(); });
 }
 
-void WaveGraphExecutor::initValueTypes() {
+void WaveGraphExecutor::initValueTypes(ValueTypes& valueTypes) {
   const auto& tensorValuesMeta = graph_.tensorValuesMeta();
-  valueTypes_.types.resize(graph_.values().size(), nullptr);
+  valueTypes.types.resize(graph_.values().size(), nullptr);
   for (const auto* value : graph_.values()) {
     auto it = tensorValuesMeta.find(std::string{value->name()});
     if (it != tensorValuesMeta.end()) {
       auto meta = std::make_unique<nativert::TensorMeta>(it->second);
-      valueTypes_.types[value->id()] = meta.get();
+      valueTypes.types[value->id()] = meta.get();
       metaStore_.push_back(std::move(meta));
     }
   }
@@ -276,19 +313,86 @@ std::vector<c10::IValue> WaveGraphExecutor::executeWithPrefilledFrame(
 
 void WaveGraphExecutor::executeWave(
     nativert::ExecutionFrame& frame,
-    const WaveGraph& waveGraph) {
+    WaveGraph& waveGraph) {
+  Timer w("top exec", FLAGS_print_timing);
   auto* g = globals();
-  ExecutionState state{
-      .frame = frame,
-      .valueTypes = &valueTypes_,
-      .deviceArena = g->deviceArena.get(),
-      .pinnedArena = g->pinnedArena.get(),
-      .managedArena = g->managedArena.get(),
-      .streamPool = g->streamPool.get(),
-      .eventPool = g->eventPool.get()};
+  launchDebugInfos_.clear();
+
+  // Get a reusable ExecutionState from the pool.
+  auto statePtr = waveGraph.getState();
+  auto& state = *statePtr;
+
+  // RAII guard returns the stream and state to the pool on scope exit.
+  struct StateGuard {
+    WaveGraph& graph;
+    std::unique_ptr<ExecutionState> state;
+    ~StateGuard() {
+      if (state->stream) {
+        state->streamPool->put(std::move(state->stream));
+      }
+      graph.returnState(std::move(state));
+    }
+  } guard{waveGraph, std::move(statePtr)};
+
+  // Fill per-call fields.
+  state.frame = &frame;
+  state.valueTypes = &waveGraph.types();
+  state.deviceArena = g->deviceArena.get();
+  state.pinnedArena = g->pinnedArena.get();
+  state.managedArena = g->managedArena.get();
+  state.streamPool = g->streamPool.get();
+  state.eventPool = g->eventPool.get();
+  state.stream = g->streamPool->get();
+  state.kernelMap = &kernelMap_;
+  state.waveGraph = &waveGraph;
+  state.standaloneIndices = &waveGraph.standaloneIndices();
+  state.standaloneStats = &waveGraph.standaloneStats();
+  state.launchDebugInfos = &launchDebugInfos_;
+
   for (const auto& node : waveGraph.nodes()) {
     node->execute(state);
   }
+  state.stream->wait();
+}
+
+std::vector<std::vector<DebugInfo>> WaveGraphExecutor::getDebugInfo() {
+  auto* g = globals();
+  auto stream = g->streamPool->get();
+
+  // Queue D2H transfers for all launches.
+  for (auto& info : launchDebugInfos_) {
+    stream->deviceToHostAsync(
+        info.pinnedInfo, info.deviceInfo, info.numBlocks * sizeof(DebugInfo));
+  }
+  stream->wait();
+  g->streamPool->put(std::move(stream));
+
+  // Copy from pinned memory into the result.
+  std::vector<std::vector<DebugInfo>> result;
+  result.reserve(launchDebugInfos_.size());
+  for (auto& info : launchDebugInfos_) {
+    result.emplace_back(info.pinnedInfo, info.pinnedInfo + info.numBlocks);
+  }
+  return result;
+}
+
+std::vector<std::pair<std::string, int64_t>>
+WaveGraphExecutor::getStandaloneStats() const {
+  const auto& indices = waveGraph_->standaloneIndices();
+  const auto& stats = waveGraph_->standaloneStats();
+  std::vector<std::pair<std::string, int64_t>> result;
+  result.reserve(indices.size());
+  for (const auto& [node, idx] : indices) {
+    Subgraph sg;
+    sg.root = node;
+    for (const auto& input : node->inputs()) {
+      sg.inputs.push_back(input.value);
+    }
+    result.emplace_back(
+        "standalone " + sg.toString(),
+        idx < static_cast<int32_t>(stats.size()) ? stats[idx].micros : 0);
+  }
+  return result;
 }
 
 } // namespace torch::wave

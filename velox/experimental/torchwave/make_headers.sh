@@ -30,6 +30,7 @@ echo "bool registerHeader(const char* text);" >>$TORCHWAVE/Headers.h
 $STRINGIFY "velox/experimental/torchwave/KernelParams.h" >>$TORCHWAVE/Headers.h
 $STRINGIFY "velox/experimental/torchwave/Core.cuh" >>$TORCHWAVE/Headers.h
 $STRINGIFY "velox/experimental/torchwave/Elementwise.cuh" >>$TORCHWAVE/Headers.h
+$STRINGIFY "velox/experimental/torchwave/Scan.cuh" >>$TORCHWAVE/Headers.h
 
 echo "}" >>$TORCHWAVE/Headers.h
 

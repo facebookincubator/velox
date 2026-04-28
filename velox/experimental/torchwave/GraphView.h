@@ -31,4 +31,8 @@ void printModelParams(const torch::nativert::Graph& graph);
 
 void printGraphView(const torch::nativert::Graph& graph);
 
+/// Builds ValueTypes from the graph's tensor metadata, constructs a WaveGraph,
+/// and prints the compiled result to stdout.
+void compileGraph(torch::nativert::Graph& graph);
+
 } // namespace torch::wave

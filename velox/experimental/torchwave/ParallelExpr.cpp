@@ -219,159 +219,7 @@ float parallelBorder(
   return cost + allArgsCost;
 }
 
-// Helper to format a leaf value using tensor metadata from the graph.
-std::string leafValueString(
-    std::string_view valueName,
-    const nativert::Graph& graph) {
-  const nativert::TensorMeta* tm = nullptr;
-  std::string name(valueName);
-  auto it = graph.tensorValuesMeta().find(name);
-  if (it != graph.tensorValuesMeta().end()) {
-    tm = &it->second;
-  } else {
-    auto wit = graph.weightsMeta().find(name);
-    if (wit != graph.weightsMeta().end()) {
-      tm = &wit->second;
-    }
-  }
-  if (tm != nullptr && !tm->hasSymbolicShape()) {
-    auto sizes = tm->sizes();
-    if (sizes.empty()) {
-      return name; // scalar
-    }
-    std::string result = "<literal [";
-    for (int64_t i = 0; i < static_cast<int64_t>(sizes.size()); ++i) {
-      if (i > 0) {
-        result += ", ";
-      }
-      result += std::to_string(sizes[i]);
-    }
-    result += "]>";
-    return result;
-  }
-  return name;
-}
-
 } // namespace
-
-// ---------- nodeExprString ----------
-
-namespace {
-
-void nodeExprStringImpl(
-    std::stringstream& ss,
-    const nativert::Node* node,
-    const nativert::Graph& graph,
-    PlanObjectSet& border) {
-  if (!isCallExpr(node)) {
-    ss << node->target();
-    return;
-  }
-
-  ss << node->target() << "(";
-  bool first = true;
-  for (const auto& input : node->inputs()) {
-    if (!first) {
-      ss << ", ";
-    }
-    first = false;
-
-    auto* value = input.value;
-    auto* producer = value->producer();
-
-    if (producer == nullptr || producer == node) {
-      ss << leafValueString(value->name(), graph);
-    } else if (border.count(producer)) {
-      ss << "%" << value->id();
-    } else {
-      nodeExprStringImpl(ss, producer, graph, border);
-    }
-  }
-  for (const auto& attr : node->attributes()) {
-    if (!first) {
-      ss << ", ";
-    }
-    first = false;
-    ss << attr.name << "=" << constantToString(attr.value);
-  }
-  ss << ")";
-}
-
-} // namespace
-
-std::string nodeExprString(
-    const nativert::Node* node,
-    const nativert::Graph& graph,
-    PlanObjectSet& border) {
-  std::stringstream ss;
-  nodeExprStringImpl(ss, node, graph, border);
-  return ss.str();
-}
-
-// ---------- ProjectNode::toString ----------
-
-namespace {
-
-void formatOutputIds(std::stringstream& ss, const nativert::Node* node) {
-  const auto& outputs = node->outputs();
-  if (outputs.empty()) {
-    return;
-  }
-  std::vector<int> ids;
-  ids.reserve(outputs.size());
-  for (const auto* v : outputs) {
-    if (v != nullptr) {
-      ids.push_back(v->id());
-    }
-  }
-  if (ids.empty()) {
-    return;
-  }
-  if (ids.size() == 1) {
-    ss << "%" << ids[0];
-    return;
-  }
-  std::sort(ids.begin(), ids.end());
-
-  bool first = true;
-  size_t i = 0;
-  while (i < ids.size()) {
-    size_t j = i;
-    while (j + 1 < ids.size() && ids[j + 1] == ids[j] + 1) {
-      ++j;
-    }
-    if (!first) {
-      ss << ", ";
-    }
-    first = false;
-    if (j > i) {
-      ss << "[%" << ids[i] << ", %" << ids[j] << "]";
-    } else {
-      ss << "%" << ids[i];
-    }
-    i = j + 1;
-  }
-}
-
-} // namespace
-
-std::string ProjectNode::toString(
-    const nativert::Graph& graph,
-    PlanObjectSet& border) const {
-  std::stringstream ss;
-  PlanObjectSet localBorder(inputs_.begin(), inputs_.end());
-  localBorder.insert(border.begin(), border.end());
-  ss << fmt::format("ProjectNode {}:\n", id_);
-  for (int32_t i = 0; i < static_cast<int32_t>(nodes_.size()); ++i) {
-    ss << fmt::format("  {}.{}: ", id_, i);
-    formatOutputIds(ss, nodes_[i]);
-    ss << " = " << nodeExprString(nodes_[i], graph, localBorder) << "\n";
-  }
-  if (input_ != nullptr) {
-    ss << fmt::format("  input: ProjectNode {}\n", input_->id());
-  }
-  return ss.str();
-}
 
 // ---------- ParallelNodes ----------
 
@@ -424,15 +272,15 @@ ProjectNode* ParallelNodes::makeParallelProject(
   if (orderedExprs.empty()) {
     orderedExprs.assign(topExprs.begin(), topExprs.end());
   }
-  std::vector<const nativert::Node*> nodes;
+  std::vector<NodeCP> nodes;
   PlanObjectSet seen;
   for (auto* expr : orderedExprs) {
     if (seen.insert(expr).second) {
       nodes.push_back(expr);
     }
   }
-  std::unordered_set<const nativert::Node*> inputs;
-  std::unordered_set<const nativert::Node*> leafInputs;
+  std::unordered_set<NodeCP> inputs;
+  std::unordered_set<NodeCP> leafInputs;
 
   if (input != nullptr) {
     auto allInputExprs = collectAllInputExprs(input);
