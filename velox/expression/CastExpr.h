@@ -371,10 +371,13 @@ class CastExpr : public SpecialForm {
       bool& wrapException) const {
     if (castResult.hasError()) {
       auto errorDetails = errorPrefix;
-      if (!errorDetails.empty() && errorDetails.back() != ' ') {
-        errorDetails.push_back(' ');
+      const auto& errorMessage = castResult.error().message();
+      if (!errorMessage.empty()) {
+        if (!errorDetails.empty() && errorDetails.back() != ' ') {
+          errorDetails.push_back(' ');
+        }
+        errorDetails.append(errorMessage);
       }
-      errorDetails.append(castResult.error().message());
       setCastError(row, context, result, wrapException, errorDetails);
     } else {
       result->set(row, castResult.value());
