@@ -1330,8 +1330,8 @@ TEST_P(IndexLookupJoinTest, mixedFilterBatches) {
 // Tests the index split handling behavior of the IndexLookupJoin operator.
 // When needsIndexSplit is true:
 // - The operator blocks waiting for splits until it receives them
-// - Works correctly with various split counts (1, 2, 3 splits)
-// - Fails when no splits are provided before the no-more-splits signal
+// - Works correctly with various split counts (0, 1, 2, 3 splits)
+// - With 0 splits (partition pruning), LEFT JOIN emits probe rows with nulls
 // This test only runs when GetParam().needsIndexSplit is true.
 DEBUG_ONLY_TEST_P(IndexLookupJoinTest, needsIndexSplit) {
   if (!GetParam().needsIndexSplit) {
@@ -1361,19 +1361,15 @@ DEBUG_ONLY_TEST_P(IndexLookupJoinTest, needsIndexSplit) {
 
   struct {
     int numIndexSplits;
-    bool expectFailure;
 
     std::string debugString() const {
-      return fmt::format(
-          "numIndexSplits: {}, expectFailure: {}",
-          numIndexSplits,
-          expectFailure);
+      return fmt::format("numIndexSplits: {}", numIndexSplits);
     }
   } testSettings[] = {
-      {1, false}, // One split - should succeed
-      {2, false}, // Two splits - should succeed
-      {3, false}, // Three splits - should succeed
-      {0, true}, // No splits - should fail
+      {1},
+      {2},
+      {3},
+      {0},
   };
 
   for (const auto& testData : testSettings) {
@@ -1423,20 +1419,19 @@ DEBUG_ONLY_TEST_P(IndexLookupJoinTest, needsIndexSplit) {
               ++collectSplitCallCount;
             }));
 
+    // For 0 splits, the LEFT JOIN should produce all probe rows with nulls
+    // on the lookup side.
+    const auto expectedSql = testData.numIndexSplits == 0
+        ? "SELECT t.c0, t.c1, NULL, NULL FROM t"
+        : duckDbVerifySql;
+
     // Run the query in a separate thread without providing index splits
     // upfront. The main thread will provide splits after the task starts.
     std::thread queryThread([&] {
       AssertQueryBuilder queryBuilder(duckDbQueryRunner_);
-      queryBuilder.plan(plan).splits(
-          probeScanNodeId_, makeHiveConnectorSplits(probeFiles));
-      // Do NOT provide index splits here - they will be provided by the
-      // main thread after the task starts.
-
-      if (testData.expectFailure) {
-        VELOX_ASSERT_THROW(queryBuilder.copyResults(pool()), "");
-      } else {
-        queryBuilder.assertResults(duckDbVerifySql);
-      }
+      queryBuilder.plan(plan)
+          .splits(probeScanNodeId_, makeHiveConnectorSplits(probeFiles))
+          .assertResults(expectedSql);
     });
 
     // Wait for collectIndexSplits to be called.
@@ -1450,32 +1445,23 @@ DEBUG_ONLY_TEST_P(IndexLookupJoinTest, needsIndexSplit) {
       ASSERT_EQ(task->state(), TaskState::kRunning)
           << "Task should still be running while waiting for splits";
 
-      if (testData.expectFailure) {
-        // Signal no more splits immediately to trigger the failure.
-        task->noMoreSplits(indexScanNodeId_);
-      } else {
-        // Add the specified number of index splits.
-        for (int i = 0; i < testData.numIndexSplits; ++i) {
-          task->addSplit(
-              indexScanNodeId_,
-              Split(
-                  std::make_shared<TestIndexConnectorSplit>(
-                      kTestIndexConnectorName)));
-        }
-        // Signal no more splits to allow the task to finish.
-        task->noMoreSplits(indexScanNodeId_);
+      for (int i = 0; i < testData.numIndexSplits; ++i) {
+        task->addSplit(
+            indexScanNodeId_,
+            Split(
+                std::make_shared<TestIndexConnectorSplit>(
+                    kTestIndexConnectorName)));
       }
+      task->noMoreSplits(indexScanNodeId_);
     }
 
     queryThread.join();
 
-    if (!testData.expectFailure) {
-      // Verify collectIndexSplits was called the expected number of times:
-      // once initially when blocked, plus once after splits are available.
-      ASSERT_EQ(collectSplitCallCount.load(), 2)
-          << "collectIndexSplits should be called once initially (blocked), "
-             "then once when splits are available";
-    }
+    // Verify collectIndexSplits was called the expected number of times:
+    // once initially when blocked, plus once after splits are available.
+    ASSERT_EQ(collectSplitCallCount.load(), 2)
+        << "collectIndexSplits should be called once initially (blocked), "
+           "then once when splits are available";
   }
 }
 
@@ -1971,6 +1957,120 @@ TEST_P(IndexLookupJoinTest, groupedExecution) {
     }
 
     // Consume output via OutputBufferManager.
+    auto outputBufferManager = exec::OutputBufferManager::getInstanceRef();
+    outputBufferManager->deleteResults(task->taskId(), 0);
+
+    waitForTaskCompletion(task.get());
+    ASSERT_EQ(task->state(), TaskState::kFinished);
+
+    auto taskStats = toPlanStats(task->taskStats());
+    ASSERT_EQ(
+        taskStats.at(joinNodeId_).numDrivers, numDrivers * numSplitGroups);
+  }
+}
+
+// Verifies that grouped execution completes correctly when some split groups
+// receive no index splits (e.g., partition pruning eliminates all index
+// partitions for a group). For INNER JOIN, the pruned group produces no
+// output. For LEFT JOIN, the pruned group emits probe rows with nulls.
+TEST_P(IndexLookupJoinTest, groupedExecutionWithEmptyIndexSplits) {
+  if (GetParam().serialExecution || !GetParam().needsIndexSplit) {
+    return;
+  }
+  IndexTableData tableData;
+  generateIndexTableData({100, 1, 1}, tableData, pool_);
+  const int numProbeSplitsPerGroup{1};
+  const int numSplitGroups{3};
+  const int numDrivers{2};
+  const auto probeVectors = generateProbeInput(
+      numProbeSplitsPerGroup * numSplitGroups,
+      256,
+      1,
+      tableData,
+      pool_,
+      {"t0", "t1", "t2"},
+      GetParam().hasNullKeys,
+      {},
+      {},
+      100);
+  const auto probeFiles = createProbeFiles(probeVectors);
+
+  const auto indexTable = TestIndexTable::create(
+      /*numEqualJoinKeys=*/3,
+      tableData.keyVectors,
+      tableData.valueVectors,
+      *pool());
+  const auto indexTableHandle = makeIndexTableHandle(
+      indexTable, GetParam().asyncLookup, GetParam().needsIndexSplit);
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  const auto indexScanNode = makeIndexScanNode(
+      planNodeIdGenerator,
+      indexTableHandle,
+      makeScanOutputType({"u0", "u1", "u2", "u3", "u5"}),
+      makeIndexColumnHandles({"u0", "u1", "u2", "u3", "u5"}));
+
+  for (const auto joinType : {core::JoinType::kInner, core::JoinType::kLeft}) {
+    SCOPED_TRACE(
+        fmt::format("joinType: {}", core::JoinTypeName::toName(joinType)));
+    auto outputLayout = std::vector<std::string>{"u3", "t5"};
+    auto plan = PlanBuilder(planNodeIdGenerator, pool())
+                    .tableScan(probeType_)
+                    .capturePlanNodeId(probeScanNodeId_)
+                    .startIndexLookupJoin()
+                    .leftKeys({"t0", "t1", "t2"})
+                    .rightKeys({"u0", "u1", "u2"})
+                    .indexSource(indexScanNode)
+                    .outputLayout(outputLayout)
+                    .joinType(joinType)
+                    .endIndexLookupJoin()
+                    .capturePlanNodeId(joinNodeId_)
+                    .partitionedOutput({}, 1, outputLayout)
+                    .planFragment();
+
+    plan.executionStrategy = core::ExecutionStrategy::kGrouped;
+    plan.groupedExecutionLeafNodeIds.emplace(probeScanNodeId_);
+    plan.groupedExecutionLeafNodeIds.emplace(indexScanNodeId_);
+    plan.numSplitGroups = numSplitGroups;
+
+    auto queryCtx = core::QueryCtx::create(executor_.get());
+    std::unordered_map<std::string, std::string> configs;
+    configs[QueryConfig::kIndexLookupJoinMaxPrefetchBatches] =
+        std::to_string(GetParam().numPrefetches);
+    queryCtx->testingOverrideConfigUnsafe(std::move(configs));
+
+    auto task = exec::Task::create(
+        fmt::format("grouped-empty-index-splits-{}", joinType),
+        std::move(plan),
+        0,
+        std::move(queryCtx),
+        Task::ExecutionMode::kParallel);
+    task->start(numDrivers, /*concurrentSplitGroups=*/2);
+
+    // Add probe splits for all groups.
+    int fileIdx = 0;
+    for (int group = 0; group < numSplitGroups; ++group) {
+      for (int j = 0; j < numProbeSplitsPerGroup; ++j) {
+        task->addSplit(
+            probeScanNodeId_,
+            Split(
+                makeHiveConnectorSplit(probeFiles[fileIdx++]->getPath()),
+                group));
+      }
+      task->noMoreSplitsForGroup(probeScanNodeId_, group);
+    }
+    task->noMoreSplits(probeScanNodeId_);
+
+    // Add index splits only for group 0. Groups 1 and 2 get no index splits,
+    // simulating partition pruning.
+    task->addSplit(
+        indexScanNodeId_,
+        Split(
+            std::make_shared<TestIndexConnectorSplit>(kTestIndexConnectorName),
+            0));
+    task->noMoreSplitsForGroup(indexScanNodeId_, 0);
+    task->noMoreSplitsForGroup(indexScanNodeId_, 1);
+    task->noMoreSplitsForGroup(indexScanNodeId_, 2);
+
     auto outputBufferManager = exec::OutputBufferManager::getInstanceRef();
     outputBufferManager->deleteResults(task->taskId(), 0);
 

@@ -16,11 +16,10 @@
 
 #pragma once
 
-#include "velox/experimental/cudf/exec/NvtxHelper.h"
+#include "velox/experimental/cudf/exec/CudfOperator.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/core/PlanNode.h"
-#include "velox/exec/Operator.h"
 
 #include <cudf/join/filtered_join.hpp>
 #include <cudf/table/table.hpp>
@@ -37,7 +36,7 @@ namespace facebook::velox::cudf_velox {
 /// first time the key combination has been seen.
 ///
 /// Unlike the CPU implementation, this operator does not support spilling.
-class CudfMarkDistinct : public exec::Operator, public NvtxHelper {
+class CudfMarkDistinct : public CudfOperatorBase {
  public:
   CudfMarkDistinct(
       int32_t operatorId,
@@ -56,17 +55,17 @@ class CudfMarkDistinct : public exec::Operator, public NvtxHelper {
     return !noMoreInput_ && input_ == nullptr;
   }
 
-  void addInput(RowVectorPtr input) override;
-
-  RowVectorPtr getOutput() override;
+  bool isFinished() override {
+    return noMoreInput_ && input_ == nullptr;
+  }
 
   exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
     return exec::BlockingReason::kNotBlocked;
   }
 
-  bool isFinished() override {
-    return noMoreInput_ && input_ == nullptr;
-  }
+ protected:
+  void doAddInput(RowVectorPtr input) override;
+  RowVectorPtr doGetOutput() override;
 
  private:
   /// Column indices in the input schema that form the distinct key.

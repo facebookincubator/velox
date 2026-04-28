@@ -662,11 +662,14 @@ bool IndexLookupJoin::collectIndexSplits(ContinueFuture* future) {
 
     if (!split.hasConnectorSplit()) {
       noMoreIndexSplits_ = true;
-      VELOX_CHECK(!indexSplits_.empty());
-      // Publish splits to the bridge for followers before consuming locally.
+      VELOX_CHECK(!hasNoIndexSplits_);
       VELOX_CHECK_NOT_NULL(joinBridge_);
       joinBridge_->setIndexSplits(indexSplits_);
-      indexSource_->addSplits(std::move(indexSplits_));
+      if (indexSplits_.empty()) {
+        hasNoIndexSplits_ = true;
+      } else {
+        indexSource_->addSplits(std::move(indexSplits_));
+      }
       return true;
     }
 
@@ -681,11 +684,15 @@ bool IndexLookupJoin::waitForIndexSplits(ContinueFuture* future) {
   VELOX_CHECK(indexSplits_.empty());
 
   auto splits = joinBridge_->splitsOrFuture(future);
-  if (splits.empty()) {
+  if (future->valid()) {
     return false;
   }
   noMoreIndexSplits_ = true;
-  indexSource_->addSplits(std::move(splits));
+  if (splits.empty()) {
+    hasNoIndexSplits_ = true;
+  } else {
+    indexSource_->addSplits(std::move(splits));
+  }
   return true;
 }
 
@@ -699,6 +706,9 @@ bool IndexLookupJoin::needsInput() const {
   }
   // Don't accept input until we have collected all splits for index source.
   if (needsIndexSplits()) {
+    return false;
+  }
+  if (shouldSkipInput()) {
     return false;
   }
   if (numInputBatches() >= maxNumInputBatches_) {
@@ -766,6 +776,7 @@ void IndexLookupJoin::endLookupBlockWait() {
 
 void IndexLookupJoin::addInput(RowVectorPtr input) {
   VELOX_CHECK_GT(input->size(), 0);
+  VELOX_CHECK(!shouldSkipInput());
   auto& batch = nextInputBatch();
   VELOX_CHECK_LE(numInputBatches(), maxNumInputBatches_);
   batch.input = std::move(input);
@@ -997,8 +1008,7 @@ void IndexLookupJoin::startLookup(InputBatchState& batch) {
   VELOX_CHECK_NULL(batch.lookupResult);
   VELOX_CHECK(!batch.lookupFuture.valid());
 
-  if (batch.lookupInput->size() == 0) {
-    // No need to start lookup for empty lookup input.
+  if (shouldSkipLookup(batch)) {
     return;
   }
 
@@ -1012,10 +1022,11 @@ void IndexLookupJoin::startLookup(InputBatchState& batch) {
 RowVectorPtr IndexLookupJoin::getOutputFromLookupResult(
     InputBatchState& batch) {
   VELOX_CHECK(!batch.empty());
+  VELOX_CHECK(!shouldSkipInput());
   VELOX_CHECK(!batch.lookupFuture.valid() || batch.lookupFuture.isReady());
   batch.lookupFuture = ContinueFuture::makeEmpty();
 
-  if (batch.lookupInput->size() == 0) {
+  if (shouldSkipLookup(batch)) {
     return produceRemainingOutput(batch);
   }
 
@@ -1177,8 +1188,8 @@ bool IndexLookupJoin::hasRemainingOutputForLeftJoin(
 
 void IndexLookupJoin::finishInput(InputBatchState& batch) {
   VELOX_CHECK_NOT_NULL(batch.input);
-  VELOX_CHECK_EQ(
-      batch.lookupInput->size() == 0, batch.lookupResultIter == nullptr);
+  VELOX_CHECK(!shouldSkipInput());
+  VELOX_CHECK_EQ(shouldSkipLookup(batch), batch.lookupResultIter == nullptr);
   VELOX_CHECK(!batch.lookupFuture.valid());
 
   batch.input = nullptr;
@@ -1196,7 +1207,7 @@ void IndexLookupJoin::finishInput(InputBatchState& batch) {
       VELOX_CHECK(!nextBatch.lookupFuture.valid());
     } else {
       VELOX_CHECK_EQ(
-          nextBatch.lookupInput->size() != 0, nextBatch.lookupFuture.valid());
+          !shouldSkipLookup(nextBatch), nextBatch.lookupFuture.valid());
     }
   }
 }
