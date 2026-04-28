@@ -478,7 +478,6 @@ void CudfHashJoinProbe::initialize() {
           rightPrecomputeInstructions_);
     }
   }
-  useAstFilter_ = true;
 }
 
 bool CudfHashJoinProbe::needsInput() const {
