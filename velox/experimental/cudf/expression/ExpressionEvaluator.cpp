@@ -1155,11 +1155,14 @@ class LikeFunction : public CudfFunction {
   std::string pattern_;
 };
 
-class StartswithFunction : public CudfFunction {
+class StringPatternPredicateFunction : public CudfFunction {
  public:
-  explicit StartswithFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+  explicit StringPatternPredicateFunction(
+      const std::shared_ptr<velox::exec::Expr>& expr,
+      std::string_view functionName) {
     using velox::exec::ConstantExpr;
-    VELOX_CHECK_EQ(expr->inputs().size(), 2, "startswith expects 2 inputs");
+    VELOX_CHECK_EQ(
+        expr->inputs().size(), 2, "{} expects 2 inputs", functionName);
 
     if (auto inputExpr =
             std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[0])) {
@@ -1179,11 +1182,12 @@ class StartswithFunction : public CudfFunction {
       }
     }
 
-    // Fully constant startswith stays off the cuDF path because the function
+    // Fully constant string-match calls stay off the cuDF path because the
     // evaluator has no input column to derive the output row count from.
     VELOX_CHECK(
         !(inputIsConstant_ && patternIsConstant_),
-        "startswith with two constant inputs is not supported by the cuDF evaluator");
+        "{} with two constant inputs is not supported by the cuDF evaluator",
+        functionName);
   }
 
   ColumnOrView eval(
@@ -1212,18 +1216,33 @@ class StartswithFunction : public CudfFunction {
             nullScalar, inputCol.size(), stream, mr);
       }
       cudf::string_scalar patternScalar(pattern_, true, stream, mr);
-      return cudf::strings::starts_with(inputCol, patternScalar, stream, mr);
+      return evaluateMatch(inputCol, patternScalar, stream, mr);
     }
 
     auto patternCol = asView(inputColumns[nextInput]);
-    auto result = cudf::strings::starts_with(inputCol, patternCol, stream, mr);
+    auto result = evaluateMatch(inputCol, patternCol, stream, mr);
+    // Match Velox CPU null propagation for column/column evaluation: libcudf
+    // can return a valid false when the pattern row is null, but Velox returns
+    // null if either side is null.
     auto [nullMask, nullCount] =
         cudf::bitmask_and(cudf::table_view({inputCol, patternCol}), stream, mr);
     result->set_null_mask(std::move(nullMask), nullCount);
     return result;
   }
 
- private:
+ protected:
+  virtual std::unique_ptr<cudf::column> evaluateMatch(
+      cudf::column_view inputCol,
+      cudf::string_scalar const& patternScalar,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const = 0;
+
+  virtual std::unique_ptr<cudf::column> evaluateMatch(
+      cudf::column_view inputCol,
+      cudf::column_view patternCol,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const = 0;
+
   bool inputIsConstant_{false};
   bool inputIsNull_{false};
   bool patternIsNull_{false};
@@ -1232,29 +1251,50 @@ class StartswithFunction : public CudfFunction {
   std::string pattern_;
 };
 
-class EndswithFunction : public CudfFunction {
+class StartswithFunction : public StringPatternPredicateFunction {
  public:
-  explicit EndswithFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
-    using velox::exec::ConstantExpr;
-    VELOX_CHECK_EQ(expr->inputs().size(), 2, "endswith expects 2 inputs");
+  explicit StartswithFunction(const std::shared_ptr<velox::exec::Expr>& expr)
+      : StringPatternPredicateFunction(expr, "startswith") {}
 
-    auto patternExpr =
-        std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[1]);
-    VELOX_CHECK_NOT_NULL(patternExpr, "endswith pattern must be a constant");
-    pattern_ = patternExpr->value()->toString(0);
-  }
-
-  ColumnOrView eval(
-      std::vector<ColumnOrView>& inputColumns,
+ protected:
+  std::unique_ptr<cudf::column> evaluateMatch(
+      cudf::column_view inputCol,
+      cudf::string_scalar const& patternScalar,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
-    auto inputCol = asView(inputColumns[0]);
-    cudf::string_scalar patternScalar(pattern_, true, stream, mr);
+    return cudf::strings::starts_with(inputCol, patternScalar, stream, mr);
+  }
+
+  std::unique_ptr<cudf::column> evaluateMatch(
+      cudf::column_view inputCol,
+      cudf::column_view patternCol,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    return cudf::strings::starts_with(inputCol, patternCol, stream, mr);
+  }
+};
+
+class EndswithFunction : public StringPatternPredicateFunction {
+ public:
+  explicit EndswithFunction(const std::shared_ptr<velox::exec::Expr>& expr)
+      : StringPatternPredicateFunction(expr, "endswith") {}
+
+ protected:
+  std::unique_ptr<cudf::column> evaluateMatch(
+      cudf::column_view inputCol,
+      cudf::string_scalar const& patternScalar,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
     return cudf::strings::ends_with(inputCol, patternScalar, stream, mr);
   }
 
- private:
-  std::string pattern_;
+  std::unique_ptr<cudf::column> evaluateMatch(
+      cudf::column_view inputCol,
+      cudf::column_view patternCol,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    return cudf::strings::ends_with(inputCol, patternCol, stream, mr);
+  }
 };
 
 class ContainsFunction : public CudfFunction {
@@ -1566,6 +1606,17 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       prefix + "startswith",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
         return std::make_shared<StartswithFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("boolean")
+           .argumentType("varchar")
+           .argumentType("varchar")
+           .build()});
+
+  registerCudfFunction(
+      prefix + "endswith",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<EndswithFunction>(expr);
       },
       {FunctionSignatureBuilder()
            .returnType("boolean")
