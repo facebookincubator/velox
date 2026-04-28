@@ -925,8 +925,6 @@ bool HashBuild::finishHashBuild() {
     pool()->release();
   };
 
-  // TODO: Re-enable parallel join build with spilling triggered after
-  //  https://github.com/facebookincubator/velox/issues/3567 is fixed.
   CpuWallTiming timing;
   {
     CpuWallTimer cpuWallTimer{timing};
