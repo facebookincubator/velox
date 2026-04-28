@@ -172,7 +172,7 @@ class CudfIcebergSplitReader : public CudfSplitReader {
 
   BufferPtr deleteBitmap_{nullptr};
   std::shared_ptr<rmm::device_buffer> deviceDeleteBitmap_;
-  std::unique_ptr<cudf::column> rowMask_;
+  std::unique_ptr<cudf::column> deleteMask_;
 };
 
 } // namespace facebook::velox::cudf_velox::connector::hive::iceberg

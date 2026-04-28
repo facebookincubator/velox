@@ -25,28 +25,30 @@
 #include <rmm/exec_policy.hpp>
 
 #include <cuda/iterator>
+#include <cuda/std/type_traits>
 #include <thrust/scatter.h>
+#include <thrust/sequence.h>
 #include <thrust/transform.h>
 
 namespace facebook::velox::cudf_velox::connector::hive::iceberg {
 
 namespace {
 
-/// Functor to apply deletion bitmap to the row mask. A row is surviving if it
-/// was previously surviving and the bit at `index` is clear.
-struct IsSurvivingRow {
+/// Functor to apply deletion bitmap to the mask. A row is deleted if it was
+/// either previously or now deleted
+struct IsDeletedRow {
   const cudf::bitmask_type* bitmask;
-  __device__ bool operator()(cudf::size_type index, bool wasSurviving)
+  __device__ bool operator()(cudf::size_type index, bool wasDeleted)
       const noexcept {
-    return wasSurviving and not cudf::bit_is_set(bitmask, index);
+    return wasDeleted or cudf::bit_is_set(bitmask, index);
   }
 };
 
 } // namespace
 
-void applyDeletionBitmapToRowMask(
-    cudf::device_span<const cudf::bitmask_type> deviceBitmap,
-    cudf::mutable_column_view const& rowMask,
+void applyBitmapToMask(
+    cudf::device_span<const cudf::bitmask_type> bitmap,
+    cudf::mutable_column_view const& deleteMask,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref temp_mr) {
   // Alternate: Use `cudf::mask_to_bools` but it produces a new column.
@@ -54,25 +56,54 @@ void applyDeletionBitmapToRowMask(
   thrust::transform(
       rmm::exec_policy_nosync(stream, temp_mr),
       iter,
-      iter + rowMask.size(),
-      rowMask.begin<bool>(),
-      rowMask.begin<bool>(),
-      IsSurvivingRow{deviceBitmap.data()});
+      iter + deleteMask.size(),
+      deleteMask.begin<bool>(),
+      deleteMask.begin<bool>(),
+      IsDeletedRow{bitmap.data()});
 }
 
-void scatterDeletesToRowMask(
-    cudf::mutable_column_view const& rowMask,
+void scatterDeletesToMask(
+    cudf::mutable_column_view const& deleteMask,
     cudf::device_span<const cudf::size_type> indices,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref temp_mr) {
   // Alternate: Use `cudf::scatter` but it produces a new column.
-  auto iter = cuda::constant_iterator<bool>(false);
+  auto iter = cuda::constant_iterator<bool>(true);
   thrust::scatter(
       rmm::exec_policy_nosync(stream, temp_mr),
       iter,
       iter + indices.size(),
       indices.begin(),
-      rowMask.begin<bool>());
+      deleteMask.begin<bool>());
 }
+
+template <typename ValueType>
+void fillSequence(
+    cudf::mutable_column_view const& rowIndices,
+    ValueType startRow,
+    int64_t numRows,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref temp_mr) {
+  auto rowIndexIter = rowIndices.begin<ValueType>();
+  thrust::sequence(
+      rmm::exec_policy_nosync(stream, temp_mr),
+      rowIndexIter,
+      rowIndexIter + numRows,
+      static_cast<ValueType>(startRow));
+}
+
+template void fillSequence<uint32_t>(
+    cudf::mutable_column_view const&,
+    uint32_t,
+    int64_t,
+    rmm::cuda_stream_view,
+    rmm::device_async_resource_ref);
+
+template void fillSequence<uint64_t>(
+    cudf::mutable_column_view const&,
+    uint64_t,
+    int64_t,
+    rmm::cuda_stream_view,
+    rmm::device_async_resource_ref);
 
 } // namespace facebook::velox::cudf_velox::connector::hive::iceberg

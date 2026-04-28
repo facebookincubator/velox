@@ -231,7 +231,7 @@ void CudfEqualityDeleteFileReader::buildEqualityColumnIndices(
 void CudfEqualityDeleteFileReader::applyDeletes(
     cudf::table_view table,
     const std::vector<std::string>& inputColumnNames,
-    cudf::mutable_column_view const& rowMask,
+    cudf::mutable_column_view const& deleteMask,
     rmm::cuda_stream_view stream) {
   const auto numRows = table.num_rows();
   if (empty() or numRows == 0) {
@@ -249,9 +249,9 @@ void CudfEqualityDeleteFileReader::applyDeletes(
   const auto probeIndices =
       deleteHashJoin_->inner_join(probeTable, stream, get_temp_mr()).first;
 
-  // Clear `rowMask` at probe positions if any
+  // Clear `deleteMask` at probe positions if any
   if (not probeIndices->is_empty()) {
-    scatterDeletesToRowMask(rowMask, *probeIndices, stream, get_temp_mr());
+    scatterDeletesToMask(deleteMask, *probeIndices, stream, get_temp_mr());
   }
 }
 

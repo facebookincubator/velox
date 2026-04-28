@@ -171,12 +171,12 @@ CudfIcebergSplitReader::readNextChunk(
        equalityDeleteFileReaders_.size());
 
   if (isApplyingDeletes) {
-    // Allocate row mask column if needed
-    if (not rowMask_ or rowMask_->size() < numRows) {
-      auto true_scalar =
-          cudf::numeric_scalar<bool>(true, true, stream_, get_temp_mr());
-      rowMask_ = cudf::make_column_from_scalar(
-          true_scalar, numRows, stream_, get_temp_mr());
+    // Allocate deletion mask column if needed (nothing is deleted)
+    if (not deleteMask_ or deleteMask_->size() < numRows) {
+      auto false_scalar =
+          cudf::numeric_scalar<bool>(false, true, stream_, get_temp_mr());
+      deleteMask_ = cudf::make_column_from_scalar(
+          false_scalar, numRows, stream_, get_temp_mr());
     }
 
     // Apply deletion vector
@@ -192,8 +192,8 @@ CudfIcebergSplitReader::readNextChunk(
       applyEqualityDeletes(cudfTable->view());
     }
 
-    cudfTable = cudf::apply_boolean_mask(
-        cudfTable->view(), rowMask_->view(), stream_, get_output_mr());
+    cudfTable = cudf::apply_deletion_mask(
+        cudfTable->view(), deleteMask_->view(), stream_, get_output_mr());
   }
 
   // Strip extra equality delete key columns added by
@@ -337,10 +337,10 @@ void CudfIcebergSplitReader::setupDeleteFileReaders(
 }
 
 void CudfIcebergSplitReader::applyDeletionVector(cudf::table_view input) {
-  // Apply deletion vector into the rowMask_
+  // Apply deletion vector into the deleteMask_
   const auto numRows = input.num_rows();
   deletionVectorReader_->applyDeletes(
-      rowMask_->mutable_view(),
+      deleteMask_->mutable_view(),
       baseReadOffset_,
       numRows,
       stream_,
@@ -353,7 +353,7 @@ void CudfIcebergSplitReader::applyDeletionVector(cudf::table_view input) {
 }
 
 void CudfIcebergSplitReader::applyPositionalDeletes(cudf::table_view input) {
-  // Apply positional deletes into the rowMask_
+  // Apply positional deletes into the deleteMask_
   const auto numRows = input.num_rows();
 
   // Initialize host and device delete bitmaps
@@ -365,16 +365,15 @@ void CudfIcebergSplitReader::applyPositionalDeletes(cudf::table_view input) {
       connectorQueryCtx_->memoryPool(),
       false,
       true);
-  if (not deviceDeleteBitmap_ or
-      deviceDeleteBitmap_->size() < numBitmaskBytes) {
-    deviceDeleteBitmap_ = std::make_shared<rmm::device_buffer>(
+  if (not deviceBitmap_ or deviceBitmap_->size() < numBitmaskBytes) {
+    deviceBitmap_ = std::make_shared<rmm::device_buffer>(
         numBitmaskBytes, stream_, get_temp_mr());
   }
 
   VELOX_CHECK_NOT_NULL(deleteBitmap_->as<uint8_t>());
   VELOX_CHECK_GE(deleteBitmap_->size(), numBitmaskBytes);
-  VELOX_CHECK_NOT_NULL(deviceDeleteBitmap_->data());
-  VELOX_CHECK_GE(deviceDeleteBitmap_->size(), numBitmaskBytes);
+  VELOX_CHECK_NOT_NULL(deviceBitmap_->data());
+  VELOX_CHECK_GE(deviceBitmap_->size(), numBitmaskBytes);
 
   for (auto iter = positionalDeleteFileReaders_.begin();
        iter != positionalDeleteFileReaders_.end();) {
@@ -388,18 +387,17 @@ void CudfIcebergSplitReader::applyPositionalDeletes(cudf::table_view input) {
 
   // Copy the deletion bitmap to device
   CUDF_CUDA_TRY(cudaMemcpyAsync(
-      deviceDeleteBitmap_->data(),
+      deviceBitmap_->data(),
       deleteBitmap_->as<uint8_t>(),
       numBitmaskBytes,
       cudaMemcpyHostToDevice,
       stream_.value()));
 
   // Apply the deletion bitmap to the row mask
-  applyDeletionBitmapToRowMask(
+  applyBitmapToMask(
       cudf::device_span<cudf::bitmask_type>(
-          static_cast<cudf::bitmask_type*>(deviceDeleteBitmap_->data()),
-          numWords),
-      rowMask_->mutable_view(),
+          static_cast<cudf::bitmask_type*>(deviceBitmap_->data()), numWords),
+      deleteMask_->mutable_view(),
       stream_,
       get_temp_mr());
 }
@@ -411,7 +409,7 @@ void CudfIcebergSplitReader::applyEqualityDeletes(cudf::table_view input) {
   // Iteratively apply equality deletes, if any
   for (auto& reader : equalityDeleteFileReaders_) {
     reader->applyDeletes(
-        input, readColumnNames_, rowMask_->mutable_view(), stream_);
+        input, readColumnNames_, deleteMask_->mutable_view(), stream_);
   }
 }
 

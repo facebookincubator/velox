@@ -15,7 +15,7 @@
 add_library(
   velox_cudf_iceberg_connector
   CudfDeletionVectorReader.cpp
-  CudfDeletionVectorReader.cu
+  CudfDeletionVectorReaderHelpers.cpp
   CudfEqualityDeleteFileReader.cpp
   CudfIcebergConnector.cpp
   CudfIcebergDataSource.cpp

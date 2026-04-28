@@ -29,26 +29,40 @@
 
 namespace facebook::velox::cudf_velox::connector::hive::iceberg {
 
-/// Applies the deletion bitmap to the current surviving row mask.
-/// @param deviceBitmap Deletion bitmap.
-/// @param rowMask Mutable view of row mask column.
-/// @param stream CUDA stream to use for the operation.
-/// @param temp_mr Memory resource for temporary allocations.
-void applyDeletionBitmapToRowMask(
-    cudf::device_span<const cudf::bitmask_type> deviceBitmap,
-    cudf::mutable_column_view const& rowMask,
+/// Applies the deletion bitmap to the current deletion row mask
+/// @param bitmap Deletion bitmap
+/// @param deleteMask Mutable view of deletion mask column
+/// @param stream CUDA stream to use
+/// @param temp_mr Memory resource for temporary allocations
+void applyBitmapToMask(
+    cudf::device_span<const cudf::bitmask_type> bitmap,
+    cudf::mutable_column_view const& deleteMask,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref temp_mr);
 
-/// Scatters deletes to the row mask at positions indicated by `indices`
+/// Scatters deletes to the deletion mask at positions indicated by `indices`
 /// (anti-join semantics).
-/// @param rowMask Mutable view of row mask column.
-/// @param indices The indices to scatter deletes to.
-/// @param stream The stream to use for the operation.
-/// @param temp_mr Memory resource for temporary allocations.
-void scatterDeletesToRowMask(
-    cudf::mutable_column_view const& rowMask,
+/// @param deleteMask Mutable view of deletion mask column
+/// @param indices Indices to scatter deletes to
+/// @param stream CUDA stream to use
+/// @param temp_mr Memory resource for temporary allocations
+void scatterDeletesToMask(
+    cudf::mutable_column_view const& deleteMask,
     cudf::device_span<const cudf::size_type> indices,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref temp_mr);
+
+/// Fills a sequence of row indices into a column.
+/// @param rowIndices Mutable view of row indices column
+/// @param startRow Starting row index
+/// @param numRows Number of rows
+/// @param stream CUDA stream to use
+/// @param temp_mr Memory resource for temporary allocations
+template <typename ValueType>
+void fillSequence(
+    cudf::mutable_column_view const& rowIndices,
+    ValueType startRow,
+    int64_t numRows,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref temp_mr);
 

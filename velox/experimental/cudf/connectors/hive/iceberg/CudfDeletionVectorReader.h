@@ -18,9 +18,10 @@
 
 #include <cudf/table/table.hpp>
 #include <cudf/types.hpp>
+#include <cudf/utilities/memory_resource.hpp>
+#include <cudf/utilities/roaring_bitmap.hpp>
 
 #include <rmm/cuda_stream_view.hpp>
-#include <rmm/mr/device_memory_resource.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -50,15 +51,15 @@ namespace facebook::velox::cudf_velox::connector::hive::iceberg {
 ///   or 12347).
 class CudfDeletionVectorReader {
  public:
-  //! Forward declaration of the opaque cuco roaring bitmap wrapper.
-  struct RoaringBitmapImpl;
-
   CudfDeletionVectorReader(
       const velox::connector::hive::iceberg::IcebergDeleteFile& dvFile,
       uint64_t splitOffset = 0);
 
-  ~CudfDeletionVectorReader();
-  CudfDeletionVectorReader(CudfDeletionVectorReader&&) noexcept;
+  ~CudfDeletionVectorReader() = default;
+  CudfDeletionVectorReader(CudfDeletionVectorReader&&) noexcept = default;
+
+  CudfDeletionVectorReader(const CudfDeletionVectorReader&) = delete;
+  CudfDeletionVectorReader& operator=(const CudfDeletionVectorReader&) = delete;
 
   /// Returns true when there is no more data. For DVs this is always true
   /// after `loadBitmap` has been called.
@@ -87,16 +88,13 @@ class CudfDeletionVectorReader {
   static constexpr int32_t kDvLengthFieldId = 101;
 
  private:
-  /// Bitmap type for the deletion vector.
-  enum class BitmapType : uint8_t { k32Bit = 0, k64Bit = 1 };
-
   /// Constructs cuco roaring bitmap from the normalized roaring bitmap
   /// payload.
-  /// @tparam Bits Roaring bitmap type to build
+  /// @param bitmapType Roaring bitmap type to build
   /// @param roaringBitmapPayload Normalized payload of the roaring bitmap.
   /// @param stream CUDA stream for bitmap construction
-  template <BitmapType BitSize>
   void buildBitmap(
+      cudf::roaring_bitmap_type bitmapType,
       std::string_view roaringBitmapPayload,
       rmm::cuda_stream_view stream);
 
@@ -105,13 +103,8 @@ class CudfDeletionVectorReader {
   /// first `applyDeletionVector` call.
   void loadBitmap(rmm::cuda_stream_view stream);
 
-  /// Deleter for RoaringBitmapImpl
-  struct RoaringBitmapDeleter {
-    void operator()(RoaringBitmapImpl* p) const;
-  };
-
   /// Opaque wrapper class for cuco's 32 or 64 bit roaring bitmap
-  std::unique_ptr<RoaringBitmapImpl, RoaringBitmapDeleter> bitmap_;
+  std::unique_ptr<cudf::roaring_bitmap> bitmap_;
 
   /// Row indices column
   std::unique_ptr<cudf::column> rowIndices_;
