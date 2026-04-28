@@ -17,16 +17,11 @@
 
 #include "velox/dwio/common/Options.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/VeloxPlanLoader.h"
 
 namespace facebook::velox::exec::test {
 
-/// Contains the query plan and input data files keyed on source plan node ID.
-/// All data files use the same file format specified in 'dataFileFormat'.
-struct TpchPlan {
-  core::PlanNodePtr plan;
-  std::unordered_map<core::PlanNodeId, std::vector<std::string>> dataFiles;
-  dwio::common::FileFormat dataFileFormat;
-};
+using TpchPlan = VeloxPlan;
 
 /// Contains type information, data files, and file column names for a table.
 /// This information is inferred from the input data files.
