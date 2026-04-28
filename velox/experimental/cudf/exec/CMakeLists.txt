@@ -20,8 +20,11 @@ add_library(
   CudfConversion.cpp
   CudfEnforceSingleRow.cpp
   CudfFilterProject.cpp
-  CudfHashAggregation.cpp
+  CudfDistinct.cpp
+  CudfGroupby.cpp
+  CudfAggregation.cpp
   CudfHashJoin.cpp
+  CudfReduce.cpp
   CudfLimit.cpp
   CudfLocalPartition.cpp
   CudfMarkDistinct.cpp

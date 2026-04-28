@@ -500,7 +500,7 @@ class SelectiveColumnReader {
 
   StringView copyStringValueIfNeed(std::string_view value) {
     if (value.size() <= StringView::kInlineSize ||
-        formatData().getStringBuffersFromDecoder()) {
+        formatData().stringDecoderZeroCopy()) {
       return StringView(value);
     }
 
@@ -761,8 +761,7 @@ class SelectiveColumnReader {
 template <>
 inline void SelectiveColumnReader::addValue(const std::string_view value) {
   const uint64_t size = value.size();
-  if (formatData().getStringBuffersFromDecoder() ||
-      size <= StringView::kInlineSize) {
+  if (formatData().stringDecoderZeroCopy() || size <= StringView::kInlineSize) {
     reinterpret_cast<StringView*>(rawValues_)[numValues_++] =
         StringView(value.data(), size);
     return;
