@@ -50,6 +50,12 @@ class IcebergParquetStatsCollector {
   /// org.apache.iceberg.TableProperties.
   constexpr static int32_t kDefaultTruncateLength{16};
 
+  /// Maximum size in bytes for encoded bounds to prevent unbounded memory
+  /// growth. If a bound exceeds this size after Base64 encoding, it will be
+  /// truncated or skipped. This prevents OOM issues with large VARCHAR/VARBINARY
+  /// columns. Default: 1KB (reasonable for most use cases).
+  constexpr static size_t kMaxEncodedBoundSize{1024};
+
  private:
   bool shouldStoreBounds(int32_t fieldId) const {
     return !skipBoundsFieldIds_.contains(fieldId);

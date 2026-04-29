@@ -102,14 +102,26 @@ IcebergDataFileStatisticsPtr IcebergParquetStatsCollector::aggregate(
   // - second: The statistics from the row group containing the global maximum
   // value. Two separate objects are stored because the global minimum and
   // global maximum for a single column may originate from different row groups.
+  //
+  // NOTE: We reserve space upfront to avoid rehashing during insertion, which
+  // can cause temporary memory spikes.
   folly::F14FastMap<
       int32_t,
       std::pair<
           std::shared_ptr<parquet::arrow::Statistics>,
           std::shared_ptr<parquet::arrow::Statistics>>>
       globalMinMaxStats;
+  
+  // Pre-allocate space based on expected column count to avoid rehashing
+  if (numRowGroups > 0 && metadata->rowGroup(0)->numColumns() > 0) {
+    globalMinMaxStats.reserve(metadata->rowGroup(0)->numColumns());
+  }
 
   std::unordered_set<int32_t> fieldIds;
+  // Reserve space for field IDs to avoid rehashing
+  if (numRowGroups > 0 && metadata->rowGroup(0)->numColumns() > 0) {
+    fieldIds.reserve(metadata->rowGroup(0)->numColumns());
+  }
   for (auto i = 0; i < numRowGroups; ++i) {
     const auto& rowGroup = metadata->rowGroup(i);
 
@@ -127,17 +139,22 @@ IcebergDataFileStatisticsPtr IcebergParquetStatsCollector::aggregate(
         stats.nullValueCount += columnChunkStats->nullCount();
 
         if (columnChunkStats->hasMinMax() && shouldStoreBounds(fieldId)) {
-          auto [it, inserted] = globalMinMaxStats.emplace(
-              fieldId, std::pair{columnChunkStats, columnChunkStats});
+          // Only store min/max stats if we haven't exceeded a reasonable limit
+          // This prevents unbounded memory growth with many columns
+          constexpr size_t kMaxTrackedColumns = 10000;
+          if (globalMinMaxStats.size() < kMaxTrackedColumns) {
+            auto [it, inserted] = globalMinMaxStats.emplace(
+                fieldId, std::pair{columnChunkStats, columnChunkStats});
 
-          if (!inserted) {
-            auto& [minStats, maxStats] = it->second;
+            if (!inserted) {
+              auto& [minStats, maxStats] = it->second;
 
-            if (columnChunkStats->maxGreaterThan(*maxStats)) {
-              maxStats = columnChunkStats;
-            }
-            if (columnChunkStats->minLessThan(*minStats)) {
-              minStats = columnChunkStats;
+              if (columnChunkStats->maxGreaterThan(*maxStats)) {
+                maxStats = columnChunkStats;
+              }
+              if (columnChunkStats->minLessThan(*minStats)) {
+                minStats = columnChunkStats;
+              }
             }
           }
         }
@@ -158,14 +175,27 @@ IcebergDataFileStatisticsPtr IcebergParquetStatsCollector::aggregate(
     auto& columnStats = dataFileStats->columnStats[fieldId];
     const auto& lowerBound =
         minStats->icebergLowerBoundInclusive(kDefaultTruncateLength);
-    columnStats.lowerBound =
-        encoding::Base64::encode(lowerBound.data(), lowerBound.size());
+    
+    // Only store bounds if they're within reasonable size limits to prevent
+    // memory exhaustion with large VARCHAR/VARBINARY columns
+    const size_t lowerBoundEncodedSize =
+        encoding::Base64::calculateEncodedSize(lowerBound.size());
+    
+    if (lowerBoundEncodedSize <= kMaxEncodedBoundSize) {
+      columnStats.lowerBound =
+          encoding::Base64::encode(lowerBound.data(), lowerBound.size());
+    }
 
     const auto upperBound =
         maxStats->icebergUpperBoundExclusive(kDefaultTruncateLength);
     if (upperBound.has_value()) {
-      columnStats.upperBound =
-          encoding::Base64::encode(upperBound->data(), upperBound->size());
+      const size_t upperBoundEncodedSize =
+          encoding::Base64::calculateEncodedSize(upperBound->size());
+      
+      if (upperBoundEncodedSize <= kMaxEncodedBoundSize) {
+        columnStats.upperBound =
+            encoding::Base64::encode(upperBound->data(), upperBound->size());
+      }
     }
   }
   return dataFileStats;
