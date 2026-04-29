@@ -126,11 +126,7 @@ VectorPtr CastExpr::castToDate(
           setResultOrError(
               row,
               result,
-              // Preserve legacy cast-to-date error formatting with two spaces
-              // before the detail message: makeErrorMessage(..., "") already
-              // ends with one trailing space, and the pre-refactor "{} {}"
-              // path contributed the second one.
-              makeErrorMessage(input, row, DATE()) + " ",
+              makeErrorMessage(input, row, DATE()),
               context,
               resultFlatVector,
               wrapException);

@@ -32,6 +32,13 @@ inline std::string makeErrorMessage(
     vector_size_t row,
     const TypePtr& toType,
     const std::string& details = "") {
+  if (details.empty()) {
+    return fmt::format(
+        "Cannot cast {} '{}' to {}.",
+        input.type()->toString(),
+        input.toString(row),
+        toType->toString());
+  }
   return fmt::format(
       "Cannot cast {} '{}' to {}. {}",
       input.type()->toString(),
@@ -479,10 +486,7 @@ VectorPtr CastExpr::applyDecimalToIntegralCast(
           context.setVeloxExceptionError(
               row,
               makeBadCastException(
-                  result->type(),
-                  input,
-                  row,
-                  makeErrorMessage(input, row, toType) + "Out of bounds."));
+                  result->type(), input, row, "Out of bounds."));
         }
         return;
       }

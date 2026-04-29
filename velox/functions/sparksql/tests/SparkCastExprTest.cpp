@@ -1094,7 +1094,7 @@ TEST_F(SparkCastExprTestAnsiOn, timestampToString) {
 TEST_F(SparkCastExprTestAnsiOn, testInvalidDate) {
   auto expected = [](const std::string& v) {
     return fmt::format(
-        "Cannot cast VARCHAR '{}' to DATE.  Unable to parse date value: \"{}\". "
+        "Cannot cast VARCHAR '{}' to DATE. Unable to parse date value: \"{}\". "
         "Valid date string patterns include ([y]y*, [y]y*-[m]m*, "
         "[y]y*-[m]m*-[d]d*, [y]y*-[m]m*-[d]d* *, "
         "[y]y*-[m]m*-[d]d*T*), and any pattern prefixed with [+-]",
