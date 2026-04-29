@@ -18,6 +18,7 @@
 #include <chrono>
 #include "velox/common/base/CountBits.h"
 #include "velox/external/tzdb/exception.h"
+#include "velox/type/FastDate.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox {
@@ -135,10 +136,9 @@ const int16_t daysBeforeFirstDayOfMonth[][12] = {
 } // namespace
 
 bool Timestamp::epochToCalendarUtc(int64_t epoch, std::tm& tm) {
-  constexpr int kDaysPerYear = 365;
   int64_t days = epoch / kSecondsPerDay;
   int64_t rem = epoch % kSecondsPerDay;
-  while (rem < 0) {
+  if (rem < 0) {
     rem += kSecondsPerDay;
     --days;
   }
@@ -150,6 +150,28 @@ bool Timestamp::epochToCalendarUtc(int64_t epoch, std::tm& tm) {
   if (tm.tm_wday < 0) {
     tm.tm_wday += 7;
   }
+  // Fast path: Neri-Schneider 2022 covers ~3 million years centered on the
+  // epoch — vastly wider than any practical Velox DATE / TIMESTAMP.
+  if (FOLLY_LIKELY(
+          days >= fast_date::kRataDieMin && days <= fast_date::kRataDieMax)) {
+    const auto ymd = daysToYmd(static_cast<int32_t>(days));
+    const int64_t y = static_cast<int64_t>(ymd.year) - kTmYearBase;
+    if (y > std::numeric_limits<decltype(tm.tm_year)>::max() ||
+        y < std::numeric_limits<decltype(tm.tm_year)>::min()) {
+      return false;
+    }
+    tm.tm_year = static_cast<int>(y);
+    const auto* monthOffsets =
+        daysBeforeFirstDayOfMonth[isLeap(ymd.year)];
+    tm.tm_mon = static_cast<int>(ymd.month) - 1;
+    tm.tm_mday = static_cast<int>(ymd.day);
+    tm.tm_yday = monthOffsets[tm.tm_mon] + tm.tm_mday - 1;
+    tm.tm_isdst = 0;
+    return true;
+  }
+  // Fallback: input outside the fast path's exact range. Iterates once per
+  // century, but only reachable from synthetic / extreme epoch values.
+  constexpr int kDaysPerYear = 365;
   int64_t y = 1970;
   if (y + days / kDaysPerYear <= -kLeapYearOffset + 10) {
     return false;

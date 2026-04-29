@@ -44,6 +44,7 @@
 #include <folly/Expected.h>
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/type/FastDate.h"
 #include "velox/type/HugeInt.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
@@ -744,8 +745,6 @@ int32_t getMaxDayOfMonth(int32_t year, int32_t month) {
 
 Expected<int64_t>
 daysSinceEpochFromDate(int32_t year, int32_t month, int32_t day) {
-  int64_t daysSinceEpoch = 0;
-
   if (!isValidDate(year, month, day)) {
     if (threadSkipErrorDetails()) {
       return folly::makeUnexpected(Status::UserError());
@@ -753,6 +752,17 @@ daysSinceEpochFromDate(int32_t year, int32_t month, int32_t day) {
     return folly::makeUnexpected(
         Status::UserError("Date out of range: {}-{}-{}", year, month, day));
   }
+  // Fast path: years inside the fast-date inverse algorithm's exact domain.
+  // Covers any DATE that fits in int32 days plus several million years on
+  // either side — anything Velox can practically carry.
+  if (FOLLY_LIKELY(
+          year >= fast_date::kYearMin && year <= fast_date::kYearMax)) {
+    return static_cast<int64_t>(
+        ymdToDays(year, static_cast<uint32_t>(month), static_cast<uint32_t>(day)));
+  }
+  // Fallback for pathological years up to kMaxYear / kMinYear. Iterates once
+  // per 400-year era; only reachable from explicit user-constructed dates.
+  int64_t daysSinceEpoch = 0;
   while (year < 1970) {
     year += kYearInterval;
     daysSinceEpoch -= kDaysPerYearInterval;

@@ -44,6 +44,7 @@ velox_add_library(
   Conversions.h
   CppToType.h
   DecimalUtil.h
+  FastDate.h
   Filter.h
   FloatingPointUtil.h
   HugeInt.h

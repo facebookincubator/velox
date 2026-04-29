@@ -1,0 +1,254 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "velox/type/FastDate.h"
+
+#include <gtest/gtest.h>
+#include <array>
+#include <random>
+#include "velox/external/date/date.h"
+#include "velox/type/Timestamp.h"
+#include "velox/type/TimestampConversion.h"
+
+namespace facebook::velox::test {
+namespace {
+
+// Returns the (year, month, day) computed by Howard Hinnant's date library,
+// which we use as the ground truth.
+YearMonthDay hinnantYmd(int32_t dayNumber) {
+  const date::sys_days sd{date::days{dayNumber}};
+  const date::year_month_day ymd{sd};
+  return YearMonthDay{
+      static_cast<int32_t>(static_cast<int64_t>(ymd.year())),
+      static_cast<unsigned>(ymd.month()),
+      static_cast<unsigned>(ymd.day()),
+  };
+}
+
+void expectEq(int32_t dayNumber, YearMonthDay got, YearMonthDay want) {
+  EXPECT_EQ(got.year, want.year) << "day=" << dayNumber;
+  EXPECT_EQ(got.month, want.month) << "day=" << dayNumber;
+  EXPECT_EQ(got.day, want.day) << "day=" << dayNumber;
+}
+
+TEST(FastDateTest, knownDates) {
+  // (input days since epoch, expected y, m, d). Hand-verifiable cases.
+  const std::array<std::tuple<int32_t, int32_t, uint32_t, uint32_t>, 9> cases =
+      {{
+          {0, 1970, 1, 1}, // Epoch.
+          {1, 1970, 1, 2},
+          {-1, 1969, 12, 31},
+          {31, 1970, 2, 1},
+          {59, 1970, 3, 1}, // 1970 not a leap year.
+          {365, 1971, 1, 1},
+          {-365, 1969, 1, 1},
+          {11016, 2000, 2, 29}, // Leap day in a 400-year leap year.
+          {-25509, 1900, 2, 28}, // 1900 not a leap year (no Feb 29).
+      }};
+
+  for (const auto& [d, y, m, day] : cases) {
+    SCOPED_TRACE(testing::Message() << "dayNumber=" << d);
+    const auto got = daysToYmd(d);
+    EXPECT_EQ(got.year, y);
+    EXPECT_EQ(got.month, m);
+    EXPECT_EQ(got.day, day);
+  }
+}
+
+TEST(FastDateTest, matchesHinnantOnTightRange) {
+  // Walk every day across roughly +/- 600 years from epoch. This covers all
+  // Gregorian rule transitions of practical interest (centuries, 400-year
+  // boundaries, leap years).
+  for (int32_t d = -219145; d <= 219145; ++d) {
+    const auto got = daysToYmd(d);
+    const auto want = hinnantYmd(d);
+    if (got.year != want.year || got.month != want.month ||
+        got.day != want.day) {
+      FAIL() << "Mismatch at day=" << d << ": got " << got.year << '-'
+             << got.month << '-' << got.day << " want " << want.year << '-'
+             << want.month << '-' << want.day;
+    }
+  }
+}
+
+TEST(FastDateTest, matchesHinnantOnRandomFullRange) {
+  // 2M random days uniformly across the algorithm's exact range. Spans
+  // roughly 3 million years centered on the epoch; behavior outside this
+  // range is undefined per FastDate.h.
+  std::mt19937 rng{0xC0FFEEu};
+  std::uniform_int_distribution<int32_t> dist{
+      fast_date::kRataDieMin, fast_date::kRataDieMax};
+  for (int i = 0; i < 2'000'000; ++i) {
+    const int32_t d = dist(rng);
+    const auto got = daysToYmd(d);
+    const auto want = hinnantYmd(d);
+    ASSERT_EQ(got.year, want.year) << "day=" << d;
+    ASSERT_EQ(got.month, want.month) << "day=" << d;
+    ASSERT_EQ(got.day, want.day) << "day=" << d;
+  }
+}
+
+TEST(FastDateTest, boundaries) {
+  // Days at every century and 400-year boundary across the algorithm's
+  // exact range. Boundaries are where Gregorian rules diverge most.
+  for (int32_t centuryYear = fast_date::kYearMin + 100;
+       centuryYear <= fast_date::kYearMax - 100;
+       centuryYear += 100) {
+    const auto sd = date::sys_days{
+        date::year{centuryYear} / date::month{3} / date::day{1}};
+    const int32_t d = sd.time_since_epoch().count();
+    const auto got = daysToYmd(d);
+    const auto want = hinnantYmd(d);
+    expectEq(d, got, want);
+  }
+}
+
+// --- Public-API random-input cross-checks (fuzzer-style) -----------------
+// These verify the patched Velox functions (Timestamp::epochToCalendarUtc and
+// util::daysSinceEpochFromDate), not just the inner FastDate.h primitives.
+// Three distributions per direction:
+//   tight:     ~+/- 70 years from epoch (the realistic-data case).
+//   wide:      across the full fast_date::kRataDie range (algorithm domain).
+//   fallback:  way outside the algorithm range, exercising the legacy loop.
+//
+// Each distribution gets 2M random samples, cross-checked against
+// date::year_month_day from velox/external/date/date.h.
+
+namespace {
+constexpr int64_t kSecondsPerDay = 86'400;
+
+// Floor-division: seconds -> days, treating negative remainders correctly.
+int64_t epochToDays(int64_t epoch) {
+  int64_t d = epoch / kSecondsPerDay;
+  int64_t r = epoch % kSecondsPerDay;
+  if (r < 0) {
+    --d;
+  }
+  return d;
+}
+
+// Reference y/m/d for any int64 day count (Hinnant supports the full range).
+struct ReferenceYmd {
+  int64_t year;
+  uint32_t month;
+  uint32_t day;
+};
+ReferenceYmd hinnantRef(int64_t days) {
+  const date::sys_days sd{date::days{days}};
+  const date::year_month_day ymd{sd};
+  return {
+      static_cast<int64_t>(ymd.year()),
+      static_cast<unsigned>(ymd.month()),
+      static_cast<unsigned>(ymd.day()),
+  };
+}
+} // namespace
+
+TEST(FastDateTest, fuzzEpochToCalendarUtcMatchesHinnant) {
+  std::mt19937_64 rng{0xFAB1Eull};
+  // Tight: realistic Velox data (~1900-2040).
+  std::uniform_int_distribution<int64_t> tight{
+      -25'567 * kSecondsPerDay, 25'567 * kSecondsPerDay};
+  // Wide: full algorithmic range (~3M years).
+  std::uniform_int_distribution<int64_t> wide{
+      static_cast<int64_t>(fast_date::kRataDieMin) * kSecondsPerDay,
+      static_cast<int64_t>(fast_date::kRataDieMax) * kSecondsPerDay};
+  // Fallback: outside the algorithm range, exercising the legacy loop.
+  // Limit to int64 / 86400 so seconds * 86400 doesn't overflow on the way in.
+  std::uniform_int_distribution<int64_t> fallback{
+      -(static_cast<int64_t>(fast_date::kYearMax) + 100'000) * 365 *
+          kSecondsPerDay,
+      -static_cast<int64_t>(fast_date::kRataDieMin - 1) * kSecondsPerDay};
+
+  auto check = [](int64_t epoch) {
+    std::tm tm;
+    if (!Timestamp::epochToCalendarUtc(epoch, tm)) {
+      // Out-of-range outputs are an acceptable "false" return; just skip.
+      return;
+    }
+    const int64_t days = epochToDays(epoch);
+    const auto want = hinnantRef(days);
+    ASSERT_EQ(tm.tm_year + 1900, want.year) << "epoch=" << epoch;
+    ASSERT_EQ(tm.tm_mon + 1, want.month) << "epoch=" << epoch;
+    ASSERT_EQ(static_cast<unsigned>(tm.tm_mday), want.day) << "epoch=" << epoch;
+  };
+
+  for (int i = 0; i < 2'000'000; ++i) {
+    check(tight(rng));
+  }
+  for (int i = 0; i < 2'000'000; ++i) {
+    check(wide(rng));
+  }
+  // Fewer fallback samples: per-call cost is much higher (legacy loop).
+  for (int i = 0; i < 500'000; ++i) {
+    check(fallback(rng));
+  }
+}
+
+TEST(FastDateTest, fuzzDaysSinceEpochFromDateMatchesHinnant) {
+  std::mt19937_64 rng{0xCAFEull};
+
+  auto check = [](int32_t year, uint32_t month, uint32_t day) {
+    auto got = util::daysSinceEpochFromDate(year, month, day);
+    if (got.hasError()) {
+      return;
+    }
+    const date::sys_days sd{
+        date::year{year} / date::month{month} / date::day{day}};
+    const int64_t want = sd.time_since_epoch().count();
+    ASSERT_EQ(got.value(), want)
+        << "y=" << year << " m=" << month << " d=" << day;
+  };
+
+  // Tight: realistic Velox years.
+  std::uniform_int_distribution<int32_t> tightYear{1900, 2040};
+  // Wide: algorithm domain.
+  std::uniform_int_distribution<int32_t> wideYear{
+      fast_date::kYearMin, fast_date::kYearMax};
+  // Fallback: outside the algorithm range, exercising the legacy 400-year
+  // step loop (year still within isValidDate's accepted range).
+  std::uniform_int_distribution<int32_t> fallbackYear{
+      fast_date::kYearMax + 1, fast_date::kYearMax + 1'000'000};
+
+  // Pick a valid day for the (year, month) pair so we don't trip
+  // isValidDate's "31 Feb"-style rejections.
+  auto sample = [&rng](int32_t year) {
+    const uint32_t month = std::uniform_int_distribution<uint32_t>{1, 12}(rng);
+    const date::year_month_day_last lastOfMonth{
+        date::year{year} / date::month{month} / date::last};
+    const uint32_t maxDay =
+        static_cast<unsigned>(static_cast<date::day>(lastOfMonth.day()));
+    const uint32_t day =
+        std::uniform_int_distribution<uint32_t>{1, maxDay}(rng);
+    return std::make_tuple(year, month, day);
+  };
+
+  for (int i = 0; i < 2'000'000; ++i) {
+    auto [y, m, d] = sample(tightYear(rng));
+    check(y, m, d);
+  }
+  for (int i = 0; i < 2'000'000; ++i) {
+    auto [y, m, d] = sample(wideYear(rng));
+    check(y, m, d);
+  }
+  for (int i = 0; i < 500'000; ++i) {
+    auto [y, m, d] = sample(fallbackYear(rng));
+    check(y, m, d);
+  }
+}
+
+} // namespace
+} // namespace facebook::velox::test
