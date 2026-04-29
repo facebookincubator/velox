@@ -171,7 +171,7 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   uint64_t baseReadOffset_{0};
 
   BufferPtr deleteBitmap_{nullptr};
-  std::shared_ptr<rmm::device_buffer> deviceDeleteBitmap_;
+  std::shared_ptr<rmm::device_buffer> deviceBitmap_;
   std::unique_ptr<cudf::column> deleteMask_;
 };
 

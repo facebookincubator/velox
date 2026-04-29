@@ -16,9 +16,12 @@
 
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfDeletionVectorReader.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfDeletionVectorReaderHelpers.h"
+#include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergDeletionHelpers.h"
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
+
+#include <cudf/column/column_factories.hpp>
 
 #include <string>
 #include <string_view>
@@ -130,8 +133,9 @@ void CudfDeletionVectorReader::buildBitmap(
       reinterpret_cast<cuda::std::byte const*>(roaringBitmapPayload.data());
   auto const bitmapSize = roaringBitmapPayload.size();
 
-  bitmap_ = std::unique_ptr<cudf::roaring_bitmap>(
-      bitmapType, cudf::host_span<const std::byte>(bitmapBytes, bitmapSize));
+  bitmap_ = std::make_unique<cudf::roaring_bitmap>(
+      bitmapType,
+      cudf::host_span<const cuda::std::byte>(bitmapBytes, bitmapSize));
 
   // Load and mark the roaring bitmap as loaded
   bitmap_->materialize(stream);
@@ -157,13 +161,13 @@ void CudfDeletionVectorReader::applyDeletes(
   }
 
   // Pick the row-index value type based on the bitmap key width.
-  using BitmapType = cudf::roaring_bitmap_type;
-  const auto valueTypeId = (bitmap_->type() == BitmapType::BITS_32)
+  const auto valueTypeId =
+      (bitmap_->type() == cudf::roaring_bitmap_type::BITS_32)
       ? cudf::type_to_id<uint32_t>()
       : cudf::type_to_id<uint64_t>();
 
   // Construct row index column if needed
-  if (not rowIndices_ or rowIndices_->size() < numRows or or
+  if (not rowIndices_ or rowIndices_->size() < numRows or
       rowIndices_->type().id() != valueTypeId) {
     rowIndices_ = cudf::make_numeric_column(
         cudf::data_type{valueTypeId},
@@ -174,11 +178,23 @@ void CudfDeletionVectorReader::applyDeletes(
   }
 
   // Generate row indices
-  using ValueType =
-      decltype(bitmap_->type() == BitmapType::BITS_32 ? uint32_t{} : uint64_t{});
-  fillSequence<ValueType>(rowIndices_->mutable_view(), startRow, numRows);
+  if (bitmap_->type() == cudf::roaring_bitmap_type::BITS_32) {
+    fillSequence<uint32_t>(
+        rowIndices_->mutable_view(),
+        static_cast<uint32_t>(startRow),
+        static_cast<int64_t>(numRows),
+        stream,
+        temp_mr);
+  } else {
+    fillSequence<uint64_t>(
+        rowIndices_->mutable_view(),
+        static_cast<uint64_t>(startRow),
+        static_cast<int64_t>(numRows),
+        stream,
+        temp_mr);
+  }
 
-  bitmap_->contains_async(rowIndices_, deleteMask, stream);
+  bitmap_->contains_async(rowIndices_->view(), deleteMask, stream);
 }
 
 } // namespace facebook::velox::cudf_velox::connector::hive::iceberg
