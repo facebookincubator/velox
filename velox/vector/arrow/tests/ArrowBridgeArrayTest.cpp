@@ -622,10 +622,11 @@ TEST_F(ArrowBridgeArrayExportTest, parentNullsMaskTimestampOverflow) {
   vector->setNullCount(1);
   assertExportsWithoutOverflow(
       vector, [&](const arrow::Array& array, TimestampUnit unit) {
-        const auto& structArray = static_cast<const arrow::StructArray&>(array);
+        const auto& structArray =
+            dynamic_cast<const arrow::StructArray&>(array);
         ASSERT_TRUE(structArray.IsNull(1));
         const auto& values =
-            static_cast<const arrow::TimestampArray&>(*structArray.field(0));
+            dynamic_cast<const arrow::TimestampArray&>(*structArray.field(0));
         assertTimestampValues(values, 0, 2, unit);
       });
 
@@ -636,12 +637,13 @@ TEST_F(ArrowBridgeArrayExportTest, parentNullsMaskTimestampOverflow) {
   vector->setNullCount(1);
   assertExportsWithoutOverflow(
       vector, [&](const arrow::Array& array, TimestampUnit unit) {
-        const auto& structArray = static_cast<const arrow::StructArray&>(array);
+        const auto& structArray =
+            dynamic_cast<const arrow::StructArray&>(array);
         ASSERT_TRUE(structArray.IsNull(1));
         const auto& inner =
-            static_cast<const arrow::StructArray&>(*structArray.field(0));
+            dynamic_cast<const arrow::StructArray&>(*structArray.field(0));
         const auto& values =
-            static_cast<const arrow::TimestampArray&>(*inner.field(0));
+            dynamic_cast<const arrow::TimestampArray&>(*inner.field(0));
         assertTimestampValues(values, 0, 2, unit);
       });
 
@@ -659,12 +661,13 @@ TEST_F(ArrowBridgeArrayExportTest, parentNullsMaskTimestampOverflow) {
   vector->setNullCount(1);
   assertExportsWithoutOverflow(
       vector, [&](const arrow::Array& array, TimestampUnit unit) {
-        const auto& structArray = static_cast<const arrow::StructArray&>(array);
+        const auto& structArray =
+            dynamic_cast<const arrow::StructArray&>(array);
         ASSERT_TRUE(structArray.IsNull(1));
         const auto& listArray =
-            static_cast<const arrow::ListArray&>(*structArray.field(0));
+            dynamic_cast<const arrow::ListArray&>(*structArray.field(0));
         const auto& values =
-            static_cast<const arrow::TimestampArray&>(*listArray.values());
+            dynamic_cast<const arrow::TimestampArray&>(*listArray.values());
         assertTimestampValues(
             values, listArray.value_offset(0), listArray.value_offset(2), unit);
       });
@@ -684,12 +687,13 @@ TEST_F(ArrowBridgeArrayExportTest, parentNullsMaskTimestampOverflow) {
   vector->setNullCount(1);
   assertExportsWithoutOverflow(
       vector, [&](const arrow::Array& array, TimestampUnit unit) {
-        const auto& structArray = static_cast<const arrow::StructArray&>(array);
+        const auto& structArray =
+            dynamic_cast<const arrow::StructArray&>(array);
         ASSERT_TRUE(structArray.IsNull(1));
         const auto& mapArray =
-            static_cast<const arrow::MapArray&>(*structArray.field(0));
+            dynamic_cast<const arrow::MapArray&>(*structArray.field(0));
         const auto& values =
-            static_cast<const arrow::TimestampArray&>(*mapArray.items());
+            dynamic_cast<const arrow::TimestampArray&>(*mapArray.items());
         assertTimestampValues(
             values, mapArray.value_offset(0), mapArray.value_offset(2), unit);
       });
@@ -710,12 +714,12 @@ TEST_F(ArrowBridgeArrayExportTest, parentNullsMaskTimestampOverflow) {
       1);
   assertExportsWithoutOverflow(
       vector, [&](const arrow::Array& array, TimestampUnit unit) {
-        const auto& listArray = static_cast<const arrow::ListArray&>(array);
+        const auto& listArray = dynamic_cast<const arrow::ListArray&>(array);
         ASSERT_TRUE(listArray.IsNull(1));
         const auto& rows =
-            static_cast<const arrow::StructArray&>(*listArray.values());
+            dynamic_cast<const arrow::StructArray&>(*listArray.values());
         const auto& values =
-            static_cast<const arrow::TimestampArray&>(*rows.field(0));
+            dynamic_cast<const arrow::TimestampArray&>(*rows.field(0));
         assertTimestampValues(
             values, listArray.value_offset(0), listArray.value_offset(2), unit);
       });
@@ -736,12 +740,12 @@ TEST_F(ArrowBridgeArrayExportTest, parentNullsMaskTimestampOverflow) {
       1);
   assertExportsWithoutOverflow(
       vector, [&](const arrow::Array& array, TimestampUnit unit) {
-        const auto& mapArray = static_cast<const arrow::MapArray&>(array);
+        const auto& mapArray = dynamic_cast<const arrow::MapArray&>(array);
         ASSERT_TRUE(mapArray.IsNull(1));
         const auto& rows =
-            static_cast<const arrow::StructArray&>(*mapArray.items());
+            dynamic_cast<const arrow::StructArray&>(*mapArray.items());
         const auto& values =
-            static_cast<const arrow::TimestampArray&>(*rows.field(0));
+            dynamic_cast<const arrow::TimestampArray&>(*rows.field(0));
         assertTimestampValues(
             values, mapArray.value_offset(0), mapArray.value_offset(2), unit);
       });
@@ -756,10 +760,11 @@ TEST_F(ArrowBridgeArrayExportTest, parentNullsMaskTimestampOverflow) {
   options_.flattenDictionary = true;
   assertExportsWithoutOverflow(
       vector, [&](const arrow::Array& array, TimestampUnit unit) {
-        const auto& structArray = static_cast<const arrow::StructArray&>(array);
+        const auto& structArray =
+            dynamic_cast<const arrow::StructArray&>(array);
         ASSERT_TRUE(structArray.IsNull(1));
         const auto& values =
-            static_cast<const arrow::TimestampArray&>(*structArray.field(0));
+            dynamic_cast<const arrow::TimestampArray&>(*structArray.field(0));
         assertTimestampValues(values, 0, 2, unit);
       });
   options_.flattenDictionary = false;
@@ -772,15 +777,16 @@ TEST_F(ArrowBridgeArrayExportTest, parentNullsMaskTimestampOverflow) {
   vector->setNullCount(1);
   assertExportsWithoutOverflow(
       vector, [&](const arrow::Array& array, TimestampUnit unit) {
-        const auto& structArray = static_cast<const arrow::StructArray&>(array);
+        const auto& structArray =
+            dynamic_cast<const arrow::StructArray&>(array);
         ASSERT_TRUE(structArray.IsNull(1));
         const auto& dictionaryArray =
-            static_cast<const arrow::DictionaryArray&>(*structArray.field(0));
+            dynamic_cast<const arrow::DictionaryArray&>(*structArray.field(0));
         const auto& dictionaryValues =
-            static_cast<const arrow::TimestampArray&>(
+            dynamic_cast<const arrow::TimestampArray&>(
                 *dictionaryArray.dictionary());
         const auto& dictionaryIndices =
-            static_cast<const arrow::Int32Array&>(*dictionaryArray.indices());
+            dynamic_cast<const arrow::Int32Array&>(*dictionaryArray.indices());
         ASSERT_FALSE(dictionaryIndices.IsNull(0));
         EXPECT_EQ(
             dictionaryValues.Value(dictionaryIndices.Value(0)),
@@ -801,7 +807,8 @@ TEST_F(ArrowBridgeArrayExportTest, parentNullsMaskTimestampOverflow) {
   vector->setNullCount(vector->size());
   assertExportsWithoutOverflow(
       vector, [&](const arrow::Array& array, TimestampUnit) {
-        const auto& structArray = static_cast<const arrow::StructArray&>(array);
+        const auto& structArray =
+            dynamic_cast<const arrow::StructArray&>(array);
         ASSERT_EQ(structArray.null_count(), vector->size());
         for (int64_t row = 0; row < structArray.length(); ++row) {
           EXPECT_TRUE(structArray.IsNull(row));
@@ -1282,6 +1289,25 @@ TEST_F(ArrowBridgeArrayExportTest, dictionarySimple) {
   EXPECT_EQ(values.Value(2), 3);
 }
 
+TEST_F(ArrowBridgeArrayExportTest, dictionaryNullConstantValues) {
+  auto values = BaseVector::createNullConstant(TINYINT(), 2048, pool_.get());
+  auto nulls = AlignedBuffer::allocate<bool>(3, pool_.get(), bits::kNotNull);
+  auto indices = makeBuffer<vector_size_t>({0, 1, 2});
+  auto vec = BaseVector::wrapInDictionary(nulls, indices, 3, values);
+
+  ArrowArray arrowArray;
+  velox::exportToArrow(vec, arrowArray, pool_.get(), options_);
+
+  EXPECT_EQ(vec->size(), arrowArray.length);
+  ASSERT_NE(nullptr, arrowArray.dictionary);
+  EXPECT_EQ(values->size(), arrowArray.dictionary->length);
+  ASSERT_NE(nullptr, arrowArray.release);
+
+  arrowArray.release(&arrowArray);
+  EXPECT_EQ(nullptr, arrowArray.release);
+  EXPECT_EQ(nullptr, arrowArray.private_data);
+}
+
 TEST_F(ArrowBridgeArrayExportTest, dictionaryNested) {
   auto vec = ({
     auto indices = makeBuffer<vector_size_t>({1, 2, 0});
@@ -1330,6 +1356,25 @@ TEST_F(ArrowBridgeArrayExportTest, constants) {
       BaseVector::createNullConstant(TINYINT(), 2048, pool_.get());
   testConstantVector<true, int8_t>(
       vector, std::vector<std::optional<int8_t>>{std::nullopt});
+}
+
+TEST_F(ArrowBridgeArrayExportTest, flattenNullConstant) {
+  options_.flattenConstant = true;
+
+  VectorPtr vector =
+      BaseVector::createNullConstant(TINYINT(), 2048, pool_.get());
+  ArrowArray arrowArray;
+  velox::exportToArrow(vector, arrowArray, pool_.get(), options_);
+
+  EXPECT_EQ(vector->size(), arrowArray.length);
+  EXPECT_EQ(vector->size(), arrowArray.null_count);
+  EXPECT_EQ(2, arrowArray.n_buffers);
+  EXPECT_EQ(0, arrowArray.n_children);
+  ASSERT_NE(nullptr, arrowArray.release);
+
+  arrowArray.release(&arrowArray);
+  EXPECT_EQ(nullptr, arrowArray.release);
+  EXPECT_EQ(nullptr, arrowArray.private_data);
 }
 
 TEST_F(ArrowBridgeArrayExportTest, constantComplex) {

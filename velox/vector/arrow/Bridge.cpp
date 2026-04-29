@@ -1199,7 +1199,7 @@ void exportDictionary(
     auto* rawNulls = nulls->as<uint64_t>();
     auto* rawIndices = vec.wrapInfo()->as<vector_size_t>();
     rows.apply([&](vector_size_t i) {
-      if (!bits::isBitNull(rawNulls, i)) {
+      if (!bits::isBitNull(rawNulls, i) && !vec.isNullAt(i)) {
         bits::setNull(rawDictionaryNulls, rawIndices[i], false);
       }
     });
@@ -1348,8 +1348,9 @@ void exportToArrowImpl(
   out.length = rows.count();
   out.offset = 0;
   out.dictionary = nullptr;
+  const bool isConstant = vec.encoding() == VectorEncoding::Simple::CONSTANT;
   BufferPtr ownNulls;
-  if (vec.mayHaveNulls() && vec.getNullCount() != 0) {
+  if (!isConstant && vec.mayHaveNulls() && vec.getNullCount() != 0) {
     ownNulls = vec.nulls();
   }
 
@@ -1357,7 +1358,7 @@ void exportToArrowImpl(
   // nodes. Arrow validity for this array still uses only this vector's own
   // nulls.
   auto effectiveNulls = parentNulls != nullptr ? parentNulls : ownNulls;
-  if (parentNulls != nullptr && ownNulls != nullptr) {
+  if (!isConstant && parentNulls != nullptr && ownNulls != nullptr) {
     auto mergedNulls =
         AlignedBuffer::allocate<bool>(vec.size(), pool, bits::kNotNull);
     bits::andBits(
@@ -1422,9 +1423,8 @@ void exportToArrowImpl(
     case VectorEncoding::Simple::CONSTANT:
       options.flattenConstant
           ? exportFlattenedVector(
-                vec, rows, options, out, pool, *holder, effectiveNulls)
-          : exportConstant(
-                vec, rows, options, out, pool, *holder, effectiveNulls);
+                vec, rows, options, out, pool, *holder, parentNulls)
+          : exportConstant(vec, rows, options, out, pool, *holder, parentNulls);
       break;
     default:
       VELOX_NYI("{} cannot be exported to Arrow yet.", vec.encoding());
