@@ -15,25 +15,25 @@
  */
 
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/benchmarks/CudfTpcdsBenchmark.h"
 #include "velox/experimental/cudf/benchmarks/CudfTpchBenchmark.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
-#include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
-#include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
+#include "velox/experimental/cudf/tests/utils/CudfTpcdsQueryBuilder.h"
 
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 
-#include <experimental/cudf/connectors/hive/CudfHiveConnector.h>
-
+DECLARE_string(data_path);
+DECLARE_string(data_format);
 DECLARE_int64(max_coalesced_bytes);
 DECLARE_string(max_coalesced_distance_bytes);
 DECLARE_int32(parquet_prefetch_rowgroups);
 
 using namespace facebook::velox;
-using namespace facebook::velox::common::testutil;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::dwio::common;
@@ -61,53 +61,56 @@ DEFINE_string(
     "Path to a properties file for CudfConfig. Each line should be key=value "
     "(e.g. cudf.memory_resource=async). See CudfConfig for available keys.");
 
-void CudfTpchBenchmark::initialize() {
+void CudfTpcdsBenchmark::initQueryBuilder() {
+  auto cudfBuilder =
+      std::make_unique<cudf_velox::exec::test::CudfTpcdsQueryBuilder>(
+          toFileFormat(FLAGS_data_format), ioExecutor_.get());
+  cudfBuilder->enableCudf();
+  cudfBuilder->initialize(FLAGS_data_path);
+  queryBuilder_ = std::move(cudfBuilder);
+}
+
+void CudfTpcdsBenchmark::initialize() {
+  // Must be set before TpcdsBenchmark::initialize(), which calls
+  // initQueryBuilder() -> registerCudf(), which bakes the prefix into the
+  // step-aware aggregation registry.
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  config.functionNamePrefix = kPrestoFunctionNamespacePrefix;
+
   if (!FLAGS_cudf_properties.empty()) {
-    cudf_velox::CudfConfig::getInstance().initialize(
-        cudf_velox::loadPropertiesFile(FLAGS_cudf_properties));
+    config.initialize(cudf_velox::loadPropertiesFile(FLAGS_cudf_properties));
   }
 
-  TpchBenchmark::initialize();
+  TpcdsBenchmark::initialize();
 
+  const std::string prestoConnectorId{kPrestoHiveConnectorId};
   if (FLAGS_velox_cudf_table_scan) {
-    connector::ConnectorRegistry::global().erase(
-        facebook::velox::exec::test::kHiveConnectorId);
+    // The base class registered a HiveConnector. Unregister it so the
+    // CudfTpcdsQueryBuilder can register CudfHiveConnector under the plan's
+    // connector ID instead. The query builder handles this when getQueryPlan()
+    // is called.
+    if (connector::ConnectorRegistry::tryGet(prestoConnectorId) != nullptr) {
+      connector::ConnectorRegistry::global().erase(prestoConnectorId);
+    }
 
-    auto cudfHiveConfigurationValues =
-        std::unordered_map<std::string, std::string>();
-    cudfHiveConfigurationValues
-        [cudf_velox::connector::hive::CudfHiveConfig::kMaxChunkReadLimit] =
-            std::to_string(FLAGS_cudf_chunk_read_limit);
-    cudfHiveConfigurationValues
-        [cudf_velox::connector::hive::CudfHiveConfig::kMaxPassReadLimit] =
-            std::to_string(FLAGS_cudf_pass_read_limit);
-    cudfHiveConfigurationValues[cudf_velox::connector::hive::CudfHiveConfig::
-                                    kAllowMismatchedCudfHiveSchemas] =
-        std::to_string(true);
-    auto cudfHiveProperties = std::make_shared<const config::ConfigBase>(
-        std::move(cudfHiveConfigurationValues));
-
+    // Re-register with CuDF properties.
+    auto properties = makeConnectorProperties();
     cudf_velox::connector::hive::CudfHiveConnectorFactory cudfHiveFactory;
     auto cudfHiveConnector = cudfHiveFactory.newConnector(
-        facebook::velox::exec::test::kHiveConnectorId,
-        cudfHiveProperties,
-        ioExecutor_.get());
+        prestoConnectorId, properties, ioExecutor_.get());
     connector::ConnectorRegistry::global().insert(
         cudfHiveConnector->connectorId(), cudfHiveConnector);
   }
 
-  cudf_velox::registerCudf();
-
-  queryConfigs_[facebook::velox::cudf_velox::CudfFromVelox::kGpuBatchSizeRows] =
+  queryConfigs_[cudf_velox::CudfFromVelox::kGpuBatchSizeRows] =
       std::to_string(FLAGS_cudf_gpu_batch_size_rows);
 }
 
 std::shared_ptr<config::ConfigBase>
-CudfTpchBenchmark::makeConnectorProperties() {
-  auto cfg = TpchBenchmark::makeConnectorProperties();
+CudfTpcdsBenchmark::makeConnectorProperties() {
+  auto cfg = TpcdsBenchmark::makeConnectorProperties();
   using CudfHiveCfg = cudf_velox::connector::hive::CudfHiveConfig;
 
-  // CuDF-specific properties.
   cfg->set(
       CudfHiveCfg::kMaxChunkReadLimit,
       std::to_string(FLAGS_cudf_chunk_read_limit));
@@ -119,39 +122,19 @@ CudfTpchBenchmark::makeConnectorProperties() {
   return cfg;
 }
 
-std::vector<std::shared_ptr<connector::ConnectorSplit>>
-CudfTpchBenchmark::listSplits(
-    const std::string& path,
-    int32_t numSplitsPerFile,
-    const exec::test::TpchPlan& plan) {
-  // TODO (dm): Figure out a way to enforce 1 split per file in
-  // CudfHiveDataSource outside of this benchmark
-  if (FLAGS_velox_cudf_table_scan) {
-    // TODO (dm): Instead of this, we can maybe use
-    // makeHiveConnectorSplits(vector<shared_ptr<TempFilePath>>&
-    // filePaths)
-    std::vector<std::shared_ptr<connector::ConnectorSplit>> result;
-    auto temp = HiveConnectorTestBase::makeHiveConnectorSplits(
-        path, 1, plan.dataFileFormat);
-    for (auto& i : temp) {
-      result.push_back(i);
-    }
-    return result;
-  }
-
-  return TpchBenchmark::listSplits(path, numSplitsPerFile, plan);
-}
-
-void CudfTpchBenchmark::shutdown() {
-  cudf_velox::unregisterCudf();
-  TpchBenchmark::shutdown();
+void CudfTpcdsBenchmark::shutdown() {
+  // CudfTpcdsQueryBuilder::shutdown() handles unregisterCudf().
+  TpcdsBenchmark::shutdown();
 }
 
 int main(int argc, char** argv) {
   std::string kUsage(
-      "This program benchmarks TPC-H queries. Run 'velox_cudf_tpch_benchmark -helpon=TpchBenchmark' for available options.\n");
+      "This program benchmarks TPC-DS queries with CuDF GPU acceleration.\n"
+      "  --data_path        Path to TPC-DS data directory\n"
+      "  --plan_path        Path to plan JSON directory\n"
+      "  --cudf_properties  Path to CudfConfig properties file\n");
   gflags::SetUsageMessage(kUsage);
   folly::Init init{&argc, &argv, false};
-  benchmark = std::make_unique<CudfTpchBenchmark>();
-  tpchBenchmarkMain();
+  tpcdsBenchmark = std::make_unique<CudfTpcdsBenchmark>();
+  tpcdsBenchmarkMain();
 }
