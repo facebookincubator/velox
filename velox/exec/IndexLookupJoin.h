@@ -41,7 +41,7 @@ class IndexLookupJoin : public Operator {
   RowVectorPtr getOutput() override;
 
   bool isFinished() override {
-    return noMoreInput_ && (numInputBatches() == 0);
+    return (noMoreInput_ || shouldSkipInput()) && (numInputBatches() == 0);
   }
 
   void close() override;
@@ -298,6 +298,19 @@ class IndexLookupJoin : public Operator {
     return lookupTableHandle_->needsIndexSplit() && !noMoreIndexSplits_;
   }
 
+  // Returns true if input processing can be skipped entirely. This is the case
+  // for INNER JOIN when there are no index splits — every probe row will be
+  // discarded since there can be no matches.
+  bool shouldSkipInput() const {
+    return hasNoIndexSplits_ && joinType_ == core::JoinType::kInner;
+  }
+
+  // Returns true if lookup should be skipped for the given batch, either
+  // because the index source has no splits or because all probe keys are null.
+  bool shouldSkipLookup(const InputBatchState& batch) const {
+    return hasNoIndexSplits_ || batch.lookupInput->size() == 0;
+  }
+
   // Returns the number of input batches to process.
   size_t numInputBatches() const {
     VELOX_CHECK_LE(startBatchIndex_, endBatchIndex_);
@@ -433,6 +446,9 @@ class IndexLookupJoin : public Operator {
   // Split collection state for index sources that require splits.
   // True if we have received the no-more-splits signal for the index source.
   bool noMoreIndexSplits_{false};
+  // True if the index source received zero splits (e.g., partition pruning
+  // eliminated all index partitions). When set, lookups are skipped entirely.
+  bool hasNoIndexSplits_{false};
   // The future to wait for the next index split.
   ContinueFuture indexSplitFuture_;
   // The collected splits for the index source. It is passed to index source

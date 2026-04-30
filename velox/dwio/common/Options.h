@@ -468,12 +468,12 @@ class RowReaderOptions {
     indexEnabled_ = enabled;
   }
 
-  bool passStringBuffersFromDecoder() const {
-    return passStringBuffersFromDecoder_;
+  bool stringDecoderZeroCopy() const {
+    return stringDecoderZeroCopy_;
   }
 
-  void setPassStringBuffersFromDecoder(bool passStringBuffersFromDecoder) {
-    passStringBuffersFromDecoder_ = passStringBuffersFromDecoder;
+  void setStringDecoderZeroCopy(bool stringDecoderZeroCopy) {
+    stringDecoderZeroCopy_ = stringDecoderZeroCopy;
   }
 
   bool collectColumnCpuMetrics() const {
@@ -553,7 +553,7 @@ class RowReaderOptions {
   bool indexEnabled_{false};
   // NOTE: we will control this option with a session property
   // for prod. Tests are parameterized on both branches.
-  bool passStringBuffersFromDecoder_{false};
+  bool stringDecoderZeroCopy_{false};
   bool collectColumnCpuMetrics_{false};
 };
 
