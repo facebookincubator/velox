@@ -88,10 +88,10 @@ function install_duckdb {
     wget_and_untar https://github.com/duckdb/duckdb/archive/refs/tags/"${DUCKDB_VERSION}".tar.gz duckdb
     # DuckDB uses git commands to retrieve version information during the build,
     # which works with git clone. To prevent incorrectly using the parent project's
-    # git version when building from a tarball, we define GIT_COMMIT_HASH to skip
-    # that.
+    # git version when building from a tarball, we define the version explicitly.
     cmake_install_dir duckdb \
-      -DGIT_COMMIT_HASH="6536a77" -DBUILD_UNITTESTS=OFF -DENABLE_SANITIZER=OFF -DENABLE_UBSAN=OFF \
+      -DGIT_COMMIT_HASH="${DUCKDB_GIT_COMMIT_HASH}" -DOVERRIDE_GIT_DESCRIBE="${DUCKDB_GIT_DESCRIBE}" \
+      -DBUILD_UNITTESTS=OFF -DENABLE_SANITIZER=OFF -DENABLE_UBSAN=OFF \
       -DBUILD_SHELL=OFF -DEXPORT_DLL_SYMBOLS=OFF -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}"
   fi
 }
