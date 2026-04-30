@@ -924,6 +924,48 @@ FOLLY_ALWAYS_INLINE std::string_view truncateUtf8(
   const auto truncatedLength = cappedByteLength<false>(input, numCodePoints);
   return std::string_view(input.data(), truncatedLength);
 }
+/// Computes an upper bound for binary data by incrementing bytes from the end.
+/// This follows the Apache Iceberg specification for binary column statistics.
+/// Unlike UTF-8 strings, binary data is treated as raw bytes without character
+/// encoding validation.
+///
+/// Implementation based on Apache Iceberg's BinaryUtil.truncateBinaryMax():
+/// https://github.com/apache/iceberg/blob/main/api/src/main/java/org/apache/iceberg/util/BinaryUtil.java
+///
+/// @param input The binary data as a string_view.
+/// @param truncateLength Maximum number of bytes to retain before incrementing.
+/// @return An optional string containing the upper bound, or std::nullopt if
+///         no valid upper bound exists (e.g., all bytes are 0xFF).
+FOLLY_ALWAYS_INLINE std::optional<std::string> roundUpBinary(
+    std::string_view input,
+    int32_t truncateLength) {
+  // Truncate to the specified length
+  const size_t length =
+      std::min(input.size(), static_cast<size_t>(truncateLength));
+
+  if (length == 0) {
+    return std::nullopt;
+  }
+
+  // Create a mutable copy of the truncated input
+  std::string result(input.data(), length);
+
+  // Try incrementing bytes from the end
+  for (int32_t i = length - 1; i >= 0; --i) {
+    unsigned char byte = static_cast<unsigned char>(result[i]);
+
+    if (byte != 0xFF) { // Can increment without overflow
+      result[i] = static_cast<char>(byte + 1);
+      // Truncate to i+1 bytes (remove trailing bytes after increment point)
+      result.resize(i + 1);
+      return result;
+    }
+    // If byte == 0xFF, it will overflow, continue to previous byte
+  }
+
+  // All bytes were 0xFF and overflowed - no valid upper bound
+  return std::nullopt;
+}
 
 /// Rounds up a UTF-8 encoded string to produce an exclusive upper bound.
 /// The result is guaranteed to be greater than any string that shares the

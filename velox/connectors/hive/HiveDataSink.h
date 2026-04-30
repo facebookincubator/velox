@@ -515,6 +515,7 @@ class HiveDataSink : public FileDataSink {
   std::unique_ptr<facebook::velox::dwio::common::Writer> createWriterForIndex(
       size_t writerIndex) override;
 
+  // Creates and configures WriterOptions based on file format.
   std::shared_ptr<dwio::common::WriterOptions> createWriterOptions()
       const override;
 
