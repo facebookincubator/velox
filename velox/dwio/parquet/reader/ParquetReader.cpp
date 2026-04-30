@@ -839,6 +839,22 @@ TypePtr ReaderBase::convertType(
       schemaElement.repetition_type == thrift::FieldRepetitionType::REPEATED;
   const bool allowNarrowing = options_.allowInt32Narrowing();
 
+  if (schemaElement.__isset.logicalType &&
+      schemaElement.logicalType.__isset.UNKNOWN) {
+    VELOX_CHECK(
+        !requestedType ||
+            isCompatible(
+                requestedType,
+                isRepeated,
+                [](const TypePtr& type) {
+                  return type->kind() == TypeKind::UNKNOWN;
+                }),
+        kTypeMappingErrorFmtStr,
+        "UNKNOWN",
+        requestedType->toString());
+    return UNKNOWN();
+  }
+
   if (schemaElement.__isset.converted_type) {
     switch (schemaElement.converted_type) {
       case thrift::ConvertedType::INT_8:
