@@ -149,34 +149,67 @@ TEST_F(MapTest, wide) {
       mapVector);
 }
 
-TEST_F(MapTest, variableNumberOfKeyValuePairs) {
-  // Test map function with a varied number of key-value pairs, including 10
-  // (the previous fixed-signature limit) and counts beyond it.
-  auto testMapWithNumPairs = [&](int numPairs) {
-    std::vector<VectorPtr> args;
-    args.reserve(numPairs * 2);
-    std::string expr = "map(";
-    std::vector<std::pair<int64_t, std::optional<double>>> entries;
-    entries.reserve(numPairs);
-    for (int i = 0; i < numPairs; ++i) {
-      args.push_back(makeFlatVector<int64_t>({i + 1}));
-      args.push_back(makeFlatVector<double>({(i + 1) * 1.1}));
-      if (i > 0) {
-        expr += ", ";
-      }
-      expr += "c" + std::to_string(2 * i) + ", c" + std::to_string(2 * i + 1);
-      entries.emplace_back(i + 1, (i + 1) * 1.1);
-    }
-    expr += ")";
+TEST_F(MapTest, tenKeyValuePairs) {
+  // Test map function with 10 key-value pairs (20 arguments).
+  auto key1 = makeFlatVector<int64_t>({1, 11, 21});
+  auto val1 = makeFlatVector<std::string>({"a", "aa", "aaa"});
+  auto key2 = makeFlatVector<int64_t>({2, 12, 22});
+  auto val2 = makeFlatVector<std::string>({"b", "bb", "bbb"});
+  auto key3 = makeFlatVector<int64_t>({3, 13, 23});
+  auto val3 = makeFlatVector<std::string>({"c", "cc", "ccc"});
+  auto key4 = makeFlatVector<int64_t>({4, 14, 24});
+  auto val4 = makeFlatVector<std::string>({"d", "dd", "ddd"});
+  auto key5 = makeFlatVector<int64_t>({5, 15, 25});
+  auto val5 = makeFlatVector<std::string>({"e", "ee", "eee"});
+  auto key6 = makeFlatVector<int64_t>({6, 16, 26});
+  auto val6 = makeFlatVector<std::string>({"f", "ff", "fff"});
+  auto key7 = makeFlatVector<int64_t>({7, 17, 27});
+  auto val7 = makeFlatVector<std::string>({"g", "gg", "ggg"});
+  auto key8 = makeFlatVector<int64_t>({8, 18, 28});
+  auto val8 = makeFlatVector<std::string>({"h", "hh", "hhh"});
+  auto key9 = makeFlatVector<int64_t>({9, 19, 29});
+  auto val9 = makeFlatVector<std::string>({"i", "ii", "iii"});
+  auto key10 = makeFlatVector<int64_t>({10, 20, 30});
+  auto val10 = makeFlatVector<std::string>({"j", "jj", "jjj"});
 
-    auto expected = makeMapVector<int64_t, double>({entries});
-    testMap(expr, args, expected);
-  };
+  auto expectedMap = makeMapVector<int64_t, std::string>(
+      {{{1, "a"},
+        {2, "b"},
+        {3, "c"},
+        {4, "d"},
+        {5, "e"},
+        {6, "f"},
+        {7, "g"},
+        {8, "h"},
+        {9, "i"},
+        {10, "j"}},
+       {{11, "aa"},
+        {12, "bb"},
+        {13, "cc"},
+        {14, "dd"},
+        {15, "ee"},
+        {16, "ff"},
+        {17, "gg"},
+        {18, "hh"},
+        {19, "ii"},
+        {20, "jj"}},
+       {{21, "aaa"},
+        {22, "bbb"},
+        {23, "ccc"},
+        {24, "ddd"},
+        {25, "eee"},
+        {26, "fff"},
+        {27, "ggg"},
+        {28, "hhh"},
+        {29, "iii"},
+        {30, "jjj"}}});
 
-  testMapWithNumPairs(5);
-  testMapWithNumPairs(10);
-  testMapWithNumPairs(12);
-  testMapWithNumPairs(20);
+  testMap(
+      "map(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, "
+      "c15, c16, c17, c18, c19)",
+      {key1, val1, key2, val2, key3, val3, key4, val4, key5,  val5,
+       key6, val6, key7, val7, key8, val8, key9, val9, key10, val10},
+      expectedMap);
 }
 
 TEST_F(MapTest, errorCases) {
@@ -192,7 +225,21 @@ TEST_F(MapTest, errorCases) {
   testMapFails(
       "map(c0, c1, c2)",
       {inputVectorInt64, inputVectorDouble, inputVectorInt64},
-      "Map function must take an even number of arguments");
+      "Scalar function signature is not supported: map(BIGINT, DOUBLE, BIGINT)");
+
+  // Test with 22 arguments (11 pairs) - exceeds the maximum of 10 key-value
+  // pairs supported by the map function.
+  testMapFails(
+      "map(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c18, c19, c20, c21)",
+      {inputVectorDouble, inputVectorDouble, inputVectorDouble,
+       inputVectorDouble, inputVectorDouble, inputVectorDouble,
+       inputVectorDouble, inputVectorDouble, inputVectorDouble,
+       inputVectorDouble, inputVectorDouble, inputVectorDouble,
+       inputVectorDouble, inputVectorDouble, inputVectorDouble,
+       inputVectorDouble, inputVectorDouble, inputVectorDouble,
+       inputVectorDouble, inputVectorDouble, inputVectorDouble,
+       inputVectorDouble},
+      "Scalar function signature is not supported: map(DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE)");
 
   // Types of args.
   testMapFails(
@@ -201,14 +248,14 @@ TEST_F(MapTest, errorCases) {
        inputVectorDouble,
        inputVectorDouble,
        inputVectorDouble},
-      "All the key arguments in Map function must be the same!");
+      "Scalar function signature is not supported: map(BIGINT, DOUBLE, DOUBLE, DOUBLE)");
   testMapFails(
       "map(c0, c1, c2, c3)",
       {inputVectorDouble,
        inputVectorInt64,
        inputVectorDouble,
        inputVectorDouble},
-      "All the value arguments in Map function must be the same!");
+      "Scalar function signature is not supported: map(DOUBLE, BIGINT, DOUBLE, DOUBLE)");
 
   testMapFails(
       "map(c0, c1)",
