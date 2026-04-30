@@ -19,6 +19,7 @@
 #include "velox/common/base/CountBits.h"
 #include "velox/external/tzdb/exception.h"
 #include "velox/type/FastDate.h"
+#include "velox/type/WideRangeDateConversion.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox {
@@ -142,18 +143,19 @@ bool Timestamp::epochToCalendarUtc(int64_t epoch, std::tm& tm) {
     rem += kSecondsPerDay;
     --days;
   }
-  tm.tm_hour = rem / kSecondsPerHour;
-  rem = rem % kSecondsPerHour;
-  tm.tm_min = rem / 60;
-  tm.tm_sec = rem % 60;
-  tm.tm_wday = (4 + days) % 7;
-  if (tm.tm_wday < 0) {
-    tm.tm_wday += 7;
-  }
   // Fast path: Neri-Schneider 2022 covers ~3 million years centered on the
   // epoch — vastly wider than any practical Velox DATE / TIMESTAMP.
+  // Inputs outside this range delegate to WideRangeDateConversion.
   if (FOLLY_LIKELY(
           days >= fast_date::kRataDieMin && days <= fast_date::kRataDieMax)) {
+    tm.tm_hour = rem / kSecondsPerHour;
+    rem = rem % kSecondsPerHour;
+    tm.tm_min = rem / 60;
+    tm.tm_sec = rem % 60;
+    tm.tm_wday = (4 + days) % 7;
+    if (tm.tm_wday < 0) {
+      tm.tm_wday += 7;
+    }
     const auto ymd = daysToYmd(static_cast<int32_t>(days));
     const int64_t y = static_cast<int64_t>(ymd.year) - kTmYearBase;
     if (y > std::numeric_limits<decltype(tm.tm_year)>::max() ||
@@ -169,31 +171,7 @@ bool Timestamp::epochToCalendarUtc(int64_t epoch, std::tm& tm) {
     tm.tm_isdst = 0;
     return true;
   }
-  // Fallback: input outside the fast path's exact range. Iterates once per
-  // century, but only reachable from synthetic / extreme epoch values.
-  constexpr int kDaysPerYear = 365;
-  int64_t y = 1970;
-  if (y + days / kDaysPerYear <= -kLeapYearOffset + 10) {
-    return false;
-  }
-  bool leapYear;
-  while (days < 0 || days >= kDaysPerYear + (leapYear = isLeap(y))) {
-    auto newy = y + days / kDaysPerYear - (days < 0);
-    days -= daysBetweenYears(y, newy);
-    y = newy;
-  }
-  y -= kTmYearBase;
-  if (y > std::numeric_limits<decltype(tm.tm_year)>::max() ||
-      y < std::numeric_limits<decltype(tm.tm_year)>::min()) {
-    return false;
-  }
-  tm.tm_year = y;
-  tm.tm_yday = days;
-  auto* months = daysBeforeFirstDayOfMonth[leapYear];
-  tm.tm_mon = std::upper_bound(months, months + 12, days) - months - 1;
-  tm.tm_mday = days - months[tm.tm_mon] + 1;
-  tm.tm_isdst = 0;
-  return true;
+  return WideRangeDateConversion::epochToCalendarUtc(epoch, tm);
 }
 
 // static
