@@ -18,6 +18,7 @@
 #include "velox/core/Expressions.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/FieldReference.h"
+#include "velox/expression/FunctionMetadata.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/parse/ExpressionsParser.h"
@@ -441,6 +442,160 @@ TEST_F(ExprCompilerTest, simpleFunctionMemoryPool) {
 
   auto stringView = decoded.valueAt<StringView>(0);
   ASSERT_GT(stringView.size(), 0) << "HLL sketch is empty";
+}
+
+TEST_F(ExprCompilerTest, functionDecorator) {
+  auto rowType = ROW({"a"}, {BIGINT()});
+  auto field = makeField(rowType);
+
+  std::vector<std::string> decoratedFunctions;
+  queryCtx_->setFunctionDecorator(
+      [&](std::string_view name,
+          std::shared_ptr<VectorFunction> original,
+          const VectorFunctionMetadata& metadata)
+          -> std::
+              pair<std::shared_ptr<VectorFunction>, VectorFunctionMetadata> {
+                decoratedFunctions.emplace_back(name);
+                return {std::move(original), metadata};
+              });
+
+  auto expression = call("plus", {field("a"), bigint(1)});
+  auto exprSet = compile(expression);
+  ASSERT_EQ(decoratedFunctions.size(), 1);
+  EXPECT_EQ(decoratedFunctions[0], "plus");
+
+  auto input = makeRowVector({"a"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  SelectivityVector rows(3);
+  EvalCtx evalCtx(execCtx_.get(), exprSet.get(), input.get());
+  std::vector<VectorPtr> results(1);
+  exprSet->eval(rows, evalCtx, results);
+
+  auto expected = makeFlatVector<int64_t>({2, 3, 4});
+  velox::test::assertEqualVectors(expected, results[0]);
+}
+
+TEST_F(ExprCompilerTest, functionDecoratorNotCalledForSpecialForms) {
+  auto rowType = ROW({"a", "b"}, {BOOLEAN(), BOOLEAN()});
+  auto field = makeField(rowType);
+
+  std::vector<std::string> decoratedFunctions;
+  queryCtx_->setFunctionDecorator(
+      [&](std::string_view name,
+          std::shared_ptr<VectorFunction> original,
+          const VectorFunctionMetadata& metadata)
+          -> std::
+              pair<std::shared_ptr<VectorFunction>, VectorFunctionMetadata> {
+                decoratedFunctions.emplace_back(name);
+                return {std::move(original), metadata};
+              });
+
+  auto expression = andCall(field("a"), field("b"));
+  compile(expression);
+
+  EXPECT_TRUE(decoratedFunctions.empty());
+}
+
+TEST_F(ExprCompilerTest, functionDecoratorWrapping) {
+  class CountingWrapper : public VectorFunction {
+   public:
+    CountingWrapper(
+        std::shared_ptr<VectorFunction> inner,
+        std::shared_ptr<std::atomic<int>> counter)
+        : inner_(std::move(inner)), counter_(std::move(counter)) {}
+
+    void apply(
+        const SelectivityVector& rows,
+        std::vector<VectorPtr>& args,
+        const TypePtr& outputType,
+        EvalCtx& context,
+        VectorPtr& result) const override {
+      ++(*counter_);
+      inner_->apply(rows, args, outputType, context, result);
+    }
+
+    bool supportsFlatNoNullsFastPath() const override {
+      return inner_->supportsFlatNoNullsFastPath();
+    }
+
+   private:
+    std::shared_ptr<VectorFunction> inner_;
+    std::shared_ptr<std::atomic<int>> counter_;
+  };
+
+  auto rowType = ROW({"a"}, {BIGINT()});
+  auto field = makeField(rowType);
+
+  auto callCount = std::make_shared<std::atomic<int>>(0);
+  queryCtx_->setFunctionDecorator(
+      [callCount](
+          std::string_view /*name*/,
+          std::shared_ptr<VectorFunction> original,
+          const VectorFunctionMetadata& metadata)
+          -> std::
+              pair<std::shared_ptr<VectorFunction>, VectorFunctionMetadata> {
+                return {
+                    std::make_shared<CountingWrapper>(
+                        std::move(original), callCount),
+                    metadata,
+                };
+              });
+
+  auto expression = call("plus", {field("a"), bigint(1)});
+  auto exprSet = compile(expression);
+
+  auto input = makeRowVector({"a"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  SelectivityVector rows(3);
+  EvalCtx evalCtx(execCtx_.get(), exprSet.get(), input.get());
+  std::vector<VectorPtr> results(1);
+  exprSet->eval(rows, evalCtx, results);
+
+  EXPECT_EQ(callCount->load(), 1);
+  auto expected = makeFlatVector<int64_t>({2, 3, 4});
+  velox::test::assertEqualVectors(expected, results[0]);
+}
+
+TEST_F(ExprCompilerTest, functionDecoratorReturningNullptr) {
+  auto rowType = ROW({"a"}, {BIGINT()});
+  auto field = makeField(rowType);
+
+  queryCtx_->setFunctionDecorator(
+      [](std::string_view /*name*/,
+         std::shared_ptr<VectorFunction> /*original*/,
+         const VectorFunctionMetadata& metadata)
+          -> std::
+              pair<std::shared_ptr<VectorFunction>, VectorFunctionMetadata> {
+                return {nullptr, metadata};
+              });
+
+  auto expression = call("plus", {field("a"), bigint(1)});
+  VELOX_ASSERT_THROW(compile(expression), "FunctionDecorator must return");
+}
+
+TEST_F(ExprCompilerTest, functionDecoratorViaBuilder) {
+  auto rowType = ROW({"a"}, {BIGINT()});
+
+  std::vector<std::string> decoratedFunctions;
+  auto queryCtx = core::QueryCtx::Builder()
+                      .functionDecorator(
+                          [&](std::string_view name,
+                              std::shared_ptr<VectorFunction> original,
+                              const VectorFunctionMetadata& metadata)
+                              -> std::pair<
+                                  std::shared_ptr<VectorFunction>,
+                                  VectorFunctionMetadata> {
+                            decoratedFunctions.emplace_back(name);
+                            return {std::move(original), metadata};
+                          })
+                      .build();
+  auto execCtx = std::make_unique<core::ExecCtx>(pool_.get(), queryCtx.get());
+
+  auto field = makeField(rowType);
+  auto expression = call("plus", {field("a"), bigint(1)});
+  auto exprSet = std::make_unique<ExprSet>(
+      std::vector<core::TypedExprPtr>{expression}, execCtx.get());
+
+  ASSERT_EQ(decoratedFunctions.size(), 1);
+  EXPECT_EQ(decoratedFunctions[0], "plus");
 }
 
 } // namespace facebook::velox::exec::test
