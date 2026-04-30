@@ -63,47 +63,79 @@ inline constexpr int32_t kYearMax = 2'906'945;
 /// [fast_date::kRataDieMin, fast_date::kRataDieMax]; results outside that
 /// range are undefined. The supported range covers ~3 million years
 /// centered on the epoch — vastly wider than any practical Velox DATE.
+///
+/// Variable mapping (Neri-Schneider 2022, §5):
+///   Paper | Local                | Meaning
+///   ------|----------------------|---------------------------------------
+///   N     | shiftedDay           | day-since-epoch rebased to be non-neg
+///   N_1   | centuryNumerator     | numerator for the century division
+///   C     | century              | century within the era
+///   N_C   | dayWithinCentury     | day within the century
+///   N_2   | yearNumerator        | numerator for year-within-century
+///   P_2   | yearProduct          | 64-bit multiply-shift reciprocal
+///   Z     | yearWithinCentury    | year within the century
+///   N_Y   | dayWithinYear        | day within the (March-based) year
+///   Y     | yearWithinEra        | year within the era
+///   N_3   | monthNumerator       | numerator for the month/day division
+///   M     | monthFromMarch       | month index counted from March
+///   D     | dayOfMonthZeroBased  | zero-based day-of-month
+///   J     | janFebAdjust         | 1 if Jan/Feb of next calendar year
 inline YearMonthDay daysToYmd(int32_t dayNumber) {
   using namespace fast_date;
-  const uint32_t N = static_cast<uint32_t>(dayNumber) + kK;
+  const uint32_t shiftedDay = static_cast<uint32_t>(dayNumber) + kK;
   // Century.
-  const uint32_t N_1 = 4u * N + 3u;
-  const uint32_t C = N_1 / 146097u;
-  const uint32_t N_C = N_1 % 146097u / 4u;
+  const uint32_t centuryNumerator = 4u * shiftedDay + 3u;
+  const uint32_t century = centuryNumerator / 146097u;
+  const uint32_t dayWithinCentury = centuryNumerator % 146097u / 4u;
   // Year within century.
-  const uint32_t N_2 = 4u * N_C + 3u;
-  const uint64_t P_2 = uint64_t{2939745u} * N_2;
-  const uint32_t Z = static_cast<uint32_t>(P_2 >> 32);
-  const uint32_t N_Y = static_cast<uint32_t>(P_2 & 0xFFFF'FFFFull) / 2939745u / 4u;
-  const uint32_t Y = 100u * C + Z;
-  // Month and day within year.
-  const uint32_t N_3 = 2141u * N_Y + 197913u;
-  const uint32_t M = N_3 / 65536u;
-  const uint32_t D = N_3 % 65536u / 2141u;
-  // Map: years are counted from March, so January/February belong to next
+  const uint32_t yearNumerator = 4u * dayWithinCentury + 3u;
+  const uint64_t yearProduct = uint64_t{2939745u} * yearNumerator;
+  const uint32_t yearWithinCentury = static_cast<uint32_t>(yearProduct >> 32);
+  const uint32_t dayWithinYear =
+      static_cast<uint32_t>(yearProduct & 0xFFFF'FFFFull) / 2939745u / 4u;
+  const uint32_t yearWithinEra = 100u * century + yearWithinCentury;
+  // Month and day within year (year here starts at March).
+  const uint32_t monthNumerator = 2141u * dayWithinYear + 197913u;
+  const uint32_t monthFromMarch = monthNumerator / 65536u;
+  const uint32_t dayOfMonthZeroBased = monthNumerator % 65536u / 2141u;
+  // Years are counted from March, so January/February belong to the next
   // calendar year; correct that here.
-  const uint32_t J = N_Y >= 306u ? 1u : 0u;
+  const uint32_t janFebAdjust = dayWithinYear >= 306u ? 1u : 0u;
   YearMonthDay out;
-  out.year = static_cast<int32_t>(Y - kL) + static_cast<int32_t>(J);
-  out.month = J ? M - 12u : M;
-  out.day = D + 1u;
+  out.year =
+      static_cast<int32_t>(yearWithinEra - kL) + static_cast<int32_t>(janFebAdjust);
+  out.month = janFebAdjust ? monthFromMarch - 12u : monthFromMarch;
+  out.day = dayOfMonthZeroBased + 1u;
   return out;
 }
 
 /// Inverse of daysToYmd. Year domain is
 /// [fast_date::kYearMin, fast_date::kYearMax]; results outside that range
 /// are undefined.
+///
+/// Variable mapping (Neri-Schneider 2022, §6):
+///   Paper  | Local                | Meaning
+///   -------|----------------------|--------------------------------------
+///   J      | janFebAdjust         | 1 if input month is Jan/Feb
+///   Y      | shiftedYear          | year within the era after Jan/Feb fix
+///   M      | monthFromMarch       | month index counted from March
+///   D      | dayOfMonthZeroBased  | zero-based day-of-month
+///   C      | century              | century within the era
+///   y_star | yearDays             | days from era start to year start
+///   m_star | monthDays            | days from year start to month start
+///   N      | shiftedRataDie       | shifted day-since-epoch (pre-offset)
 inline int32_t ymdToDays(int32_t year, uint32_t month, uint32_t day) {
   using namespace fast_date;
-  const uint32_t J = month <= 2u ? 1u : 0u;
-  const uint32_t Y = (static_cast<uint32_t>(year) + kL) - J;
-  const uint32_t M = J ? month + 12u : month;
-  const uint32_t D = day - 1u;
-  const uint32_t C = Y / 100u;
-  const uint32_t y_star = 1461u * Y / 4u - C + C / 4u;
-  const uint32_t m_star = (979u * M - 2919u) / 32u;
-  const uint32_t N = y_star + m_star + D;
-  return static_cast<int32_t>(N - kK);
+  const uint32_t janFebAdjust = month <= 2u ? 1u : 0u;
+  const uint32_t shiftedYear =
+      (static_cast<uint32_t>(year) + kL) - janFebAdjust;
+  const uint32_t monthFromMarch = janFebAdjust ? month + 12u : month;
+  const uint32_t dayOfMonthZeroBased = day - 1u;
+  const uint32_t century = shiftedYear / 100u;
+  const uint32_t yearDays = 1461u * shiftedYear / 4u - century + century / 4u;
+  const uint32_t monthDays = (979u * monthFromMarch - 2919u) / 32u;
+  const uint32_t shiftedRataDie = yearDays + monthDays + dayOfMonthZeroBased;
+  return static_cast<int32_t>(shiftedRataDie - kK);
 }
 
 } // namespace facebook::velox
