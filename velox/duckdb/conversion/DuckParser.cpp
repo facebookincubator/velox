@@ -23,6 +23,7 @@
 #include <duckdb/parser/expression/between_expression.hpp> // @manual
 #include <duckdb/parser/expression/case_expression.hpp> // @manual
 #include <duckdb/parser/expression/cast_expression.hpp> // @manual
+#include <duckdb/parser/expression/columnref_expression.hpp> // @manual
 #include <duckdb/parser/expression/comparison_expression.hpp> // @manual
 #include <duckdb/parser/expression/conjunction_expression.hpp> // @manual
 #include <duckdb/parser/expression/constant_expression.hpp> // @manual
@@ -45,6 +46,7 @@ using ::duckdb::ConstantExpression;
 using ::duckdb::ExpressionClass;
 using ::duckdb::ExpressionType;
 using ::duckdb::FunctionExpression;
+using ::duckdb::interval_t;
 using ::duckdb::LogicalTypeId;
 using ::duckdb::LogicalTypeIdToString;
 using ::duckdb::OperatorExpression;
@@ -104,6 +106,8 @@ std::string duckOperatorToVelox(ExpressionType type) {
       return "in";
     case ExpressionType::OPERATOR_NOT:
       return "not";
+    case ExpressionType::OPERATOR_TRY:
+      return "try";
     default:
       return normalizeFuncName(ExpressionTypeToOperator(type));
   }
@@ -167,6 +171,20 @@ core::ExprPtr parseConstantExpr(
     const ParseOptions& options) {
   auto& constantExpr = dynamic_cast<ConstantExpression&>(expr);
   auto& value = constantExpr.value;
+  const auto alias = getAlias(expr);
+
+  if (value.type().id() == LogicalTypeId::INTERVAL) {
+    const auto interval = value.GetValue<interval_t>();
+    if (interval.months != 0 && interval.days == 0 && interval.micros == 0) {
+      return std::make_shared<const core::ConstantExpr>(
+          INTERVAL_YEAR_MONTH(), Variant(interval.months), alias);
+    }
+    return std::make_shared<const core::ConstantExpr>(
+        INTERVAL_DAY_TIME(),
+        Variant(
+            interval.days * 24L * 60 * 60 * 1'000 + interval.micros / 1'000),
+        alias);
+  }
 
   // This is a hack to make DuckDB more compatible with the old Koski-based
   // parser. By default literal integer constants in DuckDB parser are INTEGER,
@@ -182,7 +200,7 @@ core::ExprPtr parseConstantExpr(
   }
 
   return std::make_shared<const core::ConstantExpr>(
-      toVeloxType(value.type()), duckValueToVariant(value), getAlias(expr));
+      toVeloxType(value.type()), duckValueToVariant(value), alias);
 }
 
 // Parse a column reference (col1, "col2", tbl.col, etc).
@@ -203,36 +221,45 @@ core::ExprPtr parseColumnRefExpr(
 
 namespace {
 
-std::optional<int64_t> extractInteger(const core::ConstantExpr& constInput) {
-  if (constInput.value().isNull()) {
+std::optional<int64_t> extractInteger(const Value& value) {
+  if (value.IsNull()) {
     return std::nullopt;
   }
-  if (constInput.type()->isBigint()) {
-    return constInput.value().value<int64_t>();
-  } else if (constInput.type()->isInteger()) {
-    return constInput.value().value<int32_t>();
+
+  switch (value.type().id()) {
+    case LogicalTypeId::BIGINT:
+      return value.GetValue<int64_t>();
+    case LogicalTypeId::INTEGER:
+      return value.GetValue<int32_t>();
+    case LogicalTypeId::DOUBLE:
+      return static_cast<int64_t>(value.GetValue<double>());
+    default:
+      return std::nullopt;
+  }
+}
+
+std::optional<int64_t> extractInteger(ParsedExpression& expr) {
+  if (auto* constInput = dynamic_cast<ConstantExpression*>(&expr)) {
+    return extractInteger(constInput->value);
+  }
+  if (auto* castInput = dynamic_cast<CastExpression*>(&expr)) {
+    return extractInteger(*castInput->child);
+  }
+  if (auto* functionInput = dynamic_cast<FunctionExpression*>(&expr)) {
+    if (normalizeFuncName(functionInput->function_name) == "trunc" &&
+        functionInput->children.size() == 1) {
+      return extractInteger(*functionInput->children[0]);
+    }
   }
   return std::nullopt;
 }
-
 } // namespace
 
 std::shared_ptr<const core::ConstantExpr> tryParseInterval(
     const std::string& functionName,
-    const core::ExprPtr& input,
+    ParsedExpression& input,
     std::optional<std::string> alias) {
-  std::optional<int64_t> value;
-
-  if (auto constInput = dynamic_cast<const core::ConstantExpr*>(input.get())) {
-    value = extractInteger(*constInput);
-  } else if (
-      auto castInput = dynamic_cast<const core::CastExpr*>(input.get())) {
-    if (auto constInput =
-            dynamic_cast<const core::ConstantExpr*>(castInput->input().get())) {
-      value = extractInteger(*constInput);
-    }
-  }
-
+  auto value = extractInteger(input);
   if (!value.has_value()) {
     return nullptr;
   }
@@ -324,18 +351,20 @@ core::ExprPtr parseFunctionExpr(
     ParsedExpression& expr,
     const ParseOptions& options) {
   const auto& functionExpr = dynamic_cast<FunctionExpression&>(expr);
+  auto func = normalizeFuncName(functionExpr.function_name);
+
+  if (functionExpr.children.size() == 1) {
+    if (auto interval =
+            tryParseInterval(func, *functionExpr.children[0], getAlias(expr))) {
+      return interval;
+    }
+  }
+
   std::vector<core::ExprPtr> params;
   params.reserve(functionExpr.children.size());
 
   for (const auto& c : functionExpr.children) {
     params.emplace_back(parseExpr(*c, options));
-  }
-  auto func = normalizeFuncName(functionExpr.function_name);
-
-  if (params.size() == 1) {
-    if (auto interval = tryParseInterval(func, params[0], getAlias(expr))) {
-      return interval;
-    }
   }
 
   if (func == "struct_pack" || func == "row") {
@@ -747,6 +776,13 @@ core::ExprPtr parseCastExpr(
           getAlias(expr));
     }
 
+    if (targetType->isVarbinary() && constant->type()->isVarchar()) {
+      return std::make_shared<const core::ConstantExpr>(
+          VARBINARY(),
+          Variant::binary(constant->value().value<TypeKind::VARCHAR>()),
+          getAlias(expr));
+    }
+
     // ROW(1, 2)::struct(x bigint, y bigint) — re-type the ROW constant with
     // the target type (which carries field names). Child types must match.
     if (targetType->isRow() && targetType->equivalent(*constant->type())) {
@@ -988,12 +1024,15 @@ BoundType parseBoundType(WindowBoundary boundary) {
   switch (boundary) {
     case WindowBoundary::CURRENT_ROW_RANGE:
     case WindowBoundary::CURRENT_ROW_ROWS:
+    case WindowBoundary::CURRENT_ROW_GROUPS:
       return BoundType::kCurrentRow;
     case WindowBoundary::EXPR_PRECEDING_ROWS:
     case WindowBoundary::EXPR_PRECEDING_RANGE:
+    case WindowBoundary::EXPR_PRECEDING_GROUPS:
       return BoundType::kPreceding;
     case WindowBoundary::EXPR_FOLLOWING_ROWS:
     case WindowBoundary::EXPR_FOLLOWING_RANGE:
+    case WindowBoundary::EXPR_FOLLOWING_GROUPS:
       return BoundType::kFollowing;
     case WindowBoundary::UNBOUNDED_FOLLOWING:
       return BoundType::kUnboundedFollowing;

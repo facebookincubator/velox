@@ -22,6 +22,7 @@ using namespace facebook::velox;
 using namespace facebook::velox::duckdb;
 
 using ::duckdb::LogicalType;
+using ::duckdb::LogicalTypeId;
 using ::duckdb::Value;
 
 TEST(DuckConversionTest, duckValueToVariant) {
@@ -85,17 +86,12 @@ TEST(DuckConversionTest, duckValueToVariant) {
 }
 
 TEST(DuckConversionTest, duckValueToVariantUnsupported) {
-  /// We use ::duckdb::TransformStringToLogicalType() for scalar types instead
-  /// of LogicalType:: due this bug in GCC
-  /// https://gcc.gnu.org/bugzilla/show_bug.cgi?id=101957. The scalar types are
-  /// defined as static constexpr const causing a double definition only in the
-  /// debug build.
   std::vector<LogicalType> unsupported = {
-      ::duckdb::TransformStringToLogicalType("interval"),
-      LogicalType::LIST({::duckdb::TransformStringToLogicalType("integer")}),
+      LogicalType(LogicalTypeId::INTERVAL),
+      LogicalType::LIST({LogicalType(LogicalTypeId::INTEGER)}),
       LogicalType::STRUCT(
-          {{"a", ::duckdb::TransformStringToLogicalType("integer")},
-           {"b", ::duckdb::TransformStringToLogicalType("tinyint")}})};
+          {{"a", LogicalType(LogicalTypeId::INTEGER)},
+           {"b", LogicalType(LogicalTypeId::TINYINT)}})};
 
   for (const auto& i : unsupported) {
     EXPECT_THROW(duckValueToVariant(Value(i)), std::runtime_error);

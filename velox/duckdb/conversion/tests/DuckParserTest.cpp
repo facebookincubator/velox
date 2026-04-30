@@ -630,7 +630,7 @@ TEST(DuckParserTest, parseScalarOrWindowExpr) {
 TEST(DuckParserTest, invalidExpression) {
   VELOX_ASSERT_THROW(
       parseExpr("func(a b)"),
-      "Cannot parse expression: func(a b). Parser Error: syntax error at or near \"b\"");
+      "Cannot parse expression: func(a b). {\"exception_type\":\"Parser\",\"exception_message\":\"syntax error at or near \\\"b\\\"\"");
 }
 
 TEST(DuckParserTest, parseDecimalConstant) {

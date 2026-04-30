@@ -16,6 +16,9 @@
 #include "velox/duckdb/conversion/DuckConversion.h"
 #include "velox/type/Variant.h"
 
+#include <algorithm>
+#include <cctype>
+
 namespace facebook::velox::duckdb {
 using ::duckdb::DataChunk;
 using ::duckdb::Date;
@@ -31,6 +34,29 @@ using ::duckdb::date_t;
 using ::duckdb::dtime_t;
 using ::duckdb::string_t;
 using ::duckdb::timestamp_t;
+
+namespace {
+
+TypePtr customTypeFromName(std::string name) {
+  if (name.size() > 1 && name.front() == '"' && name.back() == '"') {
+    name = name.substr(1, name.size() - 2);
+  }
+  if (auto customType = getCustomType(name, {})) {
+    return customType;
+  }
+  std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) {
+    return std::toupper(c);
+  });
+  if (auto customType = getCustomType(name, {})) {
+    return customType;
+  }
+  if (name == "OPAQUE<VOID>") {
+    return OPAQUE<void>();
+  }
+  return nullptr;
+}
+
+} // namespace
 
 Variant decimalVariant(const Value& val) {
   VELOX_DCHECK(val.type().id() == LogicalTypeId::DECIMAL);
@@ -115,6 +141,20 @@ LogicalType fromVeloxType(const TypePtr& type) {
 
 //! Type mapping for DuckDB -> velox conversions, we support more types here
 TypePtr toVeloxType(LogicalType type, bool fileColumnNamesReadAsLowerCase) {
+  // In DuckDB v1.5.2+, the parser produces UNBOUND types for type names
+  // (e.g. BOOLEAN, INTEGER) that haven't been resolved by the binder.
+  // Since Velox only uses DuckDB's parser, resolve them here.
+  if (type.id() == LogicalTypeId::UNBOUND) {
+    const auto name = type.ToString();
+    if (auto customType = customTypeFromName(name)) {
+      return customType;
+    }
+    auto bound = ::duckdb::UnboundType::TryParseAndDefaultBind(name);
+    if (bound.id() != LogicalTypeId::UNBOUND) {
+      return toVeloxType(std::move(bound), fileColumnNamesReadAsLowerCase);
+    }
+  }
+
   switch (type.id()) {
     case LogicalTypeId::SQLNULL:
       return UNKNOWN();
@@ -139,6 +179,11 @@ TypePtr toVeloxType(LogicalType type, bool fileColumnNamesReadAsLowerCase) {
     case LogicalTypeId::DOUBLE:
       return DOUBLE();
     case LogicalTypeId::VARCHAR:
+      if (type.HasAlias()) {
+        if (auto customType = customTypeFromName(type.GetAlias())) {
+          return customType;
+        }
+      }
       return VARCHAR();
     case LogicalTypeId::DATE:
       return DATE();
@@ -147,7 +192,7 @@ TypePtr toVeloxType(LogicalType type, bool fileColumnNamesReadAsLowerCase) {
     case LogicalTypeId::TIMESTAMP:
       return TIMESTAMP();
     case LogicalTypeId::TIMESTAMP_TZ: {
-      if (auto customType = getCustomType("TIMESTAMP WITH TIME ZONE", {})) {
+      if (auto customType = customTypeFromName("TIMESTAMP WITH TIME ZONE")) {
         return customType;
       }
       [[fallthrough]];
@@ -188,22 +233,15 @@ TypePtr toVeloxType(LogicalType type, bool fileColumnNamesReadAsLowerCase) {
       return ROW(std::move(names), std::move(types));
     }
     case LogicalTypeId::UUID: {
-      if (auto customType = getCustomType("UUID", {})) {
+      if (auto customType = customTypeFromName("UUID")) {
         return customType;
-      }
-      [[fallthrough]];
-    }
-    case LogicalTypeId::USER: {
-      const auto name = ::duckdb::UserType::GetTypeName(type);
-      if (auto customType = getCustomType(name, {})) {
-        return customType;
-      }
-      if (name == "OPAQUE<void>") {
-        return OPAQUE<void>();
       }
       [[fallthrough]];
     }
     default:
+      if (auto customType = customTypeFromName(type.ToString())) {
+        return customType;
+      }
       throw std::runtime_error(
           "unsupported type for duckdb -> velox conversion: " +
           type.ToString());
