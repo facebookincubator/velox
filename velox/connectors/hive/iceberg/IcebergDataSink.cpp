@@ -317,14 +317,17 @@ IcebergDataSink::IcebergDataSink(
   commitPartitionValue_.resize(maxOpenWriters_);
 
 #ifdef VELOX_ENABLE_PARQUET
-  std::vector<IcebergColumnHandlePtr> columnHandles;
-  columnHandles.reserve(insertTableHandle->inputColumns().size());
-  for (auto& column : insertTableHandle->inputColumns()) {
-    columnHandles.emplace_back(
-        checkedPointerCast<const IcebergColumnHandle>(column));
+  // Only initialize Parquet stats collector for Parquet format tables
+  if (insertTableHandle->storageFormat() == dwio::common::FileFormat::PARQUET) {
+    std::vector<IcebergColumnHandlePtr> columnHandles;
+    columnHandles.reserve(insertTableHandle->inputColumns().size());
+    for (auto& column : insertTableHandle->inputColumns()) {
+      columnHandles.emplace_back(
+          checkedPointerCast<const IcebergColumnHandle>(column));
+    }
+    parquetStatsCollector_ = std::make_shared<IcebergParquetStatsCollector>(
+        std::move(columnHandles));
   }
-  parquetStatsCollector_ = std::make_shared<IcebergParquetStatsCollector>(
-      std::move(columnHandles));
 #endif
 }
 
@@ -353,7 +356,7 @@ std::vector<std::string> IcebergDataSink::commitMessage() const {
             icebergInsertTableHandle_->partitionSpec()->specId : 0)
         // Sort order evolution is not supported. Set default id to 0 ( unsorted order).
         ("sortOrderId", 0)
-        ("fileFormat", "PARQUET")
+        ("fileFormat", toManifestFormatString(icebergInsertTableHandle_->storageFormat()))
         ("content", "DATA");
       // clang-format on
       if (!commitPartitionValue_.empty() &&
@@ -464,22 +467,27 @@ void IcebergDataSink::rotateWriter(size_t index) {
   // close the writer ourselves to capture the metadata, then prevent double
   // close by resetting the writer.
   {
-    memory::NonReclaimableSectionGuard nonReclaimableGuard(
+    const memory::NonReclaimableSectionGuard nonReclaimableGuard(
         writerInfo_[index]->nonReclaimableSectionHolder.get());
     auto metadata = writers_[index]->close();
-#ifdef VELOX_ENABLE_PARQUET
-    bool fileAdded = getCurrentFileBytes(index) > 0;
-#endif
+    const bool fileAdded = getCurrentFileBytes(index) > 0;
 
     // Finalize file info (capture file size, add to writtenFiles).
     finalizeWriterFile(index);
 
-#ifdef VELOX_ENABLE_PARQUET
     if (fileAdded) {
-      dataFileStats_[index].emplace_back(
-          parquetStatsCollector_->aggregate(std::move(metadata)));
-    }
+#ifdef VELOX_ENABLE_PARQUET
+      if (parquetStatsCollector_) {
+        dataFileStats_[index].emplace_back(
+            parquetStatsCollector_->aggregate(std::move(metadata)));
+      } else
 #endif
+      {
+        dataFileStats_[index].emplace_back(
+            std::make_shared<IcebergDataFileStatistics>(
+                IcebergDataFileStatistics::empty()));
+      }
+    }
   }
 
   // Release old writer. The new writer will be created lazily on the next
@@ -503,22 +511,27 @@ void IcebergDataSink::closeInternal() {
         // collected in rotateWriter(). No final file to close.
         continue;
       }
-      memory::NonReclaimableSectionGuard nonReclaimableGuard(
+      const memory::NonReclaimableSectionGuard nonReclaimableGuard(
           writerInfo_[i]->nonReclaimableSectionHolder.get());
 
       auto metadata = writers_[i]->close();
-#ifdef VELOX_ENABLE_PARQUET
-      bool fileAdded = getCurrentFileBytes(i) > 0;
-#endif
+      const bool fileAdded = getCurrentFileBytes(i) > 0;
 
       finalizeWriterFile(i);
 
-#ifdef VELOX_ENABLE_PARQUET
       if (fileAdded) {
-        dataFileStats_[i].emplace_back(
-            parquetStatsCollector_->aggregate(std::move(metadata)));
-      }
+#ifdef VELOX_ENABLE_PARQUET
+        if (parquetStatsCollector_) {
+          dataFileStats_[i].emplace_back(
+              parquetStatsCollector_->aggregate(std::move(metadata)));
+        } else
 #endif
+        {
+          dataFileStats_[i].emplace_back(
+              std::make_shared<IcebergDataFileStatistics>(
+                  IcebergDataFileStatistics::empty()));
+        }
+      }
     }
   } else {
     for (auto i = 0; i < writers_.size(); ++i) {

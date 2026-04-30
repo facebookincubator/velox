@@ -816,8 +816,25 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
       return encodeDecimalToBigEndian(max_);
     }
     if constexpr (std::is_same_v<T, ByteArray>) {
-      const auto truncatedMax = functions::stringImpl::roundUpUtf8(
-          std::string_view(max_), truncateTo);
+      // For ByteArray, we need to determine if this is UTF-8 text (STRING)
+      // or raw binary data (BINARY/VARBINARY). The Parquet logical type tells
+      // us this.
+      const bool isUtf8String = descr_->logicalType()->isString();
+
+      std::optional<std::string> truncatedMax;
+
+      if (isUtf8String) {
+        // Use UTF-8 string logic for STRING type
+        truncatedMax = functions::stringImpl::roundUpUtf8(
+            std::string_view(max_), truncateTo);
+      } else {
+        // Use binary byte logic for BINARY type (VARBINARY)
+        // Implementation follows Apache Iceberg's
+        // BinaryUtil.truncateBinaryMax()
+        truncatedMax = functions::stringImpl::roundUpBinary(
+            std::string_view(max_), truncateTo);
+      }
+
       if (!truncatedMax.has_value()) {
         return std::nullopt;
       }
