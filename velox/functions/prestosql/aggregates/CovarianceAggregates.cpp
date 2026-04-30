@@ -55,7 +55,7 @@ struct CovarSampResultAccessor {
 
 struct CorrResultAccessor {
   static bool hasResult(const CorrAccumulator& accumulator) {
-    return !std::isnan(result(accumulator));
+    return accumulator.count() > 0;
   }
 
   static double result(const CorrAccumulator& accumulator) {
