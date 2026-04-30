@@ -44,11 +44,19 @@ struct YearMonthDay {
 
 namespace fast_date {
 
-// Era shift used by the Neri-Schneider algorithm. s = 82 chosen so the
-// supported range covers everything Velox can natively store.
-inline constexpr uint32_t kS = 82u;
-inline constexpr uint32_t kK = 719468u + 146097u * kS;
-inline constexpr uint32_t kL = 400u * kS;
+// Era shift used by the Neri-Schneider algorithm. The paper calls this
+// `s`; 82 was chosen so the supported range covers everything Velox can
+// natively store.
+inline constexpr uint32_t kEraShift = 82u;
+
+// Epoch-day offset (paper's `K`): added to dayNumber so the algorithm
+// operates on a non-negative integer for the entire supported range.
+inline constexpr uint32_t kEpochOffset = 719468u + 146097u * kEraShift;
+
+// Year offset (paper's `L`): subtracted from the algorithm's internal
+// "year-within-era" representation to recover a real proleptic-Gregorian
+// year.
+inline constexpr uint32_t kYearOffset = 400u * kEraShift;
 
 // Supported input ranges (computed from the algorithm's affine arithmetic).
 inline constexpr int32_t kRataDieMin = -12'699'422; // 1 Mar -32800
@@ -82,7 +90,7 @@ inline constexpr int32_t kYearMax = 2'906'945;
 ///   J     | janFebAdjust         | 1 if Jan/Feb of next calendar year
 inline YearMonthDay daysToYmd(int32_t dayNumber) {
   using namespace fast_date;
-  const uint32_t shiftedDay = static_cast<uint32_t>(dayNumber) + kK;
+  const uint32_t shiftedDay = static_cast<uint32_t>(dayNumber) + kEpochOffset;
   // Century.
   const uint32_t centuryNumerator = 4u * shiftedDay + 3u;
   const uint32_t century = centuryNumerator / 146097u;
@@ -103,7 +111,8 @@ inline YearMonthDay daysToYmd(int32_t dayNumber) {
   const uint32_t janFebAdjust = dayWithinYear >= 306u ? 1u : 0u;
   YearMonthDay out;
   out.year =
-      static_cast<int32_t>(yearWithinEra - kL) + static_cast<int32_t>(janFebAdjust);
+      static_cast<int32_t>(yearWithinEra - kYearOffset) +
+      static_cast<int32_t>(janFebAdjust);
   out.month = janFebAdjust ? monthFromMarch - 12u : monthFromMarch;
   out.day = dayOfMonthZeroBased + 1u;
   return out;
@@ -128,14 +137,14 @@ inline int32_t ymdToDays(int32_t year, uint32_t month, uint32_t day) {
   using namespace fast_date;
   const uint32_t janFebAdjust = month <= 2u ? 1u : 0u;
   const uint32_t shiftedYear =
-      (static_cast<uint32_t>(year) + kL) - janFebAdjust;
+      (static_cast<uint32_t>(year) + kYearOffset) - janFebAdjust;
   const uint32_t monthFromMarch = janFebAdjust ? month + 12u : month;
   const uint32_t dayOfMonthZeroBased = day - 1u;
   const uint32_t century = shiftedYear / 100u;
   const uint32_t yearDays = 1461u * shiftedYear / 4u - century + century / 4u;
   const uint32_t monthDays = (979u * monthFromMarch - 2919u) / 32u;
   const uint32_t shiftedRataDie = yearDays + monthDays + dayOfMonthZeroBased;
-  return static_cast<int32_t>(shiftedRataDie - kK);
+  return static_cast<int32_t>(shiftedRataDie - kEpochOffset);
 }
 
 } // namespace facebook::velox
