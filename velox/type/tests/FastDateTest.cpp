@@ -181,12 +181,24 @@ TEST(FastDateTest, fuzzEpochToCalendarUtcMatchesHinnant) {
   std::uniform_int_distribution<int64_t> wide{
       static_cast<int64_t>(fast_date::kRataDieMin) * kSecondsPerDay,
       static_cast<int64_t>(fast_date::kRataDieMax) * kSecondsPerDay};
-  // Fallback: outside the algorithm range, exercising the legacy loop.
-  // Limit to int64 / 86400 so seconds * 86400 doesn't overflow on the way in.
-  std::uniform_int_distribution<int64_t> fallback{
+  // Fallback: outside the algorithm range on both sides of the epoch,
+  // exercising the legacy 400-year-step loop. Bound by the generous
+  // validation range (~+/- 290M years) but kept far enough from int64
+  // limits that seconds * 86400 doesn't overflow.
+  const int64_t fallbackPositiveStart =
+      static_cast<int64_t>(fast_date::kRataDieMax + 1) * kSecondsPerDay;
+  const int64_t fallbackPositiveEnd =
+      (static_cast<int64_t>(fast_date::kYearMax) + 100'000) * 365 *
+      kSecondsPerDay;
+  const int64_t fallbackNegativeEnd =
+      static_cast<int64_t>(fast_date::kRataDieMin - 1) * kSecondsPerDay;
+  const int64_t fallbackNegativeStart =
       -(static_cast<int64_t>(fast_date::kYearMax) + 100'000) * 365 *
-          kSecondsPerDay,
-      -static_cast<int64_t>(fast_date::kRataDieMin - 1) * kSecondsPerDay};
+      kSecondsPerDay;
+  std::uniform_int_distribution<int64_t> fallbackPositive{
+      fallbackPositiveStart, fallbackPositiveEnd};
+  std::uniform_int_distribution<int64_t> fallbackNegative{
+      fallbackNegativeStart, fallbackNegativeEnd};
   // Random non-zero seconds-of-day so tm_hour/tm_min/tm_sec are exercised.
   std::uniform_int_distribution<int64_t> secondsOfDay{0, kSecondsPerDay - 1};
 
@@ -218,9 +230,13 @@ TEST(FastDateTest, fuzzEpochToCalendarUtcMatchesHinnant) {
   for (int i = 0; i < 2'000'000; ++i) {
     check(wide(rng) + secondsOfDay(rng));
   }
-  // Fewer fallback samples: per-call cost is much higher (legacy loop).
+  // Fewer fallback samples per side — per-call cost is much higher (the
+  // legacy loop runs many iterations for years far from epoch).
   for (int i = 0; i < 500'000; ++i) {
-    check(fallback(rng) + secondsOfDay(rng));
+    check(fallbackPositive(rng) + secondsOfDay(rng));
+  }
+  for (int i = 0; i < 500'000; ++i) {
+    check(fallbackNegative(rng) + secondsOfDay(rng));
   }
 }
 
@@ -244,10 +260,13 @@ TEST(FastDateTest, fuzzDaysSinceEpochFromDateMatchesHinnant) {
   // Wide: algorithm domain.
   std::uniform_int_distribution<int32_t> wideYear{
       fast_date::kYearMin, fast_date::kYearMax};
-  // Fallback: outside the algorithm range, exercising the legacy 400-year
-  // step loop (year still within isValidDate's accepted range).
-  std::uniform_int_distribution<int32_t> fallbackYear{
+  // Fallback: outside the algorithm range on both sides, exercising the
+  // legacy 400-year step loops. Year stays within isValidDate's accepted
+  // [kMinYear, kMaxYear] range.
+  std::uniform_int_distribution<int32_t> fallbackPositiveYear{
       fast_date::kYearMax + 1, fast_date::kYearMax + 1'000'000};
+  std::uniform_int_distribution<int32_t> fallbackNegativeYear{
+      fast_date::kYearMin - 1'000'000, fast_date::kYearMin - 1};
 
   // Pick a valid day for the (year, month) pair so we don't trip
   // isValidDate's "31 Feb"-style rejections.
@@ -271,7 +290,11 @@ TEST(FastDateTest, fuzzDaysSinceEpochFromDateMatchesHinnant) {
     check(y, m, d);
   }
   for (int i = 0; i < 500'000; ++i) {
-    auto [y, m, d] = sample(fallbackYear(rng));
+    auto [y, m, d] = sample(fallbackPositiveYear(rng));
+    check(y, m, d);
+  }
+  for (int i = 0; i < 500'000; ++i) {
+    auto [y, m, d] = sample(fallbackNegativeYear(rng));
     check(y, m, d);
   }
 }
