@@ -439,6 +439,17 @@ void CudfHashJoinProbe::initialize() {
   filterEvaluator_ = createCudfExpression(
       exprs.exprs()[0], facebook::velox::type::concatRowTypes(filterRowTypes));
 
+  // Check if the filter expression spans both join sides (e.g., switch
+  // expressions referencing columns from both probe and build). If so, we
+  // cannot use AST-based filtering and must fall back to filterEvaluator_.
+  if (hasNonAstSubexprSpanningBothSides(
+          exprs.exprs()[0], probeType_, buildType_)) {
+    VLOG(1) << "Filter expression spans both join sides, using "
+               "filterEvaluator_ instead of AST";
+    useAstFilter_ = false;
+    return;
+  }
+
   // We don't need to get tables that contain conditional comparison columns
   // We'll pass the entire table. The ast will handle finding the required
   // columns. This is required because we build the ast with whole row schema
@@ -669,8 +680,6 @@ std::unique_ptr<cudf::table> CudfHashJoinProbe::filteredOutput(
         std::vector<std::unique_ptr<cudf::column>>&&,
         cudf::column_view)> func,
     rmm::cuda_stream_view stream) {
-  VELOX_CHECK(
-      isInitialized(), "Filter must be initialized before filteredOutput");
   auto leftResult = cudf::gather(
       leftTableView, leftIndicesCol, oobPolicy, stream, get_output_mr());
   auto rightResult = cudf::gather(
@@ -727,9 +736,6 @@ std::unique_ptr<cudf::table> CudfHashJoinProbe::filteredOutputIndices(
     cudf::table_view extendedRightView,
     cudf::join_kind joinKind,
     rmm::cuda_stream_view stream) {
-  VELOX_CHECK(
-      isInitialized(),
-      "Filter must be initialized before filteredOutputIndices");
   // Use extended views (with precomputed columns) for filter evaluation
   auto [filteredLeftJoinIndices, filteredRightJoinIndices] =
       cudf::filter_join_indices(
@@ -768,7 +774,8 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::innerJoin(
   // Precompute left (probe) table columns if needed (once, outside loop)
   std::vector<ColumnOrView> leftPrecomputed;
   cudf::table_view extendedLeftView = leftTableView;
-  if (joinNode_->filter() && !leftPrecomputeInstructions_.empty()) {
+  if (joinNode_->filter() && useAstFilter_ &&
+      !leftPrecomputeInstructions_.empty()) {
     auto leftColumnViews = tableViewToColumnViews(leftTableView);
     leftPrecomputed = precomputeSubexpressions(
         leftColumnViews,
@@ -785,7 +792,8 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::innerJoin(
 
     // Use cached precomputed columns for right (build) table
     cudf::table_view extendedRightView =
-        (joinNode_->filter() && !rightPrecomputeInstructions_.empty())
+        (joinNode_->filter() && useAstFilter_ &&
+         !rightPrecomputeInstructions_.empty())
         ? cachedExtendedRightViews_[i]
         : rightTableView;
 
@@ -1100,6 +1108,11 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::fullJoin(
   auto& rightTables = hashObject_.value().first;
   auto& hbs = hashObject_.value().second;
 
+  // For now, AST support is necessary to filter join output
+  if (joinNode_->filter() && !useAstFilter_) {
+    VELOX_NYI("Full join requires AST support for filtering");
+  }
+
   for (auto i = 0; i < rightTables.size(); i++) {
     auto rightTableView = rightTables[i]->view();
     auto& hb = hbs[i];
@@ -1349,6 +1362,11 @@ CudfHashJoinProbe::leftSemiProjectJoin(
     rmm::cuda_stream_view stream) {
   std::vector<std::unique_ptr<cudf::table>> cudfOutputs;
 
+  // For now, AST support is necessary to filter join output
+  if (joinNode_->filter() && !useAstFilter_) {
+    VELOX_NYI("Left semi project join requires AST support for filtering");
+  }
+
   auto& rightTables = hashObject_.value().first;
   auto& hbs = hashObject_.value().second;
   auto numProbeRows = leftTableView.num_rows();
@@ -1594,6 +1612,7 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::antiJoin(
     cudf::table_view leftTableViewParam,
     rmm::cuda_stream_view stream) {
   std::vector<std::unique_ptr<cudf::table>> cudfOutputs;
+
   auto& rightTables = hashObject_.value().first;
 
   VELOX_CHECK_EQ(

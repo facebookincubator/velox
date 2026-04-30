@@ -314,6 +314,10 @@ FileIndexReader::createIndexReader() {
 void FileIndexReader::startLookup(
     const Request& request,
     const Options& options) {
+  // Empty files have no cluster index, so indexReader_ is null.
+  if (indexReader_ == nullptr) {
+    return;
+  }
   VELOX_CHECK(
       !indexReader_->hasNext(),
       "Previous request not finished. Call next() first.");
@@ -410,11 +414,12 @@ serializer::IndexBounds FileIndexReader::buildRequestIndexBounds(
 }
 
 bool FileIndexReader::hasNext() {
-  return indexReader_->hasNext();
+  return indexReader_ != nullptr && indexReader_->hasNext();
 }
 
 std::unique_ptr<FileIndexReader::Result> FileIndexReader::next(
     vector_size_t maxOutputRows) {
+  VELOX_CHECK_NOT_NULL(indexReader_);
   return indexReader_->next(maxOutputRows);
 }
 
