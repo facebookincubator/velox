@@ -1373,11 +1373,11 @@ std::string IntervalDayTimeType::valueToString(int64_t value) const {
       sizeof(buf),
       kIntervalFormat,
       sign.c_str(),
-      days,
-      hours,
-      minutes,
-      seconds,
-      remainMillis);
+      static_cast<long long>(days),
+      static_cast<int>(hours),
+      static_cast<int>(minutes),
+      static_cast<int>(seconds),
+      static_cast<int>(remainMillis));
 
   return buf;
 }
