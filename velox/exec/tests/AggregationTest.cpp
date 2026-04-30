@@ -3628,6 +3628,14 @@ TEST_F(AggregationTest, distinctWithConstantInput) {
       plan,
       "SELECT c0, max_by(DISTINCT 1, 1), corr(DISTINCT 0.5, c2) FROM tmp GROUP BY c0");
 
+  // Distinct column input with a constant companion.
+  plan = PlanBuilder()
+             .values({data})
+             .singleAggregation({"c0"}, {"corr(DISTINCT c2, 0.5)"})
+             .planNode();
+
+  assertQuery(plan, "SELECT c0, corr(DISTINCT c2, 0.5) FROM tmp GROUP BY c0");
+
   // All-constant distinct inputs.
   plan = PlanBuilder()
              .values({data})

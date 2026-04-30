@@ -123,6 +123,25 @@ TEST_F(QueryPlannerTest, tableScan) {
       "      -- Values[1]\n");
 }
 
+TEST_F(QueryPlannerTest, tableScanCallbackUsesRegisteredName) {
+  DuckDbQueryPlanner planner(pool_.get());
+  planner.registerTable("t", ROW({"a"}, {BIGINT()}));
+
+  std::string tableName;
+  planner.registerTableScan(
+      [&](const std::string& id,
+          const std::string& name,
+          const RowTypePtr& rowType,
+          const std::vector<std::string>& /*columnNames*/) {
+        tableName = name;
+        return std::make_shared<ValuesNode>(
+            id, std::vector<RowVectorPtr>{makeEmptyRowVector(rowType)});
+      });
+
+  planner.plan("SELECT a FROM t");
+  EXPECT_EQ("t", tableName);
+}
+
 TEST_F(QueryPlannerTest, customScalarFunctions) {
   DuckDbQueryPlanner planner(pool_.get());
   planner.registerScalarFunction("foo", {BIGINT()}, BOOLEAN());

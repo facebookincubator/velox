@@ -320,6 +320,8 @@ TEST(DuckParserTest, interval) {
   EXPECT_EQ("0 05:00:00.000", parseInterval("INTERVAL 5 HOURS"));
   EXPECT_EQ("0 00:36:00.000", parseInterval("INTERVAL 36 MINUTES"));
   EXPECT_EQ("0 00:00:07.000", parseInterval("INTERVAL 7 SECONDS"));
+  EXPECT_EQ("0 00:00:01.500", parseInterval("INTERVAL (1.5) SECONDS"));
+  EXPECT_EQ("0 00:00:01.500", parseInterval("INTERVAL '1.5 SECONDS'"));
   EXPECT_EQ("0 00:00:00.123", parseInterval("INTERVAL 123 MILLISECONDS"));
 
   EXPECT_EQ("0 00:00:12.345", parseInterval("INTERVAL 12345 MILLISECONDS"));
@@ -348,6 +350,7 @@ TEST(DuckParserTest, intervalYearMonth) {
   EXPECT_EQ("14-0", parseYearMonthInterval("INTERVAL 14 YEAR"));
 
   EXPECT_EQ("0-3", parseYearMonthInterval("INTERVAL 3 MONTHS"));
+  EXPECT_EQ("0-3", parseYearMonthInterval("INTERVAL '3 MONTHS'"));
   EXPECT_EQ("1-1", parseYearMonthInterval("INTERVAL 13 MONTHS"));
   EXPECT_EQ(
       "83-3 AS xyz", parseYearMonthInterval("INTERVAL 999 MONTHS as xyz"));

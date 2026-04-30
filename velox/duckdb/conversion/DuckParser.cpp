@@ -34,6 +34,8 @@
 #include <duckdb/parser/parser.hpp> // @manual
 #include <duckdb/parser/parser_options.hpp> // @manual
 
+#include <cmath>
+
 namespace facebook::velox::duckdb {
 
 using ::duckdb::BetweenExpression;
@@ -165,6 +167,22 @@ std::shared_ptr<const core::CallExpr> callExpr(
       std::move(alias));
 }
 
+std::shared_ptr<const core::ConstantExpr> intervalConstant(
+    const interval_t& interval,
+    std::optional<std::string> alias) {
+  if (interval.months != 0 && interval.days == 0 && interval.micros == 0) {
+    return std::make_shared<const core::ConstantExpr>(
+        INTERVAL_YEAR_MONTH(), Variant(interval.months), alias);
+  }
+  if (interval.months != 0) {
+    VELOX_NYI("Mixed year-month and day-time intervals are not supported");
+  }
+  return std::make_shared<const core::ConstantExpr>(
+      INTERVAL_DAY_TIME(),
+      Variant(interval.days * 24L * 60 * 60 * 1'000 + interval.micros / 1'000),
+      alias);
+}
+
 // Parse a constant (1, 99.8, "string", etc).
 core::ExprPtr parseConstantExpr(
     ParsedExpression& expr,
@@ -174,16 +192,7 @@ core::ExprPtr parseConstantExpr(
   const auto alias = getAlias(expr);
 
   if (value.type().id() == LogicalTypeId::INTERVAL) {
-    const auto interval = value.GetValue<interval_t>();
-    if (interval.months != 0 && interval.days == 0 && interval.micros == 0) {
-      return std::make_shared<const core::ConstantExpr>(
-          INTERVAL_YEAR_MONTH(), Variant(interval.months), alias);
-    }
-    return std::make_shared<const core::ConstantExpr>(
-        INTERVAL_DAY_TIME(),
-        Variant(
-            interval.days * 24L * 60 * 60 * 1'000 + interval.micros / 1'000),
-        alias);
+    return intervalConstant(value.GetValue<interval_t>(), alias);
   }
 
   // This is a hack to make DuckDB more compatible with the old Koski-based
@@ -221,7 +230,7 @@ core::ExprPtr parseColumnRefExpr(
 
 namespace {
 
-std::optional<int64_t> extractInteger(const Value& value) {
+std::optional<double> extractNumeric(const Value& value) {
   if (value.IsNull()) {
     return std::nullopt;
   }
@@ -231,24 +240,29 @@ std::optional<int64_t> extractInteger(const Value& value) {
       return value.GetValue<int64_t>();
     case LogicalTypeId::INTEGER:
       return value.GetValue<int32_t>();
+    case LogicalTypeId::DECIMAL:
     case LogicalTypeId::DOUBLE:
-      return static_cast<int64_t>(value.GetValue<double>());
+      return value.DefaultCastAs(::duckdb::LogicalType::DOUBLE)
+          .GetValue<double>();
     default:
       return std::nullopt;
   }
 }
 
-std::optional<int64_t> extractInteger(ParsedExpression& expr) {
+std::optional<double> extractNumeric(ParsedExpression& expr) {
   if (auto* constInput = dynamic_cast<ConstantExpression*>(&expr)) {
-    return extractInteger(constInput->value);
+    return extractNumeric(constInput->value);
   }
   if (auto* castInput = dynamic_cast<CastExpression*>(&expr)) {
-    return extractInteger(*castInput->child);
+    return extractNumeric(*castInput->child);
   }
   if (auto* functionInput = dynamic_cast<FunctionExpression*>(&expr)) {
     if (normalizeFuncName(functionInput->function_name) == "trunc" &&
         functionInput->children.size() == 1) {
-      return extractInteger(*functionInput->children[0]);
+      auto value = extractNumeric(*functionInput->children[0]);
+      if (value.has_value()) {
+        return std::trunc(value.value());
+      }
     }
   }
   return std::nullopt;
@@ -259,7 +273,7 @@ std::shared_ptr<const core::ConstantExpr> tryParseInterval(
     const std::string& functionName,
     ParsedExpression& input,
     std::optional<std::string> alias) {
-  auto value = extractInteger(input);
+  auto value = extractNumeric(input);
   if (!value.has_value()) {
     return nullptr;
   }
@@ -292,8 +306,9 @@ std::shared_ptr<const core::ConstantExpr> tryParseInterval(
         Variant((int32_t)(value.value() * multiplier)),
         alias);
   }
+  const auto millis = static_cast<int64_t>(value.value() * multiplier);
   return std::make_shared<core::ConstantExpr>(
-      INTERVAL_DAY_TIME(), Variant(value.value() * multiplier), alias);
+      INTERVAL_DAY_TIME(), Variant(millis), alias);
 }
 
 // DuckDB parses struct literals {'x': 1, 'y': 2} as struct_pack(1 AS x, 2 AS
@@ -743,6 +758,17 @@ core::ExprPtr parseCastExpr(
     if (constant->value().isNull()) {
       return std::make_shared<const core::ConstantExpr>(
           targetType, Variant::null(targetType->kind()), getAlias(expr));
+    }
+
+    if (castExpr.cast_type.id() == LogicalTypeId::INTERVAL &&
+        constant->type()->isVarchar()) {
+      auto value = Value(constant->value().value<TypeKind::VARCHAR>())
+                       .DefaultCastAs(castExpr.cast_type, !castExpr.try_cast);
+      if (value.IsNull()) {
+        return std::make_shared<const core::ConstantExpr>(
+            targetType, Variant::null(targetType->kind()), getAlias(expr));
+      }
+      return intervalConstant(value.GetValue<interval_t>(), getAlias(expr));
     }
 
     // DuckDB parses BOOLEAN literal as cast expression.  Try to restore it back

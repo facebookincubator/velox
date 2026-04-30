@@ -120,6 +120,14 @@ std::string tableNameFromLogicalGet(::duckdb::LogicalGet& logicalGet) {
   return table->second;
 }
 
+std::string normalizeTableName(std::string tableName) {
+  static constexpr std::string_view kDefaultDuckDbPrefix{"memory.main."};
+  if (tableName.rfind(kDefaultDuckDbPrefix, 0) == 0) {
+    return tableName.substr(kDefaultDuckDbPrefix.size());
+  }
+  return tableName;
+}
+
 idx_t columnId(const ::duckdb::ColumnIndex& column) {
   VELOX_CHECK(column.HasPrimaryIndex(), "Unsupported DuckDB column index");
   return column.GetPrimaryIndex();
@@ -189,7 +197,7 @@ PlanNodePtr toVeloxPlan(
 
   auto rowType = ROW(std::move(names), std::move(types));
 
-  auto tableName = tableNameFromLogicalGet(logicalGet);
+  auto tableName = normalizeTableName(tableNameFromLogicalGet(logicalGet));
   auto it = queryContext.inMemoryTables.find(tableName);
   if (it == queryContext.inMemoryTables.end()) {
     const auto lastDot = tableName.rfind('.');
