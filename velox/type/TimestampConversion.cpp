@@ -694,13 +694,16 @@ int32_t getMaxDayOfMonth(int32_t year, int32_t month) {
 
 Expected<int64_t>
 daysSinceEpochFromDate(int32_t year, int32_t month, int32_t day) {
-  // Fast path: years inside the fast-date inverse algorithm's exact domain.
-  // Covers any DATE that fits in int32 days plus several million years on
-  // either side — anything Velox can practically carry. Years outside this
-  // range delegate to WideRangeDateConversion, which validates and handles
-  // the full [kMinYear, kMaxYear] domain via the loop-based fallback.
+  // Fast path: years strictly inside the fast-date inverse algorithm's
+  // exact domain. The algorithm's date range is bounded by Mar 1 kYearMin
+  // and Feb 28 kYearMax, not the full calendar year on either end, so the
+  // boundary years are excluded entirely to avoid the month-dependent
+  // wrinkle. Loses 2 years of fast-path coverage out of ~3 million —
+  // negligible. Years outside the strict range delegate to
+  // WideRangeDateConversion, which validates and handles the full
+  // [kMinYear, kMaxYear] domain via the loop-based fallback.
   if (FOLLY_LIKELY(
-          year >= fast_date::kYearMin && year <= fast_date::kYearMax)) {
+          year > fast_date::kYearMin && year < fast_date::kYearMax)) {
     if (!isValidDate(year, month, day)) {
       if (threadSkipErrorDetails()) {
         return folly::makeUnexpected(Status::UserError());

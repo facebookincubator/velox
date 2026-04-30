@@ -276,5 +276,48 @@ TEST(FastDateTest, fuzzDaysSinceEpochFromDateMatchesHinnant) {
   }
 }
 
+// Verifies that the patched fast path agrees with WideRangeDateConversion
+// at every value within ±10 of the four range boundaries. An off-by-one
+// in the dispatch range or in the algorithm's stated exact range would
+// silently route a few inputs to the wrong branch — this catches that.
+TEST(FastDateTest, fastEqualsWideRangeAtBoundaries) {
+  // Forward direction: ±10 days around kRataDieMin and kRataDieMax.
+  const int32_t forwardBoundaries[] = {
+      fast_date::kRataDieMin, fast_date::kRataDieMax};
+  for (int32_t boundary : forwardBoundaries) {
+    for (int32_t delta = -10; delta <= 10; ++delta) {
+      const int32_t days = boundary + delta;
+      // Mix in non-trivial seconds-of-day: 12:34:56 UTC.
+      const int64_t epoch =
+          static_cast<int64_t>(days) * kSecondsPerDay + 45'296;
+      std::tm fastTm;
+      std::tm wideTm;
+      ASSERT_TRUE(Timestamp::epochToCalendarUtc(epoch, fastTm))
+          << "days=" << days;
+      ASSERT_TRUE(WideRangeDateConversion::epochToCalendarUtc(epoch, wideTm))
+          << "days=" << days;
+      expectTmEqual(fastTm, wideTm, epoch);
+    }
+  }
+
+  // Inverse direction: ±10 years around kYearMin and kYearMax.
+  const int32_t inverseBoundaries[] = {
+      fast_date::kYearMin, fast_date::kYearMax};
+  for (int32_t boundary : inverseBoundaries) {
+    for (int32_t delta = -10; delta <= 10; ++delta) {
+      const int32_t year = boundary + delta;
+      // Use March 1 — same date as the forward boundaries above for
+      // visual cross-reference, and not affected by month-end edge cases.
+      const auto fastResult = util::daysSinceEpochFromDate(year, 3, 1);
+      const auto wideResult =
+          WideRangeDateConversion::daysSinceEpochFromDate(year, 3, 1);
+      ASSERT_EQ(fastResult.hasError(), wideResult.hasError()) << "y=" << year;
+      if (!fastResult.hasError()) {
+        EXPECT_EQ(fastResult.value(), wideResult.value()) << "y=" << year;
+      }
+    }
+  }
+}
+
 } // namespace
 } // namespace facebook::velox::test

@@ -59,6 +59,13 @@ inline constexpr uint32_t kEpochOffset = 719468u + 146097u * kEraShift;
 inline constexpr uint32_t kYearOffset = 400u * kEraShift;
 
 // Supported input ranges (computed from the algorithm's affine arithmetic).
+//
+// Note on the boundary years: the algorithm is parameterized from March,
+// not January. Its exact range is [Mar 1 kYearMin, Feb 28 kYearMax], not
+// [Jan 1 kYearMin, Dec 31 kYearMax]. For the inverse direction, callers
+// should restrict to year ∈ (kYearMin, kYearMax) — strictly excluding the
+// boundary years — to avoid the month-dependent wrinkle. The forward
+// direction has no such caveat because rata-die is monotonic.
 inline constexpr int32_t kRataDieMin = -12'699'422; // 1 Mar -32800
 inline constexpr int32_t kRataDieMax = 1'061'042'401; // 28 Feb 2906945
 inline constexpr int32_t kYearMin = -32800;
@@ -118,9 +125,11 @@ inline YearMonthDay daysToYmd(int32_t dayNumber) {
   return out;
 }
 
-/// Inverse of daysToYmd. Year domain is
-/// [fast_date::kYearMin, fast_date::kYearMax]; results outside that range
-/// are undefined.
+/// Inverse of daysToYmd. Safe for year ∈ (fast_date::kYearMin,
+/// fast_date::kYearMax) — strictly between the two boundaries — for any
+/// month and day. At the boundary years themselves, only the algorithm's
+/// March-based partial year is exact (see the constants' comment); use
+/// WideRangeDateConversion::daysSinceEpochFromDate for those instead.
 ///
 /// Variable mapping (Neri-Schneider 2022, §6):
 ///   Paper  | Local                | Meaning
