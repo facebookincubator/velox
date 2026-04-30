@@ -22,6 +22,7 @@
 #include "velox/external/date/date.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/TimestampConversion.h"
+#include "velox/type/WideRangeDateConversion.h"
 
 namespace facebook::velox::test {
 namespace {
@@ -155,6 +156,20 @@ ReferenceYmd hinnantRef(int64_t days) {
       static_cast<unsigned>(ymd.day()),
   };
 }
+
+// Asserts that two std::tm structs agree on every field a caller of
+// epochToCalendarUtc could observe. tm_isdst is set to 0 by both paths.
+void expectTmEqual(const std::tm& a, const std::tm& b, int64_t epoch) {
+  EXPECT_EQ(a.tm_year, b.tm_year) << "epoch=" << epoch;
+  EXPECT_EQ(a.tm_mon, b.tm_mon) << "epoch=" << epoch;
+  EXPECT_EQ(a.tm_mday, b.tm_mday) << "epoch=" << epoch;
+  EXPECT_EQ(a.tm_yday, b.tm_yday) << "epoch=" << epoch;
+  EXPECT_EQ(a.tm_wday, b.tm_wday) << "epoch=" << epoch;
+  EXPECT_EQ(a.tm_hour, b.tm_hour) << "epoch=" << epoch;
+  EXPECT_EQ(a.tm_min, b.tm_min) << "epoch=" << epoch;
+  EXPECT_EQ(a.tm_sec, b.tm_sec) << "epoch=" << epoch;
+  EXPECT_EQ(a.tm_isdst, b.tm_isdst) << "epoch=" << epoch;
+}
 } // namespace
 
 TEST(FastDateTest, fuzzEpochToCalendarUtcMatchesHinnant) {
@@ -172,29 +187,40 @@ TEST(FastDateTest, fuzzEpochToCalendarUtcMatchesHinnant) {
       -(static_cast<int64_t>(fast_date::kYearMax) + 100'000) * 365 *
           kSecondsPerDay,
       -static_cast<int64_t>(fast_date::kRataDieMin - 1) * kSecondsPerDay};
+  // Random non-zero seconds-of-day so tm_hour/tm_min/tm_sec are exercised.
+  std::uniform_int_distribution<int64_t> secondsOfDay{0, kSecondsPerDay - 1};
 
   auto check = [](int64_t epoch) {
-    std::tm tm;
-    if (!Timestamp::epochToCalendarUtc(epoch, tm)) {
-      // Out-of-range outputs are an acceptable "false" return; just skip.
+    std::tm fastTm;
+    std::tm wideTm;
+    if (!Timestamp::epochToCalendarUtc(epoch, fastTm)) {
+      // Out-of-range outputs are an acceptable "false" return on both
+      // paths; just verify the wide path agrees and skip.
+      ASSERT_FALSE(WideRangeDateConversion::epochToCalendarUtc(epoch, wideTm))
+          << "epoch=" << epoch;
       return;
     }
-    const int64_t days = epochToDays(epoch);
-    const auto want = hinnantRef(days);
-    ASSERT_EQ(tm.tm_year + 1900, want.year) << "epoch=" << epoch;
-    ASSERT_EQ(tm.tm_mon + 1, want.month) << "epoch=" << epoch;
-    ASSERT_EQ(static_cast<unsigned>(tm.tm_mday), want.day) << "epoch=" << epoch;
+    ASSERT_TRUE(WideRangeDateConversion::epochToCalendarUtc(epoch, wideTm))
+        << "epoch=" << epoch;
+    // Full std::tm equality: y/m/d, yday, wday, hour, min, sec, isdst.
+    expectTmEqual(fastTm, wideTm, epoch);
+    // Independent cross-check of the date fields against Hinnant.
+    const auto want = hinnantRef(epochToDays(epoch));
+    ASSERT_EQ(fastTm.tm_year + 1900, want.year) << "epoch=" << epoch;
+    ASSERT_EQ(fastTm.tm_mon + 1, want.month) << "epoch=" << epoch;
+    ASSERT_EQ(static_cast<unsigned>(fastTm.tm_mday), want.day)
+        << "epoch=" << epoch;
   };
 
   for (int i = 0; i < 2'000'000; ++i) {
-    check(tight(rng));
+    check(tight(rng) + secondsOfDay(rng));
   }
   for (int i = 0; i < 2'000'000; ++i) {
-    check(wide(rng));
+    check(wide(rng) + secondsOfDay(rng));
   }
   // Fewer fallback samples: per-call cost is much higher (legacy loop).
   for (int i = 0; i < 500'000; ++i) {
-    check(fallback(rng));
+    check(fallback(rng) + secondsOfDay(rng));
   }
 }
 
