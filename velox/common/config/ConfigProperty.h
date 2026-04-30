@@ -20,7 +20,7 @@
 #include <vector>
 
 #include <fmt/format.h>
-#include "velox/common/Enums.h"
+#include "velox/common/EnumDeclare.h"
 
 namespace facebook::velox::config {
 
