@@ -803,8 +803,9 @@ RowVectorPtr IndexLookupJoin::getOutput() {
   // the scan operator.
   RuntimeStatWriterScopeGuard guard(indexStatWriter_.get());
 
+  bool earlyFinishInput = false;
   SCOPE_EXIT {
-    if (numInputBatches() == 0 && isDraining()) {
+    if (!earlyFinishInput && numInputBatches() == 0 && isDraining()) {
       finishDrain();
     }
   };
@@ -818,6 +819,22 @@ RowVectorPtr IndexLookupJoin::getOutput() {
     return nullptr;
   }
   auto output = getOutputFromLookupResult(batch);
+
+  // Finish the input batch eagerly once the lookup is fully exhausted.
+  // This releases the ResultIterator and probe input, reducing steady-state
+  // pool usage. We skip finishDrain in the SCOPE_EXIT above since the driver
+  // hasn't consumed our output yet — finishDrain will be triggered on the
+  // next getOutput() call when batch.empty() returns nullptr.
+  if (output != nullptr && !batch.empty() && batch.lookupResult == nullptr &&
+      !batch.lookupFuture.valid() && batch.lookupResultIter != nullptr &&
+      !batch.lookupResultIter->hasNext() &&
+      !hasRemainingOutputForLeftJoin(batch)) {
+    finishInput(batch);
+    earlyFinishInput = true;
+    TestValue::adjust(
+        "facebook::velox::exec::IndexLookupJoin::earlyFinishInput", this);
+  }
+
   if (output == nullptr) {
     return nullptr;
   }

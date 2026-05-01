@@ -2139,6 +2139,89 @@ TEST_P(IndexLookupJoinTest, groupedExecutionLeafValidation) {
 
 } // namespace
 
+// Verifies that IndexLookupJoin eagerly releases lookup result memory at
+// finishInput time (not just at task end). Uses a TestValue injection point
+// to observe that the operator's pool is empty immediately after
+// earlyFinishInput runs, proving the ResultIterator and probe input were
+// released while the last output batch is still in flight.
+DEBUG_ONLY_TEST_P(IndexLookupJoinTest, earlyFinishInput) {
+  IndexTableData tableData;
+  generateIndexTableData({100, 1, 1}, tableData, pool_);
+
+  const auto probeVectors = generateProbeInput(
+      /*numBatches=*/3,
+      /*batchSize=*/100,
+      /*numDuplicateProbeRows=*/50,
+      tableData,
+      pool_,
+      {"t0", "t1", "t2"},
+      GetParam().hasNullKeys,
+      {},
+      {},
+      100);
+  const auto probeFiles = createProbeFiles(probeVectors);
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", {tableData.tableVectors});
+
+  const auto indexTable = TestIndexTable::create(
+      /*numEqualJoinKeys=*/3,
+      tableData.keyVectors,
+      tableData.valueVectors,
+      *pool());
+  const auto indexTableHandle = makeIndexTableHandle(
+      indexTable, GetParam().asyncLookup, GetParam().needsIndexSplit);
+
+  for (auto joinType : {core::JoinType::kInner, core::JoinType::kLeft}) {
+    SCOPED_TRACE(fmt::format("joinType={}", static_cast<int>(joinType)));
+
+    std::atomic<int> earlyFinishCount{0};
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::IndexLookupJoin::earlyFinishInput",
+        std::function<void(exec::Operator*)>(
+            [&](exec::Operator* /*op*/) { ++earlyFinishCount; }));
+
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    const auto indexScanNode = makeIndexScanNode(
+        planNodeIdGenerator,
+        indexTableHandle,
+        makeScanOutputType({"u0", "u1", "u2", "u3", "u5"}),
+        makeIndexColumnHandles({"u0", "u1", "u2", "u3", "u5"}));
+
+    auto plan = makeLookupPlan(
+        planNodeIdGenerator,
+        indexScanNode,
+        {"t0", "t1", "t2"},
+        {"u0", "u1", "u2"},
+        {},
+        /*filter=*/"",
+        /*hasMarker=*/false,
+        joinType,
+        {"u3", "t5"});
+
+    const auto duckDbSql = joinType == core::JoinType::kInner
+        ? "SELECT u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND t.c2 = u.c2"
+        : "SELECT u.c3, t.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND t.c1 = u.c1 AND t.c2 = u.c2";
+
+    auto task = runLookupQuery(
+        plan,
+        probeFiles,
+        GetParam().serialExecution,
+        GetParam().serialExecution,
+        100,
+        GetParam().numPrefetches,
+        GetParam().needsIndexSplit,
+        duckDbSql);
+
+    ASSERT_EQ(task->pool()->usedBytes(), 0)
+        << "Task pool should be fully released after completion";
+
+    if (!GetParam().hasNullKeys) {
+      ASSERT_GT(earlyFinishCount.load(), 0)
+          << "Expected early finishInput to be called at least once";
+    }
+  }
+}
+
 VELOX_INSTANTIATE_TEST_SUITE_P(
     IndexLookupJoinTest,
     IndexLookupJoinTest,
