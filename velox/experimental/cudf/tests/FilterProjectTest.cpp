@@ -21,9 +21,18 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/functions/prestosql/ArithmeticImpl.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
+
+#include <fmt/format.h>
+
+#include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <limits>
+#include <random>
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -1436,6 +1445,280 @@ TEST_F(CudfSimpleFilterProjectTest, unaryMathFunctions) {
 
   // Absolute value
   testUnaryFunction("abs(c0)", -5.5, 5.5);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, roundDouble) {
+  parse::ParseOptions options;
+  options.parseIntegerAsBigint = false;
+
+  // round(double) with no scale (defaults to 0)
+  auto data = makeRowVector(
+      {makeFlatVector<double>({3.14159, 2.71828, -1.5, 0.5, 100.999})});
+  auto plan = PlanBuilder()
+                  .setParseOptions(options)
+                  .values({data})
+                  .project({"round(c0) as c1"})
+                  .planNode();
+  auto expected =
+      makeRowVector({makeFlatVector<double>({3.0, 3.0, -2.0, 1.0, 101.0})});
+  AssertQueryBuilder(plan).assertResults(expected);
+
+  // round(double, 2)
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0, 2) as c1"})
+             .planNode();
+  expected =
+      makeRowVector({makeFlatVector<double>({3.14, 2.72, -1.5, 0.5, 101.0})});
+  AssertQueryBuilder(plan).assertResults(expected);
+
+  // round(double, -1) — round to nearest 10
+  data =
+      makeRowVector({makeFlatVector<double>({123.456, -987.654, 55.0, 5.0})});
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0, -1) as c1"})
+             .planNode();
+  expected =
+      makeRowVector({makeFlatVector<double>({120.0, -990.0, 60.0, 10.0})});
+  AssertQueryBuilder(plan).assertResults(expected);
+
+  // round(double, -3) — round to nearest 1000
+  data = makeRowVector({makeFlatVector<double>({4123.0, 456789098.0})});
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0, -3) as c1"})
+             .planNode();
+  expected = makeRowVector({makeFlatVector<double>({4000.0, 456789000.0})});
+  AssertQueryBuilder(plan).assertResults(expected);
+
+  // Large values
+  data = makeRowVector({makeFlatVector<double>({1e15 + 0.5, -1e15 - 0.5})});
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0) as c1"})
+             .planNode();
+  expected = makeRowVector({makeFlatVector<double>({1e15 + 1.0, -1e15 - 1.0})});
+  AssertQueryBuilder(plan).assertResults(expected);
+
+  // Corner cases: IEEE-754 half-way values and representation artifacts.
+  // The FLOAT64 round path JIT-compiles Velox CPU's round algorithm
+  // (std::round(x * factor) / factor), so the result depends on the actual
+  // binary value of the input and on any rounding introduced by the factor
+  // multiply. For example, 2.675 is stored as 2.6749999999999998 but
+  // multiplied by 100 lands on the exactly-representable 267.5 tie, which
+  // std::round rounds away from zero to 268 -> 2.68. By contrast, 1.005 is
+  // stored as 1.0049999999999999 and multiplied by 100 falls just below
+  // 100.5, which rounds down to 100 -> 1.00.
+  data = makeRowVector({makeFlatVector<double>({
+      // HALF_UP ties at integer magnitudes.
+      2.5,
+      3.5,
+      -2.5,
+      -3.5,
+      2.675,
+      0.1,
+      0.3,
+      1.005,
+      1.0000000000000002,
+      0.0,
+      0.5,
+      -0.5,
+      -1.5,
+      -2.675,
+      -1.6,
+      -1.645,
+      0.125,
+      1e-10,
+      999999999999999.5,
+  })});
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0) as c1"})
+             .planNode();
+  expected = makeRowVector({makeFlatVector<double>({
+      3.0, 4.0,  -3.0, -4.0, 3.0,  0.0,  0.0, 1.0, 1.0,  0.0,
+      1.0, -1.0, -2.0, -3.0, -2.0, -2.0, 0.0, 0.0, 1e15,
+  })});
+  AssertQueryBuilder(plan).assertResults(expected);
+
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0, 2) as c1"})
+             .planNode();
+  expected = makeRowVector({makeFlatVector<double>({
+      2.5,
+      3.5,
+      -2.5,
+      -3.5,
+      2.68,
+      0.1,
+      0.3,
+      1.0,
+      1.0,
+      0.0,
+      0.5,
+      -0.5,
+      -1.5,
+      -2.68,
+      -1.6,
+      -1.65,
+      0.13,
+      0.0,
+      999999999999999.5,
+  })});
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// Fuzz the JIT-compiled GPU `round(double, int)` path against Velox's CPU
+// implementation (facebook::velox::functions::round<double, int32_t>) as the
+// oracle. The GPU function is textually derived from that same CPU source
+// and compiled by NVRTC, so any drift in the extraction pipeline, in the
+// JIT'd math ops (std::round, std::pow, std::trunc, std::isfinite), or in
+// double precision between host libm and CUDA shows up here.
+TEST_F(CudfSimpleFilterProjectTest, roundDoubleFuzz) {
+  parse::ParseOptions options;
+  options.parseIntegerAsBigint = false;
+
+  // Fixed corner cases that exercise tricky paths in the algorithm:
+  // halfway ties, representation artifacts, denormals, very large magnitudes,
+  // and non-finite inputs (which the fast-path should pass through).
+  std::vector<double> corners = {
+      0.0,
+      -0.0,
+      0.5,
+      -0.5,
+      1.5,
+      -1.5,
+      2.5,
+      -2.5,
+      3.5,
+      -3.5,
+      2.675,
+      -2.675,
+      1.005,
+      -1.005,
+      0.125,
+      -0.125,
+      0.1,
+      0.3,
+      1.0000000000000002,
+      1.0 - std::numeric_limits<double>::epsilon(),
+      std::nextafter(0.5, 1.0),
+      std::nextafter(0.5, 0.0),
+      1e-10,
+      1e-15,
+      std::numeric_limits<double>::min(),
+      std::numeric_limits<double>::denorm_min(),
+      1e15,
+      -1e15,
+      1e15 + 0.5,
+      -1e15 - 0.5,
+      17592186044415.0, // exactly the 2^44 threshold in the CPU code
+      17592186044416.0, // just above
+      17592186044414.5, // just below, with a fraction
+      999999999999999.5,
+      1e100,
+      -1e100,
+      std::numeric_limits<double>::max(),
+      -std::numeric_limits<double>::max(),
+      std::numeric_limits<double>::infinity(),
+      -std::numeric_limits<double>::infinity(),
+      std::numeric_limits<double>::quiet_NaN(),
+  };
+
+  // Random doubles across magnitudes we actually support. Drawing uniformly
+  // over a range dominated by large numbers misses the small-number path
+  // (fabs(x) < 2^44), so mix three distributions: near-zero, mid, large.
+  std::mt19937_64 rng(0xC0FFEE);
+  std::uniform_real_distribution<double> smallDist(-10.0, 10.0);
+  std::uniform_real_distribution<double> midDist(-1e6, 1e6);
+  std::uniform_real_distribution<double> largeDist(-1e14, 1e14);
+  std::vector<double> random;
+  constexpr int kRandomPerBucket = 256;
+  random.reserve(kRandomPerBucket * 3);
+  for (int i = 0; i < kRandomPerBucket; ++i) {
+    random.push_back(smallDist(rng));
+    random.push_back(midDist(rng));
+    random.push_back(largeDist(rng));
+  }
+
+  std::vector<double> inputs;
+  inputs.reserve(corners.size() + random.size());
+  inputs.insert(inputs.end(), corners.begin(), corners.end());
+  inputs.insert(inputs.end(), random.begin(), random.end());
+
+  // Sweep the scale parameter across the branches in the CPU algorithm:
+  // negative (factor multiply only), zero (std::round fast-path), small
+  // positive, and larger positive.
+  const std::vector<int32_t> scales = {-6, -3, -1, 0, 1, 2, 6};
+
+  auto bitwiseEq = [](double a, double b) {
+    if (std::isnan(a) && std::isnan(b)) {
+      return true;
+    }
+    uint64_t ua, ub;
+    std::memcpy(&ua, &a, sizeof(ua));
+    std::memcpy(&ub, &b, sizeof(ub));
+    return ua == ub;
+  };
+
+  // Allow up to 2 ULPs of drift for finite results. The factor-multiply path
+  // (std::pow(10.0, d) then std::round(x*f)/f) is not guaranteed to produce
+  // bit-identical results between host libm and CUDA libdevice; a couple of
+  // ULPs is a reasonable ceiling before we consider it a real divergence.
+  auto ulpDiff = [](double a, double b) -> uint64_t {
+    if (std::isnan(a) || std::isnan(b)) {
+      return std::numeric_limits<uint64_t>::max();
+    }
+    if (std::signbit(a) != std::signbit(b) && a != b) {
+      return std::numeric_limits<uint64_t>::max();
+    }
+    int64_t ia, ib;
+    std::memcpy(&ia, &a, sizeof(ia));
+    std::memcpy(&ib, &b, sizeof(ib));
+    return ia > ib ? uint64_t(ia - ib) : uint64_t(ib - ia);
+  };
+  constexpr uint64_t kMaxUlpDrift = 2;
+
+  auto inputVector = makeFlatVector<double>(inputs);
+  auto data = makeRowVector({inputVector});
+
+  for (int32_t scale : scales) {
+    std::string expr = (scale == 0) ? "round(c0) as c1"
+                                    : fmt::format("round(c0, {}) as c1", scale);
+    auto plan = PlanBuilder()
+                    .setParseOptions(options)
+                    .values({data})
+                    .project({expr})
+                    .planNode();
+    auto actualRow = AssertQueryBuilder(plan).copyResults(pool_.get());
+    ASSERT_EQ(actualRow->size(), inputs.size()) << "scale=" << scale;
+    auto actual = actualRow->childAt(0)->asFlatVector<double>();
+    ASSERT_NE(actual, nullptr) << "scale=" << scale;
+
+    for (size_t i = 0; i < inputs.size(); ++i) {
+      const double x = inputs[i];
+      const double expected =
+          facebook::velox::functions::round<double, int32_t>(x, scale);
+      const double got = actual->valueAt(i);
+      if (bitwiseEq(expected, got)) {
+        continue;
+      }
+      const uint64_t drift = ulpDiff(expected, got);
+      EXPECT_LE(drift, kMaxUlpDrift)
+          << "round fuzz mismatch: input=" << std::hexfloat << x << " (decimal "
+          << std::defaultfloat << x << ")"
+          << " scale=" << scale << " expected=" << std::hexfloat << expected
+          << " got=" << got << std::defaultfloat << " ulp=" << drift;
+    }
+  }
 }
 
 } // namespace
