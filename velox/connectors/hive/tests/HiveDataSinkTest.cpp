@@ -620,7 +620,7 @@ TEST_F(HiveDataSinkTest, close) {
     const auto partitions = dataSink->close();
     // Can't append after close.
     VELOX_ASSERT_THROW(
-        dataSink->appendData(vectors.back()), "Hive data sink is not running");
+        dataSink->appendData(vectors.back()), "File data sink is not running");
     VELOX_ASSERT_THROW(
         dataSink->close(), "Unexpected state transition from CLOSED to CLOSED");
     VELOX_ASSERT_THROW(
@@ -668,7 +668,7 @@ TEST_F(HiveDataSinkTest, abort) {
         "Unexpected state transition from ABORTED to ABORTED");
     // Can't append after abort.
     VELOX_ASSERT_THROW(
-        dataSink->appendData(vectors.back()), "Hive data sink is not running");
+        dataSink->appendData(vectors.back()), "File data sink is not running");
   }
 }
 
