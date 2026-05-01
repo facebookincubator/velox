@@ -60,6 +60,25 @@ StructColumnReader::StructColumnReader(
   if (type->parent()) {
     levelMode_ = reinterpret_cast<const ParquetTypeWithId*>(fileType_.get())
                      ->makeLevelInfo(levelInfo_);
+    if (children_.empty()) {
+      VELOX_CHECK_GT(
+          fileType_->size(),
+          0,
+          "Cannot decode Parquet struct nullability without a leaf child");
+      // All requested children are missing and will be materialized as nulls,
+      // add one real file child reader only as the source for childForRepDefs_.
+      const auto childFileType = fileType_->childAt(0);
+      const auto& childName = fileType_->type()->asRow().nameOf(0);
+      repDefsOnlyChildScanSpec_ = std::make_unique<common::ScanSpec>(childName);
+      repDefsOnlyChildScanSpec_->addAllChildFields(*childFileType->type());
+      addChild(
+          ParquetColumnReader::build(
+              columnReaderOptions,
+              childFileType->type(),
+              childFileType,
+              params,
+              *repDefsOnlyChildScanSpec_));
+    }
     childForRepDefs_ = findBestLeaf();
     // Set mode to struct over lists if the child for repdefs has a list between
     // this and the child.
