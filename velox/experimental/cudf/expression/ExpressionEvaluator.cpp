@@ -61,11 +61,10 @@
 #include <cudf/unary.hpp>
 #include <cudf/utilities/traits.hpp>
 
-#include <memory>
-
 #include <folly/String.h>
 
 #include <cctype>
+#include <memory>
 
 namespace facebook::velox::cudf_velox {
 namespace {
@@ -2110,7 +2109,6 @@ bool registerBuiltinFunctions(const std::string& prefix) {
   // between
   //
 
-
   const std::vector<exec::FunctionSignaturePtr> betweenSignatures{
       FunctionSignatureBuilder()
           .returnType("boolean")
@@ -2130,14 +2128,14 @@ bool registerBuiltinFunctions(const std::string& prefix) {
           .argumentType("date")
           .argumentType("date")
           .build(),
-       FunctionSignatureBuilder()
-           .integerVariable("p")
-           .integerVariable("s")
-           .returnType("boolean")
-           .argumentType("decimal(p,s)")
-           .argumentType("decimal(p,s)")
-           .argumentType("decimal(p,s)")
-           .build()};
+      FunctionSignatureBuilder()
+          .integerVariable("p")
+          .integerVariable("s")
+          .returnType("boolean")
+          .argumentType("decimal(p,s)")
+          .argumentType("decimal(p,s)")
+          .argumentType("decimal(p,s)")
+          .build()};
 
   registerCudfFunction(
       prefix + "between",

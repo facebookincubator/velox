@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/expression/PrestoFunctions.h"
 
 #include "folly/synchronization/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -3549,6 +3550,9 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
 // With the check in place, the nested `plus` call routes through
 // `DatePlusIntervalFunction` as a precompute instruction.
 TEST_F(HashJoinTest, innerJoinWithDatePlusIntervalFilter) {
+  cudf_velox::registerPrestoFunctions(
+      cudf_velox::CudfConfig::getInstance().functionNamePrefix);
+
   constexpr int64_t kMillisInDay = 24LL * 60 * 60 * 1000;
   const auto baseDate = DATE()->toDays("2025-01-01");
 
