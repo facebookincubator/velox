@@ -1304,6 +1304,7 @@ void exportConstant(
     rows.apply([&](vector_size_t i) {
       if (!bits::isBitNull(rawNulls, i)) {
         allRowsNull = false;
+        return;
       }
     });
   }
