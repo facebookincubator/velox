@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/expression/AstUtils.h"
 #include "velox/experimental/cudf/expression/DecimalExpressionKernels.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/gpu_portable/Round.h"
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/expression/ConstantExpr.h"
@@ -365,13 +366,30 @@ class RoundFunction : public CudfFunction {
       std::vector<ColumnOrView>& inputColumns,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
+    auto inputCol = asView(inputColumns[0]);
+    auto inputTypeId = inputCol.type().id();
+
+    if (inputTypeId == cudf::type_id::FLOAT64) {
+      // For double inputs, we dispatch to a GPU-portable mirror of Velox's
+      // CPU round implementation so that Velox-cuDF matches CPU semantics
+      // bit-for-bit (e.g. `round(2.675, 2) == 2.68`). See the comment at the
+      // top of `gpu_portable/Round.h` for the parity contract.
+      const cudf::transform_input transformInputs[] = {inputCol};
+      return cudf::transform_extended(
+          transformInputs,
+          gpu_portable::velox_round_double_source(scale_),
+          cudf::data_type{cudf::type_id::FLOAT64},
+          cudf::udf_source_type::CUDA,
+          std::nullopt,
+          cudf::null_aware::NO,
+          std::nullopt,
+          cudf::output_nullability::PRESERVE,
+          stream,
+          mr);
+    }
+
     return cudf::round_decimal(
-        asView(inputColumns[0]),
-        scale_,
-        cudf::rounding_method::HALF_UP,
-        stream,
-        mr);
-    ;
+        inputCol, scale_, cudf::rounding_method::HALF_UP, stream, mr);
   }
 
  private:
@@ -1544,6 +1562,15 @@ bool registerBuiltinFunctions(const std::string& prefix) {
        FunctionSignatureBuilder()
            .returnType("bigint")
            .argumentType("bigint")
+           .constantArgumentType("integer")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("double")
+           .argumentType("double")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("double")
+           .argumentType("double")
            .constantArgumentType("integer")
            .build()});
 
