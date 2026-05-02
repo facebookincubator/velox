@@ -1299,13 +1299,13 @@ struct RepeatFunction {
 
   FOLLY_ALWAYS_INLINE void
   call(out_type<Varchar>& result, const arg_type<Varchar>& input, int32_t n) {
-    static constexpr size_t resultMaxSize = 1024 * 1024; // 1MB
+    static constexpr int64_t resultMaxSize = 1024 * 1024; // 1MB
     auto inputSize = input.size();
     if (inputSize == 0 || n <= 0) {
       result.resize(0);
       return;
     }
-    int32_t newSize = velox::checkedMultiply<int32_t>(inputSize, n);
+    int64_t newSize = static_cast<int64_t>(inputSize) * n;
     VELOX_USER_CHECK_LE(
         newSize,
         resultMaxSize,
