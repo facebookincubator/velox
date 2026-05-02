@@ -305,8 +305,8 @@ struct ReduceDecimalSumOrAvgAggregator : ReduceAggregator {
       return cudf_velox::serializeDecimalSumState(
           sumCol->view(), countCol->view(), stream, get_output_mr());
     }
-    if (step == core::AggregationNode::Step::kIntermediate &&
-        inputCol.type().id() == cudf::type_id::STRING) {
+    if (step == core::AggregationNode::Step::kIntermediate) {
+      VELOX_CHECK(inputCol.type().id() == cudf::type_id::STRING);
       auto scale = outputType->isDecimal()
           ? getDecimalPrecisionScale(*outputType).second
           : 0;
@@ -330,9 +330,8 @@ struct ReduceDecimalSumOrAvgAggregator : ReduceAggregator {
           *countScalar, 1, stream, get_output_mr());
       return cudf_velox::serializeDecimalSumState(
           sumCol->view(), countCol->view(), stream, get_output_mr());
-    }
-    if (step == core::AggregationNode::Step::kFinal &&
-        inputCol.type().id() == cudf::type_id::STRING) {
+    } else if (step == core::AggregationNode::Step::kFinal) {
+      VELOX_CHECK(inputCol.type().id() == cudf::type_id::STRING);
       auto scale = getDecimalPrecisionScale(*outputType).second;
       if (isAvg_) {
         auto sumAndCount = cudf_velox::deserializeDecimalSumStateWithCount(

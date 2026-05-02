@@ -101,8 +101,8 @@ struct GroupbyDecimalSumOrAvgAggregator : GroupbyAggregator {
       cudf::table_view const& tbl,
       std::vector<cudf::groupby::aggregation_request>& requests,
       rmm::cuda_stream_view stream) override {
-    if (step == core::AggregationNode::Step::kIntermediate &&
-        tbl.column(inputIndex).type().id() == cudf::type_id::STRING) {
+    if (step == core::AggregationNode::Step::kIntermediate) {
+      VELOX_CHECK(tbl.column(inputIndex).type().id() == cudf::type_id::STRING);
       auto scale = resultType->isDecimal()
           ? getDecimalPrecisionScale(*resultType).second
           : 0;
@@ -122,11 +122,8 @@ struct GroupbyDecimalSumOrAvgAggregator : GroupbyAggregator {
       countRequest.values = decodedCount_->view();
       countRequest.aggregations.push_back(
           cudf::make_sum_aggregation<cudf::groupby_aggregation>());
-      return;
-    }
-
-    if (step == core::AggregationNode::Step::kFinal &&
-        tbl.column(inputIndex).type().id() == cudf::type_id::STRING) {
+    } else if (step == core::AggregationNode::Step::kFinal) {
+      VELOX_CHECK(tbl.column(inputIndex).type().id() == cudf::type_id::STRING);
       auto scale = getDecimalPrecisionScale(*resultType).second;
       if (isAvg_) {
         auto decoded = cudf_velox::deserializeDecimalSumStateWithCount(
@@ -145,7 +142,6 @@ struct GroupbyDecimalSumOrAvgAggregator : GroupbyAggregator {
         countRequest.values = decodedCount_->view();
         countRequest.aggregations.push_back(
             cudf::make_sum_aggregation<cudf::groupby_aggregation>());
-        return;
       } else {
         auto& request = requests.emplace_back();
         sumIdx_ = requests.size() - 1;
@@ -154,7 +150,6 @@ struct GroupbyDecimalSumOrAvgAggregator : GroupbyAggregator {
         request.values = decodedSum_->view();
         request.aggregations.push_back(
             cudf::make_sum_aggregation<cudf::groupby_aggregation>());
-        return;
       }
     } else {
       auto& request = requests.emplace_back();
@@ -168,7 +163,6 @@ struct GroupbyDecimalSumOrAvgAggregator : GroupbyAggregator {
             cudf::make_count_aggregation<cudf::groupby_aggregation>(
                 cudf::null_policy::EXCLUDE));
       }
-      return;
     }
   }
 
