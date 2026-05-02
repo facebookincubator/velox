@@ -565,11 +565,11 @@ class ReaderOptions : public io::ReaderOptions {
   static constexpr uint64_t kDefaultFilePreloadThreshold =
       1024 * 1024 * 8; // 8MB
 
-  explicit ReaderOptions(velox::memory::MemoryPool* pool)
-      : io::ReaderOptions(pool),
-        tailLocation_(std::numeric_limits<uint64_t>::max()),
-        fileFormat_(FileFormat::UNKNOWN),
-        fileSchema_(nullptr) {}
+  ReaderOptions(
+      velox::memory::MemoryPool* pool,
+      velox::io::IoStatistics* dataIoStats = nullptr,
+      velox::io::IoStatistics* metadataIoStats = nullptr)
+      : io::ReaderOptions(pool, dataIoStats, metadataIoStats) {}
 
   /// Sets the format of the file, such as "rc" or "dwrf". The default is
   /// "dwrf".
@@ -633,11 +633,6 @@ class ReaderOptions : public io::ReaderOptions {
     return *this;
   }
 
-  ReaderOptions& setIOExecutor(std::shared_ptr<folly::Executor> executor) {
-    ioExecutor_ = std::move(executor);
-    return *this;
-  }
-
   ReaderOptions& setSessionTimezone(const tz::TimeZone* sessionTimezone) {
     sessionTimezone_ = sessionTimezone;
     return *this;
@@ -686,10 +681,6 @@ class ReaderOptions : public io::ReaderOptions {
 
   uint64_t filePreloadThreshold() const {
     return filePreloadThreshold_;
-  }
-
-  const std::shared_ptr<folly::Executor>& ioExecutor() const {
-    return ioExecutor_;
   }
 
   const tz::TimeZone* sessionTimezone() const {
@@ -809,8 +800,8 @@ class ReaderOptions : public io::ReaderOptions {
   }
 
  private:
-  uint64_t tailLocation_;
-  FileFormat fileFormat_;
+  uint64_t tailLocation_{std::numeric_limits<uint64_t>::max()};
+  FileFormat fileFormat_{FileFormat::UNKNOWN};
   RowTypePtr fileSchema_;
   SerDeOptions serDeOptions_;
   std::unordered_map<std::string, std::string> properties_{};
@@ -819,7 +810,6 @@ class ReaderOptions : public io::ReaderOptions {
   uint64_t filePreloadThreshold_{kDefaultFilePreloadThreshold};
   bool fileColumnNamesReadAsLowerCase_{false};
   bool useColumnNamesForColumnMapping_{false};
-  std::shared_ptr<folly::Executor> ioExecutor_;
   std::shared_ptr<random::RandomSkipTracker> randomSkip_;
   std::shared_ptr<velox::common::ScanSpec> scanSpec_;
   const tz::TimeZone* sessionTimezone_{nullptr};
