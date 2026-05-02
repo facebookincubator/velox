@@ -1313,6 +1313,8 @@ HiveWriterParameters::UpdateMode HiveDataSink::getUpdateMode() const {
           return HiveWriterParameters::UpdateMode::kOverwrite;
         case HiveConfig::InsertExistingPartitionsBehavior::kError:
           return HiveWriterParameters::UpdateMode::kNew;
+        case HiveConfig::InsertExistingPartitionsBehavior::kAppend:
+          return HiveWriterParameters::UpdateMode::kAppend;
         default:
           VELOX_UNSUPPORTED(
               "Unsupported insert existing partitions behavior: {}",

@@ -32,6 +32,9 @@ stringToInsertExistingPartitionsBehavior(const std::string& strValue) {
   if (upperValue == "OVERWRITE") {
     return HiveConfig::InsertExistingPartitionsBehavior::kOverwrite;
   }
+  if (upperValue == "APPEND") {
+    return HiveConfig::InsertExistingPartitionsBehavior::kAppend;
+  }
   VELOX_UNSUPPORTED(
       "Unsupported insert existing partitions behavior: {}.", strValue);
 }
@@ -74,6 +77,8 @@ std::string HiveConfig::insertExistingPartitionsBehaviorString(
       return "ERROR";
     case InsertExistingPartitionsBehavior::kOverwrite:
       return "OVERWRITE";
+    case InsertExistingPartitionsBehavior::kAppend:
+      return "APPEND";
     default:
       return fmt::format("UNKNOWN BEHAVIOR {}", static_cast<int>(behavior));
   }

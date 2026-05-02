@@ -32,6 +32,7 @@ class HiveConfig : public FileConfig {
   enum class InsertExistingPartitionsBehavior {
     kError,
     kOverwrite,
+    kAppend
   };
 
   static std::string insertExistingPartitionsBehaviorString(
@@ -44,7 +45,7 @@ class HiveConfig : public FileConfig {
       "insert_existing_partitions_behavior",
       std::string,
       "ERROR",
-      "Behavior when inserting into existing partitions: ERROR, OVERWRITE.")
+      "Behavior when inserting into existing partitions: ERROR, OVERWRITE, APPEND.")
   static constexpr const char* kInsertExistingPartitionsBehavior =
       "insert-existing-partitions-behavior";
 

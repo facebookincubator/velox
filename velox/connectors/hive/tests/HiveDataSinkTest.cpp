@@ -157,16 +157,15 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
           bucketProperty = nullptr,
       const std::shared_ptr<dwio::common::WriterOptions>& writerOptions =
           nullptr,
-      const bool ensureFiles = false) {
+      const bool ensureFiles = false,
+      connector::hive::LocationHandle::TableType tableType =
+          connector::hive::LocationHandle::TableType::kNew) {
     return makeHiveInsertTableHandle(
         outputRowType->names(),
         outputRowType->children(),
         partitionedBy,
         bucketProperty,
-        makeLocationHandle(
-            outputDirectoryPath,
-            std::nullopt,
-            connector::hive::LocationHandle::TableType::kNew),
+        makeLocationHandle(outputDirectoryPath, std::nullopt, tableType),
         fileFormat,
         CompressionKind::CompressionKind_ZSTD,
         {}, // serdeParameters
@@ -183,7 +182,9 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
           bucketProperty = nullptr,
       const std::shared_ptr<dwio::common::WriterOptions>& writerOptions =
           nullptr,
-      const bool ensureFiles = false) {
+      const bool ensureFiles = false,
+      connector::hive::LocationHandle::TableType tableType =
+          connector::hive::LocationHandle::TableType::kNew) {
     return std::make_shared<HiveDataSink>(
         rowType,
         createHiveInsertTableHandle(
@@ -193,10 +194,24 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
             partitionedBy,
             bucketProperty,
             writerOptions,
-            ensureFiles),
+            ensureFiles,
+            tableType),
         connectorQueryCtx_.get(),
         CommitStrategy::kNoCommit,
         connectorConfig_);
+  }
+
+  // Parses the per-partition commit message JSON returned by
+  // HiveDataSink::close() and asserts its updateMode equals the expected
+  // value ("NEW", "APPEND", or "OVERWRITE").
+  static void expectUpdateMode(
+      const std::string& partitionJson,
+      std::string_view expected) {
+    const auto parsed = folly::parseJson(partitionJson);
+    ASSERT_TRUE(parsed.count(HiveCommitMessage::kUpdateMode) > 0)
+        << "Commit message missing updateMode: " << partitionJson;
+    ASSERT_EQ(parsed[HiveCommitMessage::kUpdateMode].asString(), expected)
+        << "Commit message: " << partitionJson;
   }
 
   std::vector<std::string> listFiles(const std::string& dirPath) {
@@ -1741,6 +1756,245 @@ TEST_F(HiveDataSinkTest, fileRotationWithPartitionedTable) {
   }
 
   ASSERT_EQ(totalFilesFromPartitions, stats.numWrittenFiles);
+}
+
+// Verifies that inserting into an existing unpartitioned table produces a
+// commit message with updateMode=APPEND.
+TEST_F(HiveDataSinkTest, appendUnpartitionedExistingTable) {
+  const auto outputDirectory = TempDirectoryPath::create();
+
+  auto dataSink = createDataSink(
+      rowType_,
+      outputDirectory->getPath(),
+      dwio::common::FileFormat::DWRF,
+      {}, // partitionedBy
+      nullptr, // bucketProperty
+      nullptr, // writerOptions
+      false, // ensureFiles
+      connector::hive::LocationHandle::TableType::kExisting);
+
+  const auto vectors = createVectors(500, 3);
+  for (const auto& vector : vectors) {
+    dataSink->appendData(vector);
+  }
+  ASSERT_TRUE(dataSink->finish());
+  const auto partitions = dataSink->close();
+
+  ASSERT_EQ(partitions.size(), 1);
+  expectUpdateMode(partitions[0], "APPEND");
+
+  createDuckDbTable(vectors);
+  verifyWrittenData(outputDirectory->getPath());
+}
+
+// Verifies that immutable-partitions=true makes appending into an existing
+// unpartitioned table fail, even without an explicit APPEND config.
+TEST_F(HiveDataSinkTest, appendUnpartitionedImmutableRejected) {
+  const auto outputDirectory = TempDirectoryPath::create();
+
+  connectorConfig_ = std::make_shared<HiveConfig>(
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>{
+              {HiveConfig::kImmutablePartitions, "true"}}));
+
+  VELOX_ASSERT_THROW(
+      createDataSink(
+          rowType_,
+          outputDirectory->getPath(),
+          dwio::common::FileFormat::DWRF,
+          {},
+          nullptr,
+          nullptr,
+          false,
+          connector::hive::LocationHandle::TableType::kExisting),
+      "Unpartitioned Hive tables are immutable.");
+}
+
+// Verifies that insert-existing-partitions-behavior drives the updateMode
+// field of the per-partition commit message for an existing partitioned
+// table. Covers ERROR -> NEW, OVERWRITE -> OVERWRITE, APPEND -> APPEND.
+TEST_F(HiveDataSinkTest, appendPartitionedExistingTable) {
+  const auto partitionedRowType = ROW(
+      {"c0", "c1", "c2", "p0"}, {BIGINT(), INTEGER(), SMALLINT(), VARCHAR()});
+
+  const int numBatches = 4;
+  std::vector<RowVectorPtr> vectors;
+  vectors.reserve(numBatches);
+  for (int i = 0; i < numBatches; ++i) {
+    auto c0 = makeFlatVector<int64_t>(200, [](auto row) { return row; });
+    auto c1 = makeFlatVector<int32_t>(200, [](auto row) { return row * 2; });
+    auto c2 = makeFlatVector<int16_t>(200, [](auto row) { return row % 100; });
+    auto p0 = makeFlatVector<StringView>(200, [i](auto row) {
+      return (i + row) % 2 == 0 ? "part_a" : "part_b";
+    });
+    vectors.push_back(makeRowVector({c0, c1, c2, p0}));
+  }
+
+  struct TestCase {
+    std::string behavior;
+    std::string_view expectedUpdateMode;
+  };
+  const TestCase cases[] = {
+      {"ERROR", "NEW"},
+      {"OVERWRITE", "OVERWRITE"},
+      {"APPEND", "APPEND"},
+  };
+
+  for (const auto& testCase : cases) {
+    SCOPED_TRACE(fmt::format("behavior={}", testCase.behavior));
+    const auto outputDirectory = TempDirectoryPath::create();
+    connectorConfig_ = std::make_shared<HiveConfig>(
+        std::make_shared<config::ConfigBase>(
+            std::unordered_map<std::string, std::string>{
+                {HiveConfig::kInsertExistingPartitionsBehavior,
+                 testCase.behavior}}));
+
+    auto dataSink = createDataSink(
+        partitionedRowType,
+        outputDirectory->getPath(),
+        dwio::common::FileFormat::DWRF,
+        {"p0"},
+        nullptr,
+        nullptr,
+        false,
+        connector::hive::LocationHandle::TableType::kExisting);
+
+    for (const auto& vector : vectors) {
+      dataSink->appendData(vector);
+    }
+    ASSERT_TRUE(dataSink->finish());
+    const auto partitions = dataSink->close();
+
+    ASSERT_EQ(partitions.size(), 2);
+    for (const auto& partition : partitions) {
+      expectUpdateMode(partition, testCase.expectedUpdateMode);
+    }
+  }
+}
+
+// Same contract as appendPartitionedExistingTable but driven through the
+// session property path instead of the connector config.
+TEST_F(HiveDataSinkTest, appendPartitionedExistingTableSessionOverride) {
+  const auto outputDirectory = TempDirectoryPath::create();
+  const auto partitionedRowType = ROW(
+      {"c0", "c1", "c2", "p0"}, {BIGINT(), INTEGER(), SMALLINT(), VARCHAR()});
+
+  // Connector default is ERROR; the session property upgrades to APPEND.
+  connectorSessionProperties_->set(
+      HiveConfig::kInsertExistingPartitionsBehaviorSession, "APPEND");
+
+  auto dataSink = createDataSink(
+      partitionedRowType,
+      outputDirectory->getPath(),
+      dwio::common::FileFormat::DWRF,
+      {"p0"},
+      nullptr,
+      nullptr,
+      false,
+      connector::hive::LocationHandle::TableType::kExisting);
+
+  auto c0 = makeFlatVector<int64_t>(200, [](auto row) { return row; });
+  auto c1 = makeFlatVector<int32_t>(200, [](auto row) { return row * 2; });
+  auto c2 = makeFlatVector<int16_t>(200, [](auto row) { return row % 100; });
+  auto p0 = makeFlatVector<StringView>(
+      200, [](auto row) { return row % 2 == 0 ? "part_a" : "part_b"; });
+  dataSink->appendData(makeRowVector({c0, c1, c2, p0}));
+
+  ASSERT_TRUE(dataSink->finish());
+  const auto partitions = dataSink->close();
+
+  ASSERT_EQ(partitions.size(), 2);
+  for (const auto& partition : partitions) {
+    expectUpdateMode(partition, "APPEND");
+  }
+}
+
+// Verifies APPEND mode on an existing partitioned-and-bucketed table. Each
+// partition commit message reports updateMode=APPEND and contains one file
+// per bucket.
+TEST_F(HiveDataSinkTest, appendPartitionedBucketedExistingTable) {
+  const auto outputDirectory = TempDirectoryPath::create();
+  const auto partitionedRowType = ROW(
+      {"c0", "c1", "c2", "p0"}, {BIGINT(), INTEGER(), SMALLINT(), VARCHAR()});
+
+  const int32_t numBuckets = 4;
+  auto bucketProperty = std::make_shared<HiveBucketProperty>(
+      HiveBucketProperty::Kind::kHiveCompatible,
+      numBuckets,
+      std::vector<std::string>{"c0"},
+      std::vector<TypePtr>{BIGINT()},
+      std::vector<std::shared_ptr<const HiveSortingColumn>>{});
+
+  connectorConfig_ = std::make_shared<HiveConfig>(
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>{
+              {HiveConfig::kInsertExistingPartitionsBehavior, "APPEND"}}));
+
+  auto dataSink = createDataSink(
+      partitionedRowType,
+      outputDirectory->getPath(),
+      dwio::common::FileFormat::DWRF,
+      {"p0"},
+      bucketProperty,
+      nullptr,
+      false,
+      connector::hive::LocationHandle::TableType::kExisting);
+
+  const int numBatches = 4;
+  for (int i = 0; i < numBatches; ++i) {
+    auto c0 = makeFlatVector<int64_t>(400, [](auto row) { return row; });
+    auto c1 = makeFlatVector<int32_t>(400, [](auto row) { return row * 2; });
+    auto c2 = makeFlatVector<int16_t>(400, [](auto row) { return row % 100; });
+    auto p0 = makeFlatVector<StringView>(400, [i](auto row) {
+      return (i + row) % 2 == 0 ? "part_a" : "part_b";
+    });
+    dataSink->appendData(makeRowVector({c0, c1, c2, p0}));
+  }
+  while (!dataSink->finish()) {
+  }
+  const auto partitions = dataSink->close();
+
+  // One commit message per (partition, bucket) pair.
+  ASSERT_EQ(partitions.size(), 2 * numBuckets);
+  for (const auto& partition : partitions) {
+    expectUpdateMode(partition, "APPEND");
+  }
+}
+
+// Verifies APPEND mode on an existing bucketed-but-unpartitioned table.
+TEST_F(HiveDataSinkTest, appendBucketedUnpartitionedExistingTable) {
+  const auto outputDirectory = TempDirectoryPath::create();
+
+  const int32_t numBuckets = 4;
+  auto bucketProperty = std::make_shared<HiveBucketProperty>(
+      HiveBucketProperty::Kind::kHiveCompatible,
+      numBuckets,
+      std::vector<std::string>{"c0"},
+      std::vector<TypePtr>{BIGINT()},
+      std::vector<std::shared_ptr<const HiveSortingColumn>>{});
+
+  auto dataSink = createDataSink(
+      rowType_,
+      outputDirectory->getPath(),
+      dwio::common::FileFormat::DWRF,
+      {},
+      bucketProperty,
+      nullptr,
+      false,
+      connector::hive::LocationHandle::TableType::kExisting);
+
+  const auto vectors = createVectors(500, 4);
+  for (const auto& vector : vectors) {
+    dataSink->appendData(vector);
+  }
+  while (!dataSink->finish()) {
+  }
+  const auto partitions = dataSink->close();
+
+  ASSERT_EQ(partitions.size(), numBuckets);
+  for (const auto& partition : partitions) {
+    expectUpdateMode(partition, "APPEND");
+  }
 }
 
 TEST_F(HiveDataSinkTest, fileRotationWriteIOTimeAccumulation) {
