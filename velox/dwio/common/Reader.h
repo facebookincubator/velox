@@ -152,6 +152,34 @@ class RowReader {
   }
 
   /**
+   * Result of projectColumnsWithSelection. 'output' is the projected
+   * RowVector. 'selectedRows' maps each output row back to its input row
+   * index: selectedRows[i] is the input row that produced output row i.
+   * 'selectedRows' is null when no rows were dropped — output rows are
+   * identity-aligned with the input. This includes the empty-input case
+   * (input->size() == 0), where the identity mapping holds trivially.
+   * When all rows are filtered out from a non-empty input, 'output' is
+   * empty and 'selectedRows' is a non-null zero-length buffer so callers
+   * can distinguish "filtered to empty" from "identity mapping".
+   */
+  struct ProjectColumnsResult {
+    VectorPtr output;
+    BufferPtr selectedRows;
+  };
+
+  /**
+   * Like projectColumns, but also returns the input-row selection used to
+   * build the output. Callers that need to keep an external per-input-row
+   * structure (for example, an index reader's inputHits buffer) aligned
+   * with the filtered output can use 'selectedRows' to compact that
+   * structure without re-running filters.
+   */
+  static ProjectColumnsResult projectColumnsWithSelection(
+      const VectorPtr& input,
+      const velox::common::ScanSpec& spec,
+      const Mutation* mutation);
+
+  /**
    * Helper function used by non-selective reader to project top level columns
    * according to the scan spec and mutations.
    */
