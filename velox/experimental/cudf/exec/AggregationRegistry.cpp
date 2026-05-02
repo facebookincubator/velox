@@ -437,10 +437,6 @@ void registerCommonAggregationFunctions(
           .argumentType("row(double,bigint)")
           .build()};
 
-  // WHY DOES SUM NOT HAVE THE EQUIVALENT OF THE ABOVE?
-  // THE ABOVE THEN CLASHES WITH BELOW
-  // @mattgara HELP! :)
-  // auto avgIntermediateSignatures = avgFinalIntermediateSignatures;
   avgIntermediateSignatures.insert(
       avgIntermediateSignatures.end(),
       decimalAvgIntermediate.begin(),
