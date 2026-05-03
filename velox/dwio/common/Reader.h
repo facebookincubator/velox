@@ -21,6 +21,8 @@
 #include <optional>
 #include <string>
 
+#include <folly/container/F14Map.h>
+
 #include "velox/connectors/Connector.h"
 #include "velox/dwio/common/InputStream.h"
 #include "velox/dwio/common/Mutation.h"
@@ -247,6 +249,20 @@ class IndexReader {
   static constexpr std::string_view kNumIndexLookupStripes =
       "numIndexLookupStripes";
 
+  /// Tracks the total number of rows in all loaded stripes. Measures the full
+  /// stripe row count regardless of how many rows are actually needed by
+  /// index lookups. Comparing with kNumIndexMatchedRows shows cluster index
+  /// selectivity within stripes.
+  static constexpr std::string_view kNumIndexScannedRows =
+      "numIndexScannedRows";
+
+  /// Tracks the total number of rows matched by the cluster index across all
+  /// stripes. These are the rows identified as matching the lookup bounds
+  /// within each stripe, before any ScanSpec filter pushdown. Comparing with
+  /// actual output rows shows filter selectivity.
+  static constexpr std::string_view kNumIndexMatchedRows =
+      "numIndexMatchedRows";
+
   /// Tracks the total number of read segments across all stripes. A read
   /// segment is a contiguous row range within a stripe that needs to be read.
   /// When filters are present, overlapping request ranges are split at
@@ -256,6 +272,11 @@ class IndexReader {
       "numIndexLookupReadSegments";
 
   virtual ~IndexReader() = default;
+
+  /// Returns runtime statistics accumulated by this index reader.
+  virtual folly::F14FastMap<std::string, RuntimeMetric> stats() const {
+    return {};
+  }
 
   /// Options for controlling index reader behavior.
   struct Options {
