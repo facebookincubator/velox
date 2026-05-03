@@ -412,6 +412,9 @@ These stats are reported only by connector data or index sources.
 FileBasedDataSource
 -------------------
 These stats are reported by the file-based connector data source (Hive connector).
+Data stream IO stats use the stat names directly (e.g., ``storageReadBytes``).
+Metadata IO stats (footer, stripe groups, index) use a ``metadata.`` prefix
+(e.g., ``metadata.storageReadBytes``, ``metadata.ramReadBytes``).
 
 .. list-table::
    :widths: 50 25 50

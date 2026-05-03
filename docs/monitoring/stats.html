@@ -595,7 +595,10 @@ overlapping ranges are merged to minimize I/O.</p></td>
 </section>
 <section id="filebaseddatasource">
 <h2>FileBasedDataSource<a class="headerlink" href="#filebaseddatasource" title="Link to this heading">¶</a></h2>
-<p>These stats are reported by the file-based connector data source (Hive connector).</p>
+<p>These stats are reported by the file-based connector data source (Hive connector).
+Data stream IO stats use the stat names directly (e.g., <code class="docutils literal notranslate"><span class="pre">storageReadBytes</span></code>).
+Metadata IO stats (footer, stripe groups, index) use a <code class="docutils literal notranslate"><span class="pre">metadata.</span></code> prefix
+(e.g., <code class="docutils literal notranslate"><span class="pre">metadata.storageReadBytes</span></code>, <code class="docutils literal notranslate"><span class="pre">metadata.ramReadBytes</span></code>).</p>
 <table class="docutils align-default">
 <colgroup>
 <col style="width: 40.0%" />
