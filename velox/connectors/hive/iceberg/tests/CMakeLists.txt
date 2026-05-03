@@ -63,6 +63,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     IcebergConnectorTest.cpp
     IcebergInsertTest.cpp
     IcebergTestBase.cpp
+    IcebergWriteModeTest.cpp
     Main.cpp
     PartitionNameTest.cpp
     PartitionSpecTest.cpp

@@ -373,6 +373,10 @@ class FileDataSink : public DataSink {
   // Finalizes the current file for the writer at the given index.
   void finalizeWriterFile(size_t index);
 
+  // Closes the physical writer at 'index', finalizes its current file metadata,
+  // and releases the writer object.
+  void closeWriterAndFinalize(size_t index);
+
   virtual void closeInternal();
 
   // IMPORTANT NOTE: these are passed to writers as raw pointers. FileDataSink
