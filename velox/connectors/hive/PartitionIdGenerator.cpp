@@ -16,16 +16,21 @@
 
 #include "velox/connectors/hive/PartitionIdGenerator.h"
 
+#include <algorithm>
+#include <limits>
+
 namespace facebook::velox::connector::hive {
 
 PartitionIdGenerator::PartitionIdGenerator(
     const RowTypePtr& inputType,
     std::vector<column_index_t> partitionChannels,
     uint32_t maxPartitions,
-    memory::MemoryPool* pool)
+    memory::MemoryPool* pool,
+    bool enforceMaxPartitions)
     : pool_(pool),
       partitionChannels_(std::move(partitionChannels)),
-      maxPartitions_(maxPartitions) {
+      maxPartitions_(maxPartitions),
+      enforceMaxPartitions_(enforceMaxPartitions) {
   VELOX_USER_CHECK(
       !partitionChannels_.empty(), "There must be at least one partition key.");
   for (auto channel : partitionChannels_) {
@@ -75,18 +80,42 @@ void PartitionIdGenerator::run(
       result[i] = it->second;
     } else {
       uint64_t nextPartitionId = partitionIds_.size();
-      VELOX_USER_CHECK_LT(
-          nextPartitionId,
-          maxPartitions_,
-          "Exceeded limit of {} distinct partitions.",
-          maxPartitions_);
+      if (enforceMaxPartitions_) {
+        VELOX_USER_CHECK_LT(
+            nextPartitionId,
+            maxPartitions_,
+            "Exceeded limit of {} distinct partitions.",
+            maxPartitions_);
+      }
 
       partitionIds_.emplace(valueId, nextPartitionId);
+      ensurePartitionValueCapacity(nextPartitionId);
       savePartitionValues(nextPartitionId, input, i);
 
       result[i] = nextPartitionId;
     }
   }
+}
+
+void PartitionIdGenerator::ensurePartitionValueCapacity(uint64_t partitionId) {
+  if (partitionId < partitionValues_->size()) {
+    return;
+  }
+
+  VELOX_USER_CHECK_LT(
+      partitionId,
+      static_cast<uint64_t>(std::numeric_limits<vector_size_t>::max()),
+      "Exceeded maximum supported number of distinct partitions");
+
+  const auto requiredSize = static_cast<vector_size_t>(partitionId + 1);
+  const auto currentSize = partitionValues_->size();
+  const auto maxSize = std::numeric_limits<vector_size_t>::max();
+  const auto doubledSize = currentSize > maxSize / 2
+      ? maxSize
+      : static_cast<vector_size_t>(currentSize * 2);
+  const auto newSize =
+      std::max<vector_size_t>(requiredSize, currentSize == 0 ? 1 : doubledSize);
+  partitionValues_->resize(newSize);
 }
 
 void PartitionIdGenerator::computeValueIds(

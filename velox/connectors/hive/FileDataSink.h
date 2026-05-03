@@ -373,6 +373,16 @@ class FileDataSink : public DataSink {
   // Finalizes the current file for the writer at the given index.
   void finalizeWriterFile(size_t index);
 
+  // Closes the physical writer at 'index', finalizes its current file metadata,
+  // and releases the writer object.
+  void closeWriterAndFinalize(size_t index);
+
+  // Removes a closed writer and its heavy resources from the last writer slot.
+  // Returns lightweight writer metadata so a subclass can retain its commit
+  // result. Statistics from the released writer remain available through
+  // stats().
+  std::shared_ptr<WriterInfo> releaseWriter(size_t index, const WriterId& id);
+
   virtual void closeInternal();
 
   // IMPORTANT NOTE: these are passed to writers as raw pointers. FileDataSink
@@ -425,6 +435,10 @@ class FileDataSink : public DataSink {
 
   // Reusable buffers for bucket id calculations.
   std::vector<uint32_t> bucketIds_;
+
+  // Statistics accumulated from writers whose heavy state has been released
+  // before the sink itself is closed.
+  Stats releasedWriterStats_;
 };
 
 FOLLY_ALWAYS_INLINE std::ostream& operator<<(

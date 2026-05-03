@@ -30,7 +30,6 @@
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/TransformExprBuilder.h"
 #include "velox/connectors/hive/iceberg/WriterOptionsAdapter.h"
-#include "velox/exec/OperatorUtils.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -287,7 +286,9 @@ IcebergDataSink::IcebergDataSink(
                     }(),
                     hiveConfig->maxPartitionsPerWriters(
                         connectorQueryCtx->sessionProperties()),
-                    connectorQueryCtx->memoryPool())
+                    connectorQueryCtx->memoryPool(),
+                    icebergConfig->fanoutEnabled(
+                        connectorQueryCtx->sessionProperties()))
               : nullptr),
       partitionSpec_(insertTableHandle->partitionSpec()),
       transformEvaluator_(
@@ -303,51 +304,176 @@ IcebergDataSink::IcebergDataSink(
           partitionSpec_ != nullptr
               ? std::make_unique<IcebergPartitionName>(partitionSpec_)
               : nullptr),
-      partitionRowType_(std::move(partitionRowType)) {
-  commitPartitionValue_.resize(maxOpenWriters_);
+      partitionRowType_(std::move(partitionRowType)),
+      clusteredWrite_(!icebergConfig->fanoutEnabled(
+          connectorQueryCtx_->sessionProperties())) {
+  commitPartitionValue_.resize(writerInfo_.size());
+}
+
+void IcebergDataSink::appendData(RowVectorPtr input) {
+  if (!clusteredWrite_) {
+    HiveDataSink::appendData(std::move(input));
+    return;
+  }
+
+  clusteredAppendData(std::move(input));
+}
+
+void IcebergDataSink::clusteredAppendData(RowVectorPtr input) {
+  checkRunning();
+
+  input->loadedVector();
+
+  // Unpartitioned Iceberg doesn't need clustered routing.
+  if (!isPartitioned()) {
+    const auto index = ensureWriter(WriterId::unpartitionedId());
+    write(index, input);
+    return;
+  }
+
+  VELOX_USER_CHECK(
+      !sortWrite(), "Clustered Iceberg writer does not support sorted writes");
+  VELOX_DCHECK(!isBucketed());
+
+  computePartitionAndBucketIds(input);
+
+  const auto numRows = input->size();
+  for (vector_size_t runStart = 0; runStart < numRows;) {
+    const auto id = getWriterId(runStart);
+    auto runEnd = runStart + 1;
+    while (runEnd < numRows &&
+           partitionIds_[runEnd] == partitionIds_[runStart]) {
+      ++runEnd;
+    }
+
+    ensureClusteredWriter(id);
+
+    const auto runSize = runEnd - runStart;
+    RowVectorPtr writerInput = input;
+    if (runSize != numRows) {
+      writerInput =
+          std::dynamic_pointer_cast<RowVector>(input->slice(runStart, runSize));
+      VELOX_CHECK_NOT_NULL(writerInput);
+    }
+    write(*currentClusteredWriterIndex_, std::move(writerInput));
+
+    runStart = runEnd;
+  }
+}
+
+void IcebergDataSink::ensureClusteredWriter(const WriterId& id) {
+  if (currentClusteredWriterId_ == id) {
+    return;
+  }
+
+  validateNewClusteredWriter(id);
+  if (currentClusteredWriterId_.has_value()) {
+    closeCurrentClusteredWriter();
+  }
+
+  currentClusteredWriterId_ = id;
+  currentClusteredWriterIndex_ = ensureWriter(id);
+  lastClusteredPartitionId_ = id.partitionId;
+}
+
+void IcebergDataSink::validateNewClusteredWriter(const WriterId& id) const {
+  VELOX_CHECK(id.partitionId.has_value());
+
+  const uint64_t expectedPartitionId = lastClusteredPartitionId_.has_value()
+      ? static_cast<uint64_t>(*lastClusteredPartitionId_) + 1
+      : 0;
+  VELOX_USER_CHECK_EQ(
+      id.partitionId.value(),
+      expectedPartitionId,
+      "Iceberg clustered writer requires input rows to be clustered by partition");
+}
+
+void IcebergDataSink::closeCurrentClusteredWriter() {
+  VELOX_CHECK(currentClusteredWriterId_.has_value());
+  VELOX_CHECK(currentClusteredWriterIndex_.has_value());
+
+  const auto id = *currentClusteredWriterId_;
+  const auto index = *currentClusteredWriterIndex_;
+  closeWriterAndFinalize(index);
+
+  VELOX_CHECK_EQ(commitPartitionValue_.size(), index + 1);
+  auto partitionValue = std::move(commitPartitionValue_[index]);
+  auto writerInfo = releaseWriter(index, id);
+  commitPartitionValue_.pop_back();
+  saveCompletedClusteredWriter(writerInfo, std::move(partitionValue));
+
+  currentClusteredWriterId_.reset();
+  currentClusteredWriterIndex_.reset();
+}
+
+void IcebergDataSink::saveCompletedClusteredWriter(
+    const std::shared_ptr<WriterInfo>& writerInfo,
+    folly::dynamic partitionValue) {
+  VELOX_CHECK_NOT_NULL(writerInfo);
+  if (writerInfo->writtenFiles.empty()) {
+    return;
+  }
+
+  completedClusteredWriters_.push_back(
+      CompletedClusteredWriter{
+          writerInfo->writerParameters.targetDirectory(),
+          std::move(writerInfo->writtenFiles),
+          std::move(partitionValue)});
 }
 
 std::vector<std::string> IcebergDataSink::commitMessage() const {
   std::vector<std::string> commitTasks;
-  commitTasks.reserve(writerInfo_.size());
+  commitTasks.reserve(completedClusteredWriters_.size() + writerInfo_.size());
 
-  auto icebergInsertTableHandle =
+  const auto icebergInsertTableHandle =
       std::dynamic_pointer_cast<const IcebergInsertTableHandle>(
           insertTableHandle_);
 
-  for (auto i = 0; i < writerInfo_.size(); ++i) {
-    const auto& writerInfo = writerInfo_.at(i);
-    VELOX_CHECK_NOT_NULL(writerInfo);
-
-    // Following metadata (json format) is consumed by Presto CommitTaskData.
-    // It contains the minimal subset of metadata.
-    // TODO: Complete metrics is missing now and this could lead to suboptimal
-    // query plan, will collect full iceberg metrics in following PR.
-    for (const auto& fileInfo : writerInfo->writtenFiles) {
+  const auto appendCommitTasks = [&](const std::string& targetDirectory,
+                                     const std::vector<FileInfo>& writtenFiles,
+                                     const folly::dynamic& partitionValue) {
+    // Following metadata is consumed by Presto CommitTaskData. Complete
+    // metrics are not yet collected, which may lead to suboptimal plans.
+    for (const auto& fileInfo : writtenFiles) {
       // clang-format off
-      folly::dynamic commitData = folly::dynamic::object(
-        "path", (fs::path(writerInfo->writerParameters.targetDirectory()) /
-                      fileInfo.targetFileName).string())
-        ("fileSizeInBytes", fileInfo.fileSize)
-        ("metrics",
-          folly::dynamic::object("recordCount", fileInfo.numRows))
-        ("partitionSpecJson",
-          icebergInsertTableHandle->partitionSpec() ?
-            icebergInsertTableHandle->partitionSpec()->specId : 0)
-        ("fileFormat",
-          toManifestFormatString(icebergInsertTableHandle->storageFormat()))
-        ("content", "DATA");
+          folly::dynamic commitData = folly::dynamic::object(
+            "path", (fs::path(targetDirectory) /
+                          fileInfo.targetFileName).string())
+            ("fileSizeInBytes", fileInfo.fileSize)
+            ("metrics",
+              folly::dynamic::object("recordCount", fileInfo.numRows))
+            ("partitionSpecJson",
+              icebergInsertTableHandle->partitionSpec() ?
+                icebergInsertTableHandle->partitionSpec()->specId : 0)
+            ("fileFormat",
+              toManifestFormatString(icebergInsertTableHandle->storageFormat()))
+            ("content", "DATA");
       // clang-format on
-      if (!commitPartitionValue_.empty() &&
-          !commitPartitionValue_[i].isNull()) {
+      if (!partitionValue.isNull()) {
         commitData["partitionDataJson"] = folly::toJson(
-            folly::dynamic::object(
-                "partitionValues", commitPartitionValue_[i]));
+            folly::dynamic::object("partitionValues", partitionValue));
       }
-      auto commitDataJson = folly::toJson(commitData);
-      commitTasks.push_back(commitDataJson);
+      commitTasks.push_back(folly::toJson(commitData));
     }
+  };
+
+  for (const auto& completedWriter : completedClusteredWriters_) {
+    appendCommitTasks(
+        completedWriter.targetDirectory,
+        completedWriter.writtenFiles,
+        completedWriter.partitionValue);
   }
+
+  for (auto i = 0; i < writerInfo_.size(); ++i) {
+    const auto& writerInfo = writerInfo_[i];
+    VELOX_CHECK_NOT_NULL(writerInfo);
+    appendCommitTasks(
+        writerInfo->writerParameters.targetDirectory(),
+        writerInfo->writtenFiles,
+        i < commitPartitionValue_.size() ? commitPartitionValue_[i]
+                                         : folly::dynamic());
+  }
+
   return commitTasks;
 }
 
@@ -378,10 +504,18 @@ std::string IcebergDataSink::getPartitionName(uint32_t partitionId) const {
 }
 
 uint32_t IcebergDataSink::ensureWriter(const WriterId& id) {
-  auto writerId = HiveDataSink::ensureWriter(id);
-  if (isPartitioned() && commitPartitionValue_[writerId].isNull()) {
-    commitPartitionValue_[writerId] = makeCommitPartitionValue(writerId);
+  const auto writerId = HiveDataSink::ensureWriter(id);
+
+  if (commitPartitionValue_.size() <= writerId) {
+    commitPartitionValue_.resize(writerId + 1);
   }
+
+  if (isPartitioned() && commitPartitionValue_[writerId].isNull()) {
+    VELOX_CHECK(id.partitionId.has_value());
+    commitPartitionValue_[writerId] =
+        makeCommitPartitionValue(id.partitionId.value());
+  }
+
   return writerId;
 }
 
@@ -411,16 +545,16 @@ IcebergDataSink::createWriterOptions() const {
 }
 
 folly::dynamic IcebergDataSink::makeCommitPartitionValue(
-    uint32_t writerIndex) const {
+    uint32_t partitionId) const {
   folly::dynamic partitionValues = folly::dynamic::array();
   const auto& transformedValues = partitionIdGenerator_->partitionValues();
   for (auto i = 0; i < partitionChannels_.size(); ++i) {
     const auto& child = transformedValues->childAt(i);
-    if (child->isNullAt(writerIndex)) {
+    if (child->isNullAt(partitionId)) {
       partitionValues.push_back(nullptr);
     } else {
       partitionValues.push_back(VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-          extractPartitionValue, child->typeKind(), child, writerIndex));
+          extractPartitionValue, child->typeKind(), child, partitionId));
     }
   }
   return partitionValues;
