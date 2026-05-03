@@ -73,6 +73,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     IcebergParquetStatsTest.cpp
     IcebergSessionCredentialsE2ETest.cpp
     IcebergTestBase.cpp
+    IcebergWriteModeTest.cpp
     Main.cpp
     PartitionNameTest.cpp
     PartitionSpecTest.cpp
