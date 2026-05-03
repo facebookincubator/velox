@@ -56,8 +56,8 @@ using NvtxRegisteredStringT = nvtx3::registered_string_in<VeloxDomain>;
  *
  * This function parses a string like:
  * "virtual facebook::velox::RowVectorPtr
- * facebook::velox::cudf_velox::CudfHashAggregation::getOutput()" and returns
- * "CudfHashAggregation::getOutput"
+ * facebook::velox::cudf_velox::CudfGroupby::getOutput()" and returns
+ * "CudfGroupby::getOutput"
  *
  * @param prettyFunction The string from __PRETTY_FUNCTION__
  * @return A simplified string in the format "classname::function"

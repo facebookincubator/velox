@@ -31,6 +31,130 @@ using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::connector::hive {
 
+namespace {
+
+inline void addIoCounterMetric(
+    io::IoCounter& counter,
+    const std::string& key,
+    std::unordered_map<std::string, RuntimeMetric>& res) {
+  if (counter.count() > 0) {
+    res.insert({key, RuntimeMetric(counter.count())});
+  }
+}
+
+inline void addIoCounterMetric(
+    uint64_t value,
+    const std::string& key,
+    RuntimeCounter::Unit unit,
+    std::unordered_map<std::string, RuntimeMetric>& res) {
+  if (value > 0) {
+    res.insert({key, RuntimeMetric(value, unit)});
+  }
+}
+
+inline void addIoStatsMetric(
+    io::IoCounter& counter,
+    const std::string& key,
+    RuntimeCounter::Unit unit,
+    std::unordered_map<std::string, RuntimeMetric>& res) {
+  if (counter.count() > 0) {
+    res.insert(
+        {key,
+         RuntimeMetric(
+             saturateCast(counter.sum()),
+             counter.count(),
+             saturateCast(counter.min()),
+             saturateCast(counter.max()),
+             unit)});
+  }
+}
+
+inline void addIoLatencyMetric(
+    io::IoCounter& counter,
+    const std::string& key,
+    std::unordered_map<std::string, RuntimeMetric>& res) {
+  if (counter.count() > 0) {
+    res.insert(
+        {key,
+         RuntimeMetric(
+             saturateCast(counter.sum() * 1'000),
+             counter.count(),
+             saturateCast(counter.min() * 1'000),
+             saturateCast(counter.max() * 1'000),
+             RuntimeCounter::Unit::kNanos)});
+  }
+}
+
+void addIoStatsToRuntimeStats(
+    io::IoStatistics& ioStats,
+    std::string_view prefix,
+    std::unordered_map<std::string, RuntimeMetric>& res) {
+  auto key = [&](std::string_view name) {
+    return prefix.empty() ? std::string(name)
+                          : fmt::format("{}.{}", prefix, name);
+  };
+
+  addIoLatencyMetric(
+      ioStats.queryThreadIoLatencyUs(), key(Connector::kIoWaitWallNanos), res);
+  addIoLatencyMetric(
+      ioStats.storageReadLatencyUs(),
+      key(Connector::kStorageReadWallNanos),
+      res);
+  addIoLatencyMetric(
+      ioStats.ssdCacheReadLatencyUs(),
+      key(Connector::kSsdCacheReadWallNanos),
+      res);
+  addIoLatencyMetric(
+      ioStats.cacheWaitLatencyUs(), key(Connector::kCacheWaitWallNanos), res);
+  addIoLatencyMetric(
+      ioStats.coalescedSsdLoadLatencyUs(),
+      key(Connector::kCoalescedSsdLoadWallNanos),
+      res);
+  addIoLatencyMetric(
+      ioStats.coalescedStorageLoadLatencyUs(),
+      key(Connector::kCoalescedStorageLoadWallNanos),
+      res);
+
+  addIoCounterMetric(
+      ioStats.prefetch(), key(FileDataSource::kNumPrefetch), res);
+  addIoStatsMetric(
+      ioStats.prefetch(),
+      key(FileDataSource::kPrefetchBytes),
+      RuntimeCounter::Unit::kBytes,
+      res);
+  addIoCounterMetric(
+      ioStats.totalScanTime(),
+      key(FileDataSource::kTotalScanTime),
+      RuntimeCounter::Unit::kNanos,
+      res);
+  addIoCounterMetric(
+      ioStats.rawOverreadBytes(),
+      key(FileDataSource::kOverreadBytes),
+      RuntimeCounter::Unit::kBytes,
+      res);
+
+  addIoStatsMetric(
+      ioStats.read(),
+      key(FileDataSource::kStorageReadBytes),
+      RuntimeCounter::Unit::kBytes,
+      res);
+  addIoCounterMetric(
+      ioStats.ssdRead(), key(FileDataSource::kNumLocalRead), res);
+  addIoStatsMetric(
+      ioStats.ssdRead(),
+      key(FileDataSource::kLocalReadBytes),
+      RuntimeCounter::Unit::kBytes,
+      res);
+  addIoCounterMetric(ioStats.ramHit(), key(FileDataSource::kNumRamRead), res);
+  addIoStatsMetric(
+      ioStats.ramHit(),
+      key(FileDataSource::kRamReadBytes),
+      RuntimeCounter::Unit::kBytes,
+      res);
+}
+
+} // namespace
+
 void FileDataSource::processColumnHandle(const FileColumnHandlePtr& handle) {
   switch (handle->columnType()) {
     case FileColumnHandle::ColumnType::kRegular:
@@ -243,7 +367,8 @@ FileDataSource::FileDataSource(
     configureExtractionColumns();
   }
 
-  ioStatistics_ = std::make_shared<io::IoStatistics>();
+  dataIoStats_ = std::make_shared<io::IoStatistics>();
+  metadataIoStats_ = std::make_shared<io::IoStatistics>();
   ioStats_ = std::make_shared<IoStats>();
 }
 
@@ -361,7 +486,8 @@ std::unique_ptr<FileSplitReader> FileDataSource::createSplitReader() {
       connectorQueryCtx_,
       fileConfig_,
       readerOutputType_,
-      ioStatistics_,
+      dataIoStats_,
+      metadataIoStats_,
       ioStats_,
       fileHandleFactory_,
       ioExecutor_,
@@ -493,131 +619,17 @@ void FileDataSource::addDynamicFilter(
 std::unordered_map<std::string, RuntimeMetric>
 FileDataSource::getRuntimeStats() {
   auto res = runtimeStats_.toRuntimeMetricMap();
+  addIoStatsToRuntimeStats(*dataIoStats_, "", res);
+  addIoStatsToRuntimeStats(*metadataIoStats_, kMetadataPrefix, res);
   res.insert(
-      {std::string(Connector::kIoWaitWallNanos),
-       RuntimeMetric(
-           saturateCast(ioStatistics_->queryThreadIoLatencyUs().sum() * 1'000),
-           ioStatistics_->queryThreadIoLatencyUs().count(),
-           saturateCast(ioStatistics_->queryThreadIoLatencyUs().min() * 1'000),
-           saturateCast(ioStatistics_->queryThreadIoLatencyUs().max() * 1'000),
-           RuntimeCounter::Unit::kNanos)});
-  // Breakdown of ioWaitWallNanos by I/O type
-  if (ioStatistics_->storageReadLatencyUs().count() > 0) {
-    res.insert(
-        {std::string(Connector::kStorageReadWallNanos),
-         RuntimeMetric(
-             saturateCast(ioStatistics_->storageReadLatencyUs().sum() * 1'000),
-             ioStatistics_->storageReadLatencyUs().count(),
-             saturateCast(ioStatistics_->storageReadLatencyUs().min() * 1'000),
-             saturateCast(ioStatistics_->storageReadLatencyUs().max() * 1'000),
-             RuntimeCounter::Unit::kNanos)});
-  }
-  if (ioStatistics_->ssdCacheReadLatencyUs().count() > 0) {
-    res.insert(
-        {std::string(Connector::kSsdCacheReadWallNanos),
-         RuntimeMetric(
-             saturateCast(ioStatistics_->ssdCacheReadLatencyUs().sum() * 1'000),
-             ioStatistics_->ssdCacheReadLatencyUs().count(),
-             saturateCast(ioStatistics_->ssdCacheReadLatencyUs().min() * 1'000),
-             saturateCast(ioStatistics_->ssdCacheReadLatencyUs().max() * 1'000),
-             RuntimeCounter::Unit::kNanos)});
-  }
-  if (ioStatistics_->cacheWaitLatencyUs().count() > 0) {
-    res.insert(
-        {std::string(Connector::kCacheWaitWallNanos),
-         RuntimeMetric(
-             saturateCast(ioStatistics_->cacheWaitLatencyUs().sum() * 1'000),
-             ioStatistics_->cacheWaitLatencyUs().count(),
-             saturateCast(ioStatistics_->cacheWaitLatencyUs().min() * 1'000),
-             saturateCast(ioStatistics_->cacheWaitLatencyUs().max() * 1'000),
-             RuntimeCounter::Unit::kNanos)});
-  }
-  if (ioStatistics_->coalescedSsdLoadLatencyUs().count() > 0) {
-    res.insert(
-        {std::string(Connector::kCoalescedSsdLoadWallNanos),
-         RuntimeMetric(
-             saturateCast(
-                 ioStatistics_->coalescedSsdLoadLatencyUs().sum() * 1'000),
-             ioStatistics_->coalescedSsdLoadLatencyUs().count(),
-             saturateCast(
-                 ioStatistics_->coalescedSsdLoadLatencyUs().min() * 1'000),
-             saturateCast(
-                 ioStatistics_->coalescedSsdLoadLatencyUs().max() * 1'000),
-             RuntimeCounter::Unit::kNanos)});
-  }
-  if (ioStatistics_->coalescedStorageLoadLatencyUs().count() > 0) {
-    res.insert(
-        {std::string(Connector::kCoalescedStorageLoadWallNanos),
-         RuntimeMetric(
-             saturateCast(
-                 ioStatistics_->coalescedStorageLoadLatencyUs().sum() * 1'000),
-             ioStatistics_->coalescedStorageLoadLatencyUs().count(),
-             saturateCast(
-                 ioStatistics_->coalescedStorageLoadLatencyUs().min() * 1'000),
-             saturateCast(
-                 ioStatistics_->coalescedStorageLoadLatencyUs().max() * 1'000),
-             RuntimeCounter::Unit::kNanos)});
-  }
-  res.insert(
-      {{std::string(kNumPrefetch),
-        RuntimeMetric(ioStatistics_->prefetch().count())},
-       {std::string(kPrefetchBytes),
-        RuntimeMetric(
-            saturateCast(ioStatistics_->prefetch().sum()),
-            ioStatistics_->prefetch().count(),
-            saturateCast(ioStatistics_->prefetch().min()),
-            saturateCast(ioStatistics_->prefetch().max()),
-            RuntimeCounter::Unit::kBytes)},
-       {std::string(kTotalScanTime),
-        RuntimeMetric(
-            ioStatistics_->totalScanTime(), RuntimeCounter::Unit::kNanos)},
-       {std::string(Connector::kTotalRemainingFilterTime),
+      {{std::string(Connector::kTotalRemainingFilterTime),
         RuntimeMetric(
             totalRemainingFilterTime_.load(std::memory_order_relaxed),
             RuntimeCounter::Unit::kNanos)},
        {Connector::kTotalRemainingFilterCpuTime,
         RuntimeMetric(
             totalRemainingFilterCpuTime_.load(std::memory_order_relaxed),
-            RuntimeCounter::Unit::kNanos)},
-       {std::string(kOverreadBytes),
-        RuntimeMetric(
-            ioStatistics_->rawOverreadBytes(), RuntimeCounter::Unit::kBytes)}});
-  if (ioStatistics_->read().count() > 0) {
-    res.insert(
-        {std::string(kStorageReadBytes),
-         RuntimeMetric(
-             saturateCast(ioStatistics_->read().sum()),
-             ioStatistics_->read().count(),
-             saturateCast(ioStatistics_->read().min()),
-             saturateCast(ioStatistics_->read().max()),
-             RuntimeCounter::Unit::kBytes)});
-  }
-  if (ioStatistics_->ssdRead().count() > 0) {
-    res.insert(
-        {std::string(kNumLocalRead),
-         RuntimeMetric(ioStatistics_->ssdRead().count())});
-    res.insert(
-        {std::string(kLocalReadBytes),
-         RuntimeMetric(
-             saturateCast(ioStatistics_->ssdRead().sum()),
-             ioStatistics_->ssdRead().count(),
-             saturateCast(ioStatistics_->ssdRead().min()),
-             saturateCast(ioStatistics_->ssdRead().max()),
-             RuntimeCounter::Unit::kBytes)});
-  }
-  if (ioStatistics_->ramHit().count() > 0) {
-    res.insert(
-        {std::string(kNumRamRead),
-         RuntimeMetric(ioStatistics_->ramHit().count())});
-    res.insert(
-        {std::string(kRamReadBytes),
-         RuntimeMetric(
-             saturateCast(ioStatistics_->ramHit().sum()),
-             ioStatistics_->ramHit().count(),
-             saturateCast(ioStatistics_->ramHit().min()),
-             saturateCast(ioStatistics_->ramHit().max()),
-             RuntimeCounter::Unit::kBytes)});
-  }
+            RuntimeCounter::Unit::kNanos)}});
 
   const auto ioStatsMap = ioStats_->stats();
   for (const auto& [key, value] : ioStatsMap) {
@@ -652,8 +664,10 @@ void FileDataSource::setFromDataSource(
   splitReader_->setConnectorQueryCtx(connectorQueryCtx_);
   // New io will be accounted on the stats of 'source'. Add the existing
   // balance to that.
-  source->ioStatistics_->merge(*ioStatistics_);
-  ioStatistics_ = std::move(source->ioStatistics_);
+  source->dataIoStats_->merge(*dataIoStats_);
+  dataIoStats_ = std::move(source->dataIoStats_);
+  source->metadataIoStats_->merge(*metadataIoStats_);
+  metadataIoStats_ = std::move(source->metadataIoStats_);
   source->ioStats_->merge(*ioStats_);
   ioStats_ = std::move(source->ioStats_);
 }

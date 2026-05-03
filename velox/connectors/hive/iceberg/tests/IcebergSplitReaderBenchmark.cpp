@@ -341,6 +341,7 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
             hiveConfig,
             rowType,
             ioStatistics,
+            nullptr,
             ioStats,
             &fileHandleFactory,
             nullptr,

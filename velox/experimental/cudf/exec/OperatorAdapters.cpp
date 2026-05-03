@@ -16,16 +16,19 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
+#include "velox/experimental/cudf/exec/CudfAggregation.h"
 #include "velox/experimental/cudf/exec/CudfAssignUniqueId.h"
 #include "velox/experimental/cudf/exec/CudfBatchConcat.h"
+#include "velox/experimental/cudf/exec/CudfDistinct.h"
 #include "velox/experimental/cudf/exec/CudfEnforceSingleRow.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
-#include "velox/experimental/cudf/exec/CudfHashAggregation.h"
+#include "velox/experimental/cudf/exec/CudfGroupby.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
 #include "velox/experimental/cudf/exec/CudfLimit.h"
 #include "velox/experimental/cudf/exec/CudfLocalPartition.h"
 #include "velox/experimental/cudf/exec/CudfMarkDistinct.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
+#include "velox/experimental/cudf/exec/CudfReduce.h"
 #include "velox/experimental/cudf/exec/CudfTopN.h"
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
@@ -225,7 +228,7 @@ class FilterProjectAdapter : public OperatorAdapter {
   }
 };
 
-/// AggregationAdapter - Replaces with CudfHashAggregation
+/// AggregationAdapter - Replaces with CudfGroupby, CudfDistinct, or CudfReduce
 class AggregationAdapter : public OperatorAdapter {
  public:
   AggregationAdapter() : OperatorAdapter("Aggregation") {}
@@ -281,15 +284,25 @@ class AggregationAdapter : public OperatorAdapter {
     auto aggregationPlanNode =
         std::dynamic_pointer_cast<const core::AggregationNode>(planNode);
 
+    bool isGlobal = aggregationPlanNode->groupingKeys().empty();
+    bool isDistinct = !isGlobal && aggregationPlanNode->aggregates().empty();
+
     std::vector<std::unique_ptr<exec::Operator>> result;
     if (CudfConfig::getInstance().concatOptimizationEnabled) {
       result.push_back(
           std::make_unique<CudfBatchConcat>(
               operatorId, ctx, aggregationPlanNode));
     }
-    result.push_back(
-        std::make_unique<CudfHashAggregation>(
-            operatorId, ctx, aggregationPlanNode));
+    if (isGlobal) {
+      result.push_back(
+          std::make_unique<CudfReduce>(operatorId, ctx, aggregationPlanNode));
+    } else if (isDistinct) {
+      result.push_back(
+          std::make_unique<CudfDistinct>(operatorId, ctx, aggregationPlanNode));
+    } else {
+      result.push_back(
+          std::make_unique<CudfGroupby>(operatorId, ctx, aggregationPlanNode));
+    }
     return result;
   }
 };
