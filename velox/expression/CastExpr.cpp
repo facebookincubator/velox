@@ -126,7 +126,9 @@ VectorPtr CastExpr::castToDate(
           setResultOrError(
               row,
               result,
-              makeErrorMessage(input, row, DATE()),
+              [&](const std::string& details) {
+                return makeErrorMessage(input, row, DATE(), details);
+              },
               context,
               resultFlatVector,
               wrapException);

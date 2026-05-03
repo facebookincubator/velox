@@ -155,7 +155,9 @@ void CastExpr::applyCastKernel(
     setResultOrError(
         row,
         castResult,
-        makeErrorMessage(*input, row, result->type()),
+        [&](const std::string& details) INLINE_LAMBDA {
+          return makeErrorMessage(*input, row, result->type(), details);
+        },
         context,
         result,
         wrapException);

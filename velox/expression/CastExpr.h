@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include <fmt/format.h>
 #include "velox/common/base/Status.h"
 #include "velox/expression/CastHooks.h"
 #include "velox/expression/ExprConstants.h"
@@ -356,28 +355,24 @@ class CastExpr : public SpecialForm {
   /// the value in castResult directly to result.
   /// @param row The row index being processed
   /// @param castResult The Expected<T> result from cast operation
-  /// @param errorPrefix Error message prefix (e.g., from makeErrorMessage)
+  /// @param makeErrorDetails Builds the full error details string lazily from
+  /// the cast error message.
   /// @param context The evaluation context
   /// @param result The result vector to update
   /// @param wrapException Output parameter indicating if exception should be
   /// wrapped
-  template <typename T, typename TResult>
+  template <typename T, typename TResult, typename TMakeErrorDetails>
   void setResultOrError(
       vector_size_t row,
       const Expected<T>& castResult,
-      const std::string& errorPrefix,
+      TMakeErrorDetails makeErrorDetails,
       EvalCtx& context,
       TResult* result,
       bool& wrapException) const {
     if (castResult.hasError()) {
-      auto errorDetails = errorPrefix;
-      const auto& errorMessage = castResult.error().message();
-      if (!errorMessage.empty()) {
-        if (!errorDetails.empty() && errorDetails.back() != ' ') {
-          errorDetails.push_back(' ');
-        }
-        errorDetails.append(errorMessage);
-      }
+      const auto errorDetails = context.captureErrorDetails()
+          ? makeErrorDetails(castResult.error().message())
+          : std::string{};
       setCastError(row, context, result, wrapException, errorDetails);
     } else {
       result->set(row, castResult.value());
