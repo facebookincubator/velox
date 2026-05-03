@@ -2520,13 +2520,18 @@ ContinueFuture Task::terminate(TaskState terminalState) {
         "Termination time has already been set, this should only happen once.");
     taskStats_.terminationTimeMs = getCurrentTimeMs();
     if (state_ == TaskState::kCanceled || state_ == TaskState::kAborted) {
-      try {
-        VELOX_FAIL(
-            state_ == TaskState::kCanceled ? "Cancelled"
-                                           : "Aborted for external error");
-      } catch (const std::exception&) {
-        exception_ = std::current_exception();
-      }
+      // Construct the exception directly instead of going through VELOX_FAIL to
+      // avoid error log when cancellation is expected.
+      exception_ = std::make_exception_ptr(VeloxRuntimeError(
+          __FILE__,
+          __LINE__,
+          __FUNCTION__,
+          /*expression=*/"",
+          state_ == TaskState::kCanceled ? "Cancelled"
+                                         : "Aborted for external error",
+          error_source::kErrorSourceRuntime,
+          error_code::kInvalidState,
+          /*isRetriable=*/false));
     }
     if (state_ != TaskState::kFinished) {
       VELOX_CHECK(!cancellationSource_.isCancellationRequested());

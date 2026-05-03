@@ -281,6 +281,14 @@ std::vector<OperatorStats> IndexLookupJoin::splitStats(
   joinStats.runtimeStats.erase(std::string(LazyVector::kCpuNanos));
   joinStats.runtimeStats.erase(std::string(LazyVector::kWallNanos));
 
+  // Remove index source stats from join stats. recordConnectorStats copies
+  // these into the operator's runtimeStats (prefixed with "indexSource.") so
+  // they flow through the task-level stats path, but they belong to the
+  // IndexSource node, not the join node.
+  for (const auto& [name, _] : indexSourceStatWriter.runtimeStats()) {
+    joinStats.runtimeStats.erase(fmt::format("indexSource.{}", name));
+  }
+
   return {std::move(joinStats), std::move(indexSourceStats)};
 }
 
@@ -665,6 +673,14 @@ bool IndexLookupJoin::collectIndexSplits(ContinueFuture* future) {
       VELOX_CHECK(!hasNoIndexSplits_);
       VELOX_CHECK_NOT_NULL(joinBridge_);
       joinBridge_->setIndexSplits(indexSplits_);
+      {
+        auto lockedStats = stats_.wlock();
+        lockedStats->addRuntimeStat(
+            kNumIndexSplits,
+            RuntimeCounter(
+                static_cast<int64_t>(indexSplits_.size()),
+                RuntimeCounter::Unit::kNone));
+      }
       if (indexSplits_.empty()) {
         hasNoIndexSplits_ = true;
       } else {
@@ -1670,6 +1686,15 @@ void IndexLookupJoin::recordConnectorStats() {
                 connectorStats[std::string(kClientRequestProcessTime)].sum +
                 connectorStats[std::string(kClientResultProcessTime)].sum),
             RuntimeCounter::Unit::kNanos));
+  }
+  // Copy index source stats into the operator's own runtimeStats so they are
+  // visible through the task-level runtime stats path.
+  const auto indexSourceStats = indexStatWriter_->runtimeStats();
+  {
+    auto lockedStats = stats_.wlock();
+    for (const auto& [name, value] : indexSourceStats) {
+      lockedStats->runtimeStats[fmt::format("indexSource.{}", name)] = value;
+    }
   }
 }
 } // namespace facebook::velox::exec

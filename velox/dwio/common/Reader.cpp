@@ -20,7 +20,7 @@ namespace facebook::velox::dwio::common {
 
 using namespace velox::common;
 
-VectorPtr RowReader::projectColumns(
+RowReader::ProjectColumnsResult RowReader::projectColumnsWithSelection(
     const VectorPtr& input,
     const ScanSpec& spec,
     const Mutation* mutation) {
@@ -75,15 +75,23 @@ VectorPtr RowReader::projectColumns(
   auto rowType = ROW(std::move(names), std::move(types));
   auto size = bits::countBits(passed.data(), 0, input->size());
   if (size == 0) {
-    return RowVector::createEmpty(rowType, input->pool());
+    // Empty output. Return null selectedRows when the input was already
+    // empty (no rows were dropped — identity mapping holds trivially).
+    // Otherwise return a zero-length selection buffer so callers can
+    // distinguish "all rows filtered out" from "identity mapping" by
+    // checking selectedRows == nullptr.
+    return {
+        RowVector::createEmpty(rowType, input->pool()),
+        input->size() == 0 ? nullptr : allocateIndices(0, input->pool())};
   }
 
   // Preserve input nulls buffer
   BufferPtr outputNulls = input->nulls();
 
+  BufferPtr selectedRows;
   if (size < input->size()) {
-    auto indices = allocateIndices(size, input->pool());
-    auto* rawIndices = indices->asMutable<vector_size_t>();
+    selectedRows = allocateIndices(size, input->pool());
+    auto* rawIndices = selectedRows->asMutable<vector_size_t>();
     vector_size_t j = 0;
     bits::forEachSetBit(
         passed.data(), 0, input->size(), [&](auto i) { rawIndices[j++] = i; });
@@ -93,7 +101,7 @@ VectorPtr RowReader::projectColumns(
       }
       child->disableMemo();
       child = BaseVector::wrapInDictionary(
-          nullptr, indices, size, std::move(child));
+          nullptr, selectedRows, size, std::move(child));
     }
 
     // Filter the nulls buffer to match the filtered rows
@@ -146,8 +154,16 @@ VectorPtr RowReader::projectColumns(
             std::move(rowTypes));
   }
 
-  return std::make_shared<RowVector>(
+  auto output = std::make_shared<RowVector>(
       input->pool(), rowType, outputNulls, size, std::move(children));
+  return {std::move(output), std::move(selectedRows)};
+}
+
+VectorPtr RowReader::projectColumns(
+    const VectorPtr& input,
+    const ScanSpec& spec,
+    const Mutation* mutation) {
+  return projectColumnsWithSelection(input, spec, mutation).output;
 }
 
 namespace {
