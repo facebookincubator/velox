@@ -40,6 +40,7 @@
 #include "velox/dwio/parquet/writer/arrow/Platform.h"
 #include "velox/dwio/parquet/writer/arrow/Schema.h"
 
+#include "velox/connectors/hive/iceberg/IcebergBinaryUtil.h"
 #include "velox/functions/lib/string/StringImpl.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/HugeInt.h"
@@ -831,7 +832,7 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
         // Use binary byte logic for BINARY type (VARBINARY)
         // Implementation follows Apache Iceberg's
         // BinaryUtil.truncateBinaryMax()
-        truncatedMax = functions::stringImpl::roundUpBinary(
+        truncatedMax = connector::hive::iceberg::roundUpBinary(
             std::string_view(max_), truncateTo);
       }
 

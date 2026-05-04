@@ -43,6 +43,7 @@ velox_add_library(
   DeletionVectorReader.h
   DeletionVectorWriter.h
   EqualityDeleteFileReader.h
+  IcebergBinaryUtil.h
   IcebergColumnHandle.h
   IcebergConfig.h
   IcebergConnector.h

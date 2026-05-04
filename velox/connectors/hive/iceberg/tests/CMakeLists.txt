@@ -86,6 +86,11 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     GTest::gtest_main
   )
 
+  add_executable(velox_hive_iceberg_binary_util_test IcebergBinaryUtilTest.cpp)
+  add_test(velox_hive_iceberg_binary_util_test velox_hive_iceberg_binary_util_test)
+
+  target_link_libraries(velox_hive_iceberg_binary_util_test GTest::gtest GTest::gtest_main)
+
   add_executable(velox_hive_iceberg_deletion_vector_test DeletionVectorReaderTest.cpp)
   add_test(velox_hive_iceberg_deletion_vector_test velox_hive_iceberg_deletion_vector_test)
 
