@@ -1,0 +1,277 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// Reproducer for a bug where cudf's HashJoin crashes when probe and build
+// sides have timestamp columns at different resolutions (MICROSECONDS vs
+// NANOSECONDS). The fix (PR #245) normalizes timestamps before calling
+// cudf's filter APIs.
+//
+// Strategy: register two CudfHiveConnector instances with different
+// timestamp_type configs. Write Parquet files normally. Scan them through
+// different connectors so each side gets a different timestamp resolution.
+// Then run a filtered hash join.
+
+#include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
+#include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
+
+#include "velox/common/testutil/TempFilePath.h"
+#include "velox/connectors/ConnectorRegistry.h"
+#include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
+
+#include <cudf/types.hpp>
+
+#include <gtest/gtest.h>
+
+using namespace facebook::velox;
+using namespace facebook::velox::common::testutil;
+using namespace facebook::velox::connector;
+using namespace facebook::velox::core;
+using namespace facebook::velox::exec;
+using namespace facebook::velox::exec::test;
+using namespace facebook::velox::cudf_velox;
+using namespace facebook::velox::cudf_velox::exec::test;
+
+namespace {
+
+// Connector IDs for the two timestamp resolutions.
+const std::string kMicroConnectorId = "test-cudf-hive-micro";
+const std::string kNanoConnectorId = "test-cudf-hive-nano";
+
+class TimestampJoinTest : public CudfHiveConnectorTestBase {
+ protected:
+  void SetUp() override {
+    CudfHiveConnectorTestBase::SetUp();
+
+    registerTimestampConnector(
+        kMicroConnectorId,
+        static_cast<int>(cudf::type_id::TIMESTAMP_MICROSECONDS));
+    registerTimestampConnector(
+        kNanoConnectorId,
+        static_cast<int>(cudf::type_id::TIMESTAMP_NANOSECONDS));
+
+    // Probe table: columns t_key (INTEGER) and t_ts (TIMESTAMP).
+    probeType_ = ROW({{"t_key", INTEGER()}, {"t_ts", TIMESTAMP()}});
+    // Build table: columns u_key (INTEGER) and u_ts (TIMESTAMP).
+    buildType_ = ROW({{"u_key", INTEGER()}, {"u_ts", TIMESTAMP()}});
+
+    constexpr int32_t kNumRows{100};
+
+    // Populate probe data. Timestamp seconds = row * 2.
+    auto probeKeys = makeFlatVector<int32_t>(
+        kNumRows, [](vector_size_t row) { return row % 11; });
+    auto probeTimestamps = makeFlatVector<Timestamp>(
+        kNumRows, [](vector_size_t row) { return Timestamp(row * 2, 0); });
+    probeData_ = makeRowVector({"t_key", "t_ts"}, {probeKeys, probeTimestamps});
+
+    // Populate build data. Timestamp seconds = row * 3.
+    auto buildKeys = makeFlatVector<int32_t>(
+        kNumRows, [](vector_size_t row) { return row % 11; });
+    auto buildTimestamps = makeFlatVector<Timestamp>(
+        kNumRows, [](vector_size_t row) { return Timestamp(row * 3, 0); });
+    buildData_ = makeRowVector({"u_key", "u_ts"}, {buildKeys, buildTimestamps});
+
+    // Write Parquet files.
+    probeFile_ = TempFilePath::create();
+    buildFile_ = TempFilePath::create();
+    writeToFile(probeFile_->getPath(), probeData_);
+    writeToFile(buildFile_->getPath(), buildData_);
+
+    // Register DuckDB tables for reference queries.
+    createDuckDbTable("t", {probeData_});
+    createDuckDbTable("u", {buildData_});
+  }
+
+  void TearDown() override {
+    probeData_.reset();
+    buildData_.reset();
+    ConnectorRegistry::global().erase(kMicroConnectorId);
+    ConnectorRegistry::global().erase(kNanoConnectorId);
+    CudfHiveConnectorTestBase::TearDown();
+  }
+
+  // Register a CudfHiveConnector with the given connector ID and timestamp
+  // type (as an integer cudf::type_id value).
+  void registerTimestampConnector(
+      const std::string& connectorId,
+      int timestampTypeId) {
+    cudf_velox::connector::hive::CudfHiveConnectorFactory factory;
+    auto config = std::unordered_map<std::string, std::string>{
+        {cudf_velox::connector::hive::CudfHiveConfig::kTimestampType,
+         std::to_string(timestampTypeId)},
+    };
+    auto connector = factory.newConnector(
+        connectorId,
+        std::make_shared<facebook::velox::config::ConfigBase>(
+            std::move(config)),
+        ioExecutor_.get());
+    ConnectorRegistry::global().insert(connector->connectorId(), connector);
+  }
+
+  // Build a table-scan plan node that reads through the given connector.
+  PlanBuilder scanThrough(
+      const RowTypePtr& outputType,
+      const std::string& connectorId,
+      std::shared_ptr<PlanNodeIdGenerator> idGenerator) {
+    return PlanBuilder(idGenerator, pool_.get())
+        .startTableScan()
+        .outputType(outputType)
+        .connectorId(connectorId)
+        .endTableScan();
+  }
+
+  // Build a CudfHiveConnectorSplit for the given file and connector.
+  std::shared_ptr<cudf_velox::connector::hive::CudfHiveConnectorSplit>
+  makeSplit(const std::string& filePath, const std::string& connectorId) {
+    return cudf_velox::connector::hive::CudfHiveConnectorSplitBuilder(filePath)
+        .connectorId(connectorId)
+        .build();
+  }
+
+  RowTypePtr probeType_;
+  RowTypePtr buildType_;
+  RowVectorPtr probeData_;
+  RowVectorPtr buildData_;
+  std::shared_ptr<TempFilePath> probeFile_;
+  std::shared_ptr<TempFilePath> buildFile_;
+};
+
+// Inner join with filter on mismatched timestamp resolutions.
+// Probe side reads timestamps as MICROSECONDS, build side as NANOSECONDS.
+// Without the normalization fix this crashes in cudf's filter evaluation.
+TEST_F(TimestampJoinTest, innerJoinFilterWithMismatchedTimestamps) {
+  auto idGenerator = std::make_shared<PlanNodeIdGenerator>();
+
+  PlanNodeId probeScanId;
+  PlanNodeId buildScanId;
+
+  auto plan = scanThrough(probeType_, kMicroConnectorId, idGenerator)
+                  .capturePlanNodeId(probeScanId)
+                  .hashJoin(
+                      {"t_key"},
+                      {"u_key"},
+                      scanThrough(buildType_, kNanoConnectorId, idGenerator)
+                          .capturePlanNodeId(buildScanId)
+                          .planNode(),
+                      "t_ts < u_ts",
+                      {"t_key", "t_ts", "u_ts"},
+                      JoinType::kInner)
+                  .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .split(probeScanId, makeSplit(probeFile_->getPath(), kMicroConnectorId))
+      .split(buildScanId, makeSplit(buildFile_->getPath(), kNanoConnectorId))
+      .assertResults(
+          "SELECT t.t_key, t.t_ts, u.u_ts "
+          "FROM t, u "
+          "WHERE t.t_key = u.u_key AND t.t_ts < u.u_ts");
+}
+
+// Left semi filter join with mismatched timestamp resolutions.
+TEST_F(TimestampJoinTest, leftSemiFilterJoinWithMismatchedTimestamps) {
+  auto idGenerator = std::make_shared<PlanNodeIdGenerator>();
+
+  PlanNodeId probeScanId;
+  PlanNodeId buildScanId;
+
+  auto plan = scanThrough(probeType_, kMicroConnectorId, idGenerator)
+                  .capturePlanNodeId(probeScanId)
+                  .hashJoin(
+                      {"t_key"},
+                      {"u_key"},
+                      scanThrough(buildType_, kNanoConnectorId, idGenerator)
+                          .capturePlanNodeId(buildScanId)
+                          .planNode(),
+                      "t_ts < u_ts",
+                      {"t_key", "t_ts"},
+                      JoinType::kLeftSemiFilter)
+                  .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .split(probeScanId, makeSplit(probeFile_->getPath(), kMicroConnectorId))
+      .split(buildScanId, makeSplit(buildFile_->getPath(), kNanoConnectorId))
+      .assertResults(
+          "SELECT t.t_key, t.t_ts "
+          "FROM t "
+          "WHERE EXISTS ("
+          "  SELECT 1 FROM u WHERE t.t_key = u.u_key AND t.t_ts < u.u_ts"
+          ")");
+}
+
+// Anti join with mismatched timestamp resolutions.
+TEST_F(TimestampJoinTest, antiJoinWithMismatchedTimestamps) {
+  auto idGenerator = std::make_shared<PlanNodeIdGenerator>();
+
+  PlanNodeId probeScanId;
+  PlanNodeId buildScanId;
+
+  auto plan = scanThrough(probeType_, kMicroConnectorId, idGenerator)
+                  .capturePlanNodeId(probeScanId)
+                  .hashJoin(
+                      {"t_key"},
+                      {"u_key"},
+                      scanThrough(buildType_, kNanoConnectorId, idGenerator)
+                          .capturePlanNodeId(buildScanId)
+                          .planNode(),
+                      "t_ts < u_ts",
+                      {"t_key", "t_ts"},
+                      JoinType::kAnti)
+                  .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .split(probeScanId, makeSplit(probeFile_->getPath(), kMicroConnectorId))
+      .split(buildScanId, makeSplit(buildFile_->getPath(), kNanoConnectorId))
+      .assertResults(
+          "SELECT t.t_key, t.t_ts "
+          "FROM t "
+          "WHERE NOT EXISTS ("
+          "  SELECT 1 FROM u WHERE t.t_key = u.u_key AND t.t_ts < u.u_ts"
+          ")");
+}
+
+// Both sides use the same nano connector. Verifies no regression when
+// timestamp resolutions already match.
+TEST_F(TimestampJoinTest, noMismatchNoOp) {
+  auto idGenerator = std::make_shared<PlanNodeIdGenerator>();
+
+  PlanNodeId probeScanId;
+  PlanNodeId buildScanId;
+
+  auto plan = scanThrough(probeType_, kNanoConnectorId, idGenerator)
+                  .capturePlanNodeId(probeScanId)
+                  .hashJoin(
+                      {"t_key"},
+                      {"u_key"},
+                      scanThrough(buildType_, kNanoConnectorId, idGenerator)
+                          .capturePlanNodeId(buildScanId)
+                          .planNode(),
+                      "t_ts < u_ts",
+                      {"t_key", "t_ts", "u_ts"},
+                      JoinType::kInner)
+                  .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .split(probeScanId, makeSplit(probeFile_->getPath(), kNanoConnectorId))
+      .split(buildScanId, makeSplit(buildFile_->getPath(), kNanoConnectorId))
+      .assertResults(
+          "SELECT t.t_key, t.t_ts, u.u_ts "
+          "FROM t, u "
+          "WHERE t.t_key = u.u_key AND t.t_ts < u.u_ts");
+}
+
+} // namespace
