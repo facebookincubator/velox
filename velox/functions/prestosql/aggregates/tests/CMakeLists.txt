@@ -19,8 +19,10 @@ set(
   ApproxDistinctTest.cpp
   ApproxMostFrequentTest.cpp
   ApproxPercentileTest.cpp
+  ApproxWinsorizedMeanAggregateTest.cpp
   ArbitraryTest.cpp
   ArrayAggTest.cpp
+  VectorSumTest.cpp
   AverageAggregationTest.cpp
   BitwiseAggregationTest.cpp
   BoolAndOrTest.cpp

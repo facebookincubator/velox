@@ -537,6 +537,22 @@ TEST_F(PlanNodeSerdeTest, hashJoin) {
              .planNode();
 
   testSerde(plan);
+
+  // nullAsValue join (used for EXCEPT/INTERSECT).
+  plan = PlanBuilder(planNodeIdGenerator)
+             .values({probe})
+             .hashJoin(
+                 {"t0"},
+                 {"u0"},
+                 PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+                 "",
+                 {"t0", "t1"},
+                 core::JoinType::kAnti,
+                 /*nullAware=*/false,
+                 /*nullAsValue=*/true)
+             .planNode();
+
+  testSerde(plan);
 }
 
 TEST_F(PlanNodeSerdeTest, topN) {
@@ -994,6 +1010,29 @@ TEST_F(PlanNodeSerdeTest, columnStatsSpec) {
             std::move(aggregateNames),
             std::move(aggregates)),
         "");
+  }
+}
+
+TEST_F(PlanNodeSerdeTest, countingJoin) {
+  for (auto joinType :
+       {core::JoinType::kCountingAnti,
+        core::JoinType::kCountingLeftSemiFilter}) {
+    SCOPED_TRACE(core::JoinTypeName::toName(joinType));
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .values({data_})
+                    .hashJoin(
+                        {"c0"},
+                        {"u_c0"},
+                        PlanBuilder(planNodeIdGenerator)
+                            .values({data_})
+                            .project({"c0 as u_c0"})
+                            .planNode(),
+                        "",
+                        {"c0", "c1"},
+                        joinType)
+                    .planNode();
+    testSerde(plan);
   }
 }
 

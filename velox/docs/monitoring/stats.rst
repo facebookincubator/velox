@@ -104,6 +104,11 @@ These stats are reported only by TableScan operator
    * - numRunningScanThreads
      -
      - The number of running table scan drivers.
+   * - fileFormat.<format>
+     -
+     - The number of splits read for each file format (e.g. fileFormat.dwrf,
+       fileFormat.parquet, fileFormat.nimble). Reported per format encountered
+       during the query.
 
 TableWriter
 -----------
@@ -157,17 +162,34 @@ These stats are reported only by IndexLookupJoin operator
    * - Stats
      - Unit
      - Description
+   * - connectorIndexReadCpuNanos
+     - nanos
+     - CPU time spent reading index data from the index reader (e.g. stripe I/O, decoding).
+   * - connectorIndexReadWallNanos
+     - nanos
+     - Wall time spent reading index data from the index reader (e.g. stripe I/O, decoding).
+   * - connectorIndexSetupCpuNanos
+     - nanos
+     - CPU time spent initializing the index lookup (startLookup).
+   * - connectorIndexSetupWallNanos
+     - nanos
+     - Wall time spent initializing the index lookup (startLookup).
    * - connectorlookupWallNanos
      - nanos
-     - The end-to-end walltime in nanoseconds that the index connector do the lookup.
+     - End-to-end wall time for the index connector lookup (sum of setup, read, output, and filter).
    * - connectorlookupWaitWallNanos
      - nanos
      - The walltime in nanoseconds that the index connector wait for the lookup from
        remote storage.
+   * - connectorPostFilterCpuNanos
+     - nanos
+     - CPU time spent evaluating the remaining filter on index lookup results.
+   * - connectorPostFilterWallNanos
+     - nanos
+     - Wall time spent evaluating the remaining filter on index lookup results.
    * - connectorResultPrepareCpuNanos
      - nanos
-     - The cpu time in nanoseconds that the index connector process response from storages
-       client for followup processing by index join operator.
+     - CPU time spent projecting output columns from index reader results.
    * - clientlookupWaitWallNanos
      - nanos
      - The walltime in nanoseconds that the storage client wait for the lookup from remote storage.
@@ -192,6 +214,9 @@ These stats are reported only by IndexLookupJoin operator
    * - clientNumLazyDecodedResultBatches
      -
      - The number of lazy decoded result batches returned from the storage client.
+   * - numIndexSplits
+     -
+     - The number of index splits provided for index lookup.
 
 Merge
 -----
@@ -375,17 +400,24 @@ These stats are reported only by connector data or index sources.
    * - totalRemainingFilterCpuNanos
      - nanos
      - The total CPU time in nanoseconds that the data or index connector do the remaining filtering.
+   * - numIndexReaderOutputRows
+     -
+     - The total number of output rows returned across all next() calls from the
+       index reader. This is the final row count after cluster index bounds
+       and ScanSpec filter pushdown.
    * - numIndexFilterConversions
      -
      - The number of index columns that were converted from ScanSpec filters to
        index bounds for index-based filtering (e.g., cluster index pruning in
        Nimble). A value greater than zero indicates filters were successfully
        converted to leverage file index structures for row pruning.
-   * - numStripeLoads
+   * - numIndexLookupReadSegments
      -
-     - The number of times a stripe has been loaded during index lookup. This
-       metric helps track the I/O efficiency of index-based reads, where lower
-       values indicate better stripe reuse across lookups.
+     - The total number of read segments across all stripes during index lookup.
+       A read segment is a contiguous row range within a stripe that needs to be
+       read. When filters are present, overlapping request ranges are split at
+       boundaries to enable per-request output tracking. Without filters,
+       overlapping ranges are merged to minimize I/O.
    * - numIndexLookupRequests
      -
      - The number of index lookup requests submitted in startLookup(). Each
@@ -396,10 +428,94 @@ These stats are reported only by connector data or index sources.
      - The total number of stripes that need to be read for all index lookup
        requests. Multiple requests may share the same stripe, and each shared
        stripe is counted once per request that needs it.
-   * - numIndexLookupReadSegments
+   * - numIndexMatchedRows
      -
-     - The total number of read segments across all stripes during index lookup.
-       A read segment is a contiguous row range within a stripe that needs to be
-       read. When filters are present, overlapping request ranges are split at
-       boundaries to enable per-request output tracking. Without filters,
-       overlapping ranges are merged to minimize I/O.
+     - The total number of rows matched by the cluster index across all stripes.
+       These are the rows identified as matching the lookup bounds within each
+       stripe, before any ScanSpec filter pushdown. Comparing with actual output
+       rows shows filter selectivity.
+   * - numIndexScannedRows
+     -
+     - The total number of rows in all loaded stripes during index lookup.
+       Measures the full stripe row count regardless of how many rows are
+       actually needed. Comparing with numIndexMatchedRows shows cluster index
+       selectivity within stripes.
+   * - numStripeLoads
+     -
+     - The number of times a stripe has been loaded during index lookup. This
+       metric helps track the I/O efficiency of index-based reads, where lower
+       values indicate better stripe reuse across lookups.
+
+FileBasedDataSource
+-------------------
+These stats are reported by the file-based connector data source (Hive connector).
+Data stream IO stats use the stat names directly (e.g., ``storageReadBytes``).
+Metadata IO stats (footer, stripe groups, index) use a ``metadata.`` prefix
+(e.g., ``metadata.storageReadBytes``, ``metadata.ramReadBytes``).
+
+.. list-table::
+   :widths: 50 25 50
+   :header-rows: 1
+
+   * - Stats
+     - Unit
+     - Description
+   * - skippedSplits
+     -
+     - The number of splits skipped based on file statistics.
+   * - processedSplits
+     -
+     - The number of splits processed.
+   * - skippedSplitBytes
+     - bytes
+     - The total bytes in splits skipped based on file statistics.
+   * - skippedStrides
+     -
+     - The number of strides (row groups) skipped based on statistics.
+   * - processedStrides
+     -
+     - The number of strides (row groups) processed.
+   * - footerBufferOverread
+     - bytes
+     - The number of extra bytes read beyond the footer size due to buffer
+       over-reading.
+   * - numStripes
+     -
+     - The number of stripes read from the file.
+   * - flattenStringDictionaryValues
+     -
+     - The number of rows returned by the string dictionary reader that were
+       flattened instead of keeping dictionary encoding.
+   * - pageLoadTimeNs
+     - nanos
+     - The total time spent loading pages.
+   * - numPrefetch
+     -
+     - The number of prefetch operations issued.
+   * - prefetchBytes
+     - bytes
+     - The total bytes prefetched, including min and max per prefetch operation.
+   * - totalScanTime
+     - nanos
+     - The total wall time spent scanning the file.
+   * - overreadBytes
+     - bytes
+     - The total raw bytes over-read during I/O operations.
+   * - storageReadBytes
+     - bytes
+     - The total bytes read from remote storage, including min and max per read
+       operation.
+   * - numLocalRead
+     -
+     - The number of reads served from the local SSD cache.
+   * - localReadBytes
+     - bytes
+     - The total bytes read from the local SSD cache, including min and max per
+       read operation.
+   * - numRamRead
+     -
+     - The number of reads served from the in-memory (RAM) cache.
+   * - ramReadBytes
+     - bytes
+     - The total bytes read from the in-memory (RAM) cache, including min and
+       max per read operation.

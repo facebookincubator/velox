@@ -19,7 +19,7 @@
 
 #include <utility>
 
-#include "velox/common/Enums.h"
+#include "velox/common/EnumDeclare.h"
 #include "velox/common/rpc/RPCTypes.h"
 #include "velox/connectors/Connector.h"
 #include "velox/core/Expressions.h"
@@ -2181,11 +2181,6 @@ class ExchangeNode : public PlanNode {
   ExchangeNode(const PlanNodeId& id, RowTypePtr type, std::string serdeKind)
       : PlanNode(id), outputType_(type), serdeKind_(std::move(serdeKind)) {}
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  ExchangeNode(const PlanNodeId& id, RowTypePtr type, VectorSerde::Kind kind)
-      : ExchangeNode(id, std::move(type), VectorSerde::kindName(kind)) {}
-#endif
-
   class Builder {
    public:
     Builder() = default;
@@ -2210,13 +2205,6 @@ class ExchangeNode : public PlanNode {
       serdeKind_ = std::move(serdeKind);
       return *this;
     }
-
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-    Builder& serdeKind(VectorSerde::Kind kind) {
-      serdeKind_ = VectorSerde::kindName(kind);
-      return *this;
-    }
-#endif
 
     std::shared_ptr<ExchangeNode> build() const {
       VELOX_USER_CHECK(id_.has_value(), "ExchangeNode id is not set");
@@ -2282,21 +2270,6 @@ class MergeExchangeNode : public ExchangeNode {
       const std::vector<SortOrder>& sortingOrders,
       std::string serdeKind);
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  MergeExchangeNode(
-      const PlanNodeId& id,
-      const RowTypePtr& type,
-      const std::vector<FieldAccessTypedExprPtr>& sortingKeys,
-      const std::vector<SortOrder>& sortingOrders,
-      VectorSerde::Kind kind)
-      : MergeExchangeNode(
-            id,
-            type,
-            sortingKeys,
-            sortingOrders,
-            VectorSerde::kindName(kind)) {}
-#endif
-
   class Builder {
    public:
     Builder() = default;
@@ -2333,13 +2306,6 @@ class MergeExchangeNode : public ExchangeNode {
       serdeKind_ = std::move(serdeKind);
       return *this;
     }
-
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-    Builder& serdeKind(VectorSerde::Kind kind) {
-      serdeKind_ = VectorSerde::kindName(kind);
-      return *this;
-    }
-#endif
 
     std::shared_ptr<MergeExchangeNode> build() const {
       VELOX_USER_CHECK(id_.has_value(), "MergeExchangeNode id is not set");
@@ -2761,29 +2727,6 @@ class PartitionedOutputNode : public PlanNode {
       std::string serdeKind,
       PlanNodePtr source);
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  PartitionedOutputNode(
-      const PlanNodeId& id,
-      Kind kind,
-      const std::vector<TypedExprPtr>& keys,
-      int numPartitions,
-      bool replicateNullsAndAny,
-      PartitionFunctionSpecPtr partitionFunctionSpec,
-      RowTypePtr outputType,
-      VectorSerde::Kind serdeKind,
-      PlanNodePtr source)
-      : PartitionedOutputNode(
-            id,
-            kind,
-            keys,
-            numPartitions,
-            replicateNullsAndAny,
-            std::move(partitionFunctionSpec),
-            std::move(outputType),
-            VectorSerde::kindName(serdeKind),
-            std::move(source)) {}
-#endif
-
   static std::shared_ptr<PartitionedOutputNode> broadcast(
       const PlanNodeId& id,
       int numPartitions,
@@ -2791,61 +2734,17 @@ class PartitionedOutputNode : public PlanNode {
       std::string serdeKind,
       PlanNodePtr source);
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  static std::shared_ptr<PartitionedOutputNode> broadcast(
-      const PlanNodeId& id,
-      int numPartitions,
-      RowTypePtr outputType,
-      VectorSerde::Kind serdeKind,
-      PlanNodePtr source) {
-    return broadcast(
-        id,
-        numPartitions,
-        std::move(outputType),
-        VectorSerde::kindName(serdeKind),
-        std::move(source));
-  }
-#endif
-
   static std::shared_ptr<PartitionedOutputNode> arbitrary(
       const PlanNodeId& id,
       RowTypePtr outputType,
       std::string serdeKind,
       PlanNodePtr source);
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  static std::shared_ptr<PartitionedOutputNode> arbitrary(
-      const PlanNodeId& id,
-      RowTypePtr outputType,
-      VectorSerde::Kind serdeKind,
-      PlanNodePtr source) {
-    return arbitrary(
-        id,
-        std::move(outputType),
-        VectorSerde::kindName(serdeKind),
-        std::move(source));
-  }
-#endif
-
   static std::shared_ptr<PartitionedOutputNode> single(
       const PlanNodeId& id,
       RowTypePtr outputType,
       std::string serdeKind,
       PlanNodePtr source);
-
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  static std::shared_ptr<PartitionedOutputNode> single(
-      const PlanNodeId& id,
-      RowTypePtr outputType,
-      VectorSerde::Kind serdeKind,
-      PlanNodePtr source) {
-    return single(
-        id,
-        std::move(outputType),
-        VectorSerde::kindName(serdeKind),
-        std::move(source));
-  }
-#endif
 
   class Builder {
    public:
@@ -2903,13 +2802,6 @@ class PartitionedOutputNode : public PlanNode {
       serdeKind_ = std::move(serdeKind);
       return *this;
     }
-
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-    Builder& serdeKind(VectorSerde::Kind kind) {
-      serdeKind_ = VectorSerde::kindName(kind);
-      return *this;
-    }
-#endif
 
     Builder& source(PlanNodePtr source) {
       source_ = std::move(source);
@@ -3081,6 +2973,12 @@ enum class JoinType {
   // equal to the cardinality of the left side.
   kLeftSemiFilter = 4,
 
+  // Multiset version of kLeftSemiFilter. The build side deduplicates keys and
+  // stores a per-key count. On probe, each match decrements the count; the
+  // probe row is emitted only while the count is greater than zero. Implements
+  // INTERSECT ALL semantics.
+  kCountingLeftSemiFilter = 5,
+
   // Return each row from the left side with a boolean flag indicating whether
   // there exists a match on the right side. For this join type, cardinality
   // of the output equals the cardinality of the left side.
@@ -3089,12 +2987,12 @@ enum class JoinType {
   // 'nullAware' boolean specified separately.
   //
   // Null-aware join follows IN semantic. Regular join follows EXISTS semantic.
-  kLeftSemiProject = 5,
+  kLeftSemiProject = 6,
 
   // Opposite of kLeftSemiFilter. Return a subset of rows from the right side
   // which have a match on the left side. For this join type, cardinality of
   // the output is less than or equal to the cardinality of the right side.
-  kRightSemiFilter = 6,
+  kRightSemiFilter = 7,
 
   // Opposite of kLeftSemiProject. Return each row from the right side with a
   // boolean flag indicating whether there exists a match on the left side.
@@ -3105,7 +3003,7 @@ enum class JoinType {
   // 'nullAware' boolean specified separately.
   //
   // Null-aware join follows IN semantic. Regular join follows EXISTS semantic.
-  kRightSemiProject = 7,
+  kRightSemiProject = 8,
 
   // Return each row from the left side which has no match on the right side.
   // The handling of the rows with nulls in the join key depends on the
@@ -3120,9 +3018,15 @@ enum class JoinType {
   // Regular anti join follows NOT EXISTS semantic:
   // (1) ignore right-side rows with nulls in the join keys;
   // (2) unconditionally return left side rows with nulls in the join keys.
-  kAnti = 8,
+  kAnti = 9,
 
-  kNumJoinTypes = 9,
+  // Multiset version of kAnti. The build side deduplicates keys and stores a
+  // per-key count. On probe, each match decrements the count; the probe row is
+  // emitted only when the count reaches zero or no match is found. Implements
+  // EXCEPT ALL semantics.
+  kCountingAnti = 10,
+
+  kNumJoinTypes = 11,
 };
 
 VELOX_DECLARE_ENUM_NAME(JoinType);
@@ -3163,12 +3067,24 @@ inline bool isAntiJoin(JoinType joinType) {
   return joinType == JoinType::kAnti;
 }
 
+inline bool isCountingAntiJoin(JoinType joinType) {
+  return joinType == JoinType::kCountingAnti;
+}
+
+inline bool isCountingLeftSemiFilterJoin(JoinType joinType) {
+  return joinType == JoinType::kCountingLeftSemiFilter;
+}
+
+inline bool isCountingJoin(JoinType joinType) {
+  return isCountingAntiJoin(joinType) || isCountingLeftSemiFilterJoin(joinType);
+}
+
 /// Returns true if the join type is "probe-only", meaning the output includes
 /// only columns from the probe side (plus possibly a mark column).
-/// These join types are: kLeftSemiFilter, kLeftSemiProject, and kAnti.
 inline bool isProbeOnlyJoin(JoinType joinType) {
   return joinType == JoinType::kLeftSemiFilter ||
-      joinType == JoinType::kLeftSemiProject || joinType == JoinType::kAnti;
+      joinType == JoinType::kLeftSemiProject || joinType == JoinType::kAnti ||
+      isCountingJoin(joinType);
 }
 
 inline bool isNullAwareSupported(JoinType joinType) {
@@ -3309,17 +3225,32 @@ class AbstractJoinNode : public PlanNode {
     return joinType_ == JoinType::kAnti;
   }
 
+  bool isCountingAntiJoin() const {
+    return joinType_ == JoinType::kCountingAnti;
+  }
+
+  bool isCountingLeftSemiFilterJoin() const {
+    return joinType_ == JoinType::kCountingLeftSemiFilter;
+  }
+
+  bool isCountingJoin() const {
+    return core::isCountingJoin(joinType_);
+  }
+
   bool isPreservingProbeOrder() const {
     return isInnerJoin() || isLeftJoin() || isAntiJoin();
   }
 
   /// Indicates if this joinNode can drop duplicate rows with same join key.
   /// For left semi and anti join, it is not necessary to store duplicate rows.
+  /// For counting joins, duplicates are folded into a per-key count.
   bool canDropDuplicates() const {
     // Left semi and anti join with no extra filter only needs to know whether
     // there is a match. Hence, no need to store entries with duplicate keys.
-    return !filter() &&
-        (isLeftSemiFilterJoin() || isLeftSemiProjectJoin() || isAntiJoin());
+    // Counting joins always deduplicate and track counts.
+    return isCountingJoin() ||
+        (!filter() &&
+         (isLeftSemiFilterJoin() || isLeftSemiProjectJoin() || isAntiJoin()));
   }
 
   const std::vector<FieldAccessTypedExprPtr>& leftKeys() const {
@@ -3361,6 +3292,12 @@ class AbstractJoinNode : public PlanNode {
 /// EXISTS.
 class HashJoinNode : public AbstractJoinNode {
  public:
+  /// @param nullAware Applies to semi and anti joins only. When true, the
+  /// join semantic is IN / NOT IN (three-valued NULL logic). When false, the
+  /// join semantic is EXISTS / NOT EXISTS.
+  /// @param nullAsValue When true, join keys use IS NOT DISTINCT FROM
+  /// semantics where NULL equals NULL. Used to implement SQL set operations
+  /// (EXCEPT, INTERSECT). Mutually exclusive with nullAware.
   HashJoinNode(
       const PlanNodeId& id,
       JoinType joinType,
@@ -3371,7 +3308,8 @@ class HashJoinNode : public AbstractJoinNode {
       PlanNodePtr left,
       PlanNodePtr right,
       RowTypePtr outputType,
-      bool useHashTableCache = false)
+      bool useHashTableCache = false,
+      bool nullAsValue = false)
       : AbstractJoinNode(
             id,
             joinType,
@@ -3382,8 +3320,19 @@ class HashJoinNode : public AbstractJoinNode {
             std::move(right),
             std::move(outputType)),
         nullAware_{nullAware},
+        nullAsValue_{nullAsValue},
         useHashTableCache_{useHashTableCache} {
     validate();
+
+    VELOX_USER_CHECK(
+        !nullAware || !nullAsValue,
+        "nullAware and nullAsValue are mutually exclusive");
+
+    if (isCountingJoin()) {
+      VELOX_USER_CHECK(
+          !nullAware, "Counting joins do not support null-aware flag");
+      VELOX_USER_CHECK(!filter_, "Counting joins do not support extra filter");
+    }
 
     if (nullAware) {
       VELOX_USER_CHECK(
@@ -3407,11 +3356,17 @@ class HashJoinNode : public AbstractJoinNode {
     explicit Builder(const HashJoinNode& other)
         : AbstractJoinNode::Builder<HashJoinNode, Builder>(other) {
       nullAware_ = other.isNullAware();
+      nullAsValue_ = other.isNullAsValue();
       useHashTableCache_ = other.useHashTableCache();
     }
 
     Builder& nullAware(bool value) {
       nullAware_ = value;
+      return *this;
+    }
+
+    Builder& nullAsValue(bool value) {
+      nullAsValue_ = value;
       return *this;
     }
 
@@ -3447,11 +3402,13 @@ class HashJoinNode : public AbstractJoinNode {
           left_.value(),
           right_.value(),
           outputType_.value(),
-          useHashTableCache_.value_or(false));
+          useHashTableCache_.value_or(false),
+          nullAsValue_.value_or(false));
     }
 
    private:
     std::optional<bool> nullAware_;
+    std::optional<bool> nullAsValue_;
     std::optional<bool> useHashTableCache_;
   };
 
@@ -3479,6 +3436,13 @@ class HashJoinNode : public AbstractJoinNode {
     return nullAware_;
   }
 
+  /// Returns true when join keys use IS NOT DISTINCT FROM semantics where
+  /// NULL equals NULL. Used to implement SQL set operations (EXCEPT,
+  /// INTERSECT).
+  bool isNullAsValue() const {
+    return nullAsValue_;
+  }
+
   /// Returns whether hash table caching is enabled for broadcast joins.
   /// Only used by Presto-on-Spark.
   bool useHashTableCache() const {
@@ -3493,6 +3457,7 @@ class HashJoinNode : public AbstractJoinNode {
   void addDetails(std::stringstream& stream) const override;
 
   const bool nullAware_;
+  const bool nullAsValue_;
   const bool useHashTableCache_;
 };
 

@@ -14,7 +14,18 @@
 
 # for generated headers
 
-velox_add_library(velox_s3fs RegisterS3FileSystem.cpp)
+velox_add_library(
+  velox_s3fs
+  RegisterS3FileSystem.cpp
+  HEADERS
+  RegisterS3FileSystem.h
+  S3Config.h
+  S3Counters.h
+  S3FileSystem.h
+  S3ReadFile.h
+  S3Util.h
+  S3WriteFile.h
+)
 if(VELOX_ENABLE_S3)
   velox_sources(
     velox_s3fs

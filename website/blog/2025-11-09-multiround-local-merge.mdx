@@ -24,6 +24,8 @@ sequentially, placing them into the sorter and spilling as needed. Only after al
 does Spark perform a sort-merge of the spilled files. This process produces a large number of small
 spill files, which further degrades efficiency.
 
+<!-- truncate -->
+
 Moreover, Spark’s spill is row-based with a low compression ratio, resulting in approximately 4 times
 amplification compared to the original columnar training data in the data lake. These factors
 significantly degrade task stability and performance. Velox has a `LocalMerge` operator that can be

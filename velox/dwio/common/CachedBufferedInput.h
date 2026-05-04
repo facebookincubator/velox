@@ -167,6 +167,25 @@ class CachedBufferedInput : public BufferedInput {
         options_);
   }
 
+  /// Creates a clone that reads through the cache but marks entries as
+  /// immediately evictable on destruction (cacheable=false). Use when the
+  /// caller has its own caching layer (e.g., MetadataCache) and does not need
+  /// AsyncDataCache to retain the raw bytes.
+  std::unique_ptr<CachedBufferedInput> cloneNonCacheable() const {
+    auto nonCacheableOptions = options_;
+    nonCacheableOptions.setCacheable(false);
+    return std::make_unique<CachedBufferedInput>(
+        input_,
+        fileNum_,
+        cache_,
+        tracker_,
+        groupId_,
+        ioStatistics_,
+        ioStats_,
+        executor_,
+        nonCacheableOptions);
+  }
+
   cache::AsyncDataCache* cache() const {
     return cache_;
   }

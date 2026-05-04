@@ -201,6 +201,25 @@ std::optional<bool> dispatchDynamicVariantEquality(
       b);
 }
 
+folly::dynamic doubleToDynamic(double val) {
+  if (std::isinf(val) || std::isnan(val)) {
+    return folly::to<std::string>(val);
+  } else {
+    return val;
+  }
+}
+
+double dynamicToDouble(const folly::dynamic& val) {
+  if (val.isString()) {
+    return folly::to<double>(val.asString());
+  } else if (val.isDouble()) {
+    return val.asDouble();
+  } else if (val.isInt()) {
+    return val.asInt();
+  }
+  VELOX_FAIL("Unexpected value type: {}", val.typeName());
+}
+
 } // namespace
 
 std::string encloseWithQuote(std::string str) {
@@ -251,8 +270,10 @@ std::string Variant::toString(const TypePtr& type) const {
       return str;
     }
     case TypeKind::HUGEINT: {
-      VELOX_CHECK(type->isLongDecimal());
-      return DecimalUtil::toString(value<TypeKind::HUGEINT>(), type);
+      if (type->isLongDecimal()) {
+        return DecimalUtil::toString(value<TypeKind::HUGEINT>(), type);
+      }
+      return folly::to<std::string>(value<TypeKind::HUGEINT>());
     }
     case TypeKind::TINYINT:
       [[fallthrough]];
@@ -465,8 +486,10 @@ std::string Variant::toJson(const Type& type) const {
       return target;
     }
     case TypeKind::HUGEINT: {
-      VELOX_CHECK(type.isLongDecimal());
-      return DecimalUtil::toString(value<TypeKind::HUGEINT>(), type);
+      if (type.isLongDecimal()) {
+        return DecimalUtil::toString(value<TypeKind::HUGEINT>(), type);
+      }
+      return folly::to<std::string>(value<TypeKind::HUGEINT>());
     }
     case TypeKind::TINYINT:
       [[fallthrough]];
@@ -497,7 +520,7 @@ std::string Variant::toJson(const Type& type) const {
       return stringifyFloatingPointerValue<double>(value<TypeKind::DOUBLE>());
     }
     case TypeKind::TIMESTAMP: {
-      auto& timestamp = value<TypeKind::TIMESTAMP>();
+      const auto& timestamp = value<TypeKind::TIMESTAMP>();
       return '"' + timestamp.toString() + '"';
     }
     case TypeKind::OPAQUE: {
@@ -592,8 +615,10 @@ std::string Variant::toJsonUnsafe(const TypePtr& type) const {
       return target;
     }
     case TypeKind::HUGEINT: {
-      VELOX_CHECK(type && type->isLongDecimal());
-      return DecimalUtil::toString(value<TypeKind::HUGEINT>(), type);
+      if (type && type->isLongDecimal()) {
+        return DecimalUtil::toString(value<TypeKind::HUGEINT>(), type);
+      }
+      return folly::to<std::string>(value<TypeKind::HUGEINT>());
     }
     case TypeKind::TINYINT:
       [[fallthrough]];
@@ -729,11 +754,11 @@ folly::dynamic Variant::serialize() const {
       break;
     }
     case TypeKind::REAL: {
-      objValue = value<TypeKind::REAL>();
+      objValue = doubleToDynamic(value<TypeKind::REAL>());
       break;
     }
     case TypeKind::DOUBLE: {
-      objValue = value<TypeKind::DOUBLE>();
+      objValue = doubleToDynamic(value<TypeKind::DOUBLE>());
       break;
     }
     case TypeKind::VARCHAR: {
@@ -832,19 +857,9 @@ Variant Variant::create(const folly::dynamic& variantobj) {
       return Variant(obj.asBool());
     }
     case TypeKind::REAL:
-      if (obj.isInt()) {
-        // folly::parseJson() parses eg: "2293699590479675400"
-        // to int64 instead of double, and asDouble() will throw
-        // "folly::ConversionError: Loss of precision", so we do
-        // the check here to make it more robust.
-        return Variant::create<TypeKind::REAL>(obj.asInt());
-      }
-      return Variant::create<TypeKind::REAL>(obj.asDouble());
+      return Variant::create<TypeKind::REAL>(dynamicToDouble(obj));
     case TypeKind::DOUBLE: {
-      if (obj.isInt()) {
-        return Variant::create<TypeKind::DOUBLE>(obj.asInt());
-      }
-      return Variant::create<TypeKind::DOUBLE>(obj.asDouble());
+      return Variant::create<TypeKind::DOUBLE>(dynamicToDouble(obj));
     }
     case TypeKind::OPAQUE: {
       return deserializeOpaque(variantobj);

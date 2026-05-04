@@ -237,6 +237,9 @@ class VectorSerde {
     /// than this causes subsequent compression attempts to be skipped. The more
     /// times compression misses the target the less frequently it is tried.
     float minCompressionRatio{0.8};
+
+    /// Minimum page size to attempt compression.
+    int32_t minCompressionPageSizeBytes{0};
   };
 
   const std::string& kind() const {
@@ -382,38 +385,6 @@ bool isRegisteredNamedVectorSerde(const std::string& kind);
 
 /// Get the vector serde identified by `serdeName`. Throws if not found.
 VectorSerde* getNamedVectorSerde(const std::string& kind);
-
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-/// Legacy overloads accepting VectorSerde::Kind for backward compatibility.
-inline void registerNamedVectorSerde(
-    VectorSerde::Kind kind,
-    std::unique_ptr<VectorSerde> serdeToRegister) {
-  registerNamedVectorSerde(
-      VectorSerde::kindName(kind), std::move(serdeToRegister));
-}
-
-inline void deregisterNamedVectorSerde(VectorSerde::Kind kind) {
-  deregisterNamedVectorSerde(VectorSerde::kindName(kind));
-}
-
-inline bool isRegisteredNamedVectorSerde(VectorSerde::Kind kind) {
-  return isRegisteredNamedVectorSerde(VectorSerde::kindName(kind));
-}
-
-inline VectorSerde* getNamedVectorSerde(VectorSerde::Kind kind) {
-  return getNamedVectorSerde(VectorSerde::kindName(kind));
-}
-
-/// Allow comparing std::string with VectorSerde::Kind for backward
-/// compatibility (e.g. serdeKind() == VectorSerde::Kind::kCompactRow).
-inline bool operator==(const std::string& lhs, VectorSerde::Kind rhs) {
-  return lhs == VectorSerde::kindName(rhs);
-}
-
-inline bool operator==(VectorSerde::Kind lhs, const std::string& rhs) {
-  return VectorSerde::kindName(lhs) == rhs;
-}
-#endif
 
 class VectorStreamGroup : public StreamArena {
  public:

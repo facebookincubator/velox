@@ -116,6 +116,19 @@ void ColumnLoader::loadInternal(
   }
 }
 
+void TransformColumnLoader::loadInternal(
+    RowSet rows,
+    ValueHook* hook,
+    vector_size_t resultSize,
+    VectorPtr* result) {
+  process::TraceContext trace("TransformColumnLoader::loadInternal");
+  VectorPtr fileResult;
+  ColumnLoader::loadInternal(rows, hook, resultSize, &fileResult);
+  if (fileResult) {
+    *result = transform_(fileResult, fieldReader_->memoryPool());
+  }
+}
+
 void DeltaUpdateColumnLoader::loadInternal(
     RowSet rows,
     ValueHook* hook,

@@ -51,6 +51,7 @@ HashTable<ignoreNullKeys>::HashTable(
     bool allowDuplicates,
     bool isJoinBuild,
     bool hasProbedFlag,
+    bool hasCountFlag,
     uint32_t minTableSizeForParallelJoinBuild,
     memory::MemoryPool* pool,
     uint64_t bloomFilterMaxSize)
@@ -78,6 +79,7 @@ HashTable<ignoreNullKeys>::HashTable(
       allowDuplicates,
       isJoinBuild,
       hasProbedFlag,
+      hasCountFlag,
       hashMode_ != HashMode::kHash,
       /*useListRowIndex=*/false,
       pool);
@@ -1055,10 +1057,6 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
     driverCtx = driverThreadCtx->driverCtx();
   }
 
-  const auto getTable = [this](size_t i) INLINE_LAMBDA {
-    return i == 0 ? this : otherTables_[i - 1].get();
-  };
-
   const auto runStep = [&](auto& steps, auto&& work, bool runInCurrentThread) {
     auto step = std::make_shared<AsyncSource<bool>>([work = std::move(work)] {
       work();
@@ -1080,13 +1078,13 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
   // concurrency issues.
   rowPartitions.reserve(numPartitions);
   for (auto i = 0; i < numPartitions; ++i) {
-    auto* table = getTable(i);
-    rowPartitions.push_back(table->rows()->createRowPartitions(*rows_->pool()));
+    rowPartitions.push_back(
+        tableAt(i)->rows()->createRowPartitions(*rows_->pool()));
   }
 
   // The parallel table partitioning step.
   for (auto i = 0; i < numPartitions; ++i) {
-    auto* table = getTable(i);
+    auto* table = tableAt(i);
     bool last = i == numPartitions - 1;
     runStep(
         partitionSteps,
@@ -1099,14 +1097,26 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
   }
   syncWorkItems(partitionSteps, parallelJoinBuildStats_.partitionTimings, true);
 
-  // The parallel table building step.
+  // The parallel table building step. Each partition collects overflow rows
+  // (rows whose target bucket falls outside its [start, end) range) along
+  // with their hashes, so the final serial re-insertion phase below does
+  // not need to recompute them.
   std::vector<std::vector<char*>> overflowPerPartition(numPartitions);
+  std::vector<std::vector<uint64_t>> overflowHashesPerPartition(numPartitions);
   for (auto i = 0; i < numPartitions; ++i) {
     bool last = i == numPartitions - 1;
     runStep(
         buildSteps,
-        [this, i, &overflowPerPartition, &rowPartitions] {
-          buildJoinPartition(i, rowPartitions, overflowPerPartition[i]);
+        [this,
+         i,
+         &overflowPerPartition,
+         &overflowHashesPerPartition,
+         &rowPartitions] {
+          buildJoinPartition(
+              i,
+              rowPartitions,
+              overflowPerPartition[i],
+              overflowHashesPerPartition[i]);
         },
         // run last partition on current thread to avoid wasting current thread
         // on just waiting
@@ -1128,7 +1138,7 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
       hashers_[i]->setBloomFilter(filter);
       for (auto j = 0; j < numPartitions; ++j) {
         bool last = j == numPartitions - 1;
-        auto* rows = getTable(j)->rows();
+        auto* rows = tableAt(j)->rows();
         rowPartitions[j]->reset();
         runStep(
             bloomFilterPartitionSteps,
@@ -1172,16 +1182,16 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
     }
   }
 
-  raw_vector<uint64_t> hashes(pool_);
+  // Serially re-insert overflow rows that didn't fit in any partition's
+  // bucket range. Hashes were captured during the parallel build phase, so
+  // we reuse them instead of re-hashing.
   for (auto i = 0; i < numPartitions; ++i) {
     auto& overflows = overflowPerPartition[i];
-    hashes.resize(overflows.size());
-    VELOX_CHECK(hashRows(
-        folly::Range<char**>(overflows.data(), overflows.size()),
-        false,
-        hashes));
-    auto table = i == 0 ? this : otherTables_[i - 1].get();
-    insertForJoin(overflows.data(), hashes.data(), overflows.size(), nullptr);
+    auto& overflowHashes = overflowHashesPerPartition[i];
+    VELOX_CHECK_EQ(overflows.size(), overflowHashes.size());
+    insertForJoin(
+        overflows.data(), overflowHashes.data(), overflows.size(), nullptr);
+    auto* table = tableAt(i);
     VELOX_CHECK_EQ(table->rows()->numRows(), table->numParallelBuildRows_);
   }
 }
@@ -1239,16 +1249,18 @@ template <bool ignoreNullKeys>
 void HashTable<ignoreNullKeys>::buildJoinPartition(
     uint8_t partition,
     const std::vector<std::unique_ptr<RowPartitions>>& rowPartitions,
-    std::vector<char*>& overflow) {
+    std::vector<char*>& overflow,
+    std::vector<uint64_t>& overflowHashes) {
   raw_vector<char*> rows(kHashBatchSize, pool_);
   raw_vector<uint64_t> hashes(kHashBatchSize, pool_);
   const int32_t numPartitions = 1 + otherTables_.size();
   TableInsertPartitionInfo partitionInfo{
       buildPartitionBounds_[partition],
       buildPartitionBounds_[partition + 1],
-      overflow};
+      overflow,
+      overflowHashes};
   for (auto i = 0; i < numPartitions; ++i) {
-    auto* table = i == 0 ? this : otherTables_[i - 1].get();
+    auto* table = tableAt(i);
     RowContainerIterator iter;
     while (
         const auto numRows = table->rows_->listPartitionRows(
@@ -1267,7 +1279,7 @@ void HashTable<true>::buildBloomFilterPartition(
     const std::vector<std::unique_ptr<RowPartitions>>& rowPartitions) {
   char* rows[kHashBatchSize];
   for (auto i = 0; i < 1 + otherTables_.size(); ++i) {
-    auto* table = i == 0 ? this : otherTables_[i - 1].get();
+    auto* table = tableAt(i);
     auto rowColumn = table->rows_->columnAt(columnIndex);
     auto* filter = checkedPointerCast<common::BigintValuesUsingBloomFilter>(
         hashers_[columnIndex]->getBloomFilter().get());
@@ -1381,7 +1393,9 @@ bool HashTable<ignoreNullKeys>::arrayPushRow(char* row, int32_t index) {
       hasDuplicates_.set();
     }
   } else if (existing) {
-    // Semijoin or a known unique build side ignores a repeat of a key.
+    if (rows_->countOffset() > 0) {
+      rows_->addCount(existing, rows_->count(row));
+    }
     return false;
   }
   table_[index] = row;
@@ -1409,7 +1423,7 @@ FOLLY_ALWAYS_INLINE void HashTable<ignoreNullKeys>::buildFullProbe(
       -static_cast<int32_t>(sizeof(normalized_key_t));
   auto insertFn = [&](int32_t /*row*/, PartitionBoundIndexType index) {
     if (partitionInfo != nullptr && !partitionInfo->inRange(index)) {
-      partitionInfo->addOverflow(inserted);
+      partitionInfo->addOverflow(inserted, hash);
       return nullptr;
     }
     storeRowPointer(index, hash, inserted);
@@ -1424,6 +1438,8 @@ FOLLY_ALWAYS_INLINE void HashTable<ignoreNullKeys>::buildFullProbe(
               RowContainer::normalizedKey(inserted)) {
             if (nextOffset_ > 0) {
               pushNext(group, inserted);
+            } else if (rows_->countOffset() > 0) {
+              rows_->addCount(group, rows_->count(inserted));
             }
             return true;
           }
@@ -1441,6 +1457,8 @@ FOLLY_ALWAYS_INLINE void HashTable<ignoreNullKeys>::buildFullProbe(
           if (compareKeys(group, inserted)) {
             if (nextOffset_ > 0) {
               pushNext(group, inserted);
+            } else if (rows_->countOffset() > 0) {
+              rows_->addCount(group, rows_->count(inserted));
             }
             return true;
           }
@@ -1545,7 +1563,7 @@ void HashTable<ignoreNullKeys>::rehash(
   for (int32_t i = 0; i <= otherTables_.size(); ++i) {
     RowContainerIterator iterator;
     int32_t numGroups;
-    auto* table = i == 0 ? this : otherTables_[i - 1].get();
+    auto* table = tableAt(i);
     do {
       numGroups = table->rows()->listRows(&iterator, kHashBatchSize, groups);
       if (!insertBatch(

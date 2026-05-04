@@ -55,3 +55,5 @@ target_link_libraries(
   cached_factory_test
   PRIVATE velox_common_base Folly::folly velox_time glog::glog GTest::gtest GTest::gtest_main
 )
+
+velox_add_library(velox_caching_test_util INTERFACE HEADERS CacheTestUtil.h)

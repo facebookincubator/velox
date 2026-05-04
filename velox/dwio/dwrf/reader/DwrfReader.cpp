@@ -602,8 +602,10 @@ int64_t DwrfRowReader::nextRowNumber() {
         const auto skipRows = getReader().randomSkip()->nextSkip();
         if (skipRows >= numStripeRows) {
           getReader().randomSkip()->consume(numStripeRows);
-          const auto numStrides = bits::divRoundUp(numStripeRows, strideSize);
-          skippedStrides_ += numStrides;
+          if (strideSize > 0) {
+            skippedStrides_ += static_cast<int64_t>(
+                bits::divRoundUp(numStripeRows, strideSize));
+          }
           goto advanceToNextStripe;
         }
       }
@@ -613,6 +615,9 @@ int64_t DwrfRowReader::nextRowNumber() {
 
     checkSkipStrides(strideSize);
     if (currentRowInStripe_ < rowsInCurrentStripe_) {
+      if (strideSize > 0 && currentRowInStripe_ % strideSize == 0) {
+        ++processedStrides_;
+      }
       nextRowNumber_ = firstRowOfStripe_[currentStripe_] + currentRowInStripe_;
       return *nextRowNumber_;
     }
@@ -705,7 +710,6 @@ void DwrfRowReader::loadCurrentStripe() {
   const auto loadUnitIdx = currentStripe_ - firstStripe_;
   currentUnit_ = castDwrfUnit(&unitLoader_->getLoadedUnit(loadUnitIdx));
   rowsInCurrentStripe_ = currentUnit_->getNumRows();
-  ++processedStrides_;
 }
 
 size_t DwrfRowReader::estimatedReaderMemory() const {

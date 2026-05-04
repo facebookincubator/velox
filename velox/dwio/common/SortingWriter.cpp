@@ -86,21 +86,12 @@ bool SortingWriter::finish() {
   return true;
 }
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
 void SortingWriter::close() {
   VELOX_CHECK(isFinishing());
   setState(State::kClosed);
   VELOX_CHECK_NULL(sortBuffer_);
   outputWriter_->close();
 }
-#else
-std::unique_ptr<FileMetadata> SortingWriter::close() {
-  VELOX_CHECK(isFinishing());
-  setState(State::kClosed);
-  VELOX_CHECK_NULL(sortBuffer_);
-  return outputWriter_->close();
-}
-#endif
 
 void SortingWriter::abort() {
   setState(State::kAborted);
@@ -123,10 +114,14 @@ uint64_t SortingWriter::reclaim(
 
   if (!isRunning() && !isFinishing()) {
     LOG(WARNING) << "Can't reclaim from a not running hive sort writer pool: "
-                 << sortPool_->name() << ", state: " << state()
-                 << "used memory: " << succinctBytes(sortPool_->usedBytes())
-                 << ", reserved memory: "
-                 << succinctBytes(sortPool_->reservedBytes());
+                 << sortPool_->name()
+                 << ", root pool: " << sortPool_->root()->name()
+                 << ", state: " << state()
+                 << ", used: " << succinctBytes(sortPool_->usedBytes())
+                 << ", reservation: "
+                 << succinctBytes(sortPool_->reservedBytes())
+                 << ", root pool reservation: "
+                 << succinctBytes(sortPool_->root()->reservedBytes());
     ++stats.numNonReclaimableAttempts;
     return 0;
   }

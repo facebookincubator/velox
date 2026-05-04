@@ -82,6 +82,10 @@ add_library(
   ${GRPC_SRCS}
   SparkQueryRunner.cpp
   SparkQueryRunnerToSqlPlanNodeVisitor.cpp
+  # Headers listed as sources (not FILE_SET) because they include generated
+  # proto files that only exist after the custom_command runs.
+  SparkQueryRunner.h
+  SparkQueryRunnerToSqlPlanNodeVisitor.h
 )
 
 target_include_directories(velox_spark_query_runner PUBLIC ${PROJECT_BINARY_DIR}/spark/connect/)
@@ -118,3 +122,14 @@ target_link_libraries(
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()
+
+velox_add_library(
+  velox_spark_aggregation_fuzzer_lib
+  INTERFACE
+  HEADERS
+  AddSubtractArgTypesGenerator.h
+  DivideArgTypesGenerator.h
+  MakeTimestampArgTypesGenerator.h
+  MultiplyArgTypesGenerator.h
+  UnscaledValueArgTypesGenerator.h
+)

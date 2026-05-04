@@ -16,7 +16,7 @@
 #include "velox/exec/OutputBufferManager.h"
 #include <folly/system/HardwareConcurrency.h>
 #include <gtest/gtest.h>
-#include "folly/experimental/EventCount.h"
+#include "folly/synchronization/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/Task.h"
@@ -39,6 +39,10 @@ struct TestParam {
   TestParam(PartitionedOutputNode::Kind _outputKind, std::string _serdeKind)
       : outputKind(_outputKind), serdeKind(_serdeKind) {}
 };
+
+inline void PrintTo(const TestParam& param, std::ostream* os) {
+  *os << fmt::format("{}_{}", param.outputKind, param.serdeKind);
+}
 
 class OutputBufferManagerTest : public testing::Test {
  protected:

@@ -1054,9 +1054,11 @@ TEST(VariantOpaqueTest, opaque) {
 }
 
 void testSerDe(const Variant& value) {
-  auto serialized = value.serialize();
-  auto copy = Variant::create(serialized);
-
+  auto dynamic = value.serialize();
+  auto copy = Variant::create(dynamic);
+  ASSERT_EQ(value, copy);
+  auto json = folly::toJson(value.serialize());
+  copy = Variant::create(folly::parseJson(json));
   ASSERT_EQ(value, copy);
 }
 
@@ -1085,6 +1087,18 @@ TEST(VariantSerializationTest, serialize) {
   testSerDe(Variant(static_cast<int64_t>(1234567)));
   testSerDe(Variant(static_cast<float>(1.2f)));
   testSerDe(Variant(static_cast<double>(1.234)));
+  testSerDe(
+      Variant(static_cast<float>(std::numeric_limits<float>::quiet_NaN())));
+  testSerDe(
+      Variant(static_cast<double>(std::numeric_limits<double>::quiet_NaN())));
+  testSerDe(
+      Variant(static_cast<float>(std::numeric_limits<float>::signaling_NaN())));
+  testSerDe(Variant(
+      static_cast<double>(std::numeric_limits<double>::signaling_NaN())));
+  testSerDe(
+      Variant(static_cast<float>(std::numeric_limits<float>::infinity())));
+  testSerDe(
+      Variant(static_cast<double>(std::numeric_limits<double>::infinity())));
   testSerDe(Variant("This is a test."));
   testSerDe(Variant::binary("This is a test."));
   testSerDe(Variant(Timestamp(1, 2)));
@@ -1128,6 +1142,9 @@ TEST(VariantSerializationTest, serializeArrayTypes) {
           Variant(1.5),
           Variant(2.7),
           Variant(-3.14),
+          Variant(std::numeric_limits<double>::quiet_NaN()),
+          Variant(std::numeric_limits<double>::signaling_NaN()),
+          Variant(std::numeric_limits<double>::infinity()),
       }));
 
   // Array with boolean values.
@@ -1688,6 +1705,30 @@ TEST(VariantTest, toString) {
   EXPECT_EQ(
       Variant::row({1, 2, 3}).toString(ROW({INTEGER(), INTEGER(), INTEGER()})),
       "[1,2,3]");
+
+  // Non-decimal HUGEINT types (e.g., IPADDRESS, UUID).
+  auto hugeintType = HugeintType::create();
+  EXPECT_EQ(
+      Variant::create<TypeKind::HUGEINT>(int128_t(42)).toString(hugeintType),
+      "42");
+  EXPECT_EQ(
+      Variant::create<TypeKind::HUGEINT>(
+          HugeInt::build(0x0123456789ABCDEF, 0xFEDCBA9876543210))
+          .toString(hugeintType),
+      "1512366075204170947332355369683137040");
+}
+
+TEST(VariantTest, toJsonHugeint) {
+  auto hugeintType = HugeintType::create();
+  auto small = Variant::create<TypeKind::HUGEINT>(int128_t(42));
+  auto large = Variant::create<TypeKind::HUGEINT>(
+      HugeInt::build(0x0123456789ABCDEF, 0xFEDCBA9876543210));
+
+  EXPECT_EQ(small.toJson(hugeintType), "42");
+  EXPECT_EQ(large.toJson(hugeintType), "1512366075204170947332355369683137040");
+
+  EXPECT_EQ(small.toJsonUnsafe(), "42");
+  EXPECT_EQ(large.toJsonUnsafe(), "1512366075204170947332355369683137040");
 }
 
 template <typename T>

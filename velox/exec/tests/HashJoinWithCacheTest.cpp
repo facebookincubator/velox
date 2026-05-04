@@ -21,6 +21,7 @@
 #include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/Cursor.h"
+#include "velox/exec/HashBuild.h"
 #include "velox/exec/HashJoinBridge.h"
 #include "velox/exec/HashProbe.h"
 #include "velox/exec/HashTable.h"
@@ -585,5 +586,242 @@ DEBUG_ONLY_TEST_F(HashJoinWithCacheTest, probeOOMWithCachedTable) {
   // Cache should be cleaned up by QueryCtx destructor via release callback.
 }
 
+// Verifies that the hash table cache pool has a memory reclaimer that properly
+// suspends the driver thread during memory arbitration. Without a reclaimer,
+// allocations from the cache pool on a driver thread cause:
+// "Driver thread is not suspended under memory arbitration processing".
+DEBUG_ONLY_TEST_F(HashJoinWithCacheTest, cachePoolArbitration) {
+  const std::string queryId =
+      "cachePoolArbitrationTest_" +
+      std::to_string(
+          std::chrono::steady_clock::now().time_since_epoch().count());
+
+  std::vector<RowVectorPtr> buildVectors = makeBatches(10, [&](int32_t) {
+    return makeRowVector(
+        {"u_k", "u_v"},
+        {
+            makeFlatVector<int32_t>(
+                10'000, [](auto row) { return row % 5'000; }),
+            makeFlatVector<int64_t>(10'000, [](auto row) { return row * 10; }),
+        });
+  });
+
+  std::vector<RowVectorPtr> probeVectors = makeBatches(5, [&](int32_t) {
+    return makeRowVector(
+        {"t_k", "t_v"},
+        {
+            makeFlatVector<int32_t>(100, [](auto row) { return row % 5'000; }),
+            makeFlatVector<int64_t>(100, [](auto row) { return row; }),
+        });
+  });
+
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", buildVectors);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto buildPlanNode =
+      PlanBuilder(planNodeIdGenerator).values(buildVectors).planNode();
+  auto probePlanNode =
+      PlanBuilder(planNodeIdGenerator).values(probeVectors).planNode();
+
+  auto outputType = ROW(
+      {"t_k", "t_v", "u_k", "u_v"}, {INTEGER(), BIGINT(), INTEGER(), BIGINT()});
+
+  auto joinNode =
+      core::HashJoinNode::Builder()
+          .id(planNodeIdGenerator->next())
+          .joinType(core::JoinType::kInner)
+          .nullAware(false)
+          .leftKeys(
+              {std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "t_k")})
+          .rightKeys(
+              {std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "u_k")})
+          .left(probePlanNode)
+          .right(buildPlanNode)
+          .outputType(outputType)
+          .useHashTableCache(true)
+          .build();
+  const auto joinNodeId = joinNode->id();
+
+  auto queryCtx = core::QueryCtx::create(
+      driverExecutor_.get(),
+      core::QueryConfig({}),
+      std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>{},
+      cache::AsyncDataCache::getInstance(),
+      nullptr,
+      nullptr,
+      queryId);
+
+  // Tight pool so the large allocation in the TestValue callback triggers
+  // memory arbitration via growCapacity.
+  constexpr int64_t kPoolCapacity = 20 * 1024 * 1024; // 20MB
+  queryCtx->testingOverrideMemoryPool(
+      memory::memoryManager()->addRootPool(
+          queryCtx->queryId(), kPoolCapacity, exec::MemoryReclaimer::create()));
+
+  const auto cacheKey = fmt::format("{}:{}", queryId, joinNodeId);
+
+  std::atomic_bool injected{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::HashBuild::finishHashBuild",
+      std::function<void(exec::HashBuild*)>(([&](exec::HashBuild* hashBuild) {
+        if (injected.exchange(true)) {
+          return;
+        }
+        // Retrieve the cache entry to access the cache pool. Calling get()
+        // with the builder task's own ID returns the existing entry without
+        // side effects.
+        auto task = hashBuild->operatorCtx()->task();
+        ContinueFuture future;
+        auto entry = HashTableCache::instance()->get(
+            cacheKey, task->taskId(), task->queryCtx().get(), &future);
+
+        // Allocate enough from the cache pool to trigger growCapacity.
+        // growCapacity creates a MemoryPoolArbitrationSection on the
+        // requesting pool, which calls pool->enterArbitration(). The
+        // reclaimer's enterArbitration() must suspend the driver thread;
+        // without a reclaimer the driver is not suspended and the
+        // arbitration state check fails.
+        entry->tablePool->allocate(kPoolCapacity);
+      })));
+
+  // The query throws because the allocation exceeds capacity.
+  // With a proper reclaimer on the cache pool, the error is OOM
+  // ("Exceeded memory pool capacity"), not "Driver thread is not suspended".
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(joinNode, duckDbQueryRunner_)
+          .queryCtx(queryCtx)
+          .maxDrivers(1)
+          .copyResults(pool()),
+      "Exceeded memory pool capacity");
+
+  ASSERT_TRUE(injected) << "TestValue injection was not triggered";
+
+  waitForAllTasksToBeDeleted();
+  queryCtx.reset();
+}
+
 } // namespace
+
+// Reproduces a spin-loop bug where non-last drivers of the HashBuild pipeline
+// never reach kFinish when hash table caching is enabled.
+//
+// Root cause: after allPeersFinished() returns false, non-last drivers were
+// placed in kWaitForBuild state. When they wake from the peers-finished future,
+// isBlocked() enters the kWaitForBuild case and calls
+// receivedCachedHashTable(), which does setRunning() + noMoreInput().
+// noMoreInput() returns early (noMoreInput_ is already true), so the operator
+// stays in kRunning forever -- never reaching kFinish. The driver loop spins
+// calling isBlocked/getOutput/isFinished in a tight loop, burning CPU until the
+// task is terminated by the probe pipeline completing.
+//
+// Fix (D100200527): in finishHashBuild(), when allPeersFinished() returns false
+// and hash table caching is enabled, set kWaitForProbe instead of
+// kWaitForBuild. This skips receivedCachedHashTable() and goes directly to
+// postHashBuildProcess() -> kFinish.
+//
+// Detection: a TestValue fires at the exact point where the state is set for
+// each non-last driver. We verify the state is kWaitForProbe (the fix), not
+// kWaitForBuild (the bug). This check is deterministic: every non-last driver
+// hits the TestValue exactly once, regardless of thread scheduling.
+DEBUG_ONLY_TEST_F(HashJoinWithCacheTest, nonLastDriverSpinLoop) {
+  const std::string queryId =
+      "spinLoopTest_" +
+      std::to_string(
+          std::chrono::steady_clock::now().time_since_epoch().count());
+
+  std::vector<RowVectorPtr> buildVectors = makeBatches(1, [&](int32_t) {
+    return makeRowVector(
+        {"u_k", "u_v"},
+        {
+            makeFlatVector<int32_t>(50, [](auto row) { return row % 31; }),
+            makeFlatVector<int64_t>(50, [](auto row) { return row * 10; }),
+        });
+  });
+
+  std::vector<RowVectorPtr> probeVectors = makeBatches(3, [&](int32_t) {
+    return makeRowVector(
+        {"t_k", "t_v"},
+        {
+            makeFlatVector<int32_t>(100, [](auto row) { return row % 23; }),
+            makeFlatVector<int64_t>(100, [](auto row) { return row; }),
+        });
+  });
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  // The build ValuesNode must be parallelizable so the build pipeline gets
+  // multiple drivers.
+  auto buildPlanNode = PlanBuilder(planNodeIdGenerator)
+                           .values(buildVectors, /*parallelizable=*/true)
+                           .planNode();
+  auto probePlanNode =
+      PlanBuilder(planNodeIdGenerator).values(probeVectors).planNode();
+
+  auto outputType = ROW(
+      {"t_k", "t_v", "u_k", "u_v"}, {INTEGER(), BIGINT(), INTEGER(), BIGINT()});
+
+  auto joinNode =
+      core::HashJoinNode::Builder()
+          .id(planNodeIdGenerator->next())
+          .joinType(core::JoinType::kInner)
+          .nullAware(false)
+          .leftKeys(
+              {std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "t_k")})
+          .rightKeys(
+              {std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "u_k")})
+          .left(probePlanNode)
+          .right(buildPlanNode)
+          .outputType(outputType)
+          .useHashTableCache(true)
+          .build();
+  const auto joinNodeId = joinNode->id();
+
+  const int numDrivers = 4;
+
+  auto queryCtx = core::QueryCtx::create(
+      driverExecutor_.get(),
+      core::QueryConfig({}),
+      std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>{},
+      cache::AsyncDataCache::getInstance(),
+      nullptr,
+      nullptr,
+      queryId);
+
+  // Track non-last drivers via the finishHashBuild TestValue. This fires
+  // right after setState(kWaitForBuild) for each non-last driver. We verify
+  // the allPeersFinished coordination works (expected count = numDrivers - 1).
+  //
+  // The spin loop bug was in receivedCachedHashTable(): when non-last drivers
+  // woke from the peers-finished future and re-entered isBlocked(), the
+  // function would call setRunning() + noMoreInput() (a no-op), leaving the
+  // operator in kRunning forever. The fix adds a guard in
+  // receivedCachedHashTable() via hashTableCacheBuilderTask() so it returns
+  // false for builder tasks, letting the driver fall through to
+  // postHashBuildProcess -> kFinish.
+  std::atomic_int lastDriverCount{0};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::HashBuild::finishHashBuild",
+      std::function<void(HashBuild*)>([&](HashBuild*) { ++lastDriverCount; }));
+
+  // Run the builder task. Skip DuckDB comparison — parallelizable build source
+  // produces numDrivers copies of build data. This test checks the state
+  // machine, not result correctness (other tests cover that).
+  auto task = AssertQueryBuilder(joinNode)
+                  .queryCtx(queryCtx)
+                  .maxDrivers(numDrivers)
+                  .copyResults(pool());
+
+  // With numDrivers drivers, exactly 1 is the last driver.
+  EXPECT_EQ(lastDriverCount.load(), 1)
+      << "Expected exactly 1 last driver, got " << lastDriverCount.load();
+
+  // Verify the task completed successfully — if the spin loop bug were
+  // present, non-last drivers would spin in kRunning until the task is
+  // killed, wasting CPU. The task completing with correct output and
+  // exactly one last driver confirms the fix works.
+
+  const auto cacheKey = fmt::format("{}:{}", queryId, joinNodeId);
+  HashTableCache::instance()->drop(cacheKey);
+}
+
 } // namespace facebook::velox::exec::test

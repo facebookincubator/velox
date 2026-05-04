@@ -114,6 +114,13 @@ class HashBuild final : public Operator {
   bool isRunning() const;
   void checkRunning() const;
 
+  // Returns true if this task is the builder task for the hash table cache
+  // entry (i.e. the task that builds the table, as opposed to a waiter task
+  // that reuses a cached table built by another task).
+  bool hashTableCacheBuilderTask() const {
+    return cacheEntry_->builderTaskId == taskId();
+  }
+
   // Invoked to set up hash table to build.
   void setupTable();
 
@@ -267,6 +274,8 @@ class HashBuild final : public Operator {
   const core::JoinType joinType_;
 
   const bool nullAware_;
+
+  const bool nullAsValue_;
 
   // Sets to true for join type which needs right side join processing. The hash
   // table spiller then needs to record the probed flag, and the spilled input

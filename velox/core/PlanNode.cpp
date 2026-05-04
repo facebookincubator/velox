@@ -18,6 +18,8 @@
 #include "velox/common/Casts.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/core/PlanNode.h"
+
+#include "velox/common/EnumDefine.h"
 #include "velox/core/TableWriteTraits.h"
 #include "velox/vector/VectorSaver.h"
 
@@ -909,6 +911,13 @@ class SummarizeExprVisitor : public ITypedExprVisitor {
     myCtx.expressionCounts()["lambda"]++;
     expr.body()->accept(*this, ctx);
   }
+
+  void visit(const NullIfTypedExpr& expr, ITypedExprVisitorContext& ctx)
+      const override {
+    auto& myCtx = static_cast<Context&>(ctx);
+    myCtx.expressionCounts()["nullif"]++;
+    visitInputs(expr, ctx);
+  }
 };
 
 void appendCounts(
@@ -1555,7 +1564,8 @@ void AbstractJoinNode::validate() const {
   // Output of left semi and anti joins cannot include columns from the right
   // side.
   bool outputMayIncludeRightColumns =
-      !(isLeftSemiFilterJoin() || isLeftSemiProjectJoin() || isAntiJoin());
+      !(isLeftSemiFilterJoin() || isLeftSemiProjectJoin() || isAntiJoin() ||
+        isCountingJoin());
 
   for (auto i = 0; i < numOutputColumns; ++i) {
     auto name = outputType_->nameOf(i);
@@ -1616,6 +1626,8 @@ const auto& joinTypeNames() {
       {JoinType::kLeftSemiProject, "LEFT SEMI (PROJECT)"},
       {JoinType::kRightSemiProject, "RIGHT SEMI (PROJECT)"},
       {JoinType::kAnti, "ANTI"},
+      {JoinType::kCountingAnti, "COUNTING ANTI"},
+      {JoinType::kCountingLeftSemiFilter, "COUNTING LEFT SEMI (FILTER)"},
   };
   return kNames;
 }
@@ -1671,11 +1683,15 @@ void HashJoinNode::addDetails(std::stringstream& stream) const {
   if (nullAware_) {
     stream << ", null aware";
   }
+  if (nullAsValue_) {
+    stream << ", null as value";
+  }
 }
 
 folly::dynamic HashJoinNode::serialize() const {
   auto obj = serializeBase();
   obj["nullAware"] = nullAware_;
+  obj["nullAsValue"] = nullAsValue_;
   obj["useHashTableCache"] = useHashTableCache_;
   return obj;
 }
@@ -1692,6 +1708,7 @@ PlanNodePtr HashJoinNode::create(const folly::dynamic& obj, void* context) {
   VELOX_CHECK_EQ(2, sources.size());
 
   auto nullAware = obj["nullAware"].asBool();
+  auto nullAsValue = obj.getDefault("nullAsValue", false).asBool();
   auto useHashTableCache = obj.getDefault("useHashTableCache", false).asBool();
   auto leftKeys = deserializeFields(obj["leftKeys"], context);
   auto rightKeys = deserializeFields(obj["rightKeys"], context);
@@ -1713,7 +1730,8 @@ PlanNodePtr HashJoinNode::create(const folly::dynamic& obj, void* context) {
       sources[0],
       sources[1],
       outputType,
-      useHashTableCache);
+      useHashTableCache,
+      nullAsValue);
 }
 
 MergeJoinNode::MergeJoinNode(

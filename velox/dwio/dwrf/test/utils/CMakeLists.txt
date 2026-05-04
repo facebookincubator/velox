@@ -13,6 +13,7 @@
 # limitations under the License.
 
 add_library(velox_dwrf_test_utils E2EWriterTestUtil.cpp)
+velox_add_test_headers(velox_dwrf_test_utils E2EWriterTestUtil.h)
 
 target_link_libraries(
   velox_dwrf_test_utils

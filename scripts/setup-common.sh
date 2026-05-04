@@ -24,6 +24,7 @@ VELOX_ARROW_CMAKE_PATCH=${VELOX_ARROW_CMAKE_PATCH:-""} # avoid error due to +u
 CMAKE_BUILD_TYPE="${BUILD_TYPE:-Release}"
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 BUILD_GEOS="${BUILD_GEOS:-true}"
+BUILD_S2GEOMETRY="${BUILD_S2GEOMETRY:-true}"
 BUILD_FAISS="${BUILD_FAISS:-true}"
 BUILD_DUCKDB="${BUILD_DUCKDB:-true}"
 EXTRA_ARROW_OPTIONS=${EXTRA_ARROW_OPTIONS:-""}
@@ -121,7 +122,7 @@ function install_protobuf {
 }
 
 function install_grpc {
-  github_checkout grpc/grpc "${GRPC_VERSION}" --depth 1
+  wget_and_untar https://github.com/grpc/grpc/archive/refs/tags/v"${GRPC_VERSION}".tar.gz grpc
   cmake_install_dir grpc \
     -DgRPC_BUILD_TESTS=OFF \
     -DgRPC_ABSL_PROVIDER=package \
@@ -280,6 +281,16 @@ function install_geos {
   fi
 }
 
+function install_s2geometry {
+  if [[ $BUILD_S2GEOMETRY == "true" ]]; then
+    wget_and_untar https://github.com/google/s2geometry/archive/refs/tags/v"${S2GEOMETRY_VERSION}".tar.gz s2geometry
+    # Apply the same GCC 12 patch used by the BUNDLED CMake resolver.
+    patch -p1 -d "${DEPENDENCY_DIR}/s2geometry" < \
+      "${SCRIPT_DIR}/../CMake/resolve_dependency_modules/s2geometry/s2geometry-gcc12-max.patch" || true
+    cmake_install_dir s2geometry -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
+  fi
+}
+
 function install_faiss_deps {
   echo "Unsupported platform for faiss"
 }
@@ -335,19 +346,19 @@ function install_gcs_sdk_cpp {
   install_grpc
 
   # crc32
-  github_checkout google/crc32c "${CRC32_VERSION}" --depth 1
+  wget_and_untar https://github.com/google/crc32c/archive/refs/tags/"${CRC32_VERSION}".tar.gz crc32c
   cmake_install_dir crc32c \
     -DCRC32C_BUILD_TESTS=OFF \
     -DCRC32C_BUILD_BENCHMARKS=OFF \
     -DCRC32C_USE_GLOG=OFF
 
   # nlohmann json
-  github_checkout nlohmann/json "${NLOHMAN_JSON_VERSION}" --depth 1
+  wget_and_untar https://github.com/nlohmann/json/archive/refs/tags/v"${NLOHMAN_JSON_VERSION}".tar.gz json
   cmake_install_dir json \
     -DJSON_BuildTests=OFF
 
   # google-cloud-cpp
-  github_checkout googleapis/google-cloud-cpp "${GOOGLE_CLOUD_CPP_VERSION}" --depth 1
+  wget_and_untar https://github.com/googleapis/google-cloud-cpp/archive/refs/tags/v"${GOOGLE_CLOUD_CPP_VERSION}".tar.gz google-cloud-cpp
   cmake_install_dir google-cloud-cpp \
     -DGOOGLE_CLOUD_CPP_ENABLE_EXAMPLES=OFF \
     -DGOOGLE_CLOUD_CPP_ENABLE=storage

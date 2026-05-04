@@ -63,6 +63,73 @@ velox_add_library(
   WidthBucketArray.cpp
   Zip.cpp
   ZipWith.cpp
+  HEADERS
+  Arithmetic.h
+  ArithmeticImpl.h
+  ArrayConstructor.h
+  ArrayFunctions.h
+  ArraySort.h
+  ArraySubset.h
+  BinaryFunctions.h
+  BingTileFunctions.h
+  Bitwise.h
+  Cardinality.h
+  Comparisons.h
+  DataSizeFunctions.h
+  DateTimeFunctions.h
+  DateTimeImpl.h
+  DecimalFunctions.h
+  DistanceFunctions.h
+  DotProduct.h
+  EnumFunctions.h
+  Fail.h
+  FloatingPointFunctions.h
+  GeometryFunctions.h
+  GreatestLeast.h
+  HyperLogLogFunctions.h
+  IPAddressFunctions.h
+  InPredicate.h
+  IntegerFunctions.h
+  JsonFunctions.h
+  KHyperLogLogFunctions.h
+  L2Norm.h
+  Map.h
+  MapAppend.h
+  MapExcept.h
+  MapFunctions.h
+  MapIntersect.h
+  MapKeysByTopNValues.h
+  MapKeysOverlap.h
+  MapNormalize.h
+  MapSubset.h
+  MapTopN.h
+  MapTopNImpl.h
+  MapTopNKeys.h
+  MapTopNValues.h
+  MapTrimValues.h
+  MapUpdate.h
+  MapValuesInRange.h
+  MultimapFromEntries.h
+  Probability.h
+  QDigestFunctions.h
+  Rand.h
+  Reduce.h
+  RegexpReplace.h
+  RegexpSplit.h
+  RemapKeys.h
+  S2Functions.h
+  SetDigestFunctions.h
+  SfmSketchFunctions.h
+  SplitPart.h
+  SplitToMap.h
+  SplitToMultiMap.h
+  StringFunctions.h
+  TDigestFunctions.h
+  URIParser.h
+  URLFunctions.h
+  UuidFunctions.h
+  WidthBucketArray.h
+  WordStem.h
 )
 
 velox_link_libraries(
@@ -87,7 +154,14 @@ endif()
 
 if(VELOX_ENABLE_GEO)
   add_subdirectory(geospatial)
-  velox_link_libraries(velox_functions_prestosql_impl velox_functions_geo)
+
+  # S2 cell operations are isolated in a separate library to prevent a
+  # nallocx symbol conflict between s2geometry's malloc_extension.h and
+  # folly's MallocImpl.h.
+  velox_add_library(velox_s2_cell_operations S2CellOperations.cpp HEADERS S2CellOperations.h)
+  velox_link_libraries(velox_s2_cell_operations s2::s2 GEOS::geos)
+
+  velox_link_libraries(velox_functions_prestosql_impl velox_functions_geo velox_s2_cell_operations)
 endif()
 
 if(NOT VELOX_MONO_LIBRARY)

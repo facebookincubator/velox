@@ -59,13 +59,18 @@ WindowTestBase::QueryInfo WindowTestBase::buildStreamingWindowQuery(
   auto windowExpr = duckdb::parseWindowExpr(functionSql, {});
 
   // Extract the partition by keys.
-  for (const auto& partition : windowExpr.partitionBy) {
+  for (const auto& partition : windowExpr->partitionKeys()) {
     orderByClauses.push_back(partition->toString() + " NULLS FIRST");
   }
 
   // Extract the order by keys.
-  for (const auto& clause : windowExpr.orderBy) {
-    orderByClauses.push_back(clause.toString());
+  for (const auto& sortKey : windowExpr->orderByKeys()) {
+    orderByClauses.push_back(
+        fmt::format(
+            "{} {} NULLS {}",
+            sortKey.expr->toString(),
+            (sortKey.ascending ? "ASC" : "DESC"),
+            (sortKey.nullsFirst ? "FIRST" : "LAST")));
   }
 
   // Sort the input data before streaming window.

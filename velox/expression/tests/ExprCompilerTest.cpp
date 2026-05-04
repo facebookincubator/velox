@@ -290,7 +290,7 @@ TEST_F(ExprCompilerTest, customTypeConstant) {
 TEST_F(ExprCompilerTest, rewrites) {
   auto rowType = ROW({"c0", "c1"}, {ARRAY(VARCHAR()), BIGINT()});
   auto arraySortSql =
-      "array_sort(c0, (x, y) -> if(length(x) < length(y), -1, if(length(x) > length(y), 1, 0)))";
+      "array_sort(c0, (x, y) -> if(length(x) < length(y), (-1)::integer, if(length(x) > length(y), 1::integer, 0::integer)))";
 
   ASSERT_NO_THROW(
       std::make_unique<ExprSet>(

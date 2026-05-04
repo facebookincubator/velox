@@ -47,6 +47,7 @@ class FileSink : public Closeable {
     MetricsLogPtr metricLogger{MetricsLog::voidLog()};
     IoStatistics* stats{nullptr};
     velox::IoStats* fileSystemStats{nullptr};
+    std::unordered_map<std::string, std::string> storageParameters{};
   };
 
   FileSink(std::string name, const Options& options)

@@ -21,7 +21,7 @@
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
-#include "velox/connectors/hive/HiveIndexReader.h"
+#include "velox/connectors/hive/IndexReader.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/core/PlanNode.h"
 #include "velox/dwio/common/ScanSpec.h"
@@ -33,12 +33,12 @@ namespace facebook::velox::connector::hive {
 
 class HiveConfig;
 
-/// HiveIndexSource provides index lookup for Hive tables.
-/// Currently supports Nimble file format with TabletIndex for efficient
-/// key-based stripe lookups.
+/// Provides index lookup for Hive-metastore-backed tables.
 ///
-/// NOTE: This is a scaffold implementation that assumes a single Nimble file.
-/// The user may need to optimize and extend this for production use cases.
+/// Owns format-agnostic orchestration: remaining filter evaluation, output
+/// projection, and (in future) partition routing. Delegates format-specific
+/// reads to either the built-in FileIndexReader (for Nimble) or external
+/// SplitIndexReader implementations registered via IndexReaderFactoryRegistry.
 class HiveIndexSource : public IndexSource,
                         public std::enable_shared_from_this<HiveIndexSource> {
  public:
@@ -66,10 +66,6 @@ class HiveIndexSource : public IndexSource,
 
   memory::MemoryPool* pool() const {
     return pool_;
-  }
-
-  uint32_t maxRowsPerIndexRequest() const {
-    return maxRowsPerIndexRequest_;
   }
 
   const RowTypePtr& outputType() const {
@@ -116,9 +112,51 @@ class HiveIndexSource : public IndexSource,
       std::vector<std::string>& readColumnNames,
       std::vector<TypePtr>& readColumnTypes);
 
-  // Creates HiveIndexReader for the splits.
-  void createHiveIndexReader(
-      std::vector<std::shared_ptr<const HiveConnectorSplit>> splits);
+  // Creates a UnionResultIterator that unions results from all readers.
+  std::shared_ptr<ResultIterator> createUnionLookupIterator(
+      const Request& request,
+      const SplitIndexReader::Options& options);
+
+  // Creates a SplitIndexReader using a registered IndexReaderFactory.
+  void createCustomIndexReader(
+      const IndexReaderFactory& factory,
+      std::shared_ptr<const HiveConnectorSplit> split);
+
+  // Creates a FileIndexReader for a single split.
+  void createFileIndexReader(std::shared_ptr<const HiveConnectorSplit> split);
+
+  // Per-iteration timing breakdown for index lookups.
+  struct IterationStats {
+    uint64_t setupWallNs{0};
+    uint64_t setupCpuNs{0};
+    uint64_t readWallNs{0};
+    uint64_t readCpuNs{0};
+    uint64_t outputWallNs{0};
+    uint64_t outputCpuNs{0};
+    uint64_t filterWallNs{0};
+    uint64_t filterCpuNs{0};
+
+    static constexpr std::string_view kConnectorLookupWallNanos{
+        "connectorLookupWallNanos"};
+    static constexpr std::string_view kConnectorResultPrepareCpuNanos{
+        "connectorResultPrepareCpuNanos"};
+    static constexpr std::string_view kIndexSetupWallNanos{
+        "connectorIndexSetupWallNanos"};
+    static constexpr std::string_view kIndexSetupCpuNanos{
+        "connectorIndexSetupCpuNanos"};
+    static constexpr std::string_view kIndexReadWallNanos{
+        "connectorIndexReadWallNanos"};
+    static constexpr std::string_view kIndexReadCpuNanos{
+        "connectorIndexReadCpuNanos"};
+    static constexpr std::string_view kPostFilterWallNanos{
+        "connectorPostFilterWallNanos"};
+    static constexpr std::string_view kPostFilterCpuNanos{
+        "connectorPostFilterCpuNanos"};
+  };
+
+  // Records per-iteration timing breakdown using addOperatorRuntimeStats to
+  // preserve per-call count/min/max granularity.
+  void recordIterationStats(const IterationStats& iterationStats);
 
   FileHandleFactory* const fileHandleFactory_;
   ConnectorQueryCtx* const connectorQueryCtx_;
@@ -134,7 +172,7 @@ class HiveIndexSource : public IndexSource,
 
   // All index lookup conditions including equal lookup keys converted to
   // EqualIndexLookupConditions and original non-filter index lookup conditions.
-  // This is passed to HiveIndexReader.
+  // This is passed to FileIndexReader.
   std::vector<core::IndexLookupConditionPtr> indexLookupConditions_;
 
   // Filters for pushdown. Includes subfield filters from table handle and
@@ -168,14 +206,19 @@ class HiveIndexSource : public IndexSource,
   std::shared_ptr<common::ScanSpec> scanSpec_;
   // Output type for the index reader.
   RowTypePtr readerOutputType_;
-  /// Index reader created by addSplits().
-  std::unique_ptr<HiveIndexReader> indexReader_;
+  /// All index readers (both built-in and external). FileIndexReader
+  /// (Nimble) and external readers both implement SplitIndexReader.
+  /// Created by addSplits().
+  std::vector<std::unique_ptr<SplitIndexReader>> readers_;
 
   // Cached empty output vector.
   RowVectorPtr emptyOutput_;
 
   std::shared_ptr<io::IoStatistics> ioStatistics_;
   std::shared_ptr<IoStats> ioStats_;
+
+  // Per-call timing stats accumulated via addOperatorRuntimeStats().
+  std::unordered_map<std::string, RuntimeMetric> runtimeStats_;
 };
 
 } // namespace facebook::velox::connector::hive

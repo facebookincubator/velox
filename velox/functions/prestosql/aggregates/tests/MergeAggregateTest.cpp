@@ -20,6 +20,7 @@
 #include "velox/functions/lib/TDigest.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/lib/sfm/SfmSketch.h"
+#include "velox/functions/prestosql/aggregates/TDigestAccumulator.h"
 #include "velox/functions/prestosql/types/QDigestRegistration.h"
 #include "velox/functions/prestosql/types/QDigestType.h"
 #include "velox/functions/prestosql/types/SfmSketchRegistration.h"
@@ -32,6 +33,16 @@ using namespace facebook::velox::exec::test;
 using namespace facebook::velox::functions::aggregate::test;
 using namespace facebook::velox::functions::qdigest;
 using SfmSketchIn = facebook::velox::functions::sfm::SfmSketch;
+
+// Verify that TDigestAccumulator has a single, consistent definition. A
+// duplicate struct in the same namespace with a different layout would cause an
+// ODR violation, leading to memory corruption and SIGSEGV during aggregate
+// cleanup (see D101577660).
+static_assert(
+    sizeof(facebook::velox::aggregate::prestosql::TDigestAccumulator) ==
+    sizeof(double) +
+        sizeof(facebook::velox::functions::TDigest<
+               facebook::velox::StlAllocator<double>>));
 
 namespace facebook::velox::aggregate::test {
 namespace {

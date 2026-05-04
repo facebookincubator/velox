@@ -28,6 +28,7 @@ enum class ExprKind : int32_t {
   kConstant = 6,
   kConcat = 7,
   kLambda = 8,
+  kNullIf = 9,
 };
 
 VELOX_DECLARE_ENUM_NAME(ExprKind);
@@ -99,6 +100,10 @@ class ITypedExpr : public ISerializable {
 
   bool isLambdaKind() const {
     return kind_ == ExprKind::kLambda;
+  }
+
+  bool isNullIfKind() const {
+    return kind_ == ExprKind::kNullIf;
   }
 
   template <typename T>

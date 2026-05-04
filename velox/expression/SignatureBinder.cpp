@@ -344,7 +344,11 @@ bool SignatureBinder::tryBindVariablesWithCoercion(
         typeSignature.parameters().empty(),
         "Variables with parameters are not supported");
     const auto& variable = variableIt->second;
-    VELOX_CHECK(variable.isTypeParameter(), "Not expecting integer variable");
+    if (!variable.isTypeParameter()) {
+      // Integer variables (e.g. decimal precision and scale) are bound
+      // later by tryBind. Skip them here.
+      return true;
+    }
 
     if (!variable.isEligibleType(*actualType)) {
       return false;
@@ -406,7 +410,7 @@ bool SignatureBinderBase::tryBind(
   const auto& baseName = typeSignature.baseName();
   auto typeName = boost::algorithm::to_upper_copy(baseName);
   if (!boost::algorithm::iequals(typeName, actualType->name())) {
-    if (allowCoercion) {
+    if (allowCoercion && typeSignature.parameters().empty()) {
       if (auto availableCoercion =
               TypeCoercer::coerceTypeBase(actualType, typeName)) {
         coercion = availableCoercion.value();

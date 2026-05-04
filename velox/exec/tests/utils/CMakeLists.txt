@@ -29,9 +29,38 @@ add_library(
   TableScanTestBase.cpp
   TestIndexStorageConnector.cpp
   TpchQueryBuilder.cpp
+  TpcdsQueryBuilder.cpp
+  VeloxPlanLoader.cpp
   VectorTestUtil.cpp
   PortUtil.cpp
   SerializedPageUtil.cpp
+)
+velox_add_test_headers(
+  velox_exec_test_lib
+  AggregationResolver.h
+  ArbitratorTestUtil.h
+  AssertQueryBuilder.h
+  ExpressionBuilder.h
+  FilterToExpression.h
+  HashJoinTestBase.h
+  HiveConnectorTestBase.h
+  IndexLookupJoinTestBase.h
+  LocalExchangeSource.h
+  MergeTestBase.h
+  OperatorTestBase.h
+  PlanBuilder.h
+  PortUtil.h
+  QueryAssertions.h
+  RowContainerTestBase.h
+  SerializedPageUtil.h
+  SumNonPODAggregate.h
+  TableScanTestBase.h
+  TableWriterTestBase.h
+  TestIndexStorageConnector.h
+  TpchQueryBuilder.h
+  TpcdsQueryBuilder.h
+  VectorTestUtil.h
+  VeloxPlanLoader.h
 )
 
 target_link_libraries(
@@ -58,3 +87,5 @@ target_link_libraries(
   velox_functions_prestosql
   velox_aggregates
 )
+
+velox_add_library(velox_temp_path INTERFACE HEADERS TempDirectoryPath.h TempFilePath.h)

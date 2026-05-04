@@ -23,6 +23,7 @@
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/common/fuzzer/Utils.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
 #include "velox/dwio/dwrf/RegisterDwrfWriter.h"
@@ -301,7 +302,8 @@ MemoryArbitrationFuzzer::MemoryArbitrationFuzzer(size_t initialSeed)
   const auto hiveConnector = hiveFactory.newConnector(
       test::kHiveConnectorId,
       std::make_shared<config::ConfigBase>(std::move(hiveConfig)));
-  connector::registerConnector(hiveConnector);
+  connector::ConnectorRegistry::global().insert(
+      hiveConnector->connectorId(), hiveConnector);
   dwrf::registerDwrfReaderFactory();
   dwrf::registerDwrfWriterFactory();
 
@@ -955,7 +957,10 @@ void MemoryArbitrationFuzzer::verify() {
 
           const auto plan = plans.at(getRandomIndex(rng, plans.size() - 1));
           test::AssertQueryBuilder builder(plan.plan);
-          builder.queryCtx(queryCtx);
+          // Use a long timeout (1 hour) to avoid false failures from CI thread
+          // starvation while still catching real deadlocks.
+          static constexpr uint64_t kOneHourUs{3'600'000'000ULL};
+          builder.queryCtx(queryCtx).maxWaitMicros(kOneHourUs);
           for (const auto& [planNodeId, nodeSplits] : plan.splits) {
             builder.splits(planNodeId, nodeSplits);
           }
@@ -1083,8 +1088,13 @@ void MemoryArbitrationFuzzer::go() {
   size_t iteration = 0;
 
   while (!isDone(iteration, startTime)) {
+    LOG(INFO) << "==============================> Started iteration "
+              << iteration << " (seed: " << currentSeed_ << ")";
     verify();
     stats_.rlock()->print();
+
+    LOG(INFO) << "==============================> Done with iteration "
+              << iteration;
 
     reSeed();
     ++iteration;

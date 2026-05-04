@@ -20,7 +20,7 @@ velox_add_library(velox_rpc_client INTERFACE IRPCClient.h)
 
 velox_link_libraries(velox_rpc_client INTERFACE velox_rpc_types Folly::folly)
 
-velox_add_library(velox_mock_rpc_client clients/MockRPCClient.cpp)
+velox_add_library(velox_mock_rpc_client clients/MockRPCClient.cpp HEADERS clients/MockRPCClient.h)
 
 velox_link_libraries(
   velox_mock_rpc_client

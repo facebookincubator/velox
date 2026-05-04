@@ -84,10 +84,11 @@ class TempFilePath {
   }
 
   const bool enableFaultInjection_;
+  // initialized to -1 before tempPath_ is initialized,
+  // since members are initialized in declaration order
+  int fd_{-1};
   const std::string tempPath_;
   const std::string path_;
-
-  int fd_{};
 };
 
 std::vector<std::string> toFilePaths(

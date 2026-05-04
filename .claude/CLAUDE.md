@@ -33,6 +33,53 @@ ctest -R ExprTest                # run tests matching a pattern
 
 Test files live in `tests/` subdirectories alongside source.
 
+### Grouped tests
+
+Four test suites use `velox_add_grouped_tests` to reduce link times on Linux CI
+by batching source files into shared binaries:
+- `velox/exec/tests` (`velox_exec_test`, `velox_exec_util_test`)
+- `velox/functions/prestosql/aggregates/tests`
+- `velox/common/caching/tests`
+- `velox/serializers/tests`
+
+All other test suites use individual binaries on all platforms.
+
+On macOS, grouping is off by default (`VELOX_ENABLE_GROUPED_TESTS=OFF`) and each
+test file gets its own binary (e.g., `ValuesTest.cpp` → `velox_exec_test_ValuesTest`).
+On Linux CI, grouping is on (`velox_exec_test_group0` through `_group7`).
+Override with `-DVELOX_ENABLE_GROUPED_TESTS=ON/OFF`.
+
+### Common test workflows
+
+```bash
+# Run all test binaries whose ctest name matches a regex.
+# On Linux this matches velox_exec_test_group0 … _group7.
+# On macOS this matches velox_exec_test_ValuesTest,
+# velox_exec_test_HashJoinTest, etc.
+cd _build/debug && ctest -R velox_exec
+
+# Run a specific test file (macOS — individual binary)
+_build/debug/velox/exec/tests/velox_exec_test_ValuesTest --gtest_filter="ValuesTest.*"
+
+# Run a specific test case (Linux — grouped binary)
+_build/debug/velox/exec/tests/velox_exec_test_group3 --gtest_filter="ValuesTest.empty"
+```
+
+**Re-running a CI failure locally:** CI reports a failure in
+`velox_exec_test_group3` with `ValuesTest.empty`. On Linux, run the grouped
+binary directly. On macOS, the grouped binary does not exist — use the
+per-file binary instead: `velox_exec_test_ValuesTest --gtest_filter="ValuesTest.empty"`.
+
+**Adding a new test to a grouped suite:** Add the source file to the `SOURCES`
+list in the relevant `velox_add_grouped_tests()` call in `CMakeLists.txt`. It
+is automatically assigned to a group on Linux and gets its own binary on macOS.
+
+**Creating a new test suite:** Use `velox_add_grouped_tests` for suites with
+many test files (10+) that link against large libraries like velox core — each
+individual binary pays the full link cost, so grouping them into shared binaries
+significantly reduces total CI build time. For suites with only a few test files
+or lightweight dependencies, use `add_executable` / `add_test`.
+
 ## Formatting
 
 ```bash
@@ -57,6 +104,7 @@ are summarized below.
   - ❌ `// A simple counter.` above `size_t count_{0};`
 - Avoid redundant comments that repeat what the code already says. Comments should explain *why*, not *what*.
 - Use `// TODO: Description.` for future work. Do not include author's username.
+- Do not duplicate comments between `.h` and `.cpp`. Document the function in the header; the implementation should not repeat the same comment. Duplicated comments diverge over time.
 
 ### Naming Conventions
 
@@ -68,6 +116,11 @@ are summarized below.
 - **kPascalCase** for static constants and enumerators.
 - Do not abbreviate. Use full, descriptive names. Well-established abbreviations (`id`, `url`, `sql`, `expr`) are acceptable.
 - Prefer `numXxx` over `xxxCount` (e.g. `numRows`, `numKeys`).
+- Never name a file or class `*Utils`, `*Helpers`, or `*Common`. These generic
+  names attract unrelated functions over time and lose cohesion. Name files and
+  classes after the concept they represent. Use a class with static methods to
+  group related operations, and shorten method names since the class name
+  provides context.
 
 ### Asserts and CHECKs
 
@@ -86,13 +139,18 @@ are summarized below.
 - Use uniform initialization: `size_t size{0}` over `size_t size = 0`.
 - Declare variables in the smallest scope, as close to usage as possible.
 - Use digit separators (`'`) for numeric literals with 4 or more digits: `10'000`, not `10000`.
+- Use trailing commas in multi-line initializer lists, enum definitions, and
+  function-call argument lists that span multiple lines. This produces cleaner
+  diffs when items are added or reordered.
 
 ### API Design
 
 - Keep the public API surface small.
 - Prefer free functions in `.cpp` (anonymous namespace) over private/static class methods.
+- Define free functions close to where they are used, not grouped together at the top or bottom of the file.
 - Keep method implementations in `.cpp` except for trivial one-liners.
 - Avoid default arguments when all callers can pass values explicitly.
+- Never use `friend`, `FRIEND_TEST`, or any friend declarations. If a test needs access to private members, redesign the API or test through public methods instead.
 
 ### Tests
 
@@ -119,6 +177,23 @@ Common matchers:
 - `SizeIs(n)` - collection has n elements
 
 Requires `#include <gmock/gmock.h>`.
+
+## Common Mistakes
+
+These are frequently violated rules. Check every new or modified line against
+this list before finishing.
+
+- **Bug fixes without a failing test first.** Write the test first, confirm it fails, then fix. A test that passes with and without the fix proves nothing.
+- **`///` vs `//` wrong comment style.** `///` is only for public API in headers. Everything else uses `//`.
+- **One-letter and abbreviated variable names.** Use full, descriptive names. Only loop indices (`i`, `j`) are acceptable.
+- **Undocumented APIs in headers.** Every class, method, and member variable in a `.h` file must have a comment.
+- **Non-trivial implementations in headers.** If a method body has more than one statement, it belongs in the `.cpp` file.
+- **`goto` statements.** Never use `goto`. Use early returns, helper functions, or duplicated code paths.
+- **Fitting tests to buggy code.** Never update test expectations to match buggy output without verifying correctness first.
+- **Generic file and class names.** Never name a file or class `*Utils`, `*Helpers`, or `*Common`.
+- **Verify causation before asserting it.** Do not attribute failures to a commit based on its message alone. Verify empirically.
+- **Silently simplifying an approved plan.** If a step is harder than expected, say so and get approval before reducing scope.
+- **Working around infrastructure bugs.** Do not silently work around bugs in shared infrastructure. Report and discuss.
 
 ## Design Documents
 

@@ -92,6 +92,13 @@ struct EncodedKeyBounds {
   /// (inclusive or exclusive based on IndexBound.inclusive).
   std::optional<std::string> upperKey;
 
+  /// Returns true if this represents a point lookup (both bounds present and
+  /// equal).
+  bool isPointLookup() const {
+    return lowerKey.has_value() && upperKey.has_value() &&
+        lowerKey.value() == upperKey.value();
+  }
+
   /// Returns a human-readable string representation with hex-encoded keys.
   std::string toString() const;
 };

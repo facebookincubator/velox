@@ -71,7 +71,11 @@ found here](velox/examples)
 Developer guides detailing many aspects of the library, in addition to the list
 of available functions [can be found here.](https://facebookincubator.github.io/velox)
 
-Blog posts are available [here](https://velox-lib.io/blog).
+Recent blog posts ([all posts](https://velox-lib.io/blog)):
+
+- [FlatMapVector Adoption for Scaling High-Performance AI/ML Data Pre-Processing](https://velox-lib.io/blog/flatmapvector) (2026-05-01)
+- [Nimble Cluster Index: Efficient Indexed Lookups on Columnar Data](https://velox-lib.io/blog/nimble-cluster-index) (2026-04-27)
+- [Axiom: Composable Query Engines Built on Velox](https://velox-lib.io/blog/axiom-composable-query-engines) (2026-04-23)
 
 ## Community
 
@@ -234,6 +238,13 @@ $ make
 Run `make` in the root directory to compile the sources. For development, use
 `make debug` to build a non-optimized debug version, or `make release` to build
 an optimized version.  Use `make unittest` to build and run tests.
+
+Four test suites use grouped binaries on Linux CI to reduce link times
+(`velox/exec/tests`, `velox/functions/prestosql/aggregates/tests`,
+`velox/common/caching/tests`, `velox/serializers/tests`). All other suites use
+individual binaries on all platforms. On macOS, grouping is off by default. To
+disable grouping on Linux, pass `-DVELOX_ENABLE_GROUPED_TESTS=OFF` via
+`EXTRA_CMAKE_FLAGS`.
 
 Note that,
 * Velox requires a compiler at the minimum GCC 11.0 or Clang 15.0.
