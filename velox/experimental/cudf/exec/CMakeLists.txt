@@ -31,6 +31,7 @@ add_library(
   CudfOrderBy.cpp
   CudfTopN.cpp
   DebugUtil.cpp
+  DecimalAggregationCommon.cpp
   DecimalAggregationKernels.cu
   GpuResources.cpp
   OperatorAdapters.cpp

@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/CudfGroupby.h"
+#include "velox/experimental/cudf/exec/DecimalAggregationCommon.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationKernels.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
@@ -41,10 +42,12 @@ namespace {
 
 using namespace facebook::velox;
 using cudf_velox::CountInputKind;
+using cudf_velox::finalizeDecimalAverage;
 using cudf_velox::get_output_mr;
 using cudf_velox::get_temp_mr;
 using cudf_velox::GroupbyAggregator;
 using cudf_velox::ResolvedAggregateInfo;
+using cudf_velox::serializeDecimalPartialOrIntermediateState;
 
 #define DEFINE_SIMPLE_GROUPBY_AGGREGATOR(Name, name, KIND)               \
   struct Groupby##Name##Aggregator : GroupbyAggregator {                 \
@@ -181,44 +184,6 @@ void addDecimalRawPartialSingleSumRequest(
         cudf::make_count_aggregation<cudf::groupby_aggregation>(
             cudf::null_policy::EXCLUDE));
   }
-}
-
-std::unique_ptr<cudf::column> castCountColumnToInt64(
-    std::unique_ptr<cudf::column> count,
-    rmm::cuda_stream_view stream) {
-  if (count->type().id() != cudf::type_id::INT64) {
-    count = cudf::cast(
-        *count,
-        cudf::data_type{cudf::type_id::INT64},
-        stream,
-        cudf_velox::get_output_mr());
-  }
-  return count;
-}
-
-std::unique_ptr<cudf::column> serializeDecimalPartialOrIntermediateState(
-    std::unique_ptr<cudf::column> sum,
-    std::unique_ptr<cudf::column> count,
-    rmm::cuda_stream_view stream) {
-  count = castCountColumnToInt64(std::move(count), stream);
-  return cudf_velox::serializeDecimalSumState(
-      sum->view(), count->view(), stream, cudf_velox::get_output_mr());
-}
-
-std::unique_ptr<cudf::column> finalizeDecimalAverage(
-    std::unique_ptr<cudf::column> sum,
-    std::unique_ptr<cudf::column> count,
-    const TypePtr& resultType,
-    rmm::cuda_stream_view stream) {
-  count = castCountColumnToInt64(std::move(count), stream);
-  auto avgCol = cudf_velox::computeDecimalAverage(
-      sum->view(), count->view(), stream, cudf_velox::get_output_mr());
-  auto const cudfOutType = cudf_velox::veloxToCudfDataType(resultType);
-  if (avgCol->type() != cudfOutType) {
-    avgCol = cudf::cast(
-        avgCol->view(), cudfOutType, stream, cudf_velox::get_output_mr());
-  }
-  return avgCol;
 }
 
 struct GroupbyDecimalSumAggregator : GroupbyAggregator {
