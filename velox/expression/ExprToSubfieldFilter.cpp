@@ -122,6 +122,62 @@ std::unique_ptr<common::Filter> toInt64In(
 
 } // namespace
 
+namespace {
+std::unique_ptr<common::Filter> bigintOrImpl(
+    std::vector<std::unique_ptr<common::Filter>> inputs,
+    bool nullAllowed) {
+  std::vector<std::unique_ptr<common::BigintRange>> ranges;
+  for (auto& input : inputs) {
+    if (input->kind() == common::FilterKind::kIsNull) {
+      nullAllowed = true;
+    } else if (input->kind() != common::FilterKind::kAlwaysFalse) {
+      VELOX_CHECK(
+          isBigintRange(input),
+          "Expected BigintRange filter, got: {}",
+          input->toString());
+      ranges.emplace_back(asBigintRange(input));
+    }
+  }
+  if (ranges.empty()) {
+    if (nullAllowed) {
+      return std::make_unique<common::IsNull>();
+    }
+    return std::make_unique<common::AlwaysFalse>();
+  }
+  if (ranges.size() == 1) {
+    if (nullAllowed) {
+      return std::make_unique<common::BigintRange>(
+          ranges[0]->lower(), ranges[0]->upper(), true);
+    }
+    return std::move(ranges[0]);
+  }
+  return std::make_unique<common::BigintMultiRange>(
+      std::move(ranges), nullAllowed);
+}
+} // namespace
+
+std::unique_ptr<common::Filter> bigintOr(
+    std::unique_ptr<common::Filter> a,
+    std::unique_ptr<common::Filter> b,
+    bool nullAllowed) {
+  std::vector<std::unique_ptr<common::Filter>> inputs;
+  inputs.emplace_back(std::move(a));
+  inputs.emplace_back(std::move(b));
+  return bigintOrImpl(std::move(inputs), nullAllowed);
+}
+
+std::unique_ptr<common::Filter> bigintOr(
+    std::unique_ptr<common::Filter> a,
+    std::unique_ptr<common::Filter> b,
+    std::unique_ptr<common::Filter> c,
+    bool nullAllowed) {
+  std::vector<std::unique_ptr<common::Filter>> inputs;
+  inputs.emplace_back(std::move(a));
+  inputs.emplace_back(std::move(b));
+  inputs.emplace_back(std::move(c));
+  return bigintOrImpl(std::move(inputs), nullAllowed);
+}
+
 std::shared_ptr<ExprToSubfieldFilterParser>
     ExprToSubfieldFilterParser::parser_ =
         std::make_shared<PrestoExprToSubfieldFilterParser>();
@@ -194,6 +250,12 @@ std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeNotEqualFilter(
 
   if (typeKind == TypeKind::TINYINT || typeKind == TypeKind::SMALLINT ||
       typeKind == TypeKind::INTEGER || typeKind == TypeKind::BIGINT) {
+    if (lessThanFilter->kind() == common::FilterKind::kAlwaysFalse) {
+      return greaterThanFilter;
+    }
+    if (greaterThanFilter->kind() == common::FilterKind::kAlwaysFalse) {
+      return lessThanFilter;
+    }
     VELOX_CHECK(isBigintRange(lessThanFilter));
     VELOX_CHECK(isBigintRange(greaterThanFilter));
 
@@ -207,6 +269,14 @@ std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeNotEqualFilter(
   if (typeKind == TypeKind::HUGEINT) {
     VELOX_NYI();
   } else {
+    if (lessThanFilter->kind() == common::FilterKind::kAlwaysFalse ||
+        lessThanFilter->kind() == common::FilterKind::kIsNull) {
+      return greaterThanFilter;
+    }
+    if (greaterThanFilter->kind() == common::FilterKind::kAlwaysFalse ||
+        greaterThanFilter->kind() == common::FilterKind::kIsNull) {
+      return lessThanFilter;
+    }
     std::vector<std::unique_ptr<common::Filter>> filters;
     filters.emplace_back(std::move(lessThanFilter));
     filters.emplace_back(std::move(greaterThanFilter));

@@ -69,6 +69,7 @@ add_executable(velox_expression_fuzzer_test ExpressionFuzzerTest.cpp)
 target_link_libraries(
   velox_expression_fuzzer_test
   velox_expression_fuzzer
+  velox_core
   velox_functions_prestosql
   velox_fuzzer_util
   velox_hive_connector

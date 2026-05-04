@@ -23,6 +23,7 @@
 #include "velox/common/caching/SsdCache.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
+#include "velox/common/io/IoStatistics.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MmapAllocator.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
@@ -163,6 +164,10 @@ class CacheFuzzer {
   std::unique_ptr<memory::MemoryManager> memoryManager_;
   std::unique_ptr<folly::IOThreadPoolExecutor> executor_;
   std::shared_ptr<AsyncDataCache> cache_;
+
+  io::IoStatistics dataIoStats_;
+  io::IoStatistics metadataIoStats_;
+
   // Save the config for the last iteration so they can be potentially reused
   // after restart.
   int64_t lastMemoryCacheBytes_;
@@ -370,7 +375,8 @@ void CacheFuzzer::initializeCache(bool restartCache) {
 }
 
 void CacheFuzzer::initializeInputs() {
-  const auto readOptions = io::ReaderOptions(pool_.get());
+  const auto readOptions =
+      io::ReaderOptions(pool_.get(), &dataIoStats_, &metadataIoStats_);
   auto tracker = std::make_shared<ScanTracker>(
       "testTracker", nullptr, 256 << 10 /*256KB*/);
   auto ioStatistics = std::make_shared<IoStatistics>();

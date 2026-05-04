@@ -20,7 +20,7 @@
 
 namespace facebook::velox::cudf_velox {
 
-/// Register Spark-specific CUDF aggregate functions.
+/// Rebuild current aggregation registries with Spark-specific signatures.
 /// \param prefix Function name prefix (e.g., "spark." or "")
 void registerSparkAggregateFunctions(const std::string& prefix);
 
