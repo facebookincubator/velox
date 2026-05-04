@@ -15,9 +15,10 @@
 velox_add_library(
   velox_dwio_parquet_common
   BloomFilter.cpp
-  XxHasher.cpp
   LevelComparison.cpp
   LevelConversion.cpp
+  XxHasher.cpp
+  UnicodeUtil.cpp
   HEADERS
   BitStreamUtilsInternal.h
   BloomFilter.h
@@ -26,6 +27,7 @@ velox_add_library(
   LevelConversion.h
   LevelConversionUtil.h
   RleEncodingInternal.h
+  UnicodeUtil.h
   XxHasher.h
 )
 
