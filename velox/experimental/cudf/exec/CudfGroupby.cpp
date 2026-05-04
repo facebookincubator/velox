@@ -355,12 +355,12 @@ struct GroupbyStddevSampAggregator : GroupbyAggregator {
         auto merged = std::move(results[outputIdx_].results[0]);
         auto mergedView = merged->view();
         // Copy children from the merged struct
-        auto count =
-            std::make_unique<cudf::column>(mergedView.child(0), stream, get_temp_mr());
-        auto mean =
-            std::make_unique<cudf::column>(mergedView.child(1), stream, get_temp_mr());
-        auto m2 =
-            std::make_unique<cudf::column>(mergedView.child(2), stream, get_temp_mr());
+        auto count = std::make_unique<cudf::column>(
+            mergedView.child(0), stream, get_temp_mr());
+        auto mean = std::make_unique<cudf::column>(
+            mergedView.child(1), stream, get_temp_mr());
+        auto m2 = std::make_unique<cudf::column>(
+            mergedView.child(2), stream, get_temp_mr());
         return makeM2StructColumn(
             std::move(count), std::move(mean), std::move(m2), stream);
       }
@@ -380,7 +380,8 @@ struct GroupbyStddevSampAggregator : GroupbyAggregator {
             get_temp_mr());
 
         // count - 1
-        auto one = cudf::numeric_scalar<double>(1.0, true, stream, get_temp_mr());
+        auto one =
+            cudf::numeric_scalar<double>(1.0, true, stream, get_temp_mr());
         auto countMinus1 = cudf::binary_operation(
             *countDouble,
             one,
@@ -403,7 +404,8 @@ struct GroupbyStddevSampAggregator : GroupbyAggregator {
             *variance, cudf::unary_operator::SQRT, stream, get_temp_mr());
 
         // count >= 2.0 (reuse countDouble, compare in double space)
-        auto two = cudf::numeric_scalar<double>(2.0, true, stream, get_temp_mr());
+        auto two =
+            cudf::numeric_scalar<double>(2.0, true, stream, get_temp_mr());
         auto validMask = cudf::binary_operation(
             *countDouble,
             two,
