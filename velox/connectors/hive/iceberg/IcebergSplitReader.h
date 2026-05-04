@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <folly/container/F14Set.h>
+
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/FileSplitReader.h"
 #include "velox/connectors/hive/iceberg/DeletionVectorReader.h"
@@ -96,6 +98,37 @@ class IcebergSplitReader : public FileSplitReader {
   std::vector<TypePtr> adaptColumns(
       const RowTypePtr& fileType,
       const RowTypePtr& tableSchema) const override;
+
+  // Resolves the equality field IDs of an equality-delete file to the
+  // corresponding column names and types in the table schema. In Iceberg,
+  // field IDs for top-level columns are assigned sequentially starting from
+  // 1, matching the column order in the table schema.
+  std::pair<std::vector<std::string>, std::vector<TypePtr>>
+  resolveEqualityColumns(const IcebergDeleteFile& deleteFile) const;
+
+  // Discovers equality-delete columns that are not in the user's projection
+  // and augments 'scanSpec_' and 'readerOutputType_' so they are physically
+  // read and made available in the output RowVector. For partition columns
+  // the partition value is set as a constant on the scan-spec child so the
+  // augmentation works regardless of whether the data file physically
+  // contains the partition column. Augmented columns are appended at the end
+  // of 'readerOutputType_' so the upstream FileDataSource's positional
+  // projection naturally drops them from the operator output.
+  void configureEqualityDeleteColumns();
+
+  // Names of scan-spec children that 'configureEqualityDeleteColumns'
+  // pre-installed a partition-value constant on for the current split.
+  // Mirrors the Java 'PARTITION_KEY' column-type distinction in
+  // 'IcebergUtil.getColumns(fields, schema, partitionSpec, typeManager)':
+  // for an equality-delete column that is also an identity-partition
+  // column, the value MUST come from the split's partition metadata, never
+  // from the data file body — even if the file body physically contains
+  // the column. 'adaptColumns' uses this set to skip clearing the partition
+  // constant on Branch 1, which would otherwise leave the column stuck as
+  // a constant null and break equality-delete matching after schema
+  // evolution adds new columns at indices that shift the augmented column
+  // out of its file-natural position.
+  folly::F14FastSet<std::string> equalityAugmentedPartitionColumns_;
 
   const std::shared_ptr<const HiveIcebergSplit> icebergSplit_;
 
