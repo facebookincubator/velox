@@ -632,6 +632,83 @@ TEST_P(MultiThreadedHashJoinTest, leftSemiJoinFilter) {
       .run();
 }
 
+TEST_P(MultiThreadedHashJoinTest, leftSemiFilterZeroOutputColumns) {
+  auto probeVectors = makeBatches(64, [&](int32_t /*unused*/) {
+    return makeRowVector(
+        {"c0", "c1"},
+        {
+            makeFlatVector<int32_t>(100, [](auto row) { return row % 11; }),
+            makeFlatVector<int32_t>(100, [](auto row) { return row; }),
+        });
+  });
+  auto buildVectors = makeBatches(64, [&](int32_t /*unused*/) {
+    return makeRowVector(
+        {"u0"},
+        {
+            makeFlatVector<int32_t>(80, [](auto row) { return row % 7; }),
+        });
+  });
+
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", buildVectors);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values(probeVectors)
+          .hashJoin(
+              {"c0"},
+              {"u0"},
+              PlanBuilder(planNodeIdGenerator).values(buildVectors).planNode(),
+              "",
+              {},
+              core::JoinType::kLeftSemiFilter)
+          .singleAggregation({}, {"count(1)"})
+          .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults("SELECT count(*) FROM t WHERE c0 IN (SELECT u0 FROM u)");
+}
+
+TEST_P(MultiThreadedHashJoinTest, antiJoinZeroOutputColumns) {
+  auto probeVectors = makeBatches(64, [&](int32_t /*unused*/) {
+    return makeRowVector(
+        {"c0", "c1"},
+        {
+            makeFlatVector<int32_t>(100, [](auto row) { return row % 11; }),
+            makeFlatVector<int32_t>(100, [](auto row) { return row; }),
+        });
+  });
+  auto buildVectors = makeBatches(64, [&](int32_t /*unused*/) {
+    return makeRowVector(
+        {"u0"},
+        {
+            makeFlatVector<int32_t>(80, [](auto row) { return row % 7; }),
+        });
+  });
+
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", buildVectors);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values(probeVectors)
+          .hashJoin(
+              {"c0"},
+              {"u0"},
+              PlanBuilder(planNodeIdGenerator).values(buildVectors).planNode(),
+              "",
+              {},
+              core::JoinType::kAnti)
+          .singleAggregation({}, {"count(1)"})
+          .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults(
+          "SELECT count(*) FROM t WHERE c0 NOT IN (SELECT u0 FROM u WHERE u0 IS NOT NULL)");
+}
+
 TEST_P(MultiThreadedHashJoinTest, leftSemiJoinFilterWithEmptyBuild) {
   const std::vector<bool> finishOnEmptys = {false, true};
   for (const auto finishOnEmpty : finishOnEmptys) {
@@ -3201,6 +3278,76 @@ TEST_F(HashJoinTest, nullAwareRightSemiProjectWithFilterNotAllowed) {
               core::JoinType::kRightSemiProject,
               true /* nullAware */),
       "Null-aware right semi project join doesn't support extra filter");
+}
+
+TEST_F(HashJoinTest, leftSemiFilterZeroOutputColumns) {
+  auto probeVectors = makeBatches(1, [&](int32_t /*unused*/) {
+    return makeRowVector(
+        {"c0", "c1"},
+        {
+            makeFlatVector<int32_t>({1, 2, 3}),
+            makeFlatVector<int32_t>({10, 20, 30}),
+        });
+  });
+  auto buildVectors = makeBatches(1, [&](int32_t /*unused*/) {
+    return makeRowVector(
+        {"u0"},
+        {
+            makeFlatVector<int32_t>({2, 3}),
+        });
+  });
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values(probeVectors)
+          .hashJoin(
+              {"c0"},
+              {"u0"},
+              PlanBuilder(planNodeIdGenerator).values(buildVectors).planNode(),
+              "",
+              {},
+              core::JoinType::kLeftSemiFilter)
+          .singleAggregation({}, {"count(1)"})
+          .planNode();
+
+  auto expected = makeRowVector({makeFlatVector<int64_t>({2})});
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(HashJoinTest, antiJoinZeroOutputColumns) {
+  auto probeVectors = makeBatches(1, [&](int32_t /*unused*/) {
+    return makeRowVector(
+        {"c0", "c1"},
+        {
+            makeFlatVector<int32_t>({1, 2, 3}),
+            makeFlatVector<int32_t>({10, 20, 30}),
+        });
+  });
+  auto buildVectors = makeBatches(1, [&](int32_t /*unused*/) {
+    return makeRowVector(
+        {"u0"},
+        {
+            makeFlatVector<int32_t>({2, 3}),
+        });
+  });
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values(probeVectors)
+          .hashJoin(
+              {"c0"},
+              {"u0"},
+              PlanBuilder(planNodeIdGenerator).values(buildVectors).planNode(),
+              "",
+              {},
+              core::JoinType::kAnti)
+          .singleAggregation({}, {"count(1)"})
+          .planNode();
+
+  auto expected = makeRowVector({makeFlatVector<int64_t>({1})});
+  AssertQueryBuilder(plan).assertResults(expected);
 }
 
 TEST_F(HashJoinTest, leftSemiJoinWithExtraOutputCapacity) {
