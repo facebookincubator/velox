@@ -28,6 +28,7 @@
 #include "velox/common/base/Fs.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/common/memory/MemoryArbitrator.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/PartitionIdGenerator.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 
@@ -38,8 +39,11 @@
 
 #include "velox/connectors/hive/iceberg/TransformExprBuilder.h"
 #include "velox/connectors/hive/iceberg/WriterOptionsAdapter.h"
+#include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/type/Type.h"
+
+using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -409,30 +413,35 @@ uint32_t IcebergDataSink::ensureWriter(const WriterId& id) {
 std::shared_ptr<dwio::common::WriterOptions>
 IcebergDataSink::createWriterOptions(size_t writerIndex) const {
   auto options = HiveDataSink::createWriterOptions(writerIndex);
-  // Per Iceberg specification (https://iceberg.apache.org/spec/#parquet):
-  // - Timestamps must be stored with microsecond precision.
-  // - Timestamps must NOT be adjusted to UTC timezone; they should be written
-  //   as-is without timezone conversion (empty string disables conversion).
-  //
-  // These settings are passed via serdeParameters to avoid including
-  // parquet-specific headers. The keys must match kParquetSerdeTimestampUnit
-  // and kParquetSerdeTimestampTimezone defined in
-  // velox/dwio/parquet/writer/Writer.h. The value "6" represents microseconds
-  // (TimestampPrecision::kMicroseconds).
-  options->serdeParameters["parquet.writer.timestamp.unit"] = "6";
-  options->serdeParameters["parquet.writer.timestamp.timezone"] = "";
 
 #ifdef VELOX_ENABLE_PARQUET
-  if (parquetStatsCollector_) {
-    auto parquetOptions = checkedPointerCast<parquet::WriterOptions>(options);
-    parquetOptions->parquetFieldIds =
-        parquetStatsCollector_->parquetFieldIds().children;
+  if (auto parquetOptions =
+          std::dynamic_pointer_cast<parquet::WriterOptions>(options)) {
+    // Per Iceberg specification (https://iceberg.apache.org/spec/#parquet):
+    // - Timestamps must be stored with microsecond precision.
+    // - Timestamps must NOT be adjusted to UTC timezone; they should be written
+    //   as-is without timezone conversion (empty string disables conversion).
+    //
+    // These settings are passed via serdeParameters. The keys must match
+    // kParquetSerdeTimestampUnit and kParquetSerdeTimestampTimezone defined
+    // in velox/dwio/parquet/writer/Writer.h. The value "6" represents
+    // microseconds (TimestampPrecision::kMicroseconds).
+    parquetOptions
+        ->serdeParameters[parquet::WriterOptions::kParquetSerdeTimestampUnit] =
+        "6";
+    parquetOptions->serdeParameters
+        [parquet::WriterOptions::kParquetSerdeTimestampTimezone] = "";
+
+    if (parquetStatsCollector_) {
+      parquetOptions->parquetFieldIds =
+          parquetStatsCollector_->parquetFieldIds().children;
+    }
   }
 #endif
 
-  // Re-process configs to apply the serde parameters we just set.
   options->processConfigs(
       *hiveConfig_->config(), *connectorQueryCtx_->sessionProperties());
+
   return options;
 }
 
@@ -461,11 +470,11 @@ void IcebergDataSink::rotateWriter(size_t index) {
     dataFileStats_.resize(index + 1);
   }
 
-  // Collect Iceberg parquet stats from the writer BEFORE closing it.
-  // The base rotateWriter() will call writers_[index]->close() which returns
-  // file metadata, but the base class discards that return value. We need to
-  // close the writer ourselves to capture the metadata, then prevent double
-  // close by resetting the writer.
+  // Close the writer to flush the footer and obtain file metadata, then
+  // aggregate Iceberg stats from the metadata. The base rotateWriter() would
+  // also call writers_[index]->close() but discards the returned metadata.
+  // We close the writer ourselves to capture the metadata, then reset the
+  // writer to prevent double close.
   {
     const memory::NonReclaimableSectionGuard nonReclaimableGuard(
         writerInfo_[index]->nonReclaimableSectionHolder.get());
@@ -500,6 +509,9 @@ void IcebergDataSink::rotateWriter(size_t index) {
 void IcebergDataSink::closeInternal() {
   VELOX_CHECK_NE(state_, State::kRunning);
   VELOX_CHECK_NE(state_, State::kFinishing);
+
+  TestValue::adjust(
+      "facebook::velox::connector::hive::FileDataSink::closeInternal", this);
 
   if (state_ == State::kClosed) {
     // Ensure dataFileStats_ has entries for all writers.
