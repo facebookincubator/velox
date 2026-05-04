@@ -90,6 +90,11 @@ class WaveGraph {
   /// the graph first to fill in default attribute values from FunctionSchema.
   WaveGraph(nativert::Graph& graph, ValueTypes types);
 
+  /// Normalizes and optimizes 'graph' without compiling kernels.
+  static std::unique_ptr<WaveGraph> optimizeOnly(
+      nativert::Graph& graph,
+      ValueTypes types);
+
   ~WaveGraph();
 
   /// Returns an ExecutionState from the pool, creating one if needed.
@@ -135,6 +140,14 @@ class WaveGraph {
   /// Returns the underlying nativert graph.
   GraphP graph() {
     return graph_;
+  }
+
+  /// Returns a placeholder node in the main graph, creating it on first call.
+  nativert::Node* placeholderNode() {
+    if (!placeholderNode_) {
+      placeholderNode_ = graph_->createNode("tw.placeholder", {});
+    }
+    return placeholderNode_;
   }
 
   /// Returns the pre-built map from Value::id() to Value*.
@@ -187,13 +200,34 @@ class WaveGraph {
     return standaloneStats_;
   }
 
+  CompileCtx* compileCtx() const {
+    return compileCtx_;
+  }
+
   folly::F14FastMap<NodeCP, NodeInfo>& nodeInfos() {
     return nodeInfos_;
   }
 
   std::string toString(Listing mode = kExprs) const;
 
+  /// Takes ownership of a variant graph and returns a raw pointer.
+  nativert::Graph* addVariantGraph(std::unique_ptr<nativert::Graph> graph) {
+    variantGraphs_.push_back(std::move(graph));
+    return variantGraphs_.back().get();
+  }
+
+  /// The variant graph currently being built by variantSubgraph, or nullptr.
+  nativert::Graph* currentVariantGraph() const {
+    return currentVariantGraph_;
+  }
+
+  void setCurrentVariantGraph(nativert::Graph* graph) {
+    currentVariantGraph_ = graph;
+  }
+
  private:
+  WaveGraph(ValueTypes types, nativert::Graph& graph);
+
   // The executable graph. the nodes are executed sequentially. Each node has
   // internal prallelism.
   std::vector<std::unique_ptr<CompiledNode>> nodes_;
@@ -210,8 +244,8 @@ class WaveGraph {
   std::vector<std::unique_ptr<nativert::TensorMeta>> metaStorage_;
 
   // Tracks the c10::ScalarType for each value created by
-  // newTensorValue/newScalarValue, enabling duplication of these values.
-  std::unordered_map<ValueCP, c10::ScalarType> createdValueDtypes_;
+  // newTensorValue/newScalarValue, keyed by value id.
+  std::unordered_map<nativert::ValueId, c10::ScalarType> createdValueDtypes_;
 
   // Placeholder node used by duplicateValue to attach new Values.
   nativert::Node* placeholderNode_{nullptr};
@@ -236,8 +270,17 @@ class WaveGraph {
   // ValueIds of outputs whose Metadata has shapeSetOnDevice or neededOnHost.
   std::unordered_set<nativert::ValueId> syncableValueIds_;
 
+  // Graphs created by CompileCtx::variantSubgraph, owned here for lifetime.
+  std::vector<std::unique_ptr<nativert::Graph>> variantGraphs_;
+
+  // Set to the graph being built during variantSubgraph, nullptr otherwise.
+  nativert::Graph* currentVariantGraph_{nullptr};
+
   // Cached Metadata lookups keyed by node pointer.
   folly::F14FastMap<NodeCP, NodeInfo> nodeInfos_;
+
+  // Set during construction, cleared after.
+  CompileCtx* compileCtx_{nullptr};
 
   // Alive during construction only. Retains visited set so multikernel
   // variant nodes reuse the main-graph pass.

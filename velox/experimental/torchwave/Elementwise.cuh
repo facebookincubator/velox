@@ -375,9 +375,45 @@ __device__ inline double __sigmoid(double a1) {
   return 1.0 / (1.0 + exp(-a1));
 }
 
-template <typename T>
+template <typename T, bool kHasMin = true, bool kHasMax = true>
 __device__ inline T __clamp(T a1, T lo, T hi) {
-  return a1 < lo ? lo : (a1 > hi ? hi : a1);
+  T result = a1;
+  if constexpr (kHasMin) {
+    result = result < lo ? lo : result;
+  }
+  if constexpr (kHasMax) {
+    result = result > hi ? hi : result;
+  }
+  return result;
+}
+
+// NaN/Inf replacement.
+
+template <typename T>
+__device__ inline T __nan_to_num(T a1, T nan_val, T posinf_val, T neginf_val) {
+  return a1;
+}
+
+__device__ inline float
+__nan_to_num(float a1, float nan_val, float posinf_val, float neginf_val) {
+  if (isnan(a1)) {
+    return nan_val;
+  }
+  if (isinf(a1)) {
+    return a1 > 0 ? posinf_val : neginf_val;
+  }
+  return a1;
+}
+
+__device__ inline double
+__nan_to_num(double a1, double nan_val, double posinf_val, double neginf_val) {
+  if (isnan(a1)) {
+    return nan_val;
+  }
+  if (isinf(a1)) {
+    return a1 > 0 ? posinf_val : neginf_val;
+  }
+  return a1;
 }
 
 // Min/max.

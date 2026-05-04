@@ -18,7 +18,8 @@
 
 namespace torch::wave {
 
-Optimizer::Optimizer(ValueTypes& types) : types_(types) {}
+Optimizer::Optimizer(WaveGraph& waveGraph)
+    : waveGraph_(waveGraph), types_(waveGraph.types()) {}
 
 void Optimizer::ensureConstraint(int32_t id) {
   if (id >= 0 && static_cast<size_t>(id) >= types_.constraints.size()) {
@@ -120,7 +121,7 @@ void Optimizer::visitValue(const nativert::Value* value) {
 
   if (metadata->maybeReplace) {
     auto oldTarget = producer->target();
-    auto replacements = metadata->maybeReplace(producer, types_, graph_);
+    auto replacements = metadata->maybeReplace(producer, types_, waveGraph_);
     for (auto& [oldValue, newValue] : replacements) {
       graph_->replaceAllUses(
           const_cast<nativert::Value*>(oldValue),
@@ -130,6 +131,9 @@ void Optimizer::visitValue(const nativert::Value* value) {
       visited_.erase(producer);
       visitValue(value);
       return;
+    }
+    for (auto& [oldValue, newValue] : replacements) {
+      visitValue(newValue);
     }
   }
 }

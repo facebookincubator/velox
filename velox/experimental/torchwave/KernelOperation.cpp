@@ -35,7 +35,7 @@ int64_t SizeExpr::numElements(FrameP frame, nativert::ValueId* largestOut)
     if (op == SizeShortcut::kMax) {
       if (n > result) {
         result = n;
-        if (largestOut) {
+        if (largestOut && ivalue.isTensor()) {
           *largestOut = valueId;
         }
       }
@@ -253,7 +253,9 @@ void kernelExprImpl(
     std::stringstream& ss,
     NodeCP node,
     const std::unordered_set<ValueCP>& inputSet,
-    const std::unordered_set<ValueCP>& outputSet) {
+    const std::unordered_set<ValueCP>& outputSet,
+    const std::unordered_set<NodeCP>& allNodes,
+    CompileCtx& compileCtx) {
   if (node->inputs().empty() && node->attributes().empty()) {
     ss << node->target();
     return;
@@ -266,12 +268,13 @@ void kernelExprImpl(
     }
     first = false;
     auto* value = input.value;
-    auto* producer = value->producer();
-    if (producer == nullptr || inputSet.count(value) ||
-        outputSet.count(value)) {
+    NodeCP producer = value->producer();
+    if (producer == nullptr || inputSet.count(value)) {
+      ss << "%v" << value->id();
+    } else if (outputSet.count(value) || !allNodes.count(producer)) {
       ss << "%v" << value->id();
     } else {
-      kernelExprImpl(ss, producer, inputSet, outputSet);
+      kernelExprImpl(ss, producer, inputSet, outputSet, allNodes, compileCtx);
     }
   }
   for (const auto& attr : node->attributes()) {
@@ -379,6 +382,37 @@ std::string Subgraph::toString(Listing mode) const {
 
 // --- KernelOperation ---
 
+namespace {
+
+void flattenScalarListInputs(
+    std::unordered_set<ValueCP>& inputs,
+    std::vector<ValueCP>& orderedInputs) {
+  std::vector<ValueCP> flattened;
+  for (auto* value : orderedInputs) {
+    if (value->type().kind() == nativert::Type::Kind::SymIntList) {
+      auto* producer = value->producer();
+      if (producer && producer->target() == "prim.ListPack") {
+        inputs.erase(value);
+        for (const auto& input : producer->inputs()) {
+          if (!inputs.count(input.value)) {
+            inputs.insert(input.value);
+            flattened.push_back(input.value);
+          }
+        }
+        continue;
+      }
+    }
+    flattened.push_back(value);
+  }
+  orderedInputs = std::move(flattened);
+}
+
+} // namespace
+
+NodeCP KernelOperation::executableNode(NodeCP node) {
+  return node;
+}
+
 KernelOperation::KernelOperation(
     const Subgraph& sg,
     int32_t opCode,
@@ -389,13 +423,28 @@ KernelOperation::KernelOperation(
       inputs_{sg.inputs.begin(), sg.inputs.end()},
       orderedInputs_{sg.inputs},
       numInputs_(sg.inputs.size()) {
-  // Assign offsets to inputs.
+  flattenScalarListInputs(inputs_, orderedInputs_);
+  numInputs_ = orderedInputs_.size();
+
+  // Assign offsets to inputs. For TensorList inputs, expand component
+  // Values (deduplicating shared elements) and add the list struct.
   int32_t offset = 0;
   for (const auto* value : orderedInputs_) {
-    paramOffsets_[value] = offset;
-    if (value->type().kind() == nativert::Type::Kind::Tensor) {
+    if (value->type().kind() == nativert::Type::Kind::TensorList) {
+      auto elements = value->getListElements();
+      for (auto* elem : elements) {
+        if (paramOffsets_.find(elem) == paramOffsets_.end()) {
+          paramOffsets_[elem] = offset;
+          offset += sizeof(Tensor);
+        }
+      }
+      paramOffsets_[value] = offset;
+      offset += sizeof(TensorList) + 8 * elements.size();
+    } else if (value->type().kind() == nativert::Type::Kind::Tensor) {
+      paramOffsets_[value] = offset;
       offset += sizeof(Tensor);
     } else {
+      paramOffsets_[value] = offset;
       offset += 8;
     }
   }
@@ -420,11 +469,25 @@ KernelOperation::KernelOperation(
   alwaysSingleBlock_ = hasAlwaysSingleBlock(sg.root, inputs_, asbVisited);
 
   for (auto* value : outputValues) {
+    if (paramOffsets_.find(value) != paramOffsets_.end()) {
+      continue;
+    }
     orderedInputs_.push_back(value);
-    paramOffsets_[value] = offset;
-    if (value->type().kind() == nativert::Type::Kind::Tensor) {
+    if (value->type().kind() == nativert::Type::Kind::TensorList) {
+      auto elements = value->getListElements();
+      for (auto* elem : elements) {
+        if (paramOffsets_.find(elem) == paramOffsets_.end()) {
+          paramOffsets_[elem] = offset;
+          offset += sizeof(Tensor);
+        }
+      }
+      paramOffsets_[value] = offset;
+      offset += sizeof(TensorList) + 8 * elements.size();
+    } else if (value->type().kind() == nativert::Type::Kind::Tensor) {
+      paramOffsets_[value] = offset;
       offset += sizeof(Tensor);
     } else {
+      paramOffsets_[value] = offset;
       offset += 8;
     }
   }
@@ -438,13 +501,26 @@ KernelOperation::KernelOperation(
   altParamStart_ = offset;
   altParamOffset_ = offset;
 
-  // For all-elementwise kernel ops, mark the output as byLargestInput.
+  // For all-elementwise kernel ops, mark the output as byLargestInput,
+  // unless any input is wholeTensor (its size should not affect the output).
   std::unordered_set<NodeCP> ewVisited;
   if (!outputValues.empty() && isAllElementwise(sg.root, inputs_, ewVisited)) {
     TORCH_CHECK(
         outputDescs_.size() == 1,
         "All-elementwise op should have exactly one output");
-    outputDescs_[0].byLargestInput = true;
+    auto* meta = Registry::metadata(sg.root->target());
+    bool hasWholeTensor = false;
+    if (meta) {
+      for (size_t i = 0; i < meta->argumentMeta.size(); ++i) {
+        if (meta->argumentMeta[i].wholeTensor) {
+          hasWholeTensor = true;
+          break;
+        }
+      }
+    }
+    if (!hasWholeTensor) {
+      outputDescs_[0].byLargestInput = true;
+    }
   }
 
   sizeExpr_ = makeSizeExpr(sg.root, inputs_);
@@ -502,10 +578,75 @@ void KernelOperation::addSharedDeclaration(const std::string& decl) {
   }
 }
 
+namespace {
+
+bool hasShapeOnDeviceInChain(
+    NodeCP node,
+    const std::unordered_set<NodeCP>& allNodes,
+    std::unordered_set<NodeCP>& visited) {
+  if (!allNodes.count(node) || !visited.insert(node).second) {
+    return false;
+  }
+  auto* meta = Registry::metadata(node->target());
+  if (meta) {
+    for (const auto& rm : meta->returnMeta) {
+      if (rm.shapeSetOnDevice) {
+        return true;
+      }
+    }
+  }
+  for (const auto& input : node->inputs()) {
+    auto* producer = input.value->producer();
+    if (producer && hasShapeOnDeviceInChain(producer, allNodes, visited)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+} // namespace
+
 void KernelOperation::setCode(std::stringstream& code) {
   text_ = code.str();
   code.str("");
   code.clear();
+
+  orderingInputs_.clear();
+  orderingOutputs_.clear();
+  for (auto* node : allNodes_) {
+    for (const auto& input : node->inputs()) {
+      auto* value = input.value;
+      if (value->type().kind() == nativert::Type::Kind::SymIntList) {
+        auto* producer = value->producer();
+        if (producer && producer->target() == "prim.ListPack") {
+          for (const auto& listInput : producer->inputs()) {
+            orderingInputs_.insert(listInput.value->id());
+          }
+          continue;
+        }
+      }
+      orderingInputs_.insert(value->id());
+    }
+    for (auto* output : node->outputs()) {
+      orderingOutputs_.insert(output->id());
+    }
+  }
+
+  for (size_t i = 0; i < outputDescs_.size(); ++i) {
+    if (outputDescs_[i].shapeSetOnDevice) {
+      continue;
+    }
+    auto* value = orderedInputs_[numInputs_ + i];
+    auto* producer = value->producer();
+    if (producer) {
+      std::unordered_set<NodeCP> visited;
+      if (hasShapeOnDeviceInChain(producer, allNodes_, visited)) {
+        outputDescs_[i].shapeSetOnDevice = true;
+      }
+    }
+  }
+
+  exprString_ = makeExprString();
 }
 
 SizeExpr KernelOperation::makeSizeExpr(
@@ -514,14 +655,29 @@ SizeExpr KernelOperation::makeSizeExpr(
   // Check if the entire subtree rooted here is elementwise.
   std::unordered_set<NodeCP> ewVisited;
   if (isAllElementwise(node, subgraphInputs, ewVisited)) {
-    // Collect all distinct leaf Values reachable from this node.
+    // Collect all distinct leaf Values reachable from this node,
+    // excluding wholeTensor inputs which don't contribute to element count.
+    std::unordered_set<ValueCP> wholeTensorValues;
+    auto* nodeMeta = Registry::metadata(node->target());
+    if (nodeMeta) {
+      const auto& inputs = node->inputs();
+      for (size_t i = 0;
+           i < inputs.size() && i < nodeMeta->argumentMeta.size();
+           ++i) {
+        if (nodeMeta->argumentMeta[i].wholeTensor) {
+          wholeTensorValues.insert(inputs[i].value);
+        }
+      }
+    }
     std::unordered_set<ValueCP> seen;
     std::vector<ValueCP> leaves;
     collectDeduppedInputs(node, subgraphInputs, seen, leaves);
     std::vector<nativert::ValueId> leafIds;
     leafIds.reserve(leaves.size());
     for (auto* v : leaves) {
-      leafIds.push_back(v->id());
+      if (!wholeTensorValues.count(v)) {
+        leafIds.push_back(v->id());
+      }
     }
     return SizeExpr{SizeShortcut::kMax, std::move(leafIds), {}};
   }
@@ -538,9 +694,32 @@ SizeExpr KernelOperation::makeSizeExpr(
     auto ordinal = sizeArgs.ordinal[i];
     auto* value = node->inputs()[ordinal].value;
 
-    // If this input is a subgraph leaf or has no producer, it's a terminal
-    // Value.
-    if (subgraphInputs.count(value) || !value->producer()) {
+    // If the input comes from a prim.ListPack, treat each of its inputs
+    // as a separate size input.
+    auto* producer = value->producer();
+    if (producer && producer->target() == "prim.ListPack") {
+      for (const auto& listInput : producer->inputs()) {
+        auto* elem = listInput.value;
+        if (subgraphInputs.count(elem) || !elem->producer()) {
+          result.values.push_back(elem->id());
+        } else {
+          auto child = makeSizeExpr(elem->producer(), subgraphInputs);
+          if (child.op == result.op) {
+            result.values.insert(
+                result.values.end(), child.values.begin(), child.values.end());
+            result.args.insert(
+                result.args.end(),
+                std::make_move_iterator(child.args.begin()),
+                std::make_move_iterator(child.args.end()));
+          } else {
+            result.args.push_back(std::move(child));
+          }
+        }
+      }
+      continue;
+    }
+
+    if (subgraphInputs.count(value) || !producer) {
       bool isList = i < sizeArgs.isList.size() && sizeArgs.isList[i];
       if (isList) {
         for (auto* elem : value->getListElements()) {
@@ -550,9 +729,7 @@ SizeExpr KernelOperation::makeSizeExpr(
         result.values.push_back(value->id());
       }
     } else {
-      // Recurse into the producer subtree.
-      auto child = makeSizeExpr(value->producer(), subgraphInputs);
-      // Flatten if child has the same op.
+      auto child = makeSizeExpr(producer, subgraphInputs);
       if (child.op == result.op) {
         result.values.insert(
             result.values.end(), child.values.begin(), child.values.end());
@@ -567,6 +744,49 @@ SizeExpr KernelOperation::makeSizeExpr(
   }
 
   return result;
+}
+
+void mergeOutputDesc(OutputDesc& dst, OutputDesc&& src) {
+  if (src.reserveShape) {
+    dst.reserveShape = std::move(src.reserveShape);
+  }
+  if (src.sizeExpr.op != SizeShortcut::kNone) {
+    dst.sizeExpr = std::move(src.sizeExpr);
+  }
+  if (src.shapeSetOnDevice) {
+    dst.shapeSetOnDevice = true;
+  }
+  if (src.neededOnHost) {
+    dst.neededOnHost = true;
+  }
+  if (src.isList) {
+    dst.isList = true;
+  }
+  if (src.byLargestInput) {
+    dst.byLargestInput = true;
+  }
+  if (!src.shapeOnly && dst.shapeOnly) {
+    dst.shapeOnly = false;
+  }
+  if (src.viewNode) {
+    dst.viewNode = src.viewNode;
+  }
+}
+
+bool addOrUpdateOutput(
+    std::vector<ValueCP>& outputValues,
+    std::vector<OutputDesc>& outputDescs,
+    ValueCP value,
+    OutputDesc desc) {
+  for (size_t i = 0; i < outputValues.size(); ++i) {
+    if (outputValues[i] == value) {
+      mergeOutputDesc(outputDescs[i], std::move(desc));
+      return false;
+    }
+  }
+  outputValues.push_back(value);
+  outputDescs.push_back(std::move(desc));
+  return true;
 }
 
 OutputDesc KernelOperation::makeOutputDesc(
@@ -615,7 +835,6 @@ void KernelOperation::setOutputs(
     std::vector<OutputDesc>& outputDescs,
     bool inMemory,
     bool callerIsElementwise) {
-  node = compileCtx_.executableNode(node);
   auto* meta = Registry::metadata(node->target());
   bool isEw = meta && meta->elementwise;
 
@@ -645,74 +864,82 @@ void KernelOperation::setOutputs(
     return;
   }
 
+  if (meta->setOutputs) {
+    meta->setOutputs(
+        this,
+        node,
+        subgraphInputs,
+        outputValues,
+        outputDescs,
+        inMemory,
+        callerIsElementwise);
+    return;
+  }
+
+  // If this is a view node, add its output with viewNode set so the view
+  // is computed by executing the nativert node at launch time.
+  if (meta->isView()) {
+    const auto& outputs = node->outputs();
+    for (size_t i = 0; i < outputs.size(); ++i) {
+      OutputDesc desc;
+      desc.viewNode = compileCtx_.originalFromVariant(node);
+      addOrUpdateOutput(outputValues, outputDescs, outputs[i], std::move(desc));
+    }
+    return;
+  }
+
   // Add outputs that need memory allocation: either because the return
   // metadata says so, or because the caller requires memory-backed results.
   // Also add shapeOnly outputs when an elementwise producer feeds a register
   // argument of a non-elementwise consumer.
-  const auto& outputs = compileCtx_.outputs(node);
+  const auto& outputs = node->outputs();
   for (size_t i = 0; i < meta->returnMeta.size() && i < outputs.size(); ++i) {
+    bool isListOutput =
+        outputs[i]->type().kind() == nativert::Type::Kind::TensorList;
     bool needsShapeOnly = !inMemory && isEw && !callerIsElementwise;
     if (!meta->returnMeta[i].isRegister || inMemory || needsShapeOnly) {
-      outputValues.push_back(outputs[i]);
+      OutputDesc desc;
       if (needsShapeOnly && meta->returnMeta[i].isRegister) {
-        std::unordered_set<ValueCP> seen;
-        std::vector<ValueCP> deduppedInputs;
-        collectDeduppedInputs(node, subgraphInputs, seen, deduppedInputs);
-        OutputDesc desc;
         desc.shapeOnly = true;
-        desc.sizeExpr.op = SizeShortcut::kMax;
-        for (auto* v : deduppedInputs) {
-          desc.sizeExpr.values.push_back(v->id());
-        }
-        outputDescs.push_back(std::move(desc));
+        desc.sizeExpr = makeSizeExpr(node, subgraphInputs);
       } else if (
           meta->returnMeta[i].reserveShape ||
           meta->returnMeta[i].sizeShortcut != SizeShortcut::kNone) {
-        outputDescs.push_back(
-            makeOutputDesc(meta->returnMeta[i], node, subgraphInputs));
+        desc = makeOutputDesc(meta->returnMeta[i], node, subgraphInputs);
       } else {
-        // Register-typed output forced to memory (e.g. elementwise root).
-        // Reserve shape from the largest input.
-        std::unordered_set<ValueCP> seen;
-        std::vector<ValueCP> deduppedInputs;
-        collectDeduppedInputs(node, subgraphInputs, seen, deduppedInputs);
-        OutputDesc desc;
         desc.shapeSetOnDevice = meta->returnMeta[i].shapeSetOnDevice;
         desc.neededOnHost = meta->returnMeta[i].neededOnHost;
-        desc.sizeExpr.op = SizeShortcut::kMax;
-        for (auto* v : deduppedInputs) {
-          desc.sizeExpr.values.push_back(v->id());
-        }
-        outputDescs.push_back(std::move(desc));
+        desc.sizeExpr = makeSizeExpr(node, subgraphInputs);
       }
+      if (isListOutput) {
+        desc.isList = true;
+      }
+      addOrUpdateOutput(outputValues, outputDescs, outputs[i], std::move(desc));
     }
   }
 }
 
-std::string KernelOperation::toString(Listing mode) const {
+std::string KernelOperation::makeExprString() {
   std::stringstream ss;
   std::unordered_set<ValueCP> inputSet(
       orderedInputs_.begin(), orderedInputs_.begin() + numInputs_);
   std::unordered_set<ValueCP> outputSet(
       orderedInputs_.begin() + numInputs_, orderedInputs_.end());
 
-  // Print output-producing nodes as separate assignment lines, dependencies
-  // first.
   std::unordered_set<NodeCP> printed;
   std::function<void(NodeCP)> printNode = [&](NodeCP node) {
     if (!printed.insert(node).second) {
       return;
     }
-    // Recurse into producers that themselves have outputs in outputSet.
     for (const auto& input : node->inputs()) {
-      auto* producer = input.value->producer();
-      if (producer && !inputSet.count(input.value) &&
-          outputSet.count(input.value)) {
-        printNode(producer);
+      NodeCP producer = input.value->producer();
+      if (producer && !inputSet.count(input.value)) {
+        if (allNodes_.count(producer)) {
+          printNode(producer);
+        }
       }
     }
 
-    // Collect this node's outputs that are in the output set.
     std::vector<ValueCP> nodeOutputs;
     for (const auto* v : node->outputs()) {
       if (outputSet.count(v)) {
@@ -728,9 +955,9 @@ std::string KernelOperation::toString(Listing mode) const {
         ss << "%v" << nodeOutputs[i]->id();
       }
       ss << ") = ";
+      kernelExprImpl(ss, node, inputSet, outputSet, allNodes_, compileCtx_);
+      ss << "\n";
     }
-    kernelExprImpl(ss, node, inputSet, outputSet);
-    ss << "\n";
   };
 
   printNode(expr_);
@@ -770,12 +997,15 @@ std::string KernelOperation::toString(Listing mode) const {
     }
   }
 
-  if (mode == kCode) {
-    ss << "opCode = " << opCode_ << ":\n";
-    ss << text_ << "\n";
-  }
-
   return ss.str();
+}
+
+std::string KernelOperation::toString(Listing mode) const {
+  if (mode == kCode) {
+    return exprString_ + "opCode = " + std::to_string(opCode_) + ":\n" + text_ +
+        "\n";
+  }
+  return exprString_;
 }
 
 // --- makeBindings ---

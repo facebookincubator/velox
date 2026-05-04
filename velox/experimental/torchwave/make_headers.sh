@@ -31,6 +31,8 @@ $STRINGIFY "velox/experimental/torchwave/KernelParams.h" >>$TORCHWAVE/Headers.h
 $STRINGIFY "velox/experimental/torchwave/Core.cuh" >>$TORCHWAVE/Headers.h
 $STRINGIFY "velox/experimental/torchwave/Elementwise.cuh" >>$TORCHWAVE/Headers.h
 $STRINGIFY "velox/experimental/torchwave/Scan.cuh" >>$TORCHWAVE/Headers.h
+$STRINGIFY "velox/experimental/torchwave/Views.cuh" >>$TORCHWAVE/Headers.h
+$STRINGIFY "velox/experimental/torchwave/Hash.cuh" >>$TORCHWAVE/Headers.h
 
 echo "}" >>$TORCHWAVE/Headers.h
 

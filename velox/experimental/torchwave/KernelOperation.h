@@ -88,16 +88,34 @@ struct OutputDesc {
   /// Needs a fake tensor to indicate output shape but has no backing memory.
   bool shapeOnly{false};
 
+  /// True if allocation is delegated to another output, e.g. when creating
+  /// coordinated views.
+  bool delegated{false};
+
   /// If this is a view that is not allocated, it still gets a storage from some
   /// Value.
   ValueCP storageFrom{nullptr};
+
+  /// If set, this output is produced by executing a standalone view node
+  /// (e.g. view, reshape) rather than allocating a new tensor.
+  NodeCP viewNode{nullptr};
 
   /// Shortcut for all elementwise, where we already know the largest input and
   /// can set the output shape by that.
   bool byLargestInput{false};
 
   SizeExpr sizeExpr;
+
+  bool isList{false};
 };
+
+void mergeOutputDesc(OutputDesc& dst, OutputDesc&& src);
+
+bool addOrUpdateOutput(
+    std::vector<ValueCP>& outputValues,
+    std::vector<OutputDesc>& outputDescs,
+    ValueCP value,
+    OutputDesc desc);
 
 /// Describes a subgraph rooted at a single node with its leaf inputs and
 /// their tensor metadata.
@@ -133,6 +151,8 @@ std::vector<const c10::IValue*> listConstants(
 class KernelOperation {
  public:
   KernelOperation(const Subgraph& sg, int32_t opCode, CompileCtx& compileCtx);
+
+  NodeCP executableNode(NodeCP node);
 
   int32_t paramOffset(ValueCP value) const;
 
@@ -184,6 +204,10 @@ class KernelOperation {
     return orderedInputs_;
   }
 
+  bool isInput(ValueCP value) const {
+    return inputs_.count(value);
+  }
+
   const std::vector<OutputDesc>& outputDescs() const {
     return outputDescs_;
   }
@@ -217,10 +241,21 @@ class KernelOperation {
     return altParamOffset_;
   }
 
-  int32_t allocAltParam() {
+  int32_t allocAltParam(int32_t size = sizeof(Tensor)) {
     auto offset = altParamOffset_;
-    altParamOffset_ += sizeof(Tensor);
+    altParamOffset_ += size;
     return offset;
+  }
+
+  int32_t allocateBarrier() {
+    auto offset = altParamOffset_;
+    barrierCounters_.push_back(offset);
+    altParamOffset_ += 8;
+    return offset;
+  }
+
+  const std::vector<int32_t>& barrierCounters() const {
+    return barrierCounters_;
   }
 
   /// Returns the offset of the first alternate param and the number of
@@ -271,6 +306,18 @@ class KernelOperation {
 
   std::string toString(Listing mode = kExprs) const;
 
+  const std::string& exprString() const {
+    return exprString_;
+  }
+
+  const std::unordered_set<nativert::ValueId>& orderingInputs() const {
+    return orderingInputs_;
+  }
+
+  const std::unordered_set<nativert::ValueId>& orderingOutputs() const {
+    return orderingOutputs_;
+  }
+
   // Hash for (Node*, attrName) pairs used as keys in attrOffsets_.
   struct NodeAttrHash {
     size_t operator()(const std::pair<NodeCP, std::string>& key) const {
@@ -308,8 +355,7 @@ class KernelOperation {
   // 'inputs'. Not filled in in follow ups or single block variant.
   NodeCP expr_;
 
-  // The compilation context, used for accessing node outputs via
-  // CompileCtx::outputs() to handle multiblock variant indirection.
+  // The compilation context.
   CompileCtx& compileCtx_;
 
   // The Values this takes as input. All these are reachable from
@@ -353,6 +399,8 @@ class KernelOperation {
   int32_t altParamStart_{0};
   int32_t altParamOffset_{0};
 
+  std::vector<int32_t> barrierCounters_;
+
   std::vector<ElementExpr> elementExprs_;
 
   std::unordered_set<NodeCP> allNodes_;
@@ -367,6 +415,13 @@ class KernelOperation {
   // True if this kernel is present in both grid_ and singleBlockGrid_ (both
   // grids have a kernel at the corresponding position).
   bool isGridChoice_{false};
+
+  std::string exprString_;
+
+  std::unordered_set<nativert::ValueId> orderingInputs_;
+  std::unordered_set<nativert::ValueId> orderingOutputs_;
+
+  std::string makeExprString();
 };
 
 /// Builds a FormalToActual mapping from formal to actual value ids by walking

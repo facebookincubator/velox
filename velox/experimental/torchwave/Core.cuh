@@ -42,6 +42,23 @@ __device__ inline T elementRef(Tensor* t, uint32_t idx, uint32_t size) {
   return idx < size ? storage<T>(t)[idx] : T();
 }
 
+template <typename T>
+__device__ void __copy(Tensor* source, T* dest, BlockInfo& block) {
+  auto n = source->numEl;
+  uint32_t start = block.blockInOp * blockDim.x + threadIdx.x;
+  uint32_t stride = block.numBlocksInOp * blockDim.x;
+  if (source->contiguous) {
+    auto* src = storage<T>(source);
+    for (uint32_t i = start; i < n; i += stride) {
+      dest[i] = src[i];
+    }
+  } else {
+    for (uint32_t i = start; i < n; i += stride) {
+      dest[i] = storage<T>(source)[source->indexToOffset(i)];
+    }
+  }
+}
+
 __device__ inline void copyTensorHead(const Tensor* in, Tensor* out) {
   out->storage = in->storage;
   out->rank = in->rank;
@@ -83,11 +100,12 @@ struct Int32X32 {
   }                                                                            \
   __syncthreads();
 
-#define LEAVE()                                                \
-  __syncthreads();                                             \
-  if (threadIdx.x == 0 && blockInfo.debugInfo) {               \
-    blockInfo.debugInfo->clocks = clock64() - blockInfo.start; \
-    blockInfo.debugInfo->op = blockInfo.op;                    \
+#define LEAVE()                                                   \
+  __syncthreads();                                                \
+  if (threadIdx.x == 0 && blockInfo.debugInfo) {                  \
+    blockInfo.debugInfo->clocks = clock64() - blockInfo.start;    \
+    blockInfo.debugInfo->barrierClocks = blockInfo.barrierClocks; \
+    blockInfo.debugInfo->op = blockInfo.op;                       \
   }
 
 constexpr int32_t kWarpThreads = 32;
@@ -124,5 +142,21 @@ __device__ inline void traceTensor(const BlockInfo& block, int32_t offset) {
       __x;                  \
     }                       \
   } while (0)
+
+__device__ inline void opBarrier(BlockInfo& info, int32_t counterOffset) {
+  __threadfence();
+  __syncthreads();
+  if (threadIdx.x == 0) {
+    auto barrierStart = clock64();
+    auto* counter = param<int32_t>(info, counterOffset);
+    atomicAdd(counter, 1);
+    volatile int32_t* vc = reinterpret_cast<volatile int32_t*>(counter);
+    while (*vc < info.numBlocksInOp) {
+      __nanosleep(100);
+    }
+    info.barrierClocks += clock64() - barrierStart;
+  }
+  __syncthreads();
+}
 
 } // namespace torch::wave

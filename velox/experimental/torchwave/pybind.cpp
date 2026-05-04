@@ -59,16 +59,11 @@ PYBIND11_MODULE(_torchwave, m) {
       "register_elementwise_op",
       [](const std::string& qualifiedName,
          const std::string& elementwiseFuncName,
-         bool isStandalone,
-         std::vector<std::string> attributeArgs) {
+         bool isStandalone) {
         torch::wave::Registry::registerElementwiseOp(
-            qualifiedName,
-            elementwiseFuncName,
-            isStandalone,
-            std::move(attributeArgs));
+            qualifiedName, elementwiseFuncName, isStandalone);
       },
       py::arg("qualified_name"),
       py::arg("elementwise_func_name"),
-      py::arg("is_standalone"),
-      py::arg("attribute_args") = std::vector<std::string>{});
+      py::arg("is_standalone"));
 }

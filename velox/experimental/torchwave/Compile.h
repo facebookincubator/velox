@@ -68,6 +68,10 @@ using SubgraphKernelMap =
 
 enum class Context { kTop, kFused, kFusedBreak, kStandalone };
 
+/// Mode for variantSubgraph: kSingle copies as-is, kMulti and kCG expand
+/// nodes that have a multikernel or cg variant, respectively.
+enum class VariantMode { kSingle, kMulti, kCG };
+
 class CompileCtx {
  public:
   using NodeSet = std::unordered_set<NodeCP>;
@@ -89,28 +93,20 @@ class CompileCtx {
 
   LaunchGrid makeGrid(NodeCP node);
 
-  /// Returns the outputs of 'node'. When we make a multiblock variant of a
-  /// Node, the root of the variant should have the same outputs as the
-  /// original. However, we cannot splice a Value that is already an output of
-  /// one Node to a second Node. So we use this indirection: if the node is in
-  /// originalNode_, we return the original node's outputs instead.
-  const std::vector<nativert::Value*>& outputs(NodeCP node) const;
-
-  /// Returns the executable form of 'node'. In single block mode, returns
-  /// 'node' unchanged. Otherwise, returns the root of the multikernel variant
-  /// if one exists (creating it on first call), or 'node' itself.
-  NodeCP executableNode(NodeCP node);
-
-  /// Calls Metadata::makeMultiKernelVariant and records the mapping from the
-  /// variant root back to the original node in originalNode_.
-  NodeCP getMultiBlockVariant(NodeCP node, WaveGraph* waveGraph);
-
   bool isSingleBlock() const {
     return isSingleBlock_;
   }
 
   void setIsSingleBlock(bool value) {
     isSingleBlock_ = value;
+  }
+
+  bool isCgGrid() const {
+    return isCgGrid_;
+  }
+
+  void setIsCgGrid(bool value) {
+    isCgGrid_ = value;
   }
 
   /// Returns the next unique opcode for a KernelOperation.
@@ -141,6 +137,10 @@ class CompileCtx {
 
   void fusedCode(NodeCP node, std::vector<ResultSpec>& resultSpecs);
 
+  /// Returns true if any node reachable from 'value' within the current
+  /// generatingOp_ has an output with shapeSetOnDevice.
+  bool isSizeSetInThisOp(ValueCP value, std::unordered_set<ValueCP>& visited);
+
   void functionLoop(NodeCP node);
 
   std::string elementwiseExpr(
@@ -149,6 +149,27 @@ class CompileCtx {
       const std::vector<ValueCP>& inputs,
       bool slowPath = false);
 
+  /// Generates a barrier followed by a __view call for 'dest' as a view of
+  /// 'src' at the element offset given by 'offsetExpr'. Uses __syncthreads
+  /// for single block mode, OpBarrier otherwise.
+  void callView(
+      ValueCP src,
+      ValueCP dest,
+      const std::string& offsetExpr,
+      int32_t elementSize);
+
+  /// Emits a __copy<T> call that copies from 'source' (possibly strided) into
+  /// contiguous 'dest' at the byte offset given by 'destOffsetExpr' elements.
+  void emitCopy(
+      ValueCP source,
+      ValueCP dest,
+      const std::string& destOffsetExpr,
+      const std::string& cudaTypeName);
+
+  void emitCode(std::string_view text);
+
+  void emitBarrier();
+
   void addInclude(std::string_view header);
 
   std::string declareAttributes(
@@ -156,9 +177,18 @@ class CompileCtx {
       const KernelOperation& op,
       const std::vector<ValueCP>& inputs);
 
+  /// Emits setup code for a ScalarList parameter from either a prim.ListPack
+  /// value or a constant vector<int64_t> attribute. Allocates space in the
+  /// alt params area and returns the setup code string.
+  std::string emitScalarListSetup(
+      size_t argOrdinal,
+      ValueCP value,
+      const nativert::Attribute* attr,
+      NodeCP node);
+
   /// Generates a device function call string from the node's Metadata. Emits
   /// the deviceFunc name, optional type template parameters, input/output
-  /// params, attributes in alphabetic order, shared declarations, and
+  /// params, attributes in schema argument order, shared declarations, and
   /// blockInfo.
   std::string makeCall(
       NodeCP node,
@@ -213,6 +243,33 @@ class CompileCtx {
 
   static int32_t nextKernelId();
 
+  KernelOperation* generatingOp() const {
+    return generatingOp_;
+  }
+
+  void markPlaced(NodeCP node) {
+    placed_.insert(node);
+    generatingOp_->allNodes().insert(node);
+  }
+
+  bool isPlaced(NodeCP node) const {
+    return placed_.count(node);
+  }
+
+  /// Returns the original graph node for a variant subgraph copy, or
+  /// 'node' itself if not a copy.
+  NodeCP originalFromVariant(NodeCP node) const {
+    auto it = variantToOriginal_.find(node);
+    return it != variantToOriginal_.end() ? it->second : node;
+  }
+
+  /// Creates a new nativert::Graph with a deep copy of the contents of 'sg'.
+  /// In kSingle mode, copies as-is. In kMulti/kCG, expands nodes that have
+  /// a multikernel or cg variant. The graph is owned by the WaveGraph being
+  /// constructed. Returns a Subgraph whose root and inputs point into the
+  /// new graph.
+  Subgraph variantSubgraph(const Subgraph& sg, VariantMode mode);
+
  private:
   static std::atomic<int32_t> kernelCounter_;
 
@@ -259,6 +316,7 @@ class CompileCtx {
   WaveGraph& waveGraph_;
   const ValueTypes& types_;
   bool isSingleBlock_{false};
+  bool isCgGrid_{false};
   int32_t nextOpCode_{0};
   std::unordered_set<std::string> includes_;
   std::stringstream code_;
@@ -267,6 +325,7 @@ class CompileCtx {
   const std::unordered_set<NodeCP>* inputs_;
   NodeSet placed_;
   NodeSet placedBeforeNode_;
+  NodeSet standaloneNodes_;
 
   // Offset of param corresponding to Value in the kernel's BlockInfo::params.
   std::unordered_map<ValueCP, int32_t> valueParamOffset_;
@@ -296,15 +355,14 @@ class CompileCtx {
   // Intermediates within 'generatingOp_' that are backed by device memory.
   std::unordered_set<ValueCP> memoryValues_;
 
-  // Maps a multiblock variant root node back to the original node whose
-  // outputs it logically produces.
-  std::unordered_map<NodeCP, NodeCP> originalNode_;
-
-  // Maps an original node to its executable form (multikernel variant root,
-  // or the node itself if no variant exists).
-  std::unordered_map<NodeCP, NodeCP> executableNode_;
-
   const ElementExpr* currentElementExpr_{nullptr};
+
+  // Maps each index in leafInputs/allInputs to its tensor-only bit position
+  // in the isFastPath bitmask, or -1 for non-tensor inputs.
+  std::vector<int32_t> fastPathBitIndex_;
+
+  // Maps variant subgraph copy nodes back to original graph nodes.
+  std::unordered_map<NodeCP, NodeCP> variantToOriginal_;
 };
 
 } // namespace torch::wave

@@ -21,6 +21,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 
 #include <folly/container/F14Map.h>
 
@@ -36,7 +37,9 @@ using ValueCP = const nativert::Value*;
 using FrameP = nativert::ExecutionFrame*;
 
 class CompileCtx;
+class KernelOperation;
 class WaveGraph;
+struct OutputDesc;
 struct ResultSpec;
 struct ValueConstraint;
 struct ValueTypes;
@@ -48,12 +51,12 @@ struct ElementwiseOp {
   /// addition can have alpha
   int32_t numArgs{2};
 
-  /// Attribute names that map to extra args in the CUDA function, e.g.
-  /// {"alpha"} for add/sub, {"min", "max"} for clamp.
-  std::vector<std::string> attributeArgs;
-
   /// If true, idx is passed as the first argument before inputs and attributes.
   bool hasIdxArg{false};
+
+  /// If true, size (the element count of the first input) is passed after idx.
+  /// Requires hasIdxArg.
+  bool hasSizeArg{false};
 };
 
 /// Common cases of determining output size: kNone is a custom function, kMax is
@@ -103,6 +106,11 @@ struct ArgumentMeta {
   /// Marks that for an elementwise operation, we want the whole tensor as
   /// opposed to its element for this lane.
   bool wholeTensor{false};
+
+  /// If true, emits a bool template parameter indicating whether this argument
+  /// is present with a non-None value. Absent arguments and None-valued
+  /// attributes both produce false.
+  bool hasPresentTemplateParam{false};
 
   SizeShortcut sizeShortcut{SizeShortcut::kNone};
 
@@ -156,6 +164,11 @@ struct Metadata {
   std::function<nativert::Node*(NodeCP single, WaveGraph* waveGraph)>
       makeMultiKernelVariant;
 
+  /// Like makeMultiKernelVariant but for code generation variants.
+  std::function<nativert::Node*(NodeCP single, WaveGraph* waveGraph)> cgVariant;
+
+  int32_t numBarriers{0};
+
   /// The input can be overwritten and used as output if there are no concurrent
   /// or subsequent uses of input. True for example of elementwise arithmetic.
   bool inPlaceIfLastUse{false};
@@ -205,7 +218,7 @@ struct Metadata {
   std::function<std::vector<std::pair<ValueCP, ValueCP>>(
       NodeCP node,
       ValueTypes& types,
-      nativert::Graph* graph)>
+      WaveGraph& waveGraph)>
       maybeReplace;
 
   /// Called during graph normalization before filling in schema defaults.
@@ -275,6 +288,16 @@ struct Metadata {
     return false;
   }
 
+  /// Returns true if any argument has hasPresentTemplateParam set.
+  bool hasPresentTemplateParams() const {
+    for (const auto& am : argumentMeta) {
+      if (am.hasPresentTemplateParam) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /// Fills argumentMeta with default ArgumentMeta{} for each schema argument
   /// if argumentMeta is empty. Requires functionSchema to be set.
   void defaultInputMeta();
@@ -282,6 +305,18 @@ struct Metadata {
   /// Fills returnMeta with default ArgumentMeta{} for each schema return
   /// if returnMeta is empty. Requires functionSchema to be set.
   void defaultOutputMeta();
+
+  /// If set, called instead of the default setOutputs logic. The function
+  /// receives the same arguments as KernelOperation::setOutputs.
+  std::function<void(
+      KernelOperation* op,
+      NodeCP node,
+      const std::unordered_set<ValueCP>& subgraphInputs,
+      std::vector<ValueCP>& outputValues,
+      std::vector<OutputDesc>& outputDescs,
+      bool inMemory,
+      bool callerIsElementwise)>
+      setOutputs;
 
   bool isKernelBreak(bool isSingleBlock) const {
     for (auto& rm : returnMeta) {
@@ -310,9 +345,7 @@ class Registry {
   /// dispatcher, then creates a Metadata entry with sizeArgs={0},
   /// inPlaceIfLastUse=true, and an ElementwiseOp whose functionName is "--"
   /// followed by the op name part (e.g. "--add").
-  static void registerElementwise(
-      std::string_view qualifiedName,
-      std::vector<std::string> attributeArgs = {});
+  static void registerElementwise(std::string_view qualifiedName);
 
   /// Registers an elementwise op with an explicit CUDA function name and
   /// standalone flag. Use this to create aliases that share the same CUDA
@@ -320,8 +353,7 @@ class Registry {
   static void registerElementwiseOp(
       std::string_view qualifiedName,
       std::string_view elementwiseFuncName,
-      bool isStandalone,
-      std::vector<std::string> attributeArgs = {});
+      bool isStandalone);
 
   /// Stores a FunctionSchema for intrinsics not in the PyTorch dispatcher.
   /// Returns a stable pointer to the stored schema.
@@ -352,6 +384,9 @@ class MetadataBuilder {
   MetadataBuilder& alwaysSingleBlock(bool val = true);
   MetadataBuilder& makeMultiKernelVariant(
       std::function<nativert::Node*(NodeCP, WaveGraph*)> func);
+  MetadataBuilder& cgVariant(
+      std::function<nativert::Node*(NodeCP, WaveGraph*)> func);
+  MetadataBuilder& numBarriers(int32_t val);
   MetadataBuilder& inPlaceIfLastUse(bool val = true);
   MetadataBuilder& isStandalone(bool val = true);
   MetadataBuilder& only1d(bool val = true);
@@ -367,8 +402,7 @@ class MetadataBuilder {
           func);
   MetadataBuilder& maybeReplace(
       std::function<std::vector<
-          std::pair<ValueCP, ValueCP>>(NodeCP, ValueTypes&, nativert::Graph*)>
-          func);
+          std::pair<ValueCP, ValueCP>>(NodeCP, ValueTypes&, WaveGraph&)> func);
   MetadataBuilder& normalize(
       std::function<void(nativert::Node*, const ValueTypes&)> func);
   MetadataBuilder& generateCall(
@@ -387,12 +421,21 @@ class MetadataBuilder {
   MetadataBuilder& hasBlockSizeTemplateParam(bool val = true);
   MetadataBuilder& hasDtypeTemplateParam(bool val = true);
   MetadataBuilder& templateAttrs(std::vector<std::string> attrs);
+  MetadataBuilder& setOutputs(
+      std::function<void(
+          KernelOperation* op,
+          NodeCP node,
+          const std::unordered_set<ValueCP>& subgraphInputs,
+          std::vector<ValueCP>& outputValues,
+          std::vector<OutputDesc>& outputDescs,
+          bool inMemory,
+          bool callerIsElementwise)> func);
 
   MetadataBuilder& elementwise();
   MetadataBuilder& elementwiseFunc(std::string funcName);
   MetadataBuilder& numArgs(int32_t n);
-  MetadataBuilder& attributeArgs(std::vector<std::string> args);
   MetadataBuilder& hasIdxArg(bool val = true);
+  MetadataBuilder& hasSizeArg(bool val = true);
 
   Metadata build();
   void registerOp();

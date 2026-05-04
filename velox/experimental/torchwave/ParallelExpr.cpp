@@ -271,6 +271,12 @@ ProjectNode* ParallelNodes::makeParallelProject(
     std::vector<ExprCP> orderedExprs) {
   if (orderedExprs.empty()) {
     orderedExprs.assign(topExprs.begin(), topExprs.end());
+    std::sort(orderedExprs.begin(), orderedExprs.end(), [](ExprCP a, ExprCP b) {
+      auto idOf = [](ExprCP e) {
+        return e->outputs().empty() ? 0 : e->outputs()[0]->id();
+      };
+      return idOf(a) < idOf(b);
+    });
   }
   std::vector<NodeCP> nodes;
   PlanObjectSet seen;

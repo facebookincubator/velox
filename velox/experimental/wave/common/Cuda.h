@@ -272,6 +272,16 @@ struct CompiledModule {
       Stream* stream,
       void** args) = 0;
 
+  /// Launches the kernel as a cooperative grid. All blocks are guaranteed
+  /// to be resident simultaneously.
+  virtual void launchCooperative(
+      int32_t kernelIdx,
+      int32_t numBlocks,
+      int32_t numThreads,
+      int32_t shared,
+      Stream* stream,
+      void** args) = 0;
+
   /// Returns resource utilization for 'kernelIdx'th entry point.
   virtual KernelInfo info(int32_t kernelIdx) = 0;
 };
@@ -298,6 +308,14 @@ class CompiledKernel {
       KernelGenFunc func);
 
   virtual void launch(
+      int32_t idx,
+      int32_t numBlocks,
+      int32_t numThreads,
+      int32_t shared,
+      Stream* stream,
+      void** args) = 0;
+
+  virtual void launchCooperative(
       int32_t idx,
       int32_t numBlocks,
       int32_t numThreads,

@@ -144,6 +144,26 @@ const Metadata* nodeMeta(NodeCP node) {
 
 // --- WaveGraph ---
 
+WaveGraph::WaveGraph(ValueTypes types, nativert::Graph& graph)
+    : types_(std::move(types)), graph_(&graph) {}
+
+std::unique_ptr<WaveGraph> WaveGraph::optimizeOnly(
+    nativert::Graph& graph,
+    ValueTypes types) {
+  auto wg = std::unique_ptr<WaveGraph>(new WaveGraph(types, graph));
+  waveGraph() = wg.get();
+  SCOPE_EXIT {
+    waveGraph() = nullptr;
+  };
+  wg->normalizeAndAnnotateGraph();
+  for (auto* v : graph.values()) {
+    wg->idToValue_[v->id()] = v;
+  }
+  wg->optimizer_ = std::make_unique<Optimizer>(*wg);
+  wg->optimizer_->optimizeGraph(wg->graph_);
+  return wg;
+}
+
 WaveGraph::WaveGraph(nativert::Graph& graph, ValueTypes types)
     : types_(std::move(types)), graph_(&graph) {
   waveGraph() = this;
@@ -154,12 +174,17 @@ WaveGraph::WaveGraph(nativert::Graph& graph, ValueTypes types)
   for (auto* v : graph.values()) {
     idToValue_[v->id()] = v;
   }
-  optimizer_ = std::make_unique<Optimizer>(types_);
+  optimizer_ = std::make_unique<Optimizer>(*this);
   optimizer_->optimizeGraph(graph_);
+  createdValueDtypes_.clear();
   ParallelNodes parallelNodes;
   auto* lastProjectNode = parallelNodes.makeParallelNodes(graph);
 
   CompileCtx ctx(*this);
+  compileCtx_ = &ctx;
+  SCOPE_EXIT {
+    compileCtx_ = nullptr;
+  };
 
   // Collect nodes from last to first, then reverse to get leafmost first.
   std::vector<ProjectNode*> ordered;
@@ -310,8 +335,10 @@ void WaveGraph::registerTensorMeta(ValueCP value, c10::ScalarType dtype) {
   auto id = value->id();
   if (id >= static_cast<int>(types_.types.size())) {
     types_.types.resize(id + 1, nullptr);
+    types_.constraints.resize(id + 1);
   }
   types_.types[id] = metaPtr;
+  idToValue_[id] = value;
 }
 
 nativert::Value* WaveGraph::newTensorValue(
@@ -322,7 +349,7 @@ nativert::Value* WaveGraph::newTensorValue(
   auto* value =
       node->addOutput(uname, nativert::Type(nativert::Type::Kind::Tensor));
   registerTensorMeta(value, dtype);
-  createdValueDtypes_[value] = dtype;
+  createdValueDtypes_[value->id()] = dtype;
   return value;
 }
 
@@ -350,20 +377,22 @@ nativert::Value* WaveGraph::newScalarValue(
   auto id = value->id();
   if (id >= static_cast<int>(types_.types.size())) {
     types_.types.resize(id + 1, nullptr);
+    types_.constraints.resize(id + 1);
   }
-  createdValueDtypes_[value] = dtype;
+  idToValue_[id] = value;
+  createdValueDtypes_[value->id()] = dtype;
   return value;
 }
 
 bool WaveGraph::isCreatedValue(ValueCP value) const {
-  return createdValueDtypes_.count(value) > 0;
+  return createdValueDtypes_.count(value->id()) > 0;
 }
 
 nativert::Value* WaveGraph::duplicateValue(ValueCP original) {
   if (!placeholderNode_) {
     placeholderNode_ = graph_->createNode("tw.placeholder", {});
   }
-  auto it = createdValueDtypes_.find(original);
+  auto it = createdValueDtypes_.find(original->id());
   TORCH_CHECK(
       it != createdValueDtypes_.end(),
       "Cannot duplicate: value not tracked by newTensorValue/newScalarValue");
@@ -374,7 +403,6 @@ nativert::Value* WaveGraph::duplicateValue(ValueCP original) {
   } else {
     result = newScalarValue(placeholderNode_, original->name(), dtype);
   }
-  idToValue_[result->id()] = result;
   return result;
 }
 

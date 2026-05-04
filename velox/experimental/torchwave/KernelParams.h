@@ -180,11 +180,22 @@ struct Tensor {
 #endif
 };
 
+struct TensorList {
+  int64_t size;
+  Tensor** tensors;
+};
+
+  struct ScalarList {
+  int64_t size;
+  int64_t* data;
+};
+
 /// Struct for returning errors to host. Each block has one. These may be
 /// checked at a delay, so return status that requires action on host side must
 /// be sent in returnStatus, not here.
 struct DebugInfo {
   int64_t clocks{0};
+  int64_t barrierClocks{0};
   int32_t op{0};
   int32_t line{0};
   int64_t extra[2] = {};
@@ -213,6 +224,7 @@ struct BlockInfo {
 
   /// clock64() at start of block.
   int64_t start;
+  int64_t barrierClocks;
 };
 
 struct TorchWaveParams {

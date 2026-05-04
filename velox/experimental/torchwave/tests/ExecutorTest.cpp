@@ -48,6 +48,14 @@ TEST_F(ExecutorTest, maskedSelectTest) {
       "data/masked_select_test.pt2",
       "data/masked_select_test_results.pt",
       "3 step");
+
+  WaveConfig::get().useSingleBlock = std::nullopt;
+  WaveConfig::get().isCg = true;
+  runTest(
+      "data/masked_select_test.pt2",
+      "data/masked_select_test_results.pt",
+      "cg");
+  WaveConfig::get().isCg = std::nullopt;
 }
 
 TEST_F(ExecutorTest, sumTest) {
@@ -56,6 +64,11 @@ TEST_F(ExecutorTest, sumTest) {
 
   WaveConfig::get().useSingleBlock = true;
   runTest("data/sum_test.pt2", "data/sum_test_results.pt", "single-block");
+
+  WaveConfig::get().useSingleBlock = std::nullopt;
+  WaveConfig::get().isCg = true;
+  runTest("data/sum_test.pt2", "data/sum_test_results.pt", "cg");
+  WaveConfig::get().isCg = std::nullopt;
 }
 
 TEST_F(ExecutorTest, cumsumTest) {
@@ -65,6 +78,68 @@ TEST_F(ExecutorTest, cumsumTest) {
   WaveConfig::get().useSingleBlock = true;
   runTest(
       "data/cumsum_test.pt2", "data/cumsum_test_results.pt", "single-block");
+
+  WaveConfig::get().useSingleBlock = std::nullopt;
+  WaveConfig::get().isCg = true;
+  runTest("data/cumsum_test.pt2", "data/cumsum_test_results.pt", "cg");
+  WaveConfig::get().isCg = std::nullopt;
+}
+
+TEST_F(ExecutorTest, exclusiveSumTest) {
+  WaveConfig::get().useSingleBlock = false;
+  runTest(
+      "data/exclusive_sum_test.pt2",
+      "data/exclusive_sum_test_results.pt",
+      "multi-block");
+
+  WaveConfig::get().useSingleBlock = true;
+  runTest(
+      "data/exclusive_sum_test.pt2",
+      "data/exclusive_sum_test_results.pt",
+      "single-block");
+
+  WaveConfig::get().useSingleBlock = std::nullopt;
+  WaveConfig::get().isCg = true;
+  runTest(
+      "data/exclusive_sum_test.pt2",
+      "data/exclusive_sum_test_results.pt",
+      "cg");
+  WaveConfig::get().isCg = std::nullopt;
+}
+
+TEST_F(ExecutorTest, repeatInterleaveTest) {
+  WaveConfig::get().useSingleBlock = false;
+  runTest(
+      "data/repeat_interleave_test.pt2",
+      "data/repeat_interleave_test_results.pt",
+      "multi-block");
+
+  WaveConfig::get().useSingleBlock = true;
+  runTest(
+      "data/repeat_interleave_test.pt2",
+      "data/repeat_interleave_test_results.pt",
+      "single-block");
+
+  WaveConfig::get().useSingleBlock = std::nullopt;
+  WaveConfig::get().isCg = true;
+  runTest(
+      "data/repeat_interleave_test.pt2",
+      "data/repeat_interleave_test_results.pt",
+      "cg");
+  WaveConfig::get().isCg = std::nullopt;
+}
+
+TEST_F(ExecutorTest, catTest) {
+  WaveConfig::get().useSingleBlock = false;
+  runTest("data/cat_test.pt2", "data/cat_test_results.pt", "multi-block");
+
+  WaveConfig::get().useSingleBlock = true;
+  runTest("data/cat_test.pt2", "data/cat_test_results.pt", "single-block");
+
+  WaveConfig::get().useSingleBlock = std::nullopt;
+  WaveConfig::get().isCg = true;
+  runTest("data/cat_test.pt2", "data/cat_test_results.pt", "cg");
+  WaveConfig::get().isCg = std::nullopt;
 }
 
 TEST_F(ExecutorTest, elementShapeTest) {
@@ -79,6 +154,10 @@ TEST_F(ExecutorTest, elementShapeNcTest) {
 
 TEST_F(ExecutorTest, elementTest2) {
   runTest("data/element_test2.pt2", "data/element_test2_results.pt");
+}
+
+TEST_F(ExecutorTest, isinTest) {
+  runTest("data/isin_test.pt2", "data/isin_test_results.pt");
 }
 
 TEST_F(ExecutorTest, custom) {

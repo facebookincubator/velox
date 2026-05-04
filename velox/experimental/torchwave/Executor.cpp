@@ -18,7 +18,10 @@
 
 #include <ATen/ATen.h>
 #include <gflags/gflags.h>
+#include <folly/ScopeGuard.h>
 #include <chrono>
+#include <iostream>
+#include "velox/experimental/torchwave/WaveConfig.h"
 #include "velox/experimental/wave/common/Cuda.h"
 #include "velox/experimental/wave/common/GpuArena.h"
 
@@ -185,6 +188,7 @@ void runStandalones(
     const std::unordered_map<NodeCP, int32_t>& standaloneIndices,
     std::vector<StandaloneStats>& standaloneStats) {
   using Clock = std::chrono::high_resolution_clock;
+  auto trace = WaveConfig::get().trace;
   for (const auto& data : standalones) {
     auto* actualNode = data.standalone;
 
@@ -194,11 +198,21 @@ void runStandalones(
         "No kernel for node ",
         actualNode->target());
 
+    if (trace) {
+      std::cout << "  standalone " << actualNode->target() << std::endl;
+    }
     auto start = Clock::now();
     kernelIt->second->compute(*state.frame);
     auto us = std::chrono::duration_cast<std::chrono::microseconds>(
                   Clock::now() - start)
                   .count();
+    if (trace & WaveConfig::kFrame) {
+      for (auto outputId : data.actualOutputs) {
+        const auto& iv = state.frame->getIValue(outputId);
+        std::cout << "    v" << outputId << " = " << traceIValue(iv)
+                  << std::endl;
+      }
+    }
 
     auto idxIt = standaloneIndices.find(actualNode);
     if (idxIt != standaloneIndices.end()) {
@@ -310,9 +324,28 @@ std::vector<c10::IValue> WaveGraphExecutor::executeWithPrefilledFrame(
   }
 
   executeWave(frame, *waveGraph_);
+  if (WaveConfig::get().trace & WaveConfig::kTensors) {
+    for (auto* value : graph_.outputs()) {
+      const auto& iv = frame.getIValue(value->id());
+      std::cout << "  output v" << value->id() << " " << traceIValue(iv)
+                << std::endl;
+    }
+  }
   // tryMoveUserOutputs moves the output IValues out of the frame, decoupling
   // them so the frame can be safely returned to the pool.
-  return frame.tryMoveUserOutputs();
+  auto results = frame.tryMoveUserOutputs();
+  // Fix up outputs that the graph recorded as Constant(None) but that have
+  // a computed tensor in the frame (e.g. dynamic-shape outputs).
+  auto outputValues = graph_.outputs();
+  for (size_t i = 0; i < results.size() && i < outputValues.size(); ++i) {
+    if (results[i].isNone()) {
+      const auto& iv = frame.getIValue(outputValues[i]->id());
+      if (!iv.isNone()) {
+        results[i] = iv;
+      }
+    }
+  }
+  return results;
 }
 
 void WaveGraphExecutor::executeWave(
@@ -325,6 +358,15 @@ void WaveGraphExecutor::executeWave(
   }
   facebook::velox::wave::setDevice(waveDevice);
 
+  auto*& threadWaveGraph = torch::wave::waveGraph();
+  auto* prevWaveGraph = threadWaveGraph;
+  if (!prevWaveGraph) {
+    threadWaveGraph = &waveGraph;
+  }
+  SCOPE_EXIT {
+    threadWaveGraph = prevWaveGraph;
+  };
+
   Timer w("top exec", FLAGS_print_timing);
   auto* g = globals();
   launchDebugInfos_.clear();
@@ -332,18 +374,12 @@ void WaveGraphExecutor::executeWave(
   // Get a reusable ExecutionState from the pool.
   auto statePtr = waveGraph.getState();
   auto& state = *statePtr;
-
-  // RAII guard returns the stream and state to the pool on scope exit.
-  struct StateGuard {
-    WaveGraph& graph;
-    std::unique_ptr<ExecutionState> state;
-    ~StateGuard() {
-      if (state->stream) {
-        state->streamPool->put(std::move(state->stream));
-      }
-      graph.returnState(std::move(state));
+  SCOPE_EXIT {
+    if (statePtr->stream) {
+      statePtr->streamPool->put(std::move(statePtr->stream));
     }
-  } guard{waveGraph, std::move(statePtr)};
+    waveGraph.returnState(std::move(statePtr));
+  };
 
   // Fill per-call fields.
   state.frame = &frame;

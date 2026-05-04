@@ -33,7 +33,7 @@ _aten_lib.impl(
 # Register in torchwave registry with isStandalone=true, reusing the "add"
 # CUDA function name so the same elementwise kernel is generated.
 register_elementwise_op(
-    "torch.ops.aten.add_standalone.Tensor", "add", True, ["alpha"]
+    "torch.ops.aten.add_standalone.Tensor", "add", True
 )
 
 

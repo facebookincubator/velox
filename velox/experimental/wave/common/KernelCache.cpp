@@ -47,6 +47,18 @@ class FutureCompiledModule : public CompiledModule {
     module_->launch(kernelIdx, numBlocks, numThreads, shared, stream, args);
   }
 
+  void launchCooperative(
+      int32_t kernelIdx,
+      int32_t numBlocks,
+      int32_t numThreads,
+      int32_t shared,
+      Stream* stream,
+      void** args) override {
+    ensureReady();
+    module_->launchCooperative(
+        kernelIdx, numBlocks, numThreads, shared, stream, args);
+  }
+
   KernelInfo info(int32_t kernelIdx) override {
     ensureReady();
     return module_->info(kernelIdx);
@@ -82,6 +94,17 @@ class AsyncCompiledKernel : public CompiledKernel {
       Stream* stream,
       void** args) override {
     (*ptr_)->launch(kernelIdx, numBlocks, numThreads, shared, stream, args);
+  }
+
+  void launchCooperative(
+      int32_t kernelIdx,
+      int32_t numBlocks,
+      int32_t numThreads,
+      int32_t shared,
+      Stream* stream,
+      void** args) override {
+    (*ptr_)->launchCooperative(
+        kernelIdx, numBlocks, numThreads, shared, stream, args);
   }
 
   KernelInfo info(int32_t kernelIdx) override {

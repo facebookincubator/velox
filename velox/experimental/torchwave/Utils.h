@@ -108,6 +108,70 @@ std::string dtypeName(const nativert::Attribute& attr);
 /// Float → "Float", Int → "Int32", Long → "Int64".
 std::string cudaTypeIdSuffix(c10::ScalarType dtype);
 
+// Returns true if 'name' should be skipped during argument iteration based on
+// the Metadata skip lists and well-known non-argument attributes.
+inline bool isSkippedAttribute(const std::string& name, const Metadata* meta) {
+  if (name == "dtype" || name == "layout" || name == "pin_memory" ||
+      name == "device") {
+    return true;
+  }
+  if (meta && !meta->shapeAttr.empty() && name == meta->shapeAttr) {
+    return true;
+  }
+  if (meta && !meta->ignoreAttrs.empty() &&
+      std::find(
+          meta->ignoreAttrs.begin(), meta->ignoreAttrs.end(), name) !=
+          meta->ignoreAttrs.end()) {
+    return true;
+  }
+  if (meta && !meta->templateAttrs.empty() &&
+      std::find(
+          meta->templateAttrs.begin(), meta->templateAttrs.end(), name) !=
+          meta->templateAttrs.end()) {
+    return true;
+  }
+  return false;
+}
+
+/// Iterates over the arguments of the node's function schema in declaration
+/// order. For each argument, looks it up first in the node's inputs (by name),
+/// then in the node's attributes. Skips arguments that match the
+/// forEachSortedAttribute skip criteria. Calls func(schemaArgIndex, value, attr)
+/// where value is non-null if the argument is a node input and attr is non-null
+/// if it is an attribute.
+template <typename Func>
+void forArguments(const Metadata& meta, NodeCP node, Func&& func) {
+  TORCH_CHECK(
+      meta.functionSchema, "forArguments requires functionSchema on metadata");
+  const auto& schemaArgs = meta.functionSchema->arguments();
+  const auto& nodeInputs = node->inputs();
+  for (size_t i = 0; i < schemaArgs.size(); ++i) {
+    const auto& argName = schemaArgs[i].name();
+    if (isSkippedAttribute(argName, &meta)) {
+      continue;
+    }
+    ValueCP value = nullptr;
+    for (const auto& input : nodeInputs) {
+      if (input.name == argName) {
+        value = input.value;
+        break;
+      }
+    }
+    if (value) {
+      func(i, value, static_cast<const nativert::Attribute*>(nullptr));
+      continue;
+    }
+    const auto* attr = node->tryGetAttribute(argName);
+    if (attr) {
+      if (std::holds_alternative<std::string>(attr->value) ||
+          std::holds_alternative<c10::Device>(attr->value)) {
+        continue;
+      }
+      func(i, static_cast<ValueCP>(nullptr), attr);
+    }
+  }
+}
+
 /// Visits sorted attributes of each node reachable from 'node' in dependency
 /// order. Skips values in 'inputs' and already-visited nodes. Calls
 /// func(node, attr) for each attribute in alphabetical order per node.
@@ -124,25 +188,10 @@ void forEachSortedAttribute(NodeCP node, Func&& func) {
   sorted.reserve(attrs.size());
   for (const auto& attr : attrs) {
     if (std::holds_alternative<std::string>(attr.value) ||
-        std::holds_alternative<c10::Device>(attr.value) ||
-        attr.name == "dtype" || attr.name == "layout" ||
-        attr.name == "pin_memory") {
+        std::holds_alternative<c10::Device>(attr.value)) {
       continue;
     }
-    if (meta && !meta->shapeAttr.empty() && attr.name == meta->shapeAttr) {
-      continue;
-    }
-    if (meta && !meta->ignoreAttrs.empty() &&
-        std::find(
-            meta->ignoreAttrs.begin(), meta->ignoreAttrs.end(), attr.name) !=
-            meta->ignoreAttrs.end()) {
-      continue;
-    }
-    if (meta && !meta->templateAttrs.empty() &&
-        std::find(
-            meta->templateAttrs.begin(),
-            meta->templateAttrs.end(),
-            attr.name) != meta->templateAttrs.end()) {
+    if (isSkippedAttribute(attr.name, meta)) {
       continue;
     }
     sorted.push_back(&attr);
@@ -210,5 +259,9 @@ class Timer {
 /// Sets device attributes on all nodes in 'graph' to CUDA (current device) or
 /// CPU. Uses nativert's Placement API to rewrite c10::Device attributes.
 void setGraphDevice(nativert::Graph* graph, bool isCuda);
+
+/// Returns a trace string for a c10::IValue: "[d0, d1, ...]" for tensors,
+/// the value for scalars, or "none" for None.
+std::string traceIValue(const c10::IValue& value);
 
 } // namespace torch::wave

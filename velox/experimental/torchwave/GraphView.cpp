@@ -25,8 +25,8 @@
 #include <torch/nativert/graph/TensorMeta.h>
 
 #include "velox/experimental/torchwave/Executor.h"
-#include "velox/experimental/torchwave/GraphOptimizer.h"
 #include "velox/experimental/torchwave/ParallelExpr.h"
+#include "velox/experimental/torchwave/WaveGraph.h"
 
 namespace torch::wave {
 
@@ -100,13 +100,14 @@ void printGraphView(
 
   ValueTypes types;
   std::vector<std::unique_ptr<torch::nativert::TensorMeta>> metaStore;
+  std::unique_ptr<WaveGraph> waveGraphHolder;
   if (optimize || valueMeta) {
     initValueTypes(graph, types, metaStore);
-    Optimizer optimizer(types);
-    optimizer.optimizeGraph(&graph);
+    waveGraphHolder = WaveGraph::optimizeOnly(graph, std::move(types));
   }
 
-  const ValueTypes* typesPtr = (valueMeta) ? &types : nullptr;
+  const ValueTypes* typesPtr =
+      (valueMeta && waveGraphHolder) ? &waveGraphHolder->types() : nullptr;
   std::cout << "\nProject Nodes:\n";
   torch::wave::ParallelNodes parallelNodes;
   auto* lastProjectNode = parallelNodes.makeParallelNodes(graph);

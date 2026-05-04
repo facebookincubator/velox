@@ -80,6 +80,10 @@ class ProjectOperation {
     return singleBlockGrid_;
   }
 
+  LaunchGrid& cgGrid() {
+    return cgGrid_;
+  }
+
   int32_t singleBlockMaxSize() const {
     return singleBlockMaxSize_;
   }
@@ -102,6 +106,9 @@ class ProjectOperation {
   // If set, there is a single block variant that can process the input more
   // efficiently with fewer launches if the input is small enough.
   LaunchGrid singleBlockGrid_;
+
+  // If set, a cooperative grid variant using cgVariant metadata.
+  LaunchGrid cgGrid_;
 
   // Use single block variant if the largest input is <= than this
   int32_t singleBlockMaxSize_{0};
@@ -169,6 +176,14 @@ class CompositeKernel {
       facebook::velox::wave::Stream* stream,
       void** args);
 
+  /// Launches the kernel as a cooperative grid.
+  void launchCooperative(
+      int32_t numBlocks,
+      int32_t numThreads,
+      int32_t sharedMemory,
+      facebook::velox::wave::Stream* stream,
+      void** args);
+
   /// Returns occupancy information for the compiled kernel. Returns a
   /// default KernelInfo if no GPU is available.
   facebook::velox::wave::KernelInfo kernelInfo() const;
@@ -188,6 +203,12 @@ struct GridChoice {
 };
 
 /// Data for a single launch within a step of the grid.
+struct TensorListParam {
+  int32_t listOffset;
+  std::vector<int32_t> elementOffsets;
+  std::vector<nativert::ValueId> elementIds;
+};
+
 struct LaunchData {
   LaunchData() = default;
   LaunchData(
@@ -196,7 +217,7 @@ struct LaunchData {
       const IdToValueMap& idToValue);
 
   const Launch* launch{nullptr};
-  OpInvocation* op{nullptr};
+  OpInvocation* invocation{nullptr};
   NodeCP standalone{nullptr};
   SizeExpr sizeExpr;
   int64_t numElements;
@@ -218,6 +239,8 @@ struct LaunchData {
   std::vector<int32_t> returnOffsets;
   // Type kind for each return value, parallel to returnValues.
   std::vector<nativert::Type::Kind> returnTypes;
+
+  std::vector<TensorListParam> tensorLists;
 };
 
 struct CompositeInvocation {
@@ -254,6 +277,12 @@ struct CompositeInvocation {
       StepVectors& sv,
       nativert::ExecutionFrame& frame,
       uint8_t* pinnedBase);
+
+  /// Prints per-step trace: step header and per-launch details.
+  void traceStep(
+      int32_t stepIdx,
+      const StepVectors& sv,
+      const std::vector<GridChoice>& gridChoices);
 
   std::string toString(Listing mode = kExprs, int32_t ordinal = 0) const;
 

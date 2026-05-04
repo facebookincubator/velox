@@ -22,6 +22,11 @@
 namespace torch::wave {
 
 struct WaveConfig {
+  static constexpr int32_t kNodes = 1;
+  static constexpr int32_t kLaunches = 2;
+  static constexpr int32_t kTensors = 4;
+  static constexpr int32_t kFrame = 8;
+
   int32_t blockSize{256};
   int32_t singleBlockPathBlockSize{1024};
   bool allStandalone{false};
@@ -31,9 +36,16 @@ struct WaveConfig {
   /// device.
   int32_t numSms{0};
 
+  /// Trace bit mask. kNodes prints node headers, kLaunches prints per-launch
+  /// details.
+  int32_t trace{0};
+
   /// If set, forces the grid choice between single-block and multi-block
   /// variants. If nullopt, the choice is made based on input size.
   std::optional<bool> useSingleBlock;
+
+  /// If set and true, use the cooperative grid variant when available.
+  std::optional<bool> isCg;
 
   static WaveConfig& get() {
     static WaveConfig instance;

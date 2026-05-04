@@ -127,14 +127,14 @@ __device__ void masked_select_head(
   }
 }
 
-template <int32_t kBlockSize, typename T = int32_t>
+template <int32_t kBlockSize, typename T = uint32_t, typename T2>
 __device__ void add_sizes(
     Tensor* input,
-    T* output,
+    T2* output,
     void* temp,
     uint32_t& size,
     uint32_t& rounded,
-    uint32_t& counter,
+    T& counter,
     BlockInfo& block) {
   if (threadIdx.x == 0) {
     size = numEl(*input);
@@ -164,13 +164,13 @@ __device__ void add_sizes(
 }
 
 // Overload without output argument for use as middle stage of cumsum.
-template <int32_t kBlockSize, typename T = int32_t>
+template <int32_t kBlockSize, typename T = uint32_t>
 __device__ void add_sizes(
     Tensor* input,
     void* temp,
     uint32_t& size,
     uint32_t& rounded,
-    uint32_t& counter,
+    T& counter,
     BlockInfo& block) {
   add_sizes<kBlockSize, T>(
       input, static_cast<T*>(nullptr), temp, size, rounded, counter, block);
@@ -327,7 +327,7 @@ __device__ void cumsum_final(
 
 // Single-block exclusive prefix sum. Output has size+1 elements.
 // out[0] = 0, out[i+1] = sum(in[0..i]).
-template <int32_t kBlockSize, typename TIn, typename TOut>
+template <int32_t kBlockSize, typename TIn, typename TOut, int32_t dim = 0>
 __device__ void exclusive_sum(
     Tensor* input,
     Tensor* output,
@@ -410,6 +410,46 @@ __device__ void exclusive_sum_final(
       out[idx + 1] = sum;
     }
     blockIdx += block.numBlocksInOp;
+  }
+}
+
+// repeat_interleave head stage: compute inclusive prefix sums of repeats into
+// a separate prefix tensor and write the total to *total.
+template <int32_t kBlockSize>
+__device__ void repeat_interleave_head(
+    Tensor* repeats,
+    Tensor* prefix,
+    int32_t* total,
+    Int32X32& warpSums,
+    uint32_t& size,
+    uint32_t& rounded,
+    uint32_t& counter,
+    BlockInfo& block) {
+  if (threadIdx.x == 0) {
+    size = numEl(*repeats);
+    counter = 0;
+    rounded = roundUpPwr2(size, kBlockSize);
+  }
+  __syncthreads();
+  int64_t* in = storage<int64_t>(repeats);
+  uint32_t* out = storage<uint32_t>(prefix);
+  for (uint32_t idx = threadIdx.x; idx < rounded; idx += blockDim.x) {
+    uint32_t val = (idx < size) ? static_cast<uint32_t>(in[idx]) : 0;
+    if (threadIdx.x == 0) {
+      val += counter;
+    }
+    uint32_t sum = facebook::velox::wave::inclusiveSum<uint32_t, kBlockSize>(
+        val, nullptr, reinterpret_cast<uint32_t*>(&warpSums));
+    if (idx < size) {
+      out[idx] = sum;
+    }
+    if (threadIdx.x == blockDim.x - 1) {
+      counter = sum;
+    }
+    __syncthreads();
+  }
+  if (threadIdx.x == 0 && total) {
+    *total = counter;
   }
 }
 
@@ -538,6 +578,116 @@ __device__ void tw_sum(
   if (threadIdx.x == 0 && idx + kBlockSize >= size) {
     *storage<TOut>(output) = counterT;
   }
+}
+
+// --- Cooperative grid variants ---
+
+template <int32_t kBlockSize, typename TIn, typename TOut, int32_t dim = 0>
+__device__ void cumsum_cg(
+    Tensor* input,
+    Tensor* output,
+    Tensor* counts,
+    void* temp,
+    uint32_t& size,
+    uint32_t& rounded,
+    TOut& counter,
+    int32_t bar0,
+    int32_t bar1,
+    BlockInfo& block) {
+  cumsum_head<kBlockSize, TIn, TOut>(input, counts, temp, size, rounded, block);
+  opBarrier(block, bar0);
+  if (block.blockInOp == 0) {
+    add_sizes<kBlockSize, TOut>(counts, temp, size, rounded, counter, block);
+  }
+  opBarrier(block, bar1);
+  cumsum_final<kBlockSize, TIn, TOut, dim>(
+      input, counts, output, temp, size, rounded, block);
+}
+
+template <int32_t kBlockSize, typename TIn, typename TOut>
+__device__ void exclusive_sum_cg(
+    Tensor* input,
+    Tensor* output,
+    Tensor* counts,
+    void* temp,
+    uint32_t& size,
+    uint32_t& rounded,
+    TOut& counter,
+    int32_t bar0,
+    int32_t bar1,
+    BlockInfo& block) {
+  exclusive_sum_head<kBlockSize, TIn, TOut>(
+      input, counts, temp, size, rounded, block);
+  opBarrier(block, bar0);
+  if (block.blockInOp == 0) {
+    add_sizes<kBlockSize, TOut>(counts, temp, size, rounded, counter, block);
+  }
+  opBarrier(block, bar1);
+  exclusive_sum_final<kBlockSize, TIn, TOut>(
+      input, counts, output, temp, size, rounded, block);
+}
+
+template <int32_t kBlockSize, typename T>
+__device__ void masked_select_cg(
+    Tensor* input,
+    Tensor* mask,
+    Tensor* output,
+    Tensor* counts,
+    void* temp,
+    uint32_t& size,
+    uint32_t& rounded,
+    uint32_t& counter,
+    int32_t bar0,
+    int32_t bar1,
+    int32_t bar2,
+    BlockInfo& block) {
+  masked_select_head<kBlockSize, T>(
+      input, mask, counts, temp, size, rounded, block);
+  opBarrier(block, bar0);
+  if (block.blockInOp == 0) {
+    add_sizes<kBlockSize>(
+        counts,
+        static_cast<int32_t*>(nullptr),
+        temp,
+        size,
+        rounded,
+        counter,
+        block);
+  }
+  opBarrier(block, bar1);
+  masked_select_final<kBlockSize, T>(
+      input,
+      mask,
+      counts,
+      static_cast<int32_t*>(nullptr),
+      output,
+      temp,
+      size,
+      rounded,
+      block);
+  opBarrier(block, bar2);
+}
+
+template <int32_t kBlockSize, typename TIn, typename TOut>
+__device__ void tw_sum_cg(
+    Tensor* input,
+    Tensor* output,
+    Tensor* partials,
+    void* temp,
+    uint32_t& size,
+    uint32_t& rounded,
+    TOut& counterT,
+    int32_t bar0,
+    int32_t bar1,
+    BlockInfo& block) {
+  tw_sum_head<kBlockSize, TIn, TOut>(
+      input, partials, temp, size, rounded, block);
+  opBarrier(block, bar0);
+  if (block.blockInOp == 0) {
+    tw_sum_tensor<kBlockSize, TOut, TOut>(
+        partials, output, temp, size, rounded, counterT, block);
+  }
+  opBarrier(block, bar1);
 }
 
 } // namespace torch::wave

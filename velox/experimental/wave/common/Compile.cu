@@ -72,6 +72,14 @@ class CompiledModuleImpl : public CompiledModule {
       Stream* stream,
       void** args) override;
 
+  void launchCooperative(
+      int32_t kernelIdx,
+      int32_t numBlocks,
+      int32_t numThreads,
+      int32_t shared,
+      Stream* stream,
+      void** args) override;
+
   KernelInfo info(int32_t kernelIdx) override;
 
  private:
@@ -403,6 +411,27 @@ void CompiledModuleImpl::launch(
       reinterpret_cast<CUstream>(stream->stream()->stream),
       args,
       0);
+  CU_CHECK(result);
+};
+
+void CompiledModuleImpl::launchCooperative(
+    int32_t kernelIdx,
+    int32_t numBlocks,
+    int32_t numThreads,
+    int32_t shared,
+    Stream* stream,
+    void** args) {
+  auto result = cuLaunchCooperativeKernel(
+      kernels_[kernelIdx],
+      numBlocks,
+      1,
+      1, // grid dim
+      numThreads,
+      1,
+      1, // block dim
+      shared,
+      reinterpret_cast<CUstream>(stream->stream()->stream),
+      args);
   CU_CHECK(result);
 };
 

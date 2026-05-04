@@ -20,6 +20,7 @@
 
 #include "velox/experimental/torchwave/CompiledOp.h"
 #include "velox/experimental/torchwave/Registry.h"
+#include "velox/experimental/torchwave/WaveGraph.h"
 
 namespace torch::wave {
 
@@ -27,7 +28,7 @@ namespace torch::wave {
 /// values based on TensorMeta and Registry Metadata.
 class Optimizer {
  public:
-  explicit Optimizer(ValueTypes& types);
+  explicit Optimizer(WaveGraph& waveGraph);
 
   /// Recurses from graph outputs through producers, attaching constraints.
   void optimizeGraph(nativert::Graph* graph);
@@ -39,6 +40,7 @@ class Optimizer {
   void visitValue(const nativert::Value* value);
   void ensureConstraint(int32_t id);
 
+  WaveGraph& waveGraph_;
   ValueTypes& types_;
   nativert::Graph* graph_{nullptr};
   std::unordered_set<const nativert::Node*> visited_;

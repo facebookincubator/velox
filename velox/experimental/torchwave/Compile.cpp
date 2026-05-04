@@ -246,9 +246,25 @@ bool subgraphNodesMatch(
       if (leftPos != rightPos) {
         return false;
       }
-      if (!tensorMetaCompatible(
-              *leftSg.inputTypes[leftPos], *rightSg.inputTypes[rightPos])) {
+      auto leftKind = li[i].value->type().kind();
+      auto rightKind = ri[i].value->type().kind();
+      if (leftKind != rightKind) {
         return false;
+      }
+      auto* lp = li[i].value->producer();
+      auto* rp = ri[i].value->producer();
+      auto* lMeta = lp ? Registry::metadata(lp->target()) : nullptr;
+      auto* rMeta = rp ? Registry::metadata(rp->target()) : nullptr;
+      bool leftIsView = lMeta && lMeta->isView();
+      bool rightIsView = rMeta && rMeta->isView();
+      if (leftIsView != rightIsView) {
+        return false;
+      }
+      if (leftKind == nativert::Type::Kind::Tensor) {
+        if (!tensorMetaCompatible(
+                *leftSg.inputTypes[leftPos], *rightSg.inputTypes[rightPos])) {
+          return false;
+        }
       }
     } else {
       auto* lp = li[i].value->producer();
@@ -301,6 +317,174 @@ void hashSubgraphNode(
   }
 }
 
+void copyAttributes(const nativert::Node* source, nativert::Node* dest) {
+  for (const auto& attr : source->attributes()) {
+    std::visit(
+        [&](auto&& val) {
+          using T = std::decay_t<decltype(val)>;
+          if constexpr (!std::is_same_v<T, std::unique_ptr<nativert::Graph>>) {
+            nativert::Attribute newAttr;
+            newAttr.name = attr.name;
+            newAttr.value = val;
+            dest->addAttribute(std::move(newAttr));
+          }
+        },
+        attr.value);
+  }
+}
+
+// Walks the variant chain from 'variantRoot' and maps every reachable node
+// to 'original' in nodeMap, stopping at values already in valueMap (boundary).
+void mapVariantChain(
+    NodeCP variantRoot,
+    NodeCP original,
+    const std::unordered_map<ValueCP, nativert::Value*>& valueMap,
+    std::unordered_map<NodeCP, NodeCP>& nodeMap) {
+  std::unordered_set<NodeCP> visited;
+  std::function<void(NodeCP)> walk = [&](NodeCP node) {
+    if (!visited.insert(node).second) {
+      return;
+    }
+    nodeMap[node] = original;
+    for (const auto& input : node->inputs()) {
+      if (valueMap.count(input.value)) {
+        continue;
+      }
+      auto* producer = input.value->producer();
+      if (producer) {
+        walk(producer);
+      }
+    }
+  };
+  walk(variantRoot);
+}
+
+// Recursively deep-copies a node and its producers into 'target',
+// stopping at values already in valueMap (boundary inputs).
+// In kMulti/kCG modes, expands nodes that have a matching variant.
+// Records copy→original mapping in nodeMap.
+nativert::Node* copyVariantNode(
+    NodeCP node,
+    std::unordered_map<ValueCP, nativert::Value*>& valueMap,
+    std::unordered_set<NodeCP>& visited,
+    std::unordered_map<NodeCP, NodeCP>& nodeMap,
+    nativert::Graph* target,
+    VariantMode mode,
+    WaveGraph& waveGraph) {
+  if (visited.count(node)) {
+    return nullptr;
+  }
+
+  for (const auto& input : node->inputs()) {
+    if (valueMap.count(input.value)) {
+      continue;
+    }
+    auto* producer = input.value->producer();
+    if (producer) {
+      copyVariantNode(
+          producer, valueMap, visited, nodeMap, target, mode, waveGraph);
+    }
+  }
+
+  if (mode != VariantMode::kSingle) {
+    auto* meta = Registry::metadata(node->target());
+    if (meta) {
+      nativert::Node* variantRoot = nullptr;
+      if (mode == VariantMode::kMulti && meta->makeMultiKernelVariant) {
+        variantRoot = meta->makeMultiKernelVariant(node, &waveGraph);
+      } else if (mode == VariantMode::kCG && meta->cgVariant) {
+        variantRoot = meta->cgVariant(node, &waveGraph);
+      }
+      if (variantRoot) {
+        waveGraph.optimizeNode(variantRoot);
+        visited.insert(node);
+        if (waveGraph.currentVariantGraph()) {
+          // Variant function created nodes directly in the variant graph.
+          // Map all variant chain nodes to the original.
+          mapVariantChain(variantRoot, node, valueMap, nodeMap);
+          for (auto* origOut : node->outputs()) {
+            for (auto* vrOut : variantRoot->outputs()) {
+              if (vrOut->id() == origOut->id()) {
+                valueMap[origOut] = vrOut;
+                break;
+              }
+            }
+          }
+        } else {
+          // Variant function created nodes in the main graph. Deep-copy
+          // the variant chain into the target graph.
+          auto* newRoot = copyVariantNode(
+              variantRoot, valueMap, visited, nodeMap, target, mode, waveGraph);
+          if (newRoot) {
+            nodeMap[newRoot] = node;
+          }
+          for (auto* origOut : node->outputs()) {
+            if (!valueMap.count(origOut) && newRoot) {
+              auto* newOut = newRoot->addOutput(
+                  std::string(origOut->name()), origOut->type());
+              newOut->setId(origOut->id());
+              valueMap[origOut] = newOut;
+            }
+          }
+        }
+        return variantRoot;
+      }
+    }
+  }
+
+  std::vector<nativert::NamedArgument> newInputs;
+  for (const auto& input : node->inputs()) {
+    auto it = valueMap.find(input.value);
+    TORCH_CHECK(
+        it != valueMap.end(),
+        "Missing input value in variant subgraph copy: ",
+        input.value->name());
+    newInputs.push_back({std::string(input.name), it->second});
+  }
+  auto* newNode = target->insertNode(
+      std::string(node->target()), std::move(newInputs), node->metadata());
+  copyAttributes(node, newNode);
+  for (const auto* outVal : node->outputs()) {
+    auto* newOut =
+        newNode->addOutput(std::string(outVal->name()), outVal->type());
+    newOut->setId(outVal->id());
+    valueMap[outVal] = newOut;
+  }
+  for (const auto* outVal : node->outputs()) {
+    if (outVal->type().kind() != nativert::Type::Kind::TensorList) {
+      continue;
+    }
+    if (node->target() == "prim.ListPack") {
+      continue;
+    }
+    for (auto* user : outVal->users()) {
+      if (user->target() != "prim.ListUnpack" || visited.count(user)) {
+        continue;
+      }
+      std::vector<nativert::NamedArgument> unpackInputs;
+      for (const auto& inp : user->inputs()) {
+        auto it = valueMap.find(inp.value);
+        TORCH_CHECK(it != valueMap.end());
+        unpackInputs.push_back({std::string(inp.name), it->second});
+      }
+      auto* newUnpack = target->insertNode(
+          "prim.ListUnpack", std::move(unpackInputs), user->metadata());
+      for (const auto* unpackOut : user->outputs()) {
+        auto* newUnpackOut = newUnpack->addOutput(
+            std::string(unpackOut->name()), unpackOut->type());
+        newUnpackOut->setId(unpackOut->id());
+        valueMap[unpackOut] = newUnpackOut;
+      }
+      visited.insert(user);
+      nodeMap[newUnpack] = user;
+      break;
+    }
+  }
+  visited.insert(node);
+  nodeMap[newNode] = node;
+  return newNode;
+}
+
 } // namespace
 
 Subgraph CompileCtx::extractSubgraph(
@@ -316,6 +500,34 @@ Subgraph CompileCtx::extractSubgraph(
     sg.inputTypes.push_back(types_.types[value->id()]);
   }
   return sg;
+}
+
+Subgraph CompileCtx::variantSubgraph(const Subgraph& sg, VariantMode mode) {
+  auto graph = nativert::Graph::createGraph();
+  waveGraph_.setCurrentVariantGraph(graph.get());
+
+  Subgraph result;
+  result.inputTypes = sg.inputTypes;
+  std::unordered_map<ValueCP, nativert::Value*> valueMap;
+  result.inputs.reserve(sg.inputs.size());
+  for (size_t i = 0; i < sg.inputs.size(); ++i) {
+    auto* inputValue = sg.inputs[i];
+    auto* newValue = graph->addValue(
+        std::string(inputValue->name()), inputValue->type(), nullptr);
+    newValue->setId(inputValue->id());
+    valueMap[inputValue] = newValue;
+    result.inputs.push_back(newValue);
+  }
+
+  std::unordered_set<NodeCP> visited;
+  std::unordered_map<NodeCP, NodeCP> nodeMap;
+  result.root = copyVariantNode(
+      sg.root, valueMap, visited, nodeMap, graph.get(), mode, waveGraph_);
+  variantToOriginal_.insert(nodeMap.begin(), nodeMap.end());
+
+  waveGraph_.setCurrentVariantGraph(nullptr);
+  waveGraph_.addVariantGraph(std::move(graph));
+  return result;
 }
 
 bool subgraphsMatch(const Subgraph& left, const Subgraph& right) {
@@ -394,11 +606,29 @@ ProjectOperation* CompileCtx::makeProjectionOperation(const Subgraph& sg) {
       },
       visited);
   if (hasSingleBlock) {
+    auto singleSg = variantSubgraph(sg, VariantMode::kSingle);
     setIsSingleBlock(true);
-    projectOp->singleBlockGrid_ = makeGrid(sg.root);
+    projectOp->singleBlockGrid_ = makeGrid(singleSg.root);
     setIsSingleBlock(false);
+
+    // Check if any node has a cgVariant.
+    NodeSet cgVisited;
+    bool hasCgVariant = anyReachable(
+        *sg.root,
+        placed_,
+        [&types](const Metadata& m, NodeCP node) {
+          return m.cgVariant && !m.isStandalone(node, types);
+        },
+        cgVisited);
+    if (hasCgVariant) {
+      auto cgSg = variantSubgraph(sg, VariantMode::kCG);
+      setIsCgGrid(true);
+      projectOp->cgGrid_ = makeGrid(cgSg.root);
+      setIsCgGrid(false);
+    }
   }
-  projectOp->grid_ = makeGrid(sg.root);
+  auto multiSg = variantSubgraph(sg, VariantMode::kMulti);
+  projectOp->grid_ = makeGrid(multiSg.root);
   setGridChoice(projectOp);
   collectExtraValues(projectOp);
   projectOpSubgraph_ = nullptr;
@@ -460,51 +690,16 @@ void CompileCtx::collectExtraValues(ProjectOperation* projectOp) {
   };
   scanGrid(projectOp->grid_);
   scanGrid(projectOp->singleBlockGrid_);
-}
-
-const std::vector<nativert::Value*>& CompileCtx::outputs(NodeCP node) const {
-  auto it = originalNode_.find(node);
-  if (it != originalNode_.end()) {
-    return it->second->outputs();
-  }
-  return node->outputs();
-}
-
-NodeCP CompileCtx::executableNode(NodeCP node) {
-  if (isSingleBlock_) {
-    return node;
-  }
-  auto it = executableNode_.find(node);
-  if (it != executableNode_.end()) {
-    return it->second;
-  }
-  if (auto* variantRoot = getMultiBlockVariant(node, &waveGraph_)) {
-    executableNode_[node] = variantRoot;
-    return variantRoot;
-  }
-  executableNode_[node] = node;
-  return node;
-}
-
-NodeCP CompileCtx::getMultiBlockVariant(NodeCP node, WaveGraph* waveGraph) {
-  auto* variant = waveGraph->multiKernelVariant(node);
-  if (!variant) {
-    return nullptr;
-  }
-  originalNode_[variant->root] = node;
-  waveGraph->optimizeNode(variant->root);
-  return variant->root;
+  scanGrid(projectOp->cgGrid_);
 }
 
 void CompileCtx::newGrid() {
   placed_ = placedBeforeNode_;
   grid_.clear();
-  executableNode_.clear();
 }
 
 LaunchGrid CompileCtx::makeGrid(NodeCP node) {
   newGrid();
-  node = executableNode(node);
   auto result = placeKernels(node, Context::kTop);
   if (result == Context::kFused) {
     pushdownFused(node);
@@ -512,8 +707,29 @@ LaunchGrid CompileCtx::makeGrid(NodeCP node) {
   return std::move(grid_);
 }
 
+// Returns true if the input name maps to a sizeArgs ordinal in the metadata.
+static bool isSizeArg(
+    std::string_view inputName,
+    const Metadata* meta) {
+  if (!meta || !meta->functionSchema) {
+    return false;
+  }
+  const auto& schemaArgs = meta->functionSchema->arguments();
+  for (size_t i = 0; i < schemaArgs.size(); ++i) {
+    if (schemaArgs[i].name() == inputName) {
+      auto ordinal = static_cast<int32_t>(i);
+      for (auto sizeOrd : meta->sizeArgs.ordinal) {
+        if (sizeOrd == ordinal) {
+          return true;
+        }
+      }
+      return false;
+    }
+  }
+  return false;
+}
+
 Context CompileCtx::placeKernels(NodeCP node, Context context) {
-  node = executableNode(node);
   auto* meta = nodeMeta(node);
   auto thisContext = (!meta || meta->isStandalone(node, types_) ||
                       WaveConfig::get().allStandalone)
@@ -522,23 +738,40 @@ Context CompileCtx::placeKernels(NodeCP node, Context context) {
   std::vector<NodeCP> standaloneInputs;
   std::vector<NodeCP> fusedInputs;
 
+  auto placeInput = [&](ValueCP value, bool isSize) {
+    auto* producer = value->producer();
+    if (!producer || placed_.count(producer) ||
+        (inputs_ && inputs_->count(producer))) {
+      return;
+    }
+    auto inputContext = placeKernels(producer, thisContext);
+    if (inputContext == Context::kFused) {
+      if (isSize) {
+        pushdownFused(producer);
+      } else {
+        fusedInputs.push_back(producer);
+      }
+    }
+  };
+
   for (auto i = 0; i < node->inputs().size(); ++i) {
     if (meta && meta->inputFromPreviousKernel.has_value() &&
         i != meta->inputFromPreviousKernel.value()) {
       continue;
     }
-    auto* producer = node->inputs()[i].value->producer();
-    if (!producer || placed_.count(producer) ||
-        (inputs_ && inputs_->count(producer))) {
-      continue;
-    }
-    auto inputContext = placeKernels(producer, thisContext);
-    if (inputContext == Context::kStandalone) {
-      continue;
-    } else if (inputContext == Context::kFusedBreak) {
-      continue;
+    auto* inputValue = node->inputs()[i].value;
+    auto* producer = inputValue->producer();
+    auto inputKind = inputValue->type().kind();
+    bool isSize = isSizeArg(node->inputs()[i].name, meta) &&
+        inputKind != nativert::Type::Kind::Tensor &&
+        inputKind != nativert::Type::Kind::TensorList;
+    if (thisContext == Context::kFused && producer &&
+        producer->target() == "prim.ListPack") {
+      for (const auto& listInput : producer->inputs()) {
+        placeInput(listInput.value, isSize);
+      }
     } else {
-      fusedInputs.push_back(producer);
+      placeInput(inputValue, isSize);
     }
   }
 
@@ -558,32 +791,48 @@ Context CompileCtx::placeKernels(NodeCP node, Context context) {
 
 void CompileCtx::pushdownStandalone(NodeCP node) {
   Launch launch;
-  launch.standalone = node;
+  launch.standalone = originalFromVariant(node);
   placeKernelLaunch(std::move(launch));
   placed_.insert(node);
+  standaloneNodes_.insert(originalFromVariant(node));
 }
 
 void CompileCtx::fillConstantIndices(const Subgraph& sg, Launch& launch) {
   std::unordered_set<ValueCP> sgInputSet(sg.inputs.begin(), sg.inputs.end());
   std::unordered_set<NodeCP> attrVisited;
-  NodeCP prevNode = nullptr;
-  int32_t attrCount = 0;
   forEachSortedAttribute(
       sg.root,
       sgInputSet,
       attrVisited,
-      [&](NodeCP n, const nativert::Attribute&) {
-        if (n != prevNode) {
-          prevNode = n;
-          attrCount = 0;
-        }
-        auto ordinal = projectOpSubgraph_->nodeOrdinal(n);
+      [&](NodeCP n, const nativert::Attribute& attr) {
+        NodeCP original = originalFromVariant(n);
+
+        auto ordinal = projectOpSubgraph_->nodeOrdinal(original);
         auto mapIt = constantMap_.find(ordinal);
         TORCH_CHECK(
             mapIt != constantMap_.end(),
-            "Node ordinal not found in constantMap");
-        launch.constantIndices.push_back(mapIt->second + attrCount);
-        ++attrCount;
+            "Node ordinal not found in constantMap: ",
+            original->target());
+
+        // Find the attribute's offset in the original node's sorted
+        // non-skipped attributes.
+        int32_t attrOffset = 0;
+        bool found = false;
+        forEachSortedAttribute(
+            original, [&](NodeCP, const nativert::Attribute& origAttr) {
+              if (origAttr.name == attr.name) {
+                found = true;
+              } else if (!found) {
+                ++attrOffset;
+              }
+            });
+        TORCH_CHECK(
+            found,
+            "Attribute '",
+            attr.name,
+            "' not found in original node: ",
+            original->target());
+        launch.constantIndices.push_back(mapIt->second + attrOffset);
       });
   TORCH_CHECK(
       static_cast<int32_t>(launch.constantIndices.size()) ==
@@ -643,7 +892,7 @@ std::unique_ptr<KernelOperation> CompileCtx::generateFused(const Subgraph& sg) {
 
 void CompileCtx::generateFusedInner(const Subgraph& sg) {
   std::vector<ResultSpec> resultSpecs;
-  for (auto* output : outputs(sg.root)) {
+  for (auto* output : sg.root->outputs()) {
     ResultSpec rs;
     rs.value = output;
     resultSpecs.push_back(rs);
@@ -653,49 +902,39 @@ void CompileCtx::generateFusedInner(const Subgraph& sg) {
 
 void CompileCtx::placeKernelLaunch(Launch launch) {
   int32_t latestLevel = -1;
-  // Collect the input values of this launch.
-  std::vector<ValueCP> inputValues;
+
+  // Collect input value ids of this launch.
+  std::unordered_set<nativert::ValueId> inputIds;
   if (launch.standalone) {
     for (const auto& input : launch.standalone->inputs()) {
-      inputValues.push_back(input.value);
+      inputIds.insert(input.value->id());
     }
   } else if (launch.op) {
-    auto numInputs = launch.op->numInputs();
-    for (int32_t i = 0;
-         i < numInputs && i < static_cast<int32_t>(launch.values.size());
-         ++i) {
-      inputValues.push_back(launch.values[i]);
-    }
+    inputIds = launch.op->orderingInputs();
   }
 
   // Find the latest level in grid_ containing a Launch that produces
   // any of these input values.
-  for (auto* value : inputValues) {
-    for (int32_t level = 0; level < static_cast<int32_t>(grid_.size());
-         ++level) {
-      for (auto& existing : grid_[level]) {
-        bool produces = false;
-        if (existing.standalone) {
-          for (auto* output : existing.standalone->outputs()) {
-            if (output == value) {
-              produces = true;
-              break;
-            }
-          }
-        } else if (existing.op) {
-          const auto& ordered = existing.op->orderedInputs();
-          for (int32_t i = existing.op->numInputs();
-               i < static_cast<int32_t>(ordered.size());
-               ++i) {
-            if (ordered[i] == value) {
-              produces = true;
-              break;
-            }
+  for (int32_t level = 0; level < static_cast<int32_t>(grid_.size()); ++level) {
+    for (auto& existing : grid_[level]) {
+      bool produces = false;
+      if (existing.standalone) {
+        for (auto* output : existing.standalone->outputs()) {
+          if (inputIds.count(output->id())) {
+            produces = true;
+            break;
           }
         }
-        if (produces) {
-          latestLevel = std::max(latestLevel, level);
+      } else if (existing.op) {
+        for (auto outputId : existing.op->orderingOutputs()) {
+          if (inputIds.count(outputId)) {
+            produces = true;
+            break;
+          }
         }
+      }
+      if (produces) {
+        latestLevel = std::max(latestLevel, level);
       }
     }
   }
@@ -749,12 +988,33 @@ void CompileCtx::generateElementwiseBorderImpl(
     if (!visited.insert(producer).second) {
       continue;
     }
+    if (producer->target() == "prim.ListPack") {
+      for (auto& listInput : producer->inputs()) {
+        auto* listValue = listInput.value;
+        auto* listProducer = listValue->producer();
+        if (!listProducer || placed_.count(listProducer) ||
+            opInputs.count(listValue)) {
+          continue;
+        }
+        if (!visited.insert(listProducer).second) {
+          continue;
+        }
+        std::vector<ResultSpec> resultSpecs;
+        for (auto* output : listProducer->outputs()) {
+          ResultSpec rs;
+          rs.value = output;
+          resultSpecs.push_back(rs);
+        }
+        fusedCode(listProducer, resultSpecs);
+      }
+      continue;
+    }
     auto* meta = nodeMeta(producer);
     if (meta && meta->elementwise) {
       generateElementwiseBorderImpl(producer, opInputs, visited);
     } else {
       std::vector<ResultSpec> resultSpecs;
-      for (auto* output : outputs(producer)) {
+      for (auto* output : producer->outputs()) {
         ResultSpec rs;
         rs.value = output;
         resultSpecs.push_back(rs);
@@ -851,7 +1111,7 @@ void CompileCtx::functionLoop(NodeCP node) {
   }
 
   std::vector<ResultSpec> resultSpecs;
-  for (auto* output : outputs(node)) {
+  for (auto* output : node->outputs()) {
     ResultSpec rs;
     rs.value = output;
     resultSpecs.push_back(rs);
@@ -879,6 +1139,39 @@ void CompileCtx::functionLoop(NodeCP node) {
   code_ << "    }\n";
 }
 
+bool CompileCtx::isSizeSetInThisOp(
+    ValueCP value,
+    std::unordered_set<ValueCP>& visited) {
+  if (!visited.insert(value).second) {
+    return false;
+  }
+  const auto& opInputs = generatingOp_->orderedInputs();
+  auto numInputs = generatingOp_->numInputs();
+  for (int32_t i = 0; i < numInputs; ++i) {
+    if (opInputs[i] == value) {
+      return false;
+    }
+  }
+  auto* producer = value->producer();
+  if (!producer) {
+    return false;
+  }
+  auto* meta = nodeMeta(producer);
+  if (meta) {
+    for (size_t i = 0; i < meta->returnMeta.size(); ++i) {
+      if (meta->returnMeta[i].shapeSetOnDevice) {
+        return true;
+      }
+    }
+  }
+  for (const auto& input : producer->inputs()) {
+    if (isSizeSetInThisOp(input.value, visited)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void CompileCtx::fusedCode(NodeCP node, std::vector<ResultSpec>& resultSpecs) {
   if (placed_.count(node)) {
     return;
@@ -888,6 +1181,34 @@ void CompileCtx::fusedCode(NodeCP node, std::vector<ResultSpec>& resultSpecs) {
 
   if (meta->specialForm) {
     meta->specialForm(node, resultSpecs, this);
+    return;
+  }
+
+  if (meta->isView()) {
+    auto viewArgOrdinal = *meta->viewOfArg;
+    auto* viewInput = node->inputs()[viewArgOrdinal].value;
+    auto* producer = viewInput->producer();
+    if (producer && !placed_.count(producer)) {
+      std::vector<ResultSpec> prodSpecs;
+      for (auto* output : producer->outputs()) {
+        ResultSpec rs;
+        rs.value = output;
+        prodSpecs.push_back(rs);
+      }
+      fusedCode(producer, prodSpecs);
+    }
+    std::unordered_set<ValueCP> visited;
+    if (isSizeSetInThisOp(viewInput, visited) && !meta->deviceFunc.empty()) {
+      std::vector<ResultSpec> inputSpecs;
+      for (const auto& input : node->inputs()) {
+        ResultSpec rs;
+        rs.value = input.value;
+        inputSpecs.push_back(rs);
+      }
+      code_ << "  " << makeCall(node, inputSpecs, resultSpecs) << "\n";
+    }
+    placed_.insert(node);
+    generatingOp_->allNodes().insert(node);
     return;
   }
 
@@ -908,7 +1229,7 @@ void CompileCtx::fusedCode(NodeCP node, std::vector<ResultSpec>& resultSpecs) {
       auto* producer = value->producer();
       if (producer && !placed_.count(producer)) {
         std::vector<ResultSpec> prodSpecs;
-        for (auto* output : outputs(producer)) {
+        for (auto* output : producer->outputs()) {
           ResultSpec rs;
           rs.value = output;
           prodSpecs.push_back(rs);
@@ -920,6 +1241,8 @@ void CompileCtx::fusedCode(NodeCP node, std::vector<ResultSpec>& resultSpecs) {
 
   const auto& inputs = node->inputs();
 
+  bool cgSingleBlock = isCgGrid_ && meta->singleBlockIfFused;
+
   if (!meta->hasRegisterInputs()) {
     // No register inputs - generate plain call.
     std::vector<ResultSpec> inputSpecs;
@@ -928,7 +1251,15 @@ void CompileCtx::fusedCode(NodeCP node, std::vector<ResultSpec>& resultSpecs) {
       rs.value = input.value;
       inputSpecs.push_back(rs);
     }
+    if (cgSingleBlock) {
+      emitBarrier();
+      code_ << "  if (blockInfo.blockInOp == 0) {\n";
+    }
     code_ << "  " << makeCall(node, inputSpecs, resultSpecs) << "\n";
+    if (cgSingleBlock) {
+      code_ << "  }\n";
+      emitBarrier();
+    }
     placed_.insert(node);
     generatingOp_->allNodes().insert(node);
     return;
@@ -946,7 +1277,15 @@ void CompileCtx::fusedCode(NodeCP node, std::vector<ResultSpec>& resultSpecs) {
   }
 
   if (allInMemory) {
+    if (cgSingleBlock) {
+      emitBarrier();
+      code_ << "  if (blockInfo.blockInOp == 0) {\n";
+    }
     functionLoop(node);
+    if (cgSingleBlock) {
+      code_ << "  }\n";
+      emitBarrier();
+    }
     placed_.insert(node);
     generatingOp_->allNodes().insert(node);
     return;
@@ -985,8 +1324,16 @@ void CompileCtx::fusedCode(NodeCP node, std::vector<ResultSpec>& resultSpecs) {
   }
 
   auto callStmt = makeCall(node, callInputSpecs, resultSpecs);
+  if (cgSingleBlock) {
+    emitBarrier();
+    code_ << "  if (blockInfo.blockInOp == 0) {\n";
+  }
   if (!subgraphs.empty()) {
     generateElementwise(subgraphs, ewResultSpecs, callStmt, meta->hasBarrier);
+  }
+  if (cgSingleBlock) {
+    code_ << "  }\n";
+    emitBarrier();
   }
   placed_.insert(node);
   generatingOp_->allNodes().insert(node);
@@ -1066,43 +1413,83 @@ void CompileCtx::generateElementwise(
   }
 
   code_ << "  {\n";
+
+  // Collect values marked as wholeTensor in any subgraph node's argumentMeta.
+  std::unordered_set<ValueCP> wholeTensorValues;
+  for (const auto& sg : subgraphs) {
+    auto* meta = nodeMeta(sg.root);
+    if (meta) {
+      const auto& inputs = sg.root->inputs();
+      for (size_t i = 0; i < inputs.size() && i < meta->argumentMeta.size();
+           ++i) {
+        if (meta->argumentMeta[i].wholeTensor) {
+          wholeTensorValues.insert(inputs[i].value);
+        }
+      }
+    }
+  }
+
+  // Build tensor-only bit index for fast path processing.
+  int32_t tensorCount = 0;
+  fastPathBitIndex_.assign(leafInputs.size(), -1);
+  for (size_t i = 0; i < leafInputs.size(); ++i) {
+    if (leafInputs[i]->type().kind() == nativert::Type::Kind::Tensor) {
+      fastPathBitIndex_[i] = tensorCount++;
+    }
+  }
   // Generate shared declarations for size and fast path flags.
   op.addSharedDeclaration("  __shared__ uint32_t size;\n");
-  auto numFastPathVars = (leafInputs.size() + 31) / 32;
+  auto numFastPathVars = (tensorCount + 31) / 32;
   for (size_t i = 0; i < numFastPathVars; ++i) {
     op.addSharedDeclaration(
         "  __shared__ uint32_t isFastPath" + std::to_string(i) + ";\n");
   }
 
-  // Generate the head: compute size and fast path flags from all leaf inputs.
+  // Generate the head: compute size and fast path flags from tensor leaf
+  // inputs only.
   code_ << "  if (threadIdx.x == 0) {\n";
   for (size_t i = 0; i < numFastPathVars; ++i) {
     code_ << "    isFastPath" << i << " = 0;\n";
   }
-  code_ << "    Tensor* temp = " << param(leafInputs[0], op)
-        << ";\n    size = temp->numEl;\n"
-        << "    isFastPath0 |= temp->contiguous;\n";
-  if (leafInputs.size() > 1) {
-    code_ << "    uint32_t size2;\n";
-  }
-  for (size_t valueIdx = 1; valueIdx < leafInputs.size(); ++valueIdx) {
-    auto W = valueIdx / 32;
-    auto B = valueIdx % 32;
-    code_ << "    temp = " << param(leafInputs[valueIdx], op) << ";\n"
-          << "    size2 = temp->numEl;\n"
-          << "    isFastPath" << W << " |= (uint32_t)temp->contiguous << " << B
-          << ";\n"
-          << "    if (size2 != size) {\n"
-          << "      if (size2 > size) {\n";
-    for (size_t I = 0; (I + 1) * 32 <= valueIdx; ++I) {
-      code_ << "        isFastPath" << I << " = 0;\n";
+  bool firstTensor = true;
+  bool declaredSize2 = false;
+  for (size_t valueIdx = 0; valueIdx < leafInputs.size(); ++valueIdx) {
+    if (leafInputs[valueIdx]->type().kind() != nativert::Type::Kind::Tensor) {
+      continue;
     }
-    code_ << "        isFastPath" << W << " &= ~((1 << " << B << ") - 1);\n"
-          << "      size = size2;\n"
-          << "      } else {\n"
-          << "    isFastPath" << W << " &= ~(1 << " << B << ");\n"
-          << "}"
-          << "    }\n";
+    if (wholeTensorValues.count(leafInputs[valueIdx])) {
+      continue;
+    }
+    auto bitIdx = fastPathBitIndex_[valueIdx];
+    auto W = bitIdx / 32;
+    auto B = bitIdx % 32;
+    if (firstTensor) {
+      code_ << "    Tensor* temp = " << param(leafInputs[valueIdx], op)
+            << ";\n    size = temp->numEl;\n"
+            << "    isFastPath0 |= temp->contiguous;\n";
+      firstTensor = false;
+    } else {
+      if (!declaredSize2) {
+        code_ << "    uint32_t size2;\n";
+        declaredSize2 = true;
+      }
+      code_ << "    temp = " << param(leafInputs[valueIdx], op) << ";\n"
+            << "    size2 = temp->numEl;\n"
+            << "    isFastPath" << W << " |= (uint32_t)temp->contiguous << "
+            << B << ";\n"
+            << "    if (size2 != size) {\n"
+            << "      if (size2 > size) {\n";
+      for (int32_t I = 0; (I + 1) * 32 <= bitIdx; ++I) {
+        code_ << "        isFastPath" << I << " = 0;\n";
+      }
+      code_ << "        isFastPath" << W << " &= ~((1 << " << B
+            << ") - 1);\n"
+            << "      size = size2;\n"
+            << "      } else {\n"
+            << "    isFastPath" << W << " &= ~(1 << " << B << ");\n"
+            << "}"
+            << "    }\n";
+    }
   }
   code_ << "  }\n"
         << "  __syncthreads();\n";
@@ -1132,19 +1519,17 @@ void CompileCtx::generateElementwise(
     }
   }
 
-  // Generate fast path test for all leaf inputs.
-  auto numLeafInputs = leafInputs.size();
-  auto numFPVars = (numLeafInputs + 31) / 32;
+  // Generate fast path test for tensor leaf inputs.
   code_ << "  if (";
-  for (size_t i = 0; i < numFPVars; ++i) {
+  for (size_t i = 0; i < numFastPathVars; ++i) {
     if (i > 0) {
       code_ << " && ";
     }
     uint32_t mask;
-    if (i < numFPVars - 1) {
+    if (i < numFastPathVars - 1) {
       mask = 0xffffffff;
     } else {
-      auto bitsInLast = numLeafInputs - i * 32;
+      auto bitsInLast = tensorCount - i * 32;
       if (bitsInLast >= 32) {
         mask = 0xffffffff;
       } else {
@@ -1245,8 +1630,9 @@ void CompileCtx::generateElementwise(
         auto id = it - allInputs.begin();
         if (resultSpecs[s].value->type().kind() ==
             nativert::Type::Kind::Tensor) {
-          code_ << "        b" << id << "[complexIdx(isFastPath" << id / 32
-                << " & (1 << " << id % 32 << "), "
+          auto bitIdx = fastPathBitIndex_[id];
+          code_ << "        b" << id << "[complexIdx(isFastPath" << bitIdx / 32
+                << " & (1 << " << bitIdx % 32 << "), "
                 << param(resultSpecs[s].value, op) << ", idx)] = result" << s
                 << ";\n";
         } else {
@@ -1275,8 +1661,9 @@ void CompileCtx::generateElementwise(
         code_ << "      " << tp << " result" << s << " = " << expr << ";\n";
         if (resultSpecs[s].value->type().kind() ==
             nativert::Type::Kind::Tensor) {
-          code_ << "      b" << id << "[complexIdx(isFastPath" << id / 32
-                << " & (1 << " << id % 32 << "), "
+          auto bitIdx = fastPathBitIndex_[id];
+          code_ << "      b" << id << "[complexIdx(isFastPath" << bitIdx / 32
+                << " & (1 << " << bitIdx % 32 << "), "
                 << param(resultSpecs[s].value, op) << ", idx)] = result" << s
                 << ";\n";
         } else {
@@ -1337,6 +1724,9 @@ void declareAttributesImpl(
     std::stringstream& ss) {
   forEachSortedAttribute(
       node, inputs, visited, [&](NodeCP n, const nativert::Attribute& attr) {
+        if (std::holds_alternative<nativert::None>(attr.value)) {
+          return;
+        }
         auto off = op.attrOffset(n, attr.name);
         auto tp = cudaAttrType(attr.value);
         ss << "  " << tp << " attr" << off << " = *param<" << tp
@@ -1345,6 +1735,55 @@ void declareAttributesImpl(
 }
 
 } // namespace
+
+std::string CompileCtx::emitScalarListSetup(
+    size_t argOrdinal,
+    ValueCP value,
+    const nativert::Attribute* attr,
+    NodeCP node) {
+  auto& op = *generatingOp_;
+  std::vector<std::string> elements;
+  if (value) {
+    auto* producer = value->producer();
+    TORCH_CHECK(
+        producer && producer->target() == "prim.ListPack",
+        "SymIntList argument must come from prim.ListPack: ",
+        node->target());
+    for (const auto& listInput : producer->inputs()) {
+      elements.push_back(
+          "*" + param(listInput.value, op));
+    }
+  } else {
+    TORCH_CHECK(attr, "ScalarList argument has no value or attribute");
+    auto* vec = std::get_if<std::vector<int64_t>>(&attr->value);
+    TORCH_CHECK(
+        vec,
+        "ScalarList attribute must be vector<int64_t>: ",
+        node->target());
+    for (auto v : *vec) {
+      elements.push_back(std::to_string(v));
+    }
+  }
+  auto numElements = elements.size();
+  auto allocSize =
+      sizeof(ScalarList) + sizeof(int64_t) * numElements;
+  auto off = op.allocAltParam(allocSize);
+  auto varName = "l" + std::to_string(argOrdinal);
+  std::stringstream setup;
+  setup << "  ScalarList* " << varName << " = param<ScalarList>(blockInfo, "
+        << off << ");\n"
+        << "  if (threadIdx.x == 0) {\n"
+        << "    " << varName << "->size = " << numElements << ";\n"
+        << "    " << varName
+        << "->data = reinterpret_cast<int64_t*>(" << varName << " + 1);\n";
+  for (size_t i = 0; i < elements.size(); ++i) {
+    setup << "    " << varName << "->data[" << i << "] = " << elements[i]
+          << ";\n";
+  }
+  setup << "  }\n"
+        << "  __syncthreads();\n";
+  return setup.str();
+}
 
 std::string CompileCtx::declareAttributes(
     NodeCP node,
@@ -1356,6 +1795,41 @@ std::string CompileCtx::declareAttributes(
   declareAttributesImpl(node, op, inputSet, visited, ss);
   return ss.str();
 }
+
+namespace {
+
+std::string presentTemplateParams(const Metadata& meta, NodeCP node) {
+  std::string result;
+  const auto& schemaArgs = meta.functionSchema->arguments();
+  const auto& nodeInputs = node->inputs();
+  for (size_t i = 0; i < schemaArgs.size(); ++i) {
+    if (i >= meta.argumentMeta.size() ||
+        !meta.argumentMeta[i].hasPresentTemplateParam) {
+      continue;
+    }
+    if (!result.empty()) {
+      result += ", ";
+    }
+    bool present = false;
+    const auto& argName = schemaArgs[i].name();
+    for (const auto& input : nodeInputs) {
+      if (input.name == argName) {
+        present = true;
+        break;
+      }
+    }
+    if (!present) {
+      const auto* attr = node->tryGetAttribute(argName);
+      if (attr && !std::holds_alternative<nativert::None>(attr->value)) {
+        present = true;
+      }
+    }
+    result += present ? "true" : "false";
+  }
+  return result;
+}
+
+} // namespace
 
 std::string CompileCtx::makeCall(
     NodeCP node,
@@ -1375,8 +1849,12 @@ std::string CompileCtx::makeCall(
   ss << meta->deviceFunc;
 
   // Type template parameters from dtypes of node inputs at specified indices.
+  auto presenceParams = meta->hasPresentTemplateParams()
+      ? presentTemplateParams(*meta, node)
+      : std::string();
   if (meta->hasBlockSizeTemplateParam || !meta->typeTemplateParams.empty() ||
-      meta->hasDtypeTemplateParam || !meta->templateAttrs.empty()) {
+      meta->hasDtypeTemplateParam || !meta->templateAttrs.empty() ||
+      !presenceParams.empty()) {
     const auto& nodeInputs = node->inputs();
     ss << "<";
     bool firstTp = true;
@@ -1411,6 +1889,12 @@ std::string CompileCtx::makeCall(
           attr, node->target(), ": missing template attribute ", attrName);
       ss << constantToString(attr->value);
     }
+    if (!presenceParams.empty()) {
+      if (!firstTp) {
+        ss << ", ";
+      }
+      ss << presenceParams;
+    }
     ss << ">";
   }
 
@@ -1424,21 +1908,65 @@ std::string CompileCtx::makeCall(
     first = false;
   };
 
-  // Inputs.
-  for (size_t i = 0; i < inputs.size(); ++i) {
-    if (i < meta->argumentMeta.size() && meta->argumentMeta[i].linkOnly) {
-      continue;
-    }
-    comma();
-    if (inputs[i].value && inputs[i].variable.empty() &&
-        i < meta->argumentMeta.size() && meta->argumentMeta[i].isRegister) {
-      ss << makeElementRef(inputs[i].value, op);
-    } else if (inputs[i].value) {
-      ss << param(inputs[i].value, op);
-    } else {
-      ss << inputs[i].variable;
-    }
+  // Build a map from input name to index in the inputs ResultSpec vector.
+  std::unordered_map<std::string_view, size_t> inputNameToIdx;
+  for (size_t i = 0; i < node->inputs().size(); ++i) {
+    inputNameToIdx[node->inputs()[i].name] = i;
   }
+
+  // Setup code for ScalarList arguments emitted before the call.
+  std::stringstream setupSs;
+
+  // Inputs and attributes in schema argument order.
+  forArguments(
+      *meta,
+      node,
+      [&](size_t schemaIdx,
+          ValueCP value,
+          const nativert::Attribute* attr) {
+        // Check for SymInt list: Value with SymIntList type or attribute with
+        // vector<int64_t>.
+        bool isSymIntList =
+            (value &&
+             value->type().kind() == nativert::Type::Kind::SymIntList) ||
+            (attr &&
+             std::holds_alternative<std::vector<int64_t>>(attr->value));
+        if (isSymIntList) {
+          setupSs << emitScalarListSetup(schemaIdx, value, attr, node);
+          comma();
+          ss << "*l" << schemaIdx;
+          return;
+        }
+        if (value) {
+          auto it = inputNameToIdx.find(
+              meta->functionSchema->arguments()[schemaIdx].name());
+          TORCH_CHECK(it != inputNameToIdx.end());
+          auto i = it->second;
+          if (i < meta->argumentMeta.size() &&
+              meta->argumentMeta[schemaIdx].linkOnly) {
+            return;
+          }
+          comma();
+          if (inputs[i].value && inputs[i].variable.empty() &&
+              schemaIdx < meta->argumentMeta.size() &&
+              meta->argumentMeta[schemaIdx].isRegister) {
+            ss << makeElementRef(inputs[i].value, op);
+          } else if (inputs[i].value) {
+            ss << param(inputs[i].value, op);
+          } else {
+            ss << inputs[i].variable;
+          }
+        } else if (attr) {
+          comma();
+          if (std::holds_alternative<nativert::None>(attr->value)) {
+            ss << "0";
+          } else {
+            auto off = op.attrOffset(node, attr->name);
+            auto tp = cudaAttrType(attr->value);
+            ss << "*param<" << tp << ">(blockInfo, " << off << ")";
+          }
+        }
+      });
 
   // Outputs.
   for (size_t i = 0; i < outputs.size(); ++i) {
@@ -1460,15 +1988,6 @@ std::string CompileCtx::makeCall(
       waveGraph_.addSyncableValueId(outputs[i].value->id());
     }
   }
-
-  // Attributes in alphabetic order. dtype and device are filtered by
-  // forEachSortedAttribute (dtype is a template param, device is metadata).
-  forEachSortedAttribute(node, [&](NodeCP, const nativert::Attribute& attr) {
-    comma();
-    auto off = op.attrOffset(node, attr.name);
-    auto tp = cudaAttrType(attr.value);
-    ss << "*param<" << tp << ">(blockInfo, " << off << ")";
-  });
 
   // Shared declarations: declare in the kernel and pass as arguments.
   for (const auto& [type, name] : meta->sharedDecls) {
@@ -1514,11 +2033,66 @@ std::string CompileCtx::makeCall(
     }
   }
 
+  for (int32_t b = 0; b < meta->numBarriers; ++b) {
+    comma();
+    ss << op.allocateBarrier();
+  }
+
   // blockInfo is always the last argument.
   comma();
   ss << "blockInfo);";
 
-  return ss.str();
+  auto setup = setupSs.str();
+  if (setup.empty()) {
+    return ss.str();
+  }
+  return "{\n" + setup + "  " + ss.str() + "\n  }";
+}
+
+void CompileCtx::callView(
+    ValueCP src,
+    ValueCP dest,
+    const std::string& offsetExpr,
+    int32_t elementSize) {
+  auto& op = *generatingOp_;
+  addInclude("velox/experimental/torchwave/Views.cuh");
+  emitBarrier();
+  if (isSingleBlock_) {
+    code_ << "  if (threadIdx.x == 0) {\n";
+  } else {
+    code_ << "  if (blockInfo.blockInOp == 0 && threadIdx.x == 0) {\n";
+  }
+  code_ << "    __view(*" << param(src, op) << ", " << offsetExpr << ", "
+        << elementSize << ", *" << param(dest, op) << ");\n"
+        << "  }\n";
+  emitBarrier();
+}
+
+void CompileCtx::emitCopy(
+    ValueCP source,
+    ValueCP dest,
+    const std::string& destOffsetExpr,
+    const std::string& cudaTypeName) {
+  auto& op = *generatingOp_;
+  code_ << "  __copy<" << cudaTypeName << ">(" << param(source, op) << ", "
+        << "storage<" << cudaTypeName << ">(" << param(dest, op) << ")";
+  if (!destOffsetExpr.empty()) {
+    code_ << " + " << destOffsetExpr;
+  }
+  code_ << ", blockInfo);\n";
+}
+
+void CompileCtx::emitCode(std::string_view text) {
+  code_ << text;
+}
+
+void CompileCtx::emitBarrier() {
+  if (isSingleBlock_) {
+    code_ << "  __syncthreads();\n";
+  } else {
+    auto barrierOffset = generatingOp_->allocateBarrier();
+    code_ << "  opBarrier(blockInfo, " << barrierOffset << ");\n";
+  }
 }
 
 void CompileCtx::addInclude(std::string_view header) {
@@ -1549,9 +2123,12 @@ void CompileCtx::elementwiseExprImpl(
             it != inputs.end(), "Input value not found in inputs vector");
         auto valueIdx = it - inputs.begin();
         std::stringstream argSs;
-        if (slowPath) {
-          argSs << "b" << valueIdx << "[complexIdx(isFastPath" << valueIdx / 32
-                << " & (1 << " << valueIdx % 32 << "), " << param(value, op)
+        if (value->type().kind() != nativert::Type::Kind::Tensor) {
+          argSs << "*b" << valueIdx;
+        } else if (slowPath) {
+          auto bitIdx = fastPathBitIndex_[valueIdx];
+          argSs << "b" << valueIdx << "[complexIdx(isFastPath" << bitIdx / 32
+                << " & (1 << " << bitIdx % 32 << "), " << param(value, op)
                 << ", idx)]";
         } else {
           argSs << "b" << valueIdx << "[idx]";
@@ -1560,9 +2137,25 @@ void CompileCtx::elementwiseExprImpl(
       } else {
         auto* producer = value->producer();
         TORCH_CHECK(producer, "Non-input value has no producer");
-        std::stringstream argSs;
-        elementwiseExprImpl(producer, inputSet, inputs, op, argSs, slowPath);
-        args.push_back(argSs.str());
+        if (producer->target() == "prim.ListPack") {
+          placed_.insert(producer);
+          generatingOp_->allNodes().insert(producer);
+          for (const auto& listInput : producer->inputs()) {
+            std::stringstream argSs;
+            elementwiseExprImpl(
+                listInput.value->producer(),
+                inputSet,
+                inputs,
+                op,
+                argSs,
+                slowPath);
+            args.push_back(argSs.str());
+          }
+        } else {
+          std::stringstream argSs;
+          elementwiseExprImpl(producer, inputSet, inputs, op, argSs, slowPath);
+          args.push_back(argSs.str());
+        }
       }
     }
     meta->generateCall(ss, node, std::move(args));
@@ -1578,7 +2171,11 @@ void CompileCtx::elementwiseExprImpl(
   funcName[0] = '_';
   funcName[1] = '_';
   ss << funcName;
-  if (!meta->typeTemplateParams.empty() || meta->hasDtypeTemplateParam) {
+  auto ewPresenceParams = meta->hasPresentTemplateParams()
+      ? presentTemplateParams(*meta, node)
+      : std::string();
+  if (!meta->typeTemplateParams.empty() || meta->hasDtypeTemplateParam ||
+      !ewPresenceParams.empty()) {
     ss << "<";
     const auto& nodeInputs = node->inputs();
     bool firstTp = true;
@@ -1598,6 +2195,12 @@ void CompileCtx::elementwiseExprImpl(
       TORCH_CHECK(dtypeAttr, node->target(), ": missing dtype attribute");
       ss << cudaTypeFromDtype(*dtypeAttr);
     }
+    if (!ewPresenceParams.empty()) {
+      if (!firstTp) {
+        ss << ", ";
+      }
+      ss << ewPresenceParams;
+    }
     ss << ">";
   }
   ss << "(";
@@ -1606,41 +2209,76 @@ void CompileCtx::elementwiseExprImpl(
     ss << "idx";
     first = false;
   }
-  for (size_t i = 0; i < node->inputs().size(); ++i) {
-    auto* value = node->inputs()[i].value;
+  if (ew.hasSizeArg) {
     if (!first) {
       ss << ", ";
     }
+    ss << "size";
     first = false;
-    bool isWhole =
-        i < meta->argumentMeta.size() && meta->argumentMeta[i].wholeTensor;
-    if (isWhole) {
-      ss << param(value, op);
-    } else if (inputSet.count(value)) {
-      auto it = std::find(inputs.begin(), inputs.end(), value);
-      TORCH_CHECK(it != inputs.end(), "Input value not found in inputs vector");
-      auto valueIdx = it - inputs.begin();
-      if (slowPath) {
-        ss << "b" << valueIdx << "[complexIdx(isFastPath" << valueIdx / 32
-           << " & (1 << " << valueIdx % 32 << "), " << param(value, op)
-           << ", idx)]";
-      } else {
-        ss << "b" << valueIdx << "[idx]";
-      }
-    } else {
-      auto* producer = value->producer();
-      TORCH_CHECK(producer, "Non-input value has no producer");
-      elementwiseExprImpl(producer, inputSet, inputs, op, ss, slowPath);
-    }
   }
-  for (const auto& attrName : ew.attributeArgs) {
-    if (!first) {
-      ss << ", ";
-    }
-    first = false;
-    auto off = op.attrOffset(node, attrName);
-    ss << "attr" << off;
-  }
+  forArguments(
+      *meta,
+      node,
+      [&](size_t schemaIdx,
+          ValueCP value,
+          const nativert::Attribute* attr) {
+        if (value) {
+          if (!first) {
+            ss << ", ";
+          }
+          first = false;
+          bool isWhole = schemaIdx < meta->argumentMeta.size() &&
+              meta->argumentMeta[schemaIdx].wholeTensor;
+          if (isWhole) {
+            ss << param(value, op);
+          } else if (inputSet.count(value)) {
+            auto it = std::find(inputs.begin(), inputs.end(), value);
+            TORCH_CHECK(
+                it != inputs.end(), "Input value not found in inputs vector");
+            auto valueIdx = it - inputs.begin();
+            if (value->type().kind() != nativert::Type::Kind::Tensor) {
+              ss << "*b" << valueIdx;
+            } else if (slowPath) {
+              auto bitIdx = fastPathBitIndex_[valueIdx];
+              ss << "b" << valueIdx << "[complexIdx(isFastPath"
+                 << bitIdx / 32 << " & (1 << " << bitIdx % 32 << "), "
+                 << param(value, op) << ", idx)]";
+            } else {
+              ss << "b" << valueIdx << "[idx]";
+            }
+          } else {
+            auto* producer = value->producer();
+            TORCH_CHECK(producer, "Non-input value has no producer");
+            if (producer->target() == "prim.ListPack") {
+              placed_.insert(producer);
+              generatingOp_->allNodes().insert(producer);
+              for (const auto& listInput : producer->inputs()) {
+                elementwiseExprImpl(
+                    listInput.value->producer(),
+                    inputSet,
+                    inputs,
+                    op,
+                    ss,
+                    slowPath);
+              }
+            } else {
+              elementwiseExprImpl(
+                  producer, inputSet, inputs, op, ss, slowPath);
+            }
+          }
+        } else if (attr) {
+          if (!first) {
+            ss << ", ";
+          }
+          first = false;
+          if (std::holds_alternative<nativert::None>(attr->value)) {
+            ss << "0";
+          } else {
+            auto off = op.attrOffset(node, attr->name);
+            ss << "attr" << off;
+          }
+        }
+      });
   ss << ")";
 }
 
@@ -1698,6 +2336,9 @@ std::string CompileCtx::param(ValueCP value, const KernelOperation& op) const {
       if (value->type().kind() == nativert::Type::Kind::Tensor) {
         return fmt::format("param<Tensor>(blockInfo, {})", it->second);
       }
+      if (value->type().kind() == nativert::Type::Kind::TensorList) {
+        return fmt::format("param<TensorList>(blockInfo, {})", it->second);
+      }
       return fmt::format(
           "param<{}>(blockInfo, {})", cudaType(value), it->second);
     }
@@ -1705,6 +2346,9 @@ std::string CompileCtx::param(ValueCP value, const KernelOperation& op) const {
   auto off = op.paramOffset(value);
   if (value->type().kind() == nativert::Type::Kind::Tensor) {
     return fmt::format("param<Tensor>(blockInfo, {})", off);
+  }
+  if (value->type().kind() == nativert::Type::Kind::TensorList) {
+    return fmt::format("param<TensorList>(blockInfo, {})", off);
   }
   return fmt::format("param<{}>(blockInfo, {})", cudaType(value), off);
 }
@@ -1739,6 +2383,32 @@ void addDuplicateExtraBindings(
   }
 }
 
+bool isAllViews(
+    NodeCP node,
+    const std::unordered_set<NodeCP>& placed,
+    const std::unordered_set<NodeCP>& projectInputs,
+    std::unordered_set<NodeCP>& visited) {
+  if (!visited.insert(node).second) {
+    return true;
+  }
+  auto* meta = Registry::metadata(node->target());
+  bool isViewNode =
+      (meta && meta->isView()) || node->target() == "torch.ops.aten.sym_size";
+  if (!isViewNode) {
+    return false;
+  }
+  for (const auto& input : node->inputs()) {
+    auto* producer = input.value->producer();
+    if (!producer || placed.count(producer) || projectInputs.count(producer)) {
+      continue;
+    }
+    if (!isAllViews(producer, placed, projectInputs, visited)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 std::unique_ptr<CompiledNode> CompileCtx::compileNode(ProjectNode& project) {
   placedBeforeNode_ = placed_;
   inputs_ = &project.inputs();
@@ -1748,21 +2418,44 @@ std::unique_ptr<CompiledNode> CompileCtx::compileNode(ProjectNode& project) {
     if (node->target() == "prim.Input" || placed_.count(node)) {
       continue;
     }
+    if (node->target() == "prim.ListUnpack") {
+      auto* listValue = node->inputs()[0].value;
+      auto* producer = listValue->producer();
+      if (!producer || !standaloneNodes_.count(producer)) {
+        placed_.insert(node);
+        continue;
+      }
+    }
     auto sg = extractSubgraph(node, project.inputs(), placed_);
     auto it = projectOps_.find(sg);
     if (it != projectOps_.end()) {
       ops_.emplace_back(it->second, sg, ivalueStorage_);
       addDuplicateExtraBindings(
           ops_.back(), it->second->extraValues(), waveGraph_);
-      // Map formal syncable value ids to actual ids.
+      // Map formal syncable and standalone value ids to actual ids.
       const auto& bindings = ops_.back().bindings();
       for (const auto& [formalId, actualId] : bindings) {
         if (waveGraph_.syncableValueIds().count(formalId)) {
           waveGraph_.addSyncableValueId(actualId);
         }
       }
+      const auto& nodeMap = ops_.back().nodeMap();
+      for (const auto& [formal, actual] : nodeMap) {
+        if (standaloneNodes_.count(formal)) {
+          standaloneNodes_.insert(actual);
+        }
+      }
     } else {
+      NodeSet viewVisited;
+      bool allViews =
+          isAllViews(sg.root, placed_, project.inputs(), viewVisited);
+      auto& config = WaveConfig::get();
+      bool savedAllStandalone = config.allStandalone;
+      if (allViews) {
+        config.allStandalone = true;
+      }
       auto* projectOp = makeProjectionOperation(sg);
+      config.allStandalone = savedAllStandalone;
       if (projectOp) {
         projectOps_[sg] = projectOp;
         ops_.emplace_back(projectOp, sg, ivalueStorage_);

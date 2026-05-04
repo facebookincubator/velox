@@ -28,6 +28,7 @@
 #include <gflags/gflags.h>
 #include <algorithm>
 #include <fstream>
+#include <iostream>
 #include <sstream>
 
 #include "velox/experimental/wave/common/GpuArena.h"
@@ -73,6 +74,54 @@ void fillTensorParam(const at::Tensor& tensor, void* dest) {
   }
   t->numEl = tensor.numel();
   t->status = Tensor::kUninited;
+}
+
+std::string tensorToString(const Tensor& t) {
+  std::stringstream ss;
+  ss << "Tensor{storage=" << t.storage << " rank=" << static_cast<int>(t.rank)
+     << " dims=[";
+  for (int i = 0; i < t.rank; ++i) {
+    if (i > 0) {
+      ss << ",";
+    }
+    ss << t.dims[i];
+  }
+  ss << "] strides=[";
+  for (int i = 0; i < t.rank; ++i) {
+    if (i > 0) {
+      ss << ",";
+    }
+    ss << t.strides[i];
+  }
+  ss << "] numEl=" << t.numEl << " status=" << t.status << "}";
+  return ss.str();
+}
+
+std::string dumpOpParams(const KernelOperation& op, uint8_t* paramBase) {
+  std::stringstream ss;
+  const auto& inputs = op.orderedInputs();
+  auto numInputs = op.numInputs();
+  for (size_t i = 0; i < inputs.size(); ++i) {
+    auto offset = op.paramOffset(inputs[i]);
+    bool isOutput = static_cast<int32_t>(i) >= numInputs;
+    ss << "  " << (isOutput ? "output" : "input") << "[" << i
+       << "] offset=" << offset;
+    if (inputs[i]->type().kind() == nativert::Type::Kind::Tensor) {
+      auto* t = reinterpret_cast<Tensor*>(paramBase + offset);
+      ss << " " << tensorToString(*t);
+    } else {
+      ss << " scalar=" << *reinterpret_cast<int64_t*>(paramBase + offset);
+    }
+    ss << "\n";
+  }
+  auto constantOffset = op.constantAreaOffset();
+  for (int32_t i = 0; i < op.numConstants(); ++i) {
+    ss << "  const[" << i << "] offset=" << constantOffset
+       << " value=" << *reinterpret_cast<int64_t*>(paramBase + constantOffset)
+       << "\n";
+    constantOffset += 8;
+  }
+  return ss.str();
 }
 
 void fillScalarParam(const c10::IValue& ivalue, void* dest) {
@@ -338,6 +387,18 @@ void makeNodeMap(
     const auto& ai = actualNode->inputs();
     for (size_t i = 0; i < fi.size(); ++i) {
       if (formalInputSet.count(fi[i].value)) {
+        auto* fp = fi[i].value->producer();
+        if (fp) {
+          auto* meta = Registry::metadata(fp->target());
+          if (meta && meta->isView()) {
+            auto* ap = ai[i].value->producer();
+            TORCH_CHECK(
+                ap && Registry::metadata(ap->target()) &&
+                    Registry::metadata(ap->target())->isView(),
+                "Formal input has view producer but actual does not");
+            nodeMap.emplace(fp, ap);
+          }
+        }
         continue;
       }
       auto* fp = fi[i].value->producer();
@@ -392,6 +453,22 @@ FormalToActual makeSubgraphBindings(
         formalNode->target());
     for (size_t i = 0; i < fi.size(); ++i) {
       if (formalInputSet.count(fi[i].value)) {
+        auto* fp = fi[i].value->producer();
+        if (fp) {
+          auto* meta = Registry::metadata(fp->target());
+          if (meta && meta->isView()) {
+            auto* ap = ai[i].value->producer();
+            TORCH_CHECK(
+                ap && Registry::metadata(ap->target()) &&
+                    Registry::metadata(ap->target())->isView(),
+                "Formal input has view producer but actual does not");
+            const auto& fo = fp->outputs();
+            const auto& ao = ap->outputs();
+            for (size_t j = 0; j < fo.size(); ++j) {
+              bindings[fo[j]->id()] = ao[j]->id();
+            }
+          }
+        }
         continue;
       }
       auto* fp = fi[i].value->producer();
@@ -426,7 +503,7 @@ LaunchData::LaunchData(
     const Launch& launch,
     OpInvocation& op,
     const IdToValueMap& idToValue)
-    : launch(&launch), op(&op), numElements(0) {
+    : launch(&launch), invocation(&op), numElements(0) {
   const auto& bindings = op.bindings();
 
   auto translateId = [&](ValueCP formal) -> nativert::ValueId {
@@ -468,6 +545,12 @@ LaunchData::LaunchData(
       actualDesc.sizeExpr = desc.sizeExpr.toActual(bindings, idToValue);
       if (desc.storageFrom) {
         actualDesc.storageFrom = idToValue.at(translateId(desc.storageFrom));
+      }
+      if (desc.viewNode) {
+        auto viewIt = op.nodeMap().find(desc.viewNode);
+        TORCH_CHECK(
+            viewIt != op.nodeMap().end(), "View node not found in nodeMap");
+        actualDesc.viewNode = viewIt->second;
       }
       // Non-tensor outputs (scalars, SymInt, etc.) must be read back to host.
       auto outputValueId = actualOutputs[i];
@@ -675,6 +758,16 @@ void CompositeKernel::launch(
   kernel_->launch(0, numBlocks, numThreads, sharedMemory, stream, args);
 }
 
+void CompositeKernel::launchCooperative(
+    int32_t numBlocks,
+    int32_t numThreads,
+    int32_t sharedMemory,
+    facebook::velox::wave::Stream* stream,
+    void** args) {
+  kernel_->launchCooperative(
+      0, numBlocks, numThreads, sharedMemory, stream, args);
+}
+
 std::string CompositeKernel::toString(Listing mode) const {
   std::stringstream ss;
   for (const auto& kop : kernelOpStorage_) {
@@ -688,6 +781,56 @@ std::string CompositeKernel::toString(Listing mode) const {
 }
 
 namespace {
+
+void fillTensorListParam(
+    LaunchData& launch,
+    nativert::ExecutionFrame& frame,
+    uint8_t* paramBase,
+    const KernelOperation& kernelOp,
+    ValueCP listValue,
+    const FormalToActual& bindings,
+    std::unordered_set<int32_t>& filledOffsets) {
+  auto elements = listValue->getListElements();
+  TensorListParam tlp;
+  tlp.listOffset = kernelOp.paramOffset(listValue);
+  for (auto* elem : elements) {
+    auto elemId = elem->id();
+    auto it = bindings.find(elemId);
+    auto actualId = it != bindings.end() ? it->second : elemId;
+    auto elemOffset = kernelOp.paramOffset(elem);
+    tlp.elementOffsets.push_back(elemOffset);
+    tlp.elementIds.push_back(actualId);
+    if (filledOffsets.insert(elemOffset).second) {
+      fillTensorParam(
+          frame.getIValue(actualId).toTensor(), paramBase + elemOffset);
+      launch.tensorsInFrame.push_back(actualId);
+      launch.tensorOffsets.push_back(elemOffset);
+    }
+  }
+  // Write TensorList struct header. The tensors pointer array follows
+  // the struct and is patched with device-side addresses later.
+  auto* tl = reinterpret_cast<TensorList*>(paramBase + tlp.listOffset);
+  tl->size = elements.size();
+  tl->tensors = nullptr;
+  launch.tensorLists.push_back(std::move(tlp));
+}
+
+void patchTensorListPointers(
+    const LaunchData& launch,
+    uint8_t* paramBase,
+    uint8_t* deviceBase) {
+  for (const auto& tlp : launch.tensorLists) {
+    auto* tl = reinterpret_cast<TensorList*>(paramBase + tlp.listOffset);
+    auto* ptrArray = reinterpret_cast<Tensor**>(
+        paramBase + tlp.listOffset + sizeof(TensorList));
+    tl->tensors = reinterpret_cast<Tensor**>(
+        deviceBase + tlp.listOffset + sizeof(TensorList));
+    for (size_t j = 0; j < tlp.elementOffsets.size(); ++j) {
+      ptrArray[j] =
+          reinterpret_cast<Tensor*>(deviceBase + tlp.elementOffsets[j]);
+    }
+  }
+}
 
 void fillLaunchParams(
     LaunchData& launch,
@@ -713,6 +856,9 @@ void fillLaunchParams(
           frame.getIValue(launch.scalarsInFrame[i]),
           paramBase + launch.scalarOffsets[i]);
     }
+    for (auto offset : launch.launch->op->barrierCounters()) {
+      *reinterpret_cast<int32_t*>(paramBase + offset) = 0;
+    }
     if (!launch.returnValues.empty()) {
       if (returnBegin == -1) {
         returnBegin = launch.returnOffsets.front();
@@ -722,17 +868,44 @@ void fillLaunchParams(
           lastType == nativert::Type::Kind::Tensor ? sizeof(Tensor) : 8;
       returnEnd = launch.returnOffsets.back() + lastSize;
     }
+    if (WaveConfig::get().trace & WaveConfig::kFrame) {
+      for (size_t i = 0; i < launch.tensorsInFrame.size(); ++i) {
+        std::cout << "  v" << launch.tensorsInFrame[i] << " = "
+                  << launch.tensorOffsets[i] << std::endl;
+      }
+      for (size_t i = 0; i < launch.scalarsInFrame.size(); ++i) {
+        std::cout << "  v" << launch.scalarsInFrame[i] << " = "
+                  << launch.scalarOffsets[i] << std::endl;
+      }
+    }
     return;
   }
 
   auto* kernelOp = launch.launch->op;
   const auto& orderedInputs = kernelOp->orderedInputs();
   auto numInputs = kernelOp->numInputs();
+  const auto& bindings = launch.invocation->bindings();
+
+  // Track which tensor offsets have been filled to avoid duplicates
+  // when multiple TensorLists share elements.
+  std::unordered_set<int32_t> filledOffsets;
 
   // Fill input params, recording tensor/scalar values and their offsets.
   int32_t returnCounter = 0;
   for (int32_t i = 0; i < numInputs; ++i) {
-    auto offset = kernelOp->paramOffset(orderedInputs[i]);
+    auto* formalValue = orderedInputs[i];
+    if (formalValue->type().kind() == nativert::Type::Kind::TensorList) {
+      fillTensorListParam(
+          launch,
+          frame,
+          paramBase,
+          *kernelOp,
+          formalValue,
+          bindings,
+          filledOffsets);
+      continue;
+    }
+    auto offset = kernelOp->paramOffset(formalValue);
     auto* dest = paramBase + offset;
     auto actualId = launch.actualInputs[i];
     const auto& ivalue = frame.getIValue(actualId);
@@ -759,7 +932,19 @@ void fillLaunchParams(
 
   // Fill output params, recording values and offsets.
   for (size_t i = 0; i < launch.actualOutputs.size(); ++i) {
-    auto offset = kernelOp->paramOffset(orderedInputs[numInputs + i]);
+    auto* formalValue = orderedInputs[numInputs + i];
+    if (formalValue->type().kind() == nativert::Type::Kind::TensorList) {
+      fillTensorListParam(
+          launch,
+          frame,
+          paramBase,
+          *kernelOp,
+          formalValue,
+          bindings,
+          filledOffsets);
+      continue;
+    }
+    auto offset = kernelOp->paramOffset(formalValue);
     auto* dest = paramBase + offset;
     auto actualId = launch.actualOutputs[i];
     bool isTensorOutput = i < launch.actualOutputTypes.size() &&
@@ -797,7 +982,7 @@ void fillLaunchParams(
 
   // Fill constant params (first time only, constants don't change).
   auto constantOffset = kernelOp->constantAreaOffset();
-  const auto& opConstants = launch.op->constants();
+  const auto& opConstants = launch.invocation->constants();
   for (auto idx : launch.launch->constantIndices) {
     auto* dest = paramBase + constantOffset;
     fillScalarParam(*opConstants[idx], dest);
@@ -811,13 +996,80 @@ void fillLaunchParams(
         reinterpret_cast<Tensor*>(paramBase + altStart + i * sizeof(Tensor));
     t->status = Tensor::kUninited;
   }
+
+  for (auto offset : kernelOp->barrierCounters()) {
+    *reinterpret_cast<int32_t*>(paramBase + offset) = 0;
+  }
+
+  if (WaveConfig::get().trace & WaveConfig::kFrame) {
+    for (size_t i = 0; i < launch.tensorsInFrame.size(); ++i) {
+      std::cout << "  v" << launch.tensorsInFrame[i] << " = "
+                << launch.tensorOffsets[i] << std::endl;
+    }
+    for (size_t i = 0; i < launch.scalarsInFrame.size(); ++i) {
+      std::cout << "  v" << launch.scalarsInFrame[i] << " = "
+                << launch.scalarOffsets[i] << std::endl;
+    }
+  }
+}
+
+void traceTensor(
+    nativert::ValueId actualId,
+    c10::IntArrayRef dims,
+    const char* action) {
+  if (!(WaveConfig::get().trace & WaveConfig::kTensors)) {
+    return;
+  }
+  auto t =
+      at::empty(dims, at::TensorOptions().dtype(at::kFloat).device(at::kMeta));
+  std::cout << "  tensor v" << actualId << " " << action << " "
+            << traceIValue(c10::IValue(t)) << std::endl;
+}
+
+void traceView(
+    nativert::ValueId baseId,
+    nativert::ValueId viewId,
+    const c10::IValue& viewValue) {
+  if (!(WaveConfig::get().trace & WaveConfig::kTensors)) {
+    return;
+  }
+  std::cout << "  view v" << viewId << " of v" << baseId << " "
+            << traceIValue(viewValue) << std::endl;
+}
+
+void ensureCudaTensor(
+    nativert::ExecutionFrame& frame,
+    const ValueTypes& types,
+    nativert::ValueId actualId,
+    c10::IntArrayRef dims) {
+  auto& existing = frame.getIValue(actualId);
+  if (existing.isTensor() && existing.toTensor().is_cuda()) {
+    auto& tensor = existing.toTensor();
+    if (tensor.sizes() != dims) {
+      traceTensor(actualId, dims, "resize");
+      tensor.resize_(dims);
+    } else {
+      traceTensor(actualId, dims, "keep");
+    }
+  } else {
+    auto* meta = types.types[actualId];
+    if (!meta) {
+      return;
+    }
+    traceTensor(actualId, dims, "alloc");
+    auto tensor = at::empty(
+        dims, at::TensorOptions().dtype(meta->dtype()).device(at::kCUDA));
+    frame.setIValue(actualId, std::move(tensor));
+  }
 }
 
 void allocateLaunchOutputs(
     const LaunchData& launch,
     nativert::ExecutionFrame& frame,
     const ValueTypes& types,
-    nativert::ValueId largestId) {
+    nativert::ValueId largestId,
+    const std::unordered_map<NodeCP, nativert::OpKernel*>* kernelMap,
+    const IdToValueMap& idToValue) {
   const auto& descs = launch.actualOutputDescs;
   const auto& actualOutputs = launch.actualOutputs;
   const auto& outputTypes = launch.actualOutputTypes;
@@ -826,39 +1078,89 @@ void allocateLaunchOutputs(
   if (largestId >= 0) {
     auto dims = frame.getIValue(largestId).toTensor().sizes();
     for (size_t i = 0; i < descs.size(); ++i) {
-      // Skip non-tensor outputs.
       if (i < outputTypes.size() &&
           outputTypes[i] != nativert::Type::Kind::Tensor) {
         continue;
       }
-      auto actualId = actualOutputs[i];
-      auto& existing = frame.getIValue(actualId);
-      if (existing.isTensor() && existing.toTensor().is_cuda()) {
-        auto& tensor = existing.toTensor();
-        if (tensor.sizes() != dims) {
-          tensor.resize_(dims);
-        }
-      } else {
-        auto* meta = types.types[actualId];
-        if (!meta) {
-          continue;
-        }
-        auto tensor = at::empty(
-            dims, at::TensorOptions().dtype(meta->dtype()).device(at::kCUDA));
-        frame.setIValue(actualId, std::move(tensor));
+      if (descs[i].delegated) {
+        continue;
       }
+      auto actualId = actualOutputs[i];
+      if (descs[i].viewNode && kernelMap) {
+        auto it = kernelMap->find(descs[i].viewNode);
+        TORCH_CHECK(
+            it != kernelMap->end(),
+            "No kernel for view node ",
+            descs[i].viewNode->target());
+        it->second->compute(frame);
+        if (WaveConfig::get().trace & WaveConfig::kTensors) {
+          auto baseId = descs[i].viewNode->inputs()[0].value->id();
+          traceView(baseId, actualId, frame.getIValue(actualId));
+        }
+        continue;
+      }
+      ensureCudaTensor(frame, types, actualId, dims);
     }
     return;
   }
 
-  const auto& bindings = launch.op->bindings();
+  const auto& bindings = launch.invocation->bindings();
   for (size_t i = 0; i < descs.size(); ++i) {
-    // Skip non-tensor outputs.
+    // Skip non-tensor and non-tensor-list outputs.
     if (i < outputTypes.size() &&
-        outputTypes[i] != nativert::Type::Kind::Tensor) {
+        outputTypes[i] != nativert::Type::Kind::Tensor &&
+        outputTypes[i] != nativert::Type::Kind::TensorList) {
+      continue;
+    }
+    if (descs[i].delegated) {
       continue;
     }
     auto actualId = actualOutputs[i];
+    if (descs[i].viewNode && kernelMap) {
+      auto it = kernelMap->find(descs[i].viewNode);
+      TORCH_CHECK(
+          it != kernelMap->end(),
+          "No kernel for view node ",
+          descs[i].viewNode->target());
+      it->second->compute(frame);
+      if (WaveConfig::get().trace & WaveConfig::kTensors) {
+        auto baseId = descs[i].viewNode->inputs()[0].value->id();
+        traceView(baseId, actualId, frame.getIValue(actualId));
+      }
+      continue;
+    }
+
+    // TensorList output: expand to component Values and allocate each.
+    if (i < outputTypes.size() &&
+        outputTypes[i] == nativert::Type::Kind::TensorList) {
+      if (!descs[i].reserveShape) {
+        continue;
+      }
+      auto shapes = descs[i].reserveShape(nullptr, frame, bindings);
+      auto valueIt = idToValue.find(actualId);
+      TORCH_CHECK(
+          valueIt != idToValue.end(),
+          "TensorList output value not found: ",
+          actualId);
+      auto elements = valueIt->second->getListElements();
+      TORCH_CHECK(
+          shapes.size() == elements.size(),
+          "reserveShape returned ",
+          shapes.size(),
+          " shapes but TensorList has ",
+          elements.size(),
+          " elements");
+      for (size_t j = 0; j < elements.size(); ++j) {
+        auto elemId = elements[j]->id();
+        auto elemActualIt = bindings.find(elemId);
+        auto elemActualId =
+            elemActualIt != bindings.end() ? elemActualIt->second : elemId;
+        std::vector<int64_t> dims(shapes[j].begin(), shapes[j].end());
+        ensureCudaTensor(frame, types, elemActualId, dims);
+      }
+      continue;
+    }
+
     std::vector<int64_t> dims;
     if (descs[i].reserveShape) {
       auto shapes = descs[i].reserveShape(nullptr, frame, bindings);
@@ -886,21 +1188,7 @@ void allocateLaunchOutputs(
       }
       continue;
     }
-    auto& existing = frame.getIValue(actualId);
-    if (existing.isTensor() && existing.toTensor().is_cuda()) {
-      auto& tensor = existing.toTensor();
-      if (tensor.sizes() != dims) {
-        tensor.resize_(dims);
-      }
-    } else {
-      auto* meta = types.types[actualId];
-      if (!meta) {
-        continue;
-      }
-      auto tensor = at::empty(
-          dims, at::TensorOptions().dtype(meta->dtype()).device(at::kCUDA));
-      frame.setIValue(actualId, std::move(tensor));
-    }
+    ensureCudaTensor(frame, types, actualId, dims);
   }
 }
 
@@ -975,6 +1263,30 @@ void updateGridSizeBounds(
   sv.hasGridCache = true;
 }
 
+// When sizeExpr is kNone (0-arg elementwise), gets numElements from the
+// single output desc's reserveShape.
+int64_t numElementsFromReserve(
+    LaunchData& data,
+    nativert::ExecutionFrame& frame) {
+  const auto& descs = data.actualOutputDescs;
+  TORCH_CHECK(
+      descs.size() == 1,
+      "sizeExpr is kNone but kernel op has ",
+      descs.size(),
+      " output descs, expected 1");
+  TORCH_CHECK(
+      descs[0].reserveShape,
+      "sizeExpr is kNone but output desc has no reserveShape");
+  const auto& bindings = data.invocation->bindings();
+  auto shapes = descs[0].reserveShape(nullptr, frame, bindings);
+  TORCH_CHECK(!shapes.empty(), "reserveShape returned empty shapes");
+  int64_t numElements = 1;
+  for (auto dim : shapes[0]) {
+    numElements *= dim;
+  }
+  return numElements;
+}
+
 } // namespace
 
 // --- CompositeInvocation ---
@@ -993,9 +1305,9 @@ void CompositeInvocation::gatherLaunches(
     if (stepIdx >= static_cast<int32_t>(grid->size())) {
       continue;
     }
-    auto& step = (*grid)[stepIdx];
-    for (size_t j = 0; j < step.size(); ++j) {
-      auto& launch = step[j];
+    auto* step = &(*grid)[stepIdx];
+    for (size_t j = 0; j < step->size(); ++j) {
+      auto& launch = (*step)[j];
       if (launch.op != nullptr) {
         bool isNew = kernelIdx >= static_cast<int32_t>(sv.kernels.size());
         if (isNew) {
@@ -1005,8 +1317,12 @@ void CompositeInvocation::gatherLaunches(
         bool hasByLargestInput = !data.launch->op->outputDescs().empty() &&
             data.launch->op->outputDescs()[0].byLargestInput;
         nativert::ValueId largestId = -1;
-        data.numElements = data.sizeExpr.numElements(
-            state.frame, hasByLargestInput ? &largestId : nullptr);
+        if (data.sizeExpr.op == SizeShortcut::kNone) {
+          data.numElements = numElementsFromReserve(data, *state.frame);
+        } else {
+          data.numElements = data.sizeExpr.numElements(
+              state.frame, hasByLargestInput ? &largestId : nullptr);
+        }
 
         if (launch.op->isGridChoice()) {
           auto* projectOp = ops[i].projectOp();
@@ -1017,26 +1333,45 @@ void CompositeInvocation::gatherLaunches(
             wantSingleBlock =
                 data.numElements <= projectOp->singleBlockMaxSize();
           }
+          LaunchGrid* newGrid = nullptr;
           if (wantSingleBlock != grids[i].singleBlock) {
             if (wantSingleBlock) {
-              grids[i].grid = &projectOp->singleBlockGrid();
+              newGrid = &projectOp->singleBlockGrid();
             } else {
-              grids[i].grid = &projectOp->grid();
+              newGrid = &projectOp->grid();
             }
             grids[i].singleBlock = wantSingleBlock;
+          }
+          if (!wantSingleBlock && !projectOp->cgGrid().empty() &&
+              WaveConfig::get().isCg.has_value() && *WaveConfig::get().isCg) {
+            newGrid = &projectOp->cgGrid();
+          }
+          if (newGrid && newGrid != grids[i].grid) {
+            grids[i].grid = newGrid;
+            grid = newGrid;
+            step = &(*grid)[stepIdx];
             if (!isNew) {
               sv.gridChanged = true;
             }
-            // Reassign LaunchData from the new grid's launch.
             auto& newLaunch = (*grids[i].grid)[stepIdx][j];
             data = LaunchData(newLaunch, ops[i], idToValue);
             largestId = -1;
-            data.numElements = data.sizeExpr.numElements(
-                state.frame, hasByLargestInput ? &largestId : nullptr);
+            if (data.sizeExpr.op == SizeShortcut::kNone) {
+              data.numElements = numElementsFromReserve(data, *state.frame);
+            } else {
+              data.numElements = data.sizeExpr.numElements(
+                  state.frame, hasByLargestInput ? &largestId : nullptr);
+            }
           }
         }
 
-        allocateLaunchOutputs(data, *state.frame, *state.valueTypes, largestId);
+        allocateLaunchOutputs(
+            data,
+            *state.frame,
+            *state.valueTypes,
+            largestId,
+            state.kernelMap,
+            idToValue);
         ++kernelIdx;
       } else {
         if (standaloneIdx >= static_cast<int32_t>(sv.standalones.size())) {
@@ -1066,6 +1401,7 @@ void CompositeInvocation::processReturnData(
     StepVectors& sv,
     nativert::ExecutionFrame& frame,
     uint8_t* pinnedBase) {
+  bool trace = WaveConfig::get().trace & WaveConfig::kTensors;
   for (size_t i = 0; i < sv.kernels.size(); ++i) {
     auto& data = sv.kernels[i];
     if (data.returnValues.empty()) {
@@ -1083,20 +1419,29 @@ void CompositeInvocation::processReturnData(
           newDims[d] = t->dims[d];
         }
         tensor.resize_(newDims);
+        if (trace) {
+          std::cout << "  D2H: %" << actualId << " = "
+                    << traceIValue(c10::IValue(tensor)) << std::endl;
+        }
       } else if (typeKind == nativert::Type::Kind::SymFloat) {
-        frame.setIValue(
-            actualId,
-            c10::IValue(*reinterpret_cast<double*>(pinnedBase + absOffset)));
+        auto val = *reinterpret_cast<double*>(pinnedBase + absOffset);
+        frame.setIValue(actualId, c10::IValue(val));
+        if (trace) {
+          std::cout << "  D2H: %" << actualId << " = " << val << std::endl;
+        }
       } else if (typeKind == nativert::Type::Kind::SymBool) {
-        frame.setIValue(
-            actualId,
-            c10::IValue(
-                *reinterpret_cast<int64_t*>(pinnedBase + absOffset) != 0));
+        auto val = *reinterpret_cast<int64_t*>(pinnedBase + absOffset) != 0;
+        frame.setIValue(actualId, c10::IValue(val));
+        if (trace) {
+          std::cout << "  D2H: %" << actualId << " = "
+                    << (val ? "true" : "false") << std::endl;
+        }
       } else {
-        // SymInt and other non-tensor types: read as int64.
-        frame.setIValue(
-            actualId,
-            c10::IValue(*reinterpret_cast<int64_t*>(pinnedBase + absOffset)));
+        auto val = *reinterpret_cast<int64_t*>(pinnedBase + absOffset);
+        frame.setIValue(actualId, c10::IValue(val));
+        if (trace) {
+          std::cout << "  D2H: %" << actualId << " = " << val << std::endl;
+        }
       }
     }
   }
@@ -1105,6 +1450,10 @@ void CompositeInvocation::processReturnData(
 void CompositeInvocation::execute(ExecutionState& state) {
   Timer ex("comp inv execute", FLAGS_print_timing);
   auto& frame = *state.frame;
+
+  if (WaveConfig::get().trace) {
+    std::cout << "==== Node " << sequenceNumber << std::endl;
+  }
 
   auto& sv0 = getStepVectors(state.stepVectors, sequenceNumber, 0);
   auto& gridChoices = sv0.gridChoices;
@@ -1235,6 +1584,18 @@ void CompositeInvocation::execute(ExecutionState& state) {
         pinnedBlocks[b].params = deviceBase + sv.paramOffsets[idx];
         pinnedBlocks[b].debugInfo = deviceDebugBase + b;
       }
+
+      // Patch TensorList pointers to device-side Tensor addresses.
+      for (size_t i = 0; i < sv.kernels.size(); ++i) {
+        patchTensorListPointers(
+            sv.kernels[i],
+            pinnedBase + sv.paramOffsets[i],
+            deviceBase + sv.paramOffsets[i]);
+      }
+    }
+
+    if (WaveConfig::get().trace) {
+      traceStep(stepIdx, sv, gridChoices);
     }
 
     // Record debug info locations for later D2H transfer.
@@ -1310,14 +1671,19 @@ void CompositeInvocation::launch(
         auto opCode = originalOps[active];
         auto launchIdx = sv.launchIndices[active];
         std::string opText;
+        std::string paramText;
         if (launchIdx < static_cast<int32_t>(sv.kernels.size()) &&
             sv.kernels[launchIdx].launch && sv.kernels[launchIdx].launch->op) {
-          opText = sv.kernels[launchIdx].launch->op->toString();
+          auto* kernelOp = sv.kernels[launchIdx].launch->op;
+          opText = kernelOp->toString();
+          auto* opParams = pinnedBase + sv.paramOffsets[launchIdx];
+          paramText = dumpOpParams(*kernelOp, opParams);
         }
         LOG(ERROR) << "debug_single_ops: block " << active << " opCode "
                    << opCode << " blockInOp " << pinnedBlocks[active].blockInOp
                    << " stepIdx " << stepIdx << " op: " << opText
-                   << " error: " << e.what();
+                   << "\nparams:\n"
+                   << paramText << "error: " << e.what();
         throw;
       }
     }
@@ -1336,6 +1702,53 @@ void CompositeInvocation::launch(
           returnEnd - returnBegin);
       stream->wait();
     }
+  }
+}
+
+void CompositeInvocation::traceStep(
+    int32_t stepIdx,
+    const StepVectors& sv,
+    const std::vector<GridChoice>& gridChoices) {
+  std::cout << "== " << sequenceNumber << " step " << stepIdx << std::endl;
+
+  // Build map from OpInvocation* to its index in ops.
+  std::unordered_map<const OpInvocation*, int32_t> opInvocationIndex;
+  for (size_t i = 0; i < ops.size(); ++i) {
+    opInvocationIndex[&ops[i]] = static_cast<int32_t>(i);
+  }
+
+  // Build map from ProjectOperation* to its distinct ordinal.
+  std::unordered_map<ProjectOperation*, int32_t> projectOpIndex;
+  for (const auto& op : ops) {
+    auto* projectOp = op.projectOp();
+    if (projectOpIndex.find(projectOp) == projectOpIndex.end()) {
+      projectOpIndex[projectOp] = static_cast<int32_t>(projectOpIndex.size());
+    }
+  }
+
+  for (const auto& launch : sv.standalones) {
+    auto opIdx = opInvocationIndex[launch.invocation];
+    std::cout << sequenceNumber << "." << opIdx << " standalone" << std::endl;
+  }
+
+  for (size_t i = 0; i < sv.kernels.size(); ++i) {
+    const auto& launch = sv.kernels[i];
+    auto opIdx = opInvocationIndex[launch.invocation];
+    auto distinctOpIdx = projectOpIndex[launch.invocation->projectOp()];
+    auto* projectOp = launch.invocation->projectOp();
+    const char* gridLabel = "M";
+    if (gridChoices[opIdx].singleBlock) {
+      gridLabel = "S";
+    } else if (gridChoices[opIdx].grid == &projectOp->cgGrid()) {
+      gridLabel = "CG";
+    }
+    std::cout << sequenceNumber << "." << opIdx << " " << gridLabel << " op "
+              << distinctOpIdx << " " << launch.numElements
+              << " blocks=" << sv.numBlocksPerLaunch[i]
+              << " opcode=" << launch.launch->op->opCode() << " "
+              << (launch.standalone ? "standalone"
+                                    : launch.launch->op->toString(kExprs))
+              << std::endl;
   }
 }
 

@@ -14,14 +14,95 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/torchwave/Cat.h"
 #include "velox/experimental/torchwave/CompiledOp.h"
 #include "velox/experimental/torchwave/Executor.h"
 #include "velox/experimental/torchwave/Registry.h"
 #include "velox/experimental/torchwave/Utils.h"
 
 #include <cmath>
+#include <limits>
 
 namespace torch::wave {
+
+namespace {
+
+// Returns the graph in which variant nodes should be created: the variant
+// graph if one is being built, otherwise the main graph.
+nativert::Graph* variantNodeGraph(WaveGraph* waveGraph) {
+  auto* variantGraph = waveGraph->currentVariantGraph();
+  return variantGraph ? variantGraph : waveGraph->graph();
+}
+
+// Adds an output to 'node' that is a copy of 'original', preserving name,
+// type, and id. The value is owned by the node's owning graph.
+nativert::Value* copyOutputValue(
+    nativert::Node* node,
+    const nativert::Value* original) {
+  auto* newValue =
+      node->addOutput(std::string(original->name()), original->type());
+  newValue->setId(original->id());
+  return newValue;
+}
+
+// Copies all outputs of 'original' as outputs of 'node'. Only effective
+// when node is in the variant graph (different from the original's graph),
+// since value names must be unique within a graph.
+void copyOriginalOutputs(
+    nativert::Node* node,
+    NodeCP original,
+    WaveGraph* waveGraph) {
+  if (!waveGraph->currentVariantGraph()) {
+    return;
+  }
+  for (const auto* output : original->outputs()) {
+    copyOutputValue(node, output);
+  }
+}
+
+// Creates a new intermediate tensor value. Allocates in the main graph first
+// (on a placeholder node) so a frame slot exists, then adds an output to
+// 'node' in its owning graph with the same name, type, and id.
+// When no variant graph is active, creates directly on 'node' via
+// newTensorValue.
+nativert::Value* newVariantTensorValue(
+    nativert::Node* node,
+    WaveGraph* waveGraph,
+    std::string_view name,
+    c10::ScalarType dtype) {
+  if (!waveGraph->currentVariantGraph()) {
+    return waveGraph->newTensorValue(node, name, dtype);
+  }
+  auto* mainValue =
+      waveGraph->newTensorValue(waveGraph->placeholderNode(), name, dtype);
+  auto* copy =
+      node->addOutput(std::string(mainValue->name()), mainValue->type());
+  copy->setId(mainValue->id());
+  return copy;
+}
+
+// Creates a new intermediate scalar value. Allocates in the main graph first
+// (on a placeholder node) so a frame slot exists, then adds an output to
+// 'node' in its owning graph with the same name, type, and id.
+// When no variant graph is active, creates directly on 'node' via
+// newScalarValue.
+nativert::Value* newVariantScalarValue(
+    nativert::Node* node,
+    WaveGraph* waveGraph,
+    std::string_view name,
+    c10::ScalarType dtype) {
+  if (!waveGraph->currentVariantGraph()) {
+    return waveGraph->newScalarValue(node, name, dtype);
+  }
+  auto* mainValue =
+      waveGraph->newScalarValue(waveGraph->placeholderNode(), name, dtype);
+  auto* copy =
+      node->addOutput(std::string(mainValue->name()), mainValue->type());
+  copy->setId(mainValue->id());
+  return copy;
+}
+
+} // namespace
 
 /// Resolves the output ScalarType and dtype string from a node's dtype
 /// attribute and input tensor type. Returns {outDtype, dtypeStr}.
@@ -62,46 +143,37 @@ std::pair<c10::ScalarType, std::string> resolveOutDtype(
 }
 
 nativert::Node* makeSumVariant(NodeCP single, WaveGraph* waveGraph) {
-  auto* graph = waveGraph->graph();
+  auto* graph = variantNodeGraph(waveGraph);
   auto [outDtype, dtypeStr] = resolveOutDtype(single, waveGraph);
 
-  // Node 1: tw.sum_head. Per-block reduction. Output is one TOut value per
-  // block.
   auto* headNode =
       graph->createNode("tw.sum_head", {{"input", single->inputs()[0].value}});
   headNode->addAttribute({"dtype", dtypeStr});
   auto* headOutput =
-      waveGraph->newTensorValue(headNode, "sum_blocks", outDtype);
+      newVariantTensorValue(headNode, waveGraph, "sum_blocks", outDtype);
 
-  // Node 2: tw.sum_final. Single-block reduction of per-block sums to a
-  // scalar.
   auto* finalNode = graph->createNode("tw.sum_final", {{"input", headOutput}});
   finalNode->addAttribute({"dtype", dtypeStr});
+  copyOriginalOutputs(finalNode, single, waveGraph);
   return finalNode;
 }
 
 nativert::Node* makeCumsumVariant(NodeCP single, WaveGraph* waveGraph) {
-  auto* graph = waveGraph->graph();
+  auto* graph = variantNodeGraph(waveGraph);
   auto [outDtype, dtypeStr] = resolveOutDtype(single, waveGraph);
 
-  // Node 1: tw.cumsum_head. Input is the original input. Output is per-block
-  // sums tensor with size = ceil(inputNumel / 256).
   auto* headNode = graph->createNode(
       "tw.cumsum_head", {{"input", single->inputs()[0].value}});
   headNode->addAttribute({"dtype", dtypeStr});
   auto* headOutput =
-      waveGraph->newTensorValue(headNode, "cumsum_counts", outDtype);
+      newVariantTensorValue(headNode, waveGraph, "cumsum_counts", outDtype);
 
-  // Node 2: tw.cumsum_add_sizes. Input is the head output. Output is a
-  // link-only scalar (not passed at runtime, only for ordering).
   auto* addSizesNode =
       graph->createNode("tw.cumsum_add_sizes", {{"input", headOutput}});
   addSizesNode->addAttribute({"dtype", dtypeStr});
-  auto* addSizesOutput = waveGraph->newScalarValue(
-      addSizesNode, "cumsum_link", c10::ScalarType::Int);
+  auto* addSizesOutput = newVariantScalarValue(
+      addSizesNode, waveGraph, "cumsum_link", c10::ScalarType::Int);
 
-  // Node 3: tw.cumsum_final. Inputs are the original input, the head output
-  // (prefix-summed counts), and the link from add_sizes.
   std::vector<nativert::NamedArgument> finalInputs = {
       {"input", single->inputs()[0].value},
       {"counts", headOutput},
@@ -109,33 +181,29 @@ nativert::Node* makeCumsumVariant(NodeCP single, WaveGraph* waveGraph) {
   auto* finalNode =
       graph->createNode("tw.cumsum_final", std::move(finalInputs));
   finalNode->addAttribute({"dtype", dtypeStr});
-  // Copy the dim attribute (int64_t) from the original node.
   const auto* dimAttr = single->tryGetAttribute("dim");
   if (dimAttr) {
     finalNode->addAttribute({dimAttr->name, std::get<int64_t>(dimAttr->value)});
   }
+  copyOriginalOutputs(finalNode, single, waveGraph);
   return finalNode;
 }
 
 nativert::Node* makeExclusiveSumVariant(NodeCP single, WaveGraph* waveGraph) {
-  auto* graph = waveGraph->graph();
-  auto inputId = single->inputs()[0].value->id();
-  auto inputDtype = waveGraph->types().types[inputId]->dtype();
-  auto outDtype = c10::isIntegralType(inputDtype, true) ? c10::ScalarType::Long
-                                                        : inputDtype;
-  auto dtypeStr = c10::toString(outDtype);
+  auto* graph = variantNodeGraph(waveGraph);
+  auto [outDtype, dtypeStr] = resolveOutDtype(single, waveGraph);
 
   auto* headNode = graph->createNode(
       "tw.exclusive_sum_head", {{"input", single->inputs()[0].value}});
   headNode->addAttribute({"dtype", dtypeStr});
   auto* headOutput =
-      waveGraph->newTensorValue(headNode, "exsum_counts", outDtype);
+      newVariantTensorValue(headNode, waveGraph, "exsum_counts", outDtype);
 
   auto* addSizesNode =
       graph->createNode("tw.exclusive_sum_add_sizes", {{"input", headOutput}});
   addSizesNode->addAttribute({"dtype", dtypeStr});
-  auto* addSizesOutput = waveGraph->newScalarValue(
-      addSizesNode, "exsum_link", c10::ScalarType::Int);
+  auto* addSizesOutput = newVariantScalarValue(
+      addSizesNode, waveGraph, "exsum_link", c10::ScalarType::Int);
 
   auto* finalNode = graph->createNode(
       "tw.exclusive_sum_final",
@@ -143,37 +211,100 @@ nativert::Node* makeExclusiveSumVariant(NodeCP single, WaveGraph* waveGraph) {
        {"counts", headOutput},
        {"link", addSizesOutput}});
   finalNode->addAttribute({"dtype", dtypeStr});
+  copyOriginalOutputs(finalNode, single, waveGraph);
   return finalNode;
 }
 
 nativert::Node* makeMaskedSelectVariant(NodeCP single, WaveGraph* waveGraph) {
-  auto* graph = waveGraph->graph();
+  auto* graph = variantNodeGraph(waveGraph);
 
-  // Node 1: tw.masked_select_head. Same inputs as original. Output is a
-  // per-block counts tensor of int with size = ceil(firstInputNumel / 256).
-  std::vector<nativert::NamedArgument> headInputs(
-      single->inputs().begin(), single->inputs().end());
-  auto* headNode =
-      graph->createNode("tw.masked_select_head", std::move(headInputs));
-  auto* headOutput = waveGraph->newTensorValue(
-      headNode, "masked_select_counts", c10::ScalarType::Int);
+  auto* headNode = graph->createNode(
+      "tw.masked_select_head",
+      {{"input", single->inputs()[0].value},
+       {"mask", single->inputs()[1].value}});
+  auto* headOutput = newVariantTensorValue(
+      headNode, waveGraph, "masked_select_counts", c10::ScalarType::Int);
 
-  // Node 2: tw.add_sizes. Input is the head output. Output is a scalar
-  // int64 giving the total selected count.
   auto* addSizesNode =
       graph->createNode("tw.add_sizes", {{"input", headOutput}});
-  auto* addSizesOutput = waveGraph->newScalarValue(
-      addSizesNode, "masked_select_total", c10::ScalarType::Int);
+  auto* addSizesOutput = newVariantScalarValue(
+      addSizesNode, waveGraph, "masked_select_total", c10::ScalarType::Int);
 
-  // Node 3: tw.masked_select_final. Inputs are the original first input,
-  // the head output (per-block counts), and the total from add_sizes.
-  // Its outputs must match the original node's outputs.
   auto* finalNode = graph->createNode(
       "tw.masked_select_final",
       {{"input", single->inputs()[0].value},
        {"mask", single->inputs()[1].value},
        {"counts", headOutput},
        {"total", addSizesOutput}});
+  copyOriginalOutputs(finalNode, single, waveGraph);
+  return finalNode;
+}
+
+nativert::Node* makeCumsumCgVariant(NodeCP single, WaveGraph* waveGraph) {
+  auto* graph = variantNodeGraph(waveGraph);
+  auto [outDtype, dtypeStr] = resolveOutDtype(single, waveGraph);
+  auto* cgNode =
+      graph->createNode("tw.cumsum_cg", {{"input", single->inputs()[0].value}});
+  cgNode->addAttribute({"dtype", dtypeStr});
+  const auto* dimAttr = single->tryGetAttribute("dim");
+  if (dimAttr) {
+    cgNode->addAttribute({dimAttr->name, std::get<int64_t>(dimAttr->value)});
+  }
+  copyOriginalOutputs(cgNode, single, waveGraph);
+  newVariantTensorValue(cgNode, waveGraph, "cumsum_counts", outDtype);
+  return cgNode;
+}
+
+nativert::Node* makeExclusiveSumCgVariant(NodeCP single, WaveGraph* waveGraph) {
+  auto* graph = variantNodeGraph(waveGraph);
+  auto* cgNode = graph->createNode(
+      "tw.exclusive_sum_cg", {{"input", single->inputs()[0].value}});
+  auto [outDtype, dtypeStr] = resolveOutDtype(single, waveGraph);
+  cgNode->addAttribute({"dtype", dtypeStr});
+  copyOriginalOutputs(cgNode, single, waveGraph);
+  newVariantTensorValue(cgNode, waveGraph, "exsum_counts", outDtype);
+  return cgNode;
+}
+
+nativert::Node* makeMaskedSelectCgVariant(NodeCP single, WaveGraph* waveGraph) {
+  auto* graph = variantNodeGraph(waveGraph);
+  auto* cgNode = graph->createNode(
+      "tw.masked_select_cg",
+      {{"input", single->inputs()[0].value},
+       {"mask", single->inputs()[1].value}});
+  copyOriginalOutputs(cgNode, single, waveGraph);
+  newVariantTensorValue(
+      cgNode, waveGraph, "masked_select_counts", c10::ScalarType::Int);
+  return cgNode;
+}
+
+nativert::Node* makeSumCgVariant(NodeCP single, WaveGraph* waveGraph) {
+  auto* graph = variantNodeGraph(waveGraph);
+  auto [outDtype, dtypeStr] = resolveOutDtype(single, waveGraph);
+  auto* cgNode =
+      graph->createNode("tw.sum_cg", {{"input", single->inputs()[0].value}});
+  cgNode->addAttribute({"dtype", dtypeStr});
+  copyOriginalOutputs(cgNode, single, waveGraph);
+  newVariantTensorValue(cgNode, waveGraph, "sum_partials", outDtype);
+  return cgNode;
+}
+
+nativert::Node* makeIsinVariant(NodeCP single, WaveGraph* waveGraph) {
+  auto* graph = variantNodeGraph(waveGraph);
+  auto inputId = single->inputs()[0].value->id();
+  auto inputDtype = waveGraph->types().types[inputId]->dtype();
+
+  auto* headNode = graph->createNode(
+      "tw.isin_head",
+      {{"test_elements", single->inputs()[1].value}});
+  auto* headOutput =
+      newVariantTensorValue(headNode, waveGraph, "isin_table", inputDtype);
+
+  auto* finalNode = graph->createNode(
+      "tw.isin_final",
+      {{"elements", single->inputs()[0].value},
+       {"table", headOutput}});
+  copyOriginalOutputs(finalNode, single, waveGraph);
   return finalNode;
 }
 
@@ -183,7 +314,7 @@ void resolveDtypeFromInput(nativert::Node* node, const ValueTypes& types) {
   if (node->inputs().empty()) {
     return;
   }
-  if (node->tryGetAttribute("dtype")) {
+  if (node->tryGetAttribute("dtype") || node->tryGetInput("dtype")) {
     return;
   }
   auto inputId = node->inputs()[0].value->id();
@@ -223,14 +354,14 @@ int64_t scalarParamByName(
 }
 
 void resolveDefaultDtype(nativert::Node* node, const ValueTypes& /*types*/) {
-  if (node->tryGetAttribute("dtype")) {
+  if (node->tryGetAttribute("dtype") || node->tryGetInput("dtype")) {
     return;
   }
   node->addAttribute({"dtype", std::string("Float")});
 }
 
 void resolveArangeDtype(nativert::Node* node, const ValueTypes& /*types*/) {
-  if (node->tryGetAttribute("dtype")) {
+  if (node->tryGetAttribute("dtype") || node->tryGetInput("dtype")) {
     return;
   }
   bool hasFloat = false;
@@ -244,11 +375,52 @@ void resolveArangeDtype(nativert::Node* node, const ValueTypes& /*types*/) {
   node->addAttribute({"dtype", std::string(hasFloat ? "Float" : "Long")});
 }
 
+void resolveNanToNumDefaults(nativert::Node* node, const ValueTypes& types) {
+  double posinfDefault = std::numeric_limits<double>::max();
+  double neginfDefault = std::numeric_limits<double>::lowest();
+  if (!node->inputs().empty()) {
+    auto inputId = node->inputs()[0].value->id();
+    if (inputId < static_cast<int>(types.types.size()) &&
+        types.types[inputId]) {
+      switch (types.types[inputId]->dtype()) {
+        case c10::ScalarType::Half:
+          posinfDefault = 65504.0;
+          neginfDefault = -65504.0;
+          break;
+        case c10::ScalarType::Float:
+          posinfDefault = std::numeric_limits<float>::max();
+          neginfDefault = std::numeric_limits<float>::lowest();
+          break;
+        case c10::ScalarType::BFloat16:
+          posinfDefault = 0x1.FEp+127;
+          neginfDefault = -0x1.FEp+127;
+          break;
+        default:
+          break;
+      }
+    }
+  }
+  auto resolveAttr = [&](const char* name, double defaultVal) {
+    if (node->tryGetInput(name)) {
+      return;
+    }
+    const auto* attr = node->tryGetAttribute(name);
+    if (!attr) {
+      node->addAttribute({name, defaultVal});
+    } else if (std::holds_alternative<nativert::None>(attr->value)) {
+      const_cast<nativert::Attribute*>(attr)->value = defaultVal;
+    }
+  };
+  resolveAttr("nan", 0.0);
+  resolveAttr("posinf", posinfDefault);
+  resolveAttr("neginf", neginfDefault);
+}
+
 void resolveDtypeFromInputExact(nativert::Node* node, const ValueTypes& types) {
   if (node->inputs().empty()) {
     return;
   }
-  if (node->tryGetAttribute("dtype")) {
+  if (node->tryGetAttribute("dtype") || node->tryGetInput("dtype")) {
     return;
   }
   auto inputId = node->inputs()[0].value->id();
@@ -283,8 +455,31 @@ std::vector<std::vector<Dim>> sizeAttrReserveShape(
   auto it = map.find(sizeInput->value->id());
   TORCH_CHECK(it != map.end(), node->target(), ": size not in FormalToActual");
   auto& ivalue = frame.getIValue(it->second);
-  auto size = ivalue.toIntVector();
-  return {{size.begin(), size.end()}};
+  if (!ivalue.isNone()) {
+    auto size = ivalue.toIntVector();
+    return {{size.begin(), size.end()}};
+  }
+  auto& idToValue = waveGraph()->idToValue();
+  auto valueIt = idToValue.find(it->second);
+  TORCH_CHECK(
+      valueIt != idToValue.end(),
+      node->target(),
+      ": size value id not in idToValue");
+  auto* producer = valueIt->second->producer();
+  TORCH_CHECK(
+      producer && producer->target() == "prim.ListPack",
+      node->target(),
+      ": expected prim.ListPack producer for size");
+  std::vector<Dim> size;
+  for (const auto& input : producer->inputs()) {
+    auto elemIt = map.find(input.value->id());
+    TORCH_CHECK(
+        elemIt != map.end(),
+        node->target(),
+        ": ListPack element not in FormalToActual");
+    size.push_back(frame.getIValue(elemIt->second).toInt());
+  }
+  return {size};
 }
 
 std::vector<std::vector<Dim>> numBlocksShape(
@@ -329,7 +524,7 @@ void registerRankPreservingStandalone(
       .maybeReplace(
           [](NodeCP node,
              ValueTypes& types,
-             nativert::Graph*) -> std::vector<std::pair<ValueCP, ValueCP>> {
+             WaveGraph&) -> std::vector<std::pair<ValueCP, ValueCP>> {
             const auto& inputs = node->inputs();
             const auto& outputs = node->outputs();
             if (inputs.empty() || outputs.empty()) {
@@ -372,7 +567,7 @@ void registerReshapeLikeOp(const char* opName, const char* shapeAttrName) {
       .maybeReplace(
           [](NodeCP node,
              ValueTypes& types,
-             nativert::Graph*) -> std::vector<std::pair<ValueCP, ValueCP>> {
+             WaveGraph&) -> std::vector<std::pair<ValueCP, ValueCP>> {
             const auto& inputs = node->inputs();
             const auto& outputs = node->outputs();
             if (inputs.empty() || outputs.empty()) {
@@ -393,11 +588,9 @@ void registerBuiltins() {
   // Binary arithmetic.
   MetadataBuilder("torch.ops.aten.add.Tensor")
       .elementwise()
-      .attributeArgs({"alpha"})
       .registerOp();
   MetadataBuilder("torch.ops.aten.sub.Tensor")
       .elementwise()
-      .attributeArgs({"alpha"})
       .registerOp();
   MetadataBuilder("torch.ops.aten.mul.Tensor").elementwise().registerOp();
   MetadataBuilder("torch.ops.aten.div.Tensor").elementwise().registerOp();
@@ -410,31 +603,24 @@ void registerBuiltins() {
   // Binary arithmetic (Tensor, Scalar).
   MetadataBuilder("torch.ops.aten.add.Scalar")
       .elementwiseFunc("add")
-      .attributeArgs({"other", "alpha"})
       .registerOp();
   MetadataBuilder("torch.ops.aten.sub.Scalar")
       .elementwiseFunc("sub")
-      .attributeArgs({"other", "alpha"})
       .registerOp();
   MetadataBuilder("torch.ops.aten.mul.Scalar")
       .elementwiseFunc("mul")
-      .attributeArgs({"other"})
       .registerOp();
   MetadataBuilder("torch.ops.aten.div.Scalar")
       .elementwiseFunc("div")
-      .attributeArgs({"other"})
       .registerOp();
   MetadataBuilder("torch.ops.aten.remainder.Scalar")
       .elementwiseFunc("remainder")
-      .attributeArgs({"other"})
       .registerOp();
   MetadataBuilder("torch.ops.aten.fmod.Scalar")
       .elementwiseFunc("fmod")
-      .attributeArgs({"other"})
       .registerOp();
   MetadataBuilder("torch.ops.aten.pow.Tensor_Scalar")
       .elementwiseFunc("pow")
-      .attributeArgs({"other"})
       .registerOp();
 
   // Comparison.
@@ -448,27 +634,21 @@ void registerBuiltins() {
   // Comparison (Tensor, Scalar).
   MetadataBuilder("torch.ops.aten.eq.Scalar")
       .elementwiseFunc("eq")
-      .attributeArgs({"other"})
       .registerOp();
   MetadataBuilder("torch.ops.aten.ne.Scalar")
       .elementwiseFunc("ne")
-      .attributeArgs({"other"})
       .registerOp();
   MetadataBuilder("torch.ops.aten.lt.Scalar")
       .elementwiseFunc("lt")
-      .attributeArgs({"other"})
       .registerOp();
   MetadataBuilder("torch.ops.aten.le.Scalar")
       .elementwiseFunc("le")
-      .attributeArgs({"other"})
       .registerOp();
   MetadataBuilder("torch.ops.aten.gt.Scalar")
       .elementwiseFunc("gt")
-      .attributeArgs({"other"})
       .registerOp();
   MetadataBuilder("torch.ops.aten.ge.Scalar")
       .elementwiseFunc("ge")
-      .attributeArgs({"other"})
       .registerOp();
 
   // Bitwise.
@@ -491,15 +671,12 @@ void registerBuiltins() {
   // Bitwise (Tensor, Scalar).
   MetadataBuilder("torch.ops.aten.bitwise_and.Scalar")
       .elementwiseFunc("bitwise_and")
-      .attributeArgs({"other"})
       .registerOp();
   MetadataBuilder("torch.ops.aten.bitwise_or.Scalar")
       .elementwiseFunc("bitwise_or")
-      .attributeArgs({"other"})
       .registerOp();
   MetadataBuilder("torch.ops.aten.bitwise_xor.Scalar")
       .elementwiseFunc("bitwise_xor")
-      .attributeArgs({"other"})
       .registerOp();
   MetadataBuilder("torch.ops.aten.bitwise_not.default")
       .elementwise()
@@ -570,7 +747,14 @@ void registerBuiltins() {
   MetadataBuilder("torch.ops.aten.sigmoid.default").elementwise().registerOp();
   MetadataBuilder("torch.ops.aten.clamp.default")
       .elementwise()
-      .attributeArgs({"min", "max"})
+      .argumentMeta(
+          {{},
+           {.hasPresentTemplateParam = true},
+           {.hasPresentTemplateParam = true}})
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.nan_to_num.default")
+      .elementwise()
+      .normalize(resolveNanToNumDefaults)
       .registerOp();
 
   // Type cast.
@@ -646,6 +830,32 @@ void registerBuiltins() {
       .hasDtypeTemplateParam()
       .registerOp();
 
+  // New_zeros -> zeros replacement.
+  MetadataBuilder("torch.ops.aten.new_zeros.default")
+      .sizeOrdinal({0})
+      .maybeReplace(
+          [](NodeCP node,
+             ValueTypes& /*types*/,
+             WaveGraph& waveGraph) -> std::vector<std::pair<ValueCP, ValueCP>> {
+            const auto* sizeAttr = node->tryGetAttribute("size");
+            if (!sizeAttr) {
+              return {};
+            }
+            auto [outDtype, dtypeStr] = resolveOutDtype(node, &waveGraph);
+            auto* graph = waveGraph.graph();
+            auto* zerosNode =
+                graph->createNode("torch.ops.aten.zeros.default", {});
+            zerosNode->addAttribute(
+                {sizeAttr->name,
+                 std::get<std::vector<int64_t>>(sizeAttr->value)});
+            zerosNode->addAttribute({"dtype", dtypeStr});
+            graph->insertBefore(zerosNode, const_cast<nativert::Node*>(node));
+            auto* newOutput =
+                waveGraph.newTensorValue(zerosNode, "zeros", outDtype);
+            return {{node->outputs()[0], newOutput}};
+          })
+      .registerOp();
+
   // Arange.
   MetadataBuilder("torch.ops.aten.arange.default")
       .elementwiseFunc("arange")
@@ -667,7 +877,6 @@ void registerBuiltins() {
 
   MetadataBuilder("torch.ops.aten.arange.start")
       .elementwiseFunc("arange_start")
-      .attributeArgs({"start"})
       .hasIdxArg()
       .returnMeta(
           {{.isRegister = true,
@@ -692,7 +901,6 @@ void registerBuiltins() {
   // Shape query.
   MetadataBuilder("torch.ops.aten.sym_size.int")
       .elementwiseFunc("sym_size")
-      .attributeArgs({"dim"})
       .registerOp();
 
   // Identity-like ops: output replaces first input.
@@ -704,7 +912,7 @@ void registerBuiltins() {
     builder.sizeOrdinal({0}).rankArgument(0).maybeReplace(
         [](NodeCP node,
            ValueTypes& /*types*/,
-           nativert::Graph*) -> std::vector<std::pair<ValueCP, ValueCP>> {
+           WaveGraph&) -> std::vector<std::pair<ValueCP, ValueCP>> {
           const auto& inputs = node->inputs();
           const auto& outputs = node->outputs();
           if (inputs.empty() || outputs.empty()) {
@@ -743,7 +951,7 @@ void registerBuiltins() {
       .maybeReplace(
           [](NodeCP node,
              ValueTypes& types,
-             nativert::Graph*) -> std::vector<std::pair<ValueCP, ValueCP>> {
+             WaveGraph&) -> std::vector<std::pair<ValueCP, ValueCP>> {
             const auto& inputs = node->inputs();
             const auto& outputs = node->outputs();
             if (inputs.empty() || outputs.empty()) {
@@ -766,6 +974,139 @@ void registerBuiltins() {
               return {{outputs[0], inputs[0].value}};
             }
             return {};
+          })
+      .registerOp();
+
+  // Select.
+  MetadataBuilder("torch.ops.aten.select.int")
+      .sizeOrdinal({0})
+      .viewOfArg(0)
+      .headerFile("velox/experimental/torchwave/Views.cuh")
+      .deviceFunc("tw_select")
+      .typeTemplateParams({0})
+      .outputConstraints(
+          [](NodeCP node,
+             const ValueTypes& types) -> std::vector<ValueConstraint> {
+            const auto& inputs = node->inputs();
+            if (inputs.empty()) {
+              return {};
+            }
+            ValueConstraint constraint;
+            constraint.rank = types.rank(inputs[0].value) - 1;
+            return {constraint};
+          })
+      .registerOp();
+
+  // Narrow.
+  MetadataBuilder("torch.ops.aten.narrow.default")
+      .sizeOrdinal({0})
+      .isStandalone()
+      .viewOfArg(0)
+      .rankArgument(0)
+      .registerOp();
+
+  // Unsqueeze.
+  MetadataBuilder("torch.ops.aten.unsqueeze.default")
+      .sizeOrdinal({0})
+      .isStandalone()
+      .viewOfArg(0)
+      .outputConstraints(
+          [](NodeCP node,
+             const ValueTypes& types) -> std::vector<ValueConstraint> {
+            const auto& inputs = node->inputs();
+            if (inputs.empty()) {
+              return {};
+            }
+            ValueConstraint constraint;
+            constraint.rank = types.rank(inputs[0].value) + 1;
+            return {constraint};
+          })
+      .registerOp();
+
+  // Flatten.
+  MetadataBuilder("torch.ops.aten.flatten.using_ints")
+      .sizeOrdinal({0})
+      .isStandalone()
+      .viewOfArg(0)
+      .outputConstraints(
+          [](NodeCP node,
+             const ValueTypes& types) -> std::vector<ValueConstraint> {
+            const auto& inputs = node->inputs();
+            if (inputs.empty()) {
+              return {};
+            }
+            auto inputRank = types.rank(inputs[0].value);
+            auto getInt = [&](const char* name, int64_t defaultVal) -> int64_t {
+              const auto* attr = node->tryGetAttribute(name);
+              if (!attr) {
+                return defaultVal;
+              }
+              return std::get<int64_t>(attr->value);
+            };
+            auto startDim = getInt("start_dim", 0);
+            auto endDim = getInt("end_dim", -1);
+            if (startDim < 0) {
+              startDim += inputRank;
+            }
+            if (endDim < 0) {
+              endDim += inputRank;
+            }
+            ValueConstraint constraint;
+            constraint.rank = inputRank - (endDim - startDim);
+            return {constraint};
+          })
+      .registerOp();
+
+  // Unbind.
+  MetadataBuilder("torch.ops.aten.unbind.int")
+      .sizeOrdinal({0})
+      .isStandalone()
+      .viewOfArg(0)
+      .outputConstraints(
+          [](NodeCP node,
+             const ValueTypes& types) -> std::vector<ValueConstraint> {
+            const auto& inputs = node->inputs();
+            if (inputs.empty()) {
+              return {};
+            }
+            int8_t outputRank = types.rank(inputs[0].value) - 1;
+            std::vector<ValueConstraint> constraints;
+            for (size_t i = 0; i < node->outputs().size(); ++i) {
+              constraints.push_back({outputRank});
+            }
+            return constraints;
+          })
+      .registerOp();
+
+  // Concat.
+  MetadataBuilder("torch.ops.aten.concat.default")
+      .sizeOrdinal({0})
+      .isStandalone()
+      .outputConstraints(
+          [](NodeCP /*node*/,
+             const ValueTypes& /*types*/) -> std::vector<ValueConstraint> {
+            return {ValueConstraint{.rank = 2}};
+          })
+      .registerOp();
+
+  // Tensor split.
+  MetadataBuilder("torch.ops.aten.tensor_split.tensor_indices_or_sections")
+      .sizeOrdinal({0})
+      .isStandalone()
+      .viewOfArg(0)
+      .outputConstraints(
+          [](NodeCP node,
+             const ValueTypes& types) -> std::vector<ValueConstraint> {
+            const auto& inputs = node->inputs();
+            if (inputs.empty()) {
+              return {};
+            }
+            auto rank = types.rank(inputs[0].value);
+            std::vector<ValueConstraint> constraints;
+            for (size_t i = 0; i < node->outputs().size(); ++i) {
+              constraints.push_back({rank});
+            }
+            return constraints;
           })
       .registerOp();
 
@@ -793,6 +1134,7 @@ void registerBuiltins() {
                 -> std::vector<std::vector<Dim>> { return {{}}; }}})
       .normalize(resolveDtypeFromInput)
       .makeMultiKernelVariant(makeSumVariant)
+      .cgVariant(makeSumCgVariant)
       .headerFile(kScanHeader)
       .deviceFunc("tw_sum")
       .sharedDecls({{"Int32X32", "warpSums"}})
@@ -878,6 +1220,7 @@ void registerBuiltins() {
             },
             .shapeSetOnDevice = true}})
       .makeMultiKernelVariant(makeMaskedSelectVariant)
+      .cgVariant(makeMaskedSelectCgVariant)
       .headerFile(kScanHeader)
       .deviceFunc("masked_select")
       .sharedDecls({{"Int32X32", "warpSums"}, {"uint32_t", "counter"}})
@@ -954,8 +1297,13 @@ void registerBuiltins() {
       .sizeOrdinal({0})
       .returnMeta(
           {{.isRegister = false,
-            .reserveShape = inputShape,
-            .shapeSetOnDevice = true}})
+            .reserveShape =
+                [](NodeCP node,
+                   nativert::ExecutionFrame& frame,
+                   FormalToActual map) -> std::vector<std::vector<Dim>> {
+              auto total = paramSymInt(node->inputs()[3].value, frame, map);
+              return {{static_cast<Dim>(total)}};
+            }}})
       .inputFromPreviousKernel(3)
       .headerFile(kScanHeader)
       .deviceFunc("masked_select_final")
@@ -986,6 +1334,7 @@ void registerBuiltins() {
             }}})
       .normalize(resolveDtypeFromInput)
       .makeMultiKernelVariant(makeCumsumVariant)
+      .cgVariant(makeCumsumCgVariant)
       .headerFile(kScanHeader)
       .deviceFunc("cumsum")
       .sharedDecls(
@@ -1044,8 +1393,8 @@ void registerBuiltins() {
       .sharedDecls(
           {{"Int32X32", "warpSums"},
            {"uint32_t", "size"},
-           {"uint32_t", "rounded"},
-           {"uint32_t", "counter"}})
+           {"uint32_t", "rounded"}})
+      .dynamicSharedDecls({{0, "counter"}})
       .hasDtypeTemplateParam()
       .hasBlockSizeTemplateParam()
       .inputFromPreviousKernel(0)
@@ -1100,7 +1449,9 @@ void registerBuiltins() {
       .hasBarrier()
       .singleBlockIfFused()
       .returnMeta({{.isRegister = false, .reserveShape = inputShapePlusOne}})
+      .normalize(resolveDtypeFromInput)
       .makeMultiKernelVariant(makeExclusiveSumVariant)
+      .cgVariant(makeExclusiveSumCgVariant)
       .headerFile(kScanHeader)
       .deviceFunc("exclusive_sum")
       .sharedDecls(
@@ -1113,6 +1464,7 @@ void registerBuiltins() {
       .hasBlockSizeTemplateParam()
       .alwaysSingleBlock()
       .only1d()
+      .templateAttrs({"dim"})
       .outputConstraints(rank1Constraint)
       .registerOp();
 
@@ -1159,8 +1511,8 @@ void registerBuiltins() {
       .sharedDecls(
           {{"Int32X32", "warpSums"},
            {"uint32_t", "size"},
-           {"uint32_t", "rounded"},
-           {"uint32_t", "counter"}})
+           {"uint32_t", "rounded"}})
+      .dynamicSharedDecls({{0, "counter"}})
       .hasDtypeTemplateParam()
       .hasBlockSizeTemplateParam()
       .inputFromPreviousKernel(0)
@@ -1199,49 +1551,166 @@ void registerBuiltins() {
       .outputConstraints(rank1Constraint)
       .registerOp();
 
-  // Cat.
-  MetadataBuilder("torch.ops.aten.cat.default")
-      .sizeShortcut(SizeShortcut::kSum)
+  // --- Cooperative grid variants ---
+
+  // tw.sum_cg: (Tensor) -> (Tensor, Tensor[partials])
+  MetadataBuilder(
+      std::make_unique<c10::FunctionSchema>(
+          "tw.sum_cg",
+          "",
+          std::vector<c10::Argument>{
+              c10::Argument("input", c10::TensorType::get())},
+          std::vector<c10::Argument>{
+              c10::Argument("output", c10::TensorType::get()),
+              c10::Argument("partials", c10::TensorType::get())}))
       .sizeOrdinal({0})
-      .sizeArgsList({true})
-      .only1d()
-      .isStandalone()
-      .outputConstraints(
-          [](NodeCP node,
-             const ValueTypes& types) -> std::vector<ValueConstraint> {
-            const auto& inputs = node->inputs();
-            if (inputs.empty()) {
-              return {};
-            }
-            auto elements = inputs[0].value->getListElements();
-            if (elements.empty()) {
-              return {};
-            }
-            return {{.rank = types.rank(elements[0])}};
-          })
+      .sizeShortcut(SizeShortcut::kMax)
+      .hasBarrier()
+      .returnMeta(
+          {{.isRegister = false,
+            .reserveShape = [](NodeCP /*node*/,
+                               nativert::ExecutionFrame& /*frame*/,
+                               FormalToActual /*map*/)
+                -> std::vector<std::vector<Dim>> { return {{}}; }},
+           {.isRegister = false, .reserveShape = numBlocksShape}})
+      .normalize(resolveDtypeFromInput)
+      .headerFile(kScanHeader)
+      .deviceFunc("tw_sum_cg")
+      .sharedDecls(
+          {{"Int32X32", "warpSums"},
+           {"uint32_t", "size"},
+           {"uint32_t", "rounded"}})
+      .dynamicSharedDecls({{-1, "counter"}})
+      .typeTemplateParams({0})
+      .hasDtypeTemplateParam()
+      .hasBlockSizeTemplateParam()
+      .numBarriers(2)
       .registerOp();
+
+  // tw.cumsum_cg: (Tensor) -> (Tensor, Tensor[counts])
+  MetadataBuilder(
+      std::make_unique<c10::FunctionSchema>(
+          "tw.cumsum_cg",
+          "",
+          std::vector<c10::Argument>{
+              c10::Argument("input", c10::TensorType::get())},
+          std::vector<c10::Argument>{
+              c10::Argument("output", c10::TensorType::get()),
+              c10::Argument("counts", c10::TensorType::get())}))
+      .sizeOrdinal({0})
+      .sizeShortcut(SizeShortcut::kMax)
+      .hasBarrier()
+      .returnMeta(
+          {{.isRegister = false, .reserveShape = inputShape},
+           {.isRegister = false, .reserveShape = numBlocksShape}})
+      .normalize(resolveDtypeFromInput)
+      .headerFile(kScanHeader)
+      .deviceFunc("cumsum_cg")
+      .sharedDecls(
+          {{"Int32X32", "warpSums"},
+           {"uint32_t", "size"},
+           {"uint32_t", "rounded"}})
+      .dynamicSharedDecls({{-1, "counter"}})
+      .typeTemplateParams({0})
+      .hasDtypeTemplateParam()
+      .hasBlockSizeTemplateParam()
+      .numBarriers(2)
+      .only1d()
+      .templateAttrs({"dim"})
+      .outputConstraints(rank1Constraint)
+      .registerOp();
+
+  // tw.exclusive_sum_cg: (Tensor) -> (Tensor, Tensor[counts])
+  MetadataBuilder(
+      std::make_unique<c10::FunctionSchema>(
+          "tw.exclusive_sum_cg",
+          "",
+          std::vector<c10::Argument>{
+              c10::Argument("input", c10::TensorType::get())},
+          std::vector<c10::Argument>{
+              c10::Argument("output", c10::TensorType::get()),
+              c10::Argument("counts", c10::TensorType::get())}))
+      .sizeOrdinal({0})
+      .sizeShortcut(SizeShortcut::kMax)
+      .hasBarrier()
+      .returnMeta(
+          {{.isRegister = false, .reserveShape = inputShapePlusOne},
+           {.isRegister = false, .reserveShape = numBlocksShape}})
+      .headerFile(kScanHeader)
+      .deviceFunc("exclusive_sum_cg")
+      .sharedDecls(
+          {{"Int32X32", "warpSums"},
+           {"uint32_t", "size"},
+           {"uint32_t", "rounded"}})
+      .dynamicSharedDecls({{-1, "counter"}})
+      .typeTemplateParams({0})
+      .hasDtypeTemplateParam()
+      .hasBlockSizeTemplateParam()
+      .numBarriers(2)
+      .only1d()
+      .outputConstraints(rank1Constraint)
+      .registerOp();
+
+  // tw.masked_select_cg: (Tensor, Tensor) -> (Tensor, Tensor[counts])
+  MetadataBuilder(
+      std::make_unique<c10::FunctionSchema>(
+          "tw.masked_select_cg",
+          "",
+          std::vector<c10::Argument>{
+              c10::Argument("input", c10::TensorType::get()),
+              c10::Argument("mask", c10::TensorType::get())},
+          std::vector<c10::Argument>{
+              c10::Argument("output", c10::TensorType::get()),
+              c10::Argument("counts", c10::TensorType::get())}))
+      .sizeOrdinal({0})
+      .hasBarrier()
+      .returnMeta(
+          {{.isRegister = false,
+            .reserveShape = inputShape,
+            .shapeSetOnDevice = true},
+           {.isRegister = false, .reserveShape = numBlocksShape}})
+      .headerFile(kScanHeader)
+      .deviceFunc("masked_select_cg")
+      .sharedDecls(
+          {{"Int32X32", "warpSums"},
+           {"uint32_t", "size"},
+           {"uint32_t", "rounded"},
+           {"uint32_t", "counter"}})
+      .typeTemplateParams({0})
+      .hasBlockSizeTemplateParam()
+      .numBarriers(3)
+      .outputConstraints(rank1Constraint)
+      .registerOp();
+
+  // Cat — registered in Cat.cpp.
+  registerCatMetadata();
 
   // --- repeat_interleave ---
 
   MetadataBuilder("torch.ops.aten.repeat_interleave.self_Tensor")
       .sizeOrdinal({1})
+      .outputConstraints(rank1Constraint)
       .maybeReplace(
-          [](NodeCP node, ValueTypes& /*types*/, nativert::Graph* graph)
-              -> std::vector<std::pair<ValueCP, ValueCP>> {
+          [](NodeCP node,
+             ValueTypes& types,
+             WaveGraph& waveGraph) -> std::vector<std::pair<ValueCP, ValueCP>> {
+            auto* graph = waveGraph.graph();
+            auto inputId = node->inputs()[0].value->id();
+            auto inputDtype = types.types[inputId]->dtype();
             auto* headNode = graph->createNode(
                 "tw.repeat_interleave_head",
                 {{"repeats", node->inputs()[1].value}});
-            auto* prefixOutput = headNode->addOutput(
-                "repeat_prefix", nativert::Type(nativert::Type::Kind::Tensor));
-            auto* totalOutput = headNode->addOutput(
-                "repeat_total", nativert::Type(nativert::Type::Kind::SymInt));
+            auto* prefixOutput = waveGraph.newTensorValue(
+                headNode, "repeat_prefix", c10::ScalarType::Int);
+            auto* totalOutput = waveGraph.newScalarValue(
+                headNode, "repeat_total", c10::ScalarType::Int);
             auto* finalNode = graph->createNode(
                 "tw.repeat_interleave_final",
                 {{"input", node->inputs()[0].value},
                  {"prefix", prefixOutput},
                  {"total", totalOutput}});
-            auto* resultOutput = finalNode->addOutput(
-                "repeat_result", nativert::Type(nativert::Type::Kind::Tensor));
+            auto* resultOutput = waveGraph.newTensorValue(
+                finalNode, "repeat_result", inputDtype);
             return {{node->outputs()[0], resultOutput}};
           })
       .registerOp();
@@ -1262,12 +1731,13 @@ void registerBuiltins() {
           {{.isRegister = false, .reserveShape = inputShape},
            {.neededOnHost = true}})
       .headerFile(kScanHeader)
-      .deviceFunc("add_sizes")
+      .deviceFunc("repeat_interleave_head")
       .sharedDecls(
           {{"Int32X32", "warpSums"},
            {"uint32_t", "size"},
            {"uint32_t", "rounded"},
            {"uint32_t", "counter"}})
+      .typeTemplateParams({})
       .hasBlockSizeTemplateParam()
       .kernelBreakForMultiblock()
       .alwaysSingleBlock()
@@ -1306,6 +1776,69 @@ void registerBuiltins() {
       .typeTemplateParams({0})
       .hasBarrier()
       .hasBlockSizeTemplateParam()
+      .outputConstraints(rank1Constraint)
+      .registerOp();
+
+  static const std::string kHashHeader =
+      "velox/experimental/torchwave/Hash.cuh";
+
+  // isin.
+  MetadataBuilder("torch.ops.aten.isin.Tensor_Tensor")
+      .sizeOrdinal({0})
+      .makeMultiKernelVariant(makeIsinVariant)
+      .outputConstraints(rank1Constraint)
+      .registerOp();
+
+  // tw.isin_head: (Tensor) -> Tensor
+  MetadataBuilder(
+      std::make_unique<c10::FunctionSchema>(
+          "tw.isin_head",
+          "",
+          std::vector<c10::Argument>{
+              c10::Argument("test_elements", c10::TensorType::get())},
+          std::vector<c10::Argument>{
+              c10::Argument("output", c10::TensorType::get())}))
+      .sizeOrdinal({0})
+      .alwaysSingleBlock()
+      .returnMeta(
+          {{.isRegister = false,
+            .reserveShape =
+                [](NodeCP node,
+                   nativert::ExecutionFrame& frame,
+                   FormalToActual map) -> std::vector<std::vector<Dim>> {
+              auto tensor =
+                  paramTensor(node->inputs()[0].value, frame, map);
+              auto n = tensor.numel();
+              int64_t tableSize = 1;
+              while (tableSize < n * 2) {
+                tableSize *= 2;
+              }
+              return {{static_cast<Dim>(tableSize + 1)}};
+            }}})
+      .headerFile(kHashHeader)
+      .deviceFunc("tw_isin_head")
+      .typeTemplateParams({0})
+      .outputConstraints(rank1Constraint)
+      .registerOp();
+
+  // tw.isin_final: (Tensor, Tensor) -> Tensor(bool)
+  MetadataBuilder(
+      std::make_unique<c10::FunctionSchema>(
+          "tw.isin_final",
+          "",
+          std::vector<c10::Argument>{
+              c10::Argument("elements", c10::TensorType::get()),
+              c10::Argument("table", c10::TensorType::get())},
+          std::vector<c10::Argument>{
+              c10::Argument("output", c10::TensorType::get())}))
+      .elementwiseFunc("isin_final")
+      .hasIdxArg()
+      .hasSizeArg()
+      .argumentMeta(
+          {{.isRegister = true},
+           {.isRegister = false, .wholeTensor = true}})
+      .headerFile(kHashHeader)
+      .typeTemplateParams({0})
       .outputConstraints(rank1Constraint)
       .registerOp();
 }

@@ -15,18 +15,21 @@
 add_library(
   torch_wave
   Builtins.cpp
+  Cat.cpp
   Compile.cpp
   CompiledOp.cpp
   DelegateExecutor.cpp
   Executor.cpp
   GraphOptimizer.cpp
   KernelHandlerRegistration.cpp
+  KernelOperation.cpp
   NativertDelegateExecutor.cpp
   ParallelExpr.cpp
   Project.cpp
   Pt2Load.cpp
   Registry.cpp
   Utils.cpp
+  WaveGraph.cpp
 )
 
 target_link_libraries(

@@ -138,9 +138,7 @@ void Registry::restoreRegistry(std::string_view name, Metadata metadata) {
   registry()[std::string(name)] = std::move(metadata);
 }
 
-void Registry::registerElementwise(
-    std::string_view qualifiedName,
-    std::vector<std::string> attributeArgs) {
+void Registry::registerElementwise(std::string_view qualifiedName) {
   auto atoms = c10::split(qualifiedName, '.');
   TORCH_CHECK(atoms.size() >= 3, "Invalid qualified op name: ", qualifiedName);
   auto opName = atoms[atoms.size() - 2];
@@ -158,7 +156,6 @@ void Registry::registerElementwise(
   md.returnMeta = {ArgumentMeta{.isRegister = true}};
   md.elementwise = std::make_unique<ElementwiseOp>();
   md.elementwise->functionName = fmt::format("--{}", opName);
-  md.elementwise->attributeArgs = std::move(attributeArgs);
 
   registerMetadata(qualifiedName, std::move(md));
 }
@@ -166,8 +163,7 @@ void Registry::registerElementwise(
 void Registry::registerElementwiseOp(
     std::string_view qualifiedName,
     std::string_view elementwiseFuncName,
-    bool isStandalone,
-    std::vector<std::string> attributeArgs) {
+    bool isStandalone) {
   const auto* schema = findFunctionSchema(qualifiedName);
   TORCH_CHECK(schema, "FunctionSchema not found for: ", qualifiedName);
 
@@ -182,7 +178,6 @@ void Registry::registerElementwiseOp(
   md.returnMeta = {ArgumentMeta{.isRegister = true}};
   md.elementwise = std::make_unique<ElementwiseOp>();
   md.elementwise->functionName = fmt::format("--{}", elementwiseFuncName);
-  md.elementwise->attributeArgs = std::move(attributeArgs);
 
   registerMetadata(qualifiedName, std::move(md));
 }
@@ -280,6 +275,17 @@ MetadataBuilder& MetadataBuilder::makeMultiKernelVariant(
   return *this;
 }
 
+MetadataBuilder& MetadataBuilder::cgVariant(
+    std::function<nativert::Node*(NodeCP, WaveGraph*)> func) {
+  md_.cgVariant = std::move(func);
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::numBarriers(int32_t val) {
+  md_.numBarriers = val;
+  return *this;
+}
+
 MetadataBuilder& MetadataBuilder::inPlaceIfLastUse(bool val) {
   md_.inPlaceIfLastUse = val;
   return *this;
@@ -335,8 +341,7 @@ MetadataBuilder& MetadataBuilder::outputConstraints(
 
 MetadataBuilder& MetadataBuilder::maybeReplace(
     std::function<std::vector<
-        std::pair<ValueCP, ValueCP>>(NodeCP, ValueTypes&, nativert::Graph*)>
-        func) {
+        std::pair<ValueCP, ValueCP>>(NodeCP, ValueTypes&, WaveGraph&)> func) {
   md_.maybeReplace = std::move(func);
   return *this;
 }
@@ -405,6 +410,19 @@ MetadataBuilder& MetadataBuilder::templateAttrs(
   return *this;
 }
 
+MetadataBuilder& MetadataBuilder::setOutputs(
+    std::function<void(
+        KernelOperation* op,
+        NodeCP node,
+        const std::unordered_set<ValueCP>& subgraphInputs,
+        std::vector<ValueCP>& outputValues,
+        std::vector<OutputDesc>& outputDescs,
+        bool inMemory,
+        bool callerIsElementwise)> func) {
+  md_.setOutputs = std::move(func);
+  return *this;
+}
+
 ElementwiseOp& MetadataBuilder::ensureElementwise() {
   if (!md_.elementwise) {
     md_.elementwise = std::make_unique<ElementwiseOp>();
@@ -434,17 +452,40 @@ MetadataBuilder& MetadataBuilder::numArgs(int32_t n) {
   return *this;
 }
 
-MetadataBuilder& MetadataBuilder::attributeArgs(std::vector<std::string> args) {
-  ensureElementwise().attributeArgs = std::move(args);
-  return *this;
-}
-
 MetadataBuilder& MetadataBuilder::hasIdxArg(bool val) {
   ensureElementwise().hasIdxArg = val;
   return *this;
 }
 
+MetadataBuilder& MetadataBuilder::hasSizeArg(bool val) {
+  ensureElementwise().hasSizeArg = val;
+  return *this;
+}
+
 Metadata MetadataBuilder::build() {
+  if (md_.elementwise && md_.elementwise->numArgs == 0) {
+    md_.sizeShortcut = SizeShortcut::kNone;
+    md_.sizeArgs.ordinal.clear();
+  }
+  if (!md_.shapeAttr.empty() && md_.functionSchema) {
+    const auto& args = md_.functionSchema->arguments();
+    for (size_t i = 0; i < args.size(); ++i) {
+      if (args[i].name() == md_.shapeAttr) {
+        auto ordinal = static_cast<int32_t>(i);
+        if (std::find(
+                md_.sizeArgs.ordinal.begin(),
+                md_.sizeArgs.ordinal.end(),
+                ordinal) == md_.sizeArgs.ordinal.end()) {
+          md_.sizeArgs.ordinal.push_back(ordinal);
+        }
+        break;
+      }
+    }
+  }
+  if (!md_.sizeArgs.ordinal.empty() &&
+      md_.sizeShortcut == SizeShortcut::kNone) {
+    md_.sizeShortcut = SizeShortcut::kMax;
+  }
   if (md_.argumentMeta.empty()) {
     if (md_.elementwise) {
       md_.argumentMeta.resize(

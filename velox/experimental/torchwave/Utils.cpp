@@ -261,6 +261,25 @@ std::string cudaTypeIdSuffix(c10::ScalarType dtype) {
   }
 }
 
+std::string traceIValue(const c10::IValue& value) {
+  if (value.isNone()) {
+    return "none";
+  }
+  if (value.isTensor()) {
+    auto& t = value.toTensor();
+    std::string s = "[";
+    for (int64_t d = 0; d < t.dim(); ++d) {
+      if (d > 0) {
+        s += ", ";
+      }
+      s += std::to_string(t.size(d));
+    }
+    s += "]";
+    return s;
+  }
+  return value.tagKind() + ":" + ivalueToString(value);
+}
+
 void setGraphDevice(nativert::Graph* graph, bool isCuda) {
   c10::Device target = isCuda
       ? c10::Device(

@@ -45,6 +45,7 @@ DEFINE_int32(
     single_block,
     -1,
     "Force single block grid: -1=auto, 0=multi, 1=single");
+DEFINE_int32(cg, -1, "Force cooperative grid: -1=auto, 0=off, 1=on");
 DEFINE_bool(wave_only, false, "Skip serial CPU and serial GPU execution");
 DEFINE_bool(
     standalone_timing,
@@ -58,6 +59,7 @@ DEFINE_int32(
     list,
     0,
     "List WaveGraph before execution: 0=off, 1=kExprs, 2=kGrids, 3=kCode");
+DEFINE_int32(trace, 0, "Trace bit mask: 1=nodes, 2=launches");
 
 namespace torch::wave {
 
@@ -259,8 +261,12 @@ void ExecutorTestBase::SetUpTestSuite() {
 
   WaveConfig::get().allStandalone = FLAGS_standalone_kernels;
   WaveConfig::get().blockSize = FLAGS_block_dim;
+  WaveConfig::get().trace = FLAGS_trace;
   if (FLAGS_single_block >= 0) {
     WaveConfig::get().useSingleBlock = FLAGS_single_block != 0;
+  }
+  if (FLAGS_cg >= 0) {
+    WaveConfig::get().isCg = FLAGS_cg != 0;
   }
 
   initialize();

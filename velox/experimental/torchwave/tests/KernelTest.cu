@@ -25,6 +25,7 @@ constexpr int32_t kBlockSize = 256;
 }
 
 #include "velox/experimental/torchwave/Core.cuh"
+#include "velox/experimental/torchwave/Hash.cuh"
 #include "velox/experimental/torchwave/Scan.cuh"
 
 namespace torch::wave {
@@ -603,6 +604,102 @@ TEST_F(KernelTest, cumsumThreeStage) {
   for (int i = 0; i < kSize; ++i) {
     sum += inData[i];
     EXPECT_EQ(outData[i], sum) << "3-stage mismatch at " << i;
+  }
+}
+
+// --- Isin kernels ---
+
+__global__ void isinHeadKernel(TorchWaveParams params) {
+  __shared__ BlockInfo blockInfo;
+  if (threadIdx.x == 0) {
+    blockInfo =
+        params.info ? params.info[blockIdx.x] : params.inlineInfo[blockIdx.x];
+  }
+  __syncthreads();
+
+  tw_isin_head<int64_t>(
+      param<Tensor>(blockInfo, 0),
+      param<Tensor>(blockInfo, sizeof(Tensor)),
+      blockInfo);
+}
+
+__global__ void isinFinalKernel(
+    const int64_t* elements,
+    const Tensor* hashTable,
+    bool* output,
+    uint32_t size) {
+  uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < size) {
+    output[idx] = __isin_final<int64_t>(idx, size, elements[idx], const_cast<Tensor*>(hashTable));
+  }
+}
+
+TEST_F(KernelTest, isin) {
+  // Build a set of values: odd numbers 1..999 plus 0.
+  std::vector<int64_t> setVals;
+  setVals.push_back(0);
+  for (int64_t i = 1; i < 1000; i += 2) {
+    setVals.push_back(i);
+  }
+  auto setTensor = at::from_blob(
+                       setVals.data(),
+                       {static_cast<int64_t>(setVals.size())},
+                       at::kLong)
+                       .clone()
+                       .cuda();
+
+  // Hash table size: next power of 2 >= 2*n, plus 1 for the kEmpty flag.
+  int64_t n = setVals.size();
+  int64_t tableSize = 1;
+  while (tableSize < n * 2) {
+    tableSize *= 2;
+  }
+  tableSize += 1;
+  auto hashTable = at::zeros(
+      {tableSize}, at::TensorOptions().dtype(at::kLong).device(at::kCUDA));
+
+  // Run isin_head.
+  auto headParams = allocateManagedArray<Tensor>(2);
+  fillTensorParam(setTensor, &headParams[0]);
+  fillTensorParam(hashTable, &headParams[1]);
+
+  TorchWaveParams headTwParams;
+  memset(&headTwParams, 0, sizeof(headTwParams));
+  auto& bi = headTwParams.inlineInfo[0];
+  bi.numBlocksInOp = 1;
+  bi.params = headParams.get();
+
+  isinHeadKernel<<<1, kBlockSize>>>(headTwParams);
+  cudaDeviceSynchronize();
+
+  // Elements to query: 0..999.
+  constexpr int32_t kQuerySize = 1000;
+  auto elements = at::arange(
+      0, kQuerySize, at::TensorOptions().dtype(at::kLong).device(at::kCUDA));
+  auto output = at::zeros(
+      {kQuerySize}, at::TensorOptions().dtype(at::kBool).device(at::kCUDA));
+
+  // We need a managed Tensor param for the hash table so the kernel can
+  // read dims/storage.
+  auto finalTableParam = allocateManagedArray<Tensor>(1);
+  fillTensorParam(hashTable, &finalTableParam[0]);
+
+  constexpr int32_t kFinalGrid = (kQuerySize + kBlockSize - 1) / kBlockSize;
+  isinFinalKernel<<<kFinalGrid, kBlockSize>>>(
+      elements.data_ptr<int64_t>(),
+      finalTableParam.get(),
+      output.data_ptr<bool>(),
+      kQuerySize);
+  cudaDeviceSynchronize();
+
+  // Verify.
+  auto outputCpu = output.cpu();
+  auto* outData = outputCpu.data_ptr<bool>();
+
+  std::unordered_set<int64_t> refSet(setVals.begin(), setVals.end());
+  for (int i = 0; i < kQuerySize; ++i) {
+    bool expected = refSet.count(i) > 0;
+    EXPECT_EQ(outData[i], expected) << "Mismatch at element " << i;
   }
 }
 
