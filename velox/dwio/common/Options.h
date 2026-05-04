@@ -53,6 +53,7 @@ enum class FileFormat {
   ORC = 9,
   SST = 10, // rocksdb sst format
   FLUX = 11,
+  AVRO = 12,
 };
 
 FileFormat toFileFormat(std::string_view s);
@@ -467,12 +468,12 @@ class RowReaderOptions {
     indexEnabled_ = enabled;
   }
 
-  bool passStringBuffersFromDecoder() const {
-    return passStringBuffersFromDecoder_;
+  bool stringDecoderZeroCopy() const {
+    return stringDecoderZeroCopy_;
   }
 
-  void setPassStringBuffersFromDecoder(bool passStringBuffersFromDecoder) {
-    passStringBuffersFromDecoder_ = passStringBuffersFromDecoder;
+  void setStringDecoderZeroCopy(bool stringDecoderZeroCopy) {
+    stringDecoderZeroCopy_ = stringDecoderZeroCopy;
   }
 
   bool collectColumnCpuMetrics() const {
@@ -552,7 +553,7 @@ class RowReaderOptions {
   bool indexEnabled_{false};
   // NOTE: we will control this option with a session property
   // for prod. Tests are parameterized on both branches.
-  bool passStringBuffersFromDecoder_{false};
+  bool stringDecoderZeroCopy_{false};
   bool collectColumnCpuMetrics_{false};
 };
 
@@ -564,11 +565,11 @@ class ReaderOptions : public io::ReaderOptions {
   static constexpr uint64_t kDefaultFilePreloadThreshold =
       1024 * 1024 * 8; // 8MB
 
-  explicit ReaderOptions(velox::memory::MemoryPool* pool)
-      : io::ReaderOptions(pool),
-        tailLocation_(std::numeric_limits<uint64_t>::max()),
-        fileFormat_(FileFormat::UNKNOWN),
-        fileSchema_(nullptr) {}
+  ReaderOptions(
+      velox::memory::MemoryPool* pool,
+      velox::io::IoStatistics* dataIoStats = nullptr,
+      velox::io::IoStatistics* metadataIoStats = nullptr)
+      : io::ReaderOptions(pool, dataIoStats, metadataIoStats) {}
 
   /// Sets the format of the file, such as "rc" or "dwrf". The default is
   /// "dwrf".
@@ -632,11 +633,6 @@ class ReaderOptions : public io::ReaderOptions {
     return *this;
   }
 
-  ReaderOptions& setIOExecutor(std::shared_ptr<folly::Executor> executor) {
-    ioExecutor_ = std::move(executor);
-    return *this;
-  }
-
   ReaderOptions& setSessionTimezone(const tz::TimeZone* sessionTimezone) {
     sessionTimezone_ = sessionTimezone;
     return *this;
@@ -685,10 +681,6 @@ class ReaderOptions : public io::ReaderOptions {
 
   uint64_t filePreloadThreshold() const {
     return filePreloadThreshold_;
-  }
-
-  const std::shared_ptr<folly::Executor>& ioExecutor() const {
-    return ioExecutor_;
   }
 
   const tz::TimeZone* sessionTimezone() const {
@@ -808,8 +800,8 @@ class ReaderOptions : public io::ReaderOptions {
   }
 
  private:
-  uint64_t tailLocation_;
-  FileFormat fileFormat_;
+  uint64_t tailLocation_{std::numeric_limits<uint64_t>::max()};
+  FileFormat fileFormat_{FileFormat::UNKNOWN};
   RowTypePtr fileSchema_;
   SerDeOptions serDeOptions_;
   std::unordered_map<std::string, std::string> properties_{};
@@ -818,7 +810,6 @@ class ReaderOptions : public io::ReaderOptions {
   uint64_t filePreloadThreshold_{kDefaultFilePreloadThreshold};
   bool fileColumnNamesReadAsLowerCase_{false};
   bool useColumnNamesForColumnMapping_{false};
-  std::shared_ptr<folly::Executor> ioExecutor_;
   std::shared_ptr<random::RandomSkipTracker> randomSkip_;
   std::shared_ptr<velox::common::ScanSpec> scanSpec_;
   const tz::TimeZone* sessionTimezone_{nullptr};

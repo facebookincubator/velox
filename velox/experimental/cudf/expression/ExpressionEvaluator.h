@@ -100,6 +100,8 @@ std::shared_ptr<CudfFunction> createCudfFunction(
 
 bool registerBuiltinFunctions(const std::string& prefix);
 
+void unregisterFunctions();
+
 class CudfExpression {
  public:
   virtual ~CudfExpression() = default;
@@ -165,8 +167,7 @@ class FunctionExpression : public CudfExpression {
 
 std::shared_ptr<CudfExpression> createCudfExpression(
     std::shared_ptr<velox::exec::Expr> expr,
-    const RowTypePtr& inputRowSchema,
-    std::optional<std::string> except = std::nullopt);
+    const RowTypePtr& inputRowSchema);
 
 /// Lightweight check if an expression tree is supported by any CUDF evaluator
 /// without initializing CudfExpression objects.

@@ -19,6 +19,7 @@
 #include <gmock/gmock.h>
 #include "gtest/gtest.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/connectors/hive/ExtractionUtils.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 
 using namespace facebook::velox;
@@ -633,4 +634,151 @@ TEST(ColumnExtractionTest, threeExtractionsFromSameColumn) {
   ASSERT_TRUE(clone->extractions()[0].dataType->equivalent(*BIGINT()));
   ASSERT_TRUE(clone->extractions()[1].dataType->equivalent(*ARRAY(BIGINT())));
   ASSERT_TRUE(clone->extractions()[2].dataType->equivalent(*ARRAY(VARCHAR())));
+}
+// --- Runtime extraction application tests ---
+
+class ExtractionUtilsTest : public testing::Test, public test::VectorTestBase {
+ protected:
+  static void SetUpTestSuite() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+};
+
+TEST_F(ExtractionUtilsTest, mapKeys) {
+  // Apply MapKeys to a MapVector.
+  auto mapVector = makeMapVector<std::string, int64_t>(
+      {{{{"a", 1}, {"b", 2}}}, {{{"c", 3}}}});
+
+  std::vector<EPE> chain = {
+      ExtractionPathElement::simple(ExtractionStep::kMapKeys)};
+  auto result = applyExtractionChain(mapVector, chain, pool());
+
+  ASSERT_TRUE(result->type()->isArray());
+  auto* array = result->as<ArrayVector>();
+  ASSERT_EQ(array->size(), 2);
+  // First map has 2 keys, second has 1.
+  ASSERT_EQ(array->sizeAt(0), 2);
+  ASSERT_EQ(array->sizeAt(1), 1);
+}
+
+TEST_F(ExtractionUtilsTest, mapValues) {
+  // Apply MapValues to a MapVector.
+  auto mapVector = makeMapVector<std::string, int64_t>(
+      {{{{"a", 10}, {"b", 20}}}, {{{"c", 30}}}});
+
+  std::vector<EPE> chain = {
+      ExtractionPathElement::simple(ExtractionStep::kMapValues)};
+  auto result = applyExtractionChain(mapVector, chain, pool());
+
+  ASSERT_TRUE(result->type()->isArray());
+  auto* array = result->as<ArrayVector>();
+  ASSERT_EQ(array->size(), 2);
+  ASSERT_EQ(array->sizeAt(0), 2);
+  ASSERT_EQ(array->sizeAt(1), 1);
+  // Check values.
+  auto* elements = array->elements()->as<FlatVector<int64_t>>();
+  ASSERT_EQ(elements->valueAt(0), 10);
+  ASSERT_EQ(elements->valueAt(1), 20);
+  ASSERT_EQ(elements->valueAt(2), 30);
+}
+
+TEST_F(ExtractionUtilsTest, sizeOnMap) {
+  // Apply Size to a MapVector.
+  auto mapVector = makeMapVector<std::string, int64_t>(
+      {{{{"a", 1}, {"b", 2}, {"c", 3}}}, {{{"d", 4}}}});
+
+  std::vector<EPE> chain = {
+      ExtractionPathElement::simple(ExtractionStep::kSize)};
+  auto result = applyExtractionChain(mapVector, chain, pool());
+
+  ASSERT_TRUE(result->type()->isBigint());
+  auto* sizes = result->as<FlatVector<int64_t>>();
+  ASSERT_EQ(sizes->size(), 2);
+  ASSERT_EQ(sizes->valueAt(0), 3);
+  ASSERT_EQ(sizes->valueAt(1), 1);
+}
+
+TEST_F(ExtractionUtilsTest, sizeOnArray) {
+  // Apply Size to an ArrayVector.
+  auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3}, {4, 5}});
+
+  std::vector<EPE> chain = {
+      ExtractionPathElement::simple(ExtractionStep::kSize)};
+  auto result = applyExtractionChain(arrayVector, chain, pool());
+
+  ASSERT_TRUE(result->type()->isBigint());
+  auto* sizes = result->as<FlatVector<int64_t>>();
+  ASSERT_EQ(sizes->size(), 2);
+  ASSERT_EQ(sizes->valueAt(0), 3);
+  ASSERT_EQ(sizes->valueAt(1), 2);
+}
+
+TEST_F(ExtractionUtilsTest, structField) {
+  // Apply StructField to a RowVector.
+  auto rowVector = makeRowVector(
+      {"x", "y"},
+      {makeFlatVector<int32_t>({10, 20}), makeFlatVector<int32_t>({30, 40})});
+
+  std::vector<EPE> chain = {ExtractionPathElement::structField("x")};
+  auto result = applyExtractionChain(rowVector, chain, pool());
+
+  ASSERT_TRUE(result->type()->isInteger());
+  auto* flat = result->as<FlatVector<int32_t>>();
+  ASSERT_EQ(flat->valueAt(0), 10);
+  ASSERT_EQ(flat->valueAt(1), 20);
+}
+
+TEST_F(ExtractionUtilsTest, mapKeyFilter) {
+  // Apply MapKeyFilter to filter specific keys.
+  auto mapVector = makeMapVector<std::string, int64_t>(
+      {{{{"a", 1}, {"b", 2}, {"c", 3}}}, {{{"a", 10}, {"d", 40}}}});
+
+  std::vector<EPE> chain = {
+      ExtractionPathElement::mapKeyFilter(std::vector<std::string>{"a", "c"})};
+  auto result = applyExtractionChain(mapVector, chain, pool());
+
+  ASSERT_TRUE(result->type()->isMap());
+  auto* filteredMap = result->as<MapVector>();
+  ASSERT_EQ(filteredMap->size(), 2);
+  // First map: "a" and "c" kept (2 out of 3).
+  ASSERT_EQ(filteredMap->sizeAt(0), 2);
+  // Second map: only "a" kept (1 out of 2).
+  ASSERT_EQ(filteredMap->sizeAt(1), 1);
+}
+
+TEST_F(ExtractionUtilsTest, chainMapValuesStructField) {
+  // Chain: [MapValues, ArrayElements, StructField("x")]
+  // on MAP(VARCHAR, ROW(x: INT, y: INT)) -> ARRAY(INT).
+  auto keys = makeFlatVector<StringView>({"k1", "k2", "k3"});
+  auto structValues = makeRowVector(
+      {"x", "y"},
+      {makeFlatVector<int32_t>({10, 20, 30}),
+       makeFlatVector<int32_t>({100, 200, 300})});
+  auto mapVector = makeMapVector({0, 2}, keys, structValues);
+
+  std::vector<EPE> chain = {
+      ExtractionPathElement::simple(ExtractionStep::kMapValues),
+      ExtractionPathElement::simple(ExtractionStep::kArrayElements),
+      ExtractionPathElement::structField("x")};
+  auto result = applyExtractionChain(mapVector, chain, pool());
+
+  // Output should be ARRAY(INT).
+  ASSERT_TRUE(result->type()->isArray());
+  auto* array = result->as<ArrayVector>();
+  ASSERT_EQ(array->size(), 2);
+  // First map had 2 entries, second had 1.
+  ASSERT_EQ(array->sizeAt(0), 2);
+  ASSERT_EQ(array->sizeAt(1), 1);
+  auto* elements = array->elements()->as<FlatVector<int32_t>>();
+  ASSERT_EQ(elements->valueAt(0), 10);
+  ASSERT_EQ(elements->valueAt(1), 20);
+  ASSERT_EQ(elements->valueAt(2), 30);
+}
+
+TEST_F(ExtractionUtilsTest, emptyChain) {
+  // Empty chain should return the input unchanged.
+  auto mapVector = makeMapVector<std::string, int64_t>({{{{"a", 1}}}});
+  std::vector<EPE> chain = {};
+  auto result = applyExtractionChain(mapVector, chain, pool());
+  ASSERT_EQ(result.get(), mapVector.get());
 }

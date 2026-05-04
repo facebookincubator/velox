@@ -380,6 +380,86 @@ class ScanSpec {
     isFlatMapAsStruct_ = value;
   }
 
+  /// Extraction type for column extraction pushdown.  When set on a map or
+  /// array ScanSpec, tells the column reader to skip reading unneeded
+  /// streams and produce a different output type.
+  enum class ExtractionType : uint8_t {
+    kNone, ///< No extraction — read normally.
+    kKeys, ///< Extract map keys as ARRAY(K).  Skip reading values.
+    kValues, ///< Extract map values as ARRAY(V).  Skip reading keys.
+    kSize, ///< Extract size as BIGINT.  Skip reading keys and values.
+    kField, ///< Extract a single struct field.  Output is the field's type.
+  };
+
+  void setExtractionType(ExtractionType type) {
+    extractionType_ = type;
+  }
+
+  ExtractionType extractionType() const {
+    return extractionType_;
+  }
+
+  void setExtractionFieldIndex(column_index_t index) {
+    extractionFieldIndex_ = index;
+  }
+
+  column_index_t extractionFieldIndex() const {
+    return extractionFieldIndex_;
+  }
+
+  /// Post-read transform applied to the column's vector after it is read
+  /// from the file.  Used by column extraction pushdown to transform the
+  /// file-type vector (e.g., MAP) into the extraction output type (e.g.,
+  /// ARRAY for MapKeys).  The transform receives the read vector and a
+  /// memory pool, and returns the transformed vector.
+  ///
+  /// The transform is applied in these cases:
+  ///
+  /// 1. Delta update fallback: when a column has both extraction pushdown
+  ///    and a delta update (e.g., MAP_CONCAT), the reader checks
+  ///    deltaUpdate() and bypasses ExtractionType, producing the file
+  ///    type.  After the delta update modifies the vector, the full-chain
+  ///    transform is applied by SelectiveStructColumnReaderBase::getValues().
+  ///    ExtractionType may be set but is ignored by the reader.
+  ///
+  /// 2. Multiple extractions: when multiple extraction chains target the
+  ///    same column, the transform assembles a ROW from the individual
+  ///    extraction results.  ExtractionType is always kNone (not set for
+  ///    multiple extractions to ensure text reader compatibility).
+  ///
+  /// 3. Text reader: RowReader::projectColumns() applies the transform
+  ///    because the text reader does not use the selective reader
+  ///    framework.  ExtractionType is kNone (same as case 2) or set but
+  ///    ignored (single extraction — text reader applies the full-chain
+  ///    transform regardless).
+  ///
+  /// For selective readers (DWRF, Nimble) with a single extraction and
+  /// no delta update, the full chain is handled by ScanSpec pushdown
+  /// (ExtractionType + sub-spec pruning) and the transform is not
+  /// applied at read time.
+  using VectorTransform =
+      std::function<VectorPtr(const VectorPtr&, memory::MemoryPool*)>;
+
+  /// Set the post-read transform and the output type it produces.
+  /// The reader uses outputType to allocate the result vector, reads into
+  /// a temporary vector of the file type, then applies the transform.
+  void setTransform(VectorTransform transform, TypePtr outputType) {
+    transform_ = std::move(transform);
+    transformOutputType_ = std::move(outputType);
+  }
+
+  const VectorTransform& transform() const {
+    return transform_;
+  }
+
+  const TypePtr& transformOutputType() const {
+    return transformOutputType_;
+  }
+
+  bool hasTransform() const {
+    return transform_ != nullptr;
+  }
+
   /// Disable stats based filter reordering.
   void disableStatsBasedFilterReorder() {
     disableStatsBasedFilterReorder_ = true;
@@ -472,6 +552,18 @@ class ScanSpec {
   // This node represents a flat map column that need to be read as struct,
   // i.e. in table schema it is a MAP, but in result vector it is ROW.
   bool isFlatMapAsStruct_ = false;
+
+  // Extraction type for map/array/struct column readers.
+  ExtractionType extractionType_{ExtractionType::kNone};
+
+  // Index of the field to extract when extractionType_ is kField.
+  column_index_t extractionFieldIndex_{0};
+
+  // Post-read transform for column extraction pushdown.
+  VectorTransform transform_;
+
+  // Output type after the transform is applied.
+  TypePtr transformOutputType_;
 };
 
 template <typename F>

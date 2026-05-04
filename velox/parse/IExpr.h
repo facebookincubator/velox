@@ -22,7 +22,7 @@
 #include <optional>
 #include <string>
 #include <vector>
-#include "velox/common/Enums.h"
+#include "velox/common/EnumDeclare.h"
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
 
@@ -44,6 +44,7 @@ class IExpr {
     kSubquery = 6,
     kConcat = 7,
     kAggregate = 8,
+    kWindow = 9,
   };
 
   VELOX_DECLARE_EMBEDDED_ENUM_NAME(Kind)

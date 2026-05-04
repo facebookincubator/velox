@@ -22,14 +22,18 @@ velox_add_library(
   velox_hive_connector
   OBJECT
   BufferedInputBuilder.cpp
+  ExtractionUtils.cpp
+  ExtractionUtils.h
   FileColumnHandle.cpp
   FileConfig.cpp
   FileConnectorUtil.cpp
+  FileDataSink.cpp
   FileDataSource.cpp
   FileHandle.cpp
   FileIndexReader.cpp
   FileSplitReader.cpp
   HiveConfig.cpp
+  HiveConfigProvider.cpp
   HiveConnector.cpp
   HiveConnectorSplit.cpp
   HiveConnectorUtil.cpp
@@ -46,6 +50,7 @@ velox_add_library(
   FileConfig.h
   FileConnectorSplit.h
   FileConnectorUtil.h
+  FileDataSink.h
   FileDataSource.h
   FileHandle.h
   FileIndexReader.h
@@ -53,6 +58,9 @@ velox_add_library(
   FileSplitReader.h
   FileTableHandle.h
   HiveConfig.h
+  HiveConfigMacrosDefine.h
+  HiveConfigMacrosUndef.h
+  HiveConfigProvider.h
   HiveConnector.h
   HiveConnectorSplit.h
   HiveConnectorUtil.h

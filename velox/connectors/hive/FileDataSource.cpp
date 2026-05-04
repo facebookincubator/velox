@@ -23,12 +23,137 @@
 #include "velox/common/Casts.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/CpuWallTimer.h"
+#include "velox/connectors/hive/ExtractionUtils.h"
 #include "velox/connectors/hive/FileConfig.h"
 #include "velox/expression/FieldReference.h"
 
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::connector::hive {
+
+namespace {
+
+inline void addIoCounterMetric(
+    io::IoCounter& counter,
+    const std::string& key,
+    std::unordered_map<std::string, RuntimeMetric>& res) {
+  if (counter.count() > 0) {
+    res.insert({key, RuntimeMetric(counter.count())});
+  }
+}
+
+inline void addIoCounterMetric(
+    uint64_t value,
+    const std::string& key,
+    RuntimeCounter::Unit unit,
+    std::unordered_map<std::string, RuntimeMetric>& res) {
+  if (value > 0) {
+    res.insert({key, RuntimeMetric(value, unit)});
+  }
+}
+
+inline void addIoStatsMetric(
+    io::IoCounter& counter,
+    const std::string& key,
+    RuntimeCounter::Unit unit,
+    std::unordered_map<std::string, RuntimeMetric>& res) {
+  if (counter.count() > 0) {
+    res.insert(
+        {key,
+         RuntimeMetric(
+             saturateCast(counter.sum()),
+             counter.count(),
+             saturateCast(counter.min()),
+             saturateCast(counter.max()),
+             unit)});
+  }
+}
+
+inline void addIoLatencyMetric(
+    io::IoCounter& counter,
+    const std::string& key,
+    std::unordered_map<std::string, RuntimeMetric>& res) {
+  if (counter.count() > 0) {
+    res.insert(
+        {key,
+         RuntimeMetric(
+             saturateCast(counter.sum() * 1'000),
+             counter.count(),
+             saturateCast(counter.min() * 1'000),
+             saturateCast(counter.max() * 1'000),
+             RuntimeCounter::Unit::kNanos)});
+  }
+}
+
+void addIoStatsToRuntimeStats(
+    io::IoStatistics& ioStats,
+    std::string_view prefix,
+    std::unordered_map<std::string, RuntimeMetric>& res) {
+  auto key = [&](std::string_view name) {
+    return prefix.empty() ? std::string(name)
+                          : fmt::format("{}.{}", prefix, name);
+  };
+
+  addIoLatencyMetric(
+      ioStats.queryThreadIoLatencyUs(), key(Connector::kIoWaitWallNanos), res);
+  addIoLatencyMetric(
+      ioStats.storageReadLatencyUs(),
+      key(Connector::kStorageReadWallNanos),
+      res);
+  addIoLatencyMetric(
+      ioStats.ssdCacheReadLatencyUs(),
+      key(Connector::kSsdCacheReadWallNanos),
+      res);
+  addIoLatencyMetric(
+      ioStats.cacheWaitLatencyUs(), key(Connector::kCacheWaitWallNanos), res);
+  addIoLatencyMetric(
+      ioStats.coalescedSsdLoadLatencyUs(),
+      key(Connector::kCoalescedSsdLoadWallNanos),
+      res);
+  addIoLatencyMetric(
+      ioStats.coalescedStorageLoadLatencyUs(),
+      key(Connector::kCoalescedStorageLoadWallNanos),
+      res);
+
+  addIoCounterMetric(
+      ioStats.prefetch(), key(FileDataSource::kNumPrefetch), res);
+  addIoStatsMetric(
+      ioStats.prefetch(),
+      key(FileDataSource::kPrefetchBytes),
+      RuntimeCounter::Unit::kBytes,
+      res);
+  addIoCounterMetric(
+      ioStats.totalScanTime(),
+      key(FileDataSource::kTotalScanTime),
+      RuntimeCounter::Unit::kNanos,
+      res);
+  addIoCounterMetric(
+      ioStats.rawOverreadBytes(),
+      key(FileDataSource::kOverreadBytes),
+      RuntimeCounter::Unit::kBytes,
+      res);
+
+  addIoStatsMetric(
+      ioStats.read(),
+      key(FileDataSource::kStorageReadBytes),
+      RuntimeCounter::Unit::kBytes,
+      res);
+  addIoCounterMetric(
+      ioStats.ssdRead(), key(FileDataSource::kNumLocalRead), res);
+  addIoStatsMetric(
+      ioStats.ssdRead(),
+      key(FileDataSource::kLocalReadBytes),
+      RuntimeCounter::Unit::kBytes,
+      res);
+  addIoCounterMetric(ioStats.ramHit(), key(FileDataSource::kNumRamRead), res);
+  addIoStatsMetric(
+      ioStats.ramHit(),
+      key(FileDataSource::kRamReadBytes),
+      RuntimeCounter::Unit::kBytes,
+      res);
+}
+
+} // namespace
 
 void FileDataSource::processColumnHandle(const FileColumnHandlePtr& handle) {
   switch (handle->columnType()) {
@@ -196,8 +321,161 @@ FileDataSource::FileDataSource(
         *scanSpec_, *remainingFilter, expressionEvaluator_);
   }
 
-  ioStatistics_ = std::make_shared<io::IoStatistics>();
+  // Detect extraction columns and reconfigure scanSpec_ if needed.
+  bool hasExtractions = false;
+  readColumnTypes = readerOutputType_->children();
+  for (int outputIdx = 0; outputIdx < outputType->size(); ++outputIdx) {
+    const auto& outputName = outputType->nameOf(outputIdx);
+    auto it = assignments.find(outputName);
+    if (it == assignments.end()) {
+      continue;
+    }
+    auto* handle = static_cast<const FileColumnHandle*>(it->second.get());
+    if (!handle->extractions().empty()) {
+      // Column has extraction chains.  Read with schemaType from file, then
+      // apply extraction post-read.  Extractions and requiredSubfields are
+      // mutually exclusive (enforced by the column handle constructor).
+      auto readerIdx = readerOutputType_->getChildIdxIfExists(handle->name());
+      if (readerIdx.has_value()) {
+        readColumnTypes[*readerIdx] = handle->schemaType();
+        extractionColumns_[*readerIdx] = handle;
+        hasExtractions = true;
+      }
+    }
+  }
+
+  if (hasExtractions) {
+    // Rebuild readerOutputType_ with schemaType for extraction columns.
+    readerOutputType_ =
+        ROW(std::vector<std::string>(
+                readerOutputType_->names().begin(),
+                readerOutputType_->names().end()),
+            std::move(readColumnTypes));
+    // Rebuild scanSpec_ with the updated readerOutputType_.
+    scanSpec_ = makeScanSpec(
+        readerOutputType_,
+        subfields_,
+        filters_,
+        /*indexColumns=*/{},
+        tableHandle_->dataColumns(),
+        partitionKeys_,
+        infoColumns_,
+        specialColumns_,
+        fileConfig_->readStatsBasedFilterReorderDisabled(
+            connectorQueryCtx->sessionProperties()),
+        pool_);
+    configureExtractionColumns();
+  }
+
+  dataIoStats_ = std::make_shared<io::IoStatistics>();
+  metadataIoStats_ = std::make_shared<io::IoStatistics>();
   ioStats_ = std::make_shared<IoStats>();
+}
+
+void FileDataSource::configureExtractionColumns() {
+  // Configure extraction columns on the ScanSpec.  For each column with
+  // extractions, this:
+  // 1. Sets pruning hints so DWRF/Nimble readers skip unneeded sub-streams.
+  // 2. Sets a transform function on the ScanSpec node so the reader applies
+  //    extraction chains and produces the output type directly.
+  for (auto& [colIdx, handle] : extractionColumns_) {
+    auto* fieldSpec = scanSpec_->childByName(readerOutputType_->nameOf(colIdx));
+    if (!fieldSpec) {
+      continue;
+    }
+    const auto& extractions = handle->extractions();
+    auto extractionOutputType = handle->dataType();
+
+    // For multiple extractions, do NOT call configureExtractionScanSpec --
+    // keep ExtractionType as kNone and use full chains in the transform.
+    // This ensures the text reader (which does not handle ExtractionType
+    // natively) produces correct results.
+    if (extractions.size() == 1) {
+      configureExtractionScanSpec(
+          handle->schemaType(), extractions, *fieldSpec, pool_);
+    }
+    if (extractions.size() == 1) {
+      // Store a full-chain transform so hasTransform() returns true.  This
+      // signals to the delta update path that extraction is configured.
+      // The full chain is captured for PrismSplitReader to replace it.
+      fieldSpec->setTransform(
+          [fullChain = extractions[0].chain](
+              const VectorPtr& input, memory::MemoryPool* pool) -> VectorPtr {
+            return applyExtractionChain(input, fullChain, pool);
+          },
+          extractionOutputType);
+    } else {
+      // Multiple extractions: do NOT set ExtractionType on the ScanSpec.
+      // Use full chains in the transform so the text reader (which does
+      // not handle ExtractionType natively) produces correct results.
+      // TODO: Optimization: for agreeing multiple extractions, set
+      // ExtractionType and use remaining chains.  Requires text reader
+      // to handle ExtractionType natively.
+      struct ExtractionInfo {
+        std::string outputName;
+        std::vector<ExtractionPathElementPtr> chain;
+      };
+
+      std::vector<ExtractionInfo> infos;
+      for (const auto& extraction : extractions) {
+        infos.push_back({extraction.outputName, extraction.chain});
+      }
+      // Always need a transform for multiple extractions to assemble ROW.
+      fieldSpec->setTransform(
+          [infos = std::move(infos)](
+              const VectorPtr& input, memory::MemoryPool* pool) -> VectorPtr {
+            std::vector<VectorPtr> children;
+            std::vector<std::string> names;
+            std::vector<TypePtr> types;
+            children.reserve(infos.size());
+            names.reserve(infos.size());
+            types.reserve(infos.size());
+            for (const auto& info : infos) {
+              VectorPtr extracted;
+              if (info.chain.empty()) {
+                extracted = input;
+              } else {
+                extracted = applyExtractionChain(input, info.chain, pool);
+              }
+              names.push_back(info.outputName);
+              types.push_back(extracted->type());
+              children.push_back(std::move(extracted));
+            }
+            return std::make_shared<RowVector>(
+                pool,
+                ROW(std::move(names), std::move(types)),
+                nullptr,
+                input->size(),
+                std::move(children));
+          },
+          extractionOutputType);
+    }
+  }
+
+  // Build readerProducedType_ -- the actual type the reader will produce.
+  // For extraction columns where the reader handles extraction natively
+  // (ExtractionType != kNone), the output type differs from schemaType.
+  {
+    auto names = readerOutputType_->names();
+    auto types = readerOutputType_->children();
+    bool needsSeparateType = false;
+    for (auto& [colIdx, handle] : extractionColumns_) {
+      auto* fieldSpec =
+          scanSpec_->childByName(readerOutputType_->nameOf(colIdx));
+      if (fieldSpec &&
+          fieldSpec->extractionType() !=
+              common::ScanSpec::ExtractionType::kNone) {
+        VELOX_CHECK_LT(static_cast<size_t>(colIdx), types.size());
+        types[colIdx] = handle->dataType();
+        needsSeparateType = true;
+      }
+    }
+    if (needsSeparateType) {
+      readerProducedType_ =
+          ROW(std::vector<std::string>(names.begin(), names.end()),
+              std::move(types));
+    }
+  }
 }
 
 std::unique_ptr<FileSplitReader> FileDataSource::createSplitReader() {
@@ -208,7 +486,8 @@ std::unique_ptr<FileSplitReader> FileDataSource::createSplitReader() {
       connectorQueryCtx_,
       fileConfig_,
       readerOutputType_,
-      ioStatistics_,
+      dataIoStats_,
+      metadataIoStats_,
       ioStats_,
       fileHandleFactory_,
       ioExecutor_,
@@ -253,12 +532,14 @@ std::optional<RowVectorPtr> FileDataSource::next(
 
   // Subclass reader may add extra columns to reader output (e.g. for bucket
   // conversion or delta update).
+  auto& outputRowType =
+      readerProducedType_ ? readerProducedType_ : readerOutputType_;
   auto needsExtraColumn = [&] {
     return output_->asUnchecked<RowVector>()->childrenSize() <
-        readerOutputType_->size();
+        outputRowType->size();
   };
   if (!output_ || needsExtraColumn()) {
-    output_ = BaseVector::create(readerOutputType_, 0, pool_);
+    output_ = BaseVector::create(outputRowType, 0, pool_);
   }
 
   const auto rowsScanned = splitReader_->next(size, output_);
@@ -338,131 +619,17 @@ void FileDataSource::addDynamicFilter(
 std::unordered_map<std::string, RuntimeMetric>
 FileDataSource::getRuntimeStats() {
   auto res = runtimeStats_.toRuntimeMetricMap();
+  addIoStatsToRuntimeStats(*dataIoStats_, "", res);
+  addIoStatsToRuntimeStats(*metadataIoStats_, kMetadataPrefix, res);
   res.insert(
-      {std::string(Connector::kIoWaitWallNanos),
-       RuntimeMetric(
-           saturateCast(ioStatistics_->queryThreadIoLatencyUs().sum() * 1'000),
-           ioStatistics_->queryThreadIoLatencyUs().count(),
-           saturateCast(ioStatistics_->queryThreadIoLatencyUs().min() * 1'000),
-           saturateCast(ioStatistics_->queryThreadIoLatencyUs().max() * 1'000),
-           RuntimeCounter::Unit::kNanos)});
-  // Breakdown of ioWaitWallNanos by I/O type
-  if (ioStatistics_->storageReadLatencyUs().count() > 0) {
-    res.insert(
-        {std::string(Connector::kStorageReadWallNanos),
-         RuntimeMetric(
-             saturateCast(ioStatistics_->storageReadLatencyUs().sum() * 1'000),
-             ioStatistics_->storageReadLatencyUs().count(),
-             saturateCast(ioStatistics_->storageReadLatencyUs().min() * 1'000),
-             saturateCast(ioStatistics_->storageReadLatencyUs().max() * 1'000),
-             RuntimeCounter::Unit::kNanos)});
-  }
-  if (ioStatistics_->ssdCacheReadLatencyUs().count() > 0) {
-    res.insert(
-        {std::string(Connector::kSsdCacheReadWallNanos),
-         RuntimeMetric(
-             saturateCast(ioStatistics_->ssdCacheReadLatencyUs().sum() * 1'000),
-             ioStatistics_->ssdCacheReadLatencyUs().count(),
-             saturateCast(ioStatistics_->ssdCacheReadLatencyUs().min() * 1'000),
-             saturateCast(ioStatistics_->ssdCacheReadLatencyUs().max() * 1'000),
-             RuntimeCounter::Unit::kNanos)});
-  }
-  if (ioStatistics_->cacheWaitLatencyUs().count() > 0) {
-    res.insert(
-        {std::string(Connector::kCacheWaitWallNanos),
-         RuntimeMetric(
-             saturateCast(ioStatistics_->cacheWaitLatencyUs().sum() * 1'000),
-             ioStatistics_->cacheWaitLatencyUs().count(),
-             saturateCast(ioStatistics_->cacheWaitLatencyUs().min() * 1'000),
-             saturateCast(ioStatistics_->cacheWaitLatencyUs().max() * 1'000),
-             RuntimeCounter::Unit::kNanos)});
-  }
-  if (ioStatistics_->coalescedSsdLoadLatencyUs().count() > 0) {
-    res.insert(
-        {std::string(Connector::kCoalescedSsdLoadWallNanos),
-         RuntimeMetric(
-             saturateCast(
-                 ioStatistics_->coalescedSsdLoadLatencyUs().sum() * 1'000),
-             ioStatistics_->coalescedSsdLoadLatencyUs().count(),
-             saturateCast(
-                 ioStatistics_->coalescedSsdLoadLatencyUs().min() * 1'000),
-             saturateCast(
-                 ioStatistics_->coalescedSsdLoadLatencyUs().max() * 1'000),
-             RuntimeCounter::Unit::kNanos)});
-  }
-  if (ioStatistics_->coalescedStorageLoadLatencyUs().count() > 0) {
-    res.insert(
-        {std::string(Connector::kCoalescedStorageLoadWallNanos),
-         RuntimeMetric(
-             saturateCast(
-                 ioStatistics_->coalescedStorageLoadLatencyUs().sum() * 1'000),
-             ioStatistics_->coalescedStorageLoadLatencyUs().count(),
-             saturateCast(
-                 ioStatistics_->coalescedStorageLoadLatencyUs().min() * 1'000),
-             saturateCast(
-                 ioStatistics_->coalescedStorageLoadLatencyUs().max() * 1'000),
-             RuntimeCounter::Unit::kNanos)});
-  }
-  res.insert(
-      {{std::string(kNumPrefetch),
-        RuntimeMetric(ioStatistics_->prefetch().count())},
-       {std::string(kPrefetchBytes),
-        RuntimeMetric(
-            saturateCast(ioStatistics_->prefetch().sum()),
-            ioStatistics_->prefetch().count(),
-            saturateCast(ioStatistics_->prefetch().min()),
-            saturateCast(ioStatistics_->prefetch().max()),
-            RuntimeCounter::Unit::kBytes)},
-       {std::string(kTotalScanTime),
-        RuntimeMetric(
-            ioStatistics_->totalScanTime(), RuntimeCounter::Unit::kNanos)},
-       {std::string(Connector::kTotalRemainingFilterTime),
+      {{std::string(Connector::kTotalRemainingFilterTime),
         RuntimeMetric(
             totalRemainingFilterTime_.load(std::memory_order_relaxed),
             RuntimeCounter::Unit::kNanos)},
        {Connector::kTotalRemainingFilterCpuTime,
         RuntimeMetric(
             totalRemainingFilterCpuTime_.load(std::memory_order_relaxed),
-            RuntimeCounter::Unit::kNanos)},
-       {std::string(kOverreadBytes),
-        RuntimeMetric(
-            ioStatistics_->rawOverreadBytes(), RuntimeCounter::Unit::kBytes)}});
-  if (ioStatistics_->read().count() > 0) {
-    res.insert(
-        {std::string(kStorageReadBytes),
-         RuntimeMetric(
-             saturateCast(ioStatistics_->read().sum()),
-             ioStatistics_->read().count(),
-             saturateCast(ioStatistics_->read().min()),
-             saturateCast(ioStatistics_->read().max()),
-             RuntimeCounter::Unit::kBytes)});
-  }
-  if (ioStatistics_->ssdRead().count() > 0) {
-    res.insert(
-        {std::string(kNumLocalRead),
-         RuntimeMetric(ioStatistics_->ssdRead().count())});
-    res.insert(
-        {std::string(kLocalReadBytes),
-         RuntimeMetric(
-             saturateCast(ioStatistics_->ssdRead().sum()),
-             ioStatistics_->ssdRead().count(),
-             saturateCast(ioStatistics_->ssdRead().min()),
-             saturateCast(ioStatistics_->ssdRead().max()),
-             RuntimeCounter::Unit::kBytes)});
-  }
-  if (ioStatistics_->ramHit().count() > 0) {
-    res.insert(
-        {std::string(kNumRamRead),
-         RuntimeMetric(ioStatistics_->ramHit().count())});
-    res.insert(
-        {std::string(kRamReadBytes),
-         RuntimeMetric(
-             saturateCast(ioStatistics_->ramHit().sum()),
-             ioStatistics_->ramHit().count(),
-             saturateCast(ioStatistics_->ramHit().min()),
-             saturateCast(ioStatistics_->ramHit().max()),
-             RuntimeCounter::Unit::kBytes)});
-  }
+            RuntimeCounter::Unit::kNanos)}});
 
   const auto ioStatsMap = ioStats_->stats();
   for (const auto& [key, value] : ioStatsMap) {
@@ -488,6 +655,8 @@ void FileDataSource::setFromDataSource(
   runtimeStats_.processedSplits += source->runtimeStats_.processedSplits;
   runtimeStats_.skippedSplitBytes += source->runtimeStats_.skippedSplitBytes;
   readerOutputType_ = std::move(source->readerOutputType_);
+  readerProducedType_ = std::move(source->readerProducedType_);
+  extractionColumns_ = std::move(source->extractionColumns_);
   source->scanSpec_->moveAdaptationFrom(*scanSpec_);
   scanSpec_ = std::move(source->scanSpec_);
   metadataFilter_ = std::move(source->metadataFilter_);
@@ -495,8 +664,10 @@ void FileDataSource::setFromDataSource(
   splitReader_->setConnectorQueryCtx(connectorQueryCtx_);
   // New io will be accounted on the stats of 'source'. Add the existing
   // balance to that.
-  source->ioStatistics_->merge(*ioStatistics_);
-  ioStatistics_ = std::move(source->ioStatistics_);
+  source->dataIoStats_->merge(*dataIoStats_);
+  dataIoStats_ = std::move(source->dataIoStats_);
+  source->metadataIoStats_->merge(*metadataIoStats_);
+  metadataIoStats_ = std::move(source->metadataIoStats_);
   source->ioStats_->merge(*ioStats_);
   ioStats_ = std::move(source->ioStats_);
 }

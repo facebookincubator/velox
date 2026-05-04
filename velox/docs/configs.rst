@@ -683,6 +683,11 @@ Each query can override the config by setting corresponding query session proper
    :widths: 20 20 10 10 70
    :header-rows: 1
 
+   * - Configuration Property Name
+     - Session Property Name
+     - Type
+     - Default Value
+     - Description
    * - user
      -
      - string
@@ -704,6 +709,15 @@ Hive Connector
 Hive Connector config is initialized on velox runtime startup and is shared among queries as the default config.
 Each query can override the config by setting corresponding query session properties such as in Prestissimo.
 
+Configuration property names use kebab-case (e.g., ``max-bucket-count``).
+Session property names use snake_case (e.g., ``max_bucket_count``).
+Properties without a session property name in the table below are fixed for the lifetime of the process
+and cannot be modified per query.
+
+Properties of type ``capacity`` accept human-readable size strings such as ``512kB``, ``128MB``, ``1GB``, etc.
+Properties of type ``integer`` with byte-valued defaults (shown as ``256KB``, ``8MB``, etc. for readability)
+must be specified as raw byte counts.
+
 .. list-table::
    :widths: 20 20 10 10 70
    :header-rows: 1
@@ -713,13 +727,13 @@ Each query can override the config by setting corresponding query session proper
      - Type
      - Default Value
      - Description
-   * - hive.max-partitions-per-writers
-     -
+   * - max-partitions-per-writers
+     - max_partitions_per_writers
      - integer
-     - 100
+     - 128
      - Maximum number of (bucketed) partitions per a single table writer instance.
-   * - hive.max-bucket-count
-     - hive.max_bucket_count
+   * - max-bucket-count
+     - max_bucket_count
      - integer
      - 100000
      - Maximum number of buckets that a table writer is allowed to write to.
@@ -731,7 +745,7 @@ Each query can override the config by setting corresponding query session proper
        the update mode field of the table writer operator output. ``OVERWRITE``
        sets the update mode to indicate overwriting a partition if exists. ``ERROR`` sets the update mode to indicate
        error throwing if writing to an existing partition.
-   * - hive.immutable-partitions
+   * - immutable-partitions
      -
      - bool
      - false
@@ -768,7 +782,7 @@ Each query can override the config by setting corresponding query session proper
      - Maximum size in bytes to coalesce requests to be fetched in a single request.
    * - max-coalesced-distance
      -
-     - integer
+     - capacity
      - 512KB
      - Maximum distance in capacity units between chunks to be fetched that may be coalesced into a single request.
    * - load-quantum
@@ -795,12 +809,12 @@ Each query can override the config by setting corresponding query session proper
      - Maximum number of rows for sort writer in one batch of output. This is to limit the memory usage of sort writer.
    * - sort-writer-max-output-bytes
      - sort_writer_max_output_bytes
-     - string
+     - capacity
      - 10MB
      - Maximum bytes for sort writer in one batch of output. This is to limit the memory usage of sort writer.
    * - max-target-file-size
      - max_target_file_size
-     - string
+     - capacity
      - 0B
      - Maximum target file size for writers. When a file exceeds this size during writing, the writer
        closes the current file and starts writing to a new file. Accepts human-readable values like
@@ -820,26 +834,26 @@ Each query can override the config by setting corresponding query session proper
        and also skip staging to the ssd cache. This helps to prevent the cache space pollution
        from the one-time table scan by large batch query when mixed running with interactive
        query which has high data locality.
-   * - hive.reader.stats_based_filter_reorder_disabaled
-     - hive.reader.stats_based_filter_reorder_disabaled
+   * - stats-based-filter-reorder-disabled
+     - stats_based_filter_reorder_disabled
      - bool
      - false
      - If true, disable the stats based filter reordering during the read processing, and the
        filter execution order is totally determined by the filter type. Otherwise, the file
        reader will dynamically adjust the filter execution order based on the past filter
        execution stats.
-   * - hive.reader.timestamp-partition-value-as-local-time
-     - hive.reader.timestamp_partition_value_as_local_time
+   * - reader.timestamp-partition-value-as-local-time
+     - reader.timestamp_partition_value_as_local_time
      - bool
      - true
      - Reads timestamp partition value as local time if true. Otherwise, reads as UTC.
-   * - hive.preserve-flat-maps-in-memory
-     - hive.preserve_flat_maps_in_memory
+   * - preserve-flat-maps-in-memory
+     - preserve_flat_maps_in_memory
      - bool
      - false
      - Whether to preserve flat maps in memory as FlatMapVectors instead of converting them to MapVectors. This is only applied during data reading inside the DWRF and Nimble readers, not during downstream processing like expression evaluation etc.
-   * - hive.max-rows-per-index-request
-     - hive.max_rows_per_index_request
+   * - max-rows-per-index-request
+     - max_rows_per_index_request
      - integer
      - 0
      - Maximum number of output rows to return per index lookup request. The limit is applied to the actual output rows
@@ -859,29 +873,29 @@ Each query can override the config by setting corresponding query session proper
        strong references so they are never evicted. This avoids re-reading and re-parsing metadata on every stripe
        access when weak-pointer cache entries would otherwise expire. Can be used independently of
        file-metadata-cache-enabled. Currently only supported by Nimble format.
-   * - hive.reader.collect-column-cpu-metrics
-     - hive.reader.collect_column_cpu_metrics
+   * - reader.collect-column-cpu-metrics
+     - reader.collect_column_cpu_metrics
      - bool
      - false
      - If true, enables collection of per-column timing statistics during file reading. This includes
        decompression and decode CPU time metrics for each column, reported as runtime metrics in the format
        ``column_<nodeId>.<type>.decompressCPUTimeNanos`` and ``column_<nodeId>.<type>.decodeCPUTimeNanos``.
        Useful for performance analysis and identifying slow columns.
-   * - hive.orc.footer-speculative-io-size
+   * - orc.footer-speculative-io-size
      - orc_footer_speculative_io_size
      - integer
      - 256KB
      - Speculative tail-read size in bytes when opening ORC files. Controls how many bytes are read from the end
        of the file to load the footer and nearby metadata in a single IO operation.
        Set to 0 for adaptive mode.
-   * - hive.parquet.footer-speculative-io-size
+   * - parquet.footer-speculative-io-size
      - parquet_footer_speculative_io_size
      - integer
      - 256KB
      - Speculative tail-read size in bytes when opening Parquet files. Controls how many bytes are read from the end
        of the file to load the footer and nearby metadata in a single IO operation.
        Set to 0 for adaptive mode.
-   * - hive.nimble.footer-speculative-io-size
+   * - nimble.footer-speculative-io-size
      - nimble_footer_speculative_io_size
      - integer
      - 8MB
@@ -1113,23 +1127,23 @@ These semantics are similar to the `Apache Hadoop-Aws module <https://hadoop.apa
      - Type
      - Default Value
      - Description
-   * - hive.gcs.endpoint
+   * - gcs.endpoint
      - string
      -
      - The GCS storage URI.
-   * - hive.gcs.json-key-file-path
+   * - gcs.json-key-file-path
      - string
      -
      - The GCS service account configuration JSON key file.
-   * - hive.gcs.max-retry-count
+   * - gcs.max-retry-count
      - integer
      -
      - The GCS maximum retry counter of transient errors.
-   * - hive.gcs.max-retry-time
+   * - gcs.max-retry-time
      - string
      -
      - The GCS maximum time allowed to retry transient errors.
-   * - hive.gcs.auth.access-token-provider
+   * - gcs.auth.access-token-provider
      - string
      -
      - A custom OAuth credential provider, if specified, will be used to create the client in favor of other
@@ -1362,3 +1376,85 @@ Note: These configurations are experimental and subject to change.
      - ns
      - Timestamp precision unit for cuDF timestamp types. Valid values are: "s" (seconds), "ms" (milliseconds), "us" (microseconds), "ns" (nanoseconds). This controls the precision of timestamp data when converting between Velox and cuDF formats.
      - Register the function for a specific engine. The optional values are presto or spark.
+
+Cudf Hive Connector Configuration (Experimental)
+------------------------------------------------
+These configurations apply to the cuDF Hive connector (Parquet reader/writer via cuDF).
+Connector config is initialized on velox runtime startup and is shared among queries as the default config.
+Each query can override the config by setting the corresponding session property.
+Reader options map to `libcudf parquet_reader_options <https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet__reader__options>`_ (used with the chunked reader when applicable).
+
+.. list-table::
+   :widths: 20 20 10 10 70
+   :header-rows: 1
+
+   * - Configuration Property Name
+     - Session Property Name
+     - Type
+     - Default Value
+     - Description
+   * - cudf.hive.use-buffered-input
+     - cudf.hive.use_buffered_input
+     - bool
+     - true
+     - Whether to use BufferedInput for CudfHiveDataSource (can use AsyncDataCache when HiveConfig file handle cache is enabled).
+   * - cudf.hive.use-experimental-reader
+     - cudf.hive.use_experimental_reader
+     - bool
+     - false
+     - Whether to use the experimental cuDF Parquet reader (Hybrid Scan) for highly selective filters. When enabled, uses `libcudf hybrid_scan_reader <https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet_1_1experimental_1_1hybrid__scan__reader>`_.
+   * - parquet.reader.use-pandas-metadata
+     - parquet.reader.use_pandas_metadata
+     - bool
+     - true
+     - Enable or disable use of pandas metadata while reading. Maps to ``enable_use_pandas_metadata`` in `libcudf parquet_reader_options <https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet__reader__options>`_.
+   * - parquet.reader.use-arrow-schema
+     - parquet.reader.use_arrow_schema
+     - bool
+     - true
+     - Enable or disable use of Arrow schema while reading. Maps to ``enable_use_arrow_schema`` in `libcudf parquet_reader_options <https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet__reader__options>`_.
+   * - parquet.reader.allow-mismatched-parquet-schemas
+     - parquet.reader.allow_mismatched_parquet_schemas
+     - bool
+     - false
+     - Enable or disable reading matching projected and filter columns from mismatched Parquet sources. Maps to ``enable_allow_mismatched_pq_schemas`` in `libcudf parquet_reader_options <https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet__reader__options>`_.
+   * - parquet.reader.timestamp-type
+     - parquet.reader.timestamp_type
+     - string
+     - TIMESTAMP_MILLISECONDS
+     - Timestamp type used to cast all timestamp columns (e.g. TIMESTAMP_DAYS, TIMESTAMP_SECONDS, TIMESTAMP_MILLISECONDS, TIMESTAMP_MICROSECONDS, TIMESTAMP_NANOSECONDS). Maps to ``set_timestamp_type`` in `libcudf parquet_reader_options <https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet__reader__options>`_.
+   * - parquet.reader.chunk-read-limit
+     - parquet.reader.chunk_read_limit
+     - integer
+     - 0
+     - Limit on total number of bytes to be returned per read (per table chunk); 0 means no limit. Maps to ``chunk_read_limit`` in `libcudf hybrid_scan_reader <https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet_1_1experimental_1_1hybrid__scan__reader>`_ (e.g. ``setup_chunking_for_filter_columns``, ``setup_chunking_for_payload_columns``).
+   * - parquet.reader.pass-read-limit
+     - parquet.reader.pass_read_limit
+     - integer
+     - 0
+     - Limit on the amount of memory (bytes) used for reading and decompressing data; 0 means no limit. This is a hint, not an absolute limit—if a single row group cannot fit within the limit, it will still be loaded. Affects how many row groups can be read at a time by limiting decompression space. Maps to ``pass_read_limit`` in `libcudf hybrid_scan_reader <https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet_1_1experimental_1_1hybrid__scan__reader>`_ (e.g. ``setup_chunking_for_filter_columns``, ``setup_chunking_for_payload_columns``).
+   * - parquet.reader.convert-strings-to-categories
+     - parquet.reader.convert_strings_to_categories
+     - bool
+     - false
+     - Whether to store string data as categorical type.
+   * - parquet.writer.write-timestamps-as-utc
+     - parquet.writer.write_timestamps_as_utc
+     - bool
+     - true
+     - Whether to write timestamps as UTC.
+   * - sort-writer_finish_time_slice_limit_ms
+     - sort_writer_finish_time_slice_limit_ms
+     - integer
+     - 5000
+     - Sort writer exits finish() after this many milliseconds even if work is not complete; 0 means no time limit.
+   * - parquet.writer.write-arrow-schema
+     - parquet.writer.write_arrow_schema
+     - bool
+     - false
+     - Whether to write ARROW schema.
+   * - parquet.writer.write-v2-page-headers
+     - parquet.writer.write_v2_page_headers
+     - bool
+     - false
+     - Whether to write V2 page headers.

@@ -397,6 +397,8 @@ class HashProbe : public Operator {
 
   const bool nullAware_;
 
+  const bool nullAsValue_;
+
   const RowTypePtr probeType_;
 
   // Flag to indicate whether this hash probe operator can output build-side
