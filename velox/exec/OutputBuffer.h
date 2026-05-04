@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/common/base/Portability.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/ExchangeQueue.h"
 
@@ -403,9 +404,9 @@ class OutputBuffer {
   // after receiving no-more-broadcast-buffers signal.
   std::vector<std::shared_ptr<SerializedPageBase>> dataToBroadcast_;
 
-  mutable std::mutex mutex_;
+  std::mutex mutex_;
   // Actual data size in 'buffers_'.
-  int64_t bufferedBytes_{0};
+  tsan_atomic<int64_t> bufferedBytes_{0};
   // The number of buffered pages which corresponds to 'bufferedBytes_'.
   int64_t bufferedPages_{0};
   // The total number of output bytes, rows and pages.
@@ -425,7 +426,7 @@ class OutputBuffer {
   uint32_t numFinished_{0};
   // When this reaches buffers_.size(), 'this' can be freed.
   int numFinalAcknowledges_ = 0;
-  bool atEnd_ = false;
+  tsan_atomic<bool> atEnd_{false};
 
   // Time since last change in bufferedBytes_. Used to compute total time data
   // is buffered. Ignored if bufferedBytes_ is zero.
