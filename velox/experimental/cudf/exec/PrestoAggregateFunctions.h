@@ -20,7 +20,7 @@
 
 namespace facebook::velox::cudf_velox {
 
-/// Register Presto-specific CUDF aggregate functions.
+/// Rebuild current aggregation registries with Presto-specific signatures.
 /// \param prefix Function name prefix (e.g., "presto." or "")
 void registerPrestoAggregateFunctions(const std::string& prefix);
 

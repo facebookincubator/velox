@@ -23,6 +23,7 @@ add_executable(velox_cudf_hash_join_test HashJoinTest.cpp Main.cpp)
 add_executable(velox_cudf_limit_test Main.cpp LimitTest.cpp)
 add_executable(velox_cudf_local_partition_test Main.cpp LocalPartitionTest.cpp)
 add_executable(velox_cudf_order_by_test Main.cpp OrderByTest.cpp)
+add_executable(velox_cudf_interop_test Main.cpp InteropTest.cpp)
 if(VELOX_ENABLE_S3)
   add_executable(velox_cudf_s3_read_test Main.cpp S3ReadTest.cpp)
 endif()
@@ -41,6 +42,7 @@ add_executable(
 add_executable(velox_cudf_mark_distinct_test Main.cpp MarkDistinctTest.cpp)
 add_executable(velox_cudf_topn_test Main.cpp TopNTest.cpp)
 add_executable(velox_cudf_batch_concat_test Main.cpp BatchConcatTest.cpp)
+add_executable(velox_cudf_string_function_test Main.cpp StringFunctionTest.cpp)
 
 add_test(
   NAME velox_cudf_aggregation_test
@@ -108,6 +110,12 @@ add_test(
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
+add_test(
+  NAME velox_cudf_interop_test
+  COMMAND velox_cudf_interop_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
 if(VELOX_ENABLE_S3)
   add_test(
     NAME velox_cudf_s3_read_test
@@ -152,6 +160,12 @@ add_test(
 )
 
 add_test(
+  NAME velox_cudf_string_function_test
+  COMMAND velox_cudf_string_function_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+add_test(
   NAME velox_cudf_aggregation_selection_test
   COMMAND velox_cudf_aggregation_selection_test
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
@@ -185,6 +199,7 @@ set_tests_properties(velox_cudf_hash_join_test PROPERTIES LABELS cuda_driver TIM
 set_tests_properties(velox_cudf_limit_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 set_tests_properties(velox_cudf_local_partition_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 set_tests_properties(velox_cudf_order_by_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
+set_tests_properties(velox_cudf_interop_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 if(VELOX_ENABLE_S3)
   set_tests_properties(velox_cudf_s3_read_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 endif()
@@ -203,6 +218,7 @@ set_tests_properties(
   PROPERTIES LABELS cuda_driver TIMEOUT 3000
 )
 set_tests_properties(velox_cudf_batch_concat_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
+set_tests_properties(velox_cudf_string_function_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 
 target_link_libraries(
   velox_cudf_aggregation_test
@@ -314,6 +330,16 @@ target_link_libraries(
   gtest
   gtest_main
   fmt::fmt
+)
+
+target_link_libraries(
+  velox_cudf_interop_test
+  velox_cudf_exec
+  velox_exec
+  velox_exec_test_lib
+  velox_test_util
+  gtest
+  gtest_main
 )
 
 if(VELOX_ENABLE_S3)
@@ -429,6 +455,17 @@ target_link_libraries(
   gtest_main
   fmt::fmt
   velox_cudf_exec
+)
+
+target_link_libraries(
+  velox_cudf_string_function_test
+  velox_cudf_exec
+  velox_exec
+  velox_exec_test_lib
+  velox_functions_test_lib
+  velox_test_util
+  gtest
+  gtest_main
 )
 
 add_subdirectory(utils)

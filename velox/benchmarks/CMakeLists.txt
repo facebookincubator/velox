@@ -71,5 +71,6 @@ endif()
 
 if(${VELOX_ENABLE_BENCHMARKS})
   add_subdirectory(tpch)
+  add_subdirectory(tpcds)
   add_subdirectory(filesystem)
 endif()

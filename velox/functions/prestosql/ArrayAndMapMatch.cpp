@@ -267,6 +267,7 @@ class MapValuesMatchFunction
   }
 };
 
+class AllValuesMatchFunction : public MapValuesMatchFunction<true, false> {};
 class AnyValuesMatchFunction : public MapValuesMatchFunction<false, true> {};
 class NoValuesMatchFunction : public MapValuesMatchFunction<true, true> {};
 
@@ -355,6 +356,24 @@ VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
 
 VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
     udf_no_values_match,
+    valuesSignatures(),
+    exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
+    std::make_unique<NoValuesMatchFunction>());
+
+VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
+    udf_map_values_all_match,
+    valuesSignatures(),
+    exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
+    std::make_unique<AllValuesMatchFunction>());
+
+VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
+    udf_map_values_any_match,
+    valuesSignatures(),
+    exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
+    std::make_unique<AnyValuesMatchFunction>());
+
+VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
+    udf_map_values_none_match,
     valuesSignatures(),
     exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
     std::make_unique<NoValuesMatchFunction>());

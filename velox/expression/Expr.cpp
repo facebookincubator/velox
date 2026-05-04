@@ -1101,7 +1101,7 @@ void Expr::evalEncodings(
     EvalCtx& context,
     VectorPtr& result) {
   if (deterministic_ && !skipFieldDependentOptimizations() &&
-      context.peelingEnabled()) {
+      context.peelingEnabled(rows)) {
     bool hasFlat = false;
     for (auto* field : distinctFields_) {
       if (isFlat(*context.getField(field->index(context)))) {
@@ -1535,15 +1535,39 @@ bool Expr::applyFunctionWithPeeling(
     VectorPtr& result) {
   LocalDecodedVector localDecoded(context);
   LocalSelectivityVector newRowsHolder(context);
-  if (!context.peelingEnabled()) {
-    if (distinctFields_.size() < 2) {
-      // If we have a single input, velox needs to ensure that the
-      // vectorFunction would receive a flat or constant input.
-      for (int i = 0; i < inputValues_.size(); ++i) {
-        if (inputValues_[i]->encoding() == VectorEncoding::Simple::DICTIONARY) {
-          BaseVector::flattenVector(inputValues_[i]);
+  // When peeling was always enabled, VectorFunctions would implicitly always
+  // receive flat or constant inputs. Now that peeling can be suppressed for
+  // small batches, we must preserve that guarantee for three cases:
+  //
+  // 1. Single constant input (e.g. map_from_entries({null, ...}),
+  //    array_sort(constant_array)): fall through to the peeling path since
+  //    constant peeling is cheap.
+  //
+  // 2. Single dictionary-encoded argument: flatten the dictionary before
+  //    calling applyFunction.
+  //
+  // 3. Single dictionary-encoded argument with all other arguments being
+  //    constants (e.g. in-predicate: dict_wrap(c0) in (40, 42)): flatten the
+  //    dictionary — the constants pass through unchanged.
+  if (!context.peelingEnabled(applyRows) &&
+      !(inputValues_.size() == 1 &&
+        inputValues_[0]->encoding() == VectorEncoding::Simple::CONSTANT)) {
+    int dictIndex = -1;
+    bool canFlatten = true;
+
+    for (int i = 0; i < inputValues_.size(); ++i) {
+      auto encoding = inputValues_[i]->encoding();
+      if (encoding == VectorEncoding::Simple::DICTIONARY) {
+        if (dictIndex != -1) {
+          // More than one dictionary-encoded input.
+          canFlatten = false;
+          break;
         }
+        dictIndex = i;
       }
+    }
+    if (canFlatten && dictIndex != -1) {
+      BaseVector::flattenVector(inputValues_[dictIndex]);
       applyFunction(applyRows, context, result);
       return true;
     }
