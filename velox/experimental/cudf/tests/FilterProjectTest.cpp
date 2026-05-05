@@ -29,6 +29,8 @@
 #include "velox/parse/TypeResolver.h"
 #include "velox/type/Time.h"
 
+#include <limits>
+
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
@@ -1092,6 +1094,119 @@ TEST_F(CudfFilterProjectTest, datePlusIntervalRejectsSubDayInterval) {
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(plan).copyResults(pool()),
       "Cannot add hours, minutes, seconds or milliseconds to a date");
+}
+
+TEST_F(CudfFilterProjectTest, dateAddDateConstantValue) {
+  auto data = makeRowVector(
+      {"event_date"},
+      {makeNullableFlatVector<int32_t>(
+          {toDateDays("2019-02-28"),
+           toDateDays("2019-01-30"),
+           toDateDays("2019-11-30"),
+           toDateDays("2020-02-29"),
+           std::nullopt},
+          DATE())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "date_add('day', 1, event_date) AS plus_day",
+      "date_add('week', 1, event_date) AS plus_week",
+      "date_add('month', 13, event_date) AS plus_month",
+      "date_add('quarter', 1, event_date) AS plus_quarter",
+      "date_add('year', 1, event_date) AS plus_year",
+      "date_add('day', -366, event_date) AS minus_day"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, dateAddDateColumnValue) {
+  auto data = makeRowVector(
+      {"event_date", "amount"},
+      {makeNullableFlatVector<int32_t>(
+           {toDateDays("2019-02-28"),
+            toDateDays("2019-01-30"),
+            toDateDays("2020-02-29"),
+            std::nullopt,
+            toDateDays("2025-01-15")},
+           DATE()),
+       makeNullableFlatVector<int64_t>({1, 13, -1, 2, std::nullopt})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "date_add('day', amount, event_date) AS plus_day",
+      "date_add('week', amount, event_date) AS plus_week",
+      "date_add('month', amount, event_date) AS plus_month",
+      "date_add('quarter', amount, event_date) AS plus_quarter",
+      "date_add('year', amount, event_date) AS plus_year",
+      "date_add('week', amount, DATE '2020-01-31') AS literal_date_week",
+      "date_add('month', amount, DATE '2020-01-31') AS literal_date_month"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, dateAddDateNullLiteralValue) {
+  auto data = makeRowVector(
+      {"event_date"},
+      {makeFlatVector<int32_t>(
+          {toDateDays("2020-01-01"),
+           toDateDays("2020-06-15"),
+           toDateDays("2020-12-31")},
+          DATE())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "date_add('day', CAST(NULL AS BIGINT), event_date) AS plus_day",
+      "date_add('year', CAST(NULL AS BIGINT), event_date) AS plus_year"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, dateAddDateNullLiteralDate) {
+  auto data = makeRowVector(
+      {"amount"}, {makeFlatVector<int64_t>({1, 13, -1})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "date_add('day', amount, CAST(NULL AS DATE)) AS plus_day",
+      "date_add('month', amount, CAST(NULL AS DATE)) AS plus_month"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, dateAddDateLiteralValueOutOfRange) {
+  // Literal value that exceeds int32 range; checked at eval time by
+  // checkedScaleValue -> checkValueInInt32Range.
+  auto data = makeRowVector(
+      {"event_date"},
+      {makeFlatVector<int32_t>({toDateDays("2020-01-01")}, DATE())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"date_add('day', 2147483648, event_date) AS r"})
+                  .planNode();
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()), "Value should be in range");
+}
+
+TEST_F(CudfFilterProjectTest, dateAddDateColumnValueOutOfRange) {
+  // Column value that exceeds int32 range; checked at eval time by
+  // checkScaledValueRange on the GPU.
+  auto data = makeRowVector(
+      {"event_date", "amount"},
+      {makeFlatVector<int32_t>(
+           {toDateDays("2020-01-01"), toDateDays("2020-12-31")}, DATE()),
+       makeFlatVector<int64_t>(
+           {1, std::numeric_limits<int64_t>::max()})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"date_add('day', amount, event_date) AS r"})
+                  .planNode();
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "date_add value is out of range");
 }
 
 TEST_F(CudfFilterProjectTest, extractTimestampComponents) {

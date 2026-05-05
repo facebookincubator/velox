@@ -19,15 +19,15 @@
 
 #include <cudf/scalar/scalar.hpp>
 
-namespace facebook::velox::cudf_velox {
+namespace facebook::velox::cudf_velox::sparksql {
 
-/// plus(DATE, INTERVAL DAY TO SECOND) -> DATE.
-/// Converts the interval from milliseconds to days and adds to the date.
-/// Handles both constant and column interval inputs.
-class DatePlusIntervalFunction : public CudfFunction {
+/// Spark date_add(date, days) -> DATE.
+/// Adds a constant number of days to a date column. days must be a constant
+/// (tinyint, smallint, or integer); date must be a column.
+/// Note: signature differs from Presto date_add, which takes (unit, value, date).
+class DateAddFunction : public CudfFunction {
  public:
-  explicit DatePlusIntervalFunction(
-      const std::shared_ptr<velox::exec::Expr>& expr);
+  explicit DateAddFunction(const std::shared_ptr<velox::exec::Expr>& expr);
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
@@ -35,8 +35,8 @@ class DatePlusIntervalFunction : public CudfFunction {
       rmm::device_async_resource_ref mr) const override;
 
  private:
-  /// Pre-computed duration scalar for constant interval inputs.
-  std::unique_ptr<cudf::scalar> durationDaysLiteral_;
+  // Pre-computed duration_D scalar holding the days argument.
+  std::unique_ptr<cudf::scalar> value_;
 };
 
-} // namespace facebook::velox::cudf_velox
+} // namespace facebook::velox::cudf_velox::sparksql

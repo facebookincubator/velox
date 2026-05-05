@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 #include "velox/experimental/cudf/CudfNoDefaults.h"
-#include "velox/experimental/cudf/expression/DateArithmeticFunctions.h"
+#include "velox/experimental/cudf/expression/prestosql/DatePlusIntervalFunction.h"
 
 #include "velox/expression/ConstantExpr.h"
 #include "velox/type/Time.h"
@@ -25,7 +25,7 @@
 #include <cudf/reduction.hpp>
 #include <cudf/unary.hpp>
 
-namespace facebook::velox::cudf_velox {
+namespace facebook::velox::cudf_velox::prestosql {
 
 DatePlusIntervalFunction::DatePlusIntervalFunction(
     const std::shared_ptr<velox::exec::Expr>& expr) {
@@ -129,4 +129,4 @@ ColumnOrView DatePlusIntervalFunction::eval(
       mr);
 }
 
-} // namespace facebook::velox::cudf_velox
+} // namespace facebook::velox::cudf_velox::prestosql

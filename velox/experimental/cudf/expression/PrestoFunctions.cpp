@@ -14,10 +14,11 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/expression/DateArithmeticFunctions.h"
 #include "velox/experimental/cudf/expression/DateTruncFunction.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
+#include "velox/experimental/cudf/expression/prestosql/DateAddFunction.h"
+#include "velox/experimental/cudf/expression/prestosql/DatePlusIntervalFunction.h"
 
 #include "velox/expression/FunctionSignature.h"
 
@@ -29,13 +30,27 @@ void registerPrestoFunctions(const std::string& prefix) {
   registerCudfFunction(
       prefix + "plus",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<DatePlusIntervalFunction>(expr);
+        return std::make_shared<prestosql::DatePlusIntervalFunction>(expr);
       },
       {FunctionSignatureBuilder()
            .returnType("date")
            .argumentType("date")
            .argumentType("interval day to second")
            .build()});
+
+  registerCudfFunction(
+      prefix + "date_add",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<prestosql::DateAddFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("date")
+           .constantArgumentType("varchar")
+           .argumentType("bigint")
+           .argumentType("date")
+           .build()},
+      true,
+      prestosql::DateAddFunction::canEvaluate);
 
   registerCudfFunction(
       prefix + "date_trunc",
