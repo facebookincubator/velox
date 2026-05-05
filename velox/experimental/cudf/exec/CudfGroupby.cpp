@@ -302,10 +302,7 @@ struct GroupbyStddevSampAggregator : GroupbyAggregator {
       uint32_t inputIndex,
       VectorPtr constant,
       const TypePtr& resultType)
-      : GroupbyAggregator(step, inputIndex, constant, resultType),
-        one_(1.0, true),
-        two_(2, true),
-        nullDouble_(0.0, false) {}
+      : GroupbyAggregator(step, inputIndex, constant, resultType) {}
 
   void addGroupbyRequest(
       cudf::table_view const& tbl,
@@ -376,9 +373,10 @@ struct GroupbyStddevSampAggregator : GroupbyAggregator {
         auto m2View = mergedView.child(2);
 
         // count - 1 (binary_operation handles type promotion)
+        cudf::numeric_scalar<double> one(1.0, true, stream, get_temp_mr());
         auto countMinus1 = cudf::binary_operation(
             countView,
-            one_,
+            one,
             cudf::binary_operator::SUB,
             cudf::data_type{cudf::type_id::FLOAT64},
             stream,
@@ -398,17 +396,19 @@ struct GroupbyStddevSampAggregator : GroupbyAggregator {
             *variance, cudf::unary_operator::SQRT, stream, get_temp_mr());
 
         // count >= 2
+        cudf::numeric_scalar<int64_t> two(2, true, stream, get_temp_mr());
         auto validMask = cudf::binary_operation(
             countView,
-            two_,
+            two,
             cudf::binary_operator::GREATER_EQUAL,
             cudf::data_type{cudf::type_id::BOOL8},
             stream,
             get_temp_mr());
 
         // Apply mask: where count < 2, result is NULL
+        cudf::numeric_scalar<double> nullDouble(0.0, false, stream, get_temp_mr());
         return cudf::copy_if_else(
-            *stddev, nullDouble_, *validMask, stream, get_output_mr());
+            *stddev, nullDouble, *validMask, stream, get_output_mr());
       }
       default:
         VELOX_NYI("Unsupported aggregation step for stddev_samp");
@@ -456,10 +456,6 @@ struct GroupbyStddevSampAggregator : GroupbyAggregator {
   }
 
   uint32_t outputIdx_;
-  // Scalars used in kFinal step, initialized once in constructor.
-  cudf::numeric_scalar<double> one_;
-  cudf::numeric_scalar<int64_t> two_;
-  cudf::numeric_scalar<double> nullDouble_;
 };
 
 std::unique_ptr<GroupbyAggregator> createGroupbyAggregator(
