@@ -30,8 +30,10 @@
 #include "velox/external/tzdb/exception.h"
 #include "velox/type/CastRegistry.h"
 #include "velox/type/DecimalUtil.h"
+#include "velox/type/FastDate.h"
 #include "velox/type/Time.h"
 #include "velox/type/TimestampConversion.h"
+#include "velox/type/TwoDigitChars.h"
 
 namespace std {
 template <>
@@ -1312,13 +1314,52 @@ std::string IntervalYearMonthType::valueToString(int32_t value) const {
   return oss.str();
 }
 
+namespace {
+
+// Writes a positive 4-digit ISO date `YYYY-MM-DD` (exactly 10 bytes)
+// into `out`. Caller guarantees year is in [0, 9999], month in [1, 12],
+// day in [1, 31], and that `out` has at least 10 bytes available.
+inline void
+writeIsoDate4DigitYear(char* out, uint32_t year, uint32_t month, uint32_t day) {
+  const uint32_t yearHigh = year / 100u;
+  const uint32_t yearLow = year - yearHigh * 100u;
+  writeTwoDigit(out + 0, yearHigh);
+  writeTwoDigit(out + 2, yearLow);
+  out[4] = '-';
+  writeTwoDigit(out + 5, month);
+  out[7] = '-';
+  writeTwoDigit(out + 8, day);
+}
+
+} // namespace
+
 std::string DateType::toString(int32_t days) const {
   return DateType::toIso8601(days);
 }
 
 std::string DateType::toIso8601(int32_t days) {
-  // Find the number of seconds for the days_;
-  // Casting 86400 to int64 to handle overflows gracefully.
+  // Fast path: positive 4-digit year, no sign. Covers all dates in the
+  // proleptic Gregorian range [0001-01-01, 9999-12-31] and their
+  // immediate neighborhood — the dominant production case. Skips the
+  // std::tm round trip and the std::to_chars/memset machinery in
+  // tmToStringView, going directly from days → y/m/d via the
+  // Neri-Schneider primitive and emitting digits with two-byte memcpy
+  // table lookups.
+  if (FOLLY_LIKELY(
+          days >= fast_date::kRataDieMin && days <= fast_date::kRataDieMax)) {
+    const auto ymd = daysToYmd(days);
+    if (FOLLY_LIKELY(ymd.year >= 0 && ymd.year <= 9999)) {
+      std::string result(10, '\0');
+      writeIsoDate4DigitYear(
+          result.data(), static_cast<uint32_t>(ymd.year), ymd.month, ymd.day);
+      return result;
+    }
+  }
+
+  // General path: negative years, years above 9999, or rare dates
+  // outside the Neri-Schneider domain. Goes through tmToStringView so
+  // the leading sign and variable-width year are formatted exactly as
+  // before.
   int64_t daySeconds = days * (int64_t)(86400);
   std::tm tmValue;
   VELOX_CHECK(
