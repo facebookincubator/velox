@@ -428,6 +428,7 @@ target_link_libraries(
   velox_dwio_dwrf_reader_test
   velox_dwrf_test_utils
   velox_vector_test_lib
+  velox_hive_connector
   velox_link_libs
   Folly::folly
   fmt::fmt
