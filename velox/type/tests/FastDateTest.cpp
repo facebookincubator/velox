@@ -323,17 +323,31 @@ TEST(FastDateTest, fastEqualsWideRangeAtBoundaries) {
     }
   }
 
-  // Inverse direction: ±10 years around kYearMin and kYearMax.
-  const int32_t inverseBoundaries[] = {
-      fast_date::kYearMin, fast_date::kYearMax};
-  for (int32_t boundary : inverseBoundaries) {
+  // Inverse direction: ±10 years around kYearMin and kYearMax. The date
+  // is chosen per boundary to lie *one day outside* the algorithm's
+  // exact range [Mar 1 kYearMin, Feb 28 kYearMax] at the boundary year:
+  //   kYearMin → Feb 28 — one day before Mar 1 kYearMin
+  //   kYearMax → Mar  1 — one day after  Feb 28 kYearMax
+  // This way, a future relaxation of the dispatch from strict (`<`) to
+  // inclusive (`<=`) would route a UB input to the fast path at either
+  // boundary, and the fast/wide mismatch (or crash) would fail this
+  // test. A single in-range date for both boundaries would only catch
+  // the regression at one end.
+  const struct {
+    int32_t boundary;
+    uint32_t month;
+    uint32_t day;
+  } inverseBoundaries[] = {
+      {fast_date::kYearMin, 2u, 28u},
+      {fast_date::kYearMax, 3u, 1u},
+  };
+  for (const auto& bound : inverseBoundaries) {
     for (int32_t delta = -10; delta <= 10; ++delta) {
-      const int32_t year = boundary + delta;
-      // Use March 1 — same date as the forward boundaries above for
-      // visual cross-reference, and not affected by month-end edge cases.
-      const auto fastResult = util::daysSinceEpochFromDate(year, 3, 1);
-      const auto wideResult =
-          WideRangeDateConversion::daysSinceEpochFromDate(year, 3, 1);
+      const int32_t year = bound.boundary + delta;
+      const auto fastResult =
+          util::daysSinceEpochFromDate(year, bound.month, bound.day);
+      const auto wideResult = WideRangeDateConversion::daysSinceEpochFromDate(
+          year, bound.month, bound.day);
       ASSERT_EQ(fastResult.hasError(), wideResult.hasError()) << "y=" << year;
       if (!fastResult.hasError()) {
         EXPECT_EQ(fastResult.value(), wideResult.value()) << "y=" << year;
