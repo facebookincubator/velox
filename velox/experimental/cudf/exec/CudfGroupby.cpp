@@ -406,7 +406,8 @@ struct GroupbyStddevSampAggregator : GroupbyAggregator {
             get_temp_mr());
 
         // Apply mask: where count < 2, result is NULL
-        cudf::numeric_scalar<double> nullDouble(0.0, false, stream, get_temp_mr());
+        cudf::numeric_scalar<double> nullDouble(
+            0.0, false, stream, get_temp_mr());
         return cudf::copy_if_else(
             *stddev, nullDouble, *validMask, stream, get_output_mr());
       }
