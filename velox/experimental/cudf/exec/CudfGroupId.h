@@ -20,6 +20,8 @@
 
 #include "velox/exec/Operator.h"
 
+#include <cudf/types.hpp>
+
 namespace facebook::velox::cudf_velox {
 
 /// GPU implementation of the GroupId operator for GROUPING SETS, CUBE, and
@@ -60,6 +62,10 @@ class CudfGroupId : public CudfOperatorBase {
 
   /// A list of input column indices corresponding to aggregation inputs.
   std::vector<column_index_t> aggregationInputs_;
+
+  /// Precomputed cudf data types for each grouping key output column, used to
+  /// create all-null columns for keys not in a grouping set.
+  std::vector<cudf::data_type> groupingKeyCudfTypes_;
 
   /// Stored input columns for cycling through grouping sets.
   std::vector<std::unique_ptr<cudf::column>> inputColumns_;

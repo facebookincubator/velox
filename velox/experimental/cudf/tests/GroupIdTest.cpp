@@ -425,4 +425,21 @@ TEST_F(CudfGroupIdTest, sameInputMultipleOutputsInGroupingSet) {
       "SELECT k1, k1_copy, sum(a) FROM ("
       "  SELECT k1, k1 as k1_copy, a FROM tmp"
       ") GROUP BY GROUPING SETS ((k1, k1_copy), (k1), (k1_copy))");
+
+  // Verify the case where the duplicate-input grouping set is the LAST one.
+  // This exercises the move path in doGetOutput: the same input column must be
+  // copied (not moved) for the first output position and moved for the second.
+  plan =
+      PlanBuilder()
+          .values({input})
+          .groupId({"k1", "k1 as k1_copy"}, {{"k1"}, {"k1", "k1_copy"}}, {"a"})
+          .singleAggregation({"k1", "k1_copy", "group_id"}, {"sum(a) as sum_a"})
+          .project({"k1", "k1_copy", "sum_a"})
+          .planNode();
+
+  assertQuery(
+      plan,
+      "SELECT k1, k1_copy, sum(a) FROM ("
+      "  SELECT k1, k1 as k1_copy, a FROM tmp"
+      ") GROUP BY GROUPING SETS ((k1), (k1, k1_copy))");
 }

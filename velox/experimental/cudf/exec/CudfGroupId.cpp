@@ -78,6 +78,14 @@ CudfGroupId::CudfGroupId(
   for (const auto& input : aggregationInputs) {
     aggregationInputs_.push_back(inputType->getChildIdx(input->name()));
   }
+
+  // Precompute cudf data types for grouping key columns (used to create
+  // all-null columns for keys not in a grouping set).
+  groupingKeyCudfTypes_.reserve(numGroupingKeys_);
+  for (size_t i = 0; i < numGroupingKeys_; ++i) {
+    groupingKeyCudfTypes_.push_back(
+        veloxToCudfDataType(outputType_->childAt(i)));
+  }
 }
 
 bool CudfGroupId::needsInput() const {
@@ -116,22 +124,34 @@ RowVectorPtr CudfGroupId::doGetOutput() {
   // inputColumns_ is reused across multiple getOutput() calls.
   const bool isLastGroupingSet = (groupingSetIndex_ == numGroupingSets_ - 1);
 
+  // When moving on the last grouping set, the same input column may map to
+  // multiple output positions (e.g., aliased keys). Count references so we
+  // move only on the final use and copy otherwise.
+  std::unordered_map<column_index_t, int> remainingUses;
+  if (isLastGroupingSet) {
+    for (size_t i = 0; i < numGroupingKeys_; ++i) {
+      if (mapping[i] != kMissingGroupingKey) {
+        ++remainingUses[mapping[i]];
+      }
+    }
+    for (auto inputIdx : aggregationInputs_) {
+      ++remainingUses[inputIdx];
+    }
+  }
+
   // Fill in grouping keys
   for (size_t i = 0; i < numGroupingKeys_; ++i) {
     if (mapping[i] == kMissingGroupingKey) {
       // Create an all-null column for keys not in this grouping set
-      auto cudfType = veloxToCudfDataType(outputType_->childAt(i));
-      auto nullScalar =
-          cudf::make_default_constructed_scalar(cudfType, stream, tempMr);
+      auto nullScalar = cudf::make_default_constructed_scalar(
+          groupingKeyCudfTypes_[i], stream, tempMr);
       outputColumns[i] =
           cudf::make_column_from_scalar(*nullScalar, numRows, stream, outputMr);
     } else {
       auto inputIdx = mapping[i];
-      if (isLastGroupingSet) {
-        // Last grouping set - safe to move the column
+      if (isLastGroupingSet && --remainingUses[inputIdx] == 0) {
         outputColumns[i] = std::move(inputColumns_[inputIdx]);
       } else {
-        // More grouping sets to come - copy the column
         outputColumns[i] = std::make_unique<cudf::column>(
             *inputColumns_[inputIdx], stream, outputMr);
       }
@@ -142,11 +162,9 @@ RowVectorPtr CudfGroupId::doGetOutput() {
   for (size_t i = 0; i < aggregationInputs_.size(); ++i) {
     auto inputIdx = aggregationInputs_[i];
     auto outputIdx = numGroupingKeys_ + i;
-    if (isLastGroupingSet) {
-      // Last grouping set - safe to move the column
+    if (isLastGroupingSet && --remainingUses[inputIdx] == 0) {
       outputColumns[outputIdx] = std::move(inputColumns_[inputIdx]);
     } else {
-      // More grouping sets to come - copy the column
       outputColumns[outputIdx] = std::make_unique<cudf::column>(
           *inputColumns_[inputIdx], stream, outputMr);
     }
