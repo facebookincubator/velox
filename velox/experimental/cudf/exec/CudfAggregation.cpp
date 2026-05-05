@@ -98,17 +98,29 @@ bool isCompanionAggregateName(std::string const& kind) {
       kind.find("_merge_extract") != std::string::npos;
 }
 
+bool isSupportedConstantAggregationName(std::string const& kind) {
+  const auto prefix = CudfConfig::getInstance().functionNamePrefix;
+  const auto originalName = getOriginalName(kind);
+  return originalName == prefix + "sum" || originalName == prefix + "avg" ||
+      originalName == prefix + "min" || originalName == prefix + "max" ||
+      originalName == prefix + "count";
+}
+
 bool isSupportedZeroColumnAggregation(
     const core::AggregationNode& aggregationNode) {
-  // Zero-column input: only global prefixed `count` aggregates (same as
-  // createAggregator). No GROUP BY keys.
+  // Zero-column input: global count(*) or aggregates over constants. No GROUP
+  // BY keys.
   return aggregationNode.groupingKeys().empty() &&
       !aggregationNode.aggregates().empty() &&
       std::all_of(
              aggregationNode.aggregates().begin(),
              aggregationNode.aggregates().end(),
              [](const auto& aggregate) {
-               return isCountFunctionName(aggregate.call->name());
+               return (isCountFunctionName(aggregate.call->name()) &&
+                       aggregate.call->inputs().empty()) ||
+                   (isSupportedConstantAggregationName(
+                        aggregate.call->name()) &&
+                    hasOnlyConstantArguments(*aggregate.call));
              });
 }
 } // namespace
@@ -180,7 +192,7 @@ AggregationInputChannels buildAggregationInputChannels(
         result.constants[i] = constant->toConstantVector(operatorCtx.pool());
         aggInputs.push_back(fallbackChannel);
       } else {
-        VELOX_NYI("Constants and lambdas not yet supported");
+        VELOX_NYI("Aggregation arguments must be columns or constants");
       }
     }
 
@@ -304,7 +316,8 @@ bool canAggregationBeEvaluatedByRegistry(
     return true;
   }
 
-  if (hasOnlyConstantArguments(call)) {
+  if (hasOnlyConstantArguments(call) &&
+      !isSupportedConstantAggregationName(call.name())) {
     return false;
   }
 

@@ -138,6 +138,16 @@ TEST_F(CudfAggregationSelectionTest, supportedAggregationFunctions) {
   ASSERT_TRUE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
 }
 
+TEST_F(CudfAggregationSelectionTest, supportedConstantAggregationFunctions) {
+  auto globalAggregationNode =
+      createAggregationNode({}, {"sum(1)", "avg(1)", "min(1)", "max(1)"});
+  ASSERT_TRUE(canBeEvaluatedByCudf(*globalAggregationNode, queryCtx_.get()));
+
+  auto groupedAggregationNode =
+      createAggregationNode({"c0"}, {"sum(1)", "avg(1)", "min(1)", "max(1)"});
+  ASSERT_TRUE(canBeEvaluatedByCudf(*groupedAggregationNode, queryCtx_.get()));
+}
+
 // Test unsupported aggregation functions
 TEST_F(CudfAggregationSelectionTest, unsupportedAggregationFunctions) {
   auto aggregationNode =
