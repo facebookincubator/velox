@@ -20,6 +20,8 @@
 
 #include <cudf/scalar/scalar.hpp>
 
+#include <optional>
+
 namespace facebook::velox::cudf_velox::prestosql {
 
 /// date_add(unit, value, date) -> DATE.
@@ -43,17 +45,19 @@ class DateAddFunction : public CudfFunction {
       rmm::device_async_resource_ref mr) const override;
 
  private:
-  /// Adds value*scale days (where scale comes from unit_) to dateCol.
+  /// Adds value*scale days (where scale comes from unit_) to dateCol. When
+  /// valueCol is empty, the literal value cached at construction time is used.
   ColumnOrView evalDayBased(
       cudf::column_view dateCol,
-      std::vector<ColumnOrView>& inputColumns,
+      std::optional<cudf::column_view> valueCol,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const;
 
-  /// Adds value*scale months (where scale comes from unit_) to dateCol.
+  /// Adds value*scale months (where scale comes from unit_) to dateCol. When
+  /// valueCol is empty, the literal value cached at construction time is used.
   ColumnOrView evalMonthBased(
       cudf::column_view dateCol,
-      std::vector<ColumnOrView>& inputColumns,
+      std::optional<cudf::column_view> valueCol,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const;
 
@@ -63,12 +67,6 @@ class DateAddFunction : public CudfFunction {
   bool valueIsLiteral_{};
   // True if the date (third) argument is a constant ConstantExpr.
   bool dateIsLiteral_{};
-  // Position of the value column in inputColumns; meaningful only when
-  // valueIsLiteral_ is false.
-  size_t valueIdx_{};
-  // Position of the date column in inputColumns; meaningful only when
-  // dateIsLiteral_ is false.
-  size_t dateIdx_{};
   // True if literalValue_ is non-null. When false, literalValue_ is unused
   // and the resulting cudf scalar carries a null validity bit.
   bool literalValueIsValid_{};

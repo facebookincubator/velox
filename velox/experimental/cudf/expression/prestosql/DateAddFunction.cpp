@@ -214,49 +214,54 @@ DateAddFunction::DateAddFunction(
   if (dateIsLiteral_) {
     literalDate_ = makeScalarFromConstantExpr(expr->inputs()[2]);
   }
-
-  // The value column, if present, is always at index 0 in inputColumns.
-  // The date column follows it; when the value is a literal, the date
-  // column slides into index 0.
-  valueIdx_ = 0;
-  dateIdx_ = valueIsLiteral_ ? 0 : 1;
 }
 
 ColumnOrView DateAddFunction::eval(
     std::vector<ColumnOrView>& inputColumns,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) const {
-  // Materialize the date column. For a literal date input, expand the scalar
-  // to a column the same size as the value column (kept alive in
-  // literalDateColumn for the duration of this call).
+  // Walk the non-literal inputs in argument order. Constants were captured at
+  // construction time and never appear in inputColumns, so the first slot
+  // holds value (if value is a column), and the next slot holds date (if
+  // date is a column).
+  size_t idx = 0;
+
+  std::optional<cudf::column_view> valueCol;
+  if (!valueIsLiteral_) {
+    valueCol = asView(inputColumns[idx++]);
+  }
+
   std::unique_ptr<cudf::column> literalDateColumn;
-  const cudf::column_view dateCol = [&]() -> cudf::column_view {
-    if (!dateIsLiteral_) {
-      return asView(inputColumns[dateIdx_]);
-    }
+  cudf::column_view dateCol;
+  if (!dateIsLiteral_) {
+    dateCol = asView(inputColumns[idx++]);
+  } else {
+    // Expand the literal date scalar to a column matching the value column's
+    // size. literalDateColumn is kept alive for the duration of this call so
+    // the view stays valid.
     VELOX_CHECK_NOT_NULL(literalDate_);
     VELOX_CHECK(
-        !inputColumns.empty(),
+        valueCol.has_value(),
         "date_add with only literal inputs is not supported");
     literalDateColumn = cudf::make_column_from_scalar(
-        *literalDate_, asView(inputColumns[0]).size(), stream, mr);
-    return literalDateColumn->view();
-  }();
+        *literalDate_, valueCol->size(), stream, mr);
+    dateCol = literalDateColumn->view();
+  }
 
   return isDayBasedUnit(unit_)
-      ? evalDayBased(dateCol, inputColumns, stream, mr)
-      : evalMonthBased(dateCol, inputColumns, stream, mr);
+      ? evalDayBased(dateCol, valueCol, stream, mr)
+      : evalMonthBased(dateCol, valueCol, stream, mr);
 }
 
 ColumnOrView DateAddFunction::evalDayBased(
     cudf::column_view dateCol,
-    std::vector<ColumnOrView>& inputColumns,
+    std::optional<cudf::column_view> valueCol,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) const {
   const auto outType = cudf::data_type(cudf::type_id::TIMESTAMP_DAYS);
   const auto scale = unitScale(unit_);
 
-  if (valueIsLiteral_) {
+  if (!valueCol.has_value()) {
     cudf::duration_scalar<cudf::duration_D> days(
         checkedScaleValue(literalValue_, scale),
         literalValueIsValid_,
@@ -266,8 +271,7 @@ ColumnOrView DateAddFunction::evalDayBased(
         dateCol, days, cudf::binary_operator::ADD, outType, stream, mr);
   }
 
-  auto daysInt =
-      scaleToInt32(asView(inputColumns[valueIdx_]), scale, stream, mr);
+  auto daysInt = scaleToInt32(*valueCol, scale, stream, mr);
   auto days = cudf::cast(
       daysInt->view(),
       cudf::data_type(cudf::type_id::DURATION_DAYS),
@@ -284,12 +288,12 @@ ColumnOrView DateAddFunction::evalDayBased(
 
 ColumnOrView DateAddFunction::evalMonthBased(
     cudf::column_view dateCol,
-    std::vector<ColumnOrView>& inputColumns,
+    std::optional<cudf::column_view> valueCol,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) const {
   const auto scale = unitScale(unit_);
 
-  if (valueIsLiteral_) {
+  if (!valueCol.has_value()) {
     cudf::numeric_scalar<int32_t> months(
         checkedScaleValue(literalValue_, scale),
         literalValueIsValid_,
@@ -299,8 +303,7 @@ ColumnOrView DateAddFunction::evalMonthBased(
         dateCol, months, stream, mr);
   }
 
-  auto months =
-      scaleToInt32(asView(inputColumns[valueIdx_]), scale, stream, mr);
+  auto months = scaleToInt32(*valueCol, scale, stream, mr);
   return cudf::datetime::add_calendrical_months(
       dateCol, months->view(), stream, mr);
 }
