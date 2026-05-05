@@ -114,6 +114,18 @@ class GroupingSet {
 
   const HashLookup& hashLookup() const;
 
+  /// Returns true if there are pending new-group rows from the most recent
+  /// tail auto-drain that have not yet been consumed.
+  bool hasDrainedNewGroups() const;
+
+  /// Returns the number of pending drained new-group rows.
+  vector_size_t drainedNewGroupsCount() const;
+
+  /// Extracts the pending drained new-group rows into 'result' by reading
+  /// directly from row-container pointers. Clears the pending state after
+  /// extraction.
+  void extractDrainedNewGroups(const RowVectorPtr& result);
+
   /// Spills all the rows in container.
   void spill();
 
@@ -376,6 +388,12 @@ class GroupingSet {
 
   // First row in remainingInput_ that needs to be processed.
   vector_size_t firstRemainingRow_;
+
+  // Populated by addRemainingInput(); reset at top of addInput()/noMoreInput().
+  // Pointers reference table_->rows() and remain valid only while no spill
+  // path runs. Pre-grouped distinct aggregation does not currently spill, so
+  // the row container is not cleared between capture and consumption.
+  std::vector<char*> drainedNewGroups_;
 
   // In case of distinct aggregation without aggregates and the grouping key
   // reordered, the spilled data is first loaded into

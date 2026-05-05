@@ -32,7 +32,8 @@ class ParquetReaderWideningTest : public ParquetTestBase {
       const RowTypePtr& readSchema,
       bool allowInt32Narrowing = false) {
     auto* sink = write(writeData);
-    dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+    dwio::common::ReaderOptions readerOptions{
+        leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
     readerOptions.setFileSchema(readSchema);
     readerOptions.setAllowInt32Narrowing(allowInt32Narrowing);
     auto reader = createReaderInMemory(*sink, readerOptions);
@@ -72,7 +73,8 @@ class ParquetReaderWideningTest : public ParquetTestBase {
       const RowVectorPtr& expected,
       bool allowInt32Narrowing = false) {
     auto* sink = write(writeData);
-    dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+    dwio::common::ReaderOptions readerOptions{
+        leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
     readerOptions.setFileSchema(readSchema);
     readerOptions.setAllowInt32Narrowing(allowInt32Narrowing);
     auto reader = createReaderInMemory(*sink, readerOptions);
@@ -94,7 +96,8 @@ class ParquetReaderWideningTest : public ParquetTestBase {
       const RowTypePtr& readSchema,
       const std::string& sourceTypeName) {
     auto* sink = write(writeData);
-    dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+    dwio::common::ReaderOptions readerOptions{
+        leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
     readerOptions.setFileSchema(readSchema);
     VELOX_ASSERT_THROW(
         createReaderInMemory(*sink, readerOptions),
@@ -227,7 +230,8 @@ void FloatToDoubleEvolutionTest::runFloatToDoubleScenario(
 
   RowTypePtr readSchema = ROW({"float_col", "id"}, {DOUBLE(), BIGINT()});
 
-  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  dwio::common::ReaderOptions readerOptions{
+      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
   readerOptions.setFileSchema(readSchema);
 
   std::string dataBuf(sinkPtr->data(), sinkPtr->size());
@@ -1060,7 +1064,8 @@ TEST_F(ParquetReaderWideningTest, allowInt32Narrowing) {
   auto* sink = write(data);
 
   // Default: flag is false.
-  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  dwio::common::ReaderOptions readerOptions{
+      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
   ASSERT_FALSE(readerOptions.allowInt32Narrowing());
 
   // INT32->TINYINT narrowing rejected by default.

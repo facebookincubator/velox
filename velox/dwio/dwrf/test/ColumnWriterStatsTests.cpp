@@ -18,6 +18,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/base/Nulls.h"
+#include "velox/common/io/IoStatistics.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"
@@ -194,7 +195,8 @@ class ColumnWriterStatsTest : public ::testing::Test {
         std::make_shared<facebook::velox::InMemoryReadFile>(std::move(data));
     auto input = std::make_unique<BufferedInput>(readFile, *leafPool_);
 
-    dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+    dwio::common::ReaderOptions readerOpts{
+        leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
     RowReaderOptions rowReaderOpts;
     auto reader = std::make_unique<DwrfReader>(readerOpts, std::move(input));
     return reader->createRowReader(rowReaderOpts);
@@ -228,6 +230,10 @@ class ColumnWriterStatsTest : public ::testing::Test {
 
   std::shared_ptr<MemoryPool> rootPool_;
   std::shared_ptr<MemoryPool> leafPool_;
+  std::shared_ptr<io::IoStatistics> dataIoStats_ =
+      std::make_shared<io::IoStatistics>();
+  std::shared_ptr<io::IoStatistics> metadataIoStats_ =
+      std::make_shared<io::IoStatistics>();
 };
 
 template <typename T>

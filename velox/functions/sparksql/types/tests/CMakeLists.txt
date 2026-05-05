@@ -18,5 +18,8 @@ target_link_libraries(
   velox_spark_types_test
   velox_spark_types
   velox_vector_test_lib
+  velox_functions_spark
+  velox_parse_parser
+  velox_common_fuzzer_util
   GTest::gtest_main
 )

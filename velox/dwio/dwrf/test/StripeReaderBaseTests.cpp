@@ -17,6 +17,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "velox/common/io/IoStatistics.h"
 #include "velox/dwio/common/encryption/TestProvider.h"
 #include "velox/dwio/dwrf/reader/StripeReaderBase.h"
 #include "velox/dwio/dwrf/utils/ProtoUtils.h"
@@ -73,7 +74,9 @@ class StripeLoadKeysTest : public Test {
         nullptr,
         footer_.get(),
         nullptr,
-        std::move(handler));
+        std::move(handler),
+        dataIoStats_.get(),
+        metadataIoStats_.get());
 
     stripeReader_ = std::make_unique<StripeReaderBase>(reader_);
   }
@@ -104,6 +107,10 @@ class StripeLoadKeysTest : public Test {
   std::unique_ptr<StripeReaderBase> stripeReader_;
   TestEncryption* enc_;
   std::shared_ptr<MemoryPool> pool_;
+  std::shared_ptr<io::IoStatistics> dataIoStats_ =
+      std::make_shared<io::IoStatistics>();
+  std::shared_ptr<io::IoStatistics> metadataIoStats_ =
+      std::make_shared<io::IoStatistics>();
   std::unique_ptr<const proto::StripeFooter> stripeFooter_;
   std::unique_ptr<const encryption::DecryptionHandler> handler_;
   std::unique_ptr<const StripeInformationWrapper> stripeInfo_;

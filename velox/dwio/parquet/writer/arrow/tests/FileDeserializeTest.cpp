@@ -19,6 +19,7 @@
 #include <gmock/gmock.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/io/IoStatistics.h"
 #include "velox/common/testutil/TempFilePath.h"
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 #include "velox/dwio/parquet/writer/arrow/Exception.h"
@@ -971,7 +972,10 @@ class TestParquetFileReader : public ::testing::Test {
         memory::memoryManager()->addRootPool("MetadataTest");
     std::shared_ptr<facebook::velox::memory::MemoryPool> leafPool =
         rootPool->addLeafChild("MetadataTest");
-    dwio::common::ReaderOptions readerOptions{leafPool.get()};
+    auto dataIoStats = std::make_shared<velox::io::IoStatistics>();
+    auto metadataIoStats = std::make_shared<velox::io::IoStatistics>();
+    dwio::common::ReaderOptions readerOptions{
+        leafPool.get(), dataIoStats.get(), metadataIoStats.get()};
     auto input = std::make_unique<dwio::common::BufferedInput>(
         std::make_shared<LocalReadFile>(filePath->getPath()),
         readerOptions.memoryPool());
@@ -1027,7 +1031,10 @@ TEST_F(TestParquetFileReader, IncompleteMetadata) {
       memory::memoryManager()->addRootPool("MetadataTest");
   std::shared_ptr<facebook::velox::memory::MemoryPool> leafPool =
       rootPool->addLeafChild("MetadataTest");
-  dwio::common::ReaderOptions readerOptions{leafPool.get()};
+  auto dataIoStats = std::make_shared<velox::io::IoStatistics>();
+  auto metadataIoStats = std::make_shared<velox::io::IoStatistics>();
+  dwio::common::ReaderOptions readerOptions{
+      leafPool.get(), dataIoStats.get(), metadataIoStats.get()};
   auto input = std::make_unique<dwio::common::BufferedInput>(
       std::make_shared<LocalReadFile>(filePath->getPath()),
       readerOptions.memoryPool());

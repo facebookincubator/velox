@@ -187,6 +187,27 @@ TEST_F(CudfExpressionSelectionTest, signatureAllowsColumnArgsStartswith) {
   ASSERT_TRUE(canBeEvaluatedByCudf(okColumn, /*deep=*/true));
 }
 
+TEST_F(CudfExpressionSelectionTest, signatureAllowsColumnArgsEndswith) {
+  // OK: pattern is a constant
+  auto ok = compileExecExpr("endswith(name, 'ab')", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(ok, /*deep=*/true));
+
+  // OK: the input can also be a constant.
+  auto okConstantInput =
+      compileExecExpr("endswith('ab', name)", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okConstantInput, /*deep=*/true));
+
+  // OK: null pattern is still a constant and should remain on the cuDF path.
+  auto okNull = compileExecExpr(
+      "endswith(name, cast(null as varchar))", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okNull, /*deep=*/true));
+
+  // OK: pattern can also come from a column.
+  auto okColumn =
+      compileExecExpr("endswith(name, name)", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okColumn, /*deep=*/true));
+}
+
 TEST_F(CudfExpressionSelectionTest, signatureArityAndConstantsSubstr) {
   // OK: 2-arg substr with constant start
   auto ok2 = compileExecExpr("substr(name, 1)", rowType_, execCtx_.get());

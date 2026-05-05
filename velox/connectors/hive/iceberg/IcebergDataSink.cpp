@@ -377,7 +377,7 @@ std::string IcebergDataSink::getPartitionName(uint32_t partitionId) const {
       partitionKeyAsLowerCase_);
 }
 
-uint32_t IcebergDataSink::ensureWriter(const HiveWriterId& id) {
+uint32_t IcebergDataSink::ensureWriter(const WriterId& id) {
   auto writerId = HiveDataSink::ensureWriter(id);
   if (isPartitioned() && commitPartitionValue_[writerId].isNull()) {
     commitPartitionValue_[writerId] = makeCommitPartitionValue(writerId);
