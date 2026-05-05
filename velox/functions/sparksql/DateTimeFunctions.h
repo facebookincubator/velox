@@ -619,10 +619,7 @@ struct TruncFunction {
     if (!unitOption.has_value() || unitOption.value() < DateTimeUnit::kWeek) {
       return false;
     }
-    auto dateTime = getDateTime(date);
-    adjustDateTime(dateTime, unitOption.value());
-
-    result = Timestamp::calendarUtcToEpoch(dateTime) / kSecondsInDay;
+    result = truncateDate(date, unitOption.value());
     return true;
   }
 

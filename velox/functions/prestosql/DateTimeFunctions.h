@@ -1190,16 +1190,7 @@ struct DateTruncFunction : public TimestampWithTimezoneSupport<T> {
     DateTimeUnit unit = unit_.has_value()
         ? unit_.value()
         : getDateUnit(unitString, true).value();
-
-    if (unit == DateTimeUnit::kDay) {
-      result = date;
-      return;
-    }
-
-    auto dateTime = getDateTime(date);
-    adjustDateTime(dateTime, unit);
-
-    result = Timestamp::calendarUtcToEpoch(dateTime) / kSecondsInDay;
+    result = truncateDate(date, unit);
   }
 
   FOLLY_ALWAYS_INLINE void call(
