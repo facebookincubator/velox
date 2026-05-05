@@ -2255,7 +2255,8 @@ TEST_F(AggregationTest, sortedDistinct) {
              .values(vectors)
              .singleAggregation(
                  {"c0"},
-                 {"array_agg(DISTINCT c1 ORDER BY c1)", "array_agg(c2 ORDER BY c2)"})
+                 {"array_agg(DISTINCT c1 ORDER BY c1)",
+                  "array_agg(c2 ORDER BY c2)"})
              .capturePlanNodeId(aggrNodeId)
              .planNode();
   testPlan(

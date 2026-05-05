@@ -117,9 +117,6 @@ std::unique_ptr<SortedAggregations> SortedAggregations::create(
   std::vector<const AggregateInfo*> sortedAggs;
   for (auto& aggregate : aggregates) {
     if (!aggregate.sortingKeys.empty()) {
-      // VELOX_USER_CHECK(
-      //     !aggregate.distinct,
-      //     "Aggregations over sorted unique values are not supported yet");
       sortedAggs.push_back(&aggregate);
     }
   }
