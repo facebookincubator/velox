@@ -23,6 +23,7 @@
 #include <cudf/aggregation.hpp>
 #include <cudf/binaryop.hpp>
 #include <cudf/reduction.hpp>
+#include <cudf/unary.hpp>
 
 namespace facebook::velox::cudf_velox {
 
