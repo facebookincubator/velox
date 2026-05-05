@@ -312,7 +312,10 @@ EqualityDeleteFileReader::resolveOutputColumnIndices(
     outputColumnIndices_.reserve(equalityColumnNames_.size());
     for (const auto& colName : equalityColumnNames_) {
       auto colIdx = rowType.getChildIdxIfExists(colName);
-      VELOX_CHECK(colIdx.has_value(), "Column not found in row: {}", colName);
+      VELOX_CHECK(
+          colIdx.has_value(),
+          "Equality delete column not found in the output columns: {}",
+          colName);
       outputColumnIndices_.push_back(static_cast<column_index_t>(*colIdx));
     }
   }

@@ -31,6 +31,7 @@ if(VELOX_ENABLE_BENCHMARKS)
     velox_exec_test_lib
     velox_exec
     velox_hive_connector
+    velox_hive_iceberg_splitreader
     Folly::folly
     Folly::follybenchmark
     ${TEST_LINK_LIBS}
@@ -153,6 +154,8 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     velox_dwio_common_test_utils
     velox_dwio_dwrf_reader
     velox_dwio_dwrf_writer
+    velox_dwio_parquet_reader
+    velox_dwio_parquet_writer
     GTest::gtest
     GTest::gtest_main
   )

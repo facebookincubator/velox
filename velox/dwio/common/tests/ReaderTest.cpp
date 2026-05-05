@@ -18,6 +18,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 namespace facebook::velox::dwio::common {
@@ -465,6 +466,78 @@ TEST_F(ReaderTest, projectColumnsFiltersRowNullsWithMutation) {
   EXPECT_FALSE(actual->isNullAt(5)); // was row 7
   EXPECT_TRUE(actual->isNullAt(6)); // was row 8
   EXPECT_FALSE(actual->isNullAt(7)); // was row 9
+}
+
+TEST_F(ReaderTest, projectColumnsWithSelectionIdentity) {
+  // No filter: every input row passes, selectedRows is null to signal
+  // identity mapping with input.
+  constexpr int kSize = 5;
+  auto input =
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>(kSize, folly::identity)});
+
+  common::ScanSpec spec("<root>");
+  spec.addAllChildFields(*input->type());
+
+  auto result = RowReader::projectColumnsWithSelection(input, spec, nullptr);
+  EXPECT_EQ(result.output->size(), kSize);
+  EXPECT_EQ(result.selectedRows, nullptr);
+}
+
+TEST_F(ReaderTest, projectColumnsWithSelectionFiltered) {
+  // Filter keeps a subset; selectedRows must list the surviving input
+  // indices in order.
+  constexpr int kSize = 6;
+  auto input =
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>(kSize, folly::identity)});
+
+  common::ScanSpec spec("<root>");
+  spec.addAllChildFields(*input->type());
+  spec.childByName("c0")->setFilter(
+      common::createBigintValues({1, 3, 5}, false));
+
+  auto result = RowReader::projectColumnsWithSelection(input, spec, nullptr);
+  ASSERT_NE(result.selectedRows, nullptr);
+  ASSERT_EQ(result.output->size(), 3);
+  ASSERT_EQ(
+      result.selectedRows->size() / sizeof(vector_size_t),
+      result.output->size());
+  const auto* indices = result.selectedRows->as<vector_size_t>();
+  EXPECT_THAT(
+      std::vector<vector_size_t>(indices, indices + 3),
+      testing::ElementsAre(1, 3, 5));
+}
+
+TEST_F(ReaderTest, projectColumnsWithSelectionAllFiltered) {
+  // Filter rejects every row; output is empty and selectedRows is a
+  // zero-length buffer (non-null) so callers can distinguish "empty after
+  // filtering" from "identity mapping".
+  constexpr int kSize = 4;
+  auto input =
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>(kSize, folly::identity)});
+
+  common::ScanSpec spec("<root>");
+  spec.addAllChildFields(*input->type());
+  spec.childByName("c0")->setFilter(common::createBigintValues({99}, false));
+
+  auto result = RowReader::projectColumnsWithSelection(input, spec, nullptr);
+  EXPECT_EQ(result.output->size(), 0);
+  ASSERT_NE(result.selectedRows, nullptr);
+  EXPECT_EQ(result.selectedRows->size(), 0);
+}
+
+TEST_F(ReaderTest, projectColumnsWithSelectionEmptyInput) {
+  // Empty input: no rows were dropped, so the identity contract holds and
+  // selectedRows must be null. Distinguishes "empty identity" from "all
+  // rows filtered out", which returns a non-null zero-length buffer.
+  auto input =
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>(0, folly::identity)});
+
+  common::ScanSpec spec("<root>");
+  spec.addAllChildFields(*input->type());
+
+  auto result = RowReader::projectColumnsWithSelection(input, spec, nullptr);
+  EXPECT_EQ(result.output->size(), 0);
+  EXPECT_EQ(result.selectedRows, nullptr);
 }
 
 } // namespace
