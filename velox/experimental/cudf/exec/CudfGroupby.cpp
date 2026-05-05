@@ -372,18 +372,11 @@ struct GroupbyStddevSampAggregator : GroupbyAggregator {
         auto countView = mergedView.child(0);
         auto m2View = mergedView.child(2);
 
-        // Cast count to double for arithmetic and comparison
-        auto countDouble = cudf::cast(
-            countView,
-            cudf::data_type{cudf::type_id::FLOAT64},
-            stream,
-            get_temp_mr());
-
-        // count - 1
+        // count - 1 (binary_operation handles type promotion)
         auto one =
             cudf::numeric_scalar<double>(1.0, true, stream, get_temp_mr());
         auto countMinus1 = cudf::binary_operation(
-            *countDouble,
+            countView,
             one,
             cudf::binary_operator::SUB,
             cudf::data_type{cudf::type_id::FLOAT64},
@@ -403,11 +396,11 @@ struct GroupbyStddevSampAggregator : GroupbyAggregator {
         auto stddev = cudf::unary_operation(
             *variance, cudf::unary_operator::SQRT, stream, get_temp_mr());
 
-        // count >= 2.0 (reuse countDouble, compare in double space)
+        // count >= 2
         auto two =
-            cudf::numeric_scalar<double>(2.0, true, stream, get_temp_mr());
+            cudf::numeric_scalar<int64_t>(2, true, stream, get_temp_mr());
         auto validMask = cudf::binary_operation(
-            *countDouble,
+            countView,
             two,
             cudf::binary_operator::GREATER_EQUAL,
             cudf::data_type{cudf::type_id::BOOL8},
