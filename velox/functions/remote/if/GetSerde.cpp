@@ -27,6 +27,14 @@ std::unique_ptr<VectorSerde> getSerde(const remote::PageFormat& format) {
 
     case remote::PageFormat::SPARK_UNSAFE_ROW:
       return std::make_unique<serializer::spark::UnsafeRowVectorSerde>();
+
+    case remote::PageFormat::ARROW_IPC:
+      VELOX_USER_CHECK(
+          isRegisteredVectorSerdeFactory("ArrowIpc"),
+          "Arrow IPC VectorSerde not registered. "
+          "Link velox_arrow_serializer and call "
+          "ArrowVectorSerde::registerVectorSerdeFactory().");
+      return createVectorSerde("ArrowIpc");
   }
   VELOX_UNREACHABLE();
 }
@@ -42,6 +50,7 @@ std::unique_ptr<VectorSerde::Options> getSerdeOptions(
       return options;
     }
     case remote::PageFormat::SPARK_UNSAFE_ROW:
+    case remote::PageFormat::ARROW_IPC:
       return std::make_unique<VectorSerde::Options>();
   }
   VELOX_UNREACHABLE();

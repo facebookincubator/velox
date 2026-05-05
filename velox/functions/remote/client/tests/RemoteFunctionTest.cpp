@@ -35,7 +35,9 @@
 #include "velox/functions/remote/if/gen-cpp2/RemoteFunctionService.h"
 #include "velox/functions/remote/server/RemoteFunctionService.h"
 #include "velox/functions/remote/utils/RemoteFunctionServiceProvider.h"
+#include "velox/serializers/ArrowSerializer.h"
 #include "velox/serializers/PrestoSerializer.h"
+#include "velox/type/StringView.h"
 #include "velox/vector/VectorStream.h"
 
 using ::apache::thrift::ThriftServer;
@@ -71,15 +73,14 @@ struct OpaqueTypeFunction {
   }
 };
 
-// Parametrize in the serialization format so we can test both presto page and
-// unsafe row.
-class RemoteFunctionTest
-    : public functions::test::FunctionBaseTest,
-      public ::testing::WithParamInterface<remote::PageFormat> {
- public:
-  void SetUp() override {
+class RemoteFunctionTestBase : public functions::test::FunctionBaseTest {
+ protected:
+  void SetUpWithPageFormat(remote::PageFormat pageFormat) {
+    if (!isRegisteredVectorSerdeFactory("ArrowIpc")) {
+      serializer::arrow::ArrowVectorSerde::registerVectorSerdeFactory();
+    }
     auto params = startLocalThriftServiceAndGetParams();
-    registerRemoteFunctions(params);
+    registerRemoteFunctions(params, pageFormat);
   }
 
   void TearDown() override {
@@ -87,9 +88,11 @@ class RemoteFunctionTest
   }
 
   // Registers a few remote functions to be used in this test.
-  void registerRemoteFunctions(RemoteFunctionServiceParams params) {
+  void registerRemoteFunctions(
+      const RemoteFunctionServiceParams& params,
+      remote::PageFormat pageFormat) {
     RemoteThriftVectorFunctionMetadata metadata;
-    metadata.serdeFormat = GetParam();
+    metadata.serdeFormat = pageFormat;
     metadata.location = params.serverAddress;
 
     // Register the remote adapter.
@@ -147,6 +150,31 @@ class RemoteFunctionTest
     registerOpaqueType<Foo>("Foo");
     OpaqueType::registerSerialization<Foo>(
         "Foo", Foo::serialize, Foo::deserialize);
+  }
+};
+
+// Parametrize in the serialization format so we can test presto page, unsafe
+// row, and Arrow IPC.
+class RemoteFunctionTest
+    : public RemoteFunctionTestBase,
+      public ::testing::WithParamInterface<remote::PageFormat> {
+ public:
+  void SetUp() override {
+    SetUpWithPageFormat(GetParam());
+  }
+};
+
+class ArrowIpcRemoteFunctionTest : public RemoteFunctionTestBase {
+ public:
+  void SetUp() override {
+    SetUpWithPageFormat(remote::PageFormat::ARROW_IPC);
+  }
+};
+
+class PrestoRemoteFunctionTest : public RemoteFunctionTestBase {
+ public:
+  void SetUp() override {
+    SetUpWithPageFormat(remote::PageFormat::PRESTO_PAGE);
   }
 };
 
@@ -228,13 +256,7 @@ TEST_P(RemoteFunctionTest, tryErrorCode) {
   ASSERT_EQ(results[0]->size(), 2);
 }
 
-TEST_P(RemoteFunctionTest, opaque) {
-  // TODO: Support opaque type serialization in SPARK_UNSAFE_ROW
-  if (GetParam() == remote::PageFormat::SPARK_UNSAFE_ROW) {
-    LOG(WARNING)
-        << "opaque type serialization not supported in SPARK_UNSAFE_ROW";
-    return;
-  }
+TEST_F(PrestoRemoteFunctionTest, opaque) {
   auto inputVector = makeFlatVector<std::shared_ptr<void>>(
       2,
       [](vector_size_t row) { return std::make_shared<Foo>(row + 10); },
@@ -265,6 +287,110 @@ TEST_P(RemoteFunctionTest, connectionError) {
   } catch (const VeloxRuntimeError& e) {
     EXPECT_THAT(e.message(), testing::HasSubstr("Channel is !good()"));
   }
+}
+
+// Arrow IPC-specific tests that exercise type coverage and edge cases beyond
+// the parameterized suite.
+TEST_F(ArrowIpcRemoteFunctionTest, nullsInBigint) {
+  auto inputVector =
+      makeNullableFlatVector<int64_t>({1, std::nullopt, 3, std::nullopt, 5});
+  auto results = evaluate<SimpleVector<int64_t>>(
+      "remote_plus(c0, c0)", makeRowVector({inputVector}));
+
+  auto expected =
+      makeNullableFlatVector<int64_t>({2, std::nullopt, 6, std::nullopt, 10});
+  assertEqualVectors(expected, results);
+}
+
+TEST_F(ArrowIpcRemoteFunctionTest, nullsInDouble) {
+  auto numerator =
+      makeNullableFlatVector<double>({1.0, std::nullopt, 9.0, 16.0});
+  auto denominator = makeNullableFlatVector<double>({1.0, 2.0, 3.0, 4.0});
+  auto results = evaluate<SimpleVector<double>>(
+      "remote_divide(c0, c1)", makeRowVector({numerator, denominator}));
+
+  auto expected = makeNullableFlatVector<double>({1.0, std::nullopt, 3.0, 4.0});
+  assertEqualVectors(expected, results);
+}
+
+TEST_F(ArrowIpcRemoteFunctionTest, nullsInString) {
+  auto inputStr = makeNullableFlatVector<StringView>(
+      {"hello"_sv, std::nullopt, "world"_sv, std::nullopt});
+  auto inputPos = makeNullableFlatVector<int32_t>({2, 1, 3, 1});
+  auto results = evaluate<SimpleVector<StringView>>(
+      "remote_substr(c0, c1)", makeRowVector({inputStr, inputPos}));
+
+  auto expected = makeNullableFlatVector<StringView>(
+      {"ello"_sv, std::nullopt, "rld"_sv, std::nullopt});
+  assertEqualVectors(expected, results);
+}
+
+TEST_F(ArrowIpcRemoteFunctionTest, largeBatch) {
+  constexpr int kSize = 10'000;
+  std::vector<int64_t> values(kSize);
+  std::iota(values.begin(), values.end(), 0);
+
+  auto inputVector = makeFlatVector<int64_t>(values);
+  auto results = evaluate<SimpleVector<int64_t>>(
+      "remote_plus(c0, c0)", makeRowVector({inputVector}));
+
+  std::vector<int64_t> expectedValues(kSize);
+  for (int i = 0; i < kSize; i++) {
+    expectedValues[i] = values[i] * 2;
+  }
+  auto expected = makeFlatVector<int64_t>(expectedValues);
+  assertEqualVectors(expected, results);
+}
+
+TEST_F(ArrowIpcRemoteFunctionTest, allNulls) {
+  auto inputVector = makeNullableFlatVector<int64_t>(
+      {std::nullopt, std::nullopt, std::nullopt});
+  auto results = evaluate<SimpleVector<int64_t>>(
+      "remote_plus(c0, c0)", makeRowVector({inputVector}));
+
+  auto expected = makeNullableFlatVector<int64_t>(
+      {std::nullopt, std::nullopt, std::nullopt});
+  assertEqualVectors(expected, results);
+}
+
+TEST_F(ArrowIpcRemoteFunctionTest, mixedNullsAcrossColumns) {
+  // Column a has nulls at positions 1,3; column b has nulls at positions 0,2.
+  auto colA =
+      makeNullableFlatVector<int64_t>({1, std::nullopt, 3, std::nullopt});
+  auto colB =
+      makeNullableFlatVector<int64_t>({std::nullopt, 20, std::nullopt, 40});
+  auto results = evaluate<SimpleVector<int64_t>>(
+      "remote_plus(c0, c1)", makeRowVector({colA, colB}));
+
+  // plus propagates nulls: null if either input is null.
+  auto expected = makeNullableFlatVector<int64_t>(
+      {std::nullopt, std::nullopt, std::nullopt, std::nullopt});
+  assertEqualVectors(expected, results);
+}
+
+TEST_F(ArrowIpcRemoteFunctionTest, longStrings) {
+  // Strings longer than 12 bytes (non-inline in Velox StringView).
+  const std::string longStr(256, 'x');
+  const std::string longerStr(4'096, 'y');
+  auto inputStr = makeFlatVector<StringView>(
+      {StringView(longStr), StringView(longerStr), "short"_sv});
+  auto inputPos = makeFlatVector<int32_t>({1, 1, 1});
+  auto results = evaluate<SimpleVector<StringView>>(
+      "remote_substr(c0, c1)", makeRowVector({inputStr, inputPos}));
+
+  // substr(s, 1) returns the full string.
+  auto expected = makeFlatVector<StringView>(
+      {StringView(longStr), StringView(longerStr), "short"_sv});
+  assertEqualVectors(expected, results);
+}
+
+TEST_F(ArrowIpcRemoteFunctionTest, singleRow) {
+  auto inputVector = makeFlatVector<int64_t>({42});
+  auto results = evaluate<SimpleVector<int64_t>>(
+      "remote_plus(c0, c0)", makeRowVector({inputVector}));
+
+  auto expected = makeFlatVector<int64_t>({84});
+  assertEqualVectors(expected, results);
 }
 
 /// Mock implementation of IRemoteFunctionClient for testing without a real
@@ -498,7 +624,8 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     RemoteFunctionTest,
     ::testing::Values(
         remote::PageFormat::PRESTO_PAGE,
-        remote::PageFormat::SPARK_UNSAFE_ROW));
+        remote::PageFormat::SPARK_UNSAFE_ROW,
+        remote::PageFormat::ARROW_IPC));
 
 } // namespace
 } // namespace facebook::velox::functions
