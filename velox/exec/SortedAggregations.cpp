@@ -117,9 +117,9 @@ std::unique_ptr<SortedAggregations> SortedAggregations::create(
   std::vector<const AggregateInfo*> sortedAggs;
   for (auto& aggregate : aggregates) {
     if (!aggregate.sortingKeys.empty()) {
-      VELOX_USER_CHECK(
-          !aggregate.distinct,
-          "Aggregations over sorted unique values are not supported yet");
+      // VELOX_USER_CHECK(
+      //     !aggregate.distinct,
+      //     "Aggregations over sorted unique values are not supported yet");
       sortedAggs.push_back(&aggregate);
     }
   }
@@ -330,10 +330,32 @@ vector_size_t SortedAggregations::extractSingleGroup(
     }
   }
 
+  if (aggregate.distinct) {
+    if (!aggregate.mask) {
+      rowNumbers.resize(numGroupRows);
+      std::iota(rowNumbers.begin(), rowNumbers.end(), 0);
+    }
+    std::vector<vector_size_t> deduped;
+    deduped.reserve(rowNumbers.size());
+    const char* preRow = nullptr;
+    for (auto idx : rowNumbers) {
+      const char* row = groupRows[idx];
+      if (preRow == nullptr || !inputRowEquals(preRow, row, aggregate)) {
+        deduped.push_back(idx);
+        preRow = row;
+      }
+    }
+    rowNumbers = std::move(deduped);
+    if (rowNumbers.empty()) {
+      return 0;
+    }
+  }
+
   const auto numInputs = aggregate.inputs.size();
   VELOX_CHECK_EQ(numInputs, inputVectors.size());
 
-  const auto numRows = aggregate.mask ? rowNumbers.size() : numGroupRows;
+  const auto numRows =
+      (aggregate.mask || aggregate.distinct) ? rowNumbers.size() : numGroupRows;
 
   for (auto i = 0; i < numInputs; ++i) {
     if (aggregate.inputs[i] == kConstantChannel) {
@@ -347,7 +369,7 @@ vector_size_t SortedAggregations::extractSingleGroup(
         BaseVector::prepareForReuse(inputVectors[i], numRows);
       }
 
-      if (aggregate.mask) {
+      if (aggregate.mask || aggregate.distinct) {
         inputData_->extractColumn(
             groupRows.data(),
             folly::Range(rowNumbers.data(), rowNumbers.size()),
@@ -436,5 +458,21 @@ void SortedAggregations::extractValues(
               iota(groups.size(), indices), groups.size()));
     }
   }
+}
+
+bool SortedAggregations::inputRowEquals(
+    const char* lhs,
+    const char* rhs,
+    const AggregateInfo& aggregate) const {
+  for (const auto inputCol : aggregate.inputs) {
+    if (inputCol == kConstantChannel) {
+      continue;
+    }
+    const auto colIdx = inputMapping_[inputCol];
+    if (inputData_->compare(lhs, rhs, colIdx, CompareFlags{}) != 0) {
+      return false;
+    }
+  }
+  return true;
 }
 } // namespace facebook::velox::exec

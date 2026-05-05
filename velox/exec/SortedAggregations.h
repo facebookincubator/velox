@@ -113,6 +113,8 @@ class SortedAggregations {
 
   void extractForSpill(folly::Range<char**> groups, VectorPtr& result) const;
 
+  bool inputRowEquals(const char* lhs, const char* rhs, const AggregateInfo& aggregate) const;
+
   struct Hash {
     static uint64_t hashSortOrder(const core::SortOrder& sortOrder) {
       return bits::hashMix(

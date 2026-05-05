@@ -2212,6 +2212,77 @@ TEST_F(AggregationTest, spillingForAggrsWithSorting) {
       plan, "SELECT c0 % 7, array_agg(c1 ORDER BY c1) FROM tmp GROUP BY 1");
 }
 
+TEST_F(AggregationTest, sortedDistinct) {
+  auto vectors = makeVectors(rowType_, 100, 10);
+  createDuckDbTable(vectors);
+
+  core::PlanNodeId aggrNodeId;
+
+  auto testPlan = [&](const core::PlanNodePtr& plan, const std::string& sql) {
+    SCOPED_TRACE(sql);
+    AssertQueryBuilder(duckDbQueryRunner_).plan(plan).assertResults(sql);
+  };
+
+  // Global aggregation, ascending order.
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .singleAggregation({}, {"array_agg(DISTINCT c1 ORDER BY c1)"})
+                  .capturePlanNodeId(aggrNodeId)
+                  .planNode();
+  testPlan(plan, "SELECT array_agg(DISTINCT c1 ORDER BY c1) FROM tmp");
+
+  // Global aggregation, descending order.
+  plan = PlanBuilder()
+             .values(vectors)
+             .singleAggregation({}, {"array_agg(DISTINCT c1 ORDER BY c1 DESC)"})
+             .capturePlanNodeId(aggrNodeId)
+             .planNode();
+  testPlan(plan, "SELECT array_agg(DISTINCT c1 ORDER BY c1 DESC) FROM tmp");
+
+  // Grouped aggregation.
+  plan = PlanBuilder()
+             .values(vectors)
+             .project({"c0 % 7 as g", "c1"})
+             .singleAggregation({"g"}, {"array_agg(DISTINCT c1 ORDER BY c1)"})
+             .capturePlanNodeId(aggrNodeId)
+             .planNode();
+  testPlan(
+      plan,
+      "SELECT c0 % 7, array_agg(DISTINCT c1 ORDER BY c1) FROM tmp GROUP BY 1");
+
+  // Mixed: distinct+sorted alongside plain sorted in the same aggregation.
+  plan = PlanBuilder()
+             .values(vectors)
+             .singleAggregation(
+                 {"c0"},
+                 {"array_agg(DISTINCT c1 ORDER BY c1)", "array_agg(c2 ORDER BY c2)"})
+             .capturePlanNodeId(aggrNodeId)
+             .planNode();
+  testPlan(
+      plan,
+      "SELECT c0, array_agg(DISTINCT c1 ORDER BY c1), array_agg(c2 ORDER BY c2)"
+      " FROM tmp GROUP BY c0");
+
+  // With NULLs in the aggregate input.
+  VectorFuzzer::Options opts;
+  opts.vectorSize = 100;
+  opts.nullRatio = 0.2;
+  VectorFuzzer fuzzer(opts, pool());
+  std::vector<RowVectorPtr> nullableVectors;
+  for (int i = 0; i < 5; ++i) {
+    nullableVectors.push_back(fuzzer.fuzzRow(rowType_));
+  }
+  createDuckDbTable(nullableVectors);
+  plan = PlanBuilder()
+             .values(nullableVectors)
+             .singleAggregation({"c0"}, {"array_agg(DISTINCT c1 ORDER BY c1)"})
+             .capturePlanNodeId(aggrNodeId)
+             .planNode();
+  testPlan(
+      plan,
+      "SELECT c0, array_agg(DISTINCT c1 ORDER BY c1) FROM tmp GROUP BY c0");
+}
+
 TEST_F(AggregationTest, spillPrefixSortOptimization) {
   const RowTypePtr rowType{
       ROW({"c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8"},
