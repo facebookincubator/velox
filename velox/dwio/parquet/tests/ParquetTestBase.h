@@ -20,6 +20,7 @@
 #include <string>
 #include "velox/common/base/Fs.h"
 #include "velox/common/file/File.h"
+#include "velox/common/io/IoStatistics.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/Reader.h"
@@ -236,6 +237,10 @@ class ParquetTestBase : public testing::Test,
   static constexpr uint64_t kBytesInRowGroup = 128 * 1'024 * 1'024;
   std::shared_ptr<memory::MemoryPool> rootPool_;
   std::shared_ptr<memory::MemoryPool> leafPool_;
+  std::shared_ptr<velox::io::IoStatistics> dataIoStats_ =
+      std::make_shared<velox::io::IoStatistics>();
+  std::shared_ptr<velox::io::IoStatistics> metadataIoStats_ =
+      std::make_shared<velox::io::IoStatistics>();
   std::shared_ptr<TempDirectoryPath> tempPath_;
   // Stores writers created by write() helper to keep sinks alive for reading.
   std::vector<std::unique_ptr<Writer>> writers_;

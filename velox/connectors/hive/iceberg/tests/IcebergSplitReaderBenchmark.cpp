@@ -294,6 +294,8 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
   const RowTypePtr readerOutputType;
   const std::shared_ptr<io::IoStatistics> ioStatistics =
       std::make_shared<io::IoStatistics>();
+  const std::shared_ptr<io::IoStatistics> metadataIoStatistics =
+      std::make_shared<io::IoStatistics>();
   const std::shared_ptr<IoStats> ioStats = std::make_shared<IoStats>();
 
   std::shared_ptr<memory::MemoryPool> root =
@@ -341,7 +343,7 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
             hiveConfig,
             rowType,
             ioStatistics,
-            nullptr,
+            metadataIoStatistics,
             ioStats,
             &fileHandleFactory,
             nullptr,
