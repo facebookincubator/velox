@@ -117,8 +117,7 @@ inline YearMonthDay daysToYmd(int32_t dayNumber) {
   // calendar year; correct that here.
   const uint32_t janFebAdjust = dayWithinYear >= 306u ? 1u : 0u;
   YearMonthDay out;
-  out.year =
-      static_cast<int32_t>(yearWithinEra - kYearOffset) +
+  out.year = static_cast<int32_t>(yearWithinEra - kYearOffset) +
       static_cast<int32_t>(janFebAdjust);
   out.month = janFebAdjust ? monthFromMarch - 12u : monthFromMarch;
   out.day = dayOfMonthZeroBased + 1u;

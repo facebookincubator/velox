@@ -43,12 +43,14 @@ int main(int argc, char** argv) {
 
   // DATE inputs (int32 days since epoch).
   benchmarkBuilder
-      .addBenchmarkSet("year_date", vectorMaker.rowVector({fuzzer.fuzz(DATE())}))
+      .addBenchmarkSet(
+          "year_date", vectorMaker.rowVector({fuzzer.fuzz(DATE())}))
       .addExpression("year", "year(c0)")
       .disableTesting();
 
   benchmarkBuilder
-      .addBenchmarkSet("month_date", vectorMaker.rowVector({fuzzer.fuzz(DATE())}))
+      .addBenchmarkSet(
+          "month_date", vectorMaker.rowVector({fuzzer.fuzz(DATE())}))
       .addExpression("month", "month(c0)")
       .disableTesting();
 

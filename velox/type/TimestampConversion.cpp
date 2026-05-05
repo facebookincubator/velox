@@ -702,14 +702,13 @@ daysSinceEpochFromDate(int32_t year, int32_t month, int32_t day) {
   // negligible. Years outside the strict range delegate to
   // WideRangeDateConversion, which validates and handles the full
   // [kMinYear, kMaxYear] domain via the loop-based fallback.
-  if (FOLLY_LIKELY(
-          year > fast_date::kYearMin && year < fast_date::kYearMax)) {
+  if (FOLLY_LIKELY(year > fast_date::kYearMin && year < fast_date::kYearMax)) {
     if (!isValidDate(year, month, day)) {
       if (threadSkipErrorDetails()) {
         return folly::makeUnexpected(Status::UserError());
       }
-      return folly::makeUnexpected(Status::UserError(
-          "Date out of range: {}-{}-{}", year, month, day));
+      return folly::makeUnexpected(
+          Status::UserError("Date out of range: {}-{}-{}", year, month, day));
     }
     return static_cast<int64_t>(ymdToDays(
         year, static_cast<uint32_t>(month), static_cast<uint32_t>(day)));

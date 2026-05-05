@@ -108,8 +108,8 @@ TEST(FastDateTest, boundaries) {
   for (int32_t centuryYear = fast_date::kYearMin + 100;
        centuryYear <= fast_date::kYearMax - 100;
        centuryYear += 100) {
-    const auto sd = date::sys_days{
-        date::year{centuryYear} / date::month{3} / date::day{1}};
+    const auto sd =
+        date::sys_days{date::year{centuryYear} / date::month{3} / date::day{1}};
     const int32_t d = sd.time_since_epoch().count();
     const auto got = daysToYmd(d);
     const auto want = hinnantYmd(d);

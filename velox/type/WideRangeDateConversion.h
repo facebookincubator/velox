@@ -15,8 +15,8 @@
  */
 #pragma once
 
-#include <ctime>
 #include <cstdint>
+#include <ctime>
 #include "velox/common/base/Status.h"
 
 namespace facebook::velox {
@@ -41,10 +41,8 @@ class WideRangeDateConversion {
   /// loop-based path. Validates the input against [kMinYear, kMaxYear];
   /// returns Status::UserError ("Date out of range: ...") on invalid
   /// input.
-  static Expected<int64_t> daysSinceEpochFromDate(
-      int32_t year,
-      int32_t month,
-      int32_t day);
+  static Expected<int64_t>
+  daysSinceEpochFromDate(int32_t year, int32_t month, int32_t day);
 };
 
 } // namespace facebook::velox

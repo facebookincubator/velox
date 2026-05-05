@@ -56,11 +56,12 @@ void fillYmd(std::vector<Ymd>& out, const std::vector<int32_t>& days) {
   out.reserve(days.size());
   for (int32_t d : days) {
     const date::year_month_day ymd{date::sys_days{date::days{d}}};
-    out.push_back(Ymd{
-        static_cast<int32_t>(static_cast<int64_t>(ymd.year())),
-        static_cast<unsigned>(ymd.month()),
-        static_cast<unsigned>(ymd.day()),
-    });
+    out.push_back(
+        Ymd{
+            static_cast<int32_t>(static_cast<int64_t>(ymd.year())),
+            static_cast<unsigned>(ymd.month()),
+            static_cast<unsigned>(ymd.day()),
+        });
   }
 }
 
@@ -75,28 +76,26 @@ void fillYmd(std::vector<Ymd>& out, const std::vector<int32_t>& days) {
 // Both fill the full std::tm including tm_hour/tm_min/tm_sec/tm_wday, so
 // the only differing component is the calendar-conversion algorithm.
 
-__attribute__((noinline)) uint64_t runWideRange(
-    const std::vector<int32_t>& days) {
+__attribute__((noinline)) uint64_t
+runWideRange(const std::vector<int32_t>& days) {
   uint64_t sum = 0;
   std::tm tm;
   for (int32_t d : days) {
     WideRangeDateConversion::epochToCalendarUtc(int64_t{d} * 86400, tm);
     sum += static_cast<uint64_t>(tm.tm_year) +
-        static_cast<uint64_t>(tm.tm_mon) +
-        static_cast<uint64_t>(tm.tm_mday);
+        static_cast<uint64_t>(tm.tm_mon) + static_cast<uint64_t>(tm.tm_mday);
   }
   return sum;
 }
 
-__attribute__((noinline)) uint64_t runNeriSchneider(
-    const std::vector<int32_t>& days) {
+__attribute__((noinline)) uint64_t
+runNeriSchneider(const std::vector<int32_t>& days) {
   uint64_t sum = 0;
   std::tm tm;
   for (int32_t d : days) {
     Timestamp::epochToCalendarUtc(int64_t{d} * 86400, tm);
     sum += static_cast<uint64_t>(tm.tm_year) +
-        static_cast<uint64_t>(tm.tm_mon) +
-        static_cast<uint64_t>(tm.tm_mday);
+        static_cast<uint64_t>(tm.tm_mon) + static_cast<uint64_t>(tm.tm_mday);
   }
   return sum;
 }
@@ -123,20 +122,18 @@ BENCHMARK_DRAW_LINE();
 // Same contestant pair, both validating via isValidDate and wrapping the
 // result in Expected<int64_t>.
 
-__attribute__((noinline)) uint64_t runWideRangeInv(
-    const std::vector<Ymd>& v) {
+__attribute__((noinline)) uint64_t runWideRangeInv(const std::vector<Ymd>& v) {
   uint64_t s = 0;
   for (const auto& x : v) {
     s += static_cast<uint64_t>(
-        WideRangeDateConversion::daysSinceEpochFromDate(
-            x.year, x.month, x.day)
+        WideRangeDateConversion::daysSinceEpochFromDate(x.year, x.month, x.day)
             .value());
   }
   return s;
 }
 
-__attribute__((noinline)) uint64_t runNeriSchneiderInv(
-    const std::vector<Ymd>& v) {
+__attribute__((noinline)) uint64_t
+runNeriSchneiderInv(const std::vector<Ymd>& v) {
   uint64_t s = 0;
   for (const auto& x : v) {
     s += static_cast<uint64_t>(

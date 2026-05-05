@@ -163,8 +163,7 @@ bool Timestamp::epochToCalendarUtc(int64_t epoch, std::tm& tm) {
       return false;
     }
     tm.tm_year = static_cast<int>(y);
-    const auto* monthOffsets =
-        daysBeforeFirstDayOfMonth[isLeap(ymd.year)];
+    const auto* monthOffsets = daysBeforeFirstDayOfMonth[isLeap(ymd.year)];
     tm.tm_mon = static_cast<int>(ymd.month) - 1;
     tm.tm_mday = static_cast<int>(ymd.day);
     tm.tm_yday = monthOffsets[tm.tm_mon] + tm.tm_mday - 1;
