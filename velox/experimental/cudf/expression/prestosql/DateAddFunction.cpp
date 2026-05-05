@@ -248,9 +248,8 @@ ColumnOrView DateAddFunction::eval(
     dateCol = literalDateColumn->view();
   }
 
-  return isDayBasedUnit(unit_)
-      ? evalDayBased(dateCol, valueCol, stream, mr)
-      : evalMonthBased(dateCol, valueCol, stream, mr);
+  return isDayBasedUnit(unit_) ? evalDayBased(dateCol, valueCol, stream, mr)
+                               : evalMonthBased(dateCol, valueCol, stream, mr);
 }
 
 ColumnOrView DateAddFunction::evalDayBased(
@@ -278,12 +277,7 @@ ColumnOrView DateAddFunction::evalDayBased(
       stream,
       mr);
   return cudf::binary_operation(
-      dateCol,
-      days->view(),
-      cudf::binary_operator::ADD,
-      outType,
-      stream,
-      mr);
+      dateCol, days->view(), cudf::binary_operator::ADD, outType, stream, mr);
 }
 
 ColumnOrView DateAddFunction::evalMonthBased(
@@ -299,8 +293,7 @@ ColumnOrView DateAddFunction::evalMonthBased(
         literalValueIsValid_,
         stream,
         mr);
-    return cudf::datetime::add_calendrical_months(
-        dateCol, months, stream, mr);
+    return cudf::datetime::add_calendrical_months(dateCol, months, stream, mr);
   }
 
   auto months = scaleToInt32(*valueCol, scale, stream, mr);

@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+
 #include "velox/functions/lib/DateTimeFormatter.h"
 
 #include <cudf/scalar/scalar.hpp>

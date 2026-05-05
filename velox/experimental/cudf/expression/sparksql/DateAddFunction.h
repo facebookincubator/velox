@@ -24,7 +24,8 @@ namespace facebook::velox::cudf_velox::sparksql {
 /// Spark date_add(date, days) -> DATE.
 /// Adds a constant number of days to a date column. days must be a constant
 /// (tinyint, smallint, or integer); date must be a column.
-/// Note: signature differs from Presto date_add, which takes (unit, value, date).
+/// Note: signature differs from Presto date_add, which takes (unit, value,
+/// date).
 class DateAddFunction : public CudfFunction {
  public:
   explicit DateAddFunction(const std::shared_ptr<velox::exec::Expr>& expr);

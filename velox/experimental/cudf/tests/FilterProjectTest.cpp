@@ -1162,8 +1162,7 @@ TEST_F(CudfFilterProjectTest, dateAddDateNullLiteralValue) {
 }
 
 TEST_F(CudfFilterProjectTest, dateAddDateNullLiteralDate) {
-  auto data = makeRowVector(
-      {"amount"}, {makeFlatVector<int64_t>({1, 13, -1})});
+  auto data = makeRowVector({"amount"}, {makeFlatVector<int64_t>({1, 13, -1})});
   std::vector<RowVectorPtr> vectors{data};
 
   const std::vector<std::string> projections{
@@ -1196,8 +1195,7 @@ TEST_F(CudfFilterProjectTest, dateAddDateColumnValueOutOfRange) {
       {"event_date", "amount"},
       {makeFlatVector<int32_t>(
            {toDateDays("2020-01-01"), toDateDays("2020-12-31")}, DATE()),
-       makeFlatVector<int64_t>(
-           {1, std::numeric_limits<int64_t>::max()})});
+       makeFlatVector<int64_t>({1, std::numeric_limits<int64_t>::max()})});
   std::vector<RowVectorPtr> vectors{data};
 
   auto plan = PlanBuilder()
