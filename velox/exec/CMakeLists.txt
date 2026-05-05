@@ -83,6 +83,7 @@ velox_add_library(
   ProbeOperatorState.cpp
   SubPartitionedSortWindowBuild.cpp
   RowContainer.cpp
+  RowLayout.cpp
   RowNumber.cpp
   RowsStreamingWindowBuild.cpp
   ScaleWriterLocalPartition.cpp
@@ -188,6 +189,7 @@ velox_add_library(
   ProbeOperatorState.h
   RoundRobinPartitionFunction.h
   RowContainer.h
+  RowLayout.h
   RowNumber.h
   RowsStreamingWindowBuild.h
   ScaleWriterLocalPartition.h
