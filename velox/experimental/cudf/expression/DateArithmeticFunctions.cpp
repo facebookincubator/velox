@@ -13,45 +13,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/experimental/cudf/expression/AstUtils.h"
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/expression/DateArithmeticFunctions.h"
 
 #include "velox/expression/ConstantExpr.h"
 #include "velox/type/Time.h"
+#include "velox/vector/ConstantVector.h"
 
 #include <cudf/aggregation.hpp>
 #include <cudf/binaryop.hpp>
 #include <cudf/reduction.hpp>
-#include <cudf/unary.hpp>
 
 namespace facebook::velox::cudf_velox {
-
-DateAddFunction::DateAddFunction(
-    const std::shared_ptr<velox::exec::Expr>& expr) {
-  VELOX_CHECK_EQ(
-      expr->inputs().size(), 2, "date_add function expects exactly 2 inputs");
-  VELOX_CHECK(
-      expr->inputs()[0]->type()->isDate(),
-      "First argument to date_add must be a date");
-  VELOX_CHECK_NULL(
-      std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr->inputs()[0]));
-  value_ = makeScalarFromConstantExpr(
-      expr->inputs()[1], cudf::type_id::DURATION_DAYS);
-}
-
-ColumnOrView DateAddFunction::eval(
-    std::vector<ColumnOrView>& inputColumns,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) const {
-  auto inputCol = asView(inputColumns[0]);
-  return cudf::binary_operation(
-      inputCol,
-      *value_,
-      cudf::binary_operator::ADD,
-      cudf::data_type(cudf::type_id::TIMESTAMP_DAYS),
-      stream,
-      mr);
-}
 
 DatePlusIntervalFunction::DatePlusIntervalFunction(
     const std::shared_ptr<velox::exec::Expr>& expr) {

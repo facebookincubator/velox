@@ -21,21 +21,6 @@
 
 namespace facebook::velox::cudf_velox {
 
-/// Spark date_add(date, integer) -> date.
-/// Adds a constant number of days (as tinyint/smallint/integer) to a date.
-class DateAddFunction : public CudfFunction {
- public:
-  explicit DateAddFunction(const std::shared_ptr<velox::exec::Expr>& expr);
-
-  ColumnOrView eval(
-      std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
-      rmm::device_async_resource_ref mr) const override;
-
- private:
-  std::unique_ptr<cudf::scalar> value_;
-};
-
 /// plus(DATE, INTERVAL DAY TO SECOND) -> DATE.
 /// Converts the interval from milliseconds to days and adds to the date.
 /// Handles both constant and column interval inputs.
