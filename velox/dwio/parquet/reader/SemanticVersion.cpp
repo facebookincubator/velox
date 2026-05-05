@@ -59,7 +59,7 @@ std::optional<SemanticVersion> SemanticVersion::parse(
   }
 }
 
-bool SemanticVersion::shouldIgnoreStatistics(thrift::Type::type type) const {
+bool SemanticVersion::shouldIgnoreStatistics(thrift::Type type) const {
   if (type != thrift::Type::BYTE_ARRAY &&
       type != thrift::Type::FIXED_LEN_BYTE_ARRAY) {
     return false;
