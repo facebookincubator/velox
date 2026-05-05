@@ -17,6 +17,7 @@
 #include <folly/init/Init.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/io/IoStatistics.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h" // @manual
 #include "velox/dwio/parquet/RegisterParquetReader.h" // @manual
@@ -168,7 +169,8 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
 
   void loadDataWithRowType(const std::string& filePath, RowVectorPtr data) {
     auto pool = facebook::velox::memory::memoryManager()->addLeafPool();
-    dwio::common::ReaderOptions readerOpts{pool.get()};
+    dwio::common::ReaderOptions readerOpts{
+        pool.get(), dataIoStats_.get(), metadataIoStats_.get()};
     auto reader = std::make_unique<ParquetReader>(
         std::make_unique<facebook::velox::dwio::common::BufferedInput>(
             std::make_shared<LocalReadFile>(filePath), readerOpts.memoryPool()),
@@ -314,6 +316,10 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
 
   RowTypePtr rowType_;
   TimestampPrecision timestampPrecision_ = TimestampPrecision::kMicroseconds;
+  std::shared_ptr<io::IoStatistics> dataIoStats_ =
+      std::make_shared<io::IoStatistics>();
+  std::shared_ptr<io::IoStatistics> metadataIoStats_ =
+      std::make_shared<io::IoStatistics>();
 };
 
 TEST_F(ParquetTableScanTest, basic) {

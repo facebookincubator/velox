@@ -16,6 +16,7 @@
 
 #include <gtest/gtest.h>
 #include "velox/common/caching/AsyncDataCache.h"
+#include "velox/common/io/IoStatistics.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 
 #include <folly/init/Init.h>
@@ -243,6 +244,10 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
       std::make_shared<HiveConfig>(std::make_shared<config::ConfigBase>(
           std::unordered_map<std::string, std::string>()));
   std::unique_ptr<folly::IOThreadPoolExecutor> spillExecutor_;
+  std::shared_ptr<velox::io::IoStatistics> dataIoStats_ =
+      std::make_shared<velox::io::IoStatistics>();
+  std::shared_ptr<velox::io::IoStatistics> metadataIoStats_ =
+      std::make_shared<velox::io::IoStatistics>();
 };
 
 TEST_F(HiveDataSinkTest, hiveSortingColumn) {
@@ -1171,7 +1176,8 @@ TEST_F(HiveDataSinkTest, flushPolicyWithParquet) {
   ASSERT_TRUE(dataSink->finish());
   dataSink->close();
 
-  dwio::common::ReaderOptions readerOpts{pool_.get()};
+  dwio::common::ReaderOptions readerOpts{
+      pool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
   const std::vector<std::string> filePaths =
       listFiles(outputDirectory->getPath());
   auto bufferedInput = std::make_unique<dwio::common::BufferedInput>(
@@ -1209,7 +1215,8 @@ TEST_F(HiveDataSinkTest, flushPolicyWithDWRF) {
   ASSERT_TRUE(dataSink->finish());
   dataSink->close();
 
-  dwio::common::ReaderOptions readerOpts{pool_.get()};
+  dwio::common::ReaderOptions readerOpts{
+      pool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
   const std::vector<std::string> filePaths =
       listFiles(outputDirectory->getPath());
   auto bufferedInput = std::make_unique<dwio::common::BufferedInput>(

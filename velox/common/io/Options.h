@@ -18,6 +18,7 @@
 
 #include <folly/Executor.h>
 
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/io/IoStatistics.h"
 #include "velox/common/memory/Memory.h"
 
@@ -72,7 +73,10 @@ class ReaderOptions {
       IoStatistics* metadataIoStats)
       : pool_{pool},
         dataIoStats_{dataIoStats},
-        metadataIoStats_{metadataIoStats} {}
+        metadataIoStats_{metadataIoStats} {
+    VELOX_CHECK_NOT_NULL(dataIoStats);
+    VELOX_CHECK_NOT_NULL(metadataIoStats);
+  }
 
   /// Modifies the autoPreloadLength
   ReaderOptions& setAutoPreloadLength(uint64_t len) {
