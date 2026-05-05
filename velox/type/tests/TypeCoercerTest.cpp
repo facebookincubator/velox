@@ -244,10 +244,41 @@ TEST(TypeCoercerTest, leastCommonSuperType) {
           MAP(INTEGER(), REAL()), ROW({INTEGER(), REAL()})) == nullptr);
 }
 
-TEST(TypeCoercerTest, parametricBuiltinTargetDoesNotThrow) {
-  // Parametric built-in factories throw on empty params. Verify graceful
-  // handling.
-  EXPECT_EQ(TypeCoercer::coerceTypeBase(BIGINT(), "ARRAY"), std::nullopt);
+TEST(TypeCoercerTest, customRuleCostPropagation) {
+  // Verify that CastRulesRegistry costs propagate through TypeCoercer.
+  // clear() wipes all rules (including built-in coercions registered once via
+  // function-local static), so only the custom rule below is active.
+  // VARCHAR->DOUBLE is not a built-in coercion, ensuring this tests the
+  // custom-rule path.
+  CastRulesRegistry::instance().clear();
+  registerCastRules({
+      {.fromType = "VARCHAR",
+       .toType = "DOUBLE",
+       .implicitAllowed = true,
+       .cost = 7,
+       .validator = {}},
+  });
+
+  auto coercion = TypeCoercer::coerceTypeBase(VARCHAR(), "DOUBLE");
+  ASSERT_TRUE(coercion.has_value());
+  EXPECT_EQ(coercion->cost, 7);
+  EXPECT_EQ(*coercion->type, *DOUBLE());
+
+  auto cost = TypeCoercer::coercible(VARCHAR(), DOUBLE());
+  ASSERT_TRUE(cost.has_value());
+  EXPECT_EQ(cost.value(), 7);
+
+  CastRulesRegistry::instance().clear();
+}
+
+TEST(TypeCoercerTest, parametricTargetReturnsNullopt) {
+  // Parametric types (ARRAY, MAP, ROW) cannot be constructed without type
+  // parameters. The string overload checks for a coercion rule by name first
+  // and returns nullopt when none exists, avoiding calls to getType() that
+  // would throw.
+  ASSERT_FALSE(TypeCoercer::coerceTypeBase(BIGINT(), "ARRAY").has_value());
+  ASSERT_FALSE(TypeCoercer::coerceTypeBase(BIGINT(), "MAP").has_value());
+  ASSERT_FALSE(TypeCoercer::coerceTypeBase(BIGINT(), "ROW").has_value());
 }
 
 } // namespace

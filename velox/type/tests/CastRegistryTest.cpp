@@ -405,9 +405,9 @@ TEST_F(CastRulesRegistryTest, standaloneRegistration) {
   }));
 }
 
-TEST_F(CastRulesRegistryTest, rejectsRulesWithoutCastOperator) {
-  // The free function registerCastRules() validates that at least one side
-  // has a registered custom type with a CastOperator.
+TEST_F(CastRulesRegistryTest, rejectsRulesWithUnknownTypes) {
+  // Rules where one side is unknown and neither has a CastOperator are
+  // rejected.
   EXPECT_THROW(
       registerCastRules({
           {.fromType = "BIGINT",
@@ -416,6 +416,18 @@ TEST_F(CastRulesRegistryTest, rejectsRulesWithoutCastOperator) {
            .validator = {}},
       }),
       VeloxException);
+}
+
+TEST_F(CastRulesRegistryTest, acceptsBuiltInToBuiltInRules) {
+  // Rules between known built-in types are accepted even without a
+  // CastOperator — Velox's native cast machinery handles them.
+  EXPECT_NO_THROW(registerCastRules({
+      {.fromType = "VARCHAR",
+       .toType = "DOUBLE",
+       .implicitAllowed = true,
+       .cost = 5,
+       .validator = {}},
+  }));
 }
 
 } // namespace
