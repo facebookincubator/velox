@@ -11,19 +11,33 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+# Leaf library that owns the out-of-line definitions for the
+# `velox::core` expression class hierarchy declared in Expressions.h
+# (CallExpr, CastExpr, FieldAccessExpr, ConstantExpr, LambdaExpr,
+# WindowCallExpr, ...). Lifted out of velox_parse_expression so that
+# velox_expression — which uses dynamic_cast on these classes — can
+# pick up the typeinfo without taking a dependency on
+# velox_parse_expression itself, which would close a cycle
+# (velox_parse_expression already depends on velox_expression).
+velox_add_library(velox_core_expressions Expressions.cpp HEADERS Expressions.h IExpr.h)
+velox_link_libraries(velox_core_expressions velox_common_base velox_type Folly::folly)
+
 velox_add_library(
   velox_parse_expression
   ExprRewriter.cpp
-  Expressions.cpp
   SqlExpressionsParser.cpp
   HEADERS
   ExprRewriter.h
-  Expressions.h
-  IExpr.h
   SqlExpressionsParser.h
   TypeResolver.h
 )
-velox_link_libraries(velox_parse_expression velox_type velox_parse_utils velox_expression)
+velox_link_libraries(
+  velox_parse_expression
+  velox_core_expressions
+  velox_type
+  velox_parse_utils
+  velox_expression
+)
 
 velox_add_library(
   velox_parse_parser

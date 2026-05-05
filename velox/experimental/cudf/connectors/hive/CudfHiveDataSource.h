@@ -112,6 +112,10 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   cudf::ast::expression const* subfieldFilterExpr_{nullptr};
 
  private:
+  // Construct and cache a RowTypePtr for the table column names and types.
+  const RowTypePtr getTableRowType();
+  RowTypePtr cachedTableRowType_{};
+
   memory::MemoryPool* const pool_;
 
   size_t completedRows_{0};

@@ -433,7 +433,8 @@ void E2EFilterTestBase::readWithoutFilter(
     const std::vector<RowVectorPtr>& batches,
     uint64_t& time) {
   SCOPED_TRACE("Read without filter");
-  dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+  dwio::common::ReaderOptions readerOpts{
+      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
   dwio::common::RowReaderOptions rowReaderOpts;
   auto input = std::make_unique<BufferedInput>(
       std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
@@ -487,7 +488,8 @@ void E2EFilterTestBase::readWithFilter(
     bool useValueHook,
     bool skipCheck) {
   SCOPED_TRACE("Read with filter");
-  dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+  dwio::common::ReaderOptions readerOpts{
+      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
   dwio::common::RowReaderOptions rowReaderOpts;
   auto input = std::make_unique<BufferedInput>(
       std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
@@ -875,7 +877,8 @@ void E2EFilterTestBase::testMetadataFilterImpl(
   specB->setChannel(1);
   specC->setProjectOut(true);
   specC->setChannel(0);
-  ReaderOptions readerOpts{leafPool_.get()};
+  ReaderOptions readerOpts{
+      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
   RowReaderOptions rowReaderOpts;
   auto input = std::make_unique<BufferedInput>(
       std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
@@ -1138,7 +1141,8 @@ void E2EFilterTestBase::testSubfieldsPruning() {
   auto specF = spec->addFieldRecursively("f", *ARRAY(BIGINT()), 5);
   specF->childByName(common::ScanSpec::kArrayElementsFieldName)
       ->setFilter(common::createBigintValues({0, 2, 4}, false));
-  ReaderOptions readerOpts{leafPool_.get()};
+  ReaderOptions readerOpts{
+      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
   RowReaderOptions rowReaderOpts;
   auto input = std::make_unique<BufferedInput>(
       std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
@@ -1228,7 +1232,8 @@ void E2EFilterTestBase::testMutationCornerCases() {
   }
   auto& rowType = batches[0]->type();
   writeToMemory(rowType, batches, false);
-  ReaderOptions readerOpts{leafPool_.get()};
+  ReaderOptions readerOpts{
+      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
   auto input = std::make_unique<BufferedInput>(
       std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
   auto reader = makeReader(readerOpts, std::move(input));

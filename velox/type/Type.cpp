@@ -16,6 +16,8 @@
 
 #include <velox/type/Type.h>
 
+#include "velox/common/EnumDefine.h"
+
 #include <boost/algorithm/string.hpp>
 #include <fmt/format.h>
 #include <folly/Demangle.h>

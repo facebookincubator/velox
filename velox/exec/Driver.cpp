@@ -32,6 +32,14 @@ Driver::~Driver() = default;
 
 namespace {
 
+/// Returns current time in microseconds using high_resolution_clock.
+/// Used for driver-level lifecycle timing to match BlockingState::sinceUs_.
+inline uint64_t currentTimeMicrosHires() {
+  return std::chrono::duration_cast<std::chrono::microseconds>(
+             std::chrono::high_resolution_clock::now().time_since_epoch())
+      .count();
+}
+
 // Checks if output channel is produced using identity projection and returns
 // input channel if so.
 std::optional<column_index_t> getIdentityProjection(
@@ -228,6 +236,10 @@ void BlockingState::setResume(std::shared_ptr<BlockingState> state) {
         std::lock_guard<std::timed_mutex> l(task->mutex());
         if (!driver->state().isTerminated) {
           state->operator_->recordBlockingTime(state->sinceUs_, state->reason_);
+          // Accumulate driver-level blocked time using high_resolution_clock,
+          // matching sinceUs_ and all other driver lifecycle timing.
+          driver->addDriverBlockedTime(
+              (currentTimeMicrosHires() - state->sinceUs_) * 1'000);
         }
         VELOX_CHECK(!driver->state().suspended());
         VELOX_CHECK(driver->state().hasBlockingFuture);
@@ -358,7 +370,7 @@ void Driver::enqueueInternal() {
   VELOX_CHECK(!state_.isEnqueued);
   state_.isEnqueued = true;
   // When enqueuing, starting timing the queue time.
-  queueTimeStartUs_ = getCurrentTimeMicro();
+  queueTimeStartUs_ = currentTimeMicrosHires();
 }
 
 // Call an Operator method. record silenced throws, but not a query
@@ -414,10 +426,14 @@ CpuWallTiming Driver::processLazyIoStats(
   if (&op == operators_[0].get()) {
     return timing;
   }
+  static const std::string kCpuNanosKey(LazyVector::kCpuNanos);
+  static const std::string kWallNanosKey(LazyVector::kWallNanos);
+  static const std::string kInputBytesKey(LazyVector::kInputBytes);
+
   auto lockStats = op.stats().wlock();
 
   // Checks and tries to update cpu time from lazy loads.
-  auto it = lockStats->runtimeStats.find(std::string(LazyVector::kCpuNanos));
+  auto it = lockStats->runtimeStats.find(kCpuNanosKey);
   if (it == lockStats->runtimeStats.end()) {
     // Return early if no lazy activity.  Lazy CPU and wall times are recorded
     // together, checking one is enough.
@@ -435,7 +451,7 @@ CpuWallTiming Driver::processLazyIoStats(
 
   // Checks and tries to update wall time from lazy loads.
   int64_t wallDelta = 0;
-  it = lockStats->runtimeStats.find(std::string(LazyVector::kWallNanos));
+  it = lockStats->runtimeStats.find(kWallNanosKey);
   if (it != lockStats->runtimeStats.end()) {
     const int64_t wall = it->second.sum;
     wallDelta = std::max<int64_t>(0, wall - lockStats->lastLazyWallNanos);
@@ -446,7 +462,7 @@ CpuWallTiming Driver::processLazyIoStats(
 
   // Checks and tries to update input bytes from lazy loads.
   int64_t inputBytesDelta = 0;
-  it = lockStats->runtimeStats.find(std::string(LazyVector::kInputBytes));
+  it = lockStats->runtimeStats.find(kInputBytesKey);
   if (it != lockStats->runtimeStats.end()) {
     const int64_t inputBytes = it->second.sum;
     inputBytesDelta = inputBytes - lockStats->lastLazyInputBytes;
@@ -504,8 +520,23 @@ StopReason Driver::runInternal(
     std::shared_ptr<Driver>& self,
     std::shared_ptr<BlockingState>& blockingState,
     RowVectorPtr& result) {
-  const auto now = getCurrentTimeMicro();
+  // All driver timing uses high_resolution_clock consistently
+  // (matching BlockingState::sinceUs_ used for blocked time).
+  const auto now = currentTimeMicrosHires();
   const auto queuedTimeUs = now - queueTimeStartUs_;
+
+  totalDriverQueuedNanos_ += queuedTimeUs * 1'000;
+  onThreadStartUs_ = now;
+  // For the normal close path, closeOperators() finalizes and clears
+  // onThreadStartUs_ before reporting. This guard handles early returns
+  // (e.g. Task::enter() failure) and non-close exit paths.
+  auto onThreadTimeGuard = folly::makeGuard([this]() {
+    if (onThreadStartUs_ > 0) {
+      totalDriverOnThreadNanos_ +=
+          (currentTimeMicrosHires() - onThreadStartUs_) * 1'000;
+      onThreadStartUs_ = 0;
+    }
+  });
 
   // Update the next operator's queueTime.
   StopReason stop =
@@ -870,6 +901,23 @@ void Driver::closeOperators() {
     op->close();
   }
 
+  // Report driver-level lifecycle timing to the Task accumulator.
+  // Use partitionId (0..numDrivers-1) so same-index drivers across split
+  // groups in grouped execution are summed together.
+  // Finalize on-thread time here (the onThreadTimeGuard in runInternal
+  // hasn't fired yet since CancelGuard destructs before it).
+  if (onThreadStartUs_ > 0) {
+    totalDriverOnThreadNanos_ +=
+        (currentTimeMicrosHires() - onThreadStartUs_) * 1'000;
+    onThreadStartUs_ = 0; // Prevent double-counting in the guard.
+  }
+  task()->addDriverLifecycleStats(
+      static_cast<uint32_t>(ctx_->pipelineId),
+      ctx_->partitionId,
+      totalDriverQueuedNanos_,
+      totalDriverOnThreadNanos_,
+      totalDriverBlockedNanos_);
+
   // Add operator stats to the task.
   for (auto& op : operators_) {
     auto stats = op->stats(true);
@@ -904,15 +952,22 @@ void Driver::updateStats() {
             1'000'000 * state_.totalOffThreadTimeMs,
             RuntimeCounter::Unit::kNanos);
   }
+
   task()->addDriverStats(ctx_->pipelineId, std::move(stats));
 }
 
 void Driver::updateOperatorBlockingStats() {
   // Record blocked time if the driver was blocked when terminated.
   // This ensures we don't lose blocked time metrics when a query is aborted.
-  if (state_.hasBlockingFuture && blockedOperatorId_ < operators_.size()) {
-    operators_[blockedOperatorId_]->recordBlockingTime(
-        state_.blockingStartUs, blockingReason_);
+  if (state_.hasBlockingFuture) {
+    // Accumulate driver-level blocked time unconditionally.
+    totalDriverBlockedNanos_ +=
+        (currentTimeMicrosHires() - state_.blockingStartUs) * 1'000;
+    // Record per-operator blocked time if operator is available.
+    if (blockedOperatorId_ < operators_.size()) {
+      operators_[blockedOperatorId_]->recordBlockingTime(
+          state_.blockingStartUs, blockingReason_);
+    }
   }
 }
 

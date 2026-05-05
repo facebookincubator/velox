@@ -218,7 +218,16 @@ TEST(PrestoTypeSqlTest, valueToString) {
   EXPECT_EQ(PrestoTypes::valueToString(1.5, DOUBLE()), "1.5");
   EXPECT_EQ(
       PrestoTypes::valueToString(Timestamp(0, 0), TIMESTAMP()),
-      "1970-01-01T00:00:00.000000000");
+      "1970-01-01 00:00:00.000");
+  // Non-zero nanos: verify millisecond truncation.
+  EXPECT_EQ(
+      PrestoTypes::valueToString(
+          Timestamp(1'705'320'000, 123'456'789), TIMESTAMP()),
+      "2024-01-15 12:00:00.123");
+  // Pre-1000 year: verify zero-padded year.
+  EXPECT_EQ(
+      PrestoTypes::valueToString(Timestamp(-62'135'596'800, 0), TIMESTAMP()),
+      "0001-01-01 00:00:00.000");
 }
 
 // Tests PrestoTypes::valueToString(DecodedVector) which handles nulls,
