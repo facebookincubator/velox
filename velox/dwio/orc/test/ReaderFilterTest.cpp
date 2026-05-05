@@ -47,6 +47,9 @@ class OrcReaderFilterTestP
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
+
+  io::IoStatistics dataIoStats_;
+  io::IoStatistics metadataIoStats_;
 };
 
 INSTANTIATE_TEST_SUITE_P(
@@ -217,7 +220,8 @@ TEST_P(OrcReaderFilterTestP, tests) {
 
   std::string fileName = "orc_all_type.orc";
 
-  dwio::common::ReaderOptions readerOpts{pool()};
+  dwio::common::ReaderOptions readerOpts{
+      pool(), &dataIoStats_, &metadataIoStats_};
 
   // To make DwrfReader reads ORC file, setFileFormat to FileFormat::ORC
   readerOpts.setFileFormat(dwio::common::FileFormat::ORC);

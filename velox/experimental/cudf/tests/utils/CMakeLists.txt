@@ -37,5 +37,6 @@ target_link_libraries(
   velox_duckdb_conversion
   velox_file_test_utils
   velox_cudf_hive_connector
+  velox_s3fs
   velox_aggregates
 )

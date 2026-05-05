@@ -16,6 +16,8 @@
 
 #include "velox/connectors/hive/iceberg/IcebergSplitReader.h"
 
+#include <algorithm>
+
 #include <folly/lang/Bits.h>
 
 #include "velox/common/base/Exceptions.h"
@@ -91,6 +93,9 @@ void IcebergSplitReader::prepareSplit(
   if (emptySplit_) {
     return;
   }
+
+  configureEqualityDeleteColumns();
+
   auto rowType = getAdaptedRowType();
 
   if (checkIfSplitIsEmpty(runtimeStats)) {
@@ -159,31 +164,8 @@ void IcebergSplitReader::prepareSplit(
           continue;
         }
 
-        // Resolve equalityFieldIds to column names and types. In Iceberg,
-        // field IDs for top-level columns are assigned sequentially starting
-        // from 1, matching the column order in the table schema.
-        std::vector<std::string> equalityColumnNames;
-        std::vector<TypePtr> equalityColumnTypes;
-
-        const auto& dataColumns = tableHandle_->dataColumns();
-        VELOX_CHECK(
-            dataColumns != nullptr,
-            "Iceberg equality delete file '{}' cannot be processed because "
-            "table data columns are not available in HiveTableHandle.",
-            deleteFile.filePath);
-        for (const auto& eqFieldId : deleteFile.equalityFieldIds) {
-          // Field IDs are 1-based sequential for non-evolved schemas.
-          auto colIdx = static_cast<uint32_t>(eqFieldId - 1);
-          VELOX_CHECK_LT(
-              colIdx,
-              dataColumns->size(),
-              "Equality delete field ID {} out of range. This may indicate "
-              "schema evolution with non-sequential field IDs, which is "
-              "not yet supported.",
-              eqFieldId);
-          equalityColumnNames.push_back(dataColumns->nameOf(colIdx));
-          equalityColumnTypes.push_back(dataColumns->childAt(colIdx));
-        }
+        auto [equalityColumnNames, equalityColumnTypes] =
+            resolveEqualityColumns(deleteFile);
 
         if (!equalityColumnNames.empty()) {
           equalityDeleteFileReaders_.push_back(
@@ -221,6 +203,141 @@ void IcebergSplitReader::prepareSplit(
           static_cast<int>(deleteFile.content));
     }
   }
+}
+
+void IcebergSplitReader::configureEqualityDeleteColumns() {
+  // Reset partition-column tracking from any prior split before re-augmenting.
+  equalityAugmentedPartitionColumns_.clear();
+
+  std::vector<std::string> extraEqualityColumns;
+  std::vector<std::string> extraNames;
+  std::vector<TypePtr> extraTypes;
+  const auto& deleteFiles = icebergSplit_->deleteFiles;
+  const auto& splitPartitionKeys = icebergSplit_->partitionKeys;
+
+  for (const auto& deleteFile : deleteFiles) {
+    if (deleteFile.content != FileContent::kEqualityDeletes ||
+        deleteFile.recordCount == 0 || deleteFile.equalityFieldIds.empty()) {
+      continue;
+    }
+    if (shouldSkipBySequenceNumber(
+            deleteFile.dataSequenceNumber,
+            icebergSplit_->dataSequenceNumber,
+            /*isEqualityDelete=*/true)) {
+      continue;
+    }
+
+    auto [equalityColumnNames, equalityColumnTypes] =
+        resolveEqualityColumns(deleteFile);
+    for (size_t i = 0; i < equalityColumnNames.size(); ++i) {
+      const auto& name = equalityColumnNames[i];
+      // Skip if this column was already added by a previous delete file.
+      if (std::find(
+              extraEqualityColumns.begin(), extraEqualityColumns.end(), name) !=
+          extraEqualityColumns.end()) {
+        continue;
+      }
+      auto* fieldSpec = scanSpec_->childByName(name);
+      const bool alreadyInOutput =
+          readerOutputType_->getChildIdxIfExists(name).has_value();
+      if (fieldSpec != nullptr && fieldSpec->projectOut() && alreadyInOutput) {
+        // Already projected by the user (or a previous augmentation) AND
+        // present in the output type by name. The equality-delete reader can
+        // probe it directly.
+        continue;
+      }
+      // Either no spec exists, or one exists but is filter-only, or the
+      // scan-spec child is projected but the column is missing from
+      // 'readerOutputType_'. In all cases ensure the column ends up in
+      // 'readerOutputType_' AND has a projected scan-spec child with a
+      // non-conflicting channel.
+      if (fieldSpec == nullptr) {
+        fieldSpec = scanSpec_->getOrCreateChild(name);
+      }
+      fieldSpec->setProjectOut(true);
+      fieldSpec->setChannel(
+          static_cast<column_index_t>(
+              readerOutputType_->size() + extraEqualityColumns.size()));
+
+      // For partition columns set the partition value directly as a constant
+      // on the scan-spec child. This is independent of whether the data file
+      // contains the partition column physically. With the constant set
+      // up-front, 'adaptColumns' does not need any special-case logic for
+      // augmented partition columns and the read does not depend on the
+      // writer's choice of including the partition column in the file.
+      auto partitionIt = splitPartitionKeys.find(name);
+      if (partitionIt != splitPartitionKeys.end()) {
+        // Iceberg encodes DATE partition values as the integer number of
+        // days since the Unix epoch (e.g. "19345"). The standard
+        // 'setPartitionValue' helper learns this from the planner-supplied
+        // ColumnHandle via 'isPartitionDateValueDaysSinceEpoch()', but no
+        // ColumnHandle is available here when the partition column is not
+        // in the user's projection. Derive the flag from the column type
+        // instead — Iceberg always uses days-since-epoch for DATE.
+        const bool isDaysSinceEpoch = equalityColumnTypes[i]->isDate();
+        auto constant = newConstantFromString(
+            equalityColumnTypes[i],
+            partitionIt->second,
+            connectorQueryCtx_->memoryPool(),
+            fileConfig_->readTimestampPartitionValueAsLocalTime(
+                connectorQueryCtx_->sessionProperties()),
+            isDaysSinceEpoch);
+        fieldSpec->setConstantValue(constant);
+        // Mirror Java's PARTITION_KEY column-type marking: this column's
+        // value MUST come from the partition metadata, never from the file
+        // body. Track it so 'adaptColumns' Branch 1 does not later wipe the
+        // constant when the file happens to also carry the column.
+        equalityAugmentedPartitionColumns_.insert(name);
+      }
+
+      extraEqualityColumns.push_back(name);
+      extraNames.push_back(name);
+      extraTypes.push_back(equalityColumnTypes[i]);
+    }
+  }
+
+  if (extraEqualityColumns.empty()) {
+    return;
+  }
+
+  // Extend 'readerOutputType_' so the upstream FileDataSource allocates the
+  // output RowVector wide enough for the augmented scan-spec channels. The
+  // original projection columns remain at indices [0, originalSize), so
+  // FileDataSource's positional projection still returns exactly the
+  // user-requested columns.
+  auto names = readerOutputType_->names();
+  auto types = readerOutputType_->children();
+  names.insert(names.end(), extraNames.begin(), extraNames.end());
+  types.insert(types.end(), extraTypes.begin(), extraTypes.end());
+  readerOutputType_ = ROW(std::move(names), std::move(types));
+}
+
+std::pair<std::vector<std::string>, std::vector<TypePtr>>
+IcebergSplitReader::resolveEqualityColumns(
+    const IcebergDeleteFile& deleteFile) const {
+  std::vector<std::string> equalityColumnNames;
+  std::vector<TypePtr> equalityColumnTypes;
+
+  const auto& dataColumns = tableHandle_->dataColumns();
+  VELOX_CHECK(
+      dataColumns != nullptr,
+      "Iceberg equality delete file '{}' cannot be processed because "
+      "table data columns are not available in HiveTableHandle.",
+      deleteFile.filePath);
+  for (const auto& eqFieldId : deleteFile.equalityFieldIds) {
+    // Field IDs are 1-based sequential for non-evolved schemas.
+    auto colIdx = static_cast<uint32_t>(eqFieldId - 1);
+    VELOX_CHECK_LT(
+        colIdx,
+        dataColumns->size(),
+        "Equality delete field ID {} out of range. This may indicate "
+        "schema evolution with non-sequential field IDs, which is "
+        "not yet supported.",
+        eqFieldId);
+    equalityColumnNames.push_back(dataColumns->nameOf(colIdx));
+    equalityColumnTypes.push_back(dataColumns->childAt(colIdx));
+  }
+  return {std::move(equalityColumnNames), std::move(equalityColumnTypes)};
 }
 
 uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
@@ -366,17 +483,34 @@ std::vector<TypePtr> IcebergSplitReader::adaptColumns(
       auto fileTypeIdx = fileType->getChildIdxIfExists(fieldName);
       auto outputTypeIdx = readerOutputType_->getChildIdxIfExists(fieldName);
       if (outputTypeIdx.has_value() && fileTypeIdx.has_value()) {
+        if (equalityAugmentedPartitionColumns_.count(fieldName) > 0) {
+          // This column was pre-installed as a partition-value constant by
+          // 'configureEqualityDeleteColumns'. Mirror Java's PARTITION_KEY
+          // semantics — the value comes from partition metadata, never from
+          // the file body, even though the file body happens to carry the
+          // column. Leave the constant in place; the column type entry for
+          // the file column index stays as the file type so Velox does not
+          // try to bind this output channel to a file read.
+          continue;
+        }
         childSpec->setConstantValue(nullptr);
         auto& outputType = readerOutputType_->childAt(*outputTypeIdx);
         columnTypes[*fileTypeIdx] = outputType;
       } else if (!fileTypeIdx.has_value()) {
-        // Handle columns missing from the data file in two scenarios:
+        // Handle columns missing from the data file in three scenarios:
         // 1. Schema evolution: Column was added after the data file was
-        // written and doesn't exist in older data files.
-        // 2. Partition columns: Hive migrated table. In Hive-written data
-        // files, partition column values are stored in partition metadata
-        // rather than in the data file itself, following Hive's partitioning
-        // convention.
+        //    written and doesn't exist in older data files.
+        // 2. Partition columns from a Hive-migrated table where partition
+        //    column values are stored in partition metadata rather than in
+        //    the data file itself.
+        // 3. Equality-delete partition columns not in the user's projection:
+        //    'configureEqualityDeleteColumns' has already pre-installed the
+        //    partition value as a constant, so this branch leaves it alone.
+        if (childSpec->isConstant()) {
+          // Constant already set (case 3, or set on a previous prepareSplit
+          // call for the same scanSpec). Nothing to do.
+          continue;
+        }
         auto partitionIt = fileSplit_->partitionKeys.find(fieldName);
         if (partitionIt != fileSplit_->partitionKeys.end()) {
           setPartitionValue(childSpec.get(), fieldName, partitionIt->second);
