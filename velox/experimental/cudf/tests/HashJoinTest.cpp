@@ -3535,6 +3535,63 @@ TEST_P(MultiThreadedHashJoinTest, leftJoinWithStringFunctionFilter) {
       .run();
 }
 
+// Test inner join with CASE WHEN filter expression that spans both sides.
+// This exercises the filterEvaluator_ path (not AST) because:
+// 1. CASE WHEN (switch) is not natively supported in cuDF AST
+// 2. The expression references columns from both probe and build sides
+TEST_P(MultiThreadedHashJoinTest, innerJoinWithCaseFilterSpanningBothSides) {
+  // Create probe vectors with positive and negative values, including nulls
+  std::vector<RowVectorPtr> probeVectors = makeBatches(3, [&](int32_t batch) {
+    return makeRowVector(
+        {"t0", "t_val"},
+        {
+            makeFlatVector<int64_t>(
+                100, [batch](auto row) { return row + batch * 100; }),
+            makeFlatVector<double>(
+                100,
+                [](auto row) { return static_cast<double>(row) - 50.0; },
+                [](auto row) { return row % 20 == 0; }),
+        });
+  });
+
+  // Create build vectors - u_val is always positive to avoid division issues,
+  // including nulls to test null propagation through apply_boolean_mask
+  std::vector<RowVectorPtr> buildVectors = makeBatches(2, [&](int32_t batch) {
+    return makeRowVector(
+        {"u0", "u_val"},
+        {
+            makeFlatVector<int64_t>(
+                50, [batch](auto row) { return row * 2 + batch * 100; }),
+            makeFlatVector<double>(
+                50,
+                [](auto row) { return static_cast<double>(row) + 1.0; },
+                [](auto row) { return row % 15 == 0; }),
+        });
+  });
+
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", buildVectors);
+
+  // CASE WHEN expression spanning both sides:
+  // - CASE WHEN is not AST-supported (triggers precomputation path)
+  // - References t_val (probe) and u_val (build)
+  // - This combination triggers useAstFilter_ = false
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .injectSpill(false)
+      .numDrivers(numDrivers_)
+      .probeKeys({"t0"})
+      .probeVectors(std::move(probeVectors))
+      .buildKeys({"u0"})
+      .buildVectors(std::move(buildVectors))
+      .joinFilter("CASE WHEN t_val > 0.0 THEN t_val / u_val ELSE 0.0 END > 0.5")
+      .joinOutputLayout({"t0", "t_val", "u0", "u_val"})
+      .referenceQuery(
+          "SELECT t.t0, t.t_val, u.u0, u.u_val FROM t, u "
+          "WHERE t.t0 = u.u0 AND "
+          "CASE WHEN t.t_val > 0.0 THEN t.t_val / u.u_val ELSE 0.0 END > 0.5")
+      .run();
+}
+
 VELOX_INSTANTIATE_TEST_SUITE_P(
     HashJoinTest,
     MultiThreadedHashJoinTest,

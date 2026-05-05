@@ -1773,6 +1773,16 @@ TEST(FilterTest, mergeWithBigint) {
   filters.push_back(notIn({empty - 5, empty, empty + 5}, true));
   filters.push_back(notIn({5, 498, 499, 500}, false));
 
+  const int64_t kInt64Min = std::numeric_limits<int64_t>::min();
+  const int64_t kInt64Max = std::numeric_limits<int64_t>::max();
+  filters.push_back(notIn({kInt64Min, -1}));
+  filters.push_back(notIn({kInt64Min, -1}, true));
+  filters.push_back(notIn({1, kInt64Max}));
+  filters.push_back(notIn({1, kInt64Max}, true));
+  filters.push_back(notIn({kInt64Min, kInt64Max}));
+  filters.push_back(between(kInt64Min, 0));
+  filters.push_back(between(0, kInt64Max));
+
   for (const auto& left : filters) {
     for (const auto& right : filters) {
       testMergeWithBigint(left.get(), right.get());

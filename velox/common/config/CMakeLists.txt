@@ -26,4 +26,7 @@ velox_add_library(
   ConfigProperty.h
   ConfigProvider.h
 )
-velox_link_libraries(velox_config_property PUBLIC velox_enums velox_exception)
+velox_link_libraries(
+  velox_config_property
+  PUBLIC velox_enum_declare velox_enum_define velox_exception
+)

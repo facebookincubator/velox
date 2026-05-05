@@ -17,17 +17,17 @@ cuDF supports Linux and WSL2 but not Windows or MacOS. cuDF also has minimum CUD
 The cuDF backend is included in Velox builds when the [VELOX_ENABLE_CUDF](https://github.com/facebookincubator/velox/blob/43df50c4f24bcbfa96f5739c072ab0894d41cf4c/CMakeLists.txt#L455) CMake option is set. The `adapters-cuda` service in Velox's [docker-compose.yml](https://github.com/facebookincubator/velox/blob/43df50c4f24bcbfa96f5739c072ab0894d41cf4c/docker-compose.yml#L69) is an excellent starting point for Velox builds with cuDF.
 
 1. Use `docker compose` to run an `adapters-cuda` image.
-```
-$ docker compose -f docker-compose.yml run -e NUM_THREADS=8 --rm -v "$(pwd):/velox" adapters-cuda /bin/bash
+```shell
+docker compose -f docker-compose.yml run -e NUM_THREADS=8 --rm -v "$(pwd):/velox" adapters-cuda /bin/bash
 ```
 2. Once inside the image, build cuDF with the following flags:
-```
-$ CUDA_ARCHITECTURES="native" EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON -DVELOX_ENABLE_PARQUET=ON -DVELOX_ENABLE_BENCHMARKS=ON -DVELOX_ENABLE_BENCHMARKS_BASIC=ON" make cudf
+```shell
+CUDA_ARCHITECTURES="native" EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON -DVELOX_ENABLE_PARQUET=ON -DVELOX_ENABLE_BENCHMARKS=ON -DVELOX_ENABLE_BENCHMARKS_BASIC=ON" make cudf
 ```
 3. After cuDF is built, verify the build by running the unit tests.
-```
-$ cd _build/release
-$ ctest -R cudf -V
+```shell
+cd _build/release
+ctest -R cudf -V
 ```
 
 Velox-cuDF builds are included in Velox CI as part of the [adapters build](https://github.com/facebookincubator/velox/blob/de31a3eb07b5ec3cbd1e6320a989fcb2ee1a95a7/.github/workflows/linux-build-base.yml#L85). The build step for cuDF does not require the worker to have a GPU, so adding a Velox-cuDF build step to Velox CI is compatible with the existing runners.
