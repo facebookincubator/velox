@@ -54,6 +54,9 @@ static constexpr const char* kAzureOAuthAuthType = "OAuth";
 
 static constexpr const char* kAzureSASAuthType = "SAS";
 
+// The default suffix for Azure Data Lake Storage Gen2 account names.
+static constexpr const char* kAzureAccountNameSuffix = ".dfs.core.windows.net";
+
 // For performance, re - use SAS tokens until the expiry is within this number
 // of seconds.
 static constexpr const char* kAzureSasTokenRenewPeriod =
