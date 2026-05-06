@@ -150,7 +150,7 @@ class IcebergDataSink : public HiveDataSink {
   // Additionally, extracts and stores the transformed partition values for
   // the writer in commitPartitionValue_ if not already set, which will be
   // included in the commit message as "partitionDataJson".
-  uint32_t ensureWriter(const HiveWriterId& id) override;
+  uint32_t ensureWriter(const WriterId& id) override;
 
   // Creates writer options configured for Iceberg table writes. Extends the
   // base HiveDataSink writer options with Iceberg-specific settings:

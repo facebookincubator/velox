@@ -42,7 +42,10 @@ class FileConfig;
 /// merge-on-read.
 class FileDataSource : public DataSource {
  public:
-  /// Runtime stat keys for file-based data sources.
+  /// Runtime stat keys for file-based data sources. Data IO stats use the
+  /// keys directly (e.g., "storageReadBytes"). Metadata IO stats use the
+  /// kMetadataPrefix (e.g., "metadata.storageReadBytes").
+  static constexpr std::string_view kMetadataPrefix{"metadata"};
   static constexpr std::string_view kNumPrefetch{"numPrefetch"};
   static constexpr std::string_view kPrefetchBytes{"prefetchBytes"};
   static constexpr std::string_view kTotalScanTime{"totalScanTime"};
@@ -72,7 +75,7 @@ class FileDataSource : public DataSource {
       const std::shared_ptr<common::Filter>& filter) override;
 
   uint64_t getCompletedBytes() override {
-    return ioStatistics_->rawBytesRead();
+    return dataIoStats_->rawBytesRead();
   }
 
   uint64_t getCompletedRows() override {
@@ -121,7 +124,8 @@ class FileDataSource : public DataSource {
   /// name.
   std::unordered_map<std::string, FileColumnHandlePtr> partitionKeys_;
 
-  std::shared_ptr<io::IoStatistics> ioStatistics_;
+  std::shared_ptr<io::IoStatistics> dataIoStats_;
+  std::shared_ptr<io::IoStatistics> metadataIoStats_;
   std::shared_ptr<IoStats> ioStats_;
 
   /// Column handles for the split info columns keyed on their column names.

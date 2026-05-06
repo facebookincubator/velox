@@ -53,5 +53,5 @@ add_test(velox_core_plan_consistency_checker_test velox_core_plan_consistency_ch
 
 target_link_libraries(
   velox_core_plan_consistency_checker_test
-  PRIVATE velox_core GTest::gtest GTest::gtest_main
+  PRIVATE velox_core velox_exec GTest::gtest GTest::gtest_main
 )

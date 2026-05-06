@@ -15,7 +15,6 @@
  */
 #pragma once
 
-#include "velox/expression/ComplexViewTypes.h"
 #include "velox/functions/Udf.h"
 #include "velox/type/FloatingPointUtil.h"
 
@@ -38,17 +37,23 @@ struct MapExceptPrimitiveFunction {
     }
   }
 
-  void call(
+  FOLLY_ALWAYS_INLINE void call(
       out_type<Map<Key, Generic<T1>>>& out,
       const arg_type<Map<Key, Generic<T1>>>& inputMap,
       const arg_type<Array<Key>>& keys) {
     if (!constantSearchKeys_) {
       searchKeys_.clear();
-      initializeSearchKeys(keys);
+      if (!keys.empty() && !inputMap.empty()) {
+        initializeSearchKeys(keys);
+      }
     }
 
+    auto toExclude = searchKeys_.size();
+    out.reserve(inputMap.size());
+
     for (const auto& entry : inputMap) {
-      if (searchKeys_.contains(entry.first)) {
+      if (toExclude > 0 && searchKeys_.contains(entry.first)) {
+        --toExclude;
         continue;
       }
 
@@ -65,6 +70,7 @@ struct MapExceptPrimitiveFunction {
 
  private:
   void initializeSearchKeys(const arg_type<Array<Key>>& keys) {
+    searchKeys_.reserve(keys.size());
     for (const auto& key : keys.skipNulls()) {
       searchKeys_.emplace(key);
     }
@@ -102,19 +108,26 @@ struct MapExceptVarcharFunction {
     }
   }
 
-  void call(
+  FOLLY_ALWAYS_INLINE void call(
       out_type<Map<Varchar, Generic<T1>>>& out,
       const arg_type<Map<Varchar, Generic<T1>>>& inputMap,
       const arg_type<Array<Varchar>>& keys) {
     if (!constantSearchKeys_) {
       searchKeys_.clear();
-      for (const auto& key : keys.skipNulls()) {
-        searchKeys_.emplace(key);
+      if (!keys.empty() && !inputMap.empty()) {
+        searchKeys_.reserve(keys.size());
+        for (const auto& key : keys.skipNulls()) {
+          searchKeys_.emplace(key);
+        }
       }
     }
 
+    auto toExclude = searchKeys_.size();
+    out.reserve(inputMap.size());
+
     for (const auto& entry : inputMap) {
-      if (searchKeys_.contains(entry.first)) {
+      if (toExclude > 0 && searchKeys_.contains(entry.first)) {
+        --toExclude;
         continue;
       }
 
@@ -133,63 +146,6 @@ struct MapExceptVarcharFunction {
   bool constantSearchKeys_{false};
   folly::F14FastSet<StringView> searchKeys_;
   std::vector<std::string> searchKeyStrings_;
-};
-
-struct MapExceptFunctionEqualComparator {
-  bool operator()(const exec::GenericView& lhs, const exec::GenericView& rhs)
-      const {
-    static constexpr auto kEqualValueAtFlags = CompareFlags::equality(
-        CompareFlags::NullHandlingMode::kNullAsIndeterminate);
-
-    auto result = lhs.compare(rhs, kEqualValueAtFlags);
-
-    // If comparison returns indeterminate (null), treat as not equal.
-    // This is consistent with SQL semantics where NULL != NULL.
-    if (!result.has_value()) {
-      return false;
-    }
-
-    return result.value() == 0;
-  }
-};
-
-/// Generic implementation. Doesn't provide an optimization for constant search
-/// keys.
-template <typename TExec>
-struct MapExceptFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(TExec);
-
-  void call(
-      out_type<Map<Generic<T1>, Generic<T2>>>& out,
-      const arg_type<Map<Generic<T1>, Generic<T2>>>& inputMap,
-      const arg_type<Array<Generic<T1>>>& keys) {
-    searchKeys_.clear();
-    for (const auto& key : keys.skipNulls()) {
-      searchKeys_.emplace(key);
-    }
-
-    for (const auto& entry : inputMap) {
-      if (searchKeys_.contains(entry.first)) {
-        continue;
-      }
-
-      if (!entry.second.has_value()) {
-        auto& keyWriter = out.add_null();
-        keyWriter.copy_from(entry.first);
-      } else {
-        auto [keyWriter, valueWriter] = out.add_item();
-        keyWriter.copy_from(entry.first);
-        valueWriter.copy_from(entry.second.value());
-      }
-    }
-  }
-
- private:
-  folly::F14FastSet<
-      exec::GenericView,
-      std::hash<exec::GenericView>,
-      MapExceptFunctionEqualComparator>
-      searchKeys_;
 };
 
 } // namespace facebook::velox::functions

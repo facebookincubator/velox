@@ -1060,6 +1060,12 @@ class Task : public std::enable_shared_from_this<Task> {
       std::unique_ptr<SplitsStore>& splitsStore,
       std::unique_ptr<SplitsStore> newSplitsStore);
 
+  // Returns the splits store for the given group, creating one if it doesn't
+  // exist.
+  SplitsStore* getOrCreateSplitsStoreLocked(
+      SplitsState& splitsState,
+      uint32_t splitGroupId);
+
   // Invoked when all the driver threads are off thread. The function returns
   // 'threadFinishPromises_' to fulfill.
   std::vector<ContinuePromise> allThreadsFinishedLocked();

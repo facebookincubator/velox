@@ -24,15 +24,35 @@ namespace facebook::velox::cudf_velox {
 void registerSparkAggregateFunctions(const std::string& prefix) {
   using exec::FunctionSignatureBuilder;
 
+  unregisterAggregateFunctions();
+  registerCommonAggregationFunctions(getGroupbyAggregationRegistry(), prefix);
+  registerCommonAggregationFunctions(getReduceAggregationRegistry(), prefix);
+  registerReduceOnlyAggregationFunctions(
+      getReduceAggregationRegistry(), prefix);
+
   // Spark: SUM(REAL) -> DOUBLE, AVG(REAL) -> DOUBLE
-  appendRegisterAggregationFunctionForStep(
+  appendGroupbyAggregationFunctionForStep(
       prefix + "sum",
       core::AggregationNode::Step::kSingle,
       FunctionSignatureBuilder()
           .returnType("double")
           .argumentType("real")
           .build());
-  appendRegisterAggregationFunctionForStep(
+  appendReduceAggregationFunctionForStep(
+      prefix + "sum",
+      core::AggregationNode::Step::kSingle,
+      FunctionSignatureBuilder()
+          .returnType("double")
+          .argumentType("real")
+          .build());
+  appendGroupbyAggregationFunctionForStep(
+      prefix + "sum",
+      core::AggregationNode::Step::kPartial,
+      FunctionSignatureBuilder()
+          .returnType("double")
+          .argumentType("real")
+          .build());
+  appendReduceAggregationFunctionForStep(
       prefix + "sum",
       core::AggregationNode::Step::kPartial,
       FunctionSignatureBuilder()
@@ -41,7 +61,14 @@ void registerSparkAggregateFunctions(const std::string& prefix) {
           .build());
   // SUM final/intermediate: DOUBLE->DOUBLE already registered.
 
-  appendRegisterAggregationFunctionForStep(
+  appendGroupbyAggregationFunctionForStep(
+      prefix + "avg",
+      core::AggregationNode::Step::kSingle,
+      FunctionSignatureBuilder()
+          .returnType("double")
+          .argumentType("real")
+          .build());
+  appendReduceAggregationFunctionForStep(
       prefix + "avg",
       core::AggregationNode::Step::kSingle,
       FunctionSignatureBuilder()

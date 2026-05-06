@@ -17,6 +17,7 @@
 #include <folly/init/Init.h>
 #include <unordered_set>
 
+#include "velox/core/QueryConfig.h"
 #include "velox/exec/fuzzer/PrestoQueryRunner.h"
 #include "velox/expression/fuzzer/ArgTypesGenerator.h"
 #include "velox/expression/fuzzer/ArgValuesGenerators.h"
@@ -319,6 +320,9 @@ std::unordered_set<std::string> skipFunctionsSOT = {
                      // instances
     "array_subset", // Velox-only function, not available in Presto
     "map_values_in_range", // Velox-only function, not available in Presto
+    "map_values_all_match", // Velox-only function, not available in Presto
+    "map_values_any_match", // Velox-only function, not available in Presto
+    "map_values_none_match", // Velox-only function, not available in Presto
     "transform_with_index", // Velox-only function, not available in Presto
     "dot_product", // Velox-only function, not available in Presto
     "remap_keys", // Velox-only function, not available in Presto
@@ -327,6 +331,7 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "map_append", // Velox-only function, not available in Presto
     "map_update", // Velox-only function, not available in Presto
     "map_trim_values", // Velox-only function, not available in Presto
+    "map_subset_key_in_range", // Velox-only function, not available in Presto
     "noisy_empty_approx_set_sfm", // non-deterministic because of privacy.
     // https://github.com/facebookincubator/velox/issues/11034
     "cast(real) -> varchar",
@@ -543,8 +548,10 @@ int main(int argc, char** argv) {
       initialSeed,
       skipFunctions,
       exprTransformers,
-      {{"session_timezone", "America/Los_Angeles"},
-       {"adjust_timestamp_to_session_timezone", "true"}},
+      {{facebook::velox::core::QueryConfig::kSessionTimezone,
+        "America/Los_Angeles"},
+       {facebook::velox::core::QueryConfig::kAdjustTimestampToTimezone, "true"},
+       {facebook::velox::core::QueryConfig::kMinRowsForPeeling, "50"}},
       argTypesGenerators,
       argValuesGenerators,
       referenceQueryRunner,

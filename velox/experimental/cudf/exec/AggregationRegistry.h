@@ -33,21 +33,41 @@ using StepAwareAggregationRegistry = std::unordered_map<
         core::AggregationNode::Step,
         std::vector<exec::FunctionSignaturePtr>>>;
 
-/// Get the step-aware aggregation registry
-StepAwareAggregationRegistry& getStepAwareAggregationRegistry();
+/// Runtime aggregation registries keyed by physical execution kind.
+StepAwareAggregationRegistry& getGroupbyAggregationRegistry();
+StepAwareAggregationRegistry& getReduceAggregationRegistry();
 
-/// Append a single signature to an existing aggregation function registration.
-/// This is a utility function used by Spark and Presto aggregate function
-/// registration to add engine-specific signatures.
-void appendRegisterAggregationFunctionForStep(
+/// Shared registration helpers used to populate a target physical registry.
+bool registerAggregationFunctionForStep(
+    StepAwareAggregationRegistry& registry,
+    const std::string& name,
+    core::AggregationNode::Step step,
+    const std::vector<exec::FunctionSignaturePtr>& signatures,
+    bool overwrite = true);
+
+/// Shared common aggregation registration used by engine-specific builders.
+void registerCommonAggregationFunctions(
+    StepAwareAggregationRegistry& registry,
+    const std::string& prefix);
+
+/// Shared reduce-only registration used by engine-specific builders.
+void registerReduceOnlyAggregationFunctions(
+    StepAwareAggregationRegistry& registry,
+    const std::string& prefix);
+
+/// Append a single signature to the current groupby aggregation registry.
+void appendGroupbyAggregationFunctionForStep(
     const std::string& name,
     core::AggregationNode::Step step,
     const exec::FunctionSignaturePtr& signature);
 
-/// Unregister all aggregation functions from the registry.
-void unregisterAggregateFunctions();
+/// Append a single signature to the current reduce aggregation registry.
+void appendReduceAggregationFunctionForStep(
+    const std::string& name,
+    core::AggregationNode::Step step,
+    const exec::FunctionSignaturePtr& signature);
 
-/// Unregister aggregation functions whose names start with the given prefix.
-void unregisterAggregateFunctionsWithPrefix(const std::string& prefix);
+/// Clear all physical aggregation registries.
+void unregisterAggregateFunctions();
 
 } // namespace facebook::velox::cudf_velox
