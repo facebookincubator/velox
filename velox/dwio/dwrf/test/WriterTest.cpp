@@ -18,6 +18,7 @@
 #include <gtest/gtest.h>
 #include <stdexcept>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/io/IoStatistics.h"
 #include "velox/dwio/dwrf/reader/ReaderBase.h"
 #include "velox/dwio/dwrf/writer/WriterBase.h"
 #include "velox/type/fbhive/HiveTypeParser.h"
@@ -61,7 +62,8 @@ class WriterTest : public Test {
     std::string data(sinkPtr_->data(), sinkPtr_->size());
     auto readFile = std::make_shared<InMemoryReadFile>(std::move(data));
     auto input = std::make_unique<BufferedInput>(std::move(readFile), *pool_);
-    dwio::common::ReaderOptions readerOpts{pool_.get()};
+    dwio::common::ReaderOptions readerOpts{
+        pool_.get(), &dataIoStats_, &metadataIoStats_};
     auto reader = std::make_unique<ReaderBase>(readerOpts, std::move(input));
     reader->loadCache();
     return reader;
@@ -91,6 +93,8 @@ class WriterTest : public Test {
   std::shared_ptr<MemoryPool> pool_;
   MemorySink* sinkPtr_;
   std::unique_ptr<WriterBase> writer_;
+  io::IoStatistics dataIoStats_;
+  io::IoStatistics metadataIoStats_;
 };
 
 class SupportedCompressionTest

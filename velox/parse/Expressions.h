@@ -346,14 +346,14 @@ class WindowCallExpr : public CallExpr {
 class ConstantExpr : public IExpr,
                      public std::enable_shared_from_this<ConstantExpr> {
  public:
-  ConstantExpr(TypePtr type, variant value, std::optional<std::string> alias)
+  ConstantExpr(TypePtr type, Variant value, std::optional<std::string> alias)
       : IExpr{IExpr::Kind::kConstant, {}, std::move(alias)},
         type_{std::move(type)},
         value_{std::move(value)} {}
 
   std::string toString() const override;
 
-  const variant& value() const {
+  const Variant& value() const {
     return value_;
   }
 
@@ -382,7 +382,7 @@ class ConstantExpr : public IExpr,
 
  private:
   const TypePtr type_;
-  const variant value_;
+  const Variant value_;
 };
 
 class CastExpr : public IExpr, public std::enable_shared_from_this<CastExpr> {

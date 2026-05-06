@@ -70,7 +70,9 @@ class ReaderBase {
   ReaderBase(
       memory::MemoryPool& pool,
       std::unique_ptr<dwio::common::BufferedInput> input,
-      dwio::common::FileFormat fileFormat = dwio::common::FileFormat::DWRF);
+      dwio::common::FileFormat fileFormat,
+      io::IoStatistics* dataIoStats,
+      io::IoStatistics* metadataIoStats);
 
   /// Creates reader base from metadata.
   ReaderBase(
@@ -79,8 +81,13 @@ class ReaderBase {
       std::unique_ptr<PostScript> ps,
       const proto::Footer* footer,
       std::unique_ptr<StripeMetadataCache> cache,
-      std::unique_ptr<encryption::DecryptionHandler> handler = nullptr)
-      : options_{dwio::common::ReaderOptions(&pool)},
+      std::unique_ptr<encryption::DecryptionHandler> handler,
+      io::IoStatistics* dataIoStats,
+      io::IoStatistics* metadataIoStats)
+      : options_{dwio::common::ReaderOptions(
+            &pool,
+            dataIoStats,
+            metadataIoStats)},
         input_{std::move(input)},
         fileLength_{0},
         postScript_{std::move(ps)},
@@ -262,8 +269,10 @@ class ReaderBase {
 
   static dwio::common::ReaderOptions createReaderOptions(
       memory::MemoryPool& pool,
-      dwio::common::FileFormat fileFormat) {
-    dwio::common::ReaderOptions options(&pool);
+      dwio::common::FileFormat fileFormat,
+      io::IoStatistics* dataIoStats,
+      io::IoStatistics* metadataIoStats) {
+    dwio::common::ReaderOptions options(&pool, dataIoStats, metadataIoStats);
     options.setFileFormat(fileFormat);
     return options;
   }

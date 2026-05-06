@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/expression/ExprOptimizer.h"
+#include "velox/core/Expressions.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/ExprRewriteRegistry.h"
 
@@ -59,16 +60,22 @@ core::TypedExprPtr optimizeInputs(
     core::QueryCtx* queryCtx,
     memory::MemoryPool* pool,
     const MakeFailExpr& makeFailExpr) {
-  if (expr->isCallKind()) {
+  if (expr->isCallKind() || expr->isNullIfKind()) {
     std::vector<core::TypedExprPtr> optimizedInputs;
     optimizedInputs.reserve(expr->inputs().size());
     for (const auto& input : expr->inputs()) {
       optimizedInputs.push_back(optimize(input, queryCtx, pool, makeFailExpr));
     }
-    const auto* callExpr = expr->asUnchecked<core::CallTypedExpr>();
 
-    return std::make_shared<core::CallTypedExpr>(
-        callExpr->type(), optimizedInputs, callExpr->name());
+    if (expr->isCallKind()) {
+      const auto* callExpr = expr->asUnchecked<core::CallTypedExpr>();
+      return std::make_shared<core::CallTypedExpr>(
+          callExpr->type(), optimizedInputs, callExpr->name());
+    }
+
+    const auto* nullIfExpr = expr->asUnchecked<core::NullIfTypedExpr>();
+    return std::make_shared<core::NullIfTypedExpr>(
+        optimizedInputs[0], optimizedInputs[1], nullIfExpr->commonType());
   }
 
   if (expr->isCastKind()) {

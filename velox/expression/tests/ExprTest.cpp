@@ -4099,7 +4099,7 @@ TEST_P(ParameterizedExprTest, cseUnderTryWithIf) {
   // errors when combined with TRY. In this case a VectorFunction sizes the
   // result based on rows.end(), can throw user exceptions, and doesn't resize
   // the result Vector to include rows that produced exceptions. If that
-  // funciton is evaluated as part of CSE, e.g. on both sides of an if
+  // function is evaluated as part of CSE, e.g. on both sides of an if
   // statement, and the last row produces an exception, the result Vector will
   // be smaller than rows.size(). This test validates that in CSE we can
   // tolerate this and does not rely on the fact the result Vector is at least
@@ -5321,9 +5321,8 @@ TEST_F(ExprTest, evaluateConstantExpression) {
       makeArrayVectorFromJson<int64_t>({"[2, 2, 2]"}));
 
   assertEqualVectors(
-      eval(
-          "try(coalesce(array_min_by(array[1, 2, 3], x -> x / 0), 0::INTEGER))"),
-      makeNullConstant(TypeKind::INTEGER, 1));
+      eval("try(coalesce(array_min_by(array[1, 2, 3], x -> x / 0), 0))"),
+      makeNullConstant(TypeKind::BIGINT, 1));
 
   // Verify that constant folding takes into account query config.
   setQueryTimeZone("America/Los_Angeles");
@@ -5342,7 +5341,9 @@ TEST_F(ExprTest, evaluateConstantExpression) {
 
   EXPECT_TRUE(eval("transform(array[1, 2, 3], x -> (x * 2) + a)") == nullptr);
 
-  EXPECT_TRUE(eval("transform(array[1, 2, 3], x -> x + rand())") == nullptr);
+  EXPECT_TRUE(
+      eval("transform(array[1, 2, 3], x -> cast(x as double) + rand())") ==
+      nullptr);
 
   VELOX_ASSERT_THROW(eval("5 / 0"), "division by zero");
   EXPECT_TRUE(evalNoThrow("5 / 0") == nullptr);

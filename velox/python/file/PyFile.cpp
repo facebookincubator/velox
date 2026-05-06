@@ -17,6 +17,7 @@
 #include "velox/python/file/PyFile.h"
 #include <fmt/format.h>
 #include <folly/String.h>
+#include "velox/common/io/IoStatistics.h"
 #include "velox/dwio/common/ReaderFactory.h"
 
 namespace facebook::velox::py {
@@ -55,10 +56,13 @@ PyType PyFile::getSchema() {
                         ->openFileForRead(filePath_);
     auto input = std::make_unique<dwio::common::BufferedInput>(
         std::shared_ptr<ReadFile>(std::move(readFile)), *leafPool);
-    auto reader =
-        dwio::common::getReaderFactory(fileFormat_)
-            ->createReader(
-                std::move(input), dwio::common::ReaderOptions{leafPool.get()});
+    io::IoStatistics dataIoStats;
+    io::IoStatistics metadataIoStats;
+    auto reader = dwio::common::getReaderFactory(fileFormat_)
+                      ->createReader(
+                          std::move(input),
+                          dwio::common::ReaderOptions{
+                              leafPool.get(), &dataIoStats, &metadataIoStats});
     fileSchema_ = reader->rowType();
   }
   return PyType{fileSchema_};

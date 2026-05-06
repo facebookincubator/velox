@@ -15,8 +15,11 @@
  */
 #include "velox/connectors/hive/HiveIndexSource.h"
 
+#include <folly/ScopeGuard.h>
 #include "velox/common/base/RuntimeMetrics.h"
+#include "velox/common/time/CpuWallTimer.h"
 #include "velox/common/time/Timer.h"
+#include "velox/connectors/hive/FileDataSource.h"
 #include "velox/connectors/hive/FileIndexReader.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
@@ -430,6 +433,22 @@ class UnionResultIterator : public IndexSource::ResultIterator {
 
 } // namespace
 
+// Scope-attached timer that accumulates wall and CPU time into the
+// corresponding iterationStats fields when the attached block exits.
+// Expects a local variable named 'iterationStats' of type
+// HiveIndexSource::IterationStats.
+//
+// Usage:
+//   RECORD_CPU_WALL(setup) {
+//     // timed work
+//   }
+#define RECORD_CPU_WALL(name)                                        \
+  if (DeltaCpuWallTimer _timer_##name([&](const CpuWallTiming& _t) { \
+        iterationStats.name##WallNs += _t.wallNanos;                 \
+        iterationStats.name##CpuNs += _t.cpuNanos;                   \
+      });                                                            \
+      true)
+
 /// Iterates over results from a SplitIndexReader and applies HiveIndexSource's
 /// format-agnostic orchestration: remaining filter evaluation and output
 /// projection.
@@ -456,9 +475,16 @@ class HiveLookupIterator : public IndexSource::ResultIterator {
       return nullptr;
     }
 
+    HiveIndexSource::IterationStats iterationStats;
+    SCOPE_EXIT {
+      indexSource_->recordIterationStats(iterationStats);
+    };
+
     // Initialize lookup on first call.
     if (state_ == State::kInit) {
-      indexReader_->startLookup(request_, options_);
+      RECORD_CPU_WALL(setup) {
+        indexReader_->startLookup(request_, options_);
+      }
       setState(State::kRead);
     }
 
@@ -466,7 +492,7 @@ class HiveLookupIterator : public IndexSource::ResultIterator {
       setState(State::kEnd);
       return nullptr;
     }
-    return getOutput(size);
+    return getOutput(size, iterationStats);
   }
 
  private:
@@ -523,25 +549,37 @@ class HiveLookupIterator : public IndexSource::ResultIterator {
     }
   }
 
-  std::unique_ptr<IndexSource::Result> getOutput(vector_size_t size) {
-    auto result = indexReader_->next(size);
+  std::unique_ptr<IndexSource::Result> getOutput(
+      vector_size_t size,
+      HiveIndexSource::IterationStats& iterationStats) {
+    std::unique_ptr<IndexSource::Result> result;
+    RECORD_CPU_WALL(read) {
+      result = indexReader_->next(size);
+    }
     if (result == nullptr) {
       VELOX_CHECK(!indexReader_->hasNext());
       setState(State::kEnd);
       return nullptr;
     }
     if (indexSource_->remainingFilterExprSet_ == nullptr) {
-      result->output = indexSource_->projectOutput(
-          result->output->size(), nullptr, result->output);
-      return result;
+      RECORD_CPU_WALL(output) {
+        result->output = indexSource_->projectOutput(
+            result->output->size(), nullptr, result->output);
+      }
+    } else {
+      result = evaluateRemainingFilter(std::move(result), iterationStats);
     }
-    return evaluateRemainingFilter(std::move(result));
+    return result;
   }
 
   std::unique_ptr<IndexSource::Result> evaluateRemainingFilter(
-      std::unique_ptr<IndexSource::Result> result) {
+      std::unique_ptr<IndexSource::Result> result,
+      HiveIndexSource::IterationStats& iterationStats) {
     auto& output = result->output;
-    const auto numRemainingRows = indexSource_->evaluateRemainingFilter(output);
+    vector_size_t numRemainingRows;
+    RECORD_CPU_WALL(filter) {
+      numRemainingRows = indexSource_->evaluateRemainingFilter(output);
+    }
 
     if (numRemainingRows == 0) {
       return getEmptyResult();
@@ -556,8 +594,10 @@ class HiveLookupIterator : public IndexSource::ResultIterator {
           result->inputHits,
           indexSource_->pool_);
     }
-    output =
-        indexSource_->projectOutput(numRemainingRows, remainingIndices, output);
+    RECORD_CPU_WALL(output) {
+      output = indexSource_->projectOutput(
+          numRemainingRows, remainingIndices, output);
+    }
     return result;
   }
 
@@ -909,11 +949,14 @@ HiveIndexSource::createUnionLookupIterator(
 }
 
 std::unordered_map<std::string, RuntimeMetric> HiveIndexSource::runtimeStats() {
-  std::unordered_map<std::string, RuntimeMetric> stats;
+  // Start with accumulated per-call timing stats.
+  auto stats = runtimeStats_;
+
   if (remainingFilterTimeNs_ != 0) {
     stats[std::string(Connector::kTotalRemainingFilterTime)] =
         RuntimeMetric(remainingFilterTimeNs_, RuntimeCounter::Unit::kNanos);
   }
+
   // Merge stats from all readers.
   for (auto& reader : readers_) {
     for (auto& [key, metric] : reader->runtimeStats()) {
@@ -925,6 +968,41 @@ std::unordered_map<std::string, RuntimeMetric> HiveIndexSource::runtimeStats() {
       }
     }
   }
+  // Add I/O stats from ioStatistics_ (storage read, ram cache, ssd cache).
+  if (ioStatistics_) {
+    const auto& read = ioStatistics_->read();
+    if (read.count() > 0) {
+      stats[std::string(FileDataSource::kStorageReadBytes)] = RuntimeMetric(
+          static_cast<int64_t>(read.sum()),
+          read.count(),
+          static_cast<int64_t>(read.min()),
+          static_cast<int64_t>(read.max()),
+          RuntimeCounter::Unit::kBytes);
+    }
+    const auto& ramHit = ioStatistics_->ramHit();
+    if (ramHit.count() > 0) {
+      stats[std::string(FileDataSource::kNumRamRead)] =
+          RuntimeMetric(static_cast<int64_t>(ramHit.count()));
+      stats[std::string(FileDataSource::kRamReadBytes)] = RuntimeMetric(
+          static_cast<int64_t>(ramHit.sum()),
+          ramHit.count(),
+          static_cast<int64_t>(ramHit.min()),
+          static_cast<int64_t>(ramHit.max()),
+          RuntimeCounter::Unit::kBytes);
+    }
+    const auto& ssdRead = ioStatistics_->ssdRead();
+    if (ssdRead.count() > 0) {
+      stats[std::string(FileDataSource::kNumLocalRead)] =
+          RuntimeMetric(static_cast<int64_t>(ssdRead.count()));
+      stats[std::string(FileDataSource::kLocalReadBytes)] = RuntimeMetric(
+          static_cast<int64_t>(ssdRead.sum()),
+          ssdRead.count(),
+          static_cast<int64_t>(ssdRead.min()),
+          static_cast<int64_t>(ssdRead.max()),
+          RuntimeCounter::Unit::kBytes);
+    }
+  }
+
   return stats;
 }
 
@@ -956,6 +1034,76 @@ vector_size_t HiveIndexSource::evaluateRemainingFilter(
   }
   remainingFilterTimeNs_ += filterTimeNs;
   return numRemainingRows;
+}
+
+void HiveIndexSource::recordIterationStats(
+    const IterationStats& iterationStats) {
+  const auto totalWallNs = iterationStats.setupWallNs +
+      iterationStats.readWallNs + iterationStats.outputWallNs +
+      iterationStats.filterWallNs;
+  if (totalWallNs != 0) {
+    exec::addOperatorRuntimeStats(
+        IterationStats::kConnectorLookupWallNanos,
+        RuntimeCounter(
+            static_cast<int64_t>(totalWallNs), RuntimeCounter::Unit::kNanos),
+        runtimeStats_);
+  }
+  if (iterationStats.setupWallNs != 0) {
+    exec::addOperatorRuntimeStats(
+        IterationStats::kIndexSetupWallNanos,
+        RuntimeCounter(
+            static_cast<int64_t>(iterationStats.setupWallNs),
+            RuntimeCounter::Unit::kNanos),
+        runtimeStats_);
+  }
+  if (iterationStats.setupCpuNs != 0) {
+    exec::addOperatorRuntimeStats(
+        IterationStats::kIndexSetupCpuNanos,
+        RuntimeCounter(
+            static_cast<int64_t>(iterationStats.setupCpuNs),
+            RuntimeCounter::Unit::kNanos),
+        runtimeStats_);
+  }
+  if (iterationStats.readWallNs != 0) {
+    exec::addOperatorRuntimeStats(
+        IterationStats::kIndexReadWallNanos,
+        RuntimeCounter(
+            static_cast<int64_t>(iterationStats.readWallNs),
+            RuntimeCounter::Unit::kNanos),
+        runtimeStats_);
+  }
+  if (iterationStats.readCpuNs != 0) {
+    exec::addOperatorRuntimeStats(
+        IterationStats::kIndexReadCpuNanos,
+        RuntimeCounter(
+            static_cast<int64_t>(iterationStats.readCpuNs),
+            RuntimeCounter::Unit::kNanos),
+        runtimeStats_);
+  }
+  if (iterationStats.outputCpuNs != 0) {
+    exec::addOperatorRuntimeStats(
+        IterationStats::kConnectorResultPrepareCpuNanos,
+        RuntimeCounter(
+            static_cast<int64_t>(iterationStats.outputCpuNs),
+            RuntimeCounter::Unit::kNanos),
+        runtimeStats_);
+  }
+  if (iterationStats.filterWallNs != 0) {
+    exec::addOperatorRuntimeStats(
+        IterationStats::kPostFilterWallNanos,
+        RuntimeCounter(
+            static_cast<int64_t>(iterationStats.filterWallNs),
+            RuntimeCounter::Unit::kNanos),
+        runtimeStats_);
+  }
+  if (iterationStats.filterCpuNs != 0) {
+    exec::addOperatorRuntimeStats(
+        IterationStats::kPostFilterCpuNanos,
+        RuntimeCounter(
+            static_cast<int64_t>(iterationStats.filterCpuNs),
+            RuntimeCounter::Unit::kNanos),
+        runtimeStats_);
+  }
 }
 
 RowVectorPtr HiveIndexSource::projectOutput(

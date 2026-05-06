@@ -1687,18 +1687,12 @@ void Task::addSplitToStoreLocked(
     uint32_t groupId,
     const exec::Split& split,
     std::vector<ContinuePromise>& promises) {
-  auto& splitsStore = splitsState.groupSplitsStores[groupId];
-  if (!splitsStore) {
-    setSplitsStore(
-        splitsStore,
-        std::make_unique<QueueSplitsStore>(!splitsState.sourceIsTableScan));
-  }
+  auto* splitsStore = getOrCreateSplitsStoreLocked(splitsState, groupId);
   if (split.isBarrier()) {
     splitsStore->requestBarrier(split.barrier->numDrivers, promises);
     return;
   }
-  auto* queueSplitsStore =
-      checkedPointerCast<QueueSplitsStore>(splitsStore.get());
+  auto* queueSplitsStore = checkedPointerCast<QueueSplitsStore>(splitsStore);
   queueSplitsStore->addSplit(split, promises);
 }
 
@@ -1712,7 +1706,7 @@ void Task::noMoreSplitsForGroup(
 
     auto& splitsState = getPlanNodeSplitsStateLocked(planNodeId);
     noMoreSplitsForStore(
-        splitsState.groupSplitsStores[splitGroupId].get(), promises);
+        getOrCreateSplitsStoreLocked(splitsState, splitGroupId), promises);
 
     // There were no splits in this group, hence, no active drivers. Mark the
     // group complete.
@@ -1807,6 +1801,18 @@ void Task::setSplitsStore(
   splitsStore = std::move(newSplitsStore);
   splitsStore->setTaskStats(taskStats_);
   splitsStore->setPreloadingSplits(preloadingSplits_);
+}
+
+SplitsStore* Task::getOrCreateSplitsStoreLocked(
+    SplitsState& splitsState,
+    uint32_t splitGroupId) {
+  auto& splitsStore = splitsState.groupSplitsStores[splitGroupId];
+  if (!splitsStore) {
+    setSplitsStore(
+        splitsStore,
+        std::make_unique<QueueSplitsStore>(!splitsState.sourceIsTableScan));
+  }
+  return splitsStore.get();
 }
 
 ContinueFuture Task::requestBarrier() {
@@ -2022,12 +2028,7 @@ BlockingReason Task::getSplitOrFuture(
     ContinueFuture& future) {
   std::lock_guard<std::timed_mutex> l(mutex_);
   auto& splitsState = getPlanNodeSplitsStateLocked(planNodeId);
-  auto& splitsStore = splitsState.groupSplitsStores[splitGroupId];
-  if (!splitsStore) {
-    setSplitsStore(
-        splitsStore,
-        std::make_unique<QueueSplitsStore>(!splitsState.sourceIsTableScan));
-  }
+  auto* splitsStore = getOrCreateSplitsStoreLocked(splitsState, splitGroupId);
   return splitsStore->nextSplit(
              driverId, maxPreloadSplits, preload, split, future)
       ? BlockingReason::kNotBlocked
@@ -2519,13 +2520,18 @@ ContinueFuture Task::terminate(TaskState terminalState) {
         "Termination time has already been set, this should only happen once.");
     taskStats_.terminationTimeMs = getCurrentTimeMs();
     if (state_ == TaskState::kCanceled || state_ == TaskState::kAborted) {
-      try {
-        VELOX_FAIL(
-            state_ == TaskState::kCanceled ? "Cancelled"
-                                           : "Aborted for external error");
-      } catch (const std::exception&) {
-        exception_ = std::current_exception();
-      }
+      // Construct the exception directly instead of going through VELOX_FAIL to
+      // avoid error log when cancellation is expected.
+      exception_ = std::make_exception_ptr(VeloxRuntimeError(
+          __FILE__,
+          __LINE__,
+          __FUNCTION__,
+          /*expression=*/"",
+          state_ == TaskState::kCanceled ? "Cancelled"
+                                         : "Aborted for external error",
+          error_source::kErrorSourceRuntime,
+          error_code::kInvalidState,
+          /*isRetriable=*/false));
     }
     if (state_ != TaskState::kFinished) {
       VELOX_CHECK(!cancellationSource_.isCancellationRequested());

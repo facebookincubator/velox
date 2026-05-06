@@ -27,6 +27,7 @@ velox_add_library(
   FileColumnHandle.cpp
   FileConfig.cpp
   FileConnectorUtil.cpp
+  FileDataSink.cpp
   FileDataSource.cpp
   FileHandle.cpp
   FileIndexReader.cpp
@@ -49,6 +50,7 @@ velox_add_library(
   FileConfig.h
   FileConnectorSplit.h
   FileConnectorUtil.h
+  FileDataSink.h
   FileDataSource.h
   FileHandle.h
   FileIndexReader.h
@@ -79,6 +81,7 @@ velox_link_libraries(
     velox_common_io
     velox_connector
     velox_dwio_catalog_fbhive
+    velox_exec
     velox_hive_partition_function
     velox_key_encoder
 )
