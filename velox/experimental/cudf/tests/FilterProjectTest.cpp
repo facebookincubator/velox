@@ -933,7 +933,11 @@ TEST_F(CudfFilterProjectTest, dateLiteralComparisons) {
   }
 }
 
-TEST_F(CudfFilterProjectTest, timestampBetweenAndNullSemantics) {
+// TODO: Re-enable once https://github.com/facebookincubator/velox/pull/17314
+// (NotFunction, IsNullFunction, IsNotNullFunction) lands. AST/JIT cannot
+// evaluate timestamp expressions, so IS [NOT] NULL and NOT BETWEEN over
+// TIMESTAMP rely on the function-registry path provided by that PR.
+TEST_F(CudfFilterProjectTest, DISABLED_timestampBetweenAndNullSemantics) {
   std::vector<std::optional<Timestamp>> timestamps = {
       Timestamp(1735689599, 0), // 2024-12-31 23:59:59
       std::nullopt,
