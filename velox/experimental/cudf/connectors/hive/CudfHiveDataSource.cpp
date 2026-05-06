@@ -124,7 +124,11 @@ CudfHiveDataSource::CudfHiveDataSource(
   if (!subfieldFilters_.empty()) {
     auto const readerFilterType = getTableRowType();
     subfieldFilterExpr_ = &createAstFromSubfieldFilters(
-        subfieldFilters_, subfieldTree_, subfieldScalars_, readerFilterType);
+        subfieldFilters_,
+        subfieldTree_,
+        subfieldScalars_,
+        readerFilterType,
+        cudfHiveConfig_->timestampType().id());
   }
 
   VELOX_CHECK_NOT_NULL(fileHandleFactory_, "No FileHandleFactory present");

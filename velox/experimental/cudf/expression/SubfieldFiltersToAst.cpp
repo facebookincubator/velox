@@ -341,7 +341,8 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
     const common::Filter& filter,
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
-    const RowTypePtr& inputRowSchema) {
+    const RowTypePtr& inputRowSchema,
+    cudf::type_id timestampUnit) {
   // First, create column reference from subfield
   // For now, only support simple field references
   if (subfield.path().empty() ||
@@ -495,7 +496,7 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
       exprRefs.reserve(subFilters.size());
       for (const auto* subFilter : subFilters) {
         auto const& subExpr = createAstFromSubfieldFilter(
-            subfield, *subFilter, tree, scalars, inputRowSchema);
+            subfield, *subFilter, tree, scalars, inputRowSchema, timestampUnit);
         exprRefs.push_back(&subExpr);
       }
 
@@ -505,6 +506,128 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
             &tree.push(Operation{Op::NULL_LOGICAL_OR, *result, *exprRefs[i]});
       }
       return *result;
+    }
+
+    case common::FilterKind::kTimestampRange: {
+      auto* tsRange = static_cast<const common::TimestampRange*>(&filter);
+      const auto lower = tsRange->lower();
+      const auto upper = tsRange->upper();
+
+      // Convert Velox Timestamp to the cuDF timestamp resolution configured
+      // in CudfConfig (defaults to nanoseconds).
+      auto makeTimestampScalar =
+          [&](const Timestamp& ts) -> std::unique_ptr<cudf::scalar> {
+        auto tsUnit = timestampUnit;
+        switch (tsUnit) {
+          case cudf::type_id::TIMESTAMP_NANOSECONDS: {
+            auto nanos = ts.toNanos();
+            auto scalar =
+                std::make_unique<cudf::timestamp_scalar<cudf::timestamp_ns>>(
+                    nanos, true, stream, mr);
+            stream.synchronize();
+            return scalar;
+          }
+          case cudf::type_id::TIMESTAMP_MICROSECONDS: {
+            auto micros = ts.toMicros();
+            auto scalar =
+                std::make_unique<cudf::timestamp_scalar<cudf::timestamp_us>>(
+                    micros, true, stream, mr);
+            stream.synchronize();
+            return scalar;
+          }
+          case cudf::type_id::TIMESTAMP_MILLISECONDS: {
+            auto millis = ts.toMillis();
+            auto scalar =
+                std::make_unique<cudf::timestamp_scalar<cudf::timestamp_ms>>(
+                    millis, true, stream, mr);
+            stream.synchronize();
+            return scalar;
+          }
+          case cudf::type_id::TIMESTAMP_SECONDS: {
+            auto secs = ts.getSeconds();
+            auto scalar =
+                std::make_unique<cudf::timestamp_scalar<cudf::timestamp_s>>(
+                    secs, true, stream, mr);
+            stream.synchronize();
+            return scalar;
+          }
+          default:
+            VELOX_FAIL(
+                "Unsupported timestamp unit: {}", static_cast<int>(tsUnit));
+        }
+      };
+
+      auto pushTimestampLiteral =
+          [&](const Timestamp& ts) -> const cudf::ast::expression& {
+        auto scalar = makeTimestampScalar(ts);
+        scalars.emplace_back(std::move(scalar));
+        auto tsUnit = timestampUnit;
+        switch (tsUnit) {
+          case cudf::type_id::TIMESTAMP_NANOSECONDS:
+            return tree.push(
+                cudf::ast::literal{
+                    *static_cast<cudf::timestamp_scalar<cudf::timestamp_ns>*>(
+                        scalars.back().get())});
+          case cudf::type_id::TIMESTAMP_MICROSECONDS:
+            return tree.push(
+                cudf::ast::literal{
+                    *static_cast<cudf::timestamp_scalar<cudf::timestamp_us>*>(
+                        scalars.back().get())});
+          case cudf::type_id::TIMESTAMP_MILLISECONDS:
+            return tree.push(
+                cudf::ast::literal{
+                    *static_cast<cudf::timestamp_scalar<cudf::timestamp_ms>*>(
+                        scalars.back().get())});
+          case cudf::type_id::TIMESTAMP_SECONDS:
+            return tree.push(
+                cudf::ast::literal{
+                    *static_cast<cudf::timestamp_scalar<cudf::timestamp_s>*>(
+                        scalars.back().get())});
+          default:
+            VELOX_FAIL(
+                "Unsupported timestamp unit: {}", static_cast<int>(tsUnit));
+        }
+      };
+
+      if (tsRange->isSingleValue()) {
+        const auto& literal = pushTimestampLiteral(lower);
+        return tree.push(Operation{Op::EQUAL, columnRef, literal});
+      }
+
+      const auto& lowerLiteral = pushTimestampLiteral(lower);
+      const auto& lowerExpr =
+          tree.push(Operation{Op::GREATER_EQUAL, columnRef, lowerLiteral});
+
+      const auto& upperLiteral = pushTimestampLiteral(upper);
+      const auto& upperExpr =
+          tree.push(Operation{Op::LESS_EQUAL, columnRef, upperLiteral});
+
+      return tree.push(Operation{Op::NULL_LOGICAL_AND, lowerExpr, upperExpr});
+    }
+
+    case common::FilterKind::kNegatedBigintRange: {
+      auto* negRange = static_cast<const common::NegatedBigintRange*>(&filter);
+      const auto rejectedLower = negRange->lower();
+      const auto rejectedUpper = negRange->upper();
+
+      auto const& columnType = inputRowSchema->childAt(columnIndex);
+
+      // Build the inner range: column >= lower AND column <= upper.
+      // Then negate it: NOT(column >= lower AND column <= upper).
+      // This expresses "column is outside [lower, upper]".
+      common::BigintRange innerRange(
+          rejectedLower, rejectedUpper, !filter.testNull());
+      auto innerResult = VELOX_DYNAMIC_TYPE_DISPATCH(
+          buildBigintRangeExpr,
+          columnType->kind(),
+          innerRange,
+          tree,
+          scalars,
+          columnRef,
+          stream,
+          mr,
+          columnType);
+      return tree.push(Operation{Op::NOT, innerResult.get()});
     }
 
     default:
@@ -520,7 +643,8 @@ cudf::ast::expression const& createAstFromSubfieldFilters(
     const common::SubfieldFilters& subfieldFilters,
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
-    const RowTypePtr& inputRowSchema) {
+    const RowTypePtr& inputRowSchema,
+    cudf::type_id timestampUnit) {
   using Op = cudf::ast::ast_operator;
   using Operation = cudf::ast::operation;
 
@@ -532,7 +656,7 @@ cudf::ast::expression const& createAstFromSubfieldFilters(
       continue;
     }
     auto const& expr = createAstFromSubfieldFilter(
-        subfield, *filterPtr, tree, scalars, inputRowSchema);
+        subfield, *filterPtr, tree, scalars, inputRowSchema, timestampUnit);
     exprRefs.push_back(&expr);
   }
 
