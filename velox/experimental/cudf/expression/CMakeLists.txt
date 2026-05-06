@@ -15,11 +15,9 @@
 add_library(
   velox_cudf_expression
   AstExpression.cpp
-  DateTruncFunction.cpp
   DecimalExpressionKernels.cu
   ExpressionEvaluator.cpp
   JitExpression.cpp
-  prestosql/DateAddFunction.cpp
   prestosql/DatePlusIntervalFunction.cpp
   PrestoFunctions.cpp
   sparksql/DateAddFunction.cpp

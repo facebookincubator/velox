@@ -16,7 +16,6 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
-#include "velox/experimental/cudf/expression/PrestoFunctions.h"
 
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/OperatorType.h"
@@ -24,7 +23,6 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/type/Time.h"
 
 namespace facebook::velox::exec::test {
 
@@ -43,8 +41,6 @@ class ToCudfSelectionTest : public OperatorTestBase {
     OperatorTestBase::SetUp();
     filesystems::registerLocalFileSystem();
     cudf_velox::registerCudf();
-    cudf_velox::registerPrestoFunctions(
-        cudf_velox::CudfConfig::getInstance().functionNamePrefix);
   }
 
   void TearDown() override {
@@ -89,30 +85,6 @@ class ToCudfSelectionTest : public OperatorTestBase {
     return false;
   }
 
-  bool wasCudfFilterProjectUsed(const std::shared_ptr<exec::Task>& task) {
-    auto stats = task->taskStats();
-    for (const auto& pipelineStats : stats.pipelineStats) {
-      for (const auto& operatorStats : pipelineStats.operatorStats) {
-        if (operatorStats.operatorType == "CudfFilterProject") {
-          return true;
-        }
-      }
-    }
-    return false;
-  }
-
-  bool wasDefaultFilterProjectUsed(const std::shared_ptr<exec::Task>& task) {
-    auto stats = task->taskStats();
-    for (const auto& pipelineStats : stats.pipelineStats) {
-      for (const auto& operatorStats : pipelineStats.operatorStats) {
-        if (operatorStats.operatorType == OperatorType::kFilterProject) {
-          return true;
-        }
-      }
-    }
-    return false;
-  }
-
   RowTypePtr rowType_{
       ROW({"c0", "c1", "c2", "c3", "c4", "c5", "c6"},
           {BIGINT(),
@@ -123,76 +95,6 @@ class ToCudfSelectionTest : public OperatorTestBase {
            DOUBLE(),
            VARCHAR()})};
 };
-
-TEST_F(ToCudfSelectionTest, supportedPrestoDateAddDateUsesCudf) {
-  auto input = makeRowVector(
-      {"amount", "event_date"},
-      {makeFlatVector<int64_t>({1, 2, -1, 13}),
-       makeFlatVector<int32_t>(
-           {DATE()->toDays("2020-01-31"),
-            DATE()->toDays("2020-02-29"),
-            DATE()->toDays("2020-03-01"),
-            DATE()->toDays("2020-12-31")},
-           DATE())});
-
-  auto plan = PlanBuilder()
-                  .values({input})
-                  .project({"date_add('month', amount, event_date) AS result"})
-                  .planNode();
-
-  std::shared_ptr<Task> task;
-  AssertQueryBuilder(plan).config("cudf.enabled", true).countResults(task);
-
-  ASSERT_TRUE(wasCudfFilterProjectUsed(task));
-  ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
-}
-
-TEST_F(ToCudfSelectionTest, prestoDateAddVariableUnitFallsBack) {
-  auto input = makeRowVector(
-      {"unit", "amount", "event_date"},
-      {makeFlatVector<std::string>({"day", "week", "month", "year"}),
-       makeFlatVector<int64_t>({1, 2, -1, 13}),
-       makeFlatVector<int32_t>(
-           {DATE()->toDays("2020-01-31"),
-            DATE()->toDays("2020-02-29"),
-            DATE()->toDays("2020-03-01"),
-            DATE()->toDays("2020-12-31")},
-           DATE())});
-
-  auto plan = PlanBuilder()
-                  .values({input})
-                  .project({"date_add(unit, amount, event_date) AS result"})
-                  .planNode();
-
-  std::shared_ptr<Task> task;
-  AssertQueryBuilder(plan).config("cudf.enabled", true).countResults(task);
-
-  ASSERT_FALSE(wasCudfFilterProjectUsed(task));
-  ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
-}
-
-TEST_F(ToCudfSelectionTest, prestoDateAddTimestampFallsBack) {
-  auto input = makeRowVector(
-      {"amount", "event_ts"},
-      {makeFlatVector<int64_t>({1, 2, -1, 13}),
-       makeFlatVector<Timestamp>(
-           {Timestamp(1675209600, 0),
-            Timestamp(1677628800, 0),
-            Timestamp(1680307200, 0),
-            Timestamp(1703980800, 0)},
-           TIMESTAMP())});
-
-  auto plan = PlanBuilder()
-                  .values({input})
-                  .project({"date_add('day', amount, event_ts) AS result"})
-                  .planNode();
-
-  std::shared_ptr<Task> task;
-  AssertQueryBuilder(plan).config("cudf.enabled", true).countResults(task);
-
-  ASSERT_FALSE(wasCudfFilterProjectUsed(task));
-  ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
-}
 
 // Test supported aggregation should use CUDF
 TEST_F(ToCudfSelectionTest, supportedAggregationUsesCudf) {
