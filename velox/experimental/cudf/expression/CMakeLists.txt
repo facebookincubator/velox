@@ -26,7 +26,6 @@ add_library(
   sparksql/HashFunction.cpp
   SparkFunctions.cpp
   SubfieldFiltersToAst.cpp
-  DecimalTypeCheck.cpp
 )
 
 target_link_libraries(
