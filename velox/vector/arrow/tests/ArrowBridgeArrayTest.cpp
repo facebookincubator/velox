@@ -814,6 +814,28 @@ TEST_F(ArrowBridgeArrayExportTest, parentNullsMaskTimestampOverflow) {
           EXPECT_TRUE(structArray.IsNull(row));
         }
       });
+
+  // ARRAY<CONSTANT<TIMESTAMP>>
+  constant = BaseVector::createConstant(
+      TIMESTAMP(), variant(overflowingTimestamp), 3, pool_.get());
+  auto nulls = AlignedBuffer::allocate<bool>(3, pool_.get(), bits::kNull);
+  vector = std::make_shared<ArrayVector>(
+      pool_.get(),
+      ARRAY(TIMESTAMP()),
+      nulls,
+      3,
+      makeOffsets(),
+      makeSizes(),
+      constant,
+      3);
+  assertExportsWithoutOverflow(
+      vector, [&](const arrow::Array& array, TimestampUnit) {
+        const auto& listArray = dynamic_cast<const arrow::ListArray&>(array);
+        ASSERT_EQ(listArray.null_count(), vector->size());
+        for (int64_t row = 0; row < listArray.length(); ++row) {
+          EXPECT_TRUE(listArray.IsNull(row));
+        }
+      });
 }
 
 TEST_F(ArrowBridgeArrayExportTest, flatTime) {

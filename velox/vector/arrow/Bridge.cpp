@@ -1308,10 +1308,17 @@ void exportConstant(
       }
     });
   }
-  if (allRowsNull) {
+  if (rows.count() == 0) {
+    // values.length = 0
+    auto emptyValue = BaseVector::create(vec.type(), 0, pool);
+    exportToArrowImpl(
+        *emptyValue, Selection(0), options, *holder.allocateChild(1), pool);
+  } else if (allRowsNull) {
+    // values.length = 1, values[0] = null
     auto nullValue = BaseVector::createNullConstant(vec.type(), 1, pool);
     exportConstantValue(*nullValue, options, *holder.allocateChild(1), pool);
   } else {
+    // values.length = 1, values[0] = actual constant
     exportConstantValue(vec, options, *holder.allocateChild(1), pool);
   }
 
@@ -1320,7 +1327,7 @@ void exportConstant(
   auto runEndsHolder = std::make_unique<VeloxToArrowBridgeHolder>();
 
   runEnds->buffers = runEndsHolder->getArrowBuffers();
-  runEnds->length = 1;
+  runEnds->length = rows.count() > 0 ? 1 : 0;
   runEnds->offset = 0;
   runEnds->null_count = 0;
   runEnds->n_buffers = 2;
@@ -1330,7 +1337,7 @@ void exportConstant(
 
   // Allocate single runs buffer with the run set as size.
   auto runsBuffer = AlignedBuffer::allocate<int32_t>(1, pool);
-  runsBuffer->asMutable<int32_t>()[0] = vec.size();
+  runsBuffer->asMutable<int32_t>()[0] = rows.count();
   runEndsHolder->setBuffer(1, runsBuffer);
 
   runEnds->private_data = runEndsHolder.release();
