@@ -42,11 +42,12 @@ namespace facebook::velox::cache {
 namespace {
 
 void addEntryToIovecs(AsyncDataCacheEntry& entry, std::vector<iovec>& iovecs) {
-  if (entry.tinyData() != nullptr) {
-    iovecs.push_back({entry.tinyData(), static_cast<size_t>(entry.size())});
+  if (entry.hasContiguousData()) {
+    iovecs.push_back(
+        {entry.contiguousData(), static_cast<size_t>(entry.size())});
     return;
   }
-  const auto& data = entry.data();
+  const auto& data = entry.nonContiguousData();
   iovecs.reserve(iovecs.size() + data.numRuns());
   int64_t bytesLeft = entry.size();
   for (auto i = 0; i < data.numRuns(); ++i) {
@@ -60,12 +61,11 @@ void addEntryToIovecs(AsyncDataCacheEntry& entry, std::vector<iovec>& iovecs) {
   }
 }
 
-// Returns the number of entries in a cache 'entry'.
 uint32_t numIoVectorsFromEntry(AsyncDataCacheEntry& entry) {
-  if (entry.tinyData() != nullptr) {
+  if (entry.hasContiguousData()) {
     return 1;
   }
-  return entry.data().numRuns();
+  return entry.nonContiguousData().numRuns();
 }
 } // namespace
 
@@ -511,12 +511,12 @@ void SsdFile::verifyWrite(AsyncDataCacheEntry& entry, SsdRun ssdRun) {
   const auto rc =
       readFile_->pread(ssdRun.offset(), entry.size(), testData.get());
   VELOX_CHECK_EQ(rc.size(), entry.size());
-  if (entry.tinyData() != nullptr) {
-    if (::memcmp(testData.get(), entry.tinyData(), entry.size()) != 0) {
+  if (entry.hasContiguousData()) {
+    if (::memcmp(testData.get(), entry.contiguousData(), entry.size()) != 0) {
       VELOX_FAIL("bad read back");
     }
   } else {
-    const auto& data = entry.data();
+    const auto& data = entry.nonContiguousData();
     int64_t bytesLeft = entry.size();
     int64_t offset = 0;
     for (auto i = 0; i < data.numRuns(); ++i) {
@@ -938,11 +938,11 @@ void SsdFile::initializeCheckpoint() {
 
 uint32_t SsdFile::checksumEntry(const AsyncDataCacheEntry& entry) const {
   bits::Crc32 crc;
-  if (entry.tinyData()) {
-    crc.process_bytes(entry.tinyData(), entry.size());
+  if (entry.hasContiguousData()) {
+    crc.process_bytes(entry.contiguousData(), entry.size());
   } else {
     int64_t bytesLeft = entry.size();
-    const auto& data = entry.data();
+    const auto& data = entry.nonContiguousData();
     for (auto i = 0; i < data.numRuns() && bytesLeft > 0; ++i) {
       const auto run = data.runAt(i);
       const auto bytesToProcess = std::min<size_t>(bytesLeft, run.numBytes());

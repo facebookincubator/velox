@@ -151,13 +151,13 @@ class CacheTest : public ::testing::Test {
 
   static void checkEntry(const cache::AsyncDataCacheEntry& entry) {
     uint64_t seed = entry.key().fileNum.id();
-    if (entry.tinyData()) {
-      checkData(entry.tinyData(), entry.offset(), entry.size(), seed);
+    if (entry.hasContiguousData()) {
+      checkData(entry.contiguousData(), entry.offset(), entry.size(), seed);
     } else {
       int64_t bytesLeft = entry.size();
       auto runOffset = entry.offset();
-      for (auto i = 0; i < entry.data().numRuns(); ++i) {
-        auto run = entry.data().runAt(i);
+      for (auto i = 0; i < entry.nonContiguousData().numRuns(); ++i) {
+        auto run = entry.nonContiguousData().runAt(i);
         checkData(
             run.data<char>(),
             runOffset,
