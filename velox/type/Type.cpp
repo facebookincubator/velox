@@ -1711,6 +1711,10 @@ std::string TimeMicroPrecisionUtcType::toCompactIso8601(int64_t microseconds) {
 // as they override equals(): see RowType, DecimalType, OpaqueType, and the
 // compound types (ArrayType, MapType, FunctionType).
 size_t Type::hash() const noexcept {
+<<<<<<< export-D100846744
+=======
+  // Offset by 1 to differentiate bool type from empty hash.
+>>>>>>> main
   return folly::hash::hash_combine(
       static_cast<size_t>(kind()) + 1,
       std::hash<std::type_index>{}(std::type_index(typeid(*this))));

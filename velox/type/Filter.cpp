@@ -1670,29 +1670,27 @@ std::unique_ptr<Filter> combineRangesAndNegatedValues(
   std::vector<std::unique_ptr<BigintRange>> outRanges;
 
   for (int i = 0; i < ranges.size(); ++i) {
-    auto it =
-        std::lower_bound(rejects.begin(), rejects.end(), ranges[i]->lower());
-    int64_t start = ranges[i]->lower();
-    int64_t end;
+    const int64_t rangeLower{ranges[i]->lower()};
+    const int64_t rangeUpper{ranges[i]->upper()};
+    auto begin = std::lower_bound(rejects.begin(), rejects.end(), rangeLower);
+    auto end = std::upper_bound(begin, rejects.end(), rangeUpper);
 
-    while (it != rejects.end()) {
-      end = *it - 1;
-      if (start >= ranges[i]->lower() && end < ranges[i]->upper()) {
-        if (start <= end) {
-          outRanges.emplace_back(
-              std::make_unique<common::BigintRange>(start, end, false));
-        }
-        start = *it + 1;
-        ++it;
-      } else {
+    int64_t start{rangeLower};
+    bool finished{false};
+    for (auto it = begin; it != end; ++it) {
+      if (*it > start) {
+        outRanges.emplace_back(
+            std::make_unique<common::BigintRange>(start, *it - 1, false));
+      }
+      if (*it == std::numeric_limits<int64_t>::max()) {
+        finished = true;
         break;
       }
+      start = *it + 1;
     }
-    end = ranges[i]->upper();
-    if (start <= end && start >= ranges[i]->lower() &&
-        end <= ranges[i]->upper()) {
+    if (!finished && start <= rangeUpper) {
       outRanges.emplace_back(
-          std::make_unique<common::BigintRange>(start, end, false));
+          std::make_unique<common::BigintRange>(start, rangeUpper, false));
     }
   }
 

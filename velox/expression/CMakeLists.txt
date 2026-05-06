@@ -121,6 +121,7 @@ velox_link_libraries(
   velox_core
   velox_vector
   velox_common_base
+  velox_core_expressions
   velox_expression_functions
   velox_functions_util
   velox_type_tz

@@ -261,6 +261,148 @@ TEST_F(CudfFilterProjectTest, startswithColumnPatternNullPattern) {
   AssertQueryBuilder(plan).assertResults(expected);
 }
 
+TEST_F(CudfFilterProjectTest, contains) {
+  auto input = makeNullableFlatVector<std::string>(
+      {"abc", "zabc", std::nullopt, "ab", "", "xyz", "abz"});
+  auto data = makeRowVector({input});
+
+  auto plan = PlanBuilder()
+                  .setParseOptions(options_)
+                  .values({data})
+                  .project({"contains(c0, 'ab') AS c1"})
+                  .planNode();
+
+  auto expected = makeRowVector({
+      makeNullableFlatVector<bool>(
+          {true, true, std::nullopt, true, false, false, true}),
+  });
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfFilterProjectTest, containsNullPattern) {
+  auto input = makeNullableFlatVector<std::string>(
+      {"abc", "zabc", std::nullopt, "ab", "", "xyz", "abz"});
+  auto data = makeRowVector({input});
+
+  auto plan = PlanBuilder()
+                  .setParseOptions(options_)
+                  .values({data})
+                  .project({"contains(c0, cast(null as varchar)) AS c1"})
+                  .planNode();
+
+  auto expected = makeRowVector({
+      makeNullableFlatVector<bool>({
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+      }),
+  });
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfFilterProjectTest, containsEmptyPattern) {
+  auto input = makeNullableFlatVector<std::string>(
+      {"abc", "zabc", std::nullopt, "ab", "", "xyz", "abz"});
+  auto data = makeRowVector({input});
+
+  auto plan = PlanBuilder()
+                  .setParseOptions(options_)
+                  .values({data})
+                  .project({"contains(c0, '') AS c1"})
+                  .planNode();
+
+  auto expected = makeRowVector({
+      makeNullableFlatVector<bool>(
+          {true, true, std::nullopt, true, true, true, true}),
+  });
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfFilterProjectTest, containsColumnPattern) {
+  auto input = makeNullableFlatVector<std::string>(
+      {"abc", "zabc", std::nullopt, "ab", "", "xyz", "abz"});
+  auto pattern = makeNullableFlatVector<std::string>(
+      {"bc", "ab", "bc", std::nullopt, "", "yz", "zz"});
+  auto data = makeRowVector({input, pattern});
+
+  auto plan = PlanBuilder()
+                  .setParseOptions(options_)
+                  .values({data})
+                  .project({"contains(c0, c1) AS c2"})
+                  .planNode();
+
+  auto expected = makeRowVector({
+      makeNullableFlatVector<bool>(
+          {true, true, std::nullopt, std::nullopt, true, true, false}),
+  });
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfFilterProjectTest, containsConstantInput) {
+  auto pattern =
+      makeNullableFlatVector<std::string>({"b", "ab", std::nullopt, "", "abc"});
+  auto data = makeRowVector({pattern});
+  auto typed = test_utils::parseAndInferTypedExpr(
+      "contains('ab', c0)", data->rowType(), &execCtx_, options_);
+  exec::ExprSet exprSet({typed}, &execCtx_, /*enableConstantFolding*/ false);
+
+  auto result = evaluate(exprSet, data);
+  auto expected =
+      makeNullableFlatVector<bool>({true, true, std::nullopt, true, false});
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfFilterProjectTest, containsConstantNullInput) {
+  auto pattern =
+      makeNullableFlatVector<std::string>({"b", "ab", std::nullopt, "", "abc"});
+  auto data = makeRowVector({pattern});
+  auto typed = test_utils::parseAndInferTypedExpr(
+      "contains(cast(null as varchar), c0)",
+      data->rowType(),
+      &execCtx_,
+      options_);
+  exec::ExprSet exprSet({typed}, &execCtx_, /*enableConstantFolding*/ false);
+
+  auto result = evaluate(exprSet, data);
+  auto expected = makeNullableFlatVector<bool>(
+      {std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt});
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfFilterProjectTest, containsColumnPatternNullInput) {
+  auto input = makeNullableFlatVector<std::string>({std::nullopt});
+  auto pattern = makeNullableFlatVector<std::string>({"ab"});
+  auto data = makeRowVector({input, pattern});
+
+  auto plan = PlanBuilder()
+                  .setParseOptions(options_)
+                  .values({data})
+                  .project({"contains(c0, c1) AS c2"})
+                  .planNode();
+
+  auto expected = makeRowVector({makeNullableFlatVector<bool>({std::nullopt})});
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfFilterProjectTest, containsColumnPatternNullPattern) {
+  auto input = makeNullableFlatVector<std::string>({"ab"});
+  auto pattern = makeNullableFlatVector<std::string>({std::nullopt});
+  auto data = makeRowVector({input, pattern});
+
+  auto plan = PlanBuilder()
+                  .setParseOptions(options_)
+                  .values({data})
+                  .project({"contains(c0, c1) AS c2"})
+                  .planNode();
+
+  auto expected = makeRowVector({makeNullableFlatVector<bool>({std::nullopt})});
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
 TEST_F(CudfFilterProjectTest, endswith) {
   auto input = makeNullableFlatVector<std::string>(
       {"abc", "zabc", std::nullopt, "ab", "", "xyz", "abz"});

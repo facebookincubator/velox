@@ -74,7 +74,8 @@ CudfSplitReader::CudfSplitReader(
       cudfHiveConfig_(cudfHiveConfig),
       pool_(connectorQueryCtx->memoryPool()),
       useExperimentalCudfReader_(useExperimentalCudfReader),
-      baseReaderOpts_(pool_),
+      baseReaderOpts_(pool_, ioStatistics_.get(), ioStatistics_.get()),
+
       subfieldFilterExpr_(subfieldFilterExpr) {}
 
 void CudfSplitReader::prepareSplit(

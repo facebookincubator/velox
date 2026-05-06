@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <string_view>
+
 #include "velox/common/base/CountBits.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/core/CoreTypeSystem.h"
@@ -30,7 +32,7 @@ inline std::string makeErrorMessage(
     const BaseVector& input,
     vector_size_t row,
     const TypePtr& toType,
-    const std::string& details = "") {
+    std::string_view details = "") {
   return fmt::format(
       "Cannot cast {} '{}' to {}. {}",
       input.type()->toString(),
@@ -132,7 +134,7 @@ void CastExpr::applyCastKernel(
     const SimpleVector<typename TypeTraits<FromKind>::NativeType>* input,
     FlatVector<typename TypeTraits<ToKind>::NativeType>* result) {
   bool wrapException = true;
-  auto setError = [&](const std::string& details) INLINE_LAMBDA {
+  auto setError = [&](std::string_view details) INLINE_LAMBDA {
     if (setNullInResultAtError()) {
       result->setNull(row, true);
     } else {
