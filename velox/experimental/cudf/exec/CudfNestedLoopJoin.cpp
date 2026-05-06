@@ -355,7 +355,10 @@ void CudfNestedLoopJoinProbe::doNoMoreInput() {
 
   isLastDriver_ = true;
 
-  if (!buildEmpty_) {
+  // Unfiltered cross_join matches every build row on every probe batch, so
+  // every driver's buildMatchedFlags_ would be all-true. Skip the stream-join
+  // and peer merge when there is no filter.
+  if (!buildEmpty_ && hasFilter_) {
     auto stream = cudfGlobalStreamPool().get_stream();
 
     // GPU stream synchronization: allPeersFinished synchronizes CPU threads
@@ -461,9 +464,10 @@ exec::BlockingReason CudfNestedLoopJoinProbe::isBlocked(
     }
   }
 
-  // Initialize build matched flags for right/full join: single BOOL8 column
-  // with one element per build row, all false.
-  if (isRightOrFullJoin() && !buildEmpty_) {
+  // Initialize build matched flags for filtered right/full join (single BOOL8
+  // column with one element per build row, all false). Unfiltered cross_join
+  // matches every build row, so flags aren't needed.
+  if (isRightOrFullJoin() && hasFilter_ && !buildEmpty_) {
     auto initStream = cudfGlobalStreamPool().get_stream();
     auto numRows = buildData_.value()->num_rows();
     auto falseScalar =
@@ -658,19 +662,11 @@ std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::joinWithBuildBatch(
   auto crossResult =
       cudf::cross_join(probeTableView, buildView, stream, get_output_mr());
 
-  // Cross join matches every row, so mark all rows as matched for outer joins.
-  if (isLeftOrFullJoin()) {
-    auto trueScalar =
-        cudf::numeric_scalar<bool>(true, true, stream, get_temp_mr());
-    probeMatchedFlags_ = cudf::make_column_from_scalar(
-        trueScalar, probeTableView.num_rows(), stream, get_temp_mr());
-  }
-  if (isRightOrFullJoin()) {
-    auto trueScalar =
-        cudf::numeric_scalar<bool>(true, true, stream, get_temp_mr());
-    buildMatchedFlags_ = cudf::make_column_from_scalar(
-        trueScalar, buildView.num_rows(), stream, get_temp_mr());
-  }
+  // Cross join matches every row, so no per-row matched flags are needed:
+  // probeMatchedFlags_ is only consumed via emitProbeMismatchRows, which is
+  // unreachable in the unfiltered path (see doGetOutput). buildMatchedFlags_
+  // is skipped in isBlocked for !hasFilter_; emitBuildMismatchRows early-
+  // returns in that case.
 
   auto allCols = crossResult->release();
   auto numProbeCols = probeTableView.num_columns();
@@ -738,6 +734,12 @@ std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::emitProbeMismatchRows(
 
 RowVectorPtr CudfNestedLoopJoinProbe::emitBuildMismatchRows(
     rmm::cuda_stream_view stream) {
+  // Unfiltered cross_join already emitted every build row, so no mismatches
+  // to emit. buildMatchedFlags_ is not allocated in that case.
+  if (!buildMatchedFlags_) {
+    finished_ = true;
+    return nullptr;
+  }
   auto& buildTable = buildData_.value();
   auto numOutputColumns = outputType_->size();
 
