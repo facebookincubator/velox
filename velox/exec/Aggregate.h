@@ -539,6 +539,11 @@ struct AggregateFunctionMetadata {
 
   /// Indicates if this is a companion function.
   bool companionFunction{false};
+
+  /// True if the aggregate ignores null inputs following default SQL null
+  /// behavior. For example, sum and count ignore nulls while array_agg
+  /// includes them by default.
+  bool defaultNullBehavior{true};
 };
 /// Register an aggregate function with the specified name and signatures. If
 /// registerCompanionFunctions is true, also register companion aggregate and

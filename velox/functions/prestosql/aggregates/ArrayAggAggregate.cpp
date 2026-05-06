@@ -457,6 +457,7 @@ void registerArrayAggAggregate(
         return std::make_unique<ArrayAggAggregate>(
             resultType, config.prestoArrayAggIgnoreNulls());
       },
+      {.defaultNullBehavior = false},
       withCompanionFunctions,
       overwrite);
 }
