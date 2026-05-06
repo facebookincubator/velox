@@ -1663,28 +1663,24 @@ void IndexLookupJoin::recordConnectorStats() {
 
   // Record lookup timing into the index stat writer. splitStats extracts these
   // to populate the IndexSource node's addInputTiming.
-  if (connectorStats.count(std::string(kConnectorLookupWallTime)) != 0) {
-    const auto& lookupWallTime =
-        connectorStats[std::string(kConnectorLookupWallTime)];
+  const auto lookupTiming = indexSource_->lookupTiming();
+  if (lookupTiming.count > 0) {
     indexStatWriter_->addRuntimeStat(
         "lookupCount",
         RuntimeCounter(
-            static_cast<int64_t>(lookupWallTime.count),
+            static_cast<int64_t>(lookupTiming.count),
             RuntimeCounter::Unit::kNone));
     indexStatWriter_->addRuntimeStat(
         "lookupWallNanos",
         RuntimeCounter(
-            static_cast<int64_t>(lookupWallTime.sum),
+            static_cast<int64_t>(lookupTiming.wallNanos),
             RuntimeCounter::Unit::kNanos));
-    // NOTE: this might not be accurate as it doesn't include the time
-    // spent inside the index storage client.
+    // NOTE: lookupCpuNanos may undercount CPU consumed on prefetch worker
+    // threads or async I/O completion handlers.
     indexStatWriter_->addRuntimeStat(
         "lookupCpuNanos",
         RuntimeCounter(
-            static_cast<int64_t>(
-                connectorStats[std::string(kConnectorResultPrepareTime)].sum +
-                connectorStats[std::string(kClientRequestProcessTime)].sum +
-                connectorStats[std::string(kClientResultProcessTime)].sum),
+            static_cast<int64_t>(lookupTiming.cpuNanos),
             RuntimeCounter::Unit::kNanos));
   }
   // Copy index source stats into the operator's own runtimeStats so they are

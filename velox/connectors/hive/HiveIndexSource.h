@@ -61,6 +61,10 @@ class HiveIndexSource : public IndexSource,
 
   std::unordered_map<std::string, RuntimeMetric> runtimeStats() override;
 
+  CpuWallTiming lookupTiming() const override {
+    return lookupTiming_;
+  }
+
  private:
   friend class HiveLookupIterator;
 
@@ -219,6 +223,10 @@ class HiveIndexSource : public IndexSource,
 
   // Per-call timing stats accumulated via addOperatorRuntimeStats().
   std::unordered_map<std::string, RuntimeMetric> runtimeStats_;
+
+  // Cumulative end-to-end lookup timing. Updated once per iteration in
+  // recordIterationStats(). Returned by lookupTiming().
+  CpuWallTiming lookupTiming_;
 };
 
 } // namespace facebook::velox::connector::hive

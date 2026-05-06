@@ -228,6 +228,11 @@ class TestIndexSource : public connector::IndexSource,
 
   std::unordered_map<std::string, RuntimeMetric> runtimeStats() override;
 
+  CpuWallTiming lookupTiming() const override {
+    std::lock_guard<std::mutex> l(mutex_);
+    return lookupTiming_;
+  }
+
   memory::MemoryPool* pool() const {
     return pool_.get();
   }
@@ -372,6 +377,7 @@ class TestIndexSource : public connector::IndexSource,
   std::vector<IdentityProjection> conditionTableProjections_;
   std::vector<IdentityProjection> lookupOutputProjections_;
   std::unordered_map<std::string, RuntimeMetric> runtimeStats_;
+  CpuWallTiming lookupTiming_;
 
   // Collected splits for the index source (if tableHandle_->needsIndexSplit()
   // returns true). This is only used for testing the split interface but not

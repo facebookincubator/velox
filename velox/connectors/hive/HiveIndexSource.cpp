@@ -1041,6 +1041,12 @@ void HiveIndexSource::recordIterationStats(
   const auto totalWallNs = iterationStats.setupWallNs +
       iterationStats.readWallNs + iterationStats.outputWallNs +
       iterationStats.filterWallNs;
+  const auto totalCpuNs = iterationStats.setupCpuNs + iterationStats.readCpuNs +
+      iterationStats.outputCpuNs + iterationStats.filterCpuNs;
+  ++lookupTiming_.count;
+  lookupTiming_.wallNanos += totalWallNs;
+  lookupTiming_.cpuNanos += totalCpuNs;
+
   if (totalWallNs != 0) {
     exec::addOperatorRuntimeStats(
         IterationStats::kConnectorLookupWallNanos,

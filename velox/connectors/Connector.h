@@ -26,6 +26,7 @@
 #include "velox/common/config/ConfigProvider.h"
 #include "velox/common/file/TokenProvider.h"
 #include "velox/common/future/VeloxPromise.h"
+#include "velox/common/time/CpuWallTimer.h"
 #include "velox/core/ExpressionEvaluator.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/exec/SpillStats.h"
@@ -414,6 +415,25 @@ class IndexSource {
   virtual std::shared_ptr<ResultIterator> lookup(const Request& request) = 0;
 
   virtual std::unordered_map<std::string, RuntimeMetric> runtimeStats() = 0;
+
+  /// Returns cumulative timing for lookup operations performed by this
+  /// IndexSource. Used by IndexLookupJoin to attribute time to the
+  /// IndexSource node in the operator stats tree.
+  ///
+  /// - count: number of completed lookup iterations.
+  /// - wallNanos: total wall time across all lookup phases.
+  /// - cpuNanos: total CPU time consumed by the IndexSource (excludes
+  ///   probe-side work attributed to the join).
+  ///
+  /// NOTE: CPU time may undercount actual CPU consumption: CpuWallTimer
+  /// measures CPU on the calling thread only, so any work performed on prefetch
+  /// worker threads or async I/O completion handlers is not included.
+  ///
+  /// Default returns zero timing for IndexSource implementations that don't
+  /// track per-lookup timing.
+  virtual CpuWallTiming lookupTiming() const {
+    return CpuWallTiming{};
+  }
 };
 
 /// Collection of context data for use in a DataSource, IndexSource or DataSink.

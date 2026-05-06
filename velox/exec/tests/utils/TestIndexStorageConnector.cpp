@@ -345,6 +345,7 @@ void TestIndexSource::initOutputProjections(
 void TestIndexSource::recordCpuTiming(const CpuWallTiming& timing) {
   VELOX_CHECK_EQ(timing.count, 1);
   std::lock_guard<std::mutex> l(mutex_);
+  lookupTiming_.add(timing);
   if (timing.wallNanos != 0) {
     addOperatorRuntimeStats(
         std::string(IndexLookupJoin::kConnectorLookupWallTime),
