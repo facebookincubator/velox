@@ -624,8 +624,6 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
           tree,
           scalars,
           columnRef,
-          stream,
-          mr,
           columnType);
       return tree.push(Operation{Op::NOT, innerResult.get()});
     }
