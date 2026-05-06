@@ -253,8 +253,10 @@ bool registerCudfExpressionEvaluator(
   return true;
 }
 
-std::unordered_map<std::string, CudfFunctionSpec>& getCudfFunctionRegistry() {
-  static std::unordered_map<std::string, CudfFunctionSpec> registry;
+std::unordered_map<std::string, std::vector<CudfFunctionSpec>>&
+getCudfFunctionRegistry() {
+  static std::unordered_map<std::string, std::vector<CudfFunctionSpec>>
+      registry;
   return registry;
 }
 
@@ -1594,29 +1596,27 @@ class EndswithFunction : public StringPatternPredicateFunction {
   }
 };
 
-class ContainsFunction : public CudfFunction {
+class ContainsFunction : public StringPatternPredicateFunction {
  public:
-  explicit ContainsFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
-    using velox::exec::ConstantExpr;
-    VELOX_CHECK_EQ(expr->inputs().size(), 2, "contains expects 2 inputs");
+  explicit ContainsFunction(const std::shared_ptr<velox::exec::Expr>& expr)
+      : StringPatternPredicateFunction(expr, "contains") {}
 
-    auto patternExpr =
-        std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[1]);
-    VELOX_CHECK_NOT_NULL(patternExpr, "contains pattern must be a constant");
-    pattern_ = patternExpr->value()->toString(0);
-  }
-
-  ColumnOrView eval(
-      std::vector<ColumnOrView>& inputColumns,
+ protected:
+  std::unique_ptr<cudf::column> evaluateMatch(
+      cudf::column_view inputCol,
+      cudf::string_scalar const& patternScalar,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
-    auto inputCol = asView(inputColumns[0]);
-    cudf::string_scalar patternScalar(pattern_, true, stream, mr);
     return cudf::strings::contains(inputCol, patternScalar, stream, mr);
   }
 
- private:
-  std::string pattern_;
+  std::unique_ptr<cudf::column> evaluateMatch(
+      cudf::column_view inputCol,
+      cudf::column_view patternCol,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    return cudf::strings::contains(inputCol, patternCol, stream, mr);
+  }
 };
 
 class ConcatFunction : public CudfFunction {
@@ -1698,11 +1698,11 @@ bool registerCudfFunction(
     bool overwrite,
     CudfCanEvaluate canEvaluate) {
   auto& registry = getCudfFunctionRegistry();
-  if (!overwrite && registry.find(name) != registry.end()) {
+  if (!overwrite && !registry[name].empty()) {
     return false;
   }
-  registry[name] =
-      CudfFunctionSpec{std::move(factory), signatures, std::move(canEvaluate)};
+  registry[name].push_back(
+      CudfFunctionSpec{std::move(factory), signatures, std::move(canEvaluate)});
   return true;
 }
 
@@ -1721,8 +1721,20 @@ std::shared_ptr<CudfFunction> createCudfFunction(
     const std::shared_ptr<velox::exec::Expr>& expr) {
   auto& registry = getCudfFunctionRegistry();
   auto it = registry.find(name);
-  if (it != registry.end()) {
-    return it->second.factory(name, expr);
+  if (it == registry.end()) {
+    return nullptr;
+  }
+  for (const auto& spec : it->second) {
+    // Empty signatures matching must be allowed to handle
+    // the special case of cast.
+    if (!spec.signatures.empty() &&
+        !matchCallAgainstSignatures(*expr, spec.signatures)) {
+      continue;
+    }
+    if (spec.canEvaluate && !spec.canEvaluate(expr)) {
+      continue;
+    }
+    return spec.factory(name, expr);
   }
   return nullptr;
 }
@@ -2060,6 +2072,17 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       prefix + "endswith",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
         return std::make_shared<EndswithFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("boolean")
+           .argumentType("varchar")
+           .argumentType("varchar")
+           .build()});
+
+  registerCudfFunction(
+      prefix + "contains",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<ContainsFunction>(expr);
       },
       {FunctionSignatureBuilder()
            .returnType("boolean")
@@ -2412,14 +2435,17 @@ bool FunctionExpression::canEvaluate(std::shared_ptr<velox::exec::Expr> expr) {
   if (it == registry.end()) {
     return false;
   }
-  const auto& spec = it->second;
-  if (!matchCallAgainstSignatures(*expr, spec.signatures)) {
-    return false;
+  for (const auto& spec : it->second) {
+    if (!spec.signatures.empty() &&
+        !matchCallAgainstSignatures(*expr, spec.signatures)) {
+      continue;
+    }
+    if (spec.canEvaluate && !spec.canEvaluate(expr)) {
+      continue;
+    }
+    return true;
   }
-  if (spec.canEvaluate) {
-    return spec.canEvaluate(expr);
-  }
-  return true;
+  return false;
 }
 
 bool canBeEvaluatedByCudf(std::shared_ptr<velox::exec::Expr> expr, bool deep) {

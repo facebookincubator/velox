@@ -46,7 +46,11 @@ def git_changed_lines(commit):
         if match:
             matched_file = match.group(1)
             # Exclude all files in cudf directories
-            if "cudf/" not in matched_file:
+            # Exclude *-inl.h files: they are designed to be included from
+            # their corresponding header (e.g., SimdUtil-inl.h is included by
+            # SimdUtil.h) and cannot be compiled as standalone translation
+            # units.
+            if "cudf/" not in matched_file and not matched_file.endswith("-inl.h"):
                 file = matched_file
 
         match = re.match(r"^@@", line)
@@ -76,6 +80,11 @@ def tidy(args):
     # Exclude all files in cudf directories
     # as clang-tidy doesn't support CUDA compiler flags and CUDA headers
     files = [file for file in files if "cudf/" not in file]
+
+    # Exclude *-inl.h files: they are designed to be included from their
+    # corresponding header and cannot be compiled as standalone translation
+    # units (see git_changed_lines for rationale).
+    files = [file for file in files if not file.endswith("-inl.h")]
 
     in_gha = os.environ.get("GITHUB_ACTIONS") is not None
     changed_lines = git_changed_lines(args.commit)

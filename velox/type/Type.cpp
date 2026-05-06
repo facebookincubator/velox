@@ -21,6 +21,7 @@
 #include <boost/algorithm/string.hpp>
 #include <fmt/format.h>
 #include <folly/Demangle.h>
+#include <folly/hash/Hash.h>
 #include <re2/re2.h>
 
 #include <sstream>
@@ -1700,6 +1701,68 @@ std::string TimeMicroPrecisionUtcType::toCompactIso8601(int64_t microseconds) {
   }
   return result;
 }
+
+// Default hash for leaf scalar types: mix in kind + RTTI to distinguish
+// singleton overlay types that share a TypeKind with their base (e.g.,
+// IntervalDayTimeType and plain BIGINT both have TypeKind::BIGINT;
+// DateType and IntervalYearMonthType both share TypeKind::INTEGER).
+// NOTE: This default is only correct when equality is fully determined by
+// (TypeKind, typeid). Types with additional state MUST override hash() just
+// as they override equals(): see RowType, DecimalType, OpaqueType, and the
+// compound types (ArrayType, MapType, FunctionType).
+size_t Type::hash() const noexcept {
+  // Offset by 1 to differentiate bool type from empty hash.
+  return folly::hash::hash_combine(
+      static_cast<size_t>(kind()) + 1,
+      std::hash<std::type_index>{}(std::type_index(typeid(*this))));
+}
+
+size_t RowType::hash() const noexcept {
+  size_t result = static_cast<size_t>(TypeKind::ROW) + 1;
+  for (uint32_t i = 0; i < size(); ++i) {
+    result =
+        folly::hash::hash_combine(result, std::hash<std::string>{}(names_[i]));
+    result = folly::hash::hash_combine(result, children_[i]->hash());
+  }
+  return result;
+}
+
+size_t ArrayType::hash() const noexcept {
+  return folly::hash::hash_combine(
+      static_cast<size_t>(TypeKind::ARRAY) + 1, child_->hash());
+}
+
+size_t MapType::hash() const noexcept {
+  size_t result = static_cast<size_t>(TypeKind::MAP) + 1;
+  result = folly::hash::hash_combine(result, keyType_->hash());
+  result = folly::hash::hash_combine(result, valueType_->hash());
+  return result;
+}
+
+size_t FunctionType::hash() const noexcept {
+  size_t result = static_cast<size_t>(TypeKind::FUNCTION) + 1;
+  for (const auto& child : children_) {
+    result = folly::hash::hash_combine(result, child->hash());
+  }
+  return result;
+}
+
+size_t OpaqueType::hash() const noexcept {
+  return folly::hash::hash_combine(
+      static_cast<size_t>(TypeKind::OPAQUE) + 1,
+      std::hash<std::type_index>{}(typeIndex_));
+}
+
+template <TypeKind KIND>
+size_t DecimalType<KIND>::hash() const noexcept {
+  size_t result = static_cast<size_t>(KIND) + 1;
+  result = folly::hash::hash_combine(result, static_cast<size_t>(precision()));
+  result = folly::hash::hash_combine(result, static_cast<size_t>(scale()));
+  return result;
+}
+
+template size_t DecimalType<TypeKind::BIGINT>::hash() const noexcept;
+template size_t DecimalType<TypeKind::HUGEINT>::hash() const noexcept;
 
 std::string stringifyTruncatedElementList(
     size_t size,

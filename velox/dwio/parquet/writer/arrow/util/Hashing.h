@@ -46,9 +46,7 @@
 
 #include "velox/common/base/Exceptions.h"
 
-#define XXH_INLINE_ALL
-
-#include <xxhash.h>
+#include "velox/common/base/XxHashInline.h"
 
 namespace facebook::velox::parquet::arrow::internal {
 

@@ -591,10 +591,13 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
   /// Examples: Two RowTypes are equivalent if the children types are
   /// equivalent, but the children names could be different. Two OpaqueTypes are
   /// equivalent if the typeKind matches, but the typeIndex could be different.
+  /// Note: The hashKind() function provides a hash consistent with
+  /// equivalent().
   virtual bool equivalent(const Type& other) const = 0;
 
   /// For Complex types (Row, Array, Map, Opaque): types are strongly matched.
   /// For primitive types: same as equivalent.
+  /// Note: The hash() function provides a hash consistent with this operator==.
   virtual bool operator==(const Type& other) const {
     return this->equals(other);
   }
@@ -615,6 +618,12 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
 
   /// Recursive kind hashing (uses only TypeKind).
   virtual size_t hashKind() const;
+
+  /// Recursive hash consistent with operator==: includes ROW field names,
+  /// DECIMAL precision/scale, OPAQUE type identity, and RTTI for singleton
+  /// overlay types. Subclasses that override equals() must override hash() too
+  /// to maintain the invariant: a == b ⟹ hash(a) == hash(b).
+  virtual size_t hash() const noexcept;
 
   /// Recursive kind match (uses only TypeKind).
   bool kindEquals(const TypePtr& other) const;
@@ -673,6 +682,7 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
   /// are same. Two OpaqueTypes are == if the typeKind and the typeIndex are
   /// same.
   /// For primitive types: same as equivalent.
+  /// Note: The hash() function provides a hash consistent with operator==.
   virtual bool equals(const Type& other) const {
     VELOX_CHECK(this->isPrimitiveType());
     return this->equivalent(other);
@@ -762,6 +772,10 @@ class CanProvideCustomComparisonType : public TypeBase<KIND> {
         "Type {} is marked as providesCustomComparison but did not implement hash.");
     VELOX_FAIL("Type {} does not provide custom hash", this->name());
   }
+
+  // Bring the 0-arg Type::hash() (structural type hash) into scope alongside
+  // the 1-arg hash(value) overload above.
+  using Type::hash;
 };
 
 template <TypeKind KIND>
@@ -838,6 +852,11 @@ class DecimalType : public ScalarType<KIND> {
         otherDecimal.precision() == precision() &&
         otherDecimal.scale() == scale());
   }
+
+  size_t hash() const noexcept override;
+  // Bring hash(value) from CanProvideCustomComparisonType into scope alongside
+  // the 0-arg hash() override above.
+  using ScalarType<KIND>::hash;
 
   inline uint8_t precision() const {
     return parameters_[0].longLiteral.value();
@@ -1028,6 +1047,7 @@ class ArrayType : public TypeBase<TypeKind::ARRAY> {
 
  protected:
   bool equals(const Type& other) const override;
+  size_t hash() const noexcept override;
 
   const TypePtr child_;
   const TypeParameter parameter_;
@@ -1084,6 +1104,7 @@ class MapType : public TypeBase<TypeKind::MAP> {
 
  protected:
   bool equals(const Type& other) const override;
+  size_t hash() const noexcept override;
 
  private:
   TypePtr keyType_;
@@ -1210,6 +1231,7 @@ class RowType : public TypeBase<TypeKind::ROW> {
 
  protected:
   bool equals(const Type& other) const override;
+  size_t hash() const noexcept override;
 
  private:
   const std::vector<TypeParameter>* ensureParameters() const;
@@ -1267,6 +1289,7 @@ class FunctionType : public TypeBase<TypeKind::FUNCTION> {
 
  protected:
   bool equals(const Type& other) const override;
+  size_t hash() const noexcept override;
 
  private:
   static std::vector<TypePtr> allChildren(
@@ -1375,6 +1398,7 @@ class OpaqueType : public TypeBase<TypeKind::OPAQUE> {
 
  protected:
   bool equals(const Type& other) const override;
+  size_t hash() const noexcept override;
 
  private:
   const std::type_index typeIndex_;
@@ -2659,6 +2683,15 @@ std::string stringifyTruncatedElementList(
     size_t limit = 5);
 
 } // namespace facebook::velox
+
+namespace std {
+template <>
+struct hash<facebook::velox::Type> {
+  size_t operator()(const facebook::velox::Type& type) const noexcept {
+    return type.hash();
+  }
+};
+} // namespace std
 
 namespace folly {
 template <>
