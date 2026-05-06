@@ -567,8 +567,8 @@ class ReaderOptions : public io::ReaderOptions {
 
   ReaderOptions(
       velox::memory::MemoryPool* pool,
-      velox::io::IoStatistics* dataIoStats = nullptr,
-      velox::io::IoStatistics* metadataIoStats = nullptr)
+      velox::io::IoStatistics* dataIoStats,
+      velox::io::IoStatistics* metadataIoStats)
       : io::ReaderOptions(pool, dataIoStats, metadataIoStats) {}
 
   /// Sets the format of the file, such as "rc" or "dwrf". The default is

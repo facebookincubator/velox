@@ -909,7 +909,7 @@ TEST_F(CachedBufferedInputTest, findCachedRegionExclusiveWithWait) {
   // CachedBufferedInput.
   StringIdLease sameFileId(ids, fileName);
   RawFileCacheKey key{sameFileId.id(), kOffset};
-  auto exclusivePin = cache_->findOrCreate(key, kSize, nullptr);
+  auto exclusivePin = cache_->findOrCreate(key, kSize);
   ASSERT_FALSE(exclusivePin.empty());
   ASSERT_TRUE(exclusivePin.entry()->isExclusive());
 
@@ -933,7 +933,7 @@ TEST_F(CachedBufferedInputTest, findCachedRegionExclusiveWithWait) {
   // Populate the entry and transition to shared.
   auto* entry = exclusivePin.entry();
   ASSERT_LT(kSize, AsyncDataCacheEntry::kTinyDataSize);
-  ::memcpy(entry->tinyData(), content.data() + kOffset, kSize);
+  ::memcpy(entry->contiguousData(), content.data() + kOffset, kSize);
   entry->setExclusiveToShared();
   exclusivePin.clear();
 
@@ -991,7 +991,7 @@ TEST_F(CachedBufferedInputTest, cacheRegionSkipsOngoingInsert) {
   // Simulate an ongoing insert by creating an exclusive entry directly.
   StringIdLease sameFileId(ids, fileName);
   RawFileCacheKey key{sameFileId.id(), kOffset};
-  auto exclusivePin = cache_->findOrCreate(key, kSize, nullptr);
+  auto exclusivePin = cache_->findOrCreate(key, kSize);
   ASSERT_FALSE(exclusivePin.empty());
   ASSERT_TRUE(exclusivePin.entry()->isExclusive());
 
@@ -1007,7 +1007,7 @@ TEST_F(CachedBufferedInputTest, cacheRegionSkipsOngoingInsert) {
   // Complete the original insert with the real data.
   auto* entry = exclusivePin.entry();
   ASSERT_LT(kSize, AsyncDataCacheEntry::kTinyDataSize);
-  ::memcpy(entry->tinyData(), content.data() + kOffset, kSize);
+  ::memcpy(entry->contiguousData(), content.data() + kOffset, kSize);
   entry->setExclusiveToShared();
   exclusivePin.clear();
 

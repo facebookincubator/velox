@@ -96,7 +96,8 @@ std::shared_ptr<ScanSpec> ParquetReaderBenchmark::createScanSpec(
 std::unique_ptr<RowReader> ParquetReaderBenchmark::createReader(
     std::shared_ptr<ScanSpec> scanSpec,
     const RowTypePtr& rowType) {
-  dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+  dwio::common::ReaderOptions readerOpts{
+      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
   auto input = std::make_unique<BufferedInput>(
       std::make_shared<LocalReadFile>(fileFolder_->getPath() + "/" + fileName_),
       readerOpts.memoryPool());
