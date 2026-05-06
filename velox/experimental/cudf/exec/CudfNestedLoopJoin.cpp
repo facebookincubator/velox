@@ -280,25 +280,36 @@ CudfNestedLoopJoinProbe::CudfNestedLoopJoinProbe(
     }
     VELOX_FAIL("Output column not found in probe or build types: {}", name);
   }
+}
 
-  // Setup AST filter if join condition exists
-  if (joinNode_->joinCondition()) {
-    hasFilter_ = true;
-    exec::ExprSet exprs({joinNode_->joinCondition()}, operatorCtx_->execCtx());
-    VELOX_CHECK_EQ(exprs.exprs().size(), 1);
+void CudfNestedLoopJoinProbe::initialize() {
+  // Filter construction is deferred from the ctor to avoid memory allocation
+  // during driver initialization. Mirrors #17045 for CudfHashJoinProbe.
+  Operator::initialize();
 
-    // Convert Velox expression to cuDF AST expression tree.
-    // The AST will be passed to cudf::conditional_inner_join() for GPU
-    // evaluation.
-    createAstTree(
-        exprs.exprs()[0],
-        tree_,
-        scalars_,
-        probeType_,
-        buildType_,
-        leftPrecomputeInstructions_,
-        rightPrecomputeInstructions_);
+  if (!joinNode_->joinCondition()) {
+    return;
   }
+
+  exec::ExprSet exprs({joinNode_->joinCondition()}, operatorCtx_->execCtx());
+  VELOX_CHECK_EQ(exprs.exprs().size(), 1);
+
+  // Convert Velox expression to cuDF AST expression tree.
+  // The AST will be passed to cudf::conditional_inner_join() for GPU
+  // evaluation.
+  createAstTree(
+      exprs.exprs()[0],
+      tree_,
+      scalars_,
+      probeType_,
+      buildType_,
+      leftPrecomputeInstructions_,
+      rightPrecomputeInstructions_);
+
+  // Set hasFilter_ only after the AST has been fully built so that a throw
+  // from createAstTree() does not leave the operator marked as having a filter
+  // with a partially-initialized tree.
+  hasFilter_ = true;
 }
 
 void CudfNestedLoopJoinProbe::doClose() {
@@ -536,6 +547,9 @@ std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::joinWithBuildBatch(
       buildPrecomputed_.empty() ? buildView : buildExtendedView_;
 
   if (hasFilter_) {
+    VELOX_CHECK(
+        isInitialized(),
+        "Filter must be initialized before joinWithBuildBatch");
     auto [leftIndices, rightIndices] = cudf::conditional_inner_join(
         extendedProbeView,
         extendedBuildView,
