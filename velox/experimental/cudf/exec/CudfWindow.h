@@ -23,15 +23,15 @@
 
 #include <cudf/table/table.hpp>
 #include <cudf/types.hpp>
+#include <rmm/cuda_stream_view.hpp>
 
 namespace facebook::velox::cudf_velox {
 
 /// GPU-accelerated Window operator using cuDF.
 ///
-/// Incoming GPU batches are stored in addInput(); getOutput() concatenates
-/// batches, optionally normalizes libcudf types per column to match the
-/// WindowNode input row type, sorts if WindowNode::inputsSorted() is false,
-/// evaluates window functions, and returns one output batch.
+/// Incoming GPU batches are stored in addInput(). When noMoreInput() is called,
+/// batches are concatenated and sorted. getOutput() then evaluates window
+/// functions and returns one output batch.
 ///
 /// inputsSorted fast path: when WindowNode::inputsSorted() is true, this
 /// operator skips stable_sorted_order and the full-table gather (see
@@ -40,12 +40,6 @@ namespace facebook::velox::cudf_velox {
 /// must only set it when a Sort or ordered exchange actually guarantees
 /// partition keys then ORDER BY keys across concatenated input batches.
 ///
-/// Concat + normalize: multi-batch inputs use cudf::concatenate after
-/// per-batch processing. Batches whose columns already match
-/// veloxToCudfDataType(input row) skip the identity gather/cast normalize.
-/// Single-batch + already-aligned still deep-copies via concatenate so the
-/// result owns storage after input batches are released.
-///
 /// Memory: the sorted path peaks at roughly concat output plus gather copy plus
 /// window result columns. Batch-wise / streaming evaluation would require a
 /// larger redesign.
@@ -53,10 +47,6 @@ namespace facebook::velox::cudf_velox {
 /// Rank-like functions (row_number, rank, dense_rank) use
 /// cudf::groupby::scan with cudf::make_rank_aggregation.
 /// Aggregate windows and lag/lead use cudf::grouped_rolling_window.
-///
-/// Future enhancement (PR follow-up): DECIMAL sort keys and rank/dense_rank
-/// tie-breaking vs DuckDB/Presto (plan-level alignment or fixed-point rank).
-/// libcudf release notes should be checked periodically for order-aware APIs.
 class CudfWindow : public CudfOperatorBase {
  public:
   CudfWindow(
@@ -165,6 +155,10 @@ class CudfWindow : public CudfOperatorBase {
   std::vector<cudf::null_order> nullOrders_;
 
   std::vector<CudfVectorPtr> inputBatches_;
+
+  // Sorted and concatenated input data, prepared in doNoMoreInput().
+  std::unique_ptr<cudf::table> sortedData_;
+  rmm::cuda_stream_view stream_{};
 
   // Scratch storage for multiSortKeyStructView children.
   mutable std::vector<cudf::column_view> sortKeyStructChildren_;

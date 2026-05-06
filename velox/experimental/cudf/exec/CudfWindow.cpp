@@ -25,11 +25,8 @@
 
 #include <cudf/aggregation.hpp>
 #include <cudf/column/column_factories.hpp>
-#include <cudf/concatenate.hpp>
 #include <cudf/copying.hpp>
-#include <cudf/filling.hpp>
 #include <cudf/groupby.hpp>
-#include <cudf/reduction.hpp>
 #include <cudf/rolling.hpp>
 #include <cudf/scalar/scalar_factories.hpp>
 #include <cudf/sorting.hpp>
@@ -38,6 +35,8 @@
 #include <cudf/unary.hpp>
 
 #include <nvtx3/nvtx3.hpp>
+
+#include <limits>
 
 namespace facebook::velox::cudf_velox {
 
@@ -103,97 +102,6 @@ std::pair<cudf::window_bounds, cudf::window_bounds> toWindowBounds(
   return {
       toBound(frame.startType, frame.startValue),
       toBound(frame.endType, frame.endValue)};
-}
-
-// Materialize a column without unary cast. libcudf::cast only supports
-// fixed-width targets; STRING/LIST/STRUCT identity "casts" fail at runtime.
-std::unique_ptr<cudf::column> materializeColumnSameType(
-    cudf::column_view col,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
-  if (col.size() == 0) {
-    return cudf::empty_like(col);
-  }
-  auto indices = cudf::sequence(
-      col.size(),
-      cudf::numeric_scalar<cudf::size_type>(0, true, stream, mr),
-      cudf::numeric_scalar<cudf::size_type>(1, true, stream, mr),
-      stream,
-      mr);
-  auto gathered = cudf::gather(
-      cudf::table_view{{col}},
-      indices->view(),
-      cudf::out_of_bounds_policy::DONT_CHECK,
-      stream,
-      mr);
-  return std::move(gathered->release()[0]);
-}
-
-// Normalize each incoming GPU batch to the WindowNode's logical row type so
-// libcudf::concatenate is well-defined. Invariant: every batch matches the
-// WindowNode input *Velox* row type. That does not guarantee identical libcudf
-// physical types across batches (e.g. width/precision mismatches on fixed types
-// or Arrow import quirks); concatenate requires matching
-// cudf::data_type per column. When types already match, we only materialize
-// (gather) for a stable copy; variable-width columns must match exactly.
-std::unique_ptr<cudf::table> normalizeTableToInputRowType(
-    cudf::table_view view,
-    const RowTypePtr& rowType,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
-  VELOX_CHECK_EQ(
-      static_cast<size_t>(view.num_columns()),
-      rowType->size(),
-      "CudfWindow: GPU batch column count does not match input row type");
-  std::vector<std::unique_ptr<cudf::column>> cols;
-  cols.reserve(view.num_columns());
-  for (cudf::size_type i = 0; i < view.num_columns(); ++i) {
-    auto expected = cudf_velox::veloxToCudfDataType(rowType->childAt(i));
-    auto col = view.column(i);
-    // libcudf unary cast rejects STRING/LIST/STRUCT targets regardless of
-    // cudf::is_fixed_width() on some versions — never route those through cast.
-    const bool typesMatch = (col.type() == expected);
-    const bool stringCompat = !typesMatch &&
-        col.type().id() == cudf::type_id::STRING &&
-        expected.id() == cudf::type_id::STRING;
-    if (typesMatch || stringCompat) {
-      cols.push_back(materializeColumnSameType(col, stream, mr));
-    } else {
-      VELOX_CHECK(
-          expected.id() != cudf::type_id::STRING &&
-              expected.id() != cudf::type_id::LIST &&
-              expected.id() != cudf::type_id::STRUCT,
-          "CudfWindow: variable-width column types must match exactly for concatenate");
-      VELOX_CHECK(
-          cudf::is_fixed_width(col.type()) && cudf::is_fixed_width(expected),
-          "CudfWindow: cannot align non-fixed-width column types for concatenate");
-      cols.push_back(cudf::cast(col, expected, stream, mr));
-    }
-  }
-  return std::make_unique<cudf::table>(std::move(cols));
-}
-
-// True when every column's libcudf type already matches Velox input row type
-// (same rules as normalizeTableToInputRowType); concat can use the view as-is.
-bool tableViewMatchesInputRowType(
-    cudf::table_view view,
-    const RowTypePtr& rowType) {
-  VELOX_CHECK_EQ(
-      static_cast<size_t>(view.num_columns()),
-      rowType->size(),
-      "CudfWindow: column count does not match input row type");
-  for (cudf::size_type i = 0; i < view.num_columns(); ++i) {
-    auto expected = cudf_velox::veloxToCudfDataType(rowType->childAt(i));
-    auto col = view.column(i);
-    const bool typesMatch = (col.type() == expected);
-    const bool stringCompat = !typesMatch &&
-        col.type().id() == cudf::type_id::STRING &&
-        expected.id() == cudf::type_id::STRING;
-    if (!typesMatch && !stringCompat) {
-      return false;
-    }
-  }
-  return true;
 }
 
 } // namespace
@@ -463,68 +371,31 @@ std::unique_ptr<cudf::column> CudfWindow::computeAggregateColumn(
 }
 
 void CudfWindow::doNoMoreInput() {
-  CudfOperatorBase::doNoMoreInput();
+  Operator::noMoreInput();
   if (inputBatches_.empty()) {
     finished_ = true;
-  }
-}
-
-bool CudfWindow::isFinished() {
-  return finished_;
-}
-
-RowVectorPtr CudfWindow::doGetOutput() {
-  if (finished_ || !noMoreInput_) {
-    return nullptr;
-  }
-  if (inputBatches_.empty()) {
-    finished_ = true;
-    return nullptr;
+    return;
   }
 
-  auto stream = inputBatches_[0]->stream();
-  auto mr = get_output_mr();
-  velox::memory::MemoryPool* const outPool = pool();
-
-  // Concatenate all input batches into one table. Skip per-batch normalize when
-  // libcudf types already match the Window input row (avoids identity gather).
-  std::vector<std::unique_ptr<cudf::table>> normalizedBatches;
-  normalizedBatches.reserve(inputBatches_.size());
-  std::vector<cudf::table_view> views;
-  views.reserve(inputBatches_.size());
+  // Verify total row count doesn't exceed cudf's int32 limit.
+  int64_t totalRows = 0;
   for (const auto& batch : inputBatches_) {
-    auto batchView = batch->getTableView();
-    if (tableViewMatchesInputRowType(batchView, inputRowType_)) {
-      views.push_back(batchView);
-    } else {
-      normalizedBatches.push_back(
-          normalizeTableToInputRowType(batchView, inputRowType_, stream, mr));
-      views.push_back(normalizedBatches.back()->view());
-    }
+    totalRows += batch->size();
   }
-  std::unique_ptr<cudf::table> allData;
-  if (views.size() == 1) {
-    if (!normalizedBatches.empty()) {
-      allData = std::move(normalizedBatches[0]);
-    } else {
-      // Own a copy: input CudfVector batches are released below.
-      allData = cudf::concatenate(
-          std::vector<cudf::table_view>{views[0]}, stream, mr);
-    }
-  } else {
-    allData = cudf::concatenate(views, stream, mr);
-  }
-  // Drop normalized intermediates; release input batches after concat copied
-  // data.
-  normalizedBatches.clear();
-  inputBatches_.clear();
+  VELOX_CHECK_LE(
+      totalRows,
+      std::numeric_limits<cudf::size_type>::max(),
+      "Total row count {} exceeds cudf int32 limit",
+      totalRows);
 
-  auto allView = allData->view();
+  stream_ = cudfGlobalStreamPool().get_stream();
+  auto mr = get_output_mr();
 
-  // 1. Sort by partition keys + sort keys if the plan is not already sorted.
-  std::unique_ptr<cudf::table> sortedData;
-  cudf::table_view sortedView;
+  // Concatenate all input batches into one table with proper stream sync.
+  auto allData = getConcatenatedTable(
+      std::exchange(inputBatches_, {}), inputRowType_, stream_, mr);
 
+  // Sort by partition keys + sort keys if the plan is not already sorted.
   if (!windowNode_->inputsSorted()) {
     std::vector<cudf::size_type> allSortKeys;
     std::vector<cudf::order> allOrders;
@@ -541,31 +412,42 @@ RowVectorPtr CudfWindow::doGetOutput() {
       allNullOrders.push_back(nullOrders_[i]);
     }
 
-    {
-      auto keyTable = allView.select(allSortKeys);
-      auto indices = cudf::stable_sorted_order(
-          keyTable, allOrders, allNullOrders, stream, mr);
-      sortedData = cudf::gather(
-          allView,
-          indices->view(),
-          cudf::out_of_bounds_policy::DONT_CHECK,
-          cudf::negative_index_policy::NOT_ALLOWED,
-          stream,
-          mr);
-    }
-    sortedView = sortedData->view();
-    // sortedData is a full gather copy; release the unsorted table before rank
-    // scans to cut peak GPU memory (large windows e.g. TPC-DS Q49).
-    allData.reset();
-    stream.synchronize();
+    auto allView = allData->view();
+    auto keyTable = allView.select(allSortKeys);
+    auto indices = cudf::stable_sorted_order(
+        keyTable, allOrders, allNullOrders, stream_, mr);
+    sortedData_ = cudf::gather(
+        allView,
+        indices->view(),
+        cudf::out_of_bounds_policy::DONT_CHECK,
+        cudf::negative_index_policy::NOT_ALLOWED,
+        stream_,
+        mr);
   } else {
-    sortedView = allView;
+    sortedData_ = std::move(allData);
+  }
+}
+
+bool CudfWindow::isFinished() {
+  return finished_;
+}
+
+RowVectorPtr CudfWindow::doGetOutput() {
+  if (finished_ || !noMoreInput_) {
+    return nullptr;
+  }
+  if (!sortedData_) {
+    finished_ = true;
+    return nullptr;
   }
 
-  // 2. Build partition key table for grouped_rolling_window.
+  auto mr = get_output_mr();
+  auto sortedView = sortedData_->view();
+
+  // Build partition key table for grouped_rolling_window.
   auto partKeys = sortedView.select(partitionKeyIndices_);
 
-  // 3. Evaluate each window function and collect result columns.
+  // Evaluate each window function and collect result columns.
   std::vector<std::unique_ptr<cudf::column>> windowResultCols;
   const auto& prefix = CudfConfig::getInstance().functionNamePrefix;
 
@@ -576,40 +458,40 @@ RowVectorPtr CudfWindow::doGetOutput() {
     if (baseName == "row_number" || baseName == "rank" ||
         baseName == "dense_rank") {
       windowResultCols.push_back(
-          computeRankColumn(sortedView, baseName, stream));
+          computeRankColumn(sortedView, baseName, stream_));
     } else if (baseName == "lag" || baseName == "lead") {
       auto inputColIdx = resolveInputColumn(func);
       auto inputCol = sortedView.column(inputColIdx);
       windowResultCols.push_back(
-          computeLeadLagColumn(partKeys, inputCol, func, baseName, stream));
+          computeLeadLagColumn(partKeys, inputCol, func, baseName, stream_));
     } else if (baseName == "first_value" || baseName == "last_value") {
       auto inputColIdx = resolveInputColumn(func);
       auto inputCol = sortedView.column(inputColIdx);
       windowResultCols.push_back(
-          computeNthValueColumn(partKeys, inputCol, func, baseName, stream));
+          computeNthValueColumn(partKeys, inputCol, func, baseName, stream_));
     } else if (
         baseName == "sum" || baseName == "min" || baseName == "max" ||
         baseName == "count" || baseName == "avg") {
       auto inputColIdx = resolveInputColumn(func);
       auto inputCol = sortedView.column(inputColIdx);
       windowResultCols.push_back(
-          computeAggregateColumn(partKeys, inputCol, func, baseName, stream));
+          computeAggregateColumn(partKeys, inputCol, func, baseName, stream_));
     } else {
       VELOX_FAIL("Unsupported window function for cudf: {}", baseName);
     }
   }
 
-  // 4. Build the output table: input columns + window result columns.
+  // Build the output table: input columns + window result columns.
   // Cast window result columns to expected output types if needed.
-  auto& dataOwner = sortedData ? sortedData : allData;
-  auto sortedCols = dataOwner->release();
+  auto sortedCols = sortedData_->release();
+  sortedData_.reset();
   const auto numInputCols = inputRowType_->size();
   for (size_t i = 0; i < windowResultCols.size(); ++i) {
     auto& wc = windowResultCols[i];
     auto expectedType =
         veloxToCudfDataType(outputType_->childAt(numInputCols + i));
     if (wc->type() != expectedType) {
-      wc = cudf::cast(wc->view(), expectedType, stream, mr);
+      wc = cudf::cast(wc->view(), expectedType, stream_, mr);
     }
     sortedCols.push_back(std::move(wc));
   }
@@ -618,7 +500,7 @@ RowVectorPtr CudfWindow::doGetOutput() {
 
   finished_ = true;
   return std::make_shared<CudfVector>(
-      outPool, outputType_, resultSize, std::move(resultTable), stream);
+      pool(), outputType_, resultSize, std::move(resultTable), stream_);
 }
 
 } // namespace facebook::velox::cudf_velox
