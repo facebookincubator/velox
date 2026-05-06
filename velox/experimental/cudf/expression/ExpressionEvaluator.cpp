@@ -25,7 +25,9 @@
 #include "velox/expression/FunctionSignature.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/type/DecimalUtil.h"
+#include "velox/type/Timestamp.h"
 #include "velox/type/Type.h"
+#include "velox/type/tz/TimeZoneMap.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ConstantVector.h"
 
@@ -231,6 +233,21 @@ getCudfFunctionRegistry() {
   return registry;
 }
 
+static thread_local const tz::TimeZone* g_sessionTimeZone = nullptr;
+
+SessionTimeZoneScope::SessionTimeZoneScope(const tz::TimeZone* tz)
+    : saved_(g_sessionTimeZone) {
+  g_sessionTimeZone = tz;
+}
+
+SessionTimeZoneScope::~SessionTimeZoneScope() {
+  g_sessionTimeZone = saved_;
+}
+
+const tz::TimeZone* getSessionTimeZone() {
+  return g_sessionTimeZone;
+}
+
 namespace {
 
 static bool matchCallAgainstSignatures(
@@ -303,6 +320,100 @@ class SplitFunction : public CudfFunction {
   cudf::size_type maxSplitCount_;
 };
 
+// Copy the underlying int64 data of a TIMESTAMP column to host memory.
+std::vector<int64_t> copyTimestampToHost(
+    cudf::column_view col,
+    rmm::cuda_stream_view stream) {
+  auto numRows = col.size();
+  std::vector<int64_t> hostData(numRows);
+  if (numRows > 0) {
+    CUDF_CUDA_TRY(cudaMemcpyAsync(
+        hostData.data(),
+        col.data<int64_t>(),
+        numRows * sizeof(int64_t),
+        cudaMemcpyDeviceToHost,
+        stream.value()));
+    stream.synchronize();
+  }
+  return hostData;
+}
+
+// Build a TIMESTAMP column from host int64 data, preserving the original
+// column's null mask and data type.
+std::unique_ptr<cudf::column> buildTimestampFromHost(
+    const std::vector<int64_t>& hostData,
+    cudf::column_view originalCol,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  auto numRows = static_cast<cudf::size_type>(hostData.size());
+  auto result = cudf::make_fixed_width_column(
+      originalCol.type(), numRows, cudf::mask_state::UNALLOCATED, stream, mr);
+  if (numRows > 0) {
+    CUDF_CUDA_TRY(cudaMemcpyAsync(
+        result->mutable_view().data<int64_t>(),
+        hostData.data(),
+        numRows * sizeof(int64_t),
+        cudaMemcpyHostToDevice,
+        stream.value()));
+  }
+  if (originalCol.nullable()) {
+    auto mask = cudf::copy_bitmask(originalCol, stream, mr);
+    result->set_null_mask(std::move(mask), originalCol.null_count());
+  }
+  stream.synchronize();
+  return result;
+}
+
+// Convert timestamps from local time to UTC using the session timezone.
+// Presto treats bare timestamp strings as local time, but
+// cudf::strings::to_timestamps always produces UTC. This corrects the offset.
+std::unique_ptr<cudf::column> convertLocalToUtc(
+    std::unique_ptr<cudf::column> localTs,
+    const tz::TimeZone* tz,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  auto view = localTs->view();
+  auto hostData = copyTimestampToHost(view, stream);
+  bool isMicroseconds =
+      view.type().id() == cudf::type_id::TIMESTAMP_MICROSECONDS;
+  for (auto& val : hostData) {
+    if (isMicroseconds) {
+      Timestamp ts = Timestamp::fromMicros(val);
+      ts.toGMT(*tz);
+      val = ts.toMicros();
+    } else {
+      Timestamp ts = Timestamp::fromNanos(val);
+      ts.toGMT(*tz);
+      val = ts.toNanos();
+    }
+  }
+  return buildTimestampFromHost(hostData, view, stream, mr);
+}
+
+// Convert timestamps from UTC to local time using the session timezone.
+std::unique_ptr<cudf::column> convertUtcToLocal(
+    std::unique_ptr<cudf::column> utcTs,
+    const tz::TimeZone* tz,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  auto view = utcTs->view();
+  auto hostData = copyTimestampToHost(view, stream);
+  bool isMicroseconds =
+      view.type().id() == cudf::type_id::TIMESTAMP_MICROSECONDS;
+  for (auto& val : hostData) {
+    if (isMicroseconds) {
+      Timestamp ts = Timestamp::fromMicros(val);
+      ts.toTimezone(*tz);
+      val = ts.toMicros();
+    } else {
+      Timestamp ts = Timestamp::fromNanos(val);
+      ts.toTimezone(*tz);
+      val = ts.toNanos();
+    }
+  }
+  return buildTimestampFromHost(hostData, view, stream, mr);
+}
+
 class CastFunction : public CudfFunction {
  public:
   CastFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
@@ -328,6 +439,353 @@ class CastFunction : public CudfFunction {
 
  private:
   cudf::data_type targetCudfType_;
+};
+
+// Presto date_add(unit, value, date/timestamp) -> date/timestamp.
+// The unit argument is always a constant VARCHAR resolved at construction time.
+// Supported units for DATE: day, week, month, quarter, year.
+// Supported units for TIMESTAMP: millisecond, second, minute, hour, day, week,
+//   month, quarter, year.
+// For simple duration units we convert the integer value to the appropriate
+// cuDF duration type and use binary ADD. For calendar-aware units (month,
+// quarter, year) we use cudf::datetime::add_calendrical_months.
+// When a session timezone is active and the input is TIMESTAMP, we perform
+// UTC→local conversion before arithmetic and local→UTC after, matching the
+// CPU DateAddFunction behavior (DateTimeImpl.h:91-105).
+class PrestoDateAddFunction : public CudfFunction {
+ public:
+  PrestoDateAddFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    VELOX_CHECK_EQ(
+        expr->inputs().size(), 3, "date_add expects exactly 3 inputs");
+
+    auto unitExpr =
+        std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr->inputs()[0]);
+    VELOX_CHECK_NOT_NULL(unitExpr, "date_add unit must be a constant");
+    unit_ = unitExpr->value()->toString(0);
+
+    isDate_ = expr->inputs()[2]->type()->isDate();
+
+    if (auto c = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
+            expr->inputs()[1])) {
+      valueScalar_ = makeScalarFromConstantExpr(c);
+      valueIsConst_ = true;
+    }
+    if (auto c = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
+            expr->inputs()[2])) {
+      inputScalar_ = makeScalarFromConstantExpr(c);
+      inputIsConst_ = true;
+    }
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    size_t colIdx = 0;
+    Operand value, input;
+
+    if (valueIsConst_) {
+      value.sc = valueScalar_.get();
+    } else {
+      value.col = asView(inputColumns[colIdx++]);
+    }
+
+    if (inputIsConst_) {
+      input.sc = inputScalar_.get();
+    } else {
+      input.col = asView(inputColumns[colIdx++]);
+    }
+
+    // When session timezone is active and input is TIMESTAMP, delegate to the
+    // timezone-aware path that converts UTC↔local around the GPU arithmetic.
+    const auto* tz = getSessionTimeZone();
+    if (!isDate_ && tz != nullptr) {
+      return evalWithTimezone(input, value, tz, stream, mr);
+    }
+
+    if (unit_ == "day") {
+      return addByDuration(input, value, 1, stream, mr);
+    } else if (unit_ == "week") {
+      return addByDuration(input, value, 7, stream, mr);
+    } else if (unit_ == "month") {
+      return addByCalendar(input, value, 1, stream, mr);
+    } else if (unit_ == "quarter") {
+      return addByCalendar(input, value, 3, stream, mr);
+    } else if (unit_ == "year") {
+      return addByCalendar(input, value, 12, stream, mr);
+    } else if (!isDate_) {
+      static constexpr int64_t kUsPerMs = 1'000LL;
+      static constexpr int64_t kUsPerSecond = 1'000LL * 1'000;
+      static constexpr int64_t kUsPerMinute = 60LL * kUsPerSecond;
+      static constexpr int64_t kUsPerHour = 60LL * kUsPerMinute;
+      if (unit_ == "second") {
+        return addTimestamp(input, value, kUsPerSecond, stream, mr);
+      } else if (unit_ == "millisecond") {
+        return addTimestamp(input, value, kUsPerMs, stream, mr);
+      } else if (unit_ == "minute") {
+        return addTimestamp(input, value, kUsPerMinute, stream, mr);
+      } else if (unit_ == "hour") {
+        return addTimestamp(input, value, kUsPerHour, stream, mr);
+      }
+    }
+    VELOX_FAIL("Unsupported date_add unit: {}", unit_);
+  }
+
+ private:
+  struct Operand {
+    std::optional<cudf::column_view> col;
+    const cudf::scalar* sc = nullptr;
+  };
+
+  static cudf::size_type getSize(const Operand& a, const Operand& b) {
+    if (a.col) {
+      return a.col->size();
+    }
+    VELOX_CHECK(b.col.has_value(), "At least one operand must be a column");
+    return b.col->size();
+  }
+
+  template <typename DurationType>
+  static std::unique_ptr<cudf::scalar> makeDurationScalar(
+      int64_t rawValue,
+      int64_t multiplier,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) {
+    using Rep = typename DurationType::rep;
+    return std::make_unique<cudf::duration_scalar<DurationType>>(
+        static_cast<Rep>(rawValue * multiplier), true, stream, mr);
+  }
+
+  static int64_t scalarValue(
+      const cudf::scalar* sc,
+      rmm::cuda_stream_view stream) {
+    return static_cast<cudf::numeric_scalar<int64_t> const*>(sc)->value(stream);
+  }
+
+  static std::unique_ptr<cudf::column> scaleColumn(
+      cudf::column_view col,
+      int64_t multiplier,
+      cudf::type_id targetType,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) {
+    if (multiplier == 1) {
+      return cudf::cast(col, cudf::data_type(targetType), stream, mr);
+    }
+    auto mul = cudf::numeric_scalar<int64_t>(multiplier, true, stream, mr);
+    auto scaled = cudf::binary_operation(
+        col,
+        mul,
+        cudf::binary_operator::MUL,
+        cudf::data_type(cudf::type_id::INT64),
+        stream,
+        mr);
+    return cudf::cast(scaled->view(), cudf::data_type(targetType), stream, mr);
+  }
+
+  static cudf::column_view ensureColumn(
+      const Operand& op,
+      cudf::size_type size,
+      std::unique_ptr<cudf::column>& owned,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) {
+    if (op.col) {
+      return *op.col;
+    }
+    owned = cudf::make_column_from_scalar(*op.sc, size, stream, mr);
+    return owned->view();
+  }
+
+  /// Add a duration to a DATE (day/week). For TIMESTAMP delegates to
+  /// addTimestamp.
+  ColumnOrView addByDuration(
+      const Operand& input,
+      const Operand& value,
+      int64_t dayMultiplier,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const {
+    if (!isDate_) {
+      static constexpr int64_t kUsPerDay = 86'400LL * 1'000'000LL;
+      return addTimestamp(input, value, dayMultiplier * kUsPerDay, stream, mr);
+    }
+
+    auto outType = cudf::data_type(cudf::type_id::TIMESTAMP_DAYS);
+    std::unique_ptr<cudf::column> inputOwned;
+    if (value.sc) {
+      auto durSc = makeDurationScalar<cudf::duration_D>(
+          scalarValue(value.sc, stream), dayMultiplier, stream, mr);
+      auto inputCol = ensureColumn(input, 1, inputOwned, stream, mr);
+      return cudf::binary_operation(
+          inputCol, *durSc, cudf::binary_operator::ADD, outType, stream, mr);
+    }
+    auto durCol = scaleColumn(
+        *value.col, dayMultiplier, cudf::type_id::DURATION_DAYS, stream, mr);
+    auto inputCol =
+        ensureColumn(input, value.col->size(), inputOwned, stream, mr);
+    return cudf::binary_operation(
+        inputCol,
+        durCol->view(),
+        cudf::binary_operator::ADD,
+        outType,
+        stream,
+        mr);
+  }
+
+  /// Add a scaled duration to a TIMESTAMP.
+  ColumnOrView addTimestamp(
+      const Operand& input,
+      const Operand& value,
+      int64_t usPerUnit,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const {
+    auto durTypeId = cudf::type_id::DURATION_MICROSECONDS;
+    auto tsTypeId = cudf::type_id::TIMESTAMP_MICROSECONDS;
+    int64_t scaleFactor = usPerUnit;
+    if (input.col.has_value() &&
+        input.col->type().id() == cudf::type_id::TIMESTAMP_NANOSECONDS) {
+      durTypeId = cudf::type_id::DURATION_NANOSECONDS;
+      tsTypeId = cudf::type_id::TIMESTAMP_NANOSECONDS;
+      scaleFactor = usPerUnit * 1'000;
+    }
+
+    auto outType = cudf::data_type(tsTypeId);
+    std::unique_ptr<cudf::column> inputOwned;
+    if (value.sc) {
+      std::unique_ptr<cudf::scalar> durSc;
+      if (durTypeId == cudf::type_id::DURATION_NANOSECONDS) {
+        durSc = makeDurationScalar<cudf::duration_ns>(
+            scalarValue(value.sc, stream), scaleFactor, stream, mr);
+      } else {
+        durSc = makeDurationScalar<cudf::duration_us>(
+            scalarValue(value.sc, stream), scaleFactor, stream, mr);
+      }
+      auto inputCol = ensureColumn(input, 1, inputOwned, stream, mr);
+      return cudf::binary_operation(
+          inputCol, *durSc, cudf::binary_operator::ADD, outType, stream, mr);
+    }
+    auto durCol = scaleColumn(*value.col, scaleFactor, durTypeId, stream, mr);
+    auto inputCol =
+        ensureColumn(input, value.col->size(), inputOwned, stream, mr);
+    return cudf::binary_operation(
+        inputCol,
+        durCol->view(),
+        cudf::binary_operator::ADD,
+        outType,
+        stream,
+        mr);
+  }
+
+  /// Add calendar months using cudf::datetime::add_calendrical_months.
+  ColumnOrView addByCalendar(
+      const Operand& input,
+      const Operand& value,
+      int64_t monthMultiplier,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const {
+    auto numRows = getSize(input, value);
+    std::unique_ptr<cudf::column> inputOwned;
+    cudf::column_view tsCol;
+    if (input.col) {
+      tsCol = *input.col;
+    } else {
+      inputOwned =
+          cudf::make_column_from_scalar(*input.sc, numRows, stream, mr);
+      tsCol = inputOwned->view();
+    }
+
+    if (value.sc) {
+      auto months =
+          static_cast<int32_t>(scalarValue(value.sc, stream) * monthMultiplier);
+      auto monthsSc = cudf::numeric_scalar<int32_t>(months, true, stream, mr);
+      return cudf::datetime::add_calendrical_months(
+          tsCol, monthsSc, stream, mr);
+    }
+    auto monthsCol = scaleColumn(
+        *value.col, monthMultiplier, cudf::type_id::INT32, stream, mr);
+    return cudf::datetime::add_calendrical_months(
+        tsCol, monthsCol->view(), stream, mr);
+  }
+
+  /// Timezone-aware date_add for TIMESTAMP inputs.
+  /// Matches CPU addToTimestamp flow: UTC→local, arithmetic, local→UTC.
+  ColumnOrView evalWithTimezone(
+      const Operand& input,
+      const Operand& value,
+      const tz::TimeZone* tz,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const {
+    // Step 1: Materialize the input timestamp column on device.
+    auto numRows = getSize(input, value);
+    std::unique_ptr<cudf::column> inputOwned;
+    cudf::column_view inputCol;
+    if (input.col) {
+      inputCol = *input.col;
+    } else {
+      inputOwned =
+          cudf::make_column_from_scalar(*input.sc, numRows, stream, mr);
+      inputCol = inputOwned->view();
+    }
+
+    // Step 2: Convert UTC→local on host.
+    auto inputCopy = std::make_unique<cudf::column>(inputCol, stream, mr);
+    auto localCol = convertUtcToLocal(std::move(inputCopy), tz, stream, mr);
+
+    // Step 3: Run arithmetic on local timestamps.
+    Operand localInput;
+    localInput.col = localCol->view();
+
+    ColumnOrView arithmeticResult;
+    if (unit_ == "day") {
+      arithmeticResult = addByDuration(localInput, value, 1, stream, mr);
+    } else if (unit_ == "week") {
+      arithmeticResult = addByDuration(localInput, value, 7, stream, mr);
+    } else if (unit_ == "month") {
+      arithmeticResult = addByCalendar(localInput, value, 1, stream, mr);
+    } else if (unit_ == "quarter") {
+      arithmeticResult = addByCalendar(localInput, value, 3, stream, mr);
+    } else if (unit_ == "year") {
+      arithmeticResult = addByCalendar(localInput, value, 12, stream, mr);
+    } else {
+      static constexpr int64_t kUsPerMs = 1'000LL;
+      static constexpr int64_t kUsPerSecond = 1'000LL * 1'000;
+      static constexpr int64_t kUsPerMinute = 60LL * kUsPerSecond;
+      static constexpr int64_t kUsPerHour = 60LL * kUsPerMinute;
+      if (unit_ == "second") {
+        arithmeticResult =
+            addTimestamp(localInput, value, kUsPerSecond, stream, mr);
+      } else if (unit_ == "millisecond") {
+        arithmeticResult =
+            addTimestamp(localInput, value, kUsPerMs, stream, mr);
+      } else if (unit_ == "minute") {
+        arithmeticResult =
+            addTimestamp(localInput, value, kUsPerMinute, stream, mr);
+      } else if (unit_ == "hour") {
+        arithmeticResult =
+            addTimestamp(localInput, value, kUsPerHour, stream, mr);
+      } else {
+        VELOX_FAIL("Unsupported date_add unit: {}", unit_);
+      }
+    }
+
+    // Step 4: Convert local→UTC on host.
+    auto resultCol = std::visit(
+        [&](auto& holder) -> std::unique_ptr<cudf::column> {
+          using T = std::decay_t<decltype(holder)>;
+          if constexpr (std::is_same_v<T, std::unique_ptr<cudf::column>>) {
+            return std::move(holder);
+          } else {
+            return std::make_unique<cudf::column>(holder, stream, mr);
+          }
+        },
+        arithmeticResult);
+    return convertLocalToUtc(std::move(resultCol), tz, stream, mr);
+  }
+
+  std::string unit_;
+  bool isDate_;
+  std::unique_ptr<cudf::scalar> valueScalar_;
+  std::unique_ptr<cudf::scalar> inputScalar_;
+  bool valueIsConst_ = false;
+  bool inputIsConst_ = false;
 };
 
 class CardinalityFunction : public CudfFunction {
@@ -1572,6 +2030,45 @@ std::shared_ptr<CudfFunction> createCudfFunction(
     }
   }
   return nullptr;
+}
+
+// TODO: Move to SparkFunctions.cpp per PR #16960 refactor.
+void registerSparkFunctions(const std::string& prefix) {
+  using exec::FunctionSignatureBuilder;
+
+  registerCudfFunction(
+      prefix + "hash_with_seed",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<HashFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("bigint")
+           .constantArgumentType("integer")
+           .argumentType("any")
+           .variableArity()
+           .build()});
+}
+
+void registerPrestoFunctions(const std::string& prefix) {
+  using exec::FunctionSignatureBuilder;
+
+  registerCudfFunction(
+      prefix + "date_add",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<PrestoDateAddFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("date")
+           .constantArgumentType("varchar")
+           .argumentType("bigint")
+           .argumentType("date")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("timestamp")
+           .constantArgumentType("varchar")
+           .argumentType("bigint")
+           .argumentType("timestamp")
+           .build()});
 }
 
 bool registerBuiltinFunctions(const std::string& prefix) {
