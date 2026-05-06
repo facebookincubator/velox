@@ -244,7 +244,7 @@ class AsyncDataCacheTest : public ::testing::TestWithParam<TestParam> {
   // Checks that the contents are consistent with what is set in
   // initializeContents.
   static void checkContents(const AsyncDataCacheEntry& entry) {
-    const auto& alloc = entry.data();
+    const auto& alloc = entry.nonContiguousData();
     const int32_t numBytes = entry.size();
     const int64_t expectedSequence = entry.key().fileNum.id() + entry.offset();
     int32_t bytesChecked = sizeof(int64_t);
@@ -274,7 +274,7 @@ class AsyncDataCacheTest : public ::testing::TestWithParam<TestParam> {
     folly::SemiFuture<bool> wait(false);
     try {
       RawFileCacheKey key{filenames_[0].id(), offset};
-      auto pin = cache_->findOrCreate(key, size, &wait);
+      auto pin = cache_->findOrCreate(key, size, /*contiguous=*/false, &wait);
       EXPECT_FALSE(pin.empty());
       EXPECT_TRUE(pin.entry()->isExclusive());
       pin.entry()->setPrefetch();
@@ -346,7 +346,7 @@ class TestingCoalescedLoad : public CoalescedLoad {
           pins.push_back(std::move(pin));
         });
     for (const auto& pin : pins) {
-      auto& buffer = pin.entry()->data();
+      auto& buffer = pin.entry()->nonContiguousData();
       AsyncDataCacheTest::initializeContents(
           pin.entry()->key().offset + pin.entry()->key().fileNum.id(), buffer);
     }
@@ -441,7 +441,8 @@ void AsyncDataCacheTest::loadOne(
   RawFileCacheKey key{fileNum, request.offset};
   for (;;) {
     folly::SemiFuture<bool> loadFuture(false);
-    auto pin = cache_->findOrCreate(key, request.size, &loadFuture);
+    auto pin = cache_->findOrCreate(
+        key, request.size, /*contiguous=*/false, &loadFuture);
     if (pin.empty()) {
       // The pin was exclusive on another thread. Wait until it is no longer so
       // and retry.
@@ -475,7 +476,8 @@ void AsyncDataCacheTest::loadOne(
     }
     // Load from storage.
     initializeContents(
-        entry->key().offset + entry->key().fileNum.id(), entry->data());
+        entry->key().offset + entry->key().fileNum.id(),
+        entry->nonContiguousData());
     entry->setExclusiveToShared();
     return;
   }
@@ -669,12 +671,12 @@ TEST_P(AsyncDataCacheTest, pin) {
   uint64_t offset = 1000;
   folly::SemiFuture<bool> wait(false);
   RawFileCacheKey key{file.id(), offset};
-  auto pin = cache_->findOrCreate(key, kSize, &wait);
+  auto pin = cache_->findOrCreate(key, kSize, /*contiguous=*/false, &wait);
   EXPECT_FALSE(pin.empty());
   EXPECT_TRUE(wait.isReady());
   EXPECT_TRUE(pin.entry()->isExclusive());
   pin.entry()->setPrefetch();
-  EXPECT_LE(kSize, pin.entry()->data().byteSize());
+  EXPECT_LE(kSize, pin.entry()->nonContiguousData().byteSize());
   EXPECT_LT(0, cache_->incrementPrefetchPages(0));
   auto stats = cache_->refreshStats();
   EXPECT_EQ(1, stats.numExclusive);
@@ -685,19 +687,20 @@ TEST_P(AsyncDataCacheTest, pin) {
   EXPECT_TRUE(otherPin.empty());
 
   // Second reference to an exclusive entry.
-  otherPin = cache_->findOrCreate(key, kSize, &wait);
+  otherPin = cache_->findOrCreate(key, kSize, /*contiguous=*/false, &wait);
   EXPECT_FALSE(wait.isReady());
   EXPECT_TRUE(otherPin.empty());
   bool noLongerExclusive = false;
   std::move(wait).via(&exec).thenValue([&](bool) { noLongerExclusive = true; });
-  initializeContents(key.fileNum + key.offset, pin.checkedEntry()->data());
+  initializeContents(
+      key.fileNum + key.offset, pin.checkedEntry()->nonContiguousData());
   pin.checkedEntry()->setExclusiveToShared();
   pin.clear();
   EXPECT_TRUE(pin.empty());
 
   EXPECT_TRUE(noLongerExclusive);
 
-  pin = cache_->findOrCreate(key, kSize, &wait);
+  pin = cache_->findOrCreate(key, kSize, /*contiguous=*/false, &wait);
   EXPECT_TRUE(pin.entry()->isShared());
   EXPECT_TRUE(pin.entry()->getAndClearFirstUseFlag());
   EXPECT_FALSE(pin.entry()->getAndClearFirstUseFlag());
@@ -705,7 +708,8 @@ TEST_P(AsyncDataCacheTest, pin) {
   otherPin = pin;
   EXPECT_EQ(2, pin.entry()->numPins());
   EXPECT_FALSE(pin.entry()->isPrefetch());
-  auto largerPin = cache_->findOrCreate(key, kSize * 2, &wait);
+  auto largerPin =
+      cache_->findOrCreate(key, kSize * 2, /*contiguous=*/false, &wait);
   // We expect a new uninitialized entry with a larger size to displace the
   // previous one.
 
@@ -727,6 +731,223 @@ TEST_P(AsyncDataCacheTest, pin) {
   EXPECT_EQ(0, cache_->incrementPrefetchPages(0));
 }
 
+TEST_P(AsyncDataCacheTest, contiguousPin) {
+  initializeCache(1 << 20);
+  auto& exec = folly::QueuedImmediateExecutor::instance();
+
+  StringIdLease file(fileIds(), std::string_view("testingfile_contiguous"));
+
+  struct TestParam {
+    int64_t size;
+    bool expectTiny;
+    std::string debugString() const {
+      return fmt::format("size {}, expectTiny {}", size, expectTiny);
+    }
+  };
+
+  std::vector<TestParam> testSettings = {
+      {AsyncDataCacheEntry::kTinyDataSize / 2, true},
+      {AsyncDataCacheEntry::kTinyDataSize - 1, true},
+      {AsyncDataCacheEntry::kTinyDataSize, false},
+      {AsyncDataCacheEntry::kTinyDataSize * 4, false},
+      {25'000, false},
+  };
+
+  uint64_t offset = 1'000;
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+
+    folly::SemiFuture<bool> wait(false);
+    RawFileCacheKey key{file.id(), offset};
+    offset += testData.size;
+
+    auto pin =
+        cache_->findOrCreate(key, testData.size, /*contiguous=*/true, &wait);
+    ASSERT_FALSE(pin.empty());
+    ASSERT_TRUE(wait.isReady());
+    auto* entry = pin.checkedEntry();
+    ASSERT_TRUE(entry->isExclusive());
+    ASSERT_TRUE(entry->hasContiguousData());
+    ASSERT_TRUE(entry->nonContiguousData().empty());
+    ASSERT_EQ(entry->contiguousDataSize(), testData.size);
+
+    test::AsyncDataCacheEntryTestHelper entryHelper(entry);
+    if (testData.expectTiny) {
+      ASSERT_TRUE(entryHelper.isTinyData());
+      ASSERT_FALSE(entryHelper.isContiguousData());
+    } else {
+      ASSERT_FALSE(entryHelper.isTinyData());
+      ASSERT_TRUE(entryHelper.isContiguousData());
+    }
+
+    ::memset(entry->contiguousData(), 0xCD, testData.size);
+    entry->setExclusiveToShared();
+
+    // Verify stats include the contiguous allocation.
+    {
+      auto stats = cache_->refreshStats();
+      ASSERT_EQ(stats.numEntries, 1);
+      if (testData.expectTiny) {
+        ASSERT_EQ(stats.numTinyEntries, 1);
+        ASSERT_EQ(stats.tinySize, testData.size);
+      } else {
+        ASSERT_EQ(stats.numLargeEntries, 1);
+        ASSERT_EQ(stats.largeSize, testData.size);
+      }
+      if (!testData.expectTiny) {
+        ASSERT_EQ(
+            cache_->cachedPages(),
+            memory::AllocationTraits::numPages(testData.size));
+      }
+    }
+
+    auto pin2 =
+        cache_->findOrCreate(key, testData.size, /*contiguous=*/true, &wait);
+    ASSERT_FALSE(pin2.empty());
+    ASSERT_TRUE(pin2.checkedEntry()->isShared());
+    ASSERT_TRUE(pin2.checkedEntry()->hasContiguousData());
+    ASSERT_EQ(
+        static_cast<uint8_t>(pin2.checkedEntry()->contiguousData()[0]), 0xCD);
+    pin2.clear();
+
+    // Lookup with contiguous=false should return the same contiguous entry.
+    auto pin3 =
+        cache_->findOrCreate(key, testData.size, /*contiguous=*/false, &wait);
+    ASSERT_FALSE(pin3.empty());
+    ASSERT_TRUE(pin3.checkedEntry()->isShared());
+    ASSERT_TRUE(pin3.checkedEntry()->hasContiguousData());
+    pin.clear();
+    pin3.clear();
+
+    // Wait-future: concurrent access to an exclusive entry.
+    RawFileCacheKey key2{file.id(), offset};
+    offset += testData.size;
+    auto exclusivePin =
+        cache_->findOrCreate(key2, testData.size, /*contiguous=*/true, &wait);
+    ASSERT_FALSE(exclusivePin.empty());
+    ASSERT_TRUE(exclusivePin.checkedEntry()->isExclusive());
+
+    auto waitingPin =
+        cache_->findOrCreate(key2, testData.size, /*contiguous=*/true, &wait);
+    ASSERT_TRUE(waitingPin.empty());
+    ASSERT_FALSE(wait.isReady());
+
+    bool notified = false;
+    std::move(wait).via(&exec).thenValue([&](bool) { notified = true; });
+    exclusivePin.checkedEntry()->setExclusiveToShared();
+    exclusivePin.clear();
+    ASSERT_TRUE(notified);
+
+    auto retryPin =
+        cache_->findOrCreate(key2, testData.size, /*contiguous=*/true, &wait);
+    ASSERT_FALSE(retryPin.empty());
+    ASSERT_TRUE(retryPin.checkedEntry()->isShared());
+    retryPin.clear();
+
+    cache_->clear();
+    auto stats = cache_->refreshStats();
+    ASSERT_EQ(stats.numEntries, 0);
+    ASSERT_EQ(stats.largeSize, 0);
+    ASSERT_EQ(stats.tinySize, 0);
+    ASSERT_EQ(cache_->cachedPages(), 0);
+  }
+}
+
+TEST_P(AsyncDataCacheTest, nonContiguousPin) {
+  initializeCache(1 << 20);
+
+  StringIdLease file(fileIds(), std::string_view("testingfile_noncontiguous"));
+
+  struct TestParam {
+    int64_t size;
+    bool expectTiny;
+    std::string debugString() const {
+      return fmt::format("size {}, expectTiny {}", size, expectTiny);
+    }
+  };
+
+  std::vector<TestParam> testSettings = {
+      {AsyncDataCacheEntry::kTinyDataSize / 2, true},
+      {AsyncDataCacheEntry::kTinyDataSize - 1, true},
+      {AsyncDataCacheEntry::kTinyDataSize, false},
+      {AsyncDataCacheEntry::kTinyDataSize * 4, false},
+      {25'000, false},
+  };
+
+  uint64_t offset = 1'000;
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+
+    folly::SemiFuture<bool> wait(false);
+    RawFileCacheKey key{file.id(), offset};
+    offset += testData.size;
+
+    auto pin =
+        cache_->findOrCreate(key, testData.size, /*contiguous=*/false, &wait);
+    ASSERT_FALSE(pin.empty());
+    ASSERT_TRUE(wait.isReady());
+    auto* entry = pin.checkedEntry();
+    ASSERT_TRUE(entry->isExclusive());
+
+    test::AsyncDataCacheEntryTestHelper entryHelper(entry);
+    if (testData.expectTiny) {
+      ASSERT_TRUE(entryHelper.isTinyData());
+      ASSERT_FALSE(entryHelper.isContiguousData());
+      ASSERT_TRUE(entry->hasContiguousData());
+      ASSERT_TRUE(entry->nonContiguousData().empty());
+    } else {
+      ASSERT_FALSE(entryHelper.isTinyData());
+      ASSERT_FALSE(entryHelper.isContiguousData());
+      ASSERT_FALSE(entry->hasContiguousData());
+      ASSERT_FALSE(entry->nonContiguousData().empty());
+    }
+
+    entry->setExclusiveToShared();
+
+    // Verify stats.
+    {
+      auto stats = cache_->refreshStats();
+      ASSERT_EQ(stats.numEntries, 1);
+      if (testData.expectTiny) {
+        ASSERT_EQ(stats.numTinyEntries, 1);
+        ASSERT_EQ(stats.tinySize, testData.size);
+      } else {
+        ASSERT_EQ(stats.numLargeEntries, 1);
+      }
+      if (!testData.expectTiny) {
+        ASSERT_EQ(
+            cache_->cachedPages(),
+            memory::AllocationTraits::numPages(testData.size));
+      }
+    }
+
+    // Shared hit with same flag.
+    auto pin2 =
+        cache_->findOrCreate(key, testData.size, /*contiguous=*/false, &wait);
+    ASSERT_FALSE(pin2.empty());
+    ASSERT_TRUE(pin2.checkedEntry()->isShared());
+    pin2.clear();
+
+    // Lookup with contiguous=true should return the same non-contiguous entry.
+    auto pin3 =
+        cache_->findOrCreate(key, testData.size, /*contiguous=*/true, &wait);
+    ASSERT_FALSE(pin3.empty());
+    ASSERT_TRUE(pin3.checkedEntry()->isShared());
+    if (testData.expectTiny) {
+      ASSERT_TRUE(pin3.checkedEntry()->hasContiguousData());
+    } else {
+      ASSERT_FALSE(pin3.checkedEntry()->hasContiguousData());
+    }
+    pin.clear();
+    pin3.clear();
+
+    cache_->clear();
+    auto stats = cache_->refreshStats();
+    ASSERT_EQ(stats.numEntries, 0);
+    ASSERT_EQ(cache_->cachedPages(), 0);
+  }
+}
+
 TEST_P(AsyncDataCacheTest, replace) {
   constexpr int64_t kMaxBytes = 64 << 20;
   FLAGS_velox_exception_user_stacktrace_enabled = false;
@@ -741,8 +962,7 @@ TEST_P(AsyncDataCacheTest, replace) {
   EXPECT_LT(0, stats.hitBytes);
   EXPECT_LT(0, stats.numEvict);
   EXPECT_GE(
-      kMaxBytes / memory::AllocationTraits::kPageSize,
-      cache_->incrementCachedPages(0));
+      kMaxBytes / memory::AllocationTraits::kPageSize, cache_->cachedPages());
 }
 
 TEST_P(AsyncDataCacheTest, evictAccounting) {
@@ -784,8 +1004,7 @@ TEST_P(AsyncDataCacheTest, largeEvict) {
   auto stats = cache_->refreshStats();
   EXPECT_LT(0, stats.numEvict);
   EXPECT_GE(
-      kMaxBytes / memory::AllocationTraits::kPageSize,
-      cache_->incrementCachedPages(0));
+      kMaxBytes / memory::AllocationTraits::kPageSize, cache_->cachedPages());
   LOG(INFO) << "Reties after failed evict: " << numLargeRetries_;
 }
 
@@ -813,7 +1032,7 @@ TEST_P(AsyncDataCacheTest, outOfCapacity) {
   ASSERT_FALSE(allocator_->allocateNonContiguous(kSizeInPages, allocation));
   // One 4 page entry below the max size of 4K 4 page entries in 16MB of
   // capacity.
-  ASSERT_EQ(16384, cache_->incrementCachedPages(0));
+  ASSERT_EQ(16384, cache_->cachedPages());
   ASSERT_EQ(16384, cache_->incrementPrefetchPages(0));
   pins.clear();
 
@@ -824,7 +1043,7 @@ TEST_P(AsyncDataCacheTest, outOfCapacity) {
     }
     allocations.push_back(std::move(allocation));
   }
-  EXPECT_EQ(0, cache_->incrementCachedPages(0));
+  EXPECT_EQ(0, cache_->cachedPages());
   EXPECT_EQ(0, cache_->incrementPrefetchPages(0));
   EXPECT_EQ(16384, allocator_->numAllocated());
   clearAllocations(allocations);
@@ -1052,7 +1271,7 @@ TEST_P(AsyncDataCacheTest, staleEntry) {
   const uint64_t size = 200;
   folly::SemiFuture<bool> wait(false);
   RawFileCacheKey key{file.id(), offset};
-  auto pin = cache_->findOrCreate(key, size, &wait);
+  auto pin = cache_->findOrCreate(key, size, /*contiguous=*/false, &wait);
   ASSERT_FALSE(pin.empty());
   ASSERT_TRUE(wait.isReady());
   ASSERT_TRUE(pin.entry()->isExclusive());
@@ -1063,7 +1282,7 @@ TEST_P(AsyncDataCacheTest, staleEntry) {
   ASSERT_EQ(stats.numEntries, 1);
   ASSERT_EQ(stats.numHit, 0);
 
-  auto validPin = cache_->findOrCreate(key, size, &wait);
+  auto validPin = cache_->findOrCreate(key, size, /*contiguous=*/false, &wait);
   ASSERT_FALSE(validPin.empty());
   ASSERT_TRUE(wait.isReady());
   ASSERT_FALSE(validPin.entry()->isExclusive());
@@ -1073,7 +1292,8 @@ TEST_P(AsyncDataCacheTest, staleEntry) {
   ASSERT_EQ(stats.numHit, 1);
 
   // Stale cache access with large cache size.
-  auto stalePin = cache_->findOrCreate(key, 2 * size, &wait);
+  auto stalePin =
+      cache_->findOrCreate(key, 2 * size, /*contiguous=*/false, &wait);
   ASSERT_FALSE(stalePin.empty());
   ASSERT_TRUE(wait.isReady());
   ASSERT_TRUE(stalePin.entry()->isExclusive());
@@ -1133,14 +1353,14 @@ TEST_P(AsyncDataCacheTest, shrinkCache) {
     for (int i = 0; i < numEntries; ++i) {
       auto tinyPin = cache_->findOrCreate(tinyCacheKeys[i], kTinyDataSize);
       ASSERT_FALSE(tinyPin.empty());
-      ASSERT_TRUE(tinyPin.entry()->tinyData() != nullptr);
-      ASSERT_TRUE(tinyPin.entry()->data().empty());
+      ASSERT_TRUE(tinyPin.entry()->hasContiguousData());
+      ASSERT_TRUE(tinyPin.entry()->nonContiguousData().empty());
       ASSERT_FALSE(tinyPin.entry()->isPrefetch());
       ASSERT_FALSE(tinyPin.entry()->ssdSaveable());
       pins.push_back(std::move(tinyPin));
       auto largePin = cache_->findOrCreate(largeCacheKeys[i], kLargeDataSize);
-      ASSERT_FALSE(largePin.entry()->tinyData() != nullptr);
-      ASSERT_FALSE(largePin.entry()->data().empty());
+      ASSERT_FALSE(largePin.entry()->hasContiguousData());
+      ASSERT_FALSE(largePin.entry()->nonContiguousData().empty());
       ASSERT_FALSE(largePin.entry()->isPrefetch());
       ASSERT_FALSE(largePin.entry()->ssdSaveable());
       pins.push_back(std::move(largePin));
@@ -1699,10 +1919,11 @@ TEST_P(AsyncDataCacheTest, findHit) {
 
   // Populate the entry via findOrCreate.
   {
-    auto pin = cache_->findOrCreate(key, kEntrySize, nullptr);
+    auto pin = cache_->findOrCreate(key, kEntrySize);
     ASSERT_FALSE(pin.empty());
     ASSERT_TRUE(pin.entry()->isExclusive());
-    initializeContents(key.offset + key.fileNum, pin.entry()->data());
+    initializeContents(
+        key.offset + key.fileNum, pin.entry()->nonContiguousData());
     pin.entry()->setExclusiveToShared();
   }
 
@@ -1725,7 +1946,7 @@ TEST_P(AsyncDataCacheTest, findExclusiveWithWait) {
   RawFileCacheKey key{filenames_[0].id(), 2000};
 
   // Create an exclusive entry.
-  auto exclusivePin = cache_->findOrCreate(key, kEntrySize, nullptr);
+  auto exclusivePin = cache_->findOrCreate(key, kEntrySize);
   ASSERT_FALSE(exclusivePin.empty());
   ASSERT_TRUE(exclusivePin.entry()->isExclusive());
 
@@ -1766,7 +1987,8 @@ TEST_P(AsyncDataCacheTest, findExclusiveWithWait) {
   ASSERT_FALSE(waitFuture.isReady());
 
   // Transition to shared makes the future ready.
-  initializeContents(key.offset + key.fileNum, exclusivePin.entry()->data());
+  initializeContents(
+      key.offset + key.fileNum, exclusivePin.entry()->nonContiguousData());
   exclusivePin.entry()->setExclusiveToShared();
   exclusivePin.clear();
 
@@ -1812,7 +2034,8 @@ TEST_P(AsyncDataCacheTest, fuzz) {
       } else {
         // findOrCreate: populate if new.
         folly::SemiFuture<bool> waitFuture(false);
-        auto pin = cache_->findOrCreate(key, kEntrySize, &waitFuture);
+        auto pin = cache_->findOrCreate(
+            key, kEntrySize, /*contiguous=*/false, &waitFuture);
         if (pin.empty()) {
           auto& exec = folly::QueuedImmediateExecutor::instance();
           std::move(waitFuture).via(&exec).wait();
@@ -1820,7 +2043,8 @@ TEST_P(AsyncDataCacheTest, fuzz) {
         }
         auto* entry = pin.checkedEntry();
         if (entry->isExclusive()) {
-          initializeContents(key.offset + key.fileNum, entry->data());
+          initializeContents(
+              key.offset + key.fileNum, entry->nonContiguousData());
           entry->setExclusiveToShared();
         }
         checkContents(*entry);
@@ -1918,15 +2142,526 @@ TEST_P(AsyncDataCacheTest, dataRanges) {
     if (testData.size < AsyncDataCacheEntry::kTinyDataSize) {
       // Tiny entry: single range backed by tinyData.
       ASSERT_EQ(ranges.size(), 1);
-      ASSERT_NE(entry->tinyData(), nullptr);
-      ASSERT_EQ(ranges[0].data(), entry->tinyData());
+      ASSERT_TRUE(entry->hasContiguousData());
+      ASSERT_EQ(ranges[0].data(), entry->contiguousData());
     } else {
       // Allocation-backed: one range per run.
-      ASSERT_EQ(ranges.size(), entry->data().numRuns());
+      ASSERT_EQ(ranges.size(), entry->nonContiguousData().numRuns());
     }
 
     entry->setExclusiveToShared();
   }
+}
+
+TEST_P(AsyncDataCacheTest, acquiredMemory) {
+  constexpr uint64_t kRamBytes = 64UL << 20;
+  initializeCache(kRamBytes);
+  auto* allocator = cache_->allocator();
+
+  // Default is empty with zero bytes.
+  {
+    AcquiredMemory acquired;
+    ASSERT_TRUE(acquired.empty());
+    ASSERT_EQ(acquired.totalBytes(), 0);
+    acquired.free(allocator);
+    ASSERT_TRUE(acquired.empty());
+  }
+
+  // Non-contiguous only.
+  {
+    AcquiredMemory acquired;
+    memory::Allocation allocation;
+    ASSERT_TRUE(allocator->allocateNonContiguous(10, allocation));
+    const auto expectedBytes = allocation.byteSize();
+    acquired.nonContiguous.appendMove(allocation);
+
+    ASSERT_FALSE(acquired.empty());
+    ASSERT_EQ(acquired.totalBytes(), expectedBytes);
+
+    acquired.free(allocator);
+    ASSERT_TRUE(acquired.empty());
+    ASSERT_EQ(acquired.totalBytes(), 0);
+  }
+
+  // Contiguous only.
+  {
+    AcquiredMemory acquired;
+    auto* ptr1 = allocator->allocateBytes(1'024);
+    auto* ptr2 = allocator->allocateBytes(2'048);
+    ASSERT_NE(ptr1, nullptr);
+    ASSERT_NE(ptr2, nullptr);
+    acquired.contiguous.emplace_back(ptr1, 1'024);
+    acquired.contiguous.emplace_back(ptr2, 2'048);
+
+    ASSERT_FALSE(acquired.empty());
+    ASSERT_EQ(acquired.totalBytes(), 3'072);
+
+    acquired.free(allocator);
+    ASSERT_TRUE(acquired.empty());
+    ASSERT_EQ(acquired.totalBytes(), 0);
+  }
+
+  // Mixed non-contiguous and contiguous.
+  {
+    AcquiredMemory acquired;
+    memory::Allocation allocation;
+    ASSERT_TRUE(allocator->allocateNonContiguous(10, allocation));
+    const auto nonContiguousBytes = allocation.byteSize();
+    acquired.nonContiguous.appendMove(allocation);
+
+    constexpr uint64_t kContiguousSize = 4'096;
+    auto* ptr = allocator->allocateBytes(kContiguousSize);
+    ASSERT_NE(ptr, nullptr);
+    acquired.contiguous.emplace_back(ptr, kContiguousSize);
+
+    ASSERT_FALSE(acquired.empty());
+    ASSERT_EQ(acquired.totalBytes(), nonContiguousBytes + kContiguousSize);
+
+    acquired.free(allocator);
+    ASSERT_TRUE(acquired.empty());
+    ASSERT_EQ(acquired.totalBytes(), 0);
+  }
+}
+
+TEST_P(AsyncDataCacheTest, eviction) {
+  constexpr uint64_t kRamBytes = 64UL << 20;
+  initializeCache(kRamBytes);
+
+  constexpr int32_t kEntrySize = 64 * 1'024;
+  constexpr int32_t kNumEntries = 32;
+
+  enum class EntryType { kContiguous, kNonContiguous, kMixed };
+
+  struct TestParam {
+    EntryType entryType;
+    std::string debugString() const {
+      switch (entryType) {
+        case EntryType::kContiguous:
+          return "contiguous";
+        case EntryType::kNonContiguous:
+          return "nonContiguous";
+        case EntryType::kMixed:
+          return "mixed";
+      }
+      VELOX_UNREACHABLE();
+    }
+  };
+
+  std::vector<TestParam> testSettings = {
+      {EntryType::kContiguous},
+      {EntryType::kNonContiguous},
+      {EntryType::kMixed},
+  };
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+
+    std::vector<CachePin> pins;
+    for (int i = 0; i < kNumEntries; ++i) {
+      bool contiguous = false;
+      switch (testData.entryType) {
+        case EntryType::kContiguous:
+          contiguous = true;
+          break;
+        case EntryType::kNonContiguous:
+          contiguous = false;
+          break;
+        case EntryType::kMixed:
+          contiguous = (i % 2 == 0);
+          break;
+      }
+      RawFileCacheKey key{
+          filenames_[0].id(), static_cast<uint64_t>(i) * kEntrySize};
+      auto pin = cache_->findOrCreate(key, kEntrySize, contiguous);
+      ASSERT_FALSE(pin.empty());
+      auto* entry = pin.checkedEntry();
+      ASSERT_TRUE(entry->isExclusive());
+      if (contiguous) {
+        ASSERT_TRUE(entry->hasContiguousData());
+        ::memset(entry->contiguousData(), static_cast<int>(i), kEntrySize);
+      }
+      entry->setExclusiveToShared();
+      pins.push_back(std::move(pin));
+    }
+    ASSERT_EQ(pins.size(), kNumEntries);
+
+    auto statsBefore = cache_->refreshStats();
+    ASSERT_EQ(statsBefore.numEntries, kNumEntries);
+    const auto evictsBefore = statsBefore.numEvict;
+
+    pins.clear();
+
+    auto freed = cache_->shrink(kRamBytes);
+    ASSERT_GT(freed, 0);
+
+    auto statsAfter = cache_->refreshStats();
+    ASSERT_EQ(statsAfter.numEntries, 0);
+    ASSERT_GE(statsAfter.numEvict - evictsBefore, kNumEntries);
+  }
+}
+
+TEST_P(AsyncDataCacheTest, retryAllocation) {
+  constexpr uint64_t kRamBytes = 64UL << 20;
+  initializeCache(kRamBytes);
+
+  constexpr int32_t kEntrySize = 64 * 1'024;
+  constexpr int32_t kNumEntries = 512;
+
+  enum class EntryType { kContiguous, kNonContiguous, kMixed };
+
+  struct TestParam {
+    EntryType entryType;
+    std::string debugString() const {
+      switch (entryType) {
+        case EntryType::kContiguous:
+          return "contiguous";
+        case EntryType::kNonContiguous:
+          return "nonContiguous";
+        case EntryType::kMixed:
+          return "mixed";
+      }
+      VELOX_UNREACHABLE();
+    }
+  };
+
+  std::vector<TestParam> testSettings = {
+      {EntryType::kContiguous},
+      {EntryType::kNonContiguous},
+      {EntryType::kMixed},
+  };
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+
+    // Fill the cache with entries.
+    std::vector<CachePin> pins;
+    for (int i = 0; i < kNumEntries; ++i) {
+      bool contiguous = false;
+      switch (testData.entryType) {
+        case EntryType::kContiguous:
+          contiguous = true;
+          break;
+        case EntryType::kNonContiguous:
+          contiguous = false;
+          break;
+        case EntryType::kMixed:
+          contiguous = (i % 2 == 0);
+          break;
+      }
+      RawFileCacheKey key{
+          filenames_[0].id(), static_cast<uint64_t>(i) * kEntrySize};
+      auto pin = cache_->findOrCreate(key, kEntrySize, contiguous);
+      ASSERT_FALSE(pin.empty());
+      auto* entry = pin.checkedEntry();
+      if (contiguous) {
+        ::memset(entry->contiguousData(), 0xAB, kEntrySize);
+      }
+      entry->setExclusiveToShared();
+      pins.push_back(std::move(pin));
+    }
+
+    // Unpin so entries are evictable.
+    pins.clear();
+
+    auto statsBefore = cache_->refreshStats();
+    ASSERT_EQ(statsBefore.numEntries, kNumEntries);
+
+    auto* allocator = cache_->allocator();
+
+    // Allocate non-contiguous pages through the allocator directly.
+    // Request more than what's free to force eviction via makeSpace.
+    constexpr uint64_t kAllocBytes = 48UL << 20;
+    memory::Allocation allocation;
+    ASSERT_TRUE(allocator->allocateNonContiguous(
+        memory::AllocationTraits::numPages(kAllocBytes), allocation));
+
+    auto statsAfter = cache_->refreshStats();
+    ASSERT_GT(statsAfter.numEvict, statsBefore.numEvict);
+
+    allocator->freeNonContiguous(allocation);
+
+    cache_->clear();
+    auto statsFinal = cache_->refreshStats();
+    ASSERT_EQ(statsFinal.numEntries, 0);
+  }
+}
+
+TEST_P(AsyncDataCacheTest, makePins) {
+  constexpr uint64_t kRamBytes = 64UL << 20;
+  initializeCache(kRamBytes);
+
+  constexpr int32_t kEntrySize = 8'192;
+
+  struct TestParam {
+    int numEntries;
+    bool contiguous;
+    std::string debugString() const {
+      return fmt::format(
+          "numEntries {}, contiguous {}", numEntries, contiguous);
+    }
+  };
+
+  std::vector<TestParam> testSettings = {
+      {1, false},
+      {1, true},
+      {10, false},
+      {10, true},
+      {100, false},
+      {100, true},
+  };
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+
+    std::vector<RawFileCacheKey> keys;
+    keys.reserve(testData.numEntries);
+    for (int i = 0; i < testData.numEntries; ++i) {
+      keys.push_back(
+          {filenames_[0].id(), static_cast<uint64_t>(i) * kEntrySize});
+    }
+
+    std::vector<CachePin> pins;
+    cache_->makePins(
+        keys,
+        [&](size_t /*i*/) { return kEntrySize; },
+        [&](size_t /*i*/, CachePin&& pin) { pins.push_back(std::move(pin)); },
+        testData.contiguous);
+
+    ASSERT_EQ(pins.size(), testData.numEntries);
+    for (auto& pin : pins) {
+      auto* entry = pin.checkedEntry();
+      ASSERT_TRUE(entry->isExclusive());
+      test::AsyncDataCacheEntryTestHelper entryHelper(entry);
+      if (testData.contiguous) {
+        ASSERT_TRUE(entryHelper.isContiguousData());
+        ASSERT_TRUE(entry->hasContiguousData());
+        ASSERT_EQ(entry->contiguousDataSize(), kEntrySize);
+      } else {
+        ASSERT_FALSE(entryHelper.isContiguousData());
+        ASSERT_FALSE(entry->hasContiguousData());
+      }
+      entry->setExclusiveToShared();
+    }
+    pins.clear();
+    cache_->clear();
+  }
+}
+
+TEST_P(AsyncDataCacheTest, removeFileEntries) {
+  constexpr uint64_t kRamBytes = 64UL << 20;
+  initializeCache(kRamBytes);
+
+  constexpr int32_t kEntrySize = 8'192;
+  constexpr int kNumEntries = 10;
+
+  struct TestParam {
+    bool contiguous;
+    std::string debugString() const {
+      return fmt::format("contiguous {}", contiguous);
+    }
+  };
+
+  std::vector<TestParam> testSettings = {{false}, {true}};
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+
+    for (int i = 0; i < kNumEntries; ++i) {
+      RawFileCacheKey key{
+          filenames_[0].id(), static_cast<uint64_t>(i) * kEntrySize};
+      auto pin = cache_->findOrCreate(key, kEntrySize, testData.contiguous);
+      ASSERT_FALSE(pin.empty());
+      auto* entry = pin.checkedEntry();
+      if (testData.contiguous) {
+        ::memset(entry->contiguousData(), 0xCD, kEntrySize);
+      }
+      entry->setExclusiveToShared();
+    }
+
+    auto statsBefore = cache_->refreshStats();
+    ASSERT_EQ(statsBefore.numEntries, kNumEntries);
+    ASSERT_GT(statsBefore.largeSize, 0);
+
+    folly::F14FastSet<uint64_t> filesToRemove;
+    filesToRemove.insert(filenames_[0].id());
+    folly::F14FastSet<uint64_t> filesRetained;
+    cache_->removeFileEntries(filesToRemove, filesRetained);
+    ASSERT_TRUE(filesRetained.empty());
+
+    auto statsAfter = cache_->refreshStats();
+    ASSERT_EQ(statsAfter.numEntries, 0);
+    ASSERT_EQ(statsAfter.largeSize, 0);
+    ASSERT_EQ(statsAfter.tinySize, 0);
+  }
+}
+
+TEST_P(AsyncDataCacheTest, mixedBufferFuzz) {
+  constexpr uint64_t kRamBytes = 256UL << 20;
+  constexpr int32_t kNumThreads = 8;
+  constexpr int32_t kNumKeys = 200;
+  constexpr int32_t kTestDurationMs = 20'000;
+
+  initializeCache(kRamBytes);
+
+  // Per-key properties are deterministic so all threads agree.
+  struct KeyProps {
+    int64_t size;
+    bool contiguous;
+  };
+  std::vector<KeyProps> keyProps(kNumKeys);
+  {
+    std::mt19937 rng(42);
+    for (int i = 0; i < kNumKeys; ++i) {
+      switch (i % 3) {
+        case 0:
+          keyProps[i].size = 512 + (rng() % 1'024);
+          break;
+        case 1:
+          keyProps[i].size =
+              AsyncDataCacheEntry::kTinyDataSize + (rng() % (64 * 1'024));
+          break;
+        default:
+          // Large entries ensure total data exceeds cache capacity,
+          // triggering eviction.
+          keyProps[i].size = 1'024 * 1'024 + (rng() % (3 * 1'024 * 1'024));
+          break;
+      }
+      keyProps[i].contiguous = (i % 2 == 0);
+    }
+  }
+
+  struct EntryState {
+    uint8_t pattern{0};
+  };
+
+  std::mutex stateMutex;
+  std::unordered_map<uint64_t, EntryState> entryStates;
+
+  std::atomic_bool stop{false};
+
+  auto workerFunc = [&](int32_t threadId) {
+    std::mt19937 rng(threadId * 7 + 13);
+    while (!stop.load(std::memory_order_relaxed)) {
+      const auto keyIdx = rng() % kNumKeys;
+      const uint64_t offset = keyIdx * 128 * 1'024;
+      RawFileCacheKey key{filenames_[0].id(), offset};
+
+      const auto& props = keyProps[keyIdx];
+      const uint8_t pattern = static_cast<uint8_t>(rng());
+
+      folly::SemiFuture<bool> waitFuture(false);
+      auto pin =
+          cache_->findOrCreate(key, props.size, props.contiguous, &waitFuture);
+      if (pin.empty()) {
+        continue;
+      }
+      auto* entry = pin.checkedEntry();
+      ASSERT_EQ(entry->size(), props.size);
+
+      if (entry->isExclusive()) {
+        if (entry->hasContiguousData()) {
+          ::memset(entry->contiguousData(), pattern, entry->size());
+        } else {
+          for (auto& range : entry->dataRanges(entry->size())) {
+            ::memset(range.data(), pattern, range.size());
+          }
+        }
+        {
+          // Record state before making shared so other threads always
+          // find the state when they get a shared pin.
+          std::lock_guard<std::mutex> l(stateMutex);
+          entryStates[offset] = {pattern};
+        }
+        entry->setExclusiveToShared();
+      } else {
+        EntryState expected;
+        {
+          std::lock_guard<std::mutex> l(stateMutex);
+          auto it = entryStates.find(offset);
+          ASSERT_NE(it, entryStates.end());
+          expected = it->second;
+        }
+
+        if (entry->hasContiguousData()) {
+          const auto* data = entry->contiguousData();
+          for (int i = 0; i < entry->size(); ++i) {
+            ASSERT_EQ(static_cast<uint8_t>(data[i]), expected.pattern)
+                << "Data mismatch at offset " << offset << " byte " << i;
+          }
+        } else {
+          int byteIdx = 0;
+          for (const auto& range : entry->dataRanges(entry->size())) {
+            for (size_t i = 0; i < range.size(); ++i) {
+              ASSERT_EQ(static_cast<uint8_t>(range.data()[i]), expected.pattern)
+                  << "Data mismatch at offset " << offset << " byte "
+                  << byteIdx;
+              ++byteIdx;
+            }
+          }
+        }
+      }
+      // Release pin immediately so eviction can reclaim it.
+    }
+  };
+
+  std::vector<std::thread> threads;
+  for (int32_t i = 0; i < kNumThreads; ++i) {
+    threads.emplace_back(workerFunc, i);
+  }
+
+  std::this_thread::sleep_for(
+      std::chrono::milliseconds(kTestDurationMs)); // NOLINT
+  stop.store(true, std::memory_order_relaxed);
+
+  for (auto& thread : threads) {
+    thread.join();
+  }
+
+  auto stats = cache_->refreshStats();
+  LOG(INFO) << "contiguousFuzz stats: " << stats.numEntries << " entries, "
+            << stats.numHit << " hits, " << stats.numNew << " new, "
+            << stats.numEvict << " evicts";
+
+  // Verify remaining entries have correct data.
+  int32_t verified = 0;
+  int32_t evicted = 0;
+  {
+    std::lock_guard<std::mutex> l(stateMutex);
+    for (const auto& [offset, expected] : entryStates) {
+      RawFileCacheKey key{filenames_[0].id(), offset};
+      auto result = cache_->find(key);
+      if (!result.has_value()) {
+        ++evicted;
+        continue;
+      }
+      ASSERT_FALSE(result->empty());
+      auto* entry = result->checkedEntry();
+      // Verify the data pattern.
+      if (entry->hasContiguousData()) {
+        const auto* data = entry->contiguousData();
+        for (int i = 0; i < entry->size(); ++i) {
+          ASSERT_EQ(static_cast<uint8_t>(data[i]), expected.pattern);
+        }
+      } else {
+        for (const auto& range : entry->dataRanges(entry->size())) {
+          for (size_t i = 0; i < range.size(); ++i) {
+            ASSERT_EQ(static_cast<uint8_t>(range.data()[i]), expected.pattern);
+          }
+        }
+      }
+      ++verified;
+    }
+  }
+
+  LOG(INFO) << "Verified " << verified << " entries, " << evicted
+            << " evicted from tracked state";
+  if (evicted > 0) {
+    ASSERT_GT(stats.numEvict, 0);
+  }
+
+  cache_->clear();
+  auto finalStats = cache_->refreshStats();
+  ASSERT_EQ(finalStats.numEntries, 0);
 }
 
 INSTANTIATE_TEST_SUITE_P(
