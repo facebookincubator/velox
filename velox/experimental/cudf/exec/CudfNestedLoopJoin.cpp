@@ -198,9 +198,9 @@ void CudfNestedLoopJoinBuild::doNoMoreInput() {
       stream,
       get_output_mr());
 
-  stream.synchronize(); // Ensure GPU operations complete before bridge handoff
-
-  // Transfer build data to bridge - this will unblock probe operators
+  // Transfer build data to bridge - this will unblock probe operators.
+  // No stream sync is required: the probe side uses syncBuildStream() via a
+  // CUDA event to ensure the build table is ready before reading it.
   auto joinBridge = operatorCtx_->task()->getCustomJoinBridge(
       operatorCtx_->driverCtx()->splitGroupId, planNodeId());
   auto bridge = std::dynamic_pointer_cast<CudfNestedLoopJoinBridge>(joinBridge);
