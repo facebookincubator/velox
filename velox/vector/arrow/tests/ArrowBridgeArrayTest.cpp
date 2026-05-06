@@ -1176,6 +1176,44 @@ TEST_F(ArrowBridgeArrayExportTest, arrayNested) {
   EXPECT_EQ(values.Value(1), 1);
 }
 
+TEST_F(ArrowBridgeArrayExportTest, arrayStringViewSkipsNullChildRows) {
+  options_.exportToStringView = true;
+
+  auto elements = vectorMaker_.flatVector<StringView>({
+      "short",
+      "masked string longer than inline",
+      "last string longer than inline",
+  });
+  auto nulls = AlignedBuffer::allocate<bool>(3, pool_.get(), bits::kNotNull);
+  bits::setNull(nulls->asMutable<uint64_t>(), 1, true);
+  auto vector = std::make_shared<ArrayVector>(
+      pool_.get(),
+      ARRAY(VARCHAR()),
+      nulls,
+      3,
+      makeBuffer<vector_size_t>({0, 1, 2}),
+      makeBuffer<vector_size_t>({1, 1, 1}),
+      elements,
+      1);
+
+  auto array = toArrow(vector, options_, pool_.get());
+  ASSERT_OK(array->ValidateFull());
+  ASSERT_EQ(*array->type(), *arrow::list(arrow::utf8_view()));
+
+  const auto& listArray = dynamic_cast<const arrow::ListArray&>(*array);
+  ASSERT_EQ(listArray.length(), 3);
+  ASSERT_FALSE(listArray.IsNull(0));
+  ASSERT_TRUE(listArray.IsNull(1));
+  ASSERT_FALSE(listArray.IsNull(2));
+  validateOffsets(listArray, {0, 1, 1, 2});
+
+  const auto& values =
+      dynamic_cast<const arrow::StringViewArray&>(*listArray.values());
+  ASSERT_EQ(values.length(), 2);
+  EXPECT_EQ(values.GetView(0), "short");
+  EXPECT_EQ(values.GetView(1), "last string longer than inline");
+}
+
 TEST_F(ArrowBridgeArrayExportTest, mapSimple) {
   auto allOnes = [](vector_size_t) { return 1; };
   auto vec =

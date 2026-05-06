@@ -518,6 +518,27 @@ void gatherFromTimestampBuffer(
   }
 }
 
+// Returns the size of a single element of a given `type` in the target arrow
+// buffer.
+size_t getArrowElementSize(const Type& type, const ArrowOptions& options) {
+  if (type.isShortDecimal() && !options.useDecimalTypeWidth) {
+    return sizeof(int128_t);
+  }
+  if (type.isTimestamp()) {
+    return sizeof(int64_t);
+  }
+  if (type.isTime()) {
+    VELOX_DCHECK(type.equivalent(*TIME()));
+    // TIME is exported as Arrow time32 (int32_t).
+    return sizeof(int32_t);
+  }
+  if ((type.isVarchar() || type.isVarbinary()) && options.exportToStringView) {
+    return sizeof(StringView);
+  }
+
+  return type.cppSizeInBytes();
+}
+
 void gatherFromBuffer(
     const Type& type,
     const Buffer& buf,
@@ -538,7 +559,7 @@ void gatherFromBuffer(
       memcpy(dst + (j++) * sizeof(int128_t), &value, sizeof(int128_t));
     });
   } else {
-    auto typeSize = type.cppSizeInBytes();
+    auto typeSize = getArrowElementSize(type, options);
     rows.apply([&](vector_size_t i) {
       memcpy(dst + (j++) * typeSize, src + i * typeSize, typeSize);
     });
@@ -815,7 +836,7 @@ void exportValues(
   }
 
   // Otherwise we will need a new buffer and copy the data.
-  auto size = getArrowElementSize(type, options);
+  auto size = getArrowElementSize(*type, options);
   auto values = type->isBoolean()
       ? AlignedBuffer::allocate<bool>(out.length, pool)
       : AlignedBuffer::allocate<uint8_t>(
@@ -895,9 +916,11 @@ void exportViews(
   int32_t bufferIdxCache = 0;
   uint64_t bufferAddrCache = 0;
 
+  vector_size_t j = 0;
   rows.apply([&](vector_size_t i) {
+    const auto outputRow = j++;
     auto view = const_cast<uint32_t*>(
-        reinterpret_cast<const uint32_t*>(&utf8Views[2 * i]));
+        reinterpret_cast<const uint32_t*>(&utf8Views[2 * outputRow]));
     if (!vec.isNullAt(i) && view[0] > 12) {
       const uint64_t currAddr = *reinterpret_cast<uint64_t*>(&view[2]);
       // 2. Search for correct index with the buffer-pointer as key. Cache the
