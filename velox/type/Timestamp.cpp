@@ -19,6 +19,7 @@
 #include "velox/common/base/CountBits.h"
 #include "velox/external/tzdb/exception.h"
 #include "velox/type/FastDate.h"
+#include "velox/type/TwoDigitChars.h"
 #include "velox/type/WideRangeDateConversion.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
@@ -133,6 +134,53 @@ const int16_t daysBeforeFirstDayOfMonth[][12] = {
     {0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334},
     {0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335},
 };
+
+// Writes the optional fractional part of a timestamp (".fff..." or
+// nothing if skipped). Returns the new write position.
+char* appendFractionalNanos(
+    char* writePosition,
+    uint64_t nanos,
+    const TimestampToStringOptions& options) {
+  if (options.precision == TimestampToStringOptions::Precision::kMilliseconds) {
+    nanos /= 1'000'000;
+  } else if (
+      options.precision == TimestampToStringOptions::Precision::kMicroseconds) {
+    nanos /= 1'000;
+  }
+  if (options.skipTrailingZeros && nanos == 0) {
+    return writePosition;
+  }
+  *writePosition++ = '.';
+  const auto numDigits = countDigits(nanos);
+  const auto precisionWidth = static_cast<int8_t>(options.precision);
+  std::memset(writePosition, '0', precisionWidth - numDigits);
+  writePosition += precisionWidth - numDigits;
+  if (options.skipTrailingZeros) {
+    std::optional<uint32_t> nonZeroOffset = std::nullopt;
+    int32_t offset = numDigits - 1;
+    while (nanos > 0) {
+      if (nonZeroOffset.has_value() || nanos % 10 != 0) {
+        *(writePosition + offset) = '0' + nanos % 10;
+        if (!nonZeroOffset.has_value()) {
+          nonZeroOffset = offset;
+        }
+      }
+      --offset;
+      nanos /= 10;
+    }
+    writePosition += nonZeroOffset.value() + 1;
+  } else {
+    const auto [position, errorCode] =
+        std::to_chars(writePosition, writePosition + numDigits, nanos);
+    VELOX_DCHECK_EQ(
+        errorCode,
+        std::errc(),
+        "Failed to convert fractional part to chars: {}.",
+        std::make_error_code(errorCode).message());
+    writePosition = position;
+  }
+  return writePosition;
+}
 
 } // namespace
 
@@ -271,50 +319,7 @@ StringView Timestamp::tmToStringView(
   *writePosition++ = ':';
   writePosition += appendDigits(tmValue.tm_sec, 2, writePosition);
 
-  if (options.precision == TimestampToStringOptions::Precision::kMilliseconds) {
-    nanos /= 1'000'000;
-  } else if (
-      options.precision == TimestampToStringOptions::Precision::kMicroseconds) {
-    nanos /= 1'000;
-  }
-  if (options.skipTrailingZeros && nanos == 0) {
-    return StringView(startPosition, writePosition - startPosition);
-  }
-
-  // Fractional part.
-  *writePosition++ = '.';
-  // Append leading zeros.
-  const auto numDigits = countDigits(nanos);
-  const auto precisionWidth = static_cast<int8_t>(options.precision);
-  std::memset(writePosition, '0', precisionWidth - numDigits);
-  writePosition += precisionWidth - numDigits;
-
-  // Append the remaining numeric digits.
-  if (options.skipTrailingZeros) {
-    std::optional<uint32_t> nonZeroOffset = std::nullopt;
-    int32_t offset = numDigits - 1;
-    // Write non-zero digits from end to start.
-    while (nanos > 0) {
-      if (nonZeroOffset.has_value() || nanos % 10 != 0) {
-        *(writePosition + offset) = '0' + nanos % 10;
-        if (!nonZeroOffset.has_value()) {
-          nonZeroOffset = offset;
-        }
-      }
-      --offset;
-      nanos /= 10;
-    }
-    writePosition += nonZeroOffset.value() + 1;
-  } else {
-    const auto [position, errorCode] =
-        std::to_chars(writePosition, writePosition + numDigits, nanos);
-    VELOX_DCHECK_EQ(
-        errorCode,
-        std::errc(),
-        "Failed to convert fractional part to chars: {}.",
-        std::make_error_code(errorCode).message());
-    writePosition = position;
-  }
+  writePosition = appendFractionalNanos(writePosition, nanos, options);
   return StringView(startPosition, writePosition - startPosition);
 }
 
@@ -322,6 +327,65 @@ StringView Timestamp::tsToStringView(
     const Timestamp& ts,
     const TimestampToStringOptions& options,
     char* const startPosition) {
+  // Fast path: the dominant production case — no leading positive
+  // sign, year ∈ [0, 9999], days inside the Neri-Schneider domain.
+  // Skips the std::tm fill in epochToCalendarUtc and the
+  // appendDigits / std::to_chars machinery in tmToStringView, going
+  // directly from (days, rem) to digits via two-byte memcpy lookups.
+  if (FOLLY_LIKELY(
+          options.mode != TimestampToStringOptions::Mode::kTimeOnly &&
+          !options.leadingPositiveSign)) {
+    const int64_t seconds = ts.getSeconds();
+    int64_t days = seconds / kSecondsPerDay;
+    int64_t rem = seconds % kSecondsPerDay;
+    if (rem < 0) {
+      rem += kSecondsPerDay;
+      --days;
+    }
+    if (FOLLY_LIKELY(
+            days >= fast_date::kRataDieMin && days <= fast_date::kRataDieMax)) {
+      const auto ymd = daysToYmd(static_cast<int32_t>(days));
+      // Fast path emits the year as exactly four digits, so it requires
+      // either `zeroPaddingYear` or `year >= 1000`. For the rare
+      // unpadded < 1000 case, fall through to the slow path which
+      // omits leading zeros via appendDigits' nullopt-min-width branch.
+      if (FOLLY_LIKELY(
+              ymd.year >= 0 && ymd.year <= 9999 &&
+              (options.zeroPaddingYear || ymd.year >= 1000))) {
+        char* writePosition = startPosition;
+        const uint32_t year = static_cast<uint32_t>(ymd.year);
+        const uint32_t yearHigh = year / 100u;
+        const uint32_t yearLow = year - yearHigh * 100u;
+        writeTwoDigit(writePosition + 0, yearHigh);
+        writeTwoDigit(writePosition + 2, yearLow);
+        writePosition[4] = '-';
+        writeTwoDigit(writePosition + 5, ymd.month);
+        writePosition[7] = '-';
+        writeTwoDigit(writePosition + 8, ymd.day);
+        writePosition += 10;
+        if (options.mode == TimestampToStringOptions::Mode::kDateOnly) {
+          return StringView(startPosition, writePosition - startPosition);
+        }
+        *writePosition++ = options.dateTimeSeparator;
+        const uint32_t hour =
+            static_cast<uint32_t>(rem) / static_cast<uint32_t>(kSecondsPerHour);
+        const uint32_t remainingSeconds = static_cast<uint32_t>(rem) -
+            hour * static_cast<uint32_t>(kSecondsPerHour);
+        const uint32_t minute = remainingSeconds / 60u;
+        const uint32_t second = remainingSeconds - minute * 60u;
+        writeTwoDigit(writePosition, hour);
+        writePosition[2] = ':';
+        writeTwoDigit(writePosition + 3, minute);
+        writePosition[5] = ':';
+        writeTwoDigit(writePosition + 6, second);
+        writePosition += 8;
+        writePosition =
+            appendFractionalNanos(writePosition, ts.getNanos(), options);
+        return StringView(startPosition, writePosition - startPosition);
+      }
+    }
+  }
+  // Fallback: existing slow path through std::tm + tmToStringView.
   std::tm tmValue;
   VELOX_USER_CHECK(
       epochToCalendarUtc(ts.getSeconds(), tmValue),
