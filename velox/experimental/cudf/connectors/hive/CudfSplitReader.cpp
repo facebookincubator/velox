@@ -354,7 +354,7 @@ void CudfSplitReader::totalScanTimeCalculator(void* userData) {
   auto elapsedNs = elapsedUs * 1000; // Convert microseconds to nanoseconds
 
   // Update totalScanTime
-  data->ioStatistics->incTotalScanTime(elapsedNs);
+  data->ioStatistics->incTotalScanTimeNs(elapsedNs);
 
   delete data;
 }
