@@ -566,7 +566,7 @@ std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::joinWithBuildBatch(
 
     // Track which probe rows matched for left/full join mismatch handling.
     // Uses cudf::contains to check which probe row indices [0..N) appear
-    // in the join result, then ORs with accumulated flags.
+    // in the join result.
     if (isLeftOrFullJoin()) {
       auto numProbeRows = probeTableView.num_rows();
       auto probeRowSequence = cudf::sequence(
@@ -576,21 +576,12 @@ std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::joinWithBuildBatch(
           stream,
           get_temp_mr());
 
-      auto matchedInBatch = cudf::contains(
+      // The build side is concatenated into a single table (see
+      // CudfNestedLoopJoinBuild::doNoMoreInput), so joinWithBuildBatch runs
+      // exactly once per probe input. probeMatchedFlags_ is the result of
+      // this single contains() call; no cross-batch BITWISE_OR is needed.
+      probeMatchedFlags_ = cudf::contains(
           leftIndicesView, probeRowSequence->view(), stream, get_temp_mr());
-
-      auto updatedFlags = cudf::binary_operation(
-          probeMatchedFlags_->view(),
-          matchedInBatch->view(),
-          cudf::binary_operator::BITWISE_OR,
-          cudf::data_type{cudf::type_id::BOOL8},
-          stream,
-          get_temp_mr());
-      // binary_operation is async on `stream`; the old column destructs via
-      // cudaFreeAsync on its allocation stream (not `stream`), so the free
-      // can race the kernel. Drain `stream` before the move-assign.
-      stream.synchronize();
-      probeMatchedFlags_ = std::move(updatedFlags);
     }
 
     // Track which build rows matched for right/full join mismatch handling.
@@ -919,18 +910,12 @@ RowVectorPtr CudfNestedLoopJoinProbe::doGetOutput() {
         operatorCtx_->pool(), outputType_, size, std::move(result), stream);
   }
 
-  // For left/full join with filter: two-phase per probe batch.
-  // Phase 1 (probeMatchedFlags_ null): initialize flags and join.
+  // For left/full join with filter: two-phase per probe input.
+  // Phase 1 (probeMatchedFlags_ null): join; joinWithBuildBatch populates
+  // probeMatchedFlags_ from the single build table.
   // Phase 2 (probeMatchedFlags_ set): emit unmatched probe rows.
   if (isLeftOrFullJoin() && hasFilter_ && !buildEmpty_) {
     if (probeMatchedFlags_ == nullptr) {
-      auto numProbeRows =
-          static_cast<cudf::size_type>(cudfInput->getTableView().num_rows());
-      auto falseScalar =
-          cudf::numeric_scalar<bool>(false, true, stream, get_temp_mr());
-      probeMatchedFlags_ = cudf::make_column_from_scalar(
-          falseScalar, numProbeRows, stream, get_temp_mr());
-
       auto result = joinWithBuildBatch(
           cudfInput->getTableView(), buildData_.value()->view(), stream);
       if (result->num_rows() > 0) {

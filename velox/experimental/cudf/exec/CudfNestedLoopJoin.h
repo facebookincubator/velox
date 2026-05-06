@@ -233,8 +233,9 @@ class CudfNestedLoopJoinProbe : public CudfOperatorBase {
   bool finished_{false};
 
   // Probe mismatch tracking for left/full joins: BOOL8 column, one element
-  // per probe row in the current input batch. Updated across build batches
-  // via BITWISE_OR. Reset for each new probe input.
+  // per probe row in the current input batch. Populated by
+  // joinWithBuildBatch against the concatenated build table (single batch);
+  // reset between probe inputs.
   std::unique_ptr<cudf::column> probeMatchedFlags_;
 
   // True when build side has no rows.
