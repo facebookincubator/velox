@@ -13,9 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/experimental/cudf/expression/AstUtils.h"
 #include "velox/experimental/cudf/expression/DateTruncFunction.h"
 
-#include "velox/experimental/cudf/expression/AstUtils.h"
 #include "velox/expression/ConstantExpr.h"
 #include "velox/functions/lib/TimeUtils.h"
 

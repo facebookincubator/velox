@@ -285,9 +285,8 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
   // TIMESTAMP and DECIMAL).
   if (containsAstUnsupportedType(expr)) {
     if (cudf_velox::CudfConfig::getInstance().debugEnabled) {
-      LOG(WARNING)
-          << "Expression contains a type not supported by AST/JIT: "
-          << expr->toString();
+      LOG(WARNING) << "Expression contains a type not supported by AST/JIT: "
+                   << expr->toString();
     }
     return false;
   }
