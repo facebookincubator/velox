@@ -19,6 +19,7 @@ add_test(velox_functions_remote_client_test velox_functions_remote_client_test)
 target_link_libraries(
   velox_functions_remote_client_test
   remote_function_thrift
+  velox_arrow_serializer
   velox_functions_remote_server
   velox_functions_remote
   velox_function_registry

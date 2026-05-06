@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <functional>
+
 #include <folly/Range.h>
 
 #include "velox/common/base/RuntimeMetrics.h"
@@ -210,6 +212,7 @@ class VectorSerde {
     kPresto,
     kCompactRow,
     kUnsafeRow,
+    kArrowIpc,
   };
 
   static std::string kindName(Kind type);
@@ -354,6 +357,17 @@ class VectorSerde {
     VELOX_NYI();
   }
 
+  /// Deserializes data directly from an IOBuf, enabling zero-copy paths for
+  /// formats like Arrow IPC that can wrap IOBuf memory without copying. The
+  /// default implementation converts to a ByteInputStream and calls the
+  /// regular deserialize().
+  virtual void deserialize(
+      const folly::IOBuf& source,
+      velox::memory::MemoryPool* pool,
+      RowTypePtr type,
+      RowVectorPtr* result,
+      const Options* options = nullptr);
+
  protected:
   explicit VectorSerde(std::string kind) : kind_(std::move(kind)) {}
 
@@ -385,6 +399,21 @@ bool isRegisteredNamedVectorSerde(const std::string& kind);
 
 /// Get the vector serde identified by `serdeName`. Throws if not found.
 VectorSerde* getNamedVectorSerde(const std::string& kind);
+
+/// Factory function type for creating new VectorSerde instances by name.
+using VectorSerdeFactory = std::function<std::unique_ptr<VectorSerde>()>;
+
+/// Register a factory that creates new VectorSerde instances by kind name.
+void registerVectorSerdeFactory(
+    const std::string& kind,
+    VectorSerdeFactory factory);
+
+/// Check if a factory has been registered for the given kind.
+bool isRegisteredVectorSerdeFactory(const std::string& kind);
+
+/// Create a new VectorSerde instance using the registered factory. Throws if
+/// no factory is registered for the given kind.
+std::unique_ptr<VectorSerde> createVectorSerde(const std::string& kind);
 
 class VectorStreamGroup : public StreamArena {
  public:
