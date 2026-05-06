@@ -128,6 +128,27 @@ bool hasDecimalZero(
   return boolScalar.is_valid(stream) && boolScalar.value(stream);
 }
 
+void checkAllTrue(
+    cudf::column_view cond,
+    std::string_view userMessage,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  if (cond.is_empty() || cond.null_count() == cond.size()) {
+    return;
+  }
+
+  const auto boolType = cudf::data_type(cudf::type_id::BOOL8);
+  auto allTrue = cudf::reduce(
+      cond,
+      *cudf::make_all_aggregation<cudf::reduce_aggregation>(),
+      boolType,
+      stream,
+      mr);
+  auto* result = static_cast<cudf::scalar_type_t<bool>*>(allTrue.get());
+  VELOX_USER_CHECK(
+      result->is_valid(stream) && result->value(stream), "{}", userMessage);
+}
+
 std::unique_ptr<cudf::scalar> castDecimalScalar(
     const cudf::scalar& src,
     cudf::data_type targetType,

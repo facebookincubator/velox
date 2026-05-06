@@ -20,9 +20,7 @@
 #include "velox/type/Time.h"
 #include "velox/vector/ConstantVector.h"
 
-#include <cudf/aggregation.hpp>
 #include <cudf/binaryop.hpp>
-#include <cudf/reduction.hpp>
 #include <cudf/unary.hpp>
 
 namespace facebook::velox::cudf_velox::prestosql {
@@ -96,16 +94,11 @@ ColumnOrView DatePlusIntervalFunction::eval(
       cudf::data_type(cudf::type_id::BOOL8),
       stream,
       mr);
-  auto allWholeDays = cudf::reduce(
+  checkAllTrue(
       isWholeDays->view(),
-      *cudf::make_all_aggregation<cudf::reduce_aggregation>(),
-      cudf::data_type(cudf::type_id::BOOL8),
+      "Cannot add hours, minutes, seconds or milliseconds to a date",
       stream,
       mr);
-  auto* result = static_cast<cudf::scalar_type_t<bool>*>(allWholeDays.get());
-  VELOX_USER_CHECK(
-      result->is_valid(stream) && result->value(stream),
-      "Cannot add hours, minutes, seconds or milliseconds to a date");
 
   auto daysInt = cudf::binary_operation(
       intervalCol,

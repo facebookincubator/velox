@@ -15,6 +15,7 @@
  */
 #include "velox/experimental/cudf/expression/DateTruncFunction.h"
 
+#include "velox/experimental/cudf/expression/AstUtils.h"
 #include "velox/expression/ConstantExpr.h"
 #include "velox/functions/lib/TimeUtils.h"
 
@@ -27,25 +28,16 @@ namespace facebook::velox::cudf_velox {
 
 using functions::DateTimeUnit;
 
-std::string DateTruncFunction::stripQuotes(std::string unit) {
-  if (unit.size() >= 2 && unit.front() == '\'' && unit.back() == '\'') {
-    unit = unit.substr(1, unit.size() - 2);
-  }
-  return unit;
-}
-
 bool DateTruncFunction::canEvaluate(
     const std::shared_ptr<velox::exec::Expr>& expr) {
   if (expr->inputs().size() != 2) {
     return false;
   }
-  auto unitExpr =
-      std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr->inputs()[0]);
-  if (!unitExpr || unitExpr->value()->isNullAt(0)) {
+  auto unitString = constantVarcharValue(expr->inputs()[0]);
+  if (!unitString.has_value()) {
     return false;
   }
-  auto unitStr = stripQuotes(unitExpr->value()->toString(0));
-  auto unit = functions::fromDateTimeUnitString(StringView(unitStr), false);
+  auto unit = functions::fromDateTimeUnitString(*unitString, false);
   if (!unit.has_value()) {
     return false;
   }
@@ -69,27 +61,26 @@ bool DateTruncFunction::canEvaluate(
 
 DateTruncFunction::DateTruncFunction(
     const std::shared_ptr<velox::exec::Expr>& expr) {
-  using velox::exec::ConstantExpr;
   VELOX_CHECK_EQ(
       expr->inputs().size(), 2, "date_trunc expects exactly 2 inputs");
-  auto unitExpr = std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[0]);
-  VELOX_CHECK_NOT_NULL(unitExpr, "date_trunc unit must be a constant");
+  auto unitString = constantVarcharValue(expr->inputs()[0]);
+  VELOX_CHECK(
+      unitString.has_value(), "date_trunc unit must be a non-null constant");
   auto inputType = expr->inputs()[1]->type();
   isTimestamp_ = inputType->isTimestamp();
   isDate_ = inputType->isDate();
   VELOX_CHECK(
       isTimestamp_ || isDate_,
       "date_trunc only supports date or timestamp inputs");
-  auto unitStr = stripQuotes(unitExpr->value()->toString(0));
-  auto parsed = functions::fromDateTimeUnitString(StringView(unitStr), true);
-  VELOX_CHECK(parsed.has_value(), "Invalid date_trunc unit: {}", unitStr);
+  auto parsed = functions::fromDateTimeUnitString(*unitString, true);
+  VELOX_CHECK(parsed.has_value(), "Invalid date_trunc unit: {}", *unitString);
   unit_ = *parsed;
 
   // Validate time-only units require timestamp input.
   if (unit_ == DateTimeUnit::kSecond || unit_ == DateTimeUnit::kMinute ||
       unit_ == DateTimeUnit::kHour) {
     VELOX_CHECK(
-        isTimestamp_, "date_trunc {} requires timestamp input", unitStr);
+        isTimestamp_, "date_trunc {} requires timestamp input", *unitString);
   }
 }
 

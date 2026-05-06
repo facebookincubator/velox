@@ -21,11 +21,9 @@
 #include "velox/functions/prestosql/DateTimeFunctions.h"
 #include "velox/vector/ConstantVector.h"
 
-#include <cudf/aggregation.hpp>
 #include <cudf/binaryop.hpp>
 #include <cudf/column/column_factories.hpp>
 #include <cudf/datetime.hpp>
-#include <cudf/reduction.hpp>
 #include <cudf/unary.hpp>
 
 #include <limits>
@@ -36,17 +34,6 @@ namespace facebook::velox::cudf_velox::prestosql {
 using functions::DateTimeUnit;
 
 namespace {
-
-// Returns the constant string value of expr, or nullopt if expr is not a
-// non-null constant VARCHAR.
-std::optional<StringView> constantVarcharValue(
-    const std::shared_ptr<velox::exec::Expr>& expr) {
-  auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr);
-  if (!constExpr || constExpr->value()->isNullAt(0)) {
-    return std::nullopt;
-  }
-  return constExpr->value()->as<ConstantVector<StringView>>()->valueAt(0);
-}
 
 // Day and week units add a duration_D to the date directly. Month, quarter,
 // and year units must go through add_calendrical_months because calendar
@@ -84,17 +71,13 @@ int32_t checkedScaleValue(int64_t value, int32_t scale) {
 }
 
 // Throws if any non-null entry of valueCol would overflow int32_t when
-// multiplied by scale. The bound is computed in int64_t, then a single
-// boolean reduction asserts every value fits.
+// multiplied by scale. The bound is computed in int64_t, so the predicate
+// itself cannot overflow.
 void checkScaledValueRange(
     cudf::column_view valueCol,
     int32_t scale,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
-  if (valueCol.is_empty() || valueCol.null_count() == valueCol.size()) {
-    return;
-  }
-
   constexpr auto kMin = std::numeric_limits<int32_t>::min();
   constexpr auto kMax = std::numeric_limits<int32_t>::max();
   const auto minValue = static_cast<int64_t>(kMin / scale);
@@ -126,16 +109,7 @@ void checkScaledValueRange(
       boolType,
       stream,
       mr);
-  auto allInRange = cudf::reduce(
-      inRange->view(),
-      *cudf::make_all_aggregation<cudf::reduce_aggregation>(),
-      boolType,
-      stream,
-      mr);
-  auto* result = static_cast<cudf::scalar_type_t<bool>*>(allInRange.get());
-  VELOX_USER_CHECK(
-      result->is_valid(stream) && result->value(stream),
-      "date_add value is out of range");
+  checkAllTrue(inRange->view(), "date_add value is out of range", stream, mr);
 }
 
 // Casts an int64 column to int32 and multiplies by scale, asserting the

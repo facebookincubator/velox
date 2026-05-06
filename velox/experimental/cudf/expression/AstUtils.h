@@ -211,6 +211,17 @@ inline std::unique_ptr<cudf::scalar> makeScalarFromConstantExpr(
       createCudfScalar, constValue->typeKind(), constValue, toType);
 }
 
+/// Returns the constant string value of expr, or nullopt if expr is not a
+/// non-null constant VARCHAR.
+inline std::optional<StringView> constantVarcharValue(
+    const std::shared_ptr<velox::exec::Expr>& expr) {
+  auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr);
+  if (!constExpr || constExpr->value()->isNullAt(0)) {
+    return std::nullopt;
+  }
+  return constExpr->value()->as<ConstantVector<StringView>>()->valueAt(0);
+}
+
 template <TypeKind kind>
 cudf::ast::literal makeScalarAndLiteral(
     const TypePtr& type,

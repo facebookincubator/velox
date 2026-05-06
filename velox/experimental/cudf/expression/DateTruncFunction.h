@@ -36,9 +36,6 @@ class DateTruncFunction : public CudfFunction {
       rmm::device_async_resource_ref mr) const override;
 
  private:
-  /// Strips surrounding single quotes from unit strings if present.
-  static std::string stripQuotes(std::string unit);
-
   functions::DateTimeUnit unit_;
   bool isTimestamp_{false};
   bool isDate_{false};
