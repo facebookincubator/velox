@@ -237,4 +237,23 @@ cudf::ast::literal makeScalarAndLiteral(
   VELOX_NYI("Scalar creation not implemented for type {}", type->toString());
 }
 
+/// Returns true if expr or any descendant has a type that the AST/JIT
+/// evaluator does not support (currently TIMESTAMP and DECIMAL).
+inline bool containsAstUnsupportedType(
+    const std::shared_ptr<velox::exec::Expr>& expr) {
+  if (!expr) {
+    return false;
+  }
+  if (expr->type() &&
+      (expr->type()->isTimestamp() || expr->type()->isDecimal())) {
+    return true;
+  }
+  for (const auto& input : expr->inputs()) {
+    if (containsAstUnsupportedType(input)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 } // namespace facebook::velox::cudf_velox

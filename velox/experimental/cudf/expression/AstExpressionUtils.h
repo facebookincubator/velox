@@ -20,11 +20,9 @@
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
-#include "velox/experimental/cudf/expression/AstTypeUtils.h"
 #include "velox/experimental/cudf/expression/AstUtils.h"
 // TODO(kn): in another PR
 // #include "velox/experimental/cudf/CudfNoDefaults.h"
-#include "velox/experimental/cudf/expression/DecimalTypeCheck.h"
 
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/FieldReference.h"
@@ -283,16 +281,12 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
   using velox::exec::FieldReference;
   using Op = cudf::ast::ast_operator;
 
-  // Reject expressions with types not yet supported in AST/JIT.
-  // TODO: Implement TIMESTAMP and DECIMAL support in AST and JIT.
+  // Reject expressions with types not yet supported in AST/JIT (currently
+  // TIMESTAMP and DECIMAL).
   if (containsAstUnsupportedType(expr)) {
-    LOG(INFO) << "Expression not supported by AST/JIT: " << expr->toString();
-    return false;
-  }
-  if (containsDecimalType(expr, false)) {
     if (cudf_velox::CudfConfig::getInstance().debugEnabled) {
       LOG(WARNING)
-          << "Expression contains DECIMAL type, which is not supported by AST/JIT: "
+          << "Expression contains a type not supported by AST/JIT: "
           << expr->toString();
     }
     return false;

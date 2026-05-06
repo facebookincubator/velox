@@ -15,7 +15,6 @@
 add_library(
   velox_cudf_expression
   AstExpression.cpp
-  AstTypeUtils.cpp
   DateTruncFunction.cpp
   DecimalExpressionKernels.cu
   ExpressionEvaluator.cpp
