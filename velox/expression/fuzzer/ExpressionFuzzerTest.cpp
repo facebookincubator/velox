@@ -510,6 +510,15 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "s2_cell_to_token",
     "ip_version", // New function, pending Presto Java implementation
     "ip_prefix_masklen", // New function, pending Presto Java implementation
+    // Documented in Presto 0.295 (functions/{array,map}.html) but missing from
+    // the 0.297 docs and not registered in the 0.297 server image used for SOT
+    // fuzzing — fuzzer aborts with "Function ... not registered". Whether
+    // this is a removal or a plugin/namespace move in 0.297 is TBD; skip
+    // until that is sorted out (see #17449 / #17450).
+    "any_keys_match",
+    "no_keys_match",
+    "remove_nulls",
+    "array_max_by",
 };
 
 int main(int argc, char** argv) {
