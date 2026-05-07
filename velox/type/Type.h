@@ -538,7 +538,10 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
   /// example) to dynamically cast to the appropriate type.
   template <TypeKind KIND>
   const typename TypeTraits<KIND>::ImplType& as() const {
-    return dynamic_cast<const typename TypeTraits<KIND>::ImplType&>(*this);
+    if (kind_ != KIND) {
+      throw std::bad_cast();
+    }
+    return static_cast<const typename TypeTraits<KIND>::ImplType&>(*this);
   }
 
   virtual bool isPrimitiveType() const = 0;
