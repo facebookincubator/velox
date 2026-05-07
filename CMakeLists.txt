@@ -260,6 +260,79 @@ endif()
 if(${VELOX_ENABLE_DUCKDB})
   velox_set_source(DuckDB)
   velox_resolve_dependency(DuckDB)
+
+  function(velox_link_duckdb_static_extension_loader)
+    if(NOT TARGET duckdb_static)
+      return()
+    endif()
+
+    function(velox_get_imported_library_path target_name output_variable)
+      string(TOUPPER "${CMAKE_BUILD_TYPE}" build_type)
+      get_target_property(library_path ${target_name} IMPORTED_LOCATION_${build_type})
+      if(NOT library_path)
+        get_target_property(imported_configurations ${target_name} IMPORTED_CONFIGURATIONS)
+        foreach(imported_configuration IN LISTS imported_configurations)
+          get_target_property(
+            library_path
+            ${target_name}
+            IMPORTED_LOCATION_${imported_configuration}
+          )
+          if(library_path)
+            break()
+          endif()
+        endforeach()
+      endif()
+      if(NOT library_path)
+        get_target_property(library_path ${target_name} IMPORTED_LOCATION)
+      endif()
+      if(library_path)
+        set(${output_variable} ${library_path} PARENT_SCOPE)
+      endif()
+    endfunction()
+
+    get_target_property(duckdb_static_imported duckdb_static IMPORTED)
+
+    if(
+      COMMAND link_extension_libraries
+      AND TARGET duckdb_generated_extension_loader
+      AND NOT duckdb_static_imported
+    )
+      link_extension_libraries(duckdb_static PUBLIC)
+    elseif(TARGET duckdb_generated_extension_loader)
+      set(
+        duckdb_static_extension_libraries
+        duckdb_generated_extension_loader
+        autocomplete_extension
+        icu_extension
+        parquet_extension
+        json_extension
+        core_functions_extension
+      )
+
+      set(duckdb_static_extension_archives)
+      foreach(extension_library IN LISTS duckdb_static_extension_libraries)
+        if(TARGET ${extension_library})
+          velox_get_imported_library_path(${extension_library} extension_library_path)
+          if(extension_library_path)
+            list(APPEND duckdb_static_extension_archives ${extension_library_path})
+          endif()
+        endif()
+      endforeach()
+
+      velox_get_imported_library_path(duckdb_static duckdb_static_path)
+      if(duckdb_static_path)
+        list(APPEND duckdb_static_extension_archives ${duckdb_static_path})
+      endif()
+
+      if(duckdb_static_extension_archives)
+        target_link_libraries(duckdb_static INTERFACE ${duckdb_static_extension_archives})
+      endif()
+    elseif(TARGET dummy_static_extension_loader)
+      target_link_libraries(duckdb_static INTERFACE dummy_static_extension_loader)
+    endif()
+  endfunction()
+
+  velox_link_duckdb_static_extension_loader()
 endif()
 
 if(VELOX_ENABLE_FAISS)

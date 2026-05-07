@@ -13,21 +13,7 @@
 # limitations under the License.
 velox_add_library(velox_duckdb_conversion DuckConversion.cpp HEADERS DuckConversion.h)
 
-set(VELOX_DUCKDB_LIBRARIES duckdb_static)
-if(TARGET duckdb_generated_extension_loader)
-  list(APPEND VELOX_DUCKDB_LIBRARIES duckdb_generated_extension_loader)
-  if(TARGET core_functions_extension)
-    list(APPEND VELOX_DUCKDB_LIBRARIES core_functions_extension)
-  endif()
-  if(TARGET parquet_extension)
-    list(APPEND VELOX_DUCKDB_LIBRARIES parquet_extension)
-  endif()
-elseif(TARGET dummy_static_extension_loader)
-  list(APPEND VELOX_DUCKDB_LIBRARIES dummy_static_extension_loader)
-endif()
-list(APPEND VELOX_DUCKDB_LIBRARIES duckdb_static)
-
-velox_link_libraries(velox_duckdb_conversion velox_core velox_vector ${VELOX_DUCKDB_LIBRARIES})
+velox_link_libraries(velox_duckdb_conversion velox_core velox_vector duckdb_static)
 
 velox_add_library(velox_duckdb_parser DuckParser.cpp HEADERS DuckParser.h)
 
@@ -35,7 +21,7 @@ velox_link_libraries(
   velox_duckdb_parser
   velox_duckdb_conversion
   velox_parse_expression
-  ${VELOX_DUCKDB_LIBRARIES}
+  duckdb_static
 )
 
 if(${VELOX_BUILD_TESTING})
