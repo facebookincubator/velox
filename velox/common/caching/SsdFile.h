@@ -336,6 +336,7 @@ class SsdFile {
 
   /// Erases 'key'
   bool erase(RawFileCacheKey key);
+
   /// Copies the data in 'ssdPins' into 'pins'. Coalesces IO for nearby
   /// entries if they are in ascending order and near enough.
   CoalesceIoStats load(
