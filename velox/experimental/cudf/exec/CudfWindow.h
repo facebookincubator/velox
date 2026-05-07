@@ -23,6 +23,7 @@
 
 #include <cudf/table/table.hpp>
 #include <cudf/types.hpp>
+
 #include <rmm/cuda_stream_view.hpp>
 
 namespace facebook::velox::cudf_velox {

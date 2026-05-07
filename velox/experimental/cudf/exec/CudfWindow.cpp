@@ -216,8 +216,7 @@ CudfWindow::CudfWindow(
         order.isAscending() ? cudf::order::ASCENDING : cudf::order::DESCENDING);
     // Velox isNullsFirst() is absolute; cuDF null_order is relative to sort
     // direction. BEFORE means nulls precede values in that direction.
-    bool nullsBefore =
-        (order.isNullsFirst() && order.isAscending()) ||
+    bool nullsBefore = (order.isNullsFirst() && order.isAscending()) ||
         (!order.isNullsFirst() && !order.isAscending());
     nullOrders_.push_back(
         nullsBefore ? cudf::null_order::BEFORE : cudf::null_order::AFTER);
