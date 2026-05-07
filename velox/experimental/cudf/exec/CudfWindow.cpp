@@ -56,17 +56,6 @@ cudf::size_type getLeadLagOffset(const core::WindowNode::Function& func) {
   return 1;
 }
 
-cudf::rank_method toRankMethod(const std::string& baseName) {
-  if (baseName == "row_number") {
-    return cudf::rank_method::FIRST;
-  } else if (baseName == "rank") {
-    return cudf::rank_method::MIN;
-  } else if (baseName == "dense_rank") {
-    return cudf::rank_method::DENSE;
-  }
-  VELOX_FAIL("toRankMethod called on non-rank function: {}", baseName);
-}
-
 std::pair<cudf::window_bounds, cudf::window_bounds> toWindowBounds(
     const core::WindowNode::Frame& frame) {
   auto toBound = [](core::WindowNode::BoundType type,
@@ -105,35 +94,24 @@ std::pair<cudf::window_bounds, cudf::window_bounds> toWindowBounds(
 
 } // namespace
 
-cudf::column_view CudfWindow::multiSortKeyStructView(
-    cudf::table_view const& sortedInput) const {
-  VELOX_CHECK_GE(
-      sortKeyIndices_.size(),
-      2,
-      "multiSortKeyStructView requires >= 2 sort keys");
-  sortKeyStructChildren_.clear();
-  sortKeyStructChildren_.reserve(sortKeyIndices_.size());
-  for (auto ch : sortKeyIndices_) {
-    sortKeyStructChildren_.push_back(sortedInput.column(ch));
-  }
-  return cudf::column_view(
-      cudf::data_type{cudf::type_id::STRUCT},
-      sortedInput.num_rows(),
-      nullptr,
-      nullptr,
-      0,
-      0,
-      sortKeyStructChildren_);
-}
-
 std::unique_ptr<cudf::column> CudfWindow::computeRankColumn(
     cudf::table_view const& sortedInput,
     const std::string& baseName,
     rmm::cuda_stream_view stream) const {
   auto mr = get_output_mr();
+  auto toRankMethod = [](const std::string& name) {
+    if (name == "row_number") {
+      return cudf::rank_method::FIRST;
+    } else if (name == "rank") {
+      return cudf::rank_method::MIN;
+    }
+    return cudf::rank_method::DENSE;
+  };
   auto method = toRankMethod(baseName);
 
-  // Build the "values" column for rank tie detection.
+  // Build the "values" column for rank tie detection. For rank/dense_rank with
+  // multiple sort keys, wrap them in a STRUCT for composite comparison.
+  std::vector<cudf::column_view> structChildren;
   cudf::column_view valuesCol = [&]() -> cudf::column_view {
     if (sortKeyIndices_.empty()) {
       return sortedInput.column(0);
@@ -141,7 +119,18 @@ std::unique_ptr<cudf::column> CudfWindow::computeRankColumn(
     if (sortKeyIndices_.size() == 1 || baseName == "row_number") {
       return sortedInput.column(sortKeyIndices_[0]);
     }
-    return multiSortKeyStructView(sortedInput);
+    structChildren.reserve(sortKeyIndices_.size());
+    for (auto idx : sortKeyIndices_) {
+      structChildren.push_back(sortedInput.column(idx));
+    }
+    return cudf::column_view(
+        cudf::data_type{cudf::type_id::STRUCT},
+        sortedInput.num_rows(),
+        nullptr,
+        nullptr,
+        0,
+        0,
+        structChildren);
   }();
 
   auto colOrder =

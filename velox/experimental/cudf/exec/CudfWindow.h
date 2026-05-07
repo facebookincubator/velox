@@ -141,11 +141,6 @@ class CudfWindow : public CudfOperatorBase {
       const std::string& baseName,
       rmm::cuda_stream_view stream) const;
 
-  // Build a zero-copy STRUCT column_view over multiple sort key columns
-  // for composite-key tie detection in rank functions.
-  cudf::column_view multiSortKeyStructView(
-      cudf::table_view const& sortedInput) const;
-
   std::shared_ptr<const core::WindowNode> windowNode_;
   const RowTypePtr inputRowType_;
 
@@ -159,9 +154,6 @@ class CudfWindow : public CudfOperatorBase {
   // Sorted and concatenated input data, prepared in doNoMoreInput().
   std::unique_ptr<cudf::table> sortedData_;
   rmm::cuda_stream_view stream_{};
-
-  // Scratch storage for multiSortKeyStructView children.
-  mutable std::vector<cudf::column_view> sortKeyStructChildren_;
 
   bool finished_ = false;
 };
