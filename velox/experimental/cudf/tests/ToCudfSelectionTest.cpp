@@ -364,8 +364,8 @@ TEST_F(ToCudfSelectionTest, unsupportedAggregationInputExpressionsFallsBack) {
   ASSERT_TRUE(wasDefaultHashAggregationUsed(task));
 }
 
-// Non-count constant aggregates are not supported by cuDF aggregation.
-TEST_F(ToCudfSelectionTest, nonCountConstantAggregationFallsBack) {
+// Non-count constant aggregates should use cuDF aggregation.
+TEST_F(ToCudfSelectionTest, nonCountConstantAggregationUsesCudf) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
 
@@ -381,8 +381,8 @@ TEST_F(ToCudfSelectionTest, nonCountConstantAggregationFallsBack) {
                   .plan(plan)
                   .assertResults("SELECT sum(1) FROM tmp");
 
-  ASSERT_FALSE(wasCudfAggregationUsed(task));
-  ASSERT_TRUE(wasDefaultHashAggregationUsed(task));
+  ASSERT_TRUE(wasCudfAggregationUsed(task));
+  ASSERT_FALSE(wasDefaultHashAggregationUsed(task));
 }
 
 // Test zero-column count(*) should stay on GPU.
@@ -430,6 +430,35 @@ TEST_F(ToCudfSelectionTest, zeroColumnCountConstantUsesGpu) {
                   .config("cudf.enabled", true)
                   .plan(plan)
                   .assertResults("SELECT count(1) FROM tmp WHERE c0 > 0");
+
+  ASSERT_TRUE(wasCudfAggregationUsed(task));
+  ASSERT_FALSE(wasDefaultHashAggregationUsed(task));
+}
+
+TEST_F(ToCudfSelectionTest, zeroColumnConstantAggregationsUseGpu) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3, 4}),
+  });
+  createDuckDbTable({data});
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .filter("c0 > 0")
+                  .project({})
+                  .aggregation(
+                      {},
+                      {"sum(1)", "avg(1)", "min(1)", "max(1)"},
+                      {},
+                      core::AggregationNode::Step::kSingle,
+                      false)
+                  .planNode();
+
+  auto task =
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .config("cudf.enabled", true)
+          .plan(plan)
+          .assertResults(
+              "SELECT sum(1), avg(1), min(1), max(1) FROM tmp WHERE c0 > 0");
 
   ASSERT_TRUE(wasCudfAggregationUsed(task));
   ASSERT_FALSE(wasDefaultHashAggregationUsed(task));

@@ -30,7 +30,8 @@ struct GroupbyAggregator {
 
   virtual void addGroupbyRequest(
       cudf::table_view const& tbl,
-      std::vector<cudf::groupby::aggregation_request>& requests) = 0;
+      std::vector<cudf::groupby::aggregation_request>& requests,
+      rmm::cuda_stream_view stream) = 0;
 
   virtual std::unique_ptr<cudf::column> makeOutputColumn(
       std::vector<cudf::groupby::aggregation_result>& results,

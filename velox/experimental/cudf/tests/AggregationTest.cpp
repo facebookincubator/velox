@@ -75,8 +75,6 @@ class AggregationTest : public OperatorTestBase {
       bool distinct) {
     std::vector<std::string> aggregates;
     if (!distinct) {
-      // TODO (dm): "sum(15)", "sum(0.1)",  "min(15)",  "min(0.1)", "max(15)",
-      // "max(0.1)",
       aggregates = {
           "sum(c1)",
           "sum(c2)",
@@ -111,8 +109,6 @@ class AggregationTest : public OperatorTestBase {
     if (distinct) {
       assertQuery(op, "SELECT distinct " + keyName + " " + fromClause);
     } else {
-      // TODO (dm): sum(15), sum(cast(0.1 as double)), min(15), min(0.1),
-      // max(15), max(0.1),
       assertQuery(
           op,
           "SELECT " + keyName +
@@ -126,8 +122,6 @@ class AggregationTest : public OperatorTestBase {
       bool ignoreNullKeys,
       bool distinct) {
     std::vector<std::string> aggregates;
-    // TODO (dm): "sum(15)", "sum(0.1)",  "min(15)",  "min(0.1)", "max(15)",
-    // "max(0.1)"
     if (!distinct) {
       aggregates = {
           "sum(c4)",
@@ -157,8 +151,6 @@ class AggregationTest : public OperatorTestBase {
     if (distinct) {
       assertQuery(op, "SELECT distinct c0, c1, c6 " + fromClause);
     } else {
-      // TODO (dm): sum(15), sum(cast(0.1 as double)), min(15), min(0.1),
-      // max(15), max(0.1),, sum(1)
       assertQuery(
           op,
           "SELECT c0, c1, c6, sum(c4), sum(c5), min(c3), min(c4), min(c5),  max(c3), max(c4), max(c5) " +
@@ -227,7 +219,6 @@ TEST_F(AggregationTest, global) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
 
-  // DM: removed "sum(15)","min(15)","max(15)",
   auto op = PlanBuilder()
                 .values(vectors)
                 .aggregation(
@@ -253,7 +244,6 @@ TEST_F(AggregationTest, global) {
                     false)
                 .planNode();
 
-  // DM: removed sum(15), min(15), max(15),
   assertQuery(
       op,
       "SELECT sum(c1), sum(c2), sum(c4), sum(c5), "
@@ -370,6 +360,44 @@ TEST_F(AggregationTest, varcharMinMax) {
   assertQuery(op, "SELECT min(c6), max(c6) FROM tmp");
 }
 
+TEST_F(AggregationTest, constantAggregationsGlobal) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3, 4}),
+  });
+  createDuckDbTable({data});
+
+  for (const auto steps :
+       {AggSteps::kSingle,
+        AggSteps::kPartialFinal,
+        AggSteps::kPartialIntermediateFinal}) {
+    testAggregation(
+        {data},
+        {},
+        {"sum(1)", "avg(1)", "min(1)", "max(1)", "min('x')", "max('x')"},
+        "SELECT sum(1), avg(1), min(1), max(1), min('x'), max('x') FROM tmp",
+        steps);
+  }
+}
+
+TEST_F(AggregationTest, constantAggregationsGroupBy) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 1, 2, 2, 2}),
+  });
+  createDuckDbTable({data});
+
+  for (const auto steps :
+       {AggSteps::kSingle,
+        AggSteps::kPartialFinal,
+        AggSteps::kPartialIntermediateFinal}) {
+    testAggregation(
+        {data},
+        {"c0"},
+        {"sum(1)", "avg(1)", "min(1)", "max(1)"},
+        "SELECT c0, sum(1), avg(1), min(1), max(1) FROM tmp GROUP BY c0",
+        steps);
+  }
+}
+
 TEST_F(AggregationTest, allKeyTypes) {
   // Covers different key types. Unlike the integer/string tests, the
   // hash table begins life in the generic mode, not array or
@@ -388,13 +416,12 @@ TEST_F(AggregationTest, allKeyTypes) {
   auto op =
       PlanBuilder()
           .values(batches)
-          .singleAggregation({"c0", "c1", "c2", "c3", "c4", "c5"}, {"sum(c6)"})
+          .singleAggregation({"c0", "c1", "c2", "c3", "c4", "c5"}, {"sum(1)"})
           .planNode();
 
-  // DM: Instead of sum(c6), this was sum(1) but we don't yet support constants
   assertQuery(
       op,
-      "SELECT c0, c1, c2, c3, c4, c5, sum(c6) FROM tmp "
+      "SELECT c0, c1, c2, c3, c4, c5, sum(1) FROM tmp "
       " GROUP BY c0, c1, c2, c3, c4, c5");
 }
 
