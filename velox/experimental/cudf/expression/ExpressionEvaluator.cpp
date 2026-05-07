@@ -286,7 +286,8 @@ void mergePatternNullsIntoResult(
 
   if (!result.nullable()) {
     result.set_null_mask(
-        cudf::copy_bitmask(patternColumn, stream, mr), patternColumn.null_count());
+        cudf::copy_bitmask(patternColumn, stream, mr),
+        patternColumn.null_count());
     return;
   }
 
@@ -295,12 +296,8 @@ void mergePatternNullsIntoResult(
       patternColumn.null_mask(),
   };
   std::vector<cudf::size_type> beginBits{0, patternColumn.offset()};
-  auto [nullMask, nullCount] = cudf::bitmask_and(
-      masks,
-      beginBits,
-      result.size(),
-      stream,
-      mr);
+  auto [nullMask, nullCount] =
+      cudf::bitmask_and(masks, beginBits, result.size(), stream, mr);
   result.set_null_mask(std::move(nullMask), nullCount);
 }
 
@@ -334,9 +331,9 @@ std::unique_ptr<cudf::column> makeLikeEscapeTargetsColumn(
     char escape,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
-  // Build the three legal escape sequences so column-pattern LIKE ESCAPE can strip
-  // them before checking whether any invalid escape usage remains. This keeps cuDF
-  // aligned with Velox CPU pattern validation semantics.
+  // Build the three legal escape sequences so column-pattern LIKE ESCAPE can
+  // strip them before checking whether any invalid escape usage remains. This
+  // keeps cuDF aligned with Velox CPU pattern validation semantics.
   cudf::string_scalar escapedEscapeScalar(
       std::string(2, escape), true, stream, mr);
   cudf::string_scalar escapedPercentScalar(
@@ -1540,8 +1537,8 @@ class LikeFunction : public CudfFunction {
     auto sanitizedPattern = patternCol;
     if (patternCol.has_nulls()) {
       // libcudf rejects null pattern rows for column/column LIKE. Replace them
-      // only for the LIKE call after validation so the temporary column overlaps
-      // less with the validation intermediates above.
+      // only for the LIKE call after validation so the temporary column
+      // overlaps less with the validation intermediates above.
       cudf::string_scalar emptyPattern("", true, stream, mr);
       sanitizedPatternHolder =
           cudf::replace_nulls(patternCol, emptyPattern, stream, mr);

@@ -302,10 +302,9 @@ TEST_F(CudfFilterProjectTest, likeColumnPattern) {
 }
 
 TEST_F(CudfFilterProjectTest, likeColumnPatternWithoutPatternNulls) {
-  auto input = makeNullableFlatVector<std::string>(
-      {"abc", std::nullopt, "a_c", ""});
-  auto pattern = makeNullableFlatVector<std::string>(
-      {"a%", "%", "a_d", ""});
+  auto input =
+      makeNullableFlatVector<std::string>({"abc", std::nullopt, "a_c", ""});
+  auto pattern = makeNullableFlatVector<std::string>({"a%", "%", "a_d", ""});
   auto data = makeRowVector({input, pattern});
 
   auto plan = PlanBuilder()
@@ -379,10 +378,7 @@ TEST_F(CudfFilterProjectTest, likeConstantNullInputColumnPattern) {
       {"a%", "%b%", std::nullopt, "", "abc"});
   auto data = makeRowVector({pattern});
   auto typed = test_utils::parseAndInferTypedExpr(
-      "like(cast(null as varchar), c0)",
-      data->rowType(),
-      &execCtx_,
-      options_);
+      "like(cast(null as varchar), c0)", data->rowType(), &execCtx_, options_);
   exec::ExprSet exprSet({typed}, &execCtx_, /*enableConstantFolding*/ false);
 
   auto result = evaluate(exprSet, data);
