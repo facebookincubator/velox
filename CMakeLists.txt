@@ -869,3 +869,13 @@ if(VELOX_ENABLE_GEO)
 endif()
 
 add_subdirectory(velox)
+
+if(
+  VELOX_ENABLE_DUCKDB
+  AND VELOX_MONO_LIBRARY
+  AND TARGET velox
+  AND DuckDB_SOURCE STREQUAL "BUNDLED"
+  AND DEFINED duckdb_SOURCE_DIR
+)
+  target_include_directories(velox SYSTEM PRIVATE "${duckdb_SOURCE_DIR}/src/include")
+endif()
