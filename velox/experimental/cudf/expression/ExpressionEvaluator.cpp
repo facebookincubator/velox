@@ -271,145 +271,34 @@ static bool matchCallAgainstSignatures(
   return false;
 }
 
-void mergePatternNullsIntoResult(
+void mergeSecondaryNullsIntoResult(
     cudf::column& result,
-    cudf::column_view patternColumn,
+    cudf::column_view secondaryColumn,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
   // cuDF string pattern predicates already propagate input nulls to the result.
-  // Only merge the pattern nulls back when they are present so Velox CPU null
-  // propagation semantics are preserved without extra mask work unless it is
-  // required.
-  if (!patternColumn.has_nulls()) {
+  // Only merge the secondary-input nulls back when they are present so Velox
+  // CPU null propagation semantics are preserved without extra mask work unless
+  // it is required.
+  if (!secondaryColumn.has_nulls()) {
     return;
   }
 
   if (!result.nullable()) {
     result.set_null_mask(
-        cudf::copy_bitmask(patternColumn, stream, mr),
-        patternColumn.null_count());
+        cudf::copy_bitmask(secondaryColumn, stream, mr),
+        secondaryColumn.null_count());
     return;
   }
 
   std::vector<cudf::bitmask_type const*> masks{
       result.view().null_mask(),
-      patternColumn.null_mask(),
+      secondaryColumn.null_mask(),
   };
-  std::vector<cudf::size_type> beginBits{0, patternColumn.offset()};
+  std::vector<cudf::size_type> beginBits{0, secondaryColumn.offset()};
   auto [nullMask, nullCount] =
       cudf::bitmask_and(masks, beginBits, result.size(), stream, mr);
   result.set_null_mask(std::move(nullMask), nullCount);
-}
-
-void validateLikeEscape(std::string_view escape) {
-  // Keep cuDF LIKE escape validation aligned with Velox CPU semantics.
-  VELOX_USER_CHECK_EQ(
-      escape.size(), 1, "Escape string must be a single character");
-}
-
-void validateLikePattern(std::string_view pattern, char escape) {
-  // Match Velox CPU invalid escape validation before calling libcudf LIKE.
-  for (size_t index = 0; index < pattern.size(); ++index) {
-    if (pattern[index] != escape) {
-      continue;
-    }
-
-    VELOX_USER_CHECK_LT(
-        index + 1,
-        pattern.size(),
-        "Escape character must be followed by '%', '_' or the escape character itself");
-    auto next = pattern[index + 1];
-    if (next != escape && next != '%' && next != '_') {
-      VELOX_USER_FAIL(
-          "Escape character must be followed by '%', '_' or the escape character itself");
-    }
-    ++index;
-  }
-}
-
-std::unique_ptr<cudf::column> makeLikeEscapeTargetsColumn(
-    char escape,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
-  // Build the three legal escape sequences so column-pattern LIKE ESCAPE can
-  // strip them before checking whether any invalid escape usage remains. This
-  // keeps cuDF aligned with Velox CPU pattern validation semantics.
-  cudf::string_scalar escapedEscapeScalar(
-      std::string(2, escape), true, stream, mr);
-  cudf::string_scalar escapedPercentScalar(
-      std::string(1, escape) + '%', true, stream, mr);
-  cudf::string_scalar escapedUnderscoreScalar(
-      std::string(1, escape) + '_', true, stream, mr);
-  auto escapedEscapeView = escapedEscapeScalar.value(stream);
-  auto escapedPercentView = escapedPercentScalar.value(stream);
-  auto escapedUnderscoreView = escapedUnderscoreScalar.value(stream);
-  rmm::device_uvector<cudf::string_view> deviceTargetViews(3, stream, mr);
-  deviceTargetViews.set_element_async(0, escapedEscapeView, stream);
-  deviceTargetViews.set_element_async(1, escapedPercentView, stream);
-  deviceTargetViews.set_element_async(2, escapedUnderscoreView, stream);
-  auto targetsColumn = cudf::make_strings_column(
-      cudf::device_span<cudf::string_view const>{deviceTargetViews},
-      cudf::string_view{nullptr, 0},
-      stream,
-      mr);
-  // The temporary scalars and string_view array above back async work used to
-  // build the output column, so wait for the stream before returning.
-  stream.synchronize();
-  return targetsColumn;
-}
-
-std::unique_ptr<cudf::column> makeLikeEscapeReplacementsColumn(
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
-  cudf::string_scalar emptyString("", true, stream, mr);
-  auto replacementsColumn =
-      cudf::make_column_from_scalar(emptyString, 1, stream, mr);
-  // make_column_from_scalar(string_scalar) reads the scalar's device string
-  // data asynchronously, so keep the scalar alive until the stream completes.
-  stream.synchronize();
-  return replacementsColumn;
-}
-
-void validateLikePattern(
-    cudf::column_view patternColumn,
-    cudf::column_view targetsColumn,
-    cudf::column_view replacementsColumn,
-    std::string_view escape,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
-  // Remove the three legal escape forms first. Any remaining escape character
-  // must be dangling or followed by an unsupported character, which matches the
-  // Velox CPU invalid-escape check.
-  auto normalized = cudf::strings::replace_multiple(
-      cudf::strings_column_view(patternColumn),
-      cudf::strings_column_view(targetsColumn),
-      cudf::strings_column_view(replacementsColumn),
-      stream,
-      mr);
-
-  auto escapeScalar = cudf::string_scalar(escape, true, stream, mr);
-  auto hasDanglingEscape = cudf::strings::contains(
-      cudf::strings_column_view(normalized->view()), escapeScalar, stream, mr);
-  normalized.reset();
-
-  auto anyAggregation = cudf::make_any_aggregation<cudf::reduce_aggregation>();
-  auto invalidScalar = cudf::reduce(
-      hasDanglingEscape->view(),
-      *anyAggregation,
-      cudf::data_type{cudf::type_id::BOOL8},
-      stream,
-      mr);
-  hasDanglingEscape.reset();
-
-  auto const& invalidBool =
-      static_cast<cudf::numeric_scalar<bool> const&>(*invalidScalar);
-  auto hasInvalidEscapeUsageValue =
-      invalidBool.is_valid(stream) && invalidBool.value(stream);
-  invalidScalar.reset();
-
-  VELOX_USER_CHECK(
-      !hasInvalidEscapeUsageValue,
-      "Escape character must be followed by '%', '_' or the escape character itself");
 }
 
 } // namespace
@@ -1463,16 +1352,11 @@ class LikeFunction : public CudfFunction {
           // these columns.
           auto stream = cudf::get_default_stream(cudf::allow_default_stream);
           auto mr = get_temp_mr();
-          targetsColumn_ = makeLikeEscapeTargetsColumn(escape_[0], stream, mr);
-          replacementsColumn_ = makeLikeEscapeReplacementsColumn(stream, mr);
+          targetsColumn_ = makeEscapeTargetsColumn(escape_[0], stream, mr);
+          replacementsColumn_ = makeEscapeReplacementsColumn(stream, mr);
         }
       }
     }
-  }
-
-  ~LikeFunction() override {
-    targetsColumn_.reset();
-    replacementsColumn_.reset();
   }
 
   ColumnOrView eval(
@@ -1483,14 +1367,16 @@ class LikeFunction : public CudfFunction {
     VELOX_CHECK(
         !inputColumns.empty(),
         "like requires at least one non-literal input column");
-    auto rowCount = asView(inputColumns[0]).size();
+    // inputColumns only contains non-literal children, so the first entry
+    // determines the output row count even when the input itself is constant.
+    auto outputRowCount = asView(inputColumns[0]).size();
 
     std::unique_ptr<cudf::column> inputColumnHolder;
     cudf::column_view inputCol;
     if (inputIsConstant_) {
       cudf::string_scalar inputScalar(input_, !inputIsNull_, stream, mr);
-      inputColumnHolder =
-          cudf::make_column_from_scalar(inputScalar, rowCount, stream, mr);
+      inputColumnHolder = cudf::make_column_from_scalar(
+          inputScalar, outputRowCount, stream, mr);
       inputCol = inputColumnHolder->view();
     } else {
       inputCol = asView(inputColumns[nextInput++]);
@@ -1511,26 +1397,23 @@ class LikeFunction : public CudfFunction {
       return makeAllNullResult();
     }
 
+    char escapeChar{0};
+    if (hasEscape_) {
+      VELOX_USER_CHECK_EQ(
+          escape_.size(), 1, "Escape string must be a single character");
+      escapeChar = escape_[0];
+    }
+
     if (patternIsConstant_) {
       if (hasEscape_) {
-        validateLikeEscape(escape_);
-        validateLikePattern(pattern_, escape_[0]);
+        validateConstantPattern(pattern_, escapeChar);
       }
       return cudf::strings::like(inputCol, pattern_, escape_, stream, mr);
     }
 
     auto patternCol = asView(inputColumns[nextInput]);
     if (hasEscape_) {
-      validateLikeEscape(escape_);
-      VELOX_CHECK_NOT_NULL(targetsColumn_);
-      VELOX_CHECK_NOT_NULL(replacementsColumn_);
-      validateLikePattern(
-          patternCol,
-          targetsColumn_->view(),
-          replacementsColumn_->view(),
-          escape_,
-          stream,
-          mr);
+      validatePatternColumn(patternCol, escapeChar, stream, mr);
     }
 
     std::unique_ptr<cudf::column> sanitizedPatternHolder;
@@ -1552,11 +1435,28 @@ class LikeFunction : public CudfFunction {
     // Velox returns null if either the input or pattern row is null. cuDF
     // already propagated input nulls into the result, so only merge the pattern
     // nulls back when needed.
-    mergePatternNullsIntoResult(*result, patternCol, stream, mr);
+    mergeSecondaryNullsIntoResult(*result, patternCol, stream, mr);
     return result;
   }
 
  private:
+  static void validateConstantPattern(std::string_view pattern, char escape);
+
+  static std::unique_ptr<cudf::column> makeEscapeTargetsColumn(
+      char escape,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr);
+
+  static std::unique_ptr<cudf::column> makeEscapeReplacementsColumn(
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr);
+
+  void validatePatternColumn(
+      cudf::column_view patternColumn,
+      char escape,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const;
+
   bool inputIsConstant_{false};
   bool inputIsNull_{false};
   bool patternIsConstant_{false};
@@ -1569,6 +1469,115 @@ class LikeFunction : public CudfFunction {
   std::unique_ptr<cudf::column> targetsColumn_;
   std::unique_ptr<cudf::column> replacementsColumn_;
 };
+
+void LikeFunction::validateConstantPattern(
+    std::string_view pattern,
+    char escape) {
+  // Match Velox CPU invalid escape validation before calling libcudf LIKE.
+  for (size_t index = 0; index < pattern.size(); ++index) {
+    if (pattern[index] != escape) {
+      continue;
+    }
+
+    VELOX_USER_CHECK_LT(
+        index + 1,
+        pattern.size(),
+        "Escape character must be followed by '%', '_' or the escape character itself");
+    auto next = pattern[index + 1];
+    if (next != escape && next != '%' && next != '_') {
+      VELOX_USER_FAIL(
+          "Escape character must be followed by '%', '_' or the escape character itself");
+    }
+    ++index;
+  }
+}
+
+std::unique_ptr<cudf::column> LikeFunction::makeEscapeTargetsColumn(
+    char escape,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  // Build the three legal escape sequences so column-pattern LIKE ESCAPE can
+  // strip them before checking whether any invalid escape usage remains. This
+  // keeps cuDF aligned with Velox CPU pattern validation semantics.
+  cudf::string_scalar escapedEscapeScalar(
+      std::string(2, escape), true, stream, mr);
+  cudf::string_scalar escapedPercentScalar(
+      std::string(1, escape) + '%', true, stream, mr);
+  cudf::string_scalar escapedUnderscoreScalar(
+      std::string(1, escape) + '_', true, stream, mr);
+  auto escapedEscapeView = escapedEscapeScalar.value(stream);
+  auto escapedPercentView = escapedPercentScalar.value(stream);
+  auto escapedUnderscoreView = escapedUnderscoreScalar.value(stream);
+  rmm::device_uvector<cudf::string_view> deviceTargetViews(3, stream, mr);
+  deviceTargetViews.set_element_async(0, escapedEscapeView, stream);
+  deviceTargetViews.set_element_async(1, escapedPercentView, stream);
+  deviceTargetViews.set_element_async(2, escapedUnderscoreView, stream);
+  auto targetsColumn = cudf::make_strings_column(
+      cudf::device_span<cudf::string_view const>{deviceTargetViews},
+      cudf::string_view{nullptr, 0},
+      stream,
+      mr);
+  // The temporary scalars and string_view array above back async work used to
+  // build the output column, so wait for the stream before returning.
+  stream.synchronize();
+  return targetsColumn;
+}
+
+std::unique_ptr<cudf::column> LikeFunction::makeEscapeReplacementsColumn(
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  cudf::string_scalar emptyString("", true, stream, mr);
+  auto replacementsColumn =
+      cudf::make_column_from_scalar(emptyString, 1, stream, mr);
+  // make_column_from_scalar(string_scalar) reads the scalar's device string
+  // data asynchronously, so keep the scalar alive until the stream completes.
+  stream.synchronize();
+  return replacementsColumn;
+}
+
+void LikeFunction::validatePatternColumn(
+    cudf::column_view patternColumn,
+    char escape,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) const {
+  VELOX_CHECK_NOT_NULL(targetsColumn_);
+  VELOX_CHECK_NOT_NULL(replacementsColumn_);
+
+  // Remove the three legal escape forms first. Any remaining escape character
+  // must be dangling or followed by an unsupported character, which matches the
+  // Velox CPU invalid-escape check.
+  auto normalized = cudf::strings::replace_multiple(
+      cudf::strings_column_view(patternColumn),
+      cudf::strings_column_view(targetsColumn_->view()),
+      cudf::strings_column_view(replacementsColumn_->view()),
+      stream,
+      mr);
+
+  auto escapeScalar =
+      cudf::string_scalar(std::string(1, escape), true, stream, mr);
+  auto hasDanglingEscape = cudf::strings::contains(
+      cudf::strings_column_view(normalized->view()), escapeScalar, stream, mr);
+  normalized.reset();
+
+  auto anyAggregation = cudf::make_any_aggregation<cudf::reduce_aggregation>();
+  auto invalidScalar = cudf::reduce(
+      hasDanglingEscape->view(),
+      *anyAggregation,
+      cudf::data_type{cudf::type_id::BOOL8},
+      stream,
+      mr);
+  hasDanglingEscape.reset();
+
+  auto const& invalidBool =
+      static_cast<cudf::numeric_scalar<bool> const&>(*invalidScalar);
+  auto hasInvalidEscapeUsageValue =
+      invalidBool.is_valid(stream) && invalidBool.value(stream);
+  invalidScalar.reset();
+
+  VELOX_USER_CHECK(
+      !hasInvalidEscapeUsageValue,
+      "Escape character must be followed by '%', '_' or the escape character itself");
+}
 
 class StringPatternPredicateFunction : public CudfFunction {
  public:
@@ -1640,7 +1649,7 @@ class StringPatternPredicateFunction : public CudfFunction {
     // can return a valid false when the pattern row is null, but Velox returns
     // null if either side is null. cuDF already propagated input nulls into the
     // result, so only merge the pattern nulls back when needed.
-    mergePatternNullsIntoResult(*result, patternCol, stream, mr);
+    mergeSecondaryNullsIntoResult(*result, patternCol, stream, mr);
     return result;
   }
 
