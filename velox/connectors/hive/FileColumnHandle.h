@@ -21,6 +21,18 @@
 
 namespace facebook::velox::connector::hive {
 
+/// Timestamp unit for partition values stored as bigint.
+enum class PartitionTimestampUnit {
+  /// Microseconds since epoch (Iceberg identity transform).
+  kMicroseconds,
+  /// Milliseconds since epoch (some Hive implementations).
+  kMilliseconds,
+  /// Nanoseconds since epoch (future formats).
+  kNanoseconds,
+  /// Unknown unit - will fall back to string parsing.
+  kUnknown,
+};
+
 /// Type of extraction to apply at one nesting level.
 enum class ExtractionStep : uint8_t {
   /// Navigate into a struct field.  Input must be ROW.
@@ -207,6 +219,12 @@ class FileColumnHandle : public ColumnHandle {
   /// Return true if partition date values are encoded as days since epoch
   /// (e.g., Iceberg) rather than ISO 8601 strings (e.g., Hive).
   virtual bool isPartitionDateValueDaysSinceEpoch() const = 0;
+
+  /// Return the timestamp unit for partition values stored as bigint.
+  /// Default implementation returns kUnknown, which falls back to string parsing.
+  virtual PartitionTimestampUnit getPartitionTimestampUnit() const {
+    return PartitionTimestampUnit::kUnknown;
+  }
 
   /// Named extraction chains.  Empty means no extraction (default behavior).
   virtual const std::vector<NamedExtraction>& extractions() const {

@@ -196,15 +196,34 @@ bool applyPartitionFilter(
       return applyFilter(*filter, folly::to<bool>(partitionValue));
     }
     case TypeKind::TIMESTAMP: {
-      // Try to parse as microseconds timestamp first (Iceberg identity transform).
-      auto microsResult = folly::tryTo<int64_t>(partitionValue);
-      if (microsResult.hasValue()) {
-        // Convert microseconds to Timestamp.
-        // Iceberg identity transform stores timestamps in UTC, no timezone conversion needed.
-        Timestamp ts = Timestamp::fromMicros(microsResult.value());
-        return applyFilter(*filter, ts);
+      // Try to parse as bigint timestamp first.
+      auto bigintResult = folly::tryTo<int64_t>(partitionValue);
+      if (bigintResult.hasValue()) {
+        const auto handlesIter = partitionKeysHandle.find(name);
+        if (handlesIter != partitionKeysHandle.end()) {
+          auto unit = handlesIter->second->getPartitionTimestampUnit();
+          
+          Timestamp ts;
+          switch (unit) {
+            case PartitionTimestampUnit::kMicroseconds:
+              // Iceberg identity transform stores timestamps as microseconds in UTC.
+              ts = Timestamp::fromMicros(bigintResult.value());
+              break;
+            case PartitionTimestampUnit::kMilliseconds:
+              ts = Timestamp::fromMillis(bigintResult.value());
+              break;
+            case PartitionTimestampUnit::kNanoseconds:
+              ts = Timestamp::fromNanos(bigintResult.value());
+              break;
+            case PartitionTimestampUnit::kUnknown:
+              // Unknown unit - fall back to string parsing below.
+              goto string_parsing;
+          }
+          return applyFilter(*filter, ts);
+        }
       }
       
+      string_parsing:
       // Fall back to string parsing - try ISO 8601 first (for Iceberg), then PrestoCast.
       auto result = util::fromTimestampString(
           StringView(partitionValue), util::TimestampParseMode::kIso8601);
