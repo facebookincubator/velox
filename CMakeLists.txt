@@ -305,6 +305,7 @@ if(${VELOX_ENABLE_DUCKDB})
         autocomplete_extension
         icu_extension
         parquet_extension
+        jemalloc_extension
         json_extension
         core_functions_extension
       )
