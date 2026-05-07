@@ -17,19 +17,55 @@
 #pragma once
 
 #include <cstdint>
-#include <optional>
 #include <string>
+#include <string_view>
+#include <variant>
 
 namespace facebook::velox::parquet {
 
 class UnicodeUtil {
  public:
-  static std::string_view truncateStringMin(
+  /// Returns the byte length of the minimum UTF-8 value containing at most the
+  /// specified number of code points.
+  ///
+  /// This function computes the byte length of the input prefix containing at
+  /// most numCodePoints Unicode code points. The caller can reuse the original
+  /// input pointer together with the returned length to reference the minimum
+  /// prefix value.
+  ///
+  /// @param input Pointer to the UTF-8 encoded input string
+  /// @param inputLength Length of the input string in bytes
+  /// @param numCodePoints Maximum number of Unicode code points to include
+  /// @return Byte length of the truncated prefix. If the input has fewer than
+  ///         numCodePoints code points, returns inputLength.
+  static int32_t truncateStringMinLength(
       const char* input,
       int32_t inputLength,
       int32_t numCodePoints);
 
-  static std::string truncateStringMax(
+  /// Truncates a UTF-8 string to at most the specified number of code points
+  /// and attempts to increment the last code point to produce an upper bound
+  /// for range queries.
+  ///
+  /// This function truncates the input string to contain at most numCodePoints
+  /// Unicode code points, then attempts to increment the last code point.
+  /// It tries incrementing from the last code point backwards until a valid
+  /// increment is found.
+  ///
+  /// The increment logic properly handles:
+  /// - Surrogate range: U+D7FF increments to U+E000 (skipping U+D800..U+DFFF)
+  /// - Maximum code point: U+10FFFF cannot be incremented
+  /// - Invalid UTF-8: Treated as single-byte sequences
+  ///
+  /// @param input Pointer to the UTF-8 encoded input string
+  /// @param inputLength Length of the input string in bytes
+  /// @param numCodePoints Maximum number of Unicode code points to include
+  /// @return A string_view into the original input when the entire input fits
+  ///         within numCodePoints, otherwise a new string containing:
+  ///         - A string with the last incrementable code point incremented
+  ///         - The truncated string as fallback if no code point can be
+  ///           incremented (e.g., all retained code points are U+10FFFF)
+  static std::variant<std::string_view, std::string> truncateStringUpper(
       const char* input,
       int32_t inputLength,
       int32_t numCodePoints);

@@ -16,58 +16,68 @@
 
 #include "velox/dwio/parquet/common/UnicodeUtil.h"
 
+#include <vector>
 #include "velox/external/utf8proc/utf8proc.h"
 #include "velox/functions/lib/string/StringImpl.h"
 
 namespace facebook::velox::parquet {
 
-std::string_view UnicodeUtil::truncateStringMin(
+int32_t UnicodeUtil::truncateStringMinLength(
     const char* input,
     int32_t inputLength,
     int32_t numCodePoints) {
-  auto length = functions::stringImpl::cappedByteLength<false>(
+  return functions::stringImpl::cappedByteLength<false>(
       StringView(input, inputLength), numCodePoints);
-  return std::string_view(input, length);
 }
 
-std::string UnicodeUtil::truncateStringMax(
+std::variant<std::string_view, std::string> UnicodeUtil::truncateStringUpper(
     const char* input,
     int32_t inputLength,
     int32_t numCodePoints) {
+  // Maximum number of bytes a UTF-8 encoded code point can occupy.
+  constexpr int32_t kMaxUtf8BytesPerCodePoint = 4;
+
   auto truncatedLength = functions::stringImpl::cappedByteLength<false>(
       StringView(input, inputLength), numCodePoints);
 
   if (truncatedLength == inputLength) {
-    return std::string(input, inputLength);
+    return std::string_view{input, static_cast<size_t>(inputLength)};
   }
 
-  // Try to increment the last code point.
-  for (auto i = numCodePoints - 1; i >= 0; --i) {
-    const char* current = input;
-    int32_t currentCodePoint = 0;
+  // Collect the byte offset of each code point to avoid O(n^2) rescanning.
+  std::vector<size_t> codePointOffsets;
+  codePointOffsets.reserve(static_cast<size_t>(numCodePoints));
+  const char* current = input;
+  const char* truncatedEnd = input + truncatedLength;
 
-    // Find the i-th code point position.
-    while (current < input + truncatedLength && currentCodePoint < i) {
-      int32_t charLength;
-      utf8proc_codepoint(current, input + truncatedLength, charLength);
-      current += charLength;
-      currentCodePoint++;
+  while (current < truncatedEnd) {
+    codePointOffsets.push_back(static_cast<size_t>(current - input));
+    int32_t codePointSize = 1;
+    auto cp = utf8proc_codepoint(current, truncatedEnd, codePointSize);
+    // If invalid UTF-8, advance by 1 byte.
+    current += (cp == -1) ? 1 : codePointSize;
+  }
+
+  // Try incrementing from the last code point backwards.
+  for (auto i = static_cast<int32_t>(codePointOffsets.size()) - 1; i >= 0;
+       --i) {
+    const char* pos = input + codePointOffsets[static_cast<size_t>(i)];
+    int32_t codePointSize = 1;
+    auto codePoint = utf8proc_codepoint(pos, truncatedEnd, codePointSize);
+
+    // Skip invalid UTF-8 sequences.
+    if (codePoint == -1) {
+      continue;
     }
 
-    if (current >= input + truncatedLength)
-      continue;
+    auto nextCodePoint =
+        functions::stringImpl::detail::incrementCodePoint(codePoint);
 
-    int32_t charLength;
-    auto codePoint =
-        utf8proc_codepoint(current, input + truncatedLength, charLength);
-    auto nextCodePoint = codePoint + 1;
-
-    // Check if the incremented code point is valid.
-    if (nextCodePoint != 0 && utf8proc_codepoint_valid(nextCodePoint)) {
+    if (nextCodePoint != 0) {
       std::string result;
-      result.reserve(truncatedLength + 4);
-      result.assign(input, current - input);
-      char buffer[4];
+      result.reserve(truncatedLength + kMaxUtf8BytesPerCodePoint);
+      result.assign(input, codePointOffsets[static_cast<size_t>(i)]);
+      char buffer[kMaxUtf8BytesPerCodePoint];
       auto bytesWritten = utf8proc_encode_char(
           nextCodePoint, reinterpret_cast<utf8proc_uint8_t*>(buffer));
       result.append(buffer, bytesWritten);
@@ -75,7 +85,9 @@ std::string UnicodeUtil::truncateStringMax(
     }
   }
 
-  return std::string(input, truncatedLength);
+  // No valid upper bound can be computed (e.g. all code points are U+10FFFF).
+  // Return the truncated string as a fallback.
+  return std::string_view{input, static_cast<size_t>(truncatedLength)};
 }
 
 } // namespace facebook::velox::parquet
