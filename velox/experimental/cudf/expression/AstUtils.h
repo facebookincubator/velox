@@ -108,13 +108,17 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
     if (unit == cudf::type_id::TIMESTAMP_MICROSECONDS) {
       using CudfTimestampType = cudf::timestamp_us;
       auto micros = isNull ? 0 : value.toMicros();
-      return std::make_unique<cudf::timestamp_scalar<CudfTimestampType>>(
+      auto scalar = std::make_unique<cudf::timestamp_scalar<CudfTimestampType>>(
           CudfTimestampType{cudf::duration_us{micros}}, !isNull, stream, mr);
+      stream.synchronize();
+      return scalar;
     } else if (unit == cudf::type_id::TIMESTAMP_NANOSECONDS) {
       using CudfTimestampType = cudf::timestamp_ns;
       auto nanos = isNull ? 0 : value.toNanos();
-      return std::make_unique<cudf::timestamp_scalar<CudfTimestampType>>(
+      auto scalar = std::make_unique<cudf::timestamp_scalar<CudfTimestampType>>(
           CudfTimestampType{cudf::duration_ns{nanos}}, !isNull, stream, mr);
+      stream.synchronize();
+      return scalar;
     } else {
       VELOX_FAIL("Unsupported timestamp unit: {}", static_cast<int32_t>(unit));
     }
@@ -209,17 +213,6 @@ inline std::unique_ptr<cudf::scalar> makeScalarFromConstantExpr(
   auto constValue = constExpr->value();
   return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
       createCudfScalar, constValue->typeKind(), constValue, toType);
-}
-
-/// Returns the constant string value of expr, or nullopt if expr is not a
-/// non-null constant VARCHAR.
-inline std::optional<StringView> constantVarcharValue(
-    const std::shared_ptr<velox::exec::Expr>& expr) {
-  auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr);
-  if (!constExpr || constExpr->value()->isNullAt(0)) {
-    return std::nullopt;
-  }
-  return constExpr->value()->as<ConstantVector<StringView>>()->valueAt(0);
 }
 
 template <TypeKind kind>

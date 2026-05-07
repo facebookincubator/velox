@@ -1092,6 +1092,29 @@ TEST_F(CudfFilterProjectTest, datePlusIntervalNullHandling) {
   assertQuery(plan, expected);
 }
 
+// Regression test for the literal-null interval path. Constructing
+// DatePlusIntervalFunction with a constant-null interval used to silently
+// treat it as +0 days (the validity bit was unconditionally set to true), so
+// the row-wise output came back as the input dates instead of NULL.
+TEST_F(CudfFilterProjectTest, datePlusIntervalNullLiteral) {
+  auto data = makeRowVector(
+      {"event_date"},
+      {makeFlatVector<int32_t>(
+          {toDateDays("2020-01-01"), toDateDays("2020-12-31")}, DATE())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  auto plan =
+      PlanBuilder()
+          .values(vectors)
+          .project(
+              {"plus(event_date, CAST(NULL AS INTERVAL DAY TO SECOND)) AS result"})
+          .planNode();
+
+  auto expected = makeRowVector(
+      {makeNullableFlatVector<int32_t>({std::nullopt, std::nullopt}, DATE())});
+  assertQuery(plan, expected);
+}
+
 TEST_F(CudfFilterProjectTest, datePlusIntervalRejectsSubDayInterval) {
   auto data = makeRowVector(
       {"event_date", "interval_val"},

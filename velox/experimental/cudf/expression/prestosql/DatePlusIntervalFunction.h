@@ -37,6 +37,12 @@ class DatePlusIntervalFunction : public CudfFunction {
  private:
   /// Pre-computed duration scalar for constant interval inputs.
   std::unique_ptr<cudf::scalar> durationDaysLiteral_;
+  /// Pre-computed kMillisInDay scalar; populated only when the interval is a
+  /// column. Used twice per eval (modulo + division).
+  std::unique_ptr<cudf::numeric_scalar<int64_t>> millisPerDayScalar_;
+  /// Pre-computed zero scalar; populated only when the interval is a column.
+  /// Used to assert (interval % kMillisInDay) == 0.
+  std::unique_ptr<cudf::numeric_scalar<int64_t>> zeroScalar_;
 };
 
 } // namespace facebook::velox::cudf_velox::prestosql
