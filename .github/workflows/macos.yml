@@ -80,6 +80,7 @@ jobs:
           # Needed for faiss to find BLAS
           install_faiss_deps
           install_double_conversion
+          install_duckdb_clang
 
           echo "NJOBS=`sysctl -n hw.ncpu`" >> $GITHUB_ENV
           majorVersion=$(sw_vers -productVersion | awk -F '.' '{print $1}')
