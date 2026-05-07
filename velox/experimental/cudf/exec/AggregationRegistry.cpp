@@ -368,6 +368,12 @@ void registerGroupbyOnlyAggregationFunctions(
       prefix + "stddev_samp",
       core::AggregationNode::Step::kSingle,
       stddevSampSingleSignatures);
+  // Register stddev as alias for stddev_samp
+  registerAggregationFunctionForStep(
+      registry,
+      prefix + "stddev",
+      core::AggregationNode::Step::kSingle,
+      stddevSampSingleSignatures);
 
   // kPartial: numeric -> row(bigint, double, double) representing (count, mean,
   // m2)
@@ -385,6 +391,11 @@ void registerGroupbyOnlyAggregationFunctions(
       prefix + "stddev_samp",
       core::AggregationNode::Step::kPartial,
       stddevSampPartialSignatures);
+  registerAggregationFunctionForStep(
+      registry,
+      prefix + "stddev",
+      core::AggregationNode::Step::kPartial,
+      stddevSampPartialSignatures);
 
   // kIntermediate: row(bigint,double,double) -> row(bigint,double,double)
   auto stddevSampIntermediateSignatures =
@@ -398,6 +409,11 @@ void registerGroupbyOnlyAggregationFunctions(
       prefix + "stddev_samp",
       core::AggregationNode::Step::kIntermediate,
       stddevSampIntermediateSignatures);
+  registerAggregationFunctionForStep(
+      registry,
+      prefix + "stddev",
+      core::AggregationNode::Step::kIntermediate,
+      stddevSampIntermediateSignatures);
 
   // kFinal: row(bigint,double,double) -> double
   auto stddevSampFinalSignatures = std::vector<exec::FunctionSignaturePtr>{
@@ -408,6 +424,11 @@ void registerGroupbyOnlyAggregationFunctions(
   registerAggregationFunctionForStep(
       registry,
       prefix + "stddev_samp",
+      core::AggregationNode::Step::kFinal,
+      stddevSampFinalSignatures);
+  registerAggregationFunctionForStep(
+      registry,
+      prefix + "stddev",
       core::AggregationNode::Step::kFinal,
       stddevSampFinalSignatures);
 }

@@ -353,14 +353,34 @@ struct GroupbyStddevSampAggregator : GroupbyAggregator {
       }
       case core::AggregationNode::Step::kIntermediate: {
         auto merged = std::move(results[outputIdx_].results[0]);
+
+        // Check if types already match expected output - avoid copies if so
+        const auto& outputType = asRowType(resultType);
+        auto const cudfCountType = cudf::data_type(
+            cudf_velox::veloxToCudfTypeId(outputType->childAt(0)));
+        auto const cudfMeanType = cudf::data_type(
+            cudf_velox::veloxToCudfTypeId(outputType->childAt(1)));
+        auto const cudfM2Type = cudf::data_type(
+            cudf_velox::veloxToCudfTypeId(outputType->childAt(2)));
+
         auto mergedView = merged->view();
-        // Copy children from the merged struct
+        bool typesMatch = mergedView.child(0).type() == cudfCountType &&
+            mergedView.child(1).type() == cudfMeanType &&
+            mergedView.child(2).type() == cudfM2Type;
+
+        if (typesMatch) {
+          // Types match - return merged directly to avoid device copies
+          return std::move(merged);
+        }
+
+        // Types don't match - need to copy and cast (use output_mr since
+        // these become part of the output)
         auto count = std::make_unique<cudf::column>(
-            mergedView.child(0), stream, get_temp_mr());
+            mergedView.child(0), stream, get_output_mr());
         auto mean = std::make_unique<cudf::column>(
-            mergedView.child(1), stream, get_temp_mr());
+            mergedView.child(1), stream, get_output_mr());
         auto m2 = std::make_unique<cudf::column>(
-            mergedView.child(2), stream, get_temp_mr());
+            mergedView.child(2), stream, get_output_mr());
         return makeM2StructColumn(
             std::move(count), std::move(mean), std::move(m2), stream);
       }
@@ -480,6 +500,10 @@ std::unique_ptr<GroupbyAggregator> createGroupbyAggregator(
     return std::make_unique<GroupbyMeanAggregator>(
         p.companionStep, p.inputIndex, p.constant, p.resultType);
   } else if (kind.rfind(prefix + "stddev_samp", 0) == 0) {
+    return std::make_unique<GroupbyStddevSampAggregator>(
+        p.companionStep, p.inputIndex, p.constant, p.resultType);
+  } else if (kind.rfind(prefix + "stddev", 0) == 0) {
+    // stddev is an alias for stddev_samp
     return std::make_unique<GroupbyStddevSampAggregator>(
         p.companionStep, p.inputIndex, p.constant, p.resultType);
   } else {
