@@ -16,8 +16,7 @@
 #include <velox/exec/HashPartitionFunction.h>
 #include <velox/exec/VectorHasher.h>
 
-#define XXH_INLINE_ALL
-#include <xxhash.h> // @manual=third-party//xxHash:xxhash
+#include "velox/common/base/XxHashInline.h"
 
 namespace facebook::velox::exec {
 namespace {

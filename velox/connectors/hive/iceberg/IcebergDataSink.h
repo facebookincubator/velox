@@ -91,7 +91,9 @@ class IcebergDataSink : public HiveDataSink {
   /// - fileSizeInBytes: raw bytes written to disk.
   /// - metrics: object with recordCount (number of rows written).
   /// - partitionSpecJson: partition specification.
-  /// - fileFormat: storage format (e.g., "PARQUET").
+  /// - fileFormat: storage format. Either "PARQUET" or "ORC". DWRF files
+  ///   are reported as "ORC" because Iceberg's file-format vocabulary has
+  ///   no DWRF enum.
   /// - content: file content type ("DATA" for data files).
   ///
   /// See
@@ -148,7 +150,7 @@ class IcebergDataSink : public HiveDataSink {
   // Additionally, extracts and stores the transformed partition values for
   // the writer in commitPartitionValue_ if not already set, which will be
   // included in the commit message as "partitionDataJson".
-  uint32_t ensureWriter(const HiveWriterId& id) override;
+  uint32_t ensureWriter(const WriterId& id) override;
 
   // Creates writer options configured for Iceberg table writes. Extends the
   // base HiveDataSink writer options with Iceberg-specific settings:

@@ -18,6 +18,7 @@
 #include <cstring>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/io/IoStatistics.h"
 #include "velox/dwio/common/Arena.h"
 #include "velox/dwio/common/InputStream.h"
 #include "velox/dwio/common/encryption/TestProvider.h"
@@ -111,7 +112,9 @@ class EncryptedStatsTest : public Test {
         std::make_unique<PostScript>(std::move(ps)),
         footerWrapper.getDwrfPtr(),
         nullptr,
-        std::move(handler));
+        std::move(handler),
+        dataIoStats_.get(),
+        metadataIoStats_.get());
   }
 
   void clearKey(uint32_t groupIdx) {
@@ -127,6 +130,10 @@ class EncryptedStatsTest : public Test {
   std::shared_ptr<MemoryPool> pool_;
   std::shared_ptr<MemoryPool> sinkPool_;
   std::shared_ptr<MemoryPool> readerPool_;
+  std::shared_ptr<facebook::velox::io::IoStatistics> dataIoStats_ =
+      std::make_shared<facebook::velox::io::IoStatistics>();
+  std::shared_ptr<facebook::velox::io::IoStatistics> metadataIoStats_ =
+      std::make_shared<facebook::velox::io::IoStatistics>();
 };
 
 TEST_F(EncryptedStatsTest, statistics) {
@@ -179,7 +186,9 @@ TEST_F(EncryptedStatsTest, getColumnStatisticsKeyNotLoaded) {
 
 std::unique_ptr<ReaderBase> createCorruptedFileReader(
     uint64_t footerLen,
-    uint32_t cacheLen) {
+    uint32_t cacheLen,
+    facebook::velox::io::IoStatistics& dataIoStats,
+    facebook::velox::io::IoStatistics& metadataIoStats) {
   auto pool = facebook::velox::memory::memoryManager()->addLeafPool();
   MemorySink sink{1024, {.pool = pool.get()}};
   DataBufferHolder holder{*pool, 1024, 0, DEFAULT_PAGE_GROW_RATIO, &sink};
@@ -214,7 +223,8 @@ std::unique_ptr<ReaderBase> createCorruptedFileReader(
   sink.write(std::move(buf));
   auto readFile = std::make_shared<facebook::velox::InMemoryReadFile>(
       std::string(sink.data(), sink.size()));
-  facebook::velox::dwio::common::ReaderOptions readerOpts{pool.get()};
+  facebook::velox::dwio::common::ReaderOptions readerOpts{
+      pool.get(), &dataIoStats, &metadataIoStats};
   return std::make_unique<ReaderBase>(
       readerOpts, std::make_unique<BufferedInput>(readFile, *pool));
 }
@@ -224,13 +234,16 @@ class ReaderBaseTest : public Test {
   static void SetUpTestCase() {
     MemoryManager::testingSetInstance(MemoryManager::Options{});
   }
+
+  facebook::velox::io::IoStatistics dataIoStats_;
+  facebook::velox::io::IoStatistics metadataIoStats_;
 };
 
 TEST_F(ReaderBaseTest, InvalidPostScriptThrows) {
   VELOX_ASSERT_THROW(
-      createCorruptedFileReader(1'000'000, 0),
+      createCorruptedFileReader(1'000'000, 0, dataIoStats_, metadataIoStats_),
       "Corrupted file, footer size is invalid");
   VELOX_ASSERT_THROW(
-      createCorruptedFileReader(0, 1'000'000),
+      createCorruptedFileReader(0, 1'000'000, dataIoStats_, metadataIoStats_),
       "Corrupted file, cache size is invalid");
 }

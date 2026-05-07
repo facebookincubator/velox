@@ -24,29 +24,63 @@ namespace facebook::velox::cudf_velox {
 void registerPrestoAggregateFunctions(const std::string& prefix) {
   using exec::FunctionSignatureBuilder;
 
-  // Presto (default): SUM(REAL) -> REAL, AVG(REAL) -> REAL
-  appendRegisterAggregationFunctionForStep(
+  unregisterAggregateFunctions();
+  registerCommonAggregationFunctions(getGroupbyAggregationRegistry(), prefix);
+  registerCommonAggregationFunctions(getReduceAggregationRegistry(), prefix);
+  registerReduceOnlyAggregationFunctions(
+      getReduceAggregationRegistry(), prefix);
+
+  // Presto (default): SUM(REAL) -> REAL, AVG(REAL) -> REAL.
+  appendGroupbyAggregationFunctionForStep(
       prefix + "sum",
       core::AggregationNode::Step::kSingle,
       FunctionSignatureBuilder()
           .returnType("real")
           .argumentType("real")
           .build());
-  appendRegisterAggregationFunctionForStep(
+  appendReduceAggregationFunctionForStep(
+      prefix + "sum",
+      core::AggregationNode::Step::kSingle,
+      FunctionSignatureBuilder()
+          .returnType("real")
+          .argumentType("real")
+          .build());
+  appendGroupbyAggregationFunctionForStep(
       prefix + "sum",
       core::AggregationNode::Step::kPartial,
       FunctionSignatureBuilder()
           .returnType("double")
           .argumentType("real")
           .build());
-  appendRegisterAggregationFunctionForStep(
+  appendReduceAggregationFunctionForStep(
+      prefix + "sum",
+      core::AggregationNode::Step::kPartial,
+      FunctionSignatureBuilder()
+          .returnType("double")
+          .argumentType("real")
+          .build());
+  appendGroupbyAggregationFunctionForStep(
       prefix + "sum",
       core::AggregationNode::Step::kFinal,
       FunctionSignatureBuilder()
           .returnType("real")
           .argumentType("double")
           .build());
-  appendRegisterAggregationFunctionForStep(
+  appendReduceAggregationFunctionForStep(
+      prefix + "sum",
+      core::AggregationNode::Step::kFinal,
+      FunctionSignatureBuilder()
+          .returnType("real")
+          .argumentType("double")
+          .build());
+  appendGroupbyAggregationFunctionForStep(
+      prefix + "sum",
+      core::AggregationNode::Step::kIntermediate,
+      FunctionSignatureBuilder()
+          .returnType("real")
+          .argumentType("double")
+          .build());
+  appendReduceAggregationFunctionForStep(
       prefix + "sum",
       core::AggregationNode::Step::kIntermediate,
       FunctionSignatureBuilder()
@@ -54,14 +88,28 @@ void registerPrestoAggregateFunctions(const std::string& prefix) {
           .argumentType("double")
           .build());
 
-  appendRegisterAggregationFunctionForStep(
+  appendGroupbyAggregationFunctionForStep(
       prefix + "avg",
       core::AggregationNode::Step::kSingle,
       FunctionSignatureBuilder()
           .returnType("real")
           .argumentType("real")
           .build());
-  appendRegisterAggregationFunctionForStep(
+  appendReduceAggregationFunctionForStep(
+      prefix + "avg",
+      core::AggregationNode::Step::kSingle,
+      FunctionSignatureBuilder()
+          .returnType("real")
+          .argumentType("real")
+          .build());
+  appendGroupbyAggregationFunctionForStep(
+      prefix + "avg",
+      core::AggregationNode::Step::kFinal,
+      FunctionSignatureBuilder()
+          .returnType("real")
+          .argumentType("row(double,bigint)")
+          .build());
+  appendReduceAggregationFunctionForStep(
       prefix + "avg",
       core::AggregationNode::Step::kFinal,
       FunctionSignatureBuilder()

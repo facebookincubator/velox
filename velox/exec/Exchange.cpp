@@ -77,7 +77,11 @@ Exchange::Exchange(
           common::stringToCompressionKind(operatorCtx_->driverCtx()
                                               ->queryConfig()
                                               .shuffleCompressionKind()),
-          serdeKind_)},
+          serdeKind_,
+          std::nullopt,
+          operatorCtx_->driverCtx()
+              ->queryConfig()
+              .minShuffleCompressionPageSizeBytes())},
       processSplits_{operatorCtx_->driverCtx()->driverId == 0},
       driverId_{driverCtx->driverId},
       exchangeClient_{std::move(exchangeClient)} {}
