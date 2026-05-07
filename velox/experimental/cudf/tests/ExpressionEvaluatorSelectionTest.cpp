@@ -23,6 +23,7 @@
 #include "velox/experimental/cudf/tests/utils/ExpressionTestUtil.h"
 
 #include "velox/common/memory/Memory.h"
+#include "velox/core/Expressions.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/expression/ConstantExpr.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -124,6 +125,99 @@ TEST_F(CudfExpressionSelectionTest, functionTopLevelWithNestedFunction) {
   // Top level should be Function
   auto* functionExpr = dynamic_cast<FunctionExpression*>(cudfExpr.get());
   ASSERT_NE(functionExpr, nullptr);
+}
+
+TEST_F(
+    CudfExpressionSelectionTest,
+    signatureAllowsRowConstructorAndDereference) {
+  auto row = compileExecExpr("row_constructor(a, b)", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(row, /*deep=*/true));
+
+  auto firstField =
+      compileExecExpr("row_constructor(a, b).c1", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(firstField, /*deep=*/true));
+
+  auto secondField =
+      compileExecExpr("row_constructor(a, 1).c2", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(secondField, /*deep=*/true));
+
+  auto nullLiteralField = compileExecExpr(
+      "row_constructor(a, cast(null as bigint)).c2", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(nullLiteralField, /*deep=*/true));
+
+  auto leadingNullField = compileExecExpr(
+      "row_constructor(cast(null as bigint), b).c1", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(leadingNullField, /*deep=*/true));
+
+  auto nestedField = compileExecExpr(
+      "row_constructor(row_constructor(a, cast(null as bigint)), b).c1.c2",
+      rowType_,
+      execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(nestedField, /*deep=*/true));
+}
+
+TEST_F(CudfExpressionSelectionTest, nestedRowDereferenceUsesFunctionEvaluator) {
+  auto prevAst = CudfConfig::getInstance().astExpressionEnabled;
+  auto prevJit = CudfConfig::getInstance().jitExpressionEnabled;
+  CudfConfig::getInstance().astExpressionEnabled = true;
+  CudfConfig::getInstance().jitExpressionEnabled = true;
+
+  auto expr = compileExecExpr(
+      "row_constructor(row_constructor(a, b), cast(null as bigint)).c1.c1",
+      rowType_,
+      execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(expr, /*deep=*/true));
+
+  auto cudfExpr = createCudfExpression(expr, rowType_);
+  auto* functionExpr = dynamic_cast<FunctionExpression*>(cudfExpr.get());
+  ASSERT_NE(functionExpr, nullptr);
+
+  CudfConfig::getInstance().astExpressionEnabled = prevAst;
+  CudfConfig::getInstance().jitExpressionEnabled = prevJit;
+}
+
+TEST_F(
+    CudfExpressionSelectionTest,
+    signatureAllowsRowConstructorDereferenceByIndex) {
+  auto unnamedRowType = ROW({{"", BIGINT()}, {"", BIGINT()}});
+  auto typed = std::make_shared<core::DereferenceTypedExpr>(
+      BIGINT(),
+      std::make_shared<core::CallTypedExpr>(
+          unnamedRowType,
+          std::vector<core::TypedExprPtr>{
+              std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "a"),
+              std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "b"),
+          },
+          "row_constructor"),
+      1);
+  exec::ExprSet exprSet(
+      {typed}, execCtx_.get(), /*enableConstantFolding*/ false);
+
+  auto expr = exprSet.expr(0);
+  ASSERT_TRUE(canBeEvaluatedByCudf(expr, /*deep=*/true));
+  ASSERT_NE(createCudfExpression(expr, rowType_), nullptr);
+}
+
+TEST_F(
+    CudfExpressionSelectionTest,
+    signatureAllowsRowConstructorDereferenceByName) {
+  auto namedRowType = ROW({{"left", BIGINT()}, {"right", BIGINT()}});
+  auto typed = std::make_shared<core::FieldAccessTypedExpr>(
+      BIGINT(),
+      std::make_shared<core::CallTypedExpr>(
+          namedRowType,
+          std::vector<core::TypedExprPtr>{
+              std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "a"),
+              std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "b"),
+          },
+          "row_constructor"),
+      "right");
+  exec::ExprSet exprSet(
+      {typed}, execCtx_.get(), /*enableConstantFolding=*/false);
+
+  auto expr = exprSet.expr(0);
+  ASSERT_TRUE(canBeEvaluatedByCudf(expr, /*deep=*/true));
+  ASSERT_NE(createCudfExpression(expr, rowType_), nullptr);
 }
 
 // Disabled because this test segfaults in CI in compileExecExpr step which does

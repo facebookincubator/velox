@@ -20,7 +20,10 @@
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/memory/Memory.h"
+#include "velox/core/QueryCtx.h"
 #include "velox/expression/ConstantExpr.h"
+#include "velox/expression/EvalCtx.h"
 #include "velox/expression/FieldReference.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/expression/SignatureBinder.h"
@@ -53,6 +56,7 @@
 #include <cudf/strings/split/split.hpp>
 #include <cudf/strings/string_view.hpp>
 #include <cudf/strings/strings_column_view.hpp>
+#include <cudf/structs/structs_column_view.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/transform.hpp>
 #include <cudf/types.hpp>
@@ -271,6 +275,22 @@ static bool matchCallAgainstSignatures(
   return false;
 }
 
+std::unique_ptr<cudf::column> makeOwnedColumn(
+    ColumnOrView& holder,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  return std::visit(
+      [&](auto& value) -> std::unique_ptr<cudf::column> {
+        using T = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<T, cudf::column_view>) {
+          return std::make_unique<cudf::column>(value, stream, mr);
+        } else {
+          return std::move(value);
+        }
+      },
+      holder);
+}
+
 void mergeSecondaryNullsIntoResult(
     cudf::column& result,
     cudf::column_view secondaryColumn,
@@ -299,6 +319,48 @@ void mergeSecondaryNullsIntoResult(
   auto [nullMask, nullCount] =
       cudf::bitmask_and(masks, beginBits, result.size(), stream, mr);
   result.set_null_mask(std::move(nullMask), nullCount);
+}
+
+std::unique_ptr<cudf::column> makeStructChildColumn(
+    cudf::column_view structColumn,
+    cudf::size_type childIndex,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  auto const childView = cudf::structs_column_view(structColumn)
+                             .get_sliced_child(childIndex, stream);
+  auto child = std::make_unique<cudf::column>(childView, stream, mr);
+  mergeSecondaryNullsIntoResult(*child, structColumn, stream, mr);
+  return child;
+}
+
+int32_t resolveFieldReferenceIndex(
+    const std::shared_ptr<velox::exec::FieldReference>& fieldExpr,
+    const RowTypePtr& parentRowType) {
+  VELOX_CHECK_NOT_NULL(parentRowType);
+  // FieldReference stores the compiled dereference index internally. Resolve it
+  // once during expression creation using a lightweight EvalCtx scoped to the
+  // parent ROW type so unnamed-field dereferences stay aligned with CPU.
+  auto pool = memory::memoryManager()->addLeafPool();
+  auto queryCtx = core::QueryCtx::Builder().pool(pool).build();
+  core::ExecCtx execCtx(pool.get(), queryCtx.get());
+  exec::ExprSet exprSet(
+      std::vector<core::TypedExprPtr>{},
+      &execCtx,
+      /*enableConstantFolding=*/false);
+
+  std::vector<VectorPtr> children;
+  children.reserve(parentRowType->size());
+  for (size_t childIndex = 0; childIndex < parentRowType->size();
+       ++childIndex) {
+    children.push_back(
+        BaseVector::createNullConstant(
+            parentRowType->childAt(childIndex), 1, pool.get()));
+  }
+
+  auto row = std::make_shared<RowVector>(
+      pool.get(), parentRowType, nullptr, 1, std::move(children), 0);
+  exec::EvalCtx evalCtx(&execCtx, &exprSet, row.get());
+  return fieldExpr->index(evalCtx);
 }
 
 } // namespace
@@ -1815,6 +1877,63 @@ class ConcatFunction : public CudfFunction {
   size_t numInputs_{0};
 };
 
+class RowConstructorFunction : public CudfFunction {
+ public:
+  explicit RowConstructorFunction(
+      const std::shared_ptr<velox::exec::Expr>& expr) {
+    using velox::exec::ConstantExpr;
+    VELOX_CHECK_GE(
+        expr->inputs().size(), 1, "row_constructor expects at least 1 input");
+    numInputs_ = expr->inputs().size();
+    bool hasNonLiteralInput = false;
+    literals_.reserve(numInputs_);
+    for (const auto& input : expr->inputs()) {
+      if (auto constant = std::dynamic_pointer_cast<ConstantExpr>(input)) {
+        literals_.push_back(makeScalarFromConstantExpr(constant));
+      } else {
+        hasNonLiteralInput = true;
+        literals_.push_back(nullptr);
+      }
+    }
+    if (!hasNonLiteralInput) {
+      VELOX_NYI("row_constructor with only literal inputs is not supported");
+    }
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    VELOX_CHECK(
+        !inputColumns.empty(),
+        "row_constructor requires at least one non-literal input column");
+    const cudf::size_type outputSize = asView(inputColumns[0]).size();
+
+    std::vector<std::unique_ptr<cudf::column>> children;
+    children.reserve(numInputs_);
+
+    size_t nextInputColumnIndex = 0;
+    for (const auto& literal : literals_) {
+      if (literal) {
+        children.push_back(
+            cudf::make_column_from_scalar(*literal, outputSize, stream, mr));
+      } else {
+        VELOX_CHECK_LT(nextInputColumnIndex, inputColumns.size());
+        children.push_back(
+            makeOwnedColumn(inputColumns[nextInputColumnIndex++], stream, mr));
+      }
+    }
+
+    VELOX_CHECK_EQ(nextInputColumnIndex, inputColumns.size());
+    return cudf::make_structs_column(
+        outputSize, std::move(children), 0, rmm::device_buffer{}, stream, mr);
+  }
+
+ private:
+  std::vector<std::unique_ptr<cudf::scalar>> literals_;
+  size_t numInputs_{0};
+};
+
 bool registerCudfFunction(
     const std::string& name,
     CudfFunctionFactory factory,
@@ -1920,6 +2039,14 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .argumentType("T")
            .variableArity("T")
            .build()});
+
+  // row_constructor is a special form and doesn't have a prefix in its name.
+  registerCudfFunction(
+      "row_constructor",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<RowConstructorFunction>(expr);
+      },
+      {});
 
   registerCudfFunction(
       "and",
@@ -2323,14 +2450,25 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 std::shared_ptr<FunctionExpression> FunctionExpression::create(
     const std::shared_ptr<velox::exec::Expr>& expr,
     const RowTypePtr& inputRowSchema) {
+  using velox::exec::FieldReference;
+
   auto node = std::make_shared<FunctionExpression>();
   node->expr_ = expr;
   node->inputRowSchema_ = inputRowSchema;
 
   auto name = expr->name();
   node->function_ = createCudfFunction(name, expr);
+  if (auto fieldExpr = std::dynamic_pointer_cast<FieldReference>(expr);
+      fieldExpr && !fieldExpr->inputs().empty()) {
+    VELOX_CHECK_EQ(
+        fieldExpr->inputs().size(),
+        1,
+        "Nested field reference expects exactly one input");
+    node->fieldIndex_ = resolveFieldReferenceIndex(
+        fieldExpr, asRowType(expr->inputs()[0]->type()));
+  }
 
-  if (node->function_) {
+  if (node->function_ || std::dynamic_pointer_cast<FieldReference>(expr)) {
     for (const auto& input : expr->inputs()) {
       if (input->name() != "literal") {
         node->subexpressions_.push_back(
@@ -2350,9 +2488,27 @@ ColumnOrView FunctionExpression::eval(
   using velox::exec::FieldReference;
 
   if (auto fieldExpr = std::dynamic_pointer_cast<FieldReference>(expr_)) {
-    auto name = fieldExpr->name();
-    auto columnIndex = inputRowSchema_->getChildIdx(name);
-    return inputColumnViews[columnIndex];
+    if (fieldExpr->inputs().empty()) {
+      auto columnIndex = inputRowSchema_->getChildIdx(fieldExpr->name());
+      return inputColumnViews[columnIndex];
+    }
+
+    VELOX_CHECK_EQ(
+        fieldExpr->inputs().size(),
+        1,
+        "Nested field reference expects exactly one input");
+    VELOX_CHECK_EQ(
+        subexpressions_.size(),
+        1,
+        "Nested field reference expects exactly one subexpression");
+
+    auto parent = subexpressions_[0]->eval(inputColumnViews, stream, mr);
+    auto parentView = asView(parent);
+    VELOX_CHECK(
+        parentView.type().id() == cudf::type_id::STRUCT,
+        "Nested field reference expects a ROW input");
+    VELOX_CHECK_GE(fieldIndex_, 0, "Nested field reference did not resolve");
+    return makeStructChildColumn(parentView, fieldIndex_, stream, mr);
   }
 
   if (function_) {

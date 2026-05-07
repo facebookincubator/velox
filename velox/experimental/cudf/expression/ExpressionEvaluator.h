@@ -161,6 +161,7 @@ class FunctionExpression : public CudfExpression {
   std::shared_ptr<velox::exec::Expr> expr_;
   std::shared_ptr<CudfFunction> function_;
   std::vector<std::shared_ptr<CudfExpression>> subexpressions_;
+  int32_t fieldIndex_{-1};
 
   RowTypePtr inputRowSchema_;
 };

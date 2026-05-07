@@ -298,7 +298,9 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
       stripPrefix(expr->name(), CudfConfig::getInstance().functionNamePrefix);
   const auto len = expr->inputs().size();
 
-  // Literals and field references are always supported
+  // Literals and top-level field references are always supported in pure
+  // AST/JIT. Nested field references are delegated to FunctionExpression so
+  // computed ROW values keep Velox's dereference semantics.
   auto isSupportedLiteral = [&](const TypePtr& type) {
     try {
       auto cudfType = veloxToCudfDataType(type);
@@ -314,14 +316,11 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
     return isSupportedLiteral(type);
   }
   if (auto fieldExpr = std::dynamic_pointer_cast<FieldReference>(expr)) {
-    const auto fieldName =
-        fieldExpr->inputs().empty() ? name : fieldExpr->inputs()[0]->name();
-    if (fieldExpr->field() == fieldName) {
-      return true;
-    }
-    LOG(WARNING) << "Field " << name << "not found, in expression "
-                 << expr->toString();
-    return false;
+    // Nested FieldReferences can reuse the same field name as their parent
+    // (e.g. .c1.c1), which makes the pure AST/JIT path misclassify them as a
+    // top-level column reference. Keep only true top-level fields here and let
+    // FunctionExpression handle nested ROW dereference semantics.
+    return fieldExpr->inputs().empty() && fieldExpr->field() == name;
   }
 
   // Convert input types to CUDF types once

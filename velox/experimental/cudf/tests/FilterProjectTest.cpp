@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
 
+#include "velox/core/Expressions.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
@@ -1153,13 +1154,7 @@ TEST_F(CudfFilterProjectTest, mixedLiteralProjection) {
   testMixedLiteralProjection(vectors);
 }
 
-// This test checks for CudfExpression's ability to handle nested field
-// references. However, to test this, we need to disable CPU fallback, otherwise
-// the test could pass by using CPU, having not exercised the CudfExpression at
-// all. But this test relies on row_constructor to construct the nested fields,
-// which CudfExpression doesn't support. Disabling this until we have a better
-// test
-TEST_F(CudfFilterProjectTest, DISABLED_dereference) {
+TEST_F(CudfFilterProjectTest, dereference) {
   auto rowType = ROW(
       {"c0", "c1", "c2", "c3"}, {BIGINT(), INTEGER(), SMALLINT(), DOUBLE()});
   auto vectors = makeVectors(rowType, 10, 100);
@@ -1179,6 +1174,21 @@ TEST_F(CudfFilterProjectTest, DISABLED_dereference) {
              .project({"c1_c2.c1", "c1_c2.c2"})
              .planNode();
   assertQuery(plan, "SELECT c1, c2 FROM tmp WHERE c1 % 10 = 5");
+}
+
+TEST_F(CudfFilterProjectTest, dereferenceWithLiteralAndNullFields) {
+  vector_size_t batchSize = 128;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  auto plan =
+      PlanBuilder()
+          .values(vectors)
+          .project({"row_constructor(c0, cast(null as integer), 'x') AS r"})
+          .project({"r.c1", "r.c2", "r.c3"})
+          .planNode();
+
+  assertQuery(plan, "SELECT c0, CAST(NULL AS INTEGER), 'x' FROM tmp");
 }
 
 TEST_F(CudfFilterProjectTest, cardinality) {
@@ -1497,6 +1507,84 @@ TEST_F(CudfSimpleFilterProjectTest, castToSmallInt) {
   auto tryCast =
       evaluateOnce<int16_t, int32_t>("try_cast(c0 as smallint)", -214);
   EXPECT_EQ(tryCast, -214);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, rowConstructorAndDereference) {
+  auto rowType = ROW({{"c0", INTEGER()}, {"c1", VARCHAR()}});
+  auto c0 = makeNullableFlatVector<int32_t>({1, std::nullopt, 3});
+  auto c1 = makeNullableFlatVector<std::string>({"x", "y", std::nullopt});
+  auto input = makeRowVector({c0, c1});
+
+  assertExpressionMatchesCpu("row_constructor(c0, c1).c1", input, rowType);
+  assertExpressionMatchesCpu("row_constructor(c0, c1).c2", input, rowType);
+  assertExpressionMatchesCpu("row_constructor(c0, 1).c2", input, rowType);
+  assertExpressionMatchesCpu(
+      "row_constructor(c0, cast(null as varchar)).c1", input, rowType);
+  assertExpressionMatchesCpu(
+      "row_constructor(c0, cast(null as varchar)).c2", input, rowType);
+  assertExpressionMatchesCpu(
+      "row_constructor(cast(null as integer), c1).c1", input, rowType);
+  assertExpressionMatchesCpu(
+      "row_constructor(cast(null as integer), c1).c2", input, rowType);
+  assertExpressionMatchesCpu("row_constructor(c0, 'z').c2", input, rowType);
+  assertExpressionMatchesCpu(
+      "row_constructor(row_constructor(c0, c1), cast(null as integer)).c1.c1",
+      input,
+      rowType);
+  assertExpressionMatchesCpu(
+      "row_constructor(row_constructor(c0, c1), cast(null as integer)).c1.c2",
+      input,
+      rowType);
+  assertExpressionMatchesCpu(
+      "row_constructor(row_constructor(c0, cast(null as varchar)), 1).c1.c2",
+      input,
+      rowType);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, rowConstructorDereferenceByIndex) {
+  auto c0 = makeNullableFlatVector<int32_t>({1, std::nullopt, 3});
+  auto c1 = makeNullableFlatVector<std::string>({"x", "y", std::nullopt});
+  auto input = makeRowVector({c0, c1});
+
+  auto unnamedRowType = ROW({{"", INTEGER()}, {"", VARCHAR()}});
+  auto typed = std::make_shared<core::DereferenceTypedExpr>(
+      VARCHAR(),
+      std::make_shared<core::CallTypedExpr>(
+          unnamedRowType,
+          std::vector<core::TypedExprPtr>{
+              std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c0"),
+              std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c1"),
+          },
+          "row_constructor"),
+      1);
+  exec::ExprSet exprSet({typed}, &execCtx_, /*enableConstantFolding*/ false);
+
+  auto expected = functions::test::FunctionBaseTest::evaluate(exprSet, input);
+  auto actual = evaluate(exprSet, input);
+  facebook::velox::test::assertEqualVectors(expected, actual);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, rowConstructorDereferenceByName) {
+  auto c0 = makeNullableFlatVector<int32_t>({1, std::nullopt, 3});
+  auto c1 = makeNullableFlatVector<std::string>({"x", "y", std::nullopt});
+  auto input = makeRowVector({c0, c1});
+
+  auto namedRowType = ROW({{"left", INTEGER()}, {"right", VARCHAR()}});
+  auto typed = std::make_shared<core::FieldAccessTypedExpr>(
+      VARCHAR(),
+      std::make_shared<core::CallTypedExpr>(
+          namedRowType,
+          std::vector<core::TypedExprPtr>{
+              std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c0"),
+              std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c1"),
+          },
+          "row_constructor"),
+      "right");
+  exec::ExprSet exprSet({typed}, &execCtx_, /*enableConstantFolding*/ false);
+
+  auto expected = functions::test::FunctionBaseTest::evaluate(exprSet, input);
+  auto actual = evaluate(exprSet, input);
+  facebook::velox::test::assertEqualVectors(expected, actual);
 }
 
 // Test unary math functions
