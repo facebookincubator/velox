@@ -81,7 +81,8 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
 
   // Create the Reader and RowReader
 
-  dwio::common::ReaderOptions deleteReaderOpts(pool_);
+  dwio::common::ReaderOptions deleteReaderOpts(
+      pool_, ioStatistics_.get(), ioStatistics_.get());
   configureReaderOptions(
       fileConfig_,
       connectorQueryCtx,

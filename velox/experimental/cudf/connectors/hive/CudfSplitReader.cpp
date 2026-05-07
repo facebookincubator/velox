@@ -74,7 +74,8 @@ CudfSplitReader::CudfSplitReader(
       cudfHiveConfig_(cudfHiveConfig),
       pool_(connectorQueryCtx->memoryPool()),
       useExperimentalCudfReader_(useExperimentalCudfReader),
-      baseReaderOpts_(pool_),
+      baseReaderOpts_(pool_, ioStatistics_.get(), ioStatistics_.get()),
+
       subfieldFilterExpr_(subfieldFilterExpr) {}
 
 void CudfSplitReader::prepareSplit(
@@ -354,7 +355,7 @@ void CudfSplitReader::totalScanTimeCalculator(void* userData) {
   auto elapsedNs = elapsedUs * 1000; // Convert microseconds to nanoseconds
 
   // Update totalScanTime
-  data->ioStatistics->incTotalScanTime(elapsedNs);
+  data->ioStatistics->incTotalScanTimeNs(elapsedNs);
 
   delete data;
 }
