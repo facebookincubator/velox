@@ -992,6 +992,16 @@ static void customAggregateFinalize(
 
 } // namespace
 
+struct DuckDbQueryPlanner::Impl {
+  ::duckdb::DuckDB db;
+  ::duckdb::Connection conn{db};
+};
+
+DuckDbQueryPlanner::DuckDbQueryPlanner(memory::MemoryPool* pool)
+    : impl_{std::make_unique<Impl>()}, pool_{pool} {}
+
+DuckDbQueryPlanner::~DuckDbQueryPlanner() = default;
+
 PlanNodePtr parseQuery(
     const std::string& sql,
     memory::MemoryPool* pool,
@@ -1014,7 +1024,7 @@ void DuckDbQueryPlanner::registerTable(
 
   auto createTableSql =
       duckdb::makeCreateTableSql(name, *asRowType(data[0]->type()));
-  auto res = conn_.Query(createTableSql);
+  auto res = impl_->conn.Query(createTableSql);
   VELOX_CHECK(
       !res->HasError(), "Failed to create DuckDB table: {}", res->GetError());
 
@@ -1028,7 +1038,7 @@ void DuckDbQueryPlanner::registerTable(
       tables_.count(name), 0, "Table is already registered: {}", name);
 
   auto createTableSql = duckdb::makeCreateTableSql(name, *type);
-  auto res = conn_.Query(createTableSql);
+  auto res = impl_->conn.Query(createTableSql);
 }
 
 void DuckDbQueryPlanner::registerScalarFunction(
@@ -1040,7 +1050,7 @@ void DuckDbQueryPlanner::registerScalarFunction(
     argDuckTypes.push_back(duckdb::fromVeloxType(type));
   }
 
-  conn_.CreateVectorizedFunction(
+  impl_->conn.CreateVectorizedFunction(
       name,
       argDuckTypes,
       duckdb::fromVeloxType(returnType),
@@ -1056,7 +1066,7 @@ void DuckDbQueryPlanner::registerAggregateFunction(
     argDuckTypes.push_back(duckdb::fromVeloxType(type));
   }
 
-  conn_.CreateAggregateFunction(
+  impl_->conn.CreateAggregateFunction(
       name,
       argDuckTypes,
       duckdb::fromVeloxType(returnType),
@@ -1070,9 +1080,9 @@ void DuckDbQueryPlanner::registerAggregateFunction(
 PlanNodePtr DuckDbQueryPlanner::plan(const std::string& sql) {
   // Disable the optimizer. Otherwise, the filter over table scan gets pushdown
   // as a callback that is impossible to recover.
-  conn_.Query("PRAGMA disable_optimizer");
+  impl_->conn.Query("PRAGMA disable_optimizer");
 
-  auto plan = conn_.ExtractPlan(sql);
+  auto plan = impl_->conn.ExtractPlan(sql);
 
   QueryContext queryContext{tables_};
   queryContext.makeTableScan = makeTableScan_;
