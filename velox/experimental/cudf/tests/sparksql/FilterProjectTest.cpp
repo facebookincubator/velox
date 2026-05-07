@@ -28,6 +28,7 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/sparksql/registration/Register.h"
 #include "velox/parse/TypeResolver.h"
+#include "velox/type/TimestampConversion.h"
 
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox;
@@ -117,6 +118,32 @@ TEST_F(CudfFilterProjectTest, dateAdd) {
   // Account for the last day of a year-month
   EXPECT_EQ(parseDate("2020-02-29"), dateAdd("2019-01-30", 395));
   EXPECT_EQ(parseDate("2020-02-29"), dateAdd("2019-01-30", 395));
+}
+
+TEST_F(CudfFilterProjectTest, dateTruncTimestamp) {
+  auto parseTs = [](const char* str) {
+    auto result = util::fromTimestampString(
+        StringView(str), util::TimestampParseMode::kLegacyCast);
+    VELOX_CHECK(result.hasValue(), "Bad timestamp: {}", str);
+    return result.value();
+  };
+
+  const auto dateTrunc = [&](const std::string& unit, Timestamp ts) {
+    return evaluateOnce<Timestamp>(
+        fmt::format("date_trunc('{}', c0)", unit),
+        {TIMESTAMP()},
+        std::optional<Timestamp>(ts));
+  };
+
+  auto ts = parseTs("2025-01-15 12:01:01.123");
+
+  EXPECT_EQ(parseTs("2025-01-15 12:01:01"), dateTrunc("second", ts));
+  EXPECT_EQ(parseTs("2025-01-15 12:01:00"), dateTrunc("minute", ts));
+  EXPECT_EQ(parseTs("2025-01-15 12:00:00"), dateTrunc("hour", ts));
+  EXPECT_EQ(parseTs("2025-01-15 00:00:00"), dateTrunc("day", ts));
+  EXPECT_EQ(parseTs("2025-01-01 00:00:00"), dateTrunc("month", ts));
+  EXPECT_EQ(parseTs("2025-01-01 00:00:00"), dateTrunc("quarter", ts));
+  EXPECT_EQ(parseTs("2025-01-01 00:00:00"), dateTrunc("year", ts));
 }
 
 TEST_F(CudfFilterProjectTest, startswith) {
@@ -586,6 +613,5 @@ TEST_F(CudfFilterProjectTest, unaryMathFunctions) {
   // Absolute value
   testUnaryFunction("abs(c0)", -5.5, 5.5);
 }
-
 } // namespace
 } // namespace facebook::velox::cudf_velox

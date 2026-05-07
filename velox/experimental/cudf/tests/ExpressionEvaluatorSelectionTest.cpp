@@ -56,7 +56,7 @@ class CudfExpressionSelectionTest : public ::testing::Test {
         {"b", BIGINT()},
         {"c", INTEGER()},
         {"name", VARCHAR()},
-        {"date", TIMESTAMP()},
+        {"date", DATE()},
         {"c", INTEGER()},
     });
 

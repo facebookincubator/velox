@@ -14,13 +14,61 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/expression/DateTruncFunction.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
+#include "velox/experimental/cudf/expression/prestosql/DateAddFunction.h"
+#include "velox/experimental/cudf/expression/prestosql/DatePlusIntervalFunction.h"
+
+#include "velox/expression/FunctionSignature.h"
 
 namespace facebook::velox::cudf_velox {
 
 void registerPrestoFunctions(const std::string& prefix) {
-  // Presto-specific functions will be registered here in the future
+  using exec::FunctionSignatureBuilder;
+
+  registerCudfFunction(
+      prefix + "plus",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<prestosql::DatePlusIntervalFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("date")
+           .argumentType("date")
+           .argumentType("interval day to second")
+           .build()});
+
+  registerCudfFunction(
+      prefix + "date_add",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<prestosql::DateAddFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("date")
+           .constantArgumentType("varchar")
+           .argumentType("bigint")
+           .argumentType("date")
+           .build()},
+      true,
+      prestosql::DateAddFunction::canEvaluate);
+
+  registerCudfFunction(
+      prefix + "date_trunc",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<DateTruncFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("timestamp")
+           .constantArgumentType("varchar")
+           .argumentType("timestamp")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("date")
+           .constantArgumentType("varchar")
+           .argumentType("date")
+           .build()},
+      true,
+      DateTruncFunction::canEvaluate);
 }
 
 } // namespace facebook::velox::cudf_velox
