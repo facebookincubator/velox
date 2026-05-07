@@ -86,7 +86,7 @@ services:
     image: ghcr.io/facebookincubator/velox-dev:presto-java
     build:
       args:
-        - PRESTO_VERSION=0.295
+        - PRESTO_VERSION=0.297
       dockerfile: scripts/docker/java.dockerfile
 
   spark-server:
