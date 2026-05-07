@@ -1177,10 +1177,12 @@ void flattenAndExport(
   auto flatVector = BaseVector::create<FlatVector<NativeType>>(
       vec.type(), decoded.size(), pool);
 
-  if (decoded.mayHaveNulls() || nulls != nullptr) {
+  const auto mayHaveNulls = decoded.mayHaveNulls();
+  const auto* rawNulls = nulls == nullptr ? nullptr : nulls->as<uint64_t>();
+  if (mayHaveNulls || rawNulls != nullptr) {
     allRows.applyToSelected([&](vector_size_t row) {
-      if ((nulls != nullptr && bits::isBitNull(nulls->as<uint64_t>(), row)) ||
-          (decoded.mayHaveNulls() && decoded.isNullAt(row))) {
+      if ((rawNulls != nullptr && bits::isBitNull(rawNulls, row)) ||
+          (mayHaveNulls && decoded.isNullAt(row))) {
         flatVector->setNull(row, true);
       } else {
         flatVector->set(row, decoded.valueAt<NativeType>(row));
@@ -1222,7 +1224,7 @@ void exportDictionary(
     auto* rawNulls = nulls->as<uint64_t>();
     auto* rawIndices = vec.wrapInfo()->as<vector_size_t>();
     rows.apply([&](vector_size_t i) {
-      if (!bits::isBitNull(rawNulls, i) && !vec.isNullAt(i)) {
+      if (!bits::isBitNull(rawNulls, i)) {
         bits::setNull(rawDictionaryNulls, rawIndices[i], false);
       }
     });
@@ -1327,7 +1329,6 @@ void exportConstant(
     rows.apply([&](vector_size_t i) {
       if (!bits::isBitNull(rawNulls, i)) {
         allRowsNull = false;
-        return;
       }
     });
   }
@@ -1385,6 +1386,10 @@ void exportToArrowImpl(
     ownNulls = vec.nulls();
   }
 
+  // Keep this ArrowArray's validity bitmap aligned with the vector's own nulls.
+  // Parent nulls are only used to mask child/value export.
+  exportValidityBitmap(vec, rows, options, out, pool, *holder);
+
   // Calculate the effective nulls buffer used to skip values masked by parent
   // nodes. Arrow validity for this array still uses only this vector's own
   // nulls.
@@ -1400,7 +1405,6 @@ void exportToArrowImpl(
         vec.size());
     effectiveNulls = std::move(mergedNulls);
   }
-  exportValidityBitmap(vec, rows, options, out, pool, *holder);
 
   switch (vec.encoding()) {
     case VectorEncoding::Simple::FLAT: {

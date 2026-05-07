@@ -757,17 +757,21 @@ TEST_F(ArrowBridgeArrayExportTest, parentNullsMaskTimestampOverflow) {
   vector = vectorMaker_.rowVector({"ts"}, {dictionary});
   vector->setNull(1, true);
   vector->setNullCount(1);
-  options_.flattenDictionary = true;
-  assertExportsWithoutOverflow(
-      vector, [&](const arrow::Array& array, TimestampUnit unit) {
-        const auto& structArray =
-            dynamic_cast<const arrow::StructArray&>(array);
-        ASSERT_TRUE(structArray.IsNull(1));
-        const auto& values =
-            dynamic_cast<const arrow::TimestampArray&>(*structArray.field(0));
-        assertTimestampValues(values, 0, 2, unit);
-      });
-  options_.flattenDictionary = false;
+  {
+    options_.flattenDictionary = true;
+    SCOPE_EXIT {
+      options_.flattenDictionary = false;
+    };
+    assertExportsWithoutOverflow(
+        vector, [&](const arrow::Array& array, TimestampUnit unit) {
+          const auto& structArray =
+              dynamic_cast<const arrow::StructArray&>(array);
+          ASSERT_TRUE(structArray.IsNull(1));
+          const auto& values =
+              dynamic_cast<const arrow::TimestampArray&>(*structArray.field(0));
+          assertTimestampValues(values, 0, 2, unit);
+        });
+  }
 
   // ROW<ts: DICTIONARY<TIMESTAMP>>
   dictionary =
