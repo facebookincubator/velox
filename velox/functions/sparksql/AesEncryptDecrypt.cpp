@@ -15,6 +15,7 @@
  */
 
 #include "velox/functions/sparksql/AesEncryptDecrypt.h"
+#include "velox/common/EnumDefine.h"
 
 namespace facebook::velox::functions::sparksql::detail {
 
