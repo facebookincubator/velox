@@ -63,6 +63,14 @@ set(
 set(VELOX_cudf_SOURCE_URL "https://github.com/rapidsai/cudf/archive/${VELOX_cudf_COMMIT}.tar.gz")
 velox_resolve_dependency_url(cudf)
 
+set(VELOXX_ucxx_VERSION 0.49)
+set(
+  VELOX_ucxx_BUILD_SHA256_CHECKSUM
+  64c890eb501939cc05da9a005f16d354499023b388ba6f8a0994b7920cd034b9
+)
+set(VELOX_ucxx_SOURCE_URL "https://github.com/rapidsai/ucxx/archive/refs/tags/v0.49.00.tar.gz")
+velox_resolve_dependency_url(ucxx)
+
 # Use block so we don't leak variables
 block(SCOPE_FOR VARIABLES)
   # Setup libcudf build to not have testing components
@@ -104,7 +112,17 @@ block(SCOPE_FOR VARIABLES)
     UPDATE_DISCONNECTED 1
   )
 
+  FetchContent_Declare(
+    ucxx
+    URL ${VELOX_ucxx_SOURCE_URL}
+    URL_HASH ${VELOX_ucxx_BUILD_SHA256_CHECKSUM}
+    SOURCE_SUBDIR
+    cpp
+    UPDATE_DISCONNECTED 1
+  )
+
   FetchContent_MakeAvailable(cudf)
+  FetchContent_MakeAvailable(ucxx)
 
   # cudf sets all warnings as errors, and therefore fails to compile with velox
   # expanded set of warnings. We selectively disable problematic warnings just for
