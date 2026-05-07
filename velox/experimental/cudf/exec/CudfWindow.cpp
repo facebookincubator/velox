@@ -25,7 +25,6 @@
 
 #include <cudf/aggregation.hpp>
 #include <cudf/column/column_factories.hpp>
-#include <cudf/copying.hpp>
 #include <cudf/groupby.hpp>
 #include <cudf/rolling.hpp>
 #include <cudf/scalar/scalar_factories.hpp>
@@ -414,15 +413,8 @@ void CudfWindow::doNoMoreInput() {
 
     auto allView = allData->view();
     auto keyTable = allView.select(allSortKeys);
-    auto indices = cudf::stable_sorted_order(
-        keyTable, allOrders, allNullOrders, stream_, mr);
-    sortedData_ = cudf::gather(
-        allView,
-        indices->view(),
-        cudf::out_of_bounds_policy::DONT_CHECK,
-        cudf::negative_index_policy::NOT_ALLOWED,
-        stream_,
-        mr);
+    sortedData_ = cudf::stable_sort_by_key(
+        allView, keyTable, allOrders, allNullOrders, stream_, mr);
   } else {
     sortedData_ = std::move(allData);
   }
