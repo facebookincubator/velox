@@ -1720,4 +1720,150 @@ TEST_F(CudfFilterProjectTest, andAndAndWithDecimalDivideBelowExpr) {
   facebook::velox::test::assertEqualVectors(expected, result);
 }
 
+TEST_F(CudfSimpleFilterProjectTest, roundDouble) {
+  parse::ParseOptions options;
+  options.parseIntegerAsBigint = false;
+
+  // round(double) with no scale (defaults to 0)
+  auto data = makeRowVector(
+      {makeFlatVector<double>({3.14159, 2.71828, -1.5, 0.5, 100.999})});
+  auto plan = PlanBuilder()
+                  .setParseOptions(options)
+                  .values({data})
+                  .project({"round(c0) as c1"})
+                  .planNode();
+  auto expected =
+      makeRowVector({makeFlatVector<double>({3.0, 3.0, -2.0, 1.0, 101.0})});
+  AssertQueryBuilder(plan).assertResults(expected);
+
+  // round(double, 2)
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0, 2) as c1"})
+             .planNode();
+  expected =
+      makeRowVector({makeFlatVector<double>({3.14, 2.72, -1.5, 0.5, 101.0})});
+  AssertQueryBuilder(plan).assertResults(expected);
+
+  // round(double, -1) — round to nearest 10
+  data =
+      makeRowVector({makeFlatVector<double>({123.456, -987.654, 55.0, 5.0})});
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0, -1) as c1"})
+             .planNode();
+  expected =
+      makeRowVector({makeFlatVector<double>({120.0, -990.0, 60.0, 10.0})});
+  AssertQueryBuilder(plan).assertResults(expected);
+
+  // round(double, -3) — round to nearest 1000
+  data = makeRowVector({makeFlatVector<double>({4123.0, 456789098.0})});
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0, -3) as c1"})
+             .planNode();
+  expected = makeRowVector({makeFlatVector<double>({4000.0, 456789000.0})});
+  AssertQueryBuilder(plan).assertResults(expected);
+
+  // Large values
+  data = makeRowVector({makeFlatVector<double>({1e15 + 0.5, -1e15 - 0.5})});
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0) as c1"})
+             .planNode();
+  expected = makeRowVector({makeFlatVector<double>({1e15 + 1.0, -1e15 - 1.0})});
+  AssertQueryBuilder(plan).assertResults(expected);
+
+  // Corner cases: IEEE-754 half-way values and representation artifacts.
+  // The FLOAT64 round path JIT-compiles Velox CPU's round algorithm
+  // (std::round(x * factor) / factor), so the result depends on the actual
+  // binary value of the input and on any rounding introduced by the factor
+  // multiply. For example, 2.675 is stored as 2.6749999999999998 but
+  // multiplied by 100 lands on the exactly-representable 267.5 tie, which
+  // std::round rounds away from zero to 268 -> 2.68. By contrast, 1.005 is
+  // stored as 1.0049999999999999 and multiplied by 100 falls just below
+  // 100.5, which rounds down to 100 -> 1.00.
+  data = makeRowVector({makeFlatVector<double>({
+      // HALF_UP ties at integer magnitudes.
+      2.5,
+      3.5,
+      -2.5,
+      -3.5,
+      2.675,
+      0.1,
+      0.3,
+      1.005,
+      1.0000000000000002,
+      0.0,
+      0.5,
+      -0.5,
+      -1.5,
+      -2.675,
+      -1.6,
+      -1.645,
+      0.125,
+      1e-10,
+      999999999999999.5,
+  })});
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0) as c1"})
+             .planNode();
+  expected = makeRowVector({makeFlatVector<double>({
+      3.0,
+      4.0,
+      -3.0,
+      -4.0,
+      3.0,
+      0.0,
+      0.0,
+      1.0,
+      1.0,
+      0.0,
+      1.0,
+      -1.0,
+      -2.0,
+      -3.0,
+      -2.0,
+      -2.0,
+      0.0,
+      0.0,
+      1e15,
+  })});
+  AssertQueryBuilder(plan).assertResults(expected);
+
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0, 2) as c1"})
+             .planNode();
+  expected = makeRowVector({makeFlatVector<double>({
+      2.5,
+      3.5,
+      -2.5,
+      -3.5,
+      2.68,
+      0.1,
+      0.3,
+      1.0,
+      1.0,
+      0.0,
+      0.5,
+      -0.5,
+      -1.5,
+      -2.68,
+      -1.6,
+      -1.65,
+      0.13,
+      0.0,
+      999999999999999.5,
+  })});
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
 } // namespace
