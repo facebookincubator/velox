@@ -157,7 +157,7 @@ TEST_F(ToCudfSelectionTest, mixedSupportFallsBack) {
                   .values(vectors)
                   .aggregation(
                       {"c0"},
-                      {"sum(c1)", "stddev(c2)"},
+                      {"sum(c1)", "variance(c2)"},
                       {},
                       core::AggregationNode::Step::kSingle,
                       false)
@@ -167,7 +167,7 @@ TEST_F(ToCudfSelectionTest, mixedSupportFallsBack) {
       AssertQueryBuilder(duckDbQueryRunner_)
           .config("cudf.enabled", true)
           .plan(plan)
-          .assertResults("SELECT c0, sum(c1), stddev(c2) FROM tmp GROUP BY c0");
+          .assertResults("SELECT c0, sum(c1), variance(c2) FROM tmp GROUP BY c0");
 
   ASSERT_FALSE(wasCudfAggregationUsed(task));
   ASSERT_TRUE(wasDefaultHashAggregationUsed(task));
@@ -266,7 +266,7 @@ TEST_F(ToCudfSelectionTest, unsupportedAggregationFunctionsFallsBack) {
                   .values(vectors)
                   .aggregation(
                       {"c0"},
-                      {"sum(c1)", "stddev(c2)"},
+                      {"sum(c1)", "variance(c2)"},
                       {},
                       core::AggregationNode::Step::kSingle,
                       false)
@@ -276,7 +276,7 @@ TEST_F(ToCudfSelectionTest, unsupportedAggregationFunctionsFallsBack) {
       AssertQueryBuilder(duckDbQueryRunner_)
           .config("cudf.enabled", true)
           .plan(plan)
-          .assertResults("SELECT c0, sum(c1), stddev(c2) FROM tmp GROUP BY c0");
+          .assertResults("SELECT c0, sum(c1), variance(c2) FROM tmp GROUP BY c0");
 
   ASSERT_FALSE(wasCudfAggregationUsed(task));
   ASSERT_TRUE(wasDefaultHashAggregationUsed(task));
