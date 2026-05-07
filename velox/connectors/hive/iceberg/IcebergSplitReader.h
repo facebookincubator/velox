@@ -43,7 +43,8 @@ class IcebergSplitReader : public FileSplitReader {
       const std::shared_ptr<IoStats>& ioStats,
       FileHandleFactory* fileHandleFactory,
       folly::Executor* executor,
-      const std::shared_ptr<common::ScanSpec>& scanSpec);
+      const std::shared_ptr<common::ScanSpec>& scanSpec,
+      std::shared_ptr<ColumnHandleMap> columnHandles);
 
   ~IcebergSplitReader() override = default;
 
@@ -147,5 +148,9 @@ class IcebergSplitReader : public FileSplitReader {
   /// Readers for equality delete files.
   std::list<std::unique_ptr<EqualityDeleteFileReader>>
       equalityDeleteFileReaders_;
+
+  /// Column handles map shared with IcebergDataSource.
+  /// Used for accessing column metadata including initial-default values.
+  std::shared_ptr<ColumnHandleMap> columnHandles_;
 };
 } // namespace facebook::velox::connector::hive::iceberg
