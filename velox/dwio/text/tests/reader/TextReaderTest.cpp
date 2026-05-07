@@ -14,7 +14,10 @@
  * limitations under the License.
  */
 
+#include "velox/common/file/File.h"
 #include "velox/common/io/IoStatistics.h"
+#include "velox/common/testutil/TempFilePath.h"
+#include "velox/connectors/hive/ExtractionUtils.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/dwio/text/RegisterTextReader.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -24,6 +27,7 @@ extern long timezone;
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
+using facebook::velox::common::testutil::TempFilePath;
 
 namespace facebook::velox::text {
 
@@ -1964,6 +1968,285 @@ TEST_F(TextReaderTest, unsupportedCompressedKind) {
     EXPECT_THROW(
         factory->createReader(std::move(input), readerOptions),
         VeloxRuntimeError);
+  }
+}
+
+TEST_F(TextReaderTest, extractionMapKeys) {
+  // Read a text file with a MAP column and apply a MapKeys extraction transform
+  // via ScanSpec.  The text reader uses RowReader::projectColumns() as
+  // fallback, which should apply the transform.
+  const auto type = ROW(
+      {{"col_string", VARCHAR()},
+       {"col_bigint_arr", ARRAY(BIGINT())},
+       {"col_double_arr", ARRAY(DOUBLE())},
+       {"col_map", MAP(BIGINT(), BOOLEAN())}});
+  auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
+
+  auto path = velox::test::getDataFilePath(
+      "velox/dwio/text/tests/reader/", "examples/custom_delimiters_file");
+  auto readFile = std::make_shared<LocalReadFile>(path);
+
+  auto serDeOptions = dwio::common::SerDeOptions('\t', '|', '#', '\\', true);
+  auto readerOptions = dwio::common::ReaderOptions(
+      pool(), dataIoStats_.get(), metadataIoStats_.get());
+  readerOptions.setFileSchema(type);
+  readerOptions.setSerDeOptions(serDeOptions);
+
+  auto input =
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+  auto reader = factory->createReader(std::move(input), readerOptions);
+
+  // Build a ScanSpec that projects only col_map with a MapKeys extraction
+  // transform.
+  auto spec = std::make_shared<common::ScanSpec>("root");
+  auto* mapSpec = spec->addField("col_map", 0);
+  mapSpec->addAllChildFields(*MAP(BIGINT(), BOOLEAN()));
+
+  using connector::hive::applyExtractionChain;
+  using connector::hive::ExtractionPathElement;
+  using connector::hive::ExtractionPathElementPtr;
+  using connector::hive::ExtractionStep;
+  auto chain = std::vector<ExtractionPathElementPtr>{
+      ExtractionPathElement::simple(ExtractionStep::kMapKeys)};
+  mapSpec->setExtractionType(common::ScanSpec::ExtractionType::kKeys);
+  mapSpec->setTransform(
+      [chain](const VectorPtr& input, memory::MemoryPool* pool) -> VectorPtr {
+        return applyExtractionChain(input, chain, pool);
+      },
+      ARRAY(BIGINT()));
+
+  auto rowReaderOptions = dwio::common::RowReaderOptions();
+  rowReaderOptions.setScanSpec(spec);
+  rowReaderOptions.range(0, 544);
+  auto rowReader = reader->createRowReader(rowReaderOptions);
+
+  VectorPtr result;
+  auto numRows = rowReader->next(100, result);
+  ASSERT_GT(numRows, 0);
+  auto* row = result->as<RowVector>();
+  ASSERT_EQ(row->childrenSize(), 1);
+
+  // Verify the transform was applied: the result should be ARRAY(BIGINT)
+  // (keys), not MAP.
+  auto* keysArray = row->childAt(0)->as<ArrayVector>();
+  ASSERT_NE(keysArray, nullptr);
+  ASSERT_EQ(keysArray->size(), numRows);
+
+  // Each map in the test file has some keys.  Verify array sizes are
+  // non-negative.
+  for (int i = 0; i < numRows; ++i) {
+    ASSERT_GE(keysArray->sizeAt(i), 0);
+  }
+}
+
+TEST_F(TextReaderTest, extractionMapValues) {
+  // Read a text file with a MAP column and apply a MapValues extraction
+  // transform via ScanSpec.
+  const auto type = ROW(
+      {{"col_string", VARCHAR()},
+       {"col_bigint_arr", ARRAY(BIGINT())},
+       {"col_double_arr", ARRAY(DOUBLE())},
+       {"col_map", MAP(BIGINT(), BOOLEAN())}});
+  auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
+
+  auto path = velox::test::getDataFilePath(
+      "velox/dwio/text/tests/reader/", "examples/custom_delimiters_file");
+  auto readFile = std::make_shared<LocalReadFile>(path);
+
+  auto serDeOptions = dwio::common::SerDeOptions('\t', '|', '#', '\\', true);
+  auto readerOptions = dwio::common::ReaderOptions(
+      pool(), dataIoStats_.get(), metadataIoStats_.get());
+  readerOptions.setFileSchema(type);
+  readerOptions.setSerDeOptions(serDeOptions);
+
+  auto input =
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+  auto reader = factory->createReader(std::move(input), readerOptions);
+
+  // Build a ScanSpec that projects only col_map with a MapValues extraction
+  // transform.
+  auto spec = std::make_shared<common::ScanSpec>("root");
+  auto* mapSpec = spec->addField("col_map", 0);
+  mapSpec->addAllChildFields(*MAP(BIGINT(), BOOLEAN()));
+
+  using connector::hive::applyExtractionChain;
+  using connector::hive::ExtractionPathElement;
+  using connector::hive::ExtractionPathElementPtr;
+  using connector::hive::ExtractionStep;
+  auto chain = std::vector<ExtractionPathElementPtr>{
+      ExtractionPathElement::simple(ExtractionStep::kMapValues)};
+  mapSpec->setExtractionType(common::ScanSpec::ExtractionType::kValues);
+  mapSpec->setTransform(
+      [chain](const VectorPtr& input, memory::MemoryPool* pool) -> VectorPtr {
+        return applyExtractionChain(input, chain, pool);
+      },
+      ARRAY(BOOLEAN()));
+
+  auto rowReaderOptions = dwio::common::RowReaderOptions();
+  rowReaderOptions.setScanSpec(spec);
+  rowReaderOptions.range(0, 544);
+  auto rowReader = reader->createRowReader(rowReaderOptions);
+
+  VectorPtr result;
+  auto numRows = rowReader->next(100, result);
+  ASSERT_GT(numRows, 0);
+  auto* row = result->as<RowVector>();
+  ASSERT_EQ(row->childrenSize(), 1);
+
+  // Verify the transform was applied: the result should be ARRAY(BOOLEAN)
+  // (values), not MAP.
+  auto* valuesArray = row->childAt(0)->as<ArrayVector>();
+  ASSERT_NE(valuesArray, nullptr);
+  ASSERT_EQ(valuesArray->size(), numRows);
+
+  // Verify array sizes are non-negative.
+  for (int i = 0; i < numRows; ++i) {
+    ASSERT_GE(valuesArray->sizeAt(i), 0);
+  }
+}
+
+TEST_F(TextReaderTest, extractionMapKeyFilter) {
+  // Write a text file with a MAP(VARCHAR, BIGINT) column and apply a
+  // MapKeyFilter extraction transform via ScanSpec.
+  auto textFile = TempFilePath::create();
+  {
+    auto writeFile =
+        std::make_unique<LocalWriteFile>(textFile->getPath(), true, false);
+    // Row format: map entries separated by \x02, key-value by \x03.
+    // Row 0: {"a":1, "b":2, "c":3}
+    // Row 1: {"a":10, "d":40}
+    writeFile->append(
+        "a\x03"
+        "1\x02"
+        "b\x03"
+        "2\x02"
+        "c\x03"
+        "3\n"
+        "a\x03"
+        "10\x02"
+        "d\x03"
+        "40\n");
+    writeFile->close();
+  }
+
+  const auto type = ROW({{"col_map", MAP(VARCHAR(), BIGINT())}});
+  auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
+
+  auto readFile = std::make_shared<LocalReadFile>(textFile->getPath());
+  auto readerOptions = dwio::common::ReaderOptions(
+      pool(), dataIoStats_.get(), metadataIoStats_.get());
+  readerOptions.setFileSchema(type);
+
+  auto input =
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+  auto reader = factory->createReader(std::move(input), readerOptions);
+
+  // Build a ScanSpec with MapKeyFilter extraction for keys {"a", "b"}.
+  auto spec = std::make_shared<common::ScanSpec>("root");
+  auto* mapSpec = spec->addField("col_map", 0);
+  mapSpec->addAllChildFields(*MAP(VARCHAR(), BIGINT()));
+
+  using connector::hive::applyExtractionChain;
+  using connector::hive::ExtractionPathElement;
+  using connector::hive::ExtractionPathElementPtr;
+  using connector::hive::ExtractionStep;
+  auto chain = std::vector<ExtractionPathElementPtr>{
+      ExtractionPathElement::mapKeyFilter(std::vector<std::string>{"a", "b"})};
+  mapSpec->setTransform(
+      [chain](const VectorPtr& input, memory::MemoryPool* pool) -> VectorPtr {
+        return applyExtractionChain(input, chain, pool);
+      },
+      MAP(VARCHAR(), BIGINT()));
+
+  auto serDeOptions = dwio::common::SerDeOptions('\x01', '\x02', '\x03');
+  readerOptions.setSerDeOptions(serDeOptions);
+  input = std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+  reader = factory->createReader(std::move(input), readerOptions);
+
+  auto rowReaderOptions = dwio::common::RowReaderOptions();
+  rowReaderOptions.setScanSpec(spec);
+  auto rowReader = reader->createRowReader(rowReaderOptions);
+
+  VectorPtr result;
+  auto numRows = rowReader->next(100, result);
+  ASSERT_EQ(numRows, 2);
+  auto* row = result->as<RowVector>();
+  ASSERT_EQ(row->childrenSize(), 1);
+
+  // Verify the MapKeyFilter was applied: only keys "a" and "b" remain.
+  auto* filteredMap = row->childAt(0)->as<MapVector>();
+  ASSERT_NE(filteredMap, nullptr);
+  // Row 0: {"a":1, "b":2} kept, "c" filtered out.
+  ASSERT_EQ(filteredMap->sizeAt(0), 2);
+  // Row 1: {"a":10} kept, "d" filtered out.
+  ASSERT_EQ(filteredMap->sizeAt(1), 1);
+}
+
+TEST_F(TextReaderTest, extractionTransformOnMapColumn) {
+  // Read a text file with a MAP column and apply a Size extraction transform
+  // via ScanSpec.  The text reader uses RowReader::projectColumns() as
+  // fallback, which should apply the transform.
+  const auto type = ROW(
+      {{"col_string", VARCHAR()},
+       {"col_bigint_arr", ARRAY(BIGINT())},
+       {"col_double_arr", ARRAY(DOUBLE())},
+       {"col_map", MAP(BIGINT(), BOOLEAN())}});
+  auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
+
+  auto path = velox::test::getDataFilePath(
+      "velox/dwio/text/tests/reader/", "examples/custom_delimiters_file");
+  auto readFile = std::make_shared<LocalReadFile>(path);
+
+  auto serDeOptions = dwio::common::SerDeOptions('\t', '|', '#', '\\', true);
+  auto readerOptions = dwio::common::ReaderOptions(
+      pool(), dataIoStats_.get(), metadataIoStats_.get());
+  readerOptions.setFileSchema(type);
+  readerOptions.setSerDeOptions(serDeOptions);
+
+  auto input =
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+  auto reader = factory->createReader(std::move(input), readerOptions);
+
+  // Build a ScanSpec that projects only col_map with a Size extraction
+  // transform.
+  auto spec = std::make_shared<common::ScanSpec>("root");
+  auto* mapSpec = spec->addField("col_map", 0);
+  mapSpec->addAllChildFields(*MAP(BIGINT(), BOOLEAN()));
+
+  using connector::hive::applyExtractionChain;
+  using connector::hive::ExtractionPathElement;
+  using connector::hive::ExtractionPathElementPtr;
+  using connector::hive::ExtractionStep;
+  auto chain = std::vector<ExtractionPathElementPtr>{
+      ExtractionPathElement::simple(ExtractionStep::kSize)};
+  mapSpec->setExtractionType(common::ScanSpec::ExtractionType::kSize);
+  mapSpec->setTransform(
+      [chain](const VectorPtr& input, memory::MemoryPool* pool) -> VectorPtr {
+        return applyExtractionChain(input, chain, pool);
+      },
+      BIGINT());
+
+  auto rowReaderOptions = dwio::common::RowReaderOptions();
+  rowReaderOptions.setScanSpec(spec);
+  rowReaderOptions.range(0, 544);
+  auto rowReader = reader->createRowReader(rowReaderOptions);
+
+  VectorPtr result;
+  auto numRows = rowReader->next(100, result);
+  ASSERT_GT(numRows, 0);
+  auto* row = result->as<RowVector>();
+  ASSERT_EQ(row->childrenSize(), 1);
+
+  // Verify the transform was applied: the result should be BIGINT (sizes),
+  // not MAP.
+  auto* sizes = row->childAt(0)->as<FlatVector<int64_t>>();
+  ASSERT_NE(sizes, nullptr);
+  ASSERT_EQ(sizes->size(), numRows);
+
+  // Each map entry in the test file has some keys.  Just verify sizes are
+  // non-negative.
+  for (int i = 0; i < numRows; ++i) {
+    ASSERT_GE(sizes->valueAt(i), 0);
   }
 }
 
