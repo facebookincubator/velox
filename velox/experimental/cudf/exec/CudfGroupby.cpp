@@ -370,7 +370,7 @@ struct GroupbyStddevSampAggregator : GroupbyAggregator {
 
         if (typesMatch) {
           // Types match - return merged directly to avoid device copies
-          return std::move(merged);
+          return merged;
         }
 
         // Types don't match - need to copy and cast (use output_mr since
