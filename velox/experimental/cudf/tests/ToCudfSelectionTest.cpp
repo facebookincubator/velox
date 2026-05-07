@@ -163,11 +163,11 @@ TEST_F(ToCudfSelectionTest, mixedSupportFallsBack) {
                       false)
                   .planNode();
 
-  auto task =
-      AssertQueryBuilder(duckDbQueryRunner_)
-          .config("cudf.enabled", true)
-          .plan(plan)
-          .assertResults("SELECT c0, sum(c1), variance(c2) FROM tmp GROUP BY c0");
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .config("cudf.enabled", true)
+                  .plan(plan)
+                  .assertResults(
+                      "SELECT c0, sum(c1), variance(c2) FROM tmp GROUP BY c0");
 
   ASSERT_FALSE(wasCudfAggregationUsed(task));
   ASSERT_TRUE(wasDefaultHashAggregationUsed(task));
@@ -272,11 +272,11 @@ TEST_F(ToCudfSelectionTest, unsupportedAggregationFunctionsFallsBack) {
                       false)
                   .planNode();
 
-  auto task =
-      AssertQueryBuilder(duckDbQueryRunner_)
-          .config("cudf.enabled", true)
-          .plan(plan)
-          .assertResults("SELECT c0, sum(c1), variance(c2) FROM tmp GROUP BY c0");
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .config("cudf.enabled", true)
+                  .plan(plan)
+                  .assertResults(
+                      "SELECT c0, sum(c1), variance(c2) FROM tmp GROUP BY c0");
 
   ASSERT_FALSE(wasCudfAggregationUsed(task));
   ASSERT_TRUE(wasDefaultHashAggregationUsed(task));
