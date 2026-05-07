@@ -96,6 +96,28 @@ function install_duckdb {
   fi
 }
 
+function installed_duckdb_matches_version {
+  local cmake_dir
+  for cmake_dir in "${INSTALL_PREFIX}"/lib/cmake/DuckDB "${INSTALL_PREFIX}"/lib64/cmake/DuckDB; do
+    if [[ -f "${cmake_dir}/DuckDBConfigVersion.cmake" ]] &&
+      grep -q "PACKAGE_VERSION \"${DUCKDB_VERSION}\"" "${cmake_dir}/DuckDBConfigVersion.cmake"; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+function install_duckdb_if_needed {
+  if installed_duckdb_matches_version; then
+    echo "DuckDB ${DUCKDB_VERSION} is already installed."
+    return
+  fi
+
+  echo "Installing DuckDB ${DUCKDB_VERSION}."
+  BUILD_DUCKDB=true install_duckdb
+}
+
 function install_boost {
   wget_and_untar https://github.com/boostorg/boost/releases/download/"${BOOST_VERSION}"/"${BOOST_VERSION}".tar.gz boost
   (
