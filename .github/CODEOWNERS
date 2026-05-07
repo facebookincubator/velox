@@ -34,7 +34,7 @@ scripts/ @assignUser @majetideepak
 velox/experimental/breeze @dreveman
 
 # cuDF
-velox/experimental/cudf/ @bdice @karthikeyann @devavret @mhaseeb123
+velox/experimental/cudf/ @bdice @karthikeyann @devavret @mhaseeb123 @shrshi @simoneves @mattgara
 
 # Parquet
 velox/dwio/parquet/ @majetideepak
