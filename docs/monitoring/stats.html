@@ -614,8 +614,9 @@ multiple stripes.</p></td>
 <tr class="row-even"><td><p>numIndexLookupStripes</p></td>
 <td></td>
 <td><p>The total number of stripes that need to be read for all index lookup
-requests. Multiple requests may share the same stripe, and each shared
-stripe is counted once per request that needs it.</p></td>
+requests. Within a single startLookup() call, a stripe shared by
+multiple requests is counted once; across different startLookup() calls,
+the same stripe is counted separately for each call.</p></td>
 </tr>
 <tr class="row-odd"><td><p>numIndexMatchedRows</p></td>
 <td></td>
@@ -636,6 +637,32 @@ selectivity within stripes.</p></td>
 <td><p>The number of times a stripe has been loaded during index lookup. This
 metric helps track the I/O efficiency of index-based reads, where lower
 values indicate better stripe reuse across lookups.</p></td>
+</tr>
+<tr class="row-even"><td><p>numIndexDistinctStripesLoaded</p></td>
+<td></td>
+<td><p>The number of distinct stripes loaded across the lifetime of the index
+reader. Comparing with numStripeLoads (which counts every load call)
+reveals redundant loads of the same stripe.</p></td>
+</tr>
+<tr class="row-odd"><td><p>indexStripeLoadWallNanos</p></td>
+<td><p>nanos</p></td>
+<td><p>Wall time spent loading stripes (or equivalent format-specific load
+unit) during index lookup, summed across all stripe loads.</p></td>
+</tr>
+<tr class="row-even"><td><p>indexStripeLoadCpuNanos</p></td>
+<td><p>nanos</p></td>
+<td><p>CPU time spent loading stripes during index lookup. May undercount on
+async/prefetch paths.</p></td>
+</tr>
+<tr class="row-odd"><td><p>indexDataDecodeWallNanos</p></td>
+<td><p>nanos</p></td>
+<td><p>Wall time spent decoding column data from loaded stripes during index
+lookup, summed across all read segments.</p></td>
+</tr>
+<tr class="row-even"><td><p>indexDataDecodeCpuNanos</p></td>
+<td><p>nanos</p></td>
+<td><p>CPU time spent decoding column data from loaded stripes during index
+lookup. Same prefetch undercounting caveat as indexStripeLoadCpuNanos.</p></td>
 </tr>
 </tbody>
 </table>
