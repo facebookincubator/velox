@@ -49,7 +49,7 @@ TableInfo readTableInfo(
     }
 
     if (info.dataFiles.empty()) {
-      dwio::common::ReaderOptions readerOptions{pool};
+      dwio::common::ReaderOptions readerOptions{pool, nullptr, nullptr};
       readerOptions.setFileFormat(format);
       auto readFile = filesystems::getFileSystem(entry.path().string(), nullptr)
                           ->openFileForRead(entry.path().string());
