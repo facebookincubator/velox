@@ -41,46 +41,6 @@
 
 namespace facebook::velox::cudf_velox {
 
-namespace {
-
-std::pair<cudf::window_bounds, cudf::window_bounds> toWindowBounds(
-    const core::WindowNode::Frame& frame) {
-  auto toBound = [](core::WindowNode::BoundType type,
-                    const core::TypedExprPtr& value) -> cudf::window_bounds {
-    switch (type) {
-      case core::WindowNode::BoundType::kUnboundedPreceding:
-      case core::WindowNode::BoundType::kUnboundedFollowing:
-        return cudf::window_bounds::unbounded();
-      case core::WindowNode::BoundType::kCurrentRow:
-        return cudf::window_bounds::get(0);
-      case core::WindowNode::BoundType::kPreceding:
-      case core::WindowNode::BoundType::kFollowing: {
-        if (value) {
-          if (auto constExpr =
-                  std::dynamic_pointer_cast<const core::ConstantTypedExpr>(
-                      value)) {
-            if (constExpr->hasValueVector()) {
-              return cudf::window_bounds::get(constExpr->valueVector()
-                                                  ->as<SimpleVector<int64_t>>()
-                                                  ->valueAt(0));
-            }
-            return cudf::window_bounds::get(
-                constExpr->value().value<int64_t>());
-          }
-        }
-        return cudf::window_bounds::get(1);
-      }
-      default:
-        return cudf::window_bounds::unbounded();
-    }
-  };
-  return {
-      toBound(frame.startType, frame.startValue),
-      toBound(frame.endType, frame.endValue)};
-}
-
-} // namespace
-
 std::unique_ptr<cudf::column> CudfWindow::computeRankColumn(
     cudf::table_view const& sortedInput,
     const std::string& baseName,
@@ -353,7 +313,39 @@ std::unique_ptr<cudf::column> CudfWindow::computeAggregateColumn(
         mr);
   }
 
-  auto [preceding, following] = toWindowBounds(func.frame);
+  // Convert Velox frame bounds to cudf window bounds.
+  auto toBound = [](core::WindowNode::BoundType type,
+                    const core::TypedExprPtr& value) -> cudf::window_bounds {
+    switch (type) {
+      case core::WindowNode::BoundType::kUnboundedPreceding:
+      case core::WindowNode::BoundType::kUnboundedFollowing:
+        return cudf::window_bounds::unbounded();
+      case core::WindowNode::BoundType::kCurrentRow:
+        return cudf::window_bounds::get(0);
+      case core::WindowNode::BoundType::kPreceding:
+      case core::WindowNode::BoundType::kFollowing: {
+        if (value) {
+          if (auto constExpr =
+                  std::dynamic_pointer_cast<const core::ConstantTypedExpr>(
+                      value)) {
+            if (constExpr->hasValueVector()) {
+              return cudf::window_bounds::get(constExpr->valueVector()
+                                                  ->as<SimpleVector<int64_t>>()
+                                                  ->valueAt(0));
+            }
+            return cudf::window_bounds::get(
+                constExpr->value().value<int64_t>());
+          }
+        }
+        return cudf::window_bounds::get(1);
+      }
+      default:
+        return cudf::window_bounds::unbounded();
+    }
+  };
+  auto preceding = toBound(func.frame.startType, func.frame.startValue);
+  auto following = toBound(func.frame.endType, func.frame.endValue);
+
   return cudf::grouped_rolling_window(
       partKeys, inputCol, preceding, following, 1, *agg, stream, mr);
 }
