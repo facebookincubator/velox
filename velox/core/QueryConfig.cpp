@@ -204,7 +204,7 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     VELOX_REGISTER_QUERY_CONFIG(kDebugLambdaFunctionEvaluationBatchSize);
     VELOX_REGISTER_QUERY_CONFIG(kDebugBingTileChildrenMaxZoomShift);
 
-    // Nimble.
+    // Nimble (deprecated, kept for backward compatibility).
     VELOX_REGISTER_QUERY_CONFIG(kSelectiveNimbleReaderEnabled);
 
     // Scale writer.

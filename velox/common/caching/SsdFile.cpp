@@ -232,6 +232,9 @@ CoalesceIoStats SsdFile::load(
         read(offset, buffers);
       });
 
+  common::testutil::TestValue::adjust(
+      "facebook::velox::cache::SsdFile::load", this);
+
   for (auto i = 0; i < ssdPins.size(); ++i) {
     pins[i].checkedEntry()->setSsdFile(this, ssdPins[i].run().offset());
     auto* entry = pins[i].checkedEntry();
