@@ -32,4 +32,80 @@ const auto& cipherModeNames() {
 
 VELOX_DEFINE_ENUM_NAME(CipherMode, cipherModeNames);
 
+CipherConfig parseModeAndPadding(
+    const std::string& modeStr,
+    const std::string& paddingStr) {
+  CipherConfig config;
+
+  if (modeStr == "ECB") {
+    config.mode = CipherMode::ECB;
+    config.ivLen = 0;
+    config.supportsAad = false;
+  } else if (modeStr == "CBC") {
+    config.mode = CipherMode::CBC;
+    config.ivLen = 16;
+    config.supportsAad = false;
+  } else if (modeStr == "GCM") {
+    config.mode = CipherMode::GCM;
+    config.ivLen = 12;
+    config.supportsAad = true;
+  } else {
+    config.error = fmt::format("Unsupported AES mode: {}", modeStr);
+    return config;
+  }
+
+  if (paddingStr == "DEFAULT") {
+    config.usePkcs = (config.mode != CipherMode::GCM);
+  } else if (paddingStr == "PKCS") {
+    if (config.mode == CipherMode::GCM) {
+      config.error = "PKCS padding is not supported for GCM mode";
+      return config;
+    }
+    config.usePkcs = true;
+  } else if (paddingStr == "NONE") {
+    config.usePkcs = false;
+  } else {
+    config.error = fmt::format("Unsupported AES padding: {}", paddingStr);
+    return config;
+  }
+
+  return config;
+}
+
+const EVP_CIPHER* getCipher(CipherMode mode, int keyLen) {
+  switch (mode) {
+    case CipherMode::ECB:
+      switch (keyLen) {
+        case 16:
+          return EVP_aes_128_ecb();
+        case 24:
+          return EVP_aes_192_ecb();
+        case 32:
+          return EVP_aes_256_ecb();
+      }
+      break;
+    case CipherMode::CBC:
+      switch (keyLen) {
+        case 16:
+          return EVP_aes_128_cbc();
+        case 24:
+          return EVP_aes_192_cbc();
+        case 32:
+          return EVP_aes_256_cbc();
+      }
+      break;
+    case CipherMode::GCM:
+      switch (keyLen) {
+        case 16:
+          return EVP_aes_128_gcm();
+        case 24:
+          return EVP_aes_192_gcm();
+        case 32:
+          return EVP_aes_256_gcm();
+      }
+      break;
+  }
+  VELOX_UNREACHABLE();
+}
+
 } // namespace facebook::velox::functions::sparksql::detail
