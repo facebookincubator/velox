@@ -50,6 +50,12 @@ void registerCommonAggregationFunctions(
     StepAwareAggregationRegistry& registry,
     const std::string& prefix);
 
+/// Shared groupby-only aggregation registration (e.g., stddev_samp which uses
+/// M2/MERGE_M2 aggregations that are only available for groupby).
+void registerGroupbyOnlyAggregationFunctions(
+    StepAwareAggregationRegistry& registry,
+    const std::string& prefix);
+
 /// Shared reduce-only registration used by engine-specific builders.
 void registerReduceOnlyAggregationFunctions(
     StepAwareAggregationRegistry& registry,
