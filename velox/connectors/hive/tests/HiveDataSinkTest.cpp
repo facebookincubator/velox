@@ -1909,6 +1909,74 @@ TEST_F(HiveDataSinkTest, appendPartitionedExistingTableSessionOverride) {
   }
 }
 
+// Verifies that consecutive sink lifecycles writing into the same partitioned
+// table directory accumulate files instead of overwriting prior writes. The
+// first lifecycle creates the partitions (kNew). Subsequent lifecycles open
+// the table as kExisting with APPEND behavior and must add new files
+// alongside the ones already on disk.
+TEST_F(HiveDataSinkTest, appendPartitionedExistingTableMultipleLifecycles) {
+  const auto outputDirectory = TempDirectoryPath::create();
+  const auto partitionedRowType = ROW(
+      {"c0", "c1", "c2", "p0"}, {BIGINT(), INTEGER(), SMALLINT(), VARCHAR()});
+
+  auto makeBatch = [&](int lifecycle) {
+    auto c0 = makeFlatVector<int64_t>(
+        200, [lifecycle](auto row) { return row + lifecycle * 1'000; });
+    auto c1 = makeFlatVector<int32_t>(
+        200, [lifecycle](auto row) { return (row + lifecycle) * 2; });
+    auto c2 = makeFlatVector<int16_t>(200, [](auto row) { return row % 100; });
+    auto p0 = makeFlatVector<StringView>(
+        200, [](auto row) { return row % 2 == 0 ? "part_a" : "part_b"; });
+    return makeRowVector({c0, c1, c2, p0});
+  };
+
+  // Lifecycle 0: create the partitions on disk.
+  {
+    auto dataSink = createDataSink(
+        partitionedRowType,
+        outputDirectory->getPath(),
+        dwio::common::FileFormat::DWRF,
+        {"p0"});
+    dataSink->appendData(makeBatch(0));
+    ASSERT_TRUE(dataSink->finish());
+    const auto partitions = dataSink->close();
+    ASSERT_EQ(partitions.size(), 2);
+    for (const auto& partition : partitions) {
+      expectUpdateMode(partition, "NEW");
+    }
+  }
+  ASSERT_EQ(listFiles(outputDirectory->getPath()).size(), 2);
+
+  // Subsequent lifecycles: kExisting + APPEND must add files alongside.
+  connectorConfig_ = std::make_shared<HiveConfig>(
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>{
+              {HiveConfig::kInsertExistingPartitionsBehavior, "APPEND"}}));
+
+  for (int lifecycle = 1; lifecycle <= 2; ++lifecycle) {
+    SCOPED_TRACE(fmt::format("lifecycle={}", lifecycle));
+    auto dataSink = createDataSink(
+        partitionedRowType,
+        outputDirectory->getPath(),
+        dwio::common::FileFormat::DWRF,
+        {"p0"},
+        nullptr,
+        nullptr,
+        false,
+        connector::hive::LocationHandle::TableType::kExisting);
+    dataSink->appendData(makeBatch(lifecycle));
+    ASSERT_TRUE(dataSink->finish());
+    const auto partitions = dataSink->close();
+    ASSERT_EQ(partitions.size(), 2);
+    for (const auto& partition : partitions) {
+      expectUpdateMode(partition, "APPEND");
+    }
+    // Each lifecycle adds one file per partition; prior files persist.
+    ASSERT_EQ(
+        listFiles(outputDirectory->getPath()).size(), 2 * (lifecycle + 1));
+  }
+}
+
 // Verifies APPEND mode on an existing partitioned-and-bucketed table. Each
 // partition commit message reports updateMode=APPEND and contains one file
 // per bucket.
@@ -1958,6 +2026,109 @@ TEST_F(HiveDataSinkTest, appendPartitionedBucketedExistingTable) {
   ASSERT_EQ(partitions.size(), 2 * numBuckets);
   for (const auto& partition : partitions) {
     expectUpdateMode(partition, "APPEND");
+  }
+}
+
+// Verifies that consecutive sink lifecycles writing into the same partitioned
+// + bucketed table accumulate files instead of overwriting prior writes. Each
+// lifecycle uses a distinct queryId because bucketed file names are derived
+// deterministically from (queryId, bucketId) and would otherwise collide.
+TEST_F(
+    HiveDataSinkTest,
+    appendPartitionedBucketedExistingTableMultipleLifecycles) {
+  const auto outputDirectory = TempDirectoryPath::create();
+  const auto partitionedRowType = ROW(
+      {"c0", "c1", "c2", "p0"}, {BIGINT(), INTEGER(), SMALLINT(), VARCHAR()});
+
+  const int32_t numBuckets = 4;
+  auto bucketProperty = std::make_shared<HiveBucketProperty>(
+      HiveBucketProperty::Kind::kHiveCompatible,
+      numBuckets,
+      std::vector<std::string>{"c0"},
+      std::vector<TypePtr>{BIGINT()},
+      std::vector<std::shared_ptr<const HiveSortingColumn>>{});
+
+  // Each partition takes a contiguous c0 range so that c0 % numBuckets covers
+  // every bucket residue within both partitions. Splitting by row parity
+  // instead would leave half the buckets empty per partition.
+  auto makeBatch = [&](int lifecycle) {
+    auto c0 = makeFlatVector<int64_t>(
+        400, [lifecycle](auto row) { return row + lifecycle * 1'000; });
+    auto c1 = makeFlatVector<int32_t>(
+        400, [lifecycle](auto row) { return (row + lifecycle) * 2; });
+    auto c2 = makeFlatVector<int16_t>(400, [](auto row) { return row % 100; });
+    auto p0 = makeFlatVector<StringView>(
+        400, [](auto row) { return row < 200 ? "part_a" : "part_b"; });
+    return makeRowVector({c0, c1, c2, p0});
+  };
+
+  auto installQueryContext = [&](int lifecycle) {
+    setConnectorQueryContext(std::make_unique<connector::ConnectorQueryCtx>(
+        opPool_.get(),
+        connectorPool_.get(),
+        connectorSessionProperties_.get(),
+        nullptr,
+        common::PrefixSortConfig(),
+        nullptr,
+        nullptr,
+        fmt::format("query.lifecycle{}", lifecycle),
+        fmt::format("task.lifecycle{}", lifecycle),
+        "planNodeId.HiveDataSinkTest",
+        0,
+        ""));
+  };
+
+  // Lifecycle 0: kNew creates the partitions and buckets on disk.
+  installQueryContext(0);
+  {
+    auto dataSink = createDataSink(
+        partitionedRowType,
+        outputDirectory->getPath(),
+        dwio::common::FileFormat::DWRF,
+        {"p0"},
+        bucketProperty);
+    dataSink->appendData(makeBatch(0));
+    while (!dataSink->finish()) {
+    }
+    const auto partitions = dataSink->close();
+    ASSERT_EQ(partitions.size(), 2 * numBuckets);
+    for (const auto& partition : partitions) {
+      expectUpdateMode(partition, "NEW");
+    }
+  }
+  ASSERT_EQ(listFiles(outputDirectory->getPath()).size(), 2 * numBuckets);
+
+  // Subsequent lifecycles: kExisting + APPEND must add files alongside.
+  connectorConfig_ = std::make_shared<HiveConfig>(
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>{
+              {HiveConfig::kInsertExistingPartitionsBehavior, "APPEND"}}));
+
+  for (int lifecycle = 1; lifecycle <= 2; ++lifecycle) {
+    SCOPED_TRACE(fmt::format("lifecycle={}", lifecycle));
+    installQueryContext(lifecycle);
+    auto dataSink = createDataSink(
+        partitionedRowType,
+        outputDirectory->getPath(),
+        dwio::common::FileFormat::DWRF,
+        {"p0"},
+        bucketProperty,
+        nullptr,
+        false,
+        connector::hive::LocationHandle::TableType::kExisting);
+    dataSink->appendData(makeBatch(lifecycle));
+    while (!dataSink->finish()) {
+    }
+    const auto partitions = dataSink->close();
+    ASSERT_EQ(partitions.size(), 2 * numBuckets);
+    for (const auto& partition : partitions) {
+      expectUpdateMode(partition, "APPEND");
+    }
+    // Each lifecycle adds one file per (partition, bucket); prior files
+    // persist.
+    ASSERT_EQ(
+        listFiles(outputDirectory->getPath()).size(),
+        2 * numBuckets * (lifecycle + 1));
   }
 }
 
