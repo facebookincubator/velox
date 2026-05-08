@@ -20,10 +20,28 @@ namespace facebook::velox::dwrf {
 
 template <typename DataT>
 SelectiveDecimalColumnReader<DataT>::SelectiveDecimalColumnReader(
+    const TypePtr& requestedType,
     const std::shared_ptr<const TypeWithId>& fileType,
     DwrfParams& params,
     common::ScanSpec& scanSpec)
-    : SelectiveColumnReader(fileType->type(), fileType, params, scanSpec) {
+    // Use requestedType (table schema) when it is a decimal of the same
+    // TypeKind as the file type.  This allows the reader to rescale values
+    // from the ORC file's precision/scale to the metastore-declared
+    // precision/scale, so that NativeScan output matches the vanilla Spark
+    // scan path and decimal join-key comparisons succeed.
+    //
+    // When the TypeKinds differ (e.g. file is HUGEINT but table declares
+    // BIGINT) we fall back to the file type to avoid buffer-size mismatches
+    // in getIntValues(); in that case the Gluten fallback-tag logic will
+    // ensure symmetric scan behaviour at the join level.
+    : SelectiveColumnReader(
+          (requestedType && requestedType->isDecimal() &&
+           requestedType->kind() == fileType->type()->kind())
+              ? requestedType
+              : fileType->type(),
+          fileType,
+          params,
+          scanSpec) {
   EncodingKey encodingKey{fileType_->id(), params.flatMapContext().sequence};
   auto& stripe = params.stripeStreams();
   if constexpr (std::is_same_v<DataT, std::int64_t>) {

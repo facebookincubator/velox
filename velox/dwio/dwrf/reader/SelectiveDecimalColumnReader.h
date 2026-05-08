@@ -29,6 +29,7 @@ template <typename DataT>
 class SelectiveDecimalColumnReader : public SelectiveColumnReader {
  public:
   SelectiveDecimalColumnReader(
+      const TypePtr& requestedType,
       const std::shared_ptr<const TypeWithId>& fileType,
       DwrfParams& params,
       common::ScanSpec& scanSpec);
