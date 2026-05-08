@@ -191,9 +191,13 @@ RowVectorPtr CudfGroupId::doGetOutput() {
     auto inputIdx = aggregationInputs_[i];
     auto outputIdx = numGroupingKeys_ + i;
     VELOX_CHECK_LT(
-        inputIdx, inputColumns_.size(), "inputIdx out of bounds in aggregation inputs");
+        inputIdx,
+        inputColumns_.size(),
+        "inputIdx out of bounds in aggregation inputs");
     VELOX_CHECK_LT(
-        outputIdx, outputColumns.size(), "outputIdx out of bounds in aggregation inputs");
+        outputIdx,
+        outputColumns.size(),
+        "outputIdx out of bounds in aggregation inputs");
     if (isLastGroupingSet && --remainingUses[inputIdx] == 0) {
       outputColumns[outputIdx] = std::move(inputColumns_[inputIdx]);
     } else {

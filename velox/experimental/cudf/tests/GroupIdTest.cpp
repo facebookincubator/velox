@@ -280,9 +280,9 @@ TEST_F(CudfGroupIdTest, nullHandling) {
   // c1 preserves input values: row 0 has null (from input), row 1 has value 20
   EXPECT_EQ(1, groupId->valueAt(2));
   EXPECT_EQ(1, groupId->valueAt(3));
-  EXPECT_TRUE(c0->isNullAt(2));  // Synthesized null
-  EXPECT_TRUE(c0->isNullAt(3));  // Synthesized null
-  EXPECT_TRUE(c1->isNullAt(2));  // Input null preserved
+  EXPECT_TRUE(c0->isNullAt(2)); // Synthesized null
+  EXPECT_TRUE(c0->isNullAt(3)); // Synthesized null
+  EXPECT_TRUE(c1->isNullAt(2)); // Input null preserved
   EXPECT_FALSE(c1->isNullAt(3));
   EXPECT_EQ(20, c1->valueAt(3));
 }
