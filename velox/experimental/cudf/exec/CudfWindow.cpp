@@ -219,18 +219,19 @@ std::unique_ptr<cudf::column> CudfWindow::computeLeadLagColumn(
   // Extract offset from the second argument, defaulting to 1.
   auto getOffset = [&]() -> cudf::size_type {
     const auto& args = func.functionCall->inputs();
-    if (args.size() >= 2) {
-      if (auto constExpr =
-              std::dynamic_pointer_cast<const core::ConstantTypedExpr>(
-                  args[1])) {
-        if (constExpr->hasValueVector()) {
-          return constExpr->valueVector()->as<SimpleVector<int64_t>>()->valueAt(
-              0);
-        }
-        return constExpr->value().value<int64_t>();
-      }
+    if (args.size() < 2) {
+      return 1;
     }
-    return 1;
+    auto constExpr = std::dynamic_pointer_cast<const core::ConstantTypedExpr>(
+        args[1]);
+    VELOX_USER_CHECK_NOT_NULL(
+        constExpr,
+        "cudf {} requires constant offset, non-constant offset not supported",
+        baseName);
+    if (constExpr->hasValueVector()) {
+      return constExpr->valueVector()->as<SimpleVector<int64_t>>()->valueAt(0);
+    }
+    return constExpr->value().value<int64_t>();
   };
   auto offset = getOffset();
 
@@ -331,10 +332,22 @@ std::unique_ptr<cudf::column> CudfWindow::computeAggregateColumn(
           if (auto constExpr =
                   std::dynamic_pointer_cast<const core::ConstantTypedExpr>(
                       value)) {
+            VELOX_USER_CHECK(
+                constExpr->type()->isInteger(),
+                "Window frame bound must be INTEGER or BIGINT type, got {}",
+                constExpr->type()->toString());
             if (constExpr->hasValueVector()) {
-              return cudf::window_bounds::get(constExpr->valueVector()
-                                                  ->as<SimpleVector<int64_t>>()
-                                                  ->valueAt(0));
+              auto vec = constExpr->valueVector();
+              if (vec->type()->kind() == TypeKind::INTEGER) {
+                return cudf::window_bounds::get(
+                    vec->as<SimpleVector<int32_t>>()->valueAt(0));
+              }
+              return cudf::window_bounds::get(
+                  vec->as<SimpleVector<int64_t>>()->valueAt(0));
+            }
+            if (constExpr->type()->kind() == TypeKind::INTEGER) {
+              return cudf::window_bounds::get(
+                  constExpr->value().value<int32_t>());
             }
             return cudf::window_bounds::get(
                 constExpr->value().value<int64_t>());

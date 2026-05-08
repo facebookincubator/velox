@@ -760,4 +760,316 @@ TEST_F(CudfWindowTest, DISABLED_NaNFrameBound) {
   }
 }
 
+// =============================================================================
+// Tests ported from velox/functions/prestosql/window/tests/RankTest.cpp
+// =============================================================================
+
+// Tests rank functions with all rows in a single partition.
+TEST_F(CudfWindowTest, rankSinglePartition) {
+  // All rows have the same partition key.
+  auto data = makeRowVector(
+      {"p", "s"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 1, 1}),
+          makeFlatVector<int64_t>({10, 20, 20, 30, 40}),
+      });
+
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .window({
+              "row_number() over (partition by p order by s) as rn",
+              "rank() over (partition by p order by s) as r",
+              "dense_rank() over (partition by p order by s) as dr",
+          })
+          .orderBy({"s ASC NULLS LAST"}, false)
+          .planNode();
+
+  auto expected = makeRowVector(
+      {"p", "s", "rn", "r", "dr"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 1, 1}),
+          makeFlatVector<int64_t>({10, 20, 20, 30, 40}),
+          makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+          makeFlatVector<int64_t>({1, 2, 2, 4, 5}),
+          makeFlatVector<int64_t>({1, 2, 2, 3, 4}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// Tests rank functions with single-row partitions.
+TEST_F(CudfWindowTest, rankSingleRowPartitions) {
+  // Each row is its own partition.
+  auto data = makeRowVector(
+      {"p", "s"},
+      {
+          makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
+          makeFlatVector<int64_t>({100, 200, 300, 400, 500}),
+      });
+
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .window({
+              "row_number() over (partition by p order by s) as rn",
+              "rank() over (partition by p order by s) as r",
+              "dense_rank() over (partition by p order by s) as dr",
+          })
+          .orderBy({"p ASC NULLS LAST"}, false)
+          .planNode();
+
+  // Each partition has only one row, so all ranks are 1.
+  auto expected = makeRowVector(
+      {"p", "s", "rn", "r", "dr"},
+      {
+          makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
+          makeFlatVector<int64_t>({100, 200, 300, 400, 500}),
+          makeFlatVector<int64_t>({1, 1, 1, 1, 1}),
+          makeFlatVector<int64_t>({1, 1, 1, 1, 1}),
+          makeFlatVector<int64_t>({1, 1, 1, 1, 1}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// Tests rank functions with nulls in sort key.
+TEST_F(CudfWindowTest, rankWithNulls) {
+  auto data = makeRowVector(
+      {"p", "s"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 1, 2, 2, 2}),
+          makeNullableFlatVector<int64_t>(
+              {std::nullopt, 10, 20, 20, std::nullopt, std::nullopt, 30}),
+      });
+
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .window({
+              "row_number() over (partition by p order by s NULLS FIRST) as rn",
+              "rank() over (partition by p order by s NULLS FIRST) as r",
+              "dense_rank() over (partition by p order by s NULLS FIRST) as dr",
+          })
+          .orderBy({"p ASC NULLS LAST", "s ASC NULLS FIRST"}, false)
+          .planNode();
+
+  // With NULLS FIRST, null values come before non-null values.
+  // Partition 1: null, 10, 20, 20 -> row_number: 1,2,3,4; rank: 1,2,3,3;
+  //   dense_rank: 1,2,3,3
+  // Partition 2: null, null, 30 -> row_number: 1,2,3; rank: 1,1,3;
+  //   dense_rank: 1,1,2
+  auto expected = makeRowVector(
+      {"p", "s", "rn", "r", "dr"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 1, 2, 2, 2}),
+          makeNullableFlatVector<int64_t>(
+              {std::nullopt, 10, 20, 20, std::nullopt, std::nullopt, 30}),
+          makeFlatVector<int64_t>({1, 2, 3, 4, 1, 2, 3}),
+          makeFlatVector<int64_t>({1, 2, 3, 3, 1, 1, 3}),
+          makeFlatVector<int64_t>({1, 2, 3, 3, 1, 1, 2}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// =============================================================================
+// Tests ported from velox/functions/prestosql/window/tests/LeadLagTest.cpp
+// =============================================================================
+
+// Tests lag/lead with zero offset.
+TEST_F(CudfWindowTest, lagLeadZeroOffset) {
+  auto data = makeRowVector(
+      {"p", "v"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 2, 2}),
+          makeFlatVector<int64_t>({10, 20, 30, 100, 200}),
+      });
+
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .window({
+              "lag(v, 0) over (partition by p order by v) as lag0",
+              "lead(v, 0) over (partition by p order by v) as lead0",
+          })
+          .orderBy({"p ASC NULLS LAST", "v ASC NULLS LAST"}, false)
+          .planNode();
+
+  // Zero offset means the current row's value.
+  auto expected = makeRowVector(
+      {"p", "v", "lag0", "lead0"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 2, 2}),
+          makeFlatVector<int64_t>({10, 20, 30, 100, 200}),
+          makeFlatVector<int64_t>({10, 20, 30, 100, 200}),
+          makeFlatVector<int64_t>({10, 20, 30, 100, 200}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// Tests lag/lead with larger offset.
+TEST_F(CudfWindowTest, lagLeadLargeOffset) {
+  auto data = makeRowVector(
+      {"p", "v"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 1, 1}),
+          makeFlatVector<int64_t>({10, 20, 30, 40, 50}),
+      });
+
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .window({
+              "lag(v, 3) over (partition by p order by v) as lag3",
+              "lead(v, 3) over (partition by p order by v) as lead3",
+          })
+          .orderBy({"v ASC NULLS LAST"}, false)
+          .planNode();
+
+  // lag(3): first 3 rows are null, then 10, 20
+  // lead(3): last 3 rows are null, first 2 are 40, 50
+  auto expected = makeRowVector(
+      {"p", "v", "lag3", "lead3"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 1, 1}),
+          makeFlatVector<int64_t>({10, 20, 30, 40, 50}),
+          makeNullableFlatVector<int64_t>(
+              {std::nullopt, std::nullopt, std::nullopt, 10, 20}),
+          makeNullableFlatVector<int64_t>(
+              {40, 50, std::nullopt, std::nullopt, std::nullopt}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// Tests lag/lead with nulls in the value column.
+TEST_F(CudfWindowTest, lagLeadWithNullValues) {
+  auto data = makeRowVector(
+      {"p", "v"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 1, 1}),
+          makeNullableFlatVector<int64_t>({10, std::nullopt, 30, std::nullopt, 50}),
+      });
+
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .window({
+              "lag(v, 1) over (partition by p order by v NULLS FIRST) as lag1",
+              "lead(v, 1) over (partition by p order by v NULLS FIRST) as lead1",
+          })
+          .orderBy({"v ASC NULLS FIRST"}, false)
+          .planNode();
+
+  // With NULLS FIRST, order is: null, null, 10, 30, 50
+  // lag(1): null, null, null, 10, 30
+  // lead(1): null, 10, 30, 50, null
+  auto expected = makeRowVector(
+      {"p", "v", "lag1", "lead1"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 1, 1}),
+          makeNullableFlatVector<int64_t>(
+              {std::nullopt, std::nullopt, 10, 30, 50}),
+          makeNullableFlatVector<int64_t>(
+              {std::nullopt, std::nullopt, std::nullopt, 10, 30}),
+          makeNullableFlatVector<int64_t>(
+              {std::nullopt, 10, 30, 50, std::nullopt}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// Tests lag/lead with single-row partitions.
+TEST_F(CudfWindowTest, lagLeadSingleRowPartitions) {
+  auto data = makeRowVector(
+      {"p", "v"},
+      {
+          makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
+          makeFlatVector<int64_t>({10, 20, 30, 40, 50}),
+      });
+
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .window({
+              "lag(v, 1) over (partition by p order by v) as lag1",
+              "lead(v, 1) over (partition by p order by v) as lead1",
+          })
+          .orderBy({"p ASC NULLS LAST"}, false)
+          .planNode();
+
+  // Each partition has only one row, so lag and lead are always null.
+  auto expected = makeRowVector(
+      {"p", "v", "lag1", "lead1"},
+      {
+          makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
+          makeFlatVector<int64_t>({10, 20, 30, 40, 50}),
+          makeNullableFlatVector<int64_t>(
+              {std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt}),
+          makeNullableFlatVector<int64_t>(
+              {std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// Tests lag/lead with small partitions (5 rows each).
+TEST_F(CudfWindowTest, lagLeadSmallPartitions) {
+  // Create data with small partitions.
+  std::vector<int32_t> partitions;
+  std::vector<int64_t> values;
+  for (int i = 0; i < 100; ++i) {
+    partitions.push_back(i / 5); // 5 rows per partition
+    values.push_back(i);
+  }
+
+  auto data = makeRowVector(
+      {"p", "v"},
+      {
+          makeFlatVector<int32_t>(partitions),
+          makeFlatVector<int64_t>(values),
+      });
+
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .window({
+              "lag(v, 2) over (partition by p order by v) as lag2",
+              "lead(v, 2) over (partition by p order by v) as lead2",
+          })
+          .orderBy({"p ASC NULLS LAST", "v ASC NULLS LAST"}, false)
+          .planNode();
+
+  // Compute expected results.
+  std::vector<std::optional<int64_t>> expectedLag;
+  std::vector<std::optional<int64_t>> expectedLead;
+  for (int i = 0; i < 100; ++i) {
+    int posInPartition = i % 5;
+    int partitionStart = (i / 5) * 5;
+    if (posInPartition < 2) {
+      expectedLag.push_back(std::nullopt);
+    } else {
+      expectedLag.push_back(values[i - 2]);
+    }
+    if (posInPartition >= 3) {
+      expectedLead.push_back(std::nullopt);
+    } else {
+      expectedLead.push_back(values[i + 2]);
+    }
+  }
+
+  auto expected = makeRowVector(
+      {"p", "v", "lag2", "lead2"},
+      {
+          makeFlatVector<int32_t>(partitions),
+          makeFlatVector<int64_t>(values),
+          makeNullableFlatVector<int64_t>(expectedLag),
+          makeNullableFlatVector<int64_t>(expectedLead),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
 } // namespace
