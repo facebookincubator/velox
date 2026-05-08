@@ -833,6 +833,9 @@ class ScalarType : public CanProvideCustomComparisonType<KIND> {
 };
 
 /// This class represents the fixed-point numbers.
+std::pair<uint8_t, uint8_t> getDecimalPrecisionScale(const Type& type);
+TypePtr DECIMAL(uint8_t precision, uint8_t scale);
+
 /// The parameter "precision" represents the number of digits the
 /// Decimal Type can support and "scale" represents the number of digits to
 /// the right of the decimal point.
@@ -884,6 +887,74 @@ class DecimalType : public ScalarType<KIND> {
 
   std::span<const TypeParameter> parameters() const override {
     return parameters_;
+  }
+
+  /// Returns the minimum DECIMAL precision needed to represent all values
+  /// of 'kind' without loss. E.g. SMALLINT needs precision 5 since max
+  /// value is 32767 (5 digits). Returns std::nullopt for non-integer types.
+  static std::optional<uint8_t> minPrecisionForInteger(TypeKind kind) {
+    switch (kind) {
+      case TypeKind::TINYINT:
+        return 3;
+      case TypeKind::SMALLINT:
+        return 5;
+      case TypeKind::INTEGER:
+        return 10;
+      case TypeKind::BIGINT:
+        return 19;
+      default:
+        return std::nullopt;
+    }
+  }
+
+  /// Returns true if this DECIMAL can be coerced to the target DECIMAL
+  /// without precision loss. For integers, first map to the natural DECIMAL
+  /// via minPrecisionForInteger (e.g. INTEGER → DECIMAL(10,0)), then call
+  /// this method. The rule is: (p1 - s1) <= (p2 - s2) && s1 <= s2.
+  bool isCoercibleTo(const Type& target) const {
+    auto [targetPrecision, targetScale] = getDecimalPrecisionScale(target);
+    return precision() - scale() <= targetPrecision - targetScale &&
+        scale() <= targetScale;
+  }
+
+  /// Returns the narrowest DECIMAL that can represent values from both
+  /// 'lhs' and 'rhs' (each may be integer or decimal). Returns nullptr
+  /// if the result would exceed DECIMAL(38, s).
+  static TypePtr commonSuperType(const TypePtr& lhs, const TypePtr& rhs) {
+    auto extractComponents = [](const TypePtr& type,
+                                int32_t& integerDigits,
+                                uint8_t& scale) -> bool {
+      if (type->isDecimal()) {
+        auto [precision, s] = getDecimalPrecisionScale(*type);
+        integerDigits = precision - s;
+        scale = s;
+        return true;
+      }
+      if (auto precision = minPrecisionForInteger(type->kind())) {
+        integerDigits = *precision;
+        scale = 0;
+        return true;
+      }
+      return false;
+    };
+
+    int32_t lhsDigits = 0;
+    int32_t rhsDigits = 0;
+    uint8_t lhsScale = 0;
+    uint8_t rhsScale = 0;
+
+    if (!extractComponents(lhs, lhsDigits, lhsScale) ||
+        !extractComponents(rhs, rhsDigits, rhsScale)) {
+      return nullptr;
+    }
+
+    auto scale = std::max(lhsScale, rhsScale);
+    auto integerDigits = std::max(lhsDigits, rhsDigits);
+    auto precision = std::min(38, integerDigits + scale);
+    if (precision - scale < integerDigits) {
+      return nullptr;
+    }
+    return DECIMAL(precision, scale);
   }
 
  protected:
@@ -951,8 +1022,6 @@ FOLLY_ALWAYS_INLINE bool Type::isDecimal() const {
 FOLLY_ALWAYS_INLINE bool isDecimalName(const std::string& name) {
   return (name == "DECIMAL");
 }
-
-std::pair<uint8_t, uint8_t> getDecimalPrecisionScale(const Type& type);
 
 class UnknownType : public CanProvideCustomComparisonType<TypeKind::UNKNOWN> {
  public:

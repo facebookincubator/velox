@@ -65,6 +65,78 @@ TEST(TypeCoercerTest, decimal) {
   ASSERT_FALSE(TypeCoercer::coercible(DOUBLE(), DECIMAL(10, 2)));
 }
 
+TEST(TypeCoercerTest, integerToDecimal) {
+  testCoercion(TINYINT(), DECIMAL(3, 0));
+  testCoercion(SMALLINT(), DECIMAL(5, 0));
+  testCoercion(INTEGER(), DECIMAL(10, 0));
+  testCoercion(BIGINT(), DECIMAL(19, 0));
+
+  ASSERT_TRUE(TypeCoercer::coercible(TINYINT(), DECIMAL(10, 2)));
+  ASSERT_TRUE(TypeCoercer::coercible(SMALLINT(), DECIMAL(10, 2)));
+  ASSERT_TRUE(TypeCoercer::coercible(INTEGER(), DECIMAL(38, 4)));
+  ASSERT_TRUE(TypeCoercer::coercible(BIGINT(), DECIMAL(38, 4)));
+
+  ASSERT_TRUE(TypeCoercer::coercible(TINYINT(), DECIMAL(3, 0)));
+  ASSERT_TRUE(TypeCoercer::coercible(SMALLINT(), DECIMAL(5, 0)));
+  ASSERT_TRUE(TypeCoercer::coercible(INTEGER(), DECIMAL(10, 0)));
+  ASSERT_TRUE(TypeCoercer::coercible(BIGINT(), DECIMAL(19, 0)));
+
+  ASSERT_FALSE(TypeCoercer::coercible(TINYINT(), DECIMAL(2, 0)));
+  ASSERT_FALSE(TypeCoercer::coercible(SMALLINT(), DECIMAL(4, 0)));
+  ASSERT_FALSE(TypeCoercer::coercible(INTEGER(), DECIMAL(9, 0)));
+  ASSERT_FALSE(TypeCoercer::coercible(BIGINT(), DECIMAL(18, 0)));
+  ASSERT_FALSE(TypeCoercer::coercible(INTEGER(), DECIMAL(4, 2)));
+  ASSERT_FALSE(TypeCoercer::coercible(BIGINT(), DECIMAL(10, 2)));
+
+  ASSERT_FALSE(TypeCoercer::coercible(DECIMAL(10, 2), INTEGER()));
+  ASSERT_FALSE(TypeCoercer::coercible(DECIMAL(10, 2), BIGINT()));
+}
+
+TEST(TypeCoercerTest, integerToDecimalLeastCommonSuperType) {
+  VELOX_ASSERT_EQ_TYPES(
+      TypeCoercer::leastCommonSuperType(INTEGER(), DECIMAL(38, 4)),
+      DECIMAL(38, 4));
+  VELOX_ASSERT_EQ_TYPES(
+      TypeCoercer::leastCommonSuperType(DECIMAL(38, 4), INTEGER()),
+      DECIMAL(38, 4));
+  VELOX_ASSERT_EQ_TYPES(
+      TypeCoercer::leastCommonSuperType(BIGINT(), DECIMAL(10, 2)),
+      DECIMAL(21, 2));
+  VELOX_ASSERT_EQ_TYPES(
+      TypeCoercer::leastCommonSuperType(DECIMAL(10, 2), BIGINT()),
+      DECIMAL(21, 2));
+  VELOX_ASSERT_EQ_TYPES(
+      TypeCoercer::leastCommonSuperType(INTEGER(), DECIMAL(4, 2)),
+      DECIMAL(12, 2));
+  VELOX_ASSERT_EQ_TYPES(
+      TypeCoercer::leastCommonSuperType(SMALLINT(), DECIMAL(4, 2)),
+      DECIMAL(7, 2));
+  VELOX_ASSERT_EQ_TYPES(
+      TypeCoercer::leastCommonSuperType(TINYINT(), DECIMAL(10, 4)),
+      DECIMAL(10, 4));
+  VELOX_ASSERT_EQ_TYPES(
+      TypeCoercer::leastCommonSuperType(BIGINT(), DECIMAL(19, 0)),
+      DECIMAL(19, 0));
+
+  ASSERT_EQ(
+      TypeCoercer::leastCommonSuperType(BIGINT(), DECIMAL(38, 20)), nullptr);
+}
+
+TEST(TypeCoercerTest, decimalDecimalLeastCommonSuperType) {
+  VELOX_ASSERT_EQ_TYPES(
+      TypeCoercer::leastCommonSuperType(DECIMAL(10, 2), DECIMAL(20, 4)),
+      DECIMAL(20, 4));
+  VELOX_ASSERT_EQ_TYPES(
+      TypeCoercer::leastCommonSuperType(DECIMAL(20, 2), DECIMAL(10, 4)),
+      DECIMAL(22, 4));
+  VELOX_ASSERT_EQ_TYPES(
+      TypeCoercer::leastCommonSuperType(DECIMAL(38, 4), DECIMAL(38, 4)),
+      DECIMAL(38, 4));
+  VELOX_ASSERT_EQ_TYPES(
+      TypeCoercer::leastCommonSuperType(DECIMAL(10, 2), DECIMAL(10, 2)),
+      DECIMAL(10, 2));
+}
+
 TEST(TypeCoercerTest, decimalLeastCommonSuperType) {
   VELOX_ASSERT_EQ_TYPES(
       TypeCoercer::leastCommonSuperType(DECIMAL(10, 2), DOUBLE()), DOUBLE());

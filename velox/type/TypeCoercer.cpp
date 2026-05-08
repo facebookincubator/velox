@@ -46,10 +46,11 @@ allowedCoercions() {
     }
   };
 
-  add(TINYINT(), {SMALLINT(), INTEGER(), BIGINT(), REAL(), DOUBLE()});
-  add(SMALLINT(), {INTEGER(), BIGINT(), REAL(), DOUBLE()});
-  add(INTEGER(), {BIGINT(), REAL(), DOUBLE()});
-  add(BIGINT(), {DOUBLE()});
+  add(TINYINT(),
+      {SMALLINT(), INTEGER(), BIGINT(), DECIMAL(3, 0), REAL(), DOUBLE()});
+  add(SMALLINT(), {INTEGER(), BIGINT(), DECIMAL(5, 0), REAL(), DOUBLE()});
+  add(INTEGER(), {BIGINT(), DECIMAL(10, 0), REAL(), DOUBLE()});
+  add(BIGINT(), {DECIMAL(19, 0), DOUBLE()});
   add(REAL(), {DOUBLE()});
   add(DECIMAL(1, 0), {REAL(), DOUBLE()});
   add(DATE(), {TIMESTAMP()});
@@ -80,6 +81,18 @@ std::optional<Coercion> TypeCoercer::coerceTypeBase(
   static const auto kAllowedCoercions = allowedCoercions();
   auto it = kAllowedCoercions.find({fromType->name(), toType->name()});
   if (it != kAllowedCoercions.end()) {
+    if (toType->isDecimal() && it->second.type->isDecimal()) {
+      if (it->second.type->isShortDecimal()) {
+        if (!it->second.type->asShortDecimal().isCoercibleTo(*toType)) {
+          return std::nullopt;
+        }
+      } else {
+        if (!it->second.type->asLongDecimal().isCoercibleTo(*toType)) {
+          return std::nullopt;
+        }
+      }
+      return Coercion{.type = toType, .cost = it->second.cost};
+    }
     return it->second;
   }
 
@@ -208,6 +221,12 @@ TypePtr TypeCoercer::leastCommonSuperType(const TypePtr& a, const TypePtr& b) {
   }
 
   if (a->size() == 0) {
+    if (a->isDecimal() || b->isDecimal()) {
+      if (auto result = LongDecimalType::commonSuperType(a, b)) {
+        return result;
+      }
+    }
+
     if (TypeCoercer::coerceTypeBase(a, b)) {
       return b;
     }
