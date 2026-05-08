@@ -222,8 +222,8 @@ std::unique_ptr<cudf::column> CudfWindow::computeLeadLagColumn(
     if (args.size() < 2) {
       return 1;
     }
-    auto constExpr = std::dynamic_pointer_cast<const core::ConstantTypedExpr>(
-        args[1]);
+    auto constExpr =
+        std::dynamic_pointer_cast<const core::ConstantTypedExpr>(args[1]);
     VELOX_USER_CHECK_NOT_NULL(
         constExpr,
         "cudf {} requires constant offset, non-constant offset not supported",

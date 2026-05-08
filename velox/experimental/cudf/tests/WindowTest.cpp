@@ -774,16 +774,15 @@ TEST_F(CudfWindowTest, rankSinglePartition) {
           makeFlatVector<int64_t>({10, 20, 20, 30, 40}),
       });
 
-  auto plan =
-      PlanBuilder()
-          .values({data})
-          .window({
-              "row_number() over (partition by p order by s) as rn",
-              "rank() over (partition by p order by s) as r",
-              "dense_rank() over (partition by p order by s) as dr",
-          })
-          .orderBy({"s ASC NULLS LAST"}, false)
-          .planNode();
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({
+                      "row_number() over (partition by p order by s) as rn",
+                      "rank() over (partition by p order by s) as r",
+                      "dense_rank() over (partition by p order by s) as dr",
+                  })
+                  .orderBy({"s ASC NULLS LAST"}, false)
+                  .planNode();
 
   auto expected = makeRowVector(
       {"p", "s", "rn", "r", "dr"},
@@ -808,16 +807,15 @@ TEST_F(CudfWindowTest, rankSingleRowPartitions) {
           makeFlatVector<int64_t>({100, 200, 300, 400, 500}),
       });
 
-  auto plan =
-      PlanBuilder()
-          .values({data})
-          .window({
-              "row_number() over (partition by p order by s) as rn",
-              "rank() over (partition by p order by s) as r",
-              "dense_rank() over (partition by p order by s) as dr",
-          })
-          .orderBy({"p ASC NULLS LAST"}, false)
-          .planNode();
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({
+                      "row_number() over (partition by p order by s) as rn",
+                      "rank() over (partition by p order by s) as r",
+                      "dense_rank() over (partition by p order by s) as dr",
+                  })
+                  .orderBy({"p ASC NULLS LAST"}, false)
+                  .planNode();
 
   // Each partition has only one row, so all ranks are 1.
   auto expected = makeRowVector(
@@ -886,15 +884,14 @@ TEST_F(CudfWindowTest, lagLeadZeroOffset) {
           makeFlatVector<int64_t>({10, 20, 30, 100, 200}),
       });
 
-  auto plan =
-      PlanBuilder()
-          .values({data})
-          .window({
-              "lag(v, 0) over (partition by p order by v) as lag0",
-              "lead(v, 0) over (partition by p order by v) as lead0",
-          })
-          .orderBy({"p ASC NULLS LAST", "v ASC NULLS LAST"}, false)
-          .planNode();
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({
+                      "lag(v, 0) over (partition by p order by v) as lag0",
+                      "lead(v, 0) over (partition by p order by v) as lead0",
+                  })
+                  .orderBy({"p ASC NULLS LAST", "v ASC NULLS LAST"}, false)
+                  .planNode();
 
   // Zero offset means the current row's value.
   auto expected = makeRowVector(
@@ -918,15 +915,14 @@ TEST_F(CudfWindowTest, lagLeadLargeOffset) {
           makeFlatVector<int64_t>({10, 20, 30, 40, 50}),
       });
 
-  auto plan =
-      PlanBuilder()
-          .values({data})
-          .window({
-              "lag(v, 3) over (partition by p order by v) as lag3",
-              "lead(v, 3) over (partition by p order by v) as lead3",
-          })
-          .orderBy({"v ASC NULLS LAST"}, false)
-          .planNode();
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({
+                      "lag(v, 3) over (partition by p order by v) as lag3",
+                      "lead(v, 3) over (partition by p order by v) as lead3",
+                  })
+                  .orderBy({"v ASC NULLS LAST"}, false)
+                  .planNode();
 
   // lag(3): first 3 rows are null, then 10, 20
   // lead(3): last 3 rows are null, first 2 are 40, 50
@@ -950,7 +946,8 @@ TEST_F(CudfWindowTest, lagLeadWithNullValues) {
       {"p", "v"},
       {
           makeFlatVector<int32_t>({1, 1, 1, 1, 1}),
-          makeNullableFlatVector<int64_t>({10, std::nullopt, 30, std::nullopt, 50}),
+          makeNullableFlatVector<int64_t>(
+              {10, std::nullopt, 30, std::nullopt, 50}),
       });
 
   auto plan =
@@ -990,15 +987,14 @@ TEST_F(CudfWindowTest, lagLeadSingleRowPartitions) {
           makeFlatVector<int64_t>({10, 20, 30, 40, 50}),
       });
 
-  auto plan =
-      PlanBuilder()
-          .values({data})
-          .window({
-              "lag(v, 1) over (partition by p order by v) as lag1",
-              "lead(v, 1) over (partition by p order by v) as lead1",
-          })
-          .orderBy({"p ASC NULLS LAST"}, false)
-          .planNode();
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({
+                      "lag(v, 1) over (partition by p order by v) as lag1",
+                      "lead(v, 1) over (partition by p order by v) as lead1",
+                  })
+                  .orderBy({"p ASC NULLS LAST"}, false)
+                  .planNode();
 
   // Each partition has only one row, so lag and lead are always null.
   auto expected = makeRowVector(
@@ -1007,9 +1003,17 @@ TEST_F(CudfWindowTest, lagLeadSingleRowPartitions) {
           makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
           makeFlatVector<int64_t>({10, 20, 30, 40, 50}),
           makeNullableFlatVector<int64_t>(
-              {std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt}),
+              {std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt}),
           makeNullableFlatVector<int64_t>(
-              {std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt}),
+              {std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt}),
       });
 
   AssertQueryBuilder(plan).assertResults(expected);
@@ -1032,15 +1036,14 @@ TEST_F(CudfWindowTest, lagLeadSmallPartitions) {
           makeFlatVector<int64_t>(values),
       });
 
-  auto plan =
-      PlanBuilder()
-          .values({data})
-          .window({
-              "lag(v, 2) over (partition by p order by v) as lag2",
-              "lead(v, 2) over (partition by p order by v) as lead2",
-          })
-          .orderBy({"p ASC NULLS LAST", "v ASC NULLS LAST"}, false)
-          .planNode();
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({
+                      "lag(v, 2) over (partition by p order by v) as lag2",
+                      "lead(v, 2) over (partition by p order by v) as lead2",
+                  })
+                  .orderBy({"p ASC NULLS LAST", "v ASC NULLS LAST"}, false)
+                  .planNode();
 
   // Compute expected results.
   std::vector<std::optional<int64_t>> expectedLag;
