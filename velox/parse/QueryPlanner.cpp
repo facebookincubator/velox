@@ -128,8 +128,18 @@ std::string normalizeTableName(std::string tableName) {
   return tableName;
 }
 
+template <typename TColumnIndex>
+bool hasPrimaryIndex(const TColumnIndex& column) {
+  if constexpr (requires(const TColumnIndex& value) {
+                  value.HasPrimaryIndex();
+                }) {
+    return column.HasPrimaryIndex();
+  }
+  return true;
+}
+
 idx_t columnId(const ::duckdb::ColumnIndex& column) {
-  VELOX_CHECK(column.HasPrimaryIndex(), "Unsupported DuckDB column index");
+  VELOX_CHECK(hasPrimaryIndex(column), "Unsupported DuckDB column index");
   return column.GetPrimaryIndex();
 }
 
@@ -158,12 +168,39 @@ PlanNodePtr toVeloxPlan(
   return std::make_shared<ValuesNode>(queryContext.nextNodeId(), vectors);
 }
 
+PlanNodePtr makeUnnestInput(
+    const ::duckdb::LogicalGet& logicalGet,
+    memory::MemoryPool* pool,
+    QueryContext& queryContext) {
+  VELOX_CHECK_EQ(1, logicalGet.parameters.size());
+
+  const auto arrayType = duckdb::toVeloxType(logicalGet.parameters[0].type());
+  const auto inputName = queryContext.nextColumnName("_p");
+  auto arrayVector = BaseVector::createConstant(
+      arrayType, duckdb::duckValueToVariant(logicalGet.parameters[0]), 1, pool);
+  auto rowType = ROW({inputName}, {arrayType});
+  auto values = std::make_shared<ValuesNode>(
+      queryContext.nextNodeId(),
+      std::vector<RowVectorPtr>{std::make_shared<RowVector>(
+          pool, rowType, nullptr, 1, std::vector<VectorPtr>{arrayVector})});
+
+  return std::make_shared<ProjectNode>(
+      queryContext.nextNodeId(),
+      std::vector<std::string>{inputName},
+      std::vector<TypedExprPtr>{
+          std::make_shared<FieldAccessTypedExpr>(arrayType, inputName)},
+      std::move(values));
+}
+
 PlanNodePtr toVeloxPlan(
     ::duckdb::LogicalGet& logicalGet,
     memory::MemoryPool* pool,
     std::vector<PlanNodePtr> sources,
     QueryContext& queryContext) {
   if (logicalGet.function.name == "unnest") {
+    if (sources.empty()) {
+      sources.push_back(makeUnnestInput(logicalGet, pool, queryContext));
+    }
     VELOX_CHECK_EQ(1, sources.size());
     return std::make_shared<UnnestNode>(
         queryContext.nextNodeId(),
@@ -1081,6 +1118,10 @@ PlanNodePtr DuckDbQueryPlanner::plan(const std::string& sql) {
   // Disable the optimizer. Otherwise, the filter over table scan gets pushdown
   // as a callback that is impossible to recover.
   impl_->conn.Query("PRAGMA disable_optimizer");
+  // DuckDB 1.5 injects a CASE/error guard into scalar subqueries by default.
+  // This planner only uses DuckDB to extract a Velox plan, and Velox doesn't
+  // support that DuckDB-internal error expression.
+  impl_->conn.Query("SET scalar_subquery_error_on_multiple_rows=false");
 
   auto plan = impl_->conn.ExtractPlan(sql);
 

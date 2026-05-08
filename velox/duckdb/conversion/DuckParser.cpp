@@ -34,7 +34,10 @@
 #include <duckdb/parser/parser.hpp> // @manual
 #include <duckdb/parser/parser_options.hpp> // @manual
 
+#include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <limits>
 
 namespace facebook::velox::duckdb {
 
@@ -49,6 +52,7 @@ using ::duckdb::ExpressionClass;
 using ::duckdb::ExpressionType;
 using ::duckdb::FunctionExpression;
 using ::duckdb::interval_t;
+using ::duckdb::LogicalType;
 using ::duckdb::LogicalTypeId;
 using ::duckdb::LogicalTypeIdToString;
 using ::duckdb::OperatorExpression;
@@ -266,6 +270,152 @@ std::optional<double> extractNumeric(ParsedExpression& expr) {
     }
   }
   return std::nullopt;
+}
+
+std::optional<LogicalType> logicalTypeFromName(std::string name) {
+  if (name.size() > 1 && name.front() == '"' && name.back() == '"') {
+    name = name.substr(1, name.size() - 2);
+  }
+  std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) {
+    return std::toupper(c);
+  });
+
+  if (name == "BOOLEAN" || name == "BOOL") {
+    return LogicalType::BOOLEAN;
+  }
+  if (name == "TINYINT") {
+    return LogicalType::TINYINT;
+  }
+  if (name == "SMALLINT") {
+    return LogicalType::SMALLINT;
+  }
+  if (name == "INTEGER" || name == "INT" || name == "SIGNED") {
+    return LogicalType::INTEGER;
+  }
+  if (name == "BIGINT") {
+    return LogicalType::BIGINT;
+  }
+  if (name == "REAL" || name == "FLOAT" || name == "FLOAT4") {
+    return LogicalType::FLOAT;
+  }
+  if (name == "DOUBLE" || name == "DOUBLE PRECISION" || name == "FLOAT8") {
+    return LogicalType::DOUBLE;
+  }
+  if (name == "VARCHAR" || name == "CHAR" || name == "BPCHAR" ||
+      name == "TEXT" || name == "STRING") {
+    return LogicalType::VARCHAR;
+  }
+  if (name == "BLOB" || name == "BYTEA" || name == "VARBINARY") {
+    return LogicalType::BLOB;
+  }
+  if (name == "DATE") {
+    return LogicalType::DATE;
+  }
+  if (name == "TIME") {
+    return LogicalType::TIME;
+  }
+  if (name == "TIMESTAMP" || name == "DATETIME") {
+    return LogicalType::TIMESTAMP;
+  }
+  if (name == "INTERVAL") {
+    return LogicalType::INTERVAL;
+  }
+  return std::nullopt;
+}
+
+LogicalType resolveParsedType(LogicalType type) {
+  if (auto resolvedType = logicalTypeFromName(type.ToString())) {
+    return resolvedType.value();
+  }
+  return type;
+}
+
+std::optional<int64_t> extractInteger(const Value& value) {
+  switch (value.type().id()) {
+    case LogicalTypeId::TINYINT:
+      return value.GetValue<int8_t>();
+    case LogicalTypeId::SMALLINT:
+      return value.GetValue<int16_t>();
+    case LogicalTypeId::INTEGER:
+      return value.GetValue<int32_t>();
+    case LogicalTypeId::BIGINT:
+      return value.GetValue<int64_t>();
+    case LogicalTypeId::INTEGER_LITERAL:
+      return value.GetValue<int64_t>();
+    default:
+      return std::nullopt;
+  }
+}
+
+template <typename T>
+T checkedIntegerCast(int64_t value, LogicalTypeId targetType) {
+  VELOX_USER_CHECK(
+      value >= static_cast<int64_t>(std::numeric_limits<T>::min()) &&
+          value <= static_cast<int64_t>(std::numeric_limits<T>::max()),
+      "Cannot cast IN-list constant {} to {}",
+      value,
+      LogicalTypeIdToString(targetType));
+  return static_cast<T>(value);
+}
+
+std::optional<Value> castIntegerInListConstant(
+    const Value& value,
+    LogicalTypeId targetType) {
+  const auto integer = extractInteger(value);
+  if (!integer.has_value()) {
+    return std::nullopt;
+  }
+
+  switch (targetType) {
+    case LogicalTypeId::TINYINT:
+      return Value::TINYINT(
+          checkedIntegerCast<int8_t>(integer.value(), targetType));
+    case LogicalTypeId::SMALLINT:
+      return Value::SMALLINT(
+          checkedIntegerCast<int16_t>(integer.value(), targetType));
+    case LogicalTypeId::INTEGER:
+      return Value::INTEGER(
+          checkedIntegerCast<int32_t>(integer.value(), targetType));
+    case LogicalTypeId::BIGINT:
+      return Value::BIGINT(integer.value());
+    default:
+      return std::nullopt;
+  }
+}
+
+Value castInListConstant(const Value& value, const CastExpression& castExpr) {
+  const auto sourceType = value.type().id();
+  const auto targetLogicalType = resolveParsedType(castExpr.cast_type);
+  const auto targetType = targetLogicalType.id();
+
+  if (auto integerValue = castIntegerInListConstant(value, targetType)) {
+    return integerValue.value();
+  }
+
+  if (sourceType == LogicalTypeId::VARCHAR) {
+    const auto str = value.GetValue<std::string>();
+    if (targetType == LogicalTypeId::BOOLEAN) {
+      if (str == "t" || str == "true") {
+        return Value::BOOLEAN(true);
+      }
+      if (str == "f" || str == "false") {
+        return Value::BOOLEAN(false);
+      }
+    }
+    if (targetType == LogicalTypeId::DATE) {
+      return Value::DATE(::duckdb::Date::FromString(str));
+    }
+    if (targetType == LogicalTypeId::BLOB) {
+      return Value::BLOB_RAW(str);
+    }
+  }
+
+  if (sourceType == LogicalTypeId::DECIMAL &&
+      targetType == LogicalTypeId::FLOAT) {
+    return Value::FLOAT(static_cast<float>(value.GetValue<double>()));
+  }
+
+  return value.DefaultCastAs(targetLogicalType, !castExpr.try_cast);
 }
 } // namespace
 
@@ -552,8 +702,7 @@ core::ExprPtr parseOperatorExpr(
             ExpressionType::VALUE_CONSTANT) {
           auto constExpr =
               dynamic_cast<ConstantExpression*>(castExpr->child.get());
-          auto value = constExpr->value.DefaultCastAs(
-              castExpr->cast_type, !castExpr->try_cast);
+          auto value = castInListConstant(constExpr->value, *castExpr);
           if (options.parseInListAsArray) {
             values.emplace_back(duckValueToVariant(value));
             valueType = toVeloxType(castExpr->cast_type);

@@ -55,7 +55,7 @@ struct CovarSampResultAccessor {
 
 struct CorrResultAccessor {
   static bool hasResult(const CorrAccumulator& accumulator) {
-    // DuckDB 1.5.2 returns NaN, not NULL, when corr has inputs but zero
+    // DuckDB 1.4.4 returns NaN, not NULL, when corr has inputs but zero
     // variance in one or both arguments.
     return accumulator.count() > 0;
   }
@@ -143,7 +143,7 @@ struct RegrSxxResultAccessor {
 
 struct RegrSlopeResultAccessor {
   static bool hasResult(const RegrAccumulator& accumulator) {
-    // DuckDB 1.5.2 returns NaN, not NULL, when regr_slope has inputs but the
+    // DuckDB 1.4.4 returns NaN, not NULL, when regr_slope has inputs but the
     // independent variable has zero variance.
     return accumulator.count() > 0;
   }

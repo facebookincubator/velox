@@ -25,6 +25,11 @@
 namespace facebook::velox::exec::test {
 using namespace facebook::velox::common::testutil;
 
+namespace {
+constexpr const char* kRowNumberOverC0 =
+    "row_number() over (partition by c0 order by c1)";
+}
+
 class RowNumberTest : public OperatorTestBase {
  protected:
   RowNumberTest() {
@@ -41,6 +46,18 @@ class RowNumberTest : public OperatorTestBase {
     fuzzerOpts_.allowLazyVector = false;
   }
 
+  std::vector<RowVectorPtr> createSpillVectors(uint32_t numVectors) {
+    auto vectors = createVectors(numVectors, rowType_, fuzzerOpts_);
+    int64_t nextRowNumber = 0;
+    for (auto& vector : vectors) {
+      auto children = vector->children();
+      children[1] = makeFlatVector<int64_t>(
+          vector->size(), [&](auto /*row*/) { return nextRowNumber++; });
+      vector = makeRowVector(vector->type()->asRow().names(), children);
+    }
+    return vectors;
+  }
+
   RowTypePtr rowType_;
   VectorFuzzer::Options fuzzerOpts_;
 };
@@ -55,7 +72,7 @@ TEST_F(RowNumberTest, basic) {
 
   // No limit, emit row numbers.
   auto plan = PlanBuilder().values({data}).rowNumber({"c0"}).planNode();
-  assertQuery(plan, "SELECT *, row_number() over (partition by c0) FROM tmp");
+  assertQuery(plan, fmt::format("SELECT *, {} FROM tmp", kRowNumberOverC0));
 
   // No limit, don't emit row numbers.
   plan = PlanBuilder()
@@ -64,7 +81,9 @@ TEST_F(RowNumberTest, basic) {
              .planNode();
   assertQuery(
       plan,
-      "SELECT c0, c1 FROM (SELECT *, row_number() over (partition by c0) as rn FROM tmp)");
+      fmt::format(
+          "SELECT c0, c1 FROM (SELECT *, {} as rn FROM tmp)",
+          kRowNumberOverC0));
 
   auto testLimit = [&](int32_t limit) {
     // Limit, emit row numbers.
@@ -73,8 +92,9 @@ TEST_F(RowNumberTest, basic) {
     assertQuery(
         plan,
         fmt::format(
-            "SELECT * FROM (SELECT *, row_number() over (partition by c0) as rn FROM tmp) "
+            "SELECT * FROM (SELECT *, {} as rn FROM tmp) "
             "WHERE rn <= {}",
+            kRowNumberOverC0,
             limit));
 
     // Limit, don't emit row numbers.
@@ -83,8 +103,9 @@ TEST_F(RowNumberTest, basic) {
     assertQuery(
         plan,
         fmt::format(
-            "SELECT c0, c1 FROM (SELECT *, row_number() over (partition by c0) as rn FROM tmp) "
+            "SELECT c0, c1 FROM (SELECT *, {} as rn FROM tmp) "
             "WHERE rn <= {}",
+            kRowNumberOverC0,
             limit));
   };
 
@@ -145,43 +166,54 @@ TEST_F(RowNumberTest, largeInput) {
       makeFlatVector<int64_t>(10'000, [](auto row) { return row % 7; }),
       makeFlatVector<int64_t>(10'000, [](auto row) { return row; }),
   });
+  auto secondBatch = makeRowVector({
+      makeFlatVector<int64_t>(10'000, [](auto row) { return row % 7; }),
+      makeFlatVector<int64_t>(10'000, [](auto row) { return row + 10'000; }),
+  });
 
-  createDuckDbTable({data, data});
+  createDuckDbTable({data, secondBatch});
 
   // No limit, emit row numbers.
-  auto plan = PlanBuilder().values({data, data}).rowNumber({"c0"}).planNode();
-  assertQuery(plan, "SELECT *, row_number() over (partition by c0) FROM tmp");
+  auto plan =
+      PlanBuilder().values({data, secondBatch}).rowNumber({"c0"}).planNode();
+  assertQuery(plan, fmt::format("SELECT *, {} FROM tmp", kRowNumberOverC0));
 
   // No limit, don't emit row numbers.
   plan = PlanBuilder()
-             .values({data, data})
+             .values({data, secondBatch})
              .rowNumber({"c0"}, std::nullopt, false)
              .planNode();
   assertQuery(
       plan,
-      "SELECT c0, c1 FROM (SELECT *, row_number() over (partition by c0) as rn FROM tmp)");
+      fmt::format(
+          "SELECT c0, c1 FROM (SELECT *, {} as rn FROM tmp)",
+          kRowNumberOverC0));
 
   auto testLimit = [&](int32_t limit) {
     // Emit row numbers.
-    auto plan =
-        PlanBuilder().values({data, data}).rowNumber({"c0"}, limit).planNode();
+    auto plan = PlanBuilder()
+                    .values({data, secondBatch})
+                    .rowNumber({"c0"}, limit)
+                    .planNode();
     assertQuery(
         plan,
         fmt::format(
-            "SELECT * FROM (SELECT *, row_number() over (partition by c0) as rn FROM tmp) "
+            "SELECT * FROM (SELECT *, {} as rn FROM tmp) "
             "WHERE rn <= {}",
+            kRowNumberOverC0,
             limit));
 
     // Don't emit row numbers.
     plan = PlanBuilder()
-               .values({data, data})
+               .values({data, secondBatch})
                .rowNumber({"c0"}, limit, false)
                .planNode();
     assertQuery(
         plan,
         fmt::format(
-            "SELECT c0, c1 FROM (SELECT *, row_number() over (partition by c0) as rn FROM tmp) "
+            "SELECT c0, c1 FROM (SELECT *, {} as rn FROM tmp) "
             "WHERE rn <= {}",
+            kRowNumberOverC0,
             limit));
   };
 
@@ -192,7 +224,7 @@ TEST_F(RowNumberTest, largeInput) {
 }
 
 TEST_F(RowNumberTest, spill) {
-  std::vector<RowVectorPtr> vectors = createVectors(8, rowType_, fuzzerOpts_);
+  std::vector<RowVectorPtr> vectors = createSpillVectors(8);
   createDuckDbTable(vectors);
 
   struct {
@@ -210,23 +242,22 @@ TEST_F(RowNumberTest, spill) {
     TestScopedSpillInjection scopedSpillInjection(100, ".*", 1);
 
     core::PlanNodeId rowNumberPlanNodeId;
-    auto task =
-        AssertQueryBuilder(duckDbQueryRunner_)
-            .spillDirectory(spillDirectory->getPath())
-            .config(core::QueryConfig::kSpillEnabled, true)
-            .config(core::QueryConfig::kRowNumberSpillEnabled, true)
-            .config(
-                core::QueryConfig::kSpillNumPartitionBits,
-                testData.spillPartitionBits)
-            .queryCtx(queryCtx)
-            .plan(
-                PlanBuilder()
-                    .values(vectors)
-                    .rowNumber({"c0"})
-                    .capturePlanNodeId(rowNumberPlanNodeId)
-                    .planNode())
-            .assertResults(
-                "SELECT *, row_number() over (partition by c0) FROM tmp");
+    auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                    .spillDirectory(spillDirectory->getPath())
+                    .config(core::QueryConfig::kSpillEnabled, true)
+                    .config(core::QueryConfig::kRowNumberSpillEnabled, true)
+                    .config(
+                        core::QueryConfig::kSpillNumPartitionBits,
+                        testData.spillPartitionBits)
+                    .queryCtx(queryCtx)
+                    .plan(
+                        PlanBuilder()
+                            .values(vectors)
+                            .rowNumber({"c0"})
+                            .capturePlanNodeId(rowNumberPlanNodeId)
+                            .planNode())
+                    .assertResults(
+                        fmt::format("SELECT *, {} FROM tmp", kRowNumberOverC0));
     auto taskStats = toPlanStats(task->taskStats());
     auto& planStats = taskStats.at(rowNumberPlanNodeId);
     ASSERT_GT(planStats.spilledBytes, 0);
@@ -357,7 +388,7 @@ TEST_F(RowNumberTest, memoryUsage) {
 }
 
 DEBUG_ONLY_TEST_F(RowNumberTest, spillOnlyDuringInputOrOutput) {
-  std::vector<RowVectorPtr> vectors = createVectors(8, rowType_, fuzzerOpts_);
+  std::vector<RowVectorPtr> vectors = createSpillVectors(8);
   createDuckDbTable(vectors);
 
   struct {
@@ -399,23 +430,22 @@ DEBUG_ONLY_TEST_F(RowNumberTest, spillOnlyDuringInputOrOutput) {
         })));
 
     core::PlanNodeId rowNumberPlanNodeId;
-    auto task =
-        AssertQueryBuilder(duckDbQueryRunner_)
-            .spillDirectory(spillDirectory->getPath())
-            .config(core::QueryConfig::kSpillEnabled, true)
-            .config(core::QueryConfig::kRowNumberSpillEnabled, true)
-            .config(
-                core::QueryConfig::kSpillNumPartitionBits,
-                testData.spillPartitionBits)
-            .queryCtx(queryCtx)
-            .plan(
-                PlanBuilder()
-                    .values(vectors)
-                    .rowNumber({"c0"})
-                    .capturePlanNodeId(rowNumberPlanNodeId)
-                    .planNode())
-            .assertResults(
-                "SELECT *, row_number() over (partition by c0) FROM tmp");
+    auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                    .spillDirectory(spillDirectory->getPath())
+                    .config(core::QueryConfig::kSpillEnabled, true)
+                    .config(core::QueryConfig::kRowNumberSpillEnabled, true)
+                    .config(
+                        core::QueryConfig::kSpillNumPartitionBits,
+                        testData.spillPartitionBits)
+                    .queryCtx(queryCtx)
+                    .plan(
+                        PlanBuilder()
+                            .values(vectors)
+                            .rowNumber({"c0"})
+                            .capturePlanNodeId(rowNumberPlanNodeId)
+                            .planNode())
+                    .assertResults(
+                        fmt::format("SELECT *, {} FROM tmp", kRowNumberOverC0));
     auto taskStats = toPlanStats(task->taskStats());
     auto& planStats = taskStats.at(rowNumberPlanNodeId);
     ASSERT_GT(planStats.spilledBytes, 0);
@@ -431,7 +461,7 @@ DEBUG_ONLY_TEST_F(RowNumberTest, spillOnlyDuringInputOrOutput) {
 }
 
 DEBUG_ONLY_TEST_F(RowNumberTest, recursiveSpill) {
-  std::vector<RowVectorPtr> vectors = createVectors(32, rowType_, fuzzerOpts_);
+  std::vector<RowVectorPtr> vectors = createSpillVectors(32);
   createDuckDbTable(vectors);
 
   struct {
@@ -500,7 +530,7 @@ DEBUG_ONLY_TEST_F(RowNumberTest, recursiveSpill) {
                     .capturePlanNodeId(rowNumberPlanNodeId)
                     .planNode())
             .assertResults(
-                "SELECT *, row_number() over (partition by c0) FROM tmp");
+                fmt::format("SELECT *, {} FROM tmp", kRowNumberOverC0));
     auto taskStats = toPlanStats(task->taskStats());
     auto& planStats = taskStats.at(rowNumberPlanNodeId);
     ASSERT_GT(planStats.spilledBytes, 0);
@@ -524,7 +554,7 @@ DEBUG_ONLY_TEST_F(RowNumberTest, recursiveSpill) {
 }
 
 TEST_F(RowNumberTest, spillWithYield) {
-  std::vector<RowVectorPtr> vectors = createVectors(8, rowType_, fuzzerOpts_);
+  std::vector<RowVectorPtr> vectors = createSpillVectors(8);
   createDuckDbTable(vectors);
 
   struct {
@@ -547,23 +577,22 @@ TEST_F(RowNumberTest, spillWithYield) {
     auto queryCtx = core::QueryCtx::create(executor_.get());
 
     core::PlanNodeId rowNumberPlanNodeId;
-    auto task =
-        AssertQueryBuilder(duckDbQueryRunner_)
-            .spillDirectory(spillDirectory->getPath())
-            .config(core::QueryConfig::kSpillEnabled, true)
-            .config(core::QueryConfig::kRowNumberSpillEnabled, true)
-            .config(
-                core::QueryConfig::kDriverCpuTimeSliceLimitMs,
-                testData.cpuTimeSliceLimitMs)
-            .queryCtx(queryCtx)
-            .plan(
-                PlanBuilder()
-                    .values(vectors)
-                    .rowNumber({"c0"})
-                    .capturePlanNodeId(rowNumberPlanNodeId)
-                    .planNode())
-            .assertResults(
-                "SELECT *, row_number() over (partition by c0) FROM tmp");
+    auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                    .spillDirectory(spillDirectory->getPath())
+                    .config(core::QueryConfig::kSpillEnabled, true)
+                    .config(core::QueryConfig::kRowNumberSpillEnabled, true)
+                    .config(
+                        core::QueryConfig::kDriverCpuTimeSliceLimitMs,
+                        testData.cpuTimeSliceLimitMs)
+                    .queryCtx(queryCtx)
+                    .plan(
+                        PlanBuilder()
+                            .values(vectors)
+                            .rowNumber({"c0"})
+                            .capturePlanNodeId(rowNumberPlanNodeId)
+                            .planNode())
+                    .assertResults(
+                        fmt::format("SELECT *, {} FROM tmp", kRowNumberOverC0));
     auto taskStats = toPlanStats(task->taskStats());
     auto& planStats = taskStats.at(rowNumberPlanNodeId);
     ASSERT_GT(planStats.spilledBytes, 0);
@@ -576,7 +605,7 @@ TEST_F(RowNumberTest, spillWithYield) {
 }
 
 DEBUG_ONLY_TEST_F(RowNumberTest, rowNumberSpillFileCreateConfig) {
-  auto vectors = createVectors(8, rowType_, fuzzerOpts_);
+  auto vectors = createSpillVectors(8);
   createDuckDbTable(vectors);
 
   auto tempDirectory = TempDirectoryPath::create();
@@ -607,7 +636,7 @@ DEBUG_ONLY_TEST_F(RowNumberTest, rowNumberSpillFileCreateConfig) {
           core::QueryConfig::kRowNumberSpillFileCreateConfig,
           "test_row_number_config")
       .plan(PlanBuilder().values(vectors).rowNumber({"c0"}).planNode())
-      .assertResults("SELECT *, row_number() over (partition by c0) FROM tmp");
+      .assertResults(fmt::format("SELECT *, {} FROM tmp", kRowNumberOverC0));
 
   ASSERT_TRUE(rowNumberConfigVerified.load());
 }

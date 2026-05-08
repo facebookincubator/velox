@@ -83,12 +83,18 @@ TEST(DuckConversionTest, duckValueToVariant) {
   for (const auto& i : vec) {
     EXPECT_EQ(variant(i), duckValueToVariant(Value(i)));
   }
+
+  EXPECT_EQ(
+      Variant::array({variant(1), variant(2), variant(3)}),
+      duckValueToVariant(
+          Value::LIST(
+              LogicalType::INTEGER,
+              {Value::INTEGER(1), Value::INTEGER(2), Value::INTEGER(3)})));
 }
 
 TEST(DuckConversionTest, duckValueToVariantUnsupported) {
   std::vector<LogicalType> unsupported = {
       LogicalType(LogicalTypeId::INTERVAL),
-      LogicalType::LIST({LogicalType(LogicalTypeId::INTEGER)}),
       LogicalType::STRUCT(
           {{"a", LogicalType(LogicalTypeId::INTEGER)},
            {"b", LogicalType(LogicalTypeId::TINYINT)}})};

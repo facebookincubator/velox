@@ -56,6 +56,64 @@ TypePtr customTypeFromName(std::string name) {
   return nullptr;
 }
 
+TypePtr builtinTypeFromName(std::string name) {
+  if (name.size() > 1 && name.front() == '"' && name.back() == '"') {
+    name = name.substr(1, name.size() - 2);
+  }
+  std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) {
+    return std::toupper(c);
+  });
+
+  if (name == "BOOLEAN" || name == "BOOL") {
+    return BOOLEAN();
+  }
+  if (name == "TINYINT") {
+    return TINYINT();
+  }
+  if (name == "SMALLINT") {
+    return SMALLINT();
+  }
+  if (name == "INTEGER" || name == "INT" || name == "SIGNED") {
+    return INTEGER();
+  }
+  if (name == "BIGINT") {
+    return BIGINT();
+  }
+  if (name == "REAL" || name == "FLOAT" || name == "FLOAT4") {
+    return REAL();
+  }
+  if (name == "DOUBLE" || name == "DOUBLE PRECISION" || name == "FLOAT8") {
+    return DOUBLE();
+  }
+  if (name == "VARCHAR" || name == "CHAR" || name == "BPCHAR" ||
+      name == "TEXT" || name == "STRING") {
+    return VARCHAR();
+  }
+  if (name == "BLOB" || name == "BYTEA" || name == "VARBINARY") {
+    return VARBINARY();
+  }
+  if (name == "DATE") {
+    return DATE();
+  }
+  if (name == "TIME") {
+    return TIME();
+  }
+  if (name == "TIMESTAMP" || name == "DATETIME") {
+    return TIMESTAMP();
+  }
+  if (name == "INTERVAL") {
+    return INTERVAL_DAY_TIME();
+  }
+  return nullptr;
+}
+
+TypePtr typeFromName(const std::string& name) {
+  if (auto customType = customTypeFromName(name)) {
+    return customType;
+  }
+  return builtinTypeFromName(name);
+}
+
 } // namespace
 
 Variant decimalVariant(const Value& val) {
@@ -141,20 +199,6 @@ LogicalType fromVeloxType(const TypePtr& type) {
 
 //! Type mapping for DuckDB -> velox conversions, we support more types here
 TypePtr toVeloxType(LogicalType type, bool fileColumnNamesReadAsLowerCase) {
-  // In DuckDB v1.5.2+, the parser produces UNBOUND types for type names
-  // (e.g. BOOLEAN, INTEGER) that haven't been resolved by the binder.
-  // Since Velox only uses DuckDB's parser, resolve them here.
-  if (type.id() == LogicalTypeId::UNBOUND) {
-    const auto name = type.ToString();
-    if (auto customType = customTypeFromName(name)) {
-      return customType;
-    }
-    auto bound = ::duckdb::UnboundType::TryParseAndDefaultBind(name);
-    if (bound.id() != LogicalTypeId::UNBOUND) {
-      return toVeloxType(std::move(bound), fileColumnNamesReadAsLowerCase);
-    }
-  }
-
   switch (type.id()) {
     case LogicalTypeId::SQLNULL:
       return UNKNOWN();
@@ -239,8 +283,10 @@ TypePtr toVeloxType(LogicalType type, bool fileColumnNamesReadAsLowerCase) {
       [[fallthrough]];
     }
     default:
-      if (auto customType = customTypeFromName(type.ToString())) {
-        return customType;
+      // DuckDB's parser can produce parser-only type names that are not bound
+      // without a full binder. Resolve the names Velox supports locally.
+      if (auto typeFromString = typeFromName(type.ToString())) {
+        return typeFromString;
       }
       throw std::runtime_error(
           "unsupported type for duckdb -> velox conversion: " +
@@ -276,6 +322,18 @@ Variant duckValueToVariant(const Value& val) {
       return Variant::binary(val.GetValue<std::string>());
     case LogicalTypeId::DATE:
       return Variant(val.GetValue<::duckdb::date_t>().days);
+    case LogicalTypeId::LIST: {
+      if (val.IsNull()) {
+        return Variant::null(TypeKind::ARRAY);
+      }
+      std::vector<Variant> elements;
+      const auto& children = ::duckdb::ListValue::GetChildren(val);
+      elements.reserve(children.size());
+      for (const auto& child : children) {
+        elements.push_back(duckValueToVariant(child));
+      }
+      return Variant::array(std::move(elements));
+    }
     default:
       throw std::runtime_error(
           "unsupported type for duckdb value -> velox variant conversion: " +

@@ -13,7 +13,7 @@
 # limitations under the License.
 include_guard(GLOBAL)
 
-set(VELOX_DUCKDB_VERSION 1.5.2)
+set(VELOX_DUCKDB_VERSION 1.4.4)
 set(
   VELOX_DUCKDB_BUILD_SHA256_CHECKSUM
   6d8612fc87115cf4d3512a934ada5d1669db29378b4cc8e226fdfa8f5c537385

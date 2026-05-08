@@ -38,7 +38,7 @@ by Velox. See details on bundling below.
 | mvfst             | v2026.01.05.00  | No       ||
 | fbthrift          | v2026.01.05.00  | No       ||
 | libstemmer        | 2.2.0           | Yes      ||
-| DuckDB (testing)  | 1.5.2           | Yes      ||
+| DuckDB (testing)  | 1.4.4           | Yes      ||
 | arrow             | 15.0.0          | Yes      ||
 | geos              | 3.10.7          | Yes      ||
 | s2geometry        | 0.12.0          | Yes      ||

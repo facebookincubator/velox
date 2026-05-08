@@ -165,6 +165,9 @@ TEST(DuckParserTest, in) {
   EXPECT_EQ(
       "in(\"col1\",{a, null, b, c})",
       parseExpr("col1 in ('a', null, 'b', 'c')")->toString());
+  EXPECT_EQ(
+      "in(\"col1\",{1, 2, 4})",
+      parseExpr("col1 in (1::smallint, 2::smallint, 4::smallint)")->toString());
 }
 
 TEST(DuckParserTest, inListAsArray) {

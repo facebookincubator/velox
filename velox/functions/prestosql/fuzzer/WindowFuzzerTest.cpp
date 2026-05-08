@@ -176,7 +176,7 @@ int main(int argc, char** argv) {
   using facebook::velox::exec::test::SetDigestResultVerifier;
   using facebook::velox::exec::test::TDigestAggregateResultVerifier;
 
-  static const std::unordered_map<
+  std::unordered_map<
       std::string,
       std::shared_ptr<facebook::velox::exec::test::ResultVerifier>>
       customVerificationFunctions = {
@@ -201,6 +201,15 @@ int main(int argc, char** argv) {
           {"make_set_digest", std::make_shared<SetDigestResultVerifier>()},
           {"merge_set_digest", std::make_shared<SetDigestResultVerifier>()},
       };
+
+  if (!FLAGS_presto_url.empty()) {
+    // DuckDB 1.4 returns NaN for zero-variance cases, while Presto returns
+    // NULL. These functions are still verified against DuckDB.
+    customVerificationFunctions.insert({
+        {"corr", nullptr},
+        {"regr_slope", nullptr},
+    });
+  }
 
   static const std::unordered_set<std::string> orderDependentFunctions = {
       // Window functions.
