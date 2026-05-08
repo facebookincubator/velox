@@ -153,9 +153,13 @@ class CudfDeletionVectorReaderTest : public ::testing::Test {
     filesystems::registerLocalFileSystem();
   }
 
-  rmm::cuda_stream_view stream_{cudf::get_default_stream()};
-  rmm::device_async_resource_ref mr_{
-      rmm::mr::get_current_device_resource_ref()};
+  auto stream() const {
+    return cudf::get_default_stream();
+  }
+
+  auto mr() const {
+    return rmm::mr::get_current_device_resource_ref();
+  }
 };
 
 TEST_F(CudfDeletionVectorReaderTest, basicArrayContainer) {
@@ -171,10 +175,10 @@ TEST_F(CudfDeletionVectorReaderTest, basicArrayContainer) {
   EXPECT_FALSE(reader.noMoreData());
 
   constexpr auto numRows = 100;
-  auto deleteMask = makeDeletionColumn(numRows, stream_, mr_);
-  reader.applyDeletes(deleteMask->mutable_view(), 0, numRows, stream_, mr_);
+  auto deleteMask = makeDeletionColumn(numRows, stream(), mr());
+  reader.applyDeletes(deleteMask->mutable_view(), 0, numRows, stream(), mr());
 
-  auto setBits = getSetBits<IndexType>(deleteMask->view(), numRows, stream_);
+  auto setBits = getSetBits<IndexType>(deleteMask->view(), numRows, stream());
   EXPECT_EQ(setBits, positions);
   EXPECT_TRUE(reader.noMoreData());
 }
@@ -191,23 +195,23 @@ TEST_F(CudfDeletionVectorReaderTest, batchRangeFiltering) {
   CudfDeletionVectorReader reader(dvFile);
 
   // First batch: rows 0-24 (should contain positions 10, 20).
-  auto mask1 = makeDeletionColumn(25, stream_, mr_);
-  reader.applyDeletes(mask1->mutable_view(), 0, 25, stream_, mr_);
-  auto bits1 = getSetBits<IndexType>(mask1->view(), 25, stream_);
+  auto mask1 = makeDeletionColumn(25, stream(), mr());
+  reader.applyDeletes(mask1->mutable_view(), 0, 25, stream(), mr());
+  auto bits1 = getSetBits<IndexType>(mask1->view(), 25, stream());
   EXPECT_EQ(bits1, (std::vector<IndexType>{10, 20}));
 
   // Second batch: rows 25-49 (should contain positions 30, 40).
   // Chunk-local indices for 30 and 40 are 5 and 15.
-  auto mask2 = makeDeletionColumn(25, stream_, mr_);
-  reader.applyDeletes(mask2->mutable_view(), 25, 25, stream_, mr_);
-  auto bits2 = getSetBits<IndexType>(mask2->view(), 25, stream_);
+  auto mask2 = makeDeletionColumn(25, stream(), mr());
+  reader.applyDeletes(mask2->mutable_view(), 25, 25, stream(), mr());
+  auto bits2 = getSetBits<IndexType>(mask2->view(), 25, stream());
   EXPECT_EQ(bits2, (std::vector<IndexType>{5, 15}));
 
   // Third batch: rows 50-74 (should contain position 50).
   // Chunk-local index for 50 is 0.
-  auto mask3 = makeDeletionColumn(25, stream_, mr_);
-  reader.applyDeletes(mask3->mutable_view(), 50, 25, stream_, mr_);
-  auto bits3 = getSetBits<IndexType>(mask3->view(), 25, stream_);
+  auto mask3 = makeDeletionColumn(25, stream(), mr());
+  reader.applyDeletes(mask3->mutable_view(), 50, 25, stream(), mr());
+  auto bits3 = getSetBits<IndexType>(mask3->view(), 25, stream());
   EXPECT_EQ(bits3, (std::vector<IndexType>{0}));
 }
 
@@ -223,10 +227,10 @@ TEST_F(CudfDeletionVectorReaderTest, noDeletesInRange) {
   CudfDeletionVectorReader reader(dvFile);
   // Table has 100 rows; deleted positions 1000/2000 are out of range.
   constexpr auto numRows = 100;
-  auto deleteMask = makeDeletionColumn(numRows, stream_, mr_);
-  reader.applyDeletes(deleteMask->mutable_view(), 0, numRows, stream_, mr_);
+  auto deleteMask = makeDeletionColumn(numRows, stream(), mr());
+  reader.applyDeletes(deleteMask->mutable_view(), 0, numRows, stream(), mr());
 
-  auto setBits = getSetBits<IndexType>(deleteMask->view(), numRows, stream_);
+  auto setBits = getSetBits<IndexType>(deleteMask->view(), numRows, stream());
   EXPECT_TRUE(setBits.empty());
 }
 
@@ -245,10 +249,10 @@ TEST_F(CudfDeletionVectorReaderTest, runContainers) {
   CudfDeletionVectorReader reader(dvFile);
 
   constexpr auto numRows = 100;
-  auto deleteMask = makeDeletionColumn(numRows, stream_, mr_);
-  reader.applyDeletes(deleteMask->mutable_view(), 0, numRows, stream_, mr_);
+  auto deleteMask = makeDeletionColumn(numRows, stream(), mr());
+  reader.applyDeletes(deleteMask->mutable_view(), 0, numRows, stream(), mr());
 
-  auto setBits = getSetBits<IndexType>(deleteMask->view(), numRows, stream_);
+  auto setBits = getSetBits<IndexType>(deleteMask->view(), numRows, stream());
   // Expect positions 10-19 and 50-59 to be deleted
   std::vector<IndexType> expected(20);
   std::iota(expected.begin(), expected.begin() + 10, IndexType{10});
@@ -269,10 +273,10 @@ TEST_F(CudfDeletionVectorReaderTest, largePositionsMultipleContainers) {
   CudfDeletionVectorReader reader(dvFile);
 
   constexpr auto numRows = 66000;
-  auto deleteMask = makeDeletionColumn(numRows, stream_, mr_);
-  reader.applyDeletes(deleteMask->mutable_view(), 0, numRows, stream_, mr_);
+  auto deleteMask = makeDeletionColumn(numRows, stream(), mr());
+  reader.applyDeletes(deleteMask->mutable_view(), 0, numRows, stream(), mr());
 
-  auto setBits = getSetBits<IndexType>(deleteMask->view(), numRows, stream_);
+  auto setBits = getSetBits<IndexType>(deleteMask->view(), numRows, stream());
   EXPECT_EQ(setBits, (std::vector<IndexType>{5, 100, 65536, 65600}));
 }
 
@@ -294,10 +298,10 @@ TEST_F(CudfDeletionVectorReaderTest, blobOffset) {
   CudfDeletionVectorReader reader(dvFile);
 
   constexpr auto numRows = 20;
-  auto deleteMask = makeDeletionColumn(numRows, stream_, mr_);
-  reader.applyDeletes(deleteMask->mutable_view(), 0, numRows, stream_, mr_);
+  auto deleteMask = makeDeletionColumn(numRows, stream(), mr());
+  reader.applyDeletes(deleteMask->mutable_view(), 0, numRows, stream(), mr());
 
-  auto setBits = getSetBits<IndexType>(deleteMask->view(), numRows, stream_);
+  auto setBits = getSetBits<IndexType>(deleteMask->view(), numRows, stream());
   EXPECT_EQ(setBits, (std::vector<IndexType>{3, 7, 11}));
 }
 
@@ -312,10 +316,10 @@ TEST_F(CudfDeletionVectorReaderTest, singlePosition) {
   CudfDeletionVectorReader reader(dvFile);
 
   constexpr auto numRows = 100;
-  auto deleteMask = makeDeletionColumn(numRows, stream_, mr_);
-  reader.applyDeletes(deleteMask->mutable_view(), 0, numRows, stream_, mr_);
+  auto deleteMask = makeDeletionColumn(numRows, stream(), mr());
+  reader.applyDeletes(deleteMask->mutable_view(), 0, numRows, stream(), mr());
 
-  auto setBits = getSetBits<IndexType>(deleteMask->view(), numRows, stream_);
+  auto setBits = getSetBits<IndexType>(deleteMask->view(), numRows, stream());
   EXPECT_EQ(setBits, (std::vector<IndexType>{42}));
 }
 
@@ -333,10 +337,10 @@ TEST_F(CudfDeletionVectorReaderTest, consecutivePositions) {
 
   // Chunk covers rows 0-99; all 100 should be deleted.
   constexpr auto numRows = 100;
-  auto deleteMask = makeDeletionColumn(numRows, stream_, mr_);
-  reader.applyDeletes(deleteMask->mutable_view(), 0, numRows, stream_, mr_);
+  auto deleteMask = makeDeletionColumn(numRows, stream(), mr());
+  reader.applyDeletes(deleteMask->mutable_view(), 0, numRows, stream(), mr());
 
-  auto setBits = getSetBits<IndexType>(deleteMask->view(), numRows, stream_);
+  auto setBits = getSetBits<IndexType>(deleteMask->view(), numRows, stream());
   std::vector<IndexType> expected(100);
   std::iota(expected.begin(), expected.end(), IndexType{0});
   EXPECT_EQ(setBits, expected);
@@ -356,11 +360,11 @@ TEST_F(CudfDeletionVectorReaderTest, startRowOffset) {
   // Create a 20-row chunk; startRow=100 means the reader maps row 0 of this
   // chunk to absolute position 100.
   constexpr uint64_t numRows = 20;
-  auto deleteMask = makeDeletionColumn(numRows, stream_, mr_);
-  reader.applyDeletes(deleteMask->mutable_view(), 100, numRows, stream_, mr_);
+  auto deleteMask = makeDeletionColumn(numRows, stream(), mr());
+  reader.applyDeletes(deleteMask->mutable_view(), 100, numRows, stream(), mr());
 
   // Absolute positions 100, 105, 110 correspond to chunk indices 0, 5, 10.
-  auto setBits = getSetBits<IndexType>(deleteMask->view(), numRows, stream_);
+  auto setBits = getSetBits<IndexType>(deleteMask->view(), numRows, stream());
   EXPECT_EQ(setBits, (std::vector<IndexType>{0, 5, 10}));
 }
 
@@ -379,18 +383,18 @@ TEST_F(CudfDeletionVectorReaderTest, noMoreDataAfterAllConsumed) {
   EXPECT_FALSE(reader.noMoreData());
 
   constexpr uint64_t numRows = 10;
-  auto mask1 = makeDeletionColumn(numRows, stream_, mr_);
-  reader.applyDeletes(mask1->mutable_view(), 0, numRows, stream_, mr_);
+  auto mask1 = makeDeletionColumn(numRows, stream(), mr());
+  reader.applyDeletes(mask1->mutable_view(), 0, numRows, stream(), mr());
   EXPECT_TRUE(reader.noMoreData());
 
-  auto bits1 = getSetBits<IndexType>(mask1->view(), numRows, stream_);
+  auto bits1 = getSetBits<IndexType>(mask1->view(), numRows, stream());
   EXPECT_EQ(bits1, (std::vector<IndexType>{0, 1, 2}));
 
   // A second call on a chunk past the deleted positions should leave the
   // mask all-false.
-  auto mask2 = makeDeletionColumn(numRows, stream_, mr_);
-  reader.applyDeletes(mask2->mutable_view(), 10, numRows, stream_, mr_);
-  auto bits2 = getSetBits<IndexType>(mask2->view(), numRows, stream_);
+  auto mask2 = makeDeletionColumn(numRows, stream(), mr());
+  reader.applyDeletes(mask2->mutable_view(), 10, numRows, stream(), mr());
+  auto bits2 = getSetBits<IndexType>(mask2->view(), numRows, stream());
   EXPECT_TRUE(bits2.empty());
   EXPECT_TRUE(reader.noMoreData());
 }
@@ -420,10 +424,10 @@ TEST_F(CudfDeletionVectorReaderTest, largeDeletionVector) {
   // Apply to a 2000-row chunk starting at row 0. Only positions in
   // container 0 (key=0, positions 0,64,128,...,65472) overlap with [0,2000).
   constexpr auto numRows = 2000;
-  auto deleteMask = makeDeletionColumn(numRows, stream_, mr_);
-  reader.applyDeletes(deleteMask->mutable_view(), 0, numRows, stream_, mr_);
+  auto deleteMask = makeDeletionColumn(numRows, stream(), mr());
+  reader.applyDeletes(deleteMask->mutable_view(), 0, numRows, stream(), mr());
 
-  auto setBits = getSetBits<IndexType>(deleteMask->view(), numRows, stream_);
+  auto setBits = getSetBits<IndexType>(deleteMask->view(), numRows, stream());
   // Only positions in container 0 overlap [0, 2000): 0, 64, 128, ..., 1984.
   std::vector<IndexType> expected;
   for (IndexType i = 0; i < numRows; i += IndexType{64}) {

@@ -34,6 +34,7 @@
 #include <cudf/types.hpp>
 
 #include <limits>
+#include <unordered_map>
 
 namespace facebook::velox::cudf_velox::connector::hive::iceberg {
 
@@ -82,7 +83,8 @@ CudfEqualityDeleteFileReader::CudfEqualityDeleteFileReader(
       0,
       deleteFile.fileSizeInBytes);
 
-  dwio::common::ReaderOptions deleteReaderOpts(pool_);
+  dwio::common::ReaderOptions deleteReaderOpts(
+      pool_, ioStatistics.get(), ioStatistics.get());
   velox_hive::configureReaderOptions(
       hiveConfig,
       connectorQueryCtx,
@@ -209,22 +211,26 @@ void CudfEqualityDeleteFileReader::buildEqualityColumnIndices(
     return;
   }
 
+  std::unordered_map<std::string, cudf::size_type> columnIndexToNameMap;
+  columnIndexToNameMap.reserve(inputColumnNames.size());
+  auto inputColIndex = 0;
+  std::transform(
+      inputColumnNames.begin(),
+      inputColumnNames.end(),
+      std::inserter(columnIndexToNameMap, columnIndexToNameMap.end()),
+      [&inputColIndex](const auto& inputColName) {
+        return std::make_pair(inputColName, inputColIndex++);
+      });
+
   equalityColumnIndices_.reserve(equalityColumnNames_.size());
   for (const auto& eqColName : equalityColumnNames_) {
-    bool found = false;
-    for (cudf::size_type i = 0;
-         i < static_cast<cudf::size_type>(inputColumnNames.size());
-         ++i) {
-      if (inputColumnNames[i] == eqColName) {
-        equalityColumnIndices_.push_back(i);
-        found = true;
-        break;
-      }
-    }
-    VELOX_CHECK(
-        found,
+    const auto it = columnIndexToNameMap.find(eqColName);
+    VELOX_CHECK_NE(
+        it,
+        columnIndexToNameMap.end(),
         "Equality delete column not found in input table: {}",
         eqColName);
+    equalityColumnIndices_.push_back(it->second);
   }
 }
 
