@@ -844,7 +844,7 @@ class CallbackSinkAdapter : public OperatorAdapter {
   }
 };
 
-/// WindowAdapter - Replaces with CudfWindow
+// WindowAdapter - Replaces with CudfWindow
 class WindowAdapter : public OperatorAdapter {
  public:
   WindowAdapter() : OperatorAdapter("Window") {}
