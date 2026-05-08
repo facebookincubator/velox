@@ -30,6 +30,9 @@ class PlanNodeTest : public testing::Test, public test::VectorTestBase {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+    Type::registerSerDe();
+    core::PlanNode::registerSerDe();
+    core::ITypedExpr::registerSerDe();
   }
 
   PlanNodeTest() {
@@ -736,10 +739,6 @@ TEST_F(PlanNodeTest, rpcNodeSerdeWithConstants) {
 }
 
 TEST_F(PlanNodeTest, exchangeNodeTransportTypeSerialization) {
-  Type::registerSerDe();
-  core::PlanNode::registerSerDe();
-  core::ITypedExpr::registerSerDe();
-
   // Round-trip with kUcx transport.
   {
     auto node = std::make_shared<ExchangeNode>(
@@ -761,9 +760,7 @@ TEST_F(PlanNodeTest, exchangeNodeTransportTypeSerialization) {
     auto deserialized = std::dynamic_pointer_cast<const ExchangeNode>(
         ExchangeNode::create(serialized, nullptr));
     ASSERT_EQ(deserialized->transportType(), TransportType::kHttp);
-    ASSERT_THAT(
-        node->toString(/*detailed=*/true),
-        testing::Not(testing::HasSubstr("UCX")));
+    ASSERT_THAT(node->toString(/*detailed=*/true), testing::HasSubstr("HTTP"));
   }
 
   // Backward compatibility: missing transportType field defaults to kHttp.
@@ -779,10 +776,6 @@ TEST_F(PlanNodeTest, exchangeNodeTransportTypeSerialization) {
 }
 
 TEST_F(PlanNodeTest, mergeExchangeNodeTransportTypeSerialization) {
-  Type::registerSerDe();
-  core::PlanNode::registerSerDe();
-  core::ITypedExpr::registerSerDe();
-
   auto sortingKeys = std::vector<FieldAccessTypedExprPtr>{
       std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "c0"),
   };
@@ -819,9 +812,7 @@ TEST_F(PlanNodeTest, mergeExchangeNodeTransportTypeSerialization) {
     auto deserialized = std::dynamic_pointer_cast<const MergeExchangeNode>(
         MergeExchangeNode::create(serialized, nullptr));
     ASSERT_EQ(deserialized->transportType(), TransportType::kHttp);
-    ASSERT_THAT(
-        node->toString(/*detailed=*/true),
-        testing::Not(testing::HasSubstr("UCX")));
+    ASSERT_THAT(node->toString(/*detailed=*/true), testing::HasSubstr("HTTP"));
   }
 
   // Backward compatibility: missing transportType field defaults to kHttp.
@@ -842,10 +833,6 @@ TEST_F(PlanNodeTest, mergeExchangeNodeTransportTypeSerialization) {
 }
 
 TEST_F(PlanNodeTest, partitionedOutputNodeTransportTypeSerialization) {
-  Type::registerSerDe();
-  core::PlanNode::registerSerDe();
-  core::ITypedExpr::registerSerDe();
-
   auto source = std::make_shared<ValuesNode>("source", rowData_);
   const auto serdeKind = "presto";
 
@@ -870,9 +857,7 @@ TEST_F(PlanNodeTest, partitionedOutputNodeTransportTypeSerialization) {
     auto deserialized = std::dynamic_pointer_cast<const PartitionedOutputNode>(
         PartitionedOutputNode::create(serialized, pool_.get()));
     ASSERT_EQ(deserialized->transportType(), TransportType::kHttp);
-    ASSERT_THAT(
-        node->toString(/*detailed=*/true),
-        testing::Not(testing::HasSubstr("UCX")));
+    ASSERT_THAT(node->toString(/*detailed=*/true), testing::HasSubstr("HTTP"));
   }
 
   // Backward compatibility: missing transportType field defaults to kHttp.

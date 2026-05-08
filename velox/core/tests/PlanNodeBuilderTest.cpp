@@ -498,17 +498,20 @@ TEST_F(PlanNodeBuilderTest, exchangeNode) {
   const PlanNodeId id = "exchange_node_id";
   const RowTypePtr type = ROW({"c0"}, {BIGINT()});
   const auto serdeKind = "Presto";
+  const auto transportType = TransportType::kUcx;
 
   const auto verify = [&](const std::shared_ptr<const ExchangeNode>& node) {
     EXPECT_EQ(node->id(), id);
     EXPECT_EQ(node->outputType(), type);
     EXPECT_EQ(node->serdeKind(), serdeKind);
+    EXPECT_EQ(node->transportType(), transportType);
   };
 
   const auto node = ExchangeNode::Builder()
                         .id(id)
                         .outputType(type)
                         .serdeKind(serdeKind)
+                        .transportType(transportType)
                         .build();
   verify(node);
 
@@ -523,6 +526,7 @@ TEST_F(PlanNodeBuilderTest, mergeExchangeNode) {
   const std::vector<FieldAccessTypedExprPtr> sortingKeys = {
       std::make_shared<FieldAccessTypedExpr>(BIGINT(), "c1")};
   const std::vector<SortOrder> sortingOrders = {SortOrder(true, false)};
+  const auto transportType = TransportType::kUcx;
 
   const auto verify =
       [&](const std::shared_ptr<const MergeExchangeNode>& node) {
@@ -531,6 +535,7 @@ TEST_F(PlanNodeBuilderTest, mergeExchangeNode) {
         EXPECT_EQ(node->sortingKeys(), sortingKeys);
         EXPECT_EQ(node->sortingOrders(), sortingOrders);
         EXPECT_EQ(node->serdeKind(), serdeKind);
+        EXPECT_EQ(node->transportType(), transportType);
       };
 
   const auto node = MergeExchangeNode::Builder()
@@ -539,6 +544,7 @@ TEST_F(PlanNodeBuilderTest, mergeExchangeNode) {
                         .sortingKeys(sortingKeys)
                         .sortingOrders(sortingOrders)
                         .serdeKind(serdeKind)
+                        .transportType(transportType)
                         .build();
   verify(node);
 
@@ -613,6 +619,7 @@ TEST_F(PlanNodeBuilderTest, partitionedOutputNode) {
       std::make_shared<GatherPartitionFunctionSpec>();
   const RowTypePtr outputType = ROW({"c0"}, {BIGINT()});
   const auto serdeKind = "Presto";
+  const auto transportType = TransportType::kUcx;
 
   const auto verify =
       [&](const std::shared_ptr<const PartitionedOutputNode>& node) {
@@ -623,6 +630,7 @@ TEST_F(PlanNodeBuilderTest, partitionedOutputNode) {
         EXPECT_EQ(node->isReplicateNullsAndAny(), replicateNullsAndAny);
         EXPECT_EQ(node->outputType(), outputType);
         EXPECT_EQ(node->serdeKind(), serdeKind);
+        EXPECT_EQ(node->transportType(), transportType);
         EXPECT_EQ(node->partitionFunctionSpecPtr(), partitionFunctionSpec);
         EXPECT_EQ(node->sources(), std::vector<PlanNodePtr>{source_});
       };
@@ -636,6 +644,7 @@ TEST_F(PlanNodeBuilderTest, partitionedOutputNode) {
                         .partitionFunctionSpec(partitionFunctionSpec)
                         .outputType(outputType)
                         .serdeKind(serdeKind)
+                        .transportType(transportType)
                         .source(source_)
                         .build();
   verify(node);
