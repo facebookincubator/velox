@@ -2018,6 +2018,37 @@ TEST_F(ParquetReaderTest, readTimeMillis) {
 
   assertReadWithReaderAndExpected(rowType, *rowReader, data, *leafPool_);
 }
+TEST_F(ParquetReaderTest, readDeltaLengthByteArray) {
+  // delta_length_byte_array.parquet has 1 column (FRUIT: STRING) with 1000 rows
+  // encoded using DELTA_LENGTH_BYTE_ARRAY encoding.
+  const std::string file(getExampleFilePath("delta_length_byte_array.parquet"));
+
+  dwio::common::ReaderOptions readerOptions{
+      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  auto reader = createReader(file, readerOptions);
+  EXPECT_EQ(reader->numberOfRows(), 1000ULL);
+
+  auto type = reader->typeWithId();
+  EXPECT_EQ(type->size(), 1ULL);
+  EXPECT_EQ(type->childAt(0)->type()->kind(), TypeKind::VARCHAR);
+
+  auto rowType = ROW({"FRUIT"}, {VARCHAR()});
+  auto rowReaderOpts = getReaderOpts(rowType);
+  auto scanSpec = makeScanSpec(rowType);
+  rowReaderOpts.setScanSpec(scanSpec);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  VectorPtr result;
+  auto numRead = rowReader->next(1000, result);
+  EXPECT_EQ(numRead, 1000);
+
+  auto* rowVector = result->as<RowVector>();
+  auto* strings = rowVector->childAt(0)->asFlatVector<StringView>();
+  EXPECT_EQ(strings->valueAt(0).str(), "apple_banana_mango0");
+  EXPECT_EQ(strings->valueAt(1).str(), "apple_banana_mango1");
+  EXPECT_EQ(strings->valueAt(999).str(), "apple_banana_mango998001");
+}
+
 
 TEST_F(ParquetReaderTest, readTimeWithMultipleColumns) {
   const auto rowType =

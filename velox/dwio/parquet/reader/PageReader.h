@@ -315,6 +315,9 @@ class PageReader {
         nullsFromFastPath = dwio::common::useFastPath<Visitor, true>(visitor);
         auto dictVisitor = visitor.toStringDictionaryColumnVisitor();
         dictionaryIdDecoder_->readWithVisitor<true>(nulls, dictVisitor);
+      } else if (encoding_ == thrift::Encoding::DELTA_LENGTH_BYTE_ARRAY) {
+        nullsFromFastPath = false;
+        deltaLengthByteArrDecoder_->readWithVisitor<true>(nulls, visitor);
       } else if (encoding_ == thrift::Encoding::DELTA_BYTE_ARRAY) {
         nullsFromFastPath = false;
         deltaByteArrDecoder_->readWithVisitor<true>(nulls, visitor);
@@ -326,6 +329,8 @@ class PageReader {
       if (isDictionary()) {
         auto dictVisitor = visitor.toStringDictionaryColumnVisitor();
         dictionaryIdDecoder_->readWithVisitor<false>(nullptr, dictVisitor);
+      } else if (encoding_ == thrift::Encoding::DELTA_LENGTH_BYTE_ARRAY) {
+        deltaLengthByteArrDecoder_->readWithVisitor<false>(nulls, visitor);
       } else if (encoding_ == thrift::Encoding::DELTA_BYTE_ARRAY) {
         deltaByteArrDecoder_->readWithVisitor<false>(nulls, visitor);
       } else {
@@ -522,6 +527,7 @@ class PageReader {
   std::unique_ptr<BooleanDecoder> booleanDecoder_;
   std::unique_ptr<DeltaBpDecoder> deltaBpDecoder_;
   std::unique_ptr<DeltaByteArrayDecoder> deltaByteArrDecoder_;
+  std::unique_ptr<DeltaLengthByteArrayDecoder> deltaLengthByteArrDecoder_;
   std::unique_ptr<RleBpDataDecoder> rleBooleanDecoder_;
   // Add decoders for other encodings here.
 };

@@ -31,6 +31,54 @@ class DeltaLengthByteArrayDecoder {
     bufferStart_ = lengthDecoder_->bufferStart();
   }
 
+
+  void skip(uint64_t numValues) {
+    skip<false>(numValues, 0, nullptr);
+  }
+
+  template <bool hasNulls>
+  inline void skip(int32_t numValues, int32_t current, const uint64_t* nulls) {
+    if (hasNulls) {
+      numValues = bits::countNonNulls(nulls, current, current + numValues);
+    }
+    for (int32_t i = 0; i < numValues; ++i) {
+      readString();
+    }
+  }
+
+  template <bool hasNulls, typename Visitor>
+  void readWithVisitor(const uint64_t* nulls, Visitor visitor) {
+    int32_t current = visitor.start();
+    skip<hasNulls>(current, 0, nulls);
+    int32_t toSkip;
+    bool atEnd = false;
+    const bool allowNulls = hasNulls && visitor.allowNulls();
+    for (;;) {
+      if (hasNulls && allowNulls && bits::isBitNull(nulls, current)) {
+        toSkip = visitor.processNull(atEnd);
+      } else {
+        if (hasNulls && !allowNulls) {
+          toSkip = visitor.checkAndSkipNulls(nulls, current, atEnd);
+          if (!Visitor::dense) {
+            skip<false>(toSkip, current, nullptr);
+          }
+          if (atEnd) {
+            return;
+          }
+        }
+        toSkip = visitor.process(readString(), atEnd);
+      }
+      ++current;
+      if (toSkip) {
+        skip<hasNulls>(toSkip, current, nulls);
+        current += toSkip;
+      }
+      if (atEnd) {
+        return;
+      }
+    }
+  }
+
   std::string_view readString() {
     const int64_t length = bufferedLength_[lengthIdx_++];
     VELOX_CHECK_GE(length, 0, "negative string delta length");
