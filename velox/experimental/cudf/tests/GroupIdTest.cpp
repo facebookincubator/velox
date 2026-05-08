@@ -237,17 +237,21 @@ TEST_F(CudfGroupIdTest, groupingSetsEmptyInput) {
       "SELECT k1, k2, sum(a) FROM tmp GROUP BY GROUPING SETS ((k1), (k2))");
 }
 
-// Test: Verify NULL values in non-grouping columns
-TEST_F(CudfGroupIdTest, nullsInNonGroupingColumns) {
+// Test: Verify NULL values in non-grouping columns and nulls within grouping
+// key input columns are preserved correctly.
+TEST_F(CudfGroupIdTest, nullHandling) {
+  // Input has nulls in grouping key columns: c0 has null at row 1,
+  // c1 has null at row 0.
   auto input = makeRowVector({
-      makeFlatVector<int32_t>({1, 2}),
-      makeFlatVector<int32_t>({10, 20}),
+      makeNullableFlatVector<int32_t>({1, std::nullopt}),
+      makeNullableFlatVector<int32_t>({std::nullopt, 20}),
       makeFlatVector<int64_t>({100, 200}),
   });
 
   // GROUPING SETS ((c0), (c1))
-  // For grouping set (c0): c1 should be NULL
-  // For grouping set (c1): c0 should be NULL
+  // For grouping set (c0): c1 should be NULL (synthesized), c0 preserves input
+  // nulls For grouping set (c1): c0 should be NULL (synthesized), c1 preserves
+  // input nulls
   auto plan = PlanBuilder()
                   .values({input})
                   .groupId({"c0", "c1"}, {{"c0"}, {"c1"}}, {"c2"})
@@ -262,21 +266,25 @@ TEST_F(CudfGroupIdTest, nullsInNonGroupingColumns) {
   auto c1 = result->childAt(1)->asFlatVector<int32_t>();
   auto groupId = result->childAt(3)->asFlatVector<int64_t>();
 
-  // First grouping set (c0): c1 is NULL
+  // First grouping set (c0): c1 is NULL (synthesized)
+  // c0 preserves input values: row 0 has value 1, row 1 has null (from input)
   EXPECT_EQ(0, groupId->valueAt(0));
   EXPECT_EQ(0, groupId->valueAt(1));
   EXPECT_FALSE(c0->isNullAt(0));
-  EXPECT_FALSE(c0->isNullAt(1));
-  EXPECT_TRUE(c1->isNullAt(0));
-  EXPECT_TRUE(c1->isNullAt(1));
+  EXPECT_EQ(1, c0->valueAt(0));
+  EXPECT_TRUE(c0->isNullAt(1)); // Input null preserved
+  EXPECT_TRUE(c1->isNullAt(0)); // Synthesized null
+  EXPECT_TRUE(c1->isNullAt(1)); // Synthesized null
 
-  // Second grouping set (c1): c0 is NULL
+  // Second grouping set (c1): c0 is NULL (synthesized)
+  // c1 preserves input values: row 0 has null (from input), row 1 has value 20
   EXPECT_EQ(1, groupId->valueAt(2));
   EXPECT_EQ(1, groupId->valueAt(3));
-  EXPECT_TRUE(c0->isNullAt(2));
-  EXPECT_TRUE(c0->isNullAt(3));
-  EXPECT_FALSE(c1->isNullAt(2));
+  EXPECT_TRUE(c0->isNullAt(2));  // Synthesized null
+  EXPECT_TRUE(c0->isNullAt(3));  // Synthesized null
+  EXPECT_TRUE(c1->isNullAt(2));  // Input null preserved
   EXPECT_FALSE(c1->isNullAt(3));
+  EXPECT_EQ(20, c1->valueAt(3));
 }
 
 // Test: Multiple batches
