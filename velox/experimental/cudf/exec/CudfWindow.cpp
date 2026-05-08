@@ -41,96 +41,6 @@
 
 namespace facebook::velox::cudf_velox {
 
-std::unique_ptr<cudf::column> CudfWindow::computeRankColumn(
-    cudf::table_view const& sortedInput,
-    const std::string& baseName,
-    rmm::cuda_stream_view stream) const {
-  auto mr = get_output_mr();
-  auto const n = sortedInput.num_rows();
-
-  // Convert function name to cudf rank method.
-  auto toRankMethod = [](const std::string& name) {
-    if (name == "row_number") {
-      return cudf::rank_method::FIRST;
-    } else if (name == "rank") {
-      return cudf::rank_method::MIN;
-    }
-    return cudf::rank_method::DENSE;
-  };
-
-  // Get sort order and null order for ranking.
-  auto colOrder =
-      sortKeyIndices_.empty() ? cudf::order::ASCENDING : sortOrders_[0];
-  auto nullOrd =
-      sortKeyIndices_.empty() ? cudf::null_order::BEFORE : nullOrders_[0];
-
-  // Build the values column for tie detection. For rank/dense_rank with
-  // multiple sort keys, wrap them in a STRUCT for composite comparison.
-  // row_number doesn't need tie detection, so single column suffices.
-  std::vector<cudf::column_view> structChildren;
-  auto buildValuesCol = [&]() -> cudf::column_view {
-    if (sortKeyIndices_.empty()) {
-      return sortedInput.column(0);
-    }
-    if (sortKeyIndices_.size() == 1 || baseName == "row_number") {
-      return sortedInput.column(sortKeyIndices_[0]);
-    }
-    structChildren.reserve(sortKeyIndices_.size());
-    for (auto idx : sortKeyIndices_) {
-      structChildren.push_back(sortedInput.column(idx));
-    }
-    return cudf::column_view(
-        cudf::data_type{cudf::type_id::STRUCT},
-        n,
-        nullptr,
-        nullptr,
-        0,
-        0,
-        structChildren);
-  };
-
-  // For global windows (no partition keys), use cudf::scan or cudf::sequence
-  // instead of groupby with a synthetic partition column.
-  if (partitionKeyIndices_.empty()) {
-    if (baseName == "row_number") {
-      // row_number is just a sequence 1, 2, 3, ..., N
-      auto oneScalar = cudf::numeric_scalar<int64_t>(1, true, stream, mr);
-      return cudf::sequence(n, oneScalar, oneScalar, stream, mr);
-    }
-    auto method = toRankMethod(baseName);
-    auto agg = cudf::make_rank_aggregation<cudf::scan_aggregation>(
-        method, colOrder, cudf::null_policy::INCLUDE, nullOrd);
-    return cudf::scan(
-        buildValuesCol(), *agg, cudf::scan_type::INCLUSIVE,
-        cudf::null_policy::INCLUDE, stream, mr);
-  }
-
-  // Partitioned case: use groupby scan.
-  auto method = toRankMethod(baseName);
-  auto valuesCol = buildValuesCol();
-
-  std::vector<cudf::groupby::scan_request> requests(1);
-  requests[0].values = valuesCol;
-  requests[0].aggregations.push_back(
-      cudf::make_rank_aggregation<cudf::groupby_scan_aggregation>(
-          method, colOrder, cudf::null_policy::INCLUDE, nullOrd));
-
-  cudf::groupby::groupby grouper(
-      sortedInput.select(partitionKeyIndices_),
-      cudf::null_policy::INCLUDE,
-      cudf::sorted::YES,
-      std::vector<cudf::order>(
-          partitionKeyIndices_.size(), cudf::order::ASCENDING),
-      std::vector<cudf::null_order>(
-          partitionKeyIndices_.size(), cudf::null_order::BEFORE));
-
-  auto scanResult = grouper.scan(requests, stream, mr);
-  auto& aggResults = scanResult.second;
-  VELOX_CHECK_EQ(aggResults.size(), 1);
-  VELOX_CHECK_EQ(aggResults[0].results.size(), 1);
-  return std::move(aggResults[0].results[0]);
-}
-
 CudfWindow::CudfWindow(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
@@ -199,6 +109,100 @@ cudf::size_type CudfWindow::resolveInputColumn(
   return static_cast<cudf::size_type>(channel);
 }
 
+std::unique_ptr<cudf::column> CudfWindow::computeRankColumn(
+    cudf::table_view const& sortedInput,
+    const std::string& baseName,
+    rmm::cuda_stream_view stream) const {
+  auto mr = get_output_mr();
+  auto const n = sortedInput.num_rows();
+
+  // Convert function name to cudf rank method.
+  auto toRankMethod = [](const std::string& name) {
+    if (name == "row_number") {
+      return cudf::rank_method::FIRST;
+    } else if (name == "rank") {
+      return cudf::rank_method::MIN;
+    }
+    return cudf::rank_method::DENSE;
+  };
+
+  // Get sort order and null order for ranking.
+  auto colOrder =
+      sortKeyIndices_.empty() ? cudf::order::ASCENDING : sortOrders_[0];
+  auto nullOrd =
+      sortKeyIndices_.empty() ? cudf::null_order::BEFORE : nullOrders_[0];
+
+  // Build the values column for tie detection. For rank/dense_rank with
+  // multiple sort keys, wrap them in a STRUCT for composite comparison.
+  // row_number doesn't need tie detection, so single column suffices.
+  std::vector<cudf::column_view> structChildren;
+  auto buildValuesCol = [&]() -> cudf::column_view {
+    if (sortKeyIndices_.empty()) {
+      return sortedInput.column(0);
+    }
+    if (sortKeyIndices_.size() == 1 || baseName == "row_number") {
+      return sortedInput.column(sortKeyIndices_[0]);
+    }
+    structChildren.reserve(sortKeyIndices_.size());
+    for (auto idx : sortKeyIndices_) {
+      structChildren.push_back(sortedInput.column(idx));
+    }
+    return cudf::column_view(
+        cudf::data_type{cudf::type_id::STRUCT},
+        n,
+        nullptr,
+        nullptr,
+        0,
+        0,
+        structChildren);
+  };
+
+  // For global windows (no partition keys), use cudf::scan or cudf::sequence
+  // instead of groupby with a synthetic partition column.
+  if (partitionKeyIndices_.empty()) {
+    if (baseName == "row_number") {
+      // row_number is just a sequence 1, 2, 3, ..., N
+      auto oneScalar = cudf::numeric_scalar<int64_t>(1, true, stream, mr);
+      return cudf::sequence(n, oneScalar, oneScalar, stream, mr);
+    }
+    auto method = toRankMethod(baseName);
+    auto agg = cudf::make_rank_aggregation<cudf::scan_aggregation>(
+        method, colOrder, cudf::null_policy::INCLUDE, nullOrd);
+    return cudf::scan(
+        buildValuesCol(),
+        *agg,
+        cudf::scan_type::INCLUSIVE,
+        cudf::null_policy::INCLUDE,
+        stream,
+        mr);
+  }
+
+  // Partitioned case: use groupby scan.
+  auto method = toRankMethod(baseName);
+  auto valuesCol = buildValuesCol();
+
+  std::vector<cudf::groupby::scan_request> requests(1);
+  requests[0].values = valuesCol;
+  requests[0].aggregations.push_back(
+      cudf::make_rank_aggregation<cudf::groupby_scan_aggregation>(
+          method, colOrder, cudf::null_policy::INCLUDE, nullOrd));
+
+  cudf::groupby::groupby grouper(
+      sortedInput.select(partitionKeyIndices_),
+      cudf::null_policy::INCLUDE,
+      cudf::sorted::YES,
+      std::vector<cudf::order>(
+          partitionKeyIndices_.size(), cudf::order::ASCENDING),
+      std::vector<cudf::null_order>(
+          partitionKeyIndices_.size(), cudf::null_order::BEFORE));
+
+  auto scanResult = grouper.scan(requests, stream, mr);
+  auto& aggResults = scanResult.second;
+  VELOX_CHECK_EQ(aggResults.size(), 1);
+  VELOX_CHECK_EQ(aggResults[0].results.size(), 1);
+  return std::move(aggResults[0].results[0]);
+}
+
 std::unique_ptr<cudf::column> CudfWindow::computeLeadLagColumn(
     cudf::table_view const& partKeys,
     cudf::column_view inputCol,
@@ -220,9 +224,8 @@ std::unique_ptr<cudf::column> CudfWindow::computeLeadLagColumn(
               std::dynamic_pointer_cast<const core::ConstantTypedExpr>(
                   args[1])) {
         if (constExpr->hasValueVector()) {
-          return constExpr->valueVector()
-              ->as<SimpleVector<int64_t>>()
-              ->valueAt(0);
+          return constExpr->valueVector()->as<SimpleVector<int64_t>>()->valueAt(
+              0);
         }
         return constExpr->value().value<int64_t>();
       }
