@@ -426,8 +426,9 @@ These stats are reported only by connector data or index sources.
    * - numIndexLookupStripes
      -
      - The total number of stripes that need to be read for all index lookup
-       requests. Multiple requests may share the same stripe, and each shared
-       stripe is counted once per request that needs it.
+       requests. Within a single startLookup() call, a stripe shared by
+       multiple requests is counted once; across different startLookup() calls,
+       the same stripe is counted separately for each call.
    * - numIndexMatchedRows
      -
      - The total number of rows matched by the cluster index across all stripes.
@@ -445,6 +446,27 @@ These stats are reported only by connector data or index sources.
      - The number of times a stripe has been loaded during index lookup. This
        metric helps track the I/O efficiency of index-based reads, where lower
        values indicate better stripe reuse across lookups.
+   * - numIndexDistinctStripesLoaded
+     -
+     - The number of distinct stripes loaded across the lifetime of the index
+       reader. Comparing with numStripeLoads (which counts every load call)
+       reveals redundant loads of the same stripe.
+   * - indexStripeLoadWallNanos
+     - nanos
+     - Wall time spent loading stripes (or equivalent format-specific load
+       unit) during index lookup, summed across all stripe loads.
+   * - indexStripeLoadCpuNanos
+     - nanos
+     - CPU time spent loading stripes during index lookup. May undercount on
+       async/prefetch paths.
+   * - indexDataDecodeWallNanos
+     - nanos
+     - Wall time spent decoding column data from loaded stripes during index
+       lookup, summed across all read segments.
+   * - indexDataDecodeCpuNanos
+     - nanos
+     - CPU time spent decoding column data from loaded stripes during index
+       lookup. Same prefetch undercounting caveat as indexStripeLoadCpuNanos.
 
 FileBasedDataSource
 -------------------
