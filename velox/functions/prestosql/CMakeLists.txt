@@ -102,6 +102,7 @@ velox_add_library(
   MapKeysOverlap.h
   MapNormalize.h
   MapSubset.h
+  MapSubsetKeyInRange.h
   MapTopN.h
   MapTopNImpl.h
   MapTopNKeys.h

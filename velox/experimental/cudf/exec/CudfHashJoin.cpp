@@ -41,6 +41,7 @@
 #include <cudf/join/mixed_join.hpp>
 #include <cudf/null_mask.hpp>
 #include <cudf/reduction.hpp>
+#include <cudf/reshape.hpp>
 #include <cudf/scalar/scalar_factories.hpp>
 #include <cudf/search.hpp>
 #include <cudf/stream_compaction.hpp>
@@ -1337,6 +1338,62 @@ std::unique_ptr<cudf::column> applyNullMask(
   // value
   return cudf::copy_if_else(nullScalar, col, nullMask, stream, mr);
 }
+
+/// Get row indices where mask is true.
+/// Returns a column of size_type indices.
+std::unique_ptr<cudf::column> getIndicesWhere(
+    cudf::column_view mask,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  // Create sequence [0, 1, 2, ..., mask.size()-1]
+  auto seq = cudf::sequence(
+      mask.size(),
+      cudf::numeric_scalar<cudf::size_type>(0, true, stream, mr),
+      cudf::numeric_scalar<cudf::size_type>(1, true, stream, mr),
+      stream,
+      mr);
+
+  // Filter to keep only indices where mask is true
+  auto indicesTable = cudf::apply_boolean_mask(
+      cudf::table_view{{seq->view()}}, mask, stream, mr);
+
+  return std::move(indicesTable->release()[0]);
+}
+
+/// Create cross-product of two index columns.
+/// Given left = [a, b, c] and right = [x, y], produces:
+///   leftOut = [a, a, b, b, c, c]
+///   rightOut = [x, y, x, y, x, y]
+/// Uses cudf::repeat for left (repeat each element) and cudf::tile for right.
+std::pair<std::unique_ptr<cudf::column>, std::unique_ptr<cudf::column>>
+createCrossProductIndices(
+    cudf::column_view leftIndices,
+    cudf::column_view rightIndices,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  auto numLeft = leftIndices.size();
+  auto numRight = rightIndices.size();
+
+  if (numLeft == 0 || numRight == 0) {
+    // Return empty columns
+    auto emptyLeft = cudf::make_empty_column(cudf::type_id::INT32);
+    auto emptyRight = cudf::make_empty_column(cudf::type_id::INT32);
+    return {std::move(emptyLeft), std::move(emptyRight)};
+  }
+
+  // Repeat each left element numRight times: [a,a,b,b,c,c]
+  auto leftRepeated =
+      cudf::repeat(cudf::table_view{{leftIndices}}, numRight, stream, mr);
+
+  // Tile the right indices numLeft times: [x,y,x,y,x,y]
+  auto rightTiled =
+      cudf::tile(cudf::table_view{{rightIndices}}, numLeft, stream, mr);
+
+  return {
+      std::move(leftRepeated->release()[0]),
+      std::move(rightTiled->release()[0])};
+}
+
 } // namespace
 
 // LEFT SEMI PROJECT returns all probe rows with a boolean "match" column
@@ -1371,7 +1428,12 @@ CudfHashJoinProbe::leftSemiProjectJoin(
   auto& hbs = hashObject_.value().second;
   auto numProbeRows = leftTableView.num_rows();
 
-  const bool isNullAware = joinNode_->isNullAware() && !joinNode_->filter();
+  const bool isNullAware = joinNode_->isNullAware();
+  const bool hasFilter = joinNode_->filter() != nullptr;
+  // For null-aware without filter, we use a different code path (existing)
+  // For null-aware with filter, we need to compute indeterminate cases
+  const bool isNullAwareWithFilter = isNullAware && hasFilter;
+  const bool isNullAwareWithoutFilter = isNullAware && !hasFilter;
 
   // Create probe row indices sequence: [0, 1, 2, ..., numProbeRows-1]
   // Used with cudf::contains to create the match column
@@ -1489,10 +1551,203 @@ CudfHashJoinProbe::leftSemiProjectJoin(
     matchCol = std::move(updatedMatch);
   }
 
-  // Step 5: For null-aware mode (IN semantics), apply null mask to match
-  // column. Empty build: always FALSE. Otherwise: NULL probe key or (no match
-  // AND build has nulls) yields NULL; matched rows yield TRUE; else FALSE.
-  if (isNullAware) {
+  // Step 5: Handle null-aware semantics (IN vs EXISTS).
+  // For null-aware mode, we need to compute three-valued logic:
+  // - TRUE: at least one match passes filter
+  // - FALSE: no match passes filter AND no indeterminate cases
+  // - NULL: probe key is NULL, OR (no match AND build has null keys that might
+  // match)
+
+  if (isNullAwareWithFilter) {
+    // Null-aware LEFT SEMI PROJECT with filter implements SQL IN semantics:
+    //   SELECT t0 IN (SELECT u0 FROM u WHERE filter) FROM t
+    //
+    // "Indeterminate" means the result should be NULL (unknown) rather than
+    // FALSE. This happens when we cannot definitively say the probe value is
+    // NOT IN the subquery because NULL comparisons are involved:
+    //
+    // - Type B (null probe key): When probe key is NULL, we can't determine
+    //   if NULL equals any subquery value. If the filter passes for ANY build
+    //   row, result is NULL (might match). If filter fails for ALL build rows,
+    //   the subquery is empty, so result is FALSE.
+    //
+    // - Type A (non-null probe key, no match): When probe key doesn't match
+    //   any non-NULL build key, but build has NULL keys where filter passes,
+    //   we can't rule out a match (NULL might equal our probe key), so result
+    //   is NULL.
+    //
+    // We evaluate these by creating synthetic (probe, build) index pairs and
+    // running the filter to see if any pair passes.
+
+    // Lambda to create device_span from a column
+    auto toSpan = [](cudf::column_view col) {
+      return cudf::device_span<cudf::size_type const>{
+          static_cast<cudf::size_type const*>(col.head()),
+          static_cast<size_t>(col.size())};
+    };
+
+    // Lambda to run filter on synthetic pairs and accumulate indeterminate
+    // flags. Creates cross-product of probeIndices × buildIndices, runs the
+    // filter, and ORs any passing probe rows into indeterminateCol.
+    auto accumulateIndeterminate =
+        [&](cudf::column_view probeIndices,
+            cudf::column_view buildIndices,
+            cudf::table_view extendedRight,
+            std::unique_ptr<cudf::column>& indeterminateCol) {
+          if (probeIndices.size() == 0 || buildIndices.size() == 0) {
+            return;
+          }
+
+          auto [syntheticLeft, syntheticRight] = createCrossProductIndices(
+              probeIndices, buildIndices, stream, get_temp_mr());
+
+          if (syntheticLeft->size() == 0) {
+            return;
+          }
+
+          auto [filteredLeft, filteredRight] = cudf::filter_join_indices(
+              extendedLeftView,
+              extendedRight,
+              toSpan(syntheticLeft->view()),
+              toSpan(syntheticRight->view()),
+              tree_.back(),
+              cudf::join_kind::INNER_JOIN,
+              stream,
+              get_temp_mr());
+
+          if (filteredLeft->size() == 0) {
+            return;
+          }
+
+          auto filteredLeftSpan =
+              cudf::device_span<cudf::size_type const>{*filteredLeft};
+          auto filteredLeftCol = cudf::column_view{filteredLeftSpan};
+          auto indeterminate = cudf::contains(
+              filteredLeftCol, probeRowIndices->view(), stream, get_temp_mr());
+
+          indeterminateCol = cudf::binary_operation(
+              indeterminateCol->view(),
+              indeterminate->view(),
+              cudf::binary_operator::BITWISE_OR,
+              cudf::data_type{cudf::type_id::BOOL8},
+              stream,
+              get_temp_mr());
+        };
+
+    bool buildSideEmpty = true;
+    for (const auto& rt : rightTables) {
+      if (rt->num_rows() > 0) {
+        buildSideEmpty = false;
+        break;
+      }
+    }
+
+    // For empty build side, IN returns FALSE (already set in matchCol).
+    if (!buildSideEmpty) {
+      auto probeKeyView = leftTableView.select(leftKeyIndices_);
+      bool probeHasNulls = cudf::has_nulls(probeKeyView);
+
+      // Compute probe key null mask upfront
+      auto probeKeyNullMask =
+          createProbeKeyNullMask(probeKeyView, stream, get_temp_mr());
+
+      // Initialize indeterminate column to all false
+      auto falseScalar =
+          cudf::numeric_scalar<bool>(false, true, stream, get_temp_mr());
+      auto indeterminateCol = cudf::make_column_from_scalar(
+          falseScalar, numProbeRows, stream, get_temp_mr());
+
+      // Process each build batch for indeterminate cases
+      for (size_t i = 0; i < rightTables.size(); i++) {
+        auto rightTableView = rightTables[i]->view();
+        auto buildKeyView = rightTableView.select(rightKeyIndices_);
+        bool buildBatchHasNullKeys = cudf::has_nulls(buildKeyView);
+        auto numBuildRows = rightTableView.num_rows();
+
+        if (numBuildRows == 0) {
+          continue;
+        }
+
+        // Get extended views for filter evaluation
+        cudf::table_view extendedRightView =
+            (!rightPrecomputeInstructions_.empty())
+            ? cachedExtendedRightViews_[i]
+            : rightTableView;
+
+        // Type B: Null probe keys × all build rows
+        if (probeHasNulls) {
+          auto nullProbeIndices =
+              getIndicesWhere(probeKeyNullMask->view(), stream, get_temp_mr());
+          auto allBuildIndices = cudf::sequence(
+              numBuildRows,
+              cudf::numeric_scalar<cudf::size_type>(
+                  0, true, stream, get_temp_mr()),
+              cudf::numeric_scalar<cudf::size_type>(
+                  1, true, stream, get_temp_mr()),
+              stream,
+              get_temp_mr());
+
+          accumulateIndeterminate(
+              nullProbeIndices->view(),
+              allBuildIndices->view(),
+              extendedRightView,
+              indeterminateCol);
+        }
+
+        // Type A: Non-null, non-matching probe keys × null-key build rows
+        if (buildBatchHasNullKeys) {
+          auto notProbeNull = cudf::unary_operation(
+              probeKeyNullMask->view(),
+              cudf::unary_operator::NOT,
+              stream,
+              get_temp_mr());
+          auto noMatch = cudf::unary_operation(
+              matchCol->view(),
+              cudf::unary_operator::NOT,
+              stream,
+              get_temp_mr());
+          auto typeAMask = cudf::binary_operation(
+              notProbeNull->view(),
+              noMatch->view(),
+              cudf::binary_operator::BITWISE_AND,
+              cudf::data_type{cudf::type_id::BOOL8},
+              stream,
+              get_temp_mr());
+
+          auto typeAProbeIndices =
+              getIndicesWhere(typeAMask->view(), stream, get_temp_mr());
+          auto buildKeyNullMask =
+              createProbeKeyNullMask(buildKeyView, stream, get_temp_mr());
+          auto nullBuildIndices =
+              getIndicesWhere(buildKeyNullMask->view(), stream, get_temp_mr());
+
+          accumulateIndeterminate(
+              typeAProbeIndices->view(),
+              nullBuildIndices->view(),
+              extendedRightView,
+              indeterminateCol);
+        }
+      }
+
+      // Apply three-valued logic:
+      // - Where matchCol is TRUE → keep TRUE (takes precedence)
+      // - Where matchCol is FALSE and indeterminateCol is TRUE → set NULL
+      // - Where matchCol is FALSE and indeterminateCol is FALSE → keep FALSE
+      auto notMatch = cudf::unary_operation(
+          matchCol->view(), cudf::unary_operator::NOT, stream, get_temp_mr());
+      auto shouldBeNull = cudf::binary_operation(
+          notMatch->view(),
+          indeterminateCol->view(),
+          cudf::binary_operator::BITWISE_AND,
+          cudf::data_type{cudf::type_id::BOOL8},
+          stream,
+          get_temp_mr());
+
+      matchCol = applyNullMask(
+          matchCol->view(), shouldBeNull->view(), stream, get_output_mr());
+    }
+  } else if (isNullAwareWithoutFilter) {
+    // Original null-aware without filter logic
     bool buildSideEmpty = true;
     for (const auto& rt : rightTables) {
       if (rt->num_rows() > 0) {

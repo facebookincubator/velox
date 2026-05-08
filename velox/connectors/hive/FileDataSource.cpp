@@ -123,7 +123,7 @@ void addIoStatsToRuntimeStats(
       RuntimeCounter::Unit::kBytes,
       res);
   addIoCounterMetric(
-      ioStats.totalScanTime(),
+      ioStats.totalScanTimeNs(),
       key(FileDataSource::kTotalScanTime),
       RuntimeCounter::Unit::kNanos,
       res);
