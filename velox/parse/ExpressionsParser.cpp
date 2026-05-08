@@ -24,6 +24,7 @@ facebook::velox::duckdb::ParseOptions toDuckOptions(
   duckOptions.parseDecimalAsDouble = options.parseDecimalAsDouble;
   duckOptions.parseIntegerAsBigint = options.parseIntegerAsBigint;
   duckOptions.parseInListAsArray = options.parseInListAsArray;
+  duckOptions.correctWindowFrameDefault = options.correctWindowFrameDefault;
   duckOptions.functionPrefix = options.functionPrefix;
   return duckOptions;
 }
@@ -46,17 +47,18 @@ OrderByClause DuckSqlExpressionsParser::parseOrderByExpr(
   return facebook::velox::duckdb::parseOrderByExpr(expr);
 }
 
-AggregateExpr DuckSqlExpressionsParser::parseAggregateExpr(
+core::AggregateCallExprPtr DuckSqlExpressionsParser::parseAggregateExpr(
     const std::string& expr) {
   return facebook::velox::duckdb::parseAggregateExpr(expr, options_);
 }
 
-WindowExpr DuckSqlExpressionsParser::parseWindowExpr(const std::string& expr) {
+core::WindowCallExprPtr DuckSqlExpressionsParser::parseWindowExpr(
+    const std::string& expr) {
   return facebook::velox::duckdb::parseWindowExpr(expr, options_);
 }
 
-std::variant<core::ExprPtr, WindowExpr>
-DuckSqlExpressionsParser::parseScalarOrWindowExpr(const std::string& expr) {
+core::ExprPtr DuckSqlExpressionsParser::parseScalarOrWindowExpr(
+    const std::string& expr) {
   return facebook::velox::duckdb::parseScalarOrWindowExpr(expr, options_);
 }
 

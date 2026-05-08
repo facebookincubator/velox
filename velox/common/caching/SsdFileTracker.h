@@ -30,7 +30,12 @@ namespace facebook::velox::cache {
 class SsdFileTracker {
  public:
   void resize(int32_t numRegions) {
-    resizeTsanAtomic(regionScores_, numRegions);
+    std::vector<tsan_atomic<double>> newScores(numRegions);
+    auto numCopy = std::min<int32_t>(numRegions, regionScores_.size());
+    for (auto i = 0; i < numCopy; ++i) {
+      newScores[i] = tsanAtomicValue(regionScores_[i]);
+    }
+    regionScores_ = std::move(newScores);
   }
 
   void regionRead(int32_t region, int32_t bytes) {

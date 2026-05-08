@@ -509,7 +509,7 @@ jobs:
                 --repro_persist_path=__REPRO_DIR__
 
       - name: Archive production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: presto-fuzzer-failure-artifacts
@@ -587,7 +587,7 @@ jobs:
                 --table_name_prefix=i__INSTANCE_ID__
 
       - name: Archive expression production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: presto-sot-fuzzer-failure-artifacts
@@ -654,7 +654,7 @@ jobs:
             && echo -e "\n\nPresto Fuzzer run finished successfully."
 
       - name: Archive Presto Bias expression production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: presto-bias-fuzzer-failure-artifacts
@@ -703,7 +703,7 @@ jobs:
                 --table_name_prefix=i__INSTANCE_ID__
 
       - name: Archive Spark aggregate production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: spark-agg-fuzzer-failure-artifacts
@@ -761,7 +761,7 @@ jobs:
             && echo -e "\n\nSpark Fuzzer run finished successfully."
 
       - name: Archive Spark expression production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: spark-fuzzer-failure-artifacts
@@ -814,7 +814,7 @@ jobs:
                 --repro_persist_path=__REPRO_DIR__
 
       - name: Archive Spark expression production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: spark-fuzzer-failure-artifacts
@@ -878,11 +878,11 @@ jobs:
                 --stderrthreshold=2 \
                 --log_dir=__LOG_DIR__ \
                 --presto_url=http://127.0.0.1:8080 \
-                --req_timeout_ms=2000 \
+                --req_timeout_ms=10000 \
                 --table_name_prefix=i__INSTANCE_ID__
 
       - name: Archive join production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: presto-sot-join-fuzzer-failure-artifacts
@@ -929,7 +929,7 @@ jobs:
                 --repro_path=__REPRO_DIR__
 
       - name: Archive Exchange production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: exchange-fuzzer-failure-artifacts
@@ -994,10 +994,11 @@ jobs:
                 --stderrthreshold=2 \
                 --log_dir=__LOG_DIR__ \
                 --presto_url=http://127.0.0.1:8080 \
+                --req_timeout_ms=10000 \
                 --table_name_prefix=i__INSTANCE_ID__
 
       - name: Archive row number production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: row-fuzzer-failure-artifacts
@@ -1066,7 +1067,7 @@ jobs:
                 --table_name_prefix=i__INSTANCE_ID__
 
       - name: Archive topn row number production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: topn-row-fuzzer-failure-artifacts
@@ -1110,7 +1111,7 @@ jobs:
                 --log_dir=__LOG_DIR__
 
       - name: Archive Cache production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: cache-fuzzer-logs
@@ -1152,7 +1153,7 @@ jobs:
                 --log_dir=__LOG_DIR__
 
       - name: Archive table evolution production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: table-evolution-fuzzer-test-logs
@@ -1194,12 +1195,12 @@ jobs:
                 --log_dir=__LOG_DIR__
 
       - name: Archive memory arbitration production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: memory-arbitration-fuzzer-test-logs
           path: |
-            /tmp/memory_arbitration_fuzzer_test
+            /tmp/memory_arbitration_fuzzer
 
   presto-java-aggregation-fuzzer-run:
     name: Aggregation Fuzzer with Presto as source of truth
@@ -1260,10 +1261,11 @@ jobs:
                 --repro_persist_path=__REPRO_DIR__ \
                 --enable_sorted_aggregations=true \
                 --presto_url=http://127.0.0.1:8080 \
+                --req_timeout_ms=10000 \
                 --table_name_prefix=i__INSTANCE_ID__
 
       - name: Archive aggregate production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: presto-sot-aggregate-fuzzer-failure-artifacts
@@ -1363,7 +1365,7 @@ jobs:
                 --repro_persist_path=/tmp/presto_only_bias_function_fuzzer_repro \
           && echo -e "\n\nPresto Fuzzer run finished successfully."
       - name: Archive Presto only-bias-function expression fuzzer production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: presto-only-bias-function-fuzzer-failure-artifacts
@@ -1447,7 +1449,7 @@ jobs:
           && echo -e "\n\nAggregation fuzzer run finished successfully."
 
       - name: Archive bias aggregate production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: presto-bias-sot-aggregate-fuzzer-failure-artifacts
@@ -1539,10 +1541,11 @@ jobs:
                 --repro_persist_path=__REPRO_DIR__ \
                 --enable_window_reference_verification \
                 --presto_url=http://127.0.0.1:8080 \
+                --req_timeout_ms=10000 \
                 --table_name_prefix=i__INSTANCE_ID__
 
       - name: Archive window production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: presto-sot-window-fuzzer-failure-artifacts
@@ -1615,7 +1618,7 @@ jobs:
                 --table_name_prefix=i__INSTANCE_ID__
 
       - name: Archive writer production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: presto-sot-writer-fuzzer-failure-artifacts
@@ -1659,7 +1662,7 @@ jobs:
                 --log_dir=__LOG_DIR__
 
       - name: Archive spatial join fuzzer production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: spatial-join-fuzzer-failure-artifacts

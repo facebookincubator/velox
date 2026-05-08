@@ -120,6 +120,27 @@ Map Functions
         SELECT map_values_in_range(MAP(ARRAY[1, 2], ARRAY[null, 50]), 0, 100); -- {1 -> null, 2 -> 50}
         SELECT map_values_in_range(MAP(ARRAY[1, 2, 3], ARRAY[5, 50, 500]), 10, 100); -- {2 -> 50}
 
+.. function:: map_values_all_match(x(K,V), function(V, boolean)) -> boolean
+
+    Returns true if all values in the given map match the predicate and false otherwise. NULL if the predicate function returns NULL for one or more values and true for all other values. Equivalent to ``all_match(map_values(x), predicate)`` but avoids materializing the intermediate array. ::
+
+        SELECT map_values_all_match(map(array['a', 'b', 'c'], array[1, 2, 3]), x -> x > 0); -- true
+        SELECT map_values_all_match(map(array['a', 'b', 'c'], array[1, 2, 3]), x -> x > 1); -- false
+
+.. function:: map_values_any_match(x(K,V), function(V, boolean)) -> boolean
+
+    Returns true if one or more values in the given map match the predicate and false otherwise. NULL if the predicate function returns NULL for one or more values and false for all other values. Equivalent to ``any_match(map_values(x), predicate)`` but avoids materializing the intermediate array. ::
+
+        SELECT map_values_any_match(map(array['a', 'b', 'c'], array[1, 2, 3]), x -> x = 1); -- true
+        SELECT map_values_any_match(map(array['a', 'b', 'c'], array[1, 2, 3]), x -> x = 5); -- false
+
+.. function:: map_values_none_match(x(K,V), function(V, boolean)) -> boolean
+
+    Returns true if no values in the given map match the predicate and false otherwise. NULL if the predicate function returns NULL for one or more values and false for all other values. Equivalent to ``none_match(map_values(x), predicate)`` but avoids materializing the intermediate array. ::
+
+        SELECT map_values_none_match(map(array['a', 'b', 'c'], array[1, 2, 3]), x -> x = 5); -- true
+        SELECT map_values_none_match(map(array['a', 'b', 'c'], array[1, 2, 3]), x -> x = 1); -- false
+
 .. function:: map_remove_null_values(map(K,V)) -> map(K,V)
 
     Returns a map by removing all the keys in input map with null values. If input
@@ -150,6 +171,19 @@ Map Functions
         SELECT map_subset(MAP(ARRAY[1,2], ARRAY['a','b']), ARRAY[1,3]); -- {1->'a'}
         SELECT map_subset(MAP(ARRAY[], ARRAY[]), ARRAY[1,2]); -- {}
         SELECT map_subset(MAP(ARRAY[], ARRAY[]), ARRAY[]); -- {}
+
+.. function:: map_subset_key_in_range(map(K,V), low_key, high_key) -> map(K,V)
+
+    Returns a sub-map containing only the entries from the input map whose keys fall
+    within the inclusive range ``[low_key, high_key]``. Both bounds are inclusive.
+    If ``low_key > high_key``, returns an empty map. Entries with null values are
+    preserved. If the input map, ``low_key``, or ``high_key`` is ``NULL``, the
+    result is ``NULL``. ``K`` must be an orderable type. ::
+
+        SELECT map_subset_key_in_range(MAP(ARRAY[1,2,3,4,5], ARRAY[10,20,30,40,50]), 2, 4); -- {2->20, 3->30, 4->40}
+        SELECT map_subset_key_in_range(MAP(ARRAY[7,10,14,20], ARRAY[70,100,140,200]), 7, 14); -- {7->70, 10->100, 14->140}
+        SELECT map_subset_key_in_range(MAP(ARRAY[1,2,3], ARRAY[10,20,30]), 5, 1); -- {}
+        SELECT map_subset_key_in_range(MAP(ARRAY[], ARRAY[]), 1, 10); -- {}
 
 .. function:: map_intersect(map(K,V), array(K)) -> map(K,V)
 

@@ -17,6 +17,7 @@
 #include <folly/init/Init.h>
 #include <unordered_set>
 
+#include "velox/core/QueryConfig.h"
 #include "velox/exec/fuzzer/PrestoQueryRunner.h"
 #include "velox/expression/fuzzer/ArgTypesGenerator.h"
 #include "velox/expression/fuzzer/ArgValuesGenerators.h"
@@ -64,6 +65,8 @@ using facebook::velox::fuzzer::FuzzerRunner;
 using facebook::velox::fuzzer::JsonExtractArgValuesGenerator;
 using facebook::velox::fuzzer::JsonParseArgValuesGenerator;
 using facebook::velox::fuzzer::QDigestArgValuesGenerator;
+using facebook::velox::fuzzer::S2CellIdArgValuesGenerator;
+using facebook::velox::fuzzer::S2CellTokenArgValuesGenerator;
 using facebook::velox::fuzzer::SetDigestArgValuesGenerator;
 using facebook::velox::fuzzer::TDigestArgValuesGenerator;
 using facebook::velox::fuzzer::UnifiedDigestArgValuesGenerator;
@@ -128,6 +131,8 @@ std::unordered_map<std::string, std::shared_ptr<ArgValuesGenerator>>
          std::make_shared<TDigestArgValuesGenerator>("destructure_tdigest")},
         {"trimmed_mean",
          std::make_shared<TDigestArgValuesGenerator>("trimmed_mean")},
+        {"winsorized_mean",
+         std::make_shared<TDigestArgValuesGenerator>("winsorized_mean")},
         {"hash_counts",
          std::make_shared<SetDigestArgValuesGenerator>("hash_counts")},
         {"cardinality",
@@ -136,7 +141,14 @@ std::unordered_map<std::string, std::shared_ptr<ArgValuesGenerator>>
          std::make_shared<SetDigestArgValuesGenerator>("jaccard_index")},
         {"intersection_cardinality",
          std::make_shared<SetDigestArgValuesGenerator>(
-             "intersection_cardinality")}};
+             "intersection_cardinality")},
+        {"s2_cell_area_sq_km", std::make_shared<S2CellIdArgValuesGenerator>()},
+        {"s2_cell_contains", std::make_shared<S2CellIdArgValuesGenerator>()},
+        {"s2_cell_level", std::make_shared<S2CellIdArgValuesGenerator>()},
+        {"s2_cell_parent", std::make_shared<S2CellIdArgValuesGenerator>()},
+        {"s2_cell_to_token", std::make_shared<S2CellIdArgValuesGenerator>()},
+        {"s2_cell_from_token",
+         std::make_shared<S2CellTokenArgValuesGenerator>()}};
 
 // TODO: List of the functions that at some point crash or fail and need to
 // be fixed before we can enable.
@@ -165,6 +177,7 @@ std::unordered_set<std::string> skipFunctions = {
     "construct_tdigest",
     "destructure_tdigest",
     "trimmed_mean",
+    "winsorized_mean",
     // Fuzzer and the underlying engine are confused about SetDigest functions
     // (since KHLL is a user defined type), and tries to pass a
     // VARBINARY (since KHLL's implementation uses an
@@ -179,7 +192,7 @@ std::unordered_set<std::string> skipFunctions = {
     "uniqueness_distribution(khyperloglog,bigint) -> map(bigint,double)",
     "merge_khll(array(khyperloglog)) -> khyperloglog",
     // Fuzzer cannot generate valid 'comparator' lambda.
-    "array_sort(array(T),constant function(T,T,bigint)) -> array(T)",
+    "array_sort(array(T),constant function(T,T,integer)) -> array(T)",
     "array_sort(array(T),constant function(T,U)) -> array(T)",
     "array_sort_desc(array(T),constant function(T,U)) -> array(T)",
     "split_to_map(varchar,varchar,varchar,function(varchar,varchar,varchar,varchar)) -> map(varchar,varchar)",
@@ -297,6 +310,7 @@ std::unordered_set<std::string> skipFunctions = {
     "convex_hull_agg",
     "geometry_union_agg",
     "localtime",
+    "s2_cells",
 };
 
 std::unordered_set<std::string> skipFunctionsSOT = {
@@ -306,6 +320,9 @@ std::unordered_set<std::string> skipFunctionsSOT = {
                      // instances
     "array_subset", // Velox-only function, not available in Presto
     "map_values_in_range", // Velox-only function, not available in Presto
+    "map_values_all_match", // Velox-only function, not available in Presto
+    "map_values_any_match", // Velox-only function, not available in Presto
+    "map_values_none_match", // Velox-only function, not available in Presto
     "transform_with_index", // Velox-only function, not available in Presto
     "dot_product", // Velox-only function, not available in Presto
     "remap_keys", // Velox-only function, not available in Presto
@@ -314,6 +331,7 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "map_append", // Velox-only function, not available in Presto
     "map_update", // Velox-only function, not available in Presto
     "map_trim_values", // Velox-only function, not available in Presto
+    "map_subset_key_in_range", // Velox-only function, not available in Presto
     "noisy_empty_approx_set_sfm", // non-deterministic because of privacy.
     // https://github.com/facebookincubator/velox/issues/11034
     "cast(real) -> varchar",
@@ -483,6 +501,15 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "uniqueness_distribution(khyperloglog,bigint) -> map(bigint,double)",
     "merge_khll(array(khyperloglog)) -> khyperloglog",
     "pmod", // Not available in Presto
+    // S2 functions are not registered in the Presto instance used for fuzzing.
+    "s2_cell_area_sq_km",
+    "s2_cell_contains",
+    "s2_cell_from_token",
+    "s2_cell_level",
+    "s2_cell_parent",
+    "s2_cell_to_token",
+    "ip_version", // New function, pending Presto Java implementation
+    "ip_prefix_masklen", // New function, pending Presto Java implementation
 };
 
 int main(int argc, char** argv) {
@@ -521,8 +548,10 @@ int main(int argc, char** argv) {
       initialSeed,
       skipFunctions,
       exprTransformers,
-      {{"session_timezone", "America/Los_Angeles"},
-       {"adjust_timestamp_to_session_timezone", "true"}},
+      {{facebook::velox::core::QueryConfig::kSessionTimezone,
+        "America/Los_Angeles"},
+       {facebook::velox::core::QueryConfig::kAdjustTimestampToTimezone, "true"},
+       {facebook::velox::core::QueryConfig::kMinRowsForPeeling, "50"}},
       argTypesGenerators,
       argValuesGenerators,
       referenceQueryRunner,

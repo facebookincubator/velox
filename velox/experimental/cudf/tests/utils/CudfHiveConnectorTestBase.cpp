@@ -45,21 +45,10 @@ namespace {
 
 void fillColumnNames(
     cudf::io::table_input_metadata& tableMeta,
-    const std::string& prefix) {
-  // Fill unnamed columns' names in cudf table_meta
-  std::function<void(cudf::io::column_in_metadata&, std::string)>
-      addDefaultName =
-          [&](cudf::io::column_in_metadata& colMeta, std::string defaultName) {
-            if (colMeta.get_name().empty()) {
-              colMeta.set_name(defaultName);
-            }
-            for (int32_t i = 0; i < colMeta.num_children(); ++i) {
-              addDefaultName(
-                  colMeta.child(i), fmt::format("{}_{}", defaultName, i));
-            }
-          };
+    const RowTypePtr& rowType) {
+  VELOX_CHECK_EQ(tableMeta.column_metadata.size(), rowType->size());
   for (int32_t i = 0; i < tableMeta.column_metadata.size(); ++i) {
-    addDefaultName(tableMeta.column_metadata[i], prefix + std::to_string(i));
+    tableMeta.column_metadata[i].set_name(rowType->nameOf(i));
   }
 }
 
@@ -165,15 +154,14 @@ CudfHiveConnectorTestBase::makeFilePaths(int count) {
 
 void CudfHiveConnectorTestBase::writeToFile(
     const std::string& filePath,
-    const std::vector<RowVectorPtr>& vectors,
-    std::string prefix) {
+    const std::vector<RowVectorPtr>& vectors) {
   // Convert all RowVectorPtrs to cudf tables
+  auto stream = cudf::get_default_stream();
   std::vector<std::unique_ptr<cudf::table>> cudfTables;
   cudfTables.reserve(vectors.size());
   for (const auto& vector : vectors) {
     VELOX_CHECK_NOT_NULL(vector);
     if (vector->size()) {
-      auto stream = cudf::get_default_stream();
       auto cudfTable = with_arrow::toCudfTable(
           vector,
           vector->pool(),
@@ -185,19 +173,19 @@ void CudfHiveConnectorTestBase::writeToFile(
   }
   // Make sure cudfTables has at least one table
   if (cudfTables.empty()) {
-    VELOX_CHECK(not cudfTables.empty());
     return;
   }
 
   // Create a sink and writer
+  auto rowType = asRowType(vectors[0]->type());
   auto const sinkInfo = cudf::io::sink_info(filePath);
   auto tableInputMetadata =
       cudf::io::table_input_metadata(cudfTables[0]->view());
-  fillColumnNames(tableInputMetadata, prefix);
+  fillColumnNames(tableInputMetadata, rowType);
   auto options = cudf::io::chunked_parquet_writer_options::builder(sinkInfo)
                      .metadata(tableInputMetadata)
                      .build();
-  cudf::io::chunked_parquet_writer writer(options);
+  cudf::io::chunked_parquet_writer writer(options, stream);
 
   // Write all table chunks
   for (const auto& table : cudfTables) {
@@ -210,21 +198,21 @@ void CudfHiveConnectorTestBase::writeToFile(
 
 void CudfHiveConnectorTestBase::writeToFile(
     const std::string& filePath,
-    RowVectorPtr vector,
-    std::string prefix) {
-  auto const sinkInfo = cudf::io::sink_info(filePath);
+    RowVectorPtr vector) {
   VELOX_CHECK_NOT_NULL(vector);
+  auto rowType = asRowType(vector->type());
+  auto const sinkInfo = cudf::io::sink_info(filePath);
   auto stream = cudf::get_default_stream();
   auto cudfTable = with_arrow::toCudfTable(
       vector, vector->pool(), stream, cudf::get_current_device_resource_ref());
   stream.synchronize();
   auto tableInputMetadata = cudf::io::table_input_metadata(cudfTable->view());
-  fillColumnNames(tableInputMetadata, prefix);
+  fillColumnNames(tableInputMetadata, rowType);
   auto options =
       cudf::io::parquet_writer_options::builder(sinkInfo, cudfTable->view())
           .metadata(tableInputMetadata)
           .build();
-  cudf::io::write_parquet(options);
+  cudf::io::write_parquet(options, stream);
 }
 
 std::vector<std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
@@ -324,7 +312,7 @@ CudfHiveConnectorTestBase::makeCudfHiveInsertTableHandle(
         std::make_shared<connector::hive::CudfHiveColumnHandle>(
             tableColumnNames.at(i),
             tableColumnTypes.at(i),
-            cudf::data_type{veloxToCudfTypeId(tableColumnTypes.at(i))}));
+            veloxToCudfDataType(tableColumnTypes.at(i))));
   }
 
   return std::make_shared<connector::hive::CudfHiveInsertTableHandle>(

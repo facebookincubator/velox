@@ -18,8 +18,6 @@
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/VectorTypeUtils.h"
 
-#include <folly/container/Reserve.h>
-
 namespace facebook::velox::serializer::presto::detail {
 namespace {
 template <TypeKind Kind>
@@ -359,6 +357,14 @@ void estimateWrapperSerializedSize(
   std::vector<IndexRange> newRanges;
   std::vector<vector_size_t*> newSizes;
   const BaseVector* wrapped = wrapper->wrappedVector();
+  if (!wrapper->mayHaveNulls()) {
+    int64_t totalSize = 0;
+    for (int32_t i = 0; i < ranges.size(); ++i) {
+      totalSize += ranges[i].size;
+    }
+    newRanges.reserve(totalSize);
+    newSizes.reserve(totalSize);
+  }
   for (int32_t i = 0; i < ranges.size(); ++i) {
     int32_t numNulls = 0;
     auto end = ranges[i].begin + ranges[i].size;
@@ -388,8 +394,8 @@ void expandRepeatedRanges(
     for (int32_t i = 0; i < ranges.size(); ++i) {
       totalSize += ranges[i].size;
     }
-    folly::grow_capacity_by(*childRanges, totalSize);
-    folly::grow_capacity_by(*childSizes, totalSize);
+    childRanges->reserve(totalSize);
+    childSizes->reserve(totalSize);
   }
   for (int32_t i = 0; i < ranges.size(); ++i) {
     int32_t begin = ranges[i].begin;

@@ -11,7 +11,7 @@ query engine.
 
 Benchmarking in Velox is made easy with the optionally built TpchBenchmark
 (velox_tpch_benchmark) executable. To build the benchmark executable
-(*_build/release/velox/benchamrks/tpch/velox_tpch_benchmark*), use the
+(*_build/release/velox/benchmarks/tpch/velox_tpch_benchmark*), use the
 following command line to do the build with S3 support:
 
 .. code:: shell
@@ -89,7 +89,7 @@ use a single dash not a double dash; i.e. -option and not --option):
 
 **NOTE:** *There is a limitation on the implementation of the AWS SDK that
 will cause failures (curl error 28) if the **driver** *threads times I/O threads
-grow much beyond 350 threads. This only really effects the multi-threaded
+grow much beyond 350 threads. This only really affects the multi-threaded
 **drivers** *use case like the benchmark tool. It is only known to be an issue
 when running against AWS S3. However, the error is coming from the libcurl
 library so it is possible other Cloud storage APIs could also be affected.*
@@ -99,7 +99,7 @@ Velox exposes other options used for tuning that are of interest:
 * *max_coalesce_bytes* - Size of coalesced data, has small improvements as size
   grows.
 
-* *max_coalesce_distance_bytes* - Maximum gap bytes between data that can
+* *max_coalesce_distance_bytes* - Maximum gap bytes between data that can be
   coalesced. Larger may mean more fetched data but at greater bytes/sec.
 
 Top Optimization Recommendations
@@ -149,14 +149,14 @@ chunks as opposed to many smaller requests.
 
 This configuration option is useful for workloads that read the same data
 several times per query but only applies to the single process use case.
-*NOTE: There is a SSD Caching option in Velox but it to is ONLY useful in
+*NOTE: There is a SSD Caching option in Velox but it too is ONLY useful in
 the single process use case.*
 
 **num_splits_per_file**
 -----------------------
 
 This configuration option is best when the data set count of row groups
-matches this value. The affect in overall performance appears based on
+matches this value. The effect on overall performance appears based on
 testing to be small, however.
 
 Optimizations for All Workloads (Both Use Cases)
@@ -183,8 +183,8 @@ fine-tuned for the workload being run.
 Summary
 =======
 
-If a use of Velox matches the use case of the TcphBenchmark then it is a good
-tool to test, I/O and driver performance for specific TCP-H queries. This would
+If a use of Velox matches the use case of the TpchBenchmark then it is a good
+tool to test, I/O and driver performance for specific TPC-H queries. This would
 benefit execution of specific production workloads that are like the chosen
 queries. If in multi-process use case, like Spark/Gluten/Velox configuration,
 the recommendation is to oversubscribe I/O threads between 2X and 3X vCPUs and

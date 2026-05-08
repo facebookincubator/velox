@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/JitExpression.h"
+#include "velox/experimental/cudf/expression/SparkFunctions.h"
 #include "velox/experimental/cudf/tests/utils/ExpressionTestUtil.h"
 
 #include "velox/common/memory/Memory.h"
@@ -48,8 +49,8 @@ class CudfExpressionSelectionTest : public ::testing::Test {
     pool_ = memory::memoryManager()->addLeafPool("", false);
     queryCtx_ = core::QueryCtx::create();
     execCtx_ = std::make_unique<core::ExecCtx>(pool_.get(), queryCtx_.get());
-    CudfConfig::getInstance().functionEngine = "spark";
     cudf_velox::registerCudf();
+    cudf_velox::registerSparkFunctions("");
     rowType_ = ROW({
         {"a", BIGINT()},
         {"b", BIGINT()},
@@ -63,6 +64,7 @@ class CudfExpressionSelectionTest : public ::testing::Test {
   }
 
   void TearDown() override {
+    cudf_velox::unregisterFunctions();
     cudf_velox::unregisterCudf();
     execCtx_.reset();
     queryCtx_.reset();
@@ -167,6 +169,64 @@ TEST_F(CudfExpressionSelectionTest, signatureEnforcesConstantArgsLike) {
   // Bad: pattern is not a constant
   auto bad = compileExecExpr("like(name, name)", rowType_, execCtx_.get());
   ASSERT_FALSE(canBeEvaluatedByCudf(bad, /*deep=*/true));
+}
+
+TEST_F(CudfExpressionSelectionTest, signatureAllowsColumnArgsStartswith) {
+  // OK: pattern is a constant
+  auto ok = compileExecExpr("startswith(name, 'ab')", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(ok, /*deep=*/true));
+
+  // OK: null pattern is still a constant and should remain on the cuDF path.
+  auto okNull = compileExecExpr(
+      "startswith(name, cast(null as varchar))", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okNull, /*deep=*/true));
+
+  // OK: pattern can also come from a column.
+  auto okColumn =
+      compileExecExpr("startswith(name, name)", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okColumn, /*deep=*/true));
+}
+
+TEST_F(CudfExpressionSelectionTest, signatureAllowsColumnArgsContains) {
+  // OK: pattern is a constant
+  auto ok = compileExecExpr("contains(name, 'ab')", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(ok, /*deep=*/true));
+
+  // OK: the input can also be a constant.
+  auto okConstantInput =
+      compileExecExpr("contains('ab', name)", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okConstantInput, /*deep=*/true));
+
+  // OK: null pattern is still a constant and should remain on the cuDF path.
+  auto okNull = compileExecExpr(
+      "contains(name, cast(null as varchar))", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okNull, /*deep=*/true));
+
+  // OK: pattern can also come from a column.
+  auto okColumn =
+      compileExecExpr("contains(name, name)", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okColumn, /*deep=*/true));
+}
+
+TEST_F(CudfExpressionSelectionTest, signatureAllowsColumnArgsEndswith) {
+  // OK: pattern is a constant
+  auto ok = compileExecExpr("endswith(name, 'ab')", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(ok, /*deep=*/true));
+
+  // OK: the input can also be a constant.
+  auto okConstantInput =
+      compileExecExpr("endswith('ab', name)", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okConstantInput, /*deep=*/true));
+
+  // OK: null pattern is still a constant and should remain on the cuDF path.
+  auto okNull = compileExecExpr(
+      "endswith(name, cast(null as varchar))", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okNull, /*deep=*/true));
+
+  // OK: pattern can also come from a column.
+  auto okColumn =
+      compileExecExpr("endswith(name, name)", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okColumn, /*deep=*/true));
 }
 
 TEST_F(CudfExpressionSelectionTest, signatureArityAndConstantsSubstr) {

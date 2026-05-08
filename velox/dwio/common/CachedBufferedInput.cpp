@@ -94,7 +94,7 @@ bool CachedBufferedInput::shouldPreload(int32_t numPages) {
     numPages += memory::AllocationTraits::numPages(
         std::min<int32_t>(request.size, options_.loadQuantum()));
   }
-  const auto cachePages = cache_->incrementCachedPages(0);
+  const auto cachePages = cache_->cachedPages();
   auto* allocator = cache_->allocator();
   const auto maxPages =
       memory::AllocationTraits::numPages(allocator->capacity());
@@ -179,7 +179,8 @@ void CachedBufferedInput::preload() {
   cache::RawFileCacheKey key{fileNum_.id(), 0};
   folly::SemiFuture<bool> waitFuture(false);
   do {
-    preloadPin_ = cache_->findOrCreate(key, fileSize_, &waitFuture);
+    preloadPin_ =
+        cache_->findOrCreate(key, fileSize_, /*contiguous=*/false, &waitFuture);
     if (preloadPin_.empty()) {
       uint64_t waitUs{0};
       {
@@ -214,7 +215,7 @@ void CachedBufferedInput::preload() {
   ioStatistics_->incRawBytesRead(fileSize_);
   ioStatistics_->queryThreadIoLatencyUs().increment(storageReadUs);
   ioStatistics_->storageReadLatencyUs().increment(storageReadUs);
-  ioStatistics_->incTotalScanTime(storageReadUs * 1'000);
+  ioStatistics_->incTotalScanTimeNs(storageReadUs * 1'000);
   entry->setExclusiveToShared(options_.cacheable());
 }
 
@@ -681,8 +682,8 @@ void CachedBufferedInput::cacheRegion(
     uint64_t length,
     const folly::IOBuf& buffer,
     uint64_t bufferOffset) {
-  auto pin = cache_->findOrCreate(
-      RawFileCacheKey{fileNum_.id(), offset}, length, nullptr);
+  auto pin =
+      cache_->findOrCreate(RawFileCacheKey{fileNum_.id(), offset}, length);
   // Empty pin means the cache is at capacity and cannot accept new entries.
   // Non-exclusive means another thread already cached this region; skip the
   // duplicate write.
@@ -701,10 +702,10 @@ void CachedBufferedInput::cacheRegion(
       length);
 
   auto* entry = pin.checkedEntry();
-  if (entry->size() < cache::AsyncDataCacheEntry::kTinyDataSize) {
-    cursor.pull(entry->tinyData(), length);
+  if (entry->hasContiguousData()) {
+    cursor.pull(entry->contiguousData(), length);
   } else {
-    auto& allocation = entry->data();
+    auto& allocation = entry->nonContiguousData();
     uint64_t copyBytes = 0;
     for (int i = 0; i < allocation.numRuns() && copyBytes < length; ++i) {
       const auto run = allocation.runAt(i);

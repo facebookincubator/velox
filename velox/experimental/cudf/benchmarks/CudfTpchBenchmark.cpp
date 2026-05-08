@@ -84,6 +84,12 @@ DEFINE_bool(velox_cudf_table_scan, true, "Enable cuDF table scan");
 DEFINE_bool(cudf_debug_enabled, false, "Enable debug printing");
 
 DEFINE_string(
+    cudf_properties,
+    "",
+    "Path to a properties file for CudfConfig. Each line should be key=value "
+    "(e.g. cudf.memory_resource=async). See CudfConfig for available keys.");
+
+DEFINE_string(
     preload,
     "off",
     "Pre-load all TPC-H tables and serve from memory instead of disk. "
@@ -95,14 +101,40 @@ DEFINE_int32(
     512 * 1024 * 1024,
     "Batch size in bytes when reading parquet during preload.");
 
+namespace {
+
+bool flagWasSet(const std::string& name) {
+  return !gflags::GetCommandLineFlagInfoOrDie(name.c_str()).is_default;
+}
+
+void applyLegacyCudfFlags() {
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  if (flagWasSet("cudf_memory_resource")) {
+    config.memoryResource = FLAGS_cudf_memory_resource;
+  }
+  if (flagWasSet("cudf_memory_percent")) {
+    config.memoryPercent = FLAGS_cudf_memory_percent;
+  }
+  if (flagWasSet("cudf_debug_enabled")) {
+    config.debugEnabled = FLAGS_cudf_debug_enabled;
+  }
+}
+
+} // namespace
+
 void CudfTpchBenchmark::initialize() {
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  if (!FLAGS_cudf_properties.empty()) {
+    config.initialize(cudf_velox::loadPropertiesFile(FLAGS_cudf_properties));
+  }
+  applyLegacyCudfFlags();
+
   TpchBenchmark::initialize();
 
   if (FLAGS_velox_cudf_table_scan) {
     connector::ConnectorRegistry::global().erase(
         facebook::velox::exec::test::kHiveConnectorId);
 
-    // Add new values into the cudfHive configuration...
     auto cudfHiveConfigurationValues =
         std::unordered_map<std::string, std::string>();
     cudfHiveConfigurationValues
@@ -120,7 +152,6 @@ void CudfTpchBenchmark::initialize() {
     auto cudfHiveProperties = std::make_shared<const config::ConfigBase>(
         std::move(cudfHiveConfigurationValues));
 
-    // Create cudfHive connector with config...
     cudf_velox::connector::hive::CudfHiveConnectorFactory cudfHiveFactory;
     auto cudfHiveConnector = cudfHiveFactory.newConnector(
         facebook::velox::exec::test::kHiveConnectorId,
@@ -130,13 +161,6 @@ void CudfTpchBenchmark::initialize() {
         cudfHiveConnector->connectorId(), cudfHiveConnector);
   }
 
-  cudf_velox::CudfConfig::getInstance().memoryResource =
-      FLAGS_cudf_memory_resource;
-  cudf_velox::CudfConfig::getInstance().memoryPercent =
-      FLAGS_cudf_memory_percent;
-
-  cudf_velox::CudfConfig::getInstance().debugEnabled = FLAGS_cudf_debug_enabled;
-  // Enable cuDF operators
   cudf_velox::registerCudf();
 
   if (FLAGS_preload != "off") {
