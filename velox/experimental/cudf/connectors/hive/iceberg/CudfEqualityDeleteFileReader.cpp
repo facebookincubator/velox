@@ -224,10 +224,9 @@ void CudfEqualityDeleteFileReader::buildEqualityColumnIndices(
 
   equalityColumnIndices_.reserve(equalityColumnNames_.size());
   for (const auto& eqColName : equalityColumnNames_) {
-    const auto it = columnIndexToNameMap.find(eqColName);
-    VELOX_CHECK_NE(
-        it,
-        columnIndexToNameMap.end(),
+    const auto it = inputColumnIndexByName.find(eqColName);
+    VELOX_CHECK(
+        it != inputColumnIndexByName.end(),
         "Equality delete column not found in input table: {}",
         eqColName);
     equalityColumnIndices_.push_back(it->second);
