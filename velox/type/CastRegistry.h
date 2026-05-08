@@ -61,6 +61,11 @@ class CastRulesRegistry {
   /// Clear all registered rules. Used for testing.
   void clear();
 
+  /// Find a rule by type name pair. Returns std::nullopt if no rule exists.
+  std::optional<CastRule> findRule(
+      const std::string& fromTypeName,
+      const std::string& toTypeName) const;
+
  private:
   CastRulesRegistry() = default;
 
@@ -71,10 +76,6 @@ class CastRulesRegistry {
       const TypePtr& fromType,
       const TypePtr& toType,
       bool requireImplicit) const;
-
-  std::optional<CastRule> findRule(
-      const std::string& fromTypeName,
-      const std::string& toTypeName) const;
 
   struct PairHash {
     size_t operator()(const std::pair<std::string, std::string>& p) const {
@@ -92,9 +93,10 @@ class CastRulesRegistry {
       rules_;
 };
 
-/// Register cast rules for custom types. Call this after registerCustomType()
-/// in register*Type() functions. Validates that at least one type in each rule
-/// has a registered CastOperator.
+/// Register cast rules. For custom types, call this after
+/// registerCustomType() in register*Type() functions. Validates that either
+/// at least one type has a registered CastOperator, or both types are known
+/// built-in types (handled by Velox's native cast machinery in CastExpr).
 ///
 /// Example:
 ///   registerCastRules({

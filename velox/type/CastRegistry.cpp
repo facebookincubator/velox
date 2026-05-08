@@ -136,13 +136,17 @@ void CastRulesRegistry::clear() {
 
 void registerCastRules(const std::vector<CastRule>& rules) {
   for (const auto& rule : rules) {
-    // At least one side must be a registered custom type with a CastOperator,
-    // otherwise the cast has no execution path.
+    // Validate that both type names are known. For custom types, at least one
+    // side must have a CastOperator to provide the cast execution path.
+    // Built-in type pairs (e.g. VARCHAR->DOUBLE) are handled by Velox's native
+    // cast machinery in CastExpr, so they don't need a CastOperator.
+    bool hasCustomCast = getCustomTypeCastOperator(rule.fromType) != nullptr ||
+        getCustomTypeCastOperator(rule.toType) != nullptr;
+    bool bothKnown = hasType(rule.fromType) && hasType(rule.toType);
     VELOX_CHECK(
-        getCustomTypeCastOperator(rule.fromType) != nullptr ||
-            getCustomTypeCastOperator(rule.toType) != nullptr,
-        "CastRule {} -> {} requires at least one side to be a registered "
-        "custom type with a CastOperator",
+        hasCustomCast || bothKnown,
+        "CastRule {} -> {} requires either a CastOperator on at least one "
+        "side, or both types to be known built-in types",
         rule.fromType,
         rule.toType);
   }

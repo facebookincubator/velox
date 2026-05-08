@@ -17,6 +17,8 @@
 
 #include "velox/type/CastRegistry.h"
 
+#include <folly/synchronization/CallOnce.h>
+
 namespace facebook::velox {
 
 int64_t Coercion::overallCost(const std::vector<Coercion>& coercions) {
@@ -32,58 +34,61 @@ int64_t Coercion::overallCost(const std::vector<Coercion>& coercions) {
 
 namespace {
 
-std::unordered_map<std::pair<std::string, std::string>, Coercion>
-allowedCoercions() {
-  std::unordered_map<std::pair<std::string, std::string>, Coercion> coercions;
+// Registers implicit coercion rules for built-in types in the
+// CastRulesRegistry. Idempotent — safe to call from multiple overloads.
+// TODO: Migrate as part of phase 3 of Query-Scoped Registries.
+void registerBuiltInCoercions() {
+  static folly::once_flag flag;
+  folly::call_once(flag, [] {
+    auto add = [](const TypePtr& from, const std::vector<TypePtr>& toTypes) {
+      std::vector<CastRule> rules;
+      rules.reserve(toTypes.size());
+      int32_t cost = 0;
+      for (const auto& toType : toTypes) {
+        rules.push_back(
+            {from->name(),
+             toType->name(),
+             /*implicitAllowed=*/true,
+             /*cost=*/++cost,
+             /*validator=*/nullptr});
+      }
+      registerCastRules(rules);
+    };
 
-  auto add = [&](const TypePtr& from, const std::vector<TypePtr>& to) {
-    int32_t cost = 0;
-    for (const auto& toType : to) {
-      coercions.emplace(
-          std::make_pair<std::string, std::string>(
-              from->name(), toType->name()),
-          Coercion{.type = toType, .cost = ++cost});
-    }
-  };
-
-  add(TINYINT(), {SMALLINT(), INTEGER(), BIGINT(), REAL(), DOUBLE()});
-  add(SMALLINT(), {INTEGER(), BIGINT(), REAL(), DOUBLE()});
-  add(INTEGER(), {BIGINT(), REAL(), DOUBLE()});
-  add(BIGINT(), {DOUBLE()});
-  add(REAL(), {DOUBLE()});
-  add(DECIMAL(1, 0), {REAL(), DOUBLE()});
-  add(DATE(), {TIMESTAMP()});
-  add(UNKNOWN(),
-      {TINYINT(),
-       BOOLEAN(),
-       SMALLINT(),
-       INTEGER(),
-       BIGINT(),
-       REAL(),
-       DOUBLE(),
-       VARCHAR(),
-       VARBINARY()});
-
-  return coercions;
+    add(TINYINT(), {SMALLINT(), INTEGER(), BIGINT(), REAL(), DOUBLE()});
+    add(SMALLINT(), {INTEGER(), BIGINT(), REAL(), DOUBLE()});
+    add(INTEGER(), {BIGINT(), REAL(), DOUBLE()});
+    add(BIGINT(), {DOUBLE()});
+    add(REAL(), {DOUBLE()});
+    add(DECIMAL(1, 0), {REAL(), DOUBLE()});
+    add(DATE(), {TIMESTAMP()});
+    add(UNKNOWN(),
+        {TINYINT(),
+         BOOLEAN(),
+         SMALLINT(),
+         INTEGER(),
+         BIGINT(),
+         REAL(),
+         DOUBLE(),
+         VARCHAR(),
+         VARBINARY()});
+  });
 }
+
 } // namespace
 
 // static
 std::optional<Coercion> TypeCoercer::coerceTypeBase(
     const TypePtr& fromType,
     const TypePtr& toType) {
+  registerBuiltInCoercions();
+
   if (fromType->name() == toType->name()) {
     return Coercion{.type = fromType, .cost = 0};
   }
 
-  // Check built-in coercions first.
-  static const auto kAllowedCoercions = allowedCoercions();
-  auto it = kAllowedCoercions.find({fromType->name(), toType->name()});
-  if (it != kAllowedCoercions.end()) {
-    return it->second;
-  }
-
-  // Check CastRulesRegistry directly — no type reconstruction needed.
+  // CastRulesRegistry is the single source of truth for all coercions
+  // (built-in and custom).
   if (auto cost = CastRulesRegistry::instance().canCoerce(fromType, toType)) {
     return Coercion{.type = toType, .cost = *cost};
   }
@@ -95,31 +100,28 @@ std::optional<Coercion> TypeCoercer::coerceTypeBase(
 std::optional<Coercion> TypeCoercer::coerceTypeBase(
     const TypePtr& fromType,
     const std::string& toTypeName) {
-  static const auto kAllowedCoercions = allowedCoercions();
+  registerBuiltInCoercions();
+
   if (fromType->name() == toTypeName) {
     return Coercion{.type = fromType, .cost = 0};
   }
 
-  // Check built-in coercions first.
-  auto it = kAllowedCoercions.find({fromType->name(), toTypeName});
-  if (it != kAllowedCoercions.end()) {
-    return it->second;
-  }
-
-  // Fall back to CastRulesRegistry for custom type coercions. Skip
-  // parameterized types — we cannot construct the target type without knowing
-  // its type parameters.
-  // getCustomType() returns nullptr for built-in types. Callers must not
-  // pass parametric custom type names (e.g., "BIGINT_ENUM") because their
-  // factories throw when called with empty parameters. SignatureBinder
-  // guards against this by checking typeSignature.parameters().empty().
-  if (fromType->size() == 0 && fromType->parameters().empty()) {
-    if (auto toType = getCustomType(toTypeName, {})) {
-      if (auto cost =
-              CastRulesRegistry::instance().canCoerce(fromType, toType)) {
-        return Coercion{.type = std::move(toType), .cost = *cost};
-      }
+  // Look up by name first to avoid calling getType() for parametric types
+  // whose factories throw with empty parameters (ARRAY, MAP, ROW, BIGINT_ENUM).
+  if (fromType->size() == 0) {
+    auto rule =
+        CastRulesRegistry::instance().findRule(fromType->name(), toTypeName);
+    if (!rule || !rule->implicitAllowed) {
+      return std::nullopt;
     }
+    auto toType = getType(toTypeName, {});
+    if (!toType) {
+      return std::nullopt;
+    }
+    if (rule->validator && !rule->validator(fromType, toType)) {
+      return std::nullopt;
+    }
+    return Coercion{.type = std::move(toType), .cost = rule->cost};
   }
 
   return std::nullopt;
