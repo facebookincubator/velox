@@ -66,7 +66,15 @@ CudfGroupId::CudfGroupId(
           0,
           "GroupIdNode didn't map grouping key {} to input channel",
           groupingKey);
+      VELOX_CHECK_LT(
+          outputChannel,
+          outputToInputGroupingKeyMapping.size(),
+          "outputChannel out of bounds in outputToInputGroupingKeyMapping");
       auto inputChannel = outputToInputGroupingKeyMapping.at(outputChannel);
+      VELOX_CHECK_LT(
+          outputChannel,
+          mappings.size(),
+          "outputChannel out of bounds in mappings");
       mappings[outputChannel] = inputChannel;
     }
     groupingKeyMappings_.emplace_back(std::move(mappings));
@@ -85,6 +93,30 @@ CudfGroupId::CudfGroupId(
   for (size_t i = 0; i < numGroupingKeys_; ++i) {
     groupingKeyCudfTypes_.push_back(
         veloxToCudfDataType(outputType_->childAt(i)));
+  }
+
+  // Precompute usage counts for each input column in the last grouping set.
+  // This avoids rebuilding the map on every doGetOutput() call.
+  size_t maxInputIdx = 0;
+  for (const auto& m : groupingKeyMappings_) {
+    for (auto idx : m) {
+      if (idx != kMissingGroupingKey) {
+        maxInputIdx = std::max(maxInputIdx, static_cast<size_t>(idx));
+      }
+    }
+  }
+  for (auto idx : aggregationInputs_) {
+    maxInputIdx = std::max(maxInputIdx, static_cast<size_t>(idx));
+  }
+  lastGroupingSetUsageCounts_.resize(maxInputIdx + 1, 0);
+  const auto& lastMapping = groupingKeyMappings_.back();
+  for (size_t i = 0; i < numGroupingKeys_; ++i) {
+    if (lastMapping[i] != kMissingGroupingKey) {
+      ++lastGroupingSetUsageCounts_[lastMapping[i]];
+    }
+  }
+  for (auto inputIdx : aggregationInputs_) {
+    ++lastGroupingSetUsageCounts_[inputIdx];
   }
 }
 
@@ -117,6 +149,10 @@ RowVectorPtr CudfGroupId::doGetOutput() {
   auto tempMr = get_temp_mr();
   auto numRows = inputSize_;
 
+  VELOX_CHECK_LT(
+      groupingSetIndex_,
+      groupingKeyMappings_.size(),
+      "groupingSetIndex_ out of bounds");
   const auto& mapping = groupingKeyMappings_[groupingSetIndex_];
   std::vector<std::unique_ptr<cudf::column>> outputColumns(outputType_->size());
 
@@ -124,19 +160,11 @@ RowVectorPtr CudfGroupId::doGetOutput() {
   // inputColumns_ is reused across multiple getOutput() calls.
   const bool isLastGroupingSet = (groupingSetIndex_ == numGroupingSets_ - 1);
 
-  // When moving on the last grouping set, the same input column may map to
-  // multiple output positions (e.g., aliased keys). Count references so we
-  // move only on the final use and copy otherwise.
-  std::unordered_map<column_index_t, int> remainingUses;
+  // For the last grouping set, use precomputed usage counts to track remaining
+  // uses of each input column. This allows us to move on the final use.
+  std::vector<int> remainingUses;
   if (isLastGroupingSet) {
-    for (size_t i = 0; i < numGroupingKeys_; ++i) {
-      if (mapping[i] != kMissingGroupingKey) {
-        ++remainingUses[mapping[i]];
-      }
-    }
-    for (auto inputIdx : aggregationInputs_) {
-      ++remainingUses[inputIdx];
-    }
+    remainingUses = lastGroupingSetUsageCounts_;
   }
 
   // Fill in grouping keys
@@ -162,6 +190,10 @@ RowVectorPtr CudfGroupId::doGetOutput() {
   for (size_t i = 0; i < aggregationInputs_.size(); ++i) {
     auto inputIdx = aggregationInputs_[i];
     auto outputIdx = numGroupingKeys_ + i;
+    VELOX_CHECK_LT(
+        inputIdx, inputColumns_.size(), "inputIdx out of bounds in aggregation inputs");
+    VELOX_CHECK_LT(
+        outputIdx, outputColumns.size(), "outputIdx out of bounds in aggregation inputs");
     if (isLastGroupingSet && --remainingUses[inputIdx] == 0) {
       outputColumns[outputIdx] = std::move(inputColumns_[inputIdx]);
     } else {

@@ -443,3 +443,57 @@ TEST_F(CudfGroupIdTest, sameInputMultipleOutputsInGroupingSet) {
       "  SELECT k1, k1 as k1_copy, a FROM tmp"
       ") GROUP BY GROUPING SETS ((k1), (k1, k1_copy))");
 }
+
+// Test: Same input column used as both grouping key and aggregation input.
+// This exercises the case where inputColumnUsageCount > 1 because the same
+// input column appears in both groupingKeyMappings and aggregationInputs.
+// Note: We use an alias (k1 as k1_key) to avoid duplicate column names in the
+// output schema, which would cause the aggregation to reference the wrong
+// column.
+TEST_F(CudfGroupIdTest, columnUsedAsKeyAndAggregationInput) {
+  auto input = makeRowVector(
+      {"k1", "k2"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 1, 2}),
+          makeFlatVector<int64_t>({10, 20, 30, 40, 50}),
+      });
+
+  createDuckDbTable({input});
+
+  // k1 is used as both a grouping key (aliased to k1_key) AND an aggregation
+  // input (k1). This means the input column k1 has usage count > 1 and must be
+  // copied, not moved, for the first use and moved only on the final use.
+  auto plan =
+      PlanBuilder()
+          .values({input})
+          .groupId({"k1 as k1_key"}, {{"k1_key"}, {"k1_key"}}, {"k1", "k2"})
+          .singleAggregation(
+              {"k1_key", "group_id"},
+              {"sum(k1) as sum_k1", "sum(k2) as sum_k2"})
+          .project({"k1_key", "sum_k1", "sum_k2"})
+          .planNode();
+
+  assertQuery(
+      plan,
+      "SELECT k1, sum(k1) as sum_k1, sum(k2) as sum_k2 FROM tmp GROUP BY k1 "
+      "UNION ALL "
+      "SELECT k1, sum(k1) as sum_k1, sum(k2) as sum_k2 FROM tmp GROUP BY k1");
+
+  // Test with multiple grouping sets where k1 is used as key and agg input.
+  // For the global grouping set ({}), k1_key is NULL but k1 (agg input) retains
+  // original values.
+  plan = PlanBuilder()
+             .values({input})
+             .groupId({"k1 as k1_key"}, {{"k1_key"}, {}}, {"k1", "k2"})
+             .singleAggregation(
+                 {"k1_key", "group_id"},
+                 {"sum(k1) as sum_k1", "sum(k2) as sum_k2"})
+             .project({"k1_key", "sum_k1", "sum_k2"})
+             .planNode();
+
+  assertQuery(
+      plan,
+      "SELECT k1_key, sum(k1) as sum_k1, sum(k2) as sum_k2 FROM ("
+      "  SELECT k1 as k1_key, k1, k2 FROM tmp"
+      ") GROUP BY GROUPING SETS ((k1_key), ())");
+}
