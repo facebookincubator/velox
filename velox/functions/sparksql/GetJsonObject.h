@@ -220,7 +220,7 @@ struct GetJsonObjectFunction {
         return false;
       }
 
-      if (!extractStringResult(rawResult, result)) {
+      if (!extractStringResult(rawResult, paddedJson, result)) {
         return false;
       }
     } catch (simdjson::simdjson_error&) {
@@ -246,6 +246,7 @@ struct GetJsonObjectFunction {
   // Returns true if the conversion is successful. Otherwise, returns false.
   bool extractStringResult(
       simdjson::simdjson_result<simdjson::ondemand::value> rawResult,
+      const simdjson::padded_string& paddedJson,
       out_type<Varchar>& result) {
     std::stringstream ss;
     switch (rawResult.type()) {
@@ -288,6 +289,12 @@ struct GetJsonObjectFunction {
         return false;
       }
       case simdjson::ondemand::json_type::string: {
+        std::string_view rawToken;
+        if (rawResult.raw_json_token().get(rawToken) ||
+            !hasClosedJsonString(rawToken, paddedJson)) {
+          return false;
+        }
+
         std::string_view stringResult;
         if (!rawResult.get_string().get(stringResult)) {
           result.append(stringResult);
@@ -306,6 +313,59 @@ struct GetJsonObjectFunction {
       default:
         return false;
     }
+  }
+
+  bool hasClosedJsonString(
+      std::string_view rawToken,
+      const simdjson::padded_string& paddedJson) {
+    const auto* begin = paddedJson.data();
+    const auto* stringStart = rawToken.data();
+    if (begin == nullptr || stringStart == nullptr) {
+      return false;
+    }
+
+    if (!isStringViewInPaddedJson(rawToken, paddedJson)) {
+      return false;
+    }
+
+    const auto* end = begin + paddedJson.size();
+    if (stringStart < begin || stringStart >= end || *stringStart != '"') {
+      return false;
+    }
+
+    bool escaped = false;
+    for (auto* current = stringStart + 1; current < end; ++current) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (*current == '\\') {
+        escaped = true;
+        continue;
+      }
+      if (*current == '"') {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  bool isStringViewInPaddedJson(
+      std::string_view value,
+      const simdjson::padded_string& paddedJson) {
+    const auto* begin = paddedJson.data();
+    const auto* data = value.data();
+    if (begin == nullptr || data == nullptr) {
+      return value.empty();
+    }
+
+    const auto size = paddedJson.size();
+    const auto* end = begin + size;
+    if (data < begin || data > end) {
+      return false;
+    }
+
+    return value.size() <= static_cast<size_t>(end - data);
   }
 
   // Checks whether the obtained result is followed by valid char. Because
