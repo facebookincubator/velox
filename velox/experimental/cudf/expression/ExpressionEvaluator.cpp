@@ -275,22 +275,6 @@ static bool matchCallAgainstSignatures(
   return false;
 }
 
-std::unique_ptr<cudf::column> makeOwnedColumn(
-    ColumnOrView& holder,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
-  return std::visit(
-      [&](auto& value) -> std::unique_ptr<cudf::column> {
-        using T = std::decay_t<decltype(value)>;
-        if constexpr (std::is_same_v<T, cudf::column_view>) {
-          return std::make_unique<cudf::column>(value, stream, mr);
-        } else {
-          return std::move(value);
-        }
-      },
-      holder);
-}
-
 void mergeSecondaryNullsIntoResult(
     cudf::column& result,
     cudf::column_view secondaryColumn,
@@ -319,48 +303,6 @@ void mergeSecondaryNullsIntoResult(
   auto [nullMask, nullCount] =
       cudf::bitmask_and(masks, beginBits, result.size(), stream, mr);
   result.set_null_mask(std::move(nullMask), nullCount);
-}
-
-std::unique_ptr<cudf::column> makeStructChildColumn(
-    cudf::column_view structColumn,
-    cudf::size_type childIndex,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
-  auto const childView = cudf::structs_column_view(structColumn)
-                             .get_sliced_child(childIndex, stream);
-  auto child = std::make_unique<cudf::column>(childView, stream, mr);
-  mergeSecondaryNullsIntoResult(*child, structColumn, stream, mr);
-  return child;
-}
-
-int32_t resolveFieldReferenceIndex(
-    const std::shared_ptr<velox::exec::FieldReference>& fieldExpr,
-    const RowTypePtr& parentRowType) {
-  VELOX_CHECK_NOT_NULL(parentRowType);
-  // FieldReference stores the compiled dereference index internally. Resolve it
-  // once during expression creation using a lightweight EvalCtx scoped to the
-  // parent ROW type so unnamed-field dereferences stay aligned with CPU.
-  auto pool = memory::memoryManager()->addLeafPool();
-  auto queryCtx = core::QueryCtx::Builder().pool(pool).build();
-  core::ExecCtx execCtx(pool.get(), queryCtx.get());
-  exec::ExprSet exprSet(
-      std::vector<core::TypedExprPtr>{},
-      &execCtx,
-      /*enableConstantFolding=*/false);
-
-  std::vector<VectorPtr> children;
-  children.reserve(parentRowType->size());
-  for (size_t childIndex = 0; childIndex < parentRowType->size();
-       ++childIndex) {
-    children.push_back(
-        BaseVector::createNullConstant(
-            parentRowType->childAt(childIndex), 1, pool.get()));
-  }
-
-  auto row = std::make_shared<RowVector>(
-      pool.get(), parentRowType, nullptr, 1, std::move(children), 0);
-  exec::EvalCtx evalCtx(&execCtx, &exprSet, row.get());
-  return fieldExpr->index(evalCtx);
 }
 
 } // namespace
@@ -1930,9 +1872,30 @@ class RowConstructorFunction : public CudfFunction {
   }
 
  private:
+  static std::unique_ptr<cudf::column> makeOwnedColumn(
+      ColumnOrView& holder,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr);
+
   std::vector<std::unique_ptr<cudf::scalar>> literals_;
   size_t numInputs_{0};
 };
+
+std::unique_ptr<cudf::column> RowConstructorFunction::makeOwnedColumn(
+    ColumnOrView& holder,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  return std::visit(
+      [&](auto& value) -> std::unique_ptr<cudf::column> {
+        using T = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<T, cudf::column_view>) {
+          return std::make_unique<cudf::column>(value, stream, mr);
+        } else {
+          return std::move(value);
+        }
+      },
+      holder);
+}
 
 bool registerCudfFunction(
     const std::string& name,
@@ -2464,7 +2427,7 @@ std::shared_ptr<FunctionExpression> FunctionExpression::create(
         fieldExpr->inputs().size(),
         1,
         "Nested field reference expects exactly one input");
-    node->fieldIndex_ = resolveFieldReferenceIndex(
+    node->fieldIndex_ = FunctionExpression::resolveFieldReferenceIndex(
         fieldExpr, asRowType(expr->inputs()[0]->type()));
   }
 
@@ -2478,6 +2441,48 @@ std::shared_ptr<FunctionExpression> FunctionExpression::create(
   }
 
   return node;
+}
+
+int32_t FunctionExpression::resolveFieldReferenceIndex(
+    const std::shared_ptr<velox::exec::FieldReference>& fieldExpr,
+    const RowTypePtr& parentRowType) {
+  VELOX_CHECK_NOT_NULL(parentRowType);
+  // FieldReference stores the compiled dereference index internally. Resolve it
+  // once during expression creation using a lightweight EvalCtx scoped to the
+  // parent ROW type so unnamed-field dereferences stay aligned with CPU.
+  auto pool = memory::memoryManager()->addLeafPool();
+  auto queryCtx = core::QueryCtx::Builder().pool(pool).build();
+  core::ExecCtx execCtx(pool.get(), queryCtx.get());
+  exec::ExprSet exprSet(
+      std::vector<core::TypedExprPtr>{},
+      &execCtx,
+      /*enableConstantFolding=*/false);
+
+  std::vector<VectorPtr> children;
+  children.reserve(parentRowType->size());
+  for (size_t childIndex = 0; childIndex < parentRowType->size();
+       ++childIndex) {
+    children.push_back(
+        BaseVector::createNullConstant(
+            parentRowType->childAt(childIndex), 1, pool.get()));
+  }
+
+  auto row = std::make_shared<RowVector>(
+      pool.get(), parentRowType, nullptr, 1, std::move(children), 0);
+  exec::EvalCtx evalCtx(&execCtx, &exprSet, row.get());
+  return fieldExpr->index(evalCtx);
+}
+
+std::unique_ptr<cudf::column> FunctionExpression::makeStructChildColumn(
+    cudf::column_view structColumn,
+    cudf::size_type childIndex,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  auto const childView = cudf::structs_column_view(structColumn)
+                             .get_sliced_child(childIndex, stream);
+  auto child = std::make_unique<cudf::column>(childView, stream, mr);
+  mergeSecondaryNullsIntoResult(*child, structColumn, stream, mr);
+  return child;
 }
 
 ColumnOrView FunctionExpression::eval(
@@ -2508,7 +2513,8 @@ ColumnOrView FunctionExpression::eval(
         parentView.type().id() == cudf::type_id::STRUCT,
         "Nested field reference expects a ROW input");
     VELOX_CHECK_GE(fieldIndex_, 0, "Nested field reference did not resolve");
-    return makeStructChildColumn(parentView, fieldIndex_, stream, mr);
+    return FunctionExpression::makeStructChildColumn(
+        parentView, fieldIndex_, stream, mr);
   }
 
   if (function_) {

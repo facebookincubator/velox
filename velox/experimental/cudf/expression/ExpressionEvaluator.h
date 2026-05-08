@@ -158,6 +158,16 @@ class FunctionExpression : public CudfExpression {
   static bool canEvaluate(std::shared_ptr<velox::exec::Expr> expr);
 
  private:
+  static std::unique_ptr<cudf::column> makeStructChildColumn(
+      cudf::column_view structColumn,
+      cudf::size_type childIndex,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr);
+
+  static int32_t resolveFieldReferenceIndex(
+      const std::shared_ptr<velox::exec::FieldReference>& fieldExpr,
+      const RowTypePtr& parentRowType);
+
   std::shared_ptr<velox::exec::Expr> expr_;
   std::shared_ptr<CudfFunction> function_;
   std::vector<std::shared_ptr<CudfExpression>> subexpressions_;
