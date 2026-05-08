@@ -19,6 +19,15 @@
 
 namespace facebook::velox::parquet {
 
+// Helper functions to convert thrift types to abstracted types
+inline EncodingType convertEncoding(thrift::Encoding::type thriftEncoding) {
+  return static_cast<EncodingType>(thriftEncoding);
+}
+
+inline PageType convertPageType(thrift::PageType::type thriftPageType) {
+  return static_cast<PageType>(thriftPageType);
+}
+
 template <typename T>
 inline const T load(const char* ptr) {
   T ret;
@@ -244,6 +253,40 @@ ColumnChunkMetaDataPtr::getColumnStatistics(
   return buildColumnStatisticsFromThrift(
       thriftColumnChunkPtr(ptr_)->meta_data.statistics, *type, numRows);
 };
+
+bool ColumnChunkMetaDataPtr::hasEncodingStats() const {
+  return hasMetadata() &&
+      thriftColumnChunkPtr(ptr_)->meta_data.__isset.encoding_stats;
+}
+
+std::vector<PageEncodingStats> ColumnChunkMetaDataPtr::getEncodingStats()
+    const {
+  const auto& thriftStats =
+      thriftColumnChunkPtr(ptr_)->meta_data.encoding_stats;
+  std::vector<PageEncodingStats> result;
+  result.reserve(thriftStats.size());
+
+  for (const auto& stat : thriftStats) {
+    result.emplace_back(
+        convertPageType(stat.page_type),
+        convertEncoding(stat.encoding),
+        stat.count);
+  }
+
+  return result;
+}
+
+std::vector<EncodingType> ColumnChunkMetaDataPtr::getEncodings() const {
+  const auto& thriftEncodings = thriftColumnChunkPtr(ptr_)->meta_data.encodings;
+  std::vector<EncodingType> result;
+  result.reserve(thriftEncodings.size());
+
+  for (const auto& encoding : thriftEncodings) {
+    result.push_back(convertEncoding(encoding));
+  }
+
+  return result;
+}
 
 std::string ColumnChunkMetaDataPtr::getColumnMetadataStatsMinValue() {
   VELOX_CHECK(hasStatistics());
