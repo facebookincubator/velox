@@ -43,21 +43,6 @@ namespace facebook::velox::cudf_velox {
 
 namespace {
 
-cudf::size_type getLeadLagOffset(const core::WindowNode::Function& func) {
-  const auto& args = func.functionCall->inputs();
-  if (args.size() >= 2) {
-    if (auto constExpr =
-            std::dynamic_pointer_cast<const core::ConstantTypedExpr>(args[1])) {
-      if (constExpr->hasValueVector()) {
-        return constExpr->valueVector()->as<SimpleVector<int64_t>>()->valueAt(
-            0);
-      }
-      return constExpr->value().value<int64_t>();
-    }
-  }
-  return 1;
-}
-
 std::pair<cudf::window_bounds, cudf::window_bounds> toWindowBounds(
     const core::WindowNode::Frame& frame) {
   auto toBound = [](core::WindowNode::BoundType type,
@@ -266,7 +251,25 @@ std::unique_ptr<cudf::column> CudfWindow::computeLeadLagColumn(
       2,
       "cudf {} does not support default value (3rd argument)",
       baseName);
-  auto offset = getLeadLagOffset(func);
+
+  // Extract offset from the second argument, defaulting to 1.
+  auto getOffset = [&]() -> cudf::size_type {
+    const auto& args = func.functionCall->inputs();
+    if (args.size() >= 2) {
+      if (auto constExpr =
+              std::dynamic_pointer_cast<const core::ConstantTypedExpr>(
+                  args[1])) {
+        if (constExpr->hasValueVector()) {
+          return constExpr->valueVector()
+              ->as<SimpleVector<int64_t>>()
+              ->valueAt(0);
+        }
+        return constExpr->value().value<int64_t>();
+      }
+    }
+    return 1;
+  };
+  auto offset = getOffset();
 
   if (baseName == "lag") {
     auto agg = cudf::make_lag_aggregation<cudf::rolling_aggregation>(offset);
