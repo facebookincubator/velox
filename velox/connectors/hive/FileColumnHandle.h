@@ -17,21 +17,10 @@
 
 #include "velox/connectors/Connector.h"
 #include "velox/type/Subfield.h"
+#include "velox/type/Timestamp.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::connector::hive {
-
-/// Timestamp unit for partition values stored as bigint.
-enum class PartitionTimestampUnit {
-  /// Microseconds since epoch (Iceberg identity transform).
-  kMicroseconds,
-  /// Milliseconds since epoch (some Hive implementations).
-  kMilliseconds,
-  /// Nanoseconds since epoch (future formats).
-  kNanoseconds,
-  /// Unknown unit - will fall back to string parsing.
-  kUnknown,
-};
 
 /// Type of extraction to apply at one nesting level.
 enum class ExtractionStep : uint8_t {
@@ -220,10 +209,12 @@ class FileColumnHandle : public ColumnHandle {
   /// (e.g., Iceberg) rather than ISO 8601 strings (e.g., Hive).
   virtual bool isPartitionDateValueDaysSinceEpoch() const = 0;
 
-  /// Return the timestamp unit for partition values stored as bigint.
-  /// Default implementation returns kUnknown, which falls back to string parsing.
-  virtual PartitionTimestampUnit getPartitionTimestampUnit() const {
-    return PartitionTimestampUnit::kUnknown;
+  /// Return the timestamp precision for partition values stored as bigint.
+  /// Returns std::nullopt if unknown, which falls back to string parsing.
+  /// Default implementation returns std::nullopt for backward compatibility.
+  virtual std::optional<TimestampPrecision> getPartitionTimestampPrecision()
+      const {
+    return std::nullopt;
   }
 
   /// Named extraction chains.  Empty means no extraction (default behavior).

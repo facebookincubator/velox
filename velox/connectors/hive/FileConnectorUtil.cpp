@@ -168,7 +168,8 @@ bool applyPartitionFilter(
     const std::string& partitionValue,
     bool isPartitionDateDaysSinceEpoch,
     const common::Filter* filter,
-    bool asLocalTime) {
+    bool asLocalTime,
+    const std::shared_ptr<const FileColumnHandle>& columnHandle = nullptr) {
   if (type->isDate()) {
     int32_t result = 0;
     // days_since_epoch partition values are integers in string format. Eg.
@@ -199,31 +200,33 @@ bool applyPartitionFilter(
       // Try to parse as bigint timestamp first.
       auto bigintResult = folly::tryTo<int64_t>(partitionValue);
       if (bigintResult.hasValue()) {
-        const auto handlesIter = partitionKeysHandle.find(name);
-        if (handlesIter != partitionKeysHandle.end()) {
-          auto unit = handlesIter->second->getPartitionTimestampUnit();
-          
-          Timestamp ts;
-          switch (unit) {
-            case PartitionTimestampUnit::kMicroseconds:
-              // Iceberg identity transform stores timestamps as microseconds in UTC.
-              ts = Timestamp::fromMicros(bigintResult.value());
-              break;
-            case PartitionTimestampUnit::kMilliseconds:
-              ts = Timestamp::fromMillis(bigintResult.value());
-              break;
-            case PartitionTimestampUnit::kNanoseconds:
-              ts = Timestamp::fromNanos(bigintResult.value());
-              break;
-            case PartitionTimestampUnit::kUnknown:
-              // Unknown unit - fall back to string parsing below.
-              goto string_parsing;
+        Timestamp ts;
+        
+        // Check if column handle provides explicit timestamp precision
+        if (columnHandle) {
+          auto precision = columnHandle->getPartitionTimestampPrecision();
+          if (precision.has_value()) {
+            switch (precision.value()) {
+              case TimestampPrecision::kMicroseconds:
+                ts = Timestamp::fromMicros(bigintResult.value());
+                break;
+              case TimestampPrecision::kMilliseconds:
+                ts = Timestamp::fromMillis(bigintResult.value());
+                break;
+              case TimestampPrecision::kNanoseconds:
+                ts = Timestamp::fromNanos(bigintResult.value());
+                break;
+            }
+            return applyFilter(*filter, ts);
           }
-          return applyFilter(*filter, ts);
         }
+        
+        // Default behavior: treat as microseconds (for backward compatibility and Iceberg)
+        // Iceberg identity transform stores timestamps as microseconds in UTC.
+        ts = Timestamp::fromMicros(bigintResult.value());
+        return applyFilter(*filter, ts);
       }
       
-      string_parsing:
       // Fall back to string parsing - try ISO 8601 first (for Iceberg), then PrestoCast.
       auto result = util::fromTimestampString(
           StringView(partitionValue), util::TimestampParseMode::kIso8601);
@@ -285,7 +288,8 @@ bool testFilters(
               iter->second.value(),
               handlesIter->second->isPartitionDateValueDaysSinceEpoch(),
               child->filter(),
-              asLocalTime);
+              asLocalTime,
+              handlesIter->second);
         }
         // Column is missing, most likely due to schema evolution. Or it's a
         // partition key but the partition value is NULL.
