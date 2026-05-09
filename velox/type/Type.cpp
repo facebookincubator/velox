@@ -269,6 +269,7 @@ void Type::registerSerDe() {
   registry.Register(
       "IntervalYearMonthType", IntervalYearMonthType::deserialize);
   registry.Register("DateType", DateType::deserialize);
+  registry.Register("TimestampUtcType", TimestampUtcType::deserialize);
   registry.Register("TimeType", TimeTypeFactory::deserialize);
 }
 
@@ -1027,6 +1028,10 @@ VELOX_DEFINE_SCALAR_ACCESSOR(VARBINARY);
 
 #undef VELOX_DEFINE_SCALAR_ACCESSOR
 
+TypePtr TIMESTAMP_UTC() {
+  return TimestampUtcType::get();
+}
+
 TypePtr UNKNOWN() {
   return TypeFactory<TypeKind::UNKNOWN>::create();
 }
@@ -1364,6 +1369,7 @@ const SingletonTypeMap& singletonBuiltInTypes() {
       {"VARCHAR", VARCHAR()},
       {"VARBINARY", VARBINARY()},
       {"TIMESTAMP", TIMESTAMP()},
+      {"TIMESTAMP UTC", TIMESTAMP_UTC()},
       {"INTERVAL DAY TO SECOND", INTERVAL_DAY_TIME()},
       {"INTERVAL YEAR TO MONTH", INTERVAL_YEAR_MONTH()},
       {"DATE", DATE()},
@@ -1547,6 +1553,13 @@ const auto& typeParameterKindNames() {
 } // namespace
 
 VELOX_DEFINE_ENUM_NAME(TypeParameterKind, typeParameterKindNames);
+
+folly::dynamic TimestampUtcType::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = "TimestampUtcType";
+  obj["type"] = name();
+  return obj;
+}
 
 template <TimePrecision kPrecision, bool kLocalTime>
 folly::dynamic TimeType<kPrecision, kLocalTime>::serialize() const {

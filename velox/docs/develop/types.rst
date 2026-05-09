@@ -117,6 +117,7 @@ INTERVAL DAY TO SECOND  BIGINT
 INTERVAL YEAR TO MONTH  INTEGER
 TIME                    BIGINT
 TIME_MICRO_UTC          BIGINT
+TIMESTAMP_UTC           TIMESTAMP
 ======================  ======================================================
 
 DECIMAL type carries additional `precision`,
@@ -132,9 +133,11 @@ upto 38 precision, with a range of :math:`[-10^{38} + 1, +10^{38} - 1]`.
 All the three values, precision, scale, unscaled value are required to represent a
 decimal value.
 
-TIME type represents time in milliseconds of local timezone from midnight. Thus min/max value can range from 0 to 23:59:59.999.
-TIME_MICRO_UTC type represents time in microseconds from midnight, timezone unaware. Thus min/max value can range from 00:00:00.000000 to 23:59:59.999999.
+TIME represents time in milliseconds since midnight, subject to session timezone interpretation. Thus min/max value can range from 0 to 23:59:59.999.
+TIME_MICRO_UTC represents time in microseconds since midnight in UTC, not subject to session timezone adjustment. Thus min/max value can range from 00:00:00.000000 to 23:59:59.999999.
 The TIME and TIME_MICRO_UTC types are backed by BIGINT physical type.
+
+TIMESTAMP represents a timestamp subject to session timezone interpretation. TIMESTAMP_UTC represents a timestamp in UTC, not subject to session timezone adjustment. Both types are backed by TIMESTAMP physical type.
 
 Custom Types
 ~~~~~~~~~~~~
@@ -314,6 +317,8 @@ key differences are listed below.
   Example::
 
       SELECT cast('12:30:45.123456' as time)  -- 12:30:45.123456
+
+* Spark uses TIMESTAMP_UTC to support TimestampNTZType. TIMESTAMP_UTC is not subject to session timezone adjustment.
 
 * In function comparisons, nested null values are handled as values.
   Example::
