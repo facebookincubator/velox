@@ -823,13 +823,7 @@ class ScalarType : public CanProvideCustomComparisonType<KIND> {
     return Type::hasSameTypeId(other);
   }
 
-  // TODO: velox implementation is in cpp
-  folly::dynamic serialize() const override {
-    folly::dynamic obj = folly::dynamic::object;
-    obj["name"] = "Type";
-    obj["type"] = TypeTraits<KIND>::name;
-    return obj;
-  }
+  folly::dynamic serialize() const override;
 };
 
 /// This class represents the fixed-point numbers.
@@ -877,13 +871,7 @@ class DecimalType : public ScalarType<KIND> {
     return fmt::format("DECIMAL({}, {})", precision(), scale());
   }
 
-  folly::dynamic serialize() const override {
-    auto obj = ScalarType<KIND>::serialize();
-    obj["type"] = name();
-    obj["precision"] = precision();
-    obj["scale"] = scale();
-    return obj;
-  }
+  folly::dynamic serialize() const override;
 
   std::span<const TypeParameter> parameters() const override {
     return parameters_;
@@ -1056,12 +1044,7 @@ class UnknownType : public CanProvideCustomComparisonType<TypeKind::UNKNOWN> {
     return Type::hasSameTypeId(other);
   }
 
-  folly::dynamic serialize() const override {
-    folly::dynamic obj = folly::dynamic::object;
-    obj["name"] = "Type";
-    obj["type"] = TypeTraits<TypeKind::UNKNOWN>::name;
-    return obj;
-  }
+  folly::dynamic serialize() const override;
 };
 
 class ArrayType : public TypeBase<TypeKind::ARRAY> {
@@ -1527,16 +1510,9 @@ class IntervalDayTimeType final : public BigintType {
   /// Perhaps, Type::valueToString(variant)?
   std::string valueToString(int64_t value) const;
 
-  folly::dynamic serialize() const override {
-    folly::dynamic obj = folly::dynamic::object;
-    obj["name"] = "IntervalDayTimeType";
-    obj["type"] = name();
-    return obj;
-  }
+  folly::dynamic serialize() const override;
 
-  static TypePtr deserialize(const folly::dynamic& /*obj*/) {
-    return IntervalDayTimeType::get();
-  }
+  static TypePtr deserialize(const folly::dynamic& obj);
 };
 
 FOLLY_ALWAYS_INLINE std::shared_ptr<const IntervalDayTimeType>
@@ -1578,16 +1554,9 @@ class IntervalYearMonthType final : public IntegerType {
   /// represented as 1-2; -14 months would be represents as -1-2.
   std::string valueToString(int32_t value) const;
 
-  folly::dynamic serialize() const override {
-    folly::dynamic obj = folly::dynamic::object;
-    obj["name"] = "IntervalYearMonthType";
-    obj["type"] = name();
-    return obj;
-  }
+  folly::dynamic serialize() const override;
 
-  static TypePtr deserialize(const folly::dynamic& /*obj*/) {
-    return IntervalYearMonthType::get();
-  }
+  static TypePtr deserialize(const folly::dynamic& obj);
 };
 
 FOLLY_ALWAYS_INLINE std::shared_ptr<const IntervalYearMonthType>
@@ -1632,16 +1601,9 @@ class DateType final : public IntegerType {
 
   int32_t toDays(const char* in, size_t len) const;
 
-  folly::dynamic serialize() const override {
-    folly::dynamic obj = folly::dynamic::object;
-    obj["name"] = "DateType";
-    obj["type"] = name();
-    return obj;
-  }
+  folly::dynamic serialize() const override;
 
-  static TypePtr deserialize(const folly::dynamic& /*obj*/) {
-    return DateType::get();
-  }
+  static TypePtr deserialize(const folly::dynamic& obj);
 };
 
 FOLLY_ALWAYS_INLINE std::shared_ptr<const DateType> DATE() {
