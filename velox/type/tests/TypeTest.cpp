@@ -20,6 +20,7 @@
 #include "velox/type/SimpleFunctionApi.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/TypeEncodingUtil.h"
+#include "velox/type/TypeSerde.h"
 #include "velox/type/tests/utils/CustomTypesForTesting.h"
 
 using namespace facebook;

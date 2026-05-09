@@ -16,7 +16,10 @@
 
 #include <velox/type/Type.h>
 
+#include <folly/dynamic.h>
+
 #include "velox/common/EnumDefine.h"
+#include "velox/type/TypeSerde.h"
 
 #include <boost/algorithm/string.hpp>
 #include <fmt/format.h>
