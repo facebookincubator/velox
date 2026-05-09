@@ -4077,6 +4077,235 @@ TEST_P(TestColumnReader, testDecimal128WithSkip) {
       DecimalUtil::toString(intBatch->valueAt(4), decimalType));
 }
 
+// The following three tests verify that SelectiveDecimalColumnReader uses
+// requestedType (the metastore/table schema) to determine the target scale,
+// rather than the file-footer type.
+//
+// Background: Hive's ORC writer always stores DECIMAL(38, 18) in the file
+// footer regardless of the metastore-declared precision.  The per-row
+// SECONDARY (NANO_DATA) stream carries the actual scale at which each value
+// was written.  Without the fix, the selective reader derives scale_ from the
+// file-footer type (scale=18) and incorrectly rescales integer values
+// (DECIMAL(p,0)) by multiplying them by 10^18, causing join-key mismatches
+// when one side uses NativeScan and the other falls back to vanilla Spark.
+
+// Scenario: integer column (per-row scale=0) stored in an ORC file whose
+// footer declares DECIMAL(38, 18), but the metastore says DECIMAL(20, 0).
+// The reader must produce the original integer values without rescaling.
+TEST_P(TestColumnReader, testDecimal128RequestedTypeScaleZero) {
+  // set getEncoding
+  proto::ColumnEncoding directEncoding;
+  directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
+  EXPECT_CALL(streams_, getEncodingProxy(_))
+      .WillRepeatedly(Return(&directEncoding));
+
+  // set getStream
+  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
+      .WillRepeatedly(Return(nullptr));
+  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
+      .WillRepeatedly(Return(nullptr));
+
+  // col_0's DATA stream: values 1, 2, 3, 4 as zigzag-encoded varints (2,4,6,8)
+  const unsigned char numBuffer[] = {0x02, 0x04, 0x06, 0x08};
+  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+      .WillRepeatedly(Return(
+          new SeekableArrayInputStream(numBuffer, std::size(numBuffer))));
+
+  // col_0's SECONDARY (NANO_DATA) stream: 4 rows all with scale=0.
+  // RLEv1 run encoding: ctrl=0x01 (run of 4), delta=0x00, base=0x00
+  // (zigzag(0) = 0).
+  const unsigned char scaleBuffer[] = {0x01, 0x00, 0x00};
+  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_NANO_DATA, true))
+      .WillRepeatedly(Return(
+          new SeekableArrayInputStream(scaleBuffer, std::size(scaleBuffer))));
+
+  // File footer type: DECIMAL(38, 18) — Hive always writes this.
+  auto fileType = HiveTypeParser().parse("struct<col_0:decimal(38, 18)>");
+  // Metastore / requested type: DECIMAL(20, 0).
+  auto requestedType = HiveTypeParser().parse("struct<col_0:decimal(20, 0)>");
+
+  auto scanSpec = std::make_unique<common::ScanSpec>("root");
+  buildReader(requestedType, fileType, {}, scanSpec.get());
+  VectorPtr batch = newBatch(requestedType);
+  skipAndRead(batch, /* read */ 4);
+
+  auto intBatch = getOnlyChild<FlatVector<int128_t>>(batch);
+  ASSERT_EQ(4, batch->size());
+  ASSERT_EQ(4, intBatch->size());
+  ASSERT_EQ(0, getNullCount(batch));
+  ASSERT_EQ(0, getNullCount(intBatch));
+  // Values must be the original integers, not multiplied by 10^18.
+  EXPECT_EQ(1, (long long)intBatch->valueAt(0));
+  EXPECT_EQ(2, (long long)intBatch->valueAt(1));
+  EXPECT_EQ(3, (long long)intBatch->valueAt(2));
+  EXPECT_EQ(4, (long long)intBatch->valueAt(3));
+}
+
+// Scenario: non-zero scale column where the per-row scale already matches the
+// requestedType scale.  The reader must not apply any rescaling.
+TEST_P(TestColumnReader, testDecimal128RequestedTypeScaleMatchesData) {
+  // set getEncoding
+  proto::ColumnEncoding directEncoding;
+  directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
+  EXPECT_CALL(streams_, getEncodingProxy(_))
+      .WillRepeatedly(Return(&directEncoding));
+
+  // set getStream
+  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
+      .WillRepeatedly(Return(nullptr));
+  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
+      .WillRepeatedly(Return(nullptr));
+
+  // col_0's DATA stream: values 1, 2, 3, 4 (zigzag: 2, 4, 6, 8)
+  const unsigned char numBuffer[] = {0x02, 0x04, 0x06, 0x08};
+  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+      .WillRepeatedly(Return(
+          new SeekableArrayInputStream(numBuffer, std::size(numBuffer))));
+
+  // col_0's SECONDARY (NANO_DATA) stream: 4 rows all with scale=5.
+  // RLEv1: ctrl=0x01 (run of 4), delta=0x00, base=0x0A (zigzag(5) = 10).
+  const unsigned char scaleBuffer[] = {0x01, 0x00, 0x0A};
+  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_NANO_DATA, true))
+      .WillRepeatedly(Return(
+          new SeekableArrayInputStream(scaleBuffer, std::size(scaleBuffer))));
+
+  // File footer: DECIMAL(38, 18) — Hive default.
+  auto fileType = HiveTypeParser().parse("struct<col_0:decimal(38, 18)>");
+  // Requested type: DECIMAL(25, 5) — per-row scale equals target scale.
+  auto requestedType = HiveTypeParser().parse("struct<col_0:decimal(25, 5)>");
+
+  auto scanSpec = std::make_unique<common::ScanSpec>("root");
+  buildReader(requestedType, fileType, {}, scanSpec.get());
+  VectorPtr batch = newBatch(requestedType);
+  skipAndRead(batch, /* read */ 4);
+
+  auto intBatch = getOnlyChild<FlatVector<int128_t>>(batch);
+  ASSERT_EQ(4, batch->size());
+  ASSERT_EQ(4, intBatch->size());
+  ASSERT_EQ(0, getNullCount(batch));
+  ASSERT_EQ(0, getNullCount(intBatch));
+  // currentScale(5) == targetScale(5): no rescaling expected.
+  EXPECT_EQ(1, (long long)intBatch->valueAt(0));
+  EXPECT_EQ(2, (long long)intBatch->valueAt(1));
+  EXPECT_EQ(3, (long long)intBatch->valueAt(2));
+  EXPECT_EQ(4, (long long)intBatch->valueAt(3));
+}
+
+// Scenario: per-row scale (3) is lower than the requestedType scale (5).
+// The reader must upscale by multiplying by 10^(5-3) = 100.
+TEST_P(TestColumnReader, testDecimal128RequestedTypeUpscale) {
+  // set getEncoding
+  proto::ColumnEncoding directEncoding;
+  directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
+  EXPECT_CALL(streams_, getEncodingProxy(_))
+      .WillRepeatedly(Return(&directEncoding));
+
+  // set getStream
+  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
+      .WillRepeatedly(Return(nullptr));
+  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
+      .WillRepeatedly(Return(nullptr));
+
+  // col_0's DATA stream: values 1, 2, 3, 4 (zigzag: 2, 4, 6, 8)
+  const unsigned char numBuffer[] = {0x02, 0x04, 0x06, 0x08};
+  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+      .WillRepeatedly(Return(
+          new SeekableArrayInputStream(numBuffer, std::size(numBuffer))));
+
+  // col_0's SECONDARY (NANO_DATA) stream: 4 rows all with scale=3.
+  // RLEv1: ctrl=0x01 (run of 4), delta=0x00, base=0x06 (zigzag(3) = 6).
+  const unsigned char scaleBuffer[] = {0x01, 0x00, 0x06};
+  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_NANO_DATA, true))
+      .WillRepeatedly(Return(
+          new SeekableArrayInputStream(scaleBuffer, std::size(scaleBuffer))));
+
+  // File footer: DECIMAL(38, 18) — Hive default.
+  auto fileType = HiveTypeParser().parse("struct<col_0:decimal(38, 18)>");
+  // Requested type: DECIMAL(25, 5) — target scale=5, needs upscaling.
+  auto requestedType = HiveTypeParser().parse("struct<col_0:decimal(25, 5)>");
+
+  auto scanSpec = std::make_unique<common::ScanSpec>("root");
+  buildReader(requestedType, fileType, {}, scanSpec.get());
+  VectorPtr batch = newBatch(requestedType);
+  skipAndRead(batch, /* read */ 4);
+
+  auto intBatch = getOnlyChild<FlatVector<int128_t>>(batch);
+  ASSERT_EQ(4, batch->size());
+  ASSERT_EQ(4, intBatch->size());
+  ASSERT_EQ(0, getNullCount(batch));
+  ASSERT_EQ(0, getNullCount(intBatch));
+  // currentScale(3) → targetScale(5): multiply by 10^2 = 100.
+  EXPECT_EQ(100, (long long)intBatch->valueAt(0));
+  EXPECT_EQ(200, (long long)intBatch->valueAt(1));
+  EXPECT_EQ(300, (long long)intBatch->valueAt(2));
+  EXPECT_EQ(400, (long long)intBatch->valueAt(3));
+}
+
+// Scenario: short decimal (BIGINT, precision<=18).  File declares
+// DECIMAL(12, 5), metastore says DECIMAL(10, 2).  The reader must downscale
+// by dividing by 10^(5-2) = 1000.
+TEST_P(TestColumnReader, testDecimal64RequestedTypeDownscale) {
+  // set getEncoding
+  proto::ColumnEncoding directEncoding;
+  directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
+  EXPECT_CALL(streams_, getEncodingProxy(_))
+      .WillRepeatedly(Return(&directEncoding));
+
+  // set getStream
+  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
+      .WillRepeatedly(Return(nullptr));
+  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
+      .WillRepeatedly(Return(nullptr));
+
+  // col_0's DATA stream: values 1000, 2000, 3000, 4000 as zigzag varints.
+  // Zigzag(n) = 2n for positive n.  Varint encoding splits into 7-bit groups.
+  // Zigzag(1000)=2000: 2000 mod 128=80=0x50, cont=0xD0; 2000>>7=15=0x0F.
+  // Zigzag(2000)=4000: 4000 mod 128=32=0x20, cont=0xA0; 4000>>7=31=0x1F.
+  // Zigzag(3000)=6000: 6000 mod 128=112=0x70, cont=0xF0; 6000>>7=46=0x2E.
+  // Zigzag(4000)=8000: 8000 mod 128=64=0x40, cont=0xC0; 8000>>7=62=0x3E.
+  const unsigned char numBuffer[] = {
+      0xD0,
+      0x0F, // 1000
+      0xA0,
+      0x1F, // 2000
+      0xF0,
+      0x2E, // 3000
+      0xC0,
+      0x3E, // 4000
+  };
+  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+      .WillRepeatedly(Return(
+          new SeekableArrayInputStream(numBuffer, std::size(numBuffer))));
+
+  // col_0's SECONDARY (NANO_DATA) stream: 4 rows all with scale=5.
+  // RLEv1: ctrl=0x01 (run of 4), delta=0x00, base=0x0A (zigzag(5)=10).
+  const unsigned char scaleBuffer[] = {0x01, 0x00, 0x0A};
+  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_NANO_DATA, true))
+      .WillRepeatedly(Return(
+          new SeekableArrayInputStream(scaleBuffer, std::size(scaleBuffer))));
+
+  // File footer: DECIMAL(12, 5) (BIGINT).
+  auto fileType = HiveTypeParser().parse("struct<col_0:decimal(12, 5)>");
+  // Requested type: DECIMAL(10, 2) (BIGINT) — target scale=2.
+  auto requestedType = HiveTypeParser().parse("struct<col_0:decimal(10, 2)>");
+
+  auto scanSpec = std::make_unique<common::ScanSpec>("root");
+  buildReader(requestedType, fileType, {}, scanSpec.get());
+  VectorPtr batch = newBatch(requestedType);
+  skipAndRead(batch, /* read */ 4);
+
+  auto intBatch = getOnlyChild<FlatVector<int64_t>>(batch);
+  ASSERT_EQ(4, batch->size());
+  ASSERT_EQ(4, intBatch->size());
+  ASSERT_EQ(0, getNullCount(batch));
+  ASSERT_EQ(0, getNullCount(intBatch));
+  // currentScale(5) → targetScale(2): divide by 10^3 = 1000.
+  EXPECT_EQ(1, intBatch->valueAt(0));
+  EXPECT_EQ(2, intBatch->valueAt(1));
+  EXPECT_EQ(3, intBatch->valueAt(2));
+  EXPECT_EQ(4, intBatch->valueAt(3));
+}
+
 TEST_P(TestColumnReader, testLargeSkip) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;

@@ -24,22 +24,19 @@ SelectiveDecimalColumnReader<DataT>::SelectiveDecimalColumnReader(
     const std::shared_ptr<const TypeWithId>& fileType,
     DwrfParams& params,
     common::ScanSpec& scanSpec)
-    // Use requestedType (table schema) when it is a decimal of the same
-    // TypeKind as the file type.  This allows the reader to rescale values
-    // from the ORC file's precision/scale to the metastore-declared
-    // precision/scale, so that NativeScan output matches the vanilla Spark
-    // scan path and decimal join-key comparisons succeed.
+    // When the read schema (requestedType) differs from the file schema,
+    // prefer using requestedType for decoding as long as the conversion is
+    // supported (e.g. reading decimal with different scale). This allows the
+    // reader to interpret values according to the table schema, so that
+    // NativeScan matches the vanilla Spark scan behavior.
     //
     // When the TypeKinds differ (e.g. file is HUGEINT but table declares
     // BIGINT) we fall back to the file type to avoid buffer-size mismatches
     // in getIntValues(); in that case the Gluten fallback-tag logic will
     // ensure symmetric scan behaviour at the join level.
     : SelectiveColumnReader(
-          (requestedType && requestedType->isDecimal() &&
-           requestedType->kind() == fileType->type()->kind())
-              ? requestedType
-              : fileType->type(),
-          fileType,
+          requestedType,
+          std::move(fileType),
           params,
           scanSpec) {
   EncodingKey encodingKey{fileType_->id(), params.flatMapContext().sequence};
