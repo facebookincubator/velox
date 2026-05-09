@@ -92,6 +92,12 @@ uint64_t FileConfig::filePreloadThreshold() const {
   return config_->get<uint64_t>(kFilePreloadThreshold, 8UL << 20);
 }
 
+uint64_t FileConfig::parquetFooterTrackThriftMemoryThreshold() const {
+  return config_->get<uint64_t>(
+      kParquetFooterTrackThriftMemoryThreshold,
+      std::numeric_limits<uint64_t>::max());
+}
+
 uint8_t FileConfig::readTimestampUnit(const config::ConfigBase* session) const {
   const auto unit = sessionValue<uint8_t>(
       session, kReadTimestampUnitSession, kReadTimestampUnit, 3 /*milli*/);

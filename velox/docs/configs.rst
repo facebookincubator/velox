@@ -1011,6 +1011,11 @@ must be specified as raw byte counts.
      - string
      - parquet-cpp-velox version 0.0.0
      - Created-by value used when writing to Parquet.
+   * - hive.parquet.track-footer-thrift-memory-threshold
+     -
+     - string
+     - disabled (max uint64)
+     - Threshold for tracking thrift memory usage in Parquet file footers. When the footer size exceeds this threshold, memory usage is tracked and reported. By default, tracking is disabled.
 
 ``Amazon S3 Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -284,6 +284,12 @@ class FileConfig {
   /// meta data together. Optimization to decrease the small IO requests.
   static constexpr const char* kFilePreloadThreshold = "file-preload-threshold";
 
+  /// The byte size threshold beyond which the Parquet reader estimates and
+  /// reports the memory usage of deserialized Thrift objects to the memory
+  /// pool. Defaults to disabled (max uint64).
+  static constexpr const char* kParquetFooterTrackThriftMemoryThreshold =
+      "parquet.track-footer-thrift-memory-threshold";
+
   explicit FileConfig(std::shared_ptr<const config::ConfigBase> config) {
     VELOX_CHECK_NOT_NULL(
         config, "Config is null for FileConfig initialization");
@@ -299,6 +305,11 @@ class FileConfig {
   size_t parallelUnitLoadCount(const config::ConfigBase* session) const;
 
   uint64_t filePreloadThreshold() const;
+
+  /// Returns the byte size threshold beyond which the Parquet reader reports
+  /// the deserialized Thrift footer's memory consumption to the memory pool.
+  /// Defaults to disabled (max uint64).
+  uint64_t parquetFooterTrackThriftMemoryThreshold() const;
 
   // Returns the timestamp unit used when reading timestamps from files.
   uint8_t readTimestampUnit(const config::ConfigBase* session) const;

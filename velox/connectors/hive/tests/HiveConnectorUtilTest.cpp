@@ -274,6 +274,8 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   customHiveConfigProps[hive::HiveConfig::kFileColumnNamesReadAsLowerCase] =
       "true";
   customHiveConfigProps[hive::HiveConfig::kOrcUseColumnNames] = "true";
+  customHiveConfigProps
+      [hive::HiveConfig::kParquetFooterTrackThriftMemoryThreshold] = "1111";
   customHiveConfigProps[hive::HiveConfig::kFilePreloadThreshold] = "9999";
   customHiveConfigProps[hive::HiveConfig::kPrefetchRowGroups] = "10";
   customHiveConfigProps[hive::HiveConfig::kCacheMetadata] = "true";
@@ -295,6 +297,9 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   EXPECT_EQ(
       readerOptions.footerSpeculativeIoSize(),
       hiveConfig->orcFooterSpeculativeIoSize(&sessionProperties));
+  EXPECT_EQ(
+      readerOptions.parquetFooterTrackThriftMemoryThreshold(),
+      hiveConfig->parquetFooterTrackThriftMemoryThreshold());
   EXPECT_EQ(
       readerOptions.filePreloadThreshold(), hiveConfig->filePreloadThreshold());
   EXPECT_EQ(readerOptions.prefetchRowGroups(), hiveConfig->prefetchRowGroups());

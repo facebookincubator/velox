@@ -1902,7 +1902,6 @@ TEST_F(ParquetReaderTest, readerWithSchema) {
   auto buffer = std::make_unique<dwio::common::BufferedInput>(
       file, readerOptions.memoryPool());
   ParquetReader reader(std::move(buffer), readerOptions);
-
   EXPECT_EQ(reader.rowType()->toString(), schema->toString());
 }
 
@@ -2137,4 +2136,38 @@ TEST_F(ParquetReaderTest, readTimeWithMultipleColumns) {
   auto rowReader = reader->createRowReader(rowReaderOpts);
 
   assertReadWithReaderAndExpected(rowType, *rowReader, data, *leafPool_);
+}
+
+TEST_F(ParquetReaderTest, thriftMemoryTracking) {
+  // Verifies that when the footer size exceeds the configured threshold,
+  // memory for the deserialized Thrift footer is reported to the pool when
+  // the row reader is created and released when the reader is destroyed.
+  const std::string sample(getExampleFilePath("sample.parquet"));
+
+  dwio::common::ReaderOptions readerOptions{
+      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  // 1-byte threshold forces memory tracking to engage for any footer.
+  readerOptions.setParquetFooterTrackThriftMemoryThreshold(1);
+  const auto initialUsage = leafPool_->usedBytes();
+  {
+    auto reader = createReader(sample, readerOptions);
+    EXPECT_EQ(reader->numberOfRows(), 20ULL);
+    auto rowReaderOpts = getReaderOpts(sampleSchema());
+    rowReaderOpts.setScanSpec(makeScanSpec(sampleSchema()));
+    auto rowReader = reader->createRowReader(rowReaderOpts);
+
+    // After row reader creation, the Thrift footer memory has been reported.
+    const auto memoryAfterRowReader = leafPool_->usedBytes();
+    EXPECT_GT(memoryAfterRowReader, initialUsage);
+
+    auto result = BaseVector::create(sampleSchema(), 0, leafPool_.get());
+    rowReader->next(10, result);
+    EXPECT_EQ(result->size(), 10);
+
+    // Memory remains reported throughout reading.
+    EXPECT_GE(leafPool_->usedBytes(), memoryAfterRowReader);
+  }
+
+  // ~ReaderBase() releases the reported memory, returning to baseline.
+  EXPECT_EQ(leafPool_->usedBytes(), initialUsage);
 }
