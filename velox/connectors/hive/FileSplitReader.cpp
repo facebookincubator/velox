@@ -158,11 +158,11 @@ FileSplitReader::FileSplitReader(
       fileSplit_(fileSplit),
       connectorQueryCtx_(connectorQueryCtx),
       readerOutputType_(readerOutputType),
-      baseReaderOpts_(
-          connectorQueryCtx->memoryPool(),
-          dataIoStats_.get(),
-          metadataIoStats_.get()),
-      emptySplit_(false) {}
+      baseReaderOpts_(connectorQueryCtx->memoryPool()),
+      emptySplit_(false) {
+  baseReaderOpts_.setDataIoStats(dataIoStats_.get());
+  baseReaderOpts_.setMetadataIoStats(metadataIoStats_.get());
+}
 
 void FileSplitReader::configureReaderOptions(
     std::shared_ptr<velox::random::RandomSkipTracker> randomSkip) {

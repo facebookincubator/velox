@@ -88,8 +88,9 @@ class ParquetWriterTest : public ParquetTestBase {
   thrift::PageHeader readPageHeader(
       MemorySink* sinkPtr,
       int64_t offsetFromDataPage) {
-    dwio::common::ReaderOptions readerOptions{
-        leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+    dwio::common::ReaderOptions readerOptions(leafPool_.get());
+    readerOptions.setDataIoStats(dataIoStats_.get());
+    readerOptions.setMetadataIoStats(metadataIoStats_.get());
     auto reader = createReaderInMemory(*sinkPtr, readerOptions);
 
     auto colChunkPtr = reader->fileMetaData().rowGroup(0).columnChunk(0);
@@ -409,8 +410,9 @@ TEST_F(ParquetWriterTest, compression) {
 
   auto* sinkPtr = write(data, writerOptions);
 
-  dwio::common::ReaderOptions readerOptions{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   auto reader = createReaderInMemory(*sinkPtr, readerOptions);
 
   ASSERT_EQ(reader->numberOfRows(), kRows);
@@ -802,8 +804,9 @@ TEST_F(ParquetWriterTest, allNulls) {
 
   auto* sinkPtr = write(data);
 
-  dwio::common::ReaderOptions readerOptions{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   auto reader = createReaderInMemory(*sinkPtr, readerOptions);
 
   ASSERT_EQ(reader->numberOfRows(), kRows);

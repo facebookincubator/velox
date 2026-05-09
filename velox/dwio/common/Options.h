@@ -565,6 +565,10 @@ class ReaderOptions : public io::ReaderOptions {
   static constexpr uint64_t kDefaultFilePreloadThreshold =
       1024 * 1024 * 8; // 8MB
 
+  explicit ReaderOptions(velox::memory::MemoryPool* pool)
+      : io::ReaderOptions(pool) {}
+
+  // Deprecated: use pool-only constructor + setDataIoStats/setMetadataIoStats.
   ReaderOptions(
       velox::memory::MemoryPool* pool,
       velox::io::IoStatistics* dataIoStats,
