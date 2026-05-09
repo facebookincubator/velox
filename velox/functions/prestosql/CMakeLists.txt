@@ -145,6 +145,7 @@ velox_link_libraries(
   velox_functions_util
   Folly::folly
   FastFloat::fast_float
+  absl::strings
   stemmer::stemmer
 )
 

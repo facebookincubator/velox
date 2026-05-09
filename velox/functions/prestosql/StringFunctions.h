@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <absl/strings/match.h>
+
 #include "velox/common/base/XxHashInline.h"
 
 #include "velox/functions/Udf.h"
@@ -725,21 +727,17 @@ struct LongestCommonPrefixFunction {
     stringImpl::stringToCodePoints(right);
 
     if constexpr (isAscii) {
-      // Fast path for ASCII: simple byte comparison.
-      const char* leftData = left.data();
-      const char* rightData = right.data();
-      const size_t minLength = std::min(left.size(), right.size());
+      // Fast path for ASCII: byte-level prefix using Abseil. The result
+      // refers to bytes inside `left`, which is allowed because the function
+      // declares `reuse_strings_from_arg = 0`.
+      const absl::string_view prefix = absl::FindLongestCommonPrefix(
+          absl::string_view(left.data(), left.size()),
+          absl::string_view(right.data(), right.size()));
 
-      size_t commonLength = 0;
-      while (commonLength < minLength &&
-             leftData[commonLength] == rightData[commonLength]) {
-        commonLength++;
-      }
-
-      if (commonLength == 0) {
+      if (prefix.empty()) {
         result.setEmpty();
       } else {
-        result.setNoCopy(StringView(leftData, commonLength));
+        result.setNoCopy(StringView(prefix.data(), prefix.size()));
       }
     } else {
       // Unicode path: lazy codepoint iteration.
