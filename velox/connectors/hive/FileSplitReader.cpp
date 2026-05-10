@@ -364,6 +364,12 @@ void FileSplitReader::createRowReader(
     std::optional<bool> rowSizeTrackingEnabled) {
   VELOX_CHECK_NULL(baseRowReader_);
   configureBaseRowReaderOptions(std::move(metadataFilter), std::move(rowType));
+  baseRowReaderOpts_.setStringDecoderZeroCopy(
+      fileConfig_->nimbleStringDecoderZeroCopy(
+          connectorQueryCtx_->sessionProperties()));
+  baseRowReaderOpts_.setNimblePreserveDictionaryEncoding(
+      fileConfig_->nimblePreserveDictionaryEncoding(
+          connectorQueryCtx_->sessionProperties()));
   baseRowReaderOpts_.setTrackRowSize(
       rowSizeTrackingEnabled.has_value()
           ? *rowSizeTrackingEnabled
