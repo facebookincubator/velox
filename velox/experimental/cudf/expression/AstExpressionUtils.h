@@ -671,38 +671,17 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     return *result;
   } else if (name == "cast" || name == "try_cast") {
     VELOX_CHECK_EQ(len, 1);
-    // Only INTEGER, BIGINT, DOUBLE casts are supported in pure AST
-    // Other casts (including DECIMAL) need to go through precompute path
-    if (expr->type()->kind() == TypeKind::INTEGER ||
-        expr->type()->kind() == TypeKind::BIGINT ||
-        expr->type()->kind() == TypeKind::DOUBLE) {
-      auto const& op1 = pushExprToTree(expr->inputs()[0]);
-      if (expr->type()->kind() == TypeKind::INTEGER) {
-        // No int32 cast in cudf ast
-        return tree.push(Operation{Op::CAST_TO_INT64, op1});
-      } else if (expr->type()->kind() == TypeKind::BIGINT) {
-        return tree.push(Operation{Op::CAST_TO_INT64, op1});
-      } else if (expr->type()->kind() == TypeKind::DOUBLE) {
-        return tree.push(Operation{Op::CAST_TO_FLOAT64, op1});
-      }
+    auto const& op1 = pushExprToTree(expr->inputs()[0]);
+    if (expr->type()->kind() == TypeKind::INTEGER) {
+      // No int32 cast in cudf ast
+      return tree.push(Operation{Op::CAST_TO_INT64, op1});
+    } else if (expr->type()->kind() == TypeKind::BIGINT) {
+      return tree.push(Operation{Op::CAST_TO_INT64, op1});
+    } else if (expr->type()->kind() == TypeKind::DOUBLE) {
+      return tree.push(Operation{Op::CAST_TO_FLOAT64, op1});
+    } else {
+      VELOX_FAIL("Unsupported type for cast operation");
     }
-    // For unsupported cast types (including DECIMAL), fall through to
-    // precompute path below
-    if (!allowPureAstOnly && canBeEvaluatedByCudf(expr, /*deep=*/false)) {
-      int sideIdx = findExpressionSide(expr);
-      if (sideIdx == -2) {
-        VELOX_FAIL(
-            "Expression spans both join sides and cannot be precomputed: " +
-            name);
-      }
-      if (sideIdx < 0) {
-        sideIdx = 0;
-      }
-      auto node =
-          createCudfExpression(expr, inputRowSchema[sideIdx]);
-      return addPrecomputeInstructionOnSide(sideIdx, 0, name, "", node);
-    }
-    VELOX_FAIL("Unsupported type for cast operation");
   } else if (auto fieldExpr = std::dynamic_pointer_cast<FieldReference>(expr)) {
     // Refer to the appropriate side
     const auto fieldName =
