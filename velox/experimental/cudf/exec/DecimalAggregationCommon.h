@@ -26,7 +26,8 @@
 
 namespace facebook::velox::cudf_velox {
 
-/// Checks that the column is STRING-encoded serialized decimal aggregation state.
+/// Checks that the column is STRING-encoded serialized decimal aggregation
+/// state.
 void validateIntermediateColumnType(cudf::column_view const& column);
 
 std::unique_ptr<cudf::column> castCountColumnToInt64(

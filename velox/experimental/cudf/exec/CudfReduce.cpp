@@ -46,10 +46,10 @@ using facebook::velox::cudf_velox::CountInputKind;
 using facebook::velox::cudf_velox::finalizeDecimalAverage;
 using facebook::velox::cudf_velox::get_output_mr;
 using facebook::velox::cudf_velox::get_temp_mr;
-using facebook::velox::cudf_velox::serializeDecimalPartialOrIntermediateState;
-using facebook::velox::cudf_velox::validateIntermediateColumnType;
 using facebook::velox::cudf_velox::ReduceAggregator;
 using facebook::velox::cudf_velox::ResolvedAggregateInfo;
+using facebook::velox::cudf_velox::serializeDecimalPartialOrIntermediateState;
+using facebook::velox::cudf_velox::validateIntermediateColumnType;
 
 #define DEFINE_SIMPLE_REDUCE_AGGREGATOR(Name, name)                            \
   struct Reduce##Name##Aggregator : ReduceAggregator {                         \
@@ -255,8 +255,7 @@ struct ReduceMeanAggregator : ReduceAggregator {
 std::unique_ptr<cudf::column> partialDecimalSumCountToSerializedString(
     cudf::column_view inputCol,
     rmm::cuda_stream_view stream) {
-  auto const sumAgg =
-      cudf::make_sum_aggregation<cudf::reduce_aggregation>();
+  auto const sumAgg = cudf::make_sum_aggregation<cudf::reduce_aggregation>();
   auto sumScalar =
       cudf::reduce(inputCol, *sumAgg, inputCol.type(), stream, get_temp_mr());
   auto countAgg = cudf::make_count_aggregation<cudf::reduce_aggregation>(
@@ -279,8 +278,7 @@ std::unique_ptr<cudf::column> intermediateDecimalMergeSerializedString(
     cudf::column_view inputCol,
     int32_t scale,
     rmm::cuda_stream_view stream) {
-  auto const sumAgg =
-      cudf::make_sum_aggregation<cudf::reduce_aggregation>();
+  auto const sumAgg = cudf::make_sum_aggregation<cudf::reduce_aggregation>();
   auto decoded = cudf_velox::deserializeDecimalSumStateWithCount(
       inputCol, scale, stream, get_output_mr());
   auto sumScalar = cudf::reduce(
@@ -308,8 +306,7 @@ std::unique_ptr<cudf::column> finalDecimalAvgFromSerializedString(
     int32_t scale,
     TypePtr const& resultType,
     rmm::cuda_stream_view stream) {
-  auto const sumAgg =
-      cudf::make_sum_aggregation<cudf::reduce_aggregation>();
+  auto const sumAgg = cudf::make_sum_aggregation<cudf::reduce_aggregation>();
   auto sumAndCount = cudf_velox::deserializeDecimalSumStateWithCount(
       inputCol, scale, stream, get_output_mr());
   auto sumScalar = cudf::reduce(
@@ -344,8 +341,7 @@ std::unique_ptr<cudf::column> singleDecimalAvgFromRawColumn(
     cudf::column_view inputCol,
     TypePtr const& resultType,
     rmm::cuda_stream_view stream) {
-  auto const sumAgg =
-      cudf::make_sum_aggregation<cudf::reduce_aggregation>();
+  auto const sumAgg = cudf::make_sum_aggregation<cudf::reduce_aggregation>();
   auto sumScalar =
       cudf::reduce(inputCol, *sumAgg, inputCol.type(), stream, get_temp_mr());
   auto countAgg = cudf::make_count_aggregation<cudf::reduce_aggregation>(
@@ -368,8 +364,7 @@ std::unique_ptr<cudf::column> singleOrRawDecimalSumWithCast(
     cudf::column_view inputCol,
     TypePtr const& outputType,
     rmm::cuda_stream_view stream) {
-  auto const sumAgg =
-      cudf::make_sum_aggregation<cudf::reduce_aggregation>();
+  auto const sumAgg = cudf::make_sum_aggregation<cudf::reduce_aggregation>();
   auto const cudfOutType = cudf_velox::veloxToCudfDataType(outputType);
   std::unique_ptr<cudf::column> castedInput;
   if (outputType->isDecimal() && inputCol.type() != cudfOutType) {
@@ -400,8 +395,7 @@ std::unique_ptr<cudf::column> reduceFinalDecimalSumFromSerializedColumn(
   validateIntermediateColumnType(inputCol);
   auto scale = getDecimalPrecisionScale(*outputType).second;
   auto decodedSum = finalDecimalSumDecodeColumn(inputCol, scale, stream);
-  return singleOrRawDecimalSumWithCast(
-      decodedSum->view(), outputType, stream);
+  return singleOrRawDecimalSumWithCast(decodedSum->view(), outputType, stream);
 }
 
 std::unique_ptr<cudf::column> reduceFinalDecimalAvgFromSerializedColumn(
@@ -462,8 +456,7 @@ struct ReduceDecimalAvgAggregator : ReduceAggregator {
     cudf::column_view inputCol = input.column(inputIndex);
     switch (step) {
       case core::AggregationNode::Step::kSingle:
-        return singleDecimalAvgFromRawColumn(
-            inputCol, resultType, stream);
+        return singleDecimalAvgFromRawColumn(inputCol, resultType, stream);
       case core::AggregationNode::Step::kPartial:
         return partialDecimalSumCountToSerializedString(inputCol, stream);
       case core::AggregationNode::Step::kIntermediate:

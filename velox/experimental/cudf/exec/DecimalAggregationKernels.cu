@@ -24,8 +24,8 @@
 #include <cudf/utilities/error.hpp>
 #include <cudf/utilities/memory_resource.hpp>
 
-#include <cuda_runtime.h>
 #include <cub/device/device_for.cuh>
+#include <cuda_runtime.h>
 #include <thrust/iterator/counting_iterator.h>
 
 #include <cstdint>
@@ -97,7 +97,8 @@ struct UnpackStateFunctor {
 
   __device__ void operator()(int32_t idx) const {
     int64_t offset = static_cast<int64_t>(offsets[idx]);
-    auto* state = reinterpret_cast<const DecimalSumStateDevice*>(chars + offset);
+    auto* state =
+        reinterpret_cast<const DecimalSumStateDevice*>(chars + offset);
     counts[idx] = state->count;
     sums[idx] = (static_cast<__int128_t>(state->upper) << 64) | state->lower;
   }
@@ -130,10 +131,7 @@ void launchFillOffsets(
     rmm::cuda_stream_view stream) {
   FillOffsetsFunctor<OffsetT> op{offsets};
   cub::DeviceFor::ForEachN(
-      thrust::counting_iterator<int32_t>(0),
-      numRows + 1,
-      op,
-      stream.value());
+      thrust::counting_iterator<int32_t>(0), numRows + 1, op, stream.value());
   CUDF_CUDA_TRY(cudaGetLastError());
 }
 
@@ -147,10 +145,7 @@ void launchPackState(
     rmm::cuda_stream_view stream) {
   PackStateFunctor<SumT, OffsetT> op{sums, counts, offsets, chars};
   cub::DeviceFor::ForEachN(
-      thrust::counting_iterator<int32_t>(0),
-      numRows,
-      op,
-      stream.value());
+      thrust::counting_iterator<int32_t>(0), numRows, op, stream.value());
   CUDF_CUDA_TRY(cudaGetLastError());
 }
 
@@ -164,10 +159,7 @@ void launchUnpackState(
     rmm::cuda_stream_view stream) {
   UnpackStateFunctor<OffsetT> op{offsets, chars, sums, counts};
   cub::DeviceFor::ForEachN(
-      thrust::counting_iterator<int32_t>(0),
-      numRows,
-      op,
-      stream.value());
+      thrust::counting_iterator<int32_t>(0), numRows, op, stream.value());
   CUDF_CUDA_TRY(cudaGetLastError());
 }
 
@@ -180,10 +172,7 @@ void launchAvgRound(
     rmm::cuda_stream_view stream) {
   AvgRoundFunctor<SumT> op{sums, counts, out};
   cub::DeviceFor::ForEachN(
-      thrust::counting_iterator<int32_t>(0),
-      numRows,
-      op,
-      stream.value());
+      thrust::counting_iterator<int32_t>(0), numRows, op, stream.value());
   CUDF_CUDA_TRY(cudaGetLastError());
 }
 
@@ -369,11 +358,9 @@ std::unique_ptr<cudf::column> serializeDecimalSumState(
       static_cast<size_t>(numRows) * kStateSize, stream);
 
   if (useLargeOffsets) {
-    launchFillOffsets<int64_t>(
-        offsetsView.data<int64_t>(), rowCount, stream);
+    launchFillOffsets<int64_t>(offsetsView.data<int64_t>(), rowCount, stream);
   } else {
-    launchFillOffsets<int32_t>(
-        offsetsView.data<int32_t>(), rowCount, stream);
+    launchFillOffsets<int32_t>(offsetsView.data<int32_t>(), rowCount, stream);
   }
 
   if (numRows > 0) {

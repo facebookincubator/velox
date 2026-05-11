@@ -15,11 +15,11 @@
  */
 
 #include "velox/experimental/cudf/exec/DecimalAggregationCommon.h"
-
-#include "velox/common/base/Exceptions.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationKernels.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+
+#include "velox/common/base/Exceptions.h"
 
 #include <cudf/unary.hpp>
 
@@ -36,10 +36,7 @@ std::unique_ptr<cudf::column> castCountColumnToInt64(
     rmm::cuda_stream_view stream) {
   if (count->type().id() != cudf::type_id::INT64) {
     count = cudf::cast(
-        *count,
-        cudf::data_type{cudf::type_id::INT64},
-        stream,
-        get_output_mr());
+        *count, cudf::data_type{cudf::type_id::INT64}, stream, get_output_mr());
   }
   return count;
 }
@@ -63,8 +60,7 @@ std::unique_ptr<cudf::column> finalizeDecimalAverage(
       sum->view(), count->view(), stream, get_output_mr());
   auto const cudfOutType = veloxToCudfDataType(resultType);
   if (avgCol->type() != cudfOutType) {
-    avgCol = cudf::cast(
-        avgCol->view(), cudfOutType, stream, get_output_mr());
+    avgCol = cudf::cast(avgCol->view(), cudfOutType, stream, get_output_mr());
   }
   return avgCol;
 }
