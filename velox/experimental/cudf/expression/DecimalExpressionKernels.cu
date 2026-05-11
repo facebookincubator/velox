@@ -15,10 +15,14 @@
  */
 #include "velox/experimental/cudf/expression/DecimalExpressionKernels.h"
 
+#include <cudf/binaryop.hpp>
 #include <cudf/column/column_factories.hpp>
+#include <cudf/fixed_point/fixed_point.hpp>
 #include <cudf/null_mask.hpp>
 #include <cudf/scalar/scalar.hpp>
+#include <cudf/scalar/scalar_factories.hpp>
 #include <cudf/table/table_view.hpp>
+#include <cudf/transform.hpp>
 #include <cudf/types.hpp>
 #include <cudf/utilities/error.hpp>
 #include <cudf/utilities/memory_resource.hpp>
@@ -30,6 +34,34 @@
 
 namespace facebook::velox::cudf_velox {
 namespace {
+
+// Creates a null mask that marks zeros in the divisor column as null.
+// Returns the combined mask (existing nulls AND non-zero divisor) and null count.
+std::pair<std::unique_ptr<rmm::device_buffer>, cudf::size_type> createDivisorNullMask(
+    const cudf::column_view& divisor,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  // Create a scalar with value 0 matching the divisor's type and scale.
+  std::unique_ptr<cudf::scalar> zero;
+  auto scale = numeric::scale_type{divisor.type().scale()};
+  if (divisor.type().id() == cudf::type_id::DECIMAL64) {
+    zero = cudf::make_fixed_point_scalar<numeric::decimal64>(0, scale, stream, mr);
+  } else {
+    zero = cudf::make_fixed_point_scalar<numeric::decimal128>(0, scale, stream, mr);
+  }
+
+  // Create boolean column: TRUE where divisor != 0 (valid), FALSE where divisor == 0 (null).
+  auto nonZero = cudf::binary_operation(
+      divisor,
+      *zero,
+      cudf::binary_operator::NOT_EQUAL,
+      cudf::data_type{cudf::type_id::BOOL8},
+      stream,
+      mr);
+
+  // Convert boolean column to bitmask: TRUE -> valid bit, FALSE -> null bit.
+  return cudf::bools_to_mask(nonZero->view(), stream, mr);
+}
 
 template <typename OutT>
 __device__ OutT
@@ -196,10 +228,35 @@ std::unique_ptr<cudf::column> decimalDivide(
   CUDF_EXPECTS(
       aRescale >= 0, "Decimal divide requires non-negative rescale factor");
 
-  auto [nullMask, nullCount] =
+  // Combine input null masks with a mask that marks zero divisors as null.
+  auto [inputNullMask, inputNullCount] =
       cudf::bitmask_and(cudf::table_view({lhs, rhs}), stream, mr);
+  auto [zeroMaskPtr, zeroNullCount] = createDivisorNullMask(rhs, stream, mr);
+
+  // AND the masks together: null if either input is null OR divisor is zero.
+  rmm::device_buffer finalMask;
+  cudf::size_type finalNullCount;
+  if (inputNullMask.size() > 0 && zeroMaskPtr && zeroMaskPtr->size() > 0) {
+    auto [combined, count] = cudf::bitmask_and(
+        std::vector<cudf::bitmask_type const*>{
+            static_cast<cudf::bitmask_type const*>(inputNullMask.data()),
+            static_cast<cudf::bitmask_type const*>(zeroMaskPtr->data())},
+        std::vector<cudf::size_type>{0, 0},
+        lhs.size(),
+        stream,
+        mr);
+    finalMask = std::move(combined);
+    finalNullCount = count;
+  } else if (zeroMaskPtr && zeroMaskPtr->size() > 0) {
+    finalMask = std::move(*zeroMaskPtr);
+    finalNullCount = zeroNullCount;
+  } else {
+    finalMask = std::move(inputNullMask);
+    finalNullCount = inputNullCount;
+  }
+
   auto out = cudf::make_fixed_width_column(
-      outputType, lhs.size(), std::move(nullMask), nullCount, stream, mr);
+      outputType, lhs.size(), std::move(finalMask), finalNullCount, stream, mr);
 
   if (lhs.type().id() == cudf::type_id::DECIMAL64) {
     if (outputType.id() == cudf::type_id::DECIMAL64) {
@@ -286,10 +343,35 @@ std::unique_ptr<cudf::column> decimalDivide(
     return makeAllNullDecimalColumn(outputType, rhs.size(), stream, mr);
   }
 
-  auto nullMask = cudf::copy_bitmask(rhs, stream, mr);
-  auto nullCount = rhs.null_count();
+  // Combine rhs null mask with a mask that marks zero divisors as null.
+  auto inputNullMask = cudf::copy_bitmask(rhs, stream, mr);
+  auto inputNullCount = rhs.null_count();
+  auto [zeroMaskPtr, zeroNullCount] = createDivisorNullMask(rhs, stream, mr);
+
+  // AND the masks together: null if rhs is null OR divisor is zero.
+  rmm::device_buffer finalMask;
+  cudf::size_type finalNullCount;
+  if (inputNullMask.size() > 0 && zeroMaskPtr && zeroMaskPtr->size() > 0) {
+    auto [combined, count] = cudf::bitmask_and(
+        std::vector<cudf::bitmask_type const*>{
+            static_cast<cudf::bitmask_type const*>(inputNullMask.data()),
+            static_cast<cudf::bitmask_type const*>(zeroMaskPtr->data())},
+        std::vector<cudf::size_type>{0, 0},
+        rhs.size(),
+        stream,
+        mr);
+    finalMask = std::move(combined);
+    finalNullCount = count;
+  } else if (zeroMaskPtr && zeroMaskPtr->size() > 0) {
+    finalMask = std::move(*zeroMaskPtr);
+    finalNullCount = zeroNullCount;
+  } else {
+    finalMask = std::move(inputNullMask);
+    finalNullCount = inputNullCount;
+  }
+
   auto out = cudf::make_fixed_width_column(
-      outputType, rhs.size(), std::move(nullMask), nullCount, stream, mr);
+      outputType, rhs.size(), std::move(finalMask), finalNullCount, stream, mr);
 
   auto lhsValue = getDecimalScalarValue(lhs, stream);
 
