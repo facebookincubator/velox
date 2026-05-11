@@ -22,6 +22,7 @@
 #include "velox/common/memory/MemoryPool.h"
 #include "velox/functions/lib/SubscriptUtil.h"
 #include "velox/type/Type.h"
+#include "velox/type/TypeCoercer.h"
 #include "velox/vector/FlatMapVector.h"
 #include "velox/vector/TypeAliases.h"
 
@@ -389,7 +390,13 @@ VectorPtr MapSubscript::applyMap(
   auto& indexArg = args[1];
 
   // Ensure map key type and second argument are the same.
-  VELOX_CHECK(mapArg->type()->childAt(0)->equivalent(*indexArg->type()));
+  VELOX_CHECK(
+      (mapArg->type()->childAt(0)->equivalent(*indexArg->type()) ||
+       TypeCoercer::isTypeOnlyCoercion(
+           mapArg->type()->childAt(0), indexArg->type())),
+      "key type: {}, indexArg[1] type: {}",
+      mapArg->type()->childAt(0)->toString(),
+      indexArg->type()->toString());
 
   // Short-circuit for FlatMapVector encoding. FlatMapVector doesn't need to
   // distinguish between primitive and complex types (where the former requires

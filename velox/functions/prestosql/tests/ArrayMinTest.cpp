@@ -84,37 +84,50 @@ class ArrayMinTest : public FunctionBaseTest {
   void testInLineVarcharNullable() {
     using S = StringView;
 
-    auto arrayVector = makeNullableArrayVector<StringView>({
-        {S("red"), S("blue")},
-        {std::nullopt, S("blue"), S("yellow"), S("orange")},
-        {},
-        {S("red"), S("purple"), S("green")},
-    });
-    auto expected = makeNullableFlatVector<StringView>(
-        {S("blue"), std::nullopt, std::nullopt, S("green")});
-    testExpr<StringView>(expected, "array_min(C0)", {arrayVector});
+    TypePtr inputType = VARCHAR();
+    for (int loop = 0; loop < 2; ++loop) {
+      auto arrayVector = makeNullableArrayVector<StringView>(
+          {
+              {S("red"), S("blue")},
+              {std::nullopt, S("blue"), S("yellow"), S("orange")},
+              {},
+              {S("red"), S("purple"), S("green")},
+          },
+          ARRAY(inputType));
+      auto expected = makeNullableFlatVector<StringView>(
+          {S("blue"), std::nullopt, std::nullopt, S("green")}, VARCHAR());
+      testExpr<StringView>(expected, "array_min(C0)", {arrayVector});
+      inputType = VARCHAR(12);
+    }
   }
 
   void testVarcharNullable() {
     using S = StringView;
-    // use > 12 length string to avoid inlining
-    auto arrayVector = makeNullableArrayVector<StringView>({
-        {S("red shiny car ahead"), S("blue clear sky above")},
-        {std::nullopt,
-         S("blue clear sky above"),
-         S("yellow rose flowers"),
-         S("orange beautiful sunset")},
-        {},
-        {S("red shiny car ahead"),
-         S("purple is an elegant color"),
-         S("green plants make us happy")},
-    });
-    auto expected = makeNullableFlatVector<StringView>(
-        {S("blue clear sky above"),
-         std::nullopt,
-         std::nullopt,
-         S("green plants make us happy")});
-    testExpr<StringView>(expected, "array_min(C0)", {arrayVector});
+    TypePtr inputType = VARCHAR();
+    for (int loop = 0; loop < 2; ++loop) {
+      // use > 12 length string to avoid inlining
+      auto arrayVector = makeNullableArrayVector<StringView>(
+          {
+              {S("red shiny car ahead"), S("blue clear sky above")},
+              {std::nullopt,
+               S("blue clear sky above"),
+               S("yellow rose flowers"),
+               S("orange beautiful sunset")},
+              {},
+              {S("red shiny car ahead"),
+               S("purple is an elegant color"),
+               S("green plants make us happy")},
+          },
+          ARRAY(inputType));
+      auto expected = makeNullableFlatVector<StringView>(
+          {S("blue clear sky above"),
+           std::nullopt,
+           std::nullopt,
+           S("green plants make us happy")},
+          VARCHAR());
+      testExpr<StringView>(expected, "array_min(C0)", {arrayVector});
+      inputType = VARCHAR(50);
+    }
   }
 
   void testBoolNullable() {

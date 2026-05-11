@@ -159,6 +159,30 @@ void registerUuidType() {
       {.fromType = "VARBINARY", .toType = "UUID"},
       {.fromType = "UUID", .toType = "VARCHAR"},
       {.fromType = "UUID", .toType = "VARBINARY"},
+      {.fromType = "VARCHARN",
+       .toType = "UUID",
+       .validator =
+           [](const TypePtr& from, const TypePtr& to) {
+             return (from->isVarcharN() && getVarcharLength(*from) < 36);
+           }},
+      {.fromType = "VARBINARYN",
+       .toType = "UUID",
+       .validator =
+           [](const TypePtr& from, const TypePtr& to) {
+             return from->kind() == TypeKind::VARBINARY;
+           }},
+      {.fromType = "UUID",
+       .toType = "VARCHARN",
+       .validator =
+           [](const TypePtr& from, const TypePtr& to) {
+             return from->kind() == TypeKind::VARCHAR;
+           }},
+      {.fromType = "UUID",
+       .toType = "VARBINARYN",
+       .validator =
+           [](const TypePtr& from, const TypePtr& to) {
+             return from->kind() == TypeKind::VARBINARY;
+           }},
   });
 }
 } // namespace facebook::velox

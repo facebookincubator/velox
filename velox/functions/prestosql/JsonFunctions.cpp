@@ -610,7 +610,7 @@ class JsonFunctionTemplate : public exec::VectorFunction {
     applyImpl(rows, args[0], args[1], outputType, context, localResult);
 
     if (args[0]->type() != JSON()) {
-      VELOX_CHECK_EQ(args[0]->type(), VARCHAR());
+      VELOX_CHECK_EQ(args[0]->type()->kind(), TypeKind::VARCHAR);
       // Remove null and error rows as the parser does not expect nulls.
       exec::MutableRemainingRows remainingRows(rows, context);
       if (localResult->rawNulls()) {

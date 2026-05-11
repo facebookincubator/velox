@@ -19,6 +19,9 @@ String Functions
     some languages. Specifically, this will return incorrect results for
     Lithuanian, Turkish and Azeri.
 
+    The "string" input parameter indicates an input of either type `varchar` or `varchar(n)`.
+    The output type where indicates as "varchar" is always of type `varchar`.
+
 .. function:: bit_length(string) -> integer
 
     Returns the bit length for the specified string column.

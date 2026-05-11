@@ -85,6 +85,17 @@ TypePtr resolveIntermediateType(
       }
     }
 
+    /*
+      // If no direct match was found re-try with coercions.
+      for (const auto& signature : signatures.value()) {
+        SignatureBinder binder(*signature, argTypes);
+        std::vector<Coercion> coercions;
+        if (binder.tryBindWithCoercions(coercions)) {
+          return binder.tryResolveType(signature->intermediateType());
+        }
+      }
+  */
+
     VELOX_USER_FAIL(
         "Aggregate function signature is not supported: {}. Supported signatures: {}.",
         toString(name, argTypes),
