@@ -92,6 +92,12 @@ DEFINE_SIMPLE_GROUPBY_AGGREGATOR(Sum, sum, SUM)
 DEFINE_SIMPLE_GROUPBY_AGGREGATOR(Min, min, MIN)
 DEFINE_SIMPLE_GROUPBY_AGGREGATOR(Max, max, MAX)
 
+// Decimal SUM and AVG aggregators are separate implementations, as they need to
+// handle the VARBINARY encoded intermediate state for streaming aggregation.
+// Unlike other aggregators, these classes hold state (the decoded intermediate
+// sum and count columns and associated indices) in order to guarantee a
+// lifetime constraint between aggregation steps.
+
 void addDecimalSumCountRequestsAfterDecode(
     cudf::column_view encodedColumn,
     int32_t scale,
@@ -229,13 +235,7 @@ struct GroupbyDecimalSumAggregator : GroupbyAggregator {
           decodedCount_);
     } else if (step == core::AggregationNode::Step::kFinal) {
       addDecimalFinalSumOnlyRequest(
-          tbl,
-          inputIndex,
-          resultType,
-          requests,
-          stream,
-          sumIdx_,
-          decodedSum_);
+          tbl, inputIndex, resultType, requests, stream, sumIdx_, decodedSum_);
     } else {
       addDecimalRawPartialSingleSumRequest(
           tbl,
