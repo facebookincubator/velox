@@ -1026,6 +1026,81 @@ TEST(TypeTest, kindHash) {
   EXPECT_NE(ARRAY(BIGINT())->hashKind(), ROW({{"a", BIGINT()}})->hashKind());
 }
 
+TEST(TypeTest, hashType) {
+  std::hash<Type> hasher;
+
+  // Same primitive types are equal.
+  EXPECT_EQ(hasher(*BIGINT()), hasher(*BIGINT()));
+  EXPECT_EQ(hasher(*VARCHAR()), hasher(*VARCHAR()));
+  EXPECT_NE(hasher(*BIGINT()), hasher(*INTEGER()));
+
+  // ROW field names and types are included.
+  EXPECT_NE(hasher(*ROW({"a"}, {INTEGER()})), hasher(*ROW({"b"}, {INTEGER()})));
+  EXPECT_NE(hasher(*ROW({"a"}, {INTEGER()})), hasher(*ROW({"a"}, {BIGINT()})));
+  EXPECT_NE(
+      hasher(*ROW({"a"}, {INTEGER()})),
+      hasher(*ROW({"a", "b"}, {INTEGER(), INTEGER()})));
+  EXPECT_EQ(hasher(*ROW({"a"}, {INTEGER()})), hasher(*ROW({"a"}, {INTEGER()})));
+
+  // ARRAY element type is included.
+  EXPECT_NE(hasher(*ARRAY(BIGINT())), hasher(*ARRAY(VARCHAR())));
+  EXPECT_EQ(hasher(*ARRAY(BIGINT())), hasher(*ARRAY(BIGINT())));
+
+  // MAP key and value types are included.
+  EXPECT_NE(hasher(*MAP(BIGINT(), REAL())), hasher(*MAP(VARCHAR(), REAL())));
+  EXPECT_NE(hasher(*MAP(BIGINT(), REAL())), hasher(*MAP(BIGINT(), VARCHAR())));
+  EXPECT_EQ(hasher(*MAP(BIGINT(), REAL())), hasher(*MAP(BIGINT(), REAL())));
+
+  // FUNCTION argument and return types are included.
+  EXPECT_NE(
+      hasher(*FUNCTION({BIGINT()}, REAL())),
+      hasher(*FUNCTION({VARCHAR()}, REAL())));
+  EXPECT_NE(
+      hasher(*FUNCTION({BIGINT()}, REAL())),
+      hasher(*FUNCTION({BIGINT()}, VARCHAR())));
+  EXPECT_EQ(
+      hasher(*FUNCTION({BIGINT()}, REAL())),
+      hasher(*FUNCTION({BIGINT()}, REAL())));
+
+  // DECIMAL precision and scale are included.
+  EXPECT_NE(hasher(*DECIMAL(10, 2)), hasher(*DECIMAL(10, 3)));
+  EXPECT_NE(hasher(*DECIMAL(10, 2)), hasher(*DECIMAL(11, 2)));
+  EXPECT_EQ(hasher(*DECIMAL(10, 2)), hasher(*DECIMAL(10, 2)));
+  // LongDecimalType (precision > 18, TypeKind::HUGEINT) is also covered.
+  EXPECT_NE(hasher(*DECIMAL(38, 10)), hasher(*DECIMAL(38, 11)));
+  EXPECT_NE(hasher(*DECIMAL(38, 10)), hasher(*DECIMAL(19, 10)));
+  EXPECT_EQ(hasher(*DECIMAL(38, 10)), hasher(*DECIMAL(38, 10)));
+  // HUGEINT and a LongDecimalType share TypeKind::HUGEINT but must hash
+  // differently (HUGEINT goes through the leaf-scalar typeid branch; the
+  // LongDecimalType goes through the decimal branch).
+  EXPECT_NE(hasher(*HUGEINT()), hasher(*DECIMAL(38, 10)));
+
+  // OpaqueType differentiates by C++ type identity.
+  auto opaque1 = OpaqueType::create<int>();
+  auto opaque2 = OpaqueType::create<double>();
+  EXPECT_NE(hasher(*opaque1), hasher(*opaque2));
+  EXPECT_EQ(hasher(*opaque1), hasher(*OpaqueType::create<int>()));
+
+  // Singleton overlay types that share a TypeKind with their base scalar
+  // must hash distinctly (they are distinguished by operator== via RTTI).
+  EXPECT_NE(hasher(*BIGINT()), hasher(*INTERVAL_DAY_TIME()));
+  EXPECT_NE(hasher(*BIGINT()), hasher(*TIME()));
+  EXPECT_NE(hasher(*BIGINT()), hasher(*TIME_MICRO_UTC()));
+  EXPECT_NE(hasher(*INTERVAL_DAY_TIME()), hasher(*TIME()));
+  EXPECT_NE(hasher(*INTERVAL_DAY_TIME()), hasher(*TIME_MICRO_UTC()));
+  EXPECT_NE(hasher(*TIME()), hasher(*TIME_MICRO_UTC()));
+  EXPECT_NE(hasher(*INTEGER()), hasher(*DATE()));
+  EXPECT_NE(hasher(*INTEGER()), hasher(*INTERVAL_YEAR_MONTH()));
+  EXPECT_NE(hasher(*DATE()), hasher(*INTERVAL_YEAR_MONTH()));
+
+  // Self-consistency for singleton overlay types.
+  EXPECT_EQ(hasher(*INTERVAL_DAY_TIME()), hasher(*INTERVAL_DAY_TIME()));
+  EXPECT_EQ(hasher(*DATE()), hasher(*DATE()));
+  EXPECT_EQ(hasher(*INTERVAL_YEAR_MONTH()), hasher(*INTERVAL_YEAR_MONTH()));
+  EXPECT_EQ(hasher(*TIME()), hasher(*TIME()));
+  EXPECT_EQ(hasher(*TIME_MICRO_UTC()), hasher(*TIME_MICRO_UTC()));
+}
+
 template <TypeKind KIND>
 int32_t returnKindIntPlus(int32_t val) {
   return (int32_t)KIND + val;

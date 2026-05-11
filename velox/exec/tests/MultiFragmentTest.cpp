@@ -3125,6 +3125,63 @@ TEST_P(MultiFragmentTest, compression) {
     }
   }
 }
+
+TEST_P(MultiFragmentTest, compressionPageSizeSkip) {
+  if (GetParam().compressionKind == common::CompressionKind_NONE) {
+    GTEST_SKIP() << "Page size skip only applies with compression enabled";
+  }
+  if (GetParam().serdeKind != "Presto") {
+    GTEST_SKIP()
+        << "Page size skip only implemented in PrestoIterativeVectorSerializer";
+  }
+
+  const auto data = makeRowVector({makeFlatVector<int64_t>({1, 2, 3})});
+
+  const auto producerPlan =
+      test::PlanBuilder()
+          .values({data})
+          .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
+          .planNode();
+
+  const auto plan = test::PlanBuilder()
+                        .exchange(asRowType(data->type()), GetParam().serdeKind)
+                        .singleAggregation({}, {"sum(c0)"})
+                        .planNode();
+
+  const auto expected =
+      makeRowVector({makeFlatVector<int64_t>(std::vector<int64_t>{6})});
+
+  std::unordered_map<std::string, std::string> producerConfig;
+  producerConfig[core::QueryConfig::kShuffleCompressionKind] =
+      common::compressionKindToString(GetParam().compressionKind);
+  producerConfig[core::QueryConfig::kMinShuffleCompressionPageSizeBytes] =
+      std::to_string(1 << 30);
+
+  auto producerTask =
+      makeTask("local://pageSizeSkip", producerPlan, producerConfig);
+  producerTask->start(1);
+
+  auto consumerTask =
+      test::AssertQueryBuilder(plan)
+          .split(remoteSplit("local://pageSizeSkip"))
+          .config(
+              core::QueryConfig::kShuffleCompressionKind,
+              common::compressionKindToString(GetParam().compressionKind))
+          .destination(0)
+          .assertResults(expected);
+
+  auto producerTaskStats = exec::toPlanStats(producerTask->taskStats());
+  const auto& producerStats = producerTaskStats.at("1");
+  ASSERT_GT(
+      producerStats.customStats.count(
+          std::string(IterativeVectorSerializer::kCompressionSkippedBytes)),
+      0);
+  ASSERT_EQ(
+      producerStats.customStats.count(
+          std::string(IterativeVectorSerializer::kCompressionInputBytes)),
+      0);
+}
+
 TEST_P(MultiFragmentTest, scaledTableScan) {
   const int numSplits = 20;
   std::vector<std::shared_ptr<TempFilePath>> splitFiles;

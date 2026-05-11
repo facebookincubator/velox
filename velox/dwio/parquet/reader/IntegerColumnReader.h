@@ -17,6 +17,9 @@
 #pragma once
 
 #include "velox/dwio/common/SelectiveIntegerColumnReader.h"
+#include "velox/dwio/parquet/reader/ParquetColumnReader.h"
+#include "velox/dwio/parquet/reader/ParquetData.h"
+#include "velox/dwio/parquet/reader/ParquetTypeWithId.h"
 #include "velox/type/DecimalUtil.h"
 
 namespace facebook::velox::parquet {

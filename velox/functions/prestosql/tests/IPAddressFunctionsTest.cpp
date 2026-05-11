@@ -721,4 +721,48 @@ TEST_F(IPAddressFunctionsTest, IsPrivateIPTest) {
   EXPECT_EQ(std::nullopt, isPrivateIP(std::nullopt));
 }
 
+TEST_F(IPAddressFunctionsTest, ipVersionFromAddress) {
+  auto ipVersionFromAddress = [this](const std::optional<std::string>& input) {
+    return evaluateOnce<int64_t>("ip_version(cast(c0 as ipaddress))", input);
+  };
+
+  ASSERT_EQ(ipVersionFromAddress("1.2.3.4"), 4);
+  ASSERT_EQ(ipVersionFromAddress("255.255.255.255"), 4);
+  ASSERT_EQ(ipVersionFromAddress("::ffff:1.2.3.4"), 4);
+  ASSERT_EQ(ipVersionFromAddress("64:ff9b::17"), 6);
+  ASSERT_EQ(ipVersionFromAddress("2001:db8::1"), 6);
+  ASSERT_EQ(ipVersionFromAddress("::"), 6);
+  ASSERT_EQ(ipVersionFromAddress(std::nullopt), std::nullopt);
+}
+
+TEST_F(IPAddressFunctionsTest, ipVersionFromPrefix) {
+  auto ipVersionFromPrefix = [this](const std::optional<std::string>& input) {
+    return evaluateOnce<int64_t>("ip_version(cast(c0 as ipprefix))", input);
+  };
+
+  ASSERT_EQ(ipVersionFromPrefix("1.2.3.4/24"), 4);
+  ASSERT_EQ(ipVersionFromPrefix("192.168.0.0/16"), 4);
+  ASSERT_EQ(ipVersionFromPrefix("::ffff:1.2.3.4/24"), 4);
+  ASSERT_EQ(ipVersionFromPrefix("64:ff9b::17/64"), 6);
+  ASSERT_EQ(ipVersionFromPrefix("2001:db8::/32"), 6);
+  ASSERT_EQ(ipVersionFromPrefix("::1/128"), 6);
+  ASSERT_EQ(ipVersionFromPrefix(std::nullopt), std::nullopt);
+}
+
+TEST_F(IPAddressFunctionsTest, ipPrefixMaskLen) {
+  auto ipPrefixMaskLen = [this](const std::optional<std::string>& input) {
+    return evaluateOnce<int64_t>(
+        "ip_prefix_masklen(cast(c0 as ipprefix))", input);
+  };
+
+  ASSERT_EQ(ipPrefixMaskLen("1.2.3.4/24"), 24);
+  ASSERT_EQ(ipPrefixMaskLen("1.2.3.4/32"), 32);
+  ASSERT_EQ(ipPrefixMaskLen("0.0.0.0/0"), 0);
+  ASSERT_EQ(ipPrefixMaskLen("64:ff9b::17/64"), 64);
+  ASSERT_EQ(ipPrefixMaskLen("64:ff9b::17/128"), 128);
+  ASSERT_EQ(ipPrefixMaskLen("::1/128"), 128);
+  ASSERT_EQ(ipPrefixMaskLen("::/0"), 0);
+  ASSERT_EQ(ipPrefixMaskLen(std::nullopt), std::nullopt);
+}
+
 } // namespace facebook::velox::functions::prestosql

@@ -108,8 +108,7 @@ bool isSupportedZeroColumnAggregation(
              aggregationNode.aggregates().begin(),
              aggregationNode.aggregates().end(),
              [](const auto& aggregate) {
-               return isCountFunctionName(
-                   aggregate.call->name());
+               return isCountFunctionName(aggregate.call->name());
              });
 }
 } // namespace

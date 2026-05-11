@@ -94,7 +94,6 @@ velox_add_library(
   SpatialJoinProbe.cpp
   Spill.cpp
   SpillFile.cpp
-  SpillStats.cpp
   Spiller.cpp
   StreamingAggregation.cpp
   StreamingEnforceDistinct.cpp
@@ -204,7 +203,6 @@ velox_add_library(
   SpatialJoinProbe.h
   Spill.h
   SpillFile.h
-  SpillStats.h
   Spiller.h
   Split.h
   StreamingAggregation.h
@@ -233,6 +231,9 @@ velox_add_library(
   WindowPartition.h
 )
 
+velox_add_library(velox_exec_spill_stats SpillStats.cpp HEADERS SpillStats.h)
+velox_link_libraries(velox_exec_spill_stats velox_common_base velox_file Folly::folly)
+
 velox_link_libraries(
   velox_exec
   velox_arrow_bridge
@@ -241,6 +242,7 @@ velox_link_libraries(
   velox_core
   velox_connector
   velox_connector_registry
+  velox_exec_spill_stats
   velox_expression
   velox_file
   velox_presto_serializer
@@ -249,6 +251,11 @@ velox_link_libraries(
   velox_test_util
   velox_vector
 )
+
+if(VELOX_ENABLE_GEO)
+  velox_compile_definitions(velox_exec PRIVATE VELOX_ENABLE_GEO)
+  velox_link_libraries(velox_exec velox_common_geospatial_serde)
+endif()
 
 velox_add_library(velox_cursor Cursor.cpp HEADERS Cursor.h)
 

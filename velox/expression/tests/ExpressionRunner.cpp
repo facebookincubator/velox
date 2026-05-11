@@ -169,21 +169,6 @@ RowVectorPtr replicateCommonDictionaryLayer(
       children);
 }
 
-// Applies modifications to the input test cases based on the input row
-// metadata, which includes making sure specific columns are wrapped in common
-// dictionary and/or wrapped in a lazy shim layer.
-void applyModificationsToInput(
-    std::vector<fuzzer::InputTestCase>& inputTestCases,
-    const InputRowMetadata& inputRowMetadata) {
-  for (auto& testCase : inputTestCases) {
-    auto& inputVector = testCase.inputVector;
-    inputVector = replicateCommonDictionaryLayer(
-        inputVector, inputRowMetadata.columnsToWrapInCommonDictionary);
-    inputVector = VectorFuzzer::fuzzRowChildrenToLazy(
-        inputVector, inputRowMetadata.columnsToWrapInLazy);
-  }
-}
-
 void ExpressionRunner::run(
     const std::string& inputPaths,
     const std::string& inputSelectivityVectorPaths,
@@ -199,7 +184,14 @@ void ExpressionRunner::run(
     bool useSeperatePoolForInput) {
   VELOX_CHECK(!sql.empty());
   auto memoryManager = memory::memoryManager();
-  auto queryCtx = core::QueryCtx::create();
+  auto queryCtx = core::QueryCtx::create(
+      nullptr,
+      core::QueryConfig(
+          {{facebook::velox::core::QueryConfig::kSessionTimezone,
+            "America/Los_Angeles"},
+           {facebook::velox::core::QueryConfig::kAdjustTimestampToTimezone,
+            "true"},
+           {facebook::velox::core::QueryConfig::kMinRowsForPeeling, "50"}}));
   std::shared_ptr<memory::MemoryPool> deserializerPool{
       memoryManager->addLeafPool()};
   std::shared_ptr<memory::MemoryPool> pool = useSeperatePoolForInput
@@ -236,7 +228,10 @@ void ExpressionRunner::run(
           "Input vector is not a RowVector: {}",
           vector->toString());
       VELOX_CHECK_GT(inputVector->size(), 0, "Input vector must not be empty.");
-      if (inputSelectivityPaths.size() > i) {
+      inputVector = replicateCommonDictionaryLayer(
+          inputVector, inputRowMetadata.columnsToWrapInCommonDictionary);
+      if (inputSelectivityPaths.size() > i &&
+          !inputSelectivityPaths[i].empty()) {
         inputTestCases.push_back(
             {inputVector,
              restoreSelectivityVectorFromFile(
@@ -246,7 +241,6 @@ void ExpressionRunner::run(
             {inputVector, SelectivityVector(inputVector->size(), true)});
       }
     }
-    applyModificationsToInput(inputTestCases, inputRowMetadata);
   }
 
   VELOX_CHECK(inputTestCases.size() > 0);
@@ -318,6 +312,11 @@ void ExpressionRunner::run(
     }
 
   } else if (mode == "common" || mode == "simplified") {
+    for (auto& testCase : inputTestCases) {
+      auto& inputVector = testCase.inputVector;
+      inputVector = VectorFuzzer::fuzzRowChildrenToLazy(
+          inputVector, inputRowMetadata.columnsToWrapInLazy);
+    }
     std::shared_ptr<exec::ExprSet> exprSet = mode == "common"
         ? std::make_shared<exec::ExprSet>(typedExprs, &execCtx)
         : std::make_shared<exec::ExprSetSimplified>(typedExprs, &execCtx);

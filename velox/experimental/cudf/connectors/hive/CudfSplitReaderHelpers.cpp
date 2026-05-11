@@ -15,7 +15,7 @@
  */
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
-#include "velox/experimental/cudf/connectors/hive/CudfHiveDataSourceHelpers.hpp"
+#include "velox/experimental/cudf/connectors/hive/CudfSplitReaderHelpers.h"
 
 #include "velox/common/Casts.h"
 #include "velox/dwio/common/BufferedInput.h"
@@ -206,7 +206,7 @@ fetchByteRangesAsync(
       byteRanges.begin(),
       byteRanges.end(),
       std::size_t{0},
-      [&](auto acc, auto const& byteRange) { return acc + byteRange.size(); });
+      [&](auto acc, const auto& byteRange) { return acc + byteRange.size(); });
 
   // Allocate single device buffer for all column chunks
   std::vector<rmm::device_buffer> columnChunkBuffers{};
@@ -221,7 +221,7 @@ fetchByteRangesAsync(
       byteRanges.begin(),
       byteRanges.end(),
       std::size_t{0},
-      [&](auto acc, auto const& byteRange) {
+      [&](auto acc, const auto& byteRange) {
         columnChunkData.emplace_back(
             bufferData + acc, static_cast<size_t>(byteRange.size()));
         return acc + byteRange.size();
@@ -234,9 +234,9 @@ fetchByteRangesAsync(
     auto iter =
         cuda::make_zip_iterator(byteRanges.begin(), columnChunkData.begin());
     std::for_each(
-        iter, iter + byteRanges.size(), [bufferedInput](auto const& tuple) {
-          auto const& byteRange = cuda::std::get<0>(tuple);
-          auto const& destination = cuda::std::get<1>(tuple);
+        iter, iter + byteRanges.size(), [bufferedInput](const auto& tuple) {
+          const auto& byteRange = cuda::std::get<0>(tuple);
+          const auto& destination = cuda::std::get<1>(tuple);
           bufferedInput->enqueueForDevice(
               static_cast<uint64_t>(byteRange.offset()),
               static_cast<uint64_t>(byteRange.size()),
@@ -264,11 +264,11 @@ fetchByteRangesAsync(
   std::vector<uint8_t*> destinations;
 
   for (size_t chunk = 0; chunk < byteRanges.size();) {
-    auto const ioOffset = static_cast<size_t>(byteRanges[chunk].offset());
+    const auto ioOffset = static_cast<size_t>(byteRanges[chunk].offset());
     auto ioSize = static_cast<size_t>(byteRanges[chunk].size());
     size_t nextChunk = chunk + 1;
     while (nextChunk < byteRanges.size()) {
-      size_t const nextOffset = byteRanges[nextChunk].offset();
+      const size_t nextOffset = byteRanges[nextChunk].offset();
       if (nextOffset != ioOffset + ioSize) {
         break;
       }
@@ -307,10 +307,10 @@ fetchByteRangesAsync(
   {
     std::lock_guard<std::mutex> lock(ioBatchMutex());
 
-    std::for_each(iter, iter + ioOffsets.size(), [&](auto const& tuple) {
-      auto const ioOffset = cuda::std::get<0>(tuple);
-      auto const ioSize = cuda::std::get<1>(tuple);
-      auto const dest = cuda::std::get<2>(tuple);
+    std::for_each(iter, iter + ioOffsets.size(), [&](const auto& tuple) {
+      const auto ioOffset = cuda::std::get<0>(tuple);
+      const auto ioSize = cuda::std::get<1>(tuple);
+      const auto dest = cuda::std::get<2>(tuple);
 
       if (dataSource->supports_device_read() and
           dataSource->is_device_read_preferred(ioSize)) {

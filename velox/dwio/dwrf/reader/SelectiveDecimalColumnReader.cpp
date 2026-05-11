@@ -51,7 +51,7 @@ SelectiveDecimalColumnReader<DataT>::SelectiveDecimalColumnReader(
   scaleDecoder_ = createRleDecoder</*isSigned*/ true>(
       stripe.getStream(secondary, params.streamLabels().label(), true),
       version_,
-      *memoryPool_,
+      *pool_,
       stripe.getUseVInts(secondary),
       LONG_BYTE_SIZE);
 }
@@ -95,7 +95,7 @@ void SelectiveDecimalColumnReader<DataT>::readHelper(
   }
 
   // copy scales into scaleBuffer_
-  ensureCapacity<int64_t>(scaleBuffer_, numValues_, memoryPool_);
+  ensureCapacity<int64_t>(scaleBuffer_, numValues_, pool_);
   scaleBuffer_->setSize(numValues_ * sizeof(int64_t));
   memcpy(
       scaleBuffer_->asMutable<char>(),
@@ -249,7 +249,7 @@ void SelectiveDecimalColumnReader<DataT>::read(
     // Make sure a dedicated resultNulls_ is allocated with enough capacity as
     // RleDecoder always assumes it is available and 'prepareRead' skips
     // allocation when the column is not projected.
-    resultNulls_ = AlignedBuffer::allocate<bool>(rows.size(), memoryPool_);
+    resultNulls_ = AlignedBuffer::allocate<bool>(rows.size(), pool_);
     rawResultNulls_ = resultNulls_->asMutable<uint64_t>();
   }
   rawValues_ = values_->asMutable<char>();

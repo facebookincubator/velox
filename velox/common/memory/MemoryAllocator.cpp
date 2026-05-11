@@ -28,6 +28,14 @@ DECLARE_bool(velox_memory_use_hugepages);
 
 namespace facebook::velox::memory {
 
+void AcquiredMemory::free(MemoryAllocator* allocator) {
+  allocator->freeNonContiguous(nonContiguous);
+  for (auto& [ptr, size] : contiguous) {
+    allocator->freeBytes(ptr, size);
+  }
+  contiguous.clear();
+}
+
 // static
 std::vector<MachinePageCount> MemoryAllocator::makeSizeClassSizes(
     MachinePageCount largest) {
@@ -217,8 +225,9 @@ bool MemoryAllocator::allocateNonContiguous(
     success = allocateNonContiguousWithoutRetry(mix, out);
   } else {
     success = cache()->makeSpace(
-        pagesToAcquire(numPages, out.numPages()), [&](Allocation& acquired) {
-          freeNonContiguous(acquired);
+        pagesToAcquire(numPages, out.numPages()),
+        [&](AcquiredMemory& acquired) {
+          acquired.free(this);
           return allocateNonContiguousWithoutRetry(mix, out);
         });
   }
@@ -285,8 +294,8 @@ bool MemoryAllocator::allocateContiguous(
   } else {
     success = cache()->makeSpace(
         pagesToAcquire(numPages, numCollateralPages),
-        [&](Allocation& acquired) {
-          freeNonContiguous(acquired);
+        [&](AcquiredMemory& acquired) {
+          acquired.free(this);
           return allocateContiguousWithoutRetry(
               numPages, collateral, allocation, maxPages);
         });
@@ -319,8 +328,8 @@ bool MemoryAllocator::growContiguous(
   if (cache() == nullptr) {
     success = growContiguousWithoutRetry(increment, allocation);
   } else {
-    success = cache()->makeSpace(increment, [&](Allocation& acquired) {
-      freeNonContiguous(acquired);
+    success = cache()->makeSpace(increment, [&](AcquiredMemory& acquired) {
+      acquired.free(this);
       return growContiguousWithoutRetry(increment, allocation);
     });
   }
@@ -336,8 +345,8 @@ void* MemoryAllocator::allocateBytes(uint64_t bytes, uint16_t alignment) {
   }
   void* result = nullptr;
   cache()->makeSpace(
-      AllocationTraits::numPages(bytes), [&](Allocation& acquired) {
-        freeNonContiguous(acquired);
+      AllocationTraits::numPages(bytes), [&](AcquiredMemory& acquired) {
+        acquired.free(this);
         result = allocateBytesWithoutRetry(bytes, alignment);
         return result != nullptr;
       });
@@ -350,8 +359,8 @@ void* MemoryAllocator::allocateZeroFilled(uint64_t bytes) {
   }
   void* result = nullptr;
   cache()->makeSpace(
-      AllocationTraits::numPages(bytes), [&](Allocation& acquired) {
-        freeNonContiguous(acquired);
+      AllocationTraits::numPages(bytes), [&](AcquiredMemory& acquired) {
+        acquired.free(this);
         result = allocateZeroFilledWithoutRetry(bytes);
         return result != nullptr;
       });

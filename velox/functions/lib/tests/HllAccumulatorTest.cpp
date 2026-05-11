@@ -15,8 +15,7 @@
  */
 #include "velox/functions/lib/HllAccumulator.h"
 
-#define XXH_INLINE_ALL
-#include <xxhash.h>
+#include "velox/common/base/XxHashInline.h"
 
 #include <gtest/gtest-typed-test.h>
 #include <gtest/gtest.h>

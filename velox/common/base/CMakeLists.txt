@@ -78,6 +78,7 @@ velox_add_library(
   StatsReporter.h
   SuccinctPrinter.h
   TreeOfLosers.h
+  XxHashInline.h
 )
 
 velox_link_libraries(

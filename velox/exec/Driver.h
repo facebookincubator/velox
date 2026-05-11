@@ -416,6 +416,12 @@ class Driver : public std::enable_shared_from_this<Driver> {
   /// memory arbitration finishes.
   bool checkUnderArbitration(ContinueFuture* future);
 
+  /// Accumulates blocked time for driver-level lifecycle tracking.
+  /// Called from BlockingState::setResume() when the blocking future resolves.
+  void addDriverBlockedTime(uint64_t nanos) {
+    totalDriverBlockedNanos_ += nanos;
+  }
+
   void initializeOperatorStats(std::vector<OperatorStats>& stats);
 
   /// Close operators and add operator stats to the task.
@@ -699,6 +705,24 @@ class Driver : public std::enable_shared_from_this<Driver> {
 
   // Timer used to track down the time we are sitting in the driver queue.
   size_t queueTimeStartUs_{0};
+
+  // Driver-level lifecycle timing: independently tracks the three states
+  // a driver can be in (queued, on-thread, blocked) to enable gap analysis.
+  // Reported as RuntimeStats on the source operator at close time.
+  // All three use high_resolution_clock for consistency, matching
+  // BlockingState::sinceUs_ and enabling accurate gap analysis
+  // (queued + on-thread + blocked ≈ elapsed time).
+  // Atomic because closeByTask() may read these from a different thread
+  // than the one running the onThreadTimeGuard scope guard.
+  std::atomic<uint64_t> totalDriverQueuedNanos_{0};
+  std::atomic<uint64_t> totalDriverOnThreadNanos_{0};
+  std::atomic<uint64_t> totalDriverBlockedNanos_{0};
+  // Timestamp (micros, high_resolution_clock) when the current on-thread
+  // period started. Set at the beginning of runInternal, used by
+  // closeOperators to snapshot on-thread time before the scope guard fires.
+  // Atomic because closeByTask() may access it from a different thread
+  // than the one running the onThreadTimeGuard scope guard in runInternal.
+  std::atomic<uint64_t> onThreadStartUs_{0};
 
   // Id (index in the vector) of the current operator to run (or the 1st one if
   // we haven't started yet). Used to determine which operator's queueTime we

@@ -90,7 +90,8 @@ class FileSplitReader {
       const ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<const FileConfig>& fileConfig,
       const RowTypePtr& readerOutputType,
-      const std::shared_ptr<io::IoStatistics>& ioStatistics,
+      const std::shared_ptr<io::IoStatistics>& dataIoStats,
+      const std::shared_ptr<io::IoStatistics>& metadataIoStats,
       const std::shared_ptr<IoStats>& ioStats,
       FileHandleFactory* fileHandleFactory,
       folly::Executor* ioExecutor,
@@ -141,7 +142,8 @@ class FileSplitReader {
       const ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<const FileConfig>& fileConfig,
       const RowTypePtr& readerOutputType,
-      const std::shared_ptr<io::IoStatistics>& ioStatistics,
+      const std::shared_ptr<io::IoStatistics>& dataIoStats,
+      const std::shared_ptr<io::IoStatistics>& metadataIoStats,
       const std::shared_ptr<IoStats>& ioStats,
       FileHandleFactory* fileHandleFactory,
       folly::Executor* executor,
@@ -213,27 +215,26 @@ class FileSplitReader {
       const RowTypePtr& tableSchema) const;
 
  protected:
-  std::shared_ptr<const FileConnectorSplit> fileSplit_;
   const FileTableHandlePtr tableHandle_;
   const std::unordered_map<std::string, FileColumnHandlePtr>* const
       partitionKeys_;
-
-  const ConnectorQueryCtx* connectorQueryCtx_;
   const std::shared_ptr<const FileConfig> fileConfig_;
-
-  RowTypePtr readerOutputType_;
-  const std::shared_ptr<io::IoStatistics> ioStatistics_;
+  const std::shared_ptr<io::IoStatistics> dataIoStats_;
+  const std::shared_ptr<io::IoStatistics> metadataIoStats_;
   const std::shared_ptr<IoStats> ioStats_;
   FileHandleFactory* const fileHandleFactory_;
   folly::Executor* const ioExecutor_;
   memory::MemoryPool* const pool_;
-
   const std::shared_ptr<common::ScanSpec> scanSpec_;
   // Subfield filters from HiveDataSource, includes both original
   // subfieldFilters and filters extracted from remainingFilter. Used by
   // subclasses (e.g., HiveSplitReader) for synthesized column filter
   // validation.
   const common::SubfieldFilters* const subfieldFiltersForValidation_;
+
+  std::shared_ptr<const FileConnectorSplit> fileSplit_;
+  const ConnectorQueryCtx* connectorQueryCtx_;
+  RowTypePtr readerOutputType_;
   std::unique_ptr<dwio::common::Reader> baseReader_;
   std::unique_ptr<dwio::common::RowReader> baseRowReader_;
   dwio::common::ReaderOptions baseReaderOpts_;

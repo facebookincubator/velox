@@ -374,6 +374,11 @@ void serializeRowVectorRanges(
   }
   auto rowVector = vector->as<RowVector>();
   std::vector<IndexRange> childRanges;
+  size_t totalOffsets = 0;
+  for (const auto& range : ranges) {
+    totalOffsets += range.size;
+  }
+  childRanges.reserve(totalOffsets);
   for (int32_t i = 0; i < ranges.size(); ++i) {
     auto begin = ranges[i].begin;
     auto end = begin + ranges[i].size;

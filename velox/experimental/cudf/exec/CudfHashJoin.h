@@ -134,6 +134,8 @@ class CudfHashJoinProbe : public CudfOperatorBase {
       exec::DriverCtx* driverCtx,
       std::shared_ptr<const core::HashJoinNode> joinNode);
 
+  void initialize() override;
+
   bool needsInput() const override;
 
   bool skipProbeOnEmptyBuild() const;
@@ -173,6 +175,9 @@ class CudfHashJoinProbe : public CudfOperatorBase {
   std::optional<hash_type> hashObject_;
 
   // Filter related members
+  /** @brief Whether to use AST-based filtering (false if filter spans both
+   * sides or if filter deals with decimal types) */
+  bool useAstFilter_{true};
   /** @brief CUDF AST tree for join filter evaluation */
   cudf::ast::tree tree_;
   /** @brief Scalar values used in filter expressions */
@@ -253,6 +258,7 @@ class CudfHashJoinProbe : public CudfOperatorBase {
   std::optional<rmm::cuda_stream_view> lastProbeStream_;
 
   static constexpr auto oobPolicy = cudf::out_of_bounds_policy::NULLIFY;
+
   /**
    * @brief Performs inner join between probe table and all build tables.
    * @param leftTable Probe-side table to join

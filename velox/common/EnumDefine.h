@@ -37,49 +37,9 @@ struct Enums {
 
 } // namespace facebook::velox
 
-/// Helper macros to implement bi-direction mappings between enum values and
-/// names.
+/// DEFINE macros for enum-to-name mappings. Include only in .cpp files.
 ///
-/// Usage:
-///
-/// In the header file, define the enum:
-///
-/// #include "velox/common/Enums.h"
-///
-/// enum class Foo {...};
-///
-/// VELOX_DECLARE_ENUM_NAME(Foo);
-///
-/// In the cpp file, define the mapping:
-///
-/// namespace {
-/// const auto& fooNames() {
-///   static const folly::F14FastMap<Foo, std::string_view> kNames = {
-///       {Foo::kFirst, "FIRST"},
-///       {Foo::kSecond, "SECOND"},
-///        ...
-///   };
-///   return kNames;
-/// }
-/// } // namespace
-///
-/// VELOX_DEFINE_ENUM_NAME(Foo, fooNames);
-///
-/// In the client code, use FooName::toName(Foo::kFirst) to get the name of the
-/// enum and FooName::toFoo("FIRST") or FooName::tryToFoo("FIRST") to get the
-/// enum value. toFoo throws an exception if input is not a valid name, while
-/// tryToFoo returns a std::nullopt.
-///
-/// Use _EMBEDDED_ versions of the macros to define enums embedded in other
-/// classes.
-
-#define VELOX_DECLARE_ENUM_NAME(EnumType)                                  \
-  struct EnumType##Name {                                                  \
-    static std::string_view toName(EnumType value);                        \
-    static EnumType to##EnumType(std::string_view name);                   \
-    static std::optional<EnumType> tryTo##EnumType(std::string_view name); \
-  };                                                                       \
-  std::ostream& operator<<(std::ostream& os, const EnumType& value);
+/// See EnumDeclare.h for full usage documentation and the DECLARE macros.
 
 #define VELOX_DEFINE_ENUM_NAME(EnumType, Names)                             \
   std::string_view EnumType##Name::toName(EnumType value) {                 \
@@ -112,11 +72,6 @@ struct Enums {
     VELOX_CHECK(maybeType, "Invalid enum name: {}", name);                  \
     return *maybeType;                                                      \
   }
-
-#define VELOX_DECLARE_EMBEDDED_ENUM_NAME(EnumType)     \
-  static std::string_view toName(EnumType value);      \
-  static EnumType to##EnumType(std::string_view name); \
-  static std::optional<EnumType> tryTo##EnumType(std::string_view name);
 
 #define VELOX_DEFINE_EMBEDDED_ENUM_NAME(Class, EnumType, Names)             \
   std::string_view Class::toName(Class::EnumType value) {                   \

@@ -237,6 +237,9 @@ class VectorSerde {
     /// than this causes subsequent compression attempts to be skipped. The more
     /// times compression misses the target the less frequently it is tried.
     float minCompressionRatio{0.8};
+
+    /// Minimum page size to attempt compression.
+    int32_t minCompressionPageSizeBytes{0};
   };
 
   const std::string& kind() const {

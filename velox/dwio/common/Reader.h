@@ -21,6 +21,8 @@
 #include <optional>
 #include <string>
 
+#include <folly/container/F14Map.h>
+
 #include "velox/connectors/Connector.h"
 #include "velox/dwio/common/InputStream.h"
 #include "velox/dwio/common/Mutation.h"
@@ -152,6 +154,34 @@ class RowReader {
   }
 
   /**
+   * Result of projectColumnsWithSelection. 'output' is the projected
+   * RowVector. 'selectedRows' maps each output row back to its input row
+   * index: selectedRows[i] is the input row that produced output row i.
+   * 'selectedRows' is null when no rows were dropped — output rows are
+   * identity-aligned with the input. This includes the empty-input case
+   * (input->size() == 0), where the identity mapping holds trivially.
+   * When all rows are filtered out from a non-empty input, 'output' is
+   * empty and 'selectedRows' is a non-null zero-length buffer so callers
+   * can distinguish "filtered to empty" from "identity mapping".
+   */
+  struct ProjectColumnsResult {
+    VectorPtr output;
+    BufferPtr selectedRows;
+  };
+
+  /**
+   * Like projectColumns, but also returns the input-row selection used to
+   * build the output. Callers that need to keep an external per-input-row
+   * structure (for example, an index reader's inputHits buffer) aligned
+   * with the filtered output can use 'selectedRows' to compact that
+   * structure without re-running filters.
+   */
+  static ProjectColumnsResult projectColumnsWithSelection(
+      const VectorPtr& input,
+      const velox::common::ScanSpec& spec,
+      const Mutation* mutation);
+
+  /**
    * Helper function used by non-selective reader to project top level columns
    * according to the scan spec and mutations.
    */
@@ -219,6 +249,20 @@ class IndexReader {
   static constexpr std::string_view kNumIndexLookupStripes =
       "numIndexLookupStripes";
 
+  /// Tracks the total number of rows in all loaded stripes. Measures the full
+  /// stripe row count regardless of how many rows are actually needed by
+  /// index lookups. Comparing with kNumIndexMatchedRows shows cluster index
+  /// selectivity within stripes.
+  static constexpr std::string_view kNumIndexScannedRows =
+      "numIndexScannedRows";
+
+  /// Tracks the total number of rows matched by the cluster index across all
+  /// stripes. These are the rows identified as matching the lookup bounds
+  /// within each stripe, before any ScanSpec filter pushdown. Comparing with
+  /// actual output rows shows filter selectivity.
+  static constexpr std::string_view kNumIndexMatchedRows =
+      "numIndexMatchedRows";
+
   /// Tracks the total number of read segments across all stripes. A read
   /// segment is a contiguous row range within a stripe that needs to be read.
   /// When filters are present, overlapping request ranges are split at
@@ -228,6 +272,11 @@ class IndexReader {
       "numIndexLookupReadSegments";
 
   virtual ~IndexReader() = default;
+
+  /// Returns runtime statistics accumulated by this index reader.
+  virtual folly::F14FastMap<std::string, RuntimeMetric> stats() const {
+    return {};
+  }
 
   /// Options for controlling index reader behavior.
   struct Options {

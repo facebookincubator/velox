@@ -18,7 +18,7 @@
 #include <folly/Range.h>
 #include <folly/container/F14Set.h>
 #include <xsimd/xsimd.hpp>
-#include "velox/common/Enums.h"
+#include "velox/common/EnumDeclare.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/SimdUtil.h"
 #include "velox/common/base/SplitBlockBloomFilter.h"

@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/DebugUtil.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 
 #include "velox/common/base/SpillConfig.h"
@@ -128,24 +129,29 @@ class CudfOperatorBase : public exec::Operator, public NvtxHelper {
     VELOX_NVTX_OPERATOR_FUNC_RANGE_IF(
         nvtxMethods_ & NvtxMethodFlag::kAddInput, className_);
     doAddInput(std::move(input));
+    checkCudaErrorInDebug();
   }
 
   RowVectorPtr getOutput() final {
     VELOX_NVTX_OPERATOR_FUNC_RANGE_IF(
         nvtxMethods_ & NvtxMethodFlag::kGetOutput, className_);
-    return doGetOutput();
+    auto result = doGetOutput();
+    checkCudaErrorInDebug();
+    return result;
   }
 
   void noMoreInput() final {
     VELOX_NVTX_OPERATOR_FUNC_RANGE_IF(
         nvtxMethods_ & NvtxMethodFlag::kNoMoreInput, className_);
     doNoMoreInput();
+    checkCudaErrorInDebug();
   }
 
   void close() final {
     VELOX_NVTX_OPERATOR_FUNC_RANGE_IF(
         nvtxMethods_ & NvtxMethodFlag::kClose, className_);
     doClose();
+    checkCudaErrorInDebug();
   }
 
  protected:

@@ -43,4 +43,20 @@ TEST(IoStatisticsTest, latencyBreakdown) {
   EXPECT_EQ(stats.storageReadLatencyUs().sum(), 300);
 }
 
+TEST(IoStatisticsTest, totalScanTimeNs) {
+  IoStatistics stats;
+  EXPECT_EQ(stats.totalScanTimeNs(), 0);
+
+  stats.incTotalScanTimeNs(1'000);
+  EXPECT_EQ(stats.totalScanTimeNs(), 1'000);
+
+  stats.incTotalScanTimeNs(2'500);
+  EXPECT_EQ(stats.totalScanTimeNs(), 3'500);
+
+  IoStatistics stats2;
+  stats2.incTotalScanTimeNs(500);
+  stats.merge(stats2);
+  EXPECT_EQ(stats.totalScanTimeNs(), 4'000);
+}
+
 } // namespace facebook::velox::io

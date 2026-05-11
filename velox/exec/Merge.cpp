@@ -784,7 +784,9 @@ MergeExchange::MergeExchange(
       serdeOptions_(getVectorSerdeOptions(
           common::stringToCompressionKind(
               driverCtx->queryConfig().shuffleCompressionKind()),
-          mergeExchangeNode->serdeKind())) {}
+          mergeExchangeNode->serdeKind(),
+          std::nullopt,
+          driverCtx->queryConfig().minShuffleCompressionPageSizeBytes())) {}
 
 BlockingReason MergeExchange::addMergeSources(ContinueFuture* future) {
   if (operatorCtx_->driverCtx()->driverId != 0) {

@@ -34,10 +34,11 @@ CachedRegion::CachedRegion(cache::CachePin pin) : pin_(std::move(pin)) {
       !entry->isExclusive(),
       "CachedRegion requires a shared (non-exclusive) cache pin");
   size_ = entry->size();
-  if (entry->tinyData() != nullptr) {
-    ranges_.push_back(folly::Range<const char*>(entry->tinyData(), size_));
+  if (entry->hasContiguousData()) {
+    ranges_.push_back(
+        folly::Range<const char*>(entry->contiguousData(), size_));
   } else {
-    auto& allocation = entry->data();
+    auto& allocation = entry->nonContiguousData();
     ranges_.reserve(allocation.numRuns());
     uint64_t offset{0};
     for (int i = 0; i < allocation.numRuns() && offset < size_; ++i) {

@@ -18,6 +18,8 @@
 #include "velox/common/Casts.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/core/PlanNode.h"
+
+#include "velox/common/EnumDefine.h"
 #include "velox/core/TableWriteTraits.h"
 #include "velox/vector/VectorSaver.h"
 
@@ -908,6 +910,13 @@ class SummarizeExprVisitor : public ITypedExprVisitor {
     auto& myCtx = static_cast<Context&>(ctx);
     myCtx.expressionCounts()["lambda"]++;
     expr.body()->accept(*this, ctx);
+  }
+
+  void visit(const NullIfTypedExpr& expr, ITypedExprVisitorContext& ctx)
+      const override {
+    auto& myCtx = static_cast<Context&>(ctx);
+    myCtx.expressionCounts()["nullif"]++;
+    visitInputs(expr, ctx);
   }
 };
 

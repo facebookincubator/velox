@@ -20,6 +20,7 @@
 #include "folly/Random.h"
 #include "folly/String.h"
 #include "velox/common/file/File.h"
+#include "velox/common/io/IoStatistics.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
@@ -103,6 +104,9 @@ class E2EReaderTest : public testing::TestWithParam<ValueTypes> {
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
+
+  io::IoStatistics dataIoStats_;
+  io::IoStatistics metadataIoStats_;
 };
 } // namespace
 
@@ -174,7 +178,8 @@ TEST_P(E2EReaderTest, SharedDictionaryFlatmapReadAsStruct) {
   writer->close();
   writer.reset();
 
-  dwio::common::ReaderOptions readerOpts{pool.get()};
+  dwio::common::ReaderOptions readerOpts{
+      pool.get(), &dataIoStats_, &metadataIoStats_};
   auto bufferedInput = std::make_unique<BufferedInput>(
       std::make_shared<LocalReadFile>(path), *pool);
   auto reader = DwrfReader::create(std::move(bufferedInput), readerOpts);

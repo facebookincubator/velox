@@ -178,5 +178,10 @@ jobs:
           github_token: ${{ github.token }}
           claude_args: --model claude-opus-4-6 --allowedTools Bash Read Grep Glob
           prompt: ${{ steps.prompt.outputs.value }}
+          # Most Velox PRs are exported from Phabricator and pushed to GitHub
+          # by the meta-codesync bot, so the upstream workflow_run's `actor`
+          # is a Bot. Without this allowlist, claude-code-action refuses to
+          # run for those PRs and the failure analysis is silently dropped.
+          allowed_bots: meta-codesync
         env:
           GH_TOKEN: ${{ github.token }}

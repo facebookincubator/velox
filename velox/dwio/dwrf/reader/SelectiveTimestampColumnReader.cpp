@@ -41,7 +41,7 @@ SelectiveTimestampColumnReader::SelectiveTimestampColumnReader(
   seconds_ = createRleDecoder</*isSigned=*/true>(
       stripe.getStream(data, params.streamLabels().label(), true),
       version_,
-      *memoryPool_,
+      *pool_,
       vints,
       LONG_BYTE_SIZE);
   auto nanoData = StripeStreamsUtil::getStreamForKind(
@@ -53,7 +53,7 @@ SelectiveTimestampColumnReader::SelectiveTimestampColumnReader(
   nano_ = createRleDecoder</*isSigned=*/false>(
       stripe.getStream(nanoData, params.streamLabels().label(), true),
       version_,
-      *memoryPool_,
+      *pool_,
       nanoVInts,
       LONG_BYTE_SIZE);
 }
@@ -86,7 +86,7 @@ void SelectiveTimestampColumnReader::read(
       resultNulls_->capacity() * 8 < rows.size()) {
     // Make sure a dedicated resultNulls_ is allocated with enough capacity as
     // RleDecoder always assumes it is available.
-    resultNulls_ = AlignedBuffer::allocate<bool>(rows.size(), memoryPool_);
+    resultNulls_ = AlignedBuffer::allocate<bool>(rows.size(), pool_);
     rawResultNulls_ = resultNulls_->asMutable<uint64_t>();
   }
   bool isDense = rows.back() == rows.size() - 1;
@@ -119,8 +119,7 @@ void SelectiveTimestampColumnReader::readHelper(
 
   // Save the seconds into their own buffer before reading nanos into
   // 'values_'
-  dwio::common::ensureCapacity<uint64_t>(
-      secondsValues_, numValues_, memoryPool_);
+  dwio::common::ensureCapacity<uint64_t>(secondsValues_, numValues_, pool_);
   secondsValues_->setSize(numValues_ * sizeof(int64_t));
   memcpy(
       secondsValues_->asMutable<char>(),
@@ -141,7 +140,7 @@ void SelectiveTimestampColumnReader::readHelper(
   const auto rawNulls = nullsInReadRange_
       ? (isDense ? nullsInReadRange_->as<uint64_t>() : rawResultNulls_)
       : nullptr;
-  auto tsValues = AlignedBuffer::allocate<Timestamp>(numValues_, memoryPool_);
+  auto tsValues = AlignedBuffer::allocate<Timestamp>(numValues_, pool_);
   auto rawTs = tsValues->asMutable<Timestamp>();
 
   for (vector_size_t i = 0; i < numValues_; i++) {

@@ -309,7 +309,7 @@ void DirectBufferedInput::preload() {
   ioStatistics_->incRawBytesRead(fileSize_);
   ioStatistics_->queryThreadIoLatencyUs().increment(storageReadUs);
   ioStatistics_->storageReadLatencyUs().increment(storageReadUs);
-  ioStatistics_->incTotalScanTime(storageReadUs * 1'000);
+  ioStatistics_->incTotalScanTimeNs(storageReadUs * 1'000);
 }
 
 folly::Range<const char*> DirectBufferedInput::preloadedData(
@@ -397,7 +397,7 @@ std::vector<cache::CachePin> DirectCoalescedLoad::loadData(bool prefetch) {
 
   ioStatistics_->read().increment(size + overread);
   ioStatistics_->incRawBytesRead(size);
-  ioStatistics_->incTotalScanTime(usecs * 1'000);
+  ioStatistics_->incTotalScanTimeNs(usecs * 1'000);
   ioStatistics_->queryThreadIoLatencyUs().increment(usecs);
   ioStatistics_->storageReadLatencyUs().increment(usecs);
   ioStatistics_->incRawOverreadBytes(overread);

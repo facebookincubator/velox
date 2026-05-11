@@ -135,6 +135,22 @@ class raw_vector {
     size_ = 0;
   }
 
+  /// Releases unused capacity. If empty, frees all memory.
+  void shrink_to_fit() {
+    if (size_ == 0) {
+      free();
+      capacity_ = 0;
+      return;
+    }
+    if (calculateCapacity(size_) < capacity_) {
+      auto* newData = allocateData(size_);
+      memcpy(newData, data_, size_ * sizeof(T));
+      free();
+      data_ = newData;
+      capacity_ = calculateCapacity(size_);
+    }
+  }
+
   void resize(int64_t size) {
     if (LIKELY(size <= capacity_)) {
       size_ = size;

@@ -233,7 +233,10 @@ PartitionedOutput::PartitionedOutput(
                                               ->queryConfig()
                                               .shuffleCompressionKind()),
           planNode->serdeKind(),
-          PartitionedOutput::minCompressionRatio())) {
+          PartitionedOutput::minCompressionRatio(),
+          operatorCtx_->driverCtx()
+              ->queryConfig()
+              .minShuffleCompressionPageSizeBytes())) {
   if (!planNode->isPartitioned()) {
     VELOX_USER_CHECK_EQ(numDestinations_, 1);
   }

@@ -224,7 +224,11 @@ RowVectorPtr TableScan::getOutput() {
       if (data != nullptr && !shouldDropOutput()) {
         constexpr int kMaxSelectiveBatchSizeMultiplier = 4;
         if (data->size() > 0) {
-          lockedStats->addInputVector(data->estimateFlatSize(), data->size());
+          uint64_t flatSize = 0;
+          if (driverCtx_->driver->enableOperatorBatchSizeStats()) {
+            flatSize = data->estimateFlatSize();
+          }
+          lockedStats->addInputVector(flatSize, data->size());
           maxFilteringRatio_ = std::max(
               {maxFilteringRatio_,
                1.0 * data->size() / readBatchSize,
@@ -233,8 +237,9 @@ RowVectorPtr TableScan::getOutput() {
             RECORD_METRIC_VALUE(
                 velox::kMetricTableScanBatchProcessTimeMs, ioTimeUs / 1'000);
           }
-          RECORD_METRIC_VALUE(
-              velox::kMetricTableScanBatchBytes, data->estimateFlatSize());
+          if (driverCtx_->driver->enableOperatorBatchSizeStats()) {
+            RECORD_METRIC_VALUE(velox::kMetricTableScanBatchBytes, flatSize);
+          }
           return data;
         } else {
           maxFilteringRatio_ = std::max(

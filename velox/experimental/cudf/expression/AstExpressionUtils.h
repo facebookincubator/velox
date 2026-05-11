@@ -23,6 +23,7 @@
 #include "velox/experimental/cudf/expression/AstUtils.h"
 // TODO(kn): in another PR
 // #include "velox/experimental/cudf/CudfNoDefaults.h"
+#include "velox/experimental/cudf/expression/DecimalTypeCheck.h"
 
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/FieldReference.h"
@@ -281,6 +282,18 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
   using velox::exec::FieldReference;
   using Op = cudf::ast::ast_operator;
 
+  // For now, AST does not support expressions with DECIMAL output, or immediate
+  // DECIMAL inputs.
+  // @TODO implement DECIMAL in AST and JIT
+  if (containsDecimalType(expr, false)) {
+    if (cudf_velox::CudfConfig::getInstance().debugEnabled) {
+      LOG(WARNING)
+          << "Expression contains DECIMAL type, which is not supported by AST/JIT: "
+          << expr->toString();
+    }
+    return false;
+  }
+
   const auto name =
       stripPrefix(expr->name(), CudfConfig::getInstance().functionNamePrefix);
   const auto len = expr->inputs().size();
@@ -288,7 +301,7 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
   // Literals and field references are always supported
   auto isSupportedLiteral = [&](const TypePtr& type) {
     try {
-      auto cudfType = cudf::data_type(veloxToCudfTypeId(type));
+      auto cudfType = veloxToCudfDataType(type);
       return cudf::is_fixed_width(cudfType) ||
           cudfType.id() == cudf::type_id::STRING;
     } catch (...) {
@@ -316,8 +329,7 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
   inputCudfDataTypes.reserve(len);
   for (const auto& input : expr->inputs()) {
     try {
-      inputCudfDataTypes.push_back(
-          cudf::data_type(veloxToCudfTypeId(input->type())));
+      inputCudfDataTypes.push_back(veloxToCudfDataType(input->type()));
     } catch (...) {
       return false;
     }
@@ -409,9 +421,42 @@ struct AstContext {
       const std::shared_ptr<velox::exec::Expr>& expr);
   static bool canBeEvaluated(const std::shared_ptr<velox::exec::Expr>& expr);
   // Determines which side (0=left, 1=right) an expression references by
-  // examining its field references. Returns -1 if no fields found.
+  // examining its field references. Returns -1 if no fields found, -2 if spans
+  // both sides.
   int findExpressionSide(const std::shared_ptr<velox::exec::Expr>& expr) const;
 };
+
+/// Checks if an expression contains sub-expressions that:
+/// 1. Cannot be represented natively in cuDF AST (need precomputation)
+/// 2. AND reference fields from both sides of a join
+/// Returns true only if such problematic sub-expressions exist.
+inline bool hasNonAstSubexprSpanningBothSides(
+    const std::shared_ptr<velox::exec::Expr>& expr,
+    const RowTypePtr& leftSchema,
+    const RowTypePtr& rightSchema) {
+  // Check if the expression is natively supported by AST
+  // If it is, we don't need to precompute it, so cross-side references are fine
+  if (detail::isAstExprSupported(expr)) {
+    // Recursively check children
+    for (const auto& child : expr->inputs()) {
+      if (hasNonAstSubexprSpanningBothSides(child, leftSchema, rightSchema)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Expression needs precomputation - check if it spans both sides
+  bool hasLeft = false, hasRight = false;
+  for (const auto* field : expr->distinctFields()) {
+    hasLeft |= leftSchema->containsChild(field->field());
+    hasRight |= rightSchema->containsChild(field->field());
+    if (hasLeft && hasRight) {
+      return true;
+    }
+  }
+  return false;
+}
 
 // get nested column indices
 std::vector<int> getNestedColumnIndices(
@@ -442,7 +487,11 @@ cudf::ast::expression const& AstContext::addPrecomputeInstructionOnSide(
     auto nestedIndices = getNestedColumnIndices(
         inputRowSchema[sideIdx].get()->childAt(columnIndex), fieldName);
     precomputeInstructions[sideIdx].get().emplace_back(
-        columnIndex, instruction, newColumnIndex, nestedIndices, node);
+        columnIndex,
+        instruction,
+        newColumnIndex,
+        std::move(nestedIndices),
+        node);
   }
   auto side = static_cast<cudf::ast::table_reference>(sideIdx);
   return tree.push(cudf::ast::column_reference(newColumnIndex, side));
@@ -501,6 +550,29 @@ cudf::ast::expression const& AstContext::pushExprToTree(
 
   const auto name =
       stripPrefix(expr->name(), CudfConfig::getInstance().functionNamePrefix);
+
+  if (!detail::isAstExprSupported(expr)) {
+    if (canBeEvaluatedByCudf(expr, /*deep=*/false)) {
+      // Shallow check: only verify this operation is supported
+      // Children will be recursively handled by createCudfExpression
+      // Determine which side this expression references
+      int sideIdx = findExpressionSide(expr);
+      if (sideIdx == -2) {
+        // Expression spans both sides of the join - cannot precompute on one
+        // side
+        VELOX_FAIL(
+            "Expression spans both join sides and cannot be precomputed: " +
+            name);
+      }
+      if (sideIdx < 0) {
+        sideIdx = 0; // Default to left side if no fields found
+      }
+      auto node = createCudfExpression(expr, inputRowSchema[sideIdx]);
+      return addPrecomputeInstructionOnSide(sideIdx, 0, name, "", node);
+    }
+    VELOX_FAIL("Unsupported expression: {}", name);
+  }
+
   auto len = expr->inputs().size();
   auto& type = expr->type();
 
@@ -632,32 +704,29 @@ cudf::ast::expression const& AstContext::pushExprToTree(
       }
     }
     VELOX_FAIL("Field not found: {}", name);
-  } else if (!allowPureAstOnly && canBeEvaluatedByCudf(expr, /*deep=*/false)) {
-    // Shallow check: only verify this operation is supported
-    // Children will be recursively handled by createCudfExpression
-    // Determine which side this expression references
-    int sideIdx = findExpressionSide(expr);
-    if (sideIdx < 0) {
-      sideIdx = 0; // Default to left side if no fields found
-    }
-    auto node =
-        createCudfExpression(expr, inputRowSchema[sideIdx], kAstEvaluatorName);
-    return addPrecomputeInstructionOnSide(sideIdx, 0, name, "", node);
   } else {
-    VELOX_FAIL("Unsupported expression: {}", name);
+    VELOX_UNREACHABLE("Unsupported expression: {}", name);
   }
 }
 
+// Returns: 0 = left only, 1 = right only, -1 = no fields, -2 = spans both sides
 int AstContext::findExpressionSide(
     const std::shared_ptr<velox::exec::Expr>& expr) const {
+  int foundSide = -1;
   for (const auto* field : expr->distinctFields()) {
     for (size_t sideIdx = 0; sideIdx < inputRowSchema.size(); ++sideIdx) {
       if (inputRowSchema[sideIdx].get()->containsChild(field->field())) {
-        return static_cast<int>(sideIdx);
+        if (foundSide == -1) {
+          foundSide = static_cast<int>(sideIdx);
+        } else if (foundSide != static_cast<int>(sideIdx)) {
+          // Expression spans both sides
+          return -2;
+        }
+        break;
       }
     }
   }
-  return -1;
+  return foundSide;
 }
 
 std::vector<ColumnOrView> precomputeSubexpressions(

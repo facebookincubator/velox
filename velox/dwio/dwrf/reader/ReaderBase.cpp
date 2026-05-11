@@ -82,8 +82,12 @@ FooterStatisticsImpl::FooterStatisticsImpl(
 ReaderBase::ReaderBase(
     MemoryPool& pool,
     std::unique_ptr<dwio::common::BufferedInput> input,
-    FileFormat fileFormat)
-    : ReaderBase(createReaderOptions(pool, fileFormat), std::move(input)) {}
+    FileFormat fileFormat,
+    io::IoStatistics* dataIoStats,
+    io::IoStatistics* metadataIoStats)
+    : ReaderBase(
+          createReaderOptions(pool, fileFormat, dataIoStats, metadataIoStats),
+          std::move(input)) {}
 
 namespace {
 

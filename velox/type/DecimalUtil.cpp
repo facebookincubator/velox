@@ -20,9 +20,7 @@
 namespace facebook::velox {
 namespace {
 std::string formatDecimal(uint8_t scale, int128_t unscaledValue) {
-  VELOX_DCHECK_GE(scale, 0);
-  VELOX_DCHECK_LT(
-      static_cast<size_t>(scale), sizeof(DecimalUtil::kPowersOfTen));
+  VELOX_DCHECK_LT(scale, std::size(DecimalUtil::kPowersOfTen));
   const bool isFraction = (scale > 0);
   if (unscaledValue == 0) {
     if (isFraction) {

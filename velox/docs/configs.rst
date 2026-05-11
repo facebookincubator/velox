@@ -1368,3 +1368,93 @@ Note: These configurations are experimental and subject to change.
      - bool
      - true
      - If true, log a reason for falling back to Velox CPU execution, when an operation is not supported in cuDF execution.
+   * - cudf.function_engine
+     - string
+     - presto
+   * - cudf.timestamp_unit
+     - string
+     - ns
+     - Timestamp precision unit for cuDF timestamp types. Valid values are: "s" (seconds), "ms" (milliseconds), "us" (microseconds), "ns" (nanoseconds). This controls the precision of timestamp data when converting between Velox and cuDF formats.
+     - Register the function for a specific engine. The optional values are presto or spark.
+
+Cudf Hive Connector Configuration (Experimental)
+------------------------------------------------
+These configurations apply to the cuDF Hive connector (Parquet reader/writer via cuDF).
+Connector config is initialized on velox runtime startup and is shared among queries as the default config.
+Each query can override the config by setting the corresponding session property.
+Reader options map to `libcudf parquet_reader_options <https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet__reader__options>`_ (used with the chunked reader when applicable).
+
+.. list-table::
+   :widths: 20 20 10 10 70
+   :header-rows: 1
+
+   * - Configuration Property Name
+     - Session Property Name
+     - Type
+     - Default Value
+     - Description
+   * - cudf.hive.use-buffered-input
+     - cudf.hive.use_buffered_input
+     - bool
+     - true
+     - Whether to use BufferedInput for CudfHiveDataSource (can use AsyncDataCache when HiveConfig file handle cache is enabled).
+   * - cudf.hive.use-experimental-reader
+     - cudf.hive.use_experimental_reader
+     - bool
+     - false
+     - Whether to use the experimental cuDF Parquet reader (Hybrid Scan) for highly selective filters. When enabled, uses `libcudf hybrid_scan_reader <https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet_1_1experimental_1_1hybrid__scan__reader>`_.
+   * - parquet.reader.use-pandas-metadata
+     - parquet.reader.use_pandas_metadata
+     - bool
+     - true
+     - Enable or disable use of pandas metadata while reading. Maps to ``enable_use_pandas_metadata`` in `libcudf parquet_reader_options <https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet__reader__options>`_.
+   * - parquet.reader.use-arrow-schema
+     - parquet.reader.use_arrow_schema
+     - bool
+     - true
+     - Enable or disable use of Arrow schema while reading. Maps to ``enable_use_arrow_schema`` in `libcudf parquet_reader_options <https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet__reader__options>`_.
+   * - parquet.reader.allow-mismatched-parquet-schemas
+     - parquet.reader.allow_mismatched_parquet_schemas
+     - bool
+     - false
+     - Enable or disable reading matching projected and filter columns from mismatched Parquet sources. Maps to ``enable_allow_mismatched_pq_schemas`` in `libcudf parquet_reader_options <https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet__reader__options>`_.
+   * - parquet.reader.timestamp-type
+     - parquet.reader.timestamp_type
+     - string
+     - TIMESTAMP_MILLISECONDS
+     - Timestamp type used to cast all timestamp columns (e.g. TIMESTAMP_DAYS, TIMESTAMP_SECONDS, TIMESTAMP_MILLISECONDS, TIMESTAMP_MICROSECONDS, TIMESTAMP_NANOSECONDS). Maps to ``set_timestamp_type`` in `libcudf parquet_reader_options <https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet__reader__options>`_.
+   * - parquet.reader.chunk-read-limit
+     - parquet.reader.chunk_read_limit
+     - integer
+     - 0
+     - Limit on total number of bytes to be returned per read (per table chunk); 0 means no limit. Maps to ``chunk_read_limit`` in `libcudf hybrid_scan_reader <https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet_1_1experimental_1_1hybrid__scan__reader>`_ (e.g. ``setup_chunking_for_filter_columns``, ``setup_chunking_for_payload_columns``).
+   * - parquet.reader.pass-read-limit
+     - parquet.reader.pass_read_limit
+     - integer
+     - 0
+     - Limit on the amount of memory (bytes) used for reading and decompressing data; 0 means no limit. This is a hint, not an absolute limit—if a single row group cannot fit within the limit, it will still be loaded. Affects how many row groups can be read at a time by limiting decompression space. Maps to ``pass_read_limit`` in `libcudf hybrid_scan_reader <https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet_1_1experimental_1_1hybrid__scan__reader>`_ (e.g. ``setup_chunking_for_filter_columns``, ``setup_chunking_for_payload_columns``).
+   * - parquet.reader.convert-strings-to-categories
+     - parquet.reader.convert_strings_to_categories
+     - bool
+     - false
+     - Whether to store string data as categorical type.
+   * - parquet.writer.write-timestamps-as-utc
+     - parquet.writer.write_timestamps_as_utc
+     - bool
+     - true
+     - Whether to write timestamps as UTC.
+   * - sort-writer_finish_time_slice_limit_ms
+     - sort_writer_finish_time_slice_limit_ms
+     - integer
+     - 5000
+     - Sort writer exits finish() after this many milliseconds even if work is not complete; 0 means no time limit.
+   * - parquet.writer.write-arrow-schema
+     - parquet.writer.write_arrow_schema
+     - bool
+     - false
+     - Whether to write ARROW schema.
+   * - parquet.writer.write-v2-page-headers
+     - parquet.writer.write_v2_page_headers
+     - bool
+     - false
+     - Whether to write V2 page headers.

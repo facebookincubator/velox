@@ -575,5 +575,189 @@ TEST_F(TDigestTest, largeWeightFloatingPointPrecision) {
   ASSERT_FALSE(std::isnan(digest.estimateQuantile(0.5)));
 }
 
+TEST_F(TDigestTest, winsorizedMeanFullRange) {
+  // winsorizedMean(0, 1) should equal sum() / totalWeight() (regular mean).
+  constexpr int N = 1e5;
+  TDigest digest;
+  std::vector<int16_t> positions;
+  for (int i = 0; i < N; ++i) {
+    digest.add(positions, i);
+  }
+  digest.compress(positions);
+  ASSERT_NEAR(
+      digest.winsorizedMean(0, 1),
+      digest.sum() / digest.totalWeight(),
+      kSumError);
+}
+
+TEST_F(TDigestTest, winsorizedMeanUniform) {
+  // Uniform distribution: winsorization has minimal effect on mean.
+  constexpr int N = 1e6;
+  TDigest digest;
+  std::vector<int16_t> positions;
+  for (int i = 0; i < N; ++i) {
+    digest.add(positions, i);
+  }
+  digest.compress(positions);
+  double exactMean = (N - 1) / 2.0;
+  ASSERT_NEAR(digest.winsorizedMean(0.01, 0.99), exactMean, exactMean * 0.01);
+}
+
+TEST_F(TDigestTest, winsorizedMeanVsTrimmedMean) {
+  // winsorizedMean(p, 1-p) should be between trimmedMean(p, 1-p) and mean().
+  constexpr int N = 1e5;
+  TDigest digest;
+  std::vector<int16_t> positions;
+  std::default_random_engine gen(common::testutil::getRandomSeed(42));
+  std::exponential_distribution<> dist(1.0);
+  for (int i = 0; i < N; ++i) {
+    digest.add(positions, dist(gen));
+  }
+  digest.compress(positions);
+  double mean = digest.sum() / digest.totalWeight();
+  double trimmed = digest.trimmedMean(0.05, 0.95);
+  double winsorized = digest.winsorizedMean(0.05, 0.95);
+  ASSERT_GE(winsorized, std::min(trimmed, mean) - kSumError);
+  ASSERT_LE(winsorized, std::max(trimmed, mean) + kSumError);
+}
+
+TEST_F(TDigestTest, winsorizedMeanOneSided) {
+  // One-sided upper winsorization should reduce the mean.
+  constexpr int N = 1e5;
+  TDigest digest;
+  std::vector<int16_t> positions;
+  for (int i = 0; i < N; ++i) {
+    digest.add(positions, i);
+  }
+  digest.compress(positions);
+  double result = digest.winsorizedMean(0, 0.99);
+  double regularMean = digest.sum() / digest.totalWeight();
+  ASSERT_LE(result, regularMean + kSumError);
+}
+
+TEST_F(TDigestTest, winsorizedMeanEmpty) {
+  TDigest digest;
+  ASSERT_TRUE(std::isnan(digest.winsorizedMean(0.01, 0.99)));
+}
+
+TEST_F(TDigestTest, winsorizedMeanSingleElement) {
+  TDigest digest;
+  std::vector<int16_t> positions;
+  digest.add(positions, 42.0);
+  digest.compress(positions);
+  ASSERT_EQ(digest.winsorizedMean(0.01, 0.99), 42.0);
+}
+
+TEST_F(TDigestTest, winsorizedMeanAllSame) {
+  TDigest digest;
+  std::vector<int16_t> positions;
+  for (int i = 0; i < 1000; ++i) {
+    digest.add(positions, 7.0);
+  }
+  digest.compress(positions);
+  ASSERT_NEAR(digest.winsorizedMean(0.1, 0.9), 7.0, kSumError);
+}
+
+TEST_F(TDigestTest, winsorizedMeanEqualBounds) {
+  // winsorizedMean(0.5, 0.5) should equal estimateQuantile(0.5).
+  // Both tails cover the full weight and sumInBounds == 0.
+  constexpr int N{10'000};
+  TDigest digest;
+  std::vector<int16_t> positions;
+  for (int i = 0; i < N; ++i) {
+    digest.add(positions, i);
+  }
+  digest.compress(positions);
+  ASSERT_NEAR(
+      digest.winsorizedMean(0.5, 0.5), digest.estimateQuantile(0.5), kSumError);
+}
+
+TEST_F(TDigestTest, trimmedMeanNarrowRangeSmallDigest) {
+  // Both bounds within a single centroid — old trimmedMean had a special early
+  // return for this case. Verify the shared helper produces the same result.
+  TDigest digest;
+  std::vector<int16_t> positions;
+  digest.add(positions, 10.0);
+  digest.add(positions, 20.0);
+  digest.add(positions, 30.0);
+  digest.compress(positions);
+  // Narrow range around the median.
+  double trimmed{digest.trimmedMean(0.4, 0.6)};
+  ASSERT_FALSE(std::isnan(trimmed));
+  // The result should be close to the median value (20).
+  ASSERT_NEAR(trimmed, 20.0, 10.0);
+}
+
+TEST_F(TDigestTest, trimmedMeanSingleElement) {
+  // Single-element digest — trimmedMean should return that element for any
+  // valid range.
+  TDigest digest;
+  std::vector<int16_t> positions;
+  digest.add(positions, 42.0);
+  digest.compress(positions);
+  ASSERT_EQ(digest.trimmedMean(0.1, 0.9), 42.0);
+  ASSERT_EQ(digest.trimmedMean(0.0, 1.0), 42.0);
+  ASSERT_EQ(digest.trimmedMean(0.0, 0.5), 42.0);
+}
+
+TEST_F(TDigestTest, trimmedMeanVsWinsorizedMeanConsistency) {
+  // For uniform data, trimmedMean and winsorizedMean should be close since
+  // tails are symmetric. Verify both use the shared helper correctly.
+  constexpr int N{10'000};
+  TDigest digest;
+  std::vector<int16_t> positions;
+  for (int i = 0; i < N; ++i) {
+    digest.add(positions, i);
+  }
+  digest.compress(positions);
+  double trimmed{digest.trimmedMean(0.1, 0.9)};
+  double winsorized{digest.winsorizedMean(0.1, 0.9)};
+  // Both should be close to the true mean (4999.5) for uniform data.
+  double trueMean{(N - 1) / 2.0};
+  ASSERT_NEAR(trimmed, trueMean, trueMean * 0.02);
+  ASSERT_NEAR(winsorized, trueMean, trueMean * 0.02);
+}
+
+TEST_F(TDigestTest, winsorizedMeanInvalid) {
+  TDigest digest;
+  std::vector<int16_t> positions;
+  digest.add(positions, 1.0);
+  digest.compress(positions);
+  ASSERT_THROW(digest.winsorizedMean(-0.1, 0.5), VeloxRuntimeError);
+  ASSERT_THROW(digest.winsorizedMean(0.5, 1.1), VeloxRuntimeError);
+  ASSERT_THROW(digest.winsorizedMean(0.9, 0.1), VeloxRuntimeError);
+}
+
+TEST_F(TDigestTest, winsorizedMeanAccuracy) {
+  // Compare against exact winsorized mean on raw data.
+  constexpr int N = 1e5;
+  std::vector<double> values(N);
+  TDigest digest;
+  std::vector<int16_t> positions;
+  std::default_random_engine gen(common::testutil::getRandomSeed(42));
+  std::lognormal_distribution<> dist(0, 1.0);
+  for (int i = 0; i < N; ++i) {
+    values[i] = dist(gen);
+    digest.add(positions, values[i]);
+  }
+  digest.compress(positions);
+  std::sort(values.begin(), values.end());
+
+  // Compute exact winsorized mean at (0.01, 0.99).
+  int lowerK = static_cast<int>(0.01 * N);
+  int upperK = static_cast<int>(0.99 * N);
+  double qLow = values[lowerK];
+  double qHigh = values[upperK];
+  double exactSum = 0;
+  for (int i = 0; i < N; ++i) {
+    exactSum += std::max(qLow, std::min(qHigh, values[i]));
+  }
+  double exactWinsorizedMean = exactSum / N;
+
+  double approx = digest.winsorizedMean(0.01, 0.99);
+  ASSERT_NEAR(
+      approx, exactWinsorizedMean, std::abs(exactWinsorizedMean) * 0.02);
+}
+
 } // namespace
 } // namespace facebook::velox::functions

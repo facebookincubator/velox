@@ -762,4 +762,10 @@ if(VELOX_ENABLE_GEO)
   velox_resolve_dependency(geos)
 endif()
 
+if(VELOX_ENABLE_GEO)
+  list(PREPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/CMake/resolve_dependency_modules/s2geometry)
+  velox_set_source(s2geometry)
+  velox_resolve_dependency(s2geometry)
+endif()
+
 add_subdirectory(velox)

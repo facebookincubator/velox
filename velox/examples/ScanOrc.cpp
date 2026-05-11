@@ -18,6 +18,7 @@
 #include <algorithm>
 
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/io/IoStatistics.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/dwio/common/Reader.h"
@@ -49,7 +50,10 @@ int main(int argc, char** argv) {
   auto pool = facebook::velox::memory::memoryManager()->addLeafPool();
 
   std::string filePath{argv[1]};
-  dwio::common::ReaderOptions readerOpts{pool.get()};
+  io::IoStatistics dataIoStats;
+  io::IoStatistics metadataIoStats;
+  dwio::common::ReaderOptions readerOpts{
+      pool.get(), &dataIoStats, &metadataIoStats};
   // To make DwrfReader reads ORC file, setFileFormat to FileFormat::ORC
   readerOpts.setFileFormat(FileFormat::ORC);
   auto reader = dwio::common::getReaderFactory(FileFormat::ORC)

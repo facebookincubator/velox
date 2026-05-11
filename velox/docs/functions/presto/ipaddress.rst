@@ -69,6 +69,35 @@ IP Functions
         SELECT IP_PREFIX_SUBNETS(IPPREFIX '192.168.1.0/24', 25); -- [{192.168.1.0/25}, {192.168.1.128/25}]
         SELECT IP_PREFIX_SUBNETS(IPPREFIX '2a03:2880:c000::/34', 36); -- [{2a03:2880:c000::/36}, {2a03:2880:d000::/36}, {2a03:2880:e000::/36}, {2a03:2880:f000::/36}]
 
+.. function:: ip_version(ip_address) -> bigint
+
+    Returns ``4`` if ``ip_address`` is an IPv4 address, ``6`` if it is an IPv6 address.
+    IPv4-mapped IPv6 addresses (e.g. ``::ffff:1.2.3.4``) are treated as IPv4.
+    ``ip_address`` is of type ``IPADDRESS``. ::
+
+        SELECT ip_version(IPADDRESS '1.2.3.4'); -- 4
+        SELECT ip_version(IPADDRESS '::ffff:1.2.3.4'); -- 4
+        SELECT ip_version(IPADDRESS '64:ff9b::17'); -- 6
+        SELECT ip_version(IPADDRESS '2001:db8::1'); -- 6
+
+.. function:: ip_version(ip_prefix) -> bigint
+
+    Returns ``4`` if ``ip_prefix`` contains an IPv4 address, ``6`` if it contains an IPv6 address.
+    IPv4-mapped IPv6 prefixes are treated as IPv4.
+    ``ip_prefix`` is of type ``IPPREFIX``. ::
+
+        SELECT ip_version(IPPREFIX '1.2.3.4/24'); -- 4
+        SELECT ip_version(IPPREFIX '64:ff9b::17/64'); -- 6
+
+.. function:: ip_prefix_masklen(ip_prefix) -> bigint
+
+    Returns the prefix length (mask length) of ``ip_prefix``.
+    The value is in the range [0, 32] for IPv4 and [0, 128] for IPv6. ::
+
+        SELECT ip_prefix_masklen(IPPREFIX '1.2.3.4/24'); -- 24
+        SELECT ip_prefix_masklen(IPPREFIX '64:ff9b::17/128'); -- 128
+        SELECT ip_prefix_masklen(IPPREFIX '::/0'); -- 0
+
 .. function:: is_private_ip(ip_address) -> boolean
 
     Returns whether ``ip_address`` of type ``IPADDRESS`` is a private or reserved IP address

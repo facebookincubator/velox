@@ -27,7 +27,8 @@ void registerSparkAggregateFunctions(const std::string& prefix) {
   unregisterAggregateFunctions();
   registerCommonAggregationFunctions(getGroupbyAggregationRegistry(), prefix);
   registerCommonAggregationFunctions(getReduceAggregationRegistry(), prefix);
-  registerReduceOnlyAggregationFunctions(getReduceAggregationRegistry(), prefix);
+  registerReduceOnlyAggregationFunctions(
+      getReduceAggregationRegistry(), prefix);
 
   // Spark: SUM(REAL) -> DOUBLE, AVG(REAL) -> DOUBLE
   appendGroupbyAggregationFunctionForStep(

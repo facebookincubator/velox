@@ -31,13 +31,23 @@ namespace facebook::velox::config {
 /// externally managed system configuration.
 class IConfig {
  public:
+  // Do not inline this member function as lambda. Otherwise, a GCC bug
+  // https://gcc.gnu.org/bugzilla/show_bug.cgi?id=103186 might be triggered
+  // with GCC 11.1 and 11.2.
+  // This is currently a required workaround specifically for Apache Gluten
+  // that still relies on GCC 11.2:
+  // https://github.com/apache/gluten/issues/11991. The workaround is needed
+  // until Apache Gluten migrates away from the old compiler.
+  template <typename T>
+  static T defaultToT(std::string /* unused */, std::string value) {
+    return folly::to<T>(value);
+  }
+
   template <typename T>
   std::optional<T> get(
       const std::string& key,
       const std::function<T(std::string, std::string)>& toT =
-          [](auto /* unused */, auto value) {
-            return folly::to<T>(value);
-          }) const {
+          defaultToT<T>) const {
     if (auto val = access(key)) {
       return toT(key, *val);
     }
@@ -49,9 +59,7 @@ class IConfig {
       const std::string& key,
       const T& defaultValue,
       const std::function<T(std::string, std::string)>& toT =
-          [](auto /* unused */, auto value) {
-            return folly::to<T>(value);
-          }) const {
+          defaultToT<T>) const {
     if (auto val = access(key)) {
       return toT(key, *val);
     }

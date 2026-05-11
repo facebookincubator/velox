@@ -15,11 +15,10 @@
  */
 #pragma once
 
-#define XXH_INLINE_ALL
 #include <fast_float/fast_float.h>
 #include <re2/re2.h>
-#include <xxhash.h>
 #include <string_view>
+#include "velox/common/base/XxHashInline.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"

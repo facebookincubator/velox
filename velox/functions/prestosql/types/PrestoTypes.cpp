@@ -226,6 +226,20 @@ std::string PrestoTypes::valueToString(
   return decoded.toString(index);
 }
 
+std::string PrestoTypes::timestampToPrestoString(Timestamp value) {
+  // Uses millisecond precision to match Presto Java's SqlTimestamp.JSON_FORMAT
+  // ("uuuu-MM-dd HH:mm:ss.SSS"). Sub-millisecond nanos are truncated.
+  // This is consistent with PrestoCastHooks (non-legacy mode), which sets the
+  // same options for CAST(timestamp AS varchar).
+  // TODO: Support microsecond precision for TIMESTAMP(6) if needed.
+  static const TimestampToStringOptions kPrestoOptions{
+      .precision = TimestampToStringOptions::Precision::kMilliseconds,
+      .zeroPaddingYear = true,
+      .dateTimeSeparator = ' ',
+  };
+  return value.toString(kPrestoOptions);
+}
+
 std::string PrestoTypes::toHex(StringView value) {
   std::string result;
   result.reserve(value.size() * 3);

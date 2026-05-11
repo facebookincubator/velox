@@ -36,7 +36,8 @@ IcebergDataSource::IcebergDataSource(
           fileHandleFactory,
           ioExecutor,
           connectorQueryCtx,
-          hiveConfig) {}
+          hiveConfig),
+      columnHandles_(std::make_shared<ColumnHandleMap>(assignments)) {}
 
 std::unique_ptr<FileSplitReader> IcebergDataSource::createSplitReader() {
   prepareSplit();
@@ -49,11 +50,13 @@ std::unique_ptr<FileSplitReader> IcebergDataSource::createSplitReader() {
       connectorQueryCtx_,
       fileConfig_,
       readerOutputType_,
-      ioStatistics_,
+      dataIoStats_,
+      metadataIoStats_,
       ioStats_,
       fileHandleFactory_,
       ioExecutor_,
-      scanSpec_);
+      scanSpec_,
+      columnHandles_);
 
   return reader;
 }

@@ -53,11 +53,13 @@ class DirectBufferedInputTest : public testing::Test {
   void SetUp() override {
     executor_ = std::make_unique<folly::IOThreadPoolExecutor>(10, 10);
     ioStatistics_ = std::make_shared<IoStatistics>();
+    metadataIoStats_ = std::make_shared<IoStatistics>();
     fileIoStats_ = std::make_shared<IoStatistics>();
     ioStats_ = std::make_shared<facebook::velox::IoStats>();
     tracker_ = std::make_shared<cache::ScanTracker>("", nullptr, kLoadQuantum);
     file_ = std::make_shared<TestReadFile>(11, 100 << 20, ioStats_);
-    opts_ = std::make_unique<dwio::common::ReaderOptions>(pool_.get());
+    opts_ = std::make_unique<dwio::common::ReaderOptions>(
+        pool_.get(), ioStatistics_.get(), metadataIoStats_.get());
     opts_->setLoadQuantum(kLoadQuantum);
   }
 
@@ -134,6 +136,7 @@ class DirectBufferedInputTest : public testing::Test {
   std::shared_ptr<TestReadFile> file_;
   std::shared_ptr<cache::ScanTracker> tracker_;
   std::shared_ptr<IoStatistics> ioStatistics_;
+  std::shared_ptr<IoStatistics> metadataIoStats_;
   std::shared_ptr<IoStatistics> fileIoStats_;
   std::shared_ptr<facebook::velox::IoStats> ioStats_;
   std::unique_ptr<folly::IOThreadPoolExecutor> executor_;

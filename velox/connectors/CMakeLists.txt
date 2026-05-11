@@ -13,7 +13,7 @@
 # limitations under the License.
 velox_add_library(velox_connector Connector.cpp HEADERS Connector.h ConnectorRegistryInternal.h)
 
-velox_link_libraries(velox_connector velox_common_config velox_vector)
+velox_link_libraries(velox_connector velox_common_config velox_exec_spill_stats velox_vector)
 
 velox_add_library(velox_connector_registry ConnectorRegistry.cpp HEADERS ConnectorRegistry.h)
 

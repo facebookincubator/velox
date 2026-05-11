@@ -20,8 +20,7 @@
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
 
 #include <boost/crc.hpp>
-#define XXH_INLINE_ALL
-#include <xxhash.h>
+#include "velox/common/base/XxHashInline.h"
 
 namespace facebook::velox::dwrf {
 

@@ -1756,6 +1756,108 @@ TEST_P(PrestoSerializerTest, checksum) {
       "Received corrupted serialized page.");
 }
 
+TEST_P(PrestoSerializerTest, minCompressionPageSizeBytes) {
+  if (GetParam() == common::CompressionKind::CompressionKind_NONE) {
+    GTEST_SKIP() << "Compression skip only applies with compression enabled";
+  }
+
+  auto rowVector = makeTestVector(10);
+  auto rowType = asRowType(rowVector->type());
+
+  auto options = getParamSerdeOptions(nullptr);
+  options.minCompressionPageSizeBytes = 1 << 30;
+
+  auto arena = std::make_unique<StreamArena>(pool_.get());
+  auto serializer = serde_->createIterativeSerializer(
+      rowType, rowVector->size(), arena.get(), &options);
+  serializer->append(rowVector);
+  facebook::velox::serializer::presto::PrestoOutputStreamListener listener;
+  std::ostringstream output;
+  OStreamOutputStream out(&output, &listener);
+  serializer->flush(&out);
+
+  auto stats = serializer->runtimeStats();
+  EXPECT_GT(stats.count("compressionSkippedBytes"), 0);
+  EXPECT_EQ(stats.count("compressionInputBytes"), 0);
+
+  auto arena2 = std::make_unique<StreamArena>(pool_.get());
+  options.minCompressionPageSizeBytes = 1;
+  auto serializer2 = serde_->createIterativeSerializer(
+      rowType, rowVector->size(), arena2.get(), &options);
+  serializer2->append(rowVector);
+  std::ostringstream output2;
+  OStreamOutputStream out2(&output2, &listener);
+  serializer2->flush(&out2);
+
+  auto stats2 = serializer2->runtimeStats();
+  EXPECT_GT(stats2.count("compressionInputBytes"), 0);
+  EXPECT_EQ(stats2.count("compressionSkippedBytes"), 0);
+}
+
+TEST_P(PrestoSerializerTest, minCompressionPageSizeBytesDisabledAtZero) {
+  if (GetParam() == common::CompressionKind::CompressionKind_NONE) {
+    GTEST_SKIP() << "Compression skip only applies with compression enabled";
+  }
+
+  auto rowVector = makeTestVector(10);
+  auto rowType = asRowType(rowVector->type());
+
+  auto options = getParamSerdeOptions(nullptr);
+  options.minCompressionPageSizeBytes = 0;
+
+  auto arena = std::make_unique<StreamArena>(pool_.get());
+  auto serializer = serde_->createIterativeSerializer(
+      rowType, rowVector->size(), arena.get(), &options);
+  serializer->append(rowVector);
+  facebook::velox::serializer::presto::PrestoOutputStreamListener listener;
+  std::ostringstream output;
+  OStreamOutputStream out(&output, &listener);
+  serializer->flush(&out);
+
+  auto stats = serializer->runtimeStats();
+  EXPECT_GT(stats.count("compressionInputBytes"), 0);
+  EXPECT_EQ(stats.count("compressionSkippedBytes"), 0);
+}
+
+TEST_P(PrestoSerializerTest, minCompressionPageSizeBytesAtBoundary) {
+  if (GetParam() == common::CompressionKind::CompressionKind_NONE) {
+    GTEST_SKIP() << "Compression skip only applies with compression enabled";
+  }
+
+  auto rowVector = makeTestVector(10);
+  auto rowType = asRowType(rowVector->type());
+  facebook::velox::serializer::presto::PrestoOutputStreamListener listener;
+
+  auto options = getParamSerdeOptions(nullptr);
+  options.minCompressionPageSizeBytes = 0;
+
+  // Measure the arena size produced by appending the row vector. Flush is
+  // unnecessary because the arena is filled by append and the size check in
+  // flush() reads the same value.
+  auto measureArena = std::make_unique<StreamArena>(pool_.get());
+  auto measureSerializer = serde_->createIterativeSerializer(
+      rowType, rowVector->size(), measureArena.get(), &options);
+  measureSerializer->append(rowVector);
+  const auto pageSize = measureArena->size();
+
+  options.minCompressionPageSizeBytes = static_cast<int32_t>(pageSize);
+  auto arena = std::make_unique<StreamArena>(pool_.get());
+  auto serializer = serde_->createIterativeSerializer(
+      rowType, rowVector->size(), arena.get(), &options);
+  serializer->append(rowVector);
+  ASSERT_EQ(arena->size(), pageSize)
+      << "Arena size after append must match measured size for the boundary "
+         "comparison to be meaningful";
+  std::ostringstream output;
+  OStreamOutputStream out(&output, &listener);
+  serializer->flush(&out);
+
+  auto stats = serializer->runtimeStats();
+  EXPECT_GT(stats.count("compressionInputBytes"), 0)
+      << "Page size exactly at threshold should attempt compression (strict <)";
+  EXPECT_EQ(stats.count("compressionSkippedBytes"), 0);
+}
+
 INSTANTIATE_TEST_SUITE_P(
     PrestoSerializerTest,
     PrestoSerializerTest,

@@ -308,7 +308,7 @@ TEST_F(MapTest, fewerValuesThanKeysInLast) {
       "try("
       "   if(c0, "
       "       map(c1, c2), "
-      "       cast(null as map(integer, integer))))",
+      "       cast(null as map(bigint, bigint))))",
       makeRowVector({condition, keys2, values2}));
   EXPECT_EQ(0, result->offsetAt(0));
   EXPECT_EQ(3, result->offsetAt(2));

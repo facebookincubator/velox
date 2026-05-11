@@ -2555,6 +2555,110 @@ TEST_F(TaskTest, updateStatsWhileCloseOffThreadDriver) {
   ASSERT_GE(totalOffThreadTime.sum, 0);
 }
 
+// Verifies that driver-level lifecycle timing metrics
+// (driverQueuedWallNanos, driverOnThreadWallNanos, driverBlockedWallNanos)
+// are reported correctly for each pipeline.
+TEST_F(TaskTest, driverLifecycleTimingStats) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(1'000, [](auto row) { return row % 10; }),
+      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
+  });
+
+  auto buildData = makeRowVector(
+      {"u0", "u1"},
+      {
+          makeFlatVector<int64_t>(100, [](auto row) { return row % 10; }),
+          makeFlatVector<int64_t>(100, [](auto row) { return row; }),
+      });
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  // Build a hash join plan to get multiple pipelines:
+  // Pipeline 0 (probe): Values -> HashProbe -> sink
+  // Pipeline 1 (build): Values -> HashBuild
+  core::PlanNodeId probeScanId;
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({data})
+          .capturePlanNodeId(probeScanId)
+          .hashJoin(
+              {"c0"},
+              {"u0"},
+              PlanBuilder(planNodeIdGenerator).values({buildData}).planNode(),
+              "",
+              {"c0", "c1"})
+          .planNode();
+
+  auto result = AssertQueryBuilder(plan).copyResults(pool_.get());
+  ASSERT_GT(result->size(), 0);
+
+  // Get task stats from the most recently completed task.
+  auto tasks = Task::getRunningTasks();
+  // Tasks may already be cleaned up. Use a cursor-based approach instead.
+
+  // Re-run using CursorParameters to access the task directly.
+  CursorParameters params;
+  params.planNode = plan;
+  params.queryCtx = core::QueryCtx::create(driverExecutor_.get());
+  params.maxDrivers = 2;
+
+  auto cursor = TaskCursor::create(params);
+  while (cursor->moveNext()) {
+  }
+  auto task = cursor->task();
+  ASSERT_TRUE(waitForTaskCompletion(task.get()));
+
+  auto taskStats = task->taskStats();
+  // We should have at least 2 pipelines (probe and build).
+  ASSERT_GE(taskStats.pipelineStats.size(), 2);
+
+  // Helper to find a driver stat by substring match across all pipelines.
+  auto findDriverStat =
+      [&taskStats](
+          const std::string& statSubstr) -> std::optional<RuntimeMetric> {
+    for (const auto& pipeline : taskStats.pipelineStats) {
+      for (const auto& ds : pipeline.driverStats) {
+        for (const auto& [name, metric] : ds.runtimeStats) {
+          if (name.find(statSubstr) != std::string::npos) {
+            return metric;
+          }
+        }
+      }
+    }
+    return std::nullopt;
+  };
+
+  // Verify driver lifecycle metrics exist and have sensible values.
+  auto queued = findDriverStat("driverQueuedWallNanos");
+  auto onThread = findDriverStat("driverOnThreadWallNanos");
+  auto blocked = findDriverStat("driverBlockedWallNanos");
+
+  ASSERT_TRUE(queued.has_value()) << "driverQueuedWallNanos not found";
+  ASSERT_TRUE(onThread.has_value()) << "driverOnThreadWallNanos not found";
+  ASSERT_TRUE(blocked.has_value()) << "driverBlockedWallNanos not found";
+
+  // Each metric should have count >= 1 (at least one driver reported).
+  ASSERT_GE(queued->count, 1);
+  ASSERT_GE(onThread->count, 1);
+  ASSERT_GE(blocked->count, 1);
+
+  // On-thread time must be positive (drivers did real work).
+  ASSERT_GT(onThread->sum, 0);
+  ASSERT_GT(onThread->max, 0);
+
+  // Queued and blocked times must be non-negative.
+  ASSERT_GE(queued->sum, 0);
+  ASSERT_GE(blocked->sum, 0);
+
+  // Verify the stat names contain the pipeline prefix and source operator.
+  // Look for probe pipeline stats (source is Values with probeScanId).
+  auto probePrefix = fmt::format("P0-Values.{}", probeScanId);
+  auto probeOnThread = findDriverStat(probePrefix + ".driverOnThreadWallNanos");
+  ASSERT_TRUE(probeOnThread.has_value())
+      << "Probe pipeline stat not found with prefix: " << probePrefix;
+  ASSERT_GT(probeOnThread->max, 0);
+}
+
 DEBUG_ONLY_TEST_F(TaskTest, driverEnqueAfterFailedAndPausedTask) {
   const auto data = makeRowVector({
       makeFlatVector<int64_t>(50, [](auto row) { return row; }),

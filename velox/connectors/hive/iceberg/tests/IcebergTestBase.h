@@ -79,6 +79,13 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
       const std::string& key,
       const std::string& value);
 
+  /// Recreates the connector query context with the given session timezone
+  /// and timestamp-adjustment flag. Tests use this to exercise non-UTC
+  /// session configurations and verify timezone-sensitive behavior.
+  void recreateConnectorQueryCtx(
+      const std::string& sessionTimezone,
+      bool adjustTimestampToTimezone);
+
   /// Extracts partition key-value pairs from a file path.
   /// Returns a map where keys are partition column names and values are
   /// partition values (std::nullopt for null values).

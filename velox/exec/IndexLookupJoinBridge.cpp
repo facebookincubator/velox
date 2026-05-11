@@ -25,9 +25,8 @@ void IndexLookupJoinBridge::setIndexSplits(
     VELOX_CHECK(started_, "Bridge must be started before setting index splits");
     VELOX_CHECK(
         !cancelled_, "Setting index splits after the bridge is cancelled");
-    VELOX_CHECK(
-        indexSplits_.empty(), "setIndexSplits must be called only once");
-    VELOX_CHECK(!splits.empty(), "Index splits must not be empty");
+    VELOX_CHECK(!splitsSet_, "setIndexSplits must be called only once");
+    splitsSet_ = true;
     indexSplits_ = std::move(splits);
     promises = std::move(promises_);
   }
@@ -39,7 +38,7 @@ IndexLookupJoinBridge::splitsOrFuture(ContinueFuture* future) {
   std::lock_guard<std::mutex> l(mutex_);
   VELOX_CHECK(
       !cancelled_, "Getting index splits after the bridge is cancelled");
-  if (!indexSplits_.empty()) {
+  if (splitsSet_) {
     return indexSplits_;
   }
   promises_.emplace_back("IndexLookupJoinBridge::splitsOrFuture");

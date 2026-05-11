@@ -44,6 +44,7 @@ namespace facebook::velox::cache {
 
 class AsyncDataCache;
 class CacheShard;
+struct CacheStats;
 class SsdCache;
 struct SsdCacheStats;
 class SsdFile;
@@ -160,29 +161,56 @@ class AsyncDataCacheEntry {
   explicit AsyncDataCacheEntry(CacheShard* shard);
   ~AsyncDataCacheEntry();
 
-  /// Sets the key and allocates the entry's memory.  Resets
-  ///  all other state. The entry must be held exclusively and must
-  ///  hold no memory when calling this.
-  void initialize(FileCacheKey key);
+  /// Sets the key and allocates the entry's memory. Resets all other state.
+  /// The entry must be held exclusively and must hold no memory when calling
+  /// this. If 'contiguous' is true, allocates a single contiguous region
+  /// instead of a potentially non-contiguous Allocation.
+  void initialize(FileCacheKey key, bool contiguous = false);
 
-  memory::Allocation& data() {
-    return data_;
+  memory::Allocation& nonContiguousData() {
+    return nonContiguousData_;
   }
 
-  const memory::Allocation& data() const {
-    return data_;
+  const memory::Allocation& nonContiguousData() const {
+    return nonContiguousData_;
   }
 
-  const char* tinyData() const {
-    return tinyData_.empty() ? nullptr : tinyData_.data();
+  /// Returns a pointer to contiguous data. Valid for entries created
+  /// with contiguous=true. Covers both tinyData_ (small) and
+  /// contiguousData_ (larger) paths. Throws if the entry has no
+  /// contiguous data.
+  char* contiguousData() {
+    if (!tinyData_.empty()) {
+      VELOX_CHECK_NULL(contiguousData_);
+      return tinyData_.data();
+    }
+    VELOX_CHECK_NOT_NULL(
+        contiguousData_, "Entry does not have contiguous data");
+    return static_cast<char*>(contiguousData_);
   }
 
-  char* tinyData() {
-    return tinyData_.empty() ? nullptr : tinyData_.data();
+  const char* contiguousData() const {
+    if (!tinyData_.empty()) {
+      VELOX_CHECK_NULL(contiguousData_);
+      return tinyData_.data();
+    }
+    VELOX_CHECK_NOT_NULL(
+        contiguousData_, "Entry does not have contiguous data");
+    return static_cast<const char*>(contiguousData_);
+  }
+
+  /// Returns true if this entry has contiguous data.
+  bool hasContiguousData() const {
+    return contiguousData_ != nullptr || !tinyData_.empty();
+  }
+
+  uint64_t contiguousDataSize() const {
+    return size_;
   }
 
   // Returns writable buffer ranges covering the first 'length' bytes of
   // this entry's data. For small entries (tinyData), returns a single range.
+  // For contiguous entries, returns a single range.
   // For larger entries (allocation-backed), returns one range per run.
   std::vector<folly::Range<char*>> dataRanges(size_t length);
 
@@ -197,6 +225,13 @@ class AsyncDataCacheEntry {
   int32_t size() const {
     return size_;
   }
+
+  /// Returns the allocated capacity in bytes for this entry's data,
+  /// including any padding from the allocator.
+  int64_t dataCapacity() const;
+
+  /// Updates the data-type-specific size and padding fields in 'stats'.
+  void updateDataStats(CacheStats& stats) const;
 
   void touch() {
     accessStats_.touch();
@@ -280,6 +315,10 @@ class AsyncDataCacheEntry {
   void release();
   void addReference();
 
+  // Frees all data storage (non-contiguous, contiguous, and tiny) with
+  // cache page accounting and resets size to zero.
+  void freeData();
+
   // Moves the promise out of 'this'. Must be called inside the mutex of
   // 'shard_'.
   std::unique_ptr<folly::SharedPromise<bool>> movePromiseLocked() {
@@ -300,8 +339,12 @@ class AsyncDataCacheEntry {
 
   CacheShard* const shard_;
 
-  // The data being cached.
-  memory::Allocation data_;
+  // The data being cached (non-contiguous page runs).
+  memory::Allocation nonContiguousData_;
+
+  // Contiguous bytes allocated via allocateBytes (jemalloc). Populated when
+  // the entry is created with contiguous=true and size >= kTinyDataSize.
+  void* contiguousData_{nullptr};
 
   // Contains the cached data if this is much smaller than a MemoryAllocator
   // page (kTinyDataSize).
@@ -502,11 +545,11 @@ struct CacheStats {
 
   /// Total size in 'tinyData_'
   int64_t tinySize{0};
-  /// Total size in 'data_'
+  /// Total size in 'nonContiguousData_'
   int64_t largeSize{0};
   /// Unused capacity in 'tinyData_'.
   int64_t tinyPadding{0};
-  /// Unused capacity in 'data_'.
+  /// Unused capacity in 'nonContiguousData_'.
   int64_t largePadding{0};
   /// Total number of entries.
   int32_t numEntries{0};
@@ -568,6 +611,8 @@ struct CacheStats {
   std::string toString() const;
 };
 
+using AcquiredMemory = memory::AcquiredMemory;
+
 /// Collection of cache entries whose key hashes to the same shard of
 /// the hash number space.  The cache population is divided into shards
 /// to decrease contention on the mutex for the key to entry mapping
@@ -579,11 +624,13 @@ class CacheShard {
   CacheShard(AsyncDataCache* cache, double maxWriteRatio)
       : cache_(cache), maxWriteRatio_(maxWriteRatio) {}
 
-  /// See AsyncDataCache::findOrCreate.
+  /// See AsyncDataCache::findOrCreate. If 'contiguous' is true, the
+  /// entry's data is allocated as a single contiguous region.
   CachePin findOrCreate(
       RawFileCacheKey key,
       uint64_t size,
-      folly::SemiFuture<bool>* readyFuture);
+      bool contiguous = false,
+      folly::SemiFuture<bool>* readyFuture = nullptr);
 
   /// Finds a cache entry for 'key'. Returns a shared-mode pin if the entry
   /// exists and is not exclusive. Returns an empty pin (inside optional) if
@@ -617,15 +664,15 @@ class CacheShard {
   /// Removes 'bytesToFree' worth of entries or as many entries as are not
   /// pinned. This favors first removing older and less frequently used entries.
   /// If 'evictAllUnpinned' is true, anything that is not pinned is evicted at
-  /// first sight. This is for out of memory emergencies. If 'pagesToAcquire' is
-  /// set, up to this amount is added to 'allocation'. A smaller amount can be
-  /// added if not enough evictable data is found. The function returns the
-  /// total evicted bytes.
+  /// first sight. This is for out of memory emergencies. If
+  /// 'bytesToAcquire' is set, up to this amount of non-contiguous pages
+  /// is moved into 'acquired'. A smaller amount can be added if not enough
+  /// evictable data is found. The function returns the total evicted bytes.
   uint64_t evict(
       uint64_t bytesToFree,
       bool evictAllUnpinned,
-      memory::MachinePageCount pagesToAcquire,
-      memory::Allocation& acquiredAllocation);
+      uint64_t bytesToAcquire,
+      AcquiredMemory& acquired);
 
   /// Removes 'entry' from 'this'. Removes a possible promise from the entry
   /// inside the shard mutex and returns it so that it can be realized outside
@@ -673,7 +720,8 @@ class CacheShard {
   // already has the right amount of memory associated with it.
   std::unique_ptr<AsyncDataCacheEntry> getFreeEntryLocked();
 
-  CachePin initEntry(RawFileCacheKey key, AsyncDataCacheEntry* entry);
+  CachePin
+  initEntry(RawFileCacheKey key, bool contiguous, AsyncDataCacheEntry* entry);
 
   // Looks up 'key' in the cache under mutex_. 'size' is the minimum acceptable
   // entry size: pass 0 from find() to accept any size, or the required size
@@ -685,9 +733,19 @@ class CacheShard {
       uint64_t size,
       folly::SemiFuture<bool>* waitFuture);
 
-  void freeAllocations(std::vector<memory::Allocation>& allocations);
-
   void tryAddFreeEntry(std::unique_ptr<AsyncDataCacheEntry>&& entry);
+
+  // Acquires or frees evicted data from 'entry', including tiny data
+  // cleanup. If 'bytesToAcquire' > 0, moves data into 'acquired' and
+  // decrements 'bytesToAcquire'; otherwise moves data into 'toFree'.
+  // Increments 'largeEvicted' and 'tinyEvicted' accordingly.
+  void acquireEvictedData(
+      AsyncDataCacheEntry* entry,
+      uint64_t& bytesToAcquire,
+      AcquiredMemory& acquired,
+      AcquiredMemory& toFree,
+      int64_t& largeEvicted,
+      int64_t& tinyEvicted);
 
   AsyncDataCache* const cache_;
   const double maxWriteRatio_;
@@ -816,7 +874,7 @@ class AsyncDataCache : public memory::Cache {
   /// for memory arbitration to work.
   bool makeSpace(
       memory::MachinePageCount numPages,
-      std::function<bool(memory::Allocation& allocation)> allocate) override;
+      std::function<bool(memory::AcquiredMemory&)> allocate) override;
 
   uint64_t shrink(uint64_t targetBytes) override;
 
@@ -826,18 +884,21 @@ class AsyncDataCache : public memory::Cache {
 
   /// Finds or creates a cache entry corresponding to 'key'. The entry
   /// is returned in 'pin'. If the entry is new, it is pinned in
-  /// exclusive mode and its 'data_' has uninitialized space for at
-  /// least 'size' bytes. If the entry is in cache and already filled,
-  /// the pin is in shared mode.  If the entry is in exclusive mode for
-  /// some other pin, the pin is empty. If 'waitFuture' is not nullptr
-  /// and the pin is exclusive on some other pin, this is set to a
-  /// future that is realized when the pin is no longer exclusive. When
-  /// the future is realized, the caller may retry findOrCreate().
-  /// runtime error with code kNoCacheSpace if there is no space to create the
-  /// new entry after evicting any unpinned content.
+  /// exclusive mode and its data has uninitialized space for at least
+  /// 'size' bytes. If 'contiguous' is true, the data is allocated as a
+  /// single contiguous region; otherwise it is allocated as potentially
+  /// non-contiguous page runs. If the entry is in cache and already
+  /// filled, the pin is in shared mode. If the entry is in exclusive
+  /// mode for some other pin, the pin is empty. If 'waitFuture' is not
+  /// nullptr and the pin is exclusive on some other pin, this is set to
+  /// a future that is realized when the pin is no longer exclusive.
+  /// When the future is realized, the caller may retry findOrCreate().
+  /// runtime error with code kNoCacheSpace if there is no space to
+  /// create the new entry after evicting any unpinned content.
   CachePin findOrCreate(
       RawFileCacheKey key,
       uint64_t size,
+      bool contiguous = false,
       folly::SemiFuture<bool>* waitFuture = nullptr);
 
   /// Finds a cache entry for 'key'. Returns a shared-mode pin if the entry
@@ -873,9 +934,8 @@ class AsyncDataCache : public memory::Cache {
   /// and ssd cache. Otherwise, only returns the cache stats.
   std::string toString(bool details = true) const;
 
-  memory::MachinePageCount incrementCachedPages(int64_t pages) {
-    // The counter is unsigned and the increment is signed.
-    return cachedPages_.fetch_add(pages) + pages;
+  memory::MachinePageCount cachedPages() const {
+    return cachedPages_.load();
   }
 
   memory::MachinePageCount incrementPrefetchPages(int64_t pages) {
@@ -911,14 +971,16 @@ class AsyncDataCache : public memory::Cache {
   /// Looks up a pin for each in 'keys' and skips all loading or loaded pins.
   /// Calls processPin for each exclusive pin. processPin must move its argument
   /// if it wants to use it afterwards. sizeFunc(i) returns the size of the ith
-  /// item in 'keys'.
+  /// item in 'keys'. If 'contiguous' is true, new entries are allocated as
+  /// single contiguous regions instead of non-contiguous page runs.
   template <typename SizeFunc, typename ProcessPin>
   void makePins(
       const std::vector<RawFileCacheKey>& keys,
       const SizeFunc& sizeFunc,
-      const ProcessPin& processPin) {
+      const ProcessPin& processPin,
+      bool contiguous = false) {
     for (size_t i = 0; i < keys.size(); ++i) {
-      auto pin = findOrCreate(keys[i], sizeFunc(i), nullptr);
+      auto pin = findOrCreate(keys[i], sizeFunc(i), contiguous);
       if (pin.empty() || pin.checkedEntry()->isShared()) {
         continue;
       }
@@ -948,11 +1010,14 @@ class AsyncDataCache : public memory::Cache {
   void clear();
 
  private:
-  // True if 'acquired' has more pages than 'numPages' or allocator has space
-  // for numPages - acquired pages of more allocation.
-  bool canTryAllocate(
-      memory::MachinePageCount numPages,
-      const memory::Allocation& acquired) const;
+  // True if acquired bytes plus available allocator capacity is enough
+  // for 'requestBytes'.
+  bool canTryAllocate(uint64_t requestBytes, const AcquiredMemory& acquired)
+      const;
+
+  memory::MachinePageCount incrementCachedPages(int64_t pages) {
+    return cachedPages_.fetch_add(pages) + pages;
+  }
 
   static AsyncDataCache** getInstancePtr();
 
@@ -999,6 +1064,8 @@ class AsyncDataCache : public memory::Cache {
   // for setting staggered backoff. Mutexes are not allowed for this.
   std::atomic<int32_t> numThreadsInAllocate_{0};
 
+  friend class AsyncDataCacheEntry;
+  friend class CacheShard;
   friend class test::AsyncDataCacheTestHelper;
 };
 

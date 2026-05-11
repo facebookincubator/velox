@@ -625,5 +625,90 @@ for more details.
     For example, if the non-dissolved covering is [“00”, “01”, “02”, “03”, “10”],
     the dissolved covering would be [“0”, “10”]. Zoom levels from 0 to 23 are supported.
 
+S2 Cell Functions
+-----------------
+
+`S2 Geometry <http://s2geometry.io/>`_ is a library for spherical geometry that
+decomposes the Earth's surface into a hierarchy of cells. Unlike planar tiling
+systems (e.g., Bing Tiles), S2 cells have near-uniform area across all latitudes.
+
+Each cell is identified by a 64-bit **cell ID** (stored as ``BIGINT``), which
+encodes both the cell's position and level in the hierarchy. Cells are organized
+in 31 levels (0–30), where level 0 cells are the largest (covering roughly 1/6
+of Earth's surface) and level 30 cells are the smallest (sub-centimeter).
+
+Cells can also be represented as compact hexadecimal **tokens** (e.g.,
+``'8085808b'``), which are shorter and human-readable. Use
+``s2_cell_from_token`` and ``s2_cell_to_token`` to convert between the two
+representations.
+
+All functions operate on cell IDs (``BIGINT``) rather than tokens because cell
+IDs support direct integer comparison, efficient equi-joins and GROUP BY, and
+compose without casting (e.g., ``s2_cell_contains(s2_cell_parent(id, 10), id)``).
+Tokens are useful for human-readable output and interop with external systems
+that use the token format.
+
+
+.. function:: s2_cell_area_sq_km(cell_id: bigint) -> area: double
+
+    Returns the area of the S2 cell in square kilometers.
+    Returns an error if the cell ID is invalid.
+
+.. function:: s2_cell_contains(parent_cell_id: bigint, child_cell_id: bigint) -> boolean
+
+    Returns ``true`` if the first S2 cell contains the second. Containment is
+    hierarchical: a cell contains all of its descendants at finer levels.
+    Returns an error if either cell ID is invalid.
+
+.. function:: s2_cell_from_token(cell_token: varchar) -> cell_id: bigint
+
+    Returns the 64-bit S2 cell ID for the given cell token. The
+    ``cell_token`` is a compact hexadecimal representation of the S2 cell.
+    Returns an error if the cell token is invalid.
+
+.. function:: s2_cell_level(cell_id: bigint) -> level: integer
+
+    Returns the level of the S2 cell, from 0 (coarsest) to 30 (finest).
+    Returns an error if the cell ID is invalid.
+
+.. function:: s2_cell_parent(cell_id: bigint, level: integer) -> parent_id: bigint
+
+    Returns the parent S2 cell ID at the given ``level``. If the cell is
+    already at or above the given level, returns the same cell ID. The
+    ``level`` must be in the ``[0, 30]`` range. Returns an error if the cell
+    ID is invalid or the level is out of range.
+
+.. function:: s2_cell_to_token(cell_id: bigint) -> cell_token: varchar
+
+    Returns the compact hexadecimal token representation of the S2 cell.
+    Returns an error if the cell ID is invalid.
+
+.. function:: s2_cells(geometry: Geometry, level: integer) -> cell_ids: array(bigint)
+
+    Returns the set of S2 cell IDs that cover the given geometry at a fixed
+    ``level``. All returned cells are at the same level. Supports Point,
+    LineString, Polygon, and their Multi variants. Empty geometries return an
+    empty array, null geometries return null. The ``level`` must be in the
+    ``[0, 30]`` range.
+
+.. function:: s2_cells(geometry: Geometry, min_level: integer, max_level: integer, max_cells: integer) -> cell_ids: array(bigint)
+
+    Returns a compact set of S2 cell IDs at mixed levels that cover the given
+    geometry, similar to ``geometry_to_dissolved_bing_tiles``. The coverer uses
+    large cells (at ``min_level``) for interiors and small cells (up to
+    ``max_level``) for boundaries, targeting at most ``max_cells`` cells. This
+    is useful for compact spatial indexing of regions like cities or countries.
+    Both levels must be in the ``[0, 30]`` range with ``min_level <= max_level``,
+    and ``max_cells`` must be >= 1. Empty geometries return an empty array,
+    null geometries return null.
+
+    Note: ``max_cells`` is a soft limit. Up to 6 cells may be returned
+    regardless of ``max_cells`` if the region intersects multiple cube faces
+    of the S2 projection. ``min_level`` takes priority over ``max_cells`` —
+    cells below ``min_level`` are never used even if this causes more cells
+    to be returned. If ``max_cells`` is less than 4, the covering area may be
+    significantly larger than the original region. A value of 8 or higher is
+    recommended for a reasonable approximation.
+
 .. _OpenGIS Specifications: https://www.ogc.org/standards/ogcapi-features/
 .. _SQL/MM Part 3: Spatial: https://www.iso.org/standard/31369.html

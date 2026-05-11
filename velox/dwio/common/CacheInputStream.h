@@ -163,15 +163,15 @@ class CacheInputStream : public SeekableInputStream {
   // Handle of cache entry.
   cache::CachePin pin_;
 
-  // Offset of current run from start of 'entry_->data()'
+  // Offset of current run from start of 'entry_->nonContiguousData()'
   uint64_t offsetOfRun_;
 
-  // Pointer  to start of  current run in 'entry->data()' or
-  // 'entry->tinyData()'.
+  // Pointer to start of current run in 'entry->nonContiguousData()' or
+  // 'entry->contiguousData()'.
   uint8_t* run_{nullptr};
   // Position of stream relative to 'run_'.
   int offsetInRun_{0};
-  // Index of run in 'entry_->data()'
+  // Index of run in 'entry_->nonContiguousData()'
   int runIndex_ = -1;
   // Number of valid bytes above 'run_'.
   uint32_t runSize_ = 0;

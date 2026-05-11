@@ -16,6 +16,7 @@
 
 #include "velox/dwio/dwrf/reader/StripeStream.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/io/IoStatistics.h"
 #include "velox/dwio/common/Arena.h"
 #include "velox/dwio/common/encryption/TestProvider.h"
 #include "velox/dwio/dwrf/test/OrcTest.h"
@@ -138,6 +139,10 @@ class StripeStreamTest : public testing::TestWithParam<DwrfFormat> {
     MemoryManager::testingSetInstance(MemoryManager::Options{});
   }
   std::shared_ptr<MemoryPool> pool_{memoryManager()->addLeafPool()};
+  std::shared_ptr<facebook::velox::io::IoStatistics> dataIoStats_ =
+      std::make_shared<facebook::velox::io::IoStatistics>();
+  std::shared_ptr<facebook::velox::io::IoStatistics> metadataIoStats_ =
+      std::make_shared<facebook::velox::io::IoStatistics>();
 };
 
 class StripeStreamFormatTypeTest : public testing::TestWithParam<DwrfFormat> {
@@ -146,6 +151,10 @@ class StripeStreamFormatTypeTest : public testing::TestWithParam<DwrfFormat> {
     MemoryManager::testingSetInstance(MemoryManager::Options{});
   }
   std::shared_ptr<MemoryPool> pool_{memoryManager()->addLeafPool()};
+  std::shared_ptr<facebook::velox::io::IoStatistics> dataIoStats_ =
+      std::make_shared<facebook::velox::io::IoStatistics>();
+  std::shared_ptr<facebook::velox::io::IoStatistics> metadataIoStats_ =
+      std::make_shared<facebook::velox::io::IoStatistics>();
   DwrfFormat testParamDwrfFormat_ = GetParam();
 };
 
@@ -177,7 +186,10 @@ TEST_P(StripeStreamFormatTypeTest, planReads) {
           true),
       std::make_unique<PostScript>(proto::PostScript{}),
       footer,
-      nullptr);
+      nullptr,
+      nullptr,
+      dataIoStats_.get(),
+      metadataIoStats_.get());
   ColumnSelector cs{readerBase->schema(), std::vector<uint64_t>{2}, true};
 
   TestDecrypterFactory factory;
@@ -260,7 +272,10 @@ TEST_F(StripeStreamTest, filterSequences) {
       std::make_unique<BufferedInput>(std::move(is), *pool_),
       std::make_unique<PostScript>(proto::PostScript{}),
       footer,
-      nullptr);
+      nullptr,
+      nullptr,
+      dataIoStats_.get(),
+      metadataIoStats_.get());
 
   // mock a filter that we only need one node and one sequence
   ColumnSelector cs{readerBase->schema(), std::vector<std::string>{"a#[1]"}};
@@ -328,7 +343,10 @@ TEST_P(StripeStreamFormatTypeTest, zeroLength) {
       std::make_unique<BufferedInput>(std::move(is), *pool_),
       std::make_unique<PostScript>(std::move(ps)),
       footer,
-      nullptr);
+      nullptr,
+      nullptr,
+      dataIoStats_.get(),
+      metadataIoStats_.get());
 
   TestDecrypterFactory factory;
   auto handler = DecryptionHandler::create(FooterWrapper(footer), &factory);
@@ -462,7 +480,10 @@ TEST_P(StripeStreamFormatTypeTest, planReadsIndex) {
       std::make_unique<BufferedInput>(std::move(is), *pool_),
       std::make_unique<PostScript>(std::move(ps)),
       footer,
-      std::move(cache));
+      std::move(cache),
+      nullptr,
+      dataIoStats_.get(),
+      metadataIoStats_.get());
 
   TestDecrypterFactory factory;
   auto handler = DecryptionHandler::create(FooterWrapper(footer), &factory);
@@ -648,7 +669,9 @@ TEST_F(StripeStreamTest, readEncryptedStreams) {
       std::make_unique<PostScript>(std::move(ps)),
       footer,
       nullptr,
-      std::move(handler));
+      std::move(handler),
+      dataIoStats_.get(),
+      metadataIoStats_.get());
   auto stripeMetadata = std::make_unique<const StripeMetadata>(
       &readerBase->bufferedInput(),
       std::move(stripeFooter),
@@ -732,7 +755,9 @@ TEST_F(StripeStreamTest, schemaMismatch) {
       std::make_unique<PostScript>(std::move(ps)),
       footer,
       nullptr,
-      std::move(handler));
+      std::move(handler),
+      dataIoStats_.get(),
+      metadataIoStats_.get());
   auto stripeMetadata = std::make_unique<const StripeMetadata>(
       &readerBase->bufferedInput(),
       std::move(stripeFooter),

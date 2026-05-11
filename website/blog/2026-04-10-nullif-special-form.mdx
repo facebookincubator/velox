@@ -9,6 +9,8 @@ tags: [tech-blog, expressions]
 
 `NULLIF(a, b)` is a SQL standard function that returns NULL if `a` equals `b`, otherwise returns `a`. It's commonly used to avoid division by zero (`x / NULLIF(y, 0)`) or to convert sentinel values to NULLs.
 
+<!-- truncate -->
+
 ## The Naive Implementation
 
 The textbook rewrite is simple:

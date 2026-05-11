@@ -127,6 +127,17 @@ class TDigest {
   double trimmedMean(double lowerQuantileBound, double upperQuantileBound)
       const;
 
+  /// Calculate the Winsorized mean of the digest.
+  /// Values below the lower quantile are replaced with the lower boundary
+  /// value. Values above the upper quantile are replaced with the upper
+  /// boundary value. The mean is then computed on all N values:
+  ///   winsorizedMean = (trimmedSum + countLow * qLow + countHigh * qHigh) / N
+  /// @param lowerQuantileBound Lower quantile bound in [0, 1].
+  /// @param upperQuantileBound Upper quantile bound in [0, 1].
+  /// @return The Winsorized mean of the digest.
+  double winsorizedMean(double lowerQuantileBound, double upperQuantileBound)
+      const;
+
   /// Returns the compression parameter.
   double compression() const {
     return compression_;
@@ -168,6 +179,13 @@ class TDigest {
   static constexpr double kRelativeErrorEpsilon = 1e-4;
 
  private:
+  // Compute the weighted sum and weight of centroids overlapping the index
+  // range [lowerIndex, upperIndex]. Used by both trimmedMean and
+  // winsorizedMean.
+  std::pair<double, double> computeWeightedSumInBounds(
+      double lowerIndex,
+      double upperIndex) const;
+
   void mergeNewValues(std::vector<int16_t>& positions, double compression);
   void merge(
       double compression,
@@ -381,8 +399,15 @@ double TDigest<A>::estimateQuantile(double quantile) const {
   // If the right-most centroid has more than one sample, we still know that one
   // sample occurred at max so we can do some interpolation.
   if (weights_.back() > 1 && totalWeightVal - index <= weights_.back() / 2) {
+    auto halfWeight = weights_.back() / 2;
+    if (halfWeight <= 1) {
+      // When the last centroid has weight <= 2, the interpolation denominator
+      // (halfWeight - 1) is zero or negative. Return max_ since we are at or
+      // past the boundary between the last centroid and max_.
+      return max_;
+    }
     return max_ -
-        (totalWeightVal - index - 1) / (weights_.back() / 2 - 1) *
+        (totalWeightVal - index - 1) / (halfWeight - 1) *
         (max_ - means_.back());
   }
   // In between extremes we interpolate between centroids.
@@ -701,6 +726,36 @@ double TDigest<A>::sum() const {
 }
 
 template <typename A>
+std::pair<double, double> TDigest<A>::computeWeightedSumInBounds(
+    double lowerIndex,
+    double upperIndex) const {
+  double weightSoFar{0};
+  double sumInBounds{0};
+  double weightInBounds{0};
+
+  for (size_t i = 0; i < weights_.size(); i++) {
+    double centroidStart{weightSoFar};
+    if (centroidStart >= upperIndex) {
+      break;
+    }
+    double centroidEnd{weightSoFar + weights_[i]};
+
+    double overlapStart{std::max(centroidStart, lowerIndex)};
+    double overlapEnd{std::min(centroidEnd, upperIndex)};
+
+    if (overlapStart < overlapEnd) {
+      double overlap{overlapEnd - overlapStart};
+      sumInBounds += means_[i] * overlap;
+      weightInBounds += overlap;
+    }
+
+    weightSoFar = centroidEnd;
+  }
+
+  return {sumInBounds, weightInBounds};
+}
+
+template <typename A>
 double TDigest<A>::trimmedMean(
     double lowerQuantileBound,
     double upperQuantileBound) const {
@@ -718,53 +773,74 @@ double TDigest<A>::trimmedMean(
     return std::numeric_limits<double>::quiet_NaN();
   }
 
-  // Special case for full range
   if (lowerQuantileBound == 0 && upperQuantileBound == 1) {
     return sum() / totalWeight();
   }
 
-  // Calculate the trimmed mean
-  double totalWeightVal = totalWeight();
-  double lowerIndex = lowerQuantileBound * totalWeightVal;
-  double upperIndex = upperQuantileBound * totalWeightVal;
+  double totalWeightVal{totalWeight()};
+  double lowerIndex{lowerQuantileBound * totalWeightVal};
+  double upperIndex{upperQuantileBound * totalWeightVal};
 
-  double weightSoFar = 0;
-  double sumInBounds = 0;
-  double weightInBounds = 0;
+  auto [sumInBounds, weightInBounds] =
+      computeWeightedSumInBounds(lowerIndex, upperIndex);
 
-  for (size_t i = 0; i < weights_.size(); i++) {
-    // Check if lower and upper bounds are in the same weight interval
-    if (weightSoFar < lowerIndex && (lowerIndex - weightSoFar) <= weights_[i] &&
-        (upperIndex - weightSoFar) <= weights_[i]) {
-      return means_[i];
-    }
-    // Check if the lower bound is between our current point and the next point
-    else if (
-        weightSoFar < lowerIndex && (lowerIndex - weightSoFar) <= weights_[i]) {
-      double addedWeight = weightSoFar + weights_[i] - lowerIndex;
-      sumInBounds += means_[i] * addedWeight;
-      weightInBounds += addedWeight;
-    }
-    // Check if the upper bound is between our current point and the next point
-    else if (
-        upperIndex > weightSoFar && upperIndex - weightSoFar <= weights_[i]) {
-      double addedWeight = upperIndex - weightSoFar;
-      sumInBounds += means_[i] * addedWeight;
-      weightInBounds += addedWeight;
-      return sumInBounds / weightInBounds;
-    }
-    // Check if we are somewhere in between the lower and upper bounds
-    else if (lowerIndex <= weightSoFar && weightSoFar <= upperIndex) {
-      sumInBounds += means_[i] * weights_[i];
-      weightInBounds += weights_[i];
-    }
-    weightSoFar += weights_[i];
-  }
   if (weightInBounds > 0) {
     return sumInBounds / weightInBounds;
   }
-
   return std::numeric_limits<double>::quiet_NaN();
+}
+
+template <typename A>
+double TDigest<A>::winsorizedMean(
+    double lowerQuantileBound,
+    double upperQuantileBound) const {
+  VELOX_CHECK_GE(lowerQuantileBound, 0.0, "Lower quantile bound must be >= 0");
+  VELOX_CHECK_LE(lowerQuantileBound, 1.0, "Lower quantile bound must be <= 1");
+  VELOX_CHECK_GE(upperQuantileBound, 0.0, "Upper quantile bound must be >= 0");
+  VELOX_CHECK_LE(upperQuantileBound, 1.0, "Upper quantile bound must be <= 1");
+  VELOX_CHECK_LE(
+      lowerQuantileBound,
+      upperQuantileBound,
+      "Lower quantile bound must be less than or equal to upper quantile bound");
+
+  if (weights_.size() == 0) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+
+  if (lowerQuantileBound == 0 && upperQuantileBound == 1) {
+    return sum() / totalWeight();
+  }
+
+  double totalWeightVal{totalWeight()};
+  double lowerIndex{lowerQuantileBound * totalWeightVal};
+  double upperIndex{upperQuantileBound * totalWeightVal};
+
+  // Note: estimateQuantile() uses half-weight interpolation within each
+  // centroid, while the centroid walk below uses raw weight boundaries.
+  // This is a known approximation inherent to the TDigest sketch — the
+  // boundary values and weight partitioning operate under subtly different
+  // geometric assumptions, but the error is bounded by the centroid size
+  // at the tails, which is small by design.
+
+  auto [sumInBounds, weightInBounds] =
+      computeWeightedSumInBounds(lowerIndex, upperIndex);
+
+  // Replace tails with boundary values instead of discarding them.
+  double lowerTailWeight{lowerIndex};
+  double upperTailWeight{totalWeightVal - upperIndex};
+
+  // Guard: skip estimateQuantile when tail weight is zero to avoid
+  // 0 * NaN/Inf = NaN from floating-point edge cases.
+  double lowerContrib{
+      lowerTailWeight > 0
+          ? lowerTailWeight * estimateQuantile(lowerQuantileBound)
+          : 0.0};
+  double upperContrib{
+      upperTailWeight > 0
+          ? upperTailWeight * estimateQuantile(upperQuantileBound)
+          : 0.0};
+
+  return (sumInBounds + lowerContrib + upperContrib) / totalWeightVal;
 }
 
 } // namespace facebook::velox::functions

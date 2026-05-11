@@ -30,12 +30,12 @@
 #include <fmt/format.h>
 #include <folly/Indestructible.h>
 #include <folly/String.h>
-#include <folly/experimental/symbolizer/StackTrace.h>
+#include <folly/debugging/symbolizer/StackTrace.h>
 
 #include "velox/common/process/ProcessBase.h"
 
 #ifdef __linux__
-#include <folly/experimental/symbolizer/Symbolizer.h> // @manual
+#include <folly/debugging/symbolizer/Symbolizer.h> // @manual
 #include <folly/fibers/FiberManager.h> // @manual
 #endif
 

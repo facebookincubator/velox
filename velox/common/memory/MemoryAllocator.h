@@ -140,23 +140,42 @@ struct Stats {
 
 class MemoryAllocator;
 
+/// Memory collected from evicted cache entries. Non-contiguous page
+/// allocations and contiguous byte allocations are tracked separately so they
+/// can be freed back to the allocator before retrying allocation.
+struct AcquiredMemory {
+  Allocation nonContiguous;
+  std::vector<std::pair<void*, uint64_t>> contiguous;
+
+  uint64_t totalBytes() const {
+    uint64_t bytes = nonContiguous.byteSize();
+    for (const auto& [_, size] : contiguous) {
+      bytes += size;
+    }
+    return bytes;
+  }
+
+  void free(MemoryAllocator* allocator);
+
+  bool empty() const {
+    return nonContiguous.empty() && contiguous.empty();
+  }
+};
+
 /// A general cache interface using 'MemoryAllocator' to allocate memory, that
 /// is also able to free up memory upon request by shrinking itself.
 class Cache {
  public:
   virtual ~Cache() = default;
 
-  /// This method should be implemented so that it tries to
-  /// accommodate the passed in 'allocate' by freeing up space from
-  /// 'this' if needed. 'numPages' is the number of pages 'allocate
-  /// needs to be free for allocate to succeed. This should return
-  /// true if 'allocate' succeeds, and false otherwise. 'numPages' can
-  /// be less than the planned allocation, even 0 but not
-  /// negative. This is possible if 'allocate' brings its own memory
-  /// that is exchanged for the new allocation.
+  /// Tries to accommodate 'allocate' by freeing up space from 'this'
+  /// if needed. 'numPages' is the number of pages 'allocate' needs to
+  /// be free to succeed. Returns true if 'allocate' succeeds.
+  /// 'allocate' receives an 'AcquiredMemory' containing evicted memory
+  /// that should be freed before retrying allocation.
   virtual bool makeSpace(
       memory::MachinePageCount numPages,
-      std::function<bool(Allocation&)> allocate) = 0;
+      std::function<bool(AcquiredMemory&)> allocate) = 0;
 
   /// This method is implemented to shrink the cache space with the specified
   /// 'targetBytes'. The method returns the actually freed cache space in bytes.

@@ -17,6 +17,7 @@ velox_add_library(
   ApproxDistinctAggregate.cpp
   ApproxMostFrequentAggregate.cpp
   ApproxPercentileAggregate.cpp
+  ApproxWinsorizedMeanAggregate.cpp
   ArbitraryAggregate.cpp
   ArrayAggAggregate.cpp
   AverageAggregate.cpp
@@ -113,6 +114,7 @@ velox_add_library(
   SetDigestAggregate.h
   SumAggregate.h
   SumDataSizeForStatsAggregate.h
+  TDigestAccumulator.h
   VarianceAggregates.h
   VectorSumAggregate.h
 )
@@ -132,9 +134,10 @@ velox_link_libraries(
   Folly::folly
 )
 
-if(${VELOX_ENABLE_GEO})
+if(VELOX_ENABLE_GEO)
   velox_sources(velox_aggregates PRIVATE GeometryAggregate.cpp)
   velox_link_libraries(velox_aggregates velox_functions_geo)
+  velox_compile_definitions(velox_aggregates PRIVATE VELOX_ENABLE_GEO)
 endif()
 
 if(${VELOX_BUILD_TESTING})

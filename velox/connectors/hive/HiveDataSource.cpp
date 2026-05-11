@@ -144,7 +144,8 @@ std::unique_ptr<FileSplitReader> HiveDataSource::createSplitReader() {
       connectorQueryCtx_,
       fileConfig_,
       readerOutputType_,
-      ioStatistics_,
+      dataIoStats_,
+      metadataIoStats_,
       ioStats_,
       fileHandleFactory_,
       ioExecutor_,
@@ -196,7 +197,7 @@ std::shared_ptr<wave::WaveDataSource> HiveDataSource::toWaveDataSource() {
         ioExecutor_,
         connectorQueryCtx_,
         hiveConfig_,
-        ioStatistics_,
+        dataIoStats_,
         remainingFilterExprSet(),
         metadataFilter());
   }

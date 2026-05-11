@@ -1151,6 +1151,17 @@ class QueryConfig {
       false,
       "Disable dictionary peeling optimization in expression evaluation.")
 
+  /// Minimum number of rows in the selectivity vector for peeling to be
+  /// applied during expression evaluation. For small batches, the overhead of
+  /// peeling can outweigh the benefits.
+  VELOX_QUERY_CONFIG(
+      kMinRowsForPeeling,
+      minRowsForPeeling,
+      "expression.min_rows_for_peeling",
+      int32_t,
+      0,
+      "Minimum number of rows to process for peeling optimization in expression evaluation to be active.");
+
   /// Disable optimization in expression evaluation to re-use cached results for
   /// common sub-expressions.
   VELOX_QUERY_CONFIG(
@@ -1295,6 +1306,15 @@ class QueryConfig {
       std::string,
       "none",
       "Compression codec for shuffle data.")
+
+  /// Minimum serialized page size in bytes to attempt shuffle compression.
+  VELOX_QUERY_CONFIG(
+      kMinShuffleCompressionPageSizeBytes,
+      minShuffleCompressionPageSizeBytes,
+      "min_shuffle_compression_page_size_bytes",
+      int32_t,
+      0,
+      "Minimum serialized page size in bytes to attempt shuffle compression.")
 
   /// When true, throw exception on duplicate map key.
   VELOX_QUERY_CONFIG(

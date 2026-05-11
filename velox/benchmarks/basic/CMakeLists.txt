@@ -126,3 +126,12 @@ target_link_libraries(
   velox_functions_prestosql
   velox_row_fast
 )
+
+add_executable(velox_date_extract_benchmark DateExtractBenchmark.cpp)
+target_link_libraries(
+  velox_date_extract_benchmark
+  ${velox_benchmark_deps}
+  velox_vector_test_lib
+  velox_functions_prestosql
+  velox_functions_spark
+)

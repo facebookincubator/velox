@@ -764,3 +764,128 @@ TEST(DuckParserTest, lambda) {
       parseExpr("filter(a, if (b > 0, x -> (x = 10), x -> (x = 20)))")
           ->toString());
 }
+
+TEST(DuckParserTest, arrayLiteral) {
+  {
+    auto expr = parseExpr("ARRAY[1, 2, 3]");
+    EXPECT_TRUE(expr->is(core::IExpr::Kind::kConstant));
+    VELOX_EXPECT_EQ_TYPES(
+        expr->as<core::ConstantExpr>()->type(), ARRAY(BIGINT()));
+    EXPECT_EQ("{1, 2, 3}", expr->toString());
+  }
+
+  {
+    auto expr = parseExpr("[1, 2, 3]");
+    EXPECT_TRUE(expr->is(core::IExpr::Kind::kConstant));
+    VELOX_EXPECT_EQ_TYPES(
+        expr->as<core::ConstantExpr>()->type(), ARRAY(BIGINT()));
+    EXPECT_EQ("{1, 2, 3}", expr->toString());
+  }
+
+  // Array with null elements.
+  {
+    auto expr = parseExpr("[1, null, 3]");
+    EXPECT_TRUE(expr->is(core::IExpr::Kind::kConstant));
+    VELOX_EXPECT_EQ_TYPES(
+        expr->as<core::ConstantExpr>()->type(), ARRAY(BIGINT()));
+    EXPECT_EQ("{1, null, 3}", expr->toString());
+  }
+
+  // All-null array.
+  {
+    auto expr = parseExpr("[null, null]");
+    EXPECT_TRUE(expr->is(core::IExpr::Kind::kConstant));
+    VELOX_EXPECT_EQ_TYPES(
+        expr->as<core::ConstantExpr>()->type(), ARRAY(UNKNOWN()));
+    EXPECT_EQ("{null, null}", expr->toString());
+  }
+
+  // Empty array.
+  {
+    auto expr = parseExpr("[]");
+    EXPECT_TRUE(expr->is(core::IExpr::Kind::kConstant));
+    VELOX_EXPECT_EQ_TYPES(
+        expr->as<core::ConstantExpr>()->type(), ARRAY(UNKNOWN()));
+    EXPECT_EQ("<empty>", expr->toString());
+  }
+
+  // Nested array.
+  {
+    auto expr = parseExpr("[[1, 2], [3, 4]]");
+    EXPECT_TRUE(expr->is(core::IExpr::Kind::kConstant));
+    VELOX_EXPECT_EQ_TYPES(
+        expr->as<core::ConstantExpr>()->type(), ARRAY(ARRAY(BIGINT())));
+    EXPECT_EQ("{{1, 2}, {3, 4}}", expr->toString());
+  }
+
+  // Non-constant argument stays a function call.
+  {
+    auto expr = parseExpr("[a, 1, 2]");
+    EXPECT_TRUE(expr->is(core::IExpr::Kind::kCall));
+    EXPECT_EQ("list_value(\"a\",1,2)", expr->toString());
+  }
+}
+
+TEST(DuckParserTest, structLiteral) {
+  // {'x': 1, 'y': 2} becomes a ROW constant with named fields.
+  {
+    auto expr = parseExpr("{'x': 1, 'y': 2}");
+    EXPECT_TRUE(expr->is(core::IExpr::Kind::kConstant));
+    VELOX_EXPECT_EQ_TYPES(
+        expr->as<core::ConstantExpr>()->type(),
+        ROW({"x", "y"}, {BIGINT(), BIGINT()}));
+    EXPECT_EQ("{1, 2}", expr->toString());
+  }
+
+  // ROW(1, 2) becomes a ROW constant with unnamed fields.
+  {
+    auto expr = parseExpr("ROW(1, 2)");
+    EXPECT_TRUE(expr->is(core::IExpr::Kind::kConstant));
+    VELOX_EXPECT_EQ_TYPES(
+        expr->as<core::ConstantExpr>()->type(), ROW({"", ""}, BIGINT()));
+    EXPECT_EQ("{1, 2}", expr->toString());
+  }
+
+  // ROW(a, 2) with a non-constant argument stays a function call.
+  {
+    auto expr = parseExpr("ROW(a, 2)");
+    EXPECT_TRUE(expr->is(core::IExpr::Kind::kCall));
+    EXPECT_EQ("row(\"a\",2)", expr->toString());
+  }
+
+  // ROW(1, 2)::struct(x bigint, y bigint) becomes a named ROW constant.
+  {
+    auto expr = parseExpr("ROW(1, 2)::struct(x bigint, y bigint)");
+    EXPECT_TRUE(expr->is(core::IExpr::Kind::kConstant));
+    VELOX_EXPECT_EQ_TYPES(
+        expr->as<core::ConstantExpr>()->type(), ROW({"x", "y"}, BIGINT()));
+    EXPECT_EQ("{1, 2}", expr->toString());
+  }
+
+  // ROW(1, 2)::struct(x varchar, y bigint) with mismatched child types stays a
+  // cast.
+  {
+    auto expr = parseExpr("ROW(1, 2)::struct(x varchar, y bigint)");
+    EXPECT_TRUE(expr->is(core::IExpr::Kind::kCast));
+    EXPECT_EQ("cast({1, 2} as ROW<x:VARCHAR,y:BIGINT>)", expr->toString());
+  }
+}
+
+TEST(DuckParserTest, dateLiteral) {
+  for (const auto& sql : {"'1994-01-01'::date", "DATE '1994-01-01'"}) {
+    SCOPED_TRACE(sql);
+    auto expr = parseExpr(sql);
+    EXPECT_TRUE(expr->is(core::IExpr::Kind::kConstant));
+
+    auto* constant = expr->as<core::ConstantExpr>();
+    EXPECT_EQ(*constant->type(), *DATE());
+    EXPECT_EQ(constant->value().value<int32_t>(), DATE()->toDays("1994-01-01"));
+
+    EXPECT_EQ("1994-01-01", expr->toString());
+  }
+
+  // Invalid date string.
+  VELOX_ASSERT_THROW(
+      parseExpr("DATE 'not-a-date'"),
+      "Unable to parse date value: \"not-a-date\"");
+}

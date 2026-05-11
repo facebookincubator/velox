@@ -125,6 +125,39 @@ class HiveIndexSource : public IndexSource,
   // Creates a FileIndexReader for a single split.
   void createFileIndexReader(std::shared_ptr<const HiveConnectorSplit> split);
 
+  // Per-iteration timing breakdown for index lookups.
+  struct IterationStats {
+    uint64_t setupWallNs{0};
+    uint64_t setupCpuNs{0};
+    uint64_t readWallNs{0};
+    uint64_t readCpuNs{0};
+    uint64_t outputWallNs{0};
+    uint64_t outputCpuNs{0};
+    uint64_t filterWallNs{0};
+    uint64_t filterCpuNs{0};
+
+    static constexpr std::string_view kConnectorLookupWallNanos{
+        "connectorLookupWallNanos"};
+    static constexpr std::string_view kConnectorResultPrepareCpuNanos{
+        "connectorResultPrepareCpuNanos"};
+    static constexpr std::string_view kIndexSetupWallNanos{
+        "connectorIndexSetupWallNanos"};
+    static constexpr std::string_view kIndexSetupCpuNanos{
+        "connectorIndexSetupCpuNanos"};
+    static constexpr std::string_view kIndexReadWallNanos{
+        "connectorIndexReadWallNanos"};
+    static constexpr std::string_view kIndexReadCpuNanos{
+        "connectorIndexReadCpuNanos"};
+    static constexpr std::string_view kPostFilterWallNanos{
+        "connectorPostFilterWallNanos"};
+    static constexpr std::string_view kPostFilterCpuNanos{
+        "connectorPostFilterCpuNanos"};
+  };
+
+  // Records per-iteration timing breakdown using addOperatorRuntimeStats to
+  // preserve per-call count/min/max granularity.
+  void recordIterationStats(const IterationStats& iterationStats);
+
   FileHandleFactory* const fileHandleFactory_;
   ConnectorQueryCtx* const connectorQueryCtx_;
   const std::shared_ptr<HiveConfig> hiveConfig_;
@@ -183,6 +216,9 @@ class HiveIndexSource : public IndexSource,
 
   std::shared_ptr<io::IoStatistics> ioStatistics_;
   std::shared_ptr<IoStats> ioStats_;
+
+  // Per-call timing stats accumulated via addOperatorRuntimeStats().
+  std::unordered_map<std::string, RuntimeMetric> runtimeStats_;
 };
 
 } // namespace facebook::velox::connector::hive

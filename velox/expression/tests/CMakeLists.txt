@@ -37,6 +37,7 @@ add_executable(
   Main.cpp
   MapViewTest.cpp
   MapWriterTest.cpp
+  NullIfExprTest.cpp
   PeeledEncodingTest.cpp
   ReverseSignatureBinderTest.cpp
   RowViewTest.cpp

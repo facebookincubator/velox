@@ -31,7 +31,44 @@ BINARY=$3
 shift 3
 
 PIDS=()
+SEEDS=()
 FAILED=0
+
+dump_instance() {
+  local idx=$1
+  echo "=== Instance ${idx} stdout (last 200 lines) ==="
+  tail -200 "${REPRO_BASE}/instance_${idx}/stdout.log" 2>/dev/null ||
+    echo "(no stdout.log)"
+  echo "=== End instance ${idx} ==="
+}
+
+# When the GH Actions step timeout fires it sends SIGTERM. Without this trap
+# `wait` blocks indefinitely, the per-instance stdout is never surfaced, and
+# the only signal in the job log is "context canceled" with no diagnostics.
+on_signal() {
+  local sig=$1
+  echo "::warning::run-fuzzer-parallel.sh received ${sig}; dumping per-instance state"
+  for i in "${!PIDS[@]}"; do
+    local idx=$((i + 1))
+    local pid=${PIDS[$i]}
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "::error::Instance ${idx} (PID ${pid}, seed=${SEEDS[$i]}) still running at ${sig}; sending SIGTERM"
+      kill -TERM "$pid" 2>/dev/null || true
+    fi
+  done
+  sleep 5
+  for i in "${!PIDS[@]}"; do
+    local idx=$((i + 1))
+    local pid=${PIDS[$i]}
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
+    dump_instance "$idx"
+  done
+  exit 124
+}
+trap 'on_signal SIGTERM' TERM
+trap 'on_signal SIGINT' INT
 
 for i in $(seq 1 "$NUM_INSTANCES"); do
   REPRO_DIR="${REPRO_BASE}/instance_${i}"
@@ -52,6 +89,7 @@ for i in $(seq 1 "$NUM_INSTANCES"); do
   echo "Starting instance ${i}: seed=${SEED}, repro=${REPRO_DIR}"
   "$BINARY" "${INSTANCE_ARGS[@]}" >"${REPRO_DIR}/stdout.log" 2>&1 &
   PIDS+=($!)
+  SEEDS+=("$SEED")
 done
 
 echo "Waiting for ${NUM_INSTANCES} instances to complete..."
@@ -59,13 +97,11 @@ echo "Waiting for ${NUM_INSTANCES} instances to complete..."
 for i in "${!PIDS[@]}"; do
   IDX=$((i + 1))
   if ! wait "${PIDS[$i]}"; then
-    echo "::error::Fuzzer instance ${IDX} FAILED (PID ${PIDS[$i]})"
-    echo "=== Instance ${IDX} stdout (last 100 lines) ==="
-    tail -100 "${REPRO_BASE}/instance_${IDX}/stdout.log" || true
-    echo "=== End instance ${IDX} ==="
+    echo "::error::Fuzzer instance ${IDX} FAILED (PID ${PIDS[$i]}, seed=${SEEDS[$i]})"
+    dump_instance "$IDX"
     FAILED=$((FAILED + 1))
   else
-    echo "Instance ${IDX} passed"
+    echo "Instance ${IDX} passed (seed=${SEEDS[$i]})"
   fi
 done
 

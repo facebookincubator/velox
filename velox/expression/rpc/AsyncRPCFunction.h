@@ -141,11 +141,18 @@ class AsyncRPCFunction {
   /// The function builds the typed batch request from its internal
   /// accumulated state and dispatches it.
   ///
-  /// Returns responses for ALL accumulated rows. Null rows get
+  /// @param maxRows Maximum number of rows to flush. 0 means flush all.
+  /// Returns responses for the flushed rows. Null rows get
   /// RPCResponse{.error = "null_input"}. This keeps the operator
   /// completely agnostic to null handling in batch mode.
-  virtual folly::SemiFuture<std::vector<RPCResponse>> flushBatch() {
+  virtual folly::SemiFuture<std::vector<RPCResponse>> flushBatch(
+      int32_t /*maxRows*/) {
     VELOX_UNSUPPORTED("flushBatch() not implemented for function '{}'", name());
+  }
+
+  /// Convenience overload: flush all accumulated rows.
+  virtual folly::SemiFuture<std::vector<RPCResponse>> flushBatch() {
+    return flushBatch(0);
   }
 
   /// Number of rows accumulated so far (for threshold checks).
@@ -176,6 +183,35 @@ class AsyncRPCFunction {
       }
     }
     return result;
+  }
+
+  // ── Congestion Control ───────────────────────────────────────
+
+  /// Signal returned by evaluateCongestion() to indicate batch health.
+  enum class CongestionSignal {
+    /// Batch completed successfully — increase concurrency window.
+    kSuccess,
+    /// Batch had errors — decrease concurrency window.
+    kError,
+    /// No congestion evaluation — skip window adjustment.
+    kNone,
+  };
+
+  /// Evaluate batch congestion from completed responses.
+  /// Called by RPCOperator after a BATCH-mode batch completes.
+  /// The function inspects responses and returns a signal that the
+  /// operator maps to window adjustments (additive increase on
+  /// kSuccess, multiplicative decrease on kError).
+  /// Default: kNone (no congestion control).
+  virtual CongestionSignal evaluateCongestion(
+      const std::vector<RPCResponse>& /*responses*/) const {
+    return CongestionSignal::kNone;
+  }
+
+  /// How much to increase the concurrency window on kSuccess.
+  /// Override to tune recovery speed per client. Default: 2.
+  virtual int64_t congestionRecoveryIncrement() const {
+    return 2;
   }
 };
 

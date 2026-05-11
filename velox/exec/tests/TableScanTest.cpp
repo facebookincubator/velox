@@ -6301,7 +6301,10 @@ TEST_F(TableScanTest, textfileEscape) {
   auto it = planStats.find(scanNodeId);
   ASSERT_TRUE(it != planStats.end());
   auto rawInputBytes = it->second.rawInputBytes;
-  auto overreadBytes = getTableScanRuntimeStats(task).at("overreadBytes").sum;
+  auto runtimeStats = getTableScanRuntimeStats(task);
+  auto overreadIt = runtimeStats.find("overreadBytes");
+  const int64_t overreadBytes =
+      overreadIt != runtimeStats.end() ? overreadIt->second.sum : 0;
 
   ASSERT_EQ(rawInputBytes, 11);
   ASSERT_EQ(overreadBytes, 0);

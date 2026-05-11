@@ -178,6 +178,7 @@ bool equalKeys(
 } // namespace
 
 void GroupingSet::addInput(const RowVectorPtr& input, bool mayPushdown) {
+  drainedNewGroups_ = {};
   if (isGlobal_) {
     addGlobalAggregationInput(input, mayPushdown);
     return;
@@ -211,6 +212,7 @@ void GroupingSet::addInput(const RowVectorPtr& input, bool mayPushdown) {
 }
 
 void GroupingSet::noMoreInput() {
+  drainedNewGroups_ = {};
   noMoreInput_ = true;
 
   if (remainingInput_) {
@@ -358,6 +360,23 @@ void GroupingSet::addRemainingInput() {
   activeRows_.updateBounds();
 
   addInputForActiveRows(remainingInput_, remainingMayPushdown_);
+
+  if (isDistinct() && !preGroupedKeyChannels_.empty()) {
+    // Pre-grouped distinct aggregation does not currently spill
+    // (AggregationNode::canSpill returns false when preGroupedKeys is
+    // non-empty; see velox#3264). The captured row pointers below
+    // reference table_->rows() and would dangle after table_->clear() in
+    // any spill path. If spill becomes enabled here, restore a
+    // materialize-before-clear path or otherwise preserve these rows.
+    VELOX_CHECK(!hasSpilled());
+    const auto& newGroups = lookup_->newGroups;
+    drainedNewGroups_.clear();
+    drainedNewGroups_.reserve(newGroups.size());
+    for (auto idx : newGroups) {
+      drainedNewGroups_.push_back(lookup_->hits[idx]);
+    }
+  }
+
   remainingInput_.reset();
 }
 
@@ -851,6 +870,30 @@ void GroupingSet::extractGroups(
       aggregation->extractValues(groups, result);
     }
   }
+}
+
+bool GroupingSet::hasDrainedNewGroups() const {
+  return !drainedNewGroups_.empty();
+}
+
+vector_size_t GroupingSet::drainedNewGroupsCount() const {
+  return static_cast<vector_size_t>(drainedNewGroups_.size());
+}
+
+void GroupingSet::extractDrainedNewGroups(const RowVectorPtr& result) {
+  VELOX_CHECK(isDistinct());
+  VELOX_DCHECK(!drainedNewGroups_.empty());
+  result->resize(drainedNewGroups_.size());
+  auto* rowContainer = table_->rows();
+  for (vector_size_t i = 0; i < result->childrenSize(); ++i) {
+    auto& keyVector = result->childAt(i);
+    rowContainer->extractColumn(
+        drainedNewGroups_.data(),
+        drainedNewGroups_.size(),
+        groupingKeyOutputProjections_[i],
+        keyVector);
+  }
+  drainedNewGroups_.clear();
 }
 
 void GroupingSet::resetTable(bool freeTable) {

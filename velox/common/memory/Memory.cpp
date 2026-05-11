@@ -386,23 +386,23 @@ std::string MemoryManager::toString(bool detail) const {
                                           : succinctBytes(allocatorCapacity))
       << " alignment " << succinctBytes(alignment_) << " usedBytes "
       << succinctBytes(getTotalBytes()) << " number of pools " << numPools()
-      << "\n";
+      << '\n';
   out << "List of root pools:\n";
   if (detail) {
     out << sysRoot_->treeMemoryUsage(false);
   } else {
-    out << "\t" << sysRoot_->name() << "\n";
+    out << '\t' << sysRoot_->name() << '\n';
   }
   std::vector<std::shared_ptr<MemoryPool>> pools = getAlivePools();
   for (const auto& pool : pools) {
     if (detail) {
       out << pool->treeMemoryUsage(false);
     } else {
-      out << "\t" << pool->name() << "\n";
+      out << '\t' << pool->name() << '\n';
     }
-    out << "\trefcount " << pool.use_count() << "\n";
+    out << "\trefcount " << pool.use_count() << '\n';
   }
-  out << allocator_->toString() << "\n";
+  out << allocator_->toString() << '\n';
   out << arbitrator_->toString();
   out << "]";
   return out.str();

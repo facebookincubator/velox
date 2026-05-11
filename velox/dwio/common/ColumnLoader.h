@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/common/SelectiveStructColumnReader.h"
 #include "velox/vector/LazyVector.h"
 
@@ -50,6 +51,34 @@ class ColumnLoader : public VectorLoader {
   // these differ, 'structReader' has been advanced since the creation
   // of 'this' and 'this' is no longer loadable.
   const uint64_t version_;
+};
+
+/// Wraps a ColumnLoader and applies a post-read transform when the lazy
+/// vector is loaded.  Used for mixed extraction transforms where the reader
+/// produces the file type and the transform converts to the extraction
+/// output type (e.g., MAP → ROW<keys, sz> for MapKeys + Size extractions).
+class TransformColumnLoader : public ColumnLoader {
+ public:
+  TransformColumnLoader(
+      SelectiveStructColumnReaderBase* structReader,
+      SelectiveColumnReader* fieldReader,
+      uint64_t version,
+      common::ScanSpec::VectorTransform transform)
+      : ColumnLoader(structReader, fieldReader, version),
+        transform_(std::move(transform)) {}
+
+  bool supportsHook() const override {
+    return false;
+  }
+
+ private:
+  void loadInternal(
+      RowSet rows,
+      ValueHook* hook,
+      vector_size_t resultSize,
+      VectorPtr* result) override;
+
+  common::ScanSpec::VectorTransform transform_;
 };
 
 class DeltaUpdateColumnLoader : public VectorLoader {

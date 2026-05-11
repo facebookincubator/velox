@@ -72,6 +72,7 @@ void ITypedExpr::registerSerDe() {
   registry.Register("FieldAccessTypedExpr", core::FieldAccessTypedExpr::create);
   registry.Register("InputTypedExpr", core::InputTypedExpr::create);
   registry.Register("LambdaTypedExpr", core::LambdaTypedExpr::create);
+  registry.Register("NullIfTypedExpr", core::NullIfTypedExpr::create);
 }
 
 void InputTypedExpr::accept(
@@ -685,6 +686,65 @@ TypedExprPtr CastTypedExpr::create(const folly::dynamic& obj, void* context) {
 
   return std::make_shared<CastTypedExpr>(
       std::move(type), std::move(inputs), obj["isTryCast"].asBool());
+}
+
+NullIfTypedExpr::NullIfTypedExpr(
+    TypedExprPtr value,
+    TypedExprPtr comparand,
+    TypePtr commonType)
+    : ITypedExpr{ExprKind::kNullIf, value->type(), {std::move(value), std::move(comparand)}},
+      commonType_(std::move(commonType)) {}
+
+TypedExprPtr NullIfTypedExpr::rewriteInputNames(
+    const std::unordered_map<std::string, TypedExprPtr>& mapping) const {
+  auto newInputs = rewriteInputsRecursive(mapping);
+  return std::make_shared<NullIfTypedExpr>(
+      std::move(newInputs[0]), std::move(newInputs[1]), commonType_);
+}
+
+size_t NullIfTypedExpr::localHash() const {
+  static const size_t kBaseHash =
+      folly::hasher<std::string_view>()("NullIfTypedExpr");
+  return bits::hashMix(kBaseHash, commonType_->hashKind());
+}
+
+bool NullIfTypedExpr::operator==(const ITypedExpr& other) const {
+  const auto* otherNullIf = dynamic_cast<const NullIfTypedExpr*>(&other);
+  if (!otherNullIf) {
+    return false;
+  }
+  return *type() == *otherNullIf->type() &&
+      *commonType_ == *otherNullIf->commonType_ &&
+      *inputs()[0] == *otherNullIf->inputs()[0] &&
+      *inputs()[1] == *otherNullIf->inputs()[1];
+}
+
+std::string NullIfTypedExpr::toString() const {
+  return fmt::format(
+      "nullif({}, {})", inputs()[0]->toString(), inputs()[1]->toString());
+}
+
+void NullIfTypedExpr::accept(
+    const ITypedExprVisitor& visitor,
+    ITypedExprVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
+folly::dynamic NullIfTypedExpr::serialize() const {
+  auto obj = ITypedExpr::serializeBase("NullIfTypedExpr");
+  obj["commonType"] = commonType_->serialize();
+  return obj;
+}
+
+// static
+TypedExprPtr NullIfTypedExpr::create(const folly::dynamic& obj, void* context) {
+  auto type = core::deserializeType(obj, context);
+  auto inputs = deserializeInputs(obj, context);
+  auto commonType = Type::create(obj["commonType"]);
+
+  VELOX_CHECK_EQ(inputs.size(), 2);
+  return std::make_shared<NullIfTypedExpr>(
+      std::move(inputs[0]), std::move(inputs[1]), std::move(commonType));
 }
 
 } // namespace facebook::velox::core

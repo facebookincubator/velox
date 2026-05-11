@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/common/io/IoStatistics.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/Options.h"
@@ -113,6 +114,10 @@ class ParquetReaderBenchmark {
   std::unique_ptr<facebook::velox::test::DataSetBuilder> dataSetBuilder_;
   std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool_;
   std::shared_ptr<facebook::velox::memory::MemoryPool> leafPool_;
+  std::shared_ptr<facebook::velox::io::IoStatistics> dataIoStats_ =
+      std::make_shared<facebook::velox::io::IoStatistics>();
+  std::shared_ptr<facebook::velox::io::IoStatistics> metadataIoStats_ =
+      std::make_shared<facebook::velox::io::IoStatistics>();
   std::unique_ptr<facebook::velox::parquet::Writer> writer_;
   facebook::velox::dwio::common::RuntimeStatistics runtimeStats_;
 };

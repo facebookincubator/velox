@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -32,12 +33,18 @@ class IcebergColumnHandle : public HiveColumnHandle {
       ColumnType columnType,
       TypePtr dataType,
       parquet::ParquetFieldId icebergField,
-      std::vector<common::Subfield> requiredSubfields = {});
+      std::vector<common::Subfield> requiredSubfields = {},
+      std::optional<std::string> initialDefaultValue = std::nullopt);
 
   const parquet::ParquetFieldId& field() const;
 
+  const std::optional<std::string>& initialDefaultValue() const {
+    return initialDefaultValue_;
+  }
+
  private:
   const parquet::ParquetFieldId field_;
+  const std::optional<std::string> initialDefaultValue_;
 };
 
 using IcebergColumnHandlePtr = std::shared_ptr<const IcebergColumnHandle>;

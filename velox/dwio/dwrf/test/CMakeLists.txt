@@ -70,7 +70,7 @@ target_link_libraries(
   ${TEST_LINK_LIBS}
 )
 
-add_executable(velox_dwio_dwrf_decompression_test TestDecompression.cpp)
+add_executable(velox_dwio_dwrf_decompression_test DecompressionTest.cpp)
 add_test(
   NAME velox_dwio_dwrf_decompression_test
   COMMAND velox_dwio_dwrf_decompression_test
@@ -428,6 +428,7 @@ target_link_libraries(
   velox_dwio_dwrf_reader_test
   velox_dwrf_test_utils
   velox_vector_test_lib
+  velox_hive_connector
   velox_link_libs
   Folly::folly
   fmt::fmt

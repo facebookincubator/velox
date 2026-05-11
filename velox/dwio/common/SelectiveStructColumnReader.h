@@ -124,7 +124,7 @@ class SelectiveStructColumnReaderBase : public SelectiveColumnReader {
             getExceptionContext().message(VeloxException::Type::kSystem)),
         isRoot_(isRoot),
         generateLazyChildren_(generateLazyChildren),
-        rows_(memoryPool_) {}
+        rows_(pool_) {}
 
   bool hasDeletion() const final {
     return hasDeletion_;
@@ -249,7 +249,7 @@ class SelectiveFlatMapColumnReaderHelper {
       reader_.children_[i]->setIsFlatMapValue(true);
     }
     if (auto type = reader_.requestedType_->childAt(1); type->isRow()) {
-      childValues_ = BaseVector::create(type, 0, reader_.memoryPool_);
+      childValues_ = BaseVector::create(type, 0, reader_.pool_);
     }
   }
 
@@ -265,8 +265,7 @@ class SelectiveFlatMapColumnReaderHelper {
       result->resize(size);
     } else {
       VLOG(1) << "Reallocating result MAP vector of size " << size;
-      result =
-          BaseVector::create(reader_.requestedType_, size, reader_.memoryPool_);
+      result = BaseVector::create(reader_.requestedType_, size, reader_.pool_);
     }
     return *result->asUnchecked<MapVector>();
   }
@@ -502,7 +501,7 @@ void SelectiveFlatMapColumnReaderHelper<T, KeyNode, FormatData>::copyValues(
       }
     }
     if (strKeySize > 0) {
-      auto buf = AlignedBuffer::allocate<char>(strKeySize, reader_.memoryPool_);
+      auto buf = AlignedBuffer::allocate<char>(strKeySize, reader_.pool_);
       rawStrKeyBuffer = buf->template asMutable<char>();
       flatKeys->addStringBuffer(buf);
       strKeySize = 0;

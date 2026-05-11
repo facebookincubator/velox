@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#define XXH_INLINE_ALL
-#include <xxhash.h>
+#include "velox/common/base/XxHashInline.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/external/tzdb/zoned_time.h"

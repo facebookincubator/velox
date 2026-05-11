@@ -17,8 +17,7 @@
 
 #include <type_traits>
 
-#define XXH_INLINE_ALL
-#include <xxhash.h> // @manual=third-party//xxHash:xxhash
+#include "velox/common/base/XxHashInline.h"
 
 #include "velox/functions/lib/RowsTranslationUtil.h"
 #include "velox/functions/prestosql/types/IPAddressType.h"

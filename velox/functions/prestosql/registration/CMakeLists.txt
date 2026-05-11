@@ -51,7 +51,10 @@ if(VELOX_ENABLE_GEO)
   velox_compile_definitions(velox_functions_prestosql PRIVATE VELOX_ENABLE_GEO)
   velox_sources(
     velox_functions_prestosql
-    PRIVATE GeometryFunctionsRegistration.cpp SphericalGeographyFunctionsRegistration.cpp
+    PRIVATE
+      GeometryFunctionsRegistration.cpp
+      S2FunctionsRegistration.cpp
+      SphericalGeographyFunctionsRegistration.cpp
   )
 endif()
 

@@ -16,7 +16,7 @@
 
 #include "velox/common/process/ThreadDebugInfo.h"
 
-#include <folly/experimental/symbolizer/SignalHandler.h>
+#include <folly/debugging/symbolizer/SignalHandler.h>
 #include <glog/logging.h>
 
 namespace facebook::velox::process {

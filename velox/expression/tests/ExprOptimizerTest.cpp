@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/core/Expressions.h"
 #include "velox/expression/ExprOptimizer.h"
 #include "velox/expression/ExprRewriteRegistry.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -75,6 +76,32 @@ class ExprOptimizerTest : public functions::test::FunctionBaseTest {
 
     // Generate random values with fuzzer to validate evaluation of optimized
     // expression.
+    const auto data = fuzzFlat(type);
+    if (makeFailExpr != nullptr && !evalError.empty()) {
+      VELOX_ASSERT_THROW(evaluate(optimized, data), evalError);
+    } else {
+      const auto optimizedResult = evaluate(optimized, data);
+      const auto expectedResult = evaluate(expectedTypedExpr, data);
+      test::assertEqualVectors(optimizedResult, expectedResult);
+    }
+  }
+
+  void testExpression(
+      const core::TypedExprPtr& typedExpr,
+      const core::TypedExprPtr& expectedTypedExpr,
+      const RowTypePtr& type = ROW({}),
+      const MakeFailExpr& makeFailExpr = nullptr,
+      const std::string& evalError = "") {
+    auto optimized =
+        expression::optimize(typedExpr, queryCtx_.get(), pool(), makeFailExpr);
+    SCOPED_TRACE(
+        fmt::format(
+            "Input: {}\nOptimized: {}\nExpected: {}",
+            typedExpr->toString(),
+            optimized->toString(),
+            expectedTypedExpr->toString()));
+    ASSERT_TRUE(*optimized == *expectedTypedExpr);
+
     const auto data = fuzzFlat(type);
     if (makeFailExpr != nullptr && !evalError.empty()) {
       VELOX_ASSERT_THROW(evaluate(optimized, data), evalError);
@@ -377,6 +404,148 @@ TEST_F(ExprOptimizerTest, makeFailExpr) {
           "CASE 1234 WHEN a + 5 THEN 2 WHEN {} THEN 2 ELSE 3 END",
           prestoFailCall()),
       ROW({"a"}, {BIGINT()}));
+}
+
+TEST_F(ExprOptimizerTest, nullIfConstantFolding) {
+  auto emptyRow = ROW({});
+
+  auto makeNull = [&](const TypePtr& type) {
+    return std::make_shared<core::ConstantTypedExpr>(
+        BaseVector::createNullConstant(type, 1, pool()));
+  };
+
+  auto makeCast = [](const TypePtr& toType, const core::TypedExprPtr& input) {
+    return std::make_shared<core::CastTypedExpr>(toType, input, false);
+  };
+
+  auto constTrue = makeTypedExpr("true", emptyRow);
+  auto constFalse = makeTypedExpr("false", emptyRow);
+  auto constA = makeTypedExpr("'a'", emptyRow);
+  auto constB = makeTypedExpr("'b'", emptyRow);
+  auto constOne = makeTypedExpr("1", emptyRow);
+  auto constTwo = makeTypedExpr("2", emptyRow);
+
+  // Boolean cases.
+  testExpression(
+      std::make_shared<core::NullIfTypedExpr>(constTrue, constTrue, BOOLEAN()),
+      makeNull(BOOLEAN()));
+  testExpression(
+      std::make_shared<core::NullIfTypedExpr>(constTrue, constFalse, BOOLEAN()),
+      constTrue);
+  testExpression(
+      std::make_shared<core::NullIfTypedExpr>(
+          makeCast(BOOLEAN(), makeNull(UNKNOWN())), constFalse, BOOLEAN()),
+      makeNull(BOOLEAN()));
+  testExpression(
+      std::make_shared<core::NullIfTypedExpr>(
+          constTrue, makeCast(BOOLEAN(), makeNull(UNKNOWN())), BOOLEAN()),
+      constTrue);
+
+  // VARCHAR cases.
+  testExpression(
+      std::make_shared<core::NullIfTypedExpr>(constA, constA, VARCHAR()),
+      makeNull(VARCHAR()));
+  testExpression(
+      std::make_shared<core::NullIfTypedExpr>(constA, constB, VARCHAR()),
+      constA);
+  testExpression(
+      std::make_shared<core::NullIfTypedExpr>(
+          makeCast(VARCHAR(), makeNull(UNKNOWN())), constB, VARCHAR()),
+      makeNull(VARCHAR()));
+  testExpression(
+      std::make_shared<core::NullIfTypedExpr>(
+          constA, makeCast(VARCHAR(), makeNull(UNKNOWN())), VARCHAR()),
+      constA);
+
+  // Integer cases.
+  testExpression(
+      std::make_shared<core::NullIfTypedExpr>(
+          constOne, constOne, constOne->type()),
+      makeNull(constOne->type()));
+  testExpression(
+      std::make_shared<core::NullIfTypedExpr>(
+          constOne, constTwo, constOne->type()),
+      constOne);
+
+  // Cross-type with cast.
+  testExpression(
+      std::make_shared<core::NullIfTypedExpr>(
+          constOne, makeCast(BIGINT(), constTwo), BIGINT()),
+      constOne);
+
+  // Double with cast.
+  {
+    auto constOneDouble = makeTypedExpr("1.0E0", emptyRow);
+    testExpression(
+        std::make_shared<core::NullIfTypedExpr>(
+            constOneDouble, makeCast(DOUBLE(), constOne), DOUBLE()),
+        makeNull(DOUBLE()));
+  }
+  {
+    auto constOneOneDouble = makeTypedExpr("1.1E0", emptyRow);
+    testExpression(
+        std::make_shared<core::NullIfTypedExpr>(
+            constOneOneDouble, makeCast(DOUBLE(), constOne), DOUBLE()),
+        constOneOneDouble);
+  }
+  {
+    auto constOneOneDouble = makeTypedExpr("1.1E0", emptyRow);
+    testExpression(
+        std::make_shared<core::NullIfTypedExpr>(
+            constOneOneDouble, constOneOneDouble, DOUBLE()),
+        makeNull(DOUBLE()));
+  }
+
+  // Arithmetic subexpression.
+  testExpression(
+      std::make_shared<core::NullIfTypedExpr>(
+          constOne, makeTypedExpr("2 - 1", emptyRow), constOne->type()),
+      makeNull(constOne->type()));
+
+  // Null pairs.
+  testExpression(
+      std::make_shared<core::NullIfTypedExpr>(
+          makeNull(BIGINT()), makeNull(BIGINT()), BIGINT()),
+      makeNull(BIGINT()));
+  testExpression(
+      std::make_shared<core::NullIfTypedExpr>(
+          constOne, makeNull(constOne->type()), constOne->type()),
+      constOne);
+
+  // Decimal cases.
+  {
+    auto d11 = makeTypedExpr("1.1", emptyRow);
+    auto d12 = makeTypedExpr("1.2", emptyRow);
+    testExpression(
+        std::make_shared<core::NullIfTypedExpr>(d11, d12, d11->type()), d11);
+  }
+  {
+    auto dLong = makeTypedExpr("9876543210.9874561203", emptyRow);
+    testExpression(
+        std::make_shared<core::NullIfTypedExpr>(dLong, dLong, dLong->type()),
+        makeNull(dLong->type()));
+  }
+
+  // Array.
+  {
+    auto arr = makeTypedExpr("array[1::bigint]", emptyRow);
+    testExpression(
+        std::make_shared<core::NullIfTypedExpr>(arr, arr, arr->type()),
+        makeNull(arr->type()));
+  }
+
+  // Variable input: partial folding of subexpressions.
+  {
+    auto rowType = ROW({"a", "b"}, {BIGINT(), BIGINT()});
+    auto aField = std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "a");
+    auto addExpr = makeTypedExpr("b + (1 + 1)", rowType);
+    auto expectedExpr = std::make_shared<core::NullIfTypedExpr>(
+        aField, makeTypedExpr("b + 2", rowType), BIGINT());
+    testExpression(
+        std::make_shared<core::NullIfTypedExpr>(aField, addExpr, BIGINT()),
+        expectedExpr,
+        rowType);
+  }
 }
 
 } // namespace

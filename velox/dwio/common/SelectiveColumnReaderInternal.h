@@ -46,8 +46,8 @@ void SelectiveColumnReader::ensureValuesCapacity(
           BaseVector::byteSize<T>(numRows) + simd::kPadding) {
     return;
   }
-  auto newValues = AlignedBuffer::allocate<T>(
-      numRows + simd::kPadding / sizeof(T), memoryPool_);
+  auto newValues =
+      AlignedBuffer::allocate<T>(numRows + simd::kPadding / sizeof(T), pool_);
   if (preserveData) {
     std::memcpy(
         newValues->template asMutable<char>(), rawValues_, values_->capacity());
@@ -137,12 +137,12 @@ void SelectiveColumnReader::getFlatValues(
       } else {
         flatMapValueConstantNullValues_ =
             std::make_shared<ConstantVector<TVector>>(
-                memoryPool_, rows.size(), true, type, TVector());
+                pool_, rows.size(), true, type, TVector());
       }
       *result = flatMapValueConstantNullValues_;
     } else {
       *result = std::make_shared<ConstantVector<TVector>>(
-          memoryPool_, rows.size(), true, type, TVector());
+          pool_, rows.size(), true, type, TVector());
     }
     return;
   }
@@ -164,7 +164,7 @@ void SelectiveColumnReader::getFlatValues(
       flat->setStringBuffers(std::move(stringBuffers_));
     } else {
       flatMapValueFlatValues_ = std::make_shared<FlatVector<TVector>>(
-          memoryPool_,
+          pool_,
           type,
           resultNulls(),
           numValues_,
@@ -174,7 +174,7 @@ void SelectiveColumnReader::getFlatValues(
     *result = flatMapValueFlatValues_;
   } else {
     *result = std::make_shared<FlatVector<TVector>>(
-        memoryPool_,
+        pool_,
         type,
         resultNulls(),
         numValues_,

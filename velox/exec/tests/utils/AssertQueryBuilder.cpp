@@ -331,51 +331,55 @@ AssertQueryBuilder::readCursor() {
     }
   }
 
-  return test::readCursorAsync(params_, [&](exec::TaskCursor* taskCursor) {
-    if (taskCursor->noMoreSplits()) {
-      return ContinueFuture::makeEmpty();
-    }
-    auto& task = taskCursor->task();
-    if (params_.barrierExecution) {
-      int numSplits{0};
-      for (auto& [nodeId, nodeSplits] : splits_) {
-        if (nodeSplits.empty()) {
-          task->noMoreSplits(nodeId);
-          continue;
+  return test::readCursorAsync(
+      params_,
+      [&](exec::TaskCursor* taskCursor) {
+        if (taskCursor->noMoreSplits()) {
+          return ContinueFuture::makeEmpty();
         }
-        ++numSplits;
-        if (addSplitWithSequence_) {
-          task->addSplitWithSequence(
-              nodeId, std::move(nodeSplits[0]), ++sequenceId_);
-          task->setMaxSplitSequenceId(nodeId, sequenceId_);
-        } else {
-          task->addSplit(nodeId, std::move(nodeSplits[0]));
-        }
-        nodeSplits.erase(nodeSplits.cbegin());
-      }
-      if (numSplits > 0) {
-        VELOX_CHECK_EQ(
-            numSplits,
-            splits_.size(),
-            "Barrier task execution mode requires all the sources have the same number of splits");
-        return task->requestBarrier();
-      }
-      taskCursor->setNoMoreSplits();
-    } else {
-      for (auto& [nodeId, nodeSplits] : splits_) {
-        for (auto& split : nodeSplits) {
-          if (addSplitWithSequence_) {
-            task->addSplitWithSequence(nodeId, std::move(split), ++sequenceId_);
-            task->setMaxSplitSequenceId(nodeId, sequenceId_);
-          } else {
-            task->addSplit(nodeId, std::move(split));
+        auto& task = taskCursor->task();
+        if (params_.barrierExecution) {
+          int numSplits{0};
+          for (auto& [nodeId, nodeSplits] : splits_) {
+            if (nodeSplits.empty()) {
+              task->noMoreSplits(nodeId);
+              continue;
+            }
+            ++numSplits;
+            if (addSplitWithSequence_) {
+              task->addSplitWithSequence(
+                  nodeId, std::move(nodeSplits[0]), ++sequenceId_);
+              task->setMaxSplitSequenceId(nodeId, sequenceId_);
+            } else {
+              task->addSplit(nodeId, std::move(nodeSplits[0]));
+            }
+            nodeSplits.erase(nodeSplits.cbegin());
           }
+          if (numSplits > 0) {
+            VELOX_CHECK_EQ(
+                numSplits,
+                splits_.size(),
+                "Barrier task execution mode requires all the sources have the same number of splits");
+            return task->requestBarrier();
+          }
+          taskCursor->setNoMoreSplits();
+        } else {
+          for (auto& [nodeId, nodeSplits] : splits_) {
+            for (auto& split : nodeSplits) {
+              if (addSplitWithSequence_) {
+                task->addSplitWithSequence(
+                    nodeId, std::move(split), ++sequenceId_);
+                task->setMaxSplitSequenceId(nodeId, sequenceId_);
+              } else {
+                task->addSplit(nodeId, std::move(split));
+              }
+            }
+            task->noMoreSplits(nodeId);
+          }
+          taskCursor->setNoMoreSplits();
         }
-        task->noMoreSplits(nodeId);
-      }
-      taskCursor->setNoMoreSplits();
-    }
-    return ContinueFuture::makeEmpty();
-  });
+        return ContinueFuture::makeEmpty();
+      },
+      maxWaitMicros_);
 }
 } // namespace facebook::velox::exec::test

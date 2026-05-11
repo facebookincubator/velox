@@ -91,8 +91,8 @@ class DirectInputStream : public SeekableInputStream {
   // Contains the data if the range is too small for Allocation.
   std::string tinyData_;
 
-  // Pointer  to start of current run in 'entry->data()' or
-  // 'entry->tinyData()'.
+  // Pointer to start of current run in 'entry->nonContiguousData()' or
+  // 'entry->contiguousData()'.
   uint8_t* run_{nullptr};
 
   // Offset of current run from start of 'data_'

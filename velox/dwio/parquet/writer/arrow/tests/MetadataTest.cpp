@@ -21,6 +21,7 @@
 #include <gtest/gtest.h>
 
 #include "arrow/util/key_value_metadata.h"
+#include "velox/common/io/IoStatistics.h"
 #include "velox/common/testutil/TempFilePath.h"
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 #include "velox/dwio/parquet/writer/arrow/FileWriter.h"
@@ -414,7 +415,10 @@ TEST(Metadata, TestAddKeyValueMetadata) {
       memory::memoryManager()->addRootPool("MetadataTest");
   std::shared_ptr<facebook::velox::memory::MemoryPool> leafPool =
       rootPool->addLeafChild("MetadataTest");
-  dwio::common::ReaderOptions readerOptions{leafPool.get()};
+  auto dataIoStats = std::make_shared<velox::io::IoStatistics>();
+  auto metadataIoStats = std::make_shared<velox::io::IoStatistics>();
+  dwio::common::ReaderOptions readerOptions{
+      leafPool.get(), dataIoStats.get(), metadataIoStats.get()};
   auto input = std::make_unique<dwio::common::BufferedInput>(
       std::make_shared<LocalReadFile>(filePath->getPath()),
       readerOptions.memoryPool());
@@ -533,7 +537,10 @@ TEST(Metadata, TestSortingColumns) {
       memory::memoryManager()->addRootPool("MetadataTest");
   std::shared_ptr<facebook::velox::memory::MemoryPool> leafPool =
       rootPool->addLeafChild("MetadataTest");
-  dwio::common::ReaderOptions readerOptions{leafPool.get()};
+  auto dataIoStats = std::make_shared<velox::io::IoStatistics>();
+  auto metadataIoStats = std::make_shared<velox::io::IoStatistics>();
+  dwio::common::ReaderOptions readerOptions{
+      leafPool.get(), dataIoStats.get(), metadataIoStats.get()};
   auto input = std::make_unique<dwio::common::BufferedInput>(
       std::make_shared<LocalReadFile>(filePath->getPath()),
       readerOptions.memoryPool());

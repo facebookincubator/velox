@@ -354,7 +354,7 @@ RowVectorPtr HashAggregation::getOutput() {
   // - distinct aggregation has new keys;
   // - running in partial streaming mode and have some output ready.
   if (!noMoreInput_ && !partialFull_ && !newDistincts_ &&
-      !groupingSet_->hasOutput()) {
+      !groupingSet_->hasDrainedNewGroups() && !groupingSet_->hasOutput()) {
     input_ = nullptr;
     return nullptr;
   }
@@ -389,6 +389,15 @@ RowVectorPtr HashAggregation::getOutput() {
 RowVectorPtr HashAggregation::getDistinctOutput() {
   VELOX_CHECK(isDistinct_);
   VELOX_CHECK(!finished_);
+
+  if (groupingSet_->hasDrainedNewGroups()) {
+    auto size = groupingSet_->drainedNewGroupsCount();
+    prepareOutput(size);
+    groupingSet_->extractDrainedNewGroups(output_);
+    numOutputRows_ += size;
+    resetPartialOutputIfNeed();
+    return output_;
+  }
 
   if (newDistincts_) {
     VELOX_CHECK_NOT_NULL(input_);

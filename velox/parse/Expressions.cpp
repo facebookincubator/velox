@@ -15,6 +15,8 @@
  */
 #include "velox/parse/Expressions.h"
 
+#include "velox/common/EnumDefine.h"
+
 namespace facebook::velox::core {
 
 namespace {

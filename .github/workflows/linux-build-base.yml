@@ -96,11 +96,11 @@ jobs:
       cudf-changes: ${{ steps.changes.outputs.cudf }}
       build-outcome: ${{ steps.build.outcome }}
       build-failure-details: ${{ steps.build-errors.outputs.build-failure-details }}
-      test-outcome: ${{ steps.tests.outcome }}
-      flaky: ${{ steps.tests.outputs.flaky }}
-      failed-tests: ${{ steps.tests.outputs.failed-tests }}
-      failed-cases: ${{ steps.tests.outputs.failed-cases }}
-      failure-details: ${{ steps.tests.outputs.failure-details }}
+      test-outcome: ${{ steps.retry-tests.outcome != 'skipped' && steps.retry-tests.outcome || steps.tests.outcome }}
+      flaky: ${{ steps.retry-tests.outputs.flaky }}
+      failed-tests: ${{ steps.retry-tests.outputs.failed-tests }}
+      failed-cases: ${{ steps.retry-tests.outputs.failed-cases }}
+      failure-details: ${{ steps.retry-tests.outputs.failure-details }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -217,21 +217,28 @@ jobs:
         run: |
           source /setup-classpath.sh
           ulimit -n 65536
-          if ctest -j 24 --timeout 900 --label-exclude cuda_driver \
-               --output-on-failure --no-tests=error \
-               --output-junit test-results.xml 2>&1 | tee /tmp/ctest-output.log; then
-            echo "All tests passed on first run."
+          ctest -j 24 --timeout 900 --label-exclude cuda_driver \
+            --output-on-failure --no-tests=error \
+            --output-junit test-results.xml 2>&1 | tee /tmp/ctest-output.log
+
+      - name: Retry Flaky Tests
+        id: retry-tests
+        continue-on-error: true
+        if: steps.tests.outcome == 'failure'
+        env:
+          LIBHDFS3_CONF: ${{ github.workspace }}/scripts/ci/hdfs-client.xml
+        working-directory: _build/release
+        run: |
+          source /setup-classpath.sh
+          echo "::warning::Some tests failed. Retrying failed tests..."
+          if ctest --rerun-failed -j 4 --timeout 900 \
+               --output-on-failure --output-junit retry-results.xml; then
+            echo "::warning::All failed tests passed on retry — these are flaky tests."
+            echo "flaky=true" >> "$GITHUB_OUTPUT"
           else
-            echo "::warning::Some tests failed. Retrying failed tests..."
-            if ctest --rerun-failed -j 4 --timeout 900 \
-                 --output-on-failure --output-junit retry-results.xml; then
-              echo "::warning::All failed tests passed on retry — these are flaky tests."
-              echo "flaky=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "::error::Tests failed consistently on retry."
-              "$GITHUB_WORKSPACE/.github/scripts/extract-test-failures.sh" /tmp/ctest-output.log
-              exit 1
-            fi
+            echo "::error::Tests failed consistently on retry."
+            "$GITHUB_WORKSPACE/.github/scripts/extract-test-failures.sh" /tmp/ctest-output.log
+            exit 1
           fi
 
       # Clang-tidy needs a complete build because some files are only generated during the build
@@ -453,11 +460,11 @@ jobs:
     outputs:
       build-outcome: ${{ steps.build.outcome }}
       build-failure-details: ${{ steps.build-errors.outputs.build-failure-details }}
-      test-outcome: ${{ steps.tests.outcome }}
-      flaky: ${{ steps.tests.outputs.flaky }}
-      failed-tests: ${{ steps.tests.outputs.failed-tests }}
-      failed-cases: ${{ steps.tests.outputs.failed-cases }}
-      failure-details: ${{ steps.tests.outputs.failure-details }}
+      test-outcome: ${{ steps.retry-tests.outcome != 'skipped' && steps.retry-tests.outcome || steps.tests.outcome }}
+      flaky: ${{ steps.retry-tests.outputs.flaky }}
+      failed-tests: ${{ steps.retry-tests.outputs.failed-tests }}
+      failed-cases: ${{ steps.retry-tests.outputs.failed-cases }}
+      failure-details: ${{ steps.retry-tests.outputs.failure-details }}
     defaults:
       run:
         shell: bash
@@ -572,20 +579,24 @@ jobs:
         run: |
           ulimit -n 65536
           cd _build/debug
-          if ctest -j 24 --timeout 1800 --output-on-failure --no-tests=error \
-               --output-junit test-results.xml 2>&1 | tee /tmp/ctest-output.log; then
-            echo "All tests passed on first run."
+          ctest -j 24 --timeout 1800 --output-on-failure --no-tests=error \
+            --output-junit test-results.xml 2>&1 | tee /tmp/ctest-output.log
+
+      - name: Retry Flaky Tests
+        id: retry-tests
+        continue-on-error: true
+        if: steps.tests.outcome == 'failure'
+        run: |
+          cd _build/debug
+          echo "::warning::Some tests failed. Retrying failed tests..."
+          if ctest --rerun-failed -j 4 --timeout 1800 \
+               --output-on-failure --output-junit retry-results.xml; then
+            echo "::warning::All failed tests passed on retry — these are flaky tests."
+            echo "flaky=true" >> "$GITHUB_OUTPUT"
           else
-            echo "::warning::Some tests failed. Retrying failed tests..."
-            if ctest --rerun-failed -j 4 --timeout 1800 \
-                 --output-on-failure --output-junit retry-results.xml; then
-              echo "::warning::All failed tests passed on retry — these are flaky tests."
-              echo "flaky=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "::error::Tests failed consistently on retry."
-              "$GITHUB_WORKSPACE/velox/.github/scripts/extract-test-failures.sh" /tmp/ctest-output.log
-              exit 1
-            fi
+            echo "::error::Tests failed consistently on retry."
+            "$GITHUB_WORKSPACE/velox/.github/scripts/extract-test-failures.sh" /tmp/ctest-output.log
+            exit 1
           fi
 
   ubuntu-debug-build-status:

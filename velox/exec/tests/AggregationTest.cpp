@@ -2443,6 +2443,52 @@ TEST_F(AggregationTest, spillPrefixSortOptimization) {
   }
 }
 
+TEST_F(AggregationTest, distinctWithProperPrefixPreGroupedKeys) {
+  std::vector<RowVectorPtr> vectors;
+  vectors.push_back(makeRowVector({
+      makeFlatVector<int64_t>({0, 0, 1, 1, 2}),
+      makeFlatVector<int64_t>({0, 1, 10, 11, 20}),
+  }));
+  createDuckDbTable(vectors);
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .aggregation(
+                      {"c0", "c1"},
+                      {"c0"},
+                      {},
+                      {},
+                      core::AggregationNode::Step::kSingle,
+                      false)
+                  .planNode();
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults("SELECT DISTINCT c0, c1 FROM tmp");
+}
+
+TEST_F(AggregationTest, distinctWithPreGroupedKeysAcrossBatches) {
+  std::vector<RowVectorPtr> vectors;
+  vectors.push_back(makeRowVector({
+      makeFlatVector<int64_t>({0, 0, 1, 1}),
+      makeFlatVector<int64_t>({0, 1, 10, 11}),
+  }));
+  vectors.push_back(makeRowVector({
+      makeFlatVector<int64_t>({1, 1, 2, 2}),
+      makeFlatVector<int64_t>({12, 13, 20, 21}),
+  }));
+  createDuckDbTable(vectors);
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .aggregation(
+                      {"c0", "c1"},
+                      {"c0"},
+                      {},
+                      {},
+                      core::AggregationNode::Step::kSingle,
+                      false)
+                  .planNode();
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults("SELECT DISTINCT c0, c1 FROM tmp");
+}
+
 TEST_F(AggregationTest, preGroupedAggregationWithSpilling) {
   std::vector<RowVectorPtr> vectors;
   int64_t val = 0;

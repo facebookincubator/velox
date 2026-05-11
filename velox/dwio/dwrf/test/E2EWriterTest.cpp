@@ -18,6 +18,7 @@
 #include <random>
 #include "velox/common/base/SpillConfig.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/io/IoStatistics.h"
 #include "velox/common/memory/tests/SharedArbitratorTestUtil.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/Options.h"
@@ -62,6 +63,11 @@ class E2EWriterTest : public testing::Test {
     leafPool_ = rootPool_->addLeafChild("leaf");
   }
 
+  std::shared_ptr<io::IoStatistics> dataIoStats_ =
+      std::make_shared<io::IoStatistics>();
+  std::shared_ptr<io::IoStatistics> metadataIoStats_ =
+      std::make_shared<io::IoStatistics>();
+
   static std::unique_ptr<dwrf::DwrfReader> createReader(
       const MemorySink& sink,
       const dwio::common::ReaderOptions& opts) {
@@ -104,7 +110,8 @@ class E2EWriterTest : public testing::Test {
 
     writer.close();
 
-    dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+    dwio::common::ReaderOptions readerOpts{
+        leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
     RowReaderOptions rowReaderOpts;
     auto reader = createReader(*sinkPtr, readerOpts);
     auto rowReader = reader->createRowReader(rowReaderOpts);
@@ -166,7 +173,8 @@ class E2EWriterTest : public testing::Test {
 
     writer.close();
 
-    dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+    dwio::common::ReaderOptions readerOpts{
+        leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
     RowReaderOptions rowReaderOpts;
     auto reader = createReader(*sinkPtr, readerOpts);
     auto rowReader = reader->createRowReader(rowReaderOpts);
@@ -568,7 +576,8 @@ TEST_F(E2EWriterTest, PresentStreamIsSuppressedOnFlatMap) {
       config,
       dwrf::E2EWriterTestUtil::simpleFlushPolicyFactory(true));
 
-  dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+  dwio::common::ReaderOptions readerOpts{
+      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
   RowReaderOptions rowReaderOpts;
   auto reader = createReader(*sinkPtr, readerOpts);
   auto rowReader = reader->createRowReader(rowReaderOpts);
@@ -940,7 +949,8 @@ TEST_F(E2EWriterTest, PartialStride) {
   writer.write(batch);
   writer.close();
 
-  dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+  dwio::common::ReaderOptions readerOpts{
+      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
   RowReaderOptions rowReaderOpts;
   auto reader = createReader(*sinkPtr, readerOpts);
   ASSERT_EQ(
@@ -1140,7 +1150,8 @@ class E2EEncryptionTest : public E2EWriterTest {
     writer_->close();
 
     // read it back for compare
-    dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+    dwio::common::ReaderOptions readerOpts{
+        leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
     readerOpts.setDecrypterFactory(decrypterFactory);
     return createReader(*sink_, readerOpts);
   }
