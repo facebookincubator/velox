@@ -194,7 +194,7 @@ TEST_F(NamedStructTest, oddArguments) {
       "named_struct requires an even number of arguments");
 }
 
-TEST_F(NamedStructTest, zeroArguments) {
+TEST_F(NamedStructTest, noArguments) {
   VELOX_ASSERT_THROW(
       evaluateExpression("named_struct()", makeRowVector(ROW({}), 1)),
       "named_struct requires at least 2 arguments");

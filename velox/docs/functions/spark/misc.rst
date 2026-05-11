@@ -46,6 +46,16 @@ Miscellaneous Functions
     The function relies on partition IDs, which are provided by the framework
     via the configuration 'spark.partition_id'.
 
+.. spark:function:: named_struct(name1, value1, name2, value2, ...) -> struct
+
+    Creates a struct with the given field names and values. Arguments are
+    specified as alternating field name and value pairs. Field names must be
+    constant VARCHAR expressions and cannot be null. The number of arguments
+    must be even and at least 2. ::
+
+        SELECT named_struct('id', 1, 'name', 'Alice');  -- {id: 1, name: Alice}
+        SELECT named_struct('x', 1.5, 'y', 2.5);       -- {x: 1.5, y: 2.5}
+
 .. spark:function:: raise_error(message)
 
     Throws a user error with the specified ``message``.

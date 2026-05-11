@@ -39,16 +39,16 @@ class NamedStructFunction : public exec::VectorFunction {
       const TypePtr& outputType,
       exec::EvalCtx& context,
       VectorPtr& result) const override {
-    // Create output RowVector
+    // Create output RowVector.
     auto rowVector = std::dynamic_pointer_cast<RowVector>(
         BaseVector::create(outputType, rows.end(), context.pool()));
 
-    // Set each field from the corresponding value argument
-    for (size_t i = 0; i < valueIndices_.size(); ++i) {
+    // Set each field from the corresponding value argument.
+    for (auto i = 0; i < valueIndices_.size(); ++i) {
       rowVector->childAt(i) = args[valueIndices_[i]];
     }
 
-    context.moveOrCopyResult(rowVector, rows, result);
+    result = rowVector;
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
@@ -72,23 +72,24 @@ class NamedStructFunction : public exec::VectorFunction {
 
 TypePtr NamedStructCallToSpecialForm::resolveType(
     const std::vector<TypePtr>& argTypes) {
-  // Validate we have at least 2 arguments and even number
+  // Validate we have at least 2 arguments and even number.
   VELOX_USER_CHECK_GE(
       argTypes.size(),
       2,
-      "named_struct requires at least 2 arguments (1 field)");
+      "named_struct requires at least 2 arguments");
   
   VELOX_USER_CHECK_EQ(
       argTypes.size() % 2,
       0,
       "named_struct requires an even number of arguments (name-value pairs)");
 
-  // Build field names and types
-  std::vector<std::string> fieldNames;
+  // Build field types.
   std::vector<TypePtr> fieldTypes;
+  const auto numColumns = argTypes.size() / 2;
+  fieldTypes.reserve(numColumns);
 
-  for (size_t i = 0; i < argTypes.size(); i += 2) {
-    // Field name must be VARCHAR
+  for (auto i = 0; i < argTypes.size(); i += 2) {
+    // Field name must be VARCHAR.
     VELOX_USER_CHECK_EQ(
         argTypes[i]->kind(),
         TypeKind::VARCHAR,
@@ -96,15 +97,10 @@ TypePtr NamedStructCallToSpecialForm::resolveType(
         i,
         argTypes[i]->toString());
 
-    // We can't extract the actual string value here (that's done in
-    // constructSpecialForm where we have access to ConstantExpr),
-    // so we use placeholder names for now. They will be replaced in
-    // constructSpecialForm.
-    fieldNames.push_back(fmt::format("_field_{}", i / 2));
     fieldTypes.push_back(argTypes[i + 1]);
   }
 
-  return ROW(std::move(fieldNames), std::move(fieldTypes));
+  return ROW(std::vector<std::string>(numColumns, ""), std::move(fieldTypes));
 }
 
 exec::ExprPtr NamedStructCallToSpecialForm::constructSpecialForm(
@@ -112,19 +108,15 @@ exec::ExprPtr NamedStructCallToSpecialForm::constructSpecialForm(
     std::vector<exec::ExprPtr>&& args,
     bool trackCpuUsage,
     const core::QueryConfig& /*config*/) {
-  VELOX_USER_CHECK_GE(
-      args.size(), 2, "named_struct requires at least 2 arguments");
-  VELOX_USER_CHECK_EQ(
-      args.size() % 2,
-      0,
-      "named_struct requires an even number of arguments");
-
-  // Extract field names and validate they are constant expressions
+  // Extract field names and validate they are constant expressions.
+  const auto numColumns = args.size() / 2;
   std::vector<std::string> fieldNames;
   std::vector<int32_t> valueIndices;
+  fieldNames.reserve(numColumns);
+  valueIndices.reserve(numColumns);
 
-  for (size_t i = 0; i < args.size(); i += 2) {
-    // Field name must be a constant expression
+  for (auto i = 0; i < args.size(); i += 2) {
+    // Field name must be a constant expression.
     auto constantExpr = std::dynamic_pointer_cast<exec::ConstantExpr>(args[i]);
     VELOX_USER_CHECK_NOT_NULL(
         constantExpr,
@@ -146,23 +138,21 @@ exec::ExprPtr NamedStructCallToSpecialForm::constructSpecialForm(
 
     auto fieldName = constantVector->valueAt(0).str();
     fieldNames.push_back(fieldName);
-    valueIndices.push_back(i + 1); // Value is at next position
+    valueIndices.push_back(i + 1); // Value is at next position.
   }
 
-  // Build the actual ROW type with real field names
-  std::vector<TypePtr> fieldTypes;
-  for (size_t i = 1; i < args.size(); i += 2) {
-    fieldTypes.push_back(args[i]->type());
-  }
+  // Build the actual ROW type with real field names using children types from
+  // the resolved type.
+  auto rowType =
+      ROW(std::move(fieldNames), type->asRowType()->children());
 
-  auto rowType = ROW(std::move(fieldNames), std::move(fieldTypes));
-
-  // Create the function
+  // Create the function.
   auto namedStructFunction =
       std::make_shared<NamedStructFunction>(rowType, valueIndices);
 
-  // Build the expression with only value arguments (names are constants)
+  // Build the expression with only value arguments (names are constants).
   std::vector<exec::ExprPtr> valueArgs;
+  valueArgs.reserve(numColumns);
   for (auto idx : valueIndices) {
     valueArgs.push_back(std::move(args[idx]));
   }
