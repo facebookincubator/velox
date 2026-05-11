@@ -886,5 +886,35 @@ TEST_F(CudfFilterProjectTest, unaryMathFunctions) {
   testUnaryFunction("abs(c0)", -5.5, 5.5);
 }
 
+TEST_F(CudfFilterProjectTest, binaryOperators) {
+  // Test remainder (Spark's modulo)
+  auto remainderResult =
+      evaluateOnceValue<int32_t, int32_t>("remainder(c0, 10)", 47);
+  EXPECT_EQ(remainderResult, 7);
+
+  // Test pmod (positive modulo)
+  auto pmodResult = evaluateOnceValue<int32_t, int32_t>("pmod(c0, 10)", -13);
+  EXPECT_EQ(pmodResult, 7);
+
+  // Test bitwiseand (Spark's bitwise AND)
+  auto bitwiseAndResult =
+      evaluateOnceValue<int32_t, int32_t>("bitwise_and(c0, 15)", 31);
+  EXPECT_EQ(bitwiseAndResult, 15);
+
+  auto bitwiseAndResult64 =
+      evaluateOnceValue<int64_t, int64_t>("bitwise_and(c0, 15)", 31);
+  EXPECT_EQ(bitwiseAndResult64, 15);
+
+  // Test bitwiseor (Spark's bitwise OR)
+  auto bitwiseOrResult =
+      evaluateOnceValue<int64_t, int64_t>("bitwise_or(c0, 15)", 16);
+  EXPECT_EQ(bitwiseOrResult, 31);
+
+  // Test bitwisexor (Spark's bitwise XOR)
+  auto bitwiseXorResult =
+      evaluateOnceValue<int64_t, int64_t>("bitwise_xor(c0, 15)", 31);
+  EXPECT_EQ(bitwiseXorResult, 16);
+}
+
 } // namespace
 } // namespace facebook::velox::cudf_velox

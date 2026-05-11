@@ -54,6 +54,29 @@ class CudfFunctionBaseTest : public velox::functions::test::FunctionBaseTest {
         cudf::get_current_device_resource_ref());
     return result->childAt(0);
   }
+
+  template <typename TReturn, typename... TArgs>
+  TReturn evaluateOnceValue(
+      const std::string& expr,
+      std::optional<TArgs>... args) {
+    auto result = evaluateOnce<TReturn, TArgs...>(expr, args...);
+
+    VELOX_CHECK(result.has_value(), "Expression returned null: {}", expr);
+
+    return result.value();
+  }
+
+  template <typename TReturn, typename... TArgs>
+  TReturn evaluateOnceValue(
+      const std::string& expr,
+      const std::initializer_list<TypePtr>& types,
+      std::optional<TArgs>... args) {
+    auto result = evaluateOnce<TReturn, TArgs...>(expr, types, args...);
+
+    VELOX_CHECK(result.has_value(), "Expression returned null: {}", expr);
+
+    return result.value();
+  }
 };
 
 } // namespace facebook::velox::cudf_velox

@@ -58,6 +58,29 @@ cudf::ast::literal createLiteral(
       scalars);
 }
 
+// Cast the input var to type
+template <TypeKind kind>
+cudf::ast::literal makeScalarAndLiteral(
+    const TypePtr& type,
+    int64_t value,
+    std::vector<std::unique_ptr<cudf::scalar>>& scalars) {
+  using T = typename TypeTraits<kind>::NativeType;
+  if constexpr (cudf::is_fixed_width<T>()) {
+    auto scalar = makeScalarFromValue<T>(type, value, false);
+    scalars.emplace_back(std::move(scalar));
+    return makeLiteralFromScalar<T>(*(scalars.back()), type);
+  }
+  VELOX_NYI("Scalar creation not implemented for type " + type->toString());
+}
+
+cudf::ast::literal createLiteral(
+    const TypePtr& type,
+    int64_t value,
+    std::vector<std::unique_ptr<cudf::scalar>>& scalars) {
+  return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
+      makeScalarAndLiteral, type->kind(), type, value, scalars);
+}
+
 // Helper function to extract literals from array elements based on type
 void extractArrayLiterals(
     const ArrayVector* arrayVector,
@@ -136,34 +159,56 @@ std::string stripPrefix(const std::string& input, const std::string& prefix) {
 
 using Op = cudf::ast::ast_operator;
 const std::unordered_map<std::string, Op> prestoBinaryOps = {
+    // Arithmetic operators
     {"plus", Op::ADD},
     {"minus", Op::SUB},
     {"multiply", Op::MUL},
     {"divide", Op::DIV},
+    // Only supports floating type
+    {"mod", Op::MOD},
+    {"power", Op::POW},
+
+    // Comparison operators
     {"eq", Op::EQUAL},
     {"neq", Op::NOT_EQUAL},
     {"lt", Op::LESS},
     {"gt", Op::GREATER},
     {"lte", Op::LESS_EQUAL},
     {"gte", Op::GREATER_EQUAL},
+
+    // Logical operators
     {"and", Op::NULL_LOGICAL_AND},
     {"or", Op::NULL_LOGICAL_OR},
-    {"mod", Op::MOD},
+
+    // Bitwise operators
+    {"bitwise_and", Op::BITWISE_AND},
+    {"bitwise_or", Op::BITWISE_OR},
+    {"bitwise_xor", Op::BITWISE_XOR},
 };
 
 const std::unordered_map<std::string, Op> sparkBinaryOps = {
+    // Arithmetic operators
     {"add", Op::ADD},
     {"subtract", Op::SUB},
     {"multiply", Op::MUL},
     {"divide", Op::DIV},
+    {"remainder", Op::MOD},
+
+    // Comparison operators
     {"equalto", Op::EQUAL},
     {"lessthan", Op::LESS},
     {"greaterthan", Op::GREATER},
     {"lessthanorequal", Op::LESS_EQUAL},
     {"greaterthanorequal", Op::GREATER_EQUAL},
+
+    // Logical operators
     {"and", Op::NULL_LOGICAL_AND},
     {"or", Op::NULL_LOGICAL_OR},
-    {"mod", Op::MOD},
+
+    // Bitwise operators
+    {"bitwise_and", Op::BITWISE_AND},
+    {"bitwise_or", Op::BITWISE_OR},
+    {"bitwise_xor", Op::BITWISE_XOR},
 };
 
 const std::unordered_map<std::string, Op> binaryOps = [] {
@@ -353,6 +398,19 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
       }
       return true;
     }
+    if (name == "bitwise_and" || name == "bitwise_or" || name == "bitwise_xor" || ) {
+      // Spark result type is same with the input type, Presto result type is
+      // int64_t
+      // Spark case and Presto int64_t case
+      if (expr->type() == expr->inputs()[0]->type()) {
+        // For tinyint, the result type is tinyint in Spark but is integer in cudf
+        return expr->type()->kind() == TypeKind::BIGINT || expr->type()->kind() == TypeKind::INTEGER;
+      }
+      return isOpAndInputsSupported(binaryOps.at(name), inputCudfDataTypes);
+    }
+    if (name == "mod" || name == "remainder") {
+      return true;
+    }
     return len == 2 &&
         isOpAndInputsSupported(binaryOps.at(name), inputCudfDataTypes);
   }
@@ -363,6 +421,11 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
   }
   if (name == "isnotnull" && len == 1) {
     return isOpAndInputsSupported(Op::IS_NULL, inputCudfDataTypes);
+  }
+  if (name == "pmod") {
+    // The data type is decided by a mixed operation, do we have the way to
+    // check it?
+    return true;
   }
 
   // Between: value >= lower AND value <= upper
@@ -616,7 +679,14 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     VELOX_CHECK_EQ(len, 2);
     auto const& op1 = pushExprToTree(expr->inputs()[0]);
     auto const& op2 = pushExprToTree(expr->inputs()[1]);
-    return tree.push(Operation{binaryOps.at(name), op1, op2});
+    auto const& op3 = tree.push(Operation{binaryOps.at(name), op1, op2});
+    if (name == "bitwise_and" || name == "bitwise_or" || name == "bitwise_xor" || name == "mod" || name == "remainder") {
+      if (expr->type()->kind() == TypeKind::BIGINT &&
+          expr->inputs()[0]->type()->kind() != TypeKind::BIGINT) {
+        return tree.push(Operation{Op::CAST_TO_INT64, op3});
+      }
+    }
+    return op3;
   } else if (unaryOps.find(name) != unaryOps.end()) {
     VELOX_CHECK_EQ(len, 1);
     auto const& op1 = pushExprToTree(expr->inputs()[0]);
@@ -693,6 +763,13 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     } else {
       VELOX_FAIL("Unsupported type for cast operation");
     }
+  } else if (name == "pmod") {
+    // pmod(a, b) = (a % b + b) % b
+    auto const& a = pushExprToTree(expr->inputs()[0]);
+    auto const& b = pushExprToTree(expr->inputs()[1]);
+    auto const& r1 = tree.push(Operation{Op::MOD, a, b});
+    auto const& r2 = tree.push(Operation{Op::ADD, r1, b});
+    return tree.push(Operation{Op::MOD, r2, b});
   } else if (auto fieldExpr = std::dynamic_pointer_cast<FieldReference>(expr)) {
     // Refer to the appropriate side
     const auto fieldName =

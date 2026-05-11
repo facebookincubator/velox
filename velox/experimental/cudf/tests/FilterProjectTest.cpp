@@ -1720,4 +1720,41 @@ TEST_F(CudfFilterProjectTest, andAndAndWithDecimalDivideBelowExpr) {
   facebook::velox::test::assertEqualVectors(expected, result);
 }
 
+TEST_F(CudfSimpleFilterProjectTest, binaryOperators) {
+  // Test modulo operation
+  auto modResult = evaluateOnceValue<double, double>("c0 % 10.0", 47);
+  EXPECT_EQ(modResult, 7);
+  auto modResult2 = evaluateOnceValue<float, float>("c0 % 10.0", 47);
+  EXPECT_EQ(modResult2, 7);
+
+  // Test power operation
+  auto powerResult = evaluateOnceValue<double, double>("power(c0, 2.0)", 3.0);
+  EXPECT_DOUBLE_EQ(powerResult, 9.0);
+
+  // Test bitwise AND operation
+  auto bitwiseAndResult =
+      evaluateOnceValue<int64_t, int32_t, int32_t>("bitwise_and(c0, c1)", 31, 15);
+  EXPECT_EQ(bitwiseAndResult, 15);
+  auto bitwiseAndResult16 = evaluateOnceValue<int64_t, int16_t, int16_t>(
+      "bitwise_and(c0, c1)", 31, 15);
+  EXPECT_EQ(bitwiseAndResult16, 15);
+  auto bitwiseAndResult8 = evaluateOnceValue<int64_t, int8_t, int8_t>(
+      "bitwise_and(c0, c1)", 31, 15);
+  EXPECT_EQ(bitwiseAndResult8, 15);
+  auto bitwiseAndResult64 = evaluateOnceValue<int64_t, int64_t, int64_t>(
+      "bitwise_and(c0, c1)", 31, 15);
+  EXPECT_EQ(bitwiseAndResult64, 15);
+
+  // Test bitwise OR operation
+  auto bitwiseOrResult =
+      evaluateOnceValue<int64_t, int32_t>("bitwise_or(c0, 15)", 16);
+  EXPECT_EQ(bitwiseOrResult, 31);
+
+  // Test bitwise XOR operation
+  auto bitwiseXorResult =
+      evaluateOnceValue<int64_t, int32_t>("bitwise_xor(c0, 15)", 31);
+  EXPECT_EQ(bitwiseXorResult, 16);
+
+}
+
 } // namespace
