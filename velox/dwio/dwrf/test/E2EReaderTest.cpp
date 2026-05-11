@@ -178,8 +178,9 @@ TEST_P(E2EReaderTest, SharedDictionaryFlatmapReadAsStruct) {
   writer->close();
   writer.reset();
 
-  dwio::common::ReaderOptions readerOpts{
-      pool.get(), &dataIoStats_, &metadataIoStats_};
+  dwio::common::ReaderOptions readerOpts(pool.get());
+  readerOpts.setDataIoStats(&dataIoStats_);
+  readerOpts.setMetadataIoStats(&metadataIoStats_);
   auto bufferedInput = std::make_unique<BufferedInput>(
       std::make_shared<LocalReadFile>(path), *pool);
   auto reader = DwrfReader::create(std::move(bufferedInput), readerOpts);
