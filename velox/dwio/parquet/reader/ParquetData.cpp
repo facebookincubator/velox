@@ -305,13 +305,16 @@ ParquetData::readDictionaryPageForFiltering(
     return std::make_unique<dwio::common::DictionaryValues>();
   }
 
-  // Create PageReader - it will automatically handle dictionary loading
+  // Pass the dictionary page size as chunkSize: PageReader only reads the
+  // dictionary page header and body here, never seeks into data pages.
+  const uint64_t dictPageSize =
+      columnChunk.dataPageOffset() - columnChunk.dictionaryPageOffset();
   auto pageReader = std::make_unique<PageReader>(
       std::move(inputStream),
       pool_,
       type_,
       columnChunk.compression(),
-      columnChunk.totalCompressedSize(),
+      dictPageSize,
       stats_,
       sessionTimezone_);
   // Read the first page header to trigger dictionary loading
@@ -332,20 +335,19 @@ ParquetData::readDictionaryPageForFiltering(
 std::unique_ptr<dwio::common::SeekableInputStream> ParquetData::getInputStream(
     uint32_t rowGroupId,
     const ColumnChunkMetaDataPtr& columnChunk) {
-  // Calculate read parameters (same as enqueueRowGroup)
-  uint64_t chunkReadOffset = columnChunk.dataPageOffset();
-  if (columnChunk.hasDictionaryPageOffset() &&
-      columnChunk.dictionaryPageOffset() >= 4) {
-    chunkReadOffset = columnChunk.dictionaryPageOffset();
+  // Row group pruning only needs the dictionary page, so request just that
+  // region instead of the full column chunk. The dictionary page lies in
+  // [dictionaryPageOffset, dataPageOffset).
+  if (!columnChunk.hasDictionaryPageOffset() ||
+      columnChunk.dictionaryPageOffset() < 4) {
+    return nullptr;
   }
-
-  uint64_t readSize = (columnChunk.compression() ==
-                       common::CompressionKind::CompressionKind_NONE)
-      ? columnChunk.totalUncompressedSize()
-      : columnChunk.totalCompressedSize();
+  const uint64_t dictPageOffset = columnChunk.dictionaryPageOffset();
+  const uint64_t dictPageSize =
+      columnChunk.dataPageOffset() - dictPageOffset;
 
   auto id = dwio::common::StreamIdentifier(type_->column());
-  auto stream = bufferedInput_->enqueue({chunkReadOffset, readSize}, &id);
+  auto stream = bufferedInput_->enqueue({dictPageOffset, dictPageSize}, &id);
 
   bufferedInput_->load(dwio::common::LogType::STRIPE);
   return stream;

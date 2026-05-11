@@ -2063,12 +2063,18 @@ TEST_F(ParquetReaderTest, readTimeWithMultipleColumns) {
 }
 
 TEST_F(ParquetReaderTest, dictionaryEncodedComplexFilter) {
-  // Test using pre-created dictionary_rowgroup_skipping.parquet
-  // This file has 3 row groups with dictionary-encoded region and product
-  // columns: Row group 0: primarily "us-east" region Row group 1: primarily
-  // "us-west" region Row group 2: primarily "eu-central" region All row groups
-  // have all 4 products (productA, productB, productC, productD) This file has
-  // total 3000 rows
+  // Test using pre-created dictionary_rowgroup_skipping.parquet.
+  // The file has 3 row groups (1000 rows each, 3000 total) with
+  // dictionary-encoded region and product columns:
+  //   RG0: region dict = {us-east, us-west}        (min=us-east,  max=us-west)
+  //   RG1: region dict = {eu-central, us-west}     (min=eu-central, max=us-west)
+  //   RG2: region dict = {eu-central, us-east}     (min=eu-central, max=us-east)
+  // All row groups have all 4 products (productA..D).
+  //
+  // Note: for region="us-east" all 3 row groups' [min,max] cover "us-east", so
+  // column-statistics filtering alone cannot skip any row group. Only the
+  // dictionary filter can prove RG1 has no "us-east" value, so a non-zero
+  // skippedStrides on Test 1 is direct evidence the dictionary skip is active.
 
   const std::string sample(
       getExampleFilePath("dictionary_rowgroup_skipping.parquet"));
@@ -2089,7 +2095,8 @@ TEST_F(ParquetReaderTest, dictionaryEncodedComplexFilter) {
     return totalRows;
   };
 
-  // Test 1: Region filter
+  // Test 1: Region filter — only the dictionary filter can skip RG1
+  // (column stats keep all three row groups).
   {
     dwio::common::ReaderOptions readerOptions{leafPool_.get()};
     auto reader = createReader(sample, readerOptions);
@@ -2103,11 +2110,18 @@ TEST_F(ParquetReaderTest, dictionaryEncodedComplexFilter) {
     rowReaderOpts.setScanSpec(scanSpec);
     auto rowReader = reader->createRowReader(rowReaderOpts);
 
-    // Rowgroup skipped
     EXPECT_EQ(readAllRows(rowReader), 2000);
+
+    RuntimeStatistics stats;
+    rowReader->updateRuntimeStats(stats);
+    // RG1's dict has no "us-east", so it must be skipped. Column stats cannot
+    // skip any of the three row groups.
+    EXPECT_EQ(stats.skippedStrides, 1);
+    EXPECT_EQ(stats.processedStrides, 2);
   }
 
-  // Test 2: Product filter
+  // Test 2: Product filter — every row group's dict contains "productA",
+  // so no skipping should occur.
   {
     dwio::common::ReaderOptions readerOptions{leafPool_.get()};
     auto reader = createReader(sample, readerOptions);
@@ -2121,12 +2135,16 @@ TEST_F(ParquetReaderTest, dictionaryEncodedComplexFilter) {
     rowReaderOpts.setScanSpec(scanSpec);
     auto rowReader = reader->createRowReader(rowReaderOpts);
 
-    // Should find matches across all row groups - NO row group skipping should
-    // occur
     EXPECT_EQ(readAllRows(rowReader), 3000);
+
+    RuntimeStatistics stats;
+    rowReader->updateRuntimeStats(stats);
+    EXPECT_EQ(stats.skippedStrides, 0);
+    EXPECT_EQ(stats.processedStrides, 3);
   }
 
-  // Test 3: Filter that matches no regions
+  // Test 3: Filter that matches no region — every row group should be
+  // skipped (RG0 by column stats, RG1 and RG2 by dictionary filter).
   {
     dwio::common::ReaderOptions readerOptions{leafPool_.get()};
     auto reader = createReader(sample, readerOptions);
@@ -2147,5 +2165,10 @@ TEST_F(ParquetReaderTest, dictionaryEncodedComplexFilter) {
     auto rowReader = reader->createRowReader(rowReaderOpts);
 
     EXPECT_EQ(readAllRows(rowReader), 0);
+
+    RuntimeStatistics stats;
+    rowReader->updateRuntimeStats(stats);
+    EXPECT_EQ(stats.skippedStrides, 3);
+    EXPECT_EQ(stats.processedStrides, 0);
   }
 }
