@@ -45,7 +45,7 @@ target_compile_options(velox_cudf_exec PRIVATE -g -O0)
 
 target_link_libraries(
   velox_cudf_exec
-  PUBLIC cudf::cudf
+  PUBLIC cudf::cudf nvtx3::nvtx3-cpp
   PRIVATE
     arrow
     velox_arrow_bridge

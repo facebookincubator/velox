@@ -53,12 +53,12 @@ set(
 )
 velox_resolve_dependency_url(kvikio)
 
-# cudf commit d09d10d from 2026-05-04
+# cudf commit 974fbfe from 2026-05-11
 set(VELOX_cudf_VERSION 26.06 CACHE STRING "cudf version")
-set(VELOX_cudf_COMMIT d09d10d14d3ed932b8de93638809101af5c7fec3)
+set(VELOX_cudf_COMMIT 974fbfe926a8d2b68510ea9dc409e813a8a2dd14)
 set(
   VELOX_cudf_BUILD_SHA256_CHECKSUM
-  5042ec46beb8260eb60d13b9cd44f26357b9756628f7d58659c77e88c67e15d5
+  f510dc0366ba05dc837d8b0ed59898d41836488bf47296dfc868216b13435603
 )
 set(VELOX_cudf_SOURCE_URL "https://github.com/rapidsai/cudf/archive/${VELOX_cudf_COMMIT}.tar.gz")
 velox_resolve_dependency_url(cudf)
@@ -69,6 +69,7 @@ block(SCOPE_FOR VARIABLES)
   set(BUILD_TESTS OFF)
   set(CUDF_BUILD_TESTUTIL OFF)
   set(BUILD_SHARED_LIBS ON)
+  set(RAPIDS_LOGGER_FMT_OPTION BUNDLED CACHE STRING "Build rapids_logger spdlog with bundled fmt" FORCE)
 
   FetchContent_Declare(
     rapids-cmake
