@@ -141,15 +141,17 @@ struct Stats {
 class MemoryAllocator;
 
 /// Memory collected from evicted cache entries. Non-contiguous page
-/// allocations and contiguous byte allocations are tracked separately so they
-/// can be freed back to the allocator before retrying allocation.
+/// allocations and byte allocations (from allocateBytes()) are tracked
+/// separately so they can be freed back to the allocator before retrying
+/// allocation.
 struct AcquiredMemory {
-  Allocation nonContiguous;
-  std::vector<std::pair<void*, uint64_t>> contiguous;
+  Allocation nonContiguousAllocs;
+  // Byte allocations from allocateBytes().
+  std::vector<std::pair<void*, uint64_t>> byteAllocations;
 
   uint64_t totalBytes() const {
-    uint64_t bytes = nonContiguous.byteSize();
-    for (const auto& [_, size] : contiguous) {
+    uint64_t bytes = nonContiguousAllocs.byteSize();
+    for (const auto& [_, size] : byteAllocations) {
       bytes += size;
     }
     return bytes;
@@ -158,7 +160,7 @@ struct AcquiredMemory {
   void free(MemoryAllocator* allocator);
 
   bool empty() const {
-    return nonContiguous.empty() && contiguous.empty();
+    return nonContiguousAllocs.empty() && byteAllocations.empty();
   }
 };
 

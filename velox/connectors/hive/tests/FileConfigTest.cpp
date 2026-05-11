@@ -53,6 +53,8 @@ TEST(FileConfigTest, defaultConfig) {
       config.parquetFooterSpeculativeIoSize(emptySession.get()), 256UL << 10);
   EXPECT_EQ(
       config.nimbleFooterSpeculativeIoSize(emptySession.get()), 8UL << 20);
+  EXPECT_FALSE(config.nimbleStringDecoderZeroCopy(emptySession.get()));
+  EXPECT_FALSE(config.nimblePreserveDictionaryEncoding(emptySession.get()));
 }
 
 TEST(FileConfigTest, overrideConfig) {
@@ -74,6 +76,8 @@ TEST(FileConfigTest, overrideConfig) {
       {FileConfig::kOrcFooterSpeculativeIoSize, std::to_string(512UL << 10)},
       {FileConfig::kParquetFooterSpeculativeIoSize, std::to_string(1UL << 20)},
       {FileConfig::kNimbleFooterSpeculativeIoSize, std::to_string(4UL << 20)},
+      {FileConfig::kNimbleStringDecoderZeroCopy, "true"},
+      {FileConfig::kNimblePreserveDictionaryEncoding, "true"},
   };
   FileConfig config(
       std::make_shared<config::ConfigBase>(std::move(configFromFile)));
@@ -99,6 +103,8 @@ TEST(FileConfigTest, overrideConfig) {
       config.parquetFooterSpeculativeIoSize(emptySession.get()), 1UL << 20);
   EXPECT_EQ(
       config.nimbleFooterSpeculativeIoSize(emptySession.get()), 4UL << 20);
+  EXPECT_TRUE(config.nimbleStringDecoderZeroCopy(emptySession.get()));
+  EXPECT_TRUE(config.nimblePreserveDictionaryEncoding(emptySession.get()));
 }
 
 TEST(FileConfigTest, overrideSession) {
@@ -124,6 +130,8 @@ TEST(FileConfigTest, overrideSession) {
        std::to_string(512UL << 10)},
       {FileConfig::kNimbleFooterSpeculativeIoSizeSession,
        std::to_string(2UL << 20)},
+      {FileConfig::kNimbleStringDecoderZeroCopySession, "true"},
+      {FileConfig::kNimblePreserveDictionaryEncodingSession, "true"},
   };
   const auto session =
       std::make_unique<config::ConfigBase>(std::move(sessionOverride));
@@ -143,6 +151,8 @@ TEST(FileConfigTest, overrideSession) {
   EXPECT_EQ(config.orcFooterSpeculativeIoSize(session.get()), 128UL << 10);
   EXPECT_EQ(config.parquetFooterSpeculativeIoSize(session.get()), 512UL << 10);
   EXPECT_EQ(config.nimbleFooterSpeculativeIoSize(session.get()), 2UL << 20);
+  EXPECT_TRUE(config.nimbleStringDecoderZeroCopy(session.get()));
+  EXPECT_TRUE(config.nimblePreserveDictionaryEncoding(session.get()));
 }
 
 TEST(FileConfigTest, nullConfig) {

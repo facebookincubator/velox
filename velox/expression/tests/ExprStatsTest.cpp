@@ -21,7 +21,6 @@
 #include "velox/functions/Registerer.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
-#include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/TypeResolver.h"
 

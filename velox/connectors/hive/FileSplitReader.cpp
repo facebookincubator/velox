@@ -158,11 +158,11 @@ FileSplitReader::FileSplitReader(
       fileSplit_(fileSplit),
       connectorQueryCtx_(connectorQueryCtx),
       readerOutputType_(readerOutputType),
-      baseReaderOpts_(
-          connectorQueryCtx->memoryPool(),
-          dataIoStats_.get(),
-          metadataIoStats_.get()),
-      emptySplit_(false) {}
+      baseReaderOpts_(connectorQueryCtx->memoryPool()),
+      emptySplit_(false) {
+  baseReaderOpts_.setDataIoStats(dataIoStats_.get());
+  baseReaderOpts_.setMetadataIoStats(metadataIoStats_.get());
+}
 
 void FileSplitReader::configureReaderOptions(
     std::shared_ptr<velox::random::RandomSkipTracker> randomSkip) {
@@ -364,6 +364,12 @@ void FileSplitReader::createRowReader(
     std::optional<bool> rowSizeTrackingEnabled) {
   VELOX_CHECK_NULL(baseRowReader_);
   configureBaseRowReaderOptions(std::move(metadataFilter), std::move(rowType));
+  baseRowReaderOpts_.setStringDecoderZeroCopy(
+      fileConfig_->nimbleStringDecoderZeroCopy(
+          connectorQueryCtx_->sessionProperties()));
+  baseRowReaderOpts_.setNimblePreserveDictionaryEncoding(
+      fileConfig_->nimblePreserveDictionaryEncoding(
+          connectorQueryCtx_->sessionProperties()));
   baseRowReaderOpts_.setTrackRowSize(
       rowSizeTrackingEnabled.has_value()
           ? *rowSizeTrackingEnabled

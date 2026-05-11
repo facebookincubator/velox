@@ -146,7 +146,13 @@ Result HiveTypeParser::parseType() {
 
     // TODO: `getTypeIdForOpaqueTypeAlias()` should take a std::string_view so
     // we don't need to needlessly construct a std::string.
-    auto typeIndex = getTypeIdForOpaqueTypeAlias(std::string(innerTypeName));
+    std::string aliasName(innerTypeName);
+    // If the alias is registered as a custom type (via
+    // OpaqueCustomTypeRegister), return it to respect the singleton semantics.
+    if (auto customType = getCustomType(aliasName, /*parameters=*/{})) {
+      return Result{customType};
+    }
+    auto typeIndex = getTypeIdForOpaqueTypeAlias(aliasName);
     auto instance = std::make_shared<const OpaqueType>(typeIndex);
     return Result{instance};
   } else {
