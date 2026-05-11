@@ -1178,13 +1178,44 @@ TEST_F(CudfWindowTest, rankWithoutOrderBy) {
   }
 }
 
+// Test rank() OVER () - global window without partition or order by.
+// This addresses mattgara's comment: rank should return 1 for all rows.
+TEST_F(CudfWindowTest, rankGlobalWithoutOrderBy) {
+  auto data = makeRowVector(
+      {"x"},
+      {
+          makeFlatVector<int32_t>({2, 1}),
+      });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({
+                      "rank() over () as r",
+                      "dense_rank() over () as dr",
+                  })
+                  .planNode();
+
+  // Without ORDER BY, all rows are considered tied, so rank and dense_rank
+  // should both return 1 for all rows.
+  auto expected = makeRowVector(
+      {"x", "r", "dr"},
+      {
+          makeFlatVector<int32_t>({2, 1}),
+          makeFlatVector<int64_t>({1, 1}),
+          makeFlatVector<int64_t>({1, 1}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
 // Test last_value respects the actual frame bounds.
 // Default frame with ORDER BY is RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT
 // ROW, which for last_value means returning the current row's value.
 // Previously hardcoded UNBOUNDED FOLLOWING which was incorrect.
+// Addresses mattgara's comment: with the bug, this would return {3,3,3}.
 TEST_F(CudfWindowTest, lastValueWithDefaultFrame) {
   auto data = makeRowVector(
-      {"v"},
+      {"x"},
       {
           makeFlatVector<int64_t>({1, 2, 3}),
       });
@@ -1192,16 +1223,17 @@ TEST_F(CudfWindowTest, lastValueWithDefaultFrame) {
   auto plan =
       PlanBuilder()
           .values({data})
-          .window({"last_value(v) over (order by v) as lv"})
-          .orderBy({"v ASC NULLS LAST"}, false)
+          .window({"last_value(x) over (order by x) as lv"})
+          .orderBy({"x ASC NULLS LAST"}, false)
           .planNode();
 
   // With default frame (RANGE UNBOUNDED PRECEDING TO CURRENT ROW):
-  // Row 1 (v=1): frame is [1], last_value = 1
-  // Row 2 (v=2): frame is [1,2], last_value = 2
-  // Row 3 (v=3): frame is [1,2,3], last_value = 3
+  // Row 1 (x=1): frame is [1], last_value = 1
+  // Row 2 (x=2): frame is [1,2], last_value = 2
+  // Row 3 (x=3): frame is [1,2,3], last_value = 3
+  // The bug would have returned {3, 3, 3} by using UNBOUNDED FOLLOWING.
   auto expected = makeRowVector(
-      {"v", "lv"},
+      {"x", "lv"},
       {
           makeFlatVector<int64_t>({1, 2, 3}),
           makeFlatVector<int64_t>({1, 2, 3}),

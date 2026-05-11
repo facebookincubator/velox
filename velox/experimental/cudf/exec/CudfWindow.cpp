@@ -432,10 +432,15 @@ void CudfWindow::doNoMoreInput() {
       allNullOrders.push_back(nullOrders_[i]);
     }
 
-    auto allView = allData->view();
-    auto keyTable = allView.select(allSortKeys);
-    sortedData_ = cudf::stable_sort_by_key(
-        allView, keyTable, allOrders, allNullOrders, stream_, mr);
+    // Skip sorting if there are no sort keys (global window without ORDER BY).
+    if (allSortKeys.empty()) {
+      sortedData_ = std::move(allData);
+    } else {
+      auto allView = allData->view();
+      auto keyTable = allView.select(allSortKeys);
+      sortedData_ = cudf::stable_sort_by_key(
+          allView, keyTable, allOrders, allNullOrders, stream_, mr);
+    }
   } else {
     sortedData_ = std::move(allData);
   }
