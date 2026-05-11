@@ -173,8 +173,8 @@ std::unique_ptr<cudf::column> CudfWindow::computeRankColumn(
     return cudf::rank_method::DENSE;
   };
 
-  // Without ORDER BY, rank/dense_rank treat all rows as tied (return 1 for all).
-  // row_number still assigns unique sequential numbers.
+  // Without ORDER BY, rank/dense_rank treat all rows as tied (return 1 for
+  // all). row_number still assigns unique sequential numbers.
   if (sortKeyIndices_.empty() && baseName != "row_number") {
     auto oneScalar = cudf::numeric_scalar<int64_t>(1, true, stream, mr);
     return cudf::make_column_from_scalar(oneScalar, n, stream, mr);

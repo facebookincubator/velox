@@ -902,11 +902,9 @@ class WindowAdapter : public OperatorAdapter {
         // - UNBOUNDED PRECEDING to CURRENT ROW
         // - UNBOUNDED PRECEDING to UNBOUNDED FOLLOWING
         if (func.frame.type == core::WindowNode::WindowType::kRange) {
-          bool startOk =
-              func.frame.startType ==
-                  core::WindowNode::BoundType::kUnboundedPreceding;
-          bool endOk =
-              func.frame.endType ==
+          bool startOk = func.frame.startType ==
+              core::WindowNode::BoundType::kUnboundedPreceding;
+          bool endOk = func.frame.endType ==
                   core::WindowNode::BoundType::kUnboundedFollowing ||
               func.frame.endType == core::WindowNode::BoundType::kCurrentRow;
           if (!startOk || !endOk) {

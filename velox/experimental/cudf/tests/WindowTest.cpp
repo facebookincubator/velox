@@ -1088,15 +1088,15 @@ TEST_F(CudfWindowTest, countStarWithNulls) {
       {"p", "v"},
       {
           makeFlatVector<int32_t>({1, 1, 1, 2, 2}),
-          makeNullableFlatVector<int64_t>({10, std::nullopt, 30, std::nullopt, 50}),
+          makeNullableFlatVector<int64_t>(
+              {10, std::nullopt, 30, std::nullopt, 50}),
       });
 
-  auto plan =
-      PlanBuilder()
-          .values({data})
-          .window({"count(*) over (partition by p) as cnt"})
-          .orderBy({"p ASC NULLS LAST", "v ASC NULLS FIRST"}, false)
-          .planNode();
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({"count(*) over (partition by p) as cnt"})
+                  .orderBy({"p ASC NULLS LAST", "v ASC NULLS FIRST"}, false)
+                  .planNode();
 
   // count(*) should count all rows, including those where v is null.
   // Partition 1 has 3 rows, partition 2 has 2 rows.
@@ -1104,7 +1104,8 @@ TEST_F(CudfWindowTest, countStarWithNulls) {
       {"p", "v", "cnt"},
       {
           makeFlatVector<int32_t>({1, 1, 1, 2, 2}),
-          makeNullableFlatVector<int64_t>({std::nullopt, 10, 30, std::nullopt, 50}),
+          makeNullableFlatVector<int64_t>(
+              {std::nullopt, 10, 30, std::nullopt, 50}),
           makeFlatVector<int64_t>({3, 3, 3, 2, 2}),
       });
 
@@ -1117,15 +1118,15 @@ TEST_F(CudfWindowTest, countColumnExcludesNulls) {
       {"p", "v"},
       {
           makeFlatVector<int32_t>({1, 1, 1, 2, 2}),
-          makeNullableFlatVector<int64_t>({10, std::nullopt, 30, std::nullopt, 50}),
+          makeNullableFlatVector<int64_t>(
+              {10, std::nullopt, 30, std::nullopt, 50}),
       });
 
-  auto plan =
-      PlanBuilder()
-          .values({data})
-          .window({"count(v) over (partition by p) as cnt"})
-          .orderBy({"p ASC NULLS LAST", "v ASC NULLS FIRST"}, false)
-          .planNode();
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({"count(v) over (partition by p) as cnt"})
+                  .orderBy({"p ASC NULLS LAST", "v ASC NULLS FIRST"}, false)
+                  .planNode();
 
   // count(v) should exclude nulls.
   // Partition 1 has 2 non-null values, partition 2 has 1 non-null value.
@@ -1133,7 +1134,8 @@ TEST_F(CudfWindowTest, countColumnExcludesNulls) {
       {"p", "v", "cnt"},
       {
           makeFlatVector<int32_t>({1, 1, 1, 2, 2}),
-          makeNullableFlatVector<int64_t>({std::nullopt, 10, 30, std::nullopt, 50}),
+          makeNullableFlatVector<int64_t>(
+              {std::nullopt, 10, 30, std::nullopt, 50}),
           makeFlatVector<int64_t>({2, 2, 2, 1, 1}),
       });
 
@@ -1150,16 +1152,15 @@ TEST_F(CudfWindowTest, rankWithoutOrderBy) {
           makeFlatVector<int64_t>({30, 10, 20, 50, 40}),
       });
 
-  auto plan =
-      PlanBuilder()
-          .values({data})
-          .window({
-              "row_number() over (partition by p) as rn",
-              "rank() over (partition by p) as r",
-              "dense_rank() over (partition by p) as dr",
-          })
-          .orderBy({"p ASC NULLS LAST", "v ASC NULLS LAST"}, false)
-          .planNode();
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({
+                      "row_number() over (partition by p) as rn",
+                      "rank() over (partition by p) as r",
+                      "dense_rank() over (partition by p) as dr",
+                  })
+                  .orderBy({"p ASC NULLS LAST", "v ASC NULLS LAST"}, false)
+                  .planNode();
 
   // Without ORDER BY:
   // - row_number() still assigns unique sequential numbers within partition
@@ -1220,12 +1221,11 @@ TEST_F(CudfWindowTest, lastValueWithDefaultFrame) {
           makeFlatVector<int64_t>({1, 2, 3}),
       });
 
-  auto plan =
-      PlanBuilder()
-          .values({data})
-          .window({"last_value(x) over (order by x) as lv"})
-          .orderBy({"x ASC NULLS LAST"}, false)
-          .planNode();
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({"last_value(x) over (order by x) as lv"})
+                  .orderBy({"x ASC NULLS LAST"}, false)
+                  .planNode();
 
   // With default frame (RANGE UNBOUNDED PRECEDING TO CURRENT ROW):
   // Row 1 (x=1): frame is [1], last_value = 1
@@ -1250,12 +1250,11 @@ TEST_F(CudfWindowTest, firstValueWithDefaultFrame) {
           makeFlatVector<int64_t>({1, 2, 3}),
       });
 
-  auto plan =
-      PlanBuilder()
-          .values({data})
-          .window({"first_value(v) over (order by v) as fv"})
-          .orderBy({"v ASC NULLS LAST"}, false)
-          .planNode();
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({"first_value(v) over (order by v) as fv"})
+                  .orderBy({"v ASC NULLS LAST"}, false)
+                  .planNode();
 
   // With default frame (RANGE UNBOUNDED PRECEDING TO CURRENT ROW):
   // All rows have first_value = 1 (the first value in the frame)
@@ -1280,8 +1279,8 @@ TEST_F(CudfWindowTest, lastValueWithUnboundedFrame) {
   auto plan =
       PlanBuilder()
           .values({data})
-          .window({
-              "last_value(v) over (order by v rows between unbounded preceding and unbounded following) as lv"})
+          .window(
+              {"last_value(v) over (order by v rows between unbounded preceding and unbounded following) as lv"})
           .orderBy({"v ASC NULLS LAST"}, false)
           .planNode();
 
@@ -1351,9 +1350,8 @@ TEST_F(CudfWindowTest, windowAdapterGatingChecks) {
       AssertQueryBuilder(
           PlanBuilder()
               .values({data})
-              .window(
-                  {"sum(v) over (partition by p order by v "
-                   "range between 5 preceding and current row)"})
+              .window({"sum(v) over (partition by p order by v "
+                       "range between 5 preceding and current row)"})
               .planNode())
           .copyResults(pool()),
       "Replacement with cuDF operator failed");
@@ -1363,9 +1361,8 @@ TEST_F(CudfWindowTest, windowAdapterGatingChecks) {
       AssertQueryBuilder(
           PlanBuilder()
               .values({data})
-              .window(
-                  {"sum(v) over (partition by p order by v "
-                   "range between current row and 5 following)"})
+              .window({"sum(v) over (partition by p order by v "
+                       "range between current row and 5 following)"})
               .planNode())
           .copyResults(pool()),
       "Replacement with cuDF operator failed");
@@ -1382,9 +1379,8 @@ TEST_F(CudfWindowTest, windowAdapterGatingChecks) {
       AssertQueryBuilder(
           PlanBuilder()
               .values({dataWithBound})
-              .window(
-                  {"sum(v) over (partition by p order by v "
-                   "rows between bound preceding and current row)"})
+              .window({"sum(v) over (partition by p order by v "
+                       "rows between bound preceding and current row)"})
               .planNode())
           .copyResults(pool()),
       "Replacement with cuDF operator failed");
@@ -1393,9 +1389,8 @@ TEST_F(CudfWindowTest, windowAdapterGatingChecks) {
   auto plan1 =
       PlanBuilder()
           .values({data})
-          .window(
-              {"sum(v) over (partition by p order by v "
-               "range between unbounded preceding and current row)"})
+          .window({"sum(v) over (partition by p order by v "
+                   "range between unbounded preceding and current row)"})
           .orderBy({"p ASC NULLS LAST", "v ASC NULLS LAST"}, false)
           .planNode();
   auto expected1 = makeRowVector(
@@ -1430,9 +1425,8 @@ TEST_F(CudfWindowTest, windowAdapterGatingChecks) {
       AssertQueryBuilder(
           PlanBuilder()
               .values({data})
-              .window(
-                  {"sum(v) over (partition by p order by v "
-                   "range between current row and unbounded following)"})
+              .window({"sum(v) over (partition by p order by v "
+                       "range between current row and unbounded following)"})
               .planNode())
           .copyResults(pool()),
       "Replacement with cuDF operator failed");
