@@ -36,6 +36,7 @@
 #include "velox/exec/Values.h"
 
 #include <cudf/detail/nvtx/ranges.hpp>
+#include <cudf/utilities/memory_resource.hpp>
 
 #include <cuda.h>
 
@@ -316,8 +317,8 @@ void registerCudf() {
   const std::string mrMode = CudfConfig::getInstance().memoryResource;
   auto mr = cudf_velox::createMemoryResource(
       mrMode, CudfConfig::getInstance().memoryPercent);
-  cudf::set_current_device_resource(mr.get());
-  mr_ = mr;
+  cudf::set_current_device_resource(mr);
+  mr_ = std::move(mr);
 
   const auto& outputMrMode = CudfConfig::getInstance().outputMemoryResource;
   if (!outputMrMode.empty() && outputMrMode != mrMode) {
@@ -345,8 +346,8 @@ void registerCudf() {
 }
 
 void unregisterCudf() {
-  output_mr_ = nullptr;
-  mr_ = nullptr;
+  output_mr_.reset();
+  mr_.reset();
   exec::DriverFactory::adapters.erase(
       std::remove_if(
           exec::DriverFactory::adapters.begin(),

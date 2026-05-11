@@ -17,9 +17,9 @@
 
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <vector>
 
-#include <fmt/format.h>
 #include "velox/common/EnumDeclare.h"
 
 namespace facebook::velox::config {
@@ -50,6 +50,8 @@ struct ConfigProperty {
 
 namespace detail {
 
+std::string toStringValue(double value);
+
 template <typename T>
 constexpr ConfigPropertyType configPropertyTypeOf() {
   if constexpr (std::is_same_v<T, bool>) {
@@ -68,7 +70,12 @@ std::string configPropertyDefaultToString(const T& value) {
   if constexpr (std::is_same_v<T, bool>) {
     return value ? "true" : "false";
   } else if constexpr (std::is_arithmetic_v<T>) {
-    return fmt::format("{}", value);
+    if constexpr (std::is_floating_point_v<T>) {
+      return toStringValue(static_cast<double>(value));
+    } else {
+      static_assert(!std::is_same_v<T, char>, "Use int, not char.");
+      return std::to_string(value);
+    }
   } else {
     return std::string(value);
   }

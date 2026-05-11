@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/common/io/IoStatistics.h"
 #include "velox/common/testutil/RandomSeed.h"
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/common/BufferedInput.h"
@@ -420,6 +421,10 @@ class E2EFilterTestBase : public testing::Test {
   std::unique_ptr<common::FilterGenerator> filterGenerator_;
   std::shared_ptr<memory::MemoryPool> rootPool_;
   std::shared_ptr<memory::MemoryPool> leafPool_;
+  std::shared_ptr<velox::io::IoStatistics> dataIoStats_ =
+      std::make_shared<velox::io::IoStatistics>();
+  std::shared_ptr<velox::io::IoStatistics> metadataIoStats_ =
+      std::make_shared<velox::io::IoStatistics>();
   std::shared_ptr<const RowType> rowType_;
   std::string sinkData_;
   bool useVInts_ = true;

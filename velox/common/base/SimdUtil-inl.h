@@ -1385,6 +1385,19 @@ struct Filter<T, A, 8> {
 
 template <typename A>
 struct Crc32<uint64_t, A> {
+  static uint32_t
+  apply(uint32_t checksum, uint64_t value, const xsimd::generic&) {
+    checksum ^= static_cast<uint32_t>(value);
+    for (int i = 0; i < 32; ++i) {
+      checksum = (checksum >> 1) ^ (0x82F63B78 & -(checksum & 1));
+    }
+    checksum ^= static_cast<uint32_t>(value >> 32);
+    for (int i = 0; i < 32; ++i) {
+      checksum = (checksum >> 1) ^ (0x82F63B78 & -(checksum & 1));
+    }
+    return checksum;
+  }
+
 #if XSIMD_WITH_SSE4_2
   static uint32_t
   apply(uint32_t checksum, uint64_t value, const xsimd::sse4_2&) {

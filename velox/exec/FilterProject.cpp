@@ -108,7 +108,7 @@ const void* lazyIdentityPtr(const VectorPtr& vec) {
 // hook during pushdown. Accessing a loaded vector in this case can lead to
 // incorrect results or even a crash.
 void loadReusedLazyVectors(const RowVectorPtr& output) {
-  if (!output) {
+  if (!output || !output->containsLazyNotLoaded()) {
     return;
   }
 

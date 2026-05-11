@@ -27,6 +27,8 @@ void registerPrestoAggregateFunctions(const std::string& prefix) {
   unregisterAggregateFunctions();
   registerCommonAggregationFunctions(getGroupbyAggregationRegistry(), prefix);
   registerCommonAggregationFunctions(getReduceAggregationRegistry(), prefix);
+  registerGroupbyOnlyAggregationFunctions(
+      getGroupbyAggregationRegistry(), prefix);
   registerReduceOnlyAggregationFunctions(
       getReduceAggregationRegistry(), prefix);
 

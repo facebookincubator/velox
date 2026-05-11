@@ -289,7 +289,7 @@ CudfHiveDataSource::getRuntimeStats() {
   result.insert({
       {std::string(connector::hive::HiveDataSource::kTotalScanTime),
        RuntimeMetric(
-           ioStatistics_->totalScanTime(), RuntimeCounter::Unit::kNanos)},
+           ioStatistics_->totalScanTimeNs(), RuntimeCounter::Unit::kNanos)},
       {std::string(Connector::kTotalRemainingFilterTime),
        RuntimeMetric(
            totalRemainingFilterTime_.load(std::memory_order_relaxed),
