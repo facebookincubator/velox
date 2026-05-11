@@ -18,12 +18,16 @@
 #include "velox/type/Type.h"
 
 #include <cudf/column/column.hpp>
+#include <cudf/column/column_view.hpp>
 
 #include <rmm/cuda_stream_view.hpp>
 
 #include <memory>
 
 namespace facebook::velox::cudf_velox {
+
+/// Checks that the column is STRING-encoded serialized decimal aggregation state.
+void validateIntermediateColumnType(cudf::column_view const& column);
 
 std::unique_ptr<cudf::column> castCountColumnToInt64(
     std::unique_ptr<cudf::column> count,

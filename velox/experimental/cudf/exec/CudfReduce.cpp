@@ -47,6 +47,7 @@ using facebook::velox::cudf_velox::finalizeDecimalAverage;
 using facebook::velox::cudf_velox::get_output_mr;
 using facebook::velox::cudf_velox::get_temp_mr;
 using facebook::velox::cudf_velox::serializeDecimalPartialOrIntermediateState;
+using facebook::velox::cudf_velox::validateIntermediateColumnType;
 using facebook::velox::cudf_velox::ReduceAggregator;
 using facebook::velox::cudf_velox::ResolvedAggregateInfo;
 
@@ -381,6 +382,39 @@ std::unique_ptr<cudf::column> singleOrRawDecimalSumWithCast(
       *resultScalar, 1, stream, get_output_mr());
 }
 
+std::unique_ptr<cudf::column> reduceIntermediateDecimalFromSerializedColumn(
+    cudf::column_view inputCol,
+    TypePtr const& outputType,
+    rmm::cuda_stream_view stream) {
+  validateIntermediateColumnType(inputCol);
+  auto scale = outputType->isDecimal()
+      ? getDecimalPrecisionScale(*outputType).second
+      : 0;
+  return intermediateDecimalMergeSerializedString(inputCol, scale, stream);
+}
+
+std::unique_ptr<cudf::column> reduceFinalDecimalSumFromSerializedColumn(
+    cudf::column_view inputCol,
+    TypePtr const& outputType,
+    rmm::cuda_stream_view stream) {
+  validateIntermediateColumnType(inputCol);
+  auto scale = getDecimalPrecisionScale(*outputType).second;
+  auto decodedSum = finalDecimalSumDecodeColumn(inputCol, scale, stream);
+  return singleOrRawDecimalSumWithCast(
+      decodedSum->view(), outputType, stream);
+}
+
+std::unique_ptr<cudf::column> reduceFinalDecimalAvgFromSerializedColumn(
+    cudf::column_view inputCol,
+    TypePtr const& outputType,
+    TypePtr const& resultType,
+    rmm::cuda_stream_view stream) {
+  validateIntermediateColumnType(inputCol);
+  auto scale = getDecimalPrecisionScale(*outputType).second;
+  return finalDecimalAvgFromSerializedString(
+      inputCol, scale, resultType, stream);
+}
+
 struct ReduceDecimalSumAggregator : ReduceAggregator {
   ReduceDecimalSumAggregator(
       core::AggregationNode::Step step,
@@ -400,22 +434,12 @@ struct ReduceDecimalSumAggregator : ReduceAggregator {
         return singleOrRawDecimalSumWithCast(inputCol, outputType, stream);
       case core::AggregationNode::Step::kPartial:
         return partialDecimalSumCountToSerializedString(inputCol, stream);
-      case core::AggregationNode::Step::kIntermediate: {
-        VELOX_CHECK(inputCol.type().id() == cudf::type_id::STRING);
-        auto scale = outputType->isDecimal()
-            ? getDecimalPrecisionScale(*outputType).second
-            : 0;
-        return intermediateDecimalMergeSerializedString(
-            inputCol, scale, stream);
-      }
-      case core::AggregationNode::Step::kFinal: {
-        VELOX_CHECK(inputCol.type().id() == cudf::type_id::STRING);
-        auto scale = getDecimalPrecisionScale(*outputType).second;
-        auto decodedSum =
-            finalDecimalSumDecodeColumn(inputCol, scale, stream);
-        return singleOrRawDecimalSumWithCast(
-            decodedSum->view(), outputType, stream);
-      }
+      case core::AggregationNode::Step::kIntermediate:
+        return reduceIntermediateDecimalFromSerializedColumn(
+            inputCol, outputType, stream);
+      case core::AggregationNode::Step::kFinal:
+        return reduceFinalDecimalSumFromSerializedColumn(
+            inputCol, outputType, stream);
       default:
         VELOX_NYI("Unsupported aggregation step for decimal sum reduce");
     }
@@ -442,20 +466,12 @@ struct ReduceDecimalAvgAggregator : ReduceAggregator {
             inputCol, resultType, stream);
       case core::AggregationNode::Step::kPartial:
         return partialDecimalSumCountToSerializedString(inputCol, stream);
-      case core::AggregationNode::Step::kIntermediate: {
-        VELOX_CHECK(inputCol.type().id() == cudf::type_id::STRING);
-        auto scale = outputType->isDecimal()
-            ? getDecimalPrecisionScale(*outputType).second
-            : 0;
-        return intermediateDecimalMergeSerializedString(
-            inputCol, scale, stream);
-      }
-      case core::AggregationNode::Step::kFinal: {
-        VELOX_CHECK(inputCol.type().id() == cudf::type_id::STRING);
-        auto scale = getDecimalPrecisionScale(*outputType).second;
-        return finalDecimalAvgFromSerializedString(
-            inputCol, scale, resultType, stream);
-      }
+      case core::AggregationNode::Step::kIntermediate:
+        return reduceIntermediateDecimalFromSerializedColumn(
+            inputCol, outputType, stream);
+      case core::AggregationNode::Step::kFinal:
+        return reduceFinalDecimalAvgFromSerializedColumn(
+            inputCol, outputType, resultType, stream);
       default:
         VELOX_NYI("Unsupported aggregation step for decimal avg reduce");
     }

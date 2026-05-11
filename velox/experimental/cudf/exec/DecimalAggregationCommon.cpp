@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/exec/DecimalAggregationCommon.h"
 
+#include "velox/common/base/Exceptions.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationKernels.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
@@ -23,6 +24,12 @@
 #include <cudf/unary.hpp>
 
 namespace facebook::velox::cudf_velox {
+
+void validateIntermediateColumnType(cudf::column_view const& column) {
+  VELOX_CHECK(
+      column.type().id() == cudf::type_id::STRING,
+      "Expected serialized decimal aggregation state: Velox VARBINARY represented as cuDF STRING");
+}
 
 std::unique_ptr<cudf::column> castCountColumnToInt64(
     std::unique_ptr<cudf::column> count,

@@ -48,6 +48,7 @@ using cudf_velox::get_temp_mr;
 using cudf_velox::GroupbyAggregator;
 using cudf_velox::ResolvedAggregateInfo;
 using cudf_velox::serializeDecimalPartialOrIntermediateState;
+using cudf_velox::validateIntermediateColumnType;
 
 #define DEFINE_SIMPLE_GROUPBY_AGGREGATOR(Name, name, KIND)               \
   struct Groupby##Name##Aggregator : GroupbyAggregator {                 \
@@ -128,7 +129,7 @@ void addDecimalIntermediateSumCountRequests(
     uint32_t& countIdx,
     std::unique_ptr<cudf::column>& decodedSum,
     std::unique_ptr<cudf::column>& decodedCount) {
-  VELOX_CHECK(tbl.column(inputIndex).type().id() == cudf::type_id::STRING);
+  validateIntermediateColumnType(tbl.column(inputIndex));
   auto scale = resultType->isDecimal()
       ? getDecimalPrecisionScale(*resultType).second
       : 0;
@@ -153,7 +154,7 @@ void addDecimalFinalAvgSumCountRequests(
     uint32_t& countIdx,
     std::unique_ptr<cudf::column>& decodedSum,
     std::unique_ptr<cudf::column>& decodedCount) {
-  VELOX_CHECK(tbl.column(inputIndex).type().id() == cudf::type_id::STRING);
+  validateIntermediateColumnType(tbl.column(inputIndex));
   auto scale = getDecimalPrecisionScale(*resultType).second;
   addDecimalSumCountRequestsAfterDecode(
       tbl.column(inputIndex),
@@ -174,7 +175,7 @@ void addDecimalFinalSumOnlyRequest(
     rmm::cuda_stream_view stream,
     uint32_t& sumIdx,
     std::unique_ptr<cudf::column>& decodedSum) {
-  VELOX_CHECK(tbl.column(inputIndex).type().id() == cudf::type_id::STRING);
+  validateIntermediateColumnType(tbl.column(inputIndex));
   auto scale = getDecimalPrecisionScale(*resultType).second;
   auto& request = requests.emplace_back();
   sumIdx = requests.size() - 1;
