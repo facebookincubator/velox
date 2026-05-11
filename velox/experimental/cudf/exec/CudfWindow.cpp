@@ -41,6 +41,53 @@
 
 namespace facebook::velox::cudf_velox {
 
+namespace {
+
+// Convert Velox frame bounds to cudf window bounds.
+cudf::window_bounds toWindowBound(
+    core::WindowNode::BoundType type,
+    const core::TypedExprPtr& value) {
+  switch (type) {
+    case core::WindowNode::BoundType::kUnboundedPreceding:
+    case core::WindowNode::BoundType::kUnboundedFollowing:
+      return cudf::window_bounds::unbounded();
+    case core::WindowNode::BoundType::kCurrentRow:
+      return cudf::window_bounds::get(0);
+    case core::WindowNode::BoundType::kPreceding:
+    case core::WindowNode::BoundType::kFollowing: {
+      if (value) {
+        if (auto constExpr =
+                std::dynamic_pointer_cast<const core::ConstantTypedExpr>(
+                    value)) {
+          VELOX_USER_CHECK(
+              constExpr->type()->isInteger(),
+              "Window frame bound must be INTEGER or BIGINT type, got {}",
+              constExpr->type()->toString());
+          if (constExpr->hasValueVector()) {
+            auto vec = constExpr->valueVector();
+            if (vec->type()->kind() == TypeKind::INTEGER) {
+              return cudf::window_bounds::get(
+                  vec->as<SimpleVector<int32_t>>()->valueAt(0));
+            }
+            return cudf::window_bounds::get(
+                vec->as<SimpleVector<int64_t>>()->valueAt(0));
+          }
+          if (constExpr->type()->kind() == TypeKind::INTEGER) {
+            return cudf::window_bounds::get(
+                constExpr->value().value<int32_t>());
+          }
+          return cudf::window_bounds::get(constExpr->value().value<int64_t>());
+        }
+      }
+      return cudf::window_bounds::get(1);
+    }
+    default:
+      return cudf::window_bounds::unbounded();
+  }
+}
+
+} // namespace
+
 CudfWindow::CudfWindow(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
@@ -88,9 +135,9 @@ void CudfWindow::doAddInput(RowVectorPtr input) {
 cudf::size_type CudfWindow::resolveInputColumn(
     const core::WindowNode::Function& func) const {
   const auto& inputs = func.functionCall->inputs();
-  // e.g. count(*) OVER (...) has no call arguments; use column 0 for row count.
+  // e.g. count(*) OVER (...) has no call arguments; return -1 to indicate this.
   if (inputs.empty()) {
-    return 0;
+    return -1;
   }
   // Match exec::Window: resolve column via exprToChannel. Peel casts so we do
   // not default to column 0 (which broke nested/wrapped refs e.g. TPC-DS Q12
@@ -126,6 +173,21 @@ std::unique_ptr<cudf::column> CudfWindow::computeRankColumn(
     return cudf::rank_method::DENSE;
   };
 
+  // Without ORDER BY, rank/dense_rank treat all rows as tied (return 1 for all).
+  // row_number still assigns unique sequential numbers.
+  if (sortKeyIndices_.empty() && baseName != "row_number") {
+    auto oneScalar = cudf::numeric_scalar<int64_t>(1, true, stream, mr);
+    return cudf::make_column_from_scalar(oneScalar, n, stream, mr);
+  }
+
+  // For row_number without ORDER BY, we need to generate sequential numbers.
+  // Use a synthetic sequence column as the values column for tie detection.
+  std::unique_ptr<cudf::column> sequenceCol;
+  if (sortKeyIndices_.empty() && baseName == "row_number") {
+    auto oneScalar = cudf::numeric_scalar<int64_t>(1, true, stream, mr);
+    sequenceCol = cudf::sequence(n, oneScalar, oneScalar, stream, mr);
+  }
+
   // Get sort order and null order for ranking.
   auto colOrder =
       sortKeyIndices_.empty() ? cudf::order::ASCENDING : sortOrders_[0];
@@ -137,8 +199,9 @@ std::unique_ptr<cudf::column> CudfWindow::computeRankColumn(
   // row_number doesn't need tie detection, so single column suffices.
   std::vector<cudf::column_view> structChildren;
   auto buildValuesCol = [&]() -> cudf::column_view {
+    // For row_number without ORDER BY, use the synthetic sequence column.
     if (sortKeyIndices_.empty()) {
-      return sortedInput.column(0);
+      return sequenceCol->view();
     }
     if (sortKeyIndices_.size() == 1 || baseName == "row_number") {
       return sortedInput.column(sortKeyIndices_[0]);
@@ -254,21 +317,21 @@ std::unique_ptr<cudf::column> CudfWindow::computeNthValueColumn(
   auto mr = get_output_mr();
   auto nullPolicy = func.ignoreNulls ? cudf::null_policy::EXCLUDE
                                      : cudf::null_policy::INCLUDE;
+
+  auto preceding = toWindowBound(func.frame.startType, func.frame.startValue);
+  auto following = toWindowBound(func.frame.endType, func.frame.endValue);
+
   if (baseName == "first_value") {
     auto agg = cudf::make_nth_element_aggregation<cudf::rolling_aggregation>(
         0, nullPolicy);
-    auto unbounded = cudf::window_bounds::unbounded();
-    auto current = cudf::window_bounds::get(1);
     return cudf::grouped_rolling_window(
-        partKeys, inputCol, unbounded, current, 1, *agg, stream, mr);
+        partKeys, inputCol, preceding, following, 1, *agg, stream, mr);
   }
-  // last_value
+  // last_value: use -1 to get the last element in the frame.
   auto agg = cudf::make_nth_element_aggregation<cudf::rolling_aggregation>(
       -1, nullPolicy);
-  auto unbounded = cudf::window_bounds::unbounded();
-  auto current = cudf::window_bounds::get(1);
   return cudf::grouped_rolling_window(
-      partKeys, inputCol, current, unbounded, 1, *agg, stream, mr);
+      partKeys, inputCol, preceding, following, 1, *agg, stream, mr);
 }
 
 std::unique_ptr<cudf::column> CudfWindow::computeAggregateColumn(
@@ -276,6 +339,7 @@ std::unique_ptr<cudf::column> CudfWindow::computeAggregateColumn(
     cudf::column_view inputCol,
     const core::WindowNode::Function& func,
     const std::string& baseName,
+    bool isCountStar,
     rmm::cuda_stream_view stream) const {
   auto mr = get_output_mr();
   std::unique_ptr<cudf::rolling_aggregation> agg;
@@ -286,8 +350,10 @@ std::unique_ptr<cudf::column> CudfWindow::computeAggregateColumn(
   } else if (baseName == "max") {
     agg = cudf::make_max_aggregation<cudf::rolling_aggregation>();
   } else if (baseName == "count") {
-    agg = cudf::make_count_aggregation<cudf::rolling_aggregation>(
-        cudf::null_policy::EXCLUDE);
+    // count(*) counts all rows; count(col) excludes nulls.
+    auto nullPolicy =
+        isCountStar ? cudf::null_policy::INCLUDE : cudf::null_policy::EXCLUDE;
+    agg = cudf::make_count_aggregation<cudf::rolling_aggregation>(nullPolicy);
   } else {
     agg = cudf::make_mean_aggregation<cudf::rolling_aggregation>();
   }
@@ -317,50 +383,8 @@ std::unique_ptr<cudf::column> CudfWindow::computeAggregateColumn(
         mr);
   }
 
-  // Convert Velox frame bounds to cudf window bounds.
-  auto toBound = [](core::WindowNode::BoundType type,
-                    const core::TypedExprPtr& value) -> cudf::window_bounds {
-    switch (type) {
-      case core::WindowNode::BoundType::kUnboundedPreceding:
-      case core::WindowNode::BoundType::kUnboundedFollowing:
-        return cudf::window_bounds::unbounded();
-      case core::WindowNode::BoundType::kCurrentRow:
-        return cudf::window_bounds::get(0);
-      case core::WindowNode::BoundType::kPreceding:
-      case core::WindowNode::BoundType::kFollowing: {
-        if (value) {
-          if (auto constExpr =
-                  std::dynamic_pointer_cast<const core::ConstantTypedExpr>(
-                      value)) {
-            VELOX_USER_CHECK(
-                constExpr->type()->isInteger(),
-                "Window frame bound must be INTEGER or BIGINT type, got {}",
-                constExpr->type()->toString());
-            if (constExpr->hasValueVector()) {
-              auto vec = constExpr->valueVector();
-              if (vec->type()->kind() == TypeKind::INTEGER) {
-                return cudf::window_bounds::get(
-                    vec->as<SimpleVector<int32_t>>()->valueAt(0));
-              }
-              return cudf::window_bounds::get(
-                  vec->as<SimpleVector<int64_t>>()->valueAt(0));
-            }
-            if (constExpr->type()->kind() == TypeKind::INTEGER) {
-              return cudf::window_bounds::get(
-                  constExpr->value().value<int32_t>());
-            }
-            return cudf::window_bounds::get(
-                constExpr->value().value<int64_t>());
-          }
-        }
-        return cudf::window_bounds::get(1);
-      }
-      default:
-        return cudf::window_bounds::unbounded();
-    }
-  };
-  auto preceding = toBound(func.frame.startType, func.frame.startValue);
-  auto following = toBound(func.frame.endType, func.frame.endValue);
+  auto preceding = toWindowBound(func.frame.startType, func.frame.startValue);
+  auto following = toWindowBound(func.frame.endType, func.frame.endValue);
 
   return cudf::grouped_rolling_window(
       partKeys, inputCol, preceding, following, 1, *agg, stream, mr);
@@ -462,9 +486,12 @@ RowVectorPtr CudfWindow::doGetOutput() {
         baseName == "sum" || baseName == "min" || baseName == "max" ||
         baseName == "count" || baseName == "avg") {
       auto inputColIdx = resolveInputColumn(func);
-      auto inputCol = sortedView.column(inputColIdx);
-      windowResultCols.push_back(
-          computeAggregateColumn(partKeys, inputCol, func, baseName, stream_));
+      // count(*) has no arguments, so inputColIdx is -1. Use column 0 for the
+      // rolling window but with INCLUDE null policy to count all rows.
+      bool isCountStar = (baseName == "count" && inputColIdx < 0);
+      auto inputCol = sortedView.column(isCountStar ? 0 : inputColIdx);
+      windowResultCols.push_back(computeAggregateColumn(
+          partKeys, inputCol, func, baseName, isCountStar, stream_));
     } else {
       VELOX_FAIL("Unsupported window function for cudf: {}", baseName);
     }

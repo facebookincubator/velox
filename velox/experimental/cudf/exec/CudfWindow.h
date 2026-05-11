@@ -135,11 +135,13 @@ class CudfWindow : public CudfOperatorBase {
 
   // Compute aggregate window functions (sum, min, max, count, avg)
   // with frame bounds from the WindowNode.
+  // isCountStar: true for count(*), false for count(col).
   std::unique_ptr<cudf::column> computeAggregateColumn(
       cudf::table_view const& partKeys,
       cudf::column_view inputCol,
       const core::WindowNode::Function& func,
       const std::string& baseName,
+      bool isCountStar,
       rmm::cuda_stream_view stream) const;
 
   std::shared_ptr<const core::WindowNode> windowNode_;
