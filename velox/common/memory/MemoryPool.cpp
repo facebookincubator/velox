@@ -227,6 +227,7 @@ MemoryPool::MemoryPool(
       trackUsage_(options.trackUsage),
       threadSafe_(options.threadSafe),
       debugOptions_(options.debugOptions),
+      resourceTag_(options.resourceTag),
       coreOnAllocationFailureEnabled_(options.coreOnAllocationFailureEnabled),
       getPreferredSize_(
           options.getPreferredSize == nullptr

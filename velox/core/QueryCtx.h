@@ -390,6 +390,21 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     pool_ = std::move(pool);
   }
 
+  /// Tracks an additional root pool tied to a custom memory resource. Called
+  /// by Builder::build for each entry in MemoryManager::customResources.
+  void addCustomPool(std::shared_ptr<memory::MemoryPool> pool);
+
+  /// Returns the custom root pool associated with the resource tag, or
+  /// nullptr if no pool was registered under that tag for this query.
+  std::shared_ptr<memory::MemoryPool> customPool(
+      const std::string& tag) const;
+
+  /// Returns all custom root pools registered for this query, in registration
+  /// order. The reference is stable for the lifetime of the QueryCtx.
+  const std::vector<std::shared_ptr<memory::MemoryPool>>& customPools() const {
+    return customPools_;
+  }
+
   /// Indicates if the query is under memory arbitration or not.
   bool testingUnderArbitration() const {
     std::lock_guard<std::mutex> l(mutex_);
@@ -482,6 +497,7 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
       connectorSessionProperties_;
   std::shared_ptr<memory::MemoryPool> pool_;
+  std::vector<std::shared_ptr<memory::MemoryPool>> customPools_;
   QueryConfig queryConfig_;
   std::atomic<uint64_t> numSpilledBytes_{0};
   std::atomic<uint64_t> numTracedBytes_{0};
