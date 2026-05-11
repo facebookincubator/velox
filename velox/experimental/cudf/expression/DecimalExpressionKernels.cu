@@ -36,8 +36,10 @@ namespace facebook::velox::cudf_velox {
 namespace {
 
 // Creates a null mask that marks zeros in the divisor column as null.
-// Returns the combined mask (existing nulls AND non-zero divisor) and null count.
-std::pair<std::unique_ptr<rmm::device_buffer>, cudf::size_type> createDivisorNullMask(
+// Returns the combined mask (existing nulls AND non-zero divisor) and null
+// count.
+std::pair<std::unique_ptr<rmm::device_buffer>, cudf::size_type>
+createDivisorNullMask(
     const cudf::column_view& divisor,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
@@ -45,12 +47,15 @@ std::pair<std::unique_ptr<rmm::device_buffer>, cudf::size_type> createDivisorNul
   std::unique_ptr<cudf::scalar> zero;
   auto scale = numeric::scale_type{divisor.type().scale()};
   if (divisor.type().id() == cudf::type_id::DECIMAL64) {
-    zero = cudf::make_fixed_point_scalar<numeric::decimal64>(0, scale, stream, mr);
+    zero =
+        cudf::make_fixed_point_scalar<numeric::decimal64>(0, scale, stream, mr);
   } else {
-    zero = cudf::make_fixed_point_scalar<numeric::decimal128>(0, scale, stream, mr);
+    zero = cudf::make_fixed_point_scalar<numeric::decimal128>(
+        0, scale, stream, mr);
   }
 
-  // Create boolean column: TRUE where divisor != 0 (valid), FALSE where divisor == 0 (null).
+  // Create boolean column: TRUE where divisor != 0 (valid), FALSE where divisor
+  // == 0 (null).
   auto nonZero = cudf::binary_operation(
       divisor,
       *zero,
