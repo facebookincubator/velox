@@ -1421,4 +1421,171 @@ TEST_F(AggregationTest, globalApproxDistinctWithNaN) {
   EXPECT_LE(cudfEstimate, 5);
 }
 
+// Test stddev_samp with kSingle step and grouped aggregation
+TEST_F(AggregationTest, stddevSampSingleGrouped) {
+  // Hand-crafted data with known expected results
+  // Group 0: [1, 2, 3] -> stddev_samp = 1.0
+  // Group 1: [4, 6] -> stddev_samp = sqrt(2) ≈ 1.414
+  // Group 2: [10, 20, 30, 40] -> stddev_samp = sqrt(500/3) ≈ 12.909
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({0, 0, 0, 1, 1, 2, 2, 2, 2}), // c0 - key
+      makeFlatVector<int64_t>({1, 2, 3, 4, 6, 10, 20, 30, 40}), // c1 - bigint
+      makeFlatVector<double>(
+          {1.0, 2.0, 3.0, 4.0, 6.0, 10.0, 20.0, 30.0, 40.0}), // c2 - double
+  });
+  createDuckDbTable({data});
+
+  // Test with bigint input
+  auto op = PlanBuilder()
+                .values({data})
+                .singleAggregation({"c0"}, {"stddev_samp(c1)"})
+                .planNode();
+
+  assertQuery(op, "SELECT c0, stddev_samp(c1) FROM tmp GROUP BY c0");
+
+  // Test with double input
+  auto op2 = PlanBuilder()
+                 .values({data})
+                 .singleAggregation({"c0"}, {"stddev_samp(c2)"})
+                 .planNode();
+
+  assertQuery(op2, "SELECT c0, stddev_samp(c2) FROM tmp GROUP BY c0");
+}
+
+// Test stddev_samp with kPartial + kFinal (two-stage distributed)
+TEST_F(AggregationTest, stddevSampPartialFinalGrouped) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({0, 0, 0, 1, 1, 2, 2, 2, 2}),
+      makeFlatVector<int64_t>({1, 2, 3, 4, 6, 10, 20, 30, 40}),
+      makeFlatVector<double>({1.0, 2.0, 3.0, 4.0, 6.0, 10.0, 20.0, 30.0, 40.0}),
+  });
+  createDuckDbTable({data});
+
+  // Test with bigint input
+  auto op = PlanBuilder()
+                .values({data})
+                .partialAggregation({"c0"}, {"stddev_samp(c1)"})
+                .finalAggregation()
+                .planNode();
+
+  assertQuery(op, "SELECT c0, stddev_samp(c1) FROM tmp GROUP BY c0");
+
+  // Test with double input
+  auto op2 = PlanBuilder()
+                 .values({data})
+                 .partialAggregation({"c0"}, {"stddev_samp(c2)"})
+                 .finalAggregation()
+                 .planNode();
+
+  assertQuery(op2, "SELECT c0, stddev_samp(c2) FROM tmp GROUP BY c0");
+}
+
+// Test stddev_samp with kPartial + kIntermediate + kFinal (three-stage)
+TEST_F(AggregationTest, stddevSampPartialIntermediateFinalGrouped) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({0, 0, 0, 1, 1, 2, 2, 2, 2}),
+      makeFlatVector<int64_t>({1, 2, 3, 4, 6, 10, 20, 30, 40}),
+      makeFlatVector<double>({1.0, 2.0, 3.0, 4.0, 6.0, 10.0, 20.0, 30.0, 40.0}),
+  });
+  createDuckDbTable({data});
+
+  // Test with bigint input
+  auto op = PlanBuilder()
+                .values({data})
+                .partialAggregation({"c0"}, {"stddev_samp(c1)"})
+                .intermediateAggregation()
+                .finalAggregation()
+                .planNode();
+
+  assertQuery(op, "SELECT c0, stddev_samp(c1) FROM tmp GROUP BY c0");
+
+  // Test with double input
+  auto op2 = PlanBuilder()
+                 .values({data})
+                 .partialAggregation({"c0"}, {"stddev_samp(c2)"})
+                 .intermediateAggregation()
+                 .finalAggregation()
+                 .planNode();
+
+  assertQuery(op2, "SELECT c0, stddev_samp(c2) FROM tmp GROUP BY c0");
+}
+
+// Test stddev_samp with NULL values in input
+TEST_F(AggregationTest, stddevSampWithNulls) {
+  // Group 0: [1, NULL, 3] -> should compute stddev of [1, 3] = sqrt(2) ≈ 1.414
+  // Group 1: [4, 6, NULL] -> should compute stddev of [4, 6] = sqrt(2) ≈ 1.414
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({0, 0, 0, 1, 1, 1}),
+      makeNullableFlatVector<int64_t>({1, std::nullopt, 3, 4, 6, std::nullopt}),
+      makeNullableFlatVector<double>(
+          {1.0, std::nullopt, 3.0, 4.0, 6.0, std::nullopt}),
+  });
+  createDuckDbTable({data});
+
+  auto op = PlanBuilder()
+                .values({data})
+                .singleAggregation({"c0"}, {"stddev_samp(c1)"})
+                .planNode();
+
+  assertQuery(op, "SELECT c0, stddev_samp(c1) FROM tmp GROUP BY c0");
+
+  auto op2 = PlanBuilder()
+                 .values({data})
+                 .singleAggregation({"c0"}, {"stddev_samp(c2)"})
+                 .planNode();
+
+  assertQuery(op2, "SELECT c0, stddev_samp(c2) FROM tmp GROUP BY c0");
+}
+
+// Test stddev_samp with single value per group (should return NULL)
+TEST_F(AggregationTest, stddevSampSingleValueGroup) {
+  // Each group has only one value -> stddev_samp should return NULL
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({0, 1, 2}),
+      makeFlatVector<int64_t>({10, 20, 30}),
+      makeFlatVector<double>({10.0, 20.0, 30.0}),
+  });
+  createDuckDbTable({data});
+
+  auto op = PlanBuilder()
+                .values({data})
+                .singleAggregation({"c0"}, {"stddev_samp(c1)"})
+                .planNode();
+
+  assertQuery(op, "SELECT c0, stddev_samp(c1) FROM tmp GROUP BY c0");
+
+  auto op2 = PlanBuilder()
+                 .values({data})
+                 .singleAggregation({"c0"}, {"stddev_samp(c2)"})
+                 .planNode();
+
+  assertQuery(op2, "SELECT c0, stddev_samp(c2) FROM tmp GROUP BY c0");
+}
+
+// Test stddev_samp with all NULL input (should return NULL)
+TEST_F(AggregationTest, stddevSampAllNulls) {
+  // Group 0: all NULLs -> stddev_samp should return NULL
+  // Group 1: has values -> should compute normally
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({0, 0, 1, 1}),
+      makeNullableFlatVector<int64_t>({std::nullopt, std::nullopt, 1, 2}),
+      makeNullableFlatVector<double>({std::nullopt, std::nullopt, 1.0, 2.0}),
+  });
+  createDuckDbTable({data});
+
+  auto op = PlanBuilder()
+                .values({data})
+                .singleAggregation({"c0"}, {"stddev_samp(c1)"})
+                .planNode();
+
+  assertQuery(op, "SELECT c0, stddev_samp(c1) FROM tmp GROUP BY c0");
+
+  auto op2 = PlanBuilder()
+                 .values({data})
+                 .singleAggregation({"c0"}, {"stddev_samp(c2)"})
+                 .planNode();
+
+  assertQuery(op2, "SELECT c0, stddev_samp(c2) FROM tmp GROUP BY c0");
+}
+
 } // namespace facebook::velox::exec::test

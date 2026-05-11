@@ -42,8 +42,8 @@ uint64_t IoStatistics::outputBatchSize() const {
   return outputBatchSize_.load(std::memory_order_relaxed);
 }
 
-uint64_t IoStatistics::totalScanTime() const {
-  return totalScanTime_.load(std::memory_order_relaxed);
+uint64_t IoStatistics::totalScanTimeNs() const {
+  return totalScanTimeNs_.load(std::memory_order_relaxed);
 }
 
 uint64_t IoStatistics::writeIOTimeUs() const {
@@ -70,8 +70,8 @@ uint64_t IoStatistics::incRawOverreadBytes(int64_t v) {
   return rawOverreadBytes_.fetch_add(v, std::memory_order_relaxed);
 }
 
-uint64_t IoStatistics::incTotalScanTime(int64_t v) {
-  return totalScanTime_.fetch_add(v, std::memory_order_relaxed);
+uint64_t IoStatistics::incTotalScanTimeNs(int64_t v) {
+  return totalScanTimeNs_.fetch_add(v, std::memory_order_relaxed);
 }
 
 uint64_t IoStatistics::incWriteIOTimeUs(int64_t v) {
@@ -111,7 +111,7 @@ IoStatistics::operationStats() const {
 void IoStatistics::merge(const IoStatistics& other) {
   rawBytesRead_ += other.rawBytesRead_;
   rawBytesWritten_ += other.rawBytesWritten_;
-  totalScanTime_ += other.totalScanTime_;
+  totalScanTimeNs_ += other.totalScanTimeNs_;
 
   rawOverreadBytes_ += other.rawOverreadBytes_;
   prefetch_.merge(other.prefetch_);
