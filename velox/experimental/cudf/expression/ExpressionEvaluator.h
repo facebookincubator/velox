@@ -164,14 +164,9 @@ class FunctionExpression : public CudfExpression {
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr);
 
-  static int32_t resolveFieldReferenceIndex(
-      const std::shared_ptr<velox::exec::FieldReference>& fieldExpr,
-      const RowTypePtr& parentRowType);
-
   std::shared_ptr<velox::exec::Expr> expr_;
   std::shared_ptr<CudfFunction> function_;
   std::vector<std::shared_ptr<CudfExpression>> subexpressions_;
-  int32_t fieldIndex_{-1};
 
   RowTypePtr inputRowSchema_;
 };

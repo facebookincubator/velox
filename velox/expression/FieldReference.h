@@ -56,6 +56,8 @@ class FieldReference : public SpecialForm {
     return Expr::isConstantExpr() && !inputs_.empty();
   }
 
+  int32_t index(const RowType& rowType);
+
   int32_t index(const EvalCtx& context) {
     if (index_ != -1) {
       return index_;

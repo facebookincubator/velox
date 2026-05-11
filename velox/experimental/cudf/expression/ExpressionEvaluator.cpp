@@ -2421,15 +2421,6 @@ std::shared_ptr<FunctionExpression> FunctionExpression::create(
 
   auto name = expr->name();
   node->function_ = createCudfFunction(name, expr);
-  if (auto fieldExpr = std::dynamic_pointer_cast<FieldReference>(expr);
-      fieldExpr && !fieldExpr->inputs().empty()) {
-    VELOX_CHECK_EQ(
-        fieldExpr->inputs().size(),
-        1,
-        "Nested field reference expects exactly one input");
-    node->fieldIndex_ = FunctionExpression::resolveFieldReferenceIndex(
-        fieldExpr, asRowType(expr->inputs()[0]->type()));
-  }
 
   if (node->function_ || std::dynamic_pointer_cast<FieldReference>(expr)) {
     for (const auto& input : expr->inputs()) {
@@ -2441,36 +2432,6 @@ std::shared_ptr<FunctionExpression> FunctionExpression::create(
   }
 
   return node;
-}
-
-int32_t FunctionExpression::resolveFieldReferenceIndex(
-    const std::shared_ptr<velox::exec::FieldReference>& fieldExpr,
-    const RowTypePtr& parentRowType) {
-  VELOX_CHECK_NOT_NULL(parentRowType);
-  // FieldReference stores the compiled dereference index internally. Resolve it
-  // once during expression creation using a lightweight EvalCtx scoped to the
-  // parent ROW type so unnamed-field dereferences stay aligned with CPU.
-  auto pool = memory::memoryManager()->addLeafPool();
-  auto queryCtx = core::QueryCtx::Builder().pool(pool).build();
-  core::ExecCtx execCtx(pool.get(), queryCtx.get());
-  exec::ExprSet exprSet(
-      std::vector<core::TypedExprPtr>{},
-      &execCtx,
-      /*enableConstantFolding=*/false);
-
-  std::vector<VectorPtr> children;
-  children.reserve(parentRowType->size());
-  for (size_t childIndex = 0; childIndex < parentRowType->size();
-       ++childIndex) {
-    children.push_back(
-        BaseVector::createNullConstant(
-            parentRowType->childAt(childIndex), 1, pool.get()));
-  }
-
-  auto row = std::make_shared<RowVector>(
-      pool.get(), parentRowType, nullptr, 1, std::move(children), 0);
-  exec::EvalCtx evalCtx(&execCtx, &exprSet, row.get());
-  return fieldExpr->index(evalCtx);
 }
 
 std::unique_ptr<cudf::column> FunctionExpression::makeStructChildColumn(
@@ -2512,9 +2473,10 @@ ColumnOrView FunctionExpression::eval(
     VELOX_CHECK(
         parentView.type().id() == cudf::type_id::STRUCT,
         "Nested field reference expects a ROW input");
-    VELOX_CHECK_GE(fieldIndex_, 0, "Nested field reference did not resolve");
+    auto parentRowType = asRowType(fieldExpr->inputs()[0]->type());
+    auto fieldIndex = fieldExpr->index(*parentRowType);
     return FunctionExpression::makeStructChildColumn(
-        parentView, fieldIndex_, stream, mr);
+        parentView, fieldIndex, stream, mr);
   }
 
   if (function_) {
