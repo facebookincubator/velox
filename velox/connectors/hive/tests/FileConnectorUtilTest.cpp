@@ -19,6 +19,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/io/IoStatistics.h"
 #include "velox/connectors/hive/FileConfig.h"
 #include "velox/connectors/hive/FileConnectorSplit.h"
 #include "velox/connectors/hive/TableHandle.h"
@@ -78,13 +79,20 @@ class FileConnectorUtilTest : public exec::test::HiveConnectorTestBase {
   }
 
   std::unique_ptr<dwio::common::Reader> makeReader(const std::string& path) {
-    dwio::common::ReaderOptions readerOpts{pool_.get()};
+    dwio::common::ReaderOptions readerOpts(pool_.get());
+    readerOpts.setDataIoStats(dataIoStats_.get());
+    readerOpts.setMetadataIoStats(metadataIoStats_.get());
     readerOpts.setFileFormat(dwio::common::FileFormat::DWRF);
     auto readFile = std::make_shared<LocalReadFile>(path);
     auto input = std::make_unique<dwio::common::BufferedInput>(
         std::move(readFile), readerOpts.memoryPool());
     return dwrf::DwrfReader::create(std::move(input), readerOpts);
   }
+
+  std::shared_ptr<velox::io::IoStatistics> dataIoStats_ =
+      std::make_shared<velox::io::IoStatistics>();
+  std::shared_ptr<velox::io::IoStatistics> metadataIoStats_ =
+      std::make_shared<velox::io::IoStatistics>();
 
  private:
   std::vector<std::shared_ptr<exec::test::TempFilePath>> tempPaths_;
@@ -98,6 +106,8 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
     auto holder = makeConnectorQueryCtx();
     auto split = makeSplit(dwio::common::FileFormat::DWRF);
     dwio::common::ReaderOptions readerOptions(pool_.get());
+    readerOptions.setDataIoStats(dataIoStats_.get());
+    readerOptions.setMetadataIoStats(metadataIoStats_.get());
     hive::configureReaderOptions(
         fileConfig,
         holder.ctx.get(),
@@ -117,6 +127,8 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
         {{hive::FileConfig::kOrcUseColumnNamesSession, "true"}});
     auto split = makeSplit(dwio::common::FileFormat::ORC);
     dwio::common::ReaderOptions readerOptions(pool_.get());
+    readerOptions.setDataIoStats(dataIoStats_.get());
+    readerOptions.setMetadataIoStats(metadataIoStats_.get());
     hive::configureReaderOptions(
         fileConfig,
         holder.ctx.get(),
@@ -135,6 +147,8 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
         {{hive::FileConfig::kParquetUseColumnNamesSession, "true"}});
     auto split = makeSplit(dwio::common::FileFormat::PARQUET);
     dwio::common::ReaderOptions readerOptions(pool_.get());
+    readerOptions.setDataIoStats(dataIoStats_.get());
+    readerOptions.setMetadataIoStats(metadataIoStats_.get());
     hive::configureReaderOptions(
         fileConfig,
         holder.ctx.get(),
@@ -152,6 +166,8 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
     auto holder = makeConnectorQueryCtx();
     auto split = makeSplit(dwio::common::FileFormat::DWRF);
     dwio::common::ReaderOptions readerOptions(pool_.get());
+    readerOptions.setDataIoStats(dataIoStats_.get());
+    readerOptions.setMetadataIoStats(metadataIoStats_.get());
     readerOptions.setFileFormat(dwio::common::FileFormat::PARQUET);
     VELOX_ASSERT_THROW(
         hive::configureReaderOptions(

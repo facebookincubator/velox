@@ -22,6 +22,7 @@
 #include "velox/connectors/hive/FileConnectorSplit.h"
 #include "velox/connectors/hive/FileConnectorUtil.h"
 #include "velox/dwio/common/ReaderFactory.h"
+#include "velox/type/DecimalUtil.h"
 
 namespace facebook::velox::connector::hive {
 namespace {
@@ -51,6 +52,19 @@ VectorPtr newConstantFromStringImpl(
         pool, 1, false, type, std::move(days));
   }
 
+  if constexpr (std::is_same_v<T, int64_t> || std::is_same_v<T, int128_t>) {
+    if (type->isDecimal()) {
+      T decimalValue = 0;
+      auto [precision, scale] = getDecimalPrecisionScale(*type);
+      auto status = DecimalUtil::castFromString(
+          StringView(value.value()), precision, scale, decimalValue);
+      if (!status.ok()) {
+        VELOX_USER_FAIL(status.message());
+      }
+      return std::make_shared<ConstantVector<T>>(
+          pool, 1, false, type, std::move(decimalValue));
+    }
+  }
   if constexpr (std::is_same_v<T, StringView>) {
     return std::make_shared<ConstantVector<StringView>>(
         pool, 1, false, type, StringView(value.value()));
@@ -93,7 +107,8 @@ std::unique_ptr<FileSplitReader> FileSplitReader::create(
     const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<const FileConfig>& fileConfig,
     const RowTypePtr& readerOutputType,
-    const std::shared_ptr<io::IoStatistics>& ioStatistics,
+    const std::shared_ptr<io::IoStatistics>& dataIoStats,
+    const std::shared_ptr<io::IoStatistics>& metadataIoStats,
     const std::shared_ptr<IoStats>& ioStats,
     FileHandleFactory* fileHandleFactory,
     folly::Executor* ioExecutor,
@@ -106,7 +121,8 @@ std::unique_ptr<FileSplitReader> FileSplitReader::create(
       connectorQueryCtx,
       fileConfig,
       readerOutputType,
-      ioStatistics,
+      dataIoStats,
+      metadataIoStats,
       ioStats,
       fileHandleFactory,
       ioExecutor,
@@ -121,27 +137,32 @@ FileSplitReader::FileSplitReader(
     const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<const FileConfig>& fileConfig,
     const RowTypePtr& readerOutputType,
-    const std::shared_ptr<io::IoStatistics>& ioStatistics,
+    const std::shared_ptr<io::IoStatistics>& dataIoStats,
+    const std::shared_ptr<io::IoStatistics>& metadataIoStats,
     const std::shared_ptr<IoStats>& ioStats,
     FileHandleFactory* fileHandleFactory,
     folly::Executor* ioExecutor,
     const std::shared_ptr<common::ScanSpec>& scanSpec,
     const common::SubfieldFilters* subfieldFiltersForValidation)
-    : fileSplit_(fileSplit),
-      tableHandle_(tableHandle),
+    : tableHandle_(tableHandle),
       partitionKeys_(partitionKeys),
-      connectorQueryCtx_(connectorQueryCtx),
       fileConfig_(fileConfig),
-      readerOutputType_(readerOutputType),
-      ioStatistics_(ioStatistics),
+      dataIoStats_(dataIoStats),
+      metadataIoStats_(metadataIoStats),
       ioStats_(ioStats),
       fileHandleFactory_(fileHandleFactory),
       ioExecutor_(ioExecutor),
       pool_(connectorQueryCtx->memoryPool()),
       scanSpec_(scanSpec),
       subfieldFiltersForValidation_(subfieldFiltersForValidation),
+      fileSplit_(fileSplit),
+      connectorQueryCtx_(connectorQueryCtx),
+      readerOutputType_(readerOutputType),
       baseReaderOpts_(connectorQueryCtx->memoryPool()),
-      emptySplit_(false) {}
+      emptySplit_(false) {
+  baseReaderOpts_.setDataIoStats(dataIoStats_.get());
+  baseReaderOpts_.setMetadataIoStats(metadataIoStats_.get());
+}
 
 void FileSplitReader::configureReaderOptions(
     std::shared_ptr<velox::random::RandomSkipTracker> randomSkip) {
@@ -286,7 +307,7 @@ void FileSplitReader::createReader(
       *fileHandleCachePtr,
       baseReaderOpts_,
       connectorQueryCtx_,
-      ioStatistics_,
+      dataIoStats_,
       ioStats_,
       ioExecutor_,
       fileReadOps);
@@ -343,6 +364,12 @@ void FileSplitReader::createRowReader(
     std::optional<bool> rowSizeTrackingEnabled) {
   VELOX_CHECK_NULL(baseRowReader_);
   configureBaseRowReaderOptions(std::move(metadataFilter), std::move(rowType));
+  baseRowReaderOpts_.setStringDecoderZeroCopy(
+      fileConfig_->nimbleStringDecoderZeroCopy(
+          connectorQueryCtx_->sessionProperties()));
+  baseRowReaderOpts_.setNimblePreserveDictionaryEncoding(
+      fileConfig_->nimblePreserveDictionaryEncoding(
+          connectorQueryCtx_->sessionProperties()));
   baseRowReaderOpts_.setTrackRowSize(
       rowSizeTrackingEnabled.has_value()
           ? *rowSizeTrackingEnabled

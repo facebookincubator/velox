@@ -21,6 +21,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/file/tests/TestUtils.h"
+#include "velox/common/io/IoStatistics.h"
 #include "velox/common/io/Options.h"
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/testutil/TestValue.h"
@@ -62,7 +63,6 @@ class CachedBufferedInputTest : public testing::Test {
     allocator_ = std::make_shared<MallocAllocator>(MemoryAllocator::Options{
         .capacity = 512 << 20, .reservationByteLimit = 0});
     cache_ = AsyncDataCache::create(allocator_.get());
-    ioStatistics_ = std::make_shared<IoStatistics>();
     tracker_ = std::make_shared<ScanTracker>(
         "testTracker", nullptr, 256 << 10 /* 256KB */);
     pool_ = memoryManager()->addLeafPool();
@@ -75,11 +75,15 @@ class CachedBufferedInputTest : public testing::Test {
     allocator_.reset();
   }
 
+  const std::shared_ptr<IoStatistics> dataIoStats_{
+      std::make_shared<IoStatistics>()};
+  const std::shared_ptr<IoStatistics> metadataIoStats_{
+      std::make_shared<IoStatistics>()};
+
   std::unique_ptr<folly::CPUThreadPoolExecutor> executor_;
   std::shared_ptr<MemoryPool> pool_;
   std::shared_ptr<MallocAllocator> allocator_;
   std::shared_ptr<AsyncDataCache> cache_;
-  std::shared_ptr<IoStatistics> ioStatistics_;
   std::shared_ptr<ScanTracker> tracker_;
 };
 
@@ -146,6 +150,8 @@ TEST_F(CachedBufferedInputTest, reset) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   readerOptions.setLoadQuantum(1 << 20);
 
   auto& ids = fileIds();
@@ -159,7 +165,7 @@ TEST_F(CachedBufferedInputTest, reset) {
       cache_.get(),
       tracker_,
       std::move(groupId),
-      ioStatistics_,
+      dataIoStats_,
       nullptr,
       executor_.get(),
       readerOptions);
@@ -283,6 +289,8 @@ TEST_F(CachedBufferedInputTest, readAfterReset) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   readerOptions.setLoadQuantum(1 << 20);
 
   auto& ids = fileIds();
@@ -296,7 +304,7 @@ TEST_F(CachedBufferedInputTest, readAfterReset) {
       cache_.get(),
       tracker_,
       std::move(groupId),
-      ioStatistics_,
+      dataIoStats_,
       nullptr,
       executor_.get(),
       readerOptions);
@@ -350,6 +358,8 @@ DEBUG_ONLY_TEST_F(CachedBufferedInputTest, resetInputWithBeforeLoading) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   readerOptions.setLoadQuantum(1 << 20);
 
   auto& ids = fileIds();
@@ -363,7 +373,7 @@ DEBUG_ONLY_TEST_F(CachedBufferedInputTest, resetInputWithBeforeLoading) {
       cache_.get(),
       tracker_,
       std::move(groupId),
-      ioStatistics_,
+      dataIoStats_,
       nullptr,
       executor_.get(),
       readerOptions);
@@ -446,6 +456,8 @@ DEBUG_ONLY_TEST_F(CachedBufferedInputTest, resetInputWithAfterLoading) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   readerOptions.setLoadQuantum(1 << 20);
 
   auto& ids = fileIds();
@@ -459,7 +471,7 @@ DEBUG_ONLY_TEST_F(CachedBufferedInputTest, resetInputWithAfterLoading) {
       cache_.get(),
       tracker_,
       std::move(groupId),
-      ioStatistics_,
+      dataIoStats_,
       nullptr,
       executor_.get(),
       readerOptions);
@@ -542,6 +554,8 @@ TEST_F(CachedBufferedInputTest, hasCache) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   auto& ids = fileIds();
   StringIdLease fileId(ids, "testFile");
   StringIdLease groupId(ids, "testGroup");
@@ -553,7 +567,7 @@ TEST_F(CachedBufferedInputTest, hasCache) {
       cache_.get(),
       tracker_,
       std::move(groupId),
-      ioStatistics_,
+      dataIoStats_,
       nullptr,
       executor_.get(),
       readerOptions);
@@ -573,6 +587,8 @@ TEST_P(CacheRegionTest, cacheAndFind) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   auto& ids = fileIds();
   StringIdLease fileId(ids, "testFile_cacheAndFind");
   StringIdLease groupId(ids, "testGroup_cacheAndFind");
@@ -584,7 +600,7 @@ TEST_P(CacheRegionTest, cacheAndFind) {
       cache_.get(),
       tracker_,
       std::move(groupId),
-      ioStatistics_,
+      dataIoStats_,
       nullptr,
       executor_.get(),
       readerOptions);
@@ -640,6 +656,8 @@ TEST_P(CacheRegionTest, smallEntry) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   auto& ids = fileIds();
   StringIdLease fileId(ids, "testFile_smallEntry");
   StringIdLease groupId(ids, "testGroup_smallEntry");
@@ -651,7 +669,7 @@ TEST_P(CacheRegionTest, smallEntry) {
       cache_.get(),
       tracker_,
       std::move(groupId),
-      ioStatistics_,
+      dataIoStats_,
       nullptr,
       executor_.get(),
       readerOptions);
@@ -667,18 +685,18 @@ TEST_P(CacheRegionTest, smallEntry) {
   // First findCachedRegion after cacheRegion should count as a cache hit since
   // cacheRegion clears the first-use flag (data was populated externally, not
   // loaded on-demand).
-  EXPECT_EQ(ioStatistics_->ramHit().count(), 0);
+  EXPECT_EQ(dataIoStats_->ramHit().count(), 0);
   auto result = input.findCachedRegion(kOffset);
   ASSERT_TRUE(result.has_value());
   EXPECT_EQ(result->size(), kSize);
-  EXPECT_EQ(ioStatistics_->ramHit().count(), 1);
-  EXPECT_EQ(ioStatistics_->ramHit().sum(), kSize);
+  EXPECT_EQ(dataIoStats_->ramHit().count(), 1);
+  EXPECT_EQ(dataIoStats_->ramHit().sum(), kSize);
 
   // Second findCachedRegion is also a cache hit.
   auto result2 = input.findCachedRegion(kOffset);
   ASSERT_TRUE(result2.has_value());
-  EXPECT_EQ(ioStatistics_->ramHit().count(), 2);
-  EXPECT_EQ(ioStatistics_->ramHit().sum(), 2 * kSize);
+  EXPECT_EQ(dataIoStats_->ramHit().count(), 2);
+  EXPECT_EQ(dataIoStats_->ramHit().sum(), 2 * kSize);
 
   // Small entry should have exactly one contiguous range.
   const auto& ranges = result->ranges();
@@ -709,6 +727,8 @@ TEST_P(CacheRegionTest, largeEntry) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   auto& ids = fileIds();
   StringIdLease fileId(ids, "testFile_largeEntry");
   StringIdLease groupId(ids, "testGroup_largeEntry");
@@ -720,7 +740,7 @@ TEST_P(CacheRegionTest, largeEntry) {
       cache_.get(),
       tracker_,
       std::move(groupId),
-      ioStatistics_,
+      dataIoStats_,
       nullptr,
       executor_.get(),
       readerOptions);
@@ -772,6 +792,8 @@ TEST_P(CacheRegionTest, miss) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   auto& ids = fileIds();
   StringIdLease fileId(ids, "testFile_miss");
   StringIdLease groupId(ids, "testGroup_miss");
@@ -783,7 +805,7 @@ TEST_P(CacheRegionTest, miss) {
       cache_.get(),
       tracker_,
       std::move(groupId),
-      ioStatistics_,
+      dataIoStats_,
       nullptr,
       executor_.get(),
       readerOptions);
@@ -803,6 +825,8 @@ TEST_P(CacheRegionTest, pinKeepsDataAlive) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   auto& ids = fileIds();
   StringIdLease fileId(ids, "testFile_pinAlive");
   StringIdLease groupId(ids, "testGroup_pinAlive");
@@ -814,7 +838,7 @@ TEST_P(CacheRegionTest, pinKeepsDataAlive) {
       cache_.get(),
       tracker_,
       std::move(groupId),
-      ioStatistics_,
+      dataIoStats_,
       nullptr,
       executor_.get(),
       readerOptions);
@@ -870,6 +894,8 @@ TEST_F(CachedBufferedInputTest, findCachedRegionExclusiveWithWait) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   auto& ids = fileIds();
   const std::string fileName = "testFile_findWait";
   StringIdLease fileId(ids, fileName);
@@ -882,7 +908,7 @@ TEST_F(CachedBufferedInputTest, findCachedRegionExclusiveWithWait) {
       cache_.get(),
       tracker_,
       std::move(groupId),
-      ioStatistics_,
+      dataIoStats_,
       nullptr,
       executor_.get(),
       readerOptions);
@@ -894,13 +920,13 @@ TEST_F(CachedBufferedInputTest, findCachedRegionExclusiveWithWait) {
   // CachedBufferedInput.
   StringIdLease sameFileId(ids, fileName);
   RawFileCacheKey key{sameFileId.id(), kOffset};
-  auto exclusivePin = cache_->findOrCreate(key, kSize, nullptr);
+  auto exclusivePin = cache_->findOrCreate(key, kSize);
   ASSERT_FALSE(exclusivePin.empty());
   ASSERT_TRUE(exclusivePin.entry()->isExclusive());
 
   // Verify latency counters are initially zero.
-  EXPECT_EQ(ioStatistics_->cacheWaitLatencyUs().count(), 0);
-  EXPECT_EQ(ioStatistics_->queryThreadIoLatencyUs().count(), 0);
+  EXPECT_EQ(dataIoStats_->cacheWaitLatencyUs().count(), 0);
+  EXPECT_EQ(dataIoStats_->queryThreadIoLatencyUs().count(), 0);
 
   // Spawn a thread that calls findCachedRegion — it will block waiting for
   // the exclusive entry to become shared.
@@ -918,7 +944,7 @@ TEST_F(CachedBufferedInputTest, findCachedRegionExclusiveWithWait) {
   // Populate the entry and transition to shared.
   auto* entry = exclusivePin.entry();
   ASSERT_LT(kSize, AsyncDataCacheEntry::kTinyDataSize);
-  ::memcpy(entry->tinyData(), content.data() + kOffset, kSize);
+  ::memcpy(entry->contiguousData(), content.data() + kOffset, kSize);
   entry->setExclusiveToShared();
   exclusivePin.clear();
 
@@ -927,10 +953,10 @@ TEST_F(CachedBufferedInputTest, findCachedRegionExclusiveWithWait) {
   ASSERT_TRUE(findFinished.load(std::memory_order_acquire));
 
   // Verify the latency counters were incremented.
-  EXPECT_EQ(ioStatistics_->cacheWaitLatencyUs().count(), 1);
-  EXPECT_GT(ioStatistics_->cacheWaitLatencyUs().sum(), 0);
-  EXPECT_EQ(ioStatistics_->queryThreadIoLatencyUs().count(), 1);
-  EXPECT_GT(ioStatistics_->queryThreadIoLatencyUs().sum(), 0);
+  EXPECT_EQ(dataIoStats_->cacheWaitLatencyUs().count(), 1);
+  EXPECT_GT(dataIoStats_->cacheWaitLatencyUs().sum(), 0);
+  EXPECT_EQ(dataIoStats_->queryThreadIoLatencyUs().count(), 1);
+  EXPECT_GT(dataIoStats_->queryThreadIoLatencyUs().sum(), 0);
 
   // Verify the returned CachedRegion has correct data.
   ASSERT_TRUE(findResult.has_value());
@@ -952,6 +978,8 @@ TEST_F(CachedBufferedInputTest, cacheRegionSkipsOngoingInsert) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   auto& ids = fileIds();
   const std::string fileName = "testFile_skipInsert";
   StringIdLease fileId(ids, fileName);
@@ -964,7 +992,7 @@ TEST_F(CachedBufferedInputTest, cacheRegionSkipsOngoingInsert) {
       cache_.get(),
       tracker_,
       std::move(groupId),
-      ioStatistics_,
+      dataIoStats_,
       nullptr,
       executor_.get(),
       readerOptions);
@@ -975,7 +1003,7 @@ TEST_F(CachedBufferedInputTest, cacheRegionSkipsOngoingInsert) {
   // Simulate an ongoing insert by creating an exclusive entry directly.
   StringIdLease sameFileId(ids, fileName);
   RawFileCacheKey key{sameFileId.id(), kOffset};
-  auto exclusivePin = cache_->findOrCreate(key, kSize, nullptr);
+  auto exclusivePin = cache_->findOrCreate(key, kSize);
   ASSERT_FALSE(exclusivePin.empty());
   ASSERT_TRUE(exclusivePin.entry()->isExclusive());
 
@@ -991,7 +1019,7 @@ TEST_F(CachedBufferedInputTest, cacheRegionSkipsOngoingInsert) {
   // Complete the original insert with the real data.
   auto* entry = exclusivePin.entry();
   ASSERT_LT(kSize, AsyncDataCacheEntry::kTinyDataSize);
-  ::memcpy(entry->tinyData(), content.data() + kOffset, kSize);
+  ::memcpy(entry->contiguousData(), content.data() + kOffset, kSize);
   entry->setExclusiveToShared();
   exclusivePin.clear();
 
@@ -1016,6 +1044,8 @@ TEST_F(CachedBufferedInputTest, preloadCalledTwice) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   auto& ids = fileIds();
   StringIdLease fileId(ids, "preloadTwice");
   StringIdLease groupId(ids, "preloadTwiceGroup");
@@ -1027,7 +1057,7 @@ TEST_F(CachedBufferedInputTest, preloadCalledTwice) {
       cache_.get(),
       tracker_,
       std::move(groupId),
-      ioStatistics_,
+      dataIoStats_,
       nullptr,
       executor_.get(),
       readerOptions);
@@ -1042,6 +1072,8 @@ TEST_F(CachedBufferedInputTest, isBufferedWithPreload) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   auto& ids = fileIds();
   StringIdLease fileId(ids, "isBufferedPreload");
   StringIdLease groupId(ids, "isBufferedPreloadGroup");
@@ -1053,7 +1085,7 @@ TEST_F(CachedBufferedInputTest, isBufferedWithPreload) {
       cache_.get(),
       tracker_,
       std::move(groupId),
-      ioStatistics_,
+      dataIoStats_,
       nullptr,
       executor_.get(),
       readerOptions);
@@ -1074,6 +1106,8 @@ TEST_F(CachedBufferedInputTest, enqueueSkipsRequestsWhenPreloaded) {
   auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   auto& ids = fileIds();
   StringIdLease fileId(ids, "enqueueSkipsRequests");
   StringIdLease groupId(ids, "enqueueSkipsRequestsGroup");
@@ -1085,7 +1119,7 @@ TEST_F(CachedBufferedInputTest, enqueueSkipsRequestsWhenPreloaded) {
       cache_.get(),
       tracker_,
       std::move(groupId),
-      ioStatistics_,
+      dataIoStats_,
       nullptr,
       executor_.get(),
       readerOptions);
@@ -1124,6 +1158,8 @@ TEST_F(CachedBufferedInputTest, readSetsPreloadedPinWhenPreloaded) {
   auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   readerOptions.setLoadQuantum(1 << 20);
 
   auto& ids = fileIds();
@@ -1137,7 +1173,7 @@ TEST_F(CachedBufferedInputTest, readSetsPreloadedPinWhenPreloaded) {
       cache_.get(),
       tracker_,
       std::move(groupId),
-      ioStatistics_,
+      dataIoStats_,
       nullptr,
       executor_.get(),
       readerOptions);
@@ -1166,6 +1202,8 @@ TEST_F(CachedBufferedInputTest, preloadAfterEnqueue) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   auto& ids = fileIds();
   StringIdLease fileId(ids, "preloadAfterEnqueue");
   StringIdLease groupId(ids, "preloadAfterEnqueueGroup");
@@ -1177,7 +1215,7 @@ TEST_F(CachedBufferedInputTest, preloadAfterEnqueue) {
       cache_.get(),
       tracker_,
       std::move(groupId),
-      ioStatistics_,
+      dataIoStats_,
       nullptr,
       executor_.get(),
       readerOptions);
@@ -1201,6 +1239,8 @@ TEST_F(CachedBufferedInputTest, preloadedStreamSkipsEviction) {
   auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   readerOptions.setCacheable(false);
   readerOptions.setLoadQuantum(1 << 20);
 
@@ -1215,7 +1255,7 @@ TEST_F(CachedBufferedInputTest, preloadedStreamSkipsEviction) {
       cache_.get(),
       tracker_,
       std::move(groupId),
-      ioStatistics_,
+      dataIoStats_,
       nullptr,
       executor_.get(),
       readerOptions);
@@ -1264,6 +1304,8 @@ TEST_F(CachedBufferedInputTest, preloadRespectsNotCacheable) {
   auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   readerOptions.setCacheable(false);
   readerOptions.setLoadQuantum(1 << 20);
 
@@ -1280,7 +1322,7 @@ TEST_F(CachedBufferedInputTest, preloadRespectsNotCacheable) {
         cache_.get(),
         tracker_,
         std::move(groupId),
-        ioStatistics_,
+        dataIoStats_,
         nullptr,
         executor_.get(),
         readerOptions);
@@ -1310,6 +1352,8 @@ TEST_F(CachedBufferedInputTest, preloadRespectsCacheable) {
   auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   readerOptions.setCacheable(true);
   readerOptions.setLoadQuantum(1 << 20);
 
@@ -1326,7 +1370,7 @@ TEST_F(CachedBufferedInputTest, preloadRespectsCacheable) {
         cache_.get(),
         tracker_,
         std::move(groupId),
-        ioStatistics_,
+        dataIoStats_,
         nullptr,
         executor_.get(),
         readerOptions);
@@ -1368,6 +1412,8 @@ TEST_F(CachedBufferedInputTest, preload) {
     auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
 
     io::ReaderOptions readerOptions(pool_.get());
+    readerOptions.setDataIoStats(dataIoStats_.get());
+    readerOptions.setMetadataIoStats(metadataIoStats_.get());
     readerOptions.setLoadQuantum(1 << 20);
 
     auto& ids = fileIds();
@@ -1382,7 +1428,7 @@ TEST_F(CachedBufferedInputTest, preload) {
         cache_.get(),
         tracker_,
         std::move(groupId),
-        ioStatistics_,
+        dataIoStats_,
         nullptr,
         executor_.get(),
         readerOptions);
@@ -1391,9 +1437,9 @@ TEST_F(CachedBufferedInputTest, preload) {
     EXPECT_FALSE(input.preloaded());
 
     auto statsBefore = cache_->refreshStats();
-    const auto readCountBefore = ioStatistics_->read().count();
-    const auto readSumBefore = ioStatistics_->read().sum();
-    const auto rawBytesBefore = ioStatistics_->rawBytesRead();
+    const auto readCountBefore = dataIoStats_->read().count();
+    const auto readSumBefore = dataIoStats_->read().sum();
+    const auto rawBytesBefore = dataIoStats_->rawBytesRead();
 
     input.preload();
 
@@ -1408,10 +1454,9 @@ TEST_F(CachedBufferedInputTest, preload) {
     // preloadPin_ holds a shared pin.
     EXPECT_GT(statsAfter.sharedPinnedBytes, 0);
     // IO stats: one storage read of fileSize bytes.
-    EXPECT_EQ(ioStatistics_->read().count(), readCountBefore + 1);
-    EXPECT_EQ(ioStatistics_->read().sum(), readSumBefore + testData.fileSize);
-    EXPECT_EQ(
-        ioStatistics_->rawBytesRead(), rawBytesBefore + testData.fileSize);
+    EXPECT_EQ(dataIoStats_->read().count(), readCountBefore + 1);
+    EXPECT_EQ(dataIoStats_->read().sum(), readSumBefore + testData.fileSize);
+    EXPECT_EQ(dataIoStats_->rawBytesRead(), rawBytesBefore + testData.fileSize);
 
     // Enqueue sub-region streams and read from the preloaded cache entry.
     const uint64_t regionSize =
@@ -1450,6 +1495,8 @@ TEST_F(CachedBufferedInputTest, preloadCacheSharing) {
   auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   readerOptions.setLoadQuantum(1 << 20);
 
   auto& ids = fileIds();
@@ -1464,7 +1511,7 @@ TEST_F(CachedBufferedInputTest, preloadCacheSharing) {
       cache_.get(),
       tracker_,
       std::move(groupId1),
-      ioStatistics_,
+      dataIoStats_,
       nullptr,
       executor_.get(),
       readerOptions);
@@ -1477,7 +1524,7 @@ TEST_F(CachedBufferedInputTest, preloadCacheSharing) {
   ASSERT_EQ(readFile->numReads(), 1);
 
   auto stats1 = cache_->refreshStats();
-  auto readCount1 = ioStatistics_->read().count();
+  auto readCount1 = dataIoStats_->read().count();
 
   // Second CachedBufferedInput with the same file should hit the cache.
   StringIdLease fileId2(ids, fileName);
@@ -1490,7 +1537,7 @@ TEST_F(CachedBufferedInputTest, preloadCacheSharing) {
       cache_.get(),
       tracker_,
       std::move(groupId2),
-      ioStatistics_,
+      dataIoStats_,
       nullptr,
       executor_.get(),
       readerOptions);
@@ -1506,7 +1553,7 @@ TEST_F(CachedBufferedInputTest, preloadCacheSharing) {
   EXPECT_EQ(stats2.numEntries, stats1.numEntries);
 
   // No additional storage read should happen (cache hit).
-  EXPECT_EQ(ioStatistics_->read().count(), readCount1);
+  EXPECT_EQ(dataIoStats_->read().count(), readCount1);
 
   // Both inputs should still be able to read data.
   auto stream1 = input1.enqueue(common::Region{0, 100}, nullptr);
@@ -1533,6 +1580,8 @@ TEST_F(CachedBufferedInputTest, prefetchScope) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
 
   auto& ids = fileIds();
   StringIdLease fileId(ids, "testFile");
@@ -1545,7 +1594,7 @@ TEST_F(CachedBufferedInputTest, prefetchScope) {
       cache_.get(),
       tracker_,
       std::move(groupId),
-      ioStatistics_,
+      dataIoStats_,
       nullptr,
       executor_.get(),
       readerOptions);
@@ -1586,7 +1635,7 @@ TEST_F(CachedBufferedInputTest, prefetchScope) {
   EXPECT_EQ(loadsAfterPrefetch[1]->state(), CoalescedLoad::State::kLoaded)
       << "Prefetch load should be submitted and completed by executor";
 
-  EXPECT_EQ(ioStatistics_->prefetch().sum(), kNumRequests * kRequestSize);
+  EXPECT_EQ(dataIoStats_->prefetch().sum(), kNumRequests * kRequestSize);
 }
 
 TEST_F(CachedBufferedInputTest, cloneNonCacheable) {
@@ -1595,6 +1644,8 @@ TEST_F(CachedBufferedInputTest, cloneNonCacheable) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   readerOptions.setLoadQuantum(1 << 20);
 
   auto& ids = fileIds();
@@ -1609,7 +1660,7 @@ TEST_F(CachedBufferedInputTest, cloneNonCacheable) {
       cache_.get(),
       tracker_,
       std::move(groupId),
-      ioStatistics_,
+      dataIoStats_,
       /*ioStats=*/nullptr,
       executor_.get(),
       readerOptions);
@@ -1660,7 +1711,7 @@ TEST_F(CachedBufferedInputTest, cloneNonCacheable) {
       cache_.get(),
       tracker_,
       std::move(groupId2),
-      ioStatistics_,
+      dataIoStats_,
       /*ioStats=*/nullptr,
       executor_.get(),
       readerOptions);
