@@ -34,11 +34,7 @@ SelectiveDecimalColumnReader<DataT>::SelectiveDecimalColumnReader(
     // BIGINT) we fall back to the file type to avoid buffer-size mismatches
     // in getIntValues(); in that case the Gluten fallback-tag logic will
     // ensure symmetric scan behaviour at the join level.
-    : SelectiveColumnReader(
-          requestedType,
-          std::move(fileType),
-          params,
-          scanSpec) {
+    : SelectiveColumnReader(requestedType, fileType, params, scanSpec) {
   EncodingKey encodingKey{fileType_->id(), params.flatMapContext().sequence};
   auto& stripe = params.stripeStreams();
   if constexpr (std::is_same_v<DataT, std::int64_t>) {
