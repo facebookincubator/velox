@@ -1840,7 +1840,6 @@ TEST_F(ParquetReaderTest, fileColumnVarcharToMetadataColumnMismatchTest) {
   }
 }
 
-<<<<<<< HEAD
 TEST_F(ParquetReaderTest, readerWithSchema) {
   // Create an in-memory writer.
   auto sink = std::make_unique<MemorySink>(

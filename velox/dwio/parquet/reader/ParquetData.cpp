@@ -312,6 +312,7 @@ ParquetData::readDictionaryPageForFiltering(
       type_,
       columnChunk.compression(),
       columnChunk.totalCompressedSize(),
+      stats_,
       sessionTimezone_);
   // Read the first page header to trigger dictionary loading
   auto pageHeader = pageReader->readPageHeader();
