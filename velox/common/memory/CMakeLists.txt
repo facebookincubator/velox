@@ -40,6 +40,7 @@ velox_add_library(
   ArbitrationParticipant.h
   ByteStream.h
   CompactDoubleList.h
+  CustomMemoryResource.h
   HashStringAllocator.h
   MallocAllocator.h
   Memory.h

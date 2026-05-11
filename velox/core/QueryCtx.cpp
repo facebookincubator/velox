@@ -56,6 +56,23 @@ std::shared_ptr<QueryCtx> QueryCtx::Builder::build() {
       std::move(tokenProvider_),
       std::move(traceCtxProvider_)));
   queryCtx->maybeSetReclaimer();
+  for (const auto& mr : memory::memoryManager()->customResources()) {
+    auto reclaimer =
+        mr.reclaimerFactory ? mr.reclaimerFactory(queryCtx.get()) : nullptr;
+    // Reuse generatePoolName so the custom pool gets the same uniqueness
+    // guarantee as the regular query pool (atomic seq counter), then suffix
+    // the resource tag so it's identifiable in pool dumps.
+    auto pool = memory::memoryManager()->addRootPool(
+        fmt::format(
+            "{}.{}",
+            QueryCtx::generatePoolName(queryCtx->queryId()),
+            mr.tag),
+        mr.maxCapacity,
+        std::move(reclaimer),
+        std::nullopt,
+        mr.tag);
+    queryCtx->addCustomPool(std::move(pool));
+  }
   for (auto& cb : releaseCallbacks_) {
     queryCtx->addReleaseCallback(std::move(cb));
   }
@@ -103,6 +120,22 @@ QueryCtx::~QueryCtx() {
   // name is unique.
   static std::atomic<int64_t> seqNum{0};
   return fmt::format("query.{}.{}", queryId, seqNum++);
+}
+
+void QueryCtx::addCustomPool(std::shared_ptr<memory::MemoryPool> pool) {
+  VELOX_CHECK_NOT_NULL(pool);
+  customPools_.push_back(std::move(pool));
+}
+
+std::shared_ptr<memory::MemoryPool> QueryCtx::customPool(
+    const std::string& tag) const {
+  for (const auto& pool : customPools_) {
+    const auto& poolTag = pool->resourceTag();
+    if (poolTag.has_value() && *poolTag == tag) {
+      return pool;
+    }
+  }
+  return nullptr;
 }
 
 void QueryCtx::maybeSetReclaimer() {

@@ -37,6 +37,7 @@
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/memory/Allocation.h"
+#include "velox/common/memory/CustomMemoryResource.h"
 #include "velox/common/memory/MemoryAllocator.h"
 #include "velox/common/memory/MemoryPool.h"
 
@@ -215,13 +216,30 @@ class MemoryManager {
 
   /// Creates a root memory pool with specified 'name' and 'maxCapacity'. If
   /// 'name' is missing, the memory manager generates a default name internally
-  /// to ensure uniqueness.
+  /// to ensure uniqueness. If 'resourceTag' is set, the pool is associated
+  /// with the custom memory resource registered under that tag.
   std::shared_ptr<MemoryPool> addRootPool(
       const std::string& name = "",
       int64_t maxCapacity = kMaxMemory,
       std::unique_ptr<MemoryReclaimer> reclaimer = nullptr,
       const std::optional<MemoryPool::DebugOptions>& poolDebugOpts =
-          std::nullopt);
+          std::nullopt,
+      const std::optional<std::string>& resourceTag = std::nullopt);
+
+  /// Registers a custom memory resource. Tag must be unique across previously
+  /// registered resources. Throws VeloxUserError on duplicate.
+  ///
+  /// NOT thread-safe. Must be called during process startup, before any
+  /// QueryCtx is built or any user code reads customResources(). Typical
+  /// callers are extension init routines invoked from main() or a static
+  /// initializer.
+  void registerCustomResource(CustomMemoryResource resource);
+
+  /// Returns the registered custom resources in registration order.
+  /// Lock-free read; safe only after all registrations have completed (see
+  /// registerCustomResource). The returned reference is stable for the
+  /// lifetime of the MemoryManager because registration only appends.
+  const std::vector<CustomMemoryResource>& customResources() const;
 
   /// Creates a leaf memory pool for direct memory allocation use with specified
   /// 'name'. If 'name' is missing, the memory manager generates a default name
@@ -332,6 +350,10 @@ class MemoryManager {
   mutable folly::SharedMutex mutex_;
   // All user root pools allocated from 'this'.
   std::unordered_map<std::string, std::weak_ptr<MemoryPool>> pools_;
+
+  // Custom memory resources registered before any query started. Not guarded
+  // by a mutex; see registerCustomResource for the threading contract.
+  std::vector<CustomMemoryResource> customResources_;
 };
 
 /// Initializes the process-wide memory manager based on the specified

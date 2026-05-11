@@ -284,7 +284,8 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
     const std::string& name,
     int64_t maxCapacity,
     std::unique_ptr<MemoryReclaimer> reclaimer,
-    const std::optional<MemoryPool::DebugOptions>& poolDebugOpts) {
+    const std::optional<MemoryPool::DebugOptions>& poolDebugOpts,
+    const std::optional<std::string>& resourceTag) {
   std::string poolName = name;
   if (poolName.empty()) {
     static std::atomic<int64_t> poolId{0};
@@ -298,6 +299,7 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
   options.coreOnAllocationFailureEnabled = coreOnAllocationFailureEnabled_;
   options.getPreferredSize = getPreferredSize_;
   options.debugOptions = poolDebugOpts;
+  options.resourceTag = resourceTag;
 
   auto pool = createRootPool(poolName, reclaimer, options);
   if (!disableMemoryPoolTracking_) {
@@ -376,6 +378,27 @@ MemoryAllocator* MemoryManager::allocator() {
 
 MemoryArbitrator* MemoryManager::arbitrator() {
   return arbitrator_.get();
+}
+
+void MemoryManager::registerCustomResource(CustomMemoryResource resource) {
+  VELOX_USER_CHECK(!resource.tag.empty(), "CustomMemoryResource tag is empty");
+  VELOX_USER_CHECK_NOT_NULL(
+      resource.allocator,
+      "CustomMemoryResource allocator is null for tag: {}",
+      resource.tag);
+  for (const auto& existing : customResources_) {
+    VELOX_USER_CHECK_NE(
+        existing.tag,
+        resource.tag,
+        "CustomMemoryResource already registered for tag: {}",
+        resource.tag);
+  }
+  customResources_.push_back(std::move(resource));
+}
+
+const std::vector<CustomMemoryResource>& MemoryManager::customResources()
+    const {
+  return customResources_;
 }
 
 std::string MemoryManager::toString(bool detail) const {

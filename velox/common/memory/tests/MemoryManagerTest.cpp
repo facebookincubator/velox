@@ -295,6 +295,61 @@ TEST_F(MemoryManagerTest, addPoolWithArbitrator) {
 }
 
 // TODO: remove this test when remove deprecatedDefaultMemoryManager.
+TEST_F(MemoryManagerTest, customResourceRegistration) {
+  MemoryManager manager{};
+  ASSERT_TRUE(manager.customResources().empty());
+
+  MemoryAllocator::Options allocatorOptions;
+  allocatorOptions.capacity = 1L << 30;
+
+  CustomMemoryResource resource;
+  resource.tag = "test-resource";
+  resource.maxCapacity = 1L << 28;
+  resource.allocator = std::make_shared<MallocAllocator>(allocatorOptions);
+  manager.registerCustomResource(std::move(resource));
+
+  ASSERT_EQ(manager.customResources().size(), 1);
+  EXPECT_EQ(manager.customResources()[0].tag, "test-resource");
+  EXPECT_EQ(manager.customResources()[0].maxCapacity, 1L << 28);
+
+  // Empty tag is rejected.
+  CustomMemoryResource emptyTag;
+  emptyTag.allocator = std::make_shared<MallocAllocator>(allocatorOptions);
+  VELOX_ASSERT_THROW(
+      manager.registerCustomResource(std::move(emptyTag)),
+      "CustomMemoryResource tag is empty");
+
+  // Null allocator is rejected.
+  CustomMemoryResource nullAllocator;
+  nullAllocator.tag = "another";
+  VELOX_ASSERT_THROW(
+      manager.registerCustomResource(std::move(nullAllocator)),
+      "CustomMemoryResource allocator is null for tag: another");
+
+  // Duplicate tag is rejected.
+  CustomMemoryResource duplicate;
+  duplicate.tag = "test-resource";
+  duplicate.allocator = std::make_shared<MallocAllocator>(allocatorOptions);
+  VELOX_ASSERT_THROW(
+      manager.registerCustomResource(std::move(duplicate)),
+      "CustomMemoryResource already registered for tag: test-resource");
+
+  // The first registration is unaffected.
+  ASSERT_EQ(manager.customResources().size(), 1);
+}
+
+TEST_F(MemoryManagerTest, addRootPoolWithResourceTag) {
+  MemoryManager manager{};
+  auto pool = manager.addRootPool(
+      "tagged-root", kMaxMemory, nullptr, std::nullopt, "gpu");
+  ASSERT_NE(pool, nullptr);
+  ASSERT_TRUE(pool->resourceTag().has_value());
+  EXPECT_EQ(*pool->resourceTag(), "gpu");
+
+  auto untagged = manager.addRootPool("untagged-root");
+  EXPECT_FALSE(untagged->resourceTag().has_value());
+}
+
 TEST_F(MemoryManagerTest, defaultMemoryManager) {
   auto& managerA = toMemoryManager(deprecatedDefaultMemoryManager());
   auto& managerB = toMemoryManager(deprecatedDefaultMemoryManager());
