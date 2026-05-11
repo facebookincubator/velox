@@ -68,6 +68,7 @@ block(SCOPE_FOR VARIABLES)
   # Setup libcudf build to not have testing components
   set(BUILD_TESTS OFF)
   set(CUDF_BUILD_TESTUTIL OFF)
+  set(CUDF_BUILD_STREAMS_TEST_UTIL OFF)
   set(BUILD_SHARED_LIBS ON)
 
   FetchContent_Declare(
