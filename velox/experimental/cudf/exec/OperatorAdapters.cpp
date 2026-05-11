@@ -898,13 +898,13 @@ class WindowAdapter : public OperatorAdapter {
 
       if (usesFrame) {
         // Check frame type - RANGE with non-trivial bounds is not supported.
-        // RANGE with UNBOUNDED/CURRENT ROW is equivalent to ROWS and is
-        // allowed.
+        // Only these RANGE combinations are supported (equivalent to ROWS):
+        // - UNBOUNDED PRECEDING to CURRENT ROW
+        // - UNBOUNDED PRECEDING to UNBOUNDED FOLLOWING
         if (func.frame.type == core::WindowNode::WindowType::kRange) {
           bool startOk =
               func.frame.startType ==
-                  core::WindowNode::BoundType::kUnboundedPreceding ||
-              func.frame.startType == core::WindowNode::BoundType::kCurrentRow;
+                  core::WindowNode::BoundType::kUnboundedPreceding;
           bool endOk =
               func.frame.endType ==
                   core::WindowNode::BoundType::kUnboundedFollowing ||

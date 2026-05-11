@@ -1375,13 +1375,13 @@ TEST_F(CudfWindowTest, windowAdapterGatingChecks) {
       });
   AssertQueryBuilder(plan1).assertResults(expected1);
 
-  // Supported: RANGE CURRENT ROW to UNBOUNDED FOLLOWING
+  // Supported: RANGE UNBOUNDED PRECEDING to UNBOUNDED FOLLOWING
   auto plan2 =
       PlanBuilder()
           .values({data})
           .window(
               {"sum(v) over (partition by p order by v "
-               "range between current row and unbounded following)"})
+               "range between unbounded preceding and unbounded following)"})
           .orderBy({"p ASC NULLS LAST", "v ASC NULLS LAST"}, false)
           .planNode();
   auto expected2 = makeRowVector(
@@ -1389,9 +1389,21 @@ TEST_F(CudfWindowTest, windowAdapterGatingChecks) {
       {
           makeFlatVector<int32_t>({1, 1, 1}),
           makeFlatVector<int64_t>({10, 20, 30}),
-          makeFlatVector<int64_t>({60, 50, 30}),
+          makeFlatVector<int64_t>({60, 60, 60}),
       });
   AssertQueryBuilder(plan2).assertResults(expected2);
+
+  // Unsupported: RANGE CURRENT ROW to UNBOUNDED FOLLOWING
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(
+          PlanBuilder()
+              .values({data})
+              .window(
+                  {"sum(v) over (partition by p order by v "
+                   "range between current row and unbounded following)"})
+              .planNode())
+          .copyResults(pool()),
+      "Replacement with cuDF operator failed");
 }
 
 } // namespace
