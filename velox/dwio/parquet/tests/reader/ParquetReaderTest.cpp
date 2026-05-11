@@ -2098,7 +2098,8 @@ TEST_F(ParquetReaderTest, dictionaryEncodedComplexFilter) {
   // Test 1: Region filter — only the dictionary filter can skip RG1
   // (column stats keep all three row groups).
   {
-    dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+    dwio::common::ReaderOptions readerOptions{
+        leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
     auto reader = createReader(sample, readerOptions);
 
     auto scanSpec = makeScanSpec(rowType);
@@ -2123,7 +2124,8 @@ TEST_F(ParquetReaderTest, dictionaryEncodedComplexFilter) {
   // Test 2: Product filter — every row group's dict contains "productA",
   // so no skipping should occur.
   {
-    dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+    dwio::common::ReaderOptions readerOptions{
+        leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
     auto reader = createReader(sample, readerOptions);
 
     auto scanSpec = makeScanSpec(rowType);
@@ -2146,7 +2148,8 @@ TEST_F(ParquetReaderTest, dictionaryEncodedComplexFilter) {
   // Test 3: Filter that matches no region — every row group should be
   // skipped (RG0 by column stats, RG1 and RG2 by dictionary filter).
   {
-    dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+    dwio::common::ReaderOptions readerOptions{
+        leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
     auto reader = createReader(sample, readerOptions);
 
     auto scanSpec = makeScanSpec(rowType);
