@@ -16,6 +16,7 @@ velox_add_library(
   velox_functions_spark_specialforms
   AtLeastNNonNulls.cpp
   DecimalRound.cpp
+  FromCsv.cpp
   FromJson.cpp
   GetArrayStructFields.cpp
   GetStructField.cpp
@@ -25,6 +26,7 @@ velox_add_library(
   HEADERS
   AtLeastNNonNulls.h
   DecimalRound.h
+  FromCsv.h
   FromJson.h
   GetArrayStructFields.h
   GetStructField.h

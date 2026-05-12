@@ -19,6 +19,7 @@
 #include "velox/expression/SpecialFormRegistry.h"
 #include "velox/functions/sparksql/specialforms/AtLeastNNonNulls.h"
 #include "velox/functions/sparksql/specialforms/DecimalRound.h"
+#include "velox/functions/sparksql/specialforms/FromCsv.h"
 #include "velox/functions/sparksql/specialforms/FromJson.h"
 #include "velox/functions/sparksql/specialforms/GetArrayStructFields.h"
 #include "velox/functions/sparksql/specialforms/GetStructField.h"
@@ -47,6 +48,9 @@ void registerSpecialFormGeneralFunctions(const std::string& prefix) {
       expression::kCast, std::make_unique<SparkCastCallToSpecialForm>());
   registerFunctionCallToSpecialForm(
       expression::kTryCast, std::make_unique<SparkTryCastCallToSpecialForm>());
+  exec::registerFunctionCallToSpecialForm(
+      FromCsvCallToSpecialForm::kFromCsv,
+      std::make_unique<FromCsvCallToSpecialForm>());
   exec::registerFunctionCallToSpecialForm(
       FromJsonCallToSpecialForm::kFromJson,
       std::make_unique<FromJsonCallToSpecialForm>());
