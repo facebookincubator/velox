@@ -21,6 +21,7 @@
 #include "velox/common/time/Timer.h"
 #include "velox/connectors/hive/FileDataSource.h"
 #include "velox/connectors/hive/FileIndexReader.h"
+#include "velox/connectors/hive/FileSplitReader.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/exec/OperatorUtils.h"
@@ -169,7 +170,7 @@ std::string getTableColumnName(
   auto it = assignments.find(inputColumnName);
   VELOX_USER_CHECK(
       it != assignments.end(),
-      "Column '{}' not found in assignments",
+      "Column not found in assignments: {}",
       inputColumnName);
   const auto* handle =
       checkedPointerCast<const HiveColumnHandle>(it->second.get());
@@ -824,8 +825,17 @@ void HiveIndexSource::init(
     const auto [it, unique] =
         columnHandles.emplace(handle->name(), handle.get());
     VELOX_CHECK(unique, "Duplicate column handle for {}", handle->name());
-    // NOTE: we only support regular column handle for hive index source.
-    checkColumnHandleIsRegular(*handle);
+    // Allow regular and partition key columns. Partition keys are not read
+    // from files — their values are synthesized from split metadata.
+    VELOX_CHECK(
+        handle->columnType() == HiveColumnHandle::ColumnType::kRegular ||
+            handle->columnType() == HiveColumnHandle::ColumnType::kPartitionKey,
+        "Unsupported column type {} for column {}",
+        HiveColumnHandle::columnTypeName(handle->columnType()),
+        handle->name());
+    if (handle->columnType() == HiveColumnHandle::ColumnType::kPartitionKey) {
+      partitionKeyHandles_.emplace(handle->name(), handle);
+    }
   }
 
   for (const auto& handle : tableHandle_->filterColumnHandles()) {
@@ -848,6 +858,12 @@ void HiveIndexSource::init(
 
     auto handle = checkedPointerCast<const HiveColumnHandle>(it->second);
     readColumnNames.push_back(handle->name());
+    if (handle->columnType() == HiveColumnHandle::ColumnType::kPartitionKey) {
+      // Subfield projection / postProcessor checks below don't apply to
+      // partition columns; their values come from split metadata.
+      continue;
+    }
+
     for (auto& subfield : handle->requiredSubfields()) {
       VELOX_USER_CHECK_EQ(
           getColumnName(subfield),
@@ -881,7 +897,7 @@ void HiveIndexSource::init(
       filters_,
       /*indexColumns=*/{},
       tableHandle_->dataColumns(),
-      /*partitionKeys=*/{},
+      partitionKeyHandles_,
       /*infoColumns=*/{},
       /*specialColumns=*/{},
       hiveConfig_->readStatsBasedFilterReorderDisabled(
@@ -889,11 +905,68 @@ void HiveIndexSource::init(
       pool_);
 }
 
+void HiveIndexSource::setPartitionValues(
+    const std::vector<std::shared_ptr<ConnectorSplit>>& splits) {
+  if (partitionKeyHandles_.empty() || splits.empty()) {
+    return;
+  }
+  const auto firstSplit =
+      checkedPointerCast<const HiveConnectorSplit>(splits[0]);
+  const auto& partitionValues = firstSplit->partitionKeys;
+
+  // Sanity check all splits share the same partition values.
+  for (size_t i = 1; i < splits.size(); ++i) {
+    const auto& split = checkedPointerCast<const HiveConnectorSplit>(splits[i]);
+    VELOX_CHECK(
+        split->partitionKeys == partitionValues,
+        "Split {} partition values differ from split 0: split[0].path={}, split[{}].path={}",
+        i,
+        firstSplit->filePath,
+        i,
+        split->filePath);
+  }
+
+  // Iterate scan spec children and set constant values for partition columns
+  // found in the split metadata.
+  auto& childrenSpecs = scanSpec_->children();
+  for (size_t i = 0; i < childrenSpecs.size(); ++i) {
+    auto* childSpec = childrenSpecs[i].get();
+    const auto& fieldName = childSpec->fieldName();
+
+    if (auto partitionIt = partitionValues.find(fieldName);
+        partitionIt != partitionValues.end()) {
+      setPartitionValue(childSpec, fieldName, partitionIt->second);
+    }
+  }
+}
+
+void HiveIndexSource::setPartitionValue(
+    common::ScanSpec* spec,
+    const std::string& partitionKey,
+    const std::optional<std::string>& value) const {
+  const auto it = partitionKeyHandles_.find(partitionKey);
+  VELOX_CHECK(
+      it != partitionKeyHandles_.end(),
+      "ColumnHandle is missing for partition key {}",
+      partitionKey);
+  const auto type = it->second->dataType();
+  const auto constant = newConstantFromString(
+      type,
+      value,
+      pool_,
+      hiveConfig_->readTimestampPartitionValueAsLocalTime(
+          connectorQueryCtx_->sessionProperties()),
+      it->second->isPartitionDateValueDaysSinceEpoch());
+  spec->setConstantValue(constant);
+}
+
 void HiveIndexSource::addSplits(
     std::vector<std::shared_ptr<ConnectorSplit>> splits) {
   VELOX_CHECK(
       readers_.empty(),
       "addSplits can only be called once for HiveIndexSource");
+
+  setPartitionValues(splits);
 
   auto* registry = IndexReaderFactoryRegistry::getInstance();
   for (auto& split : splits) {
