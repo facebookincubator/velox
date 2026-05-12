@@ -74,16 +74,6 @@ cudf::ast::literal makeLiteralFromScalar(
   }
 }
 
-template <TypeKind kind>
-variant getVariant(const VectorPtr& vector, size_t atIndex = 0) {
-  using T = typename facebook::velox::KindToFlatVector<kind>::WrapperType;
-  if constexpr (!std::is_same_v<T, ComplexType>) {
-    return vector->as<SimpleVector<T>>()->valueAt(atIndex);
-  } else {
-    return Variant();
-  }
-}
-
 template <typename T>
 std::unique_ptr<cudf::scalar> makeScalarFromValue(
     const TypePtr& type,
@@ -184,6 +174,18 @@ static std::unique_ptr<cudf::scalar> createCudfScalar(
       vector->type(), vector->value(), vector->isNullAt(0), toType);
 }
 
+template <TypeKind Kind>
+static std::unique_ptr<cudf::scalar> createCudfScalarFromVector(
+    const velox::VectorPtr& vector,
+    size_t atIndex = 0) {
+  using T = typename TypeTraits<Kind>::NativeType;
+  auto simpleVector = vector->as<SimpleVector<T>>();
+  return makeScalarFromValue<T>(
+      vector->type(),
+      simpleVector->valueAt(atIndex),
+      simpleVector->isNullAt(atIndex));
+}
+
 inline std::unique_ptr<cudf::scalar> makeScalarFromConstantExpr(
     const std::shared_ptr<velox::exec::Expr>& expr,
     std::optional<cudf::type_id> toType = std::nullopt) {
@@ -207,6 +209,17 @@ cudf::ast::literal makeScalarAndLiteral(
     return makeLiteralFromScalar<T>(*(scalars.back()), type);
   }
   VELOX_NYI("Scalar creation not implemented for type {}", type->toString());
+}
+
+template <TypeKind kind>
+cudf::ast::literal makeScalarAndLiteralFromVector(
+    const VectorPtr& vector,
+    std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+    size_t atIndex = 0) {
+  using T = typename TypeTraits<kind>::NativeType;
+  auto scalar = createCudfScalarFromVector<kind>(vector, atIndex);
+  scalars.emplace_back(std::move(scalar));
+  return makeLiteralFromScalar<T>(*(scalars.back()), vector->type());
 }
 
 } // namespace facebook::velox::cudf_velox

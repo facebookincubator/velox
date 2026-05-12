@@ -46,11 +46,8 @@ cudf::ast::literal createLiteral(
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     size_t atIndex = 0) {
   const auto kind = vector->typeKind();
-  const auto& type = vector->type();
-  variant value =
-      VELOX_DYNAMIC_TYPE_DISPATCH(getVariant, kind, vector, atIndex);
-  return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-      makeScalarAndLiteral, kind, type, value, scalars);
+  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+      makeScalarAndLiteralFromVector, kind, vector, scalars, atIndex);
 }
 
 // Helper function to extract literals from array elements based on type
