@@ -44,8 +44,11 @@ Integral types include bigint, integer, smallint, and tinyint.
 From integral types
 ^^^^^^^^^^^^^^^^^^^
 
+*(ANSI compliant)*
+
 Casting one integral type to another is allowed. When the input value exceeds the range of result type,
-a value of the result type is created forcedly with the input value.
+a value of the result type is created forcedly with the input value when ANSI mode is disabled;
+throws an error when ANSI mode is enabled.
 
 Valid examples:
 
@@ -53,14 +56,17 @@ Valid examples:
 
   SELECT cast(1234567 as bigint); -- 1234567
   SELECT cast(12 as tinyint); -- 12
-  SELECT cast(1234 as tinyint); -- -46
-  SELECT cast(1234567 as smallint); -- -10617
+  SELECT cast(1234 as tinyint); -- -46 (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast(1234567 as smallint); -- -10617 (ANSI OFF) / ERROR (ANSI ON)
 
 From floating-point types
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 
+*(ANSI compliant)*
+
 Casting from floating-point input to an integral type truncates the input value.
-It is allowed when the truncated result exceeds the range of result type.
+It is allowed when the truncated result exceeds the range of result type when ANSI mode
+is disabled; throws an error when ANSI mode is enabled.
 
 Valid examples
 
@@ -70,12 +76,12 @@ Valid examples
   SELECT cast(12345.67 as bigint); -- 12345
   SELECT cast(127.1 as tinyint); -- 127
   SELECT cast(127.8 as tinyint); -- 127
-  SELECT cast(1234567.89 as smallint); -- -10617
-  SELECT cast(cast('inf' as double) as bigint); -- 9223372036854775807
-  SELECT cast(cast('nan' as double) as integer); -- 0
-  SELECT cast(cast('nan' as double) as smallint); -- 0
-  SELECT cast(cast('nan' as double) as tinyint); -- 0
-  SELECT cast(cast('nan' as double) as bigint); -- 0
+  SELECT cast(1234567.89 as smallint); -- -10617 (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast(cast('inf' as double) as bigint); -- 9223372036854775807 (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast(cast('nan' as double) as integer); -- 0 (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast(cast('nan' as double) as smallint); -- 0 (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast(cast('nan' as double) as tinyint); -- 0 (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast(cast('nan' as double) as bigint); -- 0 (ANSI OFF) / ERROR (ANSI ON)
 
 From strings
 ^^^^^^^^^^^^
