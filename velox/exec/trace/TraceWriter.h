@@ -60,6 +60,21 @@ class TraceExprWriter {
   virtual void finish() = 0;
 };
 
+/// Abstract interface for capturing traced expression input. Implementations
+/// receive the raw input vectors (which may include null entries) and are
+/// responsible for filtering, wrapping, and serializing them.
+class TraceExprInputWriter {
+ public:
+  virtual ~TraceExprInputWriter() = default;
+
+  /// Writes expression input vectors. The inputs vector may contain null
+  /// entries which implementations should skip.
+  virtual void write(const std::vector<VectorPtr>& inputs) = 0;
+
+  /// Closes the data file and writes out the data summary.
+  virtual void finish() = 0;
+};
+
 /// Abstract interface for capturing traced split information. Implementations
 /// are responsible for processing and/or recording the splits found during
 /// query execution tracing, enabling replay and analysis of query input

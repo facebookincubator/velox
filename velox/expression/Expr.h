@@ -796,6 +796,9 @@ class Expr {
 
   // Cached output tracer set up during expression initialization.
   std::unique_ptr<trace::TraceExprWriter> outputTracer_;
+
+  // Cached input tracer set up during expression initialization.
+  std::unique_ptr<trace::TraceExprInputWriter> inputTracer_;
 };
 
 /// Generate a selectivity vector of a single row.

@@ -1710,6 +1710,10 @@ void Expr::applyFunction(
       ? computeIsAsciiForResult(vectorFunction_.get(), inputValues_, rows)
       : std::nullopt;
 
+  if (FOLLY_UNLIKELY(inputTracer_ != nullptr)) {
+    inputTracer_->write(inputValues_);
+  }
+
   try {
     vectorFunction_->apply(rows, inputValues_, type(), context, result);
   } catch (const VeloxException&) {
@@ -2043,6 +2047,7 @@ void Expr::maybeSetupTracer(
   if (traceCtx.shouldTraceExpr(name_)) {
     const int index = instanceCounts[name_]++;
     outputTracer_ = traceCtx.createExprOutputTracer(op, name_, index);
+    inputTracer_ = traceCtx.createExprInputTracer(op, name_, index);
     if (vectorFunction_) {
       traceCtx.maybeActivateIntraExprTracing(op, name_, *vectorFunction_);
     }
@@ -2065,6 +2070,9 @@ void Expr::finishTracer(std::unordered_set<Expr*>& visited) {
   }
   if (outputTracer_) {
     outputTracer_->finish();
+  }
+  if (inputTracer_) {
+    inputTracer_->finish();
   }
   for (auto& input : inputs_) {
     input->finishTracer(visited);

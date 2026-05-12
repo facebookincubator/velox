@@ -88,16 +88,22 @@ class TestTraceCtx : public TraceCtx {
 // Captures expression output vectors keyed by function name.
 using TExprCapturedVectors = std::unordered_map<std::string, VectorPtr>;
 
+// Captures expression input vectors keyed by function name.
+using TExprCapturedInputs =
+    std::unordered_map<std::string, std::vector<VectorPtr>>;
+
 // A test trace implementation for expression-level tracing. Traces output
 // batches from named expression functions listed in tracedExprs.
 class ExprTestTraceCtx : public TraceCtx {
  public:
   ExprTestTraceCtx(
       const std::vector<std::string>& tracedExprs,
-      TExprCapturedVectors& capturedVectors)
+      TExprCapturedVectors& capturedVectors,
+      TExprCapturedInputs* capturedInputs = nullptr)
       : TraceCtx(false),
         tracedExprs_(tracedExprs.begin(), tracedExprs.end()),
-        capturedVectors_(capturedVectors) {}
+        capturedVectors_(capturedVectors),
+        capturedInputs_(capturedInputs) {}
 
   bool shouldTrace(const Operator& /*op*/) const override {
     return true;
@@ -113,6 +119,18 @@ class ExprTestTraceCtx : public TraceCtx {
       int instanceIndex) const override {
     auto key = fmt::format("{}_{}", functionName, instanceIndex);
     return std::make_unique<TestExprWriter>(std::move(key), capturedVectors_);
+  }
+
+  std::unique_ptr<TraceExprInputWriter> createExprInputTracer(
+      const Operator& /*op*/,
+      std::string_view functionName,
+      int instanceIndex) const override {
+    if (!capturedInputs_) {
+      return nullptr;
+    }
+    auto key = fmt::format("{}_{}", functionName, instanceIndex);
+    return std::make_unique<TestExprInputWriterImpl>(
+        std::move(key), *capturedInputs_);
   }
 
  private:
@@ -135,8 +153,28 @@ class ExprTestTraceCtx : public TraceCtx {
     TExprCapturedVectors& capturedVectors_;
   };
 
+  class TestExprInputWriterImpl : public TraceExprInputWriter {
+   public:
+    TestExprInputWriterImpl(
+        std::string functionName,
+        TExprCapturedInputs& capturedInputs)
+        : functionName_(std::move(functionName)),
+          capturedInputs_(capturedInputs) {}
+
+    void write(const std::vector<VectorPtr>& inputs) override {
+      capturedInputs_[functionName_] = inputs;
+    }
+
+    void finish() override {}
+
+   private:
+    const std::string functionName_;
+    TExprCapturedInputs& capturedInputs_;
+  };
+
   std::unordered_set<std::string> tracedExprs_;
   TExprCapturedVectors& capturedVectors_;
+  TExprCapturedInputs* capturedInputs_;
 };
 
 class CustomTraceTest : public exec::test::HiveConnectorTestBase {};
@@ -225,6 +263,59 @@ TEST_F(CustomTraceTest, exprOutputTrace) {
   assertEqualVectors(iterator->second, expected);
 
   capturedVectors.clear();
+}
+
+TEST_F(CustomTraceTest, exprInputTrace) {
+  auto vector = makeRowVector(
+      {"a", "b"},
+      {makeFlatVector<int64_t>(10, [](auto row) { return row; }),
+       makeFlatVector<int64_t>(10, [](auto row) { return row + 100; })});
+
+  auto plan = PlanBuilder().values({vector}).project({"a + b as c"}).planNode();
+
+  TExprCapturedVectors capturedOutputs;
+  TExprCapturedInputs capturedInputs;
+  auto queryCtx =
+      core::QueryCtx::Builder()
+          .executor(executor_.get())
+          .traceCtxProvider([&](core::QueryCtx&, const core::PlanFragment&) {
+            return std::make_unique<ExprTestTraceCtx>(
+                std::vector<std::string>{"plus"},
+                capturedOutputs,
+                &capturedInputs);
+          })
+          .build();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan)
+      .config(core::QueryConfig::kQueryTraceEnabled, true)
+      .queryCtx(queryCtx)
+      .countResults(task);
+
+  // Verify input vectors were captured.
+  auto inputIterator = capturedInputs.find("plus_0");
+  ASSERT_TRUE(inputIterator != capturedInputs.end());
+
+  const auto& capturedInput = inputIterator->second;
+  ASSERT_EQ(capturedInput.size(), 2);
+
+  auto expectedInputA =
+      makeFlatVector<int64_t>(10, [](auto row) { return row; });
+  auto expectedInputB =
+      makeFlatVector<int64_t>(10, [](auto row) { return row + 100; });
+  assertEqualVectors(capturedInput[0], expectedInputA);
+  assertEqualVectors(capturedInput[1], expectedInputB);
+
+  // Verify output was also captured.
+  auto outputIterator = capturedOutputs.find("plus_0");
+  ASSERT_TRUE(outputIterator != capturedOutputs.end());
+
+  auto expectedOutput =
+      makeFlatVector<int64_t>(10, [](auto row) { return row + row + 100; });
+  assertEqualVectors(outputIterator->second, expectedOutput);
+
+  capturedOutputs.clear();
+  capturedInputs.clear();
 }
 
 TEST_F(CustomTraceTest, exprTraceOnlyMatchingFunctions) {

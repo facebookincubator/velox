@@ -75,6 +75,14 @@ class TraceCtx {
     return nullptr;
   }
 
+  /// Creates a writer for capturing input batches to a traced expression.
+  virtual std::unique_ptr<trace::TraceExprInputWriter> createExprInputTracer(
+      const Operator& /*op*/,
+      std::string_view /*functionName*/,
+      int /*instanceIndex*/) const {
+    return nullptr;
+  }
+
   /// Activates intra-expression tracing on a vector function whose owning
   /// operator and expression have both passed the tracing gates
   /// (shouldTrace() and shouldTraceExpr() respectively).
