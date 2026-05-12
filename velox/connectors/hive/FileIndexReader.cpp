@@ -245,10 +245,9 @@ void FileIndexReader::parseIndexLookupConditions() {
 std::unique_ptr<dwio::common::Reader> FileIndexReader::createFileReader() {
   VELOX_CHECK_NOT_NULL(hiveSplit_);
 
-  dwio::common::ReaderOptions readerOpts(
-      connectorQueryCtx_->memoryPool(),
-      ioStatistics_.get(),
-      ioStatistics_.get());
+  dwio::common::ReaderOptions readerOpts(connectorQueryCtx_->memoryPool());
+  readerOpts.setDataIoStats(ioStatistics_.get());
+  readerOpts.setMetadataIoStats(ioStatistics_.get());
   hive::configureReaderOptions(
       fileConfig_,
       connectorQueryCtx_,

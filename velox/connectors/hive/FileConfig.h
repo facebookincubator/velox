@@ -123,6 +123,26 @@ class FileConfig {
       8UL << 20,
       "Speculative tail-read size in bytes for Nimble files.")
 
+  VELOX_HIVE_CONFIG_LEGACY(
+      kNimbleStringDecoderZeroCopySession,
+      kNimbleStringDecoderZeroCopy,
+      nimbleStringDecoderZeroCopy,
+      "nimble_string_decoder_zero_copy",
+      "nimble.string-decoder-zero-copy",
+      bool,
+      false,
+      "Enable zero-copy string decoding in Nimble selective reader.")
+
+  VELOX_HIVE_CONFIG_LEGACY(
+      kNimblePreserveDictionaryEncodingSession,
+      kNimblePreserveDictionaryEncoding,
+      nimblePreserveDictionaryEncoding,
+      "nimble_preserve_dictionary_encoding",
+      "nimble.preserve-dictionary-encoding",
+      bool,
+      false,
+      "Preserve dictionary encoding for Nimble string column reads.")
+
   // --- VELOX_HIVE_CONFIG properties ---
 
   VELOX_HIVE_CONFIG(

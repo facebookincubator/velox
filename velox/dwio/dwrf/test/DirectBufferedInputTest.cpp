@@ -58,8 +58,9 @@ class DirectBufferedInputTest : public testing::Test {
     ioStats_ = std::make_shared<facebook::velox::IoStats>();
     tracker_ = std::make_shared<cache::ScanTracker>("", nullptr, kLoadQuantum);
     file_ = std::make_shared<TestReadFile>(11, 100 << 20, ioStats_);
-    opts_ = std::make_unique<dwio::common::ReaderOptions>(
-        pool_.get(), ioStatistics_.get(), metadataIoStats_.get());
+    opts_ = std::make_unique<dwio::common::ReaderOptions>(pool_.get());
+    opts_->setDataIoStats(ioStatistics_.get());
+    opts_->setMetadataIoStats(metadataIoStats_.get());
     opts_->setLoadQuantum(kLoadQuantum);
   }
 

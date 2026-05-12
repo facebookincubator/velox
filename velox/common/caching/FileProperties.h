@@ -16,6 +16,19 @@
 
 #pragma once
 
-// Moved to velox/common/caching/FileProperties.h.
-// This header is kept for backward compatibility.
-#include "velox/common/caching/FileProperties.h"
+#include <cstdint>
+#include <optional>
+
+#include <folly/container/F14Map.h>
+
+namespace facebook::velox {
+
+struct FileProperties {
+  std::optional<int64_t> fileSize;
+  std::optional<int64_t> modificationTime;
+  std::optional<int64_t> readRangeHint{std::nullopt};
+  std::shared_ptr<std::string> extraFileInfo{nullptr};
+  folly::F14FastMap<std::string, std::string> fileReadOps{};
+};
+
+} // namespace facebook::velox

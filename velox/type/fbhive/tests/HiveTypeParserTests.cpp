@@ -21,6 +21,7 @@
 #include "gtest/gtest-test-part.h"
 #include "gtest/gtest.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/type/OpaqueCustomTypes.h"
 #include "velox/type/fbhive/HiveTypeParser.h"
 
 using facebook::velox::TypeKind;
@@ -183,6 +184,8 @@ TEST(FbHive, parseOpaque) {
   HiveTypeParser parser;
   auto t = parser.parse("opaque<bar>");
   ASSERT_EQ(t->toString(), "OPAQUE<facebook::velox::type::fbhive::Foo>");
+  EXPECT_EQ(t->kind(), TypeKind::OPAQUE);
+  EXPECT_FALSE(customTypeExists("bar"));
   unregisterOpaqueType<Foo>("bar");
 }
 
@@ -194,5 +197,20 @@ TEST(FbHive, parseUnregisteredOpaque) {
       parser.parse("opaque<Foo>"),
       "Could not find type 'Foo'. Did you call registerOpaqueType?");
   unregisterOpaqueType<Foo>("bar");
+}
+
+struct CustomFoo {};
+constexpr char kCustomFooName[] = "CustomFoo";
+using CustomFooRegistrar = OpaqueCustomTypeRegister<CustomFoo, kCustomFooName>;
+
+TEST(FbHive, parseOpaqueCustomTypeReturnsSingleton) {
+  CustomFooRegistrar::registerType();
+  HiveTypeParser parser;
+  auto parsed = parser.parse("opaque<CustomFoo>");
+  // The parser must return the registered custom-type singleton so that
+  // pointer equality with the type produced by CustomType<TypeT> in UDF
+  // signatures holds.
+  EXPECT_EQ(parsed.get(), CustomFooRegistrar::singletonTypePtr().get());
+  CustomFooRegistrar::unregisterType();
 }
 } // namespace facebook::velox::type::fbhive
