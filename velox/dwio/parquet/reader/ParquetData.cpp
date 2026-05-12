@@ -343,8 +343,7 @@ std::unique_ptr<dwio::common::SeekableInputStream> ParquetData::getInputStream(
     return nullptr;
   }
   const uint64_t dictPageOffset = columnChunk.dictionaryPageOffset();
-  const uint64_t dictPageSize =
-      columnChunk.dataPageOffset() - dictPageOffset;
+  const uint64_t dictPageSize = columnChunk.dataPageOffset() - dictPageOffset;
 
   auto id = dwio::common::StreamIdentifier(type_->column());
   auto stream = bufferedInput_->enqueue({dictPageOffset, dictPageSize}, &id);

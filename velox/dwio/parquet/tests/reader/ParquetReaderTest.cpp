@@ -2066,9 +2066,9 @@ TEST_F(ParquetReaderTest, dictionaryEncodedComplexFilter) {
   // Test using pre-created dictionary_rowgroup_skipping.parquet.
   // The file has 3 row groups (1000 rows each, 3000 total) with
   // dictionary-encoded region and product columns:
-  //   RG0: region dict = {us-east, us-west}        (min=us-east,  max=us-west)
-  //   RG1: region dict = {eu-central, us-west}     (min=eu-central, max=us-west)
-  //   RG2: region dict = {eu-central, us-east}     (min=eu-central, max=us-east)
+  //   RG0: region dict={us-east, us-west},    [min=us-east,    max=us-west]
+  //   RG1: region dict={eu-central, us-west}, [min=eu-central, max=us-west]
+  //   RG2: region dict={eu-central, us-east}, [min=eu-central, max=us-east]
   // All row groups have all 4 products (productA..D).
   //
   // Note: for region="us-east" all 3 row groups' [min,max] cover "us-east", so
@@ -2104,8 +2104,9 @@ TEST_F(ParquetReaderTest, dictionaryEncodedComplexFilter) {
 
     auto scanSpec = makeScanSpec(rowType);
     scanSpec->getOrCreateChild(common::Subfield("region"))
-        ->setFilter(std::make_unique<common::BytesRange>(
-            "us-east", false, false, "us-east", false, false, false));
+        ->setFilter(
+            std::make_unique<common::BytesRange>(
+                "us-east", false, false, "us-east", false, false, false));
 
     RowReaderOptions rowReaderOpts;
     rowReaderOpts.setScanSpec(scanSpec);
@@ -2130,8 +2131,9 @@ TEST_F(ParquetReaderTest, dictionaryEncodedComplexFilter) {
 
     auto scanSpec = makeScanSpec(rowType);
     scanSpec->getOrCreateChild(common::Subfield("product"))
-        ->setFilter(std::make_unique<common::BytesRange>(
-            "productA", false, false, "productA", false, false, false));
+        ->setFilter(
+            std::make_unique<common::BytesRange>(
+                "productA", false, false, "productA", false, false, false));
 
     RowReaderOptions rowReaderOpts;
     rowReaderOpts.setScanSpec(scanSpec);
@@ -2154,14 +2156,15 @@ TEST_F(ParquetReaderTest, dictionaryEncodedComplexFilter) {
 
     auto scanSpec = makeScanSpec(rowType);
     scanSpec->getOrCreateChild(common::Subfield("region"))
-        ->setFilter(std::make_unique<common::BytesRange>(
-            "nonexistent-region",
-            false,
-            false,
-            "nonexistent-region",
-            false,
-            false,
-            false));
+        ->setFilter(
+            std::make_unique<common::BytesRange>(
+                "nonexistent-region",
+                false,
+                false,
+                "nonexistent-region",
+                false,
+                false,
+                false));
 
     RowReaderOptions rowReaderOpts;
     rowReaderOpts.setScanSpec(scanSpec);
