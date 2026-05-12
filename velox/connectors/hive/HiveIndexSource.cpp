@@ -818,7 +818,7 @@ void HiveIndexSource::init(
   VELOX_CHECK_NOT_NULL(tableHandle_);
 
   folly::F14FastMap<std::string_view, const HiveColumnHandle*> columnHandles;
-  // Column handled keyed on the column alias, the name used in the query.
+  // Column handles keyed on the table column name.
   for (const auto& [_, columnHandle] : assignments) {
     auto handle = checkedPointerCast<const HiveColumnHandle>(columnHandle);
     const auto [it, unique] =
@@ -840,13 +840,13 @@ void HiveIndexSource::init(
   std::vector<std::string> readColumnNames;
   auto readColumnTypes = outputType_->children();
   for (const auto& outputName : outputType_->names()) {
-    auto it = columnHandles.find(outputName);
+    auto it = assignments.find(outputName);
     VELOX_CHECK(
-        it != columnHandles.end(),
+        it != assignments.end(),
         "ColumnHandle is missing for output column: {}",
         outputName);
 
-    auto* handle = it->second;
+    auto handle = checkedPointerCast<const HiveColumnHandle>(it->second);
     readColumnNames.push_back(handle->name());
     for (auto& subfield : handle->requiredSubfields()) {
       VELOX_USER_CHECK_EQ(
