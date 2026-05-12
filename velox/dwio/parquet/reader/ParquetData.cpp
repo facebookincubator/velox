@@ -345,11 +345,13 @@ std::unique_ptr<dwio::common::SeekableInputStream> ParquetData::getInputStream(
   const uint64_t dictPageOffset = columnChunk.dictionaryPageOffset();
   const uint64_t dictPageSize = columnChunk.dataPageOffset() - dictPageOffset;
 
-  auto id = dwio::common::StreamIdentifier(type_->column());
-  auto stream = bufferedInput_->enqueue({dictPageOffset, dictPageSize}, &id);
-
-  bufferedInput_->load(dwio::common::LogType::STRIPE);
-  return stream;
+  // Use BufferedInput::read() rather than enqueue()+load(): load() clears all
+  // previously enqueued/loaded regions on the shared BufferedInput, which would
+  // corrupt subsequent reads from other readers using the same input. read()
+  // either returns the data from the cache if already buffered, or reads
+  // directly from the file without mutating BufferedInput state.
+  return bufferedInput_->read(
+      dictPageOffset, dictPageSize, dwio::common::LogType::STRIPE);
 }
 
 } // namespace facebook::velox::parquet
