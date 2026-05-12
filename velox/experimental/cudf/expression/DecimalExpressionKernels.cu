@@ -35,62 +35,6 @@
 namespace facebook::velox::cudf_velox {
 namespace {
 
-// Creates a boolean column indicating where the divisor is zero.
-// Returns a column of BOOL8 where true means divisor == 0.
-std::unique_ptr<cudf::column> createDivisorZeroMask(
-    const cudf::column_view& divisor,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
-  // Create a scalar with value 0 matching the divisor's type and scale.
-  std::unique_ptr<cudf::scalar> zero;
-  auto scale = numeric::scale_type{divisor.type().scale()};
-  if (divisor.type().id() == cudf::type_id::DECIMAL64) {
-    zero =
-        cudf::make_fixed_point_scalar<numeric::decimal64>(0, scale, stream, mr);
-  } else if (divisor.type().id() == cudf::type_id::DECIMAL128) {
-    zero = cudf::make_fixed_point_scalar<numeric::decimal128>(
-        0, scale, stream, mr);
-  } else {
-    CUDF_FAIL("Unsupported decimal type for division");
-  }
-
-  // Create boolean column: TRUE where divisor == 0, FALSE otherwise.
-  return cudf::binary_operation(
-      divisor,
-      *zero,
-      cudf::binary_operator::EQUAL,
-      cudf::data_type{cudf::type_id::BOOL8},
-      stream,
-      mr);
-}
-
-// Scatters null values to positions where the divisor is zero.
-// Returns a new column with nulls at zero-divisor positions.
-std::unique_ptr<cudf::column> scatterNullsAtZeroDivisor(
-    std::unique_ptr<cudf::column> result,
-    const cudf::column_view& divisor,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
-  // Create boolean mask: true where divisor == 0, false otherwise.
-  auto divisorIsZero = createDivisorZeroMask(divisor, stream, mr);
-
-  // Create a null scalar matching the result type.
-  std::unique_ptr<cudf::scalar> nullScalar;
-  auto outputType = result->type();
-  if (outputType.id() == cudf::type_id::DECIMAL64) {
-    nullScalar = cudf::make_fixed_point_scalar<numeric::decimal64>(
-        0, numeric::scale_type{outputType.scale()}, stream, mr);
-  } else {
-    nullScalar = cudf::make_fixed_point_scalar<numeric::decimal128>(
-        0, numeric::scale_type{outputType.scale()}, stream, mr);
-  }
-  nullScalar->set_valid_async(false, stream);
-
-  // Scatter nulls where divisor is zero.
-  return cudf::copy_if_else(
-      *nullScalar, *result, divisorIsZero->view(), stream, mr);
-}
-
 template <typename OutT>
 __device__ OutT
 decimalDivideImpl(__int128_t numerator, __int128_t denom, __int128_t scale) {
