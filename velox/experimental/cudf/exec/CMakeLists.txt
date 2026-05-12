@@ -32,7 +32,8 @@ add_library(
   CudfTopN.cpp
   DebugUtil.cpp
   DecimalAggregationCommon.cpp
-  DecimalAggregationKernels.cu
+  DecimalAggregationKernels.cpp
+  DecimalAggregationKernelsGpu.cu
   GpuResources.cpp
   OperatorAdapters.cpp
   PrestoAggregateFunctions.cpp
