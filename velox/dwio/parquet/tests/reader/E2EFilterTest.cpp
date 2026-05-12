@@ -745,6 +745,54 @@ TEST_F(E2EFilterTest, time) {
   }
 }
 
+TEST_F(E2EFilterTest, timeMicros) {
+  struct {
+    parquet::arrow::Encoding::type encoding;
+    bool enableDictionary;
+    bool keepNulls;
+  } testCases[] = {
+      {parquet::arrow::Encoding::kPlain, false, true},
+      {parquet::arrow::Encoding::kPlain, true, true},
+      {parquet::arrow::Encoding::kDeltaBinaryPacked, false, false},
+      {parquet::arrow::Encoding::kDeltaBinaryPacked, false, true},
+  };
+
+  for (const auto& testCase : testCases) {
+    options_.encoding = testCase.encoding;
+    bool enableDictionary = testCase.enableDictionary;
+    bool keepNulls = testCase.keepNulls;
+    SCOPED_TRACE(
+        fmt::format(
+            "Encoding: {}, Dictionary: {}, KeepNulls: {}",
+            static_cast<int>(options_.encoding),
+            enableDictionary,
+            keepNulls));
+
+    options_.enableDictionary = enableDictionary;
+    options_.dataPageSize = 4 * 1024;
+    // Microseconds since midnight up to 86,399,999,999 (one second short of
+    // 24 h). Use a smaller cap when forcing a dictionary so values are dense.
+    const int64_t valMax = enableDictionary ? 1'000 : 86'399'999'999LL;
+
+    testWithTypes(
+        "time_val:time_micro_utc",
+        [&]() {
+          makeIntDistribution<int64_t>(
+              "time_val",
+              0, // min
+              valMax, // max
+              22, // repeats
+              19, // rareFrequency
+              0, // rareMin
+              valMax, // rareMax
+              keepNulls); // keepNulls
+        },
+        false,
+        {"time_val"},
+        20);
+  }
+}
+
 TEST_F(E2EFilterTest, combineRowGroup) {
   rowsInRowGroup_ = 5;
   rowType_ = ROW({"c0"}, {INTEGER()});
