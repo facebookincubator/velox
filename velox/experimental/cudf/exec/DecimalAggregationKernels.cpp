@@ -28,7 +28,7 @@
 
 namespace facebook::velox::cudf_velox {
 
-DecimalSumStateColumns deserializeDecimalSumStateWithCount(
+DecimalSumStateColumns deserializeDecimalSumState(
     const cudf::column_view& stateCol,
     int32_t scale,
     rmm::cuda_stream_view stream,
@@ -119,16 +119,6 @@ DecimalSumStateColumns deserializeDecimalSumStateWithCount(
   result.sum = std::move(sumCol);
   result.count = std::move(countCol);
   return result;
-}
-
-std::unique_ptr<cudf::column> deserializeDecimalSumState(
-    const cudf::column_view& stateCol,
-    int32_t scale,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
-  auto decoded =
-      deserializeDecimalSumStateWithCount(stateCol, scale, stream, mr);
-  return std::move(decoded.sum);
 }
 
 std::unique_ptr<cudf::column> serializeDecimalSumState(

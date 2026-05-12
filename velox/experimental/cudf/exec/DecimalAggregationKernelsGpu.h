@@ -27,15 +27,22 @@
 
 namespace facebook::velox::cudf_velox::detail {
 
-/// Bytes per serialized row for decimal sum aggregation state.
+// Size in bytes of each row's packed decimal SUM intermediate state in the
+// strings payload (count, overflow placeholder, and 128-bit sum split into
+// words).
 constexpr int32_t kDecimalSumStateSize = 32;
 
+// Writes strings-style prefix offsets into offsetsMutable for numRows + 1
+// entries: offset[i] == i * kDecimalSumStateSize (INT32 or INT64 elements).
 void fillOffsetsForDecimalSumState(
     bool use64BitOffsets,
     void* offsetsMutable,
     int32_t numRows,
     rmm::cuda_stream_view stream);
 
+// For each row, writes kDecimalSumStateSize bytes into chars at the byte offset
+// given by offsetsPtr, encoding the partial sum (DECIMAL64 or DECIMAL128) and
+// int64 count into the device struct layout used for VARBINARY interchange.
 void packDecimalSumState(
     cudf::type_id sumType,
     bool use64BitOffsets,
@@ -46,6 +53,8 @@ void packDecimalSumState(
     int32_t numRows,
     rmm::cuda_stream_view stream);
 
+// Inverse of packDecimalSumState: reads fixed-width payloads via offsetsPtr
+// (INT32 or INT64 string offsets) and fills per-row DECIMAL128 sums and counts.
 void unpackDecimalSumState(
     bool offsets64,
     const void* offsetsPtr,
@@ -55,6 +64,10 @@ void unpackDecimalSumState(
     int32_t numRows,
     rmm::cuda_stream_view stream);
 
+// Per-row average from intermediate sum/count: integer divide of abs(sum) by
+// count with half-up bias (add count/2 before dividing), then restore sign;
+// count == 0 writes a numeric zero (validity is applied separately). Output
+// element type matches sumType (DECIMAL64 or DECIMAL128).
 void averageRoundDecimalSum(
     cudf::type_id sumType,
     const void* sums,
@@ -63,6 +76,9 @@ void averageRoundDecimalSum(
     int32_t numRows,
     rmm::cuda_stream_view stream);
 
+// Builds a bitmask for rows where both sum and count are valid and count is
+// non-zero (via cudf::detail::valid_if), for use when serializing state or
+// finalizing averages.
 std::pair<rmm::device_buffer, cudf::size_type> buildStateValidityMask(
     const cudf::column_view& sumCol,
     const cudf::column_view& countCol,

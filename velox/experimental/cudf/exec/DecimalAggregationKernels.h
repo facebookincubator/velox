@@ -29,24 +29,35 @@ struct DecimalSumStateColumns {
   std::unique_ptr<cudf::column> count;
 };
 
-DecimalSumStateColumns deserializeDecimalSumStateWithCount(
+// Decodes intermediate decimal SUM aggregate state stored as a cuDF STRING
+// column (fixed-size packed bytes per row, converted from Velox VARBINARY) into
+// two device columns: a DECIMAL128 sum with scale -scale (matching Velox
+// intermediate state) and an INT64 partial row count. Handles empty input,
+// all-null state without touching payload buffers, and propagates the source
+// null mask to both outputs when present.
+DecimalSumStateColumns deserializeDecimalSumState(
     const cudf::column_view& stateCol,
     int32_t scale,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
 
-std::unique_ptr<cudf::column> deserializeDecimalSumState(
-    const cudf::column_view& stateCol,
-    int32_t scale,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr);
-
+// Encodes partial decimal SUM state (DECIMAL64 or DECIMAL128 sums plus
+// INT64 counts) into a single STRING column (later converted to Velox
+// VARBINARY): per-row fixed-width payloads and string offsets (INT32 or INT64
+// depending on total char size and cuDF large-strings settings). The output
+// null mask matches buildStateValidityMask: a row is invalid if the sum or
+// count is null, or the count is zero.
 std::unique_ptr<cudf::column> serializeDecimalSumState(
     const cudf::column_view& sumCol,
     const cudf::column_view& countCol,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
 
+// Finalizes AVG from intermediate SUM state: divides each sum by its count
+// on device with decimal-specific rounding (see averageRoundDecimalSum),
+// producing a column of the same decimal type as the sum. Rows are null
+// where buildStateValidityMask marks them invalid (null sum/count or zero
+// count), matching serializeDecimalSumState.
 std::unique_ptr<cudf::column> computeDecimalAverage(
     const cudf::column_view& sumCol,
     const cudf::column_view& countCol,

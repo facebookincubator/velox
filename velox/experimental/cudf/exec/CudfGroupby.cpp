@@ -94,9 +94,12 @@ DEFINE_SIMPLE_GROUPBY_AGGREGATOR(Max, max, MAX)
 
 // Decimal SUM and AVG aggregators are separate implementations, as they need to
 // handle the VARBINARY encoded intermediate state for streaming aggregation.
-// Unlike other aggregators, these classes hold state (the decoded intermediate
-// sum and count columns and associated indices) in order to guarantee a
-// lifetime constraint between aggregation steps.
+// Due to the packing and unpacking of that intermediate state, and the special
+// handling required for the decimal divide, we cannot just use the existing
+// cudf::make_mean_aggregation class. Also, unlike other aggregators, these
+// classes hold state (the decoded intermediate sum and count columns and
+// associated indices) in order to guarantee a lifetime constraint between
+// aggregation steps.
 
 void addDecimalSumCountRequestsAfterDecode(
     cudf::column_view encodedColumn,
@@ -107,10 +110,10 @@ void addDecimalSumCountRequestsAfterDecode(
     uint32_t& countIdx,
     std::unique_ptr<cudf::column>& decodedSum,
     std::unique_ptr<cudf::column>& decodedCount) {
-  auto decoded = cudf_velox::deserializeDecimalSumStateWithCount(
+  auto sumAndCount = cudf_velox::deserializeDecimalSumState(
       encodedColumn, scale, stream, cudf_velox::get_output_mr());
-  decodedSum = std::move(decoded.sum);
-  decodedCount = std::move(decoded.count);
+  decodedSum.swap(sumAndCount.sum);
+  decodedCount.swap(sumAndCount.count);
 
   sumIdx = requests.size();
   auto& sumRequest = requests.emplace_back();
@@ -185,8 +188,9 @@ void addDecimalFinalSumOnlyRequest(
   auto scale = getDecimalPrecisionScale(*resultType).second;
   auto& request = requests.emplace_back();
   sumIdx = requests.size() - 1;
-  decodedSum = cudf_velox::deserializeDecimalSumState(
+  auto sumAndCount = cudf_velox::deserializeDecimalSumState(
       tbl.column(inputIndex), scale, stream, cudf_velox::get_output_mr());
+  decodedSum.swap(sumAndCount.sum);
   request.values = decodedSum->view();
   request.aggregations.push_back(
       cudf::make_sum_aggregation<cudf::groupby_aggregation>());

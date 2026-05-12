@@ -279,16 +279,16 @@ std::unique_ptr<cudf::column> intermediateDecimalMergeSerializedString(
     int32_t scale,
     rmm::cuda_stream_view stream) {
   auto const sumAgg = cudf::make_sum_aggregation<cudf::reduce_aggregation>();
-  auto decoded = cudf_velox::deserializeDecimalSumStateWithCount(
+  auto sumAndCount = cudf_velox::deserializeDecimalSumState(
       inputCol, scale, stream, get_output_mr());
   auto sumScalar = cudf::reduce(
-      decoded.sum->view(),
+      sumAndCount.sum->view(),
       *sumAgg,
-      decoded.sum->view().type(),
+      sumAndCount.sum->view().type(),
       stream,
       get_temp_mr());
   auto countScalar = cudf::reduce(
-      decoded.count->view(),
+      sumAndCount.count->view(),
       *sumAgg,
       cudf::data_type{cudf::type_id::INT64},
       stream,
@@ -307,7 +307,7 @@ std::unique_ptr<cudf::column> finalDecimalAvgFromSerializedString(
     TypePtr const& resultType,
     rmm::cuda_stream_view stream) {
   auto const sumAgg = cudf::make_sum_aggregation<cudf::reduce_aggregation>();
-  auto sumAndCount = cudf_velox::deserializeDecimalSumStateWithCount(
+  auto sumAndCount = cudf_velox::deserializeDecimalSumState(
       inputCol, scale, stream, get_output_mr());
   auto sumScalar = cudf::reduce(
       sumAndCount.sum->view(),
@@ -327,14 +327,6 @@ std::unique_ptr<cudf::column> finalDecimalAvgFromSerializedString(
       cudf::make_column_from_scalar(*countScalar, 1, stream, get_output_mr());
   return finalizeDecimalAverage(
       std::move(sumCol), std::move(countCol), resultType, stream);
-}
-
-std::unique_ptr<cudf::column> finalDecimalSumDecodeColumn(
-    cudf::column_view inputCol,
-    int32_t scale,
-    rmm::cuda_stream_view stream) {
-  return cudf_velox::deserializeDecimalSumState(
-      inputCol, scale, stream, get_output_mr());
 }
 
 std::unique_ptr<cudf::column> singleDecimalAvgFromRawColumn(
@@ -394,8 +386,10 @@ std::unique_ptr<cudf::column> reduceFinalDecimalSumFromSerializedColumn(
     rmm::cuda_stream_view stream) {
   validateIntermediateColumnType(inputCol);
   auto scale = getDecimalPrecisionScale(*outputType).second;
-  auto decodedSum = finalDecimalSumDecodeColumn(inputCol, scale, stream);
-  return singleOrRawDecimalSumWithCast(decodedSum->view(), outputType, stream);
+  auto sumAndCount = cudf_velox::deserializeDecimalSumState(
+      inputCol, scale, stream, get_output_mr());
+  return singleOrRawDecimalSumWithCast(
+      sumAndCount.sum->view(), outputType, stream);
 }
 
 std::unique_ptr<cudf::column> reduceFinalDecimalAvgFromSerializedColumn(

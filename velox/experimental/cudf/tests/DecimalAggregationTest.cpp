@@ -997,12 +997,13 @@ TEST_F(CudfDecimalTest, decimalDeserializeSumStateDecimal64) {
   auto countCol = makeInt64Column(counts, &countValid, stream);
   auto stateCol =
       serializeDecimalSumState(sumCol->view(), countCol->view(), stream, mr);
-  auto sumOnly = deserializeDecimalSumState(stateCol->view(), 2, stream, mr);
+  auto sumAndCount =
+      deserializeDecimalSumState(stateCol->view(), 2, stream, mr);
   auto stateMask = copyNullMask(stateCol->view(), stream);
-  auto sumMask = copyNullMask(sumOnly->view(), stream);
+  auto sumMask = copyNullMask(sumAndCount.sum->view(), stream);
   EXPECT_EQ(stateMask, sumMask);
 
-  auto outSum = copyColumnData<__int128_t>(sumOnly->view(), stream);
+  auto outSum = copyColumnData<__int128_t>(sumAndCount.sum->view(), stream);
   for (size_t i = 0; i < sums.size(); ++i) {
     bool expectedValid = sumValid[i] && countValid[i] && counts[i] != 0;
     EXPECT_EQ(isValidAt(sumMask, i), expectedValid);
@@ -1028,12 +1029,13 @@ TEST_F(CudfDecimalTest, decimalDeserializeSumStateDecimal128) {
   auto countCol = makeInt64Column(counts, &countValid, stream);
   auto stateCol =
       serializeDecimalSumState(sumCol->view(), countCol->view(), stream, mr);
-  auto sumOnly = deserializeDecimalSumState(stateCol->view(), 3, stream, mr);
+  auto sumAndCount =
+      deserializeDecimalSumState(stateCol->view(), 3, stream, mr);
   auto stateMask = copyNullMask(stateCol->view(), stream);
-  auto sumMask = copyNullMask(sumOnly->view(), stream);
+  auto sumMask = copyNullMask(sumAndCount.sum->view(), stream);
   EXPECT_EQ(stateMask, sumMask);
 
-  auto outSum = copyColumnData<__int128_t>(sumOnly->view(), stream);
+  auto outSum = copyColumnData<__int128_t>(sumAndCount.sum->view(), stream);
   for (size_t i = 0; i < sums.size(); ++i) {
     bool expectedValid = sumValid[i] && countValid[i] && counts[i] != 0;
     EXPECT_EQ(isValidAt(sumMask, i), expectedValid);
@@ -1072,10 +1074,10 @@ TEST_F(CudfDecimalTest, decimalDeserializeSumStateAllNull) {
       nullCount,
       std::move(nullMask));
 
-  auto decoded =
-      deserializeDecimalSumStateWithCount(stateCol->view(), 2, stream, mr);
-  auto outSumView = decoded.sum->view();
-  auto outCountView = decoded.count->view();
+  auto sumAndCount =
+      deserializeDecimalSumState(stateCol->view(), 2, stream, mr);
+  auto outSumView = sumAndCount.sum->view();
+  auto outCountView = sumAndCount.count->view();
 
   EXPECT_EQ(outSumView.size(), numRows);
   EXPECT_EQ(outCountView.size(), numRows);
@@ -1127,10 +1129,10 @@ TEST_F(CudfDecimalTest, decimalSumStateRoundTripUsesInt64Offsets) {
   cudf::strings_column_view strings(stateCol->view());
   EXPECT_EQ(strings.offsets().type().id(), cudf::type_id::INT64);
 
-  auto decoded =
-      deserializeDecimalSumStateWithCount(stateCol->view(), 2, stream, mr);
-  auto outSumView = decoded.sum->view();
-  auto outCountView = decoded.count->view();
+  auto sumAndCount =
+      deserializeDecimalSumState(stateCol->view(), 2, stream, mr);
+  auto outSumView = sumAndCount.sum->view();
+  auto outCountView = sumAndCount.count->view();
   auto outSum = copyColumnData<__int128_t>(outSumView, stream);
   auto outCount = copyColumnData<int64_t>(outCountView, stream);
   auto outSumMask = copyNullMask(outSumView, stream);
@@ -1235,10 +1237,10 @@ TEST_F(CudfDecimalTest, decimalSumStateRoundTripDecimal64) {
       serializeDecimalSumState(sumCol->view(), countCol->view(), stream, mr);
   auto stateMask = copyNullMask(stateCol->view(), stream);
 
-  auto decoded =
-      deserializeDecimalSumStateWithCount(stateCol->view(), 2, stream, mr);
-  auto outSumView = decoded.sum->view();
-  auto outCountView = decoded.count->view();
+  auto sumAndCount =
+      deserializeDecimalSumState(stateCol->view(), 2, stream, mr);
+  auto outSumView = sumAndCount.sum->view();
+  auto outCountView = sumAndCount.count->view();
   auto outSum = copyColumnData<__int128_t>(outSumView, stream);
   auto outCount = copyColumnData<int64_t>(outCountView, stream);
   auto outSumMask = copyNullMask(outSumView, stream);
@@ -1275,10 +1277,10 @@ TEST_F(CudfDecimalTest, decimalSumStateRoundTripDecimal128) {
       serializeDecimalSumState(sumCol->view(), countCol->view(), stream, mr);
   auto stateMask = copyNullMask(stateCol->view(), stream);
 
-  auto decoded =
-      deserializeDecimalSumStateWithCount(stateCol->view(), 3, stream, mr);
-  auto outSumView = decoded.sum->view();
-  auto outCountView = decoded.count->view();
+  auto sumAndCount =
+      deserializeDecimalSumState(stateCol->view(), 3, stream, mr);
+  auto outSumView = sumAndCount.sum->view();
+  auto outCountView = sumAndCount.count->view();
   auto outSum = copyColumnData<__int128_t>(outSumView, stream);
   auto outCount = copyColumnData<int64_t>(outCountView, stream);
   auto outSumMask = copyNullMask(outSumView, stream);

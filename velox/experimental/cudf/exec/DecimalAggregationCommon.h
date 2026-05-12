@@ -26,19 +26,30 @@
 
 namespace facebook::velox::cudf_velox {
 
-/// Checks that the column is STRING-encoded serialized decimal aggregation
-/// state.
+// Asserts that a column holds serialized decimal aggregate state in the form
+// Velox uses for VARBINARY: a cuDF STRING column whose bytes are the packed
+// sum/count payloads (see serializeDecimalSumState).
 void validateIntermediateColumnType(cudf::column_view const& column);
 
+// Ensures the partial-row count column is INT64, casting with the default GPU
+// output memory resource when the incoming type differs.
 std::unique_ptr<cudf::column> castCountColumnToInt64(
     std::unique_ptr<cudf::column> count,
     rmm::cuda_stream_view stream);
 
+// Normalizes the count column to INT64, then encodes sum and count into a
+// single STRING column of fixed-width per-row payloads (delegates to
+// serializeDecimalSumState). Used when emitting or persisting partial /
+// intermediate decimal SUM state for the cuDF path.
 std::unique_ptr<cudf::column> serializeDecimalPartialOrIntermediateState(
     std::unique_ptr<cudf::column> sum,
     std::unique_ptr<cudf::column> count,
     rmm::cuda_stream_view stream);
 
+// Normalizes the count column to INT64, computes a per-row decimal average
+// from intermediate sum/count (delegates to computeDecimalAverage), then casts
+// the result to the Velox result type when its cuDF decimal encoding differs
+// from the average column's type.
 std::unique_ptr<cudf::column> finalizeDecimalAverage(
     std::unique_ptr<cudf::column> sum,
     std::unique_ptr<cudf::column> count,
