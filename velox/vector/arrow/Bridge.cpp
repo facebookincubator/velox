@@ -796,26 +796,6 @@ bool isFlatScalarZeroCopy(const TypePtr& type, const ArrowOptions& options) {
       !needsTimeConversion;
 }
 
-// Returns the size of a single element of a given `type` in the target arrow
-// buffer.
-size_t getArrowElementSize(const TypePtr& type, const ArrowOptions& options) {
-  if (type->isShortDecimal() && !options.useDecimalTypeWidth) {
-    return sizeof(int128_t);
-  } else if (type->isTimestamp()) {
-    VELOX_DCHECK(type->equivalent(*TIMESTAMP()));
-    return sizeof(int64_t);
-  } else if (type->isTime()) {
-    if (type->equivalent(*TIME())) {
-      // TIME is exported as Arrow time32 (int32_t).
-      return sizeof(int32_t);
-    }
-    VELOX_DCHECK(type->equivalent(*TIME_MICRO_UTC()));
-    // TIME MICRO UTC is exported as Arrow time64 (int64_t).
-    return sizeof(int64_t);
-  }
-  return type->cppSizeInBytes();
-}
-
 void exportValues(
     const BaseVector& vec,
     const Selection& rows,
@@ -1216,16 +1196,15 @@ void exportDictionary(
     holder.setBuffer(1, vec.wrapInfo());
   }
   auto& values = *vec.valueVector()->loadedVector();
-  BufferPtr dictionaryNulls;
+  BufferPtr baseNulls;
   if (nulls != nullptr) {
-    dictionaryNulls =
-        AlignedBuffer::allocate<bool>(values.size(), pool, bits::kNull);
-    auto* rawDictionaryNulls = dictionaryNulls->asMutable<uint64_t>();
+    baseNulls = AlignedBuffer::allocate<bool>(values.size(), pool, bits::kNull);
+    auto* rawBaseNulls = baseNulls->asMutable<uint64_t>();
     auto* rawNulls = nulls->as<uint64_t>();
     auto* rawIndices = vec.wrapInfo()->as<vector_size_t>();
     rows.apply([&](vector_size_t i) {
       if (!bits::isBitNull(rawNulls, i)) {
-        bits::setNull(rawDictionaryNulls, rawIndices[i], false);
+        bits::setNull(rawBaseNulls, rawIndices[i], false);
       }
     });
   }
@@ -1236,7 +1215,7 @@ void exportDictionary(
       options,
       *out.dictionary,
       pool,
-      dictionaryNulls);
+      baseNulls);
 }
 
 void exportFlattenedVector(

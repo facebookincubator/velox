@@ -43,6 +43,22 @@ struct VeloxToArrowType<Timestamp> {
   using type = int64_t;
 };
 
+// Converts timestamp as bigint according to unit.
+int64_t timestampValue(Timestamp timestamp, TimestampUnit unit) {
+  switch (unit) {
+    case TimestampUnit::kSecond:
+      return timestamp.getSeconds();
+    case TimestampUnit::kMilli:
+      return timestamp.toMillis();
+    case TimestampUnit::kMicro:
+      return timestamp.toMicros();
+    case TimestampUnit::kNano:
+      return timestamp.toNanos();
+    default:
+      VELOX_UNREACHABLE();
+  }
+}
+
 class ArrowBridgeArrayExportTest : public testing::Test {
  protected:
   static void SetUpTestCase() {
@@ -169,8 +185,9 @@ class ArrowBridgeArrayExportTest : public testing::Test {
               bits::isBitSet(reinterpret_cast<const uint64_t*>(values), i))
               << "mismatch at index " << i;
         } else if constexpr (std::is_same_v<T, Timestamp>) {
-          EXPECT_TRUE(validateTimestamp(
-              inputData[i].value(), options_.timestampUnit, values[i]))
+          EXPECT_EQ(
+              timestampValue(inputData[i].value(), options_.timestampUnit),
+              values[i])
               << "mismatch at index " << i;
         } else {
           EXPECT_EQ(inputData[i], values[i]) << "mismatch at index " << i;
@@ -376,31 +393,6 @@ class ArrowBridgeArrayExportTest : public testing::Test {
       memory::memoryManager()->addLeafPool()};
   core::ExecCtx execCtx_{pool_.get(), queryCtx_.get()};
   facebook::velox::test::VectorMaker vectorMaker_{execCtx_.pool()};
-
- private:
-  // Converts timestamp as bigint according to unit, and compares it with the
-  // actual value.
-  bool
-  validateTimestamp(Timestamp ts, TimestampUnit unit, int64_t actualValue) {
-    int64_t expectedValue;
-    switch (unit) {
-      case TimestampUnit::kSecond:
-        expectedValue = ts.getSeconds();
-        break;
-      case TimestampUnit::kMilli:
-        expectedValue = ts.toMillis();
-        break;
-      case TimestampUnit::kMicro:
-        expectedValue = ts.toMicros();
-        break;
-      case TimestampUnit::kNano:
-        expectedValue = ts.toNanos();
-        break;
-      default:
-        VELOX_UNREACHABLE();
-    }
-    return expectedValue == actualValue;
-  }
 };
 
 TEST_F(ArrowBridgeArrayExportTest, flatNotNull) {
@@ -572,21 +564,6 @@ TEST_F(ArrowBridgeArrayExportTest, parentNullsMaskTimestampOverflow) {
 
   auto makeOffsets = [&]() { return makeBuffer<vector_size_t>({0, 1, 2}); };
   auto makeSizes = [&]() { return makeBuffer<vector_size_t>({1, 1, 1}); };
-
-  auto timestampValue = [](Timestamp timestamp, TimestampUnit unit) {
-    switch (unit) {
-      case TimestampUnit::kSecond:
-        return timestamp.getSeconds();
-      case TimestampUnit::kMilli:
-        return timestamp.toMillis();
-      case TimestampUnit::kMicro:
-        return timestamp.toMicros();
-      case TimestampUnit::kNano:
-        return timestamp.toNanos();
-      default:
-        VELOX_UNREACHABLE();
-    }
-  };
 
   auto assertTimestampValues = [&](const arrow::TimestampArray& values,
                                    vector_size_t firstIndex,
@@ -1420,6 +1397,47 @@ TEST_F(ArrowBridgeArrayExportTest, constants) {
       BaseVector::createNullConstant(TINYINT(), 2048, pool_.get());
   testConstantVector<true, int8_t>(
       vector, std::vector<std::optional<int8_t>>{std::nullopt});
+}
+
+TEST_F(ArrowBridgeArrayExportTest, constantTimestamp) {
+  const auto value = Timestamp(2, 123'456'789);
+
+  for (const auto unit :
+       {TimestampUnit::kSecond,
+        TimestampUnit::kMilli,
+        TimestampUnit::kMicro,
+        TimestampUnit::kNano}) {
+    options_.timestampUnit = unit;
+
+    auto constant =
+        BaseVector::createConstant(TIMESTAMP(), variant(value), 3, pool_.get());
+    auto vector = vectorMaker_.rowVector({"ts"}, {constant});
+    vector->setNull(1, true);
+    vector->setNullCount(1);
+
+    auto array = toArrow(vector, options_, pool_.get());
+    ASSERT_OK(array->ValidateFull());
+
+    const auto& structArray = dynamic_cast<const arrow::StructArray&>(*array);
+    ASSERT_EQ(structArray.null_count(), 1);
+    ASSERT_FALSE(structArray.IsNull(0));
+    ASSERT_TRUE(structArray.IsNull(1));
+    ASSERT_FALSE(structArray.IsNull(2));
+
+    const auto& reeArray =
+        dynamic_cast<const arrow::RunEndEncodedArray&>(*structArray.field(0));
+    const auto& runEnds =
+        dynamic_cast<const arrow::Int32Array&>(*reeArray.run_ends());
+    const auto& values =
+        dynamic_cast<const arrow::TimestampArray&>(*reeArray.values());
+
+    ASSERT_EQ(runEnds.length(), 1);
+    EXPECT_EQ(runEnds.Value(0), static_cast<int32_t>(vector->size()));
+
+    ASSERT_EQ(values.length(), 1);
+    ASSERT_FALSE(values.IsNull(0));
+    EXPECT_EQ(values.Value(0), timestampValue(value, unit));
+  }
 }
 
 TEST_F(ArrowBridgeArrayExportTest, flattenNullConstant) {
