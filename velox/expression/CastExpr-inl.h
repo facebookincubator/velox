@@ -141,6 +141,10 @@ void CastExpr::applyCastKernel(
     FlatVector<typename TypeTraits<ToKind>::NativeType>* result) {
   bool wrapException = true;
   auto setError = [&](const std::string& details) INLINE_LAMBDA {
+    if (setNullInResultAtError()) {
+      setCastError(row, context, result, wrapException);
+      return;
+    }
     const auto errorDetails = context.captureErrorDetails()
         ? makeErrorMessage(*input, row, result->type(), details)
         : std::string{};

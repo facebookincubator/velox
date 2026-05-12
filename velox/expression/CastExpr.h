@@ -370,6 +370,10 @@ class CastExpr : public SpecialForm {
       TResult* result,
       bool& wrapException) const {
     if (castResult.hasError()) {
+      if (setNullInResultAtError()) {
+        setCastError(row, context, result, wrapException);
+        return;
+      }
       const auto errorDetails = context.captureErrorDetails()
           ? makeErrorDetails(castResult.error().message())
           : std::string{};
