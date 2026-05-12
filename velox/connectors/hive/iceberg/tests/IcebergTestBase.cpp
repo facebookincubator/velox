@@ -18,7 +18,7 @@
 
 #include <filesystem>
 
-#include "velox/connectors/hive/TableHandle.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergConnector.h"
@@ -46,7 +46,8 @@ void IcebergTestBase::SetUp() {
       std::make_shared<config::ConfigBase>(
           std::unordered_map<std::string, std::string>()),
       ioExecutor_.get());
-  registerConnector(icebergConnector);
+  ConnectorRegistry::global().insert(
+      icebergConnector->connectorId(), icebergConnector);
 
   connectorSessionProperties_ = std::make_shared<config::ConfigBase>(
       std::unordered_map<std::string, std::string>(), true);
@@ -75,7 +76,7 @@ void IcebergTestBase::TearDown() {
   opPool_.reset();
   root_.reset();
   queryCtx_.reset();
-  unregisterConnector(kIcebergConnectorId);
+  ConnectorRegistry::global().erase(kIcebergConnectorId);
   HiveConnectorTestBase::TearDown();
 }
 
@@ -91,6 +92,15 @@ void IcebergTestBase::setupMemoryPools() {
   opPool_ = root_->addLeafChild("operator");
   connectorPool_ =
       root_->addAggregateChild("connector", exec::MemoryReclaimer::create());
+
+  recreateConnectorQueryCtx(/*sessionTimezone=*/"", false);
+}
+
+void IcebergTestBase::recreateConnectorQueryCtx(
+    const std::string& sessionTimezone,
+    bool adjustTimestampToTimezone) {
+  connectorQueryCtx_.reset();
+  queryCtx_.reset();
 
   queryCtx_ = core::QueryCtx::create(nullptr, core::QueryConfig({}));
   auto expressionEvaluator = std::make_unique<exec::SimpleExpressionEvaluator>(
@@ -108,7 +118,8 @@ void IcebergTestBase::setupMemoryPools() {
       "task.IcebergTest",
       "planNodeId.IcebergTest",
       0,
-      "");
+      sessionTimezone,
+      adjustTimestampToTimezone);
 }
 
 std::vector<RowVectorPtr> IcebergTestBase::createTestData(
@@ -187,8 +198,8 @@ void addColumnHandles(
         std::make_shared<const IcebergColumnHandle>(
             columnName,
             partitionColumnIds.contains(i)
-                ? HiveColumnHandle::ColumnType::kPartitionKey
-                : HiveColumnHandle::ColumnType::kRegular,
+                ? FileColumnHandle::ColumnType::kPartitionKey
+                : FileColumnHandle::ColumnType::kRegular,
             type,
             field));
   }

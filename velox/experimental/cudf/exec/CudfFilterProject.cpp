@@ -133,16 +133,17 @@ CudfFilterProject::CudfFilterProject(
     velox::exec::DriverCtx* driverCtx,
     const std::shared_ptr<const core::FilterNode>& filter,
     const std::shared_ptr<const core::ProjectNode>& project)
-    : Operator(
+    : CudfOperatorBase(
+          operatorId,
           driverCtx,
           project ? project->outputType() : filter->outputType(),
-          operatorId,
           project ? project->id() : filter->id(),
-          "CudfFilterProject"),
-      NvtxHelper(
+          "CudfFilterProject",
           nvtx3::rgb{220, 20, 60}, // Crimson
-          operatorId,
-          fmt::format("[{}]", project ? project->id() : filter->id())),
+          NvtxMethodFlag::kAll,
+          std::nullopt,
+          project ? std::static_pointer_cast<const core::PlanNode>(project)
+                  : std::static_pointer_cast<const core::PlanNode>(filter)),
       hasFilter_(filter != nullptr),
       project_(project),
       filter_(filter) {
@@ -227,13 +228,11 @@ void CudfFilterProject::initialize() {
   project_.reset();
 }
 
-void CudfFilterProject::addInput(RowVectorPtr input) {
+void CudfFilterProject::doAddInput(RowVectorPtr input) {
   input_ = std::move(input);
 }
 
-RowVectorPtr CudfFilterProject::getOutput() {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
-
+RowVectorPtr CudfFilterProject::doGetOutput() {
   if (allInputProcessed()) {
     return nullptr;
   }
@@ -246,26 +245,30 @@ RowVectorPtr CudfFilterProject::getOutput() {
   VELOX_CHECK_NOT_NULL(cudfInput);
   auto stream = cudfInput->stream();
   auto inputTableColumns = cudfInput->release()->release();
+  auto outputSize = input_->size();
 
   if (hasFilter_) {
     filter(inputTableColumns, stream);
+  }
+  if (!inputTableColumns.empty()) {
+    outputSize = inputTableColumns.front()->size();
   }
   auto outputColumns = project(inputTableColumns, stream);
 
   auto outputTable = std::make_unique<cudf::table>(std::move(outputColumns));
   auto const numColumns = outputTable->num_columns();
-  auto const size = outputTable->num_rows();
+  auto const size = numColumns > 0 ? outputTable->num_rows() : outputSize;
   if (CudfConfig::getInstance().debugEnabled) {
     VLOG(1) << "cudfProject Output: " << size << " rows, " << numColumns
             << " columns";
   }
-
+  if (size == 0) {
+    input_.reset();
+    return nullptr;
+  }
   auto cudfOutput = std::make_shared<CudfVector>(
       input_->pool(), outputType_, size, std::move(outputTable), stream);
   input_.reset();
-  if (numColumns == 0 or size == 0) {
-    return nullptr;
-  }
   return cudfOutput;
 }
 

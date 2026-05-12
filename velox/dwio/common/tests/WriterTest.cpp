@@ -51,9 +51,7 @@ class MockWriter : public Writer {
 
   void abort() override {}
 
-  std::unique_ptr<FileMetadata> close() override {
-    return nullptr;
-  }
+  void close() override {}
 };
 
 TEST(WriterTest, stateString) {

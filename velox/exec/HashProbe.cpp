@@ -128,6 +128,7 @@ HashProbe::HashProbe(
       joinNode_(std::move(joinNode)),
       joinType_{joinNode_->joinType()},
       nullAware_{joinNode_->isNullAware()},
+      nullAsValue_{joinNode_->isNullAsValue()},
       probeType_(joinNode_->sources()[0]->outputType()),
       canOutputBuildRowsInParallel_(
           driverCtx->queryConfig().parallelOutputJoinBuildRowsEnabled() &&
@@ -690,7 +691,9 @@ void HashProbe::decodeAndDetectNonNullKeys() {
     hashers_[i]->decode(*key, nonNullInputRows_);
   }
 
-  deselectRowsWithNulls(hashers_, nonNullInputRows_);
+  if (!nullAsValue_) {
+    deselectRowsWithNulls(hashers_, nonNullInputRows_);
+  }
   if (isRightSemiProjectJoin(joinType_) &&
       nonNullInputRows_.countSelected() < input_->size()) {
     probeSideHasNullKeys_ = true;
@@ -1942,8 +1945,11 @@ void HashProbe::ensureOutputFits() {
   }
   LOG(WARNING) << "Failed to reserve " << succinctBytes(bytesToReserve)
                << " for memory pool " << pool()->name()
-               << ", usage: " << succinctBytes(pool()->usedBytes())
-               << ", reservation: " << succinctBytes(pool()->reservedBytes());
+               << ", root pool: " << pool()->root()->name()
+               << ", used: " << succinctBytes(pool()->usedBytes())
+               << ", reservation: " << succinctBytes(pool()->reservedBytes())
+               << ", root pool reservation: "
+               << succinctBytes(pool()->root()->reservedBytes());
 }
 
 bool HashProbe::needLazyLoadProbeInput() const {
@@ -2060,8 +2066,12 @@ void HashProbe::reclaim(
     LOG(WARNING)
         << "Can't reclaim from hash probe operator, exceeded maximum spill "
            "level of "
-        << config->maxSpillLevel << ", " << pool()->name() << ", usage "
-        << succinctBytes(pool()->usedBytes());
+        << config->maxSpillLevel << ", " << pool()->name()
+        << ", root pool: " << pool()->root()->name()
+        << ", used: " << succinctBytes(pool()->usedBytes())
+        << ", reservation: " << succinctBytes(pool()->reservedBytes())
+        << ", root pool reservation: "
+        << succinctBytes(pool()->root()->reservedBytes());
     return;
   }
 
@@ -2078,9 +2088,13 @@ void HashProbe::reclaim(
                  << (table_ == nullptr ? "nullptr"
                                        : std::to_string(table_->numDistinct()))
                  << "], " << pool()->name()
-                 << ", usage: " << succinctBytes(pool()->usedBytes())
+                 << ", root pool: " << pool()->root()->name()
+                 << ", used: " << succinctBytes(pool()->usedBytes())
+                 << ", reservation: " << succinctBytes(pool()->reservedBytes())
                  << ", node pool reservation: "
-                 << succinctBytes(pool()->parent()->reservedBytes());
+                 << succinctBytes(pool()->parent()->reservedBytes())
+                 << ", root pool reservation: "
+                 << succinctBytes(pool()->root()->reservedBytes());
     return;
   }
 
@@ -2108,9 +2122,14 @@ void HashProbe::reclaim(
                            ? "nullptr"
                            : std::to_string(probeOp->table_->numDistinct()))
                    << "], " << peerPool->name()
-                   << ", usage: " << succinctBytes(peerPool->usedBytes())
+                   << ", root pool: " << peerPool->root()->name()
+                   << ", used: " << succinctBytes(peerPool->usedBytes())
+                   << ", reservation: "
+                   << succinctBytes(peerPool->reservedBytes())
                    << ", node pool reservation: "
-                   << succinctBytes(peerPool->parent()->reservedBytes());
+                   << succinctBytes(peerPool->parent()->reservedBytes())
+                   << ", root pool reservation: "
+                   << succinctBytes(peerPool->root()->reservedBytes());
       return;
     }
     hasMoreProbeInput |= !probeOp->noMoreSpillInput_;

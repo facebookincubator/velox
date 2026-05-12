@@ -28,16 +28,16 @@ CudfOrderBy::CudfOrderBy(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
     const std::shared_ptr<const core::OrderByNode>& orderByNode)
-    : exec::Operator(
+    : CudfOperatorBase(
+          operatorId,
           driverCtx,
           orderByNode->outputType(),
-          operatorId,
           orderByNode->id(),
-          "CudfOrderBy"),
-      NvtxHelper(
+          "CudfOrderBy",
           nvtx3::rgb{64, 224, 208}, // Turquoise
-          operatorId,
-          fmt::format("[{}]", orderByNode->id())),
+          NvtxMethodFlag::kAll,
+          std::nullopt,
+          orderByNode),
       orderByNode_(orderByNode) {
   sortKeys_.reserve(orderByNode->sortingKeys().size());
   columnOrder_.reserve(orderByNode->sortingKeys().size());
@@ -60,7 +60,7 @@ CudfOrderBy::CudfOrderBy(
   }
 }
 
-void CudfOrderBy::addInput(RowVectorPtr input) {
+void CudfOrderBy::doAddInput(RowVectorPtr input) {
   // Accumulate inputs
   if (input->size() > 0) {
     auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
@@ -69,10 +69,8 @@ void CudfOrderBy::addInput(RowVectorPtr input) {
   }
 }
 
-void CudfOrderBy::noMoreInput() {
-  exec::Operator::noMoreInput();
-
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+void CudfOrderBy::doNoMoreInput() {
+  Operator::noMoreInput();
 
   if (inputs_.empty()) {
     return;
@@ -94,16 +92,16 @@ void CudfOrderBy::noMoreInput() {
       pool(), outputType_, size, std::move(result), stream);
 }
 
-RowVectorPtr CudfOrderBy::getOutput() {
+RowVectorPtr CudfOrderBy::doGetOutput() {
   if (finished_ || !noMoreInput_) {
     return nullptr;
   }
-  finished_ = noMoreInput_;
+  finished_ = true;
   return outputTable_;
 }
 
-void CudfOrderBy::close() {
-  exec::Operator::close();
+void CudfOrderBy::doClose() {
+  Operator::close();
   // Release stored inputs
   // Release cudf memory resources
   inputs_.clear();

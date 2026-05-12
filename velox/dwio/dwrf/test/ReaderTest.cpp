@@ -43,6 +43,8 @@
 #include <memory>
 #include <numeric>
 
+#include "velox/common/io/IoStatistics.h"
+
 namespace facebook::velox::dwrf {
 namespace {
 
@@ -124,6 +126,10 @@ class TestReaderP
 
  private:
   std::unique_ptr<folly::Executor> executor_;
+
+ protected:
+  io::IoStatistics dataIoStats_;
+  io::IoStatistics metadataIoStats_;
 };
 
 class TestReader : public testing::Test, public VectorTestBase {
@@ -143,6 +149,9 @@ class TestReader : public testing::Test, public VectorTestBase {
     }
     return batches;
   }
+
+  io::IoStatistics dataIoStats_;
+  io::IoStatistics metadataIoStats_;
 };
 
 TEST_F(TestReader, testWriterVersions) {
@@ -265,9 +274,13 @@ void verifyFlatMapReading(
     const int32_t expectedBatchSize[],
     const int32_t numBatches,
     bool returnFlatVector,
+    io::IoStatistics& dataIoStats,
+    io::IoStatistics& metadataIoStats,
     const std::vector<uint32_t>& expectedPrefetchRowSizes = {},
     const std::vector<bool>& shouldTryPrefetch = {}) {
   dwio::common::ReaderOptions readerOpts{pool};
+  readerOpts.setDataIoStats(&dataIoStats);
+  readerOpts.setMetadataIoStats(&metadataIoStats);
 
   /* If an extra sanity check is desired you can uncomment the 2 below lines and
    * re-run */
@@ -381,6 +394,9 @@ class TestFlatMapReader : public TestWithParam<bool>, public VectorTestBase {
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
+
+  io::IoStatistics dataIoStats_;
+  io::IoStatistics metadataIoStats_;
 };
 
 TEST_P(TestFlatMapReader, testReadFlatMapEmptyMap) {
@@ -388,6 +404,8 @@ TEST_P(TestFlatMapReader, testReadFlatMapEmptyMap) {
   auto returnFlatVector = GetParam();
 
   dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setDataIoStats(&dataIoStats_);
+  readerOpts.setMetadataIoStats(&metadataIoStats_);
   RowReaderOptions rowReaderOpts;
   rowReaderOpts.setReturnFlatVector(returnFlatVector);
   std::shared_ptr<const RowType> emptyFileType =
@@ -418,6 +436,8 @@ TEST_P(TestFlatMapReader, testStringKeyLifeCycle) {
 
   VectorPtr batch;
   dwio::common::ReaderOptions readerOptions{pool()};
+  readerOptions.setDataIoStats(&dataIoStats_);
+  readerOptions.setMetadataIoStats(&metadataIoStats_);
 
   {
     RowReaderOptions rowReaderOptions;
@@ -481,7 +501,9 @@ TEST_P(TestFlatMapReader, testReadFlatMapSampleSmallSkips) {
       seeks.data(),
       expectedBatchSize.data(),
       expectedBatchSize.size(),
-      returnFlatVector);
+      returnFlatVector,
+      dataIoStats_,
+      metadataIoStats_);
 }
 
 TEST_P(TestFlatMapReader, testReadFlatMapSampleSmall) {
@@ -496,7 +518,9 @@ TEST_P(TestFlatMapReader, testReadFlatMapSampleSmall) {
       seeks.data(),
       expectedBatchSize.data(),
       expectedBatchSize.size(),
-      returnFlatVector);
+      returnFlatVector,
+      dataIoStats_,
+      metadataIoStats_);
 }
 
 TEST_P(TestFlatMapReader, testReadFlatMapSampleLarge) {
@@ -514,7 +538,9 @@ TEST_P(TestFlatMapReader, testReadFlatMapSampleLarge) {
       seeks.data(),
       expectedBatchSize.data(),
       expectedBatchSize.size(),
-      returnFlatVector);
+      returnFlatVector,
+      dataIoStats_,
+      metadataIoStats_);
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
@@ -529,10 +555,15 @@ class TestFlatMapReaderFlatLayout
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
+
+  io::IoStatistics dataIoStats_;
+  io::IoStatistics metadataIoStats_;
 };
 
 TEST_P(TestFlatMapReaderFlatLayout, testCompare) {
   dwio::common::ReaderOptions readerOptions{pool()};
+  readerOptions.setDataIoStats(&dataIoStats_);
+  readerOptions.setMetadataIoStats(&metadataIoStats_);
   auto reader = DwrfReader::create(
       createFileBufferedInput(getFMSmallFile(), readerOptions.memoryPool()),
       readerOptions);
@@ -566,6 +597,8 @@ TEST_F(TestReader, testReadFlatMapWithKeyFilters) {
   // batch size is set as 1000 in reading
   // file has schema: a int, b struct<a:int, b:float, c:string>, c float
   dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setDataIoStats(&dataIoStats_);
+  readerOpts.setMetadataIoStats(&metadataIoStats_);
   RowReaderOptions rowReaderOpts;
   // set map key filter for map1 we only need key=1, and map2 only key-1
   auto cs = std::make_shared<ColumnSelector>(
@@ -619,6 +652,8 @@ TEST_F(TestReader, testReadFlatMapWithKeyRejectList) {
   // batch size is set as 1000 in reading
   // file has schema: a int, b struct<a:int, b:float, c:string>, c float
   dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setDataIoStats(&dataIoStats_);
+  readerOpts.setMetadataIoStats(&metadataIoStats_);
   RowReaderOptions rowReaderOpts;
   auto cs = std::make_shared<ColumnSelector>(
       getFlatmapSchema(), std::vector<std::string>{"map1#[\"!2\",\"!3\"]"});
@@ -674,6 +709,8 @@ TEST_F(TestReader, testStatsCallbackFiredWithFiltering) {
       });
 
   dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setDataIoStats(&dataIoStats_);
+  readerOpts.setMetadataIoStats(&metadataIoStats_);
 
   auto reader = DwrfReader::create(
       createFileBufferedInput(getFMSmallFile(), readerOpts.memoryPool()),
@@ -712,6 +749,8 @@ TEST_F(TestReader, testBlockedIoCallbackFiredBlocking) {
   rowReaderOpts.setEagerFirstStripeLoad(false);
 
   dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setDataIoStats(&dataIoStats_);
+  readerOpts.setMetadataIoStats(&metadataIoStats_);
 
   auto reader = DwrfReader::create(
       createFileBufferedInput(getFMLargeFile(), readerOpts.memoryPool()),
@@ -756,6 +795,8 @@ TEST_F(TestReader, DISABLED_testBlockedIoCallbackFiredNonBlocking) {
   rowReaderOpts.setEagerFirstStripeLoad(false);
 
   dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setDataIoStats(&dataIoStats_);
+  readerOpts.setMetadataIoStats(&metadataIoStats_);
 
   auto reader = DwrfReader::create(
       createFileBufferedInput(getFMLargeFile(), readerOpts.memoryPool()),
@@ -805,6 +846,8 @@ TEST_F(TestReader, DISABLED_testBlockedIoCallbackFiredWithFirstStripeLoad) {
   rowReaderOpts.setEagerFirstStripeLoad(true);
 
   dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setDataIoStats(&dataIoStats_);
+  readerOpts.setMetadataIoStats(&metadataIoStats_);
 
   auto reader = DwrfReader::create(
       createFileBufferedInput(getFMLargeFile(), readerOpts.memoryPool()),
@@ -840,6 +883,8 @@ TEST_F(TestReader, DISABLED_testBlockedIoCallbackFiredWithFirstStripeLoad) {
 
 TEST_F(TestReader, testEstimatedSize) {
   dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setDataIoStats(&dataIoStats_);
+  readerOpts.setMetadataIoStats(&metadataIoStats_);
   {
     auto reader = DwrfReader::create(
         createFileBufferedInput(getFMSmallFile(), readerOpts.memoryPool()),
@@ -868,6 +913,8 @@ TEST_F(TestReader, testEstimatedSize) {
 
 TEST_F(TestReader, testSubfieldEstimatedSize) {
   dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setDataIoStats(&dataIoStats_);
+  readerOpts.setMetadataIoStats(&metadataIoStats_);
   std::shared_ptr<const RowType> schema =
       std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse("struct<\
               a:int,\
@@ -903,6 +950,8 @@ TEST_F(TestReader, testSubfieldEstimatedSize) {
 
   // estimation with full struct field selection
   dwio::common::ReaderOptions readerOpts2{pool()};
+  readerOpts2.setDataIoStats(&dataIoStats_);
+  readerOpts2.setMetadataIoStats(&metadataIoStats_);
   auto subfields2 = makeSubfields({"a", "b"});
   folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
       subfields2ByName = groupSubfields(subfields2);
@@ -939,6 +988,8 @@ TEST_F(TestReader, testStatsCallbackFiredWithoutFiltering) {
       });
 
   dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setDataIoStats(&dataIoStats_);
+  readerOpts.setMetadataIoStats(&metadataIoStats_);
 
   auto reader = DwrfReader::create(
       createFileBufferedInput(getFMSmallFile(), readerOpts.memoryPool()),
@@ -1022,8 +1073,12 @@ void verifyFlatmapStructEncoding(
     const std::string& filename,
     const std::vector<int32_t>& keysAsFields,
     const std::vector<int32_t>& keysToSelect,
+    io::IoStatistics& dataIoStats,
+    io::IoStatistics& metadataIoStats,
     size_t batchSize = 1000) {
   dwio::common::ReaderOptions readerOpts{pool};
+  readerOpts.setDataIoStats(&dataIoStats);
+  readerOpts.setMetadataIoStats(&metadataIoStats);
   auto reader = DwrfReader::create(
       createFileBufferedInput(filename, readerOpts.memoryPool()), readerOpts);
 
@@ -1090,7 +1145,9 @@ TEST_F(TestReader, testFlatmapAsStructSmall) {
       pool(),
       getFMSmallFile(),
       {1, 2, 3, 4, 5, -99999999 /* does not exist */},
-      {} /* no key filtering */);
+      {} /* no key filtering */,
+      dataIoStats_,
+      metadataIoStats_);
 }
 
 TEST_F(TestReader, testFlatmapAsStructSmallEmptyInmap) {
@@ -1099,6 +1156,8 @@ TEST_F(TestReader, testFlatmapAsStructSmallEmptyInmap) {
       getFMSmallFile(),
       {1, 2, 3, 4, 5, -99999999 /* does not exist */},
       {} /* no key filtering */,
+      dataIoStats_,
+      metadataIoStats_,
       2);
 }
 
@@ -1107,7 +1166,9 @@ TEST_F(TestReader, testFlatmapAsStructLarge) {
       pool(),
       getFMSmallFile(),
       {1, 2, 3, 4, 5, -99999999 /* does not exist */},
-      {} /* no key filtering */);
+      {} /* no key filtering */,
+      dataIoStats_,
+      metadataIoStats_);
 }
 
 TEST_F(TestReader, testFlatmapAsStructWithKeyProjection) {
@@ -1115,7 +1176,9 @@ TEST_F(TestReader, testFlatmapAsStructWithKeyProjection) {
       pool(),
       getFMSmallFile(),
       {1, 2, 3, 4, 5, -99999999 /* does not exist */},
-      {3, 5} /* select only these to read */);
+      {3, 5} /* select only these to read */,
+      dataIoStats_,
+      metadataIoStats_);
 }
 
 TEST_F(TestReader, testFlatmapAsStructRequiringKeyList) {
@@ -1130,6 +1193,8 @@ TEST_F(TestReader, testFlatmapAsStructRequiringKeyList) {
 TEST_F(TestReader, testMismatchSchemaMoreFields) {
   // file has schema: a int, b struct<a:int, b:float, c:string>, c float
   dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setDataIoStats(&dataIoStats_);
+  readerOpts.setMetadataIoStats(&metadataIoStats_);
   RowReaderOptions rowReaderOpts;
   std::shared_ptr<const RowType> requestedType =
       std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse(
@@ -1176,6 +1241,8 @@ TEST_F(TestReader, testMismatchSchemaMoreFields) {
 TEST_F(TestReader, testMismatchSchemaFewerFields) {
   // file has schema: a int, b struct<a:int, b:float, c:string>, c float
   dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setDataIoStats(&dataIoStats_);
+  readerOpts.setMetadataIoStats(&metadataIoStats_);
   RowReaderOptions rowReaderOpts;
   std::shared_ptr<const RowType> requestedType =
       std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse(
@@ -1218,6 +1285,8 @@ TEST_F(TestReader, testMismatchSchemaFewerFields) {
 TEST_F(TestReader, testMismatchSchemaNestedMoreFields) {
   // file has schema: a int, b struct<a:int, b:float>, c float
   dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setDataIoStats(&dataIoStats_);
+  readerOpts.setMetadataIoStats(&metadataIoStats_);
   RowReaderOptions rowReaderOpts;
   std::shared_ptr<const RowType> requestedType =
       std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse(
@@ -1285,6 +1354,8 @@ TEST_F(TestReader, testMismatchSchemaNestedMoreFields) {
 TEST_F(TestReader, testMismatchSchemaNestedFewerFields) {
   // file has schema: a int, b struct<a:int, b:float>, c float
   dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setDataIoStats(&dataIoStats_);
+  readerOpts.setMetadataIoStats(&metadataIoStats_);
   RowReaderOptions rowReaderOpts;
   std::shared_ptr<const RowType> requestedType =
       std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse(
@@ -1343,6 +1414,8 @@ TEST_F(TestReader, testMismatchSchemaNestedFewerFields) {
 TEST_F(TestReader, testMismatchSchemaIncompatibleNotSelected) {
   // file has schema: a int, b struct<a:int, b:float>, c float
   dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setDataIoStats(&dataIoStats_);
+  readerOpts.setMetadataIoStats(&metadataIoStats_);
   RowReaderOptions rowReaderOpts;
   std::shared_ptr<const RowType> requestedType =
       std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse(
@@ -1425,6 +1498,8 @@ TEST_F(TestReader, testMismatchSchemaIncompatible) {
 TEST_F(TestReader, fileColumnNamesReadAsLowerCase) {
   // upper.orc holds one columns (Bool_Val: BOOLEAN, b: BIGINT)
   dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setDataIoStats(&dataIoStats_);
+  readerOpts.setMetadataIoStats(&metadataIoStats_);
   readerOpts.setFileColumnNamesReadAsLowerCase(true);
   auto reader = DwrfReader::create(
       createFileBufferedInput(
@@ -1439,6 +1514,8 @@ TEST_F(TestReader, fileColumnNamesReadAsLowerCaseComplexStruct) {
   // upper_complex.orc holds type
   // Cc:struct<CcLong0:bigint,CcMap1:map<string,struct<CcArray2:array<struct<CcInt3:int>>>>>
   dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setDataIoStats(&dataIoStats_);
+  readerOpts.setMetadataIoStats(&metadataIoStats_);
   readerOpts.setFileColumnNamesReadAsLowerCase(true);
   auto reader = DwrfReader::create(
       createFileBufferedInput(
@@ -1477,6 +1554,8 @@ TEST_F(TestReader, fileColumnNamesReadAsLowerCaseComplexStruct) {
 
 TEST_F(TestReader, TestStripeSizeCallback) {
   dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setDataIoStats(&dataIoStats_);
+  readerOpts.setMetadataIoStats(&metadataIoStats_);
   readerOpts.setFilePreloadThreshold(0);
   readerOpts.setFooterSpeculativeIoSize(17);
   RowReaderOptions rowReaderOpts;
@@ -1505,6 +1584,8 @@ TEST_F(TestReader, TestStripeSizeCallback) {
 
 TEST_F(TestReader, TestStripeSizeCallbackLimitsOneStripe) {
   dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setDataIoStats(&dataIoStats_);
+  readerOpts.setMetadataIoStats(&metadataIoStats_);
   readerOpts.setFilePreloadThreshold(0);
   readerOpts.setFooterSpeculativeIoSize(17);
   RowReaderOptions rowReaderOpts;
@@ -1534,6 +1615,8 @@ TEST_F(TestReader, TestStripeSizeCallbackLimitsOneStripe) {
 
 TEST_F(TestReader, TestStripeSizeCallbackLimitsTwoStripe) {
   dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setDataIoStats(&dataIoStats_);
+  readerOpts.setMetadataIoStats(&metadataIoStats_);
   readerOpts.setFilePreloadThreshold(0);
   readerOpts.setFooterSpeculativeIoSize(17);
   RowReaderOptions rowReaderOpts;
@@ -1826,6 +1909,8 @@ TEST_F(TestReader, testEmptyFile) {
       std::make_shared<InMemoryReadFile>(std::move(data)), *pool());
 
   dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setDataIoStats(&dataIoStats_);
+  readerOpts.setMetadataIoStats(&metadataIoStats_);
   RowReaderOptions rowReaderOpts;
 
   auto rowReader = DwrfReader::create(std::move(input), readerOpts)
@@ -1908,7 +1993,9 @@ void testBufferLifeCycle(
     const std::shared_ptr<dwrf::Config>& config,
     std::mt19937& rng,
     size_t batchSize,
-    bool hasNull) {
+    bool hasNull,
+    io::IoStatistics& dataIoStats,
+    io::IoStatistics& metadataIoStats) {
   std::vector<VectorPtr> batches;
   std::function<bool(vector_size_t)> isNullAt = nullptr;
   if (hasNull) {
@@ -1929,6 +2016,8 @@ void testBufferLifeCycle(
       std::make_shared<InMemoryReadFile>(std::move(data)), *pool);
 
   dwio::common::ReaderOptions readerOpts{pool};
+  readerOpts.setDataIoStats(&dataIoStats);
+  readerOpts.setMetadataIoStats(&metadataIoStats);
   RowReaderOptions rowReaderOpts;
   rowReaderOpts.setReturnFlatVector(true);
   auto reader = std::make_unique<DwrfReader>(readerOpts, std::move(input));
@@ -1966,7 +2055,9 @@ void testFlatmapAsMapFieldLifeCycle(
     const std::shared_ptr<dwrf::Config>& config,
     std::mt19937& rng,
     size_t batchSize,
-    bool hasNull) {
+    bool hasNull,
+    io::IoStatistics& dataIoStats,
+    io::IoStatistics& metadataIoStats) {
   std::vector<VectorPtr> batches;
   std::function<bool(vector_size_t)> isNullAt = nullptr;
   if (hasNull) {
@@ -1987,6 +2078,8 @@ void testFlatmapAsMapFieldLifeCycle(
       std::make_shared<InMemoryReadFile>(std::move(data)), *pool);
 
   dwio::common::ReaderOptions readerOpts{pool};
+  readerOpts.setDataIoStats(&dataIoStats);
+  readerOpts.setMetadataIoStats(&metadataIoStats);
   RowReaderOptions rowReaderOpts;
   rowReaderOpts.setReturnFlatVector(true);
   auto reader = std::make_unique<DwrfReader>(readerOpts, std::move(input));
@@ -2083,8 +2176,24 @@ TEST_F(TestReader, testBufferLifeCycle) {
   std::mt19937 rng{seed};
 
   for (auto i = 0; i < 10; ++i) {
-    testBufferLifeCycle(pool(), schema, config, rng, batchSize, false);
-    testBufferLifeCycle(pool(), schema, config, rng, batchSize, true);
+    testBufferLifeCycle(
+        pool(),
+        schema,
+        config,
+        rng,
+        batchSize,
+        false,
+        dataIoStats_,
+        metadataIoStats_);
+    testBufferLifeCycle(
+        pool(),
+        schema,
+        config,
+        rng,
+        batchSize,
+        true,
+        dataIoStats_,
+        metadataIoStats_);
   }
 }
 
@@ -2102,8 +2211,24 @@ TEST_F(TestReader, testFlatmapAsMapFieldLifeCycle) {
   LOG(INFO) << "seed: " << seed;
   std::mt19937 rng{seed};
 
-  testFlatmapAsMapFieldLifeCycle(pool(), schema, config, rng, batchSize, false);
-  testFlatmapAsMapFieldLifeCycle(pool(), schema, config, rng, batchSize, true);
+  testFlatmapAsMapFieldLifeCycle(
+      pool(),
+      schema,
+      config,
+      rng,
+      batchSize,
+      false,
+      dataIoStats_,
+      metadataIoStats_);
+  testFlatmapAsMapFieldLifeCycle(
+      pool(),
+      schema,
+      config,
+      rng,
+      batchSize,
+      true,
+      dataIoStats_,
+      metadataIoStats_);
 }
 
 TEST_F(TestReader, testFooterWrapper) {
@@ -2167,6 +2292,8 @@ std::pair<std::unique_ptr<dwrf::Writer>, std::unique_ptr<DwrfReader>>
 createWriterReader(
     const std::vector<VectorPtr>& batches,
     memory::MemoryPool* pool,
+    io::IoStatistics& dataIoStats,
+    io::IoStatistics& metadataIoStats,
     const std::shared_ptr<dwrf::Config>& config =
         std::make_shared<dwrf::Config>(),
     std::function<std::unique_ptr<DWRFFlushPolicy>()> flushPolicy =
@@ -2184,6 +2311,8 @@ createWriterReader(
   auto input = std::make_unique<BufferedInput>(
       std::make_shared<InMemoryReadFile>(std::move(data)), *pool);
   dwio::common::ReaderOptions readerOpts(pool);
+  readerOpts.setDataIoStats(&dataIoStats);
+  readerOpts.setMetadataIoStats(&metadataIoStats);
   readerOpts.setFileFormat(FileFormat::DWRF);
   auto reader = DwrfReader::create(std::move(input), readerOpts);
   return std::make_pair(std::move(writer), std::move(reader));
@@ -2201,7 +2330,8 @@ TEST_F(TestReader, setRowNumberColumnInfo) {
   };
   auto batches = createBatches(integerValues);
   auto schema = asRowType(batches[0]->type());
-  auto [writer, reader] = createWriterReader(batches, pool());
+  auto [writer, reader] =
+      createWriterReader(batches, pool(), dataIoStats_, metadataIoStats_);
 
   auto spec = std::make_shared<common::ScanSpec>("<root>");
   spec->addAllChildFields(*schema);
@@ -2230,7 +2360,8 @@ TEST_F(TestReader, reuseRowNumberColumn) {
   std::vector<std::vector<int32_t>> integerValues{{0, 1, 2, 3, 4}};
   auto batches = createBatches(integerValues);
   auto schema = asRowType(batches[0]->type());
-  auto [writer, reader] = createWriterReader(batches, pool());
+  auto [writer, reader] =
+      createWriterReader(batches, pool(), dataIoStats_, metadataIoStats_);
 
   auto spec = std::make_shared<common::ScanSpec>("<root>");
   spec->addAllChildFields(*schema);
@@ -2296,7 +2427,8 @@ TEST_F(TestReader, explicitRowNumberColumn) {
       {9, 10, 11, 12, 13, 14, 15},
   };
   auto batches = createBatches(integerValues);
-  auto [writer, reader] = createWriterReader(batches, pool());
+  auto [writer, reader] =
+      createWriterReader(batches, pool(), dataIoStats_, metadataIoStats_);
   auto spec = std::make_shared<common::ScanSpec>("<root>");
   spec->addField("c0", 0);
   spec->addField("$row_number", 1)
@@ -2333,7 +2465,8 @@ TEST_F(TestReader, failToReuseReaderNulls) {
       makeRowVector({"c"}, {makeFlatVector<int64_t>(11, folly::identity)}),
   });
   auto schema = asRowType(data->type());
-  auto [writer, reader] = createWriterReader({data}, pool());
+  auto [writer, reader] =
+      createWriterReader({data}, pool(), dataIoStats_, metadataIoStats_);
   auto spec = std::make_shared<common::ScanSpec>("<root>");
   spec->addAllChildFields(*schema);
   spec->childByName("c0")->childByName("a")->setFilter(
@@ -2384,7 +2517,8 @@ TEST_F(TestReader, readFlatMapsSomeEmpty) {
   config->set(dwrf::Config::FLATTEN_MAP, true);
   config->set(dwrf::Config::MAP_FLAT_COLS, {0});
 
-  auto [writer, reader] = createWriterReader({row}, pool(), config);
+  auto [writer, reader] =
+      createWriterReader({row}, pool(), dataIoStats_, metadataIoStats_, config);
 
   auto schema = asRowType(row->type());
   auto spec = std::make_shared<common::ScanSpec>("<root>");
@@ -2450,7 +2584,8 @@ TEST_F(TestReader, readFlatMapsWithNullMaps) {
   config->set(dwrf::Config::FLATTEN_MAP, true);
   config->set(dwrf::Config::MAP_FLAT_COLS, {0});
 
-  auto [writer, reader] = createWriterReader({row}, pool(), config);
+  auto [writer, reader] =
+      createWriterReader({row}, pool(), dataIoStats_, metadataIoStats_, config);
 
   auto schema = asRowType(row->type());
   auto spec = std::make_shared<common::ScanSpec>("<root>");
@@ -2507,7 +2642,8 @@ TEST_F(TestReader, readFlatMapsAsFlatMaps) {
     config->set(dwrf::Config::FLATTEN_MAP, true);
     config->set(dwrf::Config::MAP_FLAT_COLS, {0});
 
-    auto [writer, reader] = createWriterReader({input}, pool(), config);
+    auto [writer, reader] = createWriterReader(
+        {input}, pool(), dataIoStats_, metadataIoStats_, config);
 
     auto schema = asRowType(input->type());
     auto spec = std::make_shared<common::ScanSpec>("<root>");
@@ -2559,6 +2695,55 @@ TEST_F(TestReader, readFlatMapsAsFlatMaps) {
            {{0, 12}, {1, 13}, {2, 14}, {3, 15}}}));
 }
 
+// Regression test: reading a multi-stripe flatmap file with
+// preserveFlatMapsInMemory=true used to crash when stripes had different
+// key sets. The ScanSpec accumulated stale children across stripes, causing
+// out-of-range access on the reader's children_ vector.
+TEST_F(TestReader, readFlatMapMultiStripeDifferentKeys) {
+  // Stripe 1: keys {0, 1, 2, 3, 4} — 5 keys.
+  auto stripe1 = makeRowVector({makeMapVector<int32_t, float>(
+      {{{0, 1.0f}, {1, 2.0f}, {2, 3.0f}, {3, 4.0f}, {4, 5.0f}},
+       {{0, 6.0f}, {1, 7.0f}, {2, 8.0f}, {3, 9.0f}, {4, 10.0f}}})});
+
+  // Stripe 2: keys {0, 1, 2} — fewer keys than stripe 1.
+  auto stripe2 = makeRowVector({makeMapVector<int32_t, float>(
+      {{{0, 11.0f}, {1, 12.0f}, {2, 13.0f}},
+       {{0, 14.0f}, {1, 15.0f}, {2, 16.0f}},
+       {{0, 17.0f}, {1, 18.0f}, {2, 19.0f}}})});
+
+  auto config = std::make_shared<dwrf::Config>();
+  config->set(dwrf::Config::FLATTEN_MAP, true);
+  config->set(dwrf::Config::MAP_FLAT_COLS, {0});
+
+  // simpleFlushPolicyFactory(true) produces one stripe per batch.
+  auto [writer, reader] = createWriterReader(
+      {stripe1, stripe2}, pool(), dataIoStats_, metadataIoStats_, config);
+  ASSERT_EQ(reader->getNumberOfStripes(), 2);
+
+  auto schema = asRowType(stripe1->type());
+  auto spec = std::make_shared<common::ScanSpec>("<root>");
+  spec->addAllChildFields(*schema);
+
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(spec);
+  rowReaderOpts.setPreserveFlatMapsInMemory(true);
+
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+  VectorPtr batch = BaseVector::create(schema, 0, pool());
+
+  uint64_t totalRows = 0;
+  while (rowReader->next(100, batch) > 0) {
+    auto* rowVec = batch->as<RowVector>();
+    // Trigger lazy loading — this is the pattern that used to crash.
+    for (column_index_t i = 0; i < rowVec->childrenSize(); ++i) {
+      auto& child = rowVec->childAt(i);
+      child = BaseVector::loadedVectorShared(child);
+    }
+    totalRows += batch->size();
+  }
+  EXPECT_EQ(totalRows, 5); // 2 rows from stripe 1 + 3 rows from stripe 2.
+}
+
 TEST_F(TestReader, readStructWithWholeBatchFiltered) {
   // Test reading a struct with a pushdown filter that filters out all rows
   // for a certain batch.
@@ -2583,7 +2768,8 @@ TEST_F(TestReader, readStructWithWholeBatchFiltered) {
       std::make_shared<RowVector>(pool(), rowType, nulls, vectorSize, children);
   auto row = makeRowVector({"c0"}, {c0});
 
-  auto [writer, reader] = createWriterReader({row}, pool());
+  auto [writer, reader] =
+      createWriterReader({row}, pool(), dataIoStats_, metadataIoStats_);
 
   auto schema = asRowType(row->type());
   auto spec = std::make_shared<common::ScanSpec>("<root>");
@@ -2638,6 +2824,8 @@ TEST_F(TestReader, readStringDictionaryAsFlat) {
   auto [writer, reader] = createWriterReader(
       {batch},
       pool(),
+      dataIoStats_,
+      metadataIoStats_,
       std::make_shared<dwrf::Config>(),
       // The always true flush policy would disable dictionary encoding at least
       // for first batch.
@@ -2679,7 +2867,8 @@ TEST_F(TestReader, missingSubfieldsNoResultReusing) {
           makeFlatVector<int64_t>(kSize, folly::identity),
       }),
   });
-  auto [writer, reader] = createWriterReader({batch}, pool());
+  auto [writer, reader] =
+      createWriterReader({batch}, pool(), dataIoStats_, metadataIoStats_);
   auto schema = ROW({{"c0", ROW({{"c0", BIGINT()}, {"c1", VARCHAR()}})}});
   auto spec = std::make_shared<common::ScanSpec>("<root>");
   spec->addAllChildFields(*schema);
@@ -2708,7 +2897,8 @@ TEST_F(TestReader, selectiveStringDirectFastPath) {
       makeFlatVector<int64_t>(17, [](auto i) { return i != 8; }),
       makeFlatVector<StringView>(17, genStr),
   });
-  auto [writer, reader] = createWriterReader({batch}, pool());
+  auto [writer, reader] =
+      createWriterReader({batch}, pool(), dataIoStats_, metadataIoStats_);
   auto schema = asRowType(batch->type());
   auto spec = std::make_shared<common::ScanSpec>("<root>");
   spec->addAllChildFields(*schema);
@@ -2734,7 +2924,8 @@ TEST_F(TestReader, selectiveStringDirect) {
       makeFlatVector<int64_t>(17, [](auto i) { return i != 15; }),
       makeFlatVector<StringView>(17, genStr),
   });
-  auto [writer, reader] = createWriterReader({batch}, pool());
+  auto [writer, reader] =
+      createWriterReader({batch}, pool(), dataIoStats_, metadataIoStats_);
   auto schema = asRowType(batch->type());
   auto spec = std::make_shared<common::ScanSpec>("<root>");
   spec->addAllChildFields(*schema);
@@ -2758,7 +2949,8 @@ TEST_F(TestReader, selectiveFlatMapFastPathAllInlinedStringKeys) {
   auto config = std::make_shared<dwrf::Config>();
   config->set(dwrf::Config::FLATTEN_MAP, true);
   config->set(dwrf::Config::MAP_FLAT_COLS, {0});
-  auto [writer, reader] = createWriterReader({row}, pool(), config);
+  auto [writer, reader] =
+      createWriterReader({row}, pool(), dataIoStats_, metadataIoStats_, config);
   auto schema = asRowType(row->type());
   auto spec = std::make_shared<common::ScanSpec>("<root>");
   spec->addAllChildFields(*schema);
@@ -2777,6 +2969,8 @@ TEST_F(TestReader, skipLongString) {
       std::make_shared<LocalReadFile>(getExampleFilePath("long_string.dwrf")),
       *pool());
   dwio::common::ReaderOptions readerOpts(pool());
+  readerOpts.setDataIoStats(&dataIoStats_);
+  readerOpts.setMetadataIoStats(&metadataIoStats_);
   readerOpts.setFileFormat(FileFormat::DWRF);
   auto reader = DwrfReader::create(std::move(input), readerOpts);
   auto spec = std::make_shared<common::ScanSpec>("<root>");
@@ -2818,7 +3012,8 @@ TEST_F(TestReader, mapAsStruct) {
   auto row = makeRowVector({
       makeMapVector<int32_t, int64_t>({{{1, 4}, {2, 5}}, {{1, 6}, {3, 7}}}),
   });
-  auto [writer, reader] = createWriterReader({row}, pool());
+  auto [writer, reader] =
+      createWriterReader({row}, pool(), dataIoStats_, metadataIoStats_);
   auto outType = ROW({"c0"}, {ROW({"3", "1"}, BIGINT())});
   auto spec = std::make_shared<common::ScanSpec>("<root>");
   spec->addAllChildFields(*outType);
@@ -2845,7 +3040,8 @@ TEST_F(TestReader, mapAsStructFilterAfterRead) {
       makeRowVector(
           {makeConstant<int64_t>(0, 3)}, [](auto i) { return i == 0; }),
   });
-  auto [writer, reader] = createWriterReader({row}, pool());
+  auto [writer, reader] =
+      createWriterReader({row}, pool(), dataIoStats_, metadataIoStats_);
   auto outType =
       ROW({"c0", "c1"}, {ROW({"3", "1"}, BIGINT()), ROW({"c0"}, BIGINT())});
   auto spec = std::make_shared<common::ScanSpec>("<root>");
@@ -2873,7 +3069,8 @@ TEST_F(TestReader, mapAsStructFilterAfterRead) {
 
 TEST_F(TestReader, mapAsStructAllEmpty) {
   auto row = makeRowVector({makeMapVector<int32_t, int64_t>({{}, {}})});
-  auto [writer, reader] = createWriterReader({row}, pool());
+  auto [writer, reader] =
+      createWriterReader({row}, pool(), dataIoStats_, metadataIoStats_);
   auto outType = ROW({"c0"}, {ROW({"1"}, BIGINT())});
   auto spec = std::make_shared<common::ScanSpec>("<root>");
   spec->addAllChildFields(*outType);
@@ -2953,6 +3150,8 @@ DEBUG_ONLY_TEST_F(TestReader, asyncLoadSurvivesReaderDestruction) {
   // Make sure ReaderOptions and DwrfRowReader are freed after {} scope
   {
     dwio::common::ReaderOptions readerOpts(pool());
+    readerOpts.setDataIoStats(&dataIoStats_);
+    readerOpts.setMetadataIoStats(&metadataIoStats_);
     readerOpts.setFileFormat(FileFormat::DWRF);
     auto reader = DwrfReader::create(std::move(input), readerOpts);
 

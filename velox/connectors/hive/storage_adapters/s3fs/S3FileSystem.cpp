@@ -229,29 +229,30 @@ void registerCredentialsProvider(
 
 class S3FileSystem::Impl {
  public:
-  Impl(const S3Config& s3Config) {
+  explicit Impl(std::shared_ptr<S3Config> s3Config)
+      : s3Config_(std::move(s3Config)) {
     VELOX_CHECK(getAwsInstance()->isInitialized(), "S3 is not initialized");
     Aws::Client::ClientConfigurationInitValues initValues;
-    initValues.shouldDisableIMDS = !s3Config.useIMDS();
+    initValues.shouldDisableIMDS = !s3Config_->useIMDS();
     Aws::S3::S3ClientConfiguration clientConfig(initValues);
     clientConfig.checksumConfig.requestChecksumCalculation =
         Aws::Client::RequestChecksumCalculation::WHEN_REQUIRED;
     clientConfig.checksumConfig.responseChecksumValidation =
         Aws::Client::ResponseChecksumValidation::WHEN_REQUIRED;
-    if (s3Config.endpoint().has_value()) {
-      clientConfig.endpointOverride = s3Config.endpoint().value();
+    if (s3Config_->endpoint().has_value()) {
+      clientConfig.endpointOverride = s3Config_->endpoint().value();
     }
 
-    if (s3Config.endpointRegion().has_value()) {
-      clientConfig.region = s3Config.endpointRegion().value();
+    if (s3Config_->endpointRegion().has_value()) {
+      clientConfig.region = s3Config_->endpointRegion().value();
     }
 
-    if (s3Config.useProxyFromEnv()) {
+    if (s3Config_->useProxyFromEnv()) {
       auto proxyConfig =
           S3ProxyConfigurationBuilder(
-              s3Config.endpoint().has_value() ? s3Config.endpoint().value()
-                                              : "")
-              .useSsl(s3Config.useSSL())
+              s3Config_->endpoint().has_value() ? s3Config_->endpoint().value()
+                                                : "")
+              .useSsl(s3Config_->useSSL())
               .build();
       if (proxyConfig.has_value()) {
         clientConfig.proxyScheme = Aws::Http::SchemeMapper::FromString(
@@ -263,42 +264,42 @@ class S3FileSystem::Impl {
       }
     }
 
-    if (s3Config.useSSL()) {
+    if (s3Config_->useSSL()) {
       clientConfig.scheme = Aws::Http::Scheme::HTTPS;
     } else {
       clientConfig.scheme = Aws::Http::Scheme::HTTP;
     }
 
-    if (s3Config.connectTimeout().has_value()) {
+    if (s3Config_->connectTimeout().has_value()) {
       clientConfig.connectTimeoutMs =
           std::chrono::duration_cast<std::chrono::milliseconds>(
               facebook::velox::config::toDuration(
-                  s3Config.connectTimeout().value()))
+                  s3Config_->connectTimeout().value()))
               .count();
     }
 
-    if (s3Config.socketTimeout().has_value()) {
+    if (s3Config_->socketTimeout().has_value()) {
       clientConfig.requestTimeoutMs =
           std::chrono::duration_cast<std::chrono::milliseconds>(
               facebook::velox::config::toDuration(
-                  s3Config.socketTimeout().value()))
+                  s3Config_->socketTimeout().value()))
               .count();
     }
 
-    if (s3Config.maxConnections().has_value()) {
-      clientConfig.maxConnections = s3Config.maxConnections().value();
+    if (s3Config_->maxConnections().has_value()) {
+      clientConfig.maxConnections = s3Config_->maxConnections().value();
     }
 
-    auto retryStrategy = getRetryStrategy(s3Config);
+    auto retryStrategy = getRetryStrategy(s3Config_);
     if (retryStrategy.has_value()) {
       clientConfig.retryStrategy = retryStrategy.value();
     }
 
-    clientConfig.useVirtualAddressing = s3Config.useVirtualAddressing();
+    clientConfig.useVirtualAddressing = s3Config_->useVirtualAddressing();
     clientConfig.payloadSigningPolicy =
-        inferPayloadSign(s3Config.payloadSigningPolicy());
+        inferPayloadSign(s3Config_->payloadSigningPolicy());
 
-    auto credentialsProvider = getCredentialsProvider(s3Config);
+    auto credentialsProvider = getCredentialsProvider(*s3Config_);
 
     client_ = std::make_shared<Aws::S3::S3Client>(
         credentialsProvider, nullptr /* endpointProvider */, clientConfig);
@@ -382,9 +383,9 @@ class S3FileSystem::Impl {
 
   // Return a client RetryStrategy based on the config.
   std::optional<std::shared_ptr<Aws::Client::RetryStrategy>> getRetryStrategy(
-      const S3Config& s3Config) const {
-    auto retryMode = s3Config.retryMode();
-    auto maxAttempts = s3Config.maxAttempts();
+      const std::shared_ptr<S3Config>& s3Config) const {
+    auto retryMode = s3Config->retryMode();
+    auto maxAttempts = s3Config->maxAttempts();
     if (retryMode.has_value()) {
       if (retryMode.value() == "standard") {
         if (maxAttempts.has_value()) {
@@ -447,16 +448,21 @@ class S3FileSystem::Impl {
     return getAwsInstance()->getLogPrefix();
   }
 
+  std::shared_ptr<S3Config> getS3Config() {
+    return s3Config_;
+  }
+
  private:
   std::shared_ptr<Aws::S3::S3Client> client_;
+  std::shared_ptr<S3Config> s3Config_;
 };
 
 S3FileSystem::S3FileSystem(
     std::string_view bucketName,
     const std::shared_ptr<const config::ConfigBase> config)
     : FileSystem(config) {
-  S3Config s3Config(bucketName, config);
-  impl_ = std::make_shared<Impl>(s3Config);
+  auto s3Config = std::make_shared<S3Config>(bucketName, config);
+  impl_ = std::make_shared<Impl>(std::move(s3Config));
 }
 
 std::string S3FileSystem::getLogLevelName() const {
@@ -480,8 +486,8 @@ std::unique_ptr<WriteFile> S3FileSystem::openFileForWrite(
     std::string_view s3Path,
     const FileOptions& options) {
   const auto path = getPath(s3Path);
-  auto s3file =
-      std::make_unique<S3WriteFile>(path, impl_->s3Client(), options.pool);
+  auto s3file = std::make_unique<S3WriteFile>(
+      path, impl_->s3Client(), options.pool, impl_->getS3Config());
   return s3file;
 }
 

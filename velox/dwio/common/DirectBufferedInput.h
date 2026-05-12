@@ -237,14 +237,8 @@ class DirectBufferedInput : public BufferedInput {
   void reset() override;
 
  protected:
-  // Some members are protected to allow custom extended buffered inputs.
-  // Regions that are candidates for loading.
-  std::vector<LoadRequest> requests_;
-
-  // Distinct coalesced loads in 'coalescedLoads_'.
-  std::vector<std::shared_ptr<cache::CoalescedLoad>> coalescedLoads_;
-
- private:
+  // The constructor and some member variables are protected to allow custom
+  // extended buffered inputs.
   // Constructor used by clone().
   DirectBufferedInput(
       std::shared_ptr<ReadFileInputStream> input,
@@ -265,6 +259,21 @@ class DirectBufferedInput : public BufferedInput {
         fileSize_(input_->getLength()),
         options_(readerOptions) {}
 
+  // Regions that are candidates for loading.
+  const StringIdLease fileNum_;
+  const std::shared_ptr<cache::ScanTracker> tracker_;
+  const StringIdLease groupId_;
+  const std::shared_ptr<IoStatistics> ioStatistics_;
+  const std::shared_ptr<velox::IoStats> ioStats_;
+  folly::Executor* const executor_;
+  const uint64_t fileSize_;
+  const io::ReaderOptions options_;
+  std::vector<LoadRequest> requests_;
+
+  // Distinct coalesced loads in 'coalescedLoads_'.
+  std::vector<std::shared_ptr<cache::CoalescedLoad>> coalescedLoads_;
+
+ private:
   std::vector<int32_t> groupRequests(
       const std::vector<LoadRequest*>& requests,
       bool prefetch) const;
@@ -300,15 +309,6 @@ class DirectBufferedInput : public BufferedInput {
       pool.reset();
     }
   };
-
-  const StringIdLease fileNum_;
-  const std::shared_ptr<cache::ScanTracker> tracker_;
-  const StringIdLease groupId_;
-  const std::shared_ptr<IoStatistics> ioStatistics_;
-  const std::shared_ptr<velox::IoStats> ioStats_;
-  folly::Executor* const executor_;
-  const uint64_t fileSize_;
-  const io::ReaderOptions options_;
 
   // Coalesced loads spanning multiple streams in one IO.
   folly::Synchronized<folly::F14FastMap<

@@ -42,7 +42,7 @@ class SelectiveRepeatedColumnReader : public SelectiveColumnReader {
       velox::common::ScanSpec& scanSpec,
       std::shared_ptr<const dwio::common::TypeWithId> type)
       : SelectiveColumnReader(requestedType, std::move(type), params, scanSpec),
-        nestedRowsHolder_(memoryPool_) {}
+        nestedRowsHolder_(pool_) {}
 
   /// Reads 'numLengths' next lengths into 'result'. If 'nulls' is
   /// non-null, each kNull bit signifies a null with a length of 0 to
@@ -62,7 +62,7 @@ class SelectiveRepeatedColumnReader : public SelectiveColumnReader {
   /// Creates a struct if '*result' is empty and 'type' is a row.
   void prepareStructResult(const TypePtr& type, VectorPtr* result) {
     if (!*result && type->kind() == TypeKind::ROW) {
-      *result = BaseVector::create(type, 0, memoryPool_);
+      *result = BaseVector::create(type, 0, pool_);
     }
   }
 
@@ -84,6 +84,10 @@ class SelectiveRepeatedColumnReader : public SelectiveColumnReader {
     }
     return i;
   }
+
+  /// Produce a FlatVector<int64_t> of sizes directly from allLengths_ for
+  /// kSize extraction.  Reuses the result vector across batches.
+  void getExtractionSizeValues(const RowSet& rows, VectorPtr* result);
 
   void ensureAllLengthsBuffer(vector_size_t size);
 
@@ -112,7 +116,9 @@ class SelectiveListColumnReader : public SelectiveRepeatedColumnReader {
       velox::common::ScanSpec& scanSpec);
 
   void resetFilterCaches() override {
-    child_->resetFilterCaches();
+    if (child_) {
+      child_->resetFilterCaches();
+    }
   }
 
   uint64_t skip(uint64_t numValues) override;
@@ -133,8 +139,12 @@ class SelectiveMapColumnReaderBase : public SelectiveRepeatedColumnReader {
   using SelectiveRepeatedColumnReader::SelectiveRepeatedColumnReader;
 
   void resetFilterCaches() override {
-    keyReader_->resetFilterCaches();
-    elementReader_->resetFilterCaches();
+    if (keyReader_) {
+      keyReader_->resetFilterCaches();
+    }
+    if (elementReader_) {
+      elementReader_->resetFilterCaches();
+    }
   }
 
   uint64_t skip(uint64_t numValues) override;
@@ -144,16 +154,27 @@ class SelectiveMapColumnReaderBase : public SelectiveRepeatedColumnReader {
 
   void seekToRowGroup(int64_t index) override {
     SelectiveRepeatedColumnReader::seekToRowGroup(index);
-    keyReader_->seekToRowGroup(index);
-    keyReader_->setReadOffsetRecursive(0);
-    elementReader_->seekToRowGroup(index);
-    elementReader_->setReadOffsetRecursive(0);
+    if (keyReader_) {
+      keyReader_->seekToRowGroup(index);
+      keyReader_->setReadOffsetRecursive(0);
+    }
+    if (elementReader_) {
+      elementReader_->seekToRowGroup(index);
+      elementReader_->setReadOffsetRecursive(0);
+    }
     childTargetReadOffset_ = 0;
   }
 
  protected:
+  /// Handle extraction types (kSize, kKeys, kValues) in getValues.
+  void getExtractionValues(const RowSet& rows, VectorPtr* result);
+
   std::unique_ptr<SelectiveColumnReader> keyReader_;
   std::unique_ptr<SelectiveColumnReader> elementReader_;
+
+  // Reusable MapVector for computing offsets/sizes in kKeys/kValues extraction.
+  // Not needed for kSize (sizes computed directly from allLengths_).
+  VectorPtr extractionOffsetsTemp_;
 };
 
 class SelectiveMapColumnReader : public SelectiveMapColumnReaderBase {

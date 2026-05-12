@@ -426,13 +426,27 @@ class ExprTest : public testing::Test, public VectorTestBase {
   parse::ParseOptions options_;
 };
 
-class ParameterizedExprTest : public ExprTest,
-                              public testing::WithParamInterface<bool> {
+struct ExprTestParams {
+  bool cacheEnabled;
+  int32_t minRowsForPeeling;
+
+  friend std::ostream& operator<<(std::ostream& os, const ExprTestParams& p) {
+    return os << "cacheEnabled=" << p.cacheEnabled
+              << ", minRowsForPeeling=" << p.minRowsForPeeling;
+  }
+};
+
+class ParameterizedExprTest
+    : public ExprTest,
+      public testing::WithParamInterface<ExprTestParams> {
  public:
   ParameterizedExprTest() {
+    const auto& params = GetParam();
     std::unordered_map<std::string, std::string> configData(
         {{core::QueryConfig::kEnableExpressionEvaluationCache,
-          GetParam() ? "true" : "false"}});
+          params.cacheEnabled ? "true" : "false"},
+         {core::QueryConfig::kMinRowsForPeeling,
+          std::to_string(params.minRowsForPeeling)}});
     queryCtx_ = velox::core::QueryCtx::create(
         nullptr, core::QueryConfig(std::move(configData)));
     execCtx_ = std::make_unique<core::ExecCtx>(pool_.get(), queryCtx_.get());
@@ -458,7 +472,13 @@ TEST_P(ParameterizedExprTest, moreEncodings) {
 
   auto result =
       evaluate("if(c1 = 'grapes', c0 + 10, c0)", makeRowVector({a, b}));
-  ASSERT_EQ(VectorEncoding::Simple::DICTIONARY, result->encoding());
+  // When peeling is active, the result is wrapped back in the original
+  // dictionary encoding. When peeling is suppressed (minRowsForPeeling >
+  // number of rows), the result is flat.
+  auto expectedOutputEncoding = GetParam().minRowsForPeeling <= size / 2
+      ? VectorEncoding::Simple::DICTIONARY
+      : VectorEncoding::Simple::FLAT;
+  ASSERT_EQ(expectedOutputEncoding, result->encoding());
   ASSERT_EQ(size / 2, result->size());
 
   auto expected = makeFlatVector<int64_t>(size / 2, [&fruits](auto row) {
@@ -1776,6 +1796,36 @@ TEST_P(ParameterizedExprTest, switchExprWithNull) {
   assertEqualVectors(expected, result);
 }
 
+// Verify that computePropagatesNulls iterates over all then-clauses when
+// checking null propagation. Uses a 3-WHEN CASE where the 3rd then-clause
+// (coalesce) does not propagate nulls. Null rows matching that clause must
+// return the coalesce result (0), not NULL.
+TEST_P(ParameterizedExprTest, switchPropagatesNullsAllThenClauses) {
+  auto c0 = makeNullableFlatVector<int64_t>({1, 2, std::nullopt, std::nullopt});
+  auto input = makeRowVector({c0});
+
+  // The 3rd then-clause uses coalesce, which does not propagate nulls. When
+  // c0 is null, cond1 and cond2 are false, cond3 (IS NULL) is true, and the
+  // result should be coalesce(null, 0) = 0.
+  auto result = evaluate(
+      "case when c0 = 1 then c0 + 10 "
+      "when c0 = 2 then c0 + 20 "
+      "when c0 is null then coalesce(c0, cast(0 as bigint)) end",
+      input);
+
+  auto expected = makeNullableFlatVector<int64_t>({11, 22, 0, 0});
+  assertEqualVectors(expected, result);
+
+  // Verify propagatesNulls is false since the 3rd then-clause (coalesce) does
+  // not propagate nulls.
+  auto typedExpr = parseExpression(
+      "case when c0 = 1 then c0 + 10 "
+      "when c0 = 2 then c0 + 20 "
+      "when c0 is null then coalesce(c0, cast(0 as bigint)) end",
+      ROW({"c0"}, {BIGINT()}));
+  EXPECT_FALSE(propagatesNulls(typedExpr));
+}
+
 TEST_P(ParameterizedExprTest, ifWithConstant) {
   vector_size_t size = 4;
 
@@ -1932,7 +1982,42 @@ class TestingSingleArgDeterministicFunction : public exec::VectorFunction {
   }
 };
 
+// Single-argument deterministic function that takes an array and asserts it
+// receives a flat-encoded (ARRAY) or constant-encoded input. Used to verify
+// that constant peeling continues to work when peeling is disabled.
+class TestingSingleArgArrayFunction : public exec::VectorFunction {
+ public:
+  void apply(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      const TypePtr& outputType,
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
+    auto& arg = args[0];
+    VELOX_CHECK(
+        arg->encoding() == VectorEncoding::Simple::ARRAY ||
+            arg->encoding() == VectorEncoding::Simple::CONSTANT,
+        "Expected ARRAY or CONSTANT encoding, got {}",
+        arg->encoding());
+    BaseVector::ensureWritable(rows, outputType, context.pool(), result);
+    result->copy(arg.get(), rows, nullptr);
+  }
+
+  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
+    return {exec::FunctionSignatureBuilder()
+                .typeVariable("T")
+                .returnType("array(T)")
+                .argumentType("array(T)")
+                .build()};
+  }
+};
+
 } // namespace
+
+VELOX_DECLARE_VECTOR_FUNCTION(
+    udf_testing_single_arg_array,
+    TestingSingleArgArrayFunction::signatures(),
+    std::make_unique<TestingSingleArgArrayFunction>());
 
 VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
     udf_testing_constant,
@@ -4014,7 +4099,7 @@ TEST_P(ParameterizedExprTest, cseUnderTryWithIf) {
   // errors when combined with TRY. In this case a VectorFunction sizes the
   // result based on rows.end(), can throw user exceptions, and doesn't resize
   // the result Vector to include rows that produced exceptions. If that
-  // funciton is evaluated as part of CSE, e.g. on both sides of an if
+  // function is evaluated as part of CSE, e.g. on both sides of an if
   // statement, and the last row produces an exception, the result Vector will
   // be smaller than rows.size(). This test validates that in CSE we can
   // tolerate this and does not rely on the fact the result Vector is at least
@@ -5020,7 +5105,12 @@ TEST_P(ParameterizedExprTest, evaluatesArgumentsOnNonIncreasingSelection) {
 VELOX_INSTANTIATE_TEST_SUITE_P(
     ExprTest,
     ParameterizedExprTest,
-    testing::ValuesIn({false, true}));
+    testing::ValuesIn(
+        std::vector<ExprTestParams>{
+            {false, 0},
+            {false, 2000},
+            {true, 0},
+            {true, 2000}}));
 
 TEST_F(ExprTest, disablePeeling) {
   // Verify that peeling is disabled when the config is set by checking whether
@@ -5089,6 +5179,18 @@ TEST_F(ExprTest, disablePeeling) {
   ASSERT_NO_THROW(evaluateMultiple(
       {"dict_wrap(c0) in (40, 42)"},
       makeRowVector({flatInput}),
+      {},
+      execCtx.get()));
+
+  // Ensure functions that receive a single constant-encoded complex input
+  // continue to peel even when peeling is disabled.
+  VELOX_REGISTER_VECTOR_FUNCTION(
+      udf_testing_single_arg_array, "testing_single_arg_array");
+  auto constantArray = BaseVector::wrapInConstant(
+      dictSize, 0, makeArrayVector<int64_t>({{1, 2, 3}}));
+  ASSERT_NO_THROW(evaluateMultiple(
+      {"testing_single_arg_array(c0)"},
+      makeRowVector({constantArray}),
       {},
       execCtx.get()));
 }
@@ -5219,9 +5321,8 @@ TEST_F(ExprTest, evaluateConstantExpression) {
       makeArrayVectorFromJson<int64_t>({"[2, 2, 2]"}));
 
   assertEqualVectors(
-      eval(
-          "try(coalesce(array_min_by(array[1, 2, 3], x -> x / 0), 0::INTEGER))"),
-      makeNullConstant(TypeKind::INTEGER, 1));
+      eval("try(coalesce(array_min_by(array[1, 2, 3], x -> x / 0), 0))"),
+      makeNullConstant(TypeKind::BIGINT, 1));
 
   // Verify that constant folding takes into account query config.
   setQueryTimeZone("America/Los_Angeles");
@@ -5240,7 +5341,9 @@ TEST_F(ExprTest, evaluateConstantExpression) {
 
   EXPECT_TRUE(eval("transform(array[1, 2, 3], x -> (x * 2) + a)") == nullptr);
 
-  EXPECT_TRUE(eval("transform(array[1, 2, 3], x -> x + rand())") == nullptr);
+  EXPECT_TRUE(
+      eval("transform(array[1, 2, 3], x -> cast(x as double) + rand())") ==
+      nullptr);
 
   VELOX_ASSERT_THROW(eval("5 / 0"), "division by zero");
   EXPECT_TRUE(evalNoThrow("5 / 0") == nullptr);

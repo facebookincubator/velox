@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include "velox/dwio/common/FileMetadata.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Writer.h"
@@ -26,9 +25,6 @@
 namespace facebook::velox::text {
 
 using dwio::common::SerDeOptions;
-
-/// Text-specific file metadata wrapper. Currently a placeholder.
-class TextFileMetadata : public dwio::common::FileMetadata {};
 
 struct WriterOptions : public dwio::common::WriterOptions {
   int64_t defaultFlushCount = 10 << 10;
@@ -62,7 +58,7 @@ class TextWriter : public dwio::common::Writer {
     return true;
   }
 
-  std::unique_ptr<dwio::common::FileMetadata> close() override;
+  void close() override;
 
   void abort() override;
 

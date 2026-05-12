@@ -15,19 +15,20 @@
  */
 #pragma once
 
-#include <optional>
-#include <string>
-#include "velox/common/base/Exceptions.h"
-
-namespace facebook::velox::config {
-class ConfigBase;
-}
+#include "velox/connectors/hive/FileConfig.h"
+#include "velox/connectors/hive/HiveConfigMacrosDefine.h"
 
 namespace facebook::velox::connector::hive {
 
-/// Hive connector configs.
-class HiveConfig {
+/// Hive connector configs. Extends FileConfig with Hive-specific settings
+/// for partitioning, bucketing, write-path options, GCS storage, and other
+/// Hive table format concerns.
+class HiveConfig : public FileConfig {
  public:
+  /// Returns all registered session-overridable properties from both
+  /// FileConfig and HiveConfig.
+  static const std::vector<config::ConfigProperty>& registeredProperties();
+
   enum class InsertExistingPartitionsBehavior {
     kError,
     kOverwrite,
@@ -36,91 +37,147 @@ class HiveConfig {
   static std::string insertExistingPartitionsBehaviorString(
       InsertExistingPartitionsBehavior behavior);
 
-  /// Behavior on insert into existing partitions.
-  static constexpr const char* kInsertExistingPartitionsBehaviorSession =
-      "insert_existing_partitions_behavior";
+  // --- VELOX_HIVE_CONFIG_PROPERTY properties ---
+
+  VELOX_HIVE_CONFIG_PROPERTY(
+      kInsertExistingPartitionsBehaviorSession,
+      "insert_existing_partitions_behavior",
+      std::string,
+      "ERROR",
+      "Behavior when inserting into existing partitions: ERROR, OVERWRITE.")
   static constexpr const char* kInsertExistingPartitionsBehavior =
       "insert-existing-partitions-behavior";
 
-  /// Maximum number of (bucketed) partitions per a single table writer
-  /// instance.
+  VELOX_HIVE_CONFIG_PROPERTY(
+      kSortWriterMaxOutputBytesSession,
+      "sort_writer_max_output_bytes",
+      std::string,
+      "10MB",
+      "Maximum output bytes for sort writer.")
+  static constexpr const char* kSortWriterMaxOutputBytes =
+      "sort-writer-max-output-bytes";
+
+  VELOX_HIVE_CONFIG_PROPERTY(
+      kMaxTargetFileSizeSession,
+      "max_target_file_size",
+      std::string,
+      "0B",
+      "Maximum target file size. 0 means no limit.")
+  static constexpr const char* kMaxTargetFileSize = "max-target-file-size";
+
+  // --- VELOX_HIVE_CONFIG properties ---
+
+  VELOX_HIVE_CONFIG(
+      kMaxPartitionsPerWritersSession,
+      maxPartitionsPerWriters,
+      "max_partitions_per_writers",
+      uint32_t,
+      128,
+      "Maximum partitions per writer.")
   static constexpr const char* kMaxPartitionsPerWriters =
       "max-partitions-per-writers";
-  static constexpr const char* kMaxPartitionsPerWritersSession =
-      "max_partitions_per_writers";
 
-  /// Maximum number of buckets allowed to output by the table writers.
-  static constexpr const char* kMaxBucketCount = "hive.max-bucket-count";
-  static constexpr const char* kMaxBucketCountSession = "hive.max_bucket_count";
+  VELOX_HIVE_CONFIG(
+      kAllowNullPartitionKeysSession,
+      allowNullPartitionKeys,
+      "allow_null_partition_keys",
+      bool,
+      true,
+      "Allow null partition keys.")
+  static constexpr const char* kAllowNullPartitionKeys =
+      "allow-null-partition-keys";
+
+  VELOX_HIVE_CONFIG_PROPERTY(
+      kPartitionPathAsLowerCaseSession,
+      "partition_path_as_lower_case",
+      bool,
+      true,
+      "Write partition path segments as lower case.")
+  bool isPartitionPathAsLowerCase(const config::ConfigBase* session) const {
+    return session->get<bool>(
+        kPartitionPathAsLowerCaseSession,
+        kPartitionPathAsLowerCaseSessionProperty::defaultValue);
+  }
+
+  VELOX_HIVE_CONFIG(
+      kSortWriterMaxOutputRowsSession,
+      sortWriterMaxOutputRows,
+      "sort_writer_max_output_rows",
+      uint32_t,
+      1024,
+      "Maximum output rows for sort writer.")
+  static constexpr const char* kSortWriterMaxOutputRows =
+      "sort-writer-max-output-rows";
+
+  VELOX_HIVE_CONFIG(
+      kSortWriterFinishTimeSliceLimitMsSession,
+      sortWriterFinishTimeSliceLimitMs,
+      "sort_writer_finish_time_slice_limit_ms",
+      uint64_t,
+      5000,
+      "Time slice limit in ms for sort writer finish. 0 means no limit.")
+  static constexpr const char* kSortWriterFinishTimeSliceLimitMs =
+      "sort-writer-finish-time-slice-limit-ms";
+
+  VELOX_HIVE_CONFIG(kUser, user, "user", std::string, "", "User of the query.")
+
+  VELOX_HIVE_CONFIG(
+      kSource,
+      source,
+      "source",
+      std::string,
+      "",
+      "Source of the query.")
+
+  VELOX_HIVE_CONFIG(
+      kSchema,
+      schema,
+      "schema",
+      std::string,
+      "",
+      "Schema of the query.")
+
+  // --- VELOX_HIVE_CONFIG_LEGACY properties ---
+
+  VELOX_HIVE_CONFIG_LEGACY(
+      kMaxBucketCountSession,
+      kMaxBucketCount,
+      maxBucketCount,
+      "max_bucket_count",
+      "max-bucket-count",
+      uint32_t,
+      100'000,
+      "Maximum bucket count.")
+
+  VELOX_HIVE_CONFIG_LEGACY(
+      kMaxRowsPerIndexRequestSession,
+      kMaxRowsPerIndexRequest,
+      maxRowsPerIndexRequest,
+      "max_rows_per_index_request",
+      "max-rows-per-index-request",
+      uint32_t,
+      0,
+      "Maximum rows per index lookup request. 0 means no limit.")
+  // --- Server-only properties (no macro) ---
 
   /// Whether new data can be inserted into an unpartition table.
   /// Velox currently does not support appending data to existing partitions.
-  static constexpr const char* kImmutablePartitions =
-      "hive.immutable-partitions";
+  static constexpr const char* kImmutablePartitions = "immutable-partitions";
 
   /// The GCS storage endpoint server.
-  static constexpr const char* kGcsEndpoint = "hive.gcs.endpoint";
+  static constexpr const char* kGcsEndpoint = "gcs.endpoint";
 
   /// The GCS service account configuration JSON key file.
-  static constexpr const char* kGcsCredentialsPath =
-      "hive.gcs.json-key-file-path";
+  static constexpr const char* kGcsCredentialsPath = "gcs.json-key-file-path";
 
   /// The GCS maximum retry counter of transient errors.
-  static constexpr const char* kGcsMaxRetryCount = "hive.gcs.max-retry-count";
+  static constexpr const char* kGcsMaxRetryCount = "gcs.max-retry-count";
 
   /// The GCS maximum time allowed to retry transient errors.
-  static constexpr const char* kGcsMaxRetryTime = "hive.gcs.max-retry-time";
+  static constexpr const char* kGcsMaxRetryTime = "gcs.max-retry-time";
 
   static constexpr const char* kGcsAuthAccessTokenProvider =
-      "hive.gcs.auth.access-token-provider";
-
-  /// Maps table field names to file field names using names, not indices.
-  static constexpr const char* kOrcUseColumnNames = "hive.orc.use-column-names";
-  static constexpr const char* kOrcUseColumnNamesSession =
-      "orc_use_column_names";
-
-  /// Maps table field names to file field names using names, not indices.
-  static constexpr const char* kParquetUseColumnNames =
-      "hive.parquet.use-column-names";
-  static constexpr const char* kParquetUseColumnNamesSession =
-      "parquet_use_column_names";
-
-  /// Reads the source file column name as lower case.
-  static constexpr const char* kFileColumnNamesReadAsLowerCase =
-      "file-column-names-read-as-lower-case";
-  static constexpr const char* kFileColumnNamesReadAsLowerCaseSession =
-      "file_column_names_read_as_lower_case";
-
-  static constexpr const char* kPartitionPathAsLowerCaseSession =
-      "partition_path_as_lower_case";
-
-  static constexpr const char* kAllowNullPartitionKeys =
-      "allow-null-partition-keys";
-  static constexpr const char* kAllowNullPartitionKeysSession =
-      "allow_null_partition_keys";
-
-  static constexpr const char* kIgnoreMissingFilesSession =
-      "ignore_missing_files";
-
-  /// The max coalesce bytes for a request.
-  static constexpr const char* kMaxCoalescedBytes = "max-coalesced-bytes";
-  static constexpr const char* kMaxCoalescedBytesSession =
-      "max-coalesced-bytes";
-
-  /// The max merge distance to combine read requests.
-  /// Note: The session property name differs from the constant name for
-  /// backward compatibility with Presto.
-  static constexpr const char* kMaxCoalescedDistance = "max-coalesced-distance";
-  static constexpr const char* kMaxCoalescedDistanceSession =
-      "orc_max_merge_distance";
-
-  /// The number of prefetch rowgroups
-  static constexpr const char* kPrefetchRowGroups = "prefetch-rowgroups";
-
-  /// The total size in bytes for a direct coalesce request. Up to 8MB load
-  /// quantum size is supported when SSD cache is enabled.
-  static constexpr const char* kLoadQuantum = "load-quantum";
-  static constexpr const char* kLoadQuantumSession = "load-quantum";
+      "gcs.auth.access-token-provider";
 
   /// Maximum number of entries in the file handle cache.
   static constexpr const char* kNumCacheFileHandles = "num_cached_file_handles";
@@ -135,139 +192,14 @@ class HiveConfig {
   static constexpr const char* kEnableFileHandleCache =
       "file-handle-cache-enabled";
 
-  /// The threshold of file size in bytes when the whole file is fetched with
-  /// meta data together. Optimization to decrease the small IO requests
-  static constexpr const char* kFilePreloadThreshold = "file-preload-threshold";
-
-  /// When set to be larger than 0, parallel unit loader feature is enabled and
-  /// it configures how many units (e.g., stripes) we load in parallel.
-  /// When set to 0, parallel unit loader feature is disabled and on demand unit
-  /// loader would be used.
-  static constexpr const char* kParallelUnitLoadCount =
-      "parallel-unit-load-count";
-  static constexpr const char* kParallelUnitLoadCountSession =
-      "parallel_unit_load_count";
-
   /// Config used to create write files. This config is provided to underlying
   /// file system through hive connector and data sink. The config is free form.
   /// The form should be defined by the underlying file system.
   static constexpr const char* kWriteFileCreateConfig =
-      "hive.write_file_create_config";
-
-  /// Maximum number of rows for sort writer in one batch of output.
-  static constexpr const char* kSortWriterMaxOutputRows =
-      "sort-writer-max-output-rows";
-  static constexpr const char* kSortWriterMaxOutputRowsSession =
-      "sort_writer_max_output_rows";
-
-  /// Maximum bytes for sort writer in one batch of output.
-  static constexpr const char* kSortWriterMaxOutputBytes =
-      "sort-writer-max-output-bytes";
-  static constexpr const char* kSortWriterMaxOutputBytesSession =
-      "sort_writer_max_output_bytes";
-
-  /// Sort Writer will exit finish() method after this many milliseconds even if
-  /// it has not completed its work yet. Zero means no time limit.
-  static constexpr const char* kSortWriterFinishTimeSliceLimitMs =
-      "sort-writer_finish_time_slice_limit_ms";
-  static constexpr const char* kSortWriterFinishTimeSliceLimitMsSession =
-      "sort_writer_finish_time_slice_limit_ms";
-
-  /// Maximum target file size. When a file exceeds this size during writing,
-  /// the writer will close the current file and start writing to a new file.
-  /// Accepts human-readable values like "1GB". Zero means no limit (default).
-  static constexpr const char* kMaxTargetFileSize = "max-target-file-size";
-  static constexpr const char* kMaxTargetFileSizeSession =
-      "max_target_file_size";
-
-  // The unit for reading timestamps from files.
-  static constexpr const char* kReadTimestampUnit =
-      "hive.reader.timestamp-unit";
-  static constexpr const char* kReadTimestampUnitSession =
-      "hive.reader.timestamp_unit";
-
-  static constexpr const char* kReadTimestampPartitionValueAsLocalTime =
-      "hive.reader.timestamp-partition-value-as-local-time";
-  static constexpr const char* kReadTimestampPartitionValueAsLocalTimeSession =
-      "hive.reader.timestamp_partition_value_as_local_time";
-
-  static constexpr const char* kReadStatsBasedFilterReorderDisabled =
-      "stats-based-filter-reorder-disabled";
-  static constexpr const char* kReadStatsBasedFilterReorderDisabledSession =
-      "stats_based_filter_reorder_disabled";
-
-  /// Whether to preserve flat maps in memory as FlatMapVectors instead of
-  /// converting them to MapVectors.
-  static constexpr const char* kPreserveFlatMapsInMemory =
-      "hive.preserve-flat-maps-in-memory";
-  static constexpr const char* kPreserveFlatMapsInMemorySession =
-      "hive.preserve_flat_maps_in_memory";
-
-  /// Whether to use the cluster index for filter-based row pruning.
-  /// When enabled, filters from ScanSpec are converted to index bounds for
-  /// efficient row skipping based on the file's cluster index.
-  static constexpr const char* kIndexEnabled = "index-enabled";
-  static constexpr const char* kIndexEnabledSession = "index_enabled";
-
-  /// Whether to collect per-column timing stats (decode/decompress CPU time).
-  /// Disabled by default to avoid overhead (~100ns per operation).
-  static constexpr const char* kReaderCollectColumnStats =
-      "hive.reader.collect-column-stats";
-  static constexpr const char* kReaderCollectColumnStatsSession =
-      "hive.reader.collect_column_stats";
-
-  /// Maximum number of output rows to return per index lookup request.
-  /// The limit is applied to the actual output rows after filtering.
-  /// 0 means no limit (default).
-  static constexpr const char* kMaxRowsPerIndexRequest =
-      "hive.max-rows-per-index-request";
-  static constexpr const char* kMaxRowsPerIndexRequestSession =
-      "hive.max_rows_per_index_request";
-
-  /// Whether to cache file metadata (footer, stripes, index) in the
-  /// process-wide AsyncDataCache. When enabled, the first reader performs a
-  /// speculative tail read and populates the cache; subsequent readers on the
-  /// same file hit the cache for zero-IO metadata init.
-  static constexpr const char* kFileMetadataCacheEnabled =
-      "file-metadata-cache-enabled";
-  static constexpr const char* kFileMetadataCacheEnabledSession =
-      "file_metadata_cache_enabled";
-
-  /// Whether to pin parsed metadata objects (e.g., StripeGroup, IndexGroup)
-  /// in the reader's metadata cache with strong references so they are never
-  /// evicted. This avoids re-reading and re-parsing metadata on every stripe
-  /// access when weak-pointer cache entries would otherwise expire.
-  /// Currently only supported by Nimble format.
-  static constexpr const char* kPinFileMetadata = "pin-file-metadata";
-  static constexpr const char* kPinFileMetadataSession = "pin_file_metadata";
-
-  /// Speculative tail-read size in bytes when opening files. Controls how many
-  /// bytes are read from the end of the file to load the footer and nearby
-  /// metadata in a single IO operation. Format-specific configs with different
-  /// defaults: ORC/Parquet default to 256KB, Nimble defaults to 8MB.
-  static constexpr const char* kOrcFooterSpeculativeIoSize =
-      "hive.orc.footer-speculative-io-size";
-  static constexpr const char* kOrcFooterSpeculativeIoSizeSession =
-      "orc_footer_speculative_io_size";
-  static constexpr const char* kParquetFooterSpeculativeIoSize =
-      "hive.parquet.footer-speculative-io-size";
-  static constexpr const char* kParquetFooterSpeculativeIoSizeSession =
-      "parquet_footer_speculative_io_size";
-  static constexpr const char* kNimbleFooterSpeculativeIoSize =
-      "hive.nimble.footer-speculative-io-size";
-  static constexpr const char* kNimbleFooterSpeculativeIoSizeSession =
-      "nimble_footer_speculative_io_size";
-
-  static constexpr const char* kUser = "user";
-  static constexpr const char* kSource = "source";
-  static constexpr const char* kSchema = "schema";
+      "write-file-create-config";
 
   InsertExistingPartitionsBehavior insertExistingPartitionsBehavior(
       const config::ConfigBase* session) const;
-
-  uint32_t maxPartitionsPerWriters(const config::ConfigBase* session) const;
-
-  uint32_t maxBucketCount(const config::ConfigBase* session) const;
 
   bool immutablePartitions() const;
 
@@ -281,29 +213,6 @@ class HiveConfig {
 
   std::optional<std::string> gcsAuthAccessTokenProvider() const;
 
-  bool isOrcUseColumnNames(const config::ConfigBase* session) const;
-
-  bool isParquetUseColumnNames(const config::ConfigBase* session) const;
-
-  bool isFileColumnNamesReadAsLowerCase(
-      const config::ConfigBase* session) const;
-
-  bool isPartitionPathAsLowerCase(const config::ConfigBase* session) const;
-
-  bool allowNullPartitionKeys(const config::ConfigBase* session) const;
-
-  bool ignoreMissingFiles(const config::ConfigBase* session) const;
-
-  int64_t maxCoalescedBytes(const config::ConfigBase* session) const;
-
-  int32_t maxCoalescedDistanceBytes(const config::ConfigBase* session) const;
-
-  int32_t prefetchRowGroups() const;
-
-  size_t parallelUnitLoadCount(const config::ConfigBase* session) const;
-
-  int32_t loadQuantum(const config::ConfigBase* session) const;
-
   int32_t numCacheFileHandles() const;
 
   uint64_t fileHandleExpirationDurationMs() const;
@@ -314,80 +223,14 @@ class HiveConfig {
 
   std::string writeFileCreateConfig() const;
 
-  uint32_t sortWriterMaxOutputRows(const config::ConfigBase* session) const;
-
   uint64_t sortWriterMaxOutputBytes(const config::ConfigBase* session) const;
-
-  uint64_t sortWriterFinishTimeSliceLimitMs(
-      const config::ConfigBase* session) const;
 
   uint64_t maxTargetFileSizeBytes(const config::ConfigBase* session) const;
 
-  uint64_t filePreloadThreshold() const;
-
-  // Returns the timestamp unit used when reading timestamps from files.
-  uint8_t readTimestampUnit(const config::ConfigBase* session) const;
-
-  // Whether to read timestamp partition value as local time. If false, read as
-  // UTC.
-  bool readTimestampPartitionValueAsLocalTime(
-      const config::ConfigBase* session) const;
-
-  /// Returns true if the stats based filter reorder for read is disabled.
-  bool readStatsBasedFilterReorderDisabled(
-      const config::ConfigBase* session) const;
-
-  /// Whether to preserve flat maps in memory as FlatMapVectors instead of
-  /// converting them to MapVectors.
-  bool preserveFlatMapsInMemory(const config::ConfigBase* session) const;
-
-  /// Whether to use the cluster index for filter-based row pruning.
-  bool indexEnabled(const config::ConfigBase* session) const;
-
-  /// Whether to collect per-column timing stats (decode/decompress CPU time).
-  /// Disabled by default to avoid overhead (~100ns per operation).
-  bool readerCollectColumnStats(const config::ConfigBase* session) const;
-
-  /// Returns the maximum number of rows to read per index lookup request.
-  /// 0 means no limit (default).
-  uint32_t maxRowsPerIndexRequest(const config::ConfigBase* session) const;
-
-  /// Whether to cache file metadata in the process-wide AsyncDataCache.
-  bool fileMetadataCacheEnabled(const config::ConfigBase* session) const;
-
-  /// Whether to pin parsed metadata objects in the reader's metadata cache.
-  bool pinFileMetadata(const config::ConfigBase* session) const;
-
-  /// Returns the speculative tail read size in bytes for footer.
-  /// ORC/Parquet default to 256KB, Nimble defaults to 8MB. 0 means adaptive.
-  uint64_t orcFooterSpeculativeIoSize(const config::ConfigBase* session) const;
-  uint64_t parquetFooterSpeculativeIoSize(
-      const config::ConfigBase* session) const;
-  uint64_t nimbleFooterSpeculativeIoSize(
-      const config::ConfigBase* session) const;
-
-  /// User of the query. Used for storage logging.
-  std::string user(const config::ConfigBase* session) const;
-
-  /// Source of the query. Used for storage access and logging.
-  std::string source(const config::ConfigBase* session) const;
-
-  /// Schema of the query. Used for storage logging.
-  std::string schema(const config::ConfigBase* session) const;
-
-  HiveConfig(std::shared_ptr<const config::ConfigBase> config) {
-    VELOX_CHECK_NOT_NULL(
-        config, "Config is null for HiveConfig initialization");
-    config_ = std::move(config);
-    // TODO: add sanity check
-  }
-
-  const std::shared_ptr<const config::ConfigBase>& config() const {
-    return config_;
-  }
-
- private:
-  std::shared_ptr<const config::ConfigBase> config_;
+  explicit HiveConfig(std::shared_ptr<const config::ConfigBase> config)
+      : FileConfig(std::move(config)) {}
 };
 
 } // namespace facebook::velox::connector::hive
+
+#include "velox/connectors/hive/HiveConfigMacrosUndef.h"

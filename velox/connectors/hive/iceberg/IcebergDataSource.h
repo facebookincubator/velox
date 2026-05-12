@@ -40,10 +40,14 @@ class IcebergDataSource : public HiveDataSource {
  protected:
   /// Creates an IcebergSplitReader for reading Iceberg data files.
   ///
-  /// Unlike the base HiveDataSource which creates a generic SplitReader,
+  /// Unlike the base HiveDataSource which creates a generic FileSplitReader,
   /// this method creates an IcebergSplitReader that handles Iceberg-specific
   /// features like positional delete files and schema evolution.
-  std::unique_ptr<SplitReader> createSplitReader() override;
+  std::unique_ptr<FileSplitReader> createSplitReader() override;
+
+ private:
+  /// Column handles map for accessing column metadata.
+  std::shared_ptr<ColumnHandleMap> columnHandles_;
 };
 
 } // namespace facebook::velox::connector::hive::iceberg

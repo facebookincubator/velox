@@ -58,6 +58,14 @@ repos:
         pass_filenames: false
         files: (\.h|CMakeLists\.txt)$
 
+      - id: check-readme-blogs
+        name: check-readme-blogs
+        description: Ensure README lists the 3 most recent blog posts.
+        entry: ./scripts/checks/check-readme-blogs.sh
+        language: script
+        files: ^(README\.md|website/blog/.*)$
+        pass_filenames: false
+
       - id: license-header
         name: license-header
         description: Add missing license headers.

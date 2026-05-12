@@ -23,6 +23,7 @@ add_executable(
   FlatMapVectorTest.cpp
   IsWritableVectorTest.cpp
   LazyVectorTest.cpp
+  MapConcatTest.cpp
   MayHaveNullsRecursiveTest.cpp
   SelectivityVectorTest.cpp
   StringVectorBufferTest.cpp

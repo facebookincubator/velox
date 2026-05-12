@@ -258,12 +258,13 @@ class MakeRowFromMap {
           auto index = it->second;
           if (visited[index]) {
             if (throwOnDuplicateKeys_) {
-              auto errorMessage =
-                  fmt::format("Duplicate keys not allowed: {}", key);
               if (evalCtx) {
-                evalCtx->setStatus(row, Status::UserError(errorMessage));
+                evalCtx->setStatus(
+                    row,
+                    Status::UserError(
+                        fmt::format("Duplicate keys not allowed: {}", key)));
               } else {
-                VELOX_USER_FAIL(errorMessage);
+                VELOX_USER_FAIL("Duplicate keys not allowed: {}", key);
               }
               return;
             }

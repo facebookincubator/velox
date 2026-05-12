@@ -19,33 +19,31 @@
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 
-#include <cudf/detail/copy.hpp>
-#include <cudf/detail/gather.hpp>
+#include <cudf/copying.hpp>
 #include <cudf/detail/utilities/stream_pool.hpp>
 #include <cudf/merge.hpp>
 #include <cudf/sorting.hpp>
-
-#include <algorithm>
 
 namespace facebook::velox::cudf_velox {
 CudfTopN::CudfTopN(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
     const std::shared_ptr<const core::TopNNode>& topNNode)
-    : exec::Operator(
+    : CudfOperatorBase(
+          operatorId,
           driverCtx,
           topNNode->outputType(),
-          operatorId,
           topNNode->id(),
-          "CudfTopN"),
-      NvtxHelper(
+          "CudfTopN",
           nvtx3::rgb{175, 238, 238}, // Pale Turquoise
-          operatorId,
-          fmt::format("[{}]", topNNode->id())),
+          NvtxMethodFlag::kAll,
+          std::nullopt,
+          topNNode),
       count_(topNNode->count()),
       topNNode_(topNNode),
-      kBatchSize_(CudfConfig::getInstance().topNBatchSize),
       cudaEvent_(std::make_unique<CudaEvent>(cudaEventDisableTiming)) {
+  kBatchSize_ = driverCtx->queryConfig().get<int32_t>(
+      CudfConfig::kCudfTopNBatchSize, kBatchSize_);
   const auto numColumns{outputType_->children().size()};
   const auto numSortingKeys{topNNode->sortingKeys().size()};
   std::vector<bool> isSortingKey(numColumns);
@@ -118,11 +116,11 @@ std::unique_ptr<cudf::table> CudfTopN::getTopK(
   auto const kIndices =
       cudf::split(indices->view(), {std::min(k, indices->size())}, stream)
           .front();
-  return cudf::detail::gather(
+  return cudf::gather(
       values,
       kIndices,
       cudf::out_of_bounds_policy::DONT_CHECK,
-      cudf::detail::negative_index_policy::NOT_ALLOWED,
+      cudf::negative_index_policy::NOT_ALLOWED,
       stream,
       mr);
 }
@@ -141,8 +139,7 @@ CudfVectorPtr CudfTopN::getTopKBatch(CudfVectorPtr cudfInput, int32_t k) {
       cudfInput->pool(), cudfInput->type(), size, std::move(result), stream);
 }
 
-void CudfTopN::addInput(RowVectorPtr input) {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+void CudfTopN::doAddInput(RowVectorPtr input) {
   if (count_ == 0 || input->size() == 0) {
     return;
   }
@@ -171,8 +168,7 @@ void CudfTopN::addInput(RowVectorPtr input) {
   }
 }
 
-RowVectorPtr CudfTopN::getOutput() {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+RowVectorPtr CudfTopN::doGetOutput() {
   if (finished_ || !noMoreInput_) {
     return nullptr;
   }
@@ -189,7 +185,7 @@ RowVectorPtr CudfTopN::getOutput() {
   return result;
 }
 
-void CudfTopN::noMoreInput() {
+void CudfTopN::doNoMoreInput() {
   Operator::noMoreInput();
   if (topNBatches_.empty()) {
     finished_ = true;

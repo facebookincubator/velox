@@ -134,7 +134,7 @@ constexpr inline T divRoundUp(T value, U factor) {
 }
 
 constexpr inline uint64_t lowMask(int32_t bits) {
-  return (1UL << bits) - 1;
+  return (1ULL << bits) - 1;
 }
 
 constexpr inline uint64_t highMask(int32_t bits) {

@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#define XXH_INLINE_ALL
-#include <xxhash.h> // @manual=third-party//xxHash:xxhash
+#include "velox/common/base/XxHashInline.h"
 
 #include "velox/exec/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"

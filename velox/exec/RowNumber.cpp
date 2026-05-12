@@ -241,8 +241,11 @@ void RowNumber::ensureInputFits(const RowVectorPtr& input) {
 
   LOG(WARNING) << "Failed to reserve " << succinctBytes(targetIncrementBytes)
                << " for memory pool " << pool()->name()
-               << ", usage: " << succinctBytes(pool()->usedBytes())
-               << ", reservation: " << succinctBytes(pool()->reservedBytes());
+               << ", root pool: " << pool()->root()->name()
+               << ", used: " << succinctBytes(pool()->usedBytes())
+               << ", reservation: " << succinctBytes(pool()->reservedBytes())
+               << ", root pool reservation: "
+               << succinctBytes(pool()->root()->reservedBytes());
 }
 
 FlatVector<int64_t>& RowNumber::getOrCreateRowNumberVector(vector_size_t size) {
@@ -385,11 +388,15 @@ void RowNumber::reclaim(
     return;
   }
 
-  if (exceededMaxSpillLevelLimit_) {
+  if (FOLLY_UNLIKELY(exceededMaxSpillLevelLimit_)) {
     LOG(WARNING) << "Exceeded row spill level limit: "
                  << spillConfig_->maxSpillLevel
-                 << ", and abandon spilling for memory pool: "
-                 << pool()->name();
+                 << ", and abandon spilling for memory pool: " << pool()->name()
+                 << ", root pool: " << pool()->root()->name()
+                 << ", used: " << succinctBytes(pool()->usedBytes())
+                 << ", reservation: " << succinctBytes(pool()->reservedBytes())
+                 << ", root pool reservation: "
+                 << succinctBytes(pool()->root()->reservedBytes());
     spillStats_->spillMaxLevelExceededCount.fetch_add(
         1, std::memory_order_relaxed);
     return;

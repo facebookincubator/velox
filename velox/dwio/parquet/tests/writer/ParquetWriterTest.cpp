@@ -21,6 +21,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h" // @manual
 #include "velox/core/QueryCtx.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
@@ -52,7 +53,8 @@ class ParquetWriterTest : public ParquetTestBase {
         kHiveConnectorId,
         std::make_shared<config::ConfigBase>(
             std::unordered_map<std::string, std::string>()));
-    connector::registerConnector(hiveConnector);
+    connector::ConnectorRegistry::global().insert(
+        hiveConnector->connectorId(), hiveConnector);
     parquet::registerParquetWriterFactory();
   }
 
@@ -86,7 +88,9 @@ class ParquetWriterTest : public ParquetTestBase {
   thrift::PageHeader readPageHeader(
       MemorySink* sinkPtr,
       int64_t offsetFromDataPage) {
-    dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+    dwio::common::ReaderOptions readerOptions(leafPool_.get());
+    readerOptions.setDataIoStats(dataIoStats_.get());
+    readerOptions.setMetadataIoStats(metadataIoStats_.get());
     auto reader = createReaderInMemory(*sinkPtr, readerOptions);
 
     auto colChunkPtr = reader->fileMetaData().rowGroup(0).columnChunk(0);
@@ -406,7 +410,9 @@ TEST_F(ParquetWriterTest, compression) {
 
   auto* sinkPtr = write(data, writerOptions);
 
-  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   auto reader = createReaderInMemory(*sinkPtr, readerOptions);
 
   ASSERT_EQ(reader->numberOfRows(), kRows);
@@ -798,7 +804,9 @@ TEST_F(ParquetWriterTest, allNulls) {
 
   auto* sinkPtr = write(data);
 
-  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   auto reader = createReaderInMemory(*sinkPtr, readerOptions);
 
   ASSERT_EQ(reader->numberOfRows(), kRows);
