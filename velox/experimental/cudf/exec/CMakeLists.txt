@@ -19,6 +19,7 @@ add_library(
   CudfBatchConcat.cpp
   CudfConversion.cpp
   CudfEnforceSingleRow.cpp
+  CudfExpand.cpp
   CudfFilterProject.cpp
   CudfDistinct.cpp
   CudfGroupby.cpp

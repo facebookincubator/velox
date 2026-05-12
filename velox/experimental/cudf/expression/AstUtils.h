@@ -195,6 +195,28 @@ inline std::unique_ptr<cudf::scalar> makeScalarFromConstantExpr(
 }
 
 template <TypeKind kind>
+std::unique_ptr<cudf::scalar> makeScalarFromVariant(
+    const TypePtr& type,
+    const variant& var) {
+  using T = typename TypeTraits<kind>::NativeType;
+  if constexpr (cudf::is_fixed_width<T>() || kind == TypeKind::VARCHAR) {
+    if (var.isNull()) {
+      return makeScalarFromValue<T>(type, T(), true);
+    }
+    auto value = var.value<T>();
+    return makeScalarFromValue(type, value, false);
+  }
+  VELOX_NYI("Scalar creation not implemented for type " + type->toString());
+}
+
+inline std::unique_ptr<cudf::scalar> makeScalarFromVariant(
+    const TypePtr& type,
+    const variant& var) {
+  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+      makeScalarFromVariant, type->kind(), type, var);
+}
+
+template <TypeKind kind>
 cudf::ast::literal makeScalarAndLiteral(
     const TypePtr& type,
     const variant& var,
