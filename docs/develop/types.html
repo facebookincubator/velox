@@ -209,6 +209,9 @@ their corresponding physical type.</p>
 <tr class="row-odd"><td><p>TIME_MICRO_UTC</p></td>
 <td><p>BIGINT</p></td>
 </tr>
+<tr class="row-even"><td><p>TIMESTAMP_UTC</p></td>
+<td><p>TIMESTAMP</p></td>
+</tr>
 </tbody>
 </table>
 <p>DECIMAL type carries additional <cite>precision</cite>,
@@ -222,9 +225,10 @@ which store the unscaled value. For example, the unscaled value of decimal
 upto 38 precision, with a range of <span class="math notranslate nohighlight">\([-10^{38} + 1, +10^{38} - 1]\)</span>.</p>
 <p>All the three values, precision, scale, unscaled value are required to represent a
 decimal value.</p>
-<p>TIME type represents time in milliseconds of local timezone from midnight. Thus min/max value can range from 0 to 23:59:59.999.
-TIME_MICRO_UTC type represents time in microseconds from midnight, timezone unaware. Thus min/max value can range from 00:00:00.000000 to 23:59:59.999999.
+<p>TIME represents time in milliseconds since midnight, subject to session timezone interpretation. Thus min/max value can range from 0 to 23:59:59.999.
+TIME_MICRO_UTC represents time in microseconds since midnight in UTC, not subject to session timezone adjustment. Thus min/max value can range from 00:00:00.000000 to 23:59:59.999999.
 The TIME and TIME_MICRO_UTC types are backed by BIGINT physical type.</p>
+<p>TIMESTAMP represents a timestamp subject to session timezone interpretation. TIMESTAMP_UTC represents a timestamp in UTC, not subject to session timezone adjustment. Both types are backed by TIMESTAMP physical type.</p>
 </section>
 <section id="custom-types">
 <h2>Custom Types<a class="headerlink" href="#custom-types" title="Link to this heading">¶</a></h2>
@@ -425,6 +429,7 @@ Example:</p>
 </pre></div>
 </div>
 </li>
+<li><p>Spark uses TIMESTAMP_UTC to support TimestampNTZType. TIMESTAMP_UTC is not subject to session timezone adjustment.</p></li>
 <li><p>In function comparisons, nested null values are handled as values.
 Example:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">equalto</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">null</span><span class="p">],</span> <span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">null</span><span class="p">]);</span> <span class="o">--</span> <span class="n">true</span>
