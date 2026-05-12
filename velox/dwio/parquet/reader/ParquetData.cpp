@@ -253,18 +253,18 @@ bool ParquetData::testFilterAgainstDictionary(
   auto dictionaryPtr = readDictionaryPageForFiltering(rowGroupId, columnChunk);
 
   auto numValues = dictionaryPtr->numValues;
+  if (numValues == 0) {
+    return true; // Conservative: no dict values means we cannot prune.
+  }
   const void* dictPtr = dictionaryPtr->values->as<void>();
 
-  // Test if any dictionary value passes the filter
+  // Test if any dictionary value passes the filter.
   auto testDict = [&]<typename T>() {
     const T* dict = reinterpret_cast<const T*>(dictPtr);
-
-    // For larger dictionaries, we could use SIMD testValues() for better
-    // performance For now, use simple scalar approach which is sufficient for
-    // typical dictionary sizes
     for (int32_t i = 0; i < numValues; ++i) {
-      if (common::applyFilter(*filter, dict[i]))
+      if (common::applyFilter(*filter, dict[i])) {
         return true;
+      }
     }
     return false;
   };
@@ -272,6 +272,23 @@ bool ParquetData::testFilterAgainstDictionary(
   bool anyValuePasses = [&] {
     switch (type_->type()->kind()) {
       case TypeKind::BIGINT:
+        // For non-decimal Velox BIGINT (e.g. TIME with millisecond precision,
+        // DATE) PageReader::prepareDictionary leaves the dictionary in its
+        // parquet physical layout, so reading 8-byte values from a 4-byte
+        // INT32 buffer would conflate adjacent entries. Short decimals are
+        // expanded to int64 by prepareDictionary, so they take the default
+        // int64 path.
+        if (type_->parquetType_.has_value() &&
+            type_->parquetType_.value() == thrift::Type::INT32 &&
+            !type_->type()->isShortDecimal()) {
+          const int32_t* dict = reinterpret_cast<const int32_t*>(dictPtr);
+          for (int32_t i = 0; i < numValues; ++i) {
+            if (common::applyFilter(*filter, static_cast<int64_t>(dict[i]))) {
+              return true;
+            }
+          }
+          return false;
+        }
         return testDict.operator()<int64_t>();
       case TypeKind::INTEGER:
         return testDict.operator()<int32_t>();
