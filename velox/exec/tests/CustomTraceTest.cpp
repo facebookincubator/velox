@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <fmt/format.h>
 #include <gtest/gtest.h>
 #include <unordered_map>
 #include <utility>
@@ -82,6 +83,60 @@ class TestTraceCtx : public TraceCtx {
   TCapturedVectors& tracedVectors_;
 };
 
+// Captures expression output vectors keyed by function name.
+using TExprCapturedVectors = std::unordered_map<std::string, VectorPtr>;
+
+// A test trace implementation for expression-level tracing. Traces output
+// batches from named expression functions listed in tracedExprs.
+class ExprTestTraceCtx : public TraceCtx {
+ public:
+  ExprTestTraceCtx(
+      const std::vector<std::string>& tracedExprs,
+      TExprCapturedVectors& capturedVectors)
+      : TraceCtx(false),
+        tracedExprs_(tracedExprs.begin(), tracedExprs.end()),
+        capturedVectors_(capturedVectors) {}
+
+  bool shouldTrace(const Operator& /*op*/) const override {
+    return true;
+  }
+
+  bool shouldTraceExpr(std::string_view functionName) const override {
+    return tracedExprs_.contains(std::string(functionName));
+  }
+
+  std::unique_ptr<TraceExprWriter> createExprOutputTracer(
+      const Operator& /*op*/,
+      std::string_view functionName,
+      int instanceIndex) const override {
+    auto key = fmt::format("{}_{}", functionName, instanceIndex);
+    return std::make_unique<TestExprWriter>(std::move(key), capturedVectors_);
+  }
+
+ private:
+  class TestExprWriter : public TraceExprWriter {
+   public:
+    TestExprWriter(
+        std::string functionName,
+        TExprCapturedVectors& capturedVectors)
+        : functionName_(std::move(functionName)),
+          capturedVectors_(capturedVectors) {}
+
+    void write(const VectorPtr& vector) override {
+      capturedVectors_[functionName_] = vector;
+    }
+
+    void finish() override {}
+
+   private:
+    const std::string functionName_;
+    TExprCapturedVectors& capturedVectors_;
+  };
+
+  std::unordered_set<std::string> tracedExprs_;
+  TExprCapturedVectors& capturedVectors_;
+};
+
 class CustomTraceTest : public exec::test::HiveConnectorTestBase {};
 
 TEST_F(CustomTraceTest, customTrace) {
@@ -135,6 +190,181 @@ TEST_F(CustomTraceTest, customTrace) {
 
   // Vectors need to be destructed before the pool in the task dies.
   tracedVectors.clear();
+}
+
+TEST_F(CustomTraceTest, exprOutputTrace) {
+  auto vector = makeRowVector(
+      {"a"}, {makeFlatVector<int64_t>(10, [](auto row) { return row; })});
+
+  auto plan =
+      PlanBuilder().values({vector}).project({"a * 10 as a"}).planNode();
+
+  TExprCapturedVectors capturedVectors;
+  auto queryCtx =
+      core::QueryCtx::Builder()
+          .executor(executor_.get())
+          .traceCtxProvider([&](core::QueryCtx&, const core::PlanFragment&) {
+            return std::make_unique<ExprTestTraceCtx>(
+                std::vector<std::string>{"multiply"}, capturedVectors);
+          })
+          .build();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan)
+      .config(core::QueryConfig::kQueryTraceEnabled, true)
+      .queryCtx(queryCtx)
+      .countResults(task);
+
+  auto iterator = capturedVectors.find("multiply_0");
+  ASSERT_TRUE(iterator != capturedVectors.end());
+
+  auto expected =
+      makeFlatVector<int64_t>(10, [](auto row) { return row * 10; });
+  assertEqualVectors(iterator->second, expected);
+
+  capturedVectors.clear();
+}
+
+TEST_F(CustomTraceTest, exprTraceOnlyMatchingFunctions) {
+  auto vector = makeRowVector(
+      {"a"}, {makeFlatVector<int64_t>(10, [](auto row) { return row; })});
+
+  // Two projections: multiply then plus. Only trace "plus".
+  auto plan = PlanBuilder()
+                  .values({vector})
+                  .project({"a * 10 as b", "a + 5 as c"})
+                  .planNode();
+
+  TExprCapturedVectors capturedVectors;
+  auto queryCtx =
+      core::QueryCtx::Builder()
+          .executor(executor_.get())
+          .traceCtxProvider([&](core::QueryCtx&, const core::PlanFragment&) {
+            return std::make_unique<ExprTestTraceCtx>(
+                std::vector<std::string>{"plus"}, capturedVectors);
+          })
+          .build();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan)
+      .config(core::QueryConfig::kQueryTraceEnabled, true)
+      .queryCtx(queryCtx)
+      .countResults(task);
+
+  // "plus" should be captured.
+  EXPECT_TRUE(capturedVectors.contains("plus_0"));
+
+  // "multiply" should not be captured.
+  EXPECT_FALSE(capturedVectors.contains("multiply_0"));
+
+  capturedVectors.clear();
+}
+
+TEST_F(CustomTraceTest, exprTraceMultipleInstances) {
+  auto vector = makeRowVector(
+      {"a", "b"},
+      {makeFlatVector<int64_t>(10, [](auto row) { return row; }),
+       makeFlatVector<int64_t>(10, [](auto row) { return row + 100; })});
+
+  auto plan = PlanBuilder()
+                  .values({vector})
+                  .project({"a * 10 as c", "b * 20 as d"})
+                  .planNode();
+
+  TExprCapturedVectors capturedVectors;
+  auto queryCtx =
+      core::QueryCtx::Builder()
+          .executor(executor_.get())
+          .traceCtxProvider([&](core::QueryCtx&, const core::PlanFragment&) {
+            return std::make_unique<ExprTestTraceCtx>(
+                std::vector<std::string>{"multiply"}, capturedVectors);
+          })
+          .build();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan)
+      .config(core::QueryConfig::kQueryTraceEnabled, true)
+      .queryCtx(queryCtx)
+      .countResults(task);
+
+  ASSERT_TRUE(capturedVectors.contains("multiply_0"));
+  ASSERT_TRUE(capturedVectors.contains("multiply_1"));
+
+  auto expected0 =
+      makeFlatVector<int64_t>(10, [](auto row) { return row * 10; });
+  auto expected1 =
+      makeFlatVector<int64_t>(10, [](auto row) { return (row + 100) * 20; });
+
+  assertEqualVectors(capturedVectors.at("multiply_0"), expected0);
+  assertEqualVectors(capturedVectors.at("multiply_1"), expected1);
+
+  capturedVectors.clear();
+}
+
+TEST_F(CustomTraceTest, exprTraceCseSharedNode) {
+  auto vector = makeRowVector(
+      {"a"}, {makeFlatVector<int64_t>(10, [](auto row) { return row; })});
+
+  // Both projections share the "a * 10" subexpression (CSE). The visited set
+  // should ensure the shared multiply node is only traced once.
+  auto plan = PlanBuilder()
+                  .values({vector})
+                  .project({"a * 10 + 1 as b", "a * 10 + 2 as c"})
+                  .planNode();
+
+  TExprCapturedVectors capturedVectors;
+  auto queryCtx =
+      core::QueryCtx::Builder()
+          .executor(executor_.get())
+          .traceCtxProvider([&](core::QueryCtx&, const core::PlanFragment&) {
+            return std::make_unique<ExprTestTraceCtx>(
+                std::vector<std::string>{"multiply"}, capturedVectors);
+          })
+          .build();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan)
+      .config(core::QueryConfig::kQueryTraceEnabled, true)
+      .queryCtx(queryCtx)
+      .countResults(task);
+
+  // The shared CSE node should produce exactly one multiply instance.
+  EXPECT_TRUE(capturedVectors.contains("multiply_0"));
+  EXPECT_FALSE(capturedVectors.contains("multiply_1"));
+
+  capturedVectors.clear();
+}
+
+TEST_F(CustomTraceTest, exprTraceNullResult) {
+  auto vector = makeRowVector(
+      {"a"},
+      {makeNullableFlatVector<int64_t>({1, std::nullopt, 3, std::nullopt, 5})});
+
+  // try(a / 0) produces all nulls without throwing.
+  auto plan =
+      PlanBuilder().values({vector}).project({"try(a / 0) as b"}).planNode();
+
+  TExprCapturedVectors capturedVectors;
+  auto queryCtx =
+      core::QueryCtx::Builder()
+          .executor(executor_.get())
+          .traceCtxProvider([&](core::QueryCtx&, const core::PlanFragment&) {
+            return std::make_unique<ExprTestTraceCtx>(
+                std::vector<std::string>{"divide"}, capturedVectors);
+          })
+          .build();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan)
+      .config(core::QueryConfig::kQueryTraceEnabled, true)
+      .queryCtx(queryCtx)
+      .countResults(task);
+
+  // divide is inside try() which catches the error and produces nulls.
+  // The tracer should still capture output (the null vector).
+  EXPECT_TRUE(capturedVectors.contains("divide_0"));
+
+  capturedVectors.clear();
 }
 
 // Helper to convert a vector of plan node IDs to a breakpoints map with null

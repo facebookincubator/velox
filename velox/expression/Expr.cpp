@@ -23,6 +23,7 @@
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/process/ThreadDebugInfo.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/exec/trace/TraceCtx.h"
 #include "velox/expression/CastExpr.h"
 
 #include "velox/common/EnumDefine.h"
@@ -1717,6 +1718,10 @@ void Expr::applyFunction(
     VELOX_USER_FAIL(e.what());
   }
 
+  if (FOLLY_UNLIKELY(outputTracer_ != nullptr) && result) {
+    outputTracer_->write(result);
+  }
+
   if (!result) {
     MutableRemainingRows remainingRows(rows, context);
 
@@ -2014,6 +2019,52 @@ ExprSet::ExprSet(
   for (auto& expr : exprs_) {
     Expr::mergeFields(
         distinctFields_, multiplyReferencedFields_, expr->distinctFields());
+  }
+}
+
+void ExprSet::maybeSetupTracers(
+    const Operator& op,
+    const trace::TraceCtx& traceCtx) {
+  std::unordered_set<Expr*> visited;
+  std::unordered_map<std::string, int> instanceCounts;
+  for (auto& expr : exprs_) {
+    expr->maybeSetupTracer(op, traceCtx, visited, instanceCounts);
+  }
+}
+
+void Expr::maybeSetupTracer(
+    const Operator& op,
+    const trace::TraceCtx& traceCtx,
+    std::unordered_set<Expr*>& visited,
+    std::unordered_map<std::string, int>& instanceCounts) {
+  if (!visited.insert(this).second) {
+    return;
+  }
+  if (traceCtx.shouldTraceExpr(name_)) {
+    const int index = instanceCounts[name_]++;
+    outputTracer_ = traceCtx.createExprOutputTracer(op, name_, index);
+  }
+  for (auto& input : inputs_) {
+    input->maybeSetupTracer(op, traceCtx, visited, instanceCounts);
+  }
+}
+
+void ExprSet::finishTracers() {
+  std::unordered_set<Expr*> visited;
+  for (auto& expr : exprs_) {
+    expr->finishTracer(visited);
+  }
+}
+
+void Expr::finishTracer(std::unordered_set<Expr*>& visited) {
+  if (!visited.insert(this).second) {
+    return;
+  }
+  if (outputTracer_) {
+    outputTracer_->finish();
+  }
+  for (auto& input : inputs_) {
+    input->finishTracer(visited);
   }
 }
 
