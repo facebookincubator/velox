@@ -232,6 +232,24 @@ void FileDataSink::finalizeWriterFile(size_t index) {
   info->cumulativeWrittenBytes = ioStats_[index]->rawBytesWritten();
 }
 
+void FileDataSink::closeWriterAndFinalize(size_t index) {
+  VELOX_CHECK_LT(index, writers_.size());
+  VELOX_CHECK_LT(index, writerInfo_.size());
+
+  if (writers_[index] == nullptr) {
+    return;
+  }
+
+  WRITER_NON_RECLAIMABLE_SECTION_GUARD(index);
+
+  VELOX_USER_CHECK(
+      !sortWrite(), "Clustered Iceberg writer does not support sorted writes");
+
+  writers_[index]->close();
+  finalizeWriterFile(index);
+  writers_[index].reset();
+}
+
 void FileDataSink::rotateWriter(size_t index) {
   VELOX_CHECK_LT(index, writers_.size());
   VELOX_CHECK_LT(index, writerInfo_.size());

@@ -106,6 +106,8 @@ class IcebergDataSink : public HiveDataSink {
   /// Presto and Spark Iceberg commit protocol.
   std::vector<std::string> commitMessage() const override;
 
+  void appendData(RowVectorPtr input) override;
+
  private:
   IcebergDataSink(
       RowTypePtr inputType,
@@ -151,6 +153,16 @@ class IcebergDataSink : public HiveDataSink {
   // the writer in commitPartitionValue_ if not already set, which will be
   // included in the commit message as "partitionDataJson".
   uint32_t ensureWriter(const WriterId& id) override;
+
+  void clusteredAppendData(RowVectorPtr input);
+
+  void writeRowsToClusteredWriter(
+      const RowVectorPtr& input,
+      uint32_t writerIndex);
+
+  void closeCurrentClusteredWriter();
+
+  void checkClusteredWriterNotClosed(const WriterId& id) const;
 
   // Creates writer options configured for Iceberg table writes. Extends the
   // base HiveDataSink writer options with Iceberg-specific settings:
@@ -213,6 +225,20 @@ class IcebergDataSink : public HiveDataSink {
   // folly::dynamic array of values across all partition fields), ready for JSON
   // serialization.
   std::vector<folly::dynamic> commitPartitionValue_;
+
+  // Enable this initially by hardcoding true, or wire it to a config/session
+  // property if your engine exposes one.
+  const bool clusteredWrite_;
+
+  // Current logical Iceberg partition writer. Kept open across input batches so
+  // clustered data split across batches remains valid.
+  std::optional<WriterId> currentClusteredWriterId_;
+  std::optional<uint32_t> currentClusteredWriterIndex_;
+
+  // Logical writer IDs that have already been closed. If one appears again, the
+  // input is not clustered.
+  folly::F14FastSet<WriterId, WriterIdHasher, WriterIdEq>
+      closedClusteredWriterIds_;
 };
 
 } // namespace facebook::velox::connector::hive::iceberg

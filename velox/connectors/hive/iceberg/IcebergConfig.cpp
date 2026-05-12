@@ -32,4 +32,9 @@ std::string IcebergConfig::functionPrefix() const {
       kFunctionPrefixConfig, kDefaultFunctionPrefix);
 }
 
+bool IcebergConfig::fanoutEnabled(const config::ConfigBase* session) const {
+  return session->get<bool>(
+      kFanoutEnabledSession, config_->get<bool>(kFanoutEnabled, true));
+}
+
 } // namespace facebook::velox::connector::hive::iceberg

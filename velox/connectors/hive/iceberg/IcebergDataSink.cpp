@@ -303,8 +303,103 @@ IcebergDataSink::IcebergDataSink(
           partitionSpec_ != nullptr
               ? std::make_unique<IcebergPartitionName>(partitionSpec_)
               : nullptr),
-      partitionRowType_(std::move(partitionRowType)) {
-  commitPartitionValue_.resize(maxOpenWriters_);
+      partitionRowType_(std::move(partitionRowType)),
+      clusteredWrite_(!icebergConfig->fanoutEnabled(
+          connectorQueryCtx_->sessionProperties())) {
+  commitPartitionValue_.resize(writerInfo_.size());
+}
+
+void IcebergDataSink::appendData(RowVectorPtr input) {
+  if (!clusteredWrite_) {
+    HiveDataSink::appendData(std::move(input));
+    return;
+  }
+
+  clusteredAppendData(std::move(input));
+}
+
+void IcebergDataSink::clusteredAppendData(RowVectorPtr input) {
+  checkRunning();
+
+  input->loadedVector();
+
+  // Unpartitioned Iceberg doesn't need clustered routing.
+  if (!isPartitioned()) {
+    const auto index = ensureWriter(WriterId::unpartitionedId());
+    write(index, input);
+    return;
+  }
+
+  VELOX_USER_CHECK(
+      !sortWrite(), "Clustered Iceberg writer does not support sorted writes");
+
+  computePartitionAndBucketIds(input);
+
+  std::fill(partitionSizes_.begin(), partitionSizes_.end(), 0);
+
+  const auto numRows = input->size();
+
+  for (vector_size_t row = 0; row < numRows; ++row) {
+    const auto id = getWriterId(row);
+
+    if (!currentClusteredWriterId_.has_value()) {
+      checkClusteredWriterNotClosed(id);
+      currentClusteredWriterId_ = id;
+      currentClusteredWriterIndex_ = ensureWriter(id);
+    } else if (*currentClusteredWriterId_ != id) {
+      writeRowsToClusteredWriter(input, *currentClusteredWriterIndex_);
+      closeCurrentClusteredWriter();
+
+      checkClusteredWriterNotClosed(id);
+      currentClusteredWriterId_ = id;
+      currentClusteredWriterIndex_ = ensureWriter(id);
+    }
+
+    updatePartitionRows(*currentClusteredWriterIndex_, numRows, row);
+  }
+
+  if (currentClusteredWriterIndex_.has_value()) {
+    writeRowsToClusteredWriter(input, *currentClusteredWriterIndex_);
+  }
+}
+
+void IcebergDataSink::writeRowsToClusteredWriter(
+    const RowVectorPtr& input,
+    uint32_t writerIndex) {
+  const auto partitionSize = partitionSizes_[writerIndex];
+  if (partitionSize == 0) {
+    return;
+  }
+
+  VELOX_CHECK_NOT_NULL(partitionRows_[writerIndex]);
+  partitionRows_[writerIndex]->setSize(partitionSize * sizeof(vector_size_t));
+
+  RowVectorPtr writerInput = partitionSize == input->size()
+      ? input
+      : exec::wrap(partitionSize, partitionRows_[writerIndex], input);
+
+  write(writerIndex, writerInput);
+
+  partitionSizes_[writerIndex] = 0;
+}
+
+void IcebergDataSink::closeCurrentClusteredWriter() {
+  VELOX_CHECK(currentClusteredWriterId_.has_value());
+  VELOX_CHECK(currentClusteredWriterIndex_.has_value());
+
+  closedClusteredWriterIds_.insert(*currentClusteredWriterId_);
+
+  closeWriterAndFinalize(*currentClusteredWriterIndex_);
+
+  currentClusteredWriterId_.reset();
+  currentClusteredWriterIndex_.reset();
+}
+
+void IcebergDataSink::checkClusteredWriterNotClosed(const WriterId& id) const {
+  VELOX_USER_CHECK_EQ(
+      closedClusteredWriterIds_.count(id),
+      0,
+      "Iceberg clustered writer requires input rows to be clustered by partition");
 }
 
 std::vector<std::string> IcebergDataSink::commitMessage() const {
@@ -378,10 +473,16 @@ std::string IcebergDataSink::getPartitionName(uint32_t partitionId) const {
 }
 
 uint32_t IcebergDataSink::ensureWriter(const WriterId& id) {
-  auto writerId = HiveDataSink::ensureWriter(id);
+  const auto writerId = HiveDataSink::ensureWriter(id);
+
+  if (commitPartitionValue_.size() <= writerId) {
+    commitPartitionValue_.resize(writerId + 1);
+  }
+
   if (isPartitioned() && commitPartitionValue_[writerId].isNull()) {
     commitPartitionValue_[writerId] = makeCommitPartitionValue(writerId);
   }
+
   return writerId;
 }
 
