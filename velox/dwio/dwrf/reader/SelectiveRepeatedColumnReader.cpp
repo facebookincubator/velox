@@ -39,6 +39,30 @@ std::unique_ptr<dwio::common::IntDecoder</*isSigned*/ false>> makeLengthDecoder(
       lenVints,
       dwio::common::INT_BYTE_SIZE);
 }
+
+// Returns true if the MAP extraction type needs the key child reader.
+// When deltaUpdate is set, all child readers are needed regardless of
+// ExtractionType because delta updates (e.g., MAP_CONCAT) operate on the
+// full map.
+bool needsKeyReader(
+    common::ScanSpec::ExtractionType extractionType,
+    bool hasDeltaUpdate) {
+  return hasDeltaUpdate ||
+      extractionType == common::ScanSpec::ExtractionType::kNone ||
+      extractionType == common::ScanSpec::ExtractionType::kKeys;
+}
+
+// Returns true if the MAP extraction type needs the value child reader.
+// When deltaUpdate is set, all child readers are needed regardless of
+// ExtractionType because delta updates (e.g., MAP_CONCAT) operate on the
+// full map.
+bool needsElementReader(
+    common::ScanSpec::ExtractionType extractionType,
+    bool hasDeltaUpdate) {
+  return hasDeltaUpdate ||
+      extractionType == common::ScanSpec::ExtractionType::kNone ||
+      extractionType == common::ScanSpec::ExtractionType::kValues;
+}
 } // namespace
 
 FlatMapContext flatMapContextFromEncodingKey(const EncodingKey& encodingKey) {
@@ -69,6 +93,15 @@ SelectiveListColumnReader::SelectiveListColumnReader(
   }
   scanSpec_->children()[0]->setProjectOut(true);
 
+  // For kSize extraction we only need the length stream, so skip creating
+  // the element reader entirely.  This avoids registering its streams and
+  // reduces IO.  When deltaUpdate is set, we still need the element reader
+  // because delta updates operate on the full array.
+  if (scanSpec.extractionType() == common::ScanSpec::ExtractionType::kSize &&
+      !scanSpec.deltaUpdate()) {
+    return;
+  }
+
   auto childParams = DwrfParams(
       stripe,
       params.streamLabels(),
@@ -91,33 +124,41 @@ void makeMapChildrenReaders(
     DwrfParams& params,
     const dwio::common::ColumnReaderOptions& columnReaderOptions,
     const common::ScanSpec& scanSpec,
+    common::ScanSpec::ExtractionType extractionType,
+    bool hasDeltaUpdate,
     std::unique_ptr<dwio::common::SelectiveColumnReader>& keyReader,
     std::unique_ptr<dwio::common::SelectiveColumnReader>& elementReader) {
   const EncodingKey encodingKey{
       fileType.id(), params.flatMapContext().sequence};
   auto& stripe = params.stripeStreams();
-  DwrfParams keyParams(
-      stripe,
-      params.streamLabels(),
-      params.runtimeStatistics(),
-      flatMapContextFromEncodingKey(encodingKey));
-  keyReader = SelectiveDwrfReader::build(
-      columnReaderOptions,
-      requestedType.childAt(0),
-      fileType.childAt(0),
-      keyParams,
-      *scanSpec.children()[0]);
-  DwrfParams elementParams = DwrfParams(
-      stripe,
-      params.streamLabels(),
-      params.runtimeStatistics(),
-      flatMapContextFromEncodingKey(encodingKey));
-  elementReader = SelectiveDwrfReader::build(
-      columnReaderOptions,
-      requestedType.childAt(1),
-      fileType.childAt(1),
-      elementParams,
-      *scanSpec.children()[1]);
+  // Skip creating child readers that extraction pushdown doesn't need.
+  // This avoids registering their streams and reduces IO.
+  if (needsKeyReader(extractionType, hasDeltaUpdate)) {
+    DwrfParams keyParams(
+        stripe,
+        params.streamLabels(),
+        params.runtimeStatistics(),
+        flatMapContextFromEncodingKey(encodingKey));
+    keyReader = SelectiveDwrfReader::build(
+        columnReaderOptions,
+        requestedType.childAt(0),
+        fileType.childAt(0),
+        keyParams,
+        *scanSpec.children()[0]);
+  }
+  if (needsElementReader(extractionType, hasDeltaUpdate)) {
+    DwrfParams elementParams = DwrfParams(
+        stripe,
+        params.streamLabels(),
+        params.runtimeStatistics(),
+        flatMapContextFromEncodingKey(encodingKey));
+    elementReader = SelectiveDwrfReader::build(
+        columnReaderOptions,
+        requestedType.childAt(1),
+        fileType.childAt(1),
+        elementParams,
+        *scanSpec.children()[1]);
+  }
 }
 
 } // namespace
@@ -140,9 +181,16 @@ SelectiveMapColumnReader::SelectiveMapColumnReader(
       params,
       columnReaderOptions,
       *scanSpec_,
+      scanSpec.extractionType(),
+      scanSpec.deltaUpdate() != nullptr,
       keyReader_,
       elementReader_);
-  children_ = {keyReader_.get(), elementReader_.get()};
+  if (keyReader_) {
+    children_.push_back(keyReader_.get());
+  }
+  if (elementReader_) {
+    children_.push_back(elementReader_.get());
+  }
 }
 
 SelectiveMapAsStructColumnReader::SelectiveMapAsStructColumnReader(
@@ -157,12 +205,16 @@ SelectiveMapAsStructColumnReader::SelectiveMapAsStructColumnReader(
           params,
           scanSpec),
       length_(makeLengthDecoder(*fileType_, params, *pool_)) {
+  // MapAsStruct never uses extraction pushdown (asserted in base class),
+  // so always create both readers.
   makeMapChildrenReaders(
       *fileType_,
       *requestedType_,
       params,
       columnReaderOptions,
       mapScanSpec_,
+      common::ScanSpec::ExtractionType::kNone,
+      /*hasDeltaUpdate=*/false,
       keyReader_,
       elementReader_);
   children_ = {keyReader_.get(), elementReader_.get()};
