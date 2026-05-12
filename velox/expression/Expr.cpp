@@ -2043,6 +2043,9 @@ void Expr::maybeSetupTracer(
   if (traceCtx.shouldTraceExpr(name_)) {
     const int index = instanceCounts[name_]++;
     outputTracer_ = traceCtx.createExprOutputTracer(op, name_, index);
+    if (vectorFunction_) {
+      traceCtx.maybeActivateIntraExprTracing(op, name_, *vectorFunction_);
+    }
   }
   for (auto& input : inputs_) {
     input->maybeSetupTracer(op, traceCtx, visited, instanceCounts);
