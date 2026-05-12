@@ -343,7 +343,7 @@ struct GroupbyLeafState final : public BufferedState {
 };
 
 bool isStreamingGroupbyCapacityError(const std::exception& e) {
-  return std::string_view{e.what()}.find("max_groups") !=
+  return std::string_view{e.what()}.find("max_distinct_keys") !=
       std::string_view::npos;
 }
 

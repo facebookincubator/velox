@@ -20,6 +20,7 @@
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/io/IoStatistics.h"
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/ReaderFactory.h"
@@ -49,7 +50,10 @@ TableInfo readTableInfo(
     }
 
     if (info.dataFiles.empty()) {
-      dwio::common::ReaderOptions readerOptions{pool, nullptr, nullptr};
+      io::IoStatistics dataIoStats;
+      io::IoStatistics metadataIoStats;
+      dwio::common::ReaderOptions readerOptions{
+          pool, &dataIoStats, &metadataIoStats};
       readerOptions.setFileFormat(format);
       auto readFile = filesystems::getFileSystem(entry.path().string(), nullptr)
                           ->openFileForRead(entry.path().string());
