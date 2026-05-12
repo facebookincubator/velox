@@ -84,11 +84,6 @@ class CudfGroupId : public CudfOperatorBase {
 
   /// Number of grouping key columns in output (first N output columns).
   size_t numGroupingKeys_{0};
-
-  /// Precomputed usage count for each input column in the last grouping set.
-  /// Used to determine whether to move or copy columns when processing the
-  /// last grouping set. Index is input column index, value is usage count.
-  std::vector<int> lastGroupingSetUsageCounts_;
 };
 
 } // namespace facebook::velox::cudf_velox
