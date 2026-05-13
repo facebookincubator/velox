@@ -75,6 +75,10 @@ class CastHooks {
 
   virtual PolicyType getPolicy() const = 0;
 
+  /// Returns true if TIMESTAMP_UTC casts are supported.
+  /// Spark supports them; Presto does not.
+  virtual bool supportsTimestampUtc() const = 0;
+
   /// Converts boolean to timestamp type.
   virtual Expected<Timestamp> castBooleanToTimestamp(bool seconds) const = 0;
 
