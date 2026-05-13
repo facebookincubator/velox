@@ -899,10 +899,7 @@ TEST_F(CudfFilterProjectTest, remainder) {
   EXPECT_FALSE(
       canEvaluateWithAst(
           "remainder(c0, c1)", ROW({"c0", "c1"}, {BIGINT(), BIGINT()})));
-
-  auto remainderFloatResult =
-      evaluateOnceValue<float, float, float>("remainder(c0, c1)", 47.0, 10.0);
-  EXPECT_FLOAT_EQ(remainderFloatResult, 7.0);
+  EXPECT_FALSE(canEvaluateWithAst("remainder(c0, c1)", ROW({"c0", "c1"}, {REAL(), REAL()})));
 
   auto remainderDoubleResult = evaluateOnceValue<double, double, double>(
       "remainder(c0, c1)", 47.0, 10.0);

@@ -166,7 +166,6 @@ const std::unordered_map<std::string, Op> prestoBinaryOps = {
     {"divide", Op::DIV},
     // Only supports floating type
     {"mod", Op::MOD},
-    {"power", Op::POW},
 
     // Comparison operators
     {"eq", Op::EQUAL},
@@ -398,7 +397,7 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
       }
       return true;
     }
-    if (name == "bitwise_and" || name == "bitwise_or" || name == "bitwise_xor" || ) {
+    if (name == "bitwise_and" || name == "bitwise_or" || name == "bitwise_xor") {
       // Spark result type is same with the input type, Presto result type is
       // int64_t
       // Spark case and Presto int64_t case
@@ -409,13 +408,14 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
       return isOpAndInputsSupported(binaryOps.at(name), inputCudfDataTypes);
     }
     if (name == "mod" || name == "remainder") {
-// | Engine | SQL Function Name | Input Type Category  | Underlying Implementation |
-// | ------ | ----------------- | -------------------- | ------------------------- |
-// | Presto | `mod`             | Integral types       | `checked_mod`             |
-// | Presto | `mod`             | Floating-point types | `mod`                     |
-// | Spark  | `remainder`       | Integral types       | `mod`                     |
-// | Spark  | `remainder`       | Floating-point types | `mod`                     |
-      return expr->type()->kind() == TypeKind::FLOAT || expr->type()->kind() == TypeKind::DOUBLE;
+      // | Engine | SQL Function Name | Input Type Category  | Underlying Implementation |
+      // | ------ | ----------------- | -------------------- | ------------------------- |
+      // | Presto | `mod`             | Integral types       | `checked_mod`             |
+      // | Presto | `mod`             | Floating-point types | `mod`                     |
+      // | Spark  | `remainder`       | Integral types       | `mod`                     |
+      // | Spark  | `remainder`       | Floating-point types | `mod`                     |
+      // Float input returns double which Velox CPU requires float.
+      return expr->type()->kind() == TypeKind::DOUBLE;
     }
     return len == 2 &&
         isOpAndInputsSupported(binaryOps.at(name), inputCudfDataTypes);
@@ -427,11 +427,6 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
   }
   if (name == "isnotnull" && len == 1) {
     return isOpAndInputsSupported(Op::IS_NULL, inputCudfDataTypes);
-  }
-  if (name == "pmod") {
-    // The data type is decided by a mixed operation, do we have the way to
-    // check it?
-    return true;
   }
 
   // Between: value >= lower AND value <= upper
