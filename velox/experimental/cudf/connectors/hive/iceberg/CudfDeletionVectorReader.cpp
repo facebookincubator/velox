@@ -76,13 +76,7 @@ void CudfDeletionVectorReader::loadBitmap(rmm::cuda_stream_view stream) {
   // Check if the payload is a raw roaring32 bitmap instead of a DV-v1 blob and
   // read it directly
   if (source.isRawRoaring32) {
-    if (is32bitBitmapNormalized(payload)) {
-      buildBitmap(cudf::roaring_bitmap_type::BITS_32, payload, stream);
-    } else {
-      auto normalizedPayload = normalizeRoaring32(payload);
-      buildBitmap(
-          cudf::roaring_bitmap_type::BITS_32, normalizedPayload, stream);
-    }
+    buildBitmap(cudf::roaring_bitmap_type::BITS_32, payload, stream);
     return;
   }
 
@@ -103,22 +97,10 @@ void CudfDeletionVectorReader::loadBitmap(rmm::cuda_stream_view stream) {
     constexpr std::size_t kRoaring32Offset =
         sizeof(uint64_t) + sizeof(uint32_t);
     auto roaring32 = std::string_view(payload).substr(kRoaring32Offset);
-    if (is32bitBitmapNormalized(roaring32)) {
-      buildBitmap(cudf::roaring_bitmap_type::BITS_32, roaring32, stream);
-    } else {
-      auto normalizedPayload = normalizeRoaring32(roaring32);
-      buildBitmap(
-          cudf::roaring_bitmap_type::BITS_32, normalizedPayload, stream);
-    }
+    buildBitmap(cudf::roaring_bitmap_type::BITS_32, roaring32, stream);
   } else {
     // Multiple keys. Use 64-bit dispatch
-    if (is64bitBitmapNormalized(payload, numKeys)) {
-      buildBitmap(cudf::roaring_bitmap_type::BITS_64, payload, stream);
-    } else {
-      auto normalizedPayload = normalizeRoaring64(payload, numKeys);
-      buildBitmap(
-          cudf::roaring_bitmap_type::BITS_64, normalizedPayload, stream);
-    }
+    buildBitmap(cudf::roaring_bitmap_type::BITS_64, payload, stream);
   }
 
   return;

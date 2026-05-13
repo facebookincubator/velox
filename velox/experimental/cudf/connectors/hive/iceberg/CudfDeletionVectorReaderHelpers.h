@@ -40,19 +40,6 @@ T inline unalignedLoad(std::string_view payload, std::size_t offset = 0)
   return value;
 }
 
-/// Checks whether the 32-bit roaring block is normalized for cuco.
-bool is32bitBitmapNormalized(std::string_view payload);
-
-/// Checks if all 32 bit roaring bitmaps in the payload are normalized.
-bool is64bitBitmapNormalized(std::string_view payload, uint64_t numKeys);
-
-/// Normalizes a single 32 bit roaring bitmap for cuco.
-std::string normalizeRoaring32(std::string_view payload);
-
-/// Walks the 64 bit roaring bitmap payload and normalizes each 32 bit
-/// roaring bitmap bucket for cuco.
-std::string normalizeRoaring64(std::string_view payload, uint64_t numKeys);
-
 /// Representation of deletion vector v1 (DV-v1) blob source.
 struct BlobSource {
   std::shared_ptr<velox::ReadFile> file;
