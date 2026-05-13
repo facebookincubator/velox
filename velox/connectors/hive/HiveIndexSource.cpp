@@ -16,6 +16,7 @@
 #include "velox/connectors/hive/HiveIndexSource.h"
 
 #include <folly/ScopeGuard.h>
+#include <folly/container/F14Set.h>
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/common/time/Timer.h"
@@ -562,6 +563,11 @@ class HiveLookupIterator : public IndexSource::ResultIterator {
       setState(State::kEnd);
       return nullptr;
     }
+
+    if (!indexSource_->nonIndexConditions_.empty()) {
+      result = applyNonIndexCondition(std::move(result));
+    }
+
     if (indexSource_->remainingFilterExprSet_ == nullptr) {
       RECORD_CPU_WALL(output) {
         result->output = indexSource_->projectOutput(
@@ -570,6 +576,24 @@ class HiveLookupIterator : public IndexSource::ResultIterator {
     } else {
       result = evaluateRemainingFilter(std::move(result), iterationStats);
     }
+    return result;
+  }
+
+  std::unique_ptr<IndexSource::Result> applyNonIndexCondition(
+      std::unique_ptr<IndexSource::Result> result) {
+    BufferPtr passingIndices{nullptr};
+    const auto numPassing = indexSource_->applyNonIndexConditions(
+        request_.input, result->output, result->inputHits, passingIndices);
+    if (numPassing == 0) {
+      return getEmptyResult();
+    }
+    if (passingIndices == nullptr) {
+      return result;
+    }
+    result->inputHits = filterIndices(
+        numPassing, passingIndices, result->inputHits, indexSource_->pool_);
+    result->output =
+        exec::wrap(numPassing, std::move(passingIndices), result->output);
     return result;
   }
 
@@ -649,30 +673,32 @@ HiveIndexSource::HiveIndexSource(
   init(columnHandles, indexLookupConditions);
 }
 
-void HiveIndexSource::initIndexLookupConditions(
+void HiveIndexSource::initConditions(
     const std::vector<core::IndexLookupConditionPtr>& indexLookupConditions,
-    const ColumnHandleMap& assignments) {
+    const ColumnHandleMap& assignments,
+    const folly::F14FastMap<std::string_view, const HiveColumnHandle*>&
+        columnHandles,
+    std::vector<std::string>& readColumnNames,
+    std::vector<TypePtr>& readColumnTypes) {
   const auto& indexColumns = tableHandle_->indexColumns();
   const auto& dataColumns = tableHandle_->dataColumns();
 
-  // Build a map from index lookup condition key name to condition for quick
-  // lookup. The key name in IndexLookupCondition references input column name,
-  // we need to convert it to the table column name using assignments.
-  folly::F14FastMap<std::string, core::IndexLookupConditionPtr>
-      indexLookupConditionMap;
+  // Build a map from condition key name to condition for quick lookup. The key
+  // name in IndexLookupCondition references input column name, we need to
+  // convert it to the table column name using assignments.
+  folly::F14FastMap<std::string, core::IndexLookupConditionPtr> conditionMap;
   for (const auto& condition : indexLookupConditions) {
     auto convertedCondition = convertConditionKeyName(condition, assignments);
     const auto& columnName = convertedCondition->key->name();
     VELOX_USER_CHECK(
-        indexLookupConditionMap
-            .emplace(columnName, std::move(convertedCondition))
-            .second,
+        conditionMap.emplace(columnName, std::move(convertedCondition)).second,
         "Duplicate lookup key found in indexLookupConditions: {}",
         columnName);
   }
 
   indexLookupConditions_.reserve(indexColumns.size());
   size_t numValidIndexLookupConditions{0};
+  folly::F14FastSet<std::string> indexConditions;
   // Process index columns in order, converting filters to index lookup
   // conditions where possible. A range filter/condition stops further
   // processing.
@@ -680,9 +706,8 @@ void HiveIndexSource::initIndexLookupConditions(
     const common::Subfield subfield(indexColumn);
     const auto filterIt = filters_.find(subfield);
     const bool hasFilter = filterIt != filters_.end();
-    const auto conditionIt = indexLookupConditionMap.find(indexColumn);
-    const bool hasIndexLookupCondition =
-        conditionIt != indexLookupConditionMap.end();
+    const auto conditionIt = conditionMap.find(indexColumn);
+    const bool hasIndexLookupCondition = conditionIt != conditionMap.end();
 
     // Cannot have both a filter and an index lookup condition on the same
     // column.
@@ -709,6 +734,7 @@ void HiveIndexSource::initIndexLookupConditions(
       indexLookupConditions_.push_back(condition);
       VELOX_CHECK(!condition->isFilter());
       ++numValidIndexLookupConditions;
+      indexConditions.insert(indexColumn);
 
       // Check if this is a range condition (Between) - stops further
       // processing.
@@ -751,10 +777,71 @@ void HiveIndexSource::initIndexLookupConditions(
     break;
   }
 
+  // Process remaining conditions not consumed as index conditions.
+  folly::F14FastSet<std::string> readColumnNameSet(
+      readColumnNames.begin(), readColumnNames.end());
+  for (const auto& [columnName, condition] : conditionMap) {
+    if (indexConditions.count(columnName) > 0) {
+      continue;
+    }
+
+    // Reject conditions on index columns that weren't consumed — this
+    // indicates a prefix-gap violation (e.g., u0 and u2 but not u1).
+    VELOX_CHECK(
+        std::find(indexColumns.begin(), indexColumns.end(), columnName) ==
+            indexColumns.end(),
+        "Unprocessed join condition on index column "
+        "(conditions must follow index column order as a prefix): {}",
+        columnName);
+
+    // Non-index conditions become post-read equality filters.
+    const auto equalCondition =
+        std::dynamic_pointer_cast<core::EqualIndexLookupCondition>(condition);
+    VELOX_CHECK_NOT_NULL(
+        equalCondition,
+        "Non-index join condition must be an equal condition: {}",
+        columnName);
+    VELOX_CHECK(
+        !equalCondition->isFilter(),
+        "Non-index join condition cannot be a constant filter: {}",
+        columnName);
+
+    // Ensure the column is in the read set.
+    if (readColumnNameSet.count(columnName) == 0) {
+      auto handleIt = columnHandles.find(columnName);
+      VELOX_CHECK(
+          handleIt != columnHandles.end(),
+          "Non-index condition column missing from assignments: {}",
+          columnName);
+      readColumnNames.emplace_back(columnName);
+      readColumnTypes.push_back(handleIt->second->dataType());
+      readColumnNameSet.insert(columnName);
+    }
+
+    // Resolve column indices for runtime evaluation.
+    const auto probeFieldAccess =
+        checkedPointerCast<const core::FieldAccessTypedExpr>(
+            equalCondition->value);
+    auto outputColumnIt =
+        std::find(readColumnNames.begin(), readColumnNames.end(), columnName);
+    const auto outputColumnIndex =
+        std::distance(readColumnNames.begin(), outputColumnIt);
+    const auto requestColumnIndex =
+        requestType_->getChildIdx(probeFieldAccess->name());
+    nonIndexConditions_.push_back(
+        {static_cast<column_index_t>(outputColumnIndex),
+         static_cast<column_index_t>(requestColumnIndex)});
+  }
+
   VELOX_CHECK_EQ(
-      numValidIndexLookupConditions,
+      numValidIndexLookupConditions + nonIndexConditions_.size(),
       indexLookupConditions.size(),
-      "Not all index lookup conditions were processed");
+      "Not all join conditions were processed");
+
+  VELOX_CHECK(
+      !indexLookupConditions_.empty(),
+      "No index column join conditions found. At least one must be an "
+      "index column");
 }
 
 void HiveIndexSource::initRemainingFilter(
@@ -887,7 +974,12 @@ void HiveIndexSource::init(
 
   initRemainingFilter(readColumnNames, readColumnTypes);
 
-  initIndexLookupConditions(indexLookupConditions, assignments);
+  initConditions(
+      indexLookupConditions,
+      assignments,
+      columnHandles,
+      readColumnNames,
+      readColumnTypes);
 
   readerOutputType_ =
       ROW(std::move(readColumnNames), std::move(readColumnTypes));
@@ -1077,6 +1169,44 @@ std::unordered_map<std::string, RuntimeMetric> HiveIndexSource::runtimeStats() {
   }
 
   return stats;
+}
+
+vector_size_t HiveIndexSource::applyNonIndexConditions(
+    const RowVectorPtr& request,
+    const RowVectorPtr& output,
+    const BufferPtr& inputHits,
+    BufferPtr& passingIndices) {
+  const auto numRows = output->size();
+  const auto* hits = inputHits->as<vector_size_t>();
+
+  SelectivityVector passingRows(numRows, true);
+
+  for (const auto& condition : nonIndexConditions_) {
+    const auto& outputVector = output->childAt(condition.outputColumnIndex);
+    const auto& requestVector = request->childAt(condition.requestColumnIndex);
+    for (vector_size_t row = 0; row < numRows; ++row) {
+      const auto requestRow = hits[row];
+      // Either null means not equal (standard SQL join semantics).
+      if (outputVector->isNullAt(row) || requestVector->isNullAt(requestRow) ||
+          !outputVector->equalValueAt(requestVector.get(), row, requestRow)) {
+        passingRows.setValid(row, false);
+      }
+    }
+  }
+  passingRows.updateBounds();
+
+  const auto numPassing = passingRows.countSelected();
+  if (numPassing == numRows) {
+    return numRows;
+  }
+
+  passingIndices = allocateIndices(numPassing, pool_);
+  auto* rawIndices = passingIndices->asMutable<vector_size_t>();
+  vector_size_t numSelected = 0;
+  passingRows.applyToSelected(
+      [&](vector_size_t row) { rawIndices[numSelected++] = row; });
+  VELOX_CHECK_EQ(numSelected, numPassing);
+  return numPassing;
 }
 
 vector_size_t HiveIndexSource::evaluateRemainingFilter(

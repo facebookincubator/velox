@@ -87,6 +87,17 @@ class HiveIndexSource : public IndexSource,
   // filterEvalCtx_.selectedIndices and selectedBits are not updated.
   vector_size_t evaluateRemainingFilter(RowVectorPtr& rowVector);
 
+  // Applies non-index equi-join conditions as post-read equality filters.
+  // Compares request (probe) values against reader output column values
+  // for each non-index join condition. Returns the number of rows that pass
+  // all conditions. Populates 'passingIndices' with the indices of rows that
+  // pass when not all rows pass.
+  vector_size_t applyNonIndexConditions(
+      const RowVectorPtr& request,
+      const RowVectorPtr& output,
+      const BufferPtr& inputHits,
+      BufferPtr& passingIndices);
+
   // Projects output from reader output to the final output type. Wraps child
   // vectors with remaining filter indices if provided. Partition
   // columns are emitted by the reader directly via setConstantValue() on
@@ -111,12 +122,19 @@ class HiveIndexSource : public IndexSource,
       const ColumnHandleMap& assignments,
       const std::vector<core::IndexLookupConditionPtr>& indexLookupConditions);
 
-  // Validates and initializes index lookup conditions:
-  // - Converts filter conditions (with constant values) to filters_.
-  // - Non-filter conditions are stored in indexLookupConditions_.
-  void initIndexLookupConditions(
+  // Initializes all join conditions:
+  // - Index conditions are pushed to indexLookupConditions_ (filters on
+  //   index columns are converted to index lookup conditions).
+  // - Non-index conditions are resolved to nonIndexConditions_ for
+  //   post-read equality filtering, and their columns are added to
+  //   readColumnNames/readColumnTypes if not already present.
+  void initConditions(
       const std::vector<core::IndexLookupConditionPtr>& indexLookupConditions,
-      const ColumnHandleMap& assignments);
+      const ColumnHandleMap& assignments,
+      const folly::F14FastMap<std::string_view, const HiveColumnHandle*>&
+          columnHandles,
+      std::vector<std::string>& readColumnNames,
+      std::vector<TypePtr>& readColumnTypes);
 
   // Initializes the remaining filter:
   // - Compiles the remaining filter expression.
@@ -189,6 +207,15 @@ class HiveIndexSource : public IndexSource,
   // EqualIndexLookupConditions and original non-filter index lookup conditions.
   // This is passed to FileIndexReader.
   std::vector<core::IndexLookupConditionPtr> indexLookupConditions_;
+
+  // Non-index equi-join conditions: join keys that are not index columns
+  // (e.g., bucket columns used for colocated joins). Applied as post-read
+  // equality filters during lookup.
+  struct NonIndexCondition {
+    column_index_t outputColumnIndex;
+    column_index_t requestColumnIndex;
+  };
+  std::vector<NonIndexCondition> nonIndexConditions_;
 
   // Partition column handles, keyed by table column name (handle->name()).
   // Populated from kPartitionKey assignments in init(). Used to feed
