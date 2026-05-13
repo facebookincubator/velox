@@ -62,7 +62,7 @@ std::string serializeRoaringBitmapNoRun(const std::vector<int64_t>& positions) {
 
   std::string data;
   // Cookie.
-  uint32_t cookie = 12346;
+  constexpr uint32_t cookie = 12346;
   data.append(reinterpret_cast<const char*>(&cookie), 4);
   // Container count.
   data.append(reinterpret_cast<const char*>(&numContainers), 4);
@@ -74,8 +74,8 @@ std::string serializeRoaringBitmapNoRun(const std::vector<int64_t>& positions) {
     data.append(reinterpret_cast<const char*>(&cardMinus1), 2);
   }
 
-  // Offset section (required for >= 4 containers).
-  if (numContainers >= 4) {
+  // Offset section (required for > 0 containers)
+  if (numContainers > 0) {
     uint32_t offset = 4 + 4 + numContainers * 4 + numContainers * 4;
     for (auto& [key, vals] : containers) {
       data.append(reinterpret_cast<const char*>(&offset), 4);
@@ -130,6 +130,21 @@ std::string serializeRoaringBitmapWithRuns(
     uint16_t cardMinus1 = static_cast<uint16_t>(cardinalities[i] - 1);
     data.append(reinterpret_cast<const char*>(&key), 2);
     data.append(reinterpret_cast<const char*>(&cardMinus1), 2);
+  }
+
+  // Offset section (required for >= 4 containers)
+  constexpr uint32_t kNoOffsetThreshold = 4;
+  if (numContainers >= kNoOffsetThreshold) {
+    // First container offset = cookie (4) + runBitmap (runBitmapBytes)
+    // + descriptive header (4 * numContainers) + offset header
+    // (4 * numContainers).
+    uint32_t offset =
+        4 + runBitmapBytes + 4 * numContainers + 4 * numContainers;
+    for (auto& [key, runs] : containerRuns) {
+      data.append(reinterpret_cast<const char*>(&offset), 4);
+      // Each run container occupies 2 + 4 * numRuns bytes.
+      offset += 2 + 4 * static_cast<uint32_t>(runs.size());
+    }
   }
 
   // Container data: each run container has numRuns (uint16) followed by
@@ -370,6 +385,44 @@ TEST_F(DeletionVectorReaderTest, runContainers) {
   }
   for (uint64_t i = 50; i <= 59; ++i) {
     expected.push_back(i);
+  }
+  EXPECT_EQ(setBits, expected);
+  EXPECT_TRUE(reader.noMoreData());
+}
+
+TEST_F(DeletionVectorReaderTest, runContainersWithOffsetHeader) {
+  std::vector<std::pair<uint16_t, std::vector<std::pair<uint16_t, uint16_t>>>>
+      containerRuns = {
+          {0, {{10, 4}}}, // positions 10-14
+          {1, {{0, 2}, {100, 1}}}, // positions 65536-65538, 65636-65637
+          {2, {{500, 0}}}, // position 131072+500 = 131572
+          {3, {{1000, 9}}}, // positions 196608+1000..196608+1009
+      };
+  auto bitmapData = serializeRoaringBitmapWithRuns(containerRuns);
+  auto tempFile = writeDvFile(bitmapData);
+  auto fileSize = static_cast<uint64_t>(bitmapData.size());
+
+  auto dvFile = makeDvDeleteFile(tempFile->getPath(), 20, fileSize);
+
+  DeletionVectorReader reader(dvFile, 0, pool_.get());
+
+  const uint64_t numRows = 200'000;
+  auto bitmap = allocateBitmap(numRows);
+  reader.readDeletePositions(0, numRows, bitmap);
+
+  auto setBits = getSetBits(bitmap, numRows);
+  std::vector<uint64_t> expected;
+  for (uint64_t i = 10; i <= 14; ++i) {
+    expected.push_back(i);
+  }
+  for (uint64_t i = 65536; i <= 65538; ++i) {
+    expected.push_back(i);
+  }
+  expected.push_back(65636);
+  expected.push_back(65637);
+  expected.push_back(131072 + 500);
+  for (uint64_t i = 0; i <= 9; ++i) {
+    expected.push_back(196608 + 1000 + i);
   }
   EXPECT_EQ(setBits, expected);
   EXPECT_TRUE(reader.noMoreData());

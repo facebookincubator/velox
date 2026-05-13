@@ -225,8 +225,9 @@ void DeletionVectorReader::deserializeRoaring64Bitmap(const std::string& data) {
       containers[i] = {key, static_cast<uint32_t>(cardMinus1) + 1, isRun};
     }
 
-    // Skip offset section.
-    if (numContainers >= 4) {
+    // Skip offset section
+    const bool hasOffsetSection = !hasRunContainers || numContainers >= 4;
+    if (hasOffsetSection) {
       ptr += numContainers * sizeof(uint32_t);
     }
 
@@ -315,8 +316,9 @@ void DeletionVectorReader::deserialize32BitRoaringBitmap(
     containers[i] = {key, static_cast<uint32_t>(cardMinus1) + 1};
   }
 
-  // Skip offset section.
-  if (numContainers >= 4) {
+  // Skip offset section
+  const bool hasOffsetSection = !hasRunContainers || numContainers >= 4;
+  if (hasOffsetSection) {
     VELOX_CHECK_GE(
         static_cast<size_t>(end - ptr),
         numContainers * 4,
