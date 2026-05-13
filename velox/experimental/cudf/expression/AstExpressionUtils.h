@@ -58,29 +58,6 @@ cudf::ast::literal createLiteral(
       scalars);
 }
 
-// Cast the input var to type
-template <TypeKind kind>
-cudf::ast::literal makeScalarAndLiteral(
-    const TypePtr& type,
-    int64_t value,
-    std::vector<std::unique_ptr<cudf::scalar>>& scalars) {
-  using T = typename TypeTraits<kind>::NativeType;
-  if constexpr (cudf::is_fixed_width<T>()) {
-    auto scalar = makeScalarFromValue<T>(type, value, false);
-    scalars.emplace_back(std::move(scalar));
-    return makeLiteralFromScalar<T>(*(scalars.back()), type);
-  }
-  VELOX_NYI("Scalar creation not implemented for type " + type->toString());
-}
-
-cudf::ast::literal createLiteral(
-    const TypePtr& type,
-    int64_t value,
-    std::vector<std::unique_ptr<cudf::scalar>>& scalars) {
-  return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-      makeScalarAndLiteral, type->kind(), type, value, scalars);
-}
-
 // Helper function to extract literals from array elements based on type
 void extractArrayLiterals(
     const ArrayVector* arrayVector,
