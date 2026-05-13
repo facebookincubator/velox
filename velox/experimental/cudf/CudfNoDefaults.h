@@ -64,7 +64,7 @@ namespace facebook::velox::cudf_velox {
 /// function directly. Use this at call sites where you intentionally want
 /// the current default device memory resource.
 inline rmm::device_async_resource_ref get_temp_mr() {
-  return rmm::mr::get_current_device_resource();
+  return rmm::mr::get_current_device_resource_ref();
 }
 
 } // namespace facebook::velox::cudf_velox

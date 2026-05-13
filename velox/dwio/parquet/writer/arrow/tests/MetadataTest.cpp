@@ -417,8 +417,9 @@ TEST(Metadata, TestAddKeyValueMetadata) {
       rootPool->addLeafChild("MetadataTest");
   auto dataIoStats = std::make_shared<velox::io::IoStatistics>();
   auto metadataIoStats = std::make_shared<velox::io::IoStatistics>();
-  dwio::common::ReaderOptions readerOptions{
-      leafPool.get(), dataIoStats.get(), metadataIoStats.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool.get());
+  readerOptions.setDataIoStats(dataIoStats.get());
+  readerOptions.setMetadataIoStats(metadataIoStats.get());
   auto input = std::make_unique<dwio::common::BufferedInput>(
       std::make_shared<LocalReadFile>(filePath->getPath()),
       readerOptions.memoryPool());
@@ -539,8 +540,9 @@ TEST(Metadata, TestSortingColumns) {
       rootPool->addLeafChild("MetadataTest");
   auto dataIoStats = std::make_shared<velox::io::IoStatistics>();
   auto metadataIoStats = std::make_shared<velox::io::IoStatistics>();
-  dwio::common::ReaderOptions readerOptions{
-      leafPool.get(), dataIoStats.get(), metadataIoStats.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool.get());
+  readerOptions.setDataIoStats(dataIoStats.get());
+  readerOptions.setMetadataIoStats(metadataIoStats.get());
   auto input = std::make_unique<dwio::common::BufferedInput>(
       std::make_shared<LocalReadFile>(filePath->getPath()),
       readerOptions.memoryPool());

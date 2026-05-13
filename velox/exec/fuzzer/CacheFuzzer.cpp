@@ -375,8 +375,9 @@ void CacheFuzzer::initializeCache(bool restartCache) {
 }
 
 void CacheFuzzer::initializeInputs() {
-  const auto readOptions =
-      io::ReaderOptions(pool_.get(), &dataIoStats_, &metadataIoStats_);
+  io::ReaderOptions readOptions(pool_.get());
+  readOptions.setDataIoStats(&dataIoStats_);
+  readOptions.setMetadataIoStats(&metadataIoStats_);
   auto tracker = std::make_shared<ScanTracker>(
       "testTracker", nullptr, 256 << 10 /*256KB*/);
   auto ioStatistics = std::make_shared<IoStatistics>();

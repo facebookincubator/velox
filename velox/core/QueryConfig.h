@@ -1233,7 +1233,8 @@ class QueryConfig {
       7,
       "Maximum zoom level difference for bing_tile_children.")
 
-  /// Temporary flag to control whether selective Nimble reader should be used.
+  /// Deprecated: Use FileConfig::kSelectiveNimbleReaderEnabledSession instead.
+  /// Kept for backward compatibility with Presto session properties.
   VELOX_QUERY_CONFIG(
       kSelectiveNimbleReaderEnabled,
       selectiveNimbleReaderEnabled,

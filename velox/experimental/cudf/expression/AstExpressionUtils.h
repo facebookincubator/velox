@@ -50,7 +50,12 @@ cudf::ast::literal createLiteral(
   variant value =
       VELOX_DYNAMIC_TYPE_DISPATCH(getVariant, kind, vector, atIndex);
   return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-      makeScalarAndLiteral, kind, type, value, scalars);
+      makeScalarAndLiteral,
+      kind,
+      type,
+      value,
+      vector->isNullAt(atIndex),
+      scalars);
 }
 
 // Helper function to extract literals from array elements based on type
@@ -582,11 +587,17 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     auto value = c->value();
     VELOX_CHECK(value->isConstantEncoding());
 
+    // Materialize NULL literals via make_column_from_scalar so the output
+    // column preserves nullness for downstream operators like count(column).
+    //
+    // Also keep the standalone literal workaround: cudf::compute_column can
+    // produce spurious nulls for root literal expressions. See comment below.
+    //
     // TODO: There is a scalar stream synchronization bug that causes
     // cudf::compute_column to produce spurious nulls for standalone
     // literal expressions.  Work around it by materialising via
     // make_column_from_scalar instead.
-    if (expr == rootExpr) {
+    if (value->isNullAt(0) || expr == rootExpr) {
       // convert to cudf scalar and store it
       createLiteral(value, scalars);
       // The scalar index is scalars.size() - 1 since we just added it

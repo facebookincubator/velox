@@ -198,15 +198,29 @@ template <TypeKind kind>
 cudf::ast::literal makeScalarAndLiteral(
     const TypePtr& type,
     const variant& var,
+    bool isNull,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars) {
   using T = typename TypeTraits<kind>::NativeType;
   if constexpr (cudf::is_fixed_width<T>() || kind == TypeKind::VARCHAR) {
+    if (isNull) {
+      auto scalar = makeScalarFromValue<T>(type, T{}, true);
+      scalars.emplace_back(std::move(scalar));
+      return makeLiteralFromScalar<T>(*(scalars.back()), type);
+    }
     auto value = var.value<T>();
     auto scalar = makeScalarFromValue(type, value, false);
     scalars.emplace_back(std::move(scalar));
     return makeLiteralFromScalar<T>(*(scalars.back()), type);
   }
   VELOX_NYI("Scalar creation not implemented for type {}", type->toString());
+}
+
+template <TypeKind kind>
+cudf::ast::literal makeScalarAndLiteral(
+    const TypePtr& type,
+    const variant& var,
+    std::vector<std::unique_ptr<cudf::scalar>>& scalars) {
+  return makeScalarAndLiteral<kind>(type, var, false, scalars);
 }
 
 } // namespace facebook::velox::cudf_velox

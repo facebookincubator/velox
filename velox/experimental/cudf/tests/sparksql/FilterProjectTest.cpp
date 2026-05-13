@@ -119,6 +119,305 @@ TEST_F(CudfFilterProjectTest, dateAdd) {
   EXPECT_EQ(parseDate("2020-02-29"), dateAdd("2019-01-30", 395));
 }
 
+TEST_F(CudfFilterProjectTest, likeWithEscape) {
+  auto input = makeNullableFlatVector<std::string>(
+      {"a_c", "abc", "abc_", "a%c", std::nullopt, ""});
+  auto data = makeRowVector({input});
+
+  auto plan = PlanBuilder()
+                  .setParseOptions(options_)
+                  .values({data})
+                  .project({"like(c0, '%#_%', '#') AS c1"})
+                  .planNode();
+
+  auto expected = makeRowVector({
+      makeNullableFlatVector<bool>(
+          {true, false, true, false, std::nullopt, false}),
+  });
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfFilterProjectTest, likeConstantPattern) {
+  auto input = makeNullableFlatVector<std::string>(
+      {"abc", "zabc", std::nullopt, "ab", "", "a_c", "a%c"});
+  auto data = makeRowVector({input});
+
+  auto plan = PlanBuilder()
+                  .setParseOptions(options_)
+                  .values({data})
+                  .project({"like(c0, 'a%') AS c1"})
+                  .planNode();
+
+  auto expected = makeRowVector({
+      makeNullableFlatVector<bool>(
+          {true, false, std::nullopt, true, false, true, true}),
+  });
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfFilterProjectTest, likeNullPattern) {
+  auto input = makeNullableFlatVector<std::string>(
+      {"a_c", "abc", "abc_", "a%c", std::nullopt, ""});
+  auto data = makeRowVector({input});
+
+  auto plan = PlanBuilder()
+                  .setParseOptions(options_)
+                  .values({data})
+                  .project({"like(c0, cast(null as varchar)) AS c1"})
+                  .planNode();
+
+  auto expected = makeRowVector({
+      makeNullableFlatVector<bool>({
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+      }),
+  });
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfFilterProjectTest, likeNullEscape) {
+  auto input = makeNullableFlatVector<std::string>(
+      {"a_c", "abc", "abc_", "a%c", std::nullopt, ""});
+  auto data = makeRowVector({input});
+
+  auto plan = PlanBuilder()
+                  .setParseOptions(options_)
+                  .values({data})
+                  .project({"like(c0, '%#_%', cast(null as varchar)) AS c1"})
+                  .planNode();
+
+  auto expected = makeRowVector({
+      makeNullableFlatVector<bool>({
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+      }),
+  });
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfFilterProjectTest, likeEmptyEscape) {
+  auto input = makeNullableFlatVector<std::string>({"abc", "xyz"});
+  auto data = makeRowVector({input});
+
+  auto plan = PlanBuilder()
+                  .setParseOptions(options_)
+                  .values({data})
+                  .project({"like(c0, 'abc', '') AS c1"})
+                  .planNode();
+
+  VELOX_ASSERT_USER_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "Escape string must be a single character");
+}
+
+TEST_F(CudfFilterProjectTest, likeMultiCharacterEscape) {
+  auto input = makeNullableFlatVector<std::string>({"abc", "xyz"});
+  auto data = makeRowVector({input});
+
+  auto plan = PlanBuilder()
+                  .setParseOptions(options_)
+                  .values({data})
+                  .project({"like(c0, 'abc', 'oops') AS c1"})
+                  .planNode();
+
+  VELOX_ASSERT_USER_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "Escape string must be a single character");
+}
+
+TEST_F(CudfFilterProjectTest, likeInvalidEscapeUsage) {
+  auto input = makeNullableFlatVector<std::string>({"test", "testo"});
+  auto data = makeRowVector({input});
+
+  auto plan = PlanBuilder()
+                  .setParseOptions(options_)
+                  .values({data})
+                  .project({"like(c0, 'test_o', 'o') AS c1"})
+                  .planNode();
+
+  VELOX_ASSERT_USER_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "Escape character must be followed by '%', '_' or the escape character itself");
+}
+
+TEST_F(CudfFilterProjectTest, tryLikeInvalidEscapeUsage) {
+  auto input =
+      makeNullableFlatVector<std::string>({"test", "testo", std::nullopt});
+  auto data = makeRowVector({input});
+
+  auto plan = PlanBuilder()
+                  .setParseOptions(options_)
+                  .values({data})
+                  .project({"try(like(c0, 'test_o', 'o')) AS c1"})
+                  .planNode();
+
+  auto expected = makeRowVector({
+      makeNullableFlatVector<bool>({std::nullopt, std::nullopt, std::nullopt}),
+  });
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfFilterProjectTest, likeColumnPatternInvalidEscapeUsage) {
+  auto input = makeNullableFlatVector<std::string>({"abc"});
+  auto pattern = makeNullableFlatVector<std::string>({"a#b"});
+  auto data = makeRowVector({input, pattern});
+
+  auto plan = PlanBuilder()
+                  .setParseOptions(options_)
+                  .values({data})
+                  .project({"like(c0, c1, '#') AS c2"})
+                  .planNode();
+
+  VELOX_ASSERT_USER_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "Escape character must be followed by '%', '_' or the escape character itself");
+}
+
+TEST_F(CudfFilterProjectTest, likeColumnPattern) {
+  auto input = makeNullableFlatVector<std::string>(
+      {"abc", "zabc", std::nullopt, "ab", "", "a_c", "a%c"});
+  auto pattern = makeNullableFlatVector<std::string>(
+      {"a%", "%bc", "a%", std::nullopt, "", "a_d", "a%%"});
+  auto data = makeRowVector({input, pattern});
+
+  auto plan = PlanBuilder()
+                  .setParseOptions(options_)
+                  .values({data})
+                  .project({"like(c0, c1) AS c2"})
+                  .planNode();
+
+  auto expected = makeRowVector({
+      makeNullableFlatVector<bool>(
+          {true, true, std::nullopt, std::nullopt, true, false, true}),
+  });
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfFilterProjectTest, likeColumnPatternWithoutPatternNulls) {
+  auto input =
+      makeNullableFlatVector<std::string>({"abc", std::nullopt, "a_c", ""});
+  auto pattern = makeNullableFlatVector<std::string>({"a%", "%", "a_d", ""});
+  auto data = makeRowVector({input, pattern});
+
+  auto plan = PlanBuilder()
+                  .setParseOptions(options_)
+                  .values({data})
+                  .project({"like(c0, c1) AS c2"})
+                  .planNode();
+
+  auto expected = makeRowVector({
+      makeNullableFlatVector<bool>({true, std::nullopt, false, true}),
+  });
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfFilterProjectTest, likeColumnPatternWithEscape) {
+  auto input = makeNullableFlatVector<std::string>(
+      {"a_c", "abc", "abc_", "a%c", std::nullopt, "a#c"});
+  auto pattern = makeNullableFlatVector<std::string>(
+      {"%#_%", "%#_%", std::nullopt, "a#%%", "%#_%", "a##c"});
+  auto data = makeRowVector({input, pattern});
+
+  auto plan = PlanBuilder()
+                  .setParseOptions(options_)
+                  .values({data})
+                  .project({"like(c0, c1, '#') AS c2"})
+                  .planNode();
+
+  auto expected = makeRowVector({
+      makeNullableFlatVector<bool>(
+          {true, false, std::nullopt, true, std::nullopt, true}),
+  });
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfFilterProjectTest, likeColumnPatternWithEscapeAllNullPatterns) {
+  auto input =
+      makeNullableFlatVector<std::string>({"a_c", "abc", std::nullopt, ""});
+  auto pattern = makeNullableFlatVector<std::string>(
+      {std::nullopt, std::nullopt, std::nullopt, std::nullopt});
+  auto data = makeRowVector({input, pattern});
+
+  auto plan = PlanBuilder()
+                  .setParseOptions(options_)
+                  .values({data})
+                  .project({"like(c0, c1, '#') AS c2"})
+                  .planNode();
+
+  auto expected = makeRowVector({
+      makeNullableFlatVector<bool>(
+          {std::nullopt, std::nullopt, std::nullopt, std::nullopt}),
+  });
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfFilterProjectTest, likeConstantInputColumnPattern) {
+  auto pattern = makeNullableFlatVector<std::string>(
+      {"a%", "%b%", "", std::nullopt, "abc"});
+  auto data = makeRowVector({pattern});
+  auto typed = test_utils::parseAndInferTypedExpr(
+      "like('abc', c0)", data->rowType(), &execCtx_, options_);
+  exec::ExprSet exprSet({typed}, &execCtx_, /*enableConstantFolding*/ false);
+
+  auto result = evaluate(exprSet, data);
+  auto expected =
+      makeNullableFlatVector<bool>({true, true, false, std::nullopt, true});
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfFilterProjectTest, likeConstantNullInputColumnPattern) {
+  auto pattern = makeNullableFlatVector<std::string>(
+      {"a%", "%b%", std::nullopt, "", "abc"});
+  auto data = makeRowVector({pattern});
+  auto typed = test_utils::parseAndInferTypedExpr(
+      "like(cast(null as varchar), c0)", data->rowType(), &execCtx_, options_);
+  exec::ExprSet exprSet({typed}, &execCtx_, /*enableConstantFolding*/ false);
+
+  auto result = evaluate(exprSet, data);
+  auto expected = makeNullableFlatVector<bool>(
+      {std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt});
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfFilterProjectTest, likeConstantInputColumnPatternWithEscape) {
+  auto pattern = makeNullableFlatVector<std::string>(
+      {"%#_%", "a#_c", "a##c", std::nullopt, "a%"});
+  auto data = makeRowVector({pattern});
+  auto typed = test_utils::parseAndInferTypedExpr(
+      "like('a_c', c0, '#')", data->rowType(), &execCtx_, options_);
+  exec::ExprSet exprSet({typed}, &execCtx_, /*enableConstantFolding*/ false);
+
+  auto result = evaluate(exprSet, data);
+  auto expected =
+      makeNullableFlatVector<bool>({true, true, false, std::nullopt, true});
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfFilterProjectTest, likeConstantNullInputColumnPatternWithEscape) {
+  auto pattern = makeNullableFlatVector<std::string>(
+      {"%#_%", "a#_c", "a##c", std::nullopt, "a%"});
+  auto data = makeRowVector({pattern});
+  auto typed = test_utils::parseAndInferTypedExpr(
+      "like(cast(null as varchar), c0, '#')",
+      data->rowType(),
+      &execCtx_,
+      options_);
+  exec::ExprSet exprSet({typed}, &execCtx_, /*enableConstantFolding*/ false);
+
+  auto result = evaluate(exprSet, data);
+  auto expected = makeNullableFlatVector<bool>(
+      {std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt});
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
 TEST_F(CudfFilterProjectTest, startswith) {
   auto input = makeNullableFlatVector<std::string>(
       {"abc", "zabc", std::nullopt, "ab", "", "xyz", "abz"});
