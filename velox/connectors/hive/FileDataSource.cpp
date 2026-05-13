@@ -192,7 +192,7 @@ FileDataSource::FileDataSource(
   tableHandle_ = checkedPointerCast<const FileTableHandle>(tableHandle);
 
   folly::F14FastMap<std::string_view, const FileColumnHandle*> columnHandles;
-  // Column handled keyed on the column alias, the name used in the query.
+  // Column handles keyed on the table column name.
   for (const auto& [_, columnHandle] : assignments) {
     auto handle = checkedPointerCast<const FileColumnHandle>(columnHandle);
     const auto [it, unique] =

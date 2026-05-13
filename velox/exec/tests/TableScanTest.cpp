@@ -6781,5 +6781,43 @@ TEST_F(TableScanTest, fileFormatRuntimeStats) {
   ASSERT_EQ(stats.at("fileFormat.dwrf").sum, 3);
 }
 
+TEST_F(TableScanTest, scanBatchCallback) {
+  auto vectors = makeVectors(3, 1'000);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+
+  uint64_t totalRows{0};
+  uint64_t callbackCount{0};
+  std::string receivedTableName;
+  auto queryCtx = core::QueryCtx::create(executor_.get());
+  queryCtx->setScanBatchCallback([&](const core::ScanBatchEvent& event) {
+    totalRows += event.numRows;
+    receivedTableName = std::string(event.tableName);
+    ++callbackCount;
+  });
+
+  auto plan = tableScanNode();
+  auto task = AssertQueryBuilder(plan)
+                  .splits(makeHiveConnectorSplits({filePath}))
+                  .queryCtx(queryCtx)
+                  .copyResults(pool_.get());
+
+  EXPECT_GT(totalRows, 0);
+  EXPECT_GT(callbackCount, 0);
+  EXPECT_FALSE(receivedTableName.empty());
+}
+
+TEST_F(TableScanTest, scanBatchCallbackNotSetIsNoOp) {
+  auto vectors = makeVectors(3, 1'000);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+
+  auto plan = tableScanNode();
+  auto result = AssertQueryBuilder(plan)
+                    .splits(makeHiveConnectorSplits({filePath}))
+                    .copyResults(pool_.get());
+  EXPECT_GT(result->size(), 0);
+}
+
 } // namespace
 } // namespace facebook::velox::exec

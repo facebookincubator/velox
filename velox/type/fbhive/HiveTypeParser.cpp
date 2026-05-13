@@ -59,6 +59,7 @@ HiveTypeParser::HiveTypeParser() {
   setupMetadata<TokenType::Long, TypeKind::BIGINT>("bigint");
   setupMetadata<TokenType::Date, TypeKind::INTEGER>("date");
   setupMetadata<TokenType::Time, TypeKind::BIGINT>("time");
+  setupMetadata<TokenType::TimeMicroUtc, TypeKind::BIGINT>("time_micro_utc");
   setupMetadata<TokenType::Float, TypeKind::REAL>({"float", "real"});
   setupMetadata<TokenType::Double, TypeKind::DOUBLE>("double");
   setupMetadata<TokenType::Decimal, TypeKind::BIGINT>("decimal");
@@ -124,6 +125,8 @@ Result HiveTypeParser::parseType() {
       return Result{DATE()};
     } else if (nt.metadata->tokenString[0] == "time") {
       return Result{TIME()};
+    } else if (nt.metadata->tokenString[0] == "time_micro_utc") {
+      return Result{TIME_MICRO_UTC()};
     }
     auto scalarType = createScalarType(nt.typeKind());
     VELOX_CHECK_NOT_NULL(

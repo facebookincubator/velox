@@ -2065,6 +2065,44 @@ TEST_F(ParquetReaderTest, readTimeMillis) {
   assertReadWithReaderAndExpected(rowType, *rowReader, data, *leafPool_);
 }
 
+TEST_F(ParquetReaderTest, readTimeMicros) {
+  // Write TIME MICRO UTC data using the parquet writer.
+  // The writer exports Velox TIME MICRO UTC as Arrow time64 with microseconds
+  // unit, which maps to Parquet TIME_MICROS (INT64).
+  const auto rowType = ROW({"time_col"}, {TIME_MICRO_UTC()});
+
+  auto data = makeRowVector(
+      rowType->names(),
+      {makeNullableFlatVector<int64_t>(
+          {0,
+           1,
+           1'000,
+           3'600'000'000,
+           std::nullopt,
+           43'200'000'000,
+           86'399'999'999},
+          TIME_MICRO_UTC())});
+  auto sink = write(data);
+
+  const dwio::common::ReaderOptions readerOpts{
+      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  auto reader = createReaderInMemory(*sink, readerOpts);
+
+  EXPECT_EQ(reader->numberOfRows(), 7ULL);
+
+  auto type = reader->typeWithId();
+  EXPECT_EQ(type->size(), 1ULL);
+  auto col0 = type->childAt(0);
+  EXPECT_TRUE(col0->type()->isTime());
+  EXPECT_TRUE(col0->type()->equivalent(*TIME_MICRO_UTC()));
+
+  auto rowReaderOpts = getReaderOpts(rowType);
+  rowReaderOpts.setScanSpec(makeScanSpec(rowType));
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  assertReadWithReaderAndExpected(rowType, *rowReader, data, *leafPool_);
+}
+
 TEST_F(ParquetReaderTest, readTimeWithMultipleColumns) {
   const auto rowType =
       ROW({"id", "time_col", "name"}, {INTEGER(), TIME(), VARCHAR()});
