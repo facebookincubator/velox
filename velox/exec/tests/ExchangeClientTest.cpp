@@ -68,6 +68,7 @@ class ExchangeClientTest : public testing::Test,
   }
 
   void TearDown() override {
+    executor_->stop();
     exec::test::waitForAllTasksToBeDeleted();
     test::testingShutdownLocalExchangeSource();
   }

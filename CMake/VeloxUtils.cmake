@@ -343,3 +343,56 @@ function(velox_add_grouped_tests)
     endif()
   endforeach()
 endfunction()
+
+# Check if compiler-rt is available and conditionally link libatomic for Clang.
+# compiler-rt provides atomic implementations, so libatomic is only needed when
+# compiler-rt is not installed.
+function(velox_configure_clang_atomic_linker_flags)
+  if(NOT "${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang")
+    return()
+  endif()
+
+  set(COMPILER_RT_FOUND FALSE)
+
+  # Get Clang's resource directory
+  execute_process(
+    COMMAND ${CMAKE_CXX_COMPILER} -print-resource-dir
+    OUTPUT_VARIABLE CLANG_RESOURCE_DIR
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+  )
+
+  if(CLANG_RESOURCE_DIR)
+    # Check for compiler-rt in Clang's resource directory
+    file(
+      GLOB COMPILER_RT_LIBS
+      "${CLANG_RESOURCE_DIR}/lib/*/libclang_rt.builtins*.a"
+      "${CLANG_RESOURCE_DIR}/lib/*/libclang_rt.builtins*.so"
+    )
+    if(COMPILER_RT_LIBS)
+      set(COMPILER_RT_FOUND TRUE)
+    endif()
+  endif()
+
+  # Also check common system library paths for Ubuntu and CentOS
+  if(NOT COMPILER_RT_FOUND)
+    foreach(LIB_PATH /usr/lib /usr/lib64 /usr/lib/x86_64-linux-gnu /usr/lib/aarch64-linux-gnu)
+      if(
+        EXISTS "${LIB_PATH}/libclang_rt.builtins.a"
+        OR EXISTS "${LIB_PATH}/libclang_rt.builtins-x86_64.a"
+        OR EXISTS "${LIB_PATH}/libclang_rt.builtins-aarch64.a"
+      )
+        set(COMPILER_RT_FOUND TRUE)
+        break()
+      endif()
+    endforeach()
+  endif()
+
+  # Only link libatomic if compiler-rt is not found
+  if(NOT COMPILER_RT_FOUND)
+    message(STATUS "compiler-rt not found, linking libatomic for Clang")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -latomic" PARENT_SCOPE)
+  else()
+    message(STATUS "compiler-rt found, skipping libatomic linking")
+  endif()
+endfunction()

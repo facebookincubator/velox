@@ -768,3 +768,194 @@ jobs:
           name: ci-failure-fedora-build
           path: /tmp/ci-failure/failure.json
           retention-days: 1
+
+  asan-ubsan-adapters:
+    name: Linux ASAN/UBSAN with system dependencies
+    # prevent errors when forks ff their main branch
+    if: ${{ github.repository == 'facebookincubator/velox' }}
+    runs-on: 32-core-ubuntu
+    container:
+      image: ghcr.io/facebookincubator/velox-dev:adapters
+      volumes:
+        - /usr:/host_usr
+        - /opt:/host_opt
+    defaults:
+      run:
+        shell: bash
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/ccache
+      VELOX_DEPENDENCY_SOURCE: SYSTEM
+      faiss_SOURCE: BUNDLED
+    outputs:
+      build-outcome: ${{ steps.build.outcome }}
+      build-failure-details: ${{ steps.build-errors.outputs.build-failure-details }}
+      test-outcome: ${{ steps.tests.outcome }}
+      flaky: ${{ steps.tests.outputs.flaky }}
+      failed-tests: ${{ steps.tests.outputs.failed-tests }}
+      failed-cases: ${{ steps.tests.outputs.failed-cases }}
+      failure-details: ${{ steps.tests.outputs.failure-details }}
+    concurrency:
+      group: ${{ github.workflow }}-asan-ubsan-adapters-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - name: Free Disk Space
+        run: |
+          # Re-used from free-disk-space github action.
+          getAvailableSpace() { echo $(df -a $1 | awk 'NR > 1 {avail+=$4} END {print avail}'); }
+          # Show before
+          echo "Original available disk space: " $(getAvailableSpace)
+          # Remove DotNet.
+          rm -rf /host_usr/share/dotnet || true
+          # Remove android
+          rm -rf /host_usr/local/lib/android || true
+          # Remove CodeQL
+          rm -rf /host_opt/hostedtoolcache/CodeQL || true
+          # Show after
+          echo "New available disk space: " $(getAvailableSpace)
+
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Fix git permissions
+        # Usually actions/checkout does this but as we run in a container
+        # it doesn't work
+        run: git config --global --add safe.directory ${GITHUB_WORKSPACE}
+
+      - uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-asan-ubsan-adapters
+
+      - name: Zero Ccache Statistics
+        run: |
+          ccache -sz
+
+      - name: Make Asan/Ubsan Build (debug plus -O1)
+        id: build
+        env:
+          MAKEFLAGS: NUM_THREADS=24 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=14
+        run: |
+          # VELOX_ENABLE_REMOTE_FUNCTIONS is turned off due producing a SEGV if the shared library is used.
+          # Revist once PR 16019 lands that removes thrift.
+          EXTRA_CMAKE_FLAGS=(
+            "-DVELOX_ENABLE_ASAN_UBSAN_SANITIZERS=ON"
+            "-DVELOX_ENABLE_BENCHMARKS=ON"
+            "-DVELOX_ENABLE_EXAMPLES=ON"
+            "-DVELOX_ENABLE_ARROW=ON"
+            "-DVELOX_ENABLE_GEO=ON"
+            "-DVELOX_ENABLE_PARQUET=ON"
+            "-DVELOX_ENABLE_HDFS=ON"
+            "-DVELOX_ENABLE_S3=ON"
+            "-DVELOX_ENABLE_GCS=ON"
+            "-DVELOX_ENABLE_ABFS=ON"
+            "-DVELOX_BUILD_SHARED=ON"
+            "-DVELOX_ENABLE_REMOTE_FUNCTIONS=OFF"
+          )
+          clang++ --version
+          CC=clang CXX=clang++ EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS[*]}" make debug
+
+      - name: Extract build errors
+        id: build-errors
+        if: failure() && steps.build.outcome == 'failure'
+        run: |
+          BUILD_ERRORS=$(grep -E '^.*:(error|fatal error):' /tmp/build-output.log | head -50 || true)
+          if [[ -n $BUILD_ERRORS ]]; then
+            {
+              echo 'build-failure-details<<EOF'
+              echo "$BUILD_ERRORS"
+              echo 'EOF'
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Ccache after
+        run: ccache -s
+
+      - uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-asan-ubsan-adapters
+
+      - name: Run Tests
+        id: tests
+        continue-on-error: true
+        if: steps.build.outcome == 'success'
+        env:
+          LIBHDFS3_CONF: ${{ github.workspace }}/scripts/ci/hdfs-client.xml
+          LSAN_OPTIONS: detect_leaks=0
+        working-directory: _build/debug
+        run: |
+          source /setup-classpath.sh
+          ulimit -n 65536
+          if ctest -j 24 --timeout 1800 --output-on-failure --no-tests=error \
+               --output-junit test-results.xml 2>&1 | tee /tmp/ctest-output.log; then
+            echo "All tests passed on first run."
+          else
+            echo "::warning::Some tests failed. Retrying failed tests..."
+            if ctest --rerun-failed -j 4 --timeout 1800 \
+                 --output-on-failure --output-junit retry-results.xml; then
+              echo "::warning::All failed tests passed on retry — these are flaky tests."
+              echo "flaky=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "::error::Tests failed consistently on retry."
+              "$GITHUB_WORKSPACE/velox/.github/scripts/extract-test-failures.sh" /tmp/ctest-output.log
+              exit 1
+            fi
+          fi
+
+  asan-ubsan-build-status:
+    if: always()
+    needs: asan-ubsan-adapters
+    runs-on: ubuntu-latest
+    name: "BUILD: Linux sanitizers with system dependencies"
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: Report build status
+        run: .github/scripts/report-build-status.sh "Linux ASAN/UBSAN with system dependencies"
+        env:
+          BUILD_OUTCOME: ${{ needs.asan-ubsan-adapters.outputs.build-outcome }}
+          BUILD_FAILURE_DETAILS: ${{ needs.asan-ubsan-adapters.outputs.build-failure-details }}
+
+      - name: Upload failure artifact
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-failure-asan-ubsan-adapters-build
+          path: /tmp/ci-failure/failure.json
+          retention-days: 1
+          if-no-files-found: ignore
+
+  asan-ubsan-test-status:
+    if: always()
+    needs: asan-ubsan-adapters
+    runs-on: ubuntu-latest
+    name: "TEST: Linux sanitizers with system dependencies"
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: Report test status
+        run: .github/scripts/report-test-status.sh "Linux ASAN/UBSAN with system dependencies" "CentOS release with -O1"
+        env:
+          BUILD_OUTCOME: ${{ needs.asan-ubsan-adapters.outputs.build-outcome }}
+          TEST_OUTCOME: ${{ needs.asan-ubsan-adapters.outputs.test-outcome }}
+          FLAKY: ${{ needs.asan-ubsan-adapters.outputs.flaky }}
+          FAILED_TESTS: ${{ needs.asan-ubsan-adapters.outputs.failed-tests }}
+          FAILED_CASES: ${{ needs.asan-ubsan-adapters.outputs.failed-cases }}
+          FAILURE_DETAILS: ${{ needs.asan-ubsan-adapters.outputs.failure-details }}
+
+      - name: Upload failure artifact
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-failure-asan-ubsan-adapters-test
+          path: /tmp/ci-failure/failure.json
+          retention-days: 1
+          if-no-files-found: ignore
