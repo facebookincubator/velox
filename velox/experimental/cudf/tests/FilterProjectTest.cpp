@@ -1688,6 +1688,17 @@ TEST_F(CudfSimpleFilterProjectTest, logicalOrThreeArgLiteralsMixed) {
 }
 
 TEST_F(CudfSimpleFilterProjectTest, modInt) {
+  auto modTinyInt =
+      evaluateOnce<int8_t, int8_t, int8_t>("mod(c0, c1)", 10, 4);
+  EXPECT_EQ(modTinyInt, 2);
+  auto modSmallInt =
+    evaluateOnce<int16_t, int16_t, int16_t>("mod(c0, c1)", 10, 4);
+  EXPECT_EQ(modSmallInt, 2);
+
+  auto modInteger =
+      evaluateOnce<int32_t, int32_t, int32_t>("mod(c0, c1)", 10, 4);
+  EXPECT_EQ(modInteger, 2);
+
   const auto rowType = ROW({"c0", "c1"}, {BIGINT(), BIGINT()});
   EXPECT_FALSE(canEvaluateWithAst("mod(c0, c1)", rowType));
 
@@ -1697,10 +1708,11 @@ TEST_F(CudfSimpleFilterProjectTest, modInt) {
        makeFlatVector<int64_t>({3, -3, 11, -1, 199999, 77, -1})});
   assertExpressionMatchesCpu("mod(c0, c1)", input, rowType);
 
-  auto errorInput = makeRowVector(
-      {makeFlatVector<int64_t>({10}), makeFlatVector<int64_t>({0})});
-  auto exprSet = compileExpression("mod(c0, c1)", rowType);
-  VELOX_ASSERT_THROW(evaluate(*exprSet, errorInput), "Cannot divide by 0");
+  auto testError = [&](int64_t a, int64_t b) {
+        evaluateOnce<int64_t, int64_t, int64_t>("mod(c0, c1)", a, b);
+  };
+
+  VELOX_ASSERT_THROW(testError(10, 0), "Cannot divide by 0");
 }
 
 TEST_F(CudfFilterProjectTest, andAndAndExpr) {
