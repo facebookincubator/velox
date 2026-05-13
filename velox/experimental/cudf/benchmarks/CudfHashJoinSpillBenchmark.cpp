@@ -16,27 +16,31 @@
 
 /// Benchmark for cuDF hash join spilling analysis.
 ///
-/// Two modes controlled by --preload:
+/// The plan is always TableScan → HashJoin → Aggregation. The data source is
+/// controlled by --preload (inherited from CudfTpchBenchmark):
 ///
-///   --preload=false (default)
-///     Full pipeline: TableScan → HashJoin → Aggregation.
-///     Reads all parquet files at query time. Measures scan + join.
+///   --preload=off (default)
+///     Reads parquet files at query time. Measures scan + join.
 ///
-///   --preload=true
+///   --preload=gpu
 ///     Pre-loads parquet data into GPU-resident CudfVectors at startup
-///     (outside the timed path), then feeds them through a ValuesNode.
-///     Measures join only — no scan, no CPU→GPU transfer in the hot path.
-///     Use --repeat to control how many times the loaded data is replayed.
+///     (outside the timed path). The PreloadedTableScanAdapter substitutes
+///     TableScan with PreloadedScanOperator transparently. Measures join only
+///     — no scan, no CPU→GPU transfer in the hot path.
+///
+///   --preload=cpu
+///     Like --preload=gpu, but data is staged as CPU RowVectors and converted
+///     to GPU on demand.
 ///
 /// Usage:
 ///   # Full pipeline (scan + join):
 ///   ./velox_cudf_hashjoin_spill_benchmark \
 ///       --data_path=/data/tpch/pq_sf100_f64 --include_results
 ///
-///   # Preloaded (join only, replay 4x):
+///   # Preloaded GPU (join only):
 ///   ./velox_cudf_hashjoin_spill_benchmark \
 ///       --data_path=/data/tpch/pq_sf10_f64 --include_results \
-///       --preload --repeat=4
+///       --preload=gpu
 
 #include "velox/experimental/cudf/benchmarks/CudfBenchmarkHelpers.h"
 #include "velox/experimental/cudf/benchmarks/CudfTpchBenchmark.h"
@@ -68,9 +72,10 @@ using namespace facebook::velox::exec::test;
 
 /// Extends CudfTpchBenchmark with a purpose-built join-only plan.
 ///
-/// Mode 1 (--preload=false): TableScan-based, reads from disk at query time.
-/// Mode 2 (--preload=true): Pre-loads data into GPU CudfVectors, then uses
-///   ValuesNode to feed pre-converted GPU data directly into the join.
+/// The plan always uses TableScan nodes. When --preload != off, the base
+/// class's PreloadedTableScanAdapter replaces TableScan with
+/// PreloadedScanOperator at runtime, so the scan reads from memory instead
+/// of disk.
 class CudfHashJoinSpillBenchmark : public CudfTpchBenchmark {
  public:
   void runMain(std::ostream& out, RunStats& runStats) override {
@@ -90,76 +95,29 @@ class CudfHashJoinSpillBenchmark : public CudfTpchBenchmark {
         !lineitemInfo.dataFiles.empty(), "No lineitem data files found");
     VELOX_CHECK(!ordersInfo.dataFiles.empty(), "No orders data files found");
 
-    auto lineitemRowType =
-        dwio::common::ColumnSelector(
-            lineitemInfo.type,
-            std::vector<std::string>{
-                "l_orderkey",
-                "l_extendedprice",
-                "l_discount",
-                "l_quantity",
-                "l_partkey"})
-            .buildSelectedReordered();
+    auto lineitemRowType = dwio::common::ColumnSelector(
+                               lineitemInfo.type,
+                               std::vector<std::string>{
+                                   "l_orderkey",
+                                   "l_extendedprice",
+                                   "l_discount",
+                                   "l_quantity",
+                                   "l_partkey"})
+                               .buildSelectedReordered();
     auto ordersRowType =
         dwio::common::ColumnSelector(
             ordersInfo.type,
             std::vector<std::string>{"o_orderkey", "o_custkey", "o_totalprice"})
             .buildSelectedReordered();
 
-    TpchPlan tpchPlan;
+    out << "=== cuDF Hash Join Spill Benchmark ===" << std::endl;
+    out << "Data path: " << FLAGS_data_path << std::endl;
+    out << "Preload mode: " << FLAGS_preload << std::endl;
+    out << "Lineitem files: " << lineitemInfo.dataFiles.size() << std::endl;
+    out << "Orders files: " << ordersInfo.dataFiles.size() << std::endl;
 
-    if (FLAGS_preload != "off") {
-      out << "=== cuDF Hash Join Spill Benchmark (preloaded) ===" << std::endl;
-      out << "Data path: " << FLAGS_data_path << std::endl;
-      out << "Repeat: " << FLAGS_repeat << std::endl;
-
-      out << "Pre-loading lineitem (" << lineitemInfo.dataFiles.size()
-          << " files) directly to GPU..." << std::endl;
-      auto lineitemGpu = cudf_velox::readParquetIntoCudfVectors(
-          lineitemInfo.dataFiles,
-          lineitemRowType,
-          lineitemInfo.fileColumnNames,
-          pool.get(),
-          FLAGS_batch_size);
-      out << "Pre-loading orders (" << ordersInfo.dataFiles.size()
-          << " files) directly to GPU..." << std::endl;
-      auto ordersGpu = cudf_velox::readParquetIntoCudfVectors(
-          ordersInfo.dataFiles,
-          ordersRowType,
-          ordersInfo.fileColumnNames,
-          pool.get(),
-          FLAGS_batch_size);
-
-      int64_t lineitemRows = 0, ordersRows = 0;
-      for (const auto& v : lineitemGpu)
-        lineitemRows += v->size();
-      for (const auto& v : ordersGpu)
-        ordersRows += v->size();
-      out << "Loaded lineitem: " << lineitemRows << " rows in "
-          << lineitemGpu.size() << " batches" << std::endl;
-      out << "Loaded orders: " << ordersRows << " rows in " << ordersGpu.size()
-          << " batches" << std::endl;
-
-      cudf_velox::registerGpuValuesAdapter();
-
-      out << "Building preloaded plan (repeat=" << FLAGS_repeat << ")..."
-          << std::endl;
-      tpchPlan = buildPreloadedJoinPlan(
-          lineitemGpu,
-          ordersGpu,
-          lineitemRowType,
-          ordersRowType,
-          FLAGS_repeat,
-          pool.get());
-    } else {
-      out << "=== cuDF Hash Join Spill Benchmark (scan) ===" << std::endl;
-      out << "Data path: " << FLAGS_data_path << std::endl;
-      out << "Lineitem files: " << lineitemInfo.dataFiles.size() << std::endl;
-      out << "Orders files: " << ordersInfo.dataFiles.size() << std::endl;
-
-      tpchPlan = buildScanJoinPlan(
-          lineitemInfo, ordersInfo, lineitemRowType, ordersRowType, pool.get());
-    }
+    auto tpchPlan = buildScanJoinPlan(
+        lineitemInfo, ordersInfo, lineitemRowType, ordersRowType, pool.get());
 
     out << "Executing..." << std::endl;
     auto [cursor, results] = run(tpchPlan, queryConfigs_);
@@ -202,7 +160,6 @@ class CudfHashJoinSpillBenchmark : public CudfTpchBenchmark {
   }
 
  private:
-  /// Builds the plan using TableScan nodes (original mode).
   TpchPlan buildScanJoinPlan(
       const cudf_velox::TableInfo& lineitemInfo,
       const cudf_velox::TableInfo& ordersInfo,
@@ -244,47 +201,6 @@ class CudfHashJoinSpillBenchmark : public CudfTpchBenchmark {
     tpchPlan.plan = std::move(plan);
     tpchPlan.dataFiles[ordersScanId] = ordersInfo.dataFiles;
     tpchPlan.dataFiles[lineitemScanId] = lineitemInfo.dataFiles;
-    tpchPlan.dataFileFormat = dwio::common::toFileFormat(FLAGS_data_format);
-    return tpchPlan;
-  }
-
-  /// Builds the plan using ValuesNode with pre-loaded GPU CudfVectors.
-  /// The CudfFromVelox passthrough ensures zero CPU→GPU transfer.
-  TpchPlan buildPreloadedJoinPlan(
-      const std::vector<RowVectorPtr>& lineitemGpu,
-      const std::vector<RowVectorPtr>& ordersGpu,
-      const RowTypePtr& lineitemRowType,
-      const RowTypePtr& ordersRowType,
-      int32_t repeatTimes,
-      memory::MemoryPool* pool) {
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-
-    auto ordersSide = PlanBuilder(planNodeIdGenerator, pool)
-                          .values(ordersGpu, false, repeatTimes)
-                          .planNode();
-
-    auto plan =
-        PlanBuilder(planNodeIdGenerator, pool)
-            .values(lineitemGpu, false, repeatTimes)
-            .hashJoin(
-                {"l_orderkey"},
-                {"o_orderkey"},
-                ordersSide,
-                "",
-                {"o_custkey",
-                 "o_totalprice",
-                 "l_extendedprice",
-                 "l_discount",
-                 "l_quantity"})
-            .partialAggregation(
-                {}, {"count(1) as cnt", "sum(l_extendedprice) as total_price"})
-            .localPartition(std::vector<std::string>{})
-            .finalAggregation()
-            .planNode();
-
-    TpchPlan tpchPlan;
-    tpchPlan.plan = std::move(plan);
-    // No dataFiles needed — data comes from ValuesNode.
     tpchPlan.dataFileFormat = dwio::common::toFileFormat(FLAGS_data_format);
     return tpchPlan;
   }
