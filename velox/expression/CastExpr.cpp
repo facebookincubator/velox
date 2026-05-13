@@ -27,6 +27,7 @@
 #include "velox/external/tzdb/time_zone.h"
 #include "velox/functions/lib/RowsTranslationUtil.h"
 #include "velox/type/CastRegistry.h"
+#include "velox/type/TimestampConversion.h"
 #include "velox/type/Type.h"
 #include "velox/type/tz/TimeZoneMap.h"
 #include "velox/vector/ComplexVector.h"
@@ -869,6 +870,15 @@ void CastExpr::applyPeeled(
             toType);
     }
   } else if (
+      fromType->kind() == TypeKind::VARCHAR &&
+      toType->equivalent(*TIMESTAMP_UTC())) {
+    VELOX_USER_CHECK(
+        hooks_->supportsTimestampUtc(),
+        "Cast from {} to {} is not supported",
+        fromType->toString(),
+        toType->toString());
+    result = applyVarcharToTimestampUtcCast(rows, context, input);
+  } else if (
       fromType->kind() == TypeKind::TIMESTAMP &&
       (toType->kind() == TypeKind::VARCHAR ||
        toType->kind() == TypeKind::VARBINARY)) {
@@ -971,6 +981,38 @@ VectorPtr CastExpr::applyTimestampToVarcharCast(
 
   // Update the exact buffer size.
   buffer->setSize(rawBuffer - buffer->asMutable<char>());
+  return result;
+}
+
+VectorPtr CastExpr::applyVarcharToTimestampUtcCast(
+    const SelectivityVector& rows,
+    exec::EvalCtx& context,
+    const BaseVector& input) {
+  VELOX_DCHECK(hooks_->supportsTimestampUtc());
+  VectorPtr result;
+  context.ensureWritable(rows, TIMESTAMP_UTC(), result);
+  (*result).clearNulls(rows);
+  auto* resultVector = result->asFlatVector<Timestamp>();
+  const auto& inputVector = *input.as<SimpleVector<StringView>>();
+
+  const auto parseMode = hooks_->getPolicy() == SparkCastPolicy ||
+          hooks_->getPolicy() == SparkTryCastPolicy
+      ? util::TimestampParseMode::kSparkCast
+      : util::TimestampParseMode::kPrestoCast;
+
+  applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
+    const auto view = hooks_->removeWhiteSpaces(inputVector.valueAt(row));
+    auto conversionResult = util::fromTimestampWithTimezoneString(
+        view.data(), view.size(), parseMode);
+    if (conversionResult.hasError()) {
+      VELOX_USER_FAIL(
+          "{}",
+          makeErrorMessage(
+              input, row, TIMESTAMP_UTC(), conversionResult.error().message()));
+    }
+    resultVector->set(row, conversionResult.value().timestamp);
+  });
+
   return result;
 }
 
