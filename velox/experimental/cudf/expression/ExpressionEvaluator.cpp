@@ -479,9 +479,6 @@ class BinaryFunction : public CudfFunction {
             rhsView = rhsCast->view();
           }
         }
-        if (hasDecimalZero(rhsView, stream, mr)) {
-          VELOX_USER_FAIL("Division by zero");
-        }
         auto lhsScale = -lhsView.type().scale();
         auto rhsScale = -rhsView.type().scale();
         auto outScale = -type_.scale();
@@ -639,9 +636,6 @@ class BinaryFunction : public CudfFunction {
     }
     if (op_ == cudf::binary_operator::DIV && cudf::is_fixed_point(type_)) {
       auto rhsView = asView(inputColumns[0]);
-      if (hasDecimalZero(rhsView, stream, mr)) {
-        VELOX_USER_FAIL("Division by zero");
-      }
       auto lhsScale = -left_->type().scale();
       auto rhsScale = -rhsView.type().scale();
       auto outScale = -type_.scale();

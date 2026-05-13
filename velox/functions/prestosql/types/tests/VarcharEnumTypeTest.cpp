@@ -79,5 +79,18 @@ TEST_F(VarcharEnumTypeTest, basic) {
 TEST_F(VarcharEnumTypeTest, serde) {
   testTypeSerde(colorEnum_);
 }
+
+TEST_F(VarcharEnumTypeTest, valueAt) {
+  EXPECT_EQ(colorEnum_->valueAt("RED"), "red");
+  EXPECT_EQ(colorEnum_->valueAt("BLUE"), "blue");
+  EXPECT_EQ(colorEnum_->valueAt("unknown"), std::nullopt);
+}
+
+TEST_F(VarcharEnumTypeTest, containsKey) {
+  EXPECT_TRUE(colorEnum_->containsKey("RED"));
+  EXPECT_FALSE(colorEnum_->containsKey("red"));
+  EXPECT_FALSE(colorEnum_->containsKey("unknown"));
+}
+
 } // namespace
 } // namespace facebook::velox
