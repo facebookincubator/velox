@@ -21,6 +21,7 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergConnector.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
@@ -250,7 +251,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
           IcebergDeleteFile icebergDeleteFile(
               FileContent::kPositionalDeletes,
               deleteFilePath,
-              fileFomat_,
+              fileFormat_,
               deleteFilePaths[deleteFileName].first,
               getTestFileSize(deleteFilePath));
           deleteFiles.push_back(icebergDeleteFile);
@@ -284,6 +285,64 @@ class HiveIcebergTest : public HiveConnectorTestBase {
  protected:
   std::shared_ptr<dwrf::Config> config_;
   std::function<std::unique_ptr<dwrf::DWRFFlushPolicy>()> flushPolicyFactory_;
+  FileFormat fileFormat_{FileFormat::DWRF};
+
+  /// Helper to create a standard c0 HiveColumnHandle (BIGINT).
+  std::shared_ptr<HiveColumnHandle> makeC0Handle() {
+    return std::make_shared<HiveColumnHandle>(
+        "c0",
+        HiveColumnHandle::ColumnType::kRegular,
+        BIGINT(),
+        BIGINT(),
+        std::vector<common::Subfield>{});
+  }
+
+  /// Helper to create an IcebergColumnHandle with default value.
+  std::shared_ptr<IcebergColumnHandle> makeIcebergHandle(
+      const std::string& name,
+      const TypePtr& type,
+      int fieldId,
+      const std::string& defaultValue) {
+    return std::make_shared<IcebergColumnHandle>(
+        name,
+        HiveColumnHandle::ColumnType::kRegular,
+        type,
+        parquet::ParquetFieldId(fieldId),
+        std::vector<common::Subfield>{},
+        std::optional<std::string>{defaultValue});
+  }
+
+  /// Helper function to test schema evolution with initial default values.
+  void assertDefaultValues(
+      const RowTypePtr& outputType,
+      const RowTypePtr& scanSpecType,
+      const ColumnHandleMap& assignments,
+      const std::vector<RowVectorPtr>& data,
+      const std::vector<RowVectorPtr>& expected,
+      const std::unordered_map<std::string, std::string>& sessionProperties =
+          {}) {
+    // Write data file with old schema
+    auto dataFilePath = TempFilePath::create();
+    writeToFile(dataFilePath->getPath(), data);
+    auto icebergSplits = makeIcebergSplits(dataFilePath->getPath());
+
+    // Build plan
+    auto plan = PlanBuilder()
+                    .startTableScan()
+                    .connectorId(kIcebergConnectorId)
+                    .outputType(outputType)
+                    .dataColumns(scanSpecType)
+                    .assignments(assignments)
+                    .endTableScan()
+                    .planNode();
+
+    // Build query and add session properties if provided
+    auto queryBuilder = AssertQueryBuilder(plan);
+    for (const auto& [key, value] : sessionProperties) {
+      queryBuilder.connectorSessionProperty(kIcebergConnectorId, key, value);
+    }
+    queryBuilder.splits(icebergSplits).assertResults(expected);
+  }
 
   std::vector<std::shared_ptr<ConnectorSplit>> makeIcebergSplits(
       const std::string& dataFilePath,
@@ -304,7 +363,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
           std::make_shared<HiveIcebergSplit>(
               kIcebergConnectorId,
               dataFilePath,
-              fileFomat_,
+              fileFormat_,
               i * splitSize,
               splitSize,
               partitionKeys,
@@ -362,7 +421,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     IcebergDeleteFile icebergDeleteFile(
         FileContent::kPositionalDeletes,
         deleteFilePath->getPath(),
-        fileFomat_,
+        fileFormat_,
         deletedPositionSize,
         getTestFileSize(deleteFilePath->getPath()));
     auto fileSize = filesystems::getFileSystem(path, nullptr)
@@ -373,7 +432,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     return {std::make_shared<HiveIcebergSplit>(
         kIcebergConnectorId,
         path,
-        dwio::common::FileFormat::PARQUET,
+        FileFormat::PARQUET,
         0,
         fileSize,
         partitionKeys,
@@ -384,6 +443,157 @@ class HiveIcebergTest : public HiveConnectorTestBase {
         std::vector<IcebergDeleteFile>{icebergDeleteFile})};
   }
 #endif
+
+  /// Creates a single HiveIcebergSplit from the full data file with info
+  /// columns (e.g. $first_row_id, $data_sequence_number) and optional
+  /// delete files.
+  std::shared_ptr<ConnectorSplit> makeIcebergSplitWithInfoColumns(
+      const std::string& dataFilePath,
+      const std::unordered_map<std::string, std::string>& infoColumns,
+      const std::vector<IcebergDeleteFile>& deleteFiles = {}) {
+    auto file = filesystems::getFileSystem(dataFilePath, nullptr)
+                    ->openFileForRead(dataFilePath);
+    return std::make_shared<HiveIcebergSplit>(
+        kIcebergConnectorId,
+        dataFilePath,
+        fileFormat_,
+        0,
+        file->size(),
+        std::unordered_map<std::string, std::optional<std::string>>{},
+        std::nullopt,
+        std::unordered_map<std::string, std::string>{},
+        nullptr,
+        /*cacheable=*/true,
+        deleteFiles,
+        infoColumns);
+  }
+
+  struct RowLineageTestCase {
+    std::vector<int64_t> values;
+    // Physically stored _row_id values; nullopt entries write a file null.
+    // Absent means no _row_id column in the file; reader derives from
+    // firstRowId. Always paired with storedSequenceNumbers.
+    std::optional<std::vector<std::optional<int64_t>>> storedRowIds;
+    // Physically stored _last_updated_sequence_number values; nullopt entries
+    // write a file null. Absent means no column in the file; reader derives
+    // from dataSequenceNumber. Always paired with storedRowIds.
+    std::optional<std::vector<std::optional<int64_t>>> storedSequenceNumbers;
+    // Passed as first_row_id in the split's info columns.
+    std::optional<int64_t> firstRowId;
+    // Passed as data_sequence_number in the split's info columns.
+    std::optional<int64_t> dataSequenceNumber;
+    // File positions to delete; empty means no delete file is created.
+    std::vector<int64_t> deletePositions;
+    // Subfield filter expression (e.g., "c0 > 20"); empty means no filter.
+    std::string subfieldFilter;
+    // Expected output rows: (c0, _row_id, _last_updated_sequence_number).
+    std::vector<RowVectorPtr> expectedVectors;
+  };
+
+  // Writes tc to a temp data file, executes a table scan over
+  // (c0, _row_id, _last_updated_sequence_number), and asserts the result.
+  void assertRowLineage(const RowLineageTestCase& tc) {
+    VELOX_CHECK_EQ(
+        tc.storedRowIds.has_value(),
+        tc.storedSequenceNumbers.has_value(),
+        "rowIds and sequenceNumbers must both be set or both absent.");
+
+    auto pathColumn = IcebergMetadataColumn::icebergDeleteFilePathColumn();
+    auto posColumn = IcebergMetadataColumn::icebergDeletePosColumn();
+
+    // Build the data file vectors from the explicit column fields.
+    std::vector<RowVectorPtr> inputVectors;
+    if (!tc.storedRowIds.has_value()) {
+      // No physical lineage columns: file contains only c0.
+      inputVectors = {makeRowVector({makeFlatVector<int64_t>(tc.values)})};
+    } else {
+      // Physical lineage columns are present in the file.
+      static const std::vector<std::string> kFileColumns = {
+          "c0", "_row_id", "_last_updated_sequence_number"};
+      inputVectors = {makeRowVector(
+          kFileColumns,
+          {
+              makeFlatVector<int64_t>(tc.values),
+              makeNullableFlatVector<int64_t>(*tc.storedRowIds),
+              makeNullableFlatVector<int64_t>(*tc.storedSequenceNumbers),
+          })};
+    }
+
+    auto dataFilePath = TempFilePath::create();
+    writeToFile(dataFilePath->getPath(), inputVectors);
+
+    std::vector<IcebergDeleteFile> deleteFiles;
+    std::shared_ptr<TempFilePath> deleteFilePath;
+    if (!tc.deletePositions.empty()) {
+      deleteFilePath = TempFilePath::create();
+      writeToFile(
+          deleteFilePath->getPath(),
+          {makeRowVector(
+              {pathColumn->name, posColumn->name},
+              {makeFlatVector<std::string>(
+                   static_cast<vector_size_t>(tc.deletePositions.size()),
+                   [&](auto) { return dataFilePath->getPath(); }),
+               makeFlatVector<int64_t>(tc.deletePositions)})});
+
+      const uint64_t upperBound = static_cast<uint64_t>(*std::max_element(
+          tc.deletePositions.begin(), tc.deletePositions.end()));
+      const auto upperBoundLE = folly::Endian::little(upperBound);
+      const auto encodedUpperBound = encoding::Base64::encode(
+          std::string_view(
+              reinterpret_cast<const char*>(&upperBoundLE),
+              sizeof(upperBoundLE)));
+
+      deleteFiles.push_back(IcebergDeleteFile(
+          FileContent::kPositionalDeletes,
+          deleteFilePath->getPath(),
+          fileFormat_,
+          static_cast<int64_t>(tc.deletePositions.size()),
+          getTestFileSize(deleteFilePath->getPath()),
+          {},
+          {},
+          {{posColumn->id, encodedUpperBound}}));
+    }
+
+    std::unordered_map<std::string, std::string> infoColumns;
+    if (tc.firstRowId.has_value()) {
+      infoColumns[IcebergMetadataColumn::kFirstRowIdInfoColumn] =
+          std::to_string(*tc.firstRowId);
+    }
+    if (tc.dataSequenceNumber.has_value()) {
+      infoColumns[IcebergMetadataColumn::kDataSequenceNumberInfoColumn] =
+          std::to_string(*tc.dataSequenceNumber);
+    }
+
+    auto split = makeIcebergSplitWithInfoColumns(
+        dataFilePath->getPath(), infoColumns, deleteFiles);
+
+    const auto outputType =
+        ROW({"c0", "_row_id", "_last_updated_sequence_number"},
+            {BIGINT(), BIGINT(), BIGINT()});
+    const auto tableDataColumns = ROW({"c0"}, {BIGINT()});
+
+    core::PlanNodePtr plan;
+    if (!tc.subfieldFilter.empty()) {
+      plan = PlanBuilder()
+                 .startTableScan()
+                 .connectorId(kIcebergConnectorId)
+                 .outputType(outputType)
+                 .dataColumns(tableDataColumns)
+                 .subfieldFilter(tc.subfieldFilter)
+                 .endTableScan()
+                 .planNode();
+    } else {
+      plan = PlanBuilder()
+                 .startTableScan()
+                 .connectorId(kIcebergConnectorId)
+                 .outputType(outputType)
+                 .dataColumns(tableDataColumns)
+                 .endTableScan()
+                 .planNode();
+    }
+
+    AssertQueryBuilder(plan).splits({split}).assertResults(tc.expectedVectors);
+  }
 
  private:
   std::map<std::string, std::shared_ptr<TempFilePath>> writeDataFiles(
@@ -586,8 +796,6 @@ class HiveIcebergTest : public HiveConnectorTestBase {
 
     return deletePositionVector;
   }
-
-  dwio::common::FileFormat fileFomat_{dwio::common::FileFormat::DWRF};
 
   std::shared_ptr<IcebergMetadataColumn> pathColumn_ =
       IcebergMetadataColumn::icebergDeleteFilePathColumn();
@@ -854,6 +1062,344 @@ TEST_F(HiveIcebergTest, schemaEvolutionAddColumns) {
   AssertQueryBuilder(plan).splits(icebergSplits).assertResults(expectedVectors);
 }
 
+// Test Iceberg V3 initial-default: a column added after data files were written
+// should return its initial-default value (not NULL) for those historical rows.
+TEST_F(HiveIcebergTest, addColumnWithDefault) {
+  auto newRowType = ROW({"c0", "country"}, {BIGINT(), VARCHAR()});
+
+  std::vector<RowVectorPtr> dataVectors;
+  dataVectors.push_back(makeRowVector({makeFlatVector<int64_t>({1, 2, 3})}));
+
+  ColumnHandleMap assignments;
+  assignments["c0"] = makeC0Handle();
+  assignments["country"] = makeIcebergHandle("country", VARCHAR(), 2, "IN");
+
+  std::vector<RowVectorPtr> expectedVectors;
+  expectedVectors.push_back(makeRowVector(
+      newRowType->names(),
+      {dataVectors[0]->childAt(0),
+       makeFlatVector<std::string>({"IN", "IN", "IN"})}));
+
+  assertDefaultValues(
+      newRowType, newRowType, assignments, dataVectors, expectedVectors);
+}
+
+TEST_F(HiveIcebergTest, addColumnWithDefaultAndAlias) {
+  auto outputType = ROW({"c0", "region"}, {BIGINT(), VARCHAR()});
+  auto dataColumns = ROW({"c0", "country"}, {BIGINT(), VARCHAR()});
+
+  std::vector<RowVectorPtr> dataVectors;
+  dataVectors.push_back(makeRowVector({makeFlatVector<int64_t>({1, 2, 3})}));
+
+  ColumnHandleMap assignments;
+  assignments["c0"] = makeC0Handle();
+  // Key is "region" (alias), but handle refers to "country" (table column)
+  assignments["region"] = makeIcebergHandle("country", VARCHAR(), 2, "IN");
+
+  std::vector<RowVectorPtr> expectedVectors;
+  expectedVectors.push_back(makeRowVector(
+      outputType->names(),
+      {dataVectors[0]->childAt(0),
+       makeFlatVector<std::string>({"IN", "IN", "IN"})}));
+
+  assertDefaultValues(
+      outputType, dataColumns, assignments, dataVectors, expectedVectors);
+}
+
+TEST_F(HiveIcebergTest, fileValueOverridesDefault) {
+  auto rowType = ROW({"c0", "country"}, {BIGINT(), VARCHAR()});
+
+  std::vector<RowVectorPtr> dataVectors;
+  dataVectors.push_back(makeRowVector(
+      {makeFlatVector<int64_t>({1, 2, 3}),
+       makeFlatVector<std::string>({"US", "UK", "CA"})}));
+
+  ColumnHandleMap assignments;
+  assignments["c0"] = makeC0Handle();
+  assignments["country"] = makeIcebergHandle("country", VARCHAR(), 2, "IN");
+
+  // Expected: file values ("US", "UK", "CA"), NOT the default "IN"
+  std::vector<RowVectorPtr> expectedVectors;
+  expectedVectors.push_back(makeRowVector(
+      rowType->names(),
+      {dataVectors[0]->childAt(0), dataVectors[0]->childAt(1)}));
+
+  assertDefaultValues(
+      rowType, rowType, assignments, dataVectors, expectedVectors);
+}
+
+TEST_F(HiveIcebergTest, addColumnWithDefaultAllTypes) {
+  auto newRowType =
+      ROW({"c0",
+           "tiny_val",
+           "small_val",
+           "int_val",
+           "big_val",
+           "real_val",
+           "double_val",
+           "bool_val",
+           "str_val",
+           "short_decimal",
+           "long_decimal",
+           "date_val",
+           "timestamp_val"},
+          {BIGINT(),
+           TINYINT(),
+           SMALLINT(),
+           INTEGER(),
+           BIGINT(),
+           REAL(),
+           DOUBLE(),
+           BOOLEAN(),
+           VARCHAR(),
+           DECIMAL(10, 2),
+           DECIMAL(38, 10),
+           DATE(),
+           TIMESTAMP()});
+
+  std::vector<RowVectorPtr> dataVectors;
+  dataVectors.push_back(makeRowVector({makeFlatVector<int64_t>({1, 2, 3})}));
+
+  ColumnHandleMap assignments;
+  assignments["c0"] = makeC0Handle();
+  assignments["tiny_val"] = makeIcebergHandle("tiny_val", TINYINT(), 2, "10");
+  assignments["small_val"] =
+      makeIcebergHandle("small_val", SMALLINT(), 3, "100");
+  assignments["int_val"] = makeIcebergHandle("int_val", INTEGER(), 4, "1000");
+  assignments["big_val"] = makeIcebergHandle("big_val", BIGINT(), 5, "10000");
+  assignments["real_val"] = makeIcebergHandle("real_val", REAL(), 6, "3.14");
+  assignments["double_val"] =
+      makeIcebergHandle("double_val", DOUBLE(), 7, "2.718");
+  assignments["bool_val"] = makeIcebergHandle("bool_val", BOOLEAN(), 8, "true");
+  assignments["str_val"] =
+      makeIcebergHandle("str_val", VARCHAR(), 9, "default_string");
+  assignments["short_decimal"] =
+      makeIcebergHandle("short_decimal", DECIMAL(10, 2), 10, "99.99");
+  assignments["long_decimal"] = makeIcebergHandle(
+      "long_decimal",
+      DECIMAL(38, 10),
+      11,
+      "123456789012345678901234567.8901234567");
+  assignments["date_val"] =
+      makeIcebergHandle("date_val", DATE(), 12, "2024-01-15");
+  assignments["timestamp_val"] = makeIcebergHandle(
+      "timestamp_val", TIMESTAMP(), 13, "2024-01-15 10:30:00");
+
+  std::vector<RowVectorPtr> expectedVectors;
+  expectedVectors.push_back(makeRowVector(
+      newRowType->names(),
+      {dataVectors[0]->childAt(0),
+       makeFlatVector<int8_t>({10, 10, 10}),
+       makeFlatVector<int16_t>({100, 100, 100}),
+       makeFlatVector<int32_t>({1000, 1000, 1000}),
+       makeFlatVector<int64_t>({10000, 10000, 10000}),
+       makeFlatVector<float>({3.14f, 3.14f, 3.14f}),
+       makeFlatVector<double>({2.718, 2.718, 2.718}),
+       makeFlatVector<bool>({true, true, true}),
+       makeFlatVector<std::string>(
+           {"default_string", "default_string", "default_string"}),
+       makeFlatVector<int64_t>({9999, 9999, 9999}, DECIMAL(10, 2)),
+       makeFlatVector<int128_t>(
+           {HugeInt::parse("1234567890123456789012345678901234567"),
+            HugeInt::parse("1234567890123456789012345678901234567"),
+            HugeInt::parse("1234567890123456789012345678901234567")},
+           DECIMAL(38, 10)),
+       makeFlatVector<int32_t>({19737, 19737, 19737}, DATE()),
+       makeFlatVector<Timestamp>(
+           {Timestamp(1705314600, 0),
+            Timestamp(1705314600, 0),
+            Timestamp(1705314600, 0)})}));
+
+  assertDefaultValues(
+      newRowType,
+      newRowType,
+      assignments,
+      dataVectors,
+      expectedVectors,
+      {{HiveConfig::kReadTimestampPartitionValueAsLocalTimeSession, "false"}});
+}
+
+TEST_F(HiveIcebergTest, addColumnWithInvalidDefault) {
+  auto newRowType = ROW({"c0", "age"}, {BIGINT(), INTEGER()});
+
+  std::vector<RowVectorPtr> dataVectors;
+  dataVectors.push_back(makeRowVector({makeFlatVector<int64_t>({1, 2, 3})}));
+  auto dataFilePath = TempFilePath::create();
+  writeToFile(dataFilePath->getPath(), dataVectors);
+  auto icebergSplits = makeIcebergSplits(dataFilePath->getPath());
+
+  ColumnHandleMap assignments;
+  assignments["c0"] = makeC0Handle();
+  assignments["age"] = makeIcebergHandle("age", INTEGER(), 2, "IN");
+
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(kIcebergConnectorId)
+                  .outputType(newRowType)
+                  .dataColumns(newRowType)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .planNode();
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).splits(icebergSplits).copyResults(pool()),
+      "Invalid");
+}
+
+TEST_F(HiveIcebergTest, addColumnWithEmptyStringDefault) {
+  auto newRowType = ROW({"c0", "name"}, {BIGINT(), VARCHAR()});
+
+  std::vector<RowVectorPtr> dataVectors;
+  dataVectors.push_back(makeRowVector({makeFlatVector<int64_t>({1, 2, 3})}));
+
+  ColumnHandleMap assignments;
+  assignments["c0"] = makeC0Handle();
+  assignments["name"] = makeIcebergHandle("name", VARCHAR(), 2, "");
+
+  std::vector<RowVectorPtr> expectedVectors;
+  expectedVectors.push_back(makeRowVector(
+      newRowType->names(),
+      {dataVectors[0]->childAt(0), makeFlatVector<std::string>({"", "", ""})}));
+
+  assertDefaultValues(
+      newRowType, newRowType, assignments, dataVectors, expectedVectors, {});
+}
+
+TEST_F(HiveIcebergTest, defaultValueWithDeletesAndFilters) {
+  auto newRowType = ROW({"c0", "country"}, {BIGINT(), VARCHAR()});
+
+  // Write data file with old schema (only c0) containing rows 1-10.
+  std::vector<RowVectorPtr> dataVectors;
+  dataVectors.push_back(makeRowVector(
+      {makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6, 7, 8, 9, 10})}));
+  auto dataFilePath = TempFilePath::create();
+  writeToFile(dataFilePath->getPath(), dataVectors);
+
+  // Create delete file that deletes positions 1, 3, 5 (rows 2, 4, 6).
+  auto deleteFilePath = TempFilePath::create();
+  std::vector<int64_t> deletePositions = {1, 3, 5};
+  auto pathColumn = IcebergMetadataColumn::icebergDeleteFilePathColumn();
+  auto posColumn = IcebergMetadataColumn::icebergDeletePosColumn();
+  writeToFile(
+      deleteFilePath->getPath(),
+      {makeRowVector(
+          {pathColumn->name, posColumn->name},
+          {makeFlatVector<std::string>(
+               3, [&](vector_size_t) { return dataFilePath->getPath(); }),
+           makeFlatVector<int64_t>(deletePositions)})});
+
+  IcebergDeleteFile icebergDeleteFile(
+      FileContent::kPositionalDeletes,
+      deleteFilePath->getPath(),
+      dwio::common::FileFormat::DWRF,
+      3,
+      getTestFileSize(deleteFilePath->getPath()));
+
+  ColumnHandleMap assignments;
+  assignments["c0"] = makeC0Handle();
+  assignments["country"] = makeIcebergHandle("country", VARCHAR(), 2, "IN");
+
+  // Test 1: No filter - rows 1,3,5,7,8,9,10 (after deletes: 2,4,6 removed)
+  {
+    auto icebergSplits =
+        makeIcebergSplits(dataFilePath->getPath(), {icebergDeleteFile}, {}, 1);
+    std::vector<RowVectorPtr> expectedVectors;
+    expectedVectors.push_back(makeRowVector(
+        newRowType->names(),
+        {makeFlatVector<int64_t>({1, 3, 5, 7, 8, 9, 10}),
+         makeFlatVector<std::string>(
+             {"IN", "IN", "IN", "IN", "IN", "IN", "IN"})}));
+
+    auto plan = PlanBuilder()
+                    .startTableScan()
+                    .connectorId(kIcebergConnectorId)
+                    .outputType(newRowType)
+                    .dataColumns(newRowType)
+                    .assignments(assignments)
+                    .endTableScan()
+                    .planNode();
+    AssertQueryBuilder(plan)
+        .splits(icebergSplits)
+        .assertResults(expectedVectors);
+  }
+
+  // Test 2: Filter on file column (c0 > 5) with deletes
+  // After deletes: 1,3,5,7,8,9,10 remain. Filter c0 > 5: 7,8,9,10
+  {
+    auto icebergSplits =
+        makeIcebergSplits(dataFilePath->getPath(), {icebergDeleteFile}, {}, 1);
+    std::vector<RowVectorPtr> expectedVectors;
+    expectedVectors.push_back(makeRowVector(
+        newRowType->names(),
+        {makeFlatVector<int64_t>({7, 8, 9, 10}),
+         makeFlatVector<std::string>({"IN", "IN", "IN", "IN"})}));
+
+    auto plan = PlanBuilder()
+                    .startTableScan()
+                    .connectorId(kIcebergConnectorId)
+                    .outputType(newRowType)
+                    .dataColumns(newRowType)
+                    .assignments(assignments)
+                    .endTableScan()
+                    .filter("c0 > 5")
+                    .planNode();
+    AssertQueryBuilder(plan)
+        .splits(icebergSplits)
+        .assertResults(expectedVectors);
+  }
+
+  // Test 3: Filter on default value column (country = 'IN') with deletes
+  // All remaining rows should match since default is 'IN'
+  {
+    auto icebergSplits =
+        makeIcebergSplits(dataFilePath->getPath(), {icebergDeleteFile}, {}, 1);
+    std::vector<RowVectorPtr> expectedVectors;
+    expectedVectors.push_back(makeRowVector(
+        newRowType->names(),
+        {makeFlatVector<int64_t>({1, 3, 5, 7, 8, 9, 10}),
+         makeFlatVector<std::string>(
+             {"IN", "IN", "IN", "IN", "IN", "IN", "IN"})}));
+
+    auto plan = PlanBuilder()
+                    .startTableScan()
+                    .connectorId(kIcebergConnectorId)
+                    .outputType(newRowType)
+                    .dataColumns(newRowType)
+                    .assignments(assignments)
+                    .endTableScan()
+                    .filter("country = 'IN'")
+                    .planNode();
+    AssertQueryBuilder(plan)
+        .splits(icebergSplits)
+        .assertResults(expectedVectors);
+  }
+
+  // Test 4: Combined filter (c0 > 3 AND country = 'IN') with deletes
+  // After deletes: 1,3,5,7,8,9,10. Filter c0 > 3: 5,7,8,9,10
+  {
+    auto icebergSplits =
+        makeIcebergSplits(dataFilePath->getPath(), {icebergDeleteFile}, {}, 1);
+    std::vector<RowVectorPtr> expectedVectors;
+    expectedVectors.push_back(makeRowVector(
+        newRowType->names(),
+        {makeFlatVector<int64_t>({5, 7, 8, 9, 10}),
+         makeFlatVector<std::string>({"IN", "IN", "IN", "IN", "IN"})}));
+
+    auto plan = PlanBuilder()
+                    .startTableScan()
+                    .connectorId(kIcebergConnectorId)
+                    .outputType(newRowType)
+                    .dataColumns(newRowType)
+                    .assignments(assignments)
+                    .endTableScan()
+                    .filter("c0 > 3 AND country = 'IN'")
+                    .planNode();
+    AssertQueryBuilder(plan)
+        .splits(icebergSplits)
+        .assertResults(expectedVectors);
+  }
+}
+
 // Test reading partition columns from Hive-migrated tables.
 // This tests the adaptColumns method handling partition columns that are not
 // stored in the data file but provided via partitionKeys map.
@@ -941,7 +1487,7 @@ TEST_F(HiveIcebergTest, skipDeleteFileByPositionUpperBound) {
   IcebergDeleteFile deleteFile(
       FileContent::kPositionalDeletes,
       deleteFilePath->getPath(),
-      dwio::common::FileFormat::DWRF,
+      FileFormat::DWRF,
       3,
       getTestFileSize(deleteFilePath->getPath()),
       {},
@@ -965,7 +1511,7 @@ TEST_F(HiveIcebergTest, skipDeleteFileByPositionUpperBound) {
   auto split = std::make_shared<HiveIcebergSplit>(
       kIcebergConnectorId,
       dataFilePath->getPath(),
-      dwio::common::FileFormat::DWRF,
+      FileFormat::DWRF,
       static_cast<uint64_t>(fileSize / 2),
       static_cast<uint64_t>(fileSize / 2),
       std::unordered_map<std::string, std::optional<std::string>>{},
@@ -979,6 +1525,149 @@ TEST_F(HiveIcebergTest, skipDeleteFileByPositionUpperBound) {
   createDuckDbTable({makeRowVector(
       {makeFlatVector<int64_t>(makeContinuousIncreasingValues(50, 50))})});
   assertQuery(plan, {split}, "SELECT * FROM tmp", 0);
+}
+
+// Row lineage scenarios for _row_id and _last_updated_sequence_number:
+//   1. Pre-V3: no info columns, no physical columns → both null.
+//   2. V3 new insert: no physical columns; derived from info columns.
+//   3. V3 rewrite: physical values take precedence over info columns.
+//   4. Physical columns all null: falls back to info column derivation.
+//   5. Mixed null/non-null: null slots derived, non-null slots preserved.
+//   6. first_row_id = 0 is a valid value.
+//   7. Positional deletes: _row_id uses file-absolute positions.
+//   8. Subfield filter: _row_id uses file-absolute positions, not output
+//   indices.
+TEST_F(HiveIcebergTest, rowLineage) {
+  folly::SingletonVault::singleton()->registrationComplete();
+
+  static const std::vector<std::string> kOutputNames = {
+      "c0", "_row_id", "_last_updated_sequence_number"};
+
+  // 1. Pre-V3.
+  assertRowLineage({
+      .values = {1, 2, 3},
+      .expectedVectors = {makeRowVector(
+          kOutputNames,
+          {
+              makeFlatVector<int64_t>({1, 2, 3}),
+              makeNullableFlatVector<int64_t>(
+                  {std::nullopt, std::nullopt, std::nullopt}),
+              makeNullableFlatVector<int64_t>(
+                  {std::nullopt, std::nullopt, std::nullopt}),
+          })},
+  });
+
+  // 2. V3 new insert.
+  assertRowLineage({
+      .values = {10, 20, 30},
+      .firstRowId = 100,
+      .dataSequenceNumber = 7,
+      .expectedVectors = {makeRowVector(
+          kOutputNames,
+          {
+              makeFlatVector<int64_t>({10, 20, 30}),
+              makeFlatVector<int64_t>({100, 101, 102}),
+              makeFlatVector<int64_t>({7, 7, 7}),
+          })},
+  });
+
+  // 3. V3 rewrite: physical values must not be overridden by info columns.
+  assertRowLineage({
+      .values = {1, 2, 3},
+      .storedRowIds = {{500, 501, 502}},
+      .storedSequenceNumbers = {{3, 5, 3}},
+      .firstRowId = 999,
+      .dataSequenceNumber = 99,
+      .expectedVectors = {makeRowVector(
+          kOutputNames,
+          {
+              makeFlatVector<int64_t>({1, 2, 3}),
+              makeFlatVector<int64_t>({500, 501, 502}),
+              makeFlatVector<int64_t>({3, 5, 3}),
+          })},
+  });
+
+  // 4. Physical columns all null: falls back to info column derivation.
+  assertRowLineage({
+      .values = {1, 2, 3},
+      .storedRowIds = {{std::nullopt, std::nullopt, std::nullopt}},
+      .storedSequenceNumbers = {{std::nullopt, std::nullopt, std::nullopt}},
+      .firstRowId = 50,
+      .dataSequenceNumber = 42,
+      .expectedVectors = {makeRowVector(
+          kOutputNames,
+          {
+              makeFlatVector<int64_t>({1, 2, 3}),
+              makeFlatVector<int64_t>({50, 51, 52}),
+              makeFlatVector<int64_t>({42, 42, 42}),
+          })},
+  });
+
+  // 5. Mixed null/non-null: null slots derived from info columns, non-null
+  // preserved.
+  //   pos 0: _row_id=null→10+0=10, seq_num=null→42
+  //   pos 1: _row_id=99,           seq_num=5
+  //   pos 2: _row_id=null→10+2=12, seq_num=null→42
+  //   pos 3: _row_id=77,           seq_num=10
+  assertRowLineage({
+      .values = {10, 20, 30, 40},
+      .storedRowIds = {{std::nullopt, 99, std::nullopt, 77}},
+      .storedSequenceNumbers = {{std::nullopt, 5, std::nullopt, 10}},
+      .firstRowId = 10,
+      .dataSequenceNumber = 42,
+      .expectedVectors = {makeRowVector(
+          kOutputNames,
+          {
+              makeFlatVector<int64_t>({10, 20, 30, 40}),
+              makeFlatVector<int64_t>({10, 99, 12, 77}),
+              makeFlatVector<int64_t>({42, 5, 42, 10}),
+          })},
+  });
+
+  // 6. first_row_id = 0 is a valid value; _row_id starts at zero.
+  assertRowLineage({
+      .values = {5, 6, 7},
+      .firstRowId = 0,
+      .dataSequenceNumber = 5,
+      .expectedVectors = {makeRowVector(
+          kOutputNames,
+          {
+              makeFlatVector<int64_t>({5, 6, 7}),
+              makeFlatVector<int64_t>({0, 1, 2}),
+              makeFlatVector<int64_t>({5, 5, 5}),
+          })},
+  });
+
+  // 7. Positional deletes: _row_id uses file-absolute positions.
+  assertRowLineage({
+      .values = {10, 20, 30, 40, 50},
+      .firstRowId = 200,
+      .dataSequenceNumber = 42,
+      .deletePositions = {1, 3},
+      .expectedVectors = {makeRowVector(
+          kOutputNames,
+          {
+              makeFlatVector<int64_t>({10, 30, 50}),
+              makeFlatVector<int64_t>({200, 202, 204}),
+              makeFlatVector<int64_t>({42, 42, 42}),
+          })},
+  });
+
+  // 8. Subfield filter: _row_id uses file-absolute positions, not output
+  // indices.
+  assertRowLineage({
+      .values = {10, 20, 30, 40, 50},
+      .firstRowId = 100,
+      .dataSequenceNumber = 15,
+      .subfieldFilter = "c0 > 20",
+      .expectedVectors = {makeRowVector(
+          kOutputNames,
+          {
+              makeFlatVector<int64_t>({30, 40, 50}),
+              makeFlatVector<int64_t>({102, 103, 104}),
+              makeFlatVector<int64_t>({15, 15, 15}),
+          })},
+  });
 }
 
 #ifdef VELOX_ENABLE_PARQUET

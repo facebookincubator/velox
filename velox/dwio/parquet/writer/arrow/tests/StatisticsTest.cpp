@@ -20,6 +20,7 @@
 
 #include "arrow/testing/builder.h"
 
+#include "velox/common/io/IoStatistics.h"
 #include "velox/common/testutil/TempFilePath.h"
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 #include "velox/dwio/parquet/writer/arrow/FileWriter.h"
@@ -485,7 +486,11 @@ class TestStatistics : public PrimitiveTypedTest<TestType> {
         memory::memoryManager()->addRootPool("StatisticsTest");
     std::shared_ptr<facebook::velox::memory::MemoryPool> leafPool =
         rootPool->addLeafChild("StatisticsTest");
-    dwio::common::ReaderOptions readerOptions{leafPool.get()};
+    auto dataIoStats = std::make_shared<velox::io::IoStatistics>();
+    auto metadataIoStats = std::make_shared<velox::io::IoStatistics>();
+    dwio::common::ReaderOptions readerOptions(leafPool.get());
+    readerOptions.setDataIoStats(dataIoStats.get());
+    readerOptions.setMetadataIoStats(metadataIoStats.get());
     auto input = std::make_unique<dwio::common::BufferedInput>(
         std::make_shared<LocalReadFile>(filePath->getPath()),
         readerOptions.memoryPool());
@@ -1030,7 +1035,11 @@ class TestStatisticsSortOrder : public ::testing::Test {
         memory::memoryManager()->addRootPool("StatisticsTest");
     std::shared_ptr<facebook::velox::memory::MemoryPool> leafPool =
         rootPool->addLeafChild("StatisticsTest");
-    dwio::common::ReaderOptions readerOptions{leafPool.get()};
+    auto dataIoStats = std::make_shared<velox::io::IoStatistics>();
+    auto metadataIoStats = std::make_shared<velox::io::IoStatistics>();
+    dwio::common::ReaderOptions readerOptions(leafPool.get());
+    readerOptions.setDataIoStats(dataIoStats.get());
+    readerOptions.setMetadataIoStats(metadataIoStats.get());
     auto input = std::make_unique<dwio::common::BufferedInput>(
         std::make_shared<LocalReadFile>(filePath->getPath()),
         readerOptions.memoryPool());
@@ -1325,7 +1334,11 @@ TEST_F(TestStatisticsSortOrderFLBA, decimalSortOrder) {
       memory::memoryManager()->addRootPool("StatisticsTest");
   std::shared_ptr<facebook::velox::memory::MemoryPool> leafPool =
       rootPool->addLeafChild("StatisticsTest");
-  dwio::common::ReaderOptions readerOptions{leafPool.get()};
+  auto dataIoStats = std::make_shared<velox::io::IoStatistics>();
+  auto metadataIoStats = std::make_shared<velox::io::IoStatistics>();
+  dwio::common::ReaderOptions readerOptions(leafPool.get());
+  readerOptions.setDataIoStats(dataIoStats.get());
+  readerOptions.setMetadataIoStats(metadataIoStats.get());
   auto input = std::make_unique<dwio::common::BufferedInput>(
       std::make_shared<LocalReadFile>(filePath->getPath()),
       readerOptions.memoryPool());

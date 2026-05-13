@@ -533,10 +533,12 @@ class ConnectorQueryCtx {
     return cancellationToken_;
   }
 
+  /// Deprecated: Use FileConfig::kSelectiveNimbleReaderEnabledSession instead.
   bool selectiveNimbleReaderEnabled() const {
     return selectiveNimbleReaderEnabled_;
   }
 
+  /// Deprecated: Use connector session properties instead.
   void setSelectiveNimbleReaderEnabled(bool value) {
     selectiveNimbleReaderEnabled_ = value;
   }

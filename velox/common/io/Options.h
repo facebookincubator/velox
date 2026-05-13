@@ -18,6 +18,7 @@
 
 #include <folly/Executor.h>
 
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/io/IoStatistics.h"
 #include "velox/common/memory/Memory.h"
 
@@ -66,13 +67,38 @@ class ReaderOptions {
   static constexpr int32_t kDefaultCoalesceBytes = 128 << 20; // 128M
   static constexpr int32_t kDefaultPrefetchRowGroups = 1;
 
+  explicit ReaderOptions(velox::memory::MemoryPool* pool) : pool_{pool} {
+    VELOX_CHECK_NOT_NULL(pool_);
+  }
+
+  // Deprecated: use pool-only constructor + setDataIoStats/setMetadataIoStats.
   ReaderOptions(
       velox::memory::MemoryPool* pool,
       IoStatistics* dataIoStats,
       IoStatistics* metadataIoStats)
       : pool_{pool},
         dataIoStats_{dataIoStats},
-        metadataIoStats_{metadataIoStats} {}
+        metadataIoStats_{metadataIoStats} {
+    VELOX_CHECK_NOT_NULL(pool_);
+  }
+
+  ReaderOptions& setDataIoStats(IoStatistics* stats) {
+    VELOX_CHECK_NULL(dataIoStats_, "dataIoStats already set");
+    dataIoStats_ = stats;
+    return *this;
+  }
+
+  ReaderOptions& setMetadataIoStats(IoStatistics* stats) {
+    VELOX_CHECK_NULL(metadataIoStats_, "metadataIoStats already set");
+    metadataIoStats_ = stats;
+    return *this;
+  }
+
+  ReaderOptions& setIndexIoStats(IoStatistics* stats) {
+    VELOX_CHECK_NULL(indexIoStats_, "indexIoStats already set");
+    indexIoStats_ = stats;
+    return *this;
+  }
 
   /// Modifies the autoPreloadLength
   ReaderOptions& setAutoPreloadLength(uint64_t len) {
@@ -167,10 +193,15 @@ class ReaderOptions {
     return metadataIoStats_;
   }
 
+  IoStatistics* indexIoStats() const {
+    return indexIoStats_;
+  }
+
  protected:
   velox::memory::MemoryPool* pool_;
-  IoStatistics* dataIoStats_;
-  IoStatistics* metadataIoStats_;
+  IoStatistics* dataIoStats_{nullptr};
+  IoStatistics* metadataIoStats_{nullptr};
+  IoStatistics* indexIoStats_{nullptr};
 
   std::shared_ptr<folly::Executor> ioExecutor_;
 

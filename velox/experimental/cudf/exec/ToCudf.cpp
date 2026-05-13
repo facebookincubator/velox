@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/CudfGroupby.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
+#include "velox/experimental/cudf/exec/CudfNestedLoopJoin.h"
 #include "velox/experimental/cudf/exec/CudfOperator.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
 #include "velox/experimental/cudf/exec/CudfReduce.h"
@@ -36,6 +37,7 @@
 #include "velox/exec/Values.h"
 
 #include <cudf/detail/nvtx/ranges.hpp>
+#include <cudf/utilities/memory_resource.hpp>
 
 #include <cuda.h>
 
@@ -316,8 +318,8 @@ void registerCudf() {
   const std::string mrMode = CudfConfig::getInstance().memoryResource;
   auto mr = cudf_velox::createMemoryResource(
       mrMode, CudfConfig::getInstance().memoryPercent);
-  cudf::set_current_device_resource(mr.get());
-  mr_ = mr;
+  cudf::set_current_device_resource(mr);
+  mr_ = std::move(mr);
 
   const auto& outputMrMode = CudfConfig::getInstance().outputMemoryResource;
   if (!outputMrMode.empty() && outputMrMode != mrMode) {
@@ -329,6 +331,8 @@ void registerCudf() {
 
   exec::Operator::registerOperator(
       std::make_unique<CudfHashJoinBridgeTranslator>());
+  exec::Operator::registerOperator(
+      std::make_unique<CudfNestedLoopJoinBridgeTranslator>());
   CudfDriverAdapter cda{CudfConfig::getInstance().allowCpuFallback};
   exec::DriverAdapter cudfAdapter{kCudfAdapterName, {}, cda};
   exec::DriverFactory::registerAdapter(cudfAdapter);
@@ -345,8 +349,8 @@ void registerCudf() {
 }
 
 void unregisterCudf() {
-  output_mr_ = nullptr;
-  mr_ = nullptr;
+  output_mr_.reset();
+  mr_.reset();
   exec::DriverFactory::adapters.erase(
       std::remove_if(
           exec::DriverFactory::adapters.begin(),

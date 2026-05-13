@@ -16,11 +16,15 @@
 
 #include <velox/type/Type.h>
 
+#include <folly/dynamic.h>
+
 #include "velox/common/EnumDefine.h"
+#include "velox/type/TypeSerde.h"
 
 #include <boost/algorithm/string.hpp>
 #include <fmt/format.h>
 #include <folly/Demangle.h>
+#include <folly/hash/Hash.h>
 #include <re2/re2.h>
 
 #include <sstream>
@@ -257,6 +261,80 @@ TypePtr Type::create(const folly::dynamic& obj) {
   }
 }
 
+template <TypeKind KIND>
+folly::dynamic ScalarType<KIND>::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = "Type";
+  obj["type"] = TypeTraits<KIND>::name;
+  return obj;
+}
+
+template folly::dynamic ScalarType<TypeKind::BOOLEAN>::serialize() const;
+template folly::dynamic ScalarType<TypeKind::TINYINT>::serialize() const;
+template folly::dynamic ScalarType<TypeKind::SMALLINT>::serialize() const;
+template folly::dynamic ScalarType<TypeKind::INTEGER>::serialize() const;
+template folly::dynamic ScalarType<TypeKind::BIGINT>::serialize() const;
+template folly::dynamic ScalarType<TypeKind::REAL>::serialize() const;
+template folly::dynamic ScalarType<TypeKind::DOUBLE>::serialize() const;
+template folly::dynamic ScalarType<TypeKind::VARCHAR>::serialize() const;
+template folly::dynamic ScalarType<TypeKind::VARBINARY>::serialize() const;
+template folly::dynamic ScalarType<TypeKind::TIMESTAMP>::serialize() const;
+template folly::dynamic ScalarType<TypeKind::HUGEINT>::serialize() const;
+template folly::dynamic ScalarType<TypeKind::UNKNOWN>::serialize() const;
+template folly::dynamic ScalarType<TypeKind::OPAQUE>::serialize() const;
+
+template <TypeKind KIND>
+folly::dynamic DecimalType<KIND>::serialize() const {
+  auto obj = ScalarType<KIND>::serialize();
+  obj["type"] = name();
+  obj["precision"] = precision();
+  obj["scale"] = scale();
+  return obj;
+}
+
+template folly::dynamic DecimalType<TypeKind::BIGINT>::serialize() const;
+template folly::dynamic DecimalType<TypeKind::HUGEINT>::serialize() const;
+
+folly::dynamic UnknownType::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = "Type";
+  obj["type"] = TypeTraits<TypeKind::UNKNOWN>::name;
+  return obj;
+}
+
+folly::dynamic IntervalDayTimeType::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = "IntervalDayTimeType";
+  obj["type"] = name();
+  return obj;
+}
+
+TypePtr IntervalDayTimeType::deserialize(const folly::dynamic& /*obj*/) {
+  return IntervalDayTimeType::get();
+}
+
+folly::dynamic IntervalYearMonthType::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = "IntervalYearMonthType";
+  obj["type"] = name();
+  return obj;
+}
+
+TypePtr IntervalYearMonthType::deserialize(const folly::dynamic& /*obj*/) {
+  return IntervalYearMonthType::get();
+}
+
+folly::dynamic DateType::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = "DateType";
+  obj["type"] = name();
+  return obj;
+}
+
+TypePtr DateType::deserialize(const folly::dynamic& /*obj*/) {
+  return DateType::get();
+}
+
 // static
 void Type::registerSerDe() {
   auto& registry = velox::DeserializationRegistryForSharedPtr();
@@ -268,6 +346,7 @@ void Type::registerSerDe() {
   registry.Register(
       "IntervalYearMonthType", IntervalYearMonthType::deserialize);
   registry.Register("DateType", DateType::deserialize);
+  registry.Register("TimestampUtcType", TimestampUtcType::deserialize);
   registry.Register("TimeType", TimeTypeFactory::deserialize);
 }
 
@@ -1026,6 +1105,10 @@ VELOX_DEFINE_SCALAR_ACCESSOR(VARBINARY);
 
 #undef VELOX_DEFINE_SCALAR_ACCESSOR
 
+TypePtr TIMESTAMP_UTC() {
+  return TimestampUtcType::get();
+}
+
 TypePtr UNKNOWN() {
   return TypeFactory<TypeKind::UNKNOWN>::create();
 }
@@ -1363,6 +1446,7 @@ const SingletonTypeMap& singletonBuiltInTypes() {
       {"VARCHAR", VARCHAR()},
       {"VARBINARY", VARBINARY()},
       {"TIMESTAMP", TIMESTAMP()},
+      {"TIMESTAMP UTC", TIMESTAMP_UTC()},
       {"INTERVAL DAY TO SECOND", INTERVAL_DAY_TIME()},
       {"INTERVAL YEAR TO MONTH", INTERVAL_YEAR_MONTH()},
       {"DATE", DATE()},
@@ -1547,6 +1631,13 @@ const auto& typeParameterKindNames() {
 
 VELOX_DEFINE_ENUM_NAME(TypeParameterKind, typeParameterKindNames);
 
+folly::dynamic TimestampUtcType::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = "TimestampUtcType";
+  obj["type"] = name();
+  return obj;
+}
+
 template <TimePrecision kPrecision, bool kLocalTime>
 folly::dynamic TimeType<kPrecision, kLocalTime>::serialize() const {
   folly::dynamic obj = folly::dynamic::object;
@@ -1700,6 +1791,68 @@ std::string TimeMicroPrecisionUtcType::toCompactIso8601(int64_t microseconds) {
   }
   return result;
 }
+
+// Default hash for leaf scalar types: mix in kind + RTTI to distinguish
+// singleton overlay types that share a TypeKind with their base (e.g.,
+// IntervalDayTimeType and plain BIGINT both have TypeKind::BIGINT;
+// DateType and IntervalYearMonthType both share TypeKind::INTEGER).
+// NOTE: This default is only correct when equality is fully determined by
+// (TypeKind, typeid). Types with additional state MUST override hash() just
+// as they override equals(): see RowType, DecimalType, OpaqueType, and the
+// compound types (ArrayType, MapType, FunctionType).
+size_t Type::hash() const noexcept {
+  // Offset by 1 to differentiate bool type from empty hash.
+  return folly::hash::hash_combine(
+      static_cast<size_t>(kind()) + 1,
+      std::hash<std::type_index>{}(std::type_index(typeid(*this))));
+}
+
+size_t RowType::hash() const noexcept {
+  size_t result = static_cast<size_t>(TypeKind::ROW) + 1;
+  for (uint32_t i = 0; i < size(); ++i) {
+    result =
+        folly::hash::hash_combine(result, std::hash<std::string>{}(names_[i]));
+    result = folly::hash::hash_combine(result, children_[i]->hash());
+  }
+  return result;
+}
+
+size_t ArrayType::hash() const noexcept {
+  return folly::hash::hash_combine(
+      static_cast<size_t>(TypeKind::ARRAY) + 1, child_->hash());
+}
+
+size_t MapType::hash() const noexcept {
+  size_t result = static_cast<size_t>(TypeKind::MAP) + 1;
+  result = folly::hash::hash_combine(result, keyType_->hash());
+  result = folly::hash::hash_combine(result, valueType_->hash());
+  return result;
+}
+
+size_t FunctionType::hash() const noexcept {
+  size_t result = static_cast<size_t>(TypeKind::FUNCTION) + 1;
+  for (const auto& child : children_) {
+    result = folly::hash::hash_combine(result, child->hash());
+  }
+  return result;
+}
+
+size_t OpaqueType::hash() const noexcept {
+  return folly::hash::hash_combine(
+      static_cast<size_t>(TypeKind::OPAQUE) + 1,
+      std::hash<std::type_index>{}(typeIndex_));
+}
+
+template <TypeKind KIND>
+size_t DecimalType<KIND>::hash() const noexcept {
+  size_t result = static_cast<size_t>(KIND) + 1;
+  result = folly::hash::hash_combine(result, static_cast<size_t>(precision()));
+  result = folly::hash::hash_combine(result, static_cast<size_t>(scale()));
+  return result;
+}
+
+template size_t DecimalType<TypeKind::BIGINT>::hash() const noexcept;
+template size_t DecimalType<TypeKind::HUGEINT>::hash() const noexcept;
 
 std::string stringifyTruncatedElementList(
     size_t size,

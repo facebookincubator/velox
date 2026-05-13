@@ -202,7 +202,8 @@ void CacheInputStream::loadSync(const Region& region) {
     folly::SemiFuture<bool> cacheLoadWait(false);
     cache::RawFileCacheKey key{fileNum_, region.offset};
     clearCachePin();
-    pin_ = cache_->findOrCreate(key, region.length, &cacheLoadWait);
+    pin_ = cache_->findOrCreate(
+        key, region.length, /*contiguous=*/false, &cacheLoadWait);
     if (pin_.empty()) {
       VELOX_CHECK(cacheLoadWait.valid());
       uint64_t waitUs{0};
@@ -242,7 +243,7 @@ void CacheInputStream::loadSync(const Region& region) {
     ioStats_->read().increment(region.length);
     ioStats_->queryThreadIoLatencyUs().increment(storageReadUs);
     ioStats_->storageReadLatencyUs().increment(storageReadUs);
-    ioStats_->incTotalScanTime(storageReadUs * 1'000);
+    ioStats_->incTotalScanTimeNs(storageReadUs * 1'000);
     entry->setExclusiveToShared(cacheable_);
   } while (pin_.empty());
 }
@@ -363,15 +364,16 @@ void CacheInputStream::loadPosition() {
       entry->offset() + entry->size() > positionInFile) {
     // The position is inside the range of 'entry'.
     const auto offsetInEntry = positionInFile - entry->offset();
-    if (entry->data().numPages() == 0) {
-      run_ = reinterpret_cast<uint8_t*>(entry->tinyData());
+    if (entry->hasContiguousData()) {
+      run_ = reinterpret_cast<uint8_t*>(entry->contiguousData());
       runSize_ = entry->size();
       offsetInRun_ = offsetInEntry;
       offsetOfRun_ = 0;
     } else {
-      entry->data().findRun(offsetInEntry, &runIndex_, &offsetInRun_);
+      entry->nonContiguousData().findRun(
+          offsetInEntry, &runIndex_, &offsetInRun_);
       offsetOfRun_ = offsetInEntry - offsetInRun_;
-      const auto run = entry->data().runAt(runIndex_);
+      const auto run = entry->nonContiguousData().runAt(runIndex_);
       run_ = run.data();
       runSize_ = memory::AllocationTraits::pageBytes(run.numPages());
       if (offsetOfRun_ + runSize_ > entry->size()) {
