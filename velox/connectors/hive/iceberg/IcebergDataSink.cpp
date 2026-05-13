@@ -24,6 +24,8 @@
 #include <utility>
 #include <vector>
 
+#include "dwio/common/SortingWriter.h"
+#include "exec/SortBuffer.h"
 #include "velox/common/base/Fs.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/connectors/hive/PartitionIdGenerator.h"
@@ -115,7 +117,8 @@ IcebergInsertTableHandle::IcebergInsertTableHandle(
     dwio::common::FileFormat tableStorageFormat,
     IcebergPartitionSpecPtr partitionSpec,
     std::optional<common::CompressionKind> compressionKind,
-    const std::unordered_map<std::string, std::string>& serdeParameters)
+    const std::unordered_map<std::string, std::string>& serdeParameters,
+    const std::vector<std::shared_ptr<const IcebergSortingColumn>>& sortedBy)
     : HiveInsertTableHandle(
           std::vector<HiveColumnHandlePtr>(
               inputColumns.begin(),
@@ -128,7 +131,8 @@ IcebergInsertTableHandle::IcebergInsertTableHandle(
           nullptr,
           false,
           std::make_shared<const HiveInsertFileNameGenerator>()),
-      partitionSpec_(partitionSpec) {
+      partitionSpec_(partitionSpec),
+      sortedBy_(sortedBy) {
   VELOX_USER_CHECK(
       !inputColumns_.empty(),
       "Input columns cannot be empty for Iceberg tables.");
@@ -233,6 +237,29 @@ RowTypePtr createPartitionRowType(
 
 } // namespace
 
+IcebergSortingColumn::IcebergSortingColumn(
+    const std::string& sortColumn,
+    const core::SortOrder& sortOrder)
+    : sortColumn_(sortColumn), sortOrder_(sortOrder) {
+  VELOX_USER_CHECK(!sortColumn_.empty(), "Iceberg sort column must be set.");
+}
+
+folly::dynamic IcebergSortingColumn::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = "IcebergSortingColumn";
+  obj["columnName"] = sortColumn_;
+  obj["sortOrder"] = sortOrder_.serialize();
+  return obj;
+}
+
+std::shared_ptr<IcebergSortingColumn> IcebergSortingColumn::deserialize(
+    const folly::dynamic& obj,
+    void* context) {
+  const std::string columnName = obj["columnName"].asString();
+  const auto sortOrder = core::SortOrder::deserialize(obj["sortOrder"]);
+  return std::make_shared<IcebergSortingColumn>(columnName, sortOrder);
+}
+
 IcebergDataSink::IcebergDataSink(
     RowTypePtr inputType,
     IcebergInsertTableHandlePtr insertTableHandle,
@@ -305,6 +332,24 @@ IcebergDataSink::IcebergDataSink(
               : nullptr),
       partitionRowType_(std::move(partitionRowType)) {
   commitPartitionValue_.resize(maxOpenWriters_);
+
+  const auto& sortedBy = insertTableHandle->sortedBy();
+  if (!sortedBy.empty()) {
+    sortColumnIndices_.reserve(sortedBy.size());
+    sortCompareFlags_.reserve(sortedBy.size());
+    for (auto i = 0; i < sortedBy.size(); ++i) {
+      auto columnIndex =
+          inputType_->getChildIdxIfExists(sortedBy[i]->sortColumn());
+      if (columnIndex.has_value()) {
+        sortColumnIndices_.push_back(columnIndex.value());
+        sortCompareFlags_.push_back(
+            {sortedBy[i]->sortOrder().isNullsFirst(),
+             sortedBy[i]->sortOrder().isAscending(),
+             false,
+             CompareFlags::NullHandlingMode::kNullAsValue});
+      }
+    }
+  }
 }
 
 std::vector<std::string> IcebergDataSink::commitMessage() const {
@@ -340,9 +385,8 @@ std::vector<std::string> IcebergDataSink::commitMessage() const {
       // clang-format on
       if (!commitPartitionValue_.empty() &&
           !commitPartitionValue_[i].isNull()) {
-        commitData["partitionDataJson"] = folly::toJson(
-            folly::dynamic::object(
-                "partitionValues", commitPartitionValue_[i]));
+        commitData["partitionDataJson"] = folly::toJson(folly::dynamic::object(
+            "partitionValues", commitPartitionValue_[i]));
       }
       auto commitDataJson = folly::toJson(commitData);
       commitTasks.push_back(commitDataJson);
