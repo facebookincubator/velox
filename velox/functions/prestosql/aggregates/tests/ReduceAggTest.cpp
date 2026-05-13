@@ -275,6 +275,29 @@ TEST_F(ReduceAggTest, nonConstantInitialValueGroupBy) {
       "Initial value in reduce_agg must be constant");
 }
 
+TEST_F(ReduceAggTest, allNullInputSkipsInitialValueCheck) {
+  auto data = makeRowVector(
+      {"k", "c0", "c1"},
+      {
+          makeFlatVector<int32_t>({1, 1, 2, 2}),
+          makeConstant<int64_t>(std::nullopt, 4),
+          makeArrayVector<int64_t>({{1, 2}, {1, 2}, {2, 20}, {2, 20}}),
+      });
+
+  auto expected = makeRowVector({
+      makeFlatVector<int32_t>({1, 2}),
+      makeNullableArrayVector<int64_t>({std::nullopt, std::nullopt}),
+  });
+
+  testAggregations(
+      {data},
+      {"k"},
+      {"reduce_agg(c0, c1, "
+       "(s, x) -> concat(s, array[x]), "
+       "(s, s2) -> concat(s, s2))"},
+      {expected});
+}
+
 TEST_F(ReduceAggTest, differentInputAndCombine) {
   auto data = makeRowVector(
       {"k", "c0", "c1", "m"},
