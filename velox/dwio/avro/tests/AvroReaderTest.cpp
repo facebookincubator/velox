@@ -18,9 +18,12 @@
 #include <avro/DataFile.hh>
 #include <avro/Generic.hh>
 
+#include "velox/common/base/BitUtil.h"
 #include "velox/common/base/VeloxException.h"
 #include "velox/common/testutil/TempFilePath.h"
 #include "velox/dwio/avro/RegisterAvroReader.h"
+#include "velox/dwio/common/Mutation.h"
+#include "velox/type/Filter.h"
 #include "velox/type/Type.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -29,6 +32,11 @@ using namespace facebook::velox::test;
 namespace facebook::velox::avro {
 namespace {
 using namespace facebook::velox::common::testutil;
+
+class TestDeltaColumnUpdater : public dwio::common::DeltaColumnUpdater {
+ public:
+  void update(const RowSet&, VectorPtr&) override {}
+};
 
 class AvroReaderTest : public testing::Test, public VectorTestBase {
  protected:
@@ -68,20 +76,35 @@ class AvroReaderTest : public testing::Test, public VectorTestBase {
       std::optional<dwio::common::RowReaderOptions> rowOptions =
           std::nullopt) const {
     auto options = rowOptions.value_or(dwio::common::RowReaderOptions{});
-    setScanSpec(*reader.rowType(), options);
     return reader.createRowReader(options);
   }
 
   VectorPtr readRows(
       dwio::common::Reader& reader,
       uint64_t maxRows,
-      uint64_t expectedCount,
+      uint64_t expectedScannedRows,
       std::optional<dwio::common::RowReaderOptions> rowOptions =
           std::nullopt) const {
-    auto rowReader = createRowReader(reader, rowOptions);
+    auto options = rowOptions.value_or(dwio::common::RowReaderOptions{});
+    if (!options.scanSpec()) {
+      setScanSpec(
+          options.requestedType() ? *options.requestedType()
+                                  : *reader.rowType(),
+          options);
+    }
+    auto rowReader = createRowReader(reader, options);
     VectorPtr result;
-    EXPECT_EQ(rowReader->next(maxRows, result), expectedCount);
+    EXPECT_EQ(rowReader->next(maxRows, result), expectedScannedRows);
     return result;
+  }
+
+  void expectRequestedTypeRejected(
+      const std::shared_ptr<TempFilePath>& filePath,
+      RowTypePtr requestedType) const {
+    auto reader = createReader(filePath);
+    dwio::common::RowReaderOptions rowOptions;
+    rowOptions.setRequestedType(std::move(requestedType));
+    EXPECT_THROW(createRowReader(*reader, rowOptions), VeloxUserError);
   }
 
   static std::shared_ptr<TempFilePath> writeAvroFile(
@@ -397,6 +420,103 @@ class AvroReaderTest : public testing::Test, public VectorTestBase {
           payloadsArray.emplace_back(payloadDatum);
 
           writer.write(datum);
+        });
+    return filePath;
+  }
+
+  std::shared_ptr<TempFilePath> writePruningRecord() const {
+    const std::string schemaJson = R"JSON(
+    {
+      "type": "record",
+      "name": "PruningRecord",
+      "fields": [
+        {"name": "nums", "type": {"type": "array", "items": "int"}},
+        {"name": "limited", "type": {"type": "array", "items": "int"}},
+        {"name": "props", "type": {"type": "map", "values": "int"}},
+        {"name": "valueProps", "type": {"type": "map", "values": "int"}}
+      ]
+    })JSON";
+
+    auto filePath = writeAvroFile(
+        schemaJson, [](auto& writer, const ::avro::ValidSchema& schema) {
+          ::avro::GenericDatum datum(schema.root());
+          auto& record = datum.value<::avro::GenericRecord>();
+
+          auto& nums = record.fieldAt(0).value<::avro::GenericArray>().value();
+          for (auto value : {1, 2, 3, 4}) {
+            nums.emplace_back(static_cast<int32_t>(value));
+          }
+
+          auto& limited =
+              record.fieldAt(1).value<::avro::GenericArray>().value();
+          for (auto value : {10, 20, 30}) {
+            limited.emplace_back(static_cast<int32_t>(value));
+          }
+
+          auto addMapEntry =
+              [](auto& map, const std::string& key, int32_t value) {
+                map.emplace_back(key, ::avro::GenericDatum(value));
+              };
+
+          auto& props = record.fieldAt(2).value<::avro::GenericMap>().value();
+          addMapEntry(props, "k1", 1);
+          addMapEntry(props, "k2", 2);
+          addMapEntry(props, "k3", 3);
+
+          auto& valueProps =
+              record.fieldAt(3).value<::avro::GenericMap>().value();
+          addMapEntry(valueProps, "k1", 1);
+          addMapEntry(valueProps, "k2", 2);
+          addMapEntry(valueProps, "k3", 3);
+
+          writer.write(datum);
+        });
+    return filePath;
+  }
+
+  std::shared_ptr<TempFilePath> writeRequestedTypeRecord() const {
+    const std::string schemaJson = R"JSON(
+    {
+      "type": "record",
+      "name": "RequestedTypeRecord",
+      "fields": [
+        {"name": "rawDate", "type": {"type": "int", "logicalType": "date"}},
+        {"name": "meta", "type": {
+          "type": "record",
+          "name": "RequestedMetaRecord",
+          "fields": [
+            {"name": "tsMillis", "type": {"type": "long", "logicalType": "timestamp-millis"}},
+            {"name": "tsMicros", "type": {"type": "long", "logicalType": "timestamp-micros"}},
+            {"name": "label", "type": "string"},
+            {"name": "count", "type": "int"}
+          ]
+        }},
+        {"name": "unused", "type": "string"}
+      ]
+    })JSON";
+
+    auto filePath = writeAvroFile(
+        schemaJson, [](auto& writer, const ::avro::ValidSchema& schema) {
+          ::avro::GenericDatum datum(schema.root());
+          auto& record = datum.value<::avro::GenericRecord>();
+          auto writeRow = [&](int32_t rawDate,
+                              int64_t tsMillis,
+                              int64_t tsMicros,
+                              const std::string& label,
+                              int32_t count,
+                              const std::string& unused) {
+            record.fieldAt(0).value<int32_t>() = rawDate;
+            auto& meta = record.fieldAt(1).value<::avro::GenericRecord>();
+            meta.fieldAt(0).value<int64_t>() = tsMillis;
+            meta.fieldAt(1).value<int64_t>() = tsMicros;
+            meta.fieldAt(2).value<std::string>() = label;
+            meta.fieldAt(3).value<int32_t>() = count;
+            record.fieldAt(2).value<std::string>() = unused;
+            writer.write(datum);
+          };
+
+          writeRow(11, 1'700, 3'500, "alpha", 1, "unused-a");
+          writeRow(22, 2'700, 4'500, "beta", 2, "unused-b");
         });
     return filePath;
   }
@@ -1019,5 +1139,565 @@ TEST_F(AvroReaderTest, scanBatchBytesRespected) {
   auto expected = makeRowVector({makeFlatVector<int>({11})});
   assertEqualVectors(expected, thirdBatch);
 }
+
+// requestedType absent; ScanSpec absent.
+
+TEST_F(AvroReaderTest, readsFileSchemaWithoutRequestedTypeOrScanSpec) {
+  const auto filePath = writeRequestedTypeRecord();
+  auto reader = createReader(filePath);
+
+  auto rowReader = createRowReader(*reader, dwio::common::RowReaderOptions{});
+  VectorPtr result;
+  ASSERT_EQ(rowReader->next(5, result), 2);
+  ASSERT_TRUE(*result->type() == *reader->rowType());
+
+  auto expectedMeta = makeRowVector(
+      {"tsMillis", "tsMicros", "label", "count"},
+      {makeFlatVector<Timestamp>(
+           {Timestamp::fromMillis(1'700), Timestamp::fromMillis(2'700)}),
+       makeFlatVector<Timestamp>(
+           {Timestamp::fromMicros(3'500), Timestamp::fromMicros(4'500)}),
+       makeFlatVector<std::string>({"alpha", "beta"}),
+       makeFlatVector<int32_t>({1, 2})});
+  auto expected = makeRowVector(
+      {"rawDate", "meta", "unused"},
+      {makeFlatVector<int32_t>({11, 22}, DATE()),
+       expectedMeta,
+       makeFlatVector<std::string>({"unused-a", "unused-b"})});
+  assertEqualVectors(expected, result);
+}
+
+// requestedType present; ScanSpec absent.
+
+TEST_F(AvroReaderTest, requestedTypeWorksWithoutScanSpec) {
+  const auto filePath = writeRequestedTypeRecord();
+  auto reader = createReader(filePath);
+
+  auto requestedType = ROW({"meta"}, {ROW({"label"}, {VARCHAR()})});
+  dwio::common::RowReaderOptions rowOptions;
+  rowOptions.setRequestedType(requestedType);
+
+  auto rowReader = createRowReader(*reader, rowOptions);
+  VectorPtr result;
+  ASSERT_EQ(rowReader->next(5, result), 2);
+  ASSERT_TRUE(*result->type() == *requestedType);
+
+  auto expectedMeta = makeRowVector(
+      {"label"}, {makeFlatVector<std::string>({"alpha", "beta"})});
+  auto expected = makeRowVector({"meta"}, {expectedMeta});
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(AvroReaderTest, requestedTypeRejectsMissingField) {
+  const auto filePath = writeRequestedTypeRecord();
+  expectRequestedTypeRejected(filePath, ROW({"missing"}, {VARCHAR()}));
+  expectRequestedTypeRejected(
+      filePath, ROW({"meta"}, {ROW({"missing"}, {VARCHAR()})}));
+}
+
+TEST_F(AvroReaderTest, requestedTypeRejectsTypeMismatch) {
+  const auto requestedTypeFilePath = writeRequestedTypeRecord();
+  const auto pruningFilePath = writePruningRecord();
+  const auto allTypesFilePath = writeAllTypesRecord();
+  expectRequestedTypeRejected(
+      requestedTypeFilePath, ROW({"unused"}, {BIGINT()}));
+  expectRequestedTypeRejected(
+      pruningFilePath, ROW({"nums"}, {ARRAY(BIGINT())}));
+  expectRequestedTypeRejected(
+      requestedTypeFilePath, ROW({"rawDate"}, {INTEGER()}));
+  expectRequestedTypeRejected(
+      allTypesFilePath, ROW({"timeMillisCol"}, {INTEGER()}));
+  expectRequestedTypeRejected(
+      requestedTypeFilePath, ROW({"meta"}, {ROW({"tsMillis"}, {BIGINT()})}));
+  expectRequestedTypeRejected(
+      allTypesFilePath, ROW({"decimalBytesCol"}, {VARBINARY()}));
+}
+
+TEST_F(AvroReaderTest, requestedTypeValidatesDecimal) {
+  const auto filePath = writeAllTypesRecord();
+
+  dwio::common::RowReaderOptions rowOptions;
+  rowOptions.setRequestedType(ROW({"decimalBytesCol"}, {DECIMAL(20, 2)}));
+
+  auto reader = createReader(filePath);
+  auto rowReader = createRowReader(*reader, rowOptions);
+  VectorPtr result;
+  ASSERT_EQ(rowReader->next(5, result), 2);
+
+  auto expected = makeRowVector(
+      {"decimalBytesCol"},
+      {makeFlatVector<int128_t>(
+          {static_cast<int128_t>(12345), static_cast<int128_t>(-4200)},
+          DECIMAL(20, 2))});
+  assertEqualVectors(expected, result);
+
+  expectRequestedTypeRejected(
+      filePath, ROW({"decimalBytesCol"}, {DECIMAL(5, 2)}));
+  expectRequestedTypeRejected(
+      filePath, ROW({"decimalBytesCol"}, {DECIMAL(9, 3)}));
+}
+
+// requestedType absent; ScanSpec present.
+
+TEST_F(AvroReaderTest, scanSpecProjectsNestedRowFields) {
+  const auto filePath = writeRequestedTypeRecord();
+  auto reader = createReader(filePath);
+
+  auto spec = std::make_shared<common::ScanSpec>("root");
+  auto* meta = spec->addField("meta", 0);
+  meta->addField("label", 0);
+
+  dwio::common::RowReaderOptions rowOptions;
+  rowOptions.setScanSpec(spec);
+  auto result = readRows(*reader, 5, 2, rowOptions);
+
+  auto expectedMeta = makeRowVector(
+      {"label"}, {makeFlatVector<std::string>({"alpha", "beta"})});
+  auto expected = makeRowVector({"meta"}, {expectedMeta});
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(AvroReaderTest, scanSpecProjectsMissingConstantFields) {
+  const auto filePath = writeRequestedTypeRecord();
+  auto reader = createReader(filePath);
+
+  auto spec = std::make_shared<common::ScanSpec>("root");
+  spec->addField("ds", 0)->setConstantValue(
+      BaseVector::createConstant(VARCHAR(), "2026-05-06", 1, pool()));
+  auto* meta = spec->addField("meta", 1);
+  meta->addField("label", 0);
+  meta->addField("region", 1)
+      ->setConstantValue(
+          BaseVector::createConstant(VARCHAR(), "us", 1, pool()));
+
+  dwio::common::RowReaderOptions rowOptions;
+  rowOptions.setScanSpec(spec);
+  auto result = readRows(*reader, 5, 2, rowOptions);
+
+  auto expectedMeta = makeRowVector(
+      {"label", "region"},
+      {makeFlatVector<std::string>({"alpha", "beta"}),
+       BaseVector::createConstant(VARCHAR(), "us", 2, pool())});
+  auto expected = makeRowVector(
+      {"ds", "meta"},
+      {BaseVector::createConstant(VARCHAR(), "2026-05-06", 2, pool()),
+       expectedMeta});
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(AvroReaderTest, scanSpecAppliesNestedFilterBeforeProjection) {
+  const auto filePath = writeRequestedTypeRecord();
+  auto reader = createReader(filePath);
+
+  auto spec = std::make_shared<common::ScanSpec>("root");
+  auto* meta = spec->addField("meta", 0);
+  meta->addField("label", 0);
+  spec->getOrCreateChild(common::Subfield("meta.count"))
+      ->setFilter(common::createBigintValues({2}, false));
+
+  dwio::common::RowReaderOptions rowOptions;
+  rowOptions.setScanSpec(spec);
+  auto result = readRows(*reader, 5, 2, rowOptions);
+
+  auto expectedMeta =
+      makeRowVector({"label"}, {makeFlatVector<std::string>({"beta"})});
+  auto expected = makeRowVector({"meta"}, {expectedMeta});
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(AvroReaderTest, scanSpecProjectsNestedArrayAndMapFields) {
+  auto filePath = writeComplexNestedRecord();
+  auto reader = createReader(filePath);
+
+  auto spec = std::make_shared<common::ScanSpec>("root");
+  auto* payloads = spec->addField("payloads", 0);
+  auto* payload = payloads->addArrayElementField();
+  auto* properties = payload->addField("properties", 0);
+  auto* property = properties->addMapValueField();
+  property->addField("values", 0);
+
+  dwio::common::RowReaderOptions rowOptions;
+  rowOptions.setScanSpec(spec);
+  auto result = readRows(*reader, 5, 1, rowOptions);
+
+  const auto& rowType = result->type()->asRow();
+  ASSERT_EQ(rowType.size(), 1);
+  EXPECT_EQ(rowType.nameOf(0), "payloads");
+  const auto& payloadsType = rowType.childAt(0)->asArray();
+  const auto& payloadType = payloadsType.elementType()->asRow();
+  ASSERT_EQ(payloadType.size(), 1);
+  EXPECT_EQ(payloadType.nameOf(0), "properties");
+  const auto& propertiesType = payloadType.childAt(0)->asMap();
+  const auto& propertyType = propertiesType.valueType()->asRow();
+  ASSERT_EQ(propertyType.size(), 1);
+  EXPECT_EQ(propertyType.nameOf(0), "values");
+
+  ASSERT_EQ(result->size(), 1);
+  auto payloadsVector = result->as<RowVector>()->childAt(0)->as<ArrayVector>();
+  ASSERT_EQ(payloadsVector->sizeAt(0), 1);
+  auto payloadVector = payloadsVector->elements()->as<RowVector>();
+  auto propertiesVector = payloadVector->childAt(0)->as<MapVector>();
+  ASSERT_GT(propertiesVector->size(), 0);
+  ASSERT_EQ(propertiesVector->sizeAt(0), 1);
+  EXPECT_EQ(
+      propertiesVector->mapKeys()->asFlatVector<StringView>()->valueAt(0).str(),
+      "k1");
+  auto propertyVector = propertiesVector->mapValues()->as<RowVector>();
+  auto valuesVector = propertyVector->childAt(0)->as<ArrayVector>();
+  ASSERT_GT(valuesVector->size(), 0);
+  ASSERT_EQ(valuesVector->sizeAt(0), 2);
+  auto values = valuesVector->elements()->asFlatVector<int32_t>();
+  EXPECT_EQ(values->valueAt(0), 1);
+  EXPECT_EQ(values->valueAt(1), 2);
+}
+
+TEST_F(AvroReaderTest, scanSpecPrunesArrayAndMapEntries) {
+  auto filePath = writePruningRecord();
+  auto reader = createReader(filePath);
+
+  auto spec = std::make_shared<common::ScanSpec>("root");
+  auto* nums = spec->addFieldRecursively("nums", *ARRAY(INTEGER()), 0);
+  nums->childByName(common::ScanSpec::kArrayElementsFieldName)
+      ->setFilter(common::createBigintValues({2, 4}, false));
+
+  spec->addFieldRecursively("limited", *ARRAY(INTEGER()), 1)
+      ->setMaxArrayElementsCount(2);
+
+  auto* props =
+      spec->addFieldRecursively("props", *MAP(VARCHAR(), INTEGER()), 2);
+  props->childByName(common::ScanSpec::kMapKeysFieldName)
+      ->setFilter(
+          std::make_unique<common::BytesValues>(
+              std::vector<std::string>{"k2"}, false));
+
+  auto* valueProps =
+      spec->addFieldRecursively("valueProps", *MAP(VARCHAR(), INTEGER()), 3);
+  valueProps->childByName(common::ScanSpec::kMapValuesFieldName)
+      ->setFilter(common::createBigintValues({1, 3}, false));
+
+  dwio::common::RowReaderOptions rowOptions;
+  rowOptions.setScanSpec(spec);
+  auto result = readRows(*reader, 5, 1, rowOptions);
+
+  auto expected = makeRowVector(
+      {"nums", "limited", "props", "valueProps"},
+      {makeArrayVector<int32_t>({{2, 4}}),
+       makeArrayVector<int32_t>({{10, 20}}),
+       makeMapVector<std::string, int32_t>({{{"k2", 2}}}),
+       makeMapVector<std::string, int32_t>({{{"k1", 1}, {"k3", 3}}})});
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(AvroReaderTest, scanSpecProjectsUnionMember) {
+  const auto filePath = writeUnionRecord();
+  auto reader = createReader(filePath);
+
+  auto spec = std::make_shared<common::ScanSpec>("root");
+  auto* mixedUnion = spec->addField("mixedUnion", 0);
+  mixedUnion->addField("member1", 0);
+
+  dwio::common::RowReaderOptions rowOptions;
+  rowOptions.setScanSpec(spec);
+  auto result = readRows(*reader, 5, 2, rowOptions);
+
+  auto expectedMixedUnion = makeRowVector(
+      {"member1"},
+      {makeNullableFlatVector<std::string>({std::nullopt, "mix-b"})});
+  auto expected = makeRowVector({"mixedUnion"}, {expectedMixedUnion});
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(AvroReaderTest, scanSpecFiltersUnionMember) {
+  const auto filePath = writeUnionRecord();
+  auto reader = createReader(filePath);
+
+  auto spec = std::make_shared<common::ScanSpec>("root");
+  auto* mixedUnion = spec->addField("mixedUnion", 0);
+  auto* member = mixedUnion->addField("member1", 0);
+  member->setFilter(
+      std::make_unique<common::BytesValues>(
+          std::vector<std::string>{"mix-b"}, false));
+
+  dwio::common::RowReaderOptions rowOptions;
+  rowOptions.setScanSpec(spec);
+  auto result = readRows(*reader, 5, 2, rowOptions);
+
+  auto expectedMixedUnion =
+      makeRowVector({"member1"}, {makeFlatVector<std::string>({"mix-b"})});
+  auto expected = makeRowVector({"mixedUnion"}, {expectedMixedUnion});
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(AvroReaderTest, scanSpecRejectsUnsupportedFeatures) {
+  const auto filePath = writeRequestedTypeRecord();
+  TestDeltaColumnUpdater updater;
+  auto expectRejected = [&](std::shared_ptr<common::ScanSpec> spec) {
+    auto reader = createReader(filePath);
+    dwio::common::RowReaderOptions rowOptions;
+    rowOptions.setScanSpec(std::move(spec));
+    EXPECT_THROW(createRowReader(*reader, rowOptions), VeloxUserError);
+  };
+
+  auto rowIndexSpec = std::make_shared<common::ScanSpec>("root");
+  rowIndexSpec->addField("rawDate", 0);
+  rowIndexSpec->addField("$row_number", 1)
+      ->setColumnType(common::ScanSpec::ColumnType::kRowIndex);
+  expectRejected(std::move(rowIndexSpec));
+
+  auto compositeSpec = std::make_shared<common::ScanSpec>("root");
+  compositeSpec->getOrCreateChild("rawDate")->setFilter(
+      common::createBigintValues({22}, false));
+  compositeSpec->addField("$row_id", 0)
+      ->setColumnType(common::ScanSpec::ColumnType::kComposite);
+  expectRejected(std::move(compositeSpec));
+
+  auto deltaUpdateSpec = std::make_shared<common::ScanSpec>("root");
+  deltaUpdateSpec->addField("rawDate", 0)->setDeltaUpdate(&updater);
+  expectRejected(std::move(deltaUpdateSpec));
+}
+
+TEST_F(AvroReaderTest, scanSpecAppliesDeletedRowsMutation) {
+  const auto filePath = writeRequestedTypeRecord();
+  auto reader = createReader(filePath);
+
+  auto spec = std::make_shared<common::ScanSpec>("root");
+  auto* meta = spec->addField("meta", 0);
+  meta->addField("label", 0);
+  spec->getOrCreateChild(common::Subfield("meta.count"))
+      ->setFilter(common::createBigintValues({1, 2}, false));
+
+  dwio::common::RowReaderOptions rowOptions;
+  rowOptions.setScanSpec(spec);
+  auto rowReader = createRowReader(*reader, rowOptions);
+
+  std::vector<uint64_t> deletedRows(bits::nwords(2));
+  bits::setBit(deletedRows.data(), 0);
+  dwio::common::Mutation mutation;
+  mutation.deletedRows = deletedRows.data();
+
+  VectorPtr result;
+  ASSERT_EQ(rowReader->next(5, result, &mutation), 2);
+
+  auto expectedMeta =
+      makeRowVector({"label"}, {makeFlatVector<std::string>({"beta"})});
+  auto expected = makeRowVector({"meta"}, {expectedMeta});
+  assertEqualVectors(expected, result);
+}
+
+// requestedType present; ScanSpec present.
+
+TEST_F(AvroReaderTest, projectsFieldsInScanSpecOrder) {
+  const auto filePath = writeRequestedTypeRecord();
+  auto reader = createReader(filePath);
+
+  auto requestedType =
+      ROW({"rawDate", "meta"},
+          {DATE(),
+           ROW({"tsMillis", "tsMicros", "label"},
+               {TIMESTAMP(), TIMESTAMP(), VARCHAR()})});
+  auto expectedType =
+      ROW({"meta", "rawDate"},
+          {ROW({"label", "tsMicros", "tsMillis"},
+               {VARCHAR(), TIMESTAMP(), TIMESTAMP()}),
+           DATE()});
+  auto spec = std::make_shared<common::ScanSpec>("root");
+  auto* meta = spec->addField("meta", 0);
+  meta->addField("label", 0);
+  meta->addField("tsMicros", 1);
+  meta->addField("tsMillis", 2);
+  spec->addField("rawDate", 1);
+
+  dwio::common::RowReaderOptions rowOptions;
+  rowOptions.setRequestedType(requestedType);
+  rowOptions.setScanSpec(spec);
+
+  auto result = readRows(*reader, 5, 2, rowOptions);
+  ASSERT_TRUE(*result->type() == *expectedType);
+
+  auto expectedMeta = makeRowVector(
+      {"label", "tsMicros", "tsMillis"},
+      {makeFlatVector<std::string>({"alpha", "beta"}),
+       makeFlatVector<Timestamp>(
+           {Timestamp::fromMicros(3'500), Timestamp::fromMicros(4'500)}),
+       makeFlatVector<Timestamp>(
+           {Timestamp::fromMillis(1'700), Timestamp::fromMillis(2'700)})});
+  auto expected = makeRowVector(
+      {"meta", "rawDate"},
+      {expectedMeta, makeFlatVector<int32_t>({11, 22}, DATE())});
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(AvroReaderTest, filtersByNestedNonProjectedField) {
+  const auto filePath = writeRequestedTypeRecord();
+  auto reader = createReader(filePath);
+
+  auto requestedType =
+      ROW({"meta"}, {ROW({"label", "count"}, {VARCHAR(), INTEGER()})});
+  auto spec = std::make_shared<common::ScanSpec>("root");
+  auto* meta = spec->addField("meta", 0);
+  meta->addField("label", 0);
+  spec->getOrCreateChild(common::Subfield("meta.count"))
+      ->setFilter(common::createBigintValues({2}, false));
+
+  dwio::common::RowReaderOptions rowOptions;
+  rowOptions.setRequestedType(requestedType);
+  rowOptions.setScanSpec(spec);
+  auto result = readRows(*reader, 5, 2, rowOptions);
+
+  auto expectedMeta =
+      makeRowVector({"label"}, {makeFlatVector<std::string>({"beta"})});
+  auto expected = makeRowVector({"meta"}, {expectedMeta});
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(AvroReaderTest, filtersByTopLevelNonProjectedField) {
+  const auto filePath = writeRequestedTypeRecord();
+  auto reader = createReader(filePath);
+
+  auto requestedType =
+      ROW({"meta", "rawDate"}, {ROW({"label"}, {VARCHAR()}), DATE()});
+  auto spec = std::make_shared<common::ScanSpec>("root");
+  auto* meta = spec->addField("meta", 0);
+  meta->addField("label", 0);
+  spec->getOrCreateChild("rawDate")->setFilter(
+      common::createBigintValues({22}, false));
+
+  dwio::common::RowReaderOptions rowOptions;
+  rowOptions.setRequestedType(requestedType);
+  rowOptions.setScanSpec(spec);
+  auto result = readRows(*reader, 5, 2, rowOptions);
+
+  auto expectedMeta =
+      makeRowVector({"label"}, {makeFlatVector<std::string>({"beta"})});
+  auto expected = makeRowVector({"meta"}, {expectedMeta});
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(AvroReaderTest, rejectsFilterOnlyFieldOutsideRequestedType) {
+  const auto filePath = writeRequestedTypeRecord();
+  auto reader = createReader(filePath);
+
+  auto spec = std::make_shared<common::ScanSpec>("root");
+  auto* meta = spec->addField("meta", 0);
+  meta->addField("label", 0);
+  spec->getOrCreateChild("rawDate")->setFilter(
+      common::createBigintValues({22}, false));
+
+  dwio::common::RowReaderOptions rowOptions;
+  rowOptions.setRequestedType(ROW({"meta"}, {ROW({"label"}, {VARCHAR()})}));
+  rowOptions.setScanSpec(spec);
+
+  EXPECT_THROW(createRowReader(*reader, rowOptions), VeloxUserError);
+}
+
+TEST_F(AvroReaderTest, rejectsProjectedFieldOutsideRequestedType) {
+  const auto filePath = writeRequestedTypeRecord();
+  auto reader = createReader(filePath);
+
+  auto spec = std::make_shared<common::ScanSpec>("root");
+  auto* meta = spec->addField("meta", 0);
+  meta->addField("label", 0);
+  spec->addField("unused", 1);
+
+  dwio::common::RowReaderOptions rowOptions;
+  rowOptions.setRequestedType(ROW({"meta"}, {ROW({"label"}, {VARCHAR()})}));
+  rowOptions.setScanSpec(spec);
+
+  EXPECT_THROW(createRowReader(*reader, rowOptions), VeloxUserError);
+}
+
+TEST_F(AvroReaderTest, constantProjectsMissingField) {
+  const auto filePath = writeRequestedTypeRecord();
+  auto reader = createReader(filePath);
+
+  auto requestedType =
+      ROW({"ds", "meta"}, {VARCHAR(), ROW({"label"}, {VARCHAR()})});
+  auto spec = std::make_shared<common::ScanSpec>("root");
+  spec->addField("ds", 0)->setConstantValue(
+      BaseVector::createConstant(VARCHAR(), "2026-05-06", 1, pool()));
+  auto* meta = spec->addField("meta", 1);
+  meta->addField("label", 0);
+
+  dwio::common::RowReaderOptions rowOptions;
+  rowOptions.setRequestedType(requestedType);
+  rowOptions.setScanSpec(spec);
+  auto result = readRows(*reader, 5, 2, rowOptions);
+
+  auto expectedMeta = makeRowVector(
+      {"label"}, {makeFlatVector<std::string>({"alpha", "beta"})});
+  auto expected = makeRowVector(
+      {"ds", "meta"},
+      {BaseVector::createConstant(VARCHAR(), "2026-05-06", 2, pool()),
+       expectedMeta});
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(AvroReaderTest, constantOverridesFileField) {
+  const auto filePath = writeRequestedTypeRecord();
+  auto reader = createReader(filePath);
+
+  auto requestedType =
+      ROW({"unused", "meta"}, {VARCHAR(), ROW({"label"}, {VARCHAR()})});
+  auto spec = std::make_shared<common::ScanSpec>("root");
+  spec->addField("unused", 0)
+      ->setConstantValue(
+          BaseVector::createConstant(VARCHAR(), "constant-unused", 1, pool()));
+  auto* meta = spec->addField("meta", 1);
+  meta->addField("label", 0);
+
+  dwio::common::RowReaderOptions rowOptions;
+  rowOptions.setRequestedType(requestedType);
+  rowOptions.setScanSpec(spec);
+  auto result = readRows(*reader, 5, 2, rowOptions);
+
+  auto expectedMeta = makeRowVector(
+      {"label"}, {makeFlatVector<std::string>({"alpha", "beta"})});
+  auto expected = makeRowVector(
+      {"unused", "meta"},
+      {BaseVector::createConstant(VARCHAR(), "constant-unused", 2, pool()),
+       expectedMeta});
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(AvroReaderTest, constantCanBeOutsideRequestedType) {
+  const auto filePath = writeRequestedTypeRecord();
+  auto reader = createReader(filePath);
+
+  auto requestedType = ROW({"meta"}, {ROW({"label"}, {VARCHAR()})});
+  auto spec = std::make_shared<common::ScanSpec>("root");
+  spec->addField("ds", 0)->setConstantValue(
+      BaseVector::createConstant(VARCHAR(), "2026-05-06", 1, pool()));
+  auto* meta = spec->addField("meta", 1);
+  meta->addField("label", 0);
+
+  dwio::common::RowReaderOptions rowOptions;
+  rowOptions.setRequestedType(requestedType);
+  rowOptions.setScanSpec(spec);
+  auto result = readRows(*reader, 5, 2, rowOptions);
+
+  auto expectedMeta = makeRowVector(
+      {"label"}, {makeFlatVector<std::string>({"alpha", "beta"})});
+  auto expected = makeRowVector(
+      {"ds", "meta"},
+      {BaseVector::createConstant(VARCHAR(), "2026-05-06", 2, pool()),
+       expectedMeta});
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(AvroReaderTest, constantRejectsRequestedTypeMismatch) {
+  const auto filePath = writeRequestedTypeRecord();
+  auto reader = createReader(filePath);
+
+  auto spec = std::make_shared<common::ScanSpec>("root");
+  spec->addField("ds", 0)->setConstantValue(
+      BaseVector::createConstant(VARCHAR(), "2026-05-06", 1, pool()));
+
+  dwio::common::RowReaderOptions rowOptions;
+  rowOptions.setRequestedType(ROW({"ds"}, {BIGINT()}));
+  rowOptions.setScanSpec(spec);
+
+  EXPECT_THROW(createRowReader(*reader, rowOptions), VeloxUserError);
+}
+
 } // namespace
 } // namespace facebook::velox::avro
