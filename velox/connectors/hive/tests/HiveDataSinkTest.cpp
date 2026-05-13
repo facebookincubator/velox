@@ -1951,9 +1951,9 @@ TEST_F(HiveDataSinkTest, sharedWriterOptionsWithMultipleWriters) {
       outputDirectory->getPath(), static_cast<uint32_t>(partitions.size()));
 }
 
-DEBUG_ONLY_TEST_F(HiveDataSinkTest, sharedWriterOptionsUsePerWriterMemoryPool) {
+DEBUG_ONLY_TEST_F(HiveDataSinkTest, perWriterMemoryPool) {
   const auto outputDirectory = TempDirectoryPath::create();
-  auto sharedWriterOptions = std::make_shared<dwrf::WriterOptions>();
+  auto writerOptions = std::make_shared<dwrf::WriterOptions>();
 
   const auto rowType = ROW({"c0", "p0"}, {BIGINT(), VARCHAR()});
   auto dataSink = createDataSink(
@@ -1962,7 +1962,7 @@ DEBUG_ONLY_TEST_F(HiveDataSinkTest, sharedWriterOptionsUsePerWriterMemoryPool) {
       dwio::common::FileFormat::DWRF,
       {"p0"},
       nullptr,
-      sharedWriterOptions);
+      writerOptions);
 
   std::set<std::string> writerPoolNames;
   SCOPED_TESTVALUE_SET(
@@ -1970,19 +1970,20 @@ DEBUG_ONLY_TEST_F(HiveDataSinkTest, sharedWriterOptionsUsePerWriterMemoryPool) {
       std::function<void(dwrf::Writer*)>([&](dwrf::Writer* writer) {
         // Memory pool hierarchy:
         // Hive writer pool -> DWRF writer pool -> DWRF category leaf pools.
-        auto* dwrfPool = writer->getContext()
-                             .getMemoryPool(dwrf::MemoryUsageCategory::GENERAL)
-                             .parent();
-        ASSERT_NE(dwrfPool, nullptr);
-        auto* writerPool = dwrfPool->parent();
+        auto* innerPool = writer->getContext()
+                              .getMemoryPool(dwrf::MemoryUsageCategory::GENERAL)
+                              .parent();
+        ASSERT_NE(innerPool, nullptr);
+        auto* writerPool = innerPool->parent();
         ASSERT_NE(writerPool, nullptr);
         writerPoolNames.insert(writerPool->name());
       }));
 
-  auto c0 = makeFlatVector<int64_t>(200, [](auto row) { return row; });
-  auto p0 = makeFlatVector<StringView>(
-      200, [](auto row) { return row % 2 == 0 ? "part_0" : "part_1"; });
-  dataSink->appendData(makeRowVector({c0, p0}));
+  dataSink->appendData(makeRowVector({
+      makeFlatVector<int64_t>(200, folly::identity),
+      makeFlatVector<StringView>(
+          200, [](auto row) { return row % 2 == 0 ? "part_0" : "part_1"; }),
+  }));
 
   ASSERT_EQ(writerPoolNames.size(), 2);
   ASSERT_TRUE(dataSink->finish());
