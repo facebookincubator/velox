@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <limits>
+
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
@@ -1720,18 +1722,80 @@ TEST_F(CudfFilterProjectTest, andAndAndWithDecimalDivideBelowExpr) {
   facebook::velox::test::assertEqualVectors(expected, result);
 }
 
-TEST_F(CudfSimpleFilterProjectTest, binaryOperators) {
-  // Test modulo operation
+TEST_F(CudfSimpleFilterProjectTest, mod) {
+  EXPECT_FALSE(canEvaluateWithAst("mod(c0, c1)", ROW({"c0", "c1"}, {TINYINT(), TINYINT()})));
+  EXPECT_FALSE(
+      canEvaluateWithAst("mod(c0, c1)", ROW({"c0", "c1"}, {SMALLINT(), SMALLINT()})));
+  EXPECT_FALSE(canEvaluateWithAst("mod(c0, c1)", ROW({"c0", "c1"}, {INTEGER(), INTEGER()})));
+  EXPECT_FALSE(canEvaluateWithAst("mod(c0, c1)", ROW({"c0", "c1"}, {BIGINT(), BIGINT()})));
+
   auto modResult = evaluateOnceValue<double, double>("c0 % 10.0", 47);
   EXPECT_EQ(modResult, 7);
   auto modResult2 = evaluateOnceValue<float, float>("c0 % 10.0", 47);
   EXPECT_EQ(modResult2, 7);
 
-  // Test power operation
+  std::vector<double> numerDouble = {0, 6, 0, -7, -1, -9, 9, 10.1};
+  std::vector<double> denomDouble = {1, 2, -1, 3, -1, -3, -3, -99.9};
+  auto input = makeRowVector(
+      {makeFlatVector<double>(numerDouble), makeFlatVector<double>(denomDouble)});
+  assertExpressionMatchesCpu("mod(c0, c1)", input, ROW({"c0", "c1"}, {DOUBLE(), DOUBLE()}));
+
+  auto specialInput = makeRowVector(
+      {makeFlatVector<double>({5.1, std::numeric_limits<double>::quiet_NaN(), 5.1, std::numeric_limits<double>::infinity(), 5.1}),
+       makeFlatVector<double>({0.0, 5.1, std::numeric_limits<double>::quiet_NaN(), 5.1, std::numeric_limits<double>::infinity()})});
+  assertExpressionMatchesCpu(
+      "mod(c0, c1)", specialInput, ROW({"c0", "c1"}, {DOUBLE(), DOUBLE()}));
+}
+
+TEST_F(CudfSimpleFilterProjectTest, power) {
+  constexpr double kInf = std::numeric_limits<double>::infinity();
+  constexpr double kNan = std::numeric_limits<double>::quiet_NaN();
+
   auto powerResult = evaluateOnceValue<double, double>("power(c0, 2.0)", 3.0);
   EXPECT_DOUBLE_EQ(powerResult, 9.0);
+  auto powerResult2 =
+      evaluateOnceValue<double, int64_t, int64_t>("power(c0, 2)", 3.0);
+  EXPECT_DOUBLE_EQ(powerResult2, 9.0);
+  auto powerResult3 =
+      evaluateOnceValue<double, int64_t, int64_t>("pow(c0, 2)", 3.0);
+  EXPECT_DOUBLE_EQ(powerResult3, 9.0);
 
-  // Test bitwise AND operation
+  auto powerInput = makeRowVector(
+      {makeFlatVector<double>(
+           {0, 0, 0, -1, -1, -1, -9, 9.1, 10.1, 11.1, -11.1}),
+       makeFlatVector<double>(
+           {0, 1, -1, 0, 1, -1, -3.3, 123456.432, -99.9, 0, 100000})});
+  assertExpressionMatchesCpu(
+      "power(c0, c1)", powerInput, ROW({"c0", "c1"}, {DOUBLE(), DOUBLE()}));
+  assertExpressionMatchesCpu(
+      "pow(c0, c1)", powerInput, ROW({"c0", "c1"}, {DOUBLE(), DOUBLE()}));
+
+  auto powerNanInput = makeRowVector(
+      {makeFlatVector<double>({1, kNan, kNan, kNan}),
+       makeFlatVector<double>({kNan, 1, kInf, 0})});
+  assertExpressionMatchesCpu(
+      "power(c0, c1)", powerNanInput, ROW({"c0", "c1"}, {DOUBLE(), DOUBLE()}));
+  assertExpressionMatchesCpu(
+      "pow(c0, c1)", powerNanInput, ROW({"c0", "c1"}, {DOUBLE(), DOUBLE()}));
+
+  auto powerInfInput = makeRowVector(
+      {makeFlatVector<double>({1, 1, 2, 2, kInf, kInf, kInf}),
+       makeFlatVector<double>({kInf, -kInf, kInf, -kInf, 1, 0, kNan})});
+  assertExpressionMatchesCpu(
+      "power(c0, c1)", powerInfInput, ROW({"c0", "c1"}, {DOUBLE(), DOUBLE()}));
+  assertExpressionMatchesCpu(
+      "pow(c0, c1)", powerInfInput, ROW({"c0", "c1"}, {DOUBLE(), DOUBLE()}));
+
+  auto powerIntInput = makeRowVector(
+      {makeFlatVector<int64_t>({9, 10, 11, -9, -10, -11, 0}),
+       makeFlatVector<int64_t>({3, -3, 0, -1, 199999, 77, 0})});
+  assertExpressionMatchesCpu(
+      "power(c0, c1)", powerIntInput, ROW({"c0", "c1"}, {BIGINT(), BIGINT()}));
+  assertExpressionMatchesCpu(
+      "pow(c0, c1)", powerIntInput, ROW({"c0", "c1"}, {BIGINT(), BIGINT()}));
+}
+
+TEST_F(CudfSimpleFilterProjectTest, bitwiseOperators) {
   auto bitwiseAndResult =
       evaluateOnceValue<int64_t, int32_t, int32_t>("bitwise_and(c0, c1)", 31, 15);
   EXPECT_EQ(bitwiseAndResult, 15);
@@ -1745,16 +1809,86 @@ TEST_F(CudfSimpleFilterProjectTest, binaryOperators) {
       "bitwise_and(c0, c1)", 31, 15);
   EXPECT_EQ(bitwiseAndResult64, 15);
 
-  // Test bitwise OR operation
+  EXPECT_EQ(evaluateOnceValue<int64_t, int32_t, int32_t>("bitwise_and(c0, c1)", 0, -1), 0);
+  EXPECT_EQ(evaluateOnceValue<int64_t, int32_t, int32_t>("bitwise_and(c0, c1)", 3, 8), 0);
+  EXPECT_EQ(evaluateOnceValue<int64_t, int32_t, int32_t>("bitwise_and(c0, c1)", -4, 12), 12);
+  EXPECT_EQ(evaluateOnceValue<int64_t, int32_t, int32_t>("bitwise_and(c0, c1)", 60, 21), 20);
+  EXPECT_EQ(
+      evaluateOnceValue<int64_t, int16_t, int16_t>(
+          "bitwise_and(c0, c1)",
+          std::numeric_limits<int16_t>::min(),
+          std::numeric_limits<int16_t>::max()),
+      0);
+  EXPECT_EQ(
+      evaluateOnceValue<int64_t, int16_t, int16_t>(
+          "bitwise_and(c0, c1)",
+          std::numeric_limits<int16_t>::max(),
+          std::numeric_limits<int16_t>::max()),
+      std::numeric_limits<int16_t>::max());
+  EXPECT_EQ(
+      evaluateOnceValue<int64_t, int32_t, int32_t>(
+          "bitwise_and(c0, c1)",
+          std::numeric_limits<int32_t>::min(),
+          std::numeric_limits<int32_t>::max()),
+      0);
+  EXPECT_EQ(
+      evaluateOnceValue<int64_t, int64_t, int64_t>(
+          "bitwise_and(c0, c1)",
+          std::numeric_limits<int64_t>::min(),
+          std::numeric_limits<int64_t>::max()),
+      0);
+
   auto bitwiseOrResult =
       evaluateOnceValue<int64_t, int32_t>("bitwise_or(c0, 15)", 16);
   EXPECT_EQ(bitwiseOrResult, 31);
+  EXPECT_EQ(evaluateOnceValue<int64_t, int32_t, int32_t>("bitwise_or(c0, c1)", 0, -1), -1);
+  EXPECT_EQ(evaluateOnceValue<int64_t, int32_t, int32_t>("bitwise_or(c0, c1)", 3, 8), 11);
+  EXPECT_EQ(evaluateOnceValue<int64_t, int32_t, int32_t>("bitwise_or(c0, c1)", -4, 12), -4);
+  EXPECT_EQ(evaluateOnceValue<int64_t, int32_t, int32_t>("bitwise_or(c0, c1)", 60, 21), 61);
+  EXPECT_EQ(
+      evaluateOnceValue<int64_t, int16_t, int16_t>(
+          "bitwise_or(c0, c1)",
+          std::numeric_limits<int16_t>::min(),
+          std::numeric_limits<int16_t>::max()),
+      -1);
+  EXPECT_EQ(
+      evaluateOnceValue<int64_t, int32_t, int32_t>(
+          "bitwise_or(c0, c1)",
+          std::numeric_limits<int32_t>::min(),
+          std::numeric_limits<int32_t>::max()),
+      -1);
+  EXPECT_EQ(
+      evaluateOnceValue<int64_t, int64_t, int64_t>(
+          "bitwise_or(c0, c1)",
+          std::numeric_limits<int64_t>::min(),
+          std::numeric_limits<int64_t>::max()),
+      -1);
 
-  // Test bitwise XOR operation
   auto bitwiseXorResult =
       evaluateOnceValue<int64_t, int32_t>("bitwise_xor(c0, 15)", 31);
   EXPECT_EQ(bitwiseXorResult, 16);
-
+  EXPECT_EQ(evaluateOnceValue<int64_t, int32_t, int32_t>("bitwise_xor(c0, c1)", 0, -1), -1);
+  EXPECT_EQ(evaluateOnceValue<int64_t, int32_t, int32_t>("bitwise_xor(c0, c1)", 3, 8), 11);
+  EXPECT_EQ(evaluateOnceValue<int64_t, int32_t, int32_t>("bitwise_xor(c0, c1)", -4, 12), -16);
+  EXPECT_EQ(evaluateOnceValue<int64_t, int32_t, int32_t>("bitwise_xor(c0, c1)", 60, 21), 41);
+  EXPECT_EQ(
+      evaluateOnceValue<int64_t, int16_t, int16_t>(
+          "bitwise_xor(c0, c1)",
+          std::numeric_limits<int16_t>::min(),
+          std::numeric_limits<int16_t>::max()),
+      -1);
+  EXPECT_EQ(
+      evaluateOnceValue<int64_t, int32_t, int32_t>(
+          "bitwise_xor(c0, c1)",
+          std::numeric_limits<int32_t>::min(),
+          std::numeric_limits<int32_t>::max()),
+      -1);
+  EXPECT_EQ(
+      evaluateOnceValue<int64_t, int64_t, int64_t>(
+          "bitwise_xor(c0, c1)",
+          std::numeric_limits<int64_t>::min(),
+          std::numeric_limits<int64_t>::max()),
+      -1);
 }
 
 } // namespace

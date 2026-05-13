@@ -402,14 +402,20 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
       // Spark result type is same with the input type, Presto result type is
       // int64_t
       // Spark case and Presto int64_t case
-      if (expr->type() == expr->inputs()[0]->type()) {
+      if (expr->type()->equivalent(*(expr->inputs()[0]->type()))) {
         // For tinyint, the result type is tinyint in Spark but is integer in cudf
         return expr->type()->kind() == TypeKind::BIGINT || expr->type()->kind() == TypeKind::INTEGER;
       }
       return isOpAndInputsSupported(binaryOps.at(name), inputCudfDataTypes);
     }
     if (name == "mod" || name == "remainder") {
-      return true;
+// | Engine | SQL Function Name | Input Type Category  | Underlying Implementation |
+// | ------ | ----------------- | -------------------- | ------------------------- |
+// | Presto | `mod`             | Integral types       | `checked_mod`             |
+// | Presto | `mod`             | Floating-point types | `mod`                     |
+// | Spark  | `remainder`       | Integral types       | `mod`                     |
+// | Spark  | `remainder`       | Floating-point types | `mod`                     |
+      return expr->type()->kind() == TypeKind::FLOAT || expr->type()->kind() == TypeKind::DOUBLE;
     }
     return len == 2 &&
         isOpAndInputsSupported(binaryOps.at(name), inputCudfDataTypes);
@@ -680,7 +686,7 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     auto const& op1 = pushExprToTree(expr->inputs()[0]);
     auto const& op2 = pushExprToTree(expr->inputs()[1]);
     auto const& op3 = tree.push(Operation{binaryOps.at(name), op1, op2});
-    if (name == "bitwise_and" || name == "bitwise_or" || name == "bitwise_xor" || name == "mod" || name == "remainder") {
+    if (name == "bitwise_and" || name == "bitwise_or" || name == "bitwise_xor") {
       if (expr->type()->kind() == TypeKind::BIGINT &&
           expr->inputs()[0]->type()->kind() != TypeKind::BIGINT) {
         return tree.push(Operation{Op::CAST_TO_INT64, op3});
@@ -763,13 +769,6 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     } else {
       VELOX_FAIL("Unsupported type for cast operation");
     }
-  } else if (name == "pmod") {
-    // pmod(a, b) = (a % b + b) % b
-    auto const& a = pushExprToTree(expr->inputs()[0]);
-    auto const& b = pushExprToTree(expr->inputs()[1]);
-    auto const& r1 = tree.push(Operation{Op::MOD, a, b});
-    auto const& r2 = tree.push(Operation{Op::ADD, r1, b});
-    return tree.push(Operation{Op::MOD, r2, b});
   } else if (auto fieldExpr = std::dynamic_pointer_cast<FieldReference>(expr)) {
     // Refer to the appropriate side
     const auto fieldName =

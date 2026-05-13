@@ -16,6 +16,7 @@
 
 #pragma once
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
@@ -76,6 +77,13 @@ class CudfFunctionBaseTest : public velox::functions::test::FunctionBaseTest {
     VELOX_CHECK(result.has_value(), "Expression returned null: {}", expr);
 
     return result.value();
+  }
+
+  bool canEvaluateWithAst(
+      const std::string& expr,
+      const RowTypePtr& rowType) {
+    auto exprSet = compileExpression(expr, rowType);
+    return ASTExpression::canEvaluate(exprSet->expr(0));
   }
 };
 

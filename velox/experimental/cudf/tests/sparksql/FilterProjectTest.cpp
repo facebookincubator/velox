@@ -886,17 +886,48 @@ TEST_F(CudfFilterProjectTest, unaryMathFunctions) {
   testUnaryFunction("abs(c0)", -5.5, 5.5);
 }
 
-TEST_F(CudfFilterProjectTest, binaryOperators) {
-  // Test remainder (Spark's modulo)
-  auto remainderResult =
-      evaluateOnceValue<int32_t, int32_t>("remainder(c0, 10)", 47);
-  EXPECT_EQ(remainderResult, 7);
+TEST_F(CudfFilterProjectTest, remainder) {
+  EXPECT_FALSE(
+      canEvaluateWithAst(
+          "remainder(c0, c1)", ROW({"c0", "c1"}, {TINYINT(), TINYINT()})));
+  EXPECT_FALSE(
+      canEvaluateWithAst(
+          "remainder(c0, c1)", ROW({"c0", "c1"}, {SMALLINT(), SMALLINT()})));
+  EXPECT_FALSE(
+      canEvaluateWithAst(
+          "remainder(c0, c1)", ROW({"c0", "c1"}, {INTEGER(), INTEGER()})));
+  EXPECT_FALSE(
+      canEvaluateWithAst(
+          "remainder(c0, c1)", ROW({"c0", "c1"}, {BIGINT(), BIGINT()})));
 
-  // Test pmod (positive modulo)
-  auto pmodResult = evaluateOnceValue<int32_t, int32_t>("pmod(c0, 10)", -13);
-  EXPECT_EQ(pmodResult, 7);
+  auto remainderFloatResult =
+      evaluateOnceValue<float, float, float>("remainder(c0, c1)", 47.0, 10.0);
+  EXPECT_FLOAT_EQ(remainderFloatResult, 7.0);
 
-  // Test bitwiseand (Spark's bitwise AND)
+  auto remainderDoubleResult = evaluateOnceValue<double, double, double>(
+      "remainder(c0, c1)", 47.0, 10.0);
+  EXPECT_DOUBLE_EQ(remainderDoubleResult, 7.0);
+}
+
+TEST_F(CudfFilterProjectTest, bitwiseOperators) {
+  EXPECT_FALSE(
+      canEvaluateWithAst(
+          "bitwise_and(c0, c1)", ROW({"c0", "c1"}, {TINYINT(), TINYINT()})));
+  EXPECT_FALSE(
+      canEvaluateWithAst(
+          "bitwise_and(c0, c1)", ROW({"c0", "c1"}, {SMALLINT(), SMALLINT()})));
+  EXPECT_FALSE(
+      canEvaluateWithAst(
+          "bitwise_or(c0, c1)", ROW({"c0", "c1"}, {TINYINT(), TINYINT()})));
+  EXPECT_FALSE(
+      canEvaluateWithAst(
+          "bitwise_or(c0, c1)", ROW({"c0", "c1"}, {SMALLINT(), SMALLINT()})));
+  EXPECT_FALSE(
+      canEvaluateWithAst(
+          "bitwise_xor(c0, c1)", ROW({"c0", "c1"}, {TINYINT(), TINYINT()})));
+  EXPECT_FALSE(
+      canEvaluateWithAst(
+          "bitwise_xor(c0, c1)", ROW({"c0", "c1"}, {SMALLINT(), SMALLINT()})));
   auto bitwiseAndResult =
       evaluateOnceValue<int32_t, int32_t>("bitwise_and(c0, 15)", 31);
   EXPECT_EQ(bitwiseAndResult, 15);
@@ -905,15 +936,19 @@ TEST_F(CudfFilterProjectTest, binaryOperators) {
       evaluateOnceValue<int64_t, int64_t>("bitwise_and(c0, 15)", 31);
   EXPECT_EQ(bitwiseAndResult64, 15);
 
-  // Test bitwiseor (Spark's bitwise OR)
   auto bitwiseOrResult =
       evaluateOnceValue<int64_t, int64_t>("bitwise_or(c0, 15)", 16);
   EXPECT_EQ(bitwiseOrResult, 31);
+  auto bitwiseOrResult32 =
+      evaluateOnceValue<int32_t, int32_t>("bitwise_or(c0, 15)", 31);
+  EXPECT_EQ(bitwiseOrResult32, 31);
 
-  // Test bitwisexor (Spark's bitwise XOR)
   auto bitwiseXorResult =
       evaluateOnceValue<int64_t, int64_t>("bitwise_xor(c0, 15)", 31);
   EXPECT_EQ(bitwiseXorResult, 16);
+  auto bitwiseXorResult32 =
+      evaluateOnceValue<int32_t, int32_t>("bitwise_xor(c0, 15)", 31);
+  EXPECT_EQ(bitwiseXorResult32, 16);
 }
 
 } // namespace
