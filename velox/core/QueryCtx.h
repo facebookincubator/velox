@@ -36,6 +36,16 @@ class TraceCtx;
 
 namespace facebook::velox::core {
 
+/// Per-batch scan statistics event fired by TableScan after each batch.
+struct ScanBatchEvent {
+  /// Post-pushdown, pre-remaining-filter row count.
+  uint64_t numRows;
+  /// Wall time spent producing this batch in microseconds.
+  uint64_t wallTimeMicros;
+  /// Table name from the connector table handle.
+  std::string_view tableName;
+};
+
 struct PlanFragment;
 
 /// Query execution context that manages resources and configuration for a
@@ -321,6 +331,17 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     traceCtxProvider_ = std::move(provider);
   }
 
+  using ScanBatchCallback = std::function<void(const ScanBatchEvent&)>;
+
+  /// Sets an optional callback fired by TableScan after each non-empty batch.
+  void setScanBatchCallback(ScanBatchCallback callback) {
+    scanBatchCallback_ = std::move(callback);
+  }
+
+  const ScanBatchCallback& scanBatchCallback() const {
+    return scanBatchCallback_;
+  }
+
   /// Store a per-query registry override. Each subsystem defines its own key
   /// (e.g., "connectors", "vectorFunctions"). The registry is stored as a
   /// type-erased shared_ptr; callers must use the same type T for setRegistry
@@ -476,6 +497,9 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
 
   // A function that constructs a custom trace ctx object.
   TraceCtxProvider traceCtxProvider_;
+
+  // Optional per-batch scan stats callback.
+  ScanBatchCallback scanBatchCallback_;
 
   // Type-erased registry entry for per-query overrides.
   struct RegistryEntry {

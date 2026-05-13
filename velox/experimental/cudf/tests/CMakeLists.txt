@@ -22,6 +22,7 @@ add_executable(velox_cudf_decimal_aggregation_test Main.cpp DecimalAggregationTe
 add_executable(velox_cudf_filter_project_test Main.cpp FilterProjectTest.cpp)
 add_executable(velox_cudf_function_registry_test Main.cpp FunctionRegistryTest.cpp)
 add_executable(velox_cudf_hash_join_test HashJoinTest.cpp Main.cpp)
+add_executable(velox_cudf_nested_loop_join_test Main.cpp NestedLoopJoinTest.cpp)
 add_executable(velox_cudf_limit_test Main.cpp LimitTest.cpp)
 add_executable(velox_cudf_local_partition_test Main.cpp LocalPartitionTest.cpp)
 add_executable(velox_cudf_order_by_test Main.cpp OrderByTest.cpp)
@@ -41,6 +42,7 @@ add_executable(
 
 # Disabling writer tests until we re-add writing ability to CudfHiveConnector
 # add_executable(velox_cudf_table_write_test Main.cpp TableWriteTest.cpp)
+add_executable(velox_cudf_group_id_test Main.cpp GroupIdTest.cpp)
 add_executable(velox_cudf_mark_distinct_test Main.cpp MarkDistinctTest.cpp)
 add_executable(velox_cudf_topn_test Main.cpp TopNTest.cpp)
 add_executable(velox_cudf_batch_concat_test Main.cpp BatchConcatTest.cpp)
@@ -107,6 +109,12 @@ add_test(
 )
 
 add_test(
+  NAME velox_cudf_nested_loop_join_test
+  COMMAND velox_cudf_nested_loop_join_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+add_test(
   NAME velox_cudf_limit_test
   COMMAND velox_cudf_limit_test
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
@@ -157,6 +165,12 @@ add_test(
 # )
 
 add_test(
+  NAME velox_cudf_group_id_test
+  COMMAND velox_cudf_group_id_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+add_test(
   NAME velox_cudf_mark_distinct_test
   COMMAND velox_cudf_mark_distinct_test
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
@@ -198,6 +212,7 @@ add_test(
 )
 
 set_tests_properties(velox_cudf_hash_join_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
+set_tests_properties(velox_cudf_nested_loop_join_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 set_tests_properties(velox_cudf_order_by_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 set_tests_properties(velox_cudf_aggregation_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 set_tests_properties(velox_cudf_assign_unique_id_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
@@ -222,6 +237,7 @@ endif()
 set_tests_properties(velox_cudf_subfield_filter_ast_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 set_tests_properties(velox_cudf_table_scan_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 # set_tests_properties(velox_cudf_table_write_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
+set_tests_properties(velox_cudf_group_id_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 set_tests_properties(velox_cudf_mark_distinct_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 set_tests_properties(velox_cudf_topn_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 set_tests_properties(
@@ -340,6 +356,18 @@ target_link_libraries(
 )
 
 target_link_libraries(
+  velox_cudf_nested_loop_join_test
+  velox_cudf_exec
+  velox_exec
+  velox_exec_test_lib
+  velox_test_util
+  gtest
+  gtest_main
+  Folly::folly
+  fmt::fmt
+)
+
+target_link_libraries(
   velox_cudf_limit_test
   velox_cudf_exec
   velox_exec
@@ -429,6 +457,16 @@ target_link_libraries(
 #   gtest_main
 #   fmt::fmt
 # )
+
+target_link_libraries(
+  velox_cudf_group_id_test
+  velox_cudf_exec
+  velox_exec
+  velox_exec_test_lib
+  velox_test_util
+  gtest
+  gtest_main
+)
 
 target_link_libraries(
   velox_cudf_mark_distinct_test
