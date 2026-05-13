@@ -20,7 +20,7 @@
 #include <cudf/scalar/scalar.hpp>
 #include <cudf/types.hpp>
 #include <rmm/cuda_stream_view.hpp>
-#include <rmm/mr/device/device_memory_resource.hpp>
+#include <rmm/resource_ref.hpp>
 
 #include <memory>
 #include <string>

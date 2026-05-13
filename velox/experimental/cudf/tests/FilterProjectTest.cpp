@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
@@ -24,6 +25,7 @@
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
+#include "velox/experimental/cudf/expression/PrestoFunctions.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -46,6 +48,9 @@ class CudfFilterProjectTest : public OperatorTestBase {
     cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
     rng_.seed(123);
+
+    // Register Presto-specific CUDF functions
+    facebook::velox::cudf_velox::registerPrestoFunctions("");
 
     rowType_ = ROW({{"c0", INTEGER()}, {"c1", DOUBLE()}, {"c2", VARCHAR()}});
   }
@@ -1473,6 +1478,8 @@ class CudfSimpleFilterProjectTest : public cudf_velox::CudfFunctionBaseTest {
     aggregate::prestosql::registerAllAggregateFunctions();
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
     cudf_velox::registerCudf();
+    // Register Presto-specific CUDF functions
+    facebook::velox::cudf_velox::registerPrestoFunctions("");
   }
 
   static void TearDownTestCase() {

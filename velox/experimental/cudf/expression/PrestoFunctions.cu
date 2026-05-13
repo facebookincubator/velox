@@ -69,22 +69,15 @@ std::unique_ptr<cudf::column> integralCheckedModulusTyped(
     const cudf::column_view& rhs,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
-  VELOX_CHECK_EQ(lhs.type().id(), type.id());
-  VELOX_CHECK_EQ(rhs.type().id(), type.id());
-
   auto [nullMask, nullCount] =
       cudf::bitmask_and(cudf::table_view({lhs, rhs}), stream, mr);
   auto out = cudf::make_fixed_width_column(
       type, lhs.size(), std::move(nullMask), nullCount, stream, mr);
-  auto outView = out->mutable_view();
-  CheckedModulusColumnsFunctor<T> functor{
-      lhs.data<T>(), rhs.data<T>(), outView.data<T>()};
-  cudf::transform(
-      std::vector<cudf::column_view>{},
-      functor,
-      outView,
-      stream,
-      mr);
+  CheckedModulusColumnsFunctor<T> functor{lhs.data<T>(), rhs.data<T>(), out->mutable_view().data<T>()};
+  if (lhs.size() > 0) {
+    cub::DeviceFor::ForEachN(
+        thrust::counting_iterator<int32_t>(0), lhs.size(), functor, stream.value());
+  }
   return out;
 }
 
@@ -95,7 +88,6 @@ std::unique_ptr<cudf::column> integralCheckedModulusTyped(
     const cudf::scalar& rhs,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
-  VELOX_CHECK_EQ(lhs.type().id(), type.id());
   auto const& rhsScalar = static_cast<cudf::numeric_scalar<T> const&>(rhs);
 
   auto out = cudf::make_fixed_width_column(
@@ -105,15 +97,11 @@ std::unique_ptr<cudf::column> integralCheckedModulusTyped(
       lhs.null_count(),
       stream,
       mr);
-  auto outView = out->mutable_view();
-  CheckedModulusColumnScalarFunctor<T> functor{
-      lhs.data<T>(), rhsScalar.value(stream), outView.data<T>()};
-  cudf::transform(
-      std::vector<cudf::column_view>{},
-      functor,
-      outView,
-      stream,
-      mr);
+  CheckedModulusColumnScalarFunctor<T> functor{lhs.data<T>(), rhsScalar.value(stream), out->mutable_view().data<T>()};
+  if (lhs.size() > 0) {
+    cub::DeviceFor::ForEachN(
+        thrust::counting_iterator<int32_t>(0), lhs.size(), functor, stream.value());
+  }
   return out;
 }
 
@@ -124,7 +112,6 @@ std::unique_ptr<cudf::column> integralCheckedModulusTyped(
     const cudf::column_view& rhs,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
-  VELOX_CHECK_EQ(rhs.type().id(), type.id());
   auto const& lhsScalar = static_cast<cudf::numeric_scalar<T> const&>(lhs);
 
   auto out = cudf::make_fixed_width_column(
@@ -134,15 +121,11 @@ std::unique_ptr<cudf::column> integralCheckedModulusTyped(
       rhs.null_count(),
       stream,
       mr);
-  auto outView = out->mutable_view();
-  CheckedModulusScalarColumnFunctor<T> functor{
-      lhsScalar.value(stream), rhs.data<T>(), outView.data<T>()};
-  cudf::transform(
-      std::vector<cudf::column_view>{},
-      functor,
-      outView,
-      stream,
-      mr);
+  CheckedModulusScalarColumnFunctor<T> functor{lhsScalar.value(stream), rhs.data<T>(), out->mutable_view().data<T>()};
+  if (rhs.size() > 0) {
+    cub::DeviceFor::ForEachN(
+        thrust::counting_iterator<int32_t>(0), rhs.size(), functor, stream.value());
+  }
   return out;
 }
 
@@ -162,6 +145,8 @@ std::unique_ptr<cudf::column> integralCheckedModulus(
     const cudf::column_view& rhs,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
+  CUDF_EXPECTS(lhs.size() == rhs.size(), "Integral mod requires equal sizes");
+  CUDF_EXPECTS(lhs.type().id() == rhs.type().id(), "Integral mod requires matching input types");
   switch (type.id()) {
     case cudf::type_id::INT8:
       return integralCheckedModulusTyped<int8_t>(type, lhs, rhs, stream, mr);
@@ -172,7 +157,7 @@ std::unique_ptr<cudf::column> integralCheckedModulus(
     case cudf::type_id::INT64:
       return integralCheckedModulusTyped<int64_t>(type, lhs, rhs, stream, mr);
     default:
-      VELOX_FAIL("Unsupported type for integral mod");
+      throw cudf::logic_error("Unsupported type for integral mod");
   }
 }
 
@@ -192,7 +177,7 @@ std::unique_ptr<cudf::column> integralCheckedModulus(
     case cudf::type_id::INT64:
       return integralCheckedModulusTyped<int64_t>(type, lhs, rhs, stream, mr);
     default:
-      VELOX_FAIL("Unsupported type for integral mod");
+      throw cudf::logic_error("Unsupported type for integral mod");
   }
 }
 
@@ -212,7 +197,7 @@ std::unique_ptr<cudf::column> integralCheckedModulus(
     case cudf::type_id::INT64:
       return integralCheckedModulusTyped<int64_t>(type, lhs, rhs, stream, mr);
     default:
-      VELOX_FAIL("Unsupported type for integral mod");
+      throw cudf::logic_error("Unsupported type for integral mod");
   }
 }
 
