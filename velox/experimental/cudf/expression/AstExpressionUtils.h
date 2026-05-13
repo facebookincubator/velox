@@ -342,6 +342,13 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
 
   // Binary operations
   if (binaryOps.find(name) != binaryOps.end()) {
+    // Restrict mod AST support to DOUBLE only.
+    if (name == "mod") {
+      return len == 2 && expr->type()->kind() == TypeKind::DOUBLE &&
+          expr->inputs()[0]->type()->kind() == TypeKind::DOUBLE &&
+          expr->inputs()[1]->type()->kind() == TypeKind::DOUBLE &&
+          isOpAndInputsSupported(binaryOps.at(name), inputCudfDataTypes);
+    }
     // AND/OR can handle multiple inputs by chaining
     if ((name == "and" || name == "or") && len > 2) {
       for (size_t i = 1; i < len; i++) {

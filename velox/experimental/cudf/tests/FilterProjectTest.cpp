@@ -1680,6 +1680,22 @@ TEST_F(CudfSimpleFilterProjectTest, logicalOrThreeArgLiteralsMixed) {
   }
 }
 
+TEST_F(CudfSimpleFilterProjectTest, modInt) {
+  const auto rowType = ROW({"c0", "c1"}, {BIGINT(), BIGINT()});
+  EXPECT_FALSE(canEvaluateWithAst("mod(c0, c1)", rowType));
+
+  auto input = makeRowVector(
+      {makeFlatVector<int64_t>(
+           {9, 10, 0, -9, -10, -11, std::numeric_limits<int64_t>::min()}),
+       makeFlatVector<int64_t>({3, -3, 11, -1, 199999, 77, -1})});
+  assertExpressionMatchesCpu("mod(c0, c1)", input, rowType);
+
+  auto errorInput = makeRowVector(
+      {makeFlatVector<int64_t>({10}), makeFlatVector<int64_t>({0})});
+  auto exprSet = compileExpression("mod(c0, c1)", rowType);
+  VELOX_ASSERT_THROW(evaluate(*exprSet, errorInput), "Cannot divide by 0");
+}
+
 TEST_F(CudfFilterProjectTest, andAndAndExpr) {
   auto data = makeRowVector(
       {makeFlatVector<int64_t>({100, 100, 100, 100}, DECIMAL(17, 2)),
