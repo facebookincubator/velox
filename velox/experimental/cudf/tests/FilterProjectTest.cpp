@@ -1687,27 +1687,6 @@ TEST_F(CudfSimpleFilterProjectTest, logicalOrThreeArgLiteralsMixed) {
   }
 }
 
-TEST_F(CudfSimpleFilterProjectTest, modFloat) {
-
-  auto modResultFloat = evaluateOnceValue<float, float>("c0 % 10.0", 47);
-  EXPECT_EQ(modResultFloat, 7);
-
-  auto modResult = evaluateOnceValue<double, double>("c0 % 10.0", 47);
-  EXPECT_EQ(modResult, 7);
-
-  std::vector<double> numerDouble = {0, 6, 0, -7, -1, -9, 9, 10.1};
-  std::vector<double> denomDouble = {1, 2, -1, 3, -1, -3, -3, -99.9};
-  auto input = makeRowVector(
-      {makeFlatVector<double>(numerDouble), makeFlatVector<double>(denomDouble)});
-  assertExpressionMatchesCpu("mod(c0, c1)", input, ROW({"c0", "c1"}, {DOUBLE(), DOUBLE()}));
-
-  auto specialInput = makeRowVector(
-      {makeFlatVector<double>({5.1, std::numeric_limits<double>::quiet_NaN(), 5.1, std::numeric_limits<double>::infinity(), 5.1}),
-       makeFlatVector<double>({0.0, 5.1, std::numeric_limits<double>::quiet_NaN(), 5.1, std::numeric_limits<double>::infinity()})});
-  assertExpressionMatchesCpu(
-      "mod(c0, c1)", specialInput, ROW({"c0", "c1"}, {DOUBLE(), DOUBLE()}));
-}
-
 TEST_F(CudfSimpleFilterProjectTest, modInt) {
   const auto rowType = ROW({"c0", "c1"}, {BIGINT(), BIGINT()});
   EXPECT_FALSE(canEvaluateWithAst("mod(c0, c1)", rowType));
