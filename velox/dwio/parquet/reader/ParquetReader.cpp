@@ -1047,10 +1047,26 @@ TypePtr ReaderBase::convertType(
             requestedType->toString());
         return TIME();
 
+      case thrift::ConvertedType::TIME_MICROS: {
+        VELOX_CHECK_EQ(
+            schemaElement.type,
+            thrift::Type::INT64,
+            "TIME_MICROS converted type can only be set for value of thrift::Type::INT64");
+        const bool isCompatibleRequestedType = !requestedType ||
+            isCompatible(requestedType, isRepeated, [](const TypePtr& type) {
+              return type->equivalent(*TIME_MICRO_UTC());
+            });
+        VELOX_CHECK(
+            isCompatibleRequestedType,
+            kTypeMappingErrorFmtStr,
+            "TIME MICRO UTC",
+            requestedType->toString());
+        return TIME_MICRO_UTC();
+      }
+
       case thrift::ConvertedType::MAP:
       case thrift::ConvertedType::MAP_KEY_VALUE:
       case thrift::ConvertedType::LIST:
-      case thrift::ConvertedType::TIME_MICROS:
       case thrift::ConvertedType::JSON:
       case thrift::ConvertedType::BSON:
       case thrift::ConvertedType::INTERVAL:

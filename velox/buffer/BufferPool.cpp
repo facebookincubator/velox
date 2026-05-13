@@ -39,10 +39,11 @@ BufferPtr BufferPool::get() {
   return result;
 }
 
-void BufferPool::release(BufferPtr buffer) {
-  if (buffer != nullptr && buffers_.size() < kMaxCached) {
-    buffers_.push_back(std::move(buffer));
+void BufferPool::release(BufferPtr&& buffer) {
+  if (buffer == nullptr || !buffer->unique() || buffers_.size() >= kMaxCached) {
+    return;
   }
+  buffers_.push_back(std::move(buffer));
 }
 
 size_t BufferPool::size() const {

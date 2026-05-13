@@ -64,6 +64,8 @@ TEST(HiveConfigTest, defaultConfig) {
       256UL << 10);
   ASSERT_EQ(
       hiveConfig.nimbleFooterSpeculativeIoSize(emptySession.get()), 8UL << 20);
+  ASSERT_FALSE(hiveConfig.nimbleStringDecoderZeroCopy(emptySession.get()));
+  ASSERT_FALSE(hiveConfig.nimblePreserveDictionaryEncoding(emptySession.get()));
 }
 
 TEST(HiveConfigTest, overrideConfig) {
@@ -92,7 +94,10 @@ TEST(HiveConfigTest, overrideConfig) {
       {HiveConfig::kFileMetadataCacheEnabled, "true"},
       {HiveConfig::kOrcFooterSpeculativeIoSize, std::to_string(512UL << 10)},
       {HiveConfig::kParquetFooterSpeculativeIoSize, std::to_string(1UL << 20)},
-      {HiveConfig::kNimbleFooterSpeculativeIoSize, std::to_string(4UL << 20)}};
+      {HiveConfig::kNimbleFooterSpeculativeIoSize, std::to_string(4UL << 20)},
+      {HiveConfig::kNimbleStringDecoderZeroCopy, "true"},
+      {HiveConfig::kNimblePreserveDictionaryEncoding, "true"},
+  };
   HiveConfig hiveConfig(
       std::make_shared<config::ConfigBase>(std::move(configFromFile)));
   auto emptySession = std::make_shared<config::ConfigBase>(
@@ -132,6 +137,8 @@ TEST(HiveConfigTest, overrideConfig) {
       hiveConfig.parquetFooterSpeculativeIoSize(emptySession.get()), 1UL << 20);
   ASSERT_EQ(
       hiveConfig.nimbleFooterSpeculativeIoSize(emptySession.get()), 4UL << 20);
+  ASSERT_TRUE(hiveConfig.nimbleStringDecoderZeroCopy(emptySession.get()));
+  ASSERT_TRUE(hiveConfig.nimblePreserveDictionaryEncoding(emptySession.get()));
 }
 
 TEST(HiveConfigTest, overrideSession) {
@@ -160,6 +167,8 @@ TEST(HiveConfigTest, overrideSession) {
        std::to_string(512UL << 10)},
       {HiveConfig::kNimbleFooterSpeculativeIoSizeSession,
        std::to_string(2UL << 20)},
+      {HiveConfig::kNimbleStringDecoderZeroCopySession, "true"},
+      {HiveConfig::kNimblePreserveDictionaryEncodingSession, "true"},
   };
   const auto session =
       std::make_unique<config::ConfigBase>(std::move(sessionOverride));
@@ -193,4 +202,6 @@ TEST(HiveConfigTest, overrideSession) {
   ASSERT_EQ(
       hiveConfig.parquetFooterSpeculativeIoSize(session.get()), 512UL << 10);
   ASSERT_EQ(hiveConfig.nimbleFooterSpeculativeIoSize(session.get()), 2UL << 20);
+  ASSERT_TRUE(hiveConfig.nimbleStringDecoderZeroCopy(session.get()));
+  ASSERT_TRUE(hiveConfig.nimblePreserveDictionaryEncoding(session.get()));
 }

@@ -344,6 +344,95 @@ void registerCommonAggregationFunctions(
       avgIntermediateSignatures);
 }
 
+void registerGroupbyOnlyAggregationFunctions(
+    StepAwareAggregationRegistry& registry,
+    const std::string& prefix) {
+  using exec::FunctionSignatureBuilder;
+
+  // Register stddev_samp function (sample standard deviation)
+  // Note: stddev_samp uses M2/MERGE_M2 aggregations which are only available
+  // for groupby, not reduce.
+
+  // kSingle: numeric -> double
+  auto stddevSampSingleSignatures = std::vector<exec::FunctionSignaturePtr>{
+      FunctionSignatureBuilder()
+          .returnType("double")
+          .argumentType("bigint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("double")
+          .argumentType("double")
+          .build()};
+  registerAggregationFunctionForStep(
+      registry,
+      prefix + "stddev_samp",
+      core::AggregationNode::Step::kSingle,
+      stddevSampSingleSignatures);
+  // Register stddev as alias for stddev_samp
+  registerAggregationFunctionForStep(
+      registry,
+      prefix + "stddev",
+      core::AggregationNode::Step::kSingle,
+      stddevSampSingleSignatures);
+
+  // kPartial: numeric -> row(bigint, double, double) representing (count, mean,
+  // m2)
+  auto stddevSampPartialSignatures = std::vector<exec::FunctionSignaturePtr>{
+      FunctionSignatureBuilder()
+          .returnType("row(bigint,double,double)")
+          .argumentType("bigint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("row(bigint,double,double)")
+          .argumentType("double")
+          .build()};
+  registerAggregationFunctionForStep(
+      registry,
+      prefix + "stddev_samp",
+      core::AggregationNode::Step::kPartial,
+      stddevSampPartialSignatures);
+  registerAggregationFunctionForStep(
+      registry,
+      prefix + "stddev",
+      core::AggregationNode::Step::kPartial,
+      stddevSampPartialSignatures);
+
+  // kIntermediate: row(bigint,double,double) -> row(bigint,double,double)
+  auto stddevSampIntermediateSignatures =
+      std::vector<exec::FunctionSignaturePtr>{
+          FunctionSignatureBuilder()
+              .returnType("row(bigint,double,double)")
+              .argumentType("row(bigint,double,double)")
+              .build()};
+  registerAggregationFunctionForStep(
+      registry,
+      prefix + "stddev_samp",
+      core::AggregationNode::Step::kIntermediate,
+      stddevSampIntermediateSignatures);
+  registerAggregationFunctionForStep(
+      registry,
+      prefix + "stddev",
+      core::AggregationNode::Step::kIntermediate,
+      stddevSampIntermediateSignatures);
+
+  // kFinal: row(bigint,double,double) -> double
+  auto stddevSampFinalSignatures = std::vector<exec::FunctionSignaturePtr>{
+      FunctionSignatureBuilder()
+          .returnType("double")
+          .argumentType("row(bigint,double,double)")
+          .build()};
+  registerAggregationFunctionForStep(
+      registry,
+      prefix + "stddev_samp",
+      core::AggregationNode::Step::kFinal,
+      stddevSampFinalSignatures);
+  registerAggregationFunctionForStep(
+      registry,
+      prefix + "stddev",
+      core::AggregationNode::Step::kFinal,
+      stddevSampFinalSignatures);
+}
+
 void registerReduceOnlyAggregationFunctions(
     StepAwareAggregationRegistry& registry,
     const std::string& prefix) {

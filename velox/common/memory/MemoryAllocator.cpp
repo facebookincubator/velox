@@ -29,11 +29,11 @@ DECLARE_bool(velox_memory_use_hugepages);
 namespace facebook::velox::memory {
 
 void AcquiredMemory::free(MemoryAllocator* allocator) {
-  allocator->freeNonContiguous(nonContiguous);
-  for (auto& [ptr, size] : contiguous) {
+  allocator->freeNonContiguous(nonContiguousAllocs);
+  for (auto& [ptr, size] : byteAllocations) {
     allocator->freeBytes(ptr, size);
   }
-  contiguous.clear();
+  byteAllocations.clear();
 }
 
 // static

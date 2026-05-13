@@ -16,6 +16,9 @@
 
 #include "velox/dwio/parquet/reader/PageReader.h"
 
+#include <snappy.h>
+#include <zstd.h>
+
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/common/BufferUtil.h"
@@ -143,27 +146,59 @@ const char* PageReader::decompressData(
     const char* pageData,
     uint32_t compressedSize,
     uint32_t uncompressedSize) {
-  std::unique_ptr<dwio::common::SeekableInputStream> inputStream =
-      std::make_unique<dwio::common::SeekableArrayInputStream>(
-          pageData, compressedSize, 0);
-  auto streamDebugInfo =
-      fmt::format("Page Reader: Stream {}", inputStream_->getName());
-  std::unique_ptr<dwio::common::SeekableInputStream> decompressedStream =
-      dwio::common::compression::createDecompressor(
-          codec_,
-          std::move(inputStream),
-          uncompressedSize,
-          pool_,
-          getParquetDecompressionOptions(codec_),
-          streamDebugInfo,
-          nullptr,
-          true,
-          compressedSize);
-
   dwio::common::ensureCapacity<char>(
       decompressedData_, uncompressedSize, &pool_);
-  decompressedStream->readFully(
-      decompressedData_->asMutable<char>(), uncompressedSize);
+  auto* dest = decompressedData_->asMutable<char>();
+
+  switch (codec_) {
+    case common::CompressionKind::CompressionKind_SNAPPY: {
+      size_t actualUncompressedSize;
+      VELOX_CHECK(
+          snappy::GetUncompressedLength(
+              pageData, compressedSize, &actualUncompressedSize),
+          "Snappy: failed to get uncompressed length from corrupt data");
+      VELOX_CHECK_EQ(actualUncompressedSize, uncompressedSize);
+      VELOX_CHECK(
+          snappy::RawUncompress(pageData, compressedSize, dest),
+          "Snappy decompression failed");
+      break;
+    }
+    case common::CompressionKind::CompressionKind_ZSTD: {
+      thread_local std::unique_ptr<ZSTD_DCtx, size_t (*)(ZSTD_DCtx*)> zstdCtx{
+          ZSTD_createDCtx(), ZSTD_freeDCtx};
+      VELOX_CHECK_NOT_NULL(zstdCtx);
+      const auto actualUncompressedSize = ZSTD_decompressDCtx(
+          zstdCtx.get(), dest, uncompressedSize, pageData, compressedSize);
+      VELOX_CHECK(
+          !ZSTD_isError(actualUncompressedSize),
+          "ZSTD decompression failed: {}",
+          ZSTD_getErrorName(actualUncompressedSize));
+      VELOX_CHECK_EQ(actualUncompressedSize, uncompressedSize);
+      break;
+    }
+    default: {
+      // Fallback to stream-based decompression for other codecs (gzip, lz4,
+      // lzo).
+      std::unique_ptr<dwio::common::SeekableInputStream> inputStream =
+          std::make_unique<dwio::common::SeekableArrayInputStream>(
+              pageData, compressedSize, 0);
+      auto streamDebugInfo =
+          fmt::format("Page Reader: Stream {}", inputStream_->getName());
+      std::unique_ptr<dwio::common::SeekableInputStream> decompressedStream =
+          dwio::common::compression::createDecompressor(
+              codec_,
+              std::move(inputStream),
+              uncompressedSize,
+              pool_,
+              getParquetDecompressionOptions(codec_),
+              streamDebugInfo,
+              nullptr,
+              true,
+              compressedSize);
+      decompressedStream->readFully(dest, uncompressedSize);
+      break;
+    }
+  }
 
   return decompressedData_->as<char>();
 }
@@ -814,6 +849,13 @@ void PageReader::makeDecoder() {
         break;
       }
       [[fallthrough]];
+    case Encoding::DELTA_LENGTH_BYTE_ARRAY:
+      if (parquetType == thrift::Type::BYTE_ARRAY) {
+        deltaLengthByteArrDecoder_ =
+            std::make_unique<DeltaLengthByteArrayDecoder>(pageData_);
+        break;
+      }
+      [[fallthrough]];
     default:
       VELOX_UNSUPPORTED("Encoding not supported yet: {}", encoding_);
   }
@@ -856,6 +898,8 @@ void PageReader::skip(int64_t numRows) {
     deltaBpDecoder_->skip(toSkip);
   } else if (deltaByteArrDecoder_) {
     deltaByteArrDecoder_->skip(toSkip);
+  } else if (deltaLengthByteArrDecoder_) {
+    deltaLengthByteArrDecoder_->skip(toSkip);
   } else if (rleBooleanDecoder_) {
     rleBooleanDecoder_->skip(toSkip);
   } else {

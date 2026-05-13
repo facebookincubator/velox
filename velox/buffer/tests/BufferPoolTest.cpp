@@ -91,8 +91,31 @@ TEST_F(BufferPoolTest, getWithMinBytesNoMatch) {
 
 TEST_F(BufferPoolTest, recycleNullptr) {
   BufferPool bufferPool;
-  bufferPool.release(nullptr);
+  BufferPtr nullBuffer;
+  bufferPool.release(std::move(nullBuffer));
   EXPECT_EQ(bufferPool.size(), 0);
+}
+
+TEST_F(BufferPoolTest, releaseNonUniqueBuffer) {
+  BufferPool bufferPool;
+  auto buffer = AlignedBuffer::allocate<char>(1'024, pool_.get());
+  auto copy = buffer;
+  EXPECT_FALSE(buffer->unique());
+  bufferPool.release(std::move(buffer));
+  EXPECT_EQ(bufferPool.size(), 0);
+}
+
+TEST_F(BufferPoolTest, releaseMoveSemantics) {
+  BufferPool bufferPool;
+  auto buffer = AlignedBuffer::allocate<char>(1'024, pool_.get());
+  auto* rawPtr = buffer.get();
+  EXPECT_TRUE(buffer->unique());
+  // NOLINTNEXTLINE(bugprone-use-after-move)
+  bufferPool.release(std::move(buffer));
+  EXPECT_EQ(buffer, nullptr);
+  EXPECT_EQ(bufferPool.size(), 1);
+  auto retrieved = bufferPool.get();
+  EXPECT_EQ(retrieved.get(), rawPtr);
 }
 
 TEST_F(BufferPoolTest, maxCachedLimit) {

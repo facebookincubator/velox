@@ -43,7 +43,8 @@ class IcebergSplitReader : public FileSplitReader {
       const std::shared_ptr<IoStats>& ioStats,
       FileHandleFactory* fileHandleFactory,
       folly::Executor* executor,
-      const std::shared_ptr<common::ScanSpec>& scanSpec);
+      const std::shared_ptr<common::ScanSpec>& scanSpec,
+      std::shared_ptr<ColumnHandleMap> columnHandles);
 
   ~IcebergSplitReader() override = default;
 
@@ -95,6 +96,17 @@ class IcebergSplitReader : public FileSplitReader {
   ///       Column was added to the table schema after this data file was
   ///       written. Set as NULL constant since the old file doesn't contain
   ///       this column.
+  ///    c) Row lineage (_last_updated_sequence_number):
+  ///       For Iceberg V3 row lineage, if the column is not in the file,
+  ///       inherit the data sequence number from the file's manifest entry
+  ///       (provided via $data_sequence_number info column). Per the spec,
+  ///       null values indicate the value should be inherited.
+  ///    d) Row lineage (_row_id):
+  ///       Per the spec, null _row_id values are assigned as
+  ///       first_row_id + file position. When first_row_id is available from
+  ///       the split info column $first_row_id, the value is computed
+  ///       in next(). When first_row_id is not available (e.g.,
+  ///       pre-V3 tables), NULL is returned.
   std::vector<TypePtr> adaptColumns(
       const RowTypePtr& fileType,
       const RowTypePtr& tableSchema) const override;
@@ -137,9 +149,26 @@ class IcebergSplitReader : public FileSplitReader {
   uint64_t baseReadOffset_;
   /// File position for the first row in the split.
   uint64_t splitOffset_;
+  // Active readers for positional delete files associated with this split.
   std::list<std::unique_ptr<PositionalDeleteFileReader>>
       positionalDeleteFileReaders_;
+  // Bitmap of deleted rows in the current batch; set bits mark deleted rows.
   BufferPtr deleteBitmap_;
+  // Output column index of _last_updated_sequence_number, if projected.
+  std::optional<column_index_t> lastUpdatedSeqNumOutputIndex_;
+  // Data sequence number from the split's manifest entry, used to populate
+  // _last_updated_sequence_number for rows whose stored value is null.
+  std::optional<int64_t> dataSequenceNumber_;
+  // First row ID from the split's $first_row_id info column, used to compute
+  // _row_id as first_row_id + file position for rows whose stored value is
+  // null.
+  std::optional<int64_t> firstRowId_;
+  // Output column index of _row_id, if projected.
+  std::optional<column_index_t> rowIdOutputIndex_;
+  // Whether an implicit row-number column is needed for _row_id computation
+  // (set when filters, random-skip, or positional deletes make output
+  // positions non-contiguous).
+  bool useRowNumberColumn_{false};
 
   /// Readers for Iceberg V3 deletion vectors (Puffin-encoded roaring bitmaps).
   std::list<std::unique_ptr<DeletionVectorReader>> deletionVectorReaders_;
@@ -147,5 +176,9 @@ class IcebergSplitReader : public FileSplitReader {
   /// Readers for equality delete files.
   std::list<std::unique_ptr<EqualityDeleteFileReader>>
       equalityDeleteFileReaders_;
+
+  /// Column handles map shared with IcebergDataSource.
+  /// Used for accessing column metadata including initial-default values.
+  std::shared_ptr<ColumnHandleMap> columnHandles_;
 };
 } // namespace facebook::velox::connector::hive::iceberg
