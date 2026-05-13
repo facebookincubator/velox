@@ -26,6 +26,7 @@
 #include "velox/expression/EvalCtx.h"
 #include "velox/expression/ExprStats.h"
 #include "velox/expression/VectorFunction.h"
+#include "velox/expression/VectorFunctionListener.h"
 #include "velox/type/Subfield.h"
 #include "velox/vector/SimpleVector.h"
 
@@ -145,7 +146,8 @@ class Expr {
       std::shared_ptr<VectorFunction> vectorFunction,
       VectorFunctionMetadata metadata,
       std::string name,
-      bool trackCpuUsage);
+      bool trackCpuUsage,
+      std::vector<VectorFunctionListeners> listeners = {});
 
   virtual ~Expr() = default;
 
@@ -518,6 +520,13 @@ class Expr {
       EvalCtx& context,
       VectorPtr& result);
 
+  // Invokes vectorFunction_->apply() with registered listeners and exception
+  // wrapping. Post-listeners always run (even if apply throws).
+  void invokeApplyWithListeners(
+      const SelectivityVector& rows,
+      EvalCtx& context,
+      VectorPtr& result);
+
   // Returns true if values in 'distinctFields_' have nulls that are
   // worth skipping. If so, the rows in 'rows' with at least one sure
   // null are deselected in 'nullHolder->get()'.
@@ -639,6 +648,10 @@ class Expr {
   const std::optional<SpecialFormKind> specialFormKind_;
   const bool supportsFlatNoNullsFastPath_;
   const bool trackCpuUsage_;
+  // Listeners invoked around vectorFunction_->apply() in both applyFunction()
+  // and evalSimplifiedImpl(). Collected from the global listener factory
+  // registry during expression compilation.
+  const std::vector<VectorFunctionListeners> listeners_;
 
   std::vector<VectorPtr> constantInputs_;
   std::vector<bool> inputIsConstant_;

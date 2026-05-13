@@ -32,7 +32,7 @@
 
 namespace facebook::velox::exec::trace {
 class TraceCtx;
-}
+} // namespace facebook::velox::exec::trace
 
 namespace facebook::velox::core {
 
