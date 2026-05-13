@@ -24,6 +24,7 @@
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
 #include "velox/dwio/parquet/thrift/ThriftTransport.h"
 #include "velox/functions/lib/string/StringImpl.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 namespace facebook::velox::parquet {
 
@@ -947,17 +948,23 @@ TypePtr ReaderBase::convertType(
             thrift::Type::INT64,
             "TIMESTAMP_MICROS or TIMESTAMP_MILLIS converted type can only be set for value of thrift::Type::INT64");
         VELOX_CHECK(
-            !requestedType ||
-                isCompatible(
-                    requestedType,
-                    isRepeated,
-                    [](const TypePtr& type) {
-                      return type->kind() == TypeKind::TIMESTAMP;
-                    }),
+            (!requestedType ||
+             isCompatible(
+                 requestedType,
+                 isRepeated,
+                 [](const TypePtr& type) {
+                   return type->kind() == TypeKind::TIMESTAMP ||
+                       isTimestampWithTimeZoneType(type);
+                 })),
             kTypeMappingErrorFmtStr,
             "TIMESTAMP",
             requestedType->toString(),
             schemaElement.name);
+        if (schemaElement.__isset.logicalType &&
+            schemaElement.logicalType.__isset.TIMESTAMP &&
+            schemaElement.logicalType.TIMESTAMP.isAdjustedToUTC) {
+          return TIMESTAMP_WITH_TIME_ZONE();
+        }
         return TIMESTAMP();
 
       case thrift::ConvertedType::DECIMAL: {
@@ -1127,12 +1134,16 @@ TypePtr ReaderBase::convertType(
                       requestedType,
                       isRepeated,
                       [](const TypePtr& type) {
-                        return type->kind() == TypeKind::TIMESTAMP;
+                        return type->kind() == TypeKind::TIMESTAMP ||
+                            isTimestampWithTimeZoneType(type);
                       }),
               kTypeMappingErrorFmtStr,
               "TIMESTAMP",
               requestedType->toString(),
               schemaElement.name);
+          if (schemaElement.logicalType.TIMESTAMP.isAdjustedToUTC) {
+            return TIMESTAMP_WITH_TIME_ZONE();
+          }
           return TIMESTAMP();
         }
         VELOX_CHECK(

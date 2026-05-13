@@ -18,6 +18,7 @@
 
 #include "velox/core/Expressions.h"
 #include "velox/dwio/common/Statistics.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 namespace facebook::velox::common {
 
@@ -375,6 +376,10 @@ bool testFilter(
     // fixed_len_byte_array. The loading of them is not supported in Metadata.
     return true;
   }
+  if (isTimestampWithTimeZoneType(type)) {
+    return true;
+  }
+
   switch (type->kind()) {
     case TypeKind::BIGINT:
     case TypeKind::INTEGER:

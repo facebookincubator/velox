@@ -21,6 +21,7 @@
 #include <utility>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 namespace facebook::velox::type::fbhive {
 namespace {
@@ -66,6 +67,8 @@ HiveTypeParser::HiveTypeParser() {
   setupMetadata<TokenType::String, TypeKind::VARCHAR>({"string", "varchar"});
   setupMetadata<TokenType::Binary, TypeKind::VARBINARY>(
       {"binary", "varbinary"});
+  setupMetadata<TokenType::TimestampWithTimeZone, TypeKind::BIGINT>(
+      "timestamp with local time zone");
   setupMetadata<TokenType::Timestamp, TypeKind::TIMESTAMP>("timestamp");
   setupMetadata<TokenType::Opaque, TypeKind::OPAQUE>("opaque");
   setupMetadata<TokenType::List, TypeKind::ARRAY>("array");
@@ -127,6 +130,9 @@ Result HiveTypeParser::parseType() {
       return Result{TIME()};
     } else if (nt.metadata->tokenString[0] == "time_micro_utc") {
       return Result{TIME_MICRO_UTC()};
+    } else if (
+        nt.metadata->tokenString[0] == "timestamp with local time zone") {
+      return Result{TIMESTAMP_WITH_TIME_ZONE()};
     }
     auto scalarType = createScalarType(nt.typeKind());
     VELOX_CHECK_NOT_NULL(

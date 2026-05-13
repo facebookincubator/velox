@@ -317,6 +317,19 @@ TEST_F(E2EFilterTest, timestampInt96Dictionary) {
       20);
 }
 
+TEST_F(E2EFilterTest, timestampWithTimeZoneInt64Direct) {
+  options_.enableDictionary = false;
+  options_.dataPageSize = 4 * 1024;
+
+  testWithTypes(
+    "timestamptz_val_0:timestamp with local time zone,"
+    "timestamptz_val_1:timestamp with local time zone",
+    [&]() {},
+    true,
+    {"timestamptz_val_0", "timestamptz_val_1"},
+    20);
+  }
+
 TEST_F(E2EFilterTest, floatAndDoubleDirect) {
   options_.enableDictionary = false;
   options_.dataPageSize = 4 * 1024;

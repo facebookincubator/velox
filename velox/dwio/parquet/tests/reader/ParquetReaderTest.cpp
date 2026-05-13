@@ -21,6 +21,7 @@
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
 #include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
 using namespace facebook::velox;
@@ -739,6 +740,88 @@ TEST_F(ParquetReaderTest, parseDate) {
       dateSchema(), *rowReader, expected, *leafPool_);
 }
 
+TEST_F(ParquetReaderTest, parseTimestamp) {
+  // timestamps.parquet holds one column:
+  //  int64 c_timestamp (TIMESTAMP(MICROS,false))
+  // and 15 rows.
+  // Data:
+  //  c_timestamp "2025-01-01T00:00:00.000000" / "2025-01-01T14:00:00.000000"
+
+  const std::string sample(getExampleFilePath("timestamp.parquet"));
+
+  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  auto reader = createReader(sample, readerOptions);
+
+  EXPECT_EQ(reader->numberOfRows(), 15ULL);
+
+  auto type = reader->typeWithId();
+  EXPECT_EQ(type->size(), 1ULL);
+  auto col0 = type->childAt(0);
+  EXPECT_EQ(col0->type(), TIMESTAMP());
+  EXPECT_EQ(type->childByName("c_timestamp"), col0);
+
+  RowReaderOptions rowReaderOpts;
+  auto rowType = ROW({"c_timestamp"}, {TIMESTAMP()});
+  rowReaderOpts.setScanSpec(makeScanSpec(rowType));
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto expected = makeRowVector({
+      makeFlatVector<Timestamp>(
+          15, [](auto row) { return Timestamp{1735689600 + row * 3600, 0}; }),
+  });
+  assertReadWithReaderAndExpected(rowType, *rowReader, expected, *leafPool_);
+}
+
+TEST_F(ParquetReaderTest, parseTimestampWithTimeZone) {
+  // timestamps.parquet holds one column:
+  //  int64 c_timestamptz (TIMESTAMP(MICROS,true))
+  // and 15 rows.
+  // Data:
+  //  c_timestamptz  "2024-12-31T09:00:00.00000" / "2025-01-01T13:00:00.00000"
+
+  const std::string sample(getExampleFilePath("timestamptz.parquet"));
+
+  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  auto reader = createReader(sample, readerOptions);
+
+  EXPECT_EQ(reader->numberOfRows(), 15ULL);
+
+  auto type = reader->typeWithId();
+  auto col0 = type->childAt(0);
+  EXPECT_EQ(col0->type(), TIMESTAMP_WITH_TIME_ZONE());
+  EXPECT_EQ(type->childByName("c_timestamptz"), col0);
+
+  RowReaderOptions rowReaderOpts;
+  auto rowType = ROW({"c_timestamptz"}, {TIMESTAMP_WITH_TIME_ZONE()});
+  rowReaderOpts.setScanSpec(makeScanSpec(rowType));
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  const std::vector<int64_t> millis = {
+      1735635600000LL,
+      1735642800000LL,
+      1735650000000LL,
+      1735657200000LL,
+      1735664400000LL,
+      1735671600000LL,
+      1735678800000LL,
+      1735686000000LL,
+      1735693200000LL,
+      1735700400000LL,
+      1735707600000LL,
+      1735714800000LL,
+      1735722000000LL,
+      1735729200000LL,
+      1735736400000LL,
+  };
+  auto expected = makeRowVector({
+      makeFlatVector<int64_t>(
+          millis.size(),
+          [&](auto row) { return pack(millis[row], 0); },
+          nullptr,
+          TIMESTAMP_WITH_TIME_ZONE()),
+  });
+  assertReadWithReaderAndExpected(rowType, *rowReader, expected, *leafPool_);
+}
+
 TEST_F(ParquetReaderTest, parseRowMapArray) {
   // sample.parquet holds one row of type (ROW(BIGINT c0, MAP(VARCHAR,
   // ARRAY(INTEGER)) c1) c)
@@ -1005,6 +1088,49 @@ TEST_F(ParquetReaderTest, dateFilters) {
 
   assertReadWithFilters(
       "date.parquet", dateSchema(), std::move(filters), expected);
+}
+
+TEST_F(ParquetReaderTest, timestampFilters) {
+  // Read timestamp.parquet with the timestamp filter
+  // "c_timestamp BETWEEN 2025-01-01T00:00:00.000000 AND
+  // 2025-01-01T10:00:00.000000".
+  FilterMap filters;
+  filters.insert({
+      "c_timestamp",
+      std::make_unique<TimestampRange>(
+          Timestamp::fromMicros(1735635600000000LL),
+          Timestamp::fromMicros(1735722000000000LL),
+          false),
+  });
+  auto expected = makeRowVector({
+      makeFlatVector<Timestamp>(
+          10, [](auto row) { return Timestamp{1735689600 + row * 3600, 0}; }),
+  });
+
+  auto rowType = ROW({"c_timestamp"}, {TIMESTAMP()});
+  assertReadWithFilters(
+      "timestamp.parquet", rowType, std::move(filters), expected);
+}
+
+TEST_F(ParquetReaderTest, timestampWithTimeZoneFilters) {
+  // Read timestamptz.parquet with an equality filter
+  constexpr int64_t timestampMillis = 1735635600000LL;
+  const auto packedTimestamp = pack(timestampMillis, 0);
+
+  FilterMap filters;
+  filters.insert({"c_timestamptz", exec::equal(packedTimestamp)});
+
+  auto expected = makeRowVector({
+      makeFlatVector<int64_t>(
+          1,
+          [&](auto row) { return packedTimestamp; },
+          nullptr,
+          TIMESTAMP_WITH_TIME_ZONE()),
+  });
+
+  auto rowType = ROW({"c_timestamptz"}, {TIMESTAMP_WITH_TIME_ZONE()});
+  assertReadWithFilters(
+      "timestamptz.parquet", rowType, std::move(filters), expected);
 }
 
 TEST_F(ParquetReaderTest, intMultipleFilters) {
