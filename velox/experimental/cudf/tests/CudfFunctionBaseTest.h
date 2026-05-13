@@ -56,9 +56,7 @@ class CudfFunctionBaseTest : public velox::functions::test::FunctionBaseTest {
     return result->childAt(0);
   }
 
-  bool canEvaluateWithAst(
-      const std::string& expr,
-      const RowTypePtr& rowType) {
+  bool canEvaluateWithAst(const std::string& expr, const RowTypePtr& rowType) {
     auto exprSet = compileExpression(expr, rowType);
     return ASTExpression::canEvaluate(exprSet->expr(0));
   }

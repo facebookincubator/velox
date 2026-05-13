@@ -19,6 +19,7 @@
 #include <cudf/column/column.hpp>
 #include <cudf/scalar/scalar.hpp>
 #include <cudf/types.hpp>
+
 #include <rmm/cuda_stream_view.hpp>
 #include <rmm/resource_ref.hpp>
 

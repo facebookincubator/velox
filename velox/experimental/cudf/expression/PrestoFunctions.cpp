@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/expression/AstExpressionUtils.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
-#include "velox/experimental/cudf/expression/AstExpressionUtils.h"
 
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/FunctionSignature.h"
@@ -109,42 +109,40 @@ class IntegralModFunction : public CudfFunction {
         default:
           VELOX_FAIL("Unsupported type for integral mod");
       }
-      return integralCheckedModulus(type_, asView(inputColumns[0]), rhs, stream, mr);
+      return integralCheckedModulus(
+          type_, asView(inputColumns[0]), rhs, stream, mr);
     }
     if (left_ == nullptr) {
       switch (type_.id()) {
         case cudf::type_id::INT8:
           VELOX_USER_CHECK(
-              static_cast<cudf::numeric_scalar<int8_t> const&>(*right_)
-                      .value(stream) !=
-                  0,
+              static_cast<cudf::numeric_scalar<int8_t> const&>(*right_).value(
+                  stream) != 0,
               "Cannot divide by 0");
           break;
         case cudf::type_id::INT16:
           VELOX_USER_CHECK(
-              static_cast<cudf::numeric_scalar<int16_t> const&>(*right_)
-                      .value(stream) !=
-                  0,
+              static_cast<cudf::numeric_scalar<int16_t> const&>(*right_).value(
+                  stream) != 0,
               "Cannot divide by 0");
           break;
         case cudf::type_id::INT32:
           VELOX_USER_CHECK(
-              static_cast<cudf::numeric_scalar<int32_t> const&>(*right_)
-                      .value(stream) !=
-                  0,
+              static_cast<cudf::numeric_scalar<int32_t> const&>(*right_).value(
+                  stream) != 0,
               "Cannot divide by 0");
           break;
         case cudf::type_id::INT64:
           VELOX_USER_CHECK(
-              static_cast<cudf::numeric_scalar<int64_t> const&>(*right_)
-                      .value(stream) !=
-                  0,
+              static_cast<cudf::numeric_scalar<int64_t> const&>(*right_).value(
+                  stream) != 0,
               "Cannot divide by 0");
           break;
         default:
           VELOX_FAIL("Unsupported type for integral mod");
       }
-      return integralCheckedModulus(type_, asView(inputColumns[0]), *right_, stream, mr);
+      return integralCheckedModulus(
+          type_, asView(inputColumns[0]), *right_, stream, mr);
     }
 
     auto rhs = asView(inputColumns[0]);
