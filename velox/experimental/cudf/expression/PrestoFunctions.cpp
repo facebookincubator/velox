@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/expression/AstExpressionUtils.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
+#include "velox/experimental/cudf/expression/PrestoFunctionsKernel.h"
 
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/FunctionSignature.h"

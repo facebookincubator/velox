@@ -20,6 +20,7 @@
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/JitExpression.h"
 #include "velox/experimental/cudf/expression/SparkFunctions.h"
+#include "velox/experimental/cudf/expression/PrestoFunctions.h"
 #include "velox/experimental/cudf/tests/utils/ExpressionTestUtil.h"
 
 #include "velox/common/memory/Memory.h"
@@ -51,6 +52,7 @@ class CudfExpressionSelectionTest : public ::testing::Test {
     execCtx_ = std::make_unique<core::ExecCtx>(pool_.get(), queryCtx_.get());
     cudf_velox::registerCudf();
     cudf_velox::registerSparkFunctions("");
+    cudf_velox::registerPrestoFunctions("");
     rowType_ = ROW({
         {"a", BIGINT()},
         {"b", BIGINT()},
@@ -392,6 +394,12 @@ TEST_F(CudfExpressionSelectionTest, constantFoldingStringAllocatesOnCompile) {
   ASSERT_NE(c, nullptr);
   // Verify the constant vector was created using the provided ExecCtx pool.
   ASSERT_EQ(c->value()->pool(), execCtx_->pool());
+}
+
+TEST_F(CudfExpressionSelectionTest, modInt) {
+  const auto rowType = ROW({"c0", "c1"}, {BIGINT(), BIGINT()});
+  auto ok1 = compileExecExpr("mod(c0, c1)", rowType, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(ok1, /*deep=*/true));
 }
 
 } // namespace
