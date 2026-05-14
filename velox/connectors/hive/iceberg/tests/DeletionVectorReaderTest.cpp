@@ -32,9 +32,9 @@ using namespace facebook::velox::common::testutil;
 
 namespace {
 
-/// Serializes a roaring bitmap in the portable format (no-run variant,
-/// cookie = 12346). Supports only array containers (cardinality <= 4096).
-/// This is the simplest format the DeletionVectorReader needs to parse.
+// Serializes a roaring bitmap in the portable format (no-run variant,
+// cookie = 12346). Supports only array containers (cardinality <= 4096).
+// This is the simplest format the DeletionVectorReader needs to parse.
 std::string serializeRoaringBitmapNoRun(const std::vector<int64_t>& positions) {
   if (positions.empty()) {
     // Empty bitmap: cookie + 0 containers.
@@ -93,8 +93,8 @@ std::string serializeRoaringBitmapNoRun(const std::vector<int64_t>& positions) {
   return data;
 }
 
-/// Serializes a roaring bitmap in the portable format with run containers
-/// (cookie = 12347). All containers are run-encoded.
+// Serializes a roaring bitmap in the portable format with run containers
+// (cookie = 12347). All containers are run-encoded.
 std::string serializeRoaringBitmapWithRuns(
     const std::vector<
         std::pair<uint16_t, std::vector<std::pair<uint16_t, uint16_t>>>>&
@@ -161,9 +161,9 @@ std::string serializeRoaringBitmapWithRuns(
   return data;
 }
 
-/// Expands a list of run-encoded containers into the full set of positions
-/// they represent. Each container is keyed by its high 16 bits and contains
-/// runs of (start, lengthMinus1)
+// Expands a list of run-encoded containers into the full set of positions
+// they represent. Each container is keyed by its high 16 bits and contains
+// runs of (start, lengthMinus1)
 std::vector<uint64_t> expandRuns(
     const std::vector<
         std::pair<uint16_t, std::vector<std::pair<uint16_t, uint16_t>>>>&
@@ -180,7 +180,7 @@ std::vector<uint64_t> expandRuns(
   return result;
 }
 
-/// Writes binary data to a temp file and returns the path.
+// Writes binary data to a temp file and returns the path.
 std::shared_ptr<TempFilePath> writeDvFile(const std::string& bitmapData) {
   auto tempFile = TempFilePath::create();
   // Write directly via C++ streams since TempFilePath already creates the
@@ -192,7 +192,7 @@ std::shared_ptr<TempFilePath> writeDvFile(const std::string& bitmapData) {
   return tempFile;
 }
 
-/// Creates an IcebergDeleteFile for a deletion vector.
+// Creates an IcebergDeleteFile for a deletion vector.
 IcebergDeleteFile makeDvDeleteFile(
     const std::string& filePath,
     uint64_t recordCount,
@@ -223,7 +223,7 @@ IcebergDeleteFile makeDvDeleteFile(
       upperBounds);
 }
 
-/// Extracts which bits are set in a bitmap buffer.
+// Extracts which bits are set in a bitmap buffer.
 std::vector<uint64_t> getSetBits(const BufferPtr& bitmap, uint64_t size) {
   auto* raw = bitmap->as<uint8_t>();
   std::vector<uint64_t> result;
