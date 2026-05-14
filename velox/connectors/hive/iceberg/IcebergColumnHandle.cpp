@@ -31,7 +31,8 @@ IcebergColumnHandle::IcebergColumnHandle(
     ColumnType columnType,
     TypePtr dataType,
     parquet::ParquetFieldId icebergField,
-    std::vector<common::Subfield> requiredSubfields)
+    std::vector<common::Subfield> requiredSubfields,
+    std::optional<std::string> initialDefaultValue)
     : HiveColumnHandle(
           name,
           columnType,
@@ -40,7 +41,8 @@ IcebergColumnHandle::IcebergColumnHandle(
           std::move(requiredSubfields),
           ColumnParseParameters{ColumnParseParameters::
                                     PartitionDateValueFormat::kDaysSinceEpoch}),
-      field_(std::move(icebergField)) {}
+      field_(std::move(icebergField)),
+      initialDefaultValue_(std::move(initialDefaultValue)) {}
 
 const parquet::ParquetFieldId& IcebergColumnHandle::field() const {
   return field_;

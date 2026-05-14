@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/common/io/IoStatistics.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/VeloxPlanLoader.h"
@@ -144,6 +145,10 @@ class TpchQueryBuilder {
   static constexpr const char* kPartsupp = "partsupp";
   std::shared_ptr<memory::MemoryPool> pool_ =
       memory::memoryManager()->addLeafPool();
+  std::shared_ptr<io::IoStatistics> dataIoStats_ =
+      std::make_shared<io::IoStatistics>();
+  std::shared_ptr<io::IoStatistics> metadataIoStats_ =
+      std::make_shared<io::IoStatistics>();
   const bool filtersAsNode_;
 };
 

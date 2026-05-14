@@ -16,8 +16,10 @@
 
 #pragma once
 
+#include <folly/Varint.h>
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/Nulls.h"
 
 namespace facebook::velox::parquet {
 
