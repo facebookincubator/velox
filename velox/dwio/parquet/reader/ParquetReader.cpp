@@ -355,7 +355,7 @@ void ReaderBase::initializeSchema() {
       options_.fileSchema(),
       nullptr,
       columnNames);
-  schema_ = createRowType(
+      schema_ = createRowType(
       schemaWithId_->getChildren(), isFileColumnNamesReadAsLowerCase());
 }
 
@@ -379,6 +379,13 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
   auto& schema = fileMetaData_->schema;
   uint32_t curSchemaIdx = schemaIdx;
   auto& schemaElement = schema[curSchemaIdx];
+
+  std::optional<int32_t> fieldId;
+  if (schemaElement.__isset.field_id) {
+    fieldId = schemaElement.field_id;
+  }
+
+
   bool isRepeated = false;
   bool isOptional = false;
 
@@ -402,6 +409,7 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
   if (isFileColumnNamesReadAsLowerCase()) {
     name = functions::stringImpl::utf8StrToLowerCopy(name);
   }
+
 
   if (!options_.useColumnNamesForColumnMapping() && options_.fileSchema()) {
     if (isParquetReservedKeyword(name, parentSchemaIdx, curSchemaIdx)) {
@@ -432,39 +440,92 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
       TypePtr childRequestedType = nullptr;
       bool followChild = true;
 
-      {
-        RowTypePtr requestedRowType = nullptr;
-        if (requestedType) {
-          if (requestedType->isRow()) {
-            requestedRowType =
-                std::dynamic_pointer_cast<const velox::RowType>(requestedType);
-          } else if (
-              requestedType->isArray() && isRepeated &&
-              requestedType->asArray().elementType()->isRow()) {
-            // Handle the case of unannotated array of structs (repeated group
-            // without LIST annotation).
-            requestedRowType = std::dynamic_pointer_cast<const velox::RowType>(
-                requestedType->asArray().elementType());
+      // Field ID-based filtering for Iceberg compatibility
+      if (requestedType && schema[schemaIdx].__isset.field_id) {
+        const auto& nameToFieldId = options_.nameToFieldId();
+
+        if (!nameToFieldId.empty()) {
+          std::string lowerName = childName;
+          folly::toLowerAscii(lowerName);
+
+          auto it = nameToFieldId.find(lowerName);
+          if (it != nameToFieldId.end()) {
+            // Field name found in requested schema - check field ID match
+            if (it->second != schema[schemaIdx].field_id) {
+              // Field IDs don't match - skip this child
+              followChild = false;
+            }
+            // else: Field IDs match - keep followChild = true
+          } else {
+            // Field name not in requested schema - skip this child
+            followChild = false;
           }
         }
+      }
 
-        if (requestedRowType) {
-          if (options_.useColumnNamesForColumnMapping()) {
-            auto fileTypeIdx = requestedRowType->getChildIdxIfExists(childName);
-            if (fileTypeIdx.has_value()) {
-              childRequestedType = requestedRowType->childAt(*fileTypeIdx);
-            }
-          } else {
-            // Handle schema evolution.
-            if (i < requestedRowType->size()) {
-              columnNames.push_back(requestedRowType->nameOf(i));
-              childRequestedType = requestedRowType->childAt(i);
-            } else {
-              followChild = false;
+
+{
+  RowTypePtr requestedRowType = nullptr;
+  if (requestedType) {
+    if (requestedType->isRow()) {
+      requestedRowType =
+          std::dynamic_pointer_cast<const velox::RowType>(requestedType);
+    } else if (
+        requestedType->isArray() && isRepeated &&
+        requestedType->asArray().elementType()->isRow()) {
+      // Handle the case of unannotated array of structs (repeated group
+      // without LIST annotation).
+      requestedRowType = std::dynamic_pointer_cast<const velox::RowType>(
+          requestedType->asArray().elementType());
+    }
+  }
+
+  if (requestedRowType) {
+    if (options_.useColumnNamesForColumnMapping()) {
+      std::optional<uint32_t> fileTypeIdx;
+
+      // Field ID matching for Iceberg tables
+      if (schema[schemaIdx].__isset.field_id) {
+        const auto& nameToFieldId = options_.nameToFieldId();
+
+        for (uint32_t j = 0; j < requestedRowType->size(); ++j) {
+          const auto& fieldName = requestedRowType->nameOf(j);
+
+          // Case-insensitive lookup
+          std::string lookup = fieldName;
+          folly::toLowerAscii(lookup);
+
+          auto it = nameToFieldId.find(lookup);
+          if (it != nameToFieldId.end()) {
+            // Match only if field IDs are equal
+            if (it->second == schema[schemaIdx].field_id) {
+              fileTypeIdx = j;
+              break;
             }
           }
         }
       }
+
+      // Fallback to name-based matching
+      if (!fileTypeIdx.has_value()) {
+        fileTypeIdx = requestedRowType->getChildIdxIfExists(childName);
+      }
+
+      if (fileTypeIdx.has_value()) {
+        childRequestedType = requestedRowType->childAt(*fileTypeIdx);
+      }
+    } else {
+      // Position-based matching for schema evolution
+      if (i < requestedRowType->size()) {
+        columnNames.push_back(requestedRowType->nameOf(i));
+        childRequestedType = requestedRowType->childAt(i);
+      } else {
+        followChild = false;
+      }
+    }
+  }
+}
+
 
       // Handling elements of ARRAY/MAP
       if (!requestedType && parentRequestedType) {
@@ -522,7 +583,11 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
                 maxRepeat + 1,
                 maxDefine,
                 isOptional,
-                isRepeated);
+                isRepeated,
+                0,
+                0,
+                0,
+                fieldId);
           }
           // Only special case list of map and list of list is handled here,
           // other generic case is handled with case MAP
@@ -558,7 +623,11 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
                 maxRepeat,
                 maxDefine,
                 isOptional,
-                isRepeated);
+                isRepeated,
+                0,
+                0,
+                0,
+                fieldId);
           }
 
           // For backward-compatibility, a group annotated with MAP_KEY_VALUE
@@ -589,7 +658,12 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
               maxRepeat + 1,
               maxDefine,
               isOptional,
-              isRepeated);
+              isRepeated,
+              0,
+              0,
+              0,
+              fieldId
+              );
         }
 
         default:
@@ -626,7 +700,11 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
                 maxRepeat,
                 maxDefine,
                 isOptional,
-                isRepeated);
+                isRepeated,
+                0,
+                0,
+                0,
+                fieldId);
           } else {
             // According to the spec of list backward compatibility
             // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#lists
@@ -658,7 +736,11 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
                     maxRepeat,
                     maxDefine,
                     isOptional,
-                    isRepeated));
+                    isRepeated,
+                    0,
+                    0,
+                    0,
+                    fieldId));
             auto res = std::make_unique<ParquetTypeWithId>(
                 TypeFactory<TypeKind::ARRAY>::create(childrenRowType),
                 std::move(rowChildren),
@@ -672,7 +754,11 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
                 maxRepeat,
                 maxDefine,
                 isOptional,
-                isRepeated);
+                isRepeated,
+                0,
+                0,
+                0,
+                fieldId);
             return res;
           }
         } else if (
@@ -697,7 +783,11 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
               maxRepeat,
               maxDefine,
               isOptional,
-              isRepeated);
+              isRepeated,
+              0,
+              0,
+              0,
+              fieldId);
         } else {
           // Row type
           // To support list backward compatibility, need create a new row type
@@ -723,7 +813,11 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
                   maxRepeat,
                   maxDefine,
                   isOptional,
-                  isRepeated));
+                  isRepeated,
+                  0,
+                  0,
+                  0,
+                  fieldId));
           return std::make_unique<ParquetTypeWithId>(
               TypeFactory<TypeKind::ARRAY>::create(childrenRowType),
               std::move(rowChildren),
@@ -737,7 +831,11 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
               maxRepeat,
               maxDefine,
               isOptional,
-              isRepeated);
+              isRepeated,
+              0,
+              0,
+              0,
+              fieldId);
         }
       } else {
         // Row type
@@ -755,7 +853,11 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
             maxRepeat,
             maxDefine,
             isOptional,
-            isRepeated);
+            isRepeated,
+            0,
+            0,
+            0,
+            fieldId);
       }
     }
   } else { // leaf node
@@ -793,7 +895,8 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
         isRepeated,
         precision,
         scale,
-        type_length);
+        type_length,
+        fieldId   );
 
     if (schemaElement.repetition_type ==
         thrift::FieldRepetitionType::REPEATED) {
@@ -814,7 +917,11 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
           maxRepeat,
           maxDefine - 1,
           isOptional,
-          isRepeated);
+          isRepeated,
+          0,
+          0,
+          0,
+          fieldId);
     }
     return leafTypePtr;
   }

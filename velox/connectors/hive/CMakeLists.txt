@@ -83,6 +83,7 @@ velox_link_libraries(
     velox_exec
     velox_hive_partition_function
     velox_key_encoder
+    velox_hive_iceberg_splitreader
 )
 
 velox_add_library(velox_hive_partition_function HivePartitionFunction.cpp)

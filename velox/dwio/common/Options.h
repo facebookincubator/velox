@@ -194,6 +194,15 @@ class RowReaderOptions {
     return selector_;
   }
 
+  void setNameToFieldId(
+    std::unordered_map<std::string, int32_t> mapping) {
+    nameToFieldId_ = std::move(mapping);
+  }
+
+  const std::unordered_map<std::string, int32_t>& nameToFieldId() const {
+    return nameToFieldId_;
+  }
+
   /// Gets the start of the range for the data being processed.
   /// @return if not set, return 0
   uint64_t offset() const {
@@ -510,6 +519,7 @@ class RowReaderOptions {
   RowTypePtr requestedType_;
   std::shared_ptr<velox::common::ScanSpec> scanSpec_{nullptr};
   std::shared_ptr<velox::common::MetadataFilter> metadataFilter_;
+  std::unordered_map<std::string, int32_t> nameToFieldId_;
 
   // Node id for map column to a list of keys to be projected as a struct.
   std::unordered_map<uint32_t, std::vector<std::string>> flatmapNodeIdAsStruct_;
@@ -591,6 +601,15 @@ class ReaderOptions : public io::ReaderOptions {
   ReaderOptions& setFileFormat(FileFormat format) {
     fileFormat_ = format;
     return *this;
+  }
+
+  void setNameToFieldId(
+    std::unordered_map<std::string, int32_t> mapping) {
+    nameToFieldId_ = std::move(mapping);
+  }
+
+  const std::unordered_map<std::string, int32_t>& nameToFieldId() const {
+    return nameToFieldId_;
   }
 
   /// Sets the property bag.
@@ -836,6 +855,7 @@ class ReaderOptions : public io::ReaderOptions {
   bool loadChunkIndex_{true};
   bool allowEmptyFile_{false};
   bool allowInt32Narrowing_{false};
+  std::unordered_map<std::string, int32_t> nameToFieldId_;
 };
 
 struct WriterOptions {

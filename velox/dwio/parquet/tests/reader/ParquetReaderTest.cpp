@@ -2137,3 +2137,88 @@ TEST_F(ParquetReaderTest, readTimeWithMultipleColumns) {
 
   assertReadWithReaderAndExpected(rowType, *rowReader, data, *leafPool_);
 }
+
+// Field ID Matching Tests for Iceberg support
+TEST_F(ParquetReaderTest, fieldIdMatchingStorage) {
+  // Create field ID mapping
+  std::unordered_map<std::string, int32_t> nameToFieldId;
+  nameToFieldId["currencycode"] = 1;
+  nameToFieldId["j"] = 2;
+
+  // Create reader options and set the mapping
+  dwio::common::ReaderOptions opts(leafPool_.get());
+  opts.setNameToFieldId(nameToFieldId);
+
+  // Verify the mapping is stored correctly
+  EXPECT_EQ(opts.nameToFieldId().size(), 2);
+  EXPECT_EQ(opts.nameToFieldId().at("currencycode"), 1);
+  EXPECT_EQ(opts.nameToFieldId().at("j"), 2);
+}
+
+TEST_F(ParquetReaderTest, fieldIdMatchingCaseInsensitive) {
+  // Create mapping with lowercase keys (as done in HiveDataSource)
+  std::unordered_map<std::string, int32_t> nameToFieldId;
+  nameToFieldId["currencycode"] = 1;  // lowercase
+  nameToFieldId["firstname"] = 2;     // lowercase
+
+  dwio::common::ReaderOptions opts(leafPool_.get());
+  opts.setNameToFieldId(nameToFieldId);
+
+  // Lookup with lowercase key should work
+  auto it1 = opts.nameToFieldId().find("currencycode");
+  EXPECT_NE(it1, opts.nameToFieldId().end());
+  EXPECT_EQ(it1->second, 1);
+
+  auto it2 = opts.nameToFieldId().find("firstname");
+  EXPECT_NE(it2, opts.nameToFieldId().end());
+  EXPECT_EQ(it2->second, 2);
+}
+
+TEST_F(ParquetReaderTest, fieldIdMatchingEmptyMapping) {
+  dwio::common::ReaderOptions opts(leafPool_.get());
+
+  // Default should be empty
+  EXPECT_TRUE(opts.nameToFieldId().empty());
+
+  // Set empty mapping
+  std::unordered_map<std::string, int32_t> emptyMap;
+  opts.setNameToFieldId(emptyMap);
+
+  // Should still be empty
+  EXPECT_TRUE(opts.nameToFieldId().empty());
+}
+
+TEST_F(ParquetReaderTest, fieldIdMatchingMultipleFields) {
+  std::unordered_map<std::string, int32_t> nameToFieldId;
+  nameToFieldId["field1"] = 1;
+  nameToFieldId["field2"] = 2;
+  nameToFieldId["field3"] = 3;
+  nameToFieldId["nestedfield"] = 4;
+
+  dwio::common::ReaderOptions opts(leafPool_.get());
+  opts.setNameToFieldId(nameToFieldId);
+
+  // Verify all mappings
+  EXPECT_EQ(opts.nameToFieldId().size(), 4);
+  EXPECT_EQ(opts.nameToFieldId().at("field1"), 1);
+  EXPECT_EQ(opts.nameToFieldId().at("field2"), 2);
+  EXPECT_EQ(opts.nameToFieldId().at("field3"), 3);
+  EXPECT_EQ(opts.nameToFieldId().at("nestedfield"), 4);
+}
+
+TEST_F(ParquetReaderTest, fieldIdMatchingLookupBehavior) {
+  std::unordered_map<std::string, int32_t> nameToFieldId;
+  nameToFieldId["existingfield"] = 100;
+
+  dwio::common::ReaderOptions opts(leafPool_.get());
+  opts.setNameToFieldId(nameToFieldId);
+
+  // Existing field should be found
+  auto it1 = opts.nameToFieldId().find("existingfield");
+  EXPECT_NE(it1, opts.nameToFieldId().end());
+  EXPECT_EQ(it1->second, 100);
+
+  // Non-existing field should not be found
+  auto it2 = opts.nameToFieldId().find("nonexistingfield");
+  EXPECT_EQ(it2, opts.nameToFieldId().end());
+}

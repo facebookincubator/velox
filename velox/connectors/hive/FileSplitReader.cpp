@@ -312,6 +312,9 @@ void FileSplitReader::createReader(
       ioExecutor_,
       fileReadOps);
 
+  baseReaderOpts_.setNameToFieldId(nameToFieldId_);
+
+
   baseReader_ = dwio::common::getReaderFactory(baseReaderOpts_.fileFormat())
                     ->createReader(std::move(baseFileInput), baseReaderOpts_);
   if (!baseReader_) {
@@ -370,6 +373,7 @@ void FileSplitReader::createRowReader(
   baseRowReaderOpts_.setNimblePreserveDictionaryEncoding(
       fileConfig_->nimblePreserveDictionaryEncoding(
           connectorQueryCtx_->sessionProperties()));
+  baseRowReaderOpts_.setNameToFieldId(nameToFieldId_);
   baseRowReaderOpts_.setTrackRowSize(
       rowSizeTrackingEnabled.has_value()
           ? *rowSizeTrackingEnabled
