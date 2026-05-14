@@ -88,6 +88,17 @@ class CudfDeletionVectorReader {
   static constexpr int32_t kDvLengthFieldId = 101;
 
  private:
+  /// Representation of deletion vector v1 (DV-v1) blob source.
+  struct BlobSource {
+    std::shared_ptr<velox::ReadFile> file;
+    std::size_t payloadFileOffset{0};
+    std::size_t payloadSize{0};
+    bool isRawRoaring32{false};
+  };
+
+  /// Loads a DV v1 blob from the file.
+  BlobSource loadBlobSource();
+
   /// Constructs cuco roaring bitmap from the normalized roaring bitmap
   /// payload.
   /// @param bitmapType Roaring bitmap type to build
