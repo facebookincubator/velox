@@ -149,7 +149,9 @@ std::unique_ptr<cudf::column> serializeDecimalSumState(
   // VeloxRuntimeError for this guard.
   VELOX_CHECK(
       !useLargeOffsets || cudf::strings::is_large_strings_enabled(),
-      "Size of output exceeds the column size limit");
+      "Size of output ({}) exceeds the column size limit ({})",
+      charsBytes,
+      threshold);
 
   auto const offsetsType =
       useLargeOffsets ? cudf::type_id::INT64 : cudf::type_id::INT32;
@@ -177,9 +179,8 @@ std::unique_ptr<cudf::column> serializeDecimalSumState(
         : static_cast<const void*>(offsetsView.data<int32_t>());
     const auto sumType = sumCol.type().id();
     VELOX_CHECK(
-        sumType == cudf::type_id::DECIMAL64 ||
-            sumType == cudf::type_id::DECIMAL128,
-        "Unsupported decimal sum column type");
+        sumType == cudf::type_id::DECIMAL64 || sumType == cudf::type_id::DECIMAL128,
+        "Unsupported decimal sum column type ({})", static_cast<int>(sumType));
     const void* sumPtr = sumType == cudf::type_id::DECIMAL64
         ? static_cast<const void*>(sumCol.data<int64_t>())
         : static_cast<const void*>(sumCol.data<__int128_t>());
