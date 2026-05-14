@@ -18,6 +18,8 @@
 #include <boost/uuid/uuid_io.hpp>
 #include <cmath>
 
+#include <folly/GLog.h>
+
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/SuccinctPrinter.h"
@@ -139,7 +141,8 @@ Expr::Expr(
     std::shared_ptr<VectorFunction> vectorFunction,
     VectorFunctionMetadata metadata,
     std::string name,
-    bool trackCpuUsage)
+    bool trackCpuUsage,
+    std::vector<VectorFunctionListeners> listeners)
     : type_(std::move(type)),
       inputs_(std::move(inputs)),
       name_(std::move(name)),
@@ -150,7 +153,8 @@ Expr::Expr(
           vectorFunction_->supportsFlatNoNullsFastPath() &&
           type_->isPrimitiveType() && type_->isFixedWidth() &&
           allSupportFlatNoNullsFastPath(inputs_)},
-      trackCpuUsage_{trackCpuUsage} {
+      trackCpuUsage_{trackCpuUsage},
+      listeners_(std::move(listeners)) {
   constantInputs_.reserve(inputs_.size());
   inputIsConstant_.reserve(inputs_.size());
   inputValues_.reserve(inputs_.size());
@@ -538,14 +542,7 @@ void Expr::evalSimplifiedImpl(
   }
 
   // Apply the actual function.
-  try {
-    vectorFunction_->apply(
-        remainingRows.rows(), inputValues_, type(), context, result);
-  } catch (const VeloxException&) {
-    throw;
-  } catch (const std::exception& e) {
-    VELOX_USER_FAIL(e.what());
-  }
+  invokeApplyWithListeners(remainingRows.rows(), context, result);
 
   // Make sure the returned vector has its null bitmap properly set.
   addNulls(rows, remainingRows.rows().asRange().bits(), context, result);
@@ -1696,6 +1693,59 @@ void Expr::finalizeAdaptiveCalibration(
   }
 }
 
+void Expr::invokeApplyWithListeners(
+    const SelectivityVector& rows,
+    EvalCtx& context,
+    VectorPtr& result) {
+  bool hasPostListeners = false;
+  for (const auto& listener : listeners_) {
+    if (listener.pre) {
+      (*listener.pre)(name_, rows, inputValues_, type(), context);
+    }
+    hasPostListeners |= (listener.post != nullptr);
+  }
+
+  if (!hasPostListeners) {
+    try {
+      vectorFunction_->apply(rows, inputValues_, type(), context, result);
+    } catch (const VeloxException&) {
+      throw;
+    } catch (const std::exception& e) {
+      VELOX_USER_FAIL(e.what());
+    }
+    return;
+  }
+
+  std::exception_ptr applyError;
+  try {
+    vectorFunction_->apply(rows, inputValues_, type(), context, result);
+  } catch (const VeloxException&) {
+    applyError = std::current_exception();
+  } catch (const std::exception& e) {
+    try {
+      VELOX_USER_FAIL(e.what());
+    } catch (...) {
+      applyError = std::current_exception();
+    }
+  }
+
+  for (const auto& listener : listeners_) {
+    if (listener.post) {
+      try {
+        (*listener.post)(
+            name_, rows, inputValues_, type(), context, result, applyError);
+      } catch (const std::exception& e) {
+        FB_LOG_EVERY_MS(ERROR, 5000)
+            << "Post-apply listener threw for function '" << name_
+            << "': " << e.what();
+      }
+    }
+  }
+  if (applyError) {
+    std::rethrow_exception(applyError);
+  }
+}
+
 void Expr::applyFunction(
     const SelectivityVector& rows,
     EvalCtx& context,
@@ -1709,13 +1759,7 @@ void Expr::applyFunction(
       ? computeIsAsciiForResult(vectorFunction_.get(), inputValues_, rows)
       : std::nullopt;
 
-  try {
-    vectorFunction_->apply(rows, inputValues_, type(), context, result);
-  } catch (const VeloxException&) {
-    throw;
-  } catch (const std::exception& e) {
-    VELOX_USER_FAIL(e.what());
-  }
+  invokeApplyWithListeners(rows, context, result);
 
   if (!result) {
     MutableRemainingRows remainingRows(rows, context);

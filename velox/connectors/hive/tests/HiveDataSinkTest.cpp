@@ -1951,6 +1951,45 @@ TEST_F(HiveDataSinkTest, sharedWriterOptionsWithMultipleWriters) {
       outputDirectory->getPath(), static_cast<uint32_t>(partitions.size()));
 }
 
+DEBUG_ONLY_TEST_F(HiveDataSinkTest, perWriterMemoryPool) {
+  const auto outputDirectory = TempDirectoryPath::create();
+  auto writerOptions = std::make_shared<dwrf::WriterOptions>();
+
+  const auto rowType = ROW({"c0", "p0"}, {BIGINT(), VARCHAR()});
+  auto dataSink = createDataSink(
+      rowType,
+      outputDirectory->getPath(),
+      dwio::common::FileFormat::DWRF,
+      {"p0"},
+      nullptr,
+      writerOptions);
+
+  std::set<std::string> writerPoolNames;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::dwrf::Writer::write",
+      std::function<void(dwrf::Writer*)>([&](dwrf::Writer* writer) {
+        // Memory pool hierarchy:
+        // Hive writer pool -> DWRF writer pool -> DWRF category leaf pools.
+        auto* innerPool = writer->getContext()
+                              .getMemoryPool(dwrf::MemoryUsageCategory::GENERAL)
+                              .parent();
+        ASSERT_NE(innerPool, nullptr);
+        auto* writerPool = innerPool->parent();
+        ASSERT_NE(writerPool, nullptr);
+        writerPoolNames.insert(writerPool->name());
+      }));
+
+  dataSink->appendData(makeRowVector({
+      makeFlatVector<int64_t>(200, folly::identity),
+      makeFlatVector<StringView>(
+          200, [](auto row) { return row % 2 == 0 ? "part_0" : "part_1"; }),
+  }));
+
+  ASSERT_EQ(writerPoolNames.size(), 2);
+  ASSERT_TRUE(dataSink->finish());
+  ASSERT_EQ(dataSink->close().size(), 2);
+}
+
 TEST_F(HiveDataSinkTest, sanitizeFileName) {
   auto sanitizeFileName = [](std::string fileName) {
     HiveInsertFileNameGenerator::sanitizeFileName(fileName);

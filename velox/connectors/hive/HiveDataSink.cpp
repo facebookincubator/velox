@@ -606,10 +606,6 @@ std::shared_ptr<dwio::common::WriterOptions> HiveDataSink::createWriterOptions(
     options->schema = getNonPartitionTypes(dataChannels_, inputType_);
   }
 
-  if (options->memoryPool == nullptr) {
-    options->memoryPool = writerInfo_[writerIndex]->writerPool.get();
-  }
-
   if (!options->compressionKind) {
     options->compressionKind = insertTableHandle_->compressionKind();
   }
@@ -618,9 +614,10 @@ std::shared_ptr<dwio::common::WriterOptions> HiveDataSink::createWriterOptions(
     options->spillConfig = spillConfig_;
   }
 
-  // Always set nonReclaimableSection to the current writer's holder.
-  // Since insertTableHandle_->writerOptions() returns a shared_ptr, we need
-  // to ensure each writer has its own nonReclaimableSection pointer.
+  // Always set per-writer options to the current writer's values.
+  // Since insertTableHandle_->writerOptions() returns a shared_ptr, each writer
+  // needs its own memory pool and nonReclaimableSection pointer.
+  options->memoryPool = writerInfo_[writerIndex]->writerPool.get();
   options->nonReclaimableSection =
       writerInfo_[writerIndex]->nonReclaimableSectionHolder.get();
 
