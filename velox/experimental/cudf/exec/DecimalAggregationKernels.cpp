@@ -242,8 +242,6 @@ std::unique_ptr<cudf::column> computeDecimalAverage(
       detail::buildStateValidityMask(sumCol, countCol, stream, mr);
   if (nullCount > 0) {
     out->set_null_mask(std::move(nullMask), nullCount);
-  } else if (nullMask.size() > 0) {
-    out->set_null_mask(std::move(nullMask), 0);
   }
   return out;
 }

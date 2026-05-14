@@ -1223,6 +1223,147 @@ TEST_F(CudfDecimalTest, decimalComputeAverageDecimal128) {
   }
 }
 
+TEST_F(CudfDecimalTest, decimalComputeAverageDecimal64AllValid) {
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+  std::vector<int64_t> sums = {100, 200, -150};
+  std::vector<int64_t> counts = {4, 5, 3};
+  std::vector<bool> sumValid = {true, true, true};
+  std::vector<bool> countValid = {true, true, true};
+
+  auto sumCol = makeDecimalColumn<int64_t>(sums, 2, &sumValid, stream);
+  auto countCol = makeInt64Column(counts, &countValid, stream);
+  auto avgCol =
+      computeDecimalAverage(sumCol->view(), countCol->view(), stream, mr);
+
+  EXPECT_EQ(avgCol->view().null_count(), 0);
+  auto avgMask = copyNullMask(avgCol->view(), stream);
+  auto outAvg = copyColumnData<int64_t>(avgCol->view(), stream);
+
+  auto avgUnscaled = [](int128_t sum, int64_t count) {
+    __int128_t out = 0;
+    facebook::velox::DecimalUtil::
+        divideWithRoundUp<__int128_t, __int128_t, int64_t>(
+            out, sum, count, false, 0, 0);
+    return static_cast<int64_t>(out);
+  };
+
+  for (size_t i = 0; i < sums.size(); ++i) {
+    if (avgCol->view().nullable()) {
+      EXPECT_TRUE(isValidAt(avgMask, i)) << "row " << i;
+    }
+    EXPECT_EQ(outAvg[i], avgUnscaled(sums[i], counts[i])) << "row " << i;
+  }
+}
+
+TEST_F(CudfDecimalTest, decimalComputeAverageDecimal128AllValid) {
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+  std::vector<__int128_t> sums = {
+      static_cast<__int128_t>(90000),
+      static_cast<__int128_t>(-5000),
+      static_cast<__int128_t>(1),
+  };
+  std::vector<int64_t> counts = {3, 5, 1};
+  std::vector<bool> sumValid = {true, true, true};
+  std::vector<bool> countValid = {true, true, true};
+
+  auto sumCol = makeDecimalColumn<__int128_t>(sums, 3, &sumValid, stream);
+  auto countCol = makeInt64Column(counts, &countValid, stream);
+  auto avgCol =
+      computeDecimalAverage(sumCol->view(), countCol->view(), stream, mr);
+
+  EXPECT_EQ(avgCol->view().null_count(), 0);
+  auto avgMask = copyNullMask(avgCol->view(), stream);
+  auto outAvg = copyColumnData<__int128_t>(avgCol->view(), stream);
+
+  auto avgUnscaled = [](int128_t sum, int64_t count) {
+    __int128_t out = 0;
+    facebook::velox::DecimalUtil::
+        divideWithRoundUp<__int128_t, __int128_t, int64_t>(
+            out, sum, count, false, 0, 0);
+    return out;
+  };
+
+  for (size_t i = 0; i < sums.size(); ++i) {
+    if (avgCol->view().nullable()) {
+      EXPECT_TRUE(isValidAt(avgMask, i)) << "row " << i;
+    }
+    EXPECT_EQ(outAvg[i], avgUnscaled(sums[i], counts[i])) << "row " << i;
+  }
+}
+
+TEST_F(CudfDecimalTest, decimalComputeAverageDecimal64NonNullableInputs) {
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+  std::vector<int64_t> sums = {80, -40, 1000};
+  std::vector<int64_t> counts = {2, 4, 10};
+
+  auto sumCol = makeDecimalColumn<int64_t>(sums, 2, nullptr, stream);
+  auto countCol = makeInt64Column(counts, nullptr, stream);
+  ASSERT_FALSE(sumCol->nullable());
+  ASSERT_FALSE(countCol->nullable());
+
+  auto avgCol =
+      computeDecimalAverage(sumCol->view(), countCol->view(), stream, mr);
+
+  EXPECT_EQ(avgCol->view().null_count(), 0);
+  auto avgMask = copyNullMask(avgCol->view(), stream);
+  auto outAvg = copyColumnData<int64_t>(avgCol->view(), stream);
+
+  auto avgUnscaled = [](int128_t sum, int64_t count) {
+    __int128_t out = 0;
+    facebook::velox::DecimalUtil::
+        divideWithRoundUp<__int128_t, __int128_t, int64_t>(
+            out, sum, count, false, 0, 0);
+    return static_cast<int64_t>(out);
+  };
+
+  for (size_t i = 0; i < sums.size(); ++i) {
+    if (avgCol->view().nullable()) {
+      EXPECT_TRUE(isValidAt(avgMask, i)) << "row " << i;
+    }
+    EXPECT_EQ(outAvg[i], avgUnscaled(sums[i], counts[i])) << "row " << i;
+  }
+}
+
+TEST_F(CudfDecimalTest, decimalComputeAverageDecimal128NonNullableInputs) {
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+  std::vector<__int128_t> sums = {
+      static_cast<__int128_t>(600),
+      static_cast<__int128_t>(-99),
+  };
+  std::vector<int64_t> counts = {3, 9};
+
+  auto sumCol = makeDecimalColumn<__int128_t>(sums, 4, nullptr, stream);
+  auto countCol = makeInt64Column(counts, nullptr, stream);
+  ASSERT_FALSE(sumCol->nullable());
+  ASSERT_FALSE(countCol->nullable());
+
+  auto avgCol =
+      computeDecimalAverage(sumCol->view(), countCol->view(), stream, mr);
+
+  EXPECT_EQ(avgCol->view().null_count(), 0);
+  auto avgMask = copyNullMask(avgCol->view(), stream);
+  auto outAvg = copyColumnData<__int128_t>(avgCol->view(), stream);
+
+  auto avgUnscaled = [](int128_t sum, int64_t count) {
+    __int128_t out = 0;
+    facebook::velox::DecimalUtil::
+        divideWithRoundUp<__int128_t, __int128_t, int64_t>(
+            out, sum, count, false, 0, 0);
+    return out;
+  };
+
+  for (size_t i = 0; i < sums.size(); ++i) {
+    if (avgCol->view().nullable()) {
+      EXPECT_TRUE(isValidAt(avgMask, i)) << "row " << i;
+    }
+    EXPECT_EQ(outAvg[i], avgUnscaled(sums[i], counts[i])) << "row " << i;
+  }
+}
+
 TEST_F(CudfDecimalTest, decimalSumStateRoundTripDecimal64) {
   auto stream = cudf::get_default_stream();
   auto mr = cudf::get_current_device_resource_ref();
