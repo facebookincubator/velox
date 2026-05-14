@@ -184,6 +184,16 @@ class ArithmeticTest : public SparkFunctionBaseTest {
     return evaluateOnce<T>("unaryminus(c0)", arg);
   }
 
+  template <typename T>
+  std::optional<T> add(std::optional<T> a, std::optional<T> b) {
+    return evaluateOnce<T>("add(c0, c1)", a, b);
+  }
+
+  template <typename T>
+  std::optional<T> subtract(std::optional<T> a, std::optional<T> b) {
+    return evaluateOnce<T>("subtract(c0, c1)", a, b);
+  }
+
   std::optional<double> divide(
       std::optional<double> numerator,
       std::optional<double> denominator) {
@@ -333,6 +343,47 @@ TEST_F(ArithmeticTest, UnaryMinusOverflowAnsi) {
   EXPECT_TRUE(std::isnan(unaryminus<float>(kNan).value_or(0)));
   EXPECT_EQ(unaryminus<double>(-kInf), kInf);
   EXPECT_TRUE(std::isnan(unaryminus<double>(kNan).value_or(0)));
+}
+
+TEST_F(ArithmeticTest, AddOverflow) {
+  EXPECT_EQ(add<int8_t>(INT8_MAX, 1), std::numeric_limits<int8_t>::min());
+  EXPECT_EQ(add<int16_t>(INT16_MAX, 1), std::numeric_limits<int16_t>::min());
+  EXPECT_EQ(add<int32_t>(INT32_MAX, 1), std::numeric_limits<int32_t>::min());
+  EXPECT_EQ(add<int64_t>(INT64_MAX, 1), std::numeric_limits<int64_t>::min());
+}
+
+TEST_F(ArithmeticTest, AddOverflowAnsi) {
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  VELOX_ASSERT_THROW(add<int8_t>(INT8_MAX, 1), "Arithmetic overflow");
+  VELOX_ASSERT_THROW(add<int16_t>(INT16_MAX, 1), "Arithmetic overflow");
+  VELOX_ASSERT_THROW(add<int32_t>(INT32_MAX, 1), "Arithmetic overflow");
+  VELOX_ASSERT_THROW(add<int64_t>(INT64_MAX, 1), "Arithmetic overflow");
+
+  EXPECT_EQ(add<int32_t>(1, 2), 3);
+}
+
+TEST_F(ArithmeticTest, SubtractOverflow) {
+  EXPECT_EQ(subtract<int8_t>(INT8_MIN, 1), std::numeric_limits<int8_t>::max());
+  EXPECT_EQ(
+      subtract<int16_t>(INT16_MIN, 1), std::numeric_limits<int16_t>::max());
+  EXPECT_EQ(
+      subtract<int32_t>(INT32_MIN, 1), std::numeric_limits<int32_t>::max());
+  EXPECT_EQ(
+      subtract<int64_t>(INT64_MIN, 1), std::numeric_limits<int64_t>::max());
+}
+
+TEST_F(ArithmeticTest, SubtractOverflowAnsi) {
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  VELOX_ASSERT_THROW(subtract<int8_t>(INT8_MIN, 1), "Arithmetic overflow");
+  VELOX_ASSERT_THROW(subtract<int16_t>(INT16_MIN, 1), "Arithmetic overflow");
+  VELOX_ASSERT_THROW(subtract<int32_t>(INT32_MIN, 1), "Arithmetic overflow");
+  VELOX_ASSERT_THROW(subtract<int64_t>(INT64_MIN, 1), "Arithmetic overflow");
+
+  EXPECT_EQ(subtract<int32_t>(3, 2), 1);
 }
 
 TEST_F(ArithmeticTest, Divide) {
