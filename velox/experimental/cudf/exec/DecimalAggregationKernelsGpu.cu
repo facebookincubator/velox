@@ -29,16 +29,15 @@
 namespace facebook::velox::cudf_velox {
 namespace {
 
-constexpr int32_t kStateSize = detail::kDecimalSumStateSize;
-
-struct DecimalSumStateDevice {
-  int64_t count;
-  int64_t overflow;
-  uint64_t lower;
-  int64_t upper;
+// TODO: Handle overflow as in CPU.
+struct DecimalSumState {
+  int64_t count;    // count of non-null input rows aggregated
+  int64_t overflow; // overflow/extension field, not used by GPU
+  uint64_t lower;   // lower 64 bits of the decimal sum
+  int64_t upper;    // upper 64 bits of the decimal sum (signed)
 };
 
-static_assert(sizeof(DecimalSumStateDevice) == kStateSize);
+static_assert(sizeof(DecimalSumState) == detail::kDecimalSumStateSize);
 
 __device__ __forceinline__ void
 splitToWords(int64_t value, int64_t& upper, uint64_t& lower) {
@@ -57,7 +56,7 @@ struct FillOffsetsFunctor {
   OffsetT* offsets;
 
   __device__ void operator()(int32_t idx) const {
-    int64_t offset = static_cast<int64_t>(idx) * kStateSize;
+    int64_t offset = static_cast<int64_t>(idx) * detail::kDecimalSumStateSize;
     offsets[idx] = static_cast<OffsetT>(offset);
   }
 };
@@ -71,7 +70,7 @@ struct PackStateFunctor {
 
   __device__ void operator()(int32_t idx) const {
     int64_t offset = static_cast<int64_t>(offsets[idx]);
-    auto* state = reinterpret_cast<DecimalSumStateDevice*>(chars + offset);
+    auto* state = reinterpret_cast<DecimalSumState*>(chars + offset);
     int64_t upper;
     uint64_t lower;
     splitToWords(sums[idx], upper, lower);
@@ -92,7 +91,7 @@ struct UnpackStateFunctor {
   __device__ void operator()(int32_t idx) const {
     int64_t offset = static_cast<int64_t>(offsets[idx]);
     auto* state =
-        reinterpret_cast<const DecimalSumStateDevice*>(chars + offset);
+        reinterpret_cast<const DecimalSumState*>(chars + offset);
     counts[idx] = state->count;
     sums[idx] = (static_cast<__int128_t>(state->upper) << 64) | state->lower;
   }
