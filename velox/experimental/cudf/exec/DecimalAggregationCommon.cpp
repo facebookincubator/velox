@@ -31,7 +31,8 @@ void validateIntermediateColumnType(cudf::column_view const& column) {
   VELOX_CHECK_EQ(
       colType,
       static_cast<int>(cudf::type_id::STRING),
-      "Expected serialized decimal aggregation state: Velox VARBINARY represented as cuDF STRING (got type {})", colType);
+      "Expected serialized decimal aggregation state: Velox VARBINARY represented as cuDF STRING (got type {})",
+      colType);
 }
 
 std::unique_ptr<cudf::column> castCountColumnToInt64(

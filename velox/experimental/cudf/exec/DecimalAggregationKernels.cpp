@@ -179,8 +179,10 @@ std::unique_ptr<cudf::column> serializeDecimalSumState(
         : static_cast<const void*>(offsetsView.data<int32_t>());
     const auto sumType = sumCol.type().id();
     VELOX_CHECK(
-        sumType == cudf::type_id::DECIMAL64 || sumType == cudf::type_id::DECIMAL128,
-        "Unsupported decimal sum column type ({})", static_cast<int>(sumType));
+        sumType == cudf::type_id::DECIMAL64 ||
+            sumType == cudf::type_id::DECIMAL128,
+        "Unsupported decimal sum column type ({})",
+        static_cast<int>(sumType));
     const void* sumPtr = sumType == cudf::type_id::DECIMAL64
         ? static_cast<const void*>(sumCol.data<int64_t>())
         : static_cast<const void*>(sumCol.data<__int128_t>());

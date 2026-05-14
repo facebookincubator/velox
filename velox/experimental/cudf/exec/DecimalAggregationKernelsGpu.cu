@@ -31,10 +31,10 @@ namespace {
 
 // TODO: Handle overflow as in CPU.
 struct DecimalSumState {
-  int64_t count;    // count of non-null input rows aggregated
+  int64_t count; // count of non-null input rows aggregated
   int64_t overflow; // overflow/extension field, not used by GPU
-  uint64_t lower;   // lower 64 bits of the decimal sum
-  int64_t upper;    // upper 64 bits of the decimal sum (signed)
+  uint64_t lower; // lower 64 bits of the decimal sum
+  int64_t upper; // upper 64 bits of the decimal sum (signed)
 };
 
 static_assert(sizeof(DecimalSumState) == detail::kDecimalSumStateSize);
@@ -90,8 +90,7 @@ struct UnpackStateFunctor {
 
   __device__ void operator()(int32_t idx) const {
     int64_t offset = static_cast<int64_t>(offsets[idx]);
-    auto* state =
-        reinterpret_cast<const DecimalSumState*>(chars + offset);
+    auto* state = reinterpret_cast<const DecimalSumState*>(chars + offset);
     counts[idx] = state->count;
     sums[idx] = (static_cast<__int128_t>(state->upper) << 64) | state->lower;
   }
