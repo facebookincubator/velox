@@ -259,6 +259,13 @@ class CudfHashJoinProbe : public CudfOperatorBase {
 
   static constexpr auto oobPolicy = cudf::out_of_bounds_policy::NULLIFY;
 
+  std::unique_ptr<cudf::table> filteredLeftJoinOutput(
+      cudf::table_view leftTableView,
+      cudf::column_view leftIndicesCol,
+      cudf::table_view rightTableView,
+      cudf::column_view rightIndicesCol,
+      rmm::cuda_stream_view stream);
+
   /**
    * @brief Performs inner join between probe table and all build tables.
    * @param leftTable Probe-side table to join
