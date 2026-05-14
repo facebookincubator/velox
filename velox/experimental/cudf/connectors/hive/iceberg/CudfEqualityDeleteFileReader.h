@@ -129,36 +129,36 @@ class CudfEqualityDeleteFileReader {
   }
 
  private:
-  /// Lazily builds the distinct_hash_join on the first `applyDeletes` call.
-  /// Converts `deleteRows_` to a GPU table if needed.
+  // Lazily builds the distinct_hash_join on the first `applyDeletes` call.
+  // Converts `deleteRows_` to a GPU table if needed.
   void buildHashJoin(rmm::cuda_stream_view stream);
 
-  /// Eagerly reads the Parquet-format equality delete file into the
-  /// deleteKeyTable_ cudf table.
+  // Eagerly reads the Parquet-format equality delete file into the
+  // deleteKeyTable_ cudf table.
   void directReadEqualityDeleteFile(
       const velox_iceberg::IcebergDeleteFile& deleteFile,
       std::shared_ptr<dwio::common::BufferedInput> bufferedInput);
 
-  /// Lazily constructs the equality column indices in the input table
-  /// on the first call to applyDeletes().
+  // Lazily constructs the equality column indices in the input table
+  // on the first call to applyDeletes().
   void buildEqualityColumnIndices(
       const std::vector<std::string>& inputColumnNames);
 
-  /// Column names and types for equality delete comparison.
+  // Column names and types for equality delete comparison.
   std::vector<std::string> equalityColumnNames_;
 
-  /// Number of delete key tuples loaded from the file.
+  // Number of delete key tuples loaded from the file.
   size_t numDeleteKeys_;
 
-  /// Transient CPU and GPU tables containing all rows read from the equality
-  /// delete file, used for equality comparison during probing.
+  // Transient CPU and GPU tables containing all rows read from the equality
+  // delete file, used for equality comparison during probing.
   RowVectorPtr deleteRows_;
   std::unique_ptr<cudf::table> deleteKeyTable_;
 
-  /// Hash join object built once from deleteKeyTable_ and probed per-batch.
+  // Hash join object built once from deleteKeyTable_ and probed per-batch.
   std::unique_ptr<cudf::distinct_hash_join> deleteHashJoin_;
 
-  /// Equality column indices in the input table
+  // Equality column indices in the input table
   std::vector<cudf::size_type> equalityColumnIndices_;
 
   memory::MemoryPool* pool_;

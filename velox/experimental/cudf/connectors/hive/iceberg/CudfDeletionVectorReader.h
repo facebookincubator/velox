@@ -85,7 +85,7 @@ class CudfDeletionVectorReader {
   static constexpr int32_t kDvLengthFieldId = 101;
 
  private:
-  /// Representation of deletion vector v1 (DV-v1) blob source.
+  // Representation of deletion vector v1 (DV-v1) blob source.
   struct BlobSource {
     std::shared_ptr<velox::ReadFile> file;
     std::size_t payloadFileOffset{0};
@@ -93,35 +93,35 @@ class CudfDeletionVectorReader {
     bool isRawRoaring32{false};
   };
 
-  /// Loads a DV v1 blob from the file.
+  // Loads a DV v1 blob from the file.
   BlobSource loadBlobSource();
 
-  /// Constructs cuco roaring bitmap from the normalized roaring bitmap
-  /// payload.
-  /// @param bitmapType Roaring bitmap type to build
-  /// @param roaringBitmapPayload Normalized payload of the roaring bitmap.
-  /// @param stream CUDA stream for bitmap construction
+  // Constructs cuco roaring bitmap from the normalized roaring bitmap
+  // payload.
+  // @param bitmapType Roaring bitmap type to build
+  // @param roaringBitmapPayload Normalized payload of the roaring bitmap.
+  // @param stream CUDA stream for bitmap construction
   void buildBitmap(
       cudf::roaring_bitmap_type bitmapType,
       std::string_view roaringBitmapPayload,
       rmm::cuda_stream_view stream);
 
-  /// Loads the deletion vector blob from the Puffin file, strips the DV-v1
-  /// envelope, and constructs the cuco roaring bitmap. Called lazily on the
-  /// first `applyDeletionVector` call.
+  // Loads the deletion vector blob from the Puffin file, strips the DV-v1
+  // envelope, and constructs the cuco roaring bitmap. Called lazily on the
+  // first `applyDeletionVector` call.
   void loadBitmap(rmm::cuda_stream_view stream);
 
-  /// Opaque wrapper class for cuco's 32 or 64 bit roaring bitmap
+  // Opaque wrapper class for cuco's 32 or 64 bit roaring bitmap
   std::unique_ptr<cudf::roaring_bitmap> bitmap_;
 
-  /// Row indices column
+  // Row indices column
   std::unique_ptr<cudf::column> rowIndices_;
 
-  /// Deletion vector file metadata.
+  // Deletion vector file metadata.
   const velox::connector::hive::iceberg::IcebergDeleteFile dvFile_;
   uint64_t splitOffset_;
 
-  /// Whether the bitmap has been loaded from the file.
+  // Whether the bitmap has been loaded from the file.
   bool loaded_{false};
 };
 

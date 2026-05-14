@@ -66,71 +66,71 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   void prepareSplit(dwio::common::RuntimeStatistics& runtimeStats) override;
 
  protected:
-  /// Override to create the chunked parquet reader.
+  // Override to create the chunked parquet reader.
   void createCudfReader(rmm::device_async_resource_ref output_mr) override;
 
-  /// Override to apply Iceberg deletes after reading a cudf table chunk.
+  // Override to apply Iceberg deletes after reading a cudf table chunk.
   std::optional<std::unique_ptr<cudf::table>> readNextChunk(
       rmm::device_async_resource_ref output_mr) override;
 
  private:
-  /// Determine the memory resource to construct the `chunked_parquet_reader`
-  /// and when calling `readNextChunk` for the hybrid scan reader.
+  // Determine the memory resource to construct the `chunked_parquet_reader`
+  // and when calling `readNextChunk` for the hybrid scan reader.
   rmm::device_async_resource_ref determineCudfMemoryResource();
 
-  /// Setup delete file readers for positional deletes, equality deletes, and
-  /// deletion vectors.
-  /// @param runtimeStats Reference to the DataSource's runtime statistics,
-  /// passed to delete file readers for stats accumulation.
+  // Setup delete file readers for positional deletes, equality deletes, and
+  // deletion vectors.
+  // @param runtimeStats Reference to the DataSource's runtime statistics,
+  // passed to delete file readers for stats accumulation.
   void setupDeleteFileReaders(dwio::common::RuntimeStatistics& runtimeStats);
 
-  /// Apply deletion vector (V3) to the input cudf table.
+  // Apply deletion vector (V3) to the input cudf table.
   void applyDeletionVector(cudf::table_view input);
 
-  /// Apply positional deletes (V2) to the input cudf table.
+  // Apply positional deletes (V2) to the input cudf table.
   void applyPositionalDeletes(cudf::table_view input);
 
-  /// Apply equality deletes (V2) to the input cudf table.
+  // Apply equality deletes (V2) to the input cudf table.
   void applyEqualityDeletes(cudf::table_view input);
 
-  /// Setup column projection to include any equality delete key columns
-  /// that are not already in the output projection.
+  // Setup column projection to include any equality delete key columns
+  // that are not already in the output projection.
   void setupColumnProjection();
 
-  /// Adapts the data file schema to match the table schema expected by the
-  /// query.
-  ///
-  /// This method reconciles differences between the physical data file schema
-  /// and the logical table schema, handling various scenarios where columns may
-  /// be missing, added, or need special treatment.
-  ///
-  /// Classifies each output column into one of:
-  ///
-  /// 1. Info columns:
-  ///    Column is a synthesized info column (e.g., $file_size) from the
-  ///    split metadata. Recorded for post-read injection as a constant.
-  ///
-  /// 2. Columns present in File:
-  ///    Column exists in the parquet file and will be read normally.
-  ///    Type coercion is handled by the cudf parquet reader options.
-  ///
-  /// 3. Columns missing from File:
-  ///    a) Partition columns (Hive-migrated tables):
-  ///       Column is a partition key in the Iceberg split. In Hive-written
-  ///       Iceberg tables, partition column values are stored in partition
-  ///       metadata, not in the data file itself. Recorded for post-read
-  ///       injection as a constant.
-  ///    b) Schema evolution (newly added columns):
-  ///       Column was added to the table schema after this data file was
-  ///       written. Recorded for post-read injection as a typed NULL column.
-  ///
-  /// Columns are recorded in injectedColumns_ and removed from readColumnNames_
-  /// so they are injected after reading using `injectMissingColumns()`.
+  // Adapts the data file schema to match the table schema expected by the
+  // query.
+  //
+  // This method reconciles differences between the physical data file schema
+  // and the logical table schema, handling various scenarios where columns may
+  // be missing, added, or need special treatment.
+  //
+  // Classifies each output column into one of:
+  //
+  // 1. Info columns:
+  //    Column is a synthesized info column (e.g., $file_size) from the
+  //    split metadata. Recorded for post-read injection as a constant.
+  //
+  // 2. Columns present in File:
+  //    Column exists in the parquet file and will be read normally.
+  //    Type coercion is handled by the cudf parquet reader options.
+  //
+  // 3. Columns missing from File:
+  //    a) Partition columns (Hive-migrated tables):
+  //       Column is a partition key in the Iceberg split. In Hive-written
+  //       Iceberg tables, partition column values are stored in partition
+  //       metadata, not in the data file itself. Recorded for post-read
+  //       injection as a constant.
+  //    b) Schema evolution (newly added columns):
+  //       Column was added to the table schema after this data file was
+  //       written. Recorded for post-read injection as a typed NULL column.
+  //
+  // Columns are recorded in injectedColumns_ and removed from readColumnNames_
+  // so they are injected after reading using `injectMissingColumns()`.
   void adaptColumns();
 
-  /// Inject partition columns and schema-evolution NULL columns into the
-  /// cudf table after reading. Returns a new table with all output columns
-  /// in the correct order.
+  // Inject partition columns and schema-evolution NULL columns into the
+  // cudf table after reading. Returns a new table with all output columns
+  // in the correct order.
   std::unique_ptr<cudf::table> injectMissingColumns(
       std::unique_ptr<cudf::table>&& table,
       rmm::device_async_resource_ref mr);
@@ -138,23 +138,23 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   std::shared_ptr<const velox_iceberg::HiveIcebergSplit> icebergSplit_;
   std::shared_ptr<const velox_hive::HiveConfig> hiveConfig_;
 
-  /// cuCollections-accelerated deletion vector (roaring bitmap) reader
+  // cuCollections-accelerated deletion vector (roaring bitmap) reader
   std::unique_ptr<CudfDeletionVectorReader> deletionVectorReader_;
 
-  /// Positional delete file readers
+  // Positional delete file readers
   std::list<std::unique_ptr<velox_iceberg::PositionalDeleteFileReader>>
       positionalDeleteFileReaders_;
 
-  /// Equality delete file readers.
+  // Equality delete file readers.
   std::list<std::unique_ptr<CudfEqualityDeleteFileReader>>
       equalityDeleteFileReaders_;
 
-  /// Extra equality delete key columns appended to readColumnNames_ that
-  /// are not part of the output projection.
+  // Extra equality delete key columns appended to readColumnNames_ that
+  // are not part of the output projection.
   std::vector<std::string> extraEqualityColumns_;
 
-  /// Describes a column that must be injected after reading because it is
-  /// not present in the parquet file (partition column or schema evolution).
+  // Describes a column that must be injected after reading because it is
+  // not present in the parquet file (partition column or schema evolution).
   struct InjectedColumn {
     size_t outputIndex; // position in the final output schema
     std::string name;
@@ -163,11 +163,11 @@ class CudfIcebergSplitReader : public CudfSplitReader {
     TypePtr veloxType;
   };
 
-  /// Columns to inject after reading. Populated by adaptColumns().
+  // Columns to inject after reading. Populated by adaptColumns().
   std::vector<InjectedColumn> injectedColumns_;
 
-  /// Tracks the absolute row offset within the data file. Each chunk advances
-  /// this by the number of rows read (before deletes).
+  // Tracks the absolute row offset within the data file. Each chunk advances
+  // this by the number of rows read (before deletes).
   uint64_t baseReadOffset_{0};
 
   BufferPtr deleteBitmap_{nullptr};

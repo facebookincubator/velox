@@ -34,8 +34,8 @@ namespace facebook::velox::cudf_velox::connector::hive::iceberg {
 
 namespace {
 
-/// Functor to apply deletion bitmap to the mask. A row is deleted if it was
-/// either previously or now deleted
+// Functor to apply deletion bitmap to the mask. A row is deleted if it was
+// either previously or now deleted
 struct IsDeletedRow {
   const cudf::bitmask_type* bitmask;
   __device__ bool operator()(cudf::size_type index, bool wasDeleted)

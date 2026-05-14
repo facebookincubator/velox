@@ -35,14 +35,14 @@ namespace facebook::velox::cudf_velox::connector::hive::iceberg {
 
 namespace {
 
-/// Roaring portable-format cookie constants.
+// Roaring portable-format cookie constants.
 constexpr uint32_t kNoRunCookie = 12346;
 constexpr uint32_t kRunCookie = 12347;
 constexpr uint32_t kCookieMask = 0xFFFF;
 constexpr std::size_t kCookieSize = sizeof(uint32_t);
 
-/// Loads a fixed width value from a string view without assuming aligned
-/// memory.
+// Loads a fixed width value from a string view without assuming aligned
+// memory.
 template <typename T>
 T inline unalignedLoad(std::string_view payload, std::size_t offset = 0)
   requires(std::is_integral_v<T>)
@@ -52,7 +52,7 @@ T inline unalignedLoad(std::string_view payload, std::size_t offset = 0)
   return value;
 }
 
-/// Reads an integral big endian value from a byte array.
+// Reads an integral big endian value from a byte array.
 template <typename T>
 constexpr T inline readBigEndian(const uint8_t* p)
   requires(std::is_integral_v<T>)
@@ -72,8 +72,8 @@ constexpr T inline readBigEndian(const uint8_t* p)
   }
 }
 
-/// Checks if there's a valid 32 bit roaring bitmap cookie at the start of the
-/// payload string.
+// Checks if there's a valid 32 bit roaring bitmap cookie at the start of the
+// payload string.
 [[nodiscard]] bool inline isRoaring32Cookie(std::string_view payload) {
   auto cookie = unalignedLoad<uint32_t>(payload);
   return cookie == kNoRunCookie or ((cookie & kCookieMask) == kRunCookie);
@@ -272,7 +272,6 @@ CudfDeletionVectorReader::loadBlobSource() {
   return source;
 }
 
-/// Constructs the cuco roaring bitmap on the GPU from the roaringBitmapPayload.
 void CudfDeletionVectorReader::buildBitmap(
     cudf::roaring_bitmap_type bitmapType,
     std::string_view roaringBitmapPayload,
