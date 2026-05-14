@@ -379,17 +379,15 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     pool_ = std::move(pool);
   }
 
-  /// Tracks an additional root pool tied to a custom memory resource. Called
-  /// by Builder::build for each entry in MemoryManager::customResources.
+  /// Tracks an additional root pool tied to a custom memory resource.
   void addCustomPool(std::shared_ptr<memory::MemoryPool> pool);
 
-  /// Returns the custom root pool associated with the resource tag, or
-  /// nullptr if no pool was registered under that tag for this query.
+  /// Returns the custom root pool for the given resource tag, or nullptr if
+  /// none is registered under that tag for this query.
   std::shared_ptr<memory::MemoryPool> customPool(
       const std::string& tag) const;
 
-  /// Returns all custom root pools registered for this query, in registration
-  /// order. The reference is stable for the lifetime of the QueryCtx.
+  /// Returns all custom root pools for this query, in registration order.
   const std::vector<std::shared_ptr<memory::MemoryPool>>& customPools() const {
     return customPools_;
   }

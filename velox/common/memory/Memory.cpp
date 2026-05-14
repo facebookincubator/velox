@@ -274,7 +274,7 @@ std::shared_ptr<MemoryPoolImpl> MemoryManager::createRootPool(
       std::move(reclaimer),
       options);
   VELOX_CHECK_EQ(pool->capacity(), 0);
-  arbitrator_->addPool(pool);
+  pool->arbitrator()->addPool(pool);
   RECORD_HISTOGRAM_METRIC_VALUE(
       kMetricMemoryPoolInitialCapacityBytes, pool->capacity());
   return pool;
@@ -299,7 +299,18 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
   options.coreOnAllocationFailureEnabled = coreOnAllocationFailureEnabled_;
   options.getPreferredSize = getPreferredSize_;
   options.debugOptions = poolDebugOpts;
-  options.resourceTag = resourceTag;
+  if (resourceTag.has_value()) {
+    for (const auto& candidate : customResources_) {
+      if (candidate->tag == *resourceTag) {
+        options.resource = candidate;
+        break;
+      }
+    }
+    VELOX_USER_CHECK_NOT_NULL(
+        options.resource,
+        "No CustomMemoryResource registered for tag: {}",
+        *resourceTag);
+  }
 
   auto pool = createRootPool(poolName, reclaimer, options);
   if (!disableMemoryPoolTracking_) {
@@ -310,7 +321,7 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
       }
       pools_.emplace(poolName, pool);
     } catch (const VeloxRuntimeError&) {
-      arbitrator_->removePool(pool.get());
+      pool->arbitrator()->removePool(pool.get());
       throw;
     }
   }
@@ -342,7 +353,7 @@ uint64_t MemoryManager::shrinkPools(
 void MemoryManager::dropPool(MemoryPool* pool) {
   VELOX_CHECK_NOT_NULL(pool);
   VELOX_DCHECK_EQ(pool->reservedBytes(), 0);
-  arbitrator_->removePool(pool);
+  pool->arbitrator()->removePool(pool);
   if (disableMemoryPoolTracking_) {
     return;
   }
@@ -388,16 +399,17 @@ void MemoryManager::registerCustomResource(CustomMemoryResource resource) {
       resource.tag);
   for (const auto& existing : customResources_) {
     VELOX_USER_CHECK_NE(
-        existing.tag,
+        existing->tag,
         resource.tag,
         "CustomMemoryResource already registered for tag: {}",
         resource.tag);
   }
-  customResources_.push_back(std::move(resource));
+  customResources_.push_back(
+      std::make_shared<CustomMemoryResource>(std::move(resource)));
 }
 
-const std::vector<CustomMemoryResource>& MemoryManager::customResources()
-    const {
+const std::vector<std::shared_ptr<CustomMemoryResource>>&
+MemoryManager::customResources() const {
   return customResources_;
 }
 

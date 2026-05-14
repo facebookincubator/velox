@@ -58,19 +58,16 @@ std::shared_ptr<QueryCtx> QueryCtx::Builder::build() {
   queryCtx->maybeSetReclaimer();
   for (const auto& mr : memory::memoryManager()->customResources()) {
     auto reclaimer =
-        mr.reclaimerFactory ? mr.reclaimerFactory(queryCtx.get()) : nullptr;
-    // Reuse generatePoolName so the custom pool gets the same uniqueness
-    // guarantee as the regular query pool (atomic seq counter), then suffix
-    // the resource tag so it's identifiable in pool dumps.
+        mr->reclaimerFactory ? mr->reclaimerFactory(queryCtx.get()) : nullptr;
     auto pool = memory::memoryManager()->addRootPool(
         fmt::format(
             "{}.{}",
             QueryCtx::generatePoolName(queryCtx->queryId()),
-            mr.tag),
-        mr.maxCapacity,
+            mr->tag),
+        mr->maxCapacity,
         std::move(reclaimer),
         std::nullopt,
-        mr.tag);
+        mr->tag);
     queryCtx->addCustomPool(std::move(pool));
   }
   for (auto& cb : releaseCallbacks_) {
