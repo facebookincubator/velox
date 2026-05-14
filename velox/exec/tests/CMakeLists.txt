@@ -129,6 +129,7 @@ set(
   TableScanTest.cpp
   AggregationTest.cpp
   OrderByTest.cpp
+  HashTableCacheTest.cpp
   HashTableTest.cpp
   RowNumberTest.cpp
   UnnestTest.cpp
