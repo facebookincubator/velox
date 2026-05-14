@@ -1,0 +1,4 @@
+This file opts this project into yarn lockfile URL rewriting.
+3P package URLs are rewritten from registry.facebook.net to registry.yarnpkg.com
+so the lockfile is portable for OSS consumers (GitHub CI, external contributors).
+See xplat/third-party/yarn/src/lockfile-url-rewrite.js for details.

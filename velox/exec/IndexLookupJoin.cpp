@@ -1676,8 +1676,9 @@ void IndexLookupJoin::recordConnectorStats() {
         RuntimeCounter(
             static_cast<int64_t>(lookupWallTime.sum),
             RuntimeCounter::Unit::kNanos));
-    // NOTE: this might not be accurate as it doesn't include the time
-    // spent inside the index storage client.
+    // NOTE: lookupCpuNanos may undercount CPU consumed on prefetch worker
+    // threads or async I/O completion handlers, since CpuWallTimer measures
+    // CPU on the calling thread only.
     indexStatWriter_->addRuntimeStat(
         "lookupCpuNanos",
         RuntimeCounter(

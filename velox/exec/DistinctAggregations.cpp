@@ -247,12 +247,18 @@ class TypedDistinctAggregations : public DistinctAggregations {
       const auto& aggregate = *aggregates_[i];
 
       // For each group, add distinct inputs to aggregate.
+      VectorPtr data;
       for (auto* group : groups) {
         auto* accumulator = reinterpret_cast<AccumulatorType*>(group + offset_);
 
         // TODO Process group rows in batches to avoid creating very large input
         // vectors.
-        auto data = BaseVector::create(inputType_, accumulator->size(), pool_);
+        if (!data) {
+          data = BaseVector::create(inputType_, accumulator->size(), pool_);
+        } else {
+          BaseVector::prepareForReuse(data, accumulator->size());
+        }
+
         if constexpr (std::is_same_v<T, ComplexType>) {
           accumulator->extractValues(*data, 0);
         } else {

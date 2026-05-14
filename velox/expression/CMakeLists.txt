@@ -19,13 +19,15 @@ velox_link_libraries(velox_type_signature velox_common_base)
 velox_add_library(
   velox_expression_functions
   FunctionSignature.cpp
-  SignatureBinder.cpp
   ReverseSignatureBinder.cpp
+  SignatureBinder.cpp
+  VectorFunctionListener.cpp
   HEADERS
   FunctionMetadata.h
   FunctionSignature.h
   ReverseSignatureBinder.h
   SignatureBinder.h
+  VectorFunctionListener.h
 )
 
 velox_link_libraries(
@@ -121,7 +123,6 @@ velox_link_libraries(
   velox_core
   velox_vector
   velox_common_base
-  velox_core_expressions
   velox_expression_functions
   velox_functions_util
   velox_type_tz
