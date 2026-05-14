@@ -17,6 +17,7 @@
 #include "velox/functions/prestosql/types/fuzzer_utils/TimestampWithTimeZoneInputGenerator.h"
 
 #include "velox/common/fuzzer/Utils.h"
+#include "velox/functions/lib/DateTimeFormatterBuilder.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/Variant.h"
 #include "velox/type/tz/TimeZoneMap.h"
@@ -57,6 +58,24 @@ std::vector<int16_t> excludeProblematicTimeZoneIds(
 
   return timeZoneIds;
 }
+
+bool roundTripsThroughPrestoQueryRunnerTransform(
+    int64_t timestampWithTimeZone) {
+  static const auto formatter =
+      functions::buildJodaDateTimeFormatter("yyyy-MM-dd HH:mm:ss.SSS ZZZ")
+          .value();
+
+  const auto input =
+      TIMESTAMP_WITH_TIME_ZONE()->valueToString(timestampWithTimeZone);
+  auto parsed = formatter->parse(input);
+  if (parsed.hasError() || parsed->timezone == nullptr) {
+    return false;
+  }
+
+  auto timestamp = parsed->timestamp;
+  timestamp.toGMT(*parsed->timezone);
+  return pack(timestamp, parsed->timezone->id()) == timestampWithTimeZone;
+}
 } // namespace
 
 TimestampWithTimeZoneInputGenerator::TimestampWithTimeZoneInputGenerator(
@@ -74,9 +93,19 @@ variant TimestampWithTimeZoneInputGenerator::generate() {
     return variant::null(type_->kind());
   }
 
-  int16_t timeZoneId =
-      timeZoneIds_[rand<size_t>(rng_, 0, timeZoneIds_.size() - 1)];
+  while (true) {
+    int16_t timeZoneId =
+        timeZoneIds_[rand<size_t>(rng_, 0, timeZoneIds_.size() - 1)];
+    auto value =
+        pack(rand<int64_t>(rng_, kMinMillisUtc, kMaxMillisUtc), timeZoneId);
 
-  return pack(rand<int64_t>(rng_, kMinMillisUtc, kMaxMillisUtc), timeZoneId);
+    // Presto query runner round-trips this type through
+    // valueToString("... ZZZ") and parse_datetime(...). Reject values that
+    // land on DST-ambiguous local timestamps because they parse back to a
+    // different instant.
+    if (roundTripsThroughPrestoQueryRunnerTransform(value)) {
+      return value;
+    }
+  }
 }
 } // namespace facebook::velox::fuzzer
