@@ -133,8 +133,8 @@ std::string serializeRoaringBitmapWithRuns(
   }
 
   // Offset section (required for >= 4 containers)
-  constexpr uint32_t kNoOffsetThreshold = 4;
-  if (numContainers >= kNoOffsetThreshold) {
+  constexpr uint32_t kRunContainerNoOffsetThreshold = 4;
+  if (numContainers >= kRunContainerNoOffsetThreshold) {
     // First container offset = cookie (4) + runBitmap (runBitmapBytes)
     // + descriptive header (4 * numContainers) + offset header
     // (4 * numContainers).
