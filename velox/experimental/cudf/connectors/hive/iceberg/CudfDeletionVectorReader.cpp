@@ -84,19 +84,19 @@ constexpr T inline readBigEndian(const uint8_t* p)
 CudfDeletionVectorReader::CudfDeletionVectorReader(
     const velox_iceberg::IcebergDeleteFile& dvFile,
     uint64_t splitOffset)
-    : dvFile_{dvFile.filePath, dvFile.fileSizeInBytes, dvFile.lowerBounds, dvFile.upperBounds},
-      splitOffset_(splitOffset) {
+    : dvFile_(dvFile), splitOffset_(splitOffset) {
   VELOX_CHECK(
-      dvFile.content == velox_iceberg::FileContent::kDeletionVector,
+      dvFile_.content == velox_iceberg::FileContent::kDeletionVector,
       "Expected deletion vector file but got content type: {}",
-      static_cast<int>(dvFile.content));
-  VELOX_CHECK_GT(dvFile.recordCount, 0, "Empty deletion vector.");
+      static_cast<int>(dvFile_.content));
+  VELOX_CHECK_GT(dvFile_.recordCount, 0, "Empty deletion vector.");
 
   static constexpr int64_t kMaxDeletionVectorRecordCount = 10'000'000'000LL;
   VELOX_CHECK_LE(
-      dvFile.recordCount,
+      dvFile_.recordCount,
       kMaxDeletionVectorRecordCount,
-      "Empty deletion vector.");
+      "Deletion vector record count exceeds sanity limit: {}",
+      dvFile_.recordCount);
 }
 
 void CudfDeletionVectorReader::loadBitmap(rmm::cuda_stream_view stream) {

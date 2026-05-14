@@ -16,6 +16,9 @@
 
 #pragma once
 
+#include "velox/common/file/File.h"
+#include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
+
 #include <cudf/table/table.hpp>
 #include <cudf/types.hpp>
 #include <cudf/utilities/memory_resource.hpp>
@@ -29,12 +32,6 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
-
-// Forward declare instead of including the `IcebergDeleteFile.h` here since the
-// header cannot be transitively included in the .cu file.
-namespace facebook::velox::connector::hive::iceberg {
-struct IcebergDeleteFile;
-} // namespace facebook::velox::connector::hive::iceberg
 
 namespace facebook::velox::cudf_velox::connector::hive::iceberg {
 
@@ -121,12 +118,7 @@ class CudfDeletionVectorReader {
   std::unique_ptr<cudf::column> rowIndices_;
 
   /// Deletion vector file metadata.
-  struct {
-    const std::string filePath;
-    const uint64_t fileSizeInBytes;
-    const std::unordered_map<int32_t, std::string> lowerBounds;
-    const std::unordered_map<int32_t, std::string> upperBounds;
-  } dvFile_;
+  const velox::connector::hive::iceberg::IcebergDeleteFile dvFile_;
   uint64_t splitOffset_;
 
   /// Whether the bitmap has been loaded from the file.
