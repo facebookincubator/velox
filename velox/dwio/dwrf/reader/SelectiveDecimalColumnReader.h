@@ -28,6 +28,14 @@ using namespace dwio::common;
 template <typename DataT>
 class SelectiveDecimalColumnReader : public SelectiveColumnReader {
  public:
+  // requestedType is the DECIMAL type to materialize values as. It must be a
+  // decimal type. Hive's ORC writer always records DECIMAL(38, 18) in the
+  // file footer regardless of the metastore-declared precision/scale; the
+  // per-row scale at which each value was actually written lives in the
+  // SECONDARY (a.k.a. NANO_DATA) stream. The reader uses
+  // requestedType.scale() (the table-schema scale) as the target scale and
+  // rescales each value from its per-row scale, so the output matches what
+  // table consumers expect even when the file footer scale differs.
   SelectiveDecimalColumnReader(
       const TypePtr& requestedType,
       const std::shared_ptr<const TypeWithId>& fileType,
