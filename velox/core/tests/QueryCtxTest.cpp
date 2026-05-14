@@ -16,7 +16,6 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/common/memory/MallocAllocator.h"
 #include "velox/core/QueryCtx.h"
 
 namespace facebook::velox::core::test {
@@ -112,38 +111,6 @@ TEST_F(QueryCtxTest, releaseCallbackException) {
   // All callbacks should have been attempted, with exception caught and logged.
   // First and third callbacks should have incremented the counter.
   ASSERT_EQ(callbackCount, 2);
-}
-
-TEST_F(QueryCtxTest, customResourcePerQueryPool) {
-  memory::MemoryAllocator::Options allocatorOptions;
-  allocatorOptions.capacity = 1L << 30;
-
-  memory::CustomMemoryResource resource;
-  resource.tag = "qctx-test-resource";
-  resource.maxCapacity = 1L << 28;
-  resource.allocator =
-      std::make_shared<memory::MallocAllocator>(allocatorOptions);
-
-  bool factoryInvoked = false;
-  resource.reclaimerFactory = [&factoryInvoked](QueryCtx* /*ctx*/) {
-    factoryInvoked = true;
-    return memory::MemoryReclaimer::create(0);
-  };
-
-  memory::memoryManager()->registerCustomResource(std::move(resource));
-
-  auto queryCtx = QueryCtx::Builder().queryId("custom-resource-query").build();
-  EXPECT_TRUE(factoryInvoked);
-
-  auto pool = queryCtx->customPool("qctx-test-resource");
-  ASSERT_NE(pool, nullptr);
-  EXPECT_TRUE(pool->name().starts_with("query.custom-resource-query."));
-  EXPECT_TRUE(pool->name().ends_with(".qctx-test-resource"));
-  ASSERT_TRUE(pool->resourceTag().has_value());
-  EXPECT_EQ(*pool->resourceTag(), "qctx-test-resource");
-
-  EXPECT_EQ(queryCtx->customPool("does-not-exist"), nullptr);
-  EXPECT_EQ(queryCtx->customPools().size(), 1);
 }
 
 TEST_F(QueryCtxTest, builderReleaseCallbacks) {

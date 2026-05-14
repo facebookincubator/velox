@@ -38,6 +38,7 @@ class ParallelMemoryReclaimer;
 namespace facebook::velox::memory {
 class TestArbitrator;
 class MemoryManager;
+struct CustomMemoryResource;
 
 constexpr int64_t kMaxMemory = std::numeric_limits<int64_t>::max();
 
@@ -164,11 +165,11 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
     /// If non-empty, enables debug mode for the created memory pool.
     std::optional<DebugOptions> debugOptions{std::nullopt};
 
-    /// If set, this pool belongs to the custom memory resource registered
-    /// under this tag with MemoryManager::registerCustomResource. Unset means
-    /// the default CPU resource. Inert until consumers (allocator dispatch,
-    /// child inheritance) are wired in a follow-up phase.
-    std::optional<std::string> resourceTag{std::nullopt};
+    /// Custom memory resource this pool belongs to. Non-null means the pool
+    /// routes allocations to this resource's allocator (and arbitrator, if
+    /// set). Null means the default CPU resource. The pool keeps a strong
+    /// reference, so the resource outlives every pool that uses it.
+    std::shared_ptr<CustomMemoryResource> resource{nullptr};
   };
 
   /// Constructs a named memory pool with specified 'name', 'parent' and 'kind'.
@@ -321,11 +322,15 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
     return alignment_;
   }
 
-  /// Returns the resource tag this memory pool was created against, or
-  /// std::nullopt for the default CPU resource.
-  virtual const std::optional<std::string>& resourceTag() const {
-    return resourceTag_;
+  /// Returns the custom memory resource this pool routes allocations to, or
+  /// nullptr for the default CPU resource.
+  virtual const std::shared_ptr<CustomMemoryResource>& resource() const {
+    return resource_;
   }
+
+  /// Returns the tag of the custom resource this pool was created against, or
+  /// std::nullopt for the default CPU resource.
+  virtual std::optional<std::string> resourceTag() const;
 
   /// Resource governing methods used to track and limit the memory usage
   /// through this memory pool object.
@@ -398,6 +403,10 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
 
   /// Returns the memory reclaimer of this memory pool if not null.
   virtual MemoryReclaimer* reclaimer() const = 0;
+
+  /// Returns the arbitrator that governs this pool's capacity. May be the
+  /// MemoryManager's default arbitrator or a custom resource's arbitrator.
+  virtual MemoryArbitrator* arbitrator() const = 0;
 
   /// Function estimates the number of reclaimable bytes and returns in
   /// 'reclaimableBytes'. If the 'reclaimer' is not set, the function returns
@@ -576,7 +585,7 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   const bool trackUsage_;
   const bool threadSafe_;
   const std::optional<DebugOptions> debugOptions_;
-  const std::optional<std::string> resourceTag_;
+  const std::shared_ptr<CustomMemoryResource> resource_;
   const bool coreOnAllocationFailureEnabled_;
   std::function<size_t(size_t)> getPreferredSize_;
 
@@ -688,6 +697,10 @@ class MemoryPoolImpl : public MemoryPool {
   void setReclaimer(std::unique_ptr<MemoryReclaimer> reclaimer) override;
 
   MemoryReclaimer* reclaimer() const override;
+
+  MemoryArbitrator* arbitrator() const override {
+    return arbitrator_;
+  }
 
   std::optional<uint64_t> reclaimableBytes() const override;
 

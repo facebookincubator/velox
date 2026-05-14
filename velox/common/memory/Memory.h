@@ -226,20 +226,15 @@ class MemoryManager {
           std::nullopt,
       const std::optional<std::string>& resourceTag = std::nullopt);
 
-  /// Registers a custom memory resource. Tag must be unique across previously
-  /// registered resources. Throws VeloxUserError on duplicate.
-  ///
-  /// NOT thread-safe. Must be called during process startup, before any
-  /// QueryCtx is built or any user code reads customResources(). Typical
-  /// callers are extension init routines invoked from main() or a static
-  /// initializer.
+  /// Registers a custom memory resource. NOT thread-safe: must be called
+  /// during process startup before any QueryCtx is built. Throws on empty
+  /// tag, null allocator, or duplicate tag.
   void registerCustomResource(CustomMemoryResource resource);
 
-  /// Returns the registered custom resources in registration order.
-  /// Lock-free read; safe only after all registrations have completed (see
-  /// registerCustomResource). The returned reference is stable for the
-  /// lifetime of the MemoryManager because registration only appends.
-  const std::vector<CustomMemoryResource>& customResources() const;
+  /// Returns the registered custom resources in registration order. Safe to
+  /// read concurrently once registrations have completed.
+  const std::vector<std::shared_ptr<CustomMemoryResource>>& customResources()
+      const;
 
   /// Creates a leaf memory pool for direct memory allocation use with specified
   /// 'name'. If 'name' is missing, the memory manager generates a default name
@@ -315,6 +310,11 @@ class MemoryManager {
     return sharedLeafPools_;
   }
 
+  /// Test-only: drops all registered custom memory resources.
+  void testingClearCustomResources() {
+    customResources_.clear();
+  }
+
  private:
   std::shared_ptr<MemoryPoolImpl> createRootPool(
       std::string poolName,
@@ -351,9 +351,9 @@ class MemoryManager {
   // All user root pools allocated from 'this'.
   std::unordered_map<std::string, std::weak_ptr<MemoryPool>> pools_;
 
-  // Custom memory resources registered before any query started. Not guarded
-  // by a mutex; see registerCustomResource for the threading contract.
-  std::vector<CustomMemoryResource> customResources_;
+  // Append-only; see registerCustomResource for the threading contract.
+  // Pools hold shared_ptrs so a resource outlives every pool that uses it.
+  std::vector<std::shared_ptr<CustomMemoryResource>> customResources_;
 };
 
 /// Initializes the process-wide memory manager based on the specified
