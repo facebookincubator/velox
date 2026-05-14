@@ -181,6 +181,7 @@ target_link_libraries(
   velox_cudf_function_registry_test
   velox_cudf_exec
   velox_cudf_expression
+  velox_cudf_exec
   velox_exec
   velox_exec_test_lib
   velox_test_util
