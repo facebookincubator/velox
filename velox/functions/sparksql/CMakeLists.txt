@@ -122,4 +122,3 @@ if(${VELOX_ENABLE_BENCHMARKS})
 endif()
 
 add_subdirectory(registration)
-add_subdirectory(types)
