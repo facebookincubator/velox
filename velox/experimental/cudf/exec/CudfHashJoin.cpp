@@ -120,8 +120,7 @@ buildLeftJoinOutputIndicesFromFilter(
       mr);
   auto unmatchedLeftIndicesTable = cudf::gather(
       cudf::table_view({combinedLeftIndices->view()}),
-      unmatchedLeftPositions->view().begin<cudf::size_type>(),
-      unmatchedLeftPositions->view().end<cudf::size_type>(),
+      unmatchedLeftPositions->view(),
       cudf::out_of_bounds_policy::DONT_CHECK,
       stream,
       mr);
