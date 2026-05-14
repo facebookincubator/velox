@@ -30,6 +30,7 @@
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
+#include "velox/vector/ComplexVector.h"
 #include "velox/vector/ConstantVector.h"
 
 #include <cudf/aggregation.hpp>
@@ -69,6 +70,20 @@
 
 namespace facebook::velox::cudf_velox {
 namespace {
+
+cudf::size_type resolveFieldReferenceIndex(
+    velox::exec::FieldReference& fieldExpr,
+    const RowTypePtr& parentRowType) {
+  auto pool = memory::memoryManager()->addLeafPool();
+  auto queryCtx = core::QueryCtx::create();
+  core::ExecCtx execCtx(pool.get(), queryCtx.get());
+  exec::ExprSet exprSet({}, &execCtx, /*enableConstantFolding=*/false);
+  auto row = RowVector::createEmpty(parentRowType, pool.get());
+  exec::EvalCtx evalCtx(&execCtx, &exprSet, row.get());
+  auto fieldIndex = fieldExpr.index(evalCtx);
+  VELOX_CHECK_GE(fieldIndex, 0);
+  return static_cast<cudf::size_type>(fieldIndex);
+}
 
 bool decimalScalarIsZero(
     const cudf::scalar& scalar,
@@ -2474,7 +2489,7 @@ ColumnOrView FunctionExpression::eval(
         parentView.type().id() == cudf::type_id::STRUCT,
         "Nested field reference expects a ROW input");
     auto parentRowType = asRowType(fieldExpr->inputs()[0]->type());
-    auto fieldIndex = fieldExpr->index(*parentRowType);
+    auto fieldIndex = resolveFieldReferenceIndex(*fieldExpr, parentRowType);
     return FunctionExpression::makeStructChildColumn(
         parentView, fieldIndex, stream, mr);
   }

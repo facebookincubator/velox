@@ -21,13 +21,6 @@
 
 namespace facebook::velox::exec {
 
-int32_t FieldReference::index(const RowType& rowType) {
-  if (index_ == -1) {
-    index_ = rowType.getChildIdx(field_);
-  }
-  return index_;
-}
-
 void FieldReference::computeDistinctFields() {
   SpecialForm::computeDistinctFields();
   if (inputs_.empty()) {
