@@ -274,6 +274,16 @@ ReaderBase::ReaderBase(
   loadFileMetaData();
   initializeSchema();
   initializeVersion();
+
+  // Report the thrift footer reservation only after all other initialization
+  // succeeds. If a step before this throws, ~ReaderBase will not run, so a
+  // reportExternalAllocation made earlier in the constructor would leak.
+  // Doing it last keeps reportExternalAllocation/reportExternalFree paired
+  // through ~ReaderBase.
+  if (thriftSize_ > 0) {
+    pool_.reportExternalAllocation(thriftSize_);
+    thriftMemoryReported_ = true;
+  }
 }
 
 void ReaderBase::loadFileMetaData() {
@@ -1354,8 +1364,7 @@ class ParquetRowReader::Impl {
     }
 
     uint64_t rowNumber = 0;
-    size_t totalColumnsSize = 0;
-    size_t totalClearedColumns = 0;
+    size_t freedThriftSize = 0;
     for (auto i = 0; i < rowGroups_.size(); i++) {
       VELOX_CHECK_GT(rowGroups_[i].columns.size(), 0);
       auto fileOffset =
@@ -1382,13 +1391,16 @@ class ParquetRowReader::Impl {
           // Clear the metadata of row groups that are not read. This helps
           // reduce the memory consumption. ColumnChunks consume the most
           // memory. Skip the 0th RowGroup as it is used by estimatedRowSize().
-          rowGroups_[i].columns.clear();
-          if (readerBase_->thriftSize_ > 0) {
+          // Measure the columns BEFORE clearing so we can release the matching
+          // amount from the pool reservation that ReaderBase reported.
+          if (readerBase_->thriftMemoryReported_) {
+            freedThriftSize +=
+                rowGroups_[i].columns.size() * sizeof(thrift::ColumnChunk);
             for (const auto& column : rowGroups_[i].columns) {
-              totalColumnsSize += calculateColumnMetadataSize(column);
-              totalClearedColumns++;
+              freedThriftSize += calculateColumnMetadataSize(column);
             }
           }
+          rowGroups_[i].columns.clear();
         }
         if (rowGroupInRange) {
           skippedStrides_++;
@@ -1398,12 +1410,13 @@ class ParquetRowReader::Impl {
       rowNumber += rowGroups_[i].num_rows;
     }
 
-    if (totalClearedColumns > 0 && readerBase_->thriftSize_ > 0) {
-      readerBase_->thriftSize_ -= totalColumnsSize;
-    }
-    if (readerBase_->thriftSize_ > 0) {
-      pool_.reportExternalAllocation(readerBase_->thriftSize_);
-      readerBase_->thriftMemoryReported_ = true;
+    if (freedThriftSize > 0) {
+      // ReaderBase reported the full thrift footprint at construction. Release
+      // the portion we just freed by clearing skipped row groups, and shrink
+      // the recorded size so ~ReaderBase frees only the remaining bytes.
+      VELOX_CHECK_GE(readerBase_->thriftSize_, freedThriftSize);
+      pool_.reportExternalFree(freedThriftSize);
+      readerBase_->thriftSize_ -= freedThriftSize;
     }
   }
 

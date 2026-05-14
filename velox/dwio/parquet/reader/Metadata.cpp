@@ -406,10 +406,15 @@ std::string FileMetaDataPtr::createdBy() const {
   return thriftFileMetaDataPtr(ptr_)->created_by;
 }
 
+// Returns the dynamically-allocated bytes reachable from `column` BEYOND the
+// inline thrift::ColumnChunk struct. The caller is expected to account for
+// sizeof(thrift::ColumnChunk) when including this column in a vector. Inline
+// sub-structs (thrift::ColumnMetaData, thrift::Statistics) live inside
+// sizeof(ColumnChunk) and are NOT counted again here; only their dynamically
+// allocated payloads (vectors and string buffers) are added.
 size_t calculateColumnMetadataSize(const thrift::ColumnChunk& column) {
   size_t size = 0;
-  size += sizeof(thrift::ColumnChunk);
-  size += sizeof(thrift::ColumnMetaData);
+  // Heap-backed vectors and the strings they contain.
   size += column.meta_data.encodings.size() * sizeof(thrift::Encoding::type);
   size += column.meta_data.path_in_schema.size() * sizeof(std::string);
   for (const auto& path : column.meta_data.path_in_schema) {
@@ -417,9 +422,11 @@ size_t calculateColumnMetadataSize(const thrift::ColumnChunk& column) {
   }
   size += keyValueMetadataSize(column.meta_data.key_value_metadata);
 
+  // thrift::Statistics is an inline member of thrift::ColumnMetaData. Its POD
+  // fields (null_count, distinct_count) are already in sizeof(ColumnChunk).
+  // Only the heap-backed string payloads need to be added here.
   if (column.meta_data.__isset.statistics) {
     const auto& stats = column.meta_data.statistics;
-    size += sizeof(thrift::Statistics);
     if (stats.__isset.min) {
       size += stats.min.capacity();
     }
@@ -432,29 +439,24 @@ size_t calculateColumnMetadataSize(const thrift::ColumnChunk& column) {
     if (stats.__isset.max_value) {
       size += stats.max_value.capacity();
     }
-    if (stats.__isset.null_count) {
-      size += sizeof(int64_t);
-    }
-    if (stats.__isset.distinct_count) {
-      size += sizeof(int64_t);
-    }
   }
   return size;
 }
 
+// Estimates the heap memory held by `metadata` after thrift deserialization.
+// Returns sizeof(thrift::FileMetaData) plus the bytes of every dynamically
+// allocated vector and string reachable through it. Inline POD members and
+// inline thrift sub-structs (e.g. thrift::EncryptionAlgorithm,
+// thrift::SchemaElement::logicalType) are part of the parent sizeof and are
+// not double-counted here.
 size_t calculateFileMetadataSize(const thrift::FileMetaData& metadata) {
   size_t totalSize = sizeof(thrift::FileMetaData);
+  // Schema vector heap allocation plus per-element name strings.
+  totalSize += metadata.schema.size() * sizeof(thrift::SchemaElement);
   for (const auto& schema : metadata.schema) {
-    size_t elementSize = sizeof(schema) + schema.name.capacity() +
-        sizeof(schema.type) + sizeof(schema.type_length) +
-        sizeof(schema.repetition_type) + sizeof(schema.num_children) +
-        sizeof(schema.converted_type) + sizeof(schema.scale) +
-        sizeof(schema.precision) + sizeof(schema.field_id);
-    if (schema.__isset.logicalType) {
-      elementSize += sizeof(schema.logicalType);
-    }
-    totalSize += elementSize;
+    totalSize += schema.name.capacity();
   }
+  // Row groups vector heap allocation plus the columns vectors it owns.
   totalSize += metadata.row_groups.size() * sizeof(thrift::RowGroup);
   for (const auto& rowGroup : metadata.row_groups) {
     totalSize += rowGroup.columns.size() * sizeof(thrift::ColumnChunk);
@@ -465,7 +467,6 @@ size_t calculateFileMetadataSize(const thrift::FileMetaData& metadata) {
   totalSize += keyValueMetadataSize(metadata.key_value_metadata);
   totalSize += metadata.created_by.capacity();
   totalSize += metadata.column_orders.size() * sizeof(thrift::ColumnOrder);
-  totalSize += sizeof(thrift::EncryptionAlgorithm);
   totalSize += metadata.footer_signing_key_metadata.capacity();
   return totalSize;
 }
