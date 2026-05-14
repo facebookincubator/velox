@@ -179,7 +179,6 @@ add_test(
 set_tests_properties(velox_cudf_function_registry_test PROPERTIES LABELS cuda_driver TIMEOUT 300)
 target_link_libraries(
   velox_cudf_function_registry_test
-  velox_cudf_exec
   velox_cudf_expression
   velox_cudf_exec
   velox_exec
