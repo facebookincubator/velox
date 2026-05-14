@@ -81,11 +81,12 @@ buildLeftJoinOutputIndicesFromFilter(
       mr);
   auto passingPairColumns = passingPairTable->release();
 
-  auto allLeftIndicesTable = cudf::drop_duplicates(
-      cudf::table_view{{leftIndicesCol}},
+  auto allLeftIndicesTable = cudf::distinct(
+      cudf::table_view({leftIndicesCol}),
       {0},
       cudf::duplicate_keep_option::KEEP_FIRST,
       cudf::null_equality::EQUAL,
+      cudf::nan_equality::ALL_EQUAL,
       stream,
       mr);
   auto allLeftIndicesColumns = allLeftIndicesTable->release();
@@ -95,28 +96,32 @@ buildLeftJoinOutputIndicesFromFilter(
     passingLeftDistinct =
         cudf::empty_like(allLeftIndicesColumns[0]->view(), stream, mr);
   } else {
-    auto passingLeftDistinctTable = cudf::drop_duplicates(
-        cudf::table_view{{passingPairColumns[0]->view()}},
+    auto passingLeftDistinctTable = cudf::distinct(
+        cudf::table_view({passingPairColumns[0]->view()}),
         {0},
         cudf::duplicate_keep_option::KEEP_FIRST,
         cudf::null_equality::EQUAL,
+        cudf::nan_equality::ALL_EQUAL,
         stream,
         mr);
     passingLeftDistinct = std::move(passingLeftDistinctTable->release()[0]);
   }
 
-  auto unmatchedLeftIndicesTable = cudf::set_difference_distinct(
-      cudf::table_view{{allLeftIndicesColumns[0]->view()}},
-      cudf::table_view{{passingLeftDistinct->view()}},
-      stream,
-      mr);
-  auto unmatchedLeftIndicesColumns = unmatchedLeftIndicesTable->release();
+  auto unmatchedLeftIndices =
+      cudf::left_anti_join(
+          cudf::table_view({allLeftIndicesColumns[0]->view()}),
+          cudf::table_view({passingLeftDistinct->view()}),
+          cudf::null_equality::EQUAL,
+          stream,
+          mr)
+          .first;
+  auto unmatchedLeftIndicesColumn = toColumn(*unmatchedLeftIndices, stream);
 
   auto nullIndexScalar =
       cudf::numeric_scalar<cudf::size_type>(-1, true, stream, mr);
   auto unmatchedRightIndices = cudf::make_column_from_scalar(
       nullIndexScalar,
-      unmatchedLeftIndicesColumns[0]->size(),
+      unmatchedLeftIndicesColumn->size(),
       stream,
       mr);
 
@@ -126,7 +131,7 @@ buildLeftJoinOutputIndicesFromFilter(
     leftConcatViews.push_back(passingPairColumns[0]->view());
     rightConcatViews.push_back(passingPairColumns[1]->view());
   }
-  leftConcatViews.push_back(unmatchedLeftIndicesColumns[0]->view());
+  leftConcatViews.push_back(unmatchedLeftIndicesColumn->view());
   rightConcatViews.push_back(unmatchedRightIndices->view());
 
   auto finalLeftIndices = cudf::concatenate(leftConcatViews, stream, mr);
