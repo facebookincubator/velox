@@ -139,6 +139,7 @@ void addDecimalIntermediateSumCountRequests(
     std::unique_ptr<cudf::column>& decodedSum,
     std::unique_ptr<cudf::column>& decodedCount) {
   validateIntermediateColumnType(tbl.column(inputIndex));
+  // resultType here could be DECIMAL or VARBINARY
   auto scale = resultType->isDecimal()
       ? getDecimalPrecisionScale(*resultType).second
       : 0;

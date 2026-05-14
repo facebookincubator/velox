@@ -374,6 +374,7 @@ std::unique_ptr<cudf::column> reduceIntermediateDecimalFromSerializedColumn(
     TypePtr const& outputType,
     rmm::cuda_stream_view stream) {
   validateIntermediateColumnType(inputCol);
+  // outputType here could be DECIMAL or VARBINARY
   auto scale = outputType->isDecimal()
       ? getDecimalPrecisionScale(*outputType).second
       : 0;
