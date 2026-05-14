@@ -78,10 +78,12 @@ inline std::string serializeRoaringBitmapNoRun(
 
   // Offset section (required for non-zero number of containers for no-run
   // cookie).
-  uint32_t offset = 4 + 4 + numContainers * 4 + numContainers * 4;
-  for (auto& [key, vals] : containers) {
-    data.append(reinterpret_cast<const char*>(&offset), 4);
-    offset += static_cast<uint32_t>(vals.size()) * 2;
+  if (numContainers > 0) {
+    uint32_t offset = 4 + 4 + numContainers * 4 + numContainers * 4;
+    for (auto& [key, vals] : containers) {
+      data.append(reinterpret_cast<const char*>(&offset), 4);
+      offset += static_cast<uint32_t>(vals.size()) * 2;
+    }
   }
 
   // Container data (array containers: sorted uint16 values).

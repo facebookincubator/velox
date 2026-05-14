@@ -32,8 +32,8 @@ namespace facebook::velox::cudf_velox::exec::test {
 
 class CudfIcebergGapTests : public CudfIcebergTestBase {};
 
-/// Multiple equality delete files at different sequence numbers targeting
-/// overlapping values.
+// Multiple equality delete files at different sequence numbers targeting
+// overlapping values.
 TEST_F(CudfIcebergGapTests, multipleDeletesAtDifferentSequenceNumbers) {
   auto rowType = ROW({"c0", "c1"}, {BIGINT(), BIGINT()});
 
@@ -109,7 +109,7 @@ TEST_F(CudfIcebergGapTests, multipleDeletesAtDifferentSequenceNumbers) {
   assertEqualResults({expected}, {result});
 }
 
-/// Mixed positional + equality + deletion vector interleaving.
+// Mixed positional + equality + deletion vector interleaving.
 TEST_F(CudfIcebergGapTests, positionalAndEqualityWithSequenceNumbers) {
   auto rowType = ROW({"c0", "c1"}, {BIGINT(), BIGINT()});
 
@@ -173,7 +173,7 @@ TEST_F(CudfIcebergGapTests, positionalAndEqualityWithSequenceNumbers) {
   assertEqualResults({expected}, {result});
 }
 
-/// Multi-column equality delete with overlapping but non-matching values.
+// Multi-column equality delete with overlapping but non-matching values.
 TEST_F(CudfIcebergGapTests, multiColumnPartialMatchDoesNotDelete) {
   auto rowType = ROW({"c0", "c1", "c2"}, {BIGINT(), BIGINT(), BIGINT()});
 
@@ -213,7 +213,7 @@ TEST_F(CudfIcebergGapTests, multiColumnPartialMatchDoesNotDelete) {
   assertEqualResults({expected}, {result});
 }
 
-/// Equality delete where the delete value doesn't exist in any data file.
+// Equality delete where the delete value doesn't exist in any data file.
 TEST_F(CudfIcebergGapTests, equalityDeleteNoMatchAcrossFiles) {
   auto rowType = ROW({"c0"}, {BIGINT()});
 
@@ -253,8 +253,8 @@ TEST_F(CudfIcebergGapTests, equalityDeleteNoMatchAcrossFiles) {
   assertEqualResults({expected}, {result});
 }
 
-/// Hive partitioned Iceberg table: data file in a partition directory,
-/// query selects both data columns and the partition column.
+// Hive partitioned Iceberg table: data file in a partition directory,
+// query selects both data columns and the partition column.
 TEST_F(CudfIcebergGapTests, hivePartitionedTable) {
   auto fullType = ROW({"c0", "c1", "country"}, {BIGINT(), BIGINT(), VARCHAR()});
 
@@ -293,7 +293,7 @@ TEST_F(CudfIcebergGapTests, hivePartitionedTable) {
   assertEqualResults({expected}, {result});
 }
 
-/// Hive partitioned table with equality deletes.
+// Hive partitioned table with equality deletes.
 TEST_F(CudfIcebergGapTests, hivePartitionWithEqualityDelete) {
   auto fullType = ROW({"c0", "c1", "region"}, {BIGINT(), BIGINT(), VARCHAR()});
   auto dataColumns = ROW({"c0", "c1"}, {BIGINT(), BIGINT()});
@@ -343,7 +343,7 @@ TEST_F(CudfIcebergGapTests, hivePartitionWithEqualityDelete) {
   assertEqualResults({expected}, {result});
 }
 
-/// Schema evolution: file 1 has [c0, c1], file 2 has [c0, c1, c2].
+// Schema evolution: file 1 has [c0, c1], file 2 has [c0, c1, c2].
 TEST_F(CudfIcebergGapTests, schemaEvolutionAddedColumn) {
   auto fullType = ROW({"c0", "c1", "c2"}, {BIGINT(), BIGINT(), BIGINT()});
 
@@ -388,7 +388,7 @@ TEST_F(CudfIcebergGapTests, schemaEvolutionAddedColumn) {
   assertEqualResults({expected}, {result});
 }
 
-/// Schema evolution with equality delete.
+// Schema evolution with equality delete.
 TEST_F(CudfIcebergGapTests, schemaEvolutionWithEqualityDelete) {
   auto fullType = ROW({"c0", "c1", "c2"}, {BIGINT(), BIGINT(), BIGINT()});
 
@@ -445,8 +445,8 @@ TEST_F(CudfIcebergGapTests, schemaEvolutionWithEqualityDelete) {
   assertEqualResults({expected}, {result});
 }
 
-/// NULL equality matching: per Iceberg spec, NULL == NULL is TRUE for
-/// equality deletes.
+// NULL equality matching: per Iceberg spec, NULL == NULL is TRUE for
+// equality deletes.
 TEST_F(CudfIcebergGapTests, equalityDeleteNullMatchesNull) {
   auto rowType = ROW({"c0", "c1"}, {BIGINT(), BIGINT()});
 
@@ -483,8 +483,8 @@ TEST_F(CudfIcebergGapTests, equalityDeleteNullMatchesNull) {
   assertEqualResults({expected}, {result});
 }
 
-/// Multiple equality delete files with DIFFERENT key columns targeting
-/// the same data file.
+// Multiple equality delete files with DIFFERENT key columns targeting
+// the same data file.
 TEST_F(CudfIcebergGapTests, multipleEqualityDeletesDifferentKeyColumns) {
   auto rowType = ROW({"c0", "c1", "c2"}, {BIGINT(), BIGINT(), BIGINT()});
 
@@ -533,8 +533,8 @@ TEST_F(CudfIcebergGapTests, multipleEqualityDeletesDifferentKeyColumns) {
   assertEqualResults({expected}, {result});
 }
 
-/// All rows deleted by equality deletes — verify that reading continues
-/// past an empty chunk.
+// All rows deleted by equality deletes — verify that reading continues
+// past an empty chunk.
 TEST_F(CudfIcebergGapTests, allRowsDeletedContinuesReading) {
   auto rowType = ROW({"c0"}, {BIGINT()});
 
@@ -574,7 +574,7 @@ TEST_F(CudfIcebergGapTests, allRowsDeletedContinuesReading) {
   assertEqualResults({expected}, {result});
 }
 
-/// Equality delete file with extra non-key columns (for CDC).
+// Equality delete file with extra non-key columns (for CDC).
 TEST_F(CudfIcebergGapTests, equalityDeleteWithExtraNonKeyColumns) {
   auto rowType = ROW({"c0", "c1"}, {BIGINT(), BIGINT()});
 
@@ -612,7 +612,7 @@ TEST_F(CudfIcebergGapTests, equalityDeleteWithExtraNonKeyColumns) {
   assertEqualResults({expected}, {result});
 }
 
-/// Schema evolution: column added in the MIDDLE of the schema.
+// Schema evolution: column added in the MIDDLE of the schema.
 TEST_F(CudfIcebergGapTests, schemaEvolutionColumnAddedInMiddle) {
   auto fullType = ROW({"c0", "c1", "c2"}, {BIGINT(), BIGINT(), BIGINT()});
 
@@ -661,7 +661,7 @@ TEST_F(CudfIcebergGapTests, schemaEvolutionColumnAddedInMiddle) {
   assertEqualResults({expected}, {result});
 }
 
-/// Empty data file (0 rows) with delete files attached.
+// Empty data file (0 rows) with delete files attached.
 TEST_F(CudfIcebergGapTests, emptyDataFileWithDeletes) {
   auto rowType = ROW({"c0", "c1"}, {BIGINT(), BIGINT()});
 
@@ -708,7 +708,7 @@ TEST_F(CudfIcebergGapTests, emptyDataFileWithDeletes) {
   assertEqualResults({expected}, {result});
 }
 
-/// Partition column with INT32 type.
+// Partition column with INT32 type.
 TEST_F(CudfIcebergGapTests, partitionColumnInt32Type) {
   auto fullType = ROW({"c0", "year"}, {BIGINT(), INTEGER()});
   auto dataColumns = ROW({"c0"}, {BIGINT()});
@@ -743,7 +743,7 @@ TEST_F(CudfIcebergGapTests, partitionColumnInt32Type) {
   assertEqualResults({expected}, {result});
 }
 
-/// Partition column with INT64 type.
+// Partition column with INT64 type.
 TEST_F(CudfIcebergGapTests, partitionColumnInt64Type) {
   auto fullType = ROW({"c0", "timestamp_ms"}, {BIGINT(), BIGINT()});
   auto dataColumns = ROW({"c0"}, {BIGINT()});
@@ -779,7 +779,7 @@ TEST_F(CudfIcebergGapTests, partitionColumnInt64Type) {
   assertEqualResults({expected}, {result});
 }
 
-/// Deletion vector combined with equality deletes on the same data file.
+// Deletion vector combined with equality deletes on the same data file.
 TEST_F(CudfIcebergGapTests, deletionVectorPlusEqualityDelete) {
   auto rowType = ROW({"c0", "c1"}, {BIGINT(), BIGINT()});
 
@@ -824,7 +824,7 @@ TEST_F(CudfIcebergGapTests, deletionVectorPlusEqualityDelete) {
   assertEqualResults({expected}, {result});
 }
 
-/// Deletion vector combined with positional deletes (V2 + V3 coexistence).
+// Deletion vector combined with positional deletes (V2 + V3 coexistence).
 TEST_F(CudfIcebergGapTests, deletionVectorPlusPositionalDelete) {
   auto rowType = ROW({"c0", "c1"}, {BIGINT(), BIGINT()});
 

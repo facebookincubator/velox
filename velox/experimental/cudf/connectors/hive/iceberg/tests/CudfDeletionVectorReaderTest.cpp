@@ -43,8 +43,8 @@ namespace velox_iceberg = ::facebook::velox::connector::hive::iceberg;
 
 namespace {
 
-/// Serializes a roaring bitmap in the portable format with run containers
-/// (cookie = 12347). All containers are run-encoded.
+// Serializes a roaring bitmap in the portable format with run containers
+// (cookie = 12347). All containers are run-encoded.
 std::string serializeRoaringBitmapWithRuns(
     const std::vector<
         std::pair<uint16_t, std::vector<std::pair<uint16_t, uint16_t>>>>&
@@ -83,6 +83,21 @@ std::string serializeRoaringBitmapWithRuns(
     data.append(reinterpret_cast<const char*>(&cardMinus1), 2);
   }
 
+  // Offset section (required for >= 4)
+  constexpr uint32_t kRunContainersNoOffsetThreshold = 4;
+  if (numContainers >= kRunContainersNoOffsetThreshold) {
+    // First container offset = cookie (4) + runBitmap (runBitmapBytes)
+    // + descriptive header (4 * numContainers) + offset header
+    // (4 * numContainers).
+    uint32_t offset =
+        4 + runBitmapBytes + 4 * numContainers + 4 * numContainers;
+    for (auto& [key, runs] : containerRuns) {
+      data.append(reinterpret_cast<const char*>(&offset), 4);
+      // Each run container occupies 2 + 4 * numRuns bytes.
+      offset += 2 + 4 * static_cast<uint32_t>(runs.size());
+    }
+  }
+
   // Container data: each run container has numRuns (uint16) followed by
   // (start, lengthMinus1) pairs.
   for (auto& [key, runs] : containerRuns) {
@@ -97,13 +112,33 @@ std::string serializeRoaringBitmapWithRuns(
   return data;
 }
 
+// Expands a list of run-encoded containers into the full set of positions
+// they represent. Each container is keyed by its high 16 bits and contains
+// runs of (start, lengthMinus1)
+template <typename IndexType>
+std::vector<IndexType> expandRuns(
+    const std::vector<
+        std::pair<uint16_t, std::vector<std::pair<uint16_t, uint16_t>>>>&
+        containerRuns) {
+  std::vector<IndexType> result;
+  for (const auto& [key, runs] : containerRuns) {
+    const IndexType base = static_cast<IndexType>(key) * 65536;
+    for (const auto& [start, lengthMinus1] : runs) {
+      for (IndexType i = 0; i <= lengthMinus1; ++i) {
+        result.push_back(base + start + i);
+      }
+    }
+  }
+  return result;
+}
+
 // ---------------------------------------------------------------------------
 // Cudf-specific helpers for constructing a deletion mask column and extracting
 // set bits.
 // ---------------------------------------------------------------------------
 
-/// Creates a boolean cudf column initialized to all-false, representing an
-/// empty deletion mask (no rows deleted yet).
+// Creates a boolean cudf column initialized to all-false, representing an
+// empty deletion mask (no rows deleted yet).
 std::unique_ptr<cudf::column> makeDeletionColumn(
     cudf::size_type numRows,
     rmm::cuda_stream_view stream,
@@ -112,8 +147,8 @@ std::unique_ptr<cudf::column> makeDeletionColumn(
   return cudf::make_column_from_scalar(falseScalar, numRows, stream, mr);
 }
 
-/// Returns the indices (in [0, numRows)) where the deletion mask is true.
-/// These indices correspond to rows that are marked as deleted.
+// Returns the indices (in [0, numRows)) where the deletion mask is true.
+// These indices correspond to rows that are marked as deleted.
 template <typename IndexType>
 std::vector<IndexType> getSetBits(
     const cudf::column_view& deleteMask,
@@ -245,7 +280,9 @@ TEST_F(CudfDeletionVectorReaderTest, runContainers) {
   auto tempFile = writeDvFile(bitmapData);
   auto fileSize = static_cast<uint64_t>(bitmapData.size());
 
-  auto dvFile = makeDvDeleteFile(tempFile->getPath(), fileSize);
+  auto expected = expandRuns<IndexType>(containerRuns);
+  auto dvFile =
+      makeDvDeleteFile(tempFile->getPath(), fileSize, expected.size());
   CudfDeletionVectorReader reader(dvFile);
 
   constexpr auto numRows = 100;
@@ -253,11 +290,35 @@ TEST_F(CudfDeletionVectorReaderTest, runContainers) {
   reader.applyDeletes(deleteMask->mutable_view(), 0, numRows, stream(), mr());
 
   auto setBits = getSetBits<IndexType>(deleteMask->view(), numRows, stream());
-  // Expect positions 10-19 and 50-59 to be deleted
-  std::vector<IndexType> expected(20);
-  std::iota(expected.begin(), expected.begin() + 10, IndexType{10});
-  std::iota(expected.begin() + 10, expected.begin() + 20, IndexType{50});
   EXPECT_EQ(setBits, expected);
+}
+
+TEST_F(CudfDeletionVectorReaderTest, runContainersWithOffsetHeader) {
+  using IndexType = int64_t;
+  std::vector<std::pair<uint16_t, std::vector<std::pair<uint16_t, uint16_t>>>>
+      containerRuns = {
+          {0, {{10, 4}}}, // positions 10-14
+          {1, {{0, 2}, {100, 1}}}, // positions 65536-65538, 65636-65637
+          {2, {{500, 0}}}, // position 131072+500 = 131572
+          {3, {{1000, 9}}}, // positions 196608+1000..196608+1009
+      };
+  auto bitmapData = serializeRoaringBitmapWithRuns(containerRuns);
+  auto tempFile = writeDvFile(bitmapData);
+  auto fileSize = static_cast<uint64_t>(bitmapData.size());
+
+  auto expected = expandRuns<IndexType>(containerRuns);
+  auto dvFile =
+      makeDvDeleteFile(tempFile->getPath(), fileSize, expected.size());
+  CudfDeletionVectorReader reader(dvFile);
+
+  constexpr auto numRows = 200'000;
+  auto deleteMask = makeDeletionColumn(numRows, stream(), mr());
+  reader.applyDeletes(deleteMask->mutable_view(), 0, numRows, stream(), mr());
+
+  auto setBits = getSetBits<IndexType>(deleteMask->view(), numRows, stream());
+
+  EXPECT_EQ(setBits, expected);
+  EXPECT_TRUE(reader.noMoreData());
 }
 
 TEST_F(CudfDeletionVectorReaderTest, largePositionsMultipleContainers) {
