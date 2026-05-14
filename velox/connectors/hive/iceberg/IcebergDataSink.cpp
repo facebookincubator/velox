@@ -427,10 +427,10 @@ IcebergDataSink::createWriterOptions(size_t writerIndex) const {
     // in velox/dwio/parquet/writer/Writer.h. The value "6" represents
     // microseconds (TimestampPrecision::kMicroseconds).
     parquetOptions
-        ->serdeParameters[parquet::WriterOptions::kParquetSerdeTimestampUnit] =
+        ->serdeParameters[parquet::WriterConfig::kParquetSerdeTimestampUnit] =
         "6";
     parquetOptions->serdeParameters
-        [parquet::WriterOptions::kParquetSerdeTimestampTimezone] = "";
+        [parquet::WriterConfig::kParquetSerdeTimestampTimezone] = "";
 
     if (parquetStatsCollector_) {
       parquetOptions->parquetFieldIds =

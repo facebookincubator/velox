@@ -24,6 +24,7 @@
 #include "velox/common/testutil/TempFilePath.h"
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 #include "velox/dwio/parquet/writer/arrow/FileWriter.h"
+#include "velox/dwio/parquet/writer/arrow/StringTruncation.h"
 #include "velox/dwio/parquet/writer/arrow/tests/TestUtil.h"
 
 using arrow::default_memory_pool;

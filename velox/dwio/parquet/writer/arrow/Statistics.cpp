@@ -39,8 +39,8 @@
 #include "velox/dwio/parquet/writer/arrow/Exception.h"
 #include "velox/dwio/parquet/writer/arrow/Platform.h"
 #include "velox/dwio/parquet/writer/arrow/Schema.h"
+#include "velox/dwio/parquet/writer/arrow/StringTruncation.h"
 
-#include "velox/functions/lib/string/StringImpl.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/HugeInt.h"
 
@@ -792,8 +792,8 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
       return encodeDecimalToBigEndian(min_);
     }
     if constexpr (std::is_same_v<T, ByteArray>) {
-      const auto truncatedMin = functions::stringImpl::truncateUtf8(
-          std::string_view(min_), truncateTo);
+      const auto truncatedMin =
+          truncateUtf8(std::string_view(min_), truncateTo);
       std::string s;
       this->plainEncode(
           ByteArray(
@@ -825,14 +825,12 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
 
       if (isUtf8String) {
         // Use UTF-8 string logic for STRING type
-        truncatedMax = functions::stringImpl::roundUpUtf8(
-            std::string_view(max_), truncateTo);
+        truncatedMax = roundUpUtf8(std::string_view(max_), truncateTo);
       } else {
         // Use binary byte logic for BINARY type (VARBINARY)
         // Implementation follows Apache Iceberg's
         // BinaryUtil.truncateBinaryMax()
-        truncatedMax = functions::stringImpl::roundUpBinary(
-            std::string_view(max_), truncateTo);
+        truncatedMax = roundUpBinary(std::string_view(max_), truncateTo);
       }
 
       if (!truncatedMax.has_value()) {
