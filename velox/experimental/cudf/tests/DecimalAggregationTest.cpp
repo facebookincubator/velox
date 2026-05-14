@@ -241,38 +241,6 @@ class CudfDecimalTest : public exec::test::OperatorTestBase {
   }
 };
 
-TEST_F(CudfDecimalTest, DISABLED_decimalAvgAndSumTimesDouble) {
-  auto rowType = ROW({
-      {"l_quantity", DECIMAL(15, 2)},
-  });
-
-  // Values chosen to keep the AVG and SUM exact in double.
-  auto input = makeRowVector(
-      {"l_quantity"},
-      {makeFlatVector<int64_t>(
-          {125, 250, 375, 400}, // 1.25, 2.50, 3.75, 4.00
-          DECIMAL(15, 2))});
-
-  std::vector<RowVectorPtr> vectors = {input};
-  createDuckDbTable(vectors);
-
-  // Force CPU-only path to validate this fails without cuDF involvement.
-  unregisterCudf();
-
-  auto plan = exec::test::PlanBuilder()
-                  .values(vectors)
-                  .project({"l_quantity * 2.0 AS qty2"})
-                  .singleAggregation(
-                      {}, {"avg(qty2) AS avg_qty", "sum(qty2) AS sum_qty"})
-                  .planNode();
-
-  facebook::velox::exec::test::AssertQueryBuilder(plan, duckDbQueryRunner_)
-      .assertResults(
-          "SELECT avg(l_quantity * 2.0) AS avg_qty, "
-          "sum(l_quantity * 2.0) AS sum_qty "
-          "FROM tmp");
-}
-
 TEST_F(CudfDecimalTest, decimalAvgDecimalInput) {
   auto rowType = ROW({
       {"d", DECIMAL(12, 2)},
