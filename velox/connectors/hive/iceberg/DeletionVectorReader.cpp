@@ -55,25 +55,32 @@ void DeletionVectorReader::loadBitmap() {
   }
   loaded_ = true;
 
-  uint64_t blobOffset = 0;
-  uint64_t blobLength = dvFile_.fileSizeInBytes;
+  // Prefer the typed contentOffset / contentLength fields. The legacy
+  // bounds-map encoding (kDvOffsetFieldId / kDvLengthFieldId) is kept as a
+  // fallback for callers that have not migrated yet.
+  uint64_t blobOffset = static_cast<uint64_t>(dvFile_.contentOffset);
+  uint64_t blobLength = dvFile_.contentLength > 0
+      ? static_cast<uint64_t>(dvFile_.contentLength)
+      : dvFile_.fileSizeInBytes;
 
-  if (auto it = dvFile_.lowerBounds.find(kDvOffsetFieldId);
-      it != dvFile_.lowerBounds.end()) {
-    try {
-      blobOffset = std::stoull(it->second);
-    } catch (const std::exception& e) {
-      VELOX_FAIL(
-          "Failed to parse DV blob offset from bounds map: {}", e.what());
+  if (dvFile_.contentLength == 0) {
+    if (auto it = dvFile_.lowerBounds.find(kDvOffsetFieldId);
+        it != dvFile_.lowerBounds.end()) {
+      try {
+        blobOffset = std::stoull(it->second);
+      } catch (const std::exception& e) {
+        VELOX_FAIL(
+            "Failed to parse DV blob offset from bounds map: {}", e.what());
+      }
     }
-  }
-  if (auto it = dvFile_.upperBounds.find(kDvLengthFieldId);
-      it != dvFile_.upperBounds.end()) {
-    try {
-      blobLength = std::stoull(it->second);
-    } catch (const std::exception& e) {
-      VELOX_FAIL(
-          "Failed to parse DV blob length from bounds map: {}", e.what());
+    if (auto it = dvFile_.upperBounds.find(kDvLengthFieldId);
+        it != dvFile_.upperBounds.end()) {
+      try {
+        blobLength = std::stoull(it->second);
+      } catch (const std::exception& e) {
+        VELOX_FAIL(
+            "Failed to parse DV blob length from bounds map: {}", e.what());
+      }
     }
   }
 
