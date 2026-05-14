@@ -115,13 +115,19 @@ buildLeftJoinOutputIndicesFromFilter(
           stream,
           mr)
           .first;
-  auto unmatchedLeftIndicesColumn = toColumn(*unmatchedLeftIndices, stream);
+  auto unmatchedLeftIndicesColumn = cudf::gather(
+      cudf::table_view({allLeftIndicesColumns[0]->view()}),
+      unmatchedLeftIndices->begin(),
+      unmatchedLeftIndices->end(),
+      cudf::out_of_bounds_policy::DONT_CHECK,
+      stream,
+      mr);
 
   auto nullIndexScalar =
       cudf::numeric_scalar<cudf::size_type>(-1, true, stream, mr);
   auto unmatchedRightIndices = cudf::make_column_from_scalar(
       nullIndexScalar,
-      unmatchedLeftIndicesColumn->size(),
+      unmatchedLeftIndicesColumn->num_rows(),
       stream,
       mr);
 
@@ -131,7 +137,7 @@ buildLeftJoinOutputIndicesFromFilter(
     leftConcatViews.push_back(passingPairColumns[0]->view());
     rightConcatViews.push_back(passingPairColumns[1]->view());
   }
-  leftConcatViews.push_back(unmatchedLeftIndicesColumn->view());
+  leftConcatViews.push_back(unmatchedLeftIndicesColumn->view().column(0));
   rightConcatViews.push_back(unmatchedRightIndices->view());
 
   auto finalLeftIndices = cudf::concatenate(leftConcatViews, stream, mr);
