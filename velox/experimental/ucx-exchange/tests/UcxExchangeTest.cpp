@@ -1476,6 +1476,76 @@ TEST_P(UcxExchangeTest, deferredRequestCleanupOnTaskAbort) {
   config.intraNodeExchange = origIntraNode;
 }
 
+// Arbitrary exchange: data distributed (not duplicated) across consumers.
+TEST_P(UcxExchangeTest, arbitraryExchange) {
+  {
+    ExchangeTestParams p = GetParam();
+    if (p.numSrcDrivers != 1 || p.numDstDrivers != 1 || p.numPartitions != 1 ||
+        p.numChunks != 100 || p.numUpstreamTasks != 1 ||
+        p.tableType != TableType::NARROW) {
+      GTEST_SKIP() << "arbitraryExchange: runs only once";
+    }
+  }
+
+  const std::string taskPrefix = getUniqueTaskPrefix();
+  const std::string srcTaskId = taskPrefix + "arbitrarySrc";
+  const int numDestinations = 3;
+  const int numDrivers = 1;
+  const int numChunks = 10;
+  const int numRowsPerChunk = 1'000;
+
+  auto srcTask = createSourceTask(srcTaskId, pool_, UcxTestData::kTestRowType);
+  queueManager_->initializeTask(
+      srcTask,
+      core::PartitionedOutputNode::Kind::kArbitrary,
+      numDestinations,
+      numDrivers);
+  queueManager_->updateOutputBuffers(srcTaskId, numDestinations, true);
+
+  std::vector<std::shared_ptr<SinkDriverMock>> sinkDrivers;
+  for (int destId = 0; destId < numDestinations; ++destId) {
+    const std::string sinkTaskId =
+        taskPrefix + "arbitrarySink" + std::to_string(destId);
+    core::PlanNodeId exchangeNodeId;
+    auto sinkTask = createExchangeTask(
+        sinkTaskId, UcxTestData::kTestRowType, destId, exchangeNodeId);
+    auto sinkDriver =
+        std::make_shared<SinkDriverMock>(sinkTask, /*numDrivers=*/1);
+
+    std::vector<exec::Split> splits;
+    splits.emplace_back(remoteSplit(srcTaskId, destId));
+    sinkDriver->addSplits(splits);
+
+    sinkDrivers.push_back(sinkDriver);
+  }
+
+  // Arbitrary sends all to destination 0 (numPartitions=1).
+  auto sourceMock = std::make_shared<UcxPartitionedOutputMock>(
+      srcTaskId, numDrivers, /*numPartitions=*/1, numChunks, numRowsPerChunk);
+
+  sourceMock->run();
+  for (auto& sink : sinkDrivers) {
+    sink->run();
+  }
+
+  sourceMock->joinThreads();
+  for (auto& sink : sinkDrivers) {
+    sink->joinThreads();
+  }
+
+  // Total rows distributed across sinks must equal total produced.
+  const size_t expectedTotalRows =
+      static_cast<size_t>(numChunks) * numRowsPerChunk;
+  size_t totalRows = 0;
+  for (int i = 0; i < numDestinations; ++i) {
+    totalRows += sinkDrivers[i]->numRows();
+  }
+  EXPECT_EQ(totalRows, expectedTotalRows)
+      << "Total rows across all sinks should equal total produced";
+
+  queueManager_->removeTask(srcTaskId);
+}
+
 std::shared_ptr<UcxOutputQueueManager> UcxExchangeTest::queueManager_;
 std::shared_ptr<std::thread> UcxExchangeTest::communicatorThread_;
 std::shared_ptr<Communicator> UcxExchangeTest::communicator_;
