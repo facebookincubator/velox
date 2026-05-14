@@ -15,22 +15,22 @@
 add_library(
   velox_cudf_exec
   AggregationRegistry.cpp
+  CudfAggregation.cpp
   CudfAssignUniqueId.cpp
   CudfBatchConcat.cpp
   CudfConversion.cpp
+  CudfDistinct.cpp
   CudfEnforceSingleRow.cpp
   CudfFilterProject.cpp
   CudfGroupId.cpp
-  CudfDistinct.cpp
   CudfGroupby.cpp
-  CudfAggregation.cpp
   CudfHashJoin.cpp
-  CudfNestedLoopJoin.cpp
-  CudfReduce.cpp
   CudfLimit.cpp
   CudfLocalPartition.cpp
   CudfMarkDistinct.cpp
+  CudfNestedLoopJoin.cpp
   CudfOrderBy.cpp
+  CudfReduce.cpp
   CudfTopN.cpp
   DebugUtil.cpp
   GpuResources.cpp
@@ -48,12 +48,12 @@ target_link_libraries(
   PRIVATE
     arrow
     velox_arrow_bridge
-    velox_exception
     velox_common_base
-    velox_cudf_vector
-    velox_exec
-    velox_cudf_hive_connector
     velox_cudf_expression
+    velox_cudf_hive_connector
+    velox_cudf_vector
+    velox_exception
+    velox_exec
 )
 
 target_compile_options(velox_cudf_exec PRIVATE -Wno-missing-field-initializers)
