@@ -532,6 +532,22 @@ class SsdFile {
   // Deletes the given file if it exists.
   void deleteFile(std::unique_ptr<WriteFile> file);
 
+  // Removes the checkpoint and eviction-log files left behind by a previous
+  // SsdFile instance using this same data file. Called from the constructor
+  // when this instance has checkpointing disabled.
+  //
+  // The checkpoint and log together describe which logical keys live at
+  // which offsets in the data file; recovery on startup reads them to
+  // rebuild 'entries_'. They are trustworthy only while every write to the
+  // data file also keeps them up to date. With checkpointing off this
+  // instance writes into the existing data file but never touches the
+  // meta files, so a later instance with checkpointing re-enabled would
+  // recover from a stale checkpoint pointing at overwritten regions and
+  // silently return wrong bytes. Removing them here keeps the on-disk
+  // state to either {data + matching checkpoint} or {data alone}; the
+  // {data + stale checkpoint} state becomes unreachable.
+  void removeStaleRecoveryFiles();
+
   // Allocates 'kCheckpointBufferSize' buffer from cache memory pool for
   // checkpointing.
   void allocateCheckpointBuffer();

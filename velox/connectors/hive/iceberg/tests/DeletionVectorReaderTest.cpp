@@ -32,9 +32,9 @@ using namespace facebook::velox::common::testutil;
 
 namespace {
 
-/// Serializes a roaring bitmap in the portable format (no-run variant,
-/// cookie = 12346). Supports only array containers (cardinality <= 4096).
-/// This is the simplest format the DeletionVectorReader needs to parse.
+// Serializes a roaring bitmap in the portable format (no-run variant,
+// cookie = 12346). Supports only array containers (cardinality <= 4096).
+// This is the simplest format the DeletionVectorReader needs to parse.
 std::string serializeRoaringBitmapNoRun(const std::vector<int64_t>& positions) {
   if (positions.empty()) {
     // Empty bitmap: cookie + 0 containers.
@@ -62,7 +62,7 @@ std::string serializeRoaringBitmapNoRun(const std::vector<int64_t>& positions) {
 
   std::string data;
   // Cookie.
-  uint32_t cookie = 12346;
+  constexpr uint32_t cookie = 12346;
   data.append(reinterpret_cast<const char*>(&cookie), 4);
   // Container count.
   data.append(reinterpret_cast<const char*>(&numContainers), 4);
@@ -74,8 +74,8 @@ std::string serializeRoaringBitmapNoRun(const std::vector<int64_t>& positions) {
     data.append(reinterpret_cast<const char*>(&cardMinus1), 2);
   }
 
-  // Offset section (required for >= 4 containers).
-  if (numContainers >= 4) {
+  // Offset section (required for > 0 containers)
+  if (numContainers > 0) {
     uint32_t offset = 4 + 4 + numContainers * 4 + numContainers * 4;
     for (auto& [key, vals] : containers) {
       data.append(reinterpret_cast<const char*>(&offset), 4);
@@ -93,8 +93,8 @@ std::string serializeRoaringBitmapNoRun(const std::vector<int64_t>& positions) {
   return data;
 }
 
-/// Serializes a roaring bitmap in the portable format with run containers
-/// (cookie = 12347). All containers are run-encoded.
+// Serializes a roaring bitmap in the portable format with run containers
+// (cookie = 12347). All containers are run-encoded.
 std::string serializeRoaringBitmapWithRuns(
     const std::vector<
         std::pair<uint16_t, std::vector<std::pair<uint16_t, uint16_t>>>>&
@@ -132,6 +132,21 @@ std::string serializeRoaringBitmapWithRuns(
     data.append(reinterpret_cast<const char*>(&cardMinus1), 2);
   }
 
+  // Offset section (required for >= 4)
+  constexpr uint32_t kRunContainersNoOffsetThreshold = 4;
+  if (numContainers >= kRunContainersNoOffsetThreshold) {
+    // First container offset = cookie (4) + runBitmap (runBitmapBytes)
+    // + descriptive header (4 * numContainers) + offset header
+    // (4 * numContainers).
+    uint32_t offset =
+        4 + runBitmapBytes + 4 * numContainers + 4 * numContainers;
+    for (auto& [key, runs] : containerRuns) {
+      data.append(reinterpret_cast<const char*>(&offset), 4);
+      // Each run container occupies 2 + 4 * numRuns bytes.
+      offset += 2 + 4 * static_cast<uint32_t>(runs.size());
+    }
+  }
+
   // Container data: each run container has numRuns (uint16) followed by
   // (start, lengthMinus1) pairs.
   for (auto& [key, runs] : containerRuns) {
@@ -146,7 +161,26 @@ std::string serializeRoaringBitmapWithRuns(
   return data;
 }
 
-/// Writes binary data to a temp file and returns the path.
+// Expands a list of run-encoded containers into the full set of positions
+// they represent. Each container is keyed by its high 16 bits and contains
+// runs of (start, lengthMinus1)
+std::vector<uint64_t> expandRuns(
+    const std::vector<
+        std::pair<uint16_t, std::vector<std::pair<uint16_t, uint16_t>>>>&
+        containerRuns) {
+  std::vector<uint64_t> result;
+  for (const auto& [key, runs] : containerRuns) {
+    const uint64_t base = static_cast<uint64_t>(key) * 65536;
+    for (const auto& [start, lengthMinus1] : runs) {
+      for (uint64_t i = 0; i <= lengthMinus1; ++i) {
+        result.push_back(base + start + i);
+      }
+    }
+  }
+  return result;
+}
+
+// Writes binary data to a temp file and returns the path.
 std::shared_ptr<TempFilePath> writeDvFile(const std::string& bitmapData) {
   auto tempFile = TempFilePath::create();
   // Write directly via C++ streams since TempFilePath already creates the
@@ -158,7 +192,7 @@ std::shared_ptr<TempFilePath> writeDvFile(const std::string& bitmapData) {
   return tempFile;
 }
 
-/// Creates an IcebergDeleteFile for a deletion vector.
+// Creates an IcebergDeleteFile for a deletion vector.
 IcebergDeleteFile makeDvDeleteFile(
     const std::string& filePath,
     uint64_t recordCount,
@@ -189,7 +223,7 @@ IcebergDeleteFile makeDvDeleteFile(
       upperBounds);
 }
 
-/// Extracts which bits are set in a bitmap buffer.
+// Extracts which bits are set in a bitmap buffer.
 std::vector<uint64_t> getSetBits(const BufferPtr& bitmap, uint64_t size) {
   auto* raw = bitmap->as<uint8_t>();
   std::vector<uint64_t> result;
@@ -355,7 +389,9 @@ TEST_F(DeletionVectorReaderTest, runContainers) {
   auto tempFile = writeDvFile(bitmapData);
   auto fileSize = static_cast<uint64_t>(bitmapData.size());
 
-  auto dvFile = makeDvDeleteFile(tempFile->getPath(), 20, fileSize);
+  auto expected = expandRuns(containerRuns);
+  auto dvFile =
+      makeDvDeleteFile(tempFile->getPath(), expected.size(), fileSize);
 
   DeletionVectorReader reader(dvFile, 0, pool_.get());
 
@@ -363,14 +399,33 @@ TEST_F(DeletionVectorReaderTest, runContainers) {
   reader.readDeletePositions(0, 100, bitmap);
 
   auto setBits = getSetBits(bitmap, 100);
-  // Expect positions 10-19 and 50-59.
-  std::vector<uint64_t> expected;
-  for (uint64_t i = 10; i <= 19; ++i) {
-    expected.push_back(i);
-  }
-  for (uint64_t i = 50; i <= 59; ++i) {
-    expected.push_back(i);
-  }
+  EXPECT_EQ(setBits, expected);
+  EXPECT_TRUE(reader.noMoreData());
+}
+
+TEST_F(DeletionVectorReaderTest, runContainersWithOffsetHeader) {
+  std::vector<std::pair<uint16_t, std::vector<std::pair<uint16_t, uint16_t>>>>
+      containerRuns = {
+          {0, {{10, 4}}}, // positions 10-14
+          {1, {{0, 2}, {100, 1}}}, // positions 65536-65538, 65636-65637
+          {2, {{500, 0}}}, // position 131072+500 = 131572
+          {3, {{1000, 9}}}, // positions 196608+1000..196608+1009
+      };
+  auto bitmapData = serializeRoaringBitmapWithRuns(containerRuns);
+  auto tempFile = writeDvFile(bitmapData);
+  auto fileSize = static_cast<uint64_t>(bitmapData.size());
+
+  auto expected = expandRuns(containerRuns);
+  auto dvFile =
+      makeDvDeleteFile(tempFile->getPath(), expected.size(), fileSize);
+
+  DeletionVectorReader reader(dvFile, 0, pool_.get());
+
+  const uint64_t numRows = 200'000;
+  auto bitmap = allocateBitmap(numRows);
+  reader.readDeletePositions(0, numRows, bitmap);
+
+  auto setBits = getSetBits(bitmap, numRows);
   EXPECT_EQ(setBits, expected);
   EXPECT_TRUE(reader.noMoreData());
 }

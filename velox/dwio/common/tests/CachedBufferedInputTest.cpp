@@ -149,8 +149,9 @@ TEST_F(CachedBufferedInputTest, reset) {
   }
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
-  io::ReaderOptions readerOptions(
-      pool_.get(), dataIoStats_.get(), metadataIoStats_.get());
+  io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   readerOptions.setLoadQuantum(1 << 20);
 
   auto& ids = fileIds();
@@ -287,8 +288,9 @@ TEST_F(CachedBufferedInputTest, readAfterReset) {
   }
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
-  io::ReaderOptions readerOptions(
-      pool_.get(), dataIoStats_.get(), metadataIoStats_.get());
+  io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   readerOptions.setLoadQuantum(1 << 20);
 
   auto& ids = fileIds();
@@ -355,8 +357,9 @@ DEBUG_ONLY_TEST_F(CachedBufferedInputTest, resetInputWithBeforeLoading) {
   }
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
-  io::ReaderOptions readerOptions(
-      pool_.get(), dataIoStats_.get(), metadataIoStats_.get());
+  io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   readerOptions.setLoadQuantum(1 << 20);
 
   auto& ids = fileIds();
@@ -452,8 +455,9 @@ DEBUG_ONLY_TEST_F(CachedBufferedInputTest, resetInputWithAfterLoading) {
   }
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
-  io::ReaderOptions readerOptions(
-      pool_.get(), dataIoStats_.get(), metadataIoStats_.get());
+  io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   readerOptions.setLoadQuantum(1 << 20);
 
   auto& ids = fileIds();
@@ -549,8 +553,9 @@ TEST_F(CachedBufferedInputTest, hasCache) {
   content.resize(kContentSize);
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
-  io::ReaderOptions readerOptions(
-      pool_.get(), dataIoStats_.get(), metadataIoStats_.get());
+  io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   auto& ids = fileIds();
   StringIdLease fileId(ids, "testFile");
   StringIdLease groupId(ids, "testGroup");
@@ -581,8 +586,9 @@ TEST_P(CacheRegionTest, cacheAndFind) {
   }
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
-  io::ReaderOptions readerOptions(
-      pool_.get(), dataIoStats_.get(), metadataIoStats_.get());
+  io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   auto& ids = fileIds();
   StringIdLease fileId(ids, "testFile_cacheAndFind");
   StringIdLease groupId(ids, "testGroup_cacheAndFind");
@@ -649,8 +655,9 @@ TEST_P(CacheRegionTest, smallEntry) {
   }
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
-  io::ReaderOptions readerOptions(
-      pool_.get(), dataIoStats_.get(), metadataIoStats_.get());
+  io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   auto& ids = fileIds();
   StringIdLease fileId(ids, "testFile_smallEntry");
   StringIdLease groupId(ids, "testGroup_smallEntry");
@@ -719,8 +726,9 @@ TEST_P(CacheRegionTest, largeEntry) {
   }
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
-  io::ReaderOptions readerOptions(
-      pool_.get(), dataIoStats_.get(), metadataIoStats_.get());
+  io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   auto& ids = fileIds();
   StringIdLease fileId(ids, "testFile_largeEntry");
   StringIdLease groupId(ids, "testGroup_largeEntry");
@@ -783,8 +791,9 @@ TEST_P(CacheRegionTest, miss) {
   std::string content(kContentSize, 'x');
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
-  io::ReaderOptions readerOptions(
-      pool_.get(), dataIoStats_.get(), metadataIoStats_.get());
+  io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   auto& ids = fileIds();
   StringIdLease fileId(ids, "testFile_miss");
   StringIdLease groupId(ids, "testGroup_miss");
@@ -815,8 +824,9 @@ TEST_P(CacheRegionTest, pinKeepsDataAlive) {
   }
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
-  io::ReaderOptions readerOptions(
-      pool_.get(), dataIoStats_.get(), metadataIoStats_.get());
+  io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   auto& ids = fileIds();
   StringIdLease fileId(ids, "testFile_pinAlive");
   StringIdLease groupId(ids, "testGroup_pinAlive");
@@ -883,8 +893,9 @@ TEST_F(CachedBufferedInputTest, findCachedRegionExclusiveWithWait) {
   }
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
-  io::ReaderOptions readerOptions(
-      pool_.get(), dataIoStats_.get(), metadataIoStats_.get());
+  io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   auto& ids = fileIds();
   const std::string fileName = "testFile_findWait";
   StringIdLease fileId(ids, fileName);
@@ -966,8 +977,9 @@ TEST_F(CachedBufferedInputTest, cacheRegionSkipsOngoingInsert) {
   }
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
-  io::ReaderOptions readerOptions(
-      pool_.get(), dataIoStats_.get(), metadataIoStats_.get());
+  io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   auto& ids = fileIds();
   const std::string fileName = "testFile_skipInsert";
   StringIdLease fileId(ids, fileName);
@@ -1031,8 +1043,9 @@ TEST_F(CachedBufferedInputTest, preloadCalledTwice) {
   std::string content(1024, 'x');
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
-  io::ReaderOptions readerOptions(
-      pool_.get(), dataIoStats_.get(), metadataIoStats_.get());
+  io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   auto& ids = fileIds();
   StringIdLease fileId(ids, "preloadTwice");
   StringIdLease groupId(ids, "preloadTwiceGroup");
@@ -1058,8 +1071,9 @@ TEST_F(CachedBufferedInputTest, isBufferedWithPreload) {
   std::string content(1024, 'x');
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
-  io::ReaderOptions readerOptions(
-      pool_.get(), dataIoStats_.get(), metadataIoStats_.get());
+  io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   auto& ids = fileIds();
   StringIdLease fileId(ids, "isBufferedPreload");
   StringIdLease groupId(ids, "isBufferedPreloadGroup");
@@ -1091,8 +1105,9 @@ TEST_F(CachedBufferedInputTest, enqueueSkipsRequestsWhenPreloaded) {
   std::string content(1024, 'x');
   auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
 
-  io::ReaderOptions readerOptions(
-      pool_.get(), dataIoStats_.get(), metadataIoStats_.get());
+  io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   auto& ids = fileIds();
   StringIdLease fileId(ids, "enqueueSkipsRequests");
   StringIdLease groupId(ids, "enqueueSkipsRequestsGroup");
@@ -1142,8 +1157,9 @@ TEST_F(CachedBufferedInputTest, readSetsPreloadedPinWhenPreloaded) {
   }
   auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
 
-  io::ReaderOptions readerOptions(
-      pool_.get(), dataIoStats_.get(), metadataIoStats_.get());
+  io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   readerOptions.setLoadQuantum(1 << 20);
 
   auto& ids = fileIds();
@@ -1185,8 +1201,9 @@ TEST_F(CachedBufferedInputTest, preloadAfterEnqueue) {
   std::string content(1024, 'x');
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
-  io::ReaderOptions readerOptions(
-      pool_.get(), dataIoStats_.get(), metadataIoStats_.get());
+  io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   auto& ids = fileIds();
   StringIdLease fileId(ids, "preloadAfterEnqueue");
   StringIdLease groupId(ids, "preloadAfterEnqueueGroup");
@@ -1221,8 +1238,9 @@ TEST_F(CachedBufferedInputTest, preloadedStreamSkipsEviction) {
   }
   auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
 
-  io::ReaderOptions readerOptions(
-      pool_.get(), dataIoStats_.get(), metadataIoStats_.get());
+  io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   readerOptions.setCacheable(false);
   readerOptions.setLoadQuantum(1 << 20);
 
@@ -1285,8 +1303,9 @@ TEST_F(CachedBufferedInputTest, preloadRespectsNotCacheable) {
   }
   auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
 
-  io::ReaderOptions readerOptions(
-      pool_.get(), dataIoStats_.get(), metadataIoStats_.get());
+  io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   readerOptions.setCacheable(false);
   readerOptions.setLoadQuantum(1 << 20);
 
@@ -1332,8 +1351,9 @@ TEST_F(CachedBufferedInputTest, preloadRespectsCacheable) {
   }
   auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
 
-  io::ReaderOptions readerOptions(
-      pool_.get(), dataIoStats_.get(), metadataIoStats_.get());
+  io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   readerOptions.setCacheable(true);
   readerOptions.setLoadQuantum(1 << 20);
 
@@ -1391,8 +1411,9 @@ TEST_F(CachedBufferedInputTest, preload) {
     }
     auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
 
-    io::ReaderOptions readerOptions(
-        pool_.get(), dataIoStats_.get(), metadataIoStats_.get());
+    io::ReaderOptions readerOptions(pool_.get());
+    readerOptions.setDataIoStats(dataIoStats_.get());
+    readerOptions.setMetadataIoStats(metadataIoStats_.get());
     readerOptions.setLoadQuantum(1 << 20);
 
     auto& ids = fileIds();
@@ -1473,8 +1494,9 @@ TEST_F(CachedBufferedInputTest, preloadCacheSharing) {
   }
   auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
 
-  io::ReaderOptions readerOptions(
-      pool_.get(), dataIoStats_.get(), metadataIoStats_.get());
+  io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   readerOptions.setLoadQuantum(1 << 20);
 
   auto& ids = fileIds();
@@ -1557,8 +1579,9 @@ TEST_F(CachedBufferedInputTest, prefetchScope) {
   }
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
-  io::ReaderOptions readerOptions(
-      pool_.get(), dataIoStats_.get(), metadataIoStats_.get());
+  io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
 
   auto& ids = fileIds();
   StringIdLease fileId(ids, "testFile");
@@ -1620,8 +1643,9 @@ TEST_F(CachedBufferedInputTest, cloneNonCacheable) {
   std::string content(kContentSize, 'x');
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
-  io::ReaderOptions readerOptions(
-      pool_.get(), dataIoStats_.get(), metadataIoStats_.get());
+  io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_.get());
+  readerOptions.setMetadataIoStats(metadataIoStats_.get());
   readerOptions.setLoadQuantum(1 << 20);
 
   auto& ids = fileIds();

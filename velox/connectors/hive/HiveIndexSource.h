@@ -35,10 +35,12 @@ class HiveConfig;
 
 /// Provides index lookup for Hive-metastore-backed tables.
 ///
-/// Owns format-agnostic orchestration: remaining filter evaluation, output
-/// projection, and (in future) partition routing. Delegates format-specific
-/// reads to either the built-in FileIndexReader (for Nimble) or external
-/// SplitIndexReader implementations registered via IndexReaderFactoryRegistry.
+/// Owns format-agnostic orchestration: remaining filter evaluation and output
+/// projection. Delegates format-specific reads to either the built-in
+/// FileIndexReader (for Nimble) or external SplitIndexReader implementations
+/// registered via IndexReaderFactoryRegistry. Supports partitioned tables by
+/// synthesizing partition column values from split metadata via scan-spec
+/// constants.
 class HiveIndexSource : public IndexSource,
                         public std::enable_shared_from_this<HiveIndexSource> {
  public:
@@ -85,23 +87,54 @@ class HiveIndexSource : public IndexSource,
   // filterEvalCtx_.selectedIndices and selectedBits are not updated.
   vector_size_t evaluateRemainingFilter(RowVectorPtr& rowVector);
 
+  // Applies non-index equi-join conditions as post-read equality filters.
+  // Compares request (probe) values against reader output column values
+  // for each non-index join condition. Returns the number of rows that pass
+  // all conditions. Populates 'passingIndices' with the indices of rows that
+  // pass when not all rows pass.
+  vector_size_t applyNonIndexConditions(
+      const RowVectorPtr& request,
+      const RowVectorPtr& output,
+      const BufferPtr& inputHits,
+      BufferPtr& passingIndices);
+
   // Projects output from reader output to the final output type. Wraps child
-  // vectors with remaining filter indices if provided.
+  // vectors with remaining filter indices if provided. Partition
+  // columns are emitted by the reader directly via setConstantValue() on
+  // the scan spec, so they are projected like any other column here.
   RowVectorPtr projectOutput(
       vector_size_t numRows,
       const BufferPtr& remainingIndices,
       const RowVectorPtr& rowVector);
 
+  // Sets partition column constants on scanSpec_ from the first split's
+  // partition values. No-op if there are no partition columns or no splits.
+  void setPartitionValues(
+      const std::vector<std::shared_ptr<ConnectorSplit>>& splits);
+
+  // Sets a constant partition value on the scanSpec for a partition column.
+  void setPartitionValue(
+      common::ScanSpec* spec,
+      const std::string& partitionKey,
+      const std::optional<std::string>& value) const;
+
   void init(
       const ColumnHandleMap& assignments,
       const std::vector<core::IndexLookupConditionPtr>& indexLookupConditions);
 
-  // Validates and initializes index lookup conditions:
-  // - Converts filter conditions (with constant values) to filters_.
-  // - Non-filter conditions are stored in indexLookupConditions_.
-  void initIndexLookupConditions(
+  // Initializes all join conditions:
+  // - Index conditions are pushed to indexLookupConditions_ (filters on
+  //   index columns are converted to index lookup conditions).
+  // - Non-index conditions are resolved to nonIndexConditions_ for
+  //   post-read equality filtering, and their columns are added to
+  //   readColumnNames/readColumnTypes if not already present.
+  void initConditions(
       const std::vector<core::IndexLookupConditionPtr>& indexLookupConditions,
-      const ColumnHandleMap& assignments);
+      const ColumnHandleMap& assignments,
+      const folly::F14FastMap<std::string_view, const HiveColumnHandle*>&
+          columnHandles,
+      std::vector<std::string>& readColumnNames,
+      std::vector<TypePtr>& readColumnTypes);
 
   // Initializes the remaining filter:
   // - Compiles the remaining filter expression.
@@ -175,6 +208,21 @@ class HiveIndexSource : public IndexSource,
   // This is passed to FileIndexReader.
   std::vector<core::IndexLookupConditionPtr> indexLookupConditions_;
 
+  // Non-index equi-join conditions: join keys that are not index columns
+  // (e.g., bucket columns used for colocated joins). Applied as post-read
+  // equality filters during lookup.
+  struct NonIndexCondition {
+    column_index_t outputColumnIndex;
+    column_index_t requestColumnIndex;
+  };
+  std::vector<NonIndexCondition> nonIndexConditions_;
+
+  // Partition column handles, keyed by table column name (handle->name()).
+  // Populated from kPartitionKey assignments in init(). Used to feed
+  // partition handles into makeScanSpec() and to look up dataType() when
+  // parsing partition value strings into typed constants.
+  std::unordered_map<std::string, FileColumnHandlePtr> partitionKeyHandles_;
+
   // Filters for pushdown. Includes subfield filters from table handle and
   // filters converted from constant index lookup conditions.
   common::SubfieldFilters filters_;
@@ -204,11 +252,13 @@ class HiveIndexSource : public IndexSource,
 
   // Scan spec for the index reader.
   std::shared_ptr<common::ScanSpec> scanSpec_;
-  // Output type for the index reader.
+  // Output type for the index reader. Includes partition columns when they
+  // appear in outputType_; the per-split reader emits their values as
+  // constants via the scan spec's setConstantValue().
   RowTypePtr readerOutputType_;
-  /// All index readers (both built-in and external). FileIndexReader
-  /// (Nimble) and external readers both implement SplitIndexReader.
-  /// Created by addSplits().
+  // All index readers (both built-in and external). FileIndexReader
+  // (Nimble) and external readers both implement SplitIndexReader.
+  // Created by addSplits().
   std::vector<std::unique_ptr<SplitIndexReader>> readers_;
 
   // Cached empty output vector.

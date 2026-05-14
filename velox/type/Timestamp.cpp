@@ -14,8 +14,12 @@
  * limitations under the License.
  */
 #include "velox/type/Timestamp.h"
+
 #include <charconv>
 #include <chrono>
+
+#include <folly/dynamic.h>
+
 #include "velox/common/base/CountBits.h"
 #include "velox/external/tzdb/exception.h"
 #include "velox/type/FastDate.h"
@@ -23,6 +27,23 @@
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox {
+
+Timestamp Timestamp::create(const folly::dynamic& obj) {
+  auto seconds = obj["seconds"].asInt();
+  auto nanos = obj["nanos"].asInt();
+  return Timestamp(seconds, nanos);
+}
+
+Timestamp::operator folly::dynamic() const {
+  return folly::dynamic(seconds_);
+}
+
+folly::dynamic Timestamp::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["seconds"] = seconds_;
+  obj["nanos"] = nanos_;
+  return obj;
+}
 
 // static
 Timestamp Timestamp::fromDaysAndNanos(int32_t days, int64_t nanos) {

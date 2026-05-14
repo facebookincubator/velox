@@ -1203,6 +1203,72 @@ Benchmarks are a great way to check if an optimization is working, evaluate
 how much benefit it brings and decide whether it is worth the additional
 complexity.
 
+Listening to Function Calls
+--------------------------
+
+Velox supports observing VectorFunction::apply calls via a global listener
+registry. This is useful for monitoring, access control, auditing, or any
+cross-cutting concern that needs to observe function execution without modifying
+function implementations.
+
+Listener factories are registered globally via
+``registerVectorFunctionListenerFactory()``. During expression compilation,
+ExprCompiler calls each factory's ``create()`` method once per resolved scalar
+function. The factory receives the function name, ``VectorFunctionMetadata``,
+and ``QueryConfig``, and returns a ``VectorFunctionListeners`` struct containing
+optional pre and/or post listeners, or ``std::nullopt`` to skip that function.
+
+.. code-block:: c++
+
+  #include "velox/expression/VectorFunctionListener.h"
+
+  class MyListenerFactory : public VectorFunctionListenerFactory {
+   public:
+    std::optional<VectorFunctionListeners> create(
+        std::string_view functionName,
+        const VectorFunctionMetadata& metadata,
+        const core::QueryConfig& queryConfig) override {
+      if (functionName != "target_fn") {
+        return std::nullopt;
+      }
+      return VectorFunctionListeners{
+          std::make_shared<PreApplyListener>(
+              [](std::string_view functionName,
+                 const SelectivityVector& rows,
+                 const std::vector<VectorPtr>& args,
+                 const TypePtr& outputType,
+                 const EvalCtx& context) {
+                // Called before VectorFunction::apply.
+              }),
+          std::make_shared<PostApplyListener>(
+              [](std::string_view functionName,
+                 const SelectivityVector& rows,
+                 const std::vector<VectorPtr>& args,
+                 const TypePtr& outputType,
+                 const EvalCtx& context,
+                 const VectorPtr& result,
+                 std::exception_ptr error) {
+                // Called after VectorFunction::apply, even if apply threw.
+                // 'error' is non-null when apply threw; the framework
+                // rethrows it after all post-listeners have executed.
+              }),
+      };
+    }
+  };
+
+  // Register globally (typically at startup).
+  auto factory = std::make_shared<MyListenerFactory>();
+  registerVectorFunctionListenerFactory(factory);
+
+Key properties:
+
+- **Multiple factories** can be registered independently, each observing
+  different concerns without coordination.
+- **Pre-listener** exceptions propagate immediately and abort the function call.
+- **Post-listener** exceptions are caught and logged (rate-limited); they do not
+  mask the original apply error or prevent other post-listeners from running.
+- **Special forms** (AND, OR, CAST, etc.) are not subject to listening.
+
 Documenting
 -----------
 

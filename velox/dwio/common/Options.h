@@ -476,6 +476,14 @@ class RowReaderOptions {
     stringDecoderZeroCopy_ = stringDecoderZeroCopy;
   }
 
+  bool nimblePreserveDictionaryEncoding() const {
+    return nimblePreserveDictionaryEncoding_;
+  }
+
+  void setNimblePreserveDictionaryEncoding(bool value) {
+    nimblePreserveDictionaryEncoding_ = value;
+  }
+
   bool collectColumnCpuMetrics() const {
     return collectColumnCpuMetrics_;
   }
@@ -551,9 +559,12 @@ class RowReaderOptions {
   std::shared_ptr<FormatSpecificOptions> formatSpecificOptions_;
   bool trackRowSize_{false};
   bool indexEnabled_{false};
-  // NOTE: we will control this option with a session property
-  // for prod. Tests are parameterized on both branches.
+  // Enables zero-copy string decoding in the Nimble selective reader,
+  // using the non-legacy encoding path. Controlled via session property.
   bool stringDecoderZeroCopy_{false};
+  // Controls whether dictionary-encoded Nimble string columns return
+  // DictionaryVector instead of FlatVector. Controlled via session property.
+  bool nimblePreserveDictionaryEncoding_{false};
   bool collectColumnCpuMetrics_{false};
 };
 
@@ -565,6 +576,10 @@ class ReaderOptions : public io::ReaderOptions {
   static constexpr uint64_t kDefaultFilePreloadThreshold =
       1024 * 1024 * 8; // 8MB
 
+  explicit ReaderOptions(velox::memory::MemoryPool* pool)
+      : io::ReaderOptions(pool) {}
+
+  // Deprecated: use pool-only constructor + setDataIoStats/setMetadataIoStats.
   ReaderOptions(
       velox::memory::MemoryPool* pool,
       velox::io::IoStatistics* dataIoStats,

@@ -28,10 +28,20 @@ struct IcebergMetadataColumn {
   std::shared_ptr<const Type> type;
   std::string doc;
 
-  // Position delete file's metadata column ID, see
-  // https://iceberg.apache.org/spec/#position-delete-files.
+  // Reserved Field IDs for Iceberg tables; see
+  // https://iceberg.apache.org/spec/#reserved-field-ids
   static constexpr int32_t kPosId = 2'147'483'545;
   static constexpr int32_t kFilePathId = 2'147'483'546;
+  static constexpr int32_t kRowId = 2'147'483'540;
+  static constexpr int32_t kLastUpdatedSequenceNumber = 2'147'483'539;
+
+  static constexpr const char* kRowIdColumnName = "_row_id";
+  static constexpr const char* kLastUpdatedSequenceNumberColumnName =
+      "_last_updated_sequence_number";
+  // Info column keys provided in the split's infoColumns map.
+  static constexpr const char* kFirstRowIdInfoColumn = "$first_row_id";
+  static constexpr const char* kDataSequenceNumberInfoColumn =
+      "$data_sequence_number";
 
   IcebergMetadataColumn(
       int _id,
