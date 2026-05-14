@@ -395,12 +395,11 @@ std::unique_ptr<cudf::column> reduceFinalDecimalSumFromSerializedColumn(
 std::unique_ptr<cudf::column> reduceFinalDecimalAvgFromSerializedColumn(
     cudf::column_view inputCol,
     TypePtr const& outputType,
-    TypePtr const& resultType,
     rmm::cuda_stream_view stream) {
   validateIntermediateColumnType(inputCol);
   auto scale = getDecimalPrecisionScale(*outputType).second;
   return finalDecimalAvgFromSerializedString(
-      inputCol, scale, resultType, stream);
+      inputCol, scale, outputType, stream);
 }
 
 struct ReduceDecimalSumAggregator : ReduceAggregator {
@@ -457,8 +456,9 @@ struct ReduceDecimalAvgAggregator : ReduceAggregator {
         return reduceIntermediateDecimalFromSerializedColumn(
             inputCol, outputType, stream);
       case core::AggregationNode::Step::kFinal:
+        VELOX_CHECK(outputType == resultType, "outputType/resultType mismatch");
         return reduceFinalDecimalAvgFromSerializedColumn(
-            inputCol, outputType, resultType, stream);
+            inputCol, outputType, stream);
       default:
         VELOX_NYI("Unsupported aggregation step for decimal avg reduce");
     }
