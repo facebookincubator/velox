@@ -161,6 +161,25 @@ std::string serializeRoaringBitmapWithRuns(
   return data;
 }
 
+/// Expands a list of run-encoded containers into the full set of positions
+/// they represent. Each container is keyed by its high 16 bits and contains
+/// runs of (start, lengthMinus1)
+std::vector<uint64_t> expandRuns(
+    const std::vector<
+        std::pair<uint16_t, std::vector<std::pair<uint16_t, uint16_t>>>>&
+        containerRuns) {
+  std::vector<uint64_t> result;
+  for (const auto& [key, runs] : containerRuns) {
+    const uint64_t base = static_cast<uint64_t>(key) * 65536;
+    for (const auto& [start, lengthMinus1] : runs) {
+      for (uint64_t i = 0; i <= lengthMinus1; ++i) {
+        result.push_back(base + start + i);
+      }
+    }
+  }
+  return result;
+}
+
 /// Writes binary data to a temp file and returns the path.
 std::shared_ptr<TempFilePath> writeDvFile(const std::string& bitmapData) {
   auto tempFile = TempFilePath::create();
@@ -370,7 +389,9 @@ TEST_F(DeletionVectorReaderTest, runContainers) {
   auto tempFile = writeDvFile(bitmapData);
   auto fileSize = static_cast<uint64_t>(bitmapData.size());
 
-  auto dvFile = makeDvDeleteFile(tempFile->getPath(), 20, fileSize);
+  auto expected = expandRuns(containerRuns);
+  auto dvFile =
+      makeDvDeleteFile(tempFile->getPath(), expected.size(), fileSize);
 
   DeletionVectorReader reader(dvFile, 0, pool_.get());
 
@@ -378,14 +399,6 @@ TEST_F(DeletionVectorReaderTest, runContainers) {
   reader.readDeletePositions(0, 100, bitmap);
 
   auto setBits = getSetBits(bitmap, 100);
-  // Expect positions 10-19 and 50-59.
-  std::vector<uint64_t> expected;
-  for (uint64_t i = 10; i <= 19; ++i) {
-    expected.push_back(i);
-  }
-  for (uint64_t i = 50; i <= 59; ++i) {
-    expected.push_back(i);
-  }
   EXPECT_EQ(setBits, expected);
   EXPECT_TRUE(reader.noMoreData());
 }
@@ -402,7 +415,9 @@ TEST_F(DeletionVectorReaderTest, runContainersWithOffsetHeader) {
   auto tempFile = writeDvFile(bitmapData);
   auto fileSize = static_cast<uint64_t>(bitmapData.size());
 
-  auto dvFile = makeDvDeleteFile(tempFile->getPath(), 20, fileSize);
+  auto expected = expandRuns(containerRuns);
+  auto dvFile =
+      makeDvDeleteFile(tempFile->getPath(), expected.size(), fileSize);
 
   DeletionVectorReader reader(dvFile, 0, pool_.get());
 
@@ -411,19 +426,6 @@ TEST_F(DeletionVectorReaderTest, runContainersWithOffsetHeader) {
   reader.readDeletePositions(0, numRows, bitmap);
 
   auto setBits = getSetBits(bitmap, numRows);
-  std::vector<uint64_t> expected;
-  for (uint64_t i = 10; i <= 14; ++i) {
-    expected.push_back(i);
-  }
-  for (uint64_t i = 65536; i <= 65538; ++i) {
-    expected.push_back(i);
-  }
-  expected.push_back(65636);
-  expected.push_back(65637);
-  expected.push_back(131072 + 500);
-  for (uint64_t i = 0; i <= 9; ++i) {
-    expected.push_back(196608 + 1000 + i);
-  }
   EXPECT_EQ(setBits, expected);
   EXPECT_TRUE(reader.noMoreData());
 }

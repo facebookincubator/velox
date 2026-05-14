@@ -27,6 +27,7 @@ namespace facebook::velox::connector::hive::iceberg {
 namespace {
 static constexpr uint32_t kSerialCookieNoRun = 12'346;
 static constexpr uint32_t kSerialCookie = 12'347;
+static constexpr uint32_t kRunContainersNoOffsetThreshold = 4;
 } // namespace
 
 DeletionVectorReader::DeletionVectorReader(
@@ -226,7 +227,8 @@ void DeletionVectorReader::deserializeRoaring64Bitmap(const std::string& data) {
     }
 
     // Skip offset section
-    const bool hasOffsetSection = !hasRunContainers || numContainers >= 4;
+    const bool hasOffsetSection =
+        !hasRunContainers || numContainers >= kRunContainersNoOffsetThreshold;
     if (hasOffsetSection) {
       ptr += numContainers * sizeof(uint32_t);
     }
@@ -317,7 +319,8 @@ void DeletionVectorReader::deserialize32BitRoaringBitmap(
   }
 
   // Skip offset section
-  const bool hasOffsetSection = !hasRunContainers || numContainers >= 4;
+  const bool hasOffsetSection =
+      !hasRunContainers || numContainers >= kRunContainersNoOffsetThreshold;
   if (hasOffsetSection) {
     VELOX_CHECK_GE(
         static_cast<size_t>(end - ptr),
