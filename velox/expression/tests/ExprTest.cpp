@@ -30,6 +30,7 @@
 #include "velox/expression/ConjunctExpr.h"
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/Expr.h"
+#include "velox/expression/FieldReference.h"
 #include "velox/expression/SwitchExpr.h"
 #include "velox/functions/Udf.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -4788,6 +4789,37 @@ TEST_P(ParameterizedExprTest, inputFreeFieldReferenceMetaData) {
 
   EXPECT_TRUE(expr->propagatesNulls());
   EXPECT_TRUE(expr->isDeterministic());
+}
+
+TEST_P(ParameterizedExprTest, fieldReferenceIndex) {
+  // Test that FieldReference::index() returns the correct field index
+  auto rowType = ROW({"c0", "c1", "c2"}, {INTEGER(), BIGINT(), VARCHAR()});
+  
+  // Test field reference by name - index should be -1 initially
+  auto exprSet = compileExpression("c1", rowType);
+  auto expr = exprSet->expr(0);
+  auto* fieldRef = dynamic_cast<const FieldReference*>(expr.get());
+  ASSERT_NE(fieldRef, nullptr);
+  EXPECT_EQ(fieldRef->field(), "c1");
+  EXPECT_EQ(fieldRef->index(), -1);  // Index not set until evaluation
+  
+  // Test field reference with nested struct access
+  auto nestedRowType = ROW(
+      {"outer"},
+      {ROW({"inner0", "inner1", "inner2"}, {INTEGER(), BIGINT(), VARCHAR()})});
+  auto nestedExprSet = compileExpression("outer.inner1", nestedRowType);
+  auto nestedExpr = nestedExprSet->expr(0);
+  
+  // The top-level expression should be a FieldReference for "inner1"
+  // We need to traverse to find the inner FieldReference
+  if (nestedExpr->inputs().size() > 0) {
+    auto* innerFieldRef =
+        dynamic_cast<const FieldReference*>(nestedExpr->inputs()[0].get());
+    if (innerFieldRef) {
+      EXPECT_EQ(innerFieldRef->field(), "outer");
+      EXPECT_EQ(innerFieldRef->index(), -1);
+    }
+  }
 }
 
 TEST_P(ParameterizedExprTest, extractSubfields) {

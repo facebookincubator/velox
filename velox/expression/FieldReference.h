@@ -52,6 +52,10 @@ class FieldReference : public SpecialForm {
     return field_;
   }
 
+  int32_t index() const {
+    return index_;
+  }
+
   bool isConstantExpr() const override {
     return Expr::isConstantExpr() && !inputs_.empty();
   }
