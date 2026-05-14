@@ -1164,6 +1164,69 @@ Benchmarks are a great way to check if an optimization is working, evaluate
 how much benefit it brings and decide whether it is worth the additional
 complexity.</p>
 </section>
+<section id="listening-to-function-calls">
+<h2>Listening to Function Calls<a class="headerlink" href="#listening-to-function-calls" title="Link to this heading">¶</a></h2>
+<p>Velox supports observing VectorFunction::apply calls via a global listener
+registry. This is useful for monitoring, access control, auditing, or any
+cross-cutting concern that needs to observe function execution without modifying
+function implementations.</p>
+<p>Listener factories are registered globally via
+<code class="docutils literal notranslate"><span class="pre">registerVectorFunctionListenerFactory()</span></code>. During expression compilation,
+ExprCompiler calls each factory’s <code class="docutils literal notranslate"><span class="pre">create()</span></code> method once per resolved scalar
+function. The factory receives the function name, <code class="docutils literal notranslate"><span class="pre">VectorFunctionMetadata</span></code>,
+and <code class="docutils literal notranslate"><span class="pre">QueryConfig</span></code>, and returns a <code class="docutils literal notranslate"><span class="pre">VectorFunctionListeners</span></code> struct containing
+optional pre and/or post listeners, or <code class="docutils literal notranslate"><span class="pre">std::nullopt</span></code> to skip that function.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;velox/expression/VectorFunctionListener.h&quot;</span>
+
+<span class="k">class</span><span class="w"> </span><span class="nc">MyListenerFactory</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="k">public</span><span class="w"> </span><span class="n">VectorFunctionListenerFactory</span><span class="w"> </span><span class="p">{</span>
+<span class="w"> </span><span class="k">public</span><span class="o">:</span>
+<span class="w">  </span><span class="n">std</span><span class="o">::</span><span class="n">optional</span><span class="o">&lt;</span><span class="n">VectorFunctionListeners</span><span class="o">&gt;</span><span class="w"> </span><span class="n">create</span><span class="p">(</span>
+<span class="w">      </span><span class="n">std</span><span class="o">::</span><span class="n">string_view</span><span class="w"> </span><span class="n">functionName</span><span class="p">,</span>
+<span class="w">      </span><span class="k">const</span><span class="w"> </span><span class="n">VectorFunctionMetadata</span><span class="o">&amp;</span><span class="w"> </span><span class="n">metadata</span><span class="p">,</span>
+<span class="w">      </span><span class="k">const</span><span class="w"> </span><span class="n">core</span><span class="o">::</span><span class="n">QueryConfig</span><span class="o">&amp;</span><span class="w"> </span><span class="n">queryConfig</span><span class="p">)</span><span class="w"> </span><span class="k">override</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">functionName</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="s">&quot;target_fn&quot;</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">nullopt</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">VectorFunctionListeners</span><span class="p">{</span>
+<span class="w">        </span><span class="n">std</span><span class="o">::</span><span class="n">make_shared</span><span class="o">&lt;</span><span class="n">PreApplyListener</span><span class="o">&gt;</span><span class="p">(</span>
+<span class="w">            </span><span class="p">[](</span><span class="n">std</span><span class="o">::</span><span class="n">string_view</span><span class="w"> </span><span class="n">functionName</span><span class="p">,</span>
+<span class="w">               </span><span class="k">const</span><span class="w"> </span><span class="n">SelectivityVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">rows</span><span class="p">,</span>
+<span class="w">               </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">VectorPtr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">args</span><span class="p">,</span>
+<span class="w">               </span><span class="k">const</span><span class="w"> </span><span class="n">TypePtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">outputType</span><span class="p">,</span>
+<span class="w">               </span><span class="k">const</span><span class="w"> </span><span class="n">EvalCtx</span><span class="o">&amp;</span><span class="w"> </span><span class="n">context</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">              </span><span class="c1">// Called before VectorFunction::apply.</span>
+<span class="w">            </span><span class="p">}),</span>
+<span class="w">        </span><span class="n">std</span><span class="o">::</span><span class="n">make_shared</span><span class="o">&lt;</span><span class="n">PostApplyListener</span><span class="o">&gt;</span><span class="p">(</span>
+<span class="w">            </span><span class="p">[](</span><span class="n">std</span><span class="o">::</span><span class="n">string_view</span><span class="w"> </span><span class="n">functionName</span><span class="p">,</span>
+<span class="w">               </span><span class="k">const</span><span class="w"> </span><span class="n">SelectivityVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">rows</span><span class="p">,</span>
+<span class="w">               </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">VectorPtr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">args</span><span class="p">,</span>
+<span class="w">               </span><span class="k">const</span><span class="w"> </span><span class="n">TypePtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">outputType</span><span class="p">,</span>
+<span class="w">               </span><span class="k">const</span><span class="w"> </span><span class="n">EvalCtx</span><span class="o">&amp;</span><span class="w"> </span><span class="n">context</span><span class="p">,</span>
+<span class="w">               </span><span class="k">const</span><span class="w"> </span><span class="n">VectorPtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">,</span>
+<span class="w">               </span><span class="n">std</span><span class="o">::</span><span class="n">exception_ptr</span><span class="w"> </span><span class="n">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">              </span><span class="c1">// Called after VectorFunction::apply, even if apply threw.</span>
+<span class="w">              </span><span class="c1">// &#39;error&#39; is non-null when apply threw; the framework</span>
+<span class="w">              </span><span class="c1">// rethrows it after all post-listeners have executed.</span>
+<span class="w">            </span><span class="p">}),</span>
+<span class="w">    </span><span class="p">};</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">};</span>
+
+<span class="c1">// Register globally (typically at startup).</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">factory</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_shared</span><span class="o">&lt;</span><span class="n">MyListenerFactory</span><span class="o">&gt;</span><span class="p">();</span>
+<span class="n">registerVectorFunctionListenerFactory</span><span class="p">(</span><span class="n">factory</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Key properties:</p>
+<ul class="simple">
+<li><p><strong>Multiple factories</strong> can be registered independently, each observing
+different concerns without coordination.</p></li>
+<li><p><strong>Pre-listener</strong> exceptions propagate immediately and abort the function call.</p></li>
+<li><p><strong>Post-listener</strong> exceptions are caught and logged (rate-limited); they do not
+mask the original apply error or prevent other post-listeners from running.</p></li>
+<li><p><strong>Special forms</strong> (AND, OR, CAST, etc.) are not subject to listening.</p></li>
+</ul>
+</section>
 <section id="documenting">
 <h2>Documenting<a class="headerlink" href="#documenting" title="Link to this heading">¶</a></h2>
 <p>If a function implements Presto semantics, document it by adding an entry to
@@ -1213,6 +1276,7 @@ functions are listed in alphabetical order.</p>
 <li><a class="reference internal" href="#function-names">Function names</a></li>
 <li><a class="reference internal" href="#function-resolution-order">Function Resolution order</a></li>
 <li><a class="reference internal" href="#benchmarking">Benchmarking</a></li>
+<li><a class="reference internal" href="#listening-to-function-calls">Listening to Function Calls</a></li>
 <li><a class="reference internal" href="#documenting">Documenting</a></li>
 </ul>
 </li>
