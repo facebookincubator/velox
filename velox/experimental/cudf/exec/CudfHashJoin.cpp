@@ -57,7 +57,15 @@ namespace facebook::velox::cudf_velox {
 
 namespace {
 
-std::unique_ptr<cudf::column> nullifyRightIndicesFromFilter(
+// LEFT JOIN with an extra ON filter cannot be implemented by simply masking the
+// joined pairs: doing so would drop probe rows whose key matched but whose
+// additional filter rejected every pair. Instead, we keep all passing
+// (leftIdx, rightIdx) pairs and then add exactly one (leftIdx, -1) row for each
+// left row that had candidate matches but no pair passed the filter. This
+// preserves SQL left join semantics for the non-AST fallback path.
+std::pair<std::unique_ptr<cudf::column>, std::unique_ptr<cudf::column>>
+buildLeftJoinOutputIndicesFromFilter(
+    cudf::column_view leftIndicesCol,
     cudf::column_view rightIndicesCol,
     cudf::column_view filterColumn,
     rmm::cuda_stream_view stream,
@@ -66,10 +74,64 @@ std::unique_ptr<cudf::column> nullifyRightIndicesFromFilter(
   auto nonNullFilter =
       cudf::replace_nulls(filterColumn, falseScalar, stream, mr);
 
+  auto passingPairTable = cudf::apply_boolean_mask(
+      cudf::table_view{{leftIndicesCol, rightIndicesCol}},
+      nonNullFilter->view(),
+      stream,
+      mr);
+  auto passingPairColumns = passingPairTable->release();
+
+  auto allLeftIndicesTable = cudf::drop_duplicates(
+      cudf::table_view{{leftIndicesCol}},
+      {0},
+      cudf::duplicate_keep_option::KEEP_FIRST,
+      cudf::null_equality::EQUAL,
+      stream,
+      mr);
+  auto allLeftIndicesColumns = allLeftIndicesTable->release();
+
+  std::unique_ptr<cudf::column> passingLeftDistinct;
+  if (passingPairColumns.empty() || passingPairColumns[0]->size() == 0) {
+    passingLeftDistinct =
+        cudf::empty_like(allLeftIndicesColumns[0]->view(), stream, mr);
+  } else {
+    auto passingLeftDistinctTable = cudf::drop_duplicates(
+        cudf::table_view{{passingPairColumns[0]->view()}},
+        {0},
+        cudf::duplicate_keep_option::KEEP_FIRST,
+        cudf::null_equality::EQUAL,
+        stream,
+        mr);
+    passingLeftDistinct = std::move(passingLeftDistinctTable->release()[0]);
+  }
+
+  auto unmatchedLeftIndicesTable = cudf::set_difference_distinct(
+      cudf::table_view{{allLeftIndicesColumns[0]->view()}},
+      cudf::table_view{{passingLeftDistinct->view()}},
+      stream,
+      mr);
+  auto unmatchedLeftIndicesColumns = unmatchedLeftIndicesTable->release();
+
   auto nullIndexScalar =
       cudf::numeric_scalar<cudf::size_type>(-1, true, stream, mr);
-  return cudf::copy_if_else(
-      rightIndicesCol, nullIndexScalar, nonNullFilter->view(), stream, mr);
+  auto unmatchedRightIndices = cudf::make_column_from_scalar(
+      nullIndexScalar,
+      unmatchedLeftIndicesColumns[0]->size(),
+      stream,
+      mr);
+
+  std::vector<cudf::column_view> leftConcatViews;
+  std::vector<cudf::column_view> rightConcatViews;
+  if (!passingPairColumns.empty()) {
+    leftConcatViews.push_back(passingPairColumns[0]->view());
+    rightConcatViews.push_back(passingPairColumns[1]->view());
+  }
+  leftConcatViews.push_back(unmatchedLeftIndicesColumns[0]->view());
+  rightConcatViews.push_back(unmatchedRightIndices->view());
+
+  auto finalLeftIndices = cudf::concatenate(leftConcatViews, stream, mr);
+  auto finalRightIndices = cudf::concatenate(rightConcatViews, stream, mr);
+  return {std::move(finalLeftIndices), std::move(finalRightIndices)};
 }
 
 /// Creates extended table view by appending precomputed columns
@@ -771,12 +833,17 @@ std::unique_ptr<cudf::table> CudfHashJoinProbe::filteredLeftJoinOutput(
   }
   auto filterColumns =
       filterEvaluator_->eval(joinedColViews, stream, get_output_mr());
-  auto adjustedRightIndices = nullifyRightIndicesFromFilter(
-      rightIndicesCol, asView(filterColumns), stream, get_output_mr());
+  auto [adjustedLeftIndices, adjustedRightIndices] =
+      buildLeftJoinOutputIndicesFromFilter(
+          leftIndicesCol,
+          rightIndicesCol,
+          asView(filterColumns),
+          stream,
+          get_output_mr());
 
   return unfilteredOutput(
       leftTableView,
-      leftIndicesCol,
+      adjustedLeftIndices->view(),
       rightTableView,
       adjustedRightIndices->view(),
       stream);
