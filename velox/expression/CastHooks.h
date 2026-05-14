@@ -65,6 +65,13 @@ class CastHooks {
   /// Returns the options to cast from timestamp to string.
   virtual const TimestampToStringOptions& timestampToStringOptions() const = 0;
 
+  /// Returns the options to cast from TIMESTAMP_UTC to string.
+  /// Unlike timestampToStringOptions(), the returned options must have
+  /// timeZone = nullptr since TIMESTAMP_UTC is not subject to session timezone
+  /// adjustment.
+  virtual const TimestampToStringOptions& timestampUtcToStringOptions()
+      const = 0;
+
   /// Returns whether to cast to int by truncate.
   virtual bool truncate() const = 0;
 
@@ -74,6 +81,10 @@ class CastHooks {
   virtual bool applyTryCastRecursively() const = 0;
 
   virtual PolicyType getPolicy() const = 0;
+
+  /// Returns true if TIMESTAMP_UTC casts are supported.
+  /// Spark supports them; Presto does not.
+  virtual bool supportsTimestampUtc() const = 0;
 
   /// Converts boolean to timestamp type.
   virtual Expected<Timestamp> castBooleanToTimestamp(bool seconds) const = 0;

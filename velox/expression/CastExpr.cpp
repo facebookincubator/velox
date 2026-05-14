@@ -869,6 +869,16 @@ void CastExpr::applyPeeled(
             toType);
     }
   } else if (
+      fromType->isTimestampUtc() &&
+      (toType->kind() == TypeKind::VARCHAR ||
+       toType->kind() == TypeKind::VARBINARY)) {
+    VELOX_USER_CHECK(
+        hooks_->supportsTimestampUtc(),
+        "Cast from {} to {} is not supported",
+        fromType->toString(),
+        toType->toString());
+    result = applyTimestampUtcToVarcharCast(toType, rows, context, input);
+  } else if (
       fromType->kind() == TypeKind::TIMESTAMP &&
       (toType->kind() == TypeKind::VARCHAR ||
        toType->kind() == TypeKind::VARBINARY)) {
@@ -970,6 +980,39 @@ VectorPtr CastExpr::applyTimestampToVarcharCast(
   });
 
   // Update the exact buffer size.
+  buffer->setSize(rawBuffer - buffer->asMutable<char>());
+  return result;
+}
+
+VectorPtr CastExpr::applyTimestampUtcToVarcharCast(
+    const TypePtr& toType,
+    const SelectivityVector& rows,
+    exec::EvalCtx& context,
+    const BaseVector& input) {
+  VELOX_DCHECK(hooks_->supportsTimestampUtc());
+  VectorPtr result;
+  context.ensureWritable(rows, toType, result);
+  (*result).clearNulls(rows);
+  auto* flatResult = result->asFlatVector<StringView>();
+  const auto& inputVector = *input.as<SimpleVector<Timestamp>>();
+
+  const uint32_t rowSize =
+      getMaxStringLength(hooks_->timestampUtcToStringOptions());
+  Buffer* buffer =
+      flatResult->getBufferWithSpace(rows.countSelected() * rowSize, true);
+  char* rawBuffer = buffer->asMutable<char>() + buffer->size();
+
+  applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
+    // No timezone adjustment: the Timestamp is a timestamp in UTC, not subject
+    // to session timezone adjustment.
+    const auto stringView = Timestamp::tsToStringView(
+        inputVector.valueAt(row),
+        hooks_->timestampUtcToStringOptions(),
+        rawBuffer);
+    flatResult->setNoCopy(row, stringView);
+    rawBuffer += stringView.size();
+  });
+
   buffer->setSize(rawBuffer - buffer->asMutable<char>());
   return result;
 }
