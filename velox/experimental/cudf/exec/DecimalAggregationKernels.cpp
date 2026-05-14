@@ -35,7 +35,8 @@ DecimalSumStateColumns deserializeDecimalSumState(
     rmm::device_async_resource_ref mr) {
   VELOX_CHECK(
       stateCol.type().id() == cudf::type_id::STRING,
-      "Decimal sum state requires STRING/VARBINARY column");
+      "Decimal sum state requires STRING/VARBINARY column (type is {})",
+      static_cast<int>(stateCol.type().id()));
   auto numRows = stateCol.size();
   if (numRows == 0) {
     DecimalSumStateColumns empty;
@@ -95,7 +96,8 @@ DecimalSumStateColumns deserializeDecimalSumState(
     const bool offsets64 = (offsetsType == cudf::type_id::INT64);
     VELOX_CHECK(
         offsets64 || offsetsType == cudf::type_id::INT32,
-        "Decimal sum state requires INT32 or INT64 offsets");
+        "Decimal sum state requires INT32 or INT64 offsets (offset type is {})",
+        static_cast<int>(offsetsType));
     detail::unpackDecimalSumState(
         offsets64,
         offsets64 ? static_cast<const void*>(offsetsView.data<int64_t>())
@@ -128,16 +130,20 @@ std::unique_ptr<cudf::column> serializeDecimalSumState(
     rmm::device_async_resource_ref mr) {
   VELOX_CHECK(
       countCol.type().id() == cudf::type_id::INT64,
-      "Decimal sum state requires INT64 count column");
+      "Decimal sum state requires INT64 count column (type is {})",
+      static_cast<int>(countCol.type().id()));
   auto numRows = sumCol.size();
   VELOX_CHECK_EQ(
       numRows,
       countCol.size(),
-      "Decimal sum state requires sum and count to be same size");
+      "Decimal sum state requires sum and count to be same size (sum size is {}, count size is {})",
+      sumCol.size(),
+      countCol.size());
   VELOX_CHECK_LE(
       numRows,
       static_cast<cudf::size_type>(std::numeric_limits<int32_t>::max()),
-      "Too many rows to serialize decimal sum state");
+      "Too many rows to serialize decimal sum state (row count is {})",
+      numRows);
 
   auto const rowCount = static_cast<int32_t>(numRows);
 
@@ -181,7 +187,7 @@ std::unique_ptr<cudf::column> serializeDecimalSumState(
     VELOX_CHECK(
         sumType == cudf::type_id::DECIMAL64 ||
             sumType == cudf::type_id::DECIMAL128,
-        "Unsupported decimal sum column type ({})",
+        "Unsupported decimal sum column type (type is {})",
         static_cast<int>(sumType));
     const void* sumPtr = sumType == cudf::type_id::DECIMAL64
         ? static_cast<const void*>(sumCol.data<int64_t>())
@@ -214,15 +220,19 @@ std::unique_ptr<cudf::column> computeDecimalAverage(
     rmm::device_async_resource_ref mr) {
   VELOX_CHECK(
       countCol.type().id() == cudf::type_id::INT64,
-      "Decimal average requires INT64 count column");
+      "Decimal average requires INT64 count column (type is {})",
+      static_cast<int>(countCol.type().id()));
   VELOX_CHECK(
       sumCol.type().id() == cudf::type_id::DECIMAL64 ||
           sumCol.type().id() == cudf::type_id::DECIMAL128,
-      "Decimal average requires DECIMAL64 or DECIMAL128 sum column");
+      "Decimal average requires DECIMAL64 or DECIMAL128 sum column (type is {})",
+      static_cast<int>(sumCol.type().id()));
   VELOX_CHECK_EQ(
       sumCol.size(),
       countCol.size(),
-      "Decimal average requires sum and count to be same size");
+      "Decimal average requires sum and count to be same size (sum size is {}, count size is {})",
+      sumCol.size(),
+      countCol.size());
 
   auto numRows = sumCol.size();
   auto out = cudf::make_fixed_width_column(
