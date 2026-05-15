@@ -34,7 +34,7 @@ void createCustomMemoryPools(QueryCtx* queryCtx) {
         std::move(reclaimer),
         std::nullopt,
         mr->tag);
-    queryCtx->addCustomPool(std::move(pool));
+    queryCtx->addCustomPool(mr->tag, std::move(pool));
   }
 }
 
@@ -125,20 +125,18 @@ QueryCtx::~QueryCtx() {
   return fmt::format("query.{}.{}", queryId, seqNum++);
 }
 
-void QueryCtx::addCustomPool(std::shared_ptr<memory::MemoryPool> pool) {
+void QueryCtx::addCustomPool(
+    const std::string& tag,
+    std::shared_ptr<memory::MemoryPool> pool) {
   VELOX_CHECK_NOT_NULL(pool);
-  customPools_.push_back(std::move(pool));
+  auto [_, inserted] = customPools_.emplace(tag, std::move(pool));
+  VELOX_CHECK(inserted, "Duplicate custom pool tag: {}", tag);
 }
 
 std::shared_ptr<memory::MemoryPool> QueryCtx::customPool(
     const std::string& tag) const {
-  for (const auto& pool : customPools_) {
-    const auto& poolTag = pool->resourceTag();
-    if (poolTag.has_value() && *poolTag == tag) {
-      return pool;
-    }
-  }
-  return nullptr;
+  auto it = customPools_.find(tag);
+  return it == customPools_.end() ? nullptr : it->second;
 }
 
 void QueryCtx::maybeSetReclaimer() {

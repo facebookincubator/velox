@@ -227,7 +227,6 @@ MemoryPool::MemoryPool(
       trackUsage_(options.trackUsage),
       threadSafe_(options.threadSafe),
       debugOptions_(options.debugOptions),
-      resource_(options.resource),
       coreOnAllocationFailureEnabled_(options.coreOnAllocationFailureEnabled),
       getPreferredSize_(
           options.getPreferredSize == nullptr
@@ -242,13 +241,6 @@ MemoryPool::MemoryPool(
 
 MemoryPool::~MemoryPool() {
   VELOX_CHECK(children_.empty());
-}
-
-std::optional<std::string> MemoryPool::resourceTag() const {
-  if (resource_ == nullptr) {
-    return std::nullopt;
-  }
-  return resource_->tag;
 }
 
 // static
@@ -450,13 +442,11 @@ MemoryPoolImpl::MemoryPoolImpl(
     : MemoryPool{name, kind, parent, options},
       manager_{memoryManager},
       allocator_{
-          options.resource != nullptr && options.resource->allocator
-              ? options.resource->allocator.get()
-              : manager_->allocator()},
+          options.customAllocator != nullptr ? options.customAllocator
+                                             : manager_->allocator()},
       arbitrator_{
-          options.resource != nullptr && options.resource->arbitrator
-              ? options.resource->arbitrator.get()
-              : manager_->arbitrator()},
+          options.customArbitrator != nullptr ? options.customArbitrator
+                                              : manager_->arbitrator()},
       reclaimer_(std::move(reclaimer)),
       // The memory manager sets the capacity through grow() according to the
       // actually used memory arbitration policy.
@@ -815,7 +805,8 @@ std::shared_ptr<MemoryPool> MemoryPoolImpl::genChild(
           .coreOnAllocationFailureEnabled = coreOnAllocationFailureEnabled_,
           .getPreferredSize = getPreferredSize,
           .debugOptions = debugOptions_,
-          .resource = resource_});
+          .customAllocator = allocator_,
+          .customArbitrator = arbitrator_});
 }
 
 bool MemoryPoolImpl::maybeReserve(uint64_t increment) {

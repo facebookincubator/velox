@@ -390,16 +390,20 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     pool_ = std::move(pool);
   }
 
-  /// Tracks an additional root pool tied to a custom memory resource.
-  void addCustomPool(std::shared_ptr<memory::MemoryPool> pool);
+  /// Tracks an additional root pool tied to a custom memory resource. Throws
+  /// if 'tag' is already present or 'pool' is null.
+  void addCustomPool(
+      const std::string& tag,
+      std::shared_ptr<memory::MemoryPool> pool);
 
   /// Returns the custom root pool for the given resource tag, or nullptr if
   /// none is registered under that tag for this query.
   std::shared_ptr<memory::MemoryPool> customPool(
       const std::string& tag) const;
 
-  /// Returns all custom root pools for this query, in registration order.
-  const std::vector<std::shared_ptr<memory::MemoryPool>>& customPools() const {
+  /// Returns all custom root pools for this query, keyed by resource tag.
+  const std::unordered_map<std::string, std::shared_ptr<memory::MemoryPool>>&
+  customPools() const {
     return customPools_;
   }
 
@@ -495,7 +499,8 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
       connectorSessionProperties_;
   std::shared_ptr<memory::MemoryPool> pool_;
-  std::vector<std::shared_ptr<memory::MemoryPool>> customPools_;
+  std::unordered_map<std::string, std::shared_ptr<memory::MemoryPool>>
+      customPools_;
   QueryConfig queryConfig_;
   std::atomic<uint64_t> numSpilledBytes_{0};
   std::atomic<uint64_t> numTracedBytes_{0};
