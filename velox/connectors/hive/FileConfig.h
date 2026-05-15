@@ -205,16 +205,6 @@ class FileConfig {
   static constexpr const char* kIndexEnabled = "index-enabled";
 
   VELOX_HIVE_CONFIG(
-      kFileMetadataCacheEnabledSession,
-      fileMetadataCacheEnabled,
-      "file_metadata_cache_enabled",
-      bool,
-      false,
-      "Cache file metadata in AsyncDataCache.")
-  static constexpr const char* kFileMetadataCacheEnabled =
-      "file-metadata-cache-enabled";
-
-  VELOX_HIVE_CONFIG(
       kPinFileMetadataSession,
       pinFileMetadata,
       "pin_file_metadata",
