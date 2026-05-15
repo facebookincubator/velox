@@ -178,8 +178,12 @@ CudfIcebergSplitReader::readNextChunk(
       deleteMask_ = cudf::make_column_from_scalar(
           false_scalar, numRows, stream_, get_temp_mr());
     } else {
-      CHECK_CUDART(cudaMemsetAsync(
-          deleteMask_->mutable_view().data<bool>(), false, numRows, stream_));
+      // Clear the bitmap
+      CUDF_CUDA_TRY(cudaMemsetAsync(
+          deleteMask_->mutable_view().data<bool>(),
+          false,
+          numRows * sizeof(bool),
+          stream_));
     }
 
     // Apply deletion vector
