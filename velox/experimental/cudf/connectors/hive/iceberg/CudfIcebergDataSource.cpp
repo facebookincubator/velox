@@ -15,6 +15,7 @@
  */
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
+#include "velox/experimental/cudf/connectors/hive/CudfSplitReader.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergDataSource.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergSplitReader.h"
 
@@ -53,37 +54,12 @@ void CudfIcebergDataSource::convertSplit(
   icebergSplit_ =
       checkedPointerCast<const velox_iceberg::HiveIcebergSplit>(split);
 
-  auto hiveSplit = checkedPointerCast<velox_hive::HiveConnectorSplit>(split);
-
   VELOX_CHECK(
-      hiveSplit->fileFormat == dwio::common::FileFormat::PARQUET,
-      "CudfIcebergDataSource only supports PARQUET format.");
-  VELOX_CHECK(
-      hiveSplit->start == 0 and
-          hiveSplit->length == std::numeric_limits<uint64_t>::max(),
+      icebergSplit_->start == 0,
       "Sub-splits are not yet supported in CudfIcebergDataSource");
 
-  icebergSplit_ = std::make_shared<velox_iceberg::HiveIcebergSplit>(
-      hiveSplit->connectorId,
-      hiveSplit->filePath,
-      hiveSplit->fileFormat,
-      hiveSplit->start,
-      hiveSplit->length,
-      hiveSplit->partitionKeys,
-      hiveSplit->tableBucketNumber,
-      hiveSplit->customSplitInfo,
-      hiveSplit->extraFileInfo,
-      hiveSplit->cacheable,
-      std::vector<velox_iceberg::IcebergDeleteFile>{},
-      hiveSplit->infoColumns,
-      hiveSplit->properties);
-
-  VLOG(1) << "Converted split to HiveIcebergSplit: "
-          << icebergSplit_->toString();
-
-  // Convert `HiveIcebergSplit` to `CudfHiveConnectorSplit`
-  CudfHiveDataSource::convertSplit(
-      std::const_pointer_cast<velox_iceberg::HiveIcebergSplit>(icebergSplit_));
+  // Convert `ConnectorSplit` to `CudfHiveConnectorSplit`
+  CudfHiveDataSource::convertSplit(split);
 }
 
 std::unique_ptr<CudfSplitReader>
