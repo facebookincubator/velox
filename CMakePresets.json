@@ -1,0 +1,64 @@
+{
+    "version": 3,
+    "configurePresets": [
+        {
+            "name": "Base",
+            "hidden": true,
+            "generator": "Ninja",
+            "cacheVariables": {
+                "CMAKE_CXX_FLAGS": "-std=c++20 -Wno-missing-field-initializers",
+                "CMAKE_CXX_STANDARD": "20",
+                "CMAKE_CXX_STANDARD_REQUIRED": "ON",
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+                "TREAT_WARNINGS_AS_ERRORS": "1",
+                "ENABLE_ALL_WARNINGS": "1",
+                "VELOX_BUILD_MINIMAL": "OFF",
+                "VELOX_BUILD_TESTING": "ON",
+                "VELOX_BUILD_TEST_UTILS": "ON",
+                "VELOX_BUILD_WANKUN_TESTING": "ON",
+                "VELOX_FORCE_COLORED_OUTPUT": "ON",
+                "VELOX_ENABLE_PARQUET": "ON",
+                "VELOX_ENABLE_HDFS": "ON",
+                "VELOX_MONO_LIBRARY": "ON",
+                "VELOX_BUILD_RUNNER": "OFF"
+            },
+            "environment": {
+                "GLUTEN_VCPKG": "/home/kunwan/ws/gluten/dev/vcpkg",
+                "VCPKG_ROOT": "$env{GLUTEN_VCPKG}/.vcpkg",
+                "CMAKE_TOOLCHAIN_FILE": "$env{GLUTEN_VCPKG}/toolchain.cmake",
+                "VCPKG_MANIFEST_DIR": "$env{GLUTEN_VCPKG}",
+                "VCPKG_TRIPLET": "x64-linux-avx",
+                "PKG_CONFIG_PATH": "$env{VCPKG_MANIFEST_DIR}/vcpkg_installed/x64-linux-avx/lib/pkgconfig:$env{VCPKG_MANIFEST_DIR}/vcpkg_installed/x64-linux-avx/share/pkgconfig"
+            }
+        },
+        {
+            "name": "Debug",
+            "generator": "Ninja",
+            "inherits": "Base",
+            "binaryDir": "${sourceDir}/_build/debug",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug"
+            }
+        },
+        {
+            "name": "Release",
+            "generator": "Ninja",
+            "inherits": "Base",
+            "binaryDir": "${sourceDir}/_build/release",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "Release",
+            "configurePreset": "Release"
+        },
+        {
+            "name": "Debug",
+            "configurePreset": "Debug",
+            "jobs": 200
+        }
+    ]
+}

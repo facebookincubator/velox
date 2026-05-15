@@ -1,0 +1,135 @@
+diff --git a/cpp/CMakeLists.txt b/cpp/CMakeLists.txt
+index d56f6a36d..9b4088df9 100644
+--- a/cpp/CMakeLists.txt
++++ b/cpp/CMakeLists.txt
+@@ -773,8 +773,7 @@ if(ARROW_ORC)
+   list(APPEND ARROW_SHARED_LINK_LIBS orc::orc ${ARROW_PROTOBUF_LIBPROTOBUF})
+   list(APPEND ARROW_STATIC_LINK_LIBS orc::orc ${ARROW_PROTOBUF_LIBPROTOBUF})
+   if(ORC_SOURCE STREQUAL "SYSTEM")
+-    list(APPEND ARROW_STATIC_INSTALL_INTERFACE_LIBS orc::orc
+-         ${ARROW_PROTOBUF_LIBPROTOBUF})
++    list(APPEND ARROW_STATIC_INSTALL_INTERFACE_LIBS orc::orc)
+   endif()
+ endif()
+
+@@ -823,9 +822,6 @@ if(ARROW_WITH_OPENTELEMETRY)
+          opentelemetry-cpp::ostream_span_exporter
+          opentelemetry-cpp::otlp_http_exporter)
+   endif()
+-  if(Protobuf_SOURCE STREQUAL "SYSTEM")
+-    list(APPEND ARROW_STATIC_INSTALL_INTERFACE_LIBS ${ARROW_PROTOBUF_LIBPROTOBUF})
+-  endif()
+   list(APPEND ARROW_STATIC_INSTALL_INTERFACE_LIBS CURL::libcurl)
+ endif()
+
+@@ -860,6 +856,14 @@ if(ARROW_USE_XSIMD)
+   list(APPEND ARROW_STATIC_LINK_LIBS ${ARROW_XSIMD})
+ endif()
+
++# This should be done after if(ARROW_ORC) and if(ARROW_WITH_OPENTELEMETRY)
++# because they depend on Protobuf.
++if(ARROW_WITH_PROTOBUF)
++  if(Protobuf_SOURCE STREQUAL "SYSTEM")
++    list(APPEND ARROW_STATIC_INSTALL_INTERFACE_LIBS ${ARROW_PROTOBUF_LIBPROTOBUF})
++  endif()
++endif()
++
+ add_custom_target(arrow_dependencies)
+ add_custom_target(arrow_benchmark_dependencies)
+ add_custom_target(arrow_test_dependencies)
+diff --git a/cpp/cmake_modules/ThirdpartyToolchain.cmake b/cpp/cmake_modules/ThirdpartyToolchain.cmake
+index a2627c190..e453512e6 100644
+--- a/cpp/cmake_modules/ThirdpartyToolchain.cmake
++++ b/cpp/cmake_modules/ThirdpartyToolchain.cmake
+@@ -2557,13 +2557,9 @@ if(ARROW_WITH_ZSTD)
+   if(ZSTD_VENDORED)
+     set(ARROW_ZSTD_LIBZSTD zstd::libzstd_static)
+   else()
+-    if(ARROW_ZSTD_USE_SHARED)
+-      set(ARROW_ZSTD_LIBZSTD zstd::libzstd_shared)
+-    else()
+-      set(ARROW_ZSTD_LIBZSTD zstd::libzstd_static)
+-    endif()
++    set(ARROW_ZSTD_LIBZSTD zstd::libzstd_shared)
+     if(NOT TARGET ${ARROW_ZSTD_LIBZSTD})
+-      message(FATAL_ERROR "Zstandard target doesn't exist: ${ARROW_ZSTD_LIBZSTD}")
++      set(ARROW_ZSTD_LIBZSTD zstd::libzstd_static)
+     endif()
+     message(STATUS "Found Zstandard: ${ARROW_ZSTD_LIBZSTD}")
+   endif()
+diff --git a/cpp/src/arrow/c/helpers.h b/cpp/src/arrow/c/helpers.h
+index a24f272fe..e25f78c85 100644
+--- a/cpp/src/arrow/c/helpers.h
++++ b/cpp/src/arrow/c/helpers.h
+@@ -17,6 +17,7 @@
+ 
+ #pragma once
+ 
++#include <cassert>
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+diff --git a/java/dataset/src/main/cpp/jni_wrapper.cc b/java/dataset/src/main/cpp/jni_wrapper.cc
+index d2d976677..d7dd01ecd 100644
+--- a/java/dataset/src/main/cpp/jni_wrapper.cc
++++ b/java/dataset/src/main/cpp/jni_wrapper.cc
+@@ -126,20 +126,14 @@ class ReserveFromJava : public arrow::dataset::jni::ReservationListener {
+       : vm_(vm), java_reservation_listener_(java_reservation_listener) {}
+ 
+   arrow::Status OnReservation(int64_t size) override {
+-    JNIEnv* env;
+-    if (vm_->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION) != JNI_OK) {
+-      return arrow::Status::Invalid("JNIEnv was not attached to current thread");
+-    }
++    JNIEnv* env = arrow::dataset::jni::GetEnvOrAttach(vm_);
+     env->CallObjectMethod(java_reservation_listener_, reserve_memory_method, size);
+     RETURN_NOT_OK(arrow::dataset::jni::CheckException(env));
+     return arrow::Status::OK();
+   }
+ 
+   arrow::Status OnRelease(int64_t size) override {
+-    JNIEnv* env;
+-    if (vm_->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION) != JNI_OK) {
+-      return arrow::Status::Invalid("JNIEnv was not attached to current thread");
+-    }
++    JNIEnv* env = arrow::dataset::jni::GetEnvOrAttach(vm_);
+     env->CallObjectMethod(java_reservation_listener_, unreserve_memory_method, size);
+     RETURN_NOT_OK(arrow::dataset::jni::CheckException(env));
+     return arrow::Status::OK();
+diff --git a/java/pom.xml b/java/pom.xml
+index a8328576b..57f282c6c 100644
+--- a/java/pom.xml
++++ b/java/pom.xml
+@@ -1101,7 +1101,8 @@
+                     -DARROW_JSON=${ARROW_DATASET}
+                     -DARROW_ORC=${ARROW_ORC}
+                     -DARROW_PARQUET=${ARROW_PARQUET}
+-                    -DARROW_S3=ON
++                    -DARROW_S3=OFF
++                    -DARROW_HDFS=ON
+                     -DARROW_SUBSTRAIT=${ARROW_DATASET}
+                     -DARROW_USE_CCACHE=ON
+                     -DCMAKE_BUILD_TYPE=Release
+diff --git a/java/dataset/src/main/cpp/jni_wrapper.cc b/java/dataset/src/main/cpp/jni_wrapper.cc
+index d2d976677..eb4b6d1d2 100644
+--- a/java/dataset/src/main/cpp/jni_wrapper.cc
++++ b/java/dataset/src/main/cpp/jni_wrapper.cc
+@@ -27,7 +27,9 @@
+ #include "arrow/dataset/file_base.h"
+ #include "arrow/filesystem/localfs.h"
+ #include "arrow/filesystem/path_util.h"
++#ifdef ARROW_S3
+ #include "arrow/filesystem/s3fs.h"
++#endif
+ #include "arrow/engine/substrait/util.h"
+ #include "arrow/engine/substrait/serde.h"
+ #include "arrow/engine/substrait/relation.h"
+@@ -622,7 +624,9 @@ JNIEXPORT void JNICALL Java_org_apache_arrow_dataset_jni_JniWrapper_releaseBuffe
+ JNIEXPORT void JNICALL Java_org_apache_arrow_dataset_jni_JniWrapper_ensureS3Finalized(
+     JNIEnv* env, jobject) {
+   JNI_METHOD_START
++#ifdef ARROW_S3
+   JniAssertOkOrThrow(arrow::fs::EnsureS3Finalized());
++#endif
+   JNI_METHOD_END()
+ }

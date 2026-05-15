@@ -1,0 +1,93 @@
+{
+    "editor.formatOnPaste": true,
+    "editor.formatOnSave": true,
+    "editor.formatOnType": true,
+    "C_Cpp.errorSquiggles": "enabled",
+    "C_Cpp.intelliSenseEngine": "disabled",
+    "C_Cpp.default.compileCommands": "${workspaceFolder}/_build/release/compile_commands.json",
+    "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
+    "C_Cpp.autocomplete": "disabled",
+    "C_Cpp.autocompleteAddParentheses": true,
+    "C_Cpp.default.cppStandard": "c++20",
+    "C_Cpp.default.cStandard": "c17",
+    "C_Cpp.inlayHints.autoDeclarationTypes.enabled": true,
+    "C_Cpp.inlayHints.parameterNames.enabled": true,
+    "C_Cpp.inlayHints.referenceOperator.enabled": true,
+    "C_Cpp.inlayHints.referenceOperator.showSpace": true,
+    "C_Cpp.enhancedColorization": "enabled",
+    "C_Cpp.codeAnalysis.clangTidy.enabled": false,
+    "C_Cpp.workspaceParsingPriority": "high",
+    "C_Cpp.codeAnalysis.clangTidy.checks.disabled": [
+        "clang-analyzer-*"
+    ],
+    // 是否启用cpp-check-lint插件
+    "cpp-check-lint.--enable": true,
+    // 是否启用cppcheck检查
+    "cpp-check-lint.cppcheck.--enable": true,
+    // 如果已配置Path环境变量，可直接填写cppcheck，否则需要填写绝对路径
+    "cpp-check-lint.cppcheck.--executable": "cppcheck",
+    // 使用什么语言进行检查，可以选择：c、c++
+    "cpp-check-lint.cppcheck.--language=": "c++",
+    // 使用的C++标准
+    "cpp-check-lint.cppcheck.--std_c++=": "c++20",
+    // 使用的C语言标准
+    "cpp-check-lint.cppcheck.--std_c=": "c11",
+    // 是否支持内联函数
+    "cpp-check-lint.cppcheck.--inline-suppr": true,
+    // 是否开启文件保存时立刻检查该文件
+    "cpp-check-lint.cppcheck.--onsave": true,
+    // 是否开启快速修复功能
+    "cpp-check-lint.cppcheck.--quick_fix": true,
+    // 开启额外的检查，可以选择一项或多项（多项时用','分割）。可以是以下类型值：
+    // warning: 开启警告消息
+    // style: 开启代码样式(规范)检查
+    // performance: 开启代码性能检查
+    // portability: 开启可移植性检查
+    // information: 启用info信息检查
+    // unusedFunction: 启用 未使用的函数 检查
+    // missingInclide: 未包含头文件时发出警告
+    // all: 以上所有类型检查
+    "cpp-check-lint.cppcheck.--enable=": "all",
+    // 是否启用cpplint检查
+    "cpp-check-lint.cpplint.--enable": true,
+    // 如果已配置Path环境变量，可直接填写cpplint，否则需要填写绝对路径
+    "cpp-check-lint.cpplint.--executable": "cpplint",
+    // 代码行长度限制
+    "cpp-check-lint.cpplint.--linelength=": 140,
+    // 是否开启文件保存时立刻检查该文件
+    "cpp-check-lint.cpplint.--onsave": true,
+    // 是否开启快速修复功能
+    "cpp-check-lint.cpplint.--quick_fix": true,
+    // 会检查的文件后缀,可以这些值：hxx,h++,cxx,cc,hh,h,cpp,cuh,c,hpp,c++,cu
+    "cpp-check-lint.cpplint.--extensions=": "hxx,h++,cxx,cc,hh,h,cpp,c,hpp,c++",
+    // 支持的头文件后缀
+    "cpp-check-lint.cpplint.--headers=": "hxx,h++,hh,h,hpp",
+    "cpp-check-lint.cppcheck.--suppress=": [
+        "missingInclude",
+        "unmatchedSuppression",
+        "missingIncludeSystem"
+    ],
+    "cpp-check-lint.cpplint.--filter=": "-build/c++11,-build/namespaces,-legal/copyright,-whitespace/comments,-build/include_what_you_use,-runtime/references,-build/include_order",
+    "cpp-check-lint.cppcheck.-j": 8,
+    "clangd.path": "clangd-15",
+    "clangd.arguments": [
+        "--background-index",
+        "-j=12",
+        "--all-scopes-completion",
+        "--completion-style=detailed",
+        "--header-insertion=iwyu",
+        "--pch-storage=memory",
+        "--enable-config",
+        "--pretty",
+        "--compile-commands-dir=${workspaceFolder}/_build/release",
+        "--query-driver=/usr/bin/clang-15",
+        "--clang-tidy=false"
+    ],
+    "clangd.serverCompletionRanking": true,
+    "clangd.detectExtensionConflicts": true,
+    "clangd.enableCodeCompletion": true,
+    "clangd.fallbackFlags": [
+        "-std=c++20"
+    ],
+    "clangd.onConfigChanged": "restart"
+}

@@ -1,0 +1,21 @@
+{
+    "configurations": [
+        {
+            "name": "Linux",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "/usr/lib/llvm/include/c++/v1/**",
+                "/usr/lib/llvm/include/**",
+                "/home/kunwan/ws/gluten/dev/vcpkg/vcpkg_installed/x64-linux-avx/include/**",
+                "/home/kunwan/ws/gluten/ep/_ep/arrow_ep/cpp/src/**"
+            ],
+            "defines": [],
+            "compilerPath": "/usr/bin/c++",
+            "compileCommands": "/home/kunwan/ws/gluten/ep/build-velox/build/velox_ep/_build/release/compile_commands.json",
+            "cStandard": "c17",
+            "cppStandard": "c++20",
+            "intelliSenseMode": "linux-clang-x64"
+        }
+    ],
+    "version": 4
+}

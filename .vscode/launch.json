@@ -1,0 +1,19 @@
+{
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "velox_dwio_orc_test",
+            "program": "${workspaceFolder}/_build/release/velox/dwio/orc/test/velox_dwio_orc_test",
+            "args": [
+                "--v=1",
+                "--gtest_filter=OrcWriterTest.compression"
+            ],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "GLOG_logtostderr": "1"
+            },
+            "preLaunchTask": "CMake: build"
+        }
+    ]
+}
