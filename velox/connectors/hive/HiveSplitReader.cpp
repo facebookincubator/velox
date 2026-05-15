@@ -143,12 +143,26 @@ std::vector<TypePtr> HiveSplitReader::adaptColumns(
         childSpec->columnType() == common::ScanSpec::ColumnType::kRegular) {
       auto fileTypeIdx = fileType->getChildIdxIfExists(fieldName);
       if (!fileTypeIdx.has_value()) {
-        VELOX_CHECK(tableSchema, "Unable to resolve column '{}'", fieldName);
+        auto outputTypeIdx = readerOutputType_->getChildIdxIfExists(fieldName);
+        TypePtr fieldType;
+        if (outputTypeIdx.has_value()) {
+          // Field name exists in the user-specified output type.
+          fieldType = readerOutputType_->childAt(outputTypeIdx.value());
+        } else {
+          VELOX_CHECK_NOT_NULL(
+              tableSchema,
+              "Unable to resolve column '{}': table schema is null.",
+              fieldName);
+          auto fieldTypeIdx = tableSchema->getChildIdxIfExists(fieldName);
+          VELOX_CHECK(
+              fieldTypeIdx.has_value(),
+              "Unable to resolve column '{}': column not found in table schema.",
+              fieldName);
+          fieldType = tableSchema->childAt(fieldTypeIdx.value());
+        }
         childSpec->setConstantValue(
             BaseVector::createNullConstant(
-                tableSchema->findChild(fieldName),
-                1,
-                connectorQueryCtx_->memoryPool()));
+                fieldType, 1, connectorQueryCtx_->memoryPool()));
       } else {
         childSpec->setConstantValue(nullptr);
         auto outputTypeIdx = readerOutputType_->getChildIdxIfExists(fieldName);
