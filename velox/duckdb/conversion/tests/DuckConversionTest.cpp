@@ -88,7 +88,7 @@ TEST(DuckConversionTest, duckValueToVariant) {
       Variant::array({variant(1), variant(2), variant(3)}),
       duckValueToVariant(
           Value::LIST(
-              LogicalType::INTEGER,
+              LogicalType(LogicalTypeId::INTEGER),
               {Value::INTEGER(1), Value::INTEGER(2), Value::INTEGER(3)})));
 }
 

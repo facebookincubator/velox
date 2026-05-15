@@ -146,36 +146,36 @@ LogicalType fromVeloxType(const TypePtr& type) {
 
   switch (type->kind()) {
     case TypeKind::BOOLEAN:
-      return LogicalType::BOOLEAN;
+      return LogicalType(LogicalTypeId::BOOLEAN);
     case TypeKind::TINYINT:
-      return LogicalType::TINYINT;
+      return LogicalType(LogicalTypeId::TINYINT);
     case TypeKind::SMALLINT:
-      return LogicalType::SMALLINT;
+      return LogicalType(LogicalTypeId::SMALLINT);
     case TypeKind::INTEGER:
       if (type->isIntervalYearMonth()) {
-        return LogicalType::INTERVAL;
+        return LogicalType(LogicalTypeId::INTERVAL);
       }
       if (type->isDate()) {
-        return LogicalType::DATE;
+        return LogicalType(LogicalTypeId::DATE);
       }
-      return LogicalType::INTEGER;
+      return LogicalType(LogicalTypeId::INTEGER);
     case TypeKind::BIGINT:
       if (type->isIntervalDayTime()) {
-        return LogicalType::INTERVAL;
+        return LogicalType(LogicalTypeId::INTERVAL);
       }
       if (type->isTime()) {
         VELOX_DCHECK(type->equivalent(*TIME()));
-        return LogicalType::TIME;
+        return LogicalType(LogicalTypeId::TIME);
       }
-      return LogicalType::BIGINT;
+      return LogicalType(LogicalTypeId::BIGINT);
     case TypeKind::REAL:
-      return LogicalType::FLOAT;
+      return LogicalType(LogicalTypeId::FLOAT);
     case TypeKind::DOUBLE:
-      return LogicalType::DOUBLE;
+      return LogicalType(LogicalTypeId::DOUBLE);
     case TypeKind::VARCHAR:
-      return LogicalType::VARCHAR;
+      return LogicalType(LogicalTypeId::VARCHAR);
     case TypeKind::TIMESTAMP:
-      return LogicalType::TIMESTAMP;
+      return LogicalType(LogicalTypeId::TIMESTAMP);
     case TypeKind::ARRAY:
       return LogicalType::LIST(fromVeloxType(type->childAt(0)));
     case TypeKind::MAP:

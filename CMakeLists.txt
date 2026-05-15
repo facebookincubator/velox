@@ -263,56 +263,28 @@ if(${VELOX_ENABLE_DUCKDB})
 
   add_library(duckdb_static_with_extensions INTERFACE)
 
-  # DuckDB uses directory-scoped include_directories() which doesn't propagate
-  # to consuming targets. Explicitly set the include path on the interface
-  # target so all velox targets that link against it can find duckdb.hpp.
-  target_include_directories(
-    duckdb_static_with_extensions
-    SYSTEM
-    INTERFACE "${duckdb_SOURCE_DIR}/src/include"
-  )
+  if(DEFINED duckdb_SOURCE_DIR)
+    # DuckDB uses directory-scoped include_directories() which doesn't propagate
+    # to consuming targets. Explicitly set the include path on the interface
+    # target so all velox targets that link against it can find duckdb.hpp.
+    target_include_directories(
+      duckdb_static_with_extensions
+      SYSTEM
+      INTERFACE "${duckdb_SOURCE_DIR}/src/include"
+    )
+  elseif(DEFINED DuckDB_INCLUDE_DIRS)
+    target_include_directories(
+      duckdb_static_with_extensions
+      SYSTEM
+      INTERFACE ${DuckDB_INCLUDE_DIRS}
+    )
+  endif()
 
-  function(velox_link_duckdb_static_extensions)
-    set(duckdb_static_libraries duckdb_static)
-
-    if(NOT TARGET duckdb_static)
-      target_link_libraries(duckdb_static_with_extensions INTERFACE ${duckdb_static_libraries})
-      return()
-    endif()
-
-    if(TARGET duckdb_generated_extension_loader)
-      set(
-        duckdb_static_extension_libraries
-        duckdb_generated_extension_loader
-        autocomplete_extension
-        icu_extension
-        parquet_extension
-        jemalloc_extension
-        json_extension
-        core_functions_extension
-      )
-
-      foreach(extension_library IN LISTS duckdb_static_extension_libraries)
-        if(TARGET ${extension_library})
-          list(APPEND duckdb_static_libraries ${extension_library})
-        endif()
-      endforeach()
-    elseif(TARGET dummy_static_extension_loader)
-      list(APPEND duckdb_static_libraries dummy_static_extension_loader)
-    endif()
-
-    if(CMAKE_CXX_LINK_GROUP_USING_RESCAN_SUPPORTED OR CMAKE_LINK_GROUP_USING_RESCAN_SUPPORTED)
-      list(JOIN duckdb_static_libraries "," duckdb_static_link_group_libraries)
-      target_link_libraries(
-        duckdb_static_with_extensions
-        INTERFACE "$<LINK_GROUP:RESCAN,${duckdb_static_link_group_libraries}>"
-      )
-    else()
-      target_link_libraries(duckdb_static_with_extensions INTERFACE ${duckdb_static_libraries})
-    endif()
-  endfunction()
-
-  velox_link_duckdb_static_extensions()
+  if(TARGET duckdb_static)
+    target_link_libraries(duckdb_static_with_extensions INTERFACE $<LINK_ONLY:duckdb_static>)
+  else()
+    target_link_libraries(duckdb_static_with_extensions INTERFACE ${DuckDB_LIBRARIES})
+  endif()
 endif()
 
 if(VELOX_ENABLE_FAISS)

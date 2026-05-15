@@ -16,7 +16,7 @@ include_guard(GLOBAL)
 set(VELOX_DUCKDB_VERSION 1.4.4)
 set(
   VELOX_DUCKDB_BUILD_SHA256_CHECKSUM
-  6d8612fc87115cf4d3512a934ada5d1669db29378b4cc8e226fdfa8f5c537385
+  43645e15419c6539bae6915ba397de6569e4a7ca0d502be95d653a78fdb0bece
 )
 set(
   VELOX_DUCKDB_SOURCE_URL
@@ -41,8 +41,8 @@ FetchContent_Declare(
 # DuckDB uses git commands to retrieve version information during the build,
 # which works with git clone. To prevent incorrectly using the parent project's
 # git version when building from a tarball, we define the version explicitly.
-set(GIT_COMMIT_HASH "8a5851971f")
-set(OVERRIDE_GIT_DESCRIBE "v${VELOX_DUCKDB_VERSION}-0-g8a5851971f")
+set(GIT_COMMIT_HASH "6ddac802ff")
+set(OVERRIDE_GIT_DESCRIBE "v${VELOX_DUCKDB_VERSION}-0-g6ddac802ff")
 set(BUILD_UNITTESTS OFF)
 set(BUILD_TESTING OFF)
 set(ENABLE_SANITIZER OFF)

@@ -246,7 +246,7 @@ std::optional<double> extractNumeric(const Value& value) {
       return value.GetValue<int32_t>();
     case LogicalTypeId::DECIMAL:
     case LogicalTypeId::DOUBLE:
-      return value.DefaultCastAs(::duckdb::LogicalType::DOUBLE)
+      return value.DefaultCastAs(::duckdb::LogicalType(LogicalTypeId::DOUBLE))
           .GetValue<double>();
     default:
       return std::nullopt;
@@ -281,44 +281,44 @@ std::optional<LogicalType> logicalTypeFromName(std::string name) {
   });
 
   if (name == "BOOLEAN" || name == "BOOL") {
-    return LogicalType::BOOLEAN;
+    return LogicalType(LogicalTypeId::BOOLEAN);
   }
   if (name == "TINYINT") {
-    return LogicalType::TINYINT;
+    return LogicalType(LogicalTypeId::TINYINT);
   }
   if (name == "SMALLINT") {
-    return LogicalType::SMALLINT;
+    return LogicalType(LogicalTypeId::SMALLINT);
   }
   if (name == "INTEGER" || name == "INT" || name == "SIGNED") {
-    return LogicalType::INTEGER;
+    return LogicalType(LogicalTypeId::INTEGER);
   }
   if (name == "BIGINT") {
-    return LogicalType::BIGINT;
+    return LogicalType(LogicalTypeId::BIGINT);
   }
   if (name == "REAL" || name == "FLOAT" || name == "FLOAT4") {
-    return LogicalType::FLOAT;
+    return LogicalType(LogicalTypeId::FLOAT);
   }
   if (name == "DOUBLE" || name == "DOUBLE PRECISION" || name == "FLOAT8") {
-    return LogicalType::DOUBLE;
+    return LogicalType(LogicalTypeId::DOUBLE);
   }
   if (name == "VARCHAR" || name == "CHAR" || name == "BPCHAR" ||
       name == "TEXT" || name == "STRING") {
-    return LogicalType::VARCHAR;
+    return LogicalType(LogicalTypeId::VARCHAR);
   }
   if (name == "BLOB" || name == "BYTEA" || name == "VARBINARY") {
-    return LogicalType::BLOB;
+    return LogicalType(LogicalTypeId::BLOB);
   }
   if (name == "DATE") {
-    return LogicalType::DATE;
+    return LogicalType(LogicalTypeId::DATE);
   }
   if (name == "TIME") {
-    return LogicalType::TIME;
+    return LogicalType(LogicalTypeId::TIME);
   }
   if (name == "TIMESTAMP" || name == "DATETIME") {
-    return LogicalType::TIMESTAMP;
+    return LogicalType(LogicalTypeId::TIMESTAMP);
   }
   if (name == "INTERVAL") {
-    return LogicalType::INTERVAL;
+    return LogicalType(LogicalTypeId::INTERVAL);
   }
   return std::nullopt;
 }
