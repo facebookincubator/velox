@@ -196,8 +196,8 @@ class ColumnWriterStatsTest : public ::testing::Test {
     auto input = std::make_unique<BufferedInput>(readFile, *leafPool_);
 
     dwio::common::ReaderOptions readerOpts(leafPool_.get());
-    readerOpts.setDataIoStats(dataIoStats_.get());
-    readerOpts.setMetadataIoStats(metadataIoStats_.get());
+    readerOpts.setDataIoStats(dataIoStats_);
+    readerOpts.setMetadataIoStats(metadataIoStats_);
     RowReaderOptions rowReaderOpts;
     auto reader = std::make_unique<DwrfReader>(readerOpts, std::move(input));
     return reader->createRowReader(rowReaderOpts);
