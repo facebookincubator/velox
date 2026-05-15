@@ -2173,7 +2173,7 @@ TEST_P(AsyncDataCacheTest, acquiredMemory) {
     memory::Allocation allocation;
     ASSERT_TRUE(allocator->allocateNonContiguous(10, allocation));
     const auto expectedBytes = allocation.byteSize();
-    acquired.nonContiguous.appendMove(allocation);
+    acquired.nonContiguousAllocs.appendMove(allocation);
 
     ASSERT_FALSE(acquired.empty());
     ASSERT_EQ(acquired.totalBytes(), expectedBytes);
@@ -2183,15 +2183,15 @@ TEST_P(AsyncDataCacheTest, acquiredMemory) {
     ASSERT_EQ(acquired.totalBytes(), 0);
   }
 
-  // Contiguous only.
+  // Byte allocations only.
   {
     AcquiredMemory acquired;
     auto* ptr1 = allocator->allocateBytes(1'024);
     auto* ptr2 = allocator->allocateBytes(2'048);
     ASSERT_NE(ptr1, nullptr);
     ASSERT_NE(ptr2, nullptr);
-    acquired.contiguous.emplace_back(ptr1, 1'024);
-    acquired.contiguous.emplace_back(ptr2, 2'048);
+    acquired.byteAllocations.emplace_back(ptr1, 1'024);
+    acquired.byteAllocations.emplace_back(ptr2, 2'048);
 
     ASSERT_FALSE(acquired.empty());
     ASSERT_EQ(acquired.totalBytes(), 3'072);
@@ -2201,21 +2201,21 @@ TEST_P(AsyncDataCacheTest, acquiredMemory) {
     ASSERT_EQ(acquired.totalBytes(), 0);
   }
 
-  // Mixed non-contiguous and contiguous.
+  // Mixed non-contiguous and byte allocations.
   {
     AcquiredMemory acquired;
     memory::Allocation allocation;
     ASSERT_TRUE(allocator->allocateNonContiguous(10, allocation));
     const auto nonContiguousBytes = allocation.byteSize();
-    acquired.nonContiguous.appendMove(allocation);
+    acquired.nonContiguousAllocs.appendMove(allocation);
 
-    constexpr uint64_t kContiguousSize = 4'096;
-    auto* ptr = allocator->allocateBytes(kContiguousSize);
+    constexpr uint64_t kByteAllocSize = 4'096;
+    auto* ptr = allocator->allocateBytes(kByteAllocSize);
     ASSERT_NE(ptr, nullptr);
-    acquired.contiguous.emplace_back(ptr, kContiguousSize);
+    acquired.byteAllocations.emplace_back(ptr, kByteAllocSize);
 
     ASSERT_FALSE(acquired.empty());
-    ASSERT_EQ(acquired.totalBytes(), nonContiguousBytes + kContiguousSize);
+    ASSERT_EQ(acquired.totalBytes(), nonContiguousBytes + kByteAllocSize);
 
     acquired.free(allocator);
     ASSERT_TRUE(acquired.empty());

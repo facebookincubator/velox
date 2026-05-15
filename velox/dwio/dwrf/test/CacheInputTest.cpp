@@ -222,8 +222,9 @@ class CacheTest : public ::testing::Test {
       const IoStatisticsPtr& ioStatistics,
       const std::shared_ptr<facebook::velox::IoStats>& ioStats) {
     auto data = std::make_unique<StripeData>();
-    auto readOptions = io::ReaderOptions(
-        pool_.get(), dataIoStats_.get(), metadataIoStats_.get());
+    auto readOptions = io::ReaderOptions(pool_.get());
+    readOptions.setDataIoStats(dataIoStats_);
+    readOptions.setMetadataIoStats(metadataIoStats_);
     readOptions.setCacheable(cacheable);
     data->input = std::make_unique<CachedBufferedInput>(
         readFile,
@@ -491,8 +492,12 @@ TEST_F(CacheTest, window) {
       dataIoStats_,
       ioStats_,
       executor_.get(),
-      io::ReaderOptions(
-          pool_.get(), dataIoStats_.get(), metadataIoStats_.get()));
+      [&] {
+        io::ReaderOptions opts(pool_.get());
+        opts.setDataIoStats(dataIoStats_);
+        opts.setMetadataIoStats(metadataIoStats_);
+        return opts;
+      }());
   auto begin = 4 * kMB;
   auto end = 17 * kMB;
   auto stream = input->read(begin, end - begin, LogType::TEST);
@@ -739,7 +744,9 @@ class FileWithReadAhead {
       std::shared_ptr<facebook::velox::IoStats> ioStats,
       memory::MemoryPool& pool,
       folly::Executor* executor)
-      : options_(&pool, &dataIoStats_, &metadataIoStats_) {
+      : options_(&pool) {
+    options_.setDataIoStats(dataIoStats_);
+    options_.setMetadataIoStats(metadataIoStats_);
     fileId_ = std::make_unique<StringIdLease>(fileIds(), name);
     file_ = std::make_shared<TestReadFile>(fileId_->id(), kFileSize, ioStats);
     options_.setCacheable(false);
@@ -769,8 +776,10 @@ class FileWithReadAhead {
   }
 
  private:
-  io::IoStatistics dataIoStats_;
-  io::IoStatistics metadataIoStats_;
+  std::shared_ptr<io::IoStatistics> dataIoStats_{
+      std::make_shared<io::IoStatistics>()};
+  std::shared_ptr<io::IoStatistics> metadataIoStats_{
+      std::make_shared<io::IoStatistics>()};
 
   std::unique_ptr<StringIdLease> fileId_;
   std::unique_ptr<CachedBufferedInput> bufferedInput_;
@@ -960,8 +969,9 @@ TEST_F(CacheTest, loadQuotumTooLarge) {
   StringIdLease fileId{fileIds(), "foo"};
   auto readFile =
       std::make_shared<TestReadFile>(fileId.id(), 10 << 20, nullptr);
-  auto readOptions = io::ReaderOptions(
-      pool_.get(), dataIoStats_.get(), metadataIoStats_.get());
+  auto readOptions = io::ReaderOptions(pool_.get());
+  readOptions.setDataIoStats(dataIoStats_);
+  readOptions.setMetadataIoStats(metadataIoStats_);
   readOptions.setLoadQuantum(9 << 20 /*9MB*/);
   VELOX_ASSERT_THROW(
       std::make_unique<CachedBufferedInput>(
@@ -999,8 +1009,12 @@ TEST_F(CacheTest, ssdReadVerification) {
       dataIoStats_,
       ioStats_,
       executor_.get(),
-      io::ReaderOptions(
-          pool_.get(), dataIoStats_.get(), metadataIoStats_.get()));
+      [&] {
+        io::ReaderOptions opts(pool_.get());
+        opts.setDataIoStats(dataIoStats_);
+        opts.setMetadataIoStats(metadataIoStats_);
+        return opts;
+      }());
 
   const auto readData = [&](uint32_t numBytesRead) {
     const uint64_t kNumBytesPerRead = 4 << 20;

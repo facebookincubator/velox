@@ -13,17 +13,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 #pragma once
 
-#include "velox/vector/SimpleVector.h"
+#include <cstdint>
+#include <functional>
 
-namespace facebook::velox::functions::sparksql {
+namespace facebook::velox::core {
 
-void castFromString(
-    const SimpleVector<StringView>& inputVector,
-    exec::EvalCtx& context,
-    const SelectivityVector& rows,
-    int64_t* rawResults);
+/// Per-batch scan statistics event fired by TableScan after each batch.
+struct ScanBatchEvent {
+  virtual ~ScanBatchEvent() = default;
 
-} // namespace facebook::velox::functions::sparksql
+  /// Post-pushdown, pre-remaining-filter row count.
+  uint64_t numRows{0};
+  /// Wall time spent producing this batch in microseconds.
+  uint64_t wallTimeMicros{0};
+};
+
+using ScanBatchCallback = std::function<void(const ScanBatchEvent&)>;
+
+} // namespace facebook::velox::core

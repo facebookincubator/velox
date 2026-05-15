@@ -355,7 +355,7 @@ class TestIndexSource : public connector::IndexSource,
   const std::shared_ptr<memory::MemoryPool> pool_;
   folly::Executor* const executor_;
 
-  mutable std::mutex mutex_;
+  std::mutex mutex_;
 
   // Join condition filter input type.
   RowTypePtr conditionInputType_;

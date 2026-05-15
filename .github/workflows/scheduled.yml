@@ -559,7 +559,7 @@ jobs:
           cd velox
           cp ./scripts/ci/presto/etc/hive.properties $PRESTO_HOME/etc/catalog
           ls -lR $PRESTO_HOME/etc
-          $PRESTO_HOME/bin/launcher run -v > /tmp/server.log 2>&1 &
+          $PRESTO_HOME/bin/launcher run > /tmp/server.log 2>&1 &
           # Sleep for 60 seconds to allow Presto server to start.
           sleep 60
           /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA IF NOT EXISTS hive.tpch;'
@@ -863,7 +863,7 @@ jobs:
           cd  velox
           cp ./scripts/ci/presto/etc/hive.properties $PRESTO_HOME/etc/catalog
           ls -lR $PRESTO_HOME/etc
-          $PRESTO_HOME/bin/launcher run -v > /tmp/server.log 2>&1 &
+          $PRESTO_HOME/bin/launcher run > /tmp/server.log 2>&1 &
           # Sleep for 60 seconds to allow Presto server to start.
           sleep 60
           /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA IF NOT EXISTS hive.tpch;'
@@ -979,7 +979,7 @@ jobs:
           cd velox
           cp ./scripts/ci/presto/etc/hive.properties $PRESTO_HOME/etc/catalog
           ls -lR $PRESTO_HOME/etc
-          $PRESTO_HOME/bin/launcher run -v > /tmp/server.log 2>&1 &
+          $PRESTO_HOME/bin/launcher run > /tmp/server.log 2>&1 &
           # Sleep for 60 seconds to allow Presto server to start.
           sleep 60
           /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA IF NOT EXISTS hive.tpch;'
@@ -1048,7 +1048,7 @@ jobs:
           cd velox
           cp ./scripts/ci/presto/etc/hive.properties $PRESTO_HOME/etc/catalog
           ls -lR $PRESTO_HOME/etc
-          $PRESTO_HOME/bin/launcher run -v > /tmp/server.log 2>&1 &
+          $PRESTO_HOME/bin/launcher run > /tmp/server.log 2>&1 &
           # Sleep for 60 seconds to allow Presto server to start.
           sleep 60
           /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA IF NOT EXISTS hive.tpch;'
@@ -1244,7 +1244,7 @@ jobs:
           cd  velox
           cp ./scripts/ci/presto/etc/hive.properties $PRESTO_HOME/etc/catalog
           ls -lR $PRESTO_HOME/etc
-          $PRESTO_HOME/bin/launcher run -v > /tmp/server.log 2>&1 &
+          $PRESTO_HOME/bin/launcher run > /tmp/server.log 2>&1 &
           # Sleep for 60 seconds to allow Presto server to start.
           sleep 60
           /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA IF NOT EXISTS hive.tpch;'
@@ -1322,7 +1322,7 @@ jobs:
           cd  velox
           cp ./scripts/ci/presto/etc/hive.properties $PRESTO_HOME/etc/catalog
           ls -lR $PRESTO_HOME/etc
-          $PRESTO_HOME/bin/launcher run -v > /tmp/server.log 2>&1 &
+          $PRESTO_HOME/bin/launcher run > /tmp/server.log 2>&1 &
           # Sleep for 60 seconds to allow Presto server to start.
           sleep 60
           /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA IF NOT EXISTS hive.tpch;'
@@ -1421,7 +1421,7 @@ jobs:
           cd  velox
           cp ./scripts/ci/presto/etc/hive.properties $PRESTO_HOME/etc/catalog
           ls -lR $PRESTO_HOME/etc
-          $PRESTO_HOME/bin/launcher run -v > /tmp/server.log 2>&1 &
+          $PRESTO_HOME/bin/launcher run > /tmp/server.log 2>&1 &
           # Sleep for 60 seconds to allow Presto server to start.
           sleep 60
           /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA IF NOT EXISTS hive.tpch;'
@@ -1523,7 +1523,7 @@ jobs:
           cd  velox
           cp ./scripts/ci/presto/etc/hive.properties $PRESTO_HOME/etc/catalog
           ls -lR $PRESTO_HOME/etc
-          $PRESTO_HOME/bin/launcher run -v > /tmp/server.log 2>&1 &
+          $PRESTO_HOME/bin/launcher run > /tmp/server.log 2>&1 &
           # Sleep for 60 seconds to allow Presto server to start.
           sleep 60
           /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA IF NOT EXISTS hive.tpch;'
@@ -1597,7 +1597,7 @@ jobs:
           ls -lR $PRESTO_HOME/etc
           echo "jvm config content:"
           cat $PRESTO_HOME/etc/jvm.config
-          $PRESTO_HOME/bin/launcher run -v > /tmp/server.log 2>&1 &
+          $PRESTO_HOME/bin/launcher run > /tmp/server.log 2>&1 &
           ls -lR /var/log
           # Sleep for 60 seconds to allow Presto server to start.
           sleep 60
