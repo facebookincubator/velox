@@ -97,8 +97,6 @@ void configureReaderOptions(
     readerOptions.setSelectiveNimbleReaderEnabled(
         connectorQueryCtx->selectiveNimbleReaderEnabled());
   }
-  readerOptions.setFileMetadataCacheEnabled(
-      fileConfig->fileMetadataCacheEnabled(sessionProperties));
   readerOptions.setPinFileMetadata(
       fileConfig->pinFileMetadata(sessionProperties));
 
