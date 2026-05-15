@@ -42,16 +42,15 @@ struct CustomMemoryResource {
   /// Capacity of the per-query root pool created for this resource.
   int64_t maxCapacity{std::numeric_limits<int64_t>::max()};
 
-  /// Allocator backing pools tagged with this resource. Required.
+  /// Allocator backing pools tagged with this resource.
   std::shared_ptr<MemoryAllocator> allocator;
 
-  /// Per-resource arbitrator. When non-null, pools tagged with this resource
-  /// route capacity decisions through it. When null, they fall back to the
-  /// MemoryManager's default arbitrator.
+  /// Arbitrator routing capacity decisions for pools tagged with this
+  /// resource.
   std::shared_ptr<MemoryArbitrator> arbitrator;
 
-  /// Optional factory invoked once per QueryCtx to build the reclaimer
-  /// attached to the resource's per-query root pool.
+  /// Invoked once per QueryCtx to build the reclaimer attached to the
+  /// per-query root pool.
   std::function<std::unique_ptr<MemoryReclaimer>(core::QueryCtx*)>
       reclaimerFactory;
 };

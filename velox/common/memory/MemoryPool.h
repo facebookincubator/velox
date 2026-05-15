@@ -406,7 +406,9 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
 
   /// Returns the arbitrator that governs this pool's capacity. May be the
   /// MemoryManager's default arbitrator or a custom resource's arbitrator.
-  virtual MemoryArbitrator* arbitrator() const = 0;
+  virtual MemoryArbitrator* arbitrator() const {
+    return nullptr;
+  }
 
   /// Function estimates the number of reclaimable bytes and returns in
   /// 'reclaimableBytes'. If the 'reclaimer' is not set, the function returns

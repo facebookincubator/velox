@@ -21,6 +21,7 @@
 #include "velox/common/memory/CustomMemoryResource.h"
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/core/QueryCtx.h"
 
 namespace facebook::velox::memory::test {
@@ -32,6 +33,10 @@ CustomMemoryResource makeResource(const std::string& tag) {
   CustomMemoryResource resource;
   resource.tag = tag;
   resource.allocator = std::make_shared<MallocAllocator>(allocatorOptions);
+  resource.arbitrator = MemoryArbitrator::create({});
+  resource.reclaimerFactory = [](core::QueryCtx*) {
+    return MemoryReclaimer::create(0);
+  };
   return resource;
 }
 
@@ -64,6 +69,18 @@ TEST_F(CustomMemoryResourceManagerTest, registrationValidation) {
   VELOX_ASSERT_THROW(
       manager.registerCustomResource(std::move(nullAllocator)),
       "CustomMemoryResource allocator is null for tag: another");
+
+  auto nullArbitrator = makeResource("another");
+  nullArbitrator.arbitrator.reset();
+  VELOX_ASSERT_THROW(
+      manager.registerCustomResource(std::move(nullArbitrator)),
+      "CustomMemoryResource arbitrator is null for tag: another");
+
+  auto nullFactory = makeResource("another");
+  nullFactory.reclaimerFactory = nullptr;
+  VELOX_ASSERT_THROW(
+      manager.registerCustomResource(std::move(nullFactory)),
+      "CustomMemoryResource reclaimerFactory is null for tag: another");
 
   VELOX_ASSERT_THROW(
       manager.registerCustomResource(makeResource("test-resource")),
@@ -186,15 +203,6 @@ TEST_F(CustomMemoryResourceQueryCtxTest, perQueryRootPoolCreated) {
 
   EXPECT_EQ(queryCtx->customPool("missing"), nullptr);
   EXPECT_EQ(queryCtx->customPools().size(), 1);
-}
-
-TEST_F(CustomMemoryResourceQueryCtxTest, noReclaimerFactory) {
-  memoryManager()->registerCustomResource(makeResource("plain"));
-
-  auto queryCtx = core::QueryCtx::Builder().queryId("q-plain").build();
-  auto pool = queryCtx->customPool("plain");
-  ASSERT_NE(pool, nullptr);
-  EXPECT_EQ(pool->reclaimer(), nullptr);
 }
 
 TEST_F(CustomMemoryResourceQueryCtxTest, customPoolsMatchRegistrationOrder) {

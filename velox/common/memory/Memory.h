@@ -226,13 +226,12 @@ class MemoryManager {
           std::nullopt,
       const std::optional<std::string>& resourceTag = std::nullopt);
 
-  /// Registers a custom memory resource. NOT thread-safe: must be called
-  /// during process startup before any QueryCtx is built. Throws on empty
-  /// tag, null allocator, or duplicate tag.
+  /// Registers a custom memory resource. Throws on empty or duplicate tag,
+  /// or on any null required field. NOT thread-safe: must be called during
+  /// process startup.
   void registerCustomResource(CustomMemoryResource resource);
 
-  /// Returns the registered custom resources in registration order. Safe to
-  /// read concurrently once registrations have completed.
+  /// Returns the registered custom resources in registration order.
   const std::vector<std::shared_ptr<CustomMemoryResource>>& customResources()
       const;
 
@@ -351,8 +350,7 @@ class MemoryManager {
   // All user root pools allocated from 'this'.
   std::unordered_map<std::string, std::weak_ptr<MemoryPool>> pools_;
 
-  // Append-only; see registerCustomResource for the threading contract.
-  // Pools hold shared_ptrs so a resource outlives every pool that uses it.
+  // Shared ownership so a resource outlives every pool that uses it.
   std::vector<std::shared_ptr<CustomMemoryResource>> customResources_;
 };
 
