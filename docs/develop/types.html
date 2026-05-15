@@ -450,6 +450,270 @@ comparable. The implication is that MAP type cannot be used as a join, group
 by or order by key in Spark.</p></li>
 </ul>
 </section>
+<section id="type-coercion">
+<h2>Type Coercion<a class="headerlink" href="#type-coercion" title="Link to this heading">¶</a></h2>
+<p>Type coercion is the implicit conversion of a value from one type to
+another during query planning. It resolves function overloads and
+special-form result types when arguments don’t match a signature exactly.</p>
+<p>Coercion is a planning-time concern: by the time a Velox <code class="docutils literal notranslate"><span class="pre">Task</span></code> is
+constructed, every implicit conversion is already a materialized <code class="docutils literal notranslate"><span class="pre">Cast</span></code>
+node in the typed expression tree, and runtime evaluators do not consult
+the coercer.</p>
+<p>Coercion rules live in <code class="docutils literal notranslate"><span class="pre">TypeCoercer</span></code> (<code class="docutils literal notranslate"><span class="pre">velox/type/TypeCoercer.h</span></code>).
+<code class="docutils literal notranslate"><span class="pre">TypeCoercer</span></code> is value-typed and immutable after construction. Velox ships
+a default instance (<code class="docutils literal notranslate"><span class="pre">TypeCoercer::defaults()</span></code>) holding a conservative
+built-in rule set used when no dialect coercer is provided. SQL dialects
+ship their own complete instances – for example,
+<code class="docutils literal notranslate"><span class="pre">velox::functions::prestosql::typeCoercer()</span></code> for the Presto dialect – that
+match the dialect’s overload-resolution semantics.</p>
+<p><code class="docutils literal notranslate"><span class="pre">TypeCoercer</span></code> itself is frontend-agnostic: it’s a plain value type that
+the resolver APIs (<code class="docutils literal notranslate"><span class="pre">SignatureBinder</span></code>,
+<code class="docutils literal notranslate"><span class="pre">resolveFunction*WithCoercions</span></code>, the special-form <code class="docutils literal notranslate"><span class="pre">resolveTypeInt</span></code>
+helpers) accept as a defaulted tail parameter so existing callers
+compile unchanged and use <code class="docutils literal notranslate"><span class="pre">TypeCoercer::defaults()</span></code>. How a coercer
+reaches the resolver APIs is the frontend’s choice. Axiom, for example,
+threads the dialect coercer through <code class="docutils literal notranslate"><span class="pre">logical_plan::PlanBuilder</span></code>’s
+<code class="docutils literal notranslate"><span class="pre">Context.coercer</span></code> field, which the SQL parser sets when constructing
+the plan builder; other frontends may pass a coercer directly into the
+resolver APIs or wire it through their own planning context.</p>
+<section id="customization-scope">
+<h3>Customization scope<a class="headerlink" href="#customization-scope" title="Link to this heading">¶</a></h3>
+<p>What a dialect’s <code class="docutils literal notranslate"><span class="pre">TypeCoercer</span></code> rule set controls:</p>
+<ul class="simple">
+<li><p><strong>Primitives</strong> (TINYINT, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE, BOOLEAN,
+VARCHAR, VARBINARY, DATE, TIMESTAMP, UNKNOWN): full control over which
+source/target pairs are allowed and at what cost. Lower cost is preferred
+during overload resolution.</p></li>
+<li><p><strong>DECIMAL</strong>: customizable for source and target separately; DECIMAL -&gt;
+DECIMAL is not customizable. See the DECIMAL section below.</p></li>
+<li><p><strong>Container types</strong> (ARRAY, MAP, ROW) and FUNCTION/OPAQUE: not
+customizable directly. Coercibility is structural – names and arities
+must match, and children are recursed element-wise. A dialect controls
+container behavior only indirectly via element-type rules.</p></li>
+<li><p><strong>Custom types</strong> (e.g. JSON, TIMESTAMP WITH TIME ZONE, BINGTILE): not
+customizable through a dialect’s <code class="docutils literal notranslate"><span class="pre">TypeCoercer</span></code> rule set. Custom-type
+coercions are registered via <code class="docutils literal notranslate"><span class="pre">registerCastRules</span></code> alongside
+<code class="docutils literal notranslate"><span class="pre">registerCustomType</span></code> and live in the global <code class="docutils literal notranslate"><span class="pre">CastRulesRegistry</span></code>,
+which is shared across dialects. To keep callers from having to query
+both registries, <code class="docutils literal notranslate"><span class="pre">TypeCoercer::coerceTypeBase</span></code> consults
+<code class="docutils literal notranslate"><span class="pre">CastRulesRegistry</span></code> as a fallback after its own rule lookup – so
+custom-type coercions remain reachable through any <code class="docutils literal notranslate"><span class="pre">TypeCoercer</span></code>
+instance even though the dialect can’t override them.</p></li>
+</ul>
+</section>
+<section id="cost-magnitudes">
+<h3>Cost magnitudes<a class="headerlink" href="#cost-magnitudes" title="Link to this heading">¶</a></h3>
+<p>Overload resolution sums per-argument coercion costs
+(<code class="docutils literal notranslate"><span class="pre">Coercion::overallCost</span></code>) to compare candidate signatures. For sums to
+be meaningful, every <code class="docutils literal notranslate"><span class="pre">CoercionEntry.cost</span></code> in a single <code class="docutils literal notranslate"><span class="pre">TypeCoercer</span></code>
+instance must be in the same small magnitude – today’s defaults use
+costs 1-9, one per source-type series. There is no hardcoded surcharge
+added at lookup time: the dialect’s rule cost is returned verbatim.</p>
+</section>
+<section id="decimal">
+<h3>DECIMAL<a class="headerlink" href="#decimal" title="Link to this heading">¶</a></h3>
+<p>DECIMAL handling depends on which side is DECIMAL. Rule keys collapse on
+the name <code class="docutils literal notranslate"><span class="pre">DECIMAL</span></code> regardless of (p, s) – one rule per
+<code class="docutils literal notranslate"><span class="pre">(sourceName,</span> <span class="pre">targetName)</span></code> pair on each side.</p>
+<p><strong>Source DECIMAL</strong> (e.g. <code class="docutils literal notranslate"><span class="pre">DECIMAL(p,</span> <span class="pre">s)</span> <span class="pre">-&gt;</span> <span class="pre">DOUBLE</span></code>). A dialect
+registers one rule per <code class="docutils literal notranslate"><span class="pre">(DECIMAL,</span> <span class="pre">target)</span></code> where <code class="docutils literal notranslate"><span class="pre">target</span></code> is a
+non-DECIMAL type (DECIMAL -&gt; DECIMAL is not customizable; see below).
+The source must be the canonical placeholder <code class="docutils literal notranslate"><span class="pre">DECIMAL(1,</span> <span class="pre">0)</span></code>; the rule
+fires for any actual <code class="docutils literal notranslate"><span class="pre">DECIMAL(p,</span> <span class="pre">s)</span></code> source because the source’s
+precision/scale is not part of the lookup key. The rule resolves
+directly to the target type at the rule’s cost.</p>
+<p><strong>Target DECIMAL</strong> (e.g. <code class="docutils literal notranslate"><span class="pre">INTEGER</span> <span class="pre">-&gt;</span> <span class="pre">DECIMAL(p,</span> <span class="pre">s)</span></code>). A dialect
+registers one rule per <code class="docutils literal notranslate"><span class="pre">(source,</span> <span class="pre">DECIMAL)</span></code>. The rule’s stored target
+is the minimum-width decimal that holds every value of the source
+(e.g. <code class="docutils literal notranslate"><span class="pre">INTEGER</span> <span class="pre">-&gt;</span> <span class="pre">DECIMAL(10,</span> <span class="pre">0)</span></code>). At lookup, the type system extends
+the rule’s fixed target to the caller’s requested <code class="docutils literal notranslate"><span class="pre">DECIMAL(p,</span> <span class="pre">s)</span></code> via
+<code class="docutils literal notranslate"><span class="pre">ShortDecimalType::isCoercibleTo</span></code> / <code class="docutils literal notranslate"><span class="pre">LongDecimalType::isCoercibleTo</span></code>
+(see widening rule below). Returns <code class="docutils literal notranslate"><span class="pre">nullopt</span></code> if the caller’s target is
+too narrow.</p>
+<p>Widening itself contributes 0 to the cost; the rule’s stored cost is
+returned verbatim. <code class="docutils literal notranslate"><span class="pre">INT</span> <span class="pre">-&gt;</span> <span class="pre">DECIMAL(10,</span> <span class="pre">0)</span></code> and <code class="docutils literal notranslate"><span class="pre">INT</span> <span class="pre">-&gt;</span> <span class="pre">DECIMAL(38,</span>
+<span class="pre">18)</span></code> both cost whatever the rule says (e.g. cost 2 in INTEGER’s series).
+This is a simple choice that works for current overload-resolution
+cases; it may need to be revisited if a function is registered with
+multiple concrete DECIMAL-target signatures, since they would all coerce
+at the same cost and produce ambiguous resolution.</p>
+<p><strong>DECIMAL -&gt; DECIMAL</strong> (e.g. <code class="docutils literal notranslate"><span class="pre">DECIMAL(10,</span> <span class="pre">2)</span> <span class="pre">-&gt;</span> <span class="pre">DECIMAL(20,</span> <span class="pre">4)</span></code>) is
+<strong>not customizable</strong> by dialects. <code class="docutils literal notranslate"><span class="pre">TypeCoercer</span></code> rejects rule entries
+with both source and target DECIMAL at construction time, so attempting
+to register one fails fast. Dialects that need non-standard
+DECIMAL -&gt; DECIMAL semantics must extend the type system, not
+<code class="docutils literal notranslate"><span class="pre">TypeCoercer</span></code>.</p>
+<p>At lookup time, <code class="docutils literal notranslate"><span class="pre">coerceTypeBase</span></code> short-circuits for any two DECIMALs
+regardless of (p, s) and returns <code class="docutils literal notranslate"><span class="pre">Coercion{type:</span> <span class="pre">from,</span> <span class="pre">cost:</span> <span class="pre">0}</span></code>.
+Precision/scale reconciliation is therefore not done by
+<code class="docutils literal notranslate"><span class="pre">coerceTypeBase</span></code> itself; instead it happens via DECIMAL-specific paths
+in two places:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">LongDecimalType::commonSuperType</span></code> inside <code class="docutils literal notranslate"><span class="pre">leastCommonSuperType</span></code>
+computes the common <code class="docutils literal notranslate"><span class="pre">(p,</span> <span class="pre">s)</span></code> for plan-level operations (UNION, CASE
+result type, etc.).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">SignatureBinder</span></code>’s integer-parameter binding handles function
+signatures of the form <code class="docutils literal notranslate"><span class="pre">DECIMAL(P,</span> <span class="pre">S)</span></code> by binding <code class="docutils literal notranslate"><span class="pre">P</span></code> and <code class="docutils literal notranslate"><span class="pre">S</span></code> as
+integer variables from the actual argument types.</p></li>
+</ul>
+<p><em>DECIMAL widening rule.</em> <code class="docutils literal notranslate"><span class="pre">DECIMAL(p1,</span> <span class="pre">s1)</span></code> is coercible to
+<code class="docutils literal notranslate"><span class="pre">DECIMAL(p2,</span> <span class="pre">s2)</span></code> iff:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">p1</span> <span class="pre">-</span> <span class="pre">s1</span> <span class="pre">&lt;=</span> <span class="pre">p2</span> <span class="pre">-</span> <span class="pre">s2</span></code> – the target has at least as many integer
+digits as the source, and</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">s1</span> <span class="pre">&lt;=</span> <span class="pre">s2</span></code> – the target has at least as much scale.</p></li>
+</ul>
+<p>Both conditions must hold; otherwise the widening fails. This rule is
+used by Target DECIMAL above (extending a fixed-width target to a wider
+caller-requested DECIMAL) and by <code class="docutils literal notranslate"><span class="pre">LongDecimalType::commonSuperType</span></code>
+for DECIMAL -&gt; DECIMAL reconciliation.</p>
+</section>
+<section id="coercetypebase-vs-coercible">
+<h3><code class="docutils literal notranslate"><span class="pre">coerceTypeBase</span></code> vs <code class="docutils literal notranslate"><span class="pre">coercible</span></code><a class="headerlink" href="#coercetypebase-vs-coercible" title="Link to this heading">¶</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">coerceTypeBase(from,</span> <span class="pre">to)</span></code> is a single-rule lookup. It does NOT recurse
+into container children – <code class="docutils literal notranslate"><span class="pre">coerceTypeBase(ARRAY&lt;INT&gt;,</span> <span class="pre">ARRAY&lt;BIGINT&gt;)</span></code>
+returns <code class="docutils literal notranslate"><span class="pre">nullopt</span></code> because no flat rule keys on
+<code class="docutils literal notranslate"><span class="pre">(&quot;ARRAY&quot;,</span> <span class="pre">&quot;ARRAY&quot;)</span></code>. <code class="docutils literal notranslate"><span class="pre">coercible(from,</span> <span class="pre">to)</span></code> is the structural
+predicate: for primitives it delegates to <code class="docutils literal notranslate"><span class="pre">coerceTypeBase</span></code>; for
+containers it requires matching names and arities, then sums child
+coercion costs.</p>
+</section>
+<section id="default-coercion-rules">
+<h3>Default coercion rules<a class="headerlink" href="#default-coercion-rules" title="Link to this heading">¶</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">TypeCoercer::defaults()</span></code> ships the rules below. In this and the
+Presto-specific table that follows, allowed targets are listed in cost
+order (cheapest first), and for DECIMAL targets the listed type is the
+minimum-width decimal that holds every value of the source (lookup
+widens to a wider DECIMAL when compatible – see the DECIMAL section
+above).</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Source</p></th>
+<th class="head"><p>Allowed targets (in cost order, cheapest first)</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>TINYINT</p></td>
+<td><p>SMALLINT, INTEGER, BIGINT, DECIMAL(3, 0), REAL, DOUBLE</p></td>
+</tr>
+<tr class="row-odd"><td><p>SMALLINT</p></td>
+<td><p>INTEGER, BIGINT, DECIMAL(5, 0), REAL, DOUBLE</p></td>
+</tr>
+<tr class="row-even"><td><p>INTEGER</p></td>
+<td><p>BIGINT, DECIMAL(10, 0), REAL, DOUBLE</p></td>
+</tr>
+<tr class="row-odd"><td><p>BIGINT</p></td>
+<td><p>DECIMAL(19, 0), DOUBLE</p></td>
+</tr>
+<tr class="row-even"><td><p>REAL</p></td>
+<td><p>DOUBLE</p></td>
+</tr>
+<tr class="row-odd"><td><p>DECIMAL</p></td>
+<td><p>REAL, DOUBLE</p></td>
+</tr>
+<tr class="row-even"><td><p>DATE</p></td>
+<td><p>TIMESTAMP</p></td>
+</tr>
+<tr class="row-odd"><td><p>UNKNOWN</p></td>
+<td><p>TINYINT, BOOLEAN, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE,
+VARCHAR, VARBINARY</p></td>
+</tr>
+</tbody>
+</table>
+<p>Notable absences:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">BIGINT</span> <span class="pre">-&gt;</span> <span class="pre">REAL</span></code> is not in the defaults (BIGINT has 64-bit integer
+precision; REAL holds only ~7 decimal digits). Presto allows it; the
+Presto dialect coercer adds it (see below).</p></li>
+<li><p>No reverse conversions (e.g. <code class="docutils literal notranslate"><span class="pre">DOUBLE</span> <span class="pre">-&gt;</span> <span class="pre">REAL</span></code>, <code class="docutils literal notranslate"><span class="pre">BIGINT</span> <span class="pre">-&gt;</span> <span class="pre">INTEGER</span></code>).</p></li>
+<li><p>No string conversions (e.g. <code class="docutils literal notranslate"><span class="pre">INTEGER</span> <span class="pre">-&gt;</span> <span class="pre">VARCHAR</span></code>).</p></li>
+<li><p>No conversions between unrelated families (e.g. <code class="docutils literal notranslate"><span class="pre">BOOLEAN</span> <span class="pre">-&gt;</span> <span class="pre">INTEGER</span></code>,
+<code class="docutils literal notranslate"><span class="pre">DATE</span> <span class="pre">-&gt;</span> <span class="pre">BIGINT</span></code>).</p></li>
+</ul>
+</section>
+<section id="presto-specific-coercion-rules">
+<h3>Presto-specific coercion rules<a class="headerlink" href="#presto-specific-coercion-rules" title="Link to this heading">¶</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">velox::functions::prestosql::typeCoercer()</span></code> (in
+<code class="docutils literal notranslate"><span class="pre">velox/functions/prestosql/coercion/PrestoCoercions.{h,cpp}</span></code>) ships a
+complete rule set independent from <code class="docutils literal notranslate"><span class="pre">TypeCoercer::defaults()</span></code> so that
+dialect-specific changes don’t silently shift when Velox defaults change.
+Same table conventions as above.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Source</p></th>
+<th class="head"><p>Allowed targets (in cost order, cheapest first)</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>TINYINT</p></td>
+<td><p>SMALLINT, INTEGER, BIGINT, DECIMAL(3, 0), REAL, DOUBLE</p></td>
+</tr>
+<tr class="row-odd"><td><p>SMALLINT</p></td>
+<td><p>INTEGER, BIGINT, DECIMAL(5, 0), REAL, DOUBLE</p></td>
+</tr>
+<tr class="row-even"><td><p>INTEGER</p></td>
+<td><p>BIGINT, DECIMAL(10, 0), REAL, DOUBLE</p></td>
+</tr>
+<tr class="row-odd"><td><p>BIGINT</p></td>
+<td><p>DECIMAL(19, 0), REAL, DOUBLE</p></td>
+</tr>
+<tr class="row-even"><td><p>REAL</p></td>
+<td><p>DOUBLE</p></td>
+</tr>
+<tr class="row-odd"><td><p>DECIMAL</p></td>
+<td><p>REAL, DOUBLE</p></td>
+</tr>
+<tr class="row-even"><td><p>DATE</p></td>
+<td><p>TIMESTAMP</p></td>
+</tr>
+<tr class="row-odd"><td><p>UNKNOWN</p></td>
+<td><p>TINYINT, BOOLEAN, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE,
+VARCHAR, VARBINARY</p></td>
+</tr>
+</tbody>
+</table>
+<p>Differences from Velox’s defaults:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">BIGINT</span> <span class="pre">-&gt;</span> <span class="pre">REAL</span></code> is added. The BIGINT row becomes
+<code class="docutils literal notranslate"><span class="pre">DECIMAL(19,</span> <span class="pre">0),</span> <span class="pre">REAL,</span> <span class="pre">DOUBLE</span></code>, mirroring the INTEGER row’s
+ordering. This makes <code class="docutils literal notranslate"><span class="pre">divide(real,</span> <span class="pre">bigint)</span></code> resolve to
+<code class="docutils literal notranslate"><span class="pre">divide(real,</span> <span class="pre">real)</span></code> via <code class="docutils literal notranslate"><span class="pre">BIGINT</span> <span class="pre">-&gt;</span> <span class="pre">REAL</span></code> (cost 2) instead of
+<code class="docutils literal notranslate"><span class="pre">divide(double,</span> <span class="pre">double)</span></code> via <code class="docutils literal notranslate"><span class="pre">REAL</span> <span class="pre">-&gt;</span> <span class="pre">DOUBLE</span> <span class="pre">+</span> <span class="pre">BIGINT</span> <span class="pre">-&gt;</span> <span class="pre">DOUBLE</span></code>
+(cost 1 + 3 = 4), matching Presto’s overload resolution.</p></li>
+</ul>
+<p>Presto also allows the following implicit coercions:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Source</p></th>
+<th class="head"><p>Target</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>TIMESTAMP</p></td>
+<td><p>TIMESTAMP WITH TIME ZONE</p></td>
+</tr>
+<tr class="row-odd"><td><p>DATE</p></td>
+<td><p>TIMESTAMP WITH TIME ZONE</p></td>
+</tr>
+<tr class="row-even"><td><p>TIME</p></td>
+<td><p>TIME WITH TIME ZONE</p></td>
+</tr>
+</tbody>
+</table>
+<p>These are not part of <code class="docutils literal notranslate"><span class="pre">presto::typeCoercer()</span></code>’s rule set. From
+Velox’s perspective the targets above are <em>custom</em> types
+(<code class="docutils literal notranslate"><span class="pre">TIMESTAMP</span> <span class="pre">WITH</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code>, <code class="docutils literal notranslate"><span class="pre">TIME</span> <span class="pre">WITH</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code>) registered via
+<code class="docutils literal notranslate"><span class="pre">registerCustomType</span></code>, so their coercion rules live in the global
+<code class="docutils literal notranslate"><span class="pre">CastRulesRegistry</span></code> (registered with <code class="docutils literal notranslate"><span class="pre">implicitAllowed</span> <span class="pre">=</span> <span class="pre">true</span></code>
+alongside the type) rather than in the dialect’s <code class="docutils literal notranslate"><span class="pre">TypeCoercer</span></code>.
+Lookup still finds them because <code class="docutils literal notranslate"><span class="pre">coerceTypeBase</span></code> consults
+<code class="docutils literal notranslate"><span class="pre">CastRulesRegistry</span></code> as a fallback.</p>
+<p>Casts to other Presto types backed by Velox custom types (JSON,
+BINGTILE, IPADDRESS, IPPREFIX, UUID, BIGINT_ENUM, VARCHAR_ENUM,
+P4HYPERLOGLOG) are explicit-only – see
+<a class="reference internal" href="../functions/presto/conversion.html"><span class="doc">Conversion Functions</span></a>.</p>
+</section>
+</section>
 </section>
 
 
@@ -469,6 +733,15 @@ by or order by key in Spark.</p></li>
 <li><a class="reference internal" href="#complex-types">Complex Types</a></li>
 <li><a class="reference internal" href="#presto-types">Presto Types</a></li>
 <li><a class="reference internal" href="#spark-types">Spark Types</a></li>
+<li><a class="reference internal" href="#type-coercion">Type Coercion</a><ul>
+<li><a class="reference internal" href="#customization-scope">Customization scope</a></li>
+<li><a class="reference internal" href="#cost-magnitudes">Cost magnitudes</a></li>
+<li><a class="reference internal" href="#decimal">DECIMAL</a></li>
+<li><a class="reference internal" href="#coercetypebase-vs-coercible"><code class="docutils literal notranslate"><span class="pre">coerceTypeBase</span></code> vs <code class="docutils literal notranslate"><span class="pre">coercible</span></code></a></li>
+<li><a class="reference internal" href="#default-coercion-rules">Default coercion rules</a></li>
+<li><a class="reference internal" href="#presto-specific-coercion-rules">Presto-specific coercion rules</a></li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>
