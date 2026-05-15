@@ -68,6 +68,7 @@ buildLeftJoinOutputIndicesFromFilter(
     cudf::column_view leftIndicesCol,
     cudf::column_view rightIndicesCol,
     cudf::column_view filterColumn,
+    cudf::size_type rightNumRows,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
   auto falseScalar = cudf::numeric_scalar<bool>(false, true, stream, mr);
@@ -125,8 +126,11 @@ buildLeftJoinOutputIndicesFromFilter(
       stream,
       mr);
 
-  auto nullIndexScalar =
-      cudf::numeric_scalar<cudf::size_type>(-1, true, stream, mr);
+  // For gather(..., NULLIFY, ...), only out-of-bounds indices become null.
+  // Negative indices can wrap, so use rightNumRows (one past the end) as the
+  // sentinel for unmatched build rows.
+  auto nullIndexScalar = cudf::numeric_scalar<cudf::size_type>(
+      rightNumRows, true, stream, mr);
   auto unmatchedRightIndices = cudf::make_column_from_scalar(
       nullIndexScalar,
       unmatchedLeftIndicesTable->num_rows(),
@@ -851,6 +855,7 @@ std::unique_ptr<cudf::table> CudfHashJoinProbe::filteredLeftJoinOutput(
           leftIndicesCol,
           rightIndicesCol,
           asView(filterColumns),
+          rightTableView.num_rows(),
           stream,
           get_output_mr());
 
