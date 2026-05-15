@@ -57,7 +57,8 @@ class CudfAbfsTest : public ::testing::Test {
   std::string uploadFile(const std::string& localPath);
 
   /// Owns the Azurite subprocess and the per-test blob container.
-  std::unique_ptr<filesystems::AzuriteServer> azuriteServer_;
+  std::unique_ptr<::facebook::velox::filesystems::AzuriteServer>
+      azuriteServer_;
 
   /// IO executor handed to the `CudfHiveConnector` for async file work.
   std::shared_ptr<folly::IOThreadPoolExecutor> ioExecutor_;

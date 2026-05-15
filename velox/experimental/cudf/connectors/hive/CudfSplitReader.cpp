@@ -27,6 +27,8 @@
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/TableHandle.h"
 #ifdef VELOX_ENABLE_ABFS
+#include "velox/experimental/cudf/connectors/hive/storage_adapters/CudfDataSourceRegistry.h"
+
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h"
 #endif
 
@@ -229,6 +231,28 @@ void CudfSplitReader::setupCudfDataSource() {
   if (dataSource_) {
     return;
   }
+
+#ifdef VELOX_ENABLE_ABFS
+  // Native zero-copy ABFS datasource takes precedence when both the
+  // session flag is on and the split is an ABFS path. Falls through to
+  // BufferedInputDataSource on miss so misconfiguration never breaks
+  // reads that the Phase 1 path can serve.
+  if (cudfHiveConfig_->useNativeAbfsDataSourceSession(
+          connectorQueryCtx_->sessionProperties()) and
+      ::facebook::velox::filesystems::isAbfsFile(split_->filePath)) {
+    auto ds = cudf_velox::filesystems::getCudfDataSource(
+        split_->filePath, cudfHiveConfig_->config());
+    if (ds) {
+      dataSource_ = std::move(ds);
+      return;
+    }
+    LOG(WARNING) << fmt::format(
+        "Native CudfAbfsDataSource not registered for {}; falling back to "
+        "BufferedInputDataSource. Call registerCudfAbfsDataSource() during "
+        "startup to enable the zero-copy path.",
+        split_->filePath);
+  }
+#endif
 
   // Use file data source if we don't want to use the BufferedInput source
   if (not cudfHiveConfig_->useBufferedInputSession(

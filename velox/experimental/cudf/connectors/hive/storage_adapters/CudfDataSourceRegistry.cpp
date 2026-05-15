@@ -1,0 +1,70 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "velox/experimental/cudf/connectors/hive/storage_adapters/CudfDataSourceRegistry.h"
+
+#include <mutex>
+#include <utility>
+#include <vector>
+
+namespace facebook::velox::cudf_velox::filesystems {
+
+namespace {
+
+struct Entry {
+  CudfDataSourceMatcher matcher;
+  CudfDataSourceGenerator generator;
+};
+
+// Guards mutation of the singleton entry vector. Reads happen on the hot
+// path so the lock is acquired only during registration.
+std::mutex& registryMutex() {
+  static std::mutex mutex;
+  return mutex;
+}
+
+std::vector<Entry>& registry() {
+  static std::vector<Entry> entries;
+  return entries;
+}
+
+} // namespace
+
+void registerCudfDataSource(
+    CudfDataSourceMatcher matcher,
+    CudfDataSourceGenerator generator) {
+  std::lock_guard<std::mutex> lock(registryMutex());
+  registry().push_back(Entry{std::move(matcher), std::move(generator)});
+}
+
+std::shared_ptr<cudf::io::datasource> getCudfDataSource(
+    std::string_view path,
+    const std::shared_ptr<const config::ConfigBase>& properties) {
+  std::lock_guard<std::mutex> lock(registryMutex());
+  for (const auto& entry : registry()) {
+    if (entry.matcher(path)) {
+      return entry.generator(path, properties);
+    }
+  }
+  return nullptr;
+}
+
+void unregisterCudfDataSources() {
+  std::lock_guard<std::mutex> lock(registryMutex());
+  registry().clear();
+}
+
+} // namespace facebook::velox::cudf_velox::filesystems

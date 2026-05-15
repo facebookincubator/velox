@@ -21,6 +21,8 @@
 // name lookup. This mirrors the pattern already used by `S3ReadTest.cpp`.
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
+#include "velox/experimental/cudf/connectors/hive/storage_adapters/CudfDataSourceRegistry.h"
+#include "velox/experimental/cudf/connectors/hive/storage_adapters/abfs/RegisterCudfAbfsDataSource.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/tests/CudfAbfsTest.h"
 
@@ -59,6 +61,7 @@ void CudfAbfsTest::SetUp() {
 
   velox_filesystems::registerLocalFileSystem();
   velox_filesystems::registerAbfsFileSystem();
+  cudf_velox::filesystems::registerCudfAbfsDataSource();
 
   // Force the cudf hive connector down the BufferedInput path so reads route
   // through the upstream AbfsFileSystem rather than kvikIO. Also declare the
@@ -85,6 +88,7 @@ void CudfAbfsTest::TearDown() {
   ::facebook::velox::connector::ConnectorRegistry::global().erase(
       kCudfHiveConnectorId);
   cudf_velox::unregisterCudf();
+  cudf_velox::filesystems::unregisterCudfDataSources();
   if (azuriteServer_) {
     azuriteServer_->stop();
     azuriteServer_.reset();

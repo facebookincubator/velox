@@ -40,7 +40,20 @@ namespace {
 
 constexpr const char* kCudfHiveConnectorId{"test-cudf-hive"};
 
-class AbfsReadTest : public CudfAbfsTest, public ::test::VectorTestBase {};
+class AbfsReadTest : public CudfAbfsTest, public ::test::VectorTestBase {
+ protected:
+  // Builds the expected rows for `int.parquet`: 10 rows with `int` =
+  // 100..109 and `bigint` = 1000..1009. Lives on the fixture so it can
+  // call the protected vector helpers in `VectorTestBase`.
+  RowVectorPtr makeIntParquetExpected() {
+    constexpr int64_t kExpectedRows = 10;
+    return makeRowVector(
+        {makeFlatVector<int32_t>(
+             kExpectedRows, [](auto row) { return row + 100; }),
+         makeFlatVector<int64_t>(
+             kExpectedRows, [](auto row) { return row + 1000; })});
+  }
+};
 
 } // namespace
 
@@ -73,12 +86,44 @@ TEST_F(AbfsReadTest, readIntParquet) {
           .build();
 
   auto actual = AssertQueryBuilder(plan).split(split).copyResults(pool());
+  assertEqualResults({makeIntParquetExpected()}, {actual});
+}
 
-  constexpr int64_t kExpectedRows = 10;
-  auto expected = makeRowVector(
-      {makeFlatVector<int32_t>(
-           kExpectedRows, [](auto row) { return row + 100; }),
-       makeFlatVector<int64_t>(
-           kExpectedRows, [](auto row) { return row + 1000; })});
-  assertEqualResults({expected}, {actual});
+TEST_F(AbfsReadTest, readIntParquetNativeDataSource) {
+  const auto sourceFile = test::getDataFilePath(
+      "velox/experimental/cudf/tests",
+      "../../../dwio/parquet/tests/examples/int.parquet");
+
+  const auto abfsFilePath = uploadFile(sourceFile);
+
+  auto rowType = ROW({"int", "bigint"}, {INTEGER(), BIGINT()});
+  auto tableHandle =
+      std::make_shared<facebook::velox::connector::hive::HiveTableHandle>(
+          kCudfHiveConnectorId,
+          "int_table",
+          common::SubfieldFilters{},
+          nullptr);
+
+  auto plan = PlanBuilder(pool())
+                  .startTableScan()
+                  .tableHandle(tableHandle)
+                  .outputType(rowType)
+                  .endTableScan()
+                  .planNode();
+
+  auto split =
+      facebook::velox::connector::hive::HiveConnectorSplitBuilder(abfsFilePath)
+          .connectorId(kCudfHiveConnectorId)
+          .fileFormat(dwio::common::FileFormat::PARQUET)
+          .build();
+
+  auto actual = AssertQueryBuilder(plan)
+                    .split(split)
+                    .connectorSessionProperty(
+                        kCudfHiveConnectorId,
+                        cudf_velox::connector::hive::CudfHiveConfig::
+                            kUseNativeAbfsDataSourceSession,
+                        "true")
+                    .copyResults(pool());
+  assertEqualResults({makeIntParquetExpected()}, {actual});
 }

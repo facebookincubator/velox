@@ -430,6 +430,7 @@ if(VELOX_ENABLE_ABFS)
     velox_cudf_abfs_read_test
     velox_cudf_exec_test_lib
     velox_cudf_hive_connector
+    velox_cudf_abfs
     velox_abfs
     velox_file
     velox_exec

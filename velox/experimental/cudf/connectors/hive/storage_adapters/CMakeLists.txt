@@ -12,28 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(
-  velox_cudf_hive_connector
-  CudfHiveConfig.cpp
-  CudfHiveConnector.cpp
-  CudfHiveConnectorSplit.cpp
-  CudfHiveDataSource.cpp
-  CudfSplitReader.cpp
-  CudfSplitReaderHelpers.cpp
-  CudfHiveDataSink.cpp
-  CudfHiveTableHandle.cpp
-)
-
-set_target_properties(velox_cudf_hive_connector PROPERTIES CUDA_ARCHITECTURES native)
-
-add_subdirectory(storage_adapters)
-
-target_link_libraries(
-  velox_cudf_hive_connector
-  PRIVATE velox_hive_connector velox_dwio_common
-  PUBLIC cudf::cudf velox_cudf_expression
-)
-
 if(VELOX_ENABLE_ABFS)
-  target_link_libraries(velox_cudf_hive_connector PRIVATE velox_abfs velox_cudf_abfs)
+  add_subdirectory(abfs)
 endif()
