@@ -16,13 +16,15 @@
 #pragma once
 
 #include "velox/common/EnumDeclare.h"
-#include "velox/common/base/Status.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/functions/Macros.h"
 
 #include <folly/ScopeGuard.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
+
+#include <limits>
 
 namespace facebook::velox::functions::sparksql {
 
@@ -33,10 +35,10 @@ enum class CipherMode { ECB, CBC, GCM };
 VELOX_DECLARE_ENUM_NAME(CipherMode);
 
 struct CipherConfig {
-  CipherMode mode;
-  int ivLen;
-  bool usePkcs;
-  bool supportsAad;
+  CipherMode mode{CipherMode::GCM};
+  int ivLen{0};
+  bool usePkcs{false};
+  bool supportsAad{false};
   std::string error;
 };
 
@@ -45,6 +47,12 @@ CipherConfig parseModeAndPadding(
     const std::string& paddingStr);
 
 const EVP_CIPHER* getCipher(CipherMode mode, int keyLen);
+
+// Returns true if a size_t value safely fits into a non-negative `int`,
+// i.e. the OpenSSL EVP_*Update length parameter type.
+FOLLY_ALWAYS_INLINE bool fitsInInt(size_t n) {
+  return n <= static_cast<size_t>(std::numeric_limits<int>::max());
+}
 
 } // namespace detail
 
@@ -69,7 +77,12 @@ struct AesEncryptFunction {
     config_ = detail::parseModeAndPadding(modeStr, paddingStr);
   }
 
-  FOLLY_ALWAYS_INLINE Status callNullable(
+  // Returns false to signal a NULL output when input or key is NULL.
+  // Returning Status with notNull=true implicitly is what `Status` callNullable
+  // does (see SimpleFunctionMetadata.h:1144), so we use bool to retain control
+  // over the null bit. Errors are surfaced via THROW_USER_* / VELOX_USER_FAIL
+  // since bool callNullable cannot return a Status.
+  FOLLY_ALWAYS_INLINE bool callNullable(
       out_type<Varbinary>& result,
       const arg_type<Varbinary>* input,
       const arg_type<Varbinary>* key,
@@ -78,73 +91,95 @@ struct AesEncryptFunction {
       const arg_type<Varbinary>* iv,
       const arg_type<Varbinary>* aad) {
     if (input == nullptr || key == nullptr) {
-      return Status::OK();
+      return false;
     }
     if (!config_.error.empty()) {
-      return Status::UserError(config_.error);
+      VELOX_USER_FAIL("{}", config_.error);
     }
-    static const arg_type<Varbinary> kEmpty{};
-    return aesEncryptImpl(
-        result, *input, *key, config_, iv ? *iv : kEmpty, aad ? *aad : kEmpty);
+    aesEncryptImpl(result, *input, *key, config_, iv, aad);
+    return true;
   }
 
  private:
   template <typename TResult>
-  static Status aesEncryptImpl(
+  static void aesEncryptImpl(
       TResult& result,
       const arg_type<Varbinary>& input,
       const arg_type<Varbinary>& key,
       const detail::CipherConfig& config,
-      const arg_type<Varbinary>& iv,
-      const arg_type<Varbinary>& aad) {
+      const arg_type<Varbinary>* iv,
+      const arg_type<Varbinary>* aad) {
+    VELOX_USER_CHECK(
+        detail::fitsInInt(key.size()),
+        "AES key size {} exceeds the maximum supported by OpenSSL EVP API "
+        "(INT_MAX bytes)",
+        key.size());
+    VELOX_USER_CHECK(
+        detail::fitsInInt(input.size()),
+        "AES input size {} exceeds the maximum supported by OpenSSL EVP API "
+        "(INT_MAX bytes)",
+        input.size());
+    if (aad != nullptr) {
+      VELOX_USER_CHECK(
+          detail::fitsInInt(aad->size()),
+          "AES AAD size {} exceeds the maximum supported by OpenSSL EVP API "
+          "(INT_MAX bytes)",
+          aad->size());
+    }
+
     const auto keyLen = static_cast<int>(key.size());
-    VELOX_USER_RETURN(
-        keyLen != 16 && keyLen != 24 && keyLen != 32,
+    VELOX_USER_CHECK(
+        keyLen == 16 || keyLen == 24 || keyLen == 32,
         "Invalid AES key length: {}. Must be 16, 24, or 32 bytes.",
         keyLen);
 
     if (!config.usePkcs && config.mode != detail::CipherMode::GCM &&
         input.size() % 16 != 0) {
-      return Status::UserError(
-          fmt::format(
-              "Input size must be a multiple of 16 bytes for {} mode with NONE "
-              "padding. Got {} bytes.",
-              detail::CipherModeName::toName(config.mode),
-              input.size()));
+      VELOX_USER_FAIL(
+          "Input size must be a multiple of 16 bytes for {} mode with NONE "
+          "padding. Got {} bytes.",
+          detail::CipherModeName::toName(config.mode),
+          input.size());
     }
 
     const auto* cipher = detail::getCipher(config.mode, keyLen);
     const auto blockSize = EVP_CIPHER_block_size(cipher);
     const auto gcmTagLen = (config.mode == detail::CipherMode::GCM) ? 16 : 0;
-    const auto maxSize =
-        config.ivLen + static_cast<int>(input.size()) + blockSize + gcmTagLen;
+    // All four addends are bounded ints (input.size() already checked above,
+    // ivLen/blockSize/gcmTagLen are tiny constants), so size_t arithmetic
+    // here cannot overflow before the cast.
+    const size_t maxSize = static_cast<size_t>(config.ivLen) + input.size() +
+        static_cast<size_t>(blockSize) + static_cast<size_t>(gcmTagLen);
+    VELOX_USER_CHECK(
+        detail::fitsInInt(maxSize),
+        "AES output size {} exceeds the maximum supported by OpenSSL EVP API "
+        "(INT_MAX bytes)",
+        maxSize);
     result.reserve(maxSize);
 
     // Write IV directly to result buffer.
     if (config.ivLen > 0) {
-      if (iv.size() > 0) {
-        VELOX_USER_RETURN_NE(
-            static_cast<int>(iv.size()), config.ivLen, "Invalid IV length");
-        std::memcpy(result.data(), iv.data(), config.ivLen);
+      if (iv != nullptr && iv->size() > 0) {
+        VELOX_USER_CHECK_EQ(
+            static_cast<int>(iv->size()), config.ivLen, "Invalid IV length");
+        std::memcpy(result.data(), iv->data(), config.ivLen);
       } else {
-        VELOX_USER_RETURN(
+        VELOX_USER_CHECK_EQ(
             RAND_bytes(
-                reinterpret_cast<unsigned char*>(result.data()),
-                config.ivLen) != 1,
+                reinterpret_cast<unsigned char*>(result.data()), config.ivLen),
+            1,
             "Failed to generate random IV");
       }
-    } else if (iv.size() > 0) {
-      return Status::UserError(
-          fmt::format(
-              "IV is not supported for {} mode",
-              detail::CipherModeName::toName(config.mode)));
+    } else if (iv != nullptr && iv->size() > 0) {
+      VELOX_USER_FAIL(
+          "IV is not supported for {} mode",
+          detail::CipherModeName::toName(config.mode));
     }
 
-    if (aad.size() > 0 && !config.supportsAad) {
-      return Status::UserError(
-          fmt::format(
-              "AAD is not supported for {} mode",
-              detail::CipherModeName::toName(config.mode)));
+    if (aad != nullptr && aad->size() > 0 && !config.supportsAad) {
+      VELOX_USER_FAIL(
+          "AAD is not supported for {} mode",
+          detail::CipherModeName::toName(config.mode));
     }
 
     auto* ctx = EVP_CIPHER_CTX_new();
@@ -155,23 +190,26 @@ struct AesEncryptFunction {
 
     if (config.mode == detail::CipherMode::GCM) {
       // GCM requires two-step init: set cipher, set IV length, then key+IV.
-      VELOX_USER_RETURN(
-          EVP_EncryptInit_ex(ctx, cipher, nullptr, nullptr, nullptr) != 1,
+      VELOX_USER_CHECK_EQ(
+          EVP_EncryptInit_ex(ctx, cipher, nullptr, nullptr, nullptr),
+          1,
           "Failed to initialize AES encryption");
-      VELOX_USER_RETURN(
+      VELOX_USER_CHECK_EQ(
           EVP_CIPHER_CTX_ctrl(
-              ctx, EVP_CTRL_GCM_SET_IVLEN, config.ivLen, nullptr) != 1,
+              ctx, EVP_CTRL_GCM_SET_IVLEN, config.ivLen, nullptr),
+          1,
           "Failed to set GCM IV length");
-      VELOX_USER_RETURN(
+      VELOX_USER_CHECK_EQ(
           EVP_EncryptInit_ex(
               ctx,
               nullptr,
               nullptr,
               reinterpret_cast<const unsigned char*>(key.data()),
-              reinterpret_cast<const unsigned char*>(result.data())) != 1,
+              reinterpret_cast<const unsigned char*>(result.data())),
+          1,
           "Failed to initialize AES encryption");
     } else {
-      VELOX_USER_RETURN(
+      VELOX_USER_CHECK_EQ(
           EVP_EncryptInit_ex(
               ctx,
               cipher,
@@ -179,7 +217,8 @@ struct AesEncryptFunction {
               reinterpret_cast<const unsigned char*>(key.data()),
               config.ivLen > 0
                   ? reinterpret_cast<const unsigned char*>(result.data())
-                  : nullptr) != 1,
+                  : nullptr),
+          1,
           "Failed to initialize AES encryption");
     }
 
@@ -187,47 +226,50 @@ struct AesEncryptFunction {
       EVP_CIPHER_CTX_set_padding(ctx, 0);
     }
 
-    if (config.mode == detail::CipherMode::GCM && aad.size() > 0) {
+    if (config.mode == detail::CipherMode::GCM && aad != nullptr &&
+        aad->size() > 0) {
       int aadLen = 0;
-      VELOX_USER_RETURN(
+      VELOX_USER_CHECK_EQ(
           EVP_EncryptUpdate(
               ctx,
               nullptr,
               &aadLen,
-              reinterpret_cast<const unsigned char*>(aad.data()),
-              aad.size()) != 1,
+              reinterpret_cast<const unsigned char*>(aad->data()),
+              static_cast<int>(aad->size())),
+          1,
           "Failed to process AAD");
     }
 
     int outLen = 0;
     auto* outPtr =
         reinterpret_cast<unsigned char*>(result.data()) + config.ivLen;
-    VELOX_USER_RETURN(
+    VELOX_USER_CHECK_EQ(
         EVP_EncryptUpdate(
             ctx,
             outPtr,
             &outLen,
             reinterpret_cast<const unsigned char*>(input.data()),
-            input.size()) != 1,
+            static_cast<int>(input.size())),
+        1,
         "AES encryption failed");
 
     int finalLen = 0;
-    VELOX_USER_RETURN(
-        EVP_EncryptFinal_ex(ctx, outPtr + outLen, &finalLen) != 1,
+    VELOX_USER_CHECK_EQ(
+        EVP_EncryptFinal_ex(ctx, outPtr + outLen, &finalLen),
+        1,
         "AES encryption finalization failed");
 
     auto totalLen = outLen + finalLen;
     if (config.mode == detail::CipherMode::GCM) {
-      VELOX_USER_RETURN(
-          EVP_CIPHER_CTX_ctrl(
-              ctx, EVP_CTRL_GCM_GET_TAG, 16, outPtr + totalLen) != 1,
+      VELOX_USER_CHECK_EQ(
+          EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, 16, outPtr + totalLen),
+          1,
           "Failed to get GCM tag");
       totalLen += 16;
     }
 
     VELOX_DCHECK_LE(config.ivLen + totalLen, maxSize);
     result.resize(config.ivLen + totalLen);
-    return Status::OK();
   }
 
   detail::CipherConfig config_;
@@ -254,7 +296,10 @@ struct AesDecryptFunction {
     config_ = detail::parseModeAndPadding(modeStr, paddingStr);
   }
 
-  FOLLY_ALWAYS_INLINE Status callNullable(
+  // Returns false to signal a NULL output when input or key is NULL.
+  // See AesEncryptFunction::callNullable comment for the bool-vs-Status
+  // rationale.
+  FOLLY_ALWAYS_INLINE bool callNullable(
       out_type<Varbinary>& result,
       const arg_type<Varbinary>* input,
       const arg_type<Varbinary>* key,
@@ -263,28 +308,45 @@ struct AesDecryptFunction {
       const arg_type<Varbinary>* iv,
       const arg_type<Varbinary>* aad) {
     if (input == nullptr || key == nullptr) {
-      return Status::OK();
+      return false;
     }
     if (!config_.error.empty()) {
-      return Status::UserError(config_.error);
+      VELOX_USER_FAIL("{}", config_.error);
     }
-    static const arg_type<Varbinary> kEmpty{};
-    return aesDecryptImpl(
-        result, *input, *key, config_, iv ? *iv : kEmpty, aad ? *aad : kEmpty);
+    aesDecryptImpl(result, *input, *key, config_, iv, aad);
+    return true;
   }
 
  private:
   template <typename TResult>
-  static Status aesDecryptImpl(
+  static void aesDecryptImpl(
       TResult& result,
       const arg_type<Varbinary>& input,
       const arg_type<Varbinary>& key,
       const detail::CipherConfig& config,
-      const arg_type<Varbinary>& iv,
-      const arg_type<Varbinary>& aad) {
+      const arg_type<Varbinary>* iv,
+      const arg_type<Varbinary>* aad) {
+    VELOX_USER_CHECK(
+        detail::fitsInInt(key.size()),
+        "AES key size {} exceeds the maximum supported by OpenSSL EVP API "
+        "(INT_MAX bytes)",
+        key.size());
+    VELOX_USER_CHECK(
+        detail::fitsInInt(input.size()),
+        "AES input size {} exceeds the maximum supported by OpenSSL EVP API "
+        "(INT_MAX bytes)",
+        input.size());
+    if (aad != nullptr) {
+      VELOX_USER_CHECK(
+          detail::fitsInInt(aad->size()),
+          "AES AAD size {} exceeds the maximum supported by OpenSSL EVP API "
+          "(INT_MAX bytes)",
+          aad->size());
+    }
+
     const auto keyLen = static_cast<int>(key.size());
-    VELOX_USER_RETURN(
-        keyLen != 16 && keyLen != 24 && keyLen != 32,
+    VELOX_USER_CHECK(
+        keyLen == 16 || keyLen == 24 || keyLen == 32,
         "Invalid AES key length: {}. Must be 16, 24, or 32 bytes.",
         keyLen);
 
@@ -294,28 +356,28 @@ struct AesDecryptFunction {
     int cipherLen;
 
     if (config.ivLen > 0) {
-      if (iv.size() > 0) {
-        VELOX_USER_RETURN_NE(
-            static_cast<int>(iv.size()), config.ivLen, "Invalid IV length");
-        ivPtr = reinterpret_cast<const unsigned char*>(iv.data());
+      if (iv != nullptr && iv->size() > 0) {
+        VELOX_USER_CHECK_EQ(
+            static_cast<int>(iv->size()), config.ivLen, "Invalid IV length");
+        ivPtr = reinterpret_cast<const unsigned char*>(iv->data());
         cipherData = reinterpret_cast<const unsigned char*>(input.data());
-        cipherLen = input.size();
+        cipherLen = static_cast<int>(input.size());
       } else {
-        VELOX_USER_RETURN_LT(
+        VELOX_USER_CHECK_GE(
             static_cast<int>(input.size()), config.ivLen, "Input too short");
         ivPtr = reinterpret_cast<const unsigned char*>(input.data());
         cipherData =
             reinterpret_cast<const unsigned char*>(input.data()) + config.ivLen;
-        cipherLen = input.size() - config.ivLen;
+        cipherLen = static_cast<int>(input.size()) - config.ivLen;
       }
     } else {
       cipherData = reinterpret_cast<const unsigned char*>(input.data());
-      cipherLen = input.size();
+      cipherLen = static_cast<int>(input.size());
     }
 
     const unsigned char* tag = nullptr;
     if (config.mode == detail::CipherMode::GCM) {
-      VELOX_USER_RETURN_LT(
+      VELOX_USER_CHECK_GE(
           cipherLen, gcmTagLen, "Input too short — missing GCM tag");
       cipherLen -= gcmTagLen;
       tag = cipherData + cipherLen;
@@ -330,36 +392,41 @@ struct AesDecryptFunction {
 
     if (config.mode == detail::CipherMode::GCM) {
       // GCM requires two-step init: set cipher, set IV length, then key+IV.
-      VELOX_USER_RETURN(
-          EVP_DecryptInit_ex(ctx, cipher, nullptr, nullptr, nullptr) != 1,
+      VELOX_USER_CHECK_EQ(
+          EVP_DecryptInit_ex(ctx, cipher, nullptr, nullptr, nullptr),
+          1,
           "Failed to initialize AES decryption");
-      VELOX_USER_RETURN(
+      VELOX_USER_CHECK_EQ(
           EVP_CIPHER_CTX_ctrl(
-              ctx, EVP_CTRL_GCM_SET_IVLEN, config.ivLen, nullptr) != 1,
+              ctx, EVP_CTRL_GCM_SET_IVLEN, config.ivLen, nullptr),
+          1,
           "Failed to set GCM IV length");
-      VELOX_USER_RETURN(
+      VELOX_USER_CHECK_EQ(
           EVP_DecryptInit_ex(
               ctx,
               nullptr,
               nullptr,
               reinterpret_cast<const unsigned char*>(key.data()),
-              ivPtr) != 1,
+              ivPtr),
+          1,
           "Failed to initialize AES decryption");
-      VELOX_USER_RETURN(
+      VELOX_USER_CHECK_EQ(
           EVP_CIPHER_CTX_ctrl(
               ctx,
               EVP_CTRL_GCM_SET_TAG,
               gcmTagLen,
-              const_cast<unsigned char*>(tag)) != 1,
+              const_cast<unsigned char*>(tag)),
+          1,
           "Failed to set GCM tag");
     } else {
-      VELOX_USER_RETURN(
+      VELOX_USER_CHECK_EQ(
           EVP_DecryptInit_ex(
               ctx,
               cipher,
               nullptr,
               reinterpret_cast<const unsigned char*>(key.data()),
-              ivPtr) != 1,
+              ivPtr),
+          1,
           "Failed to initialize AES decryption");
     }
 
@@ -367,41 +434,44 @@ struct AesDecryptFunction {
       EVP_CIPHER_CTX_set_padding(ctx, 0);
     }
 
-    if (config.mode == detail::CipherMode::GCM && aad.size() > 0) {
+    if (config.mode == detail::CipherMode::GCM && aad != nullptr &&
+        aad->size() > 0) {
       int aadLen = 0;
-      VELOX_USER_RETURN(
+      VELOX_USER_CHECK_EQ(
           EVP_DecryptUpdate(
               ctx,
               nullptr,
               &aadLen,
-              reinterpret_cast<const unsigned char*>(aad.data()),
-              aad.size()) != 1,
+              reinterpret_cast<const unsigned char*>(aad->data()),
+              static_cast<int>(aad->size())),
+          1,
           "Failed to process AAD");
     }
 
     const auto maxSize = cipherLen + EVP_CIPHER_block_size(cipher);
     result.reserve(maxSize);
     int outLen = 0;
-    VELOX_USER_RETURN(
+    VELOX_USER_CHECK_EQ(
         EVP_DecryptUpdate(
             ctx,
             reinterpret_cast<unsigned char*>(result.data()),
             &outLen,
             cipherData,
-            cipherLen) != 1,
+            cipherLen),
+        1,
         "AES decryption failed");
 
     int finalLen = 0;
-    VELOX_USER_RETURN(
+    VELOX_USER_CHECK_EQ(
         EVP_DecryptFinal_ex(
             ctx,
             reinterpret_cast<unsigned char*>(result.data()) + outLen,
-            &finalLen) != 1,
+            &finalLen),
+        1,
         "AES decryption failed — invalid key, padding, or authentication tag");
 
     VELOX_DCHECK_LE(outLen + finalLen, maxSize);
     result.resize(outLen + finalLen);
-    return Status::OK();
   }
 
   detail::CipherConfig config_;

@@ -24,6 +24,8 @@ namespace {
 class AesEncryptDecryptTest : public SparkFunctionBaseTest {
  protected:
   // Helper to encrypt with given mode/padding and optional IV/AAD.
+  // When iv/aad is nullopt the SQL argument is a real NULL literal
+  // (not empty bytes), so the C++ callNullable path receives nullptr.
   std::optional<std::string> encrypt(
       const std::optional<std::string>& input,
       const std::optional<std::string>& key,
@@ -31,6 +33,10 @@ class AesEncryptDecryptTest : public SparkFunctionBaseTest {
       const std::string& padding = "DEFAULT",
       const std::optional<std::string>& iv = std::nullopt,
       const std::optional<std::string>& aad = std::nullopt) {
+    const std::string ivExpr =
+        iv.has_value() ? "cast(c2 as varbinary)" : "cast(null as varbinary)";
+    const std::string aadExpr =
+        aad.has_value() ? "cast(c3 as varbinary)" : "cast(null as varbinary)";
     return evaluateOnce<
         std::string,
         std::string,
@@ -38,16 +44,19 @@ class AesEncryptDecryptTest : public SparkFunctionBaseTest {
         std::string,
         std::string>(
         fmt::format(
-            "aes_encrypt(cast(c0 as varbinary), cast(c1 as varbinary), '{}', '{}', cast(c2 as varbinary), cast(c3 as varbinary))",
+            "aes_encrypt(cast(c0 as varbinary), cast(c1 as varbinary), "
+            "'{}', '{}', {}, {})",
             mode,
-            padding),
+            padding,
+            ivExpr,
+            aadExpr),
         input,
         key,
         iv.value_or(""),
         aad.value_or(""));
   }
 
-  // Helper to decrypt.
+  // Helper to decrypt. Same nullopt-as-NULL convention as encrypt().
   std::optional<std::string> decrypt(
       const std::optional<std::string>& input,
       const std::optional<std::string>& key,
@@ -55,6 +64,10 @@ class AesEncryptDecryptTest : public SparkFunctionBaseTest {
       const std::string& padding = "DEFAULT",
       const std::optional<std::string>& iv = std::nullopt,
       const std::optional<std::string>& aad = std::nullopt) {
+    const std::string ivExpr =
+        iv.has_value() ? "cast(c2 as varbinary)" : "cast(null as varbinary)";
+    const std::string aadExpr =
+        aad.has_value() ? "cast(c3 as varbinary)" : "cast(null as varbinary)";
     return evaluateOnce<
         std::string,
         std::string,
@@ -62,9 +75,12 @@ class AesEncryptDecryptTest : public SparkFunctionBaseTest {
         std::string,
         std::string>(
         fmt::format(
-            "aes_decrypt(cast(c0 as varbinary), cast(c1 as varbinary), '{}', '{}', cast(c2 as varbinary), cast(c3 as varbinary))",
+            "aes_decrypt(cast(c0 as varbinary), cast(c1 as varbinary), "
+            "'{}', '{}', {}, {})",
             mode,
-            padding),
+            padding,
+            ivExpr,
+            aadExpr),
         input,
         key,
         iv.value_or(""),
@@ -237,6 +253,27 @@ TEST_F(AesEncryptDecryptTest, nullIvAndAad) {
 TEST_F(AesEncryptDecryptTest, nonePaddingBlockAligned) {
   std::string key16 = "0000111122223333";
   testRoundTrip("0123456789abcdef", key16, "ECB", "NONE");
+}
+
+// SQL NULL input or NULL key must produce NULL output (not garbage).
+// Regression test for the bool-vs-Status callNullable contract: when
+// callNullable returns Status, the framework forces notNull=true and the
+// output buffer is whatever happens to be on the stack. Returning bool
+// fixes this.
+TEST_F(AesEncryptDecryptTest, nullInputOrKey) {
+  const std::string key16 = "0000111122223333";
+
+  // input=NULL, key set → NULL.
+  EXPECT_FALSE(encrypt(std::nullopt, key16, "GCM").has_value());
+  EXPECT_FALSE(decrypt(std::nullopt, key16, "GCM").has_value());
+
+  // input set, key=NULL → NULL.
+  EXPECT_FALSE(encrypt(std::string("Spark"), std::nullopt, "GCM").has_value());
+  EXPECT_FALSE(decrypt(std::string("Spark"), std::nullopt, "GCM").has_value());
+
+  // Both NULL → NULL.
+  EXPECT_FALSE(encrypt(std::nullopt, std::nullopt, "GCM").has_value());
+  EXPECT_FALSE(decrypt(std::nullopt, std::nullopt, "GCM").has_value());
 }
 
 // --- Failure tests ---

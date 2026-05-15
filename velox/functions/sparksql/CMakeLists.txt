@@ -40,6 +40,7 @@ velox_add_library(
   Transform.cpp
   UnscaledValueFunction.cpp
   HEADERS
+  AesEncryptDecrypt.h
   Arena.h
   Arithmetic.h
   ArrayAppend.h
@@ -57,7 +58,6 @@ velox_add_library(
   Comparisons.h
   ConcatWs.h
   DateTimeFunctions.h
-  AesEncryptDecrypt.h
   DecimalArithmetic.h
   DecimalCeil.h
   DecimalUtil.h
