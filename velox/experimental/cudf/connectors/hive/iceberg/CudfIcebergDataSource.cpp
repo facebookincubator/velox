@@ -49,31 +49,34 @@ CudfIcebergDataSource::CudfIcebergDataSource(
 
 void CudfIcebergDataSource::convertSplit(
     std::shared_ptr<velox_connector::ConnectorSplit> split) {
-  // Convert ConnectorSplit to `HiveIcebergSplit`
+  // Convert `ConnectorSplit` to `HiveIcebergSplit`
   icebergSplit_ =
-      std::dynamic_pointer_cast<const velox_iceberg::HiveIcebergSplit>(split);
+      checkedPointerCast<const velox_iceberg::HiveIcebergSplit>(split);
 
-  if (!icebergSplit_) {
-    auto hiveSplit = checkedPointerCast<velox_hive::HiveConnectorSplit>(split);
+  auto hiveSplit = checkedPointerCast<velox_hive::HiveConnectorSplit>(split);
 
-    VELOX_CHECK(
-        hiveSplit->fileFormat == dwio::common::FileFormat::PARQUET,
-        "CudfIcebergDataSource only supports PARQUET format.");
-    icebergSplit_ = std::make_shared<velox_iceberg::HiveIcebergSplit>(
-        hiveSplit->connectorId,
-        hiveSplit->filePath,
-        hiveSplit->fileFormat,
-        hiveSplit->start,
-        hiveSplit->length,
-        hiveSplit->partitionKeys,
-        hiveSplit->tableBucketNumber,
-        hiveSplit->customSplitInfo,
-        hiveSplit->extraFileInfo,
-        hiveSplit->cacheable,
-        std::vector<velox_iceberg::IcebergDeleteFile>{},
-        hiveSplit->infoColumns,
-        hiveSplit->properties);
-  }
+  VELOX_CHECK(
+      hiveSplit->fileFormat == dwio::common::FileFormat::PARQUET,
+      "CudfIcebergDataSource only supports PARQUET format.");
+  VELOX_CHECK(
+      hiveSplit->start == 0 and
+          hiveSplit->length == std::numeric_limits<uint64_t>::max(),
+      "Sub-splits are not yet supported in CudfIcebergDataSource");
+
+  icebergSplit_ = std::make_shared<velox_iceberg::HiveIcebergSplit>(
+      hiveSplit->connectorId,
+      hiveSplit->filePath,
+      hiveSplit->fileFormat,
+      hiveSplit->start,
+      hiveSplit->length,
+      hiveSplit->partitionKeys,
+      hiveSplit->tableBucketNumber,
+      hiveSplit->customSplitInfo,
+      hiveSplit->extraFileInfo,
+      hiveSplit->cacheable,
+      std::vector<velox_iceberg::IcebergDeleteFile>{},
+      hiveSplit->infoColumns,
+      hiveSplit->properties);
 
   VLOG(1) << "Converted split to HiveIcebergSplit: "
           << icebergSplit_->toString();
