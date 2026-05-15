@@ -365,13 +365,15 @@ class TestColumnReader : public testing::TestWithParam<ReaderTestParams>,
   // Helper for SelectiveDecimalColumnReader tests that exercise schema
   // mismatch between the file footer (e.g. Hive ORC's DECIMAL(38, 18))
   // and the requested table-schema type.
-  template <typename DataT>
+  template <typename DataT, size_t kDataSize, size_t kScaleSize>
   void verifyDecimalRequestedType(
-      folly::Range<const unsigned char*> dataBuffer,
-      folly::Range<const unsigned char*> scaleBuffer,
-      const RowTypePtr& fileType,
-      const RowTypePtr& requestedType,
+      const unsigned char (&dataBuffer)[kDataSize],
+      const unsigned char (&scaleBuffer)[kScaleSize],
+      const TypePtr& fileType,
+      const TypePtr& requestedType,
       const std::vector<DataT>& expectedValues) {
+    auto fileRowType = ROW("col_0", fileType);
+    auto requestedRowType = ROW("col_0", requestedType);
     proto::ColumnEncoding directEncoding;
     directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
     EXPECT_CALL(streams_, getEncodingProxy(_))
@@ -384,15 +386,15 @@ class TestColumnReader : public testing::TestWithParam<ReaderTestParams>,
         .WillRepeatedly(Return(nullptr));
 
     EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
-        .WillRepeatedly(Return(new SeekableArrayInputStream(
-            dataBuffer.data(), dataBuffer.size())));
+        .WillRepeatedly(
+            Return(new SeekableArrayInputStream(dataBuffer, kDataSize)));
     EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_NANO_DATA, true))
-        .WillRepeatedly(Return(new SeekableArrayInputStream(
-            scaleBuffer.data(), scaleBuffer.size())));
+        .WillRepeatedly(
+            Return(new SeekableArrayInputStream(scaleBuffer, kScaleSize)));
 
     auto scanSpec = std::make_unique<common::ScanSpec>("root");
-    buildReader(requestedType, fileType, {}, scanSpec.get());
-    VectorPtr batch = newBatch(requestedType);
+    buildReader(requestedRowType, fileRowType, {}, scanSpec.get());
+    VectorPtr batch = newBatch(requestedRowType);
     skipAndRead(batch, /*read=*/expectedValues.size());
 
     auto actual = getOnlyChild<FlatVector<DataT>>(batch);
@@ -402,7 +404,7 @@ class TestColumnReader : public testing::TestWithParam<ReaderTestParams>,
 
     auto* pool = &streams_.getMemoryPool();
     auto expected = BaseVector::create<FlatVector<DataT>>(
-        requestedType->childAt(0), expectedValues.size(), pool);
+        requestedType, expectedValues.size(), pool);
     for (vector_size_t i = 0; i < expectedValues.size(); ++i) {
       expected->set(i, expectedValues[i]);
     }
@@ -4125,90 +4127,52 @@ TEST_P(TestColumnReader, testDecimal128WithSkip) {
       DecimalUtil::toString(intBatch->valueAt(4), decimalType));
 }
 
-// The following tests verify that SelectiveDecimalColumnReader uses
-// requestedType (the metastore/table schema) to determine the target scale,
-// rather than the file-footer scale. See the comment on
-// SelectiveDecimalColumnReader's constructor for the underlying Hive ORC
-// DECIMAL(38, 18) footer behavior these tests cover.
+// Verify that when the file type doesn't match the metastore type,
+// the metastore type wins and data is rescaled accordingly.
 
 // Integer column (per-row scale=0) stored in an ORC file whose footer
 // declares DECIMAL(38, 18), but the metastore says DECIMAL(20, 0). The
 // reader must produce the original integer values without rescaling.
-TEST_P(TestColumnReader, testDecimal128RequestedTypeScaleZero) {
-  // DATA: values 1, 2, 3, 4 as zigzag-encoded varints.
+TEST_P(TestColumnReader, longDecimalRequestedTypeScaleZero) {
   const unsigned char dataBuffer[] = {0x02, 0x04, 0x06, 0x08};
-  // SECONDARY (NANO_DATA): 4 rows with scale=0.
-  // RLEv1 run: ctrl=0x01 (run of 4), delta=0x00, base=zigzag(0)=0x00.
   const unsigned char scaleBuffer[] = {0x01, 0x00, 0x00};
   verifyDecimalRequestedType<int128_t>(
-      folly::Range(dataBuffer, std::size(dataBuffer)),
-      folly::Range(scaleBuffer, std::size(scaleBuffer)),
-      ROW({"col_0"}, {DECIMAL(38, 18)}),
-      ROW({"col_0"}, {DECIMAL(20, 0)}),
-      // Expected: original integers, not multiplied by 10^18.
-      {int128_t{1}, int128_t{2}, int128_t{3}, int128_t{4}});
+      dataBuffer, scaleBuffer, DECIMAL(38, 18), DECIMAL(20, 0), {1, 2, 3, 4});
 }
 
 // Per-row scale (5) already matches the requestedType scale (5); no
 // rescaling expected.
-TEST_P(TestColumnReader, testDecimal128RequestedTypeScaleMatchesData) {
-  // DATA: values 1, 2, 3, 4.
+TEST_P(TestColumnReader, longDecimalRequestedTypeScaleMatchesData) {
   const unsigned char dataBuffer[] = {0x02, 0x04, 0x06, 0x08};
-  // SECONDARY: 4 rows with scale=5. RLEv1 base=zigzag(5)=0x0A.
   const unsigned char scaleBuffer[] = {0x01, 0x00, 0x0A};
   verifyDecimalRequestedType<int128_t>(
-      folly::Range(dataBuffer, std::size(dataBuffer)),
-      folly::Range(scaleBuffer, std::size(scaleBuffer)),
-      ROW({"col_0"}, {DECIMAL(38, 18)}),
-      ROW({"col_0"}, {DECIMAL(25, 5)}),
-      {int128_t{1}, int128_t{2}, int128_t{3}, int128_t{4}});
+      dataBuffer, scaleBuffer, DECIMAL(38, 18), DECIMAL(25, 5), {1, 2, 3, 4});
 }
 
 // Per-row scale (3) is lower than the requestedType scale (5). The reader
 // must upscale by multiplying by 10^(5-3) = 100.
-TEST_P(TestColumnReader, testDecimal128RequestedTypeUpscale) {
+TEST_P(TestColumnReader, longDecimalRequestedTypeUpscale) {
   const unsigned char dataBuffer[] = {0x02, 0x04, 0x06, 0x08};
-  // SECONDARY: scale=3, base=zigzag(3)=0x06.
   const unsigned char scaleBuffer[] = {0x01, 0x00, 0x06};
   verifyDecimalRequestedType<int128_t>(
-      folly::Range(dataBuffer, std::size(dataBuffer)),
-      folly::Range(scaleBuffer, std::size(scaleBuffer)),
-      ROW({"col_0"}, {DECIMAL(38, 18)}),
-      ROW({"col_0"}, {DECIMAL(25, 5)}),
-      {int128_t{100}, int128_t{200}, int128_t{300}, int128_t{400}});
+      dataBuffer,
+      scaleBuffer,
+      DECIMAL(38, 18),
+      DECIMAL(25, 5),
+      {100, 200, 300, 400});
 }
 
 // Short decimal (BIGINT, precision<=18). File declares DECIMAL(12, 5),
 // metastore says DECIMAL(10, 2). Reader must downscale by 10^(5-2)=1000.
-TEST_P(TestColumnReader, testDecimal64RequestedTypeDownscale) {
-  // DATA: values 1000, 2000, 3000, 4000 as zigzag varints.
+TEST_P(TestColumnReader, shortDecimalRequestedTypeDownscale) {
   const unsigned char dataBuffer[] = {
-      0xD0,
-      0x0F, // 1000
-      0xA0,
-      0x1F, // 2000
-      0xF0,
-      0x2E, // 3000
-      0xC0,
-      0x3E, // 4000
-  };
-  // SECONDARY: scale=5, base=zigzag(5)=0x0A.
+      0xD0, 0x0F, 0xA0, 0x1F, 0xF0, 0x2E, 0xC0, 0x3E};
   const unsigned char scaleBuffer[] = {0x01, 0x00, 0x0A};
   verifyDecimalRequestedType<int64_t>(
-      folly::Range(dataBuffer, std::size(dataBuffer)),
-      folly::Range(scaleBuffer, std::size(scaleBuffer)),
-      ROW({"col_0"}, {DECIMAL(12, 5)}),
-      ROW({"col_0"}, {DECIMAL(10, 2)}),
-      {int64_t{1}, int64_t{2}, int64_t{3}, int64_t{4}});
+      dataBuffer, scaleBuffer, DECIMAL(12, 5), DECIMAL(10, 2), {1, 2, 3, 4});
 }
 
-// A non-decimal requestedType against a decimal file column is unsupported
-// and must be rejected when the reader is constructed.
-//
-// SelectiveDwrfReader::build runs the type-compatibility check first, so the
-// schema-mismatch error is raised before the SelectiveDecimalColumnReader
-// constructor's own VELOX_CHECK runs.
-TEST_P(TestColumnReader, testDecimalRequestedTypeBigintRejected) {
+TEST_P(TestColumnReader, decimalRequestedTypeNonDecimalRejected) {
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
   EXPECT_CALL(streams_, getEncodingProxy(_))
@@ -4218,30 +4182,18 @@ TEST_P(TestColumnReader, testDecimalRequestedTypeBigintRejected) {
   EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
 
-  auto fileType = ROW({"col_0"}, {DECIMAL(38, 18)});
-  auto requestedType = ROW({"col_0"}, {BIGINT()});
-  auto scanSpec = std::make_unique<common::ScanSpec>("root");
-  VELOX_ASSERT_THROW(
-      buildReader(requestedType, fileType, {}, scanSpec.get()),
-      "Schema mismatch");
-}
-
-TEST_P(TestColumnReader, testDecimalRequestedTypeDoubleRejected) {
-  proto::ColumnEncoding directEncoding;
-  directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
-      .WillRepeatedly(Return(&directEncoding));
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
-      .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
-      .WillRepeatedly(Return(nullptr));
-
-  auto fileType = ROW({"col_0"}, {DECIMAL(38, 18)});
-  auto requestedType = ROW({"col_0"}, {DOUBLE()});
-  auto scanSpec = std::make_unique<common::ScanSpec>("root");
-  VELOX_ASSERT_THROW(
-      buildReader(requestedType, fileType, {}, scanSpec.get()),
-      "Schema mismatch");
+  auto fileType = ROW("col_0", DECIMAL(38, 18));
+  for (const auto& [nonDecimalType, expectedToKind] :
+       std::vector<std::pair<TypePtr, std::string>>{
+           {BIGINT(), "BIGINT"}, {DOUBLE(), "DOUBLE"}}) {
+    SCOPED_TRACE(nonDecimalType->toString());
+    auto requestedType = ROW("col_0", nonDecimalType);
+    auto scanSpec = std::make_unique<common::ScanSpec>("root");
+    VELOX_ASSERT_THROW(
+        buildReader(requestedType, fileType, {}, scanSpec.get()),
+        std::string("Schema mismatch, From Kind: HUGEINT, To Kind: ") +
+            expectedToKind);
+  }
 }
 
 TEST_P(TestColumnReader, testLargeSkip) {
