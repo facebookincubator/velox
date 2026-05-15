@@ -160,8 +160,8 @@ FileSplitReader::FileSplitReader(
       readerOutputType_(readerOutputType),
       baseReaderOpts_(connectorQueryCtx->memoryPool()),
       emptySplit_(false) {
-  baseReaderOpts_.setDataIoStats(dataIoStats_.get());
-  baseReaderOpts_.setMetadataIoStats(metadataIoStats_.get());
+  baseReaderOpts_.setDataIoStats(dataIoStats_);
+  baseReaderOpts_.setMetadataIoStats(metadataIoStats_);
 }
 
 void FileSplitReader::configureReaderOptions(

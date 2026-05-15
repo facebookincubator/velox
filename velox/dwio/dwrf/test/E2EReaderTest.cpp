@@ -105,8 +105,10 @@ class E2EReaderTest : public testing::TestWithParam<ValueTypes> {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 
-  io::IoStatistics dataIoStats_;
-  io::IoStatistics metadataIoStats_;
+  std::shared_ptr<io::IoStatistics> dataIoStats_{
+      std::make_shared<io::IoStatistics>()};
+  std::shared_ptr<io::IoStatistics> metadataIoStats_{
+      std::make_shared<io::IoStatistics>()};
 };
 } // namespace
 
@@ -179,8 +181,8 @@ TEST_P(E2EReaderTest, SharedDictionaryFlatmapReadAsStruct) {
   writer.reset();
 
   dwio::common::ReaderOptions readerOpts(pool.get());
-  readerOpts.setDataIoStats(&dataIoStats_);
-  readerOpts.setMetadataIoStats(&metadataIoStats_);
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
   auto bufferedInput = std::make_unique<BufferedInput>(
       std::make_shared<LocalReadFile>(path), *pool);
   auto reader = DwrfReader::create(std::move(bufferedInput), readerOpts);

@@ -97,8 +97,8 @@ TEST_F(DirectBufferedInputTest, reset) {
     auto readFile = std::make_shared<InMemoryReadFile>(content);
 
     io::ReaderOptions readerOptions(pool_.get());
-    readerOptions.setDataIoStats(dataIoStats_.get());
-    readerOptions.setMetadataIoStats(metadataIoStats_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
     readerOptions.setLoadQuantum(1 << 20);
 
     auto& ids = fileIds();
@@ -224,8 +224,8 @@ TEST_F(DirectBufferedInputTest, readAfterReset) {
     auto readFile = std::make_shared<InMemoryReadFile>(content);
 
     io::ReaderOptions readerOptions(pool_.get());
-    readerOptions.setDataIoStats(dataIoStats_.get());
-    readerOptions.setMetadataIoStats(metadataIoStats_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
     readerOptions.setLoadQuantum(1 << 20);
 
     auto& ids = fileIds();
@@ -304,8 +304,8 @@ DEBUG_ONLY_TEST_F(DirectBufferedInputTest, resetInputWithBeforeLoading) {
     auto readFile = std::make_shared<InMemoryReadFile>(content);
 
     io::ReaderOptions readerOptions(pool_.get());
-    readerOptions.setDataIoStats(dataIoStats_.get());
-    readerOptions.setMetadataIoStats(metadataIoStats_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
     readerOptions.setLoadQuantum(1 << 20);
 
     auto& ids = fileIds();
@@ -411,8 +411,8 @@ DEBUG_ONLY_TEST_F(DirectBufferedInputTest, resetInputWithAfterLoading) {
     auto readFile = std::make_shared<InMemoryReadFile>(content);
 
     io::ReaderOptions readerOptions(pool_.get());
-    readerOptions.setDataIoStats(dataIoStats_.get());
-    readerOptions.setMetadataIoStats(metadataIoStats_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
     readerOptions.setLoadQuantum(1 << 20);
 
     auto& ids = fileIds();
@@ -504,8 +504,8 @@ TEST_F(DirectBufferedInputTest, preloadCalledTwice) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto& ids = fileIds();
   StringIdLease fileId(ids, "preloadTwice");
   StringIdLease groupId(ids, "preloadTwiceGroup");
@@ -531,8 +531,8 @@ TEST_F(DirectBufferedInputTest, isBufferedWithPreload) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto& ids = fileIds();
   StringIdLease fileId(ids, "isBufferedPreload");
   StringIdLease groupId(ids, "isBufferedPreloadGroup");
@@ -564,8 +564,8 @@ TEST_F(DirectBufferedInputTest, enqueueSkipsRequestsWhenPreloaded) {
   auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto& ids = fileIds();
   StringIdLease fileId(ids, "enqueueSkipsRequests");
   StringIdLease groupId(ids, "enqueueSkipsRequestsGroup");
@@ -610,8 +610,8 @@ TEST_F(DirectBufferedInputTest, preloadAfterEnqueue) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto& ids = fileIds();
   StringIdLease fileId(ids, "preloadAfterEnqueue");
   StringIdLease groupId(ids, "preloadAfterEnqueueGroup");
@@ -637,8 +637,8 @@ TEST_F(DirectBufferedInputTest, preloadedDataWithoutPreload) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto& ids = fileIds();
   StringIdLease fileId(ids, "preloadedDataNoPreload");
   StringIdLease groupId(ids, "preloadedDataNoPreloadGroup");
@@ -663,8 +663,8 @@ TEST_F(DirectBufferedInputTest, preloadedDataOffsetOutOfRange) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto& ids = fileIds();
   StringIdLease fileId(ids, "preloadedDataOOR");
   StringIdLease groupId(ids, "preloadedDataOORGroup");
@@ -712,8 +712,8 @@ TEST_F(DirectBufferedInputTest, preload) {
     auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
 
     io::ReaderOptions readerOptions(pool_.get());
-    readerOptions.setDataIoStats(dataIoStats_.get());
-    readerOptions.setMetadataIoStats(metadataIoStats_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
     readerOptions.setLoadQuantum(1 << 20);
 
     auto& ids = fileIds();
@@ -823,8 +823,8 @@ TEST_F(DirectBufferedInputTest, preloadedData) {
     auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
 
     io::ReaderOptions readerOptions(pool_.get());
-    readerOptions.setDataIoStats(dataIoStats_.get());
-    readerOptions.setMetadataIoStats(metadataIoStats_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
     auto& ids = fileIds();
     StringIdLease fileId(
         ids,
@@ -889,8 +889,8 @@ TEST_F(DirectBufferedInputTest, hasCache) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
 
   auto& ids = fileIds();
   StringIdLease fileId(ids, "testFile");
