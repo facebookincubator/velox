@@ -25,6 +25,13 @@
 #include <cudf/column/column.hpp>
 #include <cudf/table/table.hpp>
 
+#if __has_include(<cudf/column/column_stream.hpp>)
+#include <cudf/column/column_stream.hpp>
+#define VELOX_CUDF_HAS_COLUMN_REBIND_STREAM 1
+#else
+#define VELOX_CUDF_HAS_COLUMN_REBIND_STREAM 0
+#endif
+
 namespace facebook::velox::cudf_velox {
 namespace {
 
@@ -173,6 +180,32 @@ std::unique_ptr<cudf::table> CudfVector::release() {
   // Clear the packed table since we've materialized
   packedPtr.reset();
   return materializedTable;
+}
+
+bool CudfVector::rebindStream(rmm::cuda_stream_view stream) {
+  if (stream_.value() == stream.value()) {
+    return true;
+  }
+
+#if VELOX_CUDF_HAS_COLUMN_REBIND_STREAM
+  if (auto* tablePtr =
+          std::get_if<std::unique_ptr<cudf::table>>(&tableStorage_)) {
+    if (!*tablePtr) {
+      return false;
+    }
+
+    auto columns = (*tablePtr)->release();
+    for (auto& column : columns) {
+      column = cudf::rebind_stream(std::move(*column), stream);
+    }
+
+    *tablePtr = std::make_unique<cudf::table>(std::move(columns));
+    tabView_ = (*tablePtr)->view();
+    stream_ = stream;
+    return true;
+  }
+#endif
+  return false;
 }
 
 uint64_t CudfVector::estimateFlatSize() const {

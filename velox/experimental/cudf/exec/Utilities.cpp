@@ -101,11 +101,7 @@ std::unique_ptr<cudf::table> getConcatenatedTable(
   // the wrong stream.
   auto output = cudf::concatenate(tableViews, stream, mr);
 
-  // Order input deallocations after the concatenate read.
-  // Since memory resources are stream-ordered, deallocations
-  // on inputStreams will be ordered after the concatenate completes.
-  CudaEvent event(cudaEventDisableTiming);
-  streamsWaitForStream(event, inputStreams, stream);
+  orderCudfVectorDeallocationsAfterStream(tables, inputStreams, stream);
   // Input tables are deallocated here when 'tables' goes out of scope.
   return output;
 }
@@ -168,12 +164,7 @@ std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
             stream,
             mr));
   }
-  // Order input deallocations after the concatenate reads by making all input
-  // streams wait for the output stream.
-  // Since memory resources are stream-ordered, deallocations
-  // on inputStreams will be ordered after the concatenate completes.
-  CudaEvent event(cudaEventDisableTiming);
-  streamsWaitForStream(event, inputStreams, stream);
+  orderCudfVectorDeallocationsAfterStream(tables, inputStreams, stream);
 
   // Input tables are deallocated here when 'tables' goes out of scope.
   return outputTables;
@@ -214,6 +205,22 @@ const CudaEvent& CudaEvent::recordFrom(rmm::cuda_stream_view stream) const {
 const CudaEvent& CudaEvent::waitOn(rmm::cuda_stream_view stream) const {
   CUDF_CUDA_TRY(cudaStreamWaitEvent(stream.value(), event_, 0));
   return *this;
+}
+
+void orderCudfVectorDeallocationsAfterStream(
+    const std::vector<CudfVectorPtr>& vectors,
+    const std::vector<rmm::cuda_stream_view>& inputStreams,
+    rmm::cuda_stream_view stream) {
+  bool allRebound = true;
+  for (const auto& vector : vectors) {
+    VELOX_CHECK_NOT_NULL(vector);
+    allRebound &= vector->rebindStream(stream);
+  }
+
+  if (!allRebound) {
+    CudaEvent event(cudaEventDisableTiming);
+    streamsWaitForStream(event, inputStreams, stream);
+  }
 }
 
 } // namespace facebook::velox::cudf_velox
