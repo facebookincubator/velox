@@ -163,6 +163,67 @@ void configureRowReaderOptions(
 
 namespace {
 
+// Parse timestamp partition value and return the Timestamp object.
+// Tries bigint parsing first (with optional precision from columnHandle),
+// then falls back to string parsing (ISO 8601, then PrestoCast).
+Timestamp parseTimestampPartitionValue(
+    const std::string& partitionValue,
+    bool asLocalTime,
+    const std::shared_ptr<const FileColumnHandle>& columnHandle) {
+  // Try to parse as bigint timestamp first.
+  auto bigintResult = folly::tryTo<int64_t>(partitionValue);
+  if (bigintResult.hasValue()) {
+    Timestamp ts;
+    
+    // Check if column handle provides explicit timestamp precision
+    if (columnHandle) {
+      auto precision = columnHandle->getPartitionTimestampPrecision();
+      if (precision.has_value()) {
+        switch (precision.value()) {
+          case TimestampPrecision::kMicroseconds:
+            ts = Timestamp::fromMicros(bigintResult.value());
+            break;
+          case TimestampPrecision::kMilliseconds:
+            ts = Timestamp::fromMillis(bigintResult.value());
+            break;
+          case TimestampPrecision::kNanoseconds:
+            ts = Timestamp::fromNanos(bigintResult.value());
+            break;
+        }
+        return ts;
+      }
+    }
+    
+    // Default behavior: treat as microseconds (Iceberg default)
+    // Note: Traditional Presto/Hive uses string format for timestamp partitions.
+    // Iceberg identity transform stores timestamps as microseconds in UTC.
+    ts = Timestamp::fromMicros(bigintResult.value());
+    return ts;
+  }
+  
+  // Fall back to string parsing - try ISO 8601 first (for Iceberg), then PrestoCast.
+  auto result = util::fromTimestampString(
+      StringView(partitionValue), util::TimestampParseMode::kIso8601);
+  
+  // If ISO 8601 fails, try PrestoCast for backward compatibility.
+  if (result.hasError()) {
+    result = util::fromTimestampString(
+        StringView(partitionValue), util::TimestampParseMode::kPrestoCast);
+  }
+  
+  VELOX_CHECK(
+      !result.hasError(),
+      "Failed to parse TIMESTAMP partition value '{}': {}",
+      partitionValue,
+      result.error().message());
+  
+  if (asLocalTime) {
+    result.value().toGMT(Timestamp::defaultTimezone());
+  }
+  
+  return result.value();
+}
+
 bool applyPartitionFilter(
     const TypePtr& type,
     const std::string& partitionValue,
@@ -197,55 +258,9 @@ bool applyPartitionFilter(
       return applyFilter(*filter, folly::to<bool>(partitionValue));
     }
     case TypeKind::TIMESTAMP: {
-      // Try to parse as bigint timestamp first.
-      auto bigintResult = folly::tryTo<int64_t>(partitionValue);
-      if (bigintResult.hasValue()) {
-        Timestamp ts;
-        
-        // Check if column handle provides explicit timestamp precision
-        if (columnHandle) {
-          auto precision = columnHandle->getPartitionTimestampPrecision();
-          if (precision.has_value()) {
-            switch (precision.value()) {
-              case TimestampPrecision::kMicroseconds:
-                ts = Timestamp::fromMicros(bigintResult.value());
-                break;
-              case TimestampPrecision::kMilliseconds:
-                ts = Timestamp::fromMillis(bigintResult.value());
-                break;
-              case TimestampPrecision::kNanoseconds:
-                ts = Timestamp::fromNanos(bigintResult.value());
-                break;
-            }
-            return applyFilter(*filter, ts);
-          }
-        }
-        
-        // Default behavior: treat as microseconds (for backward compatibility and Iceberg)
-        // Iceberg identity transform stores timestamps as microseconds in UTC.
-        ts = Timestamp::fromMicros(bigintResult.value());
-        return applyFilter(*filter, ts);
-      }
-      
-      // Fall back to string parsing - try ISO 8601 first (for Iceberg), then PrestoCast.
-      auto result = util::fromTimestampString(
-          StringView(partitionValue), util::TimestampParseMode::kIso8601);
-      
-      // If ISO 8601 fails, try PrestoCast for backward compatibility.
-      if (result.hasError()) {
-        result = util::fromTimestampString(
-            StringView(partitionValue), util::TimestampParseMode::kPrestoCast);
-      }
-      
-      VELOX_CHECK(
-          !result.hasError(),
-          "Failed to parse TIMESTAMP partition value '{}': {}",
-          partitionValue,
-          result.error().message());
-      if (asLocalTime) {
-        result.value().toGMT(Timestamp::defaultTimezone());
-      }
-      return applyFilter(*filter, result.value());
+      Timestamp ts = parseTimestampPartitionValue(
+          partitionValue, asLocalTime, columnHandle);
+      return applyFilter(*filter, ts);
     }
     case TypeKind::VARCHAR: {
       return applyFilter(*filter, partitionValue);
