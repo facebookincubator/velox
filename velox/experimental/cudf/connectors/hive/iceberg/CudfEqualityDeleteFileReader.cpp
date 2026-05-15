@@ -126,6 +126,7 @@ CudfEqualityDeleteFileReader::CudfEqualityDeleteFileReader(
           hiveConfig->readTimestampPartitionValueAsLocalTime(
               connectorQueryCtx->sessionProperties()))) {
     runtimeStats.skippedSplitBytes += static_cast<int64_t>(deleteSplit->length);
+    numDeleteKeys_ = 0;
     return;
   }
 

@@ -177,6 +177,9 @@ CudfIcebergSplitReader::readNextChunk(
           cudf::numeric_scalar<bool>(false, true, stream_, get_temp_mr());
       deleteMask_ = cudf::make_column_from_scalar(
           false_scalar, numRows, stream_, get_temp_mr());
+    } else {
+      CHECK_CUDART(cudaMemsetAsync(
+          deleteMask_->mutable_view().data<bool>(), false, numRows, stream_));
     }
 
     // Apply deletion vector
