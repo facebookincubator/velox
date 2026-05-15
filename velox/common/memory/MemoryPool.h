@@ -39,7 +39,6 @@ class ParallelMemoryReclaimer;
 namespace facebook::velox::memory {
 class TestArbitrator;
 class MemoryManager;
-struct CustomMemoryResource;
 
 constexpr int64_t kMaxMemory = std::numeric_limits<int64_t>::max();
 
@@ -166,11 +165,16 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
     /// If non-empty, enables debug mode for the created memory pool.
     std::optional<DebugOptions> debugOptions{std::nullopt};
 
-    /// Custom memory resource this pool belongs to. Non-null means the pool
-    /// routes allocations to this resource's allocator (and arbitrator, if
-    /// set). Null means the default CPU resource. The pool keeps a strong
-    /// reference, so the resource outlives every pool that uses it.
-    std::shared_ptr<CustomMemoryResource> resource{nullptr};
+    /// Allocator override. Non-null routes allocations through this allocator
+    /// instead of the MemoryManager's default. Borrowed; the owner (typically
+    /// a CustomMemoryResource held by the MemoryManager) must outlive the
+    /// pool.
+    MemoryAllocator* customAllocator{nullptr};
+
+    /// Arbitrator override. Non-null routes capacity decisions through this
+    /// arbitrator instead of the MemoryManager's default. Same ownership
+    /// contract as 'customAllocator'.
+    MemoryArbitrator* customArbitrator{nullptr};
   };
 
   /// Constructs a named memory pool with specified 'name', 'parent' and 'kind'.
@@ -349,16 +353,6 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   virtual uint16_t alignment() const {
     return alignment_;
   }
-
-  /// Returns the custom memory resource this pool routes allocations to, or
-  /// nullptr for the default CPU resource.
-  virtual const std::shared_ptr<CustomMemoryResource>& resource() const {
-    return resource_;
-  }
-
-  /// Returns the tag of the custom resource this pool was created against, or
-  /// std::nullopt for the default CPU resource.
-  virtual std::optional<std::string> resourceTag() const;
 
   /// Resource governing methods used to track and limit the memory usage
   /// through this memory pool object.
@@ -623,7 +617,6 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   const bool trackUsage_;
   const bool threadSafe_;
   const std::optional<DebugOptions> debugOptions_;
-  const std::shared_ptr<CustomMemoryResource> resource_;
   const bool coreOnAllocationFailureEnabled_;
   std::function<size_t(size_t)> getPreferredSize_;
 

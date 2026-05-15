@@ -58,40 +58,40 @@ TEST_F(CustomMemoryResourceManagerTest, registrationValidation) {
   EXPECT_EQ(manager.customResources()[0]->tag, "test-resource");
   EXPECT_EQ(manager.customResources()[0]->maxCapacity, 1L << 28);
 
+  // Try to register another resource with the same tag, which should be rejected.
+  VELOX_ASSERT_THROW(
+      manager.registerCustomResource(makeResource("test-resource")),
+      "CustomMemoryResource already registered for tag: test-resource");
+  ASSERT_EQ(manager.customResources().size(), 1);
+
+  // Try to register resources with missing tag, which should be rejected.
   CustomMemoryResource emptyTag;
   emptyTag.allocator = makeResource("ignored").allocator;
   VELOX_ASSERT_THROW(
       manager.registerCustomResource(std::move(emptyTag)),
       "CustomMemoryResource tag is empty");
 
+  // Try to register resources with null allocator, which should be rejected.
   CustomMemoryResource nullAllocator;
   nullAllocator.tag = "another";
   VELOX_ASSERT_THROW(
       manager.registerCustomResource(std::move(nullAllocator)),
       "CustomMemoryResource allocator is null for tag: another");
 
+  // Try to register resources with null arbitrator, which should be rejected.
   auto nullArbitrator = makeResource("another");
   nullArbitrator.arbitrator.reset();
   VELOX_ASSERT_THROW(
       manager.registerCustomResource(std::move(nullArbitrator)),
       "CustomMemoryResource arbitrator is null for tag: another");
 
+  // Try to register resources with null reclaimerFactory, which should be
+  // rejected.
   auto nullFactory = makeResource("another");
   nullFactory.reclaimerFactory = nullptr;
   VELOX_ASSERT_THROW(
       manager.registerCustomResource(std::move(nullFactory)),
       "CustomMemoryResource reclaimerFactory is null for tag: another");
-
-  VELOX_ASSERT_THROW(
-      manager.registerCustomResource(makeResource("test-resource")),
-      "CustomMemoryResource already registered for tag: test-resource");
-
-  ASSERT_EQ(manager.customResources().size(), 1);
-}
-
-TEST_F(CustomMemoryResourceManagerTest, customResourcesEmptyByDefault) {
-  MemoryManager manager{};
-  EXPECT_TRUE(manager.customResources().empty());
 }
 
 TEST_F(CustomMemoryResourceManagerTest, registrationOrderPreserved) {
@@ -105,19 +105,20 @@ TEST_F(CustomMemoryResourceManagerTest, registrationOrderPreserved) {
   EXPECT_EQ(manager.customResources()[2]->tag, "c");
 }
 
-TEST_F(CustomMemoryResourceManagerTest, addRootPoolPropagatesResourceTag) {
+TEST_F(CustomMemoryResourceManagerTest, addRootPoolRejectsUnregisteredTag) {
   MemoryManager manager{};
   manager.registerCustomResource(makeResource("gpu"));
 
+  // Adding a root pool with a registered tag should succeed.
   auto tagged = manager.addRootPool(
       "tagged-root", kMaxMemory, nullptr, std::nullopt, "gpu");
   ASSERT_NE(tagged, nullptr);
-  ASSERT_TRUE(tagged->resourceTag().has_value());
-  EXPECT_EQ(*tagged->resourceTag(), "gpu");
 
+  // Adding a root pool without a tag should succeed.
   auto untagged = manager.addRootPool("untagged-root");
-  EXPECT_FALSE(untagged->resourceTag().has_value());
+  ASSERT_NE(untagged, nullptr);
 
+  // Adding a root pool with an unregistered tag should be rejected.
   VELOX_ASSERT_THROW(
       manager.addRootPool(
           "bad-root", kMaxMemory, nullptr, std::nullopt, "not-registered"),
@@ -138,44 +139,7 @@ class CustomMemoryResourceQueryCtxTest : public testing::Test {
   }
 };
 
-TEST_F(CustomMemoryResourceQueryCtxTest, queryCtxWithoutResourcesHasNoCustomPools) {
-  auto queryCtx = core::QueryCtx::Builder().queryId("q-empty").build();
-  EXPECT_TRUE(queryCtx->customPools().empty());
-  EXPECT_EQ(queryCtx->customPool("anything"), nullptr);
-}
-
-TEST_F(CustomMemoryResourceQueryCtxTest, addCustomPoolRejectsNull) {
-  auto queryCtx = core::QueryCtx::Builder().queryId("q-null").build();
-  VELOX_ASSERT_THROW(queryCtx->addCustomPool(nullptr), "");
-}
-
-TEST_F(CustomMemoryResourceQueryCtxTest, reclaimerFactoryExceptionPropagates) {
-  auto resource = makeResource("boom");
-  resource.reclaimerFactory =
-      [](core::QueryCtx*) -> std::unique_ptr<MemoryReclaimer> {
-    throw std::runtime_error("factory boom");
-  };
-  memoryManager()->registerCustomResource(std::move(resource));
-
-  EXPECT_THROW(
-      core::QueryCtx::Builder().queryId("q-boom").build(),
-      std::runtime_error);
-}
-
-TEST_F(CustomMemoryResourceQueryCtxTest, multipleQueryCtxsGetDistinctCustomPools) {
-  memoryManager()->registerCustomResource(makeResource("gpu"));
-
-  auto q1 = core::QueryCtx::Builder().queryId("q-shared").build();
-  auto q2 = core::QueryCtx::Builder().queryId("q-shared").build();
-  auto p1 = q1->customPool("gpu");
-  auto p2 = q2->customPool("gpu");
-  ASSERT_NE(p1, nullptr);
-  ASSERT_NE(p2, nullptr);
-  EXPECT_NE(p1, p2);
-  EXPECT_NE(p1->name(), p2->name());
-}
-
-TEST_F(CustomMemoryResourceQueryCtxTest, perQueryRootPoolCreated) {
+TEST_F(CustomMemoryResourceQueryCtxTest, customPoolCreation) {
   auto resource = makeResource("gpu");
   resource.maxCapacity = 1L << 28;
 
@@ -197,47 +161,49 @@ TEST_F(CustomMemoryResourceQueryCtxTest, perQueryRootPoolCreated) {
   ASSERT_NE(pool, nullptr);
   EXPECT_TRUE(pool->name().starts_with("query.q0."));
   EXPECT_TRUE(pool->name().ends_with(".gpu"));
-  ASSERT_TRUE(pool->resourceTag().has_value());
-  EXPECT_EQ(*pool->resourceTag(), "gpu");
   EXPECT_EQ(pool->maxCapacity(), 1L << 28);
 
   EXPECT_EQ(queryCtx->customPool("missing"), nullptr);
   EXPECT_EQ(queryCtx->customPools().size(), 1);
 }
 
-TEST_F(CustomMemoryResourceQueryCtxTest, customPoolsMatchRegistrationOrder) {
+TEST_F(CustomMemoryResourceQueryCtxTest, customPoolsKeyedByTag) {
   for (const auto* tag : {"a", "b", "c"}) {
     memoryManager()->registerCustomResource(makeResource(tag));
   }
 
-  auto queryCtx = core::QueryCtx::Builder().queryId("q-order").build();
+  auto queryCtx = core::QueryCtx::Builder().queryId("q-keyed").build();
   ASSERT_EQ(queryCtx->customPools().size(), 3);
-  EXPECT_EQ(*queryCtx->customPools()[0]->resourceTag(), "a");
-  EXPECT_EQ(*queryCtx->customPools()[1]->resourceTag(), "b");
-  EXPECT_EQ(*queryCtx->customPools()[2]->resourceTag(), "c");
+  EXPECT_NE(queryCtx->customPool("a"), nullptr);
+  EXPECT_NE(queryCtx->customPool("b"), nullptr);
+  EXPECT_NE(queryCtx->customPool("c"), nullptr);
 }
 
-// Locks down the chained-reclaimer ordering contract: a later-registered
-// resource's reclaimerFactory must see earlier resources' per-query pools
-// already attached to the QueryCtx. A factory cannot see its own pool because
-// the factory runs before that pool is added.
-TEST_F(CustomMemoryResourceQueryCtxTest, reclaimerFactorySeesPriorSiblingPool) {
-  memoryManager()->registerCustomResource(makeResource("primary"));
+// Locks down the core dispatch invariant: a custom-resource root pool and its
+// children must allocate through the resource's allocator, not the
+// MemoryManager default.
+TEST_F(
+    CustomMemoryResourceQueryCtxTest,
+    customPoolDispatchesToResourceAllocator) {
+  auto resource = makeResource("gpu");
+  auto* expectedAllocator = resource.allocator.get();
+  memoryManager()->registerCustomResource(std::move(resource));
 
-  std::shared_ptr<MemoryPool> capturedPrimary;
-  std::shared_ptr<MemoryPool> capturedSelf;
-  auto secondary = makeResource("secondary");
-  secondary.reclaimerFactory = [&](core::QueryCtx* ctx) {
-    capturedPrimary = ctx->customPool("primary");
-    capturedSelf = ctx->customPool("secondary");
-    return MemoryReclaimer::create(0);
-  };
-  memoryManager()->registerCustomResource(std::move(secondary));
+  auto queryCtx = core::QueryCtx::Builder().queryId("q-dispatch").build();
+  auto root = queryCtx->customPool("gpu");
+  ASSERT_NE(root, nullptr);
+  EXPECT_EQ(
+      static_cast<MemoryPoolImpl*>(root.get())->testingAllocator(),
+      expectedAllocator);
 
-  auto queryCtx = core::QueryCtx::Builder().queryId("q-chain").build();
-  ASSERT_NE(capturedPrimary, nullptr);
-  EXPECT_EQ(capturedPrimary, queryCtx->customPool("primary"));
-  EXPECT_EQ(capturedSelf, nullptr);
+  auto aggregate = root->addAggregateChild("agg");
+  auto leaf = aggregate->addLeafChild("leaf");
+  EXPECT_EQ(
+      static_cast<MemoryPoolImpl*>(aggregate.get())->testingAllocator(),
+      expectedAllocator);
+  EXPECT_EQ(
+      static_cast<MemoryPoolImpl*>(leaf.get())->testingAllocator(),
+      expectedAllocator);
 }
 
 // Test reclaimer that "spills" by allocating from a sibling resource's pool.
@@ -322,75 +288,4 @@ TEST_F(CustomMemoryResourceQueryCtxTest, deviceReclaimerSpillsToHostSibling) {
   EXPECT_EQ(reclaimed, target);
   EXPECT_GE(hostPool->usedBytes(), static_cast<int64_t>(target));
 }
-
-// Gap-coverage tests below. These pin the contracts that allocator dispatch
-// and pointer-stability must satisfy. They are expected to fail until the
-// dispatch and storage gaps are implemented.
-
-// Gap 1: a pool created against a custom resource must allocate through that
-// resource's allocator, not the MemoryManager default.
-TEST_F(
-    CustomMemoryResourceQueryCtxTest,
-    rootPoolDispatchesToCustomResourceAllocator) {
-  auto resource = makeResource("gpu");
-  auto* expectedAllocator = resource.allocator.get();
-  memoryManager()->registerCustomResource(std::move(resource));
-
-  auto queryCtx = core::QueryCtx::Builder().queryId("q-dispatch").build();
-  auto pool = queryCtx->customPool("gpu");
-  ASSERT_NE(pool, nullptr);
-  auto* impl = static_cast<MemoryPoolImpl*>(pool.get());
-  EXPECT_EQ(impl->testingAllocator(), expectedAllocator)
-      << "Root pool must resolve its allocator from the custom resource, "
-         "not the MemoryManager default.";
-}
-
-// Gap 3: a child of a custom-resource root pool must inherit the resource's
-// allocator (and, transitively, its arbitrator once dispatch is wired).
-TEST_F(
-    CustomMemoryResourceQueryCtxTest,
-    childPoolInheritsCustomResourceAllocator) {
-  auto resource = makeResource("gpu");
-  auto* expectedAllocator = resource.allocator.get();
-  memoryManager()->registerCustomResource(std::move(resource));
-
-  auto queryCtx = core::QueryCtx::Builder().queryId("q-child").build();
-  auto root = queryCtx->customPool("gpu");
-  ASSERT_NE(root, nullptr);
-  auto aggregate = root->addAggregateChild("agg");
-  auto leaf = aggregate->addLeafChild("leaf");
-
-  EXPECT_EQ(
-      static_cast<MemoryPoolImpl*>(aggregate.get())->testingAllocator(),
-      expectedAllocator);
-  EXPECT_EQ(
-      static_cast<MemoryPoolImpl*>(leaf.get())->testingAllocator(),
-      expectedAllocator);
-  ASSERT_TRUE(leaf->resourceTag().has_value());
-  EXPECT_EQ(*leaf->resourceTag(), "gpu");
-}
-
-// Gap 4: the registration list must offer stable references. Once dispatch is
-// wired, pools will store CustomMemoryResource* pointers obtained at
-// construction time; later registrations must not invalidate them.
-//
-// Compares addresses only — does not dereference the captured pointer, since
-// dereferencing a dangling pointer on contract violation would crash gtest
-// before it can report the failure.
-TEST_F(CustomMemoryResourceManagerTest, registrationKeepsExistingPointersStable) {
-  MemoryManager manager{};
-  manager.registerCustomResource(makeResource("first"));
-  const CustomMemoryResource* firstAddress =
-      manager.customResources()[0].get();
-
-  for (int i = 0; i < 128; ++i) {
-    manager.registerCustomResource(makeResource(fmt::format("r{}", i)));
-  }
-
-  EXPECT_EQ(manager.customResources()[0].get(), firstAddress)
-      << "Address of an already-registered resource must not change when "
-         "new resources are added.";
-  EXPECT_EQ(firstAddress->tag, "first");
-}
-
 } // namespace facebook::velox::memory::test

@@ -300,16 +300,19 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
   options.getPreferredSize = getPreferredSize_;
   options.debugOptions = poolDebugOpts;
   if (resourceTag.has_value()) {
+    std::shared_ptr<CustomMemoryResource> matched;
     for (const auto& candidate : customResources_) {
       if (candidate->tag == *resourceTag) {
-        options.resource = candidate;
+        matched = candidate;
         break;
       }
     }
     VELOX_USER_CHECK_NOT_NULL(
-        options.resource,
+        matched,
         "No CustomMemoryResource registered for tag: {}",
         *resourceTag);
+    options.customAllocator = matched->allocator.get();
+    options.customArbitrator = matched->arbitrator.get();
   }
 
   auto pool = createRootPool(poolName, reclaimer, options);
