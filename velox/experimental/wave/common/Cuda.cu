@@ -23,6 +23,7 @@
 #include "velox/experimental/wave/common/HashTable.h"
 
 #include <assert.h>
+#include <atomic>
 #include <mutex>
 #include <sstream>
 
@@ -69,7 +70,7 @@ std::string Device::toString() const {
 
 namespace {
 std::mutex ctxMutex;
-bool driverInited = false;
+std::atomic<bool> driverInited{false};
 
 // A context for each device. Each is initialized on first use and made the
 // primary context for the device.
@@ -78,8 +79,8 @@ std::vector<CUcontext> contexts;
 std::vector<std::unique_ptr<Device>> devices;
 
 Device* setDriverDevice(int32_t deviceId) {
+  std::lock_guard<std::mutex> l(ctxMutex);
   if (!driverInited) {
-    std::lock_guard<std::mutex> l(ctxMutex);
     CU_CHECK(cuInit(0));
     int32_t cnt;
     CU_CHECK(cuDeviceGetCount(&cnt));
@@ -97,24 +98,21 @@ Device* setDriverDevice(int32_t deviceId) {
     cuCtxSetCurrent(contexts[deviceId]);
     return devices[deviceId].get();
   }
-  {
-    std::lock_guard<std::mutex> l(ctxMutex);
-    CUdevice dev;
-    CU_CHECK(cuDeviceGet(&dev, deviceId));
-    CU_CHECK(cuDevicePrimaryCtxRetain(&contexts[deviceId], dev));
-    devices[deviceId] = std::make_unique<Device>(deviceId);
-    cudaDeviceProp prop;
-    CUDA_CHECK(cudaGetDeviceProperties(&prop, deviceId));
-    auto& device = devices[deviceId];
-    device->model = prop.name;
-    device->major = prop.major;
-    device->minor = prop.minor;
-    device->globalMB = prop.totalGlobalMem >> 20;
-    device->numSM = prop.multiProcessorCount;
-    device->sharedMemPerSM = prop.sharedMemPerMultiprocessor;
-    device->L2Size = prop.l2CacheSize;
-    device->persistingL2MaxSize = prop.persistingL2CacheMaxSize;
-  }
+  CUdevice dev;
+  CU_CHECK(cuDeviceGet(&dev, deviceId));
+  CU_CHECK(cuDevicePrimaryCtxRetain(&contexts[deviceId], dev));
+  devices[deviceId] = std::make_unique<Device>(deviceId);
+  cudaDeviceProp prop;
+  CUDA_CHECK(cudaGetDeviceProperties(&prop, deviceId));
+  auto& device = devices[deviceId];
+  device->model = prop.name;
+  device->major = prop.major;
+  device->minor = prop.minor;
+  device->globalMB = prop.totalGlobalMem >> 20;
+  device->numSM = prop.multiProcessorCount;
+  device->sharedMemPerSM = prop.sharedMemPerMultiprocessor;
+  device->L2Size = prop.l2CacheSize;
+  device->persistingL2MaxSize = prop.persistingL2CacheMaxSize;
   CU_CHECK(cuCtxSetCurrent(contexts[deviceId]));
   return devices[deviceId].get();
 }
@@ -123,16 +121,15 @@ Device* setDriverDevice(int32_t deviceId) {
 
 Device* currentDevice() {
   CUcontext ctx;
-  CU_CHECK(cuCtxGetCurrent(&ctx));
-  if (!ctx) {
+  if (CUDA_SUCCESS != cuCtxGetCurrent(&ctx) || ctx == nullptr) {
     return nullptr;
   }
+  std::lock_guard<std::mutex> l(ctxMutex);
   for (auto i = 0; i < contexts.size(); ++i) {
     if (contexts[i] == ctx) {
       return devices[i].get();
     }
   }
-  waveError("Device context not found. Inconsistent state.");
   return nullptr;
 }
 
@@ -441,7 +438,7 @@ std::string KernelInfo::toString() const {
   out << "NumRegs=" << numRegs << " maxThreadsPerBlock= " << maxThreadsPerBlock
       << " sharedMemory=" << sharedMemory << " localMemory=" << localMemory
       << " occupancy 256,  0=" << maxOccupancy0
-      << " occupancy 256,32=" << maxOccupancy32;
+      << " occupancy 256,32=" << maxOccupancy32 << " compileMs=" << compileMs;
   return out.str();
 }
 

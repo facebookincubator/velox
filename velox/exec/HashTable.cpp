@@ -22,6 +22,7 @@
 #include "velox/common/process/ProcessBase.h"
 #include "velox/common/process/TraceContext.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/exec/AdaptivePrefetch.h"
 #include "velox/exec/OperatorUtils.h"
 
 using facebook::velox::common::testutil::TestValue;
@@ -815,7 +816,14 @@ bool HashTable<ignoreNullKeys>::hashRows(
     return true;
   }
   if (!initNormalizedKeys && hashMode_ == HashMode::kNormalizedKey) {
-    for (auto i = 0; i < rows.size(); ++i) {
+    // Prefetch row pointers ahead to hide DRAM latency when reading
+    // normalizedKey from random RowContainer arena addresses.
+    const auto numRows = static_cast<int32_t>(rows.size());
+    AdaptivePrefetch prefetch(numRows);
+    for (int32_t i = 0; i < numRows; ++i) {
+      if (auto ahead = prefetch.lookAhead()) {
+        __builtin_prefetch(rows[i + ahead] - sizeof(normalized_key_t));
+      }
       hashes[i] =
           mixNormalizedKey(RowContainer::normalizedKey(rows[i]), sizeBits_);
     }
