@@ -192,25 +192,18 @@ std::shared_ptr<TempFilePath> writeDvFile(const std::string& bitmapData) {
   return tempFile;
 }
 
-// Creates an IcebergDeleteFile for a deletion vector.
+// Creates an IcebergDeleteFile for a deletion vector. Uses the typed
+/// 'contentOffset' / 'contentLength' fields rather than the legacy bounds-map
+/// encoding.
 IcebergDeleteFile makeDvDeleteFile(
     const std::string& filePath,
     uint64_t recordCount,
     uint64_t fileSize,
     uint64_t blobOffset = 0,
     std::optional<uint64_t> blobLength = std::nullopt) {
-  std::unordered_map<int32_t, std::string> lowerBounds;
-  std::unordered_map<int32_t, std::string> upperBounds;
-
-  lowerBounds[DeletionVectorReader::kDvOffsetFieldId] =
-      std::to_string(blobOffset);
-  if (blobLength.has_value()) {
-    upperBounds[DeletionVectorReader::kDvLengthFieldId] =
-        std::to_string(blobLength.value());
-  } else {
-    upperBounds[DeletionVectorReader::kDvLengthFieldId] =
-        std::to_string(fileSize);
-  }
+  const int64_t contentLength = blobLength.has_value()
+      ? static_cast<int64_t>(blobLength.value())
+      : static_cast<int64_t>(fileSize);
 
   return IcebergDeleteFile(
       FileContent::kDeletionVector,
@@ -218,9 +211,12 @@ IcebergDeleteFile makeDvDeleteFile(
       dwio::common::FileFormat::DWRF,
       recordCount,
       fileSize,
-      {},
-      lowerBounds,
-      upperBounds);
+      /*equalityFieldIds=*/{},
+      /*lowerBounds=*/{},
+      /*upperBounds=*/{},
+      /*dataSequenceNumber=*/0,
+      /*contentOffset=*/static_cast<int64_t>(blobOffset),
+      /*contentLength=*/contentLength);
 }
 
 // Extracts which bits are set in a bitmap buffer.

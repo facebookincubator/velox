@@ -24,6 +24,7 @@
 #include "velox/common/testutil/TempFilePath.h"
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 #include "velox/dwio/parquet/writer/arrow/FileWriter.h"
+#include "velox/dwio/parquet/writer/arrow/StringTruncation.h"
 #include "velox/dwio/parquet/writer/arrow/tests/TestUtil.h"
 
 using arrow::default_memory_pool;
@@ -489,8 +490,8 @@ class TestStatistics : public PrimitiveTypedTest<TestType> {
     auto dataIoStats = std::make_shared<velox::io::IoStatistics>();
     auto metadataIoStats = std::make_shared<velox::io::IoStatistics>();
     dwio::common::ReaderOptions readerOptions(leafPool.get());
-    readerOptions.setDataIoStats(dataIoStats.get());
-    readerOptions.setMetadataIoStats(metadataIoStats.get());
+    readerOptions.setDataIoStats(dataIoStats);
+    readerOptions.setMetadataIoStats(metadataIoStats);
     auto input = std::make_unique<dwio::common::BufferedInput>(
         std::make_shared<LocalReadFile>(filePath->getPath()),
         readerOptions.memoryPool());
@@ -1038,8 +1039,8 @@ class TestStatisticsSortOrder : public ::testing::Test {
     auto dataIoStats = std::make_shared<velox::io::IoStatistics>();
     auto metadataIoStats = std::make_shared<velox::io::IoStatistics>();
     dwio::common::ReaderOptions readerOptions(leafPool.get());
-    readerOptions.setDataIoStats(dataIoStats.get());
-    readerOptions.setMetadataIoStats(metadataIoStats.get());
+    readerOptions.setDataIoStats(dataIoStats);
+    readerOptions.setMetadataIoStats(metadataIoStats);
     auto input = std::make_unique<dwio::common::BufferedInput>(
         std::make_shared<LocalReadFile>(filePath->getPath()),
         readerOptions.memoryPool());
@@ -1337,8 +1338,8 @@ TEST_F(TestStatisticsSortOrderFLBA, decimalSortOrder) {
   auto dataIoStats = std::make_shared<velox::io::IoStatistics>();
   auto metadataIoStats = std::make_shared<velox::io::IoStatistics>();
   dwio::common::ReaderOptions readerOptions(leafPool.get());
-  readerOptions.setDataIoStats(dataIoStats.get());
-  readerOptions.setMetadataIoStats(metadataIoStats.get());
+  readerOptions.setDataIoStats(dataIoStats);
+  readerOptions.setMetadataIoStats(metadataIoStats);
   auto input = std::make_unique<dwio::common::BufferedInput>(
       std::make_shared<LocalReadFile>(filePath->getPath()),
       readerOptions.memoryPool());
@@ -2016,6 +2017,41 @@ TEST(IcebergStatistics, byteArrayBoundsUnicode) {
   // "好" (U+597D) incremented becomes U+597E "奾".
   const std::string expectedUpper = "ZZZZ你好你好你好你好你好你奾";
   EXPECT_EQ(*upperBound, expectedUpper);
+}
+
+// Verifies the lower and upper bounds for non-string ByteArray (BINARY /
+// VARBINARY) take a raw-byte prefix and a byte-level round-up rather than
+// going through the UTF-8 paths. Inputs include 0xff bytes that would not
+// form a valid UTF-8 sequence; the lower bound must be a byte-truncation
+// (string_view::substr), and the upper bound must use the binary round-up
+// (which propagates carry on 0xff and yields an exclusive upper bound).
+TEST(IcebergStatistics, byteArrayBoundsBinary) {
+  NodePtr Node = PrimitiveNode::make(
+      "binary_col",
+      Repetition::kRequired,
+      Type::kByteArray,
+      ConvertedType::kNone);
+  ColumnDescriptor descr(Node, 0, 0);
+
+  // Each value is 20 raw bytes, longer than kTruncLen (16). Bytes include
+  // 0xff and other non-ASCII values to ensure UTF-8 parsing would not be
+  // appropriate.
+  const std::string min(20, '\x10');
+  const std::string max = std::string(15, '\xff') + std::string(5, '\x10');
+  auto stats = makeStats(&descr, {min, max});
+
+  ASSERT_TRUE(stats->hasMinMax());
+
+  // Lower bound: raw-byte prefix of 'min' (16 bytes of 0x10).
+  const auto lowerBound = stats->icebergLowerBoundInclusive(kTruncLen);
+  EXPECT_EQ(lowerBound, std::string(16, '\x10'));
+
+  // Upper bound: max truncated to 16 bytes is 15 * 0xff + 1 * 0x10. The
+  // binary round-up walks from the end and increments the first non-0xff
+  // byte (0x10 -> 0x11), then truncates anything past it.
+  const auto upperBound = stats->icebergUpperBoundExclusive(kTruncLen);
+  ASSERT_TRUE(upperBound.has_value());
+  EXPECT_EQ(*upperBound, std::string(15, '\xff') + std::string(1, '\x11'));
 }
 
 TEST(IcebergStatistics, floatBounds) {

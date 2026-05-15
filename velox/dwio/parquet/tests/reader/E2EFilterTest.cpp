@@ -686,8 +686,8 @@ TEST_F(E2EFilterTest, largeMetadata) {
           rowType_, 1000, *leafPool_, nullptr, 0)));
   writeToMemory(rowType_, batches, false);
   dwio::common::ReaderOptions readerOpts(leafPool_.get());
-  readerOpts.setDataIoStats(dataIoStats_.get());
-  readerOpts.setMetadataIoStats(metadataIoStats_.get());
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
   readerOpts.setFooterSpeculativeIoSize(1024);
   readerOpts.setFilePreloadThreshold(1024 * 8);
   dwio::common::RowReaderOptions rowReaderOpts;
@@ -821,8 +821,8 @@ TEST_F(E2EFilterTest, combineRowGroup) {
   }
   writeToMemory(rowType_, batches, false);
   dwio::common::ReaderOptions readerOpts(leafPool_.get());
-  readerOpts.setDataIoStats(dataIoStats_.get());
-  readerOpts.setMetadataIoStats(metadataIoStats_.get());
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
   auto input = std::make_unique<BufferedInput>(
       std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
   auto reader = makeReader(readerOpts, std::move(input));
@@ -880,8 +880,8 @@ TEST_F(E2EFilterTest, parquetMRVersionStringStatsRowGroupFiltering) {
     writer->close();
 
     dwio::common::ReaderOptions readerOptions(leafPool_.get());
-    readerOptions.setDataIoStats(dataIoStats_.get());
-    readerOptions.setMetadataIoStats(metadataIoStats_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
     auto input = std::make_unique<BufferedInput>(
         std::make_shared<InMemoryReadFile>(
             std::string(sinkPtr->data(), sinkPtr->size())),
@@ -938,8 +938,8 @@ TEST_F(E2EFilterTest, writeDecimalAsInteger) {
        makeFlatVector<int128_t>({1, 2}, DECIMAL(19, 2))});
   writeToMemory(rowVector->type(), {rowVector}, false);
   dwio::common::ReaderOptions readerOpts(leafPool_.get());
-  readerOpts.setDataIoStats(dataIoStats_.get());
-  readerOpts.setMetadataIoStats(metadataIoStats_.get());
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
   auto input = std::make_unique<BufferedInput>(
       std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
   auto reader = makeReader(readerOpts, std::move(input));
@@ -965,8 +965,8 @@ TEST_F(E2EFilterTest, configurableWriteSchema) {
 
     writeToMemory(newType, batches, false);
     dwio::common::ReaderOptions readerOpts(leafPool_.get());
-    readerOpts.setDataIoStats(dataIoStats_.get());
-    readerOpts.setMetadataIoStats(metadataIoStats_.get());
+    readerOpts.setDataIoStats(dataIoStats_);
+    readerOpts.setMetadataIoStats(metadataIoStats_);
     auto input = std::make_unique<BufferedInput>(
         std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
     auto reader = makeReader(readerOpts, std::move(input));
