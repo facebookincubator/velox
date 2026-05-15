@@ -20,6 +20,25 @@
 #include "velox/common/config/Config.h"
 
 namespace facebook::velox::core {
+namespace {
+
+void createCustomMemoryPools(QueryCtx* queryCtx) {
+  for (const auto& mr : memory::memoryManager()->customResources()) {
+    auto reclaimer = mr->reclaimerFactory(queryCtx);
+    auto pool = memory::memoryManager()->addRootPool(
+        fmt::format(
+            "{}.{}",
+            QueryCtx::generatePoolName(queryCtx->queryId()),
+            mr->tag),
+        mr->maxCapacity,
+        std::move(reclaimer),
+        std::nullopt,
+        mr->tag);
+    queryCtx->addCustomPool(std::move(pool));
+  }
+}
+
+} // namespace
 
 // static
 std::shared_ptr<QueryCtx> QueryCtx::create(
@@ -56,23 +75,10 @@ std::shared_ptr<QueryCtx> QueryCtx::Builder::build() {
       std::move(tokenProvider_),
       std::move(traceCtxProvider_)));
   queryCtx->maybeSetReclaimer();
-  for (const auto& mr : memory::memoryManager()->customResources()) {
-    auto reclaimer =
-        mr->reclaimerFactory ? mr->reclaimerFactory(queryCtx.get()) : nullptr;
-    auto pool = memory::memoryManager()->addRootPool(
-        fmt::format(
-            "{}.{}",
-            QueryCtx::generatePoolName(queryCtx->queryId()),
-            mr->tag),
-        mr->maxCapacity,
-        std::move(reclaimer),
-        std::nullopt,
-        mr->tag);
-    queryCtx->addCustomPool(std::move(pool));
-  }
   for (auto& cb : releaseCallbacks_) {
     queryCtx->addReleaseCallback(std::move(cb));
   }
+  createCustomMemoryPools(queryCtx.get());
   return queryCtx;
 }
 

@@ -397,6 +397,14 @@ void MemoryManager::registerCustomResource(CustomMemoryResource resource) {
       resource.allocator,
       "CustomMemoryResource allocator is null for tag: {}",
       resource.tag);
+  VELOX_USER_CHECK_NOT_NULL(
+      resource.arbitrator,
+      "CustomMemoryResource arbitrator is null for tag: {}",
+      resource.tag);
+  VELOX_USER_CHECK_NOT_NULL(
+      resource.reclaimerFactory,
+      "CustomMemoryResource reclaimerFactory is null for tag: {}",
+      resource.tag);
   for (const auto& existing : customResources_) {
     VELOX_USER_CHECK_NE(
         existing->tag,
