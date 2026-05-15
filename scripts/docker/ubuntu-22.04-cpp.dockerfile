@@ -18,7 +18,7 @@
 # bundled tzdb code can produce silent 1-hour offsets in TIMESTAMP
 # WITH TIME ZONE values. To bump intentionally: change the default and
 # rebuild locally to confirm before merging.
-ARG UBUNTU_TZDATA_VERSION=2026a-0ubuntu0.22.04.1n
+ARG UBUNTU_TZDATA_VERSION=2026a-0ubuntu0.22.04.1
 
 ARG base=ubuntu:22.04
 FROM ${base}
