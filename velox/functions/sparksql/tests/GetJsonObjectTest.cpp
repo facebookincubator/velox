@@ -235,5 +235,9 @@ TEST_F(GetJsonObjectTest, number) {
       "-1234567890123456789012345678901234567890");
 }
 
+TEST_F(GetJsonObjectTest, incompleteJsonStringValue) {
+  EXPECT_EQ(getJsonObject(R"({"key":")", "$.key"), std::nullopt);
+}
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
