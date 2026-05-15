@@ -16,6 +16,8 @@
 
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
+#include "velox/experimental/cudf/connectors/hive/storage_adapters/CudfDataSourceRegistry.h"
+#include "velox/experimental/cudf/connectors/hive/storage_adapters/abfs/RegisterCudfAbfsDataSource.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -64,6 +66,7 @@ class AbfsReadTest : public ::testing::Test, public test::VectorTestBase {
 
     velox_filesystems::registerLocalFileSystem();
     velox_filesystems::registerAbfsFileSystem();
+    cudf_velox::filesystems::registerCudfAbfsDataSource();
 
     // Force the cudf hive connector to use the BufferedInput data source to
     // read using the upstream AbfsFileSystem instead of KvikIO. Also declare
@@ -89,6 +92,7 @@ class AbfsReadTest : public ::testing::Test, public test::VectorTestBase {
   void TearDown() override {
     connector::ConnectorRegistry::global().erase(kCudfHiveConnectorId);
     cudf_velox::unregisterCudf();
+    cudf_velox::filesystems::unregisterCudfDataSources();
     if (azuriteServer_) {
       azuriteServer_->stop();
       azuriteServer_.reset();
@@ -146,6 +150,24 @@ TEST_F(AbfsReadTest, readAbfsSource) {
 
   auto actual = AssertQueryBuilder(plan).split(split).copyResults(pool());
 
+  assertEqualResults({expectedVector()}, {actual});
+}
+
+// Reads a Parquet file from an ABFS path via the native zero-copy
+// CudfAbfsDataSource, selected by the session property.
+TEST_F(AbfsReadTest, readAbfsSourceNativeDataSource) {
+  const auto abfsFilePath = uploadSourceFile();
+  auto plan = tableScanNode();
+  auto split = makeSplit(abfsFilePath);
+
+  auto actual = AssertQueryBuilder(plan)
+                    .split(split)
+                    .connectorSessionProperty(
+                        kCudfHiveConnectorId,
+                        cudf_velox::connector::hive::CudfHiveConfig::
+                            kUseNativeAbfsDataSourceSession,
+                        "true")
+                    .copyResults(pool());
   assertEqualResults({expectedVector()}, {actual});
 }
 

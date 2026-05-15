@@ -235,6 +235,28 @@ void CudfSplitReader::setupCudfDataSource() {
   const auto useBufferedInput = cudfHiveConfig_->useBufferedInputSession(
       connectorQueryCtx_->sessionProperties());
 
+#ifdef VELOX_ENABLE_ABFS
+  // Native zero-copy ABFS datasource takes precedence when both the session
+  // flag is on and the split is an ABFS path. Falls through to the
+  // BufferedInputDataSource path on miss so misconfiguration never breaks
+  // reads that the buffered path can serve.
+  if (cudfHiveConfig_->useNativeAbfsDataSourceSession(
+          connectorQueryCtx_->sessionProperties()) and
+      isAbfsPath(split_->filePath)) {
+    auto ds = cudf_velox::filesystems::getCudfDataSource(
+        split_->filePath, cudfHiveConfig_->config());
+    if (ds) {
+      dataSource_ = std::move(ds);
+      return;
+    }
+    LOG(WARNING) << fmt::format(
+        "Native CudfAbfsDataSource not registered. Falling back to "
+        "BufferedInputDataSource. Call registerCudfAbfsDataSource() during "
+        "startup to enable the zero-copy path. Path: {}.",
+        split_->filePath);
+  }
+#endif
+
   VELOX_CHECK(
       not isAbfsPath(split_->filePath) or useBufferedInput,
       "ABFS paths require buffered input data source. "
