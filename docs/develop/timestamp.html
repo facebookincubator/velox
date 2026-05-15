@@ -157,6 +157,16 @@ generally more efficient, but std::chrono does not handle time zone offsets
 such as <code class="docutils literal notranslate"><span class="pre">+09:00</span></code>.  Timezone offsets are only supported in the API version
 that takes a timezone ID.</p>
 </section>
+<section id="timezone-database-lookup">
+<h2>Timezone Database Lookup<a class="headerlink" href="#timezone-database-lookup" title="Link to this heading">¶</a></h2>
+<p>Velox uses the IANA Time Zone Database to handle timezone conversions. It looks for the database in the following order:</p>
+<ol class="arabic simple">
+<li><p>The directory specified by the <code class="docutils literal notranslate"><span class="pre">TZDIR</span></code> environment variable.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">/usr/share/zoneinfo/uclibc</span></code> (on Linux).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">/usr/share/zoneinfo</span></code> (on Linux).</p></li>
+<li><p>The path pointed to by <code class="docutils literal notranslate"><span class="pre">/etc/localtime</span></code> (on macOS).</p></li>
+</ol>
+</section>
 <section id="casts">
 <h2>Casts<a class="headerlink" href="#casts" title="Link to this heading">¶</a></h2>
 <p>This section describes examples of timestamp casts following ANSI SQL
@@ -256,6 +266,7 @@ time zone to follow the expected semantic, although non-ANSI SQL compliant.</p>
 <li><a class="reference internal" href="#physical-representation">Physical Representation</a></li>
 <li><a class="reference internal" href="#velox-classes-and-apis">Velox Classes and APIs</a></li>
 <li><a class="reference internal" href="#conversions-across-timezones">Conversions Across Timezones</a></li>
+<li><a class="reference internal" href="#timezone-database-lookup">Timezone Database Lookup</a></li>
 <li><a class="reference internal" href="#casts">Casts</a></li>
 <li><a class="reference internal" href="#presto-cast-legacy-behavior">Presto Cast Legacy Behavior</a></li>
 <li><a class="reference internal" href="#other-resources">Other Resources</a></li>
