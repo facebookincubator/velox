@@ -26,6 +26,9 @@
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/TableHandle.h"
+#ifdef VELOX_ENABLE_ABFS
+#include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h"
+#endif
 
 #include <cudf/io/datasource.hpp>
 #include <cudf/io/experimental/hybrid_scan.hpp>
@@ -44,6 +47,22 @@ namespace facebook::velox::cudf_velox::connector::hive {
 
 using namespace facebook::velox::connector;
 using namespace facebook::velox::connector::hive;
+
+namespace {
+
+// Returns true when `path` uses an ABFS scheme that must be routed through
+// the Velox-backed BufferedInputDataSource. Returns false when ABFS support
+// is compiled out so callers can use this unconditionally.
+bool isAbfsPath(const std::string& path) {
+#ifdef VELOX_ENABLE_ABFS
+  return ::facebook::velox::filesystems::isAbfsFile(path);
+#else
+  (void)path;
+  return false;
+#endif
+}
+
+} // namespace
 
 CudfSplitReader::CudfSplitReader(
     std::shared_ptr<CudfHiveConnectorSplit> split,
@@ -216,6 +235,17 @@ void CudfSplitReader::setupCudfDataSource() {
   // Use file data source if we don't want to use the BufferedInput source
   if (not cudfHiveConfig_->useBufferedInputSession(
           connectorQueryCtx_->sessionProperties())) {
+    // kvikIO does not understand the ABFS scheme; refuse early with a
+    // message that names the config knobs the user must flip.
+    if (isAbfsPath(split_->filePath)) {
+      VELOX_USER_FAIL(
+          "ABFS paths require the Velox-backed buffered input data source. "
+          "Set the session property '{}' (or connector property '{}') to "
+          "'true'. Got path: {}",
+          CudfHiveConfig::kUseBufferedInputSession,
+          CudfHiveConfig::kUseBufferedInput,
+          split_->filePath);
+    }
     VLOG(1) << "Using file data source for CudfSplitReader";
     dataSource_ = std::move(
         cudf::io::make_datasources(cudf::io::source_info{split_->filePath})
@@ -233,6 +263,16 @@ void CudfSplitReader::setupCudfDataSource() {
         fileHandleKey, &fileProperties, ioStats_ ? ioStats_.get() : nullptr);
     VELOX_CHECK_NOT_NULL(fileHandleCachePtr.get());
   } catch (const VeloxRuntimeError& e) {
+    // For ABFS, falling back to kvikIO would silently misroute the read.
+    // Surface the original error instead.
+    if (isAbfsPath(split_->filePath)) {
+      VELOX_USER_FAIL(
+          "Failed to open ABFS file handle for {}: {}. Ensure "
+          "registerAbfsFileSystem() and registerAzureClientProvider() have "
+          "been called and the connector config provides Azure credentials.",
+          split_->filePath,
+          e.what());
+    }
     LOG(WARNING) << fmt::format(
         "Failed to generate file handle cache for file {}, falling back to kvikio data source for CudfSplitReader",
         split_->filePath);
@@ -259,6 +299,14 @@ void CudfSplitReader::setupCudfDataSource() {
           ioStats_,
           executor_);
   if (not bufferedInput) {
+    // ABFS reads must not silently fall back to kvikIO; the registered
+    // BufferedInputBuilder must be ABFS-aware.
+    if (isAbfsPath(split_->filePath)) {
+      VELOX_USER_FAIL(
+          "BufferedInputBuilder returned null for ABFS path: {}. The "
+          "registered BufferedInputBuilder does not support ABFS reads.",
+          split_->filePath);
+    }
     LOG(WARNING) << fmt::format(
         "Failed to create buffered input source for file {}, falling back to kvikio data source for CudfSplitReader",
         split_->filePath);
