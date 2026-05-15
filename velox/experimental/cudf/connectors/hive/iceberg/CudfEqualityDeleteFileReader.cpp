@@ -83,8 +83,9 @@ CudfEqualityDeleteFileReader::CudfEqualityDeleteFileReader(
       0,
       deleteFile.fileSizeInBytes);
 
-  dwio::common::ReaderOptions deleteReaderOpts(
-      pool_, ioStatistics.get(), ioStatistics.get());
+  dwio::common::ReaderOptions deleteReaderOpts(pool_);
+  deleteReaderOpts.setDataIoStats(ioStatistics);
+  deleteReaderOpts.setMetadataIoStats(ioStatistics);
   velox_hive::configureReaderOptions(
       hiveConfig,
       connectorQueryCtx,
