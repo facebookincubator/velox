@@ -29,6 +29,15 @@ add_executable(velox_cudf_interop_test Main.cpp InteropTest.cpp)
 if(VELOX_ENABLE_S3)
   add_executable(velox_cudf_s3_read_test Main.cpp S3ReadTest.cpp)
 endif()
+if(VELOX_ENABLE_ABFS)
+  add_executable(
+    velox_cudf_abfs_read_test
+    Main.cpp
+    AbfsReadTest.cpp
+    CudfAbfsTest.cpp
+    ${CMAKE_SOURCE_DIR}/velox/connectors/hive/storage_adapters/abfs/tests/AzuriteServer.cpp
+  )
+endif()
 add_executable(velox_cudf_subfield_filter_ast_test Main.cpp SubfieldFilterAstTest.cpp)
 add_executable(velox_cudf_table_scan_test Main.cpp TableScanTest.cpp)
 add_executable(velox_cudf_aggregation_selection_test Main.cpp AggregationSelectionTest.cpp)
@@ -139,6 +148,14 @@ if(VELOX_ENABLE_S3)
   )
 endif()
 
+if(VELOX_ENABLE_ABFS)
+  add_test(
+    NAME velox_cudf_abfs_read_test
+    COMMAND velox_cudf_abfs_read_test
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  )
+endif()
+
 add_test(
   NAME velox_cudf_subfield_filter_ast_test
   COMMAND velox_cudf_subfield_filter_ast_test
@@ -225,6 +242,9 @@ set_tests_properties(velox_cudf_order_by_test PROPERTIES LABELS cuda_driver TIME
 set_tests_properties(velox_cudf_interop_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 if(VELOX_ENABLE_S3)
   set_tests_properties(velox_cudf_s3_read_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
+endif()
+if(VELOX_ENABLE_ABFS)
+  set_tests_properties(velox_cudf_abfs_read_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 endif()
 set_tests_properties(velox_cudf_subfield_filter_ast_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 set_tests_properties(velox_cudf_table_scan_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
@@ -403,6 +423,22 @@ if(VELOX_ENABLE_S3)
     gtest
     gtest_main
   )
+endif()
+
+if(VELOX_ENABLE_ABFS)
+  target_link_libraries(
+    velox_cudf_abfs_read_test
+    velox_cudf_exec_test_lib
+    velox_cudf_hive_connector
+    velox_abfs
+    velox_file
+    velox_exec
+    velox_exec_test_lib
+    velox_test_util
+    gtest
+    gtest_main
+  )
+  target_compile_options(velox_cudf_abfs_read_test PRIVATE -Wno-deprecated-declarations)
 endif()
 
 target_link_libraries(
