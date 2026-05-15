@@ -26,7 +26,7 @@ set(CUDF_TEST_DEFAULT_LIBS velox_cudf_exec velox_exec velox_exec_test_lib velox_
 #   )
 #
 # gtest and gtest_main are always appended to LIBS.
-# Default timeout: 3000 seconds
+# Default timeout: 300 seconds
 function(velox_add_cudf_test)
   set(options "")
   set(one_value_args NAME TIMEOUT)
@@ -34,7 +34,7 @@ function(velox_add_cudf_test)
   cmake_parse_arguments(ARG "${options}" "${one_value_args}" "${multi_value_args}" ${ARGN})
 
   if(NOT ARG_TIMEOUT)
-    set(ARG_TIMEOUT 3000)
+    set(ARG_TIMEOUT 300)
   endif()
 
   add_executable(${ARG_NAME} ${ARG_SOURCES})
@@ -71,13 +71,13 @@ velox_add_cudf_test(
   NAME velox_cudf_config_test
   SOURCES Main.cpp ConfigTest.cpp
   LIBS velox_cudf_exec Folly::folly
-  TIMEOUT 300
 )
 
 velox_add_cudf_test(
   NAME velox_cudf_decimal_expression_test
   SOURCES Main.cpp DecimalExpressionTest.cpp
   LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_functions_test_lib
+  TIMEOUT 3000
 )
 
 velox_add_cudf_test(
@@ -102,7 +102,6 @@ velox_add_cudf_test(
   NAME velox_cudf_function_registry_test
   SOURCES Main.cpp FunctionRegistryTest.cpp
   LIBS velox_cudf_expression velox_cudf_exec velox_exec velox_exec_test_lib velox_test_util
-  TIMEOUT 300
 )
 
 velox_add_cudf_test(
