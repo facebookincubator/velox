@@ -27,7 +27,7 @@ by Velox. See details on bundling below.
 | bison             | 3.0.4           | No       ||
 | cmake             | 3.28            | No       ||
 | double-conversion | 3.1.5           | No       ||
-| xsimd             | 10.0.0          | Yes      ||
+| xsimd             | 13.1.0          | Yes      ||
 | re2               | 2024-07-02      | Yes      ||
 | fmt               | 11.2.0          | Yes      | Used API must be fmt 9 compatible |
 | simdjson          | 4.1.0           | Yes      ||
