@@ -61,10 +61,14 @@ void CudfAbfsTest::SetUp() {
   velox_filesystems::registerAbfsFileSystem();
 
   // Force the cudf hive connector down the BufferedInput path so reads route
-  // through the upstream AbfsFileSystem rather than kvikIO.
+  // through the upstream AbfsFileSystem rather than kvikIO. Also declare the
+  // Azurite account's auth type so `registerAzureClientProvider` picks it up
+  // and registers a SharedKey factory for `test.dfs.core.windows.net`.
+  // `AzuriteServer::hiveConfig` itself only sets the shared-key value and the
+  // blob endpoint; the auth-type key has to be provided by the caller.
   auto hiveConfig = azuriteServer_->hiveConfig(
-      {{cudf_velox::connector::hive::CudfHiveConfig::kUseBufferedInput,
-        "true"}});
+      {{cudf_velox::connector::hive::CudfHiveConfig::kUseBufferedInput, "true"},
+       {"fs.azure.account.auth.type.test.dfs.core.windows.net", "SharedKey"}});
 
   velox_filesystems::registerAzureClientProvider(*hiveConfig);
 
