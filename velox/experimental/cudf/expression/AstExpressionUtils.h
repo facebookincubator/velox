@@ -392,7 +392,9 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
       // | Spark  | `remainder`       | Integral types       | `mod`                     |
       // | Spark  | `remainder`       | Floating-point types | `mod`                     |
       // Float input returns double which Velox CPU requires float.
-      return expr->type()->kind() == TypeKind::DOUBLE;
+      return expr->type()->kind() == TypeKind::DOUBLE ||
+          expr->type()->kind() == TypeKind::BIGINT ||
+          expr->type()->kind() == TypeKind::INTEGER;
     }
     return len == 2 &&
         isOpAndInputsSupported(binaryOps.at(name), inputCudfDataTypes);
