@@ -134,7 +134,7 @@ TEST(AzureClientProviderFactoriesTest, registerCustomFactory) {
 
   ASSERT_NO_THROW(
       AzureClientProviderFactories::getClientFactory(
-          "efg", config::ConfigBase({})));
+          abfsPath, config::ConfigBase({})));
   VELOX_ASSERT_THROW(
       AzureClientProviderFactories::getReadFileClient(
           abfsPath, config::ConfigBase({})),
@@ -143,11 +143,16 @@ TEST(AzureClientProviderFactoriesTest, registerCustomFactory) {
       AzureClientProviderFactories::getWriteFileClient(
           abfsPath, config::ConfigBase({})),
       "DummyAzureClientProvider: Not implemented.");
+
+  // Unregistered account on a non-public Azure cloud — the fallback auth-type
+  // key must use the real suffix from the URL, not .dfs.core.windows.net.
+  const auto unregisteredPath =
+      std::make_shared<AbfsPath>("abfs://test@efg2.dfs.core.foobar.net/test");
   VELOX_ASSERT_THROW(
       AzureClientProviderFactories::getClientFactory(
-          "efg2", config::ConfigBase({})),
+          unregisteredPath, config::ConfigBase({})),
       "No AzureClientProviderFactory registered for account 'efg2' and no "
-      "auth type found in config key 'fs.azure.account.auth.type.efg2.dfs.core.windows.net'");
+      "auth type found in config key 'fs.azure.account.auth.type.efg2.dfs.core.foobar.net'");
 }
 
 TEST(

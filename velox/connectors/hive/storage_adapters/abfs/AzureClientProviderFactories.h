@@ -39,11 +39,14 @@ class AzureClientProviderFactories {
       const std::string& account,
       const AzureClientProviderFactory& factory);
 
-  /// Get the registered AzureClientProviderFactory for the specified
-  /// account. If no factory is registered, creates a default provider
-  /// based on the auth type specified in the config.
+  /// Get the registered AzureClientProviderFactory for the account in
+  /// abfsPath. If no factory is registered, creates a default provider based
+  /// on the auth type specified in the config. The registry is keyed by the
+  /// short account name; the config fallback uses the full
+  /// account-name-with-suffix so non-public Azure clouds and custom endpoints
+  /// resolve the correct auth-type key.
   static AzureClientProviderFactory getClientFactory(
-      const std::string& account,
+      const std::shared_ptr<AbfsPath>& abfsPath,
       const config::ConfigBase& config);
 
   /// Returns a factory for the specified auth type from the default

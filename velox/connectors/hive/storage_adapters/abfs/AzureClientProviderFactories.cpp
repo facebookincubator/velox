@@ -81,8 +81,9 @@ AzureClientProviderFactories::getDefaultProviderFactory(
 }
 
 AzureClientProviderFactory AzureClientProviderFactories::getClientFactory(
-    const std::string& account,
+    const std::shared_ptr<AbfsPath>& abfsPath,
     const config::ConfigBase& config) {
+  const auto& account = abfsPath->accountName();
   return azureClientFactoryRegistry().withRLock(
       [&](const auto& factories) -> AzureClientProviderFactory {
         if (auto it = factories.find(account); it != factories.end()) {
@@ -91,11 +92,11 @@ AzureClientProviderFactory AzureClientProviderFactories::getClientFactory(
         LOG(INFO) << "No AzureClientProviderFactory registered for account '"
                   << account << "', creating default provider from config.";
 
-        // Extract auth type from config to avoid capturing non-copyable
-        // ConfigBase. This allows the returned factory to be safely stored and
-        // called later.
+        // Build the auth-type key using the full account-name-with-suffix so
+        // ABFS URLs targeting non-public clouds or custom endpoints resolve
+        // the same key that the provider implementations already use.
         auto authTypeKey = fmt::format(
-            "{}.{}{}", kAzureAccountAuthType, account, kAzureAccountNameSuffix);
+            "{}.{}", kAzureAccountAuthType, abfsPath->accountNameWithSuffix());
         VELOX_USER_CHECK(
             config.valueExists(authTypeKey),
             "No AzureClientProviderFactory registered for account '{}' and no "
@@ -124,7 +125,7 @@ std::unique_ptr<AzureBlobClient>
 AzureClientProviderFactories::getReadFileClient(
     const std::shared_ptr<AbfsPath>& abfsPath,
     const config::ConfigBase& config) {
-  auto factory = getClientFactory(abfsPath->accountName(), config);
+  auto factory = getClientFactory(abfsPath, config);
   return factory(abfsPath->accountName())->getReadFileClient(abfsPath, config);
 }
 
@@ -132,7 +133,7 @@ std::unique_ptr<AzureDataLakeFileClient>
 AzureClientProviderFactories::getWriteFileClient(
     const std::shared_ptr<AbfsPath>& abfsPath,
     const config::ConfigBase& config) {
-  auto factory = getClientFactory(abfsPath->accountName(), config);
+  auto factory = getClientFactory(abfsPath, config);
   return factory(abfsPath->accountName())->getWriteFileClient(abfsPath, config);
 }
 
