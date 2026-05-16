@@ -44,6 +44,7 @@ add_executable(
   FilterTest.cpp
   FromJsonTest.cpp
   FromToJsonRoundTripTest.cpp
+  FormatNumberTest.cpp
   GetArrayStructFieldsTest.cpp
   GetJsonObjectTest.cpp
   GetStructFieldTest.cpp

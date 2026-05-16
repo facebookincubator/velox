@@ -133,6 +133,22 @@ String Functions
         SELECT find_in_set(NULL, ',123'); -- NULL
         SELECT find_in_set("abc", NULL); -- NULL
 
+.. spark:function:: format_number(number, decimalPlaces) -> varchar
+
+   Formats ``number`` with commas as thousands separator, dot as decimal
+   separator, and ``decimalPlaces`` fixed decimal digits using HALF_EVEN
+   (banker's) rounding. Returns NULL if ``decimalPlaces`` is negative.
+
+   Unlike ``CAST(number AS VARCHAR)``, this adds thousands separators and
+   fixed decimal places. Supports tinyint, smallint, integer, bigint, float,
+   and double. ::
+
+        SELECT format_number(12345.678, 2); -- '12,345.68'
+        SELECT format_number(12345, 0); -- '12,345'
+        SELECT format_number(-1234567.89, 1); -- '-1,234,567.9'
+        SELECT format_number(2.5, 0); -- '2' (HALF_EVEN rounds to even)
+        SELECT format_number(123, -1); -- NULL
+
 .. spark:function:: initcap(string) -> varchar
 
    The ``initcap`` function converts the first character of each word to uppercase
