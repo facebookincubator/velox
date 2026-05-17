@@ -15,6 +15,7 @@
  */
 
 #include <cmath>
+#include <limits>
 #include <vector>
 
 #include <fmt/format.h>
@@ -158,6 +159,36 @@ TEST_F(ApproxCountDistinctForIntervalsAggregateTest, relativeSdNonFoldable) {
           {"approx_count_distinct_for_intervals(c0, c1, c2)"},
           {makeRowVector({makeArrayVector<int64_t>({{0}})})}),
       "relativeSD must be constant for approx_count_distinct_for_intervals");
+}
+
+TEST_F(
+    ApproxCountDistinctForIntervalsAggregateTest,
+    emptySelectionDoesNotAccessUnselectedRow) {
+  auto values = makeFlatVector<double>({1.0, 2.0});
+  auto endpoints = makeEndpointsVector<double>(values->size(), {0.0, 3.0});
+  auto data = makeRowVector({values, endpoints});
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .filter("false")
+                  .singleAggregation(
+                      {}, {"approx_count_distinct_for_intervals(c0, c1, 0.05)"})
+                  .planNode();
+
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+  ASSERT_EQ(result->size(), 1);
+  EXPECT_TRUE(result->childAt(0)->isNullAt(0));
+}
+
+TEST_F(ApproxCountDistinctForIntervalsAggregateTest, nanInputsIgnored) {
+  auto values = makeFlatVector<double>(
+      {0.25, std::numeric_limits<double>::quiet_NaN(), 1.25});
+  auto endpoints = makeEndpointsVector<double>(values->size(), {0.0, 1.0, 2.0});
+  auto data = makeRowVector({values, endpoints});
+
+  auto ndvs = runGlobalAggregation(
+      data, "approx_count_distinct_for_intervals(c0, c1, 0.01)", true);
+  checkNdvs(ndvs, {1, 1}, 0.01);
 }
 
 TEST_F(ApproxCountDistinctForIntervalsAggregateTest, mergeEquivalence) {
@@ -335,6 +366,40 @@ TEST_F(ApproxCountDistinctForIntervalsAggregateTest, endpointsDifferentType) {
         data, "approx_count_distinct_for_intervals(c0, c1, 0.01)", true);
     checkNdvs(ndvs, {2, 2}, 0.01);
   }
+}
+
+TEST_F(
+    ApproxCountDistinctForIntervalsAggregateTest,
+    timestampBoundaryAtExactDoubleLimit) {
+  const int64_t baseMicros = (1LL << 53) - 2;
+  auto values = makeFlatVector<Timestamp>(
+      {Timestamp::fromMicros(baseMicros),
+       Timestamp::fromMicros(baseMicros + 1),
+       Timestamp::fromMicros(baseMicros + 2)});
+  auto endpoints = makeEndpointsVector<Timestamp>(
+      values->size(),
+      {Timestamp::fromMicros(baseMicros),
+       Timestamp::fromMicros(baseMicros + 1),
+       Timestamp::fromMicros(baseMicros + 2)});
+  auto data = makeRowVector({values, endpoints});
+
+  auto ndvs = runGlobalAggregation(
+      data, "approx_count_distinct_for_intervals(c0, c1, 0.01)", true);
+  checkNdvs(ndvs, {2, 1}, 0.01);
+}
+
+TEST_F(
+    ApproxCountDistinctForIntervalsAggregateTest,
+    highScaleDecimalBoundaries) {
+  auto decimalType = DECIMAL(38, 18);
+  auto values = makeFlatVector<int128_t>({1, 2, 3}, decimalType);
+  auto endpoints =
+      makeEndpointsVector<int128_t>(values->size(), {1, 2, 3}, decimalType);
+  auto data = makeRowVector({values, endpoints});
+
+  auto ndvs = runGlobalAggregation(
+      data, "approx_count_distinct_for_intervals(c0, c1, 0.01)", true);
+  checkNdvs(ndvs, {2, 1}, 0.01);
 }
 
 TEST_F(

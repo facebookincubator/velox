@@ -52,6 +52,7 @@ velox_link_libraries(
   fmt::fmt
   velox_exec
   velox_expression_functions
+  velox_functions_spark_impl
   velox_aggregates
   velox_vector
 )

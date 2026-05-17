@@ -170,13 +170,14 @@ class ApproxCountDistinctForIntervalsAggregate {
       }
 
       const double inputValue = fn->toDouble(data.value(), fn->inputType_);
+      if (std::isnan(inputValue)) {
+        return false;
+      }
       if (inputValue < fn->endpointsMin_ || inputValue > fn->endpointsMax_) {
         return false;
       }
 
-      const auto intervalIndex = std::isnan(inputValue)
-          ? (fn->intervalCount_ - 1)
-          : fn->findIntervalIndex(inputValue);
+      const auto intervalIndex = fn->findIntervalIndex(inputValue);
       ensureSize(allocator, fn->intervalCount_, fn->indexBitLength_);
       const uint64_t hash = fn->hashValue(data.value(), fn->inputType_);
       hlls[intervalIndex].insertHash(hash);
@@ -494,6 +495,10 @@ class ApproxCountDistinctForIntervalsAggregateAdapter final
         3,
         "approx_count_distinct_for_intervals requires relativeSD");
 
+    if (!rows.hasSelections()) {
+      return;
+    }
+
     const auto firstRow = rows.begin();
 
     DecodedVector decodedEndpoints(*args[1], rows);
@@ -591,7 +596,8 @@ exec::AggregateRegistrationResult registerApproxCountDistinctForIntervals(
           -> std::unique_ptr<exec::Aggregate> {
         VELOX_CHECK(
             argTypes.size() == 1 || argTypes.size() == 3,
-            "{} takes 3 arguments",
+            "{} takes either 3 arguments (raw input) or 1 argument "
+            "(intermediate input)",
             name);
         return std::make_unique<
             ApproxCountDistinctForIntervalsAggregateAdapter>(

@@ -87,8 +87,8 @@ velox_add_library(
   ToPrettyString.h
   UnBase64Function.h
   UnscaledValueFunction.h
-  XxHash64.h
   Uuid.h
+  XxHash64.h
   VarcharTypeWriteSideCheck.h
 )
 

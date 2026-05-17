@@ -15,6 +15,7 @@
  */
 #include "velox/functions/sparksql/Hash.h"
 
+#include <bit>
 #include <cstdint>
 #include <cstring>
 
@@ -537,27 +538,36 @@ void checkArgTypes(const std::vector<exec::VectorFunctionArg>& args) {
 } // namespace
 
 uint64_t XxHash64::hashInt32(int32_t input, uint64_t seed) {
-  int64_t hash = seed + PRIME64_5 + 4L;
-  hash ^= static_cast<int64_t>((input & 0xFFFFFFFFL) * PRIME64_1);
+  uint64_t hash = seed + PRIME64_5 + 4ULL;
+  hash ^= static_cast<uint64_t>(static_cast<uint32_t>(input)) * PRIME64_1;
   hash = bits::rotateLeft64(hash, 23) * PRIME64_2 + PRIME64_3;
   return fmix(hash);
 }
 
 uint64_t XxHash64::hashInt64(int64_t input, uint64_t seed) {
-  int64_t hash = seed + PRIME64_5 + 8L;
-  hash ^= bits::rotateLeft64(input * PRIME64_2, 31) * PRIME64_1;
+  uint64_t hash = seed + PRIME64_5 + 8ULL;
+  hash ^= bits::rotateLeft64(static_cast<uint64_t>(input) * PRIME64_2, 31) *
+      PRIME64_1;
   hash = bits::rotateLeft64(hash, 27) * PRIME64_1 + PRIME64_4;
   return fmix(hash);
 }
 
 uint64_t XxHash64::hashFloat(float input, uint64_t seed) {
-  return hashInt32(
-      input == -0.f ? 0 : *reinterpret_cast<uint32_t*>(&input), seed);
+  const auto rawBits =
+      input == -0.f ? uint32_t{0} : std::bit_cast<uint32_t>(input);
+  uint64_t hash = seed + PRIME64_5 + 4ULL;
+  hash ^= static_cast<uint64_t>(rawBits) * PRIME64_1;
+  hash = bits::rotateLeft64(hash, 23) * PRIME64_2 + PRIME64_3;
+  return fmix(hash);
 }
 
 uint64_t XxHash64::hashDouble(double input, uint64_t seed) {
-  return hashInt64(
-      input == -0. ? 0 : *reinterpret_cast<uint64_t*>(&input), seed);
+  const auto rawBits =
+      input == -0. ? uint64_t{0} : std::bit_cast<uint64_t>(input);
+  uint64_t hash = seed + PRIME64_5 + 8ULL;
+  hash ^= bits::rotateLeft64(rawBits * PRIME64_2, 31) * PRIME64_1;
+  hash = bits::rotateLeft64(hash, 27) * PRIME64_1 + PRIME64_4;
+  return fmix(hash);
 }
 
 uint64_t XxHash64::hashBytes(const StringView& input, uint64_t seed) {
