@@ -48,10 +48,10 @@ class NimbleEncoding {
 
   // Get a string_view of just the encoded data region (excluding prefix)
   std::string_view encodedData() const {
-    return encodingData_.substr(facebook::wave::nimble::Encoding::kPrefixSize);
+    return encodingData_.substr(prefixSize_);
   }
 
-  // Get pointer to the encoded data region (after the 6-byte prefix)
+  // Get pointer to the encoded data region (after the variable-size prefix)
   const char* encodedDataPtr() const {
     return encodedData().data();
   }
@@ -182,6 +182,7 @@ class NimbleEncoding {
   facebook::wave::nimble::EncodingType encodingType_;
   facebook::wave::nimble::DataType dataType_;
   uint32_t numValues_;
+  uint32_t prefixSize_;
   std::vector<std::unique_ptr<NimbleEncoding>> children_;
   void* deviceEncodedData_{nullptr};
   facebook::velox::wave::WaveBufferPtr decodedResultBuffer_;

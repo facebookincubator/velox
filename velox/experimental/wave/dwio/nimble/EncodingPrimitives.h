@@ -132,4 +132,26 @@ inline TReturn peek(const char* pos) {
   return static_cast<TReturn>(*reinterpret_cast<const T*>(pos));
 }
 
+// Read a varint-encoded uint32 from pos, advancing pos past the varint.
+inline uint32_t readVarint32(const char*& pos) {
+  uint32_t value = (*pos) & 127;
+  if (!(*(pos++) & 128)) {
+    return value;
+  }
+  value |= (*pos & 127) << 7;
+  if (!(*(pos++) & 128)) {
+    return value;
+  }
+  value |= (*pos & 127) << 14;
+  if (!(*(pos++) & 128)) {
+    return value;
+  }
+  value |= (*pos & 127) << 21;
+  if (!(*(pos++) & 128)) {
+    return value;
+  }
+  value |= (*(pos++) & 127) << 28;
+  return value;
+}
+
 } // namespace facebook::wave::nimble::encoding
