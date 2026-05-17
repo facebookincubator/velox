@@ -395,7 +395,7 @@ class TestColumnReader : public testing::TestWithParam<ReaderTestParams>,
     auto scanSpec = std::make_unique<common::ScanSpec>("root");
     buildReader(requestedRowType, fileRowType, {}, scanSpec.get());
     VectorPtr batch = newBatch(requestedRowType);
-    skipAndRead(batch, /*read=*/expectedValues.size());
+    skipAndRead(batch, /*readSize=*/expectedValues.size());
 
     auto actual = getOnlyChild<FlatVector<DataT>>(batch);
     ASSERT_EQ(expectedValues.size(), batch->size());
@@ -4183,17 +4183,13 @@ TEST_P(TestColumnReader, decimalRequestedTypeNonDecimalRejected) {
       .WillRepeatedly(Return(nullptr));
 
   auto fileType = ROW("col_0", DECIMAL(38, 18));
-  for (const auto& [nonDecimalType, expectedToKind] :
-       std::vector<std::pair<TypePtr, std::string>>{
-           {BIGINT(), "BIGINT"}, {DOUBLE(), "DOUBLE"}}) {
-    SCOPED_TRACE(nonDecimalType->toString());
-    auto requestedType = ROW("col_0", nonDecimalType);
-    auto scanSpec = std::make_unique<common::ScanSpec>("root");
-    VELOX_ASSERT_THROW(
-        buildReader(requestedType, fileType, {}, scanSpec.get()),
-        std::string("Schema mismatch, From Kind: HUGEINT, To Kind: ") +
-            expectedToKind);
-  }
+  auto scanSpec = std::make_unique<common::ScanSpec>("root");
+  VELOX_ASSERT_THROW(
+      buildReader(ROW("col_0", BIGINT()), fileType, {}, scanSpec.get()),
+      "Schema mismatch, From Kind: HUGEINT, To Kind: BIGINT");
+  VELOX_ASSERT_THROW(
+      buildReader(ROW("col_0", DOUBLE()), fileType, {}, scanSpec.get()),
+      "Schema mismatch, From Kind: HUGEINT, To Kind: DOUBLE");
 }
 
 TEST_P(TestColumnReader, testLargeSkip) {
