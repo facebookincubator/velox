@@ -61,20 +61,32 @@ std::vector<int16_t> excludeProblematicTimeZoneIds(
 
 bool roundTripsThroughPrestoQueryRunnerTransform(
     int64_t timestampWithTimeZone) {
-  static const auto formatter =
-      functions::buildJodaDateTimeFormatter("yyyy-MM-dd HH:mm:ss.SSS ZZZ")
+  static const auto timestampFormatter =
+      functions::buildJodaDateTimeFormatter("yyyy-MM-dd HH:mm:ss.SSS ZZ")
           .value();
+  static const auto zoneFormatter =
+      functions::buildJodaDateTimeFormatter("ZZZ").value();
 
-  const auto input =
-      TIMESTAMP_WITH_TIME_ZONE()->valueToString(timestampWithTimeZone);
-  auto parsed = formatter->parse(input);
+  const auto timestamp = unpackTimestampUtc(timestampWithTimeZone);
+  const auto* timeZone = tz::locateZone(unpackZoneKeyId(timestampWithTimeZone));
+
+  std::string timestampText(timestampFormatter->maxResultSize(timeZone), '\0');
+  timestampText.resize(timestampFormatter->format(
+      timestamp, timeZone, timestampText.size(), timestampText.data()));
+
+  std::string zoneText(zoneFormatter->maxResultSize(timeZone), '\0');
+  zoneText.resize(zoneFormatter->format(
+      timestamp, timeZone, zoneText.size(), zoneText.data()));
+
+  auto parsed = timestampFormatter->parse(timestampText);
   if (parsed.hasError() || parsed->timezone == nullptr) {
     return false;
   }
 
-  auto timestamp = parsed->timestamp;
-  timestamp.toGMT(*parsed->timezone);
-  return pack(timestamp, parsed->timezone->id()) == timestampWithTimeZone;
+  auto parsedTimestamp = parsed->timestamp;
+  parsedTimestamp.toGMT(*parsed->timezone);
+  return pack(parsedTimestamp, tz::getTimeZoneID(zoneText)) ==
+      timestampWithTimeZone;
 }
 } // namespace
 
@@ -99,10 +111,9 @@ variant TimestampWithTimeZoneInputGenerator::generate() {
     auto value =
         pack(rand<int64_t>(rng_, kMinMillisUtc, kMaxMillisUtc), timeZoneId);
 
-    // Presto query runner round-trips this type through
-    // valueToString("... ZZZ") and parse_datetime(...). Reject values that
-    // land on DST-ambiguous local timestamps because they parse back to a
-    // different instant.
+    // Presto query runner transports this type as
+    // (format_datetime(..., ZZ), format_datetime(..., ZZZ)) and reconstructs
+    // it with parse_datetime(..., ZZ) plus at_timezone(..., zone).
     if (roundTripsThroughPrestoQueryRunnerTransform(value)) {
       return value;
     }
