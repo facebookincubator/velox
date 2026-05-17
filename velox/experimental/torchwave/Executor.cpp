@@ -1,0 +1,445 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "velox/experimental/torchwave/Executor.h"
+
+#include <ATen/ATen.h>
+#include <gflags/gflags.h>
+#include <folly/ScopeGuard.h>
+#include <chrono>
+#include <iostream>
+#include "velox/experimental/torchwave/WaveConfig.h"
+#include "velox/experimental/wave/common/Cuda.h"
+#include "velox/experimental/wave/common/GpuArena.h"
+
+DEFINE_bool(print_timing, false, "Print timing for wave graph execution");
+
+namespace torch::wave {
+
+namespace {
+
+struct GlobalResources {
+  std::unique_ptr<facebook::velox::wave::GpuArena> deviceArena;
+  std::unique_ptr<facebook::velox::wave::GpuArena> pinnedArena;
+  std::unique_ptr<facebook::velox::wave::GpuArena> managedArena;
+  std::unique_ptr<StreamPool> streamPool;
+  std::unique_ptr<EventPool> eventPool;
+};
+
+GlobalResources* globals() {
+  static GlobalResources instance;
+  return &instance;
+}
+
+bool initialized = false;
+
+int64_t storageExtentBytes(const at::Tensor& t) {
+  if (t.numel() == 0) {
+    return 0;
+  }
+  int64_t maxOffset = 0;
+  for (int64_t d = 0; d < t.dim(); d++) {
+    if (t.size(d) > 1) {
+      maxOffset += (t.size(d) - 1) * t.stride(d);
+    }
+  }
+  return (maxOffset + 1) * t.element_size();
+}
+
+} // namespace
+
+void initialize() {
+  if (initialized) {
+    return;
+  }
+  initialized = true;
+  registerBuiltins();
+  facebook::velox::wave::Device* device = nullptr;
+  try {
+    device = facebook::velox::wave::getDevice();
+  } catch (...) {
+    return;
+  }
+  if (!device) {
+    return;
+  }
+  facebook::velox::wave::setDevice(device);
+  auto* g = globals();
+  g->deviceArena = std::make_unique<facebook::velox::wave::GpuArena>(
+      100'000'000,
+      facebook::velox::wave::getDeviceAllocator(device),
+      400'000'000);
+  g->pinnedArena = std::make_unique<facebook::velox::wave::GpuArena>(
+      100'000'000, facebook::velox::wave::getHostAllocator(device));
+  g->managedArena = std::make_unique<facebook::velox::wave::GpuArena>(
+      100'000'000, facebook::velox::wave::getAllocator(device));
+  g->streamPool = std::make_unique<StreamPool>(
+      []() { return std::make_unique<facebook::velox::wave::Stream>(); });
+  g->eventPool = std::make_unique<EventPool>(
+      []() { return std::make_unique<facebook::velox::wave::Event>(); });
+}
+
+void tensorsToDevice(
+    const std::vector<at::Tensor>& in,
+    std::vector<at::Tensor>& out,
+    facebook::velox::wave::Stream& stream) {
+  auto deviceId = facebook::velox::wave::currentDevice()->deviceId;
+  auto device = c10::Device(c10::kCUDA, deviceId);
+
+  // Compute total storage bytes needed. For non-contiguous tensors, the storage
+  // extent (first to last element) can exceed numel * element_size.
+  int64_t totalBytes = 0;
+  std::vector<int64_t> sizes(in.size());
+  for (size_t i = 0; i < in.size(); ++i) {
+    sizes[i] = storageExtentBytes(in[i]);
+    totalBytes += sizes[i];
+  }
+
+  // Allocate contiguous pinned host buffer and copy tensor data into it.
+  auto pinned = at::empty(
+      {totalBytes}, at::TensorOptions().dtype(at::kByte).pinned_memory(true));
+  auto* pinnedBase = pinned.data_ptr<uint8_t>();
+  int64_t offset = 0;
+  for (size_t i = 0; i < in.size(); ++i) {
+    memcpy(pinnedBase + offset, in[i].data_ptr(), sizes[i]);
+    offset += sizes[i];
+  }
+
+  // Allocate device storage and async copy, preserving original strides.
+  out.resize(in.size());
+  offset = 0;
+  for (size_t i = 0; i < in.size(); ++i) {
+    int64_t numElements = sizes[i] / in[i].element_size();
+    auto deviceFlat = at::empty({numElements}, in[i].options().device(device));
+    stream.hostToDeviceAsync(
+        deviceFlat.data_ptr(), pinnedBase + offset, sizes[i]);
+    out[i] = deviceFlat.as_strided(in[i].sizes(), in[i].strides());
+    offset += sizes[i];
+  }
+
+  // Wait for copies to complete before the pinned buffer goes out of scope.
+  stream.wait();
+}
+
+void tensorsToHost(
+    const std::vector<at::Tensor>& in,
+    std::vector<at::Tensor>& out,
+    facebook::velox::wave::Stream& stream) {
+  int64_t totalBytes = 0;
+  std::vector<int64_t> sizes(in.size());
+  for (size_t i = 0; i < in.size(); ++i) {
+    sizes[i] = storageExtentBytes(in[i]);
+    totalBytes += sizes[i];
+  }
+
+  auto* g = globals();
+
+  // Allocate contiguous pinned host buffer.
+  auto pinnedBuffer = g->pinnedArena->allocateBytes(totalBytes);
+  auto* pinnedBase = pinnedBuffer->as<uint8_t>();
+
+  // Gather device pointers for a single D2H copy.
+  // All input tensors are assumed contiguous in device memory only if they came
+  // from tensorsToDevice. In general, copy each tensor individually.
+  int64_t offset = 0;
+  for (size_t i = 0; i < in.size(); ++i) {
+    stream.deviceToHostAsync(pinnedBase + offset, in[i].data_ptr(), sizes[i]);
+    offset += sizes[i];
+  }
+
+  // Build output tensors backed by the pinned buffer.
+  out.resize(in.size());
+  offset = 0;
+  for (size_t i = 0; i < in.size(); ++i) {
+    auto ref = new facebook::velox::wave::WaveBufferPtr(pinnedBuffer);
+    auto storage = c10::Storage(
+        c10::Storage::use_byte_size_t(),
+        sizes[i],
+        at::DataPtr(
+            pinnedBase + offset,
+            ref,
+            [](void* ctx) {
+              delete static_cast<facebook::velox::wave::WaveBufferPtr*>(ctx);
+            },
+            c10::Device(c10::kCPU)));
+    out[i] = at::empty({0}, in[i].options().device(c10::kCPU))
+                 .set_(std::move(storage), 0, in[i].sizes(), in[i].strides());
+    offset += sizes[i];
+  }
+}
+
+void runStandalones(
+    const std::vector<LaunchData>& standalones,
+    ExecutionState& state,
+    const std::unordered_map<NodeCP, nativert::OpKernel*>& kernelMap,
+    const std::unordered_map<NodeCP, int32_t>& standaloneIndices,
+    std::vector<StandaloneStats>& standaloneStats) {
+  using Clock = std::chrono::high_resolution_clock;
+  auto trace = WaveConfig::get().trace;
+  for (const auto& data : standalones) {
+    auto* actualNode = data.standalone;
+
+    auto kernelIt = kernelMap.find(actualNode);
+    TORCH_CHECK(
+        kernelIt != kernelMap.end(),
+        "No kernel for node ",
+        actualNode->target());
+
+    if (trace) {
+      std::cout << "  standalone " << actualNode->target() << std::endl;
+    }
+    auto start = Clock::now();
+    kernelIt->second->compute(*state.frame);
+    auto us = std::chrono::duration_cast<std::chrono::microseconds>(
+                  Clock::now() - start)
+                  .count();
+    if (trace & WaveConfig::kFrame) {
+      for (auto outputId : data.actualOutputs) {
+        const auto& iv = state.frame->getIValue(outputId);
+        std::cout << "    v" << outputId << " = " << traceIValue(iv)
+                  << std::endl;
+      }
+    }
+
+    auto idxIt = standaloneIndices.find(actualNode);
+    if (idxIt != standaloneIndices.end()) {
+      standaloneStats[idxIt->second].micros += us;
+    }
+  }
+}
+
+WaveGraphExecutor::WaveGraphExecutor(
+    nativert::Graph& graph,
+    std::vector<std::unique_ptr<nativert::OpKernel>> nodeKernels,
+    const nativert::ExecutorConfig& executorConfig,
+    std::shared_ptr<nativert::Weights> weights)
+    : GraphExecutorBase(graph, std::move(nodeKernels), executorConfig),
+      weights_(std::move(weights)) {
+  for (auto& k : nodeKernels_) {
+    kernelMap_[k->node()] = k.get();
+  }
+  ValueTypes valueTypes;
+  initValueTypes(graph_, valueTypes, metaStore_);
+  waveGraph_ = std::make_unique<WaveGraph>(graph, std::move(valueTypes));
+  framePool_ = std::make_unique<Pool<nativert::ExecutionFrame>>(
+      [this]() { return makeDeviceFrame(); });
+}
+
+std::unique_ptr<nativert::ExecutionFrame> WaveGraphExecutor::makeFrame() {
+  return std::make_unique<nativert::ExecutionFrame>(
+      graph_, *weights_, executorConfig_);
+}
+
+std::unique_ptr<nativert::ExecutionFrame> WaveGraphExecutor::makeDeviceFrame() {
+  auto frame = makeFrame();
+
+  // Collect all persistent tensor values and their ids.
+  auto persistentValues =
+      nativert::ExecutionFrame::getPersistentValues(graph_, weights_.get());
+  std::vector<nativert::ValueId> tensorIds;
+  std::vector<at::Tensor> hostTensors;
+  for (auto& [id, iv] : persistentValues) {
+    if (iv.isTensor()) {
+      tensorIds.push_back(id);
+      hostTensors.push_back(iv.toTensor());
+    }
+  }
+
+  if (!hostTensors.empty()) {
+    auto stream = globals()->streamPool->get();
+    std::vector<at::Tensor> deviceTensors;
+    tensorsToDevice(hostTensors, deviceTensors, *stream);
+    stream->wait();
+    globals()->streamPool->put(std::move(stream));
+
+    for (size_t i = 0; i < tensorIds.size(); ++i) {
+      frame->setIValue(tensorIds[i], c10::IValue(std::move(deviceTensors[i])));
+    }
+  }
+
+  return frame;
+}
+
+std::unique_ptr<nativert::ExecutionFrame> WaveGraphExecutor::getFrame() {
+  return framePool_->get();
+}
+
+void WaveGraphExecutor::returnFrame(
+    std::unique_ptr<nativert::ExecutionFrame> frame) {
+  frame->clearNonPersistentValues();
+  framePool_->put(std::move(frame));
+}
+
+std::vector<c10::IValue> WaveGraphExecutor::execute(
+    nativert::ExecutionFrame& /*frame*/,
+    std::vector<c10::IValue> inputs) {
+  auto pooledFrame = getFrame();
+  fillUserInputs(*pooledFrame, std::move(inputs));
+  auto outputs = executeWithPrefilledFrame(*pooledFrame);
+  returnFrame(std::move(pooledFrame));
+  return outputs;
+}
+
+std::vector<c10::IValue> WaveGraphExecutor::executeWithPrefilledFrame(
+    nativert::ExecutionFrame& frame) {
+  // Move any user input tensors that are not on device to device.
+  const auto& userInputs = graph_.signature().userInputs();
+  std::vector<nativert::ValueId> tensorIds;
+  std::vector<at::Tensor> hostTensors;
+  for (const auto& name : userInputs) {
+    auto* value = graph_.tryGetValue(name);
+    if (!value) {
+      continue;
+    }
+    const auto& ivalue = frame.getIValue(value->id());
+    if (ivalue.isTensor() && !ivalue.toTensor().is_cuda()) {
+      tensorIds.push_back(value->id());
+      hostTensors.push_back(ivalue.toTensor());
+    }
+  }
+
+  if (!hostTensors.empty()) {
+    auto stream = globals()->streamPool->get();
+    std::vector<at::Tensor> deviceTensors;
+    tensorsToDevice(hostTensors, deviceTensors, *stream);
+    stream->wait();
+    globals()->streamPool->put(std::move(stream));
+
+    for (size_t i = 0; i < tensorIds.size(); ++i) {
+      frame.setIValue(tensorIds[i], c10::IValue(std::move(deviceTensors[i])));
+    }
+  }
+
+  executeWave(frame, *waveGraph_);
+  if (WaveConfig::get().trace & WaveConfig::kTensors) {
+    for (auto* value : graph_.outputs()) {
+      const auto& iv = frame.getIValue(value->id());
+      std::cout << "  output v" << value->id() << " " << traceIValue(iv)
+                << std::endl;
+    }
+  }
+  // tryMoveUserOutputs moves the output IValues out of the frame, decoupling
+  // them so the frame can be safely returned to the pool.
+  auto results = frame.tryMoveUserOutputs();
+  // Fix up outputs that the graph recorded as Constant(None) but that have
+  // a computed tensor in the frame (e.g. dynamic-shape outputs).
+  auto outputValues = graph_.outputs();
+  for (size_t i = 0; i < results.size() && i < outputValues.size(); ++i) {
+    if (results[i].isNone()) {
+      const auto& iv = frame.getIValue(outputValues[i]->id());
+      if (!iv.isNone()) {
+        results[i] = iv;
+      }
+    }
+  }
+  return results;
+}
+
+void WaveGraphExecutor::executeWave(
+    nativert::ExecutionFrame& frame,
+    WaveGraph& waveGraph) {
+  // Ensure the thread's CUDA device is set for tensor allocation.
+  auto* waveDevice = facebook::velox::wave::currentDevice();
+  if (!waveDevice) {
+    waveDevice = facebook::velox::wave::getDevice();
+  }
+  facebook::velox::wave::setDevice(waveDevice);
+
+  auto*& threadWaveGraph = torch::wave::waveGraph();
+  auto* prevWaveGraph = threadWaveGraph;
+  if (!prevWaveGraph) {
+    threadWaveGraph = &waveGraph;
+  }
+  SCOPE_EXIT {
+    threadWaveGraph = prevWaveGraph;
+  };
+
+  Timer w("top exec", FLAGS_print_timing);
+  auto* g = globals();
+  launchDebugInfos_.clear();
+
+  // Get a reusable ExecutionState from the pool.
+  auto statePtr = waveGraph.getState();
+  auto& state = *statePtr;
+  SCOPE_EXIT {
+    if (statePtr->stream) {
+      statePtr->streamPool->put(std::move(statePtr->stream));
+    }
+    waveGraph.returnState(std::move(statePtr));
+  };
+
+  // Fill per-call fields.
+  state.frame = &frame;
+  state.valueTypes = &waveGraph.types();
+  state.deviceArena = g->deviceArena.get();
+  state.pinnedArena = g->pinnedArena.get();
+  state.managedArena = g->managedArena.get();
+  state.streamPool = g->streamPool.get();
+  state.eventPool = g->eventPool.get();
+  state.stream = g->streamPool->get();
+  state.kernelMap = &kernelMap_;
+  state.waveGraph = &waveGraph;
+  state.standaloneIndices = &waveGraph.standaloneIndices();
+  state.standaloneStats = &waveGraph.standaloneStats();
+  state.launchDebugInfos = &launchDebugInfos_;
+
+  for (const auto& node : waveGraph.nodes()) {
+    node->execute(state);
+  }
+  state.stream->wait();
+}
+
+std::vector<std::vector<DebugInfo>> WaveGraphExecutor::getDebugInfo() {
+  auto* g = globals();
+  auto stream = g->streamPool->get();
+
+  // Queue D2H transfers for all launches.
+  for (auto& info : launchDebugInfos_) {
+    stream->deviceToHostAsync(
+        info.pinnedInfo, info.deviceInfo, info.numBlocks * sizeof(DebugInfo));
+  }
+  stream->wait();
+  g->streamPool->put(std::move(stream));
+
+  // Copy from pinned memory into the result.
+  std::vector<std::vector<DebugInfo>> result;
+  result.reserve(launchDebugInfos_.size());
+  for (auto& info : launchDebugInfos_) {
+    result.emplace_back(info.pinnedInfo, info.pinnedInfo + info.numBlocks);
+  }
+  return result;
+}
+
+std::vector<std::pair<std::string, int64_t>>
+WaveGraphExecutor::getStandaloneStats() const {
+  const auto& indices = waveGraph_->standaloneIndices();
+  const auto& stats = waveGraph_->standaloneStats();
+  std::vector<std::pair<std::string, int64_t>> result;
+  result.reserve(indices.size());
+  for (const auto& [node, idx] : indices) {
+    Subgraph sg;
+    sg.root = node;
+    for (const auto& input : node->inputs()) {
+      sg.inputs.push_back(input.value);
+    }
+    result.emplace_back(
+        "standalone " + sg.toString(),
+        idx < static_cast<int32_t>(stats.size()) ? stats[idx].micros : 0);
+  }
+  return result;
+}
+
+} // namespace torch::wave
