@@ -165,8 +165,10 @@ class CacheFuzzer {
   std::unique_ptr<folly::IOThreadPoolExecutor> executor_;
   std::shared_ptr<AsyncDataCache> cache_;
 
-  io::IoStatistics dataIoStats_;
-  io::IoStatistics metadataIoStats_;
+  std::shared_ptr<io::IoStatistics> dataIoStats_{
+      std::make_shared<io::IoStatistics>()};
+  std::shared_ptr<io::IoStatistics> metadataIoStats_{
+      std::make_shared<io::IoStatistics>()};
 
   // Save the config for the last iteration so they can be potentially reused
   // after restart.
@@ -376,8 +378,8 @@ void CacheFuzzer::initializeCache(bool restartCache) {
 
 void CacheFuzzer::initializeInputs() {
   io::ReaderOptions readOptions(pool_.get());
-  readOptions.setDataIoStats(&dataIoStats_);
-  readOptions.setMetadataIoStats(&metadataIoStats_);
+  readOptions.setDataIoStats(dataIoStats_);
+  readOptions.setMetadataIoStats(metadataIoStats_);
   auto tracker = std::make_shared<ScanTracker>(
       "testTracker", nullptr, 256 << 10 /*256KB*/);
   auto ioStatistics = std::make_shared<IoStatistics>();

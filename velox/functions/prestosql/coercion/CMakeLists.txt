@@ -12,17 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(
-  velox_spark_types
-  TimestampNTZCastUtil.cpp
-  TimestampNTZRegistration.cpp
-  HEADERS
-  TimestampNTZCastUtil.h
-  TimestampNTZRegistration.h
-  TimestampNTZType.h
-)
+velox_add_library(velox_presto_coercions PrestoCoercions.cpp HEADERS PrestoCoercions.h)
 
-velox_link_libraries(velox_spark_types velox_type velox_memory velox_expression)
+velox_link_libraries(velox_presto_coercions velox_type)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
