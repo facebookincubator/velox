@@ -246,6 +246,9 @@ std::unique_ptr<dwio::common::Reader> FileIndexReader::createFileReader() {
   VELOX_CHECK_NOT_NULL(hiveSplit_);
 
   dwio::common::ReaderOptions readerOpts(connectorQueryCtx_->memoryPool());
+  // TODO: Use separate IoStatistics for data and metadata.
+  readerOpts.setDataIoStats(ioStatistics_);
+  readerOpts.setMetadataIoStats(ioStatistics_);
   hive::configureReaderOptions(
       fileConfig_,
       connectorQueryCtx_,

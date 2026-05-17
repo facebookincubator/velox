@@ -27,12 +27,13 @@
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/core/QueryConfig.h"
+#include "velox/core/ScanBatchEvent.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/VectorPool.h"
 
 namespace facebook::velox::exec::trace {
 class TraceCtx;
-}
+} // namespace facebook::velox::exec::trace
 
 namespace facebook::velox::core {
 
@@ -321,6 +322,15 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     traceCtxProvider_ = std::move(provider);
   }
 
+  /// Sets an optional callback fired by TableScan after each non-empty batch.
+  void setScanBatchCallback(ScanBatchCallback callback) {
+    scanBatchCallback_ = std::move(callback);
+  }
+
+  const ScanBatchCallback& scanBatchCallback() const {
+    return scanBatchCallback_;
+  }
+
   /// Store a per-query registry override. Each subsystem defines its own key
   /// (e.g., "connectors", "vectorFunctions"). The registry is stored as a
   /// type-erased shared_ptr; callers must use the same type T for setRegistry
@@ -476,6 +486,9 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
 
   // A function that constructs a custom trace ctx object.
   TraceCtxProvider traceCtxProvider_;
+
+  // Optional per-batch scan stats callback.
+  ScanBatchCallback scanBatchCallback_;
 
   // Type-erased registry entry for per-query overrides.
   struct RegistryEntry {

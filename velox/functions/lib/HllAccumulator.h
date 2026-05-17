@@ -15,10 +15,8 @@
  */
 #pragma once
 
-#define XXH_INLINE_ALL
-
-#include <xxhash.h>
 #include <cmath>
+#include "velox/common/base/XxHashInline.h"
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/hyperloglog/DenseHll.h"

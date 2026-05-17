@@ -17,17 +17,17 @@ add_library(
   CudfHiveConfig.cpp
   CudfHiveConnector.cpp
   CudfHiveConnectorSplit.cpp
+  CudfHiveDataSink.cpp
   CudfHiveDataSource.cpp
+  CudfHiveTableHandle.cpp
   CudfSplitReader.cpp
   CudfSplitReaderHelpers.cpp
-  CudfHiveDataSink.cpp
-  CudfHiveTableHandle.cpp
 )
 
 set_target_properties(velox_cudf_hive_connector PROPERTIES CUDA_ARCHITECTURES native)
 
 target_link_libraries(
   velox_cudf_hive_connector
-  PRIVATE velox_hive_connector velox_dwio_common
+  PRIVATE velox_dwio_common velox_hive_connector
   PUBLIC cudf::cudf velox_cudf_expression
 )

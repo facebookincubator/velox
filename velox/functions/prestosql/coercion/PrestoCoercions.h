@@ -13,17 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 #pragma once
 
-#include "velox/vector/SimpleVector.h"
+#include "velox/type/TypeCoercer.h"
 
-namespace facebook::velox::functions::sparksql {
+namespace facebook::velox::functions::prestosql {
 
-void castFromString(
-    const SimpleVector<StringView>& inputVector,
-    exec::EvalCtx& context,
-    const SelectivityVector& rows,
-    int64_t* rawResults);
+/// Coercion rule set for the Presto SQL dialect. Returned coercer is a
+/// singleton.
+const TypeCoercer& typeCoercer();
 
-} // namespace facebook::velox::functions::sparksql
+} // namespace facebook::velox::functions::prestosql

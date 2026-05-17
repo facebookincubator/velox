@@ -19,7 +19,6 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/parse/Expressions.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;

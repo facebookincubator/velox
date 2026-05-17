@@ -17,6 +17,7 @@
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include <gtest/gtest.h>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/io/IoStatistics.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/TableHandle.h"
@@ -68,6 +69,10 @@ class HiveConnectorUtilTest : public exec::test::HiveConnectorTestBase {
 
   std::shared_ptr<memory::MemoryPool> pool_ =
       memory::memoryManager()->addLeafPool();
+  std::shared_ptr<velox::io::IoStatistics> dataIoStats_ =
+      std::make_shared<velox::io::IoStatistics>();
+  std::shared_ptr<velox::io::IoStatistics> metadataIoStats_ =
+      std::make_shared<velox::io::IoStatistics>();
 };
 
 TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
@@ -94,6 +99,8 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
 
   // Dynamic parameters.
   dwio::common::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   FileFormat fileFormat{FileFormat::DWRF};
   std::unordered_map<std::string, std::string> tableParameters;
   std::unordered_map<std::string, std::string> serdeParameters;
@@ -138,6 +145,8 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
 
   auto clearDynamicParameters = [&](FileFormat newFileFormat) {
     readerOptions = dwio::common::ReaderOptions(pool_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
     fileFormat = newFileFormat;
     tableParameters.clear();
     serdeParameters.clear();
@@ -357,6 +366,8 @@ TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {
   // Test ORC format.
   {
     dwio::common::ReaderOptions readerOptions(pool_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
     auto tableHandle = createTableHandle();
     auto split = createSplit(FileFormat::ORC);
     configureReaderOptions(
@@ -375,6 +386,8 @@ TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {
   // Test DWRF format (uses ORC config).
   {
     dwio::common::ReaderOptions readerOptions(pool_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
     auto tableHandle = createTableHandle();
     auto split = createSplit(FileFormat::DWRF);
     configureReaderOptions(
@@ -393,6 +406,8 @@ TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {
   // Test Parquet format.
   {
     dwio::common::ReaderOptions readerOptions(pool_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
     auto tableHandle = createTableHandle();
     auto split = createSplit(FileFormat::PARQUET);
     configureReaderOptions(
@@ -411,6 +426,8 @@ TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {
   // Test Nimble format.
   {
     dwio::common::ReaderOptions readerOptions(pool_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
     auto tableHandle = createTableHandle();
     auto split = createSplit(FileFormat::NIMBLE);
     configureReaderOptions(
@@ -430,6 +447,8 @@ TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {
 TEST_F(HiveConnectorUtilTest, fileMetadataCacheEnabledSessionOverride) {
   // Verify default is off.
   dwio::common::ReaderOptions defaultOptions(pool_.get());
+  defaultOptions.setDataIoStats(dataIoStats_);
+  defaultOptions.setMetadataIoStats(metadataIoStats_);
   ASSERT_FALSE(defaultOptions.fileMetadataCacheEnabled());
 
   for (bool enabled : {true, false}) {
@@ -456,6 +475,8 @@ TEST_F(HiveConnectorUtilTest, fileMetadataCacheEnabledSessionOverride) {
         std::make_shared<hive::HiveConfig>(std::make_shared<config::ConfigBase>(
             std::unordered_map<std::string, std::string>()));
     dwio::common::ReaderOptions readerOptions(pool_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
 
     auto tableHandle = std::make_shared<hive::HiveTableHandle>(
         "testConnectorId",
@@ -514,6 +535,8 @@ TEST_F(HiveConnectorUtilTest, cacheRetention) {
         "");
 
     dwio::common::ReaderOptions readerOptions(pool_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
 
     auto tableHandle = std::make_shared<hive::HiveTableHandle>(
         "testConnectorId",

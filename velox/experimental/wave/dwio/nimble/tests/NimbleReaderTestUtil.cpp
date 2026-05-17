@@ -19,6 +19,7 @@
 #include "dwio/nimble/common/tests/NimbleFileWriter.h"
 #include "dwio/nimble/encodings/EncodingSelectionPolicy.h"
 #include "dwio/nimble/tablet/TabletReader.h"
+#include "dwio/nimble/tablet/tests/TabletTestUtils.h"
 #include "dwio/nimble/velox/VeloxWriterOptions.h"
 #include "velox/common/file/File.h"
 #include "velox/exec/fuzzer/ReferenceQueryRunner.h"
@@ -365,7 +366,10 @@ std::vector<std::unique_ptr<StreamLoader>> writeToNimbleAndGetStreamLoaders(
     auto numChildren = chunkVectors[0]->as<RowVector>()->childrenSize();
 
     auto readFile = std::make_unique<InMemoryReadFile>(file);
-    auto tablet = TabletReader::create(std::move(readFile), pool, {});
+    auto tablet = TabletReader::create(
+        std::move(readFile),
+        pool,
+        facebook::nimble::test::makeTestTabletOptions(pool));
     auto stripeIdentifier = tablet->stripeIdentifier(0);
     // VELOX_CHECK_EQ(numChildren + 1, tablet.streamCount(stripeIdentifier));
 

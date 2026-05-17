@@ -16,8 +16,14 @@
 
 #pragma once
 
-namespace facebook::velox::functions::sparksql {
+namespace facebook::velox::dwio::common {
 
-void registerTimestampNTZType();
+/// File format specific metadata returned when a writer is closed.
+/// Caller of Writer::close() can do further processing such as aggregate
+/// row group statistics to file level statistics based on the metadata.
+class FileMetadata {
+ public:
+  virtual ~FileMetadata() = default;
+};
 
-} // namespace facebook::velox::functions::sparksql
+} // namespace facebook::velox::dwio::common

@@ -91,6 +91,13 @@ void registerCudfFunctions(
     const std::vector<exec::FunctionSignaturePtr>& signatures,
     bool overwrite = true);
 
+/// Create a CudfFunction for the given name and expression.
+/// Returns nullptr if no registered function matches the expression's
+/// signature.
+std::shared_ptr<CudfFunction> createCudfFunction(
+    const std::string& name,
+    const std::shared_ptr<velox::exec::Expr>& expr);
+
 bool registerBuiltinFunctions(const std::string& prefix);
 
 void unregisterFunctions();

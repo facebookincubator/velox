@@ -1937,7 +1937,9 @@ std::unique_ptr<DwrfReader> getDwrfReader(
     MemoryPool& leafPool,
     const std::shared_ptr<const RowType> type,
     const VectorPtr& batch,
-    bool useFlatMap) {
+    bool useFlatMap,
+    std::shared_ptr<io::IoStatistics> dataIoStats,
+    std::shared_ptr<io::IoStatistics> metadataIoStats) {
   auto config = std::make_shared<Config>();
   if (useFlatMap) {
     config->set(Config::FLATTEN_MAP, true);
@@ -1963,6 +1965,8 @@ std::unique_ptr<DwrfReader> getDwrfReader(
 
   std::string data(sinkPtr->data(), sinkPtr->size());
   dwio::common::ReaderOptions readerOpts{&leafPool};
+  readerOpts.setDataIoStats(std::move(dataIoStats));
+  readerOpts.setMetadataIoStats(std::move(metadataIoStats));
   return std::make_unique<DwrfReader>(
       readerOpts,
       std::make_unique<BufferedInput>(
@@ -1985,8 +1989,12 @@ void testMapWriterStats(const std::shared_ptr<const RowType> type) {
   auto rootPool = memory::memoryManager()->addRootPool();
   auto leafPool = memory::memoryManager()->addLeafPool();
   auto batch = BatchMaker::createBatch(type, 10, *leafPool);
-  auto mapReader = getDwrfReader(*rootPool, *leafPool, type, batch, false);
-  auto flatMapReader = getDwrfReader(*rootPool, *leafPool, type, batch, true);
+  auto dataIoStats = std::make_shared<io::IoStatistics>();
+  auto metadataIoStats = std::make_shared<io::IoStatistics>();
+  auto mapReader = getDwrfReader(
+      *rootPool, *leafPool, type, batch, false, dataIoStats, metadataIoStats);
+  auto flatMapReader = getDwrfReader(
+      *rootPool, *leafPool, type, batch, true, dataIoStats, metadataIoStats);
   ASSERT_EQ(
       mapReader->getFooter().statisticsSize(),
       flatMapReader->getFooter().statisticsSize());
