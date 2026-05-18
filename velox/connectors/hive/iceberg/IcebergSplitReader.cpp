@@ -209,7 +209,7 @@ void IcebergSplitReader::prepareSplit(
   auto rowType = getAdaptedRowType();
 
   lastUpdatedSeqNumOutputIndex_ = std::nullopt;
-  if (dataSequenceNumber_.has_value()) {
+  if (dataSequenceNumber_.has_value() && firstRowId_.has_value()) {
     auto* seqNumSpec = scanSpec_->childByName(
         IcebergMetadataColumn::kLastUpdatedSequenceNumberColumnName);
     if (seqNumSpec && !seqNumSpec->isConstant()) {
@@ -734,11 +734,10 @@ std::vector<TypePtr> IcebergSplitReader::adaptColumns(
         //    partition value as a constant, so this branch leaves it alone.
         if (fieldName ==
             IcebergMetadataColumn::kLastUpdatedSequenceNumberColumnName) {
-          // Column is absent from the data file. If a data sequence number is
-          // available (V3 snapshot), set a constant so every row inherits it.
-          // Otherwise (pre-V3 snapshot where the sequence number chain is
-          // unassigned), return null — analogous to the _row_id null path.
-          if (dataSequenceNumber_.has_value()) {
+          // Column is absent from the data file. Per the Iceberg V3 spec, when
+          // a data file has a null first_row_id, readers must produce null for
+          // both _row_id and _last_updated_sequence_number.
+          if (dataSequenceNumber_.has_value() && firstRowId_.has_value()) {
             childSpec->setConstantValue(
                 std::make_shared<ConstantVector<int64_t>>(
                     connectorQueryCtx_->memoryPool(),

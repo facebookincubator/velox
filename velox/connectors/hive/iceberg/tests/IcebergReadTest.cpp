@@ -1537,6 +1537,8 @@ TEST_F(HiveIcebergTest, skipDeleteFileByPositionUpperBound) {
 //   7. Positional deletes: _row_id uses file-absolute positions.
 //   8. Subfield filter: _row_id uses file-absolute positions, not output
 //   indices.
+//   9. data_sequence_number without first_row_id: both _row_id and
+//      _last_updated_sequence_number are null.
 TEST_F(HiveIcebergTest, rowLineage) {
   folly::SingletonVault::singleton()->registrationComplete();
 
@@ -1666,6 +1668,22 @@ TEST_F(HiveIcebergTest, rowLineage) {
               makeFlatVector<int64_t>({30, 40, 50}),
               makeFlatVector<int64_t>({102, 103, 104}),
               makeFlatVector<int64_t>({15, 15, 15}),
+          })},
+  });
+
+  // 9. data_sequence_number without first_row_id: _last_updated_sequence_number
+  // must be null because _row_id is null (no first_row_id to anchor it).
+  assertRowLineage({
+      .values = {1, 2, 3},
+      .dataSequenceNumber = 7,
+      .expectedVectors = {makeRowVector(
+          kOutputNames,
+          {
+              makeFlatVector<int64_t>({1, 2, 3}),
+              makeNullableFlatVector<int64_t>(
+                  {std::nullopt, std::nullopt, std::nullopt}),
+              makeNullableFlatVector<int64_t>(
+                  {std::nullopt, std::nullopt, std::nullopt}),
           })},
   });
 }

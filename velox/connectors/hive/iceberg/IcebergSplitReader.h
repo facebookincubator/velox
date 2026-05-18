@@ -97,10 +97,11 @@ class IcebergSplitReader : public FileSplitReader {
   ///       written. Set as NULL constant since the old file doesn't contain
   ///       this column.
   ///    c) Row lineage (_last_updated_sequence_number):
-  ///       For Iceberg V3 row lineage, if the column is not in the file,
-  ///       inherit the data sequence number from the file's manifest entry
-  ///       (provided via $data_sequence_number info column). Per the spec,
-  ///       null values indicate the value should be inherited.
+  ///       Per the Iceberg V3 spec, when a data file has a null first_row_id,
+  ///       readers must produce null for both _row_id and
+  ///       _last_updated_sequence_number. If the column is not in the file and
+  ///       $first_row_id is present, inherit the data sequence number from the
+  ///       manifest entry ($data_sequence_number info column).
   ///    d) Row lineage (_row_id):
   ///       Per the spec, null _row_id values are assigned as
   ///       first_row_id + file position. When first_row_id is available from
