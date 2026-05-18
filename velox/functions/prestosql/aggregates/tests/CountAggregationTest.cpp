@@ -151,6 +151,8 @@ TEST_F(CountAggregationTest, mask) {
   auto taskStats = toPlanStats(task->taskStats());
   auto partialStats = taskStats.at(partialNodeId).customStats;
   EXPECT_LT(0, partialStats.at("abandonedPartialAggregation").count);
+  EXPECT_LT(
+      0, partialStats.at("abandonedPartialAggregationPassthroughRowCount").sum);
 }
 
 TEST_F(CountAggregationTest, distinct) {

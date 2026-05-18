@@ -343,6 +343,10 @@ RowVectorPtr HashAggregation::getOutput() {
     }
     prepareOutput(input_->size());
     groupingSet_->toIntermediate(input_, output_);
+    addRuntimeStat(
+        std::string(
+            HashAggregation::kAbandonedPartialAggregationPassthroughRowCount),
+        RuntimeCounter(input_->size()));
     numOutputRows_ += input_->size();
     input_ = nullptr;
     return output_;

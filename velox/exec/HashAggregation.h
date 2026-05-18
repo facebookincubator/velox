@@ -35,6 +35,10 @@ class HashAggregation : public Operator {
   /// Whether partial aggregation was abandoned due to insufficient reduction.
   static constexpr std::string_view kAbandonedPartialAggregation =
       "abandonedPartialAggregation";
+  /// Number of rows emitted after partial aggregation was abandoned.
+  static constexpr std::string_view
+      kAbandonedPartialAggregationPassthroughRowCount =
+          "abandonedPartialAggregationPassthroughRowCount";
 
   HashAggregation(
       int32_t operatorId,
