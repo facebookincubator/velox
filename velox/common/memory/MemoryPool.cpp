@@ -541,6 +541,7 @@ void* MemoryPoolImpl::allocate(
 }
 
 void MemoryPoolImpl::reportAllocation(int64_t size) {
+  VELOX_CHECK_GT(size, 0);
   CHECK_AND_INC_MEM_OP_STATS(this, Allocs);
   const auto alignedSize = sizeAlign(size);
   reserve(alignedSize);
@@ -623,6 +624,7 @@ bool MemoryPoolImpl::transferTo(MemoryPool* dest, void* buffer, uint64_t size) {
 }
 
 void MemoryPoolImpl::reportFree(int64_t size) {
+  VELOX_CHECK_GT(size, 0);
   CHECK_AND_INC_MEM_OP_STATS(this, Frees);
   const auto alignedSize = sizeAlign(size);
   release(alignedSize);

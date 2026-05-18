@@ -241,10 +241,10 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
       std::optional<uint32_t> alignment = std::nullopt) = 0;
 
   /// Reports an external allocation of 'size' bytes to the memory pool without
-  /// actually allocating memory through the pool. Used to track memory owned by
-  /// objects allocated outside of the pool (for example, Thrift-deserialized
-  /// structures). Each call must be paired with a matching reportFree() of the
-  /// same 'size' when the external memory is released.
+  /// allocating any memory. Used to track memory owned by objects that were
+  /// allocated outside of the pool (e.g., Thrift-deserialized structures).
+  /// Each call must be paired with a matching reportFree() of the same 'size'
+  /// when the external memory is released. 'size' must be positive.
   virtual void reportAllocation(int64_t size) = 0;
 
   /// Allocates a zero-filled buffer with capacity that can store 'numEntries'
@@ -265,9 +265,9 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
     return false;
   }
 
-  /// Releases a previously reported external allocation of 'size' bytes from
-  /// the memory pool without freeing any memory. Pair every call with a
-  /// matching reportAllocation() of the same 'size'.
+  /// Reports the release of 'size' bytes of externally tracked memory. Must
+  /// be paired with a prior reportAllocation() of the same 'size'. 'size'
+  /// must be positive.
   virtual void reportFree(int64_t size) = 0;
 
   /// Allocates one or more runs that add up to at least 'numPages', with the

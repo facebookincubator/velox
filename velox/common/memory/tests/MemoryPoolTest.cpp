@@ -443,6 +443,69 @@ TEST_P(MemoryPoolTest, usedBytes) {
   ASSERT_EQ(root->usedBytes(), 0);
 }
 
+TEST_P(MemoryPoolTest, reportExternalAllocation) {
+  auto manager = getMemoryManager();
+  auto root = manager->addRootPool();
+  auto child =
+      root->addLeafChild("reportExternalAllocation", isLeafThreadSafe_);
+
+  const int64_t kReportSize{1L * MB};
+  const auto initialStats = child->stats();
+  ASSERT_EQ(child->usedBytes(), 0);
+
+  // reportAllocation does not allocate memory but should account for it in
+  // usedBytes/reservedBytes and bump the Allocs stat.
+  child->reportAllocation(kReportSize);
+  ASSERT_EQ(child->usedBytes(), kReportSize);
+  ASSERT_GE(child->reservedBytes(), kReportSize);
+  ASSERT_EQ(child->stats().numAllocs, initialStats.numAllocs + 1);
+  ASSERT_EQ(child->stats().peakBytes, kReportSize);
+
+  // A paired reportFree of the same size returns the pool to its original
+  // bookkeeping state and bumps the Frees stat. peak stays at its max.
+  child->reportFree(kReportSize);
+  ASSERT_EQ(child->usedBytes(), 0);
+  ASSERT_EQ(child->reservedBytes(), 0);
+  ASSERT_EQ(child->stats().numFrees, initialStats.numFrees + 1);
+  ASSERT_EQ(child->stats().peakBytes, kReportSize);
+}
+
+TEST_P(MemoryPoolTest, reportExternalAllocationCapacityExceeded) {
+  const uint64_t kMaxCap = 128L * MB;
+  MemoryManager::Options options;
+  options.allocatorCapacity = kMaxCap;
+  options.arbitratorCapacity = kMaxCap;
+  options.extraArbitratorConfigs = {
+      {std::string(SharedArbitrator::ExtraConfig::kReservedCapacity),
+       folly::to<std::string>(kMaxCap / 2) + "B"}};
+  setupMemory(options);
+  auto manager = getMemoryManager();
+  auto root = manager->addRootPool("reportExternalCap", kMaxCap);
+  auto pool = root->addLeafChild("reportExternalCap", isLeafThreadSafe_);
+
+  // Reporting more than the pool's capacity must trip the same memory-cap
+  // path that allocate() does, leaving usage at zero.
+  VELOX_ASSERT_THROW(
+      pool->reportAllocation(static_cast<int64_t>(kMaxCap) + 1L * MB),
+      "Exceeded memory pool capacity");
+  ASSERT_EQ(pool->usedBytes(), 0);
+  ASSERT_EQ(pool->reservedBytes(), 0);
+}
+
+TEST_P(MemoryPoolTest, reportExternalAllocationRejectsNonPositiveSize) {
+  auto manager = getMemoryManager();
+  auto root = manager->addRootPool();
+  auto child =
+      root->addLeafChild("reportExternalNonPositive", isLeafThreadSafe_);
+
+  VELOX_ASSERT_THROW(child->reportAllocation(0), "(0 vs. 0)");
+  VELOX_ASSERT_THROW(child->reportAllocation(-1), "(-1 vs. 0)");
+  VELOX_ASSERT_THROW(child->reportFree(0), "(0 vs. 0)");
+  VELOX_ASSERT_THROW(child->reportFree(-1), "(-1 vs. 0)");
+  ASSERT_EQ(child->usedBytes(), 0);
+  ASSERT_EQ(child->reservedBytes(), 0);
+}
+
 TEST_P(MemoryPoolTest, DISABLED_memoryLeakCheck) {
   gflags::FlagSaver flagSaver;
   testing::FLAGS_gtest_death_test_style = "fast";
