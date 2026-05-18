@@ -25,6 +25,11 @@ TEST(OptionsTests, defaultRowNumberColumnInfoTest) {
   ASSERT_EQ(std::nullopt, rowReaderOptions.rowNumberColumnInfo());
 }
 
+TEST(OptionsTests, fluxFileFormatRoundTrip) {
+  ASSERT_EQ(FileFormat::FLUX, toFileFormat("flux"));
+  ASSERT_EQ("flux", toString(FileFormat::FLUX));
+}
+
 TEST(OptionsTests, setRowNumberColumnInfoTest) {
   RowReaderOptions rowReaderOptions;
   RowNumberColumnInfo rowNumberColumnInfo;
