@@ -1565,11 +1565,6 @@ CudfHashJoinProbe::leftSemiProjectJoin(
     rmm::cuda_stream_view stream) {
   std::vector<std::unique_ptr<cudf::table>> cudfOutputs;
 
-  // For now, AST support is necessary to filter join output
-  if (joinNode_->filter() && !useAstFilter_) {
-    VELOX_NYI("Left semi project join requires AST support for filtering");
-  }
-
   auto& rightTables = hashObject_.value().first;
   auto& hbs = hashObject_.value().second;
   auto numProbeRows = leftTableView.num_rows();
@@ -1652,25 +1647,75 @@ CudfHashJoinProbe::leftSemiProjectJoin(
     std::unique_ptr<rmm::device_uvector<cudf::size_type>> filteredLeftIndices;
 
     if (joinNode_->filter()) {
-      // Step 2: Apply filter to the join pairs. INNER_JOIN mode keeps only
-      // pairs where the predicate evaluates to true.
-      auto [filteredLeft, filteredRight] = cudf::filter_join_indices(
-          extendedLeftView,
-          extendedRightView,
-          leftIndicesSpan,
-          rightIndicesSpan,
-          tree_.back(),
-          cudf::join_kind::INNER_JOIN,
-          stream,
-          get_temp_mr());
+      // Step 2: Apply filter to the join pairs
+      if (useAstFilter_) {
+        // Use AST-based filtering (INNER_JOIN mode keeps only pairs where predicate is true)
+        auto [filteredLeft, filteredRight] = cudf::filter_join_indices(
+            extendedLeftView,
+            extendedRightView,
+            leftIndicesSpan,
+            rightIndicesSpan,
+            tree_.back(),
+            cudf::join_kind::INNER_JOIN,
+            stream,
+            get_temp_mr());
 
-      filteredLeftIndices = std::move(filteredLeft);
-      if (filteredLeftIndices->size() == 0) {
-        continue; // No matches passed filter
+        filteredLeftIndices = std::move(filteredLeft);
+        if (filteredLeftIndices->size() == 0) {
+          continue; // No matches passed filter
+        }
+        auto filteredLeftSpan =
+            cudf::device_span<cudf::size_type const>{*filteredLeftIndices};
+        matchedProbeIndices = cudf::column_view{filteredLeftSpan};
+      } else {
+        // Fallback: Use filterEvaluator_ to manually filter join pairs
+        // Gather the joined rows
+        auto leftGathered = cudf::gather(
+            leftTableView, leftIndicesCol, oobPolicy, stream, get_temp_mr());
+        auto rightGathered = cudf::gather(
+            rightTableView, rightIndicesCol, oobPolicy, stream, get_temp_mr());
+        
+        // Concatenate left and right columns for filter evaluation
+        std::vector<cudf::column_view> joinedColViews;
+        for (auto const& col : leftGathered->view()) {
+          joinedColViews.push_back(col);
+        }
+        for (auto const& col : rightGathered->view()) {
+          joinedColViews.push_back(col);
+        }
+        
+        // Evaluate filter
+        auto filterColumns = filterEvaluator_->eval(joinedColViews, stream, get_temp_mr());
+        auto filterColumn = asView(filterColumns);
+        
+        // Apply boolean mask to keep only passing pairs
+        auto falseScalar = cudf::numeric_scalar<bool>(false, true, stream, get_temp_mr());
+        auto nonNullFilter = cudf::replace_nulls(filterColumn, falseScalar, stream, get_temp_mr());
+        
+        auto passingPairTable = cudf::apply_boolean_mask(
+            cudf::table_view{{leftIndicesCol}},
+            nonNullFilter->view(),
+            stream,
+            get_temp_mr());
+        
+        if (passingPairTable->num_rows() == 0) {
+          continue; // No matches passed filter
+        }
+        
+        auto passingLeftIndices = passingPairTable->release()[0];
+        filteredLeftIndices = std::make_unique<rmm::device_uvector<cudf::size_type>>(
+            passingLeftIndices->size(), stream, get_temp_mr());
+        cudaMemcpyAsync(
+            filteredLeftIndices->data(),
+            passingLeftIndices->view().data<cudf::size_type>(),
+            passingLeftIndices->size() * sizeof(cudf::size_type),
+            cudaMemcpyDeviceToDevice,
+            stream.value());
+        
+        auto filteredLeftSpan =
+            cudf::device_span<cudf::size_type const>{*filteredLeftIndices};
+        matchedProbeIndices = cudf::column_view{filteredLeftSpan};
       }
-      auto filteredLeftSpan =
-          cudf::device_span<cudf::size_type const>{*filteredLeftIndices};
-      matchedProbeIndices = cudf::column_view{filteredLeftSpan};
     } else {
       // No filter - use inner join results directly
       matchedProbeIndices = leftIndicesCol;
