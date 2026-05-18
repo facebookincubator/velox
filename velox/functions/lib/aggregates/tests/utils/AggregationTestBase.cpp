@@ -222,7 +222,7 @@ std::string getMergeExtractFunctionNameWithSuffix(
   VELOX_CHECK(signatures.has_value());
 
   for (const auto& signature : signatures.value()) {
-    exec::SignatureBinder binder{*signature, argTypes};
+    exec::SignatureBinder binder{*signature, argTypes, TypeCoercer::defaults()};
     if (binder.tryBind()) {
       if (auto resolvedType = binder.tryResolveReturnType()) {
         return exec::CompanionSignatures::mergeExtractFunctionNameWithSuffix(
@@ -245,7 +245,7 @@ std::string getExtractFunctionNameWithSuffix(
   VELOX_CHECK(signatures.has_value());
 
   for (const auto& signature : signatures.value()) {
-    exec::SignatureBinder binder{*signature, argTypes};
+    exec::SignatureBinder binder{*signature, argTypes, TypeCoercer::defaults()};
     if (binder.tryBind()) {
       if (auto resultType = binder.tryResolveReturnType()) {
         return exec::CompanionSignatures::extractFunctionNameWithSuffix(

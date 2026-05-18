@@ -1177,8 +1177,8 @@ TEST_F(HiveDataSinkTest, flushPolicyWithParquet) {
   dataSink->close();
 
   dwio::common::ReaderOptions readerOpts(pool_.get());
-  readerOpts.setDataIoStats(dataIoStats_.get());
-  readerOpts.setMetadataIoStats(metadataIoStats_.get());
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
   const std::vector<std::string> filePaths =
       listFiles(outputDirectory->getPath());
   auto bufferedInput = std::make_unique<dwio::common::BufferedInput>(
@@ -1217,8 +1217,8 @@ TEST_F(HiveDataSinkTest, flushPolicyWithDWRF) {
   dataSink->close();
 
   dwio::common::ReaderOptions readerOpts(pool_.get());
-  readerOpts.setDataIoStats(dataIoStats_.get());
-  readerOpts.setMetadataIoStats(metadataIoStats_.get());
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
   const std::vector<std::string> filePaths =
       listFiles(outputDirectory->getPath());
   auto bufferedInput = std::make_unique<dwio::common::BufferedInput>(

@@ -27,6 +27,7 @@
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/core/QueryConfig.h"
+#include "velox/core/ScanBatchEvent.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/VectorPool.h"
 
@@ -35,16 +36,6 @@ class TraceCtx;
 } // namespace facebook::velox::exec::trace
 
 namespace facebook::velox::core {
-
-/// Per-batch scan statistics event fired by TableScan after each batch.
-struct ScanBatchEvent {
-  /// Post-pushdown, pre-remaining-filter row count.
-  uint64_t numRows;
-  /// Wall time spent producing this batch in microseconds.
-  uint64_t wallTimeMicros;
-  /// Table name from the connector table handle.
-  std::string_view tableName;
-};
 
 struct PlanFragment;
 
@@ -330,8 +321,6 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   void setTraceCtxProvider(TraceCtxProvider provider) {
     traceCtxProvider_ = std::move(provider);
   }
-
-  using ScanBatchCallback = std::function<void(const ScanBatchEvent&)>;
 
   /// Sets an optional callback fired by TableScan after each non-empty batch.
   void setScanBatchCallback(ScanBatchCallback callback) {
