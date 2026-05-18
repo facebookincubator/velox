@@ -64,6 +64,15 @@ and the final result is null.</p>
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="bitmap_construct_agg">
+<span class="sig-name descname"><span class="pre">bitmap_construct_agg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">position</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#bitmap_construct_agg" title="Link to this definition">¶</a></dt>
+<dd><p>Builds a fixed-size 4096-byte (32768-bit) bitmap by setting bits at the
+specified positions. Input positions must be BIGINT values in [0, 32767].
+Null inputs are ignored. Returns an all-zeros bitmap for empty or all-null
+input (this is a non-nullable aggregate).</p>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="bloom_filter_agg">
 <span class="sig-name descname"><span class="pre">bloom_filter_agg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">hash</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">estimatedNumItems</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">numBits</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#bloom_filter_agg" title="Link to this definition">¶</a></dt>
 <dd><p>Creates bloom filter from input hashes and returns it serialized into VARBINARY.
@@ -336,6 +345,7 @@ When the count of <cite>x</cite> is greater than or equal to 2, a non-null outpu
 <li><a class="reference internal" href="#general-aggregate-functions">General Aggregate Functions</a><ul>
 <li><a class="reference internal" href="#avg"><code class="docutils literal notranslate"><span class="pre">avg()</span></code></a></li>
 <li><a class="reference internal" href="#bit_xor"><code class="docutils literal notranslate"><span class="pre">bit_xor()</span></code></a></li>
+<li><a class="reference internal" href="#bitmap_construct_agg"><code class="docutils literal notranslate"><span class="pre">bitmap_construct_agg()</span></code></a></li>
 <li><a class="reference internal" href="#bloom_filter_agg"><code class="docutils literal notranslate"><span class="pre">bloom_filter_agg()</span></code></a></li>
 <li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">bloom_filter_agg()</span></code></a></li>
 <li><a class="reference internal" href="#id1"><code class="docutils literal notranslate"><span class="pre">bloom_filter_agg()</span></code></a></li>
