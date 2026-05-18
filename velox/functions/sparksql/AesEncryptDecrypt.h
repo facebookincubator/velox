@@ -110,10 +110,7 @@ struct AesEncryptFunction {
       std::transform(
           modeStr.begin(), modeStr.end(), modeStr.begin(), ::toupper);
       std::transform(
-          paddingStr.begin(),
-          paddingStr.end(),
-          paddingStr.begin(),
-          ::toupper);
+          paddingStr.begin(), paddingStr.end(), paddingStr.begin(), ::toupper);
       cachedConfig_ = detail::parseModeAndPadding(modeStr, paddingStr);
     }
   }
@@ -160,10 +157,7 @@ struct AesDecryptFunction {
       std::transform(
           modeStr.begin(), modeStr.end(), modeStr.begin(), ::toupper);
       std::transform(
-          paddingStr.begin(),
-          paddingStr.end(),
-          paddingStr.begin(),
-          ::toupper);
+          paddingStr.begin(), paddingStr.end(), paddingStr.begin(), ::toupper);
       cachedConfig_ = detail::parseModeAndPadding(modeStr, paddingStr);
     }
   }

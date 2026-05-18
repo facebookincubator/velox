@@ -391,10 +391,10 @@ TEST_F(AesEncryptDecryptTest, nonConstantModeAndPadding) {
        "0000111122223333",
        "0000111122223333"},
       VARBINARY());
-  auto modes = makeNullableFlatVector<std::string>(
-      {"GCM", "CBC", "ECB", std::nullopt});
-  auto paddings = makeFlatVector<std::string>(
-      {"DEFAULT", "PKCS", "PKCS", "DEFAULT"});
+  auto modes =
+      makeNullableFlatVector<std::string>({"GCM", "CBC", "ECB", std::nullopt});
+  auto paddings =
+      makeFlatVector<std::string>({"DEFAULT", "PKCS", "PKCS", "DEFAULT"});
   auto rowVector = makeRowVector({inputs, keys, modes, paddings});
 
   // Encrypt with column-ref mode/padding (no iv, no aad).
@@ -420,16 +420,13 @@ TEST_F(AesEncryptDecryptTest, nonConstantModeAndPadding) {
       "cast(null as varbinary))",
       rtRowVector);
   EXPECT_EQ(
-      std::string(
-          decrypted->valueAt(0).data(), decrypted->valueAt(0).size()),
+      std::string(decrypted->valueAt(0).data(), decrypted->valueAt(0).size()),
       "alpha");
   EXPECT_EQ(
-      std::string(
-          decrypted->valueAt(1).data(), decrypted->valueAt(1).size()),
+      std::string(decrypted->valueAt(1).data(), decrypted->valueAt(1).size()),
       "beta");
   EXPECT_EQ(
-      std::string(
-          decrypted->valueAt(2).data(), decrypted->valueAt(2).size()),
+      std::string(decrypted->valueAt(2).data(), decrypted->valueAt(2).size()),
       "gamma");
   EXPECT_TRUE(decrypted->isNullAt(3)); // null mode -> null output
 }

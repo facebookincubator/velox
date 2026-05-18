@@ -179,8 +179,7 @@ void aesEncryptImpl(
     }
   } else if (iv != nullptr && iv->size() > 0) {
     VELOX_USER_FAIL(
-        "IV is not supported for {} mode",
-        CipherModeName::toName(config.mode));
+        "IV is not supported for {} mode", CipherModeName::toName(config.mode));
   }
 
   if (aad != nullptr && aad->size() > 0 && !config.supportsAad) {
@@ -202,8 +201,7 @@ void aesEncryptImpl(
         1,
         "Failed to initialize AES encryption");
     VELOX_CHECK_EQ(
-        EVP_CIPHER_CTX_ctrl(
-            ctx, EVP_CTRL_GCM_SET_IVLEN, config.ivLen, nullptr),
+        EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, config.ivLen, nullptr),
         1,
         "Failed to set GCM IV length");
     VELOX_CHECK_EQ(
@@ -247,8 +245,7 @@ void aesEncryptImpl(
   }
 
   int outLen = 0;
-  auto* outPtr =
-      reinterpret_cast<unsigned char*>(result.data()) + config.ivLen;
+  auto* outPtr = reinterpret_cast<unsigned char*>(result.data()) + config.ivLen;
   VELOX_CHECK_EQ(
       EVP_EncryptUpdate(
           ctx,
@@ -356,8 +353,7 @@ void aesDecryptImpl(
         1,
         "Failed to initialize AES decryption");
     VELOX_CHECK_EQ(
-        EVP_CIPHER_CTX_ctrl(
-            ctx, EVP_CTRL_GCM_SET_IVLEN, config.ivLen, nullptr),
+        EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, config.ivLen, nullptr),
         1,
         "Failed to set GCM IV length");
     VELOX_CHECK_EQ(
