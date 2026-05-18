@@ -111,7 +111,14 @@ struct AesEncryptFunction {
           modeStr.begin(), modeStr.end(), modeStr.begin(), ::toupper);
       std::transform(
           paddingStr.begin(), paddingStr.end(), paddingStr.begin(), ::toupper);
-      cachedConfig_ = detail::parseModeAndPadding(modeStr, paddingStr);
+      // Swallow parse errors here so initialize never throws. Bad literal
+      // mode/padding must throw from callNullable instead — otherwise the
+      // expression fuzzer flags a divergence between common and simplified
+      // eval paths (one throws at initialize, the other at eval).
+      try {
+        cachedConfig_ = detail::parseModeAndPadding(modeStr, paddingStr);
+      } catch (const VeloxUserError&) {
+      }
     }
   }
 
@@ -158,7 +165,11 @@ struct AesDecryptFunction {
           modeStr.begin(), modeStr.end(), modeStr.begin(), ::toupper);
       std::transform(
           paddingStr.begin(), paddingStr.end(), paddingStr.begin(), ::toupper);
-      cachedConfig_ = detail::parseModeAndPadding(modeStr, paddingStr);
+      // See AesEncryptFunction::initialize — must not throw here.
+      try {
+        cachedConfig_ = detail::parseModeAndPadding(modeStr, paddingStr);
+      } catch (const VeloxUserError&) {
+      }
     }
   }
 
