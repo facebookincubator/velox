@@ -283,22 +283,3 @@ TableScan operator shows how many rows were processed by pushing down aggregatio
 .. code-block::
 
     loadedToValueHook          sum: 50000, count: 5, min: 10000, max: 10000
-
-GPU Operator Stats
-~~~~~~~~~~~~~~~~~~
-
-When cuDF GPU operators are enabled, the stats output includes GPU-specific
-operators. Adapter operators (``CudfToVelox``, ``CudfFromVelox``) appear as
-operator-type breakdown lines under their parent plan node:
-
-.. code-block::
-
-    -- Aggregation[4][FINAL] -> a0:DOUBLE
-       Output: 2 rows, Cpu time: 546us, Wall time: 601us
-       CudfToVelox: Input: 1 rows, Cpu time: 193us, Wall time: 224us
-       CudfReduceFINAL: Input: 1 rows, Cpu time: 352us, Wall time: 377us
-
-Here, ``Aggregation[4]`` has two operators: ``CudfReduceFINAL`` (the GPU
-aggregation) and ``CudfToVelox`` (GPU-to-CPU format conversion). The summary
-line shows their combined stats. This is the same multi-operator mechanism
-used by ``HashBuild``/``HashProbe`` under join nodes.

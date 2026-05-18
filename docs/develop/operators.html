@@ -1365,40 +1365,6 @@ ALL.</p>
 </a>
 </section>
 </section>
-<section id="gpu-operators-cudf">
-<h2>GPU Operators (cuDF)<a class="headerlink" href="#gpu-operators-cudf" title="Link to this heading">¶</a></h2>
-<p>When cuDF is enabled, CPU operators are replaced with GPU equivalents at
-pipeline construction time via the <code class="docutils literal notranslate"><span class="pre">OperatorAdapterRegistry</span></code>. For example,
-<code class="docutils literal notranslate"><span class="pre">FilterProject</span></code> becomes <code class="docutils literal notranslate"><span class="pre">CudfFilterProject</span></code>, <code class="docutils literal notranslate"><span class="pre">Aggregation</span></code> becomes
-<code class="docutils literal notranslate"><span class="pre">CudfGroupby</span></code> or <code class="docutils literal notranslate"><span class="pre">CudfReduce</span></code>, and <code class="docutils literal notranslate"><span class="pre">HashJoin</span></code> becomes
-<code class="docutils literal notranslate"><span class="pre">CudfHashJoinBuild</span></code>/<code class="docutils literal notranslate"><span class="pre">CudfHashJoinProbe</span></code>.</p>
-<p>Adapter operators are automatically inserted at GPU/CPU boundaries:</p>
-<ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">CudfFromVelox</span></code> — inserted before a GPU operator when the preceding
-operator produces CPU data (host-to-device conversion).</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">CudfToVelox</span></code> — inserted after a GPU operator when the next operator
-or the pipeline output requires CPU data (device-to-host conversion).</p></li>
-</ul>
-<p>Adapter operators use synthetic planNodeIds (e.g. <code class="docutils literal notranslate"><span class="pre">4-to-velox</span></code>) at runtime,
-but redirect their stats to the parent plan node via <code class="docutils literal notranslate"><span class="pre">setStatSplitter</span></code>.
-This means they appear in <code class="docutils literal notranslate"><span class="pre">printPlanWithStats</span></code> output as operator-type
-breakdown lines under their parent node (the same mechanism used by
-<code class="docutils literal notranslate"><span class="pre">HashBuild</span></code>/<code class="docutils literal notranslate"><span class="pre">HashProbe</span></code> under <code class="docutils literal notranslate"><span class="pre">HashJoinNode</span></code>).</p>
-<p>All cuDF operators extend <code class="docutils literal notranslate"><span class="pre">CudfOperatorBase</span></code>, which provides:</p>
-<ul class="simple">
-<li><p>Template method pattern (<code class="docutils literal notranslate"><span class="pre">doAddInput</span></code>/<code class="docutils literal notranslate"><span class="pre">doGetOutput</span></code>/<code class="docutils literal notranslate"><span class="pre">doClose</span></code>)</p></li>
-<li><p>NVTX profiling ranges</p></li>
-</ul>
-<p>GPU operators are identified by their <code class="docutils literal notranslate"><span class="pre">Cudf</span></code> prefix in operator type names
-(e.g. <code class="docutils literal notranslate"><span class="pre">CudfFilterProject</span></code>, <code class="docutils literal notranslate"><span class="pre">CudfLocalPartition</span></code>, <code class="docutils literal notranslate"><span class="pre">CudfReduceFINAL</span></code>).
-Operators without this prefix (e.g. <code class="docutils literal notranslate"><span class="pre">LocalExchange</span></code>) run on CPU.
-<code class="docutils literal notranslate"><span class="pre">TableScan</span></code> uses the cuDF GPU parquet reader via the connector layer but
-is not itself a <code class="docutils literal notranslate"><span class="pre">CudfOperatorBase</span></code> subclass.</p>
-<p>In stats output, “Cpu time” and “Wall time” for GPU operators reflect the
-host-side duration of <code class="docutils literal notranslate"><span class="pre">addInput</span></code>/<code class="docutils literal notranslate"><span class="pre">getOutput</span></code> calls, which includes
-enqueuing GPU work and synchronizing. These are not GPU hardware execution
-times.</p>
-</section>
 </section>
 
 
@@ -1449,7 +1415,6 @@ times.</p>
 <li><a class="reference internal" href="#local-exchange">Local Exchange</a></li>
 </ul>
 </li>
-<li><a class="reference internal" href="#gpu-operators-cudf">GPU Operators (cuDF)</a></li>
 </ul>
 </li>
 </ul>
