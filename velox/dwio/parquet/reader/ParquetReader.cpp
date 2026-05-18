@@ -360,7 +360,7 @@ void ReaderBase::loadFileMetaData() {
   fileMetaData_ = std::make_unique<thrift::FileMetaData>();
   fileMetaData_->read(thriftProtocol.get());
   if (footerLength > options().parquetFooterMemoryTrackingThreshold()) {
-    thriftSize_ = calculateFileMetadataSize(*fileMetaData_);
+    thriftSize_ = fileMetaData().calculateFileMetadataSize();
   }
 }
 
@@ -1421,7 +1421,8 @@ class ParquetRowReader::Impl {
             freedThriftSize +=
                 rowGroups_[i].columns.size() * sizeof(thrift::ColumnChunk);
             for (const auto& column : rowGroups_[i].columns) {
-              freedThriftSize += calculateColumnMetadataSize(column);
+              freedThriftSize +=
+                  ColumnChunkMetaDataPtr(&column).calculateColumnMetadataSize();
             }
           }
           rowGroups_[i].columns.clear();

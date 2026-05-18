@@ -75,6 +75,12 @@ class ColumnChunkMetaDataPtr {
   /// This information is optional and may be 0 if omitted.
   int64_t totalUncompressedSize() const;
 
+  /// Returns the estimated dynamically-allocated heap memory reachable from
+  /// this column chunk's thrift representation. Excludes the inline
+  /// thrift::ColumnChunk struct itself; callers that account for the
+  /// containing vector must add sizeof(thrift::ColumnChunk) separately.
+  size_t calculateColumnMetadataSize() const;
+
  private:
   const void* ptr_;
 };
@@ -157,12 +163,13 @@ class FileMetaDataPtr {
   /// Return the Parquet writer created_by string.
   std::string createdBy() const;
 
+  /// Returns the estimated total heap memory held by this file's thrift
+  /// representation: sizeof(thrift::FileMetaData) plus every dynamically
+  /// allocated vector and string reachable through it.
+  size_t calculateFileMetadataSize() const;
+
  private:
   const void* ptr_;
 };
-
-size_t calculateColumnMetadataSize(const thrift::ColumnChunk& column);
-
-size_t calculateFileMetadataSize(const thrift::FileMetaData& metadata);
 
 } // namespace facebook::velox::parquet
