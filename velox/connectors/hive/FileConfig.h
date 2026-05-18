@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <limits>
 #include <string>
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/config/Config.h"
@@ -142,6 +143,18 @@ class FileConfig {
       bool,
       false,
       "Preserve dictionary encoding for Nimble string column reads.")
+
+  VELOX_HIVE_CONFIG_LEGACY(
+      kParquetFooterMemoryTrackingThresholdSession,
+      kParquetFooterMemoryTrackingThreshold,
+      parquetFooterMemoryTrackingThreshold,
+      "parquet_footer_memory_tracking_threshold",
+      "parquet.footer-memory-tracking-threshold",
+      uint64_t,
+      std::numeric_limits<uint64_t>::max(),
+      "Footer byte size beyond which the Parquet reader estimates and "
+      "reports the deserialized footer's heap footprint to the memory "
+      "pool. Defaults to disabled (max uint64).")
 
   // --- VELOX_HIVE_CONFIG properties ---
 
@@ -284,12 +297,6 @@ class FileConfig {
   /// meta data together. Optimization to decrease the small IO requests.
   static constexpr const char* kFilePreloadThreshold = "file-preload-threshold";
 
-  /// The byte size threshold beyond which the Parquet reader estimates and
-  /// reports the memory usage of deserialized Thrift objects to the memory
-  /// pool. Defaults to disabled (max uint64).
-  static constexpr const char* kParquetFooterTrackThriftMemoryThreshold =
-      "parquet.track-footer-thrift-memory-threshold";
-
   explicit FileConfig(std::shared_ptr<const config::ConfigBase> config) {
     VELOX_CHECK_NOT_NULL(
         config, "Config is null for FileConfig initialization");
@@ -305,11 +312,6 @@ class FileConfig {
   size_t parallelUnitLoadCount(const config::ConfigBase* session) const;
 
   uint64_t filePreloadThreshold() const;
-
-  /// Returns the byte size threshold beyond which the Parquet reader reports
-  /// the deserialized Thrift footer's memory consumption to the memory pool.
-  /// Defaults to disabled (max uint64).
-  uint64_t parquetFooterTrackThriftMemoryThreshold() const;
 
   // Returns the timestamp unit used when reading timestamps from files.
   uint8_t readTimestampUnit(const config::ConfigBase* session) const;

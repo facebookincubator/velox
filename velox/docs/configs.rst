@@ -529,15 +529,15 @@ Spilling
      - bool
      - false
      - Enable the prefix sort or fallback to timsort in spill. The prefix sort is faster than std::sort but requires the
-       memory to build normalized prefix keys, which might have potential risk of running out of server memory.
-   * - spiller_start_partition_bit
-     - integer
-     - 29
-     - The start partition bit which is used with `spiller_num_partition_bits` together to calculate the spilling partition number.
-   * - spiller_num_partition_bits
-     - integer
-     - 3
-     - The number of bits (N) used to calculate the spilling partition number for hash join and RowNumber: 2 ^ N. At the moment the maximum
+       memory to build normalized prefix keys,
+           which might have potential risk of running out of server memory.*
+               -spiller_start_partition_bit -
+           integer - 29 -
+           The start partition bit which is used
+                   with `spiller_num_partition_bits` together to calculate the
+                       spilling partition number.*
+               -spiller_num_partition_bits -
+           integer - 3 - The number of bits(N) used to calculate the spilling partition number for hash join and RowNumber: 2 ^ N. At the moment the maximum
        value is 3, meaning we only support up to 8-way spill partitioning.ing.
    * - testing.spill_pct
      - integer
@@ -908,6 +908,14 @@ must be specified as raw byte counts.
      - Speculative tail-read size in bytes when opening Parquet files. Controls how many bytes are read from the end
        of the file to load the footer and nearby metadata in a single IO operation.
        Set to 0 for adaptive mode.
+   * - parquet.footer-memory-tracking-threshold
+     - parquet_footer_memory_tracking_threshold
+     - integer
+     - disabled (max uint64)
+     - Footer byte size beyond which the Parquet reader estimates and reports the deserialized footer's heap
+       footprint to the memory pool, so footers large enough to dominate query memory are accounted for instead
+       of being invisible. Footers smaller than the threshold are not reported (default behavior). When set, the
+       memory is released as row groups are skipped or when the reader is destroyed.
    * - nimble.footer-speculative-io-size
      - nimble_footer_speculative_io_size
      - integer
@@ -1011,11 +1019,6 @@ must be specified as raw byte counts.
      - string
      - parquet-cpp-velox version 0.0.0
      - Created-by value used when writing to Parquet.
-   * - parquet.track-footer-thrift-memory-threshold
-     -
-     - integer
-     - disabled (max uint64)
-     - Threshold for tracking thrift memory usage in Parquet file footers. When the footer size exceeds this threshold, memory usage is tracked and reported. By default, tracking is disabled.
 
 ``Amazon S3 Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^

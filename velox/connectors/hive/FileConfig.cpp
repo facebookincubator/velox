@@ -37,6 +37,7 @@ const std::vector<config::ConfigProperty>& FileConfig::registeredProperties() {
     VELOX_HIVE_CONFIG_REGISTER(kNimbleFooterSpeculativeIoSizeSession);
     VELOX_HIVE_CONFIG_REGISTER(kNimbleStringDecoderZeroCopySession);
     VELOX_HIVE_CONFIG_REGISTER(kNimblePreserveDictionaryEncodingSession);
+    VELOX_HIVE_CONFIG_REGISTER(kParquetFooterMemoryTrackingThresholdSession);
     VELOX_HIVE_CONFIG_REGISTER(kFileColumnNamesReadAsLowerCaseSession);
     VELOX_HIVE_CONFIG_REGISTER(kIgnoreMissingFilesSession);
     VELOX_HIVE_CONFIG_REGISTER(kMaxCoalescedBytesSession);
@@ -90,12 +91,6 @@ size_t FileConfig::parallelUnitLoadCount(
 
 uint64_t FileConfig::filePreloadThreshold() const {
   return config_->get<uint64_t>(kFilePreloadThreshold, 8UL << 20);
-}
-
-uint64_t FileConfig::parquetFooterTrackThriftMemoryThreshold() const {
-  return config_->get<uint64_t>(
-      kParquetFooterTrackThriftMemoryThreshold,
-      std::numeric_limits<uint64_t>::max());
 }
 
 uint8_t FileConfig::readTimestampUnit(const config::ConfigBase* session) const {

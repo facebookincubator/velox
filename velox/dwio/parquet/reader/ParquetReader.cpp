@@ -142,10 +142,8 @@ class ReaderBase {
       const dwio::common::ReaderOptions& options);
 
   virtual ~ReaderBase() {
-    if (thriftSize_ > 0) {
-      if (thriftMemoryReported_) {
-        pool_.reportExternalFree(thriftSize_);
-      }
+    if (thriftMemoryReported_ && thriftSize_ > 0) {
+      pool_.reportExternalFree(thriftSize_);
     }
   }
 
@@ -209,9 +207,23 @@ class ReaderBase {
   /// Checks whether the specific row group has been loaded and
   /// the data still exists in the buffered inputs.
   bool isRowGroupBuffered(int32_t rowGroupIndex) const;
-  bool thriftMemoryReported_ = false;
 
-  size_t thriftSize_ = 0;
+  /// Returns true if the deserialized Thrift footer's memory has been
+  /// reported to the memory pool. False when the footer was smaller than
+  /// the tracking threshold, so no allocation was reported.
+  bool isThriftMemoryReported() const {
+    return thriftMemoryReported_;
+  }
+
+  /// Releases 'bytes' from the previously reported Thrift footer memory
+  /// back to the pool and reduces the remaining tracked size accordingly.
+  /// Called when parts of the footer (e.g. cleared row group columns) are
+  /// released early, before ~ReaderBase frees the rest.
+  void releaseThriftBytes(size_t bytes) {
+    VELOX_CHECK_GE(thriftSize_, bytes);
+    pool_.reportExternalFree(bytes);
+    thriftSize_ -= bytes;
+  }
 
  private:
   // Reads and parses file footer.
@@ -257,6 +269,18 @@ class ReaderBase {
   // Map from row group index to pre-created loading BufferedInput.
   std::unordered_map<uint32_t, std::shared_ptr<dwio::common::BufferedInput>>
       inputs_;
+
+  // Whether the deserialized Thrift footer's heap footprint has been
+  // reported to 'pool_'. Set once in the constructor after a successful
+  // reportExternalAllocation, and consulted by ~ReaderBase and
+  // releaseThriftBytes to decide whether the pool needs to be notified on
+  // release.
+  bool thriftMemoryReported_{false};
+
+  // Estimated bytes of heap memory held by 'fileMetaData_' that have been
+  // reported to 'pool_' and not yet released. Decreases as row group
+  // columns are cleared early; the remainder is released by ~ReaderBase.
+  size_t thriftSize_{0};
 };
 
 ReaderBase::ReaderBase(
@@ -335,7 +359,7 @@ void ReaderBase::loadFileMetaData() {
       thriftTransport);
   fileMetaData_ = std::make_unique<thrift::FileMetaData>();
   fileMetaData_->read(thriftProtocol.get());
-  if (footerLength > options().parquetFooterTrackThriftMemoryThreshold()) {
+  if (footerLength > options().parquetFooterMemoryTrackingThreshold()) {
     thriftSize_ = calculateFileMetadataSize(*fileMetaData_);
   }
 }
@@ -1393,7 +1417,7 @@ class ParquetRowReader::Impl {
           // memory. Skip the 0th RowGroup as it is used by estimatedRowSize().
           // Measure the columns BEFORE clearing so we can release the matching
           // amount from the pool reservation that ReaderBase reported.
-          if (readerBase_->thriftMemoryReported_) {
+          if (readerBase_->isThriftMemoryReported()) {
             freedThriftSize +=
                 rowGroups_[i].columns.size() * sizeof(thrift::ColumnChunk);
             for (const auto& column : rowGroups_[i].columns) {
@@ -1412,11 +1436,9 @@ class ParquetRowReader::Impl {
 
     if (freedThriftSize > 0) {
       // ReaderBase reported the full thrift footprint at construction. Release
-      // the portion we just freed by clearing skipped row groups, and shrink
-      // the recorded size so ~ReaderBase frees only the remaining bytes.
-      VELOX_CHECK_GE(readerBase_->thriftSize_, freedThriftSize);
-      pool_.reportExternalFree(freedThriftSize);
-      readerBase_->thriftSize_ -= freedThriftSize;
+      // the portion we just freed by clearing skipped row groups; the
+      // remainder is released by ~ReaderBase.
+      readerBase_->releaseThriftBytes(freedThriftSize);
     }
   }
 

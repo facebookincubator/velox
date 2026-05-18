@@ -2147,7 +2147,7 @@ TEST_F(ParquetReaderTest, thriftMemoryTracking) {
   dwio::common::ReaderOptions readerOptions{
       leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
   // 1-byte threshold forces memory tracking to engage for any footer.
-  readerOptions.setParquetFooterTrackThriftMemoryThreshold(1);
+  readerOptions.setParquetFooterMemoryTrackingThreshold(1);
   const auto initialUsage = leafPool_->usedBytes();
   {
     auto reader = createReader(sample, readerOptions);
@@ -2160,6 +2160,17 @@ TEST_F(ParquetReaderTest, thriftMemoryTracking) {
     const auto memoryAfterRowReader = leafPool_->usedBytes();
     EXPECT_GT(memoryAfterRowReader, initialUsage);
 
+    // The reported footprint must at least cover the FileMetaData struct
+    // itself plus one ColumnChunk per row group * column — anything smaller
+    // means the estimator is not accounting for the per-row-group payload.
+    const auto reportedBytes = memoryAfterRowReader - initialUsage;
+    const auto numRowGroups = reader->fileMetaData().numRowGroups();
+    EXPECT_GT(numRowGroups, 0);
+    EXPECT_GE(
+        reportedBytes,
+        sizeof(thrift::FileMetaData) +
+            numRowGroups * sizeof(thrift::ColumnChunk));
+
     auto result = BaseVector::create(sampleSchema(), 0, leafPool_.get());
     rowReader->next(10, result);
     EXPECT_EQ(result->size(), 10);
@@ -2169,5 +2180,47 @@ TEST_F(ParquetReaderTest, thriftMemoryTracking) {
   }
 
   // ~ReaderBase() releases the reported memory, returning to baseline.
+  EXPECT_EQ(leafPool_->usedBytes(), initialUsage);
+}
+
+TEST_F(ParquetReaderTest, thriftMemoryReleasedForSkippedRowGroups) {
+  // Verifies that when row groups are skipped via the scan range, the
+  // portion of the Thrift footer memory belonging to those row groups is
+  // released back to the pool when the row reader runs filterRowGroups.
+  const auto rowType = ROW({"id"}, {BIGINT()});
+  const std::string sample(getExampleFilePath("multiple_row_groups.parquet"));
+
+  dwio::common::ReaderOptions readerOptions{
+      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  // 1-byte threshold forces memory tracking to engage for any footer.
+  readerOptions.setParquetFooterMemoryTrackingThreshold(1);
+  const auto initialUsage = leafPool_->usedBytes();
+  {
+    auto reader = createReader(sample, readerOptions);
+    const auto numRowGroups = reader->fileMetaData().numRowGroups();
+    ASSERT_GT(numRowGroups, 1);
+
+    // After reader construction, the full footer footprint is reported.
+    const auto memoryAfterReader = leafPool_->usedBytes();
+    EXPECT_GT(memoryAfterReader, initialUsage);
+
+    // Limit the scan range to keep only row group 0; row groups 1+ fall
+    // outside the range and get cleared by filterRowGroups().
+    const auto secondRowGroupOffset =
+        reader->fileMetaData().rowGroup(1).fileOffset();
+    ASSERT_GT(secondRowGroupOffset, 0);
+
+    RowReaderOptions rowReaderOpts;
+    rowReaderOpts.setScanSpec(makeScanSpec(rowType));
+    rowReaderOpts.range(0, secondRowGroupOffset);
+    auto rowReader = reader->createRowReader(rowReaderOpts);
+
+    // The cleared row groups' bytes must have been released to the pool.
+    EXPECT_LT(leafPool_->usedBytes(), memoryAfterReader);
+    // Row group 0 is preserved, so some memory remains reported.
+    EXPECT_GT(leafPool_->usedBytes(), initialUsage);
+  }
+
+  // ~ReaderBase() releases the remaining reported memory.
   EXPECT_EQ(leafPool_->usedBytes(), initialUsage);
 }

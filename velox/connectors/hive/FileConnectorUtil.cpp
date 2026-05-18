@@ -77,8 +77,8 @@ void configureReaderOptions(
       useColumnNamesForColumnMapping);
   readerOptions.setFileSchema(fileSchema);
   readerOptions.setFilePreloadThreshold(fileConfig->filePreloadThreshold());
-  readerOptions.setParquetFooterTrackThriftMemoryThreshold(
-      fileConfig->parquetFooterTrackThriftMemoryThreshold());
+  readerOptions.setParquetFooterMemoryTrackingThreshold(
+      fileConfig->parquetFooterMemoryTrackingThreshold(sessionProperties));
   readerOptions.setPrefetchRowGroups(fileConfig->prefetchRowGroups());
   readerOptions.setCacheable(fileSplit->cacheable);
   const auto& sessionTzName = connectorQueryCtx->sessionTimezone();
