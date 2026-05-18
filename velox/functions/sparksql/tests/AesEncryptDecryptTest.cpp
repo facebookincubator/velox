@@ -395,18 +395,81 @@ TEST_F(AesEncryptDecryptTest, decryptWrongKey) {
       "AES decryption failed");
 }
 
-// Verifies that parseModeAndPadding errors propagate from initialize() as
-// VELOX_USER_FAIL — these used to be deferred via config_.error and re-thrown
-// in callNullable; now they fail at expression initialization time.
-TEST_F(AesEncryptDecryptTest, initializeRejectsBadModeAndPadding) {
-  const std::string key = "0000111122223333";
+// Per-row mode/padding (column reference, not literal). Spark vanilla
+// evaluates mode/padding per row via RuntimeReplaceable + StaticInvoke
+// (ExpressionImplUtils.aesEncrypt reads all 6 args per row), and Velox now
+// matches: `initialize` only caches the config when mode AND padding are
+// literal; otherwise `callNullable` parses per row. Null mode/padding rows
+// produce null output (Spark vanilla behavior).
+TEST_F(AesEncryptDecryptTest, nonConstantModeAndPadding) {
+  using facebook::velox::test::assertEqualVectors;
+  // 4 rows: legal combos + 1 row with null mode (expect null output).
+  auto inputs = makeFlatVector<std::string>(
+      {"alpha", "beta", "gamma", "delta"}, VARBINARY());
+  auto keys = makeFlatVector<std::string>(
+      {"0000111122223333",
+       "0000111122223333",
+       "0000111122223333",
+       "0000111122223333"},
+      VARBINARY());
+  auto modes = makeNullableFlatVector<std::string>(
+      {"GCM", "CBC", "ECB", std::nullopt});
+  auto paddings = makeFlatVector<std::string>(
+      {"DEFAULT", "PKCS", "PKCS", "DEFAULT"});
+  auto rowVector = makeRowVector({inputs, keys, modes, paddings});
+
+  // Encrypt with column-ref mode/padding (no iv, no aad).
+  auto encrypted = evaluate<FlatVector<StringView>>(
+      "aes_encrypt(c0, c1, c2, c3, cast(null as varbinary), "
+      "cast(null as varbinary))",
+      rowVector);
+  ASSERT_FALSE(encrypted->isNullAt(0));
+  ASSERT_FALSE(encrypted->isNullAt(1));
+  ASSERT_FALSE(encrypted->isNullAt(2));
+  ASSERT_TRUE(encrypted->isNullAt(3)); // null mode -> null output
+
+  // Round-trip: decrypt with the same column-ref mode/padding.
+  auto encStrs = makeFlatVector<std::string>(
+      {std::string(encrypted->valueAt(0).data(), encrypted->valueAt(0).size()),
+       std::string(encrypted->valueAt(1).data(), encrypted->valueAt(1).size()),
+       std::string(encrypted->valueAt(2).data(), encrypted->valueAt(2).size()),
+       std::string("")},
+      VARBINARY());
+  auto rtRowVector = makeRowVector({encStrs, keys, modes, paddings});
+  auto decrypted = evaluate<FlatVector<StringView>>(
+      "aes_decrypt(c0, c1, c2, c3, cast(null as varbinary), "
+      "cast(null as varbinary))",
+      rtRowVector);
+  EXPECT_EQ(
+      std::string(
+          decrypted->valueAt(0).data(), decrypted->valueAt(0).size()),
+      "alpha");
+  EXPECT_EQ(
+      std::string(
+          decrypted->valueAt(1).data(), decrypted->valueAt(1).size()),
+      "beta");
+  EXPECT_EQ(
+      std::string(
+          decrypted->valueAt(2).data(), decrypted->valueAt(2).size()),
+      "gamma");
+  EXPECT_TRUE(decrypted->isNullAt(3)); // null mode -> null output
+}
+
+// Per-row mode/padding parse error: bad mode in one row throws (Spark
+// vanilla also throws per row; we don't silently return null).
+TEST_F(AesEncryptDecryptTest, nonConstantModeBadValueThrows) {
+  auto inputs = makeFlatVector<std::string>({"alpha", "beta"}, VARBINARY());
+  auto keys = makeFlatVector<std::string>(
+      {"0000111122223333", "0000111122223333"}, VARBINARY());
+  auto modes = makeFlatVector<std::string>({"GCM", "BAD"});
+  auto paddings = makeFlatVector<std::string>({"DEFAULT", "DEFAULT"});
+  auto rowVector = makeRowVector({inputs, keys, modes, paddings});
   VELOX_ASSERT_THROW(
-      encrypt("Spark", key, "BAD", "DEFAULT"), "Unsupported AES mode: BAD");
-  VELOX_ASSERT_THROW(
-      encrypt("Spark", key, "CBC", "BAD"), "Unsupported AES padding: BAD");
-  VELOX_ASSERT_THROW(
-      encrypt("Spark", key, "GCM", "PKCS"),
-      "PKCS padding is not supported for GCM mode");
+      evaluate<FlatVector<StringView>>(
+          "aes_encrypt(c0, c1, c2, c3, cast(null as varbinary), "
+          "cast(null as varbinary))",
+          rowVector),
+      "Unsupported AES mode: BAD");
 }
 
 // Decrypt with input too short.
