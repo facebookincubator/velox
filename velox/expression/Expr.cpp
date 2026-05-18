@@ -60,6 +60,7 @@ const auto& specialFormNames() {
       {SpecialFormKind::kTry, "TRY"},
       {SpecialFormKind::kAnd, "AND"},
       {SpecialFormKind::kOr, "OR"},
+      {SpecialFormKind::kCase, "CASE"},
       {SpecialFormKind::kCustom, "CUSTOM"},
   };
   return kNames;
