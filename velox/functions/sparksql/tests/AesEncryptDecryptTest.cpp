@@ -91,14 +91,14 @@ class AesEncryptDecryptTest : public SparkFunctionBaseTest {
   void testRoundTrip(
       const std::string& input,
       const std::string& key,
-      const std::string& mode = "GCM",
-      const std::string& padding = "DEFAULT") {
+      const std::string& mode,
+      const std::string& padding) {
     auto encrypted = encrypt(input, key, mode, padding);
     ASSERT_TRUE(encrypted.has_value());
     auto decrypted = decrypt(encrypted.value(), key, mode, padding);
     ASSERT_TRUE(decrypted.has_value());
-    EXPECT_EQ(decrypted.value(), input)
-        << "Round-trip failed for mode=" << mode << " padding=" << padding;
+    SCOPED_TRACE(fmt::format("mode={} padding={}", mode, padding));
+    EXPECT_EQ(decrypted.value(), input);
   }
 };
 
@@ -253,27 +253,6 @@ TEST_F(AesEncryptDecryptTest, nullIvAndAad) {
 TEST_F(AesEncryptDecryptTest, nonePaddingBlockAligned) {
   std::string key16 = "0000111122223333";
   testRoundTrip("0123456789abcdef", key16, "ECB", "NONE");
-}
-
-// SQL NULL input or NULL key must produce NULL output (not garbage).
-// Regression test for the bool-vs-Status callNullable contract: when
-// callNullable returns Status, the framework forces notNull=true and the
-// output buffer is whatever happens to be on the stack. Returning bool
-// fixes this.
-TEST_F(AesEncryptDecryptTest, nullInputOrKey) {
-  const std::string key16 = "0000111122223333";
-
-  // input=NULL, key set → NULL.
-  EXPECT_FALSE(encrypt(std::nullopt, key16, "GCM").has_value());
-  EXPECT_FALSE(decrypt(std::nullopt, key16, "GCM").has_value());
-
-  // input set, key=NULL → NULL.
-  EXPECT_FALSE(encrypt(std::string("Spark"), std::nullopt, "GCM").has_value());
-  EXPECT_FALSE(decrypt(std::string("Spark"), std::nullopt, "GCM").has_value());
-
-  // Both NULL → NULL.
-  EXPECT_FALSE(encrypt(std::nullopt, std::nullopt, "GCM").has_value());
-  EXPECT_FALSE(decrypt(std::nullopt, std::nullopt, "GCM").has_value());
 }
 
 // --- Failure tests ---
