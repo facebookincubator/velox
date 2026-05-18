@@ -243,9 +243,12 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// Reports an external allocation of 'size' bytes to the memory pool without
   /// allocating any memory. Used to track memory owned by objects that were
   /// allocated outside of the pool (e.g., Thrift-deserialized structures).
-  /// Each call must be paired with a matching reportFree() of the same 'size'
-  /// when the external memory is released. 'size' must be positive.
-  virtual void reportAllocation(int64_t size) = 0;
+  /// Each call must be paired with a matching reportExternalFree() of the
+  /// same 'size' when the external memory is released. 'size' must be
+  /// positive. External allocations are counted separately from regular pool
+  /// allocations and surfaced through Stats::numExternalAllocs and
+  /// Stats::cumulativeExternalBytes.
+  virtual void reportExternalAllocation(int64_t size) = 0;
 
   /// Allocates a zero-filled buffer with capacity that can store 'numEntries'
   /// entries with each size of 'sizeEach'.
@@ -266,9 +269,9 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   }
 
   /// Reports the release of 'size' bytes of externally tracked memory. Must
-  /// be paired with a prior reportAllocation() of the same 'size'. 'size'
-  /// must be positive.
-  virtual void reportFree(int64_t size) = 0;
+  /// be paired with a prior reportExternalAllocation() of the same 'size'.
+  /// 'size' must be positive.
+  virtual void reportExternalFree(int64_t size) = 0;
 
   /// Allocates one or more runs that add up to at least 'numPages', with the
   /// smallest run being at least 'minSizeClass' pages. 'minSizeClass' must be
@@ -467,6 +470,14 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
     ///
     /// NOTE: this only applies for the root memory pool.
     uint64_t numCapacityGrowths{0};
+    /// The number of external allocations reported via
+    /// reportExternalAllocation().
+    uint64_t numExternalAllocs{0};
+    /// The number of external frees reported via reportExternalFree().
+    uint64_t numExternalFrees{0};
+    /// The cumulative sum of bytes reported via reportExternalAllocation()
+    /// since the pool was created.
+    uint64_t cumulativeExternalBytes{0};
 
     bool operator==(const Stats& rhs) const;
 
@@ -628,7 +639,7 @@ class MemoryPoolImpl : public MemoryPool {
   void* allocate(int64_t size, std::optional<uint32_t> alignment = std::nullopt)
       override;
 
-  void reportAllocation(int64_t size) override;
+  void reportExternalAllocation(int64_t size) override;
 
   void* allocateZeroFilled(int64_t numEntries, int64_t sizeEach) override;
 
@@ -638,7 +649,7 @@ class MemoryPoolImpl : public MemoryPool {
 
   bool transferTo(MemoryPool* dest, void* buffer, uint64_t size) override;
 
-  void reportFree(int64_t size) override;
+  void reportExternalFree(int64_t size) override;
 
   void allocateNonContiguous(
       MachinePageCount numPages,
@@ -975,7 +986,10 @@ class MemoryPoolImpl : public MemoryPool {
         << succinctBytes(minReservationBytes_);
     out << "] counters [allocs " << numAllocs_ << ", frees " << numFrees_
         << ", reserves " << numReserves_ << ", releases " << numReleases_
-        << ", collisions " << numCollisions_ << "])";
+        << ", collisions " << numCollisions_ << ", external-allocs "
+        << numExternalAllocs_ << ", external-frees " << numExternalFrees_
+        << ", cumulative-external " << succinctBytes(cumulativeExternalBytes_)
+        << "])";
     out << ">";
     return out.str();
   }
@@ -1110,6 +1124,17 @@ class MemoryPoolImpl : public MemoryPool {
   //
   // NOTE: this only applies for root memory pool.
   std::atomic_uint64_t numCapacityGrowths_{0};
+
+  // The number of external allocations reported via
+  // reportExternalAllocation().
+  std::atomic_uint64_t numExternalAllocs_{0};
+
+  // The number of external frees reported via reportExternalFree().
+  std::atomic_uint64_t numExternalFrees_{0};
+
+  // The cumulative sum of bytes reported via reportExternalAllocation() since
+  // the pool was created.
+  std::atomic_uint64_t cumulativeExternalBytes_{0};
 
   // Mutex for 'debugAllocRecords_'.
   mutable std::mutex debugAllocMutex_;

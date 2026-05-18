@@ -251,7 +251,7 @@ class TestMemoryPool : public memory::MemoryPool {
     return nullptr;
   }
 
-  void reportAllocation(int64_t /* unused */) override {}
+  void reportExternalAllocation(int64_t /* unused */) override {}
 
   void* allocateZeroFilled(int64_t /* unused */, int64_t /* unused */)
       override {
@@ -267,7 +267,7 @@ class TestMemoryPool : public memory::MemoryPool {
 
   void free(void* /* unused */, int64_t /* unused */) override {}
 
-  void reportFree(int64_t /* unused */) override {}
+  void reportExternalFree(int64_t /* unused */) override {}
 
   void allocateNonContiguous(
       memory::MachinePageCount /* unused */,

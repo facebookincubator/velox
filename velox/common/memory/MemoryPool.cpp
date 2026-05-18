@@ -170,7 +170,7 @@ std::string capacityToString(int64_t capacity) {
 
 std::string MemoryPool::Stats::toString() const {
   return fmt::format(
-      "usedBytes:{} reservedBytes:{} peakBytes:{} cumulativeBytes:{} numAllocs:{} numFrees:{} numReserves:{} numReleases:{} numShrinks:{} numReclaims:{} numCollisions:{} numCapacityGrowths:{}",
+      "usedBytes:{} reservedBytes:{} peakBytes:{} cumulativeBytes:{} numAllocs:{} numFrees:{} numReserves:{} numReleases:{} numShrinks:{} numReclaims:{} numCollisions:{} numCapacityGrowths:{} numExternalAllocs:{} numExternalFrees:{} cumulativeExternalBytes:{}",
       succinctBytes(usedBytes),
       succinctBytes(reservedBytes),
       succinctBytes(peakBytes),
@@ -182,7 +182,10 @@ std::string MemoryPool::Stats::toString() const {
       numShrinks,
       numReclaims,
       numCollisions,
-      numCapacityGrowths);
+      numCapacityGrowths,
+      numExternalAllocs,
+      numExternalFrees,
+      succinctBytes(cumulativeExternalBytes));
 }
 
 bool MemoryPool::Stats::operator==(const MemoryPool::Stats& other) const {
@@ -196,7 +199,10 @@ bool MemoryPool::Stats::operator==(const MemoryPool::Stats& other) const {
              numReserves,
              numReleases,
              numCollisions,
-             numCapacityGrowths) ==
+             numCapacityGrowths,
+             numExternalAllocs,
+             numExternalFrees,
+             cumulativeExternalBytes) ==
       std::tie(
              other.usedBytes,
              other.reservedBytes,
@@ -207,7 +213,10 @@ bool MemoryPool::Stats::operator==(const MemoryPool::Stats& other) const {
              other.numReserves,
              other.numReleases,
              other.numCollisions,
-             other.numCapacityGrowths);
+             other.numCapacityGrowths,
+             other.numExternalAllocs,
+             other.numExternalFrees,
+             other.cumulativeExternalBytes);
 }
 
 std::ostream& operator<<(std::ostream& os, const MemoryPool::Stats& stats) {
@@ -502,6 +511,9 @@ MemoryPool::Stats MemoryPoolImpl::statsLocked() const {
   stats.numReleases = numReleases_;
   stats.numCollisions = numCollisions_;
   stats.numCapacityGrowths = numCapacityGrowths_;
+  stats.numExternalAllocs = numExternalAllocs_;
+  stats.numExternalFrees = numExternalFrees_;
+  stats.cumulativeExternalBytes = cumulativeExternalBytes_;
   return stats;
 }
 
@@ -540,11 +552,15 @@ void* MemoryPoolImpl::allocate(
   return buffer;
 }
 
-void MemoryPoolImpl::reportAllocation(int64_t size) {
+void MemoryPoolImpl::reportExternalAllocation(int64_t size) {
   VELOX_CHECK_GT(size, 0);
-  CHECK_AND_INC_MEM_OP_STATS(this, Allocs);
-  const auto alignedSize = sizeAlign(size);
-  reserve(alignedSize);
+  if (FOLLY_UNLIKELY(kind_ != Kind::kLeaf)) {
+    VELOX_FAIL(
+        "Memory operation is only allowed on leaf memory pool: {}", toString());
+  }
+  ++numExternalAllocs_;
+  cumulativeExternalBytes_ += size;
+  reserve(size);
 }
 
 void* MemoryPoolImpl::allocateZeroFilled(int64_t numEntries, int64_t sizeEach) {
@@ -623,11 +639,14 @@ bool MemoryPoolImpl::transferTo(MemoryPool* dest, void* buffer, uint64_t size) {
   return true;
 }
 
-void MemoryPoolImpl::reportFree(int64_t size) {
+void MemoryPoolImpl::reportExternalFree(int64_t size) {
   VELOX_CHECK_GT(size, 0);
-  CHECK_AND_INC_MEM_OP_STATS(this, Frees);
-  const auto alignedSize = sizeAlign(size);
-  release(alignedSize);
+  if (FOLLY_UNLIKELY(kind_ != Kind::kLeaf)) {
+    VELOX_FAIL(
+        "Memory operation is only allowed on leaf memory pool: {}", toString());
+  }
+  ++numExternalFrees_;
+  release(size);
 }
 
 void MemoryPoolImpl::allocateNonContiguous(

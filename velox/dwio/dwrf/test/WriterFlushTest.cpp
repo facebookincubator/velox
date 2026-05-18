@@ -40,12 +40,7 @@ class MockMemoryPool : public velox::memory::MemoryPool {
       MemoryPool::Kind kind,
       std::shared_ptr<MemoryPool> parent,
       int64_t cap = std::numeric_limits<int64_t>::max())
-      : MemoryPool{
-            name,
-            kind,
-            parent,
-            {.alignment = velox::memory::MemoryAllocator::kMinAlignment,
-             .maxCapacity = cap}},
+      : MemoryPool{name, kind, parent, {.alignment = velox::memory::MemoryAllocator::kMinAlignment, .maxCapacity = cap}},
         capacity_(cap) {}
 
   ~MockMemoryPool() override {
@@ -105,7 +100,7 @@ class MockMemoryPool : public velox::memory::MemoryPool {
     return allocator_->allocateBytes(size);
   }
 
-  void reportAllocation(int64_t size) override {
+  void reportExternalAllocation(int64_t size) override {
     updateLocalMemoryUsage(size);
   }
 
@@ -128,7 +123,7 @@ class MockMemoryPool : public velox::memory::MemoryPool {
     updateLocalMemoryUsage(-size);
   }
 
-  void reportFree(int64_t size) override {
+  void reportExternalFree(int64_t size) override {
     updateLocalMemoryUsage(-size);
   }
 

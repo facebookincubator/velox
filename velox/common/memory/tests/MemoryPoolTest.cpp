@@ -452,22 +452,34 @@ TEST_P(MemoryPoolTest, reportExternalAllocation) {
   const int64_t kReportSize{1L * MB};
   const auto initialStats = child->stats();
   ASSERT_EQ(child->usedBytes(), 0);
+  ASSERT_EQ(initialStats.numExternalAllocs, 0);
+  ASSERT_EQ(initialStats.numExternalFrees, 0);
+  ASSERT_EQ(initialStats.cumulativeExternalBytes, 0);
 
-  // reportAllocation does not allocate memory but should account for it in
-  // usedBytes/reservedBytes and bump the Allocs stat.
-  child->reportAllocation(kReportSize);
+  // reportExternalAllocation does not allocate memory but should account for
+  // it in usedBytes/reservedBytes and bump the external-allocation stats.
+  // It must not increment numAllocs (reserved for real pool allocations).
+  child->reportExternalAllocation(kReportSize);
   ASSERT_EQ(child->usedBytes(), kReportSize);
   ASSERT_GE(child->reservedBytes(), kReportSize);
-  ASSERT_EQ(child->stats().numAllocs, initialStats.numAllocs + 1);
-  ASSERT_EQ(child->stats().peakBytes, kReportSize);
+  auto stats = child->stats();
+  ASSERT_EQ(stats.numAllocs, initialStats.numAllocs);
+  ASSERT_EQ(stats.numExternalAllocs, 1);
+  ASSERT_EQ(stats.cumulativeExternalBytes, kReportSize);
+  ASSERT_EQ(stats.peakBytes, kReportSize);
 
-  // A paired reportFree of the same size returns the pool to its original
-  // bookkeeping state and bumps the Frees stat. peak stays at its max.
-  child->reportFree(kReportSize);
+  // A paired reportExternalFree of the same size returns the pool to its
+  // original bookkeeping state and bumps the external-free stat without
+  // touching numFrees. peak stays at its max. cumulativeExternalBytes is a
+  // running total of all external allocations and never decreases.
+  child->reportExternalFree(kReportSize);
   ASSERT_EQ(child->usedBytes(), 0);
   ASSERT_EQ(child->reservedBytes(), 0);
-  ASSERT_EQ(child->stats().numFrees, initialStats.numFrees + 1);
-  ASSERT_EQ(child->stats().peakBytes, kReportSize);
+  stats = child->stats();
+  ASSERT_EQ(stats.numFrees, initialStats.numFrees);
+  ASSERT_EQ(stats.numExternalFrees, 1);
+  ASSERT_EQ(stats.cumulativeExternalBytes, kReportSize);
+  ASSERT_EQ(stats.peakBytes, kReportSize);
 }
 
 TEST_P(MemoryPoolTest, reportExternalAllocationCapacityExceeded) {
@@ -486,7 +498,7 @@ TEST_P(MemoryPoolTest, reportExternalAllocationCapacityExceeded) {
   // Reporting more than the pool's capacity must trip the same memory-cap
   // path that allocate() does, leaving usage at zero.
   VELOX_ASSERT_THROW(
-      pool->reportAllocation(static_cast<int64_t>(kMaxCap) + 1L * MB),
+      pool->reportExternalAllocation(static_cast<int64_t>(kMaxCap) + 1L * MB),
       "Exceeded memory pool capacity");
   ASSERT_EQ(pool->usedBytes(), 0);
   ASSERT_EQ(pool->reservedBytes(), 0);
@@ -498,10 +510,10 @@ TEST_P(MemoryPoolTest, reportExternalAllocationRejectsNonPositiveSize) {
   auto child =
       root->addLeafChild("reportExternalNonPositive", isLeafThreadSafe_);
 
-  VELOX_ASSERT_THROW(child->reportAllocation(0), "(0 vs. 0)");
-  VELOX_ASSERT_THROW(child->reportAllocation(-1), "(-1 vs. 0)");
-  VELOX_ASSERT_THROW(child->reportFree(0), "(0 vs. 0)");
-  VELOX_ASSERT_THROW(child->reportFree(-1), "(-1 vs. 0)");
+  VELOX_ASSERT_THROW(child->reportExternalAllocation(0), "(0 vs. 0)");
+  VELOX_ASSERT_THROW(child->reportExternalAllocation(-1), "(-1 vs. 0)");
+  VELOX_ASSERT_THROW(child->reportExternalFree(0), "(0 vs. 0)");
+  VELOX_ASSERT_THROW(child->reportExternalFree(-1), "(-1 vs. 0)");
   ASSERT_EQ(child->usedBytes(), 0);
   ASSERT_EQ(child->reservedBytes(), 0);
 }
