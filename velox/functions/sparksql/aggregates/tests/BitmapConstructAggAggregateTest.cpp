@@ -14,17 +14,16 @@
  * limitations under the License.
  */
 
-#include "velox/common/base/BitUtil.h"
+#include "velox/functions/sparksql/aggregates/BitmapConstructAggAggregate.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
+#include "velox/functions/sparksql/aggregates/tests/BitmapAggTestBase.h"
 
 namespace facebook::velox::functions::aggregate::sparksql::test {
 namespace {
-
-constexpr int32_t kBitmapNumBytes = 4096;
 
 class BitmapConstructAggAggregateTest
     : public aggregate::test::AggregationTestBase {
@@ -32,16 +31,6 @@ class BitmapConstructAggAggregateTest
   void SetUp() override {
     AggregationTestBase::SetUp();
     registerAggregateFunctions("");
-  }
-
-  // Returns a 4096-byte bitmap string with the specified bits set.
-  std::string makeBitmapString(const std::vector<int64_t>& positions) {
-    std::string bitmap(kBitmapNumBytes, '\0');
-    auto* data = reinterpret_cast<uint8_t*>(bitmap.data());
-    for (auto position : positions) {
-      bits::setBit(data, position);
-    }
-    return bitmap;
   }
 
   // Returns a single-row VARBINARY vector containing the bitmap.

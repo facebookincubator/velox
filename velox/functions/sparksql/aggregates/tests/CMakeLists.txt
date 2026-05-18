@@ -17,6 +17,7 @@ add_executable(
   ApproxPercentileAggregateTest.cpp
   AverageAggregationTest.cpp
   BitmapConstructAggAggregateTest.cpp
+  BitmapOrAggAggregateTest.cpp
   BitwiseXorAggregationTest.cpp
   BloomFilterAggAggregateTest.cpp
   CentralMomentsAggregationTest.cpp
