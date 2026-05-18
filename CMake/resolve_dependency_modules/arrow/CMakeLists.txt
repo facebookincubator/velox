@@ -58,6 +58,11 @@ if(VELOX_ENABLE_ARROW)
     -DCMAKE_POLICY_VERSION_MINIMUM=3.5
     # Remove with Arrow upgrade to Arrow 20.
     -DARROW_CXXFLAGS=-Wno-documentation
+    # Arrow inherits the CMake build type from Velox. So a Debug build turns
+    # on additional warnings that can cause the build to fail
+    # (e.g. deprecated-literal-operator in Apple Clang 21).
+    # The SYSTEM version of Arrow is always a Release build.
+    -DBUILD_WARNING_LEVEL=PRODUCTION
   )
   set(ARROW_LIBDIR ${ARROW_PREFIX}/install/lib)
 
