@@ -33,7 +33,8 @@ HiveIcebergSplit::HiveIcebergSplit(
     const std::shared_ptr<std::string>& extraFileInfo,
     bool cacheable,
     const std::unordered_map<std::string, std::string>& infoColumns,
-    std::optional<FileProperties> properties)
+    std::optional<FileProperties> properties,
+    int64_t dataSequenceNumber)
     : HiveConnectorSplit(
           connectorId,
           filePath,
@@ -50,7 +51,8 @@ HiveIcebergSplit::HiveIcebergSplit(
           infoColumns,
           properties,
           std::nullopt,
-          std::nullopt) {
+          std::nullopt),
+      dataSequenceNumber(dataSequenceNumber) {
   // TODO: Deserialize _extraFileInfo to get deleteFiles;
 }
 

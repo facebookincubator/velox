@@ -79,12 +79,6 @@ FooterStatisticsImpl::FooterStatisticsImpl(
   }
 }
 
-ReaderBase::ReaderBase(
-    MemoryPool& pool,
-    std::unique_ptr<dwio::common::BufferedInput> input,
-    FileFormat fileFormat)
-    : ReaderBase(createReaderOptions(pool, fileFormat), std::move(input)) {}
-
 namespace {
 
 template <typename T>

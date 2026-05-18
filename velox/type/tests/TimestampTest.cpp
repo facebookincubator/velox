@@ -15,7 +15,9 @@
  */
 
 #include <gtest/gtest.h>
+#include <iomanip>
 #include <random>
+#include <sstream>
 
 #include <folly/Conv.h>
 

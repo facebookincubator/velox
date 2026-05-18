@@ -570,6 +570,12 @@ class ReduceAgg : public exec::Aggregate {
       }
     });
 
+    if (rawInput && numNotNull > 0) {
+      // Validate the initial value on the original input rows before group-by
+      // aggregation reorders values for lambda evaluation.
+      verifyInitialValueArg(args[1], rows);
+    }
+
     const auto numGroups = uniqueGroups.size();
 
     std::vector<vector_size_t> groupCounts(numGroups, 0);

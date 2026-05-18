@@ -28,6 +28,7 @@
 #include "velox/dwio/parquet/RegisterParquetWriter.h" // @manual
 #include "velox/dwio/parquet/reader/PageReader.h"
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
+#include "velox/dwio/parquet/writer/WriterConfig.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -88,7 +89,9 @@ class ParquetWriterTest : public ParquetTestBase {
   thrift::PageHeader readPageHeader(
       MemorySink* sinkPtr,
       int64_t offsetFromDataPage) {
-    dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+    dwio::common::ReaderOptions readerOptions(leafPool_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
     auto reader = createReaderInMemory(*sinkPtr, readerOptions);
 
     auto colChunkPtr = reader->fileMetaData().rowGroup(0).columnChunk(0);
@@ -233,15 +236,15 @@ TEST_F(ParquetWriterTest, dictionaryEncodingWithDictionaryPageSize) {
   // there will be only one data page contains all data encoded with dictionary
   const std::unordered_map<std::string, std::string> normalConfigFromFile = {
       {config::ConfigBase::toConfigKey(
-           parquet::WriterOptions::kParquetEnableDictionary),
+           parquet::WriterConfig::kParquetSessionEnableDictionary),
        "true"},
       {config::ConfigBase::toConfigKey(
-           parquet::WriterOptions::kParquetDictionaryPageSizeLimit),
+           parquet::WriterConfig::kParquetSessionDictionaryPageSizeLimit),
        "1B"},
   };
   const std::unordered_map<std::string, std::string> normalSessionProperties = {
-      {parquet::WriterOptions::kParquetEnableDictionary, "true"},
-      {parquet::WriterOptions::kParquetDictionaryPageSizeLimit, "1B"},
+      {parquet::WriterConfig::kParquetSessionEnableDictionary, "true"},
+      {parquet::WriterConfig::kParquetSessionDictionaryPageSizeLimit, "1B"},
   };
 
   // Here we are reading the second data page. If we don't set the dictionary
@@ -262,12 +265,12 @@ TEST_F(ParquetWriterTest, dictionaryEncodingWithDictionaryPageSize) {
   const std::unordered_map<std::string, std::string>
       incorrectEnableDictionaryConfigFromFile = {
           {config::ConfigBase::toConfigKey(
-               parquet::WriterOptions::kParquetEnableDictionary),
+               parquet::WriterConfig::kParquetSessionEnableDictionary),
            invalidEnableDictionaryValue},
       };
   const std::unordered_map<std::string, std::string>
       incorrectEnableDictionarySessionProperties = {
-          {parquet::WriterOptions::kParquetEnableDictionary,
+          {parquet::WriterConfig::kParquetSessionEnableDictionary,
            invalidEnableDictionaryValue},
       };
 
@@ -287,12 +290,12 @@ TEST_F(ParquetWriterTest, dictionaryEncodingWithDictionaryPageSize) {
   const std::unordered_map<std::string, std::string>
       incorrectDictionaryPageSizeConfigFromFile = {
           {config::ConfigBase::toConfigKey(
-               parquet::WriterOptions::kParquetDictionaryPageSizeLimit),
+               parquet::WriterConfig::kParquetSessionDictionaryPageSizeLimit),
            invalidDictionaryPageSizeValue},
       };
   const std::unordered_map<std::string, std::string>
       incorrectDictionaryPageSizeSessionProperties = {
-          {parquet::WriterOptions::kParquetDictionaryPageSizeLimit,
+          {parquet::WriterConfig::kParquetSessionDictionaryPageSizeLimit,
            invalidDictionaryPageSizeValue},
       };
 
@@ -325,12 +328,12 @@ TEST_F(ParquetWriterTest, dictionaryEncodingOff) {
   const std::unordered_map<std::string, std::string>
       withoutPageSizeConfigFromFile = {
           {config::ConfigBase::toConfigKey(
-               parquet::WriterOptions::kParquetEnableDictionary),
+               parquet::WriterConfig::kParquetSessionEnableDictionary),
            "false"},
       };
   const std::unordered_map<std::string, std::string>
       withoutPageSizeSessionProperties = {
-          {parquet::WriterOptions::kParquetEnableDictionary, "false"},
+          {parquet::WriterConfig::kParquetSessionEnableDictionary, "false"},
       };
 
   const auto withoutPageSizeHeader =
@@ -352,16 +355,16 @@ TEST_F(ParquetWriterTest, dictionaryEncodingOff) {
   const std::unordered_map<std::string, std::string>
       withPageSizeConfigFromFile = {
           {config::ConfigBase::toConfigKey(
-               parquet::WriterOptions::kParquetEnableDictionary),
+               parquet::WriterConfig::kParquetSessionEnableDictionary),
            "false"},
           {config::ConfigBase::toConfigKey(
-               parquet::WriterOptions::kParquetDictionaryPageSizeLimit),
+               parquet::WriterConfig::kParquetSessionDictionaryPageSizeLimit),
            "1B"},
       };
   const std::unordered_map<std::string, std::string>
       withPageSizeSessionProperties = {
-          {parquet::WriterOptions::kParquetEnableDictionary, "false"},
-          {parquet::WriterOptions::kParquetDictionaryPageSizeLimit, "1B"},
+          {parquet::WriterConfig::kParquetSessionEnableDictionary, "false"},
+          {parquet::WriterConfig::kParquetSessionDictionaryPageSizeLimit, "1B"},
       };
 
   const auto withPageSizeHeader =
@@ -408,7 +411,9 @@ TEST_F(ParquetWriterTest, compression) {
 
   auto* sinkPtr = write(data, writerOptions);
 
-  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto reader = createReaderInMemory(*sinkPtr, readerOptions);
 
   ASSERT_EQ(reader->numberOfRows(), kRows);
@@ -466,15 +471,15 @@ TEST_F(ParquetWriterTest, testPageSizeAndBatchSizeConfiguration) {
   // applied (default is 1024)
   const std::unordered_map<std::string, std::string> normalConfigFromFile = {
       {config::ConfigBase::toConfigKey(
-           parquet::WriterOptions::kParquetWritePageSize),
+           parquet::WriterConfig::kParquetSessionWritePageSize),
        "2KB"},
       {config::ConfigBase::toConfigKey(
-           parquet::WriterOptions::kParquetWriteBatchSize),
+           parquet::WriterConfig::kParquetSessionWriteBatchSize),
        "97"},
   };
   const std::unordered_map<std::string, std::string> normalSessionProperties = {
-      {parquet::WriterOptions::kParquetWritePageSize, "2KB"},
-      {parquet::WriterOptions::kParquetWriteBatchSize, "97"},
+      {parquet::WriterConfig::kParquetSessionWritePageSize, "2KB"},
+      {parquet::WriterConfig::kParquetSessionWriteBatchSize, "97"},
   };
   const auto normalHeader = testPageSizeAndBatchSizeToGetPageHeader(
       normalConfigFromFile, normalSessionProperties);
@@ -494,12 +499,12 @@ TEST_F(ParquetWriterTest, testPageSizeAndBatchSizeConfiguration) {
   const std::unordered_map<std::string, std::string>
       incorrectPageSizeConfigFromFile = {
           {config::ConfigBase::toConfigKey(
-               parquet::WriterOptions::kParquetWritePageSize),
+               parquet::WriterConfig::kParquetSessionWritePageSize),
            invalidPageSizeAndBatchSizeValue},
       };
   const std::unordered_map<std::string, std::string>
       incorrectPageSizeSessionPropertiesFromFile = {
-          {parquet::WriterOptions::kParquetWritePageSize,
+          {parquet::WriterConfig::kParquetSessionWritePageSize,
            invalidPageSizeAndBatchSizeValue},
       };
 
@@ -516,12 +521,12 @@ TEST_F(ParquetWriterTest, testPageSizeAndBatchSizeConfiguration) {
   const std::unordered_map<std::string, std::string>
       incorrectBatchSizeConfigFromFile = {
           {config::ConfigBase::toConfigKey(
-               parquet::WriterOptions::kParquetWriteBatchSize),
+               parquet::WriterConfig::kParquetSessionWriteBatchSize),
            invalidPageSizeAndBatchSizeValue},
       };
   const std::unordered_map<std::string, std::string>
       incorrectBatchSizeSessionPropertiesFromFile = {
-          {parquet::WriterOptions::kParquetWriteBatchSize,
+          {parquet::WriterConfig::kParquetSessionWriteBatchSize,
            invalidPageSizeAndBatchSizeValue},
       };
 
@@ -557,7 +562,7 @@ TEST_F(ParquetWriterTest, toggleDataPageVersion) {
   // Simulate setting DataPage version to V2 via Hive config from file.
   std::unordered_map<std::string, std::string> configFromFile = {
       {config::ConfigBase::toConfigKey(
-           parquet::WriterOptions::kParquetDataPageVersion),
+           parquet::WriterConfig::kParquetSessionDataPageVersion),
        "V2"}};
 
   ASSERT_EQ(
@@ -567,7 +572,7 @@ TEST_F(ParquetWriterTest, toggleDataPageVersion) {
   // Simulate setting DataPage version to V1 via Hive config from file.
   configFromFile = {
       {config::ConfigBase::toConfigKey(
-           parquet::WriterOptions::kParquetDataPageVersion),
+           parquet::WriterConfig::kParquetSessionDataPageVersion),
        "V1"}};
 
   ASSERT_EQ(
@@ -576,14 +581,15 @@ TEST_F(ParquetWriterTest, toggleDataPageVersion) {
 
   // Simulate setting DataPage version to V2 via connector session property.
   std::unordered_map<std::string, std::string> sessionProperties = {
-      {parquet::WriterOptions::kParquetDataPageVersion, "V2"}};
+      {parquet::WriterConfig::kParquetSessionDataPageVersion, "V2"}};
 
   ASSERT_EQ(
       testDataPageVersion({}, sessionProperties),
       thrift::PageType::type::DATA_PAGE_V2);
 
   // Simulate setting DataPage version to V1 via connector session property.
-  sessionProperties = {{parquet::WriterOptions::kParquetDataPageVersion, "V1"}};
+  sessionProperties = {
+      {parquet::WriterConfig::kParquetSessionDataPageVersion, "V1"}};
 
   ASSERT_EQ(
       testDataPageVersion({}, sessionProperties),
@@ -592,10 +598,11 @@ TEST_F(ParquetWriterTest, toggleDataPageVersion) {
   // Simulate setting DataPage version to V1 via connector session property,
   // and to V2 via Hive config from file. Session property should take
   // precedence.
-  sessionProperties = {{parquet::WriterOptions::kParquetDataPageVersion, "V1"}};
+  sessionProperties = {
+      {parquet::WriterConfig::kParquetSessionDataPageVersion, "V1"}};
   configFromFile = {
       {config::ConfigBase::toConfigKey(
-           parquet::WriterOptions::kParquetDataPageVersion),
+           parquet::WriterConfig::kParquetSessionDataPageVersion),
        "V2"}};
 
   ASSERT_EQ(
@@ -605,10 +612,11 @@ TEST_F(ParquetWriterTest, toggleDataPageVersion) {
   // Simulate setting DataPage version to V2 via connector session property,
   // and to V1 via Hive config from file. Session property should take
   // precedence.
-  sessionProperties = {{parquet::WriterOptions::kParquetDataPageVersion, "V2"}};
+  sessionProperties = {
+      {parquet::WriterConfig::kParquetSessionDataPageVersion, "V2"}};
   configFromFile = {
       {config::ConfigBase::toConfigKey(
-           parquet::WriterOptions::kParquetDataPageVersion),
+           parquet::WriterConfig::kParquetSessionDataPageVersion),
        "V1"}};
 
   ASSERT_EQ(
@@ -669,7 +677,7 @@ TEST_F(ParquetWriterTest, parquetWriteWithArrowMemoryPool) {
 TEST_F(ParquetWriterTest, updateWriterOptionsFromHiveConfig) {
   std::unordered_map<std::string, std::string> configFromFile = {
       {config::ConfigBase::toConfigKey(
-           parquet::WriterOptions::kParquetWriteTimestampUnit),
+           parquet::WriterConfig::kParquetSessionWriteTimestampUnit),
        "3"}};
   const config::ConfigBase connectorConfig(std::move(configFromFile));
   const config::ConfigBase connectorSessionProperties({});
@@ -800,7 +808,9 @@ TEST_F(ParquetWriterTest, allNulls) {
 
   auto* sinkPtr = write(data);
 
-  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto reader = createReaderInMemory(*sinkPtr, readerOptions);
 
   ASSERT_EQ(reader->numberOfRows(), kRows);

@@ -740,7 +740,7 @@ folly::dynamic NullIfTypedExpr::serialize() const {
 TypedExprPtr NullIfTypedExpr::create(const folly::dynamic& obj, void* context) {
   auto type = core::deserializeType(obj, context);
   auto inputs = deserializeInputs(obj, context);
-  auto commonType = Type::create(obj["commonType"]);
+  auto commonType = ISerializable::deserialize<Type>(obj["commonType"]);
 
   VELOX_CHECK_EQ(inputs.size(), 2);
   return std::make_shared<NullIfTypedExpr>(

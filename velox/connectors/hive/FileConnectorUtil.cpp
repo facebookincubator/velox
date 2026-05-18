@@ -86,8 +86,17 @@ void configureReaderOptions(
   }
   readerOptions.setAdjustTimestampToTimezone(
       connectorQueryCtx->adjustTimestampToTimezone());
-  readerOptions.setSelectiveNimbleReaderEnabled(
-      connectorQueryCtx->selectiveNimbleReaderEnabled());
+  // Prefer connector session property (FileConfig). Fall back to
+  // ConnectorQueryCtx (threaded from QueryConfig) for backward compatibility
+  // with callers that set it as a query config.
+  if (sessionProperties->valueExists(
+          FileConfig::kSelectiveNimbleReaderEnabledSession)) {
+    readerOptions.setSelectiveNimbleReaderEnabled(
+        fileConfig->selectiveNimbleReaderEnabled(sessionProperties));
+  } else {
+    readerOptions.setSelectiveNimbleReaderEnabled(
+        connectorQueryCtx->selectiveNimbleReaderEnabled());
+  }
   readerOptions.setFileMetadataCacheEnabled(
       fileConfig->fileMetadataCacheEnabled(sessionProperties));
   readerOptions.setPinFileMetadata(
