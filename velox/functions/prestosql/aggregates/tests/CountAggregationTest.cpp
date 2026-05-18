@@ -150,9 +150,7 @@ TEST_F(CountAggregationTest, mask) {
               "SELECT k, count(c) FILTER (where m) FROM tmp GROUP BY k");
   auto taskStats = toPlanStats(task->taskStats());
   auto partialStats = taskStats.at(partialNodeId).customStats;
-  EXPECT_LT(0, partialStats.at("abandonedPartialAggregation").count);
-  EXPECT_LT(
-      0, partialStats.at("abandonedPartialAggregationPassthroughRowCount").sum);
+  EXPECT_LT(0, partialStats.at("abandonedPartialAggregationRows").sum);
 }
 
 TEST_F(CountAggregationTest, distinct) {

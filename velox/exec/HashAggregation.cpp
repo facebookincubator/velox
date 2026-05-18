@@ -302,9 +302,6 @@ void HashAggregation::maybeIncreasePartialAggregationMemoryUsage(
            maxExtendedPartialAggregationMemoryUsage_)) {
     groupingSet_->abandonPartialAggregation();
     pool()->release();
-    addRuntimeStat(
-        std::string(HashAggregation::kAbandonedPartialAggregation),
-        RuntimeCounter(1));
     abandonedPartialAggregation_ = true;
     return;
   }
@@ -344,8 +341,7 @@ RowVectorPtr HashAggregation::getOutput() {
     prepareOutput(input_->size());
     groupingSet_->toIntermediate(input_, output_);
     addRuntimeStat(
-        std::string(
-            HashAggregation::kAbandonedPartialAggregationPassthroughRowCount),
+        std::string(HashAggregation::kAbandonedPartialAggregationRows),
         RuntimeCounter(input_->size()));
     numOutputRows_ += input_->size();
     input_ = nullptr;
