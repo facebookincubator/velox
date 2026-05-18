@@ -43,7 +43,6 @@ struct CipherConfig {
   int ivLen{0};
   bool usePkcs{false};
   bool supportsAad{false};
-  std::string error;
 };
 
 CipherConfig parseModeAndPadding(
@@ -96,9 +95,6 @@ struct AesEncryptFunction {
       const arg_type<Varbinary>* aad) {
     if (input == nullptr || key == nullptr) {
       return false;
-    }
-    if (!config_.error.empty()) {
-      VELOX_USER_FAIL("{}", config_.error);
     }
     aesEncryptImpl(result, *input, *key, config_, iv, aad);
     return true;
@@ -313,9 +309,6 @@ struct AesDecryptFunction {
       const arg_type<Varbinary>* aad) {
     if (input == nullptr || key == nullptr) {
       return false;
-    }
-    if (!config_.error.empty()) {
-      VELOX_USER_FAIL("{}", config_.error);
     }
     aesDecryptImpl(result, *input, *key, config_, iv, aad);
     return true;

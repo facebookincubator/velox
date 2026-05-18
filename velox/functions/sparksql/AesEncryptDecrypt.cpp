@@ -50,23 +50,20 @@ CipherConfig parseModeAndPadding(
     config.ivLen = 12;
     config.supportsAad = true;
   } else {
-    config.error = fmt::format("Unsupported AES mode: {}", modeStr);
-    return config;
+    VELOX_USER_FAIL("Unsupported AES mode: {}", modeStr);
   }
 
   if (paddingStr == "DEFAULT") {
     config.usePkcs = (config.mode != CipherMode::kGcm);
   } else if (paddingStr == "PKCS") {
-    if (config.mode == CipherMode::kGcm) {
-      config.error = "PKCS padding is not supported for GCM mode";
-      return config;
-    }
+    VELOX_USER_CHECK(
+        config.mode != CipherMode::kGcm,
+        "PKCS padding is not supported for GCM mode");
     config.usePkcs = true;
   } else if (paddingStr == "NONE") {
     config.usePkcs = false;
   } else {
-    config.error = fmt::format("Unsupported AES padding: {}", paddingStr);
-    return config;
+    VELOX_USER_FAIL("Unsupported AES padding: {}", paddingStr);
   }
 
   return config;

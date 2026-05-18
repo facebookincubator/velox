@@ -395,6 +395,20 @@ TEST_F(AesEncryptDecryptTest, decryptWrongKey) {
       "AES decryption failed");
 }
 
+// Verifies that parseModeAndPadding errors propagate from initialize() as
+// VELOX_USER_FAIL — these used to be deferred via config_.error and re-thrown
+// in callNullable; now they fail at expression initialization time.
+TEST_F(AesEncryptDecryptTest, initializeRejectsBadModeAndPadding) {
+  const std::string key = "0000111122223333";
+  VELOX_ASSERT_THROW(
+      encrypt("Spark", key, "BAD", "DEFAULT"), "Unsupported AES mode: BAD");
+  VELOX_ASSERT_THROW(
+      encrypt("Spark", key, "CBC", "BAD"), "Unsupported AES padding: BAD");
+  VELOX_ASSERT_THROW(
+      encrypt("Spark", key, "GCM", "PKCS"),
+      "PKCS padding is not supported for GCM mode");
+}
+
 // Decrypt with input too short.
 TEST_F(AesEncryptDecryptTest, decryptInputTooShort) {
   const std::string key16 = "0000111122223333";
