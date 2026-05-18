@@ -390,8 +390,9 @@ accumulators.</p>
 </div>
 <p>Many aggregate functions implement toIntermediate() fast path. Some examples include:
 <a class="reference internal" href="../functions/presto/aggregate.html#min" title="min"><code class="xref py py-func docutils literal notranslate"><span class="pre">min()</span></code></a>, <a class="reference internal" href="../functions/presto/aggregate.html#max" title="max"><code class="xref py py-func docutils literal notranslate"><span class="pre">max()</span></code></a>, <a class="reference internal" href="../functions/presto/aggregate.html#array_agg" title="array_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_agg()</span></code></a>, <a class="reference internal" href="../functions/presto/aggregate.html#set_agg" title="set_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">set_agg()</span></code></a>, <a class="reference internal" href="../functions/presto/aggregate.html#map_agg" title="map_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_agg()</span></code></a>, <a class="reference internal" href="../functions/presto/aggregate.html#map_union" title="map_union"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_union()</span></code></a>.</p>
-<p>One can use runtime statistic <cite>abandonedPartialAggregation</cite> to tell whether
-partial aggregation was abandoned.</p>
+<p>Runtime statistic <cite>abandonedPartialAggregationRows</cite> counts rows that bypassed
+partial aggregation after it was abandoned. A value greater than 0 indicates
+that partial aggregation was abandoned.</p>
 </section>
 </section>
 
