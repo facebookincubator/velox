@@ -1581,7 +1581,7 @@ TEST_F(CudfNestedLoopJoinTest, emptyBuildConsumeInput) {
                   .planNode();
 
   AssertQueryBuilder builder{plan, duckDbQueryRunner_};
-  auto task = builder.assertResults("SELECT 1 WHERE false");
+  auto task = builder.assertEmptyResults();
 
   // Verify all 300 probe rows were consumed (matches CPU NLJ behavior).
   // Pipeline 0, operator 1 is the NLJ probe (operator 0 is Values).
