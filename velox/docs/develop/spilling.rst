@@ -530,6 +530,129 @@ spilling:
   bridge will split the spill partition files among the hash build operators
   with each one having an equally-sized shard to restore.
 
+Reclaim Across Memory Resources
+-------------------------------
+
+The spilling algorithms above describe how a spillable operator releases
+memory by serializing in-memory state to disk. With
+`custom memory resources <memory.html#custom-memory-resources>`_, the reclaim
+path is no longer fixed to disk. The per-query reclaimer attached to a
+custom root pool can move data into a sibling tier instead — for example,
+copying buffers out of a device memory pool into a pinned-host pool, or
+evicting cold pages from a CXL-attached pool into a local DRAM pool. The
+extension chooses what each reclaimer does; the framework only guarantees
+that *MemoryPool::reclaim* on a custom pool dispatches to the reclaimer the
+extension supplied.
+
+The reclaimer holds a pointer to its owning *QueryCtx* and can therefore
+address every other custom pool on the query through *QueryCtx::customPool*.
+A chain of reclaimers — for instance, hash table on CPU DRAM → CXL on first
+reclaim → disk on second reclaim — is built by composing reclaimers across
+resources. Each link in the chain is an independent reclaim decision made
+by the arbitrator of the pool that ran short. The framework does not
+coordinate the chain; the extension chooses the topology by deciding which
+sibling each reclaimer allocates into.
+
+Example: CXL-Backed Hash Aggregation
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The reclaim path above is meaningful when the custom resource exposes a
+tier with different access properties from CPU DRAM. CXL-attached memory
+is one such tier: it is slower than local DRAM but cheaper per byte, and
+crucially it is exposed to the CPU as part of the coherent virtual address
+space — host code can dereference a CXL pointer directly, with no copy
+back to DRAM required.
+
+A CXL extension takes advantage of this by registering a CXL custom
+resource and installing a CXL-aware *HashAggregation* through
+*DriverAdapter*. The adapter is the standard mechanism Velox uses to swap
+in alternate operator implementations (also used by the cuDF and Wave
+extensions); see *DriverAdapter* in *velox/exec/Driver.h*. The CXL-backed
+operator preserves the public *HashAggregation* contract while changing
+the reclaim policy:
+
+#. **First reclaim trigger (DRAM is tight).** Like the default operator,
+   the CXL-backed *HashAggregation* selects a spill target — the set of
+   partitions with the most data — and processes the corresponding rows
+   in its DRAM row container. Unlike the default operator, it copies each
+   row into the CXL custom pool obtained via *queryCtx->customPool("cxl")*
+   and pointer-swizzles the corresponding hash-table bucket entries to the
+   new CXL addresses, rather than clearing them. The swizzle has the same
+   cost shape as the default operator's hash-table entry removal — a
+   *ProbeState* walk per row to find each bucket slot — but with greater
+   benefit: because CXL memory is coherent with the CPU address space,
+   probe and finalize logic continue to read the relocated entries
+   directly with no restore step.
+
+#. **CXL pool fills.** Subsequent reclaim triggers continue moving
+   partitions from DRAM into CXL until the CXL custom pool's arbitrator
+   decides it is out of capacity. At that point arbitration on the CXL
+   pool calls *MemoryPool::reclaim* on the CXL root pool, which dispatches
+   to the reclaimer the resource's *reclaimerFactory* produced.
+
+#. **Second reclaim — CXL into disk.** The reclaimer behaves like the
+   default *HashAggregation* spill path, just sourced from CXL instead of
+   DRAM. It scans the partitions stored in CXL, serializes them through
+   the standard *Spiller* onto disk, and notifies the operator to remove
+   the corresponding entries from the hash table. Removal happens here,
+   not in step 1, because this is the first point at which the entries
+   are no longer directly addressable.
+
+#. **Finalize.** After receiving all input the operator produces results
+   by merging three sources for each partition: rows still in the DRAM row
+   container, rows that live in CXL (read directly with no restore), and
+   rows on disk (read back through the standard *Spiller* restore path).
+   For partitions that never made it past step 1 the merge degenerates to
+   "DRAM + CXL"; for partitions reclaimed in step 3 it degenerates to
+   "DRAM + disk" — the same shape as the default *HashAggregation*
+   algorithm.
+
+The CXL pool is registered like any other custom resource. The resource
+carries the reclaimer factory the framework uses to materialize per-query
+reclaimers for pools tagged ``"cxl"``:
+
+.. code-block:: c++
+
+  memory::memoryManager()->registerCustomResource(
+      memory::CustomMemoryResource{
+          .tag = "cxl",
+          .maxCapacity = cxlCapacityBytes,
+          .allocator = std::make_shared<CxlAllocator>(...),
+          .arbitrator = MemoryArbitrator::create(...),
+          .reclaimerFactory = []() {
+            return std::make_unique<CxlReclaimer>();
+          },
+      });
+
+  // Per query: invoke the registered factory to mint the reclaimer, build
+  // the CXL root pool with it, then hand the pool to the QueryCtx.
+  auto* manager = memory::memoryManager();
+  auto& cxlResource = *manager->customResources().at("cxl");
+  auto cxlPool = manager->addRootPool(
+      "query.q0.cxl", cxlResource.maxCapacity,
+      cxlResource.reclaimerFactory(),
+      /*poolDebugOpts*/ std::nullopt, "cxl");
+  auto queryCtx = core::QueryCtx::Builder()
+                      .customPool("cxl", std::move(cxlPool))
+                      .queryId("q0")
+                      .build();
+
+If a query needs a reclaimer that references the *QueryCtx* (for instance,
+to spill into a sibling custom pool reachable through
+*QueryCtx::customPool*), build the pool with a null reclaimer and attach
+the QueryCtx-aware reclaimer post-build via *MemoryPool::setReclaimer* —
+*setReclaimer* is one-shot, so the path skips the factory entirely.
+
+The arbitrator passed here governs only the CXL pool's capacity. The
+default *MemoryArbitrator* on *MemoryManager* continues to govern the DRAM
+side; it triggers the first reclaim (step 1) without knowledge that the
+"reclaimed" bytes have actually been relocated to CXL. From the default
+arbitrator's perspective the DRAM pool simply gave bytes back; from the
+CXL arbitrator's perspective new bytes arrived. Cross-tier coordination —
+the decision that CXL is the right next stop for DRAM, and disk is the
+right next stop for CXL — lives entirely in the extension's operator and
+reclaimer, not in the framework.
+
 Future Work
 -----------
 

@@ -20,25 +20,6 @@
 #include "velox/common/config/Config.h"
 
 namespace facebook::velox::core {
-namespace {
-
-void createCustomMemoryPools(QueryCtx* queryCtx) {
-  for (const auto& mr : memory::memoryManager()->customResources()) {
-    auto reclaimer = mr->reclaimerFactory(queryCtx);
-    auto pool = memory::memoryManager()->addRootPool(
-        fmt::format(
-            "{}.{}",
-            QueryCtx::generatePoolName(queryCtx->queryId()),
-            mr->tag),
-        mr->maxCapacity,
-        std::move(reclaimer),
-        std::nullopt,
-        mr->tag);
-    queryCtx->addCustomPool(mr->tag, std::move(pool));
-  }
-}
-
-} // namespace
 
 // static
 std::shared_ptr<QueryCtx> QueryCtx::create(
@@ -78,7 +59,9 @@ std::shared_ptr<QueryCtx> QueryCtx::Builder::build() {
   for (auto& cb : releaseCallbacks_) {
     queryCtx->addReleaseCallback(std::move(cb));
   }
-  createCustomMemoryPools(queryCtx.get());
+  for (auto& [tag, pool] : customPools_) {
+    queryCtx->addCustomPool(tag, std::move(pool));
+  }
   return queryCtx;
 }
 
@@ -126,9 +109,10 @@ QueryCtx::~QueryCtx() {
 }
 
 void QueryCtx::addCustomPool(
-    const std::string& tag,
+    std::string tag,
     std::shared_ptr<memory::MemoryPool> pool) {
-  VELOX_CHECK_NOT_NULL(pool);
+  VELOX_CHECK(!tag.empty(), "Custom pool tag is empty");
+  VELOX_CHECK_NOT_NULL(pool, "Custom pool is null for tag: {}", tag);
   auto [_, inserted] = customPools_.emplace(tag, std::move(pool));
   VELOX_CHECK(inserted, "Duplicate custom pool tag: {}", tag);
 }

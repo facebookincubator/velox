@@ -20,7 +20,9 @@ add_executable(
   ArbitrationParticipantTest.cpp
   ByteStreamTest.cpp
   CompactDoubleListTest.cpp
-  CustomMemoryResourceTest.cpp
+  CustomMemoryEmulationTest.cpp
+  CustomMemoryPoolTest.cpp
+  CustomMemoryRegistrationTest.cpp
   HashStringAllocatorTest.cpp
   MemoryAllocatorTest.cpp
   MemoryArbitratorTest.cpp
