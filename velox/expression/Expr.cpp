@@ -25,6 +25,7 @@
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/process/ThreadDebugInfo.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/exec/trace/TraceCtx.h"
 #include "velox/expression/CastExpr.h"
 
 #include "velox/common/EnumDefine.h"
@@ -546,6 +547,8 @@ void Expr::evalSimplifiedImpl(
 
   // Make sure the returned vector has its null bitmap properly set.
   addNulls(rows, remainingRows.rows().asRange().bits(), context, result);
+
+  traceOutput(result);
 }
 
 namespace {
@@ -1761,6 +1764,8 @@ void Expr::applyFunction(
 
   invokeApplyWithListeners(rows, context, result);
 
+  traceOutput(result);
+
   if (!result) {
     MutableRemainingRows remainingRows(rows, context);
 
@@ -2058,6 +2063,74 @@ ExprSet::ExprSet(
   for (auto& expr : exprs_) {
     Expr::mergeFields(
         distinctFields_, multiplyReferencedFields_, expr->distinctFields());
+  }
+}
+
+void ExprSet::maybeSetupTracers(
+    const Operator& op,
+    const trace::TraceCtx& traceCtx) {
+  exprTracingEnabled_ = true;
+  std::unordered_set<Expr*> visited;
+  std::unordered_map<std::string, int> instanceCounts;
+  for (auto& expr : exprs_) {
+    expr->maybeSetupTracer(op, traceCtx, visited, instanceCounts);
+  }
+}
+
+void Expr::maybeSetupTracer(
+    const Operator& op,
+    const trace::TraceCtx& traceCtx,
+    std::unordered_set<Expr*>& visited,
+    std::unordered_map<std::string, int>& instanceCounts) {
+  if (!visited.insert(this).second) {
+    return;
+  }
+  if (traceCtx.shouldTraceExpr(name_)) {
+    const int index = instanceCounts[name_]++;
+    try {
+      outputTracer_ = traceCtx.createExprOutputTracer(op, name_, index);
+    } catch (const std::exception& e) {
+      LOG(ERROR) << "Failed to create expression output tracer: " << e.what();
+    }
+  }
+  for (auto& input : inputs_) {
+    input->maybeSetupTracer(op, traceCtx, visited, instanceCounts);
+  }
+}
+
+void ExprSet::finishTracers() {
+  if (!exprTracingEnabled_) {
+    return;
+  }
+  std::unordered_set<Expr*> visited;
+  for (auto& expr : exprs_) {
+    expr->finishTracer(visited);
+  }
+}
+
+void Expr::finishTracer(std::unordered_set<Expr*>& visited) {
+  if (!visited.insert(this).second) {
+    return;
+  }
+  if (outputTracer_) {
+    try {
+      outputTracer_->finish();
+    } catch (const std::exception& e) {
+      LOG(ERROR) << "Failed to finish expression output tracer: " << e.what();
+    }
+  }
+  for (auto& input : inputs_) {
+    input->finishTracer(visited);
+  }
+}
+
+FOLLY_ALWAYS_INLINE void Expr::traceOutput(const VectorPtr& result) {
+  if (FOLLY_UNLIKELY(outputTracer_ != nullptr) && result) {
+    try {
+      outputTracer_->write(result);
+    } catch (const std::exception& e) {
+      LOG(ERROR) << "Failed to trace expression output: " << e.what();
+    }
   }
 }
 
