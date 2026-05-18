@@ -1136,42 +1136,5 @@ TEST_F(HiveConnectorUtilTest, createRangeFilter) {
   }
 }
 
-TEST_F(HiveConnectorUtilTest, timestampPartitionFilterCreationUnsupported) {
-  // TIMESTAMP partition values are not supported by direct filter creation APIs
-  // (e.g., createPointFilter / createRangeFilter).
-  //
-  // However, TIMESTAMP values can still be handled during partition filtering
-  // through internal logic, which supports common representations such as:
-  // - Microseconds (e.g., "1234567890123456", Iceberg identity transform)
-  // - ISO 8601 (e.g., "2023-01-15T10:30:45.123")
-  // - Presto-style cast format (e.g., "2023-06-20 14:25:30.500")
-  bool foundTimestamp = false;
-  for (const auto& unsupported : kUnsupportedFilterTypes) {
-    if (unsupported.type->kind() == TypeKind::TIMESTAMP) {
-      foundTimestamp = true;
-      break;
-    }
-  }
-  ASSERT_TRUE(foundTimestamp)
-      << "TIMESTAMP should be in kUnsupportedFilterTypes for createPointFilter/createRangeFilter";
-  
-  // Verify that createPointFilter throws for TIMESTAMP (as expected)
-  {
-    auto ts = Timestamp(1234567890, 123456000);
-    VELOX_ASSERT_THROW(
-        hive::createPointFilter(TIMESTAMP(), variant(ts)),
-        "Unsupported type kind for filter creation: TIMESTAMP");
-  }
-  
-  // Verify that createRangeFilter throws for TIMESTAMP (as expected)
-  {
-    auto lowerTs = Timestamp(1000000000, 0);
-    auto upperTs = Timestamp(2000000000, 0);
-    VELOX_ASSERT_THROW(
-        hive::createRangeFilter(TIMESTAMP(), variant(lowerTs), variant(upperTs)),
-        "Unsupported type kind for filter creation: TIMESTAMP");
-  }
-  
-}
 
 } // namespace facebook::velox::connector

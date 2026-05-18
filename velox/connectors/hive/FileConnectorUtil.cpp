@@ -230,7 +230,7 @@ bool applyPartitionFilter(
     bool isPartitionDateDaysSinceEpoch,
     const common::Filter* filter,
     bool asLocalTime,
-    const std::shared_ptr<const FileColumnHandle>& columnHandle = nullptr) {
+    const std::shared_ptr<const FileColumnHandle>& columnHandle) {
   if (type->isDate()) {
     int32_t result = 0;
     // days_since_epoch partition values are integers in string format. Eg.
