@@ -23,20 +23,20 @@ set_target_properties(velox_cudf_exec_test_lib PROPERTIES CUDA_ARCHITECTURES nat
 
 target_link_libraries(
   velox_cudf_exec_test_lib
-  velox_exec_test_lib
-  velox_vector_test_lib
-  velox_test_util
-  velox_cursor
   cudf::cudf
-  velox_cudf_exec
-  velox_cudf_vector
-  velox_core
-  velox_exception
-  velox_expression
-  velox_parse_parser
-  velox_duckdb_conversion
-  velox_file_test_utils
-  velox_cudf_hive_connector
-  velox_s3fs
   velox_aggregates
+  velox_core
+  velox_cudf_exec
+  velox_cudf_hive_connector
+  velox_cudf_vector
+  velox_cursor
+  velox_duckdb_conversion
+  velox_exception
+  velox_exec_test_lib
+  velox_expression
+  velox_file_test_utils
+  velox_parse_parser
+  velox_s3fs
+  velox_test_util
+  velox_vector_test_lib
 )

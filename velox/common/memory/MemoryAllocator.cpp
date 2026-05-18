@@ -18,6 +18,8 @@
 
 #include <sys/mman.h>
 #include <sys/resource.h>
+#include <algorithm>
+#include <cstring>
 #include <iostream>
 #include <numeric>
 
@@ -373,6 +375,40 @@ void* MemoryAllocator::allocateZeroFilledWithoutRetry(uint64_t bytes) {
     ::memset(result, 0, bytes);
   }
   return result;
+}
+
+void* MemoryAllocator::reallocateBytes(
+    void* p,
+    uint64_t oldSize,
+    uint64_t newSize,
+    uint16_t alignment) {
+  // Try in-place reallocation first (supported by MallocAllocator via
+  // ::realloc(), which jemalloc can often service without moving data).
+  void* result = reallocateBytesWithoutRetry(p, oldSize, newSize, alignment);
+  if (result != nullptr) {
+    return result;
+  }
+  // Fallback: allocate new + memcpy + free old. This path also handles
+  // cache eviction via allocateBytes.
+  void* newP = allocateBytes(newSize, alignment);
+  if (newP == nullptr) {
+    return nullptr;
+  }
+  if (p != nullptr) {
+    ::memcpy(newP, p, std::min(oldSize, newSize));
+    freeBytes(p, oldSize);
+  }
+  return newP;
+}
+
+void* MemoryAllocator::reallocateBytesWithoutRetry(
+    void* /*p*/,
+    uint64_t /*oldSize*/,
+    uint64_t /*newSize*/,
+    uint16_t /*alignment*/) {
+  // Default: in-place reallocation not supported. Caller will fall back to
+  // allocateBytes + memcpy + freeBytes.
+  return nullptr;
 }
 
 Stats Stats::operator-(const Stats& other) const {

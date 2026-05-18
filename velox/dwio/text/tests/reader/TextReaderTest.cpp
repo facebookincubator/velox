@@ -137,8 +137,8 @@ TEST_F(TextReaderTest, basic) {
   auto readFile = std::make_shared<LocalReadFile>(path);
 
   dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileSchema(type);
 
   auto input =
@@ -249,8 +249,8 @@ TEST_F(TextReaderTest, headerAndCustomNullString) {
   auto readFile = std::make_shared<LocalReadFile>(path);
 
   dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileSchema(type);
   auto rowReaderOptions = dwio::common::RowReaderOptions();
   setScanSpec(*type, rowReaderOptions);
@@ -425,8 +425,8 @@ TEST_F(TextReaderTest, complexTypesWithCustomDelimiters) {
 
   auto serDeOptions = dwio::common::SerDeOptions('\t', '|', '#', '\\', true);
   dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileSchema(type);
   readerOptions.setSerDeOptions(serDeOptions);
 
@@ -492,8 +492,8 @@ TEST_F(TextReaderTest, projectComplexTypesWithCustomDelimiters) {
 
   auto serDeOptions = dwio::common::SerDeOptions('\t', '|', '#', '\\', true);
   dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileSchema(type);
   readerOptions.setSerDeOptions(serDeOptions);
 
@@ -597,8 +597,8 @@ TEST_F(TextReaderTest, projectPrimitiveTypes) {
       "velox/dwio/text/tests/reader/", "examples/simple_types");
   auto readFile = std::make_shared<LocalReadFile>(path);
   dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileSchema(type);
   auto input =
       std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
@@ -667,8 +667,8 @@ TEST_F(TextReaderTest, projectColumns) {
       "examples/simple_types_compressed_file.gz");
   auto readFile = std::make_shared<LocalReadFile>(path);
   dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileSchema(type);
   auto input =
       std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
@@ -724,8 +724,8 @@ TEST_F(TextReaderTest, projectNone) {
   auto readFile = std::make_shared<LocalReadFile>(path);
 
   dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileSchema(type);
 
   dwio::common::RowReaderOptions rowReaderOptions;
@@ -761,8 +761,8 @@ TEST_F(TextReaderTest, compressedProjectNone) {
   auto readFile = std::make_shared<LocalReadFile>(path);
 
   dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileSchema(type);
 
   dwio::common::RowReaderOptions rowReaderOptions;
@@ -794,8 +794,8 @@ TEST_F(TextReaderTest, compressedFilter) {
       "examples/simple_types_compressed_file.gz");
   auto readFile = std::make_shared<LocalReadFile>(path);
   dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileSchema(type);
   auto input =
       std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
@@ -840,8 +840,8 @@ TEST_F(TextReaderTest, filter) {
   auto readFile = std::make_shared<LocalReadFile>(path);
 
   dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileSchema(type);
 
   auto input =
@@ -900,8 +900,8 @@ TEST_F(TextReaderTest, shrinkBatch) {
       "velox/dwio/text/tests/reader/", "examples/simple_types");
   auto readFile = std::make_shared<LocalReadFile>(path);
   dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileSchema(type);
   auto input =
       std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
@@ -935,8 +935,8 @@ TEST_F(TextReaderTest, compressedShrinkBatch) {
       "examples/simple_types_compressed_file.gz");
   auto readFile = std::make_shared<LocalReadFile>(path);
   dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileSchema(type);
   auto input =
       std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
@@ -967,8 +967,8 @@ TEST_F(TextReaderTest, emptyFile) {
       "velox/dwio/text/tests/reader/", "examples/empty.gz");
   auto readFile = std::make_shared<LocalReadFile>(path);
   dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileSchema(type);
   auto rowReaderOptions = dwio::common::RowReaderOptions();
   setScanSpec(*type, rowReaderOptions);
@@ -1016,8 +1016,8 @@ TEST_F(TextReaderTest, readRanges) {
   auto readFile = std::make_shared<LocalReadFile>(path);
 
   dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileSchema(type);
 
   auto input =
@@ -1115,8 +1115,8 @@ TEST_F(TextReaderTest, readFloatAsInt) {
   auto readFile = std::make_shared<LocalReadFile>(path);
 
   dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileSchema(type);
 
   auto input =
@@ -1216,8 +1216,8 @@ TEST_F(TextReaderTest, simpleTypes) {
   auto readFile = std::make_shared<LocalReadFile>(path);
 
   dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileSchema(type);
 
   auto input =
@@ -1278,8 +1278,8 @@ TEST_F(TextReaderTest, primitiveLimitsStressTest) {
   auto readFile = std::make_shared<LocalReadFile>(path);
 
   dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto serDeOptions = dwio::common::SerDeOptions('\t', '=', '|', '\\', true);
   readerOptions.setFileSchema(type);
   readerOptions.setSerDeOptions(serDeOptions);
@@ -1438,8 +1438,8 @@ TEST_F(TextReaderTest, DISABLED_nestedComplexTypesWithCustomDelimiters) {
   serDeOptions.separators[3] = ',';
   serDeOptions.separators[4] = ':';
   dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileSchema(type);
   readerOptions.setSerDeOptions(serDeOptions);
 
@@ -1511,8 +1511,8 @@ TEST_F(TextReaderTest, nestedArraysWithCustomDelimiters) {
   // - Comma (',') for inner array element separation (depth 2)
   auto serDeOptions = dwio::common::SerDeOptions('\t', '|', ',', '\\', true);
   dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileSchema(type);
   readerOptions.setSerDeOptions(serDeOptions);
 
@@ -1604,8 +1604,8 @@ TEST_F(TextReaderTest, tripleNestedArraysWithCustomDelimiters) {
   auto serDeOptions = dwio::common::SerDeOptions('\t', '|', ',', '\\', true);
   serDeOptions.separators[3] = '#';
   dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileSchema(type);
   readerOptions.setSerDeOptions(serDeOptions);
 
@@ -1640,8 +1640,8 @@ TEST_F(TextReaderTest, varbinarySuccessfulDecoding) {
   auto readFile = std::make_shared<LocalReadFile>(path);
 
   dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileSchema(type);
 
   auto input =
@@ -1677,8 +1677,8 @@ TEST_F(TextReaderTest, varbinaryUnsuccessfulDecoding) {
   auto readFile = std::make_shared<LocalReadFile>(path);
 
   dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileSchema(type);
 
   auto input =
@@ -1771,8 +1771,8 @@ TEST_F(TextReaderTest, logicalTypes) {
 
   auto readFile = std::make_shared<LocalReadFile>(path);
   dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileSchema(type);
 
   auto input =
@@ -1830,8 +1830,8 @@ TEST_F(TextReaderTest, nestedRows) {
   auto serDeOptions = dwio::common::SerDeOptions('&', ',', '#', '\\', true);
 
   dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileSchema(type);
   readerOptions.setSerDeOptions(serDeOptions);
 
@@ -1911,8 +1911,8 @@ TEST_P(TextReaderDecompressionTest, tests) {
   auto readFile = std::make_shared<LocalReadFile>(path);
 
   dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileSchema(type);
 
   auto input =
@@ -1986,8 +1986,8 @@ TEST_F(TextReaderTest, unsupportedCompressedKind) {
   for (const auto& path : paths) {
     auto readFile = std::make_shared<LocalReadFile>(path);
     dwio::common::ReaderOptions readerOptions(pool());
-    readerOptions.setDataIoStats(dataIoStats_.get());
-    readerOptions.setMetadataIoStats(metadataIoStats_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
     readerOptions.setFileSchema(type);
     auto input =
         std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
@@ -2014,8 +2014,8 @@ TEST_F(TextReaderTest, extractionMapKeys) {
 
   auto serDeOptions = dwio::common::SerDeOptions('\t', '|', '#', '\\', true);
   dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileSchema(type);
   readerOptions.setSerDeOptions(serDeOptions);
 
@@ -2082,8 +2082,8 @@ TEST_F(TextReaderTest, extractionMapValues) {
 
   auto serDeOptions = dwio::common::SerDeOptions('\t', '|', '#', '\\', true);
   dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileSchema(type);
   readerOptions.setSerDeOptions(serDeOptions);
 
@@ -2162,8 +2162,8 @@ TEST_F(TextReaderTest, extractionMapKeyFilter) {
 
   auto readFile = std::make_shared<LocalReadFile>(textFile->getPath());
   dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileSchema(type);
 
   auto input =
@@ -2228,8 +2228,8 @@ TEST_F(TextReaderTest, extractionTransformOnMapColumn) {
 
   auto serDeOptions = dwio::common::SerDeOptions('\t', '|', '#', '\\', true);
   dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileSchema(type);
   readerOptions.setSerDeOptions(serDeOptions);
 

@@ -29,11 +29,12 @@ bool hasElseClause(const std::vector<ExprPtr>& inputs) {
 TypePtr resolveTypeInt(
     const std::vector<TypePtr>& argTypes,
     bool allowedCoercions,
-    std::vector<TypePtr>& coercions);
+    std::vector<TypePtr>& coercions,
+    const TypeCoercer& coercer);
 
 TypePtr resolveTypeInt(const std::vector<TypePtr>& argTypes) {
   std::vector<TypePtr> coercions;
-  return resolveTypeInt(argTypes, false, coercions);
+  return resolveTypeInt(argTypes, false, coercions, TypeCoercer::defaults());
 };
 } // namespace
 
@@ -233,7 +234,8 @@ namespace {
 TypePtr resolveTypeInt(
     const std::vector<TypePtr>& argTypes,
     bool allowedCoercions,
-    std::vector<TypePtr>& coercions) {
+    std::vector<TypePtr>& coercions,
+    const TypeCoercer& coercer) {
   VELOX_CHECK_GT(
       argTypes.size(),
       1,
@@ -266,10 +268,9 @@ TypePtr resolveTypeInt(
         "Condition of  SWITCH statement is not bool");
 
     if (*thenType != *resultType) {
-      if (allowedCoercions && TypeCoercer::coercible(thenType, resultType)) {
+      if (allowedCoercions && coercer.coercible(thenType, resultType)) {
         coercions[i * 2 + 1] = resultType;
-      } else if (
-          allowedCoercions && TypeCoercer::coercible(resultType, thenType)) {
+      } else if (allowedCoercions && coercer.coercible(resultType, thenType)) {
         resultType = thenType;
         setCoercionsUpTo(i * 2 - 1, resultType);
       } else {
@@ -287,10 +288,9 @@ TypePtr resolveTypeInt(
     const auto& elseType = argTypes.back();
 
     if (*elseType != *resultType) {
-      if (allowedCoercions && TypeCoercer::coercible(elseType, resultType)) {
+      if (allowedCoercions && coercer.coercible(elseType, resultType)) {
         coercions.back() = resultType;
-      } else if (
-          allowedCoercions && TypeCoercer::coercible(resultType, elseType)) {
+      } else if (allowedCoercions && coercer.coercible(resultType, elseType)) {
         resultType = elseType;
         setCoercionsUpTo(numArgs - 2, resultType);
       } else {
@@ -312,10 +312,11 @@ TypePtr SwitchCallToSpecialForm::resolveType(
   return resolveTypeInt(argTypes);
 }
 
-TypePtr SwitchCallToSpecialForm::resolveTypeWithCorsions(
+TypePtr SwitchCallToSpecialForm::resolveTypeWithCoercions(
     const std::vector<TypePtr>& argTypes,
-    std::vector<TypePtr>& coercions) {
-  return resolveTypeInt(argTypes, true, coercions);
+    std::vector<TypePtr>& coercions,
+    const TypeCoercer& coercer) {
+  return resolveTypeInt(argTypes, true, coercions, coercer);
 }
 
 ExprPtr SwitchCallToSpecialForm::constructSpecialForm(
@@ -337,14 +338,15 @@ TypePtr IfCallToSpecialForm::resolveType(const std::vector<TypePtr>& argTypes) {
   return resolveTypeInt(argTypes);
 }
 
-TypePtr IfCallToSpecialForm::resolveTypeWithCorsions(
+TypePtr IfCallToSpecialForm::resolveTypeWithCoercions(
     const std::vector<TypePtr>& argTypes,
-    std::vector<TypePtr>& coercions) {
+    std::vector<TypePtr>& coercions,
+    const TypeCoercer& coercer) {
   VELOX_CHECK_EQ(
       argTypes.size(),
       3,
       "An IF statement must have 3 clauses: 'if', 'then', and 'else'.");
 
-  return resolveTypeInt(argTypes, true, coercions);
+  return resolveTypeInt(argTypes, true, coercions, coercer);
 }
 } // namespace facebook::velox::exec

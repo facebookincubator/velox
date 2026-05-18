@@ -833,7 +833,7 @@ TypePtr ReaderBase::convertType(
       "FIXED_LEN_BYTE_ARRAY requires length to be set");
 
   static constexpr const char* kTypeMappingErrorFmtStr =
-      "Converted type {} is not allowed for requested type {}";
+      "Converted type {} is not allowed for requested type {} for file column '{}'";
 
   const bool isRepeated = schemaElement.__isset.repetition_type &&
       schemaElement.repetition_type == thrift::FieldRepetitionType::REPEATED;
@@ -859,7 +859,8 @@ TypePtr ReaderBase::convertType(
                     }),
             kTypeMappingErrorFmtStr,
             "TINYINT",
-            requestedType->toString());
+            requestedType->toString(),
+            schemaElement.name);
         return TINYINT();
 
       case thrift::ConvertedType::INT_16:
@@ -880,7 +881,8 @@ TypePtr ReaderBase::convertType(
                     }),
             kTypeMappingErrorFmtStr,
             "SMALLINT",
-            requestedType->toString());
+            requestedType->toString(),
+            schemaElement.name);
         return SMALLINT();
 
       case thrift::ConvertedType::INT_32:
@@ -901,7 +903,8 @@ TypePtr ReaderBase::convertType(
                     }),
             kTypeMappingErrorFmtStr,
             "INTEGER",
-            requestedType->toString());
+            requestedType->toString(),
+            schemaElement.name);
         return INTEGER();
 
       case thrift::ConvertedType::INT_64:
@@ -916,7 +919,8 @@ TypePtr ReaderBase::convertType(
                 isCompatible(requestedType, isRepeated, isInt64Compatible),
             kTypeMappingErrorFmtStr,
             "BIGINT",
-            requestedType->toString());
+            requestedType->toString(),
+            schemaElement.name);
         return BIGINT();
 
       case thrift::ConvertedType::DATE:
@@ -932,7 +936,8 @@ TypePtr ReaderBase::convertType(
                     [](const TypePtr& type) { return type->isDate(); }),
             kTypeMappingErrorFmtStr,
             "DATE",
-            requestedType->toString());
+            requestedType->toString(),
+            schemaElement.name);
         return DATE();
 
       case thrift::ConvertedType::TIMESTAMP_MICROS:
@@ -951,7 +956,8 @@ TypePtr ReaderBase::convertType(
                     }),
             kTypeMappingErrorFmtStr,
             "TIMESTAMP",
-            requestedType->toString());
+            requestedType->toString(),
+            schemaElement.name);
         return TIMESTAMP();
 
       case thrift::ConvertedType::DECIMAL: {
@@ -969,7 +975,8 @@ TypePtr ReaderBase::convertType(
                   [](const TypePtr& type) { return type->isDecimal(); }),
               kTypeMappingErrorFmtStr,
               "DECIMAL",
-              requestedType->toString());
+              requestedType->toString(),
+              schemaElement.name);
           // Allow decimal widening: precision may be larger and scale may
           // increase as long as precisionIncrease >= scaleIncrease.
           // Short-to-long decimal crossing is handled by getDecimalValues
@@ -986,7 +993,8 @@ TypePtr ReaderBase::convertType(
                   }),
               kTypeMappingErrorFmtStr,
               type->toString(),
-              requestedType->toString());
+              requestedType->toString(),
+              schemaElement.name);
         }
         return type;
       }
@@ -1005,7 +1013,8 @@ TypePtr ReaderBase::convertType(
                         }),
                 kTypeMappingErrorFmtStr,
                 "VARCHAR",
-                requestedType->toString());
+                requestedType->toString(),
+                schemaElement.name);
             return VARCHAR();
           default:
             VELOX_FAIL(
@@ -1026,7 +1035,8 @@ TypePtr ReaderBase::convertType(
                     }),
             kTypeMappingErrorFmtStr,
             "VARCHAR",
-            requestedType->toString());
+            requestedType->toString(),
+            schemaElement.name);
         return VARCHAR();
       }
       case thrift::ConvertedType::TIME_MILLIS:
@@ -1044,7 +1054,8 @@ TypePtr ReaderBase::convertType(
                     }),
             kTypeMappingErrorFmtStr,
             "TIME",
-            requestedType->toString());
+            requestedType->toString(),
+            schemaElement.name);
         return TIME();
 
       case thrift::ConvertedType::TIME_MICROS: {
@@ -1088,7 +1099,8 @@ TypePtr ReaderBase::convertType(
                     }),
             kTypeMappingErrorFmtStr,
             "BOOLEAN",
-            requestedType->toString());
+            requestedType->toString(),
+            schemaElement.name);
         return BOOLEAN();
       case thrift::Type::type::INT32:
         VELOX_CHECK(
@@ -1102,7 +1114,8 @@ TypePtr ReaderBase::convertType(
                     }),
             kTypeMappingErrorFmtStr,
             "INTEGER",
-            requestedType->toString());
+            requestedType->toString(),
+            schemaElement.name);
         return INTEGER();
       case thrift::Type::type::INT64:
         // For Int64 Timestamp in nano precision
@@ -1118,7 +1131,8 @@ TypePtr ReaderBase::convertType(
                       }),
               kTypeMappingErrorFmtStr,
               "TIMESTAMP",
-              requestedType->toString());
+              requestedType->toString(),
+              schemaElement.name);
           return TIMESTAMP();
         }
         VELOX_CHECK(
@@ -1126,7 +1140,8 @@ TypePtr ReaderBase::convertType(
                 isCompatible(requestedType, isRepeated, isInt64Compatible),
             kTypeMappingErrorFmtStr,
             "BIGINT",
-            requestedType->toString());
+            requestedType->toString(),
+            schemaElement.name);
         return BIGINT();
       case thrift::Type::type::INT96:
         VELOX_CHECK(
@@ -1139,7 +1154,8 @@ TypePtr ReaderBase::convertType(
                     }),
             kTypeMappingErrorFmtStr,
             "TIMESTAMP",
-            requestedType->toString());
+            requestedType->toString(),
+            schemaElement.name);
         return TIMESTAMP(); // INT96 only maps to a timestamp
       case thrift::Type::type::FLOAT:
         VELOX_CHECK(
@@ -1153,7 +1169,8 @@ TypePtr ReaderBase::convertType(
                     }),
             kTypeMappingErrorFmtStr,
             "REAL",
-            requestedType->toString());
+            requestedType->toString(),
+            schemaElement.name);
         return REAL();
       case thrift::Type::type::DOUBLE:
         VELOX_CHECK(
@@ -1166,7 +1183,8 @@ TypePtr ReaderBase::convertType(
                     }),
             kTypeMappingErrorFmtStr,
             "DOUBLE",
-            requestedType->toString());
+            requestedType->toString(),
+            schemaElement.name);
         return DOUBLE();
       case thrift::Type::type::BYTE_ARRAY:
       case thrift::Type::type::FIXED_LEN_BYTE_ARRAY:
@@ -1184,7 +1202,8 @@ TypePtr ReaderBase::convertType(
                       [](const TypePtr& type) { return type->isVarbinary(); }),
               kTypeMappingErrorFmtStr,
               "VARBINARY",
-              requestedType->toString());
+              requestedType->toString(),
+              schemaElement.name);
           return VARBINARY();
         }
 
