@@ -272,6 +272,22 @@ operator reports whether it received dynamic filter pushed down from the join.</
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">loadedToValueHook</span>          <span class="nb">sum</span><span class="p">:</span> <span class="mi">50000</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">5</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">10000</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">10000</span>
 </pre></div>
 </div>
+<section id="gpu-operator-stats">
+<h3>GPU Operator Stats<a class="headerlink" href="#gpu-operator-stats" title="Link to this heading">¶</a></h3>
+<p>When cuDF GPU operators are enabled, the stats output includes GPU-specific
+operators. Adapter operators (<code class="docutils literal notranslate"><span class="pre">CudfToVelox</span></code>, <code class="docutils literal notranslate"><span class="pre">CudfFromVelox</span></code>) appear as
+operator-type breakdown lines under their parent plan node:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">--</span> <span class="n">Aggregation</span><span class="p">[</span><span class="mi">4</span><span class="p">][</span><span class="n">FINAL</span><span class="p">]</span> <span class="o">-&gt;</span> <span class="n">a0</span><span class="p">:</span><span class="n">DOUBLE</span>
+   <span class="n">Output</span><span class="p">:</span> <span class="mi">2</span> <span class="n">rows</span><span class="p">,</span> <span class="n">Cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mi">546</span><span class="n">us</span><span class="p">,</span> <span class="n">Wall</span> <span class="n">time</span><span class="p">:</span> <span class="mi">601</span><span class="n">us</span>
+   <span class="n">CudfToVelox</span><span class="p">:</span> <span class="n">Input</span><span class="p">:</span> <span class="mi">1</span> <span class="n">rows</span><span class="p">,</span> <span class="n">Cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mi">193</span><span class="n">us</span><span class="p">,</span> <span class="n">Wall</span> <span class="n">time</span><span class="p">:</span> <span class="mi">224</span><span class="n">us</span>
+   <span class="n">CudfReduceFINAL</span><span class="p">:</span> <span class="n">Input</span><span class="p">:</span> <span class="mi">1</span> <span class="n">rows</span><span class="p">,</span> <span class="n">Cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mi">352</span><span class="n">us</span><span class="p">,</span> <span class="n">Wall</span> <span class="n">time</span><span class="p">:</span> <span class="mi">377</span><span class="n">us</span>
+</pre></div>
+</div>
+<p>Here, <code class="docutils literal notranslate"><span class="pre">Aggregation[4]</span></code> has two operators: <code class="docutils literal notranslate"><span class="pre">CudfReduceFINAL</span></code> (the GPU
+aggregation) and <code class="docutils literal notranslate"><span class="pre">CudfToVelox</span></code> (GPU-to-CPU format conversion). The summary
+line shows their combined stats. This is the same multi-operator mechanism
+used by <code class="docutils literal notranslate"><span class="pre">HashBuild</span></code>/<code class="docutils literal notranslate"><span class="pre">HashProbe</span></code> under join nodes.</p>
+</section>
 </section>
 </section>
 
@@ -289,7 +305,10 @@ operator reports whether it received dynamic filter pushed down from the join.</
 <li><a class="reference internal" href="#plannode-tostring">PlanNode::toString()</a></li>
 <li><a class="reference internal" href="#id1">printPlanWithStats()</a></li>
 <li><a class="reference internal" href="#common-operator-statistics">Common operator statistics</a></li>
-<li><a class="reference internal" href="#custom-operator-statistics">Custom operator statistics</a></li>
+<li><a class="reference internal" href="#custom-operator-statistics">Custom operator statistics</a><ul>
+<li><a class="reference internal" href="#gpu-operator-stats">GPU Operator Stats</a></li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>

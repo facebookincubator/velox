@@ -45,19 +45,32 @@
 <p>The RowNumberFuzzer and TopNRowNumberFuzzer are testing tools that automatically generate equivalent query plans that
 use the RowNumber and TopNRowNumber Velox plan nodes, and then execute these plans to validate the consistency of
 the results. They works as follows:</p>
-<ol class="arabic simple">
+<ol class="arabic">
 <li><p>Data Generation: Generate a random set of input data, also known as a vector. This data can
 have a variety of encodings and data layouts to ensure thorough testing.</p></li>
-<li><p>Plan Generation: Generate two equivalent query plans: one is RowNumber over ValuesNode as
-the base plan and the other is over TableScanNode as the alternative plan. The TopNRowNumberFuzzer generates similar
-plans with TopNRowNumber node instead.</p></li>
+<li><p>Plan Generation: Generate equivalent query plans and validate results across all of them.</p>
+<p>For RowNumberFuzzer:</p>
+<ul class="simple">
+<li><p>Base plan: RowNumber over ValuesNode.</p></li>
+<li><p>Alternative plan: RowNumber over TableScanNode.</p></li>
+</ul>
+<p>For TopNRowNumberFuzzer:</p>
+<ul class="simple">
+<li><p>Base plan: TopNRowNumber over ValuesNode using a randomly chosen rank function
+(<code class="docutils literal notranslate"><span class="pre">row_number</span></code>, <code class="docutils literal notranslate"><span class="pre">rank</span></code>, or <code class="docutils literal notranslate"><span class="pre">dense_rank</span></code>) with a random row limit.</p></li>
+<li><p>Alternative plan: WindowNode over ValuesNode using the same rank function and partition/sort
+keys, followed by a filter on the rank value to apply the same limit. This validates that the
+optimised TopNRowNumber operator produces results consistent with the general Window operator.</p></li>
+<li><p>Alternative plan: TopNRowNumber over TableScanNode using the same rank function and limit.</p></li>
+</ul>
+</li>
 <li><p>Query Execution: Executes those equivalent query plans using the generated data and asserts that the results are
 consistent across different plans.</p></li>
 </ol>
 <blockquote>
 <div><ol class="lowerroman simple">
 <li><p>Execute the base plan, compare the result with the reference (DuckDB or Presto) and use it as the expected result.</p></li>
-<li><p>Execute the alter plan multiple times with and without spill, and compare each result with the
+<li><p>Execute the alternative plans multiple times with and without spill, and compare each result with the
 expected result.</p></li>
 </ol>
 </div></blockquote>
