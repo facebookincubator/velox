@@ -286,6 +286,37 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
     std::unique_ptr<MemoryReclaimer> reclaimer,
     const std::optional<MemoryPool::DebugOptions>& poolDebugOpts,
     const std::optional<std::string>& resourceTag) {
+  if (!resourceTag.has_value()) {
+    return addRootPoolImpl(
+        name,
+        maxCapacity,
+        std::move(reclaimer),
+        poolDebugOpts,
+        /*customAllocator=*/nullptr,
+        /*customArbitrator=*/nullptr);
+  }
+  auto it = customResources_.find(*resourceTag);
+  VELOX_USER_CHECK(
+      it != customResources_.end(),
+      "No CustomMemoryResource registered for tag: {}",
+      *resourceTag);
+  const auto& resource = *it->second;
+  return addRootPoolImpl(
+      name,
+      maxCapacity,
+      std::move(reclaimer),
+      poolDebugOpts,
+      resource.allocator.get(),
+      resource.arbitrator.get());
+}
+
+std::shared_ptr<MemoryPool> MemoryManager::addRootPoolImpl(
+    const std::string& name,
+    int64_t maxCapacity,
+    std::unique_ptr<MemoryReclaimer> reclaimer,
+    const std::optional<MemoryPool::DebugOptions>& poolDebugOpts,
+    MemoryAllocator* customAllocator,
+    MemoryArbitrator* customArbitrator) {
   std::string poolName = name;
   if (poolName.empty()) {
     static std::atomic<int64_t> poolId{0};
@@ -299,21 +330,8 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
   options.coreOnAllocationFailureEnabled = coreOnAllocationFailureEnabled_;
   options.getPreferredSize = getPreferredSize_;
   options.debugOptions = poolDebugOpts;
-  if (resourceTag.has_value()) {
-    std::shared_ptr<CustomMemoryResource> matched;
-    for (const auto& candidate : customResources_) {
-      if (candidate->tag == *resourceTag) {
-        matched = candidate;
-        break;
-      }
-    }
-    VELOX_USER_CHECK_NOT_NULL(
-        matched,
-        "No CustomMemoryResource registered for tag: {}",
-        *resourceTag);
-    options.customAllocator = matched->allocator.get();
-    options.customArbitrator = matched->arbitrator.get();
-  }
+  options.customAllocator = customAllocator;
+  options.customArbitrator = customArbitrator;
 
   auto pool = createRootPool(poolName, reclaimer, options);
   if (!disableMemoryPoolTracking_) {
@@ -408,18 +426,14 @@ void MemoryManager::registerCustomResource(CustomMemoryResource resource) {
       resource.reclaimerFactory,
       "CustomMemoryResource reclaimerFactory is null for tag: {}",
       resource.tag);
-  for (const auto& existing : customResources_) {
-    VELOX_USER_CHECK_NE(
-        existing->tag,
-        resource.tag,
-        "CustomMemoryResource already registered for tag: {}",
-        resource.tag);
-  }
-  customResources_.push_back(
-      std::make_shared<CustomMemoryResource>(std::move(resource)));
+  const auto tag = resource.tag;
+  auto [_, inserted] = customResources_.emplace(
+      tag, std::make_shared<CustomMemoryResource>(std::move(resource)));
+  VELOX_USER_CHECK(
+      inserted, "CustomMemoryResource already registered for tag: {}", tag);
 }
 
-const std::vector<std::shared_ptr<CustomMemoryResource>>&
+const folly::F14FastMap<std::string, std::shared_ptr<CustomMemoryResource>>&
 MemoryManager::customResources() const {
   return customResources_;
 }

@@ -22,10 +22,6 @@
 #include <memory>
 #include <string>
 
-namespace facebook::velox::core {
-class QueryCtx;
-} // namespace facebook::velox::core
-
 namespace facebook::velox::memory {
 
 class MemoryAllocator;
@@ -49,10 +45,12 @@ struct CustomMemoryResource {
   /// resource.
   std::shared_ptr<MemoryArbitrator> arbitrator;
 
-  /// Invoked once per QueryCtx to build the reclaimer attached to the
-  /// per-query root pool.
-  std::function<std::unique_ptr<MemoryReclaimer>(core::QueryCtx*)>
-      reclaimerFactory;
+  /// Required. Builds a reclaimer for pools tagged with this resource.
+  /// Invoked by the caller (not the framework) when constructing the
+  /// per-query root pool. For reclaimers that need a QueryCtx-aware view,
+  /// the caller skips this factory and attaches the reclaimer post-build via
+  /// MemoryPool::setReclaimer.
+  std::function<std::unique_ptr<MemoryReclaimer>()> reclaimerFactory;
 };
 
 } // namespace facebook::velox::memory

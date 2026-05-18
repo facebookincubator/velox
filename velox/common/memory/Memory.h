@@ -25,6 +25,7 @@
 
 #include <fmt/format.h>
 #include <folly/Synchronized.h>
+#include <folly/container/F14Map.h>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 
@@ -216,8 +217,10 @@ class MemoryManager {
 
   /// Creates a root memory pool with specified 'name' and 'maxCapacity'. If
   /// 'name' is missing, the memory manager generates a default name internally
-  /// to ensure uniqueness. If 'resourceTag' is set, the pool is associated
-  /// with the custom memory resource registered under that tag.
+  /// to ensure uniqueness. If 'resourceTag' is set, the pool's allocator and
+  /// arbitrator come from the CustomMemoryResource previously registered
+  /// under that tag via registerCustomResource(); throws if the tag is not
+  /// registered.
   std::shared_ptr<MemoryPool> addRootPool(
       const std::string& name = "",
       int64_t maxCapacity = kMaxMemory,
@@ -231,9 +234,10 @@ class MemoryManager {
   /// process startup.
   void registerCustomResource(CustomMemoryResource resource);
 
-  /// Returns the registered custom resources in registration order.
-  const std::vector<std::shared_ptr<CustomMemoryResource>>& customResources()
-      const;
+  /// Returns the registered custom resources keyed by tag. Iteration order
+  /// is unspecified.
+  const folly::F14FastMap<std::string, std::shared_ptr<CustomMemoryResource>>&
+  customResources() const;
 
   /// Creates a leaf memory pool for direct memory allocation use with specified
   /// 'name'. If 'name' is missing, the memory manager generates a default name
@@ -309,16 +313,21 @@ class MemoryManager {
     return sharedLeafPools_;
   }
 
-  /// Test-only: drops all registered custom memory resources.
-  void testingClearCustomResources() {
-    customResources_.clear();
-  }
-
  private:
   std::shared_ptr<MemoryPoolImpl> createRootPool(
       std::string poolName,
       std::unique_ptr<MemoryReclaimer>& reclaimer,
       MemoryPool::Options& options);
+
+  // Shared implementation for addRootPool overloads. 'customAllocator' and
+  // 'customArbitrator' are borrowed and may be null (default tier).
+  std::shared_ptr<MemoryPool> addRootPoolImpl(
+      const std::string& name,
+      int64_t maxCapacity,
+      std::unique_ptr<MemoryReclaimer> reclaimer,
+      const std::optional<MemoryPool::DebugOptions>& poolDebugOpts,
+      MemoryAllocator* customAllocator,
+      MemoryArbitrator* customArbitrator);
 
   void dropPool(MemoryPool* pool);
 
@@ -350,8 +359,10 @@ class MemoryManager {
   // All user root pools allocated from 'this'.
   std::unordered_map<std::string, std::weak_ptr<MemoryPool>> pools_;
 
-  // Shared ownership so a resource outlives every pool that uses it.
-  std::vector<std::shared_ptr<CustomMemoryResource>> customResources_;
+  // Shared ownership so a resource outlives every pool that uses it. Keyed
+  // by 'tag' so addRootPool() can resolve a resource in O(1).
+  folly::F14FastMap<std::string, std::shared_ptr<CustomMemoryResource>>
+      customResources_;
 };
 
 /// Initializes the process-wide memory manager based on the specified

@@ -180,6 +180,21 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
       return *this;
     }
 
+    /// Registers a caller-built root pool under 'tag' on the resulting
+    /// QueryCtx. Throws if 'tag' is already present or 'pool' is null. The
+    /// caller is responsible for constructing the pool, typically through
+    /// MemoryManager::addRootPool(name, cap, reclaimer, debugOpts, tag) with
+    /// a CustomMemoryResource previously registered on the MemoryManager.
+    Builder& customPool(
+        std::string tag,
+        std::shared_ptr<memory::MemoryPool> pool) {
+      VELOX_CHECK(!tag.empty(), "Custom pool tag is empty");
+      VELOX_CHECK_NOT_NULL(pool, "Custom pool is null for tag: {}", tag);
+      auto [_, inserted] = customPools_.emplace(tag, std::move(pool));
+      VELOX_CHECK(inserted, "Duplicate custom pool tag: {}", tag);
+      return *this;
+    }
+
     /// Adds a callback to be invoked when the QueryCtx is destroyed.
     /// Multiple callbacks can be added by calling this method multiple times.
     Builder& releaseCallback(ReleaseCallback callback) {
@@ -209,6 +224,8 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     std::shared_ptr<filesystems::TokenProvider> tokenProvider_;
     std::deque<ReleaseCallback> releaseCallbacks_;
     TraceCtxProvider traceCtxProvider_;
+    std::unordered_map<std::string, std::shared_ptr<memory::MemoryPool>>
+        customPools_;
   };
 
   /// Generates a unique memory pool name for a query.
@@ -379,11 +396,11 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     pool_ = std::move(pool);
   }
 
-  /// Tracks an additional root pool tied to a custom memory resource. Throws
-  /// if 'tag' is already present or 'pool' is null.
-  void addCustomPool(
-      const std::string& tag,
-      std::shared_ptr<memory::MemoryPool> pool);
+  /// Tracks an additional root pool keyed by 'tag'. The pool's allocator
+  /// and arbitrator are borrowed from a CustomMemoryResource owned by the
+  /// MemoryManager registry, so its lifetime is governed externally.
+  /// Throws if 'tag' is already present or 'pool' is null.
+  void addCustomPool(std::string tag, std::shared_ptr<memory::MemoryPool> pool);
 
   /// Returns the custom root pool for the given resource tag, or nullptr if
   /// none is registered under that tag for this query.
@@ -488,8 +505,10 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
       connectorSessionProperties_;
   std::shared_ptr<memory::MemoryPool> pool_;
+
   std::unordered_map<std::string, std::shared_ptr<memory::MemoryPool>>
       customPools_;
+
   QueryConfig queryConfig_;
   std::atomic<uint64_t> numSpilledBytes_{0};
   std::atomic<uint64_t> numTracedBytes_{0};

@@ -869,6 +869,160 @@ we don’t cap the memory allocations delegated to std::malloc in the
 reserve a small amount of memory capacity in *MmapAllocator* to compensate for
 these ad-hoc small allocations in practice.
 
+Custom Memory Resources
+-----------------------
+
+Velox supports heterogeneous compute extensions that operate across multiple
+memory tiers. A query running on a GPU connector touches device memory; a
+query running on a CXL-attached node touches a memory pool with different
+latency and capacity characteristics; a connector issuing DMA transfers
+needs a pinned-host allocator; NUMA-aware operators want a pool bound to a
+specific socket. Each of these is a distinct memory resource that the engine
+must track and arbitrate.
+
+The default memory system assumes a single homogeneous tier: host DRAM,
+managed by *MemoryAllocator* and arbitrated by a single *MemoryArbitrator*.
+Under this model, allocations issued by an extension are invisible to
+*MemoryManager*, *MemoryArbitrator* cannot reason about them, and operators
+have no way to request a memory pool backed by a particular tier.
+
+*CustomMemoryResource* is the registration primitive that lets an extension
+expose additional memory tiers side-by-side with the default CPU tier. A
+resource bundles a tag, an allocator, an arbitrator, and a factory that
+builds a per-query reclaimer:
+
+.. code-block:: c++
+
+  struct CustomMemoryResource {
+    // Unique non-empty identifier.
+    std::string tag;
+
+    // Capacity of the per-query root pool created for this resource.
+    int64_t maxCapacity{std::numeric_limits<int64_t>::max()};
+
+    // Allocator backing pools tagged with this resource.
+    std::shared_ptr<MemoryAllocator> allocator;
+
+    // Arbitrator routing capacity decisions for pools tagged with this resource.
+    std::shared_ptr<MemoryArbitrator> arbitrator;
+
+    // Builds a reclaimer for pools tagged with this resource.
+    std::function<std::unique_ptr<MemoryReclaimer>()> reclaimerFactory;
+  };
+
+Each resource carries its own allocator and arbitrator. The default CPU
+allocator and arbitrator on *MemoryManager* are not shared with custom
+resources, which keeps per-tier accounting and capacity decisions
+self-contained. This matters when tiers differ in size, latency, alignment,
+or allocation failure modes — properties that the default arbitrator was
+not designed to reason about across resources.
+
+Registration and Per-Query Materialization
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Extensions register resources at process startup, immediately after
+*initializeMemoryManager*:
+
+.. code-block:: c++
+
+  auto allocator = std::make_shared<MyTieredAllocator>(...);
+  auto arbitrator = MemoryArbitrator::create(...);
+  memory::memoryManager()->registerCustomResource(
+      memory::CustomMemoryResource{
+          .tag = "device",
+          .maxCapacity = deviceCapacity,
+          .allocator = std::move(allocator),
+          .arbitrator = std::move(arbitrator),
+          .reclaimerFactory = []() {
+            return std::make_unique<MyReclaimer>();
+          },
+      });
+
+The *MemoryManager* keeps the resource alive until process shutdown.
+Registration is not thread-safe and must happen before any *QueryCtx* is
+constructed.
+
+For each query that wants to use a registered resource, the caller builds
+the per-resource root pool through
+*MemoryManager::addRootPool(name, maxCapacity, reclaimer, debugOpts, tag)*
+and hands it to the *QueryCtx* via *Builder::customPool*:
+
+.. code-block:: c++
+
+  auto* manager = memory::memoryManager();
+  auto reclaimer = std::make_unique<MyReclaimer>();
+  auto devicePool = manager->addRootPool(
+      "query.q0.device", deviceCapacity, std::move(reclaimer),
+      /*poolDebugOpts*/ std::nullopt, "device");
+  auto queryCtx = core::QueryCtx::Builder()
+                      .customPool("device", std::move(devicePool))
+                      .queryId("q0")
+                      .build();
+
+The pool allocates through the registered resource's allocator and is
+arbitrated by the registered resource's arbitrator. The root pool is
+exposed on *QueryCtx* keyed by tag:
+
+.. code-block:: c++
+
+  // Returns the custom root pool for the given resource tag, or nullptr.
+  std::shared_ptr<memory::MemoryPool> QueryCtx::customPool(
+      const std::string& tag) const;
+
+If the reclaimer needs to address sibling custom pools on the *QueryCtx*
+(for instance, to spill into another tier), construct the pool without a
+reclaimer and attach the reclaimer post-build with the real *QueryCtx*:
+
+.. code-block:: c++
+
+  auto devicePool = manager->addRootPool(
+      "query.q0.device", deviceCapacity, /*reclaimer*/ nullptr,
+      std::nullopt, "device");
+  auto queryCtx = core::QueryCtx::Builder()
+                      .customPool("device", devicePool)
+                      .queryId("q0")
+                      .build();
+  devicePool->setReclaimer(std::make_unique<MyReclaimer>(queryCtx.get()));
+
+The *reclaimerFactory* on *CustomMemoryResource* is the resource's
+commitment to produce reclaimers for its pools. Callers invoke it
+explicitly when materializing the per-query pool (the framework no longer
+calls it implicitly). It is required at registration; for the
+post-build *setReclaimer* path above, the factory's output is unused for
+that particular pool but still serves as the default for queries that do
+not override it.
+
+Operators that want to allocate from a particular tier ask the *QueryCtx*
+for the matching pool by tag and create their own child leaf pool from it.
+Operators that don't care about custom tiers behave exactly as before —
+the default CPU root pool returned by *QueryCtx::pool()* is unchanged, and
+so is its arbitration path. When a *QueryCtx* is built without any
+*customPool* calls, *CustomMemoryResource* is inert for that query.
+
+Scope
+^^^^^
+
+The framework is deliberately the *plumbing* layer. It provides:
+
+* registration and per-query materialization of additional memory pools,
+* per-tier accounting and arbitration through the resource's own allocator
+  and arbitrator,
+* an extension point (the per-query reclaimer) for tier-specific reclaim
+  behavior.
+
+It does not provide cross-resource arbitration. When a custom pool runs
+short of capacity, its own arbitrator decides what to do; the default
+*MemoryArbitrator* on *MemoryManager* will not move memory between
+resources. If an extension wants reclaim on one tier to spill into another
+(for instance, device memory into pinned-host memory), the policy lives in
+the per-query reclaimer the caller attaches to the custom pool. The
+reclaimer reaches sibling tiers either by holding a *shared_ptr* to the
+sibling pool captured at construction, or by being attached after
+*QueryCtx::build()* (via *MemoryPool::setReclaimer*) and looking siblings
+up through *QueryCtx::customPool*. See
+`reclaim across memory resources <https://facebookincubator.github.io/velox/develop/spilling.html#reclaim-across-memory-resources>`_
+in the spilling document.
+
 Server OOM Prevention
 ---------------------
 
