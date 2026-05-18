@@ -1998,13 +1998,24 @@ CudfHashJoinProbe::rightSemiFilterJoin(
   auto rightIndicesSpan =
       cudf::device_span<cudf::size_type const>{*rightJoinIndices};
   auto rightIndicesCol = cudf::column_view{rightIndicesSpan};
-  auto leftIndicesCol = cudf::empty_like(rightIndicesCol);
-  cudfOutputs.push_back(unfilteredOutput(
-      leftTableView,
-      leftIndicesCol->view(),
-      rightTableView,
-      rightIndicesCol,
-      stream));
+  
+  // For RIGHT SEMI FILTER, only gather from right table
+  std::vector<std::unique_ptr<cudf::column>> joinedCols;
+  auto rightInput = rightTableView.select(rightColumnIndicesToGather_);
+  auto rightResult = cudf::gather(
+      rightInput, rightIndicesCol, oobPolicy, stream, get_output_mr());
+  
+  auto rightCols = rightResult->release();
+  joinedCols.resize(outputType_->names().size());
+  for (int i = 0; i < rightColumnOutputIndices_.size(); i++) {
+    joinedCols[rightColumnOutputIndices_[i]] = std::move(rightCols[i]);
+  }
+  
+  if (buildStream_.has_value()) {
+    // Ensure deallocation of build table happens after probe gathers
+    cudaEvent_->recordFrom(stream).waitOn(buildStream_.value());
+  }
+  cudfOutputs.push_back(std::make_unique<cudf::table>(std::move(joinedCols)));
 
   return cudfOutputs;
 }
