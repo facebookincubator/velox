@@ -975,8 +975,8 @@ class TestParquetFileReader : public ::testing::Test {
     auto dataIoStats = std::make_shared<velox::io::IoStatistics>();
     auto metadataIoStats = std::make_shared<velox::io::IoStatistics>();
     dwio::common::ReaderOptions readerOptions(leafPool.get());
-    readerOptions.setDataIoStats(dataIoStats.get());
-    readerOptions.setMetadataIoStats(metadataIoStats.get());
+    readerOptions.setDataIoStats(dataIoStats);
+    readerOptions.setMetadataIoStats(metadataIoStats);
     auto input = std::make_unique<dwio::common::BufferedInput>(
         std::make_shared<LocalReadFile>(filePath->getPath()),
         readerOptions.memoryPool());
@@ -1035,8 +1035,8 @@ TEST_F(TestParquetFileReader, IncompleteMetadata) {
   auto dataIoStats = std::make_shared<velox::io::IoStatistics>();
   auto metadataIoStats = std::make_shared<velox::io::IoStatistics>();
   dwio::common::ReaderOptions readerOptions(leafPool.get());
-  readerOptions.setDataIoStats(dataIoStats.get());
-  readerOptions.setMetadataIoStats(metadataIoStats.get());
+  readerOptions.setDataIoStats(dataIoStats);
+  readerOptions.setMetadataIoStats(metadataIoStats);
   auto input = std::make_unique<dwio::common::BufferedInput>(
       std::make_shared<LocalReadFile>(filePath->getPath()),
       readerOptions.memoryPool());

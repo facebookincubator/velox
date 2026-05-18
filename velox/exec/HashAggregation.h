@@ -32,9 +32,9 @@ class HashAggregation : public Operator {
   /// Ratio of output to input rows in partial aggregation as a percentage.
   static constexpr std::string_view kPartialAggregationPct =
       "partialAggregationPct";
-  /// Whether partial aggregation was abandoned due to insufficient reduction.
-  static constexpr std::string_view kAbandonedPartialAggregation =
-      "abandonedPartialAggregation";
+  /// Number of rows emitted after partial aggregation was abandoned.
+  static constexpr std::string_view kAbandonedPartialAggregationRows =
+      "abandonedPartialAggregationRows";
 
   HashAggregation(
       int32_t operatorId,

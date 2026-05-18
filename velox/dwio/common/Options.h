@@ -579,13 +579,6 @@ class ReaderOptions : public io::ReaderOptions {
   explicit ReaderOptions(velox::memory::MemoryPool* pool)
       : io::ReaderOptions(pool) {}
 
-  // Deprecated: use pool-only constructor + setDataIoStats/setMetadataIoStats.
-  ReaderOptions(
-      velox::memory::MemoryPool* pool,
-      velox::io::IoStatistics* dataIoStats,
-      velox::io::IoStatistics* metadataIoStats)
-      : io::ReaderOptions(pool, dataIoStats, metadataIoStats) {}
-
   /// Sets the format of the file, such as "rc" or "dwrf". The default is
   /// "dwrf".
   ReaderOptions& setFileFormat(FileFormat format) {

@@ -46,7 +46,7 @@ class FullSignatureBinder : public SignatureBinderBase {
       const exec::FunctionSignature& signature,
       const std::vector<TypePtr>& argTypes,
       const TypePtr& returnType)
-      : SignatureBinderBase(signature) {
+      : SignatureBinderBase(signature, TypeCoercer::defaults()) {
     if (signature_.argumentTypes().size() != argTypes.size()) {
       return;
     }

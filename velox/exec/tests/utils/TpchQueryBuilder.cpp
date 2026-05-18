@@ -71,8 +71,8 @@ void TpchQueryBuilder::readFileSchema(
     const std::string& filePath,
     const std::vector<std::string>& columns) {
   dwio::common::ReaderOptions readerOptions(pool_.get());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileFormat(format_);
   auto uniqueReadFile =
       filesystems::getFileSystem(filePath, nullptr)->openFileForRead(filePath);

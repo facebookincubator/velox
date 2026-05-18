@@ -13,19 +13,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 #pragma once
 
-namespace facebook::wave::nimble {
-class Encoding {
- public:
-  // The binary layout for each Encoding begins with the same prefix:
-  // 1 byte: EncodingType
-  // 1 byte: DataType
-  // 4 bytes: uint32_t num rows
-  static constexpr int kEncodingTypeOffset = 0;
-  static constexpr int kDataTypeOffset = 1;
-  static constexpr int kRowCountOffset = 2;
-  static constexpr int kPrefixSize = 6;
+#include <cstdint>
+#include <functional>
+
+namespace facebook::velox::core {
+
+/// Per-batch scan statistics event fired by TableScan after each batch.
+struct ScanBatchEvent {
+  virtual ~ScanBatchEvent() = default;
+
+  /// Post-pushdown, pre-remaining-filter row count.
+  uint64_t numRows{0};
+  /// Wall time spent producing this batch in microseconds.
+  uint64_t wallTimeMicros{0};
 };
-} // namespace facebook::wave::nimble
+
+using ScanBatchCallback = std::function<void(const ScanBatchEvent&)>;
+
+} // namespace facebook::velox::core

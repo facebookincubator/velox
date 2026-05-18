@@ -50,7 +50,8 @@ TypePtr resolveAggregateType(
     bool nullOnFailure) {
   if (auto signatures = exec::getAggregateFunctionSignatures(aggregateName)) {
     for (const auto& signature : signatures.value()) {
-      exec::SignatureBinder binder(*signature, rawInputTypes);
+      exec::SignatureBinder binder(
+          *signature, rawInputTypes, TypeCoercer::defaults());
       if (binder.tryBind()) {
         return binder.tryResolveType(
             exec::isPartialOutput(step) ? signature->intermediateType()
