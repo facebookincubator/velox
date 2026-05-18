@@ -4,22 +4,74 @@ Binary Functions
 
 .. spark:function:: aes_encrypt(input, key, mode, padding, iv, aad) -> varbinary
 
-    Encrypts ``input`` using AES with the given ``key``. ``mode`` can be
-    ``ECB``, ``CBC``, or ``GCM``. ``padding`` can be ``PKCS``,
-    ``NONE``, or ``DEFAULT``. ``iv`` is the initialization vector.
-    ``aad`` is additional authenticated data (GCM only).
-    Key must be 16, 24, or 32 bytes (AES-128/192/256).
-    The output is ``[IV || ciphertext]`` for CBC/GCM modes.
+    Encrypts ``input`` (varbinary) using AES (Advanced Encryption Standard)
+    symmetric-key encryption with the given ``key``.
+
+    Parameters:
+
+    * ``input`` — varbinary plaintext to encrypt.
+    * ``key`` — varbinary AES key. Must be 16, 24, or 32 bytes, selecting
+      AES-128, AES-192, or AES-256 respectively.
+    * ``mode`` — varchar block-cipher mode of operation. One of:
+
+      * ``ECB`` — Electronic Code Book. No IV; identical plaintext blocks
+        produce identical ciphertext blocks. Not recommended for general
+        use.
+      * ``CBC`` — Cipher Block Chaining. Requires a 16-byte IV
+        (initialization vector); each plaintext block is XORed with the
+        previous ciphertext block.
+      * ``GCM`` — Galois/Counter Mode. Authenticated encryption with an
+        associated data tag. Requires a 12-byte IV. Verifies integrity on
+        decryption.
+
+    * ``padding`` — varchar block-padding scheme. One of:
+
+      * ``PKCS`` — PKCS#7 padding (only valid for ECB and CBC).
+      * ``NONE`` — no padding; input length must be a multiple of 16 bytes
+        (only valid for ECB and CBC; GCM never needs padding).
+      * ``DEFAULT`` — PKCS for ECB/CBC, none for GCM.
+
+    * ``iv`` — varbinary initialization vector. Empty for ECB. For CBC
+      and GCM, if empty/NULL, a random IV is generated and prepended to
+      the output.
+    * ``aad`` — varbinary additional authenticated data, for GCM only.
+      AAD is authenticated but not encrypted; passing different AAD on
+      decryption fails the tag check. Must be empty for ECB and CBC.
+
+    Output format:
+
+    * ECB: just the ciphertext.
+    * CBC: ``[IV || ciphertext]``.
+    * GCM: ``[IV || ciphertext || tag]`` where ``tag`` is 16 bytes.
+
+    Example::
+
+        SELECT aes_decrypt(
+                 aes_encrypt(CAST('hello' AS VARBINARY),
+                             CAST('0123456789abcdef' AS VARBINARY),
+                             'GCM', 'DEFAULT', CAST('' AS VARBINARY),
+                             CAST('' AS VARBINARY)),
+                 CAST('0123456789abcdef' AS VARBINARY),
+                 'GCM', 'DEFAULT', CAST('' AS VARBINARY),
+                 CAST('' AS VARBINARY))
+          = CAST('hello' AS VARBINARY);  -- true
 
     .. warning::
        Never reuse the same IV with the same key in GCM mode. IV reuse
-       completely breaks GCM's authentication guarantees.
+       completely breaks GCM's authentication guarantees and may also
+       leak plaintext.
 
 .. spark:function:: aes_decrypt(input, key, mode, padding, iv, aad) -> varbinary
 
-    Decrypts ``input`` using AES with the given ``key``. Parameters match
-    :spark:func:`aes_encrypt`. Expects input format ``[IV || ciphertext]``
-    for CBC/GCM modes. For GCM, verifies the authentication tag.
+    Decrypts ``input`` (varbinary) using AES with the given ``key``.
+    Parameters match :spark:func:`aes_encrypt`.
+
+    For CBC and GCM with empty ``iv``, the IV is read from the first
+    bytes of ``input`` (12 bytes for GCM, 16 for CBC), and the rest is
+    treated as ciphertext. For GCM, the trailing 16 bytes of the
+    ciphertext portion are the authentication tag and are verified
+    against ``aad``; a mismatch (wrong key, tampered ciphertext, or
+    wrong AAD) causes the function to throw.
 
 .. spark:function:: crc32(binary) -> bigint
 

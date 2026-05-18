@@ -22,9 +22,9 @@ namespace facebook::velox::functions::sparksql::detail {
 namespace {
 const auto& cipherModeNames() {
   static const folly::F14FastMap<CipherMode, std::string_view> kNames = {
-      {CipherMode::ECB, "ECB"},
-      {CipherMode::CBC, "CBC"},
-      {CipherMode::GCM, "GCM"},
+      {CipherMode::kEcb, "ECB"},
+      {CipherMode::kCbc, "CBC"},
+      {CipherMode::kGcm, "GCM"},
   };
   return kNames;
 }
@@ -38,15 +38,15 @@ CipherConfig parseModeAndPadding(
   CipherConfig config;
 
   if (modeStr == "ECB") {
-    config.mode = CipherMode::ECB;
+    config.mode = CipherMode::kEcb;
     config.ivLen = 0;
     config.supportsAad = false;
   } else if (modeStr == "CBC") {
-    config.mode = CipherMode::CBC;
+    config.mode = CipherMode::kCbc;
     config.ivLen = 16;
     config.supportsAad = false;
   } else if (modeStr == "GCM") {
-    config.mode = CipherMode::GCM;
+    config.mode = CipherMode::kGcm;
     config.ivLen = 12;
     config.supportsAad = true;
   } else {
@@ -55,9 +55,9 @@ CipherConfig parseModeAndPadding(
   }
 
   if (paddingStr == "DEFAULT") {
-    config.usePkcs = (config.mode != CipherMode::GCM);
+    config.usePkcs = (config.mode != CipherMode::kGcm);
   } else if (paddingStr == "PKCS") {
-    if (config.mode == CipherMode::GCM) {
+    if (config.mode == CipherMode::kGcm) {
       config.error = "PKCS padding is not supported for GCM mode";
       return config;
     }
@@ -74,7 +74,7 @@ CipherConfig parseModeAndPadding(
 
 const EVP_CIPHER* getCipher(CipherMode mode, int keyLen) {
   switch (mode) {
-    case CipherMode::ECB:
+    case CipherMode::kEcb:
       switch (keyLen) {
         case 16:
           return EVP_aes_128_ecb();
@@ -84,7 +84,7 @@ const EVP_CIPHER* getCipher(CipherMode mode, int keyLen) {
           return EVP_aes_256_ecb();
       }
       break;
-    case CipherMode::CBC:
+    case CipherMode::kCbc:
       switch (keyLen) {
         case 16:
           return EVP_aes_128_cbc();
@@ -94,7 +94,7 @@ const EVP_CIPHER* getCipher(CipherMode mode, int keyLen) {
           return EVP_aes_256_cbc();
       }
       break;
-    case CipherMode::GCM:
+    case CipherMode::kGcm:
       switch (keyLen) {
         case 16:
           return EVP_aes_128_gcm();

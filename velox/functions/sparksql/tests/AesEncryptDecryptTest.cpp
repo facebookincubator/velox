@@ -364,11 +364,35 @@ TEST_F(AesEncryptDecryptTest, gcmAuthFailure) {
           "DEFAULT",
           iv12,
           std::string("wrong")),
-      "");
+      "AES decryption failed");
 
   auto tampered = encrypted.value();
   tampered.back() ^= 0xFF;
-  VELOX_ASSERT_THROW(decrypt(tampered, key32, "GCM", "DEFAULT"), "");
+  VELOX_ASSERT_THROW(
+      decrypt(tampered, key32, "GCM", "DEFAULT"), "AES decryption failed");
+}
+
+// Decrypt with the wrong key must fail. Distinct from tampered-ciphertext
+// (covered in gcmAuthFailure) and from short-input (covered in
+// decryptInputTooShort).
+TEST_F(AesEncryptDecryptTest, decryptWrongKey) {
+  const std::string keyA = "0000111122223333";
+  const std::string keyB = "ffffeeeeddddcccc";
+
+  // CBC/PKCS: wrong key produces invalid PKCS padding on Final_ex.
+  auto encryptedCbc = encrypt("Spark", keyA, "CBC", "DEFAULT");
+  ASSERT_TRUE(encryptedCbc.has_value());
+  VELOX_ASSERT_THROW(
+      decrypt(encryptedCbc.value(), keyB, "CBC", "DEFAULT"),
+      "AES decryption failed");
+
+  // GCM: wrong key fails the authentication tag check.
+  std::string iv12(12, '\0');
+  auto encryptedGcm = encrypt("Spark", keyA, "GCM", "DEFAULT", iv12);
+  ASSERT_TRUE(encryptedGcm.has_value());
+  VELOX_ASSERT_THROW(
+      decrypt(encryptedGcm.value(), keyB, "GCM", "DEFAULT"),
+      "AES decryption failed");
 }
 
 // Decrypt with input too short.

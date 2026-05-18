@@ -30,12 +30,16 @@ namespace facebook::velox::functions::sparksql {
 
 namespace detail {
 
-enum class CipherMode { ECB, CBC, GCM };
+enum class CipherMode {
+  kEcb,
+  kCbc,
+  kGcm,
+};
 
 VELOX_DECLARE_ENUM_NAME(CipherMode);
 
 struct CipherConfig {
-  CipherMode mode{CipherMode::GCM};
+  CipherMode mode{CipherMode::kGcm};
   int ivLen{0};
   bool usePkcs{false};
   bool supportsAad{false};
@@ -133,7 +137,7 @@ struct AesEncryptFunction {
         "Invalid AES key length: {}. Must be 16, 24, or 32 bytes.",
         keyLen);
 
-    if (!config.usePkcs && config.mode != detail::CipherMode::GCM &&
+    if (!config.usePkcs && config.mode != detail::CipherMode::kGcm &&
         input.size() % 16 != 0) {
       VELOX_USER_FAIL(
           "Input size must be a multiple of 16 bytes for {} mode with NONE "
@@ -144,7 +148,7 @@ struct AesEncryptFunction {
 
     const auto* cipher = detail::getCipher(config.mode, keyLen);
     const auto blockSize = EVP_CIPHER_block_size(cipher);
-    const auto gcmTagLen = (config.mode == detail::CipherMode::GCM) ? 16 : 0;
+    const auto gcmTagLen = (config.mode == detail::CipherMode::kGcm) ? 16 : 0;
     // All four addends are bounded ints (input.size() already checked above,
     // ivLen/blockSize/gcmTagLen are tiny constants), so size_t arithmetic
     // here cannot overflow before the cast.
@@ -164,7 +168,7 @@ struct AesEncryptFunction {
             static_cast<int>(iv->size()), config.ivLen, "Invalid IV length");
         std::memcpy(result.data(), iv->data(), config.ivLen);
       } else {
-        VELOX_USER_CHECK_EQ(
+        VELOX_CHECK_EQ(
             RAND_bytes(
                 reinterpret_cast<unsigned char*>(result.data()), config.ivLen),
             1,
@@ -188,18 +192,18 @@ struct AesEncryptFunction {
       EVP_CIPHER_CTX_free(ctx);
     };
 
-    if (config.mode == detail::CipherMode::GCM) {
+    if (config.mode == detail::CipherMode::kGcm) {
       // GCM requires two-step init: set cipher, set IV length, then key+IV.
-      VELOX_USER_CHECK_EQ(
+      VELOX_CHECK_EQ(
           EVP_EncryptInit_ex(ctx, cipher, nullptr, nullptr, nullptr),
           1,
           "Failed to initialize AES encryption");
-      VELOX_USER_CHECK_EQ(
+      VELOX_CHECK_EQ(
           EVP_CIPHER_CTX_ctrl(
               ctx, EVP_CTRL_GCM_SET_IVLEN, config.ivLen, nullptr),
           1,
           "Failed to set GCM IV length");
-      VELOX_USER_CHECK_EQ(
+      VELOX_CHECK_EQ(
           EVP_EncryptInit_ex(
               ctx,
               nullptr,
@@ -209,7 +213,7 @@ struct AesEncryptFunction {
           1,
           "Failed to initialize AES encryption");
     } else {
-      VELOX_USER_CHECK_EQ(
+      VELOX_CHECK_EQ(
           EVP_EncryptInit_ex(
               ctx,
               cipher,
@@ -226,10 +230,10 @@ struct AesEncryptFunction {
       EVP_CIPHER_CTX_set_padding(ctx, 0);
     }
 
-    if (config.mode == detail::CipherMode::GCM && aad != nullptr &&
+    if (config.mode == detail::CipherMode::kGcm && aad != nullptr &&
         aad->size() > 0) {
       int aadLen = 0;
-      VELOX_USER_CHECK_EQ(
+      VELOX_CHECK_EQ(
           EVP_EncryptUpdate(
               ctx,
               nullptr,
@@ -243,7 +247,7 @@ struct AesEncryptFunction {
     int outLen = 0;
     auto* outPtr =
         reinterpret_cast<unsigned char*>(result.data()) + config.ivLen;
-    VELOX_USER_CHECK_EQ(
+    VELOX_CHECK_EQ(
         EVP_EncryptUpdate(
             ctx,
             outPtr,
@@ -254,14 +258,14 @@ struct AesEncryptFunction {
         "AES encryption failed");
 
     int finalLen = 0;
-    VELOX_USER_CHECK_EQ(
+    VELOX_CHECK_EQ(
         EVP_EncryptFinal_ex(ctx, outPtr + outLen, &finalLen),
         1,
         "AES encryption finalization failed");
 
     auto totalLen = outLen + finalLen;
-    if (config.mode == detail::CipherMode::GCM) {
-      VELOX_USER_CHECK_EQ(
+    if (config.mode == detail::CipherMode::kGcm) {
+      VELOX_CHECK_EQ(
           EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, 16, outPtr + totalLen),
           1,
           "Failed to get GCM tag");
@@ -350,7 +354,7 @@ struct AesDecryptFunction {
         "Invalid AES key length: {}. Must be 16, 24, or 32 bytes.",
         keyLen);
 
-    const auto gcmTagLen = (config.mode == detail::CipherMode::GCM) ? 16 : 0;
+    const auto gcmTagLen = (config.mode == detail::CipherMode::kGcm) ? 16 : 0;
     const unsigned char* ivPtr = nullptr;
     const unsigned char* cipherData;
     int cipherLen;
@@ -376,7 +380,7 @@ struct AesDecryptFunction {
     }
 
     const unsigned char* tag = nullptr;
-    if (config.mode == detail::CipherMode::GCM) {
+    if (config.mode == detail::CipherMode::kGcm) {
       VELOX_USER_CHECK_GE(
           cipherLen, gcmTagLen, "Input too short — missing GCM tag");
       cipherLen -= gcmTagLen;
@@ -390,18 +394,18 @@ struct AesDecryptFunction {
       EVP_CIPHER_CTX_free(ctx);
     };
 
-    if (config.mode == detail::CipherMode::GCM) {
+    if (config.mode == detail::CipherMode::kGcm) {
       // GCM requires two-step init: set cipher, set IV length, then key+IV.
-      VELOX_USER_CHECK_EQ(
+      VELOX_CHECK_EQ(
           EVP_DecryptInit_ex(ctx, cipher, nullptr, nullptr, nullptr),
           1,
           "Failed to initialize AES decryption");
-      VELOX_USER_CHECK_EQ(
+      VELOX_CHECK_EQ(
           EVP_CIPHER_CTX_ctrl(
               ctx, EVP_CTRL_GCM_SET_IVLEN, config.ivLen, nullptr),
           1,
           "Failed to set GCM IV length");
-      VELOX_USER_CHECK_EQ(
+      VELOX_CHECK_EQ(
           EVP_DecryptInit_ex(
               ctx,
               nullptr,
@@ -410,7 +414,7 @@ struct AesDecryptFunction {
               ivPtr),
           1,
           "Failed to initialize AES decryption");
-      VELOX_USER_CHECK_EQ(
+      VELOX_CHECK_EQ(
           EVP_CIPHER_CTX_ctrl(
               ctx,
               EVP_CTRL_GCM_SET_TAG,
@@ -419,7 +423,7 @@ struct AesDecryptFunction {
           1,
           "Failed to set GCM tag");
     } else {
-      VELOX_USER_CHECK_EQ(
+      VELOX_CHECK_EQ(
           EVP_DecryptInit_ex(
               ctx,
               cipher,
@@ -434,10 +438,10 @@ struct AesDecryptFunction {
       EVP_CIPHER_CTX_set_padding(ctx, 0);
     }
 
-    if (config.mode == detail::CipherMode::GCM && aad != nullptr &&
+    if (config.mode == detail::CipherMode::kGcm && aad != nullptr &&
         aad->size() > 0) {
       int aadLen = 0;
-      VELOX_USER_CHECK_EQ(
+      VELOX_CHECK_EQ(
           EVP_DecryptUpdate(
               ctx,
               nullptr,
@@ -451,7 +455,7 @@ struct AesDecryptFunction {
     const auto maxSize = cipherLen + EVP_CIPHER_block_size(cipher);
     result.reserve(maxSize);
     int outLen = 0;
-    VELOX_USER_CHECK_EQ(
+    VELOX_CHECK_EQ(
         EVP_DecryptUpdate(
             ctx,
             reinterpret_cast<unsigned char*>(result.data()),
