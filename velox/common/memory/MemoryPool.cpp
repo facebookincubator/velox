@@ -540,6 +540,12 @@ void* MemoryPoolImpl::allocate(
   return buffer;
 }
 
+void MemoryPoolImpl::reportAllocation(int64_t size) {
+  CHECK_AND_INC_MEM_OP_STATS(this, Allocs);
+  const auto alignedSize = sizeAlign(size);
+  reserve(alignedSize);
+}
+
 void* MemoryPoolImpl::allocateZeroFilled(int64_t numEntries, int64_t sizeEach) {
   CHECK_AND_INC_MEM_OP_STATS(this, Allocs);
   const auto size = sizeEach * numEntries;
@@ -614,6 +620,12 @@ bool MemoryPoolImpl::transferTo(MemoryPool* dest, void* buffer, uint64_t size) {
   release(alignedSize);
 
   return true;
+}
+
+void MemoryPoolImpl::reportFree(int64_t size) {
+  CHECK_AND_INC_MEM_OP_STATS(this, Frees);
+  const auto alignedSize = sizeAlign(size);
+  release(alignedSize);
 }
 
 void MemoryPoolImpl::allocateNonContiguous(
