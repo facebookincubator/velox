@@ -3,6 +3,11 @@
 Additional checklist for PRs that add or modify scalar functions, aggregate
 functions, or special forms. Use alongside `SELF_REVIEW.md`.
 
+## PR title
+
+When adding a new function, use:
+`feat(presto|spark): Add xxx scalar|aggregate function`
+
 ## Documentation
 
 - [ ] Doc entry exists in the correct `.rst` file under `docs/functions/`
