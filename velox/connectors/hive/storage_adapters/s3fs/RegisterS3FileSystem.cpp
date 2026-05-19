@@ -16,8 +16,6 @@
 
 #include "velox/connectors/hive/storage_adapters/s3fs/RegisterS3FileSystem.h" // @manual
 
-#include <utility>
-
 #ifdef VELOX_ENABLE_S3
 #include "velox/common/base/StatsReporter.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Config.h" // @manual
@@ -91,7 +89,7 @@ std::shared_ptr<FileSystem> fileSystemGenerator(
         initializeS3(logLevel, logLocation);
         std::shared_ptr<FileSystem> fs;
         if (fileSystemFactory) {
-          fs = fileSystemFactory(std::move(bucketName), properties);
+          fs = fileSystemFactory(bucketName, properties);
         } else {
           fs = std::make_shared<S3FileSystem>(bucketName, properties);
         }
