@@ -155,28 +155,14 @@ jobs:
           # Set compiler to GCC 14
           CUDA_FLAGS: -ccbin /opt/rh/gcc-toolset-14/root/usr/bin
         run: |
-          EXTRA_CMAKE_FLAGS=(
-            "-DVELOX_ENABLE_BENCHMARKS=ON"
-            "-DVELOX_ENABLE_EXAMPLES=ON"
-            "-DVELOX_ENABLE_ARROW=ON"
-            "-DVELOX_ENABLE_GEO=ON"
-            "-DVELOX_ENABLE_PARQUET=ON"
-            "-DVELOX_ENABLE_HDFS=ON"
-            "-DVELOX_ENABLE_S3=ON"
-            "-DVELOX_ENABLE_GCS=ON"
-            "-DVELOX_ENABLE_ABFS=ON"
-            "-DVELOX_ENABLE_WAVE=ON"
-            "-DVELOX_MONO_LIBRARY=ON"
-          )
+          # All adapters cmake flags (including compiler-conditional
+          # ones — Faiss, REMOTE_FUNCTIONS, and CUDF — are only added
+          # when USE_CLANG != true) live in .github/scripts/cmake-flags.sh.
+          # Edit the script, not this list.
+          BUILD_PROFILE=adapters USE_CLANG="${USE_CLANG}" source .github/scripts/cmake-flags.sh
+          EXTRA_CMAKE_FLAGS=("${CMAKE_FLAGS[@]}")
           if [[ "${USE_CLANG}" = "true" ]]; then
              scripts/setup-centos9.sh install_clang15; export CC=/usr/bin/clang-15; export CXX=/usr/bin/clang++-15; CUDA_FLAGS="-ccbin /usr/lib64/llvm15/bin/clang++-15";
-          else
-            # cuDF (unsupported for Clang) and Faiss (link issue when using Clang)
-            # are excluded for Clang compilation and need to be added back when using GCC.
-            EXTRA_CMAKE_FLAGS+=("-DVELOX_ENABLE_CUDF=ON")
-            EXTRA_CMAKE_FLAGS+=("-DVELOX_ENABLE_FAISS=ON")
-            # Investigate issues with remote function service: Issue #13897
-            EXTRA_CMAKE_FLAGS+=("-DVELOX_ENABLE_REMOTE_FUNCTIONS=ON")
           fi
           source /opt/rh/gcc-toolset-14/enable
           g++ --version
@@ -519,6 +505,14 @@ jobs:
         env:
           VELOX_DEPENDENCY_SOURCE: SYSTEM
           ICU_SOURCE: SYSTEM
+          # Mirror the adapters and fedora-debug jobs: build FAISS from
+          # source instead of resolving the system-installed package.
+          # The system FAISS config (/usr/local/share/faiss/faiss-config.cmake)
+          # sets the link interface of the imported `faiss` target to
+          # include OpenMP::OpenMP_CXX without ever calling
+          # find_package(OpenMP) to define it, so a SYSTEM resolution
+          # fails the configure.
+          faiss_SOURCE: BUNDLED
           # Use BUNDLED gflags to provide PIC static gflags for .so plugins.
           # The container's folly is built with -DGFLAGS_SHARED=FALSE so its
           # exported config references gflags_static which BUNDLED gflags provides.
@@ -529,23 +523,20 @@ jobs:
           glog_SOURCE: SYSTEM
           MAKEFLAGS: NUM_THREADS=32 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=6
         run: |
-          EXTRA_CMAKE_FLAGS=(
-            "-DCMAKE_LINK_LIBRARIES_STRATEGY=REORDER_FREELY"
-            "-DVELOX_BUILD_SHARED=ON"
-            "-DVELOX_ENABLE_BENCHMARKS=ON"
-            "-DVELOX_ENABLE_EXAMPLES=ON"
-            "-DVELOX_ENABLE_ARROW=ON"
-            "-DVELOX_ENABLE_GEO=ON"
-            "-DVELOX_ENABLE_PARQUET=ON"
-            "-DVELOX_MONO_LIBRARY=ON"
-          )
+          # The container ships CMake 3.30.4. Bump to 3.31.1 so
+          # CMAKE_LINK_LIBRARIES_STRATEGY=REORDER_FREELY (added in 3.31)
+          # actually takes effect — without it ld --as-needed drops
+          # libxxhash.so before libthriftmetadata.a needs XXH3_64bits,
+          # breaking the velox_functions_remote_client_test link.
+          uv tool install --force cmake@3.31.1
+          # Shared per-profile flag lists live in
+          # .github/scripts/cmake-flags.sh — script handles
+          # Clang-conditional flags internally via USE_CLANG.
+          BUILD_PROFILE=ubuntu-debug USE_CLANG="${USE_CLANG}" source .github/scripts/cmake-flags.sh
           if [[ "${USE_CLANG}" = "true" ]]; then
              export CC=/usr/bin/clang-15; export CXX=/usr/bin/clang++-15;
-          else
-            EXTRA_CMAKE_FLAGS+=("-DVELOX_ENABLE_FAISS=ON")
-            EXTRA_CMAKE_FLAGS+=("-DVELOX_ENABLE_REMOTE_FUNCTIONS=ON")
           fi
-          export EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS[*]}"
+          export EXTRA_CMAKE_FLAGS="${CMAKE_FLAGS[*]}"
           make debug 2>&1 | tee /tmp/build-output.log
 
       - name: Extract build errors
@@ -725,14 +716,13 @@ jobs:
           simdjson_SOURCE: BUNDLED
           gRPC_SOURCE: SYSTEM
           MAKEFLAGS: NUM_THREADS=32 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=6
-          EXTRA_CMAKE_FLAGS: >-
-            -DVELOX_ENABLE_PARQUET=ON
-            -DARROW_THRIFT_USE_SHARED=ON
-            -DVELOX_ENABLE_EXAMPLES=ON
         run: |
           uv tool install --force cmake@3.31.1
           dnf install -y -q --setopt=install_weak_deps=False grpc-devel grpc-plugins
-          export EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_ENABLE_FAISS=ON"
+          # Shared per-profile flag lists live in
+          # .github/scripts/cmake-flags.sh.
+          BUILD_PROFILE=fedora-debug source .github/scripts/cmake-flags.sh
+          export EXTRA_CMAKE_FLAGS="${CMAKE_FLAGS[*]}"
           make debug
 
       - name: CCache after
