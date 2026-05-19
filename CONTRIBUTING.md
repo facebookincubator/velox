@@ -319,7 +319,9 @@ Here are specific guidelines for contributing functions:
 1. Read [How to add a scalar function?](https://facebookincubator.github.io/velox/develop/scalar-functions.html) guide. When implementing a function, simple function is preferred unless the implementation of vector function provides a significant performance gain which can be demonstrated
 with a benchmark.
 
-2. Use the following template for the PR title: Add xxx [Presto|Spark] function (replace xxx with the function name).
+2. Follow the PR title convention from the
+   [Function PR Guide](scripts/review/FUNCTION_PR_GUIDE.md), e.g.
+   `feat(presto): Add abs scalar function`.
    * Ensure the PR description contains a link to the function documentation
    from Presto or Spark docs.
    * Describe the function semantics and edge cases clearly.
