@@ -44,7 +44,7 @@ functions, or special forms. Use alongside `SELF_REVIEW.md`.
       invariants that indicate bugs.
 - [ ] Watch for unnecessary string copies and allocations. Functions that
       process strings are called per-row and small inefficiencies add up
-      quickly. Prefer `StringView` and in-place operations over
+      quickly. Prefer `std::string_view` and in-place operations over
       `std::string` temporaries.
 - [ ] For vector functions and special forms: `EvalCtx::moveOrCopyResult`
       is used when the function may be called with a pre-existing result
