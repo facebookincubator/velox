@@ -101,9 +101,10 @@ bool hasCoercion(const std::vector<Coercion>& coercions) {
 TypePtr resolveVectorFunctionWithCoercions(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes,
-    std::vector<TypePtr>& coercions) {
+    std::vector<TypePtr>& coercions,
+    const TypeCoercer& coercer) {
   if (auto result = resolveVectorFunctionWithMetadataWithCoercions(
-          functionName, argTypes, coercions)) {
+          functionName, argTypes, coercions, coercer)) {
     return result->first;
   }
 
@@ -119,7 +120,8 @@ resolveVectorFunctionWithMetadata(
       [&](const auto& /*name*/, const auto& entry)
           -> std::optional<std::pair<TypePtr, VectorFunctionMetadata>> {
         for (const auto& signature : entry.signatures) {
-          exec::SignatureBinder binder(*signature, argTypes);
+          exec::SignatureBinder binder(
+              *signature, argTypes, TypeCoercer::defaults());
           if (binder.tryBind()) {
             return {{binder.tryResolveReturnType(), entry.metadata}};
           }
@@ -132,7 +134,8 @@ std::optional<std::pair<TypePtr, VectorFunctionMetadata>>
 resolveVectorFunctionWithMetadataWithCoercions(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes,
-    std::vector<TypePtr>& coercions) {
+    std::vector<TypePtr>& coercions,
+    const TypeCoercer& coercer) {
   coercions.clear();
 
   return applyToVectorFunctionEntry<std::pair<TypePtr, VectorFunctionMetadata>>(
@@ -141,7 +144,7 @@ resolveVectorFunctionWithMetadataWithCoercions(
           -> std::optional<std::pair<TypePtr, VectorFunctionMetadata>> {
         std::vector<std::pair<std::vector<Coercion>, TypePtr>> candidates;
         for (const auto& signature : entry.signatures) {
-          exec::SignatureBinder binder(*signature, argTypes);
+          exec::SignatureBinder binder(*signature, argTypes, coercer);
           std::vector<Coercion> requiredCoercions;
           if (binder.tryBindWithCoercions(requiredCoercions)) {
             auto type = binder.tryResolveReturnType();
@@ -200,7 +203,8 @@ getVectorFunctionWithMetadata(
               std::shared_ptr<VectorFunction>,
               VectorFunctionMetadata>> {
         for (const auto& signature : entry.signatures) {
-          exec::SignatureBinder binder(*signature, inputTypes);
+          exec::SignatureBinder binder(
+              *signature, inputTypes, TypeCoercer::defaults());
           if (binder.tryBind()) {
             auto inputArgs = toVectorFunctionArgs(inputTypes, constantInputs);
 

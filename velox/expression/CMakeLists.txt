@@ -125,6 +125,7 @@ velox_link_libraries(
   velox_common_base
   velox_expression_functions
   velox_functions_util
+  velox_trace
   velox_type_tz
   double-conversion::double-conversion
   Folly::folly

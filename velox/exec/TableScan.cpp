@@ -234,14 +234,10 @@ RowVectorPtr TableScan::getOutput() {
           const auto completedRowsDelta =
               dataSource_->getCompletedRows() - prevCompletedRows;
           if (completedRowsDelta > 0) {
-            if (const auto& callback = operatorCtx_->driverCtx()
-                                           ->task->queryCtx()
-                                           ->scanBatchCallback()) {
-              callback(
-                  {.numRows = completedRowsDelta,
-                   .wallTimeMicros = ioTimeUs,
-                   .tableName = tableHandle_->name()});
-            }
+            core::ScanBatchEvent event;
+            event.numRows = completedRowsDelta;
+            event.wallTimeMicros = ioTimeUs;
+            dataSource_->fireScanBatchCallback(event);
           }
           maxFilteringRatio_ = std::max(
               {maxFilteringRatio_,
@@ -368,6 +364,10 @@ bool TableScan::getSplit() {
         tableHandle_,
         columnHandles_,
         connectorQueryCtx_.get());
+    if (const auto& callback =
+            operatorCtx_->driverCtx()->task->queryCtx()->scanBatchCallback()) {
+      dataSource_->setScanBatchCallback(callback);
+    }
   }
 
   debugString_ = fmt::format(

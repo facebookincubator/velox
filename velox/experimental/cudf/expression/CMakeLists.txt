@@ -17,18 +17,18 @@ add_library(
   AstExpression.cpp
   DecimalExpressionKernels.cpp
   DecimalExpressionKernels.cu
+  DecimalTypeCheck.cpp
   ExpressionEvaluator.cpp
   JitExpression.cpp
   PrestoFunctions.cpp
   SparkFunctions.cpp
   SubfieldFiltersToAst.cpp
-  DecimalTypeCheck.cpp
 )
 
 target_link_libraries(
   velox_cudf_expression
   PUBLIC cudf::cudf
-  PRIVATE arrow velox_exception velox_common_base velox_cudf_vector
+  PRIVATE arrow velox_common_base velox_cudf_vector velox_exception
 )
 
 target_compile_options(velox_cudf_expression PRIVATE -Wno-missing-field-initializers)

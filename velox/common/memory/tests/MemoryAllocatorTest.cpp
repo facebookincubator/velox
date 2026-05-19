@@ -1251,6 +1251,109 @@ TEST_P(MemoryAllocatorTest, allocateBytes) {
   ASSERT_TRUE(instance_->checkConsistency());
 }
 
+TEST_P(MemoryAllocatorTest, reallocateBytes) {
+  // Test grow: allocate, fill, reallocate larger, verify data preserved.
+  {
+    const uint64_t kInitialSize = 1024;
+    const uint64_t kNewSize = 4096;
+    void* p = instance_->allocateBytes(kInitialSize);
+    ASSERT_NE(nullptr, p);
+    ::memset(p, 0xAB, kInitialSize);
+
+    auto usedBefore = instance_->totalUsedBytes();
+    void* newP = instance_->reallocateBytes(p, kInitialSize, kNewSize);
+    ASSERT_NE(nullptr, newP);
+    // Verify original data is preserved.
+    for (uint64_t i = 0; i < kInitialSize; ++i) {
+      ASSERT_EQ(static_cast<uint8_t>(0xAB), static_cast<uint8_t*>(newP)[i])
+          << "at byte " << i;
+    }
+    // Verify memory accounting: usage should have increased by the delta.
+    if (!useMmap_) {
+      ASSERT_EQ(
+          usedBefore + (kNewSize - kInitialSize), instance_->totalUsedBytes());
+    }
+    instance_->freeBytes(newP, kNewSize);
+  }
+
+  // Test shrink: allocate, fill, reallocate smaller, verify data preserved.
+  {
+    const uint64_t kInitialSize = 4096;
+    const uint64_t kNewSize = 1024;
+    void* p = instance_->allocateBytes(kInitialSize);
+    ASSERT_NE(nullptr, p);
+    ::memset(p, 0xCD, kInitialSize);
+
+    void* newP = instance_->reallocateBytes(p, kInitialSize, kNewSize);
+    ASSERT_NE(nullptr, newP);
+    for (uint64_t i = 0; i < kNewSize; ++i) {
+      ASSERT_EQ(static_cast<uint8_t>(0xCD), static_cast<uint8_t*>(newP)[i])
+          << "at byte " << i;
+    }
+    instance_->freeBytes(newP, kNewSize);
+  }
+
+  // Test with nullptr input: should behave like allocateBytes.
+  {
+    const uint64_t kSize = 2048;
+    void* newP = instance_->reallocateBytes(nullptr, 0, kSize);
+    ASSERT_NE(nullptr, newP);
+    ::memset(newP, 0xEF, kSize);
+    instance_->freeBytes(newP, kSize);
+  }
+
+  // Test memory accounting after full cycle.
+  if (!useMmap_) {
+    ASSERT_EQ(0, instance_->totalUsedBytes());
+  }
+  ASSERT_TRUE(instance_->checkConsistency());
+}
+
+TEST_P(MemoryAllocatorTest, reallocateBytesWithAlignment) {
+  // Non-default alignment should fall back to allocate+memcpy+free
+  // (MallocAllocator's reallocateBytesWithoutRetry returns nullptr for
+  // non-default alignment since ::realloc() cannot guarantee it).
+  const uint64_t kInitialSize = 1024;
+  const uint64_t kNewSize = 4096;
+  const uint16_t kAlignment = MemoryAllocator::kMaxAlignment;
+  void* p = instance_->allocateBytes(kInitialSize, kAlignment);
+  ASSERT_NE(nullptr, p);
+  ASSERT_EQ(0, reinterpret_cast<uintptr_t>(p) % kAlignment);
+  ::memset(p, 0x42, kInitialSize);
+
+  void* newP =
+      instance_->reallocateBytes(p, kInitialSize, kNewSize, kAlignment);
+  ASSERT_NE(nullptr, newP);
+  ASSERT_EQ(0, reinterpret_cast<uintptr_t>(newP) % kAlignment);
+  for (uint64_t i = 0; i < kInitialSize; ++i) {
+    ASSERT_EQ(static_cast<uint8_t>(0x42), static_cast<uint8_t*>(newP)[i])
+        << "at byte " << i;
+  }
+  instance_->freeBytes(newP, kNewSize);
+  ASSERT_TRUE(instance_->checkConsistency());
+}
+
+TEST_P(MemoryAllocatorTest, reallocateBytesCapacityExceeded) {
+  if (useMmap_) {
+    // MmapAllocator has different capacity semantics; skip.
+    return;
+  }
+  // Allocate most of capacity, then try to reallocate beyond it.
+  const uint64_t kInitialSize = 1024;
+  const uint64_t kOverCapacity = kCapacityBytes + 1;
+  void* p = instance_->allocateBytes(kInitialSize);
+  ASSERT_NE(nullptr, p);
+
+  void* newP = instance_->reallocateBytes(p, kInitialSize, kOverCapacity);
+  ASSERT_EQ(nullptr, newP);
+  // Original pointer should still be valid after failed reallocation.
+  // Memory accounting should be unchanged.
+  ASSERT_EQ(kInitialSize, instance_->totalUsedBytes());
+  instance_->freeBytes(p, kInitialSize);
+  ASSERT_EQ(0, instance_->totalUsedBytes());
+  ASSERT_TRUE(instance_->checkConsistency());
+}
+
 TEST_P(MemoryAllocatorTest, allocateBytesWithAlignment) {
   struct {
     uint64_t allocateBytes;

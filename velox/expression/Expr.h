@@ -23,6 +23,7 @@
 
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/core/ExpressionEvaluator.h"
+#include "velox/exec/trace/TraceWriter.h"
 #include "velox/expression/EvalCtx.h"
 #include "velox/expression/ExprStats.h"
 #include "velox/expression/VectorFunction.h"
@@ -30,10 +31,15 @@
 #include "velox/type/Subfield.h"
 #include "velox/vector/SimpleVector.h"
 
+namespace facebook::velox::exec::trace {
+class TraceCtx;
+} // namespace facebook::velox::exec::trace
+
 namespace facebook::velox::exec {
 
 class ExprSet;
 class FieldReference;
+class Operator;
 class VectorFunction;
 
 /// Maintains a set of rows for evaluation and removes rows with
@@ -438,6 +444,21 @@ class Expr {
     return inputValues_;
   }
 
+  /// Sets up expression-level output tracer if the given TraceCtx indicates
+  /// this expression should be traced. Called once during operator
+  /// initialization. Uses a visited set to avoid redundant traversal of
+  /// shared CSE nodes.
+  void maybeSetupTracer(
+      const Operator& op,
+      const trace::TraceCtx& traceCtx,
+      std::unordered_set<Expr*>& visited,
+      std::unordered_map<std::string, int>& instanceCounts);
+
+  /// Finishes expression-level output tracing by calling finish() on the
+  /// cached tracer. Uses a visited set to avoid redundant traversal of
+  /// shared CSE nodes.
+  void finishTracer(std::unordered_set<Expr*>& visited);
+
   void setAllNulls(
       const SelectivityVector& rows,
       EvalCtx& context,
@@ -526,6 +547,9 @@ class Expr {
       const SelectivityVector& rows,
       EvalCtx& context,
       VectorPtr& result);
+
+  // Traces expression output if a tracer is configured.
+  FOLLY_ALWAYS_INLINE void traceOutput(const VectorPtr& result);
 
   // Returns true if values in 'distinctFields_' have nulls that are
   // worth skipping. If so, the rows in 'rows' with at least one sure
@@ -785,6 +809,9 @@ class Expr {
   // True if distinctFields_ are identical to at least one of the parent
   // expression's distinct fields.
   bool sameAsParentDistinctFields_ = false;
+
+  // Cached output tracer set up during expression initialization.
+  std::unique_ptr<trace::TraceExprWriter> outputTracer_;
 };
 
 /// Generate a selectivity vector of a single row.
@@ -871,6 +898,13 @@ class ExprSet {
     memoizingExprs_.insert(expr);
   }
 
+  /// Sets up expression-level tracers on all expressions in this set.
+  void maybeSetupTracers(const Operator& op, const trace::TraceCtx& traceCtx);
+
+  /// Finishes expression-level tracers on all expressions in this set.
+  /// Called during operator close.
+  void finishTracers();
+
   /// Returns text representation of the expression set.
   /// @param compact If true, uses one-line representation for each expression.
   /// Otherwise, prints a tree of expressions one node per line.
@@ -908,6 +942,10 @@ class ExprSet {
   std::unordered_set<Expr*> memoizingExprs_;
   core::ExecCtx* const execCtx_;
   const bool lazyDereference_;
+
+  // Set to true when expression-level tracers are configured for this ExprSet.
+  // Cached to avoid re-querying TraceCtx at close time.
+  bool exprTracingEnabled_{false};
 
   // Cached from QueryConfig at construction time to avoid repeated map lookups.
   const bool adaptiveCpuSampling_;

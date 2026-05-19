@@ -32,6 +32,13 @@ DEFINE_bool(
     false,
     "Whether allow to memory capacity transfer between memory pools from different tasks, which might happen in use case like Spark-Gluten");
 
+DEFINE_bool(
+    velox_enable_inplace_realloc,
+    true,
+    "If true, MemoryPool::reallocate uses MemoryAllocator::reallocateBytes "
+    "which tries in-place reallocation via ::realloc() (jemalloc can often "
+    "expand without memcpy). If false, uses the legacy alloc+memcpy+free path.");
+
 DECLARE_bool(velox_suppress_memory_capacity_exceeding_error_message);
 
 using facebook::velox::common::testutil::TestValue;
@@ -170,7 +177,7 @@ std::string capacityToString(int64_t capacity) {
 
 std::string MemoryPool::Stats::toString() const {
   return fmt::format(
-      "usedBytes:{} reservedBytes:{} peakBytes:{} cumulativeBytes:{} numAllocs:{} numFrees:{} numReserves:{} numReleases:{} numShrinks:{} numReclaims:{} numCollisions:{} numCapacityGrowths:{}",
+      "usedBytes:{} reservedBytes:{} peakBytes:{} cumulativeBytes:{} numAllocs:{} numFrees:{} numReserves:{} numReleases:{} numShrinks:{} numReclaims:{} numCollisions:{} numCapacityGrowths:{} numExternalAllocs:{} numExternalFrees:{} cumulativeExternalBytes:{}",
       succinctBytes(usedBytes),
       succinctBytes(reservedBytes),
       succinctBytes(peakBytes),
@@ -182,7 +189,10 @@ std::string MemoryPool::Stats::toString() const {
       numShrinks,
       numReclaims,
       numCollisions,
-      numCapacityGrowths);
+      numCapacityGrowths,
+      numExternalAllocs,
+      numExternalFrees,
+      succinctBytes(cumulativeExternalBytes));
 }
 
 bool MemoryPool::Stats::operator==(const MemoryPool::Stats& other) const {
@@ -196,7 +206,10 @@ bool MemoryPool::Stats::operator==(const MemoryPool::Stats& other) const {
              numReserves,
              numReleases,
              numCollisions,
-             numCapacityGrowths) ==
+             numCapacityGrowths,
+             numExternalAllocs,
+             numExternalFrees,
+             cumulativeExternalBytes) ==
       std::tie(
              other.usedBytes,
              other.reservedBytes,
@@ -207,7 +220,10 @@ bool MemoryPool::Stats::operator==(const MemoryPool::Stats& other) const {
              other.numReserves,
              other.numReleases,
              other.numCollisions,
-             other.numCapacityGrowths);
+             other.numCapacityGrowths,
+             other.numExternalAllocs,
+             other.numExternalFrees,
+             other.cumulativeExternalBytes);
 }
 
 std::ostream& operator<<(std::ostream& os, const MemoryPool::Stats& stats) {
@@ -506,6 +522,9 @@ MemoryPool::Stats MemoryPoolImpl::statsLocked() const {
   stats.numReleases = numReleases_;
   stats.numCollisions = numCollisions_;
   stats.numCapacityGrowths = numCapacityGrowths_;
+  stats.numExternalAllocs = numExternalAllocs_;
+  stats.numExternalFrees = numExternalFrees_;
+  stats.cumulativeExternalBytes = cumulativeExternalBytes_;
   return stats;
 }
 
@@ -544,6 +563,17 @@ void* MemoryPoolImpl::allocate(
   return buffer;
 }
 
+void MemoryPoolImpl::reportExternalAllocation(int64_t size) {
+  VELOX_CHECK_GT(size, 0, "reportExternalAllocation requires positive size");
+  if (FOLLY_UNLIKELY(kind_ != Kind::kLeaf)) {
+    VELOX_FAIL(
+        "Memory operation is only allowed on leaf memory pool: {}", toString());
+  }
+  ++numExternalAllocs_;
+  reserve(size);
+  cumulativeExternalBytes_ += size;
+}
+
 void* MemoryPoolImpl::allocateZeroFilled(int64_t numEntries, int64_t sizeEach) {
   CHECK_AND_INC_MEM_OP_STATS(this, Allocs);
   const auto size = sizeEach * numEntries;
@@ -568,9 +598,39 @@ void* MemoryPoolImpl::allocateZeroFilled(int64_t numEntries, int64_t sizeEach) {
 void* MemoryPoolImpl::reallocate(void* p, int64_t size, int64_t newSize) {
   CHECK_AND_INC_MEM_OP_STATS(this, Allocs);
   const auto alignedNewSize = sizeAlign(newSize);
+  const auto alignedOldSize = sizeAlign(size);
   reserve(alignedNewSize);
 
-  void* newP = allocator_->allocateBytes(alignedNewSize, alignment_);
+  // Two fully separate branches are kept here intentionally so the legacy
+  // path can be deleted as a single block once the in-place path is rolled
+  // out and FLAGS_velox_enable_inplace_realloc is removed.
+  if (FLAGS_velox_enable_inplace_realloc) {
+    // In-place path: try ::realloc() via reallocateBytes, which jemalloc can
+    // often service without moving data (avoiding the expensive memcpy).
+    void* const newP = allocator_->reallocateBytes(
+        p, alignedOldSize, alignedNewSize, alignment_);
+    if (newP == nullptr) {
+      release(alignedNewSize);
+      handleAllocationFailure(
+          fmt::format(
+              "{} failed with new {} and old {} from {} {}",
+              __FUNCTION__,
+              succinctBytes(newSize),
+              succinctBytes(size),
+              toString(),
+              allocator_->getAndClearFailureMessage()));
+    }
+    if (p != nullptr) {
+      INC_MEM_OP_STATS(Frees);
+      DEBUG_RECORD_FREE(p, size);
+      release(alignedOldSize);
+    }
+    DEBUG_RECORD_ALLOC(this, newP, newSize);
+    return newP;
+  }
+
+  // Legacy path: allocate new + memcpy + free old.
+  void* const newP = allocator_->allocateBytes(alignedNewSize, alignment_);
   if (FOLLY_UNLIKELY(newP == nullptr)) {
     release(alignedNewSize);
     handleAllocationFailure(
@@ -618,6 +678,16 @@ bool MemoryPoolImpl::transferTo(MemoryPool* dest, void* buffer, uint64_t size) {
   release(alignedSize);
 
   return true;
+}
+
+void MemoryPoolImpl::reportExternalFree(int64_t size) {
+  VELOX_CHECK_GT(size, 0, "reportExternalFree requires positive size");
+  if (FOLLY_UNLIKELY(kind_ != Kind::kLeaf)) {
+    VELOX_FAIL(
+        "Memory operation is only allowed on leaf memory pool: {}", toString());
+  }
+  ++numExternalFrees_;
+  release(size);
 }
 
 void MemoryPoolImpl::allocateNonContiguous(

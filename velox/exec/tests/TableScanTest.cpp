@@ -6793,7 +6793,10 @@ TEST_F(TableScanTest, scanBatchCallback) {
   auto queryCtx = core::QueryCtx::create(executor_.get());
   queryCtx->setScanBatchCallback([&](const core::ScanBatchEvent& event) {
     totalRows += event.numRows;
-    receivedTableName = std::string(event.tableName);
+    if (const auto* fileEvent =
+            dynamic_cast<const connector::hive::FileScanBatchEvent*>(&event)) {
+      receivedTableName = std::string(fileEvent->tableName);
+    }
     ++callbackCount;
   });
 
@@ -6806,6 +6809,51 @@ TEST_F(TableScanTest, scanBatchCallback) {
   EXPECT_GT(totalRows, 0);
   EXPECT_GT(callbackCount, 0);
   EXPECT_FALSE(receivedTableName.empty());
+}
+
+TEST_F(TableScanTest, scanBatchCallbackPartitionKeys) {
+  auto vectors = makeVectors(1, 1'000);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+
+  std::unordered_map<std::string, std::optional<std::string>>
+      receivedPartitionKeys;
+  bool callbackFired{false};
+  auto queryCtx = core::QueryCtx::create(executor_.get());
+  queryCtx->setScanBatchCallback([&](const core::ScanBatchEvent& event) {
+    if (const auto* fileEvent =
+            dynamic_cast<const connector::hive::FileScanBatchEvent*>(&event)) {
+      if (fileEvent->partitionKeys) {
+        receivedPartitionKeys = *fileEvent->partitionKeys;
+      }
+    }
+    callbackFired = true;
+  });
+
+  connector::ColumnHandleMap assignments = {
+      {"c0", regularColumn("c0", BIGINT())},
+      {"ds", partitionKey("ds", VARCHAR())},
+  };
+
+  auto outputType = ROW({"c0", "ds"}, {BIGINT(), VARCHAR()});
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .outputType(outputType)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .planNode();
+
+  auto split = exec::test::HiveConnectorSplitBuilder(filePath->getPath())
+                   .partitionKey("ds", "2026-05-12")
+                   .build();
+
+  AssertQueryBuilder(plan).queryCtx(queryCtx).split(split).copyResults(
+      pool_.get());
+
+  ASSERT_TRUE(callbackFired);
+  const std::unordered_map<std::string, std::optional<std::string>> expected{
+      {"ds", "2026-05-12"}};
+  ASSERT_EQ(receivedPartitionKeys, expected);
 }
 
 TEST_F(TableScanTest, scanBatchCallbackNotSetIsNoOp) {
