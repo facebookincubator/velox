@@ -510,84 +510,65 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
 
     case common::FilterKind::kTimestampRange: {
       auto* tsRange = static_cast<const common::TimestampRange*>(&filter);
-      const auto lower = tsRange->lower();
-      const auto upper = tsRange->upper();
 
       // Convert Velox Timestamp to the cuDF timestamp resolution configured
-      // in CudfConfig (defaults to nanoseconds).
-      auto makeTimestampScalar =
-          [&](const Timestamp& ts) -> std::unique_ptr<cudf::scalar> {
-        auto tsUnit = timestampUnit;
-        switch (tsUnit) {
-          case cudf::type_id::TIMESTAMP_NANOSECONDS: {
-            auto nanos = ts.toNanos();
-            auto scalar =
-                std::make_unique<cudf::timestamp_scalar<cudf::timestamp_ns>>(
-                    nanos, true, stream, mr);
-            stream.synchronize();
-            return scalar;
-          }
-          case cudf::type_id::TIMESTAMP_MICROSECONDS: {
-            auto micros = ts.toMicros();
-            auto scalar =
-                std::make_unique<cudf::timestamp_scalar<cudf::timestamp_us>>(
-                    micros, true, stream, mr);
-            stream.synchronize();
-            return scalar;
-          }
-          case cudf::type_id::TIMESTAMP_MILLISECONDS: {
-            auto millis = ts.toMillis();
-            auto scalar =
-                std::make_unique<cudf::timestamp_scalar<cudf::timestamp_ms>>(
-                    millis, true, stream, mr);
-            stream.synchronize();
-            return scalar;
-          }
-          case cudf::type_id::TIMESTAMP_SECONDS: {
-            auto secs = ts.getSeconds();
-            auto scalar =
-                std::make_unique<cudf::timestamp_scalar<cudf::timestamp_s>>(
-                    secs, true, stream, mr);
-            stream.synchronize();
-            return scalar;
-          }
-          default:
-            VELOX_FAIL(
-                "Unsupported timestamp unit: {}", static_cast<int>(tsUnit));
-        }
-      };
-
+      // in CudfConfig (defaults to nanoseconds), and push as an AST literal.
       auto pushTimestampLiteral =
           [&](const Timestamp& ts) -> const cudf::ast::expression& {
-        auto scalar = makeTimestampScalar(ts);
-        scalars.emplace_back(std::move(scalar));
-        auto tsUnit = timestampUnit;
-        switch (tsUnit) {
-          case cudf::type_id::TIMESTAMP_NANOSECONDS:
+        switch (timestampUnit) {
+          case cudf::type_id::TIMESTAMP_NANOSECONDS: {
+            auto nanos = ts.toNanos();
+            scalars.emplace_back(
+                std::make_unique<cudf::timestamp_scalar<cudf::timestamp_ns>>(
+                    nanos, true, stream, mr));
+            stream.synchronize();
             return tree.push(
                 cudf::ast::literal{
                     *static_cast<cudf::timestamp_scalar<cudf::timestamp_ns>*>(
                         scalars.back().get())});
-          case cudf::type_id::TIMESTAMP_MICROSECONDS:
+          }
+          case cudf::type_id::TIMESTAMP_MICROSECONDS: {
+            auto micros = ts.toMicros();
+            scalars.emplace_back(
+                std::make_unique<cudf::timestamp_scalar<cudf::timestamp_us>>(
+                    micros, true, stream, mr));
+            stream.synchronize();
             return tree.push(
                 cudf::ast::literal{
                     *static_cast<cudf::timestamp_scalar<cudf::timestamp_us>*>(
                         scalars.back().get())});
-          case cudf::type_id::TIMESTAMP_MILLISECONDS:
+          }
+          case cudf::type_id::TIMESTAMP_MILLISECONDS: {
+            auto millis = ts.toMillis();
+            scalars.emplace_back(
+                std::make_unique<cudf::timestamp_scalar<cudf::timestamp_ms>>(
+                    millis, true, stream, mr));
+            stream.synchronize();
             return tree.push(
                 cudf::ast::literal{
                     *static_cast<cudf::timestamp_scalar<cudf::timestamp_ms>*>(
                         scalars.back().get())});
-          case cudf::type_id::TIMESTAMP_SECONDS:
+          }
+          case cudf::type_id::TIMESTAMP_SECONDS: {
+            auto secs = ts.getSeconds();
+            scalars.emplace_back(
+                std::make_unique<cudf::timestamp_scalar<cudf::timestamp_s>>(
+                    secs, true, stream, mr));
+            stream.synchronize();
             return tree.push(
                 cudf::ast::literal{
                     *static_cast<cudf::timestamp_scalar<cudf::timestamp_s>*>(
                         scalars.back().get())});
+          }
           default:
             VELOX_FAIL(
-                "Unsupported timestamp unit: {}", static_cast<int>(tsUnit));
+                "Unsupported timestamp unit: {}",
+                static_cast<int>(timestampUnit));
         }
       };
+
+      const auto lower = tsRange->lower();
+      const auto upper = tsRange->upper();
 
       if (tsRange->isSingleValue()) {
         const auto& literal = pushTimestampLiteral(lower);
