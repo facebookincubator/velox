@@ -40,28 +40,6 @@ functions, or special forms. Use alongside `SELF_REVIEW.md`.
       vector (e.g., inside `IF` / `CASE WHEN`). Do not unconditionally
       replace `result`.
 
-## Tests
-
-- [ ] Test file exists in the `tests/` subdirectory alongside the source.
-- [ ] Test file is added to `CMakeLists.txt`.
-- [ ] Tests cover: basic operation, null inputs, empty input, edge cases,
-      error cases (invalid input with `VELOX_ASSERT_THROW`).
-- [ ] For aggregate functions: tests cover `testAggregations` (exercises
-      all aggregation modes), group-by, global aggregation, and an
-      end-to-end test with upstream functions if applicable.
-- [ ] For bug fixes: an integration test with the actual expression context
-      (e.g., `SWITCH`, `IF`, `TRY`) that triggered the bug, not just
-      direct function calls.
-- [ ] Expected values are derived from the Spark/Presto spec or reference
-      implementation, not hand-computed from the code being tested.
-
-## Special forms
-
-- [ ] Type resolution works through the standard `resolveType` path.
-- [ ] If type resolution requires constant argument values, discuss the
-      approach with the reviewer before modifying the framework.
-- [ ] `constructSpecialForm` is implemented correctly.
-
 ## Naming
 
 - [ ] File names match: `FunctionName.cpp`, `FunctionName.h`,
