@@ -40,17 +40,6 @@ functions, or special forms. Use alongside `SELF_REVIEW.md`.
       vector (e.g., inside `IF` / `CASE WHEN`). Do not unconditionally
       replace `result`.
 
-## Aggregate functions
-
-- [ ] All aggregation steps work correctly: partial, intermediate, final,
-      and single.
-- [ ] `combine` (merge) handles null intermediate states.
-- [ ] Memory allocated through `HashStringAllocator` is freed in
-      `destroy()`.
-- [ ] `use_external_memory_` is set to `true` if the accumulator allocates
-      through `HashStringAllocator`.
-- [ ] `is_fixed_size_` is set correctly.
-
 ## Tests
 
 - [ ] Test file exists in the `tests/` subdirectory alongside the source.
