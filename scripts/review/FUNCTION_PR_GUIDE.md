@@ -12,7 +12,8 @@ When adding a new function, use:
 
 - [ ] Doc entry exists in the correct `.rst` file under `docs/functions/`
       (e.g., `docs/functions/spark/aggregate.rst`,
-      `docs/functions/presto/math.rst`).
+      `docs/functions/presto/math.rst`). Functions must appear in
+      alphabetical order.
 - [ ] Doc entry uses the correct directive (e.g., `.. spark:function::`,
       `.. function::`).
 - [ ] Signature matches the implementation: argument types, return type,
