@@ -38,8 +38,10 @@ functions, or special forms. Use alongside `SELF_REVIEW.md`.
       header — it supports `HashStringAllocator`, custom `destroy()`, variable-size
       accumulators, and external memory.
 - [ ] Input validation uses the [non-throwing error path](https://velox-lib.io/blog/optimize-try-more#non-throwing-simple-functions)
-      (`Status` / `setError`) so functions work correctly inside `TRY`.
-      Use `VELOX_CHECK_*` only for internal invariants that indicate bugs.
+      (`Status` / `setError`) so functions work correctly and efficiently
+      inside `TRY` — throwing exceptions in C++ is extremely expensive due
+      to stack trace capture. Use `VELOX_CHECK_*` only for internal
+      invariants that indicate bugs.
 - [ ] For vector functions and special forms: `EvalCtx::moveOrCopyResult`
       is used when the function may be called with a pre-existing result
       vector (e.g., inside `IF` / `CASE WHEN`). Do not unconditionally
