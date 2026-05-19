@@ -4791,7 +4791,7 @@ TEST_F(AggregationTest, barrierExecutionPartialAggregation) {
       toPlanStats(task->taskStats())
           .at(partialNodeId)
           .customStats.count(
-              std::string(HashAggregation::kAbandonedPartialAggregation)),
+              std::string(HashAggregation::kAbandonedPartialAggregationRows)),
       0);
 }
 
@@ -4849,7 +4849,7 @@ TEST_F(AggregationTest, barrierExecutionAbandonedPartialAggregation) {
       toPlanStats(task->taskStats())
           .at(partialNodeId)
           .customStats
-          .at(std::string(HashAggregation::kAbandonedPartialAggregation))
+          .at(std::string(HashAggregation::kAbandonedPartialAggregationRows))
           .sum,
       0);
 }
