@@ -97,10 +97,10 @@ void configureReaderOptions(
     readerOptions.setSelectiveNimbleReaderEnabled(
         connectorQueryCtx->selectiveNimbleReaderEnabled());
   }
-  readerOptions.setFileMetadataCacheEnabled(
-      fileConfig->fileMetadataCacheEnabled(sessionProperties));
-  readerOptions.setPinFileMetadata(
-      fileConfig->pinFileMetadata(sessionProperties));
+  readerOptions.setCacheMetadata(fileConfig->cacheMetadata(sessionProperties));
+  readerOptions.setPinMetadata(fileConfig->pinMetadata(sessionProperties));
+  readerOptions.setCacheIndex(fileConfig->cacheIndex(sessionProperties));
+  readerOptions.setPinIndex(fileConfig->pinIndex(sessionProperties));
 
   // Set footer speculative IO size based on file format.
   switch (fileSplit->fileFormat) {
