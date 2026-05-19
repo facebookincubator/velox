@@ -50,7 +50,8 @@ jobs:
         run: |
           echo "JOB_TRIGGER: $JOB_TRIGGER"
           if [[ "$JOB_TRIGGER" == "pull_request" ]]; then
-            merge_base_commit=$(gh api -q '.merge_base_commit.sha' \
+            source .github/scripts/gh-api-retry.sh
+            merge_base_commit=$(gh_api -q '.merge_base_commit.sha' \
               /repos/facebookincubator/velox/compare/facebookincubator:$BASE_REF...$PR_OWNER:$HEAD_REF \
             )
 

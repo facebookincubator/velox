@@ -2,9 +2,42 @@
 
 Guidance for Claude Code when working in the Velox repository.
 
+## Branch Hygiene
+
+Before creating a new feature branch, always:
+
+1. `git checkout main`
+2. `git fetch upstream && git rebase upstream/main`
+3. Delete stale feature branches.
+4. Push main to origin if behind upstream.
+5. `git checkout -b <new-branch>`
+
 ## PR Review
 
 When asked to review a PR (via `/pr-review`), always use the /pr-review skill.
+
+### Review scripts
+
+Use `scripts/review/fetch.py` and `scripts/review/post.py` for PR reviews
+instead of raw `gh api` calls.
+
+```bash
+# Fetch PR metadata, diff, comments, and reviews in one shot.
+python3 scripts/review/fetch.py <owner/repo> <pr-number>
+python3 scripts/review/fetch.py <github-pr-url>
+
+# Post a review from a file.
+python3 scripts/review/post.py <owner/repo> <pr-number> <event> <body-file>
+python3 scripts/review/post.py <github-pr-url> <event> <body-file>
+# Events: APPROVE, REQUEST_CHANGES, COMMENT
+```
+
+Always draft the review body in `/tmp/` and get approval before calling
+`post.py`.
+
+### Review style
+
+See [scripts/review/REVIEW_GUIDE.md](../scripts/review/REVIEW_GUIDE.md).
 
 ## Queries
 

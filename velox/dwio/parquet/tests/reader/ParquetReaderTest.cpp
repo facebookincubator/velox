@@ -1852,7 +1852,7 @@ TEST_F(ParquetReaderTest, fileColumnVarcharToMetadataColumnMismatchTest) {
     VELOX_ASSERT_THROW(
         createReader(sample, readerOptions),
         fmt::format(
-            "Converted type VARCHAR is not allowed for requested type {}",
+            "Converted type VARCHAR is not allowed for requested type {} for file column 'name'",
             requestedType->toString()));
   };
 

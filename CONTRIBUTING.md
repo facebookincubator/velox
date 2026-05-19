@@ -95,12 +95,24 @@ The contribution process is outlined below:
      tagging the appropriate maintainers for that component.
    * Once all CI signals are green, tag the reviewers identified in Step 3.
 
-5. Review is performed by one or more reviewers.
+5. **Self-review before requesting review.** Run through the
+   [Self-Review Checklist](scripts/review/SELF_REVIEW.md) before tagging
+   reviewers. For PRs that add or modify functions, also check the
+   [Function PR Guide](scripts/review/FUNCTION_PR_GUIDE.md). If you use
+   Claude or a similar AI tool, paste these checklists as context and ask
+   it to review your diff.
+   * We want to provide timely, thorough reviews on every PR. When
+   reviewers spend rounds on naming, style, and conventions, it delays
+   feedback on design and correctness — for your PR and for others
+   waiting in the queue. PRs that repeatedly miss these basics may be
+   sent back for self-review before a detailed review can begin.
+
+6. Review is performed by one or more reviewers.
    * This normally happens within a few days, but may take longer if the change
    is large, complex, or if a critical reviewer is unavailable (feel free to
    ping them in the PR or on Slack).
 
-6. Address feedback and update the PR.
+7. Address feedback and update the PR.
    * After pushing changes, add a comment to the PR mentioning the
    reviewer(s) by name, stating the comments have been addressed. This is the best
    way to ensure that the reviewer is notified that the code is ready to be reviewed
@@ -108,8 +120,12 @@ The contribution process is outlined below:
    * As a PR author, please do not "Resolve Conversation" when review comments are
    addressed. Instead, wait for the reviewer to verify the comment has been
    addressed and resolve the conversation.
+   * Before requesting re-review, confirm every review comment is either
+   addressed in code or discussed in a reply. Do not silently skip items.
+   If a requested change is too large for this PR, say so and propose a
+   plan (e.g., separate PR).
 
-7. Iterate on this process until your changes are reviewed and accepted by a
+8. Iterate on this process until your changes are reviewed and accepted by a
    maintainer. At this point, a Meta employee will be notified to merge your PR,
    due to tooling limitations.
 
@@ -295,13 +311,17 @@ following best practices:
 
 Adding Presto and Spark functions are a good way to get yourself familiar with
 Velox and the code review process. In addition to the general contribution
-guidelines presented above, here are specific guidelines for contributing
-functions:
+guidelines presented above, review the
+[Function PR Guide](scripts/review/FUNCTION_PR_GUIDE.md) for a detailed
+checklist covering documentation, registration, and implementation.
+Here are specific guidelines for contributing functions:
 
 1. Read [How to add a scalar function?](https://facebookincubator.github.io/velox/develop/scalar-functions.html) guide. When implementing a function, simple function is preferred unless the implementation of vector function provides a significant performance gain which can be demonstrated
 with a benchmark.
 
-2. Use the following template for the PR title: Add xxx [Presto|Spark] function (replace xxx with the function name).
+2. Follow the PR title convention from the
+   [Function PR Guide](scripts/review/FUNCTION_PR_GUIDE.md), e.g.
+   `feat(presto): Add abs scalar function`.
    * Ensure the PR description contains a link to the function documentation
    from Presto or Spark docs.
    * Describe the function semantics and edge cases clearly.

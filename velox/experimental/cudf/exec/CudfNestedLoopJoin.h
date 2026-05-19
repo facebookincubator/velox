@@ -167,6 +167,12 @@ class CudfNestedLoopJoinProbe : public CudfOperatorBase {
         joinType == core::JoinType::kLeftSemiProject;
   }
 
+  /// Returns true if we should skip probe input when build side is empty.
+  bool skipProbeOnEmptyBuild() const {
+    return joinType_ == core::JoinType::kInner ||
+        joinType_ == core::JoinType::kRight;
+  }
+
  protected:
   void doAddInput(RowVectorPtr input) override;
   RowVectorPtr doGetOutput() override;
@@ -242,6 +248,10 @@ class CudfNestedLoopJoinProbe : public CudfOperatorBase {
 
   // True when build side has no rows.
   bool buildEmpty_{false};
+
+  // Skip probe input processing when build is empty for specific join types.
+  // Prevents upstream exchange hanging by consuming all probe input.
+  bool skipInput_{false};
 
   // Cached precomputed columns for the build table (populated once in
   // isBlocked() when rightPrecomputeInstructions_ is non-empty). Kept alive

@@ -2206,7 +2206,8 @@ TypePtr resolveWindowType(
     bool nullOnFailure) {
   if (auto signatures = exec::getWindowFunctionSignatures(windowFunctionName)) {
     for (const auto& signature : signatures.value()) {
-      exec::SignatureBinder binder(*signature, inputTypes);
+      exec::SignatureBinder binder(
+          *signature, inputTypes, TypeCoercer::defaults());
       if (binder.tryBind()) {
         return binder.tryResolveType(signature->returnType());
       }

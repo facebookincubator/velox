@@ -13,19 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 #pragma once
 
-namespace facebook::wave::nimble {
-class Encoding {
- public:
-  // The binary layout for each Encoding begins with the same prefix:
-  // 1 byte: EncodingType
-  // 1 byte: DataType
-  // 4 bytes: uint32_t num rows
-  static constexpr int kEncodingTypeOffset = 0;
-  static constexpr int kDataTypeOffset = 1;
-  static constexpr int kRowCountOffset = 2;
-  static constexpr int kPrefixSize = 6;
-};
-} // namespace facebook::wave::nimble
+#include "velox/type/TypeCoercer.h"
+
+namespace facebook::velox::functions::prestosql {
+
+/// Coercion rule set for the Presto SQL dialect. Returned coercer is a
+/// singleton.
+const TypeCoercer& typeCoercer();
+
+} // namespace facebook::velox::functions::prestosql
