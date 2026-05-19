@@ -53,6 +53,8 @@ class HashAggregation : public Operator {
 
   bool startDrain() override;
 
+  void finishDrain() override;
+
   void noMoreInput() override;
 
   BlockingReason isBlocked(ContinueFuture* /* unused */) override {

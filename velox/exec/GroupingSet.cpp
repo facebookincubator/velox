@@ -903,9 +903,9 @@ void GroupingSet::resetTable(bool freeTable) {
 }
 
 void GroupingSet::resetGlobalAggregation() {
-  if (!isGlobal_) {
-    return;
-  }
+  VELOX_CHECK(
+      isGlobal_,
+      "resetGlobalAggregation should only be called for global grouping sets");
   destroyGlobalAggregations();
   rows_.clear();
   stringAllocator_.clear();

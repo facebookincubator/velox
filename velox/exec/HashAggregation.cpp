@@ -238,6 +238,17 @@ bool HashAggregation::startDrain() {
   return true;
 }
 
+void HashAggregation::finishDrain() {
+  if (!isDraining()) {
+    return;
+  }
+  groupingSet_->resetTable(/*freeTable=*/false);
+  if (isGlobal_) {
+    groupingSet_->resetGlobalAggregation();
+  }
+  Operator::finishDrain();
+}
+
 void HashAggregation::updateRuntimeStats() {
   // Report range sizes and number of distinct values for the group-by keys.
   const auto& hashers = groupingSet_->hashLookup().hashers;
@@ -346,9 +357,7 @@ RowVectorPtr HashAggregation::getOutput() {
       finished_ = true;
     }
     if (!input_) {
-      if (isDraining()) {
-        Operator::finishDrain();
-      }
+      finishDrain();
       return nullptr;
     }
     prepareOutput(input_->size());
@@ -375,10 +384,7 @@ RowVectorPtr HashAggregation::getOutput() {
   if (isDistinct_) {
     auto distinctOutput = getDistinctOutput();
     if (distinctOutput == nullptr) {
-      if (isDraining()) {
-        groupingSet_->resetTable(/*freeTable=*/false);
-        Operator::finishDrain();
-      }
+      finishDrain();
     }
     return distinctOutput;
   }
@@ -396,22 +402,11 @@ RowVectorPtr HashAggregation::getOutput() {
       output_);
   if (!hasData) {
     resultIterator_.reset();
-    if (isDraining()) {
-      if (isPartialOutput_) {
-        resetPartialOutputIfNeed();
-      } else {
-        groupingSet_->resetTable(/*freeTable=*/false);
-        if (isGlobal_) {
-          groupingSet_->resetGlobalAggregation();
-        }
-      }
-      Operator::finishDrain();
-      return nullptr;
-    }
     if (noMoreInput_) {
       finished_ = true;
     }
     resetPartialOutputIfNeed();
+    finishDrain();
     return nullptr;
   }
   numOutputRows_ += output_->size();
