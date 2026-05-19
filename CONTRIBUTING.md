@@ -120,11 +120,10 @@ The contribution process is outlined below:
    * As a PR author, please do not "Resolve Conversation" when review comments are
    addressed. Instead, wait for the reviewer to verify the comment has been
    addressed and resolve the conversation.
-   * Before requesting re-review, re-read every review comment and confirm
-   each is addressed or discussed. Do not silently skip items. If a
-   requested change is too large for this PR, say so and propose a plan
-   (e.g., separate PR). See the re-review section in the
-   [Self-Review Checklist](scripts/review/SELF_REVIEW.md).
+   * Before requesting re-review, confirm every review comment is either
+   addressed in code or discussed in a reply. Do not silently skip items.
+   If a requested change is too large for this PR, say so and propose a
+   plan (e.g., separate PR).
 
 8. Iterate on this process until your changes are reviewed and accepted by a
    maintainer. At this point, a Meta employee will be notified to merge your PR,

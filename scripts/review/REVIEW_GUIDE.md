@@ -111,6 +111,9 @@ and refer back.
   duplication? Do test names follow conventions?
 - **Test files.** Each test file should have one test suite with a matching
   name. Empty test fixtures should use `TEST()` instead of `TEST_F()`.
+- **Error message tests.** When tests verify error messages, ensure they
+  match the full descriptive text, not just internal formatting from CHECK
+  macros (e.g., `"(0 vs. 0)"` is not a useful assertion).
 
 ### Documentation
 
@@ -123,7 +126,4 @@ and refer back.
   existing subsystem, check that stats and `toString()` distinguish the new
   operations from existing ones. Shared counters hide information needed
   for troubleshooting.
-- **Error message tests.** When tests verify error messages, ensure they
-  match the full descriptive text, not just internal formatting from CHECK
-  macros (e.g., `"(0 vs. 0)"` is not a useful assertion).
 - **When unsure about conventions**, CC the maintainer rather than guessing.

@@ -11,8 +11,6 @@ before review saves everyone time.
 - [ ] PR title describes what changed (not the symptom or the ticket).
 - [ ] PR description matches what the code actually does. If the scope grew
       beyond the original description, update it.
-- [ ] Every review comment from the previous round is either addressed in
-      code or discussed in a reply. Do not silently skip items.
 
 ## Naming
 
@@ -89,7 +87,8 @@ before review saves everyone time.
 
 Before requesting re-review after addressing feedback:
 
-- [ ] Re-read every review comment. Confirm each is addressed or discussed.
+- [ ] Every review comment is either addressed in code or discussed in a
+      reply. Do not silently skip items.
 - [ ] Run the full diff review again — don't just fix the flagged lines.
       Addressing feedback often introduces new issues.
 - [ ] Check that behavioral changes (e.g., dropping IO stats, changing
