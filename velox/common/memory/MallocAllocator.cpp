@@ -335,6 +335,61 @@ void* MallocAllocator::allocateZeroFilledWithoutRetry(uint64_t bytes) {
   return result;
 }
 
+void* MallocAllocator::reallocateBytesWithoutRetry(
+    void* p,
+    uint64_t oldSize,
+    uint64_t newSize,
+    uint16_t alignment) {
+  if (p == nullptr || alignment > kMinAlignment ||
+      (reinterpret_cast<uintptr_t>(p) % alignment) != 0) {
+    return nullptr;
+  }
+  if (!isAlignmentValid(newSize, alignment)) {
+    VELOX_FAIL(
+        "Alignment check failed, reallocateBytes {}, alignmentBytes {}",
+        newSize,
+        alignment);
+  }
+  const auto delta =
+      static_cast<int64_t>(newSize) - static_cast<int64_t>(oldSize);
+  if (delta > 0 && !incrementUsage(delta)) {
+    auto errorMsg = fmt::format(
+        "Failed to reallocate: exceeded memory allocator limit of {}. "
+        "Old size: {}, new size: {}",
+        succinctBytes(capacity_),
+        succinctBytes(oldSize),
+        succinctBytes(newSize));
+    VELOX_MEM_LOG_EVERY_MS(WARNING, 1000) << errorMsg;
+    setAllocatorFailureMessage(errorMsg);
+    return nullptr;
+  }
+  void* result = ::realloc(p, newSize); // NOLINT
+  if (result == nullptr) {
+    // realloc failed. The original pointer is still valid.
+    if (delta > 0) {
+      decrementUsage(delta);
+    }
+    VELOX_MEM_LOG(ERROR) << "Failed to reallocateBytes from "
+                         << succinctBytes(oldSize) << " to "
+                         << succinctBytes(newSize);
+    return nullptr;
+  }
+  // ::realloc() must return a pointer aligned to the requested alignment.
+  // The C standard guarantees alignof(max_align_t), and we already enforced
+  // alignment <= kMinAlignment above, so this should always hold for a
+  // conformant allocator. Fail loudly if it doesn't (e.g., a non-conformant
+  // LD_PRELOAD interposer).
+  VELOX_CHECK_EQ(
+      reinterpret_cast<uintptr_t>(result) % alignment,
+      0,
+      "::realloc returned a pointer not aligned to requested alignment: {}",
+      alignment);
+  if (delta < 0) {
+    decrementUsage(-delta);
+  }
+  return result;
+}
+
 void MallocAllocator::freeBytes(void* p, uint64_t bytes) noexcept {
   ::free(p); // NOLINT
   decrementUsage(bytes);

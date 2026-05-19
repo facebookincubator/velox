@@ -18,6 +18,7 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
+#include "velox/dwio/parquet/writer/WriterConfig.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -47,8 +48,10 @@ class ParquetWriterOptionsAdapter : public WriterOptionsAdapter {
     // kParquetSerdeTimestampUnit and kParquetSerdeTimestampTimezone in
     // velox/dwio/parquet/writer/Writer.h. The value "6" represents
     // microseconds (TimestampPrecision::kMicroseconds).
-    options.serdeParameters["parquet.writer.timestamp.unit"] = "6";
-    options.serdeParameters["parquet.writer.timestamp.timezone"] = "";
+    options.serdeParameters[parquet::WriterConfig::kParquetSerdeTimestampUnit] =
+        "6";
+    options.serdeParameters
+        [parquet::WriterConfig::kParquetSerdeTimestampTimezone] = "";
   }
 };
 

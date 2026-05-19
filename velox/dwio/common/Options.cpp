@@ -39,6 +39,8 @@ FileFormat toFileFormat(std::string_view s) {
     return FileFormat::ORC;
   } else if (s == "sst") {
     return FileFormat::SST;
+  } else if (s == "flux") {
+    return FileFormat::FLUX;
   } else if (s == "avro") {
     return FileFormat::AVRO;
   }
@@ -67,6 +69,8 @@ std::string_view toString(FileFormat fmt) {
       return "orc";
     case FileFormat::SST:
       return "sst";
+    case FileFormat::FLUX:
+      return "flux";
     case FileFormat::AVRO:
       return "avro";
     default:

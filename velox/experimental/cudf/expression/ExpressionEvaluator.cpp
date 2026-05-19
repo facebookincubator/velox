@@ -248,7 +248,7 @@ static bool matchCallAgainstSignatures(
     argTypes.push_back(in->type());
   }
   for (const auto& sig : sigs) {
-    exec::SignatureBinder binder(*sig, argTypes);
+    exec::SignatureBinder binder(*sig, argTypes, TypeCoercer::defaults());
     if (!binder.tryBind()) {
       continue;
     }

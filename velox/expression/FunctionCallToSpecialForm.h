@@ -18,6 +18,7 @@
 
 #include "velox/expression/Expr.h"
 #include "velox/type/Type.h"
+#include "velox/type/TypeCoercer.h"
 
 namespace facebook::velox::exec {
 class FunctionCallToSpecialForm {
@@ -33,9 +34,10 @@ class FunctionCallToSpecialForm {
   /// Like 'resolveType', but with support for applying type conversions if a
   /// special form signature doesn't match 'argTypes' exactly. Support varies
   /// from special form to special form. By default, no coersions are attempted.
-  virtual TypePtr resolveTypeWithCorsions(
+  virtual TypePtr resolveTypeWithCoercions(
       const std::vector<TypePtr>& argTypes,
-      [[maybe_unused]] std::vector<TypePtr>& coercions) {
+      [[maybe_unused]] std::vector<TypePtr>& coercions,
+      [[maybe_unused]] const TypeCoercer& coercer) {
     coercions.clear();
     coercions.resize(argTypes.size());
     return resolveType(argTypes);
@@ -61,7 +63,8 @@ TypePtr resolveTypeForSpecialForm(
 TypePtr resolveTypeForSpecialFormWithCoercions(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes,
-    std::vector<TypePtr>& coercions);
+    std::vector<TypePtr>& coercions,
+    const TypeCoercer& coercer);
 
 /// Returns the SpeicalForm associated with the functionName.  If functionName
 /// is not the name of a known SpecialForm, returns nulltpr.

@@ -25,6 +25,7 @@ add_executable(
   PropertiesTest.cpp
   SchemaTest.cpp
   StatisticsTest.cpp
+  StringTruncationTest.cpp
   TypesTest.cpp
 )
 

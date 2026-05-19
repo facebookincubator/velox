@@ -75,8 +75,8 @@ class StripeLoadKeysTest : public Test {
         footer_.get(),
         nullptr,
         std::move(handler),
-        dataIoStats_.get(),
-        metadataIoStats_.get());
+        dataIoStats_,
+        metadataIoStats_);
 
     stripeReader_ = std::make_unique<StripeReaderBase>(reader_);
   }
