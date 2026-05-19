@@ -98,7 +98,8 @@ and refer back.
   [.claude/CLAUDE.md](../../.claude/CLAUDE.md).
 - **Comments.** Flag verbose code comments that restate the code, duplicate
   docs elsewhere, or explain obvious behavior. Remove references to other
-  implementations ("like Java Presto") — logic should stand on its own.
+  implementations ("like Java Presto") unless the goal is to match that
+  engine's semantics — logic should stand on its own.
 - **Naming.** Check variable names, file names, class names against coding
   style conventions. Do not abbreviate parameter names.
 - **Enums.** `kPascalCase` enumerators, trailing commas, `VELOX_DEFINE_ENUM_NAME`.

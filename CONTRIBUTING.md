@@ -313,7 +313,7 @@ Adding Presto and Spark functions are a good way to get yourself familiar with
 Velox and the code review process. In addition to the general contribution
 guidelines presented above, review the
 [Function PR Guide](scripts/review/FUNCTION_PR_GUIDE.md) for a detailed
-checklist covering documentation, registration, implementation, and testing.
+checklist covering documentation, registration, and implementation.
 Here are specific guidelines for contributing functions:
 
 1. Read [How to add a scalar function?](https://facebookincubator.github.io/velox/develop/scalar-functions.html) guide. When implementing a function, simple function is preferred unless the implementation of vector function provides a significant performance gain which can be demonstrated

@@ -45,7 +45,9 @@ before review saves everyone time.
 ## Error handling
 
 - [ ] `VELOX_CHECK_*` for internal invariants, `VELOX_USER_CHECK_*` for
-      user-facing input validation. Don't mix them up.
+      user-facing input validation. Don't mix them up. For functions,
+      prefer the [non-throwing error path](https://velox-lib.io/blog/optimize-try-more#non-throwing-simple-functions)
+      instead — see the [Function PR Guide](FUNCTION_PR_GUIDE.md).
 - [ ] Error messages match the check. `VELOX_CHECK_GE(x, 0)` should not say
       "greater than 0" — it checks `>= 0`.
 - [ ] Error messages are descriptive. `VELOX_CHECK_*` macros already append
