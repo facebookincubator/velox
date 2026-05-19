@@ -423,6 +423,18 @@ ensures that when the task resumes after the barrier with new splits, it
 starts fresh.</p></li>
 </ul>
 </section>
+<section id="hash-aggregation">
+<h3>Hash Aggregation<a class="headerlink" href="#hash-aggregation" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p><strong>Function</strong>: Computes grouped or global aggregates using an in-memory hash
+table instead of relying on sorted input.</p></li>
+</ul>
+<p><strong>Limitation</strong>: Hash aggregation barrier support is currently intended for
+in-memory aggregation only. It’s recommended to keep spill disabled when
+using task barrier with hash aggregation. Otherwise, if the task has
+spilled, <code class="docutils literal notranslate"><span class="pre">requestBarrier()</span></code> is not supported and will cause the subsequent
+<code class="docutils literal notranslate"><span class="pre">next()</span></code> call to throw.</p>
+</section>
 </section>
 <section id="limitations">
 <h2>Limitations<a class="headerlink" href="#limitations" title="Link to this heading">¶</a></h2>
@@ -477,6 +489,7 @@ order and lower memory footprint.</p></li>
 <li><a class="reference internal" href="#unnest">Unnest</a></li>
 <li><a class="reference internal" href="#sort-merge-join">Sort Merge Join</a></li>
 <li><a class="reference internal" href="#streaming-aggregation">Streaming Aggregation</a></li>
+<li><a class="reference internal" href="#hash-aggregation">Hash Aggregation</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#limitations">Limitations</a></li>
