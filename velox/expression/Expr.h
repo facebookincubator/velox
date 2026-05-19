@@ -123,6 +123,7 @@ enum class SpecialFormKind : int32_t {
   kAnd = 7,
   kOr = 8,
   kNullIf = 9,
+  kCase = 10,
   kCustom = 999,
 };
 
@@ -312,6 +313,10 @@ class Expr {
 
   bool isOr() const {
     return specialFormKind_ == SpecialFormKind::kOr;
+  }
+
+  bool isCase() const {
+    return specialFormKind_ == SpecialFormKind::kCase;
   }
 
   bool isCustom() const {
