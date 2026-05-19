@@ -182,9 +182,7 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
 
     /// Registers a caller-built root pool under 'tag' on the resulting
     /// QueryCtx. Throws if 'tag' is already present or 'pool' is null. The
-    /// caller is responsible for constructing the pool, typically through
-    /// MemoryManager::addRootPool(name, cap, reclaimer, debugOpts, tag) with
-    /// a CustomMemoryResource previously registered on the MemoryManager.
+    /// pool is typically built through MemoryManager::addCustomRootPool.
     Builder& customPool(
         std::string tag,
         std::shared_ptr<memory::MemoryPool> pool) {
@@ -397,9 +395,10 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   }
 
   /// Tracks an additional root pool keyed by 'tag'. The pool's allocator
-  /// and arbitrator are borrowed from a CustomMemoryResource owned by the
-  /// MemoryManager registry, so its lifetime is governed externally.
-  /// Throws if 'tag' is already present or 'pool' is null.
+  /// and arbitrator are borrowed from the CustomMemoryResource the caller
+  /// passed to MemoryManager::addCustomRootPool; the resource's lifetime
+  /// is governed externally. Throws if 'tag' is already present or 'pool'
+  /// is null.
   void addCustomPool(std::string tag, std::shared_ptr<memory::MemoryPool> pool);
 
   /// Returns the custom root pool for the given resource tag, or nullptr if

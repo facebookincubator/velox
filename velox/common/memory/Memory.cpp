@@ -284,30 +284,28 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
     const std::string& name,
     int64_t maxCapacity,
     std::unique_ptr<MemoryReclaimer> reclaimer,
-    const std::optional<MemoryPool::DebugOptions>& poolDebugOpts,
-    const std::optional<std::string>& resourceTag) {
-  if (!resourceTag.has_value()) {
-    return addRootPoolImpl(
-        name,
-        maxCapacity,
-        std::move(reclaimer),
-        poolDebugOpts,
-        /*customAllocator=*/nullptr,
-        /*customArbitrator=*/nullptr);
-  }
-  auto it = customResources_.find(*resourceTag);
-  VELOX_USER_CHECK(
-      it != customResources_.end(),
-      "No CustomMemoryResource registered for tag: {}",
-      *resourceTag);
-  const auto& resource = *it->second;
+    const std::optional<MemoryPool::DebugOptions>& poolDebugOpts) {
   return addRootPoolImpl(
       name,
       maxCapacity,
       std::move(reclaimer),
       poolDebugOpts,
-      resource.allocator.get(),
-      resource.arbitrator.get());
+      /*customAllocator=*/nullptr,
+      /*customArbitrator=*/nullptr);
+}
+
+std::shared_ptr<MemoryPool> MemoryManager::addCustomRootPool(
+    const std::string& name,
+    std::shared_ptr<CustomMemoryResource> resource,
+    const std::optional<MemoryPool::DebugOptions>& poolDebugOpts) {
+  VELOX_USER_CHECK_NOT_NULL(resource);
+  return addRootPoolImpl(
+      name,
+      resource->maxCapacity(),
+      resource->newReclaimer(),
+      poolDebugOpts,
+      resource->allocator(),
+      resource->arbitrator());
 }
 
 std::shared_ptr<MemoryPool> MemoryManager::addRootPoolImpl(
@@ -410,32 +408,6 @@ MemoryAllocator* MemoryManager::allocator() {
 
 MemoryArbitrator* MemoryManager::arbitrator() {
   return arbitrator_.get();
-}
-
-void MemoryManager::registerCustomResource(CustomMemoryResource resource) {
-  VELOX_USER_CHECK(!resource.tag.empty(), "CustomMemoryResource tag is empty");
-  VELOX_USER_CHECK_NOT_NULL(
-      resource.allocator,
-      "CustomMemoryResource allocator is null for tag: {}",
-      resource.tag);
-  VELOX_USER_CHECK_NOT_NULL(
-      resource.arbitrator,
-      "CustomMemoryResource arbitrator is null for tag: {}",
-      resource.tag);
-  VELOX_USER_CHECK_NOT_NULL(
-      resource.reclaimerFactory,
-      "CustomMemoryResource reclaimerFactory is null for tag: {}",
-      resource.tag);
-  const auto tag = resource.tag;
-  auto [_, inserted] = customResources_.emplace(
-      tag, std::make_shared<CustomMemoryResource>(std::move(resource)));
-  VELOX_USER_CHECK(
-      inserted, "CustomMemoryResource already registered for tag: {}", tag);
-}
-
-const folly::F14FastMap<std::string, std::shared_ptr<CustomMemoryResource>>&
-MemoryManager::customResources() const {
-  return customResources_;
 }
 
 std::string MemoryManager::toString(bool detail) const {

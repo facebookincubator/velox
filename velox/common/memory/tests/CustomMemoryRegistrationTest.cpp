@@ -18,6 +18,7 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/CustomMemoryResource.h"
+#include "velox/common/memory/CustomMemoryResourceRegistry.h"
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MemoryArbitrator.h"
@@ -25,98 +26,110 @@
 namespace facebook::velox::memory::test {
 namespace {
 
-CustomMemoryResource makeResource(const std::string& tag) {
-  MemoryAllocator::Options allocatorOptions;
-  allocatorOptions.capacity = 1L << 30;
-  CustomMemoryResource resource;
-  resource.tag = tag;
-  resource.allocator = std::make_shared<MallocAllocator>(allocatorOptions);
-  resource.arbitrator = MemoryArbitrator::create({});
-  resource.reclaimerFactory = []() { return MemoryReclaimer::create(0); };
-  return resource;
+std::shared_ptr<MemoryAllocator> makeAllocator() {
+  MemoryAllocator::Options options;
+  options.capacity = 1L << 30;
+  return std::make_shared<MallocAllocator>(options);
+}
+
+CustomMemoryResource::ReclaimerFactory makeReclaimerFactory() {
+  return []() { return MemoryReclaimer::create(0); };
+}
+
+std::shared_ptr<CustomMemoryResource> makeResource(const std::string& tag) {
+  return std::make_shared<CustomMemoryResource>(
+      tag, makeAllocator(), MemoryArbitrator::create({}), makeReclaimerFactory());
 }
 
 } // namespace
 
-TEST(CustomMemoryRegistration, registrationValidation) {
-  MemoryManager manager{};
-  ASSERT_TRUE(manager.customResources().empty());
+TEST(CustomMemoryRegistration, constructorRejectsInvalidFields) {
+  auto allocator = makeAllocator();
+  std::shared_ptr<MemoryArbitrator> arbitrator = MemoryArbitrator::create({});
+  auto factory = makeReclaimerFactory();
 
-  auto resource = makeResource("test-resource");
-  resource.maxCapacity = 1L << 28;
-  manager.registerCustomResource(std::move(resource));
+  // Valid construction succeeds.
+  CustomMemoryResource("ok", allocator, arbitrator, factory);
 
-  ASSERT_EQ(manager.customResources().size(), 1);
-  const auto& stored = manager.customResources().at("test-resource");
-  EXPECT_EQ(stored->tag, "test-resource");
-  EXPECT_EQ(stored->maxCapacity, 1L << 28);
-
-  // Try to register another resource with the same tag, which should be
-  // rejected.
   VELOX_ASSERT_THROW(
-      manager.registerCustomResource(makeResource("test-resource")),
-      "CustomMemoryResource already registered for tag: test-resource");
-  ASSERT_EQ(manager.customResources().size(), 1);
-
-  // Try to register resources with missing tag, which should be rejected.
-  CustomMemoryResource emptyTag;
-  emptyTag.allocator = makeResource("ignored").allocator;
-  VELOX_ASSERT_THROW(
-      manager.registerCustomResource(std::move(emptyTag)),
+      CustomMemoryResource("", allocator, arbitrator, factory),
       "CustomMemoryResource tag is empty");
-
-  // Try to register resources with null allocator, which should be rejected.
-  CustomMemoryResource nullAllocator;
-  nullAllocator.tag = "another";
   VELOX_ASSERT_THROW(
-      manager.registerCustomResource(std::move(nullAllocator)),
-      "CustomMemoryResource allocator is null for tag: another");
-
-  // Try to register resources with null arbitrator, which should be rejected.
-  auto nullArbitrator = makeResource("another");
-  nullArbitrator.arbitrator.reset();
+      CustomMemoryResource("tag", nullptr, arbitrator, factory),
+      "CustomMemoryResource allocator is null for tag: tag");
   VELOX_ASSERT_THROW(
-      manager.registerCustomResource(std::move(nullArbitrator)),
-      "CustomMemoryResource arbitrator is null for tag: another");
-
-  // Try to register resources with null reclaimerFactory, which should be
-  // rejected.
-  auto nullFactory = makeResource("another");
-  nullFactory.reclaimerFactory = nullptr;
+      CustomMemoryResource("tag", allocator, nullptr, factory),
+      "CustomMemoryResource arbitrator is null for tag: tag");
   VELOX_ASSERT_THROW(
-      manager.registerCustomResource(std::move(nullFactory)),
-      "CustomMemoryResource reclaimerFactory is null for tag: another");
+      CustomMemoryResource("tag", allocator, arbitrator, nullptr),
+      "CustomMemoryResource reclaimerFactory is null for tag: tag");
 }
 
-TEST(CustomMemoryRegistration, registrationsAreReachableByTag) {
-  MemoryManager manager{};
+TEST(CustomMemoryRegistration, insertAndFindOnIsolatedRegistry) {
+  auto registry = CustomMemoryResourceRegistry::createRegistry(nullptr);
   for (const auto* tag : {"a", "b", "c"}) {
-    manager.registerCustomResource(makeResource(tag));
+    registry->insert(tag, makeResource(tag));
   }
-  ASSERT_EQ(manager.customResources().size(), 3);
-  EXPECT_NE(manager.customResources().find("a"), manager.customResources().end());
-  EXPECT_NE(manager.customResources().find("b"), manager.customResources().end());
-  EXPECT_NE(manager.customResources().find("c"), manager.customResources().end());
+  EXPECT_NE(registry->find("a"), nullptr);
+  EXPECT_NE(registry->find("b"), nullptr);
+  EXPECT_NE(registry->find("c"), nullptr);
+  EXPECT_EQ(registry->find("missing"), nullptr);
 }
 
-TEST(CustomMemoryRegistration, addRootPoolRejectsUnregisteredTag) {
-  MemoryManager manager{};
-  manager.registerCustomResource(makeResource("gpu"));
-
-  // Adding a root pool with a registered tag should succeed.
-  auto tagged = manager.addRootPool(
-      "tagged-root", kMaxMemory, nullptr, std::nullopt, "gpu");
-  ASSERT_NE(tagged, nullptr);
-
-  // Adding a root pool without a tag should succeed.
-  auto untagged = manager.addRootPool("untagged-root");
-  ASSERT_NE(untagged, nullptr);
-
-  // Adding a root pool with an unregistered tag should be rejected.
+TEST(CustomMemoryRegistration, insertRejectsDuplicateTag) {
+  auto registry = CustomMemoryResourceRegistry::createRegistry(nullptr);
+  registry->insert("device", makeResource("device"));
   VELOX_ASSERT_THROW(
-      manager.addRootPool(
-          "bad-root", kMaxMemory, nullptr, std::nullopt, "not-registered"),
-      "No CustomMemoryResource registered for tag: not-registered");
+      registry->insert("device", makeResource("device")),
+      "Key already registered: device");
+}
+
+TEST(CustomMemoryRegistration, childRegistryShadowsParent) {
+  auto parent = CustomMemoryResourceRegistry::createRegistry(nullptr);
+  auto defaultResource = makeResource("device");
+  auto* defaultAllocator = defaultResource->allocator();
+  parent->insert("device", std::move(defaultResource));
+
+  auto child = CustomMemoryResourceRegistry::createRegistry(parent.get());
+  auto tenantResource = makeResource("device");
+  auto* tenantAllocator = tenantResource->allocator();
+  child->insert("device", std::move(tenantResource));
+
+  EXPECT_EQ(child->find("device")->allocator(), tenantAllocator);
+  EXPECT_EQ(parent->find("device")->allocator(), defaultAllocator)
+      << "Parent must remain untouched by scoped registration.";
+}
+
+TEST(CustomMemoryRegistration, childRegistryFallsBackToParent) {
+  auto parent = CustomMemoryResourceRegistry::createRegistry(nullptr);
+  parent->insert("only-parent", makeResource("only-parent"));
+  auto child = CustomMemoryResourceRegistry::createRegistry(parent.get());
+  EXPECT_NE(child->find("only-parent"), nullptr);
+}
+
+TEST(CustomMemoryRegistration, isolationRegistryHasNoFallback) {
+  auto parent = CustomMemoryResourceRegistry::createRegistry(nullptr);
+  parent->insert("only-parent", makeResource("only-parent"));
+
+  auto isolated = CustomMemoryResourceRegistry::createRegistry(nullptr);
+  EXPECT_EQ(isolated->find("only-parent"), nullptr)
+      << "Isolation mode must not fall back to any parent.";
+
+  isolated->insert("only-local", makeResource("only-local"));
+  EXPECT_NE(isolated->find("only-local"), nullptr);
+  EXPECT_EQ(parent->find("only-local"), nullptr);
+}
+
+TEST(CustomMemoryRegistration, addCustomRootPoolWithResource) {
+  MemoryManager manager{};
+  auto registry = CustomMemoryResourceRegistry::createRegistry(nullptr);
+  registry->insert("gpu", makeResource("gpu"));
+
+  auto resource = registry->find("gpu");
+  ASSERT_NE(resource, nullptr);
+
+  auto tagged = manager.addCustomRootPool("tagged-root", resource);
+  ASSERT_NE(tagged, nullptr);
 }
 
 } // namespace facebook::velox::memory::test
