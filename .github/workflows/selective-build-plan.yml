@@ -1,0 +1,374 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Reusable workflow that decides whether the calling build should run full
+# or targeted, and (for targeted) computes the selective target list.
+# Pull-request events only — callers handle push-to-main separately
+# (force-full is the answer there, no need for a runner to compute it).
+#
+# Outputs (consumed by the caller):
+#   mode:           'full' | 'targeted'
+#   cmake_targets:  space-separated target list (empty for full)
+#
+# Side effect: uploads `selective-build-comment` artifact (comment.md only),
+# read by selective-build-comment.yml to post the PR comment.
+#
+# Decision rules:
+#   has standing approval                     → full   (sticky)
+#   no approval:
+#     decide_mode → 'fast'  + cached graph    → targeted
+#     decide_mode → 'slow'                    → targeted (after prepare-slow)
+#     decide_mode → 'full' or 'noop'          → full
+#     fast wanted but no cached graph         → full   (safe fallback)
+name: Selective Build Plan
+
+on:
+  workflow_call:
+    outputs:
+      mode:
+        description: "'full' | 'targeted'"
+        # prepare-slow downgrades to 'full' if its targets came back empty,
+        # so the published mode matches what ubuntu-debug will actually do.
+        value: >-
+          ${{ jobs.prepare-slow.outputs.mode_override ||
+              jobs.decide-mode.outputs.mode }}
+      cmake_targets:
+        description: Space-separated cmake target list (empty for full).
+        # prepare-slow overrides decide-mode when the slow path ran.
+        value: >-
+          ${{ jobs.prepare-slow.result == 'success' &&
+              jobs.prepare-slow.outputs.cmake_targets ||
+              jobs.decide-mode.outputs.cmake_targets }}
+
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+
+jobs:
+  # ============================================================
+  # Lightweight decision job. Runs the fast-detect path inline.
+  # ============================================================
+  decide-mode:
+    runs-on: ubuntu-latest
+    outputs:
+      mode: ${{ steps.final.outputs.mode }}
+      needs_slow_prepare: ${{ steps.final.outputs.needs_slow_prepare }}
+      cmake_targets: ${{ steps.read-targets.outputs.cmake_targets }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+
+      # Sticky approval: any standing approving review on this PR turns
+      # the build full from now on. Re-pushes after approval stay full.
+      - name: Check standing approval
+        id: approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          source .github/scripts/gh-api-retry.sh
+          approved=$(gh_api "/repos/${REPO}/pulls/${PR_NUMBER}/reviews" \
+            -q '[.[] | select(.state=="APPROVED" and .dismissed_at==null)] | length')
+          if [[ "${approved:-0}" -gt 0 ]]; then
+            echo "is_approved=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_approved=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Force-full request via PR comment: anyone posting `/full-build`
+      # on the PR escalates its build to full, regardless of approval
+      # status. Useful when a reviewer wants to validate against full
+      # coverage before approving, or when the path-based heuristics
+      # underestimate impact.
+      - name: Check /full-build comment
+        id: comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          source .github/scripts/gh-api-retry.sh
+          requested=$(gh_api --paginate "/repos/${REPO}/issues/${PR_NUMBER}/comments" \
+            -q '[.[] | select(.body | test("^/full-build(\\s|$)"; "m"))] | length')
+          if [[ "${requested:-0}" -gt 0 ]]; then
+            echo "has_request=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_request=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Combine the two force-full signals into one boolean. Every
+      # downstream gate keys off this single value — no chained
+      # "tentative" hand-off.
+      - name: Compute force-full signal
+        id: force
+        env:
+          IS_APPROVED: ${{ steps.approval.outputs.is_approved }}
+          HAS_REQUEST: ${{ steps.comment.outputs.has_request }}
+        run: |
+          if [[ "$IS_APPROVED" == "true" || "$HAS_REQUEST" == "true" ]]; then
+            echo "is_force_full=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_force_full=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Get changed files
+        if: steps.force.outputs.is_force_full == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          source .github/scripts/gh-api-retry.sh
+          gh_api --paginate \
+            "/repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
+            -q '.[].filename' > changed_files.txt
+          echo "Changed files:"
+          cat changed_files.txt
+
+      - name: Classify detection mode
+        id: detect
+        if: steps.force.outputs.is_force_full == 'false'
+        run: |
+          python3 .github/scripts/plan-selective-build.py \
+            --changed-files changed_files.txt \
+            --decide-mode-only
+
+      - name: Locate cached graph artifact
+        id: graph-artifact
+        if: steps.detect.outputs.mode == 'fast'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Pipe through jq instead of using `gh api -q`: on a 404 (bootstrap
+          # window, when dependency-graph.yml doesn't exist on main yet) gh
+          # dumps the error JSON to stdout and silently bypasses -q, leaving
+          # the {"message":"Not Found"...} blob in run_id. A separate jq pass
+          # actually filters that body, returning empty for both 404 and
+          # "workflow exists but no successful runs yet."
+          source .github/scripts/gh-api-retry.sh
+          response=$(gh_api \
+            "/repos/${{ github.repository }}/actions/workflows/dependency-graph.yml/runs?branch=main&status=success&per_page=5" \
+            2>/dev/null || true)
+          run_id=$(echo "$response" | jq -r '.workflow_runs[0].id // empty' 2>/dev/null || true)
+          head_sha=$(echo "$response" | jq -r '.workflow_runs[0].head_sha // empty' 2>/dev/null || true)
+          if [[ -z "$run_id" ]]; then
+            echo "::warning::No cached graph from main; falling back to full build."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+            # Short SHA of the commit that generated the cached graph;
+            # surfaced in the PR comment so reviewers can confirm
+            # whether the graph predates files added on the PR branch.
+            echo "graph_sha=${head_sha:0:12}" >> "$GITHUB_OUTPUT"
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download cached graph
+        if: steps.graph-artifact.outputs.available == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: dependency-graph
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.graph-artifact.outputs.run_id }}
+
+      - name: Run fast-path impact detection
+        if: steps.graph-artifact.outputs.available == 'true'
+        env:
+          # Funnel graph_sha through env to avoid zizmor's
+          # template-injection warning on direct ${{ ... }} interpolation
+          # into `run:`. Value is a SHA from the GitHub API, but zizmor
+          # can't prove that statically.
+          GRAPH_SHA: ${{ steps.graph-artifact.outputs.graph_sha }}
+        run: |
+          python3 .github/scripts/plan-selective-build.py \
+            --graph dependency-graph.json \
+            --changed-files changed_files.txt \
+            --build-type debug \
+            --graph-source "Fast path • Graph from main@$GRAPH_SHA" \
+            --output comment.md
+
+      - name: Write stub comment for full-build paths
+        if: |
+          steps.force.outputs.is_force_full == 'true' ||
+          steps.detect.outputs.mode == 'full' ||
+          steps.detect.outputs.mode == 'noop' ||
+          (steps.detect.outputs.mode == 'fast' &&
+            steps.graph-artifact.outputs.available != 'true')
+        env:
+          IS_APPROVED: ${{ steps.approval.outputs.is_approved }}
+          HAS_REQUEST: ${{ steps.comment.outputs.has_request }}
+          DETECT_MODE: ${{ steps.detect.outputs.mode }}
+          GRAPH_AVAILABLE: ${{ steps.graph-artifact.outputs.available }}
+        run: |
+          if [[ "$IS_APPROVED" == "true" && "$HAS_REQUEST" == "true" ]]; then
+            reason='PR has a standing approval and a `/full-build` comment was posted'
+          elif [[ "$HAS_REQUEST" == "true" ]]; then
+            reason='a `/full-build` comment was posted on this PR'
+          elif [[ "$IS_APPROVED" == "true" ]]; then
+            reason='PR has a standing approval'
+          elif [[ "$DETECT_MODE" == "full" ]]; then
+            reason='changes touch `velox/experimental/` or `velox/external/`'
+          elif [[ "$DETECT_MODE" == "noop" ]]; then
+            reason='no build-relevant files changed under `velox/`'
+          elif [[ "$GRAPH_AVAILABLE" != "true" ]]; then
+            reason='no cached dependency graph from main is available'
+          else
+            reason='unknown'
+          fi
+          cat > comment.md <<EOF
+          <!-- velox-selective-build-plan-comment -->
+          ## Selective Build Plan
+
+          \`Linux release with adapters\` is running a **full build** (${reason}). See the [CI workflows README](../blob/main/.github/workflows/README.md) for what this means.
+
+          ---
+          *Selective build plan*
+          EOF
+          : > comment-targets.txt
+
+      # For the slow path, write a placeholder comment. prepare-slow will
+      # overwrite the comment artifact with the real plan + targets.
+      - name: Write placeholder comment for slow path
+        if: steps.detect.outputs.mode == 'slow'
+        run: |
+          cat > comment.md <<'EOF'
+          <!-- velox-selective-build-plan-comment -->
+          ## Selective Build Plan
+
+          `Linux release with adapters` is running a **selective build** (graph regeneration in progress for this CMake-touching PR; this comment will be updated once detection completes). See the [CI workflows README](../blob/main/.github/workflows/README.md) for what this means.
+
+          ---
+          *Selective build plan*
+          EOF
+          : > comment-targets.txt
+
+      # comment-targets.txt is written by plan-selective-build.py with the
+      # security-sensitive allowlist already applied (see TARGETS_ALLOWED
+      # in that script — anything outside [A-Za-z0-9_+.- ] would be a
+      # shell-injection sink in `cmake --build --target $(TARGETS)`).
+      # Stub-comment paths leave the file absent. Empty output means
+      # "full build" — the workflow_call output ternary handles that.
+      - name: Read selective targets
+        id: read-targets
+        run: |
+          targets=
+          if [[ -s comment-targets.txt ]]; then
+            targets=$(cat comment-targets.txt)
+          fi
+          echo "cmake_targets=$targets" >> "$GITHUB_OUTPUT"
+
+      - name: Finalize mode
+        id: final
+        env:
+          IS_FORCE_FULL: ${{ steps.force.outputs.is_force_full }}
+          DETECT_MODE: ${{ steps.detect.outputs.mode }}
+          GRAPH_AVAILABLE: ${{ steps.graph-artifact.outputs.available }}
+          CMAKE_TARGETS: ${{ steps.read-targets.outputs.cmake_targets }}
+        run: |
+          if [[ "$IS_FORCE_FULL" == "true" ]]; then
+            mode=full; needs_slow=false
+          elif [[ "$DETECT_MODE" == "full" || "$DETECT_MODE" == "noop" ]]; then
+            mode=full; needs_slow=false
+          elif [[ "$DETECT_MODE" == "slow" ]]; then
+            mode=targeted; needs_slow=true
+          elif [[ "$DETECT_MODE" == "fast" && "$GRAPH_AVAILABLE" == "true" ]]; then
+            # Downgrade to full if the script produced no targets — the
+            # plan comment will say "no targets affected" and ubuntu-debug
+            # would otherwise build everything anyway with MONO=ON. Keep
+            # the comment and the behavior consistent.
+            if [[ -n "$CMAKE_TARGETS" ]]; then
+              mode=targeted; needs_slow=false
+            else
+              mode=full; needs_slow=false
+            fi
+          else
+            mode=full; needs_slow=false
+          fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "needs_slow_prepare=$needs_slow" >> "$GITHUB_OUTPUT"
+
+      - name: Upload comment artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: selective-build-comment
+          path: comment.md
+
+  # ============================================================
+  # Heavy graph regeneration. Only runs when a per-directory
+  # CMakeLists.txt or CMake/*.cmake changed (decide_mode → slow).
+  # Emits cmake_targets as a job output and overwrites the comment
+  # artifact with the real plan.
+  # ============================================================
+  prepare-slow:
+    needs: decide-mode
+    if: needs.decide-mode.outputs.needs_slow_prepare == 'true'
+    runs-on: 8-core-ubuntu
+    container: ghcr.io/facebookincubator/velox-dev:adapters
+    env:
+      VELOX_DEPENDENCY_SOURCE: SYSTEM
+    outputs:
+      cmake_targets: ${{ steps.read-targets.outputs.cmake_targets }}
+      # 'full' if our targets came back empty (graph regenerated but the
+      # changed files don't map to any target). The workflow_call output
+      # uses this to downgrade the published mode so the plan comment and
+      # ubuntu-debug's behavior stay consistent. Empty string when targets
+      # are non-empty (no override needed).
+      mode_override: ${{ steps.read-targets.outputs.cmake_targets == '' && 'full' || '' }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Get changed files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          source .github/scripts/gh-api-retry.sh
+          gh_api --paginate \
+            "/repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
+            -q '.[].filename' > changed_files.txt
+
+      - uses: ./.github/actions/generate-dependency-graph
+
+      - name: Run impact detection
+        run: |
+          python3 .github/scripts/plan-selective-build.py \
+            --graph dependency-graph.json \
+            --changed-files changed_files.txt \
+            --build-type debug \
+            --graph-source "Slow path • Graph generated from PR branch" \
+            --output comment.md
+
+      # plan-selective-build.py validates the targets line against
+      # TARGETS_ALLOWED before writing comment-targets.txt — see the
+      # matching step in decide-mode.
+      - name: Read selective targets
+        id: read-targets
+        run: |
+          targets=
+          if [[ -s comment-targets.txt ]]; then
+            targets=$(cat comment-targets.txt)
+          fi
+          echo "cmake_targets=$targets" >> "$GITHUB_OUTPUT"
+
+      - name: Upload comment artifact (overwrite)
+        uses: actions/upload-artifact@v4
+        with:
+          name: selective-build-comment
+          path: comment.md
+          overwrite: true

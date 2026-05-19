@@ -22,6 +22,9 @@
 #
 # Supported profiles:
 #   * adapters             — Linux release with adapters (linux-build-base.yml).
+#   * dep-graph            — Dep-graph generator action; same as adapters minus
+#                            WAVE/CUDF (they gate experimental code, which the
+#                            selective-build planner short-circuits to full).
 #   * ubuntu-debug         — Ubuntu debug with system dependencies.
 #   * ubuntu-bundled-deps  — Ubuntu debug with velox's BUNDLED dependency
 #                            resolution; mirrors ubuntu-debug minus
@@ -40,9 +43,16 @@
 #   EXTRA_CMAKE_FLAGS=("${CMAKE_FLAGS[@]}" -DVELOX_ENABLE_X=ON)
 
 case "${BUILD_PROFILE:?BUILD_PROFILE must be set before sourcing cmake-flags.sh}" in
-adapters)
+adapters | dep-graph)
+  # adapters and dep-graph are sister profiles: dep-graph regenerates
+  # the planner's source-of-truth graph for what adapters builds, so
+  # they share most flags. MONO=OFF on both — dep-graph needs granular
+  # per-component target edges, and adapters benefits from the same
+  # leaf-library surface the selective-build planner targets. The only
+  # delta is WAVE / CUDF (adapters-only; see below).
   CMAKE_FLAGS=(
-    -DVELOX_MONO_LIBRARY=ON
+    -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+    -DVELOX_MONO_LIBRARY=OFF
     -DVELOX_ENABLE_BENCHMARKS=ON
     -DVELOX_ENABLE_EXAMPLES=ON
     -DVELOX_ENABLE_ARROW=ON
@@ -52,16 +62,23 @@ adapters)
     -DVELOX_ENABLE_S3=ON
     -DVELOX_ENABLE_GCS=ON
     -DVELOX_ENABLE_ABFS=ON
-    -DVELOX_ENABLE_WAVE=ON
   )
   if [[ ${USE_CLANG:-false} != "true" ]]; then
     # Faiss has a link issue under Clang; the remote function service
-    # has open issues under Clang too (#13897). cuDF is GCC-only.
+    # has open issues under Clang too (#13897).
     CMAKE_FLAGS+=(
       -DVELOX_ENABLE_FAISS=ON
       -DVELOX_ENABLE_REMOTE_FUNCTIONS=ON
-      -DVELOX_ENABLE_CUDF=ON
     )
+  fi
+  if [[ $BUILD_PROFILE == "adapters" ]]; then
+    # WAVE / CUDF gate code under velox/experimental/, which the
+    # planner short-circuits to full mode via FULL_BUILD_PREFIXES,
+    # so dep-graph doesn't need their targets. CUDF is GCC-only.
+    CMAKE_FLAGS+=(-DVELOX_ENABLE_WAVE=ON)
+    if [[ ${USE_CLANG:-false} != "true" ]]; then
+      CMAKE_FLAGS+=(-DVELOX_ENABLE_CUDF=ON)
+    fi
   fi
   ;;
 

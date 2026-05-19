@@ -129,6 +129,15 @@ The contribution process is outlined below:
    maintainer. At this point, a Meta employee will be notified to merge your PR,
    due to tooling limitations.
 
+### CI commands available on PRs
+
+These trigger CI behaviors when posted as PR comments:
+
+| Command | Effect | Restriction |
+|---|---|---|
+| `/full-build` | Cancels in-flight selective build, re-runs `Linux Build using GCC` in full mode on the same head SHA. Useful when you suspect the path-based heuristics underestimate impact, or want full coverage (Ubuntu debug, Fedora debug) before getting a review. | None — anyone who can comment on a PR. |
+| `@claude` (mention) | AI assistant for PR work. Routes to one of these skills based on the message body: `@claude /pr-review [optional context]` for a thorough code review, or `@claude /query <question>` to ask about the PR or codebase. Bare `@claude <message>` falls through to the model with the available skill set. | Restricted to a small allowlist of maintainers. Unauthorized invocations get a notice comment and otherwise do nothing. |
+
 ## Commit Messages
 
 We build Velox for the long-run, and to do so it is crucial that project
