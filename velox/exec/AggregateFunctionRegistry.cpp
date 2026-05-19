@@ -40,7 +40,7 @@ TypePtr resolveResultType(
     const std::vector<TypePtr>& argTypes) {
   if (auto signatures = getAggregateFunctionSignatures(name)) {
     for (const auto& signature : signatures.value()) {
-      SignatureBinder binder(*signature, argTypes);
+      SignatureBinder binder(*signature, argTypes, TypeCoercer::defaults());
       if (binder.tryBind()) {
         return binder.tryResolveReturnType();
       }
@@ -56,14 +56,15 @@ TypePtr resolveResultType(
 TypePtr resolveResultTypeWithCoercions(
     const std::string& name,
     const std::vector<TypePtr>& argTypes,
-    std::vector<TypePtr>& coercions) {
+    std::vector<TypePtr>& coercions,
+    const TypeCoercer& coercer) {
   coercions.clear();
 
   if (auto signatures = getAggregateFunctionSignatures(name)) {
     std::vector<FunctionSignaturePtr> baseSignatures(
         signatures.value().begin(), signatures.value().end());
     if (auto type = tryResolveReturnTypeWithCoercions(
-            baseSignatures, argTypes, coercions)) {
+            baseSignatures, argTypes, coercions, coercer)) {
       return type;
     }
 
@@ -79,7 +80,7 @@ TypePtr resolveIntermediateType(
     const std::vector<TypePtr>& argTypes) {
   if (auto signatures = getAggregateFunctionSignatures(name)) {
     for (const auto& signature : signatures.value()) {
-      SignatureBinder binder(*signature, argTypes);
+      SignatureBinder binder(*signature, argTypes, TypeCoercer::defaults());
       if (binder.tryBind()) {
         return binder.tryResolveType(signature->intermediateType());
       }

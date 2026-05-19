@@ -342,6 +342,22 @@ void IcebergSplitReader::prepareSplit(
           continue;
         }
 
+        // If 'referencedDataFile' is set and does not match the split's
+        // data file, log a warning. Do NOT skip the DV: silently dropping
+        // a coordinator-shipped DV could mask deletes if the planner and
+        // worker disagree on path normalization (trailing slash, scheme
+        // prefix like s3:// vs s3a://, percent-encoding). The coordinator
+        // already filters per-split, so the worker-side check is purely
+        // diagnostic.
+        if (!deleteFile.referencedDataFile.empty() &&
+            deleteFile.referencedDataFile != fileSplit_->filePath) {
+          LOG(WARNING)
+              << "Iceberg DV referencedDataFile does not match split path. "
+              << "Applying DV anyway. referencedDataFile='"
+              << deleteFile.referencedDataFile << "' splitPath='"
+              << fileSplit_->filePath << "'";
+        }
+
         deletionVectorReaders_.push_back(
             std::make_unique<DeletionVectorReader>(
                 deleteFile, splitOffset_, connectorQueryCtx_->memoryPool()));

@@ -205,23 +205,40 @@ class FileConfig {
   static constexpr const char* kIndexEnabled = "index-enabled";
 
   VELOX_HIVE_CONFIG(
-      kFileMetadataCacheEnabledSession,
-      fileMetadataCacheEnabled,
-      "file_metadata_cache_enabled",
+      kCacheMetadataSession,
+      cacheMetadata,
+      "cache_metadata",
       bool,
       false,
       "Cache file metadata in AsyncDataCache.")
-  static constexpr const char* kFileMetadataCacheEnabled =
-      "file-metadata-cache-enabled";
+  static constexpr const char* kCacheMetadata = "cache-metadata";
 
   VELOX_HIVE_CONFIG(
-      kPinFileMetadataSession,
-      pinFileMetadata,
-      "pin_file_metadata",
+      kPinMetadataSession,
+      pinMetadata,
+      "pin_metadata",
       bool,
       false,
       "Pin parsed metadata objects in reader cache.")
-  static constexpr const char* kPinFileMetadata = "pin-file-metadata";
+  static constexpr const char* kPinMetadata = "pin-metadata";
+
+  VELOX_HIVE_CONFIG(
+      kCacheIndexSession,
+      cacheIndex,
+      "cache_index",
+      bool,
+      false,
+      "Cache index data in AsyncDataCache.")
+  static constexpr const char* kCacheIndex = "cache-index";
+
+  VELOX_HIVE_CONFIG(
+      kPinIndexSession,
+      pinIndex,
+      "pin_index",
+      bool,
+      false,
+      "Pin parsed index objects in reader cache.")
+  static constexpr const char* kPinIndex = "pin-index";
 
   VELOX_HIVE_CONFIG(
       kSelectiveNimbleReaderEnabledSession,

@@ -27,4 +27,4 @@ velox_link_libraries(
   fmt::fmt
 )
 
-velox_add_library(velox_writer_config INTERFACE)
+velox_add_library(velox_writer_config INTERFACE HEADERS WriterConfig.h)

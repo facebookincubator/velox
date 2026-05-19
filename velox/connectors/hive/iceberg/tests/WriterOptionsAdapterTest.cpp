@@ -18,6 +18,8 @@
 
 #include <gtest/gtest.h>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/dwio/dwrf/writer/Writer.h"
+#include "velox/dwio/parquet/writer/WriterConfig.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 namespace {
@@ -67,6 +69,46 @@ TEST(WriterOptionsAdapterTest, toManifestFormatString) {
       toManifestFormatString(dwio::common::FileFormat::PARQUET), "PARQUET");
   EXPECT_EQ(toManifestFormatString(dwio::common::FileFormat::DWRF), "ORC");
   EXPECT_EQ(toManifestFormatString(dwio::common::FileFormat::NIMBLE), "ORC");
+}
+
+// Verifies the Parquet adapter's pre-config hook installs the Iceberg-spec
+// timestamp serdeParameters. These values must be set before
+// processConfigs() runs because the Parquet writer reads them from
+// serdeParameters during config processing.
+TEST(WriterOptionsAdapterTest, parquetPreConfigsSetsTimestampSerdeParameters) {
+  auto adapter = createWriterOptionsAdapter(dwio::common::FileFormat::PARQUET);
+  ASSERT_NE(adapter, nullptr);
+
+  dwio::common::WriterOptions options;
+  adapter->applyPreConfigs(options);
+
+  EXPECT_EQ(
+      options
+          .serdeParameters[parquet::WriterConfig::kParquetSerdeTimestampUnit],
+      "6");
+  EXPECT_EQ(
+      options.serdeParameters
+          [parquet::WriterConfig::kParquetSerdeTimestampTimezone],
+      "");
+}
+
+// Verifies the DWRF adapter's post-config hook overrides timestamp settings
+// regardless of what processConfigs() left in place. The Iceberg spec
+// requires timestamps NOT be adjusted to UTC; if the DataSink stops calling
+// applyPostConfigs after processConfigs, this test still locks the adapter's
+// override contract — IcebergDataSink::createWriterOptions must use it.
+TEST(WriterOptionsAdapterTest, dwrfPostConfigsOverridesTimestampFields) {
+  auto adapter = createWriterOptionsAdapter(dwio::common::FileFormat::DWRF);
+  ASSERT_NE(adapter, nullptr);
+
+  dwrf::WriterOptions options;
+  options.adjustTimestampToTimezone = true;
+  options.sessionTimezone = tz::locateZone("America/Los_Angeles");
+
+  adapter->applyPostConfigs(options);
+
+  EXPECT_FALSE(options.adjustTimestampToTimezone);
+  EXPECT_EQ(options.sessionTimezone, nullptr);
 }
 
 // Verifies toManifestFormatString() throws for unsupported formats rather
