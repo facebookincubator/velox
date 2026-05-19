@@ -16,17 +16,22 @@
 
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
-#include "velox/experimental/cudf/tests/CudfAbfsTest.h"
+#include "velox/experimental/cudf/exec/ToCudf.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/file/FileSystems.h"
+#include "velox/common/memory/Memory.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/TableHandle.h"
+#include "velox/connectors/hive/storage_adapters/abfs/RegisterAbfsFileSystem.h"
 #include "velox/connectors/hive/storage_adapters/abfs/tests/AzuriteServer.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
+#include <folly/executors/IOThreadPoolExecutor.h>
 #include <gtest/gtest.h>
 
 #include <atomic>
@@ -35,29 +40,74 @@
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec::test;
-using namespace facebook::velox::cudf_velox::exec::test;
 
 namespace {
 
 constexpr const char* kCudfHiveConnectorId{"test-cudf-hive"};
+constexpr int kAzuritePort{12'345};
 constexpr int64_t kIntParquetRows{10};
 
-class AbfsReadTest : public CudfAbfsTest, public ::test::VectorTestBase {
+namespace velox_filesystems = ::facebook::velox::filesystems;
+
+class AbfsReadTest : public ::testing::Test, public test::VectorTestBase {
  protected:
-  std::string sourceFilePath() const {
-    return test::getDataFilePath(
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+  }
+
+  void SetUp() override {
+    ioExecutor_ = std::make_shared<folly::IOThreadPoolExecutor>(3);
+
+    azuriteServer_ =
+        std::make_unique<velox_filesystems::AzuriteServer>(kAzuritePort);
+    azuriteServer_->start();
+
+    velox_filesystems::registerLocalFileSystem();
+    velox_filesystems::registerAbfsFileSystem();
+
+    // Force the cudf hive connector to use the BufferedInput data source to
+    // read using the upstream AbfsFileSystem instead of KvikIO. Also declare
+    // the Azurite account's auth type so registerAzureClientProvider picks it
+    // up and registers a SharedKey factory for the Azurite account.
+    auto hiveConfig = azuriteServer_->hiveConfig(
+        {{cudf_velox::connector::hive::CudfHiveConfig::kUseBufferedInput,
+          "true"},
+         {"fs.azure.account.auth.type.test.dfs.core.windows.net",
+          "SharedKey"}});
+
+    velox_filesystems::registerAzureClientProvider(*hiveConfig);
+
+    cudf_velox::registerCudf();
+
+    cudf_velox::connector::hive::CudfHiveConnectorFactory factory;
+    auto hiveConnector = factory.newConnector(
+        kCudfHiveConnectorId, hiveConfig, ioExecutor_.get());
+    connector::ConnectorRegistry::global().insert(
+        hiveConnector->connectorId(), hiveConnector);
+  }
+
+  void TearDown() override {
+    connector::ConnectorRegistry::global().erase(kCudfHiveConnectorId);
+    cudf_velox::unregisterCudf();
+    if (azuriteServer_) {
+      azuriteServer_->stop();
+      azuriteServer_.reset();
+    }
+    ioExecutor_.reset();
+  }
+
+  std::string uploadSourceFile() {
+    const auto sourceFilePath = test::getDataFilePath(
         "velox/experimental/cudf/tests",
         "../../../dwio/parquet/tests/examples/int.parquet");
+    azuriteServer_->addFile(sourceFilePath);
+    return azuriteServer_->fileURI();
   }
 
   core::PlanNodePtr tableScanNode() {
     auto rowType = ROW({"int", "bigint"}, {INTEGER(), BIGINT()});
-    auto tableHandle =
-        std::make_shared<facebook::velox::connector::hive::HiveTableHandle>(
-            kCudfHiveConnectorId,
-            "int_table",
-            common::SubfieldFilters{},
-            nullptr);
+    auto tableHandle = std::make_shared<connector::hive::HiveTableHandle>(
+        kCudfHiveConnectorId, "int_table", common::SubfieldFilters{}, nullptr);
     return PlanBuilder(pool())
         .startTableScan()
         .tableHandle(tableHandle)
@@ -66,9 +116,9 @@ class AbfsReadTest : public CudfAbfsTest, public ::test::VectorTestBase {
         .planNode();
   }
 
-  std::shared_ptr<facebook::velox::connector::hive::HiveConnectorSplit>
-  makeSplit(const std::string& abfsPath) const {
-    return facebook::velox::connector::hive::HiveConnectorSplitBuilder(abfsPath)
+  std::shared_ptr<connector::hive::HiveConnectorSplit> makeSplit(
+      const std::string& abfsPath) const {
+    return connector::hive::HiveConnectorSplitBuilder(abfsPath)
         .connectorId(kCudfHiveConnectorId)
         .fileFormat(dwio::common::FileFormat::PARQUET)
         .build();
@@ -81,13 +131,16 @@ class AbfsReadTest : public CudfAbfsTest, public ::test::VectorTestBase {
          makeFlatVector<int64_t>(
              kIntParquetRows, [](auto row) { return row + 1000; })});
   }
+
+  std::unique_ptr<velox_filesystems::AzuriteServer> azuriteServer_;
+  std::shared_ptr<folly::IOThreadPoolExecutor> ioExecutor_;
 };
 
 } // namespace
 
 // Reads a Parquet file from an ABFS path
-TEST_F(AbfsReadTest, readIntParquet) {
-  const auto abfsFilePath = uploadFile(sourceFilePath());
+TEST_F(AbfsReadTest, readAbfsSource) {
+  const auto abfsFilePath = uploadSourceFile();
   auto plan = tableScanNode();
   auto split = makeSplit(abfsFilePath);
 
@@ -109,9 +162,9 @@ TEST_F(AbfsReadTest, nonExistentBlob) {
 }
 
 // Disabling buffered input for an ABFS split throws instead of falling back to
-// KvikIO data source
+// the KvikIO data source
 TEST_F(AbfsReadTest, bufferedInputDisabledForAbfs) {
-  const auto abfsFilePath = uploadFile(sourceFilePath());
+  const auto abfsFilePath = uploadSourceFile();
   auto plan = tableScanNode();
   auto split = makeSplit(abfsFilePath);
 
@@ -130,7 +183,7 @@ TEST_F(AbfsReadTest, bufferedInputDisabledForAbfs) {
 // Multiple independent queries reading the same ABFS blob in parallel must
 // all succeed and produce identical results
 TEST_F(AbfsReadTest, concurrentSplits) {
-  const auto abfsFilePath = uploadFile(sourceFilePath());
+  const auto abfsFilePath = uploadSourceFile();
   auto plan = tableScanNode();
   const auto expected = expectedVector();
 
