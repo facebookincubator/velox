@@ -31,7 +31,8 @@ before review saves everyone time.
       than one statement, it belongs in the `.cpp` file.
 - [ ] No setter injection when the value could be a constructor parameter.
 - [ ] No comments referencing other implementations ("like Java Presto",
-      "similar to Spark's X"). Logic should stand on its own.
+      "similar to Spark's X") unless the goal is to match that engine's
+      semantics. Logic should stand on its own.
 - [ ] No unnecessary type aliases (`using ConnectorConfig = ...` when used once).
 - [ ] No unnecessary `static_cast` when the type already matches.
 - [ ] No undefined behavior in evaluation order. Watch for
