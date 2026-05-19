@@ -19,12 +19,8 @@ functions, or special forms. Use alongside `SELF_REVIEW.md`.
 
 ## Registration
 
-- [ ] Function is registered in the correct `Register.cpp`.
 - [ ] Registration name matches the engine's canonical name.
 - [ ] Prefix handling is correct (`prefix + "function_name"`).
-- [ ] `withCompanionFunctions` and `overwrite` parameters are plumbed
-      through.
-- [ ] Function signature uses the right types (not overly broad).
 
 ## Implementation
 
