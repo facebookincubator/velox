@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <string_view>
 #include "velox/exec/trace/TraceWriter.h"
 
 namespace facebook::velox::exec {
@@ -50,10 +51,27 @@ class TraceCtx {
     return nullptr;
   }
 
-  /// Whether a particular operator should be traced. Called before the task
-  /// starts execution, when operators are instantiated.
+  /// Returns whether a particular operator should be traced. Called before the
+  /// task starts execution, when operators are instantiated.
   virtual bool shouldTrace(const Operator&) const {
     return false;
+  }
+
+  /// Returns whether a particular expression function should be traced. Called
+  /// during operator initialization in Expr::maybeSetupTracer().
+  virtual bool shouldTraceExpr(std::string_view /*functionName*/) const {
+    return false;
+  }
+
+  /// Creates a writer for capturing output batches from a traced expression.
+  /// The instanceIndex distinguishes multiple Expr nodes with the same
+  /// function name within a single operator. Ownership is transferred to the
+  /// caller.
+  virtual std::unique_ptr<trace::TraceExprWriter> createExprOutputTracer(
+      const Operator& /*op*/,
+      std::string_view /*functionName*/,
+      int /*instanceIndex*/) const {
+    return nullptr;
   }
 
   bool dryRun() const {
