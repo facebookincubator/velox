@@ -21,16 +21,6 @@
 namespace facebook::velox::dwio::common {
 namespace {
 
-bool testFilterOnConstant(const velox::common::ScanSpec& spec) {
-  if (spec.isConstant() && !spec.constantValue()->isNullAt(0)) {
-    // Non-null constant is known value during split scheduling and filters on
-    // them should not be handled at execution level.
-    return true;
-  }
-  // Check filter on missing field.
-  return !spec.hasFilter() || spec.testNull();
-}
-
 // Recursively makes empty RowVectors for positions in 'children' where the
 // corresponding child type in 'rowType' is a row. The reader expects RowVector
 // outputs to be initialized so that the content corresponds to the query schema
@@ -690,6 +680,18 @@ void SelectiveStructColumnReaderBase::getValues(
   }
 
   resultRow->updateContainsLazyNotLoaded();
+}
+
+// static
+bool SelectiveStructColumnReaderBase::testFilterOnConstant(
+    const velox::common::ScanSpec& spec) {
+  if (spec.isConstant() && !spec.constantValue()->isNullAt(0)) {
+    // Non-null constant is known value during split scheduling and filters on
+    // them should not be handled at execution level.
+    return true;
+  }
+  // Check filter on missing field.
+  return !spec.hasFilter() || spec.testNull();
 }
 
 namespace detail {

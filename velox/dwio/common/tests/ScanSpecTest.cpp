@@ -15,6 +15,7 @@
  */
 
 #include "velox/dwio/common/ScanSpec.h"
+#include "velox/dwio/common/SelectiveStructColumnReader.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 #include <gtest/gtest.h>
@@ -103,6 +104,63 @@ TEST_F(ScanSpecTest, setFilterResetsHasFilter) {
   ASSERT_TRUE(scanSpec.childByName("c1")->hasFilter());
   ASSERT_FALSE(scanSpec.childByName("c0")->hasFilter());
   ASSERT_TRUE(scanSpec.hasFilter());
+}
+
+TEST_F(ScanSpecTest, testFilterOnConstant) {
+  auto test = [&](auto&& setup, bool expected) {
+    ScanSpec scanSpec("<root>");
+    auto* child = scanSpec.addField("c0", 0);
+    setup(scanSpec, *child);
+    ASSERT_EQ(
+        dwio::common::SelectiveStructColumnReaderBase::testFilterOnConstant(
+            *child),
+        expected);
+  };
+
+  // Non-null constants are accepted regardless of filter kind.
+  test(
+      [&](ScanSpec&, ScanSpec& child) {
+        child.setConstantValue(
+            BaseVector::createConstant(BIGINT(), 1LL, 1, pool()));
+        child.setFilter(std::make_shared<IsNull>());
+      },
+      true);
+  test(
+      [&](ScanSpec&, ScanSpec& child) {
+        child.setConstantValue(
+            BaseVector::createConstant(BIGINT(), 1LL, 1, pool()));
+        child.setFilter(std::make_shared<IsNotNull>());
+      },
+      true);
+
+  // Null constants are accepted only when the filter can match nulls.
+  test(
+      [&](ScanSpec&, ScanSpec& child) {
+        child.setConstantValue(
+            BaseVector::createNullConstant(BIGINT(), 1, pool()));
+        child.setFilter(std::make_shared<IsNull>());
+      },
+      true);
+  test(
+      [&](ScanSpec& scanSpec, ScanSpec& child) {
+        child.setConstantValue(
+            BaseVector::createNullConstant(BIGINT(), 1, pool()));
+        child.setFilter(std::make_shared<IsNotNull>());
+      },
+      false);
+
+  // For non-constant specs, there is no filter or the filter accepts nulls.
+  test([](ScanSpec&, ScanSpec&) {}, true);
+  test(
+      [](ScanSpec&, ScanSpec& child) {
+        child.setFilter(std::make_shared<IsNull>());
+      },
+      true);
+  test(
+      [](ScanSpec&, ScanSpec& child) {
+        child.setFilter(std::make_shared<IsNotNull>());
+      },
+      false);
 }
 
 class TypedScanSpecTest : public testing::TestWithParam<TypePtr>,
