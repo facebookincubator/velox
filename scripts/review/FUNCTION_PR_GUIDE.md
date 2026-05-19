@@ -50,4 +50,3 @@ functions, or special forms. Use alongside `SELF_REVIEW.md`.
       is used when the function may be called with a pre-existing result
       vector (e.g., inside `IF` / `CASE WHEN`). Do not unconditionally
       replace `result`.
-
