@@ -5,8 +5,10 @@ functions, or special forms. Use alongside `SELF_REVIEW.md`.
 
 ## PR title
 
-When adding a new function, use:
-`feat(presto|spark): Add xxx scalar|aggregate function`
+When adding a new function, follow this pattern:
+
+- `feat(presto): Add abs scalar function`
+- `feat(spark): Add bitmap_or_agg aggregate function`
 
 ## Documentation
 
