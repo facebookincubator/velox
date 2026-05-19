@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -171,9 +171,8 @@ void CudfHiveDataSource::convertSplit(std::shared_ptr<ConnectorSplit> split) {
       "Unsupported file format for conversion from HiveConnectorSplit to CudfHiveConnectorSplit");
 
   // Remove "file:" prefix from the file path if present.
-  // abfs:// and abfss:// are passed through unchanged so that
-  // filesystems::getFileSystem can route them to AbfsFileSystem via
-  // BufferedInputDataSource (see CudfSplitReader::setupCudfDataSource).
+  // abfs:// and abfss:// remain unmodified so filesystems::getFileSystem
+  // routes them to AbfsFileSystem via BufferedInputDataSource
   std::string cleanedPath = hiveSplit->filePath;
   constexpr std::string_view kFilePrefix = "file:";
   constexpr std::string_view kS3APrefix = "s3a:";
