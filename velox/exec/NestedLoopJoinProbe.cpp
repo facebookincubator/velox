@@ -333,81 +333,47 @@ void NestedLoopJoinProbe::handleLeftSemiProjectNoCondition() {
 
 bool NestedLoopJoinProbe::addSingleProbeRowOutput(
     const RowVectorPtr& buildVector) {
-  for (size_t i = filterResultRow_; i < decodedFilterResult_.size(); ++i) {
-    buildRow_ = i;
-
-    if (!isJoinConditionMatch(i)) {
-      if (buildRow_ + 1 != buildVector->size() || !checkProbeMismatchRow()) {
-        continue;
-      }
-    } else {
-      if (needsBuildMismatch(joinType_)) {
-        buildMatched_[buildIndex_].setValid(buildRow_, true);
-      }
-      addOutputRow();
-      ++numOutputRows_;
-      probeRowHasMatch_ = true;
-
-      if (isLeftSemiProjectJoin(joinType_)) {
-        output_->childAt(outputType_->size() - 1)
-            ->asFlatVector<bool>()
-            ->set(numOutputRows_ - 1, true);
-        buildIndex_ = buildVectors_.value().size();
-        filterResultRow_ = 0;
-        buildRow_ = 0;
-        return true;
-      }
-    }
-
-    if (numOutputRows_ == outputBatchSize_) {
-      filterResultRow_ = i + 1;
-      copyBuildValues(buildVector);
-      return false;
-    }
-  }
-
-  copyBuildValues(buildVector);
-  ++buildIndex_;
-  filterResultRow_ = 0;
-  buildRow_ = 0;
-  return true;
+  return addFilteredOutput(buildVector, true);
 }
 
 bool NestedLoopJoinProbe::addMultiProbeRowsOutput(
     const RowVectorPtr& buildVector) {
+  return addFilteredOutput(buildVector, false);
+}
+
+bool NestedLoopJoinProbe::addFilteredOutput(
+    const RowVectorPtr& buildVector,
+    bool singleProbeRow) {
   const auto buildRowCount = buildVector->size();
-  probeRowHasMatch_ = buildRow_ == 0 ? false : probeRowHasMatch_;
+  if (!singleProbeRow && buildRow_ == 0) {
+    probeRowHasMatch_ = false;
+  }
 
   for (size_t i = filterResultRow_; i < decodedFilterResult_.size(); ++i) {
-    if (!isJoinConditionMatch(i)) {
-      if (buildRow_ + 1 == buildRowCount) {
-        checkProbeMismatchRow();
-      }
-    } else {
-      if (needsBuildMismatch(joinType_)) {
-        buildMatched_[buildIndex_].setValid(buildRow_, true);
-      }
-      addOutputRow();
-      ++numOutputRows_;
-      probeRowHasMatch_ = true;
-
-      if (isLeftSemiProjectJoin(joinType_)) {
-        output_->childAt(outputType_->size() - 1)
-            ->asFlatVector<bool>()
-            ->set(numOutputRows_ - 1, true);
-        filterResultRow_ = i + (buildRowCount - buildRow_);
-        ++probeRow_;
-        buildRow_ = 0;
-        probeRowHasMatch_ = false;
-        return true;
-      }
+    if (singleProbeRow) {
+      buildRow_ = i;
     }
 
-    ++buildRow_;
-    if (buildRow_ == buildRowCount) {
-      buildRow_ = 0;
-      ++probeRow_;
-      probeRowHasMatch_ = false;
+    if (!isJoinConditionMatch(i)) {
+      if (buildRow_ + 1 == buildRowCount) {
+        const auto addedMismatch = checkProbeMismatchRow();
+        if (singleProbeRow && !addedMismatch) {
+          continue;
+        }
+      } else if (singleProbeRow) {
+        continue;
+      }
+    } else if (handleMatchedFilterRow(i, buildRowCount, singleProbeRow)) {
+      return true;
+    }
+
+    if (!singleProbeRow) {
+      ++buildRow_;
+      if (buildRow_ == buildRowCount) {
+        buildRow_ = 0;
+        ++probeRow_;
+        probeRowHasMatch_ = false;
+      }
     }
 
     if (numOutputRows_ == outputBatchSize_) {
@@ -420,9 +386,43 @@ bool NestedLoopJoinProbe::addMultiProbeRowsOutput(
   copyBuildValues(buildVector);
   ++buildIndex_;
   filterResultRow_ = 0;
-  probeRow_ = filterProbeRow_;
-  probeRowHasMatch_ = false;
   buildRow_ = 0;
+  if (!singleProbeRow) {
+    probeRow_ = filterProbeRow_;
+    probeRowHasMatch_ = false;
+  }
+  return true;
+}
+
+bool NestedLoopJoinProbe::handleMatchedFilterRow(
+    vector_size_t filterResultRow,
+    vector_size_t buildRowCount,
+    bool singleProbeRow) {
+  if (needsBuildMismatch(joinType_)) {
+    buildMatched_[buildIndex_].setValid(buildRow_, true);
+  }
+  addOutputRow();
+  ++numOutputRows_;
+  probeRowHasMatch_ = true;
+
+  if (!isLeftSemiProjectJoin(joinType_)) {
+    return false;
+  }
+
+  output_->childAt(outputType_->size() - 1)
+      ->asFlatVector<bool>()
+      ->set(numOutputRows_ - 1, true);
+
+  if (singleProbeRow) {
+    buildIndex_ = buildVectors_.value().size();
+    filterResultRow_ = 0;
+    buildRow_ = 0;
+  } else {
+    filterResultRow_ = filterResultRow + (buildRowCount - buildRow_);
+    ++probeRow_;
+    buildRow_ = 0;
+    probeRowHasMatch_ = false;
+  }
   return true;
 }
 

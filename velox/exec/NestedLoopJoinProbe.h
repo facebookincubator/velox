@@ -166,6 +166,19 @@ class NestedLoopJoinProbe : public Operator {
   // filled up and must be produced immediately.
   bool addMultiProbeRowsOutput(const RowVectorPtr& buildVector);
 
+  // Shared implementation for processing filtered join output.
+  // `singleProbeRow` indicates whether decodedFilterResult_ covers one probe
+  // row or a batch of probe rows.
+  bool addFilteredOutput(const RowVectorPtr& buildVector, bool singleProbeRow);
+
+  // Handles output state for a matched filter row. Returns true if processing
+  // should stop immediately, e.g. left semi project found a match for the
+  // current probe row.
+  bool handleMatchedFilterRow(
+      vector_size_t filterResultRow,
+      vector_size_t buildRowCount,
+      bool singleProbeRow);
+
   // Generates the next batch of a cross product between probe and build. It
   // should be used as the entry point, and will internally delegate to one of
   // the three functions below.

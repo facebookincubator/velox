@@ -677,7 +677,7 @@ TEST_F(NestedLoopJoinTest, addOutputRowWithContinuesBuildRow) {
   assertQuery(op, "SELECT l1, l2, r1, r2 FROM t LEFT JOIN u ON l1 = r1");
 }
 
-TEST_F(NestedLoopJoinTest, smallBuildSideOuterJoins) {
+TEST_F(NestedLoopJoinTest, smallBuildSideJoins) {
   auto probeVector = makeRowVector(
       {"l1", "l2"},
       {
@@ -702,6 +702,8 @@ TEST_F(NestedLoopJoinTest, smallBuildSideOuterJoins) {
   createDuckDbTable("u_single_row", {singleRowBuild});
 
   const auto createPlan = [&](const RowVectorPtr& buildVector,
+                              const std::string& condition,
+                              const std::vector<std::string>& outputLayout,
                               core::JoinType joinType) {
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     return PlanBuilder(planNodeIdGenerator)
@@ -711,24 +713,59 @@ TEST_F(NestedLoopJoinTest, smallBuildSideOuterJoins) {
                 .values({buildVector})
                 .project({"r1", "r2"})
                 .planNode(),
-            "l1 < r1",
-            {"l1", "l2", "r1", "r2"},
+            condition,
+            outputLayout,
             joinType)
         .planNode();
   };
 
+  const auto assertLeftSemiProject = [&](const RowVectorPtr& buildVector,
+                                         const std::string& tableName) {
+    AssertQueryBuilder(
+        createPlan(
+            buildVector,
+            "l1 = r1",
+            {"l1", "match"},
+            core::JoinType::kLeftSemiProject),
+        duckDbQueryRunner_)
+        .assertResults(
+            fmt::format(
+                "SELECT l1, EXISTS(SELECT 1 FROM {} WHERE l1 = r1) AS match "
+                "FROM t ORDER BY l1 NULLS LAST",
+                tableName));
+  };
+
   assertQuery(
-      createPlan(singleVectorBuild, core::JoinType::kRight),
+      createPlan(
+          singleVectorBuild,
+          "l1 < r1",
+          {"l1", "l2", "r1", "r2"},
+          core::JoinType::kRight),
       "SELECT l1, l2, r1, r2 FROM t RIGHT JOIN u_single_vector ON l1 < r1");
   assertQuery(
-      createPlan(singleVectorBuild, core::JoinType::kFull),
+      createPlan(
+          singleVectorBuild,
+          "l1 < r1",
+          {"l1", "l2", "r1", "r2"},
+          core::JoinType::kFull),
       "SELECT l1, l2, r1, r2 FROM t FULL JOIN u_single_vector ON l1 < r1");
   assertQuery(
-      createPlan(singleRowBuild, core::JoinType::kRight),
+      createPlan(
+          singleRowBuild,
+          "l1 < r1",
+          {"l1", "l2", "r1", "r2"},
+          core::JoinType::kRight),
       "SELECT l1, l2, r1, r2 FROM t RIGHT JOIN u_single_row ON l1 < r1");
   assertQuery(
-      createPlan(singleRowBuild, core::JoinType::kFull),
+      createPlan(
+          singleRowBuild,
+          "l1 < r1",
+          {"l1", "l2", "r1", "r2"},
+          core::JoinType::kFull),
       "SELECT l1, l2, r1, r2 FROM t FULL JOIN u_single_row ON l1 < r1");
+
+  assertLeftSemiProject(singleVectorBuild, "u_single_vector");
+  assertLeftSemiProject(singleRowBuild, "u_single_row");
 }
 
 TEST_F(NestedLoopJoinTest, mergeBuildVectors) {
