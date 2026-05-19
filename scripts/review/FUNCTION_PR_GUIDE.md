@@ -5,10 +5,10 @@ functions, or special forms. Use alongside `SELF_REVIEW.md`.
 
 ## PR title
 
-When adding a new function, follow this pattern:
-
-- `feat(presto): Add abs scalar function`
-- `feat(spark): Add bitmap_or_agg aggregate function`
+- Adding: `feat(presto): Add abs scalar function`
+- Adding: `feat(spark): Add bitmap_or_agg aggregate function`
+- Fixing: `fix(presto): Fix abs function for negative zero`
+- Fixing: `fix(spark): Fix bitmap_or_agg for all-null inputs`
 
 ## Documentation
 
