@@ -35,9 +35,10 @@ functions, or special forms. Use alongside `SELF_REVIEW.md`.
 - [ ] Input validation uses the [non-throwing error path](https://velox-lib.io/blog/optimize-try-more#non-throwing-simple-functions)
       (`Status` / `setError`) so functions work correctly inside `TRY`.
       Use `VELOX_CHECK_*` only for internal invariants that indicate bugs.
-- [ ] `EvalCtx::moveOrCopyResult` is used when a function may be called
-      with a pre-existing result vector (e.g., inside `SwitchExpr` /
-      `IF` / `CASE WHEN`). Do not unconditionally replace `result`.
+- [ ] For vector functions and special forms: `EvalCtx::moveOrCopyResult`
+      is used when the function may be called with a pre-existing result
+      vector (e.g., inside `IF` / `CASE WHEN`). Do not unconditionally
+      replace `result`.
 
 ## Aggregate functions
 
