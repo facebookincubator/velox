@@ -100,8 +100,12 @@ The contribution process is outlined below:
    reviewers. For PRs that add or modify functions, also check the
    [Function PR Guide](scripts/review/FUNCTION_PR_GUIDE.md). If you use
    Claude or a similar AI tool, paste these checklists as context and ask
-   it to review your diff. Catching common issues before review saves
-   everyone time.
+   it to review your diff.
+   * We want to provide timely, thorough reviews on every PR. When
+   reviewers spend rounds on naming, style, and conventions, it delays
+   feedback on design and correctness — for your PR and for others
+   waiting in the queue. PRs that repeatedly miss these basics may be
+   sent back for self-review before a detailed review can begin.
 
 6. Review is performed by one or more reviewers.
    * This normally happens within a few days, but may take longer if the change

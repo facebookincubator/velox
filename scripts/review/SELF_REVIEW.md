@@ -5,12 +5,6 @@ AI tool, paste this file as context and ask it to review your diff against
 these rules. Most items come from recurring review feedback — fixing them
 before review saves everyone time.
 
-We want to provide timely, thorough reviews on every PR. When reviewers
-spend rounds on naming, style, and conventions, it delays feedback on
-design and correctness — for your PR and for others waiting in the queue.
-PRs that repeatedly miss these basics may be sent back for self-review
-before a detailed review can begin.
-
 ## Before requesting review
 
 - [ ] CI is green.
