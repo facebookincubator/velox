@@ -10,7 +10,8 @@ before review saves everyone time.
 - [ ] CI is green.
 - [ ] PR title describes what changed (not the symptom or the ticket).
 - [ ] PR description matches what the code actually does. If the scope grew
-      beyond the original description, update it.
+      beyond the original description, update it. Do not include test
+      results or pass/fail status — CI reports that.
 
 ## Naming
 
