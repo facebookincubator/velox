@@ -37,9 +37,6 @@ When adding a new function, follow this pattern:
       Before concluding it doesn't support your use case, check the actual
       header — it supports `HashStringAllocator`, custom `destroy()`, variable-size
       accumulators, and external memory.
-- [ ] `default_null_behavior_` is set correctly. Functions that produce
-      non-null output for null inputs (e.g., `IS NULL`, aggregate functions
-      returning default values) must set this to `false`.
 - [ ] Input validation uses the [non-throwing error path](https://velox-lib.io/blog/optimize-try-more#non-throwing-simple-functions)
       (`Status` / `setError`) so functions work correctly inside `TRY`.
       Use `VELOX_CHECK_*` only for internal invariants that indicate bugs.
