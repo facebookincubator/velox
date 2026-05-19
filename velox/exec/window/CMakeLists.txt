@@ -19,6 +19,7 @@ velox_add_library(
   RowsStreamingWindowBuild.cpp
   SortWindowBuild.cpp
   SubPartitionedSortWindowBuild.cpp
+  VectorWindowPartition.cpp
   WindowBuild.cpp
   HEADERS
   AggregateWindow.h
@@ -28,6 +29,7 @@ velox_add_library(
   RowsStreamingWindowBuild.h
   SortWindowBuild.h
   SubPartitionedSortWindowBuild.h
+  VectorWindowPartition.h
   WindowBuild.h
   WindowPartitionAccessor.h
 )

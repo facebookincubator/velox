@@ -16,13 +16,18 @@
 
 #pragma once
 
+#include "velox/exec/window/VectorWindowPartition.h"
 #include "velox/exec/window/WindowBuild.h"
+
+#include <deque>
+#include <optional>
+#include <vector>
 
 namespace facebook::velox::exec::window {
 
 /// Unlike PartitionStreamingWindowBuild, RowsStreamingWindowBuild is capable of
 /// processing window functions as rows arrive within a single partition,
-/// without the need to wait for the entirewindow partition to be ready. This
+/// without the need to wait for the entire window partition to be ready. This
 /// approach can significantly reduce memory usage, especially when a single
 /// partition contains a large amount of data. It is particularly suited for
 /// optimizing rank, dense_rank and row_number functions, as well as aggregate
@@ -54,27 +59,51 @@ class RowsStreamingWindowBuild : public WindowBuild {
   bool needsInput() override;
 
  private:
+  using RowBlock = VectorWindowPartition::RowBlock;
+  using RowReference = VectorWindowPartition::RowReference;
+
+  // Flushes rows in [start, end) from 'input' as a vector block.
+  void
+  flushBlock(const RowVectorPtr& input, vector_size_t start, vector_size_t end);
+
   // Adds input rows to the current partition, or creates a new partition if it
   // does not exist.
   void addPartitionInputs(bool finished);
 
-  // Invoked before add input to ensure there is an open (in-complete) partition
+  // Invoked before add input to ensure there is an open (incomplete) partition
   // to accept new input. The function creates a new one at the tail of
   // 'windowPartitions_' if it is empty or the last partition is already
   // completed.
   void ensureInputPartition();
 
+  // Returns true if 'row' starts a new partition relative to the previous row.
+  bool isNewPartition(const RowVectorPtr& input, vector_size_t row) const;
+
+  // Returns true if 'row' starts a new peer group relative to the previous row.
+  bool isNewPeerGroup(const RowVectorPtr& input, vector_size_t row) const;
+
+  // Compares 'row' with the previous row using the specified key columns.
+  bool compareRowsEqual(
+      const RowVectorPtr& input,
+      vector_size_t row,
+      const std::vector<std::pair<column_index_t, core::SortOrder>>& keyInfo)
+      const;
+
   // Sets to true if this window node has range frames.
   const bool hasRangeFrame_;
 
-  // Points to the input rows in the current partition.
-  std::vector<char*> inputRows_;
+  // Blocks of input rows buffered for the current partition.
+  std::vector<RowBlock> currentBlocks_;
 
-  // Used to compare rows based on partitionKeys.
-  char* previousRow_ = nullptr;
+  // Used to compare the first row of an input vector with the last row of the
+  // previous input vector.
+  RowReference previousRef_;
 
-  /// The output gets next partition from the head of 'windowPartitions_' and
-  /// input adds to the next partition from the tail of 'windowPartitions_'.
+  // Number of rows accumulated since the last partial flush.
+  vector_size_t pendingRowCount_{0};
+
+  // The output gets next partition from the head of 'windowPartitions_' and
+  // input adds to the next partition from the tail of 'windowPartitions_'.
   std::deque<std::shared_ptr<WindowPartition>> windowPartitions_;
 };
 

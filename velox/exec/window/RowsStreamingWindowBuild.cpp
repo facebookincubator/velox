@@ -16,7 +16,6 @@
 
 #include "velox/exec/window/RowsStreamingWindowBuild.h"
 #include "velox/common/testutil/TestValue.h"
-#include "velox/exec/WindowFunction.h"
 
 namespace facebook::velox::exec::window {
 
@@ -53,62 +52,75 @@ bool RowsStreamingWindowBuild::needsInput() {
 void RowsStreamingWindowBuild::ensureInputPartition() {
   if (windowPartitions_.empty() || windowPartitions_.back()->complete()) {
     windowPartitions_.emplace_back(
-        std::make_shared<WindowPartition>(
-            data_.get(), inversedInputChannels_, sortKeyInfo_));
+        std::make_shared<VectorWindowPartition>(
+            inputChannels_, inversedInputChannels_, sortKeyInfo_));
   }
 }
 
 void RowsStreamingWindowBuild::addPartitionInputs(bool finished) {
-  if (inputRows_.empty()) {
+  if (currentBlocks_.empty()) {
+    if (finished && !windowPartitions_.empty() &&
+        !windowPartitions_.back()->complete()) {
+      windowPartitions_.back()->setComplete();
+    }
     return;
   }
 
   ensureInputPartition();
-  windowPartitions_.back()->addRows(inputRows_);
+  auto partition =
+      std::static_pointer_cast<VectorWindowPartition>(windowPartitions_.back());
+  for (const auto& block : currentBlocks_) {
+    partition->addBlock(block.input, block.startRow, block.endRow);
+  }
 
   if (finished) {
     windowPartitions_.back()->setComplete();
   }
 
-  inputRows_.clear();
-  inputRows_.shrink_to_fit();
+  currentBlocks_.clear();
+  pendingRowCount_ = 0;
 }
 
 void RowsStreamingWindowBuild::addInput(RowVectorPtr input) {
-  for (auto i = 0; i < inputChannels_.size(); ++i) {
-    decodedInputVectors_[i].decode(*input->childAt(inputChannels_[i]));
+  for (auto& child : input->children()) {
+    child->loadedVector();
   }
 
+  vector_size_t blockStart = 0;
   for (auto row = 0; row < input->size(); ++row) {
-    char* newRow = data_->newRow();
-
-    for (auto col = 0; col < input->childrenSize(); ++col) {
-      data_->store(decodedInputVectors_[col], row, newRow, col);
-    }
-
-    if (previousRow_ != nullptr &&
-        compareRowsWithKeys(previousRow_, newRow, partitionKeyInfo_)) {
+    const bool hasPreviousRow = row > 0 || previousRef_.isValid();
+    if (isNewPartition(input, row)) {
+      flushBlock(input, blockStart, row);
       addPartitionInputs(true);
+      blockStart = row;
     }
-
-    if (previousRow_ != nullptr && inputRows_.size() >= numRowsPerOutput_) {
+    if (hasPreviousRow && pendingRowCount_ >= numRowsPerOutput_) {
       // Needs to wait the peer group ready for range frame.
       if (hasRangeFrame_) {
-        if (compareRowsWithKeys(previousRow_, newRow, sortKeyInfo_)) {
+        if (isNewPeerGroup(input, row)) {
+          flushBlock(input, blockStart, row);
           addPartitionInputs(false);
+          blockStart = row;
         }
       } else {
+        flushBlock(input, blockStart, row);
         addPartitionInputs(false);
+        blockStart = row;
       }
     }
 
-    inputRows_.push_back(newRow);
-    previousRow_ = newRow;
+    ++pendingRowCount_;
+  }
+
+  flushBlock(input, blockStart, input->size());
+  if (input->size() > 0) {
+    previousRef_ = {input, input->size() - 1};
   }
 }
 
 void RowsStreamingWindowBuild::noMoreInput() {
   addPartitionInputs(true);
+  previousRef_ = {};
 }
 
 std::shared_ptr<WindowPartition> RowsStreamingWindowBuild::nextPartition() {
@@ -137,6 +149,53 @@ bool RowsStreamingWindowBuild::hasNextPartition() {
   }
 
   return false;
+}
+
+void RowsStreamingWindowBuild::flushBlock(
+    const RowVectorPtr& input,
+    vector_size_t start,
+    vector_size_t end) {
+  if (start >= end) {
+    return;
+  }
+  currentBlocks_.push_back({input, start, end});
+}
+
+bool RowsStreamingWindowBuild::isNewPartition(
+    const RowVectorPtr& input,
+    vector_size_t row) const {
+  if (row == 0 && !previousRef_.isValid()) {
+    return false;
+  }
+  return !compareRowsEqual(input, row, partitionKeyInfo_);
+}
+
+bool RowsStreamingWindowBuild::isNewPeerGroup(
+    const RowVectorPtr& input,
+    vector_size_t row) const {
+  if (row == 0 && !previousRef_.isValid()) {
+    return false;
+  }
+  return !compareRowsEqual(input, row, sortKeyInfo_);
+}
+
+bool RowsStreamingWindowBuild::compareRowsEqual(
+    const RowVectorPtr& input,
+    vector_size_t row,
+    const std::vector<std::pair<column_index_t, core::SortOrder>>& keyInfo)
+    const {
+  const auto& previousInput = row == 0 ? previousRef_.input : input;
+  const auto previousRow = row == 0 ? previousRef_.row : row - 1;
+
+  for (const auto& key : keyInfo) {
+    const auto inputColumn = inputChannels_[key.first];
+    if (!previousInput->childAt(inputColumn)
+             ->equalValueAt(
+                 input->childAt(inputColumn).get(), previousRow, row)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 } // namespace facebook::velox::exec::window
