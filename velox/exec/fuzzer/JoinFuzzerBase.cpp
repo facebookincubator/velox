@@ -283,8 +283,7 @@ std::string JoinFuzzerBase::Stats::toString() const {
   std::stringstream out;
   out << "\nTotal iterations tested: " << numIterations << std::endl;
   out << "Total iterations verified against reference DB: "
-      << makePercentageString(numVerified, numIterations)
-      << std::endl;
+      << makePercentageString(numVerified, numIterations) << std::endl;
   return out.str();
 }
 

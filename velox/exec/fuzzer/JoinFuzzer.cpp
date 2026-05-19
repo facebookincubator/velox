@@ -127,11 +127,9 @@ class JoinFuzzer : public JoinFuzzerBase {
       std::stringstream out;
       out << "\nTotal iterations tested: " << numIterations << std::endl;
       out << "Total iterations verified against reference DB: "
-          << makePercentageString(numVerified, numIterations)
-          << std::endl;
+          << makePercentageString(numVerified, numIterations) << std::endl;
       out << "Total iterations testing cross product: "
-          << makePercentageString(numCrossProduct, numIterations)
-          << std::endl;
+          << makePercentageString(numCrossProduct, numIterations) << std::endl;
       return out.str();
     }
   };
