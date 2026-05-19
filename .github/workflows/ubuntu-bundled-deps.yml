@@ -63,7 +63,7 @@ jobs:
         run: |
           mkdir -p "$CCACHE_DIR"
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           path: velox
           persist-credentials: false
