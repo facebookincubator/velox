@@ -21,14 +21,27 @@ namespace facebook::velox::parquet {
 
 namespace {
 
+// Returns the heap bytes held by `s`, skipping SSO strings whose buffer is
+// inline within the std::string object and already counted by the containing
+// struct's sizeof. Detects SSO by checking whether s.data() points inside the
+// std::string itself, which is portable across libc++, libstdc++, and MSVC.
+size_t heapStringSize(const std::string& s) {
+  const auto* data = reinterpret_cast<const char*>(s.data());
+  const auto* begin = reinterpret_cast<const char*>(&s);
+  if (data >= begin && data < begin + sizeof(std::string)) {
+    return 0;
+  }
+  return s.capacity();
+}
+
 // Returns the dynamically-allocated byte size held by a thrift key/value
 // metadata vector — the inline thrift::KeyValue array bytes plus the heap
 // storage backing each key and value string.
 size_t keyValueMetadataSize(const std::vector<thrift::KeyValue>& keyValues) {
   size_t size = keyValues.size() * sizeof(thrift::KeyValue);
   for (const auto& kv : keyValues) {
-    size += kv.key.capacity();
-    size += kv.value.capacity();
+    size += heapStringSize(kv.key);
+    size += heapStringSize(kv.value);
   }
   return size;
 }
@@ -45,7 +58,7 @@ size_t columnMetadataSize(const thrift::ColumnChunk& column) {
   size += column.meta_data.encodings.size() * sizeof(thrift::Encoding::type);
   size += column.meta_data.path_in_schema.size() * sizeof(std::string);
   for (const auto& path : column.meta_data.path_in_schema) {
-    size += path.capacity();
+    size += heapStringSize(path);
   }
   size += keyValueMetadataSize(column.meta_data.key_value_metadata);
 
@@ -55,16 +68,16 @@ size_t columnMetadataSize(const thrift::ColumnChunk& column) {
   if (column.meta_data.__isset.statistics) {
     const auto& stats = column.meta_data.statistics;
     if (stats.__isset.min) {
-      size += stats.min.capacity();
+      size += heapStringSize(stats.min);
     }
     if (stats.__isset.max) {
-      size += stats.max.capacity();
+      size += heapStringSize(stats.max);
     }
     if (stats.__isset.min_value) {
-      size += stats.min_value.capacity();
+      size += heapStringSize(stats.min_value);
     }
     if (stats.__isset.max_value) {
-      size += stats.max_value.capacity();
+      size += heapStringSize(stats.max_value);
     }
   }
   return size;
@@ -81,7 +94,7 @@ size_t fileMetadataSize(const thrift::FileMetaData& metadata) {
   // Schema vector heap allocation plus per-element name strings.
   totalSize += metadata.schema.size() * sizeof(thrift::SchemaElement);
   for (const auto& schema : metadata.schema) {
-    totalSize += schema.name.capacity();
+    totalSize += heapStringSize(schema.name);
   }
   // Row groups vector heap allocation plus the columns vectors it owns.
   totalSize += metadata.row_groups.size() * sizeof(thrift::RowGroup);
@@ -91,9 +104,9 @@ size_t fileMetadataSize(const thrift::FileMetaData& metadata) {
     }
   }
   totalSize += keyValueMetadataSize(metadata.key_value_metadata);
-  totalSize += metadata.created_by.capacity();
+  totalSize += heapStringSize(metadata.created_by);
   totalSize += metadata.column_orders.size() * sizeof(thrift::ColumnOrder);
-  totalSize += metadata.footer_signing_key_metadata.capacity();
+  totalSize += heapStringSize(metadata.footer_signing_key_metadata);
   return totalSize;
 }
 

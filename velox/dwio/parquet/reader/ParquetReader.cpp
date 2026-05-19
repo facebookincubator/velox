@@ -1427,10 +1427,11 @@ class ParquetRowReader::Impl {
                   ColumnChunkMetaDataPtr(&column).calculateColumnMetadataSize();
             }
           }
-          // Swap-with-empty to actually release the vector's buffer; clear()
-          // would only destroy elements while retaining capacity, so the
-          // reported freed bytes would not match the memory actually returned.
-          rowGroups_[i].columns = {};
+          // Swap with a fresh empty vector to actually release the buffer.
+          // operator=({}) and clear() preserve capacity, so the bytes
+          // reported as freed would still be resident; only the
+          // swap-with-empty idiom guarantees the allocation is released.
+          std::vector<thrift::ColumnChunk>().swap(rowGroups_[i].columns);
         }
         if (rowGroupInRange) {
           skippedStrides_++;
