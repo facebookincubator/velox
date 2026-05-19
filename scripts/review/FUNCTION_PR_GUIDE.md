@@ -40,11 +40,3 @@ functions, or special forms. Use alongside `SELF_REVIEW.md`.
       vector (e.g., inside `IF` / `CASE WHEN`). Do not unconditionally
       replace `result`.
 
-## Naming
-
-- [ ] File names match: `FunctionName.cpp`, `FunctionName.h`,
-      `FunctionNameTest.cpp`.
-- [ ] Class name matches the function: `FunctionNameFunction` or
-      `FunctionNameAggregate`.
-- [ ] Test fixture name matches: `FunctionNameTest`.
-- [ ] Enum values for function variants use `kPascalCase`.
