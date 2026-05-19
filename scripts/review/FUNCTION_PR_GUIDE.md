@@ -42,6 +42,10 @@ functions, or special forms. Use alongside `SELF_REVIEW.md`.
       inside `TRY` — throwing exceptions in C++ is extremely expensive due
       to stack trace capture. Use `VELOX_CHECK_*` only for internal
       invariants that indicate bugs.
+- [ ] Watch for unnecessary string copies and allocations. Functions that
+      process strings are called per-row and small inefficiencies add up
+      quickly. Prefer `StringView` and in-place operations over
+      `std::string` temporaries.
 - [ ] For vector functions and special forms: `EvalCtx::moveOrCopyResult`
       is used when the function may be called with a pre-existing result
       vector (e.g., inside `IF` / `CASE WHEN`). Do not unconditionally
