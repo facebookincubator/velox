@@ -25,7 +25,6 @@
 
 #include <fmt/format.h>
 #include <folly/Synchronized.h>
-#include <folly/container/F14Map.h>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 
@@ -217,27 +216,25 @@ class MemoryManager {
 
   /// Creates a root memory pool with specified 'name' and 'maxCapacity'. If
   /// 'name' is missing, the memory manager generates a default name internally
-  /// to ensure uniqueness. If 'resourceTag' is set, the pool's allocator and
-  /// arbitrator come from the CustomMemoryResource previously registered
-  /// under that tag via registerCustomResource(); throws if the tag is not
-  /// registered.
+  /// to ensure uniqueness.
   std::shared_ptr<MemoryPool> addRootPool(
       const std::string& name = "",
       int64_t maxCapacity = kMaxMemory,
       std::unique_ptr<MemoryReclaimer> reclaimer = nullptr,
       const std::optional<MemoryPool::DebugOptions>& poolDebugOpts =
-          std::nullopt,
-      const std::optional<std::string>& resourceTag = std::nullopt);
+          std::nullopt);
 
-  /// Registers a custom memory resource. Throws on empty or duplicate tag,
-  /// or on any null required field. NOT thread-safe: must be called during
-  /// process startup.
-  void registerCustomResource(CustomMemoryResource resource);
-
-  /// Returns the registered custom resources keyed by tag. Iteration order
-  /// is unspecified.
-  const folly::F14FastMap<std::string, std::shared_ptr<CustomMemoryResource>>&
-  customResources() const;
+  /// Creates a root memory pool backed by 'resource'. The pool's capacity
+  /// comes from 'resource->maxCapacity'; its reclaimer comes from
+  /// 'resource->reclaimerFactory()'; its allocator and arbitrator are
+  /// borrowed from 'resource->allocator' and 'resource->arbitrator'. The
+  /// caller (typically via CustomMemoryResourceRegistry) is responsible
+  /// for keeping 'resource' alive while the pool exists.
+  std::shared_ptr<MemoryPool> addCustomRootPool(
+      const std::string& name,
+      std::shared_ptr<CustomMemoryResource> resource,
+      const std::optional<MemoryPool::DebugOptions>& poolDebugOpts =
+          std::nullopt);
 
   /// Creates a leaf memory pool for direct memory allocation use with specified
   /// 'name'. If 'name' is missing, the memory manager generates a default name
@@ -319,8 +316,8 @@ class MemoryManager {
       std::unique_ptr<MemoryReclaimer>& reclaimer,
       MemoryPool::Options& options);
 
-  // Shared implementation for addRootPool overloads. 'customAllocator' and
-  // 'customArbitrator' are borrowed and may be null (default tier).
+  // 'customAllocator' and 'customArbitrator' are borrowed pointers; if both
+  // are null, the manager's default tier is used.
   std::shared_ptr<MemoryPool> addRootPoolImpl(
       const std::string& name,
       int64_t maxCapacity,
@@ -358,11 +355,6 @@ class MemoryManager {
   mutable folly::SharedMutex mutex_;
   // All user root pools allocated from 'this'.
   std::unordered_map<std::string, std::weak_ptr<MemoryPool>> pools_;
-
-  // Shared ownership so a resource outlives every pool that uses it. Keyed
-  // by 'tag' so addRootPool() can resolve a resource in O(1).
-  folly::F14FastMap<std::string, std::shared_ptr<CustomMemoryResource>>
-      customResources_;
 };
 
 /// Initializes the process-wide memory manager based on the specified

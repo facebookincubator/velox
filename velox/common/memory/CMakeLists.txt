@@ -22,6 +22,7 @@ velox_add_library(
   ArbitrationOperation.cpp
   ArbitrationParticipant.cpp
   ByteStream.cpp
+  CustomMemoryResource.cpp
   HashStringAllocator.cpp
   MallocAllocator.cpp
   Memory.cpp
@@ -69,4 +70,17 @@ velox_link_libraries(
     gflags::gflags
     glog::glog
   PRIVATE velox_test_util re2::re2
+)
+
+velox_add_library(
+  velox_custom_memory_resource_registry
+  CustomMemoryResourceRegistry.cpp
+  HEADERS
+  CustomMemoryResourceRegistry.h
+)
+
+velox_link_libraries(
+  velox_custom_memory_resource_registry
+  velox_memory
+  velox_scoped_registry
 )

@@ -29,28 +29,52 @@ class MemoryArbitrator;
 class MemoryReclaimer;
 
 /// Describes an externally-provided memory resource (e.g. a GPU or tiered
-/// memory backend) registered with MemoryManager and referenced by 'tag' when
-/// building per-query memory pools.
-struct CustomMemoryResource {
-  /// Unique non-empty identifier.
-  std::string tag;
+/// memory backend) registered with the memory subsystem and referenced by
+/// 'tag' when building per-query memory pools. The constructor enforces
+/// non-empty tag and non-null allocator, arbitrator, and reclaimerFactory;
+/// once constructed, the resource is immutable.
+class CustomMemoryResource {
+ public:
+  using ReclaimerFactory = std::function<std::unique_ptr<MemoryReclaimer>()>;
 
-  /// Capacity of the per-query root pool created for this resource.
-  int64_t maxCapacity{std::numeric_limits<int64_t>::max()};
+  CustomMemoryResource(
+      std::string tag,
+      std::shared_ptr<MemoryAllocator> allocator,
+      std::shared_ptr<MemoryArbitrator> arbitrator,
+      ReclaimerFactory reclaimerFactory,
+      int64_t maxCapacity = std::numeric_limits<int64_t>::max());
+
+  /// Unique identifier for this resource.
+  const std::string& tag() const {
+    return tag_;
+  }
+
+  /// Capacity of the per-query root pool created from this resource.
+  int64_t maxCapacity() const {
+    return maxCapacity_;
+  }
 
   /// Allocator backing pools tagged with this resource.
-  std::shared_ptr<MemoryAllocator> allocator;
+  MemoryAllocator* allocator() const {
+    return allocator_.get();
+  }
 
   /// Arbitrator routing capacity decisions for pools tagged with this
   /// resource.
-  std::shared_ptr<MemoryArbitrator> arbitrator;
+  MemoryArbitrator* arbitrator() const {
+    return arbitrator_.get();
+  }
 
-  /// Required. Builds a reclaimer for pools tagged with this resource.
-  /// Invoked by the caller (not the framework) when constructing the
-  /// per-query root pool. For reclaimers that need a QueryCtx-aware view,
-  /// the caller skips this factory and attaches the reclaimer post-build via
-  /// MemoryPool::setReclaimer.
-  std::function<std::unique_ptr<MemoryReclaimer>()> reclaimerFactory;
+  /// Returns a fresh reclaimer for a new pool by invoking the factory
+  /// supplied at construction.
+  std::unique_ptr<MemoryReclaimer> newReclaimer() const;
+
+ private:
+  const std::string tag_;
+  const int64_t maxCapacity_;
+  const std::shared_ptr<MemoryAllocator> allocator_;
+  const std::shared_ptr<MemoryArbitrator> arbitrator_;
+  const ReclaimerFactory reclaimerFactory_;
 };
 
 } // namespace facebook::velox::memory
