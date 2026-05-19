@@ -31,7 +31,7 @@ functions, or special forms. Use alongside `SELF_REVIEW.md`.
 - [ ] Use `SimpleFunction` API for scalar functions when possible.
 - [ ] Use `SimpleAggregateAdapter` for aggregate functions when possible.
       Before concluding it doesn't support your use case, check the actual
-      header — it supports HSA, custom `destroy()`, variable-size
+      header — it supports `HashStringAllocator`, custom `destroy()`, variable-size
       accumulators, and external memory.
 - [ ] `default_null_behavior_` is set correctly. Functions that produce
       non-null output for null inputs (e.g., `IS NULL`, aggregate functions

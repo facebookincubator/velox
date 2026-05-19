@@ -112,8 +112,8 @@ and refer back.
 - **Test files.** Each test file should have one test suite with a matching
   name. Empty test fixtures should use `TEST()` instead of `TEST_F()`.
 - **Error message tests.** When tests verify error messages, ensure they
-  match the full descriptive text, not just internal formatting from CHECK
-  macros (e.g., `"(0 vs. 0)"` is not a useful assertion).
+  match the full descriptive text, not just the auto-generated comparison
+  output from `VELOX_CHECK_*` macros.
 
 ### Documentation
 

@@ -65,7 +65,7 @@ before review saves everyone time.
 - [ ] No duplicated test helpers across files. Extract to a shared header.
 - [ ] `TEST()` for empty fixtures, `TEST_F()` only when the fixture is used.
 - [ ] Error message assertions match the full descriptive text, not just
-      internal formatting like `"(0 vs. 0)"`.
+      the auto-generated comparison output from `VELOX_CHECK_*` macros.
 - [ ] Each test file has one test suite with a matching name.
 
 ## Documentation
@@ -93,7 +93,8 @@ Before requesting re-review after addressing feedback:
       reply. Do not silently skip items.
 - [ ] Run the full diff review again — don't just fix the flagged lines.
       Addressing feedback often introduces new issues.
-- [ ] Check that behavioral changes (e.g., dropping IO stats, changing
-      exception to nullptr) are intentional and mentioned.
+- [ ] Check that behavioral changes (e.g., removing configuration that
+      existing code relied on, changing error handling from throwing to
+      returning null) are intentional and mentioned.
 - [ ] If a requested change is too large for this PR, say so and propose
       a plan (e.g., separate PR). Do not silently skip it.
