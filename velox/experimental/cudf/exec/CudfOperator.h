@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/CudfDefaultStreamOverload.h"
 #include "velox/experimental/cudf/exec/DebugUtil.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 
@@ -23,8 +24,11 @@
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Operator.h"
 
+#include <cuda_runtime.h>
+
 #include <glog/logging.h>
 
+#include <atomic>
 #include <type_traits>
 
 namespace facebook::velox::cudf_velox {
@@ -101,8 +105,15 @@ class CudfOperator : public NvtxHelper {
 ///     void doAddInput(RowVectorPtr input) override { /* process input */ }
 ///     RowVectorPtr doGetOutput() override { /* return output or nullptr */ }
 ///   };
+///
+/// GPU Timing (cudf.gpu_timing_enabled):
+/// Records CUDA events around doAddInput/doGetOutput, resolves elapsed time
+/// via host callbacks, and reports as "gpuWallTimeNanos" runtime stat. No sync
+/// on the submission path unless the 64-slot ring buffer overflows.
 class CudfOperatorBase : public exec::Operator, public NvtxHelper {
  public:
+  static constexpr std::string_view kGpuWallTime{"gpuWallTimeNanos"};
+
   CudfOperatorBase(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
@@ -113,63 +124,44 @@ class CudfOperatorBase : public exec::Operator, public NvtxHelper {
       NvtxMethodFlag nvtxMethods = NvtxMethodFlag::kAll,
       std::optional<common::SpillConfig> spillConfig = std::nullopt,
       std::optional<std::shared_ptr<const core::PlanNode>> planNode =
-          std::nullopt)
-      : Operator(
-            driverCtx,
-            outputType,
-            operatorId,
-            planNodeId,
-            operatorName,
-            spillConfig),
-        NvtxHelper(color, operatorId, fmt::format("[{}]", planNodeId)),
-        className_(operatorName),
-        nvtxMethods_(nvtxMethods) {}
+          std::nullopt);
 
-  void addInput(RowVectorPtr input) final {
-    VELOX_NVTX_OPERATOR_FUNC_RANGE_IF(
-        nvtxMethods_ & NvtxMethodFlag::kAddInput, className_);
-    doAddInput(std::move(input));
-    checkCudaErrorInDebug();
-  }
+  ~CudfOperatorBase() override;
 
-  RowVectorPtr getOutput() final {
-    VELOX_NVTX_OPERATOR_FUNC_RANGE_IF(
-        nvtxMethods_ & NvtxMethodFlag::kGetOutput, className_);
-    auto result = doGetOutput();
-    checkCudaErrorInDebug();
-    return result;
-  }
-
-  void noMoreInput() final {
-    VELOX_NVTX_OPERATOR_FUNC_RANGE_IF(
-        nvtxMethods_ & NvtxMethodFlag::kNoMoreInput, className_);
-    doNoMoreInput();
-    checkCudaErrorInDebug();
-  }
-
-  void close() final {
-    VELOX_NVTX_OPERATOR_FUNC_RANGE_IF(
-        nvtxMethods_ & NvtxMethodFlag::kClose, className_);
-    doClose();
-    checkCudaErrorInDebug();
-  }
+  void addInput(RowVectorPtr input) final;
+  RowVectorPtr getOutput() final;
+  void noMoreInput() final;
+  void close() final;
 
  protected:
   virtual void doAddInput(RowVectorPtr input) = 0;
-
   virtual RowVectorPtr doGetOutput() = 0;
-
-  virtual void doNoMoreInput() {
-    Operator::noMoreInput();
-  }
-
-  virtual void doClose() {
-    Operator::close();
-  }
+  virtual void doNoMoreInput();
+  virtual void doClose();
 
  private:
+  struct TimingSlot {
+    cudaEvent_t start{};
+    cudaEvent_t stop{};
+    std::atomic<bool> ready{false};
+  };
+
+  static constexpr uint32_t kTimingSlots = 64;
+
+  void initEvents();
+  void destroyEvents();
+  static void gpuTimingCallback(void* userData);
+  void recordTimingStart(rmm::cuda_stream_view stream);
+  void recordTimingStopAndEnqueue(rmm::cuda_stream_view stream);
+  void resolveCompletedSlots();
+
   const std::string className_;
   const NvtxMethodFlag nvtxMethods_;
+  const bool gpuTimingEnabled_;
+
+  TimingSlot timingSlots_[kTimingSlots]{};
+  uint32_t writeIdx_{0};
+  uint32_t readIdx_{0};
 };
 
 } // namespace facebook::velox::cudf_velox

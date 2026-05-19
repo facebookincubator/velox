@@ -419,6 +419,9 @@ void CudfConfig::initialize(
   if (config.find(kCudfTopNBatchSize) != config.end()) {
     topNBatchSize = folly::to<int32_t>(config[kCudfTopNBatchSize]);
   }
+  if (config.find(kCudfGpuTimingEnabled) != config.end()) {
+    gpuTimingEnabled = folly::to<bool>(config[kCudfGpuTimingEnabled]);
+  }
   if (config.find(kCudfTimestampUnit) != config.end()) {
     const auto& unit = config[kCudfTimestampUnit];
     if (unit == "s") {

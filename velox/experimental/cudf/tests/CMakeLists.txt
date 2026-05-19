@@ -228,6 +228,12 @@ velox_add_cudf_test(
   LIBS ${CUDF_TEST_DEFAULT_LIBS} fmt::fmt
 )
 
+velox_add_cudf_test(
+  NAME velox_cudf_gpu_timing_test
+  SOURCES Main.cpp GpuTimingTest.cpp
+  LIBS ${CUDF_TEST_DEFAULT_LIBS}
+)
+
 add_subdirectory(utils)
 
 if(${VELOX_ENABLE_SPARK_FUNCTIONS})
