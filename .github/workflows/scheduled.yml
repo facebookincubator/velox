@@ -121,6 +121,17 @@ jobs:
 
     steps:
 
+      # Sparse-checkout just the helper scripts dir up front so the
+      # sourced gh-api-retry.sh is on disk for the merge-base step
+      # below. Lands at $GITHUB_WORKSPACE/.github/scripts; the later
+      # "Checkout Contender" / "Checkout Main" steps put their full
+      # clones in different subdirectories (velox/, velox_main/) and
+      # don't conflict.
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+
       - name: Get merge base with main
         if: ${{ github.event_name != 'schedule' }}
         working-directory: ${{ github.workspace }}
@@ -132,12 +143,13 @@ jobs:
           PR_OWNER: ${{ github.event.pull_request.head.repo.owner.login }}
         id: get-merge-base
         run: |
+          source .github/scripts/gh-api-retry.sh
           if [ '${{ github.event_name == 'push' }}' == "true" ]; then
             # get the parent commit of the current one to get the relevant function signatures
-            head_main=$(gh api -q '.parents.[0].sha' '/repos/facebookincubator/velox/commits/${{ github.sha }}')
+            head_main=$(gh_api -q '.parents.[0].sha' '/repos/facebookincubator/velox/commits/${{ github.sha }}')
           elif [ '${{ github.event_name == 'pull_request' }}' == "true" ]; then
             # Get the merge base from the api
-            head_main=$(gh api -q '.merge_base_commit.sha' \
+            head_main=$(gh_api -q '.merge_base_commit.sha' \
               /repos/facebookincubator/velox/compare/facebookincubator:$BASE_REF...$PR_OWNER:$HEAD_REF \
             )
           else

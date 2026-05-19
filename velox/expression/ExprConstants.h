@@ -27,5 +27,6 @@ inline constexpr const char* kTryCast = "try_cast";
 inline constexpr const char* kTry = "try";
 inline constexpr const char* kRowConstructor = "row_constructor";
 inline constexpr const char* kNullIf = "nullif";
+inline constexpr const char* kCase = "case";
 
 } // namespace facebook::velox::expression

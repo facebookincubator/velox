@@ -242,8 +242,7 @@ class ProbeState {
     int64_t numProbedBuckets = 0;
     while (numProbedBuckets < table.numBuckets()) {
       if (!hits_) {
-        const uint16_t empty = simd::toBitMask(tagsInTable_ == kEmptyGroup);
-        if (empty) {
+        if (simd::any(tagsInTable_ == kEmptyGroup)) {
           return nullptr;
         }
       } else {
@@ -283,8 +282,7 @@ class ProbeState {
   template <typename Table>
   void eraseHit(Table& table, int64_t& numTombstones) {
     const auto kEmptyGroup = BaseHashTable::TagVector::broadcast(kEmptyTag);
-    const bool hasEmptyGroup =
-        simd::toBitMask(tagsInTable_ == kEmptyGroup) != 0;
+    const bool hasEmptyGroup = simd::any(tagsInTable_ == kEmptyGroup);
 
     table.bucketAt(bucketOffset_)
         ->setTag(indexInTags_, hasEmptyGroup ? 0 : kTombstoneTag);

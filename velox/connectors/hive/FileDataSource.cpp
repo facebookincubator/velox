@@ -616,6 +616,25 @@ void FileDataSource::addDynamicFilter(
   }
 }
 
+void FileDataSource::fireScanBatchCallback(core::ScanBatchEvent event) {
+  if (!scanBatchCallback_) {
+    return;
+  }
+  FileScanBatchEvent fileEvent;
+  fileEvent.numRows = event.numRows;
+  fileEvent.wallTimeMicros = event.wallTimeMicros;
+  if (tableHandle_) {
+    fileEvent.tableName = tableHandle_->name();
+  }
+  if (split_) {
+    fileEvent.filePath = split_->filePath;
+    if (!split_->partitionKeys.empty()) {
+      fileEvent.partitionKeys = &split_->partitionKeys;
+    }
+  }
+  scanBatchCallback_(fileEvent);
+}
+
 std::unordered_map<std::string, RuntimeMetric>
 FileDataSource::getRuntimeStats() {
   auto res = runtimeStats_.toRuntimeMetricMap();

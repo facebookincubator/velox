@@ -93,6 +93,7 @@ SpecialFormSignatureGenerator::getSignatures() const {
               {"coalesce", getSignaturesForCoalesce()},
               {"if", getSignaturesForIf()},
               {"switch", getSignaturesForSwitch()},
+              {"case", getSignaturesForCase()},
               {"cast", getSignaturesForCast()}};
   return kSpecialForms;
 }
@@ -166,6 +167,26 @@ SpecialFormSignatureGenerator::getSignaturesForSwitch() const {
               .argumentType("boolean")
               .argumentType("T")
               .returnType("T")
+              .build()};
+}
+
+std::vector<exec::FunctionSignaturePtr>
+SpecialFormSignatureGenerator::getSignaturesForCase() const {
+  // Signature: case (subject, when, then) -> output:
+  // S, S, R -> R
+  // CaseExpr::create resolves 'eq' for the subject type S via the
+  // VectorFunction registry, falling back to the SimpleFunction registry —
+  // the latter has a Generic<T1>, Generic<T1> eq registration so any
+  // comparable type is accepted. The fuzzer binds S to a randomly selected
+  // type and generates the variable number of WHEN/THEN pairs (and optional
+  // ELSE) via an override; this single signature defines the slot types.
+  return {exec::FunctionSignatureBuilder()
+              .typeVariable("S")
+              .typeVariable("R")
+              .argumentType("S")
+              .argumentType("S")
+              .argumentType("R")
+              .returnType("R")
               .build()};
 }
 

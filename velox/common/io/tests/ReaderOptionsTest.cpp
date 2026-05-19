@@ -31,9 +31,10 @@ class ReaderOptionsTest : public ::testing::Test {
 
   const std::shared_ptr<memory::MemoryPool> pool_{
       memory::memoryManager()->addLeafPool("ReaderOptionsTest")};
-  IoStatistics dataIoStats_;
-  IoStatistics metadataIoStats_;
-  IoStatistics indexIoStats_;
+  std::shared_ptr<IoStatistics> dataIoStats_{std::make_shared<IoStatistics>()};
+  std::shared_ptr<IoStatistics> metadataIoStats_{
+      std::make_shared<IoStatistics>()};
+  std::shared_ptr<IoStatistics> indexIoStats_{std::make_shared<IoStatistics>()};
 };
 
 TEST_F(ReaderOptionsTest, constructor) {
@@ -94,32 +95,32 @@ TEST_F(ReaderOptionsTest, ioExecutor) {
 
 TEST_F(ReaderOptionsTest, ioStats) {
   ReaderOptions options(pool_.get());
-  options.setDataIoStats(&dataIoStats_);
-  options.setMetadataIoStats(&metadataIoStats_);
-  options.setIndexIoStats(&indexIoStats_);
+  options.setDataIoStats(dataIoStats_);
+  options.setMetadataIoStats(metadataIoStats_);
+  options.setIndexIoStats(indexIoStats_);
 
-  EXPECT_EQ(options.dataIoStats(), &dataIoStats_);
-  EXPECT_EQ(options.metadataIoStats(), &metadataIoStats_);
-  EXPECT_EQ(options.indexIoStats(), &indexIoStats_);
+  EXPECT_EQ(options.dataIoStats(), dataIoStats_);
+  EXPECT_EQ(options.metadataIoStats(), metadataIoStats_);
+  EXPECT_EQ(options.indexIoStats(), indexIoStats_);
 
   options.dataIoStats()->read().increment(100);
-  EXPECT_EQ(dataIoStats_.read().count(), 1);
-  EXPECT_EQ(dataIoStats_.read().sum(), 100);
+  EXPECT_EQ(dataIoStats_->read().count(), 1);
+  EXPECT_EQ(dataIoStats_->read().sum(), 100);
 
   options.metadataIoStats()->read().increment(50);
-  EXPECT_EQ(metadataIoStats_.read().count(), 1);
-  EXPECT_EQ(metadataIoStats_.read().sum(), 50);
+  EXPECT_EQ(metadataIoStats_->read().count(), 1);
+  EXPECT_EQ(metadataIoStats_->read().sum(), 50);
 
   options.indexIoStats()->read().increment(25);
-  EXPECT_EQ(indexIoStats_.read().count(), 1);
-  EXPECT_EQ(indexIoStats_.read().sum(), 25);
+  EXPECT_EQ(indexIoStats_->read().count(), 1);
+  EXPECT_EQ(indexIoStats_->read().sum(), 25);
 }
 
 TEST_F(ReaderOptionsTest, chainingSetters) {
   ReaderOptions options(pool_.get());
-  auto& result = options.setDataIoStats(&dataIoStats_)
-                     .setMetadataIoStats(&metadataIoStats_)
-                     .setIndexIoStats(&indexIoStats_)
+  auto& result = options.setDataIoStats(dataIoStats_)
+                     .setMetadataIoStats(metadataIoStats_)
+                     .setIndexIoStats(indexIoStats_)
                      .setAutoPreloadLength(1'024)
                      .setPrefetchMode(PrefetchMode::PRELOAD)
                      .setLoadQuantum(4 << 20)
@@ -128,9 +129,9 @@ TEST_F(ReaderOptionsTest, chainingSetters) {
                      .setPrefetchRowGroups(4);
 
   EXPECT_EQ(&result, &options);
-  EXPECT_EQ(options.dataIoStats(), &dataIoStats_);
-  EXPECT_EQ(options.metadataIoStats(), &metadataIoStats_);
-  EXPECT_EQ(options.indexIoStats(), &indexIoStats_);
+  EXPECT_EQ(options.dataIoStats(), dataIoStats_);
+  EXPECT_EQ(options.metadataIoStats(), metadataIoStats_);
+  EXPECT_EQ(options.indexIoStats(), indexIoStats_);
   EXPECT_EQ(options.autoPreloadLength(), 1'024);
   EXPECT_EQ(options.prefetchMode(), PrefetchMode::PRELOAD);
   EXPECT_EQ(options.loadQuantum(), 4 << 20);
@@ -141,32 +142,32 @@ TEST_F(ReaderOptionsTest, chainingSetters) {
 
 TEST_F(ReaderOptionsTest, doubleSetIoStatsThrows) {
   ReaderOptions options(pool_.get());
-  options.setDataIoStats(&dataIoStats_);
+  options.setDataIoStats(dataIoStats_);
   VELOX_ASSERT_THROW(
-      options.setDataIoStats(&dataIoStats_), "dataIoStats already set");
+      options.setDataIoStats(dataIoStats_), "dataIoStats already set");
 
   ReaderOptions options2(pool_.get());
-  options2.setMetadataIoStats(&metadataIoStats_);
+  options2.setMetadataIoStats(metadataIoStats_);
   VELOX_ASSERT_THROW(
-      options2.setMetadataIoStats(&metadataIoStats_),
+      options2.setMetadataIoStats(metadataIoStats_),
       "metadataIoStats already set");
 
   ReaderOptions options3(pool_.get());
-  options3.setIndexIoStats(&indexIoStats_);
+  options3.setIndexIoStats(indexIoStats_);
   VELOX_ASSERT_THROW(
-      options3.setIndexIoStats(&indexIoStats_), "indexIoStats already set");
+      options3.setIndexIoStats(indexIoStats_), "indexIoStats already set");
 }
 
 TEST_F(ReaderOptionsTest, copyConstruct) {
   ReaderOptions options(pool_.get());
-  options.setDataIoStats(&dataIoStats_);
-  options.setMetadataIoStats(&metadataIoStats_);
+  options.setDataIoStats(dataIoStats_);
+  options.setMetadataIoStats(metadataIoStats_);
   options.setLoadQuantum(4 << 20);
 
   ReaderOptions copy(options);
   EXPECT_EQ(&copy.memoryPool(), pool_.get());
-  EXPECT_EQ(copy.dataIoStats(), &dataIoStats_);
-  EXPECT_EQ(copy.metadataIoStats(), &metadataIoStats_);
+  EXPECT_EQ(copy.dataIoStats(), dataIoStats_);
+  EXPECT_EQ(copy.metadataIoStats(), metadataIoStats_);
   EXPECT_EQ(copy.indexIoStats(), nullptr);
   EXPECT_EQ(copy.loadQuantum(), 4 << 20);
 }
