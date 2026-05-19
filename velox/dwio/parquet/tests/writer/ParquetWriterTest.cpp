@@ -68,16 +68,6 @@ class ParquetWriterTest : public ParquetTestBase {
     writers_.clear();
   }
 
-  std::unique_ptr<RowReader> createRowReaderWithSchema(
-      const std::unique_ptr<Reader> reader,
-      const RowTypePtr& rowType) {
-    auto rowReaderOpts = getReaderOpts(rowType);
-    auto scanSpec = makeScanSpec(rowType);
-    rowReaderOpts.setScanSpec(scanSpec);
-    auto rowReader = reader->createRowReader(rowReaderOpts);
-    return rowReader;
-  }
-
   RowVectorPtr makeSmallintTestData(int64_t rows) {
     auto data = makeRowVector({
         makeFlatVector<int16_t>(rows, [](auto row) { return row + 1; }),
@@ -94,10 +84,7 @@ class ParquetWriterTest : public ParquetTestBase {
   thrift::PageHeader readPageHeader(
       MemorySink* sinkPtr,
       int64_t offsetFromDataPage) {
-    dwio::common::ReaderOptions readerOptions(leafPool_.get());
-    readerOptions.setDataIoStats(dataIoStats_);
-    readerOptions.setMetadataIoStats(metadataIoStats_);
-    auto reader = createReaderInMemory(*sinkPtr, readerOptions);
+    auto reader = createReaderInMemory(*sinkPtr);
 
     auto colChunkPtr = reader->fileMetaData().rowGroup(0).columnChunk(0);
     std::string_view sinkData(sinkPtr->data(), sinkPtr->size());
@@ -416,10 +403,7 @@ TEST_F(ParquetWriterTest, compression) {
 
   auto* sinkPtr = write(data, writerOptions);
 
-  dwio::common::ReaderOptions readerOptions(leafPool_.get());
-  readerOptions.setDataIoStats(dataIoStats_);
-  readerOptions.setMetadataIoStats(metadataIoStats_);
-  auto reader = createReaderInMemory(*sinkPtr, readerOptions);
+  auto reader = createReaderInMemory(*sinkPtr);
 
   ASSERT_EQ(reader->numberOfRows(), kRows);
   ASSERT_EQ(*reader->rowType(), *schema);
@@ -431,7 +415,7 @@ TEST_F(ParquetWriterTest, compression) {
                             : CompressionKind::CompressionKind_SNAPPY);
   }
 
-  auto rowReader = createRowReaderWithSchema(std::move(reader), schema);
+  auto rowReader = createRowReaderFromReader(*reader, schema);
   assertReadWithReaderAndExpected(schema, *rowReader, data, *leafPool_);
 }
 
@@ -697,15 +681,12 @@ TEST_F(ParquetWriterTest, preEpochInt96Timestamp) {
 
   auto* sinkPtr = write(data, writerOptions);
 
-  dwio::common::ReaderOptions readerOptions(leafPool_.get());
-  readerOptions.setDataIoStats(dataIoStats_);
-  readerOptions.setMetadataIoStats(metadataIoStats_);
-  auto reader = createReaderInMemory(*sinkPtr, readerOptions);
+  auto reader = createReaderInMemory(*sinkPtr);
 
   ASSERT_EQ(reader->numberOfRows(), data->size());
   ASSERT_EQ(*reader->rowType(), *schema);
 
-  auto rowReader = createRowReaderWithSchema(std::move(reader), schema);
+  auto rowReader = createRowReaderFromReader(*reader, schema);
   assertReadWithReaderAndExpected(schema, *rowReader, data, *leafPool_);
 
   // Read the Int96 values directly to verify the correctness of the conversion
@@ -775,9 +756,7 @@ TEST_F(ParquetWriterTest, largeMetadata) {
 
   const auto* sinkPtr = write(data, writerOptions);
 
-  dwio::common::ReaderOptions readerOpts(leafPool_.get());
-  readerOpts.setDataIoStats(dataIoStats_);
-  readerOpts.setMetadataIoStats(metadataIoStats_);
+  auto readerOpts = makeDefaultReaderOptions();
   readerOpts.setFooterSpeculativeIoSize(1024);
   readerOpts.setFilePreloadThreshold(1024 * 8);
 
@@ -797,10 +776,7 @@ TEST_F(ParquetWriterTest, writeDecimalAsInteger) {
 
   const auto* sinkPtr = write(rowVector, writerOptions);
 
-  dwio::common::ReaderOptions readerOpts(leafPool_.get());
-  readerOpts.setDataIoStats(dataIoStats_);
-  readerOpts.setMetadataIoStats(metadataIoStats_);
-  const auto reader = createReaderInMemory(*sinkPtr, readerOpts);
+  const auto reader = createReaderInMemory(*sinkPtr);
 
   const auto types = reader->typeWithId()->getChildren();
   ASSERT_GE(types.size(), 3);
@@ -836,15 +812,12 @@ TEST_F(ParquetWriterTest, configurableWriteSchema) {
     parquet::WriterOptions writerOptions;
     writerOptions.memoryPool = rootPool_.get();
     const auto* sinkPtr = write(data, writerOptions, newType);
-    dwio::common::ReaderOptions readerOpts(leafPool_.get());
-    readerOpts.setDataIoStats(dataIoStats_);
-    readerOpts.setMetadataIoStats(metadataIoStats_);
-    auto reader = createReaderInMemory(*sinkPtr, readerOpts);
+    auto reader = createReaderInMemory(*sinkPtr);
 
     ASSERT_EQ(reader->numberOfRows(), kNumRows);
     EXPECT_EQ(reader->rowType()->toString(), newType->toString());
 
-    auto rowReader = createRowReaderWithSchema(std::move(reader), newType);
+    auto rowReader = createRowReaderFromReader(*reader, newType);
     assertReadWithReaderAndExpected(newType, *rowReader, expected, *leafPool_);
   };
 
@@ -882,17 +855,13 @@ TEST_F(ParquetWriterTest, updateWriterOptionsFromHiveConfig) {
 
   const auto* sinkPtr = write(data, std::move(configFromFile), {});
 
-  dwio::common::ReaderOptions readerOptions(leafPool_.get());
-  readerOptions.setDataIoStats(dataIoStats_);
-  readerOptions.setMetadataIoStats(metadataIoStats_);
-  auto reader = createReaderInMemory(*sinkPtr, readerOptions);
+  auto reader = createReaderInMemory(*sinkPtr);
 
   ASSERT_EQ(reader->numberOfRows(), data->size());
   ASSERT_EQ(*reader->rowType(), *data->rowType());
 
-  auto rowReaderOpts = getReaderOpts(data->rowType());
-  auto scanSpec = makeScanSpec(data->rowType());
-  rowReaderOpts.setScanSpec(scanSpec);
+  auto rowReaderOpts = makeRowReaderOpts(data->rowType());
+  rowReaderOpts.setScanSpec(makeScanSpec(data->rowType()));
   rowReaderOpts.setTimestampPrecision(TimestampPrecision::kNanoseconds);
   auto rowReader = reader->createRowReader(rowReaderOpts);
   assertReadWithReaderAndExpected(
@@ -950,17 +919,14 @@ TEST_F(ParquetWriterTest, enableStoreDecimalAsInteger) {
         auto* sinkPtr = write(
             data, std::move(configFromFile), std::move(sessionProperties));
 
-        dwio::common::ReaderOptions readerOptions(leafPool_.get());
-        readerOptions.setDataIoStats(dataIoStats_);
-        readerOptions.setMetadataIoStats(metadataIoStats_);
-        auto reader = createReaderInMemory(*sinkPtr, readerOptions);
+        auto reader = createReaderInMemory(*sinkPtr);
         auto& parquetReader = dynamic_cast<ParquetReader&>(*reader);
 
         const auto& types = parquetReader.typeWithId()->getChildren();
         ASSERT_EQ(types.size(), 3);
         verifyPhysicalTypes(types);
 
-        auto rowReader = createRowReaderWithSchema(std::move(reader), rowType);
+        auto rowReader = createRowReaderFromReader(*reader, rowType);
         assertReadWithReaderAndExpected(rowType, *rowReader, data, *leafPool_);
       };
 
@@ -1104,15 +1070,12 @@ TEST_F(ParquetWriterTest, allNulls) {
 
   auto* sinkPtr = write(data);
 
-  dwio::common::ReaderOptions readerOptions(leafPool_.get());
-  readerOptions.setDataIoStats(dataIoStats_);
-  readerOptions.setMetadataIoStats(metadataIoStats_);
-  auto reader = createReaderInMemory(*sinkPtr, readerOptions);
+  auto reader = createReaderInMemory(*sinkPtr);
 
   ASSERT_EQ(reader->numberOfRows(), kRows);
   ASSERT_EQ(*reader->rowType(), *schema);
 
-  auto rowReader = createRowReaderWithSchema(std::move(reader), schema);
+  auto rowReader = createRowReaderFromReader(*reader, schema);
   assertReadWithReaderAndExpected(schema, *rowReader, data, *leafPool_);
 }
 

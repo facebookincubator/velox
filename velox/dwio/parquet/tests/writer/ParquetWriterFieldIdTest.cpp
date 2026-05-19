@@ -68,10 +68,7 @@ TEST_P(ParquetWriterFieldIdTest, fieldIds) {
 
   auto* sinkPtr = write(data, writerOptions);
 
-  dwio::common::ReaderOptions readerOptions(leafPool_.get());
-  readerOptions.setDataIoStats(dataIoStats_);
-  readerOptions.setMetadataIoStats(metadataIoStats_);
-  auto parquetReader = createReaderInMemory(*sinkPtr, readerOptions);
+  auto parquetReader = createReaderInMemory(*sinkPtr);
   EXPECT_EQ(parquetReader->numberOfRows(), kRows);
   auto veloxRowType = parquetReader->rowType();
   EXPECT_EQ(*veloxRowType, *schema);
