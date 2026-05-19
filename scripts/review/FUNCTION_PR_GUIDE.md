@@ -32,11 +32,9 @@ functions, or special forms. Use alongside `SELF_REVIEW.md`.
 - [ ] `default_null_behavior_` is set correctly. Functions that produce
       non-null output for null inputs (e.g., `IS NULL`, aggregate functions
       returning default values) must set this to `false`.
-- [ ] Input validation uses `VELOX_USER_CHECK_*` (user-facing errors), not
-      `VELOX_CHECK_*` (internal invariants). Intermediate/internal
-      validation uses `VELOX_CHECK_*`.
-- [ ] Error messages are user-friendly and include the actual values that
-      caused the error.
+- [ ] Input validation uses the [non-throwing error path](https://velox-lib.io/blog/optimize-try-more#non-throwing-simple-functions)
+      (`Status` / `setError`) so functions work correctly inside `TRY`.
+      Use `VELOX_CHECK_*` only for internal invariants that indicate bugs.
 - [ ] `EvalCtx::moveOrCopyResult` is used when a function may be called
       with a pre-existing result vector (e.g., inside `SwitchExpr` /
       `IF` / `CASE WHEN`). Do not unconditionally replace `result`.
