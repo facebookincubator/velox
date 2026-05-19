@@ -141,11 +141,7 @@ class ReaderBase {
       std::unique_ptr<dwio::common::BufferedInput>,
       const dwio::common::ReaderOptions& options);
 
-  virtual ~ReaderBase() {
-    if (thriftMemoryReported_ && thriftSize_ > 0) {
-      pool_.reportExternalFree(thriftSize_);
-    }
-  }
+  virtual ~ReaderBase();
 
   memory::MemoryPool& getMemoryPool() const {
     return pool_;
@@ -219,11 +215,7 @@ class ReaderBase {
   /// back to the pool and reduces the remaining tracked size accordingly.
   /// Called when parts of the footer (e.g. cleared row group columns) are
   /// released early, before ~ReaderBase frees the rest.
-  void releaseThriftBytes(size_t bytes) {
-    VELOX_CHECK_GE(thriftSize_, bytes);
-    pool_.reportExternalFree(bytes);
-    thriftSize_ -= bytes;
-  }
+  void releaseThriftBytes(size_t bytes);
 
  private:
   // Reads and parses file footer.
@@ -308,6 +300,18 @@ ReaderBase::ReaderBase(
     pool_.reportExternalAllocation(thriftSize_);
     thriftMemoryReported_ = true;
   }
+}
+
+ReaderBase::~ReaderBase() {
+  if (thriftMemoryReported_ && thriftSize_ > 0) {
+    pool_.reportExternalFree(thriftSize_);
+  }
+}
+
+void ReaderBase::releaseThriftBytes(size_t bytes) {
+  VELOX_CHECK_GE(thriftSize_, bytes);
+  pool_.reportExternalFree(bytes);
+  thriftSize_ -= bytes;
 }
 
 void ReaderBase::loadFileMetaData() {
@@ -1418,8 +1422,6 @@ class ParquetRowReader::Impl {
           // Measure the columns BEFORE clearing so we can release the matching
           // amount from the pool reservation that ReaderBase reported.
           if (readerBase_->isThriftMemoryReported()) {
-            freedThriftSize +=
-                rowGroups_[i].columns.size() * sizeof(thrift::ColumnChunk);
             for (const auto& column : rowGroups_[i].columns) {
               freedThriftSize +=
                   ColumnChunkMetaDataPtr(&column).calculateColumnMetadataSize();

@@ -18,7 +18,6 @@
 
 #include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/common/compression/Compression.h"
-#include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
 
 namespace facebook::velox::parquet {
 
@@ -75,10 +74,9 @@ class ColumnChunkMetaDataPtr {
   /// This information is optional and may be 0 if omitted.
   int64_t totalUncompressedSize() const;
 
-  /// Returns the estimated dynamically-allocated heap memory reachable from
-  /// this column chunk's thrift representation. Excludes the inline
-  /// thrift::ColumnChunk struct itself; callers that account for the
-  /// containing vector must add sizeof(thrift::ColumnChunk) separately.
+  /// Returns the estimated total bytes held by this column's thrift
+  /// representation: sizeof(thrift::ColumnChunk) plus every dynamically
+  /// allocated vector and string reachable through it.
   size_t calculateColumnMetadataSize() const;
 
  private:

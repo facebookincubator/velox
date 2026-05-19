@@ -33,14 +33,14 @@ size_t keyValueMetadataSize(const std::vector<thrift::KeyValue>& keyValues) {
   return size;
 }
 
-// Returns the dynamically-allocated bytes reachable from `column` BEYOND the
-// inline thrift::ColumnChunk struct. The caller is expected to account for
-// sizeof(thrift::ColumnChunk) when including this column in a vector. Inline
-// sub-structs (thrift::ColumnMetaData, thrift::Statistics) live inside
-// sizeof(ColumnChunk) and are NOT counted again here; only their dynamically
-// allocated payloads (vectors and string buffers) are added.
+// Returns the estimated total bytes held by `column`:
+// sizeof(thrift::ColumnChunk) plus every dynamically allocated vector and
+// string reachable through it. Inline sub-structs (thrift::ColumnMetaData,
+// thrift::Statistics) live inside sizeof(ColumnChunk) and are NOT counted again
+// here; only their dynamically allocated payloads (vectors and string buffers)
+// are added.
 size_t columnMetadataSize(const thrift::ColumnChunk& column) {
-  size_t size = 0;
+  size_t size = sizeof(thrift::ColumnChunk);
   // Heap-backed vectors and the strings they contain.
   size += column.meta_data.encodings.size() * sizeof(thrift::Encoding::type);
   size += column.meta_data.path_in_schema.size() * sizeof(std::string);
@@ -86,7 +86,6 @@ size_t fileMetadataSize(const thrift::FileMetaData& metadata) {
   // Row groups vector heap allocation plus the columns vectors it owns.
   totalSize += metadata.row_groups.size() * sizeof(thrift::RowGroup);
   for (const auto& rowGroup : metadata.row_groups) {
-    totalSize += rowGroup.columns.size() * sizeof(thrift::ColumnChunk);
     for (const auto& column : rowGroup.columns) {
       totalSize += columnMetadataSize(column);
     }

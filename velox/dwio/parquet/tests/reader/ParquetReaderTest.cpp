@@ -2163,15 +2163,16 @@ TEST_F(ParquetReaderTest, thriftMemoryTracking) {
     EXPECT_GT(memoryAfterRowReader, initialUsage);
 
     // The reported footprint must at least cover the FileMetaData struct
-    // itself plus one ColumnChunk per row group * column — anything smaller
+    // itself plus one ColumnChunk per (row group * column) — anything smaller
     // means the estimator is not accounting for the per-row-group payload.
     const auto reportedBytes = memoryAfterRowReader - initialUsage;
     const auto numRowGroups = reader->fileMetaData().numRowGroups();
     EXPECT_GT(numRowGroups, 0);
+    const auto numColumns = sampleSchema()->size();
     EXPECT_GE(
         reportedBytes,
         sizeof(thrift::FileMetaData) +
-            numRowGroups * sizeof(thrift::ColumnChunk));
+            numRowGroups * numColumns * sizeof(thrift::ColumnChunk));
 
     auto result = BaseVector::create(sampleSchema(), 0, leafPool_.get());
     rowReader->next(10, result);
@@ -2182,6 +2183,27 @@ TEST_F(ParquetReaderTest, thriftMemoryTracking) {
   }
 
   // ~ReaderBase() releases the reported memory, returning to baseline.
+  EXPECT_EQ(leafPool_->usedBytes(), initialUsage);
+}
+
+TEST_F(ParquetReaderTest, thriftMemoryNotTrackedByDefault) {
+  // Verifies that the production default (no threshold set) leaves the
+  // pool untouched: no allocation is reported and ~ReaderBase has nothing
+  // to release.
+  const std::string sample(getExampleFilePath("sample.parquet"));
+
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
+  // Default threshold (uint64::max) leaves tracking disabled.
+  const auto initialUsage = leafPool_->usedBytes();
+  {
+    auto reader = createReader(sample, readerOptions);
+    auto rowReaderOpts = getReaderOpts(sampleSchema());
+    rowReaderOpts.setScanSpec(makeScanSpec(sampleSchema()));
+    auto rowReader = reader->createRowReader(rowReaderOpts);
+    EXPECT_EQ(leafPool_->usedBytes(), initialUsage);
+  }
   EXPECT_EQ(leafPool_->usedBytes(), initialUsage);
 }
 
