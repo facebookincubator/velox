@@ -2089,8 +2089,11 @@ void Expr::maybeSetupTracer(
     const int index = instanceCounts[name_]++;
     try {
       outputTracer_ = traceCtx.createExprOutputTracer(op, name_, index);
+      if (vectorFunction_) {
+        traceCtx.maybeActivateIntraExprTracing(op, name_, *vectorFunction_);
+      }
     } catch (const std::exception& e) {
-      LOG(ERROR) << "Failed to create expression output tracer: " << e.what();
+      LOG(ERROR) << "Failed to set up expression tracer: " << e.what();
     }
   }
   for (auto& input : inputs_) {
