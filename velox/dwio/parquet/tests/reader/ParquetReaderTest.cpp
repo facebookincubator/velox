@@ -1902,6 +1902,7 @@ TEST_F(ParquetReaderTest, readerWithSchema) {
   auto buffer = std::make_unique<dwio::common::BufferedInput>(
       file, readerOptions.memoryPool());
   ParquetReader reader(std::move(buffer), readerOptions);
+
   EXPECT_EQ(reader.rowType()->toString(), schema->toString());
 }
 
@@ -2144,8 +2145,9 @@ TEST_F(ParquetReaderTest, thriftMemoryTracking) {
   // the row reader is created and released when the reader is destroyed.
   const std::string sample(getExampleFilePath("sample.parquet"));
 
-  dwio::common::ReaderOptions readerOptions{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   // 1-byte threshold forces memory tracking to engage for any footer.
   readerOptions.setParquetFooterMemoryTrackingThreshold(1);
   const auto initialUsage = leafPool_->usedBytes();
@@ -2190,8 +2192,9 @@ TEST_F(ParquetReaderTest, thriftMemoryReleasedForSkippedRowGroups) {
   const auto rowType = ROW({"id"}, {BIGINT()});
   const std::string sample(getExampleFilePath("multiple_row_groups.parquet"));
 
-  dwio::common::ReaderOptions readerOptions{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   // 1-byte threshold forces memory tracking to engage for any footer.
   readerOptions.setParquetFooterMemoryTrackingThreshold(1);
   const auto initialUsage = leafPool_->usedBytes();

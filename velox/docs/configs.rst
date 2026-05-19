@@ -529,15 +529,15 @@ Spilling
      - bool
      - false
      - Enable the prefix sort or fallback to timsort in spill. The prefix sort is faster than std::sort but requires the
-       memory to build normalized prefix keys,
-           which might have potential risk of running out of server memory.*
-               -spiller_start_partition_bit -
-           integer - 29 -
-           The start partition bit which is used
-                   with `spiller_num_partition_bits` together to calculate the
-                       spilling partition number.*
-               -spiller_num_partition_bits -
-           integer - 3 - The number of bits(N) used to calculate the spilling partition number for hash join and RowNumber: 2 ^ N. At the moment the maximum
+       memory to build normalized prefix keys, which might have potential risk of running out of server memory.
+   * - spiller_start_partition_bit
+     - integer
+     - 29
+     - The start partition bit which is used with `spiller_num_partition_bits` together to calculate the spilling partition number.
+   * - spiller_num_partition_bits
+     - integer
+     - 3
+     - The number of bits (N) used to calculate the spilling partition number for hash join and RowNumber: 2 ^ N. At the moment the maximum
        value is 3, meaning we only support up to 8-way spill partitioning.ing.
    * - testing.spill_pct
      - integer

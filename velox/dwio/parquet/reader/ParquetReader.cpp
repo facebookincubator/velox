@@ -1425,7 +1425,10 @@ class ParquetRowReader::Impl {
                   ColumnChunkMetaDataPtr(&column).calculateColumnMetadataSize();
             }
           }
-          rowGroups_[i].columns.clear();
+          // Swap-with-empty to actually release the vector's buffer; clear()
+          // would only destroy elements while retaining capacity, so the
+          // reported freed bytes would not match the memory actually returned.
+          rowGroups_[i].columns = {};
         }
         if (rowGroupInRange) {
           skippedStrides_++;
