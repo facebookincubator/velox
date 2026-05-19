@@ -165,7 +165,7 @@ class CudfJoinFuzzer : public JoinFuzzerBase {
               referenceResult.value(), plan->outputType(), {result}),
           "Velox and Reference results don't match. Seed: {}, Join type: {}",
           currentSeed_,
-          joinTypeName(joinType));
+          core::JoinTypeName::toName(joinType));
 
       LOG(INFO) << "Result matches with reference DB.";
       stats_->numVerified++;

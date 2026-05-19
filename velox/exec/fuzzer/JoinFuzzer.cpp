@@ -70,6 +70,17 @@ class JoinFuzzer : public JoinFuzzerBase {
             exec::MemoryReclaimer::create())} {
     // Replace base Stats with our extended Stats.
     stats_ = std::make_unique<Stats>();
+
+    // Register Hive connector for table scan plan variations.
+    std::unordered_map<std::string, std::string> hiveConfig = {
+        {connector::hive::HiveConfig::kNumCacheFileHandles, "1000"}};
+    connector::hive::HiveConnectorFactory factory;
+    auto hiveConnector = factory.newConnector(
+        test::kHiveConnectorId,
+        std::make_shared<config::ConfigBase>(std::move(hiveConfig)));
+    connector::ConnectorRegistry::global().insert(
+        hiveConnector->connectorId(), hiveConnector);
+
     dwrf::registerDwrfReaderFactory();
     dwrf::registerDwrfWriterFactory();
   }
@@ -116,11 +127,10 @@ class JoinFuzzer : public JoinFuzzerBase {
       std::stringstream out;
       out << "\nTotal iterations tested: " << numIterations << std::endl;
       out << "Total iterations verified against reference DB: "
-          << JoinFuzzerBase::makePercentageString(numVerified, numIterations)
+          << makePercentageString(numVerified, numIterations)
           << std::endl;
       out << "Total iterations testing cross product: "
-          << JoinFuzzerBase::makePercentageString(
-                 numCrossProduct, numIterations)
+          << makePercentageString(numCrossProduct, numIterations)
           << std::endl;
       return out.str();
     }

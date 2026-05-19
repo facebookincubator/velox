@@ -18,8 +18,6 @@
 
 #include <boost/random/uniform_int_distribution.hpp>
 #include "velox/common/file/FileSystems.h"
-#include "velox/connectors/ConnectorRegistry.h"
-#include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
 
 DEFINE_int32(steps, 10, "Number of plans to generate and test.");
@@ -59,7 +57,7 @@ bool isDone(size_t i, T startTime) {
 
 } // namespace
 
-std::string JoinFuzzerBase::makePercentageString(size_t value, size_t total) {
+std::string makePercentageString(size_t value, size_t total) {
   return fmt::format("{} ({:.2f}%)", value, (double)value / total * 100);
 }
 
@@ -80,17 +78,6 @@ JoinFuzzerBase::JoinFuzzerBase(
       referenceQueryRunner_{std::move(referenceQueryRunner)},
       stats_{std::make_unique<Stats>()} {
   filesystems::registerLocalFileSystem();
-
-  std::unordered_map<std::string, std::string> hiveConfig = {
-      {connector::hive::HiveConfig::kNumCacheFileHandles, "1000"}};
-
-  connector::hive::HiveConnectorFactory factory;
-  auto hiveConnector = factory.newConnector(
-      test::kHiveConnectorId,
-      std::make_shared<config::ConfigBase>(std::move(hiveConfig)));
-  connector::ConnectorRegistry::global().insert(
-      hiveConnector->connectorId(), hiveConnector);
-
   seed(initialSeed);
 }
 
@@ -121,7 +108,10 @@ int32_t JoinFuzzerBase::randInt(int32_t min, int32_t max) {
 }
 
 core::JoinType JoinFuzzerBase::pickJoinType() {
-  const auto& joinTypes = getSupportedJoinTypes();
+  const auto joinTypes = getSupportedJoinTypes();
+  VELOX_USER_CHECK(
+      !joinTypes.empty(),
+      "No join types are supported by both the target executor and the reference database.");
   const size_t idx = randInt(0, joinTypes.size() - 1);
   return joinTypes[idx];
 }
@@ -154,31 +144,6 @@ std::vector<core::JoinType> JoinFuzzerBase::getSupportedJoinTypes() const {
     }
   }
   return supportedTypes;
-}
-
-std::string JoinFuzzerBase::joinTypeName(core::JoinType joinType) const {
-  switch (joinType) {
-    case core::JoinType::kInner:
-      return "INNER";
-    case core::JoinType::kLeft:
-      return "LEFT";
-    case core::JoinType::kRight:
-      return "RIGHT";
-    case core::JoinType::kFull:
-      return "FULL";
-    case core::JoinType::kLeftSemiFilter:
-      return "LEFT SEMI FILTER";
-    case core::JoinType::kLeftSemiProject:
-      return "LEFT SEMI PROJECT";
-    case core::JoinType::kRightSemiFilter:
-      return "RIGHT SEMI FILTER";
-    case core::JoinType::kRightSemiProject:
-      return "RIGHT SEMI PROJECT";
-    case core::JoinType::kAnti:
-      return "ANTI";
-    default:
-      return "UNKNOWN";
-  }
 }
 
 std::vector<TypePtr> JoinFuzzerBase::generateJoinKeyTypes(int32_t numKeys) {
@@ -318,7 +283,7 @@ std::string JoinFuzzerBase::Stats::toString() const {
   std::stringstream out;
   out << "\nTotal iterations tested: " << numIterations << std::endl;
   out << "Total iterations verified against reference DB: "
-      << JoinFuzzerBase::makePercentageString(numVerified, numIterations)
+      << makePercentageString(numVerified, numIterations)
       << std::endl;
   return out.str();
 }
@@ -336,7 +301,8 @@ void JoinFuzzerBase::go() {
 
     LOG(WARNING) << "==============================> Started iteration "
                  << stats_->numIterations << " (seed: " << currentSeed_
-                 << ", join type: " << joinTypeName(joinType) << ")";
+                 << ", join type: " << core::JoinTypeName::toName(joinType)
+                 << ")";
 
     verify(joinType);
 

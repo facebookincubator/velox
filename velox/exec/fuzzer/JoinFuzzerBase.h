@@ -21,6 +21,9 @@
 
 namespace facebook::velox::exec {
 
+/// Helper for formatting percentages in stats output.
+std::string makePercentageString(size_t value, size_t total);
+
 /// Abstract base class for join fuzzers that provides common functionality
 /// for generating random join inputs and verifying results against a reference
 /// database.
@@ -56,9 +59,6 @@ class JoinFuzzerBase {
 
   /// Runs one test iteration for the given join type.
   virtual void verify(core::JoinType joinType) = 0;
-
-  /// Returns a string representation of the join type for logging.
-  virtual std::string joinTypeName(core::JoinType joinType) const;
 
   // === Shared utilities ===
 
@@ -135,9 +135,6 @@ class JoinFuzzerBase {
   virtual std::unique_ptr<Stats> makeStats() {
     return std::make_unique<Stats>();
   }
-
-  /// Helper for formatting percentages in stats output.
-  static std::string makePercentageString(size_t value, size_t total);
 
   std::unique_ptr<Stats> stats_;
 };
