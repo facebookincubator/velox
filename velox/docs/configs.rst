@@ -538,7 +538,7 @@ Spilling
      - integer
      - 3
      - The number of bits (N) used to calculate the spilling partition number for hash join and RowNumber: 2 ^ N. At the moment the maximum
-       value is 3, meaning we only support up to 8-way spill partitioning.ing.
+       value is 3, meaning we only support up to 8-way spill partitioning.
    * - testing.spill_pct
      - integer
      - 0

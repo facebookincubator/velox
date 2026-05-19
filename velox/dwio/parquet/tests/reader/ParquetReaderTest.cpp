@@ -2187,24 +2187,28 @@ TEST_F(ParquetReaderTest, thriftMemoryTracking) {
 }
 
 TEST_F(ParquetReaderTest, thriftMemoryNotTrackedByDefault) {
-  // Verifies that the production default (no threshold set) leaves the
-  // pool untouched: no allocation is reported and ~ReaderBase has nothing
-  // to release.
+  // Verifies that the production default (no threshold set) does not engage
+  // the external allocation tracking path: no reportExternalAllocation is
+  // made, and ~ReaderBase has nothing to release.
   const std::string sample(getExampleFilePath("sample.parquet"));
 
   dwio::common::ReaderOptions readerOptions(leafPool_.get());
   readerOptions.setDataIoStats(dataIoStats_);
   readerOptions.setMetadataIoStats(metadataIoStats_);
   // Default threshold (uint64::max) leaves tracking disabled.
-  const auto initialUsage = leafPool_->usedBytes();
+  const auto initialExternalAllocs = leafPool_->stats().numExternalAllocs;
   {
     auto reader = createReader(sample, readerOptions);
     auto rowReaderOpts = getReaderOpts(sampleSchema());
     rowReaderOpts.setScanSpec(makeScanSpec(sampleSchema()));
     auto rowReader = reader->createRowReader(rowReaderOpts);
-    EXPECT_EQ(leafPool_->usedBytes(), initialUsage);
+    // No external allocation was reported by the Thrift footer path even
+    // though the reader and row reader were fully constructed.
+    EXPECT_EQ(leafPool_->stats().numExternalAllocs, initialExternalAllocs);
   }
-  EXPECT_EQ(leafPool_->usedBytes(), initialUsage);
+  // And no external free either, since none was reported.
+  EXPECT_EQ(leafPool_->stats().numExternalAllocs, initialExternalAllocs);
+  EXPECT_EQ(leafPool_->stats().numExternalFrees, 0);
 }
 
 TEST_F(ParquetReaderTest, thriftMemoryReleasedForSkippedRowGroups) {
