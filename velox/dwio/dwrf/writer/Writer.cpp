@@ -175,7 +175,8 @@ Writer::Writer(
       pool,
       options.sessionTimezone,
       options.adjustTimestampToTimezone,
-      std::move(handler));
+      std::move(handler),
+      options.memoryBudget);
   auto& context = writerBase_->getContext();
   VELOX_CHECK_EQ(
       context.getTotalMemoryUsage(),

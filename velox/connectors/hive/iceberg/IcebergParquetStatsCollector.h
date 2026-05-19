@@ -24,6 +24,12 @@
 
 namespace facebook::velox::connector::hive::iceberg {
 
+/// Aggregates per-file Iceberg column statistics (column sizes, value counts,
+/// null/NaN counts, lower/upper bounds) from Parquet row group metadata
+/// produced by the Parquet writer. One instance is created per IcebergDataSink
+/// and reused across all writers; aggregate() is invoked after each Parquet
+/// file is closed. Also exposes the Parquet field IDs for the input columns
+/// so they can be threaded into the writer's column metadata.
 class IcebergParquetStatsCollector {
  public:
   explicit IcebergParquetStatsCollector(

@@ -16,17 +16,19 @@
 #pragma once
 
 #include "folly/CancellationToken.h"
-#include "velox/common/Enums.h"
+#include "velox/common/EnumDeclare.h"
 #include "velox/common/base/AsyncSource.h"
 #include "velox/common/base/PrefixSortConfig.h"
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/base/SpillConfig.h"
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/caching/ScanTracker.h"
+#include "velox/common/config/ConfigProvider.h"
 #include "velox/common/file/TokenProvider.h"
 #include "velox/common/future/VeloxPromise.h"
 #include "velox/core/ExpressionEvaluator.h"
 #include "velox/core/QueryConfig.h"
+#include "velox/core/ScanBatchEvent.h"
 #include "velox/exec/SpillStats.h"
 #include "velox/type/Filter.h"
 #include "velox/vector/ComplexVector.h"
@@ -281,6 +283,17 @@ class DataSource {
   /// Returns the number of input rows processed so far.
   virtual uint64_t getCompletedRows() = 0;
 
+  /// Stores a callback to fire after each scan batch.
+  void setScanBatchCallback(core::ScanBatchCallback callback) {
+    scanBatchCallback_ = std::move(callback);
+  }
+
+  /// Called by TableScan after each non-empty batch with generic scan stats.
+  /// Default is a no-op. Subclasses should override to create a
+  /// connector-specific event (e.g., FileScanBatchEvent), enrich it with
+  /// connector-specific fields, and call scanBatchCallback_.
+  virtual void fireScanBatchCallback(core::ScanBatchEvent /*event*/) {}
+
   virtual std::unordered_map<std::string, RuntimeMetric> getRuntimeStats() {
     return {};
   }
@@ -325,6 +338,9 @@ class DataSource {
   /// connector implementation decides how to support the cancellation if
   /// needed.
   virtual void cancel() {}
+
+ protected:
+  core::ScanBatchCallback scanBatchCallback_;
 };
 
 class IndexSource {
@@ -413,15 +429,6 @@ class IndexSource {
   virtual std::shared_ptr<ResultIterator> lookup(const Request& request) = 0;
 
   virtual std::unordered_map<std::string, RuntimeMetric> runtimeStats() = 0;
-
-  /// Defines stat names for IndexSource operator stats tracking.
-  static constexpr std::string_view kOutputPositions{
-      "indexSourceOutputPositions"};
-  static constexpr std::string_view kOutputBytes{"indexSourceOutputBytes"};
-  static constexpr std::string_view kOutputVectors{"indexSourceOutputVectors"};
-  static constexpr std::string_view kInputPositions{
-      "indexSourceInputPositions"};
-  static constexpr std::string_view kInputBytes{"indexSourceInputBytes"};
 };
 
 /// Collection of context data for use in a DataSource, IndexSource or DataSink.
@@ -541,10 +548,12 @@ class ConnectorQueryCtx {
     return cancellationToken_;
   }
 
+  /// Deprecated: Use FileConfig::kSelectiveNimbleReaderEnabledSession instead.
   bool selectiveNimbleReaderEnabled() const {
     return selectiveNimbleReaderEnabled_;
   }
 
+  /// Deprecated: Use connector session properties instead.
   void setSelectiveNimbleReaderEnabled(bool value) {
     selectiveNimbleReaderEnabled_ = value;
   }
@@ -620,6 +629,12 @@ class Connector {
 
   const std::shared_ptr<const config::ConfigBase>& connectorConfig() const {
     return config_;
+  }
+
+  /// Returns the config provider for this connector's session properties,
+  /// or nullptr if the connector has no session-overridable properties.
+  virtual const config::ConfigProvider* configProvider() const {
+    return nullptr;
   }
 
   /// Returns true if this connector would accept a filter dynamically

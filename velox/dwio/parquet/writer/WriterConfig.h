@@ -18,10 +18,13 @@
 
 namespace facebook::velox::parquet {
 
-/// Lightweight config constants for the Parquet writer.
-/// Separated from Writer.h to allow access without pulling in Arrow headers.
-/// WriterOptions inherits from this struct, so all existing code using
-/// WriterOptions::kParquet* constants continues to work.
+/// Config constants for the Parquet writer.
+///
+/// IMPORTANT: These constants are kept in a separate header rather than in
+/// Writer.h because Gluten's WholeStageResultIterator.cc needs access to these
+/// configuration constants but cannot include Writer.h due to Arrow header
+/// conflicts. This separation allows external code to reference these constants
+/// without pulling in Arrow dependencies.
 struct WriterConfig {
   // Parsing session and hive configs.
 

@@ -16,9 +16,6 @@
 
 #pragma once
 
-#include <cstdint>
-#include <string>
-
 namespace facebook::velox::dwio::common {
 
 /// File format specific metadata returned when a writer is closed.

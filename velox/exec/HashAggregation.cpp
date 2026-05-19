@@ -278,7 +278,7 @@ void HashAggregation::resetPartialOutputIfNeed() {
         std::string(HashAggregation::kFlushTimes), RuntimeCounter(1));
     lockedStats->addRuntimeStat(
         std::string(HashAggregation::kPartialAggregationPct),
-        RuntimeCounter(static_cast<int64_t>(aggregationPct)));
+        RuntimeCounter(saturateCast(aggregationPct)));
   }
   groupingSet_->resetTable(/*freeTable=*/false);
   partialFull_ = false;
@@ -302,9 +302,6 @@ void HashAggregation::maybeIncreasePartialAggregationMemoryUsage(
            maxExtendedPartialAggregationMemoryUsage_)) {
     groupingSet_->abandonPartialAggregation();
     pool()->release();
-    addRuntimeStat(
-        std::string(HashAggregation::kAbandonedPartialAggregation),
-        RuntimeCounter(1));
     abandonedPartialAggregation_ = true;
     return;
   }
@@ -343,6 +340,9 @@ RowVectorPtr HashAggregation::getOutput() {
     }
     prepareOutput(input_->size());
     groupingSet_->toIntermediate(input_, output_);
+    addRuntimeStat(
+        std::string(HashAggregation::kAbandonedPartialAggregationRows),
+        RuntimeCounter(input_->size()));
     numOutputRows_ += input_->size();
     input_ = nullptr;
     return output_;
@@ -354,7 +354,7 @@ RowVectorPtr HashAggregation::getOutput() {
   // - distinct aggregation has new keys;
   // - running in partial streaming mode and have some output ready.
   if (!noMoreInput_ && !partialFull_ && !newDistincts_ &&
-      !groupingSet_->hasOutput()) {
+      !groupingSet_->hasDrainedNewGroups() && !groupingSet_->hasOutput()) {
     input_ = nullptr;
     return nullptr;
   }
@@ -389,6 +389,15 @@ RowVectorPtr HashAggregation::getOutput() {
 RowVectorPtr HashAggregation::getDistinctOutput() {
   VELOX_CHECK(isDistinct_);
   VELOX_CHECK(!finished_);
+
+  if (groupingSet_->hasDrainedNewGroups()) {
+    auto size = groupingSet_->drainedNewGroupsCount();
+    prepareOutput(size);
+    groupingSet_->extractDrainedNewGroups(output_);
+    numOutputRows_ += size;
+    resetPartialOutputIfNeed();
+    return output_;
+  }
 
   if (newDistincts_) {
     VELOX_CHECK_NOT_NULL(input_);

@@ -21,6 +21,7 @@
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
+#include "velox/type/TypeSerde.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 #include <gtest/gtest.h>
@@ -534,6 +535,22 @@ TEST_F(PlanNodeSerdeTest, hashJoin) {
                  "", // no filter
                  {"t0", "t1", "u2", "t2"},
                  core::JoinType::kLeft)
+             .planNode();
+
+  testSerde(plan);
+
+  // nullAsValue join (used for EXCEPT/INTERSECT).
+  plan = PlanBuilder(planNodeIdGenerator)
+             .values({probe})
+             .hashJoin(
+                 {"t0"},
+                 {"u0"},
+                 PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+                 "",
+                 {"t0", "t1"},
+                 core::JoinType::kAnti,
+                 /*nullAware=*/false,
+                 /*nullAsValue=*/true)
              .planNode();
 
   testSerde(plan);

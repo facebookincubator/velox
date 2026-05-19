@@ -321,6 +321,9 @@ bool testStringFilter(
 bool testBoolFilter(
     const common::Filter* filter,
     dwio::common::BooleanColumnStatistics* boolStats) {
+  if (!boolStats) {
+    return true;
+  }
   const auto trueCount = boolStats->getTrueCount();
   const auto falseCount = boolStats->getFalseCount();
   if (trueCount.has_value() && falseCount.has_value()) {

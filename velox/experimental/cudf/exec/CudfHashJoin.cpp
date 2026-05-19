@@ -21,6 +21,7 @@
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
+#include "velox/experimental/cudf/expression/AstExpressionUtils.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/core/PlanNode.h"
@@ -40,6 +41,7 @@
 #include <cudf/join/mixed_join.hpp>
 #include <cudf/null_mask.hpp>
 #include <cudf/reduction.hpp>
+#include <cudf/reshape.hpp>
 #include <cudf/scalar/scalar_factories.hpp>
 #include <cudf/search.hpp>
 #include <cudf/stream_compaction.hpp>
@@ -78,7 +80,7 @@ cudf::table_view createExtendedTableView(
 
 } // namespace
 
-void CudfHashJoinProbe::close() {
+void CudfHashJoinProbe::doClose() {
   Operator::close();
   filterEvaluator_.reset();
   scalars_.clear();
@@ -140,26 +142,19 @@ CudfHashJoinBuild::CudfHashJoinBuild(
     exec::DriverCtx* driverCtx,
     std::shared_ptr<const core::HashJoinNode> joinNode)
     // TODO check outputType should be set or not?
-    : exec::Operator(
+    : CudfOperatorBase(
+          operatorId,
           driverCtx,
-          nullptr, // joinNode->sources(),
-          operatorId,
+          nullptr, // outputType
           joinNode->id(),
-          "CudfHashJoinBuild"),
-      NvtxHelper(
+          "CudfHashJoinBuild",
           nvtx3::rgb{65, 105, 225}, // Royal Blue
-          operatorId,
-          fmt::format("[{}]", joinNode->id())),
-      joinNode_(joinNode) {
-  if (CudfConfig::getInstance().debugEnabled) {
-    VLOG(2) << "CudfHashJoinBuild constructor";
-  }
-}
+          NvtxMethodFlag::kAll,
+          std::nullopt, // spillConfig
+          joinNode),
+      joinNode_(joinNode) {}
 
-void CudfHashJoinBuild::addInput(RowVectorPtr input) {
-  if (CudfConfig::getInstance().debugEnabled) {
-    VLOG(2) << "Calling CudfHashJoinBuild::addInput";
-  }
+void CudfHashJoinBuild::doAddInput(RowVectorPtr input) {
   // Queue inputs, process all at once.
   if (input->size() > 0) {
     auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
@@ -177,21 +172,14 @@ void CudfHashJoinBuild::addInput(RowVectorPtr input) {
 }
 
 bool CudfHashJoinBuild::needsInput() const {
-  if (CudfConfig::getInstance().debugEnabled) {
-    VLOG(2) << "Calling CudfHashJoinBuild::needsInput";
-  }
   return !noMoreInput_;
 }
 
-RowVectorPtr CudfHashJoinBuild::getOutput() {
+RowVectorPtr CudfHashJoinBuild::doGetOutput() {
   return nullptr;
 }
 
-void CudfHashJoinBuild::noMoreInput() {
-  if (CudfConfig::getInstance().debugEnabled) {
-    VLOG(2) << "Calling CudfHashJoinBuild::noMoreInput";
-  }
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+void CudfHashJoinBuild::doNoMoreInput() {
   Operator::noMoreInput();
   std::vector<ContinuePromise> promises;
   std::vector<std::shared_ptr<exec::Driver>> peers;
@@ -218,9 +206,11 @@ void CudfHashJoinBuild::noMoreInput() {
   };
 
   if (CudfConfig::getInstance().debugEnabled) {
-    VLOG(1) << "CudfHashJoinBuild: build batches";
-    VLOG(1) << "Build batches number of columns: "
-            << inputs_[0]->getTableView().num_columns();
+    VLOG(1) << "CudfHashJoinBuild: build batches count: " << inputs_.size();
+    if (!inputs_.empty()) {
+      VLOG(1) << "Build batches number of columns: "
+              << inputs_[0]->getTableView().num_columns();
+    }
     for (auto i = 0; i < inputs_.size(); i++) {
       VLOG(1) << "Build batch " << i
               << ": number of rows: " << inputs_[i]->getTableView().num_rows();
@@ -238,7 +228,7 @@ void CudfHashJoinBuild::noMoreInput() {
   for (auto const& tbl : tbls) {
     VELOX_CHECK_NOT_NULL(tbl);
   }
-  if (CudfConfig::getInstance().debugEnabled) {
+  if (CudfConfig::getInstance().debugEnabled && !tbls.empty()) {
     VLOG(1) << "Build table number of columns: " << tbls[0]->num_columns();
     for (auto i = 0; i < tbls.size(); i++) {
       VLOG(1) << "Build table " << i
@@ -317,23 +307,20 @@ CudfHashJoinProbe::CudfHashJoinProbe(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
     std::shared_ptr<const core::HashJoinNode> joinNode)
-    : exec::Operator(
+    : CudfOperatorBase(
+          operatorId,
           driverCtx,
           joinNode->outputType(),
-          operatorId,
           joinNode->id(),
-          "CudfHashJoinProbe"),
-      NvtxHelper(
+          "CudfHashJoinProbe",
           nvtx3::rgb{0, 128, 128}, // Teal
-          operatorId,
-          fmt::format("[{}]", joinNode->id())),
+          NvtxMethodFlag::kAll,
+          std::nullopt, // spillConfig
+          joinNode),
       joinNode_(joinNode),
       probeType_(joinNode_->sources()[0]->outputType()),
       buildType_(joinNode_->sources()[1]->outputType()),
       cudaEvent_(std::make_unique<CudaEvent>(cudaEventDisableTiming)) {
-  if (CudfConfig::getInstance().debugEnabled) {
-    VLOG(2) << "CudfHashJoinProbe constructor";
-  }
   auto const& leftKeys = joinNode_->leftKeys(); // probe keys
   auto const& rightKeys = joinNode_->rightKeys(); // build keys
 
@@ -418,27 +405,59 @@ CudfHashJoinProbe::CudfHashJoinProbe(
               << rightColumnIndicesToGather_[i];
     }
   }
+}
 
-  // Setup filter in case it exists
-  if (joinNode_->filter()) {
-    // simplify expression
-    exec::ExprSet exprs({joinNode_->filter()}, operatorCtx_->execCtx());
-    VELOX_CHECK_EQ(exprs.exprs().size(), 1);
+void CudfHashJoinProbe::initialize() {
+  Operator::initialize();
 
-    // Create a reusable evaluator for the filter column. This is expensive to
-    // build, and the expression + input schema are stable for the lifetime of
-    // the operator instance.
-    std::vector<velox::RowTypePtr> filterRowTypes{probeType_, buildType_};
-    filterEvaluator_ = createCudfExpression(
-        exprs.exprs()[0],
-        facebook::velox::type::concatRowTypes(filterRowTypes));
+  if (!joinNode_->filter()) {
+    return;
+  }
 
-    // We don't need to get tables that contain conditional comparison columns
-    // We'll pass the entire table. The ast will handle finding the required
-    // columns. This is required because we build the ast with whole row schema
-    // and the column locations in that schema translate to column locations
-    // in whole tables
+  // simplify expression
+  exec::ExprSet exprs({joinNode_->filter()}, operatorCtx_->execCtx());
+  VELOX_CHECK_EQ(exprs.exprs().size(), 1);
 
+  // For now we disable AST-based filtering (and force precomputation)
+  // if the filter expression contains decimal types, using the same
+  // shallow search as used for regular expression evaluation.
+  if (containsDecimalType(exprs.exprs()[0], false)) {
+    useAstFilter_ = false;
+  }
+
+  // Validate AST filtering for this join type now to avoid run-time error.
+  if (joinNode_->isRightSemiFilterJoin() || joinNode_->isLeftSemiFilterJoin() ||
+      joinNode_->isAntiJoin()) {
+    VELOX_CHECK(
+        useAstFilter_,
+        "AST expression evaluation must be enabled for semi-filter and anti joins.");
+  }
+
+  // Create a reusable evaluator for the filter column. This is expensive to
+  // build, and the expression + input schema are stable for the lifetime of
+  // the operator instance.
+  std::vector<velox::RowTypePtr> filterRowTypes{probeType_, buildType_};
+  filterEvaluator_ = createCudfExpression(
+      exprs.exprs()[0], facebook::velox::type::concatRowTypes(filterRowTypes));
+
+  // Check if the filter expression spans both join sides (e.g., switch
+  // expressions referencing columns from both probe and build). If so, we
+  // cannot use AST-based filtering and must fall back to filterEvaluator_.
+  if (hasNonAstSubexprSpanningBothSides(
+          exprs.exprs()[0], probeType_, buildType_)) {
+    VLOG(1) << "Filter expression spans both join sides, using "
+               "filterEvaluator_ instead of AST";
+    useAstFilter_ = false;
+    return;
+  }
+
+  // We don't need to get tables that contain conditional comparison columns
+  // We'll pass the entire table. The ast will handle finding the required
+  // columns. This is required because we build the ast with whole row schema
+  // and the column locations in that schema translate to column locations
+  // in whole tables
+
+  if (useAstFilter_) {
     // create ast tree
     if (joinNode_->isRightJoin() || joinNode_->isRightSemiFilterJoin()) {
       createAstTree(
@@ -463,16 +482,13 @@ CudfHashJoinProbe::CudfHashJoinProbe(
 }
 
 bool CudfHashJoinProbe::needsInput() const {
-  if (CudfConfig::getInstance().debugEnabled) {
-    VLOG(2) << "Calling CudfHashJoinProbe::needsInput";
-  }
   if (joinNode_->isRightSemiFilterJoin()) {
     return !noMoreInput_;
   }
   return !noMoreInput_ && !finished_ && input_ == nullptr;
 }
 
-void CudfHashJoinProbe::addInput(RowVectorPtr input) {
+void CudfHashJoinProbe::doAddInput(RowVectorPtr input) {
   if (skipInput_) {
     VELOX_CHECK_NULL(input_);
     return;
@@ -500,11 +516,7 @@ void CudfHashJoinProbe::addInput(RowVectorPtr input) {
   }
 }
 
-void CudfHashJoinProbe::noMoreInput() {
-  if (CudfConfig::getInstance().debugEnabled) {
-    VLOG(2) << "Calling CudfHashJoinProbe::noMoreInput";
-  }
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+void CudfHashJoinProbe::doNoMoreInput() {
   Operator::noMoreInput();
   if (!joinNode_->isRightJoin() && !joinNode_->isRightSemiFilterJoin() &&
       !joinNode_->isFullJoin()) {
@@ -763,7 +775,8 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::innerJoin(
   // Precompute left (probe) table columns if needed (once, outside loop)
   std::vector<ColumnOrView> leftPrecomputed;
   cudf::table_view extendedLeftView = leftTableView;
-  if (joinNode_->filter() && !leftPrecomputeInstructions_.empty()) {
+  if (joinNode_->filter() && useAstFilter_ &&
+      !leftPrecomputeInstructions_.empty()) {
     auto leftColumnViews = tableViewToColumnViews(leftTableView);
     leftPrecomputed = precomputeSubexpressions(
         leftColumnViews,
@@ -780,7 +793,8 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::innerJoin(
 
     // Use cached precomputed columns for right (build) table
     cudf::table_view extendedRightView =
-        (joinNode_->filter() && !rightPrecomputeInstructions_.empty())
+        (joinNode_->filter() && useAstFilter_ &&
+         !rightPrecomputeInstructions_.empty())
         ? cachedExtendedRightViews_[i]
         : rightTableView;
 
@@ -809,15 +823,35 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::innerJoin(
     std::vector<std::unique_ptr<cudf::column>> joinedCols;
 
     if (joinNode_->filter()) {
-      cudfOutputs.push_back(filteredOutputIndices(
-          leftTableView,
-          leftIndicesCol,
-          rightTableView,
-          rightIndicesCol,
-          extendedLeftView,
-          extendedRightView,
-          cudf::join_kind::INNER_JOIN,
-          stream));
+      if (useAstFilter_) {
+        cudfOutputs.push_back(filteredOutputIndices(
+            leftTableView,
+            leftIndicesCol,
+            rightTableView,
+            rightIndicesCol,
+            extendedLeftView,
+            extendedRightView,
+            cudf::join_kind::INNER_JOIN,
+            stream));
+      } else {
+        auto filterFunc =
+            [stream](
+                std::vector<std::unique_ptr<cudf::column>>&& joinedCols,
+                cudf::column_view filterColumn) {
+              auto filterTable =
+                  std::make_unique<cudf::table>(std::move(joinedCols));
+              auto filteredTable = cudf::apply_boolean_mask(
+                  *filterTable, filterColumn, stream, get_output_mr());
+              return filteredTable->release();
+            };
+        cudfOutputs.push_back(filteredOutput(
+            leftTableView,
+            leftIndicesCol,
+            rightTableView,
+            rightIndicesCol,
+            filterFunc,
+            stream));
+      }
     } else {
       cudfOutputs.push_back(unfilteredOutput(
           leftTableView,
@@ -884,15 +918,35 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::leftJoin(
     std::vector<std::unique_ptr<cudf::column>> joinedCols;
 
     if (joinNode_->filter()) {
-      cudfOutputs.push_back(filteredOutputIndices(
-          leftTableView,
-          leftIndicesCol,
-          rightTableView,
-          rightIndicesCol,
-          extendedLeftView,
-          extendedRightView,
-          cudf::join_kind::LEFT_JOIN,
-          stream));
+      if (useAstFilter_) {
+        cudfOutputs.push_back(filteredOutputIndices(
+            leftTableView,
+            leftIndicesCol,
+            rightTableView,
+            rightIndicesCol,
+            extendedLeftView,
+            extendedRightView,
+            cudf::join_kind::LEFT_JOIN,
+            stream));
+      } else {
+        auto filterFunc =
+            [stream](
+                std::vector<std::unique_ptr<cudf::column>>&& joinedCols,
+                cudf::column_view filterColumn) {
+              auto filterTable =
+                  std::make_unique<cudf::table>(std::move(joinedCols));
+              auto filteredTable = cudf::apply_boolean_mask(
+                  *filterTable, filterColumn, stream, get_output_mr());
+              return filteredTable->release();
+            };
+        cudfOutputs.push_back(filteredOutput(
+            leftTableView,
+            leftIndicesCol,
+            rightTableView,
+            rightIndicesCol,
+            filterFunc,
+            stream));
+      }
     } else {
       cudfOutputs.push_back(unfilteredOutput(
           leftTableView,
@@ -1055,6 +1109,11 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::fullJoin(
   auto& rightTables = hashObject_.value().first;
   auto& hbs = hashObject_.value().second;
 
+  // For now, AST support is necessary to filter join output
+  if (joinNode_->filter() && !useAstFilter_) {
+    VELOX_NYI("Full join requires AST support for filtering");
+  }
+
   for (auto i = 0; i < rightTables.size(); i++) {
     auto rightTableView = rightTables[i]->view();
     auto& hb = hbs[i];
@@ -1213,7 +1272,6 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::leftSemiFilterJoin(
       cudf::filtered_join filter_join(
           rightTableView.select(rightKeyIndices_),
           cudf::null_equality::UNEQUAL,
-          cudf::set_as_build_table::RIGHT,
           stream);
       leftJoinIndices = filter_join.semi_join(
           leftTableView.select(leftKeyIndices_), stream, get_temp_mr());
@@ -1280,6 +1338,62 @@ std::unique_ptr<cudf::column> applyNullMask(
   // value
   return cudf::copy_if_else(nullScalar, col, nullMask, stream, mr);
 }
+
+/// Get row indices where mask is true.
+/// Returns a column of size_type indices.
+std::unique_ptr<cudf::column> getIndicesWhere(
+    cudf::column_view mask,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  // Create sequence [0, 1, 2, ..., mask.size()-1]
+  auto seq = cudf::sequence(
+      mask.size(),
+      cudf::numeric_scalar<cudf::size_type>(0, true, stream, mr),
+      cudf::numeric_scalar<cudf::size_type>(1, true, stream, mr),
+      stream,
+      mr);
+
+  // Filter to keep only indices where mask is true
+  auto indicesTable = cudf::apply_boolean_mask(
+      cudf::table_view{{seq->view()}}, mask, stream, mr);
+
+  return std::move(indicesTable->release()[0]);
+}
+
+/// Create cross-product of two index columns.
+/// Given left = [a, b, c] and right = [x, y], produces:
+///   leftOut = [a, a, b, b, c, c]
+///   rightOut = [x, y, x, y, x, y]
+/// Uses cudf::repeat for left (repeat each element) and cudf::tile for right.
+std::pair<std::unique_ptr<cudf::column>, std::unique_ptr<cudf::column>>
+createCrossProductIndices(
+    cudf::column_view leftIndices,
+    cudf::column_view rightIndices,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  auto numLeft = leftIndices.size();
+  auto numRight = rightIndices.size();
+
+  if (numLeft == 0 || numRight == 0) {
+    // Return empty columns
+    auto emptyLeft = cudf::make_empty_column(cudf::type_id::INT32);
+    auto emptyRight = cudf::make_empty_column(cudf::type_id::INT32);
+    return {std::move(emptyLeft), std::move(emptyRight)};
+  }
+
+  // Repeat each left element numRight times: [a,a,b,b,c,c]
+  auto leftRepeated =
+      cudf::repeat(cudf::table_view{{leftIndices}}, numRight, stream, mr);
+
+  // Tile the right indices numLeft times: [x,y,x,y,x,y]
+  auto rightTiled =
+      cudf::tile(cudf::table_view{{rightIndices}}, numLeft, stream, mr);
+
+  return {
+      std::move(leftRepeated->release()[0]),
+      std::move(rightTiled->release()[0])};
+}
+
 } // namespace
 
 // LEFT SEMI PROJECT returns all probe rows with a boolean "match" column
@@ -1305,11 +1419,21 @@ CudfHashJoinProbe::leftSemiProjectJoin(
     rmm::cuda_stream_view stream) {
   std::vector<std::unique_ptr<cudf::table>> cudfOutputs;
 
+  // For now, AST support is necessary to filter join output
+  if (joinNode_->filter() && !useAstFilter_) {
+    VELOX_NYI("Left semi project join requires AST support for filtering");
+  }
+
   auto& rightTables = hashObject_.value().first;
   auto& hbs = hashObject_.value().second;
   auto numProbeRows = leftTableView.num_rows();
 
-  const bool isNullAware = joinNode_->isNullAware() && !joinNode_->filter();
+  const bool isNullAware = joinNode_->isNullAware();
+  const bool hasFilter = joinNode_->filter() != nullptr;
+  // For null-aware without filter, we use a different code path (existing)
+  // For null-aware with filter, we need to compute indeterminate cases
+  const bool isNullAwareWithFilter = isNullAware && hasFilter;
+  const bool isNullAwareWithoutFilter = isNullAware && !hasFilter;
 
   // Create probe row indices sequence: [0, 1, 2, ..., numProbeRows-1]
   // Used with cudf::contains to create the match column
@@ -1427,10 +1551,203 @@ CudfHashJoinProbe::leftSemiProjectJoin(
     matchCol = std::move(updatedMatch);
   }
 
-  // Step 5: For null-aware mode (IN semantics), apply null mask to match
-  // column. Empty build: always FALSE. Otherwise: NULL probe key or (no match
-  // AND build has nulls) yields NULL; matched rows yield TRUE; else FALSE.
-  if (isNullAware) {
+  // Step 5: Handle null-aware semantics (IN vs EXISTS).
+  // For null-aware mode, we need to compute three-valued logic:
+  // - TRUE: at least one match passes filter
+  // - FALSE: no match passes filter AND no indeterminate cases
+  // - NULL: probe key is NULL, OR (no match AND build has null keys that might
+  // match)
+
+  if (isNullAwareWithFilter) {
+    // Null-aware LEFT SEMI PROJECT with filter implements SQL IN semantics:
+    //   SELECT t0 IN (SELECT u0 FROM u WHERE filter) FROM t
+    //
+    // "Indeterminate" means the result should be NULL (unknown) rather than
+    // FALSE. This happens when we cannot definitively say the probe value is
+    // NOT IN the subquery because NULL comparisons are involved:
+    //
+    // - Type B (null probe key): When probe key is NULL, we can't determine
+    //   if NULL equals any subquery value. If the filter passes for ANY build
+    //   row, result is NULL (might match). If filter fails for ALL build rows,
+    //   the subquery is empty, so result is FALSE.
+    //
+    // - Type A (non-null probe key, no match): When probe key doesn't match
+    //   any non-NULL build key, but build has NULL keys where filter passes,
+    //   we can't rule out a match (NULL might equal our probe key), so result
+    //   is NULL.
+    //
+    // We evaluate these by creating synthetic (probe, build) index pairs and
+    // running the filter to see if any pair passes.
+
+    // Lambda to create device_span from a column
+    auto toSpan = [](cudf::column_view col) {
+      return cudf::device_span<cudf::size_type const>{
+          static_cast<cudf::size_type const*>(col.head()),
+          static_cast<size_t>(col.size())};
+    };
+
+    // Lambda to run filter on synthetic pairs and accumulate indeterminate
+    // flags. Creates cross-product of probeIndices × buildIndices, runs the
+    // filter, and ORs any passing probe rows into indeterminateCol.
+    auto accumulateIndeterminate =
+        [&](cudf::column_view probeIndices,
+            cudf::column_view buildIndices,
+            cudf::table_view extendedRight,
+            std::unique_ptr<cudf::column>& indeterminateCol) {
+          if (probeIndices.size() == 0 || buildIndices.size() == 0) {
+            return;
+          }
+
+          auto [syntheticLeft, syntheticRight] = createCrossProductIndices(
+              probeIndices, buildIndices, stream, get_temp_mr());
+
+          if (syntheticLeft->size() == 0) {
+            return;
+          }
+
+          auto [filteredLeft, filteredRight] = cudf::filter_join_indices(
+              extendedLeftView,
+              extendedRight,
+              toSpan(syntheticLeft->view()),
+              toSpan(syntheticRight->view()),
+              tree_.back(),
+              cudf::join_kind::INNER_JOIN,
+              stream,
+              get_temp_mr());
+
+          if (filteredLeft->size() == 0) {
+            return;
+          }
+
+          auto filteredLeftSpan =
+              cudf::device_span<cudf::size_type const>{*filteredLeft};
+          auto filteredLeftCol = cudf::column_view{filteredLeftSpan};
+          auto indeterminate = cudf::contains(
+              filteredLeftCol, probeRowIndices->view(), stream, get_temp_mr());
+
+          indeterminateCol = cudf::binary_operation(
+              indeterminateCol->view(),
+              indeterminate->view(),
+              cudf::binary_operator::BITWISE_OR,
+              cudf::data_type{cudf::type_id::BOOL8},
+              stream,
+              get_temp_mr());
+        };
+
+    bool buildSideEmpty = true;
+    for (const auto& rt : rightTables) {
+      if (rt->num_rows() > 0) {
+        buildSideEmpty = false;
+        break;
+      }
+    }
+
+    // For empty build side, IN returns FALSE (already set in matchCol).
+    if (!buildSideEmpty) {
+      auto probeKeyView = leftTableView.select(leftKeyIndices_);
+      bool probeHasNulls = cudf::has_nulls(probeKeyView);
+
+      // Compute probe key null mask upfront
+      auto probeKeyNullMask =
+          createProbeKeyNullMask(probeKeyView, stream, get_temp_mr());
+
+      // Initialize indeterminate column to all false
+      auto falseScalar =
+          cudf::numeric_scalar<bool>(false, true, stream, get_temp_mr());
+      auto indeterminateCol = cudf::make_column_from_scalar(
+          falseScalar, numProbeRows, stream, get_temp_mr());
+
+      // Process each build batch for indeterminate cases
+      for (size_t i = 0; i < rightTables.size(); i++) {
+        auto rightTableView = rightTables[i]->view();
+        auto buildKeyView = rightTableView.select(rightKeyIndices_);
+        bool buildBatchHasNullKeys = cudf::has_nulls(buildKeyView);
+        auto numBuildRows = rightTableView.num_rows();
+
+        if (numBuildRows == 0) {
+          continue;
+        }
+
+        // Get extended views for filter evaluation
+        cudf::table_view extendedRightView =
+            (!rightPrecomputeInstructions_.empty())
+            ? cachedExtendedRightViews_[i]
+            : rightTableView;
+
+        // Type B: Null probe keys × all build rows
+        if (probeHasNulls) {
+          auto nullProbeIndices =
+              getIndicesWhere(probeKeyNullMask->view(), stream, get_temp_mr());
+          auto allBuildIndices = cudf::sequence(
+              numBuildRows,
+              cudf::numeric_scalar<cudf::size_type>(
+                  0, true, stream, get_temp_mr()),
+              cudf::numeric_scalar<cudf::size_type>(
+                  1, true, stream, get_temp_mr()),
+              stream,
+              get_temp_mr());
+
+          accumulateIndeterminate(
+              nullProbeIndices->view(),
+              allBuildIndices->view(),
+              extendedRightView,
+              indeterminateCol);
+        }
+
+        // Type A: Non-null, non-matching probe keys × null-key build rows
+        if (buildBatchHasNullKeys) {
+          auto notProbeNull = cudf::unary_operation(
+              probeKeyNullMask->view(),
+              cudf::unary_operator::NOT,
+              stream,
+              get_temp_mr());
+          auto noMatch = cudf::unary_operation(
+              matchCol->view(),
+              cudf::unary_operator::NOT,
+              stream,
+              get_temp_mr());
+          auto typeAMask = cudf::binary_operation(
+              notProbeNull->view(),
+              noMatch->view(),
+              cudf::binary_operator::BITWISE_AND,
+              cudf::data_type{cudf::type_id::BOOL8},
+              stream,
+              get_temp_mr());
+
+          auto typeAProbeIndices =
+              getIndicesWhere(typeAMask->view(), stream, get_temp_mr());
+          auto buildKeyNullMask =
+              createProbeKeyNullMask(buildKeyView, stream, get_temp_mr());
+          auto nullBuildIndices =
+              getIndicesWhere(buildKeyNullMask->view(), stream, get_temp_mr());
+
+          accumulateIndeterminate(
+              typeAProbeIndices->view(),
+              nullBuildIndices->view(),
+              extendedRightView,
+              indeterminateCol);
+        }
+      }
+
+      // Apply three-valued logic:
+      // - Where matchCol is TRUE → keep TRUE (takes precedence)
+      // - Where matchCol is FALSE and indeterminateCol is TRUE → set NULL
+      // - Where matchCol is FALSE and indeterminateCol is FALSE → keep FALSE
+      auto notMatch = cudf::unary_operation(
+          matchCol->view(), cudf::unary_operator::NOT, stream, get_temp_mr());
+      auto shouldBeNull = cudf::binary_operation(
+          notMatch->view(),
+          indeterminateCol->view(),
+          cudf::binary_operator::BITWISE_AND,
+          cudf::data_type{cudf::type_id::BOOL8},
+          stream,
+          get_temp_mr());
+
+      matchCol = applyNullMask(
+          matchCol->view(), shouldBeNull->view(), stream, get_output_mr());
+    }
+  } else if (isNullAwareWithoutFilter) {
+    // Original null-aware without filter logic
     bool buildSideEmpty = true;
     for (const auto& rt : rightTables) {
       if (rt->num_rows() > 0) {
@@ -1527,7 +1844,6 @@ CudfHashJoinProbe::rightSemiFilterJoin(
     cudf::filtered_join filter_join(
         leftTableView.select(leftKeyIndices_),
         cudf::null_equality::UNEQUAL,
-        cudf::set_as_build_table::RIGHT,
         stream);
     rightJoinIndices = filter_join.semi_join(
         rightTableView.select(rightKeyIndices_), stream, get_temp_mr());
@@ -1551,6 +1867,7 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::antiJoin(
     cudf::table_view leftTableViewParam,
     rmm::cuda_stream_view stream) {
   std::vector<std::unique_ptr<cudf::table>> cudfOutputs;
+
   auto& rightTables = hashObject_.value().first;
 
   VELOX_CHECK_EQ(
@@ -1603,7 +1920,6 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::antiJoin(
       cudf::filtered_join filter_join(
           rightTableView.select(rightKeyIndices_),
           cudf::null_equality::UNEQUAL,
-          cudf::set_as_build_table::RIGHT,
           stream);
       leftJoinIndices = filter_join.anti_join(
           leftTableView.select(leftKeyIndices_), stream, get_temp_mr());
@@ -1624,12 +1940,7 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::antiJoin(
   return cudfOutputs;
 }
 
-RowVectorPtr CudfHashJoinProbe::getOutput() {
-  if (CudfConfig::getInstance().debugEnabled) {
-    VLOG(2) << "Calling CudfHashJoinProbe::getOutput";
-  }
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
-
+RowVectorPtr CudfHashJoinProbe::doGetOutput() {
   if (finished_ or !hashObject_.has_value()) {
     return nullptr;
   }
@@ -1672,10 +1983,10 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
         for (size_t li = 0; li < leftColumnOutputIndices_.size(); ++li) {
           auto outIdx = leftColumnOutputIndices_[li];
           auto probeChannel = leftColumnIndicesToGather_[li];
-          auto leftCudfType =
-              veloxToCudfTypeId(probeType_->childAt(probeChannel));
+          auto leftCudfDataType =
+              veloxToCudfDataType(probeType_->childAt(probeChannel));
           auto nullScalar = cudf::make_default_constructed_scalar(
-              cudf::data_type{leftCudfType}, stream, get_temp_mr());
+              leftCudfDataType, stream, get_temp_mr());
           outCols[outIdx] = cudf::make_column_from_scalar(
               *nullScalar, m, stream, get_output_mr());
         }

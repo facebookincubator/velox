@@ -18,7 +18,7 @@
 #include <folly/Range.h>
 #include <folly/container/F14Set.h>
 #include <xsimd/xsimd.hpp>
-#include "velox/common/Enums.h"
+#include "velox/common/EnumDeclare.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/SimdUtil.h"
 #include "velox/common/base/SplitBlockBloomFilter.h"
@@ -1050,7 +1050,7 @@ class BigintValuesUsingHashTable final : public Filter {
   xsimd::batch_bool<int64_t> testValues(xsimd::batch<int64_t> x) const final {
     auto outOfRange = (x < xsimd::broadcast<int64_t>(min_)) |
         (x > xsimd::broadcast<int64_t>(max_));
-    if (simd::toBitMask(outOfRange) == simd::allSetBitMask<int64_t>()) {
+    if (simd::all(outOfRange)) {
       return xsimd::batch_bool<int64_t>(false);
     }
     if (containsEmptyMarker_) {
@@ -1090,11 +1090,11 @@ class BigintValuesUsingHashTable final : public Filter {
       for (;;) {
         auto line = xsimd::load_unaligned(hashTable_.data() + index);
 
-        if (simd::toBitMask(line == allValue)) {
+        if (simd::any(line == allValue)) {
           resultBits |= 1 << lane;
           break;
         }
-        if (simd::toBitMask(line == allEmpty)) {
+        if (simd::any(line == allEmpty)) {
           resultBits &= ~(1 << lane);
           break;
         }

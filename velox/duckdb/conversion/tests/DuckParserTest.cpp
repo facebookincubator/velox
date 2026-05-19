@@ -100,40 +100,9 @@ TEST(DuckParserTest, functions) {
 }
 
 namespace {
-std::string toString(const std::vector<OrderByClause>& orderBy) {
-  std::stringstream out;
-  if (!orderBy.empty()) {
-    out << "ORDER BY ";
-    for (auto i = 0; i < orderBy.size(); ++i) {
-      if (i > 0) {
-        out << ", ";
-      }
-      out << orderBy[i].toString();
-    }
-  }
-
-  return out.str();
-}
-
 std::string parseAgg(const std::string& expression) {
   ParseOptions options;
-  auto aggregateExpr = parseAggregateExpr(expression, options);
-  std::stringstream out;
-  out << aggregateExpr.expr->toString();
-
-  if (aggregateExpr.distinct) {
-    out << " DISTINCT";
-  }
-
-  if (!aggregateExpr.orderBy.empty()) {
-    out << " " << toString(aggregateExpr.orderBy);
-  }
-
-  if (aggregateExpr.filter != nullptr) {
-    out << " FILTER " << aggregateExpr.filter->toString();
-  }
-
-  return out.str();
+  return parseAggregateExpr(expression, options)->toString();
 }
 } // namespace
 
@@ -149,20 +118,20 @@ TEST(DuckParserTest, aggregates) {
       "array_agg(\"x\") ORDER BY \"y\" ASC NULLS FIRST",
       parseAgg("array_agg(x ORDER BY y NULLS FIRST)"));
   EXPECT_EQ(
-      "array_agg(\"x\") ORDER BY \"y\" ASC NULLS LAST, \"z\" ASC NULLS LAST",
+      "array_agg(\"x\") ORDER BY \"y\" ASC NULLS LAST,\"z\" ASC NULLS LAST",
       parseAgg("array_agg(x ORDER BY y, z)"));
 }
 
 TEST(DuckParserTest, aggregatesWithMasks) {
   EXPECT_EQ(
-      "array_agg(\"x\") FILTER \"m\"",
+      "array_agg(\"x\") FILTER(WHERE \"m\")",
       parseAgg("array_agg(x) filter (where m)"));
 }
 
 TEST(DuckParserTest, distinctAggregates) {
-  EXPECT_EQ("count(\"x\") DISTINCT", parseAgg("count(distinct x)"));
-  EXPECT_EQ("count(\"x\",\"y\") DISTINCT", parseAgg("count(distinct x, y)"));
-  EXPECT_EQ("sum(\"x\") DISTINCT", parseAgg("sum(distinct x)"));
+  EXPECT_EQ("count(DISTINCT \"x\")", parseAgg("count(distinct x)"));
+  EXPECT_EQ("count(DISTINCT \"x\",\"y\")", parseAgg("count(distinct x, y)"));
+  EXPECT_EQ("sum(DISTINCT \"x\")", parseAgg("sum(distinct x)"));
 }
 
 TEST(DuckParserTest, subscript) {
@@ -573,85 +542,28 @@ TEST(DuckParserTest, orderBy) {
 }
 
 namespace {
-const std::string windowTypeString(WindowType w) {
-  switch (w) {
-    case WindowType::kRange:
-      return "RANGE";
-    case WindowType::kRows:
-      return "ROWS";
-  }
-  VELOX_UNREACHABLE();
-}
-
-const std::string boundTypeString(BoundType b) {
-  switch (b) {
-    case BoundType::kUnboundedPreceding:
-      return "UNBOUNDED PRECEDING";
-    case BoundType::kUnboundedFollowing:
-      return "UNBOUNDED FOLLOWING";
-    case BoundType::kPreceding:
-      return "PRECEDING";
-    case BoundType::kFollowing:
-      return "FOLLOWING";
-    case BoundType::kCurrentRow:
-      return "CURRENT ROW";
-  }
-  VELOX_UNREACHABLE();
-}
 
 const std::string parseWindow(const std::string& expr) {
   ParseOptions options;
-  auto windowExpr = parseWindowExpr(expr, options);
-  std::string concatPartitions;
-  int i = 0;
-  for (const auto& partition : windowExpr.partitionBy) {
-    concatPartitions += partition->toString();
-    if (i > 0) {
-      concatPartitions += " , ";
-    }
-    i++;
-  }
-  auto partitionString = windowExpr.partitionBy.empty()
-      ? ""
-      : fmt::format("PARTITION BY {}", concatPartitions);
-
-  auto orderByString = toString(windowExpr.orderBy);
-
-  auto frameString = fmt::format(
-      "{} BETWEEN {}{} AND{} {}",
-      windowTypeString(windowExpr.frame.type),
-      (windowExpr.frame.startValue
-           ? windowExpr.frame.startValue->toString() + " "
-           : ""),
-      boundTypeString(windowExpr.frame.startType),
-      (windowExpr.frame.endValue ? " " + windowExpr.frame.endValue->toString()
-                                 : ""),
-      boundTypeString(windowExpr.frame.endType));
-
-  return fmt::format(
-      "{} OVER ({} {} {})",
-      windowExpr.functionCall->toString(),
-      partitionString,
-      orderByString,
-      frameString);
+  return parseWindowExpr(expr, options)->toString();
 }
 } // namespace
 
 TEST(DuckParserTest, window) {
   EXPECT_EQ(
-      "row_number() AS c OVER (PARTITION BY \"a\" ORDER BY \"b\" ASC NULLS LAST"
-      " RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+      "row_number() OVER (PARTITION BY \"a\" ORDER BY \"b\" ASC NULLS LAST "
+      "RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS c",
       parseWindow("row_number() over (partition by a order by b) as c"));
   EXPECT_EQ(
-      "row_number() AS a OVER (  RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+      "row_number() OVER (RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS a",
       parseWindow("row_number() over () as a"));
   EXPECT_EQ(
-      "row_number() AS a OVER ( ORDER BY \"b\" ASC NULLS LAST "
-      "RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+      "row_number() OVER (ORDER BY \"b\" ASC NULLS LAST "
+      "RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS a",
       parseWindow("row_number() over (order by b) as a"));
   EXPECT_EQ(
-      "row_number() OVER (PARTITION BY \"a\"  ROWS BETWEEN "
-      "UNBOUNDED PRECEDING AND CURRENT ROW)",
+      "row_number() OVER (PARTITION BY \"a\" "
+      "ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
       parseWindow(
           "row_number() over (partition by a rows between unbounded preceding and current row)"));
   EXPECT_EQ(
@@ -668,17 +580,17 @@ TEST(DuckParserTest, window) {
           "rows between a + 10 preceding and 10 following)"));
 
   EXPECT_EQ(
-      "lead(\"x\",\"y\",\"z\") OVER (  "
+      "lead(\"x\",\"y\",\"z\") OVER ("
       "RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
       parseWindow("lead(x, y, z) over ()"));
 
   EXPECT_EQ(
-      "lag(\"x\",3,\"z\") OVER (  "
+      "lag(\"x\",3,\"z\") OVER ("
       "RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
       parseWindow("lag(x, 3, z) over ()"));
 
   EXPECT_EQ(
-      "nth_value(\"x\",3) OVER (  "
+      "nth_value(\"x\",3) OVER ("
       "RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
       parseWindow("nth_value(x, 3) over ()"));
 }
@@ -687,12 +599,10 @@ TEST(DuckParserTest, windowWithIntegerConstant) {
   ParseOptions options;
   options.parseIntegerAsBigint = false;
   auto windowExpr = parseWindowExpr("nth_value(x, 3) over ()", options);
-  auto func =
-      std::dynamic_pointer_cast<const core::CallExpr>(windowExpr.functionCall);
-  ASSERT_TRUE(func != nullptr)
-      << windowExpr.functionCall->toString() << " is not a call expr";
-  EXPECT_EQ(func->inputs().size(), 2);
-  auto param = func->inputs()[1];
+  ASSERT_TRUE(windowExpr->is(core::IExpr::Kind::kWindow));
+  auto* windowCall = windowExpr->as<core::WindowCallExpr>();
+  EXPECT_EQ(windowCall->inputs().size(), 2);
+  auto param = windowCall->inputs()[1];
   auto constant = std::dynamic_pointer_cast<const core::ConstantExpr>(param);
   ASSERT_TRUE(constant != nullptr) << param->toString() << " is not a constant";
   EXPECT_EQ(*constant->type(), *INTEGER());
@@ -701,19 +611,19 @@ TEST(DuckParserTest, windowWithIntegerConstant) {
 TEST(DuckParserTest, parseScalarOrWindowExpr) {
   ParseOptions options;
 
-  // Scalar expression returns ExprPtr.
+  // Scalar expression returns a plain ExprPtr.
   auto scalar = parseScalarOrWindowExpr("a + b", options);
-  ASSERT_TRUE(std::holds_alternative<core::ExprPtr>(scalar));
-  EXPECT_EQ(std::get<core::ExprPtr>(scalar)->toString(), "plus(\"a\",\"b\")");
+  ASSERT_FALSE(scalar->is(core::IExpr::Kind::kWindow));
+  EXPECT_EQ(scalar->toString(), "plus(\"a\",\"b\")");
 
-  // Window expression returns WindowExpr.
+  // Window expression returns a WindowCallExpr.
   auto window =
       parseScalarOrWindowExpr("row_number() over (order by a)", options);
-  ASSERT_TRUE(std::holds_alternative<WindowExpr>(window));
-  auto& windowExpr = std::get<WindowExpr>(window);
-  EXPECT_EQ(windowExpr.functionCall->toString(), "row_number()");
-  EXPECT_EQ(windowExpr.orderBy.size(), 1);
-  EXPECT_TRUE(windowExpr.orderBy[0].ascending);
+  ASSERT_TRUE(window->is(core::IExpr::Kind::kWindow));
+  auto* windowCall = window->as<core::WindowCallExpr>();
+  EXPECT_EQ(windowCall->name(), "row_number");
+  EXPECT_EQ(windowCall->orderByKeys().size(), 1);
+  EXPECT_TRUE(windowCall->orderByKeys()[0].ascending);
 }
 
 TEST(DuckParserTest, invalidExpression) {
@@ -853,4 +763,129 @@ TEST(DuckParserTest, lambda) {
       "filter(\"a\",if(gt(\"b\",0),x -> eq(\"x\",10),x -> eq(\"x\",20)))",
       parseExpr("filter(a, if (b > 0, x -> (x = 10), x -> (x = 20)))")
           ->toString());
+}
+
+TEST(DuckParserTest, arrayLiteral) {
+  {
+    auto expr = parseExpr("ARRAY[1, 2, 3]");
+    EXPECT_TRUE(expr->is(core::IExpr::Kind::kConstant));
+    VELOX_EXPECT_EQ_TYPES(
+        expr->as<core::ConstantExpr>()->type(), ARRAY(BIGINT()));
+    EXPECT_EQ("{1, 2, 3}", expr->toString());
+  }
+
+  {
+    auto expr = parseExpr("[1, 2, 3]");
+    EXPECT_TRUE(expr->is(core::IExpr::Kind::kConstant));
+    VELOX_EXPECT_EQ_TYPES(
+        expr->as<core::ConstantExpr>()->type(), ARRAY(BIGINT()));
+    EXPECT_EQ("{1, 2, 3}", expr->toString());
+  }
+
+  // Array with null elements.
+  {
+    auto expr = parseExpr("[1, null, 3]");
+    EXPECT_TRUE(expr->is(core::IExpr::Kind::kConstant));
+    VELOX_EXPECT_EQ_TYPES(
+        expr->as<core::ConstantExpr>()->type(), ARRAY(BIGINT()));
+    EXPECT_EQ("{1, null, 3}", expr->toString());
+  }
+
+  // All-null array.
+  {
+    auto expr = parseExpr("[null, null]");
+    EXPECT_TRUE(expr->is(core::IExpr::Kind::kConstant));
+    VELOX_EXPECT_EQ_TYPES(
+        expr->as<core::ConstantExpr>()->type(), ARRAY(UNKNOWN()));
+    EXPECT_EQ("{null, null}", expr->toString());
+  }
+
+  // Empty array.
+  {
+    auto expr = parseExpr("[]");
+    EXPECT_TRUE(expr->is(core::IExpr::Kind::kConstant));
+    VELOX_EXPECT_EQ_TYPES(
+        expr->as<core::ConstantExpr>()->type(), ARRAY(UNKNOWN()));
+    EXPECT_EQ("<empty>", expr->toString());
+  }
+
+  // Nested array.
+  {
+    auto expr = parseExpr("[[1, 2], [3, 4]]");
+    EXPECT_TRUE(expr->is(core::IExpr::Kind::kConstant));
+    VELOX_EXPECT_EQ_TYPES(
+        expr->as<core::ConstantExpr>()->type(), ARRAY(ARRAY(BIGINT())));
+    EXPECT_EQ("{{1, 2}, {3, 4}}", expr->toString());
+  }
+
+  // Non-constant argument stays a function call.
+  {
+    auto expr = parseExpr("[a, 1, 2]");
+    EXPECT_TRUE(expr->is(core::IExpr::Kind::kCall));
+    EXPECT_EQ("list_value(\"a\",1,2)", expr->toString());
+  }
+}
+
+TEST(DuckParserTest, structLiteral) {
+  // {'x': 1, 'y': 2} becomes a ROW constant with named fields.
+  {
+    auto expr = parseExpr("{'x': 1, 'y': 2}");
+    EXPECT_TRUE(expr->is(core::IExpr::Kind::kConstant));
+    VELOX_EXPECT_EQ_TYPES(
+        expr->as<core::ConstantExpr>()->type(),
+        ROW({"x", "y"}, {BIGINT(), BIGINT()}));
+    EXPECT_EQ("{1, 2}", expr->toString());
+  }
+
+  // ROW(1, 2) becomes a ROW constant with unnamed fields.
+  {
+    auto expr = parseExpr("ROW(1, 2)");
+    EXPECT_TRUE(expr->is(core::IExpr::Kind::kConstant));
+    VELOX_EXPECT_EQ_TYPES(
+        expr->as<core::ConstantExpr>()->type(), ROW({"", ""}, BIGINT()));
+    EXPECT_EQ("{1, 2}", expr->toString());
+  }
+
+  // ROW(a, 2) with a non-constant argument stays a function call.
+  {
+    auto expr = parseExpr("ROW(a, 2)");
+    EXPECT_TRUE(expr->is(core::IExpr::Kind::kCall));
+    EXPECT_EQ("row(\"a\",2)", expr->toString());
+  }
+
+  // ROW(1, 2)::struct(x bigint, y bigint) becomes a named ROW constant.
+  {
+    auto expr = parseExpr("ROW(1, 2)::struct(x bigint, y bigint)");
+    EXPECT_TRUE(expr->is(core::IExpr::Kind::kConstant));
+    VELOX_EXPECT_EQ_TYPES(
+        expr->as<core::ConstantExpr>()->type(), ROW({"x", "y"}, BIGINT()));
+    EXPECT_EQ("{1, 2}", expr->toString());
+  }
+
+  // ROW(1, 2)::struct(x varchar, y bigint) with mismatched child types stays a
+  // cast.
+  {
+    auto expr = parseExpr("ROW(1, 2)::struct(x varchar, y bigint)");
+    EXPECT_TRUE(expr->is(core::IExpr::Kind::kCast));
+    EXPECT_EQ("cast({1, 2} as ROW<x:VARCHAR,y:BIGINT>)", expr->toString());
+  }
+}
+
+TEST(DuckParserTest, dateLiteral) {
+  for (const auto& sql : {"'1994-01-01'::date", "DATE '1994-01-01'"}) {
+    SCOPED_TRACE(sql);
+    auto expr = parseExpr(sql);
+    EXPECT_TRUE(expr->is(core::IExpr::Kind::kConstant));
+
+    auto* constant = expr->as<core::ConstantExpr>();
+    EXPECT_EQ(*constant->type(), *DATE());
+    EXPECT_EQ(constant->value().value<int32_t>(), DATE()->toDays("1994-01-01"));
+
+    EXPECT_EQ("1994-01-01", expr->toString());
+  }
+
+  // Invalid date string.
+  VELOX_ASSERT_THROW(
+      parseExpr("DATE 'not-a-date'"),
+      "Unable to parse date value: \"not-a-date\"");
 }

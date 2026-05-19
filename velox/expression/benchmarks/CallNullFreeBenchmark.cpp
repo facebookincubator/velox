@@ -23,8 +23,13 @@
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 
 // These macros should be set, defined in command line.
-// #define WITH_NULL_ARRAYS false
-// #define WITH_NULL_VALUES false
+#ifndef WITH_NULL_ARRAYS
+#define WITH_NULL_ARRAYS false
+#endif
+
+#ifndef WITH_NULL_ELEMENTS
+#define WITH_NULL_ELEMENTS false
+#endif
 
 // Benchmark a function that returns the minimum value in an array.
 // The function returns NULL if the array or any of its elements are NULL.
@@ -283,7 +288,7 @@ class CallNullFreeBenchmark : public functions::test::FunctionBenchmarkBase {
       auto other =
           compileExpression(fmt::format("{}(c0)", name), input->type());
       if (!hasSameResults(fastResult, other, input)) {
-        VELOX_UNREACHABLE(fmt::format("testing failed at function {}", name));
+        VELOX_UNREACHABLE("Testing failed at function: {}", name);
       }
     }
   }

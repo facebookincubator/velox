@@ -10894,6 +10894,44 @@ TEST_F(KeyEncoderTest, encodedKeyBoundsToString) {
     EXPECT_EQ(str, "EncodedKeyBounds{lowerKey=, upperKey=}");
   }
 }
+TEST(EncodedKeyBoundsTest, isPointLookup) {
+  struct TestCase {
+    std::optional<std::string> lowerKey;
+    std::optional<std::string> upperKey;
+    bool expected;
+
+    std::string debugString() const {
+      auto keyStr = [](const std::optional<std::string>& key) -> std::string {
+        return key.has_value() ? fmt::format("\"{}\"", key.value()) : "nullopt";
+      };
+      return fmt::format(
+          "lowerKey={}, upperKey={}, expected={}",
+          keyStr(lowerKey),
+          keyStr(upperKey),
+          expected);
+    }
+  };
+
+  const std::vector<TestCase> testCases = {
+      {"abc", "abc", true},
+      {"abc", "def", false},
+      {"abc", std::nullopt, false},
+      {std::nullopt, "abc", false},
+      {std::nullopt, std::nullopt, false},
+      {"", "", true},
+      {std::string("\x00\xFF", 2), std::string("\x00\xFF", 2), true},
+      {std::string("\x00\xFF", 2), std::string("\x00\xFE", 2), false},
+  };
+
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(testCase.debugString());
+    EncodedKeyBounds bounds;
+    bounds.lowerKey = testCase.lowerKey;
+    bounds.upperKey = testCase.upperKey;
+    EXPECT_EQ(bounds.isPointLookup(), testCase.expected);
+  }
+}
+
 } // namespace facebook::velox::serializer::test
 
 int main(int argc, char** argv) {

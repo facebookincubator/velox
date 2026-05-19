@@ -31,6 +31,11 @@ struct TestIndexTable {
   RowTypePtr dataType;
   std::shared_ptr<BaseHashTable> table;
 
+  // Mutex to serialize concurrent access to the hash table. The hash table's
+  // hashers contain stateful DecodedVectors that are not thread-safe for
+  // concurrent joinProbe calls from multiple index sources.
+  mutable std::mutex mutex;
+
   TestIndexTable(
       RowTypePtr _keyType,
       RowTypePtr _dataType,
@@ -350,7 +355,7 @@ class TestIndexSource : public connector::IndexSource,
   const std::shared_ptr<memory::MemoryPool> pool_;
   folly::Executor* const executor_;
 
-  mutable std::mutex mutex_;
+  std::mutex mutex_;
 
   // Join condition filter input type.
   RowTypePtr conditionInputType_;

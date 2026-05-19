@@ -90,6 +90,9 @@ int main(int argc, char** argv) {
       "first_ignore_null",
       "last_ignore_null",
       "regr_replacement",
+      // https://github.com/facebookincubator/velox/issues/17124
+      // Correctness mismatches and OOM during KLL sketch operations.
+      "approx_percentile",
   };
 
   using facebook::velox::exec::test::TransformResultVerifier;

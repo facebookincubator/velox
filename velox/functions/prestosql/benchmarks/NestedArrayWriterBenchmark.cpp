@@ -174,7 +174,7 @@ class NestedArrayWriterBenchmark
       auto other =
           compileExpression(fmt::format("{}(c0)", name), input->type());
       if (!hasSameResults(exprSetRef, other, input)) {
-        VELOX_UNREACHABLE(fmt::format("testing failed at function {}", name));
+        VELOX_UNREACHABLE("Testing failed at function: {}", name);
       }
     }
   }

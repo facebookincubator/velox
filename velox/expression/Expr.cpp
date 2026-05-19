@@ -18,12 +18,17 @@
 #include <boost/uuid/uuid_io.hpp>
 #include <cmath>
 
+#include <folly/GLog.h>
+
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/process/ThreadDebugInfo.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/exec/trace/TraceCtx.h"
 #include "velox/expression/CastExpr.h"
+
+#include "velox/common/EnumDefine.h"
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/ExprCompiler.h"
@@ -137,7 +142,8 @@ Expr::Expr(
     std::shared_ptr<VectorFunction> vectorFunction,
     VectorFunctionMetadata metadata,
     std::string name,
-    bool trackCpuUsage)
+    bool trackCpuUsage,
+    std::vector<VectorFunctionListeners> listeners)
     : type_(std::move(type)),
       inputs_(std::move(inputs)),
       name_(std::move(name)),
@@ -148,9 +154,11 @@ Expr::Expr(
           vectorFunction_->supportsFlatNoNullsFastPath() &&
           type_->isPrimitiveType() && type_->isFixedWidth() &&
           allSupportFlatNoNullsFastPath(inputs_)},
-      trackCpuUsage_{trackCpuUsage} {
+      trackCpuUsage_{trackCpuUsage},
+      listeners_(std::move(listeners)) {
   constantInputs_.reserve(inputs_.size());
   inputIsConstant_.reserve(inputs_.size());
+  inputValues_.reserve(inputs_.size());
   for (auto& expr : inputs_) {
     if (auto constantExpr = expr->as<ConstantExpr>()) {
       constantInputs_.emplace_back(constantExpr->value());
@@ -535,17 +543,12 @@ void Expr::evalSimplifiedImpl(
   }
 
   // Apply the actual function.
-  try {
-    vectorFunction_->apply(
-        remainingRows.rows(), inputValues_, type(), context, result);
-  } catch (const VeloxException&) {
-    throw;
-  } catch (const std::exception& e) {
-    VELOX_USER_FAIL(e.what());
-  }
+  invokeApplyWithListeners(remainingRows.rows(), context, result);
 
   // Make sure the returned vector has its null bitmap properly set.
   addNulls(rows, remainingRows.rows().asRange().bits(), context, result);
+
+  traceOutput(result);
 }
 
 namespace {
@@ -1099,7 +1102,7 @@ void Expr::evalEncodings(
     EvalCtx& context,
     VectorPtr& result) {
   if (deterministic_ && !skipFieldDependentOptimizations() &&
-      context.peelingEnabled()) {
+      context.peelingEnabled(rows)) {
     bool hasFlat = false;
     for (auto* field : distinctFields_) {
       if (isFlat(*context.getField(field->index(context)))) {
@@ -1533,15 +1536,39 @@ bool Expr::applyFunctionWithPeeling(
     VectorPtr& result) {
   LocalDecodedVector localDecoded(context);
   LocalSelectivityVector newRowsHolder(context);
-  if (!context.peelingEnabled()) {
-    if (distinctFields_.size() < 2) {
-      // If we have a single input, velox needs to ensure that the
-      // vectorFunction would receive a flat or constant input.
-      for (int i = 0; i < inputValues_.size(); ++i) {
-        if (inputValues_[i]->encoding() == VectorEncoding::Simple::DICTIONARY) {
-          BaseVector::flattenVector(inputValues_[i]);
+  // When peeling was always enabled, VectorFunctions would implicitly always
+  // receive flat or constant inputs. Now that peeling can be suppressed for
+  // small batches, we must preserve that guarantee for three cases:
+  //
+  // 1. Single constant input (e.g. map_from_entries({null, ...}),
+  //    array_sort(constant_array)): fall through to the peeling path since
+  //    constant peeling is cheap.
+  //
+  // 2. Single dictionary-encoded argument: flatten the dictionary before
+  //    calling applyFunction.
+  //
+  // 3. Single dictionary-encoded argument with all other arguments being
+  //    constants (e.g. in-predicate: dict_wrap(c0) in (40, 42)): flatten the
+  //    dictionary — the constants pass through unchanged.
+  if (!context.peelingEnabled(applyRows) &&
+      !(inputValues_.size() == 1 &&
+        inputValues_[0]->encoding() == VectorEncoding::Simple::CONSTANT)) {
+    int dictIndex = -1;
+    bool canFlatten = true;
+
+    for (int i = 0; i < inputValues_.size(); ++i) {
+      auto encoding = inputValues_[i]->encoding();
+      if (encoding == VectorEncoding::Simple::DICTIONARY) {
+        if (dictIndex != -1) {
+          // More than one dictionary-encoded input.
+          canFlatten = false;
+          break;
         }
+        dictIndex = i;
       }
+    }
+    if (canFlatten && dictIndex != -1) {
+      BaseVector::flattenVector(inputValues_[dictIndex]);
       applyFunction(applyRows, context, result);
       return true;
     }
@@ -1669,6 +1696,59 @@ void Expr::finalizeAdaptiveCalibration(
   }
 }
 
+void Expr::invokeApplyWithListeners(
+    const SelectivityVector& rows,
+    EvalCtx& context,
+    VectorPtr& result) {
+  bool hasPostListeners = false;
+  for (const auto& listener : listeners_) {
+    if (listener.pre) {
+      (*listener.pre)(name_, rows, inputValues_, type(), context);
+    }
+    hasPostListeners |= (listener.post != nullptr);
+  }
+
+  if (!hasPostListeners) {
+    try {
+      vectorFunction_->apply(rows, inputValues_, type(), context, result);
+    } catch (const VeloxException&) {
+      throw;
+    } catch (const std::exception& e) {
+      VELOX_USER_FAIL(e.what());
+    }
+    return;
+  }
+
+  std::exception_ptr applyError;
+  try {
+    vectorFunction_->apply(rows, inputValues_, type(), context, result);
+  } catch (const VeloxException&) {
+    applyError = std::current_exception();
+  } catch (const std::exception& e) {
+    try {
+      VELOX_USER_FAIL(e.what());
+    } catch (...) {
+      applyError = std::current_exception();
+    }
+  }
+
+  for (const auto& listener : listeners_) {
+    if (listener.post) {
+      try {
+        (*listener.post)(
+            name_, rows, inputValues_, type(), context, result, applyError);
+      } catch (const std::exception& e) {
+        FB_LOG_EVERY_MS(ERROR, 5000)
+            << "Post-apply listener threw for function '" << name_
+            << "': " << e.what();
+      }
+    }
+  }
+  if (applyError) {
+    std::rethrow_exception(applyError);
+  }
+}
+
 void Expr::applyFunction(
     const SelectivityVector& rows,
     EvalCtx& context,
@@ -1682,13 +1762,9 @@ void Expr::applyFunction(
       ? computeIsAsciiForResult(vectorFunction_.get(), inputValues_, rows)
       : std::nullopt;
 
-  try {
-    vectorFunction_->apply(rows, inputValues_, type(), context, result);
-  } catch (const VeloxException&) {
-    throw;
-  } catch (const std::exception& e) {
-    VELOX_USER_FAIL(e.what());
-  }
+  invokeApplyWithListeners(rows, context, result);
+
+  traceOutput(result);
 
   if (!result) {
     MutableRemainingRows remainingRows(rows, context);
@@ -1990,6 +2066,74 @@ ExprSet::ExprSet(
   }
 }
 
+void ExprSet::maybeSetupTracers(
+    const Operator& op,
+    const trace::TraceCtx& traceCtx) {
+  exprTracingEnabled_ = true;
+  std::unordered_set<Expr*> visited;
+  std::unordered_map<std::string, int> instanceCounts;
+  for (auto& expr : exprs_) {
+    expr->maybeSetupTracer(op, traceCtx, visited, instanceCounts);
+  }
+}
+
+void Expr::maybeSetupTracer(
+    const Operator& op,
+    const trace::TraceCtx& traceCtx,
+    std::unordered_set<Expr*>& visited,
+    std::unordered_map<std::string, int>& instanceCounts) {
+  if (!visited.insert(this).second) {
+    return;
+  }
+  if (traceCtx.shouldTraceExpr(name_)) {
+    const int index = instanceCounts[name_]++;
+    try {
+      outputTracer_ = traceCtx.createExprOutputTracer(op, name_, index);
+    } catch (const std::exception& e) {
+      LOG(ERROR) << "Failed to create expression output tracer: " << e.what();
+    }
+  }
+  for (auto& input : inputs_) {
+    input->maybeSetupTracer(op, traceCtx, visited, instanceCounts);
+  }
+}
+
+void ExprSet::finishTracers() {
+  if (!exprTracingEnabled_) {
+    return;
+  }
+  std::unordered_set<Expr*> visited;
+  for (auto& expr : exprs_) {
+    expr->finishTracer(visited);
+  }
+}
+
+void Expr::finishTracer(std::unordered_set<Expr*>& visited) {
+  if (!visited.insert(this).second) {
+    return;
+  }
+  if (outputTracer_) {
+    try {
+      outputTracer_->finish();
+    } catch (const std::exception& e) {
+      LOG(ERROR) << "Failed to finish expression output tracer: " << e.what();
+    }
+  }
+  for (auto& input : inputs_) {
+    input->finishTracer(visited);
+  }
+}
+
+FOLLY_ALWAYS_INLINE void Expr::traceOutput(const VectorPtr& result) {
+  if (FOLLY_UNLIKELY(outputTracer_ != nullptr) && result) {
+    try {
+      outputTracer_->write(result);
+    } catch (const std::exception& e) {
+      LOG(ERROR) << "Failed to trace expression output: " << e.what();
+    }
+  }
+}
+
 namespace {
 
 /// If the expression is in adaptive sampling mode, extrapolate timing stats
@@ -2014,13 +2158,10 @@ void addStats(
     std::unordered_map<std::string, exec::ExprStats>& stats,
     std::unordered_set<const exec::Expr*>& uniqueExprs,
     bool excludeSpecialForm) {
-  auto it = uniqueExprs.find(&expr);
-  if (it != uniqueExprs.end()) {
+  if (!uniqueExprs.insert(&expr).second) {
     // Common sub-expression. Skip to avoid double counting.
     return;
   }
-
-  uniqueExprs.insert(&expr);
 
   bool excludeSplFormExpr = excludeSpecialForm && expr.isSpecialForm();
   // Do not aggregate empty stats.

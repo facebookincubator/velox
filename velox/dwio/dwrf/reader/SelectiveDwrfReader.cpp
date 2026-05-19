@@ -81,7 +81,7 @@ std::unique_ptr<SelectiveColumnReader> SelectiveDwrfReader::build(
     case TypeKind::BIGINT:
       if (fileType->type()->isDecimal()) {
         return std::make_unique<SelectiveDecimalColumnReader<int64_t>>(
-            fileType, params, scanSpec);
+            requestedType, fileType, params, scanSpec);
       } else {
         return buildIntegerReader(
             requestedType, fileType, params, LONG_BYTE_SIZE, scanSpec);
@@ -150,7 +150,7 @@ std::unique_ptr<SelectiveColumnReader> SelectiveDwrfReader::build(
     case TypeKind::HUGEINT:
       if (fileType->type()->isDecimal()) {
         return std::make_unique<SelectiveDecimalColumnReader<int128_t>>(
-            fileType, params, scanSpec);
+            requestedType, fileType, params, scanSpec);
       }
       [[fallthrough]];
     default:
