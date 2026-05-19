@@ -54,6 +54,10 @@ enum class FileFormat {
   SST = 10, // rocksdb sst format
   FLUX = 11,
   AVRO = 12,
+  PUFFIN =
+      13, // Iceberg V3 Puffin blob container (e.g. deletion vectors).
+          // Not consumed by dwio::ReaderFactory; read directly by the
+          // Iceberg connector via FileSystem::pread of the blob byte-range.
 };
 
 FileFormat toFileFormat(std::string_view s);
