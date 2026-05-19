@@ -56,6 +56,22 @@ When the author says "addressed comments", re-review the full diff — don't
 just check the boxes from the previous round. Docs, naming, design choices,
 and new code added while addressing feedback all need fresh eyes.
 
+### Re-review rejected
+
+When the author requests re-review but clearly hasn't fully addressed prior
+feedback (e.g., explicitly flagged bugs still present, items silently
+skipped, sloppy fixes), lead with a process comment before the technical
+points:
+
+> @author, please review your changes more carefully before requesting
+> re-review. [Specific example: "The UB bug was explicitly flagged with a
+> fix, yet it's still present."]. Each re-review round costs reviewer
+> time — please make sure feedback is fully addressed.
+
+Then list the remaining issues. Don't re-explain items that were already
+explained with code snippets in the previous round — just say "not fixed"
+and refer back.
+
 ## What to check
 
 ### Correctness
@@ -103,4 +119,11 @@ and new code added while addressing feedback all need fresh eyes.
 - Check if **existing** doc pages need updating — e.g., a change to plan output
   may require updating the print-plan-with-stats page, a dependency version
   bump may require updating the dependency table.
+- **Debuggability of new APIs.** When a PR adds new operations to an
+  existing subsystem, check that stats and `toString()` distinguish the new
+  operations from existing ones. Shared counters hide information needed
+  for troubleshooting.
+- **Error message tests.** When tests verify error messages, ensure they
+  match the full descriptive text, not just internal formatting from CHECK
+  macros (e.g., `"(0 vs. 0)"` is not a useful assertion).
 - **When unsure about conventions**, CC the maintainer rather than guessing.
