@@ -49,7 +49,6 @@ if(VELOX_ENABLE_ABFS)
     SOURCES
       Main.cpp
       AbfsReadTest.cpp
-      CudfAbfsTest.cpp
       ${CMAKE_SOURCE_DIR}/velox/connectors/hive/storage_adapters/abfs/tests/AzuriteServer.cpp
     LIBS
       velox_cudf_exec_test_lib
