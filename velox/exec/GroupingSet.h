@@ -91,6 +91,10 @@ class GroupingSet {
   /// freed but only table content.
   void resetTable(bool freeTable);
 
+  /// Resets reusable state for global aggregation so it can be initialized
+  /// again for a new processing cycle.
+  void resetGlobalAggregation();
+
   /// Returns true if 'this' should start producing partial
   /// aggregation results. Checks the memory consumption against
   /// 'maxBytes'. If exceeding 'maxBytes', sees if changing hash mode
