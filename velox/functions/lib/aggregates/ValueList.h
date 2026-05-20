@@ -47,6 +47,14 @@ class ValueList {
     }
   }
 
+  /// Appends all rows selected by 'rows' from 'decoded' in a single
+  /// HashStringAllocator write session. Avoids the per-value
+  /// extendWrite/finishWrite round-trip of appendValue.
+  void appendValues(
+      const DecodedVector& decoded,
+      const SelectivityVector& rows,
+      HashStringAllocator* allocator);
+
   void appendRange(
       const VectorPtr& vector,
       vector_size_t offset,
@@ -94,6 +102,13 @@ class ValueList {
       HashStringAllocator* allocator);
 
   void prepareAppend(HashStringAllocator* allocator);
+
+  // Lazily allocates the 'nulls' and 'data' blocks on first append.
+  void ensureAllocations(HashStringAllocator* allocator);
+
+  // Flushes 'lastNulls_' and resets it if we are about to start a new
+  // 64-element null word.
+  void maybeFlushNullsAtBoundary(HashStringAllocator* allocator);
 
   // Writes lastNulls_ word to the 'nulls' block.
   void writeLastNulls(HashStringAllocator* allocator);

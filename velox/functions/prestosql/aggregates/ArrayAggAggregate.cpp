@@ -348,12 +348,16 @@ class ArrayAggAggregate : public exec::Aggregate {
 
     decodedElements_.decode(*args[0], rows);
     auto tracker = trackRowSize(group);
-    rows.applyToSelected([&](vector_size_t row) {
-      if (ignoreNulls_ && decodedElements_.isNullAt(row)) {
+    if (ignoreNulls_ && decodedElements_.mayHaveNulls()) {
+      const auto* nulls = decodedElements_.nulls(&rows);
+      if (nulls != nullptr) {
+        SelectivityVector nonNullRows = rows;
+        nonNullRows.deselectNulls(nulls, rows.begin(), rows.end());
+        values.appendValues(decodedElements_, nonNullRows, allocator_);
         return;
       }
-      values.appendValue(decodedElements_, row, allocator_);
-    });
+    }
+    values.appendValues(decodedElements_, rows, allocator_);
   }
 
   void addSingleGroupIntermediateResults(
