@@ -53,10 +53,10 @@ target_link_libraries(
 # velox_exec velox_exec_test_lib velox_hive_connector velox_memory
 # velox_vector_test_lib)
 
-add_executable(velox_example_scan_orc ScanOrc.cpp)
+add_executable(velox_example_scan_file ScanFile.cpp)
 
 target_link_libraries(
-  velox_example_scan_orc
+  velox_example_scan_file
   velox_type
   velox_vector
   velox_exec
@@ -64,6 +64,10 @@ target_link_libraries(
   velox_hive_connector
   velox_memory
 )
+
+if(VELOX_ENABLE_PARQUET)
+  target_link_libraries(velox_example_scan_file velox_dwio_parquet_reader)
+endif()
 
 add_executable(velox_example_vector_reader_writer VectorReaderWriter.cpp)
 
