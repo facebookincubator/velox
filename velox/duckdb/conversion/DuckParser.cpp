@@ -620,6 +620,68 @@ core::ExprPtr parseCaseExpr(
     return callExpr("if", std::move(params), getAlias(expr), options);
   }
 
+  // Detect simple CASE: DuckDB rewrites `CASE subject WHEN val THEN res` into
+  // a searched CASE where each when_expr is `COMPARE_EQUAL(subject_copy, val)`.
+  // The original form is lost in the AST (DuckDB's CaseExpression has no field
+  // to distinguish the two). We reverse-engineer it by checking whether all
+  // when_exprs are equality comparisons with a structurally identical left-hand
+  // side (the subject), and if so emit "case" instead of "switch". CaseExpr
+  // evaluates the subject exactly once and reuses the cached vector for each
+  // WHEN comparison, avoiding re-evaluation of non-deterministic subjects
+  // (e.g. rand()).
+  //
+  // Note: this detection can also match a user-written searched CASE whose
+  // conditions happen to be `x = v1`, `x = v2`, ... with the same LHS. This
+  // is semantically equivalent to `CASE x WHEN v1 ... WHEN v2 ...` for
+  // deterministic subjects. For non-deterministic subjects the evaluation
+  // count changes from per-branch to once, but writing a searched CASE with
+  // repeated non-deterministic equality checks against the same expression
+  // is unlikely in practice.
+  {
+    bool allEqWithSameSubject = true;
+    const ComparisonExpression* firstComp =
+        dynamic_cast<const ComparisonExpression*>(checks[0].when_expr.get());
+    const std::string subjectStr =
+        (firstComp && firstComp->type == ExpressionType::COMPARE_EQUAL)
+        ? firstComp->left->ToString()
+        : "";
+
+    if (!subjectStr.empty()) {
+      for (size_t i = 1; i < checks.size(); i++) {
+        const auto* comp = dynamic_cast<const ComparisonExpression*>(
+            checks[i].when_expr.get());
+        if (!comp || comp->type != ExpressionType::COMPARE_EQUAL ||
+            comp->left->ToString() != subjectStr) {
+          allEqWithSameSubject = false;
+          break;
+        }
+      }
+    } else {
+      allEqWithSameSubject = false;
+    }
+
+    if (allEqWithSameSubject) {
+      // Emit: case(subject, when_val_0, then_0, when_val_1, then_1,
+      //                       ..., [else])
+      std::vector<core::ExprPtr> inputs;
+      inputs.reserve(checks.size() * 2 + 2);
+      // Subject — parse from the left side of the first condition.
+      inputs.emplace_back(parseExpr(*firstComp->left, options));
+      for (const auto& check : checks) {
+        const auto& comp =
+            dynamic_cast<const ComparisonExpression&>(*check.when_expr);
+        inputs.emplace_back(parseExpr(*comp.right, options)); // WHEN value
+        inputs.emplace_back(parseExpr(*check.then_expr, options)); // THEN
+      }
+      auto elseExpr = parseExpr(*caseExpr.else_expr, options);
+      if (!isNullConstant(elseExpr)) {
+        inputs.emplace_back(elseExpr);
+      }
+      return callExpr("case", std::move(inputs), getAlias(expr), options);
+    }
+  }
+
+  // Searched CASE (or simple CASE that could not be detected): emit "switch".
   std::vector<core::ExprPtr> inputs;
   inputs.reserve(checks.size() * 2 + 1);
   for (auto& check : checks) {

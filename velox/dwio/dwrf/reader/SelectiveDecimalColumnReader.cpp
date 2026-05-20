@@ -20,10 +20,19 @@ namespace facebook::velox::dwrf {
 
 template <typename DataT>
 SelectiveDecimalColumnReader<DataT>::SelectiveDecimalColumnReader(
+    const TypePtr& requestedType,
     const std::shared_ptr<const TypeWithId>& fileType,
     DwrfParams& params,
     common::ScanSpec& scanSpec)
-    : SelectiveColumnReader(fileType->type(), fileType, params, scanSpec) {
+    // Read using requestedType so that values are materialized at the
+    // table-schema scale rather than the file-footer scale. See the header
+    // comment for the Hive ORC DECIMAL(38, 18) footer behavior this works
+    // around.
+    : SelectiveColumnReader(requestedType, fileType, params, scanSpec) {
+  VELOX_CHECK(
+      requestedType_->isDecimal(),
+      "SelectiveDecimalColumnReader requires a decimal requestedType, got {}",
+      requestedType_->toString());
   EncodingKey encodingKey{fileType_->id(), params.flatMapContext().sequence};
   auto& stripe = params.stripeStreams();
   if constexpr (std::is_same_v<DataT, std::int64_t>) {

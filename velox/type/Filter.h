@@ -1696,6 +1696,7 @@ class FloatingPointRange final : public AbstractRange {
       case FilterKind::kAlwaysTrue:
       case FilterKind::kAlwaysFalse:
       case FilterKind::kIsNull:
+      case FilterKind::kMultiRange:
         return other->mergeWith(this);
       case FilterKind::kIsNotNull:
         return std::make_unique<FloatingPointRange<T>>(
@@ -1725,7 +1726,8 @@ class FloatingPointRange final : public AbstractRange {
         auto upperExclusive = !bothUpperUnbounded &&
             (!testDouble(upper) || !other->testDouble(upper));
 
-        if (lower > upper || (lower == upper && lowerExclusive_)) {
+        if (lower > upper ||
+            (lower == upper && (lowerExclusive || upperExclusive))) {
           if (bothNullAllowed) {
             return std::make_unique<IsNull>();
           }

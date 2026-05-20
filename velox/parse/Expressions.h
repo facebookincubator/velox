@@ -72,6 +72,10 @@ class FieldAccessExpr : public IExpr {
     return input()->is(Kind::kInput);
   }
 
+  /// Returns 'expr' as a FieldAccessExpr if it refers directly to a
+  /// top-level input column; otherwise returns nullptr.
+  static const FieldAccessExpr* tryAsRootColumn(const ExprPtr& expr);
+
   std::string toString() const override;
 
   ExprPtr replaceInputs(std::vector<ExprPtr> newInputs) const override {
