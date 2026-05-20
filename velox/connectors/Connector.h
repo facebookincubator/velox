@@ -28,6 +28,7 @@
 #include "velox/common/future/VeloxPromise.h"
 #include "velox/core/ExpressionEvaluator.h"
 #include "velox/core/QueryConfig.h"
+#include "velox/core/ScanBatchEvent.h"
 #include "velox/exec/SpillStats.h"
 #include "velox/type/Filter.h"
 #include "velox/vector/ComplexVector.h"
@@ -282,6 +283,17 @@ class DataSource {
   /// Returns the number of input rows processed so far.
   virtual uint64_t getCompletedRows() = 0;
 
+  /// Stores a callback to fire after each scan batch.
+  void setScanBatchCallback(core::ScanBatchCallback callback) {
+    scanBatchCallback_ = std::move(callback);
+  }
+
+  /// Called by TableScan after each non-empty batch with generic scan stats.
+  /// Default is a no-op. Subclasses should override to create a
+  /// connector-specific event (e.g., FileScanBatchEvent), enrich it with
+  /// connector-specific fields, and call scanBatchCallback_.
+  virtual void fireScanBatchCallback(core::ScanBatchEvent /*event*/) {}
+
   virtual std::unordered_map<std::string, RuntimeMetric> getRuntimeStats() {
     return {};
   }
@@ -326,6 +338,9 @@ class DataSource {
   /// connector implementation decides how to support the cancellation if
   /// needed.
   virtual void cancel() {}
+
+ protected:
+  core::ScanBatchCallback scanBatchCallback_;
 };
 
 class IndexSource {

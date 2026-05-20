@@ -63,8 +63,8 @@ class WriterTest : public Test {
     auto readFile = std::make_shared<InMemoryReadFile>(std::move(data));
     auto input = std::make_unique<BufferedInput>(std::move(readFile), *pool_);
     dwio::common::ReaderOptions readerOpts(pool_.get());
-    readerOpts.setDataIoStats(&dataIoStats_);
-    readerOpts.setMetadataIoStats(&metadataIoStats_);
+    readerOpts.setDataIoStats(dataIoStats_);
+    readerOpts.setMetadataIoStats(metadataIoStats_);
     auto reader = std::make_unique<ReaderBase>(readerOpts, std::move(input));
     reader->loadCache();
     return reader;
@@ -94,8 +94,10 @@ class WriterTest : public Test {
   std::shared_ptr<MemoryPool> pool_;
   MemorySink* sinkPtr_;
   std::unique_ptr<WriterBase> writer_;
-  io::IoStatistics dataIoStats_;
-  io::IoStatistics metadataIoStats_;
+  std::shared_ptr<io::IoStatistics> dataIoStats_{
+      std::make_shared<io::IoStatistics>()};
+  std::shared_ptr<io::IoStatistics> metadataIoStats_{
+      std::make_shared<io::IoStatistics>()};
 };
 
 class SupportedCompressionTest

@@ -100,13 +100,21 @@ TEST_F(IcebergDwrfInsertTest, commitMessageFormat) {
   }
 }
 
-/// Verify TIMESTAMP values round-trip unchanged through the DWRF write path
-/// even when the session is configured with a non-UTC timezone and
-/// adjustTimestampToTimezone=true. The Iceberg spec requires timestamps NOT
-/// be adjusted to UTC; the DataSink enforces this by overriding the DWRF
-/// WriterOptions fields. If that override regresses, timestamps would
-/// silently shift by the session-timezone offset and assertResults() would
-/// fail.
+/// Round-trips TIMESTAMP values through the DWRF write path with the session
+/// configured for non-UTC timezone and adjustTimestampToTimezone=true. The
+/// Iceberg spec requires timestamps NOT be adjusted to UTC; the DataSink
+/// enforces this by overriding the DWRF WriterOptions fields via
+/// DwrfWriterOptionsAdapter::applyPostConfigs.
+///
+/// TODO: This test is a symmetric Velox-only round-trip and cannot, by
+/// itself, detect a regression where the DataSink stops overriding the DWRF
+/// timezone fields — any write-side shift is exactly cancelled by the
+/// matching read-side shift. The adapter's override contract is locked down
+/// at the unit level by
+/// WriterOptionsAdapterTest::dwrfPostConfigsOverridesTimestampFields. A
+/// true cross-engine validation (e.g., reading Velox-written Iceberg files
+/// with a Java Spark reader) is needed to verify the on-disk timestamp
+/// matches the spec.
 TEST_F(IcebergDwrfInsertTest, timestampRoundTrip) {
   recreateConnectorQueryCtx(
       /*sessionTimezone=*/"America/Los_Angeles",
