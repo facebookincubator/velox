@@ -25,6 +25,7 @@
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/core/PlanNode.h"
+#include "velox/exec/Driver.h"
 #include "velox/exec/Task.h" // NOLINT(misc-unused-headers)
 #include "velox/type/TypeUtil.h"
 
@@ -2024,6 +2025,18 @@ RowVectorPtr CudfHashJoinProbe::doGetOutput() {
     return nullptr;
   }
 
+  const tz::TimeZone* sessionTz = nullptr;
+  {
+    const auto& config = operatorCtx_->driverCtx()->queryConfig();
+    if (config.adjustTimestampToTimezone()) {
+      const auto tzName = config.sessionTimezone();
+      if (!tzName.empty()) {
+        sessionTz = tz::locateZone(tzName);
+      }
+    }
+  }
+  cudf_velox::SessionTimeZoneScope tzScope(sessionTz);
+
   auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input_);
   VELOX_CHECK_NOT_NULL(cudfInput);
   auto stream = cudfInput->stream();
@@ -2167,6 +2180,18 @@ exec::BlockingReason CudfHashJoinProbe::isBlocked(ContinueFuture* future) {
 
   // Precompute right table columns if filter exists (once when build is done)
   if (joinNode_->filter() && !rightPrecomputeInstructions_.empty()) {
+    const tz::TimeZone* sessionTz = nullptr;
+    {
+      const auto& config = operatorCtx_->driverCtx()->queryConfig();
+      if (config.adjustTimestampToTimezone()) {
+        const auto tzName = config.sessionTimezone();
+        if (!tzName.empty()) {
+          sessionTz = tz::locateZone(tzName);
+        }
+      }
+    }
+    cudf_velox::SessionTimeZoneScope tzScope(sessionTz);
+
     auto& rightTablesInit = hashObject_.value().first;
     cachedRightPrecomputed_.clear();
     cachedExtendedRightViews_.clear();

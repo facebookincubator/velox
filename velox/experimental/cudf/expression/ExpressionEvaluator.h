@@ -19,6 +19,7 @@
 #include "velox/expression/Expr.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/type/Type.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 #include <cudf/column/column.hpp>
 #include <cudf/table/table_view.hpp>
@@ -178,5 +179,22 @@ std::shared_ptr<CudfExpression> createCudfExpression(
 bool canBeEvaluatedByCudf(
     std::shared_ptr<velox::exec::Expr> expr,
     bool deep = true);
+
+/// RAII scope that sets the session timezone for GPU function evaluation.
+/// Operators set this before calling CudfExpression::eval() so that
+/// timezone-sensitive CudfFunction implementations (e.g. CastFunction for
+/// VARCHAR->TIMESTAMP) can access the session timezone.
+class SessionTimeZoneScope {
+ public:
+  explicit SessionTimeZoneScope(const tz::TimeZone* tz);
+  ~SessionTimeZoneScope();
+
+ private:
+  const tz::TimeZone* saved_;
+};
+
+/// Returns the session timezone set by the innermost SessionTimeZoneScope,
+/// or nullptr if none is active.
+const tz::TimeZone* getSessionTimeZone();
 
 } // namespace facebook::velox::cudf_velox

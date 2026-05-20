@@ -1499,6 +1499,53 @@ TEST_F(CudfSimpleFilterProjectTest, castToSmallInt) {
   EXPECT_EQ(tryCast, -214);
 }
 
+TEST_F(CudfSimpleFilterProjectTest, castVarcharToTimestamp) {
+  auto result = evaluateOnce<Timestamp, std::string>(
+      "cast(c0 as timestamp)", "2024-03-14 12:30:00");
+  EXPECT_EQ(result, Timestamp(1710419400, 0));
+
+  result = evaluateOnce<Timestamp, std::string>(
+      "cast(c0 as timestamp)", "2024-03-14 12:30:00.123456");
+  EXPECT_EQ(result, Timestamp(1710419400, 123'456'000));
+
+  result = evaluateOnce<Timestamp, std::string>(
+      "cast(c0 as timestamp)", "2024-03-14 00:00:00");
+  EXPECT_EQ(result, Timestamp(1710374400, 0));
+}
+
+TEST_F(CudfSimpleFilterProjectTest, castVarcharToTimestampWithTimezone) {
+  cudf_velox::SessionTimeZoneScope tzScope(
+      tz::locateZone("America/Los_Angeles"));
+
+  // 2024-03-14 12:30:00 in America/Los_Angeles is UTC-7 (PDT in March)
+  // so UTC = 12:30 + 7:00 = 19:30 = 1710444600
+  auto result = evaluateOnce<Timestamp, std::string>(
+      "cast(c0 as timestamp)", "2024-03-14 12:30:00");
+  EXPECT_EQ(result, Timestamp(1710444600, 0));
+
+  // 2024-01-15 08:00:00 in America/Los_Angeles is UTC-8 (PST in January)
+  // so UTC = 08:00 + 8:00 = 16:00 = 1705334400
+  result = evaluateOnce<Timestamp, std::string>(
+      "cast(c0 as timestamp)", "2024-01-15 08:00:00");
+  EXPECT_EQ(result, Timestamp(1705334400, 0));
+}
+
+TEST_F(CudfSimpleFilterProjectTest, castVarcharToTimestampNull) {
+  auto result = evaluateOnce<Timestamp, std::string>(
+      "cast(c0 as timestamp)", std::optional<std::string>(std::nullopt));
+  EXPECT_FALSE(result.has_value());
+}
+
+TEST_F(CudfSimpleFilterProjectTest, tryCastVarcharToTimestamp) {
+  auto result = evaluateOnce<Timestamp, std::string>(
+      "try_cast(c0 as timestamp)", "2024-03-14 12:30:00");
+  EXPECT_EQ(result, Timestamp(1710419400, 0));
+
+  result = evaluateOnce<Timestamp, std::string>(
+      "try_cast(c0 as timestamp)", "2024-03-14 12:30:00.123456");
+  EXPECT_EQ(result, Timestamp(1710419400, 123'456'000));
+}
+
 // Test unary math functions
 TEST_F(CudfSimpleFilterProjectTest, unaryMathFunctions) {
   auto testUnaryFunction =
