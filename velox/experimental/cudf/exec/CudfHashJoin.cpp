@@ -85,6 +85,22 @@ bool isTimestampType(cudf::type_id id) {
       id == cudf::type_id::TIMESTAMP_NANOSECONDS;
 }
 
+/// Returns a resolution rank for timestamp types (higher = finer).
+int timestampResolutionRank(cudf::type_id id) {
+  switch (id) {
+    case cudf::type_id::TIMESTAMP_SECONDS:
+      return 0;
+    case cudf::type_id::TIMESTAMP_MILLISECONDS:
+      return 1;
+    case cudf::type_id::TIMESTAMP_MICROSECONDS:
+      return 2;
+    case cudf::type_id::TIMESTAMP_NANOSECONDS:
+      return 3;
+    default:
+      VELOX_UNREACHABLE();
+  }
+}
+
 /// Returns a canonical timestamp type for normalization.  Picks the highest
 /// resolution present across both tables so that no precision is lost.
 cudf::type_id findCanonicalTimestampType(
@@ -92,8 +108,7 @@ cudf::type_id findCanonicalTimestampType(
     cudf::table_view right) {
   auto best = cudf::type_id::TIMESTAMP_SECONDS;
   auto promote = [&best](cudf::type_id id) {
-    // Higher type_id == finer resolution in cuDF's enum ordering.
-    if (static_cast<int>(id) > static_cast<int>(best)) {
+    if (timestampResolutionRank(id) > timestampResolutionRank(best)) {
       best = id;
     }
   };
