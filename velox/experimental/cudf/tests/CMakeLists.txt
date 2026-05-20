@@ -107,7 +107,7 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_function_registry_test
   SOURCES Main.cpp FunctionRegistryTest.cpp
-  LIBS velox_cudf_exec velox_exec velox_exec_test_lib velox_test_util
+  LIBS velox_cudf_expression velox_cudf_exec velox_exec velox_exec_test_lib velox_test_util
 )
 
 velox_add_cudf_test(
