@@ -19,6 +19,7 @@
 #include <limits>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include <folly/Executor.h>
 #include "velox/common/base/RandomUtil.h"
@@ -35,6 +36,7 @@
 #include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/common/UnitLoader.h"
 #include "velox/dwio/common/encryption/Encryption.h"
+#include "velox/dwio/parquet/ParquetFieldId.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
@@ -573,6 +575,8 @@ class RowReaderOptions {
 };
 
 /// Options for creating a Reader.
+enum class ColumnMappingMode { kPosition, kName, kFieldId };
+
 class ReaderOptions : public io::ReaderOptions {
  public:
   static constexpr uint64_t kDefaultFooterSpeculativeIoSize =
@@ -641,7 +645,25 @@ class ReaderOptions : public io::ReaderOptions {
   }
 
   ReaderOptions& setUseColumnNamesForColumnMapping(bool flag) {
-    useColumnNamesForColumnMapping_ = flag;
+    columnMappingMode_ =
+        flag ? ColumnMappingMode::kName : ColumnMappingMode::kPosition;
+    return *this;
+  }
+
+  ReaderOptions& setColumnMappingMode(ColumnMappingMode mode) {
+    columnMappingMode_ = mode;
+    return *this;
+  }
+
+  ReaderOptions& setParquetFieldIds(
+      std::vector<parquet::ParquetFieldId> fieldIds) {
+    parquetFieldIds_ = std::move(fieldIds);
+    return *this;
+  }
+
+  ReaderOptions& setParquetFieldIdsByName(
+      std::unordered_map<std::string, parquet::ParquetFieldId> fieldIds) {
+    parquetFieldIdsByName_ = std::move(fieldIds);
     return *this;
   }
 
@@ -708,7 +730,20 @@ class ReaderOptions : public io::ReaderOptions {
   }
 
   bool useColumnNamesForColumnMapping() const {
-    return useColumnNamesForColumnMapping_;
+    return columnMappingMode_ == ColumnMappingMode::kName;
+  }
+
+  ColumnMappingMode columnMappingMode() const {
+    return columnMappingMode_;
+  }
+
+  const std::vector<parquet::ParquetFieldId>& parquetFieldIds() const {
+    return parquetFieldIds_;
+  }
+
+  const std::unordered_map<std::string, parquet::ParquetFieldId>&
+  parquetFieldIdsByName() const {
+    return parquetFieldIdsByName_;
   }
 
   const std::shared_ptr<random::RandomSkipTracker>& randomSkip() const {
@@ -865,7 +900,10 @@ class ReaderOptions : public io::ReaderOptions {
   uint64_t footerSpeculativeIoSize_{kDefaultFooterSpeculativeIoSize};
   uint64_t filePreloadThreshold_{kDefaultFilePreloadThreshold};
   bool fileColumnNamesReadAsLowerCase_{false};
-  bool useColumnNamesForColumnMapping_{false};
+  ColumnMappingMode columnMappingMode_{ColumnMappingMode::kPosition};
+  std::vector<parquet::ParquetFieldId> parquetFieldIds_;
+  std::unordered_map<std::string, parquet::ParquetFieldId>
+      parquetFieldIdsByName_;
   std::shared_ptr<random::RandomSkipTracker> randomSkip_;
   std::shared_ptr<velox::common::ScanSpec> scanSpec_;
   const tz::TimeZone* sessionTimezone_{nullptr};

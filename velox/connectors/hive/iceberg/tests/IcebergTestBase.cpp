@@ -18,6 +18,7 @@
 
 #include <filesystem>
 
+#include "velox/common/file/FileSystems.h"
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergConfig.h"
@@ -25,6 +26,12 @@
 #include "velox/connectors/hive/iceberg/IcebergDataSink.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 #include "velox/connectors/hive/iceberg/PartitionSpec.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
+
+#ifdef VELOX_ENABLE_PARQUET
+#include "velox/dwio/common/FileSink.h"
+#endif
 #include "velox/expression/Expr.h"
 
 namespace facebook::velox::connector::hive::iceberg::test {
@@ -325,6 +332,44 @@ IcebergTestBase::createSplitsForDirectory(const std::string& directory) {
   }
 
   return splits;
+}
+
+void IcebergTestBase::verifyTotalRowCount(
+    const RowTypePtr& rowType,
+    const std::string& outputPath,
+    int32_t expectedRowCount) {
+  auto splits = createSplitsForDirectory(outputPath);
+
+  const auto plan = exec::test::PlanBuilder()
+                        .startTableScan()
+                        .connectorId(test::kIcebergConnectorId)
+                        .outputType(rowType)
+                        .endTableScan()
+                        .planNode();
+
+  const auto actualRowCount =
+      exec::test::AssertQueryBuilder(plan).splits(splits).countResults();
+
+  ASSERT_EQ(actualRowCount, expectedRowCount);
+}
+
+std::shared_ptr<TempDirectoryPath> IcebergTestBase::writeBatchesWithTransforms(
+    const std::vector<RowVectorPtr>& batches,
+    const std::vector<test::PartitionField>& partitionFields) {
+  VELOX_CHECK(!batches.empty(), "input cannot be empty");
+
+  int64_t expectedRowCount = 0;
+  for (const auto& batch : batches) {
+    expectedRowCount += batch->size();
+  }
+
+  auto rowType = batches.front()->rowType();
+  auto outputDirectory = TempDirectoryPath::create();
+  const auto dataSink = createDataSinkAndAppendData(
+      batches, outputDirectory->getPath(), partitionFields);
+  dataSink->close();
+  verifyTotalRowCount(rowType, outputDirectory->getPath(), expectedRowCount);
+  return outputDirectory;
 }
 
 } // namespace facebook::velox::connector::hive::iceberg::test

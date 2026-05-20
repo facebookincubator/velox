@@ -16,9 +16,12 @@
 
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 
+#include <limits>
+
 #include <thrift/protocol/TCompactProtocol.h> //@manual
 
 #include "velox/dwio/common/StatisticsBuilder.h"
+#include "velox/dwio/parquet/ParquetFieldId.h"
 #include "velox/dwio/parquet/reader/ParquetColumnReader.h"
 #include "velox/dwio/parquet/reader/ParquetStatsContext.h"
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
@@ -59,6 +62,38 @@ bool isParquetReservedKeyword(
             name == "array_element")))
       ? true
       : false;
+}
+
+std::string columnMappingName(
+    const thrift::SchemaElement& schemaElement,
+    dwio::common::ColumnMappingMode mode) {
+  if (mode == dwio::common::ColumnMappingMode::kFieldId) {
+    return schemaElement.__isset.field_id
+        ? std::to_string(schemaElement.field_id)
+        : "-1";
+  }
+  return schemaElement.name;
+}
+
+int32_t fieldIdOrMissing(const thrift::SchemaElement& schemaElement) {
+  return schemaElement.__isset.field_id ? schemaElement.field_id : -1;
+}
+
+std::vector<ParquetFieldId> makeParquetFieldIds(
+    const RowTypePtr& requestedType,
+    const std::unordered_map<std::string, ParquetFieldId>& fieldIdsByName) {
+  if (!requestedType || fieldIdsByName.empty()) {
+    return {};
+  }
+
+  std::vector<ParquetFieldId> fieldIds;
+  fieldIds.reserve(requestedType->size());
+  for (const auto& name : requestedType->names()) {
+    const auto it = fieldIdsByName.find(name);
+    fieldIds.push_back(
+        it != fieldIdsByName.end() ? it->second : ParquetFieldId{-1, {}});
+  }
+  return fieldIds;
 }
 
 // An unannotated array in Parquet is a repeated field that is not explicitly
@@ -221,6 +256,7 @@ class ReaderBase {
       uint32_t& columnIdx,
       const TypePtr& requestedType,
       const TypePtr& parentRequestedType,
+      const ParquetFieldId* requestedFieldIds,
       std::vector<std::string>& columnNames) const;
 
   TypePtr convertType(
@@ -342,6 +378,12 @@ void ReaderBase::initializeSchema() {
   uint32_t columnIdx = 0;
   uint32_t maxSchemaElementIdx = fileMetaData_->schema.size() - 1;
   std::vector<std::string> columnNames;
+  auto fieldIds = options_.parquetFieldIds();
+  if (fieldIds.empty()) {
+    fieldIds = makeParquetFieldIds(
+        options_.fileSchema(), options_.parquetFieldIdsByName());
+  }
+  ParquetFieldId rootFieldIds{-1, fieldIds};
   // Setting the parent schema index of the root("hive_schema") to be 0, which
   // is the root itself. This is ok because it's never required to check the
   // parent of the root in getParquetColumnInfo().
@@ -354,6 +396,7 @@ void ReaderBase::initializeSchema() {
       columnIdx,
       options_.fileSchema(),
       nullptr,
+      fieldIds.empty() ? nullptr : &rootFieldIds,
       columnNames);
   schema_ = createRowType(
       schemaWithId_->getChildren(), isFileColumnNamesReadAsLowerCase());
@@ -372,6 +415,7 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
     uint32_t& columnIdx,
     const TypePtr& requestedType,
     const TypePtr& parentRequestedType,
+    const ParquetFieldId* requestedFieldIds,
     std::vector<std::string>& columnNames) const {
   VELOX_CHECK(fileMetaData_ != nullptr);
   VELOX_CHECK_LT(schemaIdx, fileMetaData_->schema.size());
@@ -398,12 +442,18 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
     }
   }
 
-  auto name = schemaElement.name;
+  const auto mappingMode = options_.columnMappingMode();
+  auto name = columnMappingName(schemaElement, mappingMode);
   if (isFileColumnNamesReadAsLowerCase()) {
     name = functions::stringImpl::utf8StrToLowerCopy(name);
   }
 
-  if (!options_.useColumnNamesForColumnMapping() && options_.fileSchema()) {
+  const bool parentProvidesChildNames =
+      (mappingMode == dwio::common::ColumnMappingMode::kPosition ||
+       (mappingMode == dwio::common::ColumnMappingMode::kFieldId &&
+        requestedFieldIds != nullptr)) &&
+      options_.fileSchema();
+  if (parentProvidesChildNames) {
     if (isParquetReservedKeyword(name, parentSchemaIdx, curSchemaIdx)) {
       columnNames.push_back(name);
     }
@@ -424,12 +474,13 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
     auto curSchemaIdx = schemaIdx;
     for (int32_t i = 0; i < schemaElement.num_children; i++) {
       ++schemaIdx;
-      auto childName = schema[schemaIdx].name;
+      auto childName = columnMappingName(schema[schemaIdx], mappingMode);
       if (isFileColumnNamesReadAsLowerCase()) {
         childName = functions::stringImpl::utf8StrToLowerCopy(childName);
       }
 
       TypePtr childRequestedType = nullptr;
+      const ParquetFieldId* childRequestedFieldIds = nullptr;
       bool followChild = true;
 
       {
@@ -449,10 +500,39 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
         }
 
         if (requestedRowType) {
-          if (options_.useColumnNamesForColumnMapping()) {
+          if (mappingMode == dwio::common::ColumnMappingMode::kName) {
             auto fileTypeIdx = requestedRowType->getChildIdxIfExists(childName);
             if (fileTypeIdx.has_value()) {
               childRequestedType = requestedRowType->childAt(*fileTypeIdx);
+            }
+          } else if (mappingMode == dwio::common::ColumnMappingMode::kFieldId) {
+            if (requestedFieldIds != nullptr) {
+              const auto fieldId = fieldIdOrMissing(schema[schemaIdx]);
+              std::optional<uint32_t> requestedIdx;
+              for (auto r = 0; r < requestedRowType->size() &&
+                   r < requestedFieldIds->children.size();
+                   ++r) {
+                if (requestedFieldIds->children[r].fieldId == fieldId) {
+                  requestedIdx = r;
+                  break;
+                }
+              }
+              if (requestedIdx.has_value()) {
+                columnNames.push_back(requestedRowType->nameOf(*requestedIdx));
+                childRequestedType = requestedRowType->childAt(*requestedIdx);
+                childRequestedFieldIds =
+                    &requestedFieldIds->children[*requestedIdx];
+              } else {
+                followChild = false;
+              }
+            } else {
+              auto fileTypeIdx =
+                  requestedRowType->getChildIdxIfExists(childName);
+              if (fileTypeIdx.has_value()) {
+                childRequestedType = requestedRowType->childAt(*fileTypeIdx);
+              } else {
+                followChild = false;
+              }
             }
           } else {
             // Handle schema evolution.
@@ -470,13 +550,25 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
       if (!requestedType && parentRequestedType) {
         if (parentRequestedType->isArray()) {
           childRequestedType = parentRequestedType->asArray().elementType();
+          childRequestedFieldIds =
+              (requestedFieldIds && !requestedFieldIds->children.empty())
+              ? &requestedFieldIds->children[0]
+              : nullptr;
         } else if (parentRequestedType->isMap()) {
           auto mapType = parentRequestedType->asMap();
           // Processing map keys
           if (i == 0) {
             childRequestedType = mapType.keyType();
+            childRequestedFieldIds =
+                (requestedFieldIds && !requestedFieldIds->children.empty())
+                ? &requestedFieldIds->children[0]
+                : nullptr;
           } else {
             childRequestedType = mapType.valueType();
+            childRequestedFieldIds =
+                (requestedFieldIds && requestedFieldIds->children.size() > 1)
+                ? &requestedFieldIds->children[1]
+                : nullptr;
           }
         }
       }
@@ -491,6 +583,7 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
             columnIdx,
             childRequestedType,
             requestedType,
+            childRequestedFieldIds,
             columnNames);
         children.push_back(std::move(child));
       }

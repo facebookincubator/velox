@@ -128,6 +128,8 @@ class IcebergSplitReader : public FileSplitReader {
   // projection naturally drops them from the operator output.
   void configureEqualityDeleteColumns();
 
+  void configureBaseReaderOptions() override;
+
   // Names of scan-spec children that 'configureEqualityDeleteColumns'
   // pre-installed a partition-value constant on for the current split.
   // Mirrors the Java 'PARTITION_KEY' column-type distinction in

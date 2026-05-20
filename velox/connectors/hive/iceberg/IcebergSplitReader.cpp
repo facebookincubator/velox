@@ -17,6 +17,8 @@
 #include "velox/connectors/hive/iceberg/IcebergSplitReader.h"
 
 #include <algorithm>
+#include <optional>
+#include <unordered_map>
 
 #include <folly/ScopeGuard.h>
 #include <folly/lang/Bits.h>
@@ -98,6 +100,26 @@ bool shouldSkipBySequenceNumber(
                           : (deleteFileSeqNum < dataSeqNum);
 }
 
+std::optional<std::unordered_map<std::string, parquet::ParquetFieldId>>
+makeParquetFieldIds(const std::shared_ptr<ColumnHandleMap>& columnHandles) {
+  if (!columnHandles) {
+    return std::nullopt;
+  }
+
+  std::unordered_map<std::string, parquet::ParquetFieldId> fieldIds;
+  fieldIds.reserve(columnHandles->size());
+  for (const auto& [_, handle] : *columnHandles) {
+    const auto* icebergHandle =
+        dynamic_cast<const IcebergColumnHandle*>(handle.get());
+    if (!icebergHandle) {
+      return std::nullopt;
+    }
+    fieldIds.emplace(icebergHandle->name(), icebergHandle->field());
+  }
+
+  return fieldIds;
+}
+
 } // namespace
 
 IcebergSplitReader::IcebergSplitReader(
@@ -132,6 +154,19 @@ IcebergSplitReader::IcebergSplitReader(
       splitOffset_(0),
       deleteBitmap_(nullptr),
       columnHandles_(std::move(columnHandles)) {}
+
+void IcebergSplitReader::configureBaseReaderOptions() {
+  FileSplitReader::configureBaseReaderOptions();
+  if (fileSplit_->fileFormat != dwio::common::FileFormat::PARQUET) {
+    return;
+  }
+
+  if (auto fieldIds = makeParquetFieldIds(columnHandles_)) {
+    baseReaderOpts_.setColumnMappingMode(
+        dwio::common::ColumnMappingMode::kFieldId);
+    baseReaderOpts_.setParquetFieldIdsByName(std::move(*fieldIds));
+  }
+}
 
 void IcebergSplitReader::prepareSplit(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
