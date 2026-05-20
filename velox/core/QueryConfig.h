@@ -1335,7 +1335,9 @@ class QueryConfig {
       0,
       "Maximum input batches to prefetch for index lookup. 0 disables.")
 
-  /// If true, index join operator may split output per input batch.
+  /// If true, index join operator may split output per input batch. This can be
+  /// overridden on a per operator basis by the splitOutput parameter in the
+  /// IndexLookupJoinNode.
   VELOX_QUERY_CONFIG(
       kIndexLookupJoinSplitOutput,
       indexLookupJoinSplitOutput,
