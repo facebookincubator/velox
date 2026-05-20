@@ -134,18 +134,7 @@ cudf::table_view normalizeTimestampColumns(
     std::vector<std::unique_ptr<cudf::column>>& storage,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
-  bool needsRebuild = false;
-  for (cudf::size_type i = 0; i < view.num_columns(); ++i) {
-    auto id = view.column(i).type().id();
-    if (isTimestampType(id) && id != target) {
-      needsRebuild = true;
-      break;
-    }
-  }
-  if (!needsRebuild) {
-    return view;
-  }
-
+  bool rebuilt = false;
   std::vector<cudf::column_view> cols;
   cols.reserve(view.num_columns());
   for (cudf::size_type i = 0; i < view.num_columns(); ++i) {
@@ -154,9 +143,13 @@ cudf::table_view normalizeTimestampColumns(
       storage.push_back(
           cudf::cast(view.column(i), cudf::data_type{target}, stream, mr));
       cols.push_back(storage.back()->view());
+      rebuilt = true;
     } else {
       cols.push_back(view.column(i));
     }
+  }
+  if (!rebuilt) {
+    return view;
   }
   return cudf::table_view(cols);
 }
