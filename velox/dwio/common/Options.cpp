@@ -43,6 +43,8 @@ FileFormat toFileFormat(std::string_view s) {
     return FileFormat::FLUX;
   } else if (s == "avro") {
     return FileFormat::AVRO;
+  } else if (s == "puffin") {
+    return FileFormat::PUFFIN;
   }
   return FileFormat::UNKNOWN;
 }
@@ -73,6 +75,8 @@ std::string_view toString(FileFormat fmt) {
       return "flux";
     case FileFormat::AVRO:
       return "avro";
+    case FileFormat::PUFFIN:
+      return "puffin";
     default:
       return "unknown";
   }
