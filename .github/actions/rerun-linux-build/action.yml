@@ -106,7 +106,10 @@ runs:
         # immediately, instead of waiting for in-flight cmake/link
         # steps that can ignore SIGTERM until they finish. The
         # ~5-min wait the regular cancel needed shrinks to seconds.
-        if ! gh run cancel --force --repo "$REPO" "$RUN_ID" 2>/tmp/cancel_err; then
+        #
+        # Uses gh_api (with retry) instead of `gh run cancel --force`
+        # so transient GitHub 5xx responses are retried automatically.
+        if ! gh_api -X POST "/repos/$REPO/actions/runs/$RUN_ID/force-cancel" 2>/tmp/cancel_err; then
           # Only swallow the expected race-with-completion case
           # (run finished between find_run and cancel). Anything
           # else — perms, network, 5xx — surfaces as a real error

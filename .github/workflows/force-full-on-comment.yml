@@ -50,13 +50,18 @@ permissions:
 jobs:
   rerun:
     # Gate to PR comments (issue_comment fires on issues too) whose
-    # body contains `/full-build`. Multiline `m` flag in
-    # selective-build-plan.yml's matcher accepts the marker on any
-    # line; mirror that intent here so reviewers' inline /full-build
-    # mentions in a longer comment still trigger.
+    # body contains `/full-build`. The `contains()` check is a cheap
+    # substring pre-filter; the dedup step below applies the precise
+    # line-start-anchored regex (`^/full-build(\s|$)`) that matches
+    # selective-build-plan.yml's matcher. Restricted to users with a
+    # prior relationship to the repo (CONTRIBUTOR = has had a PR
+    # merged) to cap CI-minutes exposure from drive-by commenters
+    # across the repo's open PRs.
     if: >
       github.event.issue.pull_request != null &&
-      contains(github.event.comment.body, '/full-build')
+      contains(github.event.comment.body, '/full-build') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'),
+               github.event.comment.author_association)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0

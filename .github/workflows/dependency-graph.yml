@@ -32,6 +32,7 @@ on:
       - .github/workflows/dependency-graph.yml
       - .github/scripts/generate-dependency-graph.py
       - .github/actions/generate-dependency-graph/action.yml
+      - .github/scripts/cmake-flags.sh
 
 permissions:
   contents: read
