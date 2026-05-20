@@ -1546,6 +1546,198 @@ TEST_F(CudfSimpleFilterProjectTest, tryCastVarcharToTimestamp) {
   EXPECT_EQ(result, Timestamp(1710419400, 123'456'000));
 }
 
+TEST_F(CudfSimpleFilterProjectTest, castDateToVarchar) {
+  auto result = evaluateOnce<std::string>(
+      "cast(c0 as varchar)",
+      {DATE()},
+      std::optional<int32_t>(parseDate("2024-03-15")));
+  EXPECT_EQ(result, "2024-03-15");
+}
+
+TEST_F(CudfSimpleFilterProjectTest, castDateToVarcharEpoch) {
+  auto result = evaluateOnce<std::string>(
+      "cast(c0 as varchar)",
+      {DATE()},
+      std::optional<int32_t>(parseDate("1970-01-01")));
+  EXPECT_EQ(result, "1970-01-01");
+}
+
+TEST_F(CudfSimpleFilterProjectTest, castDateToVarcharYear0001) {
+  auto result = evaluateOnce<std::string>(
+      "cast(c0 as varchar)",
+      {DATE()},
+      std::optional<int32_t>(parseDate("0001-01-01")));
+  EXPECT_EQ(result, "0001-01-01");
+}
+
+TEST_F(CudfSimpleFilterProjectTest, castDateToVarcharPreEpoch) {
+  auto result = evaluateOnce<std::string>(
+      "cast(c0 as varchar)",
+      {DATE()},
+      std::optional<int32_t>(parseDate("1920-01-02")));
+  EXPECT_EQ(result, "1920-01-02");
+}
+
+TEST_F(CudfSimpleFilterProjectTest, castDateToVarcharNull) {
+  auto result = evaluateOnce<std::string>(
+      "cast(c0 as varchar)", {DATE()}, std::optional<int32_t>(std::nullopt));
+  EXPECT_FALSE(result.has_value());
+}
+
+TEST_F(CudfSimpleFilterProjectTest, tryCastDateToVarchar) {
+  auto result = evaluateOnce<std::string>(
+      "try_cast(c0 as varchar)",
+      {DATE()},
+      std::optional<int32_t>(parseDate("2024-03-15")));
+  EXPECT_EQ(result, "2024-03-15");
+}
+
+TEST_F(CudfSimpleFilterProjectTest, castIntToVarchar) {
+  auto result = evaluateOnce<std::string>(
+      "cast(c0 as varchar)", std::optional<int32_t>(12'345));
+  EXPECT_EQ(result, "12345");
+}
+
+TEST_F(CudfSimpleFilterProjectTest, castIntToVarcharNegative) {
+  auto result = evaluateOnce<std::string>(
+      "cast(c0 as varchar)", std::optional<int32_t>(-100));
+  EXPECT_EQ(result, "-100");
+}
+
+TEST_F(CudfSimpleFilterProjectTest, castIntToVarcharZero) {
+  auto result = evaluateOnce<std::string>(
+      "cast(c0 as varchar)", std::optional<int32_t>(0));
+  EXPECT_EQ(result, "0");
+}
+
+TEST_F(CudfSimpleFilterProjectTest, castIntToVarcharNull) {
+  auto result = evaluateOnce<std::string>(
+      "cast(c0 as varchar)", std::optional<int32_t>(std::nullopt));
+  EXPECT_FALSE(result.has_value());
+}
+
+TEST_F(CudfSimpleFilterProjectTest, castBigintToVarchar) {
+  auto result = evaluateOnce<std::string>(
+      "cast(c0 as varchar)", std::optional<int64_t>(9'876'543'210LL));
+  EXPECT_EQ(result, "9876543210");
+}
+
+TEST_F(CudfSimpleFilterProjectTest, tryCastIntToVarchar) {
+  auto result = evaluateOnce<std::string>(
+      "try_cast(c0 as varchar)", std::optional<int32_t>(42));
+  EXPECT_EQ(result, "42");
+}
+
+TEST_F(CudfSimpleFilterProjectTest, castSmallintToVarchar) {
+  auto result = evaluateOnce<std::string, int16_t>(
+      "cast(c0 as varchar)", std::optional<int16_t>(255));
+  EXPECT_EQ(result, "255");
+}
+
+TEST_F(CudfSimpleFilterProjectTest, castTinyintToVarchar) {
+  auto result = evaluateOnce<std::string, int8_t>(
+      "cast(c0 as varchar)", std::optional<int8_t>(127));
+  EXPECT_EQ(result, "127");
+}
+
+TEST_F(CudfSimpleFilterProjectTest, dateFormatYmd) {
+  auto result = evaluateOnce<std::string>(
+      "date_format(c0, '%Y%m%d')",
+      std::optional<Timestamp>(parseTimestamp("2024-03-15")));
+  EXPECT_EQ(result, "20240315");
+}
+
+TEST_F(CudfSimpleFilterProjectTest, dateFormatIso) {
+  auto result = evaluateOnce<std::string>(
+      "date_format(c0, '%Y-%m-%d')",
+      std::optional<Timestamp>(parseTimestamp("1970-01-01")));
+  EXPECT_EQ(result, "1970-01-01");
+}
+
+TEST_F(CudfSimpleFilterProjectTest, dateFormatYearZeroPad) {
+  auto result = evaluateOnce<std::string>(
+      "date_format(c0, '%Y%m%d')",
+      std::optional<Timestamp>(parseTimestamp("1900-01-01")));
+  EXPECT_EQ(result, "19000101");
+}
+
+TEST_F(CudfSimpleFilterProjectTest, dateFormatWithTime) {
+  auto result = evaluateOnce<std::string>(
+      "date_format(c0, '%Y-%m-%d %H:%i:%S')",
+      std::optional<Timestamp>(Timestamp(0, 0)));
+  EXPECT_EQ(result, "1970-01-01 00:00:00");
+}
+
+TEST_F(CudfSimpleFilterProjectTest, dateFormatFullDateTime) {
+  auto result = evaluateOnce<std::string>(
+      "date_format(c0, '%Y-%m-%d %H:%i:%s')",
+      std::optional<Timestamp>(parseTimestamp("2000-02-29 13:45:30")));
+  EXPECT_EQ(result, "2000-02-29 13:45:30");
+}
+
+TEST_F(CudfSimpleFilterProjectTest, dateFormat24hTime) {
+  auto result = evaluateOnce<std::string>(
+      "date_format(c0, '%T')",
+      std::optional<Timestamp>(parseTimestamp("2022-01-01 23:59:59")));
+  EXPECT_EQ(result, "23:59:59");
+}
+
+TEST_F(CudfSimpleFilterProjectTest, dateFormat12hHour) {
+  auto resultH = evaluateOnce<std::string>(
+      "date_format(c0, '%h')",
+      std::optional<Timestamp>(parseTimestamp("2022-01-01 14:00:00")));
+  EXPECT_EQ(resultH, "02");
+
+  auto resultI = evaluateOnce<std::string>(
+      "date_format(c0, '%I')",
+      std::optional<Timestamp>(parseTimestamp("2022-01-01 14:00:00")));
+  EXPECT_EQ(resultI, "02");
+}
+
+TEST_F(CudfSimpleFilterProjectTest, dateFormatDayOfYear) {
+  auto result = evaluateOnce<std::string>(
+      "date_format(c0, '%j')",
+      std::optional<Timestamp>(parseTimestamp("2022-12-31")));
+  EXPECT_EQ(result, "365");
+}
+
+TEST_F(CudfSimpleFilterProjectTest, dateFormatTwoDigitYear) {
+  auto result = evaluateOnce<std::string>(
+      "date_format(c0, '%y')",
+      std::optional<Timestamp>(parseTimestamp("2024-06-15")));
+  EXPECT_EQ(result, "24");
+}
+
+TEST_F(CudfSimpleFilterProjectTest, dateFormatNull) {
+  auto result = evaluateOnce<std::string>(
+      "date_format(c0, '%Y%m%d')", std::optional<Timestamp>(std::nullopt));
+  EXPECT_FALSE(result.has_value());
+}
+
+TEST_F(CudfSimpleFilterProjectTest, dateFormatLiteralPercent) {
+  auto result = evaluateOnce<std::string>(
+      "date_format(c0, '100%%')",
+      std::optional<Timestamp>(parseTimestamp("2024-01-01")));
+  EXPECT_EQ(result, "100%");
+}
+
+TEST_F(CudfSimpleFilterProjectTest, dateFormatWithTimezone) {
+  cudf_velox::SessionTimeZoneScope tzScope(
+      tz::locateZone("America/Los_Angeles"));
+
+  // 2024-03-14 19:30:00 UTC is 12:30:00 PDT (UTC-7 in March)
+  auto result = evaluateOnce<std::string>(
+      "date_format(c0, '%Y-%m-%d %H:%i:%S')",
+      std::optional<Timestamp>(Timestamp(1710444600, 0)));
+  EXPECT_EQ(result, "2024-03-14 12:30:00");
+
+  // 2024-01-15 16:00:00 UTC is 08:00:00 PST (UTC-8 in January)
+  result = evaluateOnce<std::string>(
+      "date_format(c0, '%H:%i:%S')",
+      std::optional<Timestamp>(Timestamp(1705334400, 0)));
+  EXPECT_EQ(result, "08:00:00");
+}
+
 // Test unary math functions
 TEST_F(CudfSimpleFilterProjectTest, unaryMathFunctions) {
   auto testUnaryFunction =
@@ -1763,6 +1955,64 @@ TEST_F(CudfFilterProjectTest, andAndAndWithDecimalDivideBelowExpr) {
 
   auto expected = makeRowVector({
       makeNullableFlatVector<bool>({true, false, false, false}),
+  });
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfFilterProjectTest, castDateToVarcharQuery1Pattern) {
+  auto dates = makeNullableFlatVector<int32_t>(
+      {DATE()->toDays("0001-01-01"),
+       DATE()->toDays("2024-03-15"),
+       DATE()->toDays("1970-01-01"),
+       DATE()->toDays("2027-10-18"),
+       std::nullopt},
+      DATE());
+  auto plan = PlanBuilder()
+                  .values({makeRowVector({dates})})
+                  .project({"CASE WHEN cast(c0 as varchar) = '0001-01-01'"
+                            " THEN '00000000'"
+                            " ELSE cast(c0 as varchar)"
+                            " END AS result"})
+                  .planNode();
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  auto expected = makeRowVector({
+      makeNullableFlatVector<StringView>({
+          "00000000"_sv,
+          "2024-03-15"_sv,
+          "1970-01-01"_sv,
+          "2027-10-18"_sv,
+          std::nullopt,
+      }),
+  });
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfFilterProjectTest, dateFormatQuery2Pattern) {
+  auto dates = makeNullableFlatVector<int32_t>(
+      {DATE()->toDays("2024-03-15"),
+       DATE()->toDays("1970-01-01"),
+       DATE()->toDays("2027-10-18"),
+       std::nullopt},
+      DATE());
+  auto plan =
+      PlanBuilder()
+          .values({makeRowVector({dates})})
+          .project(
+              {"CASE WHEN date_format(cast(c0 as timestamp), '%Y%m%d') = '19700101'"
+               " THEN '00000000'"
+               " ELSE date_format(cast(c0 as timestamp), '%Y%m%d')"
+               " END AS result"})
+          .planNode();
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  auto expected = makeRowVector({
+      makeNullableFlatVector<StringView>({
+          "20240315"_sv,
+          "00000000"_sv,
+          "20271018"_sv,
+          std::nullopt,
+      }),
   });
   facebook::velox::test::assertEqualVectors(expected, result);
 }

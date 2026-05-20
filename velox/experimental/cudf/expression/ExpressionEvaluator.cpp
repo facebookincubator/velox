@@ -50,6 +50,7 @@
 #include <cudf/strings/combine.hpp>
 #include <cudf/strings/contains.hpp>
 #include <cudf/strings/convert/convert_datetime.hpp>
+#include <cudf/strings/convert/convert_integers.hpp>
 #include <cudf/strings/find.hpp>
 #include <cudf/strings/replace.hpp>
 #include <cudf/strings/slice.hpp>
@@ -321,6 +322,54 @@ void mergeSecondaryNullsIntoResult(
 
 } // namespace
 
+static std::optional<std::string> prestoToCudfDateFormat(
+    const std::string& prestoFormat) {
+  std::string result;
+  result.reserve(prestoFormat.size() * 2);
+  for (size_t i = 0; i < prestoFormat.size(); ++i) {
+    if (prestoFormat[i] != '%') {
+      result += prestoFormat[i];
+      continue;
+    }
+    if (i + 1 >= prestoFormat.size()) {
+      return std::nullopt;
+    }
+    ++i;
+    switch (prestoFormat[i]) {
+      case 'Y':
+      case 'y':
+      case 'm':
+      case 'd':
+      case 'H':
+      case 'I':
+      case 'S':
+      case 'f':
+      case 'j':
+        result += '%';
+        result += prestoFormat[i];
+        break;
+      case 'i':
+        result += "%M";
+        break;
+      case 's':
+        result += "%S";
+        break;
+      case 'h':
+        result += "%I";
+        break;
+      case 'T':
+        result += "%H:%M:%S";
+        break;
+      case '%':
+        result += "%%";
+        break;
+      default:
+        return std::nullopt;
+    }
+  }
+  return result;
+}
+
 class SplitFunction : public CudfFunction {
  public:
   SplitFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
@@ -420,11 +469,36 @@ std::unique_ptr<cudf::column> convertLocalToUtc(
   return buildTimestampFromHost(hostData, view, stream, mr);
 }
 
+std::unique_ptr<cudf::column> convertUtcToLocal(
+    std::unique_ptr<cudf::column> utcTs,
+    const tz::TimeZone* tz,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  auto view = utcTs->view();
+  auto hostData = copyTimestampToHost(view, stream);
+  bool isMicroseconds =
+      view.type().id() == cudf::type_id::TIMESTAMP_MICROSECONDS;
+  for (auto& val : hostData) {
+    if (isMicroseconds) {
+      Timestamp ts = Timestamp::fromMicros(val);
+      ts.toTimezone(*tz);
+      val = ts.toMicros();
+    } else {
+      Timestamp ts = Timestamp::fromNanos(val);
+      ts.toTimezone(*tz);
+      val = ts.toNanos();
+    }
+  }
+  return buildTimestampFromHost(hostData, view, stream, mr);
+}
+
 class CastFunction : public CudfFunction {
  public:
   enum class CastMode {
     kFixedWidth,
     kStringToTimestamp,
+    kDateToString,
+    kIntToString,
   };
 
   CastFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
@@ -437,6 +511,16 @@ class CastFunction : public CudfFunction {
     if (srcVeloxType->kind() == TypeKind::VARCHAR &&
         dstVeloxType->kind() == TypeKind::TIMESTAMP) {
       castMode_ = CastMode::kStringToTimestamp;
+    } else if (
+        srcVeloxType->isDate() && dstVeloxType->kind() == TypeKind::VARCHAR) {
+      castMode_ = CastMode::kDateToString;
+    } else if (
+        (srcVeloxType->kind() == TypeKind::TINYINT ||
+         srcVeloxType->kind() == TypeKind::SMALLINT ||
+         srcVeloxType->kind() == TypeKind::INTEGER ||
+         srcVeloxType->kind() == TypeKind::BIGINT) &&
+        dstVeloxType->kind() == TypeKind::VARCHAR) {
+      castMode_ = CastMode::kIntToString;
     } else {
       castMode_ = CastMode::kFixedWidth;
       auto sourceType = cudf_velox::veloxToCudfDataType(srcVeloxType);
@@ -483,6 +567,21 @@ class CastFunction : public CudfFunction {
         }
         return result;
       }
+      case CastMode::kDateToString:
+        return cudf::strings::from_timestamps(
+            inputCol,
+            "%Y-%m-%d",
+            cudf::strings_column_view(
+                cudf::column_view{
+                    cudf::data_type{cudf::type_id::STRING},
+                    0,
+                    nullptr,
+                    nullptr,
+                    0}),
+            stream,
+            mr);
+      case CastMode::kIntToString:
+        return cudf::strings::from_integers(inputCol, stream, mr);
       default:
         return cudf::cast(inputCol, targetCudfType_, stream, mr);
     }
@@ -491,6 +590,57 @@ class CastFunction : public CudfFunction {
  private:
   CastMode castMode_{CastMode::kFixedWidth};
   cudf::data_type targetCudfType_;
+};
+
+class DateFormatFunction : public CudfFunction {
+ public:
+  DateFormatFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    using velox::exec::ConstantExpr;
+    VELOX_CHECK_EQ(
+        expr->inputs().size(), 2, "date_format expects exactly 2 inputs");
+
+    auto formatExpr =
+        std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[1]);
+    VELOX_CHECK_NOT_NULL(
+        formatExpr, "date_format format string must be a constant");
+    auto prestoFormat = formatExpr->value()->toString(0);
+
+    auto cudfFormat = prestoToCudfDateFormat(prestoFormat);
+    VELOX_CHECK(
+        cudfFormat.has_value(),
+        "date_format: unsupported format specifier in '{}'",
+        prestoFormat);
+    cudfFormat_ = std::move(cudfFormat.value());
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    auto inputCol = asView(inputColumns[0]);
+
+    // Presto's date_format formats timestamps in the session timezone.
+    // cudf::strings::from_timestamps formats in UTC, so convert first.
+    const auto* tz = getSessionTimeZone();
+    std::unique_ptr<cudf::column> localCol;
+    if (tz != nullptr) {
+      auto inputOwned = std::make_unique<cudf::column>(inputCol, stream, mr);
+      localCol = convertUtcToLocal(std::move(inputOwned), tz, stream, mr);
+      inputCol = localCol->view();
+    }
+
+    cudf::column_view emptyNames{
+        cudf::data_type{cudf::type_id::STRING}, 0, nullptr, nullptr, 0};
+    return cudf::strings::from_timestamps(
+        inputCol,
+        cudfFormat_,
+        cudf::strings_column_view(emptyNames),
+        stream,
+        mr);
+  }
+
+ private:
+  std::string cudfFormat_;
 };
 
 class CardinalityFunction : public CudfFunction {
@@ -2439,6 +2589,17 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .variableArity("decimal(p,s)")
            .build()});
 
+  registerCudfFunction(
+      prefix + "date_format",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<DateFormatFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("varchar")
+           .argumentType("timestamp")
+           .constantArgumentType("varchar")
+           .build()});
+
   return true;
 }
 
@@ -2526,6 +2687,17 @@ bool FunctionExpression::canEvaluate(std::shared_ptr<velox::exec::Expr> expr) {
         dstType->kind() == TypeKind::TIMESTAMP) {
       return true;
     }
+    // DATE -> VARCHAR via cudf::strings::from_timestamps.
+    if (srcType->isDate() && dstType->kind() == TypeKind::VARCHAR) {
+      return true;
+    }
+    // Integer types -> VARCHAR via cudf::strings::from_integers.
+    auto srcKind = srcType->kind();
+    if ((srcKind == TypeKind::TINYINT || srcKind == TypeKind::SMALLINT ||
+         srcKind == TypeKind::INTEGER || srcKind == TypeKind::BIGINT) &&
+        dstType->kind() == TypeKind::VARCHAR) {
+      return true;
+    }
     auto src = cudf_velox::veloxToCudfDataType(srcType);
     auto dst = cudf_velox::veloxToCudfDataType(dstType);
     return cudf::is_supported_cast(src, dst);
@@ -2539,6 +2711,16 @@ bool FunctionExpression::canEvaluate(std::shared_ptr<velox::exec::Expr> expr) {
   for (const auto& spec : it->second) {
     if (spec.signatures.empty() ||
         matchCallAgainstSignatures(*expr, spec.signatures)) {
+      // Validate date_format's format string is translatable to cuDF.
+      if (opName == "date_format" && expr->inputs().size() == 2) {
+        auto formatExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
+            expr->inputs()[1]);
+        if (!formatExpr) {
+          return false;
+        }
+        return prestoToCudfDateFormat(formatExpr->value()->toString(0))
+            .has_value();
+      }
       return true;
     }
   }
