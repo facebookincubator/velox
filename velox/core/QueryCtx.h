@@ -26,6 +26,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/core/ExchangeTransportType.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/core/ScanBatchEvent.h"
 #include "velox/vector/DecodedVector.h"
@@ -192,6 +193,22 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
       return *this;
     }
 
+    /// Sets the input transport type for a specific exchange node.
+    Builder& inputTransportType(
+        const std::string& planNodeId,
+        ExchangeTransportType type) {
+      inputTransportTypes_[planNodeId] = type;
+      return *this;
+    }
+
+    /// Sets the output transport type for a specific partitioned output node.
+    Builder& outputTransportType(
+        const std::string& planNodeId,
+        ExchangeTransportType type) {
+      outputTransportTypes_[planNodeId] = type;
+      return *this;
+    }
+
     /// Constructs and returns a QueryCtx with the configured parameters.
     ///
     /// @return Shared pointer to the newly created QueryCtx instance
@@ -209,6 +226,9 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     std::shared_ptr<filesystems::TokenProvider> tokenProvider_;
     std::deque<ReleaseCallback> releaseCallbacks_;
     TraceCtxProvider traceCtxProvider_;
+    std::unordered_map<std::string, ExchangeTransportType> inputTransportTypes_;
+    std::unordered_map<std::string, ExchangeTransportType>
+        outputTransportTypes_;
   };
 
   /// Generates a unique memory pool name for a query.
@@ -237,6 +257,54 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
 
   bool isExecutorSupplied() const {
     return executor_ != nullptr;
+  }
+
+  // Per-node transport type accessors and setters.
+  //
+  // Both are keyed by PlanNodeId because a single QueryCtx is shared across
+  // multiple tasks in the same query, and each task's plan fragment can contain
+  // multiple Exchange/PartitionedOutput nodes with different transport needs.
+  //
+  // Mutable setters exist because the QueryCtx is created (and cached) before
+  // plan conversion; the host app discovers transport types during conversion
+  // and must set them on the already-existing QueryCtx.
+
+  /// Returns the transport type for a specific Exchange (input) node.
+  /// Defaults to kHttp if the node ID is not in the map.
+  ExchangeTransportType inputTransportType(
+      const std::string& planNodeId) const {
+    auto it = inputTransportTypes_.find(planNodeId);
+    if (it == inputTransportTypes_.end()) {
+      return ExchangeTransportType::kHttp;
+    }
+    return it->second;
+  }
+
+  /// Returns the transport type for a specific PartitionedOutput node.
+  /// Defaults to kHttp if the node ID is not in the map.
+  ExchangeTransportType outputTransportType(
+      const std::string& planNodeId) const {
+    auto it = outputTransportTypes_.find(planNodeId);
+    if (it == outputTransportTypes_.end()) {
+      return ExchangeTransportType::kHttp;
+    }
+    return it->second;
+  }
+
+  /// Sets the input transport type for a specific exchange node.
+  void setInputTransportType(
+      const std::string& planNodeId,
+      ExchangeTransportType type) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    inputTransportTypes_[planNodeId] = type;
+  }
+
+  /// Sets the output transport type for a specific partitioned output node.
+  void setOutputTransportType(
+      const std::string& planNodeId,
+      ExchangeTransportType type) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    outputTransportTypes_[planNodeId] = type;
   }
 
   const QueryConfig& queryConfig() const {
@@ -489,6 +557,12 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
 
   // Optional per-batch scan stats callback.
   ScanBatchCallback scanBatchCallback_;
+
+  // Per-node transport types keyed by PlanNodeId. Protected by mutex_ for
+  // mutable setters; read-only accessors are safe without lock because writes
+  // complete before operators start.
+  std::unordered_map<std::string, ExchangeTransportType> inputTransportTypes_;
+  std::unordered_map<std::string, ExchangeTransportType> outputTransportTypes_;
 
   // Type-erased registry entry for per-query overrides.
   struct RegistryEntry {

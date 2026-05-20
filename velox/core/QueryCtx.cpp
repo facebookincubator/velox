@@ -55,6 +55,8 @@ std::shared_ptr<QueryCtx> QueryCtx::Builder::build() {
       std::move(queryId_),
       std::move(tokenProvider_),
       std::move(traceCtxProvider_)));
+  queryCtx->inputTransportTypes_ = std::move(inputTransportTypes_);
+  queryCtx->outputTransportTypes_ = std::move(outputTransportTypes_);
   queryCtx->maybeSetReclaimer();
   for (auto& cb : releaseCallbacks_) {
     queryCtx->addReleaseCallback(std::move(cb));
