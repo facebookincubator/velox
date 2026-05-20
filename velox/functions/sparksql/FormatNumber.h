@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <type_traits>
+
 #include "velox/expression/StringWriter.h"
 #include "velox/functions/Macros.h"
 

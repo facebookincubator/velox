@@ -58,21 +58,19 @@ void formatInteger(
     exec::StringWriter& out) {
   int32_t cappedPlaces = std::min(decimalPlaces, kMaxFractionDigits);
 
-  // Format integer with thousands separators using locale.
-  auto formatted = fmt::format(usLocale(), "{:Ld}", value);
-
-  // Reserve: formatted + '.' + decimal zeros.
-  size_t totalSize =
-      formatted.size() + (cappedPlaces > 0 ? 1 + cappedPlaces : 0);
-  out.reserve(totalSize);
-  out.append(formatted);
+  // Use fmt::memory_buffer (stack-allocated for typical sizes) to avoid
+  // per-row heap allocation.
+  fmt::memory_buffer buf;
+  fmt::format_to(std::back_inserter(buf), usLocale(), "{:Ld}", value);
 
   if (cappedPlaces > 0) {
-    out.append(".");
-    // Append decimal zeros.
-    std::string zeros(cappedPlaces, '0');
-    out.append(zeros);
+    buf.push_back('.');
+    for (int32_t i = 0; i < cappedPlaces; ++i) {
+      buf.push_back('0');
+    }
   }
+
+  out.append(std::string_view(buf.data(), buf.size()));
 }
 
 void formatFloatingPoint(
@@ -95,10 +93,12 @@ void formatFloatingPoint(
 
   int32_t cappedPlaces = std::min(decimalPlaces, kMaxFractionDigits);
 
-  // Use fmt with locale for thousands separators and fixed decimal places.
-  // This handles rounding (HALF_EVEN via Dragonbox/Grisu) and sign.
-  auto formatted = fmt::format(usLocale(), "{:.{}Lf}", value, cappedPlaces);
-  out.append(formatted);
+  // Use fmt::memory_buffer (stack-allocated for typical sizes) to avoid
+  // per-row heap allocation.
+  fmt::memory_buffer buf;
+  fmt::format_to(
+      std::back_inserter(buf), usLocale(), "{:.{}Lf}", value, cappedPlaces);
+  out.append(std::string_view(buf.data(), buf.size()));
 }
 
 } // namespace facebook::velox::functions::sparksql::detail
