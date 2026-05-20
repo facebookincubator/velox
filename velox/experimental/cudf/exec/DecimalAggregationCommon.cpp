@@ -50,8 +50,7 @@ std::unique_ptr<cudf::column> serializeDecimalPartialOrIntermediateState(
     std::unique_ptr<cudf::column> count,
     rmm::cuda_stream_view stream) {
   count = castCountColumnToInt64(std::move(count), stream);
-  return serializeDecimalSumState(
-      sum->view(), count->view(), stream, get_output_mr());
+  return serializeDecimalSumState(sum->view(), count->view(), stream);
 }
 
 std::unique_ptr<cudf::column> finalizeDecimalAverage(
@@ -60,8 +59,7 @@ std::unique_ptr<cudf::column> finalizeDecimalAverage(
     const TypePtr& resultType,
     rmm::cuda_stream_view stream) {
   count = castCountColumnToInt64(std::move(count), stream);
-  auto avgCol = computeDecimalAverage(
-      sum->view(), count->view(), stream, get_output_mr());
+  auto avgCol = computeDecimalAverage(sum->view(), count->view(), stream);
   auto const cudfOutType = veloxToCudfDataType(resultType);
   if (avgCol->type() != cudfOutType) {
     avgCol = cudf::cast(avgCol->view(), cudfOutType, stream, get_output_mr());

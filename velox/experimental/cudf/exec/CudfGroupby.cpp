@@ -110,8 +110,8 @@ void addDecimalSumCountRequestsAfterDecode(
     uint32_t& countIdx,
     std::unique_ptr<cudf::column>& decodedSum,
     std::unique_ptr<cudf::column>& decodedCount) {
-  auto sumAndCount = cudf_velox::deserializeDecimalSumState(
-      encodedColumn, scale, stream, cudf_velox::get_output_mr());
+  auto sumAndCount =
+      cudf_velox::deserializeDecimalSumState(encodedColumn, scale, stream);
   decodedSum.swap(sumAndCount.sum);
   decodedCount.swap(sumAndCount.count);
 
@@ -190,7 +190,7 @@ void addDecimalFinalSumOnlyRequest(
   auto& request = requests.emplace_back();
   sumIdx = requests.size() - 1;
   auto sumAndCount = cudf_velox::deserializeDecimalSumState(
-      tbl.column(inputIndex), scale, stream, cudf_velox::get_output_mr());
+      tbl.column(inputIndex), scale, stream);
   decodedSum.swap(sumAndCount.sum);
   request.values = decodedSum->view();
   request.aggregations.push_back(

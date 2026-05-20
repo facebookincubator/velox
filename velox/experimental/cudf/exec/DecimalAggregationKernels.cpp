@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/exec/DecimalAggregationKernels.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationKernelsGpu.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 
 #include "velox/common/base/Exceptions.h"
 
@@ -31,8 +32,7 @@ namespace facebook::velox::cudf_velox {
 DecimalSumStateColumns deserializeDecimalSumState(
     const cudf::column_view& stateCol,
     int32_t scale,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
+    rmm::cuda_stream_view stream) {
   VELOX_CHECK(
       stateCol.type().id() == cudf::type_id::STRING,
       "Decimal sum state requires STRING/VARBINARY column (type is {})",
@@ -44,12 +44,14 @@ DecimalSumStateColumns deserializeDecimalSumState(
         cudf::data_type{cudf::type_id::DECIMAL128, -scale},
         0,
         cudf::mask_state::UNALLOCATED,
-        stream);
+        stream,
+        get_output_mr());
     empty.count = cudf::make_fixed_width_column(
         cudf::data_type{cudf::type_id::INT64},
         0,
         cudf::mask_state::UNALLOCATED,
-        stream);
+        stream,
+        get_output_mr());
     return empty;
   }
 
@@ -61,12 +63,14 @@ DecimalSumStateColumns deserializeDecimalSumState(
         cudf::data_type{cudf::type_id::DECIMAL128, -scale},
         numRows,
         cudf::mask_state::ALL_NULL,
-        stream);
+        stream,
+        get_output_mr());
     allNull.count = cudf::make_fixed_width_column(
         cudf::data_type{cudf::type_id::INT64},
         numRows,
         cudf::mask_state::ALL_NULL,
-        stream);
+        stream,
+        get_output_mr());
     return allNull;
   }
 
@@ -81,12 +85,14 @@ DecimalSumStateColumns deserializeDecimalSumState(
       cudf::data_type{cudf::type_id::DECIMAL128, -scale},
       numRows,
       cudf::mask_state::UNALLOCATED,
-      stream);
+      stream,
+      get_output_mr());
   auto countCol = cudf::make_fixed_width_column(
       cudf::data_type{cudf::type_id::INT64},
       numRows,
       cudf::mask_state::UNALLOCATED,
-      stream);
+      stream,
+      get_output_mr());
 
   auto sumView = sumCol->mutable_view();
   auto countView = countCol->mutable_view();
@@ -110,10 +116,10 @@ DecimalSumStateColumns deserializeDecimalSumState(
   }
 
   if (stateCol.nullable()) {
-    auto nullMask = cudf::copy_bitmask(stateCol, stream, mr);
+    auto nullMask = cudf::copy_bitmask(stateCol, stream, get_output_mr());
     auto nullCount = stateCol.null_count();
     sumCol->set_null_mask(std::move(nullMask), nullCount);
-    auto countMask = cudf::copy_bitmask(stateCol, stream, mr);
+    auto countMask = cudf::copy_bitmask(stateCol, stream, get_output_mr());
     countCol->set_null_mask(std::move(countMask), nullCount);
   }
 
@@ -126,8 +132,7 @@ DecimalSumStateColumns deserializeDecimalSumState(
 std::unique_ptr<cudf::column> serializeDecimalSumState(
     const cudf::column_view& sumCol,
     const cudf::column_view& countCol,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
+    rmm::cuda_stream_view stream) {
   VELOX_CHECK(
       countCol.type().id() == cudf::type_id::INT64,
       "Decimal sum state requires INT64 count column (type is {})",
@@ -165,11 +170,14 @@ std::unique_ptr<cudf::column> serializeDecimalSumState(
       cudf::data_type{offsetsType},
       numRows + 1,
       cudf::mask_state::UNALLOCATED,
-      stream);
+      stream,
+      get_output_mr());
   auto offsetsView = offsetsCol->mutable_view();
 
   rmm::device_buffer charsBuf(
-      static_cast<size_t>(numRows) * detail::kDecimalSumStateSize, stream);
+      static_cast<size_t>(numRows) * detail::kDecimalSumStateSize,
+      stream,
+      get_output_mr());
 
   detail::fillOffsetsForDecimalSumState(
       useLargeOffsets,
@@ -204,7 +212,7 @@ std::unique_ptr<cudf::column> serializeDecimalSumState(
   }
 
   auto [nullMask, nullCount] =
-      detail::buildStateValidityMask(sumCol, countCol, stream, mr);
+      detail::buildStateValidityMask(sumCol, countCol, stream, get_output_mr());
   return cudf::make_strings_column(
       static_cast<cudf::size_type>(numRows),
       std::move(offsetsCol),
@@ -216,8 +224,7 @@ std::unique_ptr<cudf::column> serializeDecimalSumState(
 std::unique_ptr<cudf::column> computeDecimalAverage(
     const cudf::column_view& sumCol,
     const cudf::column_view& countCol,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
+    rmm::cuda_stream_view stream) {
   VELOX_CHECK(
       countCol.type().id() == cudf::type_id::INT64,
       "Decimal average requires INT64 count column (type is {})",
@@ -236,7 +243,11 @@ std::unique_ptr<cudf::column> computeDecimalAverage(
 
   auto numRows = sumCol.size();
   auto out = cudf::make_fixed_width_column(
-      sumCol.type(), numRows, cudf::mask_state::UNALLOCATED, stream);
+      sumCol.type(),
+      numRows,
+      cudf::mask_state::UNALLOCATED,
+      stream,
+      get_output_mr());
 
   if (numRows > 0) {
     auto const rowCount = static_cast<int32_t>(numRows);
@@ -252,7 +263,7 @@ std::unique_ptr<cudf::column> computeDecimalAverage(
   }
 
   auto [nullMask, nullCount] =
-      detail::buildStateValidityMask(sumCol, countCol, stream, mr);
+      detail::buildStateValidityMask(sumCol, countCol, stream, get_output_mr());
   if (nullCount > 0) {
     out->set_null_mask(std::move(nullMask), nullCount);
   }
