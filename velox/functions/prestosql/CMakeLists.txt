@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+add_subdirectory(coercion)
 add_subdirectory(json)
 add_subdirectory(types)
 add_subdirectory(window)
@@ -102,6 +103,7 @@ velox_add_library(
   MapKeysOverlap.h
   MapNormalize.h
   MapSubset.h
+  MapSubsetKeyInRange.h
   MapTopN.h
   MapTopNImpl.h
   MapTopNKeys.h

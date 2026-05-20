@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_executable(velox_key_encoder_test KeyEncoderTest.cpp)
+add_executable(velox_key_encoder_test KeyDecoderTest.cpp KeyEncoderTest.cpp)
 
 add_test(
   NAME velox_key_encoder_test
@@ -32,7 +32,8 @@ target_link_libraries(
   GTest::gmock
 )
 
-# Split velox_serializer_test into individual test binaries for parallel execution.
+# Split velox_serializer_test into individual test binaries for parallel
+# execution.
 set(
   VELOX_SERIALIZER_TEST_SOURCES
   CompactRowSerializerTest.cpp

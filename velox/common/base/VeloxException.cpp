@@ -16,8 +16,10 @@
 
 #include "velox/common/base/VeloxException.h"
 
-#include <folly/synchronization/AtomicStruct.h>
+#include <chrono>
 #include <exception>
+
+#include <folly/synchronization/AtomicStruct.h>
 
 namespace facebook {
 namespace velox {

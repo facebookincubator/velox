@@ -426,10 +426,14 @@ CpuWallTiming Driver::processLazyIoStats(
   if (&op == operators_[0].get()) {
     return timing;
   }
+  static const std::string kCpuNanosKey(LazyVector::kCpuNanos);
+  static const std::string kWallNanosKey(LazyVector::kWallNanos);
+  static const std::string kInputBytesKey(LazyVector::kInputBytes);
+
   auto lockStats = op.stats().wlock();
 
   // Checks and tries to update cpu time from lazy loads.
-  auto it = lockStats->runtimeStats.find(std::string(LazyVector::kCpuNanos));
+  auto it = lockStats->runtimeStats.find(kCpuNanosKey);
   if (it == lockStats->runtimeStats.end()) {
     // Return early if no lazy activity.  Lazy CPU and wall times are recorded
     // together, checking one is enough.
@@ -447,7 +451,7 @@ CpuWallTiming Driver::processLazyIoStats(
 
   // Checks and tries to update wall time from lazy loads.
   int64_t wallDelta = 0;
-  it = lockStats->runtimeStats.find(std::string(LazyVector::kWallNanos));
+  it = lockStats->runtimeStats.find(kWallNanosKey);
   if (it != lockStats->runtimeStats.end()) {
     const int64_t wall = it->second.sum;
     wallDelta = std::max<int64_t>(0, wall - lockStats->lastLazyWallNanos);
@@ -458,7 +462,7 @@ CpuWallTiming Driver::processLazyIoStats(
 
   // Checks and tries to update input bytes from lazy loads.
   int64_t inputBytesDelta = 0;
-  it = lockStats->runtimeStats.find(std::string(LazyVector::kInputBytes));
+  it = lockStats->runtimeStats.find(kInputBytesKey);
   if (it != lockStats->runtimeStats.end()) {
     const int64_t inputBytes = it->second.sum;
     inputBytesDelta = inputBytes - lockStats->lastLazyInputBytes;

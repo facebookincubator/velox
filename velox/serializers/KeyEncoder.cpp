@@ -245,9 +245,9 @@ encodeString(const char* data, size_t size, bool descending, char*& out) {
 
       // Check which bytes need escaping (are 0 or 1)
       const auto needsEscape = (batch == zero) | (batch == one);
-      const auto escapeMask = simd::toBitMask(needsEscape);
+      const auto hasEscapes = !simd::none(needsEscape);
 
-      if (escapeMask == 0) {
+      if (!hasEscapes) {
         // Fast path: no bytes need escaping, bulk copy the entire batch
         // Apply descending transformation branchlessly (no-op if xorBatch is
         // all zeros)

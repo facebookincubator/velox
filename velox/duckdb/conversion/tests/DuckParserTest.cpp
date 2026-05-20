@@ -454,8 +454,9 @@ TEST(DuckParserTest, switchCase) {
       "switch(gt(\"a\",0),1,lt(\"a\",0),-1)",
       parseExpr("case when a > 0 then 1 when a < 0 then -1end")->toString());
 
+  // Simple CASE emits "case" (subject evaluated once).
   EXPECT_EQ(
-      "switch(eq(\"a\",1),x,eq(\"a\",5),y,z)",
+      "case(\"a\",1,x,5,y,z)",
       parseExpr("case a when 1 then 'x' when 5 then 'y' else 'z' end")
           ->toString());
 }

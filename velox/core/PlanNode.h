@@ -1299,7 +1299,7 @@ class AggregationNode : public PlanNode {
   };
 
   bool supportsBarrier() const override {
-    return isPreGrouped();
+    return true;
   }
 
   const std::vector<PlanNodePtr>& sources() const override {
@@ -4871,6 +4871,14 @@ class EnforceSingleRowNode : public PlanNode {
 
   const std::vector<PlanNodePtr>& sources() const override {
     return sources_;
+  }
+
+  /// Validates that input produces exactly one row, so the pipeline must
+  /// observe all rows sequentially on a single driver. Multiple drivers
+  /// would each independently produce a row (or NULL on empty input),
+  /// breaking the single-row contract.
+  bool requiresSingleThread() const override {
+    return true;
   }
 
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)

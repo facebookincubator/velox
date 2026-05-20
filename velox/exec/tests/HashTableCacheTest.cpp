@@ -222,4 +222,55 @@ TEST_F(HashTableCacheTest, builderTaskDriversDoNotWait) {
   EXPECT_FALSE(future2.valid());
 }
 
+// Verifies that when the builder task fails (e.g., OOM in finishHashBuild()),
+// dropping the cache entry unblocks all waiting tasks and allows new tasks
+// to become builders.
+TEST_F(HashTableCacheTest, builderFailureUnblocksWaiters) {
+  auto* cache = HashTableCache::instance();
+  const std::string key = "query_oom:node1";
+
+  // Builder task gets the entry.
+  ContinueFuture builderFuture = ContinueFuture::makeEmpty();
+  auto builderEntry =
+      cache->get(key, "builder_task", queryCtx_.get(), &builderFuture);
+  ASSERT_FALSE(builderFuture.valid());
+
+  // Two waiter tasks arrive while builder is working.
+  ContinueFuture waiterFuture1 = ContinueFuture::makeEmpty();
+  cache->get(key, "waiter_task_1", queryCtx_.get(), &waiterFuture1);
+  ASSERT_TRUE(waiterFuture1.valid());
+
+  ContinueFuture waiterFuture2 = ContinueFuture::makeEmpty();
+  cache->get(key, "waiter_task_2", queryCtx_.get(), &waiterFuture2);
+  ASSERT_TRUE(waiterFuture2.valid());
+
+  // Simulate builder task failure: close() now calls drop() when the builder
+  // fails without completing the build.
+  cache->drop(key);
+  builderEntry.reset();
+
+  // Both waiters should be unblocked.
+  EXPECT_TRUE(waiterFuture1.isReady())
+      << "Pre-existing waiter should be unblocked after builder failure";
+  EXPECT_TRUE(waiterFuture2.isReady())
+      << "Second waiter should also be unblocked after builder failure";
+
+  // A new task arriving after drop should become a fresh builder.
+  auto pool2 = memory::memoryManager()->addRootPool("HashTableCacheTest_retry");
+  auto queryCtx2 = core::QueryCtx::create(
+      nullptr,
+      core::QueryConfig{{}},
+      {},
+      cache::AsyncDataCache::getInstance(),
+      pool2);
+  ContinueFuture newFuture = ContinueFuture::makeEmpty();
+  auto newEntry = cache->get(key, "new_builder", queryCtx2.get(), &newFuture);
+  EXPECT_FALSE(newFuture.valid())
+      << "New task after drop should become builder, not waiter";
+  EXPECT_EQ(newEntry->builderTaskId, "new_builder");
+  EXPECT_FALSE(newEntry->buildComplete);
+
+  cache->drop(key);
+}
+
 } // namespace facebook::velox::exec::test

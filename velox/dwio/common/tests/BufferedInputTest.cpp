@@ -184,7 +184,7 @@ TEST_F(BufferedInputTest, cachedRegion) {
   {
     StringIdLease fileId(ids, "exclusiveTestFile");
     cache::RawFileCacheKey key{fileId.id(), 0};
-    auto pin = dataCache->findOrCreate(key, 100, nullptr);
+    auto pin = dataCache->findOrCreate(key, 100);
     ASSERT_FALSE(pin.empty());
     ASSERT_TRUE(pin.checkedEntry()->isExclusive());
     VELOX_ASSERT_THROW(
@@ -226,17 +226,17 @@ TEST_F(BufferedInputTest, cachedRegion) {
 
     StringIdLease fileId(ids, fmt::format("cachedRegionTestFile_{}", i));
     cache::RawFileCacheKey key{fileId.id(), 0};
-    auto pin = dataCache->findOrCreate(key, entrySize, nullptr);
+    auto pin = dataCache->findOrCreate(key, entrySize);
     ASSERT_FALSE(pin.empty());
     auto* entry = pin.checkedEntry();
     ASSERT_TRUE(entry->isExclusive());
 
     // Populate the entry with test data.
     if (testData.expectTinyData) {
-      ASSERT_NE(entry->tinyData(), nullptr);
-      memcpy(entry->tinyData(), expected.data(), entrySize);
+      ASSERT_TRUE(entry->hasContiguousData());
+      memcpy(entry->contiguousData(), expected.data(), entrySize);
     } else {
-      auto& allocation = entry->data();
+      auto& allocation = entry->nonContiguousData();
       ASSERT_GT(allocation.numRuns(), 0);
       uint64_t offset = 0;
       for (int i = 0; i < allocation.numRuns() && offset < entrySize; ++i) {
@@ -773,6 +773,10 @@ class CustomBufferedInputTest : public testing::Test {
   }
 
   const std::shared_ptr<MemoryPool> pool_ = memoryManager()->addLeafPool();
+  std::shared_ptr<facebook::velox::io::IoStatistics> dataIoStats_{
+      std::make_shared<facebook::velox::io::IoStatistics>()};
+  std::shared_ptr<facebook::velox::io::IoStatistics> metadataIoStats_{
+      std::make_shared<facebook::velox::io::IoStatistics>()};
 };
 
 } // namespace
@@ -780,6 +784,8 @@ class CustomBufferedInputTest : public testing::Test {
 TEST_F(CustomBufferedInputTest, basic) {
   facebook::velox::FileHandle fileHandle;
   facebook::velox::dwio::common::ReaderOptions readerOpts(pool_.get());
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
   auto ioStatistics = std::make_shared<facebook::velox::io::IoStatistics>();
   auto ioStats = std::make_shared<facebook::velox::IoStats>();
   auto executor = std::make_unique<folly::IOThreadPoolExecutor>(10, 10);

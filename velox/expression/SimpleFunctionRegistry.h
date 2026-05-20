@@ -159,14 +159,16 @@ class SimpleFunctionRegistry {
       const std::string& name,
       const std::vector<TypePtr>& argTypes) const {
     std::vector<TypePtr> coercions;
-    return resolveFunction(name, argTypes, false, coercions);
+    return resolveFunction(
+        name, argTypes, false, coercions, TypeCoercer::defaults());
   }
 
   std::optional<ResolvedSimpleFunction> resolveFunctionWithCoercions(
       const std::string& name,
       const std::vector<TypePtr>& argTypes,
-      std::vector<TypePtr>& coercions) const {
-    return resolveFunction(name, argTypes, true, coercions);
+      std::vector<TypePtr>& coercions,
+      const TypeCoercer& coercer) const {
+    return resolveFunction(name, argTypes, true, coercions, coercer);
   }
 
  private:
@@ -174,7 +176,8 @@ class SimpleFunctionRegistry {
       const std::string& name,
       const std::vector<TypePtr>& argTypes,
       bool allowCoercion,
-      std::vector<TypePtr>& coercions) const;
+      std::vector<TypePtr>& coercions,
+      const TypeCoercer& coercer) const;
 
   /// Registers a function with the given name and metadata. If an entry with
   /// the name already exists and 'overwrite' is true, the existing entry is

@@ -17,6 +17,7 @@ set(
   velox_core
   velox_exec
   velox_exec_test_lib
+  velox_functions_spark_aggregates
   velox_functions_spark_window
   velox_functions_window_test_lib
   velox_vector_fuzzer

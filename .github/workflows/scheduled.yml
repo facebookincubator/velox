@@ -121,6 +121,17 @@ jobs:
 
     steps:
 
+      # Sparse-checkout just the helper scripts dir up front so the
+      # sourced gh-api-retry.sh is on disk for the merge-base step
+      # below. Lands at $GITHUB_WORKSPACE/.github/scripts; the later
+      # "Checkout Contender" / "Checkout Main" steps put their full
+      # clones in different subdirectories (velox/, velox_main/) and
+      # don't conflict.
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+
       - name: Get merge base with main
         if: ${{ github.event_name != 'schedule' }}
         working-directory: ${{ github.workspace }}
@@ -132,12 +143,13 @@ jobs:
           PR_OWNER: ${{ github.event.pull_request.head.repo.owner.login }}
         id: get-merge-base
         run: |
+          source .github/scripts/gh-api-retry.sh
           if [ '${{ github.event_name == 'push' }}' == "true" ]; then
             # get the parent commit of the current one to get the relevant function signatures
-            head_main=$(gh api -q '.parents.[0].sha' '/repos/facebookincubator/velox/commits/${{ github.sha }}')
+            head_main=$(gh_api -q '.parents.[0].sha' '/repos/facebookincubator/velox/commits/${{ github.sha }}')
           elif [ '${{ github.event_name == 'pull_request' }}' == "true" ]; then
             # Get the merge base from the api
-            head_main=$(gh api -q '.merge_base_commit.sha' \
+            head_main=$(gh_api -q '.merge_base_commit.sha' \
               /repos/facebookincubator/velox/compare/facebookincubator:$BASE_REF...$PR_OWNER:$HEAD_REF \
             )
           else
@@ -509,7 +521,7 @@ jobs:
                 --repro_persist_path=__REPRO_DIR__
 
       - name: Archive production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: presto-fuzzer-failure-artifacts
@@ -559,7 +571,7 @@ jobs:
           cd velox
           cp ./scripts/ci/presto/etc/hive.properties $PRESTO_HOME/etc/catalog
           ls -lR $PRESTO_HOME/etc
-          $PRESTO_HOME/bin/launcher run -v > /tmp/server.log 2>&1 &
+          $PRESTO_HOME/bin/launcher run > /tmp/server.log 2>&1 &
           # Sleep for 60 seconds to allow Presto server to start.
           sleep 60
           /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA IF NOT EXISTS hive.tpch;'
@@ -587,7 +599,7 @@ jobs:
                 --table_name_prefix=i__INSTANCE_ID__
 
       - name: Archive expression production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: presto-sot-fuzzer-failure-artifacts
@@ -654,7 +666,7 @@ jobs:
             && echo -e "\n\nPresto Fuzzer run finished successfully."
 
       - name: Archive Presto Bias expression production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: presto-bias-fuzzer-failure-artifacts
@@ -703,7 +715,7 @@ jobs:
                 --table_name_prefix=i__INSTANCE_ID__
 
       - name: Archive Spark aggregate production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: spark-agg-fuzzer-failure-artifacts
@@ -761,7 +773,7 @@ jobs:
             && echo -e "\n\nSpark Fuzzer run finished successfully."
 
       - name: Archive Spark expression production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: spark-fuzzer-failure-artifacts
@@ -814,7 +826,7 @@ jobs:
                 --repro_persist_path=__REPRO_DIR__
 
       - name: Archive Spark expression production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: spark-fuzzer-failure-artifacts
@@ -863,7 +875,7 @@ jobs:
           cd  velox
           cp ./scripts/ci/presto/etc/hive.properties $PRESTO_HOME/etc/catalog
           ls -lR $PRESTO_HOME/etc
-          $PRESTO_HOME/bin/launcher run -v > /tmp/server.log 2>&1 &
+          $PRESTO_HOME/bin/launcher run > /tmp/server.log 2>&1 &
           # Sleep for 60 seconds to allow Presto server to start.
           sleep 60
           /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA IF NOT EXISTS hive.tpch;'
@@ -882,7 +894,7 @@ jobs:
                 --table_name_prefix=i__INSTANCE_ID__
 
       - name: Archive join production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: presto-sot-join-fuzzer-failure-artifacts
@@ -929,7 +941,7 @@ jobs:
                 --repro_path=__REPRO_DIR__
 
       - name: Archive Exchange production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: exchange-fuzzer-failure-artifacts
@@ -979,7 +991,7 @@ jobs:
           cd velox
           cp ./scripts/ci/presto/etc/hive.properties $PRESTO_HOME/etc/catalog
           ls -lR $PRESTO_HOME/etc
-          $PRESTO_HOME/bin/launcher run -v > /tmp/server.log 2>&1 &
+          $PRESTO_HOME/bin/launcher run > /tmp/server.log 2>&1 &
           # Sleep for 60 seconds to allow Presto server to start.
           sleep 60
           /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA IF NOT EXISTS hive.tpch;'
@@ -998,7 +1010,7 @@ jobs:
                 --table_name_prefix=i__INSTANCE_ID__
 
       - name: Archive row number production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: row-fuzzer-failure-artifacts
@@ -1048,7 +1060,7 @@ jobs:
           cd velox
           cp ./scripts/ci/presto/etc/hive.properties $PRESTO_HOME/etc/catalog
           ls -lR $PRESTO_HOME/etc
-          $PRESTO_HOME/bin/launcher run -v > /tmp/server.log 2>&1 &
+          $PRESTO_HOME/bin/launcher run > /tmp/server.log 2>&1 &
           # Sleep for 60 seconds to allow Presto server to start.
           sleep 60
           /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA IF NOT EXISTS hive.tpch;'
@@ -1067,7 +1079,7 @@ jobs:
                 --table_name_prefix=i__INSTANCE_ID__
 
       - name: Archive topn row number production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: topn-row-fuzzer-failure-artifacts
@@ -1111,7 +1123,7 @@ jobs:
                 --log_dir=__LOG_DIR__
 
       - name: Archive Cache production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: cache-fuzzer-logs
@@ -1153,7 +1165,7 @@ jobs:
                 --log_dir=__LOG_DIR__
 
       - name: Archive table evolution production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: table-evolution-fuzzer-test-logs
@@ -1195,12 +1207,12 @@ jobs:
                 --log_dir=__LOG_DIR__
 
       - name: Archive memory arbitration production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: memory-arbitration-fuzzer-test-logs
           path: |
-            /tmp/memory_arbitration_fuzzer_test
+            /tmp/memory_arbitration_fuzzer
 
   presto-java-aggregation-fuzzer-run:
     name: Aggregation Fuzzer with Presto as source of truth
@@ -1244,7 +1256,7 @@ jobs:
           cd  velox
           cp ./scripts/ci/presto/etc/hive.properties $PRESTO_HOME/etc/catalog
           ls -lR $PRESTO_HOME/etc
-          $PRESTO_HOME/bin/launcher run -v > /tmp/server.log 2>&1 &
+          $PRESTO_HOME/bin/launcher run > /tmp/server.log 2>&1 &
           # Sleep for 60 seconds to allow Presto server to start.
           sleep 60
           /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA IF NOT EXISTS hive.tpch;'
@@ -1265,7 +1277,7 @@ jobs:
                 --table_name_prefix=i__INSTANCE_ID__
 
       - name: Archive aggregate production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: presto-sot-aggregate-fuzzer-failure-artifacts
@@ -1322,7 +1334,7 @@ jobs:
           cd  velox
           cp ./scripts/ci/presto/etc/hive.properties $PRESTO_HOME/etc/catalog
           ls -lR $PRESTO_HOME/etc
-          $PRESTO_HOME/bin/launcher run -v > /tmp/server.log 2>&1 &
+          $PRESTO_HOME/bin/launcher run > /tmp/server.log 2>&1 &
           # Sleep for 60 seconds to allow Presto server to start.
           sleep 60
           /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA IF NOT EXISTS hive.tpch;'
@@ -1365,7 +1377,7 @@ jobs:
                 --repro_persist_path=/tmp/presto_only_bias_function_fuzzer_repro \
           && echo -e "\n\nPresto Fuzzer run finished successfully."
       - name: Archive Presto only-bias-function expression fuzzer production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: presto-only-bias-function-fuzzer-failure-artifacts
@@ -1421,7 +1433,7 @@ jobs:
           cd  velox
           cp ./scripts/ci/presto/etc/hive.properties $PRESTO_HOME/etc/catalog
           ls -lR $PRESTO_HOME/etc
-          $PRESTO_HOME/bin/launcher run -v > /tmp/server.log 2>&1 &
+          $PRESTO_HOME/bin/launcher run > /tmp/server.log 2>&1 &
           # Sleep for 60 seconds to allow Presto server to start.
           sleep 60
           /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA IF NOT EXISTS hive.tpch;'
@@ -1449,7 +1461,7 @@ jobs:
           && echo -e "\n\nAggregation fuzzer run finished successfully."
 
       - name: Archive bias aggregate production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: presto-bias-sot-aggregate-fuzzer-failure-artifacts
@@ -1523,7 +1535,7 @@ jobs:
           cd  velox
           cp ./scripts/ci/presto/etc/hive.properties $PRESTO_HOME/etc/catalog
           ls -lR $PRESTO_HOME/etc
-          $PRESTO_HOME/bin/launcher run -v > /tmp/server.log 2>&1 &
+          $PRESTO_HOME/bin/launcher run > /tmp/server.log 2>&1 &
           # Sleep for 60 seconds to allow Presto server to start.
           sleep 60
           /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA IF NOT EXISTS hive.tpch;'
@@ -1545,7 +1557,7 @@ jobs:
                 --table_name_prefix=i__INSTANCE_ID__
 
       - name: Archive window production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: presto-sot-window-fuzzer-failure-artifacts
@@ -1597,7 +1609,7 @@ jobs:
           ls -lR $PRESTO_HOME/etc
           echo "jvm config content:"
           cat $PRESTO_HOME/etc/jvm.config
-          $PRESTO_HOME/bin/launcher run -v > /tmp/server.log 2>&1 &
+          $PRESTO_HOME/bin/launcher run > /tmp/server.log 2>&1 &
           ls -lR /var/log
           # Sleep for 60 seconds to allow Presto server to start.
           sleep 60
@@ -1618,7 +1630,7 @@ jobs:
                 --table_name_prefix=i__INSTANCE_ID__
 
       - name: Archive writer production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: presto-sot-writer-fuzzer-failure-artifacts
@@ -1662,7 +1674,7 @@ jobs:
                 --log_dir=__LOG_DIR__
 
       - name: Archive spatial join fuzzer production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: spatial-join-fuzzer-failure-artifacts

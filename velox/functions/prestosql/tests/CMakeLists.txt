@@ -93,6 +93,7 @@ add_executable(
   MapKeysOverlapTest.cpp
   MapNormalizeTest.cpp
   MapValuesInRangeTest.cpp
+  MapSubsetKeyInRangeTest.cpp
   RemapKeysTest.cpp
   MapTopNTest.cpp
   MapTopNKeysTest.cpp

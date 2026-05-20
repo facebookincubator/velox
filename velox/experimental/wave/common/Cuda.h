@@ -240,6 +240,8 @@ struct KernelInfo {
   int32_t localMemory{0};
   int32_t maxOccupancy0{0};
   int32_t maxOccupancy32{0};
+  /// NVRTC compilation time in milliseconds.
+  int64_t compileMs{0};
 
   std::string toString() const;
 };
@@ -250,8 +252,20 @@ struct KernelSpec {
   std::vector<std::string> entryPoints;
   std::string filePath;
   int32_t numHeaders{0};
-  const char** headers;
+  const char** headers{nullptr};
   const char** headerNames{nullptr};
+  /// If non-empty, the compiled CUBIN is written to this path.
+  std::string cubinPath;
+  /// Mangled entry point names. Populated by create() after compilation.
+  /// Must be set when using fromCubinPath.
+  std::vector<std::string> loweredNames;
+  /// If non-empty, loads a pre-compiled CUBIN from this path instead of
+  /// compiling. loweredNames must be populated.
+  std::string fromCubinPath;
+  /// Called after compilation (or failure), before the kernel is added to the
+  /// cache. On success, error is nullptr and loweredNames is populated. On
+  /// failure, error holds the exception.
+  std::function<void(KernelSpec& spec, std::exception_ptr error)> postCompile;
 };
 
 /// Represents the result of compilation. Wrapped accessed through
@@ -261,10 +275,26 @@ struct CompiledModule {
 
   static void initialize();
 
-  /// Compiles 'spec' and returns the result.
-  static std::shared_ptr<CompiledModule> create(const KernelSpec& spec);
+  /// Compiles 'spec' and returns the result. Populates spec.loweredNames.
+  static std::shared_ptr<CompiledModule> create(KernelSpec& spec);
+
+  /// Loads a pre-compiled CUBIN from 'cubinPath' using the mangled entry point
+  /// names in 'spec.loweredNames'.
+  static std::shared_ptr<CompiledModule> fromCubin(
+      const std::string& cubinPath,
+      const KernelSpec& spec);
 
   virtual void launch(
+      int32_t kernelIdx,
+      int32_t numBlocks,
+      int32_t numThreads,
+      int32_t shared,
+      Stream* stream,
+      void** args) = 0;
+
+  /// Launches the kernel as a cooperative grid. All blocks are guaranteed
+  /// to be resident simultaneously.
+  virtual void launchCooperative(
       int32_t kernelIdx,
       int32_t numBlocks,
       int32_t numThreads,
@@ -297,7 +327,18 @@ class CompiledKernel {
       const std::string& key,
       KernelGenFunc func);
 
+  /// Clears all entries from the kernel cache.
+  static void clearCache();
+
   virtual void launch(
+      int32_t idx,
+      int32_t numBlocks,
+      int32_t numThreads,
+      int32_t shared,
+      Stream* stream,
+      void** args) = 0;
+
+  virtual void launchCooperative(
       int32_t idx,
       int32_t numBlocks,
       int32_t numThreads,

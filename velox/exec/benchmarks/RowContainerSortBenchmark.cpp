@@ -17,6 +17,7 @@
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
 
+#include "velox/common/io/IoStatistics.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 #include "velox/exec/RowContainer.h"
@@ -64,7 +65,11 @@ std::vector<std::optional<StringView>> getDataFromFile() {
   const std::string sample(getExampleFilePath("str_sort.parquet"));
   auto rowType = ROW({"query_sig", "result_sig"}, {VARCHAR(), VARCHAR()});
   auto pool = memory::memoryManager()->addLeafPool();
-  facebook::velox::dwio::common::ReaderOptions readerOptions{pool.get()};
+  auto dataIoStats = std::make_shared<velox::io::IoStatistics>();
+  auto metadataIoStats = std::make_shared<velox::io::IoStatistics>();
+  facebook::velox::dwio::common::ReaderOptions readerOptions(pool.get());
+  readerOptions.setDataIoStats(dataIoStats);
+  readerOptions.setMetadataIoStats(metadataIoStats);
   facebook::velox::parquet::ParquetReader reader =
       createReader(sample, readerOptions);
   auto rowReaderOpts = getReaderOpts(rowType);

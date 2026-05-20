@@ -39,8 +39,9 @@ class BufferPool {
   BufferPtr get();
 
   /// Returns a buffer to the pool for future reuse. Drops the buffer if the
-  /// pool is full or if 'buffer' is null.
-  void release(BufferPtr buffer);
+  /// pool is full or if 'buffer' is null. The buffer must have a unique
+  /// reference (refcount == 1) to ensure safe reuse.
+  void release(BufferPtr&& buffer);
 
   /// Returns the number of cached buffers currently in the pool.
   size_t size() const;

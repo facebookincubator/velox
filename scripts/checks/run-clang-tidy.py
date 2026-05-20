@@ -45,8 +45,16 @@ def git_changed_lines(commit):
         match = re.match(r"^\+\+\+ b/(.*(\.cpp|\.h|\.hpp))$", line)
         if match:
             matched_file = match.group(1)
-            # Exclude all files in cudf directories
-            if "cudf/" not in matched_file:
+            # Exclude files in cudf, wave, and torchwave directories
+            # as clang-tidy doesn't support CUDA compiler flags and CUDA
+            # headers. Exclude *-inl.h files: they are designed to be
+            # included from their corresponding header and cannot be
+            # compiled as standalone translation units.
+            if (
+                "cudf/" not in matched_file
+                and "wave/" not in matched_file
+                and not matched_file.endswith("-inl.h")
+            ):
                 file = matched_file
 
         match = re.match(r"^@@", line)
@@ -73,9 +81,14 @@ def tidy(args):
     files = util.input_files(args.files)
     files = [file for file in files if re.match(r".*(\.cpp|\.h|\.hpp)$", file)]
 
-    # Exclude all files in cudf directories
+    # Exclude files in cudf, wave, and torchwave directories
     # as clang-tidy doesn't support CUDA compiler flags and CUDA headers
-    files = [file for file in files if "cudf/" not in file]
+    files = [file for file in files if "cudf/" not in file and "wave/" not in file]
+
+    # Exclude *-inl.h files: they are designed to be included from their
+    # corresponding header and cannot be compiled as standalone translation
+    # units (see git_changed_lines for rationale).
+    files = [file for file in files if not file.endswith("-inl.h")]
 
     in_gha = os.environ.get("GITHUB_ACTIONS") is not None
     changed_lines = git_changed_lines(args.commit)
