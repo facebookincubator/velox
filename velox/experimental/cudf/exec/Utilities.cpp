@@ -172,7 +172,7 @@ std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
 
 void streamsWaitForStream(
     CudaEvent& event,
-    const std::vector<rmm::cuda_stream_view>& streams,
+    std::span<const rmm::cuda_stream_view> streams,
     rmm::cuda_stream_view stream) {
   event.recordFrom(stream);
   for (const auto& strm : streams) {
@@ -208,8 +208,8 @@ const CudaEvent& CudaEvent::waitOn(rmm::cuda_stream_view stream) const {
 }
 
 void orderCudfVectorDeallocationsAfterStream(
-    const std::vector<CudfVectorPtr>& vectors,
-    const std::vector<rmm::cuda_stream_view>& inputStreams,
+    std::span<const CudfVectorPtr> vectors,
+    std::span<const rmm::cuda_stream_view> inputStreams,
     rmm::cuda_stream_view stream) {
   bool allRebound = true;
   for (const auto& vector : vectors) {

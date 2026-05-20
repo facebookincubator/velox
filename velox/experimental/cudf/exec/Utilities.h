@@ -23,6 +23,7 @@
 #include <rmm/cuda_stream_view.hpp>
 
 #include <memory>
+#include <span>
 
 namespace facebook::velox::cudf_velox {
 
@@ -178,7 +179,7 @@ class CudaEvent {
  */
 void streamsWaitForStream(
     CudaEvent& event,
-    const std::vector<rmm::cuda_stream_view>& streams,
+    std::span<const rmm::cuda_stream_view> streams,
     rmm::cuda_stream_view stream);
 
 /**
@@ -190,7 +191,7 @@ void streamsWaitForStream(
  * materializing, e.g. packed-table inputs or older cuDF builds.
  */
 void orderCudfVectorDeallocationsAfterStream(
-    const std::vector<CudfVectorPtr>& vectors,
-    const std::vector<rmm::cuda_stream_view>& inputStreams,
+    std::span<const CudfVectorPtr> vectors,
+    std::span<const rmm::cuda_stream_view> inputStreams,
     rmm::cuda_stream_view stream);
 } // namespace facebook::velox::cudf_velox
