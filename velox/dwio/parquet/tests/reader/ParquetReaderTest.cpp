@@ -2139,10 +2139,10 @@ TEST_F(ParquetReaderTest, readTimeWithMultipleColumns) {
   assertReadWithReaderAndExpected(rowType, *rowReader, data, *leafPool_);
 }
 
+// Verifies that when the footer size exceeds the configured threshold, memory
+// for the deserialized Thrift footer is reported to the pool when the row
+// reader is created and released when the reader is destroyed.
 TEST_F(ParquetReaderTest, thriftMemoryTracking) {
-  // Verifies that when the footer size exceeds the configured threshold,
-  // memory for the deserialized Thrift footer is reported to the pool when
-  // the row reader is created and released when the reader is destroyed.
   const std::string sample(getExampleFilePath("sample.parquet"));
 
   dwio::common::ReaderOptions readerOptions(leafPool_.get());
@@ -2158,13 +2158,10 @@ TEST_F(ParquetReaderTest, thriftMemoryTracking) {
     rowReaderOpts.setScanSpec(makeScanSpec(sampleSchema()));
     auto rowReader = reader->createRowReader(rowReaderOpts);
 
-    // After row reader creation, the Thrift footer memory has been reported.
-    const auto memoryAfterRowReader = leafPool_->usedBytes();
-    EXPECT_GT(memoryAfterRowReader, initialUsage);
-
     // The reported footprint must at least cover the FileMetaData struct
     // itself plus one ColumnChunk per (row group * column) — anything smaller
     // means the estimator is not accounting for the per-row-group payload.
+    const auto memoryAfterRowReader = leafPool_->usedBytes();
     const auto reportedBytes = memoryAfterRowReader - initialUsage;
     const auto numRowGroups = reader->fileMetaData().numRowGroups();
     EXPECT_GT(numRowGroups, 0);
@@ -2186,10 +2183,50 @@ TEST_F(ParquetReaderTest, thriftMemoryTracking) {
   EXPECT_EQ(leafPool_->usedBytes(), initialUsage);
 }
 
+// Verifies that the ParquetReader, not the RowReader, owns the tracked
+// footer memory: destroying a RowReader leaves the pool reservation
+// intact, and creating additional RowReaders does not double-report.
+TEST_F(ParquetReaderTest, thriftMemoryOwnedByReader) {
+  const std::string sample(getExampleFilePath("sample.parquet"));
+
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
+  readerOptions.setParquetFooterMemoryTrackingThreshold(1);
+  const auto initialAllocs = leafPool_->stats().numExternalAllocs;
+  const auto initialFrees = leafPool_->stats().numExternalFrees;
+  {
+    auto reader = createReader(sample, readerOptions);
+    // The reader's constructor makes exactly one external allocation.
+    EXPECT_EQ(leafPool_->stats().numExternalAllocs, initialAllocs + 1);
+    EXPECT_EQ(leafPool_->stats().numExternalFrees, initialFrees);
+
+    {
+      auto rowReaderOpts = getReaderOpts(sampleSchema());
+      rowReaderOpts.setScanSpec(makeScanSpec(sampleSchema()));
+      auto rowReader = reader->createRowReader(rowReaderOpts);
+    }
+    // Creating and destroying a row reader must not touch the external
+    // allocation accounting — the reader owns it.
+    EXPECT_EQ(leafPool_->stats().numExternalAllocs, initialAllocs + 1);
+    EXPECT_EQ(leafPool_->stats().numExternalFrees, initialFrees);
+
+    // A second row reader on the same reader must not re-report the footer.
+    auto rowReaderOpts = getReaderOpts(sampleSchema());
+    rowReaderOpts.setScanSpec(makeScanSpec(sampleSchema()));
+    auto rowReader2 = reader->createRowReader(rowReaderOpts);
+    EXPECT_EQ(leafPool_->stats().numExternalAllocs, initialAllocs + 1);
+    EXPECT_EQ(leafPool_->stats().numExternalFrees, initialFrees);
+  }
+  // The reader's destruction releases the reservation with one external free.
+  EXPECT_EQ(leafPool_->stats().numExternalAllocs, initialAllocs + 1);
+  EXPECT_EQ(leafPool_->stats().numExternalFrees, initialFrees + 1);
+}
+
+// Verifies that the production default (no threshold set) does not engage
+// the external allocation tracking path: no reportExternalAllocation is
+// made, and ~ReaderBase has nothing to release.
 TEST_F(ParquetReaderTest, thriftMemoryNotTrackedByDefault) {
-  // Verifies that the production default (no threshold set) does not engage
-  // the external allocation tracking path: no reportExternalAllocation is
-  // made, and ~ReaderBase has nothing to release.
   const std::string sample(getExampleFilePath("sample.parquet"));
 
   dwio::common::ReaderOptions readerOptions(leafPool_.get());
@@ -2211,10 +2248,10 @@ TEST_F(ParquetReaderTest, thriftMemoryNotTrackedByDefault) {
   EXPECT_EQ(leafPool_->stats().numExternalFrees, 0);
 }
 
+// Verifies that when row groups are skipped via the scan range, the portion
+// of the Thrift footer memory belonging to those row groups is released back
+// to the pool when the row reader runs filterRowGroups.
 TEST_F(ParquetReaderTest, thriftMemoryReleasedForSkippedRowGroups) {
-  // Verifies that when row groups are skipped via the scan range, the
-  // portion of the Thrift footer memory belonging to those row groups is
-  // released back to the pool when the row reader runs filterRowGroups.
   const auto rowType = ROW({"id"}, {BIGINT()});
   const std::string sample(getExampleFilePath("multiple_row_groups.parquet"));
 

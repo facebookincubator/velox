@@ -912,10 +912,10 @@ must be specified as raw byte counts.
      - parquet_footer_memory_tracking_threshold
      - integer
      - disabled (max uint64)
-     - Footer byte size beyond which the Parquet reader estimates and reports the deserialized footer's heap
-       footprint to the memory pool, so footers large enough to dominate query memory are accounted for instead
-       of being invisible. Footers smaller than the threshold are not reported (default behavior). When set, the
-       memory is released as row groups are skipped or when the reader is destroyed.
+     - Footer byte size above which the Parquet reader estimates the deserialized footer's heap footprint
+       and reports it to the memory pool. Large footers that would otherwise dominate query memory are
+       tracked instead of remaining invisible. Footers below the threshold are not reported. When tracking
+       is enabled, the reported memory is released as row groups are skipped and when the reader is destroyed.
    * - nimble.footer-speculative-io-size
      - nimble_footer_speculative_io_size
      - integer
