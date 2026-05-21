@@ -337,31 +337,25 @@ void SelectiveListColumnReader::getValues(
 
 uint64_t SelectiveMapColumnReaderBase::skip(uint64_t numValues) {
   numValues = formatData_->skipNulls(numValues);
-  if (keyReader_ || elementReader_) {
-    std::array<int32_t, kBufferSize> buffer;
-    uint64_t childElements{0};
-    uint64_t lengthsRead{0};
-    while (lengthsRead < numValues) {
-      const uint64_t chunk =
-          std::min(numValues - lengthsRead, static_cast<uint64_t>(kBufferSize));
-      readLengths(buffer.data(), chunk, nullptr);
-      for (size_t i = 0; i < chunk; ++i) {
-        childElements += buffer[i];
-      }
-      lengthsRead += chunk;
+  std::array<int32_t, kBufferSize> buffer;
+  uint64_t childElements{0};
+  uint64_t lengthsRead{0};
+  while (lengthsRead < numValues) {
+    const uint64_t chunk =
+        std::min(numValues - lengthsRead, static_cast<uint64_t>(kBufferSize));
+    readLengths(buffer.data(), chunk, nullptr);
+    for (size_t i = 0; i < chunk; ++i) {
+      childElements += buffer[i];
     }
-
-    if (keyReader_) {
-      keyReader_->seekTo(keyReader_->readOffset() + childElements, false);
-    }
-    if (elementReader_) {
-      elementReader_->seekTo(
-          elementReader_->readOffset() + childElements, false);
-    }
-    childTargetReadOffset_ += childElements;
-  } else {
-    VELOX_FAIL("repeated reader with no children");
+    lengthsRead += chunk;
   }
+  if (keyReader_) {
+    keyReader_->seekTo(keyReader_->readOffset() + childElements, false);
+  }
+  if (elementReader_) {
+    elementReader_->seekTo(elementReader_->readOffset() + childElements, false);
+  }
+  childTargetReadOffset_ += childElements;
   return numValues;
 }
 

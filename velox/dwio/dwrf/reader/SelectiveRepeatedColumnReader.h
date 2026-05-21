@@ -41,8 +41,10 @@ class SelectiveListColumnReader
 
     VELOX_CHECK(!positionsProvider.hasNext());
 
-    child_->seekToRowGroup(index);
-    child_->setReadOffsetRecursive(0);
+    if (child_) {
+      child_->seekToRowGroup(index);
+      child_->setReadOffsetRecursive(0);
+    }
     childTargetReadOffset_ = 0;
   }
 

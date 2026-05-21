@@ -773,8 +773,10 @@ class CustomBufferedInputTest : public testing::Test {
   }
 
   const std::shared_ptr<MemoryPool> pool_ = memoryManager()->addLeafPool();
-  facebook::velox::io::IoStatistics dataIoStats_;
-  facebook::velox::io::IoStatistics metadataIoStats_;
+  std::shared_ptr<facebook::velox::io::IoStatistics> dataIoStats_{
+      std::make_shared<facebook::velox::io::IoStatistics>()};
+  std::shared_ptr<facebook::velox::io::IoStatistics> metadataIoStats_{
+      std::make_shared<facebook::velox::io::IoStatistics>()};
 };
 
 } // namespace
@@ -782,8 +784,8 @@ class CustomBufferedInputTest : public testing::Test {
 TEST_F(CustomBufferedInputTest, basic) {
   facebook::velox::FileHandle fileHandle;
   facebook::velox::dwio::common::ReaderOptions readerOpts(pool_.get());
-  readerOpts.setDataIoStats(&dataIoStats_);
-  readerOpts.setMetadataIoStats(&metadataIoStats_);
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
   auto ioStatistics = std::make_shared<facebook::velox::io::IoStatistics>();
   auto ioStats = std::make_shared<facebook::velox::IoStats>();
   auto executor = std::make_unique<folly::IOThreadPoolExecutor>(10, 10);

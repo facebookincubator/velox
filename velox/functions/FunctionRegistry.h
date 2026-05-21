@@ -21,6 +21,7 @@
 #include "velox/expression/FunctionMetadata.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/type/Type.h"
+#include "velox/type/TypeCoercer.h"
 
 namespace facebook::velox {
 
@@ -77,7 +78,8 @@ TypePtr resolveFunction(
 TypePtr resolveFunctionWithCoercions(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes,
-    std::vector<TypePtr>& coercions);
+    std::vector<TypePtr>& coercions,
+    const TypeCoercer& coercer);
 
 /// Given a function name and argument types, returns a pair of return
 /// type and metadata if function exists. Otherwise, returns std::nullopt.
@@ -104,7 +106,8 @@ TypePtr resolveFunctionOrCallableSpecialForm(
 TypePtr resolveFunctionOrCallableSpecialFormWithCoercions(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes,
-    std::vector<TypePtr>& coercions);
+    std::vector<TypePtr>& coercions,
+    const TypeCoercer& coercer);
 
 /// Given the name of a special form and argument types, returns
 /// the return type if the special form exists and is supported, otherwise
@@ -129,7 +132,8 @@ TypePtr resolveCallableSpecialForm(
 TypePtr resolveCallableSpecialFormWithCoercions(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes,
-    std::vector<TypePtr>& coercions);
+    std::vector<TypePtr>& coercions,
+    const TypeCoercer& coercer);
 
 /// Given name of simple function and argument types, returns
 /// the return type if function exists otherwise returns nullptr
@@ -161,7 +165,8 @@ std::optional<std::pair<TypePtr, exec::VectorFunctionMetadata>>
 resolveVectorFunctionWithMetadataWithCoercions(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes,
-    std::vector<TypePtr>& coercions);
+    std::vector<TypePtr>& coercions,
+    const TypeCoercer& coercer);
 
 /// Given name of a function, removes it from both the simple and vector
 /// function registries (including all signatures).

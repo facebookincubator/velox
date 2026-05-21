@@ -84,5 +84,19 @@ TEST_F(BigintEnumTypeTest, keyAt) {
   // Test non-existent value
   ASSERT_EQ(moodEnum_->keyAt(999), std::nullopt);
 }
+
+TEST_F(BigintEnumTypeTest, valueAt) {
+  EXPECT_EQ(moodEnum_->valueAt("CURIOUS"), -2);
+  EXPECT_EQ(moodEnum_->valueAt("HAPPY"), 0);
+  EXPECT_EQ(moodEnum_->valueAt("unknown"), std::nullopt);
+}
+
+TEST_F(BigintEnumTypeTest, containsKey) {
+  EXPECT_TRUE(moodEnum_->containsKey("CURIOUS"));
+  EXPECT_TRUE(moodEnum_->containsKey("HAPPY"));
+  EXPECT_FALSE(moodEnum_->containsKey("curious"));
+  EXPECT_FALSE(moodEnum_->containsKey("unknown"));
+}
+
 } // namespace
 } // namespace facebook::velox

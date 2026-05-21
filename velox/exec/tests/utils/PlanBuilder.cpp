@@ -942,8 +942,7 @@ core::PlanNodePtr PlanBuilder::createIntermediateOrFinalAggregation(
       partialAggNode->ignoreNullKeys(),
       partialAggNode->noGroupsSpanBatches(),
       planNode_);
-  VELOX_CHECK_EQ(
-      aggregationNode->supportsBarrier(), aggregationNode->isPreGrouped());
+  VELOX_CHECK(aggregationNode->supportsBarrier());
   return aggregationNode;
 }
 
@@ -1153,8 +1152,7 @@ PlanBuilder& PlanBuilder::aggregation(
       ignoreNullKeys,
       /*noGroupsSpanBatches=*/false,
       planNode_);
-  VELOX_CHECK_EQ(
-      aggregationNode->supportsBarrier(), aggregationNode->isPreGrouped());
+  VELOX_CHECK(aggregationNode->supportsBarrier());
   planNode_ = std::move(aggregationNode);
   return *this;
 }
@@ -1178,8 +1176,7 @@ PlanBuilder& PlanBuilder::streamingAggregation(
       ignoreNullKeys,
       noGroupsSpanBatches,
       planNode_);
-  VELOX_CHECK_EQ(
-      aggregationNode->supportsBarrier(), aggregationNode->isPreGrouped());
+  VELOX_CHECK(aggregationNode->supportsBarrier());
   planNode_ = std::move(aggregationNode);
   return *this;
 }
@@ -2206,7 +2203,8 @@ TypePtr resolveWindowType(
     bool nullOnFailure) {
   if (auto signatures = exec::getWindowFunctionSignatures(windowFunctionName)) {
     for (const auto& signature : signatures.value()) {
-      exec::SignatureBinder binder(*signature, inputTypes);
+      exec::SignatureBinder binder(
+          *signature, inputTypes, TypeCoercer::defaults());
       if (binder.tryBind()) {
         return binder.tryResolveType(signature->returnType());
       }
@@ -2727,6 +2725,7 @@ core::PlanNodePtr PlanBuilder::IndexLookupJoinBuilder::build(
       std::move(joinConditionPtrs),
       filterExpr,
       hasMarker_,
+      splitOutput_,
       std::move(planBuilder_.planNode_),
       indexSource_,
       std::move(outputType));

@@ -11,8 +11,22 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+# tzdata is pinned to a known-good version so docker rebuilds (any time
+# scripts/docker/*.dockerfile or scripts/setup-*.sh changes) don't
+# silently bump tzdata in the image. See issue #17522 for the bug class
+# this prevents — version mismatch between OS tzdata and consumers'
+# bundled tzdb code can produce silent 1-hour offsets in TIMESTAMP
+# WITH TIME ZONE values. To bump intentionally: change the default and
+# rebuild locally to confirm before merging.
+ARG UBUNTU_TZDATA_VERSION=2026a-0ubuntu0.22.04.1
+
 ARG base=ubuntu:22.04
 FROM ${base}
+
+ARG UBUNTU_TZDATA_VERSION
+ARG DEBIAN_FRONTEND="noninteractive"
+RUN apt-get update && \
+      apt-get install -y --allow-downgrades "tzdata=${UBUNTU_TZDATA_VERSION}"
 
 RUN apt update && \
       apt install -y sudo \

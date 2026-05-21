@@ -195,6 +195,8 @@ RowVectorPtr TableScan::getOutput() {
     const auto estimatedRowSize = dataSource_->estimatedRowSize();
     const int32_t readBatchSize = calculateBatchSize(estimatedRowSize);
 
+    const auto prevCompletedRows = dataSource_->getCompletedRows();
+
     uint64_t ioTimeUs{0};
     std::optional<RowVectorPtr> dataOptional;
     {
@@ -229,6 +231,14 @@ RowVectorPtr TableScan::getOutput() {
             flatSize = data->estimateFlatSize();
           }
           lockedStats->addInputVector(flatSize, data->size());
+          const auto completedRowsDelta =
+              dataSource_->getCompletedRows() - prevCompletedRows;
+          if (completedRowsDelta > 0) {
+            core::ScanBatchEvent event;
+            event.numRows = completedRowsDelta;
+            event.wallTimeMicros = ioTimeUs;
+            dataSource_->fireScanBatchCallback(event);
+          }
           maxFilteringRatio_ = std::max(
               {maxFilteringRatio_,
                1.0 * data->size() / readBatchSize,
@@ -354,6 +364,10 @@ bool TableScan::getSplit() {
         tableHandle_,
         columnHandles_,
         connectorQueryCtx_.get());
+    if (const auto& callback =
+            operatorCtx_->driverCtx()->task->queryCtx()->scanBatchCallback()) {
+      dataSource_->setScanBatchCallback(callback);
+    }
   }
 
   debugString_ = fmt::format(

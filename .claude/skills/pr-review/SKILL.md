@@ -69,40 +69,44 @@ gh pr view <PR_NUMBER> --json comments,reviews
 
 ### Step 1: Read Project Guidelines
 
-Read CLAUDE.md and CODING_STYLE.md for project-specific standards including:
-- Naming conventions (PascalCase for types, camelCase for functions)
-- Assert/CHECK usage (VELOX_CHECK_* vs VELOX_USER_CHECK_*)
-- Variable conventions (uniform initialization, std::string_view)
-- API design principles
-- Test patterns (gtest matchers)
+**Before reviewing, you MUST Read `CODING_STYLE.md` at the repo root in
+full.** Do not skim, do not skip — every modified line in the diff must be
+checked against it.
 
-### Step 2: Analyze Changes
+The "Common Mistakes" section is the authoritative checklist for the
+highest-volume real review hits (`///` vs `//`, abbreviations, `*Utils`,
+undocumented headers, header-body weight, `goto`, test-first for bug
+fixes, naming conventions, assert forms, etc.).
+
+This skill does not maintain a duplicate checklist — `CODING_STYLE.md`
+is the single source of truth. If anything in this skill ever appears to
+contradict `CODING_STYLE.md`, prefer `CODING_STYLE.md`.
+
+### Step 2: Analyze Changes and Prior Review
 
 Read through the diff systematically:
 1. Identify the purpose of the change from title/description
 2. Group changes by type (new code, tests, config, docs)
 3. Note the scope of changes (files affected, lines changed)
 
+The `<comments>` block in the prompt context contains all prior review
+comments — including any from earlier `/pr-review` invocations on this PR.
+Read them before reviewing:
+- Do **not** re-flag issues already raised by a prior reviewer (human or
+  Claude). Re-flagging trains authors to ignore Claude reviews.
+- If a prior comment was addressed by a follow-up commit, verify the fix in
+  the diff rather than restating the original concern.
+- If `/pr-review` was invoked in reply to a specific comment thread, focus
+  the review on that thread's concerns instead of re-reviewing the whole PR.
+
 ### Step 3: Deep Review
 
-**Think deeply and carefully about this code.** Take your time to:
-- Trace through the logic step by step
-- Consider what happens at boundary conditions (empty inputs, null values, max sizes)
-- Think about concurrency issues if multiple threads could access this code
-- Consider memory safety: ownership, lifetimes, dangling references
-- Look for off-by-one errors, integer overflow, and other subtle bugs
-- Examine error handling paths - what happens when things fail?
-- Consider how this code interacts with existing code in the codebase
-
-**Be thorough and strict.** It's better to flag a potential issue that turns out
-to be fine than to miss a real bug.
-
-**Explore edge cases exhaustively:**
-- What if the input is empty? Null? Maximum size?
-- What if allocation fails? What if an exception is thrown?
-- What happens on the first iteration? The last iteration?
-- Are there race conditions if called concurrently?
-- What assumptions does this code make? Are they documented and validated?
+Trace the logic step by step. For each change, consider boundary conditions
+(empty, null, max size, first/last iteration), failure modes (allocation
+failures, exceptions, partial state), concurrency (race conditions, lock
+ordering), and memory safety (ownership, lifetimes, dangling references). Be
+strict — better to flag a potential issue than miss a real bug. The Review
+Areas table below enumerates what to check; do not duplicate it as narrative.
 
 ## Review Areas
 
@@ -116,7 +120,7 @@ Analyze each of these areas thoroughly:
 | Performance | Unnecessary copies (move semantics?), inefficient algorithms, cache-unfriendly access, excessive allocations in hot paths |
 | Error Handling | All error paths handled? Exceptions caught appropriately? Informative error messages? Correct use of VELOX_CHECK_* vs VELOX_USER_CHECK_*? |
 | Code Quality | RAII, const-correctness, smart pointers, naming conventions, clear structure |
-| Testing | Sufficient tests? Edge cases covered? Error paths tested? Using gtest matchers? |
+| Testing | Sufficient tests? Edge cases covered? Error paths tested? Using gtest matchers? **Bug-fix PRs**: does the diff add a test that would fail without the fix? Flag bug fixes that ship code-only. |
 
 ## Output Format
 
@@ -171,6 +175,10 @@ supplement the summary — they do not replace it.
 4. **Be actionable** - Provide concrete suggestions, not vague concerns
 5. **Be proportionate** - Minor issues shouldn't block, but note them
 6. **Assume competence** - The author knows C++; explain only non-obvious context
+7. **Permission to be quiet** - If the PR has no meaningful issues, post a
+   short LGTM (one or two sentences) and stop. Do not manufacture nitpicks
+   to fill space — padding trains authors to ignore Claude reviews. A clean
+   PR getting a clean and high-signal review is the correct outcome.
 
 ## Files to Reference
 

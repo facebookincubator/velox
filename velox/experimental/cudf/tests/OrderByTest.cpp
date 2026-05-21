@@ -383,8 +383,9 @@ TEST_F(OrderByTest, outputBatchRows) {
     EXPECT_EQ(
         testData.expectedOutputVectors,
         toPlanStats(task->taskStats())
-            .at(orderById + "-to-velox")
-            .outputVectors);
+            .at(orderById)
+            .operatorStats.at("CudfToVelox")
+            ->outputVectors);
   }
 }
 
