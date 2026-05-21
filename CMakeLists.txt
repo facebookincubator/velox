@@ -173,6 +173,7 @@ option(
 )
 option(VELOX_SIMDJSON_SKIPUTF8VALIDATION "Skip simdjson utf8 validation in JSON parsing" OFF)
 option(VELOX_ENABLE_FAISS "Build faiss vector search support" OFF)
+option(VELOX_ENABLE_TORCHWAVE "Build TorchWave experimental subsystem." OFF)
 
 # Explicitly force compilers to generate colored output. Compilers usually do
 # this by default if they detect the output is a terminal, but this assumption
@@ -210,6 +211,15 @@ endif()
 
 if(VELOX_ENABLE_BENCHMARKS_BASIC)
   set(VELOX_BUILD_TEST_UTILS ON)
+endif()
+
+if(VELOX_ENABLE_TORCHWAVE)
+  set(VELOX_ENABLE_WAVE ON)
+  if(DEFINED ENV{TORCH_DIR})
+    list(APPEND CMAKE_PREFIX_PATH "$ENV{TORCH_DIR}")
+  endif()
+  find_package(Torch REQUIRED)
+  message(STATUS "Found Torch: ${TORCH_INSTALL_PREFIX}")
 endif()
 
 if(VELOX_ENABLE_CUDF)
