@@ -295,10 +295,8 @@ void mergeSecondaryNullsIntoResult(
     cudf::column_view secondaryColumn,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
-  // cuDF string pattern predicates already propagate input nulls to the result.
-  // Only merge the secondary-input nulls back when they are present so Velox
-  // CPU null propagation semantics are preserved without extra mask work unless
-  // it is required.
+  // Merge secondary-input nulls back only when present to preserve Velox CPU
+  // null propagation semantics without extra mask work unless it is required.
   if (!secondaryColumn.has_nulls()) {
     return;
   }
@@ -2444,15 +2442,39 @@ std::shared_ptr<FunctionExpression> FunctionExpression::create(
 }
 
 std::unique_ptr<cudf::column> FunctionExpression::makeStructChildColumn(
-    cudf::column_view structColumn,
+    ColumnOrView& structColumn,
     cudf::size_type childIndex,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
-  auto const childView = cudf::structs_column_view(structColumn)
-                             .get_sliced_child(childIndex, stream);
-  auto child = std::make_unique<cudf::column>(childView, stream, mr);
-  mergeSecondaryNullsIntoResult(*child, structColumn, stream, mr);
-  return child;
+  return std::visit(
+      [&](auto& value) -> std::unique_ptr<cudf::column> {
+        using T = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<T, cudf::column_view>) {
+          VELOX_CHECK(
+              value.type().id() == cudf::type_id::STRUCT,
+              "Nested field reference expects a ROW input");
+          VELOX_CHECK_LT(static_cast<size_t>(childIndex), value.num_children());
+          auto const childView =
+              cudf::structs_column_view(value).get_sliced_child(
+                  childIndex, stream);
+          auto child = std::make_unique<cudf::column>(childView, stream, mr);
+          mergeSecondaryNullsIntoResult(*child, value, stream, mr);
+          return child;
+        } else {
+          auto const structView = value->view();
+          VELOX_CHECK(
+              structView.type().id() == cudf::type_id::STRUCT,
+              "Nested field reference expects a ROW input");
+          VELOX_CHECK_LT(
+              static_cast<size_t>(childIndex), structView.num_children());
+
+          auto contents = value->release();
+          auto child = std::move(contents.children[childIndex]);
+          mergeSecondaryNullsIntoResult(*child, structView, stream, mr);
+          return child;
+        }
+      },
+      structColumn);
 }
 
 ColumnOrView FunctionExpression::eval(
@@ -2478,14 +2500,10 @@ ColumnOrView FunctionExpression::eval(
         "Nested field reference expects exactly one subexpression");
 
     auto parent = subexpressions_[0]->eval(inputColumnViews, stream, mr);
-    auto parentView = asView(parent);
-    VELOX_CHECK(
-        parentView.type().id() == cudf::type_id::STRUCT,
-        "Nested field reference expects a ROW input");
     auto parentRowType = asRowType(fieldExpr->inputs()[0]->type());
     auto fieldIndex = resolveFieldReferenceIndex(*fieldExpr, parentRowType);
     return FunctionExpression::makeStructChildColumn(
-        parentView, fieldIndex, stream, mr);
+        parent, fieldIndex, stream, mr);
   }
 
   if (function_) {

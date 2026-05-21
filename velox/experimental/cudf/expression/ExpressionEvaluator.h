@@ -159,7 +159,7 @@ class FunctionExpression : public CudfExpression {
 
  private:
   static std::unique_ptr<cudf::column> makeStructChildColumn(
-      cudf::column_view structColumn,
+      ColumnOrView& structColumn,
       cudf::size_type childIndex,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr);
