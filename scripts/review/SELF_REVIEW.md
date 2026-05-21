@@ -8,6 +8,11 @@ before review saves everyone time.
 ## Before requesting review
 
 - [ ] CI is green.
+- [ ] PR title and description are clear and free of common content issues
+      (dense prose, long inline lists, jargon, function-by-function
+      walkthroughs, restating the diff). The `write-commit-message` skill at
+      `.claude/skills/write-commit-message/` offers a draft + self-check
+      workflow — one path, not a requirement.
 - [ ] PR title describes what changed (not the symptom or the ticket).
 - [ ] PR description matches what the code actually does. If the scope grew
       beyond the original description, update it. Do not include test
