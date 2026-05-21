@@ -419,6 +419,15 @@ FOLLY_ALWAYS_INLINE std::string prepareRegexpReplacePattern(
 /// 3. Replacement in RE2 only supports '\' followed by a digit or another '\',
 /// while java.util.regex will ignore '\' in replacements, so we need to
 /// unescape it.
+///
+/// The unescape step in (3) is performed as a single left-to-right byte scan
+/// so that an escaped backslash '\\' is always consumed as one unit and the
+/// byte that follows it is preserved verbatim. This invariant is required by
+/// inputs such as '\\n' (a literal backslash followed by 'n'): the leading
+/// '\\' must be kept as-is, and the trailing 'n' must not be revisited as
+/// the target of another backslash-unescape, otherwise the replacement
+/// collapses to '\n' which RE2 then rejects, silently dropping the matched
+/// bytes from the input string.
 FOLLY_ALWAYS_INLINE std::string prepareRegexpReplaceReplacement(
     const RE2& re,
     const StringView& replacement) {
@@ -467,14 +476,40 @@ FOLLY_ALWAYS_INLINE std::string prepareRegexpReplaceReplacement(
       kConvertRegex.error());
   RE2::GlobalReplace(&newReplacement, kConvertRegex, R"(\\\1)");
 
-  // Un-escape character except digit or '\\'
-  static const RE2 kUnescapeRegex(R"(\\([^0-9\\]))");
-  VELOX_DCHECK(
-      kUnescapeRegex.ok(),
-      "Invalid regular expression {}: {}.",
-      R"(\\([^0-9\\]))",
-      kUnescapeRegex.error());
-  RE2::GlobalReplace(&newReplacement, kUnescapeRegex, R"(\1)");
+  // Un-escape character except digit or '\\'.
+  // We scan byte by byte so that an escaped backslash '\\' is always consumed
+  // as a single unit; the following byte is then preserved verbatim and is
+  // never mistaken for the start of another '\X' escape sequence. This avoids
+  // a regression where input like '\\n' (literal backslash + 'n') was being
+  // turned into '\n' by RE2::GlobalReplace, which subsequently failed in
+  // RE2::Rewrite and silently dropped matched bytes from the input string.
+  std::string unescaped;
+  unescaped.reserve(newReplacement.size());
+  for (size_t i = 0; i < newReplacement.size();) {
+    const char c = newReplacement[i];
+    if (c == '\\' && i + 1 < newReplacement.size()) {
+      const char next = newReplacement[i + 1];
+      if (next == '\\' || (next >= '0' && next <= '9')) {
+        // Preserve '\\' (literal backslash in RE2) and '\<digit>'
+        // (RE2 numbered backreference) as a two-byte unit.
+        unescaped.push_back(c);
+        unescaped.push_back(next);
+        i += 2;
+      } else {
+        // '\X' where X is neither a digit nor '\' -> emit literal X, matching
+        // java.util.regex semantics that silently ignores the backslash.
+        unescaped.push_back(next);
+        i += 2;
+      }
+    } else {
+      // Plain byte (or trailing lone '\\' which RE2::Rewrite will reject; we
+      // keep prior behavior of letting RE2 surface the error rather than
+      // silently dropping the byte here).
+      unescaped.push_back(c);
+      ++i;
+    }
+  }
+  newReplacement = std::move(unescaped);
 
   return newReplacement;
 }
