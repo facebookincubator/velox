@@ -150,7 +150,7 @@ jobs:
         id: build
         env:
           MAKEFLAGS: NUM_THREADS=32 MAX_HIGH_MEM_JOBS=12 MAX_LINK_JOBS=12
-          CUDA_ARCHITECTURES: 70
+          CUDA_ARCHITECTURES: 75
           CUDA_COMPILER: /usr/local/cuda-${CUDA_VERSION}/bin/nvcc
           # Set compiler to GCC 14
           CUDA_FLAGS: -ccbin /opt/rh/gcc-toolset-14/root/usr/bin
