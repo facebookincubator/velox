@@ -43,6 +43,7 @@
 #include "velox/exec/tests/utils/SumNonPODAggregate.h"
 #include "velox/exec/tests/utils/TempFilePath.h"
 #include "velox/type/tests/utils/CustomTypesForTesting.h"
+#include "velox/vector/LazyVector.h"
 
 namespace facebook::velox::exec::test {
 
@@ -2491,6 +2492,100 @@ TEST_F(AggregationTest, distinctWithPreGroupedKeysAcrossBatches) {
                   .planNode();
   AssertQueryBuilder(plan, duckDbQueryRunner_)
       .assertResults("SELECT DISTINCT c0, c1 FROM tmp");
+}
+
+namespace {
+// VectorLoader whose hook branch streams values through ValueHook and leaves
+// the result VectorPtr null.
+template <typename T>
+class HookOnlyLazyLoader : public VectorLoader {
+ public:
+  HookOnlyLazyLoader(
+      memory::MemoryPool* pool,
+      std::function<T(vector_size_t)> valueAt,
+      vector_size_t size)
+      : pool_(pool), valueAt_(std::move(valueAt)), size_(size) {}
+
+  bool supportsHook() const override {
+    return true;
+  }
+
+ protected:
+  void loadInternal(
+      RowSet rows,
+      ValueHook* hook,
+      vector_size_t resultSize,
+      VectorPtr* result) override {
+    if (hook != nullptr) {
+      for (vector_size_t i = 0; i < rows.size(); ++i) {
+        hook->addValueTyped(rows[i], valueAt_(rows[i]));
+      }
+      return;
+    }
+    BaseVector::ensureWritable(
+        SelectivityVector::empty(), CppToType<T>::create(), pool_, *result);
+    auto* flat = (*result)->template asFlatVector<T>();
+    flat->resize(std::max<vector_size_t>(resultSize, size_));
+    for (vector_size_t i = 0; i < rows.size(); ++i) {
+      flat->set(rows[i], valueAt_(rows[i]));
+    }
+  }
+
+ private:
+  memory::MemoryPool* pool_;
+  std::function<T(vector_size_t)> valueAt_;
+  vector_size_t size_;
+};
+} // namespace
+
+TEST_F(AggregationTest, preGroupedSplitWithHookOnlyLazyChild) {
+  constexpr vector_size_t kSize = 1'024;
+  auto k1 = makeFlatVector<int64_t>(kSize, [](auto row) { return row / 256; });
+  auto k2 = makeFlatVector<int64_t>(kSize, [](auto row) { return row % 8; });
+  auto valueLazy = std::make_shared<LazyVector>(
+      pool(),
+      BIGINT(),
+      kSize,
+      std::make_unique<HookOnlyLazyLoader<int64_t>>(
+          pool(),
+          [](vector_size_t row) { return static_cast<int64_t>(row); },
+          kSize));
+  auto input = makeRowVector({"k1", "k2", "v"}, {k1, k2, valueLazy});
+
+  // `min(v)` exercises `SimpleNumericAggregate::pushdown<>`;
+  // `bitwise_or_agg(v)` exercises `SimpleNumericAggregate::updateGroups`.
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .aggregation(
+                      {"k1", "k2"},
+                      {"k1"},
+                      {"min(v)", "bitwise_or_agg(v)"},
+                      {},
+                      core::AggregationNode::Step::kSingle,
+                      false)
+                  .planNode();
+
+  // Group (k1, k2) sees rows {k1*256 + k2 + 8*i : i in [0, 32)}.
+  // min = k1*256 + k2. For OR: low 3 bits = k2; bits 3..7 = OR over 8*i for
+  // i in [0, 31] = 248; bits 8+ = k1 << 8. So OR = (k1 << 8) | 248 | k2.
+  std::vector<int64_t> expectedK1(32);
+  std::vector<int64_t> expectedK2(32);
+  std::vector<int64_t> expectedMin(32);
+  std::vector<int64_t> expectedOr(32);
+  for (vector_size_t group = 0; group < 32; ++group) {
+    expectedK1[group] = group / 8;
+    expectedK2[group] = group % 8;
+    expectedMin[group] = expectedK1[group] * 256 + expectedK2[group];
+    expectedOr[group] = (expectedK1[group] << 8) | 248 | expectedK2[group];
+  }
+  auto expected = makeRowVector(
+      {"k1", "k2", "m", "o"},
+      {makeFlatVector<int64_t>(expectedK1),
+       makeFlatVector<int64_t>(expectedK2),
+       makeFlatVector<int64_t>(expectedMin),
+       makeFlatVector<int64_t>(expectedOr)});
+
+  AssertQueryBuilder(plan).assertResults(expected);
 }
 
 TEST_F(AggregationTest, preGroupedAggregationWithSpilling) {
