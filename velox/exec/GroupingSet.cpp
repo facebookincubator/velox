@@ -902,16 +902,6 @@ void GroupingSet::resetTable(bool freeTable) {
   }
 }
 
-void GroupingSet::resetGlobalAggregation() {
-  VELOX_CHECK(
-      isGlobal_,
-      "resetGlobalAggregation should only be called for global grouping sets");
-  destroyGlobalAggregations();
-  rows_.clear();
-  stringAllocator_.clear();
-  globalAggregationInitialized_ = false;
-}
-
 bool GroupingSet::isPartialFull(int64_t maxBytes) {
   VELOX_CHECK(isPartial_);
   if (!table_ || allocatedBytes() <= maxBytes) {
