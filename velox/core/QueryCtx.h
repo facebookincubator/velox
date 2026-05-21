@@ -403,8 +403,7 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
 
   /// Returns the custom root pool for the given resource tag, or nullptr if
   /// none is registered under that tag for this query.
-  std::shared_ptr<memory::MemoryPool> customPool(
-      const std::string& tag) const;
+  std::shared_ptr<memory::MemoryPool> customPool(const std::string& tag) const;
 
   /// Returns all custom root pools for this query, keyed by resource tag.
   const std::unordered_map<std::string, std::shared_ptr<memory::MemoryPool>>&

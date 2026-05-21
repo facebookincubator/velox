@@ -79,8 +79,4 @@ velox_add_library(
   CustomMemoryResourceRegistry.h
 )
 
-velox_link_libraries(
-  velox_custom_memory_resource_registry
-  velox_memory
-  velox_scoped_registry
-)
+velox_link_libraries(velox_custom_memory_resource_registry velox_memory velox_scoped_registry)

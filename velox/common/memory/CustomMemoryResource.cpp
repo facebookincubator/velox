@@ -36,13 +36,9 @@ CustomMemoryResource::CustomMemoryResource(
       reclaimerFactory_(std::move(reclaimerFactory)) {
   VELOX_USER_CHECK(!tag_.empty(), "CustomMemoryResource tag is empty");
   VELOX_USER_CHECK_NOT_NULL(
-      allocator_,
-      "CustomMemoryResource allocator is null for tag: {}",
-      tag_);
+      allocator_, "CustomMemoryResource allocator is null for tag: {}", tag_);
   VELOX_USER_CHECK_NOT_NULL(
-      arbitrator_,
-      "CustomMemoryResource arbitrator is null for tag: {}",
-      tag_);
+      arbitrator_, "CustomMemoryResource arbitrator is null for tag: {}", tag_);
   VELOX_USER_CHECK(
       reclaimerFactory_ != nullptr,
       "CustomMemoryResource reclaimerFactory is null for tag: {}",

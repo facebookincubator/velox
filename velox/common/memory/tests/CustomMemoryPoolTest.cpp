@@ -61,10 +61,8 @@ TEST_F(CustomMemoryPoolTest, customPoolCreation) {
   ASSERT_NE(resource, nullptr);
 
   auto pool = manager->addCustomRootPool("query.q0.gpu", resource);
-  auto queryCtx = core::QueryCtx::Builder()
-                      .customPool("gpu", pool)
-                      .queryId("q0")
-                      .build();
+  auto queryCtx =
+      core::QueryCtx::Builder().customPool("gpu", pool).queryId("q0").build();
 
   auto looked = queryCtx->customPool("gpu");
   ASSERT_NE(looked, nullptr);

@@ -38,7 +38,10 @@ CustomMemoryResource::ReclaimerFactory makeReclaimerFactory() {
 
 std::shared_ptr<CustomMemoryResource> makeResource(const std::string& tag) {
   return std::make_shared<CustomMemoryResource>(
-      tag, makeAllocator(), MemoryArbitrator::create({}), makeReclaimerFactory());
+      tag,
+      makeAllocator(),
+      MemoryArbitrator::create({}),
+      makeReclaimerFactory());
 }
 
 } // namespace
