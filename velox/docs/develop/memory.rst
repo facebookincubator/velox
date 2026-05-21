@@ -953,6 +953,19 @@ The root pool is exposed on *QueryCtx* keyed by tag:
   std::shared_ptr<memory::MemoryPool> QueryCtx::customPool(
       const std::string& tag) const;
 
+Per-Query Pool Hierarchy
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+For every custom root pool registered on *QueryCtx* via
+*Builder::customPool*, *Task* builds a parallel ``task → node → operator``
+aggregate/leaf subtree beneath it that mirrors the default hierarchy.
+Aggregate children under a custom root are created at the same moment as
+their default counterparts. Reclaimers for these aggregates come
+from each resource's ``reclaimerFactory`` via
+*CustomMemoryResource::newReclaimer*, so capacity decisions and reclaim
+on a custom subtree are governed end-to-end by the resource's own
+arbitrator and reclaimer — separate from the default DRAM tier.
+
 Server OOM Prevention
 ---------------------
 

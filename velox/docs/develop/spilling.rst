@@ -574,14 +574,13 @@ the reclaim policy:
    the CXL-backed *HashAggregation* selects a spill target — the set of
    partitions with the most data — and processes the corresponding rows
    in its DRAM row container. Unlike the default operator, it copies each
-   row into the CXL custom pool obtained via *queryCtx->customPool("cxl")*
-   and pointer-swizzles the corresponding hash-table bucket entries to the
-   new CXL addresses, rather than clearing them. The swizzle has the same
-   cost shape as the default operator's hash-table entry removal — a
-   *ProbeState* walk per row to find each bucket slot — but with greater
-   benefit: because CXL memory is coherent with the CPU address space,
-   probe and finalize logic continue to read the relocated entries
-   directly with no restore step.
+   row into the CXL custom pool and pointer-swizzles the corresponding
+   hash-table bucket entries to the new CXL addresses, rather than clearing
+   them. The swizzle has the same cost shape as the default operator's
+   hash-table entry removal — a *ProbeState* walk per row to find each bucket
+   slot — but with greater benefit: because CXL memory is coherent with the
+   CPU address space, probe and finalize logic continue to read the relocated
+   entries directly with no restore step.
 
 #. **CXL pool fills.** Subsequent reclaim triggers continue moving
    partitions from DRAM into CXL until the CXL custom pool's arbitrator

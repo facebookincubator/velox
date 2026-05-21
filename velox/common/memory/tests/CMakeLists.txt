@@ -21,6 +21,7 @@ add_executable(
   ByteStreamTest.cpp
   CompactDoubleListTest.cpp
   CustomMemoryEmulationTest.cpp
+  CustomMemoryHierarchyTest.cpp
   CustomMemoryPoolTest.cpp
   CustomMemoryRegistrationTest.cpp
   HashStringAllocatorTest.cpp
