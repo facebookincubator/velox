@@ -18,11 +18,19 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 
 #include "velox/common/ScopedRegistry.h"
 #include "velox/common/memory/CustomMemoryResource.h"
 
 namespace facebook::velox::memory {
+
+/// Key under which a per-QueryCtx scoped CustomMemoryResourceRegistry is
+/// stored on QueryCtx via QueryCtx::setRegistry / QueryCtx::registry. Tasks
+/// use this key to look up resources when building the custom memory pool
+/// hierarchy.
+inline constexpr std::string_view kCustomMemoryResourceRegistryKey{
+    "customMemoryResource"};
 
 /// Entry point for the CustomMemoryResource registry. Provides the
 /// process-global root and a factory for scoped registries. Callers
