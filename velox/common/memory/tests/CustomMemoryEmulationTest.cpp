@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#include <array>
 #include <gtest/gtest.h>
+#include <array>
 
 #include "velox/common/memory/CustomMemoryResource.h"
 #include "velox/common/memory/CustomMemoryResourceRegistry.h"
@@ -97,8 +97,8 @@ class EmulatedCxlHashAggregation {
       it->second.row->sum += value;
       return;
     }
-    auto* row = static_cast<EmulatedRow*>(
-        dramRowPool_->allocate(sizeof(EmulatedRow)));
+    auto* row =
+        static_cast<EmulatedRow*>(dramRowPool_->allocate(sizeof(EmulatedRow)));
     row->key = key;
     row->sum = value;
     hashTable_.emplace(key, Entry{row, Location::kDram});
@@ -144,12 +144,11 @@ class EmulatedCxlHashAggregation {
     }
     uint64_t freed = 0;
     for (auto& [key, entry] : hashTable_) {
-      if (entry.location != Location::kDram ||
-          partitionOf(key) != partition) {
+      if (entry.location != Location::kDram || partitionOf(key) != partition) {
         continue;
       }
-      auto* cxlRow = static_cast<EmulatedRow*>(
-          cxlRowPool_->allocate(sizeof(EmulatedRow)));
+      auto* cxlRow =
+          static_cast<EmulatedRow*>(cxlRowPool_->allocate(sizeof(EmulatedRow)));
       *cxlRow = *entry.row;
       dramRowPool_->free(entry.row, sizeof(EmulatedRow));
       entry.row = cxlRow;
