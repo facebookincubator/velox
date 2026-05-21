@@ -72,7 +72,7 @@ block(SCOPE_FOR VARIABLES)
   set(BUILD_SHARED_LIBS ON)
 
   # rapids_logger bundles spdlog 1.14.1 which is incompatible with system fmt
-  # >= 11. Force rapids_logger to bundle its own fmt instead of linking 
+  # >= 11. Force rapids_logger to bundle its own fmt instead of linking
   # against the external one.
   set(RAPIDS_LOGGER_HIDE_ALL_SPDLOG_SYMBOLS OFF)
   set(RAPIDS_LOGGER_FMT_OPTION BUNDLED)
