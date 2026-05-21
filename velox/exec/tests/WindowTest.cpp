@@ -579,6 +579,83 @@ TEST_F(WindowTest, rowsStreamingWindowBuildLoadsOnlyBoundaryColumns) {
   EXPECT_FALSE(payload->isLoaded());
 }
 
+TEST_F(
+    WindowTest,
+    rowsStreamingWindowBuildLoadsFunctionOnlyLazyColumnDuringApply) {
+  const vector_size_t size = 6;
+  auto payload = std::make_shared<LazyVector>(
+      pool(),
+      BIGINT(),
+      size,
+      std::make_unique<velox::test::SimpleVectorLoader>([&](RowSet /*rows*/) {
+        return makeFlatVector<int64_t>({10, 20, 30, 40, 50, 60});
+      }));
+
+  auto data = makeRowVector(
+      {"p", "s", "v"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 1, 1, 1}),
+          makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6}),
+          payload,
+      });
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .orderBy({"p", "s"}, false)
+                  .streamingWindow({"sum(v) over (partition by p order by s)"})
+                  .planNode();
+  auto windowNode = std::dynamic_pointer_cast<const core::WindowNode>(plan);
+  ASSERT_NE(windowNode, nullptr);
+
+  TestingRowsStreamingWindowBuild windowBuild(
+      windowNode, pool(), nullptr, &nonReclaimableSection_);
+  windowBuild.setNumRowsPerOutput(10);
+  windowBuild.addInput(data);
+  EXPECT_FALSE(payload->isLoaded());
+  windowBuild.noMoreInput();
+
+  auto partition = windowBuild.nextPartition();
+  HashStringAllocator stringAllocator{pool()};
+  const auto& function = windowNode->windowFunctions()[0];
+  auto windowFunction = WindowFunction::create(
+      function.functionCall->name(),
+      {WindowFunctionArg{BIGINT(), nullptr, 2}},
+      function.functionCall->type(),
+      function.ignoreNulls,
+      pool(),
+      &stringAllocator,
+      core::QueryConfig({}));
+  windowFunction->resetPartition(partition.get());
+
+  auto peerStarts = AlignedBuffer::allocate<vector_size_t>(size, pool());
+  auto peerEnds = AlignedBuffer::allocate<vector_size_t>(size, pool());
+  auto frameStarts = AlignedBuffer::allocate<vector_size_t>(size, pool());
+  auto frameEnds = AlignedBuffer::allocate<vector_size_t>(size, pool());
+  auto* rawPeerStarts = peerStarts->asMutable<vector_size_t>();
+  auto* rawPeerEnds = peerEnds->asMutable<vector_size_t>();
+  auto* rawFrameStarts = frameStarts->asMutable<vector_size_t>();
+  auto* rawFrameEnds = frameEnds->asMutable<vector_size_t>();
+  for (auto i = 0; i < size; ++i) {
+    rawPeerStarts[i] = i;
+    rawPeerEnds[i] = i;
+    rawFrameStarts[i] = 0;
+    rawFrameEnds[i] = i;
+  }
+
+  auto result = BaseVector::create(function.functionCall->type(), size, pool());
+  windowFunction->apply(
+      peerStarts,
+      peerEnds,
+      frameStarts,
+      frameEnds,
+      SelectivityVector(size),
+      0,
+      result);
+
+  EXPECT_TRUE(payload->isLoaded());
+  velox::test::assertEqualVectors(
+      makeFlatVector<int64_t>({10, 30, 60, 100, 150, 210}), result);
+}
+
 TEST_F(WindowTest, rowsStreamingWindowBuildRetainsEncodedRows) {
   const vector_size_t size = 12;
   const vector_size_t baseSize = size * 2;
