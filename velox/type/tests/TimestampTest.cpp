@@ -244,7 +244,7 @@ TEST(TimestampTest, toString) {
 TEST(TimestampTest, toStringPrestoCastBehavior) {
   auto kMin = Timestamp(Timestamp::kMinSeconds, 0);
   auto kMax = Timestamp(Timestamp::kMaxSeconds, Timestamp::kMaxNanos);
-  TimestampToStringOptions options = {
+  const TimestampToStringOptions options = {
       .precision = TimestampToStringOptions::Precision::kMilliseconds,
       .zeroPaddingYear = true,
       .dateTimeSeparator = ' ',
@@ -523,7 +523,7 @@ TEST(TimestampTest, tmToStringTimestamp) {
 }
 
 TEST(TimestampTest, leadingPositiveSign) {
-  TimestampToStringOptions options = {
+  const TimestampToStringOptions options = {
       .leadingPositiveSign = true,
       .zeroPaddingYear = true,
       .dateTimeSeparator = ' ',
@@ -538,7 +538,7 @@ TEST(TimestampTest, leadingPositiveSign) {
 }
 
 TEST(TimestampTest, skipTrailingZeros) {
-  TimestampToStringOptions options = {
+  const TimestampToStringOptions options = {
       .precision = TimestampToStringOptions::Precision::kMicroseconds,
       .skipTrailingZeros = true,
       .zeroPaddingYear = true,
@@ -572,6 +572,45 @@ TEST(TimestampTest, skipTrailingZeros) {
   ASSERT_EQ(
       timestampToString(Timestamp(946729316, 129010000), options),
       "2000-01-01 12:21:56.12901");
+  ASSERT_EQ(
+      timestampToString(Timestamp(946729316, 129001000), options),
+      "2000-01-01 12:21:56.129001");
+  ASSERT_EQ(
+      timestampToString(Timestamp(-50049331200, 726600000), options),
+      "0384-01-01 08:00:00.7266");
+}
+
+TEST(TimestampTest, skipTrailingZeroSeconds) {
+  const TimestampToStringOptions options = {
+      .precision = TimestampToStringOptions::Precision::kMicroseconds,
+      .skipTrailingZeros = true,
+      .skipTrailingZeroSeconds = true,
+      .zeroPaddingYear = true,
+      .dateTimeSeparator = ' ',
+  };
+
+  ASSERT_EQ(
+      timestampToString(Timestamp(-946684800, 0), options), "1940-01-02 00:00");
+  ASSERT_EQ(timestampToString(Timestamp(0, 0), options), "1970-01-01 00:00");
+  ASSERT_EQ(timestampToString(Timestamp(0, 365), options), "1970-01-01 00:00");
+  ASSERT_EQ(
+      timestampToString(Timestamp(0, 65873), options),
+      "1970-01-01 00:00:00.000065");
+  ASSERT_EQ(
+      timestampToString(Timestamp(94668480000, 0), options),
+      "4969-12-04 00:00");
+  ASSERT_EQ(
+      timestampToString(Timestamp(946729316, 129999999), options),
+      "2000-01-01 12:21:56.129999");
+  ASSERT_EQ(
+      timestampToString(Timestamp(946729316, 129900000), options),
+      "2000-01-01 12:21:56.1299");
+  ASSERT_EQ(
+      timestampToString(Timestamp(946729316, 129000000), options),
+      "2000-01-01 12:21:56.129");
+  ASSERT_EQ(
+      timestampToString(Timestamp(946729316, 0), options),
+      "2000-01-01 12:21:56");
   ASSERT_EQ(
       timestampToString(Timestamp(946729316, 129001000), options),
       "2000-01-01 12:21:56.129001");

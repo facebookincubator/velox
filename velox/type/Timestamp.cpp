@@ -276,7 +276,8 @@ StringView Timestamp::tmToStringView(
     writePosition += appendDigits(tmValue.tm_mday, 2, writePosition);
 
     if (options.mode == TimestampToStringOptions::Mode::kDateOnly) {
-      return StringView(startPosition, writePosition - startPosition);
+      return {
+          startPosition, static_cast<int32_t>(writePosition - startPosition)};
     }
     *writePosition++ = options.dateTimeSeparator;
   }
@@ -288,18 +289,23 @@ StringView Timestamp::tmToStringView(
   *writePosition++ = ':';
   writePosition += appendDigits(tmValue.tm_min, 2, writePosition);
 
-  // Second.
-  *writePosition++ = ':';
-  writePosition += appendDigits(tmValue.tm_sec, 2, writePosition);
-
   if (options.precision == TimestampToStringOptions::Precision::kMilliseconds) {
     nanos /= 1'000'000;
   } else if (
       options.precision == TimestampToStringOptions::Precision::kMicroseconds) {
     nanos /= 1'000;
   }
-  if (options.skipTrailingZeros && nanos == 0) {
-    return StringView(startPosition, writePosition - startPosition);
+
+  // Second.
+  const bool shouldSkipSeconds =
+      options.skipTrailingZeroSeconds && tmValue.tm_sec == 0 && nanos == 0;
+  if (!shouldSkipSeconds) {
+    *writePosition++ = ':';
+    writePosition += appendDigits(tmValue.tm_sec, 2, writePosition);
+  }
+
+  if ((options.skipTrailingZeros && nanos == 0) || shouldSkipSeconds) {
+    return {startPosition, static_cast<int32_t>(writePosition - startPosition)};
   }
 
   // Fractional part.
@@ -336,7 +342,7 @@ StringView Timestamp::tmToStringView(
         std::make_error_code(errorCode).message());
     writePosition = position;
   }
-  return StringView(startPosition, writePosition - startPosition);
+  return {startPosition, static_cast<int32_t>(writePosition - startPosition)};
 }
 
 StringView Timestamp::tsToStringView(
