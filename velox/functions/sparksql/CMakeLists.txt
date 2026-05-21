@@ -88,8 +88,8 @@ velox_add_library(
   UnBase64Function.h
   UnscaledValueFunction.h
   Uuid.h
-  XxHash64.h
   VarcharTypeWriteSideCheck.h
+  XxHash64.h
 )
 
 velox_link_libraries(

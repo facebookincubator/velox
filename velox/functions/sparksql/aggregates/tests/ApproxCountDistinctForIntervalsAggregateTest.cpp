@@ -165,30 +165,33 @@ TEST_F(
     ApproxCountDistinctForIntervalsAggregateTest,
     emptySelectionDoesNotAccessUnselectedRow) {
   auto values = makeFlatVector<double>({1.0, 2.0});
-  auto endpoints = makeEndpointsVector<double>(values->size(), {0.0, 3.0});
-  auto data = makeRowVector({values, endpoints});
+  auto data = makeRowVector({values});
 
   auto plan = PlanBuilder()
                   .values({data})
                   .filter("false")
                   .singleAggregation(
-                      {}, {"approx_count_distinct_for_intervals(c0, c1, 0.05)"})
+                      {},
+                      {"approx_count_distinct_for_intervals("
+                       "c0, ARRAY[0.0, 1.0, 1.0, 2.0], 0.05)"})
                   .planNode();
 
   auto result = AssertQueryBuilder(plan).copyResults(pool());
-  ASSERT_EQ(result->size(), 1);
-  EXPECT_TRUE(result->childAt(0)->isNullAt(0));
+  auto rows = materialize(result);
+  ASSERT_EQ(rows.size(), 1);
+  EXPECT_EQ(rows[0][0].array<int64_t>(), std::vector<int64_t>({0, 1, 0}));
 }
 
-TEST_F(ApproxCountDistinctForIntervalsAggregateTest, nanInputsIgnored) {
+TEST_F(ApproxCountDistinctForIntervalsAggregateTest, nanInputsRejected) {
   auto values = makeFlatVector<double>(
       {0.25, std::numeric_limits<double>::quiet_NaN(), 1.25});
   auto endpoints = makeEndpointsVector<double>(values->size(), {0.0, 1.0, 2.0});
   auto data = makeRowVector({values, endpoints});
 
-  auto ndvs = runGlobalAggregation(
-      data, "approx_count_distinct_for_intervals(c0, c1, 0.01)", true);
-  checkNdvs(ndvs, {1, 1}, 0.01);
+  VELOX_ASSERT_THROW(
+      runGlobalAggregation(
+          data, "approx_count_distinct_for_intervals(c0, c1, 0.01)", true),
+      "NaN input is not supported for approx_count_distinct_for_intervals");
 }
 
 TEST_F(ApproxCountDistinctForIntervalsAggregateTest, mergeEquivalence) {

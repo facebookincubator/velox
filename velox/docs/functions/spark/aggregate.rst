@@ -12,11 +12,13 @@ General Aggregate Functions
     Returns approximate distinct counts per interval defined by ``endpoints``.
     Given an array of sorted endpoints (e1, e2, ..., eN), the result contains
     counts for intervals [e1, e2], (e2, e3], ..., (eN-1, eN].
-    Values outside the overall range are ignored. Null and NaN inputs are
-    ignored.
+    Values outside the overall range are ignored. Null inputs are ignored. NaN
+    inputs are not supported.
 
     Duplicate endpoints are allowed. For any interval with identical endpoints
     (e.g. (5, 5]), the result is 1.
+    Empty or all-null input returns zero counts, with duplicate-endpoint
+    intervals set to 1.
 
     ``endpoints`` must be a constant (foldable) array with at least two values.
     ``relativeSD`` must be constant as well.

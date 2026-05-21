@@ -145,6 +145,18 @@ class ApproxCountDistinctForIntervalsAggregate {
     }
   }
 
+  void setConstantInputs(const std::vector<VectorPtr>& constantInputs) {
+    if (constantInputs.size() < 3) {
+      return;
+    }
+    if (constantInputs[1] != nullptr) {
+      ensureEndpointsFromConstantInput(*constantInputs[1]);
+    }
+    if (constantInputs[2] != nullptr) {
+      ensureRelativeSdFromConstantInput(*constantInputs[2]);
+    }
+  }
+
   struct AccumulatorType {
     std::vector<HllAccumulator> hlls;
     ApproxCountDistinctForIntervalsAggregate* fn;
@@ -170,9 +182,9 @@ class ApproxCountDistinctForIntervalsAggregate {
       }
 
       const double inputValue = fn->toDouble(data.value(), fn->inputType_);
-      if (std::isnan(inputValue)) {
-        return false;
-      }
+      VELOX_USER_CHECK(
+          !std::isnan(inputValue),
+          "NaN input is not supported for approx_count_distinct_for_intervals");
       if (inputValue < fn->endpointsMin_ || inputValue > fn->endpointsMax_) {
         return false;
       }
@@ -300,6 +312,24 @@ class ApproxCountDistinctForIntervalsAggregate {
     ensureEmptyHll();
   }
 
+  void ensureRelativeSdFromConstantInput(const BaseVector& relativeSdVector) {
+    if (indexBitLength_ >= 0) {
+      return;
+    }
+    VELOX_USER_CHECK_GT(
+        relativeSdVector.size(),
+        0,
+        "relativeSD must not be empty for approx_count_distinct_for_intervals");
+
+    DecodedVector decodedRelativeSd(relativeSdVector);
+    VELOX_USER_CHECK(
+        !decodedRelativeSd.isNullAt(0),
+        "relativeSD must not be null for approx_count_distinct_for_intervals");
+    indexBitLength_ =
+        computeIndexBitLength(decodedRelativeSd.valueAt<double>(0));
+    ensureEmptyHll();
+  }
+
   void ensureEndpoints(exec::optional_arg_type<Array<Generic<T2>>> endpoints) {
     if (endpointsSet_) {
       return;
@@ -322,6 +352,47 @@ class ApproxCountDistinctForIntervalsAggregate {
       VELOX_USER_CHECK(
           entry.has_value(), "Endpoints must not contain null values");
       converted.push_back(toDouble(entry.value(), endpointsElementType_));
+    }
+    setEndpoints(converted);
+  }
+
+  void ensureEndpointsFromConstantInput(const BaseVector& endpointsVector) {
+    if (endpointsSet_) {
+      return;
+    }
+
+    VELOX_CHECK_NOT_NULL(endpointsElementType_);
+    VELOX_USER_CHECK_GT(
+        endpointsVector.size(),
+        0,
+        "Endpoints must not be empty for approx_count_distinct_for_intervals");
+
+    DecodedVector decodedEndpoints(endpointsVector);
+    VELOX_USER_CHECK(
+        !decodedEndpoints.isNullAt(0),
+        "Endpoints must not be null for approx_count_distinct_for_intervals");
+
+    const auto* arrayVector = decodedEndpoints.base()->as<ArrayVector>();
+    const auto row = decodedEndpoints.index(0);
+    const auto size = arrayVector->sizeAt(row);
+    VELOX_USER_CHECK_GE(
+        size,
+        2,
+        "approx_count_distinct_for_intervals requires at least 2 endpoints");
+
+    DecodedVector decodedElements(*arrayVector->elements());
+    const auto offset = arrayVector->offsetAt(row);
+    std::vector<double> converted;
+    converted.reserve(size);
+    for (vector_size_t i = 0; i < size; ++i) {
+      const auto elementRow = offset + i;
+      VELOX_USER_CHECK(
+          !decodedElements.isNullAt(elementRow),
+          "Endpoints must not contain null values");
+      converted.push_back(vectorValueToDouble(
+          *decodedElements.base(),
+          decodedElements.index(elementRow),
+          endpointsElementType_));
     }
     setEndpoints(converted);
   }
@@ -417,6 +488,52 @@ class ApproxCountDistinctForIntervalsAggregate {
 
     return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
         toDoubleDispatch, type->kind(), value, type);
+  }
+
+  static double vectorValueToDouble(
+      const BaseVector& vector,
+      vector_size_t index,
+      const TypePtr& type) {
+    const auto decimalToDouble = [](auto decimal, int32_t scale) {
+      const auto scaleFactor = DecimalUtil::kPowersOfTen[scale];
+      auto converted = util::Converter<TypeKind::DOUBLE>::tryCast(decimal);
+      VELOX_USER_CHECK(
+          converted.hasValue(), "Failed to convert decimal to DOUBLE");
+      return converted.value() / scaleFactor;
+    };
+
+    if (type->isShortDecimal()) {
+      return decimalToDouble(
+          vector.as<FlatVector<int64_t>>()->valueAt(index),
+          type->asShortDecimal().scale());
+    }
+    if (type->isLongDecimal()) {
+      return decimalToDouble(
+          vector.as<FlatVector<int128_t>>()->valueAt(index),
+          type->asLongDecimal().scale());
+    }
+
+    switch (type->kind()) {
+      case TypeKind::TINYINT:
+        return vector.as<FlatVector<int8_t>>()->valueAt(index);
+      case TypeKind::SMALLINT:
+        return vector.as<FlatVector<int16_t>>()->valueAt(index);
+      case TypeKind::INTEGER:
+        return vector.as<FlatVector<int32_t>>()->valueAt(index);
+      case TypeKind::BIGINT:
+        return vector.as<FlatVector<int64_t>>()->valueAt(index);
+      case TypeKind::REAL:
+        return vector.as<FlatVector<float>>()->valueAt(index);
+      case TypeKind::DOUBLE:
+        return vector.as<FlatVector<double>>()->valueAt(index);
+      case TypeKind::TIMESTAMP:
+        return static_cast<double>(
+            vector.as<FlatVector<Timestamp>>()->valueAt(index).toMicros());
+      default:
+        VELOX_UNSUPPORTED(
+            "Unsupported type for approx_count_distinct_for_intervals: {}",
+            type->toString());
+    }
   }
 
   static uint64_t hashValue(
