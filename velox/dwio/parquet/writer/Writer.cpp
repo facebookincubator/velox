@@ -484,12 +484,18 @@ void Writer::newRowGroup(int32_t numRows) {
   PARQUET_THROW_NOT_OK(arrowContext_->writer->newRowGroup(numRows));
 }
 
-void Writer::close() {
+std::unique_ptr<dwio::common::FileMetadata> Writer::close() {
+  std::unique_ptr<ParquetFileMetadata> parquetFileMetadata;
   if (arrowContext_->writer) {
     PARQUET_THROW_NOT_OK(arrowContext_->writer->close());
+    parquetFileMetadata = std::make_unique<ParquetFileMetadata>(
+        arrowContext_->writer->metadata());
     arrowContext_->writer.reset();
   }
+
   PARQUET_THROW_NOT_OK(stream_->Close());
+
+  return parquetFileMetadata;
 }
 
 void Writer::abort() {
@@ -555,14 +561,15 @@ void WriterOptions::processConfigs(
       parquetWriterOptions, "Expected a Parquet WriterOptions object.");
 
   // Check serdeParameters for timestamp settings first (highest priority).
-  auto serdeTimestampUnitIt = serdeParameters.find(kParquetSerdeTimestampUnit);
+  auto serdeTimestampUnitIt =
+      serdeParameters.find(WriterConfig::kParquetSerdeTimestampUnit);
   if (serdeTimestampUnitIt != serdeParameters.end()) {
     parquetWriteTimestampUnit =
         stringToTimestampPrecision(serdeTimestampUnitIt->second);
   }
 
   auto serdeTimestampTimezoneIt =
-      serdeParameters.find(kParquetSerdeTimestampTimezone);
+      serdeParameters.find(WriterConfig::kParquetSerdeTimestampTimezone);
   if (serdeTimestampTimezoneIt != serdeParameters.end()) {
     // Empty string means no timezone conversion (nullopt).
     if (serdeTimestampTimezoneIt->second.empty()) {
@@ -575,7 +582,7 @@ void WriterOptions::processConfigs(
   if (!parquetWriteTimestampUnit) {
     parquetWriteTimestampUnit =
         toTimestampPrecision(session.getWithFallback<uint8_t>(
-            kParquetWriteTimestampUnit, connectorConfig));
+            WriterConfig::kParquetSessionWriteTimestampUnit, connectorConfig));
   }
   if (!parquetWriteTimestampTimeZone) {
     parquetWriteTimestampTimeZone = parquetWriterOptions->sessionTimezoneName;
@@ -584,33 +591,34 @@ void WriterOptions::processConfigs(
   if (!enableDictionary) {
     enableDictionary =
         toParquetEnableDictionary(session.getWithFallback<std::string>(
-            kParquetEnableDictionary, connectorConfig));
+            WriterConfig::kParquetSessionEnableDictionary, connectorConfig));
   }
 
   if (!dictionaryPageSizeLimit) {
     dictionaryPageSizeLimit =
         toParquetPageSize(session.getWithFallback<std::string>(
-            kParquetDictionaryPageSizeLimit, connectorConfig));
+            WriterConfig::kParquetSessionDictionaryPageSizeLimit,
+            connectorConfig));
   }
 
   if (!useParquetDataPageV2) {
     useParquetDataPageV2 = isParquetV2(session.getWithFallback<std::string>(
-        kParquetDataPageVersion, connectorConfig));
+        WriterConfig::kParquetSessionDataPageVersion, connectorConfig));
   }
 
   if (!dataPageSize) {
     dataPageSize = toParquetPageSize(session.getWithFallback<std::string>(
-        kParquetWritePageSize, connectorConfig));
+        WriterConfig::kParquetSessionWritePageSize, connectorConfig));
   }
 
   if (!batchSize) {
     batchSize = toParquetBatchSize(session.getWithFallback<std::string>(
-        kParquetWriteBatchSize, connectorConfig));
+        WriterConfig::kParquetSessionWriteBatchSize, connectorConfig));
   }
 
   if (!createdBy) {
     createdBy = session.getWithFallback<std::string>(
-        kParquetCreatedBy, connectorConfig);
+        WriterConfig::kParquetHiveConnectorCreatedBy, connectorConfig);
   }
 
   // Parquet only updates ioStats_->rawBytesWritten() when a row group is
@@ -621,7 +629,7 @@ void WriterOptions::processConfigs(
   // during writes.
   auto maxTargetFileSize =
       toParquetPageSize(session.getWithFallback<std::string>(
-          kParquetMaxTargetFileSize, connectorConfig));
+          WriterConfig::kParquetSessionMaxTargetFileSize, connectorConfig));
   if (maxTargetFileSize.has_value()) {
     if (!flushPolicyFactory) {
       auto bytesInRowGroup = std::min<int64_t>(

@@ -16,7 +16,8 @@
 
 #pragma once
 
-#include "velox/common/Enums.h"
+#include <fmt/format.h>
+#include "velox/common/EnumDeclare.h"
 
 namespace facebook::velox::exec {
 
@@ -55,6 +56,9 @@ enum class BlockingReason {
   /// Used by IndexLookupJoin operator, indicating that it was blocked by the
   /// async index lookup.
   kWaitForIndexLookup,
+  /// Used by IndexLookupJoin follower operators waiting for the leader to
+  /// finish collecting index splits via the IndexLookupJoinBridge.
+  kWaitForIndexSplits,
   /// Used by RPC operators, indicating that the operator is blocked waiting
   /// for an async RPC response (e.g., LLM inference, embedding lookups).
   kWaitForRPC,

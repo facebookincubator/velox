@@ -30,6 +30,18 @@
 
 namespace facebook::velox::connector::hive {
 
+/// File-specific scan batch event with split metadata.
+struct FileScanBatchEvent : public core::ScanBatchEvent {
+  /// Table name from the connector table handle.
+  std::string_view tableName;
+  /// File path of the current split.
+  std::string_view filePath;
+  /// Non-owning pointer to the current split's partition keys.
+  /// Null when partition keys are not available.
+  const std::unordered_map<std::string, std::optional<std::string>>*
+      partitionKeys{nullptr};
+};
+
 class FileConfig;
 
 /// Base class for file-based data sources that read from columnar file formats
@@ -42,7 +54,10 @@ class FileConfig;
 /// merge-on-read.
 class FileDataSource : public DataSource {
  public:
-  /// Runtime stat keys for file-based data sources.
+  /// Runtime stat keys for file-based data sources. Data IO stats use the
+  /// keys directly (e.g., "storageReadBytes"). Metadata IO stats use the
+  /// kMetadataPrefix (e.g., "metadata.storageReadBytes").
+  static constexpr std::string_view kMetadataPrefix{"metadata"};
   static constexpr std::string_view kNumPrefetch{"numPrefetch"};
   static constexpr std::string_view kPrefetchBytes{"prefetchBytes"};
   static constexpr std::string_view kTotalScanTime{"totalScanTime"};
@@ -72,12 +87,14 @@ class FileDataSource : public DataSource {
       const std::shared_ptr<common::Filter>& filter) override;
 
   uint64_t getCompletedBytes() override {
-    return ioStatistics_->rawBytesRead();
+    return dataIoStats_->rawBytesRead();
   }
 
   uint64_t getCompletedRows() override {
     return completedRows_;
   }
+
+  void fireScanBatchCallback(core::ScanBatchEvent event) override;
 
   std::unordered_map<std::string, RuntimeMetric> getRuntimeStats() override;
 
@@ -121,7 +138,8 @@ class FileDataSource : public DataSource {
   /// name.
   std::unordered_map<std::string, FileColumnHandlePtr> partitionKeys_;
 
-  std::shared_ptr<io::IoStatistics> ioStatistics_;
+  std::shared_ptr<io::IoStatistics> dataIoStats_;
+  std::shared_ptr<io::IoStatistics> metadataIoStats_;
   std::shared_ptr<IoStats> ioStats_;
 
   /// Column handles for the split info columns keyed on their column names.
@@ -141,9 +159,24 @@ class FileDataSource : public DataSource {
     return metadataFilter_;
   }
 
+  // Actual type produced by the reader after extraction pushdown.  Differs
+  // from readerOutputType_ when the reader handles extraction natively
+  // (e.g., MapKeys -> ARRAY).  Null if no extraction pushdown is active.
+  RowTypePtr readerProducedType_;
+
+  // Output columns that have extraction chains.  Maps output column index to
+  // the column handle.  These columns are read with schemaType and transformed
+  // post-read using the extraction chains.
+  folly::F14FastMap<column_index_t, const FileColumnHandle*> extractionColumns_;
+
   dwio::common::RuntimeStatistics runtimeStats_;
 
  private:
+  // Configure extraction columns on the ScanSpec and build
+  // readerProducedType_.  Called from the constructor after scanSpec_ is
+  // created.
+  void configureExtractionColumns();
+
   /// Adds the information from column handle to the corresponding fields in
   /// this object.
   void processColumnHandle(const FileColumnHandlePtr& handle);

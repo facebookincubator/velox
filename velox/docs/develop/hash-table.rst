@@ -235,6 +235,23 @@ columns would require multiple memory accesses and type-specific comparisons.
   but fits in a 64-bit normalized key.
   (See ``HashTableTest.int2SparseNormalized``.)
 
+Adaptive Prefetching in hashRows
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+When computing hashes in kNormalizedKey mode, ``hashRows`` reads the normalized
+key stored immediately before each row pointer. Because rows are allocated from
+a RowContainer arena and accessed in hash-partitioned order, successive row
+pointers typically reference different cache lines. When
+the working set exceeds the CPU's last-level cache, each normalized key read
+incurs a DRAM access.
+
+To hide this latency, ``hashRows`` uses the ``AdaptivePrefetch`` class. During
+the first 16 iterations, the class measures per-iteration time using a
+conservative look-ahead of 4. After measurement, it computes an optimal look-ahead
+distance based on the ratio of assumed DRAM latency to measured iteration time,
+multiplied by a coefficient of 4. The result is clamped to [4, 32] — values
+above 32 risk polluting L1 cache with too many outstanding prefetches.
+
 kHash Mode
 ~~~~~~~~~~
 

@@ -6,8 +6,10 @@ Velox supports inner, left, right, full outer, left semi filter, left semi
 project, right semi filter, right semi project, anti, and counting hash joins
 using either partitioned or broadcast distribution strategies. Semi project and
 anti joins support additional null-aware flag to distinguish between IN
-(null aware) and EXISTS (regular) semantics. Counting joins implement EXCEPT ALL
-and INTERSECT ALL semantics. Velox also supports cross joins.
+(null aware) and EXISTS (regular) semantics. Anti, left semi filter, and
+counting joins support a null-as-value flag that enables IS NOT DISTINCT FROM
+semantics for join keys (NULL equals NULL), used to implement SQL set operations
+(EXCEPT, INTERSECT, EXCEPT ALL, INTERSECT ALL). Velox also supports cross joins.
 
 Velox also supports inner and left merge join for the case where join inputs are
 sorted on the join keys. Right, full, left semi, right semi, and anti merge joins
@@ -31,6 +33,12 @@ kAnti, or kCountingAnti.
 kLeftSemiProject, kRightSemiProject and kAnti joins support an additional
 nullAware flag to distinguish between IN (null aware) and EXISTS (regular)
 semantics. See :doc:`Anti joins <anti-join>` for detailed semantics.
+
+kAnti, kLeftSemiFilter, kCountingAnti, and kCountingLeftSemiFilter joins support
+an additional nullAsValue flag that makes join keys use IS NOT DISTINCT FROM
+semantics where NULL equals NULL. This is used to implement SQL set operations
+(EXCEPT, INTERSECT, EXCEPT ALL, INTERSECT ALL) which require NULLs to match.
+The nullAsValue and nullAware flags are mutually exclusive.
 
 Filter is optional. If specified it can be any expression over the results of
 the join. This expression will be evaluated using the same expression
@@ -304,6 +312,26 @@ For inner, left semi, and right semi joins, when the build side is empty,
 Velox implements an optimization to finish the join early and return an empty
 set of results without waiting to receive all the probe side input. In this case
 all upstream operators are canceled to avoid unnecessary computation.
+
+Small Build Side Inputs
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Nested loop join materializes the entire build side before producing output.
+When the build side is small enough to fit into a single row or a single
+vector, Velox uses specialized paths to avoid processing one probe row at a
+time.
+
+If the build side has a single row, build-side projections are wrapped as
+constants and evaluated against the whole probe batch at once. If the build
+side has a single vector, Velox wraps probe-side and build-side rows in
+dictionaries and evaluates the join condition over a batched cross product that
+covers as many probe rows as fit within ``outputBatchSize_``.
+
+These paths reduce repeated cross-product materialization and join-condition
+setup for small build inputs while preserving the usual nested loop join
+semantics, including probe-side output order for inner and left joins. If the
+build side spans multiple vectors, Velox falls back to processing one probe row
+against one build vector at a time.
 
 Skipping Duplicate Keys
 ~~~~~~~~~~~~~~~~~~~~~~~

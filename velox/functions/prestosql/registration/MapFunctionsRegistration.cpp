@@ -27,6 +27,7 @@
 #include "velox/functions/prestosql/MapKeysOverlap.h"
 #include "velox/functions/prestosql/MapNormalize.h"
 #include "velox/functions/prestosql/MapSubset.h"
+#include "velox/functions/prestosql/MapSubsetKeyInRange.h"
 #include "velox/functions/prestosql/MapTopN.h"
 #include "velox/functions/prestosql/MapTopNKeys.h"
 #include "velox/functions/prestosql/MapTopNValues.h"
@@ -274,6 +275,13 @@ void registerMapFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(
       udf_no_values_match, prefix + "no_values_match");
 
+  VELOX_REGISTER_VECTOR_FUNCTION(
+      udf_map_values_all_match, prefix + "map_values_all_match");
+  VELOX_REGISTER_VECTOR_FUNCTION(
+      udf_map_values_any_match, prefix + "map_values_any_match");
+  VELOX_REGISTER_VECTOR_FUNCTION(
+      udf_map_values_none_match, prefix + "map_values_none_match");
+
   registerMapConcatFunction(prefix + "map_concat");
 
   registerFunction<
@@ -362,6 +370,41 @@ void registerMapFunctions(const std::string& prefix) {
       Map<Generic<T1>, Array<Generic<T2>>>,
       Map<Generic<T1>, Array<Generic<T2>>>,
       int64_t>({prefix + "map_trim_values"});
+
+  // Register map_subset_key_in_range for primitive key types.
+  // Boolean keys are intentionally not supported because element_at on the
+  // two possible keys provides the same functionality.
+  auto registerMapSubsetKeyInRangePrimitive = [&prefix]<typename K>() {
+    registerFunction<
+        ParameterBinder<MapSubsetKeyInRangeFunction, K>,
+        Map<K, Generic<T1>>,
+        Map<K, Generic<T1>>,
+        K,
+        K>({prefix + "map_subset_key_in_range"});
+  };
+
+  registerMapSubsetKeyInRangePrimitive.template operator()<int8_t>();
+  registerMapSubsetKeyInRangePrimitive.template operator()<int16_t>();
+  registerMapSubsetKeyInRangePrimitive.template operator()<int32_t>();
+  registerMapSubsetKeyInRangePrimitive.template operator()<int64_t>();
+  registerMapSubsetKeyInRangePrimitive.template operator()<float>();
+  registerMapSubsetKeyInRangePrimitive.template operator()<double>();
+  registerMapSubsetKeyInRangePrimitive.template operator()<Timestamp>();
+  registerMapSubsetKeyInRangePrimitive.template operator()<Date>();
+
+  registerFunction<
+      MapSubsetKeyInRangeVarcharFunction,
+      Map<Varchar, Generic<T1>>,
+      Map<Varchar, Generic<T1>>,
+      Varchar,
+      Varchar>({prefix + "map_subset_key_in_range"});
+
+  registerFunction<
+      MapSubsetKeyInRangeGenericFunction,
+      Map<Orderable<T1>, Generic<T2>>,
+      Map<Orderable<T1>, Generic<T2>>,
+      Orderable<T1>,
+      Orderable<T1>>({prefix + "map_subset_key_in_range"});
 }
 
 void registerMapAllowingDuplicates(

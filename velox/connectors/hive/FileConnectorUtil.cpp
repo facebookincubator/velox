@@ -86,12 +86,21 @@ void configureReaderOptions(
   }
   readerOptions.setAdjustTimestampToTimezone(
       connectorQueryCtx->adjustTimestampToTimezone());
-  readerOptions.setSelectiveNimbleReaderEnabled(
-      connectorQueryCtx->selectiveNimbleReaderEnabled());
-  readerOptions.setFileMetadataCacheEnabled(
-      fileConfig->fileMetadataCacheEnabled(sessionProperties));
-  readerOptions.setPinFileMetadata(
-      fileConfig->pinFileMetadata(sessionProperties));
+  // Prefer connector session property (FileConfig). Fall back to
+  // ConnectorQueryCtx (threaded from QueryConfig) for backward compatibility
+  // with callers that set it as a query config.
+  if (sessionProperties->valueExists(
+          FileConfig::kSelectiveNimbleReaderEnabledSession)) {
+    readerOptions.setSelectiveNimbleReaderEnabled(
+        fileConfig->selectiveNimbleReaderEnabled(sessionProperties));
+  } else {
+    readerOptions.setSelectiveNimbleReaderEnabled(
+        connectorQueryCtx->selectiveNimbleReaderEnabled());
+  }
+  readerOptions.setCacheMetadata(fileConfig->cacheMetadata(sessionProperties));
+  readerOptions.setPinMetadata(fileConfig->pinMetadata(sessionProperties));
+  readerOptions.setCacheIndex(fileConfig->cacheIndex(sessionProperties));
+  readerOptions.setPinIndex(fileConfig->pinIndex(sessionProperties));
 
   // Set footer speculative IO size based on file format.
   switch (fileSplit->fileFormat) {
@@ -156,8 +165,8 @@ void configureRowReaderOptions(
         fileConfig->parallelUnitLoadCount(sessionProperties));
     rowReaderOptions.setIndexEnabled(
         fileConfig->indexEnabled(sessionProperties));
-    rowReaderOptions.setCollectColumnStats(
-        fileConfig->readerCollectColumnStats(sessionProperties));
+    rowReaderOptions.setCollectColumnCpuMetrics(
+        fileConfig->readerCollectColumnCpuMetrics(sessionProperties));
   }
 }
 

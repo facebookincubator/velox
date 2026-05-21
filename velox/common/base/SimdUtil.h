@@ -367,6 +367,29 @@ auto toBitMask(xsimd::batch_bool<T, A> mask, const A& arch = {}) {
   return detail::BitMask<T, A>::toBitMask(mask, arch);
 }
 
+/// Returns true if at least one lane in the mask is true.
+template <typename T, typename A = xsimd::default_arch>
+inline bool any(xsimd::batch_bool<T, A> mask, const A& arch = {}) {
+#if XSIMD_WITH_AVX2
+  // x86 bitmasks perform better than xsimd reductions.
+  return toBitMask<T, A>(mask, arch) != 0;
+#else
+  (void)arch;
+  return xsimd::any<T, A>(mask);
+#endif
+}
+
+/// Returns true if no lanes in the mask are true.
+template <typename T, typename A = xsimd::default_arch>
+inline bool none(xsimd::batch_bool<T, A> mask, const A& arch = {}) {
+#if XSIMD_WITH_AVX2
+  return toBitMask<T, A>(mask, arch) == 0;
+#else
+  (void)arch;
+  return xsimd::none<T, A>(mask);
+#endif
+}
+
 // Get a vector mask from bit mask.
 template <typename T, typename BitMaskType, typename A = xsimd::default_arch>
 xsimd::batch_bool<T, A> fromBitMask(BitMaskType bitMask, const A& arch = {}) {
@@ -378,6 +401,17 @@ xsimd::batch_bool<T, A> fromBitMask(BitMaskType bitMask, const A& arch = {}) {
 template <typename T, typename A = xsimd::default_arch>
 auto allSetBitMask(const A& = {}) {
   return detail::BitMask<T, A>::kAllSet;
+}
+
+/// Returns true if every lane in the mask is true.
+template <typename T, typename A = xsimd::default_arch>
+inline bool all(xsimd::batch_bool<T, A> mask, const A& arch = {}) {
+#if XSIMD_WITH_AVX2
+  return toBitMask<T, A>(mask, arch) == allSetBitMask<T>(arch);
+#else
+  (void)arch;
+  return xsimd::all<T, A>(mask);
+#endif
 }
 
 namespace detail {

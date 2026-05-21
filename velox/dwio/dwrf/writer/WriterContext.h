@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <limits>
 #include "velox/common/base/GTestMacros.h"
 #include "velox/common/time/CpuWallTimer.h"
@@ -46,7 +47,8 @@ class WriterContext : public CompressionBufferPool {
           dwio::common::MetricsLog::voidLog(),
       const tz::TimeZone* sessionTimezone = nullptr,
       const bool adjustTimestampToTimezone = false,
-      std::unique_ptr<encryption::EncryptionHandler> handler = nullptr);
+      std::unique_ptr<encryption::EncryptionHandler> handler = nullptr,
+      int64_t memoryBudget = std::numeric_limits<int64_t>::max());
 
   ~WriterContext() override;
 
@@ -190,7 +192,7 @@ class WriterContext : public CompressionBufferPool {
   int64_t getTotalMemoryUsage() const;
 
   int64_t getMemoryBudget() const {
-    return pool_->maxCapacity();
+    return std::min(memoryBudget_, pool_->maxCapacity());
   }
 
   /// Returns the available memory reservations from all the memory pools.
@@ -622,6 +624,7 @@ class WriterContext : public CompressionBufferPool {
 
   const std::shared_ptr<const Config> config_;
   const std::shared_ptr<memory::MemoryPool> pool_;
+  const int64_t memoryBudget_;
   const std::shared_ptr<memory::MemoryPool> dictionaryPool_;
   const std::shared_ptr<memory::MemoryPool> outputStreamPool_;
   const std::shared_ptr<memory::MemoryPool> generalPool_;

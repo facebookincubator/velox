@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/common/io/IoStatistics.h"
 #include "velox/dwio/common/tests/utils/E2EFilterTestBase.h"
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 #include "velox/dwio/parquet/reader/ParquetTypeWithId.h"
@@ -91,6 +92,10 @@ class E2EFilterTest : public E2EFilterTestBase,
     return std::make_unique<ParquetReader>(std::move(input), opts);
   }
 
+  std::shared_ptr<velox::io::IoStatistics> dataIoStats_ =
+      std::make_shared<velox::io::IoStatistics>();
+  std::shared_ptr<velox::io::IoStatistics> metadataIoStats_ =
+      std::make_shared<velox::io::IoStatistics>();
   std::unique_ptr<facebook::velox::parquet::Writer> writer_;
   facebook::velox::parquet::WriterOptions options_;
   uint64_t rowsInRowGroup_ = 10'000;
@@ -541,6 +546,23 @@ TEST_F(E2EFilterTest, stringDeltaByteArray) {
       20);
 }
 
+TEST_F(E2EFilterTest, stringDeltaLengthByteArray) {
+  options_.enableDictionary = false;
+  options_.encoding =
+      facebook::velox::parquet::arrow::Encoding::kDeltaLengthByteArray;
+
+  testWithTypes(
+      "string_val:string,"
+      "string_val_2:string",
+      [&]() {
+        makeStringUnique("string_val");
+        makeStringUnique("string_val_2");
+      },
+      true,
+      {"string_val", "string_val_2"},
+      20);
+}
+
 TEST_F(E2EFilterTest, dedictionarize) {
   rowsInRowGroup_ = 10'000;
   options_.dictionaryPageSizeLimit = 20'000;
@@ -663,7 +685,9 @@ TEST_F(E2EFilterTest, largeMetadata) {
       std::static_pointer_cast<RowVector>(test::BatchMaker::createBatch(
           rowType_, 1000, *leafPool_, nullptr, 0)));
   writeToMemory(rowType_, batches, false);
-  dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+  dwio::common::ReaderOptions readerOpts(leafPool_.get());
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
   readerOpts.setFooterSpeculativeIoSize(1024);
   readerOpts.setFilePreloadThreshold(1024 * 8);
   dwio::common::RowReaderOptions rowReaderOpts;
@@ -738,6 +762,54 @@ TEST_F(E2EFilterTest, time) {
   }
 }
 
+TEST_F(E2EFilterTest, timeMicros) {
+  struct {
+    parquet::arrow::Encoding::type encoding;
+    bool enableDictionary;
+    bool keepNulls;
+  } testCases[] = {
+      {parquet::arrow::Encoding::kPlain, false, true},
+      {parquet::arrow::Encoding::kPlain, true, true},
+      {parquet::arrow::Encoding::kDeltaBinaryPacked, false, false},
+      {parquet::arrow::Encoding::kDeltaBinaryPacked, false, true},
+  };
+
+  for (const auto& testCase : testCases) {
+    options_.encoding = testCase.encoding;
+    bool enableDictionary = testCase.enableDictionary;
+    bool keepNulls = testCase.keepNulls;
+    SCOPED_TRACE(
+        fmt::format(
+            "Encoding: {}, Dictionary: {}, KeepNulls: {}",
+            static_cast<int>(options_.encoding),
+            enableDictionary,
+            keepNulls));
+
+    options_.enableDictionary = enableDictionary;
+    options_.dataPageSize = 4 * 1024;
+    // Microseconds since midnight up to 86,399,999,999 (one second short of
+    // 24 h). Use a smaller cap when forcing a dictionary so values are dense.
+    const int64_t valMax = enableDictionary ? 1'000 : 86'399'999'999LL;
+
+    testWithTypes(
+        "time_val:time_micro_utc",
+        [&]() {
+          makeIntDistribution<int64_t>(
+              "time_val",
+              0, // min
+              valMax, // max
+              22, // repeats
+              19, // rareFrequency
+              0, // rareMin
+              valMax, // rareMax
+              keepNulls); // keepNulls
+        },
+        false,
+        {"time_val"},
+        20);
+  }
+}
+
 TEST_F(E2EFilterTest, combineRowGroup) {
   rowsInRowGroup_ = 5;
   rowType_ = ROW({"c0"}, {INTEGER()});
@@ -748,7 +820,9 @@ TEST_F(E2EFilterTest, combineRowGroup) {
             rowType_, 1, *leafPool_, nullptr, 0)));
   }
   writeToMemory(rowType_, batches, false);
-  dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+  dwio::common::ReaderOptions readerOpts(leafPool_.get());
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
   auto input = std::make_unique<BufferedInput>(
       std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
   auto reader = makeReader(readerOpts, std::move(input));
@@ -853,7 +927,9 @@ TEST_F(E2EFilterTest, parquetMRVersionStringStatsRowGroupFiltering) {
             {kSanXing, kVivo, kSanXing, kVivo, kSanXing})}));
     writer->close();
 
-    dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+    dwio::common::ReaderOptions readerOptions(leafPool_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
     auto input = std::make_unique<BufferedInput>(
         std::make_shared<InMemoryReadFile>(
             std::string(sinkPtr->data(), sinkPtr->size())),
@@ -909,7 +985,9 @@ TEST_F(E2EFilterTest, writeDecimalAsInteger) {
        makeFlatVector<int64_t>({1, 2}, DECIMAL(10, 2)),
        makeFlatVector<int128_t>({1, 2}, DECIMAL(19, 2))});
   writeToMemory(rowVector->type(), {rowVector}, false);
-  dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+  dwio::common::ReaderOptions readerOpts(leafPool_.get());
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
   auto input = std::make_unique<BufferedInput>(
       std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
   auto reader = makeReader(readerOpts, std::move(input));
@@ -934,7 +1012,9 @@ TEST_F(E2EFilterTest, configurableWriteSchema) {
     }
 
     writeToMemory(newType, batches, false);
-    dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+    dwio::common::ReaderOptions readerOpts(leafPool_.get());
+    readerOpts.setDataIoStats(dataIoStats_);
+    readerOpts.setMetadataIoStats(metadataIoStats_);
     auto input = std::make_unique<BufferedInput>(
         std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
     auto reader = makeReader(readerOpts, std::move(input));

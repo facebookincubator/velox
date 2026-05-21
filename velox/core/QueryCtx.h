@@ -27,12 +27,13 @@
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/core/QueryConfig.h"
+#include "velox/core/ScanBatchEvent.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/VectorPool.h"
 
 namespace facebook::velox::exec::trace {
 class TraceCtx;
-}
+} // namespace facebook::velox::exec::trace
 
 namespace facebook::velox::core {
 
@@ -321,6 +322,15 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     traceCtxProvider_ = std::move(provider);
   }
 
+  /// Sets an optional callback fired by TableScan after each non-empty batch.
+  void setScanBatchCallback(ScanBatchCallback callback) {
+    scanBatchCallback_ = std::move(callback);
+  }
+
+  const ScanBatchCallback& scanBatchCallback() const {
+    return scanBatchCallback_;
+  }
+
   /// Store a per-query registry override. Each subsystem defines its own key
   /// (e.g., "connectors", "vectorFunctions"). The registry is stored as a
   /// type-erased shared_ptr; callers must use the same type T for setRegistry
@@ -477,6 +487,9 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   // A function that constructs a custom trace ctx object.
   TraceCtxProvider traceCtxProvider_;
 
+  // Optional per-batch scan stats callback.
+  ScanBatchCallback scanBatchCallback_;
+
   // Type-erased registry entry for per-query overrides.
   struct RegistryEntry {
     std::shared_ptr<void> ptr;
@@ -512,6 +525,7 @@ class ExecCtx {
           !queryConfig.debugDisableExpressionsWithMemoization() &&
           exprEvalCacheEnabled;
       peelingEnabled = !queryConfig.debugDisableExpressionsWithPeeling();
+      minRowsForPeeling = queryConfig.minRowsForPeeling();
       sharedSubExpressionReuseEnabled =
           !queryConfig.debugDisableCommonSubExpressions();
       deferredLazyLoadingEnabled =
@@ -531,6 +545,9 @@ class ExecCtx {
     bool dictionaryMemoizationEnabled;
     /// True if peeling is enabled during experssion evaluation.
     bool peelingEnabled;
+    /// Minimum number of rows required for peeling to be applied during
+    /// expression evaluation.
+    int32_t minRowsForPeeling;
     /// True if shared subexpression reuse is enabled during experssion
     /// evaluation.
     bool sharedSubExpressionReuseEnabled;

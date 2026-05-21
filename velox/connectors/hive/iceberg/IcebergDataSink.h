@@ -24,6 +24,12 @@
 #include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
+#include "velox/connectors/hive/iceberg/IcebergDataFileStatistics.h"
+
+#ifdef VELOX_ENABLE_PARQUET
+#include "velox/connectors/hive/iceberg/IcebergParquetStatsCollector.h"
+#endif
+
 #include "velox/connectors/hive/iceberg/IcebergConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergPartitionName.h"
 #include "velox/connectors/hive/iceberg/PartitionSpec.h"
@@ -91,7 +97,9 @@ class IcebergDataSink : public HiveDataSink {
   /// - fileSizeInBytes: raw bytes written to disk.
   /// - metrics: object with recordCount (number of rows written).
   /// - partitionSpecJson: partition specification.
-  /// - fileFormat: storage format (e.g., "PARQUET").
+  /// - fileFormat: storage format. Either "PARQUET" or "ORC". DWRF files
+  ///   are reported as "ORC" because Iceberg's file-format vocabulary has
+  ///   no DWRF enum.
   /// - content: file content type ("DATA" for data files).
   ///
   /// See
@@ -148,14 +156,14 @@ class IcebergDataSink : public HiveDataSink {
   // Additionally, extracts and stores the transformed partition values for
   // the writer in commitPartitionValue_ if not already set, which will be
   // included in the commit message as "partitionDataJson".
-  uint32_t ensureWriter(const HiveWriterId& id) override;
+  uint32_t ensureWriter(const WriterId& id) override;
 
   // Creates writer options configured for Iceberg table writes. Extends the
   // base HiveDataSink writer options with Iceberg-specific settings:
   // - Sets timestamp timezone to nullopt (UTC) for Iceberg compliance.
   // - Sets timestamp precision to microseconds.
-  std::shared_ptr<dwio::common::WriterOptions> createWriterOptions()
-      const override;
+  std::shared_ptr<dwio::common::WriterOptions> createWriterOptions(
+      size_t writerIndex) const override;
 
   // Extracts partition values for a specific writer to be included in the
   // commit message. Converts the transformed partition values from columnar
@@ -164,6 +172,26 @@ class IcebergDataSink : public HiveDataSink {
   // values for the given writer index) for JSON serialization.
   // Returns nullptr for null partition values.
   folly::dynamic makeCommitPartitionValue(uint32_t writerIndex) const;
+
+  // Closes the active writer at 'index' to flush its file footer, captures
+  // the file metadata for Iceberg stats aggregation (via
+  // closeWriterAndCollectStats), then resets the writer so a new one is
+  // created lazily on the next write. Differs from the base
+  // FileDataSink::rotateWriter by also collecting per-file Iceberg stats
+  // before discarding the writer.
+  void rotateWriter(size_t index) override;
+
+  // Closes all remaining writers and aggregates their file metadata into
+  // per-writer Iceberg stats (when state == kClosed). On any other state,
+  // aborts the writers without collecting stats. Stats for already-rotated
+  // files were collected during rotateWriter().
+  void closeInternal() override;
+
+  // Closes the writer at 'index', captures the resulting file metadata, and
+  // appends a per-file IcebergDataFileStatistics entry to dataFileStats_
+  // (Parquet stats when the format provides them; an empty entry otherwise).
+  // Caller is responsible for the surrounding NonReclaimableSectionGuard.
+  void closeWriterAndCollectStats(size_t index);
 
   // Iceberg partition specification defining how the table is partitioned.
   // Contains partition fields with source column names, transform types
@@ -211,6 +239,23 @@ class IcebergDataSink : public HiveDataSink {
   // folly::dynamic array of values across all partition fields), ready for JSON
   // serialization.
   std::vector<folly::dynamic> commitPartitionValue_;
+
+  // Statistics for all data files written by this sink, organized by writer
+  // index and file index within each writer. These statistics are populated
+  // during rotateWriter() (for rotated files) and during closeInternal()
+  // (for the final file of each writer). These metrics are subsequently used
+  // to construct Iceberg commit messages.
+  // Outer vector: indexed by writer index (same as writerInfo_).
+  // Inner vector: one entry per file written by that writer (including
+  // rotated files and the final file). Each entry corresponds to one
+  // individual data file.
+  std::vector<std::vector<IcebergDataFileStatisticsPtr>> dataFileStats_;
+
+  const IcebergInsertTableHandlePtr icebergInsertTableHandle_;
+
+#ifdef VELOX_ENABLE_PARQUET
+  std::shared_ptr<IcebergParquetStatsCollector> parquetStatsCollector_;
+#endif
 };
 
 } // namespace facebook::velox::connector::hive::iceberg

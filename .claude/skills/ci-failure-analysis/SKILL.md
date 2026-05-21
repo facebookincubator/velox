@@ -5,40 +5,85 @@ The workflow run ID is {{RUN_ID}}.
 Failure metadata (JSON array of failed jobs):
 {{FAILURE_METADATA}}
 
-Each entry has: "job" (job name), "type" ("build" or "test"), and
-optionally "failed_tests" (newline-separated test names).
+Each entry has: "job" (job name), "type" ("build", "test", or "unknown"), and
+optionally "failed_tests" (newline-separated test names). A type of "unknown"
+means no structured failure metadata was available (e.g., Fuzzer Jobs) — you
+must determine the failure type from the job logs.
 
 Your task:
 1. Use `gh api` to download the logs for the failed jobs in this workflow run.
    - List jobs: `gh api repos/{{REPOSITORY}}/actions/runs/{{RUN_ID}}/jobs`
+   - For each job, save its `id` and note the step numbers from the `steps` array.
+     Find the step that ran the tests or build (usually named "Run Tests", "Build",
+     or similar — look for the step whose logs contain the failure output, not the
+     status-reporting step). You need the job `id` and step `number` to build a
+     direct link: `https://github.com/{{REPOSITORY}}/actions/runs/{{RUN_ID}}/job/{job_id}#step:{step_number}:{ui_line}`
+     To compute `ui_line`: the raw log numbers lines across all steps, but the
+     GitHub UI numbers lines per-step starting from 1. To convert, find the line
+     in the raw log where the test step begins (search for "Test project /__w/")
+     and call that `start_line`. Then find the `[  FAILED  ]` line and call that
+     `failed_line`. The UI line number is `failed_line - start_line + 1`.
+     For build failures, use the first `error:` line instead of `[  FAILED  ]`.
    - Download job logs: `gh api repos/{{REPOSITORY}}/actions/jobs/{job_id}/logs` (returns plain text)
    - If job logs API fails, try: `gh run view {{RUN_ID}} --repo {{REPOSITORY}} --log-failed`
 
 2. For TEST failures: Find the gtest failure output — the lines between `[ RUN      ]` and
    `[  FAILED  ]` for each failing test. Extract the assertion message, expected vs actual
-   values, file path, and line number.
+   values, file path, and line number. Also find the test binary name from the ctest output
+   (look for lines like `Start N: <test_name>` followed by the binary path, or search for
+   the binary path in the test output). You will need this for the reproduce command.
 
 3. For BUILD failures: Find compiler `error:` lines with file paths and error messages.
 
-4. Get the PR diff: `gh pr diff {{PR_NUMBER}} --repo {{REPOSITORY}}`
+4. For FUZZER failures (from the "Fuzzer Jobs" workflow): Fuzzers run via
+   `run-fuzzer-parallel.sh` which launches multiple instances in parallel.
+   Look for crash reports, assertion failures (VELOX_CHECK, VELOX_FAIL),
+   segfaults, or timeouts in the logs. Key information to extract:
+   - The fuzzer name (e.g., "Presto Fuzzer", "Join Fuzzer", "Spark Expression Fuzzer")
+   - The error message or assertion failure
+   - The seed value (from `--seed` flag or log output) for reproduction
+   - The file and line number from stack traces
+   - The reproduce command uses the fuzzer binary with `--seed <seed>` flag
+
+5. Get the PR diff: `gh pr diff {{PR_NUMBER}} --repo {{REPOSITORY}}`
    Determine if the failures are likely caused by the PR changes.
 
-5. Search open issues for known failures:
+6. Search open issues for known failures:
    `gh issue list --repo {{REPOSITORY}} --search "<test_name>" --state open --limit 5`
    Check if any failing test has a known open issue.
 
-6. Check if the same tests fail on the main branch (pre-existing flaky test):
-   `gh run list --repo {{REPOSITORY}} --branch main --workflow "Linux Build using GCC" --limit 3 --json conclusion,databaseId`
-   If recent main runs also failed, note this.
+7. Check if the same failures occur on the main branch (pre-existing/flaky):
+   `gh run list --repo {{REPOSITORY}} --branch main --workflow "<workflow_name>" --limit 3 --json conclusion,databaseId`
+   Use the appropriate workflow name: "Linux Build using GCC" for build/test
+   failures, "Fuzzer Jobs" for fuzzer failures.
 
-7. Post a SINGLE comment on the PR with your analysis using:
-   `gh pr comment {{PR_NUMBER}} --repo {{REPOSITORY}} --body "<comment>"`
+8. Post a SINGLE comment on the PR with your analysis. Use update-or-create
+   behavior so re-runs replace the prior analysis instead of stacking new
+   comments. Look up the prior comment by its heading, then edit that
+   specific comment ID via the GitHub API.
+
+   Write the body to a file first (e.g., `/tmp/ci-failure-comment.md`) so
+   multi-line markdown round-trips correctly, then:
+   - Find any prior comment with this workflow's heading:
+     `gh api "repos/{{REPOSITORY}}/issues/{{PR_NUMBER}}/comments" --paginate \
+        --jq '[.[] | select(.body | contains("## CI Failure Analysis")) | .id] | first'`
+   - If a comment ID is returned, edit that specific comment in place by
+     piping a JSON body in via `--input -`:
+     `jq -Rs '{body: .}' /tmp/ci-failure-comment.md \
+        | gh api -X PATCH "repos/{{REPOSITORY}}/issues/comments/<comment_id>" --input -`
+   - Otherwise, create a new comment:
+     `gh pr comment {{PR_NUMBER}} --repo {{REPOSITORY}} --body-file /tmp/ci-failure-comment.md`
+
+   The `## CI Failure Analysis` heading must remain in the body so this
+   lookup keeps working across re-runs.
 
 Format the comment as follows (use markdown):
 ```
 ## CI Failure Analysis
 
-### <STATUS_EMOJI> <Job Name> — <BUILD|TEST> Failure
+> _Auto-generated by the CI Failure Analysis workflow. This comment is updated in place each time CI fails on a new commit, so it always reflects the latest run — re-pushing or re-running CI will refresh the analysis below. Last updated <UTC_TIMESTAMP> from [workflow run {{RUN_ID}}](https://github.com/{{REPOSITORY}}/actions/runs/{{RUN_ID}})._
+
+### <STATUS_EMOJI> <Job Name> — <BUILD|TEST> Failure  [View logs](<step-level link>)
 
 **Failed tests:** (or **Build errors:** for build failures)
 
@@ -53,6 +98,10 @@ For build failures, show:
 
 Keep failure details in a code block for readability.
 
+(Repeat the above section for each failed job, each with its own step-level link)
+
+---
+
 **Correlation with PR changes:**
 - State whether the failure appears related to the PR diff or not
 - If related, point to the specific file/function in the diff that likely caused it
@@ -62,11 +111,23 @@ Keep failure details in a code block for readability.
 - If an open issue tracks this failure, link to it
 - If the same test fails on main, note it as a pre-existing/flaky failure
 
+**Reproduce locally:** (for test failures)
+- Show the command to reproduce, e.g.:
+  `./_build/debug/velox/exec/tests/velox_exec_test_group0 --gtest_filter="TestSuite.testCase"`
+  Use the actual binary path from the ctest log output.
+
 **Recommended fix:** (if the failure is related to the PR)
 - Brief suggestion of what to fix
-
-[View full CI logs](<link to the workflow run>)
 ```
+
+The blockquote line directly under the heading MUST be present on every
+posted comment. Use the current UTC time in `YYYY-MM-DD HH:MM:SS UTC`
+format (run `date -u +'%Y-%m-%d %H:%M:%S UTC'`). Because the comment is
+overwritten in place on re-runs, this line is the only visible signal
+that the analysis was refreshed — it changes on every update and stays
+static if no re-run has happened. It sits directly under the heading
+(not as a footer) so reviewers see it without scrolling past the
+analysis.
 
 Important rules:
 - Be concise. Show only the relevant failure output, not the entire log.

@@ -53,6 +53,11 @@ enum class FileFormat {
   ORC = 9,
   SST = 10, // rocksdb sst format
   FLUX = 11,
+  AVRO = 12,
+  PUFFIN =
+      13, // Iceberg V3 Puffin blob container (e.g. deletion vectors).
+          // Not consumed by dwio::ReaderFactory; read directly by the
+          // Iceberg connector via FileSystem::pread of the blob byte-range.
 };
 
 FileFormat toFileFormat(std::string_view s);
@@ -467,21 +472,34 @@ class RowReaderOptions {
     indexEnabled_ = enabled;
   }
 
-  bool passStringBuffersFromDecoder() const {
-    return passStringBuffersFromDecoder_;
+  bool stringDecoderZeroCopy() const {
+    return stringDecoderZeroCopy_;
   }
 
-  void setPassStringBuffersFromDecoder(bool passStringBuffersFromDecoder) {
-    passStringBuffersFromDecoder_ = passStringBuffersFromDecoder;
+  void setStringDecoderZeroCopy(bool stringDecoderZeroCopy) {
+    stringDecoderZeroCopy_ = stringDecoderZeroCopy;
   }
 
-  bool collectColumnStats() const {
-    return collectColumnStats_;
+  bool nimblePreserveDictionaryEncoding() const {
+    return nimblePreserveDictionaryEncoding_;
   }
 
-  RowReaderOptions& setCollectColumnStats(bool collect) {
-    collectColumnStats_ = collect;
+  void setNimblePreserveDictionaryEncoding(bool value) {
+    nimblePreserveDictionaryEncoding_ = value;
+  }
+
+  bool collectColumnCpuMetrics() const {
+    return collectColumnCpuMetrics_;
+  }
+
+  RowReaderOptions& setCollectColumnCpuMetrics(bool collect) {
+    collectColumnCpuMetrics_ = collect;
     return *this;
+  }
+
+  // Legacy alias — remove after Nimble OSS bumps Velox.
+  RowReaderOptions& setCollectColumnStats(bool collect) {
+    return setCollectColumnCpuMetrics(collect);
   }
 
  private:
@@ -545,10 +563,13 @@ class RowReaderOptions {
   std::shared_ptr<FormatSpecificOptions> formatSpecificOptions_;
   bool trackRowSize_{false};
   bool indexEnabled_{false};
-  // NOTE: we will control this option with a session property
-  // for prod. Tests are parameterized on both branches.
-  bool passStringBuffersFromDecoder_{false};
-  bool collectColumnStats_{false};
+  // Enables zero-copy string decoding in the Nimble selective reader,
+  // using the non-legacy encoding path. Controlled via session property.
+  bool stringDecoderZeroCopy_{false};
+  // Controls whether dictionary-encoded Nimble string columns return
+  // DictionaryVector instead of FlatVector. Controlled via session property.
+  bool nimblePreserveDictionaryEncoding_{false};
+  bool collectColumnCpuMetrics_{false};
 };
 
 /// Options for creating a Reader.
@@ -560,10 +581,7 @@ class ReaderOptions : public io::ReaderOptions {
       1024 * 1024 * 8; // 8MB
 
   explicit ReaderOptions(velox::memory::MemoryPool* pool)
-      : io::ReaderOptions(pool),
-        tailLocation_(std::numeric_limits<uint64_t>::max()),
-        fileFormat_(FileFormat::UNKNOWN),
-        fileSchema_(nullptr) {}
+      : io::ReaderOptions(pool) {}
 
   /// Sets the format of the file, such as "rc" or "dwrf". The default is
   /// "dwrf".
@@ -627,11 +645,6 @@ class ReaderOptions : public io::ReaderOptions {
     return *this;
   }
 
-  ReaderOptions& setIOExecutor(std::shared_ptr<folly::Executor> executor) {
-    ioExecutor_ = std::move(executor);
-    return *this;
-  }
-
   ReaderOptions& setSessionTimezone(const tz::TimeZone* sessionTimezone) {
     sessionTimezone_ = sessionTimezone;
     return *this;
@@ -680,10 +693,6 @@ class ReaderOptions : public io::ReaderOptions {
 
   uint64_t filePreloadThreshold() const {
     return filePreloadThreshold_;
-  }
-
-  const std::shared_ptr<folly::Executor>& ioExecutor() const {
-    return ioExecutor_;
   }
 
   const tz::TimeZone* sessionTimezone() const {
@@ -738,29 +747,51 @@ class ReaderOptions : public io::ReaderOptions {
   /// process-wide AsyncDataCache. When enabled, the first reader performs a
   /// speculative tail read and populates the cache; subsequent readers on the
   /// same file initialize from the cache with zero additional IO.
-  bool fileMetadataCacheEnabled() const {
-    return fileMetadataCacheEnabled_;
+  bool cacheMetadata() const {
+    return cacheMetadata_;
   }
 
-  void setFileMetadataCacheEnabled(bool value) {
-    fileMetadataCacheEnabled_ = value;
+  void setCacheMetadata(bool value) {
+    cacheMetadata_ = value;
   }
 
   /// If true, pins parsed metadata objects (e.g., StripeGroup, IndexGroup) in
   /// the reader's metadata cache with strong references so they are never
   /// evicted. This avoids re-reading and re-parsing metadata on every stripe
-  /// access when weak-pointer cache entries would otherwise expire.
-  bool pinFileMetadata() const {
-    return pinFileMetadata_;
+  /// access when weak-pointer cache entries would otherwise expire. Works
+  /// independently of cacheMetadata.
+  bool pinMetadata() const {
+    return pinMetadata_;
   }
 
-  void setPinFileMetadata(bool value) {
-    pinFileMetadata_ = value;
+  void setPinMetadata(bool value) {
+    pinMetadata_ = value;
+  }
+
+  /// If true, caches index data (e.g., cluster index key stream) in the
+  /// async data cache.
+  bool cacheIndex() const {
+    return cacheIndex_;
+  }
+
+  void setCacheIndex(bool value) {
+    cacheIndex_ = value;
+  }
+
+  /// If true, pins parsed index objects in the reader's index cache with
+  /// strong references so they are never evicted. Works independently of
+  /// cacheIndex.
+  bool pinIndex() const {
+    return pinIndex_;
+  }
+
+  void setPinIndex(bool value) {
+    pinIndex_ = value;
   }
 
   /// Whether to load and initialize the cluster index during file open.
   /// When true, the cluster index section is preloaded and the structured
-  /// ClusterIndex object is created. Default true.
+  /// ClusterIndex object is created. Default false.
   bool loadClusterIndex() const {
     return loadClusterIndex_;
   }
@@ -803,8 +834,8 @@ class ReaderOptions : public io::ReaderOptions {
   }
 
  private:
-  uint64_t tailLocation_;
-  FileFormat fileFormat_;
+  uint64_t tailLocation_{std::numeric_limits<uint64_t>::max()};
+  FileFormat fileFormat_{FileFormat::UNKNOWN};
   RowTypePtr fileSchema_;
   SerDeOptions serDeOptions_;
   std::unordered_map<std::string, std::string> properties_{};
@@ -813,15 +844,16 @@ class ReaderOptions : public io::ReaderOptions {
   uint64_t filePreloadThreshold_{kDefaultFilePreloadThreshold};
   bool fileColumnNamesReadAsLowerCase_{false};
   bool useColumnNamesForColumnMapping_{false};
-  std::shared_ptr<folly::Executor> ioExecutor_;
   std::shared_ptr<random::RandomSkipTracker> randomSkip_;
   std::shared_ptr<velox::common::ScanSpec> scanSpec_;
   const tz::TimeZone* sessionTimezone_{nullptr};
   bool adjustTimestampToTimezone_{false};
   bool selectiveNimbleReaderEnabled_{false};
-  bool fileMetadataCacheEnabled_{false};
-  bool pinFileMetadata_{false};
-  bool loadClusterIndex_{true};
+  bool cacheMetadata_{false};
+  bool pinMetadata_{false};
+  bool cacheIndex_{false};
+  bool pinIndex_{false};
+  bool loadClusterIndex_{false};
   bool loadChunkIndex_{true};
   bool allowEmptyFile_{false};
   bool allowInt32Narrowing_{false};

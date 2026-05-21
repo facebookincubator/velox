@@ -28,7 +28,7 @@ void assertReturnType(
   const auto argTypes = generator->generateArgs(signature, returnType, seed);
 
   // Resolve return type from argument types for the given signature.
-  exec::SignatureBinder binder(signature, argTypes);
+  exec::SignatureBinder binder(signature, argTypes, TypeCoercer::defaults());
   VELOX_CHECK(
       binder.tryBind(),
       "Failed to resolve {} from argument types.",

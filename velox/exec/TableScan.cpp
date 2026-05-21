@@ -92,7 +92,9 @@ TableScan::TableScan(
           operatorType(),
           tableHandle_->connectorId())),
       connector_(
-          connector::ConnectorRegistry::tryGet(tableHandle_->connectorId())),
+          connector::ConnectorRegistry::tryGet(
+              *driverCtx->task->queryCtx(),
+              tableHandle_->connectorId())),
       getOutputTimeLimitMs_(
           driverCtx_->queryConfig().tableScanGetOutputTimeLimitMs()),
       outputBatchRowsOverride_(
@@ -193,6 +195,8 @@ RowVectorPtr TableScan::getOutput() {
     const auto estimatedRowSize = dataSource_->estimatedRowSize();
     const int32_t readBatchSize = calculateBatchSize(estimatedRowSize);
 
+    const auto prevCompletedRows = dataSource_->getCompletedRows();
+
     uint64_t ioTimeUs{0};
     std::optional<RowVectorPtr> dataOptional;
     {
@@ -222,7 +226,19 @@ RowVectorPtr TableScan::getOutput() {
       if (data != nullptr && !shouldDropOutput()) {
         constexpr int kMaxSelectiveBatchSizeMultiplier = 4;
         if (data->size() > 0) {
-          lockedStats->addInputVector(data->estimateFlatSize(), data->size());
+          uint64_t flatSize = 0;
+          if (driverCtx_->driver->enableOperatorBatchSizeStats()) {
+            flatSize = data->estimateFlatSize();
+          }
+          lockedStats->addInputVector(flatSize, data->size());
+          const auto completedRowsDelta =
+              dataSource_->getCompletedRows() - prevCompletedRows;
+          if (completedRowsDelta > 0) {
+            core::ScanBatchEvent event;
+            event.numRows = completedRowsDelta;
+            event.wallTimeMicros = ioTimeUs;
+            dataSource_->fireScanBatchCallback(event);
+          }
           maxFilteringRatio_ = std::max(
               {maxFilteringRatio_,
                1.0 * data->size() / readBatchSize,
@@ -231,8 +247,9 @@ RowVectorPtr TableScan::getOutput() {
             RECORD_METRIC_VALUE(
                 velox::kMetricTableScanBatchProcessTimeMs, ioTimeUs / 1'000);
           }
-          RECORD_METRIC_VALUE(
-              velox::kMetricTableScanBatchBytes, data->estimateFlatSize());
+          if (driverCtx_->driver->enableOperatorBatchSizeStats()) {
+            RECORD_METRIC_VALUE(velox::kMetricTableScanBatchBytes, flatSize);
+          }
           return data;
         } else {
           maxFilteringRatio_ = std::max(
@@ -347,6 +364,10 @@ bool TableScan::getSplit() {
         tableHandle_,
         columnHandles_,
         connectorQueryCtx_.get());
+    if (const auto& callback =
+            operatorCtx_->driverCtx()->task->queryCtx()->scanBatchCallback()) {
+      dataSource_->setScanBatchCallback(callback);
+    }
   }
 
   debugString_ = fmt::format(

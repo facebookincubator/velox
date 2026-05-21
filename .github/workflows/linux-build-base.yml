@@ -50,7 +50,8 @@ jobs:
         run: |
           echo "JOB_TRIGGER: $JOB_TRIGGER"
           if [[ "$JOB_TRIGGER" == "pull_request" ]]; then
-            merge_base_commit=$(gh api -q '.merge_base_commit.sha' \
+            source .github/scripts/gh-api-retry.sh
+            merge_base_commit=$(gh_api -q '.merge_base_commit.sha' \
               /repos/facebookincubator/velox/compare/facebookincubator:$BASE_REF...$PR_OWNER:$HEAD_REF \
             )
 
@@ -95,8 +96,12 @@ jobs:
     outputs:
       cudf-changes: ${{ steps.changes.outputs.cudf }}
       build-outcome: ${{ steps.build.outcome }}
-      test-outcome: ${{ steps.tests.outcome }}
-      flaky: ${{ steps.tests.outputs.flaky }}
+      build-failure-details: ${{ steps.build-errors.outputs.build-failure-details }}
+      test-outcome: ${{ steps.retry-tests.outcome != 'skipped' && steps.retry-tests.outcome || steps.tests.outcome }}
+      flaky: ${{ steps.retry-tests.outputs.flaky }}
+      failed-tests: ${{ steps.retry-tests.outputs.failed-tests }}
+      failed-cases: ${{ steps.retry-tests.outputs.failed-cases }}
+      failure-details: ${{ steps.retry-tests.outputs.failure-details }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -150,34 +155,36 @@ jobs:
           # Set compiler to GCC 14
           CUDA_FLAGS: -ccbin /opt/rh/gcc-toolset-14/root/usr/bin
         run: |
-          EXTRA_CMAKE_FLAGS=(
-            "-DVELOX_ENABLE_BENCHMARKS=ON"
-            "-DVELOX_ENABLE_EXAMPLES=ON"
-            "-DVELOX_ENABLE_ARROW=ON"
-            "-DVELOX_ENABLE_GEO=ON"
-            "-DVELOX_ENABLE_PARQUET=ON"
-            "-DVELOX_ENABLE_HDFS=ON"
-            "-DVELOX_ENABLE_S3=ON"
-            "-DVELOX_ENABLE_GCS=ON"
-            "-DVELOX_ENABLE_ABFS=ON"
-            "-DVELOX_ENABLE_WAVE=ON"
-            "-DVELOX_MONO_LIBRARY=ON"
-          )
+          # All adapters cmake flags (including compiler-conditional
+          # ones — Faiss, REMOTE_FUNCTIONS, and CUDF — are only added
+          # when USE_CLANG != true) live in .github/scripts/cmake-flags.sh.
+          # Edit the script, not this list.
+          BUILD_PROFILE=adapters USE_CLANG="${USE_CLANG}" source .github/scripts/cmake-flags.sh
+          EXTRA_CMAKE_FLAGS=("${CMAKE_FLAGS[@]}")
           if [[ "${USE_CLANG}" = "true" ]]; then
              scripts/setup-centos9.sh install_clang15; export CC=/usr/bin/clang-15; export CXX=/usr/bin/clang++-15; CUDA_FLAGS="-ccbin /usr/lib64/llvm15/bin/clang++-15";
-          else
-            # cuDF (unsupported for Clang) and Faiss (link issue when using Clang)
-            # are excluded for Clang compilation and need to be added back when using GCC.
-            EXTRA_CMAKE_FLAGS+=("-DVELOX_ENABLE_CUDF=ON")
-            EXTRA_CMAKE_FLAGS+=("-DVELOX_ENABLE_FAISS=ON")
-            # Investigate issues with remote function service: Issue #13897
-            EXTRA_CMAKE_FLAGS+=("-DVELOX_ENABLE_REMOTE_FUNCTIONS=ON")
           fi
           source /opt/rh/gcc-toolset-14/enable
           g++ --version
           # CC/CXX are set to GCC12 in the adapters image build and it needs to be overridden
           # after sourcing GCC14.
-          CC=gcc CXX=g++ make release EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS[*]}"
+          CC=gcc CXX=g++ make release EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS[*]}" 2>&1 | tee /tmp/build-output.log
+
+      - name: Extract build errors
+        id: build-errors
+        if: failure() && steps.build.outcome == 'failure'
+        run: |
+          # Strip ANSI escape sequences before grepping — the build uses
+          # -fdiagnostics-color=always which embeds SGR and erase (ESC[K)
+          # codes that prevent matching literal ': error:'.
+          BUILD_ERRORS=$(sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' /tmp/build-output.log | grep -E ' (error|fatal error):' | head -50 || true)
+          if [[ -n $BUILD_ERRORS ]]; then
+            {
+              echo 'build-failure-details<<EOF'
+              echo "$BUILD_ERRORS"
+              echo 'EOF'
+            } >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Ccache after
         run: ccache -s
@@ -197,20 +204,28 @@ jobs:
         run: |
           source /setup-classpath.sh
           ulimit -n 65536
-          if ctest -j 24 --timeout 900 --label-exclude cuda_driver \
-               --output-on-failure --no-tests=error \
-               --output-junit test-results.xml; then
-            echo "All tests passed on first run."
+          ctest -j 24 --timeout 900 --label-exclude cuda_driver \
+            --output-on-failure --no-tests=error \
+            --output-junit test-results.xml 2>&1 | tee /tmp/ctest-output.log
+
+      - name: Retry Flaky Tests
+        id: retry-tests
+        continue-on-error: true
+        if: steps.tests.outcome == 'failure'
+        env:
+          LIBHDFS3_CONF: ${{ github.workspace }}/scripts/ci/hdfs-client.xml
+        working-directory: _build/release
+        run: |
+          source /setup-classpath.sh
+          echo "::warning::Some tests failed. Retrying failed tests..."
+          if ctest --rerun-failed -j 4 --timeout 900 \
+               --output-on-failure --output-junit retry-results.xml; then
+            echo "::warning::All failed tests passed on retry — these are flaky tests."
+            echo "flaky=true" >> "$GITHUB_OUTPUT"
           else
-            echo "::warning::Some tests failed. Retrying failed tests..."
-            if ctest --rerun-failed -j 4 --timeout 900 \
-                 --output-on-failure --output-junit retry-results.xml; then
-              echo "::warning::All failed tests passed on retry — these are flaky tests."
-              echo "flaky=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "::error::Tests failed consistently on retry."
-              exit 1
-            fi
+            echo "::error::Tests failed consistently on retry."
+            "$GITHUB_WORKSPACE/.github/scripts/extract-test-failures.sh" /tmp/ctest-output.log
+            exit 1
           fi
 
       # Clang-tidy needs a complete build because some files are only generated during the build
@@ -307,40 +322,57 @@ jobs:
     if: always()
     needs: adapters
     runs-on: ubuntu-latest
-    name: "BUILD: Linux adapters release"
+    name: "BUILD: Linux release with adapters"
     steps:
-      - run: |
-          if [[ "$BUILD_OUTCOME" != "success" ]]; then
-            echo "Build failed or was cancelled."
-            exit 1
-          fi
-          echo "Build succeeded."
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: Report build status
+        run: .github/scripts/report-build-status.sh "Linux release with adapters"
         env:
           BUILD_OUTCOME: ${{ needs.adapters.outputs.build-outcome }}
+          BUILD_FAILURE_DETAILS: ${{ needs.adapters.outputs.build-failure-details }}
+
+      - name: Upload failure artifact
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-failure-adapters-build
+          path: /tmp/ci-failure/failure.json
+          retention-days: 1
+          if-no-files-found: ignore
 
   adapters-test-status:
     if: always()
     needs: adapters
     runs-on: ubuntu-latest
-    name: "TEST: Linux adapters release"
+    name: "TEST: Linux release with adapters"
     steps:
-      - run: |
-          if [[ "$BUILD_OUTCOME" != "success" ]]; then
-            echo "Build failed — tests did not run."
-            exit 1
-          fi
-          if [[ "$TEST_OUTCOME" != "success" ]]; then
-            echo "Tests failed."
-            exit 1
-          fi
-          if [[ "$FLAKY" == "true" ]]; then
-            echo "::warning::Some tests were flaky (failed then passed on retry)."
-          fi
-          echo "Tests passed."
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: Report test status
+        run: .github/scripts/report-test-status.sh "Linux release with adapters" "Linux adapters release"
         env:
           BUILD_OUTCOME: ${{ needs.adapters.outputs.build-outcome }}
           TEST_OUTCOME: ${{ needs.adapters.outputs.test-outcome }}
           FLAKY: ${{ needs.adapters.outputs.flaky }}
+          FAILED_TESTS: ${{ needs.adapters.outputs.failed-tests }}
+          FAILED_CASES: ${{ needs.adapters.outputs.failed-cases }}
+          FAILURE_DETAILS: ${{ needs.adapters.outputs.failure-details }}
+
+      - name: Upload failure artifact
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-failure-adapters-test
+          path: /tmp/ci-failure/failure.json
+          retention-days: 1
+          if-no-files-found: ignore
 
   cudf-tests:
     runs-on: 4-core-ubuntu-gpu-t4
@@ -414,8 +446,12 @@ jobs:
       USE_CLANG: ${{ inputs.use-clang && 'true' || 'false' }}
     outputs:
       build-outcome: ${{ steps.build.outcome }}
-      test-outcome: ${{ steps.tests.outcome }}
-      flaky: ${{ steps.tests.outputs.flaky }}
+      build-failure-details: ${{ steps.build-errors.outputs.build-failure-details }}
+      test-outcome: ${{ steps.retry-tests.outcome != 'skipped' && steps.retry-tests.outcome || steps.tests.outcome }}
+      flaky: ${{ steps.retry-tests.outputs.flaky }}
+      failed-tests: ${{ steps.retry-tests.outputs.failed-tests }}
+      failed-cases: ${{ steps.retry-tests.outputs.failed-cases }}
+      failure-details: ${{ steps.retry-tests.outputs.failure-details }}
     defaults:
       run:
         shell: bash
@@ -469,6 +505,14 @@ jobs:
         env:
           VELOX_DEPENDENCY_SOURCE: SYSTEM
           ICU_SOURCE: SYSTEM
+          # Mirror the adapters and fedora-debug jobs: build FAISS from
+          # source instead of resolving the system-installed package.
+          # The system FAISS config (/usr/local/share/faiss/faiss-config.cmake)
+          # sets the link interface of the imported `faiss` target to
+          # include OpenMP::OpenMP_CXX without ever calling
+          # find_package(OpenMP) to define it, so a SYSTEM resolution
+          # fails the configure.
+          faiss_SOURCE: BUNDLED
           # Use BUNDLED gflags to provide PIC static gflags for .so plugins.
           # The container's folly is built with -DGFLAGS_SHARED=FALSE so its
           # exported config references gflags_static which BUNDLED gflags provides.
@@ -479,24 +523,37 @@ jobs:
           glog_SOURCE: SYSTEM
           MAKEFLAGS: NUM_THREADS=32 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=6
         run: |
-          EXTRA_CMAKE_FLAGS=(
-            "-DCMAKE_LINK_LIBRARIES_STRATEGY=REORDER_FREELY"
-            "-DVELOX_BUILD_SHARED=ON"
-            "-DVELOX_ENABLE_BENCHMARKS=ON"
-            "-DVELOX_ENABLE_EXAMPLES=ON"
-            "-DVELOX_ENABLE_ARROW=ON"
-            "-DVELOX_ENABLE_GEO=ON"
-            "-DVELOX_ENABLE_PARQUET=ON"
-            "-DVELOX_MONO_LIBRARY=ON"
-          )
+          # The container ships CMake 3.30.4. Bump to 3.31.1 so
+          # CMAKE_LINK_LIBRARIES_STRATEGY=REORDER_FREELY (added in 3.31)
+          # actually takes effect — without it ld --as-needed drops
+          # libxxhash.so before libthriftmetadata.a needs XXH3_64bits,
+          # breaking the velox_functions_remote_client_test link.
+          uv tool install --force cmake@3.31.1
+          # Shared per-profile flag lists live in
+          # .github/scripts/cmake-flags.sh — script handles
+          # Clang-conditional flags internally via USE_CLANG.
+          BUILD_PROFILE=ubuntu-debug USE_CLANG="${USE_CLANG}" source .github/scripts/cmake-flags.sh
           if [[ "${USE_CLANG}" = "true" ]]; then
              export CC=/usr/bin/clang-15; export CXX=/usr/bin/clang++-15;
-          else
-            EXTRA_CMAKE_FLAGS+=("-DVELOX_ENABLE_FAISS=ON")
-            EXTRA_CMAKE_FLAGS+=("-DVELOX_ENABLE_REMOTE_FUNCTIONS=ON")
           fi
-          export EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS[*]}"
-          make debug
+          export EXTRA_CMAKE_FLAGS="${CMAKE_FLAGS[*]}"
+          make debug 2>&1 | tee /tmp/build-output.log
+
+      - name: Extract build errors
+        id: build-errors
+        if: failure() && steps.build.outcome == 'failure'
+        run: |
+          # Strip ANSI escape sequences before grepping — the build uses
+          # -fdiagnostics-color=always which embeds SGR and erase (ESC[K)
+          # codes that prevent matching literal ': error:'.
+          BUILD_ERRORS=$(sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' /tmp/build-output.log | grep -E ' (error|fatal error):' | head -50 || true)
+          if [[ -n $BUILD_ERRORS ]]; then
+            {
+              echo 'build-failure-details<<EOF'
+              echo "$BUILD_ERRORS"
+              echo 'EOF'
+            } >> "$GITHUB_OUTPUT"
+          fi
 
       - name: CCache after
         run: |
@@ -514,59 +571,81 @@ jobs:
         run: |
           ulimit -n 65536
           cd _build/debug
-          if ctest -j 24 --timeout 1800 --output-on-failure --no-tests=error \
-               --output-junit test-results.xml; then
-            echo "All tests passed on first run."
+          ctest -j 24 --timeout 1800 --output-on-failure --no-tests=error \
+            --output-junit test-results.xml 2>&1 | tee /tmp/ctest-output.log
+
+      - name: Retry Flaky Tests
+        id: retry-tests
+        continue-on-error: true
+        if: steps.tests.outcome == 'failure'
+        run: |
+          cd _build/debug
+          echo "::warning::Some tests failed. Retrying failed tests..."
+          if ctest --rerun-failed -j 4 --timeout 1800 \
+               --output-on-failure --output-junit retry-results.xml; then
+            echo "::warning::All failed tests passed on retry — these are flaky tests."
+            echo "flaky=true" >> "$GITHUB_OUTPUT"
           else
-            echo "::warning::Some tests failed. Retrying failed tests..."
-            if ctest --rerun-failed -j 4 --timeout 1800 \
-                 --output-on-failure --output-junit retry-results.xml; then
-              echo "::warning::All failed tests passed on retry — these are flaky tests."
-              echo "flaky=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "::error::Tests failed consistently on retry."
-              exit 1
-            fi
+            echo "::error::Tests failed consistently on retry."
+            "$GITHUB_WORKSPACE/velox/.github/scripts/extract-test-failures.sh" /tmp/ctest-output.log
+            exit 1
           fi
 
   ubuntu-debug-build-status:
     if: always()
     needs: ubuntu-debug
     runs-on: ubuntu-latest
-    name: "BUILD: Ubuntu debug"
+    name: "BUILD: Ubuntu debug with system dependencies"
     steps:
-      - run: |
-          if [[ "$BUILD_OUTCOME" != "success" ]]; then
-            echo "Build failed or was cancelled."
-            exit 1
-          fi
-          echo "Build succeeded."
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: Report build status
+        run: .github/scripts/report-build-status.sh "Ubuntu debug with system dependencies"
         env:
           BUILD_OUTCOME: ${{ needs.ubuntu-debug.outputs.build-outcome }}
+          BUILD_FAILURE_DETAILS: ${{ needs.ubuntu-debug.outputs.build-failure-details }}
+
+      - name: Upload failure artifact
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-failure-ubuntu-debug-build
+          path: /tmp/ci-failure/failure.json
+          retention-days: 1
+          if-no-files-found: ignore
 
   ubuntu-debug-test-status:
     if: always()
     needs: ubuntu-debug
     runs-on: ubuntu-latest
-    name: "TEST: Ubuntu debug"
+    name: "TEST: Ubuntu debug with system dependencies"
     steps:
-      - run: |
-          if [[ "$BUILD_OUTCOME" != "success" ]]; then
-            echo "Build failed — tests did not run."
-            exit 1
-          fi
-          if [[ "$TEST_OUTCOME" != "success" ]]; then
-            echo "Tests failed."
-            exit 1
-          fi
-          if [[ "$FLAKY" == "true" ]]; then
-            echo "::warning::Some tests were flaky (failed then passed on retry)."
-          fi
-          echo "Tests passed."
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: Report test status
+        run: .github/scripts/report-test-status.sh "Ubuntu debug with system dependencies" "Ubuntu debug"
         env:
           BUILD_OUTCOME: ${{ needs.ubuntu-debug.outputs.build-outcome }}
           TEST_OUTCOME: ${{ needs.ubuntu-debug.outputs.test-outcome }}
           FLAKY: ${{ needs.ubuntu-debug.outputs.flaky }}
+          FAILED_TESTS: ${{ needs.ubuntu-debug.outputs.failed-tests }}
+          FAILED_CASES: ${{ needs.ubuntu-debug.outputs.failed-cases }}
+          FAILURE_DETAILS: ${{ needs.ubuntu-debug.outputs.failure-details }}
+
+      - name: Upload failure artifact
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-failure-ubuntu-debug-test
+          path: /tmp/ci-failure/failure.json
+          retention-days: 1
+          if-no-files-found: ignore
 
   fedora-debug:
     runs-on: 32-core-ubuntu
@@ -637,14 +716,13 @@ jobs:
           simdjson_SOURCE: BUNDLED
           gRPC_SOURCE: SYSTEM
           MAKEFLAGS: NUM_THREADS=32 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=6
-          EXTRA_CMAKE_FLAGS: >-
-            -DVELOX_ENABLE_PARQUET=ON
-            -DARROW_THRIFT_USE_SHARED=ON
-            -DVELOX_ENABLE_EXAMPLES=ON
         run: |
           uv tool install --force cmake@3.31.1
           dnf install -y -q --setopt=install_weak_deps=False grpc-devel grpc-plugins
-          export EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_ENABLE_FAISS=ON"
+          # Shared per-profile flag lists live in
+          # .github/scripts/cmake-flags.sh.
+          BUILD_PROFILE=fedora-debug source .github/scripts/cmake-flags.sh
+          export EXTRA_CMAKE_FLAGS="${CMAKE_FLAGS[*]}"
           make debug
 
       - name: CCache after
@@ -663,10 +741,30 @@ jobs:
     name: "BUILD: Fedora debug"
     steps:
       - run: |
+          if [[ -z "$BUILD_OUTCOME" || "$BUILD_OUTCOME" == "cancelled" ]]; then
+            echo "Build was cancelled (likely superseded by a newer push). Skipping."
+            exit 0
+          fi
           if [[ "$BUILD_OUTCOME" != "success" ]]; then
-            echo "Build failed or was cancelled."
+            echo "::error::Fedora debug build failed. Do not land this PR until the build is fixed."
             exit 1
           fi
           echo "Build succeeded."
         env:
           BUILD_OUTCOME: ${{ needs.fedora-debug.outputs.build-outcome }}
+
+      - name: Upload build failure artifact
+        if: failure()
+        run: |
+          mkdir -p /tmp/ci-failure
+          jq -n --arg job "Fedora debug" --arg type "build" \
+            '{job: $job, type: $type}' \
+            > /tmp/ci-failure/failure.json
+
+      - name: Upload failure comment artifact
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-failure-fedora-build
+          path: /tmp/ci-failure/failure.json
+          retention-days: 1

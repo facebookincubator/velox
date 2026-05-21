@@ -18,7 +18,6 @@
 #include <folly/CPortability.h>
 #include <folly/Random.h>
 #include <folly/container/F14Set.h>
-#include <folly/dynamic.h>
 
 #include <cstdint>
 #include <cstring>
@@ -33,7 +32,7 @@
 #include <typeindex>
 #include <vector>
 
-#include <velox/common/Enums.h>
+#include <velox/common/EnumDeclare.h>
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/ClassName.h"
 #include "velox/common/base/Exceptions.h"
@@ -44,6 +43,10 @@
 #include "velox/type/Timestamp.h"
 #include "velox/type/Tree.h"
 #include "velox/type/tz/TimeZoneMap.h"
+
+namespace folly {
+struct dynamic;
+}
 
 namespace facebook::velox {
 
@@ -591,10 +594,13 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
   /// Examples: Two RowTypes are equivalent if the children types are
   /// equivalent, but the children names could be different. Two OpaqueTypes are
   /// equivalent if the typeKind matches, but the typeIndex could be different.
+  /// Note: The hashKind() function provides a hash consistent with
+  /// equivalent().
   virtual bool equivalent(const Type& other) const = 0;
 
   /// For Complex types (Row, Array, Map, Opaque): types are strongly matched.
   /// For primitive types: same as equivalent.
+  /// Note: The hash() function provides a hash consistent with this operator==.
   virtual bool operator==(const Type& other) const {
     return this->equals(other);
   }
@@ -615,6 +621,12 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
 
   /// Recursive kind hashing (uses only TypeKind).
   virtual size_t hashKind() const;
+
+  /// Recursive hash consistent with operator==: includes ROW field names,
+  /// DECIMAL precision/scale, OPAQUE type identity, and RTTI for singleton
+  /// overlay types. Subclasses that override equals() must override hash() too
+  /// to maintain the invariant: a == b ⟹ hash(a) == hash(b).
+  virtual size_t hash() const noexcept;
 
   /// Recursive kind match (uses only TypeKind).
   bool kindEquals(const TypePtr& other) const;
@@ -673,6 +685,7 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
   /// are same. Two OpaqueTypes are == if the typeKind and the typeIndex are
   /// same.
   /// For primitive types: same as equivalent.
+  /// Note: The hash() function provides a hash consistent with operator==.
   virtual bool equals(const Type& other) const {
     VELOX_CHECK(this->isPrimitiveType());
     return this->equivalent(other);
@@ -762,6 +775,10 @@ class CanProvideCustomComparisonType : public TypeBase<KIND> {
         "Type {} is marked as providesCustomComparison but did not implement hash.");
     VELOX_FAIL("Type {} does not provide custom hash", this->name());
   }
+
+  // Bring the 0-arg Type::hash() (structural type hash) into scope alongside
+  // the 1-arg hash(value) overload above.
+  using Type::hash;
 };
 
 template <TypeKind KIND>
@@ -809,16 +826,13 @@ class ScalarType : public CanProvideCustomComparisonType<KIND> {
     return Type::hasSameTypeId(other);
   }
 
-  // TODO: velox implementation is in cpp
-  folly::dynamic serialize() const override {
-    folly::dynamic obj = folly::dynamic::object;
-    obj["name"] = "Type";
-    obj["type"] = TypeTraits<KIND>::name;
-    return obj;
-  }
+  folly::dynamic serialize() const override;
 };
 
 /// This class represents the fixed-point numbers.
+std::pair<uint8_t, uint8_t> getDecimalPrecisionScale(const Type& type);
+TypePtr DECIMAL(uint8_t precision, uint8_t scale);
+
 /// The parameter "precision" represents the number of digits the
 /// Decimal Type can support and "scale" represents the number of digits to
 /// the right of the decimal point.
@@ -839,6 +853,11 @@ class DecimalType : public ScalarType<KIND> {
         otherDecimal.scale() == scale());
   }
 
+  size_t hash() const noexcept override;
+  // Bring hash(value) from CanProvideCustomComparisonType into scope alongside
+  // the 0-arg hash() override above.
+  using ScalarType<KIND>::hash;
+
   inline uint8_t precision() const {
     return parameters_[0].longLiteral.value();
   }
@@ -855,16 +874,78 @@ class DecimalType : public ScalarType<KIND> {
     return fmt::format("DECIMAL({}, {})", precision(), scale());
   }
 
-  folly::dynamic serialize() const override {
-    auto obj = ScalarType<KIND>::serialize();
-    obj["type"] = name();
-    obj["precision"] = precision();
-    obj["scale"] = scale();
-    return obj;
-  }
+  folly::dynamic serialize() const override;
 
   std::span<const TypeParameter> parameters() const override {
     return parameters_;
+  }
+
+  /// Returns the minimum DECIMAL precision needed to represent all values
+  /// of 'kind' without loss. E.g. SMALLINT needs precision 5 since max
+  /// value is 32767 (5 digits). Returns std::nullopt for non-integer types.
+  static std::optional<uint8_t> minPrecisionForInteger(TypeKind kind) {
+    switch (kind) {
+      case TypeKind::TINYINT:
+        return 3;
+      case TypeKind::SMALLINT:
+        return 5;
+      case TypeKind::INTEGER:
+        return 10;
+      case TypeKind::BIGINT:
+        return 19;
+      default:
+        return std::nullopt;
+    }
+  }
+
+  /// Returns true if this DECIMAL can be coerced to the target DECIMAL
+  /// without precision loss. For integers, first map to the natural DECIMAL
+  /// via minPrecisionForInteger (e.g. INTEGER → DECIMAL(10,0)), then call
+  /// this method. The rule is: (p1 - s1) <= (p2 - s2) && s1 <= s2.
+  bool isCoercibleTo(const Type& target) const {
+    auto [targetPrecision, targetScale] = getDecimalPrecisionScale(target);
+    return precision() - scale() <= targetPrecision - targetScale &&
+        scale() <= targetScale;
+  }
+
+  /// Returns the narrowest DECIMAL that can represent values from both
+  /// 'lhs' and 'rhs' (each may be integer or decimal). Returns nullptr
+  /// if the result would exceed DECIMAL(38, s).
+  static TypePtr commonSuperType(const TypePtr& lhs, const TypePtr& rhs) {
+    auto extractComponents = [](const TypePtr& type,
+                                int32_t& integerDigits,
+                                uint8_t& scale) -> bool {
+      if (type->isDecimal()) {
+        auto [precision, s] = getDecimalPrecisionScale(*type);
+        integerDigits = precision - s;
+        scale = s;
+        return true;
+      }
+      if (auto precision = minPrecisionForInteger(type->kind())) {
+        integerDigits = *precision;
+        scale = 0;
+        return true;
+      }
+      return false;
+    };
+
+    int32_t lhsDigits = 0;
+    int32_t rhsDigits = 0;
+    uint8_t lhsScale = 0;
+    uint8_t rhsScale = 0;
+
+    if (!extractComponents(lhs, lhsDigits, lhsScale) ||
+        !extractComponents(rhs, rhsDigits, rhsScale)) {
+      return nullptr;
+    }
+
+    auto scale = std::max(lhsScale, rhsScale);
+    auto integerDigits = std::max(lhsDigits, rhsDigits);
+    auto precision = std::min(38, integerDigits + scale);
+    if (precision - scale < integerDigits) {
+      return nullptr;
+    }
+    return DECIMAL(precision, scale);
   }
 
  protected:
@@ -933,8 +1014,6 @@ FOLLY_ALWAYS_INLINE bool isDecimalName(const std::string& name) {
   return (name == "DECIMAL");
 }
 
-std::pair<uint8_t, uint8_t> getDecimalPrecisionScale(const Type& type);
-
 class UnknownType : public CanProvideCustomComparisonType<TypeKind::UNKNOWN> {
  public:
   using CanProvideCustomComparisonType<
@@ -968,12 +1047,7 @@ class UnknownType : public CanProvideCustomComparisonType<TypeKind::UNKNOWN> {
     return Type::hasSameTypeId(other);
   }
 
-  folly::dynamic serialize() const override {
-    folly::dynamic obj = folly::dynamic::object;
-    obj["name"] = "Type";
-    obj["type"] = TypeTraits<TypeKind::UNKNOWN>::name;
-    return obj;
-  }
+  folly::dynamic serialize() const override;
 };
 
 class ArrayType : public TypeBase<TypeKind::ARRAY> {
@@ -1028,6 +1102,7 @@ class ArrayType : public TypeBase<TypeKind::ARRAY> {
 
  protected:
   bool equals(const Type& other) const override;
+  size_t hash() const noexcept override;
 
   const TypePtr child_;
   const TypeParameter parameter_;
@@ -1084,6 +1159,7 @@ class MapType : public TypeBase<TypeKind::MAP> {
 
  protected:
   bool equals(const Type& other) const override;
+  size_t hash() const noexcept override;
 
  private:
   TypePtr keyType_;
@@ -1210,6 +1286,7 @@ class RowType : public TypeBase<TypeKind::ROW> {
 
  protected:
   bool equals(const Type& other) const override;
+  size_t hash() const noexcept override;
 
  private:
   const std::vector<TypeParameter>* ensureParameters() const;
@@ -1267,6 +1344,7 @@ class FunctionType : public TypeBase<TypeKind::FUNCTION> {
 
  protected:
   bool equals(const Type& other) const override;
+  size_t hash() const noexcept override;
 
  private:
   static std::vector<TypePtr> allChildren(
@@ -1375,6 +1453,7 @@ class OpaqueType : public TypeBase<TypeKind::OPAQUE> {
 
  protected:
   bool equals(const Type& other) const override;
+  size_t hash() const noexcept override;
 
  private:
   const std::type_index typeIndex_;
@@ -1399,6 +1478,37 @@ using DoubleType = ScalarType<TypeKind::DOUBLE>;
 using TimestampType = ScalarType<TypeKind::TIMESTAMP>;
 using VarcharType = ScalarType<TypeKind::VARCHAR>;
 using VarbinaryType = ScalarType<TypeKind::VARBINARY>;
+
+// Timestamp type in UTC that is not subject to session timezone adjustment.
+class TimestampUtcType final : public TimestampType {
+ public:
+  static std::shared_ptr<const TimestampUtcType> get() {
+    VELOX_CONSTEXPR_SINGLETON TimestampUtcType kInstance;
+    return {std::shared_ptr<const TimestampUtcType>{}, &kInstance};
+  }
+
+  const char* name() const override {
+    return "TIMESTAMP UTC";
+  }
+
+  bool equivalent(const Type& other) const override {
+    // Pointer comparison works since this type is a singleton.
+    return this == &other;
+  }
+
+  std::string toString() const override {
+    return name();
+  }
+
+  folly::dynamic serialize() const override;
+
+  static TypePtr deserialize(const folly::dynamic& /*obj*/) {
+    return TimestampUtcType::get();
+  }
+
+ protected:
+  constexpr TimestampUtcType() = default;
+};
 
 constexpr long kMillisInSecond = 1000;
 constexpr long kMillisInMinute = 60 * kMillisInSecond;
@@ -1434,16 +1544,9 @@ class IntervalDayTimeType final : public BigintType {
   /// Perhaps, Type::valueToString(variant)?
   std::string valueToString(int64_t value) const;
 
-  folly::dynamic serialize() const override {
-    folly::dynamic obj = folly::dynamic::object;
-    obj["name"] = "IntervalDayTimeType";
-    obj["type"] = name();
-    return obj;
-  }
+  folly::dynamic serialize() const override;
 
-  static TypePtr deserialize(const folly::dynamic& /*obj*/) {
-    return IntervalDayTimeType::get();
-  }
+  static TypePtr deserialize(const folly::dynamic& obj);
 };
 
 FOLLY_ALWAYS_INLINE std::shared_ptr<const IntervalDayTimeType>
@@ -1485,16 +1588,9 @@ class IntervalYearMonthType final : public IntegerType {
   /// represented as 1-2; -14 months would be represents as -1-2.
   std::string valueToString(int32_t value) const;
 
-  folly::dynamic serialize() const override {
-    folly::dynamic obj = folly::dynamic::object;
-    obj["name"] = "IntervalYearMonthType";
-    obj["type"] = name();
-    return obj;
-  }
+  folly::dynamic serialize() const override;
 
-  static TypePtr deserialize(const folly::dynamic& /*obj*/) {
-    return IntervalYearMonthType::get();
-  }
+  static TypePtr deserialize(const folly::dynamic& obj);
 };
 
 FOLLY_ALWAYS_INLINE std::shared_ptr<const IntervalYearMonthType>
@@ -1539,16 +1635,9 @@ class DateType final : public IntegerType {
 
   int32_t toDays(const char* in, size_t len) const;
 
-  folly::dynamic serialize() const override {
-    folly::dynamic obj = folly::dynamic::object;
-    obj["name"] = "DateType";
-    obj["type"] = name();
-    return obj;
-  }
+  folly::dynamic serialize() const override;
 
-  static TypePtr deserialize(const folly::dynamic& /*obj*/) {
-    return DateType::get();
-  }
+  static TypePtr deserialize(const folly::dynamic& obj);
 };
 
 FOLLY_ALWAYS_INLINE std::shared_ptr<const DateType> DATE() {
@@ -2219,6 +2308,8 @@ VELOX_SCALAR_ACCESSOR(TIMESTAMP);
 VELOX_SCALAR_ACCESSOR(VARCHAR);
 VELOX_SCALAR_ACCESSOR(VARBINARY);
 
+TypePtr TIMESTAMP_UTC();
+
 TypePtr UNKNOWN();
 
 template <TypeKind KIND>
@@ -2513,95 +2604,6 @@ void toAppend(
 /// Appends type's SQL string to 'out'. Uses DuckDB SQL.
 void toTypeSql(const TypePtr& type, std::ostream& out);
 
-/// Cache of serialized RowType instances. Useful to reduce the size of
-/// serialized expressions and plans. Disabled by default. Not thread safe.
-///
-/// To enable, call 'serializedTypeCache().enable()'. This enables the cache for
-/// the current thread. To disable, call 'serializedTypeCache().disable()'.
-/// While enables, type serialization will use the cache and serialize the types
-/// using IDs stored in the cache. The caller is responsible for saving
-/// serialized types from the cache and using these to hidrate
-/// 'deserializedTypeCache()' before deserializing the types.
-class SerializedTypeCache {
- public:
-  struct Options {
-    // Caching applies to RowType's with at least this many fields.
-    size_t minRowTypeSize = 10;
-  };
-
-  bool isEnabled() const {
-    return enabled_;
-  }
-
-  const Options& options() const {
-    return options_;
-  }
-
-  void enable(const Options& options = {.minRowTypeSize = 10}) {
-    enabled_ = true;
-    options_ = options;
-  }
-
-  void disable() {
-    enabled_ = false;
-  }
-
-  size_t size() const {
-    return cache_.size();
-  }
-
-  void clear() {
-    cache_.clear();
-  }
-
-  /// Returns the ID of the type if it is in the cache. Returns std::nullopt if
-  /// type is not found in the cache. Cache key is type instance pointer. Hence,
-  /// equal but different instances are stored separately.
-  std::optional<int32_t> get(const Type& type) const;
-
-  /// Stores the type in the cache. Returns the ID of the type. Reports an error
-  /// if type is already present in the cache. IDs are monotonically increasing.
-  /// Serialized type may refer to types stored previously in the cache. When
-  /// deserializing type cache, make sure to deserialize types in the order of
-  /// cache IDs.
-  int32_t put(const Type& type, folly::dynamic serialized);
-
-  /// Serialized the types stored in the cache. Use
-  /// DeserializedTypeCache::deserialize to deserialize.
-  folly::dynamic serialize();
-
- private:
-  bool enabled_{false};
-  Options options_;
-  folly::F14FastMap<const Type*, std::pair<int32_t, folly::dynamic>> cache_;
-};
-
-/// Thread local cache of serialized RowType instances. Used by
-/// RowType::serialize.
-SerializedTypeCache& serializedTypeCache();
-
-/// Thread local cache of deserialized RowType instances. Used when
-/// deserializing Type objects.
-class DeserializedTypeCache {
- public:
-  void deserialize(const folly::dynamic& obj);
-
-  size_t size() const {
-    return cache_.size();
-  }
-
-  const TypePtr& get(int32_t id) const;
-
-  void clear() {
-    cache_.clear();
-  }
-
- private:
-  folly::F14FastMap<int32_t, TypePtr> cache_;
-};
-
-DeserializedTypeCache& deserializedTypeCache();
-
 template <typename T>
 std::string Type::valueToString(T value) const {
   if constexpr (std::is_same_v<T, bool>) {
@@ -2659,6 +2661,15 @@ std::string stringifyTruncatedElementList(
     size_t limit = 5);
 
 } // namespace facebook::velox
+
+namespace std {
+template <>
+struct hash<facebook::velox::Type> {
+  size_t operator()(const facebook::velox::Type& type) const noexcept {
+    return type.hash();
+  }
+};
+} // namespace std
 
 namespace folly {
 template <>

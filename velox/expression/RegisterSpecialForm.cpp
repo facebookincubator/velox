@@ -1,4 +1,3 @@
-
 /*
  * Copyright (c) Facebook, Inc. and its affiliates.
  *
@@ -17,6 +16,7 @@
 
 #include "velox/expression/RegisterSpecialForm.h"
 
+#include "velox/expression/CaseExpr.h"
 #include "velox/expression/CastExpr.h"
 #include "velox/expression/CoalesceExpr.h"
 #include "velox/expression/CoalesceRewrite.h"
@@ -47,6 +47,8 @@ void registerFunctionCallToSpecialForms() {
       std::make_unique<ConjunctCallToSpecialForm>(false /* isAnd */));
   registerFunctionCallToSpecialForm(
       expression::kSwitch, std::make_unique<SwitchCallToSpecialForm>());
+  registerFunctionCallToSpecialForm(
+      expression::kCase, std::make_unique<CaseCallToSpecialForm>());
   registerFunctionCallToSpecialForm(
       expression::kTry, std::make_unique<TryCallToSpecialForm>());
   registerFunctionCallToSpecialForm(

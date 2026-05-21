@@ -63,7 +63,7 @@ class PlanNodeBuilderTest : public testing::Test, public test::VectorTestBase {
 
       core::AggregationNode::Aggregate agg;
       agg.call = std::dynamic_pointer_cast<const core::CallTypedExpr>(
-          core::Expressions::inferTypes(untypedExpr.expr, type, pool()));
+          core::Expressions::inferTypes(untypedExpr, type, pool()));
 
       if (step == core::AggregationNode::Step::kPartial ||
           step == core::AggregationNode::Step::kSingle) {
@@ -75,14 +75,14 @@ class PlanNodeBuilderTest : public testing::Test, public test::VectorTestBase {
         agg.rawInputTypes = rawInputArgs[i];
       }
 
-      VELOX_CHECK_NULL(untypedExpr.filter);
-      VELOX_CHECK(!untypedExpr.distinct);
-      VELOX_CHECK(untypedExpr.orderBy.empty());
+      VELOX_CHECK_NULL(untypedExpr->filter());
+      VELOX_CHECK(!untypedExpr->isDistinct());
+      VELOX_CHECK(untypedExpr->orderBy().empty());
 
       aggs.emplace_back(agg);
 
-      if (untypedExpr.expr->alias().has_value()) {
-        names.push_back(untypedExpr.expr->alias().value());
+      if (untypedExpr->alias().has_value()) {
+        names.push_back(untypedExpr->alias().value());
       } else {
         names.push_back(fmt::format("a{}", i));
       }
@@ -671,6 +671,7 @@ TEST_F(PlanNodeBuilderTest, hashJoinNode) {
   const auto verify = [&](const std::shared_ptr<const HashJoinNode>& node) {
     EXPECT_EQ(node->id(), id);
     EXPECT_EQ(node->isNullAware(), nullAware);
+    EXPECT_FALSE(node->isNullAsValue());
     EXPECT_EQ(node->joinType(), joinType);
     EXPECT_EQ(node->leftKeys(), leftKeys);
     EXPECT_EQ(node->rightKeys(), rightKeys);
@@ -775,6 +776,7 @@ TEST_F(PlanNodeBuilderTest, indexLookupJoinNode) {
           .assignments({{"c1", std::make_shared<DummyColumnHandle>()}})
           .build();
   const auto outputType = ROW({"c0"}, {BIGINT()});
+  std::optional<bool> splitOutput = true;
 
   const auto verify =
       [&](const std::shared_ptr<const IndexLookupJoinNode>& node) {
@@ -789,6 +791,7 @@ TEST_F(PlanNodeBuilderTest, indexLookupJoinNode) {
         EXPECT_EQ(node->sources()[0], left);
         EXPECT_EQ(node->sources()[1], right);
         EXPECT_EQ(node->outputType(), outputType);
+        EXPECT_EQ(node->splitOutput(), splitOutput);
       };
 
   const auto node = IndexLookupJoinNode::Builder()
@@ -800,6 +803,7 @@ TEST_F(PlanNodeBuilderTest, indexLookupJoinNode) {
                         .left(left)
                         .right(right)
                         .outputType(outputType)
+                        .splitOutput(splitOutput)
                         .build();
   verify(node);
 

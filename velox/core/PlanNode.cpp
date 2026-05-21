@@ -18,6 +18,8 @@
 #include "velox/common/Casts.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/core/PlanNode.h"
+
+#include "velox/common/EnumDefine.h"
 #include "velox/core/TableWriteTraits.h"
 #include "velox/vector/VectorSaver.h"
 
@@ -909,6 +911,13 @@ class SummarizeExprVisitor : public ITypedExprVisitor {
     myCtx.expressionCounts()["lambda"]++;
     expr.body()->accept(*this, ctx);
   }
+
+  void visit(const NullIfTypedExpr& expr, ITypedExprVisitorContext& ctx)
+      const override {
+    auto& myCtx = static_cast<Context&>(ctx);
+    myCtx.expressionCounts()["nullif"]++;
+    visitInputs(expr, ctx);
+  }
 };
 
 void appendCounts(
@@ -1674,11 +1683,15 @@ void HashJoinNode::addDetails(std::stringstream& stream) const {
   if (nullAware_) {
     stream << ", null aware";
   }
+  if (nullAsValue_) {
+    stream << ", null as value";
+  }
 }
 
 folly::dynamic HashJoinNode::serialize() const {
   auto obj = serializeBase();
   obj["nullAware"] = nullAware_;
+  obj["nullAsValue"] = nullAsValue_;
   obj["useHashTableCache"] = useHashTableCache_;
   return obj;
 }
@@ -1695,6 +1708,7 @@ PlanNodePtr HashJoinNode::create(const folly::dynamic& obj, void* context) {
   VELOX_CHECK_EQ(2, sources.size());
 
   auto nullAware = obj["nullAware"].asBool();
+  auto nullAsValue = obj.getDefault("nullAsValue", false).asBool();
   auto useHashTableCache = obj.getDefault("useHashTableCache", false).asBool();
   auto leftKeys = deserializeFields(obj["leftKeys"], context);
   auto rightKeys = deserializeFields(obj["rightKeys"], context);
@@ -1716,7 +1730,8 @@ PlanNodePtr HashJoinNode::create(const folly::dynamic& obj, void* context) {
       sources[0],
       sources[1],
       outputType,
-      useHashTableCache);
+      useHashTableCache,
+      nullAsValue);
 }
 
 MergeJoinNode::MergeJoinNode(
@@ -1805,9 +1820,35 @@ IndexLookupJoinNode::IndexLookupJoinNode(
     const std::vector<IndexLookupConditionPtr>& joinConditions,
     TypedExprPtr filter,
     bool hasMarker,
+    std::optional<bool> splitOutput,
     PlanNodePtr left,
     TableScanNodePtr right,
     RowTypePtr outputType)
+    : IndexLookupJoinNode(
+          id,
+          joinType,
+          leftKeys,
+          rightKeys,
+          joinConditions,
+          std::move(filter),
+          hasMarker,
+          std::move(left),
+          std::move(right),
+          std::move(outputType),
+          splitOutput) {}
+
+IndexLookupJoinNode::IndexLookupJoinNode(
+    const PlanNodeId& id,
+    JoinType joinType,
+    const std::vector<FieldAccessTypedExprPtr>& leftKeys,
+    const std::vector<FieldAccessTypedExprPtr>& rightKeys,
+    const std::vector<IndexLookupConditionPtr>& joinConditions,
+    TypedExprPtr filter,
+    bool hasMarker,
+    PlanNodePtr left,
+    TableScanNodePtr right,
+    RowTypePtr outputType,
+    std::optional<bool> splitOutput)
     : AbstractJoinNode(
           id,
           joinType,
@@ -1819,7 +1860,8 @@ IndexLookupJoinNode::IndexLookupJoinNode(
           outputType),
       lookupSourceNode_(std::move(right)),
       joinConditions_(joinConditions),
-      hasMarker_(hasMarker) {
+      hasMarker_(hasMarker),
+      splitOutput_(splitOutput) {
   VELOX_USER_CHECK(
       !leftKeys.empty(),
       "The index lookup join node requires at least one join key");
@@ -1906,6 +1948,11 @@ PlanNodePtr IndexLookupJoinNode::create(
 
   const bool hasMarker = obj["hasMarker"].asBool();
 
+  std::optional<bool> splitOutput = std::nullopt;
+  if (obj.count("splitOutput")) {
+    splitOutput = obj["splitOutput"].asBool();
+  }
+
   auto outputType = deserializeRowType(obj["outputType"]);
 
   return std::make_shared<IndexLookupJoinNode>(
@@ -1916,6 +1963,7 @@ PlanNodePtr IndexLookupJoinNode::create(
       std::move(joinConditions),
       filter,
       hasMarker,
+      splitOutput,
       sources[0],
       std::move(lookupSource),
       std::move(outputType));
@@ -1934,6 +1982,9 @@ folly::dynamic IndexLookupJoinNode::serialize() const {
     obj["filter"] = filter_->serialize();
   }
   obj["hasMarker"] = hasMarker_;
+  if (splitOutput_.has_value()) {
+    obj["splitOutput"] = splitOutput_.value();
+  }
   return obj;
 }
 

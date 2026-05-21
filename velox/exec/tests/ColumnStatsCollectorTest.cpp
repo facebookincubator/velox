@@ -64,20 +64,20 @@ class ColumnStatsCollectorTest : public OperatorTestBase {
 
       core::AggregationNode::Aggregate agg;
       agg.call = std::dynamic_pointer_cast<const core::CallTypedExpr>(
-          core::Expressions::inferTypes(untypedExpr.expr, type, pool()));
+          core::Expressions::inferTypes(untypedExpr, type, pool()));
 
       for (const auto& input : agg.call->inputs()) {
         agg.rawInputTypes.push_back(input->type());
       }
 
-      VELOX_CHECK_NULL(untypedExpr.filter);
-      VELOX_CHECK(!untypedExpr.distinct);
-      VELOX_CHECK(untypedExpr.orderBy.empty());
+      VELOX_CHECK_NULL(untypedExpr->filter());
+      VELOX_CHECK(!untypedExpr->isDistinct());
+      VELOX_CHECK(untypedExpr->orderBy().empty());
 
       aggs.emplace_back(agg);
 
-      if (untypedExpr.expr->alias().has_value()) {
-        names.push_back(untypedExpr.expr->alias().value());
+      if (untypedExpr->alias().has_value()) {
+        names.push_back(untypedExpr->alias().value());
       } else {
         names.push_back(fmt::format("a{}", i));
       }

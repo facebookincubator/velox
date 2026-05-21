@@ -444,6 +444,11 @@ class PlanBuilder {
       return *this;
     }
 
+    IndexLookupJoinBuilder& splitOutput(std::optional<bool> splitOutput) {
+      splitOutput_ = splitOutput;
+      return *this;
+    }
+
     /// Stop the IndexLookupJoinBuilder.
     PlanBuilder& endIndexLookupJoin() {
       planBuilder_.planNode_ = build(planBuilder_.nextPlanNodeId());
@@ -463,6 +468,7 @@ class PlanBuilder {
     bool hasMarker_{false};
     std::vector<std::string> outputLayout_;
     core::JoinType joinType_{core::JoinType::kInner};
+    std::optional<bool> splitOutput_;
   };
 
   /// Start an IndexLookupJoinBuilder.
@@ -1304,7 +1310,8 @@ class PlanBuilder {
       const std::string& filter,
       const std::vector<std::string>& outputLayout,
       core::JoinType joinType = core::JoinType::kInner,
-      bool nullAware = false);
+      bool nullAware = false,
+      bool nullAsValue = false);
 
   /// Add a MergeJoinNode to join two inputs using one or more join keys and an
   /// optional filter. The caller is responsible to ensure that inputs are

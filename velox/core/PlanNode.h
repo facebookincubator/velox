@@ -19,7 +19,7 @@
 
 #include <utility>
 
-#include "velox/common/Enums.h"
+#include "velox/common/EnumDeclare.h"
 #include "velox/common/rpc/RPCTypes.h"
 #include "velox/connectors/Connector.h"
 #include "velox/core/Expressions.h"
@@ -1299,7 +1299,7 @@ class AggregationNode : public PlanNode {
   };
 
   bool supportsBarrier() const override {
-    return isPreGrouped();
+    return true;
   }
 
   const std::vector<PlanNodePtr>& sources() const override {
@@ -3292,6 +3292,12 @@ class AbstractJoinNode : public PlanNode {
 /// EXISTS.
 class HashJoinNode : public AbstractJoinNode {
  public:
+  /// @param nullAware Applies to semi and anti joins only. When true, the
+  /// join semantic is IN / NOT IN (three-valued NULL logic). When false, the
+  /// join semantic is EXISTS / NOT EXISTS.
+  /// @param nullAsValue When true, join keys use IS NOT DISTINCT FROM
+  /// semantics where NULL equals NULL. Used to implement SQL set operations
+  /// (EXCEPT, INTERSECT). Mutually exclusive with nullAware.
   HashJoinNode(
       const PlanNodeId& id,
       JoinType joinType,
@@ -3302,7 +3308,8 @@ class HashJoinNode : public AbstractJoinNode {
       PlanNodePtr left,
       PlanNodePtr right,
       RowTypePtr outputType,
-      bool useHashTableCache = false)
+      bool useHashTableCache = false,
+      bool nullAsValue = false)
       : AbstractJoinNode(
             id,
             joinType,
@@ -3313,8 +3320,13 @@ class HashJoinNode : public AbstractJoinNode {
             std::move(right),
             std::move(outputType)),
         nullAware_{nullAware},
+        nullAsValue_{nullAsValue},
         useHashTableCache_{useHashTableCache} {
     validate();
+
+    VELOX_USER_CHECK(
+        !nullAware || !nullAsValue,
+        "nullAware and nullAsValue are mutually exclusive");
 
     if (isCountingJoin()) {
       VELOX_USER_CHECK(
@@ -3344,11 +3356,17 @@ class HashJoinNode : public AbstractJoinNode {
     explicit Builder(const HashJoinNode& other)
         : AbstractJoinNode::Builder<HashJoinNode, Builder>(other) {
       nullAware_ = other.isNullAware();
+      nullAsValue_ = other.isNullAsValue();
       useHashTableCache_ = other.useHashTableCache();
     }
 
     Builder& nullAware(bool value) {
       nullAware_ = value;
+      return *this;
+    }
+
+    Builder& nullAsValue(bool value) {
+      nullAsValue_ = value;
       return *this;
     }
 
@@ -3384,11 +3402,13 @@ class HashJoinNode : public AbstractJoinNode {
           left_.value(),
           right_.value(),
           outputType_.value(),
-          useHashTableCache_.value_or(false));
+          useHashTableCache_.value_or(false),
+          nullAsValue_.value_or(false));
     }
 
    private:
     std::optional<bool> nullAware_;
+    std::optional<bool> nullAsValue_;
     std::optional<bool> useHashTableCache_;
   };
 
@@ -3416,6 +3436,13 @@ class HashJoinNode : public AbstractJoinNode {
     return nullAware_;
   }
 
+  /// Returns true when join keys use IS NOT DISTINCT FROM semantics where
+  /// NULL equals NULL. Used to implement SQL set operations (EXCEPT,
+  /// INTERSECT).
+  bool isNullAsValue() const {
+    return nullAsValue_;
+  }
+
   /// Returns whether hash table caching is enabled for broadcast joins.
   /// Only used by Presto-on-Spark.
   bool useHashTableCache() const {
@@ -3430,6 +3457,7 @@ class HashJoinNode : public AbstractJoinNode {
   void addDetails(std::stringstream& stream) const override;
 
   const bool nullAware_;
+  const bool nullAsValue_;
   const bool useHashTableCache_;
 };
 
@@ -3683,6 +3711,26 @@ class IndexLookupJoinNode : public AbstractJoinNode {
       bool hasMarker,
       PlanNodePtr left,
       TableScanNodePtr right,
+      RowTypePtr outputType,
+      std::optional<bool> splitOutput = std::nullopt);
+
+  /// @param splitOutput Optional flag to control whether the operator should
+  /// split output batches if they are too large. If true, output is split into
+  /// batches according to Operator's outputBatchRows logic. If false, output is
+  /// not split and output batches match input batches 1:1. If not set, defaults
+  /// to the value of the index_lookup_join_split_output config in the
+  /// QueryConfig.
+  IndexLookupJoinNode(
+      const PlanNodeId& id,
+      JoinType joinType,
+      const std::vector<FieldAccessTypedExprPtr>& leftKeys,
+      const std::vector<FieldAccessTypedExprPtr>& rightKeys,
+      const std::vector<IndexLookupConditionPtr>& joinConditions,
+      TypedExprPtr filter,
+      bool hasMarker,
+      std::optional<bool> splitOutput,
+      PlanNodePtr left,
+      TableScanNodePtr right,
       RowTypePtr outputType);
 
   class Builder
@@ -3695,6 +3743,7 @@ class IndexLookupJoinNode : public AbstractJoinNode {
       joinConditions_ = other.joinConditions();
       filter_ = other.filter();
       hasMarker_ = other.hasMarker();
+      splitOutput_ = other.splitOutput();
     }
 
     /// Set lookup conditions for index lookup that can't be converted into
@@ -3714,6 +3763,13 @@ class IndexLookupJoinNode : public AbstractJoinNode {
     /// Set whether to include a marker column for left joins.
     Builder& hasMarker(bool hasMarker) {
       hasMarker_ = hasMarker;
+      return *this;
+    }
+
+    /// Set whether to split large output into multiple batches, std::nullopt
+    /// means respect index_lookup_join_split_output in the QueryConfig.
+    Builder& splitOutput(std::optional<bool> splitOutput) {
+      splitOutput_ = splitOutput;
       return *this;
     }
 
@@ -3740,6 +3796,7 @@ class IndexLookupJoinNode : public AbstractJoinNode {
           joinConditions_,
           filter_.value_or(nullptr),
           hasMarker_,
+          splitOutput_,
           left_.value(),
           std::dynamic_pointer_cast<const TableScanNode>(right_.value()),
           outputType_.value());
@@ -3748,6 +3805,7 @@ class IndexLookupJoinNode : public AbstractJoinNode {
    private:
     std::vector<IndexLookupConditionPtr> joinConditions_;
     bool hasMarker_{false};
+    std::optional<bool> splitOutput_;
   };
 
   bool supportsBarrier() const override {
@@ -3777,6 +3835,10 @@ class IndexLookupJoinNode : public AbstractJoinNode {
     return hasMarker_;
   }
 
+  const std::optional<bool>& splitOutput() const {
+    return splitOutput_;
+  }
+
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
       const override;
 
@@ -3800,6 +3862,10 @@ class IndexLookupJoinNode : public AbstractJoinNode {
 
   /// Whether to include a marker column for left joins to indicate matches.
   const bool hasMarker_;
+
+  /// Optional flag to control whether to split output batches. When set,
+  /// overrides the index_lookup_join_split_output QueryConfig.
+  const std::optional<bool> splitOutput_;
 };
 
 using IndexLookupJoinNodePtr = std::shared_ptr<const IndexLookupJoinNode>;
@@ -4843,6 +4909,14 @@ class EnforceSingleRowNode : public PlanNode {
 
   const std::vector<PlanNodePtr>& sources() const override {
     return sources_;
+  }
+
+  /// Validates that input produces exactly one row, so the pipeline must
+  /// observe all rows sequentially on a single driver. Multiple drivers
+  /// would each independently produce a row (or NULL on empty input),
+  /// breaking the single-row contract.
+  bool requiresSingleThread() const override {
+    return true;
   }
 
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
