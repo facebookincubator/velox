@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 #include "velox/exec/window/VectorWindowPartition.h"
+#include "velox/exec/window/KRangeFrameBound.h"
+#include "velox/exec/window/PeerGroupComputation.h"
 #include "velox/vector/SimpleVector.h"
 
 #include <algorithm>
@@ -22,33 +24,19 @@
 
 namespace facebook::velox::exec::window {
 
-namespace {
-
-std::pair<vector_size_t, vector_size_t> findMinMaxFrameBounds(
-    const SelectivityVector& validRows,
-    const BufferPtr& frameStarts,
-    const BufferPtr& frameEnds) {
-  auto rawFrameStarts = frameStarts->as<vector_size_t>();
-  auto rawFrameEnds = frameEnds->as<vector_size_t>();
-
-  auto firstValidRow = validRows.begin();
-  vector_size_t minFrame = rawFrameStarts[firstValidRow];
-  vector_size_t maxFrame = rawFrameEnds[firstValidRow];
-  validRows.applyToSelected([&](auto i) {
-    minFrame = std::min(minFrame, rawFrameStarts[i]);
-    maxFrame = std::max(maxFrame, rawFrameEnds[i]);
-  });
-  return {minFrame, maxFrame};
-}
-
-} // namespace
-
 VectorWindowPartition::VectorWindowPartition(
     const std::vector<column_index_t>& inputChannels,
     const std::vector<column_index_t>& inputMapping,
-    const std::vector<std::pair<column_index_t, core::SortOrder>>& sortKeyInfo)
+    const std::vector<std::pair<column_index_t, core::SortOrder>>& sortKeyInfo,
+    memory::MemoryPool* pool)
     : WindowPartition(inputMapping, sortKeyInfo, true),
-      inputChannels_(inputChannels) {
+      previousRowKeyChannels_(
+          detail::WindowPartitionKeyChannels::create(
+              sortKeyInfo,
+              inputChannels)),
+      inputChannels_(inputChannels),
+      pool_(pool) {
+  VELOX_CHECK_NOT_NULL(pool_);
   blockPrefixSums_.push_back(0);
 }
 
@@ -92,9 +80,10 @@ void VectorWindowPartition::removeProcessedRows(vector_size_t numRows) {
   }
 
   if (complete() && numRows == totalRows_) {
-    previousRef_ = {};
+    previousRow_.clear();
   } else {
-    previousRef_ = rowAt(startRow_ + numRows - 1);
+    previousRow_.capture(
+        rowAt(startRow_ + numRows - 1), previousRowKeyChannels_, pool_);
   }
 
   auto remaining = numRows;
@@ -211,26 +200,81 @@ void VectorWindowPartition::extractNulls(
   }
 }
 
-std::optional<std::pair<vector_size_t, vector_size_t>>
-VectorWindowPartition::extractNulls(
-    column_index_t col,
-    const SelectivityVector& validRows,
-    const BufferPtr& frameStarts,
-    const BufferPtr& frameEnds,
-    BufferPtr* nulls) const {
-  VELOX_CHECK(validRows.hasSelections(), "Buffer has no active rows");
-  auto [minFrame, maxFrame] =
-      findMinMaxFrameBounds(validRows, frameStarts, frameEnds);
+class VectorWindowPartition::VectorAccessor {
+ public:
+  explicit VectorAccessor(const VectorWindowPartition& partition)
+      : partition_(partition) {}
 
-  const auto framesSize = maxFrame - minFrame + 1;
-  AlignedBuffer::reallocate<bool>(nulls, framesSize);
+  vector_size_t startRow() const {
+    return partition_.startRow_;
+  }
 
-  extractNulls(col, minFrame, framesSize, *nulls);
-  const auto foundNull =
-      bits::findFirstBit((*nulls)->as<uint64_t>(), 0, framesSize) >= 0;
-  return foundNull ? std::make_optional(std::make_pair(minFrame, framesSize))
-                   : std::nullopt;
-}
+  vector_size_t partitionEnd() const {
+    return partition_.startRow_ + partition_.totalRows_;
+  }
+
+  bool hasPreviousRow() const {
+    return partition_.previousRow_.isValid();
+  }
+
+  bool previousRowEquals(vector_size_t row) const {
+    return partition_.previousRow_.rowsEqual(
+        partition_.rowAt(row),
+        partition_.sortKeyInfo(),
+        partition_.inputChannels_);
+  }
+
+  bool rowsEqual(vector_size_t lhs, vector_size_t rhs) const {
+    return partition_.rowsEqual(
+        partition_.rowAt(lhs), partition_.rowAt(rhs), partition_.sortKeyInfo());
+  }
+
+  std::optional<int32_t> compareFrameValue(
+      vector_size_t orderByRow,
+      vector_size_t frameValueRow,
+      column_index_t frameColumn,
+      const CompareFlags& flags) const {
+    const auto orderByRef = partition_.rowAt(orderByRow);
+    const auto frameValueRef = partition_.rowAt(frameValueRow);
+    return orderByRef.input->childAt(orderByColumn())
+        ->compare(
+            frameValueRef.input->childAt(frameColumn).get(),
+            orderByRef.row,
+            frameValueRef.row,
+            flags);
+  }
+
+  bool frameValueIsNull(vector_size_t row, column_index_t frameColumn) const {
+    const auto rowRef = partition_.rowAt(row);
+    return rowRef.input->childAt(frameColumn)->isNullAt(rowRef.row);
+  }
+
+  bool orderByValueIsNull(vector_size_t row) const {
+    const auto rowRef = partition_.rowAt(row);
+    return rowRef.input->childAt(orderByColumn())->isNullAt(rowRef.row);
+  }
+
+  template <typename T>
+  bool frameValueIsNan(vector_size_t row, column_index_t frameColumn) const {
+    const auto rowRef = partition_.rowAt(row);
+    return partition_.isNanAt<T>(
+        rowRef.input->childAt(frameColumn), rowRef.row);
+  }
+
+  template <typename T>
+  bool orderByValueIsNan(vector_size_t row) const {
+    const auto rowRef = partition_.rowAt(row);
+    return partition_.isNanAt<T>(
+        rowRef.input->childAt(orderByColumn()), rowRef.row);
+  }
+
+ private:
+  column_index_t orderByColumn() const {
+    return partition_.inputChannels_[partition_.sortKeyInfo()[0].first];
+  }
+
+  const VectorWindowPartition& partition_;
+};
 
 std::pair<vector_size_t, vector_size_t>
 VectorWindowPartition::computePeerBuffers(
@@ -240,102 +284,13 @@ VectorWindowPartition::computePeerBuffers(
     vector_size_t prevPeerEnd,
     vector_size_t* rawPeerStarts,
     vector_size_t* rawPeerEnds) {
-  VELOX_CHECK_LE(start, startRow_ + totalRows_);
-  VELOX_CHECK_LE(end, startRow_ + totalRows_);
-
-  auto peerStart = prevPeerStart;
-  auto peerEnd = prevPeerEnd;
-  vector_size_t next = start;
-  vector_size_t index = 0;
-
-  if (previousRef_.isValid() && start < end) {
-    const auto samePeer = rowsEqual(previousRef_, rowAt(start), sortKeyInfo());
-    previousRef_ = {};
-    if (samePeer) {
-      peerEnd = findPeerRowEndIndex(start, startRow_ + totalRows_);
-      for (; next < std::min(end, peerEnd); ++next, ++index) {
-        rawPeerStarts[index] = peerStart;
-        rawPeerEnds[index] = peerEnd - 1;
-      }
-    }
+  VectorAccessor rows{*this};
+  auto result = PeerGroupComputation::compute(
+      rows, start, end, prevPeerStart, prevPeerEnd, rawPeerStarts, rawPeerEnds);
+  if (result.previousRowConsumed) {
+    previousRow_.clear();
   }
-
-  for (; next < end; ++next, ++index) {
-    if (next == 0 || next >= peerEnd) {
-      peerStart = next;
-      peerEnd = findPeerRowEndIndex(peerStart, startRow_ + totalRows_);
-    }
-
-    rawPeerStarts[index] = peerStart;
-    rawPeerEnds[index] = peerEnd - 1;
-  }
-
-  VELOX_CHECK_EQ(index, end - start);
-  return {peerStart, peerEnd};
-}
-
-template <typename T>
-void VectorWindowPartition::updateKRangeFrameBounds(
-    bool isStartBound,
-    bool isPreceding,
-    column_index_t frameColumn,
-    vector_size_t startRow,
-    vector_size_t numRows,
-    const vector_size_t* rawPeerBounds,
-    vector_size_t* rawFrameBounds,
-    SelectivityVector& validFrames) const {
-  const auto orderByColumn = inputChannels_[sortKeyInfo()[0].first];
-  const auto sortOrder = sortKeyInfo()[0].second;
-  CompareFlags flags;
-  flags.ascending = sortOrder.isAscending();
-  flags.nullsFirst = sortOrder.isNullsFirst();
-
-  auto [blockIndex, localRow] = findBlock(startRow - startRow_);
-  auto blockEndRow = blockPrefixSums_[blockIndex + 1] + startRow_;
-  for (auto i = 0; i < numRows; ++i) {
-    const auto currentRow = startRow + i;
-    while (currentRow >= blockEndRow) {
-      ++blockIndex;
-      localRow = blocks_[blockIndex].startRow;
-      blockEndRow = blockPrefixSums_[blockIndex + 1] + startRow_;
-    }
-
-    const auto& block = blocks_[blockIndex];
-    const auto frameValue = block.input->childAt(frameColumn);
-    const auto orderByValue = block.input->childAt(orderByColumn);
-    if (isInvalidNanFrameBound<T>(frameValue, orderByValue, localRow)) {
-      validFrames.setValid(i, false);
-    } else if (
-        orderByValue->compare(frameValue.get(), localRow, localRow, flags) ==
-        0) {
-      rawFrameBounds[i] = rawPeerBounds[i];
-    } else {
-      const auto searchStart = isPreceding ? startRow_ : currentRow;
-      const auto searchEnd =
-          isPreceding ? currentRow + 1 : startRow_ + totalRows_;
-      rawFrameBounds[i] = searchFrameValue(
-          isStartBound,
-          searchStart,
-          searchEnd,
-          orderByColumn,
-          frameValue,
-          localRow,
-          flags);
-    }
-
-    ++localRow;
-  }
-}
-
-template <typename T>
-bool VectorWindowPartition::isInvalidNanFrameBound(
-    const VectorPtr& frameValue,
-    const VectorPtr& orderByValue,
-    vector_size_t row) const {
-  if constexpr (std::is_floating_point_v<T>) {
-    return isNanAt<T>(frameValue, row) && !isNanAt<T>(orderByValue, row);
-  }
-  return false;
+  return {result.peerStart, result.peerEnd};
 }
 
 template <typename T>
@@ -358,38 +313,22 @@ void VectorWindowPartition::computeKRangeFrameBounds(
     return;
   }
 
+  const auto sortOrder = sortKeyInfo()[0].second;
   const auto frameType = blocks_.front().input->childAt(frameColumn)->type();
-  if (frameType->isReal()) {
-    updateKRangeFrameBounds<float>(
-        isStartBound,
-        isPreceding,
-        frameColumn,
-        startRow,
-        numRows,
-        rawPeerBounds,
-        rawFrameBounds,
-        validFrames);
-  } else if (frameType->isDouble()) {
-    updateKRangeFrameBounds<double>(
-        isStartBound,
-        isPreceding,
-        frameColumn,
-        startRow,
-        numRows,
-        rawPeerBounds,
-        rawFrameBounds,
-        validFrames);
-  } else {
-    updateKRangeFrameBounds<void>(
-        isStartBound,
-        isPreceding,
-        frameColumn,
-        startRow,
-        numRows,
-        rawPeerBounds,
-        rawFrameBounds,
-        validFrames);
-  }
+
+  VectorAccessor rows{*this};
+  KRangeFrameBound::compute(
+      rows,
+      isStartBound,
+      isPreceding,
+      frameColumn,
+      sortOrder,
+      frameType,
+      startRow,
+      numRows,
+      rawPeerBounds,
+      rawFrameBounds,
+      validFrames);
 }
 
 std::pair<size_t, vector_size_t> VectorWindowPartition::findBlock(
@@ -403,7 +342,7 @@ std::pair<size_t, vector_size_t> VectorWindowPartition::findBlock(
   return {blockIndex, blocks_[blockIndex].startRow + offsetInBlock};
 }
 
-VectorWindowPartition::RowReference VectorWindowPartition::rowAt(
+detail::WindowPartitionRowReference VectorWindowPartition::rowAt(
     vector_size_t row) const {
   VELOX_CHECK_GE(row, startRow_);
   const auto [blockIndex, localRow] = findBlock(row - startRow_);
@@ -411,8 +350,8 @@ VectorWindowPartition::RowReference VectorWindowPartition::rowAt(
 }
 
 bool VectorWindowPartition::rowsEqual(
-    const RowReference& lhs,
-    const RowReference& rhs,
+    const detail::WindowPartitionRowReference& lhs,
+    const detail::WindowPartitionRowReference& rhs,
     const std::vector<std::pair<column_index_t, core::SortOrder>>& keyInfo)
     const {
   for (const auto& key : keyInfo) {
@@ -424,95 +363,6 @@ bool VectorWindowPartition::rowsEqual(
     }
   }
   return true;
-}
-
-vector_size_t VectorWindowPartition::findPeerRowEndIndex(
-    vector_size_t peerStart,
-    vector_size_t lastRow) const {
-  auto peerEnd = peerStart + 1;
-  const auto startRef = rowAt(peerStart);
-  while (peerEnd < lastRow &&
-         rowsEqual(startRef, rowAt(peerEnd), sortKeyInfo())) {
-    ++peerEnd;
-  }
-  return peerEnd;
-}
-
-vector_size_t VectorWindowPartition::searchFrameValue(
-    bool firstMatch,
-    vector_size_t start,
-    vector_size_t end,
-    column_index_t orderByColumn,
-    const VectorPtr& frameValue,
-    vector_size_t frameValueIndex,
-    const CompareFlags& flags) const {
-  auto begin = start;
-  auto finish = end;
-
-  while (finish - begin >= 2) {
-    const auto mid = begin + (finish - begin) / 2;
-    const auto [blockIndex, localRow] = findBlock(mid - startRow_);
-    const auto& block = blocks_[blockIndex];
-    const auto compareResult =
-        block.input->childAt(orderByColumn)
-            ->compare(frameValue.get(), localRow, frameValueIndex, flags);
-    if (!compareResult.has_value() || compareResult.value() >= 0) {
-      finish = mid;
-    } else {
-      begin = mid;
-    }
-  }
-
-  return linearSearchFrameValue(
-      firstMatch,
-      begin,
-      end,
-      orderByColumn,
-      frameValue,
-      frameValueIndex,
-      flags);
-}
-
-vector_size_t VectorWindowPartition::linearSearchFrameValue(
-    bool firstMatch,
-    vector_size_t start,
-    vector_size_t end,
-    column_index_t orderByColumn,
-    const VectorPtr& frameValue,
-    vector_size_t frameValueIndex,
-    const CompareFlags& flags) const {
-  const auto partitionEnd = startRow_ + totalRows_;
-  if (start >= end) {
-    return end == partitionEnd ? partitionEnd + 1 : -1;
-  }
-
-  auto [blockIndex, localRow] = findBlock(start - startRow_);
-  auto blockEndRow = blockPrefixSums_[blockIndex + 1] + startRow_;
-  for (auto row = start; row < end; ++row) {
-    while (row >= blockEndRow) {
-      ++blockIndex;
-      localRow = blocks_[blockIndex].startRow;
-      blockEndRow = blockPrefixSums_[blockIndex + 1] + startRow_;
-    }
-
-    const auto& block = blocks_[blockIndex];
-    const auto compareResult =
-        block.input->childAt(orderByColumn)
-            ->compare(frameValue.get(), localRow, frameValueIndex, flags);
-    if (compareResult.has_value() && compareResult.value() == 0) {
-      if (firstMatch) {
-        return row;
-      }
-    }
-
-    if (compareResult.has_value() && compareResult.value() > 0) {
-      return firstMatch ? row : row - 1;
-    }
-
-    ++localRow;
-  }
-
-  return end == partitionEnd ? partitionEnd + 1 : -1;
 }
 
 void VectorWindowPartition::rebuildPrefixSums() {

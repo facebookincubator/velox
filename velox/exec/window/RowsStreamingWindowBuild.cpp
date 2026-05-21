@@ -16,10 +16,12 @@
 
 #include "velox/exec/window/RowsStreamingWindowBuild.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/exec/window/VectorWindowPartition.h"
 
 namespace facebook::velox::exec::window {
 
 namespace {
+
 bool hasRangeFrame(const std::shared_ptr<const core::WindowNode>& windowNode) {
   for (const auto& function : windowNode->windowFunctions()) {
     if (function.frame.type == core::WindowNode::WindowType::kRange) {
@@ -36,9 +38,15 @@ RowsStreamingWindowBuild::RowsStreamingWindowBuild(
     const common::SpillConfig* spillConfig,
     tsan_atomic<bool>* nonReclaimableSection)
     : WindowBuild(windowNode, pool, spillConfig, nonReclaimableSection),
-      hasRangeFrame_(hasRangeFrame(windowNode)) {
-  initializeRowContainer(pool);
-  initializeDecodedInputVectors();
+      hasRangeFrame_(hasRangeFrame(windowNode)),
+      previousRowKeyChannels_(
+          detail::WindowPartitionKeyChannels::create(
+              partitionKeyInfo_,
+              sortKeyInfo_,
+              inputChannels_)),
+      boundaryKeyChannels_(previousRowKeyChannels_),
+      pool_(pool) {
+  VELOX_CHECK_NOT_NULL(pool_);
   velox::common::testutil::TestValue::adjust(
       "facebook::velox::exec::window::RowsStreamingWindowBuild::RowsStreamingWindowBuild",
       this);
@@ -53,7 +61,7 @@ void RowsStreamingWindowBuild::ensureInputPartition() {
   if (windowPartitions_.empty() || windowPartitions_.back()->complete()) {
     windowPartitions_.emplace_back(
         std::make_shared<VectorWindowPartition>(
-            inputChannels_, inversedInputChannels_, sortKeyInfo_));
+            inputChannels_, inversedInputChannels_, sortKeyInfo_, pool_));
   }
 }
 
@@ -82,13 +90,11 @@ void RowsStreamingWindowBuild::addPartitionInputs(bool finished) {
 }
 
 void RowsStreamingWindowBuild::addInput(RowVectorPtr input) {
-  for (auto& child : input->children()) {
-    child->loadedVector();
-  }
+  loadBoundaryColumns(input);
 
   vector_size_t blockStart = 0;
   for (auto row = 0; row < input->size(); ++row) {
-    const bool hasPreviousRow = row > 0 || previousRef_.isValid();
+    const bool hasPreviousRow = row > 0 || previousRow_.isValid();
     if (isNewPartition(input, row)) {
       flushBlock(input, blockStart, row);
       addPartitionInputs(true);
@@ -114,13 +120,14 @@ void RowsStreamingWindowBuild::addInput(RowVectorPtr input) {
 
   flushBlock(input, blockStart, input->size());
   if (input->size() > 0) {
-    previousRef_ = {input, input->size() - 1};
+    previousRow_.capture(
+        input, input->size() - 1, previousRowKeyChannels_, pool_);
   }
 }
 
 void RowsStreamingWindowBuild::noMoreInput() {
   addPartitionInputs(true);
-  previousRef_ = {};
+  previousRow_.clear();
 }
 
 std::shared_ptr<WindowPartition> RowsStreamingWindowBuild::nextPartition() {
@@ -164,7 +171,7 @@ void RowsStreamingWindowBuild::flushBlock(
 bool RowsStreamingWindowBuild::isNewPartition(
     const RowVectorPtr& input,
     vector_size_t row) const {
-  if (row == 0 && !previousRef_.isValid()) {
+  if (row == 0 && !previousRow_.isValid()) {
     return false;
   }
   return !compareRowsEqual(input, row, partitionKeyInfo_);
@@ -173,7 +180,7 @@ bool RowsStreamingWindowBuild::isNewPartition(
 bool RowsStreamingWindowBuild::isNewPeerGroup(
     const RowVectorPtr& input,
     vector_size_t row) const {
-  if (row == 0 && !previousRef_.isValid()) {
+  if (row == 0 && !previousRow_.isValid()) {
     return false;
   }
   return !compareRowsEqual(input, row, sortKeyInfo_);
@@ -184,18 +191,25 @@ bool RowsStreamingWindowBuild::compareRowsEqual(
     vector_size_t row,
     const std::vector<std::pair<column_index_t, core::SortOrder>>& keyInfo)
     const {
-  const auto& previousInput = row == 0 ? previousRef_.input : input;
-  const auto previousRow = row == 0 ? previousRef_.row : row - 1;
+  if (row == 0) {
+    return previousRow_.rowsEqual(input, row, keyInfo, inputChannels_);
+  }
 
   for (const auto& key : keyInfo) {
     const auto inputColumn = inputChannels_[key.first];
-    if (!previousInput->childAt(inputColumn)
-             ->equalValueAt(
-                 input->childAt(inputColumn).get(), previousRow, row)) {
+    if (!input->childAt(inputColumn)
+             ->equalValueAt(input->childAt(inputColumn).get(), row - 1, row)) {
       return false;
     }
   }
   return true;
+}
+
+void RowsStreamingWindowBuild::loadBoundaryColumns(
+    const RowVectorPtr& input) const {
+  for (const auto channel : boundaryKeyChannels_) {
+    input->childAt(channel)->loadedVector();
+  }
 }
 
 } // namespace facebook::velox::exec::window

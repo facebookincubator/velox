@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "velox/exec/window/VectorWindowPartition.h"
+#include "velox/exec/WindowPartitionKeys.h"
 #include "velox/exec/window/WindowBuild.h"
 
 #include <deque>
@@ -59,8 +59,18 @@ class RowsStreamingWindowBuild : public WindowBuild {
   bool needsInput() override;
 
  private:
-  using RowBlock = VectorWindowPartition::RowBlock;
-  using RowReference = VectorWindowPartition::RowReference;
+  // Represents a contiguous row range from an input vector waiting to be added
+  // to the current partition.
+  struct RowBlock {
+    // Input vector that owns the rows in this block.
+    RowVectorPtr input;
+
+    // First retained row in 'input', inclusive.
+    vector_size_t startRow;
+
+    // Last retained row in 'input', exclusive.
+    vector_size_t endRow;
+  };
 
   // Flushes rows in [start, end) from 'input' as a vector block.
   void
@@ -89,6 +99,9 @@ class RowsStreamingWindowBuild : public WindowBuild {
       const std::vector<std::pair<column_index_t, core::SortOrder>>& keyInfo)
       const;
 
+  // Loads only key columns needed to detect partition and peer boundaries.
+  void loadBoundaryColumns(const RowVectorPtr& input) const;
+
   // Sets to true if this window node has range frames.
   const bool hasRangeFrame_;
 
@@ -97,7 +110,16 @@ class RowsStreamingWindowBuild : public WindowBuild {
 
   // Used to compare the first row of an input vector with the last row of the
   // previous input vector.
-  RowReference previousRef_;
+  detail::WindowPartitionKeyRowSnapshot previousRow_;
+
+  // Original input channels that must be copied to compare previous rows.
+  std::vector<column_index_t> previousRowKeyChannels_;
+
+  // Original input channels used to detect partition and peer boundaries.
+  std::vector<column_index_t> boundaryKeyChannels_;
+
+  // Pool used for copied previous-row key snapshots.
+  memory::MemoryPool* const pool_;
 
   // Number of rows accumulated since the last partial flush.
   vector_size_t pendingRowCount_{0};

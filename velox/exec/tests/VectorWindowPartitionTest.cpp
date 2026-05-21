@@ -43,7 +43,7 @@ class VectorWindowPartitionTest : public testing::Test,
       inputMapping[inputChannels[i]] = i;
     }
     return window::VectorWindowPartition{
-        inputChannels, std::move(inputMapping), std::move(sortKeyInfo)};
+        inputChannels, std::move(inputMapping), std::move(sortKeyInfo), pool()};
   }
 };
 
@@ -174,6 +174,33 @@ TEST_F(VectorWindowPartitionTest, computesPeerBuffersAfterRemoval) {
   EXPECT_THAT(peerEnds, ::testing::ElementsAre(3, 3, 4));
   EXPECT_EQ(peerBounds.first, 4);
   EXPECT_EQ(peerBounds.second, 5);
+}
+
+TEST_F(VectorWindowPartitionTest, previousRowDoesNotRetainProcessedInput) {
+  auto partition = makePartition({0}, {{0, core::SortOrder{true, true}}});
+
+  std::weak_ptr<RowVector> processedInput;
+  {
+    auto firstBlock = makeRowVector({makeFlatVector<int32_t>({10})});
+    processedInput = firstBlock;
+    partition.addBlock(firstBlock, 0, firstBlock->size());
+  }
+
+  partition.removeProcessedRows(1);
+  EXPECT_TRUE(processedInput.expired());
+
+  auto secondBlock = makeRowVector({makeFlatVector<int32_t>({10})});
+  partition.addBlock(secondBlock, 0, secondBlock->size());
+
+  std::vector<vector_size_t> peerStarts(1);
+  std::vector<vector_size_t> peerEnds(1);
+  const auto peerBounds = partition.computePeerBuffers(
+      1, 2, 0, 1, peerStarts.data(), peerEnds.data());
+
+  EXPECT_THAT(peerStarts, ::testing::ElementsAre(0));
+  EXPECT_THAT(peerEnds, ::testing::ElementsAre(1));
+  EXPECT_EQ(peerBounds.first, 0);
+  EXPECT_EQ(peerBounds.second, 2);
 }
 
 TEST_F(

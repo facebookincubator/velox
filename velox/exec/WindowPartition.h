@@ -126,7 +126,7 @@ class WindowPartition {
   /// The pair is returned only if null values are found in the nulls
   /// extracted. The first value of the pair is the smallest frameStart for
   /// nulls. The second is the number of frames extracted.
-  virtual std::optional<std::pair<vector_size_t, vector_size_t>> extractNulls(
+  std::optional<std::pair<vector_size_t, vector_size_t>> extractNulls(
       column_index_t col,
       const SelectivityVector& validRows,
       const BufferPtr& frameStarts,

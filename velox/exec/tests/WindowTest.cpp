@@ -28,7 +28,9 @@
 #include "velox/exec/window/RowsStreamingWindowBuild.h"
 #include "velox/exec/window/SortWindowBuild.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
+#include "velox/vector/LazyVector.h"
 #include "velox/vector/SimpleVector.h"
+#include "velox/vector/tests/utils/VectorMaker.h"
 
 using namespace facebook::velox::exec::test;
 
@@ -533,6 +535,48 @@ TEST_F(WindowTest, rowsStreamingWindowBuildDoesNotMaterializeRows) {
   windowBuild.noMoreInput();
 
   ASSERT_FALSE(windowBuild.testingHasRowContainer());
+}
+
+TEST_F(WindowTest, rowsStreamingWindowBuildLoadsOnlyBoundaryColumns) {
+  const vector_size_t size = 6;
+
+  auto makeLazyColumn = [&](const TypePtr& type,
+                            std::function<VectorPtr()> loader) {
+    return std::make_shared<LazyVector>(
+        pool(),
+        type,
+        size,
+        std::make_unique<velox::test::SimpleVectorLoader>(
+            [loader = std::move(loader)](RowSet /*rows*/) {
+              return loader();
+            }));
+  };
+
+  auto partitionKey = makeLazyColumn(
+      INTEGER(), [&]() { return makeFlatVector<int32_t>({1, 1, 1, 2, 2, 2}); });
+  auto sortKey = makeLazyColumn(
+      INTEGER(), [&]() { return makeFlatVector<int32_t>({1, 1, 2, 1, 1, 2}); });
+  auto payload = makeLazyColumn(BIGINT(), [&]() {
+    return makeFlatVector<int64_t>({10, 20, 30, 40, 50, 60});
+  });
+
+  auto data = makeRowVector({"p", "s", "v"}, {partitionKey, sortKey, payload});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .orderBy({"p", "s"}, false)
+                  .streamingWindow({"rank() over (partition by p order by s)"})
+                  .planNode();
+  auto windowNode = std::dynamic_pointer_cast<const core::WindowNode>(plan);
+  ASSERT_NE(windowNode, nullptr);
+
+  TestingRowsStreamingWindowBuild windowBuild(
+      windowNode, pool(), nullptr, &nonReclaimableSection_);
+  windowBuild.setNumRowsPerOutput(2);
+  windowBuild.addInput(data);
+
+  EXPECT_TRUE(partitionKey->isLoaded());
+  EXPECT_TRUE(sortKey->isLoaded());
+  EXPECT_FALSE(payload->isLoaded());
 }
 
 TEST_F(WindowTest, rowsStreamingWindowBuildRetainsEncodedRows) {

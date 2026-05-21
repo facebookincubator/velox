@@ -16,9 +16,9 @@
 #pragma once
 
 #include "velox/exec/WindowPartition.h"
+#include "velox/exec/WindowPartitionKeys.h"
 
 #include <deque>
-#include <optional>
 #include <utility>
 #include <vector>
 
@@ -27,41 +27,13 @@ namespace facebook::velox::exec::window {
 /// Provides WindowPartition accessors over retained input vectors.
 class VectorWindowPartition : public WindowPartition {
  public:
-  /// Represents a contiguous row range from a retained input vector.
-  struct RowBlock {
-    /// Input vector that owns the rows in this block.
-    RowVectorPtr input;
-
-    /// First retained row in 'input', inclusive.
-    vector_size_t startRow;
-
-    /// Last retained row in 'input', exclusive.
-    vector_size_t endRow;
-
-    vector_size_t size() const {
-      return endRow - startRow;
-    }
-  };
-
-  /// Points to a row in a retained input vector.
-  struct RowReference {
-    /// Input vector that owns the referenced row.
-    RowVectorPtr input;
-
-    /// Row number in 'input'.
-    vector_size_t row;
-
-    bool isValid() const {
-      return input != nullptr;
-    }
-  };
-
   /// Constructs a partial window partition over retained input vector ranges.
   VectorWindowPartition(
       const std::vector<column_index_t>& inputChannels,
       const std::vector<column_index_t>& inputMapping,
       const std::vector<std::pair<column_index_t, core::SortOrder>>&
-          sortKeyInfo);
+          sortKeyInfo,
+      memory::MemoryPool* pool);
 
   /// Returns the number of retained rows in this partition.
   vector_size_t numRows() const override;
@@ -104,13 +76,7 @@ class VectorWindowPartition : public WindowPartition {
       vector_size_t numRows,
       const BufferPtr& nullsBuffer) const override;
 
-  /// Extracts null positions over frame bounds for selected rows.
-  std::optional<std::pair<vector_size_t, vector_size_t>> extractNulls(
-      column_index_t col,
-      const SelectivityVector& validRows,
-      const BufferPtr& frameStarts,
-      const BufferPtr& frameEnds,
-      BufferPtr* nulls) const override;
+  using WindowPartition::extractNulls;
 
   /// Computes peer group bounds for retained input vector rows.
   std::pair<vector_size_t, vector_size_t> computePeerBuffers(
@@ -133,24 +99,23 @@ class VectorWindowPartition : public WindowPartition {
       SelectivityVector& validFrames) const override;
 
  private:
-  // Updates frame bounds for the current frame column type.
-  template <typename T>
-  void updateKRangeFrameBounds(
-      bool isStartBound,
-      bool isPreceding,
-      column_index_t frameColumn,
-      vector_size_t startRow,
-      vector_size_t numRows,
-      const vector_size_t* rawPeerBounds,
-      vector_size_t* rawFrameBounds,
-      SelectivityVector& validFrames) const;
+  // Represents a contiguous row range from a retained input vector.
+  struct RowBlock {
+    // Input vector that owns the rows in this block.
+    RowVectorPtr input;
 
-  // Returns true if a NaN frame bound makes the frame invalid.
-  template <typename T>
-  bool isInvalidNanFrameBound(
-      const VectorPtr& frameValue,
-      const VectorPtr& orderByValue,
-      vector_size_t row) const;
+    // First retained row in 'input', inclusive.
+    vector_size_t startRow;
+
+    // Last retained row in 'input', exclusive.
+    vector_size_t endRow;
+
+    vector_size_t size() const {
+      return endRow - startRow;
+    }
+  };
+
+  class VectorAccessor;
 
   // Returns true if the vector value at 'row' is NaN.
   template <typename T>
@@ -160,39 +125,14 @@ class VectorWindowPartition : public WindowPartition {
   std::pair<size_t, vector_size_t> findBlock(vector_size_t row) const;
 
   // Returns a reference to the absolute partition row.
-  RowReference rowAt(vector_size_t row) const;
+  detail::WindowPartitionRowReference rowAt(vector_size_t row) const;
 
   // Returns true if two retained rows are equal over the specified keys.
   bool rowsEqual(
-      const RowReference& lhs,
-      const RowReference& rhs,
+      const detail::WindowPartitionRowReference& lhs,
+      const detail::WindowPartitionRowReference& rhs,
       const std::vector<std::pair<column_index_t, core::SortOrder>>& keyInfo)
       const;
-
-  // Finds the row after the peer group that starts at 'peerStart'.
-  vector_size_t findPeerRowEndIndex(
-      vector_size_t peerStart,
-      vector_size_t lastRow) const;
-
-  // Searches for 'frameValue' in 'orderByColumn' between 'start' and 'end'.
-  vector_size_t searchFrameValue(
-      bool firstMatch,
-      vector_size_t start,
-      vector_size_t end,
-      column_index_t orderByColumn,
-      const VectorPtr& frameValue,
-      vector_size_t frameValueIndex,
-      const CompareFlags& flags) const;
-
-  // Linearly searches for 'frameValue' after binary search narrows the range.
-  vector_size_t linearSearchFrameValue(
-      bool firstMatch,
-      vector_size_t start,
-      vector_size_t end,
-      column_index_t orderByColumn,
-      const VectorPtr& frameValue,
-      vector_size_t frameValueIndex,
-      const CompareFlags& flags) const;
 
   // Rebuilds block prefix sums after processed rows are removed.
   void rebuildPrefixSums();
@@ -210,10 +150,17 @@ class VectorWindowPartition : public WindowPartition {
   vector_size_t startRow_{0};
 
   // Last row from the previously processed range, if needed for peer grouping.
-  RowReference previousRef_;
+  detail::WindowPartitionKeyRowSnapshot previousRow_;
+
+  // Original input channels that must be copied to compare previous rows.
+  std::vector<column_index_t> previousRowKeyChannels_;
 
   // Maps window input columns to retained input vector columns.
   const std::vector<column_index_t> inputChannels_;
+
+  // Pool used for copied previous-row key snapshots. The owner must outlive
+  // this partition.
+  memory::MemoryPool* const pool_;
 };
 
 } // namespace facebook::velox::exec::window
