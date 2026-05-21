@@ -229,6 +229,7 @@ velox_add_library(
   Window.h
   WindowBuild.h
   WindowFunction.h
+  WindowPartitionComputation.h
   WindowPartition.h
 )
 
