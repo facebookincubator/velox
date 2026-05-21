@@ -19,6 +19,7 @@
 #include "velox/core/QueryConfig.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/Operator.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include <cudf/concatenate.hpp>
@@ -161,7 +162,8 @@ void UcxPartitionedOutput::flushPending() {
         equalPartition(tableView, stream);
       }
     } else {
-      auto packedCols = cudf::pack(tableView, stream);
+      auto packedCols = cudf::pack(
+          tableView, stream, cudf::get_current_device_resource_ref());
       stream.synchronize();
       auto packedColsPtr = std::make_unique<cudf::packed_columns>(
           std::move(packedCols.metadata), std::move(packedCols.gpu_data));
@@ -328,7 +330,8 @@ void UcxPartitionedOutput::splitAndEnqueue(
     cudf::table_view tableView,
     std::vector<cudf::size_type> offsets,
     rmm::cuda_stream_view stream) {
-  auto contiguousTables = cudf::contiguous_split(tableView, offsets, stream);
+  auto contiguousTables = cudf::contiguous_split(
+      tableView, offsets, stream, cudf::get_current_device_resource_ref());
 
   // Synchronize the stream to ensure CUDA operations complete before enqueuing.
   // UCXX/UCX is not stream-aware, so without syncing, data could be sent before
