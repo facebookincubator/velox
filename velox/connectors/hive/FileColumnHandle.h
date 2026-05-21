@@ -17,6 +17,7 @@
 
 #include "velox/connectors/Connector.h"
 #include "velox/type/Subfield.h"
+#include "velox/type/Timestamp.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::connector::hive {
@@ -207,6 +208,14 @@ class FileColumnHandle : public ColumnHandle {
   /// Return true if partition date values are encoded as days since epoch
   /// (e.g., Iceberg) rather than ISO 8601 strings (e.g., Hive).
   virtual bool isPartitionDateValueDaysSinceEpoch() const = 0;
+
+  /// Return the timestamp precision for partition values stored as bigint.
+  /// Returns std::nullopt if unknown, which falls back to string parsing.
+  /// Default implementation returns std::nullopt for backward compatibility.
+  virtual std::optional<TimestampPrecision> getPartitionTimestampPrecision()
+      const {
+    return std::nullopt;
+  }
 
   /// Named extraction chains.  Empty means no extraction (default behavior).
   virtual const std::vector<NamedExtraction>& extractions() const {

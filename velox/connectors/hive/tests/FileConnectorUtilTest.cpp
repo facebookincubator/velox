@@ -476,6 +476,138 @@ TEST_F(FileConnectorUtilTest, testFiltersMissingColumn) {
           /*partitionKey=*/{},
           /*partitionKeysHandle=*/{},
           /*asLocalTime=*/false));
+
+TEST_F(FileConnectorUtilTest, testFiltersTimestampPartitionKey) {
+  auto rowType = ROW({"c0"}, {BIGINT()});
+  auto batch =
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>(100, folly::identity)});
+  auto filePath = writeDataFile(batch);
+  auto reader = makeReader(filePath);
+
+  // Test timestamp partition filtering with microseconds format (Iceberg).
+  {
+    auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
+    scanSpec->addField("c0", 0);
+    auto* tsSpec = scanSpec->addField("event_time", 1);
+    
+    // Filter for timestamp: 2023-01-15 10:30:45.123456 UTC
+    // = 1673781045123456 microseconds since epoch
+    auto targetTs = Timestamp(1673781045, 123456000);
+    tsSpec->setFilter(
+        std::make_unique<common::TimestampRange>(targetTs, targetTs, false));
+
+    // Matching partition value in microseconds format.
+    std::unordered_map<std::string, std::optional<std::string>> partitionKeys =
+        {{"event_time", "1673781045123456"}};
+    auto tsHandle = std::make_shared<hive::HiveColumnHandle>(
+        "event_time",
+        hive::HiveColumnHandle::ColumnType::kPartitionKey,
+        TIMESTAMP(),
+        TIMESTAMP());
+    std::unordered_map<std::string, hive::FileColumnHandlePtr>
+        partitionKeysHandle = {{"event_time", tsHandle}};
+
+    EXPECT_TRUE(hive::testFilters(
+        scanSpec.get(),
+        reader.get(),
+        filePath,
+        partitionKeys,
+        partitionKeysHandle,
+        /*asLocalTime=*/false));
+  }
+
+  // Test timestamp partition filtering with ISO 8601 format.
+  {
+    auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
+    scanSpec->addField("c0", 0);
+    auto* tsSpec = scanSpec->addField("event_time", 1);
+    
+    // Filter for timestamp: 2023-06-20 14:25:30.500 UTC
+    auto targetTs = Timestamp(1687270530, 500000000);
+    tsSpec->setFilter(
+        std::make_unique<common::TimestampRange>(targetTs, targetTs, false));
+
+    // Matching partition value in ISO 8601 format.
+    std::unordered_map<std::string, std::optional<std::string>> partitionKeys =
+        {{"event_time", "2023-06-20T14:25:30.500"}};
+    auto tsHandle = std::make_shared<hive::HiveColumnHandle>(
+        "event_time",
+        hive::HiveColumnHandle::ColumnType::kPartitionKey,
+        TIMESTAMP(),
+        TIMESTAMP());
+    std::unordered_map<std::string, hive::FileColumnHandlePtr>
+        partitionKeysHandle = {{"event_time", tsHandle}};
+
+    EXPECT_TRUE(hive::testFilters(
+        scanSpec.get(),
+        reader.get(),
+        filePath,
+        partitionKeys,
+        partitionKeysHandle,
+        /*asLocalTime=*/false));
+  }
+
+  // Test timestamp partition filtering with PrestoCast format.
+  {
+    auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
+    scanSpec->addField("c0", 0);
+    auto* tsSpec = scanSpec->addField("event_time", 1);
+    
+    // Filter for timestamp: 2024-03-15 08:45:12.250 UTC
+    auto targetTs = Timestamp(1710492312, 250000000);
+    tsSpec->setFilter(
+        std::make_unique<common::TimestampRange>(targetTs, targetTs, false));
+
+    // Matching partition value in Presto-style cast format.
+    std::unordered_map<std::string, std::optional<std::string>> partitionKeys =
+        {{"event_time", "2024-03-15 08:45:12.250"}};
+    auto tsHandle = std::make_shared<hive::HiveColumnHandle>(
+        "event_time",
+        hive::HiveColumnHandle::ColumnType::kPartitionKey,
+        TIMESTAMP(),
+        TIMESTAMP());
+    std::unordered_map<std::string, hive::FileColumnHandlePtr>
+        partitionKeysHandle = {{"event_time", tsHandle}};
+
+    EXPECT_TRUE(hive::testFilters(
+        scanSpec.get(),
+        reader.get(),
+        filePath,
+        partitionKeys,
+        partitionKeysHandle,
+        /*asLocalTime=*/false));
+  }
+
+  // Test non-matching timestamp partition value.
+  {
+    auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
+    scanSpec->addField("c0", 0);
+    auto* tsSpec = scanSpec->addField("event_time", 1);
+    
+    // Filter for timestamp: 2023-01-15 10:30:45.123456 UTC
+    auto targetTs = Timestamp(1673781045, 123456000);
+    tsSpec->setFilter(
+        std::make_unique<common::TimestampRange>(targetTs, targetTs, false));
+
+    // Non-matching partition value (different timestamp).
+    std::unordered_map<std::string, std::optional<std::string>> partitionKeys =
+        {{"event_time", "2024-01-15T10:30:45.123456"}};
+    auto tsHandle = std::make_shared<hive::HiveColumnHandle>(
+        "event_time",
+        hive::HiveColumnHandle::ColumnType::kPartitionKey,
+        TIMESTAMP(),
+        TIMESTAMP());
+    std::unordered_map<std::string, hive::FileColumnHandlePtr>
+        partitionKeysHandle = {{"event_time", tsHandle}};
+
+    EXPECT_FALSE(hive::testFilters(
+        scanSpec.get(),
+        reader.get(),
+        filePath,
+        partitionKeys,
+        partitionKeysHandle,
+        /*asLocalTime=*/false));
+  }
 }
 
 } // namespace facebook::velox::connector

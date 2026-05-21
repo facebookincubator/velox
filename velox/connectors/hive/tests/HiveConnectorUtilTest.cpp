@@ -1214,4 +1214,5 @@ TEST_F(HiveConnectorUtilTest, createRangeFilter) {
   }
 }
 
+
 } // namespace facebook::velox::connector

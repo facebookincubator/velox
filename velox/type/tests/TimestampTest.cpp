@@ -19,9 +19,12 @@
 #include <random>
 #include <sstream>
 
+#include <folly/Conv.h>
+
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/RandomSeed.h"
 #include "velox/type/Timestamp.h"
+#include "velox/type/TimestampConversion.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox {
