@@ -231,8 +231,17 @@ void Stream::wait() {
 }
 
 void Stream::prefetch(Device* device, void* ptr, size_t size) {
-  CUDA_CHECK(cudaMemPrefetchAsync(
-      ptr, size, device ? device->deviceId : cudaCpuDeviceId, stream_->stream));
+  const auto deviceId = device ? device->deviceId : cudaCpuDeviceId;
+#if defined(CUDART_VERSION) && CUDART_VERSION >= 13000
+  cudaMemLocation location{
+      deviceId == cudaCpuDeviceId ? cudaMemLocationTypeHost
+                                  : cudaMemLocationTypeDevice,
+      deviceId};
+  constexpr int flags = 0;
+  CUDA_CHECK(cudaMemPrefetchAsync(ptr, size, location, flags, stream_->stream));
+#else
+  CUDA_CHECK(cudaMemPrefetchAsync(ptr, size, deviceId, stream_->stream));
+#endif
 }
 
 void Stream::memset(void* ptr, int32_t value, size_t size) {
