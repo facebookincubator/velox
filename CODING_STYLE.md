@@ -5,6 +5,10 @@ promoting consistency within the codebase, and encouraging common practices
 which will make the codebase easier to read, edit, maintain and debug in the
 future.
 
+Before submitting a PR, run through the
+[Self-Review Checklist](scripts/review/SELF_REVIEW.md). For function PRs,
+also check the [Function PR Guide](scripts/review/FUNCTION_PR_GUIDE.md).
+
 ## Code Formatting, Headers, and Licenses
 
 We use [pre-commit](https://pre-commit.com) to manage the installation and
@@ -117,6 +121,9 @@ line width, indentation and ordering (for includes, using directives and etc). 
   | `sel` | `selectivity` |
   | `rowCount` | `numRows` |
 
+  * Do not use numbered or lettered variables (`bitmap1`, `bitmapA`, `rows2`).
+    Use descriptive names that convey meaning, or inline the value to avoid
+    naming altogether.
   * Well-established abbreviations in the domain are acceptable (e.g., `id`,
     `url`, `sql`, `expr`).
   * Loop indices like `i`, `j`, `k` are acceptable for simple loops.
@@ -225,6 +232,10 @@ return result;
 buffer.reserve(1024);
 ```
 
+* **Do not reference other implementations** in comments ("like Java Presto",
+  "similar to Spark's X"). Logic should stand on its own. The exception is
+  function implementations that deliberately match another engine's semantics
+  — there, a reference to the canonical spec helps verify correctness.
 * **Do not duplicate comments between `.h` and `.cpp`.** Document the function
   in the header; the implementation should not repeat the same comment.
   Duplicated comments diverge over time.
@@ -259,6 +270,9 @@ buffer.reserve(1024);
       i)`
     * Note that the values of v1 and v2 are already included in the exception
       message by default.
+* **Error messages must match the check.** `VELOX_CHECK_GE(x, 0)` checks
+  `x >= 0`, so the message should say "non-negative" or "greater than or
+  equal to 0", not "greater than 0".
 * Put runtime information (names, values, types) at the **end** of error
   messages, after the static description.
 
@@ -325,6 +339,8 @@ buffer.reserve(1024);
   | `100` | `100` (no separator needed) |
 * For floating point literals, never omit the initial 0 before the decimal
   point (always `0.5`, not `.5`).
+* Constants shared across files belong in a common header, not duplicated
+  in each file.
 * File level variables and constants should be defined in an anonymous
   namespace.
 * Always prefer const variables and enum to using preprocessor (#define) to
@@ -531,6 +547,9 @@ using ContinuePromise = VeloxPromise<bool>;
   at the top or bottom of the file.
 * **Keep method implementations in .cpp.** Except for trivial one-liners,
   define methods in the .cpp file to keep headers small and reduce build times.
+* **Prefer constructor parameters over setter injection.** If a dependency
+  is required for the object to function, pass it in the constructor rather
+  than adding a setter method.
 * **Avoid default arguments** when all callers can pass values explicitly.
 * **Never use `friend`, `FRIEND_TEST`, or any friend declarations.** If a test
   needs access to private members, redesign the API or test through public
@@ -538,6 +557,12 @@ using ContinuePromise = VeloxPromise<bool>;
 
 ## Tests
 
+* **Each test file should have one test suite with a matching name.** E.g.,
+  `FooTest.cpp` contains the `FooTest` suite.
+* **Use `TEST()` for empty fixtures, `TEST_F()` only when the fixture is
+  used.**
+* **No copy-pasted test blocks.** If two tests differ only in one parameter,
+  use a loop or a local lambda.
 * **Place new tests next to related existing tests**, not at the end of the
   file. Group tests by topic (e.g., place `tryCast` next to `types`,
   `notBetween` next to `ifClause` which uses `between`).

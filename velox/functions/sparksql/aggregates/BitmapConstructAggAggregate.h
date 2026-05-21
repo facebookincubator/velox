@@ -13,20 +13,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
-namespace facebook::velox::expression {
+#include <string>
 
-inline constexpr const char* kAnd = "and";
-inline constexpr const char* kOr = "or";
-inline constexpr const char* kSwitch = "switch";
-inline constexpr const char* kIf = "if";
-inline constexpr const char* kCoalesce = "coalesce";
-inline constexpr const char* kCast = "cast";
-inline constexpr const char* kTryCast = "try_cast";
-inline constexpr const char* kTry = "try";
-inline constexpr const char* kRowConstructor = "row_constructor";
-inline constexpr const char* kNullIf = "nullif";
-inline constexpr const char* kCase = "case";
+#include "velox/exec/AggregateUtil.h"
 
-} // namespace facebook::velox::expression
+namespace facebook::velox::functions::aggregate::sparksql {
+
+exec::AggregateRegistrationResult registerBitmapConstructAggAggregate(
+    const std::string& name,
+    bool withCompanionFunctions,
+    bool overwrite);
+
+} // namespace facebook::velox::functions::aggregate::sparksql
