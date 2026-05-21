@@ -200,6 +200,7 @@ void GroupingSet::addInput(const RowVectorPtr& input, bool mayPushdown) {
         remainingInput_ = input;
         firstRemainingRow_ = numRows;
         remainingMayPushdown_ = mayPushdown;
+        mayPushdown = false;
         break;
       }
     }
@@ -900,16 +901,6 @@ void GroupingSet::resetTable(bool freeTable) {
   if (table_ != nullptr) {
     table_->clear(freeTable);
   }
-}
-
-void GroupingSet::resetGlobalAggregation() {
-  VELOX_CHECK(
-      isGlobal_,
-      "resetGlobalAggregation should only be called for global grouping sets");
-  destroyGlobalAggregations();
-  rows_.clear();
-  stringAllocator_.clear();
-  globalAggregationInitialized_ = false;
 }
 
 bool GroupingSet::isPartialFull(int64_t maxBytes) {
