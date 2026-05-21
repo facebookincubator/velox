@@ -90,7 +90,7 @@ jobs:
       CCACHE_DIR: ${{ github.workspace }}/ccache
       VELOX_DEPENDENCY_SOURCE: SYSTEM
       cudf_SOURCE: BUNDLED
-      CUDA_VERSION: '12.9'
+      CUDA_VERSION: '13.2'
       faiss_SOURCE: BUNDLED
       USE_CLANG: "${{ inputs.use-clang && 'true' || 'false' }}"
     outputs:
@@ -384,7 +384,7 @@ jobs:
     steps:
       - name: Install Packages
         run: |
-          sudo apt-get update && sudo apt-get install -y cmake patchelf cuda-toolkit-12-9
+          sudo apt-get update && sudo apt-get install -y cmake patchelf cuda-toolkit-13-2
           export MINIO_VERSION="2022-05-26T05-48-41Z"
           export MINIO_BINARY_NAME="minio-2022-05-26"
           wget https://dl.min.io/server/minio/release/linux-amd64/archive/minio.RELEASE."${MINIO_VERSION}" -O "${MINIO_BINARY_NAME}"
