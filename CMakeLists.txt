@@ -491,10 +491,15 @@ if(VELOX_ENABLE_WAVE OR VELOX_ENABLE_CUDF)
   endif()
   if(VELOX_ENABLE_CUDF)
     foreach(arch ${CMAKE_CUDA_ARCHITECTURES})
-      if(arch LESS 75)
+      if(CMAKE_CUDA_COMPILER_VERSION VERSION_LESS 13.0.0 AND arch LESS 70)
         message(
           FATAL_ERROR
-          "CUDA architecture ${arch} is below 75. CUDF requires Turing (SM 75) or newer GPUs."
+          "CUDA architecture ${arch} is below 70. CUDF requires Volta (SM 70) or newer GPUs."
+        )
+      elseif(arch LESS 75)
+        message(
+          FATAL_ERROR
+          "CUDA architecture ${arch} is below 75. CUDA 13 requires Turing (SM 75) or newer GPUs."
         )
       endif()
     endforeach()
