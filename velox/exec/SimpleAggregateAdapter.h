@@ -91,6 +91,15 @@ class SimpleAggregateAdapter : public Aggregate {
     }
   }
 
+  template <typename T, typename = void>
+  struct SupportSetConstantInputs : std::false_type {};
+
+  template <typename T>
+  struct SupportSetConstantInputs<
+      T,
+      std::void_t<decltype(std::declval<T&>().setConstantInputs(
+          std::declval<const std::vector<VectorPtr>&>()))>> : std::true_type {};
+
   // Assume most aggregate functions have fixed-size accumulators. Functions
   // that
   // have non-fixed-size accumulators should overwrite `is_fixed_size_` in their
@@ -225,15 +234,6 @@ class SimpleAggregateAdapter : public Aggregate {
   struct accumulator_is_aligned<T, std::void_t<decltype(T::is_aligned_)>>
       : std::integral_constant<bool, T::is_aligned_> {};
 
-  template <typename T, typename = void>
-  struct support_set_constant_inputs : std::false_type {};
-
-  template <typename T>
-  struct support_set_constant_inputs<
-      T,
-      std::void_t<decltype(std::declval<T&>().setConstantInputs(
-          std::declval<const std::vector<VectorPtr>&>()))>> : std::true_type {};
-
   static constexpr bool aggregate_default_null_behavior_ =
       aggregate_default_null_behavior<FUNC>::value;
 
@@ -254,11 +254,11 @@ class SimpleAggregateAdapter : public Aggregate {
   static constexpr bool support_initialize_with_config_ =
       support_initialize_with_config<FUNC>::value;
 
-  static constexpr bool support_set_constant_inputs_ =
-      support_set_constant_inputs<FUNC>::value;
-
   static constexpr bool accumulator_is_aligned_ =
       accumulator_is_aligned<typename FUNC::AccumulatorType>::value;
+
+  static constexpr bool kSupportSetConstantInputs =
+      SupportSetConstantInputs<FUNC>::value;
 
   bool isFixedSize() const override {
     return accumulator_is_fixed_size_;
@@ -281,7 +281,7 @@ class SimpleAggregateAdapter : public Aggregate {
 
   void setConstantInputs(
       const std::vector<VectorPtr>& constantInputs) override {
-    if constexpr (support_set_constant_inputs_) {
+    if constexpr (kSupportSetConstantInputs) {
       fn_->setConstantInputs(constantInputs);
     }
   }

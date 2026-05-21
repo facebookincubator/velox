@@ -51,11 +51,11 @@ class XxHash64 final {
   static uint64_t hashTimestamp(Timestamp input, uint64_t seed);
 
  private:
-  static constexpr uint64_t PRIME64_1 = 0x9E3779B185EBCA87ULL;
-  static constexpr uint64_t PRIME64_2 = 0xC2B2AE3D27D4EB4FULL;
-  static constexpr uint64_t PRIME64_3 = 0x165667B19E3779F9ULL;
-  static constexpr uint64_t PRIME64_4 = 0x85EBCA77C2B2AE63ULL;
-  static constexpr uint64_t PRIME64_5 = 0x27D4EB2F165667C5ULL;
+  static constexpr uint64_t kPrime64One = 0x9E3779B185EBCA87ULL;
+  static constexpr uint64_t kPrime64Two = 0xC2B2AE3D27D4EB4FULL;
+  static constexpr uint64_t kPrime64Three = 0x165667B19E3779F9ULL;
+  static constexpr uint64_t kPrime64Four = 0x85EBCA77C2B2AE63ULL;
+  static constexpr uint64_t kPrime64Five = 0x27D4EB2F165667C5ULL;
 
   static uint64_t fmix(uint64_t hash);
   static uint64_t hashBytesByWords(const StringView& input, uint64_t seed);

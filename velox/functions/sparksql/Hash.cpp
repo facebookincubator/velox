@@ -538,35 +538,35 @@ void checkArgTypes(const std::vector<exec::VectorFunctionArg>& args) {
 } // namespace
 
 uint64_t XxHash64::hashInt32(int32_t input, uint64_t seed) {
-  uint64_t hash = seed + PRIME64_5 + 4ULL;
-  hash ^= static_cast<uint64_t>(static_cast<uint32_t>(input)) * PRIME64_1;
-  hash = bits::rotateLeft64(hash, 23) * PRIME64_2 + PRIME64_3;
+  uint64_t hash = seed + kPrime64Five + 4ULL;
+  hash ^= static_cast<uint64_t>(static_cast<uint32_t>(input)) * kPrime64One;
+  hash = bits::rotateLeft64(hash, 23) * kPrime64Two + kPrime64Three;
   return fmix(hash);
 }
 
 uint64_t XxHash64::hashInt64(int64_t input, uint64_t seed) {
-  uint64_t hash = seed + PRIME64_5 + 8ULL;
-  hash ^= bits::rotateLeft64(static_cast<uint64_t>(input) * PRIME64_2, 31) *
-      PRIME64_1;
-  hash = bits::rotateLeft64(hash, 27) * PRIME64_1 + PRIME64_4;
+  uint64_t hash = seed + kPrime64Five + 8ULL;
+  hash ^= bits::rotateLeft64(static_cast<uint64_t>(input) * kPrime64Two, 31) *
+      kPrime64One;
+  hash = bits::rotateLeft64(hash, 27) * kPrime64One + kPrime64Four;
   return fmix(hash);
 }
 
 uint64_t XxHash64::hashFloat(float input, uint64_t seed) {
   const auto rawBits =
       input == -0.f ? uint32_t{0} : std::bit_cast<uint32_t>(input);
-  uint64_t hash = seed + PRIME64_5 + 4ULL;
-  hash ^= static_cast<uint64_t>(rawBits) * PRIME64_1;
-  hash = bits::rotateLeft64(hash, 23) * PRIME64_2 + PRIME64_3;
+  uint64_t hash = seed + kPrime64Five + 4ULL;
+  hash ^= static_cast<uint64_t>(rawBits) * kPrime64One;
+  hash = bits::rotateLeft64(hash, 23) * kPrime64Two + kPrime64Three;
   return fmix(hash);
 }
 
 uint64_t XxHash64::hashDouble(double input, uint64_t seed) {
   const auto rawBits =
       input == -0. ? uint64_t{0} : std::bit_cast<uint64_t>(input);
-  uint64_t hash = seed + PRIME64_5 + 8ULL;
-  hash ^= bits::rotateLeft64(rawBits * PRIME64_2, 31) * PRIME64_1;
-  hash = bits::rotateLeft64(hash, 27) * PRIME64_1 + PRIME64_4;
+  uint64_t hash = seed + kPrime64Five + 8ULL;
+  hash ^= bits::rotateLeft64(rawBits * kPrime64Two, 31) * kPrime64One;
+  hash = bits::rotateLeft64(hash, 27) * kPrime64One + kPrime64Four;
   return fmix(hash);
 }
 
@@ -578,15 +578,15 @@ uint64_t XxHash64::hashBytes(const StringView& input, uint64_t seed) {
   uint32_t length = input.size();
   auto offset = i + (length & -8);
   if (offset + 4L <= end) {
-    hash ^=
-        (*reinterpret_cast<const uint64_t*>(offset) & 0xFFFFFFFFL) * PRIME64_1;
-    hash = bits::rotateLeft64(hash, 23) * PRIME64_2 + PRIME64_3;
+    hash ^= (*reinterpret_cast<const uint64_t*>(offset) & 0xFFFFFFFFL) *
+        kPrime64One;
+    hash = bits::rotateLeft64(hash, 23) * kPrime64Two + kPrime64Three;
     offset += 4L;
   }
 
   while (offset < end) {
-    hash ^= (*reinterpret_cast<const uint64_t*>(offset) & 0xFFL) * PRIME64_5;
-    hash = bits::rotateLeft64(hash, 11) * PRIME64_1;
+    hash ^= (*reinterpret_cast<const uint64_t*>(offset) & 0xFFL) * kPrime64Five;
+    hash = bits::rotateLeft64(hash, 11) * kPrime64One;
     offset++;
   }
   return fmix(hash);
@@ -604,9 +604,9 @@ uint64_t XxHash64::hashTimestamp(Timestamp input, uint64_t seed) {
 
 uint64_t XxHash64::fmix(uint64_t hash) {
   hash ^= hash >> 33;
-  hash *= PRIME64_2;
+  hash *= kPrime64Two;
   hash ^= hash >> 29;
-  hash *= PRIME64_3;
+  hash *= kPrime64Three;
   hash ^= hash >> 32;
   return hash;
 }
@@ -617,63 +617,63 @@ uint64_t XxHash64::hashBytesByWords(const StringView& input, uint64_t seed) {
   uint32_t length = input.size();
   uint64_t hash;
   if (length >= 32) {
-    uint64_t v1 = seed + PRIME64_1 + PRIME64_2;
-    uint64_t v2 = seed + PRIME64_2;
+    uint64_t v1 = seed + kPrime64One + kPrime64Two;
+    uint64_t v2 = seed + kPrime64Two;
     uint64_t v3 = seed;
-    uint64_t v4 = seed - PRIME64_1;
+    uint64_t v4 = seed - kPrime64One;
     for (; i <= end - 32; i += 32) {
       v1 = bits::rotateLeft64(
-               v1 + (*reinterpret_cast<const uint64_t*>(i) * PRIME64_2), 31) *
-          PRIME64_1;
+               v1 + (*reinterpret_cast<const uint64_t*>(i) * kPrime64Two), 31) *
+          kPrime64One;
       v2 = bits::rotateLeft64(
-               v2 + (*reinterpret_cast<const uint64_t*>(i + 8) * PRIME64_2),
+               v2 + (*reinterpret_cast<const uint64_t*>(i + 8) * kPrime64Two),
                31) *
-          PRIME64_1;
+          kPrime64One;
       v3 = bits::rotateLeft64(
-               v3 + (*reinterpret_cast<const uint64_t*>(i + 16) * PRIME64_2),
+               v3 + (*reinterpret_cast<const uint64_t*>(i + 16) * kPrime64Two),
                31) *
-          PRIME64_1;
+          kPrime64One;
       v4 = bits::rotateLeft64(
-               v4 + (*reinterpret_cast<const uint64_t*>(i + 24) * PRIME64_2),
+               v4 + (*reinterpret_cast<const uint64_t*>(i + 24) * kPrime64Two),
                31) *
-          PRIME64_1;
+          kPrime64One;
     }
     hash = bits::rotateLeft64(v1, 1) + bits::rotateLeft64(v2, 7) +
         bits::rotateLeft64(v3, 12) + bits::rotateLeft64(v4, 18);
-    v1 *= PRIME64_2;
+    v1 *= kPrime64Two;
     v1 = bits::rotateLeft64(v1, 31);
-    v1 *= PRIME64_1;
+    v1 *= kPrime64One;
     hash ^= v1;
-    hash = hash * PRIME64_1 + PRIME64_4;
+    hash = hash * kPrime64One + kPrime64Four;
 
-    v2 *= PRIME64_2;
+    v2 *= kPrime64Two;
     v2 = bits::rotateLeft64(v2, 31);
-    v2 *= PRIME64_1;
+    v2 *= kPrime64One;
     hash ^= v2;
-    hash = hash * PRIME64_1 + PRIME64_4;
+    hash = hash * kPrime64One + kPrime64Four;
 
-    v3 *= PRIME64_2;
+    v3 *= kPrime64Two;
     v3 = bits::rotateLeft64(v3, 31);
-    v3 *= PRIME64_1;
+    v3 *= kPrime64One;
     hash ^= v3;
-    hash = hash * PRIME64_1 + PRIME64_4;
+    hash = hash * kPrime64One + kPrime64Four;
 
-    v4 *= PRIME64_2;
+    v4 *= kPrime64Two;
     v4 = bits::rotateLeft64(v4, 31);
-    v4 *= PRIME64_1;
+    v4 *= kPrime64One;
     hash ^= v4;
-    hash = hash * PRIME64_1 + PRIME64_4;
+    hash = hash * kPrime64One + kPrime64Four;
   } else {
-    hash = seed + PRIME64_5;
+    hash = seed + kPrime64Five;
   }
 
   hash += length;
 
   for (; i <= end - 8; i += 8) {
     hash ^= bits::rotateLeft64(
-                *reinterpret_cast<const uint64_t*>(i) * PRIME64_2, 31) *
-        PRIME64_1;
-    hash = bits::rotateLeft64(hash, 27) * PRIME64_1 + PRIME64_4;
+                *reinterpret_cast<const uint64_t*>(i) * kPrime64Two, 31) *
+        kPrime64One;
+    hash = bits::rotateLeft64(hash, 27) * kPrime64One + kPrime64Four;
   }
   return hash;
 }

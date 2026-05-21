@@ -167,14 +167,27 @@ TEST_F(
   auto values = makeFlatVector<double>({1.0, 2.0});
   auto data = makeRowVector({values});
 
-  auto plan = PlanBuilder()
-                  .values({data})
-                  .filter("false")
-                  .singleAggregation(
-                      {},
-                      {"approx_count_distinct_for_intervals("
-                       "c0, ARRAY[0.0, 1.0, 1.0, 2.0], 0.05)"})
-                  .planNode();
+  core::AggregationNode::Aggregate aggregate;
+  aggregate.call = std::make_shared<core::CallTypedExpr>(
+      ARRAY(BIGINT()),
+      "approx_count_distinct_for_intervals",
+      std::make_shared<core::FieldAccessTypedExpr>(DOUBLE(), "c0"),
+      std::make_shared<core::ConstantTypedExpr>(
+          makeArrayVector<double>({{0.0, 1.0, 1.0, 2.0}})),
+      std::make_shared<core::ConstantTypedExpr>(DOUBLE(), 0.05));
+  aggregate.rawInputTypes = {DOUBLE(), ARRAY(DOUBLE()), DOUBLE()};
+
+  auto source = PlanBuilder().values({data}).filter("false").planNode();
+  auto plan = std::make_shared<core::AggregationNode>(
+      "single",
+      core::AggregationNode::Step::kSingle,
+      std::vector<core::FieldAccessTypedExprPtr>{},
+      std::vector<core::FieldAccessTypedExprPtr>{},
+      std::vector<std::string>{"a0"},
+      std::vector<core::AggregationNode::Aggregate>{aggregate},
+      false,
+      false,
+      source);
 
   auto result = AssertQueryBuilder(plan).copyResults(pool());
   auto rows = materialize(result);
