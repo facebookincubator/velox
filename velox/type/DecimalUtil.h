@@ -169,12 +169,14 @@ class DecimalUtil {
     auto scaleDifference = toScale - fromScale;
     bool isOverflow = false;
     if (scaleDifference >= 0) {
+      VELOX_DCHECK_LT(scaleDifference, std::size(DecimalUtil::kPowersOfTen));
       isOverflow = __builtin_mul_overflow(
           rescaledValue,
           DecimalUtil::kPowersOfTen[scaleDifference],
           &rescaledValue);
     } else {
       scaleDifference = -scaleDifference;
+      VELOX_DCHECK_LT(scaleDifference, std::size(DecimalUtil::kPowersOfTen));
       const auto scalingFactor = DecimalUtil::kPowersOfTen[scaleDifference];
       rescaledValue /= scalingFactor;
       int128_t remainder = inputValue % scalingFactor;
@@ -583,6 +585,9 @@ class DecimalUtil {
     int128_t out = 0;
     VELOX_RETURN_NOT_OK(parseStringToDecimalComponents(
         s, toScale, parsedPrecision, parsedScale, out));
+    if (parsedScale - toScale > LongDecimalType::kMaxPrecision) {
+      return Status::UserError("Decimal scale difference is too large.");
+    }
 
     const auto status = rescaleWithRoundUp<int128_t, T>(
         out,
