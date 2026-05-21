@@ -74,9 +74,11 @@ CudfSplitReader::CudfSplitReader(
       cudfHiveConfig_(cudfHiveConfig),
       pool_(connectorQueryCtx->memoryPool()),
       useExperimentalCudfReader_(useExperimentalCudfReader),
-      baseReaderOpts_(pool_, ioStatistics_.get(), ioStatistics_.get()),
-
-      subfieldFilterExpr_(subfieldFilterExpr) {}
+      baseReaderOpts_(pool_),
+      subfieldFilterExpr_(subfieldFilterExpr) {
+  baseReaderOpts_.setDataIoStats(ioStatistics_);
+  baseReaderOpts_.setMetadataIoStats(ioStatistics_);
+}
 
 void CudfSplitReader::prepareSplit(
     dwio::common::RuntimeStatistics& runtimeStats) {

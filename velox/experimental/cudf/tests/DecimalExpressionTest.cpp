@@ -1057,8 +1057,8 @@ TEST_F(CudfDecimalTest, decimalDivideByZero) {
   auto input = makeRowVector(
       {"a", "b"},
       {
-          makeFlatVector<int64_t>({100}, DECIMAL(10, 2)),
-          makeFlatVector<int64_t>({0}, DECIMAL(10, 2)),
+          makeFlatVector<int64_t>({100, 200, 300}, DECIMAL(10, 2)),
+          makeFlatVector<int64_t>({0, 50, 0}, DECIMAL(10, 2)),
       });
 
   std::vector<RowVectorPtr> vectors = {input};
@@ -1068,9 +1068,21 @@ TEST_F(CudfDecimalTest, decimalDivideByZero) {
                   .project({"a / b AS div"})
                   .planNode();
 
-  VELOX_ASSERT_USER_THROW(
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool()),
-      "Division by zero");
+  auto result =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+
+  // Expect null for rows where b = 0, and the division result otherwise.
+  // Input values are stored as fixed-point: 100 = 1.00, 200 = 2.00, etc.
+  // Row 0: 1.00 / 0 = null
+  // Row 1: 2.00 / 0.50 = 4.00 (stored as 400 in DECIMAL(12,2))
+  // Row 2: 3.00 / 0 = null
+  auto expectedType = DECIMAL(12, 2);
+  auto expected = makeRowVector({
+      makeNullableFlatVector<int64_t>(
+          {std::nullopt, 400, std::nullopt}, expectedType),
+  });
+
+  facebook::velox::test::assertEqualVectors(expected, result);
 }
 
 TEST_F(CudfDecimalTest, decimalModulo) {

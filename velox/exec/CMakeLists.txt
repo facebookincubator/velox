@@ -117,6 +117,7 @@ velox_add_library(
   HEADERS
   AddressableNonNullValueList.h
   Aggregate.h
+  AdaptivePrefetch.h
   AggregateCompanionAdapter.h
   AggregateCompanionSignatures.h
   AggregateFunctionRegistry.h

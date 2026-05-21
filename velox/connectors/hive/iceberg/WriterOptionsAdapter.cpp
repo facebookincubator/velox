@@ -18,10 +18,18 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
+#include "velox/dwio/parquet/writer/WriterConfig.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
 namespace {
+
+// Manifest format string emitted in Iceberg commit messages for files that
+// share the ORC on-disk family. Iceberg's manifest vocabulary has no DWRF or
+// NIMBLE enum, so DWRF and NIMBLE files are reported as "ORC" per the
+// cross-engine convention shared with the Java planner (see
+// FileFormat.{DWRF,NIMBLE}.toIceberg() in presto-facebook-iceberg).
+constexpr std::string_view kOrcManifestFormat{"ORC"};
 
 class ParquetWriterOptionsAdapter : public WriterOptionsAdapter {
  public:
@@ -40,15 +48,17 @@ class ParquetWriterOptionsAdapter : public WriterOptionsAdapter {
     // kParquetSerdeTimestampUnit and kParquetSerdeTimestampTimezone in
     // velox/dwio/parquet/writer/Writer.h. The value "6" represents
     // microseconds (TimestampPrecision::kMicroseconds).
-    options.serdeParameters["parquet.writer.timestamp.unit"] = "6";
-    options.serdeParameters["parquet.writer.timestamp.timezone"] = "";
+    options.serdeParameters[parquet::WriterConfig::kParquetSerdeTimestampUnit] =
+        "6";
+    options.serdeParameters
+        [parquet::WriterConfig::kParquetSerdeTimestampTimezone] = "";
   }
 };
 
 class DwrfWriterOptionsAdapter : public WriterOptionsAdapter {
  public:
   std::string manifestFormatString() const override {
-    return "ORC";
+    return std::string{kOrcManifestFormat};
   }
 
   void applyPostConfigs(dwio::common::WriterOptions& options) const override {
@@ -66,6 +76,17 @@ class DwrfWriterOptionsAdapter : public WriterOptionsAdapter {
   }
 };
 
+class NimbleWriterOptionsAdapter : public WriterOptionsAdapter {
+ public:
+  // Reports NIMBLE files as ORC in the manifest so cross-engine readers
+  // (Presto coordinator, catalog) can interpret the commit message. The
+  // actual on-disk format is identified at read time via the file
+  // extension and on-disk magic bytes, not via this string.
+  std::string manifestFormatString() const override {
+    return std::string{kOrcManifestFormat};
+  }
+};
+
 } // namespace
 
 std::unique_ptr<WriterOptionsAdapter> createWriterOptionsAdapter(
@@ -78,6 +99,8 @@ std::unique_ptr<WriterOptionsAdapter> createWriterOptionsAdapter(
       return std::make_unique<ParquetWriterOptionsAdapter>();
     case dwio::common::FileFormat::DWRF:
       return std::make_unique<DwrfWriterOptionsAdapter>();
+    case dwio::common::FileFormat::NIMBLE:
+      return std::make_unique<NimbleWriterOptionsAdapter>();
     default:
       return nullptr;
   }

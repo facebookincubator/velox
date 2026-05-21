@@ -308,6 +308,7 @@ class TimestampWithTimeZoneCastOperator final : public exec::CastOperator {
     auto* rawResults = timestampWithTzResult->mutableRawValues();
 
     if (input.typeKind() == TypeKind::TIMESTAMP) {
+      VELOX_DCHECK(input.type()->equivalent(*TIMESTAMP()));
       const auto inputVector = input.as<SimpleVector<Timestamp>>();
       castFromTimestamp(*inputVector, context, rows, rawResults);
     } else if (input.typeKind() == TypeKind::VARCHAR) {
@@ -333,6 +334,7 @@ class TimestampWithTimeZoneCastOperator final : public exec::CastOperator {
     context.ensureWritable(rows, resultType, result);
 
     if (resultType->kind() == TypeKind::TIMESTAMP) {
+      VELOX_DCHECK(resultType->equivalent(*TIMESTAMP()));
       castToTimestamp(input, context, rows, *result);
     } else if (resultType->kind() == TypeKind::VARCHAR) {
       castToString(input, context, rows, *result);

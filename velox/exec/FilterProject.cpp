@@ -15,6 +15,7 @@
  */
 #include "velox/exec/FilterProject.h"
 #include "velox/core/Expressions.h"
+#include "velox/exec/Driver.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/FieldReference.h"
@@ -208,6 +209,11 @@ void FilterProject::initialize() {
   }
   filter_.reset();
   project_.reset();
+
+  if (const auto* traceCtx = operatorCtx_->driverCtx()->traceCtx();
+      traceCtx && traceCtx->shouldTrace(*this)) {
+    exprs_->maybeSetupTracers(*this, *traceCtx);
+  }
 }
 
 void FilterProject::addInput(RowVectorPtr input) {

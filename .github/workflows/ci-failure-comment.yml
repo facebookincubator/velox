@@ -55,6 +55,17 @@ jobs:
         github.event.workflow_run.conclusion == 'failure'))
     runs-on: ubuntu-latest
     steps:
+      # workflow_run-triggered jobs start with an empty workspace; check
+      # out just the helper-scripts dir so the sourced gh-api-retry.sh
+      # is on disk for the gh_api callers below. Sparse-checkout keeps
+      # this fast; the later "Checkout for Claude context and prompt"
+      # step swaps to a different sparse set (CLAUDE.md + skill files)
+      # but only after gh_api usage is done.
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+
       - name: Get PR number
         id: pr
         env:
@@ -70,7 +81,8 @@ jobs:
             exit 0
           fi
 
-          pr_number=$(gh api \
+          source .github/scripts/gh-api-retry.sh
+          pr_number=$(gh_api \
             "/repos/${REPO}/pulls?head=${HEAD_OWNER}:${HEAD_BRANCH}&state=open" \
             -q '.[0].number // empty')
 
@@ -118,7 +130,8 @@ jobs:
             # No failure artifacts — build metadata from failed jobs in the run.
             # This handles workflows (e.g., Fuzzer Jobs) that don't upload
             # ci-failure-* artifacts.
-            METADATA=$(gh api "repos/${REPO}/actions/runs/${RUN_ID}/jobs" \
+            source .github/scripts/gh-api-retry.sh
+            METADATA=$(gh_api "repos/${REPO}/actions/runs/${RUN_ID}/jobs" \
               --paginate --jq '[.jobs[] | select(.conclusion == "failure") | {job: .name, type: "unknown"}]')
             if [ "$METADATA" = "[]" ] || [ -z "$METADATA" ]; then
               echo "No failure artifacts or failed jobs found."

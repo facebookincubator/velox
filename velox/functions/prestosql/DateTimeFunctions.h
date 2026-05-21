@@ -1889,6 +1889,7 @@ struct ToISO8601Function {
       const core::QueryConfig& config,
       const arg_type<Timestamp>* /*input*/) {
     if (inputTypes[0]->isTimestamp()) {
+      VELOX_DCHECK(inputTypes[0]->equivalent(*TIMESTAMP()));
       timeZone_ = getTimeZoneFromConfig(config);
     }
   }

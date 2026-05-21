@@ -776,6 +776,7 @@ TEST_F(PlanNodeBuilderTest, indexLookupJoinNode) {
           .assignments({{"c1", std::make_shared<DummyColumnHandle>()}})
           .build();
   const auto outputType = ROW({"c0"}, {BIGINT()});
+  std::optional<bool> splitOutput = true;
 
   const auto verify =
       [&](const std::shared_ptr<const IndexLookupJoinNode>& node) {
@@ -790,6 +791,7 @@ TEST_F(PlanNodeBuilderTest, indexLookupJoinNode) {
         EXPECT_EQ(node->sources()[0], left);
         EXPECT_EQ(node->sources()[1], right);
         EXPECT_EQ(node->outputType(), outputType);
+        EXPECT_EQ(node->splitOutput(), splitOutput);
       };
 
   const auto node = IndexLookupJoinNode::Builder()
@@ -801,6 +803,7 @@ TEST_F(PlanNodeBuilderTest, indexLookupJoinNode) {
                         .left(left)
                         .right(right)
                         .outputType(outputType)
+                        .splitOutput(splitOutput)
                         .build();
   verify(node);
 
