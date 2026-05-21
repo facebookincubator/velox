@@ -16,16 +16,15 @@
 
 #pragma once
 
-namespace facebook::wave::nimble {
-class Encoding {
- public:
-  // The binary layout for each Encoding begins with the same prefix:
-  // 1 byte: EncodingType
-  // 1 byte: DataType
-  // 4 bytes: uint32_t num rows
-  static constexpr int kEncodingTypeOffset = 0;
-  static constexpr int kDataTypeOffset = 1;
-  static constexpr int kRowCountOffset = 2;
-  static constexpr int kPrefixSize = 6;
-};
-} // namespace facebook::wave::nimble
+#include <string>
+
+#include "velox/exec/AggregateUtil.h"
+
+namespace facebook::velox::functions::aggregate::sparksql {
+
+exec::AggregateRegistrationResult registerBitmapConstructAggAggregate(
+    const std::string& name,
+    bool withCompanionFunctions,
+    bool overwrite);
+
+} // namespace facebook::velox::functions::aggregate::sparksql

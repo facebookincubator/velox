@@ -171,7 +171,12 @@ target_link_libraries(
 # TopNRowNumber Fuzzer.
 add_executable(velox_topn_row_number_fuzzer TopNRowNumberFuzzerRunner.cpp)
 
-target_link_libraries(velox_topn_row_number_fuzzer velox_topn_row_number_fuzzer_lib)
+target_link_libraries(
+  velox_topn_row_number_fuzzer
+  velox_topn_row_number_fuzzer_lib
+  velox_functions_prestosql
+  velox_window
+)
 
 add_library(velox_mark_distinct_fuzzer_lib MarkDistinctFuzzer.cpp)
 velox_add_test_headers(velox_mark_distinct_fuzzer_lib MarkDistinctFuzzer.h)

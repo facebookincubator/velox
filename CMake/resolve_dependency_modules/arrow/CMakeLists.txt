@@ -110,8 +110,14 @@ if(VELOX_ENABLE_ARROW)
   )
   set_target_properties(arrow PROPERTIES IMPORTED_LOCATION ${ARROW_LIBDIR}/libarrow.a)
   set_property(TARGET arrow PROPERTY INTERFACE_LINK_LIBRARIES ${RE2} thrift)
+  # Mirror the path-based interface dep from CMake/FindArrow.cmake — see
+  # the SYSTEM-arrow comment there for the ODR-violation rationale that
+  # forces us to use ${ARROW_LIBDIR}/libarrow.a (path) instead of the
+  # `arrow` target name.
   set_target_properties(
     arrow_testing
-    PROPERTIES IMPORTED_LOCATION ${ARROW_LIBDIR}/libarrow_testing.a
+    PROPERTIES
+      IMPORTED_LOCATION ${ARROW_LIBDIR}/libarrow_testing.a
+      INTERFACE_LINK_LIBRARIES ${ARROW_LIBDIR}/libarrow.a
   )
 endif()

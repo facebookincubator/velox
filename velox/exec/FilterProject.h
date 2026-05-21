@@ -59,6 +59,7 @@ class FilterProject : public Operator {
   void close() override {
     Operator::close();
     if (exprs_ != nullptr) {
+      exprs_->finishTracers();
       exprs_->clear();
     } else {
       VELOX_CHECK(!initialized_);
