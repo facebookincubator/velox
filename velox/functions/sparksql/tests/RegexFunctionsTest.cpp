@@ -325,57 +325,38 @@ TEST_F(RegexFunctionsTest, regexpReplaceWithEmptyString) {
   EXPECT_EQ(result, output);
 }
 
-// 'regexp_replace' must replace LF (0x0A) with the two-byte literal
-// sequence '\' + 'n' when the user-supplied SQL replacement is the 3-byte
-// sequence '\', '\', 'n' (equivalent to Spark/Java `\\n`). Inputs that
-// contain multibyte UTF-8 characters are included to ensure the replacement
-// path treats the LF as a plain byte regardless of surrounding bytes.
+// Verifies that the SQL replacement '\\n' (three bytes: '\\', '\\', 'n')
+// produces the two-byte literal '\\n' (one backslash followed by 'n') when
+// the matched byte is LF (0x0A). Inputs include a multibyte UTF-8 character
+// to confirm that surrounding bytes do not affect the replacement.
 TEST_F(RegexFunctionsTest, regexpReplaceLiteralBackslashLetterReplacement) {
-  // Pattern column matches LF byte; replacement column is the 3-byte string
-  // '\\n' (a literal backslash followed by another backslash followed by 'n').
   auto result = testingRegexpReplaceRows(
-      {std::string("A\nB"),
-       std::string("A\nB\nC"),
-       std::string("\xE5\x9B\xBD\nA")},
-      {std::string("\\n"), std::string("\\n"), std::string("\\n")},
-      {std::string("\\\\n"), std::string("\\\\n"), std::string("\\\\n")});
+      {"A\nB", "A\nB\nC", "\xE5\x9B\xBD\nA"},
+      {"\\n", "\\n", "\\n"},
+      {"\\\\n", "\\\\n", "\\\\n"});
   auto expected = convertOutput({"A\\nB", "A\\nB\\nC", "\xE5\x9B\xBD\\nA"}, 1);
   assertEqualVectors(result, expected);
 }
 
-// The same '\\' + letter replacement form must work for the control
-// characters that JSON escaping commonly substitutes: '\b' (0x08),
-// '\f' (0x0C), '\r' (0x0D) and '\t' (0x09). Each match must be replaced by
-// the two-byte literal '\X' sequence rather than being dropped.
+// Verifies that '\\' + letter replacements covering the control characters
+// that JSON escaping commonly substitutes -- '\\b' (0x08), '\\f' (0x0C),
+// '\\r' (0x0D), '\\t' (0x09) -- each produce the corresponding two-byte
+// literal '\\X' sequence.
 TEST_F(RegexFunctionsTest, regexpReplaceControlCharsReplacement) {
   auto result = testingRegexpReplaceRows(
-      {std::string("A\bB"),
-       std::string("A\fB"),
-       std::string("A\rB"),
-       std::string("A\tB")},
-      {std::string("\\x08"),
-       std::string("\\x0c"),
-       std::string("\\r"),
-       std::string("\\t")},
-      {std::string("\\\\b"),
-       std::string("\\\\f"),
-       std::string("\\\\r"),
-       std::string("\\\\t")});
+      {"A\bB", "A\fB", "A\rB", "A\tB"},
+      {"\\x08", "\\x0c", "\\r", "\\t"},
+      {"\\\\b", "\\\\f", "\\\\r", "\\\\t"});
   auto expected = convertOutput({"A\\bB", "A\\fB", "A\\rB", "A\\tB"}, 1);
   assertEqualVectors(result, expected);
 }
 
-// A replacement of the form '\X' where X is neither a digit nor another '\'
-// must drop the leading backslash and produce a literal 'X', matching
-// java.util.regex semantics. This covers cases such as '\{' -> '{' and
-// '\$' -> '$'.
+// Verifies that a replacement of the form '\\X', where X is neither a digit
+// nor another '\\', drops the leading backslash and produces a literal 'X',
+// matching java.util.regex semantics (e.g. '\\{' -> '{', '\\$' -> '$').
 TEST_F(RegexFunctionsTest, regexpReplaceUnescapesNonDigitNonBackslash) {
-  // Replacement column is C++ literal "\\{" = 2 bytes (backslash + '{').
-  // Java regex semantics drop the leading backslash, leaving literal '{'.
   auto result = testingRegexpReplaceRows(
-      {std::string("[{}]"), std::string("a$b")},
-      {std::string("\\[\\{"), std::string("\\$")},
-      {std::string("\\{"), std::string("#")});
+      {"[{}]", "a$b"}, {"\\[\\{", "\\$"}, {"\\{", "#"});
   auto expected = convertOutput({"{}]", "a#b"}, 1);
   assertEqualVectors(result, expected);
 }

@@ -409,25 +409,70 @@ FOLLY_ALWAYS_INLINE std::string prepareRegexpReplacePattern(
   return newPattern;
 }
 
-/// This function preprocesses an input replacement string to follow RE2 syntax
-/// for java.util.regex used by Presto and Spark. These are the replacements
-/// that are required.
-/// 1. RE2 replacement only supports group index capture, so we need to convert
-/// group name captures to group index captures.
-/// 2. Group index capture in java.util.regex replacement is '$N', while in RE2
-/// replacement it is '\N'. We need to convert it.
-/// 3. Replacement in RE2 only supports '\' followed by a digit or another '\',
-/// while java.util.regex will ignore '\' in replacements, so we need to
-/// unescape it.
+/// Translate a java.util.regex-style replacement string into the equivalent
+/// RE2 replacement.
 ///
-/// The unescape step in (3) is performed as a single left-to-right byte scan
-/// so that an escaped backslash '\\' is always consumed as one unit and the
-/// byte that follows it is preserved verbatim. This invariant is required by
-/// inputs such as '\\n' (a literal backslash followed by 'n'): the leading
-/// '\\' must be kept as-is, and the trailing 'n' must not be revisited as
-/// the target of another backslash-unescape, otherwise the replacement
-/// collapses to '\n' which RE2 then rejects, silently dropping the matched
-/// bytes from the input string.
+/// Both java.util.regex and RE2 treat '\\' as an escape introducer in the
+/// replacement, but they differ on what may follow:
+///   - '\\\\'      -> a single literal backslash (same in both).
+///   - '\\<digit>' -> back-reference (same in both, though Spark/Java also
+///                    accept the '$<digit>' form which the caller converts
+///                    separately).
+///   - '\\<other>' -> java.util.regex silently drops the backslash and keeps
+///                    the trailing character as a literal; RE2 rejects this
+///                    form. To bridge the two, we strip the backslash here.
+///
+/// The translation must consume the input in two-byte escape units. A regex
+/// pass cannot do this: given '\\\\X' (literal backslash followed by 'X'),
+/// the leftmost search for '\\<not-digit-not-backslash>' starts at offset 1,
+/// matches '\\X' and produces 'X', dropping the leading backslash that
+/// should have been kept. This byte-level loop walks the string left to
+/// right and always advances past a recognized escape unit as a whole.
+FOLLY_ALWAYS_INLINE std::string unescapeReplacement(
+    const std::string& replacement) {
+  std::string result;
+  result.reserve(replacement.size());
+  for (size_t i = 0; i < replacement.size();) {
+    const char current = replacement[i];
+    const bool hasNext = i + 1 < replacement.size();
+    if (current == '\\' && hasNext) {
+      const char following = replacement[i + 1];
+      if (following == '\\' || (following >= '0' && following <= '9')) {
+        // '\\\\' and '\\<digit>' have the same meaning in RE2 and in
+        // java.util.regex; keep them as a two-byte unit.
+        result.push_back(current);
+        result.push_back(following);
+        i += 2;
+      } else {
+        // '\\<other>' in java.util.regex is just <other>; emit the trailing
+        // byte and skip the backslash.
+        result.push_back(following);
+        i += 2;
+      }
+    } else {
+      // Plain byte, or a trailing lone '\\'. The latter is invalid in both
+      // engines; we keep the byte so RE2 surfaces the error later instead of
+      // silently dropping input here.
+      result.push_back(current);
+      ++i;
+    }
+  }
+  return result;
+}
+
+/// This function preprocesses an input replacement string to follow RE2
+/// syntax for java.util.regex used by Presto and Spark. The required
+/// transformations are:
+/// 1. RE2 replacement only supports group index capture, so named capturing
+/// group references are converted to numbered captures.
+/// 2. Group index capture in java.util.regex replacement is '$N', while in
+/// RE2 replacement it is '\N'. We convert it.
+/// 3. java.util.regex silently drops a backslash that is followed by any
+/// character other than another backslash or a digit; RE2 instead rejects
+/// such sequences. To match Spark/Presto semantics we strip the leading
+/// backslash before passing the replacement to RE2. The transformation is
+/// done by unescapeReplacement(); see that function for why it cannot be
+/// expressed as another regex pass.
 FOLLY_ALWAYS_INLINE std::string prepareRegexpReplaceReplacement(
     const RE2& re,
     const StringView& replacement) {
@@ -476,42 +521,7 @@ FOLLY_ALWAYS_INLINE std::string prepareRegexpReplaceReplacement(
       kConvertRegex.error());
   RE2::GlobalReplace(&newReplacement, kConvertRegex, R"(\\\1)");
 
-  // Un-escape character except digit or '\\'.
-  // We scan byte by byte so that an escaped backslash '\\' is always consumed
-  // as a single unit; the following byte is then preserved verbatim and is
-  // never mistaken for the start of another '\X' escape sequence. This avoids
-  // a regression where input like '\\n' (literal backslash + 'n') was being
-  // turned into '\n' by RE2::GlobalReplace, which subsequently failed in
-  // RE2::Rewrite and silently dropped matched bytes from the input string.
-  std::string unescaped;
-  unescaped.reserve(newReplacement.size());
-  for (size_t i = 0; i < newReplacement.size();) {
-    const char c = newReplacement[i];
-    if (c == '\\' && i + 1 < newReplacement.size()) {
-      const char next = newReplacement[i + 1];
-      if (next == '\\' || (next >= '0' && next <= '9')) {
-        // Preserve '\\' (literal backslash in RE2) and '\<digit>'
-        // (RE2 numbered backreference) as a two-byte unit.
-        unescaped.push_back(c);
-        unescaped.push_back(next);
-        i += 2;
-      } else {
-        // '\X' where X is neither a digit nor '\' -> emit literal X, matching
-        // java.util.regex semantics that silently ignores the backslash.
-        unescaped.push_back(next);
-        i += 2;
-      }
-    } else {
-      // Plain byte (or trailing lone '\\' which RE2::Rewrite will reject; we
-      // keep prior behavior of letting RE2 surface the error rather than
-      // silently dropping the byte here).
-      unescaped.push_back(c);
-      ++i;
-    }
-  }
-  newReplacement = std::move(unescaped);
-
-  return newReplacement;
+  return unescapeReplacement(newReplacement);
 }
 
 } // namespace facebook::velox::functions
