@@ -206,7 +206,7 @@ TEST_F(AbfsReadTest, nonExistentBlobCudfAbfsIoSource) {
 // BufferedInput fails to open non-existent blob and the registry has no
 // ABFS IO source registered as fallback.
 TEST_F(AbfsReadTest, nonExistentBlobNoFallback) {
-  cudf_io_sources::unregisterCudfAbfsIoSource();
+  cudf_io_sources::unregisterCudfIoSources();
   SCOPE_EXIT {
     cudf_io_sources::registerCudfAbfsIoSource();
   };
@@ -223,7 +223,7 @@ TEST_F(AbfsReadTest, nonExistentBlobNoFallback) {
 // No registered cuDF IO source for the ABFS path when BufferedInput is
 // disabled.
 TEST_F(AbfsReadTest, noAvailableIoSource) {
-  cudf_io_sources::unregisterCudfAbfsIoSource();
+  cudf_io_sources::unregisterCudfIoSources();
   SCOPE_EXIT {
     cudf_io_sources::registerCudfAbfsIoSource();
   };
