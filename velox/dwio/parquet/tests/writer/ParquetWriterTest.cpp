@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <arrow/io/memory.h>
 #include <arrow/type.h>
 #include <folly/init/Init.h>
 #include "velox/dwio/parquet/writer/arrow/tests/TestUtil.h"
@@ -29,6 +30,8 @@
 #include "velox/dwio/parquet/reader/PageReader.h"
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
 #include "velox/dwio/parquet/writer/WriterConfig.h"
+#include "velox/dwio/parquet/writer/arrow/tests/ColumnReader.h"
+#include "velox/dwio/parquet/writer/arrow/tests/FileReader.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -42,6 +45,7 @@ using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::parquet;
 using namespace facebook::velox::common::testutil;
+namespace parquetArrow = facebook::velox::parquet::arrow;
 
 class ParquetWriterTest : public ParquetTestBase {
  protected:
@@ -672,6 +676,74 @@ TEST_F(ParquetWriterTest, parquetWriteWithArrowMemoryPool) {
   writerOptions.arrowMemoryPool = std::make_shared<ArrowMemoryPool>();
 
   write(data, writerOptions);
+}
+
+TEST_F(ParquetWriterTest, preEpochInt96Timestamp) {
+  auto schema = ROW({"c0"}, {TIMESTAMP()});
+  auto data = makeRowVector({makeFlatVector<Timestamp>({
+      Timestamp(-86'401, 0),
+      Timestamp(-86'400, 0),
+      Timestamp(-3'600, 0),
+      Timestamp(-1, 0),
+      Timestamp(0, 0),
+      Timestamp(1, 0),
+  })});
+
+  parquet::WriterOptions writerOptions;
+  writerOptions.memoryPool = rootPool_.get();
+  writerOptions.parquetWriteTimestampUnit = TimestampPrecision::kNanoseconds;
+  writerOptions.writeInt96AsTimestamp = true;
+
+  auto* sinkPtr = write(data, writerOptions);
+
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
+  auto reader = createReaderInMemory(*sinkPtr, readerOptions);
+
+  ASSERT_EQ(reader->numberOfRows(), data->size());
+  ASSERT_EQ(*reader->rowType(), *schema);
+
+  auto rowReader = createRowReaderWithSchema(std::move(reader), schema);
+  assertReadWithReaderAndExpected(schema, *rowReader, data, *leafPool_);
+
+  // Read the Int96 values directly to verify the correctness of the conversion
+  // from Timestamp to Int96.
+  std::string_view sinkData(sinkPtr->data(), sinkPtr->size());
+  auto arrowBufferReader = std::make_shared<::arrow::io::BufferReader>(
+      std::make_shared<::arrow::Buffer>(
+          reinterpret_cast<const uint8_t*>(sinkData.data()), sinkData.size()));
+  auto fileReader = parquetArrow::ParquetFileReader::open(arrowBufferReader);
+  auto int96Reader = std::dynamic_pointer_cast<parquetArrow::Int96Reader>(
+      fileReader->rowGroup(0)->column(0));
+  ASSERT_NE(int96Reader, nullptr);
+
+  std::vector<parquetArrow::Int96> values(data->size());
+  int64_t valuesRead = 0;
+  ASSERT_EQ(
+      int96Reader->readBatch(
+          data->size(), nullptr, nullptr, values.data(), &valuesRead),
+      data->size());
+  ASSERT_EQ(valuesRead, data->size());
+
+  const std::vector<std::pair<int32_t, uint64_t>> expected = {
+      {-2, 86'399'000'000'000},
+      {-1, 0},
+      {-1, 23LL * 3'600 * 1'000'000'000},
+      {-1, 86'399'000'000'000},
+      {0, 0},
+      {0, 1'000'000'000},
+  };
+
+  for (auto i = 0; i < values.size(); ++i) {
+    const auto decoded = parquetArrow::decodeInt96Timestamp(values[i]);
+    EXPECT_EQ(
+        values[i].value[2],
+        static_cast<uint32_t>(
+            parquetArrow::kJulianToUnixEpochDays + expected[i].first));
+    EXPECT_EQ(decoded.nanoseconds, expected[i].second);
+    EXPECT_LT(decoded.nanoseconds, parquetArrow::kNanosecondsPerDay);
+  }
 }
 
 TEST_F(ParquetWriterTest, updateWriterOptionsFromHiveConfig) {
