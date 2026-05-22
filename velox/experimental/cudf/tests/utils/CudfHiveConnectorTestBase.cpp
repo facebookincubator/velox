@@ -69,7 +69,7 @@ void CudfHiveConnectorTestBase::SetUp() {
   // Register cudf to enable the CudfDatasource creation from CudfHiveConnector
   facebook::velox::cudf_velox::registerCudf();
 
-  // Install KvikIO IO source to read local and S3 files.
+  // Register KvikIO IO source to read local and S3 files.
   facebook::velox::cudf_velox::connector::hive::io_sources::
       registerCudfKvikIoSource();
 
