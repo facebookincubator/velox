@@ -111,6 +111,7 @@ add_executable(
   MultimapFromEntriesTest.cpp
   NotTest.cpp
   ParsePrestoDataSizeTest.cpp
+  PrestoQueryConfigTest.cpp
   ProbabilityTest.cpp
   RandTest.cpp
   ReduceTest.cpp
