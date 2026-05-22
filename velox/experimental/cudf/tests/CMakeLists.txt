@@ -43,26 +43,6 @@ function(velox_add_cudf_test)
   target_link_libraries(${ARG_NAME} ${ARG_LIBS} gtest gtest_main)
 endfunction()
 
-if(VELOX_ENABLE_ABFS)
-  velox_add_cudf_test(
-    NAME velox_cudf_abfs_read_test
-    SOURCES
-      Main.cpp
-      AbfsReadTest.cpp
-      ${CMAKE_SOURCE_DIR}/velox/connectors/hive/storage_adapters/abfs/tests/AzuriteServer.cpp
-    LIBS
-      velox_cudf_exec_test_lib
-      velox_cudf_hive_connector
-      velox_cudf_abfs
-      velox_abfs
-      velox_file
-      velox_exec
-      velox_exec_test_lib
-      velox_test_util
-  )
-  target_compile_options(velox_cudf_abfs_read_test PRIVATE -Wno-deprecated-declarations)
-endif()
-
 velox_add_cudf_test(
   NAME velox_cudf_adapter_operator_test
   SOURCES Main.cpp AdapterOperatorTest.cpp
@@ -185,6 +165,7 @@ if(VELOX_ENABLE_S3)
     LIBS
       velox_cudf_exec_test_lib
       velox_cudf_hive_connector
+      velox_cudf_kvikio_io_source
       velox_exec
       velox_exec_test_lib
       velox_file

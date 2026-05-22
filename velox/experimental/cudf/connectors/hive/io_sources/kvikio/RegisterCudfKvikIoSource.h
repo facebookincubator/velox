@@ -16,14 +16,10 @@
 
 #pragma once
 
-namespace facebook::velox::cudf_velox::filesystems {
+namespace facebook::velox::cudf_velox::connector::hive::io_sources {
 
-/// Registers `CudfAbfsDataSource` in the cudf datasource registry so
-/// that any `abfs://` / `abfss://` URI handed to
-/// `getCudfDataSource` is served by the native zero-copy datasource.
-/// Mirrors `facebook::velox::filesystems::registerAbfsFileSystem`.
-/// Safe to call multiple times; only the first call registers.
-/// No-op when `VELOX_ENABLE_ABFS` is not defined.
-void registerCudfAbfsDataSource();
+/// Installs KvikIO datasource serving local and S3 files, as well as any
+/// paths not claimed by a backend-specific matcher-based registration.
+void registerCudfKvikIoSource();
 
-} // namespace facebook::velox::cudf_velox::filesystems
+} // namespace facebook::velox::cudf_velox::connector::hive::io_sources

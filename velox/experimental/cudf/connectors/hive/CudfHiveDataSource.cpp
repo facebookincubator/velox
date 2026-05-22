@@ -170,20 +170,7 @@ void CudfHiveDataSource::convertSplit(std::shared_ptr<ConnectorSplit> split) {
       dwio::common::FileFormat::PARQUET,
       "Unsupported file format for conversion from HiveConnectorSplit to CudfHiveConnectorSplit");
 
-  // Remove "file:" prefix from the file path if present. abfs:// and abfss://
-  // remain unmodified so filesystems::getFileSystem routes them directly to
-  // CudfABFSDataSource, or AbfsFileSystem via BufferedInputDataSource
-  std::string cleanedPath = hiveSplit->filePath;
-  constexpr std::string_view kFilePrefix = "file:";
-  constexpr std::string_view kS3APrefix = "s3a:";
-  if (cleanedPath.compare(0, kFilePrefix.size(), kFilePrefix) == 0) {
-    cleanedPath = cleanedPath.substr(kFilePrefix.size());
-  } else if (cleanedPath.compare(0, kS3APrefix.size(), kS3APrefix) == 0) {
-    // KvikIO does not support "s3a:" prefix. We need to translate it to "s3:".
-    cleanedPath.erase(kS3APrefix.size() - 2, 1);
-  }
-
-  auto cudfHiveSplitBuilder = CudfHiveConnectorSplitBuilder(cleanedPath)
+  auto cudfHiveSplitBuilder = CudfHiveConnectorSplitBuilder(hiveSplit->filePath)
                                   .start(hiveSplit->start)
                                   .length(hiveSplit->length)
                                   .connectorId(hiveSplit->connectorId)

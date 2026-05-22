@@ -12,13 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(velox_cudf_datasource_registry CudfDataSourceRegistry.cpp)
+add_library(velox_cudf_kvikio_io_source RegisterCudfKvikIoSource.cpp)
 
 target_link_libraries(
-  velox_cudf_datasource_registry
-  PUBLIC velox_common_config cudf::cudf
+  velox_cudf_kvikio_io_source
+  PUBLIC velox_cudf_io_source_registry cudf::cudf
 )
-
-if(VELOX_ENABLE_ABFS)
-  add_subdirectory(abfs)
-endif()

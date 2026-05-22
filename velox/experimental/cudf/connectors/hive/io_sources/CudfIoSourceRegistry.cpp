@@ -14,23 +14,24 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/connectors/hive/storage_adapters/CudfDataSourceRegistry.h"
+#include "velox/experimental/cudf/connectors/hive/io_sources/CudfIoSourceRegistry.h"
 
 #include <mutex>
 #include <utility>
 #include <vector>
 
-namespace facebook::velox::cudf_velox::filesystems {
+namespace facebook::velox::cudf_velox::connector::hive::io_sources {
 
 namespace {
 
 struct Entry {
-  CudfDataSourceMatcher matcher;
-  CudfDataSourceGenerator generator;
+  CudfIoSourceMatcher matcher;
+  CudfIoSourceFactory factory;
 };
 
-// Guards mutation of the singleton entry vector. Reads happen on the hot
-// path so the lock is acquired only during registration.
+// Guards mutation of the singleton entry vector and the default-slot
+// factory. Reads happen on the hot path but the lock is brief and the
+// registration list is small, so a single mutex is sufficient.
 std::mutex& registryMutex() {
   static std::mutex mutex;
   return mutex;
@@ -41,30 +42,44 @@ std::vector<Entry>& registry() {
   return entries;
 }
 
-} // namespace
-
-void registerCudfDataSource(
-    CudfDataSourceMatcher matcher,
-    CudfDataSourceGenerator generator) {
-  std::lock_guard<std::mutex> lock(registryMutex());
-  registry().push_back(Entry{std::move(matcher), std::move(generator)});
+CudfIoSourceFactory& defaultFactory() {
+  static CudfIoSourceFactory factory;
+  return factory;
 }
 
-std::shared_ptr<cudf::io::datasource> getCudfDataSource(
+} // namespace
+
+void registerCudfIoSource(
+    CudfIoSourceMatcher matcher,
+    CudfIoSourceFactory factory) {
+  std::lock_guard<std::mutex> lock(registryMutex());
+  registry().push_back(Entry{std::move(matcher), std::move(factory)});
+}
+
+void registerCudfDefaultIoSource(CudfIoSourceFactory factory) {
+  std::lock_guard<std::mutex> lock(registryMutex());
+  defaultFactory() = std::move(factory);
+}
+
+std::shared_ptr<cudf::io::datasource> getCudfIoSource(
     std::string_view path,
     const std::shared_ptr<const config::ConfigBase>& properties) {
   std::lock_guard<std::mutex> lock(registryMutex());
   for (const auto& entry : registry()) {
     if (entry.matcher(path)) {
-      return entry.generator(path, properties);
+      return entry.factory(path, properties);
     }
+  }
+  if (defaultFactory()) {
+    return defaultFactory()(path, properties);
   }
   return nullptr;
 }
 
-void unregisterCudfDataSources() {
+void unregisterCudfIoSources() {
   std::lock_guard<std::mutex> lock(registryMutex());
   registry().clear();
+  defaultFactory() = nullptr;
 }
 
-} // namespace facebook::velox::cudf_velox::filesystems
+} // namespace facebook::velox::cudf_velox::connector::hive::io_sources

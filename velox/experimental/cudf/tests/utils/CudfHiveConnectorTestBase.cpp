@@ -15,6 +15,7 @@
  */
 
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
+#include "velox/experimental/cudf/connectors/hive/io_sources/kvikio/RegisterCudfKvikIoSource.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
@@ -73,6 +74,10 @@ void CudfHiveConnectorTestBase::SetUp() {
 
   // Register cudf to enable the CudfDatasource creation from CudfHiveConnector
   facebook::velox::cudf_velox::registerCudf();
+
+  // Install KvikIO IO source to read local and S3 files.
+  facebook::velox::cudf_velox::connector::hive::io_sources::
+      registerCudfKvikIoSource();
 
   // Register Hive connector
   facebook::velox::cudf_velox::connector::hive::CudfHiveConnectorFactory

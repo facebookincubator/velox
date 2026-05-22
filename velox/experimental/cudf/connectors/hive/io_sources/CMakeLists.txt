@@ -12,17 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-if(VELOX_ENABLE_ABFS)
-  add_library(
-    velox_cudf_abfs
-    CudfAbfsDataSource.cpp
-    CudfAbfsPinnedBufferPool.cpp
-    RegisterCudfAbfsDataSource.cpp
-  )
+add_library(velox_cudf_io_source_registry CudfIoSourceRegistry.cpp)
 
-  target_link_libraries(
-    velox_cudf_abfs
-    PUBLIC velox_abfs velox_cudf_datasource_registry cudf::cudf
-    PRIVATE Azure::azure-storage-blobs Azure::azure-storage-files-datalake CUDA::cudart
-  )
-endif()
+target_link_libraries(
+  velox_cudf_io_source_registry
+  PUBLIC velox_common_config cudf::cudf
+)
+
+add_subdirectory(kvikio)

@@ -26,14 +26,13 @@ add_library(
 
 set_target_properties(velox_cudf_hive_connector PROPERTIES CUDA_ARCHITECTURES native)
 
-add_subdirectory(storage_adapters)
+add_subdirectory(io_sources)
 
 target_link_libraries(
   velox_cudf_hive_connector
-  PRIVATE velox_dwio_common velox_hive_connector velox_cudf_datasource_registry
+  PRIVATE
+    velox_dwio_common
+    velox_hive_connector
+    velox_cudf_io_source_registry
   PUBLIC cudf::cudf velox_cudf_expression
 )
-
-if(VELOX_ENABLE_ABFS)
-  target_link_libraries(velox_cudf_hive_connector PRIVATE velox_abfs velox_cudf_abfs)
-endif()
