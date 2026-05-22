@@ -30,7 +30,7 @@ add_subdirectory(storage_adapters)
 
 target_link_libraries(
   velox_cudf_hive_connector
-  PRIVATE velox_dwio_common velox_hive_connector
+  PRIVATE velox_dwio_common velox_hive_connector velox_cudf_datasource_registry
   PUBLIC cudf::cudf velox_cudf_expression
 )
 

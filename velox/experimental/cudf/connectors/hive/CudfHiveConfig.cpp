@@ -143,17 +143,6 @@ bool CudfHiveConfig::useExperimentalCudfReaderSession(
       config_->get<bool>(kUseExperimentalCudfReader, false));
 }
 
-bool CudfHiveConfig::useNativeAbfsDataSource() const {
-  return config_->get<bool>(kUseNativeAbfsDataSource, false);
-}
-
-bool CudfHiveConfig::useNativeAbfsDataSourceSession(
-    const config::ConfigBase* session) const {
-  return session->get<bool>(
-      kUseNativeAbfsDataSourceSession,
-      config_->get<bool>(kUseNativeAbfsDataSource, false));
-}
-
 bool CudfHiveConfig::immutableFiles() const {
   return config_->get<bool>(kImmutableFiles, false);
 }

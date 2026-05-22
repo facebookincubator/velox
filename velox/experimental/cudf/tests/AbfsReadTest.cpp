@@ -33,6 +33,7 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
+#include <folly/ScopeGuard.h>
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include <gtest/gtest.h>
 
@@ -55,6 +56,16 @@ class AbfsReadTest : public ::testing::Test, public test::VectorTestBase {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+
+    velox_filesystems::registerLocalFileSystem();
+    velox_filesystems::registerAbfsFileSystem();
+    cudf_velox::filesystems::registerCudfAbfsDataSource();
+    cudf_velox::registerCudf();
+  }
+
+  static void TearDownTestCase() {
+    cudf_velox::filesystems::unregisterCudfDataSources();
+    cudf_velox::unregisterCudf();
   }
 
   void SetUp() override {
@@ -63,10 +74,6 @@ class AbfsReadTest : public ::testing::Test, public test::VectorTestBase {
     azuriteServer_ =
         std::make_unique<velox_filesystems::AzuriteServer>(kAzuritePort);
     azuriteServer_->start();
-
-    velox_filesystems::registerLocalFileSystem();
-    velox_filesystems::registerAbfsFileSystem();
-    cudf_velox::filesystems::registerCudfAbfsDataSource();
 
     // Force the cudf hive connector to use the BufferedInput data source to
     // read using the upstream AbfsFileSystem instead of KvikIO. Also declare
@@ -80,8 +87,6 @@ class AbfsReadTest : public ::testing::Test, public test::VectorTestBase {
 
     velox_filesystems::registerAzureClientProvider(*hiveConfig);
 
-    cudf_velox::registerCudf();
-
     cudf_velox::connector::hive::CudfHiveConnectorFactory factory;
     auto hiveConnector = factory.newConnector(
         kCudfHiveConnectorId, hiveConfig, ioExecutor_.get());
@@ -91,8 +96,6 @@ class AbfsReadTest : public ::testing::Test, public test::VectorTestBase {
 
   void TearDown() override {
     connector::ConnectorRegistry::global().erase(kCudfHiveConnectorId);
-    cudf_velox::unregisterCudf();
-    cudf_velox::filesystems::unregisterCudfDataSources();
     if (azuriteServer_) {
       azuriteServer_->stop();
       azuriteServer_.reset();
@@ -143,7 +146,7 @@ class AbfsReadTest : public ::testing::Test, public test::VectorTestBase {
 } // namespace
 
 // Reads a Parquet file from an ABFS path
-TEST_F(AbfsReadTest, readAbfsSource) {
+TEST_F(AbfsReadTest, readWithBufferedInput) {
   const auto abfsFilePath = uploadSourceFile();
   auto plan = tableScanNode();
   auto split = makeSplit(abfsFilePath);
@@ -153,27 +156,62 @@ TEST_F(AbfsReadTest, readAbfsSource) {
   assertEqualResults({expectedVector()}, {actual});
 }
 
-// Reads a Parquet file from an ABFS path via the native zero-copy
+// Reads a Parquet file from an ABFS path via the zero-copy
 // CudfAbfsDataSource, selected by the session property.
-TEST_F(AbfsReadTest, readAbfsSourceNativeDataSource) {
+TEST_F(AbfsReadTest, readWithCudfAbfsDataSource) {
   const auto abfsFilePath = uploadSourceFile();
   auto plan = tableScanNode();
   auto split = makeSplit(abfsFilePath);
 
   auto actual = AssertQueryBuilder(plan)
-                    .split(split)
                     .connectorSessionProperty(
                         kCudfHiveConnectorId,
                         cudf_velox::connector::hive::CudfHiveConfig::
-                            kUseNativeAbfsDataSourceSession,
-                        "true")
+                            kUseBufferedInputSession,
+                        "false")
+                    .split(split)
                     .copyResults(pool());
   assertEqualResults({expectedVector()}, {actual});
 }
 
 // An invalid ABFS split throws instead of falling back to the KvikIO data
 // source
-TEST_F(AbfsReadTest, nonExistentBlob) {
+TEST_F(AbfsReadTest, nonExistentBlobBufferedInput) {
+  const auto missingPath = azuriteServer_->URI() + "does_not_exist.parquet";
+  auto plan = tableScanNode();
+  auto split = makeSplit(missingPath);
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).split(split).copyResults(pool()),
+      "encountered azure storage exception");
+}
+
+// Non existent blob with CudfAbfsDataSource
+TEST_F(AbfsReadTest, nonExistentBlobCudfAbfsDatasource) {
+  const auto missingPath = azuriteServer_->URI() + "does_not_exist.parquet";
+  auto plan = tableScanNode();
+  auto split = makeSplit(missingPath);
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan)
+          .connectorSessionProperty(
+              kCudfHiveConnectorId,
+              cudf_velox::connector::hive::CudfHiveConfig::
+                  kUseBufferedInputSession,
+              "false")
+          .split(split)
+          .copyResults(pool()),
+      "encountered azure storage exception");
+}
+
+// Buffered input fails to open non existent blob and the fallback
+// is also not available
+TEST_F(AbfsReadTest, nonExistentBlobNoFallback) {
+  cudf_velox::filesystems::unregisterCudfDataSources();
+  SCOPE_EXIT {
+    cudf_velox::filesystems::registerCudfAbfsDataSource();
+  };
+
   const auto missingPath = azuriteServer_->URI() + "does_not_exist.parquet";
   auto plan = tableScanNode();
   auto split = makeSplit(missingPath);
@@ -183,9 +221,13 @@ TEST_F(AbfsReadTest, nonExistentBlob) {
       "Failed to generate file handle cache for ABFS path");
 }
 
-// Disabling buffered input for an ABFS split throws instead of falling back to
-// the KvikIO data source
-TEST_F(AbfsReadTest, bufferedInputDisabledForAbfs) {
+// No available datasource for ABFS path
+TEST_F(AbfsReadTest, noAvailableDataSource) {
+  cudf_velox::filesystems::unregisterCudfDataSources();
+  SCOPE_EXIT {
+    cudf_velox::filesystems::registerCudfAbfsDataSource();
+  };
+
   const auto abfsFilePath = uploadSourceFile();
   auto plan = tableScanNode();
   auto split = makeSplit(abfsFilePath);
@@ -199,7 +241,7 @@ TEST_F(AbfsReadTest, bufferedInputDisabledForAbfs) {
               "false")
           .split(split)
           .copyResults(pool()),
-      "ABFS paths require buffered input data source");
+      "ABFS path requires a registered native cuDF datasource");
 }
 
 // Multiple independent queries reading the same ABFS blob in parallel must
@@ -221,7 +263,14 @@ TEST_F(AbfsReadTest, concurrentSplits) {
         std::this_thread::yield();
       }
       auto split = makeSplit(abfsFilePath);
-      results[i] = AssertQueryBuilder(plan).split(split).copyResults(pool());
+      results[i] = AssertQueryBuilder(plan)
+                       .split(split)
+                       .connectorSessionProperty(
+                           kCudfHiveConnectorId,
+                           cudf_velox::connector::hive::CudfHiveConfig::
+                               kUseBufferedInputSession,
+                           i % 2 == 0 ? "true" : "false")
+                       .copyResults(pool());
     });
   }
   startThreads.store(true, std::memory_order_release);

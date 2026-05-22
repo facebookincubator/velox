@@ -88,14 +88,6 @@ class CudfHiveConfig {
   static constexpr const char* kUseExperimentalCudfReaderSession =
       "cudf.hive.use_experimental_reader";
 
-  // Whether to route ABFS reads through the native cudf ABFS datasource
-  // (zero-copy onto the GPU via pinned-host + DMA) instead of through
-  // Velox's BufferedInput. When false, Phase 1 behavior is preserved.
-  static constexpr const char* kUseNativeAbfsDataSource =
-      "cudf.hive.use-native-abfs-datasource";
-  static constexpr const char* kUseNativeAbfsDataSourceSession =
-      "cudf.hive.use_native_abfs_datasource";
-
   // Writer config options
 
   /// Whether new data can be inserted into a CudfHive file
@@ -166,9 +158,6 @@ class CudfHiveConfig {
   bool useExperimentalCudfReader() const;
   bool useExperimentalCudfReaderSession(
       const config::ConfigBase* session) const;
-
-  bool useNativeAbfsDataSource() const;
-  bool useNativeAbfsDataSourceSession(const config::ConfigBase* session) const;
 
   bool immutableFiles() const;
 

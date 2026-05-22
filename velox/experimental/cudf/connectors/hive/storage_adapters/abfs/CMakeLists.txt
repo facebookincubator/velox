@@ -15,7 +15,6 @@
 if(VELOX_ENABLE_ABFS)
   add_library(
     velox_cudf_abfs
-    ../CudfDataSourceRegistry.cpp
     CudfAbfsDataSource.cpp
     CudfAbfsPinnedBufferPool.cpp
     RegisterCudfAbfsDataSource.cpp
@@ -23,7 +22,7 @@ if(VELOX_ENABLE_ABFS)
 
   target_link_libraries(
     velox_cudf_abfs
-    PUBLIC velox_abfs cudf::cudf
+    PUBLIC velox_abfs velox_cudf_datasource_registry cudf::cudf
     PRIVATE Azure::azure-storage-blobs Azure::azure-storage-files-datalake CUDA::cudart
   )
 endif()
