@@ -49,19 +49,6 @@ namespace facebook::velox::cudf_velox::connector::hive {
 using namespace facebook::velox::connector;
 using namespace facebook::velox::connector::hive;
 
-namespace {
-
-// Checks whether the `path` uses an ABFS scheme
-bool isAbfsPath([[maybe_unused]] const std::string_view path) {
-#ifdef VELOX_ENABLE_ABFS
-  return ::facebook::velox::filesystems::isAbfsFile(path);
-#else
-  return false;
-#endif
-}
-
-} // namespace
-
 CudfSplitReader::CudfSplitReader(
     std::shared_ptr<CudfHiveConnectorSplit> split,
     std::shared_ptr<const HiveTableHandle> tableHandle,
@@ -230,20 +217,9 @@ void CudfSplitReader::setupCudfDataSource() {
     return;
   }
 
-  const auto useBufferedInput = cudfHiveConfig_->useBufferedInputSession(
-      connectorQueryCtx_->sessionProperties());
-
-  VELOX_CHECK(
-      not isAbfsPath(split_->filePath) or useBufferedInput,
-      "ABFS paths require buffered input data source. "
-      "Set the session property '{}' (or connector property '{}') to 'true'. "
-      "Path: {}.",
-      CudfHiveConfig::kUseBufferedInputSession,
-      CudfHiveConfig::kUseBufferedInput,
-      split_->filePath);
-
   // Use file data source if we don't want to use the BufferedInput source
-  if (not useBufferedInput) {
+  if (not cudfHiveConfig_->useBufferedInputSession(
+          connectorQueryCtx_->sessionProperties())) {
     VLOG(1) << "Using file data source for CudfSplitReader";
     dataSource_ = std::move(
         cudf::io::make_datasources(cudf::io::source_info{split_->filePath})
@@ -261,16 +237,6 @@ void CudfSplitReader::setupCudfDataSource() {
         fileHandleKey, &fileProperties, ioStats_ ? ioStats_.get() : nullptr);
     VELOX_CHECK_NOT_NULL(fileHandleCachePtr.get());
   } catch (const VeloxRuntimeError& e) {
-    // ABFS paths can not fall back to KvikIO. Throw the original error.
-    if (isAbfsPath(split_->filePath)) {
-      VELOX_USER_FAIL(
-          "Failed to generate file handle cache for ABFS path. Ensure "
-          "registerAbfsFileSystem() and registerAzureClientProvider() have "
-          "been called and the connector config provides Azure credentials. "
-          "Path: {}. Error: {}.",
-          split_->filePath,
-          e.what());
-    }
     LOG(WARNING) << fmt::format(
         "Failed to generate file handle cache for file. Falling back to KvikIO. Path: {}",
         split_->filePath);
@@ -297,13 +263,6 @@ void CudfSplitReader::setupCudfDataSource() {
           ioStats_,
           executor_);
   if (not bufferedInput) {
-    // ABFS paths can not fall back to KvikIO
-    if (isAbfsPath(split_->filePath)) {
-      VELOX_USER_FAIL(
-          "Failed to create buffered input data source for the ABFS path. Ensure that the registered "
-          "BufferedInputBuilder is ABFS-aware. Path: {}.",
-          split_->filePath);
-    }
     LOG(WARNING) << fmt::format(
         "Failed to create buffered input data source for file. Falling back to the KvikIO. Path: {}",
         split_->filePath);

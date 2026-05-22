@@ -31,6 +31,7 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
+#include <folly/ScopeGuard.h>
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include <gtest/gtest.h>
 
@@ -53,22 +54,23 @@ class AbfsReadTest : public ::testing::Test, public test::VectorTestBase {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
-  }
 
-  void SetUp() override {
+    velox_filesystems::registerLocalFileSystem();
+    velox_filesystems::registerAbfsFileSystem();
+    cudf_velox::registerCudf();
+
+    // TODO(mh): Register CudfAbfsDataSource when available
+
     ioExecutor_ = std::make_shared<folly::IOThreadPoolExecutor>(3);
 
     azuriteServer_ =
         std::make_unique<velox_filesystems::AzuriteServer>(kAzuritePort);
     azuriteServer_->start();
 
-    velox_filesystems::registerLocalFileSystem();
-    velox_filesystems::registerAbfsFileSystem();
-
     // Force the cudf hive connector to use the BufferedInput data source to
-    // read using the upstream AbfsFileSystem instead of KvikIO. Also declare
-    // the Azurite account's auth type so registerAzureClientProvider picks it
-    // up and registers a SharedKey factory for the Azurite account.
+    // read using the upstream AbfsFileSystem . Also declare the Azurite
+    // account's auth type so registerAzureClientProvider picks it up and
+    // registers a SharedKey factory for the Azurite account.
     auto hiveConfig = azuriteServer_->hiveConfig(
         {{cudf_velox::connector::hive::CudfHiveConfig::kUseBufferedInput,
           "true"},
@@ -77,8 +79,6 @@ class AbfsReadTest : public ::testing::Test, public test::VectorTestBase {
 
     velox_filesystems::registerAzureClientProvider(*hiveConfig);
 
-    cudf_velox::registerCudf();
-
     cudf_velox::connector::hive::CudfHiveConnectorFactory factory;
     auto hiveConnector = factory.newConnector(
         kCudfHiveConnectorId, hiveConfig, ioExecutor_.get());
@@ -86,14 +86,16 @@ class AbfsReadTest : public ::testing::Test, public test::VectorTestBase {
         hiveConnector->connectorId(), hiveConnector);
   }
 
-  void TearDown() override {
+  static void TearDownTestCase() {
     connector::ConnectorRegistry::global().erase(kCudfHiveConnectorId);
-    cudf_velox::unregisterCudf();
     if (azuriteServer_) {
       azuriteServer_->stop();
       azuriteServer_.reset();
     }
     ioExecutor_.reset();
+
+    // TODO(mh): Unregister cuDF to remove the CudfAbfsDataSource
+    cudf_velox::unregisterCudf();
   }
 
   std::string uploadSourceFile() {
@@ -132,14 +134,15 @@ class AbfsReadTest : public ::testing::Test, public test::VectorTestBase {
              kIntParquetRows, [](auto row) { return row + 1000; })});
   }
 
-  std::unique_ptr<velox_filesystems::AzuriteServer> azuriteServer_;
-  std::shared_ptr<folly::IOThreadPoolExecutor> ioExecutor_;
+  inline static std::unique_ptr<velox_filesystems::AzuriteServer>
+      azuriteServer_;
+  inline static std::shared_ptr<folly::IOThreadPoolExecutor> ioExecutor_;
 };
 
 } // namespace
 
 // Reads a Parquet file from an ABFS path
-TEST_F(AbfsReadTest, readAbfsSource) {
+TEST_F(AbfsReadTest, readWithBufferedInput) {
   const auto abfsFilePath = uploadSourceFile();
   auto plan = tableScanNode();
   auto split = makeSplit(abfsFilePath);
@@ -151,19 +154,18 @@ TEST_F(AbfsReadTest, readAbfsSource) {
 
 // An invalid ABFS split throws instead of falling back to the KvikIO data
 // source
-TEST_F(AbfsReadTest, nonExistentBlob) {
+TEST_F(AbfsReadTest, nonExistentBlobBufferedInput) {
   const auto missingPath = azuriteServer_->URI() + "does_not_exist.parquet";
   auto plan = tableScanNode();
   auto split = makeSplit(missingPath);
 
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(plan).split(split).copyResults(pool()),
-      "Failed to generate file handle cache for ABFS path");
+      "encountered azure storage exception");
 }
 
-// Disabling buffered input for an ABFS split throws instead of falling back to
-// the KvikIO data source
-TEST_F(AbfsReadTest, bufferedInputDisabledForAbfs) {
+// No available datasource for ABFS path
+TEST_F(AbfsReadTest, noAvailableDataSource) {
   const auto abfsFilePath = uploadSourceFile();
   auto plan = tableScanNode();
   auto split = makeSplit(abfsFilePath);
@@ -177,7 +179,7 @@ TEST_F(AbfsReadTest, bufferedInputDisabledForAbfs) {
               "false")
           .split(split)
           .copyResults(pool()),
-      "ABFS paths require buffered input data source");
+      "ABFS path requires a registered native cuDF datasource");
 }
 
 // Multiple independent queries reading the same ABFS blob in parallel must

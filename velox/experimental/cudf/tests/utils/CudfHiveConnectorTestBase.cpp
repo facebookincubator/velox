@@ -25,9 +25,6 @@
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/RegisterS3FileSystem.h"
-#ifdef VELOX_ENABLE_ABFS
-#include "velox/connectors/hive/storage_adapters/abfs/RegisterAbfsFileSystem.h"
-#endif
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/Driver.h"
@@ -62,9 +59,6 @@ using facebook::velox::connector::hive::HiveConnectorFactory;
 CudfHiveConnectorTestBase::CudfHiveConnectorTestBase() {
   filesystems::registerLocalFileSystem();
   filesystems::registerS3FileSystem();
-#ifdef VELOX_ENABLE_ABFS
-  filesystems::registerAbfsFileSystem();
-#endif
   tests::utils::registerFaultyFileSystem();
 }
 
