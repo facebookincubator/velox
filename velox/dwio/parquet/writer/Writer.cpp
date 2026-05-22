@@ -467,7 +467,7 @@ void Writer::write(const VectorPtr& data) {
             arrowProperties));
   }
 
-  arrowContext_->writer->writeRecordBatch(*recordBatch);
+  PARQUET_THROW_NOT_OK(arrowContext_->writer->writeRecordBatch(*recordBatch));
 
   if (flushPolicy_->shouldFlush(getStripeProgress(
           arrowContext_->writer->currentRowGroupBufferedBytes()))) {
