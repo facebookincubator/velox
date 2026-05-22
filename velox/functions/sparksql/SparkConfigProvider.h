@@ -15,27 +15,19 @@
  */
 #pragma once
 
-#include "velox/core/QueryConfig.h"
-#include "velox/functions/Macros.h"
-#include "velox/functions/sparksql/SparkQueryConfig.h"
+#include "velox/common/config/ConfigProvider.h"
 
 namespace facebook::velox::functions::sparksql {
 
-template <typename T>
-struct SparkPartitionIdFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
+/// Exposes Spark function-package session-overridable properties.
+class SparkConfigProvider : public config::ConfigProvider {
+ public:
+  /// Returns all session-overridable Spark function properties.
+  std::vector<config::ConfigProperty> properties() const override;
 
-  void initialize(
-      const std::vector<TypePtr>& /*inputTypes*/,
-      const core::QueryConfig& config) {
-    partitionId_ = SparkQueryConfig{config}.partitionId();
-  }
-
-  FOLLY_ALWAYS_INLINE void call(int32_t& result) {
-    result = partitionId_;
-  }
-
- private:
-  int32_t partitionId_;
+  /// Validates and normalizes a property value.
+  std::string normalize(std::string_view name, std::string_view value)
+      const override;
 };
+
 } // namespace facebook::velox::functions::sparksql
