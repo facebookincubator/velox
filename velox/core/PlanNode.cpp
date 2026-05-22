@@ -1820,9 +1820,35 @@ IndexLookupJoinNode::IndexLookupJoinNode(
     const std::vector<IndexLookupConditionPtr>& joinConditions,
     TypedExprPtr filter,
     bool hasMarker,
+    std::optional<bool> splitOutput,
     PlanNodePtr left,
     TableScanNodePtr right,
     RowTypePtr outputType)
+    : IndexLookupJoinNode(
+          id,
+          joinType,
+          leftKeys,
+          rightKeys,
+          joinConditions,
+          std::move(filter),
+          hasMarker,
+          std::move(left),
+          std::move(right),
+          std::move(outputType),
+          splitOutput) {}
+
+IndexLookupJoinNode::IndexLookupJoinNode(
+    const PlanNodeId& id,
+    JoinType joinType,
+    const std::vector<FieldAccessTypedExprPtr>& leftKeys,
+    const std::vector<FieldAccessTypedExprPtr>& rightKeys,
+    const std::vector<IndexLookupConditionPtr>& joinConditions,
+    TypedExprPtr filter,
+    bool hasMarker,
+    PlanNodePtr left,
+    TableScanNodePtr right,
+    RowTypePtr outputType,
+    std::optional<bool> splitOutput)
     : AbstractJoinNode(
           id,
           joinType,
@@ -1834,7 +1860,8 @@ IndexLookupJoinNode::IndexLookupJoinNode(
           outputType),
       lookupSourceNode_(std::move(right)),
       joinConditions_(joinConditions),
-      hasMarker_(hasMarker) {
+      hasMarker_(hasMarker),
+      splitOutput_(splitOutput) {
   VELOX_USER_CHECK(
       !leftKeys.empty(),
       "The index lookup join node requires at least one join key");
@@ -1921,6 +1948,11 @@ PlanNodePtr IndexLookupJoinNode::create(
 
   const bool hasMarker = obj["hasMarker"].asBool();
 
+  std::optional<bool> splitOutput = std::nullopt;
+  if (obj.count("splitOutput")) {
+    splitOutput = obj["splitOutput"].asBool();
+  }
+
   auto outputType = deserializeRowType(obj["outputType"]);
 
   return std::make_shared<IndexLookupJoinNode>(
@@ -1931,6 +1963,7 @@ PlanNodePtr IndexLookupJoinNode::create(
       std::move(joinConditions),
       filter,
       hasMarker,
+      splitOutput,
       sources[0],
       std::move(lookupSource),
       std::move(outputType));
@@ -1949,6 +1982,9 @@ folly::dynamic IndexLookupJoinNode::serialize() const {
     obj["filter"] = filter_->serialize();
   }
   obj["hasMarker"] = hasMarker_;
+  if (splitOutput_.has_value()) {
+    obj["splitOutput"] = splitOutput_.value();
+  }
   return obj;
 }
 

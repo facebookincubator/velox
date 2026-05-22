@@ -800,6 +800,18 @@ class ReaderOptions : public io::ReaderOptions {
     loadClusterIndex_ = value;
   }
 
+  /// Whether to eagerly preload all per-partition metadata and decode all
+  /// per-partition key streams during file open. Only effective when
+  /// loadClusterIndex() is also true. Implies pinning so preloaded chunks
+  /// are not evicted on first lookup. Default false.
+  bool preloadIndex() const {
+    return preloadIndex_;
+  }
+
+  void setPreloadIndex(bool value) {
+    preloadIndex_ = value;
+  }
+
   /// Whether to load and initialize the chunk index during file open.
   /// When true, the chunk index section is preloaded and the structured
   /// ChunkIndex object is created. Default true.
@@ -854,6 +866,7 @@ class ReaderOptions : public io::ReaderOptions {
   bool cacheIndex_{false};
   bool pinIndex_{false};
   bool loadClusterIndex_{false};
+  bool preloadIndex_{false};
   bool loadChunkIndex_{true};
   bool allowEmptyFile_{false};
   bool allowInt32Narrowing_{false};
