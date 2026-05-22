@@ -915,11 +915,6 @@ must be specified as raw byte counts.
      - Speculative tail-read size in bytes when opening Nimble files. Controls how many bytes are read from the end
        of the file to load the footer and nearby metadata in a single IO operation.
        Set to 0 for adaptive mode.
-   * - fanout-enabled
-     - fanout_enabled
-     - bool
-     - true
-     - Controls the writer mode, whether the fanout mode writer is enabled, default value is true, setting to false means clustered mode. Currently applies only to the Iceberg writer.
 
 ``ORC File Format Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -1257,10 +1252,6 @@ Spark-specific Configuration
        Note: This feature is still under development to achieve full ANSI compliance. Users can
        refer to the Spark function documentation to verify the current support status of a specific
        function.
-   * - spark.legacy_size_of_null
-     - bool
-     - true
-     - If false, ``size`` function returns null for null input.
    * - spark.bloom_filter.expected_num_items
      - integer
      - 1000000
@@ -1297,6 +1288,10 @@ Spark-specific Configuration
      - bool
      - true
      - If true, ignore null fields when generating JSON string. If false, null fields are included with a null value.
+   * - spark.collect_list.ignore_nulls
+     - bool
+     - true
+     - If true, Spark ``collect_list`` aggregate function ignores nulls in the input.
 
 Tracing
 --------

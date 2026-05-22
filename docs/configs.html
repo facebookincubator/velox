@@ -1173,12 +1173,6 @@ Set to 0 for adaptive mode.</p></td>
 of the file to load the footer and nearby metadata in a single IO operation.
 Set to 0 for adaptive mode.</p></td>
 </tr>
-<tr class="row-even"><td><p>fanout-enabled</p></td>
-<td><p>fanout_enabled</p></td>
-<td><p>bool</p></td>
-<td><p>true</p></td>
-<td><p>Controls the writer mode, whether the fanout mode writer is enabled, default value is true, setting to false means clustered mode. Currently applies only to the Iceberg writer.</p></td>
-</tr>
 </tbody>
 </table>
 <section id="orc-file-format-configuration">
@@ -1630,37 +1624,32 @@ Note: This feature is still under development to achieve full ANSI compliance. U
 refer to the Spark function documentation to verify the current support status of a specific
 function.</p></td>
 </tr>
-<tr class="row-odd"><td><p>spark.legacy_size_of_null</p></td>
-<td><p>bool</p></td>
-<td><p>true</p></td>
-<td><p>If false, <code class="docutils literal notranslate"><span class="pre">size</span></code> function returns null for null input.</p></td>
-</tr>
-<tr class="row-even"><td><p>spark.bloom_filter.expected_num_items</p></td>
+<tr class="row-odd"><td><p>spark.bloom_filter.expected_num_items</p></td>
 <td><p>integer</p></td>
 <td><p>1000000</p></td>
 <td><p>The default number of expected items for the bloom filter in <a class="reference internal" href="functions/spark/aggregate.html#id1" title="bloom_filter_agg"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">bloom_filter_agg()</span></code></a> function.</p></td>
 </tr>
-<tr class="row-odd"><td><p>spark.bloom_filter.max_num_items</p></td>
+<tr class="row-even"><td><p>spark.bloom_filter.max_num_items</p></td>
 <td><p>integer</p></td>
 <td><p>4000000</p></td>
 <td><p>The maximum number of items for the bloom filter in <a class="reference internal" href="functions/spark/aggregate.html#id1" title="bloom_filter_agg"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">bloom_filter_agg()</span></code></a> function.</p></td>
 </tr>
-<tr class="row-even"><td><p>spark.bloom_filter.num_bits</p></td>
+<tr class="row-odd"><td><p>spark.bloom_filter.num_bits</p></td>
 <td><p>integer</p></td>
 <td><p>8388608</p></td>
 <td><p>The default number of bits to use for the bloom filter in <a class="reference internal" href="functions/spark/aggregate.html#id1" title="bloom_filter_agg"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">bloom_filter_agg()</span></code></a> function.</p></td>
 </tr>
-<tr class="row-odd"><td><p>spark.bloom_filter.max_num_bits</p></td>
+<tr class="row-even"><td><p>spark.bloom_filter.max_num_bits</p></td>
 <td><p>integer</p></td>
 <td><p>67108864</p></td>
 <td><p>The maximum number of bits to use for the bloom filter in <a class="reference internal" href="functions/spark/aggregate.html#id1" title="bloom_filter_agg"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">bloom_filter_agg()</span></code></a> function.</p></td>
 </tr>
-<tr class="row-even"><td><p>spark.partition_id</p></td>
+<tr class="row-odd"><td><p>spark.partition_id</p></td>
 <td><p>integer</p></td>
 <td></td>
 <td><p>The current task’s Spark partition ID. It’s set by the query engine (Spark) prior to task execution.</p></td>
 </tr>
-<tr class="row-odd"><td><p>spark.legacy_date_formatter</p></td>
+<tr class="row-even"><td><p>spark.legacy_date_formatter</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>If true, <a class="reference external" href="https://docs.oracle.com/javase/8/docs/api/java/text/SimpleDateFormat.html">Simple Date Format</a> is used for time formatting and parsing. Joda date formatter is used by default.
@@ -1668,16 +1657,21 @@ Joda date formatter performs strict checking of its input and uses different pat
 For example, the 2015-07-22 10:00:00 timestamp cannot be parsed if pattern is yyyy-MM-dd because the parser does not consume whole input.
 Another example is that the ‘W’ pattern, which means week in month, is not supported. For more differences, see <a class="reference external" href="https://github.com/facebookincubator/velox/issues/10354">#10354</a>.</p></td>
 </tr>
-<tr class="row-even"><td><p>spark.legacy_statistical_aggregate</p></td>
+<tr class="row-odd"><td><p>spark.legacy_statistical_aggregate</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>If true, Spark statistical aggregation functions including skewness, kurtosis, stddev, stddev_samp, variance,
 var_samp, covar_samp and corr will return NaN instead of NULL when dividing by zero during expression evaluation.</p></td>
 </tr>
-<tr class="row-odd"><td><p>spark.json_ignore_null_fields</p></td>
+<tr class="row-even"><td><p>spark.json_ignore_null_fields</p></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
 <td><p>If true, ignore null fields when generating JSON string. If false, null fields are included with a null value.</p></td>
+</tr>
+<tr class="row-odd"><td><p>spark.collect_list.ignore_nulls</p></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>If true, Spark <code class="docutils literal notranslate"><span class="pre">collect_list</span></code> aggregate function ignores nulls in the input.</p></td>
 </tr>
 </tbody>
 </table>
