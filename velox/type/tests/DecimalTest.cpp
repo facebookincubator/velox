@@ -794,7 +794,7 @@ TEST(DecimalTest, castFromStringError) {
   testCastFromString<int64_t>(
       "9e", 12, 2, "Value is not a number. The exponent part is empty.");
   testCastFromString<int64_t>(
-  "09{xi+yD", 12, 2, "Value is not a number. Chars are invalid.");
+      "09{xi+yD", 12, 2, "Value is not a number. Chars are invalid.");
 
   // Large negative exponent string.
   testCastFromString<int128_t>(
