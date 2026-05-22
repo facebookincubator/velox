@@ -141,6 +141,7 @@ void serializeTyped<TypeKind::TIMESTAMP>(
     const raw_vector<uint8_t*>& nulls,
     char* buffer,
     std::vector<size_t>& offsets) {
+  VELOX_DCHECK(decoded.base()->type()->equivalent(*TIMESTAMP()));
   const auto* rawData = decoded.data<Timestamp>();
   if (!decoded.mayHaveNulls()) {
     for (auto i = 0; i < rows.size(); ++i) {
@@ -259,6 +260,7 @@ void CompactRow::initialize(const TypePtr& type) {
       supportsBulkCopy_ = decoded_.isIdentityMapping();
       break;
     case TypeKind::TIMESTAMP:
+      VELOX_DCHECK(type->equivalent(*TIMESTAMP()));
       valueBytes_ = sizeof(int64_t);
       fixedWidthTypeKind_ = true;
       break;
@@ -281,6 +283,7 @@ void CompactRow::initialize(const TypePtr& type) {
 namespace {
 std::optional<int32_t> fixedValueSize(const TypePtr& type) {
   if (type->isTimestamp()) {
+    VELOX_DCHECK(type->equivalent(*TIMESTAMP()));
     return sizeof(int64_t);
   }
   if (type->isFixedWidth()) {
@@ -671,6 +674,7 @@ void CompactRow::serializeFixedWidth(vector_size_t index, char* buffer) const {
       *reinterpret_cast<bool*>(buffer) = decoded_.valueAt<bool>(index);
       break;
     case TypeKind::TIMESTAMP: {
+      VELOX_DCHECK(decoded_.base()->type()->equivalent(*TIMESTAMP()));
       auto micros = decoded_.valueAt<Timestamp>(index).toMicros();
       ::memcpy(buffer, &micros, sizeof(int64_t));
       break;

@@ -2728,6 +2728,7 @@ core::PlanNodePtr PlanBuilder::IndexLookupJoinBuilder::build(
       std::move(joinConditionPtrs),
       filterExpr,
       hasMarker_,
+      splitOutput_,
       std::move(planBuilder_.planNode_),
       indexSource_,
       std::move(outputType));
