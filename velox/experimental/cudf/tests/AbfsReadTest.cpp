@@ -61,14 +61,7 @@ class AbfsReadTest : public ::testing::Test, public test::VectorTestBase {
     velox_filesystems::registerAbfsFileSystem();
     cudf_velox::filesystems::registerCudfAbfsDataSource();
     cudf_velox::registerCudf();
-  }
 
-  static void TearDownTestCase() {
-    cudf_velox::filesystems::unregisterCudfDataSources();
-    cudf_velox::unregisterCudf();
-  }
-
-  void SetUp() override {
     ioExecutor_ = std::make_shared<folly::IOThreadPoolExecutor>(3);
 
     azuriteServer_ =
@@ -94,13 +87,16 @@ class AbfsReadTest : public ::testing::Test, public test::VectorTestBase {
         hiveConnector->connectorId(), hiveConnector);
   }
 
-  void TearDown() override {
+  static void TearDownTestCase() {
     connector::ConnectorRegistry::global().erase(kCudfHiveConnectorId);
     if (azuriteServer_) {
       azuriteServer_->stop();
       azuriteServer_.reset();
     }
     ioExecutor_.reset();
+
+    cudf_velox::filesystems::unregisterCudfDataSources();
+    cudf_velox::unregisterCudf();
   }
 
   std::string uploadSourceFile() {
@@ -139,8 +135,9 @@ class AbfsReadTest : public ::testing::Test, public test::VectorTestBase {
              kIntParquetRows, [](auto row) { return row + 1000; })});
   }
 
-  std::unique_ptr<velox_filesystems::AzuriteServer> azuriteServer_;
-  std::shared_ptr<folly::IOThreadPoolExecutor> ioExecutor_;
+  inline static std::unique_ptr<velox_filesystems::AzuriteServer>
+      azuriteServer_;
+  inline static std::shared_ptr<folly::IOThreadPoolExecutor> ioExecutor_;
 };
 
 } // namespace
