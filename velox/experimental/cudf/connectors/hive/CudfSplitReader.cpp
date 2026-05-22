@@ -26,9 +26,6 @@
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/TableHandle.h"
-#ifdef VELOX_ENABLE_ABFS
-#include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h"
-#endif
 
 #include <cudf/io/datasource.hpp>
 #include <cudf/io/experimental/hybrid_scan.hpp>
@@ -42,7 +39,6 @@
 #include <nvtx3/nvtx3.hpp>
 
 #include <memory>
-#include <string_view>
 
 namespace facebook::velox::cudf_velox::connector::hive {
 
