@@ -170,7 +170,7 @@ class PARQUET_EXPORT EncodedStatistics {
   }
 
   bool isSet() const {
-    return hasMin || hasMax || hasNullCount || hasDistinctCount;
+    return hasMin || hasMax || hasNullCount || hasDistinctCount || hasNanCount;
   }
 
   bool isSigned() const {
@@ -205,7 +205,7 @@ class PARQUET_EXPORT EncodedStatistics {
     return *this;
   }
 
-  EncodedStatistics& set_nan_count(int64_t value) {
+  EncodedStatistics& setNanCount(int64_t value) {
     nanCount = value;
     hasNanCount = true;
     return *this;
@@ -245,11 +245,11 @@ class PARQUET_EXPORT Statistics {
       int64_t numValues,
       int64_t nullCount,
       int64_t distinctCount,
+      int64_t nanCount,
       bool hasMinMax,
       bool hasNullCount,
       bool hasDistinctCount,
       bool hasNaNCount,
-      int64_t nanCount,
       ::arrow::MemoryPool* pool = ::arrow::default_memory_pool());
 
   // Helper function to convert EncodedStatistics to Statistics.
@@ -476,11 +476,11 @@ std::shared_ptr<TypedStatistics<DType>> makeStatistics(
     int64_t numValues,
     int64_t nullCount,
     int64_t distinctCount,
+    int64_t nanCount,
     bool hasMinMax,
     bool hasNullCount,
     bool hasDistinctCount,
     bool hasNaNCount,
-    int64_t nanCount,
     ::arrow::MemoryPool* pool = ::arrow::default_memory_pool()) {
   return std::static_pointer_cast<TypedStatistics<DType>>(Statistics::make(
       descr,
@@ -489,11 +489,11 @@ std::shared_ptr<TypedStatistics<DType>> makeStatistics(
       numValues,
       nullCount,
       distinctCount,
+      nanCount,
       hasMinMax,
       hasNullCount,
       hasDistinctCount,
       hasNaNCount,
-      nanCount,
       pool));
 }
 

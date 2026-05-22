@@ -40,7 +40,6 @@
 #include "velox/dwio/parquet/writer/arrow/Platform.h"
 #include "velox/dwio/parquet/writer/arrow/Schema.h"
 #include "velox/dwio/parquet/writer/arrow/StringTruncation.h"
-
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/HugeInt.h"
 
@@ -607,11 +606,11 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
       int64_t numValues,
       int64_t nullCount,
       int64_t distinctCount,
+      int64_t nanCount,
       bool hasMinMax,
       bool hasNullCount,
       bool hasDistinctCount,
       bool hasNaNCount,
-      int64_t nanCount,
       MemoryPool* pool)
       : TypedStatisticsImpl(descr, pool) {
     TypedStatisticsImpl::incrementNumValues(numValues);
@@ -870,7 +869,7 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
       s.setDistinctCount(this->distinctCount());
     }
     if (hasNanCount_) {
-      s.set_nan_count(nanCount_);
+      s.setNanCount(nanCount_);
     }
     return s;
   }
@@ -1261,11 +1260,11 @@ std::shared_ptr<Statistics> Statistics::make(
       numValues,
       encodedStats->nullCount,
       encodedStats->distinctCount,
+      encodedStats->nanCount,
       encodedStats->hasMin && encodedStats->hasMax,
       encodedStats->hasNullCount,
       encodedStats->hasDistinctCount,
       encodedStats->hasNanCount,
-      encodedStats->nanCount,
       pool);
 }
 
@@ -1276,11 +1275,11 @@ std::shared_ptr<Statistics> Statistics::make(
     int64_t numValues,
     int64_t nullCount,
     int64_t distinctCount,
+    int64_t nanCount,
     bool hasMinMax,
     bool hasNullCount,
     bool hasDistinctCount,
     bool hasNaNCount,
-    int64_t nanCount,
     ::arrow::MemoryPool* pool) {
 #define MAKE_STATS(CAP_TYPE, KLASS)                      \
   case Type::CAP_TYPE:                                   \
@@ -1291,11 +1290,11 @@ std::shared_ptr<Statistics> Statistics::make(
         numValues,                                       \
         nullCount,                                       \
         distinctCount,                                   \
+        nanCount,                                        \
         hasMinMax,                                       \
         hasNullCount,                                    \
         hasDistinctCount,                                \
         hasNaNCount,                                     \
-        nanCount,                                        \
         pool)
 
   switch (descr->physicalType()) {

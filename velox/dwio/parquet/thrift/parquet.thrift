@@ -238,6 +238,13 @@ struct Statistics {
     */
   5: optional binary max_value;
   6: optional binary min_value;
+  /**
+    * count of NaN values occurring.
+    * Note: This is a Velox extension to the Parquet format. The upstream
+    * Parquet community is considering adding official support for this field.
+    * See: https://github.com/apache/parquet-format/pull/514
+    */
+  7: optional i64 nan_count;
 }
 
 /** Empty structs to use as logical type annotations */

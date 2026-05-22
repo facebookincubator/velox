@@ -682,6 +682,11 @@ void Statistics::__set_max_value(const std::string& val) {
   __isset.max_value = true;
 }
 
+void Statistics::__set_nan_count(const int64_t val) {
+  this->nan_count = val;
+  __isset.nan_count = true;
+}
+
 void Statistics::__set_min_value(const std::string& val) {
   this->min_value = val;
   __isset.min_value = true;
@@ -756,6 +761,14 @@ uint32_t Statistics::read(::apache::thrift::protocol::TProtocol* iprot) {
           xfer += iprot->skip(ftype);
         }
         break;
+      case 7:
+        if (ftype == ::apache::thrift::protocol::T_I64) {
+          xfer += iprot->readI64(this->nan_count);
+          this->__isset.nan_count = true;
+        } else {
+          xfer += iprot->skip(ftype);
+        }
+        break;
       default:
         xfer += iprot->skip(ftype);
         break;
@@ -809,6 +822,12 @@ uint32_t Statistics::write(::apache::thrift::protocol::TProtocol* oprot) const {
     xfer += oprot->writeBinary(this->min_value);
     xfer += oprot->writeFieldEnd();
   }
+  if (this->__isset.nan_count) {
+    xfer += oprot->writeFieldBegin(
+        "nan_count", ::apache::thrift::protocol::T_I64, 7);
+    xfer += oprot->writeI64(this->nan_count);
+    xfer += oprot->writeFieldEnd();
+  }
   xfer += oprot->writeFieldStop();
   xfer += oprot->writeStructEnd();
   return xfer;
@@ -820,6 +839,7 @@ void swap(Statistics& a, Statistics& b) {
   swap(a.min, b.min);
   swap(a.null_count, b.null_count);
   swap(a.distinct_count, b.distinct_count);
+  swap(a.nan_count, b.nan_count);
   swap(a.max_value, b.max_value);
   swap(a.min_value, b.min_value);
   swap(a.__isset, b.__isset);
@@ -830,6 +850,7 @@ Statistics::Statistics(const Statistics& other0) {
   min = other0.min;
   null_count = other0.null_count;
   distinct_count = other0.distinct_count;
+  nan_count = other0.nan_count;
   max_value = other0.max_value;
   min_value = other0.min_value;
   __isset = other0.__isset;
@@ -839,6 +860,7 @@ Statistics& Statistics::operator=(const Statistics& other1) {
   min = other1.min;
   null_count = other1.null_count;
   distinct_count = other1.distinct_count;
+  nan_count = other1.nan_count;
   max_value = other1.max_value;
   min_value = other1.min_value;
   __isset = other1.__isset;
@@ -860,6 +882,8 @@ void Statistics::printTo(std::ostream& out) const {
   (__isset.max_value ? (out << to_string(max_value)) : (out << "<null>"));
   out << ", " << "min_value=";
   (__isset.min_value ? (out << to_string(min_value)) : (out << "<null>"));
+  out << ", " << "nan_count=";
+  (__isset.nan_count ? (out << to_string(nan_count)) : (out << "<null>"));
   out << ")";
 }
 
