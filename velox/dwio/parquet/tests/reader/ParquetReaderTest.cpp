@@ -2184,9 +2184,11 @@ TEST_F(ParquetReaderTest, thriftMemoryTracking) {
 }
 
 // Verifies that the ParquetReader, not the RowReader, owns the tracked
-// footer memory: creating a row reader does not call
-// reportExternalAllocation, and destroying it does not call
-// reportExternalFree.
+// footer memory: the reader makes the only reportExternalAllocation,
+// row readers add no further external allocations across their entire
+// lifecycle (including a second row reader on the same ParquetReader),
+// and the reservation is released through ~ReaderBase (with possible
+// earlier releaseThriftBytes calls for skipped row groups).
 TEST_F(ParquetReaderTest, thriftMemoryOwnedByReader) {
   const std::string sample(getExampleFilePath("sample.parquet"));
 
@@ -2204,22 +2206,39 @@ TEST_F(ParquetReaderTest, thriftMemoryOwnedByReader) {
 
     {
       // Full scan range keeps every row group, so filterRowGroups does not
-      // call releaseThriftBytes — any change in numExternalFrees would mean
-      // the row reader's lifecycle (not just row-group skipping) is
-      // touching the accounting.
+      // call releaseThriftBytes — neither row reader creation nor
+      // destruction must touch the accounting.
       auto rowReaderOpts = getReaderOpts(sampleSchema());
       rowReaderOpts.setScanSpec(makeScanSpec(sampleSchema()));
       auto rowReader = reader->createRowReader(rowReaderOpts);
       EXPECT_EQ(leafPool_->stats().numExternalAllocs, initialAllocs + 1);
       EXPECT_EQ(leafPool_->stats().numExternalFrees, initialFrees);
     }
-    // Destroying the row reader must not release the reservation either.
     EXPECT_EQ(leafPool_->stats().numExternalAllocs, initialAllocs + 1);
     EXPECT_EQ(leafPool_->stats().numExternalFrees, initialFrees);
+
+    // Create a second row reader on the *same* ParquetReader. The
+    // out-of-file scan range (0, 1) matches no row groups, so the
+    // constructor skips advanceToNextRowGroup and avoids a pre-existing
+    // multi-row-reader limitation in ParquetData::seekToRowGroup (the
+    // shared ReaderBase::inputs_ cache leaves the new column reader with
+    // no enqueued streams). filterRowGroups may release the memory of
+    // any skipped row groups through the reader's releaseThriftBytes API
+    // — that is the reader's reservation shrinking, not a row-reader-
+    // owned allocation. The key invariant under test is that no new
+    // external allocation appears: the reader, not the row reader,
+    // remains the sole owner of the reservation.
+    auto rowReaderOpts2 = getReaderOpts(sampleSchema());
+    rowReaderOpts2.setScanSpec(makeScanSpec(sampleSchema()));
+    rowReaderOpts2.range(0, 1);
+    auto rowReader2 = reader->createRowReader(rowReaderOpts2);
+    EXPECT_EQ(leafPool_->stats().numExternalAllocs, initialAllocs + 1);
   }
-  // The reader's destruction releases the reservation with one external free.
+  // After the reader is destroyed, every external allocation has a
+  // matching external free: one initial alloc, balanced by one or more
+  // frees from ~ReaderBase plus any earlier releaseThriftBytes calls.
   EXPECT_EQ(leafPool_->stats().numExternalAllocs, initialAllocs + 1);
-  EXPECT_EQ(leafPool_->stats().numExternalFrees, initialFrees + 1);
+  EXPECT_GE(leafPool_->stats().numExternalFrees, initialFrees + 1);
 }
 
 // Verifies that the production default (no threshold set) does not engage
