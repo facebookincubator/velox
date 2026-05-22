@@ -29,9 +29,9 @@ struct Entry {
   CudfIoSourceFactory factory;
 };
 
-// Guards mutation of the singleton entry vector and the default-slot
-// factory. Reads happen on the hot path but the lock is brief and the
-// registration list is small, so a single mutex is sufficient.
+// Guards mutation of the singleton entry vector. Reads happen on the
+// hot path but the lock is brief and the registration list is small,
+// so a single mutex is sufficient.
 std::mutex& registryMutex() {
   static std::mutex mutex;
   return mutex;
@@ -40,11 +40,6 @@ std::mutex& registryMutex() {
 std::vector<Entry>& registry() {
   static std::vector<Entry> entries;
   return entries;
-}
-
-CudfIoSourceFactory& defaultFactory() {
-  static CudfIoSourceFactory factory;
-  return factory;
 }
 
 } // namespace
@@ -56,11 +51,6 @@ void registerCudfIoSource(
   registry().push_back(Entry{std::move(matcher), std::move(factory)});
 }
 
-void registerCudfDefaultIoSource(CudfIoSourceFactory factory) {
-  std::lock_guard<std::mutex> lock(registryMutex());
-  defaultFactory() = std::move(factory);
-}
-
 std::shared_ptr<cudf::io::datasource> getCudfIoSource(
     std::string_view path,
     const std::shared_ptr<const config::ConfigBase>& properties) {
@@ -70,16 +60,12 @@ std::shared_ptr<cudf::io::datasource> getCudfIoSource(
       return entry.factory(path, properties);
     }
   }
-  if (defaultFactory()) {
-    return defaultFactory()(path, properties);
-  }
   return nullptr;
 }
 
 void unregisterCudfIoSources() {
   std::lock_guard<std::mutex> lock(registryMutex());
   registry().clear();
-  defaultFactory() = nullptr;
 }
 
 } // namespace facebook::velox::cudf_velox::connector::hive::io_sources

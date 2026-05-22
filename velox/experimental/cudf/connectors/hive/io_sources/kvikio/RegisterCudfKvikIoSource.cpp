@@ -29,20 +29,27 @@ namespace facebook::velox::cudf_velox::connector::hive::io_sources {
 
 namespace {
 
-// Remove "file:" prefix from the file path if present. Normalize "s3a:" to
-// "s3:" prefix.
+constexpr std::string_view kFilePrefix = "file:";
+constexpr std::string_view kS3Prefix = "s3://";
+constexpr std::string_view kS3aPrefix = "s3a://";
+
+// Matches the paths served by KvikIO datasource: local files (with or without a
+// `file:` prefix) and S3 URIs (`s3://`, `s3a://`)
+bool kvikIoMatcher(std::string_view path) {
+  return path.starts_with('/') || path.starts_with(kFilePrefix) ||
+      path.starts_with(kS3Prefix) || path.starts_with(kS3aPrefix);
+}
+
+// Strip the `file:` prefix and rewrite `s3a://` to `s3://` so the path
+// is in the form KvikIO datasource expects.
 std::string normalizeKvikIoPath(std::string_view path) {
-  constexpr std::string_view kFilePrefix = "file:";
-  constexpr std::string_view kS3aPrefix = "s3a:";
-  if (path.size() >= kFilePrefix.size() &&
-      path.substr(0, kFilePrefix.size()) == kFilePrefix) {
+  if (path.starts_with(kFilePrefix)) {
     return std::string(path.substr(kFilePrefix.size()));
   }
-  if (path.size() >= kS3aPrefix.size() &&
-      path.substr(0, kS3aPrefix.size()) == kS3aPrefix) {
-    // "s3a:" -> "s3:" (drop the 'a' before the colon).
+  if (path.starts_with(kS3aPrefix)) {
     std::string normalized(path);
-    normalized.erase(kS3aPrefix.size() - 2, 1);
+    // "s3a://..." -> "s3://..." by dropping the 'a' at index 2.
+    normalized.erase(2, 1);
     return normalized;
   }
   return std::string(path);
@@ -51,7 +58,8 @@ std::string normalizeKvikIoPath(std::string_view path) {
 } // namespace
 
 void registerCudfKvikIoSource() {
-  registerCudfDefaultIoSource(
+  registerCudfIoSource(
+      kvikIoMatcher,
       [](std::string_view path,
          [[maybe_unused]] const std::shared_ptr<const config::ConfigBase>&
              properties) -> std::shared_ptr<cudf::io::datasource> {

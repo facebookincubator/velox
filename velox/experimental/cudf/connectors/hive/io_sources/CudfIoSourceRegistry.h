@@ -34,37 +34,30 @@ using CudfIoSourceMatcher = std::function<bool(std::string_view path)>;
 
 /// Factory that constructs a `cudf::io::datasource` for `path` using
 /// `properties` for credentials / endpoint configuration.
-using CudfIoSourceFactory =
-    std::function<std::shared_ptr<cudf::io::datasource>(
-        std::string_view path,
-        const std::shared_ptr<const config::ConfigBase>& properties)>;
+using CudfIoSourceFactory = std::function<std::shared_ptr<cudf::io::datasource>(
+    std::string_view path,
+    const std::shared_ptr<const config::ConfigBase>& properties)>;
 
 /// Registers a (matcher, factory) pair. Matchers are tried in
 /// registration order on lookup; the first matcher whose predicate
-/// accepts a given path produces the IO source for it. Use this for
-/// per-backend native IO sources (e.g. ABFS) whose matcher recognizes a
-/// specific URI scheme.
+/// accepts a given path produces the IO source for it. Each backend
+/// (KvikIO for local/S3, ABFS, ...) registers exactly one such pair,
+/// matching the upstream `registerFileSystem` model.
 void registerCudfIoSource(
     CudfIoSourceMatcher matcher,
     CudfIoSourceFactory factory);
 
-/// Installs a catch-all factory used when no matcher-based registration
-/// claims the path. Only one default slot exists; calling this again
-/// replaces the previously installed factory. KvikIO registers itself
-/// here via `registerCudfKvikIoSource` so any path not claimed by a
-/// backend-specific source is served by cuDF's bundled datasources.
-void registerCudfDefaultIoSource(CudfIoSourceFactory factory);
-
-/// Returns an IO source for `path`. Walks matcher-based registrations
-/// first (FIFO), then falls through to the default factory if one is
-/// installed. Returns nullptr if nothing matches and no default is set.
+/// Returns an IO source for `path` by walking matcher-based
+/// registrations in FIFO order and returning the first hit. Returns
+/// nullptr if no registered backend claims the path; callers are
+/// expected to surface this as an error (see `CudfSplitReader`).
 std::shared_ptr<cudf::io::datasource> getCudfIoSource(
     std::string_view path,
     const std::shared_ptr<const config::ConfigBase>& properties);
 
-/// Removes every previously registered (matcher, factory) entry and
-/// clears the default factory slot. Intended for test teardown so
-/// successive test binaries do not stack duplicate registrations.
+/// Removes every previously registered (matcher, factory) entry.
+/// Intended for test teardown so successive test binaries do not stack
+/// duplicate registrations.
 void unregisterCudfIoSources();
 
 } // namespace facebook::velox::cudf_velox::connector::hive::io_sources

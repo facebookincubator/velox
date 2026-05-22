@@ -18,8 +18,8 @@
 
 namespace facebook::velox::cudf_velox::connector::hive::io_sources {
 
-/// Installs KvikIO datasource serving local and S3 files, as well as any
-/// paths not claimed by a backend-specific matcher-based registration.
+/// Registers KvikIO datasource that handles local files
+/// (with or without a `file:` prefix) and S3 URIs (`s3://`, `s3a://`).
 void registerCudfKvikIoSource();
 
 } // namespace facebook::velox::cudf_velox::connector::hive::io_sources
