@@ -2184,9 +2184,9 @@ TEST_F(ParquetReaderTest, thriftMemoryTracking) {
 }
 
 // Verifies that the ParquetReader, not the RowReader, owns the tracked
-// footer memory: creating and destroying RowReaders does not touch the
-// external allocation accounting, and creating additional RowReaders
-// does not re-report the footer.
+// footer memory: creating a row reader does not call
+// reportExternalAllocation, and destroying it does not call
+// reportExternalFree.
 TEST_F(ParquetReaderTest, thriftMemoryOwnedByReader) {
   const std::string sample(getExampleFilePath("sample.parquet"));
 
@@ -2203,25 +2203,17 @@ TEST_F(ParquetReaderTest, thriftMemoryOwnedByReader) {
     EXPECT_EQ(leafPool_->stats().numExternalFrees, initialFrees);
 
     {
+      // Full scan range keeps every row group, so filterRowGroups does not
+      // call releaseThriftBytes — any change in numExternalFrees would mean
+      // the row reader's lifecycle (not just row-group skipping) is
+      // touching the accounting.
       auto rowReaderOpts = getReaderOpts(sampleSchema());
       rowReaderOpts.setScanSpec(makeScanSpec(sampleSchema()));
       auto rowReader = reader->createRowReader(rowReaderOpts);
-      // Creating a row reader must not touch the external allocation
-      // accounting — the reader owns it.
       EXPECT_EQ(leafPool_->stats().numExternalAllocs, initialAllocs + 1);
       EXPECT_EQ(leafPool_->stats().numExternalFrees, initialFrees);
     }
     // Destroying the row reader must not release the reservation either.
-    EXPECT_EQ(leafPool_->stats().numExternalAllocs, initialAllocs + 1);
-    EXPECT_EQ(leafPool_->stats().numExternalFrees, initialFrees);
-
-    // A second row reader configured with an out-of-file scan range matches
-    // no row groups, so it does not attempt to prefetch. It must not
-    // re-report the footer or release the reservation.
-    auto rowReaderOpts = getReaderOpts(sampleSchema());
-    rowReaderOpts.setScanSpec(makeScanSpec(sampleSchema()));
-    rowReaderOpts.range(0, 1);
-    auto rowReader2 = reader->createRowReader(rowReaderOpts);
     EXPECT_EQ(leafPool_->stats().numExternalAllocs, initialAllocs + 1);
     EXPECT_EQ(leafPool_->stats().numExternalFrees, initialFrees);
   }
