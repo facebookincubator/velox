@@ -28,6 +28,7 @@ target_link_libraries(
   velox_core
   velox_cudf_exec
   velox_cudf_hive_connector
+  velox_cudf_kvikio_io_source
   velox_cudf_vector
   velox_cursor
   velox_duckdb_conversion

@@ -17,7 +17,7 @@
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/connectors/hive/CudfSplitReader.h"
 #include "velox/experimental/cudf/connectors/hive/CudfSplitReaderHelpers.h"
-#include "velox/experimental/cudf/connectors/hive/storage_adapters/CudfDataSourceRegistry.h"
+#include "velox/experimental/cudf/connectors/hive/io_sources/CudfIoSourceRegistry.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 
 #include "velox/common/caching/CacheTTLController.h"
@@ -27,10 +27,6 @@
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/TableHandle.h"
-
-#ifdef VELOX_ENABLE_ABFS
-#include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h"
-#endif
 
 #include <cudf/io/datasource.hpp>
 #include <cudf/io/experimental/hybrid_scan.hpp>
@@ -50,19 +46,6 @@ namespace facebook::velox::cudf_velox::connector::hive {
 
 using namespace facebook::velox::connector;
 using namespace facebook::velox::connector::hive;
-
-namespace {
-
-// Checks whether the `path` uses an ABFS scheme
-bool isAbfsPath([[maybe_unused]] const std::string_view path) {
-#ifdef VELOX_ENABLE_ABFS
-  return ::facebook::velox::filesystems::isAbfsFile(path);
-#else
-  return false;
-#endif
-}
-
-} // namespace
 
 CudfSplitReader::CudfSplitReader(
     std::shared_ptr<CudfHiveConnectorSplit> split,
@@ -232,31 +215,24 @@ void CudfSplitReader::setupCudfDataSource() {
     return;
   }
 
+  // Helper to build a CudfIoSource for the file
+  const auto buildCudfIoSource = [&]() {
+    auto dataSource = io_sources::getCudfIoSource(
+        split_->filePath, cudfHiveConfig_->config());
+    VELOX_CHECK_NOT_NULL(
+        dataSource,
+        "No cuDF IO source registered for file. Register an appropriate cuDF IO source using"
+        "registerCudf*IoSource() during startup. File path: {}",
+        split_->filePath);
+    return dataSource;
+  };
+
   const auto useBufferedInput = cudfHiveConfig_->useBufferedInputSession(
       connectorQueryCtx_->sessionProperties());
 
-  // If BufferedInput is off, use CudfDataSource registry or KvikIO data source
+  // If BufferedInput is off, use CudfIoSource registry
   if (not useBufferedInput) {
-    // Check if the file is served by a registered native cuDF datasource
-    if (auto dataSource = cudf_velox::filesystems::getCudfDataSource(
-            split_->filePath, cudfHiveConfig_->config())) {
-      VLOG(1) << "Using CudfDataSource registry for CudfSplitReader";
-      dataSource_ = std::move(dataSource);
-      return;
-    }
-
-    // ABFS paths cannot fall back to KvikIO; must be served by a
-    // registered native cuDF datasource.
-    VELOX_USER_CHECK(
-        not isAbfsPath(split_->filePath),
-        "ABFS path requires a registered native cuDF datasource. Call "
-        "registerCudfAbfsDataSource() during startup. Path: {}.",
-        split_->filePath);
-
-    VLOG(1) << "Using KvikIO data source for CudfSplitReader";
-    dataSource_ = std::move(
-        cudf::io::make_datasources(cudf::io::source_info{split_->filePath})
-            .front());
+    dataSource_ = buildCudfIoSource();
     return;
   }
 
@@ -270,34 +246,12 @@ void CudfSplitReader::setupCudfDataSource() {
         fileHandleKey, &fileProperties, ioStats_ ? ioStats_.get() : nullptr);
     VELOX_CHECK_NOT_NULL(fileHandleCachePtr.get());
   } catch (const VeloxRuntimeError& e) {
-    // Check if the file is served by a registered native cuDF datasource
-    if (auto dataSource = cudf_velox::filesystems::getCudfDataSource(
-            split_->filePath, cudfHiveConfig_->config())) {
-      LOG(WARNING)
-          << "Failed to generate file handle cache for file. Falling back to the CudfDataSource registry. Path: {}";
-      dataSource_ = std::move(dataSource);
-      return;
-    }
-
-    // ABFS paths cannot fall back to KvikIO; must be served by a
-    // registered native cuDF datasource.
-    VELOX_USER_CHECK(
-        not isAbfsPath(split_->filePath),
-        "Failed to generate file handle cache for ABFS path and no native "
-        "cuDF datasource is registered. Ensure registerAbfsFileSystem(), "
-        "registerAzureClientProvider() and registerCudfAbfsDataSource() have "
-        "been called and the connector config provides Azure credentials. "
-        "Path: {}. Error: {}.",
+    LOG(WARNING) << fmt::format(
+        "Failed to generate FileHandle for file. Falling back to cuDF IO "
+        "source registry. Path: {}, Error: {}",
         split_->filePath,
         e.what());
-
-    // Fall back to KvikIO data source
-    LOG(WARNING) << fmt::format(
-        "Failed to generate file handle cache for file. Falling back to KvikIO. Path: {}",
-        split_->filePath);
-    dataSource_ = std::move(
-        cudf::io::make_datasources(cudf::io::source_info{split_->filePath})
-            .front());
+    dataSource_ = buildCudfIoSource();
     return;
   }
 
@@ -308,7 +262,6 @@ void CudfSplitReader::setupCudfDataSource() {
   if (auto* cacheTTLController = cache::CacheTTLController::getInstance()) {
     cacheTTLController->addOpenFileInfo(fileHandleCachePtr->uuid.id());
   }
-
   auto bufferedInput =
       velox::connector::hive::BufferedInputBuilder::getInstance()->create(
           *fileHandleCachePtr,
@@ -318,33 +271,17 @@ void CudfSplitReader::setupCudfDataSource() {
           ioStats_,
           executor_);
   if (not bufferedInput) {
-    if (auto dataSource = cudf_velox::filesystems::getCudfDataSource(
-            split_->filePath, cudfHiveConfig_->config())) {
-      LOG(WARNING)
-          << "Failed to create buffered input data source for file. Falling back to the CudfDataSource registry. Path: {}";
-      dataSource_ = std::move(dataSource);
-      return;
-    } else {
-      // ABFS paths cannot fall back to KvikIO; they must be served by a
-      // registered native cuDF datasource.
-      VELOX_USER_CHECK(
-          !isAbfsPath(split_->filePath),
-          "Failed to create buffered input data source for ABFS path and no "
-          "native cuDF datasource is registered. Ensure the registered "
-          "BufferedInputBuilder is ABFS-aware or call "
-          "registerCudfAbfsDataSource() during startup. Path: {}.",
-          split_->filePath);
-    }
     LOG(WARNING) << fmt::format(
-        "Failed to create buffered input data source for file. Falling back to the KvikIO. Path: {}",
+        "BufferedInputBuilder produced no input for file. Falling back to "
+        "cuDF IO source registry. Path: {}",
         split_->filePath);
-    dataSource_ = std::move(
-        cudf::io::make_datasources(cudf::io::source_info{split_->filePath})
-            .front());
+    dataSource_ = buildCudfIoSource();
     return;
   }
+
+  // Create a BufferedInputDataSource
   dataSource_ =
-      std::make_unique<BufferedInputDataSource>(std::move(bufferedInput));
+      std::make_shared<BufferedInputDataSource>(std::move(bufferedInput));
 }
 
 void CudfSplitReader::setupReaderOptions() {

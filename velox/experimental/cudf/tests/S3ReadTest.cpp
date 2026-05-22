@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
+#include "velox/experimental/cudf/connectors/hive/io_sources/kvikio/RegisterCudfKvikIoSource.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
 
@@ -36,7 +37,12 @@ using namespace facebook::velox::exec::test;
 using namespace facebook::velox::cudf_velox::exec::test;
 namespace {
 
-class S3ReadTest : public S3Test, public ::test::VectorTestBase {
+// Parameterized on whether the cuDF hive connector uses Velox's
+// BufferedInput (true) or falls through to the KvikIO IO source
+// (false), so the single test body exercises both read paths.
+class S3ReadTest : public S3Test,
+                   public ::test::VectorTestBase,
+                   public ::testing::WithParamInterface<bool> {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
@@ -47,13 +53,21 @@ class S3ReadTest : public S3Test, public ::test::VectorTestBase {
     // Register cudf to enable the CudfDatasource creation from
     // CudfHiveConnector
     facebook::velox::cudf_velox::registerCudf();
+    facebook::velox::cudf_velox::connector::hive::io_sources::
+        registerCudfKvikIoSource();
     filesystems::registerS3FileSystem();
+
+    auto hiveConfig = minioServer_->hiveConfig({
+        {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
+             kUseBufferedInput,
+         GetParam() ? "true" : "false"},
+    });
 
     // Register Hive connector
     facebook::velox::cudf_velox::connector::hive::CudfHiveConnectorFactory
         factory;
     auto hiveConnector = factory.newConnector(
-        kCudfHiveConnectorId, minioServer_->hiveConfig(), ioExecutor_.get());
+        kCudfHiveConnectorId, std::move(hiveConfig), ioExecutor_.get());
     facebook::velox::connector::ConnectorRegistry::global().insert(
         hiveConnector->connectorId(), hiveConnector);
   }
