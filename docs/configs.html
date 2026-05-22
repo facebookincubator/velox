@@ -1173,6 +1173,12 @@ Set to 0 for adaptive mode.</p></td>
 of the file to load the footer and nearby metadata in a single IO operation.
 Set to 0 for adaptive mode.</p></td>
 </tr>
+<tr class="row-even"><td><p>fanout-enabled</p></td>
+<td><p>fanout_enabled</p></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>Controls the writer mode, whether the fanout mode writer is enabled, default value is true, setting to false means clustered mode. Currently applies only to the Iceberg writer.</p></td>
+</tr>
 </tbody>
 </table>
 <section id="orc-file-format-configuration">
