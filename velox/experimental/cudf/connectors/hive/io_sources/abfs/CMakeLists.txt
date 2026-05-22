@@ -12,24 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(
-  velox_cudf_hive_connector
-  CudfHiveConfig.cpp
-  CudfHiveConnector.cpp
-  CudfHiveConnectorSplit.cpp
-  CudfHiveDataSink.cpp
-  CudfHiveDataSource.cpp
-  CudfHiveTableHandle.cpp
-  CudfSplitReader.cpp
-  CudfSplitReaderHelpers.cpp
-)
-
-set_target_properties(velox_cudf_hive_connector PROPERTIES CUDA_ARCHITECTURES native)
-
-add_subdirectory(io_sources)
+add_library(velox_cudf_abfs_io_source RegisterCudfAbfsIoSource.cpp)
 
 target_link_libraries(
-  velox_cudf_hive_connector
-  PRIVATE velox_dwio_common velox_hive_connector velox_cudf_io_source_registry
-  PUBLIC cudf::cudf velox_cudf_expression
+  velox_cudf_abfs_io_source
+  PUBLIC velox_cudf_io_source_registry
 )
+
+if(VELOX_ENABLE_ABFS)
+  target_sources(
+    velox_cudf_abfs_io_source
+    PRIVATE CudfAbfsIoSource.cpp CudfAbfsPinnedBufferPool.cpp
+  )
+
+  target_link_libraries(
+    velox_cudf_abfs_io_source
+    PUBLIC velox_abfs cudf::cudf
+    PRIVATE Azure::azure-storage-blobs Azure::azure-storage-files-datalake
+  )
+endif()
