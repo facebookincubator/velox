@@ -142,9 +142,6 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     // Writer.
     VELOX_REGISTER_QUERY_CONFIG(kWriterFlushThresholdBytes);
 
-    // Presto-specific.
-    VELOX_REGISTER_QUERY_CONFIG(kPrestoArrayAggIgnoreNulls);
-
     // Task writer.
     VELOX_REGISTER_QUERY_CONFIG(kTaskWriterCount);
 
