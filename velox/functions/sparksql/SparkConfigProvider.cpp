@@ -13,29 +13,29 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#pragma once
+#include "velox/functions/sparksql/SparkConfigProvider.h"
 
-#include "velox/core/QueryConfig.h"
-#include "velox/functions/Macros.h"
+#include <folly/Conv.h>
+#include "velox/common/base/Exceptions.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
 
 namespace facebook::velox::functions::sparksql {
 
-template <typename T>
-struct SparkPartitionIdFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
+std::vector<config::ConfigProperty> SparkConfigProvider::properties() const {
+  return SparkQueryConfig::registeredProperties();
+}
 
-  void initialize(
-      const std::vector<TypePtr>& /*inputTypes*/,
-      const core::QueryConfig& config) {
-    partitionId_ = SparkQueryConfig{config}.partitionId();
+std::string SparkConfigProvider::normalize(
+    std::string_view name,
+    std::string_view value) const {
+  if (name == SparkQueryConfig::kPartitionId) {
+    const auto parsed = folly::tryTo<int32_t>(value);
+    VELOX_USER_CHECK(
+        parsed.hasValue(), "Invalid Spark partition id: {}", value);
+    VELOX_USER_CHECK_GE(
+        parsed.value(), 0, "Spark partition id must be non-negative.");
   }
+  return std::string{value};
+}
 
-  FOLLY_ALWAYS_INLINE void call(int32_t& result) {
-    result = partitionId_;
-  }
-
- private:
-  int32_t partitionId_;
-};
 } // namespace facebook::velox::functions::sparksql
