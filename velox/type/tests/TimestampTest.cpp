@@ -581,7 +581,13 @@ TEST(TimestampTest, skipTrailingZeros) {
 }
 
 TEST(TimestampTest, skipTrailingZeroSeconds) {
-  const TimestampToStringOptions options = {
+  const TimestampToStringOptions optionsNoTrim = {
+      .precision = TimestampToStringOptions::Precision::kMicroseconds,
+      .skipTrailingZeroSeconds = true,
+      .zeroPaddingYear = true,
+      .dateTimeSeparator = ' ',
+  };
+  const TimestampToStringOptions optionsWithTrim = {
       .precision = TimestampToStringOptions::Precision::kMicroseconds,
       .skipTrailingZeros = true,
       .skipTrailingZeroSeconds = true,
@@ -589,34 +595,80 @@ TEST(TimestampTest, skipTrailingZeroSeconds) {
       .dateTimeSeparator = ' ',
   };
 
-  ASSERT_EQ(
-      timestampToString(Timestamp(-946684800, 0), options), "1940-01-02 00:00");
-  ASSERT_EQ(timestampToString(Timestamp(0, 0), options), "1970-01-01 00:00");
-  ASSERT_EQ(timestampToString(Timestamp(0, 365), options), "1970-01-01 00:00");
-  ASSERT_EQ(
-      timestampToString(Timestamp(0, 65873), options),
-      "1970-01-01 00:00:00.000065");
-  ASSERT_EQ(
-      timestampToString(Timestamp(94668480000, 0), options),
-      "4969-12-04 00:00");
-  ASSERT_EQ(
-      timestampToString(Timestamp(946729316, 129999999), options),
-      "2000-01-01 12:21:56.129999");
-  ASSERT_EQ(
-      timestampToString(Timestamp(946729316, 129900000), options),
-      "2000-01-01 12:21:56.1299");
-  ASSERT_EQ(
-      timestampToString(Timestamp(946729316, 129000000), options),
-      "2000-01-01 12:21:56.129");
-  ASSERT_EQ(
-      timestampToString(Timestamp(946729316, 0), options),
-      "2000-01-01 12:21:56");
-  ASSERT_EQ(
-      timestampToString(Timestamp(946729316, 129001000), options),
-      "2000-01-01 12:21:56.129001");
-  ASSERT_EQ(
-      timestampToString(Timestamp(-50049331200, 726600000), options),
-      "0384-01-01 08:00:00.7266");
+  // Cases whose output is identical for both configurations:
+  //   - Zero-seconds inputs: nothing after HH:MM to trim either way.
+  //   - Non-zero inputs with no trailing zeros: trimming is a no-op.
+  auto assertCommonCases = [](const TimestampToStringOptions& options) {
+    // 1940-01-02 00:00:00.000000 → 1940-01-02 00:00
+    ASSERT_EQ(
+        timestampToString(Timestamp(-946684800, 0), options),
+        "1940-01-02 00:00");
+    // 1970-01-01 00:00:00.000000 → 1970-01-01 00:00
+    ASSERT_EQ(timestampToString(Timestamp(0, 0), options), "1970-01-01 00:00");
+    // 1970-01-01 00:00:00.000000 → 1970-01-01 00:00 (365 nanos rounds to 0 µs)
+    ASSERT_EQ(
+        timestampToString(Timestamp(0, 365), options), "1970-01-01 00:00");
+    // 4969-12-04 00:00:00.000000 → 4969-12-04 00:00
+    ASSERT_EQ(
+        timestampToString(Timestamp(94668480000, 0), options),
+        "4969-12-04 00:00");
+    // 1970-01-01 00:00:00.000065 → 1970-01-01 00:00:00.000065
+    ASSERT_EQ(
+        timestampToString(Timestamp(0, 65873), options),
+        "1970-01-01 00:00:00.000065");
+    // 2000-01-01 12:21:56.129999 → 2000-01-01 12:21:56.129999
+    ASSERT_EQ(
+        timestampToString(Timestamp(946729316, 129999999), options),
+        "2000-01-01 12:21:56.129999");
+    // 2000-01-01 12:21:56.129001 → 2000-01-01 12:21:56.129001
+    ASSERT_EQ(
+        timestampToString(Timestamp(946729316, 129001000), options),
+        "2000-01-01 12:21:56.129001");
+  };
+
+  {
+    SCOPED_TRACE("skipTrailingZeros=false");
+    assertCommonCases(optionsNoTrim);
+    // Trailing zeros are preserved.
+    // 2000-01-01 12:21:56.129900 → 2000-01-01 12:21:56.129900
+    ASSERT_EQ(
+        timestampToString(Timestamp(946729316, 129900000), optionsNoTrim),
+        "2000-01-01 12:21:56.129900");
+    // 2000-01-01 12:21:56.129000 → 2000-01-01 12:21:56.129000
+    ASSERT_EQ(
+        timestampToString(Timestamp(946729316, 129000000), optionsNoTrim),
+        "2000-01-01 12:21:56.129000");
+    // 2000-01-01 12:21:56.000000 → 2000-01-01 12:21:56.000000
+    ASSERT_EQ(
+        timestampToString(Timestamp(946729316, 0), optionsNoTrim),
+        "2000-01-01 12:21:56.000000");
+    // 0384-01-01 08:00:00.726600 → 0384-01-01 08:00:00.726600
+    ASSERT_EQ(
+        timestampToString(Timestamp(-50049331200, 726600000), optionsNoTrim),
+        "0384-01-01 08:00:00.726600");
+  }
+
+  {
+    SCOPED_TRACE("skipTrailingZeros=true");
+    assertCommonCases(optionsWithTrim);
+    // Trailing zeros are trimmed.
+    // 2000-01-01 12:21:56.129900 → 2000-01-01 12:21:56.1299
+    ASSERT_EQ(
+        timestampToString(Timestamp(946729316, 129900000), optionsWithTrim),
+        "2000-01-01 12:21:56.1299");
+    // 2000-01-01 12:21:56.129000 → 2000-01-01 12:21:56.129
+    ASSERT_EQ(
+        timestampToString(Timestamp(946729316, 129000000), optionsWithTrim),
+        "2000-01-01 12:21:56.129");
+    // 2000-01-01 12:21:56.000000 → 2000-01-01 12:21:56
+    ASSERT_EQ(
+        timestampToString(Timestamp(946729316, 0), optionsWithTrim),
+        "2000-01-01 12:21:56");
+    // 0384-01-01 08:00:00.726600 → 0384-01-01 08:00:00.7266
+    ASSERT_EQ(
+        timestampToString(Timestamp(-50049331200, 726600000), optionsWithTrim),
+        "0384-01-01 08:00:00.7266");
+  }
 }
 
 } // namespace

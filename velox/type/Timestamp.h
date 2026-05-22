@@ -49,10 +49,15 @@ struct TimestampToStringOptions {
   /// '2000-01-01 12:21:56.129000' becomes '2000-01-01 12:21:56.129'.
   bool skipTrailingZeros = false;
 
-  /// Whether to skip trailing zeros of second part. E.g. when true,
-  /// '2000-01-01 12:21:00' becomes '2000-01-01 12:21'.
-  /// '2000-01-01 12:21:00.000' becomes '2000-01-01 12:21'.
-  /// '2000-01-01 12:21:00.123' will not be impacted by this option.
+  /// Whether to omit the entire ":SS" seconds component when both the seconds
+  /// field (tm_sec) is 0 AND the nanoseconds (after precision adjustment) are
+  /// also 0. This removes the whole ":00" segment, not just trailing zeros
+  /// within it. E.g. when true:
+  ///   - '2000-01-01 12:21:00' becomes '2000-01-01 12:21'
+  ///   - '2000-01-01 12:21:00.000' becomes '2000-01-01 12:21'
+  ///   - '2000-01-01 12:21:00.000000365' becomes '2000-01-01 12:21' when
+  ///     formatted with microseconds precision (nanos round to 0)
+  ///   - '2000-01-01 12:21:00.123' is NOT affected (has non-zero milliseconds)
   bool skipTrailingZeroSeconds = false;
 
   /// Whether padding zeros are added when the digits of year is less than 4.
