@@ -549,7 +549,7 @@ TEST_F(VectorCompareTest, compareNullAsIndeterminateRow) {
   }
 }
 
-TEST_F(VectorCompareTest, CompareWithNullChildVector) {
+TEST_F(VectorCompareTest, compareWithNullChildVector) {
   auto pool = memory::memoryManager()->addLeafPool();
   test::VectorMaker maker{pool.get()};
   auto rowType = ROW({"a", "b", "c"}, {INTEGER(), INTEGER(), INTEGER()});

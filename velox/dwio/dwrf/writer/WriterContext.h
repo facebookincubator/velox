@@ -694,8 +694,8 @@ class WriterContext : public CompressionBufferPool {
   // TODO: remove once writer code is consolidated
   friend class WriterEncodingIndexTest2;
 
-  VELOX_FRIEND_TEST(WriterContextTest, GetIntDictionaryEncoder);
-  VELOX_FRIEND_TEST(WriterContextTest, RemoveIntDictionaryEncoderForNode);
+  VELOX_FRIEND_TEST(WriterContextTest, getIntDictionaryEncoder);
+  VELOX_FRIEND_TEST(WriterContextTest, removeIntDictionaryEncoderForNode);
 };
 
 } // namespace facebook::velox::dwrf

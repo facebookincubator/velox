@@ -444,7 +444,7 @@ TEST_F(BufferedInputTest, readSorting) {
   }
 }
 
-TEST_F(BufferedInputTest, VreadSorting) {
+TEST_F(BufferedInputTest, vreadSorting) {
   std::string content = "aaabbbcccdddeeefffggghhhiiijjjkkklllmmmnnnooopppqqq";
   std::vector<Region> regions = {{6, 3}, {24, 3}, {3, 3}, {0, 3}, {29, 3}};
 
@@ -482,7 +482,7 @@ TEST_F(BufferedInputTest, VreadSorting) {
   }
 }
 
-TEST_F(BufferedInputTest, VreadSortingWithLabels) {
+TEST_F(BufferedInputTest, vreadSortingWithLabels) {
   std::string content = "aaabbbcccdddeeefffggghhhiiijjjkkklllmmmnnnooopppqqq";
   std::vector<std::string> l = {"a", "b", "c", "d", "e"};
   std::vector<Region> regions = {

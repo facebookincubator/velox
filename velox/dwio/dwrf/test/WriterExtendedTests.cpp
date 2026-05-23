@@ -96,7 +96,7 @@ class E2EWriterTest : public testing::Test {
   }
 };
 
-TEST_F(E2EWriterTest, FlushPolicySimpleEncoding) {
+TEST_F(E2EWriterTest, flushPolicySimpleEncoding) {
   const size_t batchCount = 200;
   const size_t batchSize = 1000;
   auto pool = facebook::velox::memory::memoryManager()->addLeafPool();
@@ -152,7 +152,7 @@ TEST_F(E2EWriterTest, FlushPolicySimpleEncoding) {
 
 // Many streams are not yet allocated prior to the first flush, hence first
 // flush is delayed if we rely on stream usage to estimate stripe size.
-TEST_F(E2EWriterTest, FlushPolicyDictionaryEncoding) {
+TEST_F(E2EWriterTest, flushPolicyDictionaryEncoding) {
   const size_t batchCount = 500;
   const size_t batchSize = 1000;
   auto pool = facebook::velox::memory::memoryManager()->addLeafPool();
@@ -277,7 +277,7 @@ TEST_F(E2EWriterTest, FlushPolicyDictionaryEncoding) {
 }
 
 // stream usage seems to have a delta that is close to compression block size?
-TEST_F(E2EWriterTest, FlushPolicyNestedTypes) {
+TEST_F(E2EWriterTest, flushPolicyNestedTypes) {
   const size_t batchCount = 10;
   const size_t batchSize = 1000;
   auto pool = facebook::velox::memory::memoryManager()->addLeafPool();
@@ -326,7 +326,7 @@ TEST_F(E2EWriterTest, FlushPolicyNestedTypes) {
 }
 
 // Flat map has 1.5 orders of magnitude inflated stream memory usage.
-TEST_F(E2EWriterTest, FlushPolicyFlatMap) {
+TEST_F(E2EWriterTest, flushPolicyFlatMap) {
   const size_t batchCount = 10;
   const size_t batchSize = 500;
   auto pool = facebook::velox::memory::memoryManager()->addLeafPool();
@@ -423,7 +423,7 @@ TEST_F(E2EWriterTest, FlushPolicyFlatMap) {
   }
 }
 
-TEST_F(E2EWriterTest, MemoryPoolBasedFlushPolicySimpleEncoding) {
+TEST_F(E2EWriterTest, memoryPoolBasedFlushPolicySimpleEncoding) {
   const size_t batchCount = 2000;
   const size_t batchSize = 5000;
   auto pool = facebook::velox::memory::memoryManager()->addLeafPool();
@@ -481,7 +481,7 @@ TEST_F(E2EWriterTest, MemoryPoolBasedFlushPolicySimpleEncoding) {
 
 // Many streams are not yet allocated prior to the first flush, hence first
 // flush is delayed if we rely on stream usage to estimate stripe size.
-TEST_F(E2EWriterTest, MemoryPoolBasedFlushPolicyDictionaryEncoding) {
+TEST_F(E2EWriterTest, memoryPoolBasedFlushPolicyDictionaryEncoding) {
   const size_t batchCount = 1000;
   const size_t batchSize = 2000;
   auto pool = facebook::velox::memory::memoryManager()->addLeafPool();
@@ -618,7 +618,7 @@ TEST_F(E2EWriterTest, MemoryPoolBasedFlushPolicyDictionaryEncoding) {
 }
 
 // stream usage seems to have a delta that is close to compression block size?
-TEST_F(E2EWriterTest, MemoryPoolBasedFlushPolicyNestedTypes) {
+TEST_F(E2EWriterTest, memoryPoolBasedFlushPolicyNestedTypes) {
   const size_t batchCount = 100;
   const size_t batchSize = 1000;
   auto pool = facebook::velox::memory::memoryManager()->addLeafPool();

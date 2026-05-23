@@ -164,106 +164,106 @@ std::shared_ptr<DuckDbQueryRunner> ParquetTpchTest::duckDb_ = nullptr;
 std::shared_ptr<TempDirectoryPath> ParquetTpchTest::tempDirectory_ = nullptr;
 std::shared_ptr<TpchQueryBuilder> ParquetTpchTest::tpchBuilder_ = nullptr;
 
-TEST_F(ParquetTpchTest, Q1) {
+TEST_F(ParquetTpchTest, q1) {
   assertQuery(1);
 }
 
-TEST_F(ParquetTpchTest, Q2) {
+TEST_F(ParquetTpchTest, q2) {
   std::vector<uint32_t> sortingKeys{0, 1, 2, 3};
   assertQuery(2, std::move(sortingKeys));
 }
 
-TEST_F(ParquetTpchTest, Q3) {
+TEST_F(ParquetTpchTest, q3) {
   std::vector<uint32_t> sortingKeys{1, 2};
   assertQuery(3, std::move(sortingKeys));
 }
 
-TEST_F(ParquetTpchTest, Q4) {
+TEST_F(ParquetTpchTest, q4) {
   std::vector<uint32_t> sortingKeys{0};
   assertQuery(4, std::move(sortingKeys));
 }
 
-TEST_F(ParquetTpchTest, Q5) {
+TEST_F(ParquetTpchTest, q5) {
   std::vector<uint32_t> sortingKeys{1};
   assertQuery(5, std::move(sortingKeys));
 }
 
-TEST_F(ParquetTpchTest, Q6) {
+TEST_F(ParquetTpchTest, q6) {
   assertQuery(6);
 }
 
-TEST_F(ParquetTpchTest, Q7) {
+TEST_F(ParquetTpchTest, q7) {
   std::vector<uint32_t> sortingKeys{0, 1, 2};
   assertQuery(7, std::move(sortingKeys));
 }
 
-TEST_F(ParquetTpchTest, Q8) {
+TEST_F(ParquetTpchTest, q8) {
   std::vector<uint32_t> sortingKeys{0};
   assertQuery(8, std::move(sortingKeys));
 }
 
-TEST_F(ParquetTpchTest, Q9) {
+TEST_F(ParquetTpchTest, q9) {
   std::vector<uint32_t> sortingKeys{0, 1};
   assertQuery(9, std::move(sortingKeys));
 }
 
-TEST_F(ParquetTpchTest, Q10) {
+TEST_F(ParquetTpchTest, q10) {
   std::vector<uint32_t> sortingKeys{2};
   assertQuery(10, std::move(sortingKeys));
 }
 
-TEST_F(ParquetTpchTest, Q11) {
+TEST_F(ParquetTpchTest, q11) {
   std::vector<uint32_t> sortingKeys{1};
   assertQuery(11, std::move(sortingKeys));
 }
 
-TEST_F(ParquetTpchTest, Q12) {
+TEST_F(ParquetTpchTest, q12) {
   std::vector<uint32_t> sortingKeys{0};
   assertQuery(12, std::move(sortingKeys));
 }
 
-TEST_F(ParquetTpchTest, Q13) {
+TEST_F(ParquetTpchTest, q13) {
   std::vector<uint32_t> sortingKeys{0, 1};
   assertQuery(13, std::move(sortingKeys));
 }
 
-TEST_F(ParquetTpchTest, Q14) {
+TEST_F(ParquetTpchTest, q14) {
   assertQuery(14);
 }
 
-TEST_F(ParquetTpchTest, Q15) {
+TEST_F(ParquetTpchTest, q15) {
   std::vector<uint32_t> sortingKeys{0};
   assertQuery(15, std::move(sortingKeys));
 }
 
-TEST_F(ParquetTpchTest, Q16) {
+TEST_F(ParquetTpchTest, q16) {
   std::vector<uint32_t> sortingKeys{0, 1, 2, 3};
   assertQuery(16, std::move(sortingKeys));
 }
 
-TEST_F(ParquetTpchTest, Q17) {
+TEST_F(ParquetTpchTest, q17) {
   assertQuery(17);
 }
 
-TEST_F(ParquetTpchTest, Q18) {
+TEST_F(ParquetTpchTest, q18) {
   assertQuery(18);
 }
 
-TEST_F(ParquetTpchTest, Q19) {
+TEST_F(ParquetTpchTest, q19) {
   assertQuery(19);
 }
 
-TEST_F(ParquetTpchTest, Q20) {
+TEST_F(ParquetTpchTest, q20) {
   std::vector<uint32_t> sortingKeys{0};
   assertQuery(20, std::move(sortingKeys));
 }
 
-TEST_F(ParquetTpchTest, Q21) {
+TEST_F(ParquetTpchTest, q21) {
   std::vector<uint32_t> sortingKeys{0, 1};
   assertQuery(21, std::move(sortingKeys));
 }
 
-TEST_F(ParquetTpchTest, Q22) {
+TEST_F(ParquetTpchTest, q22) {
   std::vector<uint32_t> sortingKeys{0};
   assertQuery(22, std::move(sortingKeys));
 }

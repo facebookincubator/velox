@@ -37,7 +37,7 @@ using TestTypes = ::testing::Types<int, unsigned, long long, unsigned long long,
 
 TYPED_TEST_SUITE(FunctionTest, TestTypes);
 
-TYPED_TEST(FunctionTest, ReduceAdd) {
+TYPED_TEST(FunctionTest, reduceAdd) {
   TypeParam src[] = {1, 6,  22, 8,  2,  3, 11, 5,  13, 9, 0,  16, 18,
                      7, 10, 4,  14, 0,  4, 21, 4,  7,  5, 10, 8,  20,
                      9, 6,  22, 30, 1,  3, 8,  12, 25, 9, 10, 25, 6,
@@ -53,7 +53,7 @@ TYPED_TEST(FunctionTest, ReduceAdd) {
   EXPECT_EQ(expected_result, out);
 }
 
-TYPED_TEST(FunctionTest, ReduceAddOneItemPerThread) {
+TYPED_TEST(FunctionTest, reduceAddOneItemPerThread) {
   TypeParam src[] = {1, 6,  22, 8,  2,  3, 11, 5,  13, 9, 0,  16, 18,
                      7, 10, 4,  14, 0,  4, 21, 4,  7,  5, 10, 8,  20,
                      9, 6,  22, 30, 1,  3, 8,  12, 25, 9, 10, 25, 6,
@@ -69,7 +69,7 @@ TYPED_TEST(FunctionTest, ReduceAddOneItemPerThread) {
   EXPECT_EQ(expected_result, out);
 }
 
-TYPED_TEST(FunctionTest, ReduceAddFew) {
+TYPED_TEST(FunctionTest, reduceAddFew) {
   TypeParam src[] = {1, 2, 3, 4, 5, 6, 7, 8};
 
   std::vector<TypeParam> in(std::begin(src), std::end(src));
@@ -110,7 +110,7 @@ std::vector<T> generate_bit_pattern_vector() {
   return values;
 }
 
-TYPED_TEST(FunctionTest, ReduceAddBitPatterns) {
+TYPED_TEST(FunctionTest, reduceAddBitPatterns) {
   auto in = generate_bit_pattern_vector<TypeParam>();
   TypeParam out = 0;
 
@@ -131,7 +131,7 @@ TYPED_TEST(FunctionTest, ReduceAddBitPatterns) {
   EXPECT_EQ(expected_result, out);
 }
 
-TYPED_TEST(FunctionTest, ReduceMin) {
+TYPED_TEST(FunctionTest, reduceMin) {
   TypeParam src[] = {1, 2, 3, 4, 5, 6, 7, 8};
 
   std::vector<TypeParam> in(std::begin(src), std::end(src));
@@ -143,7 +143,7 @@ TYPED_TEST(FunctionTest, ReduceMin) {
   EXPECT_EQ(expected_result, out);
 }
 
-TYPED_TEST(FunctionTest, ReduceMinBitPatterns) {
+TYPED_TEST(FunctionTest, reduceMinBitPatterns) {
   auto in = generate_bit_pattern_vector<TypeParam>();
   TypeParam out = 0;
 
@@ -153,7 +153,7 @@ TYPED_TEST(FunctionTest, ReduceMinBitPatterns) {
   EXPECT_EQ(expected_result, out);
 }
 
-TYPED_TEST(FunctionTest, ReduceMax) {
+TYPED_TEST(FunctionTest, reduceMax) {
   TypeParam src[] = {1, 2, 3, 4, 5, 6, 7, 8};
 
   std::vector<TypeParam> in(std::begin(src), std::end(src));
@@ -165,7 +165,7 @@ TYPED_TEST(FunctionTest, ReduceMax) {
   EXPECT_EQ(expected_result, out);
 }
 
-TYPED_TEST(FunctionTest, ReduceMaxBitPatterns) {
+TYPED_TEST(FunctionTest, reduceMaxBitPatterns) {
   auto in = generate_bit_pattern_vector<TypeParam>();
   TypeParam out = 0;
 

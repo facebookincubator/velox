@@ -63,8 +63,8 @@ class EncodingIter {
 
   void next();
 
-  VELOX_FRIEND_TEST(TestEncodingIter, Ctor);
-  VELOX_FRIEND_TEST(TestEncodingIter, EncodingIterBeginAndEnd);
+  VELOX_FRIEND_TEST(TestEncodingIter, ctor);
+  VELOX_FRIEND_TEST(TestEncodingIter, encodingIterBeginAndEnd);
   bool emptyEncryptionGroups() const;
 
   const proto::StripeFooter& footer_;
@@ -148,7 +148,7 @@ class LayoutPlanner {
 
   folly::F14FastMap<uint32_t, uint32_t> nodeToColumnMap_;
 
-  VELOX_FRIEND_TEST(LayoutPlannerTests, Basic);
+  VELOX_FRIEND_TEST(LayoutPlannerTests, basic);
 };
 
 } // namespace facebook::velox::dwrf

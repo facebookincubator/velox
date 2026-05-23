@@ -66,7 +66,7 @@ class StripeDictionaryCacheTest : public testing::Test {
 };
 } // namespace
 
-TEST_F(StripeDictionaryCacheTest, RegisterDictionary) {
+TEST_F(StripeDictionaryCacheTest, registerDictionary) {
   {
     StripeDictionaryCache cache{pool_.get()};
     cache.registerIntDictionary({9, 0}, genConsecutiveRangeBuffer(0, 100));
@@ -100,7 +100,7 @@ TEST_F(StripeDictionaryCacheTest, RegisterDictionary) {
   }
 }
 
-TEST_F(StripeDictionaryCacheTest, GetDictionaryBuffer) {
+TEST_F(StripeDictionaryCacheTest, getDictionaryBuffer) {
   {
     StripeDictionaryCache cache{pool_.get()};
 

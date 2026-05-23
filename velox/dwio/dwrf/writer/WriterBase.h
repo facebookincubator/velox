@@ -184,7 +184,7 @@ class WriterBase {
   std::unique_ptr<google::protobuf::Arena> arena_;
 
   friend class WriterTest;
-  VELOX_FRIEND_TEST(WriterBaseTest, FlushWriterSinkUponClose);
+  VELOX_FRIEND_TEST(WriterBaseTest, flushWriterSinkUponClose);
 };
 
 } // namespace facebook::velox::dwrf

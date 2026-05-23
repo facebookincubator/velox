@@ -167,7 +167,7 @@ TEST_F(BinaryFunctionsTest, spookyHashV264) {
       spookyHashV264("more_than_12_characters_string"));
 }
 
-TEST_F(BinaryFunctionsTest, HmacSha1) {
+TEST_F(BinaryFunctionsTest, hmacSha1) {
   const auto hmacSha1 = [&](std::optional<std::string> arg,
                             std::optional<std::string> key) {
     return evaluateOnce<std::string>(
@@ -205,7 +205,7 @@ TEST_F(BinaryFunctionsTest, HmacSha1) {
   EXPECT_EQ(std::nullopt, hmacSha1("velox", std::nullopt));
 }
 
-TEST_F(BinaryFunctionsTest, HmacSha256) {
+TEST_F(BinaryFunctionsTest, hmacSha256) {
   const auto hmacSha256 = [&](std::optional<std::string> arg,
                               std::optional<std::string> key) {
     return evaluateOnce<std::string>(
@@ -237,7 +237,7 @@ TEST_F(BinaryFunctionsTest, HmacSha256) {
   EXPECT_EQ(std::nullopt, hmacSha256(std::nullopt, "velox"));
 }
 
-TEST_F(BinaryFunctionsTest, HmacSha512) {
+TEST_F(BinaryFunctionsTest, hmacSha512) {
   const auto hmacSha512 = [&](std::optional<std::string> arg,
                               std::optional<std::string> key) {
     return evaluateOnce<std::string>(
@@ -259,7 +259,7 @@ TEST_F(BinaryFunctionsTest, HmacSha512) {
 
 // Note: this test fails in a FIPS enabled environment because OpenSSL restricts
 // usage of MD5 for hmacs.
-TEST_F(BinaryFunctionsTest, HmacMd5) {
+TEST_F(BinaryFunctionsTest, hmacMd5) {
   const auto hmacMd5 = [&](std::optional<std::string> arg,
                            std::optional<std::string> key) {
     return evaluateOnce<std::string>(

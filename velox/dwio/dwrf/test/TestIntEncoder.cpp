@@ -32,7 +32,7 @@ class VarintPairs {
       : value{value}, varInt{varInt} {}
 };
 
-TEST(TestIntEncoder, TestVarIntEncoder) {
+TEST(TestIntEncoder, testVarIntEncoder) {
   auto values = std::vector<VarintPairs>{
       {0, {0x0}},
       {(1ul << 7) - 1, {0x7F}},

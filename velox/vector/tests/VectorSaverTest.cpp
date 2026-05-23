@@ -612,7 +612,7 @@ TEST_F(VectorSaverTest, dictionaryRow) {
   testRoundTrip(fuzzer.fuzzDictionary(fuzzer.fuzzDictionary(flatVector)));
 }
 
-TEST_F(VectorSaverTest, LazyVector) {
+TEST_F(VectorSaverTest, lazyVector) {
   auto opts = fuzzerOptions();
   opts.nullRatio = 0.5;
   SCOPED_TRACE(fmt::format("seed: {}", seed_));

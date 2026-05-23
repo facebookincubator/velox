@@ -808,7 +808,7 @@ INSTANTIATE_TEST_SUITE_P(
 /// Tests the spark scenario of having different types of aggs in the same
 /// planNode Specific example being tested is
 /// https://github.com/facebookincubator/velox/issues/12830#issuecomment-2783340233
-TEST_F(AggregationTest, CompanionAggs) {
+TEST_F(AggregationTest, companionAggs) {
   std::vector<int64_t> keys0{1, 1, 1, 2, 1, 1, 2, 2};
   std::vector<int64_t> keys1{1, 2, 1, 2, 1, 2, 1, 2};
   std::vector<int64_t> values{1, 2, 3, 4, 5, 6, 7, 8};

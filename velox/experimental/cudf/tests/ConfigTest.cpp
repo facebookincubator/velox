@@ -20,7 +20,7 @@
 
 namespace facebook::velox::cudf_velox::test {
 
-TEST(ConfigTest, CudfConfig) {
+TEST(ConfigTest, cudfConfig) {
   std::unordered_map<std::string, std::string> options = {
       {CudfConfig::kCudfEnabled, "false"},
       {CudfConfig::kCudfDebugEnabled, "true"},

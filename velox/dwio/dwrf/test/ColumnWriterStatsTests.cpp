@@ -255,7 +255,7 @@ VectorPtr makeFlatVector(
   return flatVector;
 }
 
-TEST_F(ColumnWriterStatsTest, Bool) {
+TEST_F(ColumnWriterStatsTest, bool) {
   auto populateBoolBatch =
       [](MemoryPool& pool, VectorPtr* vector, size_t size) {
         BufferPtr nulls = allocateNulls(size, &pool);
@@ -281,7 +281,7 @@ TEST_F(ColumnWriterStatsTest, Bool) {
   verifyTypeStats("struct<bool_val:boolean>", populateBoolBatch);
 }
 
-TEST_F(ColumnWriterStatsTest, TinyInt) {
+TEST_F(ColumnWriterStatsTest, tinyInt) {
   auto populateTinyIntBatch =
       [](MemoryPool& pool, VectorPtr* vector, size_t size) {
         BufferPtr nulls = allocateNulls(size, &pool);
@@ -307,7 +307,7 @@ TEST_F(ColumnWriterStatsTest, TinyInt) {
   verifyTypeStats("struct<byte_val:tinyint>", populateTinyIntBatch);
 }
 
-TEST_F(ColumnWriterStatsTest, SmallInt) {
+TEST_F(ColumnWriterStatsTest, smallInt) {
   auto populateSmallIntBatch =
       [](MemoryPool& pool, VectorPtr* vector, size_t size) {
         BufferPtr nulls = allocateNulls(size, &pool);
@@ -335,7 +335,7 @@ TEST_F(ColumnWriterStatsTest, SmallInt) {
   verifyTypeStats("struct<small_val:smallint>", populateSmallIntBatch);
 }
 
-TEST_F(ColumnWriterStatsTest, Int) {
+TEST_F(ColumnWriterStatsTest, int) {
   auto populateIntBatch = [](MemoryPool& pool, VectorPtr* vector, size_t size) {
     BufferPtr nulls = allocateNulls(size, &pool);
     auto* nullsPtr = nulls->asMutable<uint64_t>();
@@ -362,7 +362,7 @@ TEST_F(ColumnWriterStatsTest, Int) {
   verifyTypeStats("struct<int_val:int>", populateIntBatch);
 }
 
-TEST_F(ColumnWriterStatsTest, Long) {
+TEST_F(ColumnWriterStatsTest, long) {
   auto populateLongBatch =
       [](MemoryPool& pool, VectorPtr* vector, size_t size) {
         BufferPtr nulls = allocateNulls(size, &pool);
@@ -413,11 +413,11 @@ auto populateFloatBatch = [](MemoryPool& pool, VectorPtr* vector, size_t size) {
   return std::vector<size_t>{totalSize, totalSize};
 };
 
-TEST_F(ColumnWriterStatsTest, Float) {
+TEST_F(ColumnWriterStatsTest, float) {
   verifyTypeStats("struct<float_val:float>", populateFloatBatch);
 }
 
-TEST_F(ColumnWriterStatsTest, Double) {
+TEST_F(ColumnWriterStatsTest, double) {
   auto populateDoubleBatch =
       [](MemoryPool& pool, VectorPtr* vector, size_t size) {
         BufferPtr nulls = allocateNulls(size, &pool);
@@ -445,7 +445,7 @@ TEST_F(ColumnWriterStatsTest, Double) {
   verifyTypeStats("struct<long_val:double>", populateDoubleBatch);
 }
 
-TEST_F(ColumnWriterStatsTest, String) {
+TEST_F(ColumnWriterStatsTest, string) {
   auto populateStringBatch =
       [](MemoryPool& pool, VectorPtr* vector, size_t size) {
         std::mt19937 gen{};
@@ -465,7 +465,7 @@ TEST_F(ColumnWriterStatsTest, String) {
   verifyTypeStats("struct<string_val:string>", populateStringBatch);
 }
 
-TEST_F(ColumnWriterStatsTest, Binary) {
+TEST_F(ColumnWriterStatsTest, binary) {
   auto populateBinaryBatch =
       [](MemoryPool& pool, VectorPtr* vector, size_t size) {
         std::mt19937 gen{};
@@ -485,7 +485,7 @@ TEST_F(ColumnWriterStatsTest, Binary) {
   verifyTypeStats("struct<binary_val:binary>", populateBinaryBatch);
 }
 
-TEST_F(ColumnWriterStatsTest, Timestamp) {
+TEST_F(ColumnWriterStatsTest, timestamp) {
   auto populateTimestampBatch = [](MemoryPool& pool,
                                    VectorPtr* vector,
                                    size_t size) {
@@ -514,7 +514,7 @@ TEST_F(ColumnWriterStatsTest, Timestamp) {
   verifyTypeStats("struct<timestamp_val:timestamp>", populateTimestampBatch);
 }
 
-TEST_F(ColumnWriterStatsTest, List) {
+TEST_F(ColumnWriterStatsTest, list) {
   auto populateListBatch = [](MemoryPool& pool,
                               VectorPtr* vector,
                               size_t size) {
@@ -560,7 +560,7 @@ TEST_F(ColumnWriterStatsTest, List) {
   verifyTypeStats("struct<array_val:array<float>>", populateListBatch);
 }
 
-TEST_F(ColumnWriterStatsTest, Map) {
+TEST_F(ColumnWriterStatsTest, map) {
   auto populateMapBatch = [](MemoryPool& pool, VectorPtr* vector, size_t size) {
     BufferPtr nulls = allocateNulls(size, &pool);
     auto* nullsPtr = nulls->asMutable<uint64_t>();
@@ -615,7 +615,7 @@ TEST_F(ColumnWriterStatsTest, Map) {
       "struct<map_val:map<int,float>>", populateMapBatch, FLAT_MAP_COL_ID);
 }
 
-TEST_F(ColumnWriterStatsTest, Struct) {
+TEST_F(ColumnWriterStatsTest, struct) {
   auto populateStructBatch =
       [](MemoryPool& pool, VectorPtr* vector, size_t size) {
         BufferPtr nulls = allocateNulls(size, &pool);

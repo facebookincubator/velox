@@ -31,7 +31,7 @@ class WriterContextTest : public testing::Test {
   }
 };
 
-TEST_F(WriterContextTest, GetIntDictionaryEncoder) {
+TEST_F(WriterContextTest, getIntDictionaryEncoder) {
   auto config = std::make_shared<Config>();
   WriterContext context{
       config, memory::memoryManager()->addRootPool("GetIntDictionaryEncoder")};
@@ -64,7 +64,7 @@ TEST_F(WriterContextTest, GetIntDictionaryEncoder) {
   EXPECT_EQ(2, context.dictEncoders_.size());
 }
 
-TEST_F(WriterContextTest, RemoveIntDictionaryEncoderForNode) {
+TEST_F(WriterContextTest, removeIntDictionaryEncoderForNode) {
   auto config = std::make_shared<Config>();
   config->set(Config::MAP_FLAT_DICT_SHARE, false);
   WriterContext context{
@@ -117,7 +117,7 @@ TEST_F(WriterContextTest, RemoveIntDictionaryEncoderForNode) {
   EXPECT_EQ(0, context.dictEncoders_.size());
 }
 
-TEST_F(WriterContextTest, BuildPhysicalSizeAggregators) {
+TEST_F(WriterContextTest, buildPhysicalSizeAggregators) {
   auto config = std::make_shared<Config>();
   WriterContext context{
       config,

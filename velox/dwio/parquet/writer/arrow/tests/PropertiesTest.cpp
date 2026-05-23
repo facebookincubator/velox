@@ -31,7 +31,7 @@ using schema::ColumnPath;
 
 namespace test {
 
-TEST(TestReaderProperties, Basics) {
+TEST(TestReaderProperties, basics) {
   ReaderProperties props;
 
   ASSERT_EQ(props.bufferSize(), kDefaultBufferSize);
@@ -39,7 +39,7 @@ TEST(TestReaderProperties, Basics) {
   ASSERT_FALSE(props.pageChecksumVerification());
 }
 
-TEST(TestWriterProperties, Basics) {
+TEST(TestWriterProperties, basics) {
   std::shared_ptr<WriterProperties> props = WriterProperties::Builder().build();
 
   ASSERT_EQ(kDefaultDataPageSize, props->dataPagesize());
@@ -50,7 +50,7 @@ TEST(TestWriterProperties, Basics) {
   ASSERT_FALSE(props->pageChecksumEnabled());
 }
 
-TEST(TestWriterProperties, AdvancedHandling) {
+TEST(TestWriterProperties, advancedHandling) {
   WriterProperties::Builder Builder;
   Builder.compression("gzip", Compression::GZIP);
   Builder.compression("zstd", Compression::ZSTD);
@@ -76,7 +76,7 @@ TEST(TestWriterProperties, AdvancedHandling) {
   ASSERT_EQ(ParquetDataPageVersion::V2, props->dataPageVersion());
 }
 
-TEST(TestReaderProperties, GetStreamInsufficientData) {
+TEST(TestReaderProperties, getStreamInsufficientData) {
   // ARROW-6058.
   std::string data = "shorter than expected";
   auto buf = std::make_shared<Buffer>(data);

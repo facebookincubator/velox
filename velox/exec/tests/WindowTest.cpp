@@ -921,7 +921,7 @@ DEBUG_ONLY_TEST_F(WindowTest, reserveMemorySort) {
   }
 }
 
-TEST_F(WindowTest, NaNFrameBound) {
+TEST_F(WindowTest, nanFrameBound) {
   const auto kNan = std::numeric_limits<double>::quiet_NaN();
   auto data = makeRowVector(
       {"c0", "s0", "off0", "off1"},

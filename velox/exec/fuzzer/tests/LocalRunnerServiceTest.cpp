@@ -158,7 +158,7 @@ class LocalRunnerServiceTest : public functions::test::FunctionBaseTest {
   RowVectorPtr testRowVectorWrapped_;
 };
 
-TEST_F(LocalRunnerServiceTest, ConvertToBatchesRoundTrip) {
+TEST_F(LocalRunnerServiceTest, convertToBatchesRoundTrip) {
   auto result = facebook::velox::runner::convertToBatches(
       {testRowVector_}, rootPool_.get());
 
@@ -199,7 +199,7 @@ TEST_F(LocalRunnerServiceTest, ConvertToBatchesRoundTrip) {
   assertEqualVectors(deserialized, testRowVector_);
 }
 
-TEST_F(LocalRunnerServiceTest, ServiceHandlerMockRequestIntegration) {
+TEST_F(LocalRunnerServiceTest, serviceHandlerMockRequestIntegration) {
   LocalRunnerServiceHandler handler;
 
   auto request = std::make_unique<ExecutePlanRequest>();
@@ -223,7 +223,7 @@ TEST_F(LocalRunnerServiceTest, ServiceHandlerMockRequestIntegration) {
   EXPECT_GT(batch.serializedData()->size(), 0);
 }
 
-TEST_F(LocalRunnerServiceTest, ServiceHandlerMockRequestIntegrationFailure) {
+TEST_F(LocalRunnerServiceTest, serviceHandlerMockRequestIntegrationFailure) {
   LocalRunnerServiceHandler handler;
 
   auto request = std::make_unique<ExecutePlanRequest>();

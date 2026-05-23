@@ -205,7 +205,7 @@ TEST_P(AllWriterCompressionTest, compression) {
           : compressionKind_);
 }
 
-TEST_P(SupportedCompressionTest, WriteFooter) {
+TEST_P(SupportedCompressionTest, writeFooter) {
   auto config = std::make_shared<Config>();
   config->set(Config::COMPRESSION, supportedCompressionKind_);
   auto& writer = createWriter(config);
@@ -298,7 +298,7 @@ TEST_P(SupportedCompressionTest, WriteFooter) {
   }
 }
 
-TEST_P(SupportedCompressionTest, AddStripeInfo) {
+TEST_P(SupportedCompressionTest, addStripeInfo) {
   auto config = std::make_shared<Config>();
   config->set(Config::COMPRESSION, supportedCompressionKind_);
   auto& writer = createWriter(config);
@@ -320,7 +320,7 @@ TEST_P(SupportedCompressionTest, AddStripeInfo) {
   writer.close();
 }
 
-TEST_P(SupportedCompressionTest, NoChecksum) {
+TEST_P(SupportedCompressionTest, noChecksum) {
   auto config = std::make_shared<Config>();
   config->set(Config::CHECKSUM_ALGORITHM, proto::ChecksumAlgorithm::NULL_);
   config->set(Config::COMPRESSION, supportedCompressionKind_);
@@ -352,7 +352,7 @@ TEST_P(SupportedCompressionTest, NoChecksum) {
   ASSERT_EQ(footer.checksumAlgorithm(), proto::ChecksumAlgorithm::NULL_);
 }
 
-TEST_P(SupportedCompressionTest, NoCache) {
+TEST_P(SupportedCompressionTest, noCache) {
   auto config = std::make_shared<Config>();
   config->set(Config::STRIPE_CACHE_MODE, StripeCacheMode::NA);
   config->set(Config::COMPRESSION, supportedCompressionKind_);
@@ -390,7 +390,7 @@ TEST_P(SupportedCompressionTest, NoCache) {
   ASSERT_EQ(reader->metadataCache(), nullptr);
 }
 
-TEST_P(SupportedCompressionTest, ValidateStreamSizeConfigDisabled) {
+TEST_P(SupportedCompressionTest, validateStreamSizeConfigDisabled) {
   auto config = std::make_shared<Config>();
   config->set(Config::STREAM_SIZE_ABOVE_THRESHOLD_CHECK_ENABLED, false);
   config->set(Config::COMPRESSION, supportedCompressionKind_);
@@ -400,7 +400,7 @@ TEST_P(SupportedCompressionTest, ValidateStreamSizeConfigDisabled) {
   writer.close();
 }
 
-TEST_P(SupportedCompressionTest, ValidateStreamSizeConfigEnabled) {
+TEST_P(SupportedCompressionTest, validateStreamSizeConfigEnabled) {
   auto config = std::make_shared<Config>();
   ASSERT_TRUE(config->get(Config::STREAM_SIZE_ABOVE_THRESHOLD_CHECK_ENABLED));
   config->set(Config::COMPRESSION, supportedCompressionKind_);
@@ -451,7 +451,7 @@ void abandonWriterWithoutClosing() {
   // guard.dismiss();
 }
 
-TEST_F(WriterTest, DoNotCrashDbgModeOnAbort) {
+TEST_F(WriterTest, doNotCrashDbgModeOnAbort) {
   EXPECT_THROW(abandonWriterWithoutClosing(), std::runtime_error);
 }
 
@@ -479,7 +479,7 @@ class MockFileSink : public dwio::common::FileSink {
 #pragma GCC diagnostic pop
 };
 
-TEST_F(WriterTest, FlushWriterSinkUponClose) {
+TEST_F(WriterTest, flushWriterSinkUponClose) {
   auto config = std::make_shared<Config>();
   auto pool = memory::memoryManager()->addRootPool("FlushWriterSinkUponClose");
   auto sink = std::make_unique<MockFileSink>();

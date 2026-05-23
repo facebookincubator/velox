@@ -21,18 +21,18 @@
 using namespace ::testing;
 using namespace ::facebook::velox::dwio::common;
 
-TEST(MeasureTimeTests, DoesntCreateMeasureIfNoCallback) {
+TEST(MeasureTimeTests, doesntCreateMeasureIfNoCallback) {
   EXPECT_FALSE(measureTimeIfCallback(nullptr).has_value());
 }
 
-TEST(MeasureTimeTests, CreatesMeasureIfCallback) {
+TEST(MeasureTimeTests, createsMeasureIfCallback) {
   auto callback =
       std::function<void(std::chrono::high_resolution_clock::duration)>(
           [](const auto&) {});
   EXPECT_TRUE(measureTimeIfCallback(callback).has_value());
 }
 
-TEST(MeasureTimeTests, MeasuresTime) {
+TEST(MeasureTimeTests, measuresTime) {
   bool measured{false};
   {
     auto callback =

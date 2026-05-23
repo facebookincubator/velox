@@ -346,7 +346,7 @@ VectorPtr createRowVector(
       /*nullCount=*/0);
 }
 
-TEST_F(E2EWriterTest, E2E) {
+TEST_F(E2EWriterTest, e2e) {
   const size_t batchCount = 4;
   // Start with a size larger than stride to cover splitting into
   // strides. Continue with smaller size for faster test.
@@ -478,7 +478,7 @@ TEST_F(E2EWriterTest, DISABLED_DisableLinearHeuristicsLargeAnalytics) {
   dwrf::E2EWriterTestUtil::testWriter(*leafPool_, type, batches, 8, 8, config);
 }
 
-TEST_F(E2EWriterTest, FlatMapDictionaryEncoding) {
+TEST_F(E2EWriterTest, flatMapDictionaryEncoding) {
   const size_t batchCount = 4;
   // Start with a size larger than stride to cover splitting into
   // strides. Continue with smaller size for faster test.
@@ -515,7 +515,7 @@ TEST_F(E2EWriterTest, FlatMapDictionaryEncoding) {
   dwrf::E2EWriterTestUtil::testWriter(*pool, type, batches, 1, 1, config);
 }
 
-TEST_F(E2EWriterTest, MaxFlatMapKeys) {
+TEST_F(E2EWriterTest, maxFlatMapKeys) {
   using keyType = int32_t;
   using valueType = int32_t;
   using b = MapBuilder<keyType, valueType>;
@@ -547,7 +547,7 @@ TEST_F(E2EWriterTest, MaxFlatMapKeys) {
       config);
 }
 
-TEST_F(E2EWriterTest, PresentStreamIsSuppressedOnFlatMap) {
+TEST_F(E2EWriterTest, presentStreamIsSuppressedOnFlatMap) {
   using keyType = int32_t;
   using valueType = int64_t;
   using b = MapBuilder<keyType, valueType>;
@@ -597,7 +597,7 @@ TEST_F(E2EWriterTest, PresentStreamIsSuppressedOnFlatMap) {
   }
 }
 
-TEST_F(E2EWriterTest, TooManyFlatMapKeys) {
+TEST_F(E2EWriterTest, tooManyFlatMapKeys) {
   using keyType = int32_t;
   using valueType = int32_t;
   using b = MapBuilder<keyType, valueType>;
@@ -631,7 +631,7 @@ TEST_F(E2EWriterTest, TooManyFlatMapKeys) {
       "");
 }
 
-TEST_F(E2EWriterTest, FlatMapBackfill) {
+TEST_F(E2EWriterTest, flatMapBackfill) {
   auto pool = memory::memoryManager()->addLeafPool();
 
   using keyType = int32_t;
@@ -740,7 +740,7 @@ void testFlatMapWithNulls(
       dwrf::E2EWriterTestUtil::simpleFlushPolicyFactory(false));
 }
 
-TEST_F(E2EWriterTest, FlatMapWithNulls) {
+TEST_F(E2EWriterTest, flatMapWithNulls) {
   testFlatMapWithNulls(
       /*firstRowNotNull=*/false, /*enableFlatmapDictionaryEncoding=*/false);
   testFlatMapWithNulls(
@@ -751,7 +751,7 @@ TEST_F(E2EWriterTest, FlatMapWithNulls) {
       /*firstRowNotNull=*/true, /*enableFlatmapDictionaryEncoding=*/true);
 }
 
-TEST_F(E2EWriterTest, FlatMapWithNullsSharedDict) {
+TEST_F(E2EWriterTest, flatMapWithNullsSharedDict) {
   testFlatMapWithNulls(
       /*firstRowNotNull=*/false,
       /*enableFlatmapDictionaryEncoding=*/true,
@@ -762,7 +762,7 @@ TEST_F(E2EWriterTest, FlatMapWithNullsSharedDict) {
       /*shareDictionary=*/true);
 }
 
-TEST_F(E2EWriterTest, FlatMapEmpty) {
+TEST_F(E2EWriterTest, flatMapEmpty) {
   auto pool = memory::memoryManager()->addLeafPool();
 
   using keyType = int32_t;
@@ -803,7 +803,7 @@ TEST_F(E2EWriterTest, FlatMapEmpty) {
       dwrf::E2EWriterTestUtil::simpleFlushPolicyFactory(false));
 }
 
-TEST_F(E2EWriterTest, FlatMapConfigSingleColumn) {
+TEST_F(E2EWriterTest, flatMapConfigSingleColumn) {
   HiveTypeParser parser;
   auto type = parser.parse(
       "struct<"
@@ -814,7 +814,7 @@ TEST_F(E2EWriterTest, FlatMapConfigSingleColumn) {
   testFlatMapConfig(type, {}, {});
 }
 
-TEST_F(E2EWriterTest, FlatMapConfigMixedTypes) {
+TEST_F(E2EWriterTest, flatMapConfigMixedTypes) {
   HiveTypeParser parser;
   auto type = parser.parse(
       "struct<"
@@ -826,7 +826,7 @@ TEST_F(E2EWriterTest, FlatMapConfigMixedTypes) {
   testFlatMapConfig(type, {}, {});
 }
 
-TEST_F(E2EWriterTest, FlatMapConfigNestedMap) {
+TEST_F(E2EWriterTest, flatMapConfigNestedMap) {
   HiveTypeParser parser;
   auto type = parser.parse(
       "struct<"
@@ -838,7 +838,7 @@ TEST_F(E2EWriterTest, FlatMapConfigNestedMap) {
   testFlatMapConfig(type, {}, {});
 }
 
-TEST_F(E2EWriterTest, FlatMapConfigMixedMaps) {
+TEST_F(E2EWriterTest, flatMapConfigMixedMaps) {
   HiveTypeParser parser;
   auto type = parser.parse(
       "struct<"
@@ -852,7 +852,7 @@ TEST_F(E2EWriterTest, FlatMapConfigMixedMaps) {
   testFlatMapConfig(type, {}, {});
 }
 
-TEST_F(E2EWriterTest, FlatMapConfigNotMapColumn) {
+TEST_F(E2EWriterTest, flatMapConfigNotMapColumn) {
   HiveTypeParser parser;
   auto type = parser.parse(
       "struct<"
@@ -903,7 +903,7 @@ TEST_F(E2EWriterTest, mapStatsMultiStrides) {
   testFlatMapFileStats(type, {0, 1, 2, 3, 4, 5}, /*strideSize=*/1000);
 }
 
-TEST_F(E2EWriterTest, PartialStride) {
+TEST_F(E2EWriterTest, partialStride) {
   auto type = ROW({"bool_val"}, {INTEGER()});
 
   size_t batchSize = 1'000;
@@ -963,7 +963,7 @@ TEST_F(E2EWriterTest, PartialStride) {
   ASSERT_EQ(true, reader->columnStatistics(1)->hasNull().value());
 }
 
-TEST_F(E2EWriterTest, OversizeRows) {
+TEST_F(E2EWriterTest, oversizeRows) {
   auto pool = facebook::velox::memory::memoryManager()->addLeafPool();
 
   HiveTypeParser parser;
@@ -1001,7 +1001,7 @@ TEST_F(E2EWriterTest, OversizeRows) {
       false);
 }
 
-TEST_F(E2EWriterTest, OversizeBatches) {
+TEST_F(E2EWriterTest, oversizeBatches) {
   auto pool = facebook::velox::memory::memoryManager()->addLeafPool();
 
   HiveTypeParser parser;
@@ -1049,7 +1049,7 @@ TEST_F(E2EWriterTest, OversizeBatches) {
       false);
 }
 
-TEST_F(E2EWriterTest, OverflowLengthIncrements) {
+TEST_F(E2EWriterTest, overflowLengthIncrements) {
   auto pool = facebook::velox::memory::memoryManager()->addLeafPool();
 
   HiveTypeParser parser;
@@ -1203,7 +1203,7 @@ class E2EEncryptionTest : public E2EWriterTest {
   std::vector<VectorPtr> batches_;
 };
 
-TEST_F(E2EEncryptionTest, EncryptRoot) {
+TEST_F(E2EEncryptionTest, encryptRoot) {
   auto spec =
       std::make_shared<EncryptionSpecification>(EncryptionProvider::Unknown);
   spec->withRootEncryptionProperties(
@@ -1254,7 +1254,7 @@ TEST_F(E2EEncryptionTest, EncryptRoot) {
   validateFileContent(*reader);
 }
 
-TEST_F(E2EEncryptionTest, EncryptSelectedFields) {
+TEST_F(E2EEncryptionTest, encryptSelectedFields) {
   auto spec =
       std::make_shared<EncryptionSpecification>(EncryptionProvider::Unknown);
   spec->withEncryptedField(
@@ -1338,7 +1338,7 @@ TEST_F(E2EEncryptionTest, EncryptSelectedFields) {
   validateFileContent(*reader);
 }
 
-TEST_F(E2EEncryptionTest, EncryptEmptyFile) {
+TEST_F(E2EEncryptionTest, encryptEmptyFile) {
   auto spec =
       std::make_shared<EncryptionSpecification>(EncryptionProvider::Unknown);
   spec->withEncryptedField(
@@ -1353,7 +1353,7 @@ TEST_F(E2EEncryptionTest, EncryptEmptyFile) {
   ASSERT_FALSE(handler.isEncrypted());
 }
 
-TEST_F(E2EEncryptionTest, ReadWithoutKey) {
+TEST_F(E2EEncryptionTest, readWithoutKey) {
   auto spec =
       std::make_shared<EncryptionSpecification>(EncryptionProvider::Unknown);
   spec->withEncryptedField(

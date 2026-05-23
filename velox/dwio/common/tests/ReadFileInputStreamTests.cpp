@@ -35,7 +35,7 @@ class ReadFileInputStreamTest : public testing::Test {
   }
 };
 
-TEST_F(ReadFileInputStreamTest, LocalReadFile) {
+TEST_F(ReadFileInputStreamTest, localReadFile) {
   auto tempFile = TempFilePath::create();
   const auto& filename = tempFile->getPath();
   remove(filename.c_str());
@@ -66,7 +66,7 @@ TEST_F(ReadFileInputStreamTest, LocalReadFile) {
   remove(filename.c_str());
 }
 
-TEST(ReadFileInputStream, SimpleUsage) {
+TEST(ReadFileInputStream, simpleUsage) {
   std::string fileData;
   {
     InMemoryWriteFile writeFile(&fileData);
@@ -88,7 +88,7 @@ TEST(ReadFileInputStream, SimpleUsage) {
   ASSERT_EQ(read_value, "aaaaabbbbbccccc");
 }
 
-TEST(ReadFileInputStream, VReadIOBufs) {
+TEST(ReadFileInputStream, vReadIOBufs) {
   std::string fileData;
   {
     InMemoryWriteFile writeFile(&fileData);

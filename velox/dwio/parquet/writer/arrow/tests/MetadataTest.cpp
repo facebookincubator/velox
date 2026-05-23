@@ -138,7 +138,7 @@ void assertEncodings(
   ASSERT_EQ(encodings, expected);
 }
 
-TEST(Metadata, TestBuildAccess) {
+TEST(Metadata, testBuildAccess) {
   schema::NodeVector fields;
   schema::NodePtr root;
   SchemaDescriptor schema;
@@ -324,7 +324,7 @@ TEST(Metadata, TestBuildAccess) {
   ASSERT_TRUE(fAccessor1->equals(*fAccessor->subset({2, 0})));
 }
 
-TEST(Metadata, TestV1Version) {
+TEST(Metadata, testV1Version) {
   // PARQUET-839.
   schema::NodeVector fields;
   schema::NodePtr root;
@@ -349,7 +349,7 @@ TEST(Metadata, TestV1Version) {
   ASSERT_EQ(ParquetVersion::PARQUET_1_0, fAccessor->version());
 }
 
-TEST(Metadata, TestKeyValueMetadata) {
+TEST(Metadata, testKeyValueMetadata) {
   schema::NodeVector fields;
   schema::NodePtr root;
   SchemaDescriptor schema;
@@ -377,7 +377,7 @@ TEST(Metadata, TestKeyValueMetadata) {
   EXPECT_TRUE(fAccessor->keyValueMetadata()->Equals(*kvmeta));
 }
 
-TEST(Metadata, TestAddKeyValueMetadata) {
+TEST(Metadata, testAddKeyValueMetadata) {
   schema::NodeVector fields;
   fields.push_back(schema::int32("int_col", Repetition::kRequired));
   auto schema = std::static_pointer_cast<schema::GroupNode>(
@@ -442,7 +442,7 @@ TEST(Metadata, TestAddKeyValueMetadata) {
 
 // TODO: disabled as they require Arrow parquet data dir.
 /*
-TEST(Metadata, TestHasBloomFilter) {
+TEST(Metadata, testHasBloomFilter) {
   std::string dir_string(test::get_data_dir());
   std::string path = dir_string + "/data_index_bloom_encoding_stats.parquet";
   auto reader = ParquetFileReader::OpenFile(path, false);
@@ -456,7 +456,7 @@ TEST(Metadata, TestHasBloomFilter) {
   ASSERT_EQ(192, bloom_filter_offset);
 }
 
-TEST(Metadata, TestReadPageIndex) {
+TEST(Metadata, testReadPageIndex) {
   std::string dir_string(test::get_data_dir());
   std::string path = dir_string + "/alltypes_tiny_pages.parquet";
   auto reader = ParquetFileReader::OpenFile(path, false);
@@ -495,7 +495,7 @@ TEST(Metadata, TestReadPageIndex) {
 }
 */
 
-TEST(Metadata, TestSortingColumns) {
+TEST(Metadata, testSortingColumns) {
   schema::NodeVector fields;
   fields.push_back(schema::int32("sort_col", Repetition::kRequired));
   fields.push_back(schema::int32("int_col", Repetition::kRequired));
@@ -556,7 +556,7 @@ TEST(Metadata, TestSortingColumns) {
   ASSERT_EQ(createdBy, reader->fileMetaData().createdBy());
 }
 
-TEST(ApplicationVersion, Basics) {
+TEST(ApplicationVersion, basics) {
   ApplicationVersion version("parquet-mr version 1.7.9");
   ApplicationVersion version1("parquet-mr version 1.8.0");
   ApplicationVersion version2("parquet-cpp version 1.0.0");
@@ -640,7 +640,7 @@ TEST(ApplicationVersion, empty) {
   ASSERT_EQ("", version.version.buildInfo);
 }
 
-TEST(ApplicationVersion, NoVersion) {
+TEST(ApplicationVersion, noVersion) {
   ApplicationVersion version("parquet-mr (build abcd)");
 
   ASSERT_EQ("parquet-mr (build abcd)", version.application_);
@@ -653,7 +653,7 @@ TEST(ApplicationVersion, NoVersion) {
   ASSERT_EQ("", version.version.buildInfo);
 }
 
-TEST(ApplicationVersion, VersionEmpty) {
+TEST(ApplicationVersion, versionEmpty) {
   ApplicationVersion version("parquet-mr version ");
 
   ASSERT_EQ("parquet-mr", version.application_);
@@ -666,7 +666,7 @@ TEST(ApplicationVersion, VersionEmpty) {
   ASSERT_EQ("", version.version.buildInfo);
 }
 
-TEST(ApplicationVersion, VersionNoMajor) {
+TEST(ApplicationVersion, versionNoMajor) {
   ApplicationVersion version("parquet-mr version .");
 
   ASSERT_EQ("parquet-mr", version.application_);
@@ -679,7 +679,7 @@ TEST(ApplicationVersion, VersionNoMajor) {
   ASSERT_EQ("", version.version.buildInfo);
 }
 
-TEST(ApplicationVersion, VersionInvalidMajor) {
+TEST(ApplicationVersion, versionInvalidMajor) {
   ApplicationVersion version("parquet-mr version x1");
 
   ASSERT_EQ("parquet-mr", version.application_);
@@ -692,7 +692,7 @@ TEST(ApplicationVersion, VersionInvalidMajor) {
   ASSERT_EQ("", version.version.buildInfo);
 }
 
-TEST(ApplicationVersion, VersionMajorOnly) {
+TEST(ApplicationVersion, versionMajorOnly) {
   ApplicationVersion version("parquet-mr version 1");
 
   ASSERT_EQ("parquet-mr", version.application_);
@@ -705,7 +705,7 @@ TEST(ApplicationVersion, VersionMajorOnly) {
   ASSERT_EQ("", version.version.buildInfo);
 }
 
-TEST(ApplicationVersion, VersionNoMinor) {
+TEST(ApplicationVersion, versionNoMinor) {
   ApplicationVersion version("parquet-mr version 1.");
 
   ASSERT_EQ("parquet-mr", version.application_);
@@ -718,7 +718,7 @@ TEST(ApplicationVersion, VersionNoMinor) {
   ASSERT_EQ("", version.version.buildInfo);
 }
 
-TEST(ApplicationVersion, VersionMajorMinorOnly) {
+TEST(ApplicationVersion, versionMajorMinorOnly) {
   ApplicationVersion version("parquet-mr version 1.7");
 
   ASSERT_EQ("parquet-mr", version.application_);
@@ -731,7 +731,7 @@ TEST(ApplicationVersion, VersionMajorMinorOnly) {
   ASSERT_EQ("", version.version.buildInfo);
 }
 
-TEST(ApplicationVersion, VersionInvalidMinor) {
+TEST(ApplicationVersion, versionInvalidMinor) {
   ApplicationVersion version("parquet-mr version 1.x7");
 
   ASSERT_EQ("parquet-mr", version.application_);
@@ -744,7 +744,7 @@ TEST(ApplicationVersion, VersionInvalidMinor) {
   ASSERT_EQ("", version.version.buildInfo);
 }
 
-TEST(ApplicationVersion, VersionNoPatch) {
+TEST(ApplicationVersion, versionNoPatch) {
   ApplicationVersion version("parquet-mr version 1.7.");
 
   ASSERT_EQ("parquet-mr", version.application_);
@@ -757,7 +757,7 @@ TEST(ApplicationVersion, VersionNoPatch) {
   ASSERT_EQ("", version.version.buildInfo);
 }
 
-TEST(ApplicationVersion, VersionInvalidPatch) {
+TEST(ApplicationVersion, versionInvalidPatch) {
   ApplicationVersion version("parquet-mr version 1.7.x9");
 
   ASSERT_EQ("parquet-mr", version.application_);
@@ -770,7 +770,7 @@ TEST(ApplicationVersion, VersionInvalidPatch) {
   ASSERT_EQ("", version.version.buildInfo);
 }
 
-TEST(ApplicationVersion, VersionNoUnknown) {
+TEST(ApplicationVersion, versionNoUnknown) {
   ApplicationVersion version("parquet-mr version 1.7.9-cdh5.5.0+cd");
 
   ASSERT_EQ("parquet-mr", version.application_);
@@ -783,7 +783,7 @@ TEST(ApplicationVersion, VersionNoUnknown) {
   ASSERT_EQ("cd", version.version.buildInfo);
 }
 
-TEST(ApplicationVersion, VersionNoPreRelease) {
+TEST(ApplicationVersion, versionNoPreRelease) {
   ApplicationVersion version("parquet-mr version 1.7.9ab+cd");
 
   ASSERT_EQ("parquet-mr", version.application_);
@@ -796,7 +796,7 @@ TEST(ApplicationVersion, VersionNoPreRelease) {
   ASSERT_EQ("cd", version.version.buildInfo);
 }
 
-TEST(ApplicationVersion, VersionNoUnknownNoPreRelease) {
+TEST(ApplicationVersion, versionNoUnknownNoPreRelease) {
   ApplicationVersion version("parquet-mr version 1.7.9+cd");
 
   ASSERT_EQ("parquet-mr", version.application_);
@@ -809,7 +809,7 @@ TEST(ApplicationVersion, VersionNoUnknownNoPreRelease) {
   ASSERT_EQ("cd", version.version.buildInfo);
 }
 
-TEST(ApplicationVersion, VersionNoUnknownBuildInfoPreRelease) {
+TEST(ApplicationVersion, versionNoUnknownBuildInfoPreRelease) {
   ApplicationVersion version("parquet-mr version 1.7.9+cd-cdh5.5.0");
 
   ASSERT_EQ("parquet-mr", version.application_);
@@ -822,7 +822,7 @@ TEST(ApplicationVersion, VersionNoUnknownBuildInfoPreRelease) {
   ASSERT_EQ("cd-cdh5.5.0", version.version.buildInfo);
 }
 
-TEST(ApplicationVersion, FullWithSpaces) {
+TEST(ApplicationVersion, fullWithSpaces) {
   ApplicationVersion version(
       " parquet-mr \t version \v 1.5.3ab-cdh5.5.0+cd \r (build \n abcd \f) ");
 

@@ -406,7 +406,7 @@ class ColumnWriterTest : public Test {
   std::shared_ptr<MemoryPool> pool_ = memoryManager()->addLeafPool();
 };
 
-TEST_F(ColumnWriterTest, LowMemoryModeConfig) {
+TEST_F(ColumnWriterTest, lowMemoryModeConfig) {
   auto dataTypeWithId = TypeWithId::create(std::make_shared<VarcharType>(), 1);
   auto config = std::make_shared<Config>();
   WriterContext context{config, memory::memoryManager()->addRootPool()};
@@ -415,7 +415,7 @@ TEST_F(ColumnWriterTest, LowMemoryModeConfig) {
   EXPECT_TRUE(writer->useDictionaryEncoding());
 }
 
-TEST_F(ColumnWriterTest, IntegerDictionaryEncodingEnabledConfig) {
+TEST_F(ColumnWriterTest, integerDictionaryEncodingEnabledConfig) {
   auto dataTypeWithId = TypeWithId::create(INTEGER(), 1);
   auto config = std::make_shared<Config>();
   config->set(Config::INTEGER_DICTIONARY_ENCODING_ENABLED, true);
@@ -430,7 +430,7 @@ TEST_F(ColumnWriterTest, IntegerDictionaryEncodingEnabledConfig) {
   EXPECT_FALSE(writer->useDictionaryEncoding());
 }
 
-TEST_F(ColumnWriterTest, StringDictionaryEncodingEnabledConfig) {
+TEST_F(ColumnWriterTest, stringDictionaryEncodingEnabledConfig) {
   auto dataTypeWithId = TypeWithId::create(VARCHAR(), 1);
   auto config = std::make_shared<Config>();
   config->set(Config::STRING_DICTIONARY_ENCODING_ENABLED, true);
@@ -445,7 +445,7 @@ TEST_F(ColumnWriterTest, StringDictionaryEncodingEnabledConfig) {
   EXPECT_FALSE(writer->useDictionaryEncoding());
 }
 
-TEST_F(ColumnWriterTest, TestBooleanWriter) {
+TEST_F(ColumnWriterTest, testBooleanWriter) {
   std::vector<std::optional<bool>> data;
   for (auto i = 0; i < ITERATIONS; ++i) {
     bool value = (bool)(Random::rand32() & 1);
@@ -457,7 +457,7 @@ TEST_F(ColumnWriterTest, TestBooleanWriter) {
   testDataTypeWriter(BOOLEAN(), data, 3);
 }
 
-TEST_F(ColumnWriterTest, TestNullBooleanWriter) {
+TEST_F(ColumnWriterTest, testNullBooleanWriter) {
   std::vector<std::optional<bool>> data;
   for (auto i = 0; i < ITERATIONS; ++i) {
     data.emplace_back();
@@ -502,7 +502,7 @@ TEST_F(ColumnWriterTest, testDecimalWriter) {
   testDataTypeWriter(DECIMAL(38, 4), longValues, /*sequence=*/0, format);
 }
 
-TEST_F(ColumnWriterTest, TestTimestampEpochWriter) {
+TEST_F(ColumnWriterTest, testTimestampEpochWriter) {
   std::vector<std::optional<Timestamp>> data;
   // This value will be corrupted. verified in verifyValue method.
   data.emplace_back(Timestamp(-1, 1));
@@ -516,7 +516,7 @@ TEST_F(ColumnWriterTest, TestTimestampEpochWriter) {
   testDataTypeWriter(TIMESTAMP(), data);
 }
 
-TEST_F(ColumnWriterTest, TestTimestampWriter) {
+TEST_F(ColumnWriterTest, testTimestampWriter) {
   std::vector<std::optional<Timestamp>> data;
   for (int64_t i = 0; i < ITERATIONS; ++i) {
     Timestamp ts(i, i);
@@ -528,7 +528,7 @@ TEST_F(ColumnWriterTest, TestTimestampWriter) {
   testDataTypeWriter(TIMESTAMP(), data, 6);
 }
 
-TEST_F(ColumnWriterTest, TestTimestampBoundaryValuesWriter) {
+TEST_F(ColumnWriterTest, testTimestampBoundaryValuesWriter) {
   std::vector<std::optional<Timestamp>> data;
   for (int64_t i = 0; i < ITERATIONS; ++i) {
     if (i & 1) {
@@ -543,7 +543,7 @@ TEST_F(ColumnWriterTest, TestTimestampBoundaryValuesWriter) {
   testDataTypeWriter(TIMESTAMP(), data);
 }
 
-TEST_F(ColumnWriterTest, TestTimestampMixedWriter) {
+TEST_F(ColumnWriterTest, testTimestampMixedWriter) {
   std::vector<std::optional<Timestamp>> data;
   for (int64_t i = 0; i < ITERATIONS; ++i) {
     int64_t seconds = Random::rand64(Timestamp::kMaxSeconds);
@@ -568,7 +568,7 @@ void verifyInvalidTimestamp(int64_t seconds, int64_t nanos) {
       testDataTypeWriter(TIMESTAMP(), data), exception::LoggedException);
 }
 
-TEST_F(ColumnWriterTest, TestTimestampNullWriter) {
+TEST_F(ColumnWriterTest, testTimestampNullWriter) {
   std::vector<std::optional<Timestamp>> data;
   for (int64_t i = 0; i < ITERATIONS; ++i) {
     data.emplace_back();
@@ -576,7 +576,7 @@ TEST_F(ColumnWriterTest, TestTimestampNullWriter) {
   testDataTypeWriter(TIMESTAMP(), data);
 }
 
-TEST_F(ColumnWriterTest, TestBooleanMixedWriter) {
+TEST_F(ColumnWriterTest, testBooleanMixedWriter) {
   std::vector<std::optional<bool>> data;
   for (auto i = 0; i < ITERATIONS; ++i) {
     bool value = (bool)(Random::rand32() & 1);
@@ -586,7 +586,7 @@ TEST_F(ColumnWriterTest, TestBooleanMixedWriter) {
   testDataTypeWriter(BOOLEAN(), data);
 }
 
-TEST_F(ColumnWriterTest, TestAllBytesWriter) {
+TEST_F(ColumnWriterTest, testAllBytesWriter) {
   std::vector<std::optional<int8_t>> data;
   for (int16_t i = INT8_MIN; i <= INT8_MAX; ++i) {
     data.emplace_back(i);
@@ -597,7 +597,7 @@ TEST_F(ColumnWriterTest, TestAllBytesWriter) {
   testDataTypeWriter(TINYINT(), data);
 }
 
-TEST_F(ColumnWriterTest, TestRepeatedValuesByteWriter) {
+TEST_F(ColumnWriterTest, testRepeatedValuesByteWriter) {
   std::vector<std::optional<int8_t>> data;
   for (auto i = 0; i < ITERATIONS; ++i) {
     data.emplace_back(INT8_MIN);
@@ -605,7 +605,7 @@ TEST_F(ColumnWriterTest, TestRepeatedValuesByteWriter) {
   testDataTypeWriter(TINYINT(), data);
 }
 
-TEST_F(ColumnWriterTest, TestOnlyNullByteWriter) {
+TEST_F(ColumnWriterTest, testOnlyNullByteWriter) {
   std::vector<std::optional<int8_t>> data;
   for (auto i = 0; i <= ITERATIONS; ++i) {
     data.emplace_back();
@@ -613,7 +613,7 @@ TEST_F(ColumnWriterTest, TestOnlyNullByteWriter) {
   testDataTypeWriter(TINYINT(), data);
 }
 
-TEST_F(ColumnWriterTest, TestByteNullAndExtremeValueMixed) {
+TEST_F(ColumnWriterTest, testByteNullAndExtremeValueMixed) {
   std::vector<std::optional<int8_t>> data;
   for (auto i = 0; i < ITERATIONS; ++i) {
     data.emplace_back(INT8_MIN);
@@ -636,7 +636,7 @@ void generateSampleData(std::vector<std::optional<T>>& data) {
   }
 }
 
-TEST_F(ColumnWriterTest, TestByteWriter) {
+TEST_F(ColumnWriterTest, testByteWriter) {
   std::vector<std::optional<int8_t>> data;
   generateSampleData(data);
   testDataTypeWriter(TINYINT(), data);
@@ -645,7 +645,7 @@ TEST_F(ColumnWriterTest, TestByteWriter) {
   testDataTypeWriter(TINYINT(), data, 5);
 }
 
-TEST_F(ColumnWriterTest, TestShortWriter) {
+TEST_F(ColumnWriterTest, testShortWriter) {
   std::vector<std::optional<int16_t>> data;
   generateSampleData(data);
   testDataTypeWriter(SMALLINT(), data);
@@ -654,7 +654,7 @@ TEST_F(ColumnWriterTest, TestShortWriter) {
   testDataTypeWriter(SMALLINT(), data, 23);
 }
 
-TEST_F(ColumnWriterTest, TestIntWriter) {
+TEST_F(ColumnWriterTest, testIntWriter) {
   std::vector<std::optional<int32_t>> data;
   generateSampleData(data);
   testDataTypeWriter(INTEGER(), data);
@@ -663,7 +663,7 @@ TEST_F(ColumnWriterTest, TestIntWriter) {
   testDataTypeWriter(INTEGER(), data, 1);
 }
 
-TEST_F(ColumnWriterTest, TestLongWriter) {
+TEST_F(ColumnWriterTest, testLongWriter) {
   std::vector<std::optional<int64_t>> data;
   generateSampleData(data);
   testDataTypeWriter(BIGINT(), data);
@@ -672,7 +672,7 @@ TEST_F(ColumnWriterTest, TestLongWriter) {
   testDataTypeWriter(BIGINT(), data, 42);
 }
 
-TEST_F(ColumnWriterTest, TestBinaryWriter) {
+TEST_F(ColumnWriterTest, testBinaryWriter) {
   std::vector<std::optional<StringView>> data;
   const size_t size = 100;
   for (size_t i = 0; i < size; ++i) {
@@ -689,7 +689,7 @@ TEST_F(ColumnWriterTest, TestBinaryWriter) {
   testDataTypeWriter(VARBINARY(), data, 42);
 }
 
-TEST_F(ColumnWriterTest, TestBinaryWriterAllNulls) {
+TEST_F(ColumnWriterTest, testBinaryWriterAllNulls) {
   std::vector<std::optional<StringView>> data{100};
   testDataTypeWriter(VARBINARY(), data);
 }
@@ -1291,7 +1291,7 @@ void testMapWriterRowImpl() {
   testMapWriterRow<TVALUE>(*pool, batches, true, true);
 }
 
-TEST_F(ColumnWriterTest, TestMapWriterNestedRow) {
+TEST_F(ColumnWriterTest, testMapWriterNestedRow) {
   testMapWriterRowImpl<bool>();
   testMapWriterRowImpl<Array<int32_t>>();
   testMapWriterRowImpl<Array<bool>>();
@@ -1365,7 +1365,7 @@ void testMapWriterNumericKeyUseFlatMap(bool useFlatMap) {
   testMapWriterNumericKey<T>(useFlatMap, MapWriterInputType::kFlatMap);
 }
 
-TEST_F(ColumnWriterTest, TestMapWriterFloatKey) {
+TEST_F(ColumnWriterTest, testMapWriterFloatKey) {
   testMapWriterNumericKey<float>(/* useFlatMap */ false);
 
   EXPECT_THROW(
@@ -1387,14 +1387,14 @@ TEST_F(ColumnWriterTest, TestMapWriterFloatKey) {
       exception::LoggedException);
 }
 
-TEST_F(ColumnWriterTest, TestMapWriterInt64Key) {
+TEST_F(ColumnWriterTest, testMapWriterInt64Key) {
   testMapWriterNumericKey<int64_t>(/* useFlatMap */ false);
   testMapWriterNumericKey<int64_t>(/* useFlatMap */ true);
   testMapWriterNumericKeyUseStruct<int64_t>(/* useFlatMap */ true);
   testMapWriterNumericKeyUseFlatMap<int64_t>(/* useFlatMap */ true);
 }
 
-TEST_F(ColumnWriterTest, TestMapWriterDuplicatedInt64Key) {
+TEST_F(ColumnWriterTest, testMapWriterDuplicatedInt64Key) {
   using T = int64_t;
   using b = MapBuilder<T, T>;
 
@@ -1407,28 +1407,28 @@ TEST_F(ColumnWriterTest, TestMapWriterDuplicatedInt64Key) {
       "Duplicated key in map: 5");
 }
 
-TEST_F(ColumnWriterTest, TestMapWriterInt32Key) {
+TEST_F(ColumnWriterTest, testMapWriterInt32Key) {
   testMapWriterNumericKey<int32_t>(/* useFlatMap */ false);
   testMapWriterNumericKey<int32_t>(/* useFlatMap */ true);
   testMapWriterNumericKeyUseStruct<int32_t>(/* useFlatMap */ true);
   testMapWriterNumericKeyUseFlatMap<int32_t>(/* useFlatMap */ true);
 }
 
-TEST_F(ColumnWriterTest, TestMapWriterInt16Key) {
+TEST_F(ColumnWriterTest, testMapWriterInt16Key) {
   testMapWriterNumericKey<int16_t>(/* useFlatMap */ false);
   testMapWriterNumericKey<int16_t>(/* useFlatMap */ true);
   testMapWriterNumericKeyUseStruct<int16_t>(/* useFlatMap */ true);
   testMapWriterNumericKeyUseFlatMap<int16_t>(/* useFlatMap */ true);
 }
 
-TEST_F(ColumnWriterTest, TestMapWriterInt8Key) {
+TEST_F(ColumnWriterTest, testMapWriterInt8Key) {
   testMapWriterNumericKey<int8_t>(/* useFlatMap */ false);
   testMapWriterNumericKey<int8_t>(/* useFlatMap */ true);
   testMapWriterNumericKeyUseStruct<int8_t>(/* useFlatMap */ true);
   testMapWriterNumericKeyUseFlatMap<int8_t>(/* useFlatMap */ true);
 }
 
-TEST_F(ColumnWriterTest, TestMapWriterStringKey) {
+TEST_F(ColumnWriterTest, testMapWriterStringKey) {
   using keyType = StringView;
   using valueType = StringView;
   using b = MapBuilder<keyType, valueType>;
@@ -1523,7 +1523,7 @@ void testFlatMapWriter(
 //
 // With the bug: crashes with SIGABRT in F14Table::rehashImpl.
 // With the fix: passes (keys are properly owned).
-TEST_F(ColumnWriterTest, TestFlatMapDanglingStringViewKeyOnRehash) {
+TEST_F(ColumnWriterTest, testFlatMapDanglingStringViewKeyOnRehash) {
   const auto rowType = CppToType<Row<Map<StringView, int32_t>>>::create();
   const auto writerSchema = TypeWithId::create(rowType);
   const auto writerDataTypeWithId = writerSchema->childAt(0);
@@ -1594,7 +1594,7 @@ TEST_F(ColumnWriterTest, TestFlatMapDanglingStringViewKeyOnRehash) {
   writer->createIndexEntry();
 }
 
-TEST_F(ColumnWriterTest, TestFlatMapKeyNotInAllBatches) {
+TEST_F(ColumnWriterTest, testFlatMapKeyNotInAllBatches) {
   VectorMaker maker(pool_.get());
   // Test the case where not all keys appear in all batches.
   const std::vector<RowVectorPtr> batches{
@@ -1608,7 +1608,7 @@ TEST_F(ColumnWriterTest, TestFlatMapKeyNotInAllBatches) {
   testFlatMapWriter(batches, pool_.get());
 }
 
-TEST_F(ColumnWriterTest, TesFlatMapDuplicatedKey) {
+TEST_F(ColumnWriterTest, tesFlatMapDuplicatedKey) {
   const size_t size = 3;
   const BufferPtr inMaps = AlignedBuffer::allocate<bool>(size, pool_.get());
   bits::fillBits(inMaps->asMutable<uint64_t>(), 1, size, pool_.get());
@@ -1628,7 +1628,7 @@ TEST_F(ColumnWriterTest, TesFlatMapDuplicatedKey) {
       testFlatMapWriter({batch}, pool_.get()), "Duplicated key in map: 2");
 }
 
-TEST_F(ColumnWriterTest, TestMapWriterDuplicatedStringKey) {
+TEST_F(ColumnWriterTest, testMapWriterDuplicatedStringKey) {
   using keyType = StringView;
   using valueType = StringView;
   using b = MapBuilder<keyType, valueType>;
@@ -1643,7 +1643,7 @@ TEST_F(ColumnWriterTest, TestMapWriterDuplicatedStringKey) {
       "Duplicated key in map: 2");
 }
 
-TEST_F(ColumnWriterTest, TestMapWriterDifferentNumericKeyValue) {
+TEST_F(ColumnWriterTest, testMapWriterDifferentNumericKeyValue) {
   using keyType = float;
   using valueType = int32_t;
   using b = MapBuilder<keyType, valueType>;
@@ -1657,7 +1657,7 @@ TEST_F(ColumnWriterTest, TestMapWriterDifferentNumericKeyValue) {
   testMapWriter<keyType, valueType>(*pool_, batch, /* useFlatMap */ false);
 }
 
-TEST_F(ColumnWriterTest, TestMapWriterDifferentKeyValue) {
+TEST_F(ColumnWriterTest, testMapWriterDifferentKeyValue) {
   using keyType = float;
   using valueType = StringView;
   using b = MapBuilder<keyType, valueType>;
@@ -1671,7 +1671,7 @@ TEST_F(ColumnWriterTest, TestMapWriterDifferentKeyValue) {
   testMapWriter<keyType, valueType>(*pool_, batch, /* useFlatMap */ false);
 }
 
-TEST_F(ColumnWriterTest, TestMapWriterMixedBatchTypeHandling) {
+TEST_F(ColumnWriterTest, testMapWriterMixedBatchTypeHandling) {
   using keyType = int32_t;
   using valueType = int32_t;
   using b = MapBuilder<keyType, valueType>;
@@ -1704,7 +1704,7 @@ TEST_F(ColumnWriterTest, TestMapWriterMixedBatchTypeHandling) {
       "");
 }
 
-TEST_F(ColumnWriterTest, TestMapWriterBinaryKey) {
+TEST_F(ColumnWriterTest, testMapWriterBinaryKey) {
   using keyType = StringView;
   using valueType = int32_t;
   using b = MapBuilder<keyType, valueType>;
@@ -1742,7 +1742,7 @@ void testMapWriterImpl() {
   testMapWriter<keyType, valueType>(*pool, batch, /* useFlatMap */ true);
 }
 
-TEST_F(ColumnWriterTest, TestMapWriterNestedMap) {
+TEST_F(ColumnWriterTest, testMapWriterNestedMap) {
   testMapWriterImpl<int32_t, bool>();
   testMapWriterImpl<int32_t, Array<int32_t>>();
   testMapWriterImpl<int32_t, Array<bool>>();
@@ -1756,7 +1756,7 @@ TEST_F(ColumnWriterTest, TestMapWriterNestedMap) {
   testMapWriterImpl<int32_t, Row<int32_t, bool, StringView>>();
 }
 
-TEST_F(ColumnWriterTest, TestMapWriterDifferentStripeBatches) {
+TEST_F(ColumnWriterTest, testMapWriterDifferentStripeBatches) {
   using keyType = int32_t;
   using valueType = int32_t;
   using b = MapBuilder<keyType, valueType>;
@@ -1790,7 +1790,7 @@ TEST_F(ColumnWriterTest, TestMapWriterDifferentStripeBatches) {
       false);
 }
 
-TEST_F(ColumnWriterTest, TestMapWriterNullValues) {
+TEST_F(ColumnWriterTest, testMapWriterNullValues) {
   using keyType = int32_t;
   using valueType = int32_t;
   using b = MapBuilder<keyType, valueType>;
@@ -1805,7 +1805,7 @@ TEST_F(ColumnWriterTest, TestMapWriterNullValues) {
   testMapWriter<keyType, valueType>(*pool_, batch, /* useFlatMap */ true);
 }
 
-TEST_F(ColumnWriterTest, TestMapWriterNullRows) {
+TEST_F(ColumnWriterTest, testMapWriterNullRows) {
   using keyType = int32_t;
   using valueType = int32_t;
   using b = MapBuilder<keyType, valueType>;
@@ -1823,7 +1823,7 @@ TEST_F(ColumnWriterTest, TestMapWriterNullRows) {
   testMapWriter<keyType, valueType>(*pool_, batch, /* useFlatMap */ true);
 }
 
-TEST_F(ColumnWriterTest, TestMapWriterDuplicateKeys) {
+TEST_F(ColumnWriterTest, testMapWriterDuplicateKeys) {
   using keyType = int32_t;
   using valueType = int32_t;
   using b = MapBuilder<keyType, valueType>;
@@ -1843,7 +1843,7 @@ TEST_F(ColumnWriterTest, TestMapWriterDuplicateKeys) {
       exception::LoggedException);
 }
 
-TEST_F(ColumnWriterTest, TestMapWriterBigBatch) {
+TEST_F(ColumnWriterTest, testMapWriterBigBatch) {
   using keyType = int32_t;
   using valueType = float;
   using b = MapBuilder<keyType, valueType>;
@@ -1879,7 +1879,7 @@ TEST_F(ColumnWriterTest, TestMapWriterBigBatch) {
       /* useFlatMap */ true);
 }
 
-TEST_F(ColumnWriterTest, TestMapWriterUnalignedKeyValueCount) {
+TEST_F(ColumnWriterTest, testMapWriterUnalignedKeyValueCount) {
   VectorMaker maker(pool_.get());
   auto keys = maker.flatVector<int64_t>(11, folly::identity);
   auto values = maker.flatVector<int64_t>(12, folly::identity);
@@ -1921,7 +1921,7 @@ TEST_F(ColumnWriterTest, TestMapWriterUnalignedKeyValueCount) {
       (testMapWriter<int64_t, int64_t>(*pool_, batch, true)), "");
 }
 
-TEST_F(ColumnWriterTest, TestStructKeysConfigSerializationDeserialization) {
+TEST_F(ColumnWriterTest, testStructKeysConfigSerializationDeserialization) {
   const std::vector<std::vector<std::string>> columns{
       {"1.45", "hi, you;", "29102819", "1e-4"},
       {"291", "world"},
@@ -2014,7 +2014,7 @@ void testMapWriterStats(const std::shared_ptr<const RowType> type) {
   }
 }
 
-TEST_F(ColumnWriterTest, TestMapWriterCompareStatsBinaryKey) {
+TEST_F(ColumnWriterTest, testMapWriterCompareStatsBinaryKey) {
   using keyType = Varbinary;
   // We create a complex map with complex value structure to test that value
   // aggregation work well in flat maps
@@ -2024,7 +2024,7 @@ TEST_F(ColumnWriterTest, TestMapWriterCompareStatsBinaryKey) {
   testMapWriterStats(type);
 }
 
-TEST_F(ColumnWriterTest, TestMapWriterCompareStatsStringKey) {
+TEST_F(ColumnWriterTest, testMapWriterCompareStatsStringKey) {
   using keyType = std::string;
   // We create a complex map with complex value structure to test that value
   // aggregation work well in flat maps
@@ -2034,7 +2034,7 @@ TEST_F(ColumnWriterTest, TestMapWriterCompareStatsStringKey) {
   testMapWriterStats(type);
 }
 
-TEST_F(ColumnWriterTest, TestMapWriterCompareStatsInt8Key) {
+TEST_F(ColumnWriterTest, testMapWriterCompareStatsInt8Key) {
   using keyType = int8_t;
 
   // We create a complex map with complex value structure to test that value
@@ -2045,7 +2045,7 @@ TEST_F(ColumnWriterTest, TestMapWriterCompareStatsInt8Key) {
   testMapWriterStats(type);
 }
 
-TEST_F(ColumnWriterTest, TestMapWriterCompareStatsInt16Key) {
+TEST_F(ColumnWriterTest, testMapWriterCompareStatsInt16Key) {
   using keyType = int16_t;
 
   // We create a complex map with complex value structure to test that value
@@ -2056,7 +2056,7 @@ TEST_F(ColumnWriterTest, TestMapWriterCompareStatsInt16Key) {
   testMapWriterStats(type);
 }
 
-TEST_F(ColumnWriterTest, TestMapWriterCompareStatsInt32Key) {
+TEST_F(ColumnWriterTest, testMapWriterCompareStatsInt32Key) {
   using keyType = int32_t;
 
   // We create a complex map with complex value structure to test that value
@@ -2067,7 +2067,7 @@ TEST_F(ColumnWriterTest, TestMapWriterCompareStatsInt32Key) {
   testMapWriterStats(type);
 }
 
-TEST_F(ColumnWriterTest, TestMapWriterCompareStatsInt64Key) {
+TEST_F(ColumnWriterTest, testMapWriterCompareStatsInt64Key) {
   using keyType = int64_t;
 
   // We create a complex map with complex value structure to test that value
@@ -2085,11 +2085,11 @@ void testFractionalWrite(const TypePtr& t) {
   testDataTypeWriter(t, data);
 }
 
-TEST_F(ColumnWriterTest, TestFloatWriter) {
+TEST_F(ColumnWriterTest, testFloatWriter) {
   testFractionalWrite<float>(REAL());
 }
 
-TEST_F(ColumnWriterTest, TestDoubleWriter) {
+TEST_F(ColumnWriterTest, testDoubleWriter) {
   testFractionalWrite<double>(DOUBLE());
 }
 
@@ -2103,11 +2103,11 @@ void testFractionalInfinityWrite(const TypePtr& t) {
   testDataTypeWriter(t, data);
 }
 
-TEST_F(ColumnWriterTest, TestFloatInfinityWriter) {
+TEST_F(ColumnWriterTest, testFloatInfinityWriter) {
   testFractionalInfinityWrite<float>(REAL());
 }
 
-TEST_F(ColumnWriterTest, TestDoubleInfinityWriter) {
+TEST_F(ColumnWriterTest, testDoubleInfinityWriter) {
   testFractionalInfinityWrite<double>(DOUBLE());
 }
 
@@ -2121,11 +2121,11 @@ void testFractionalNegativeInfinityWrite(const TypePtr& t) {
   testDataTypeWriter(t, data);
 }
 
-TEST_F(ColumnWriterTest, TestFloatNegativeInfinityWriter) {
+TEST_F(ColumnWriterTest, testFloatNegativeInfinityWriter) {
   testFractionalNegativeInfinityWrite<float>(REAL());
 }
 
-TEST_F(ColumnWriterTest, TestDoubleNegativeInfinityWriter) {
+TEST_F(ColumnWriterTest, testDoubleNegativeInfinityWriter) {
   testFractionalNegativeInfinityWrite<double>(DOUBLE());
 }
 
@@ -2139,11 +2139,11 @@ void testFractionalNaNWrite(const TypePtr& t) {
   testDataTypeWriter(t, data);
 }
 
-TEST_F(ColumnWriterTest, TestFloatNanWriter) {
+TEST_F(ColumnWriterTest, testFloatNanWriter) {
   testFractionalNaNWrite<float>(REAL());
 }
 
-TEST_F(ColumnWriterTest, TestDoubleNanWriter) {
+TEST_F(ColumnWriterTest, testDoubleNanWriter) {
   testFractionalNaNWrite<double>(DOUBLE());
 }
 
@@ -2156,11 +2156,11 @@ void testFractionalNullWrite(const TypePtr& t) {
   testDataTypeWriter(t, data);
 }
 
-TEST_F(ColumnWriterTest, TestFloatAllNullWriter) {
+TEST_F(ColumnWriterTest, testFloatAllNullWriter) {
   testFractionalNullWrite<float>(REAL());
 }
 
-TEST_F(ColumnWriterTest, TestDoubleAllNullWriter) {
+TEST_F(ColumnWriterTest, testDoubleAllNullWriter) {
   testFractionalNullWrite<double>(DOUBLE());
 }
 
@@ -2184,11 +2184,11 @@ void testFractionalMixedWrite(const TypePtr& t) {
   testDataTypeWriter(t, data);
 }
 
-TEST_F(ColumnWriterTest, TestFloatMixedWriter) {
+TEST_F(ColumnWriterTest, testFloatMixedWriter) {
   testFractionalMixedWrite<float>(REAL());
 }
 
-TEST_F(ColumnWriterTest, TestDoubleMixedWriter) {
+TEST_F(ColumnWriterTest, testDoubleMixedWriter) {
   testFractionalMixedWrite<double>(DOUBLE());
 }
 
@@ -2689,7 +2689,7 @@ struct IntegerColumnWriterDirectEncodingUniversalTestCase
             flushCount} {}
 };
 
-TEST_F(ColumnWriterTest, IntegerTypeDictionaryEncodingWrites) {
+TEST_F(ColumnWriterTest, integerTypeDictionaryEncodingWrites) {
   struct TestCase
       : public IntegerColumnWriterDictionaryEncodingUniversalTestCase {
     TestCase(
@@ -2729,7 +2729,7 @@ TEST_F(ColumnWriterTest, IntegerTypeDictionaryEncodingWrites) {
   }
 }
 
-TEST_F(ColumnWriterTest, IntegerTypeDictionaryEncodingWritesWithNulls) {
+TEST_F(ColumnWriterTest, integerTypeDictionaryEncodingWritesWithNulls) {
   struct DictionaryEncodingTestCase
       : public IntegerColumnWriterDictionaryEncodingUniversalTestCase {
     DictionaryEncodingTestCase(
@@ -2798,7 +2798,7 @@ TEST_F(ColumnWriterTest, IntegerTypeDictionaryEncodingWritesWithNulls) {
   }
 }
 
-TEST_F(ColumnWriterTest, IntegerTypeDictionaryEncodingHugeWrites) {
+TEST_F(ColumnWriterTest, integerTypeDictionaryEncodingHugeWrites) {
   struct TestCase
       : public IntegerColumnWriterDictionaryEncodingUniversalTestCase {
     TestCase(
@@ -2842,7 +2842,7 @@ TEST_F(ColumnWriterTest, IntegerTypeDictionaryEncodingHugeWrites) {
 }
 
 // Split test to avoid sandcastle timeouts.
-TEST_F(ColumnWriterTest, IntegerTypeDictionaryEncodingHugeRepeatedWrites) {
+TEST_F(ColumnWriterTest, integerTypeDictionaryEncodingHugeRepeatedWrites) {
   struct TestCase
       : public IntegerColumnWriterDictionaryEncodingUniversalTestCase {
     TestCase(
@@ -2879,7 +2879,7 @@ TEST_F(ColumnWriterTest, IntegerTypeDictionaryEncodingHugeRepeatedWrites) {
   }
 }
 
-TEST_F(ColumnWriterTest, IntegerTypeDirectEncodingWrites) {
+TEST_F(ColumnWriterTest, integerTypeDirectEncodingWrites) {
   struct TestCase : public IntegerColumnWriterDirectEncodingUniversalTestCase {
     TestCase(
         size_t size,
@@ -2913,7 +2913,7 @@ TEST_F(ColumnWriterTest, IntegerTypeDirectEncodingWrites) {
   }
 }
 
-TEST_F(ColumnWriterTest, IntegerTypeDirectEncodingWritesWithNulls) {
+TEST_F(ColumnWriterTest, integerTypeDirectEncodingWritesWithNulls) {
   struct TestCase : public IntegerColumnWriterDirectEncodingUniversalTestCase {
     TestCase(
         size_t size,
@@ -2949,7 +2949,7 @@ TEST_F(ColumnWriterTest, IntegerTypeDirectEncodingWritesWithNulls) {
   }
 }
 
-TEST_F(ColumnWriterTest, IntegerTypeDirectEncodingHugeWrites) {
+TEST_F(ColumnWriterTest, integerTypeDirectEncodingHugeWrites) {
   struct TestCase : public IntegerColumnWriterDirectEncodingUniversalTestCase {
     TestCase(
         size_t size,
@@ -2979,7 +2979,7 @@ TEST_F(ColumnWriterTest, IntegerTypeDirectEncodingHugeWrites) {
 }
 
 // Split test to avoid sandcastle timeouts.
-TEST_F(ColumnWriterTest, IntegerTypeDirectEncodingHugeRepeatedWrites) {
+TEST_F(ColumnWriterTest, integerTypeDirectEncodingHugeRepeatedWrites) {
   struct TestCase : public IntegerColumnWriterDirectEncodingUniversalTestCase {
     TestCase(
         size_t size,
@@ -3012,7 +3012,7 @@ TEST_F(ColumnWriterTest, IntegerTypeDirectEncodingHugeRepeatedWrites) {
   }
 }
 
-TEST_F(ColumnWriterTest, IntegerTypeDictionaryWriteThreshold) {
+TEST_F(ColumnWriterTest, integerTypeDictionaryWriteThreshold) {
   struct DictionaryEncodingTestCase
       : public IntegerColumnWriterDictionaryEncodingUniversalTestCase {
     DictionaryEncodingTestCase(
@@ -3103,7 +3103,7 @@ TEST_F(ColumnWriterTest, IntegerTypeDictionaryWriteThreshold) {
   }
 }
 
-TEST_F(ColumnWriterTest, IntegerColumnWriterAbandonDictionaries) {
+TEST_F(ColumnWriterTest, integerColumnWriterAbandonDictionaries) {
   struct TestCase : public IntegerColumnWriterUniversalTestCase {
     TestCase(
         size_t size,
@@ -3235,7 +3235,7 @@ TEST_F(ColumnWriterTest, IntegerColumnWriterAbandonDictionaries) {
   }
 }
 
-TEST_F(ColumnWriterTest, IntegerColumnWriterAbandonDictionariesWithNulls) {
+TEST_F(ColumnWriterTest, integerColumnWriterAbandonDictionariesWithNulls) {
   struct TestCase : public IntegerColumnWriterUniversalTestCase {
     TestCase(
         size_t size,
@@ -3367,7 +3367,7 @@ TEST_F(ColumnWriterTest, IntegerColumnWriterAbandonDictionariesWithNulls) {
   }
 }
 
-TEST_F(ColumnWriterTest, IntegerColumnWriterAbandonLowValueDictionaries) {
+TEST_F(ColumnWriterTest, integerColumnWriterAbandonLowValueDictionaries) {
   struct TestCase : public IntegerColumnWriterUniversalTestCase {
     TestCase(
         size_t size,
@@ -3572,7 +3572,7 @@ void testIntegerDictionaryEncodableWriterConstructor() {
   }
 }
 
-TEST_F(ColumnWriterTest, IntegerDictionaryDictionaryEncodableWriterCtor) {
+TEST_F(ColumnWriterTest, integerDictionaryDictionaryEncodableWriterCtor) {
   testIntegerDictionaryEncodableWriterConstructor<int16_t>();
   testIntegerDictionaryEncodableWriterConstructor<int32_t>();
   testIntegerDictionaryEncodableWriterConstructor<int64_t>();
@@ -3821,7 +3821,7 @@ struct StringDirectEncodingTestCase : public StringColumnWriterTestCase {
             flushCount} {}
 };
 
-TEST_F(ColumnWriterTest, StringDictionaryEncodingWrite) {
+TEST_F(ColumnWriterTest, stringDictionaryEncodingWrite) {
   struct TestCase : public StringDictionaryEncodingTestCase {
     explicit TestCase(
         size_t size,
@@ -3895,7 +3895,7 @@ bool genNulls_ForStride2(
   return strideIndex == 2;
 }
 
-TEST_F(ColumnWriterTest, StrideStringWithSomeDataNotInDictionary) {
+TEST_F(ColumnWriterTest, strideStringWithSomeDataNotInDictionary) {
   struct TestCase : public StringDictionaryEncodingTestCase {
     explicit TestCase(
         size_t size,
@@ -3927,7 +3927,7 @@ TEST_F(ColumnWriterTest, StrideStringWithSomeDataNotInDictionary) {
   }
 }
 
-TEST_F(ColumnWriterTest, StringDictionaryEncodingWritesWithNulls) {
+TEST_F(ColumnWriterTest, stringDictionaryEncodingWritesWithNulls) {
   struct DictionaryEncodingTestCase : public StringDictionaryEncodingTestCase {
     DictionaryEncodingTestCase(
         size_t size,
@@ -4001,7 +4001,7 @@ TEST_F(ColumnWriterTest, StringDictionaryEncodingWritesWithNulls) {
   }
 }
 
-TEST_F(ColumnWriterTest, StringDirectEncodingWrites) {
+TEST_F(ColumnWriterTest, stringDirectEncodingWrites) {
   struct TestCase : public StringDirectEncodingTestCase {
     TestCase(
         size_t size,
@@ -4033,7 +4033,7 @@ TEST_F(ColumnWriterTest, StringDirectEncodingWrites) {
   }
 }
 
-TEST_F(ColumnWriterTest, StringDirectEncodingWritesWithNulls) {
+TEST_F(ColumnWriterTest, stringDirectEncodingWritesWithNulls) {
   struct TestCase : public StringDirectEncodingTestCase {
     TestCase(
         size_t size,
@@ -4069,7 +4069,7 @@ TEST_F(ColumnWriterTest, StringDirectEncodingWritesWithNulls) {
   }
 }
 
-TEST_F(ColumnWriterTest, StringColumnWriterAbandonDictionaries) {
+TEST_F(ColumnWriterTest, stringColumnWriterAbandonDictionaries) {
   struct TestCase : public StringColumnWriterTestCase {
     TestCase(
         size_t size,
@@ -4203,7 +4203,7 @@ TEST_F(ColumnWriterTest, StringColumnWriterAbandonDictionaries) {
 }
 
 // TODO: how about all nulls?
-TEST_F(ColumnWriterTest, StringColumnWriterAbandonDictionariesWithNulls) {
+TEST_F(ColumnWriterTest, stringColumnWriterAbandonDictionariesWithNulls) {
   struct TestCase : public StringColumnWriterTestCase {
     TestCase(
         size_t size,
@@ -4336,7 +4336,7 @@ TEST_F(ColumnWriterTest, StringColumnWriterAbandonDictionariesWithNulls) {
   }
 }
 
-TEST_F(ColumnWriterTest, StringColumnWriterAbandonLowValueDictionaries) {
+TEST_F(ColumnWriterTest, stringColumnWriterAbandonLowValueDictionaries) {
   struct TestCase : public StringColumnWriterTestCase {
     TestCase(
         size_t size,
@@ -4518,7 +4518,7 @@ TEST_F(ColumnWriterTest, StringColumnWriterAbandonLowValueDictionaries) {
   }
 }
 
-TEST_F(ColumnWriterTest, IntDictWriterDirectValueOverflow) {
+TEST_F(ColumnWriterTest, intDictWriterDirectValueOverflow) {
   auto config = std::make_shared<Config>();
   WriterContext context{
       config,
@@ -4561,7 +4561,7 @@ TEST_F(ColumnWriterTest, IntDictWriterDirectValueOverflow) {
   }
 }
 
-TEST_F(ColumnWriterTest, ShortDictWriterDictValueOverflow) {
+TEST_F(ColumnWriterTest, shortDictWriterDictValueOverflow) {
   auto config = std::make_shared<Config>();
   WriterContext context{config, memory::memoryManager()->addRootPool()};
   context.initBuffer();
@@ -4607,7 +4607,7 @@ TEST_F(ColumnWriterTest, ShortDictWriterDictValueOverflow) {
   }
 }
 
-TEST_F(ColumnWriterTest, RemovePresentStream) {
+TEST_F(ColumnWriterTest, removePresentStream) {
   auto config = std::make_shared<Config>();
 
   std::vector<std::optional<int32_t>> data;
@@ -4638,7 +4638,7 @@ TEST_F(ColumnWriterTest, RemovePresentStream) {
   ASSERT_EQ(streams.getStream(si, {}, false), nullptr);
 }
 
-TEST_F(ColumnWriterTest, ColumnIdInStream) {
+TEST_F(ColumnWriterTest, columnIdInStream) {
   auto config = std::make_shared<Config>();
 
   std::vector<std::optional<int32_t>> data;
@@ -4857,7 +4857,7 @@ void testDictionary(
       .runTest(valueAt, [](int) { return false; });
 }
 
-TEST_F(ColumnWriterTest, ColumnWriterDictionarySimple) {
+TEST_F(ColumnWriterTest, columnWriterDictionarySimple) {
   testDictionary<Timestamp>(TIMESTAMP(), randomNulls(11), [](vector_size_t i) {
     return Timestamp(i * 5, i * 2);
   });

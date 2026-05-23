@@ -388,7 +388,7 @@ class OrcReaderTestP : public testing::TestWithParam<OrcFileDescription>,
 
 TEST_P(
     OrcReaderTestP,
-    DwrfReader_FetchesOrcMetadata_ExpectCorrectFooterAndMetadata) {
+    dwrfReader_FetchesOrcMetadata_ExpectCorrectFooterAndMetadata) {
   const std::string dateOrc(getFilename());
   dwio::common::ReaderOptions readerOpts{pool()};
   readerOpts.setDataIoStats(dataIoStats_);
@@ -424,7 +424,7 @@ TEST_P(
   }
 }
 
-TEST_P(OrcReaderTestP, DwrfRowReader_ReadAllColumnTypes_ExpectedRowDataRead) {
+TEST_P(OrcReaderTestP, dwrfRowReader_ReadAllColumnTypes_ExpectedRowDataRead) {
   // Create schema and scan spec
   std::string schemaString = GetParam().typeString;
   auto type = HiveTypeParser().parse(schemaString);
