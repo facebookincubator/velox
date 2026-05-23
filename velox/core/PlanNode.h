@@ -5963,15 +5963,7 @@ using TopNRowNumberNodePtr = std::shared_ptr<const TopNRowNumberNode>;
 class MixedUnionNode : public PlanNode {
  public:
   MixedUnionNode(const PlanNodeId& id, std::vector<PlanNodePtr> sources)
-      : MixedUnionNode(id, std::move(sources), {}) {}
-
-  MixedUnionNode(
-      const PlanNodeId& id,
-      std::vector<PlanNodePtr> sources,
-      std::vector<int64_t> batchSizesPerSource)
-      : PlanNode(id),
-        sources_(std::move(sources)),
-        batchSizesPerSource_(std::move(batchSizesPerSource)) {
+      : PlanNode(id), sources_(std::move(sources)) {
     VELOX_USER_CHECK(
         !sources_.empty(), "Union node must have at least one source");
 
@@ -5995,7 +5987,6 @@ class MixedUnionNode : public PlanNode {
     explicit Builder(const MixedUnionNode& other) {
       id_ = other.id();
       sources_ = other.sources();
-      batchSizesPerSource_ = other.batchSizesPerSource();
     }
 
     Builder& id(PlanNodeId id) {
@@ -6016,38 +6007,18 @@ class MixedUnionNode : public PlanNode {
       return *this;
     }
 
-    Builder& batchSizesPerSource(std::vector<int64_t> batchSizes) {
-      batchSizesPerSource_ = std::move(batchSizes);
-      return *this;
-    }
-
-    Builder& batchSizeForSource(int32_t sourceIndex, int64_t batchSize) {
-      if (!batchSizesPerSource_.has_value()) {
-        batchSizesPerSource_ = std::vector<int64_t>{};
-      }
-      if (sourceIndex >= batchSizesPerSource_->size()) {
-        batchSizesPerSource_->resize(sourceIndex + 1, 0);
-      }
-      (*batchSizesPerSource_)[sourceIndex] = batchSize;
-      return *this;
-    }
-
     std::shared_ptr<MixedUnionNode> build() const {
       VELOX_USER_CHECK(id_.has_value(), "MixedUnionNode id is not set");
       VELOX_USER_CHECK(
           sources_.has_value() && !sources_->empty(),
           "MixedUnionNode sources is not set or empty");
 
-      return std::make_shared<MixedUnionNode>(
-          id_.value(),
-          sources_.value(),
-          batchSizesPerSource_.value_or(std::vector<int64_t>{}));
+      return std::make_shared<MixedUnionNode>(id_.value(), sources_.value());
     }
 
    private:
     std::optional<PlanNodeId> id_;
     std::optional<std::vector<PlanNodePtr>> sources_;
-    std::optional<std::vector<int64_t>> batchSizesPerSource_;
   };
 
   const std::vector<PlanNodePtr>& sources() const override {
@@ -6056,20 +6027,6 @@ class MixedUnionNode : public PlanNode {
 
   const RowTypePtr& outputType() const override {
     return outputType_;
-  }
-
-  /// Returns the batch sizes per source index.
-  /// This controls how many rows are taken from each source when mixing.
-  const std::vector<int64_t>& batchSizesPerSource() const {
-    return batchSizesPerSource_;
-  }
-
-  /// Get batch size for a specific source index (returns 0 if not set).
-  int64_t getBatchSizeForSource(int32_t sourceIndex) const {
-    if (sourceIndex < 0 || sourceIndex >= batchSizesPerSource_.size()) {
-      return 0;
-    }
-    return batchSizesPerSource_[sourceIndex];
   }
 
   bool requiresSingleThread() const override {
@@ -6095,7 +6052,6 @@ class MixedUnionNode : public PlanNode {
   void addDetails(std::stringstream& /* stream */) const override {}
   const std::vector<PlanNodePtr> sources_;
   RowTypePtr outputType_;
-  std::vector<int64_t> batchSizesPerSource_;
 };
 
 using MixedUnionNodePtr = std::shared_ptr<const MixedUnionNode>;

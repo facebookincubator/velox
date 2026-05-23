@@ -228,6 +228,10 @@ struct SplitGroupState {
   std::unordered_map<core::PlanNodeId, std::shared_ptr<ScaledScanController>>
       scaledScanControllers;
 
+  /// Per-source split counts for MixedUnion nodes, keyed on MixedUnion plan
+  /// node ID. Used to compute mixing fractions from the split ratio.
+  std::unordered_map<core::PlanNodeId, std::vector<int64_t>> sourceSplitCounts;
+
   /// Drivers created and still running for this split group.
   /// The split group is finished when this numbers reaches zero.
   uint32_t numRunningDrivers{0};
