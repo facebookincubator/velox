@@ -184,11 +184,37 @@ void MixedUnion::finishDrain() {
 
 RowVectorPtr MixedUnion::getOutputMixed() {
   // Drain pendingData_ populated by isBlocked() in both normal and drain modes.
+  // // Collect available data from sources, respecting batch sizes per source
+  const auto& batchSizesPerSource = unionNode_->batchSizesPerSource();
   std::vector<RowVectorPtr> validInputs;
   for (size_t i = 0; i < pendingData_.size(); ++i) {
     if (pendingData_[i]) {
-      validInputs.push_back(std::move(pendingData_[i]));
-      pendingData_[i] = nullptr;
+      // Check if we have a batch size limit for this source
+      const int64_t batchSizeLimit =
+          (i < batchSizesPerSource.size()) ? batchSizesPerSource[i] : 0;
+      if (batchSizeLimit > 0) {
+        // Limit the rows taken from this source
+        const auto batchSize = static_cast<vector_size_t>(batchSizeLimit);
+        if (pendingData_[i]->size() > batchSize) {
+          // Slice to take only the specified number of rows
+          validInputs.push_back(
+              std::dynamic_pointer_cast<RowVector>(
+                  pendingData_[i]->slice(0, batchSize)));
+          // Keep remaining data for next batch
+          auto remaining =
+              std::dynamic_pointer_cast<RowVector>(pendingData_[i]->slice(
+                  batchSize, pendingData_[i]->size() - batchSize));
+          pendingData_[i] = std::move(remaining);
+        } else {
+          // Take all available rows (less than batch size limit)
+          validInputs.push_back(std::move(pendingData_[i]));
+          pendingData_[i] = nullptr;
+        }
+      } else {
+        // No batch size limit, take all rows
+        validInputs.push_back(std::move(pendingData_[i]));
+        pendingData_[i] = nullptr;
+      }
     }
   }
 
