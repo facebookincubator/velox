@@ -21,6 +21,18 @@
 #include "velox/experimental/cudf/exec/Utilities.h"
 
 namespace facebook::velox::cudf_velox {
+namespace {
+
+RowTypePtr getConcatOutputType(
+    const std::shared_ptr<const core::PlanNode>& planNode) {
+  VELOX_CHECK_EQ(
+      planNode->sources().size(),
+      1,
+      "CudfBatchConcat expects a single-source plan node");
+  return planNode->sources()[0]->outputType();
+}
+
+} // namespace
 
 CudfBatchConcat::CudfBatchConcat(
     int32_t operatorId,
@@ -29,7 +41,7 @@ CudfBatchConcat::CudfBatchConcat(
     : CudfOperatorBase(
           operatorId,
           driverCtx,
-          planNode->outputType(),
+          getConcatOutputType(planNode),
           planNode->id(),
           "CudfBatchConcat",
           nvtx3::rgb{211, 211, 211}, /* LightGrey */
@@ -40,15 +52,37 @@ CudfBatchConcat::CudfBatchConcat(
       targetRows_(CudfConfig::getInstance().batchSizeMinThreshold) {}
 
 void CudfBatchConcat::doAddInput(RowVectorPtr input) {
+  if (input->size() == 0) {
+    return;
+  }
+
   auto cudfVector = std::dynamic_pointer_cast<CudfVector>(input);
   VELOX_CHECK_NOT_NULL(cudfVector, "CudfBatchConcat expects CudfVector input");
 
   // Push input cudf table to buffer
-  currentNumRows_ += cudfVector->getTableView().num_rows();
+  currentNumRows_ += cudfVector->size();
   buffer_.push_back(std::move(cudfVector));
 }
 
 RowVectorPtr CudfBatchConcat::doGetOutput() {
+  if (outputType_->size() == 0) {
+    if (buffer_.empty() || (currentNumRows_ < targetRows_ && !noMoreInput_)) {
+      return nullptr;
+    }
+
+    outputQueueStream_ = buffer_[0]->stream();
+    const auto rowCount = currentNumRows_;
+    buffer_.clear();
+    currentNumRows_ = 0;
+
+    return std::make_shared<CudfVector>(
+        pool(),
+        outputType_,
+        rowCount,
+        makeEmptyTable(outputType_),
+        outputQueueStream_);
+  }
+
   // Drain the queue if there is any output to be flushed
   if (!outputQueue_.empty()) {
     auto table = std::move(outputQueue_.front());
