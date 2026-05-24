@@ -426,39 +426,12 @@ FOLLY_ALWAYS_INLINE std::string prepareRegexpReplacePattern(
 /// pass cannot do this: given '\\\\X' (literal backslash followed by 'X'),
 /// the leftmost search for '\\<not-digit-not-backslash>' starts at offset 1,
 /// matches '\\X' and produces 'X', dropping the leading backslash that
-/// should have been kept. This byte-level loop walks the string left to
-/// right and always advances past a recognized escape unit as a whole.
-FOLLY_ALWAYS_INLINE std::string unescapeReplacement(
-    const std::string& replacement) {
-  std::string result;
-  result.reserve(replacement.size());
-  for (size_t i = 0; i < replacement.size();) {
-    const char current = replacement[i];
-    const bool hasNext = i + 1 < replacement.size();
-    if (current == '\\' && hasNext) {
-      const char following = replacement[i + 1];
-      if (following == '\\' || (following >= '0' && following <= '9')) {
-        // '\\\\' and '\\<digit>' have the same meaning in RE2 and in
-        // java.util.regex; keep them as a two-byte unit.
-        result.push_back(current);
-        result.push_back(following);
-        i += 2;
-      } else {
-        // '\\<other>' in java.util.regex is just <other>; emit the trailing
-        // byte and skip the backslash.
-        result.push_back(following);
-        i += 2;
-      }
-    } else {
-      // Plain byte, or a trailing lone '\\'. The latter is invalid in both
-      // engines; we keep the byte so RE2 surfaces the error later instead of
-      // silently dropping input here.
-      result.push_back(current);
-      ++i;
-    }
-  }
-  return result;
-}
+/// should have been kept. The implementation walks the string left to right
+/// and always advances past a recognized escape unit as a whole.
+///
+/// Defined in Re2Functions.cpp; called once per query during replacement
+/// preprocessing, not per row.
+std::string unescapeReplacement(const std::string& replacement);
 
 /// This function preprocesses an input replacement string to follow RE2
 /// syntax for java.util.regex used by Presto and Spark. The required

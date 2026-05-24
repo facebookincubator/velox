@@ -325,39 +325,52 @@ TEST_F(RegexFunctionsTest, regexpReplaceWithEmptyString) {
   EXPECT_EQ(result, output);
 }
 
-// Verifies that the SQL replacement '\\n' (three bytes: '\\', '\\', 'n')
-// produces the two-byte literal '\\n' (one backslash followed by 'n') when
-// the matched byte is LF (0x0A). Inputs include a multibyte UTF-8 character
-// to confirm that surrounding bytes do not affect the replacement.
-TEST_F(RegexFunctionsTest, regexpReplaceLiteralBackslashLetterReplacement) {
+// Verifies the handling of backslash escapes in regexp_replace's replacement
+// argument. Three families are covered in a single table:
+//   1. Two-byte literal '\\X' (e.g. '\\n', '\\b', '\\f', '\\r', '\\t') is
+//      preserved verbatim, so a matched control byte is rewritten to a
+//      literal backslash plus letter. Inputs include a multibyte UTF-8
+//      character to confirm surrounding bytes do not affect the result.
+//   2. Replacement of the form '\\X' where X is neither a digit nor '\\'
+//      drops the leading backslash and produces literal X, matching
+//      java.util.regex semantics (e.g. '\\{' -> '{', '\\$' -> '$').
+//
+// Patterns use the explicit hex form '\\x08' for backspace because RE2
+// interprets '\\b' in patterns as a word boundary anchor; the other letter
+// escapes ('\\f', '\\r', '\\t') match the corresponding control bytes
+// directly.
+TEST_F(RegexFunctionsTest, regexpReplaceBackslashEscapes) {
   auto result = testingRegexpReplaceRows(
-      {"A\nB", "A\nB\nC", "\xE5\x9B\xBD\nA"},
-      {"\\n", "\\n", "\\n"},
-      {"\\\\n", "\\\\n", "\\\\n"});
-  auto expected = convertOutput({"A\\nB", "A\\nB\\nC", "\xE5\x9B\xBD\\nA"}, 1);
-  assertEqualVectors(result, expected);
-}
-
-// Verifies that '\\' + letter replacements covering the control characters
-// that JSON escaping commonly substitutes -- '\\b' (0x08), '\\f' (0x0C),
-// '\\r' (0x0D), '\\t' (0x09) -- each produce the corresponding two-byte
-// literal '\\X' sequence.
-TEST_F(RegexFunctionsTest, regexpReplaceControlCharsReplacement) {
-  auto result = testingRegexpReplaceRows(
-      {"A\bB", "A\fB", "A\rB", "A\tB"},
-      {"\\x08", "\\x0c", "\\r", "\\t"},
-      {"\\\\b", "\\\\f", "\\\\r", "\\\\t"});
-  auto expected = convertOutput({"A\\bB", "A\\fB", "A\\rB", "A\\tB"}, 1);
-  assertEqualVectors(result, expected);
-}
-
-// Verifies that a replacement of the form '\\X', where X is neither a digit
-// nor another '\\', drops the leading backslash and produces a literal 'X',
-// matching java.util.regex semantics (e.g. '\\{' -> '{', '\\$' -> '$').
-TEST_F(RegexFunctionsTest, regexpReplaceUnescapesNonDigitNonBackslash) {
-  auto result = testingRegexpReplaceRows(
-      {"[{}]", "a$b"}, {"\\[\\{", "\\$"}, {"\\{", "#"});
-  auto expected = convertOutput({"{}]", "a#b"}, 1);
+      {"A\nB",
+       "A\nB\nC",
+       "\xE5\x9B\xBD\nA",
+       "A\bB",
+       "A\fB",
+       "A\rB",
+       "A\tB",
+       "[{}]",
+       "a$b"},
+      {"\\n", "\\n", "\\n", "\\x08", "\\f", "\\r", "\\t", "\\[\\{", "\\$"},
+      {"\\\\n",
+       "\\\\n",
+       "\\\\n",
+       "\\\\b",
+       "\\\\f",
+       "\\\\r",
+       "\\\\t",
+       "\\{",
+       "#"});
+  auto expected = convertOutput(
+      {"A\\nB",
+       "A\\nB\\nC",
+       "\xE5\x9B\xBD\\nA",
+       "A\\bB",
+       "A\\fB",
+       "A\\rB",
+       "A\\tB",
+       "{}]",
+       "a#b"},
+      1);
   assertEqualVectors(result, expected);
 }
 
