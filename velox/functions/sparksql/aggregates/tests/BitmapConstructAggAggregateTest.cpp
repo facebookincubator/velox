@@ -20,7 +20,7 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
-#include "velox/functions/sparksql/aggregates/tests/BitmapAggTestBase.h"
+#include "velox/functions/sparksql/aggregates/tests/BitmapBuilder.h"
 
 namespace facebook::velox::functions::aggregate::sparksql::test {
 namespace {
@@ -35,7 +35,7 @@ class BitmapConstructAggAggregateTest
 
   // Returns a single-row VARBINARY vector containing the bitmap.
   VectorPtr makeBitmapWithBits(const std::vector<int64_t>& positions) {
-    return makeFlatVector({makeBitmapString(positions)}, VARBINARY());
+    return makeFlatVector({BitmapBuilder::fromBits(positions)}, VARBINARY());
   }
 };
 
@@ -85,12 +85,11 @@ TEST_F(BitmapConstructAggAggregateTest, groupBy) {
   });
 
   // Group 1: bits 0 and 100 set. Group 2: all-zeros (all-null input).
-  auto bitmap1 = makeBitmapString({0, 100});
-  auto bitmap2 = makeBitmapString({});
+  auto bitmap1 = BitmapBuilder::fromBits({0, 100});
+  auto bitmap2 = BitmapBuilder::fromBits({});
   auto expected = makeRowVector({
       makeFlatVector<int32_t>({1, 2}),
-      makeFlatVector<StringView>(
-          {StringView(bitmap1), StringView(bitmap2)}, VARBINARY()),
+      makeFlatVector({bitmap1, bitmap2}, VARBINARY()),
   });
 
   testAggregations(
@@ -154,7 +153,7 @@ TEST_F(BitmapConstructAggAggregateTest, partialAndFinalAggregation) {
 TEST_F(BitmapConstructAggAggregateTest, invalidIntermediateSizeTooSmall) {
   std::string tinyBitmap(1, '\xFF');
   auto input = makeRowVector(
-      {makeFlatVector<StringView>({StringView(tinyBitmap)}, VARBINARY())});
+      {makeFlatVector({tinyBitmap}, VARBINARY())});
 
   auto plan =
       exec::test::PlanBuilder()
@@ -170,7 +169,7 @@ TEST_F(BitmapConstructAggAggregateTest, invalidIntermediateSizeTooSmall) {
 TEST_F(BitmapConstructAggAggregateTest, invalidIntermediateSizeTooLarge) {
   std::string bigBitmap(8192, '\x00');
   auto input = makeRowVector(
-      {makeFlatVector<StringView>({StringView(bigBitmap)}, VARBINARY())});
+      {makeFlatVector({bigBitmap}, VARBINARY())});
 
   auto plan =
       exec::test::PlanBuilder()

@@ -113,7 +113,7 @@ class BitmapOrAggAggregate {
     }
 
    private:
-    bool writeResult(exec::out_type<Varbinary>& out) {
+    bool writeResult(exec::out_type<Varbinary>& out) const {
       out.resize(kBitmapNumBytes);
       if (data_) {
         std::memcpy(out.data(), data_, kBitmapNumBytes);

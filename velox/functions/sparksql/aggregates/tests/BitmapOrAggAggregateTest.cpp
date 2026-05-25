@@ -20,9 +20,7 @@
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/sparksql/aggregates/BitmapConstructAggAggregate.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
-#include "velox/functions/sparksql/aggregates/tests/BitmapAggTestBase.h"
-
-#include <cstring>
+#include "velox/functions/sparksql/aggregates/tests/BitmapBuilder.h"
 
 namespace facebook::velox::functions::aggregate::sparksql::test {
 namespace {
@@ -36,32 +34,19 @@ class BitmapOrAggAggregateTest : public aggregate::test::AggregationTestBase {
 
   // Returns a single-row VARBINARY vector containing the bitmap.
   VectorPtr makeBitmapWithBits(const std::vector<int64_t>& positions) {
-    return makeFlatVector({makeBitmapString(positions)}, VARBINARY());
-  }
-
-  // Returns a 4096-byte bitmap string with specified bytes set to given values.
-  std::string makeBitmapFromBytes(
-      std::vector<std::pair<int, uint8_t>> bytesAndValues) {
-    std::string bitmap(kBitmapNumBytes, '\0');
-    for (auto& [byteIndex, value] : bytesAndValues) {
-      bitmap[byteIndex] = static_cast<char>(value);
-    }
-    return bitmap;
-  }
-
-  // Returns a VARBINARY FlatVector containing the given bitmaps.
-  VectorPtr makeBitmapVector(const std::vector<std::string>& bitmaps) {
-    return makeFlatVector(bitmaps, VARBINARY());
+    return makeFlatVector({BitmapBuilder::fromBits(positions)}, VARBINARY());
   }
 };
 
 TEST_F(BitmapOrAggAggregateTest, basic) {
-  auto lowBytes = makeBitmapFromBytes({{0, 0xF0}, {1, 0x0F}});
-  auto highByte = makeBitmapFromBytes({{0, 0x0F}, {2, 0xFF}});
-  auto merged = makeBitmapFromBytes({{0, 0xFF}, {1, 0x0F}, {2, 0xFF}});
+  auto lowBytes = BitmapBuilder::fromBytes({{0, 0xF0}, {1, 0x0F}});
+  auto highByte = BitmapBuilder::fromBytes({{0, 0x0F}, {2, 0xFF}});
+  auto merged = BitmapBuilder::fromBytes({{0, 0xFF}, {1, 0x0F}, {2, 0xFF}});
 
-  auto input = makeRowVector({makeBitmapVector({lowBytes, highByte})});
-  auto expectedResult = makeRowVector({makeBitmapVector({merged})});
+  auto input =
+      makeRowVector({makeFlatVector({lowBytes, highByte}, VARBINARY())});
+  auto expectedResult =
+      makeRowVector({makeFlatVector({merged}, VARBINARY())});
 
   testAggregations({input}, {}, {"bitmap_or_agg(c0)"}, {expectedResult});
 }
@@ -85,35 +70,31 @@ TEST_F(BitmapOrAggAggregateTest, emptyInput) {
 }
 
 TEST_F(BitmapOrAggAggregateTest, mixedNullAndNonNull) {
-  auto bitmap = makeBitmapFromBytes({{0, 0xAA}});
+  auto bitmap = BitmapBuilder::fromBytes({{0, 0xAA}});
 
   auto input = makeRowVector({makeNullableFlatVector<StringView>(
       {StringView(bitmap), std::nullopt}, VARBINARY())});
-  auto expectedResult = makeRowVector({makeBitmapVector({bitmap})});
+  auto expectedResult =
+      makeRowVector({makeFlatVector({bitmap}, VARBINARY())});
 
   testAggregations({input}, {}, {"bitmap_or_agg(c0)"}, {expectedResult});
 }
 
 TEST_F(BitmapOrAggAggregateTest, groupBy) {
-  auto groupOneFirst = makeBitmapFromBytes({{0, 0xF0}});
-  auto groupOneSecond = makeBitmapFromBytes({{0, 0x0F}});
-  auto groupTwoBitmap = makeBitmapFromBytes({{1, 0xFF}});
+  auto groupOneFirst = BitmapBuilder::fromBytes({{0, 0xF0}});
+  auto groupOneSecond = BitmapBuilder::fromBytes({{0, 0x0F}});
+  auto groupTwoBitmap = BitmapBuilder::fromBytes({{1, 0xFF}});
 
   auto input = makeRowVector({
       makeFlatVector<int32_t>({1, 1, 2}),
-      makeFlatVector<StringView>(
-          {StringView(groupOneFirst),
-           StringView(groupOneSecond),
-           StringView(groupTwoBitmap)},
-          VARBINARY()),
+      makeFlatVector(
+          {groupOneFirst, groupOneSecond, groupTwoBitmap}, VARBINARY()),
   });
 
-  auto groupOneMerged = makeBitmapFromBytes({{0, 0xFF}});
+  auto groupOneMerged = BitmapBuilder::fromBytes({{0, 0xFF}});
   auto expectedResult = makeRowVector({
       makeFlatVector<int32_t>({1, 2}),
-      makeFlatVector<StringView>(
-          {StringView(groupOneMerged), StringView(groupTwoBitmap)},
-          VARBINARY()),
+      makeFlatVector({groupOneMerged, groupTwoBitmap}, VARBINARY()),
   });
 
   testAggregations({input}, {"c0"}, {"bitmap_or_agg(c1)"}, {expectedResult});
@@ -122,7 +103,8 @@ TEST_F(BitmapOrAggAggregateTest, groupBy) {
 TEST_F(BitmapOrAggAggregateTest, invalidInputSize) {
   // Inputs not exactly 4096 bytes should trigger a check failure.
   auto shortBitmap = std::string(100, '\x01');
-  auto input = makeRowVector({makeBitmapVector({shortBitmap})});
+  auto input =
+      makeRowVector({makeFlatVector({shortBitmap}, VARBINARY())});
 
   VELOX_ASSERT_THROW(
       testAggregations(
@@ -133,7 +115,8 @@ TEST_F(BitmapOrAggAggregateTest, invalidInputSize) {
 TEST_F(BitmapOrAggAggregateTest, emptyBitmapRejected) {
   // A zero-length VARBINARY is invalid input, not silently skipped.
   auto emptyBitmap = std::string();
-  auto input = makeRowVector({makeBitmapVector({emptyBitmap})});
+  auto input =
+      makeRowVector({makeFlatVector({emptyBitmap}, VARBINARY())});
 
   VELOX_ASSERT_THROW(
       testAggregations(
@@ -143,13 +126,16 @@ TEST_F(BitmapOrAggAggregateTest, emptyBitmapRejected) {
 
 TEST_F(BitmapOrAggAggregateTest, mergeIntermediate) {
   // Two batches exercise partial -> final aggregation merge.
-  auto firstPartial = makeBitmapFromBytes({{0, 0xAA}, {100, 0x55}});
-  auto secondPartial = makeBitmapFromBytes({{0, 0x55}, {200, 0xFF}});
-  auto merged = makeBitmapFromBytes({{0, 0xFF}, {100, 0x55}, {200, 0xFF}});
+  auto firstPartial = BitmapBuilder::fromBytes({{0, 0xAA}, {100, 0x55}});
+  auto secondPartial = BitmapBuilder::fromBytes({{0, 0x55}, {200, 0xFF}});
+  auto merged = BitmapBuilder::fromBytes({{0, 0xFF}, {100, 0x55}, {200, 0xFF}});
 
-  auto batch1 = makeRowVector({makeBitmapVector({firstPartial})});
-  auto batch2 = makeRowVector({makeBitmapVector({secondPartial})});
-  auto expectedResult = makeRowVector({makeBitmapVector({merged})});
+  auto batch1 =
+      makeRowVector({makeFlatVector({firstPartial}, VARBINARY())});
+  auto batch2 =
+      makeRowVector({makeFlatVector({secondPartial}, VARBINARY())});
+  auto expectedResult =
+      makeRowVector({makeFlatVector({merged}, VARBINARY())});
 
   testAggregations(
       {batch1, batch2}, {}, {"bitmap_or_agg(c0)"}, {expectedResult});
@@ -158,7 +144,8 @@ TEST_F(BitmapOrAggAggregateTest, mergeIntermediate) {
 TEST_F(BitmapOrAggAggregateTest, invalidIntermediateSize) {
   // Invalid intermediate size should trigger a system check failure.
   std::string tinyBitmap(1, '\xFF');
-  auto input = makeRowVector({makeBitmapVector({tinyBitmap})});
+  auto input =
+      makeRowVector({makeFlatVector({tinyBitmap}, VARBINARY())});
 
   auto plan = exec::test::PlanBuilder()
                   .values({input})
@@ -209,7 +196,9 @@ TEST_F(BitmapOrAggAggregateTest, endToEndWithBitmapConstructAgg) {
 
   // Expected: OR of bits {0, 7, 100} (bucket 1) and {200, 300, 7} (bucket 2)
   // = bits {0, 7, 100, 200, 300}
-  auto expected = makeRowVector({makeBitmapWithBits({0, 7, 100, 200, 300})});
+  auto expected = makeRowVector(
+      {makeFlatVector(
+          {BitmapBuilder::fromBits({0, 7, 100, 200, 300})}, VARBINARY())});
   exec::test::AssertQueryBuilder(plan).assertResults(expected);
 }
 
