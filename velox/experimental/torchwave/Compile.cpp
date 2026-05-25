@@ -128,16 +128,7 @@ void listConstantsImpl(
       node, inputs, visited, [&](NodeCP n, const nativert::Attribute& attr) {
         auto iv = nativert::constantToIValue(attr.value);
         if (iv.isNone()) {
-          auto* meta = Registry::metadata(n->target());
-          if (meta && meta->isPresenceTemplateParam(attr.name)) {
-            return;
-          }
-          TORCH_CHECK(
-              false,
-              "Constant attribute '",
-              attr.name,
-              "' is None in node: ",
-              n->toString());
+          return;
         }
         storage.push_back(std::move(iv));
       });
@@ -1803,6 +1794,17 @@ std::string CompileCtx::cudaType(ValueCP value) const {
   }
   switch (kind) {
     case nativert::Type::Kind::SymInt:
+      return "int32_t";
+    case nativert::Type::Kind::None:
+      // Type not set during export.  Recover from TensorMeta if available,
+      // otherwise fall back to int32_t (covers integer scalar attributes
+      // like dim, index whose Kind was not annotated).
+      if (value->id() < types_.types.size() && types_.types[value->id()]) {
+        return cudaTypeString(types_.types[value->id()]->dtype());
+      }
+      LOG(WARNING) << "Value " << value->name()
+                   << " has Kind::None with no TensorMeta, defaulting to "
+                      "int32_t";
       return "int32_t";
     case nativert::Type::Kind::SymFloat:
       return "float";
