@@ -23,11 +23,13 @@
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/functions/sparksql/aggregates/BitmapConstructAggAggregate.h"
+#include "velox/vector/FlatVector.h"
+#include "velox/vector/tests/utils/VectorMaker.h"
 
 namespace facebook::velox::functions::aggregate::sparksql::test {
 
-/// Utility for constructing test bitmaps. Consolidates bitmap creation helpers
-/// into a consistent API for use across bitmap aggregate tests.
+/// Utility for constructing test bitmaps. Consolidates bitmap creation
+/// helpers into a consistent API for use across bitmap aggregate tests.
 class BitmapBuilder {
  public:
   /// Returns a 4096-byte bitmap string with specified bit positions set.
@@ -40,14 +42,65 @@ class BitmapBuilder {
     return bitmap;
   }
 
-  /// Returns a 4096-byte bitmap string with specific byte positions set.
+  /// Returns a 4096-byte bitmap string with consecutive bytes starting
+  /// at index 0, rest zeros.
+  static std::string fromBytes(std::initializer_list<uint8_t> bytes) {
+    std::string bitmap(kBitmapNumBytes, '\0');
+    int32_t index = 0;
+    for (auto byte : bytes) {
+      bitmap[index++] = static_cast<char>(byte);
+    }
+    return bitmap;
+  }
+
+  /// Returns a 4096-byte bitmap string with specific byte positions
+  /// set.
   static std::string fromBytes(
-      std::initializer_list<std::pair<int32_t, uint8_t>> bytesAndValues) {
+      const std::vector<std::pair<int32_t, uint8_t>>& bytesAndValues) {
     std::string bitmap(kBitmapNumBytes, '\0');
     for (const auto& [byteIndex, value] : bytesAndValues) {
       bitmap[byteIndex] = static_cast<char>(value);
     }
     return bitmap;
+  }
+
+  static std::string fromBytes(
+      std::initializer_list<std::pair<int32_t, uint8_t>> bytesAndValues) {
+    return fromBytes(std::vector<std::pair<int32_t, uint8_t>>(bytesAndValues));
+  }
+
+  /// Creates a VARBINARY FlatVector with one bitmap per entry, each
+  /// constructed from bit positions.
+  static VectorPtr vectorFromBits(
+      memory::MemoryPool* pool,
+      std::initializer_list<std::vector<int64_t>> bitmaps) {
+    std::vector<std::string> strings;
+    strings.reserve(bitmaps.size());
+    for (const auto& positions : bitmaps) {
+      strings.push_back(fromBits(positions));
+    }
+    return vector(pool, strings);
+  }
+
+  /// Creates a VARBINARY FlatVector with one bitmap per entry, each
+  /// constructed from byte position/value pairs.
+  static VectorPtr vectorFromBytes(
+      memory::MemoryPool* pool,
+      std::initializer_list<std::vector<std::pair<int32_t, uint8_t>>> bitmaps) {
+    std::vector<std::string> strings;
+    strings.reserve(bitmaps.size());
+    for (const auto& bytesAndValues : bitmaps) {
+      strings.push_back(fromBytes(bytesAndValues));
+    }
+    return vector(pool, strings);
+  }
+
+  /// Creates a VARBINARY FlatVector from pre-built bitmap strings.
+  static VectorPtr vector(
+      memory::MemoryPool* pool,
+      const std::vector<std::string>& bitmaps) {
+    velox::test::VectorMaker maker(pool);
+    return maker.flatVector(bitmaps, VARBINARY());
   }
 };
 

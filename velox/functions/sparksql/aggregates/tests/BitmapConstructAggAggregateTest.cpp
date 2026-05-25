@@ -32,17 +32,12 @@ class BitmapConstructAggAggregateTest
     AggregationTestBase::SetUp();
     registerAggregateFunctions("");
   }
-
-  // Returns a single-row VARBINARY vector containing the bitmap.
-  VectorPtr makeBitmapWithBits(const std::vector<int64_t>& positions) {
-    return makeFlatVector({BitmapBuilder::fromBits(positions)}, VARBINARY());
-  }
 };
 
 TEST_F(BitmapConstructAggAggregateTest, basic) {
   // Single group, several bit positions.
   auto input = makeRowVector({makeFlatVector<int64_t>({0, 1, 7, 8, 100})});
-  auto expected = makeBitmapWithBits({0, 1, 7, 8, 100});
+  auto expected = BitmapBuilder::vectorFromBits(pool(), {{0, 1, 7, 8, 100}});
 
   testAggregations(
       {input}, {}, {"bitmap_construct_agg(c0)"}, {makeRowVector({expected})});
@@ -52,7 +47,7 @@ TEST_F(BitmapConstructAggAggregateTest, allNullInputReturnsZeroBitmap) {
   // Spark contract: nullable = false, so all-null input produces all-zeros.
   auto input = makeRowVector({makeNullableFlatVector<int64_t>(
       {std::nullopt, std::nullopt, std::nullopt})});
-  auto expected = makeBitmapWithBits({});
+  auto expected = BitmapBuilder::vectorFromBits(pool(), {{}});
 
   testAggregations(
       {input}, {}, {"bitmap_construct_agg(c0)"}, {makeRowVector({expected})});
@@ -60,7 +55,7 @@ TEST_F(BitmapConstructAggAggregateTest, allNullInputReturnsZeroBitmap) {
 
 TEST_F(BitmapConstructAggAggregateTest, emptyInputReturnsZeroBitmap) {
   auto input = makeRowVector({makeFlatVector<int64_t>({})});
-  auto expected = makeBitmapWithBits({});
+  auto expected = BitmapBuilder::vectorFromBits(pool(), {{}});
 
   testAggregations(
       {input}, {}, {"bitmap_construct_agg(c0)"}, {makeRowVector({expected})});
@@ -70,7 +65,7 @@ TEST_F(BitmapConstructAggAggregateTest, mixedNullAndValid) {
   // Mix of null and valid values.
   auto input = makeRowVector({makeNullableFlatVector<int64_t>(
       {std::nullopt, 5, std::nullopt, 10, std::nullopt})});
-  auto expected = makeBitmapWithBits({5, 10});
+  auto expected = BitmapBuilder::vectorFromBits(pool(), {{5, 10}});
 
   testAggregations(
       {input}, {}, {"bitmap_construct_agg(c0)"}, {makeRowVector({expected})});
@@ -85,11 +80,11 @@ TEST_F(BitmapConstructAggAggregateTest, groupBy) {
   });
 
   // Group 1: bits 0 and 100 set. Group 2: all-zeros (all-null input).
-  auto bitmap1 = BitmapBuilder::fromBits({0, 100});
-  auto bitmap2 = BitmapBuilder::fromBits({});
+  auto groupOneBitmap = BitmapBuilder::fromBits({0, 100});
+  auto groupTwoBitmap = BitmapBuilder::fromBits({});
   auto expected = makeRowVector({
       makeFlatVector<int32_t>({1, 2}),
-      makeFlatVector({bitmap1, bitmap2}, VARBINARY()),
+      BitmapBuilder::vector(pool(), {groupOneBitmap, groupTwoBitmap}),
   });
 
   testAggregations(
@@ -99,7 +94,7 @@ TEST_F(BitmapConstructAggAggregateTest, groupBy) {
 TEST_F(BitmapConstructAggAggregateTest, boundaryPositions) {
   // Test min and max valid positions.
   auto input = makeRowVector({makeFlatVector<int64_t>({0, 32767})});
-  auto expected = makeBitmapWithBits({0, 32767});
+  auto expected = BitmapBuilder::vectorFromBits(pool(), {{0, 32767}});
 
   testAggregations(
       {input}, {}, {"bitmap_construct_agg(c0)"}, {makeRowVector({expected})});
@@ -130,7 +125,7 @@ TEST_F(BitmapConstructAggAggregateTest, invalidPositionTooLarge) {
 TEST_F(BitmapConstructAggAggregateTest, duplicatePositions) {
   // Duplicate positions should result in same bitmap as unique.
   auto input = makeRowVector({makeFlatVector<int64_t>({5, 5, 5, 10, 10})});
-  auto expected = makeBitmapWithBits({5, 10});
+  auto expected = BitmapBuilder::vectorFromBits(pool(), {{5, 10}});
 
   testAggregations(
       {input}, {}, {"bitmap_construct_agg(c0)"}, {makeRowVector({expected})});
@@ -141,7 +136,7 @@ TEST_F(BitmapConstructAggAggregateTest, partialAndFinalAggregation) {
   // Split data across multiple batches to exercise intermediate merge.
   auto batch1 = makeRowVector({makeFlatVector<int64_t>({0, 1, 2})});
   auto batch2 = makeRowVector({makeFlatVector<int64_t>({3, 4, 5})});
-  auto expected = makeBitmapWithBits({0, 1, 2, 3, 4, 5});
+  auto expected = BitmapBuilder::vectorFromBits(pool(), {{0, 1, 2, 3, 4, 5}});
 
   testAggregations(
       {batch1, batch2},
@@ -152,8 +147,7 @@ TEST_F(BitmapConstructAggAggregateTest, partialAndFinalAggregation) {
 
 TEST_F(BitmapConstructAggAggregateTest, invalidIntermediateSizeTooSmall) {
   std::string tinyBitmap(1, '\xFF');
-  auto input = makeRowVector(
-      {makeFlatVector({tinyBitmap}, VARBINARY())});
+  auto input = makeRowVector({makeFlatVector({tinyBitmap}, VARBINARY())});
 
   auto plan =
       exec::test::PlanBuilder()
@@ -168,8 +162,7 @@ TEST_F(BitmapConstructAggAggregateTest, invalidIntermediateSizeTooSmall) {
 
 TEST_F(BitmapConstructAggAggregateTest, invalidIntermediateSizeTooLarge) {
   std::string bigBitmap(8192, '\x00');
-  auto input = makeRowVector(
-      {makeFlatVector({bigBitmap}, VARBINARY())});
+  auto input = makeRowVector({makeFlatVector({bigBitmap}, VARBINARY())});
 
   auto plan =
       exec::test::PlanBuilder()
@@ -194,7 +187,7 @@ TEST_F(BitmapConstructAggAggregateTest, nullIntermediateInFinalAggregation) {
           .finalAggregation({}, {"bitmap_construct_agg(c0)"}, {{BIGINT()}})
           .planNode();
 
-  auto expected = makeRowVector({makeBitmapWithBits({})});
+  auto expected = makeRowVector({BitmapBuilder::vectorFromBits(pool(), {{}})});
   exec::test::AssertQueryBuilder(plan).assertResults(expected);
 }
 
@@ -202,7 +195,7 @@ TEST_F(BitmapConstructAggAggregateTest, mergeMultipleIntermediates) {
   // Two batches with disjoint positions exercise the 64-bit OR combine logic.
   auto batch1 = makeRowVector({makeFlatVector<int64_t>({0})});
   auto batch2 = makeRowVector({makeFlatVector<int64_t>({15})});
-  auto expected = makeBitmapWithBits({0, 15});
+  auto expected = BitmapBuilder::vectorFromBits(pool(), {{0, 15}});
 
   testAggregations(
       {batch1, batch2},
@@ -215,7 +208,7 @@ TEST_F(BitmapConstructAggAggregateTest, mergeOverlappingIntermediates) {
   // Two batches with overlapping positions — OR produces union.
   auto batch1 = makeRowVector({makeFlatVector<int64_t>({0})});
   auto batch2 = makeRowVector({makeFlatVector<int64_t>({0, 1})});
-  auto expected = makeBitmapWithBits({0, 1});
+  auto expected = BitmapBuilder::vectorFromBits(pool(), {{0, 1}});
 
   testAggregations(
       {batch1, batch2},

@@ -31,11 +31,6 @@ class BitmapOrAggAggregateTest : public aggregate::test::AggregationTestBase {
     AggregationTestBase::SetUp();
     registerAggregateFunctions("");
   }
-
-  // Returns a single-row VARBINARY vector containing the bitmap.
-  VectorPtr makeBitmapWithBits(const std::vector<int64_t>& positions) {
-    return makeFlatVector({BitmapBuilder::fromBits(positions)}, VARBINARY());
-  }
 };
 
 TEST_F(BitmapOrAggAggregateTest, basic) {
@@ -44,9 +39,9 @@ TEST_F(BitmapOrAggAggregateTest, basic) {
   auto merged = BitmapBuilder::fromBytes({{0, 0xFF}, {1, 0x0F}, {2, 0xFF}});
 
   auto input =
-      makeRowVector({makeFlatVector({lowBytes, highByte}, VARBINARY())});
+      makeRowVector({BitmapBuilder::vector(pool(), {lowBytes, highByte})});
   auto expectedResult =
-      makeRowVector({makeFlatVector({merged}, VARBINARY())});
+      makeRowVector({BitmapBuilder::vector(pool(), {merged})});
 
   testAggregations({input}, {}, {"bitmap_or_agg(c0)"}, {expectedResult});
 }
@@ -55,16 +50,18 @@ TEST_F(BitmapOrAggAggregateTest, allNullInputs) {
   auto input = makeRowVector({makeNullableFlatVector<StringView>(
       {std::nullopt, std::nullopt, std::nullopt}, VARBINARY())});
 
-  auto expectedResult = makeRowVector({makeBitmapWithBits({})});
+  auto expectedResult =
+      makeRowVector({BitmapBuilder::vectorFromBits(pool(), {{}})});
 
   testAggregations({input}, {}, {"bitmap_or_agg(c0)"}, {expectedResult});
 }
 
 TEST_F(BitmapOrAggAggregateTest, emptyInput) {
-  auto input =
-      makeRowVector({makeFlatVector(std::vector<std::string>{}, VARBINARY())});
+  auto input = makeRowVector(
+      {BitmapBuilder::vector(pool(), std::vector<std::string>{})});
 
-  auto expectedResult = makeRowVector({makeBitmapWithBits({})});
+  auto expectedResult =
+      makeRowVector({BitmapBuilder::vectorFromBits(pool(), {{}})});
 
   testAggregations({input}, {}, {"bitmap_or_agg(c0)"}, {expectedResult});
 }
@@ -75,7 +72,7 @@ TEST_F(BitmapOrAggAggregateTest, mixedNullAndNonNull) {
   auto input = makeRowVector({makeNullableFlatVector<StringView>(
       {StringView(bitmap), std::nullopt}, VARBINARY())});
   auto expectedResult =
-      makeRowVector({makeFlatVector({bitmap}, VARBINARY())});
+      makeRowVector({BitmapBuilder::vector(pool(), {bitmap})});
 
   testAggregations({input}, {}, {"bitmap_or_agg(c0)"}, {expectedResult});
 }
@@ -87,14 +84,14 @@ TEST_F(BitmapOrAggAggregateTest, groupBy) {
 
   auto input = makeRowVector({
       makeFlatVector<int32_t>({1, 1, 2}),
-      makeFlatVector(
-          {groupOneFirst, groupOneSecond, groupTwoBitmap}, VARBINARY()),
+      BitmapBuilder::vector(
+          pool(), {groupOneFirst, groupOneSecond, groupTwoBitmap}),
   });
 
   auto groupOneMerged = BitmapBuilder::fromBytes({{0, 0xFF}});
   auto expectedResult = makeRowVector({
       makeFlatVector<int32_t>({1, 2}),
-      makeFlatVector({groupOneMerged, groupTwoBitmap}, VARBINARY()),
+      BitmapBuilder::vector(pool(), {groupOneMerged, groupTwoBitmap}),
   });
 
   testAggregations({input}, {"c0"}, {"bitmap_or_agg(c1)"}, {expectedResult});
@@ -103,8 +100,7 @@ TEST_F(BitmapOrAggAggregateTest, groupBy) {
 TEST_F(BitmapOrAggAggregateTest, invalidInputSize) {
   // Inputs not exactly 4096 bytes should trigger a check failure.
   auto shortBitmap = std::string(100, '\x01');
-  auto input =
-      makeRowVector({makeFlatVector({shortBitmap}, VARBINARY())});
+  auto input = makeRowVector({makeFlatVector({shortBitmap}, VARBINARY())});
 
   VELOX_ASSERT_THROW(
       testAggregations(
@@ -115,8 +111,7 @@ TEST_F(BitmapOrAggAggregateTest, invalidInputSize) {
 TEST_F(BitmapOrAggAggregateTest, emptyBitmapRejected) {
   // A zero-length VARBINARY is invalid input, not silently skipped.
   auto emptyBitmap = std::string();
-  auto input =
-      makeRowVector({makeFlatVector({emptyBitmap}, VARBINARY())});
+  auto input = makeRowVector({makeFlatVector({emptyBitmap}, VARBINARY())});
 
   VELOX_ASSERT_THROW(
       testAggregations(
@@ -130,12 +125,10 @@ TEST_F(BitmapOrAggAggregateTest, mergeIntermediate) {
   auto secondPartial = BitmapBuilder::fromBytes({{0, 0x55}, {200, 0xFF}});
   auto merged = BitmapBuilder::fromBytes({{0, 0xFF}, {100, 0x55}, {200, 0xFF}});
 
-  auto batch1 =
-      makeRowVector({makeFlatVector({firstPartial}, VARBINARY())});
-  auto batch2 =
-      makeRowVector({makeFlatVector({secondPartial}, VARBINARY())});
+  auto batch1 = makeRowVector({BitmapBuilder::vector(pool(), {firstPartial})});
+  auto batch2 = makeRowVector({BitmapBuilder::vector(pool(), {secondPartial})});
   auto expectedResult =
-      makeRowVector({makeFlatVector({merged}, VARBINARY())});
+      makeRowVector({BitmapBuilder::vector(pool(), {merged})});
 
   testAggregations(
       {batch1, batch2}, {}, {"bitmap_or_agg(c0)"}, {expectedResult});
@@ -144,8 +137,7 @@ TEST_F(BitmapOrAggAggregateTest, mergeIntermediate) {
 TEST_F(BitmapOrAggAggregateTest, invalidIntermediateSize) {
   // Invalid intermediate size should trigger a system check failure.
   std::string tinyBitmap(1, '\xFF');
-  auto input =
-      makeRowVector({makeFlatVector({tinyBitmap}, VARBINARY())});
+  auto input = makeRowVector({makeFlatVector({tinyBitmap}, VARBINARY())});
 
   auto plan = exec::test::PlanBuilder()
                   .values({input})
@@ -167,7 +159,7 @@ TEST_F(BitmapOrAggAggregateTest, nullIntermediateInFinalAggregation) {
                   .finalAggregation({}, {"bitmap_or_agg(c0)"}, {{VARBINARY()}})
                   .planNode();
 
-  auto expected = makeRowVector({makeBitmapWithBits({})});
+  auto expected = makeRowVector({BitmapBuilder::vectorFromBits(pool(), {{}})});
   exec::test::AssertQueryBuilder(plan).assertResults(expected);
 }
 
@@ -196,9 +188,8 @@ TEST_F(BitmapOrAggAggregateTest, endToEndWithBitmapConstructAgg) {
 
   // Expected: OR of bits {0, 7, 100} (bucket 1) and {200, 300, 7} (bucket 2)
   // = bits {0, 7, 100, 200, 300}
-  auto expected = makeRowVector(
-      {makeFlatVector(
-          {BitmapBuilder::fromBits({0, 7, 100, 200, 300})}, VARBINARY())});
+  auto expected = makeRowVector({makeFlatVector(
+      {BitmapBuilder::fromBits({0, 7, 100, 200, 300})}, VARBINARY())});
   exec::test::AssertQueryBuilder(plan).assertResults(expected);
 }
 
