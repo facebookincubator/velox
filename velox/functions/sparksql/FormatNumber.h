@@ -26,11 +26,13 @@ namespace detail {
 
 // Formats a number with US locale (comma thousands separator, dot decimal
 // separator) and d decimal places. Writes the result directly into 'out'.
-// Returns false (null) if decimalPlaces < 0.
+// Uses the default format pattern "#,###,###,###,###,###,##0" with d
+// fractional digits appended, matching Java DecimalFormat with Locale.US.
 void formatInteger(
     int64_t value,
     int32_t decimalPlaces,
     exec::StringWriter& out);
+
 void formatFloatingPoint(
     double value,
     int32_t decimalPlaces,
@@ -42,7 +44,12 @@ void formatFloatingPoint(
 ///
 /// Formats number x with d decimal places using US locale formatting (comma
 /// as thousands separator, dot as decimal separator), matching Java
-/// DecimalFormat with Locale.US. Returns null if d < 0.
+/// DecimalFormat with the default pattern "#,###,###,###,###,###,##0" and
+/// Locale.US. Returns null if d < 0.
+///
+/// Currently only supports the integer second argument (number of decimal
+/// places). Spark also supports a string format argument, which is not yet
+/// implemented.
 ///
 /// Unlike CAST(x AS VARCHAR), this adds thousands separators and fixed decimal
 /// places with HALF_EVEN (banker's) rounding.
@@ -54,7 +61,7 @@ struct FormatNumberFunction {
   bool call(
       out_type<Varchar>& result,
       const T& value,
-      const int32_t& decimalPlaces) {
+      int32_t decimalPlaces) {
     if (decimalPlaces < 0) {
       return false;
     }
