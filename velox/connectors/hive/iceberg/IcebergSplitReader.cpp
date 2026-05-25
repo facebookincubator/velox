@@ -17,6 +17,7 @@
 #include "velox/connectors/hive/iceberg/IcebergSplitReader.h"
 
 #include <algorithm>
+#include <limits>
 #include <optional>
 #include <unordered_map>
 
@@ -80,6 +81,12 @@ void fillNullsWithInt64(
 namespace facebook::velox::connector::hive::iceberg {
 namespace {
 
+// Parquet uses -1 when a physical schema node has no field_id. Use a distinct
+// value for requested columns that have no ID mapping so they never match an
+// unannotated physical column by accident.
+constexpr int32_t kMissingRequestedFieldId =
+    std::numeric_limits<int32_t>::min();
+
 /// Returns true if a delete/update file should be skipped based on sequence
 /// number conflict resolution. Per the Iceberg spec (V2+):
 ///   - Equality deletes apply when deleteSeqNum > dataSeqNum (i.e., skip when
@@ -100,23 +107,25 @@ bool shouldSkipBySequenceNumber(
                           : (deleteFileSeqNum < dataSeqNum);
 }
 
-std::optional<std::unordered_map<std::string, parquet::ParquetFieldId>>
-makeParquetFieldIds(const std::shared_ptr<ColumnHandleMap>& columnHandles) {
-  if (!columnHandles) {
+std::optional<std::vector<parquet::ParquetFieldId>> makeParquetFieldIds(
+    const RowTypePtr& fileSchema,
+    const std::shared_ptr<ColumnHandleMap>& columnHandles) {
+  if (!fileSchema || !columnHandles) {
     return std::nullopt;
   }
 
-  std::unordered_map<std::string, parquet::ParquetFieldId> fieldIds;
-  fieldIds.reserve(columnHandles->size());
-  for (const auto& [_, handle] : *columnHandles) {
-    const auto* icebergHandle =
-        dynamic_cast<const IcebergColumnHandle*>(handle.get());
-    if (!icebergHandle) {
-      return std::nullopt;
+  std::vector<parquet::ParquetFieldId> fieldIds;
+  fieldIds.reserve(fileSchema->size());
+  for (const auto& name : fileSchema->names()) {
+    const auto handle = columnHandles->find(name);
+    if (handle == columnHandles->end()) {
+      fieldIds.push_back(parquet::ParquetFieldId{kMissingRequestedFieldId, {}});
+      continue;
     }
-    fieldIds.emplace(icebergHandle->name(), icebergHandle->field());
+    const auto icebergHandle =
+        checkedPointerCast<const IcebergColumnHandle>(handle->second.get());
+    fieldIds.push_back(icebergHandle->field());
   }
-
   return fieldIds;
 }
 
@@ -161,10 +170,11 @@ void IcebergSplitReader::configureBaseReaderOptions() {
     return;
   }
 
-  if (auto fieldIds = makeParquetFieldIds(columnHandles_)) {
+  if (auto fieldIds =
+          makeParquetFieldIds(tableHandle_->dataColumns(), columnHandles_)) {
     baseReaderOpts_.setColumnMappingMode(
         dwio::common::ColumnMappingMode::kFieldId);
-    baseReaderOpts_.setParquetFieldIdsByName(std::move(*fieldIds));
+    baseReaderOpts_.setParquetFieldIds(std::move(*fieldIds));
   }
 }
 

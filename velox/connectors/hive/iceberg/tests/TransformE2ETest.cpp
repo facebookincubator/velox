@@ -21,7 +21,6 @@
 #include "velox/common/encode/Base64.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
-#include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -754,7 +753,6 @@ TEST_F(TransformE2ETest, dateIdentityPartitionWithFilter) {
 
   ASSERT_EQ(filteredRowCount, kDefaultRowsPerBatch);
 }
-
 #endif
 
 } // namespace

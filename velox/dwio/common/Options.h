@@ -574,9 +574,44 @@ class RowReaderOptions {
   bool collectColumnCpuMetrics_{false};
 };
 
-/// Options for creating a Reader.
-enum class ColumnMappingMode { kPosition, kName, kFieldId };
+/// Controls how readers match physical file columns to the requested schema.
+enum class ColumnMappingMode {
+  /// Matches physical file columns to requested columns by ordinal position.
+  kPosition,
 
+  /// Matches physical file columns to requested columns by column name.
+  kName,
+
+  /// Matches physical Parquet fields to requested columns by Parquet field_id.
+  ///
+  /// Use this mode for table formats, such as Iceberg, where a column's
+  /// identity is its field ID rather than its name or ordinal position. This
+  /// allows the reader to handle schema evolution where columns are renamed,
+  /// reordered, deleted, or added back later with the same name and a different
+  /// type.
+  ///
+  /// The caller must provide ReaderOptions::parquetFieldIds() ordered to match
+  /// ReaderOptions::fileSchema() at every row-typed level. Each ParquetFieldId
+  /// entry describes the table field ID for the corresponding requested column,
+  /// and nested children describe field IDs below structs, arrays, and maps.
+  ///
+  /// Physical Parquet schema nodes that do not have field_id metadata are
+  /// treated as having a missing field ID and therefore do not match positive
+  /// Iceberg field IDs. This is expected for legacy Hive-style Parquet files or
+  /// files written by producers that do not preserve field IDs. In that case,
+  /// kFieldId can still be used, but any requested positive field ID without a
+  /// matching physical field is read as missing and is materialized by the
+  /// connector as null or as the table format's default value. Use kName or
+  /// kPosition instead when reading files whose schema identity must come from
+  /// names or positions.
+  ///
+  /// Physical Parquet fields whose IDs are not present in the requested table
+  /// schema are skipped. This covers deleted columns and old fields whose names
+  /// are later reused with different field IDs.
+  kFieldId,
+};
+
+/// Options for creating a Reader.
 class ReaderOptions : public io::ReaderOptions {
  public:
   static constexpr uint64_t kDefaultFooterSpeculativeIoSize =
@@ -650,20 +685,16 @@ class ReaderOptions : public io::ReaderOptions {
     return *this;
   }
 
+  /// Sets how physical file columns are matched to the requested schema.
   ReaderOptions& setColumnMappingMode(ColumnMappingMode mode) {
     columnMappingMode_ = mode;
     return *this;
   }
 
+  /// Sets Parquet field IDs ordered to match fileSchema() child order.
   ReaderOptions& setParquetFieldIds(
       std::vector<parquet::ParquetFieldId> fieldIds) {
     parquetFieldIds_ = std::move(fieldIds);
-    return *this;
-  }
-
-  ReaderOptions& setParquetFieldIdsByName(
-      std::unordered_map<std::string, parquet::ParquetFieldId> fieldIds) {
-    parquetFieldIdsByName_ = std::move(fieldIds);
     return *this;
   }
 
@@ -733,17 +764,14 @@ class ReaderOptions : public io::ReaderOptions {
     return columnMappingMode_ == ColumnMappingMode::kName;
   }
 
+  /// Returns how physical file columns are matched to the requested schema.
   ColumnMappingMode columnMappingMode() const {
     return columnMappingMode_;
   }
 
+  /// Returns ordered Parquet field IDs matching fileSchema() child order.
   const std::vector<parquet::ParquetFieldId>& parquetFieldIds() const {
     return parquetFieldIds_;
-  }
-
-  const std::unordered_map<std::string, parquet::ParquetFieldId>&
-  parquetFieldIdsByName() const {
-    return parquetFieldIdsByName_;
   }
 
   const std::shared_ptr<random::RandomSkipTracker>& randomSkip() const {
@@ -900,10 +928,10 @@ class ReaderOptions : public io::ReaderOptions {
   uint64_t footerSpeculativeIoSize_{kDefaultFooterSpeculativeIoSize};
   uint64_t filePreloadThreshold_{kDefaultFilePreloadThreshold};
   bool fileColumnNamesReadAsLowerCase_{false};
+  // Controls how physical file columns are matched to requested schema columns.
   ColumnMappingMode columnMappingMode_{ColumnMappingMode::kPosition};
+  // Ordered field IDs, already aligned with fileSchema() child order.
   std::vector<parquet::ParquetFieldId> parquetFieldIds_;
-  std::unordered_map<std::string, parquet::ParquetFieldId>
-      parquetFieldIdsByName_;
   std::shared_ptr<random::RandomSkipTracker> randomSkip_;
   std::shared_ptr<velox::common::ScanSpec> scanSpec_;
   const tz::TimeZone* sessionTimezone_{nullptr};

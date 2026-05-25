@@ -19,22 +19,15 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/common/file/FileSystems.h"
-#include "velox/connectors/ConnectorRegistry.h"
-#include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
-#include "velox/connectors/hive/iceberg/IcebergConnector.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
+#include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-
-#ifdef VELOX_ENABLE_PARQUET
-#include "velox/dwio/parquet/RegisterParquetReader.h"
-#endif
 
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::exec;
@@ -55,31 +48,11 @@ uint64_t getTestFileSize(const std::string& path) {
 
 static const char* kIcebergConnectorId = "test-iceberg";
 
-class HiveIcebergTest : public HiveConnectorTestBase {
+class HiveIcebergTest : public test::IcebergTestBase {
  public:
-  void SetUp() override {
-    HiveConnectorTestBase::SetUp();
-#ifdef VELOX_ENABLE_PARQUET
-    parquet::registerParquetReaderFactory();
-#endif
-    // Register IcebergConnector.
-    IcebergConnectorFactory icebergFactory;
-    auto icebergConnector = icebergFactory.newConnector(
-        kIcebergConnectorId,
-        std::make_shared<config::ConfigBase>(
-            std::unordered_map<std::string, std::string>()),
-        ioExecutor_.get());
-    connector::ConnectorRegistry::global().insert(
-        icebergConnector->connectorId(), icebergConnector);
-  }
-
-  void TearDown() override {
-    connector::ConnectorRegistry::global().erase(kIcebergConnectorId);
-    HiveConnectorTestBase::TearDown();
-  }
-
   HiveIcebergTest()
       : config_{std::make_shared<facebook::velox::dwrf::Config>()} {
+    fileFormat_ = FileFormat::DWRF;
     // Make the writers flush per batch so that we can create non-aligned
     // RowGroups between the base data files and delete files
     flushPolicyFactory_ = []() {
@@ -285,7 +258,6 @@ class HiveIcebergTest : public HiveConnectorTestBase {
  protected:
   std::shared_ptr<dwrf::Config> config_;
   std::function<std::unique_ptr<dwrf::DWRFFlushPolicy>()> flushPolicyFactory_;
-  FileFormat fileFormat_{FileFormat::DWRF};
 
   /// Helper to create a standard c0 HiveColumnHandle (BIGINT).
   std::shared_ptr<HiveColumnHandle> makeC0Handle() {
@@ -302,15 +274,53 @@ class HiveIcebergTest : public HiveConnectorTestBase {
       const std::string& name,
       const TypePtr& type,
       int fieldId,
-      const std::string& defaultValue) {
+      std::optional<std::string> defaultValue = std::nullopt) {
     return std::make_shared<IcebergColumnHandle>(
         name,
         HiveColumnHandle::ColumnType::kRegular,
         type,
         parquet::ParquetFieldId(fieldId),
         std::vector<common::Subfield>{},
-        std::optional<std::string>{defaultValue});
+        std::move(defaultValue));
   }
+
+#ifdef VELOX_ENABLE_PARQUET
+  struct FieldIdColumnSpec {
+    std::string name;
+    TypePtr type;
+    int32_t fieldId;
+  };
+
+  ColumnHandleMap makeFieldIdAssignments(
+      const std::vector<FieldIdColumnSpec>& columns) {
+    ColumnHandleMap assignments;
+    for (const auto& column : columns) {
+      assignments[column.name] =
+          makeIcebergHandle(column.name, column.type, column.fieldId);
+    }
+    return assignments;
+  }
+
+  void assertParquetFieldIdRead(
+      const std::string& outputDirectory,
+      const RowTypePtr& outputType,
+      const RowTypePtr& scanSpecType,
+      const std::vector<FieldIdColumnSpec>& columns,
+      const std::vector<RowVectorPtr>& expected) {
+    auto plan = PlanBuilder()
+                    .startTableScan()
+                    .connectorId(kIcebergConnectorId)
+                    .outputType(outputType)
+                    .dataColumns(scanSpecType)
+                    .assignments(makeFieldIdAssignments(columns))
+                    .endTableScan()
+                    .planNode();
+
+    AssertQueryBuilder(plan)
+        .splits(createSplitsForDirectory(outputDirectory))
+        .assertResults(expected);
+  }
+#endif
 
   /// Helper function to test schema evolution with initial default values.
   void assertDefaultValues(
@@ -1062,6 +1072,118 @@ TEST_F(HiveIcebergTest, schemaEvolutionAddColumns) {
   AssertQueryBuilder(plan).splits(icebergSplits).assertResults(expectedVectors);
 }
 
+#ifdef VELOX_ENABLE_PARQUET
+TEST_F(HiveIcebergTest, readParquetSchemaEvolutionByFieldId) {
+  fileFormat_ = FileFormat::PARQUET;
+
+  const auto writeType =
+      ROW({"id", "flag", "status"}, {BIGINT(), BOOLEAN(), VARCHAR()});
+  const std::vector<RowVectorPtr> data{makeRowVector(
+      writeType->names(),
+      {makeFlatVector<int64_t>({10, 20, 30}),
+       makeFlatVector<bool>({true, false, true}),
+       makeFlatVector<std::string>({"old-a", "old-b", "old-c"})})};
+  const auto outputDirectory = TempDirectoryPath::create();
+  const auto dataSink =
+      createDataSinkAndAppendData(data, outputDirectory->getPath());
+  dataSink->close();
+
+  struct ReadCase {
+    std::string name;
+    RowTypePtr outputType;
+    RowTypePtr scanSpecType;
+    std::vector<FieldIdColumnSpec> columns;
+    RowVectorPtr expected;
+  };
+
+  const std::vector<ReadCase> cases{
+      {
+          "rename and reorder columns",
+          ROW({"enabled", "id"}, {BOOLEAN(), BIGINT()}),
+          ROW({"id", "enabled", "status"}, {BIGINT(), BOOLEAN(), VARCHAR()}),
+          {
+              {"id", BIGINT(), 1},
+              {"enabled", BOOLEAN(), 2},
+              {"status", VARCHAR(), 3},
+          },
+          makeRowVector(
+              {"enabled", "id"},
+              {makeFlatVector<bool>({true, false, true}),
+               makeFlatVector<int64_t>({10, 20, 30})}),
+      },
+      {
+          "add column",
+          ROW({"id", "flag", "status", "score"},
+              {BIGINT(), BOOLEAN(), VARCHAR(), INTEGER()}),
+          ROW({"id", "flag", "status", "score"},
+              {BIGINT(), BOOLEAN(), VARCHAR(), INTEGER()}),
+          {
+              {"id", BIGINT(), 1},
+              {"flag", BOOLEAN(), 2},
+              {"status", VARCHAR(), 3},
+              {"score", INTEGER(), 4},
+          },
+          makeRowVector(
+              {"id", "flag", "status", "score"},
+              {makeFlatVector<int64_t>({10, 20, 30}),
+               makeFlatVector<bool>({true, false, true}),
+               makeFlatVector<std::string>({"old-a", "old-b", "old-c"}),
+               makeNullableFlatVector<int32_t>(
+                   {std::nullopt, std::nullopt, std::nullopt})}),
+      },
+      {
+          "delete column",
+          ROW({"id", "status"}, {BIGINT(), VARCHAR()}),
+          ROW({"id", "status"}, {BIGINT(), VARCHAR()}),
+          {
+              {"id", BIGINT(), 1},
+              {"status", VARCHAR(), 3},
+          },
+          makeRowVector(
+              {"id", "status"},
+              {makeFlatVector<int64_t>({10, 20, 30}),
+               makeFlatVector<std::string>({"old-a", "old-b", "old-c"})}),
+      },
+      {
+          "project only added column",
+          ROW({"score"}, {INTEGER()}),
+          ROW({"score"}, {INTEGER()}),
+          {
+              {"score", INTEGER(), 4},
+          },
+          makeRowVector(
+              {"score"},
+              {makeNullableFlatVector<int32_t>(
+                  {std::nullopt, std::nullopt, std::nullopt})}),
+      },
+      {
+          "delete and add back column with same name but different type",
+          ROW({"id", "status"}, {BIGINT(), BOOLEAN()}),
+          ROW({"id", "status"}, {BIGINT(), BOOLEAN()}),
+          {
+              {"id", BIGINT(), 1},
+              {"status", BOOLEAN(), 4},
+          },
+          makeRowVector(
+              {"id", "status"},
+              {makeFlatVector<int64_t>({10, 20, 30}),
+               makeNullableFlatVector<bool>(
+                   {std::nullopt, std::nullopt, std::nullopt})}),
+      },
+  };
+
+  for (const auto& readCase : cases) {
+    SCOPED_TRACE(readCase.name);
+    assertParquetFieldIdRead(
+        outputDirectory->getPath(),
+        readCase.outputType,
+        readCase.scanSpecType,
+        readCase.columns,
+        {readCase.expected});
+  }
+}
+#endif
+
 // Test Iceberg V3 initial-default: a column added after data files were written
 // should return its initial-default value (not NULL) for those historical rows.
 TEST_F(HiveIcebergTest, addColumnWithDefault) {
@@ -1679,7 +1801,7 @@ TEST_F(HiveIcebergTest, positionalDeleteFileWithRowGroupFilter) {
   // baseReadOffset tracked by Iceberg's split reader and the actual offset,
   // resulting in records in the position delete file being mapped to incorrect
   // rows.
-  auto path = test::getDataFilePath(
+  auto path = facebook::velox::test::getDataFilePath(
       "velox/connectors/hive/iceberg/test", "examples/three_groups.parquet");
   const auto deletedPositionSize = 100;
   std::vector<int64_t> deletePositionsVec(
