@@ -164,6 +164,12 @@ BlockingReason NestedLoopJoinProbe::isBlocked(ContinueFuture* future) {
 }
 
 void NestedLoopJoinProbe::close() {
+  // Disarm the peer-synchronization barrier so that any peer drivers
+  // waiting at, or about to reach, the barrier proceed without blocking.
+  // This prevents kWaitForPeers deadlock when this driver terminates
+  // without first running noMoreInput() (i.e., the barrier counter for
+  // this driver is never incremented).
+  operatorCtx_->task()->releasePeerBarrier(splitGroupId(), planNodeId());
   if (joinCondition_ != nullptr) {
     joinCondition_->clear();
   }
@@ -770,8 +776,21 @@ void NestedLoopJoinProbe::beginBuildMismatch() {
   // this code will survive and move on to process build mismatches.
   std::vector<ContinuePromise> promises;
   std::vector<std::shared_ptr<Driver>> peers;
+  bool released{false};
   if (!operatorCtx_->task()->allPeersFinished(
-          planNodeId(), operatorCtx_->driver(), &future_, promises, peers)) {
+          planNodeId(),
+          operatorCtx_->driver(),
+          &future_,
+          promises,
+          peers,
+          &released)) {
+    if (released) {
+      // Barrier was disarmed by a peer that closed without reaching it.
+      // Skip build-mismatch output and finish without becoming a last
+      // prober.
+      setState(ProbeOperatorState::kFinish);
+      return;
+    }
     VELOX_CHECK(future_.valid());
     setState(ProbeOperatorState::kWaitForPeers);
     return;

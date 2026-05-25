@@ -539,12 +539,38 @@ class Task : public std::enable_shared_from_this<Task> {
   /// NOTE: The last peer (the one that got 'true' returned and a bunch of
   /// promises) is responsible for promises' fulfillment even in case of an
   /// exception!
+  ///
+  /// If 'released' is non-null and the barrier has been disarmed by an
+  /// earlier call to releasePeerBarrier(), '*released' is set to true and the
+  /// function returns false without setting 'future', 'peers', or 'promises'.
+  /// The caller must treat this case as "skip last-peer work and finish"
+  /// rather than as "wait for peers". When 'released' is null, the released
+  /// state is ignored and the regular peer-counting behavior is used; in
+  /// that case the caller must not rely on the released semantics.
   bool allPeersFinished(
       const core::PlanNodeId& planNodeId,
       Driver* caller,
       ContinueFuture* future,
       std::vector<ContinuePromise>& promises,
-      std::vector<std::shared_ptr<Driver>>& peers);
+      std::vector<std::shared_ptr<Driver>>& peers,
+      bool* released = nullptr);
+
+  /// Disarms the peer-synchronization barrier for the operator identified by
+  /// 'planNodeId' in 'splitGroupId' and fulfills any promises held by peers
+  /// already suspended on the barrier. Subsequent callers of
+  /// allPeersFinished() for the same barrier that pass a non-null 'released'
+  /// out-parameter receive '*released = true' and return value false (i.e.,
+  /// they are not treated as the "last" peer and they do not wait).
+  ///
+  /// Intended for operators that participate in a peer barrier but may have
+  /// their driver closed before reaching the barrier (e.g., when a
+  /// downstream operator finishes the pipeline early). Without a release,
+  /// peers already suspended at the barrier would wait forever for a count
+  /// that can never be reached. The call is idempotent and may be made
+  /// whether or not the barrier has been created.
+  void releasePeerBarrier(
+      uint32_t splitGroupId,
+      const core::PlanNodeId& planNodeId);
 
   /// Adds HashJoinBridge's for all the specified plan node IDs.
   void addHashJoinBridgesLocked(

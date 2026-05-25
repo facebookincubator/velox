@@ -1006,5 +1006,82 @@ DEBUG_ONLY_TEST_F(NestedLoopJoinTest, longBatchDurationYield) {
       testSettings[0].numGetOutputCalls, testSettings[1].numGetOutputCalls);
 }
 
+// Verifies that a multi-driver NestedLoopJoinProbe (RIGHT JOIN with a
+// non-empty build) does not deadlock when one driver is closed via an
+// early-terminating downstream Limit while peer drivers are still
+// approaching the build-mismatch peer barrier.
+//
+// Setup:
+//   - 4 drivers on the probe pipeline.
+//   - All probe rows share a single key value, so localPartition delivers
+//     every probe row to exactly one driver. The other three drivers
+//     receive no probe rows.
+//   - A per-driver Limit(1) immediately follows the join. The loaded
+//     driver hits Limit and closes without ever calling noMoreInput() on
+//     the probe operator, so its barrier counter is never incremented.
+//
+// Without the fix, the three empty drivers reach beginBuildMismatch ->
+// Task::allPeersFinished, transition to kWaitForPeers, and block forever
+// on a count that can never reach 4. The test uses an external timeout to
+// detect the hang.
+TEST_F(NestedLoopJoinTest, earlyLimitPeerBarrierDeadlock) {
+  const int kProbeRows = 32;
+  std::vector<RowVectorPtr> probeVectors = {
+      makeRowVector(
+          {"t0"},
+          {makeFlatVector<int64_t>(
+              kProbeRows, [](auto /*row*/) { return 1; })}),
+  };
+  // Build has matching (u0 == 1) and non-matching rows so RIGHT JOIN must
+  // emit build-mismatch rows, which is what drives the peer barrier.
+  std::vector<RowVectorPtr> buildVectors = {
+      makeRowVector({"u0"}, {makeFlatVector<int64_t>({1, 2, 3})}),
+  };
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  CursorParameters params;
+  params.maxDrivers = 4;
+  params.queryCtx = core::QueryCtx::create(executor_.get());
+  // Force per-row output so Limit fires on the very first matched row.
+  params.queryConfigs[core::QueryConfig::kPreferredOutputBatchRows] = "1";
+  params.planNode =
+      PlanBuilder(planNodeIdGenerator)
+          .values(probeVectors)
+          .localPartition({"t0"})
+          .nestedLoopJoin(
+              PlanBuilder(planNodeIdGenerator)
+                  .values(buildVectors)
+                  .localPartition({})
+                  .planNode(),
+              "t0 = u0",
+              {"t0", "u0"},
+              core::JoinType::kRight)
+          .limit(0, 1, /*isPartial=*/true)
+          .planNode();
+  auto cursor = TaskCursor::create(params);
+  auto task = cursor->task();
+  std::atomic<bool> done{false};
+  std::thread runner([&] {
+    while (cursor->moveNext()) {
+      // Drain results.
+    }
+    done.store(true);
+  });
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(15);
+  while (!done.load() && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+  const bool deadlocked = !done.load();
+  if (deadlocked) {
+    // Force the task down so the cursor thread can exit.
+    task->requestCancel();
+  }
+  runner.join();
+  ASSERT_FALSE(deadlocked)
+      << "NestedLoopJoinProbe peer barrier deadlock: task state at "
+         "detection: "
+      << taskStateString(task->state());
+}
+
 } // namespace
 } // namespace facebook::velox::exec::test

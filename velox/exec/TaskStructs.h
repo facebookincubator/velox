@@ -66,6 +66,12 @@ struct BarrierState {
   /// operator does that). After the last drier done its work, the promises are
   /// fulfilled and the non-last drivers can continue.
   std::vector<ContinuePromise> allPeersFinishedPromises;
+  /// Indicates whether this barrier has been disarmed by
+  /// Task::releasePeerBarrier(). When true, callers of
+  /// Task::allPeersFinished() that opt into the released contract receive
+  /// the released signal and return false: none is treated as the "last"
+  /// peer and none waits.
+  bool released{false};
 };
 
 using ConnectorSplitPreloadFunc =

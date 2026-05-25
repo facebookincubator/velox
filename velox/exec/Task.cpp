@@ -2289,7 +2289,8 @@ bool Task::allPeersFinished(
     Driver* caller,
     ContinueFuture* future,
     std::vector<ContinuePromise>& promises,
-    std::vector<std::shared_ptr<Driver>>& peers) {
+    std::vector<std::shared_ptr<Driver>>& peers,
+    bool* released) {
   std::lock_guard<std::timed_mutex> l(mutex_);
   if (exception_) {
     VELOX_FAIL(
@@ -2299,6 +2300,16 @@ bool Task::allPeersFinished(
   const auto splitGroupId = caller->driverCtx()->splitGroupId;
   auto& barriers = splitGroupStates_[splitGroupId].barriers;
   auto& state = barriers[planNodeId];
+
+  // If the barrier has been disarmed by releasePeerBarrier() and the caller
+  // opted into the released contract, report it without setting 'future',
+  // 'peers', or 'promises'. Any suspended peers were already woken by the
+  // releaser. Callers that did not pass 'released' fall through to the
+  // regular peer-counting path for backward compatibility.
+  if (state.released && released != nullptr) {
+    *released = true;
+    return false;
+  }
 
   const auto numPeers = numDrivers(caller->driverCtx()->pipelineId);
   if (++state.numRequested == numPeers) {
@@ -2325,6 +2336,32 @@ bool Task::allPeersFinished(
     *future = state.allPeersFinishedPromises.back().getSemiFuture();
   }
   return false;
+}
+
+void Task::releasePeerBarrier(
+    uint32_t splitGroupId,
+    const core::PlanNodeId& planNodeId) {
+  std::vector<ContinuePromise> promises;
+  {
+    std::lock_guard<std::timed_mutex> l(mutex_);
+    auto groupIt = splitGroupStates_.find(splitGroupId);
+    if (groupIt == splitGroupStates_.end()) {
+      return;
+    }
+    // Create the barrier in the 'released' state if no peer has reached it
+    // yet, so any future caller of allPeersFinished() bypasses blocking.
+    auto& state = groupIt->second.barriers[planNodeId];
+    if (state.released) {
+      return;
+    }
+    state.released = true;
+    promises = std::move(state.allPeersFinishedPromises);
+  }
+  // Fulfill pending peer promises outside the lock to avoid re-entrancy via
+  // promise continuations.
+  for (auto& promise : promises) {
+    promise.setValue();
+  }
 }
 
 void Task::addHashJoinBridgesLocked(

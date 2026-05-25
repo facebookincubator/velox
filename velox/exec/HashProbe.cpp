@@ -1850,12 +1850,21 @@ void HashProbe::noMoreInputInternal() {
   const bool outputBuildRowsInParallel =
       canOutputBuildRowsInParallel_ && needLastProbe();
   const bool shouldBlock = canSpill() || outputBuildRowsInParallel;
+  bool released{false};
   if (!operatorCtx_->task()->allPeersFinished(
           planNodeId(),
           operatorCtx_->driver(),
           shouldBlock ? &future_ : nullptr,
           shouldBlock ? promises_ : promises,
-          peers)) {
+          peers,
+          &released)) {
+    if (released) {
+      // Barrier was disarmed by a peer that closed without reaching it.
+      // Skip last-prober work and finish; build-side output coordination
+      // and probeFinished signaling are left to Task teardown.
+      setState(ProbeOperatorState::kFinish);
+      return;
+    }
     if (shouldBlock) {
       VELOX_CHECK(future_.valid());
       setState(ProbeOperatorState::kWaitForPeers);
@@ -2319,6 +2328,13 @@ void HashProbe::checkMaxSpillLevel(
 }
 
 void HashProbe::close() {
+  // Disarm the peer-synchronization barrier so that any peer drivers
+  // waiting at, or about to reach, the barrier proceed without blocking.
+  // This prevents kWaitForPeers deadlock when this driver terminates
+  // without first running noMoreInput() (i.e., the barrier counter for
+  // this driver is never incremented).
+  operatorCtx_->task()->releasePeerBarrier(splitGroupId(), planNodeId());
+
   Operator::close();
 
   // Free up major memory usage.
