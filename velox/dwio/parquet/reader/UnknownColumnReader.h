@@ -43,11 +43,14 @@ class UnknownColumnReader : public dwio::common::SelectiveColumnReader {
   }
 
   uint64_t skip(uint64_t numValues) override {
+    // Unknown columns are not read from parquet, so just skip the values.
     return numValues;
   }
 
-  void read(int64_t offset, const RowSet& rows, const uint64_t* incomingNulls)
-      override {
+  void read(
+      int64_t /*offset*/,
+      const RowSet& rows,
+      const uint64_t* /*incomingNulls*/) override {
     if (rows.empty()) {
       return;
     }
