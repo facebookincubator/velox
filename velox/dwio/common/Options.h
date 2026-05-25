@@ -54,6 +54,10 @@ enum class FileFormat {
   SST = 10, // rocksdb sst format
   FLUX = 11,
   AVRO = 12,
+  PUFFIN =
+      13, // Iceberg V3 Puffin blob container (e.g. deletion vectors).
+          // Not consumed by dwio::ReaderFactory; read directly by the
+          // Iceberg connector via FileSystem::pread of the blob byte-range.
 };
 
 FileFormat toFileFormat(std::string_view s);
@@ -785,6 +789,16 @@ class ReaderOptions : public io::ReaderOptions {
     pinIndex_ = value;
   }
 
+  /// If true, caches data column reads in the async data cache. Default false
+  /// keeps the cache scoped to metadata/index only.
+  bool cacheData() const {
+    return cacheData_;
+  }
+
+  void setCacheData(bool value) {
+    cacheData_ = value;
+  }
+
   /// Whether to load and initialize the cluster index during file open.
   /// When true, the cluster index section is preloaded and the structured
   /// ClusterIndex object is created. Default false.
@@ -794,6 +808,18 @@ class ReaderOptions : public io::ReaderOptions {
 
   void setLoadClusterIndex(bool value) {
     loadClusterIndex_ = value;
+  }
+
+  /// Whether to eagerly preload all per-partition metadata and decode all
+  /// per-partition key streams during file open. Only effective when
+  /// loadClusterIndex() is also true. Implies pinning so preloaded chunks
+  /// are not evicted on first lookup. Default false.
+  bool preloadIndex() const {
+    return preloadIndex_;
+  }
+
+  void setPreloadIndex(bool value) {
+    preloadIndex_ = value;
   }
 
   /// Whether to load and initialize the chunk index during file open.
@@ -849,7 +875,9 @@ class ReaderOptions : public io::ReaderOptions {
   bool pinMetadata_{false};
   bool cacheIndex_{false};
   bool pinIndex_{false};
+  bool cacheData_{true};
   bool loadClusterIndex_{false};
+  bool preloadIndex_{false};
   bool loadChunkIndex_{true};
   bool allowEmptyFile_{false};
   bool allowInt32Narrowing_{false};

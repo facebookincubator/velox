@@ -200,6 +200,7 @@ void GroupingSet::addInput(const RowVectorPtr& input, bool mayPushdown) {
         remainingInput_ = input;
         firstRemainingRow_ = numRows;
         remainingMayPushdown_ = mayPushdown;
+        mayPushdown = false;
         break;
       }
     }

@@ -15,6 +15,7 @@
  */
 
 #include <fmt/format.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <unordered_map>
 #include <utility>
@@ -24,6 +25,7 @@
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/trace/TraceCtx.h"
+#include "velox/expression/VectorFunction.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -453,6 +455,147 @@ TEST_F(CustomTraceTest, exprTraceThrowingWriter) {
                       .config(core::QueryConfig::kQueryTraceEnabled, true)
                       .queryCtx(queryCtx)
                       .countResults(task));
+}
+
+// TraceCtx that tracks maybeActivateIntraExprTracing calls.
+class IntraExprTraceCtx : public TraceCtx {
+ public:
+  IntraExprTraceCtx(
+      const std::vector<std::string>& tracedExprs,
+      std::vector<std::string>& activatedFunctions)
+      : TraceCtx(false),
+        tracedExprs_(tracedExprs.begin(), tracedExprs.end()),
+        activatedFunctions_(activatedFunctions) {}
+
+  bool shouldTrace(const Operator&) const override {
+    return true;
+  }
+
+  bool shouldTraceExpr(std::string_view functionName) const override {
+    return tracedExprs_.contains(std::string(functionName));
+  }
+
+  std::unique_ptr<TraceExprWriter> createExprOutputTracer(
+      const Operator&,
+      std::string_view,
+      int) const override {
+    return nullptr;
+  }
+
+  void maybeActivateIntraExprTracing(
+      const Operator&,
+      std::string_view functionName,
+      VectorFunction&) const override {
+    activatedFunctions_.emplace_back(functionName);
+  }
+
+ private:
+  std::unordered_set<std::string> tracedExprs_;
+  std::vector<std::string>& activatedFunctions_;
+};
+
+TEST_F(CustomTraceTest, intraExprTracingCalledForTracedFunctions) {
+  auto vector = makeRowVector(
+      {"a"}, {makeFlatVector<int64_t>(10, [](auto row) { return row; })});
+
+  auto plan =
+      PlanBuilder().values({vector}).project({"a * 10 as a"}).planNode();
+
+  std::vector<std::string> activatedFunctions;
+  auto queryCtx =
+      core::QueryCtx::Builder()
+          .executor(executor_.get())
+          .traceCtxProvider([&](core::QueryCtx&, const core::PlanFragment&) {
+            return std::make_unique<IntraExprTraceCtx>(
+                std::vector<std::string>{"multiply"}, activatedFunctions);
+          })
+          .build();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan)
+      .config(core::QueryConfig::kQueryTraceEnabled, true)
+      .queryCtx(queryCtx)
+      .countResults(task);
+
+  EXPECT_THAT(activatedFunctions, testing::ElementsAre("multiply"));
+}
+
+TEST_F(CustomTraceTest, intraExprTracingNotCalledForUntracedFunctions) {
+  auto vector = makeRowVector(
+      {"a"}, {makeFlatVector<int64_t>(10, [](auto row) { return row; })});
+
+  auto plan = PlanBuilder()
+                  .values({vector})
+                  .project({"a * 10 as b", "a + 5 as c"})
+                  .planNode();
+
+  std::vector<std::string> activatedFunctions;
+  auto queryCtx =
+      core::QueryCtx::Builder()
+          .executor(executor_.get())
+          .traceCtxProvider([&](core::QueryCtx&, const core::PlanFragment&) {
+            return std::make_unique<IntraExprTraceCtx>(
+                std::vector<std::string>{"plus"}, activatedFunctions);
+          })
+          .build();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan)
+      .config(core::QueryConfig::kQueryTraceEnabled, true)
+      .queryCtx(queryCtx)
+      .countResults(task);
+
+  EXPECT_THAT(activatedFunctions, testing::ElementsAre("plus"));
+}
+
+TEST_F(CustomTraceTest, intraExprTracingNotCalledWhenOperatorNotTraced) {
+  auto vector = makeRowVector(
+      {"a"}, {makeFlatVector<int64_t>(10, [](auto row) { return row; })});
+
+  // TraceCtx where shouldTrace returns false for all operators.
+  class NoOpTraceCtx : public TraceCtx {
+   public:
+    explicit NoOpTraceCtx(std::vector<std::string>& activatedFunctions)
+        : TraceCtx(false), activatedFunctions_(activatedFunctions) {}
+
+    bool shouldTrace(const Operator&) const override {
+      return false;
+    }
+
+    bool shouldTraceExpr(std::string_view) const override {
+      return true;
+    }
+
+    void maybeActivateIntraExprTracing(
+        const Operator&,
+        std::string_view functionName,
+        VectorFunction&) const override {
+      activatedFunctions_.emplace_back(functionName);
+    }
+
+   private:
+    std::vector<std::string>& activatedFunctions_;
+  };
+
+  auto plan =
+      PlanBuilder().values({vector}).project({"a * 10 as a"}).planNode();
+
+  std::vector<std::string> activatedFunctions;
+  auto queryCtx =
+      core::QueryCtx::Builder()
+          .executor(executor_.get())
+          .traceCtxProvider([&](core::QueryCtx&, const core::PlanFragment&) {
+            return std::make_unique<NoOpTraceCtx>(activatedFunctions);
+          })
+          .build();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan)
+      .config(core::QueryConfig::kQueryTraceEnabled, true)
+      .queryCtx(queryCtx)
+      .countResults(task);
+
+  EXPECT_THAT(activatedFunctions, testing::IsEmpty());
 }
 
 // Helper to convert a vector of plan node IDs to a breakpoints map with null

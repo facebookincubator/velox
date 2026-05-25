@@ -45,10 +45,10 @@ struct CursorParameters {
 
   uint64_t bufferedBytes{512 * 1024};
 
-  /// An optional memory pool to be used to allocate vectors returned by
-  /// MultiThreadedTaskCursor. A new pool is created if not specified.
-  ///
-  /// Only used if serialExecution is false.
+  /// An optional memory pool to be used to allocate vectors returned by the
+  /// task cursor. If null and `copyResult` is true, the cursor creates a new
+  /// leaf pool internally. If `copyResult` is false, vectors are returned
+  /// without copy and outputPool is ignored.
   std::shared_ptr<memory::MemoryPool> outputPool;
 
   /// Ungrouped (by default) or grouped (bucketed) execution.

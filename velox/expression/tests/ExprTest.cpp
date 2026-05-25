@@ -1741,35 +1741,357 @@ TEST_P(ParameterizedExprTest, switchExpr) {
   assertEqualVectors(expected, result);
 }
 
-TEST_P(ParameterizedExprTest, swithExprSanityChecks) {
+// Simple CASE expressions with an explicit subject are now routed through
+// CaseExpr (emitted as "case" by parseCaseExpr).  CaseExpr evaluates
+// the subject exactly once per row and reuses the cached vector for each WHEN
+// comparison via the pre-resolved 'eq' VectorFunction.
+
+TEST_P(ParameterizedExprTest, caseExprBasic) {
+  // Verify correct value matching and null propagation for a simple CASE with
+  // a deterministic column subject.
+  vector_size_t size = 1'000;
+  auto vector = makeRowVector(
+      {makeFlatVector<int32_t>(size, [](auto row) { return row % 3; }),
+       makeFlatVector<int32_t>(
+           size, [](auto row) { return row % 3; }, nullEvery(5)),
+       makeConstant<int32_t>(0, size)});
+
+  // Basic matching.
+  auto result =
+      evaluate("case c0 when 0 then 0 when 1 then 1 when 2 then 2 end", vector);
+  auto expected =
+      makeFlatVector<int64_t>(size, [](auto row) { return row % 3; });
+  assertEqualVectors(expected, result);
+
+  // ELSE clause.
+  result = evaluate("case c0 when 7 then 1 when 11 then 2 else 0 end", vector);
+  expected = makeFlatVector<int64_t>(size, [](auto /*row*/) { return 0; });
+  assertEqualVectors(expected, result);
+
+  // No ELSE, unmatched rows produce null.
+  result = evaluate("case c0 when 7 then 1 when 11 then 2 end", vector);
+  expected = makeAllNullFlatVector<int64_t>(size);
+  assertEqualVectors(expected, result);
+
+  // Nullable subject column (c1, nulls at every 5th row).
+  // Null subject: eq(null, k) is always null/false, so null rows fall through.
+  // With no ELSE the result for null-subject rows is null.
+  result =
+      evaluate("case c1 when 0 then 0 when 1 then 1 when 2 then 2 end", vector);
+  expected = makeFlatVector<int64_t>(
+      size,
+      [](auto row) { return row % 3; },
+      nullEvery(5) /* null-subject rows produce null */);
+  assertEqualVectors(expected, result);
+
+  // Nullable subject with ELSE: null subject falls through to ELSE.
+  result = evaluate(
+      "case c1 when 0 then 0 when 1 then 1 when 2 then 2 else -1 end", vector);
+  expected = makeFlatVector<int64_t>(size, [](auto row) {
+    // Null rows (row % 5 == 0) hit the ELSE clause → -1.
+    return (row % 5 == 0) ? -1 : row % 3;
+  });
+  assertEqualVectors(expected, result);
+
+  // Constant subject with no match produces all null.
+  result = evaluate("case c2 when 100 then 1 when 200 then 2 end", vector);
+  expected = makeAllNullFlatVector<int64_t>(size);
+  assertEqualVectors(expected, result);
+}
+
+TEST_P(ParameterizedExprTest, caseExprNonConstantThen) {
+  // THEN clauses that reference input columns (not constants).
+  vector_size_t size = 1'000;
+  auto vector = makeRowVector(
+      {makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+       makeFlatVector<int32_t>(
+           size, [](auto row) { return row; }, nullEvery(5))});
+
+  auto result = evaluate(
+      "case when c0 < 7 then c0 + 5 when c0 < 11 then c0 - 11 "
+      "else c0::BIGINT end",
+      vector);
+  auto expected = makeFlatVector<int64_t>(size, [](auto row) -> int64_t {
+    if (row < 7) {
+      return row + 5;
+    }
+    if (row < 11) {
+      return row - 11;
+    }
+    return row;
+  });
+  assertEqualVectors(expected, result);
+}
+
+TEST_P(ParameterizedExprTest, caseExprRandSubjectEvaluatedOnce) {
+  // With CaseExpr the subject (RAND()) is evaluated exactly once per row.
+  // The cached result is compared against each WHEN value, so every row is
+  // guaranteed to match exactly one branch (0, 1, or 2).  Nulls cannot appear
+  // because FLOOR(RAND()*3) is always in {0,1,2} and all three are covered.
+  vector_size_t size = 1'000;
+  auto vector = makeRowVector(
+      {makeFlatVector<int64_t>(size, [](auto row) { return row; })});
+
+  auto result = evaluate(
+      "case cast(floor(rand() * 3.0) as integer)"
+      " when 0 then 0"
+      " when 1 then 1"
+      " when 2 then 2"
+      " end",
+      vector);
+
+  ASSERT_EQ(size, result->size());
+  auto* flat = result->asFlatVector<int64_t>();
+  ASSERT_NE(flat, nullptr);
+  for (vector_size_t i = 0; i < size; ++i) {
+    // Subject is evaluated once → always matches one of the three branches →
+    // no row should be null.
+    ASSERT_FALSE(result->isNullAt(i)) << "Unexpected null at row " << i;
+    auto val = flat->valueAt(i);
+    ASSERT_GE(val, 0) << "Value out of range at row " << i;
+    ASSERT_LE(val, 2) << "Value out of range at row " << i;
+  }
+}
+
+TEST_P(ParameterizedExprTest, caseExprWhenNullNeverMatches) {
+  // WHEN NULL uses equality semantics: eq(x, null) is always null/false,
+  // so WHEN NULL never matches any row — including rows where the subject
+  // itself is null.  The value 3 (THEN result of WHEN NULL) must never appear.
+  vector_size_t size = 1'000;
+  auto vector = makeRowVector({makeFlatVector<int32_t>(
+      size, [](auto row) { return row % 3; }, nullEvery(5))});
+
+  auto result = evaluate(
+      "case c0"
+      " when 0 then 0"
+      " when 1 then 1"
+      " when 2 then 2"
+      " when null then 3"
+      " end",
+      vector);
+
+  ASSERT_EQ(size, result->size());
+  auto* flat = result->asFlatVector<int64_t>();
+  ASSERT_NE(flat, nullptr);
+  for (vector_size_t i = 0; i < size; ++i) {
+    if (i % 5 == 0) {
+      // Null subject: eq(null, k) is always null/false for any k.
+      // WHEN NULL also never fires.  No ELSE → null output.
+      ASSERT_TRUE(result->isNullAt(i)) << "Expected null at row " << i;
+    } else {
+      ASSERT_FALSE(result->isNullAt(i)) << "Unexpected null at row " << i;
+      auto val = flat->valueAt(i);
+      // 3 (from WHEN NULL) must never appear.
+      ASSERT_NE(val, 3) << "WHEN NULL fired unexpectedly at row " << i;
+      ASSERT_EQ(val, i % 3) << "Wrong value at row " << i;
+    }
+  }
+}
+
+TEST_P(ParameterizedExprTest, caseExprSanityChecks) {
   auto vector = makeRowVector({makeFlatVector<int32_t>({1, 2, 3})});
 
   // Then clauses have different types.
   VELOX_ASSERT_THROW(
       evaluate(
           "case c0 when 7 then 1 when 11 then 'welcome' else 0 end", vector),
-      "All then clauses of a SWITCH statement must have the same type. "
-      "Expected BIGINT, but got VARCHAR.");
+      "All THEN clauses in case must have the same type. "
+      "Expected BIGINT, got VARCHAR.");
 
   // Else clause has different type.
   VELOX_ASSERT_THROW(
       evaluate("case c0 when 7 then 1 when 11 then 2 else 'hello' end", vector),
-      "Else clause of a SWITCH statement must have the same type as 'then' clauses. "
-      "Expected BIGINT, but got VARCHAR.");
+      "ELSE clause in case must match THEN clause type. "
+      "Expected BIGINT, got VARCHAR.");
 
   // Unknown is not implicitly casted.
   VELOX_ASSERT_THROW(
       evaluate("case c0 when 7 then 1 when 11 then null else 3 end", vector),
-      "All then clauses of a SWITCH statement must have the same type. "
-      "Expected BIGINT, but got UNKNOWN.");
+      "All THEN clauses in case must have the same type. "
+      "Expected BIGINT, got UNKNOWN.");
 
   // Unknown is not implicitly casted.
   VELOX_ASSERT_THROW(
       evaluate(
           "case c0 when 7 then  row_constructor(null, 1) when 11 then  row_constructor(1, null) end",
           vector),
+      "All THEN clauses in case must have the same type. "
+      "Expected ROW<c1:UNKNOWN,c2:BIGINT>, got ROW<c1:BIGINT,c2:UNKNOWN>.");
+}
+
+TEST_P(ParameterizedExprTest, swithExprSanityChecks) {
+  // Use conditions that cannot be detected as a simple CASE (different
+  // subjects per branch) so that the parser emits "switch" not "case".
+  auto vector = makeRowVector(
+      {makeFlatVector<int32_t>({1, 2, 3}), makeFlatVector<int32_t>({4, 5, 6})});
+
+  // Then clauses have different types.
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "case when c0 > 7 then 1 when c1 > 11 then 'welcome' else 0 end",
+          vector),
+      "All then clauses of a SWITCH statement must have the same type. "
+      "Expected BIGINT, but got VARCHAR.");
+
+  // Else clause has different type.
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "case when c0 > 7 then 1 when c1 > 11 then 2 else 'hello' end",
+          vector),
+      "Else clause of a SWITCH statement must have the same type as 'then' "
+      "clauses. Expected BIGINT, but got VARCHAR.");
+
+  // Unknown is not implicitly casted.
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "case when c0 > 7 then 1 when c1 > 11 then null else 3 end", vector),
+      "All then clauses of a SWITCH statement must have the same type. "
+      "Expected BIGINT, but got UNKNOWN.");
+
+  // Unknown is not implicitly casted.
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "case when c0 > 7 then row_constructor(null, 1) when c1 > 11 then row_constructor(1, null) end",
+          vector),
       "All then clauses of a SWITCH statement must have the same type. "
       "Expected ROW<c1:UNKNOWN,c2:BIGINT>, but got ROW<c1:BIGINT,c2:UNKNOWN>.");
+}
+
+TEST_P(ParameterizedExprTest, caseExprExceptionHandling) {
+  registerFunction<TestingAlwaysThrowsFunction, int64_t, int64_t>(
+      {"always_throws_bigint"});
+
+  // THEN clause exception.
+  {
+    auto input = makeRowVector({makeFlatVector<int64_t>({1, 2})});
+
+    // Without try: throws.
+    VELOX_ASSERT_THROW(
+        evaluate(
+            "case c0 when 1 then always_throws_bigint(c0) else 0 end", input),
+        "");
+
+    // With try: row 0 matches → THEN errors → null; row 1 → ELSE 0.
+    auto result = evaluate(
+        "try(case c0 when 1 then always_throws_bigint(c0) else 0 end)", input);
+    EXPECT_TRUE(result->isNullAt(0));
+    EXPECT_FALSE(result->isNullAt(1));
+    EXPECT_EQ(result->as<SimpleVector<int64_t>>()->valueAt(1), 0);
+  }
+
+  // ELSE clause exception.
+  {
+    auto input = makeRowVector({makeFlatVector<int64_t>({1, 2})});
+
+    // Without try: throws.
+    VELOX_ASSERT_THROW(
+        evaluate(
+            "case c0 when 1 then 10 else always_throws_bigint(c0) end", input),
+        "");
+
+    // With try: row 0 matches → THEN 10; row 1 → ELSE errors → null.
+    auto result = evaluate(
+        "try(case c0 when 1 then 10 else always_throws_bigint(c0) end)", input);
+    EXPECT_FALSE(result->isNullAt(0));
+    EXPECT_EQ(result->as<SimpleVector<int64_t>>()->valueAt(0), 10);
+    EXPECT_TRUE(result->isNullAt(1));
+  }
+
+  // Subject exception.
+  {
+    auto input = makeRowVector({makeFlatVector<int64_t>({1, 2, 3})});
+
+    // Without try: throws.
+    VELOX_ASSERT_THROW(
+        evaluate(
+            "case always_throws_bigint(c0) when 1 then 10 else 0 end", input),
+        "");
+
+    // With try: subject errors for every row → all null.
+    auto result = evaluate(
+        "try(case always_throws_bigint(c0) when 1 then 10 else 0 end)", input);
+    for (auto i = 0; i < input->size(); i++) {
+      EXPECT_TRUE(result->isNullAt(i)) << "at row " << i;
+    }
+  }
+
+  // Null propagation masks THEN/ELSE exceptions.
+  // propagatesNulls_ is true when every THEN/ELSE references the same field
+  // used by the subject.  Rows where that field is null are pre-deselected
+  // before the subject, eq, and THEN/ELSE are ever evaluated, so the throwing
+  // expression is never reached for null rows.
+  //
+  // c0 = {0, null, 4}. THEN and ELSE are both c0 / 0.
+  // Non-null rows hit division by zero; null row is masked by propagation.
+  {
+    auto input = makeRowVector({makeFlatVector<int64_t>(
+        3,
+        [](auto row) { return row * 2; },
+        [](auto row) { return row == 1; })});
+
+    // Without try: non-null rows hit c0/0 → throws.
+    VELOX_ASSERT_THROW(
+        evaluate("case c0 when 1 then c0 / 0 else c0 / 0 end", input), "");
+
+    // With try: non-null rows → error → null; null row → propagation → null.
+    auto result =
+        evaluate("try(case c0 when 1 then c0 / 0 else c0 / 0 end)", input);
+    EXPECT_TRUE(result->isNullAt(0));
+    EXPECT_TRUE(result->isNullAt(1));
+    EXPECT_TRUE(result->isNullAt(2));
+  }
+
+  // Null propagation masks WHEN-value exceptions.
+  // All THEN/ELSE reference c0, subject is c0, WHEN value uses c0 → subset
+  // of THEN/ELSE fields → propagatesNulls_ is true.
+  // Rows where c0 is null are pre-deselected so always_throws_bigint is never
+  // called for them, and they return null cleanly.
+  //
+  // c0 = {0, null, 2}.
+  {
+    auto input = makeRowVector({makeFlatVector<int64_t>(
+        3, [](auto row) { return row; }, [](auto row) { return row == 1; })});
+
+    // Without try: non-null rows call always_throws_bigint → throws.
+    VELOX_ASSERT_THROW(
+        evaluate(
+            "case c0 when always_throws_bigint(c0) then c0 else c0 end", input),
+        "");
+
+    // With try: non-null rows → error → null; null row → propagation → null.
+    auto result = evaluate(
+        "try(case c0 when always_throws_bigint(c0) then c0 else c0 end)",
+        input);
+    EXPECT_TRUE(result->isNullAt(0));
+    EXPECT_TRUE(result->isNullAt(1));
+    EXPECT_TRUE(result->isNullAt(2));
+  }
+
+  // THEN/ELSE exception with null subject, without null propagation.
+  // THEN/ELSE reference c1 (not c0), so propagatesNulls_ is false. The null
+  // in c0 causes the row to fall to ELSE, which throws on c1.
+  //
+  // c0 = {1, null}, c1 = {10, 20}.
+  {
+    auto input = makeRowVector(
+        {makeNullableFlatVector<int64_t>({1, std::nullopt}),
+         makeFlatVector<int64_t>({10, 20})});
+
+    // Without try: row 0 matches → THEN always_throws_bigint(c1) → throws.
+    VELOX_ASSERT_THROW(
+        evaluate(
+            "case c0 when 1 then always_throws_bigint(c1) else always_throws_bigint(c1) end",
+            input),
+        "");
+
+    // With try: row 0 → THEN errors → null; row 1 → c0 null, no match →
+    // ELSE always_throws_bigint(c1) → error → null.
+    auto result = evaluate(
+        "try(case c0 when 1 then always_throws_bigint(c1) else always_throws_bigint(c1) end)",
+        input);
+    EXPECT_TRUE(result->isNullAt(0));
+    EXPECT_TRUE(result->isNullAt(1));
+  }
 }
 
 TEST_P(ParameterizedExprTest, switchExprWithNull) {
@@ -3079,8 +3401,12 @@ TEST_P(ParameterizedExprTest, toSql) {
   testToSql("if(a = 10, true, false)", rowType);
   testToSql("case a when 7 then 1 when 11 then 2 else 0 end", rowType);
   testToSql("case a when 7 then 1 when 11 then 2 when 17 then 3 end", rowType);
+  // Use a::bigint explicitly so the subject and the THEN-clause expression
+  // both go through the same ExprCompiler cast path, avoiding a CSE
+  // divergence between the original and re-compiled expression trees.
   testToSql(
-      "case a when b + 3 then 1 when b * 11 then 2 when b - 17 then a + b end",
+      "case a::bigint when b + 3 then 1 when b * 11 then 2"
+      " when b - 17 then a::bigint + b end",
       rowType);
 
   // AND / OR.
