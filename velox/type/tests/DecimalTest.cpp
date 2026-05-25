@@ -798,7 +798,7 @@ TEST(DecimalTest, castFromStringError) {
 
   // Large negative exponent string.
   testCastFromString<int128_t>(
-      "6E-120", 38, 0, "Decimal scale difference is too large.");
+      "6E-120", 38, 0, "Decimal scale difference is too large: 120 vs max 38.");
 }
 } // namespace
 } // namespace facebook::velox
