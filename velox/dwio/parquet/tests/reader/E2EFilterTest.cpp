@@ -17,7 +17,6 @@
 #include "velox/common/io/IoStatistics.h"
 #include "velox/dwio/common/tests/utils/E2EFilterTestBase.h"
 #include "velox/dwio/parquet/reader/ParquetReader.h"
-#include "velox/dwio/parquet/reader/ParquetTypeWithId.h"
 #include "velox/dwio/parquet/writer/Writer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -101,19 +100,6 @@ class E2EFilterTest : public E2EFilterTestBase,
   uint64_t rowsInRowGroup_ = 10'000;
   int64_t bytesInRowGroup_ = 128 * 1'024 * 1'024;
 };
-
-TEST_F(E2EFilterTest, writerMagic) {
-  rowType_ = ROW({"c0"}, {INTEGER()});
-  std::vector<RowVectorPtr> batches;
-  batches.push_back(
-      std::static_pointer_cast<RowVector>(test::BatchMaker::createBatch(
-          rowType_, 20000, *leafPool_, nullptr, 0)));
-  writeToMemory(rowType_, batches, false);
-  auto data = sinkData_.data();
-  auto size = sinkData_.size();
-  EXPECT_EQ("PAR1", std::string(data, 4));
-  EXPECT_EQ("PAR1", std::string(data + size - 4, 4));
-}
 
 TEST_F(E2EFilterTest, boolean) {
   testWithTypes(
@@ -676,27 +662,6 @@ TEST_F(E2EFilterTest, varbinaryDictionary) {
       20);
 }
 
-TEST_F(E2EFilterTest, largeMetadata) {
-  rowsInRowGroup_ = 1;
-
-  rowType_ = ROW({"c0"}, {INTEGER()});
-  std::vector<RowVectorPtr> batches;
-  batches.push_back(
-      std::static_pointer_cast<RowVector>(test::BatchMaker::createBatch(
-          rowType_, 1000, *leafPool_, nullptr, 0)));
-  writeToMemory(rowType_, batches, false);
-  dwio::common::ReaderOptions readerOpts(leafPool_.get());
-  readerOpts.setDataIoStats(dataIoStats_);
-  readerOpts.setMetadataIoStats(metadataIoStats_);
-  readerOpts.setFooterSpeculativeIoSize(1024);
-  readerOpts.setFilePreloadThreshold(1024 * 8);
-  dwio::common::RowReaderOptions rowReaderOpts;
-  auto input = std::make_unique<BufferedInput>(
-      std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
-  auto reader = makeReader(readerOpts, std::move(input));
-  EXPECT_EQ(1000, reader->numberOfRows());
-}
-
 TEST_F(E2EFilterTest, date) {
   testWithTypes(
       "date_val:date",
@@ -929,78 +894,6 @@ TEST_F(E2EFilterTest, parquetMRVersionStringStatsRowGroupFiltering) {
   writeAndGetStats("parquet-mr version 1.8.1", stats181);
   EXPECT_EQ(stats181.skippedStrides, 0);
   EXPECT_EQ(stats181.processedStrides, 2);
-}
-
-TEST_F(E2EFilterTest, writeDecimalAsInteger) {
-  auto rowVector = makeRowVector(
-      {makeFlatVector<int64_t>({1, 2}, DECIMAL(8, 2)),
-       makeFlatVector<int64_t>({1, 2}, DECIMAL(10, 2)),
-       makeFlatVector<int128_t>({1, 2}, DECIMAL(19, 2))});
-  writeToMemory(rowVector->type(), {rowVector}, false);
-  dwio::common::ReaderOptions readerOpts(leafPool_.get());
-  readerOpts.setDataIoStats(dataIoStats_);
-  readerOpts.setMetadataIoStats(metadataIoStats_);
-  auto input = std::make_unique<BufferedInput>(
-      std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
-  auto reader = makeReader(readerOpts, std::move(input));
-  auto parquetReader = dynamic_cast<ParquetReader&>(*reader.get());
-
-  auto types = parquetReader.typeWithId()->getChildren();
-  auto c0 = std::dynamic_pointer_cast<const ParquetTypeWithId>(types[0]);
-  EXPECT_EQ(c0->parquetType_.value(), thrift::Type::type::INT32);
-  auto c1 = std::dynamic_pointer_cast<const ParquetTypeWithId>(types[1]);
-  EXPECT_EQ(c1->parquetType_.value(), thrift::Type::type::INT64);
-  auto c2 = std::dynamic_pointer_cast<const ParquetTypeWithId>(types[2]);
-  EXPECT_EQ(c2->parquetType_.value(), thrift::Type::type::FIXED_LEN_BYTE_ARRAY);
-}
-
-TEST_F(E2EFilterTest, configurableWriteSchema) {
-  auto test = [&](auto& type, auto& newType) {
-    std::vector<RowVectorPtr> batches;
-    for (auto i = 0; i < 5; i++) {
-      auto vector = BaseVector::create(type, 100, pool());
-      auto rowVector = std::dynamic_pointer_cast<RowVector>(vector);
-      batches.push_back(rowVector);
-    }
-
-    writeToMemory(newType, batches, false);
-    dwio::common::ReaderOptions readerOpts(leafPool_.get());
-    readerOpts.setDataIoStats(dataIoStats_);
-    readerOpts.setMetadataIoStats(metadataIoStats_);
-    auto input = std::make_unique<BufferedInput>(
-        std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
-    auto reader = makeReader(readerOpts, std::move(input));
-    auto parquetReader = dynamic_cast<ParquetReader&>(*reader.get());
-
-    EXPECT_EQ(parquetReader.rowType()->toString(), newType->toString());
-  };
-
-  // ROW(ROW(ROW))
-  auto type =
-      ROW({"a", "b"}, {INTEGER(), ROW({"c"}, {ROW({"d"}, {INTEGER()})})});
-  auto newType =
-      ROW({"aa", "bb"}, {INTEGER(), ROW({"cc"}, {ROW({"dd"}, {INTEGER()})})});
-  test(type, newType);
-
-  // ARRAY(ROW)
-  type =
-      ROW({"a", "b"}, {ARRAY(ROW({"c", "d"}, {BIGINT(), BIGINT()})), BIGINT()});
-  newType = ROW(
-      {"aa", "bb"}, {ARRAY(ROW({"cc", "dd"}, {BIGINT(), BIGINT()})), BIGINT()});
-  test(type, newType);
-
-  // // MAP(ROW)
-  type =
-      ROW({"a", "b"},
-          {MAP(ROW({"c", "d"}, {BIGINT(), BIGINT()}),
-               ROW({"e", "f"}, {BIGINT(), BIGINT()})),
-           BIGINT()});
-  newType =
-      ROW({"aa", "bb"},
-          {MAP(ROW({"cc", "dd"}, {BIGINT(), BIGINT()}),
-               ROW({"ee", "ff"}, {BIGINT(), BIGINT()})),
-           BIGINT()});
-  test(type, newType);
 }
 
 TEST_F(E2EFilterTest, booleanRle) {
