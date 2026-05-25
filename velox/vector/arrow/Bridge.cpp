@@ -327,6 +327,7 @@ const char* exportArrowFormatStr(
     case TypeKind::UNKNOWN:
       return "n"; // NullType
     case TypeKind::TIMESTAMP:
+      VELOX_DCHECK(type->equivalent(*TIMESTAMP()));
       return exportArrowFormatTimestampStr(options, formatBuffer);
     // Complex/nested types.
     case TypeKind::ARRAY:
@@ -759,6 +760,7 @@ size_t getArrowElementSize(const TypePtr& type, const ArrowOptions& options) {
   if (type->isShortDecimal() && !options.useDecimalTypeWidth) {
     return sizeof(int128_t);
   } else if (type->isTimestamp()) {
+    VELOX_DCHECK(type->equivalent(*TIMESTAMP()));
     return sizeof(int64_t);
   } else if (type->isTime()) {
     if (type->equivalent(*TIME())) {
@@ -798,6 +800,7 @@ void exportValues(
       : AlignedBuffer::allocate<uint8_t>(
             checkedMultiply<size_t>(out.length, size), pool);
   if (type->kind() == TypeKind::TIMESTAMP) {
+    VELOX_DCHECK(type->equivalent(*TIMESTAMP()));
     gatherFromTimestampBuffer(vec, rows, options.timestampUnit, *values);
   } else if (
       type->kind() == TypeKind::BIGINT && type->isTime() &&
@@ -2271,6 +2274,7 @@ VectorPtr importFromArrowImpl(
         arrowArray.null_count,
         wrapInBufferView);
   } else if (type->isTimestamp()) {
+    VELOX_DCHECK(type->equivalent(*TIMESTAMP()));
     return createTimestampVector(
         pool,
         type,

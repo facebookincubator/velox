@@ -1128,3 +1128,41 @@ ALL.
 .. image:: images/local-exchange.png
     :width: 400
     :align: center
+
+GPU Operators (cuDF)
+--------------------
+
+When cuDF is enabled, CPU operators are replaced with GPU equivalents at
+pipeline construction time via the ``OperatorAdapterRegistry``. For example,
+``FilterProject`` becomes ``CudfFilterProject``, ``Aggregation`` becomes
+``CudfGroupby`` or ``CudfReduce``, and ``HashJoin`` becomes
+``CudfHashJoinBuild``/``CudfHashJoinProbe``.
+
+Adapter operators are automatically inserted at GPU/CPU boundaries:
+
+* ``CudfFromVelox`` — inserted before a GPU operator when the preceding
+  operator produces CPU data (host-to-device conversion).
+* ``CudfToVelox`` — inserted after a GPU operator when the next operator
+  or the pipeline output requires CPU data (device-to-host conversion).
+
+Adapter operators use synthetic planNodeIds (e.g. ``4-to-velox``) at runtime,
+but redirect their stats to the parent plan node via ``setStatSplitter``.
+This means they appear in ``printPlanWithStats`` output as operator-type
+breakdown lines under their parent node (the same mechanism used by
+``HashBuild``/``HashProbe`` under ``HashJoinNode``).
+
+All cuDF operators extend ``CudfOperatorBase``, which provides:
+
+* Template method pattern (``doAddInput``/``doGetOutput``/``doClose``)
+* NVTX profiling ranges
+
+GPU operators are identified by their ``Cudf`` prefix in operator type names
+(e.g. ``CudfFilterProject``, ``CudfLocalPartition``, ``CudfReduceFINAL``).
+Operators without this prefix (e.g. ``LocalExchange``) run on CPU.
+``TableScan`` uses the cuDF GPU parquet reader via the connector layer but
+is not itself a ``CudfOperatorBase`` subclass.
+
+In stats output, "Cpu time" and "Wall time" for GPU operators reflect the
+host-side duration of ``addInput``/``getOutput`` calls, which includes
+enqueuing GPU work and synchronizing. These are not GPU hardware execution
+times.

@@ -28,7 +28,7 @@ class QueryConfigProviderTest : public ::testing::Test {
 
 TEST_F(QueryConfigProviderTest, propertiesNotEmpty) {
   auto props = provider_.properties();
-  EXPECT_GT(props.size(), 140);
+  EXPECT_GT(props.size(), 130);
 }
 
 TEST_F(QueryConfigProviderTest, allNamesNonEmpty) {

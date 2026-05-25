@@ -54,6 +54,10 @@ enum class FileFormat {
   SST = 10, // rocksdb sst format
   FLUX = 11,
   AVRO = 12,
+  PUFFIN =
+      13, // Iceberg V3 Puffin blob container (e.g. deletion vectors).
+          // Not consumed by dwio::ReaderFactory; read directly by the
+          // Iceberg connector via FileSystem::pread of the blob byte-range.
 };
 
 FileFormat toFileFormat(std::string_view s);
@@ -743,35 +747,79 @@ class ReaderOptions : public io::ReaderOptions {
   /// process-wide AsyncDataCache. When enabled, the first reader performs a
   /// speculative tail read and populates the cache; subsequent readers on the
   /// same file initialize from the cache with zero additional IO.
-  bool fileMetadataCacheEnabled() const {
-    return fileMetadataCacheEnabled_;
+  bool cacheMetadata() const {
+    return cacheMetadata_;
   }
 
-  void setFileMetadataCacheEnabled(bool value) {
-    fileMetadataCacheEnabled_ = value;
+  void setCacheMetadata(bool value) {
+    cacheMetadata_ = value;
   }
 
   /// If true, pins parsed metadata objects (e.g., StripeGroup, IndexGroup) in
   /// the reader's metadata cache with strong references so they are never
   /// evicted. This avoids re-reading and re-parsing metadata on every stripe
-  /// access when weak-pointer cache entries would otherwise expire.
-  bool pinFileMetadata() const {
-    return pinFileMetadata_;
+  /// access when weak-pointer cache entries would otherwise expire. Works
+  /// independently of cacheMetadata.
+  bool pinMetadata() const {
+    return pinMetadata_;
   }
 
-  void setPinFileMetadata(bool value) {
-    pinFileMetadata_ = value;
+  void setPinMetadata(bool value) {
+    pinMetadata_ = value;
+  }
+
+  /// If true, caches index data (e.g., cluster index key stream) in the
+  /// async data cache.
+  bool cacheIndex() const {
+    return cacheIndex_;
+  }
+
+  void setCacheIndex(bool value) {
+    cacheIndex_ = value;
+  }
+
+  /// If true, pins parsed index objects in the reader's index cache with
+  /// strong references so they are never evicted. Works independently of
+  /// cacheIndex.
+  bool pinIndex() const {
+    return pinIndex_;
+  }
+
+  void setPinIndex(bool value) {
+    pinIndex_ = value;
+  }
+
+  /// If true, caches data column reads in the async data cache. Default false
+  /// keeps the cache scoped to metadata/index only.
+  bool cacheData() const {
+    return cacheData_;
+  }
+
+  void setCacheData(bool value) {
+    cacheData_ = value;
   }
 
   /// Whether to load and initialize the cluster index during file open.
   /// When true, the cluster index section is preloaded and the structured
-  /// ClusterIndex object is created. Default true.
+  /// ClusterIndex object is created. Default false.
   bool loadClusterIndex() const {
     return loadClusterIndex_;
   }
 
   void setLoadClusterIndex(bool value) {
     loadClusterIndex_ = value;
+  }
+
+  /// Whether to eagerly preload all per-partition metadata and decode all
+  /// per-partition key streams during file open. Only effective when
+  /// loadClusterIndex() is also true. Implies pinning so preloaded chunks
+  /// are not evicted on first lookup. Default false.
+  bool preloadIndex() const {
+    return preloadIndex_;
+  }
+
+  void setPreloadIndex(bool value) {
+    preloadIndex_ = value;
   }
 
   /// Whether to load and initialize the chunk index during file open.
@@ -823,9 +871,13 @@ class ReaderOptions : public io::ReaderOptions {
   const tz::TimeZone* sessionTimezone_{nullptr};
   bool adjustTimestampToTimezone_{false};
   bool selectiveNimbleReaderEnabled_{false};
-  bool fileMetadataCacheEnabled_{false};
-  bool pinFileMetadata_{false};
-  bool loadClusterIndex_{true};
+  bool cacheMetadata_{false};
+  bool pinMetadata_{false};
+  bool cacheIndex_{false};
+  bool pinIndex_{false};
+  bool cacheData_{true};
+  bool loadClusterIndex_{false};
+  bool preloadIndex_{false};
   bool loadChunkIndex_{true};
   bool allowEmptyFile_{false};
   bool allowInt32Narrowing_{false};

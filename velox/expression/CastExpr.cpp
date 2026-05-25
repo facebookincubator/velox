@@ -85,6 +85,7 @@ VectorPtr CastExpr::castFromDate(
       return castResult;
     }
     case TypeKind::TIMESTAMP: {
+      VELOX_DCHECK(toType->equivalent(*TIMESTAMP()));
       static const int64_t kMillisPerDay{86'400'000};
       const auto* timeZone =
           getTimeZoneFromConfig(context.execCtx()->queryCtx()->queryConfig());
@@ -157,6 +158,7 @@ VectorPtr CastExpr::castToDate(
       return castResult;
     }
     case TypeKind::TIMESTAMP: {
+      VELOX_DCHECK(fromType->equivalent(*TIMESTAMP()));
       auto* inputVector = input.as<SimpleVector<Timestamp>>();
       const auto* timeZone =
           getTimeZoneFromConfig(context.execCtx()->queryCtx()->queryConfig());
@@ -306,6 +308,7 @@ VectorPtr CastExpr::castFromTime(
       return castResult;
     }
     case TypeKind::TIMESTAMP: {
+      VELOX_DCHECK(toType->equivalent(*TIMESTAMP()));
       // if input is constant, create a constant output vector
       if (input.isConstantEncoding()) {
         auto constantInput = input.as<ConstantVector<int64_t>>();
@@ -378,6 +381,7 @@ VectorPtr CastExpr::castToTime(
       return castResult;
     }
     case TypeKind::TIMESTAMP: {
+      VELOX_DCHECK(fromType->equivalent(*TIMESTAMP()));
       VectorPtr castResult;
       context.ensureWritable(rows, TIME(), castResult);
       (*castResult).clearNulls(rows);
@@ -878,6 +882,7 @@ void CastExpr::applyPeeled(
       fromType->kind() == TypeKind::TIMESTAMP &&
       (toType->kind() == TypeKind::VARCHAR ||
        toType->kind() == TypeKind::VARBINARY)) {
+    VELOX_DCHECK(fromType->equivalent(*TIMESTAMP()));
     result = applyTimestampToVarcharCast(toType, rows, context, input);
   } else if (toType->kind() == TypeKind::VARBINARY) {
     switch (fromType->kind()) {

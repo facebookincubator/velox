@@ -3711,6 +3711,26 @@ class IndexLookupJoinNode : public AbstractJoinNode {
       bool hasMarker,
       PlanNodePtr left,
       TableScanNodePtr right,
+      RowTypePtr outputType,
+      std::optional<bool> splitOutput = std::nullopt);
+
+  /// @param splitOutput Optional flag to control whether the operator should
+  /// split output batches if they are too large. If true, output is split into
+  /// batches according to Operator's outputBatchRows logic. If false, output is
+  /// not split and output batches match input batches 1:1. If not set, defaults
+  /// to the value of the index_lookup_join_split_output config in the
+  /// QueryConfig.
+  IndexLookupJoinNode(
+      const PlanNodeId& id,
+      JoinType joinType,
+      const std::vector<FieldAccessTypedExprPtr>& leftKeys,
+      const std::vector<FieldAccessTypedExprPtr>& rightKeys,
+      const std::vector<IndexLookupConditionPtr>& joinConditions,
+      TypedExprPtr filter,
+      bool hasMarker,
+      std::optional<bool> splitOutput,
+      PlanNodePtr left,
+      TableScanNodePtr right,
       RowTypePtr outputType);
 
   class Builder
@@ -3723,6 +3743,7 @@ class IndexLookupJoinNode : public AbstractJoinNode {
       joinConditions_ = other.joinConditions();
       filter_ = other.filter();
       hasMarker_ = other.hasMarker();
+      splitOutput_ = other.splitOutput();
     }
 
     /// Set lookup conditions for index lookup that can't be converted into
@@ -3742,6 +3763,13 @@ class IndexLookupJoinNode : public AbstractJoinNode {
     /// Set whether to include a marker column for left joins.
     Builder& hasMarker(bool hasMarker) {
       hasMarker_ = hasMarker;
+      return *this;
+    }
+
+    /// Set whether to split large output into multiple batches, std::nullopt
+    /// means respect index_lookup_join_split_output in the QueryConfig.
+    Builder& splitOutput(std::optional<bool> splitOutput) {
+      splitOutput_ = splitOutput;
       return *this;
     }
 
@@ -3768,6 +3796,7 @@ class IndexLookupJoinNode : public AbstractJoinNode {
           joinConditions_,
           filter_.value_or(nullptr),
           hasMarker_,
+          splitOutput_,
           left_.value(),
           std::dynamic_pointer_cast<const TableScanNode>(right_.value()),
           outputType_.value());
@@ -3776,6 +3805,7 @@ class IndexLookupJoinNode : public AbstractJoinNode {
    private:
     std::vector<IndexLookupConditionPtr> joinConditions_;
     bool hasMarker_{false};
+    std::optional<bool> splitOutput_;
   };
 
   bool supportsBarrier() const override {
@@ -3805,6 +3835,10 @@ class IndexLookupJoinNode : public AbstractJoinNode {
     return hasMarker_;
   }
 
+  const std::optional<bool>& splitOutput() const {
+    return splitOutput_;
+  }
+
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
       const override;
 
@@ -3828,6 +3862,10 @@ class IndexLookupJoinNode : public AbstractJoinNode {
 
   /// Whether to include a marker column for left joins to indicate matches.
   const bool hasMarker_;
+
+  /// Optional flag to control whether to split output batches. When set,
+  /// overrides the index_lookup_join_split_output QueryConfig.
+  const std::optional<bool> splitOutput_;
 };
 
 using IndexLookupJoinNodePtr = std::shared_ptr<const IndexLookupJoinNode>;
@@ -4871,6 +4909,14 @@ class EnforceSingleRowNode : public PlanNode {
 
   const std::vector<PlanNodePtr>& sources() const override {
     return sources_;
+  }
+
+  /// Validates that input produces exactly one row, so the pipeline must
+  /// observe all rows sequentially on a single driver. Multiple drivers
+  /// would each independently produce a row (or NULL on empty input),
+  /// breaking the single-row contract.
+  bool requiresSingleThread() const override {
+    return true;
   }
 
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
