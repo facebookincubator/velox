@@ -1299,7 +1299,7 @@ class AggregationNode : public PlanNode {
   };
 
   bool supportsBarrier() const override {
-    return isPreGrouped();
+    return true;
   }
 
   const std::vector<PlanNodePtr>& sources() const override {
