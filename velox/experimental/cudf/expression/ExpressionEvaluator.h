@@ -167,6 +167,8 @@ class FunctionExpression : public CudfExpression {
   std::shared_ptr<velox::exec::Expr> expr_;
   std::shared_ptr<CudfFunction> function_;
   std::vector<std::shared_ptr<CudfExpression>> subexpressions_;
+  // TODO: Remove once FieldReference can resolve index directly from RowType.
+  int32_t fieldIndex_{-1};
 
   RowTypePtr inputRowSchema_;
 };

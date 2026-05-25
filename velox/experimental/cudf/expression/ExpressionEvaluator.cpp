@@ -2429,6 +2429,21 @@ std::shared_ptr<FunctionExpression> FunctionExpression::create(
   auto name = expr->name();
   node->function_ = createCudfFunction(name, expr);
 
+  if (auto fieldExpr = std::dynamic_pointer_cast<FieldReference>(expr)) {
+    if (!fieldExpr->inputs().empty()) {
+      VELOX_CHECK_EQ(
+          fieldExpr->inputs().size(),
+          1,
+          "Nested field reference expects exactly one input");
+      auto parentRowType = asRowType(fieldExpr->inputs()[0]->type());
+      VELOX_CHECK_NOT_NULL(
+          parentRowType,
+          "Nested FieldReference parent must be a ROW: {}",
+          expr->toString());
+      node->fieldIndex_ = resolveFieldReferenceIndex(*fieldExpr, parentRowType);
+    }
+  }
+
   if (node->function_ || std::dynamic_pointer_cast<FieldReference>(expr)) {
     for (const auto& input : expr->inputs()) {
       if (input->name() != "literal") {
@@ -2468,6 +2483,8 @@ std::unique_ptr<cudf::column> FunctionExpression::makeStructChildColumn(
           VELOX_CHECK_LT(
               static_cast<size_t>(childIndex), structView.num_children());
 
+          // `structView` points into `value`. Keep `contents` alive until after
+          // merging parent nulls so structView's null mask remains valid.
           auto contents = value->release();
           auto child = std::move(contents.children[childIndex]);
           mergeSecondaryNullsIntoResult(*child, structView, stream, mr);
@@ -2500,10 +2517,9 @@ ColumnOrView FunctionExpression::eval(
         "Nested field reference expects exactly one subexpression");
 
     auto parent = subexpressions_[0]->eval(inputColumnViews, stream, mr);
-    auto parentRowType = asRowType(fieldExpr->inputs()[0]->type());
-    auto fieldIndex = resolveFieldReferenceIndex(*fieldExpr, parentRowType);
+    VELOX_DCHECK_GE(fieldIndex_, 0);
     return FunctionExpression::makeStructChildColumn(
-        parent, fieldIndex, stream, mr);
+        parent, static_cast<cudf::size_type>(fieldIndex_), stream, mr);
   }
 
   if (function_) {
