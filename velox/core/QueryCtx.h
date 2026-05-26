@@ -273,6 +273,7 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   /// Defaults to kHttp if the node ID is not in the map.
   ExchangeTransportType inputTransportType(
       const std::string& planNodeId) const {
+    std::lock_guard<std::mutex> lock(mutex_);
     auto it = inputTransportTypes_.find(planNodeId);
     if (it == inputTransportTypes_.end()) {
       return ExchangeTransportType::kHttp;
@@ -284,6 +285,7 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   /// Defaults to kHttp if the node ID is not in the map.
   ExchangeTransportType outputTransportType(
       const std::string& planNodeId) const {
+    std::lock_guard<std::mutex> lock(mutex_);
     auto it = outputTransportTypes_.find(planNodeId);
     if (it == outputTransportTypes_.end()) {
       return ExchangeTransportType::kHttp;
@@ -559,8 +561,8 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   ScanBatchCallback scanBatchCallback_;
 
   // Per-node transport types keyed by PlanNodeId. Protected by mutex_ for
-  // mutable setters; read-only accessors are safe without lock because writes
-  // complete before operators start.
+  // both readers and writers because tasks sharing a QueryCtx may have their
+  // plan translations and driver creations interleaved across HTTP threads.
   std::unordered_map<std::string, ExchangeTransportType> inputTransportTypes_;
   std::unordered_map<std::string, ExchangeTransportType> outputTransportTypes_;
 
