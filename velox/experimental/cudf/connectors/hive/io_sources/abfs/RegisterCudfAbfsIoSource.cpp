@@ -17,16 +17,22 @@
 #include "velox/experimental/cudf/connectors/hive/io_sources/abfs/RegisterCudfAbfsIoSource.h"
 
 #ifdef VELOX_ENABLE_ABFS
-#include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h"
 #include "velox/experimental/cudf/connectors/hive/io_sources/CudfIoSourceRegistry.h"
 #include "velox/experimental/cudf/connectors/hive/io_sources/abfs/CudfAbfsIoSource.h"
+
+#include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h"
+
+#include <string>
+#include <string_view>
 #endif
 
 namespace facebook::velox::cudf_velox::connector::hive::io_sources {
 
 void registerCudfAbfsIoSource() {
 #ifdef VELOX_ENABLE_ABFS
+  constexpr std::string_view kAbfsIoSourceName = "abfs";
   registerCudfIoSource(
+      std::string(kAbfsIoSourceName),
       [](std::string_view path) {
         return ::facebook::velox::filesystems::isAbfsFile(path);
       },

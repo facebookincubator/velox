@@ -21,16 +21,13 @@
 #include <cudf/io/types.hpp>
 
 #include <array>
-#include <memory>
 #include <string>
 #include <string_view>
-#include <utility>
 
 namespace facebook::velox::cudf_velox::connector::hive::io_sources {
 
 namespace {
 
-constexpr std::string_view kKvikIoSourceName = "kvikio";
 constexpr std::string_view kFilePrefix = "file:";
 
 // S3-wire-compatible prefixes KvikIO can serve
@@ -82,6 +79,7 @@ std::string normalizeKvikIoPath(std::string_view path) {
 } // namespace
 
 void registerCudfKvikIoSource() {
+  constexpr std::string_view kKvikIoSourceName = "kvikio";
   registerCudfIoSource(
       std::string(kKvikIoSourceName),
       kvikIoMatcher,
