@@ -20,6 +20,7 @@
 #include <cudf/io/datasource.hpp>
 #include <cudf/io/types.hpp>
 
+#include <array>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -29,28 +30,51 @@ namespace facebook::velox::cudf_velox::connector::hive::io_sources {
 
 namespace {
 
+constexpr std::string_view kKvikIoSourceName = "kvikio";
 constexpr std::string_view kFilePrefix = "file:";
-constexpr std::string_view kS3Prefix = "s3://";
-constexpr std::string_view kS3aPrefix = "s3a://";
 
-// Matches the paths served by KvikIO datasource: local files (with or without a
-// `file:` prefix) and S3 URIs (`s3://`, `s3a://`)
-bool kvikIoMatcher(std::string_view path) {
-  return path.starts_with('/') || path.starts_with(kFilePrefix) ||
-      path.starts_with(kS3Prefix) || path.starts_with(kS3aPrefix);
+// S3-wire-compatible prefixes KvikIO can serve
+constexpr std::array<std::string_view, 6> kS3CompatiblePrefixes{
+    "s3://",
+    "s3a://",
+    "s3n://",
+    "oss://",
+    "cos://",
+    "cosn://"};
+
+constexpr std::string_view kS3CanonicalPrefix = "s3://";
+
+bool startsWithAnyS3Prefix(std::string_view path) {
+  for (const auto& prefix : kS3CompatiblePrefixes) {
+    if (path.starts_with(prefix)) {
+      return true;
+    }
+  }
+  return false;
 }
 
-// Strip the `file:` prefix and rewrite `s3a://` to `s3://` so the path
-// is in the form KvikIO datasource expects.
+// Matches the paths served by KvikIO datasource: local files (with or without a
+// `file:` prefix) and S3 URIs.
+bool kvikIoMatcher(std::string_view path) {
+  return path.starts_with('/') || path.starts_with(kFilePrefix) ||
+      startsWithAnyS3Prefix(path);
+}
+
+// Strip the `file:` prefix and rewrite any S3-compatible scheme so the path is
+// in a form that KvikIO expects.
 std::string normalizeKvikIoPath(std::string_view path) {
   if (path.starts_with(kFilePrefix)) {
     return std::string(path.substr(kFilePrefix.size()));
   }
-  if (path.starts_with(kS3aPrefix)) {
-    std::string normalized(path);
-    // "s3a://..." -> "s3://..." by dropping the 'a' at index 2.
-    normalized.erase(2, 1);
-    return normalized;
+  for (const auto& prefix : kS3CompatiblePrefixes) {
+    if (path.starts_with(prefix)) {
+      if (prefix == kS3CanonicalPrefix) {
+        return std::string(path);
+      }
+      std::string normalized(kS3CanonicalPrefix);
+      normalized.append(path.substr(prefix.size()));
+      return normalized;
+    }
   }
   return std::string(path);
 }
@@ -59,6 +83,7 @@ std::string normalizeKvikIoPath(std::string_view path) {
 
 void registerCudfKvikIoSource() {
   registerCudfIoSource(
+      std::string(kKvikIoSourceName),
       kvikIoMatcher,
       [](std::string_view path,
          [[maybe_unused]] const std::shared_ptr<const config::ConfigBase>&

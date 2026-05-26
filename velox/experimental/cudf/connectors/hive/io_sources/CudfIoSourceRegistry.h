@@ -22,30 +22,31 @@
 
 #include <functional>
 #include <memory>
+#include <string>
 #include <string_view>
 
 namespace facebook::velox::cudf_velox::connector::hive::io_sources {
 
-/// Predicate that decides whether a registered factory should handle
+/// Predicate that decides whether a registered generator should handle
 /// `path`. Mirrors the role of the matcher in
 /// `facebook::velox::filesystems::registerFileSystem`, but operates on
 /// cuDF IO sources rather than Velox filesystems.
-using CudfIoSourceMatcher = std::function<bool(std::string_view path)>;
+using SourceMatcher = std::function<bool(std::string_view path)>;
 
-/// Factory that constructs a `cudf::io::datasource` for `path` using
+/// Generator that constructs a `cudf::io::datasource` for `path` using
 /// `properties` for credentials / endpoint configuration.
-using CudfIoSourceFactory = std::function<std::shared_ptr<cudf::io::datasource>(
+using SourceGenerator = std::function<std::shared_ptr<cudf::io::datasource>(
     std::string_view path,
     const std::shared_ptr<const config::ConfigBase>& properties)>;
 
-/// Registers a (matcher, factory) pair. Matchers are tried in
-/// registration order on lookup; the first matcher whose predicate
-/// accepts a given path produces the IO source for it. Each backend
-/// (KvikIO for local/S3, ABFS, ...) registers exactly one such pair,
-/// matching the upstream `registerFileSystem` model.
+/// Registers a (matcher, generator) pair under `name`. Matchers are tried in
+/// registration order on lookup and the first matcher whose predicate accepts a
+/// given path produces the IO source for it. Each backend registers exactly one
+/// such entry.
 void registerCudfIoSource(
-    CudfIoSourceMatcher matcher,
-    CudfIoSourceFactory factory);
+    std::string name,
+    SourceMatcher matcher,
+    SourceGenerator generator);
 
 /// Returns an IO source for `path` by walking matcher-based
 /// registrations in FIFO order and returning the first hit. Returns
