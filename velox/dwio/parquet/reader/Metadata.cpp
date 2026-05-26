@@ -317,7 +317,7 @@ common::CompressionKind thriftCodecToCompressionKind(
     case thrift::CompressionCodec::LZO:
       return common::CompressionKind::CompressionKind_LZO;
     case thrift::CompressionCodec::LZ4:
-      return common::CompressionKind::CompressionKind_LZ4;
+      return common::CompressionKind::CompressionKind_LZ4_HADOOP;
     case thrift::CompressionCodec::ZSTD:
       return common::CompressionKind::CompressionKind_ZSTD;
     case thrift::CompressionCodec::LZ4_RAW:
