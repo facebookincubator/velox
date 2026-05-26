@@ -5431,17 +5431,39 @@ class RowNumberNode : public PlanNode {
 
 using RowNumberNodePtr = std::shared_ptr<const RowNumberNode>;
 
-/// The MarkDistinct operator marks unique rows based on distinctKeys.
-/// The result is put in a new markerName column alongside the original input.
-/// @param markerName Name of the output mask channel.
-/// @param distinctKeys Names of grouping keys.
-/// column.
+/// Marks unique rows based on a set of distinct keys. Always produces
+/// masks.size() + 1 boolean marker columns:
+///
+/// markers[0]: no-mask marker — true for the first occurrence of each distinct
+/// key combination, regardless of any mask.
+///
+/// markers[i+1]: per-mask marker — true for the first occurrence of each
+/// distinct key combination where masks[i] is true.
+///
+/// When masks is empty (single-marker mode), only the no-mask marker is
+/// produced.
 class MarkDistinctNode : public PlanNode {
  public:
+  /// Constructs a single-marker MarkDistinct node.
+  /// @param markerName Name of the output boolean marker column.
+  /// @param distinctKeys Columns to check for distinct values.
   MarkDistinctNode(
       PlanNodeId id,
       std::string markerName,
       std::vector<FieldAccessTypedExprPtr> distinctKeys,
+      PlanNodePtr source);
+
+  /// Constructs a MarkDistinct node that produces one no-mask marker followed
+  /// by one marker per mask column.
+  /// @param markerNames Names of output boolean marker columns. Must have
+  ///   exactly masks.size() + 1 entries.
+  /// @param distinctKeys Columns to check for distinct values.
+  /// @param masks Boolean input columns used as masks. Can be empty.
+  MarkDistinctNode(
+      PlanNodeId id,
+      std::vector<std::string> markerNames,
+      std::vector<FieldAccessTypedExprPtr> distinctKeys,
+      std::vector<FieldAccessTypedExprPtr> masks,
       PlanNodePtr source);
 
   class Builder {
@@ -5450,7 +5472,8 @@ class MarkDistinctNode : public PlanNode {
 
     explicit Builder(const MarkDistinctNode& other) {
       id_ = other.id();
-      markerName_ = other.markerName();
+      markerNames_ = other.markerNames();
+      masks_ = other.masks();
       distinctKeys_ = other.distinctKeys();
       VELOX_CHECK_EQ(other.sources().size(), 1);
       source_ = other.sources()[0];
@@ -5461,8 +5484,13 @@ class MarkDistinctNode : public PlanNode {
       return *this;
     }
 
-    Builder& markerName(std::string markerName) {
-      markerName_ = std::move(markerName);
+    Builder& markerNames(std::vector<std::string> markerNames) {
+      markerNames_ = std::move(markerNames);
+      return *this;
+    }
+
+    Builder& masks(std::vector<FieldAccessTypedExprPtr> masks) {
+      masks_ = std::move(masks);
       return *this;
     }
 
@@ -5479,7 +5507,7 @@ class MarkDistinctNode : public PlanNode {
     std::shared_ptr<MarkDistinctNode> build() const {
       VELOX_USER_CHECK(id_.has_value(), "MarkDistinctNode id is not set");
       VELOX_USER_CHECK(
-          markerName_.has_value(), "MarkDistinctNode markerName is not set");
+          markerNames_.has_value(), "MarkDistinctNode markerNames is not set");
       VELOX_USER_CHECK(
           distinctKeys_.has_value(),
           "MarkDistinctNode distinctKeys is not set");
@@ -5488,14 +5516,16 @@ class MarkDistinctNode : public PlanNode {
 
       return std::make_shared<MarkDistinctNode>(
           id_.value(),
-          markerName_.value(),
+          markerNames_.value(),
           distinctKeys_.value(),
+          masks_.value_or(std::vector<FieldAccessTypedExprPtr>{}),
           source_.value());
     }
 
    private:
     std::optional<PlanNodeId> id_;
-    std::optional<std::string> markerName_;
+    std::optional<std::vector<std::string>> markerNames_;
+    std::optional<std::vector<FieldAccessTypedExprPtr>> masks_;
     std::optional<std::vector<FieldAccessTypedExprPtr>> distinctKeys_;
     std::optional<PlanNodePtr> source_;
   };
@@ -5521,8 +5551,22 @@ class MarkDistinctNode : public PlanNode {
     return queryConfig.markDistinctSpillEnabled();
   }
 
-  const std::string& markerName() const {
-    return markerName_;
+  /// Returns the no-mask marker name (markerNames[0]). Retained for callers
+  /// not yet migrated to markerNames(); to be removed in a follow-up.
+  [[deprecated("Use markerNames()[0]")]] const std::string& markerName() const {
+    return markerNames_[0];
+  }
+
+  /// Returns all marker names: [0] is the no-mask marker, [1..N] correspond
+  /// to masks[0..N-1]. The constructor invariant markerNames_.size() ==
+  /// masks_.size() + 1 guarantees this is always non-empty.
+  const std::vector<std::string>& markerNames() const {
+    return markerNames_;
+  }
+
+  /// Returns mask column references. Empty for single-marker mode.
+  const std::vector<FieldAccessTypedExprPtr>& masks() const {
+    return masks_;
   }
 
   const std::vector<FieldAccessTypedExprPtr>& distinctKeys() const {
@@ -5536,7 +5580,12 @@ class MarkDistinctNode : public PlanNode {
  private:
   void addDetails(std::stringstream& stream) const override;
 
-  const std::string markerName_;
+  // markerNames_[0] is the no-mask marker; markerNames_[i+1] corresponds to
+  // masks_[i]. Always has masks_.size() + 1 entries.
+  const std::vector<std::string> markerNames_;
+
+  // Mask channel references. Empty in single-marker mode.
+  const std::vector<FieldAccessTypedExprPtr> masks_;
 
   const std::vector<FieldAccessTypedExprPtr> distinctKeys_;
 
