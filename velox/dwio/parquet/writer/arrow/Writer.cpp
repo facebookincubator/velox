@@ -519,7 +519,8 @@ class FileWriterImpl : public FileWriter {
     }
     auto stats = rowGroupWriter_->estimatedBufferedStats();
     return stats.defLevelBytes + stats.repLevelBytes + stats.valueBytes +
-        stats.dictBytes;
+        stats.dictBytes + rowGroupWriter_->totalCompressedBytes() +
+        rowGroupWriter_->totalCompressedBytesWritten();
   }
 
   const WriterProperties& properties() const {
