@@ -79,7 +79,7 @@ class BitmapBuilder {
     for (const auto& positions : bitmaps) {
       strings.push_back(fromBits(positions));
     }
-    return vector(pool, strings);
+    return makeVector(pool, strings);
   }
 
   /// Creates a VARBINARY FlatVector with one bitmap per entry, each
@@ -92,11 +92,11 @@ class BitmapBuilder {
     for (const auto& bytesAndValues : bitmaps) {
       strings.push_back(fromBytes(bytesAndValues));
     }
-    return vector(pool, strings);
+    return makeVector(pool, strings);
   }
 
-  /// Creates a VARBINARY FlatVector from pre-built bitmap strings.
-  static VectorPtr vector(
+ private:
+  static VectorPtr makeVector(
       memory::MemoryPool* pool,
       const std::vector<std::string>& bitmaps) {
     velox::test::VectorMaker maker(pool);

@@ -80,11 +80,9 @@ TEST_F(BitmapConstructAggAggregateTest, groupBy) {
   });
 
   // Group 1: bits 0 and 100 set. Group 2: all-zeros (all-null input).
-  auto groupOneBitmap = BitmapBuilder::fromBits({0, 100});
-  auto groupTwoBitmap = BitmapBuilder::fromBits({});
   auto expected = makeRowVector({
       makeFlatVector<int32_t>({1, 2}),
-      BitmapBuilder::vector(pool(), {groupOneBitmap, groupTwoBitmap}),
+      BitmapBuilder::vectorFromBits(pool(), {{0, 100}, {}}),
   });
 
   testAggregations(
@@ -178,8 +176,8 @@ TEST_F(BitmapConstructAggAggregateTest, invalidIntermediateSizeTooLarge) {
 TEST_F(BitmapConstructAggAggregateTest, nullIntermediateInFinalAggregation) {
   // A null intermediate should be skipped; the result should still be a valid
   // all-zeros bitmap (non-null output).
-  auto input = makeRowVector(
-      {makeNullableFlatVector<StringView>({std::nullopt}, VARBINARY())});
+  auto input =
+      makeRowVector({BaseVector::createNullConstant(VARBINARY(), 1, pool())});
 
   auto plan =
       exec::test::PlanBuilder()
