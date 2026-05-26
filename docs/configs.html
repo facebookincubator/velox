@@ -1302,6 +1302,13 @@ Valid values are “V1” and “V2”.</p></td>
 <td><p>parquet-cpp-velox version 0.0.0</p></td>
 <td><p>Created-by value used when writing to Parquet.</p></td>
 </tr>
+<tr class="row-odd"><td><p>hive.parquet.writer.enable-store-decimal-as-integer</p></td>
+<td><p>hive.parquet.writer.enable_store_decimal_as_integer</p></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>Whether to store DECIMAL values using integer physical types (INT32/INT64) when precision allows.
+When false, all DECIMAL values are stored as FIXED_LEN_BYTE_ARRAY regardless of precision.</p></td>
+</tr>
 </tbody>
 </table>
 </section>

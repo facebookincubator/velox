@@ -1011,6 +1011,12 @@ must be specified as raw byte counts.
      - string
      - parquet-cpp-velox version 0.0.0
      - Created-by value used when writing to Parquet.
+   * - hive.parquet.writer.enable-store-decimal-as-integer
+     - hive.parquet.writer.enable_store_decimal_as_integer
+     - bool
+     - true
+     - Whether to store DECIMAL values using integer physical types (INT32/INT64) when precision allows.
+       When false, all DECIMAL values are stored as FIXED_LEN_BYTE_ARRAY regardless of precision.
 
 ``Amazon S3 Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
