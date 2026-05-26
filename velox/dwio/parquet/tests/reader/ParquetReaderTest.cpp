@@ -2228,10 +2228,10 @@ TEST_F(ParquetReaderTest, thriftMemoryOwnedByReader) {
     // owned allocation. The key invariant under test is that no new
     // external allocation appears: the reader, not the row reader,
     // remains the sole owner of the reservation.
-    auto rowReaderOpts2 = getReaderOpts(sampleSchema());
-    rowReaderOpts2.setScanSpec(makeScanSpec(sampleSchema()));
-    rowReaderOpts2.range(0, 1);
-    auto rowReader2 = reader->createRowReader(rowReaderOpts2);
+    auto emptyRangeRowReaderOpts = getReaderOpts(sampleSchema());
+    emptyRangeRowReaderOpts.setScanSpec(makeScanSpec(sampleSchema()));
+    emptyRangeRowReaderOpts.range(0, 1);
+    auto emptyRangeRowReader = reader->createRowReader(emptyRangeRowReaderOpts);
     EXPECT_EQ(leafPool_->stats().numExternalAllocs, initialAllocs + 1);
   }
   // After the reader is destroyed, every external allocation has a
