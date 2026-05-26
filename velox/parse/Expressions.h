@@ -347,6 +347,37 @@ class WindowCallExpr : public CallExpr {
   const bool ignoreNulls_;
 };
 
+/// Placeholder for a GROUPING() SQL operation. Carries the referenced column
+/// names so the SQL planner can resolve them after grouping set expansion.
+/// The planner replaces this with the resolved bitmask expression before
+/// the plan reaches the execution engine.
+class GroupingOperationExpr : public IExpr {
+ public:
+  explicit GroupingOperationExpr(std::vector<std::string> columnNames)
+      : IExpr(IExpr::Kind::kGroupingOperation, {}),
+        columnNames_(std::move(columnNames)) {}
+
+  const std::vector<std::string>& columnNames() const {
+    return columnNames_;
+  }
+
+  std::string toString() const override;
+
+  ExprPtr replaceInputs(std::vector<ExprPtr> newInputs) const override;
+
+  ExprPtr dropAlias() const final;
+
+  bool operator==(const IExpr& other) const override;
+
+  VELOX_DEFINE_CLASS_NAME(GroupingOperationExpr)
+
+ protected:
+  size_t localHash() const override;
+
+ private:
+  const std::vector<std::string> columnNames_;
+};
+
 class ConstantExpr : public IExpr,
                      public std::enable_shared_from_this<ConstantExpr> {
  public:

@@ -55,6 +55,7 @@ const auto& kindNames() {
       {IExpr::Kind::kSubquery, "Subquery"},
       {IExpr::Kind::kAggregate, "Aggregate"},
       {IExpr::Kind::kWindow, "Window"},
+      {IExpr::Kind::kGroupingOperation, "GroupingOperation"},
   };
   return kNames;
 }
@@ -470,6 +471,36 @@ bool ConcatExpr::operator==(const IExpr& other) const {
 size_t ConcatExpr::localHash() const {
   size_t hash = 0;
   for (const auto& name : fieldNames_) {
+    hash = bits::hashMix(hash, std::hash<std::string>{}(name));
+  }
+  return hash;
+}
+
+ExprPtr GroupingOperationExpr::replaceInputs(
+    std::vector<ExprPtr> newInputs) const {
+  VELOX_CHECK_EQ(newInputs.size(), 0);
+  return std::make_shared<GroupingOperationExpr>(columnNames_);
+}
+
+ExprPtr GroupingOperationExpr::dropAlias() const {
+  return std::make_shared<GroupingOperationExpr>(columnNames_);
+}
+
+bool GroupingOperationExpr::operator==(const IExpr& other) const {
+  if (!other.is(Kind::kGroupingOperation)) {
+    return false;
+  }
+  return columnNames_ == other.as<GroupingOperationExpr>()->columnNames_ &&
+      compareAliasAndInputs(other);
+}
+
+std::string GroupingOperationExpr::toString() const {
+  return fmt::format("grouping({})", folly::join(", ", columnNames_));
+}
+
+size_t GroupingOperationExpr::localHash() const {
+  size_t hash = 0;
+  for (const auto& name : columnNames_) {
     hash = bits::hashMix(hash, std::hash<std::string>{}(name));
   }
   return hash;

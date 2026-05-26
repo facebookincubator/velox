@@ -45,6 +45,7 @@ class IExpr {
     kConcat = 7,
     kAggregate = 8,
     kWindow = 9,
+    kGroupingOperation = 10,
   };
 
   VELOX_DECLARE_EMBEDDED_ENUM_NAME(Kind)
