@@ -343,6 +343,7 @@ bool TableScan::getSplit() {
       RuntimeCounter(static_cast<int64_t>(split.connectorSplit->size())));
   const auto& connectorSplit = split.connectorSplit;
   currentSplitWeight_ = connectorSplit->splitWeight;
+  splitBatchSizeHint_ = connectorSplit->batchSizeHint;
   needNewSplit_ = false;
 
   // A point for test code injection.
@@ -524,9 +525,23 @@ void TableScan::addDynamicFilterLocked(
 }
 
 int32_t TableScan::calculateBatchSize(int64_t currentEstimatedRowSize) {
+  // Per-split batch size hint from the split generator (e.g., MixedUnion split
+  // iterator). Takes top priority because a generic query-level override has no
+  // awareness of proportional mixing ratios and would destroy them.
+  if (splitBatchSizeHint_ > 0) {
+    int32_t batchSize = splitBatchSizeHint_;
+    if (maxFilteringRatio_ > 0) {
+      batchSize = std::min(
+          maxReadBatchSize_,
+          static_cast<int32_t>(batchSize / maxFilteringRatio_));
+    }
+    return batchSize;
+  }
+
   if (outputBatchRowsOverride_ > 0) {
     return outputBatchRowsOverride_;
   }
+
   int64_t estimatedRowSize = connector::DataSource::kUnknownRowSize;
   if (currentEstimatedRowSize != connector::DataSource::kUnknownRowSize) {
     // Use current file estimate.

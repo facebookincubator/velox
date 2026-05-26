@@ -15,6 +15,8 @@
  */
 
 #include <gtest/gtest.h>
+#include <set>
+#include "velox/core/QueryConfig.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -685,4 +687,627 @@ TEST_F(MixedUnionWithTableScanTest, unionWithLargeDataVolume) {
           }),
   });
   facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+/// Test that batchSizeHint on ConnectorSplit controls the TableScan read rate,
+/// allowing split generators to produce rows at different rates per source.
+/// This is the "automatic batch sizing at TableScan" option for MixedUnion:
+/// the split generator stamps each split with a batch size proportional to its
+/// share of the union, so sources with fewer splits naturally read fewer rows
+/// per batch and both sides exhaust at approximately the same rate.
+TEST_F(MixedUnionWithTableScanTest, batchSizeHintControlsReadRate) {
+  // Source A: 500 rows. Simulates 5 splits worth of data → batchSizeHint = 100.
+  // Source B: 200 rows. Simulates 2 splits worth of data → batchSizeHint = 40.
+  // Ratio 5:2 means A should read 2.5x more rows per batch than B.
+  constexpr int kRowsA = 500;
+  constexpr int kRowsB = 200;
+  constexpr int kBatchHintA = 100;
+  constexpr int kBatchHintB = 40;
+
+  auto dataA = makeRowVector({
+      makeFlatVector<int64_t>(kRowsA, [](auto row) { return row; }),
+  });
+  auto dataB = makeRowVector({
+      makeFlatVector<int64_t>(kRowsB, [](auto row) { return row + 10'000; }),
+  });
+
+  auto filePathA = TempFilePath::create();
+  auto filePathB = TempFilePath::create();
+  writeToFile(filePathA->getPath(), dataA);
+  writeToFile(filePathB->getPath(), dataB);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto rowType = ROW({"c0"}, {BIGINT()});
+
+  core::PlanNodeId scanAId;
+  auto sourceA = PlanBuilder(planNodeIdGenerator)
+                     .tableScan(rowType)
+                     .capturePlanNodeId(scanAId)
+                     .planNode();
+
+  core::PlanNodeId scanBId;
+  auto sourceB = PlanBuilder(planNodeIdGenerator)
+                     .tableScan(rowType)
+                     .capturePlanNodeId(scanBId)
+                     .planNode();
+
+  auto unionNode = makeMixedUnionNode({sourceA, sourceB}, planNodeIdGenerator);
+
+  // Build splits with batchSizeHint set.
+  auto splitA = HiveConnectorSplitBuilder(filePathA->getPath())
+                    .batchSizeHint(kBatchHintA)
+                    .build();
+  auto splitB = HiveConnectorSplitBuilder(filePathB->getPath())
+                    .batchSizeHint(kBatchHintB)
+                    .build();
+
+  // Use readCursor to collect individual output batches so we can inspect
+  // per-batch composition.
+  CursorParameters params;
+  params.planNode = unionNode;
+  params.maxDrivers = 1;
+  params.serialExecution = true;
+
+  auto [cursor, results] = readCursor(params, [&](TaskCursor* taskCursor) {
+    if (taskCursor->noMoreSplits()) {
+      return;
+    }
+    auto task = taskCursor->task();
+    task->addSplit(scanAId, Split(splitA));
+    task->addSplit(scanBId, Split(splitB));
+    task->noMoreSplits(scanAId);
+    task->noMoreSplits(scanBId);
+    taskCursor->setNoMoreSplits();
+  });
+
+  // Verify all rows are present.
+  std::set<int64_t> allValues;
+  for (const auto& batch : results) {
+    auto* col = batch->childAt(0)->asFlatVector<int64_t>();
+    for (int i = 0; i < batch->size(); ++i) {
+      allValues.insert(col->valueAt(i));
+    }
+  }
+  EXPECT_EQ(allValues.size(), kRowsA + kRowsB);
+
+  // Count rows from each source across all batches.
+  int totalA = 0;
+  int totalB = 0;
+  for (const auto& batch : results) {
+    auto* col = batch->childAt(0)->asFlatVector<int64_t>();
+    for (int i = 0; i < batch->size(); ++i) {
+      if (col->valueAt(i) < 10'000) {
+        ++totalA;
+      } else {
+        ++totalB;
+      }
+    }
+  }
+  EXPECT_EQ(totalA, kRowsA);
+  EXPECT_EQ(totalB, kRowsB);
+
+  // Inspect batches that contain rows from both sources (mixed batches).
+  // In such batches, the ratio of A-rows to B-rows should approximately
+  // reflect the batchSizeHint ratio (100:40 = 2.5:1).
+  int mixedBatchARows = 0;
+  int mixedBatchBRows = 0;
+  for (const auto& batch : results) {
+    auto* col = batch->childAt(0)->asFlatVector<int64_t>();
+    int batchA = 0, batchB = 0;
+    for (int i = 0; i < batch->size(); ++i) {
+      if (col->valueAt(i) < 10'000) {
+        ++batchA;
+      } else {
+        ++batchB;
+      }
+    }
+    if (batchA > 0 && batchB > 0) {
+      mixedBatchARows += batchA;
+      mixedBatchBRows += batchB;
+    }
+  }
+
+  // If we have mixed batches, A should contribute more rows than B,
+  // reflecting the 2.5:1 batch size hint ratio.
+  if (mixedBatchARows > 0 && mixedBatchBRows > 0) {
+    double observedRatio =
+        static_cast<double>(mixedBatchARows) / mixedBatchBRows;
+    double expectedRatio =
+        static_cast<double>(kBatchHintA) / kBatchHintB; // 2.5
+    // Allow generous tolerance — the exact ratio depends on file layout and
+    // internal buffering. The key property is that A contributes more.
+    EXPECT_GT(observedRatio, expectedRatio * 0.3)
+        << "A should contribute proportionally more rows in mixed batches. "
+        << "A=" << mixedBatchARows << " B=" << mixedBatchBRows
+        << " observed ratio=" << observedRatio
+        << " expected~=" << expectedRatio;
+    EXPECT_GT(mixedBatchARows, mixedBatchBRows)
+        << "A (hint=" << kBatchHintA
+        << ") should have more rows than B (hint=" << kBatchHintB
+        << ") in mixed batches";
+  }
+}
+
+/// Test that batchSizeHint=0 (default) does not affect TableScan behavior —
+/// it falls through to the normal dynamic batch sizing.
+TEST_F(MixedUnionWithTableScanTest, zeroBatchSizeHintUsesDefault) {
+  constexpr int kRows = 100;
+
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(kRows, folly::identity),
+  });
+
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), data);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto rowType = ROW({"c0"}, {BIGINT()});
+
+  core::PlanNodeId scanId;
+  auto source = PlanBuilder(planNodeIdGenerator)
+                    .tableScan(rowType)
+                    .capturePlanNodeId(scanId)
+                    .planNode();
+
+  auto unionNode = makeMixedUnionNode({source}, planNodeIdGenerator);
+
+  // Split with batchSizeHint=0 (default).
+  auto split = HiveConnectorSplitBuilder(filePath->getPath()).build();
+  ASSERT_EQ(split->batchSizeHint, 0);
+
+  auto result =
+      AssertQueryBuilder(unionNode).split(scanId, split).copyResults(pool());
+
+  ASSERT_EQ(result->size(), kRows);
+
+  auto* col = result->childAt(0)->asFlatVector<int64_t>();
+  for (int i = 0; i < kRows; ++i) {
+    EXPECT_EQ(col->valueAt(i), i);
+  }
+}
+
+// Verify that batchSizeHint directly controls the per-batch row count produced
+// by TableScan. With a single source through MixedUnion, each output batch
+// should have exactly the hinted number of rows (except the final batch).
+TEST_F(MixedUnionWithTableScanTest, batchSizeHintDirectlyControlsBatchSize) {
+  constexpr int kRows = 500;
+  constexpr int32_t kBatchHint = 50;
+
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(kRows, folly::identity),
+  });
+
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), data);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto rowType = ROW({"c0"}, {BIGINT()});
+
+  core::PlanNodeId scanId;
+  auto source = PlanBuilder(planNodeIdGenerator)
+                    .tableScan(rowType)
+                    .capturePlanNodeId(scanId)
+                    .planNode();
+
+  auto unionNode = makeMixedUnionNode({source}, planNodeIdGenerator);
+
+  auto split = HiveConnectorSplitBuilder(filePath->getPath())
+                   .batchSizeHint(kBatchHint)
+                   .build();
+
+  CursorParameters params;
+  params.planNode = unionNode;
+  params.maxDrivers = 1;
+  params.serialExecution = true;
+
+  auto [cursor, results] = readCursor(params, [&](TaskCursor* taskCursor) {
+    if (taskCursor->noMoreSplits()) {
+      return;
+    }
+    auto task = taskCursor->task();
+    task->addSplit(scanId, Split(split));
+    task->noMoreSplits(scanId);
+    taskCursor->setNoMoreSplits();
+  });
+
+  int totalRows = 0;
+  for (const auto& batch : results) {
+    totalRows += batch->size();
+  }
+  EXPECT_EQ(totalRows, kRows);
+
+  // With 500 rows and hint=50, we expect at least 10 batches.
+  ASSERT_GE(results.size(), kRows / kBatchHint);
+  for (size_t i = 0; i + 1 < results.size(); ++i) {
+    EXPECT_EQ(results[i]->size(), kBatchHint)
+        << "Batch " << i << " should have " << kBatchHint << " rows";
+  }
+  EXPECT_LE(results.back()->size(), kBatchHint);
+}
+
+// Verify the priority order: batchSizeHint (split-level) takes precedence
+// over outputBatchRowsOverride (query-level config). The hint is a specific
+// signal from the split generator for proportional mixing; a generic
+// query-level override must not silently destroy the ratio.
+TEST_F(
+    MixedUnionWithTableScanTest,
+    batchSizeHintTakesPriorityOverOutputBatchRowsOverride) {
+  constexpr int kRows = 500;
+  constexpr int32_t kBatchHint = 50;
+  constexpr uint32_t kOverride = 75;
+
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(kRows, folly::identity),
+  });
+
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), data);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto rowType = ROW({"c0"}, {BIGINT()});
+
+  core::PlanNodeId scanId;
+  auto source = PlanBuilder(planNodeIdGenerator)
+                    .tableScan(rowType)
+                    .capturePlanNodeId(scanId)
+                    .planNode();
+
+  auto unionNode = makeMixedUnionNode({source}, planNodeIdGenerator);
+
+  auto split = HiveConnectorSplitBuilder(filePath->getPath())
+                   .batchSizeHint(kBatchHint)
+                   .build();
+
+  CursorParameters params;
+  params.planNode = unionNode;
+  params.maxDrivers = 1;
+  params.serialExecution = true;
+  params.queryConfigs[core::QueryConfig::kTableScanOutputBatchRowsOverride] =
+      folly::to<std::string>(kOverride);
+
+  auto [cursor, results] = readCursor(params, [&](TaskCursor* taskCursor) {
+    if (taskCursor->noMoreSplits()) {
+      return;
+    }
+    auto task = taskCursor->task();
+    task->addSplit(scanId, Split(split));
+    task->noMoreSplits(scanId);
+    taskCursor->setNoMoreSplits();
+  });
+
+  int totalRows = 0;
+  for (const auto& batch : results) {
+    totalRows += batch->size();
+  }
+  EXPECT_EQ(totalRows, kRows);
+
+  // Hint should win: batches should be kBatchHint, not kOverride.
+  ASSERT_GE(results.size(), kRows / kBatchHint);
+  for (size_t i = 0; i + 1 < results.size(); ++i) {
+    EXPECT_EQ(results[i]->size(), kBatchHint)
+        << "Batch " << i << " should use batchSizeHint (" << kBatchHint
+        << "), not override (" << kOverride << ")";
+  }
+  EXPECT_LE(results.back()->size(), kBatchHint);
+}
+
+// Verify proportional mixing with three sources. Each source's batchSizeHint
+// is proportional to its data volume, so mixed output batches should reflect
+// the 3:2:1 ratio.
+TEST_F(MixedUnionWithTableScanTest, threeSourceProportionalBatchSizeHints) {
+  constexpr int kRowsA = 300;
+  constexpr int kRowsB = 200;
+  constexpr int kRowsC = 100;
+  constexpr int32_t kHintA = 30;
+  constexpr int32_t kHintB = 20;
+  constexpr int32_t kHintC = 10;
+
+  auto dataA = makeRowVector({
+      makeFlatVector<int64_t>(kRowsA, [](auto row) { return row; }),
+  });
+  auto dataB = makeRowVector({
+      makeFlatVector<int64_t>(kRowsB, [](auto row) { return row + 10'000; }),
+  });
+  auto dataC = makeRowVector({
+      makeFlatVector<int64_t>(kRowsC, [](auto row) { return row + 20'000; }),
+  });
+
+  auto filePathA = TempFilePath::create();
+  auto filePathB = TempFilePath::create();
+  auto filePathC = TempFilePath::create();
+  writeToFile(filePathA->getPath(), dataA);
+  writeToFile(filePathB->getPath(), dataB);
+  writeToFile(filePathC->getPath(), dataC);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto rowType = ROW({"c0"}, {BIGINT()});
+
+  core::PlanNodeId scanAId;
+  auto sourceA = PlanBuilder(planNodeIdGenerator)
+                     .tableScan(rowType)
+                     .capturePlanNodeId(scanAId)
+                     .planNode();
+  core::PlanNodeId scanBId;
+  auto sourceB = PlanBuilder(planNodeIdGenerator)
+                     .tableScan(rowType)
+                     .capturePlanNodeId(scanBId)
+                     .planNode();
+  core::PlanNodeId scanCId;
+  auto sourceC = PlanBuilder(planNodeIdGenerator)
+                     .tableScan(rowType)
+                     .capturePlanNodeId(scanCId)
+                     .planNode();
+
+  auto unionNode =
+      makeMixedUnionNode({sourceA, sourceB, sourceC}, planNodeIdGenerator);
+
+  auto splitA = HiveConnectorSplitBuilder(filePathA->getPath())
+                    .batchSizeHint(kHintA)
+                    .build();
+  auto splitB = HiveConnectorSplitBuilder(filePathB->getPath())
+                    .batchSizeHint(kHintB)
+                    .build();
+  auto splitC = HiveConnectorSplitBuilder(filePathC->getPath())
+                    .batchSizeHint(kHintC)
+                    .build();
+
+  CursorParameters params;
+  params.planNode = unionNode;
+  params.maxDrivers = 1;
+  params.serialExecution = true;
+
+  auto [cursor, results] = readCursor(params, [&](TaskCursor* taskCursor) {
+    if (taskCursor->noMoreSplits()) {
+      return;
+    }
+    auto task = taskCursor->task();
+    task->addSplit(scanAId, Split(splitA));
+    task->addSplit(scanBId, Split(splitB));
+    task->addSplit(scanCId, Split(splitC));
+    task->noMoreSplits(scanAId);
+    task->noMoreSplits(scanBId);
+    task->noMoreSplits(scanCId);
+    taskCursor->setNoMoreSplits();
+  });
+
+  // Verify all rows present.
+  int totalA = 0, totalB = 0, totalC = 0;
+  for (const auto& batch : results) {
+    auto* col = batch->childAt(0)->asFlatVector<int64_t>();
+    for (int i = 0; i < batch->size(); ++i) {
+      auto value = col->valueAt(i);
+      if (value < 10'000) {
+        ++totalA;
+      } else if (value < 20'000) {
+        ++totalB;
+      } else {
+        ++totalC;
+      }
+    }
+  }
+  EXPECT_EQ(totalA, kRowsA);
+  EXPECT_EQ(totalB, kRowsB);
+  EXPECT_EQ(totalC, kRowsC);
+
+  // In batches that contain rows from all three sources, check that
+  // A > B > C, reflecting the 3:2:1 hint ratio.
+  int mixedA = 0, mixedB = 0, mixedC = 0;
+  for (const auto& batch : results) {
+    auto* col = batch->childAt(0)->asFlatVector<int64_t>();
+    int countA = 0, countB = 0, countC = 0;
+    for (int i = 0; i < batch->size(); ++i) {
+      auto value = col->valueAt(i);
+      if (value < 10'000) {
+        ++countA;
+      } else if (value < 20'000) {
+        ++countB;
+      } else {
+        ++countC;
+      }
+    }
+    if (countA > 0 && countB > 0 && countC > 0) {
+      mixedA += countA;
+      mixedB += countB;
+      mixedC += countC;
+    }
+  }
+
+  if (mixedA > 0 && mixedB > 0 && mixedC > 0) {
+    EXPECT_GT(mixedA, mixedB)
+        << "A (hint=" << kHintA
+        << ") should contribute more than B (hint=" << kHintB
+        << ") in mixed batches";
+    EXPECT_GT(mixedB, mixedC)
+        << "B (hint=" << kHintB
+        << ") should contribute more than C (hint=" << kHintC
+        << ") in mixed batches";
+  }
+}
+
+// Verify HiveConnectorSplitBuilder propagates batchSizeHint correctly.
+TEST_F(
+    MixedUnionWithTableScanTest,
+    hiveConnectorSplitBuilderSetsBatchSizeHint) {
+  auto splitWithHint = HiveConnectorSplitBuilder("file:///tmp/test.dwrf")
+                           .batchSizeHint(42)
+                           .build();
+  EXPECT_EQ(splitWithHint->batchSizeHint, 42);
+
+  auto splitWithZeroHint = HiveConnectorSplitBuilder("file:///tmp/test.dwrf")
+                               .batchSizeHint(0)
+                               .build();
+  EXPECT_EQ(splitWithZeroHint->batchSizeHint, 0);
+
+  // Default (no batchSizeHint call) should be 0.
+  auto splitDefault =
+      HiveConnectorSplitBuilder("file:///tmp/test.dwrf").build();
+  EXPECT_EQ(splitDefault->batchSizeHint, 0);
+}
+
+// Verify that a small batchSizeHint (e.g., 5) produces many small batches,
+// confirming the hint is respected even at low values.
+TEST_F(MixedUnionWithTableScanTest, batchSizeHintWithSmallValue) {
+  constexpr int kRows = 100;
+  constexpr int32_t kBatchHint = 5;
+
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(kRows, folly::identity),
+  });
+
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), data);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto rowType = ROW({"c0"}, {BIGINT()});
+
+  core::PlanNodeId scanId;
+  auto source = PlanBuilder(planNodeIdGenerator)
+                    .tableScan(rowType)
+                    .capturePlanNodeId(scanId)
+                    .planNode();
+
+  auto unionNode = makeMixedUnionNode({source}, planNodeIdGenerator);
+
+  auto split = HiveConnectorSplitBuilder(filePath->getPath())
+                   .batchSizeHint(kBatchHint)
+                   .build();
+
+  CursorParameters params;
+  params.planNode = unionNode;
+  params.maxDrivers = 1;
+  params.serialExecution = true;
+
+  auto [cursor, results] = readCursor(params, [&](TaskCursor* taskCursor) {
+    if (taskCursor->noMoreSplits()) {
+      return;
+    }
+    auto task = taskCursor->task();
+    task->addSplit(scanId, Split(split));
+    task->noMoreSplits(scanId);
+    taskCursor->setNoMoreSplits();
+  });
+
+  int totalRows = 0;
+  for (const auto& batch : results) {
+    totalRows += batch->size();
+  }
+  EXPECT_EQ(totalRows, kRows);
+
+  // With hint=5 and 100 rows, we expect at least 20 batches.
+  EXPECT_GE(results.size(), kRows / kBatchHint);
+
+  for (size_t i = 0; i + 1 < results.size(); ++i) {
+    EXPECT_EQ(results[i]->size(), kBatchHint)
+        << "Batch " << i << " should have " << kBatchHint << " rows";
+  }
+  EXPECT_LE(results.back()->size(), kBatchHint);
+
+  // Verify data integrity — all values present.
+  std::set<int64_t> allValues;
+  for (const auto& batch : results) {
+    auto* col = batch->childAt(0)->asFlatVector<int64_t>();
+    for (int i = 0; i < batch->size(); ++i) {
+      allValues.insert(col->valueAt(i));
+    }
+  }
+  EXPECT_EQ(allValues.size(), kRows);
+}
+
+// Verify that each mixed output batch contains exactly the hinted number of
+// rows from each source. Uses data sizes that are exact multiples of the
+// hints so both sources exhaust in the same number of cycles, producing
+// deterministic per-batch composition.
+TEST_F(MixedUnionWithTableScanTest, perBatchMixRatioMatchesHints) {
+  // 300/60 = 5 cycles for A, 100/20 = 5 cycles for B.
+  // Every output batch should contain exactly 60 A-rows and 20 B-rows.
+  constexpr int kRowsA = 300;
+  constexpr int kRowsB = 100;
+  constexpr int32_t kHintA = 60;
+  constexpr int32_t kHintB = 20;
+
+  auto dataA = makeRowVector({
+      makeFlatVector<int64_t>(kRowsA, [](auto row) { return row; }),
+  });
+  auto dataB = makeRowVector({
+      makeFlatVector<int64_t>(kRowsB, [](auto row) { return row + 10'000; }),
+  });
+
+  auto filePathA = TempFilePath::create();
+  auto filePathB = TempFilePath::create();
+  writeToFile(filePathA->getPath(), dataA);
+  writeToFile(filePathB->getPath(), dataB);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto rowType = ROW({"c0"}, {BIGINT()});
+
+  core::PlanNodeId scanAId;
+  auto sourceA = PlanBuilder(planNodeIdGenerator)
+                     .tableScan(rowType)
+                     .capturePlanNodeId(scanAId)
+                     .planNode();
+  core::PlanNodeId scanBId;
+  auto sourceB = PlanBuilder(planNodeIdGenerator)
+                     .tableScan(rowType)
+                     .capturePlanNodeId(scanBId)
+                     .planNode();
+
+  auto unionNode = makeMixedUnionNode({sourceA, sourceB}, planNodeIdGenerator);
+
+  auto splitA = HiveConnectorSplitBuilder(filePathA->getPath())
+                    .batchSizeHint(kHintA)
+                    .build();
+  auto splitB = HiveConnectorSplitBuilder(filePathB->getPath())
+                    .batchSizeHint(kHintB)
+                    .build();
+
+  CursorParameters params;
+  params.planNode = unionNode;
+  params.maxDrivers = 1;
+  params.serialExecution = true;
+
+  auto [cursor, results] = readCursor(params, [&](TaskCursor* taskCursor) {
+    if (taskCursor->noMoreSplits()) {
+      return;
+    }
+    auto task = taskCursor->task();
+    task->addSplit(scanAId, Split(splitA));
+    task->addSplit(scanBId, Split(splitB));
+    task->noMoreSplits(scanAId);
+    task->noMoreSplits(scanBId);
+    taskCursor->setNoMoreSplits();
+  });
+
+  // Both sources exhaust in 5 cycles, so we expect exactly 5 mixed batches.
+  constexpr int kExpectedCycles = kRowsA / kHintA;
+  static_assert(kRowsA / kHintA == kRowsB / kHintB);
+
+  int totalRows = 0;
+  int mixedBatchCount = 0;
+  for (const auto& batch : results) {
+    auto* col = batch->childAt(0)->asFlatVector<int64_t>();
+    int countA = 0, countB = 0;
+    for (int i = 0; i < batch->size(); ++i) {
+      if (col->valueAt(i) < 10'000) {
+        ++countA;
+      } else {
+        ++countB;
+      }
+    }
+    totalRows += batch->size();
+
+    if (countA > 0 && countB > 0) {
+      ++mixedBatchCount;
+      EXPECT_EQ(countA, kHintA) << "Mixed batch should contain exactly "
+                                << kHintA << " rows from source A";
+      EXPECT_EQ(countB, kHintB) << "Mixed batch should contain exactly "
+                                << kHintB << " rows from source B";
+      EXPECT_EQ(batch->size(), kHintA + kHintB)
+          << "Mixed batch total should be " << kHintA + kHintB;
+    }
+  }
+
+  EXPECT_EQ(totalRows, kRowsA + kRowsB);
+  EXPECT_EQ(mixedBatchCount, kExpectedCycles)
+      << "All " << kExpectedCycles
+      << " output batches should be mixed (both sources exhaust together)";
 }
