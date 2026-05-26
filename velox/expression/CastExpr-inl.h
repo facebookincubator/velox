@@ -712,6 +712,14 @@ void CastExpr::applyCastPrimitivesDispatch(
     VectorPtr& result) {
   context.ensureWritable(rows, toType, result);
 
+  if (fromType->kind() == TypeKind::TIMESTAMP) {
+    VELOX_DCHECK(fromType->equivalent(*TIMESTAMP()));
+  }
+
+  if constexpr (ToKind == TypeKind::TIMESTAMP) {
+    VELOX_DCHECK(toType->equivalent(*TIMESTAMP()));
+  }
+
   if (isSupportedFastUpcast(fromType, toType)) {
     VELOX_DYNAMIC_SCALAR_TEMPLATE_TYPE_DISPATCH(
         applyNumericUpcast,

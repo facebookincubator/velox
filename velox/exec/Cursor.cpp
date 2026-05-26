@@ -454,7 +454,12 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
 class SingleThreadedTaskCursor : public TaskCursorBase {
  public:
   explicit SingleThreadedTaskCursor(const CursorParameters& params)
-      : TaskCursorBase(params, nullptr) {
+      : TaskCursorBase(params, nullptr),
+        outputPool_{
+            (params.outputPool != nullptr || !params.copyResult)
+                ? params.outputPool
+                : memory::memoryManager()->addLeafPool()},
+        copyResult_{params.copyResult} {
     VELOX_CHECK(params.serialExecution);
     VELOX_CHECK(
         !queryCtx_->isExecutorSupplied(),
@@ -509,7 +514,13 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
       ContinueFuture future = ContinueFuture::makeEmpty();
       RowVectorPtr next = task_->next(&future);
       if (next != nullptr) {
-        current_ = next;
+        if (outputPool_ && copyResult_) {
+          VectorPtr copy = encodedVectorCopy(
+              {.pool = outputPool_.get(), .reuseSource = false}, next);
+          current_ = std::static_pointer_cast<RowVector>(std::move(copy));
+        } else {
+          current_ = next;
+        }
         return true;
       }
       // When next is returned from task as a null pointer.
@@ -549,6 +560,8 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
 
  private:
   std::shared_ptr<exec::Task> task_;
+  std::shared_ptr<memory::MemoryPool> outputPool_;
+  bool copyResult_{false};
   bool noMoreSplits_{false};
   RowVectorPtr current_;
   std::exception_ptr error_;
