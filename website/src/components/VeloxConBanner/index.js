@@ -7,18 +7,17 @@ export default function VeloxConBanner() {
     <section className={styles.banner} role="region" aria-label="VeloxCon announcement">
       <div className={styles.container}>
         <div className={styles.text}>
-          <h2 className={styles.title}>Announcing VeloxCon 2026</h2>
-          <p className={styles.subtitle}>Meta HQ, Bay Area</p>
-          <p className={styles.date}>April 29–30, 2026</p>
+          <h2 className={styles.title}>VeloxCon 2026 Recordings Are Now Available</h2>
+          <p className={styles.subtitle}>Watch all sessions on-demand on our YouTube channel</p>
         </div>
 
         <Link
           className={styles.button}
-          to="https://veloxcon.io/"
+          to="https://www.youtube.com/playlist?list=PLJvBe8nQAEsE6CVJCCx7yMENUS7Id7Ptt"
           target="_blank"
           rel="noopener noreferrer"
         >
-          Register Now →
+          Watch Now →
         </Link>
       </div>
     </section>
