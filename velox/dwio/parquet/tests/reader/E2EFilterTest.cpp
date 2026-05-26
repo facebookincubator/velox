@@ -115,6 +115,27 @@ TEST_F(E2EFilterTest, writerMagic) {
   EXPECT_EQ("PAR1", std::string(data + size - 4, 4));
 }
 
+TEST_F(E2EFilterTest, unknownType) {
+  rowType_ = ROW({"bigint_val", "unknown_val"}, {BIGINT(), UNKNOWN()});
+  filterGenerator_ = std::make_unique<FilterGenerator>(rowType_, seed_);
+
+  std::vector<RowVectorPtr> batches;
+  for (auto batch = 0; batch < batchCount_; ++batch) {
+    auto bigintValues = makeFlatVector<int64_t>(
+        batchSize_, [batch, this](vector_size_t row) -> int64_t {
+          return static_cast<int64_t>(batch) * batchSize_ + row;
+        });
+    auto unknownValues =
+        BaseVector::createNullConstant(UNKNOWN(), batchSize_, leafPool_.get());
+    batches.push_back(makeRowVector(
+        rowType_->names(),
+        std::vector<VectorPtr>{bigintValues, unknownValues}));
+  }
+
+  writeToMemory(rowType_, batches, false);
+  testNoRowGroupSkip(batches, {"bigint_val"}, 10);
+}
+
 TEST_F(E2EFilterTest, boolean) {
   testWithTypes(
       "boolean_val:boolean,"

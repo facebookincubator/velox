@@ -88,6 +88,10 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
   // 'this'. This is nullptr for the root of a table.
   dwio::common::SelectiveColumnReader* childForRepDefs_{nullptr};
 
+  // ScanSpec for a synthetic child reader used only to decode this struct's
+  // repetition and definition levels when all requested children are missing.
+  std::unique_ptr<common::ScanSpec> repDefsOnlyChildScanSpec_;
+
   // Mode for getting nulls from repdefs. kStructOverLists if 'this'
   // only has list children.
   LevelMode levelMode_;

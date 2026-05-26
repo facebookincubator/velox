@@ -2033,6 +2033,89 @@ TEST_F(ParquetReaderTest, columnStatisticsMultipleRowGroups) {
   EXPECT_EQ(intStats->getMaximum(), 50);
 }
 
+TEST_F(ParquetReaderTest, readNullTypeWithRequestedSchema) {
+  constexpr vector_size_t kRows = 7;
+  const auto rowType =
+      ROW({"unknown", "struct_unknown", "array_unknown", "map_unknown"},
+          {UNKNOWN(),
+           ROW({"n"}, {UNKNOWN()}),
+           ARRAY(UNKNOWN()),
+           MAP(VARCHAR(), UNKNOWN())});
+
+  auto unknownVector =
+      BaseVector::createNullConstant(UNKNOWN(), kRows, pool_.get());
+  auto structUnknownVector = makeRowVector(
+      {"n"},
+      {BaseVector::createNullConstant(UNKNOWN(), kRows, pool_.get())},
+      [](vector_size_t row) { return row == 3; });
+  auto arrayUnknownVector = makeArrayVector(
+      {0, 2, 2, 3, 3, 6, 6},
+      BaseVector::createNullConstant(UNKNOWN(), 6, pool_.get()),
+      {1});
+  auto mapUnknownVector = makeMapVector(
+      {0, 1, 1, 3, 3, 4, 4},
+      makeFlatVector<std::string>({"a", "b", "c", "d"}),
+      BaseVector::createNullConstant(UNKNOWN(), 4, pool_.get()),
+      {1, 5});
+
+  auto data = makeRowVector(
+      rowType->names(),
+      {unknownVector,
+       structUnknownVector,
+       arrayUnknownVector,
+       mapUnknownVector});
+
+  auto* sink = write(data);
+
+  dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+  readerOpts.setFileSchema(rowType);
+  auto reader = createReaderInMemory(*sink, readerOpts);
+
+  EXPECT_EQ(reader->numberOfRows(), kRows);
+  EXPECT_EQ(reader->rowType()->toString(), rowType->toString());
+
+  auto scanSpec = makeScanSpec(rowType);
+  scanSpec->getOrCreateChild(facebook::velox::common::Subfield("unknown"))
+      ->setFilter(exec::isNull());
+  auto rowReaderOpts = getReaderOpts(rowType);
+  rowReaderOpts.setScanSpec(scanSpec);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  assertReadWithReaderAndExpected(rowType, *rowReader, data, *leafPool_);
+}
+
+TEST_F(ParquetReaderTest, readStructWithAllFieldsMissing) {
+  constexpr vector_size_t kRows = 3;
+  const auto fileSchema =
+      ROW({"_1"}, {ROW({"_1", "_2"}, {UNKNOWN(), UNKNOWN()})});
+  auto fileStruct = makeRowVector(
+      {"_1", "_2"},
+      {BaseVector::createNullConstant(UNKNOWN(), kRows, pool_.get()),
+       BaseVector::createNullConstant(UNKNOWN(), kRows, pool_.get())},
+      [](vector_size_t row) { return row == 2; });
+  auto data = makeRowVector(fileSchema->names(), {fileStruct});
+
+  auto* sink = write(data);
+
+  dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+  auto reader = createReaderInMemory(*sink, readerOpts);
+
+  const auto readSchema =
+      ROW({"_1"}, {ROW({"_3", "_4"}, {INTEGER(), VARCHAR()})});
+  auto expectedStruct = makeRowVector(
+      {"_3", "_4"},
+      {BaseVector::createNullConstant(INTEGER(), kRows, pool_.get()),
+       BaseVector::createNullConstant(VARCHAR(), kRows, pool_.get())},
+      [](vector_size_t row) { return row == 2; });
+  auto expected = makeRowVector(readSchema->names(), {expectedStruct});
+
+  auto rowReaderOpts = getReaderOpts(readSchema);
+  rowReaderOpts.setScanSpec(makeScanSpec(readSchema));
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  assertReadWithReaderAndExpected(readSchema, *rowReader, expected, *leafPool_);
+}
+
 TEST_F(ParquetReaderTest, readTimeMillis) {
   // Write TIME data using the parquet writer.
   // The writer exports Velox TIME as Arrow time32 with milliseconds unit,
