@@ -295,10 +295,9 @@ void fastpforlib(uint8_t bitWidth, T* result) {
 }
 
 void lemirebmi2(uint8_t bitWidth, uint32_t* result) {
+#ifdef __BMI2__
   const uint8_t* inputIter =
       reinterpret_cast<const uint8_t*>(bitPackedData[bitWidth].data());
-
-#ifdef __BMI2__
   bmiunpack32(inputIter, kNumValues, bitWidth, result);
 #else
   VELOX_FAIL("bmiunpack32 is not supported on this platform.");
