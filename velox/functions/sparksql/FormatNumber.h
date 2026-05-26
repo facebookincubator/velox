@@ -50,6 +50,7 @@ void formatFloatingPoint(
 /// Currently only supports the integer second argument (number of decimal
 /// places). Spark also supports a string format argument, which is not yet
 /// implemented.
+// TODO: Support string format argument (user-specified format pattern).
 ///
 /// Unlike CAST(x AS VARCHAR), this adds thousands separators and fixed decimal
 /// places with HALF_EVEN (banker's) rounding.

@@ -137,7 +137,8 @@ String Functions
 
    Formats ``number`` with commas as thousands separator, dot as decimal
    separator, and ``decimalPlaces`` fixed decimal digits using HALF_EVEN
-   (banker's) rounding. Returns NULL if ``decimalPlaces`` is negative.
+   (banker's) rounding. Uses the default format pattern
+   ``#,###,###,###,###,###,##0``. Returns NULL if ``decimalPlaces`` is negative.
 
    Unlike ``CAST(number AS VARCHAR)``, this adds thousands separators and
    fixed decimal places. Supports tinyint, smallint, integer, bigint, float,

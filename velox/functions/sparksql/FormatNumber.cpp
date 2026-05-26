@@ -20,7 +20,6 @@
 #include <cmath>
 #include <cstdint>
 #include <locale>
-
 #include <fmt/format.h>
 
 namespace facebook::velox::functions::sparksql::detail {
