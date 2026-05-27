@@ -893,8 +893,25 @@ std::unique_ptr<cudf::table> CudfHashJoinProbe::filteredOutput(
   for (const auto& col : joinedCols) {
     joinedColViews.push_back(col->view());
   }
+
+  // Normalize timestamp columns to a common resolution that avoids overflow.
+  // The joined table may contain timestamps from both sides at different
+  // resolutions; the filter evaluator's JIT engine implicitly converts to the
+  // finest resolution which can overflow for large values.
+  std::vector<std::unique_ptr<cudf::column>> normStorage;
+  auto joinedView = cudf::table_view(joinedColViews);
+  auto canonTs = findSafeCanonicalType(
+      joinedView, cudf::table_view{}, stream, get_temp_mr());
+  auto normalizedView = normalizeTimestampColumns(
+      joinedView, canonTs, normStorage, stream, get_temp_mr());
+  std::vector<cudf::column_view> normalizedColViews;
+  normalizedColViews.reserve(normalizedView.num_columns());
+  for (cudf::size_type i = 0; i < normalizedView.num_columns(); ++i) {
+    normalizedColViews.push_back(normalizedView.column(i));
+  }
+
   auto filterColumns =
-      filterEvaluator_->eval(joinedColViews, stream, get_output_mr());
+      filterEvaluator_->eval(normalizedColViews, stream, get_output_mr());
   auto filterColumn = asView(filterColumns);
 
   joinedCols = func(std::move(joinedCols), filterColumn);
