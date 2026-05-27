@@ -16,7 +16,7 @@
 
 // Reproducer for a bug where cudf's HashJoin crashes when probe and build
 // sides have timestamp columns at different resolutions (MICROSECONDS vs
-// NANOSECONDS). The fix (PR #245) normalizes timestamps before calling
+// NANOSECONDS). The fix normalizes timestamps before calling
 // cudf's filter APIs.
 //
 // Strategy: register two CudfHiveConnector instances with different
