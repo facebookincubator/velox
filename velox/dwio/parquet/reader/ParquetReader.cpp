@@ -1521,7 +1521,7 @@ class ParquetRowReader::Impl {
   void updateRuntimeStats(dwio::common::RuntimeStatistics& stats) const {
     stats.skippedStrides += skippedStrides_;
     stats.processedStrides += rowGroupIds_.size();
-    stats.footerEstimatedBytes += readerBase_->initialThriftSize();
+    stats.parquetFooterEstimatedBytes += readerBase_->initialThriftSize();
     stats.columnReaderStats.pageLoadTimeNs.merge(
         columnReaderStats_.pageLoadTimeNs);
   }

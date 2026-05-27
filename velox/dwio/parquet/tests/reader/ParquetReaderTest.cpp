@@ -2232,6 +2232,52 @@ TEST_F(ParquetReaderTest, thriftMemoryOwnedByReader) {
   EXPECT_GE(leafPool_->stats().numExternalFrees, initialFrees + 1);
 }
 
+// Verifies that the estimated footer size is surfaced via the per-scan
+// runtime stat, and appears in the runtime-metric map for operator
+// stats consumers.
+TEST_F(ParquetReaderTest, thriftMemoryRuntimeStat) {
+  const std::string sample(getExampleFilePath("sample.parquet"));
+  auto readerOptions = makeThriftTrackingReaderOptions();
+  auto reader = createReader(sample, readerOptions);
+  auto rowReaderOpts = getReaderOpts(sampleSchema());
+  rowReaderOpts.setScanSpec(makeScanSpec(sampleSchema()));
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  dwio::common::RuntimeStatistics stats;
+  rowReader->updateRuntimeStats(stats);
+  EXPECT_GT(stats.parquetFooterEstimatedBytes, 0);
+
+  auto metrics = stats.toRuntimeMetricMap();
+  ASSERT_TRUE(metrics.count("parquetFooterEstimatedBytes"));
+  EXPECT_EQ(
+      metrics["parquetFooterEstimatedBytes"].sum,
+      stats.parquetFooterEstimatedBytes);
+  EXPECT_EQ(
+      metrics["parquetFooterEstimatedBytes"].unit,
+      RuntimeCounter::Unit::kBytes);
+}
+
+// Verifies that without tracking the runtime stat stays at zero and
+// the metric is not emitted in the metric map (kept off the operator
+// stats panel for non-tracking scans).
+TEST_F(ParquetReaderTest, thriftMemoryRuntimeStatAbsentWithoutTracking) {
+  const std::string sample(getExampleFilePath("sample.parquet"));
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
+  auto reader = createReader(sample, readerOptions);
+  auto rowReaderOpts = getReaderOpts(sampleSchema());
+  rowReaderOpts.setScanSpec(makeScanSpec(sampleSchema()));
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  dwio::common::RuntimeStatistics stats;
+  rowReader->updateRuntimeStats(stats);
+  EXPECT_EQ(stats.parquetFooterEstimatedBytes, 0);
+
+  auto metrics = stats.toRuntimeMetricMap();
+  EXPECT_EQ(metrics.count("parquetFooterEstimatedBytes"), 0);
+}
+
 // Verifies that without setting the threshold the tracking path is
 // disabled: no external allocation is reported, and ~ReaderBase has
 // nothing to release.

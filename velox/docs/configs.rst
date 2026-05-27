@@ -936,8 +936,8 @@ must be specified as raw byte counts.
        silently over-consuming. The reservation shrinks as row groups are
        skipped by filterRowGroups and is released in full when the reader
        is destroyed. When tracking engages, the estimate is also surfaced
-       per scan via the runtime stat ``footerEstimatedBytes`` so operators
-       can compare it against actual pool usage.
+       per scan via the runtime stat ``parquetFooterEstimatedBytes`` so
+       operators can compare it against actual pool usage.
    * - nimble.footer-speculative-io-size
      - nimble_footer_speculative_io_size
      - integer

@@ -795,10 +795,11 @@ struct RuntimeStatistics {
     if (numStripes > 0) {
       result.emplace("numStripes", RuntimeMetric(numStripes));
     }
-    if (footerEstimatedBytes > 0) {
+    if (parquetFooterEstimatedBytes > 0) {
       result.emplace(
-          "footerEstimatedBytes",
-          RuntimeMetric(footerEstimatedBytes, RuntimeCounter::Unit::kBytes));
+          "parquetFooterEstimatedBytes",
+          RuntimeMetric(
+              parquetFooterEstimatedBytes, RuntimeCounter::Unit::kBytes));
     }
     columnReaderStats.toRuntimeMetrics(result);
     return result;
