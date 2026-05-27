@@ -18,8 +18,11 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/external/date/date.h"
 #include "velox/type/tz/TimeZoneMap.h"
+
+using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::tz {
 namespace {
@@ -65,6 +68,97 @@ TEST(TimeZoneMapTest, locateZoneUTCAlias) {
   EXPECT_EQ("UTC", locateZoneID("uct"));
   EXPECT_EQ("UTC", locateZoneID("+00:00"));
   EXPECT_EQ("UTC", locateZoneID("-00:00"));
+}
+
+TEST(TimeZoneMapTest, utcAsOffsetTimezone) {
+  {
+    const auto* tz = locateZone("UTC");
+    ASSERT_NE(tz, nullptr);
+    EXPECT_NE(tz->tz(), nullptr);
+    EXPECT_FALSE(tz->offset().has_value());
+  }
+
+  {
+    TimeZone tz("UTC", 0, minutes(0));
+    EXPECT_EQ("UTC", tz.name());
+    EXPECT_EQ(0, tz.id());
+    EXPECT_EQ(tz.tz(), nullptr);
+    ASSERT_TRUE(tz.offset().has_value());
+    EXPECT_EQ(0, tz.offset()->count());
+
+    EXPECT_EQ(0, tz.to_sys(seconds{0}).count());
+    EXPECT_EQ(0, tz.to_local(seconds{0}).count());
+    EXPECT_EQ(1'000'000, tz.to_sys(seconds{1'000'000}).count());
+    EXPECT_EQ(1'000'000, tz.to_local(seconds{1'000'000}).count());
+
+    EXPECT_EQ("UTC", tz.getShortName(milliseconds{0}));
+    EXPECT_EQ("UTC", tz.getLongName(milliseconds{0}));
+  }
+}
+
+TEST(TimeZoneMapTest, buildTimeZoneDatabase) {
+  const std::vector<std::pair<int16_t, std::string>> input = {
+      {0, "UTC"},
+      {1, "-14:00"},
+      {1680, "+14:00"},
+      {1720, "Africa/Maseru"},
+  };
+
+  const auto database = testingBuildTimeZoneDatabase(input);
+  ASSERT_EQ(database.size(), 1721);
+
+  // UTC is tzdb-backed: tz() is non-null and offset() is empty.
+  ASSERT_NE(database[0], nullptr);
+  EXPECT_EQ("UTC", database[0]->name());
+  EXPECT_EQ(0, database[0]->id());
+  EXPECT_NE(nullptr, database[0]->tz());
+  EXPECT_FALSE(database[0]->offset().has_value());
+
+  // Fixed-offset zones are offset-based.
+  ASSERT_NE(database[1], nullptr);
+  EXPECT_EQ("-14:00", database[1]->name());
+  ASSERT_NE(database[1680], nullptr);
+  EXPECT_EQ("+14:00", database[1680]->name());
+
+  // Named zone is tzdb-backed.
+  ASSERT_NE(database[1720], nullptr);
+  EXPECT_EQ("Africa/Maseru", database[1720]->name());
+  EXPECT_NE(nullptr, database[1720]->tz());
+}
+
+DEBUG_ONLY_TEST(TimeZoneMapTest, buildTimeZoneDatabaseNoTzdb) {
+  TestValue::enable();
+
+  const std::vector<std::pair<int16_t, std::string>> input = {
+      {0, "UTC"},
+      {1, "-14:00"},
+      {1680, "+14:00"},
+      {1720, "Africa/Maseru"},
+  };
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::tz::hasTimeZoneDatabase",
+      std::function<void(bool*)>([](bool* available) { *available = false; }));
+
+  const auto database = testingBuildTimeZoneDatabase(input);
+  ASSERT_EQ(database.size(), 1721);
+
+  // UTC falls back to a fixed-offset TimeZone (tz()==nullptr, offset==0).
+  ASSERT_NE(database[0], nullptr);
+  EXPECT_EQ("UTC", database[0]->name());
+  EXPECT_EQ(0, database[0]->id());
+  EXPECT_EQ(nullptr, database[0]->tz());
+  ASSERT_TRUE(database[0]->offset().has_value());
+  EXPECT_EQ(0, database[0]->offset()->count());
+
+  // Fixed-offset zones are still present.
+  ASSERT_NE(database[1], nullptr);
+  EXPECT_EQ("-14:00", database[1]->name());
+  ASSERT_NE(database[1680], nullptr);
+  EXPECT_EQ("+14:00", database[1680]->name());
+
+  // Named zones are skipped, leaving a nullptr slot.
+  EXPECT_EQ(nullptr, database[1720]);
 }
 
 TEST(TimeZoneMapTest, offsetToLocal) {
@@ -369,5 +463,6 @@ TEST(TimeZoneMapTest, getLongName) {
   ts = 1704096000000;
   EXPECT_EQ("Pacific Standard Time", toLongName("America/Los_Angeles", ts));
 }
+
 } // namespace
 } // namespace facebook::velox::tz

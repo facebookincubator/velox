@@ -294,10 +294,15 @@ const char* exportArrowFormatStr(
       return "i"; // int32
     case TypeKind::BIGINT:
       if (type->isTime()) {
-        VELOX_DCHECK(type->equivalent(*TIME()));
-        // TIME is stored as milliseconds since midnight in Velox.
-        // Export as Arrow time32 with milliseconds unit.
-        return "ttm";
+        if (type->equivalent(*TIME())) {
+          // TIME is stored as milliseconds since midnight in Velox.
+          // Export as Arrow time32 with milliseconds unit.
+          return "ttm";
+        }
+        VELOX_DCHECK(type->equivalent(*TIME_MICRO_UTC()));
+        // TIME MICRO UTC is stored as microseconds since midnight in Velox.
+        // Export as Arrow time64 with microseconds unit.
+        return "ttu";
       }
       return "l"; // int64
     case TypeKind::REAL:
@@ -322,6 +327,7 @@ const char* exportArrowFormatStr(
     case TypeKind::UNKNOWN:
       return "n"; // NullType
     case TypeKind::TIMESTAMP:
+      VELOX_DCHECK(type->equivalent(*TIMESTAMP()));
       return exportArrowFormatTimestampStr(options, formatBuffer);
     // Complex/nested types.
     case TypeKind::ARRAY:
@@ -735,17 +741,17 @@ void exportValidityBitmap(
 bool isFlatScalarZeroCopy(const TypePtr& type, const ArrowOptions& options) {
   // - Velox's Timestamp representation (2x 64bit values) does not have an
   // equivalent in Arrow.
-  // - Velox's TIME is in milliseconds, Arrow time64 is in microseconds.
-  bool isTime = type->isTime();
-  if (isTime) {
-    VELOX_DCHECK(type->equivalent(*TIME()));
-  }
+  // - Velox's TIME (millisecond precision) is exported as Arrow time32, which
+  // is narrower than the underlying BIGINT and therefore requires conversion.
+  // TIME_MICRO_UTC matches Arrow time64 in width and is zero-copy.
+  const bool needsTimeConversion = type->isTime() && type->equivalent(*TIME());
   if (options.useDecimalTypeWidth) {
     // Short decimal is zero-copy.
-    return !type->isTimestamp() && !isTime;
+    return !type->isTimestamp() && !needsTimeConversion;
   }
   // Short decimal requires conversion.
-  return !type->isShortDecimal() && !type->isTimestamp() && !isTime;
+  return !type->isShortDecimal() && !type->isTimestamp() &&
+      !needsTimeConversion;
 }
 
 // Returns the size of a single element of a given `type` in the target arrow
@@ -754,11 +760,16 @@ size_t getArrowElementSize(const TypePtr& type, const ArrowOptions& options) {
   if (type->isShortDecimal() && !options.useDecimalTypeWidth) {
     return sizeof(int128_t);
   } else if (type->isTimestamp()) {
+    VELOX_DCHECK(type->equivalent(*TIMESTAMP()));
     return sizeof(int64_t);
   } else if (type->isTime()) {
-    VELOX_DCHECK(type->equivalent(*TIME()));
-    // TIME is exported as Arrow time32 (int32_t).
-    return sizeof(int32_t);
+    if (type->equivalent(*TIME())) {
+      // TIME is exported as Arrow time32 (int32_t).
+      return sizeof(int32_t);
+    }
+    VELOX_DCHECK(type->equivalent(*TIME_MICRO_UTC()));
+    // TIME MICRO UTC is exported as Arrow time64 (int64_t).
+    return sizeof(int64_t);
   }
   return type->cppSizeInBytes();
 }
@@ -789,9 +800,11 @@ void exportValues(
       : AlignedBuffer::allocate<uint8_t>(
             checkedMultiply<size_t>(out.length, size), pool);
   if (type->kind() == TypeKind::TIMESTAMP) {
+    VELOX_DCHECK(type->equivalent(*TIMESTAMP()));
     gatherFromTimestampBuffer(vec, rows, options.timestampUnit, *values);
-  } else if (type->kind() == TypeKind::BIGINT && type->isTime()) {
-    VELOX_DCHECK(type->equivalent(*TIME()));
+  } else if (
+      type->kind() == TypeKind::BIGINT && type->isTime() &&
+      type->equivalent(*TIME())) {
     gatherFromTimeBuffer(vec, rows, *values);
   } else {
     gatherFromBuffer(*type, *vec.values(), rows, options, *values);
@@ -2261,6 +2274,7 @@ VectorPtr importFromArrowImpl(
         arrowArray.null_count,
         wrapInBufferView);
   } else if (type->isTimestamp()) {
+    VELOX_DCHECK(type->equivalent(*TIMESTAMP()));
     return createTimestampVector(
         pool,
         type,

@@ -55,6 +55,9 @@ target_link_libraries(
 if(VELOX_ENABLE_BENCHMARKS)
   add_executable(velox_dwio_parquet_reader_benchmark ParquetReaderBenchmarkMain.cpp)
   target_link_libraries(velox_dwio_parquet_reader_benchmark velox_dwio_parquet_reader_benchmark_lib)
+
+  add_executable(velox_dwio_parquet_metadata_benchmark MetadataBenchmark.cpp)
+  target_link_libraries(velox_dwio_parquet_metadata_benchmark velox_dwio_native_parquet_reader)
 endif()
 
 add_executable(
@@ -63,6 +66,7 @@ add_executable(
   ParquetReaderWideningTest.cpp
   ParquetReaderBenchmarkTest.cpp
   BloomFilterTest.cpp
+  MetadataTest.cpp
 )
 add_test(
   NAME velox_dwio_parquet_reader_test

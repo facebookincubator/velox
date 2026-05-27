@@ -18,8 +18,12 @@
 #include "velox/exec/ContainerRowSerde.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/lib/aggregates/ValueList.h"
+#include "velox/functions/prestosql/PrestoQueryConfig.h"
 
 namespace facebook::velox::aggregate::prestosql {
+
+using functions::prestosql::PrestoQueryConfig;
+
 namespace {
 
 struct ArrayAccumulator {
@@ -455,7 +459,7 @@ void registerArrayAggAggregate(
         VELOX_CHECK_EQ(
             argTypes.size(), 1, "{} takes at most one argument", names.front());
         return std::make_unique<ArrayAggAggregate>(
-            resultType, config.prestoArrayAggIgnoreNulls());
+            resultType, PrestoQueryConfig{config}.arrayAggIgnoreNulls());
       },
       withCompanionFunctions,
       overwrite);

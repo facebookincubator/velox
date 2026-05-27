@@ -325,6 +325,55 @@ TEST_F(RegexFunctionsTest, regexpReplaceWithEmptyString) {
   EXPECT_EQ(result, output);
 }
 
+// Verifies the handling of backslash escapes in regexp_replace's replacement
+// argument. Three families are covered in a single table:
+//   1. Two-byte literal '\\X' (e.g. '\\n', '\\b', '\\f', '\\r', '\\t') is
+//      preserved verbatim, so a matched control byte is rewritten to a
+//      literal backslash plus letter. Inputs include a multibyte UTF-8
+//      character to confirm surrounding bytes do not affect the result.
+//   2. Replacement of the form '\\X' where X is neither a digit nor '\\'
+//      drops the leading backslash and produces literal X, matching
+//      java.util.regex semantics (e.g. '\\{' -> '{', '\\$' -> '$').
+//
+// Patterns use the explicit hex form '\\x08' for backspace because RE2
+// interprets '\\b' in patterns as a word boundary anchor; the other letter
+// escapes ('\\f', '\\r', '\\t') match the corresponding control bytes
+// directly.
+TEST_F(RegexFunctionsTest, regexpReplaceBackslashEscapes) {
+  auto result = testingRegexpReplaceRows(
+      {"A\nB",
+       "A\nB\nC",
+       "\xE5\x9B\xBD\nA",
+       "A\bB",
+       "A\fB",
+       "A\rB",
+       "A\tB",
+       "[{}]",
+       "a$b"},
+      {"\\n", "\\n", "\\n", "\\x08", "\\f", "\\r", "\\t", "\\[\\{", "\\$"},
+      {"\\\\n",
+       "\\\\n",
+       "\\\\n",
+       "\\\\b",
+       "\\\\f",
+       "\\\\r",
+       "\\\\t",
+       "\\{",
+       "#"});
+  auto expected = convertOutput(
+      {"A\\nB",
+       "A\\nB\\nC",
+       "\xE5\x9B\xBD\\nA",
+       "A\\bB",
+       "A\\fB",
+       "A\\rB",
+       "A\\tB",
+       "{}]",
+       "a#b"},
+      1);
+  assertEqualVectors(result, expected);
+}
+
 TEST_F(RegexFunctionsTest, regexpReplacePosition) {
   std::string output1 = "abc";
   std::string output2 = "bc";

@@ -195,6 +195,8 @@ RowVectorPtr TableScan::getOutput() {
     const auto estimatedRowSize = dataSource_->estimatedRowSize();
     const int32_t readBatchSize = calculateBatchSize(estimatedRowSize);
 
+    const auto prevCompletedRows = dataSource_->getCompletedRows();
+
     uint64_t ioTimeUs{0};
     std::optional<RowVectorPtr> dataOptional;
     {
@@ -229,6 +231,14 @@ RowVectorPtr TableScan::getOutput() {
             flatSize = data->estimateFlatSize();
           }
           lockedStats->addInputVector(flatSize, data->size());
+          const auto completedRowsDelta =
+              dataSource_->getCompletedRows() - prevCompletedRows;
+          if (completedRowsDelta > 0) {
+            core::ScanBatchEvent event;
+            event.numRows = completedRowsDelta;
+            event.wallTimeMicros = ioTimeUs;
+            dataSource_->fireScanBatchCallback(event);
+          }
           maxFilteringRatio_ = std::max(
               {maxFilteringRatio_,
                1.0 * data->size() / readBatchSize,
@@ -333,6 +343,7 @@ bool TableScan::getSplit() {
       RuntimeCounter(static_cast<int64_t>(split.connectorSplit->size())));
   const auto& connectorSplit = split.connectorSplit;
   currentSplitWeight_ = connectorSplit->splitWeight;
+  splitBatchSizeHint_ = connectorSplit->batchSizeHint;
   needNewSplit_ = false;
 
   // A point for test code injection.
@@ -354,6 +365,10 @@ bool TableScan::getSplit() {
         tableHandle_,
         columnHandles_,
         connectorQueryCtx_.get());
+    if (const auto& callback =
+            operatorCtx_->driverCtx()->task->queryCtx()->scanBatchCallback()) {
+      dataSource_->setScanBatchCallback(callback);
+    }
   }
 
   debugString_ = fmt::format(
@@ -510,9 +525,23 @@ void TableScan::addDynamicFilterLocked(
 }
 
 int32_t TableScan::calculateBatchSize(int64_t currentEstimatedRowSize) {
+  // Per-split batch size hint from the split generator (e.g., MixedUnion split
+  // iterator). Takes top priority because a generic query-level override has no
+  // awareness of proportional mixing ratios and would destroy them.
+  if (splitBatchSizeHint_ > 0) {
+    int32_t batchSize = splitBatchSizeHint_;
+    if (maxFilteringRatio_ > 0) {
+      batchSize = std::min(
+          maxReadBatchSize_,
+          static_cast<int32_t>(batchSize / maxFilteringRatio_));
+    }
+    return batchSize;
+  }
+
   if (outputBatchRowsOverride_ > 0) {
     return outputBatchRowsOverride_;
   }
+
   int64_t estimatedRowSize = connector::DataSource::kUnknownRowSize;
   if (currentEstimatedRowSize != connector::DataSource::kUnknownRowSize) {
     // Use current file estimate.

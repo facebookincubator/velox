@@ -28,6 +28,7 @@
 #include "velox/common/future/VeloxPromise.h"
 #include "velox/core/ExpressionEvaluator.h"
 #include "velox/core/QueryConfig.h"
+#include "velox/core/ScanBatchEvent.h"
 #include "velox/exec/SpillStats.h"
 #include "velox/type/Filter.h"
 #include "velox/vector/ComplexVector.h"
@@ -62,6 +63,13 @@ struct ConnectorSplit : public ISerializable {
   const std::string connectorId;
   const int64_t splitWeight{0};
   const bool cacheable{true};
+
+  /// Optional hint for the number of rows a TableScan should read per batch
+  /// from this split. When set (> 0), TableScan uses this instead of the
+  /// query-level preferred batch size. This allows split generators (e.g.,
+  /// MixedUnion split iterators) to control per-source read rates by stamping
+  /// each split with a batch size proportional to its share of the union.
+  int32_t batchSizeHint{0};
 
   std::unique_ptr<AsyncSource<DataSource>> dataSource;
 
@@ -282,6 +290,17 @@ class DataSource {
   /// Returns the number of input rows processed so far.
   virtual uint64_t getCompletedRows() = 0;
 
+  /// Stores a callback to fire after each scan batch.
+  void setScanBatchCallback(core::ScanBatchCallback callback) {
+    scanBatchCallback_ = std::move(callback);
+  }
+
+  /// Called by TableScan after each non-empty batch with generic scan stats.
+  /// Default is a no-op. Subclasses should override to create a
+  /// connector-specific event (e.g., FileScanBatchEvent), enrich it with
+  /// connector-specific fields, and call scanBatchCallback_.
+  virtual void fireScanBatchCallback(core::ScanBatchEvent /*event*/) {}
+
   virtual std::unordered_map<std::string, RuntimeMetric> getRuntimeStats() {
     return {};
   }
@@ -326,6 +345,9 @@ class DataSource {
   /// connector implementation decides how to support the cancellation if
   /// needed.
   virtual void cancel() {}
+
+ protected:
+  core::ScanBatchCallback scanBatchCallback_;
 };
 
 class IndexSource {
@@ -533,10 +555,12 @@ class ConnectorQueryCtx {
     return cancellationToken_;
   }
 
+  /// Deprecated: Use FileConfig::kSelectiveNimbleReaderEnabledSession instead.
   bool selectiveNimbleReaderEnabled() const {
     return selectiveNimbleReaderEnabled_;
   }
 
+  /// Deprecated: Use connector session properties instead.
   void setSelectiveNimbleReaderEnabled(bool value) {
     selectiveNimbleReaderEnabled_ = value;
   }

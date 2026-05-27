@@ -18,6 +18,8 @@
 
 #include <sys/mman.h>
 #include <sys/resource.h>
+#include <algorithm>
+#include <cstring>
 #include <iostream>
 #include <numeric>
 
@@ -29,11 +31,11 @@ DECLARE_bool(velox_memory_use_hugepages);
 namespace facebook::velox::memory {
 
 void AcquiredMemory::free(MemoryAllocator* allocator) {
-  allocator->freeNonContiguous(nonContiguous);
-  for (auto& [ptr, size] : contiguous) {
+  allocator->freeNonContiguous(nonContiguousAllocs);
+  for (auto& [ptr, size] : byteAllocations) {
     allocator->freeBytes(ptr, size);
   }
-  contiguous.clear();
+  byteAllocations.clear();
 }
 
 // static
@@ -146,8 +148,7 @@ bool MemoryAllocator::isAlignmentValid(
   // alignmentBytes must be a power of two, so we can replace the expensive
   // modulo operation with bitwise and.
   return (alignmentBytes == kMinAlignment) ||
-      (alignmentBytes >= kMinAlignment && alignmentBytes <= kMaxAlignment &&
-       bits::isPowerOfTwo(alignmentBytes) &&
+      (alignmentBytes >= kMinAlignment && bits::isPowerOfTwo(alignmentBytes) &&
        (allocateBytes & (alignmentBytes - 1)) == 0);
 }
 
@@ -373,6 +374,40 @@ void* MemoryAllocator::allocateZeroFilledWithoutRetry(uint64_t bytes) {
     ::memset(result, 0, bytes);
   }
   return result;
+}
+
+void* MemoryAllocator::reallocateBytes(
+    void* p,
+    uint64_t oldSize,
+    uint64_t newSize,
+    uint16_t alignment) {
+  // Try in-place reallocation first (supported by MallocAllocator via
+  // ::realloc(), which jemalloc can often service without moving data).
+  void* result = reallocateBytesWithoutRetry(p, oldSize, newSize, alignment);
+  if (result != nullptr) {
+    return result;
+  }
+  // Fallback: allocate new + memcpy + free old. This path also handles
+  // cache eviction via allocateBytes.
+  void* newP = allocateBytes(newSize, alignment);
+  if (newP == nullptr) {
+    return nullptr;
+  }
+  if (p != nullptr) {
+    ::memcpy(newP, p, std::min(oldSize, newSize));
+    freeBytes(p, oldSize);
+  }
+  return newP;
+}
+
+void* MemoryAllocator::reallocateBytesWithoutRetry(
+    void* /*p*/,
+    uint64_t /*oldSize*/,
+    uint64_t /*newSize*/,
+    uint16_t /*alignment*/) {
+  // Default: in-place reallocation not supported. Caller will fall back to
+  // allocateBytes + memcpy + freeBytes.
+  return nullptr;
 }
 
 Stats Stats::operator-(const Stats& other) const {

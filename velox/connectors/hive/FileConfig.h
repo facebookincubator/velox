@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <limits>
 #include <string>
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/config/Config.h"
@@ -123,6 +124,26 @@ class FileConfig {
       8UL << 20,
       "Speculative tail-read size in bytes for Nimble files.")
 
+  VELOX_HIVE_CONFIG_LEGACY(
+      kNimbleStringDecoderZeroCopySession,
+      kNimbleStringDecoderZeroCopy,
+      nimbleStringDecoderZeroCopy,
+      "nimble_string_decoder_zero_copy",
+      "nimble.string-decoder-zero-copy",
+      bool,
+      false,
+      "Enable zero-copy string decoding in Nimble selective reader.")
+
+  VELOX_HIVE_CONFIG_LEGACY(
+      kNimblePreserveDictionaryEncodingSession,
+      kNimblePreserveDictionaryEncoding,
+      nimblePreserveDictionaryEncoding,
+      "nimble_preserve_dictionary_encoding",
+      "nimble.preserve-dictionary-encoding",
+      bool,
+      false,
+      "Preserve dictionary encoding for Nimble string column reads.")
+
   // --- VELOX_HIVE_CONFIG properties ---
 
   VELOX_HIVE_CONFIG(
@@ -185,23 +206,58 @@ class FileConfig {
   static constexpr const char* kIndexEnabled = "index-enabled";
 
   VELOX_HIVE_CONFIG(
-      kFileMetadataCacheEnabledSession,
-      fileMetadataCacheEnabled,
-      "file_metadata_cache_enabled",
+      kCacheMetadataSession,
+      cacheMetadata,
+      "cache_metadata",
       bool,
       false,
       "Cache file metadata in AsyncDataCache.")
-  static constexpr const char* kFileMetadataCacheEnabled =
-      "file-metadata-cache-enabled";
+  static constexpr const char* kCacheMetadata = "cache-metadata";
 
   VELOX_HIVE_CONFIG(
-      kPinFileMetadataSession,
-      pinFileMetadata,
-      "pin_file_metadata",
+      kPinMetadataSession,
+      pinMetadata,
+      "pin_metadata",
       bool,
       false,
       "Pin parsed metadata objects in reader cache.")
-  static constexpr const char* kPinFileMetadata = "pin-file-metadata";
+  static constexpr const char* kPinMetadata = "pin-metadata";
+
+  VELOX_HIVE_CONFIG(
+      kCacheIndexSession,
+      cacheIndex,
+      "cache_index",
+      bool,
+      false,
+      "Cache index data in AsyncDataCache.")
+  static constexpr const char* kCacheIndex = "cache-index";
+
+  VELOX_HIVE_CONFIG(
+      kPinIndexSession,
+      pinIndex,
+      "pin_index",
+      bool,
+      false,
+      "Pin parsed index objects in reader cache.")
+  static constexpr const char* kPinIndex = "pin-index";
+
+  VELOX_HIVE_CONFIG(
+      kSelectiveNimbleReaderEnabledSession,
+      selectiveNimbleReaderEnabled,
+      "selective_nimble_reader_enabled",
+      bool,
+      true,
+      "Enable selective Nimble reader.")
+
+  VELOX_HIVE_CONFIG(
+      kParquetFooterMemoryTrackingThresholdSession,
+      parquetFooterMemoryTrackingThreshold,
+      "parquet_footer_memory_tracking_threshold",
+      uint64_t,
+      std::numeric_limits<uint64_t>::max(),
+      "Serialized footer size in bytes beyond which the Parquet reader "
+      "estimates and reports the deserialized footer's heap footprint to "
+      "the memory pool. Defaults to disabled (max uint64).")
 
   // --- VELOX_HIVE_CONFIG_PROPERTY properties ---
 
