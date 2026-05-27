@@ -14,8 +14,8 @@
 
 include_guard(GLOBAL)
 
-# 3.30.4 is the minimum version required by cudf
-cmake_minimum_required(VERSION 3.30.4)
+# 4.0 is the minimum version required by cudf
+cmake_minimum_required(VERSION 4.0)
 
 # rapids_cmake commit d79e071 from 2026-05-01
 set(VELOX_rapids_cmake_VERSION 26.06)

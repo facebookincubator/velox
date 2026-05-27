@@ -83,9 +83,6 @@ jobs:
 
           echo "NJOBS=`sysctl -n hw.ncpu`" >> $GITHUB_ENV
           majorVersion=$(sw_vers -productVersion | awk -F '.' '{print $1}')
-          if (( majorVersion == 13 )); then
-            brew uninstall cmake
-            pipx install --force cmake==3.31
           fi
           echo "$INSTALL_PREFIX/bin" >> $GITHUB_PATH
 
