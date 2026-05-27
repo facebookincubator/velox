@@ -789,6 +789,16 @@ class ReaderOptions : public io::ReaderOptions {
     pinIndex_ = value;
   }
 
+  /// If true, caches data column reads in the async data cache. Default false
+  /// keeps the cache scoped to metadata/index only.
+  bool cacheData() const {
+    return cacheData_;
+  }
+
+  void setCacheData(bool value) {
+    cacheData_ = value;
+  }
+
   /// Whether to load and initialize the cluster index during file open.
   /// When true, the cluster index section is preloaded and the structured
   /// ClusterIndex object is created. Default false.
@@ -865,6 +875,7 @@ class ReaderOptions : public io::ReaderOptions {
   bool pinMetadata_{false};
   bool cacheIndex_{false};
   bool pinIndex_{false};
+  bool cacheData_{true};
   bool loadClusterIndex_{false};
   bool preloadIndex_{false};
   bool loadChunkIndex_{true};

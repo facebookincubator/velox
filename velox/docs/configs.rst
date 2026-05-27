@@ -1011,6 +1011,12 @@ must be specified as raw byte counts.
      - string
      - parquet-cpp-velox version 0.0.0
      - Created-by value used when writing to Parquet.
+   * - hive.parquet.writer.enable-store-decimal-as-integer
+     - hive.parquet.writer.enable_store_decimal_as_integer
+     - bool
+     - true
+     - Whether to store DECIMAL values using integer physical types (INT32/INT64) when precision allows.
+       When false, all DECIMAL values are stored as FIXED_LEN_BYTE_ARRAY regardless of precision.
 
 ``Amazon S3 Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -1252,10 +1258,6 @@ Spark-specific Configuration
        Note: This feature is still under development to achieve full ANSI compliance. Users can
        refer to the Spark function documentation to verify the current support status of a specific
        function.
-   * - spark.legacy_size_of_null
-     - bool
-     - true
-     - If false, ``size`` function returns null for null input.
    * - spark.bloom_filter.expected_num_items
      - integer
      - 1000000
@@ -1292,6 +1294,10 @@ Spark-specific Configuration
      - bool
      - true
      - If true, ignore null fields when generating JSON string. If false, null fields are included with a null value.
+   * - spark.collect_list.ignore_nulls
+     - bool
+     - true
+     - If true, Spark ``collect_list`` aggregate function ignores nulls in the input.
 
 Tracing
 --------

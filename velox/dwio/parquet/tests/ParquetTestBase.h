@@ -196,13 +196,16 @@ class ParquetTestBase : public testing::Test,
 
   dwio::common::MemorySink* write(
       const RowVectorPtr& data,
-      const WriterOptions& writerOptions) {
+      const WriterOptions& writerOptions,
+      const RowTypePtr& rowType = nullptr) {
     auto sink = std::make_unique<dwio::common::MemorySink>(
         200 * 1024 * 1024,
         dwio::common::FileSink::Options{.pool = leafPool_.get()});
     auto* sinkPtr = sink.get();
     auto writer = std::make_unique<Writer>(
-        std::move(sink), writerOptions, data->rowType());
+        std::move(sink),
+        writerOptions,
+        rowType != nullptr ? rowType : data->rowType());
     writer->write(data);
     writer->close();
     writers_.push_back(std::move(writer));
