@@ -17,6 +17,7 @@
 
 #include "velox/connectors/hive/FileDataSource.h"
 #include "velox/connectors/hive/TableHandle.h"
+#include "velox/dwio/parquet/ParquetFieldId.h"
 
 namespace facebook::velox::connector::hive {
 
@@ -72,7 +73,16 @@ class HiveDataSource : public FileDataSource {
 
   void setupRowIdColumn();
 
+  // Helper function to extract nested field IDs from Iceberg column handles
+  void extractNestedFieldIds(
+      const parquet::ParquetFieldId& field,
+      const TypePtr& type,
+      std::unordered_map<std::string, int32_t>& mapping);
+
   const std::shared_ptr<HiveConfig> hiveConfig_;
+
+  // Map from lowercase field names to Iceberg field IDs
+  std::unordered_map<std::string, int32_t> nameToFieldId_;
 
   int64_t numBucketConversion_ = 0;
 

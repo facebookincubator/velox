@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+#include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/HiveDataSource.h"
 
 #include <utility>
@@ -22,6 +22,10 @@
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/HiveSplitReader.h"
+#include "velox/expression/FieldReference.h"
+
+using facebook::velox::common::testutil::TestValue;
+using facebook::velox::connector::hive::iceberg::IcebergColumnHandle;
 
 namespace facebook::velox::connector::hive {
 
@@ -41,7 +45,28 @@ HiveDataSource::HiveDataSource(
           ioExecutor,
           connectorQueryCtx,
           hiveConfig),
-      hiveConfig_(hiveConfig) {}
+      hiveConfig_(hiveConfig) {
+  // Extract field IDs from Iceberg column handles for field ID matching
+  nameToFieldId_.clear();
+  
+  for (const auto& [_, columnHandle] : assignments) {
+    auto icebergHandle = std::dynamic_pointer_cast<
+        const facebook::velox::connector::hive::iceberg::IcebergColumnHandle>(columnHandle);
+
+    if (icebergHandle) {
+      const auto& field = icebergHandle->field();
+
+      std::string lower = icebergHandle->name();
+      folly::toLowerAscii(lower);
+      nameToFieldId_[lower] = field.fieldId;
+
+      const auto& type = icebergHandle->dataType();
+      if (type->isRow() && !field.children.empty()) {
+        extractNestedFieldIds(field, type, nameToFieldId_);
+      }
+    }
+  }
+}
 
 std::vector<column_index_t> HiveDataSource::setupBucketConversion() {
   auto hiveSplit = checkedPointerCast<const HiveConnectorSplit>(split_);
@@ -137,7 +162,7 @@ std::unique_ptr<FileSplitReader> HiveDataSource::createSplitReader() {
   auto bucketChannels = prepareSplit();
   auto hiveSplit = checkedPointerCast<const HiveConnectorSplit>(split_);
 
-  return std::make_unique<HiveSplitReader>(
+  auto splitReader = std::make_unique<HiveSplitReader>(
       hiveSplit,
       tableHandle_,
       &partitionKeys_,
@@ -153,6 +178,13 @@ std::unique_ptr<FileSplitReader> HiveDataSource::createSplitReader() {
       &infoColumns_,
       std::move(bucketChannels),
       /*subfieldFiltersForValidation=*/&filters_);
+
+  // Propagate field ID mapping to split reader for Iceberg tables
+  if (!nameToFieldId_.empty()) {
+    splitReader->setNameToFieldId(nameToFieldId_);
+  }
+
+  return splitReader;
 }
 
 std::unordered_map<std::string, RuntimeMetric>
@@ -207,6 +239,38 @@ std::shared_ptr<wave::WaveDataSource> HiveDataSource::toWaveDataSource() {
 //  static
 void HiveDataSource::registerWaveDelegateHook(WaveDelegateHookFunction hook) {
   waveDelegateHook_ = hook;
+}
+void HiveDataSource::extractNestedFieldIds(
+    const parquet::ParquetFieldId& field,
+    const TypePtr& type,
+    std::unordered_map<std::string, int32_t>& mapping) {
+  if (!type->isRow() || field.children.empty()) {
+    return;
+  }
+
+  auto rowType = std::dynamic_pointer_cast<const RowType>(type);
+  if (!rowType) {
+    return;
+  }
+
+  // Match children by position
+  size_t numChildren = std::min<size_t>(field.children.size(), rowType->size());
+
+  for (size_t i = 0; i < numChildren; ++i) {
+    const auto& child = field.children[i];
+    const std::string& fieldName = rowType->nameOf(i);
+
+    // Store nested field ID with lowercase name
+    std::string lower = fieldName;
+    folly::toLowerAscii(lower);
+    mapping[lower] = child.fieldId;
+
+    // Recursively process nested structs
+    const auto& childType = rowType->childAt(i);
+    if (childType->isRow() && !child.children.empty()) {
+      extractNestedFieldIds(child, childType, mapping);
+    }
+  }
 }
 
 } // namespace facebook::velox::connector::hive

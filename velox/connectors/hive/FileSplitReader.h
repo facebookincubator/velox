@@ -103,6 +103,8 @@ class FileSplitReader {
   void configureReaderOptions(
       std::shared_ptr<random::RandomSkipTracker> randomSkip);
 
+
+
   /// This function is used by different table formats like Iceberg and Hudi to
   /// do additional preparations before reading the split, e.g. Open delete
   /// files or log files, and add column adapatations for metadata columns. It
@@ -127,6 +129,23 @@ class FileSplitReader {
   bool allPrefetchIssued() const;
 
   void setConnectorQueryCtx(const ConnectorQueryCtx* connectorQueryCtx);
+
+  void setBucketConversion(std::vector<column_index_t> bucketChannels);
+
+  /// Sets the info columns map for synthesized column filter validation.
+  /// Must be called before prepareSplit() if synthesized column filter
+  /// validation is needed.
+
+  void setNameToFieldId(
+    std::unordered_map<std::string, int32_t> mapping) {
+    nameToFieldId_ = std::move(mapping);
+  }
+  void setInfoColumns(
+      const std::unordered_map<
+          std::string,
+          std::shared_ptr<const FileColumnHandle>>* infoColumns) {
+    infoColumns_ = infoColumns;
+  }
 
   const RowTypePtr& readerOutputType() const {
     return readerOutputType_;
@@ -240,6 +259,15 @@ class FileSplitReader {
   dwio::common::ReaderOptions baseReaderOpts_;
   dwio::common::RowReaderOptions baseRowReaderOpts_;
   bool emptySplit_;
+  
+  // Column handles for the split info columns
+  const std::unordered_map<std::string, std::shared_ptr<const FileColumnHandle>>*
+      infoColumns_{nullptr};
+      
+ private:
+  folly::F14FastSet<column_index_t> bucketChannels_;
+  std::vector<uint32_t> partitions_;
+  std::unordered_map<std::string, int32_t> nameToFieldId_;
 };
 
 } // namespace facebook::velox::connector::hive
