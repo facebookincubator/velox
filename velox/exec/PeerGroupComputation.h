@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/exec/RowAccessor.h"
 #include "velox/vector/TypeAliases.h"
 
 #include <algorithm>
@@ -32,21 +33,12 @@ class PeerGroupComputation {
     bool previousRowConsumed;
   };
 
-  /// Computes peer start and end bounds for rows in [start, end).
-  ///
-  /// RowAccessor contract:
-  /// - partitionEnd() returns the absolute end row of the available partition.
-  /// - hasPreviousRow() returns true if there is a retained row immediately
-  ///   before 'start' for cross-batch peer comparison.
-  /// - previousRowEquals(row) compares the retained previous row with 'row'.
-  /// - rowsEqual(lhs, rhs) compares two absolute partition rows.
-  ///
-  /// The accessor is read-only. If the previous row is consumed, the result
-  /// sets previousRowConsumed=true and the caller remains responsible for
-  /// clearing or releasing that state.
-  template <typename RowAccessor>
+  /// Computes peer start and end bounds for rows in [start, end). If the
+  /// previous row is consumed, the result sets previousRowConsumed=true and the
+  /// caller remains responsible for clearing or releasing that state.
+  template <RowAccessor Rows>
   static Result compute(
-      const RowAccessor& rows,
+      const Rows& rows,
       vector_size_t start,
       vector_size_t end,
       vector_size_t prevPeerStart,
@@ -89,9 +81,9 @@ class PeerGroupComputation {
   }
 
  private:
-  template <typename RowAccessor>
+  template <RowAccessor Rows>
   static vector_size_t findEnd(
-      const RowAccessor& rows,
+      const Rows& rows,
       vector_size_t peerStart,
       vector_size_t partitionEnd) {
     auto peerEnd = peerStart + 1;

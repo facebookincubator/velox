@@ -18,11 +18,11 @@
 #include "velox/common/base/CompareFlags.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/core/PlanNode.h"
+#include "velox/exec/RowAccessor.h"
 #include "velox/type/Type.h"
 #include "velox/vector/SelectivityVector.h"
 #include "velox/vector/TypeAliases.h"
 
-#include <optional>
 #include <type_traits>
 
 namespace facebook::velox::exec {
@@ -31,25 +31,12 @@ namespace facebook::velox::exec {
 class KRangeFrameBound {
  public:
   /// Computes k RANGE frame bounds for rows in [startRow, startRow + numRows).
-  ///
-  /// RowAccessor contract:
-  /// - startRow() returns the absolute first row retained by the accessor.
-  /// - partitionEnd() returns the absolute end row of retained rows.
-  /// - compareFrameValue(orderByRow, frameValueRow, flags) compares the
-  ///   order-by value at 'orderByRow' with the frame-bound value at
-  ///   'frameValueRow'.
-  /// - frameValueIsNull(row) and orderByValueIsNull(row) expose null states
-  ///   for the debug invariant.
-  /// - frameValueIsNan<T>(row) and orderByValueIsNan<T>(row) expose typed
-  ///   NaN checks for floating-point k RANGE frame bounds.
-  ///
-  /// The accessor is read-only. Schema metadata is passed as arguments rather
-  /// than exposed through the accessor.
-  template <typename RowAccessor>
+  template <RowAccessor Rows>
   static void compute(
-      const RowAccessor& rows,
+      const Rows& rows,
       bool isStartBound,
       bool isPreceding,
+      column_index_t frameColumn,
       const core::SortOrder& sortOrder,
       const TypePtr& frameType,
       vector_size_t startRow,
@@ -71,6 +58,7 @@ class KRangeFrameBound {
           isStartBound,
           isPreceding,
           flags,
+          frameColumn,
           startRow,
           numRows,
           rawPeerBounds,
@@ -82,6 +70,7 @@ class KRangeFrameBound {
           isStartBound,
           isPreceding,
           flags,
+          frameColumn,
           startRow,
           numRows,
           rawPeerBounds,
@@ -93,6 +82,7 @@ class KRangeFrameBound {
           isStartBound,
           isPreceding,
           flags,
+          frameColumn,
           startRow,
           numRows,
           rawPeerBounds,
@@ -102,13 +92,14 @@ class KRangeFrameBound {
   }
 
  private:
-  template <typename RowAccessor>
+  template <RowAccessor Rows>
   static vector_size_t linearSearch(
-      const RowAccessor& rows,
+      const Rows& rows,
       bool firstMatch,
       vector_size_t start,
       vector_size_t end,
       vector_size_t frameValueRow,
+      column_index_t frameColumn,
       const CompareFlags& flags) {
     if (start >= end) {
       return end == rows.partitionEnd() ? rows.partitionEnd() + 1 : -1;
@@ -116,7 +107,7 @@ class KRangeFrameBound {
 
     for (auto row = start; row < end; ++row) {
       const auto compareResult =
-          rows.compareFrameValue(row, frameValueRow, flags);
+          rows.compareFrameValue(row, frameValueRow, frameColumn, flags);
       if (compareResult.has_value() && compareResult.value() == 0) {
         if (firstMatch) {
           return row;
@@ -131,13 +122,14 @@ class KRangeFrameBound {
     return end == rows.partitionEnd() ? rows.partitionEnd() + 1 : -1;
   }
 
-  template <typename RowAccessor>
+  template <RowAccessor Rows>
   static vector_size_t search(
-      const RowAccessor& rows,
+      const Rows& rows,
       bool firstMatch,
       vector_size_t start,
       vector_size_t end,
       vector_size_t frameValueRow,
+      column_index_t frameColumn,
       const CompareFlags& flags) {
     auto begin = start;
     auto finish = end;
@@ -145,7 +137,7 @@ class KRangeFrameBound {
     while (finish - begin >= 2) {
       const auto mid = begin + (finish - begin) / 2;
       const auto compareResult =
-          rows.compareFrameValue(mid, frameValueRow, flags);
+          rows.compareFrameValue(mid, frameValueRow, frameColumn, flags);
       if (!compareResult.has_value() || compareResult.value() >= 0) {
         finish = mid;
       } else {
@@ -153,15 +145,17 @@ class KRangeFrameBound {
       }
     }
 
-    return linearSearch(rows, firstMatch, begin, end, frameValueRow, flags);
+    return linearSearch(
+        rows, firstMatch, begin, end, frameValueRow, frameColumn, flags);
   }
 
-  template <typename T, typename RowAccessor>
+  template <typename T, RowAccessor Rows>
   static void computeTyped(
-      const RowAccessor& rows,
+      const Rows& rows,
       bool isStartBound,
       bool isPreceding,
       const CompareFlags& flags,
+      column_index_t frameColumn,
       vector_size_t startRow,
       vector_size_t numRows,
       const vector_size_t* rawPeerBounds,
@@ -171,7 +165,7 @@ class KRangeFrameBound {
       const auto currentRow = startRow + i;
 
       if constexpr (std::is_floating_point_v<T>) {
-        if (rows.template frameValueIsNan<T>(currentRow) &&
+        if (rows.template frameValueIsNan<T>(currentRow, frameColumn) &&
             !rows.template orderByValueIsNan<T>(currentRow)) {
           validFrames.setValid(i, false);
           continue;
@@ -179,11 +173,11 @@ class KRangeFrameBound {
       }
 
       VELOX_DCHECK_EQ(
-          rows.frameValueIsNull(currentRow),
+          rows.frameValueIsNull(currentRow, frameColumn),
           rows.orderByValueIsNull(currentRow));
 
       const auto compareResult =
-          rows.compareFrameValue(currentRow, currentRow, flags);
+          rows.compareFrameValue(currentRow, currentRow, frameColumn, flags);
       if (compareResult.has_value() && compareResult.value() == 0) {
         rawFrameBounds[i] = rawPeerBounds[i];
       } else {
@@ -191,7 +185,13 @@ class KRangeFrameBound {
         const auto searchEnd =
             isPreceding ? currentRow + 1 : rows.partitionEnd();
         rawFrameBounds[i] = search(
-            rows, isStartBound, searchStart, searchEnd, currentRow, flags);
+            rows,
+            isStartBound,
+            searchStart,
+            searchEnd,
+            currentRow,
+            frameColumn,
+            flags);
       }
     }
   }

@@ -190,6 +190,7 @@ velox_add_library(
   PrefixSort.h
   ProbeOperatorState.h
   RoundRobinPartitionFunction.h
+  RowAccessor.h
   RowContainer.h
   RowNumber.h
   RowsStreamingWindowBuild.h

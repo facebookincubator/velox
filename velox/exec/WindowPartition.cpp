@@ -201,10 +201,14 @@ void WindowPartition::removePreviousRow() {
   previousRow_ = nullptr;
 }
 
-class WindowPartition::RowContainerPeerAccessor {
+class WindowPartition::RowContainerAccessor {
  public:
-  explicit RowContainerPeerAccessor(WindowPartition& partition)
+  explicit RowContainerAccessor(const WindowPartition& partition)
       : partition_(partition) {}
+
+  vector_size_t startRow() const {
+    return partition_.startRow_;
+  }
 
   vector_size_t partitionEnd() const {
     return partition_.startRow_ + partition_.partition_.size();
@@ -223,81 +227,47 @@ class WindowPartition::RowContainerPeerAccessor {
     return !partition_.compareRowsWithSortKeys(rowAt(lhs), rowAt(rhs));
   }
 
- private:
-  char* rowAt(vector_size_t row) const {
-    return partition_.partition_[row - partition_.startRow_];
-  }
-
-  WindowPartition& partition_;
-};
-
-std::pair<vector_size_t, vector_size_t> WindowPartition::computePeerBuffers(
-    vector_size_t start,
-    vector_size_t end,
-    vector_size_t prevPeerStart,
-    vector_size_t prevPeerEnd,
-    vector_size_t* rawPeerStarts,
-    vector_size_t* rawPeerEnds) {
-  RowContainerPeerAccessor rows{*this};
-  auto result = PeerGroupComputation::compute(
-      rows, start, end, prevPeerStart, prevPeerEnd, rawPeerStarts, rawPeerEnds);
-  if (result.previousRowConsumed) {
-    removePreviousRow();
-  }
-  return {result.peerStart, result.peerEnd};
-}
-
-class WindowPartition::RowContainerKRangeFrameAccessor {
- public:
-  RowContainerKRangeFrameAccessor(
-      const WindowPartition& partition,
-      column_index_t orderByColumn,
-      column_index_t frameColumn)
-      : partition_(partition),
-        orderByColumn_(orderByColumn),
-        mappedFrameColumn_(partition.inputMapping_[frameColumn]),
-        orderByRowColumn_(partition.data_->columnAt(orderByColumn)),
-        frameRowColumn_(partition.columns_[frameColumn]) {}
-
-  vector_size_t startRow() const {
-    return partition_.startRow_;
-  }
-
-  vector_size_t partitionEnd() const {
-    return partition_.startRow_ + partition_.partition_.size();
-  }
-
   std::optional<int32_t> compareFrameValue(
       vector_size_t orderByRow,
       vector_size_t frameValueRow,
+      column_index_t frameColumn,
       const CompareFlags& flags) const {
     return partition_.data_->compare(
         rowAt(orderByRow),
         rowAt(frameValueRow),
-        orderByColumn_,
-        mappedFrameColumn_,
+        orderByColumn(),
+        partition_.inputMapping_[frameColumn],
         flags);
   }
 
-  bool frameValueIsNull(vector_size_t row) const {
-    return isNullAt(rowAt(row), frameRowColumn_);
+  bool frameValueIsNull(vector_size_t row, column_index_t frameColumn) const {
+    return isNullAt(rowAt(row), partition_.columns_[frameColumn]);
   }
 
   bool orderByValueIsNull(vector_size_t row) const {
-    return isNullAt(rowAt(row), orderByRowColumn_);
+    return isNullAt(rowAt(row), orderByRowColumn());
   }
 
   template <typename T>
-  bool frameValueIsNan(vector_size_t row) const {
-    return partition_.data_->isNanAt<T>(rowAt(row), frameRowColumn_);
+  bool frameValueIsNan(vector_size_t row, column_index_t frameColumn) const {
+    return partition_.data_->isNanAt<T>(
+        rowAt(row), partition_.columns_[frameColumn]);
   }
 
   template <typename T>
   bool orderByValueIsNan(vector_size_t row) const {
-    return partition_.data_->isNanAt<T>(rowAt(row), orderByRowColumn_);
+    return partition_.data_->isNanAt<T>(rowAt(row), orderByRowColumn());
   }
 
  private:
+  column_index_t orderByColumn() const {
+    return partition_.sortKeyInfo_[0].first;
+  }
+
+  RowColumn orderByRowColumn() const {
+    return partition_.data_->columnAt(orderByColumn());
+  }
+
   char* rowAt(vector_size_t row) const {
     return partition_.partition_[row - partition_.startRow_];
   }
@@ -307,11 +277,23 @@ class WindowPartition::RowContainerKRangeFrameAccessor {
   }
 
   const WindowPartition& partition_;
-  const column_index_t orderByColumn_;
-  const column_index_t mappedFrameColumn_;
-  const RowColumn orderByRowColumn_;
-  const RowColumn frameRowColumn_;
 };
+
+std::pair<vector_size_t, vector_size_t> WindowPartition::computePeerBuffers(
+    vector_size_t start,
+    vector_size_t end,
+    vector_size_t prevPeerStart,
+    vector_size_t prevPeerEnd,
+    vector_size_t* rawPeerStarts,
+    vector_size_t* rawPeerEnds) {
+  RowContainerAccessor rows{*this};
+  auto result = PeerGroupComputation::compute(
+      rows, start, end, prevPeerStart, prevPeerEnd, rawPeerStarts, rawPeerEnds);
+  if (result.previousRowConsumed) {
+    removePreviousRow();
+  }
+  return {result.peerStart, result.peerEnd};
+}
 
 void WindowPartition::computeKRangeFrameBounds(
     bool isStartBound,
@@ -322,15 +304,15 @@ void WindowPartition::computeKRangeFrameBounds(
     const vector_size_t* rawPeerBuffer,
     vector_size_t* rawFrameBounds,
     SelectivityVector& validFrames) const {
-  const auto orderByColumn = sortKeyInfo_[0].first;
   const auto sortOrder = sortKeyInfo_[0].second;
   const auto frameType = data_->columnTypes()[inputMapping_[frameColumn]];
 
-  RowContainerKRangeFrameAccessor rows{*this, orderByColumn, frameColumn};
+  RowContainerAccessor rows{*this};
   KRangeFrameBound::compute(
       rows,
       isStartBound,
       isPreceding,
+      frameColumn,
       sortOrder,
       frameType,
       startRow,
