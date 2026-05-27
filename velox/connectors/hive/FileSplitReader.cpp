@@ -74,6 +74,7 @@ VectorPtr newConstantFromStringImpl(
                       VELOX_USER_FAIL("{}", status.message());
                     });
     if constexpr (kind == TypeKind::TIMESTAMP) {
+      VELOX_DCHECK(type->equivalent(*TIMESTAMP()));
       if (isLocalTimestamp) {
         copy.toGMT(Timestamp::defaultTimezone());
       }

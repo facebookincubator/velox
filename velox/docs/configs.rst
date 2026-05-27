@@ -858,21 +858,34 @@ must be specified as raw byte counts.
      - 0
      - Maximum number of output rows to return per index lookup request. The limit is applied to the actual output rows
        after filtering. 0 means no limit (default).
-   * - file-metadata-cache-enabled
-     - file_metadata_cache_enabled
+   * - cache-metadata
+     - cache_metadata
      - bool
      - false
      - Whether to cache file metadata (footer, stripes, index) in the process-wide AsyncDataCache. When enabled,
        the first reader performs a speculative tail read and populates the cache; subsequent readers on the same file
        serve metadata from cache with zero file IO. Currently only supported by Nimble format.
-   * - pin-file-metadata
-     - pin_file_metadata
+   * - pin-metadata
+     - pin_metadata
      - bool
      - false
      - Whether to pin parsed metadata objects (e.g., StripeGroup, IndexGroup) in the reader's metadata cache with
        strong references so they are never evicted. This avoids re-reading and re-parsing metadata on every stripe
        access when weak-pointer cache entries would otherwise expire. Can be used independently of
-       file-metadata-cache-enabled. Currently only supported by Nimble format.
+       cache-metadata. Currently only supported by Nimble format.
+   * - cache-index
+     - cache_index
+     - bool
+     - false
+     - Whether to cache index data (e.g., cluster index key stream) in the async data cache.
+       Currently only supported by Nimble format.
+   * - pin-index
+     - pin_index
+     - bool
+     - false
+     - Whether to pin parsed index objects (e.g., HashIndex, SortedIndex) in the reader's index cache with
+       strong references so they are never evicted. Can be used independently of
+       cache-index. Currently only supported by Nimble format.
    * - reader.collect-column-cpu-metrics
      - reader.collect_column_cpu_metrics
      - bool
@@ -998,6 +1011,12 @@ must be specified as raw byte counts.
      - string
      - parquet-cpp-velox version 0.0.0
      - Created-by value used when writing to Parquet.
+   * - hive.parquet.writer.enable-store-decimal-as-integer
+     - hive.parquet.writer.enable_store_decimal_as_integer
+     - bool
+     - true
+     - Whether to store DECIMAL values using integer physical types (INT32/INT64) when precision allows.
+       When false, all DECIMAL values are stored as FIXED_LEN_BYTE_ARRAY regardless of precision.
 
 ``Amazon S3 Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -1239,10 +1258,6 @@ Spark-specific Configuration
        Note: This feature is still under development to achieve full ANSI compliance. Users can
        refer to the Spark function documentation to verify the current support status of a specific
        function.
-   * - spark.legacy_size_of_null
-     - bool
-     - true
-     - If false, ``size`` function returns null for null input.
    * - spark.bloom_filter.expected_num_items
      - integer
      - 1000000
@@ -1279,6 +1294,10 @@ Spark-specific Configuration
      - bool
      - true
      - If true, ignore null fields when generating JSON string. If false, null fields are included with a null value.
+   * - spark.collect_list.ignore_nulls
+     - bool
+     - true
+     - If true, Spark ``collect_list`` aggregate function ignores nulls in the input.
 
 Tracing
 --------

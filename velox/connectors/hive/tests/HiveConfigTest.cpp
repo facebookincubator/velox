@@ -56,7 +56,8 @@ TEST(HiveConfigTest, defaultConfig) {
   ASSERT_EQ(hiveConfig.loadQuantum(emptySession.get()), 8 << 20);
   ASSERT_FALSE(hiveConfig.preserveFlatMapsInMemory(emptySession.get()));
   ASSERT_FALSE(hiveConfig.indexEnabled(emptySession.get()));
-  ASSERT_FALSE(hiveConfig.fileMetadataCacheEnabled(emptySession.get()));
+  ASSERT_FALSE(hiveConfig.cacheMetadata(emptySession.get()));
+  ASSERT_FALSE(hiveConfig.cacheIndex(emptySession.get()));
   ASSERT_EQ(
       hiveConfig.orcFooterSpeculativeIoSize(emptySession.get()), 256UL << 10);
   ASSERT_EQ(
@@ -91,7 +92,8 @@ TEST(HiveConfigTest, overrideConfig) {
       {HiveConfig::kMaxBucketCount, std::to_string(100'000)},
       {HiveConfig::kPreserveFlatMapsInMemory, "true"},
       {HiveConfig::kIndexEnabled, "true"},
-      {HiveConfig::kFileMetadataCacheEnabled, "true"},
+      {HiveConfig::kCacheMetadata, "true"},
+      {HiveConfig::kCacheIndex, "true"},
       {HiveConfig::kOrcFooterSpeculativeIoSize, std::to_string(512UL << 10)},
       {HiveConfig::kParquetFooterSpeculativeIoSize, std::to_string(1UL << 20)},
       {HiveConfig::kNimbleFooterSpeculativeIoSize, std::to_string(4UL << 20)},
@@ -130,7 +132,8 @@ TEST(HiveConfigTest, overrideConfig) {
   ASSERT_EQ(hiveConfig.maxBucketCount(emptySession.get()), 100'000);
   ASSERT_TRUE(hiveConfig.preserveFlatMapsInMemory(emptySession.get()));
   ASSERT_TRUE(hiveConfig.indexEnabled(emptySession.get()));
-  ASSERT_TRUE(hiveConfig.fileMetadataCacheEnabled(emptySession.get()));
+  ASSERT_TRUE(hiveConfig.cacheMetadata(emptySession.get()));
+  ASSERT_TRUE(hiveConfig.cacheIndex(emptySession.get()));
   ASSERT_EQ(
       hiveConfig.orcFooterSpeculativeIoSize(emptySession.get()), 512UL << 10);
   ASSERT_EQ(
@@ -160,7 +163,8 @@ TEST(HiveConfigTest, overrideSession) {
       {HiveConfig::kLoadQuantumSession, std::to_string(4 << 20)},
       {HiveConfig::kPreserveFlatMapsInMemorySession, "true"},
       {HiveConfig::kIndexEnabledSession, "true"},
-      {HiveConfig::kFileMetadataCacheEnabledSession, "true"},
+      {HiveConfig::kCacheMetadataSession, "true"},
+      {HiveConfig::kCacheIndexSession, "true"},
       {HiveConfig::kOrcFooterSpeculativeIoSizeSession,
        std::to_string(128UL << 10)},
       {HiveConfig::kParquetFooterSpeculativeIoSizeSession,
@@ -197,7 +201,8 @@ TEST(HiveConfigTest, overrideSession) {
   ASSERT_EQ(hiveConfig.loadQuantum(session.get()), 4 << 20);
   ASSERT_TRUE(hiveConfig.preserveFlatMapsInMemory(session.get()));
   ASSERT_TRUE(hiveConfig.indexEnabled(session.get()));
-  ASSERT_TRUE(hiveConfig.fileMetadataCacheEnabled(session.get()));
+  ASSERT_TRUE(hiveConfig.cacheMetadata(session.get()));
+  ASSERT_TRUE(hiveConfig.cacheIndex(session.get()));
   ASSERT_EQ(hiveConfig.orcFooterSpeculativeIoSize(session.get()), 128UL << 10);
   ASSERT_EQ(
       hiveConfig.parquetFooterSpeculativeIoSize(session.get()), 512UL << 10);

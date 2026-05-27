@@ -20,6 +20,7 @@
 #include "velox/exec/HashPartitionFunction.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/Spiller.h"
+#include "velox/vector/DecodedVector.h"
 
 namespace facebook::velox::exec {
 
@@ -117,6 +118,18 @@ class MarkDistinct : public Operator {
   bool yield_{false};
 
   std::vector<column_index_t> distinctKeyChannels_;
+
+  // Input channels for mask booleans. Empty for single-marker mode.
+  std::vector<column_index_t> maskChannels_;
+
+  // Cached byte offset of the per-group bitmask within a RowContainer row.
+  int32_t bitmaskOffset_{0};
+
+  int32_t numMasks() const {
+    return static_cast<int32_t>(maskChannels_.size());
+  }
+
+  std::vector<DecodedVector> decodedMasks_;
 };
 
 /// Spills the hash table contents (distinct keys) from MarkDistinct's
