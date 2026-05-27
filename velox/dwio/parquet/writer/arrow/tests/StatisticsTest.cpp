@@ -67,7 +67,7 @@ static FLBA fLBAFromString(const std::string& s) {
   return FLBA(ptr);
 }
 
-TEST(Comparison, SignedByteArray) {
+TEST(Comparison, signedByteArray) {
   // Signed byte array comparison is only used for Decimal comparison. When
   // decimals are encoded as byte arrays they use twos complement big-endian
   // encoded values. Comparisons of byte arrays of unequal types need to handle
@@ -126,7 +126,7 @@ TEST(Comparison, SignedByteArray) {
   }
 }
 
-TEST(Comparison, UnsignedByteArray) {
+TEST(Comparison, unsignedByteArray) {
   // Check if UTF-8 is compared using unsigned correctly.
   auto Comparator =
       makeComparator<ByteArrayType>(Type::kByteArray, SortOrder::kUnsigned);
@@ -151,7 +151,7 @@ TEST(Comparison, UnsignedByteArray) {
   ASSERT_TRUE(Comparator->compare(s1ba, s2ba));
 }
 
-TEST(Comparison, SignedFLBA) {
+TEST(Comparison, signedFLBA) {
   int size = 4;
   auto Comparator = makeComparator<FLBAType>(
       Type::kFixedLenByteArray, SortOrder::kSigned, size);
@@ -182,7 +182,7 @@ TEST(Comparison, SignedFLBA) {
   }
 }
 
-TEST(Comparison, UnsignedFLBA) {
+TEST(Comparison, unsignedFLBA) {
   int size = 10;
   auto Comparator = makeComparator<FLBAType>(
       Type::kFixedLenByteArray, SortOrder::kUnsigned, size);
@@ -200,7 +200,7 @@ TEST(Comparison, UnsignedFLBA) {
   ASSERT_TRUE(Comparator->compare(s1flba, s2flba));
 }
 
-TEST(Comparison, SignedInt96) {
+TEST(Comparison, signedInt96) {
   Int96 a{{1, 41, 14}}, b{{1, 41, 42}};
   Int96 aa{{1, 41, 14}}, bb{{1, 41, 14}};
   Int96 aaa{{1, 41, static_cast<uint32_t>(-14)}}, bbb{{1, 41, 42}};
@@ -212,7 +212,7 @@ TEST(Comparison, SignedInt96) {
   ASSERT_TRUE(Comparator->compare(aaa, bbb));
 }
 
-TEST(Comparison, UnsignedInt96) {
+TEST(Comparison, unsignedInt96) {
   Int96 a{{1, 41, 14}}, b{{1, static_cast<uint32_t>(-41), 42}};
   Int96 aa{{1, 41, 14}}, bb{{1, 41, static_cast<uint32_t>(-14)}};
   Int96 aaa, bbb;
@@ -249,7 +249,7 @@ TEST(Comparison, UnsignedInt96) {
   ASSERT_TRUE(Comparator->compare(aaa, bbb));
 }
 
-TEST(Comparison, SignedInt64) {
+TEST(Comparison, signedInt64) {
   int64_t a = 1, b = 4;
   int64_t aa = 1, bb = 1;
   int64_t aaa = -1, bbb = 1;
@@ -265,7 +265,7 @@ TEST(Comparison, SignedInt64) {
   ASSERT_TRUE(Comparator->compare(aaa, bbb));
 }
 
-TEST(Comparison, UnsignedInt64) {
+TEST(Comparison, unsignedInt64) {
   uint64_t a = 1, b = 4;
   uint64_t aa = 1, bb = 1;
   uint64_t aaa = 1, bbb = -1;
@@ -285,7 +285,7 @@ TEST(Comparison, UnsignedInt64) {
   ASSERT_TRUE(Comparator->compare(aaa, bbb));
 }
 
-TEST(Comparison, UnsignedInt32) {
+TEST(Comparison, unsignedInt32) {
   uint32_t a = 1, b = 4;
   uint32_t aa = 1, bb = 1;
   uint32_t aaa = 1, bbb = -1;
@@ -305,7 +305,7 @@ TEST(Comparison, UnsignedInt32) {
   ASSERT_TRUE(Comparator->compare(aaa, bbb));
 }
 
-TEST(Comparison, UnknownSortOrder) {
+TEST(Comparison, unknownSortOrder) {
   NodePtr Node = PrimitiveNode::make(
       "Unknown",
       Repetition::kRequired,
@@ -638,7 +638,7 @@ using Types = ::testing::Types<
 
 TYPED_TEST_SUITE(TestStatistics, Types);
 
-TYPED_TEST(TestStatistics, MinMaxEncode) {
+TYPED_TEST(TestStatistics, minMaxEncode) {
   this->setUpSchema(Repetition::kRequired);
   ASSERT_NO_FATAL_FAILURE(this->testMinMaxEncode());
 }
@@ -653,7 +653,7 @@ TYPED_TEST(TestStatistics, equals) {
   ASSERT_NO_FATAL_FAILURE(this->testEquals());
 }
 
-TYPED_TEST(TestStatistics, FullRoundtrip) {
+TYPED_TEST(TestStatistics, fullRoundtrip) {
   this->setUpSchema(Repetition::kOptional);
   ASSERT_NO_FATAL_FAILURE(this->testFullRoundtrip(100, 31));
   ASSERT_NO_FATAL_FAILURE(this->testFullRoundtrip(1000, 415));
@@ -839,19 +839,19 @@ class TestStatisticsHasFlag : public TestStatistics<TestType> {
 
 TYPED_TEST_SUITE(TestStatisticsHasFlag, Types);
 
-TYPED_TEST(TestStatisticsHasFlag, MergeDistinctCount) {
+TYPED_TEST(TestStatisticsHasFlag, mergeDistinctCount) {
   ASSERT_NO_FATAL_FAILURE(this->testMergeDistinctCount());
 }
 
-TYPED_TEST(TestStatisticsHasFlag, MergeNullCount) {
+TYPED_TEST(TestStatisticsHasFlag, mergeNullCount) {
   ASSERT_NO_FATAL_FAILURE(this->testMergeNullCount());
 }
 
-TYPED_TEST(TestStatisticsHasFlag, MergeMinMax) {
+TYPED_TEST(TestStatisticsHasFlag, mergeMinMax) {
   ASSERT_NO_FATAL_FAILURE(this->testMergeMinMax());
 }
 
-TYPED_TEST(TestStatisticsHasFlag, MissingNullCount) {
+TYPED_TEST(TestStatisticsHasFlag, missingNullCount) {
   ASSERT_NO_FATAL_FAILURE(this->testMissingNullCount());
 }
 
@@ -871,7 +871,7 @@ void assertStatsSet(
 }
 
 // Statistics are restricted for few types in older parquet version.
-TEST(CorruptStatistics, Basics) {
+TEST(CorruptStatistics, basics) {
   std::string createdBy = "parquet-mr version 1.8.0";
   ApplicationVersion version(createdBy);
   SchemaDescriptor schema;
@@ -923,7 +923,7 @@ TEST(CorruptStatistics, Basics) {
 }
 
 // Statistics for all types have no restrictions in newer parquet version.
-TEST(CorrectStatistics, Basics) {
+TEST(CorrectStatistics, basics) {
   std::string createdBy = "parquet-cpp version 1.3.0";
   ApplicationVersion version(createdBy);
   SchemaDescriptor schema;
@@ -1270,7 +1270,7 @@ void TestStatisticsSortOrder<FLBAType>::setValues() {
 
 TYPED_TEST_SUITE(TestStatisticsSortOrder, CompareTestTypes);
 
-TYPED_TEST(TestStatisticsSortOrder, MinMax) {
+TYPED_TEST(TestStatisticsSortOrder, minMax) {
   this->addNodes("Column ");
   this->setUpSchema();
   this->writeParquet();
@@ -1300,12 +1300,12 @@ void testByteArrayStatisticsFromArrow() {
   ASSERT_EQ(2, stats->nullCount());
 }
 
-TEST(testByteArrayStatisticsFromArrow, StringType) {
+TEST(testByteArrayStatisticsFromArrow, stringType) {
   // Part of ARROW-3246. Replicating TestStatisticsSortOrder test but via Arrow.
   testByteArrayStatisticsFromArrow<::arrow::StringType>();
 }
 
-TEST(testByteArrayStatisticsFromArrow, LargeStringType) {
+TEST(testByteArrayStatisticsFromArrow, largeStringType) {
   testByteArrayStatisticsFromArrow<::arrow::LargeStringType>();
 }
 
@@ -1506,10 +1506,10 @@ void checkExtrema() {
   }
 }
 
-TEST(TestStatistic, Int32Extrema) {
+TEST(TestStatistic, int32Extrema) {
   checkExtrema<Int32Type>();
 }
-TEST(TestStatistic, Int64Extrema) {
+TEST(TestStatistic, int64Extrema) {
   checkExtrema<Int64Type>();
 }
 
@@ -1559,16 +1559,16 @@ void checkNaNs() {
   EXPECT_EQ(otherStats->nanCount(), 2);
 }
 
-TEST(TestStatistic, NaNFloatValues) {
+TEST(TestStatistic, nanFloatValues) {
   checkNaNs<FloatType>();
 }
 
-TEST(TestStatistic, NaNDoubleValues) {
+TEST(TestStatistic, nanDoubleValues) {
   checkNaNs<DoubleType>();
 }
 
 // ARROW-7376.
-TEST(TestStatisticsSortOrderFloatNaN, NaNAndNullsInfiniteLoop) {
+TEST(TestStatisticsSortOrderFloatNaN, nanAndNullsInfiniteLoop) {
   constexpr int kNumValues = 8;
   NodePtr Node =
       PrimitiveNode::make("nan_float", Repetition::kOptional, Type::kFloat);
@@ -1636,11 +1636,11 @@ void checkNegativeZeroStats() {
   }
 }
 
-TEST(TestStatistics, FloatNegativeZero) {
+TEST(TestStatistics, floatNegativeZero) {
   checkNegativeZeroStats<FloatType>();
 }
 
-TEST(TestStatistics, DoubleNegativeZero) {
+TEST(TestStatistics, doubleNegativeZero) {
   checkNegativeZeroStats<DoubleType>();
 }
 
@@ -1696,16 +1696,16 @@ void checkInfinityStats() {
   }
 }
 
-TEST(TestStatistics, FloatInfinityValues) {
+TEST(TestStatistics, floatInfinityValues) {
   checkInfinityStats<FloatType>();
 }
 
-TEST(TestStatistics, DoubleInfinityValues) {
+TEST(TestStatistics, doubleInfinityValues) {
   checkInfinityStats<DoubleType>();
 }
 
 // Test infinity values with validity bitmap.
-TEST(TestStatistics, InfinityWithNullBitmap) {
+TEST(TestStatistics, infinityWithNullBitmap) {
   constexpr int kNumValues = 8;
   NodePtr Node = PrimitiveNode::make(
       "infinity_null_test", Repetition::kOptional, Type::kFloat);
@@ -1730,7 +1730,7 @@ TEST(TestStatistics, InfinityWithNullBitmap) {
 }
 
 // Test merging statistics with infinity values.
-TEST(TestStatistics, MergeInfinityStatistics) {
+TEST(TestStatistics, mergeInfinityStatistics) {
   NodePtr Node = PrimitiveNode::make(
       "merge_infinity", Repetition::kOptional, Type::kDouble);
   ColumnDescriptor descr(Node, 1, 1);
@@ -1756,7 +1756,7 @@ TEST(TestStatistics, MergeInfinityStatistics) {
   ASSERT_EQ(posInf, mergedStats->max());
 }
 
-TEST(TestStatistics, CleanInfinityStatistics) {
+TEST(TestStatistics, cleanInfinityStatistics) {
   constexpr int kNumValues = 4;
   NodePtr Node = PrimitiveNode::make(
       "clean_stat_nullopt", Repetition::kOptional, Type::kFloat);
@@ -1787,7 +1787,7 @@ TEST(TestStatistics, CleanInfinityStatistics) {
   }
 }
 
-TEST(TestStatistics, InfinityCleanStatisticValid) {
+TEST(TestStatistics, infinityCleanStatisticValid) {
   constexpr int kNumValues = 4;
   NodePtr Node = PrimitiveNode::make(
       "clean_stat_valid", Repetition::kOptional, Type::kDouble);
@@ -1813,7 +1813,7 @@ TEST(TestStatistics, InfinityCleanStatisticValid) {
 // TODO: disabled as it requires Arrow parquet data dir.
 // Test statistics for binary column with UNSIGNED sort order.
 /*
-TEST(TestStatisticsSortOrderMinMax, Unsigned) {
+TEST(TestStatisticsSortOrderMinMax, unsigned) {
   std::string dir_string(test::get_data_dir());
   std::stringstream ss;
   ss << dir_string << "/binary.parquet";
@@ -1840,7 +1840,7 @@ TEST(TestStatisticsSortOrderMinMax, Unsigned) {
   ASSERT_EQ(0x0b, stats->EncodeMax()[0]);
 }
 
-TEST(TestEncodedStatistics, CopySafe) {
+TEST(TestEncodedStatistics, copySafe) {
   EncodedStatistics encoded_statistics;
   encoded_statistics.set_max("abc");
   encoded_statistics.has_max = true;

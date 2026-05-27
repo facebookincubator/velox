@@ -59,7 +59,7 @@ class StripeDictionaryCache {
       EncodingKeyHash>
       intDictionaryFactories_;
 
-  VELOX_FRIEND_TEST(StripeDictionaryCacheTest, RegisterDictionary);
+  VELOX_FRIEND_TEST(StripeDictionaryCacheTest, registerDictionary);
 };
 
 } // namespace facebook::velox::dwrf

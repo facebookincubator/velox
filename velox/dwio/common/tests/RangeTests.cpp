@@ -23,7 +23,7 @@ using namespace ::testing;
 
 namespace facebook::velox::common {
 
-TEST(RangeTests, Add) {
+TEST(RangeTests, add) {
   Ranges ranges;
   VELOX_ASSERT_THROW(ranges.add(2, 1), "");
   ranges.add(2, 2);
@@ -50,7 +50,7 @@ TEST(RangeTests, Add) {
   ASSERT_EQ(ranges.size(), 0);
 }
 
-TEST(RangeTests, ForEach) {
+TEST(RangeTests, forEach) {
   Ranges ranges;
   ranges.add(1, 3);
   ranges.add(6, 9);
@@ -62,7 +62,7 @@ TEST(RangeTests, ForEach) {
   ASSERT_EQ(total, 24);
 }
 
-TEST(RangeTests, Filter) {
+TEST(RangeTests, filter) {
   auto r = Ranges::of(1, 10);
   auto r2 = r.filter([](auto /* unused */) { return true; });
   ASSERT_EQ(r2.size(), 9);

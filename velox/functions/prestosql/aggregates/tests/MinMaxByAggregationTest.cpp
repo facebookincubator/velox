@@ -2514,7 +2514,7 @@ TEST_F(MinMaxByTest, nans) {
   testNanFloatValues<double>();
 }
 
-TEST_F(MinMaxByTest, TimestampWithTimezone) {
+TEST_F(MinMaxByTest, timestampWithTimezone) {
   auto data = makeRowVector(
       {// output column for min_by/max_by
        makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6, 7, 8}),

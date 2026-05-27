@@ -436,7 +436,7 @@ class TimestampWriterIndexTest : public testing::Test,
   // is sufficient
 };
 
-TEST_F(TimestampWriterIndexTest, TestIndex) {
+TEST_F(TimestampWriterIndexTest, testIndex) {
   // Present Stream has 4. seconds and nanos are Ints with 3 each.
   // 4+3+3 = 10. There is no backfill.
   runTest(2, 10, 0, 0);
@@ -476,7 +476,7 @@ VELOX_TYPED_TEST_SUITE(
     IntegerColumnWriterDictionaryEncodingIndexTest,
     DictionaryTypes);
 
-TYPED_TEST(IntegerColumnWriterDictionaryEncodingIndexTest, WriteAllStreams) {
+TYPED_TEST(IntegerColumnWriterDictionaryEncodingIndexTest, writeAllStreams) {
   // Present stream uses 4 positions.
   // compressed size, uncompressed size, ByteRLE numLiterals,
   // Boolean 8-bitsRemaining
@@ -492,7 +492,7 @@ TYPED_TEST(IntegerColumnWriterDictionaryEncodingIndexTest, WriteAllStreams) {
   this->runTest(1, RECORD_POSITION_COUNT, BACKFILL_POSITION_COUNT, 100);
 }
 
-TYPED_TEST(IntegerColumnWriterDictionaryEncodingIndexTest, OmitInDictStream) {
+TYPED_TEST(IntegerColumnWriterDictionaryEncodingIndexTest, omitInDictStream) {
   // Present stream uses 4 positions.
   // compressed size, uncompressed size, ByteRLE numLiterals,
   // Boolean 8-bitsRemaining
@@ -533,7 +533,7 @@ class BoolColumnWriterEncodingIndexTest : public testing::Test,
   }
 };
 
-TEST_F(BoolColumnWriterEncodingIndexTest, TestIndex) {
+TEST_F(BoolColumnWriterEncodingIndexTest, testIndex) {
   // Boolean Stream uses one Stream for Presence and Other Stream for data
   // Each Stream has compressed size, uncompressed size, ByteRLE numLiterals,
   // Boolean 8-bitsRemaining , so 4+4 =8. It has no back fill streams.
@@ -569,7 +569,7 @@ class ByteColumnWriterEncodingIndexTest : public testing::Test,
   }
 };
 
-TEST_F(ByteColumnWriterEncodingIndexTest, TestIndex) {
+TEST_F(ByteColumnWriterEncodingIndexTest, testIndex) {
   // Byte Stream has presence Stream and data stream.
   // Present Stream has compressed size, uncompressed size, ByteRLE numLiterals,
   // Boolean 8-bitsRemaining (4)
@@ -630,7 +630,7 @@ class BinaryColumnWriterEncodingIndexTest : public testing::Test,
   }
 };
 
-TEST_F(BinaryColumnWriterEncodingIndexTest, TestIndex) {
+TEST_F(BinaryColumnWriterEncodingIndexTest, testIndex) {
   // Binary Stream has present, data and length.
   // Present Stream has compressed size, uncompressed size, ByteRLE numLiterals,
   // Boolean 8-bitsRemaining (4)
@@ -674,7 +674,7 @@ class FloatColumnWriterEncodingIndexTest : public testing::Test,
 using FloatTypes = ::testing::Types<float, double>;
 VELOX_TYPED_TEST_SUITE(FloatColumnWriterEncodingIndexTest, FloatTypes);
 
-TYPED_TEST(FloatColumnWriterEncodingIndexTest, TestIndex) {
+TYPED_TEST(FloatColumnWriterEncodingIndexTest, testIndex) {
   // Float Stream has present and data.
   // Present Stream has compressed size, uncompressed size, ByteRLE numLiterals,
   // Boolean 8-bitsRemaining (4)
@@ -868,7 +868,7 @@ class IntegerColumnWriterDirectEncodingIndexTest : public testing::Test {
   bool abandonDict_;
 };
 
-TEST_F(IntegerColumnWriterDirectEncodingIndexTest, ConvertFromDictionary) {
+TEST_F(IntegerColumnWriterDirectEncodingIndexTest, convertFromDictionary) {
   testForAllTypes(1, 6, 0);
   testForAllTypes(10, 6, 0);
   // 6 positions: {PRESENT, 4}, {DATA, 2}
@@ -876,7 +876,7 @@ TEST_F(IntegerColumnWriterDirectEncodingIndexTest, ConvertFromDictionary) {
   testForAllTypes(10, 6, 1);
 }
 
-TEST_F(IntegerColumnWriterDirectEncodingIndexTest, DirectWrites) {
+TEST_F(IntegerColumnWriterDirectEncodingIndexTest, directWrites) {
   // Same 6 positions but recorded at different points in time.
   testForAllTypes(1, 6, 2);
   testForAllTypes(10, 6, 100);
@@ -889,7 +889,7 @@ class IntegerColumnWriterAbandonDictionaryIndexTest
       : IntegerColumnWriterDirectEncodingIndexTest{true} {}
 };
 
-TEST_F(IntegerColumnWriterAbandonDictionaryIndexTest, AbandonDictionary) {
+TEST_F(IntegerColumnWriterAbandonDictionaryIndexTest, abandonDictionary) {
   testForAllTypes(1, 6, 0, abandonEveryWrite);
   testForAllTypes(10, 6, 0, abandonEveryWrite);
   // 6 positions: {PRESENT, 4}, {DATA, 2}
@@ -993,7 +993,7 @@ class StringColumnWriterDictionaryEncodingIndexTest : public testing::Test {
   std::shared_ptr<Config> config_;
 };
 
-TEST_F(StringColumnWriterDictionaryEncodingIndexTest, WriteAllStreams) {
+TEST_F(StringColumnWriterDictionaryEncodingIndexTest, writeAllStreams) {
   runTest(1, 17, 0);
   // 17 positions: {PRESENT, 4}, {STRIDE_DICT_DATA, 2}, {STRIDE_DICT_LENGTH, 3},
   // {stride dict size, 1}, {IN_DICTIONARY, 4}, {DATA, 3}
@@ -1001,7 +1001,7 @@ TEST_F(StringColumnWriterDictionaryEncodingIndexTest, WriteAllStreams) {
   runTest(1, 17, 100);
 }
 
-TEST_F(StringColumnWriterDictionaryEncodingIndexTest, OmitInDictStream) {
+TEST_F(StringColumnWriterDictionaryEncodingIndexTest, omitInDictStream) {
   runTest(2, 7, 0);
   // Writing the batch twice so that all values are in dictionary.
   // 7 positions: {PRESENT, 4}, {DATA, 3}
@@ -1179,7 +1179,7 @@ class StringColumnWriterDirectEncodingIndexTest : public testing::Test {
   bool abandonDict_;
 };
 
-TEST_F(StringColumnWriterDirectEncodingIndexTest, ConvertFromDictionary) {
+TEST_F(StringColumnWriterDirectEncodingIndexTest, convertFromDictionary) {
   runTest(1, 9, 0);
   runTest(10, 9, 0);
   // 9 positions: {PRESENT, 4}, {DATA, 2}, {DATA_LENGTH, 3}
@@ -1187,7 +1187,7 @@ TEST_F(StringColumnWriterDirectEncodingIndexTest, ConvertFromDictionary) {
   runTest(10, 9, 1);
 }
 
-TEST_F(StringColumnWriterDirectEncodingIndexTest, DirectWrites) {
+TEST_F(StringColumnWriterDirectEncodingIndexTest, directWrites) {
   // Same 9 positions but recorded at different points in time.
   runTest(1, 9, 2);
   runTest(10, 9, 100);
@@ -1200,7 +1200,7 @@ class StringColumnWriterAbandonDictionaryIndexTest
       : StringColumnWriterDirectEncodingIndexTest{true} {}
 };
 
-TEST_F(StringColumnWriterAbandonDictionaryIndexTest, AbandonDictionary) {
+TEST_F(StringColumnWriterAbandonDictionaryIndexTest, abandonDictionary) {
   runTest(1, 9, 0, abandonEveryWrite);
   runTest(10, 9, 0, abandonEveryWrite);
   // 9 positions: {PRESENT, 4}, {DATA, 2}, {DATA_LENGTH, 3}
@@ -1268,7 +1268,7 @@ class ListColumnWriterEncodingIndexTest : public testing::Test,
   }
 };
 
-TEST_F(ListColumnWriterEncodingIndexTest, TestIndex) {
+TEST_F(ListColumnWriterEncodingIndexTest, testIndex) {
   // List Stream has present and length.
   // Present Stream has compressed size, uncompressed size, ByteRLE numLiterals,
   // Boolean 8-bitsRemaining (4)
@@ -1343,7 +1343,7 @@ class MapColumnWriterEncodingIndexTest : public testing::Test,
   }
 };
 
-TEST_F(MapColumnWriterEncodingIndexTest, TestIndex) {
+TEST_F(MapColumnWriterEncodingIndexTest, testIndex) {
   // Map Stream has present and length.
   // Present Stream has compressed size, uncompressed size, ByteRLE numLiterals,
   // Boolean 8-bitsRemaining (4)
@@ -1433,7 +1433,7 @@ class FlatMapColumnWriterEncodingIndexTest : public testing::Test,
   }
 };
 
-TEST_F(FlatMapColumnWriterEncodingIndexTest, TestIndex) {
+TEST_F(FlatMapColumnWriterEncodingIndexTest, testIndex) {
   config_->set(Config::FLATTEN_MAP, true);
   config_->set(Config::MAP_FLAT_COLS, {0});
 
@@ -1495,7 +1495,7 @@ class StructColumnWriterEncodingIndexTest : public testing::Test,
   }
 };
 
-TEST_F(StructColumnWriterEncodingIndexTest, TestIndex) {
+TEST_F(StructColumnWriterEncodingIndexTest, testIndex) {
   // Struct Stream has present stream
   // Present Stream has compressed size, uncompressed size, ByteRLE numLiterals,
   // Boolean 8-bitsRemaining (4)

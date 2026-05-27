@@ -22,7 +22,7 @@
 using namespace facebook::velox::dwrf;
 using namespace facebook::velox::type::fbhive;
 
-TEST(ProtoUtilsTests, AllTypes) {
+TEST(ProtoUtilsTests, allTypes) {
   std::vector<std::string> types{
       "struct<a:boolean,b:tinyint,c:smallint,d:int,e:bigint,f:float,g:double,f:string,g:binary,h:timestamp>",
       "struct<a:map<int,array<struct<a:map<string,int>,b:array<int>>>>>"};
@@ -41,7 +41,7 @@ TEST(ProtoUtilsTests, AllTypes) {
   }
 }
 
-TEST(ProtoUtilsTests, Projection) {
+TEST(ProtoUtilsTests, projection) {
   HiveTypeParser parser;
   auto schema = parser.parse(
       "struct<a:boolean,b:tinyint,c:smallint,d:struct<a:int,b:int,c:int>>");

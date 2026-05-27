@@ -83,7 +83,7 @@ TEST_F(TraceUtilTest, traceDir) {
   }
 }
 
-TEST_F(TraceUtilTest, OperatorTraceSummary) {
+TEST_F(TraceUtilTest, operatorTraceSummary) {
   exec::trace::OperatorTraceSummary summary;
   summary.opType = "summary";
   summary.inputRows = 100;

@@ -393,7 +393,7 @@ TEST_F(SimdUtilTest, crc32) {
   EXPECT_EQ(checksum, 121285919);
 }
 
-TEST_F(SimdUtilTest, Batch64_assign) {
+TEST_F(SimdUtilTest, batch64_assign) {
   auto b = simd::Batch64<int32_t>::from({0, 1});
   EXPECT_EQ(b.data[0], 0);
   EXPECT_EQ(b.data[1], 1);
@@ -402,7 +402,7 @@ TEST_F(SimdUtilTest, Batch64_assign) {
   EXPECT_EQ(b.data[1], 1);
 }
 
-TEST_F(SimdUtilTest, Batch64_arithmetics) {
+TEST_F(SimdUtilTest, batch64_arithmetics) {
   auto b = simd::Batch64<int32_t>::from({0, 1});
   auto bb = b + 42;
   EXPECT_EQ(bb.data[0], 42);
@@ -412,7 +412,7 @@ TEST_F(SimdUtilTest, Batch64_arithmetics) {
   EXPECT_EQ(bb.data[1], 0);
 }
 
-TEST_F(SimdUtilTest, Batch64_memory) {
+TEST_F(SimdUtilTest, batch64_memory) {
   int32_t data[] = {0, 1};
   auto b = simd::Batch64<int32_t>::load_unaligned(data);
   EXPECT_EQ(b.data[0], 0);

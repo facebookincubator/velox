@@ -291,9 +291,9 @@ class BaseColumnWriter : public ColumnWriter {
   // in_map stream
   const std::function<void(IndexBuilder&)> onRecordPosition_;
 
-  VELOX_FRIEND_TEST(ColumnWriterTest, LowMemoryModeConfig);
-  VELOX_FRIEND_TEST(ColumnWriterTest, IntegerDictionaryEncodingEnabledConfig);
-  VELOX_FRIEND_TEST(ColumnWriterTest, StringDictionaryEncodingEnabledConfig);
+  VELOX_FRIEND_TEST(ColumnWriterTest, lowMemoryModeConfig);
+  VELOX_FRIEND_TEST(ColumnWriterTest, integerDictionaryEncodingEnabledConfig);
+  VELOX_FRIEND_TEST(ColumnWriterTest, stringDictionaryEncodingEnabledConfig);
   friend class ValueStatisticsBuilder;
   friend class ValueWriter;
 };

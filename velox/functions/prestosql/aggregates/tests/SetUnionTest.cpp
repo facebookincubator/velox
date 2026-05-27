@@ -606,7 +606,7 @@ TEST_F(SetUnionTest, nans) {
       {data}, {"c1"}, {"set_union(c0)"}, {"array_sort(a0)", "c1"}, {expected});
 }
 
-TEST_F(SetUnionTest, TimestampWithTimeZone) {
+TEST_F(SetUnionTest, timestampWithTimeZone) {
   // Global aggregation, Primitive type.
   auto data = makeRowVector({
       makeArrayVector<int64_t>(

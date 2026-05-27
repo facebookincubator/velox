@@ -24,7 +24,7 @@ using namespace ::testing;
 
 namespace facebook::velox::dwrf::utils {
 
-TEST(BulkBitIterator, Basic) {
+TEST(BulkBitIterator, basic) {
   std::vector<char> charBuffer1{
       std::numeric_limits<char>::max(), 102, 40, -120};
   std::vector<char> charBuffer2{125, 85, 42, std::numeric_limits<char>::min()};

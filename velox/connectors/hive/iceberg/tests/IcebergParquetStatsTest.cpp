@@ -560,7 +560,7 @@ TEST_F(IcebergParquetStatsTest, mixedDoubleFloat) {
   EXPECT_FLOAT_EQ(maxFloatVal, -std::numeric_limits<float>::infinity());
 }
 
-TEST_F(IcebergParquetStatsTest, NaN) {
+TEST_F(IcebergParquetStatsTest, nan) {
   constexpr vector_size_t size = 1'000;
   constexpr int32_t expectedNulls = 500;
   constexpr int32_t doubleColId = 1;

@@ -787,7 +787,7 @@ class DynamicQuantilePatternTest
     : public StatsReporterTest,
       public testing::WithParamInterface<DynamicQuantilePatternTestCase> {};
 
-TEST_P(DynamicQuantilePatternTest, PatternScenarios) {
+TEST_P(DynamicQuantilePatternTest, patternScenarios) {
   const auto& testCase = GetParam();
   testCase.testFunc(this);
 }

@@ -32,7 +32,7 @@ class DefaultFlushPolicyTest : public testing::Test {
   }
 };
 
-TEST_F(DefaultFlushPolicyTest, StripeProgressTest) {
+TEST_F(DefaultFlushPolicyTest, stripeProgressTest) {
   struct TestCase {
     const uint64_t stripeSizeThreshold;
     const int64_t stripeSize;
@@ -57,7 +57,7 @@ TEST_F(DefaultFlushPolicyTest, StripeProgressTest) {
   }
 }
 
-TEST_F(DefaultFlushPolicyTest, AdditionalCriteriaTest) {
+TEST_F(DefaultFlushPolicyTest, additionalCriteriaTest) {
   struct TestCase {
     const bool flushStripe;
     const bool overMemoryBudget;
@@ -134,7 +134,7 @@ TEST_F(DefaultFlushPolicyTest, AdditionalCriteriaTest) {
   }
 }
 
-TEST_F(DefaultFlushPolicyTest, EarlyDictionaryEvaluation) {
+TEST_F(DefaultFlushPolicyTest, earlyDictionaryEvaluation) {
   // Test the precedence of decisions.
   struct TestCase {
     dwio::common::StripeProgress stripeProgress;
@@ -237,7 +237,7 @@ TEST_F(DefaultFlushPolicyTest, EarlyDictionaryEvaluation) {
       FlushDecision::SKIP);
 }
 
-TEST_F(DefaultFlushPolicyTest, EmptyFile) {
+TEST_F(DefaultFlushPolicyTest, emptyFile) {
   // Empty vector creation succeeds.
   RowsPerStripeFlushPolicy policy({});
 
@@ -246,7 +246,7 @@ TEST_F(DefaultFlushPolicyTest, EmptyFile) {
       exception::LoggedException);
 }
 
-TEST_F(DefaultFlushPolicyTest, InvalidCases) {
+TEST_F(DefaultFlushPolicyTest, invalidCases) {
   // Vector with 0 rows, throws
   ASSERT_THROW(
       RowsPerStripeFlushPolicy policy({5, 7, 0, 10}),
@@ -254,7 +254,7 @@ TEST_F(DefaultFlushPolicyTest, InvalidCases) {
 }
 
 // RowsPerStripeFlushPolicy has no dictionary flush criteria.
-TEST_F(DefaultFlushPolicyTest, DictionaryCriteriaTest) {
+TEST_F(DefaultFlushPolicyTest, dictionaryCriteriaTest) {
   auto config = std::make_shared<Config>();
   WriterContext context{
       config, memory::memoryManager()->addRootPool("DictionaryCriteriaTest")};
@@ -294,7 +294,7 @@ TEST_F(DefaultFlushPolicyTest, DictionaryCriteriaTest) {
           context));
 }
 
-TEST_F(DefaultFlushPolicyTest, FlushTest) {
+TEST_F(DefaultFlushPolicyTest, flushTest) {
   RowsPerStripeFlushPolicy policy({5, 7, 12});
 
   ASSERT_FALSE(policy.shouldFlush(

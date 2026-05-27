@@ -49,7 +49,7 @@ class CommonTest : public ::testing::Test {
 
 TEST_F(
     CommonTest,
-    DwrfStreamIdentifierGetFormat_WithStreamTypes_GetCorrectFormat) {
+    dwrfStreamIdentifierGetFormat_WithStreamTypes_GetCorrectFormat) {
   EXPECT_EQ(
       DwrfStreamIdentifier(createDwrfStream({}, {}, {}, {})).format(),
       DwrfFormat::kDwrf);
@@ -58,7 +58,7 @@ TEST_F(
       DwrfStreamIdentifier(createOrcStream({}, {})).format(), DwrfFormat::kOrc);
 }
 
-TEST_F(CommonTest, DwrfStreamIdentifier_WithDwrfStream_GetCorrectInfo) {
+TEST_F(CommonTest, dwrfStreamIdentifier_WithDwrfStream_GetCorrectInfo) {
   auto streamId = DwrfStreamIdentifier(
       createDwrfStream(proto::Stream::Kind::Stream_Kind_DATA, 1, 2, 3));
 
@@ -69,7 +69,7 @@ TEST_F(CommonTest, DwrfStreamIdentifier_WithDwrfStream_GetCorrectInfo) {
   EXPECT_EQ(streamId.column(), 3);
 }
 
-TEST_F(CommonTest, DwrfStreamIdentifier_WithOrcStream_GetCorrectInfo) {
+TEST_F(CommonTest, dwrfStreamIdentifier_WithOrcStream_GetCorrectInfo) {
   auto streamId = DwrfStreamIdentifier(
       createOrcStream(proto::orc::Stream::Kind::Stream_Kind_DATA, 1));
 
@@ -83,7 +83,7 @@ TEST_F(CommonTest, DwrfStreamIdentifier_WithOrcStream_GetCorrectInfo) {
 
 TEST_F(
     CommonTest,
-    DwrfStreamIdentifierGetKind_WithAllStreamKinds_GetCorrectConversion) {
+    dwrfStreamIdentifierGetKind_WithAllStreamKinds_GetCorrectConversion) {
   // DWRF
   for (auto [dwrfStreamKind, veloxStreamKind] :
        std::vector<std::tuple<proto::Stream_Kind, StreamKind>>{
@@ -133,7 +133,7 @@ TEST_F(
 
 TEST_F(
     CommonTest,
-    EncodingKeyGetKindFor_WithAllStreamKinds_GetCorrectConversion) {
+    encodingKeyGetKindFor_WithAllStreamKinds_GetCorrectConversion) {
   // DWRF
   for (auto [dwrfStreamKind, veloxStreamKind] :
        std::vector<std::tuple<proto::Stream_Kind, StreamKind>>{

@@ -37,14 +37,14 @@ class FileMetadataTest : public ::testing::Test {
       StripeFooterWrapper(orcStripeFooter_);
 };
 
-TEST_F(FileMetadataTest, StripeFooterWrapper_GetFormat_CorrectFormat) {
+TEST_F(FileMetadataTest, stripeFooterWrapper_GetFormat_CorrectFormat) {
   EXPECT_EQ(dwrfStripeFooterWrapper_.format(), DwrfFormat::kDwrf);
   EXPECT_EQ(orcStripeFooterWrapper_.format(), DwrfFormat::kOrc);
 }
 
 TEST_F(
     FileMetadataTest,
-    StripeFooterWrapper_GetStripeFooter_ReturnsProtoTypes) {
+    stripeFooterWrapper_GetStripeFooter_ReturnsProtoTypes) {
   EXPECT_EQ(
       &dwrfStripeFooterWrapper_.getStripeFooterDwrf(), dwrfStripeFooter_.get());
   EXPECT_ANY_THROW(dwrfStripeFooterWrapper_.getStripeFooterOrc());
@@ -56,7 +56,7 @@ TEST_F(
 
 TEST_F(
     FileMetadataTest,
-    StripeFooterWrapper_GetStreamData_ReturnsCorrispondingProtoInfo) {
+    stripeFooterWrapper_GetStreamData_ReturnsCorrispondingProtoInfo) {
   // 2 streams with incrementing length for validation
   dwrfStripeFooter_->add_streams()->set_length(1);
   dwrfStripeFooter_->add_streams()->set_length(2);
@@ -92,7 +92,7 @@ TEST_F(
 
 TEST_F(
     FileMetadataTest,
-    StripeFooterWrapper_GetEncodings_ReturnsCorrispondingProtoInfo) {
+    stripeFooterWrapper_GetEncodings_ReturnsCorrispondingProtoInfo) {
   // 2 encoding with incrementing node for validation
   dwrfStripeFooter_->add_encoding()->set_kind(
       proto::ColumnEncoding_Kind::ColumnEncoding_Kind_DICTIONARY);
@@ -143,7 +143,7 @@ TEST_F(
 
 TEST_F(
     FileMetadataTest,
-    StripeFooterWrapper_GetEncryptionGroups_ReturnsCorrispondingProtoInfo) {
+    stripeFooterWrapper_GetEncryptionGroups_ReturnsCorrispondingProtoInfo) {
   // 2 encryption groups with incrementing group for validation
   dwrfStripeFooter_->add_encryptiongroups()->append("test_encryption_group_1");
   dwrfStripeFooter_->add_encryptiongroups()->append("test_encryption_group_2");

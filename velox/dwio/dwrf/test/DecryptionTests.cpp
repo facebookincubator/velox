@@ -28,7 +28,7 @@ using namespace facebook::velox::dwrf;
 using namespace facebook::velox::dwrf::encryption;
 using namespace facebook::velox::type::fbhive;
 
-TEST(Decryption, NotEncrypted) {
+TEST(Decryption, notEncrypted) {
   HiveTypeParser parser;
   auto type = parser.parse("struct<a:int>");
   proto::Footer footer;
@@ -39,7 +39,7 @@ TEST(Decryption, NotEncrypted) {
   ASSERT_FALSE(handler->isEncrypted());
 }
 
-TEST(Decryption, NoKeyProvider) {
+TEST(Decryption, noKeyProvider) {
   HiveTypeParser parser;
   auto type = parser.parse("struct<a:int>");
   proto::Footer footer;
@@ -51,7 +51,7 @@ TEST(Decryption, NoKeyProvider) {
       DecryptionHandler::create(footer, &factory), exception::LoggedException);
 }
 
-TEST(Decryption, EmptyGroup) {
+TEST(Decryption, emptyGroup) {
   HiveTypeParser parser;
   auto type = parser.parse("struct<a:int>");
   proto::Footer footer;
@@ -64,7 +64,7 @@ TEST(Decryption, EmptyGroup) {
       DecryptionHandler::create(footer, &factory), exception::LoggedException);
 }
 
-TEST(Decryption, EmptyNodes) {
+TEST(Decryption, emptyNodes) {
   HiveTypeParser parser;
   auto type = parser.parse("struct<a:int>");
   proto::Footer footer;
@@ -79,7 +79,7 @@ TEST(Decryption, EmptyNodes) {
       DecryptionHandler::create(footer, &factory), exception::LoggedException);
 }
 
-TEST(Decryption, StatsMismatch) {
+TEST(Decryption, statsMismatch) {
   HiveTypeParser parser;
   auto type = parser.parse("struct<a:int>");
   proto::Footer footer;
@@ -97,7 +97,7 @@ TEST(Decryption, StatsMismatch) {
       DecryptionHandler::create(footer, &factory), exception::LoggedException);
 }
 
-TEST(Decryption, KeyExistenceMismatch) {
+TEST(Decryption, keyExistenceMismatch) {
   HiveTypeParser parser;
   auto type = parser.parse("struct<a:int>");
   proto::Footer footer;
@@ -118,7 +118,7 @@ TEST(Decryption, KeyExistenceMismatch) {
       DecryptionHandler::create(footer, &factory), exception::LoggedException);
 }
 
-TEST(Decryption, ReuseStripeKey) {
+TEST(Decryption, reuseStripeKey) {
   HiveTypeParser parser;
   auto type = parser.parse("struct<a:int>");
   proto::Footer footer;
@@ -138,7 +138,7 @@ TEST(Decryption, ReuseStripeKey) {
   ASSERT_EQ(td.getKey(), "foobar");
 }
 
-TEST(Decryption, StripeKeyMismatch) {
+TEST(Decryption, stripeKeyMismatch) {
   HiveTypeParser parser;
   auto type = parser.parse("struct<a:int>");
   proto::Footer footer;
@@ -157,7 +157,7 @@ TEST(Decryption, StripeKeyMismatch) {
       DecryptionHandler::create(footer, &factory), exception::LoggedException);
 }
 
-TEST(Decryption, Basic) {
+TEST(Decryption, basic) {
   HiveTypeParser parser;
   auto type = parser.parse("struct<a:int,b:float,c:string,d:double>");
   proto::Footer footer;
@@ -187,7 +187,7 @@ TEST(Decryption, Basic) {
   }
 }
 
-TEST(Decryption, NestedType) {
+TEST(Decryption, nestedType) {
   HiveTypeParser parser;
   auto type = parser.parse(
       "struct<a:int,b:map<float,map<int,double>>,c:struct<a:string,b:int>,d:array<double>>");
@@ -228,7 +228,7 @@ TEST(Decryption, NestedType) {
   }
 }
 
-TEST(Decryption, RootNode) {
+TEST(Decryption, rootNode) {
   HiveTypeParser parser;
   auto type = parser.parse("struct<a:int,b:int>");
   proto::Footer footer;
@@ -245,7 +245,7 @@ TEST(Decryption, RootNode) {
   ASSERT_EQ(handler->getEncryptionGroupCount(), 1);
 }
 
-TEST(Decryption, GroupOverlap) {
+TEST(Decryption, groupOverlap) {
   HiveTypeParser parser;
   auto type = parser.parse("struct<a:struct<a:float,b:double>>");
   proto::Footer footer;

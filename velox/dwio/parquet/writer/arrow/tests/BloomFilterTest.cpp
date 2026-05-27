@@ -42,7 +42,7 @@
 namespace facebook::velox::parquet::arrow {
 namespace test {
 
-TEST(ConstructorTest, TestBloomFilter) {
+TEST(ConstructorTest, testBloomFilter) {
   BlockSplitBloomFilter BloomFilter;
   EXPECT_NO_THROW(BloomFilter.init(1000));
 
@@ -58,7 +58,7 @@ TEST(ConstructorTest, TestBloomFilter) {
 
 // The BasicTest is used to test basic operations including InsertHash,
 // FindHash. And serializing and de-serializing.
-TEST(BasicTest, TestBloomFilter) {
+TEST(BasicTest, testBloomFilter) {
   const std::vector<uint32_t> kBloomFilterSizes = {
       32, 64, 128, 256, 512, 1024, 2048};
   const std::vector<int32_t> kIntInserts = {
@@ -148,7 +148,7 @@ std::string getRandomString(uint32_t length) {
   return ret;
 }
 
-TEST(FPPTest, TestBloomFilter) {
+TEST(FPPTest, testBloomFilter) {
   // It counts the number of times FindHash returns true.
   int exist = 0;
 
@@ -203,7 +203,7 @@ TEST(FPPTest, TestBloomFilter) {
 // Step 2: Insert "hello", "parquet", "bloom", "filter" to Bloom filter.
 // Step 3: Call writeTo API to write to File.
 /*
-TEST(CompatibilityTest, TestBloomFilter) {
+TEST(CompatibilityTest, testBloomFilter) {
   const std::string test_string[4] = {"hello", "parquet", "bloom", "filter"};
   const std::string bloom_filter_test_binary =
       std::string(test::get_data_dir()) + "/bloom_filter.xxhash.bin";
@@ -263,7 +263,7 @@ uint8_t*>(test_string[i].c_str()));
 // Where ndv is the number of distinct values and fpp is the false positive.
 // Probability. Also it is used to test whether OptimalNumOfBits returns value.
 // Between [MINIMUM_BLOOM_FILTER_SIZE, MAXIMUM_BLOOM_FILTER_SIZE].
-TEST(OptimalValueTest, TestBloomFilter) {
+TEST(OptimalValueTest, testBloomFilter) {
   auto testOptimalNumEstimation = [](uint32_t ndv,
                                      double fpp,
                                      uint32_t numBits) {
@@ -345,7 +345,7 @@ const int64_t HASHES_OF_LOOPING_BYTES_WITH_SEED_0[32] = {
  *     }
  * }
  */
-TEST(XxHashTest, TestBloomFilter) {
+TEST(XxHashTest, testBloomFilter) {
   constexpr int kNumValues = 32;
   uint8_t bytes[kNumValues] = {};
 
@@ -361,7 +361,7 @@ TEST(XxHashTest, TestBloomFilter) {
 }
 
 // Same as TestBloomFilter but using Batch interface.
-TEST(XxHashTest, TestBloomFilterHashes) {
+TEST(XxHashTest, testBloomFilterHashes) {
   constexpr int kNumValues = 32;
   uint8_t bytes[kNumValues] = {};
 
@@ -415,7 +415,7 @@ using BloomFilterTestTypes = ::testing::Types<
 
 TYPED_TEST_SUITE(TestBatchBloomFilter, BloomFilterTestTypes);
 
-TYPED_TEST(TestBatchBloomFilter, Basic) {
+TYPED_TEST(TestBatchBloomFilter, basic) {
   using Type = typename TypeParam::CType;
   std::vector<Type> testData = TestFixture::generateTestData();
   BlockSplitBloomFilter batchInsertFilter;

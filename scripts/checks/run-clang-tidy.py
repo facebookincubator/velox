@@ -22,6 +22,10 @@ import os
 import util
 
 
+# clang-tidy doesn't support CUDA compiler flags and CUDA headers.
+DEFAULT_EXCLUDE_DIRS = ["cudf/", "wave/"]
+
+
 class Multimap(dict):
     def __setitem__(self, key, value):
         if key not in self:
@@ -30,7 +34,26 @@ class Multimap(dict):
             self[key].append(value)
 
 
-def git_changed_lines(commit):
+def should_exclude(file, exclude_dirs):
+    return any(exclude_dir in file for exclude_dir in exclude_dirs)
+
+
+def get_exclude_dirs(exclude_dirs):
+    return list(dict.fromkeys(DEFAULT_EXCLUDE_DIRS + (exclude_dirs or [])))
+
+
+def is_supported_file(file, exclude_dirs):
+    # Exclude files in exclude_dirs.
+    # Exclude *-inl.h files: they are designed to be included from their corresponding header
+    # and cannot be compiled as standalone translation units.
+    return (
+        re.match(r".*(\.cpp|\.h|\.hpp)$", file)
+        and not should_exclude(file, exclude_dirs)
+        and not file.endswith("-inl.h")
+    )
+
+
+def git_changed_lines(commit, exclude_dirs):
     file = ""
     changed_lines = Multimap()
 
@@ -45,16 +68,7 @@ def git_changed_lines(commit):
         match = re.match(r"^\+\+\+ b/(.*(\.cpp|\.h|\.hpp))$", line)
         if match:
             matched_file = match.group(1)
-            # Exclude files in cudf, wave, and torchwave directories
-            # as clang-tidy doesn't support CUDA compiler flags and CUDA
-            # headers. Exclude *-inl.h files: they are designed to be
-            # included from their corresponding header and cannot be
-            # compiled as standalone translation units.
-            if (
-                "cudf/" not in matched_file
-                and "wave/" not in matched_file
-                and not matched_file.endswith("-inl.h")
-            ):
+            if is_supported_file(matched_file, exclude_dirs):
                 file = matched_file
 
         match = re.match(r"^@@", line)
@@ -78,30 +92,22 @@ def check_output(output):
 
 
 def tidy(args):
+    exclude_dirs = get_exclude_dirs(args.exclude_dirs)
     files = util.input_files(args.files)
-    files = [file for file in files if re.match(r".*(\.cpp|\.h|\.hpp)$", file)]
-
-    # Exclude files in cudf, wave, and torchwave directories
-    # as clang-tidy doesn't support CUDA compiler flags and CUDA headers
-    files = [file for file in files if "cudf/" not in file and "wave/" not in file]
-
-    # Exclude *-inl.h files: they are designed to be included from their
-    # corresponding header and cannot be compiled as standalone translation
-    # units (see git_changed_lines for rationale).
-    files = [file for file in files if not file.endswith("-inl.h")]
+    files = [file for file in files if is_supported_file(file, exclude_dirs)]
 
     in_gha = os.environ.get("GITHUB_ACTIONS") is not None
-    changed_lines = git_changed_lines(args.commit)
-
+    changed_lines = git_changed_lines(args.commit, exclude_dirs)
+    filtered_files = [file for file in files if file in changed_lines]
     line_filter = json.dumps(
-        [{"name": key, "lines": value} for key, value in changed_lines.items()]
+        [{"name": file, "lines": changed_lines[file]} for file in filtered_files]
     )
-    filtered_files = [*changed_lines.keys()]
+    lines = f"'--line-filter={line_filter}'"
+
     if len(filtered_files) == 0:
         return 0
 
     fix = "--fix" if args.fix == "fix" else ""
-    lines = f"'--line-filter={line_filter}'" if args.commit is not None else ""
 
     ok = True
     build_path = args.p or os.getenv("BUILD_PATH")
@@ -142,9 +148,16 @@ def tidy(args):
 def parse_args():
     global parser
     parser = argparse.ArgumentParser(description="Clang Tidy Utility")
-    parser.add_argument("--commit")
+    parser.add_argument("--commit", required=True)
     parser.add_argument("--fix")
     parser.add_argument("-p", help="Path containing 'compile_commands.json'")
+    parser.add_argument(
+        "--exclude-dir",
+        action="append",
+        default=[],
+        dest="exclude_dirs",
+        help="Additional path substring to exclude from clang-tidy.",
+    )
 
     parser.add_argument("files", metavar="FILES", nargs="+", help="files to process")
 

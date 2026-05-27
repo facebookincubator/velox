@@ -30,7 +30,7 @@ class TestStringDictionaryEncoder : public ::testing::Test {
   }
 };
 
-TEST_F(TestStringDictionaryEncoder, AddKey) {
+TEST_F(TestStringDictionaryEncoder, addKey) {
   struct TestCase {
     explicit TestCase(
         const std::vector<std::string_view>& addKeySequence,
@@ -58,7 +58,7 @@ TEST_F(TestStringDictionaryEncoder, AddKey) {
   }
 }
 
-TEST_F(TestStringDictionaryEncoder, GetIndex) {
+TEST_F(TestStringDictionaryEncoder, getIndex) {
   struct TestCase {
     explicit TestCase(
         const std::vector<std::string_view>& addKeySequence,
@@ -106,7 +106,7 @@ TEST_F(TestStringDictionaryEncoder, GetIndex) {
   }
 }
 
-TEST_F(TestStringDictionaryEncoder, GetCount) {
+TEST_F(TestStringDictionaryEncoder, getCount) {
   struct TestCase {
     explicit TestCase(
         const std::vector<std::string_view>& addKeySequence,
@@ -156,7 +156,7 @@ TEST_F(TestStringDictionaryEncoder, GetCount) {
   }
 }
 
-TEST_F(TestStringDictionaryEncoder, GetStride) {
+TEST_F(TestStringDictionaryEncoder, getStride) {
   struct TestCase {
     explicit TestCase(
         const std::vector<std::pair<std::string_view, size_t>>& addKeySequence,
@@ -216,7 +216,7 @@ std::string genPaddedIntegerString(size_t integer, size_t length) {
   return padding + origString;
 }
 
-TEST_F(TestStringDictionaryEncoder, Clear) {
+TEST_F(TestStringDictionaryEncoder, clear) {
   auto pool = memory::memoryManager()->addLeafPool();
   StringDictionaryEncoder stringDictEncoder{*pool, *pool};
   std::string baseString{"jjkkll"};
@@ -238,7 +238,7 @@ TEST_F(TestStringDictionaryEncoder, Clear) {
   EXPECT_LT(pool->usedBytes(), peakMemory);
 }
 
-TEST_F(TestStringDictionaryEncoder, MemBenchmark) {
+TEST_F(TestStringDictionaryEncoder, memBenchmark) {
   auto pool = memory::memoryManager()->addLeafPool();
   StringDictionaryEncoder stringDictEncoder{*pool, *pool};
   std::string baseString{"jjkkll"};
@@ -249,7 +249,7 @@ TEST_F(TestStringDictionaryEncoder, MemBenchmark) {
   LOG(INFO) << "Total memory bytes: " << pool->usedBytes();
 }
 
-TEST_F(TestStringDictionaryEncoder, Limit) {
+TEST_F(TestStringDictionaryEncoder, limit) {
   auto pool = memory::memoryManager()->addLeafPool();
   StringDictionaryEncoder encoder{*pool, *pool};
   encoder.addKey(std::string_view{"abc"}, 0);

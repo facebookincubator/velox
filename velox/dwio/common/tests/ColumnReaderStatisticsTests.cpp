@@ -24,7 +24,7 @@ using namespace facebook::velox::dwio::common;
 using facebook::velox::RuntimeMetric;
 using facebook::velox::TypeKind;
 
-TEST(IoCounterTest, BasicOperations) {
+TEST(IoCounterTest, basicOperations) {
   facebook::velox::io::IoCounter counter;
 
   EXPECT_EQ(counter.sum(), 0);
@@ -39,7 +39,7 @@ TEST(IoCounterTest, BasicOperations) {
   EXPECT_EQ(counter.max(), 5'000);
 }
 
-TEST(IoCounterTest, ConcurrentAccess) {
+TEST(IoCounterTest, concurrentAccess) {
   facebook::velox::io::IoCounter counter;
   constexpr int kNumThreads = 4;
   constexpr int kIterationsPerThread = 1'000;
@@ -61,7 +61,7 @@ TEST(IoCounterTest, ConcurrentAccess) {
   EXPECT_EQ(counter.count(), kNumThreads * kIterationsPerThread);
 }
 
-TEST(ColumnMetricsSetTest, GetOrCreate) {
+TEST(ColumnMetricsSetTest, getOrCreate) {
   ColumnMetricsSet metricsSet;
 
   auto* result = metricsSet.getOrCreate(1);
@@ -75,7 +75,7 @@ TEST(ColumnMetricsSetTest, GetOrCreate) {
   EXPECT_NE(result2, result);
 }
 
-TEST(ColumnMetricsSetTest, GetOrCreateWithTypeKind) {
+TEST(ColumnMetricsSetTest, getOrCreateWithTypeKind) {
   ColumnMetricsSet metricsSet;
 
   // Pass type when calling getOrCreate.
@@ -99,7 +99,7 @@ TEST(ColumnMetricsSetTest, GetOrCreateWithTypeKind) {
   EXPECT_EQ(metrics["column_2.VARCHAR.decompressCPUTimeNanos"].sum, 2'000);
 }
 
-TEST(ColumnMetricsSetTest, ToRuntimeMetrics) {
+TEST(ColumnMetricsSetTest, toRuntimeMetrics) {
   ColumnMetricsSet metricsSet;
 
   // Empty stats produces empty result.
@@ -136,7 +136,7 @@ TEST(ColumnMetricsSetTest, ToRuntimeMetrics) {
   EXPECT_EQ(result.count("column_99.DOUBLE.decompressCPUTimeNanos"), 0);
 }
 
-TEST(ColumnMetricsSetTest, ToRuntimeMetricsWithInvalidType) {
+TEST(ColumnMetricsSetTest, toRuntimeMetricsWithInvalidType) {
   ColumnMetricsSet metricsSet;
 
   // Add timing data without type information (INVALID type).
@@ -150,7 +150,7 @@ TEST(ColumnMetricsSetTest, ToRuntimeMetricsWithInvalidType) {
   EXPECT_EQ(result["column_1.INVALID.decompressCPUTimeNanos"].sum, 5'000);
 }
 
-TEST(ColumnMetricsSetTest, ToRuntimeMetricsWithDecodeTime) {
+TEST(ColumnMetricsSetTest, toRuntimeMetricsWithDecodeTime) {
   ColumnMetricsSet metricsSet;
 
   // Add both decompress and decode timing data.
@@ -178,7 +178,7 @@ TEST(ColumnMetricsSetTest, ToRuntimeMetricsWithDecodeTime) {
   EXPECT_EQ(result["column_2.VARCHAR.decodeCPUTimeNanos"].count, 1);
 }
 
-TEST(RuntimeStatisticsTest, ToRuntimeMetricMap) {
+TEST(RuntimeStatisticsTest, toRuntimeMetricMap) {
   RuntimeStatistics stats;
 
   // Empty stats produces empty result.
@@ -213,7 +213,7 @@ TEST(RuntimeStatisticsTest, ToRuntimeMetricMap) {
   EXPECT_EQ(result["column_1.BIGINT.decodeCPUTimeNanos"].count, 1);
 }
 
-TEST(ColumnMetricsSetConcurrencyTest, ConcurrentGetOrCreate) {
+TEST(ColumnMetricsSetConcurrencyTest, concurrentGetOrCreate) {
   ColumnMetricsSet metricsSet;
   constexpr int kNumThreads = 4;
   constexpr int kNumColumns = 10;
@@ -247,7 +247,7 @@ TEST(ColumnMetricsSetConcurrencyTest, ConcurrentGetOrCreate) {
   }
 }
 
-TEST(IoCounterTest, MergeStats) {
+TEST(IoCounterTest, mergeStats) {
   facebook::velox::io::IoCounter counter1;
   counter1.increment(5'000);
   counter1.increment(3'000);
@@ -261,7 +261,7 @@ TEST(IoCounterTest, MergeStats) {
   EXPECT_EQ(counter1.count(), 3);
 }
 
-TEST(ColumnMetricsSetTest, MergeFromWithOverlappingNodeIds) {
+TEST(ColumnMetricsSetTest, mergeFromWithOverlappingNodeIds) {
   ColumnMetricsSet src;
   auto* srcCol1 = src.getOrCreate(1, TypeKind::BIGINT);
   srcCol1->decompressCPUTimeNanos.increment(5'000);
@@ -292,7 +292,7 @@ TEST(ColumnMetricsSetTest, MergeFromWithOverlappingNodeIds) {
   EXPECT_EQ(result["column_2.VARCHAR.decodeCPUTimeNanos"].count, 1);
 }
 
-TEST(ColumnMetricsSetTest, MergeFromWithDisjointNodeIds) {
+TEST(ColumnMetricsSetTest, mergeFromWithDisjointNodeIds) {
   ColumnMetricsSet src;
   auto* srcCol3 = src.getOrCreate(3, TypeKind::DOUBLE);
   srcCol3->decompressCPUTimeNanos.increment(3'000);
@@ -318,7 +318,7 @@ TEST(ColumnMetricsSetTest, MergeFromWithDisjointNodeIds) {
   EXPECT_EQ(result["column_4.BOOLEAN.decompressCPUTimeNanos"].sum, 4'000);
 }
 
-TEST(ColumnMetricsSetTest, MergeFromEmpty) {
+TEST(ColumnMetricsSetTest, mergeFromEmpty) {
   ColumnMetricsSet nonEmpty;
   auto* col = nonEmpty.getOrCreate(1, TypeKind::BIGINT);
   col->decompressCPUTimeNanos.increment(5'000);
@@ -339,7 +339,7 @@ TEST(ColumnMetricsSetTest, MergeFromEmpty) {
   EXPECT_EQ(result["column_1.BIGINT.decompressCPUTimeNanos"].sum, 5'000);
 }
 
-TEST(ColumnReaderStatisticsTest, MergeFromWithColumnMetrics) {
+TEST(ColumnReaderStatisticsTest, mergeFromWithColumnMetrics) {
   ColumnReaderStatistics src;
   src.flattenStringDictionaryValues = 100;
   src.columnMetricsSet.emplace();
@@ -359,7 +359,7 @@ TEST(ColumnReaderStatisticsTest, MergeFromWithColumnMetrics) {
   EXPECT_EQ(result["column_1.BIGINT.decompressCPUTimeNanos"].sum, 1'000);
 }
 
-TEST(ColumnReaderStatisticsTest, MergeFromBothWithColumnMetrics) {
+TEST(ColumnReaderStatisticsTest, mergeFromBothWithColumnMetrics) {
   ColumnReaderStatistics src;
   src.flattenStringDictionaryValues = 100;
   src.columnMetricsSet.emplace();
@@ -382,7 +382,7 @@ TEST(ColumnReaderStatisticsTest, MergeFromBothWithColumnMetrics) {
   EXPECT_EQ(result["column_1.BIGINT.decompressCPUTimeNanos"].sum, 3'000);
 }
 
-TEST(ColumnReaderStatisticsTest, MergeFromWithoutColumnMetrics) {
+TEST(ColumnReaderStatisticsTest, mergeFromWithoutColumnMetrics) {
   ColumnReaderStatistics src;
   src.flattenStringDictionaryValues = 100;
 

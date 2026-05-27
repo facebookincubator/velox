@@ -31,7 +31,7 @@ class DataBufferHolderTest : public testing::Test {
   std::shared_ptr<MemoryPool> pool_{memoryManager()->addLeafPool()};
 };
 
-TEST_F(DataBufferHolderTest, InputCheck) {
+TEST_F(DataBufferHolderTest, inputCheck) {
   VELOX_ASSERT_THROW((DataBufferHolder{*pool_, 0}), "");
   VELOX_ASSERT_THROW((DataBufferHolder{*pool_, 1024, 2048}), "");
   VELOX_ASSERT_THROW((DataBufferHolder{*pool_, 1024, 1024, 1.1f}), "");
@@ -47,7 +47,7 @@ TEST_F(DataBufferHolderTest, InputCheck) {
   }
 }
 
-TEST_F(DataBufferHolderTest, TakeAndGetBuffer) {
+TEST_F(DataBufferHolderTest, takeAndGetBuffer) {
   MemorySink sink{1024, {.pool = pool_.get()}};
   DataBufferHolder holder{*pool_, 1024, 0, 2.0f, &sink};
   DataBuffer<char> buffer{*pool_, 512};
@@ -69,7 +69,7 @@ TEST_F(DataBufferHolderTest, TakeAndGetBuffer) {
   ASSERT_EQ(holder.getBuffers().size(), 0);
 }
 
-TEST_F(DataBufferHolderTest, TruncateBufferHolder) {
+TEST_F(DataBufferHolderTest, truncateBufferHolder) {
   DataBufferHolder holder{*pool_, 1024};
   constexpr size_t BUF_SIZE = 10;
   DataBuffer<char> buffer{*pool_, BUF_SIZE};
@@ -93,7 +93,7 @@ TEST_F(DataBufferHolderTest, TruncateBufferHolder) {
   }
 }
 
-TEST_F(DataBufferHolderTest, TakeAndGetBufferNoOutput) {
+TEST_F(DataBufferHolderTest, takeAndGetBufferNoOutput) {
   DataBufferHolder holder{*pool_, 1024};
   DataBuffer<char> buffer{*pool_, 512};
   std::memset(buffer.data(), 'a', 512);
@@ -122,7 +122,7 @@ TEST_F(DataBufferHolderTest, TakeAndGetBufferNoOutput) {
   }
 }
 
-TEST_F(DataBufferHolderTest, Reset) {
+TEST_F(DataBufferHolderTest, reset) {
   DataBufferHolder holder{*pool_, 1024};
   DataBuffer<char> buffer{*pool_, 512};
   std::memset(buffer.data(), 'a', 512);
@@ -135,7 +135,7 @@ TEST_F(DataBufferHolderTest, Reset) {
   ASSERT_FALSE(holder.isSuppressed());
 }
 
-TEST_F(DataBufferHolderTest, TryResize) {
+TEST_F(DataBufferHolderTest, tryResize) {
   DataBufferHolder holder{*pool_, 1024, 128};
 
   auto runTest = [&](uint64_t size,
@@ -248,7 +248,7 @@ TEST_F(DataBufferHolderTest, TryResize) {
       1024 + headerSize);
 }
 
-TEST_F(DataBufferHolderTest, TestGrowRatio) {
+TEST_F(DataBufferHolderTest, testGrowRatio) {
   DataBufferHolder holder{*pool_, 1024, 16, 4.0f};
   DataBuffer<char> buffer{*pool_, 16};
   ASSERT_TRUE(holder.tryResize(buffer, 0, 1));

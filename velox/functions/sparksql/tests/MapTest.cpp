@@ -45,7 +45,7 @@ class MapTest : public SparkFunctionBaseTest {
   }
 };
 
-TEST_F(MapTest, Basics) {
+TEST_F(MapTest, basics) {
   auto inputVector1 = makeNullableFlatVector<int64_t>({1, 2, 3});
   auto inputVector2 = makeNullableFlatVector<int64_t>({4, 5, 6});
   auto mapVector =
@@ -53,7 +53,7 @@ TEST_F(MapTest, Basics) {
   testMap("map(c0, c1)", {inputVector1, inputVector2}, mapVector);
 }
 
-TEST_F(MapTest, Nulls) {
+TEST_F(MapTest, nulls) {
   auto inputVector1 = makeNullableFlatVector<int64_t>({1, 2, 3});
   auto inputVector2 =
       makeNullableFlatVector<int64_t>({std::nullopt, 5, std::nullopt});

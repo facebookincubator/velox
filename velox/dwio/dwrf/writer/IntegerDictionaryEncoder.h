@@ -277,9 +277,9 @@ class IntegerDictionaryEncoder : public AbstractIntegerDictionaryEncoder {
   }
 
  private:
-  VELOX_FRIEND_TEST(TestIntegerDictionaryEncoder, Clear);
-  VELOX_FRIEND_TEST(TestIntegerDictionaryEncoder, GetCount);
-  VELOX_FRIEND_TEST(WriterContextTest, GetIntDictionaryEncoder);
+  VELOX_FRIEND_TEST(TestIntegerDictionaryEncoder, clear);
+  VELOX_FRIEND_TEST(TestIntegerDictionaryEncoder, getCount);
+  VELOX_FRIEND_TEST(WriterContextTest, getIntDictionaryEncoder);
 
   // TODO: partially specialize for integers only.
   template <typename T>

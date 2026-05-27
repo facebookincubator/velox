@@ -33,7 +33,7 @@ class TestIntegerDictionaryEncoder : public ::testing::Test {
   }
 };
 
-TEST_F(TestIntegerDictionaryEncoder, AddKey) {
+TEST_F(TestIntegerDictionaryEncoder, addKey) {
   struct TestCase {
     explicit TestCase(
         const std::vector<int64_t>& addKeySequence,
@@ -61,7 +61,7 @@ TEST_F(TestIntegerDictionaryEncoder, AddKey) {
   }
 }
 
-TEST_F(TestIntegerDictionaryEncoder, GetCount) {
+TEST_F(TestIntegerDictionaryEncoder, getCount) {
   struct TestCase {
     explicit TestCase(
         const std::vector<int64_t>& addKeySequence,
@@ -99,7 +99,7 @@ TEST_F(TestIntegerDictionaryEncoder, GetCount) {
   }
 }
 
-TEST_F(TestIntegerDictionaryEncoder, GetTotalCount) {
+TEST_F(TestIntegerDictionaryEncoder, getTotalCount) {
   struct TestCase {
     explicit TestCase(
         const std::vector<int64_t>& addKeySequence,
@@ -126,7 +126,7 @@ TEST_F(TestIntegerDictionaryEncoder, GetTotalCount) {
   }
 }
 
-TEST_F(TestIntegerDictionaryEncoder, Clear) {
+TEST_F(TestIntegerDictionaryEncoder, clear) {
   auto pool = memoryManager()->addLeafPool();
   {
     IntegerDictionaryEncoder<int64_t> intDictEncoder{*pool, *pool};
@@ -207,7 +207,7 @@ TEST_F(TestIntegerDictionaryEncoder, Clear) {
   }
 }
 
-TEST_F(TestIntegerDictionaryEncoder, RepeatedFlush) {
+TEST_F(TestIntegerDictionaryEncoder, repeatedFlush) {
   auto pool = memoryManager()->addLeafPool();
   IntegerDictionaryEncoder<int64_t> intDictEncoder{*pool, *pool};
   std::vector<int> keys{0, 1, 4, 9, 16, 25, 9, 1};
@@ -233,7 +233,7 @@ TEST_F(TestIntegerDictionaryEncoder, RepeatedFlush) {
   EXPECT_ANY_THROW(intDictEncoder.getLookupTable());
 }
 
-TEST_F(TestIntegerDictionaryEncoder, Limit) {
+TEST_F(TestIntegerDictionaryEncoder, limit) {
   auto pool = memoryManager()->addLeafPool();
   IntegerDictionaryEncoder<int16_t> intDictEncoder{*pool, *pool};
   for (size_t iter = 0; iter < 2; ++iter) {
@@ -310,13 +310,13 @@ void testGetSortedIndexLookupTable() {
   }
 }
 
-TEST_F(TestIntegerDictionaryEncoder, GetSortedIndexLookupTable) {
+TEST_F(TestIntegerDictionaryEncoder, getSortedIndexLookupTable) {
   testGetSortedIndexLookupTable<int16_t>();
   testGetSortedIndexLookupTable<int32_t>();
   testGetSortedIndexLookupTable<int64_t>();
 }
 
-TEST_F(TestIntegerDictionaryEncoder, ShortIntegerDictionary) {
+TEST_F(TestIntegerDictionaryEncoder, shortIntegerDictionary) {
   // DictionaryEncoding lookupTable can contain the index into dictionary
   // or the actual value. For short integer, index can be  [0,2^16-1]
   // and the values can be from [-2^15, 2^15-1]. Integer writers always
@@ -494,7 +494,7 @@ void testInfrequentKeyOptimization() {
   }
 }
 
-TEST_F(TestIntegerDictionaryEncoder, InfrequentKeyOptimization) {
+TEST_F(TestIntegerDictionaryEncoder, infrequentKeyOptimization) {
   testInfrequentKeyOptimization<int16_t>();
   testInfrequentKeyOptimization<int32_t>();
   testInfrequentKeyOptimization<int64_t>();

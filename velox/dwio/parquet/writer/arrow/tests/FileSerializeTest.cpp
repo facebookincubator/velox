@@ -340,57 +340,57 @@ typedef ::testing::Types<
 
 TYPED_TEST_SUITE(TestSerialize, TestTypes);
 
-TYPED_TEST(TestSerialize, SmallFileUncompressed) {
+TYPED_TEST(TestSerialize, smallFileUncompressed) {
   ASSERT_NO_FATAL_FAILURE(this->fileSerializeTest(Compression::UNCOMPRESSED));
 }
 
-TYPED_TEST(TestSerialize, TooFewRows) {
+TYPED_TEST(TestSerialize, tooFewRows) {
   std::vector<int64_t> numRows = {100, 100, 100, 99};
   ASSERT_THROW(this->unequalNumRows(100, numRows), ParquetException);
   ASSERT_THROW(this->unequalNumRowsBuffered(100, numRows), ParquetException);
 }
 
-TYPED_TEST(TestSerialize, TooManyRows) {
+TYPED_TEST(TestSerialize, tooManyRows) {
   std::vector<int64_t> numRows = {100, 100, 100, 101};
   ASSERT_THROW(this->unequalNumRows(101, numRows), ParquetException);
   ASSERT_THROW(this->unequalNumRowsBuffered(101, numRows), ParquetException);
 }
 
-TYPED_TEST(TestSerialize, ZeroRows) {
+TYPED_TEST(TestSerialize, zeroRows) {
   ASSERT_NO_THROW(this->zeroRowsRowGroup());
 }
 
-TYPED_TEST(TestSerialize, RepeatedTooFewRows) {
+TYPED_TEST(TestSerialize, repeatedTooFewRows) {
   ASSERT_THROW(this->repeatedUnequalRows(), ParquetException);
 }
 
-TYPED_TEST(TestSerialize, SmallFileSnappy) {
+TYPED_TEST(TestSerialize, smallFileSnappy) {
   ASSERT_NO_FATAL_FAILURE(this->fileSerializeTest(Compression::SNAPPY));
 }
 
 #ifdef ARROW_WITH_BROTLI
-TYPED_TEST(TestSerialize, SmallFileBrotli) {
+TYPED_TEST(TestSerialize, smallFileBrotli) {
   ASSERT_NO_FATAL_FAILURE(this->fileSerializeTest(Compression::BROTLI));
 }
 #endif
 
-TYPED_TEST(TestSerialize, SmallFileGzip) {
+TYPED_TEST(TestSerialize, smallFileGzip) {
   ASSERT_NO_FATAL_FAILURE(this->fileSerializeTest(Compression::GZIP));
 }
 
-TYPED_TEST(TestSerialize, SmallFileLz4) {
+TYPED_TEST(TestSerialize, smallFileLz4) {
   ASSERT_NO_FATAL_FAILURE(this->fileSerializeTest(Compression::LZ4));
 }
 
-TYPED_TEST(TestSerialize, SmallFileLz4Hadoop) {
+TYPED_TEST(TestSerialize, smallFileLz4Hadoop) {
   ASSERT_NO_FATAL_FAILURE(this->fileSerializeTest(Compression::LZ4_HADOOP));
 }
 
-TYPED_TEST(TestSerialize, SmallFileZstd) {
+TYPED_TEST(TestSerialize, smallFileZstd) {
   ASSERT_NO_FATAL_FAILURE(this->fileSerializeTest(Compression::ZSTD));
 }
 
-TEST(TestBufferedRowGroupWriter, DisabledDictionary) {
+TEST(TestBufferedRowGroupWriter, disabledDictionary) {
   // PARQUET-1706:
   // Wrong dictionary_page_offset when writing only data pages via.
   // BufferedPageWriter.
@@ -419,7 +419,7 @@ TEST(TestBufferedRowGroupWriter, DisabledDictionary) {
   ASSERT_FALSE(rgReader->metadata()->columnChunk(0)->hasDictionaryPage());
 }
 
-TEST(TestBufferedRowGroupWriter, MultiPageDisabledDictionary) {
+TEST(TestBufferedRowGroupWriter, multiPageDisabledDictionary) {
   constexpr int kValueCount = 10000;
   constexpr int kPageSize = 16384;
   auto sink = createOutputStream();
@@ -471,7 +471,7 @@ TEST(TestBufferedRowGroupWriter, MultiPageDisabledDictionary) {
   }
 }
 
-TEST(ParquetRoundtrip, AllNulls) {
+TEST(ParquetRoundtrip, allNulls) {
   auto primitiveNode = PrimitiveNode::make(
       "nulls", Repetition::kOptional, nullptr, Type::kInt32);
   schema::NodeVector columns({primitiveNode});

@@ -44,7 +44,7 @@ class LayoutPlannerTest : public testing::Test {
 };
 } // namespace
 
-TEST_F(LayoutPlannerTest, CreateNodeToColumnIdMapping) {
+TEST_F(LayoutPlannerTest, createNodeToColumnIdMapping) {
   testCreateNodeToColumnIdMapping(ROW({BOOLEAN()}), {{0, 0}, {1, 0}});
   testCreateNodeToColumnIdMapping(
       ROW(
@@ -96,7 +96,7 @@ TEST_F(LayoutPlannerTest, CreateNodeToColumnIdMapping) {
        {17, 5}});
 }
 
-TEST_F(LayoutPlannerTest, Basic) {
+TEST_F(LayoutPlannerTest, basic) {
   auto config = std::make_shared<Config>();
   config->set(
       Config::COMPRESSION, common::CompressionKind::CompressionKind_NONE);

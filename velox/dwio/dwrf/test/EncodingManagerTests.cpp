@@ -24,7 +24,7 @@
 using namespace ::testing;
 
 namespace facebook::velox::dwrf {
-TEST(TestEncodingIter, Ctor) {
+TEST(TestEncodingIter, ctor) {
   proto::StripeFooter footer;
   std::vector<proto::StripeEncryptionGroup> encryptionGroups;
   // footer []
@@ -212,7 +212,7 @@ TEST(TestEncodingIter, Ctor) {
 
 // The Ctor test has covered most iterator adjustments. Suffices
 // to then just sanity test pass-in values.
-TEST(TestEncodingIter, EncodingIterBeginAndEnd) {
+TEST(TestEncodingIter, encodingIterBeginAndEnd) {
   proto::StripeFooter footer;
   footer.add_encoding();
   std::vector<proto::StripeEncryptionGroup> encryptionGroups;
@@ -279,7 +279,7 @@ void testEncodingIter(
 }
 } // namespace
 
-TEST(TestEncodingManager, EncodingIter) {
+TEST(TestEncodingManager, encodingIter) {
   testEncodingIter({{1, 0}}, {});
   testEncodingIter({}, {{{1, 0}}});
   testEncodingIter({{1, 0}}, {{{2, 1}, {2, 3}}});

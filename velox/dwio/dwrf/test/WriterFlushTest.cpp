@@ -271,7 +271,7 @@ class DummyWriter : public velox::dwrf::Writer {
   MOCK_METHOD0(resetImpl, void());
 
   friend class WriterFlushTestHelper;
-  VELOX_FRIEND_TEST(TestWriterFlush, CheckAgainstMemoryBudget);
+  VELOX_FRIEND_TEST(TestWriterFlush, checkAgainstMemoryBudget);
 };
 
 // Big idea is to directly manipulate context states (num rows) + memory pool
@@ -496,7 +496,7 @@ class TestWriterFlush : public testing::Test {
 };
 
 // This test checks against constructed test cases.
-TEST_F(TestWriterFlush, CheckAgainstMemoryBudget) {
+TEST_F(TestWriterFlush, checkAgainstMemoryBudget) {
   auto pool = MockMemoryPool::create();
   {
     auto writer = WriterFlushTestHelper::prepWriter(pool, 1024);
@@ -646,7 +646,7 @@ TEST_F(TestWriterFlush, CheckAgainstMemoryBudget) {
 }
 
 // Tests the number of stripes produced based on random results.
-TEST_F(TestWriterFlush, MemoryBasedFlushRandom) {
+TEST_F(TestWriterFlush, memoryBasedFlushRandom) {
   struct TestCase {
     TestCase(
         uint32_t seed,

@@ -172,10 +172,10 @@ class StringDictionaryEncoder {
   }
 
  private:
-  VELOX_FRIEND_TEST(TestStringDictionaryEncoder, GetCount);
-  VELOX_FRIEND_TEST(TestStringDictionaryEncoder, GetIndex);
-  VELOX_FRIEND_TEST(TestStringDictionaryEncoder, GetStride);
-  VELOX_FRIEND_TEST(TestStringDictionaryEncoder, Clear);
+  VELOX_FRIEND_TEST(TestStringDictionaryEncoder, getCount);
+  VELOX_FRIEND_TEST(TestStringDictionaryEncoder, getIndex);
+  VELOX_FRIEND_TEST(TestStringDictionaryEncoder, getStride);
+  VELOX_FRIEND_TEST(TestStringDictionaryEncoder, clear);
 
   // Intended for testing only.
   uint32_t getIndex(std::string_view sv) {

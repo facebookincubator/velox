@@ -237,7 +237,7 @@ class ReaderBaseTest : public Test {
   }
 };
 
-TEST_F(ReaderBaseTest, InvalidPostScriptThrows) {
+TEST_F(ReaderBaseTest, invalidPostScriptThrows) {
   VELOX_ASSERT_THROW(
       createCorruptedFileReader(1'000'000, 0),
       "Corrupted file, footer size is invalid");
