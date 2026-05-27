@@ -89,7 +89,7 @@ function install_build_prerequisites {
     wget
 
   install_uv
-  uv_install cmake==3.30.4
+  uv_install cmake==4.3.2
 
   install_gcc11_if_needed
 
