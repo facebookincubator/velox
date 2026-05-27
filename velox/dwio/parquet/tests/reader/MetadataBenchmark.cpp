@@ -14,8 +14,10 @@
  * limitations under the License.
  */
 
-#include <folly/Benchmark.h>
-#include <folly/init/Init.h>
+#include <chrono>
+#include <cstdio>
+#include <string>
+#include <vector>
 
 #include "velox/dwio/parquet/reader/Metadata.h"
 #include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
@@ -74,38 +76,48 @@ thrift::FileMetaData makeFooter(size_t numColumns, size_t numRowGroups) {
   return metadata;
 }
 
-void runEstimate(size_t numColumns, size_t numRowGroups) {
-  folly::BenchmarkSuspender suspender;
+void run(const char* label, size_t numColumns, size_t numRowGroups, int iters) {
   auto footer = makeFooter(numColumns, numRowGroups);
   FileMetaDataPtr ptr(&footer);
-  suspender.dismiss();
-  auto bytes = ptr.estimateFileMetadataSize();
-  folly::doNotOptimizeAway(bytes);
+  // Warm caches.
+  for (int i = 0; i < std::max(1, iters / 10); ++i) {
+    auto bytes = ptr.estimateFileMetadataSize();
+    asm volatile("" : : "g"(bytes) : "memory");
+  }
+  auto start = std::chrono::steady_clock::now();
+  size_t total = 0;
+  for (int i = 0; i < iters; ++i) {
+    total += ptr.estimateFileMetadataSize();
+  }
+  auto end = std::chrono::steady_clock::now();
+  asm volatile("" : : "g"(total) : "memory");
+  auto totalNanos =
+      std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+  double perCallNs = static_cast<double>(totalNanos) / iters;
+  // Reported MB matches what would be passed to reportExternalAllocation.
+  double estMb = ptr.estimateFileMetadataSize() / (1024.0 * 1024.0);
+  std::printf(
+      "%-10s columns=%-5zu row_groups=%-5zu chunks=%-9zu  per_call=%9.2f us  "
+      "estimate=%6.1f MB\n",
+      label,
+      numColumns,
+      numRowGroups,
+      numColumns * numRowGroups,
+      perCallNs / 1000.0,
+      estMb);
 }
 
 } // namespace
 
-// Mirrors the per-call cost of estimateFileMetadataSize() across
-// realistic footer shapes:
-//   small  - 10 columns x  4 row groups (typical narrow file)
-//   medium - 100 columns x 50 row groups
-//   wide   - 6879 columns x 147 row groups (the OOM pathology)
-BENCHMARK(estimateSmall) {
-  runEstimate(10, 4);
-}
-
-BENCHMARK(estimateMedium) {
-  runEstimate(100, 50);
-}
-
-BENCHMARK(estimateWide) {
-  runEstimate(6879, 147);
-}
-
 } // namespace facebook::velox::parquet
 
-int main(int argc, char** argv) {
-  folly::Init init{&argc, &argv};
-  folly::runBenchmarks();
+int main() {
+  using namespace facebook::velox::parquet;
+  std::printf(
+      "Per-call cost of estimateFileMetadataSize() across footer shapes.\n"
+      "Heap-payload sizes chosen to defeat SSO so heap dereferences are paid.\n\n");
+  run("small", 10, 4, 100'000);
+  run("medium", 100, 50, 5'000);
+  run("wide", 6879, 147, 20);
   return 0;
 }

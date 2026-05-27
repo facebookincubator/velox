@@ -57,12 +57,7 @@ if(VELOX_ENABLE_BENCHMARKS)
   target_link_libraries(velox_dwio_parquet_reader_benchmark velox_dwio_parquet_reader_benchmark_lib)
 
   add_executable(velox_dwio_parquet_metadata_benchmark MetadataBenchmark.cpp)
-  target_link_libraries(
-    velox_dwio_parquet_metadata_benchmark
-    velox_dwio_native_parquet_reader
-    Folly::follybenchmark
-    Folly::folly
-  )
+  target_link_libraries(velox_dwio_parquet_metadata_benchmark velox_dwio_native_parquet_reader)
 endif()
 
 add_executable(
