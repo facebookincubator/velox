@@ -14,7 +14,10 @@
  * limitations under the License.
  */
 #include "velox/exec/WindowPartition.h"
-#include "velox/exec/WindowPartitionComputation.h"
+#include "velox/exec/KRangeFrameBound.h"
+#include "velox/exec/PeerGroupComputation.h"
+
+#include <algorithm>
 
 namespace facebook::velox::exec {
 
@@ -132,6 +135,27 @@ void WindowPartition::extractNulls(
       nullsBuffer);
 }
 
+namespace {
+
+std::pair<vector_size_t, vector_size_t> findMinMaxFrameBounds(
+    const SelectivityVector& validRows,
+    const BufferPtr& frameStarts,
+    const BufferPtr& frameEnds) {
+  auto rawFrameStarts = frameStarts->as<vector_size_t>();
+  auto rawFrameEnds = frameEnds->as<vector_size_t>();
+
+  auto firstValidRow = validRows.begin();
+  vector_size_t minFrame = rawFrameStarts[firstValidRow];
+  vector_size_t maxFrame = rawFrameEnds[firstValidRow];
+  validRows.applyToSelected([&](auto i) {
+    minFrame = std::min(minFrame, rawFrameStarts[i]);
+    maxFrame = std::max(maxFrame, rawFrameEnds[i]);
+  });
+  return {minFrame, maxFrame};
+}
+
+} // namespace
+
 std::optional<std::pair<vector_size_t, vector_size_t>>
 WindowPartition::extractNulls(
     column_index_t col,
@@ -140,8 +164,8 @@ WindowPartition::extractNulls(
     const BufferPtr& frameEnds,
     BufferPtr* nulls) const {
   VELOX_CHECK(validRows.hasSelections(), "Buffer has no active rows");
-  auto [minFrame, maxFrame] = FrameBoundSearch::findMinMaxFrameBounds(
-      validRows, frameStarts, frameEnds);
+  auto [minFrame, maxFrame] =
+      findMinMaxFrameBounds(validRows, frameStarts, frameEnds);
 
   // Add 1 since maxFrame is the index of the frame end row.
   auto framesSize = maxFrame - minFrame + 1;
@@ -195,10 +219,6 @@ class WindowPartition::RowContainerPeerAccessor {
         partition_.previousRow_, rowAt(row));
   }
 
-  void clearPreviousRow() {
-    partition_.removePreviousRow();
-  }
-
   bool rowsEqual(vector_size_t lhs, vector_size_t rhs) const {
     return !partition_.compareRowsWithSortKeys(rowAt(lhs), rowAt(rhs));
   }
@@ -219,14 +239,25 @@ std::pair<vector_size_t, vector_size_t> WindowPartition::computePeerBuffers(
     vector_size_t* rawPeerStarts,
     vector_size_t* rawPeerEnds) {
   RowContainerPeerAccessor rows{*this};
-  return PeerGroupComputation::computeBuffers(
+  auto result = PeerGroupComputation::compute(
       rows, start, end, prevPeerStart, prevPeerEnd, rawPeerStarts, rawPeerEnds);
+  if (result.previousRowConsumed) {
+    removePreviousRow();
+  }
+  return {result.peerStart, result.peerEnd};
 }
 
-class WindowPartition::RowContainerFrameAccessor {
+class WindowPartition::RowContainerKRangeFrameAccessor {
  public:
-  explicit RowContainerFrameAccessor(const WindowPartition& partition)
-      : partition_(partition) {}
+  RowContainerKRangeFrameAccessor(
+      const WindowPartition& partition,
+      column_index_t orderByColumn,
+      column_index_t frameColumn)
+      : partition_(partition),
+        orderByColumn_(orderByColumn),
+        mappedFrameColumn_(partition.inputMapping_[frameColumn]),
+        orderByRowColumn_(partition.data_->columnAt(orderByColumn)),
+        frameRowColumn_(partition.columns_[frameColumn]) {}
 
   vector_size_t startRow() const {
     return partition_.startRow_;
@@ -236,61 +267,34 @@ class WindowPartition::RowContainerFrameAccessor {
     return partition_.startRow_ + partition_.partition_.size();
   }
 
-  column_index_t orderByColumn() const {
-    return partition_.sortKeyInfo_[0].first;
-  }
-
-  core::SortOrder sortOrder() const {
-    return partition_.sortKeyInfo_[0].second;
-  }
-
-  TypePtr frameColumnType(column_index_t frameColumn) const {
-    return partition_.data_
-        ->columnTypes()[partition_.inputMapping_[frameColumn]];
-  }
-
   std::optional<int32_t> compareFrameValue(
       vector_size_t orderByRow,
       vector_size_t frameValueRow,
-      column_index_t orderByColumn,
-      column_index_t frameColumn,
       const CompareFlags& flags) const {
     return partition_.data_->compare(
         rowAt(orderByRow),
         rowAt(frameValueRow),
-        orderByColumn,
-        partition_.inputMapping_[frameColumn],
+        orderByColumn_,
+        mappedFrameColumn_,
         flags);
   }
 
-  template <typename T>
-  bool isInvalidNanFrameBound(
-      vector_size_t row,
-      column_index_t orderByColumn,
-      column_index_t frameColumn) const {
-    const auto* partitionRow = rowAt(row);
-    return partition_.data_->isNanAt<T>(
-               partitionRow,
-               partition_.data_->columnAt(
-                   partition_.inputMapping_[frameColumn])) &&
-        !partition_.data_->isNanAt<T>(
-            partitionRow, partition_.data_->columnAt(orderByColumn));
+  bool frameValueIsNull(vector_size_t row) const {
+    return isNullAt(rowAt(row), frameRowColumn_);
   }
 
-  void checkFrameAndOrderNulls(
-      vector_size_t row,
-      column_index_t orderByColumn,
-      column_index_t frameColumn) const {
-    const auto* partitionRow = rowAt(row);
-    const auto frameRowColumn = partition_.columns_[frameColumn];
-    const auto orderByRowColumn = partition_.data_->columnAt(orderByColumn);
-    VELOX_DCHECK_EQ(
-        RowContainer::isNullAt(
-            partitionRow, frameRowColumn.nullByte(), frameRowColumn.nullMask()),
-        RowContainer::isNullAt(
-            partitionRow,
-            orderByRowColumn.nullByte(),
-            orderByRowColumn.nullMask()));
+  bool orderByValueIsNull(vector_size_t row) const {
+    return isNullAt(rowAt(row), orderByRowColumn_);
+  }
+
+  template <typename T>
+  bool frameValueIsNan(vector_size_t row) const {
+    return partition_.data_->isNanAt<T>(rowAt(row), frameRowColumn_);
+  }
+
+  template <typename T>
+  bool orderByValueIsNan(vector_size_t row) const {
+    return partition_.data_->isNanAt<T>(rowAt(row), orderByRowColumn_);
   }
 
  private:
@@ -298,7 +302,15 @@ class WindowPartition::RowContainerFrameAccessor {
     return partition_.partition_[row - partition_.startRow_];
   }
 
+  static bool isNullAt(const char* row, RowColumn column) {
+    return RowContainer::isNullAt(row, column.nullByte(), column.nullMask());
+  }
+
   const WindowPartition& partition_;
+  const column_index_t orderByColumn_;
+  const column_index_t mappedFrameColumn_;
+  const RowColumn orderByRowColumn_;
+  const RowColumn frameRowColumn_;
 };
 
 void WindowPartition::computeKRangeFrameBounds(
@@ -310,12 +322,17 @@ void WindowPartition::computeKRangeFrameBounds(
     const vector_size_t* rawPeerBuffer,
     vector_size_t* rawFrameBounds,
     SelectivityVector& validFrames) const {
-  RowContainerFrameAccessor rows{*this};
-  FrameBoundSearch::computeKRangeFrameBounds(
+  const auto orderByColumn = sortKeyInfo_[0].first;
+  const auto sortOrder = sortKeyInfo_[0].second;
+  const auto frameType = data_->columnTypes()[inputMapping_[frameColumn]];
+
+  RowContainerKRangeFrameAccessor rows{*this, orderByColumn, frameColumn};
+  KRangeFrameBound::compute(
       rows,
       isStartBound,
       isPreceding,
-      frameColumn,
+      sortOrder,
+      frameType,
       startRow,
       numRows,
       rawPeerBuffer,

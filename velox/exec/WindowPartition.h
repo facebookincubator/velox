@@ -184,8 +184,8 @@ class WindowPartition {
   // Adapts RowContainer-backed rows to peer group computation.
   class RowContainerPeerAccessor;
 
-  // Adapts RowContainer-backed rows to RANGE frame bound search.
-  class RowContainerFrameAccessor;
+  // Adapts RowContainer-backed rows to k RANGE frame bound computation.
+  class RowContainerKRangeFrameAccessor;
 
   bool compareRowsWithSortKeys(const char* lhs, const char* rhs) const;
 
