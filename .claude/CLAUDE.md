@@ -32,8 +32,9 @@ python3 scripts/review/post.py <github-pr-url> <event> <body-file>
 # Events: APPROVE, REQUEST_CHANGES, COMMENT
 ```
 
-Always draft the review body in `/tmp/` and get approval before calling
-`post.py`.
+Always draft the review body in `~/.claude/review-drafts/pr-NNNNN-rN-vN.md`.
+The `/pr-review` skill creates the directory on first use. Always get
+maintainer approval before calling `post.py`.
 
 ### Review style
 
