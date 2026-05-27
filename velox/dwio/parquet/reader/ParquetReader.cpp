@@ -16,7 +16,10 @@
 
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 
+#include <glog/logging.h>
+#include <thrift/TApplicationException.h>
 #include <thrift/protocol/TCompactProtocol.h> //@manual
+#include <unordered_map>
 
 #include "velox/dwio/common/StatisticsBuilder.h"
 #include "velox/dwio/parquet/reader/ParquetColumnReader.h"
@@ -1308,7 +1311,8 @@ class ParquetRowReader::Impl {
         columnReaderStats_,
         readerBase_->fileMetaData(),
         readerBase->sessionTimezone(),
-        options_.timestampPrecision());
+        options_.timestampPrecision(),
+        &readerBase_->bufferedInput());
     requestedType_ = options_.requestedType() ? options_.requestedType()
                                               : readerBase_->schema();
     columnReader_ = ParquetColumnReader::build(
