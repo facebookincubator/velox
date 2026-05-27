@@ -1854,22 +1854,21 @@ TEST_F(HashJoinPeerBarrierDeadlockTest, earlyLimitPeerBarrierDeadlock) {
   params.queryConfigs[core::QueryConfig::kPreferredOutputBatchRows] = "1";
   params.queryConfigs[core::QueryConfig::kParallelOutputJoinBuildRowsEnabled] =
       "true";
-  params.planNode =
-      PlanBuilder(planNodeIdGenerator)
-          .values(probeVectors)
-          .localPartition({"t0"})
-          .hashJoin(
-              {"t0"},
-              {"u0"},
-              PlanBuilder(planNodeIdGenerator)
-                  .values(buildVectors)
-                  .localPartition({})
-                  .planNode(),
-              "",
-              {"t0", "u0"},
-              core::JoinType::kRight)
-          .limit(0, 1, /*isPartial=*/true)
-          .planNode();
+  params.planNode = PlanBuilder(planNodeIdGenerator)
+                        .values(probeVectors)
+                        .localPartition({"t0"})
+                        .hashJoin(
+                            {"t0"},
+                            {"u0"},
+                            PlanBuilder(planNodeIdGenerator)
+                                .values(buildVectors)
+                                .localPartition({})
+                                .planNode(),
+                            "",
+                            {"t0", "u0"},
+                            core::JoinType::kRight)
+                        .limit(0, 1, /*isPartial=*/true)
+                        .planNode();
   auto cursor = TaskCursor::create(params);
   auto task = cursor->task();
   std::atomic<bool> done{false};

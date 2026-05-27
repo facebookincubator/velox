@@ -1858,6 +1858,8 @@ void HashProbe::noMoreInputInternal() {
           shouldBlock ? promises_ : promises,
           peers,
           &released)) {
+    // We participated in the barrier, so close() must not disarm it later.
+    barrierReached_ = true;
     if (released) {
       // Barrier was disarmed by a peer that closed without reaching it.
       // Skip last-prober work and finish; build-side output coordination
@@ -1875,6 +1877,9 @@ void HashProbe::noMoreInputInternal() {
     return;
   }
 
+  // Last prober: we contributed to the barrier count, so close() must skip
+  // the disarm step that would otherwise poison the released flag.
+  barrierReached_ = true;
   VELOX_CHECK(promises.empty());
   lastProber_ = true;
   joinBridge_->resetUnclaimedRowContainerId();
@@ -2328,12 +2333,17 @@ void HashProbe::checkMaxSpillLevel(
 }
 
 void HashProbe::close() {
-  // Disarm the peer-synchronization barrier so that any peer drivers
-  // waiting at, or about to reach, the barrier proceed without blocking.
-  // This prevents kWaitForPeers deadlock when this driver terminates
-  // without first running noMoreInput() (i.e., the barrier counter for
-  // this driver is never incremented).
-  operatorCtx_->task()->releasePeerBarrier(splitGroupId(), planNodeId());
+  // Disarm the peer-synchronization barrier only if this operator never
+  // reached it (so its missing arrival would otherwise leave peers in
+  // kWaitForPeers forever). Operators that already participated in the
+  // barrier must not disarm it: doing so would set the released flag on a
+  // barrier that is either still actively counting peers or has already
+  // completed normally, causing future or concurrent allPeersFinished()
+  // callers to skip last-prober work (e.g. RIGHT/FULL outer-join
+  // build-side mismatch emission) and silently drop result rows.
+  if (!barrierReached_) {
+    operatorCtx_->task()->releasePeerBarrier(splitGroupId(), planNodeId());
+  }
 
   Operator::close();
 

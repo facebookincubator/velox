@@ -1043,20 +1043,19 @@ TEST_F(NestedLoopJoinTest, earlyLimitPeerBarrierDeadlock) {
   params.queryCtx = core::QueryCtx::create(executor_.get());
   // Force per-row output so Limit fires on the very first matched row.
   params.queryConfigs[core::QueryConfig::kPreferredOutputBatchRows] = "1";
-  params.planNode =
-      PlanBuilder(planNodeIdGenerator)
-          .values(probeVectors)
-          .localPartition({"t0"})
-          .nestedLoopJoin(
-              PlanBuilder(planNodeIdGenerator)
-                  .values(buildVectors)
-                  .localPartition({})
-                  .planNode(),
-              "t0 = u0",
-              {"t0", "u0"},
-              core::JoinType::kRight)
-          .limit(0, 1, /*isPartial=*/true)
-          .planNode();
+  params.planNode = PlanBuilder(planNodeIdGenerator)
+                        .values(probeVectors)
+                        .localPartition({"t0"})
+                        .nestedLoopJoin(
+                            PlanBuilder(planNodeIdGenerator)
+                                .values(buildVectors)
+                                .localPartition({})
+                                .planNode(),
+                            "t0 = u0",
+                            {"t0", "u0"},
+                            core::JoinType::kRight)
+                        .limit(0, 1, /*isPartial=*/true)
+                        .planNode();
   auto cursor = TaskCursor::create(params);
   auto task = cursor->task();
   std::atomic<bool> done{false};
