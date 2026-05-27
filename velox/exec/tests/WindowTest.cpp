@@ -983,6 +983,32 @@ TEST_F(WindowTest, NaNFrameBound) {
   }
 }
 
+TEST_F(WindowTest, nanFrameBoundAcrossOutputBatches) {
+  const auto kNan = std::numeric_limits<double>::quiet_NaN();
+  auto data = makeRowVector(
+      {"value", "sort_key", "frame_offset"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 4}),
+          makeFlatVector<double>({1.0, 2.0, 3.0, 4.0}),
+          makeFlatVector<double>({0.0, 0.0, kNan, 0.0}),
+      });
+
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .window(
+              {"sum(value) over (order by sort_key range between frame_offset preceding and current row)"})
+          .project({"w0"})
+          .planNode();
+
+  auto expected = makeRowVector(
+      {makeNullableFlatVector<int64_t>({1, 3, std::nullopt, 10})});
+  AssertQueryBuilder(plan)
+      .config(core::QueryConfig::kPreferredOutputBatchRows, "2")
+      .config(core::QueryConfig::kMaxOutputBatchRows, "2")
+      .assertResults(expected);
+}
+
 DEBUG_ONLY_TEST_F(WindowTest, releaseWindowBuildInTime) {
   const vector_size_t size = 1'000;
   auto data = makeRowVector(
