@@ -46,6 +46,7 @@
 #include <cudf/search.hpp>
 #include <cudf/stream_compaction.hpp>
 #include <cudf/unary.hpp>
+#include <cudf/utilities/traits.hpp>
 
 #include <rmm/cuda_stream_view.hpp>
 #include <rmm/device_uvector.hpp>
@@ -78,16 +79,9 @@ cudf::table_view createExtendedTableView(
   return cudf::table_view(allViews);
 }
 
-/// Checks whether a cudf type_id is any timestamp variant.
-bool isTimestampType(cudf::type_id id) {
-  return id == cudf::type_id::TIMESTAMP_SECONDS ||
-      id == cudf::type_id::TIMESTAMP_MILLISECONDS ||
-      id == cudf::type_id::TIMESTAMP_MICROSECONDS ||
-      id == cudf::type_id::TIMESTAMP_NANOSECONDS;
-}
-
 /// Returns a resolution rank for timestamp types (higher = finer).
 int timestampResolutionRank(cudf::type_id id) {
+  VELOX_CHECK(cudf::is_timestamp(cudf::data_type{id}));
   switch (id) {
     case cudf::type_id::TIMESTAMP_SECONDS:
       return 0;
@@ -114,12 +108,12 @@ cudf::type_id findCanonicalTimestampType(
     }
   };
   for (cudf::size_type i = 0; i < left.num_columns(); ++i) {
-    if (isTimestampType(left.column(i).type().id())) {
+    if (cudf::is_timestamp(left.column(i).type())) {
       promote(left.column(i).type().id());
     }
   }
   for (cudf::size_type i = 0; i < right.num_columns(); ++i) {
-    if (isTimestampType(right.column(i).type().id())) {
+    if (cudf::is_timestamp(right.column(i).type())) {
       promote(right.column(i).type().id());
     }
   }
@@ -140,7 +134,7 @@ cudf::table_view normalizeTimestampColumns(
   cols.reserve(view.num_columns());
   for (cudf::size_type i = 0; i < view.num_columns(); ++i) {
     auto id = view.column(i).type().id();
-    if (isTimestampType(id) && id != target) {
+    if (cudf::is_timestamp(cudf::data_type{id}) && id != target) {
       storage.push_back(
           cudf::cast(view.column(i), cudf::data_type{target}, stream, mr));
       cols.push_back(storage.back()->view());
@@ -1711,9 +1705,17 @@ CudfHashJoinProbe::leftSemiProjectJoin(
             return;
           }
 
+          auto canonTs =
+              findCanonicalTimestampType(extendedLeftView, extendedRight);
+          std::vector<std::unique_ptr<cudf::column>> tsStorage;
+          auto normLeft = normalizeTimestampColumns(
+              extendedLeftView, canonTs, tsStorage, stream, get_temp_mr());
+          auto normRight = normalizeTimestampColumns(
+              extendedRight, canonTs, tsStorage, stream, get_temp_mr());
+
           auto [filteredLeft, filteredRight] = cudf::filter_join_indices(
-              extendedLeftView,
-              extendedRight,
+              normLeft,
+              normRight,
               toSpan(syntheticLeft->view()),
               toSpan(syntheticRight->view()),
               tree_.back(),
