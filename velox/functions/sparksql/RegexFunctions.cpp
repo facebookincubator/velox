@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include <folly/container/F14Map.h>
+#include <limits>
 #include "velox/functions/lib/Re2Functions.h"
 #include "velox/functions/lib/string/StringImpl.h"
 
@@ -225,6 +226,135 @@ void registerRegexpReplace(const std::string& prefix) {
       Varchar,
       Varchar,
       int32_t>({prefix + "regexp_replace"});
+}
+
+// REGEXP_INSTR(string, pattern[, idx]) → integer
+//
+// Returns the 1-based character position of the first substring that matches
+// the given regex pattern. Returns 0 if no match is found.
+// The optional 'idx' parameter is accepted for Spark compatibility but is
+// silently ignored — Spark's regexp_instr always returns the position of the
+// entire match regardless of idx value. We replicate this behavior.
+template <typename T>
+struct RegexpInstrFunction {
+  RegexpInstrFunction() : cache_(0) {}
+
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  static constexpr bool is_default_ascii_behavior = true;
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const arg_type<Varchar>* /*stringInput*/,
+      const arg_type<Varchar>* pattern) {
+    if (pattern) {
+      // Converts Java named groups (?<name>...) to RE2 (?P<name>...) syntax.
+      // Despite the name, this function only handles named group conversion
+      // and is safe for match-only patterns.
+      const auto processedPattern = prepareRegexpReplacePattern(*pattern);
+      re_.emplace(processedPattern, RE2::Quiet);
+      VELOX_USER_CHECK(
+          re_->ok(),
+          "Invalid regular expression {}: {}.",
+          processedPattern,
+          re_->error());
+    }
+    cache_.setMaxCompiledRegexes(config.exprMaxCompiledRegexes());
+  }
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const arg_type<Varchar>* /*stringInput*/,
+      const arg_type<Varchar>* pattern,
+      const arg_type<int32_t>* /*idx*/) {
+    // NOTE: Spark's regexp_instr accepts an idx (group index) parameter but
+    // silently ignores it — it always returns the position of the entire match
+    // regardless of idx value. We replicate this behavior for compatibility.
+    if (pattern) {
+      const auto processedPattern = prepareRegexpReplacePattern(*pattern);
+      re_.emplace(processedPattern, RE2::Quiet);
+      VELOX_USER_CHECK(
+          re_->ok(),
+          "Invalid regular expression {}: {}.",
+          processedPattern,
+          re_->error());
+    }
+    cache_.setMaxCompiledRegexes(config.exprMaxCompiledRegexes());
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      int32_t& result,
+      const arg_type<Varchar>& stringInput,
+      const arg_type<Varchar>& pattern) {
+    return callImpl(result, stringInput, pattern);
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      int32_t& result,
+      const arg_type<Varchar>& stringInput,
+      const arg_type<Varchar>& pattern,
+      const arg_type<int32_t>& /*idx*/) {
+    // Spark's regexp_instr ignores the idx parameter and always returns the
+    // position of the entire match (group 0). We replicate this behavior.
+    return callImpl(result, stringInput, pattern);
+  }
+
+ private:
+  FOLLY_ALWAYS_INLINE bool callImpl(
+      int32_t& result,
+      const arg_type<Varchar>& stringInput,
+      const arg_type<Varchar>& pattern) {
+    const re2::StringPiece input(stringInput.data(), stringInput.size());
+    const RE2& re = re_.has_value() ? re_.value() : getOrCompileRegex(pattern);
+
+    re2::StringPiece match;
+    if (re.Match(input, 0, input.size(), RE2::UNANCHORED, &match, 1)) {
+      const size_t byteOffset =
+          static_cast<size_t>(match.data() - input.data());
+      if (byteOffset == 0) {
+        result = 1;
+      } else {
+        // Use lengthUnicode to count UTF-8 characters up to the match start.
+        // This handles both ASCII (tight inner loop) and multi-byte sequences
+        // in a single pass.
+        const int64_t charCount =
+            functions::stringCore::lengthUnicode(input.data(), byteOffset);
+        // Guard against overflow (strings >2B chars).
+        VELOX_USER_CHECK_LE(
+            charCount,
+            static_cast<int64_t>(std::numeric_limits<int32_t>::max()) - 1,
+            "regexp_instr: string has too many characters for int32_t result");
+        result = static_cast<int32_t>(charCount + 1);
+      }
+    } else {
+      result = 0;
+    }
+    return true;
+  }
+
+  const RE2& getOrCompileRegex(const arg_type<Varchar>& pattern) {
+    // Store the processed pattern to ensure the StringView remains valid
+    // through the cache lookup.
+    processedPatternBuf_ = prepareRegexpReplacePattern(pattern);
+    return *cache_.findOrCompile(StringView(processedPatternBuf_));
+  }
+
+  std::optional<RE2> re_;
+  detail::ReCache cache_;
+  std::string processedPatternBuf_;
+};
+
+void registerRegexpInstr(const std::string& prefix) {
+  // 2-arg form: regexp_instr(string, pattern)
+  registerFunction<RegexpInstrFunction, int32_t, Varchar, Varchar>(
+      {prefix + "regexp_instr"});
+  // 3-arg form: regexp_instr(string, pattern, idx)
+  // idx is accepted for Spark compatibility but silently ignored — Spark's
+  // regexp_instr always returns the position of the entire match.
+  registerFunction<RegexpInstrFunction, int32_t, Varchar, Varchar, int32_t>(
+      {prefix + "regexp_instr"});
 }
 
 } // namespace facebook::velox::functions::sparksql

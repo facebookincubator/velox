@@ -615,5 +615,133 @@ TEST_F(RegexFunctionsTest, regexpReplacePreprocess) {
   EXPECT_EQ(testRegexpReplace("[{}]", "\\}\\]", "\\}"), "[{}");
 }
 
+TEST_F(RegexFunctionsTest, regexpInstrBasic) {
+  auto regexpInstr = [&](std::optional<std::string> str, std::string pattern) {
+    return evaluateOnce<int32_t>(
+        fmt::format("regexp_instr(c0, '{}')", pattern), str);
+  };
+
+  // Basic match at start.
+  EXPECT_EQ(regexpInstr("hello world", "world"), 7);
+  // Match at position 1.
+  EXPECT_EQ(regexpInstr("hello", "h"), 1);
+  // No match.
+  EXPECT_EQ(regexpInstr("hello", "xyz"), 0);
+  // Regex pattern.
+  EXPECT_EQ(regexpInstr("abc123def", "[0-9]+"), 4);
+  // Empty string input.
+  EXPECT_EQ(regexpInstr("", "a"), 0);
+  // Match with empty pattern (matches at start).
+  EXPECT_EQ(regexpInstr("hello", ""), 1);
+  // Null input.
+  EXPECT_EQ(regexpInstr(std::nullopt, "a"), std::nullopt);
+  // Verify FIRST match is returned when multiple matches exist.
+  EXPECT_EQ(regexpInstr("abcabc", "abc"), 1);
+  EXPECT_EQ(regexpInstr("xxabcxxabc", "abc"), 3);
+  // Pattern with capturing groups — still returns position of whole match.
+  EXPECT_EQ(regexpInstr("foo123bar", "(\\d+)"), 4);
+  EXPECT_EQ(regexpInstr("hello world", "(wor)(ld)"), 7);
+}
+
+TEST_F(RegexFunctionsTest, regexpInstrUnicode) {
+  auto regexpInstr = [&](std::optional<std::string> str, std::string pattern) {
+    return evaluateOnce<int32_t>(
+        fmt::format("regexp_instr(c0, '{}')", pattern), str);
+  };
+
+  // Unicode: each character is multi-byte but position should be
+  // character-based.
+  // \xC3\xA9 = é, \xC3\xA8 = è, \xC3\xA0 = à (each 2 bytes, 1 char).
+  EXPECT_EQ(regexpInstr("\xC3\xA9\xC3\xA8\xC3\xA0", "\xC3\xA0"), 3);
+  // 4-byte UTF-8 characters (emoji): 🌍🌎🌏 each is 4 bytes.
+  EXPECT_EQ(
+      regexpInstr(
+          "\xF0\x9F\x8C\x8D\xF0\x9F\x8C\x8E\xF0\x9F\x8C\x8F",
+          "\xF0\x9F\x8C\x8F"),
+      3);
+  // Mixed ASCII and multi-byte: "aéb" — match 'b' at char pos 3.
+  EXPECT_EQ(
+      regexpInstr(
+          "a\xC3\xA9"
+          "b",
+          "b"),
+      3);
+  // 3-byte UTF-8 characters: Chinese chars.
+  EXPECT_EQ(
+      regexpInstr(
+          "\xE4\xB8\xAD\xE6\x96\x87\xE6\xB5\x8B\xE8\xAF\x95", "\xE6\xB5\x8B"),
+      3);
+  // Mixed multi-byte with regex metacharacters.
+  EXPECT_EQ(regexpInstr("\xC3\xA9\xC3\xA8.test", "\\."), 3);
+  // Single character match at the very start (ASCII fast path).
+  EXPECT_EQ(regexpInstr("ascii", "a"), 1);
+}
+
+TEST_F(RegexFunctionsTest, regexpInstrDynamicPattern) {
+  // Test with non-constant (dynamic) pattern using two column inputs.
+  auto strings =
+      makeFlatVector<StringView>({"hello world", "abc123", "test", "foo bar"});
+  auto patterns = makeFlatVector<StringView>({"world", "[0-9]+", "xyz", "bar"});
+  auto result =
+      evaluate("regexp_instr(c0, c1)", makeRowVector({strings, patterns}));
+  auto expected = makeFlatVector<int32_t>({7, 4, 0, 5});
+  velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(RegexFunctionsTest, regexpInstrWithIdx) {
+  // Spark's regexp_instr accepts idx but silently ignores it — always returns
+  // position of entire match regardless of idx value.
+  auto regexpInstrIdx =
+      [&](std::optional<std::string> str, std::string pattern, int32_t idx) {
+        return evaluateOnce<int32_t>(
+            fmt::format("regexp_instr(c0, '{}', {})", pattern, idx), str);
+      };
+
+  // idx=0 — entire match position.
+  EXPECT_EQ(regexpInstrIdx("hello world", "world", 0), 7);
+  EXPECT_EQ(regexpInstrIdx("abc123", "[0-9]+", 0), 4);
+  // idx>0 — Spark ignores idx, still returns position of entire match.
+  EXPECT_EQ(regexpInstrIdx("foo123bar", "(\\d+)", 1), 4);
+  EXPECT_EQ(regexpInstrIdx("hello world", "(wor)(ld)", 2), 7);
+}
+
+TEST_F(RegexFunctionsTest, regexpInstrNonConstantIdx) {
+  // Non-constant idx column — Spark ignores idx values, always returns
+  // position of entire match.
+  auto strings = makeFlatVector<StringView>({"hello", "world", "abc123"});
+  auto patterns = makeFlatVector<StringView>({"h", "or", "[0-9]+"});
+  auto indices = makeFlatVector<int32_t>({0, 1, 2});
+  auto result = evaluate(
+      "regexp_instr(c0, c1, c2)", makeRowVector({strings, patterns, indices}));
+  auto expected = makeFlatVector<int32_t>({1, 2, 4});
+  velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(RegexFunctionsTest, regexpInstrInvalidPattern) {
+  auto regexpInstr = [&](std::optional<std::string> str, std::string pattern) {
+    return evaluateOnce<int32_t>(
+        fmt::format("regexp_instr(c0, '{}')", pattern), str);
+  };
+
+  // Invalid regex pattern should throw.
+  VELOX_ASSERT_THROW(
+      regexpInstr("hello", "[invalid"), "Invalid regular expression");
+}
+
+TEST_F(RegexFunctionsTest, regexpInstrMultipleMatches) {
+  auto regexpInstr = [&](std::optional<std::string> str, std::string pattern) {
+    return evaluateOnce<int32_t>(
+        fmt::format("regexp_instr(c0, '{}')", pattern), str);
+  };
+
+  // Always returns position of FIRST match.
+  EXPECT_EQ(regexpInstr("aaa", "a"), 1);
+  EXPECT_EQ(regexpInstr("baa", "a"), 2);
+  EXPECT_EQ(regexpInstr("abab", "ab"), 1);
+  EXPECT_EQ(regexpInstr("xyzabcxyzabc", "abc"), 4);
+  // Overlapping potential matches — first one wins.
+  EXPECT_EQ(regexpInstr("aaaa", "aa"), 1);
+}
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql
