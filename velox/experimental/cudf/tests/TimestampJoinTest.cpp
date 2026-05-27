@@ -34,6 +34,9 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
+#include <cudf/column/column_factories.hpp>
+#include <cudf/io/parquet.hpp>
+#include <cudf/table/table.hpp>
 #include <cudf/types.hpp>
 
 #include <gtest/gtest.h>
@@ -315,6 +318,140 @@ TEST_F(TimestampJoinTest, nullAwareLeftSemiProjectWithMismatchedTimestamps) {
           "    WHERE t_null.t_ts < u_null.u_ts"
           "  ) AS match "
           "FROM t_null");
+}
+
+// Verifies correct join results when timestamps exceed the nanosecond overflow
+// boundary (~year 2262).  Probe side reads as SECONDS, build side as
+// NANOSECONDS.  Without overflow-safe normalization, the normalization step
+// casts seconds to nanoseconds (×10^9) which overflows int64 for values beyond
+// ~9.2×10^9 seconds, producing wrong filter comparisons.
+//
+// The test writes Parquet files directly via cuDF (bypassing Velox's Arrow
+// bridge which also can't handle >2262 timestamps) to create a file with
+// TIMESTAMP_SECONDS containing year-2300 values.
+TEST_F(TimestampJoinTest, overflowSafeNormalization) {
+  const std::string kSecConnectorId = "test-cudf-hive-sec";
+  registerTimestampConnector(
+      kSecConnectorId, static_cast<int>(cudf::type_id::TIMESTAMP_SECONDS));
+
+  constexpr int64_t kFarFuture = 10'413'792'000; // ~2300-01-01 in seconds
+  constexpr int32_t kNumRows = 10;
+
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+
+  // Write probe Parquet directly with cuDF: INT32 key + TIMESTAMP_SECONDS.
+  auto probeFile = TempFilePath::create();
+  {
+    std::vector<int32_t> keys(kNumRows);
+    std::vector<int64_t> ticks(kNumRows);
+    for (int i = 0; i < kNumRows; ++i) {
+      keys[i] = i % 5;
+      ticks[i] = kFarFuture + i * 86'400;
+    }
+    auto keyCol = cudf::make_numeric_column(
+        cudf::data_type{cudf::type_id::INT32}, kNumRows);
+    auto tsCol = cudf::make_timestamp_column(
+        cudf::data_type{cudf::type_id::TIMESTAMP_SECONDS}, kNumRows);
+    CUDF_CUDA_TRY(cudaMemcpy(
+        keyCol->mutable_view().head(),
+        keys.data(),
+        kNumRows * sizeof(int32_t),
+        cudaMemcpyHostToDevice));
+    CUDF_CUDA_TRY(cudaMemcpy(
+        tsCol->mutable_view().head(),
+        ticks.data(),
+        kNumRows * sizeof(int64_t),
+        cudaMemcpyHostToDevice));
+    std::vector<std::unique_ptr<cudf::column>> cols;
+    cols.push_back(std::move(keyCol));
+    cols.push_back(std::move(tsCol));
+    auto table = std::make_unique<cudf::table>(std::move(cols));
+
+    auto metadata = cudf::io::table_input_metadata(table->view());
+    metadata.column_metadata[0].set_name("t_key");
+    metadata.column_metadata[1].set_name("t_ts");
+    auto options = cudf::io::parquet_writer_options::builder(
+                       cudf::io::sink_info(probeFile->getPath()), table->view())
+                       .metadata(metadata)
+                       .build();
+    cudf::io::write_parquet(options, stream);
+    stream.synchronize();
+  }
+
+  // Write build Parquet with cuDF: INT32 key + TIMESTAMP_NANOSECONDS (near
+  // epoch, fits fine in nanos).
+  auto buildFile = TempFilePath::create();
+  {
+    std::vector<int32_t> keys(kNumRows);
+    std::vector<int64_t> ticks(kNumRows);
+    for (int i = 0; i < kNumRows; ++i) {
+      keys[i] = i % 5;
+      // Small values near epoch: i * 86400 * 10^9 (fits in int64 for small i).
+      ticks[i] = static_cast<int64_t>(i) * 86'400 * 1'000'000'000LL;
+    }
+    auto keyCol = cudf::make_numeric_column(
+        cudf::data_type{cudf::type_id::INT32}, kNumRows);
+    auto tsCol = cudf::make_timestamp_column(
+        cudf::data_type{cudf::type_id::TIMESTAMP_NANOSECONDS}, kNumRows);
+    CUDF_CUDA_TRY(cudaMemcpy(
+        keyCol->mutable_view().head(),
+        keys.data(),
+        kNumRows * sizeof(int32_t),
+        cudaMemcpyHostToDevice));
+    CUDF_CUDA_TRY(cudaMemcpy(
+        tsCol->mutable_view().head(),
+        ticks.data(),
+        kNumRows * sizeof(int64_t),
+        cudaMemcpyHostToDevice));
+    std::vector<std::unique_ptr<cudf::column>> cols;
+    cols.push_back(std::move(keyCol));
+    cols.push_back(std::move(tsCol));
+    auto table = std::make_unique<cudf::table>(std::move(cols));
+
+    auto metadata = cudf::io::table_input_metadata(table->view());
+    metadata.column_metadata[0].set_name("u_key");
+    metadata.column_metadata[1].set_name("u_ts");
+    auto options = cudf::io::parquet_writer_options::builder(
+                       cudf::io::sink_info(buildFile->getPath()), table->view())
+                       .metadata(metadata)
+                       .build();
+    cudf::io::write_parquet(options, stream);
+    stream.synchronize();
+  }
+
+  auto idGenerator = std::make_shared<PlanNodeIdGenerator>();
+
+  PlanNodeId probeScanId;
+  PlanNodeId buildScanId;
+
+  // Filter: "t_ts > u_ts".  All probe timestamps are year 2300+ and all build
+  // timestamps are near epoch, so every key-matching pair should pass.
+  // With 10 rows per side and keys 0..4 (2 rows per key per side), we expect
+  // 5 keys × 2 probe × 2 build = 20 result rows.
+  auto plan = scanThrough(probeType_, kSecConnectorId, idGenerator)
+                  .capturePlanNodeId(probeScanId)
+                  .hashJoin(
+                      {"t_key"},
+                      {"u_key"},
+                      scanThrough(buildType_, kNanoConnectorId, idGenerator)
+                          .capturePlanNodeId(buildScanId)
+                          .planNode(),
+                      "t_ts > u_ts",
+                      {"t_key"},
+                      JoinType::kInner)
+                  .planNode();
+
+  auto result =
+      AssertQueryBuilder(plan)
+          .split(probeScanId, makeSplit(probeFile->getPath(), kSecConnectorId))
+          .split(buildScanId, makeSplit(buildFile->getPath(), kNanoConnectorId))
+          .copyResults(pool_.get());
+
+  // Every key-matching pair passes the filter, so we expect 20 rows.
+  EXPECT_EQ(result->size(), 20);
+
+  ConnectorRegistry::global().erase(kSecConnectorId);
 }
 
 // Both sides use the same nano connector. Verifies no regression when
