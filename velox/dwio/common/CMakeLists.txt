@@ -104,6 +104,7 @@ velox_add_library(
   OnDemandUnitLoader.h
   Options.h
   OutputStream.h
+  ParquetFieldId.h
   ParallelFor.h
   ParallelUnitLoader.h
   PositionProvider.h

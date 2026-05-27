@@ -54,27 +54,28 @@ void configureReaderOptions(
   readerOptions.setFileColumnNamesReadAsLowerCase(
       fileConfig->isFileColumnNamesReadAsLowerCase(sessionProperties));
   readerOptions.setAllowEmptyFile(true);
-  bool useColumnNamesForColumnMapping = false;
+  auto columnMappingMode = dwio::common::ColumnMappingMode::kPosition;
   switch (fileSplit->fileFormat) {
     case dwio::common::FileFormat::DWRF:
     case dwio::common::FileFormat::ORC: {
-      useColumnNamesForColumnMapping =
-          fileConfig->isOrcUseColumnNames(sessionProperties);
+      columnMappingMode = fileConfig->isOrcUseColumnNames(sessionProperties)
+          ? dwio::common::ColumnMappingMode::kName
+          : dwio::common::ColumnMappingMode::kPosition;
       break;
     }
     case dwio::common::FileFormat::PARQUET: {
-      useColumnNamesForColumnMapping =
-          fileConfig->isParquetUseColumnNames(sessionProperties);
+      columnMappingMode = fileConfig->isParquetUseColumnNames(sessionProperties)
+          ? dwio::common::ColumnMappingMode::kName
+          : dwio::common::ColumnMappingMode::kPosition;
       readerOptions.setAllowInt32Narrowing(
           fileConfig->allowInt32Narrowing(sessionProperties));
       break;
     }
     default:
-      useColumnNamesForColumnMapping = false;
+      columnMappingMode = dwio::common::ColumnMappingMode::kPosition;
   }
 
-  readerOptions.setUseColumnNamesForColumnMapping(
-      useColumnNamesForColumnMapping);
+  readerOptions.setColumnMappingMode(columnMappingMode);
   readerOptions.setFileSchema(fileSchema);
   readerOptions.setFilePreloadThreshold(fileConfig->filePreloadThreshold());
   readerOptions.setPrefetchRowGroups(fileConfig->prefetchRowGroups());

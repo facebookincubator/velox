@@ -118,7 +118,9 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
 
     EXPECT_EQ(readerOptions.fileFormat(), dwio::common::FileFormat::DWRF);
     EXPECT_FALSE(readerOptions.fileColumnNamesReadAsLowerCase());
-    EXPECT_FALSE(readerOptions.useColumnNamesForColumnMapping());
+    EXPECT_EQ(
+        readerOptions.columnMappingMode(),
+        dwio::common::ColumnMappingMode::kPosition);
   }
 
   // Test with ORC format and useColumnNames enabled via session.
@@ -138,7 +140,9 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
         readerOptions);
 
     EXPECT_EQ(readerOptions.fileFormat(), dwio::common::FileFormat::ORC);
-    EXPECT_TRUE(readerOptions.useColumnNamesForColumnMapping());
+    EXPECT_EQ(
+        readerOptions.columnMappingMode(),
+        dwio::common::ColumnMappingMode::kName);
   }
 
   // Test with Parquet format and useColumnNames enabled via session.
@@ -158,7 +162,9 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
         readerOptions);
 
     EXPECT_EQ(readerOptions.fileFormat(), dwio::common::FileFormat::PARQUET);
-    EXPECT_TRUE(readerOptions.useColumnNamesForColumnMapping());
+    EXPECT_EQ(
+        readerOptions.columnMappingMode(),
+        dwio::common::ColumnMappingMode::kName);
   }
 
   // Test format mismatch throws.
