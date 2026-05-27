@@ -41,27 +41,59 @@ MarkDistinct::MarkDistinct(
               ? driverCtx->makeSpillConfig(operatorId, planNode->name())
               : std::nullopt) {
   inputType_ = planNode->sources()[0]->outputType();
+  for (const auto& mask : planNode->masks()) {
+    maskChannels_.push_back(inputType_->getChildIdx(mask->name()));
+  }
 
   // Set all input columns as identity projection.
   for (auto i = 0; i < inputType_->size(); ++i) {
     identityProjections_.emplace_back(i, i);
   }
 
-  // Use result[0] for distinct mask output.
-  resultProjections_.emplace_back(0, inputType_->size());
+  // Result projections: one per marker output column. The first marker is the
+  // no-mask marker; additional markers correspond to each mask.
+  const auto numMarkers = numMasks() + 1;
+  for (int32_t i = 0; i < numMarkers; ++i) {
+    resultProjections_.emplace_back(i, inputType_->size() + i);
+  }
 
   for (const auto& key : planNode->distinctKeys()) {
     distinctKeyChannels_.push_back(inputType_->getChildIdx(key->name()));
   }
 
+  auto hashers = createVectorHashers(inputType_, planNode->distinctKeys());
+  std::vector<Accumulator> extraAccumulators;
+  if (numMasks() > 0) {
+    const auto numBytes = static_cast<int32_t>(bits::nbytes(numMasks()));
+    extraAccumulators.emplace_back(
+        /*isFixedSize=*/true,
+        /*fixedSize=*/numBytes,
+        /*usesExternalMemory=*/false,
+        /*alignment=*/1,
+        /*spillType=*/VARBINARY(),
+        [this, numBytes](folly::Range<char**> groups, VectorPtr& result) {
+          auto* flatResult = result->as<FlatVector<StringView>>();
+          for (auto i = 0; i < groups.size(); ++i) {
+            flatResult->set(
+                i, StringView(groups[i] + bitmaskOffset_, numBytes));
+          }
+        },
+        /*destroyFunction=*/nullptr);
+  }
+
   groupingSet_ = GroupingSet::createForDistinct(
       inputType_,
-      createVectorHashers(inputType_, planNode->distinctKeys()),
+      std::move(hashers),
       /*preGroupedKeys=*/{},
+      std::move(extraAccumulators),
       operatorCtx_.get(),
       &nonReclaimableSection_);
-
-  results_.resize(1);
+  if (numMasks() > 0) {
+    bitmaskOffset_ =
+        groupingSet_->table()->rows()->accumulatorColumnAt(0).offset();
+  }
+  results_.resize(numMarkers);
+  decodedMasks_.resize(numMasks());
 
   if (spillEnabled()) {
     setSpillPartitionBits();
@@ -136,6 +168,21 @@ void MarkDistinct::restoreNextSpillPartition() {
           *lookup, input, rows, spillConfig_->startPartitionBit);
       table->groupProbe(*lookup, spillConfig_->startPartitionBit);
 
+      // Restore bitmask bytes from spilled accumulator column. Spill layout
+      // is [keys..., bitmask]: rows()->columnTypes() followed by each
+      // accumulator's spillType(). The single extra accumulator (bitmask)
+      // sits at index hashers.size().
+      if (numMasks() > 0) {
+        auto* bitmaskVector =
+            data->childAt(hashers.size())->as<FlatVector<StringView>>();
+        const auto numBytes = bits::nbytes(numMasks());
+        for (auto i = 0; i < data->size(); ++i) {
+          auto bitmask = bitmaskVector->valueAt(i);
+          VELOX_CHECK_EQ(bitmask.size(), numBytes);
+          memcpy(lookup->hits[i] + bitmaskOffset_, bitmask.data(), numBytes);
+        }
+      }
+
       columns.assign(inputType_->size(), nullptr);
     }
   }
@@ -191,18 +238,75 @@ RowVectorPtr MarkDistinct::getOutput() {
 
   const auto outputSize = input_->size();
 
-  VectorPtr& result = results_[0];
-  if (result && result.use_count() == 1) {
-    BaseVector::prepareForReuse(result, outputSize);
-  } else {
-    result = BaseVector::create(BOOLEAN(), outputSize, operatorCtx_->pool());
+  const auto numMarkers = numMasks() + 1;
+  const auto& lookup = groupingSet_->hashLookup();
+
+  // Allocate and zero-init all marker vectors.
+  for (int32_t i = 0; i < numMarkers; ++i) {
+    VectorPtr& result = results_[i];
+    if (result) {
+      BaseVector::prepareForReuse(result, outputSize);
+    } else {
+      result = BaseVector::create(BOOLEAN(), outputSize, operatorCtx_->pool());
+    }
+    auto* resultBits =
+        result->as<FlatVector<bool>>()->mutableRawValues<uint64_t>();
+    bits::fillBits(resultBits, 0, outputSize, false);
   }
 
-  auto* resultBits =
+  // Result[0] is the no-mask marker — true for first-seen key combinations.
+  auto* nomaskBits =
       results_[0]->as<FlatVector<bool>>()->mutableRawValues<uint64_t>();
-  bits::fillBits(resultBits, 0, outputSize, false);
-  for (const auto i : groupingSet_->hashLookup().newGroups) {
-    bits::setBit(resultBits, i, true);
+  for (const auto index : lookup.newGroups) {
+    bits::setBit(nomaskBits, index, true);
+  }
+
+  if (numMasks() > 0) {
+    const auto numBytes = bits::nbytes(numMasks());
+
+    // Zero bitmask bytes for newly created groups.
+    for (const auto index : lookup.newGroups) {
+      memset(lookup.hits[index] + bitmaskOffset_, 0, numBytes);
+    }
+
+    for (int32_t i = 0; i < numMasks(); ++i) {
+      decodedMasks_[i].decode(*input_->childAt(maskChannels_[i]));
+    }
+
+    // Results[1..N]: per-mask markers. For each (row, mask) where the mask
+    // is active, check the per-group bitmask. If bit i is unset this is the
+    // first row where mask i is true for this key — set the bit and emit
+    // true.
+    for (int32_t i = 0; i < numMasks(); ++i) {
+      auto& decoded = decodedMasks_[i];
+      auto* resultBits =
+          results_[i + 1]->as<FlatVector<bool>>()->mutableRawValues<uint64_t>();
+
+      auto markIfFirst = [&](vector_size_t row) {
+        auto* bitmask =
+            reinterpret_cast<uint8_t*>(lookup.hits[row] + bitmaskOffset_);
+        if (!bits::isBitSet(bitmask, i)) {
+          bits::setBit(bitmask, i);
+          bits::setBit(resultBits, row);
+        }
+      };
+
+      if (decoded.isConstantMapping()) {
+        if (decoded.isNullAt(0) || !decoded.valueAt<bool>(0)) {
+          continue;
+        }
+        for (auto row = 0; row < outputSize; ++row) {
+          markIfFirst(row);
+        }
+      } else {
+        for (auto row = 0; row < outputSize; ++row) {
+          if (decoded.isNullAt(row) || !decoded.valueAt<bool>(row)) {
+            continue;
+          }
+          markIfFirst(row);
+        }
+      }
+    }
   }
 
   auto output = fillOutput(outputSize, nullptr);
@@ -327,6 +431,9 @@ SpillPartitionIdSet MarkDistinct::spillHashTable() {
 
   auto* table = groupingSet_->table();
   auto columnTypes = table->rows()->columnTypes();
+  for (const auto& accumulator : table->rows()->accumulators()) {
+    columnTypes.push_back(accumulator.spillType());
+  }
   auto tableType = ROW(std::move(columnTypes));
 
   auto hashTableSpiller = std::make_unique<MarkDistinctHashTableSpiller>(
@@ -374,7 +481,7 @@ void MarkDistinct::spill() {
     input_ = nullptr;
   }
   results_.clear();
-  results_.resize(1);
+  results_.resize(numMasks() + 1);
 }
 
 void MarkDistinct::spillInput(
