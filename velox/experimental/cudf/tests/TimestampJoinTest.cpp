@@ -244,6 +244,79 @@ TEST_F(TimestampJoinTest, antiJoinWithMismatchedTimestamps) {
           ")");
 }
 
+// Null-aware left semi project join with filter and mismatched timestamp
+// resolutions.  This exercises the `accumulateIndeterminate` lambda inside
+// `leftSemiProjectJoin`, which creates synthetic cross-product pairs and
+// calls `filter_join_indices` on them.  Null keys on the probe side force
+// entry into the "Type B" indeterminate path.
+TEST_F(TimestampJoinTest, nullAwareLeftSemiProjectWithMismatchedTimestamps) {
+  // Create data with null keys to trigger the indeterminate path.
+  constexpr int32_t kNumRows{20};
+
+  // Probe: some rows have null keys.
+  auto probeKeys = makeFlatVector<int32_t>(
+      kNumRows,
+      [](vector_size_t row) { return row % 5; },
+      [](vector_size_t row) { return row % 7 == 0; });
+  auto probeTimestamps = makeFlatVector<Timestamp>(
+      kNumRows, [](vector_size_t row) { return Timestamp(row * 2, 0); });
+  auto probeWithNulls =
+      makeRowVector({"t_key", "t_ts"}, {probeKeys, probeTimestamps});
+
+  // Build: some rows have null keys.
+  auto buildKeys = makeFlatVector<int32_t>(
+      kNumRows,
+      [](vector_size_t row) { return row % 5; },
+      [](vector_size_t row) { return row % 6 == 0; });
+  auto buildTimestamps = makeFlatVector<Timestamp>(
+      kNumRows, [](vector_size_t row) { return Timestamp(row * 3, 0); });
+  auto buildWithNulls =
+      makeRowVector({"u_key", "u_ts"}, {buildKeys, buildTimestamps});
+
+  // Write to separate Parquet files.
+  auto probeNullFile = TempFilePath::create();
+  auto buildNullFile = TempFilePath::create();
+  writeToFile(probeNullFile->getPath(), probeWithNulls);
+  writeToFile(buildNullFile->getPath(), buildWithNulls);
+
+  // Register DuckDB tables for the reference query.
+  createDuckDbTable("t_null", {probeWithNulls});
+  createDuckDbTable("u_null", {buildWithNulls});
+
+  auto idGenerator = std::make_shared<PlanNodeIdGenerator>();
+
+  PlanNodeId probeScanId;
+  PlanNodeId buildScanId;
+
+  // kLeftSemiProject + nullAware=true + filter on timestamp columns.
+  // The output is all probe columns plus a boolean "match" column.
+  auto plan = scanThrough(probeType_, kMicroConnectorId, idGenerator)
+                  .capturePlanNodeId(probeScanId)
+                  .hashJoin(
+                      {"t_key"},
+                      {"u_key"},
+                      scanThrough(buildType_, kNanoConnectorId, idGenerator)
+                          .capturePlanNodeId(buildScanId)
+                          .planNode(),
+                      "t_ts < u_ts",
+                      {"t_key", "t_ts", "match"},
+                      JoinType::kLeftSemiProject,
+                      /*nullAware=*/true)
+                  .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .split(
+          probeScanId, makeSplit(probeNullFile->getPath(), kMicroConnectorId))
+      .split(buildScanId, makeSplit(buildNullFile->getPath(), kNanoConnectorId))
+      .assertResults(
+          "SELECT t_null.t_key, t_null.t_ts, "
+          "  t_null.t_key IN ("
+          "    SELECT u_null.u_key FROM u_null"
+          "    WHERE t_null.t_ts < u_null.u_ts"
+          "  ) AS match "
+          "FROM t_null");
+}
+
 // Both sides use the same nano connector. Verifies no regression when
 // timestamp resolutions already match.
 TEST_F(TimestampJoinTest, noMismatchNoOp) {
