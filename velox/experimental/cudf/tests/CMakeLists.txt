@@ -219,14 +219,7 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_timestamp_join_test
   SOURCES Main.cpp TimestampJoinTest.cpp
-  LIBS
-    velox_cudf_exec_test_lib
-    velox_cudf_hive_connector
-    velox_cudf_exec
-    velox_exec
-    velox_exec_test_lib
-    velox_test_util
-    fmt::fmt
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_cudf_exec_test_lib velox_cudf_hive_connector fmt::fmt
 )
 
 velox_add_cudf_test(
