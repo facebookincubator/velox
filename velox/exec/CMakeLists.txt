@@ -190,7 +190,6 @@ velox_add_library(
   PrefixSort.h
   ProbeOperatorState.h
   RoundRobinPartitionFunction.h
-  RowAccessor.h
   RowContainer.h
   RowNumber.h
   RowsStreamingWindowBuild.h
@@ -233,6 +232,7 @@ velox_add_library(
   WindowBuild.h
   WindowFunction.h
   WindowPartition.h
+  WindowPartitionAccessor.h
 )
 
 velox_add_library(velox_exec_spill_stats SpillStats.cpp HEADERS SpillStats.h)

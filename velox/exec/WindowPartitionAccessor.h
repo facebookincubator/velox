@@ -24,11 +24,11 @@
 
 namespace facebook::velox::exec {
 
-/// Defines storage access required by window partition algorithms.
+/// Defines access to rows within a single window partition.
 ///
 /// All row indexes are absolute positions in the window partition.
 template <typename T>
-concept RowAccessor = requires(
+concept WindowPartitionAccessor = requires(
     const T& rows,
     vector_size_t row,
     vector_size_t lhs,

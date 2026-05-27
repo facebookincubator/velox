@@ -18,7 +18,7 @@
 #include "velox/common/base/CompareFlags.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/core/PlanNode.h"
-#include "velox/exec/RowAccessor.h"
+#include "velox/exec/WindowPartitionAccessor.h"
 #include "velox/type/Type.h"
 #include "velox/vector/SelectivityVector.h"
 #include "velox/vector/TypeAliases.h"
@@ -31,7 +31,7 @@ namespace facebook::velox::exec {
 class KRangeFrameBound {
  public:
   /// Computes k RANGE frame bounds for rows in [startRow, startRow + numRows).
-  template <RowAccessor Rows>
+  template <WindowPartitionAccessor Rows>
   static void compute(
       const Rows& rows,
       bool isStartBound,
@@ -92,7 +92,7 @@ class KRangeFrameBound {
   }
 
  private:
-  template <RowAccessor Rows>
+  template <WindowPartitionAccessor Rows>
   static vector_size_t linearSearch(
       const Rows& rows,
       bool firstMatch,
@@ -122,7 +122,7 @@ class KRangeFrameBound {
     return end == rows.partitionEnd() ? rows.partitionEnd() + 1 : -1;
   }
 
-  template <RowAccessor Rows>
+  template <WindowPartitionAccessor Rows>
   static vector_size_t search(
       const Rows& rows,
       bool firstMatch,
@@ -149,7 +149,7 @@ class KRangeFrameBound {
         rows, firstMatch, begin, end, frameValueRow, frameColumn, flags);
   }
 
-  template <typename T, RowAccessor Rows>
+  template <typename T, WindowPartitionAccessor Rows>
   static void computeTyped(
       const Rows& rows,
       bool isStartBound,

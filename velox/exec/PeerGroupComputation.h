@@ -16,7 +16,7 @@
 #pragma once
 
 #include "velox/common/base/Exceptions.h"
-#include "velox/exec/RowAccessor.h"
+#include "velox/exec/WindowPartitionAccessor.h"
 #include "velox/vector/TypeAliases.h"
 
 #include <algorithm>
@@ -36,7 +36,7 @@ class PeerGroupComputation {
   /// Computes peer start and end bounds for rows in [start, end). If the
   /// previous row is consumed, the result sets previousRowConsumed=true and the
   /// caller remains responsible for clearing or releasing that state.
-  template <RowAccessor Rows>
+  template <WindowPartitionAccessor Rows>
   static Result compute(
       const Rows& rows,
       vector_size_t start,
@@ -81,7 +81,7 @@ class PeerGroupComputation {
   }
 
  private:
-  template <RowAccessor Rows>
+  template <WindowPartitionAccessor Rows>
   static vector_size_t findEnd(
       const Rows& rows,
       vector_size_t peerStart,
