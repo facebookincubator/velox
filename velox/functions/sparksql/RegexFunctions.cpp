@@ -244,23 +244,11 @@ struct RegexpInstrFunction {
   static constexpr bool is_default_ascii_behavior = true;
 
   FOLLY_ALWAYS_INLINE void initialize(
-      const std::vector<TypePtr>& /*inputTypes*/,
+      const std::vector<TypePtr>& inputTypes,
       const core::QueryConfig& config,
-      const arg_type<Varchar>* /*stringInput*/,
+      const arg_type<Varchar>* stringInput,
       const arg_type<Varchar>* pattern) {
-    if (pattern) {
-      // Converts Java named groups (?<name>...) to RE2 (?P<name>...) syntax.
-      // Despite the name, this function only handles named group conversion
-      // and is safe for match-only patterns.
-      const auto processedPattern = prepareRegexpReplacePattern(*pattern);
-      re_.emplace(processedPattern, RE2::Quiet);
-      VELOX_USER_CHECK(
-          re_->ok(),
-          "Invalid regular expression {}: {}.",
-          processedPattern,
-          re_->error());
-    }
-    cache_.setMaxCompiledRegexes(config.exprMaxCompiledRegexes());
+    initialize(inputTypes, config, stringInput, pattern, nullptr);
   }
 
   FOLLY_ALWAYS_INLINE void initialize(
@@ -272,7 +260,11 @@ struct RegexpInstrFunction {
     // NOTE: Spark's regexp_instr accepts an idx (group index) parameter but
     // silently ignores it — it always returns the position of the entire match
     // regardless of idx value. We replicate this behavior for compatibility.
+    // See: RegExpInStr.nullSafeEval in Spark's regexpExpressions.scala.
     if (pattern) {
+      // Converts Java named groups (?<name>...) to RE2 (?P<name>...) syntax.
+      // Despite the name, this function only handles named group conversion
+      // and is safe for match-only patterns.
       const auto processedPattern = prepareRegexpReplacePattern(*pattern);
       re_.emplace(processedPattern, RE2::Quiet);
       VELOX_USER_CHECK(

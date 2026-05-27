@@ -723,9 +723,16 @@ TEST_F(RegexFunctionsTest, regexpInstrInvalidPattern) {
         fmt::format("regexp_instr(c0, '{}')", pattern), str);
   };
 
-  // Invalid regex pattern should throw.
+  // Invalid regex pattern should throw (constant pattern path).
   VELOX_ASSERT_THROW(
       regexpInstr("hello", "[invalid"), "Invalid regular expression");
+
+  // Invalid regex pattern with dynamic (non-constant) pattern column.
+  auto strings = makeFlatVector<StringView>({"hello"});
+  auto patterns = makeFlatVector<StringView>({"[invalid"});
+  VELOX_ASSERT_THROW(
+      evaluate("regexp_instr(c0, c1)", makeRowVector({strings, patterns})),
+      "invalid regular expression");
 }
 
 TEST_F(RegexFunctionsTest, regexpInstrMultipleMatches) {

@@ -165,10 +165,11 @@ See https://github.com/google/re2/wiki/Syntax for more information.
     accepted for compatibility with Spark's function signature but is silently
     ignored — the function always returns the position of the entire match
     regardless of the ``idx`` value. This matches Spark's behavior where
-    ``regexp_instr`` ignores the group index parameter.
+    ``RegExpInStr.nullSafeEval`` ignores the group index parameter
+    (see ``regexpExpressions.scala``).
 
     Parameters:
 
     - **string**: The input string to search.
     - **pattern**: The regular expression pattern to match.
-    - **idx**: Accepted but ignored. Spark silently ignores this parameter.
+    - **idx**: Accepted but ignored per Spark semantics.
