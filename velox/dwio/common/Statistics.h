@@ -756,6 +756,12 @@ struct RuntimeStatistics {
 
   int64_t numStripes{0};
 
+  // Estimated bytes reported to the memory pool for the deserialized file
+  // footer, when the reader's footer-memory tracking path is engaged. Lets
+  // operators compare the estimate against actual pool usage. 0 when the
+  // reader did not engage tracking (e.g. footer below threshold).
+  int64_t footerEstimatedBytes{0};
+
   UnitLoaderStats unitLoaderStats;
   ColumnReaderStatistics columnReaderStats;
 
@@ -788,6 +794,11 @@ struct RuntimeStatistics {
     }
     if (numStripes > 0) {
       result.emplace("numStripes", RuntimeMetric(numStripes));
+    }
+    if (footerEstimatedBytes > 0) {
+      result.emplace(
+          "footerEstimatedBytes",
+          RuntimeMetric(footerEstimatedBytes, RuntimeCounter::Unit::kBytes));
     }
     columnReaderStats.toRuntimeMetrics(result);
     return result;

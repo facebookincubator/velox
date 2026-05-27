@@ -76,8 +76,11 @@ class ColumnChunkMetaDataPtr {
 
   /// Returns the estimated total bytes held by this column's thrift
   /// representation: sizeof(thrift::ColumnChunk) plus every dynamically
-  /// allocated vector and string reachable through it.
-  size_t calculateColumnMetadataSize() const;
+  /// allocated vector and string reachable through it. The estimate
+  /// walks the inline struct tree and approximates the heap footprint;
+  /// it is not measured from the allocator and may over- or
+  /// under-report by a small fraction.
+  size_t estimateColumnMetadataSize() const;
 
  private:
   const void* ptr_;
@@ -163,8 +166,11 @@ class FileMetaDataPtr {
 
   /// Returns the estimated total heap memory held by this file's thrift
   /// representation: sizeof(thrift::FileMetaData) plus every dynamically
-  /// allocated vector and string reachable through it.
-  size_t calculateFileMetadataSize() const;
+  /// allocated vector and string reachable through it. The estimate
+  /// walks the inline struct tree and approximates the heap footprint;
+  /// it is not measured from the allocator and may over- or
+  /// under-report by a small fraction.
+  size_t estimateFileMetadataSize() const;
 
  private:
   const void* ptr_;

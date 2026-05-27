@@ -144,17 +144,17 @@ class FileConfig {
       false,
       "Preserve dictionary encoding for Nimble string column reads.")
 
-  VELOX_HIVE_CONFIG_LEGACY(
+  VELOX_HIVE_CONFIG(
       kParquetFooterMemoryTrackingThresholdSession,
-      kParquetFooterMemoryTrackingThreshold,
       parquetFooterMemoryTrackingThreshold,
       "parquet_footer_memory_tracking_threshold",
-      "parquet.footer-memory-tracking-threshold",
       uint64_t,
       std::numeric_limits<uint64_t>::max(),
       "Footer byte size beyond which the Parquet reader estimates and "
       "reports the deserialized footer's heap footprint to the memory "
       "pool. Defaults to disabled (max uint64).")
+  static constexpr const char* kParquetFooterMemoryTrackingThreshold =
+      "parquet-footer-memory-tracking-threshold";
 
   // --- VELOX_HIVE_CONFIG properties ---
 

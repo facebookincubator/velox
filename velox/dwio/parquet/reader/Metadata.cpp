@@ -24,7 +24,12 @@ namespace {
 // Returns the heap bytes held by `s`, skipping SSO strings whose buffer is
 // inline within the std::string object and already counted by the containing
 // struct's sizeof. Detects SSO by checking whether s.data() points inside the
-// std::string itself, which is portable across libc++, libstdc++, and MSVC.
+// std::string itself. This relies on the standard library placing the SSO
+// buffer inside the object, which is true on libc++, libstdc++, and MSVC —
+// the implementations Velox supports — but is not guaranteed by the C++
+// standard. On a hypothetical implementation that stored SSO data outside
+// the object, the check would simply treat short strings as heap-allocated
+// and slightly over-report, never under-report.
 size_t heapStringSize(const std::string& s) {
   const auto* data = reinterpret_cast<const char*>(s.data());
   const auto* begin = reinterpret_cast<const char*>(&s);
@@ -507,11 +512,11 @@ std::string FileMetaDataPtr::createdBy() const {
   return thriftFileMetaDataPtr(ptr_)->created_by;
 }
 
-size_t ColumnChunkMetaDataPtr::calculateColumnMetadataSize() const {
+size_t ColumnChunkMetaDataPtr::estimateColumnMetadataSize() const {
   return columnMetadataSize(*thriftColumnChunkPtr(ptr_));
 }
 
-size_t FileMetaDataPtr::calculateFileMetadataSize() const {
+size_t FileMetaDataPtr::estimateFileMetadataSize() const {
   return fileMetadataSize(*thriftFileMetaDataPtr(ptr_));
 }
 

@@ -211,6 +211,14 @@ class ReaderBase {
     return thriftMemoryReported_;
   }
 
+  /// Returns the estimated footer size reported to the pool at
+  /// construction. Unchanged by later releaseThriftBytes() calls, so it
+  /// reflects the initial estimate rather than the remaining reservation.
+  /// Zero when tracking was not engaged.
+  size_t initialThriftSize() const {
+    return initialThriftSize_;
+  }
+
   /// Releases 'bytes' from the previously reported Thrift footer memory
   /// back to the pool and reduces the remaining tracked size accordingly.
   /// Called when parts of the footer (e.g. cleared row group columns) are
@@ -273,6 +281,11 @@ class ReaderBase {
   // reported to 'pool_' and not yet released. Decreases as row group
   // columns are cleared early; the remainder is released by ~ReaderBase.
   size_t thriftSize_{0};
+
+  // The value of 'thriftSize_' at construction time, captured before any
+  // releaseThriftBytes() calls shrink it. Surfaced as a runtime stat so
+  // operators can compare the estimate against actual pool usage.
+  size_t initialThriftSize_{0};
 };
 
 ReaderBase::ReaderBase(
@@ -299,6 +312,7 @@ ReaderBase::ReaderBase(
   if (thriftSize_ > 0) {
     pool_.reportExternalAllocation(thriftSize_);
     thriftMemoryReported_ = true;
+    initialThriftSize_ = thriftSize_;
   }
 }
 
@@ -364,7 +378,7 @@ void ReaderBase::loadFileMetaData() {
   fileMetaData_ = std::make_unique<thrift::FileMetaData>();
   fileMetaData_->read(thriftProtocol.get());
   if (footerLength > options().parquetFooterMemoryTrackingThreshold()) {
-    thriftSize_ = fileMetaData().calculateFileMetadataSize();
+    thriftSize_ = fileMetaData().estimateFileMetadataSize();
   }
 }
 
@@ -1424,7 +1438,7 @@ class ParquetRowReader::Impl {
           if (readerBase_->isThriftMemoryReported()) {
             for (const auto& column : rowGroups_[i].columns) {
               freedThriftSize +=
-                  ColumnChunkMetaDataPtr(&column).calculateColumnMetadataSize();
+                  ColumnChunkMetaDataPtr(&column).estimateColumnMetadataSize();
             }
           }
           // Swap with a fresh empty vector to actually release the buffer.
@@ -1507,6 +1521,7 @@ class ParquetRowReader::Impl {
   void updateRuntimeStats(dwio::common::RuntimeStatistics& stats) const {
     stats.skippedStrides += skippedStrides_;
     stats.processedStrides += rowGroupIds_.size();
+    stats.footerEstimatedBytes += readerBase_->initialThriftSize();
     stats.columnReaderStats.pageLoadTimeNs.merge(
         columnReaderStats_.pageLoadTimeNs);
   }
