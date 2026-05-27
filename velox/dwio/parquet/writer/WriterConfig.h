@@ -38,6 +38,11 @@ struct WriterConfig {
       "hive.parquet.writer.enable_dictionary";
   static constexpr const char* kParquetHiveConnectorEnableDictionary =
       "hive.parquet.writer.enable-dictionary";
+  static constexpr const char* kParquetSessionEnableStoreDecimalAsInteger =
+      "hive.parquet.writer.enable_store_decimal_as_integer";
+  static constexpr const char*
+      kParquetHiveConnectorEnableStoreDecimalAsInteger =
+          "hive.parquet.writer.enable-store-decimal-as-integer";
   static constexpr const char* kParquetSessionDictionaryPageSizeLimit =
       "hive.parquet.writer.dictionary_page_size_limit";
   static constexpr const char* kParquetHiveConnectorDictionaryPageSizeLimit =

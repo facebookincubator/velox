@@ -901,6 +901,12 @@ class RowContainer {
     return accumulators_;
   }
 
+  /// Returns the RowColumn for the i-th accumulator. Accumulators are laid
+  /// out in row storage after the keys.
+  RowColumn accumulatorColumnAt(int32_t i) const {
+    return columnAt(keyTypes_.size() + i);
+  }
+
   const HashStringAllocator& stringAllocator() const {
     return *stringAllocator_;
   }
