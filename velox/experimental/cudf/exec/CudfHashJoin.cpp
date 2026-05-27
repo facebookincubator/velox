@@ -123,30 +123,55 @@ cudf::type_id findCanonicalTimestampType(
 /// Casts any timestamp column whose resolution differs from `target` and
 /// returns the new table_view.  Owned columns are appended to `storage` so
 /// they outlive the returned view.
+///
+/// NOTE: Casting from a coarser to a finer resolution (e.g. SECONDS →
+/// NANOSECONDS) multiplies the underlying int64 by up to 10^9. This overflows
+/// for timestamps beyond ~±292 years from epoch. Velox/Presto timestamps are
+/// bounded well within this range in practice.
 cudf::table_view normalizeTimestampColumns(
     cudf::table_view view,
     cudf::type_id target,
     std::vector<std::unique_ptr<cudf::column>>& storage,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
-  bool rebuilt = false;
   std::vector<cudf::column_view> cols;
   cols.reserve(view.num_columns());
+  bool anycast = false;
   for (cudf::size_type i = 0; i < view.num_columns(); ++i) {
     auto id = view.column(i).type().id();
     if (cudf::is_timestamp(cudf::data_type{id}) && id != target) {
       storage.push_back(
           cudf::cast(view.column(i), cudf::data_type{target}, stream, mr));
       cols.push_back(storage.back()->view());
-      rebuilt = true;
+      anycast = true;
     } else {
       cols.push_back(view.column(i));
     }
   }
-  if (!rebuilt) {
-    return view;
-  }
-  return cudf::table_view(cols);
+  return anycast ? cudf::table_view(cols) : view;
+}
+
+/// Normalizes timestamp columns in both tables to match the finest resolution
+/// present across either side.  Returns the (possibly unchanged) views and
+/// owns any intermediate cast columns via the returned storage vector.
+struct NormalizedPair {
+  cudf::table_view left;
+  cudf::table_view right;
+  std::vector<std::unique_ptr<cudf::column>> storage;
+};
+
+NormalizedPair normalizeBothSides(
+    cudf::table_view left,
+    cudf::table_view right,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  auto canonTs = findCanonicalTimestampType(left, right);
+  NormalizedPair result;
+  result.left =
+      normalizeTimestampColumns(left, canonTs, result.storage, stream, mr);
+  result.right =
+      normalizeTimestampColumns(right, canonTs, result.storage, stream, mr);
+  return result;
 }
 
 } // namespace
@@ -811,18 +836,13 @@ std::unique_ptr<cudf::table> CudfHashJoinProbe::filteredOutputIndices(
   // Normalize timestamp resolutions across both sides so the AST filter
   // tree sees matching types.  Different Parquet files may store timestamps
   // at different resolutions (e.g. microseconds vs nanoseconds).
-  auto canonicalTs =
-      findCanonicalTimestampType(extendedLeftView, extendedRightView);
-  std::vector<std::unique_ptr<cudf::column>> tsNormStorage;
-  auto normalizedLeft = normalizeTimestampColumns(
-      extendedLeftView, canonicalTs, tsNormStorage, stream, get_temp_mr());
-  auto normalizedRight = normalizeTimestampColumns(
-      extendedRightView, canonicalTs, tsNormStorage, stream, get_temp_mr());
+  auto norm = normalizeBothSides(
+      extendedLeftView, extendedRightView, stream, get_temp_mr());
   // Use extended views (with precomputed columns) for filter evaluation
   auto [filteredLeftJoinIndices, filteredRightJoinIndices] =
       cudf::filter_join_indices(
-          normalizedLeft,
-          normalizedRight,
+          norm.left,
+          norm.right,
           leftIndicesCol,
           rightIndicesCol,
           tree_.back(),
@@ -1259,16 +1279,12 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::fullJoin(
       // Use filter_join_indices with LEFT_JOIN to get proper full join probe
       // semantics: all probe rows are kept, build columns are NULL when filter
       // fails or no match.
-      auto canonTs = findCanonicalTimestampType(leftTableView, rightTableView);
-      std::vector<std::unique_ptr<cudf::column>> tsStorage;
-      auto normLeft = normalizeTimestampColumns(
-          leftTableView, canonTs, tsStorage, stream, get_temp_mr());
-      auto normRight = normalizeTimestampColumns(
-          rightTableView, canonTs, tsStorage, stream, get_temp_mr());
+      auto norm = normalizeBothSides(
+          leftTableView, rightTableView, stream, get_temp_mr());
       auto [filteredLeftJoinIndices, filteredRightJoinIndices] =
           cudf::filter_join_indices(
-              normLeft,
-              normRight,
+              norm.left,
+              norm.right,
               leftIndicesCol,
               rightIndicesCol,
               tree_.back(),
@@ -1346,17 +1362,13 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::leftSemiFilterJoin(
     std::unique_ptr<rmm::device_uvector<cudf::size_type>> leftJoinIndices;
 
     if (joinNode_->filter()) {
-      auto canonTs = findCanonicalTimestampType(leftTableView, rightTableView);
-      std::vector<std::unique_ptr<cudf::column>> tsStorage;
-      auto normLeft = normalizeTimestampColumns(
-          leftTableView, canonTs, tsStorage, stream, get_temp_mr());
-      auto normRight = normalizeTimestampColumns(
-          rightTableView, canonTs, tsStorage, stream, get_temp_mr());
+      auto norm = normalizeBothSides(
+          leftTableView, rightTableView, stream, get_temp_mr());
       leftJoinIndices = cudf::mixed_left_semi_join(
-          normLeft.select(leftKeyIndices_),
-          normRight.select(rightKeyIndices_),
-          normLeft,
-          normRight,
+          norm.left.select(leftKeyIndices_),
+          norm.right.select(rightKeyIndices_),
+          norm.left,
+          norm.right,
           tree_.back(),
           cudf::null_equality::UNEQUAL,
           stream,
@@ -1601,16 +1613,11 @@ CudfHashJoinProbe::leftSemiProjectJoin(
     if (joinNode_->filter()) {
       // Step 2: Apply filter to the join pairs. INNER_JOIN mode keeps only
       // pairs where the predicate evaluates to true.
-      auto canonTs =
-          findCanonicalTimestampType(extendedLeftView, extendedRightView);
-      std::vector<std::unique_ptr<cudf::column>> tsStorage;
-      auto normLeft = normalizeTimestampColumns(
-          extendedLeftView, canonTs, tsStorage, stream, get_temp_mr());
-      auto normRight = normalizeTimestampColumns(
-          extendedRightView, canonTs, tsStorage, stream, get_temp_mr());
+      auto norm = normalizeBothSides(
+          extendedLeftView, extendedRightView, stream, get_temp_mr());
       auto [filteredLeft, filteredRight] = cudf::filter_join_indices(
-          normLeft,
-          normRight,
+          norm.left,
+          norm.right,
           leftIndicesSpan,
           rightIndicesSpan,
           tree_.back(),
@@ -1705,17 +1712,12 @@ CudfHashJoinProbe::leftSemiProjectJoin(
             return;
           }
 
-          auto canonTs =
-              findCanonicalTimestampType(extendedLeftView, extendedRight);
-          std::vector<std::unique_ptr<cudf::column>> tsStorage;
-          auto normLeft = normalizeTimestampColumns(
-              extendedLeftView, canonTs, tsStorage, stream, get_temp_mr());
-          auto normRight = normalizeTimestampColumns(
-              extendedRight, canonTs, tsStorage, stream, get_temp_mr());
+          auto norm = normalizeBothSides(
+              extendedLeftView, extendedRight, stream, get_temp_mr());
 
           auto [filteredLeft, filteredRight] = cudf::filter_join_indices(
-              normLeft,
-              normRight,
+              norm.left,
+              norm.right,
               toSpan(syntheticLeft->view()),
               toSpan(syntheticRight->view()),
               tree_.back(),
@@ -1939,17 +1941,13 @@ CudfHashJoinProbe::rightSemiFilterJoin(
 
   std::unique_ptr<rmm::device_uvector<cudf::size_type>> rightJoinIndices;
   if (joinNode_->filter()) {
-    auto canonTs = findCanonicalTimestampType(rightTableView, leftTableView);
-    std::vector<std::unique_ptr<cudf::column>> tsStorage;
-    auto normRight = normalizeTimestampColumns(
-        rightTableView, canonTs, tsStorage, stream, get_temp_mr());
-    auto normLeft = normalizeTimestampColumns(
-        leftTableView, canonTs, tsStorage, stream, get_temp_mr());
+    auto norm = normalizeBothSides(
+        rightTableView, leftTableView, stream, get_temp_mr());
     rightJoinIndices = cudf::mixed_left_semi_join(
-        normRight.select(rightKeyIndices_),
-        normLeft.select(leftKeyIndices_),
-        normRight,
-        normLeft,
+        norm.left.select(rightKeyIndices_),
+        norm.right.select(leftKeyIndices_),
+        norm.left,
+        norm.right,
         tree_.back(),
         cudf::null_equality::UNEQUAL,
         stream,
@@ -2014,17 +2012,13 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::antiJoin(
 
   std::unique_ptr<rmm::device_uvector<cudf::size_type>> leftJoinIndices;
   if (joinNode_->filter()) {
-    auto canonTs = findCanonicalTimestampType(leftTableView, rightTableView);
-    std::vector<std::unique_ptr<cudf::column>> tsStorage;
-    auto normLeft = normalizeTimestampColumns(
-        leftTableView, canonTs, tsStorage, stream, get_temp_mr());
-    auto normRight = normalizeTimestampColumns(
-        rightTableView, canonTs, tsStorage, stream, get_temp_mr());
+    auto norm = normalizeBothSides(
+        leftTableView, rightTableView, stream, get_temp_mr());
     leftJoinIndices = cudf::mixed_left_anti_join(
-        normLeft.select(leftKeyIndices_),
-        normRight.select(rightKeyIndices_),
-        normLeft,
-        normRight,
+        norm.left.select(leftKeyIndices_),
+        norm.right.select(rightKeyIndices_),
+        norm.left,
+        norm.right,
         tree_.back(),
         cudf::null_equality::UNEQUAL,
         stream,
