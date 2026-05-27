@@ -99,7 +99,29 @@ Read them before reviewing:
 - If `/pr-review` was invoked in reply to a specific comment thread, focus
   the review on that thread's concerns instead of re-reviewing the whole PR.
 
-### Step 3: Deep Review
+### Step 3: Check PR Title and Description Quality
+
+Read the PR title and body, and walk the self-check in
+`.claude/skills/write-commit-message/SKILL.md`. If **2 or more** items fail
+(e.g., long lists embedded in sentences, function-by-function walkthroughs,
+restating the diff, jargon nouns, long inline code/error strings), include a
+single short note in the summary comment asking the author to tighten the
+description. Template:
+
+```
+The PR description would read more clearly with a rewrite. Specifically:
+- <issue 1, one short sentence>
+- <issue 2, one short sentence>
+
+The `write-commit-message` skill at `.claude/skills/write-commit-message/`
+can help (it has a self-check + drafting workflow), but any path is fine
+as long as the result is clear.
+```
+
+One short paragraph in the summary comment — do not file an inline comment
+per issue, and do not nag on 0–1 minor issues.
+
+### Step 4: Deep Review
 
 Trace the logic step by step. For each change, consider boundary conditions
 (empty, null, max size, first/last iteration), failure modes (allocation
