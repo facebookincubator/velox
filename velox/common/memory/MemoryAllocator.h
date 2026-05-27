@@ -269,7 +269,7 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
 
   static constexpr int32_t kMaxSizeClasses = 12;
   static constexpr uint16_t kMinAlignment = alignof(max_align_t);
-  static constexpr uint16_t kMaxAlignment = 64;
+  static constexpr uint16_t kDefaultAlignment = 64;
 
   /// Returns the kind of this memory allocator. For AsyncDataCache, it returns
   /// the kind of the delegated memory allocator underneath.
@@ -362,8 +362,7 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
   /// space from 'cache()' if registered. But sufficient space is not
   /// guaranteed.
   ///
-  /// NOTE: 'alignment' must be power of two and in range of
-  /// [kMinAlignment, kMaxAlignment].
+  /// NOTE: 'alignment' must be power of two and >= kMinAlignment.
   void* allocateBytes(uint64_t bytes, uint16_t alignment = kMinAlignment);
 
   /// Allocates a zero-filled contiguous bytes. Returns nullptr if there is no
