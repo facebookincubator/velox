@@ -120,14 +120,108 @@ cudf::type_id findCanonicalTimestampType(
   return best;
 }
 
+/// Returns the finest resolution that `col` can safely be cast to without
+/// overflowing int64.  For MICROSECONDS → NANOSECONDS (×10^3) the range is
+/// always safe.  For coarser sources (SECONDS, MILLISECONDS) heading to a
+/// finer target, we inspect the column's actual min/max via cudf::minmax()
+/// and select the finest type whose scaling factor won't overflow.
+cudf::type_id safestFinestPrecision(
+    cudf::column_view col,
+    cudf::type_id target,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  auto src = col.type().id();
+  if (src == target || col.size() == 0) {
+    return target;
+  }
+  if (src == cudf::type_id::TIMESTAMP_MICROSECONDS &&
+      target == cudf::type_id::TIMESTAMP_NANOSECONDS) {
+    return target;
+  }
+
+  // Max absolute source value that survives the cast to each target.
+  // E.g. SECONDS → NANOSECONDS multiplies by 10^9, so |val| must be
+  // ≤ INT64_MAX / 10^9 ≈ 9.2×10^9.
+  static constexpr int64_t kMaxSecToNanos = 9'223'372'036LL;
+  static constexpr int64_t kMaxSecToMicros = 9'223'372'036'854LL;
+  static constexpr int64_t kMaxSecToMillis = 9'223'372'036'854'775LL;
+  static constexpr int64_t kMaxMillisToNanos = 9'223'372'036'854LL;
+  static constexpr int64_t kMaxMillisToMicros = 9'223'372'036'854'775LL;
+
+  struct Candidate {
+    cudf::type_id type;
+    int64_t limit;
+  };
+
+  std::vector<Candidate> candidates;
+  if (src == cudf::type_id::TIMESTAMP_SECONDS) {
+    if (timestampResolutionRank(target) >= 3)
+      candidates.push_back(
+          {cudf::type_id::TIMESTAMP_NANOSECONDS, kMaxSecToNanos});
+    if (timestampResolutionRank(target) >= 2)
+      candidates.push_back(
+          {cudf::type_id::TIMESTAMP_MICROSECONDS, kMaxSecToMicros});
+    if (timestampResolutionRank(target) >= 1)
+      candidates.push_back(
+          {cudf::type_id::TIMESTAMP_MILLISECONDS, kMaxSecToMillis});
+  } else if (src == cudf::type_id::TIMESTAMP_MILLISECONDS) {
+    if (timestampResolutionRank(target) >= 3)
+      candidates.push_back(
+          {cudf::type_id::TIMESTAMP_NANOSECONDS, kMaxMillisToNanos});
+    if (timestampResolutionRank(target) >= 2)
+      candidates.push_back(
+          {cudf::type_id::TIMESTAMP_MICROSECONDS, kMaxMillisToMicros});
+  }
+
+  if (candidates.empty()) {
+    return target;
+  }
+
+  auto extremes = cudf::minmax(col, stream, mr);
+  auto minTicks =
+      static_cast<cudf::numeric_scalar<int64_t> const&>(*extremes.first)
+          .value(stream);
+  auto maxTicks =
+      static_cast<cudf::numeric_scalar<int64_t> const&>(*extremes.second)
+          .value(stream);
+  int64_t absMax = std::max(std::abs(minTicks), std::abs(maxTicks));
+
+  for (auto& c : candidates) {
+    if (absMax <= c.limit) {
+      return c.type;
+    }
+  }
+  return src;
+}
+
+/// Finds the finest timestamp resolution that ALL timestamp columns across
+/// both tables can safely be cast to without int64 overflow.
+cudf::type_id findSafeCanonicalType(
+    cudf::table_view left,
+    cudf::table_view right,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  auto target = findCanonicalTimestampType(left, right);
+  auto clampToSafe = [&](cudf::table_view view) {
+    for (cudf::size_type i = 0; i < view.num_columns(); ++i) {
+      auto id = view.column(i).type().id();
+      if (!cudf::is_timestamp(cudf::data_type{id}) || id == target) {
+        continue;
+      }
+      auto safe = safestFinestPrecision(view.column(i), target, stream, mr);
+      if (timestampResolutionRank(safe) < timestampResolutionRank(target)) {
+        target = safe;
+      }
+    }
+  };
+  clampToSafe(left);
+  clampToSafe(right);
+  return target;
+}
+
 /// Casts any timestamp column whose resolution differs from `target` and
 /// returns the new table_view.  Owned columns are appended to `storage` so
 /// they outlive the returned view.
-///
-/// NOTE: Casting from a coarser to a finer resolution (e.g. SECONDS →
-/// NANOSECONDS) multiplies the underlying int64 by up to 10^9. This overflows
-/// for timestamps beyond ~±292 years from epoch. Velox/Presto timestamps are
-/// bounded well within this range in practice.
 cudf::table_view normalizeTimestampColumns(
     cudf::table_view view,
     cudf::type_id target,
@@ -165,7 +259,7 @@ NormalizedPair normalizeBothSides(
     cudf::table_view right,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
-  auto canonTs = findCanonicalTimestampType(left, right);
+  auto canonTs = findSafeCanonicalType(left, right, stream, mr);
   NormalizedPair result;
   result.left =
       normalizeTimestampColumns(left, canonTs, result.storage, stream, mr);
