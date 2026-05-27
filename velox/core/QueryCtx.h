@@ -26,7 +26,6 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/memory/Memory.h"
-#include "velox/core/ExchangeTransportType.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/core/ScanBatchEvent.h"
 #include "velox/vector/DecodedVector.h"
@@ -37,6 +36,9 @@ class TraceCtx;
 } // namespace facebook::velox::exec::trace
 
 namespace facebook::velox::core {
+
+/// Determines how data is physically transferred between tasks.
+enum class ExchangeTransportType { kHttp, kUcx };
 
 struct PlanFragment;
 

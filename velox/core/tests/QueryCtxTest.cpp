@@ -140,7 +140,8 @@ TEST_F(QueryCtxTest, builderReleaseCallbacks) {
   ASSERT_EQ(callbackCount, 2);
   ASSERT_EQ(capturedQueryId, "builder_test_query_id");
 }
-TEST_F(QueryCtxTest, transportTypeDefaultsToHttp) {
+
+TEST_F(QueryCtxTest, transportTypeDefaults) {
   auto queryCtx = QueryCtx::Builder().build();
   EXPECT_EQ(
       queryCtx->inputTransportType("node1"), ExchangeTransportType::kHttp);

@@ -28,7 +28,6 @@ velox_add_library(
   TableWriteTraits.cpp
   HEADERS
   CoreTypeSystem.h
-  ExchangeTransportType.h
   Expressions.h
   ITypedExpr.h
   PlanConsistencyChecker.h
