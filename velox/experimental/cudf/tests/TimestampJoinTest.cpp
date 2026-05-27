@@ -454,6 +454,79 @@ TEST_F(TimestampJoinTest, overflowSafeNormalization) {
   ConnectorRegistry::global().erase(kSecConnectorId);
 }
 
+// Inner join with CASE WHEN filter spanning both sides and mismatched
+// timestamp resolutions (probe = MICROSECONDS, build = NANOSECONDS).
+// CASE WHEN with cross-side references in the value branches triggers
+// useAstFilter_ = false (Path B: filteredOutput).  Unlike Path A which
+// uses filter_join_indices (requires exact type matches), Path B evaluates
+// sub-expressions via cudf::compute_column() which handles implicit type
+// promotion for timestamp comparisons.  This test verifies that Path B
+// works correctly without explicit normalization.
+TEST_F(TimestampJoinTest, filteredOutputMismatchedTimestamps) {
+  auto idGenerator = std::make_shared<PlanNodeIdGenerator>();
+
+  PlanNodeId probeScanId;
+  PlanNodeId buildScanId;
+
+  auto plan =
+      scanThrough(probeType_, kMicroConnectorId, idGenerator)
+          .capturePlanNodeId(probeScanId)
+          .hashJoin(
+              {"t_key"},
+              {"u_key"},
+              scanThrough(buildType_, kNanoConnectorId, idGenerator)
+                  .capturePlanNodeId(buildScanId)
+                  .planNode(),
+              "CASE WHEN t_key > 5 THEN t_ts < u_ts ELSE t_ts > u_ts END",
+              {"t_key", "t_ts", "u_ts"},
+              JoinType::kInner)
+          .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .split(probeScanId, makeSplit(probeFile_->getPath(), kMicroConnectorId))
+      .split(buildScanId, makeSplit(buildFile_->getPath(), kNanoConnectorId))
+      .assertResults(
+          "SELECT t.t_key, t.t_ts, u.u_ts "
+          "FROM t, u "
+          "WHERE t.t_key = u.u_key AND "
+          "CASE WHEN t.t_key > 5 THEN t.t_ts < u.u_ts "
+          "ELSE t.t_ts > u.u_ts END");
+}
+
+// Same CASE WHEN filter spanning both sides but with matching timestamp
+// resolutions (both NANOSECONDS).  Exercises Path B (filteredOutput)
+// without the type mismatch as a baseline.
+TEST_F(TimestampJoinTest, filteredOutputMatchedTimestamps) {
+  auto idGenerator = std::make_shared<PlanNodeIdGenerator>();
+
+  PlanNodeId probeScanId;
+  PlanNodeId buildScanId;
+
+  auto plan =
+      scanThrough(probeType_, kNanoConnectorId, idGenerator)
+          .capturePlanNodeId(probeScanId)
+          .hashJoin(
+              {"t_key"},
+              {"u_key"},
+              scanThrough(buildType_, kNanoConnectorId, idGenerator)
+                  .capturePlanNodeId(buildScanId)
+                  .planNode(),
+              "CASE WHEN t_key > 5 THEN t_ts < u_ts ELSE t_ts > u_ts END",
+              {"t_key", "t_ts", "u_ts"},
+              JoinType::kInner)
+          .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .split(probeScanId, makeSplit(probeFile_->getPath(), kNanoConnectorId))
+      .split(buildScanId, makeSplit(buildFile_->getPath(), kNanoConnectorId))
+      .assertResults(
+          "SELECT t.t_key, t.t_ts, u.u_ts "
+          "FROM t, u "
+          "WHERE t.t_key = u.u_key AND "
+          "CASE WHEN t.t_key > 5 THEN t.t_ts < u.u_ts "
+          "ELSE t.t_ts > u.u_ts END");
+}
+
 // Both sides use the same nano connector. Verifies no regression when
 // timestamp resolutions already match.
 TEST_F(TimestampJoinTest, noMismatchNoOp) {
