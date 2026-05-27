@@ -774,7 +774,7 @@ TEST_P(MemoryPoolTest, alignmentCheck) {
       0,
       MemoryAllocator::kMinAlignment,
       MemoryAllocator::kMinAlignment * 2,
-      MemoryAllocator::kMaxAlignment};
+      MemoryAllocator::kDefaultAlignment};
   for (const auto& alignment : alignments) {
     SCOPED_TRACE(fmt::format("alignment:{}", alignment));
     MemoryManager::Options options;
@@ -924,7 +924,7 @@ TEST(MemoryPoolTest, GetAlignment) {
     MemoryManager::Options options;
     options.allocatorCapacity = kMaxMemory;
     EXPECT_EQ(
-        MemoryAllocator::kMaxAlignment,
+        MemoryAllocator::kDefaultAlignment,
         MemoryManager{options}.addRootPool()->alignment());
   }
   {
@@ -934,6 +934,56 @@ TEST(MemoryPoolTest, GetAlignment) {
     MemoryManager manager{options};
     EXPECT_EQ(64, manager.addRootPool()->alignment());
   }
+}
+
+TEST(MemoryPoolTest, allocateAligned) {
+  MemoryManager::testingSetInstance({});
+  auto pool = memoryManager()->addLeafPool("allocateAlignedTest");
+
+  struct TestCase {
+    int64_t size;
+    uint32_t alignment;
+    std::string debugString() const {
+      return fmt::format("size={}, alignment={}", size, alignment);
+    }
+  };
+  std::vector<TestCase> testCases = {
+      {4'096, 4'096},
+      {8'192, 4'096},
+      {4'096, 128},
+      {1'024, 512},
+      {16'384, 4'096},
+  };
+
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(testCase.debugString());
+    auto* buffer = pool->allocateAligned(testCase.size, testCase.alignment);
+    ASSERT_NE(buffer, nullptr);
+    EXPECT_EQ(reinterpret_cast<uintptr_t>(buffer) % testCase.alignment, 0);
+    std::memset(buffer, 0x42, testCase.size);
+    pool->freeAligned(buffer, testCase.size, testCase.alignment);
+  }
+}
+
+TEST(MemoryPoolTest, allocateAlignedInvalidAlignment) {
+  MemoryManager::testingSetInstance({});
+  auto pool = memoryManager()->addLeafPool("allocateAlignedInvalidTest");
+
+  VELOX_ASSERT_THROW(pool->allocateAligned(4'096, 3), "power of two");
+  VELOX_ASSERT_THROW(pool->allocateAligned(0, 4'096), "");
+}
+
+TEST(MemoryPoolTest, allocateAlignedTracksUsage) {
+  MemoryManager::testingSetInstance({});
+  auto root =
+      memoryManager()->addRootPool("allocateAlignedUsageRoot", kMaxMemory);
+  auto pool = root->addLeafChild("allocateAlignedUsageTest");
+
+  const auto statsBefore = pool->stats();
+  auto* buffer = pool->allocateAligned(4'096, 4'096);
+  EXPECT_GT(pool->stats().numAllocs, statsBefore.numAllocs);
+  pool->freeAligned(buffer, 4'096, 4'096);
+  EXPECT_GT(pool->stats().numFrees, statsBefore.numFrees);
 }
 
 TEST_P(MemoryPoolTest, MemoryManagerGlobalCap) {
