@@ -16,91 +16,20 @@
 
 #include "velox/connectors/hive/FileSplitReader.h"
 
+#include <cstddef>
+#include <cstdint>
+
 #include "velox/common/caching/CacheTTLController.h"
 #include "velox/connectors/hive/BufferedInputBuilder.h"
 #include "velox/connectors/hive/FileConfig.h"
 #include "velox/connectors/hive/FileConnectorSplit.h"
 #include "velox/connectors/hive/FileConnectorUtil.h"
+#include "velox/core/VectorUtil.h"
 #include "velox/dwio/common/ReaderFactory.h"
 #include "velox/type/DecimalUtil.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::connector::hive {
-namespace {
-
-template <TypeKind kind>
-VectorPtr newConstantFromStringImpl(
-    const TypePtr& type,
-    const std::optional<std::string>& value,
-    velox::memory::MemoryPool* pool,
-    bool isLocalTimestamp,
-    bool isDaysSinceEpoch) {
-  using T = typename TypeTraits<kind>::NativeType;
-  if (!value.has_value()) {
-    return std::make_shared<ConstantVector<T>>(pool, 1, true, type, T());
-  }
-
-  if (type->isDate()) {
-    int32_t days = 0;
-    // For Iceberg, the date partition values are already in daysSinceEpoch
-    // form.
-    if (isDaysSinceEpoch) {
-      days = folly::to<int32_t>(value.value());
-    } else {
-      days = DATE()->toDays(value.value());
-    }
-    return std::make_shared<ConstantVector<int32_t>>(
-        pool, 1, false, type, std::move(days));
-  }
-
-  if constexpr (std::is_same_v<T, int64_t> || std::is_same_v<T, int128_t>) {
-    if (type->isDecimal()) {
-      T decimalValue = 0;
-      auto [precision, scale] = getDecimalPrecisionScale(*type);
-      auto status = DecimalUtil::castFromString(
-          StringView(value.value()), precision, scale, decimalValue);
-      if (!status.ok()) {
-        VELOX_USER_FAIL(status.message());
-      }
-      return std::make_shared<ConstantVector<T>>(
-          pool, 1, false, type, std::move(decimalValue));
-    }
-  }
-  if constexpr (std::is_same_v<T, StringView>) {
-    return std::make_shared<ConstantVector<StringView>>(
-        pool, 1, false, type, StringView(value.value()));
-  } else {
-    auto copy = velox::util::Converter<kind>::tryCast(value.value())
-                    .thenOrThrow(folly::identity, [&](const Status& status) {
-                      VELOX_USER_FAIL("{}", status.message());
-                    });
-    if constexpr (kind == TypeKind::TIMESTAMP) {
-      VELOX_DCHECK(type->equivalent(*TIMESTAMP()));
-      if (isLocalTimestamp) {
-        copy.toGMT(Timestamp::defaultTimezone());
-      }
-    }
-    return std::make_shared<ConstantVector<T>>(
-        pool, 1, false, type, std::move(copy));
-  }
-}
-} // namespace
-
-VectorPtr newConstantFromString(
-    const TypePtr& type,
-    const std::optional<std::string>& value,
-    velox::memory::MemoryPool* pool,
-    bool isLocalTimestamp,
-    bool isDaysSinceEpoch) {
-  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
-      newConstantFromStringImpl,
-      type->kind(),
-      type,
-      value,
-      pool,
-      isLocalTimestamp,
-      isDaysSinceEpoch);
-}
-
 std::unique_ptr<FileSplitReader> FileSplitReader::create(
     const std::shared_ptr<const hive::FileConnectorSplit>& fileSplit,
     const FileTableHandlePtr& tableHandle,
@@ -154,6 +83,11 @@ FileSplitReader::FileSplitReader(
       fileHandleFactory_(fileHandleFactory),
       ioExecutor_(ioExecutor),
       pool_(connectorQueryCtx->memoryPool()),
+      sessionTimezone_(
+          connectorQueryCtx->sessionTimezone().empty()
+              ? nullptr
+              : tz::locateZone(connectorQueryCtx->sessionTimezone())),
+      adjustTimestampToTimezone_(connectorQueryCtx->adjustTimestampToTimezone()),
       scanSpec_(scanSpec),
       subfieldFiltersForValidation_(subfieldFiltersForValidation),
       fileSplit_(fileSplit),
@@ -459,13 +393,17 @@ void FileSplitReader::setPartitionValue(
       "ColumnHandle is missing for partition key {}",
       partitionKey);
   const auto type = it->second->dataType();
-  const auto constant = newConstantFromString(
+  const auto constant = velox::core::newConstantFromString(
       type,
       value,
       connectorQueryCtx_->memoryPool(),
       fileConfig_->readTimestampPartitionValueAsLocalTime(
           connectorQueryCtx_->sessionProperties()),
-      it->second->isPartitionDateValueDaysSinceEpoch());
+      it->second->isPartitionDateValueDaysSinceEpoch(),
+      adjustTimestampToTimezone_ ? sessionTimezone_ : nullptr);
+  // Replace the placeholder null constant with the actual partition value.
+  // The column was already marked as constant in makeScanSpec to prevent
+  // child reader creation.
   spec->setConstantValue(constant);
 }
 

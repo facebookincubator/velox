@@ -19,8 +19,75 @@
 #include "velox/connectors/hive/FileConfig.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
+#include "velox/connectors/hive/delta/DeltaSplitReader.h"
+#include "velox/connectors/hive/delta/HiveDeltaSplit.h"
+#include "velox/core/VectorUtil.h"
 
 namespace facebook::velox::connector::hive {
+
+std::unique_ptr<FileSplitReader> HiveSplitReader::create(
+    const std::shared_ptr<const HiveConnectorSplit>& hiveSplit,
+    const FileTableHandlePtr& tableHandle,
+    const std::unordered_map<std::string, FileColumnHandlePtr>* partitionKeys,
+    const ConnectorQueryCtx* connectorQueryCtx,
+    const std::shared_ptr<const FileConfig>& fileConfig,
+    const RowTypePtr& readerOutputType,
+    const std::shared_ptr<io::IoStatistics>& dataIoStats,
+    const std::shared_ptr<io::IoStatistics>& metadataIoStats,
+    const std::shared_ptr<IoStats>& ioStats,
+    FileHandleFactory* fileHandleFactory,
+    folly::Executor* ioExecutor,
+    const std::shared_ptr<common::ScanSpec>& scanSpec,
+    const std::unordered_map<std::string, FileColumnHandlePtr>* infoColumns,
+    std::vector<column_index_t> bucketChannels,
+    const common::SubfieldFilters* subfieldFiltersForValidation) {
+  // Create the SplitReader based on hiveSplit->customSplitInfo["table_format"]
+  if (hiveSplit->customSplitInfo.count("table_format") > 0) {
+    const auto& tableFormat = hiveSplit->customSplitInfo.at("table_format");
+
+    if (tableFormat == "hive-delta") {
+      auto deltaSplit =
+          std::dynamic_pointer_cast<const delta::HiveDeltaSplit>(hiveSplit);
+      VELOX_CHECK_NOT_NULL(
+          deltaSplit,
+          "Expected HiveDeltaSplit for table_format=hive-delta");
+      return std::make_unique<delta::DeltaSplitReader>(
+          deltaSplit,
+          tableHandle,
+          partitionKeys,
+          connectorQueryCtx,
+          fileConfig,
+          readerOutputType,
+          dataIoStats,
+          metadataIoStats,
+          ioStats,
+          fileHandleFactory,
+          ioExecutor,
+          scanSpec,
+          infoColumns,
+          std::move(bucketChannels),
+          subfieldFiltersForValidation);
+    }
+  }
+
+  // Default to HiveSplitReader for regular Hive tables
+  return std::make_unique<HiveSplitReader>(
+      hiveSplit,
+      tableHandle,
+      partitionKeys,
+      connectorQueryCtx,
+      fileConfig,
+      readerOutputType,
+      dataIoStats,
+      metadataIoStats,
+      ioStats,
+      fileHandleFactory,
+      ioExecutor,
+      scanSpec,
+      infoColumns,
+      std::move(bucketChannels),
+      subfieldFiltersForValidation);
+}
 
 HiveSplitReader::HiveSplitReader(
     const std::shared_ptr<const HiveConnectorSplit>& hiveSplit,
@@ -131,7 +198,7 @@ std::vector<TypePtr> HiveSplitReader::adaptColumns(
       auto iter = hiveSplit_->infoColumns.find(fieldName);
       auto infoColumnType =
           readerOutputType_->childAt(readerOutputType_->getChildIdx(fieldName));
-      auto constant = newConstantFromString(
+      auto constant = core::newConstantFromString(
           infoColumnType,
           iter->second,
           connectorQueryCtx_->memoryPool(),

@@ -49,37 +49,10 @@ class MemoryPool;
 
 namespace facebook::velox::connector::hive {
 
-/// Creates a constant vector of size 1 from a string representation of a value.
-///
-/// Used to materialize partition column values and info columns (e.g., $path,
-/// $file_size) when reading Hive and Iceberg tables. Partition values are
-/// stored as strings in HiveConnectorSplit::partitionKeys and need to be
-/// converted to their appropriate types.
-///
-/// @param type The target Velox type for the constant vector. Supports all
-/// scalar types including primitives, dates, timestamps.
-/// @param value The string representation of the value to convert, formatted
-/// the same way as CAST(x as VARCHAR). Date values must be formatted using ISO
-/// 8601 as YYYY-MM-DD. If nullopt, creates a null constant vector.
-/// @param pool Memory pool for allocating the constant vector.
-/// @param isLocalTimestamp If true and type is TIMESTAMP, interprets the string
-/// value as local time and converts it to GMT. If false, treats the value
-/// as already in GMT.
-/// @param isDaysSinceEpoch If true and type is DATE, treats the string value as
-/// an integer representing days since epoch (used by Iceberg). If false, parses
-/// the string as a date string in ISO 8601 format (used by Hive).
-///
-/// @return A constant vector of size 1 containing the converted value, or a
-/// null constant if value is nullopt.
-/// @throws VeloxUserError if the string cannot be converted to the target type.
-VectorPtr newConstantFromString(
-    const TypePtr& type,
-    const std::optional<std::string>& value,
-    velox::memory::MemoryPool* pool,
-    bool isLocalTimestamp,
-    bool isDaysSinceEpoch);
-
 class FileConfig;
+struct FileConnectorSplit;
+class FileTableHandle;
+class FileColumnHandle;
 
 class FileSplitReader {
  public:
@@ -225,6 +198,10 @@ class FileSplitReader {
   FileHandleFactory* const fileHandleFactory_;
   folly::Executor* const ioExecutor_;
   memory::MemoryPool* const pool_;
+
+  const tz::TimeZone* sessionTimezone_;
+  bool adjustTimestampToTimezone_;
+
   const std::shared_ptr<common::ScanSpec> scanSpec_;
   // Subfield filters from HiveDataSource, includes both original
   // subfieldFilters and filters extracted from remainingFilter. Used by
