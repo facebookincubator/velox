@@ -167,12 +167,7 @@ inline void randomNumbers(
   }
 }
 
-void randomInt96Numbers(
-    int n,
-    uint32_t seed,
-    int32_t minValue,
-    int32_t maxValue,
-    Int96* out);
+void randomInt96Numbers(int n, uint32_t seed, Int96* out);
 
 void randomFixedByteArray(
     int n,
@@ -785,12 +780,7 @@ inline void initValues<Int96>(
     uint32_t seed,
     std::vector<Int96>& values,
     std::vector<uint8_t>& buffer) {
-  randomInt96Numbers(
-      numValues,
-      seed,
-      std::numeric_limits<int32_t>::min(),
-      std::numeric_limits<int32_t>::max(),
-      values.data());
+  randomInt96Numbers(numValues, seed, values.data());
 }
 
 inline std::string testColumnName(int i) {
@@ -943,12 +933,7 @@ template <>
 inline void
 generateData<Int96>(int numValues, Int96* out, std::vector<uint8_t>* heap) {
   // Seed the prng so failure is deterministic.
-  randomInt96Numbers(
-      numValues,
-      0,
-      std::numeric_limits<int32_t>::min(),
-      std::numeric_limits<int32_t>::max(),
-      out);
+  randomInt96Numbers(numValues, 0, out);
 }
 
 template <>
