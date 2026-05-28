@@ -37,6 +37,28 @@ class JsonReaderTest : public testing::Test, public test::VectorTestBase {
   void TearDown() override {
     unregisterJsonReaderFactory();
   }
+
+  // Reads the entire input string through the JSON reader against the
+  // given schema and returns the resulting RowVector. The input is
+  // interpreted as JSON Lines (one record per newline).
+  RowVectorPtr read(const std::string& input, const RowTypePtr& schema) {
+    auto factory =
+        dwio::common::getReaderFactory(dwio::common::FileFormat::JSON);
+
+    dwio::common::ReaderOptions readerOptions{pool()};
+    readerOptions.setFileSchema(schema);
+
+    auto readFile = std::make_shared<InMemoryReadFile>(input);
+    auto bufferedInput =
+        std::make_unique<dwio::common::BufferedInput>(readFile, *pool());
+    auto reader =
+        factory->createReader(std::move(bufferedInput), readerOptions);
+    auto rowReader = reader->createRowReader(dwio::common::RowReaderOptions{});
+
+    VectorPtr result;
+    rowReader->next(1'000, result);
+    return std::dynamic_pointer_cast<RowVector>(result);
+  }
 };
 
 TEST_F(JsonReaderTest, factoryRegistration) {
@@ -62,6 +84,117 @@ TEST_F(JsonReaderTest, emptyFileReturnsZeroRows) {
 
   VectorPtr result;
   EXPECT_EQ(rowReader->next(10, result), 0);
+}
+
+TEST_F(JsonReaderTest, parseSingleBigint) {
+  auto schema = ROW({{"a", BIGINT()}});
+  auto row = read("{\"a\":42}\n", schema);
+
+  ASSERT_EQ(row->size(), 1);
+  auto col = row->childAt(0)->asFlatVector<int64_t>();
+  EXPECT_EQ(col->valueAt(0), 42);
+}
+
+TEST_F(JsonReaderTest, parseAllNumericTypes) {
+  auto schema = ROW(
+      {{"t", TINYINT()},
+       {"s", SMALLINT()},
+       {"i", INTEGER()},
+       {"b", BIGINT()},
+       {"r", REAL()},
+       {"d", DOUBLE()}});
+  auto row = read("{\"t\":1,\"s\":2,\"i\":3,\"b\":4,\"r\":1.5,\"d\":2.5}\n", schema);
+
+  ASSERT_EQ(row->size(), 1);
+  EXPECT_EQ(row->childAt(0)->asFlatVector<int8_t>()->valueAt(0), 1);
+  EXPECT_EQ(row->childAt(1)->asFlatVector<int16_t>()->valueAt(0), 2);
+  EXPECT_EQ(row->childAt(2)->asFlatVector<int32_t>()->valueAt(0), 3);
+  EXPECT_EQ(row->childAt(3)->asFlatVector<int64_t>()->valueAt(0), 4);
+  EXPECT_FLOAT_EQ(row->childAt(4)->asFlatVector<float>()->valueAt(0), 1.5f);
+  EXPECT_DOUBLE_EQ(row->childAt(5)->asFlatVector<double>()->valueAt(0), 2.5);
+}
+
+TEST_F(JsonReaderTest, bigintFromString) {
+  auto row = read("{\"a\":\"100\"}\n", ROW({{"a", BIGINT()}}));
+  EXPECT_EQ(row->childAt(0)->asFlatVector<int64_t>()->valueAt(0), 100);
+}
+
+TEST_F(JsonReaderTest, bigintFromNonNumericString) {
+  // Full-fail to 0, NOT partial-parse.
+  // "12abc" -> 0, not 12.
+  auto row = read(
+      "{\"a\":\"abc\"}\n{\"a\":\"12abc\"}\n", ROW({{"a", BIGINT()}}));
+  ASSERT_EQ(row->size(), 2);
+  auto col = row->childAt(0)->asFlatVector<int64_t>();
+  EXPECT_EQ(col->valueAt(0), 0);
+  EXPECT_EQ(col->valueAt(1), 0);
+}
+
+TEST_F(JsonReaderTest, bigintFromBoolean) {
+  auto row =
+      read("{\"a\":true}\n{\"a\":false}\n", ROW({{"a", BIGINT()}}));
+  ASSERT_EQ(row->size(), 2);
+  auto col = row->childAt(0)->asFlatVector<int64_t>();
+  EXPECT_EQ(col->valueAt(0), 1);
+  EXPECT_EQ(col->valueAt(1), 0);
+}
+
+TEST_F(JsonReaderTest, bigintFromFloatTruncatesTowardZero) {
+  // -3.7 -> -3 (truncate toward zero, NOT floor which would be -4).
+  auto row = read("{\"a\":-3.7}\n", ROW({{"a", BIGINT()}}));
+  EXPECT_EQ(row->childAt(0)->asFlatVector<int64_t>()->valueAt(0), -3);
+}
+
+TEST_F(JsonReaderTest, bigintOverflowWrapsUint64) {
+  // 9223372036854775808 = 2^63: simdjson parses as unsigned_integer,
+  // two's-complement wrap to int64 yields Long.MIN_VALUE.
+  auto row =
+      read("{\"a\":9223372036854775808}\n", ROW({{"a", BIGINT()}}));
+  EXPECT_EQ(
+      row->childAt(0)->asFlatVector<int64_t>()->valueAt(0),
+      std::numeric_limits<int64_t>::min());
+}
+
+TEST_F(JsonReaderTest, bigintExtremeOverflowDiverges) {
+  // 1e20 is outside [INT64_MIN, 2^64). v1 diverges from Presto/Jackson
+  // here. The contract is only "does
+  // not throw"; the exact wrap value is intentionally not asserted.
+  EXPECT_NO_THROW(read("{\"a\":1e20}\n", ROW({{"a", BIGINT()}})));
+}
+
+TEST_F(JsonReaderTest, bigintFromEmptyString) {
+  auto row = read("{\"a\":\"\"}\n", ROW({{"a", BIGINT()}}));
+  EXPECT_EQ(row->childAt(0)->asFlatVector<int64_t>()->valueAt(0), 0);
+}
+
+TEST_F(JsonReaderTest, missingFieldYieldsNull) {
+  // Field "b" is in the schema but absent from the JSON record.
+  auto row = read("{\"a\":1}\n", ROW({{"a", BIGINT()}, {"b", BIGINT()}}));
+  ASSERT_EQ(row->size(), 1);
+  EXPECT_FALSE(row->childAt(0)->isNullAt(0));
+  EXPECT_TRUE(row->childAt(1)->isNullAt(0));
+}
+
+TEST_F(JsonReaderTest, extraFieldIgnored) {
+  // Field "extra" is in the JSON record but not in the schema. Should
+  // be silently ignored.
+  auto row = read("{\"a\":1,\"extra\":99}\n", ROW({{"a", BIGINT()}}));
+  ASSERT_EQ(row->size(), 1);
+  EXPECT_EQ(row->childAt(0)->asFlatVector<int64_t>()->valueAt(0), 1);
+}
+
+TEST_F(JsonReaderTest, tinyintRangeOverflow) {
+  // 255 narrows to int8 via two's-complement wrap: 255 -> -1.
+  auto row = read("{\"a\":255}\n", ROW({{"a", TINYINT()}}));
+  EXPECT_EQ(row->childAt(0)->asFlatVector<int8_t>()->valueAt(0), -1);
+}
+
+TEST_F(JsonReaderTest, parseDoubleAndReal) {
+  auto row = read(
+      "{\"d\":3.14,\"r\":2.5}\n",
+      ROW({{"d", DOUBLE()}, {"r", REAL()}}));
+  EXPECT_DOUBLE_EQ(row->childAt(0)->asFlatVector<double>()->valueAt(0), 3.14);
+  EXPECT_FLOAT_EQ(row->childAt(1)->asFlatVector<float>()->valueAt(0), 2.5f);
 }
 
 } // namespace

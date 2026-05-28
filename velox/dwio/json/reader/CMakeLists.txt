@@ -20,4 +20,5 @@ velox_link_libraries(
   velox_type
   velox_vector
   Folly::folly
-  fmt::fmt)
+  fmt::fmt
+  simdjson::simdjson)

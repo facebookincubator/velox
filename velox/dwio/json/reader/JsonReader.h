@@ -16,6 +16,9 @@
 
 #pragma once
 
+#include <string>
+#include <unordered_map>
+
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Reader.h"
@@ -46,6 +49,13 @@ struct FileContents {
   /// Decompressed byte stream for the file. Owned here so JsonRowReader
   /// can read from it without taking ownership.
   std::unique_ptr<dwio::common::BufferedInput> input;
+
+  /// Lowercased top-level field name to column index in the schema.
+  /// Built once from the schema; reused across rows. The iterate-once
+  /// dispatch pattern requires
+  /// a fast name lookup because simdjson On-Demand is forward-only and
+  /// values cannot be stashed for later association with a column.
+  std::unordered_map<std::string, size_t> fieldIndex;
 };
 
 /// Reader for the JSON file format (JSON Lines, matching Hive
@@ -86,8 +96,10 @@ class JsonReader : public dwio::common::Reader {
   std::shared_ptr<FileContents> contents_;
 };
 
-/// Row reader for the JSON file format. Phase 1 stub: implements the
-/// full RowReader interface but produces no rows.
+/// Row reader for the JSON file format. Reads one JSON object per line,
+/// dispatching each field to the matching column via the schema field
+/// index. The whole file is loaded into memory at construction; split
+/// support is deferred (see json-reader-pr-roadmap.md PR-7).
 class JsonRowReader : public dwio::common::RowReader {
  public:
   JsonRowReader(
@@ -111,11 +123,41 @@ class JsonRowReader : public dwio::common::RowReader {
   std::optional<size_t> estimatedRowSize() const override;
 
  private:
+  // Reads the next newline-terminated line from the file buffer into
+  // lineBuffer_, padded with SIMDJSON_PADDING zero bytes for safe
+  // simdjson parsing. Returns false when there are no more lines.
+  bool readNextLine();
+
+  // Parses lineBuffer_ as a single JSON object and writes its fields
+  // into the corresponding columns of row at rowIndex. Fields not in
+  // the schema are silently ignored; fields in the schema but absent
+  // from the JSON object remain NULL.
+  void writeRow(RowVector& row, vector_size_t rowIndex);
+
   // Per-file shared state (input stream, schema, options).
   const std::shared_ptr<FileContents> contents_;
 
   // Caller-supplied row reader options (range, selector, scan spec).
   dwio::common::RowReaderOptions options_;
+
+  // Entire file contents loaded at construction. Split support
+  // is deferred to a later PR.
+  std::string fileBuffer_;
+
+  // Length of valid bytes in fileBuffer_. fileBuffer_ has additional
+  // SIMDJSON_PADDING bytes of zeroes after fileLength_ so the last
+  // line can be parsed in place.
+  size_t fileLength_{0};
+
+  // Current read offset into fileBuffer_. Records start at this position.
+  size_t pos_{0};
+
+  // Reusable padded buffer holding the current line. Sized to fit the
+  // longest line seen so far plus SIMDJSON_PADDING.
+  std::string lineBuffer_;
+
+  // Length of valid line content in lineBuffer_ (excluding padding).
+  size_t lineLength_{0};
 };
 
 } // namespace facebook::velox::json
