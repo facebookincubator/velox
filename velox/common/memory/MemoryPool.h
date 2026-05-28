@@ -164,6 +164,17 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
 
     /// If non-empty, enables debug mode for the created memory pool.
     std::optional<DebugOptions> debugOptions{std::nullopt};
+
+    /// Allocator override. Non-null routes allocations through this allocator
+    /// instead of the MemoryManager's default. Borrowed; the owner (typically
+    /// a CustomMemoryResource held by the MemoryManager) must outlive the
+    /// pool.
+    MemoryAllocator* customAllocator{nullptr};
+
+    /// Arbitrator override. Non-null routes capacity decisions through this
+    /// arbitrator instead of the MemoryManager's default. Same ownership
+    /// contract as 'customAllocator'.
+    MemoryArbitrator* customArbitrator{nullptr};
   };
 
   /// Constructs a named memory pool with specified 'name', 'parent' and 'kind'.
@@ -414,6 +425,10 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
 
   /// Returns the memory reclaimer of this memory pool if not null.
   virtual MemoryReclaimer* reclaimer() const = 0;
+
+  /// Returns the arbitrator that governs this pool's capacity. May be the
+  /// MemoryManager's default arbitrator or a custom resource's arbitrator.
+  virtual MemoryArbitrator* arbitrator() const = 0;
 
   /// Function estimates the number of reclaimable bytes and returns in
   /// 'reclaimableBytes'. If the 'reclaimer' is not set, the function returns
@@ -719,6 +734,10 @@ class MemoryPoolImpl : public MemoryPool {
   void setReclaimer(std::unique_ptr<MemoryReclaimer> reclaimer) override;
 
   MemoryReclaimer* reclaimer() const override;
+
+  MemoryArbitrator* arbitrator() const override {
+    return arbitrator_;
+  }
 
   std::optional<uint64_t> reclaimableBytes() const override;
 
