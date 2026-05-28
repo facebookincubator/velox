@@ -25,6 +25,7 @@
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/encode/Base64.h"
+#include "velox/connectors/hive/ConstantFromString.h"
 #include "velox/connectors/hive/FileSplitReader.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/dwio/common/BufferUtil.h"

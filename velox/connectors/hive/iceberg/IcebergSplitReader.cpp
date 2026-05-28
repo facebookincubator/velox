@@ -24,6 +24,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/config/Config.h"
 #include "velox/common/encode/Base64.h"
+#include "velox/connectors/hive/ConstantFromString.h"
 #include "velox/connectors/hive/FileConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
@@ -1014,7 +1015,8 @@ std::vector<TypePtr> IcebergSplitReader::adaptColumns(
           iter->second,
           connectorQueryCtx_->memoryPool(),
           readTimestampAsLocalTime,
-          false);
+          false,
+          adjustTimestampToTimezone_ ? sessionTimezone_ : nullptr);
       childSpec->setConstantValue(constant);
     } else {
       auto fileTypeIdx = fileType->getChildIdxIfExists(fieldName);
