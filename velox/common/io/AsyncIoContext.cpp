@@ -25,8 +25,11 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/memory/Allocation.h"
 
-#if __has_include(<folly/io/async/IoUringBackend.h>)
+#include <folly/io/async/Liburing.h>
+
+#if FOLLY_HAS_LIBURING
 #include <folly/io/async/IoUringBackend.h>
+#include <folly/io/async/IoUringOptions.h>
 #define VELOX_HAS_IO_URING 1
 #else
 #define VELOX_HAS_IO_URING 0
