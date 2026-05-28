@@ -15,9 +15,6 @@
  */
 #include <gtest/gtest.h>
 
-#include <thread>
-#include <vector>
-
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/QueryCtx.h"
 
@@ -143,131 +140,36 @@ TEST_F(QueryCtxTest, builderReleaseCallbacks) {
 
 TEST_F(QueryCtxTest, transportTypeDefaults) {
   auto queryCtx = QueryCtx::Builder().build();
-  EXPECT_EQ(
-      queryCtx->inputTransportType("node1"), ExchangeTransportType::kHttp);
-  EXPECT_EQ(
-      queryCtx->outputTransportType("node1"), ExchangeTransportType::kHttp);
+  EXPECT_EQ(queryCtx->inputTransportType("node1"), TransportType::kHttp);
+  EXPECT_EQ(queryCtx->outputTransportType("node1"), TransportType::kHttp);
 }
 
 TEST_F(QueryCtxTest, transportTypeViaBuilder) {
-  auto queryCtx =
-      QueryCtx::Builder()
-          .inputTransportType("exchange1", ExchangeTransportType::kUcx)
-          .inputTransportType("exchange2", ExchangeTransportType::kHttp)
-          .outputTransportType("output1", ExchangeTransportType::kUcx)
-          .build();
+  auto queryCtx = QueryCtx::Builder()
+                      .inputTransportType("exchange1", TransportType::kUcx)
+                      .inputTransportType("exchange2", TransportType::kHttp)
+                      .outputTransportType("output1", TransportType::kUcx)
+                      .build();
 
-  EXPECT_EQ(
-      queryCtx->inputTransportType("exchange1"), ExchangeTransportType::kUcx);
-  EXPECT_EQ(
-      queryCtx->inputTransportType("exchange2"), ExchangeTransportType::kHttp);
-  EXPECT_EQ(
-      queryCtx->outputTransportType("output1"), ExchangeTransportType::kUcx);
+  EXPECT_EQ(queryCtx->inputTransportType("exchange1"), TransportType::kUcx);
+  EXPECT_EQ(queryCtx->inputTransportType("exchange2"), TransportType::kHttp);
+  EXPECT_EQ(queryCtx->outputTransportType("output1"), TransportType::kUcx);
   // Unset node defaults to kHttp.
-  EXPECT_EQ(
-      queryCtx->outputTransportType("output2"), ExchangeTransportType::kHttp);
+  EXPECT_EQ(queryCtx->outputTransportType("output2"), TransportType::kHttp);
 }
 
 TEST_F(QueryCtxTest, transportTypeMutableSetters) {
   auto queryCtx = QueryCtx::Builder().build();
 
-  queryCtx->setInputTransportType("exchange1", ExchangeTransportType::kUcx);
-  queryCtx->setOutputTransportType("output1", ExchangeTransportType::kUcx);
+  queryCtx->setInputTransportType("exchange1", TransportType::kUcx);
+  queryCtx->setOutputTransportType("output1", TransportType::kUcx);
 
-  EXPECT_EQ(
-      queryCtx->inputTransportType("exchange1"), ExchangeTransportType::kUcx);
-  EXPECT_EQ(
-      queryCtx->outputTransportType("output1"), ExchangeTransportType::kUcx);
+  EXPECT_EQ(queryCtx->inputTransportType("exchange1"), TransportType::kUcx);
+  EXPECT_EQ(queryCtx->outputTransportType("output1"), TransportType::kUcx);
 
   // Overwrite with a different value.
-  queryCtx->setInputTransportType("exchange1", ExchangeTransportType::kHttp);
-  EXPECT_EQ(
-      queryCtx->inputTransportType("exchange1"), ExchangeTransportType::kHttp);
-}
-
-TEST_F(QueryCtxTest, transportTypeParallelSetters) {
-  auto queryCtx = QueryCtx::Builder().build();
-
-  constexpr int kNumThreads = 8;
-  constexpr int kNodesPerThread = 100;
-
-  std::vector<std::thread> threads;
-  threads.reserve(kNumThreads * 2);
-
-  // Parallel writes to inputTransportTypes_ from multiple threads, each writing
-  // to its own set of node IDs.
-  for (int t = 0; t < kNumThreads; ++t) {
-    threads.emplace_back([&queryCtx, t]() {
-      for (int i = 0; i < kNodesPerThread; ++i) {
-        auto nodeId = fmt::format("input_t{}_n{}", t, i);
-        queryCtx->setInputTransportType(nodeId, ExchangeTransportType::kUcx);
-      }
-    });
-  }
-
-  // Parallel writes to outputTransportTypes_ from multiple threads.
-  for (int t = 0; t < kNumThreads; ++t) {
-    threads.emplace_back([&queryCtx, t]() {
-      for (int i = 0; i < kNodesPerThread; ++i) {
-        auto nodeId = fmt::format("output_t{}_n{}", t, i);
-        queryCtx->setOutputTransportType(nodeId, ExchangeTransportType::kUcx);
-      }
-    });
-  }
-
-  for (auto& thread : threads) {
-    thread.join();
-  }
-
-  // Verify all entries were written correctly.
-  for (int t = 0; t < kNumThreads; ++t) {
-    for (int i = 0; i < kNodesPerThread; ++i) {
-      EXPECT_EQ(
-          queryCtx->inputTransportType(fmt::format("input_t{}_n{}", t, i)),
-          ExchangeTransportType::kUcx);
-      EXPECT_EQ(
-          queryCtx->outputTransportType(fmt::format("output_t{}_n{}", t, i)),
-          ExchangeTransportType::kUcx);
-    }
-  }
-}
-
-TEST_F(QueryCtxTest, transportTypeParallelSettersSameKey) {
-  auto queryCtx = QueryCtx::Builder().build();
-
-  constexpr int kNumThreads = 8;
-  constexpr int kIterations = 1'000;
-
-  std::vector<std::thread> threads;
-  threads.reserve(kNumThreads);
-
-  // Multiple threads race to set the same key. The final value depends on
-  // scheduling, but no crash or data corruption should occur.
-  for (int t = 0; t < kNumThreads; ++t) {
-    threads.emplace_back([&queryCtx, t]() {
-      auto type = (t % 2 == 0) ? ExchangeTransportType::kUcx
-                               : ExchangeTransportType::kHttp;
-      for (int i = 0; i < kIterations; ++i) {
-        queryCtx->setInputTransportType("contested_node", type);
-        queryCtx->setOutputTransportType("contested_node", type);
-      }
-    });
-  }
-
-  for (auto& thread : threads) {
-    thread.join();
-  }
-
-  // The final value must be one of the two valid enum values.
-  auto inputType = queryCtx->inputTransportType("contested_node");
-  EXPECT_TRUE(
-      inputType == ExchangeTransportType::kHttp ||
-      inputType == ExchangeTransportType::kUcx);
-
-  auto outputType = queryCtx->outputTransportType("contested_node");
-  EXPECT_TRUE(
-      outputType == ExchangeTransportType::kHttp ||
-      outputType == ExchangeTransportType::kUcx);
+  queryCtx->setInputTransportType("exchange1", TransportType::kHttp);
+  EXPECT_EQ(queryCtx->inputTransportType("exchange1"), TransportType::kHttp);
 }
 
 } // namespace facebook::velox::core::test

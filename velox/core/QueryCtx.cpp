@@ -15,11 +15,51 @@
  */
 
 #include "velox/core/QueryCtx.h"
+#include "velox/common/EnumDefine.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/SpillConfig.h"
 #include "velox/common/config/Config.h"
 
 namespace facebook::velox::core {
+
+namespace {
+const auto& transportTypeNames() {
+  static const folly::F14FastMap<TransportType, std::string_view> kNames = {
+      {TransportType::kHttp, "HTTP"},
+      {TransportType::kUcx, "UCX"},
+  };
+  return kNames;
+}
+} // namespace
+
+VELOX_DEFINE_ENUM_NAME(TransportType, transportTypeNames)
+
+TransportType QueryCtx::inputTransportType(const PlanNodeId& planNodeId) const {
+  return inputTransportTypes_.withRLock([&](const auto& map) -> TransportType {
+    auto it = map.find(planNodeId);
+    return it != map.end() ? it->second : TransportType::kHttp;
+  });
+}
+
+TransportType QueryCtx::outputTransportType(
+    const PlanNodeId& planNodeId) const {
+  return outputTransportTypes_.withRLock([&](const auto& map) -> TransportType {
+    auto it = map.find(planNodeId);
+    return it != map.end() ? it->second : TransportType::kHttp;
+  });
+}
+
+void QueryCtx::setInputTransportType(
+    const PlanNodeId& planNodeId,
+    TransportType type) {
+  inputTransportTypes_.withWLock([&](auto& map) { map[planNodeId] = type; });
+}
+
+void QueryCtx::setOutputTransportType(
+    const PlanNodeId& planNodeId,
+    TransportType type) {
+  outputTransportTypes_.withWLock([&](auto& map) { map[planNodeId] = type; });
+}
 
 // static
 std::shared_ptr<QueryCtx> QueryCtx::create(
@@ -55,8 +95,8 @@ std::shared_ptr<QueryCtx> QueryCtx::Builder::build() {
       std::move(queryId_),
       std::move(tokenProvider_),
       std::move(traceCtxProvider_)));
-  queryCtx->inputTransportTypes_ = std::move(inputTransportTypes_);
-  queryCtx->outputTransportTypes_ = std::move(outputTransportTypes_);
+  *queryCtx->inputTransportTypes_.wlock() = std::move(inputTransportTypes_);
+  *queryCtx->outputTransportTypes_.wlock() = std::move(outputTransportTypes_);
   queryCtx->maybeSetReclaimer();
   for (auto& cb : releaseCallbacks_) {
     queryCtx->addReleaseCallback(std::move(cb));

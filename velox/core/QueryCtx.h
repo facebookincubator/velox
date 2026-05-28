@@ -23,6 +23,7 @@
 #include <functional>
 #include <string_view>
 #include <typeindex>
+#include "velox/common/EnumDeclare.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/memory/Memory.h"
@@ -37,8 +38,13 @@ class TraceCtx;
 
 namespace facebook::velox::core {
 
+// Duplicated from PlanNode.h to avoid a heavyweight include.
+using PlanNodeId = std::string;
+
 /// Determines how data is physically transferred between tasks.
-enum class ExchangeTransportType { kHttp, kUcx };
+enum class TransportType { kHttp, kUcx };
+
+VELOX_DECLARE_ENUM_NAME(TransportType);
 
 struct PlanFragment;
 
@@ -197,16 +203,16 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
 
     /// Sets the input transport type for a specific exchange node.
     Builder& inputTransportType(
-        const std::string& planNodeId,
-        ExchangeTransportType type) {
+        const PlanNodeId& planNodeId,
+        TransportType type) {
       inputTransportTypes_[planNodeId] = type;
       return *this;
     }
 
     /// Sets the output transport type for a specific partitioned output node.
     Builder& outputTransportType(
-        const std::string& planNodeId,
-        ExchangeTransportType type) {
+        const PlanNodeId& planNodeId,
+        TransportType type) {
       outputTransportTypes_[planNodeId] = type;
       return *this;
     }
@@ -228,9 +234,8 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     std::shared_ptr<filesystems::TokenProvider> tokenProvider_;
     std::deque<ReleaseCallback> releaseCallbacks_;
     TraceCtxProvider traceCtxProvider_;
-    std::unordered_map<std::string, ExchangeTransportType> inputTransportTypes_;
-    std::unordered_map<std::string, ExchangeTransportType>
-        outputTransportTypes_;
+    folly::F14FastMap<PlanNodeId, TransportType> inputTransportTypes_;
+    folly::F14FastMap<PlanNodeId, TransportType> outputTransportTypes_;
   };
 
   /// Generates a unique memory pool name for a query.
@@ -261,55 +266,23 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     return executor_ != nullptr;
   }
 
-  // Per-node transport type accessors and setters.
-  //
-  // Both are keyed by PlanNodeId because a single QueryCtx is shared across
-  // multiple tasks in the same query, and each task's plan fragment can contain
-  // multiple Exchange/PartitionedOutput nodes with different transport needs.
-  //
-  // Mutable setters exist because the QueryCtx is created (and cached) before
-  // plan conversion; the host app discovers transport types during conversion
-  // and must set them on the already-existing QueryCtx.
-
   /// Returns the transport type for a specific Exchange (input) node.
-  /// Defaults to kHttp if the node ID is not in the map.
-  ExchangeTransportType inputTransportType(
-      const std::string& planNodeId) const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    auto it = inputTransportTypes_.find(planNodeId);
-    if (it == inputTransportTypes_.end()) {
-      return ExchangeTransportType::kHttp;
-    }
-    return it->second;
-  }
+  /// Defaults to kHttp if the node ID is not in the map. The caller is
+  /// responsible for passing valid plan node IDs assigned by the coordinator.
+  TransportType inputTransportType(const PlanNodeId& planNodeId) const;
 
   /// Returns the transport type for a specific PartitionedOutput node.
-  /// Defaults to kHttp if the node ID is not in the map.
-  ExchangeTransportType outputTransportType(
-      const std::string& planNodeId) const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    auto it = outputTransportTypes_.find(planNodeId);
-    if (it == outputTransportTypes_.end()) {
-      return ExchangeTransportType::kHttp;
-    }
-    return it->second;
-  }
+  /// Defaults to kHttp if the node ID is not in the map. The caller is
+  /// responsible for passing valid plan node IDs assigned by the coordinator.
+  TransportType outputTransportType(const PlanNodeId& planNodeId) const;
 
-  /// Sets the input transport type for a specific exchange node.
-  void setInputTransportType(
-      const std::string& planNodeId,
-      ExchangeTransportType type) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    inputTransportTypes_[planNodeId] = type;
-  }
+  /// Sets the input transport type for a specific exchange node. Mutable
+  /// setters exist because the host app discovers transport types during plan
+  /// conversion, after the QueryCtx is already created and cached.
+  void setInputTransportType(const PlanNodeId& planNodeId, TransportType type);
 
   /// Sets the output transport type for a specific partitioned output node.
-  void setOutputTransportType(
-      const std::string& planNodeId,
-      ExchangeTransportType type) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    outputTransportTypes_[planNodeId] = type;
-  }
+  void setOutputTransportType(const PlanNodeId& planNodeId, TransportType type);
 
   const QueryConfig& queryConfig() const {
     return queryConfig_;
@@ -562,11 +535,14 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   // Optional per-batch scan stats callback.
   ScanBatchCallback scanBatchCallback_;
 
-  // Per-node transport types keyed by PlanNodeId. Protected by mutex_ for
-  // both readers and writers because tasks sharing a QueryCtx may have their
-  // plan translations and driver creations interleaved across HTTP threads.
-  std::unordered_map<std::string, ExchangeTransportType> inputTransportTypes_;
-  std::unordered_map<std::string, ExchangeTransportType> outputTransportTypes_;
+  // Per-node transport types keyed by PlanNodeId. Plan node IDs are unique
+  // within a query (assigned by the coordinator), so a single flat map per
+  // direction works even though a QueryCtx is shared across all tasks in the
+  // query.
+  folly::Synchronized<folly::F14FastMap<PlanNodeId, TransportType>>
+      inputTransportTypes_;
+  folly::Synchronized<folly::F14FastMap<PlanNodeId, TransportType>>
+      outputTransportTypes_;
 
   // Type-erased registry entry for per-query overrides.
   struct RegistryEntry {
