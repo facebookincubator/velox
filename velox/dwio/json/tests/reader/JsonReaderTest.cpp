@@ -20,6 +20,7 @@
 #include "velox/common/file/File.h"
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/json/RegisterJsonReader.h"
+#include "velox/type/Timestamp.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 namespace facebook::velox::json {
@@ -41,13 +42,18 @@ class JsonReaderTest : public testing::Test, public test::VectorTestBase {
 
   // Reads the entire input string through the JSON reader against the
   // given schema and returns the resulting RowVector. The input is
-  // interpreted as JSON Lines (one record per newline).
-  RowVectorPtr read(const std::string& input, const RowTypePtr& schema) {
+  // interpreted as JSON Lines (one record per newline). serDeOptions
+  // supplies the temporal format strings used for DATE/TIMESTAMP columns.
+  RowVectorPtr read(
+      const std::string& input,
+      const RowTypePtr& schema,
+      const dwio::common::JsonSerDeOptions& serDeOptions = {}) {
     auto factory =
         dwio::common::getReaderFactory(dwio::common::FileFormat::JSON);
 
     dwio::common::ReaderOptions readerOptions{pool()};
     readerOptions.setFileSchema(schema);
+    readerOptions.setJsonSerDeOptions(serDeOptions);
 
     auto readFile = std::make_shared<InMemoryReadFile>(input);
     auto bufferedInput =
@@ -354,6 +360,66 @@ TEST_F(JsonReaderTest, varbinaryInvalidBase64Throws) {
   VELOX_ASSERT_THROW(
       read("{\"a\":\"@@@@\"}\n", ROW({{"a", VARBINARY()}})),
       "Invalid base64 in VARBINARY column");
+}
+
+TEST_F(JsonReaderTest, parseDateDefaultFormat) {
+  // Default Joda pattern is yyyy-MM-dd. 2021-03-15 is day 18701 since the
+  // epoch; 1969-12-31 is -1, exercising pre-epoch floor division.
+  auto row = read(
+      "{\"a\":\"2021-03-15\"}\n{\"a\":\"1969-12-31\"}\n",
+      ROW({{"a", DATE()}}));
+  ASSERT_EQ(row->size(), 2);
+  auto col = row->childAt(0)->asFlatVector<int32_t>();
+  EXPECT_EQ(col->valueAt(0), 18701);
+  EXPECT_EQ(col->valueAt(1), -1);
+}
+
+TEST_F(JsonReaderTest, parseDateCustomFormat) {
+  dwio::common::JsonSerDeOptions options;
+  options.dateFormat = "MM/dd/yyyy";
+  auto row = read("{\"a\":\"03/15/2021\"}\n", ROW({{"a", DATE()}}), options);
+  EXPECT_EQ(row->childAt(0)->asFlatVector<int32_t>()->valueAt(0), 18701);
+}
+
+TEST_F(JsonReaderTest, parseDateMalformedThrows) {
+  // Unlike numeric coercion (which silently defaults), a temporal string the
+  // format cannot parse is an error.
+  VELOX_ASSERT_THROW(
+      read("{\"a\":\"not-a-date\"}\n", ROW({{"a", DATE()}})),
+      "Failed to parse DATE");
+}
+
+TEST_F(JsonReaderTest, parseTimestampDefaultFormat) {
+  // Default Joda pattern is yyyy-MM-dd HH:mm:ss, interpreted as UTC.
+  auto row =
+      read("{\"a\":\"2021-03-15 12:34:56\"}\n", ROW({{"a", TIMESTAMP()}}));
+  ASSERT_EQ(row->size(), 1);
+  EXPECT_EQ(
+      row->childAt(0)->asFlatVector<Timestamp>()->valueAt(0),
+      Timestamp(1615811696, 0));
+}
+
+TEST_F(JsonReaderTest, parseTimestampWithTimezone) {
+  // TZ behavior pinned here: a timezone token in the format consumes the
+  // input's offset, and the wall-clock time is normalized to UTC. So
+  // 12:34:56 at +05:00 stores as 07:34:56 UTC (seconds 1615793696). Inputs
+  // without a timezone token are interpreted as UTC (see the default-format
+  // test above).
+  dwio::common::JsonSerDeOptions options;
+  options.timestampFormat = "yyyy-MM-dd HH:mm:ss ZZ";
+  auto row = read(
+      "{\"a\":\"2021-03-15 12:34:56 +05:00\"}\n",
+      ROW({{"a", TIMESTAMP()}}),
+      options);
+  EXPECT_EQ(
+      row->childAt(0)->asFlatVector<Timestamp>()->valueAt(0),
+      Timestamp(1615793696, 0));
+}
+
+TEST_F(JsonReaderTest, parseTimestampMalformedThrows) {
+  VELOX_ASSERT_THROW(
+      read("{\"a\":\"2021-13-99 99:99:99\"}\n", ROW({{"a", TIMESTAMP()}})),
+      "Failed to parse TIMESTAMP");
 }
 
 } // namespace

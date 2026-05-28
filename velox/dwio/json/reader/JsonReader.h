@@ -23,6 +23,7 @@
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Reader.h"
 #include "velox/dwio/common/TypeWithId.h"
+#include "velox/functions/lib/DateTimeFormatter.h"
 
 namespace facebook::velox::json {
 
@@ -42,9 +43,18 @@ struct FileContents {
   /// schema; this comes from the connector.
   const std::shared_ptr<const RowType> schema;
 
-  /// SerDe options controlling parse behavior. Empty in this phase; later
-  /// phases add date/timestamp format strings.
+  /// SerDe options controlling parse behavior, including the Joda-style
+  /// format strings used to parse DATE and TIMESTAMP columns.
   dwio::common::JsonSerDeOptions serDeOptions;
+
+  /// Formatter compiled once from serDeOptions.dateFormat, reused across
+  /// rows to parse DATE columns. simdjson hands us the JSON string; this
+  /// turns it into days since the epoch.
+  std::shared_ptr<functions::DateTimeFormatter> dateFormatter;
+
+  /// Formatter compiled once from serDeOptions.timestampFormat, reused
+  /// across rows to parse TIMESTAMP columns.
+  std::shared_ptr<functions::DateTimeFormatter> timestampFormatter;
 
   /// Decompressed byte stream for the file. Owned here so JsonRowReader
   /// can read from it without taking ownership.

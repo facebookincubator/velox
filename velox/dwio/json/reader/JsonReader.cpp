@@ -25,6 +25,7 @@
 #include "velox/dwio/common/exception/Exceptions.h"
 #include "velox/functions/prestosql/json/SIMDJsonWrapper.h"
 #include "velox/type/DecimalUtil.h"
+#include "velox/type/Timestamp.h"
 
 namespace facebook::velox::json {
 namespace {
@@ -433,13 +434,71 @@ std::string coerceToVarbinary(simdjson::ondemand::value& value) {
   return out;
 }
 
+// Extracts the JSON string a temporal column expects. DATE and TIMESTAMP are
+// parsed from string values only; any other JSON type (number, boolean,
+// object, array) is a shape mismatch and throws. typeName labels the error.
+std::string_view temporalStringOrThrow(
+    simdjson::ondemand::value& value,
+    const char* typeName) {
+  if (unwrap(value.type()) != simdjson::ondemand::json_type::string) {
+    VELOX_USER_FAIL(
+        "Shape mismatch: {} column expects a JSON string value.", typeName);
+  }
+  return unwrap(value.get_string());
+}
+
+// Parses a JSON string into a Timestamp using the configured Joda formatter.
+// When the input carries a timezone (the format has a timezone token and the
+// value supplies an offset), the wall-clock time is normalized to UTC. Inputs
+// without a timezone are interpreted as UTC. A string the format cannot parse
+// throws — unlike numeric/boolean coercion, malformed temporal input is an
+// error, not a silent default (per json-reader-pr-roadmap.md PR-5).
+Timestamp coerceToTimestamp(
+    simdjson::ondemand::value& value,
+    const functions::DateTimeFormatter& formatter) {
+  auto str = temporalStringOrThrow(value, "TIMESTAMP");
+  auto result = formatter.parse(str);
+  if (result.hasError()) {
+    VELOX_USER_FAIL(
+        "Failed to parse TIMESTAMP from JSON string: '{}'", std::string{str});
+  }
+  auto parsed = result.value();
+  Timestamp timestamp = parsed.timestamp;
+  if (parsed.timezone != nullptr) {
+    timestamp.toGMT(*parsed.timezone);
+  }
+  return timestamp;
+}
+
+// Parses a JSON string into a DATE (days since the epoch) using the configured
+// Joda formatter. The parsed timestamp lands at midnight of the date; flooring
+// its UTC seconds by the seconds-per-day count yields the day number, correct
+// for pre-epoch dates where integer division alone would round toward zero.
+int32_t coerceToDate(
+    simdjson::ondemand::value& value,
+    const functions::DateTimeFormatter& formatter) {
+  auto str = temporalStringOrThrow(value, "DATE");
+  auto result = formatter.parse(str);
+  if (result.hasError()) {
+    VELOX_USER_FAIL(
+        "Failed to parse DATE from JSON string: '{}'", std::string{str});
+  }
+  const int64_t seconds = result.value().timestamp.getSeconds();
+  int64_t days = seconds / Timestamp::kSecondsInDay;
+  if (seconds < 0 && seconds % Timestamp::kSecondsInDay != 0) {
+    --days;
+  }
+  return static_cast<int32_t>(days);
+}
+
 // Writes one JSON value into a FlatVector cell. The caller has verified
 // that the JSON value is not `null` (it set the cell to NULL beforehand).
 void writeValue(
     simdjson::ondemand::value& value,
     const TypePtr& type,
     BaseVector& column,
-    vector_size_t rowIndex) {
+    vector_size_t rowIndex,
+    const FileContents& contents) {
   // DECIMAL is read from the raw lexeme, not coerced through a numeric kind.
   // It must be intercepted before the kind switch because a short decimal's
   // TypeKind is BIGINT and a long decimal's is HUGEINT — the switch would
@@ -466,6 +525,13 @@ void writeValue(
       return;
     }
     case TypeKind::INTEGER: {
+      // DATE is an INTEGER-kinded logical type storing days since the epoch;
+      // it must be dispatched before the plain integer coercion below.
+      if (type->isDate()) {
+        column.asUnchecked<FlatVector<int32_t>>()->set(
+            rowIndex, coerceToDate(value, *contents.dateFormatter));
+        return;
+      }
       // Narrowing wrap from int64 follows the empirical table.
       column.asUnchecked<FlatVector<int32_t>>()->set(
           rowIndex, static_cast<int32_t>(coerceToInt64(value)));
@@ -512,6 +578,11 @@ void writeValue(
           rowIndex, StringView(bytes.data(), bytes.size()));
       return;
     }
+    case TypeKind::TIMESTAMP: {
+      column.asUnchecked<FlatVector<Timestamp>>()->set(
+          rowIndex, coerceToTimestamp(value, *contents.timestampFormatter));
+      return;
+    }
     default:
       VELOX_NYI(
           "JSON reader does not yet support column type: {}",
@@ -529,6 +600,26 @@ FileContents::FileContents(
       schema{std::move(schema)},
       serDeOptions{serDeOptions},
       input{nullptr} {
+  // Compile the temporal formatters once. Joda-style patterns only — the
+  // reader does not implement SimpleDateFormat parity.
+  auto dateFormatterOrError =
+      functions::buildJodaDateTimeFormatter(this->serDeOptions.dateFormat);
+  VELOX_USER_CHECK(
+      !dateFormatterOrError.hasError(),
+      "Invalid JSON date format '{}': {}",
+      this->serDeOptions.dateFormat,
+      dateFormatterOrError.error().message());
+  dateFormatter = dateFormatterOrError.value();
+
+  auto timestampFormatterOrError =
+      functions::buildJodaDateTimeFormatter(this->serDeOptions.timestampFormat);
+  VELOX_USER_CHECK(
+      !timestampFormatterOrError.hasError(),
+      "Invalid JSON timestamp format '{}': {}",
+      this->serDeOptions.timestampFormat,
+      timestampFormatterOrError.error().message());
+  timestampFormatter = timestampFormatterOrError.value();
+
   fieldIndex.reserve(this->schema->size());
   for (size_t i = 0; i < this->schema->size(); ++i) {
     // Last-write-wins on case-collision: a schema with both `x` and `X`
@@ -547,7 +638,9 @@ JsonReader::JsonReader(
   VELOX_USER_CHECK(schema->isRow(), "File schema for JSON must be a ROW type.");
 
   contents_ = std::make_shared<FileContents>(
-      options_.memoryPool(), std::move(schema), dwio::common::JsonSerDeOptions{});
+      options_.memoryPool(),
+      std::move(schema),
+      options_.jsonSerDeOptions());
   contents_->input = std::move(input);
 }
 
@@ -680,7 +773,12 @@ void JsonRowReader::writeRow(RowVector& row, vector_size_t rowIndex) {
       // Already NULL from the per-row initialization above.
       continue;
     }
-    writeValue(value, contents_->schema->childAt(it->second), *child, rowIndex);
+    writeValue(
+        value,
+        contents_->schema->childAt(it->second),
+        *child,
+        rowIndex,
+        *contents_);
   }
 }
 
