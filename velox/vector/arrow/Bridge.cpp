@@ -407,6 +407,27 @@ struct Selection {
   vector_size_t total_;
 };
 
+template <TypeKind kind>
+VectorPtr makeFlatVectorWithNulls(const BaseVector& vec, BufferPtr nulls) {
+  using T = typename TypeTraits<kind>::NativeType;
+  auto flat = vec.asUnchecked<FlatVector<T>>();
+  std::vector<BufferPtr> stringBuffers;
+  if constexpr (std::is_same_v<T, StringView>) {
+    stringBuffers = std::vector<BufferPtr>(
+        flat->stringBuffers().begin(), flat->stringBuffers().end());
+  }
+  return std::make_shared<FlatVector<T>>(
+      flat->pool(),
+      flat->type(),
+      std::move(nulls),
+      flat->size(),
+      flat->values(),
+      std::move(stringBuffers),
+      SimpleVectorStats<T>{},
+      std::nullopt,
+      std::nullopt);
+}
+
 // Gather values from time buffer. Nulls are skipped.
 // TIME is stored as int64_t milliseconds in Velox, converted to int32_t
 // milliseconds for Arrow time32.
@@ -497,6 +518,27 @@ void gatherFromTimestampBuffer(
   }
 }
 
+// Returns the size of a single element of a given `type` in the target arrow
+// buffer.
+size_t getArrowElementSize(const Type& type, const ArrowOptions& options) {
+  if (type.isShortDecimal() && !options.useDecimalTypeWidth) {
+    return sizeof(int128_t);
+  }
+  if (type.isTimestamp()) {
+    return sizeof(int64_t);
+  }
+  if (type.isTime()) {
+    VELOX_DCHECK(type.equivalent(*TIME()));
+    // TIME is exported as Arrow time32 (int32_t).
+    return sizeof(int32_t);
+  }
+  if ((type.isVarchar() || type.isVarbinary()) && options.exportToStringView) {
+    return sizeof(StringView);
+  }
+
+  return type.cppSizeInBytes();
+}
+
 void gatherFromBuffer(
     const Type& type,
     const Buffer& buf,
@@ -517,7 +559,7 @@ void gatherFromBuffer(
       memcpy(dst + (j++) * sizeof(int128_t), &value, sizeof(int128_t));
     });
   } else {
-    auto typeSize = type.cppSizeInBytes();
+    auto typeSize = getArrowElementSize(type, options);
     rows.apply([&](vector_size_t i) {
       memcpy(dst + (j++) * typeSize, src + i * typeSize, typeSize);
     });
@@ -754,26 +796,6 @@ bool isFlatScalarZeroCopy(const TypePtr& type, const ArrowOptions& options) {
       !needsTimeConversion;
 }
 
-// Returns the size of a single element of a given `type` in the target arrow
-// buffer.
-size_t getArrowElementSize(const TypePtr& type, const ArrowOptions& options) {
-  if (type->isShortDecimal() && !options.useDecimalTypeWidth) {
-    return sizeof(int128_t);
-  } else if (type->isTimestamp()) {
-    VELOX_DCHECK(type->equivalent(*TIMESTAMP()));
-    return sizeof(int64_t);
-  } else if (type->isTime()) {
-    if (type->equivalent(*TIME())) {
-      // TIME is exported as Arrow time32 (int32_t).
-      return sizeof(int32_t);
-    }
-    VELOX_DCHECK(type->equivalent(*TIME_MICRO_UTC()));
-    // TIME MICRO UTC is exported as Arrow time64 (int64_t).
-    return sizeof(int64_t);
-  }
-  return type->cppSizeInBytes();
-}
-
 void exportValues(
     const BaseVector& vec,
     const Selection& rows,
@@ -794,7 +816,7 @@ void exportValues(
   }
 
   // Otherwise we will need a new buffer and copy the data.
-  auto size = getArrowElementSize(type, options);
+  auto size = getArrowElementSize(*type, options);
   auto values = type->isBoolean()
       ? AlignedBuffer::allocate<bool>(out.length, pool)
       : AlignedBuffer::allocate<uint8_t>(
@@ -874,9 +896,11 @@ void exportViews(
   int32_t bufferIdxCache = 0;
   uint64_t bufferAddrCache = 0;
 
+  vector_size_t j = 0;
   rows.apply([&](vector_size_t i) {
+    const auto outputRow = j++;
     auto view = const_cast<uint32_t*>(
-        reinterpret_cast<const uint32_t*>(&utf8Views[2 * i]));
+        reinterpret_cast<const uint32_t*>(&utf8Views[2 * outputRow]));
     if (!vec.isNullAt(i) && view[0] > 12) {
       const uint64_t currAddr = *reinterpret_cast<uint64_t*>(&view[2]);
       // 2. Search for correct index with the buffer-pointer as key. Cache the
@@ -990,7 +1014,8 @@ void exportToArrowImpl(
     const Selection&,
     const ArrowOptions& options,
     ArrowArray&,
-    memory::MemoryPool*);
+    memory::MemoryPool*,
+    const BufferPtr& parentNulls = nullptr);
 
 void exportRows(
     const RowVector& vec,
@@ -998,7 +1023,8 @@ void exportRows(
     const ArrowOptions& options,
     ArrowArray& out,
     memory::MemoryPool* pool,
-    VeloxToArrowBridgeHolder& holder) {
+    VeloxToArrowBridgeHolder& holder,
+    const BufferPtr& nulls) {
   out.n_buffers = 1;
   holder.resizeChildren(vec.childrenSize());
   out.n_children = vec.childrenSize();
@@ -1010,7 +1036,8 @@ void exportRows(
           rows,
           options,
           *holder.allocateChild(i),
-          pool);
+          pool,
+          nulls);
     } catch (const VeloxException&) {
       for (column_index_t j = 0; j < i; ++j) {
         // When exception is thrown, i th child is guaranteed unset.
@@ -1038,14 +1065,15 @@ void exportOffsets(
     ArrowArray& out,
     memory::MemoryPool* pool,
     VeloxToArrowBridgeHolder& holder,
-    Selection& childRows) {
+    Selection& childRows,
+    const BufferPtr& nulls) {
   VELOX_CHECK_GE(vec.size(), rows.count());
 
   auto offsets = AlignedBuffer::allocate<vector_size_t>(
       checkedPlus<size_t>(out.length, 1), pool);
   auto rawOffsets = offsets->asMutable<vector_size_t>();
 
-  if (!rows.changed() && isCompact(vec)) {
+  if (nulls == nullptr && !rows.changed() && isCompact(vec)) {
     vector_size_t rowCount = rows.count();
     memcpy(rawOffsets, vec.rawOffsets(), sizeof(vector_size_t) * rowCount);
     rawOffsets[rowCount] = rowCount == 0
@@ -1053,12 +1081,13 @@ void exportOffsets(
         : vec.offsetAt(rowCount - 1) + vec.sizeAt(rowCount - 1);
   } else {
     childRows.clearAll();
+    auto rawNulls = nulls == nullptr ? nullptr : nulls->as<uint64_t>();
     // j: Index of element we are writing.
     // k: Total size so far.
     vector_size_t j = 0, k = 0;
     rows.apply([&](vector_size_t i) {
       rawOffsets[j++] = k;
-      if (!vec.isNullAt(i)) {
+      if (rawNulls == nullptr || !bits::isBitNull(rawNulls, i)) {
         childRows.addRange(vec.offsetAt(i), vec.sizeAt(i));
         k += vec.sizeAt(i);
       }
@@ -1076,9 +1105,10 @@ void exportArrays(
     const ArrowOptions& options,
     ArrowArray& out,
     memory::MemoryPool* pool,
-    VeloxToArrowBridgeHolder& holder) {
+    VeloxToArrowBridgeHolder& holder,
+    const BufferPtr& nulls) {
   Selection childRows(vec.elements()->size());
-  exportOffsets(vec, rows, out, pool, holder, childRows);
+  exportOffsets(vec, rows, out, pool, holder, childRows, nulls);
   holder.resizeChildren(1);
   exportToArrowImpl(
       *vec.elements()->loadedVector(),
@@ -1096,7 +1126,8 @@ void exportMaps(
     const ArrowOptions& options,
     ArrowArray& out,
     memory::MemoryPool* pool,
-    VeloxToArrowBridgeHolder& holder) {
+    VeloxToArrowBridgeHolder& holder,
+    const BufferPtr& nulls) {
   RowVector child(
       pool,
       ROW({"key", "value"}, {vec.mapKeys()->type(), vec.mapValues()->type()}),
@@ -1104,7 +1135,7 @@ void exportMaps(
       vec.mapKeys()->size(),
       {vec.mapKeys(), vec.mapValues()});
   Selection childRows(child.size());
-  exportOffsets(vec, rows, out, pool, holder, childRows);
+  exportOffsets(vec, rows, out, pool, holder, childRows, nulls);
   holder.resizeChildren(1);
   exportToArrowImpl(child, childRows, options, *holder.allocateChild(0), pool);
   out.n_children = 1;
@@ -1118,16 +1149,20 @@ void flattenAndExport(
     const ArrowOptions& options,
     ArrowArray& out,
     memory::MemoryPool* pool,
-    VeloxToArrowBridgeHolder& holder) {
+    VeloxToArrowBridgeHolder& holder,
+    const BufferPtr& nulls) {
   using NativeType = typename velox::TypeTraits<kind>::NativeType;
   SelectivityVector allRows(vec.size());
   DecodedVector decoded(vec, allRows);
   auto flatVector = BaseVector::create<FlatVector<NativeType>>(
       vec.type(), decoded.size(), pool);
 
-  if (decoded.mayHaveNulls()) {
+  const auto mayHaveNulls = decoded.mayHaveNulls();
+  const auto* rawNulls = nulls == nullptr ? nullptr : nulls->as<uint64_t>();
+  if (mayHaveNulls || rawNulls != nullptr) {
     allRows.applyToSelected([&](vector_size_t row) {
-      if (decoded.isNullAt(row)) {
+      if ((rawNulls != nullptr && bits::isBitNull(rawNulls, row)) ||
+          (mayHaveNulls && decoded.isNullAt(row))) {
         flatVector->setNull(row, true);
       } else {
         flatVector->set(row, decoded.valueAt<NativeType>(row));
@@ -1149,7 +1184,8 @@ void exportDictionary(
     const ArrowOptions& options,
     ArrowArray& out,
     memory::MemoryPool* pool,
-    VeloxToArrowBridgeHolder& holder) {
+    VeloxToArrowBridgeHolder& holder,
+    const BufferPtr& nulls) {
   out.n_buffers = 2;
   out.n_children = 0;
   if (rows.changed()) {
@@ -1160,9 +1196,26 @@ void exportDictionary(
     holder.setBuffer(1, vec.wrapInfo());
   }
   auto& values = *vec.valueVector()->loadedVector();
+  BufferPtr baseNulls;
+  if (nulls != nullptr) {
+    baseNulls = AlignedBuffer::allocate<bool>(values.size(), pool, bits::kNull);
+    auto* rawBaseNulls = baseNulls->asMutable<uint64_t>();
+    auto* rawNulls = nulls->as<uint64_t>();
+    auto* rawIndices = vec.wrapInfo()->as<vector_size_t>();
+    rows.apply([&](vector_size_t i) {
+      if (!bits::isBitNull(rawNulls, i)) {
+        bits::setNull(rawBaseNulls, rawIndices[i], false);
+      }
+    });
+  }
   out.dictionary = holder.allocateDictionary();
   exportToArrowImpl(
-      values, Selection(values.size()), options, *out.dictionary, pool);
+      values,
+      Selection(values.size()),
+      options,
+      *out.dictionary,
+      pool,
+      baseNulls);
 }
 
 void exportFlattenedVector(
@@ -1171,13 +1224,22 @@ void exportFlattenedVector(
     const ArrowOptions& options,
     ArrowArray& out,
     memory::MemoryPool* pool,
-    VeloxToArrowBridgeHolder& holder) {
+    VeloxToArrowBridgeHolder& holder,
+    const BufferPtr& nulls) {
   VELOX_CHECK(
       vec.valueVector() == nullptr || vec.wrappedVector()->isFlatEncoding(),
       "An unsupported nested encoding was found.");
   VELOX_CHECK(vec.isScalar(), "Flattening is only supported for scalar types.");
   VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-      flattenAndExport, vec.typeKind(), vec, rows, options, out, pool, holder);
+      flattenAndExport,
+      vec.typeKind(),
+      vec,
+      rows,
+      options,
+      out,
+      pool,
+      holder,
+      nulls);
 }
 
 void exportConstantValue(
@@ -1227,7 +1289,8 @@ void exportConstant(
     const ArrowOptions& options,
     ArrowArray& out,
     memory::MemoryPool* pool,
-    VeloxToArrowBridgeHolder& holder) {
+    VeloxToArrowBridgeHolder& holder,
+    const BufferPtr& nulls) {
   // As per Arrow spec, REE has zero buffers and two children, `run_ends` and
   // `values`.
   out.n_buffers = 0;
@@ -1236,14 +1299,38 @@ void exportConstant(
   out.n_children = 2;
   holder.resizeChildren(2);
   out.children = holder.getChildrenArrays();
-  exportConstantValue(vec, options, *holder.allocateChild(1), pool);
+
+  // REE (Run-End Encoded) has one value child. Use a null placeholder only
+  // when all selected rows are masked null.
+  bool allRowsNull = nulls != nullptr;
+  if (allRowsNull) {
+    auto* rawNulls = nulls->as<uint64_t>();
+    rows.apply([&](vector_size_t i) {
+      if (!bits::isBitNull(rawNulls, i)) {
+        allRowsNull = false;
+      }
+    });
+  }
+  if (rows.count() == 0) {
+    // values.length = 0
+    auto emptyValue = BaseVector::create(vec.type(), 0, pool);
+    exportToArrowImpl(
+        *emptyValue, Selection(0), options, *holder.allocateChild(1), pool);
+  } else if (allRowsNull) {
+    // values.length = 1, values[0] = null
+    auto nullValue = BaseVector::createNullConstant(vec.type(), 1, pool);
+    exportConstantValue(*nullValue, options, *holder.allocateChild(1), pool);
+  } else {
+    // values.length = 1, values[0] = actual constant
+    exportConstantValue(vec, options, *holder.allocateChild(1), pool);
+  }
 
   // Create the run ends child.
   auto* runEnds = holder.allocateChild(0);
   auto runEndsHolder = std::make_unique<VeloxToArrowBridgeHolder>();
 
   runEnds->buffers = runEndsHolder->getArrowBuffers();
-  runEnds->length = 1;
+  runEnds->length = rows.count() > 0 ? 1 : 0;
   runEnds->offset = 0;
   runEnds->null_count = 0;
   runEnds->n_buffers = 2;
@@ -1253,7 +1340,7 @@ void exportConstant(
 
   // Allocate single runs buffer with the run set as size.
   auto runsBuffer = AlignedBuffer::allocate<int32_t>(1, pool);
-  runsBuffer->asMutable<int32_t>()[0] = vec.size();
+  runsBuffer->asMutable<int32_t>()[0] = rows.count();
   runEndsHolder->setBuffer(1, runsBuffer);
 
   runEnds->private_data = runEndsHolder.release();
@@ -1265,39 +1352,93 @@ void exportToArrowImpl(
     const Selection& rows,
     const ArrowOptions& options,
     ArrowArray& out,
-    memory::MemoryPool* pool) {
+    memory::MemoryPool* pool,
+    const BufferPtr& parentNulls) {
   auto holder = std::make_unique<VeloxToArrowBridgeHolder>();
   out.buffers = holder->getArrowBuffers();
   out.length = rows.count();
   out.offset = 0;
   out.dictionary = nullptr;
+  const bool isConstant = vec.encoding() == VectorEncoding::Simple::CONSTANT;
+  BufferPtr ownNulls;
+  if (!isConstant && vec.mayHaveNulls() && vec.getNullCount() != 0) {
+    ownNulls = vec.nulls();
+  }
+
+  // Keep this ArrowArray's validity bitmap aligned with the vector's own nulls.
+  // Parent nulls are only used to mask child/value export.
   exportValidityBitmap(vec, rows, options, out, pool, *holder);
 
+  // Calculate the effective nulls buffer used to skip values masked by parent
+  // nodes. Arrow validity for this array still uses only this vector's own
+  // nulls.
+  auto effectiveNulls = parentNulls != nullptr ? parentNulls : ownNulls;
+  if (!isConstant && parentNulls != nullptr && ownNulls != nullptr) {
+    auto mergedNulls =
+        AlignedBuffer::allocate<bool>(vec.size(), pool, bits::kNotNull);
+    bits::andBits(
+        mergedNulls->asMutable<uint64_t>(),
+        vec.rawNulls(),
+        parentNulls->as<uint64_t>(),
+        0,
+        vec.size());
+    effectiveNulls = std::move(mergedNulls);
+  }
+
   switch (vec.encoding()) {
-    case VectorEncoding::Simple::FLAT:
-      exportFlat(vec, rows, options, out, pool, *holder);
+    case VectorEncoding::Simple::FLAT: {
+      VectorPtr flatWithNulls;
+      auto flat = &vec;
+      if (effectiveNulls != ownNulls && vec.typeKind() != TypeKind::UNKNOWN) {
+        flatWithNulls = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+            makeFlatVectorWithNulls, vec.typeKind(), vec, effectiveNulls);
+        flat = flatWithNulls.get();
+      }
+      exportFlat(*flat, rows, options, out, pool, *holder);
       break;
+    }
     case VectorEncoding::Simple::ROW:
       exportRows(
-          *vec.asUnchecked<RowVector>(), rows, options, out, pool, *holder);
+          *vec.asUnchecked<RowVector>(),
+          rows,
+          options,
+          out,
+          pool,
+          *holder,
+          effectiveNulls);
       break;
     case VectorEncoding::Simple::ARRAY:
       exportArrays(
-          *vec.asUnchecked<ArrayVector>(), rows, options, out, pool, *holder);
+          *vec.asUnchecked<ArrayVector>(),
+          rows,
+          options,
+          out,
+          pool,
+          *holder,
+          effectiveNulls);
       break;
     case VectorEncoding::Simple::MAP:
       exportMaps(
-          *vec.asUnchecked<MapVector>(), rows, options, out, pool, *holder);
+          *vec.asUnchecked<MapVector>(),
+          rows,
+          options,
+          out,
+          pool,
+          *holder,
+          effectiveNulls);
       break;
     case VectorEncoding::Simple::DICTIONARY:
       options.flattenDictionary
-          ? exportFlattenedVector(vec, rows, options, out, pool, *holder)
-          : exportDictionary(vec, rows, options, out, pool, *holder);
+          ? exportFlattenedVector(
+                vec, rows, options, out, pool, *holder, effectiveNulls)
+          : exportDictionary(
+                vec, rows, options, out, pool, *holder, effectiveNulls);
       break;
     case VectorEncoding::Simple::CONSTANT:
       options.flattenConstant
-          ? exportFlattenedVector(vec, rows, options, out, pool, *holder)
-          : exportConstant(vec, rows, options, out, pool, *holder);
+          ? exportFlattenedVector(
+                vec, rows, options, out, pool, *holder, parentNulls)
+          : exportConstant(vec, rows, options, out, pool, *holder, parentNulls);
       break;
     default:
       VELOX_NYI("{} cannot be exported to Arrow yet.", vec.encoding());

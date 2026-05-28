@@ -43,6 +43,22 @@ struct VeloxToArrowType<Timestamp> {
   using type = int64_t;
 };
 
+// Converts timestamp as bigint according to unit.
+int64_t timestampValue(Timestamp timestamp, TimestampUnit unit) {
+  switch (unit) {
+    case TimestampUnit::kSecond:
+      return timestamp.getSeconds();
+    case TimestampUnit::kMilli:
+      return timestamp.toMillis();
+    case TimestampUnit::kMicro:
+      return timestamp.toMicros();
+    case TimestampUnit::kNano:
+      return timestamp.toNanos();
+    default:
+      VELOX_UNREACHABLE();
+  }
+}
+
 class ArrowBridgeArrayExportTest : public testing::Test {
  protected:
   static void SetUpTestCase() {
@@ -169,8 +185,9 @@ class ArrowBridgeArrayExportTest : public testing::Test {
               bits::isBitSet(reinterpret_cast<const uint64_t*>(values), i))
               << "mismatch at index " << i;
         } else if constexpr (std::is_same_v<T, Timestamp>) {
-          EXPECT_TRUE(validateTimestamp(
-              inputData[i].value(), options_.timestampUnit, values[i]))
+          EXPECT_EQ(
+              timestampValue(inputData[i].value(), options_.timestampUnit),
+              values[i])
               << "mismatch at index " << i;
         } else {
           EXPECT_EQ(inputData[i], values[i]) << "mismatch at index " << i;
@@ -376,31 +393,6 @@ class ArrowBridgeArrayExportTest : public testing::Test {
       memory::memoryManager()->addLeafPool()};
   core::ExecCtx execCtx_{pool_.get(), queryCtx_.get()};
   facebook::velox::test::VectorMaker vectorMaker_{execCtx_.pool()};
-
- private:
-  // Converts timestamp as bigint according to unit, and compares it with the
-  // actual value.
-  bool
-  validateTimestamp(Timestamp ts, TimestampUnit unit, int64_t actualValue) {
-    int64_t expectedValue;
-    switch (unit) {
-      case TimestampUnit::kSecond:
-        expectedValue = ts.getSeconds();
-        break;
-      case TimestampUnit::kMilli:
-        expectedValue = ts.toMillis();
-        break;
-      case TimestampUnit::kMicro:
-        expectedValue = ts.toMicros();
-        break;
-      case TimestampUnit::kNano:
-        expectedValue = ts.toNanos();
-        break;
-      default:
-        VELOX_UNREACHABLE();
-    }
-    return expectedValue == actualValue;
-  }
 };
 
 TEST_F(ArrowBridgeArrayExportTest, flatNotNull) {
@@ -556,6 +548,275 @@ TEST_F(ArrowBridgeArrayExportTest, flatTimestamp) {
   EXPECT_THROW(
       testFlatVector<Timestamp>({Timestamp(9246211200, 0)}, TIMESTAMP()),
       VeloxUserError);
+}
+
+TEST_F(ArrowBridgeArrayExportTest, parentNullsMaskTimestampOverflow) {
+  const int64_t overflowingSeconds =
+      std::numeric_limits<int64_t>::max() / 1'000;
+  const auto firstTimestamp = Timestamp(1, 0);
+  const auto overflowingTimestamp = Timestamp(overflowingSeconds, 0);
+  const auto secondTimestamp = Timestamp(2, 0);
+
+  auto makeTimestampVector = [&]() {
+    return vectorMaker_.flatVector<Timestamp>(
+        {firstTimestamp, overflowingTimestamp, secondTimestamp});
+  };
+
+  auto makeOffsets = [&]() { return makeBuffer<vector_size_t>({0, 1, 2}); };
+  auto makeSizes = [&]() { return makeBuffer<vector_size_t>({1, 1, 1}); };
+
+  auto assertTimestampValues = [&](const arrow::TimestampArray& values,
+                                   vector_size_t firstIndex,
+                                   vector_size_t secondIndex,
+                                   TimestampUnit unit) {
+    ASSERT_FALSE(values.IsNull(firstIndex));
+    EXPECT_EQ(values.Value(firstIndex), timestampValue(firstTimestamp, unit));
+    ASSERT_FALSE(values.IsNull(secondIndex));
+    EXPECT_EQ(values.Value(secondIndex), timestampValue(secondTimestamp, unit));
+  };
+
+  auto assertExportsWithoutOverflow = [&](const VectorPtr& vector,
+                                          auto validateValues) {
+    for (const auto unit : {TimestampUnit::kMicro, TimestampUnit::kNano}) {
+      options_.timestampUnit = unit;
+
+      ArrowSchema schema;
+      ArrowArray data;
+      velox::exportToArrow(vector, schema, options_);
+      velox::exportToArrow(vector, data, pool_.get(), options_);
+      EXPECT_OK_AND_ASSIGN(auto type, arrow::ImportType(&schema));
+      EXPECT_OK_AND_ASSIGN(auto arrowArray, arrow::ImportArray(&data, type));
+      ASSERT_OK(arrowArray->ValidateFull());
+      ASSERT_NO_FATAL_FAILURE(validateValues(*arrowArray, unit));
+    }
+  };
+
+  VectorPtr vector;
+
+  // ROW<ts: TIMESTAMP>
+  vector = vectorMaker_.rowVector({"ts"}, {makeTimestampVector()});
+  vector->setNull(1, true);
+  vector->setNullCount(1);
+  assertExportsWithoutOverflow(
+      vector, [&](const arrow::Array& array, TimestampUnit unit) {
+        const auto& structArray =
+            dynamic_cast<const arrow::StructArray&>(array);
+        ASSERT_TRUE(structArray.IsNull(1));
+        const auto& values =
+            dynamic_cast<const arrow::TimestampArray&>(*structArray.field(0));
+        assertTimestampValues(values, 0, 2, unit);
+      });
+
+  // ROW<inner: ROW<ts: TIMESTAMP>>
+  auto innerStruct = vectorMaker_.rowVector({"ts"}, {makeTimestampVector()});
+  vector = vectorMaker_.rowVector({"inner"}, {innerStruct});
+  vector->setNull(1, true);
+  vector->setNullCount(1);
+  assertExportsWithoutOverflow(
+      vector, [&](const arrow::Array& array, TimestampUnit unit) {
+        const auto& structArray =
+            dynamic_cast<const arrow::StructArray&>(array);
+        ASSERT_TRUE(structArray.IsNull(1));
+        const auto& inner =
+            dynamic_cast<const arrow::StructArray&>(*structArray.field(0));
+        const auto& values =
+            dynamic_cast<const arrow::TimestampArray&>(*inner.field(0));
+        assertTimestampValues(values, 0, 2, unit);
+      });
+
+  // ROW<items: ARRAY<TIMESTAMP>>
+  auto arrayChild = std::make_shared<ArrayVector>(
+      pool_.get(),
+      ARRAY(TIMESTAMP()),
+      nullptr,
+      3,
+      makeOffsets(),
+      makeSizes(),
+      makeTimestampVector());
+  vector = vectorMaker_.rowVector({"items"}, {arrayChild});
+  vector->setNull(1, true);
+  vector->setNullCount(1);
+  assertExportsWithoutOverflow(
+      vector, [&](const arrow::Array& array, TimestampUnit unit) {
+        const auto& structArray =
+            dynamic_cast<const arrow::StructArray&>(array);
+        ASSERT_TRUE(structArray.IsNull(1));
+        const auto& listArray =
+            dynamic_cast<const arrow::ListArray&>(*structArray.field(0));
+        const auto& values =
+            dynamic_cast<const arrow::TimestampArray&>(*listArray.values());
+        assertTimestampValues(
+            values, listArray.value_offset(0), listArray.value_offset(2), unit);
+      });
+
+  // ROW<items: MAP<INTEGER, TIMESTAMP>>
+  auto mapChild = std::make_shared<MapVector>(
+      pool_.get(),
+      MAP(INTEGER(), TIMESTAMP()),
+      nullptr,
+      3,
+      makeOffsets(),
+      makeSizes(),
+      vectorMaker_.flatVector<int32_t>({0, 1, 2}),
+      makeTimestampVector());
+  vector = vectorMaker_.rowVector({"items"}, {mapChild});
+  vector->setNull(1, true);
+  vector->setNullCount(1);
+  assertExportsWithoutOverflow(
+      vector, [&](const arrow::Array& array, TimestampUnit unit) {
+        const auto& structArray =
+            dynamic_cast<const arrow::StructArray&>(array);
+        ASSERT_TRUE(structArray.IsNull(1));
+        const auto& mapArray =
+            dynamic_cast<const arrow::MapArray&>(*structArray.field(0));
+        const auto& values =
+            dynamic_cast<const arrow::TimestampArray&>(*mapArray.items());
+        assertTimestampValues(
+            values, mapArray.value_offset(0), mapArray.value_offset(2), unit);
+      });
+
+  // ARRAY<ROW<ts: TIMESTAMP>>
+  auto elements = vectorMaker_.rowVector({"ts"}, {makeTimestampVector()});
+  auto arrayNulls =
+      AlignedBuffer::allocate<bool>(3, pool_.get(), bits::kNotNull);
+  bits::setNull(arrayNulls->asMutable<uint64_t>(), 1, true);
+  vector = std::make_shared<ArrayVector>(
+      pool_.get(),
+      ARRAY(elements->type()),
+      arrayNulls,
+      3,
+      makeOffsets(),
+      makeSizes(),
+      elements,
+      1);
+  assertExportsWithoutOverflow(
+      vector, [&](const arrow::Array& array, TimestampUnit unit) {
+        const auto& listArray = dynamic_cast<const arrow::ListArray&>(array);
+        ASSERT_TRUE(listArray.IsNull(1));
+        const auto& rows =
+            dynamic_cast<const arrow::StructArray&>(*listArray.values());
+        const auto& values =
+            dynamic_cast<const arrow::TimestampArray&>(*rows.field(0));
+        assertTimestampValues(
+            values, listArray.value_offset(0), listArray.value_offset(2), unit);
+      });
+
+  // MAP<INTEGER, ROW<ts: TIMESTAMP>>
+  auto values = vectorMaker_.rowVector({"ts"}, {makeTimestampVector()});
+  auto mapNulls = AlignedBuffer::allocate<bool>(3, pool_.get(), bits::kNotNull);
+  bits::setNull(mapNulls->asMutable<uint64_t>(), 1, true);
+  vector = std::make_shared<MapVector>(
+      pool_.get(),
+      MAP(INTEGER(), values->type()),
+      mapNulls,
+      3,
+      makeOffsets(),
+      makeSizes(),
+      vectorMaker_.flatVector<int32_t>({0, 1, 2}),
+      values,
+      1);
+  assertExportsWithoutOverflow(
+      vector, [&](const arrow::Array& array, TimestampUnit unit) {
+        const auto& mapArray = dynamic_cast<const arrow::MapArray&>(array);
+        ASSERT_TRUE(mapArray.IsNull(1));
+        const auto& rows =
+            dynamic_cast<const arrow::StructArray&>(*mapArray.items());
+        const auto& values =
+            dynamic_cast<const arrow::TimestampArray&>(*rows.field(0));
+        assertTimestampValues(
+            values, mapArray.value_offset(0), mapArray.value_offset(2), unit);
+      });
+
+  // ROW<ts: DICTIONARY<TIMESTAMP>>, flattenDictionary=true
+  auto indices = makeBuffer<vector_size_t>({0, 1, 2});
+  auto dictionary =
+      BaseVector::wrapInDictionary(nullptr, indices, 3, makeTimestampVector());
+  vector = vectorMaker_.rowVector({"ts"}, {dictionary});
+  vector->setNull(1, true);
+  vector->setNullCount(1);
+  {
+    options_.flattenDictionary = true;
+    SCOPE_EXIT {
+      options_.flattenDictionary = false;
+    };
+    assertExportsWithoutOverflow(
+        vector, [&](const arrow::Array& array, TimestampUnit unit) {
+          const auto& structArray =
+              dynamic_cast<const arrow::StructArray&>(array);
+          ASSERT_TRUE(structArray.IsNull(1));
+          const auto& values =
+              dynamic_cast<const arrow::TimestampArray&>(*structArray.field(0));
+          assertTimestampValues(values, 0, 2, unit);
+        });
+  }
+
+  // ROW<ts: DICTIONARY<TIMESTAMP>>
+  dictionary =
+      BaseVector::wrapInDictionary(nullptr, indices, 3, makeTimestampVector());
+  vector = vectorMaker_.rowVector({"ts"}, {dictionary});
+  vector->setNull(1, true);
+  vector->setNullCount(1);
+  assertExportsWithoutOverflow(
+      vector, [&](const arrow::Array& array, TimestampUnit unit) {
+        const auto& structArray =
+            dynamic_cast<const arrow::StructArray&>(array);
+        ASSERT_TRUE(structArray.IsNull(1));
+        const auto& dictionaryArray =
+            dynamic_cast<const arrow::DictionaryArray&>(*structArray.field(0));
+        const auto& dictionaryValues =
+            dynamic_cast<const arrow::TimestampArray&>(
+                *dictionaryArray.dictionary());
+        const auto& dictionaryIndices =
+            dynamic_cast<const arrow::Int32Array&>(*dictionaryArray.indices());
+        ASSERT_FALSE(dictionaryIndices.IsNull(0));
+        EXPECT_EQ(
+            dictionaryValues.Value(dictionaryIndices.Value(0)),
+            timestampValue(firstTimestamp, unit));
+        ASSERT_FALSE(dictionaryIndices.IsNull(2));
+        EXPECT_EQ(
+            dictionaryValues.Value(dictionaryIndices.Value(2)),
+            timestampValue(secondTimestamp, unit));
+      });
+
+  // ROW<ts: CONSTANT<TIMESTAMP>>
+  auto constant = BaseVector::createConstant(
+      TIMESTAMP(), variant(overflowingTimestamp), 3, pool_.get());
+  vector = vectorMaker_.rowVector({"ts"}, {constant});
+  for (vector_size_t row = 0; row < vector->size(); ++row) {
+    vector->setNull(row, true);
+  }
+  vector->setNullCount(vector->size());
+  assertExportsWithoutOverflow(
+      vector, [&](const arrow::Array& array, TimestampUnit) {
+        const auto& structArray =
+            dynamic_cast<const arrow::StructArray&>(array);
+        ASSERT_EQ(structArray.null_count(), vector->size());
+        for (int64_t row = 0; row < structArray.length(); ++row) {
+          EXPECT_TRUE(structArray.IsNull(row));
+        }
+      });
+
+  // ARRAY<CONSTANT<TIMESTAMP>>
+  constant = BaseVector::createConstant(
+      TIMESTAMP(), variant(overflowingTimestamp), 3, pool_.get());
+  auto nulls = AlignedBuffer::allocate<bool>(3, pool_.get(), bits::kNull);
+  vector = std::make_shared<ArrayVector>(
+      pool_.get(),
+      ARRAY(TIMESTAMP()),
+      nulls,
+      3,
+      makeOffsets(),
+      makeSizes(),
+      constant,
+      3);
+  assertExportsWithoutOverflow(
+      vector, [&](const arrow::Array& array, TimestampUnit) {
+        const auto& listArray = dynamic_cast<const arrow::ListArray&>(array);
+        ASSERT_EQ(listArray.null_count(), vector->size());
+        for (int64_t row = 0; row < listArray.length(); ++row) {
+          EXPECT_TRUE(listArray.IsNull(row));
+        }
+      });
 }
 
 TEST_F(ArrowBridgeArrayExportTest, flatTime) {
@@ -896,6 +1157,44 @@ TEST_F(ArrowBridgeArrayExportTest, arrayNested) {
   EXPECT_EQ(values.Value(1), 1);
 }
 
+TEST_F(ArrowBridgeArrayExportTest, arrayStringViewSkipsNullChildRows) {
+  options_.exportToStringView = true;
+
+  auto elements = vectorMaker_.flatVector<StringView>({
+      "short",
+      "masked string longer than inline",
+      "last string longer than inline",
+  });
+  auto nulls = AlignedBuffer::allocate<bool>(3, pool_.get(), bits::kNotNull);
+  bits::setNull(nulls->asMutable<uint64_t>(), 1, true);
+  auto vector = std::make_shared<ArrayVector>(
+      pool_.get(),
+      ARRAY(VARCHAR()),
+      nulls,
+      3,
+      makeBuffer<vector_size_t>({0, 1, 2}),
+      makeBuffer<vector_size_t>({1, 1, 1}),
+      elements,
+      1);
+
+  auto array = toArrow(vector, options_, pool_.get());
+  ASSERT_OK(array->ValidateFull());
+  ASSERT_EQ(*array->type(), *arrow::list(arrow::utf8_view()));
+
+  const auto& listArray = dynamic_cast<const arrow::ListArray&>(*array);
+  ASSERT_EQ(listArray.length(), 3);
+  ASSERT_FALSE(listArray.IsNull(0));
+  ASSERT_TRUE(listArray.IsNull(1));
+  ASSERT_FALSE(listArray.IsNull(2));
+  validateOffsets(listArray, {0, 1, 1, 2});
+
+  const auto& values =
+      dynamic_cast<const arrow::StringViewArray&>(*listArray.values());
+  ASSERT_EQ(values.length(), 2);
+  EXPECT_EQ(values.GetView(0), "short");
+  EXPECT_EQ(values.GetView(1), "last string longer than inline");
+}
+
 TEST_F(ArrowBridgeArrayExportTest, mapSimple) {
   auto allOnes = [](vector_size_t) { return 1; };
   auto vec =
@@ -1031,6 +1330,25 @@ TEST_F(ArrowBridgeArrayExportTest, dictionarySimple) {
   EXPECT_EQ(values.Value(2), 3);
 }
 
+TEST_F(ArrowBridgeArrayExportTest, dictionaryNullConstantValues) {
+  auto values = BaseVector::createNullConstant(TINYINT(), 2048, pool_.get());
+  auto nulls = AlignedBuffer::allocate<bool>(3, pool_.get(), bits::kNotNull);
+  auto indices = makeBuffer<vector_size_t>({0, 1, 2});
+  auto vec = BaseVector::wrapInDictionary(nulls, indices, 3, values);
+
+  ArrowArray arrowArray;
+  velox::exportToArrow(vec, arrowArray, pool_.get(), options_);
+
+  EXPECT_EQ(vec->size(), arrowArray.length);
+  ASSERT_NE(nullptr, arrowArray.dictionary);
+  EXPECT_EQ(values->size(), arrowArray.dictionary->length);
+  ASSERT_NE(nullptr, arrowArray.release);
+
+  arrowArray.release(&arrowArray);
+  EXPECT_EQ(nullptr, arrowArray.release);
+  EXPECT_EQ(nullptr, arrowArray.private_data);
+}
+
 TEST_F(ArrowBridgeArrayExportTest, dictionaryNested) {
   auto vec = ({
     auto indices = makeBuffer<vector_size_t>({1, 2, 0});
@@ -1079,6 +1397,66 @@ TEST_F(ArrowBridgeArrayExportTest, constants) {
       BaseVector::createNullConstant(TINYINT(), 2048, pool_.get());
   testConstantVector<true, int8_t>(
       vector, std::vector<std::optional<int8_t>>{std::nullopt});
+}
+
+TEST_F(ArrowBridgeArrayExportTest, constantTimestamp) {
+  const auto value = Timestamp(2, 123'456'789);
+
+  for (const auto unit :
+       {TimestampUnit::kSecond,
+        TimestampUnit::kMilli,
+        TimestampUnit::kMicro,
+        TimestampUnit::kNano}) {
+    options_.timestampUnit = unit;
+
+    auto constant =
+        BaseVector::createConstant(TIMESTAMP(), variant(value), 3, pool_.get());
+    auto vector = vectorMaker_.rowVector({"ts"}, {constant});
+    vector->setNull(1, true);
+    vector->setNullCount(1);
+
+    auto array = toArrow(vector, options_, pool_.get());
+    ASSERT_OK(array->ValidateFull());
+
+    const auto& structArray = dynamic_cast<const arrow::StructArray&>(*array);
+    ASSERT_EQ(structArray.null_count(), 1);
+    ASSERT_FALSE(structArray.IsNull(0));
+    ASSERT_TRUE(structArray.IsNull(1));
+    ASSERT_FALSE(structArray.IsNull(2));
+
+    const auto& reeArray =
+        dynamic_cast<const arrow::RunEndEncodedArray&>(*structArray.field(0));
+    const auto& runEnds =
+        dynamic_cast<const arrow::Int32Array&>(*reeArray.run_ends());
+    const auto& values =
+        dynamic_cast<const arrow::TimestampArray&>(*reeArray.values());
+
+    ASSERT_EQ(runEnds.length(), 1);
+    EXPECT_EQ(runEnds.Value(0), static_cast<int32_t>(vector->size()));
+
+    ASSERT_EQ(values.length(), 1);
+    ASSERT_FALSE(values.IsNull(0));
+    EXPECT_EQ(values.Value(0), timestampValue(value, unit));
+  }
+}
+
+TEST_F(ArrowBridgeArrayExportTest, flattenNullConstant) {
+  options_.flattenConstant = true;
+
+  VectorPtr vector =
+      BaseVector::createNullConstant(TINYINT(), 2048, pool_.get());
+  ArrowArray arrowArray;
+  velox::exportToArrow(vector, arrowArray, pool_.get(), options_);
+
+  EXPECT_EQ(vector->size(), arrowArray.length);
+  EXPECT_EQ(vector->size(), arrowArray.null_count);
+  EXPECT_EQ(2, arrowArray.n_buffers);
+  EXPECT_EQ(0, arrowArray.n_children);
+  ASSERT_NE(nullptr, arrowArray.release);
+
+  arrowArray.release(&arrowArray);
+  EXPECT_EQ(nullptr, arrowArray.release);
+  EXPECT_EQ(nullptr, arrowArray.private_data);
 }
 
 TEST_F(ArrowBridgeArrayExportTest, constantComplex) {
