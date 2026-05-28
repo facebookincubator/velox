@@ -24,7 +24,8 @@
 
 using namespace facebook::velox::memory;
 
-constexpr int64_t kMemoryFootprintIncrement = MemoryAllocator::kMaxAlignment;
+constexpr int64_t kMemoryFootprintIncrement =
+    MemoryAllocator::kDefaultAlignment;
 
 namespace facebook::velox::memory {
 

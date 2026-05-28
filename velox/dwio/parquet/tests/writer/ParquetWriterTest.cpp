@@ -28,6 +28,7 @@
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/parquet/RegisterParquetWriter.h" // @manual
 #include "velox/dwio/parquet/reader/PageReader.h"
+#include "velox/dwio/parquet/reader/ParquetTypeWithId.h"
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
 #include "velox/dwio/parquet/writer/WriterConfig.h"
 #include "velox/dwio/parquet/writer/arrow/tests/ColumnReader.h"
@@ -746,22 +747,245 @@ TEST_F(ParquetWriterTest, preEpochInt96Timestamp) {
   }
 }
 
+TEST_F(ParquetWriterTest, writerMagic) {
+  const auto data = makeRowVector(
+      {makeFlatVector<int32_t>(20'000, [](auto row) { return row; })});
+
+  parquet::WriterOptions writerOptions;
+  writerOptions.memoryPool = rootPool_.get();
+
+  const auto* sinkPtr = write(data, writerOptions);
+  const auto fileData = std::string_view(sinkPtr->data(), sinkPtr->size());
+
+  EXPECT_EQ("PAR1", std::string(fileData.data(), 4));
+  EXPECT_EQ("PAR1", std::string(fileData.data() + fileData.size() - 4, 4));
+}
+
+TEST_F(ParquetWriterTest, largeMetadata) {
+  const auto data = makeRowVector(
+      {makeFlatVector<int32_t>(1'000, [](auto row) { return row; })});
+
+  parquet::WriterOptions writerOptions;
+  writerOptions.memoryPool = rootPool_.get();
+  writerOptions.flushPolicyFactory = []() {
+    return std::make_unique<DefaultFlushPolicy>(
+        /*rowsInRowGroup=*/1,
+        /*bytesInRowGroup=*/128 * 1'024 * 1'024);
+  };
+
+  const auto* sinkPtr = write(data, writerOptions);
+
+  dwio::common::ReaderOptions readerOpts(leafPool_.get());
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
+  readerOpts.setFooterSpeculativeIoSize(1024);
+  readerOpts.setFilePreloadThreshold(1024 * 8);
+
+  const auto reader = createReaderInMemory(*sinkPtr, readerOpts);
+  EXPECT_EQ(1'000, reader->numberOfRows());
+  EXPECT_EQ(1'000, reader->fileMetaData().numRowGroups());
+}
+
+TEST_F(ParquetWriterTest, writeDecimalAsInteger) {
+  const auto rowVector = makeRowVector(
+      {makeFlatVector<int64_t>({1, 2}, DECIMAL(8, 2)),
+       makeFlatVector<int64_t>({1, 2}, DECIMAL(10, 2)),
+       makeFlatVector<int128_t>({1, 2}, DECIMAL(19, 2))});
+
+  parquet::WriterOptions writerOptions;
+  writerOptions.memoryPool = rootPool_.get();
+
+  const auto* sinkPtr = write(rowVector, writerOptions);
+
+  dwio::common::ReaderOptions readerOpts(leafPool_.get());
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
+  const auto reader = createReaderInMemory(*sinkPtr, readerOpts);
+
+  const auto types = reader->typeWithId()->getChildren();
+  ASSERT_GE(types.size(), 3);
+  const auto c0 = std::dynamic_pointer_cast<const ParquetTypeWithId>(types[0]);
+  ASSERT_NE(c0, nullptr);
+  EXPECT_EQ(c0->parquetType_.value(), thrift::Type::type::INT32);
+  const auto c1 = std::dynamic_pointer_cast<const ParquetTypeWithId>(types[1]);
+  ASSERT_NE(c1, nullptr);
+  EXPECT_EQ(c1->parquetType_.value(), thrift::Type::type::INT64);
+  const auto c2 = std::dynamic_pointer_cast<const ParquetTypeWithId>(types[2]);
+  ASSERT_NE(c2, nullptr);
+  EXPECT_EQ(c2->parquetType_.value(), thrift::Type::type::FIXED_LEN_BYTE_ARRAY);
+}
+
+TEST_F(ParquetWriterTest, configurableWriteSchema) {
+  const auto test = [&](const RowTypePtr& type, const RowTypePtr& newType) {
+    constexpr int32_t kNumBatches = 5;
+    constexpr int32_t kBatchSize = 100;
+    auto batches = createBatches(type, kNumBatches, kBatchSize);
+    constexpr vector_size_t kNumRows = kNumBatches * kBatchSize;
+
+    auto data = std::dynamic_pointer_cast<RowVector>(
+        BaseVector::create(type, kNumRows, pool()));
+    auto expected = std::dynamic_pointer_cast<RowVector>(
+        BaseVector::create(newType, kNumRows, pool()));
+    vector_size_t offset = 0;
+    for (const auto& batch : batches) {
+      data->copy(batch.get(), offset, 0, batch->size());
+      expected->copy(batch.get(), offset, 0, batch->size());
+      offset += batch->size();
+    }
+
+    parquet::WriterOptions writerOptions;
+    writerOptions.memoryPool = rootPool_.get();
+    const auto* sinkPtr = write(data, writerOptions, newType);
+    dwio::common::ReaderOptions readerOpts(leafPool_.get());
+    readerOpts.setDataIoStats(dataIoStats_);
+    readerOpts.setMetadataIoStats(metadataIoStats_);
+    auto reader = createReaderInMemory(*sinkPtr, readerOpts);
+
+    ASSERT_EQ(reader->numberOfRows(), kNumRows);
+    EXPECT_EQ(reader->rowType()->toString(), newType->toString());
+
+    auto rowReader = createRowReaderWithSchema(std::move(reader), newType);
+    assertReadWithReaderAndExpected(newType, *rowReader, expected, *leafPool_);
+  };
+
+  test(
+      ROW({"a", "b"}, {INTEGER(), ROW({"c"}, {ROW({"d"}, INTEGER())})}),
+      ROW({"aa", "bb"}, {INTEGER(), ROW({"cc"}, {ROW({"dd"}, INTEGER())})}));
+
+  test(
+      ROW({"a", "b"}, {ARRAY(ROW({"c", "d"}, BIGINT())), BIGINT()}),
+      ROW({"aa", "bb"}, {ARRAY(ROW({"cc", "dd"}, BIGINT())), BIGINT()}));
+
+  test(
+      ROW({"a", "b"},
+          {MAP(ROW({"c", "d"}, BIGINT()), ROW({"e", "f"}, BIGINT())),
+           BIGINT()}),
+      ROW({"aa", "bb"},
+          {MAP(ROW({"cc", "dd"}, BIGINT()), ROW({"ee", "ff"}, BIGINT())),
+           BIGINT()}));
+}
+
 TEST_F(ParquetWriterTest, updateWriterOptionsFromHiveConfig) {
   std::unordered_map<std::string, std::string> configFromFile = {
       {config::ConfigBase::toConfigKey(
            parquet::WriterConfig::kParquetSessionWriteTimestampUnit),
        "3"}};
-  const config::ConfigBase connectorConfig(std::move(configFromFile));
-  const config::ConfigBase connectorSessionProperties({});
+  const std::vector<Timestamp> timestamps = {
+      Timestamp(1, 123'456'789),
+      Timestamp(2, 987'654'321),
+  };
+  const auto data = makeRowVector({makeFlatVector<Timestamp>(timestamps)});
+  const auto expected = makeRowVector({makeFlatVector<Timestamp>({
+      Timestamp::fromMillis(timestamps[0].toMillis()),
+      Timestamp::fromMillis(timestamps[1].toMillis()),
+  })});
 
-  parquet::WriterOptions options;
-  options.compressionKind = facebook::velox::common::CompressionKind_ZLIB;
+  const auto* sinkPtr = write(data, std::move(configFromFile), {});
 
-  options.processConfigs(connectorConfig, connectorSessionProperties);
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
+  auto reader = createReaderInMemory(*sinkPtr, readerOptions);
 
-  ASSERT_EQ(
-      options.parquetWriteTimestampUnit.value(),
-      TimestampPrecision::kMilliseconds);
+  ASSERT_EQ(reader->numberOfRows(), data->size());
+  ASSERT_EQ(*reader->rowType(), *data->rowType());
+
+  auto rowReaderOpts = getReaderOpts(data->rowType());
+  auto scanSpec = makeScanSpec(data->rowType());
+  rowReaderOpts.setScanSpec(scanSpec);
+  rowReaderOpts.setTimestampPrecision(TimestampPrecision::kNanoseconds);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+  assertReadWithReaderAndExpected(
+      data->rowType(), *rowReader, expected, *leafPool_);
+}
+
+TEST_F(ParquetWriterTest, enableStoreDecimalAsInteger) {
+  const auto rowType = ROW({
+      {"c0", DECIMAL(8, 2)},
+      {"c1", DECIMAL(10, 2)},
+      {"c2", DECIMAL(19, 2)},
+  });
+  // c1 includes an unscaled value exceeding INT32 range (50000000.00).
+  const auto data = makeRowVector({
+      makeFlatVector<int64_t>({100, 99999999}, DECIMAL(8, 2)),
+      makeFlatVector<int64_t>({100, 5000000000LL}, DECIMAL(10, 2)),
+      makeFlatVector<int128_t>({100, 200}, DECIMAL(19, 2)),
+  });
+
+  using PhysicalTypes =
+      std::vector<std::shared_ptr<const ParquetTypeWithId::TypeWithId>>;
+
+  auto expectParquetType = [&](size_t columnIndex,
+                               const PhysicalTypes& types,
+                               thrift::Type::type expectedType,
+                               std::optional<int32_t> expectedTypeLength =
+                                   std::nullopt) {
+    auto col =
+        std::dynamic_pointer_cast<const ParquetTypeWithId>(types[columnIndex]);
+    ASSERT_NE(col, nullptr);
+    ASSERT_TRUE(col->parquetType_.has_value());
+    EXPECT_EQ(col->parquetType_.value(), expectedType);
+    if (expectedTypeLength.has_value()) {
+      EXPECT_EQ(col->typeLength_, expectedTypeLength.value());
+    }
+  };
+
+  const auto verifyStoredAsInteger = [&](const PhysicalTypes& types) {
+    expectParquetType(0, types, thrift::Type::type::INT32);
+    expectParquetType(1, types, thrift::Type::type::INT64);
+    expectParquetType(2, types, thrift::Type::type::FIXED_LEN_BYTE_ARRAY, 9);
+  };
+
+  const auto verifyStoredAsFixedLenByteArray = [&](const PhysicalTypes& types) {
+    expectParquetType(0, types, thrift::Type::type::FIXED_LEN_BYTE_ARRAY, 4);
+    expectParquetType(1, types, thrift::Type::type::FIXED_LEN_BYTE_ARRAY, 5);
+    expectParquetType(2, types, thrift::Type::type::FIXED_LEN_BYTE_ARRAY, 9);
+  };
+
+  const auto writeReadAndVerify =
+      [&](std::unordered_map<std::string, std::string> configFromFile,
+          std::unordered_map<std::string, std::string> sessionProperties,
+          const std::function<void(const PhysicalTypes&)>&
+              verifyPhysicalTypes) {
+        auto* sinkPtr = write(
+            data, std::move(configFromFile), std::move(sessionProperties));
+
+        dwio::common::ReaderOptions readerOptions(leafPool_.get());
+        readerOptions.setDataIoStats(dataIoStats_);
+        readerOptions.setMetadataIoStats(metadataIoStats_);
+        auto reader = createReaderInMemory(*sinkPtr, readerOptions);
+        auto& parquetReader = dynamic_cast<ParquetReader&>(*reader);
+
+        const auto& types = parquetReader.typeWithId()->getChildren();
+        ASSERT_EQ(types.size(), 3);
+        verifyPhysicalTypes(types);
+
+        auto rowReader = createRowReaderWithSchema(std::move(reader), rowType);
+        assertReadWithReaderAndExpected(rowType, *rowReader, data, *leafPool_);
+      };
+
+  const auto configKey = config::ConfigBase::toConfigKey(
+      parquet::WriterConfig::kParquetSessionEnableStoreDecimalAsInteger);
+  const auto sessionKey =
+      parquet::WriterConfig::kParquetSessionEnableStoreDecimalAsInteger;
+
+  // Connector session property.
+  writeReadAndVerify({}, {{sessionKey, "true"}}, verifyStoredAsInteger);
+  writeReadAndVerify(
+      {}, {{sessionKey, "false"}}, verifyStoredAsFixedLenByteArray);
+
+  // Hive config from file.
+  writeReadAndVerify({{configKey, "true"}}, {}, verifyStoredAsInteger);
+  writeReadAndVerify(
+      {{configKey, "false"}}, {}, verifyStoredAsFixedLenByteArray);
+
+  // Session property takes precedence over Hive config from file.
+  writeReadAndVerify(
+      {{configKey, "false"}}, {{sessionKey, "true"}}, verifyStoredAsInteger);
+  writeReadAndVerify(
+      {{configKey, "true"}},
+      {{sessionKey, "false"}},
+      verifyStoredAsFixedLenByteArray);
 }
 
 #ifdef VELOX_ENABLE_PARQUET

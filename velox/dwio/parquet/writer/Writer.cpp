@@ -161,7 +161,11 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
   properties = properties->maxRowGroupLength(
       static_cast<int64_t>(flushPolicy->rowsInRowGroup()));
   properties = properties->codecOptions(options.codecOptions);
-  properties = properties->enableStoreDecimalAsInteger();
+  if (options.enableStoreDecimalAsInteger.value_or(true)) {
+    properties = properties->enableStoreDecimalAsInteger();
+  } else {
+    properties = properties->disableStoreDecimalAsInteger();
+  }
   if (options.useParquetDataPageV2.value_or(false)) {
     properties = properties->dataPageVersion(arrow::ParquetDataPageVersion::V2);
   } else {
@@ -324,16 +328,17 @@ std::optional<int64_t> toParquetPageSize(std::optional<std::string> pageSize) {
   return config::toCapacity(*pageSize, config::CapacityUnit::BYTE);
 }
 
-std::optional<bool> toParquetEnableDictionary(
-    std::optional<std::string> enableDictionary) {
-  if (!enableDictionary) {
+std::optional<bool> toBoolConfigValue(
+    std::optional<std::string> value,
+    const char* optionName) {
+  if (!value) {
     return std::nullopt;
   }
   try {
-    return folly::to<bool>(*enableDictionary);
+    return folly::to<bool>(*value);
   } catch (const std::exception& e) {
     VELOX_USER_FAIL(
-        "Invalid parquet writer enable dictionary option: {}", e.what());
+        "Invalid parquet writer {} option: {}", optionName, e.what());
   }
 }
 
@@ -635,9 +640,18 @@ void WriterOptions::processConfigs(
   }
 
   if (!enableDictionary) {
-    enableDictionary =
-        toParquetEnableDictionary(session.getWithFallback<std::string>(
-            WriterConfig::kParquetSessionEnableDictionary, connectorConfig));
+    enableDictionary = toBoolConfigValue(
+        session.getWithFallback<std::string>(
+            WriterConfig::kParquetSessionEnableDictionary, connectorConfig),
+        "enable dictionary");
+  }
+
+  if (!enableStoreDecimalAsInteger) {
+    enableStoreDecimalAsInteger = toBoolConfigValue(
+        session.getWithFallback<std::string>(
+            WriterConfig::kParquetSessionEnableStoreDecimalAsInteger,
+            connectorConfig),
+        "enable store decimal as integer");
   }
 
   if (!dictionaryPageSizeLimit) {
