@@ -265,11 +265,18 @@ From DECIMAL
 
 *(ANSI compliant)*
 
-Casting a DECIMAL to STRING returns a plain decimal value.
-The scale is preserved and trailing zeros are kept for normal (non-scientific) form.
-When the absolute value is less than:math:`10^{-6}`, the result is formatted in scientific notation (e.g. ``1.23E-8``).
+Casting a DECIMAL to STRING keeps the scale, including trailing zeros.
 
-The conversion always succeeds with identical results for both ANSI ON and OFF modes.
+With ANSI mode enabled, the result is a plain decimal string. ``try_cast`` and
+``spark_ansi_cast`` also return plain strings, regardless of the session ANSI
+setting.
+
+With ANSI mode disabled, and for ``spark_legacy_cast``, small values are
+formatted in scientific notation. This applies to non-zero values whose
+absolute value is less than :math:`10^{-6}` (e.g. ``1.23E-8``), and to zero
+with a scale greater than 6 (e.g. ``0E-7``).
+
+The conversion always succeeds.
 
 Valid examples
 
@@ -277,15 +284,16 @@ Valid examples
 
   SELECT cast(cast(1.00 as decimal(10, 2)) as string); -- '1.00'
   SELECT cast(cast(12.30 as decimal(10, 2)) as string); -- '12.30'
-  SELECT cast(cast(0.00000012 as decimal(10, 8)) as string); -- '0.00000012'
+  SELECT cast(cast(0.00000012 as decimal(10, 8)) as string); -- '1.2E-7' (ANSI OFF) / '0.00000012' (ANSI ON)
   SELECT cast(cast(-1.00 as decimal(10, 2)) as string); -- '-1.00'
   SELECT cast(cast(123456789.123456789 as decimal(18, 9)) as string); -- '123456789.123456789'
   SELECT cast(cast(0.00 as decimal(5, 2)) as string); -- '0.00'
   SELECT cast(cast(999.99 as decimal(5, 2)) as string); -- '999.99'
   SELECT cast(cast(-0.01 as decimal(3, 2)) as string); -- '-0.01'
-  SELECT cast(cast(1 as decimal(38, 20)) as string);   -- '1E-20'
-  SELECT cast(cast(0 as decimal(10, 7)) as string);   -- '0E-7'
-  SELECT cast(cast(123 as decimal(38, 10)) as string); -- '1.23E-8'
+  SELECT cast(cast(0.00000000000000000001 as decimal(38, 20)) as string); -- '1E-20' (ANSI OFF) / '0.00000000000000000001' (ANSI ON)
+  SELECT cast(cast(0 as decimal(10, 7)) as string); -- '0E-7' (ANSI OFF) / '0.0000000' (ANSI ON)
+  SELECT cast(cast(0.0000000123 as decimal(38, 10)) as string); -- '1.23E-8' (ANSI OFF) / '0.0000000123' (ANSI ON)
+  SELECT try_cast(cast(0.0000000123 as decimal(38, 10)) as string); -- '0.0000000123'
 
 From TIMESTAMP
 ^^^^^^^^^^^^^^
