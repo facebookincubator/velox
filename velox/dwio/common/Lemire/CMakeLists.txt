@@ -12,4 +12,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(velox_lemire_bmipacking32 INTERFACE HEADERS bmipacking32.h)
+add_subdirectory(BitPacking)
