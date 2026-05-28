@@ -15,19 +15,44 @@
  */
 
 #include "velox/dwio/common/tests/utils/DataFiles.h"
-#include <boost/algorithm/string.hpp>
+#include <string_view>
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Fs.h"
 
 namespace facebook::velox::test {
 
+namespace {
+
+constexpr std::string_view kDataFilesSourceSuffix =
+    "velox/dwio/common/tests/utils/DataFiles.cpp";
+
+// Computes the project root from this source file location so test data lookup
+// does not depend on the process working directory.
+const fs::path& projectRoot() {
+  static const fs::path root = [] {
+    const std::string sourcePath =
+        fs::path{__FILE__}.lexically_normal().string();
+    VELOX_CHECK(
+        sourcePath.ends_with(kDataFilesSourceSuffix),
+        "DataFiles.cpp path does not end with expected suffix: {}",
+        sourcePath);
+    return fs::path{sourcePath.substr(
+        0, sourcePath.size() - kDataFilesSourceSuffix.size())};
+  }();
+  return root;
+}
+
+} // namespace
+
 std::string getDataFilePath(
     const std::string& baseDir,
     const std::string& filePath) {
-  std::string current_path = fs::current_path().c_str();
-  if (boost::algorithm::ends_with(current_path, "fbcode")) {
-    return current_path + "/" + baseDir + "/" + filePath;
+  const fs::path requestedPath{filePath};
+  if (requestedPath.is_absolute()) {
+    return requestedPath.string();
   }
-  return current_path + "/" + filePath;
+
+  return (projectRoot() / baseDir / requestedPath).lexically_normal().string();
 }
 
 } // namespace facebook::velox::test
