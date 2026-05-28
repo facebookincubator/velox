@@ -212,6 +212,13 @@ class SerDeOptions {
   ~SerDeOptions() = default;
 };
 
+/// Parse options for the JSON reader (JSON Lines, matching Hive
+/// org.apache.hive.hcatalog.data.JsonSerDe). Intentionally empty for now: the
+/// reader has no lenient mode — every parse error throws, and leaf type
+/// mismatches coerce silently — so no toggle is needed yet. Date and timestamp
+/// format strings are added when temporal types land.
+struct JsonSerDeOptions {};
+
 struct TableParameter {
   /// If present in the table parameters, the option is passed to the row reader
   /// to instruct it to skip the number of rows from the current position. Used
