@@ -16,6 +16,7 @@
 
 #include "velox/functions/sparksql/specialforms/SparkCastHooks.h"
 #include "velox/functions/lib/string/StringImpl.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
@@ -132,4 +133,11 @@ exec::PolicyType SparkCastHooks::getPolicy() const {
   }
   return exec::PolicyType::SparkCastPolicy;
 }
+
+bool SparkCastHooks::isScientific() const {
+  // When casting decimal as string, Spark always use plain string when ANSI
+  // mode is enabled.
+  return !SparkQueryConfig{config_}.ansiEnabled();
+}
+
 } // namespace facebook::velox::functions::sparksql

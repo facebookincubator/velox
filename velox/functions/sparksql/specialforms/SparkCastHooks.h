@@ -78,9 +78,7 @@ class SparkCastHooks : public exec::CastHooks {
 
   exec::PolicyType getPolicy() const override;
 
-  bool isScientific() const override {
-    return true;
-  }
+  bool isScientific() const override;
 
  private:
   // Casts a number to a timestamp. The number is treated as the number of
