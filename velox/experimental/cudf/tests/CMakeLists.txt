@@ -301,6 +301,19 @@ velox_add_cudf_test(
 )
 
 add_subdirectory(iceberg)
+
+# GPU SFI foundation -- exercises GpuExec resolver and GPU proxy types.
+# Host-only verification of POD layout, equality, and type mappings.
+add_executable(velox_cudf_gpu_types_test GpuTypesTest.cpp)
+add_test(
+  NAME velox_cudf_gpu_types_test
+  COMMAND velox_cudf_gpu_types_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+set_tests_properties(velox_cudf_gpu_types_test
+                     PROPERTIES LABELS cuda_driver TIMEOUT 300)
+target_link_libraries(velox_cudf_gpu_types_test gtest gtest_main)
+
 add_subdirectory(utils)
 
 if(${VELOX_ENABLE_SPARK_FUNCTIONS})
