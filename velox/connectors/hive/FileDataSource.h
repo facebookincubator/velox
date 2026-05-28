@@ -30,6 +30,18 @@
 
 namespace facebook::velox::connector::hive {
 
+/// File-specific scan batch event with split metadata.
+struct FileScanBatchEvent : public core::ScanBatchEvent {
+  /// Table name from the connector table handle.
+  std::string_view tableName;
+  /// File path of the current split.
+  std::string_view filePath;
+  /// Non-owning pointer to the current split's partition keys.
+  /// Null when partition keys are not available.
+  const std::unordered_map<std::string, std::optional<std::string>>*
+      partitionKeys{nullptr};
+};
+
 class FileConfig;
 
 /// Base class for file-based data sources that read from columnar file formats
@@ -81,6 +93,8 @@ class FileDataSource : public DataSource {
   uint64_t getCompletedRows() override {
     return completedRows_;
   }
+
+  void fireScanBatchCallback(core::ScanBatchEvent event) override;
 
   std::unordered_map<std::string, RuntimeMetric> getRuntimeStats() override;
 

@@ -46,13 +46,17 @@ TEST(FileConfigTest, defaultConfig) {
   EXPECT_FALSE(config.preserveFlatMapsInMemory(emptySession.get()));
   EXPECT_FALSE(config.indexEnabled(emptySession.get()));
   EXPECT_FALSE(config.readerCollectColumnCpuMetrics(emptySession.get()));
-  EXPECT_FALSE(config.fileMetadataCacheEnabled(emptySession.get()));
-  EXPECT_FALSE(config.pinFileMetadata(emptySession.get()));
+  EXPECT_FALSE(config.cacheMetadata(emptySession.get()));
+  EXPECT_FALSE(config.pinMetadata(emptySession.get()));
+  EXPECT_FALSE(config.cacheIndex(emptySession.get()));
+  EXPECT_FALSE(config.pinIndex(emptySession.get()));
   EXPECT_EQ(config.orcFooterSpeculativeIoSize(emptySession.get()), 256UL << 10);
   EXPECT_EQ(
       config.parquetFooterSpeculativeIoSize(emptySession.get()), 256UL << 10);
   EXPECT_EQ(
       config.nimbleFooterSpeculativeIoSize(emptySession.get()), 8UL << 20);
+  EXPECT_FALSE(config.nimbleStringDecoderZeroCopy(emptySession.get()));
+  EXPECT_FALSE(config.nimblePreserveDictionaryEncoding(emptySession.get()));
 }
 
 TEST(FileConfigTest, overrideConfig) {
@@ -69,11 +73,15 @@ TEST(FileConfigTest, overrideConfig) {
       {FileConfig::kPreserveFlatMapsInMemory, "true"},
       {FileConfig::kIndexEnabled, "true"},
       {FileConfig::kReaderCollectColumnCpuMetrics, "true"},
-      {FileConfig::kFileMetadataCacheEnabled, "true"},
-      {FileConfig::kPinFileMetadata, "true"},
+      {FileConfig::kCacheMetadata, "true"},
+      {FileConfig::kPinMetadata, "true"},
+      {FileConfig::kCacheIndex, "true"},
+      {FileConfig::kPinIndex, "true"},
       {FileConfig::kOrcFooterSpeculativeIoSize, std::to_string(512UL << 10)},
       {FileConfig::kParquetFooterSpeculativeIoSize, std::to_string(1UL << 20)},
       {FileConfig::kNimbleFooterSpeculativeIoSize, std::to_string(4UL << 20)},
+      {FileConfig::kNimbleStringDecoderZeroCopy, "true"},
+      {FileConfig::kNimblePreserveDictionaryEncoding, "true"},
   };
   FileConfig config(
       std::make_shared<config::ConfigBase>(std::move(configFromFile)));
@@ -92,13 +100,17 @@ TEST(FileConfigTest, overrideConfig) {
   EXPECT_TRUE(config.preserveFlatMapsInMemory(emptySession.get()));
   EXPECT_TRUE(config.indexEnabled(emptySession.get()));
   EXPECT_TRUE(config.readerCollectColumnCpuMetrics(emptySession.get()));
-  EXPECT_TRUE(config.fileMetadataCacheEnabled(emptySession.get()));
-  EXPECT_TRUE(config.pinFileMetadata(emptySession.get()));
+  EXPECT_TRUE(config.cacheMetadata(emptySession.get()));
+  EXPECT_TRUE(config.pinMetadata(emptySession.get()));
+  EXPECT_TRUE(config.cacheIndex(emptySession.get()));
+  EXPECT_TRUE(config.pinIndex(emptySession.get()));
   EXPECT_EQ(config.orcFooterSpeculativeIoSize(emptySession.get()), 512UL << 10);
   EXPECT_EQ(
       config.parquetFooterSpeculativeIoSize(emptySession.get()), 1UL << 20);
   EXPECT_EQ(
       config.nimbleFooterSpeculativeIoSize(emptySession.get()), 4UL << 20);
+  EXPECT_TRUE(config.nimbleStringDecoderZeroCopy(emptySession.get()));
+  EXPECT_TRUE(config.nimblePreserveDictionaryEncoding(emptySession.get()));
 }
 
 TEST(FileConfigTest, overrideSession) {
@@ -116,14 +128,18 @@ TEST(FileConfigTest, overrideSession) {
       {FileConfig::kPreserveFlatMapsInMemorySession, "true"},
       {FileConfig::kIndexEnabledSession, "true"},
       {FileConfig::kReaderCollectColumnCpuMetricsSession, "true"},
-      {FileConfig::kFileMetadataCacheEnabledSession, "true"},
-      {FileConfig::kPinFileMetadataSession, "true"},
+      {FileConfig::kCacheMetadataSession, "true"},
+      {FileConfig::kPinMetadataSession, "true"},
+      {FileConfig::kCacheIndexSession, "true"},
+      {FileConfig::kPinIndexSession, "true"},
       {FileConfig::kOrcFooterSpeculativeIoSizeSession,
        std::to_string(128UL << 10)},
       {FileConfig::kParquetFooterSpeculativeIoSizeSession,
        std::to_string(512UL << 10)},
       {FileConfig::kNimbleFooterSpeculativeIoSizeSession,
        std::to_string(2UL << 20)},
+      {FileConfig::kNimbleStringDecoderZeroCopySession, "true"},
+      {FileConfig::kNimblePreserveDictionaryEncodingSession, "true"},
   };
   const auto session =
       std::make_unique<config::ConfigBase>(std::move(sessionOverride));
@@ -138,11 +154,15 @@ TEST(FileConfigTest, overrideSession) {
   EXPECT_TRUE(config.preserveFlatMapsInMemory(session.get()));
   EXPECT_TRUE(config.indexEnabled(session.get()));
   EXPECT_TRUE(config.readerCollectColumnCpuMetrics(session.get()));
-  EXPECT_TRUE(config.fileMetadataCacheEnabled(session.get()));
-  EXPECT_TRUE(config.pinFileMetadata(session.get()));
+  EXPECT_TRUE(config.cacheMetadata(session.get()));
+  EXPECT_TRUE(config.pinMetadata(session.get()));
+  EXPECT_TRUE(config.cacheIndex(session.get()));
+  EXPECT_TRUE(config.pinIndex(session.get()));
   EXPECT_EQ(config.orcFooterSpeculativeIoSize(session.get()), 128UL << 10);
   EXPECT_EQ(config.parquetFooterSpeculativeIoSize(session.get()), 512UL << 10);
   EXPECT_EQ(config.nimbleFooterSpeculativeIoSize(session.get()), 2UL << 20);
+  EXPECT_TRUE(config.nimbleStringDecoderZeroCopy(session.get()));
+  EXPECT_TRUE(config.nimblePreserveDictionaryEncoding(session.get()));
 }
 
 TEST(FileConfigTest, nullConfig) {

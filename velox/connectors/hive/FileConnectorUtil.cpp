@@ -77,6 +77,8 @@ void configureReaderOptions(
       useColumnNamesForColumnMapping);
   readerOptions.setFileSchema(fileSchema);
   readerOptions.setFilePreloadThreshold(fileConfig->filePreloadThreshold());
+  readerOptions.setParquetFooterMemoryTrackingThreshold(
+      fileConfig->parquetFooterMemoryTrackingThreshold(sessionProperties));
   readerOptions.setPrefetchRowGroups(fileConfig->prefetchRowGroups());
   readerOptions.setCacheable(fileSplit->cacheable);
   const auto& sessionTzName = connectorQueryCtx->sessionTimezone();
@@ -97,10 +99,10 @@ void configureReaderOptions(
     readerOptions.setSelectiveNimbleReaderEnabled(
         connectorQueryCtx->selectiveNimbleReaderEnabled());
   }
-  readerOptions.setFileMetadataCacheEnabled(
-      fileConfig->fileMetadataCacheEnabled(sessionProperties));
-  readerOptions.setPinFileMetadata(
-      fileConfig->pinFileMetadata(sessionProperties));
+  readerOptions.setCacheMetadata(fileConfig->cacheMetadata(sessionProperties));
+  readerOptions.setPinMetadata(fileConfig->pinMetadata(sessionProperties));
+  readerOptions.setCacheIndex(fileConfig->cacheIndex(sessionProperties));
+  readerOptions.setPinIndex(fileConfig->pinIndex(sessionProperties));
 
   // Set footer speculative IO size based on file format.
   switch (fileSplit->fileFormat) {
@@ -205,6 +207,7 @@ bool applyPartitionFilter(
       return applyFilter(*filter, folly::to<bool>(partitionValue));
     }
     case TypeKind::TIMESTAMP: {
+      VELOX_DCHECK(type->equivalent(*TIMESTAMP()));
       auto result = util::fromTimestampString(
           StringView(partitionValue), util::TimestampParseMode::kPrestoCast);
       VELOX_CHECK(!result.hasError());

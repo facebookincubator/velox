@@ -381,7 +381,7 @@ void WindowPartition::updateKRangeFrameBounds(
     if constexpr (std::is_floating_point_v<T>) {
       if (data_->isNanAt<T>(partitionRow, mappedFrameRowColumn) &&
           !data_->isNanAt<T>(partitionRow, orderByRowColumn)) {
-        validFrames.setValid(currentRow, false);
+        validFrames.setValid(i, false);
         continue;
       }
     }

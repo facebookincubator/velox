@@ -26,12 +26,12 @@ target_link_libraries(
   velox_cudf_spark_aggregates_test
   velox_cudf_exec
   velox_exec_test_lib
-  velox_vector_test_lib
   velox_functions_aggregates_test_lib
   velox_functions_spark
   velox_functions_spark_aggregates
   velox_hive_connector
   velox_vector_fuzzer
+  velox_vector_test_lib
   gflags::gflags
   GTest::gtest
   GTest::gtest_main
@@ -54,9 +54,9 @@ target_link_libraries(
   velox_cudf_spark_filter_project_test
   velox_cudf_exec
   velox_exec_test_lib
-  velox_vector_test_lib
   velox_functions_spark
   velox_vector_fuzzer
+  velox_vector_test_lib
   gflags::gflags
   GTest::gtest
   GTest::gtest_main

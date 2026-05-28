@@ -74,6 +74,7 @@ VectorPtr newConstantFromStringImpl(
                       VELOX_USER_FAIL("{}", status.message());
                     });
     if constexpr (kind == TypeKind::TIMESTAMP) {
+      VELOX_DCHECK(type->equivalent(*TIMESTAMP()));
       if (isLocalTimestamp) {
         copy.toGMT(Timestamp::defaultTimezone());
       }
@@ -158,11 +159,11 @@ FileSplitReader::FileSplitReader(
       fileSplit_(fileSplit),
       connectorQueryCtx_(connectorQueryCtx),
       readerOutputType_(readerOutputType),
-      baseReaderOpts_(
-          connectorQueryCtx->memoryPool(),
-          dataIoStats_.get(),
-          metadataIoStats_.get()),
-      emptySplit_(false) {}
+      baseReaderOpts_(connectorQueryCtx->memoryPool()),
+      emptySplit_(false) {
+  baseReaderOpts_.setDataIoStats(dataIoStats_);
+  baseReaderOpts_.setMetadataIoStats(metadataIoStats_);
+}
 
 void FileSplitReader::configureReaderOptions(
     std::shared_ptr<velox::random::RandomSkipTracker> randomSkip) {
@@ -364,6 +365,12 @@ void FileSplitReader::createRowReader(
     std::optional<bool> rowSizeTrackingEnabled) {
   VELOX_CHECK_NULL(baseRowReader_);
   configureBaseRowReaderOptions(std::move(metadataFilter), std::move(rowType));
+  baseRowReaderOpts_.setStringDecoderZeroCopy(
+      fileConfig_->nimbleStringDecoderZeroCopy(
+          connectorQueryCtx_->sessionProperties()));
+  baseRowReaderOpts_.setNimblePreserveDictionaryEncoding(
+      fileConfig_->nimblePreserveDictionaryEncoding(
+          connectorQueryCtx_->sessionProperties()));
   baseRowReaderOpts_.setTrackRowSize(
       rowSizeTrackingEnabled.has_value()
           ? *rowSizeTrackingEnabled
@@ -441,13 +448,13 @@ void FileSplitReader::setPartitionValue(
     common::ScanSpec* spec,
     const std::string& partitionKey,
     const std::optional<std::string>& value) const {
-  auto it = partitionKeys_->find(partitionKey);
+  const auto it = partitionKeys_->find(partitionKey);
   VELOX_CHECK(
       it != partitionKeys_->end(),
       "ColumnHandle is missing for partition key {}",
       partitionKey);
-  auto type = it->second->dataType();
-  auto constant = newConstantFromString(
+  const auto type = it->second->dataType();
+  const auto constant = newConstantFromString(
       type,
       value,
       connectorQueryCtx_->memoryPool(),

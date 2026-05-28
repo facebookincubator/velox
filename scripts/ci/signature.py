@@ -216,9 +216,8 @@ def bias_signatures(base_signatures, contender_signatures, tickets, error_path):
 
 def bias_aggregates(args):
     """
-    Finds and exports aggregates whose signatures have been modified agasint a baseline.
+    Finds and exports aggregates whose signatures have been modified against a baseline.
     Saves the results to a file and sets a Github Actions Output.
-    Currently this is hardcoded to presto aggregates.
     """
     with open(args.base) as f:
         base_signatures = json.load(f)
@@ -230,7 +229,7 @@ def bias_aggregates(args):
         base_signatures, contender_signatures, args.error_path
     )
 
-    set_gh_output("presto_aggregate_error", status == 1)
+    set_gh_output(f"{args.group}_aggregate_error", status == 1)
 
     if not delta:
         print(f"{bcolors.BOLD} No changes detected: Nothing to do!")
@@ -251,7 +250,7 @@ def bias_aggregates(args):
         with open(args.output_path, "w") as f:
             print(f"{biased_functions}", file=f, end="")
 
-        set_gh_output("presto_aggregate_functions", True)
+        set_gh_output(f"{args.group}_aggregate_functions", True)
 
     return 0
 
@@ -362,6 +361,11 @@ def parse_args(args):
     )
 
     bias_aggregate_command_parser = command.add_parser("bias_aggregates")
+    bias_aggregate_command_parser.add_argument(
+        "--group",
+        choices=["presto", "spark"],
+        required=True,
+    )
     bias_aggregate_command_parser.add_argument("base", type=str)
     bias_aggregate_command_parser.add_argument("contender", type=str)
     bias_aggregate_command_parser.add_argument("output_path", type=str)

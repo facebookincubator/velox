@@ -17,6 +17,7 @@
 
 #include <folly/Synchronized.h>
 #include <string_view>
+#include <unordered_map>
 #include "velox/core/PlanNode.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/exec/Driver.h"
@@ -65,6 +66,10 @@ class OperatorCtx {
     return pool_;
   }
 
+  /// Returns the leaf operator pool under the custom root registered with
+  /// 'tag', or nullptr if no such custom root is registered on this query.
+  velox::memory::MemoryPool* customPool(std::string_view tag) const;
+
   const core::PlanNodeId& planNodeId() const {
     return planNodeId_;
   }
@@ -101,6 +106,11 @@ class OperatorCtx {
   int32_t operatorId_;
   const std::string operatorType_;
   velox::memory::MemoryPool* const pool_;
+
+  // Per-resource-tag leaf pools mirroring 'pool_' under each registered
+  // custom root pool. Empty when no custom pools are registered.
+  const std::unordered_map<std::string, velox::memory::MemoryPool*>
+      customPools_;
 
   // These members are created on demand.
   mutable std::unique_ptr<core::ExecCtx> execCtx_;
@@ -219,7 +229,7 @@ class Operator : public BaseRuntimeStatWriter {
   /// allocation from memory pool that can't be done under operator constructor.
   ///
   /// NOTE: the default implementation set 'initialized_' to true to ensure we
-  /// never call this more than once. The overload initialize() implementation
+  /// never call this more than once. The overriding initialize() implementation
   /// must call this base implementation first.
   virtual void initialize();
 
@@ -372,6 +382,12 @@ class Operator : public BaseRuntimeStatWriter {
 
   velox::memory::MemoryPool* pool() const {
     return operatorCtx_->pool();
+  }
+
+  /// Returns this operator's leaf pool under the custom root registered with
+  /// 'tag', or nullptr if no such custom root is registered.
+  velox::memory::MemoryPool* customPool(std::string_view tag) const {
+    return operatorCtx_->customPool(tag);
   }
 
   /// Returns true if the operator is reclaimable. Currently, we only support

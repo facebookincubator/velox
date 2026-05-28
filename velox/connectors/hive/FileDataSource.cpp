@@ -192,7 +192,7 @@ FileDataSource::FileDataSource(
   tableHandle_ = checkedPointerCast<const FileTableHandle>(tableHandle);
 
   folly::F14FastMap<std::string_view, const FileColumnHandle*> columnHandles;
-  // Column handled keyed on the column alias, the name used in the query.
+  // Column handles keyed on the table column name.
   for (const auto& [_, columnHandle] : assignments) {
     auto handle = checkedPointerCast<const FileColumnHandle>(columnHandle);
     const auto [it, unique] =
@@ -614,6 +614,25 @@ void FileDataSource::addDynamicFilter(
   if (splitReader_) {
     splitReader_->resetFilterCaches();
   }
+}
+
+void FileDataSource::fireScanBatchCallback(core::ScanBatchEvent event) {
+  if (!scanBatchCallback_) {
+    return;
+  }
+  FileScanBatchEvent fileEvent;
+  fileEvent.numRows = event.numRows;
+  fileEvent.wallTimeMicros = event.wallTimeMicros;
+  if (tableHandle_) {
+    fileEvent.tableName = tableHandle_->name();
+  }
+  if (split_) {
+    fileEvent.filePath = split_->filePath;
+    if (!split_->partitionKeys.empty()) {
+      fileEvent.partitionKeys = &split_->partitionKeys;
+    }
+  }
+  scanBatchCallback_(fileEvent);
 }
 
 std::unordered_map<std::string, RuntimeMetric>

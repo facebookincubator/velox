@@ -35,8 +35,9 @@ class ParquetReaderTest : public ParquetTestBase {
       const RowTypePtr& rowType) {
     const std::string sample(getExampleFilePath(fileName));
 
-    dwio::common::ReaderOptions readerOptions{
-        leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+    dwio::common::ReaderOptions readerOptions(leafPool_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
     auto reader = createReader(sample, readerOptions);
 
     RowReaderOptions rowReaderOpts;
@@ -62,11 +63,22 @@ class ParquetReaderTest : public ParquetTestBase {
       FilterMap filters,
       const RowVectorPtr& expected) {
     const auto filePath(getExampleFilePath(fileName));
-    dwio::common::ReaderOptions readerOpts{
-        leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+    dwio::common::ReaderOptions readerOpts(leafPool_.get());
+    readerOpts.setDataIoStats(dataIoStats_);
+    readerOpts.setMetadataIoStats(metadataIoStats_);
     auto reader = createReader(filePath, readerOpts);
     assertReadWithReaderAndFilters(
         std::move(reader), fileName, fileSchema, std::move(filters), expected);
+  }
+
+  // Builds ReaderOptions with the Parquet thrift footer-memory tracking
+  // path enabled by a 1-byte threshold so any footer engages tracking.
+  dwio::common::ReaderOptions makeThriftTrackingReaderOptions() {
+    dwio::common::ReaderOptions readerOptions(leafPool_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
+    readerOptions.setParquetFooterMemoryTrackingThreshold(1);
+    return readerOptions;
   }
 };
 
@@ -78,8 +90,9 @@ TEST_F(ParquetReaderTest, parseSample) {
   //   b: [1.0..20.0]
   const std::string sample(getExampleFilePath("sample.parquet"));
 
-  dwio::common::ReaderOptions readerOptions{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto reader = createReader(sample, readerOptions);
   EXPECT_EQ(reader->numberOfRows(), 20ULL);
 
@@ -128,8 +141,9 @@ TEST_F(ParquetReaderTest, parseEmptyNestedList) {
   const std::string sample(
       getExampleFilePath("parse_empty_nested_list.parquet"));
 
-  dwio::common::ReaderOptions readerOptions{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto reader = createReader(sample, readerOptions);
   EXPECT_EQ(reader->numberOfRows(), 1000ULL);
 
@@ -187,8 +201,9 @@ TEST_F(ParquetReaderTest, parseUnannotatedList) {
   // }
   const std::string sample(getExampleFilePath("unannotated_list.parquet"));
 
-  dwio::common::ReaderOptions readerOpts{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOpts(leafPool_.get());
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
   auto reader = createReader(sample, readerOpts);
 
   EXPECT_EQ(reader->numberOfRows(), 22ULL);
@@ -243,8 +258,9 @@ TEST_F(ParquetReaderTest, parseUnannotatedMap) {
   const std::string filename("unnotated_map.parquet");
   const std::string sample(getExampleFilePath(filename));
 
-  dwio::common::ReaderOptions readerOptions{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto reader = createReader(sample, readerOptions);
 
   auto type = reader->typeWithId();
@@ -283,8 +299,9 @@ TEST_F(ParquetReaderTest, parseLegacyListWithMultipleChildren) {
   const std::string filename("listmultiplechildren.parquet");
   const std::string sample(getExampleFilePath(filename));
 
-  dwio::common::ReaderOptions readerOptions{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto reader = createReader(sample, readerOptions);
 
   auto type = reader->typeWithId();
@@ -343,8 +360,9 @@ TEST_F(ParquetReaderTest, parseArrayOfRowHiveReservedKeywords) {
   const std::string sample(
       getExampleFilePath("array_of_row_hive_reserved_keywords.parquet"));
 
-  dwio::common::ReaderOptions readerOpts{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOpts(leafPool_.get());
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
   auto reader = createReader(sample, readerOpts);
   EXPECT_EQ(reader->rowType()->toString(), expectedVeloxType);
   EXPECT_EQ(reader->numberOfRows(), 6ULL);
@@ -395,8 +413,9 @@ TEST_F(ParquetReaderTest, parseArrayOfRowHiveReservedKeywords) {
 TEST_F(ParquetReaderTest, parseSampleRange1) {
   const std::string sample(getExampleFilePath("sample.parquet"));
 
-  dwio::common::ReaderOptions readerOpts{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOpts(leafPool_.get());
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
   auto reader = createReader(sample, readerOpts);
 
   auto rowReaderOpts = getReaderOpts(sampleSchema());
@@ -415,8 +434,9 @@ TEST_F(ParquetReaderTest, parseSampleRange1) {
 TEST_F(ParquetReaderTest, parseSampleRange2) {
   const std::string sample(getExampleFilePath("sample.parquet"));
 
-  dwio::common::ReaderOptions readerOpts{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOpts(leafPool_.get());
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
   auto reader = createReader(sample, readerOpts);
 
   auto rowReaderOpts = getReaderOpts(sampleSchema());
@@ -435,8 +455,9 @@ TEST_F(ParquetReaderTest, parseSampleRange2) {
 TEST_F(ParquetReaderTest, parseSampleEmptyRange) {
   const std::string sample(getExampleFilePath("sample.parquet"));
 
-  dwio::common::ReaderOptions readerOpts{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOpts(leafPool_.get());
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
   auto reader = createReader(sample, readerOpts);
 
   auto rowReaderOpts = getReaderOpts(sampleSchema());
@@ -454,8 +475,9 @@ TEST_F(ParquetReaderTest, parseReadAsLowerCase) {
   // 2 rows.
   const std::string upper(getExampleFilePath("upper.parquet"));
 
-  dwio::common::ReaderOptions readerOptions{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto outputRowType = ROW({"a", "b"}, {BIGINT(), BIGINT()});
   readerOptions.setFileSchema(outputRowType);
   readerOptions.setFileColumnNamesReadAsLowerCase(true);
@@ -491,8 +513,9 @@ TEST_F(ParquetReaderTest, parseRowMapArrayReadAsLowerCase) {
   // +-----------------------+
   const std::string upper(getExampleFilePath("upper_complex.parquet"));
 
-  dwio::common::ReaderOptions readerOptions{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileColumnNamesReadAsLowerCase(true);
   auto reader = createReader(upper, readerOptions);
 
@@ -535,8 +558,9 @@ TEST_F(ParquetReaderTest, parseEmpty) {
   // 0 rows.
   const std::string empty(getExampleFilePath("empty.parquet"));
 
-  dwio::common::ReaderOptions readerOptions{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto reader = createReader(empty, readerOptions);
   EXPECT_EQ(reader->numberOfRows(), 0ULL);
 
@@ -558,8 +582,9 @@ TEST_F(ParquetReaderTest, parseInt) {
   //   bigint: [1000 .. 1009]
   const std::string sample(getExampleFilePath("int.parquet"));
 
-  dwio::common::ReaderOptions readerOpts{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOpts(leafPool_.get());
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
   auto reader = createReader(sample, readerOpts);
 
   EXPECT_EQ(reader->numberOfRows(), 10ULL);
@@ -594,8 +619,9 @@ TEST_F(ParquetReaderTest, parseUnsignedInt1) {
   //   uint64: [18446744073709551615, 2000000000000000000, 3000000000000000000]
   const std::string sample(getExampleFilePath("uint.parquet"));
 
-  dwio::common::ReaderOptions readerOptions{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto reader = createReader(sample, readerOptions);
 
   EXPECT_EQ(reader->numberOfRows(), 3ULL);
@@ -699,8 +725,9 @@ TEST_F(ParquetReaderTest, parseDate) {
   //   date: [1969-12-27 .. 1970-01-20]
   const std::string sample(getExampleFilePath("date.parquet"));
 
-  dwio::common::ReaderOptions readerOptions{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto reader = createReader(sample, readerOptions);
 
   EXPECT_EQ(reader->numberOfRows(), 25ULL);
@@ -727,8 +754,9 @@ TEST_F(ParquetReaderTest, parseRowMapArray) {
   // ARRAY(INTEGER)) c1) c)
   const std::string sample(getExampleFilePath("row_map_array.parquet"));
 
-  dwio::common::ReaderOptions readerOptions{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto reader = createReader(sample, readerOptions);
 
   EXPECT_EQ(reader->numberOfRows(), 1ULL);
@@ -761,8 +789,9 @@ TEST_F(ParquetReaderTest, parseRowMapArray) {
 TEST_F(ParquetReaderTest, projectNoColumns) {
   // This is the case for count(*).
   auto rowType = ROW({}, {});
-  dwio::common::ReaderOptions readerOpts{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOpts(leafPool_.get());
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
   auto reader = createReader(getExampleFilePath("sample.parquet"), readerOpts);
   RowReaderOptions rowReaderOpts;
   rowReaderOpts.setScanSpec(makeScanSpec(rowType));
@@ -786,8 +815,9 @@ TEST_F(ParquetReaderTest, parseIntDecimal) {
   //   a: [11.11, 11.11, 22.22, 22.22, 33.33, 33.33]
   //   b: [11.11, 11.11, 22.22, 22.22, 33.33, 33.33]
   auto rowType = ROW({"a", "b"}, {DECIMAL(7, 2), DECIMAL(14, 2)});
-  dwio::common::ReaderOptions readerOpts{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOpts(leafPool_.get());
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
   const std::string decimal_dict(getExampleFilePath("decimal_dict.parquet"));
 
   auto reader = createReader(decimal_dict, readerOpts);
@@ -841,8 +871,9 @@ TEST_F(ParquetReaderTest, parseMapKeyValueAsMap) {
 
   const std::string sample(getExampleFilePath("map_key_value.parquet"));
 
-  dwio::common::ReaderOptions readerOptions{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto reader = createReader(sample, readerOptions);
   EXPECT_EQ(reader->numberOfRows(), 1ULL);
 
@@ -890,8 +921,9 @@ TEST_F(ParquetReaderTest, parseRowArrayTest) {
   const std::string sample(
       getExampleFilePath("proto-struct-with-array.parquet"));
 
-  dwio::common::ReaderOptions readerOptions{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto reader = createReader(sample, readerOptions);
   EXPECT_EQ(reader->numberOfRows(), 1ULL);
   auto type = reader->typeWithId();
@@ -1176,8 +1208,9 @@ TEST_F(ParquetReaderTest, filterRowGroups) {
   // decimal_no_ColumnMetadata.parquet has one columns a: DECIMAL(9,1). It
   // doesn't have ColumnMetaData, and rowGroups_[0].columns[0].file_offset is 0.
   auto rowType = ROW({"_c0"}, {DECIMAL(9, 1)});
-  dwio::common::ReaderOptions readerOpts{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOpts(leafPool_.get());
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
   const std::string decimal_dict(
       getExampleFilePath("decimal_no_ColumnMetadata.parquet"));
 
@@ -1204,8 +1237,9 @@ TEST_F(ParquetReaderTest, shouldIgnoreStatsForParquetMRVersions) {
 // This test is to verify filterRowGroups() doesn't fail if offset is 0
 TEST_F(ParquetReaderTest, filterRowGroupsWithZeroOffset) {
   auto rowType = ROW({"IDX"}, {INTEGER()});
-  const dwio::common::ReaderOptions readerOpts{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOpts(leafPool_.get());
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
   const std::string zeroOffsetPath(
       getExampleFilePath("zero_offset_row_group.parquet"));
 
@@ -1221,8 +1255,9 @@ TEST_F(ParquetReaderTest, parseLongTagged) {
   // This is a case for long with annonation read
   const std::string sample(getExampleFilePath("tagged_long.parquet"));
 
-  dwio::common::ReaderOptions readerOptions{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto reader = createReader(sample, readerOptions);
 
   EXPECT_EQ(reader->numberOfRows(), 4ULL);
@@ -1240,8 +1275,9 @@ TEST_F(ParquetReaderTest, preloadSmallFile) {
   auto file = std::make_shared<LocalReadFile>(sample);
   auto input = std::make_unique<BufferedInput>(file, *leafPool_);
 
-  dwio::common::ReaderOptions readerOptions{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto reader =
       std::make_unique<ParquetReader>(std::move(input), readerOptions);
 
@@ -1275,8 +1311,9 @@ TEST_F(ParquetReaderTest, prefetchRowGroups) {
   const std::string sample(getExampleFilePath("multiple_row_groups.parquet"));
   const int numRowGroups = 4;
 
-  dwio::common::ReaderOptions readerOptions{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   // Disable preload of file.
   readerOptions.setFilePreloadThreshold(0);
 
@@ -1329,8 +1366,9 @@ TEST_F(ParquetReaderTest, testEmptyRowGroups) {
   // empty_row_groups.parquet contains empty row groups
   const std::string sample(getExampleFilePath("empty_row_groups.parquet"));
 
-  dwio::common::ReaderOptions readerOptions{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto reader = createReader(sample, readerOptions);
   EXPECT_EQ(reader->numberOfRows(), 5ULL);
 
@@ -1356,8 +1394,9 @@ TEST_F(ParquetReaderTest, testEnumType) {
   // enum_type.parquet contains 1 column (ENUM) with 3 rows.
   const std::string sample(getExampleFilePath("enum_type.parquet"));
 
-  dwio::common::ReaderOptions readerOptions{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto reader = createReader(sample, readerOptions);
   EXPECT_EQ(reader->numberOfRows(), 3ULL);
 
@@ -1382,8 +1421,9 @@ TEST_F(ParquetReaderTest, readVarbinaryFromFLBA) {
   const std::string filename("varbinary_flba.parquet");
   const std::string sample(getExampleFilePath(filename));
 
-  dwio::common::ReaderOptions readerOptions{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto reader = createReader(sample, readerOptions);
 
   auto type = reader->typeWithId();
@@ -1414,8 +1454,9 @@ TEST_F(ParquetReaderTest, readBinaryAsStringFromNation) {
   const std::string filename("nation.parquet");
   const std::string sample(getExampleFilePath(filename));
 
-  dwio::common::ReaderOptions readerOptions{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto outputRowType =
       ROW({"nationkey", "name", "regionkey", "comment"},
           {BIGINT(), VARCHAR(), BIGINT(), VARCHAR()});
@@ -1446,8 +1487,9 @@ TEST_F(ParquetReaderTest, readComplexType) {
   const std::string filename("complex_with_varchar_varbinary.parquet");
   const std::string sample(getExampleFilePath(filename));
 
-  dwio::common::ReaderOptions readerOptions{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto outputRowType =
       ROW({"a", "b", "c", "d"},
           {ARRAY(VARCHAR()),
@@ -1494,8 +1536,9 @@ TEST_F(ParquetReaderTest, readFixedLenBinaryAsStringFromUuid) {
   const std::string filename("uuid.parquet");
   const std::string sample(getExampleFilePath(filename));
 
-  dwio::common::ReaderOptions readerOptions{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto outputRowType = ROW({"uuid_field"}, {VARCHAR()});
 
   readerOptions.setFileSchema(outputRowType);
@@ -1523,8 +1566,9 @@ TEST_F(ParquetReaderTest, readFixedLenBinaryAsStringFromUuid) {
 TEST_F(ParquetReaderTest, testV2PageWithZeroMaxDefRep) {
   const std::string sample(getExampleFilePath("v2_page.parquet"));
 
-  dwio::common::ReaderOptions readerOptions{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto reader = createReader(sample, readerOptions);
   EXPECT_EQ(reader->numberOfRows(), 5ULL);
 
@@ -1548,8 +1592,9 @@ TEST_F(ParquetReaderTest, testV2PageWithZeroMaxDefRep) {
 TEST_F(ParquetReaderTest, readComplexTypeWithV2Page) {
   const std::string sample(getExampleFilePath("complex_type_v2_page.parquet"));
 
-  dwio::common::ReaderOptions readerOptions{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto reader = createReader(sample, readerOptions);
   EXPECT_EQ(reader->numberOfRows(), 1ULL);
 
@@ -1589,8 +1634,9 @@ TEST_F(ParquetReaderTest, arrayOfMapOfIntKeyArrayValue) {
       "ROW<test:ARRAY<MAP<VARCHAR,ARRAY<INTEGER>>>>";
   const std::string sample(
       getExampleFilePath("array_of_map_of_int_key_array_value.parquet"));
-  facebook::velox::dwio::common::ReaderOptions readerOptions{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  facebook::velox::dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto reader = createReader(sample, readerOptions);
   EXPECT_EQ(reader->rowType()->toString(), expectedVeloxType);
   auto type = reader->typeWithId();
@@ -1623,8 +1669,9 @@ TEST_F(ParquetReaderTest, arrayOfMapOfIntKeyStructValue) {
       "ROW<test:ARRAY<MAP<INTEGER,ROW<stringfield:VARCHAR,longfield:BIGINT>>>>";
   const std::string sample(
       getExampleFilePath("array_of_map_of_int_key_struct_value.parquet"));
-  facebook::velox::dwio::common::ReaderOptions readerOptions{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  facebook::velox::dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto reader = createReader(sample, readerOptions);
   EXPECT_EQ(reader->rowType()->toString(), expectedVeloxType);
   auto type = reader->typeWithId();
@@ -1658,8 +1705,9 @@ TEST_F(ParquetReaderTest, struct_of_array_of_array) {
       "ROW<test:ROW<stringarrayfield:ARRAY<ARRAY<VARCHAR>>,intarrayfield:ARRAY<ARRAY<INTEGER>>>>";
   const std::string sample(
       getExampleFilePath("struct_of_array_of_array.parquet"));
-  facebook::velox::dwio::common::ReaderOptions readerOptions{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  facebook::velox::dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto reader = createReader(sample, readerOptions);
   auto type = reader->typeWithId();
   EXPECT_EQ(type->size(), 1ULL);
@@ -1723,8 +1771,9 @@ TEST_F(ParquetReaderTest, struct_of_array_of_array) {
 TEST_F(ParquetReaderTest, testLzoDataPage) {
   const std::string sample(getExampleFilePath("lzo.parquet"));
 
-  dwio::common::ReaderOptions readerOptions{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto reader = createReader(sample, readerOptions);
   EXPECT_EQ(reader->numberOfRows(), 23'547ULL);
 
@@ -1759,8 +1808,9 @@ TEST_F(ParquetReaderTest, testLzoDataPage) {
 TEST_F(ParquetReaderTest, testEmptyV2DataPage) {
   const std::string sample(getExampleFilePath("empty_v2datapage.parquet"));
 
-  dwio::common::ReaderOptions readerOptions{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto reader = createReader(sample, readerOptions);
   EXPECT_EQ(reader->numberOfRows(), 30001ULL);
 
@@ -1792,8 +1842,9 @@ TEST_F(ParquetReaderTest, parquet251) {
 TEST_F(ParquetReaderTest, fileColumnVarcharToMetadataColumnMismatchTest) {
   const std::string sample(getExampleFilePath("nation.parquet"));
 
-  dwio::common::ReaderOptions readerOptions{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
 
   auto runVarcharColTest = [&](const TypePtr& requestedType) {
     // The type in the file is a BYTE_ARRAY resolving to VARCHAR.
@@ -1811,7 +1862,7 @@ TEST_F(ParquetReaderTest, fileColumnVarcharToMetadataColumnMismatchTest) {
     VELOX_ASSERT_THROW(
         createReader(sample, readerOptions),
         fmt::format(
-            "Converted type VARCHAR is not allowed for requested type {}",
+            "Converted type VARCHAR is not allowed for requested type {} for file column 'name'",
             requestedType->toString()));
   };
 
@@ -1852,8 +1903,9 @@ TEST_F(ParquetReaderTest, readerWithSchema) {
   writer->close();
 
   // Create the reader.
-  dwio::common::ReaderOptions readerOptions{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileSchema(schema);
   std::string dataBuf(sinkPtr->data(), sinkPtr->size());
   auto file = std::make_shared<InMemoryReadFile>(std::move(dataBuf));
@@ -1874,8 +1926,9 @@ TEST_F(ParquetReaderTest, columnStatistics) {
       });
 
   auto* sink = write(data);
-  dwio::common::ReaderOptions readerOptions{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto reader = createReaderInMemory(*sink, readerOptions);
   const auto& schema = reader->typeWithId();
 
@@ -1934,8 +1987,9 @@ TEST_F(ParquetReaderTest, columnStatisticsWithNulls) {
       });
 
   auto* sink = write(data);
-  dwio::common::ReaderOptions readerOptions{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto reader = createReaderInMemory(*sink, readerOptions);
   const auto& schema = reader->typeWithId();
 
@@ -1968,8 +2022,9 @@ TEST_F(ParquetReaderTest, columnStatisticsMultipleRowGroups) {
       });
 
   auto* sink = write(data, writerOptions);
-  dwio::common::ReaderOptions readerOptions{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto reader = createReaderInMemory(*sink, readerOptions);
 
   // Verify we have multiple row groups.
@@ -2001,8 +2056,9 @@ TEST_F(ParquetReaderTest, readTimeMillis) {
           TIME())});
   auto sink = write(data);
 
-  dwio::common::ReaderOptions readerOpts{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOpts(leafPool_.get());
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
   auto reader = createReaderInMemory(*sink, readerOpts);
 
   EXPECT_EQ(reader->numberOfRows(), 6ULL);
@@ -2011,6 +2067,45 @@ TEST_F(ParquetReaderTest, readTimeMillis) {
   EXPECT_EQ(type->size(), 1ULL);
   auto col0 = type->childAt(0);
   EXPECT_TRUE(col0->type()->isTime());
+
+  auto rowReaderOpts = getReaderOpts(rowType);
+  rowReaderOpts.setScanSpec(makeScanSpec(rowType));
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  assertReadWithReaderAndExpected(rowType, *rowReader, data, *leafPool_);
+}
+
+TEST_F(ParquetReaderTest, readTimeMicros) {
+  // Write TIME MICRO UTC data using the parquet writer.
+  // The writer exports Velox TIME MICRO UTC as Arrow time64 with microseconds
+  // unit, which maps to Parquet TIME_MICROS (INT64).
+  const auto rowType = ROW({"time_col"}, {TIME_MICRO_UTC()});
+
+  auto data = makeRowVector(
+      rowType->names(),
+      {makeNullableFlatVector<int64_t>(
+          {0,
+           1,
+           1'000,
+           3'600'000'000,
+           std::nullopt,
+           43'200'000'000,
+           86'399'999'999},
+          TIME_MICRO_UTC())});
+  auto sink = write(data);
+
+  dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
+  auto reader = createReaderInMemory(*sink, readerOpts);
+
+  EXPECT_EQ(reader->numberOfRows(), 7ULL);
+
+  auto type = reader->typeWithId();
+  EXPECT_EQ(type->size(), 1ULL);
+  auto col0 = type->childAt(0);
+  EXPECT_TRUE(col0->type()->isTime());
+  EXPECT_TRUE(col0->type()->equivalent(*TIME_MICRO_UTC()));
 
   auto rowReaderOpts = getReaderOpts(rowType);
   rowReaderOpts.setScanSpec(makeScanSpec(rowType));
@@ -2034,8 +2129,9 @@ TEST_F(ParquetReaderTest, readTimeWithMultipleColumns) {
 
   auto sink = write(data);
 
-  dwio::common::ReaderOptions readerOpts{
-      leafPool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOpts(leafPool_.get());
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
   auto reader = createReaderInMemory(*sink, readerOpts);
 
   EXPECT_EQ(reader->numberOfRows(), 5ULL);
@@ -2051,4 +2147,190 @@ TEST_F(ParquetReaderTest, readTimeWithMultipleColumns) {
   auto rowReader = reader->createRowReader(rowReaderOpts);
 
   assertReadWithReaderAndExpected(rowType, *rowReader, data, *leafPool_);
+}
+
+// Verifies that when the footer size exceeds the configured threshold, memory
+// for the deserialized Thrift footer is reported to the pool when the row
+// reader is created and released when the reader is destroyed.
+TEST_F(ParquetReaderTest, thriftMemoryTracking) {
+  const std::string sample(getExampleFilePath("sample.parquet"));
+  auto readerOptions = makeThriftTrackingReaderOptions();
+  const auto initialUsage = leafPool_->usedBytes();
+  {
+    auto reader = createReader(sample, readerOptions);
+    EXPECT_EQ(reader->numberOfRows(), 20ULL);
+    auto rowReaderOpts = getReaderOpts(sampleSchema());
+    rowReaderOpts.setScanSpec(makeScanSpec(sampleSchema()));
+    auto rowReader = reader->createRowReader(rowReaderOpts);
+
+    // Reported bytes must at least cover FileMetaData plus one ColumnChunk
+    // per (row group * column); anything smaller would mean per-row-group
+    // payload is not accounted for.
+    const auto memoryAfterRowReader = leafPool_->usedBytes();
+    const auto reportedBytes = memoryAfterRowReader - initialUsage;
+    const auto numRowGroups = reader->fileMetaData().numRowGroups();
+    EXPECT_GT(numRowGroups, 0);
+    const auto numColumns = sampleSchema()->size();
+    EXPECT_GE(
+        reportedBytes,
+        sizeof(thrift::FileMetaData) +
+            numRowGroups * numColumns * sizeof(thrift::ColumnChunk));
+
+    auto result = BaseVector::create(sampleSchema(), 0, leafPool_.get());
+    rowReader->next(10, result);
+    EXPECT_EQ(result->size(), 10);
+
+    // Reading does not release any of the reported memory.
+    EXPECT_GE(leafPool_->usedBytes(), memoryAfterRowReader);
+  }
+
+  // Destroying the reader returns memory to the pre-tracking baseline.
+  EXPECT_EQ(leafPool_->usedBytes(), initialUsage);
+}
+
+// Verifies that the ParquetReader, not the RowReader, owns the tracked
+// footer memory: a single external allocation is made when the reader
+// is constructed, no further external allocations are made when row
+// readers are created or destroyed (including a second row reader on
+// the same ParquetReader), and the reservation is balanced by frees
+// after the reader is destroyed.
+TEST_F(ParquetReaderTest, thriftMemoryOwnedByReader) {
+  const std::string sample(getExampleFilePath("sample.parquet"));
+  auto readerOptions = makeThriftTrackingReaderOptions();
+  const auto initialAllocs = leafPool_->stats().numExternalAllocs;
+  const auto initialFrees = leafPool_->stats().numExternalFrees;
+  {
+    auto reader = createReader(sample, readerOptions);
+    EXPECT_EQ(leafPool_->stats().numExternalAllocs, initialAllocs + 1);
+    EXPECT_EQ(leafPool_->stats().numExternalFrees, initialFrees);
+
+    {
+      // Full-range row reader: no row groups skipped, no accounting change.
+      auto rowReaderOpts = getReaderOpts(sampleSchema());
+      rowReaderOpts.setScanSpec(makeScanSpec(sampleSchema()));
+      auto rowReader = reader->createRowReader(rowReaderOpts);
+      EXPECT_EQ(leafPool_->stats().numExternalAllocs, initialAllocs + 1);
+      EXPECT_EQ(leafPool_->stats().numExternalFrees, initialFrees);
+    }
+    EXPECT_EQ(leafPool_->stats().numExternalAllocs, initialAllocs + 1);
+    EXPECT_EQ(leafPool_->stats().numExternalFrees, initialFrees);
+
+    // A second row reader on the same ParquetReader does not allocate.
+    // Range (0, 1) is out-of-file, so no row groups match — this also
+    // sidesteps a pre-existing multi-row-reader prefetch limitation in
+    // ParquetData::seekToRowGroup unrelated to footer accounting.
+    auto emptyRangeRowReaderOpts = getReaderOpts(sampleSchema());
+    emptyRangeRowReaderOpts.setScanSpec(makeScanSpec(sampleSchema()));
+    emptyRangeRowReaderOpts.range(0, 1);
+    auto emptyRangeRowReader = reader->createRowReader(emptyRangeRowReaderOpts);
+    EXPECT_EQ(leafPool_->stats().numExternalAllocs, initialAllocs + 1);
+  }
+  // Every external alloc is paired with at least one free across the
+  // reader's lifetime (frees may include early releases from skipped
+  // row groups in addition to the final release in ~ReaderBase).
+  EXPECT_EQ(leafPool_->stats().numExternalAllocs, initialAllocs + 1);
+  EXPECT_GE(leafPool_->stats().numExternalFrees, initialFrees + 1);
+}
+
+// Verifies that the estimated footer size is surfaced via the per-scan
+// runtime stat, and appears in the runtime-metric map for operator
+// stats consumers.
+TEST_F(ParquetReaderTest, thriftMemoryRuntimeStat) {
+  const std::string sample(getExampleFilePath("sample.parquet"));
+  auto readerOptions = makeThriftTrackingReaderOptions();
+  auto reader = createReader(sample, readerOptions);
+  auto rowReaderOpts = getReaderOpts(sampleSchema());
+  rowReaderOpts.setScanSpec(makeScanSpec(sampleSchema()));
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  dwio::common::RuntimeStatistics stats;
+  rowReader->updateRuntimeStats(stats);
+  EXPECT_GT(stats.parquetFooterEstimatedBytes, 0);
+
+  auto metrics = stats.toRuntimeMetricMap();
+  ASSERT_TRUE(metrics.count("parquetFooterEstimatedBytes"));
+  EXPECT_EQ(
+      metrics["parquetFooterEstimatedBytes"].sum,
+      stats.parquetFooterEstimatedBytes);
+  EXPECT_EQ(
+      metrics["parquetFooterEstimatedBytes"].unit,
+      RuntimeCounter::Unit::kBytes);
+}
+
+// Verifies that without tracking the runtime stat stays at zero and
+// the metric is not emitted in the metric map (kept off the operator
+// stats panel for non-tracking scans).
+TEST_F(ParquetReaderTest, thriftMemoryRuntimeStatAbsentWithoutTracking) {
+  const std::string sample(getExampleFilePath("sample.parquet"));
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
+  auto reader = createReader(sample, readerOptions);
+  auto rowReaderOpts = getReaderOpts(sampleSchema());
+  rowReaderOpts.setScanSpec(makeScanSpec(sampleSchema()));
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  dwio::common::RuntimeStatistics stats;
+  rowReader->updateRuntimeStats(stats);
+  EXPECT_EQ(stats.parquetFooterEstimatedBytes, 0);
+
+  auto metrics = stats.toRuntimeMetricMap();
+  EXPECT_EQ(metrics.count("parquetFooterEstimatedBytes"), 0);
+}
+
+// Verifies that without setting the threshold the tracking path is
+// disabled: no external allocation is reported, and ~ReaderBase has
+// nothing to release.
+TEST_F(ParquetReaderTest, thriftMemoryNotTrackedByDefault) {
+  const std::string sample(getExampleFilePath("sample.parquet"));
+
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
+  // Default threshold (uint64::max) leaves tracking disabled.
+  const auto initialExternalAllocs = leafPool_->stats().numExternalAllocs;
+  {
+    auto reader = createReader(sample, readerOptions);
+    auto rowReaderOpts = getReaderOpts(sampleSchema());
+    rowReaderOpts.setScanSpec(makeScanSpec(sampleSchema()));
+    auto rowReader = reader->createRowReader(rowReaderOpts);
+    EXPECT_EQ(leafPool_->stats().numExternalAllocs, initialExternalAllocs);
+  }
+  EXPECT_EQ(leafPool_->stats().numExternalAllocs, initialExternalAllocs);
+  EXPECT_EQ(leafPool_->stats().numExternalFrees, 0);
+}
+
+// Verifies that when row groups are skipped via the scan range, the portion
+// of the Thrift footer memory belonging to those row groups is released back
+// to the pool when the row reader runs filterRowGroups.
+TEST_F(ParquetReaderTest, thriftMemoryReleasedForSkippedRowGroups) {
+  const auto rowType = ROW({"id"}, {BIGINT()});
+  const std::string sample(getExampleFilePath("multiple_row_groups.parquet"));
+  auto readerOptions = makeThriftTrackingReaderOptions();
+  const auto initialUsage = leafPool_->usedBytes();
+  {
+    auto reader = createReader(sample, readerOptions);
+    const auto numRowGroups = reader->fileMetaData().numRowGroups();
+    ASSERT_GT(numRowGroups, 1);
+
+    // Full footer footprint is reported at reader construction.
+    const auto memoryAfterReader = leafPool_->usedBytes();
+    EXPECT_GT(memoryAfterReader, initialUsage);
+
+    // Scan range covers only row group 0; later groups are cleared.
+    const auto secondRowGroupOffset =
+        reader->fileMetaData().rowGroup(1).fileOffset();
+    ASSERT_GT(secondRowGroupOffset, 0);
+
+    RowReaderOptions rowReaderOpts;
+    rowReaderOpts.setScanSpec(makeScanSpec(rowType));
+    rowReaderOpts.range(0, secondRowGroupOffset);
+    auto rowReader = reader->createRowReader(rowReaderOpts);
+
+    // Cleared row groups' bytes are released; row group 0 still tracked.
+    EXPECT_LT(leafPool_->usedBytes(), memoryAfterReader);
+    EXPECT_GT(leafPool_->usedBytes(), initialUsage);
+  }
+
+  EXPECT_EQ(leafPool_->usedBytes(), initialUsage);
 }
