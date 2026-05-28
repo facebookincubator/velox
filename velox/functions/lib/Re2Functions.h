@@ -409,16 +409,43 @@ FOLLY_ALWAYS_INLINE std::string prepareRegexpReplacePattern(
   return newPattern;
 }
 
-/// This function preprocesses an input replacement string to follow RE2 syntax
-/// for java.util.regex used by Presto and Spark. These are the replacements
-/// that are required.
-/// 1. RE2 replacement only supports group index capture, so we need to convert
-/// group name captures to group index captures.
-/// 2. Group index capture in java.util.regex replacement is '$N', while in RE2
-/// replacement it is '\N'. We need to convert it.
-/// 3. Replacement in RE2 only supports '\' followed by a digit or another '\',
-/// while java.util.regex will ignore '\' in replacements, so we need to
-/// unescape it.
+/// Translate a java.util.regex-style replacement string into the equivalent
+/// RE2 replacement.
+///
+/// Both java.util.regex and RE2 treat '\\' as an escape introducer in the
+/// replacement, but they differ on what may follow:
+///   - '\\\\'      -> a single literal backslash (same in both).
+///   - '\\<digit>' -> back-reference (same in both, though Spark/Java also
+///                    accept the '$<digit>' form which the caller converts
+///                    separately).
+///   - '\\<other>' -> java.util.regex silently drops the backslash and keeps
+///                    the trailing character as a literal; RE2 rejects this
+///                    form. To bridge the two, we strip the backslash here.
+///
+/// The translation must consume the input in two-byte escape units. A regex
+/// pass cannot do this: given '\\\\X' (literal backslash followed by 'X'),
+/// the leftmost search for '\\<not-digit-not-backslash>' starts at offset 1,
+/// matches '\\X' and produces 'X', dropping the leading backslash that
+/// should have been kept. The implementation walks the string left to right
+/// and always advances past a recognized escape unit as a whole.
+///
+/// Defined in Re2Functions.cpp; called once per query during replacement
+/// preprocessing, not per row.
+std::string unescapeReplacement(const std::string& replacement);
+
+/// This function preprocesses an input replacement string to follow RE2
+/// syntax for java.util.regex used by Presto and Spark. The required
+/// transformations are:
+/// 1. RE2 replacement only supports group index capture, so named capturing
+/// group references are converted to numbered captures.
+/// 2. Group index capture in java.util.regex replacement is '$N', while in
+/// RE2 replacement it is '\N'. We convert it.
+/// 3. java.util.regex silently drops a backslash that is followed by any
+/// character other than another backslash or a digit; RE2 instead rejects
+/// such sequences. To match Spark/Presto semantics we strip the leading
+/// backslash before passing the replacement to RE2. The transformation is
+/// done by unescapeReplacement(); see that function for why it cannot be
+/// expressed as another regex pass.
 FOLLY_ALWAYS_INLINE std::string prepareRegexpReplaceReplacement(
     const RE2& re,
     const StringView& replacement) {
@@ -467,16 +494,7 @@ FOLLY_ALWAYS_INLINE std::string prepareRegexpReplaceReplacement(
       kConvertRegex.error());
   RE2::GlobalReplace(&newReplacement, kConvertRegex, R"(\\\1)");
 
-  // Un-escape character except digit or '\\'
-  static const RE2 kUnescapeRegex(R"(\\([^0-9\\]))");
-  VELOX_DCHECK(
-      kUnescapeRegex.ok(),
-      "Invalid regular expression {}: {}.",
-      R"(\\([^0-9\\]))",
-      kUnescapeRegex.error());
-  RE2::GlobalReplace(&newReplacement, kUnescapeRegex, R"(\1)");
-
-  return newReplacement;
+  return unescapeReplacement(newReplacement);
 }
 
 } // namespace facebook::velox::functions

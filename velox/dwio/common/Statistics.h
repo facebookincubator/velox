@@ -756,6 +756,13 @@ struct RuntimeStatistics {
 
   int64_t numStripes{0};
 
+  // Estimated bytes reported to the memory pool for the deserialized
+  // Parquet file footer, when the parquet reader's footer-memory
+  // tracking path is engaged. Lets operators compare the estimate
+  // against actual pool usage. 0 when the reader did not engage
+  // tracking (e.g. footer below threshold or non-parquet format).
+  int64_t parquetFooterEstimatedBytes{0};
+
   UnitLoaderStats unitLoaderStats;
   ColumnReaderStatistics columnReaderStats;
 
@@ -788,6 +795,12 @@ struct RuntimeStatistics {
     }
     if (numStripes > 0) {
       result.emplace("numStripes", RuntimeMetric(numStripes));
+    }
+    if (parquetFooterEstimatedBytes > 0) {
+      result.emplace(
+          "parquetFooterEstimatedBytes",
+          RuntimeMetric(
+              parquetFooterEstimatedBytes, RuntimeCounter::Unit::kBytes));
     }
     columnReaderStats.toRuntimeMetrics(result);
     return result;

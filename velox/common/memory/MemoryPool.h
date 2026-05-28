@@ -128,7 +128,7 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
 
   struct Options {
     /// Specifies the memory allocation alignment through this memory pool.
-    uint16_t alignment{MemoryAllocator::kMaxAlignment};
+    uint16_t alignment{MemoryAllocator::kDefaultAlignment};
 
     /// Specifies the max memory capacity of this memory pool.
     int64_t maxCapacity{kMaxMemory};
@@ -164,6 +164,17 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
 
     /// If non-empty, enables debug mode for the created memory pool.
     std::optional<DebugOptions> debugOptions{std::nullopt};
+
+    /// Allocator override. Non-null routes allocations through this allocator
+    /// instead of the MemoryManager's default. Borrowed; the owner (typically
+    /// a CustomMemoryResource held by the MemoryManager) must outlive the
+    /// pool.
+    MemoryAllocator* customAllocator{nullptr};
+
+    /// Arbitrator override. Non-null routes capacity decisions through this
+    /// arbitrator instead of the MemoryManager's default. Same ownership
+    /// contract as 'customAllocator'.
+    MemoryArbitrator* customArbitrator{nullptr};
   };
 
   /// Constructs a named memory pool with specified 'name', 'parent' and 'kind'.
@@ -261,6 +272,18 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
 
   /// Frees an allocated buffer.
   virtual void free(void* p, int64_t size) = 0;
+
+  /// Allocates a buffer with arbitrary power-of-two alignment (e.g., 4096 for
+  /// O_DIRECT). Unlike allocate(), which is limited to the pool's fixed
+  /// alignment, this supports any power-of-two alignment >= kMinAlignment.
+  virtual void* allocateAligned(int64_t size, uint32_t alignment) {
+    VELOX_NYI("allocateAligned not implemented for {}", toString());
+  }
+
+  /// Frees a buffer allocated by allocateAligned.
+  virtual void freeAligned(void* buffer, int64_t size, uint32_t alignment) {
+    VELOX_NYI("freeAligned not implemented for {}", toString());
+  }
 
   /// Transfer the ownership of memory at 'buffer' for 'size' bytes to the
   /// memory pool 'dest'. Returns true if the transfer succeeds.
@@ -402,6 +425,10 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
 
   /// Returns the memory reclaimer of this memory pool if not null.
   virtual MemoryReclaimer* reclaimer() const = 0;
+
+  /// Returns the arbitrator that governs this pool's capacity. May be the
+  /// MemoryManager's default arbitrator or a custom resource's arbitrator.
+  virtual MemoryArbitrator* arbitrator() const = 0;
 
   /// Function estimates the number of reclaimable bytes and returns in
   /// 'reclaimableBytes'. If the 'reclaimer' is not set, the function returns
@@ -648,6 +675,10 @@ class MemoryPoolImpl : public MemoryPool {
 
   void free(void* p, int64_t size) override;
 
+  void* allocateAligned(int64_t size, uint32_t alignment) override;
+
+  void freeAligned(void* buffer, int64_t size, uint32_t alignment) override;
+
   bool transferTo(MemoryPool* dest, void* buffer, uint64_t size) override;
 
   void reportExternalFree(int64_t size) override;
@@ -703,6 +734,10 @@ class MemoryPoolImpl : public MemoryPool {
   void setReclaimer(std::unique_ptr<MemoryReclaimer> reclaimer) override;
 
   MemoryReclaimer* reclaimer() const override;
+
+  MemoryArbitrator* arbitrator() const override {
+    return arbitrator_;
+  }
 
   std::optional<uint64_t> reclaimableBytes() const override;
 
@@ -811,7 +846,13 @@ class MemoryPoolImpl : public MemoryPool {
   }
 
   FOLLY_ALWAYS_INLINE int64_t sizeAlign(int64_t size) const {
-    return (size + alignment_ - 1) & ~(alignment_ - 1);
+    return sizeAlign(size, alignment_);
+  }
+
+  static FOLLY_ALWAYS_INLINE int64_t
+  sizeAlign(int64_t size, uint32_t alignment) {
+    const auto mask = static_cast<int64_t>(alignment) - 1;
+    return checkedPlus(size, mask) & ~mask;
   }
 
   // Returns a rounded up delta based on adding 'delta' to 'size'. Adding the

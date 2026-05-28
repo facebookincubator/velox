@@ -169,12 +169,24 @@ class DecimalUtil {
     auto scaleDifference = toScale - fromScale;
     bool isOverflow = false;
     if (scaleDifference >= 0) {
+      VELOX_RETURN_IF(
+          scaleDifference > LongDecimalType::kMaxPrecision,
+          Status::UserError(
+              "Decimal scale difference is too large: {} vs max {}.",
+              scaleDifference,
+              LongDecimalType::kMaxPrecision));
       isOverflow = __builtin_mul_overflow(
           rescaledValue,
           DecimalUtil::kPowersOfTen[scaleDifference],
           &rescaledValue);
     } else {
       scaleDifference = -scaleDifference;
+      VELOX_RETURN_IF(
+          scaleDifference > LongDecimalType::kMaxPrecision,
+          Status::UserError(
+              "Decimal scale difference is too large: {} vs max {}.",
+              scaleDifference,
+              LongDecimalType::kMaxPrecision));
       const auto scalingFactor = DecimalUtil::kPowersOfTen[scaleDifference];
       rescaledValue /= scalingFactor;
       int128_t remainder = inputValue % scalingFactor;
