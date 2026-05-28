@@ -228,13 +228,10 @@ void registerRegexpReplace(const std::string& prefix) {
       int32_t>({prefix + "regexp_replace"});
 }
 
-// REGEXP_INSTR(string, pattern[, idx]) → integer
+// REGEXP_INSTR(string, pattern) → integer
 //
 // Returns the 1-based character position of the first substring that matches
 // the given regex pattern. Returns 0 if no match is found.
-// The optional 'idx' parameter is accepted for Spark compatibility but is
-// silently ignored — Spark's regexp_instr always returns the position of the
-// entire match regardless of idx value. We replicate this behavior.
 template <typename T>
 struct RegexpInstrFunction {
   RegexpInstrFunction() : cache_(0) {}
@@ -244,23 +241,10 @@ struct RegexpInstrFunction {
   static constexpr bool is_default_ascii_behavior = true;
 
   FOLLY_ALWAYS_INLINE void initialize(
-      const std::vector<TypePtr>& inputTypes,
-      const core::QueryConfig& config,
-      const arg_type<Varchar>* stringInput,
-      const arg_type<Varchar>* pattern) {
-    initialize(inputTypes, config, stringInput, pattern, nullptr);
-  }
-
-  FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
       const arg_type<Varchar>* /*stringInput*/,
-      const arg_type<Varchar>* pattern,
-      const arg_type<int32_t>* /*idx*/) {
-    // NOTE: Spark's regexp_instr accepts an idx (group index) parameter but
-    // silently ignores it — it always returns the position of the entire match
-    // regardless of idx value. We replicate this behavior for compatibility.
-    // See: RegExpInStr.nullSafeEval in Spark's regexpExpressions.scala.
+      const arg_type<Varchar>* pattern) {
     if (pattern) {
       // Converts Java named groups (?<name>...) to RE2 (?P<name>...) syntax.
       // Despite the name, this function only handles named group conversion
@@ -280,16 +264,6 @@ struct RegexpInstrFunction {
       int32_t& result,
       const arg_type<Varchar>& stringInput,
       const arg_type<Varchar>& pattern) {
-    return callImpl(result, stringInput, pattern);
-  }
-
-  FOLLY_ALWAYS_INLINE bool call(
-      int32_t& result,
-      const arg_type<Varchar>& stringInput,
-      const arg_type<Varchar>& pattern,
-      const arg_type<int32_t>& /*idx*/) {
-    // Spark's regexp_instr ignores the idx parameter and always returns the
-    // position of the entire match (group 0). We replicate this behavior.
     return callImpl(result, stringInput, pattern);
   }
 
@@ -339,13 +313,7 @@ struct RegexpInstrFunction {
 };
 
 void registerRegexpInstr(const std::string& prefix) {
-  // 2-arg form: regexp_instr(string, pattern)
   registerFunction<RegexpInstrFunction, int32_t, Varchar, Varchar>(
-      {prefix + "regexp_instr"});
-  // 3-arg form: regexp_instr(string, pattern, idx)
-  // idx is accepted for Spark compatibility but silently ignored — Spark's
-  // regexp_instr always returns the position of the entire match.
-  registerFunction<RegexpInstrFunction, int32_t, Varchar, Varchar, int32_t>(
       {prefix + "regexp_instr"});
 }
 

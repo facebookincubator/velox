@@ -737,35 +737,6 @@ TEST_F(RegexFunctionsTest, regexpInstrDynamicPattern) {
   velox::test::assertEqualVectors(expected, result);
 }
 
-TEST_F(RegexFunctionsTest, regexpInstrWithIdx) {
-  // Spark's regexp_instr accepts idx but silently ignores it — always returns
-  // position of entire match regardless of idx value.
-  auto regexpInstrIdx =
-      [&](std::optional<std::string> str, std::string pattern, int32_t idx) {
-        return evaluateOnce<int32_t>(
-            fmt::format("regexp_instr(c0, '{}', {})", pattern, idx), str);
-      };
-
-  // idx=0 — entire match position.
-  EXPECT_EQ(regexpInstrIdx("hello world", "world", 0), 7);
-  EXPECT_EQ(regexpInstrIdx("abc123", "[0-9]+", 0), 4);
-  // idx>0 — Spark ignores idx, still returns position of entire match.
-  EXPECT_EQ(regexpInstrIdx("foo123bar", "(\\d+)", 1), 4);
-  EXPECT_EQ(regexpInstrIdx("hello world", "(wor)(ld)", 2), 7);
-}
-
-TEST_F(RegexFunctionsTest, regexpInstrNonConstantIdx) {
-  // Non-constant idx column — Spark ignores idx values, always returns
-  // position of entire match.
-  auto strings = makeFlatVector<StringView>({"hello", "world", "abc123"});
-  auto patterns = makeFlatVector<StringView>({"h", "or", "[0-9]+"});
-  auto indices = makeFlatVector<int32_t>({0, 1, 2});
-  auto result = evaluate(
-      "regexp_instr(c0, c1, c2)", makeRowVector({strings, patterns, indices}));
-  auto expected = makeFlatVector<int32_t>({1, 2, 4});
-  velox::test::assertEqualVectors(expected, result);
-}
-
 TEST_F(RegexFunctionsTest, regexpInstrInvalidPattern) {
   auto regexpInstr = [&](std::optional<std::string> str, std::string pattern) {
     return evaluateOnce<int32_t>(

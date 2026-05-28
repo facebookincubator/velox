@@ -74,13 +74,10 @@ std::shared_ptr<exec::VectorFunction> makeRegexExtract(
 /// If position > length string, return string.
 void registerRegexpReplace(const std::string& prefix);
 
-/// regexp_instr(string, pattern[, idx]) → integer
+/// regexp_instr(string, pattern) → integer
 ///
 /// Returns the 1-based character position of the first substring that matches
 /// the given regex pattern. Returns 0 if no match is found.
-/// The optional idx parameter is accepted for Spark compatibility but is
-/// silently ignored — the function always returns the position of the entire
-/// match, matching Spark's behavior.
 void registerRegexpInstr(const std::string& prefix);
 
 } // namespace facebook::velox::functions::sparksql

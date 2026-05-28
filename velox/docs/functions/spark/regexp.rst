@@ -73,6 +73,25 @@ See https://github.com/google/re2/wiki/Syntax for more information.
 
         SELECT regexp_extract_all('1a 2b 14m', '(\d+)([a-z]+)', 2); -- ['a', 'b', 'm']
 
+.. spark:function:: regexp_instr(string, pattern) -> integer
+
+    Returns the 1-based character position of the first substring in ``string``
+    that matches the regular expression ``pattern``. Returns 0 if no match is found.
+    If ``string`` is NULL, returns NULL.
+
+    Parameters:
+
+    - **string**: The input string to search.
+    - **pattern**: The regular expression pattern to match.
+
+    Examples:
+
+    ::
+
+        SELECT regexp_instr('hello world', 'world'); -- 7
+        SELECT regexp_instr('abc123def', '[0-9]+'); -- 4
+        SELECT regexp_instr('hello', 'xyz'); -- 0
+
 .. spark:function:: rlike(string, pattern) -> boolean
 
     Evaluates the regular expression ``pattern`` and determines if it is
@@ -136,40 +155,3 @@ See https://github.com/google/re2/wiki/Syntax for more information.
         SELECT regexp_replace('Hello, World!', 'l', 'L', 5); -- 'Hello, World!'
 
         SELECT regexp_replace('Hello, World!', 'l', 'L', 100); -- 'Hello, World!'
-
-
-.. spark:function:: regexp_instr(string, pattern) -> integer
-
-    Returns the 1-based character position of the first substring in ``string``
-    that matches the regular expression ``pattern``. Returns 0 if no match is found.
-    If ``string`` is NULL, returns NULL.
-
-    Parameters:
-
-    - **string**: The input string to search.
-    - **pattern**: The regular expression pattern to match.
-
-    Examples:
-
-    ::
-
-        SELECT regexp_instr('hello world', 'world'); -- 7
-        SELECT regexp_instr('abc123def', '[0-9]+'); -- 4
-        SELECT regexp_instr('hello', 'xyz'); -- 0
-
-.. spark:function:: regexp_instr(string, pattern, idx) -> integer
-    :noindex:
-
-    Returns the 1-based character position of the first substring in ``string``
-    that matches the regular expression ``pattern``. The ``idx`` parameter is
-    accepted for compatibility with Spark's function signature but is silently
-    ignored — the function always returns the position of the entire match
-    regardless of the ``idx`` value. This matches Spark's behavior where
-    ``RegExpInStr.nullSafeEval`` ignores the group index parameter
-    (see ``regexpExpressions.scala``).
-
-    Parameters:
-
-    - **string**: The input string to search.
-    - **pattern**: The regular expression pattern to match.
-    - **idx**: Accepted but ignored per Spark semantics.
