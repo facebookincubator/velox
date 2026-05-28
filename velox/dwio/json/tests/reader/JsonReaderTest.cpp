@@ -197,5 +197,122 @@ TEST_F(JsonReaderTest, parseDoubleAndReal) {
   EXPECT_FLOAT_EQ(row->childAt(1)->asFlatVector<float>()->valueAt(0), 2.5f);
 }
 
+TEST_F(JsonReaderTest, parseString) {
+  auto row = read("{\"a\":\"hello\"}\n", ROW({{"a", VARCHAR()}}));
+  EXPECT_EQ(
+      row->childAt(0)->asFlatVector<StringView>()->valueAt(0), "hello"_sv);
+}
+
+TEST_F(JsonReaderTest, parseBoolean) {
+  auto row =
+      read("{\"a\":true}\n{\"a\":false}\n", ROW({{"a", BOOLEAN()}}));
+  ASSERT_EQ(row->size(), 2);
+  auto col = row->childAt(0)->asFlatVector<bool>();
+  EXPECT_TRUE(col->valueAt(0));
+  EXPECT_FALSE(col->valueAt(1));
+}
+
+TEST_F(JsonReaderTest, booleanFromStringStrictLiteral) {
+  // Only the exact lowercase "true" is true. "True"/"TRUE" are false —
+  // case-sensitive per the probe.
+  auto row = read(
+      "{\"a\":\"true\"}\n{\"a\":\"True\"}\n{\"a\":\"TRUE\"}\n",
+      ROW({{"a", BOOLEAN()}}));
+  ASSERT_EQ(row->size(), 3);
+  auto col = row->childAt(0)->asFlatVector<bool>();
+  EXPECT_TRUE(col->valueAt(0));
+  EXPECT_FALSE(col->valueAt(1));
+  EXPECT_FALSE(col->valueAt(2));
+}
+
+TEST_F(JsonReaderTest, booleanFromNumberNonzero) {
+  // Any nonzero number — including negatives — is true; 0 is false.
+  auto row = read(
+      "{\"a\":-1}\n{\"a\":2}\n{\"a\":0}\n", ROW({{"a", BOOLEAN()}}));
+  ASSERT_EQ(row->size(), 3);
+  auto col = row->childAt(0)->asFlatVector<bool>();
+  EXPECT_TRUE(col->valueAt(0));
+  EXPECT_TRUE(col->valueAt(1));
+  EXPECT_FALSE(col->valueAt(2));
+}
+
+TEST_F(JsonReaderTest, varcharFromIntegerStringifies) {
+  auto row = read("{\"a\":123}\n", ROW({{"a", VARCHAR()}}));
+  EXPECT_EQ(
+      row->childAt(0)->asFlatVector<StringView>()->valueAt(0), "123"_sv);
+}
+
+TEST_F(JsonReaderTest, varcharFromSimpleFloatStringifies) {
+  auto row = read("{\"a\":123.45}\n", ROW({{"a", VARCHAR()}}));
+  EXPECT_EQ(
+      row->childAt(0)->asFlatVector<StringView>()->valueAt(0), "123.45"_sv);
+}
+
+TEST_F(JsonReaderTest, varcharFromNumberV1DivergenceDocumented) {
+  // v1 emits the original lexeme rather than Presto's BigDecimal-canonical
+  // form. The semantic value is preserved; the exact textual form may
+  // differ (trailing zeros, scientific notation). We assert each output is
+  // a valid string parseable back to the input number, NOT bit-for-bit
+  // Presto parity. This is the documented "VARCHAR-from-number v1
+  // divergence".
+  auto row = read(
+      "{\"a\":1.20}\n{\"a\":1e3}\n{\"a\":100.0}\n", ROW({{"a", VARCHAR()}}));
+  ASSERT_EQ(row->size(), 3);
+  auto col = row->childAt(0)->asFlatVector<StringView>();
+  EXPECT_DOUBLE_EQ(folly::to<double>(std::string(col->valueAt(0))), 1.20);
+  EXPECT_DOUBLE_EQ(folly::to<double>(std::string(col->valueAt(1))), 1e3);
+  EXPECT_DOUBLE_EQ(folly::to<double>(std::string(col->valueAt(2))), 100.0);
+}
+
+TEST_F(JsonReaderTest, varcharFromBooleanStringifiesLowercase) {
+  auto row =
+      read("{\"a\":true}\n{\"a\":false}\n", ROW({{"a", VARCHAR()}}));
+  ASSERT_EQ(row->size(), 2);
+  auto col = row->childAt(0)->asFlatVector<StringView>();
+  EXPECT_EQ(col->valueAt(0), "true"_sv);
+  EXPECT_EQ(col->valueAt(1), "false"_sv);
+}
+
+TEST_F(JsonReaderTest, varcharFromNestedObjectReSerializes) {
+  // Whitespace stripped, key order preserved (NOT canonicalized). Asserted
+  // byte-for-byte against the probe's observed minified output.
+  auto row =
+      read("{\"a\":{\"a\"  :  1 , \"b\" : 2}}\n", ROW({{"a", VARCHAR()}}));
+  EXPECT_EQ(
+      row->childAt(0)->asFlatVector<StringView>()->valueAt(0),
+      "{\"a\":1,\"b\":2}"_sv);
+}
+
+TEST_F(JsonReaderTest, varcharFromArrayReSerializes) {
+  auto row = read("{\"a\":[1 ,  2,3]}\n", ROW({{"a", VARCHAR()}}));
+  EXPECT_EQ(
+      row->childAt(0)->asFlatVector<StringView>()->valueAt(0), "[1,2,3]"_sv);
+}
+
+TEST_F(JsonReaderTest, varcharStringDecodesEscapes) {
+  // simdjson decodes the \/ escape; passthrough yields the bare slash.
+  auto row =
+      read("{\"a\":\"http:\\/\\/example.com\"}\n", ROW({{"a", VARCHAR()}}));
+  EXPECT_EQ(
+      row->childAt(0)->asFlatVector<StringView>()->valueAt(0),
+      "http://example.com"_sv);
+}
+
+TEST_F(JsonReaderTest, varcharFromExplicitJsonNull) {
+  // Unquoted null is SQL NULL.
+  auto row = read("{\"a\":null}\n", ROW({{"a", VARCHAR()}}));
+  ASSERT_EQ(row->size(), 1);
+  EXPECT_TRUE(row->childAt(0)->isNullAt(0));
+}
+
+TEST_F(JsonReaderTest, varcharFromQuotedNullString) {
+  // Quoted "null" is the 4-char string null, distinct from SQL NULL.
+  auto row = read("{\"a\":\"null\"}\n", ROW({{"a", VARCHAR()}}));
+  ASSERT_EQ(row->size(), 1);
+  EXPECT_FALSE(row->childAt(0)->isNullAt(0));
+  EXPECT_EQ(
+      row->childAt(0)->asFlatVector<StringView>()->valueAt(0), "null"_sv);
+}
+
 } // namespace
 } // namespace facebook::velox::json

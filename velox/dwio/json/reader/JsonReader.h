@@ -61,6 +61,12 @@ struct FileContents {
 /// Reader for the JSON file format (JSON Lines, matching Hive
 /// org.apache.hive.hcatalog.data.JsonSerDe). Constructs JsonRowReader
 /// instances that parse records out of the underlying stream.
+///
+/// Known v1 divergence: VARCHAR-formatted JSON numbers may differ in exact
+/// string form from Presto's Hive JSON connector for edge cases involving
+/// trailing zeros and scientific notation (Presto canonicalizes via
+/// BigDecimal; v1 emits the original lexeme). The semantic numeric value is
+/// preserved; only the textual representation may diverge.
 class JsonReader : public dwio::common::Reader {
  public:
   JsonReader(

@@ -29,7 +29,7 @@ namespace {
 
 // Unwraps a simdjson_result, throwing VELOX_USER_FAIL on error.
 template <typename T>
-T unwrap(simdjson::simdjson_result<T>&& result) {
+T unwrap(simdjson::simdjson_result<T> result) {
   if (result.error() != simdjson::SUCCESS) {
     VELOX_USER_FAIL(
         "JSON parse error: {}", simdjson::error_message(result.error()));
@@ -47,6 +47,21 @@ std::string asciiLower(std::string_view s) {
     out.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
   }
   return out;
+}
+
+// Trims trailing ASCII whitespace from a raw simdjson token. raw_json_token()
+// returns the value's bytes up to (but not including) the next structural
+// character, which can leave trailing spaces or newlines for scalars.
+std::string_view trimTrailingWhitespace(std::string_view token) {
+  size_t size = token.size();
+  while (size > 0) {
+    char c = token[size - 1];
+    if (c != ' ' && c != '\t' && c != '\n' && c != '\r') {
+      break;
+    }
+    --size;
+  }
+  return token.substr(0, size);
 }
 
 // Casts a JSON-parsed double to int64, wrapping through uint64 for values
@@ -120,6 +135,198 @@ int64_t coerceToInt64(simdjson::ondemand::value& value) {
   VELOX_UNREACHABLE();
 }
 
+// Returns the boolean coercion of a JSON scalar.
+// Numbers coerce by nonzero (any nonzero, including negatives, is true).
+// Strings match the strict literal "true" (lowercase, exactly four bytes);
+// everything else — "True", "TRUE", "yes", "", "false" — is false. Throws on
+// container-shape mismatch. null is handled by the caller's is_null() check.
+bool coerceToBool(simdjson::ondemand::value& value) {
+  auto type = unwrap(value.type());
+  switch (type) {
+    case simdjson::ondemand::json_type::boolean:
+      return unwrap(value.get_bool());
+    case simdjson::ondemand::json_type::number: {
+      auto num = unwrap(value.get_number());
+      switch (num.get_number_type()) {
+        case simdjson::ondemand::number_type::signed_integer:
+          return num.get_int64() != 0;
+        case simdjson::ondemand::number_type::unsigned_integer:
+          return num.get_uint64() != 0;
+        case simdjson::ondemand::number_type::floating_point_number:
+          return num.get_double() != 0.0;
+        case simdjson::ondemand::number_type::big_integer:
+          // get_number() already returned NUMBER_OUT_OF_RANGE and threw.
+          VELOX_UNREACHABLE();
+      }
+      VELOX_UNREACHABLE();
+    }
+    case simdjson::ondemand::json_type::string: {
+      auto s = unwrap(value.get_string());
+      // Strict literal match — case-sensitive — per the probe: only the
+      // exact lowercase "true" is true. "True"/"TRUE" are false.
+      return s.size() == 4 && std::memcmp(s.data(), "true", 4) == 0;
+    }
+    case simdjson::ondemand::json_type::object:
+    case simdjson::ondemand::json_type::array:
+      VELOX_USER_FAIL(
+          "Container shape mismatch: boolean column received a JSON object or array.");
+    case simdjson::ondemand::json_type::null:
+      VELOX_UNREACHABLE();
+    case simdjson::ondemand::json_type::unknown:
+      VELOX_USER_FAIL("Unrecognized JSON value type.");
+  }
+  VELOX_UNREACHABLE();
+}
+
+// JSON-escapes str into out, emitting compact escapes for the mandatory
+// characters (quote, backslash, control bytes). Forward slash is left bare
+// because Jackson's compact serialization does not escape it — this is what
+// makes "http:\/\/x" re-serialize as http://x. The surrounding quotes are
+// the caller's responsibility.
+void appendEscapedJsonString(std::string_view str, std::string& out) {
+  for (char c : str) {
+    switch (c) {
+      case '"':
+        out += "\\\"";
+        break;
+      case '\\':
+        out += "\\\\";
+        break;
+      case '\b':
+        out += "\\b";
+        break;
+      case '\f':
+        out += "\\f";
+        break;
+      case '\n':
+        out += "\\n";
+        break;
+      case '\r':
+        out += "\\r";
+        break;
+      case '\t':
+        out += "\\t";
+        break;
+      default:
+        const auto byte = static_cast<unsigned int>(static_cast<unsigned char>(c));
+        if (byte < 0x20) {
+          constexpr char kHex[] = "0123456789abcdef";
+          out += "\\u00";
+          out += kHex[(byte >> 4U) & 0xFU];
+          out += kHex[byte & 0xFU];
+        } else {
+          out += c;
+        }
+    }
+  }
+}
+
+// Forward declaration: serializeJsonValue and serializeJsonObject/Array
+// recurse into one another.
+void serializeJsonValue(simdjson::ondemand::value& value, std::string& out);
+
+// Minifies a JSON object into out: whitespace stripped, escapes decoded then
+// re-encoded, input key order preserved (NOT canonicalized — distinct from
+// the JSON-typed-column rule). simdjson On-Demand
+// is forward-only, so each field is visited exactly once in document order.
+void serializeJsonObject(simdjson::ondemand::object& obj, std::string& out) {
+  out += '{';
+  bool first = true;
+  for (auto field : obj) {
+    if (!first) {
+      out += ',';
+    }
+    first = false;
+    out += '"';
+    appendEscapedJsonString(unwrap(field.unescaped_key()), out);
+    out += "\":";
+    auto value = unwrap(field.value());
+    serializeJsonValue(value, out);
+  }
+  out += '}';
+}
+
+// Minifies a JSON array into out, preserving element order.
+void serializeJsonArray(simdjson::ondemand::array& arr, std::string& out) {
+  out += '[';
+  bool first = true;
+  for (auto element : arr) {
+    if (!first) {
+      out += ',';
+    }
+    first = false;
+    auto value = unwrap(element);
+    serializeJsonValue(value, out);
+  }
+  out += ']';
+}
+
+void serializeJsonValue(simdjson::ondemand::value& value, std::string& out) {
+  auto type = unwrap(value.type());
+  switch (type) {
+    case simdjson::ondemand::json_type::object: {
+      auto obj = unwrap(value.get_object());
+      serializeJsonObject(obj, out);
+      return;
+    }
+    case simdjson::ondemand::json_type::array: {
+      auto arr = unwrap(value.get_array());
+      serializeJsonArray(arr, out);
+      return;
+    }
+    case simdjson::ondemand::json_type::string:
+      out += '"';
+      appendEscapedJsonString(unwrap(value.get_string()), out);
+      out += '"';
+      return;
+    case simdjson::ondemand::json_type::number:
+    case simdjson::ondemand::json_type::boolean:
+    case simdjson::ondemand::json_type::null:
+      // Scalars carry no whitespace within the token; emit the lexeme as-is
+      // (trailing whitespace before the next structural char is trimmed).
+      out += trimTrailingWhitespace(value.raw_json_token());
+      return;
+    case simdjson::ondemand::json_type::unknown:
+      VELOX_USER_FAIL("Unrecognized JSON value type.");
+  }
+  VELOX_UNREACHABLE();
+}
+
+// Returns the VARCHAR coercion of a JSON value.
+// Strings pass through with escapes decoded by the parser; booleans become
+// the lowercase literals; objects and arrays are re-serialized minified with
+// key order preserved; numbers use a best-effort lexeme. null is handled by
+// the caller's is_null() check.
+//
+// VARCHAR-from-number is a known v1 divergence: Presto/Jackson formats via
+// BigDecimal(input).stripTrailingZeros().toString(), which C++ has no
+// standard equivalent for. v1 emits the original lexeme, so the semantic
+// value is preserved but the exact textual form (trailing zeros, scientific
+// notation case/threshold) may differ. This is the documented
+// VARCHAR-from-number v1 divergence.
+std::string coerceToString(simdjson::ondemand::value& value) {
+  auto type = unwrap(value.type());
+  switch (type) {
+    case simdjson::ondemand::json_type::string:
+      return std::string{unwrap(value.get_string())};
+    case simdjson::ondemand::json_type::boolean:
+      return unwrap(value.get_bool()) ? "true" : "false";
+    case simdjson::ondemand::json_type::number:
+      return std::string{trimTrailingWhitespace(value.raw_json_token())};
+    case simdjson::ondemand::json_type::object:
+    case simdjson::ondemand::json_type::array: {
+      std::string out;
+      serializeJsonValue(value, out);
+      return out;
+    }
+    case simdjson::ondemand::json_type::null:
+      VELOX_UNREACHABLE();
+    case simdjson::ondemand::json_type::unknown:
+      VELOX_USER_FAIL("Unrecognized JSON value type.");
+  }
+  VELOX_UNREACHABLE();
+}
+
 double coerceToDouble(simdjson::ondemand::value& value) {
   auto type = unwrap(value.type());
   switch (type) {
@@ -181,6 +388,19 @@ void writeValue(
     case TypeKind::REAL: {
       column.asUnchecked<FlatVector<float>>()->set(
           rowIndex, static_cast<float>(coerceToDouble(value)));
+      return;
+    }
+    case TypeKind::BOOLEAN: {
+      column.asUnchecked<FlatVector<bool>>()->set(
+          rowIndex, coerceToBool(value));
+      return;
+    }
+    case TypeKind::VARCHAR: {
+      auto str = coerceToString(value);
+      // FlatVector::set() copies the StringView's data into the vector's
+      // owned string buffer, so the temporary str can safely go out of scope.
+      column.asUnchecked<FlatVector<StringView>>()->set(
+          rowIndex, StringView(str.data(), str.size()));
       return;
     }
     default:
