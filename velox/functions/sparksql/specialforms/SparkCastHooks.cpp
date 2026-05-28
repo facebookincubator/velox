@@ -203,4 +203,11 @@ exec::PolicyType SparkCastHooks::getPolicy() const {
   }
   return exec::PolicyType::SparkCastPolicy;
 }
+
+bool SparkCastHooks::isScientific() const {
+  // When casting decimal as string, Spark always use plain string when ANSI
+  // mode is enabled.
+  return !SparkQueryConfig{config_}.ansiEnabled();
+}
+
 } // namespace facebook::velox::functions::sparksql
