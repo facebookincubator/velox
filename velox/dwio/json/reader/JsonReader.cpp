@@ -21,8 +21,10 @@
 
 #include <folly/Conv.h>
 
+#include "velox/common/encode/Base64.h"
 #include "velox/dwio/common/exception/Exceptions.h"
 #include "velox/functions/prestosql/json/SIMDJsonWrapper.h"
+#include "velox/type/DecimalUtil.h"
 
 namespace facebook::velox::json {
 namespace {
@@ -351,6 +353,86 @@ double coerceToDouble(simdjson::ondemand::value& value) {
   VELOX_UNREACHABLE();
 }
 
+// Parses a JSON value into a decimal of the given precision and scale from
+// the original lexeme, NOT through double. Routing a high-precision number
+// through double silently rounds away digits a double cannot hold (a double
+// carries ~15-16 significant decimal digits); the raw lexeme preserves them.
+// Numbers use the raw token; strings use the decoded contents. Throws on a
+// container-shape mismatch or a lexeme the decimal parser rejects.
+template <typename T>
+T coerceToDecimal(
+    simdjson::ondemand::value& value,
+    uint8_t precision,
+    uint8_t scale) {
+  std::string_view lexeme;
+  // Backs lexeme when the source is a JSON string; must outlive the parse.
+  std::string decoded;
+  auto type = unwrap(value.type());
+  switch (type) {
+    case simdjson::ondemand::json_type::number:
+      lexeme = trimTrailingWhitespace(value.raw_json_token());
+      break;
+    case simdjson::ondemand::json_type::string:
+      decoded = std::string{unwrap(value.get_string())};
+      lexeme = decoded;
+      break;
+    case simdjson::ondemand::json_type::object:
+    case simdjson::ondemand::json_type::array:
+      VELOX_USER_FAIL(
+          "Container shape mismatch: decimal column received a JSON object or array.");
+    case simdjson::ondemand::json_type::boolean:
+      VELOX_USER_FAIL("Cannot coerce a JSON boolean to a decimal column.");
+    case simdjson::ondemand::json_type::null:
+      VELOX_UNREACHABLE();
+    case simdjson::ondemand::json_type::unknown:
+      VELOX_USER_FAIL("Unrecognized JSON value type.");
+  }
+
+  T out{0};
+  const auto status = DecimalUtil::castFromString<T>(
+      StringView(lexeme.data(), static_cast<int32_t>(lexeme.size())),
+      precision,
+      scale,
+      out);
+  if (!status.ok()) {
+    VELOX_USER_FAIL(
+        "Cannot parse decimal from JSON lexeme: {} ({})",
+        lexeme,
+        status.message());
+  }
+  return out;
+}
+
+// Base64-decodes a JSON string into raw bytes for a VARBINARY column. Presto
+// carries binary data base64-encoded in JSON text, so the reader decodes on
+// the way in. Throws on a non-string value or invalid base64.
+std::string coerceToVarbinary(simdjson::ondemand::value& value) {
+  auto type = unwrap(value.type());
+  if (type != simdjson::ondemand::json_type::string) {
+    VELOX_USER_FAIL("VARBINARY column requires a base64-encoded JSON string.");
+  }
+  auto encoded = unwrap(value.get_string());
+  // calculateDecodedSize adjusts inputSize for padding; the adjusted value
+  // must be the one passed to decode.
+  size_t inputSize = encoded.size();
+  auto decodedSize =
+      encoding::Base64::calculateDecodedSize(encoded.data(), inputSize);
+  if (decodedSize.hasError()) {
+    VELOX_USER_FAIL(
+        "Invalid base64 in VARBINARY column: {}",
+        decodedSize.error().message());
+  }
+  std::string out;
+  out.resize(decodedSize.value());
+  const auto status = encoding::Base64::decode(
+      encoded.data(), inputSize, out.data(), out.size());
+  if (!status.ok()) {
+    VELOX_USER_FAIL(
+        "Invalid base64 in VARBINARY column: {}", status.message());
+  }
+  return out;
+}
+
 // Writes one JSON value into a FlatVector cell. The caller has verified
 // that the JSON value is not `null` (it set the cell to NULL beforehand).
 void writeValue(
@@ -358,6 +440,25 @@ void writeValue(
     const TypePtr& type,
     BaseVector& column,
     vector_size_t rowIndex) {
+  // DECIMAL is read from the raw lexeme, not coerced through a numeric kind.
+  // It must be intercepted before the kind switch because a short decimal's
+  // TypeKind is BIGINT and a long decimal's is HUGEINT — the switch would
+  // otherwise misroute them. JSON-typed columns are not handled here: the
+  // Hive connector does not accept JSON column declarations today, so
+  // JSON-shaped data flows through VARCHAR. If
+  // a future Presto adds JSON columns to the Hive path, this dispatch reopens.
+  if (type->isDecimal()) {
+    const auto [precision, scale] = getDecimalPrecisionScale(*type);
+    if (type->isShortDecimal()) {
+      column.asUnchecked<FlatVector<int64_t>>()->set(
+          rowIndex, coerceToDecimal<int64_t>(value, precision, scale));
+    } else {
+      column.asUnchecked<FlatVector<int128_t>>()->set(
+          rowIndex, coerceToDecimal<int128_t>(value, precision, scale));
+    }
+    return;
+  }
+
   switch (type->kind()) {
     case TypeKind::BIGINT: {
       column.asUnchecked<FlatVector<int64_t>>()->set(
@@ -401,6 +502,14 @@ void writeValue(
       // owned string buffer, so the temporary str can safely go out of scope.
       column.asUnchecked<FlatVector<StringView>>()->set(
           rowIndex, StringView(str.data(), str.size()));
+      return;
+    }
+    case TypeKind::VARBINARY: {
+      auto bytes = coerceToVarbinary(value);
+      // FlatVector::set() copies the bytes into the vector's owned string
+      // buffer, so the temporary can safely go out of scope.
+      column.asUnchecked<FlatVector<StringView>>()->set(
+          rowIndex, StringView(bytes.data(), bytes.size()));
       return;
     }
     default:

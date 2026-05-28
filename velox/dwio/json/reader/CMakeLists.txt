@@ -17,6 +17,7 @@ velox_add_library(velox_dwio_json_reader JsonReader.cpp HEADERS JsonReader.h)
 velox_link_libraries(
   velox_dwio_json_reader
   velox_dwio_common
+  velox_encode
   velox_type
   velox_vector
   Folly::folly

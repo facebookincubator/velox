@@ -16,6 +16,7 @@
 
 #include <gtest/gtest.h>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/File.h"
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/json/RegisterJsonReader.h"
@@ -312,6 +313,47 @@ TEST_F(JsonReaderTest, varcharFromQuotedNullString) {
   EXPECT_FALSE(row->childAt(0)->isNullAt(0));
   EXPECT_EQ(
       row->childAt(0)->asFlatVector<StringView>()->valueAt(0), "null"_sv);
+}
+
+TEST_F(JsonReaderTest, decimalPreservesPrecisionViaLexeme) {
+  // 123456789.0123456789 has more significant digits than a double can hold
+  // exactly. Routing through double would round the trailing digits away;
+  // reading from the lexeme preserves them. DECIMAL(38, 10) scales by 10^10,
+  // so the exact unscaled value is 1234567890123456789.
+  auto row = read("{\"a\":123456789.0123456789}\n", ROW({{"a", DECIMAL(38, 10)}}));
+  ASSERT_EQ(row->size(), 1);
+  EXPECT_EQ(
+      row->childAt(0)->asFlatVector<int128_t>()->valueAt(0),
+      static_cast<int128_t>(1234567890123456789LL));
+}
+
+TEST_F(JsonReaderTest, decimalScaleAndPrecision) {
+  // A short decimal (precision <= 18) is stored as int64. "3.14" at scale 4
+  // scales to the unscaled value 31400. The string and number forms parse
+  // identically since both go through the lexeme.
+  auto row = read(
+      "{\"a\":3.14,\"b\":\"3.14\"}\n",
+      ROW({{"a", DECIMAL(10, 4)}, {"b", DECIMAL(10, 4)}}));
+  ASSERT_EQ(row->size(), 1);
+  EXPECT_EQ(row->childAt(0)->asFlatVector<int64_t>()->valueAt(0), 31400);
+  EXPECT_EQ(row->childAt(1)->asFlatVector<int64_t>()->valueAt(0), 31400);
+}
+
+TEST_F(JsonReaderTest, varbinaryFromBase64) {
+  // "SGVsbG8gV29ybGQ=" is the base64 encoding of "Hello World".
+  auto row =
+      read("{\"a\":\"SGVsbG8gV29ybGQ=\"}\n", ROW({{"a", VARBINARY()}}));
+  ASSERT_EQ(row->size(), 1);
+  EXPECT_EQ(
+      row->childAt(0)->asFlatVector<StringView>()->valueAt(0),
+      "Hello World"_sv);
+}
+
+TEST_F(JsonReaderTest, varbinaryInvalidBase64Throws) {
+  // '@' is outside the base64 alphabet, so decoding must fail.
+  VELOX_ASSERT_THROW(
+      read("{\"a\":\"@@@@\"}\n", ROW({{"a", VARBINARY()}})),
+      "Invalid base64 in VARBINARY column");
 }
 
 } // namespace
