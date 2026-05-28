@@ -15,12 +15,14 @@
  */
 #include "velox/connectors/hive/HiveIndexSource.h"
 
+
 #include <folly/ScopeGuard.h>
 #include <folly/container/F14Set.h>
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/common/time/Timer.h"
+#include "velox/connectors/hive/ConstantFromString.h"
 #include "velox/connectors/hive/FileDataSource.h"
 #include "velox/connectors/hive/FileIndexReader.h"
 #include "velox/connectors/hive/FileSplitReader.h"
