@@ -181,6 +181,10 @@ class ReadFileInputStream final : public InputStream {
     return readFile_;
   }
 
+  const FileIoContext& fileIoContext() const {
+    return fileIoContext_;
+  }
+
  private:
   FileIoContext fileIoContext_;
   std::shared_ptr<velox::ReadFile> readFile_;

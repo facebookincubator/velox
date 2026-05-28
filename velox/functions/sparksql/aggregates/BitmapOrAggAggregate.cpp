@@ -14,28 +14,22 @@
  * limitations under the License.
  */
 
-#include "velox/functions/sparksql/aggregates/BitmapConstructAggAggregate.h"
+#include "velox/functions/sparksql/aggregates/BitmapOrAggAggregate.h"
 
 #include <cstring>
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/expression/FunctionSignature.h"
+#include "velox/functions/sparksql/aggregates/BitmapConstructAggAggregate.h"
 
 namespace facebook::velox::functions::aggregate::sparksql {
 
 namespace {
 
-// Validates that a bitmap position is within [0, kBitmapNumBits).
-void validateBitmapPosition(int64_t position) {
-  VELOX_USER_CHECK_GE(position, 0, "Bitmap position out of bounds");
-  VELOX_USER_CHECK_LT(
-      position, kBitmapNumBits, "Bitmap position out of bounds");
-}
-
-class BitmapConstructAggAggregate {
+class BitmapOrAggAggregate {
  public:
-  using InputType = Row<int64_t>;
+  using InputType = Row<Varbinary>;
 
   using IntermediateType = Varbinary;
 
@@ -46,9 +40,7 @@ class BitmapConstructAggAggregate {
   static constexpr bool default_null_behavior_ = false;
 
   struct AccumulatorType {
-    // Pointer to the 4096-byte bitmap stored in external memory.
     uint8_t* data_{nullptr};
-    // Header for the HashStringAllocator-managed allocation.
     HashStringAllocator::Header* header_{nullptr};
 
     static constexpr bool is_fixed_size_ = false;
@@ -56,17 +48,27 @@ class BitmapConstructAggAggregate {
 
     explicit AccumulatorType(
         HashStringAllocator* /*allocator*/,
-        BitmapConstructAggAggregate* /*fn*/) {}
+        BitmapOrAggAggregate* /*fn*/) {}
 
     bool addInput(
         HashStringAllocator* allocator,
-        exec::optional_arg_type<int64_t> position) {
-      if (!position.has_value()) {
+        exec::optional_arg_type<Varbinary> input) {
+      if (!input.has_value()) {
         return false;
       }
-      validateBitmapPosition(position.value());
+      auto bitmap = input.value();
+      VELOX_USER_CHECK_EQ(
+          bitmap.size(),
+          kBitmapNumBytes,
+          "bitmap_or_agg expects exactly {} byte bitmaps, got {}",
+          kBitmapNumBytes,
+          bitmap.size());
       init(allocator);
-      bits::setBit(data_, static_cast<uint64_t>(position.value()));
+      bits::orBits(
+          reinterpret_cast<uint64_t*>(data_),
+          reinterpret_cast<const uint64_t*>(bitmap.data()),
+          0,
+          kBitmapNumBits);
       return true;
     }
 
@@ -90,8 +92,6 @@ class BitmapConstructAggAggregate {
       return true;
     }
 
-    // Always produce a non-null result (all-zeros bitmap for empty groups)
-    // to match Spark's bitmap_construct_agg semantics.
     bool writeIntermediateResult(
         bool /*nonNullGroup*/,
         exec::out_type<IntermediateType>& out) {
@@ -113,7 +113,7 @@ class BitmapConstructAggAggregate {
     }
 
    private:
-    bool writeResult(exec::out_type<Varbinary>& out) {
+    bool writeResult(exec::out_type<Varbinary>& out) const {
       out.resize(kBitmapNumBytes);
       if (data_) {
         std::memcpy(out.data(), data_, kBitmapNumBytes);
@@ -135,13 +135,13 @@ class BitmapConstructAggAggregate {
 
 } // namespace
 
-exec::AggregateRegistrationResult registerBitmapConstructAggAggregate(
+exec::AggregateRegistrationResult registerBitmapOrAggAggregate(
     const std::string& name,
     bool withCompanionFunctions,
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
       exec::AggregateFunctionSignatureBuilder()
-          .argumentType("bigint")
+          .argumentType("varbinary")
           .intermediateType("varbinary")
           .returnType("varbinary")
           .build()};
@@ -157,7 +157,7 @@ exec::AggregateRegistrationResult registerBitmapConstructAggAggregate(
         VELOX_CHECK_EQ(
             argTypes.size(), 1, "{} takes exactly one argument", name);
         return std::make_unique<
-            exec::SimpleAggregateAdapter<BitmapConstructAggAggregate>>(
+            exec::SimpleAggregateAdapter<BitmapOrAggAggregate>>(
             step, argTypes, resultType, &config);
       },
       withCompanionFunctions,

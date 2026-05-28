@@ -579,6 +579,8 @@ class ReaderOptions : public io::ReaderOptions {
       1024 * 1024; // 1MB
   static constexpr uint64_t kDefaultFilePreloadThreshold =
       1024 * 1024 * 8; // 8MB
+  static constexpr uint64_t kDefaultParquetFooterMemoryTrackingThreshold =
+      std::numeric_limits<uint64_t>::max(); // Disabled by default.
 
   explicit ReaderOptions(velox::memory::MemoryPool* pool)
       : io::ReaderOptions(pool) {}
@@ -627,6 +629,10 @@ class ReaderOptions : public io::ReaderOptions {
 
   ReaderOptions& setFooterSpeculativeIoSize(uint64_t size) {
     footerSpeculativeIoSize_ = size;
+    return *this;
+  }
+  ReaderOptions& setParquetFooterMemoryTrackingThreshold(uint64_t size) {
+    parquetFooterMemoryTrackingThreshold_ = size;
     return *this;
   }
 
@@ -689,6 +695,10 @@ class ReaderOptions : public io::ReaderOptions {
 
   uint64_t footerSpeculativeIoSize() const {
     return footerSpeculativeIoSize_;
+  }
+
+  uint64_t parquetFooterMemoryTrackingThreshold() const {
+    return parquetFooterMemoryTrackingThreshold_;
   }
 
   uint64_t filePreloadThreshold() const {
@@ -881,6 +891,8 @@ class ReaderOptions : public io::ReaderOptions {
   bool loadChunkIndex_{true};
   bool allowEmptyFile_{false};
   bool allowInt32Narrowing_{false};
+  uint64_t parquetFooterMemoryTrackingThreshold_{
+      kDefaultParquetFooterMemoryTrackingThreshold};
 };
 
 struct WriterOptions {
