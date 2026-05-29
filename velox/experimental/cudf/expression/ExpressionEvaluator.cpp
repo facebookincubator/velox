@@ -62,8 +62,6 @@
 #include <cudf/unary.hpp>
 #include <cudf/utilities/traits.hpp>
 
-#include <folly/String.h>
-
 #include <rmm/device_uvector.hpp>
 
 #include <cctype>
