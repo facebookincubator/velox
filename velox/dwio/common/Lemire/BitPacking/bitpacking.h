@@ -24,7 +24,7 @@
 #include <cinttypes>
 #include <string>
 
-namespace velox::fastpforlib {
+namespace facebook::velox::fastpforlib {
 namespace internal {
 
 // Unpacks 8 uint8_t values
@@ -291,4 +291,4 @@ void __fastpack62(const uint64_t* __restrict in, uint32_t* __restrict out);
 void __fastpack63(const uint64_t* __restrict in, uint32_t* __restrict out);
 void __fastpack64(const uint64_t* __restrict in, uint32_t* __restrict out);
 } // namespace internal
-} // namespace velox::fastpforlib
+} // namespace facebook::velox::fastpforlib

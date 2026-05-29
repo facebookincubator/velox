@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <type_traits>
 
-namespace velox::fastpforlib {
+namespace facebook::velox::fastpforlib {
 namespace internal {
 
 // Used for uint8_t, uint16_t and uint32_t
@@ -1317,4 +1317,4 @@ void __fastpack64(const uint64_t* __restrict in, uint32_t* __restrict out) {
   }
 }
 } // namespace internal
-} // namespace velox::fastpforlib
+} // namespace facebook::velox::fastpforlib
