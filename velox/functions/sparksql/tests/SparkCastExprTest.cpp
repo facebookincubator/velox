@@ -1592,5 +1592,27 @@ TEST_F(SparkCastExprTestAnsiOff, overflow) {
 TEST_F(SparkCastExprTestAnsiOff, recursiveTryCast) {
   testRecursiveTryCast();
 }
+
+// Verify that casting DATE to TIMESTAMP in a timezone where midnight falls in
+// a gap (nonexistent local time) does not throw. Spark adjusts to the
+// post-transition time instead.
+TEST_F(SparkCastExprTestAnsiOff, dateToTimestampTimezoneGap) {
+  // 1941-12-25 in Hong Kong: clocks jumped from HKWT (UTC+8) to JST (UTC+9),
+  // making midnight nonexistent. Spark adjusts to 00:30:00 JST, which is
+  // 1941-12-24 15:30:00 UTC.
+  setTimezone("Asia/Hong_Kong");
+  auto input = makeFlatVector<int32_t>({-10234}, DATE());
+  auto expected =
+      makeFlatVector<Timestamp>({Timestamp(-884248200, 0)}, TIMESTAMP());
+  testCast(input, expected);
+}
+
+TEST_F(SparkCastExprTestAnsiOn, dateToTimestampTimezoneGap) {
+  setTimezone("Asia/Hong_Kong");
+  auto input = makeFlatVector<int32_t>({-10234}, DATE());
+  auto expected =
+      makeFlatVector<Timestamp>({Timestamp(-884248200, 0)}, TIMESTAMP());
+  testCast(input, expected);
+}
 } // namespace
 } // namespace facebook::velox::test

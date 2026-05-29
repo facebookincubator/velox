@@ -93,6 +93,17 @@ VectorPtr CastExpr::castFromDate(
         auto timestamp = Timestamp::fromMillis(
             inputFlatVector->valueAt(row) * kMillisPerDay);
         if (timeZone) {
+          if (hooks_->getPolicy() == SparkCastPolicy ||
+              hooks_->getPolicy() == SparkTryCastPolicy) {
+            // Spark handles nonexistent local times (timezone gaps) by
+            // adjusting to the post-transition time instead of throwing.
+            timestamp = Timestamp(
+                timeZone
+                    ->correct_nonexistent_time(
+                        std::chrono::seconds(timestamp.getSeconds()))
+                    .count(),
+                timestamp.getNanos());
+          }
           timestamp.toGMT(*timeZone);
         }
         resultFlatVector->set(row, timestamp);
