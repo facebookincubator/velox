@@ -158,12 +158,10 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
     return kind_;
   }
 
-  /// Returns true if this queue has been initialized via initializeTask()
+  /// Returns true once task metadata has been published via initializeTask()
   /// (not just a placeholder created by early getData() calls).
-  /// Uses an acquire load so that all fields written before the release
-  /// store in initialize() (kind_, numDrivers_, task_, etc.) are visible
-  /// to the caller. This makes lock-free reads from canUseIntraNode()
-  /// safe across threads.
+  /// This is published before destination queue expansion completes so local
+  /// UCX handshakes do not permanently fall back to the remote path.
   bool isInitialized() const {
     return initialized_.load(std::memory_order_acquire);
   }
@@ -274,9 +272,9 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   core::PartitionedOutputNode::Kind kind_{
       core::PartitionedOutputNode::Kind::kPartitioned};
 
-  // Set to true at the end of initialize() with memory_order_release.
-  // Lock-free readers (canUseIntraNode) load with memory_order_acquire
-  // so that all fields written before the store are visible.
+  // Set to true once task metadata is available. Lock-free readers
+  // (canUseIntraNode) load with memory_order_acquire so kind_ and task_
+  // written before the store are visible.
   std::atomic<bool> initialized_{false};
 
   // For broadcast: stores data for late-arriving destinations that need
