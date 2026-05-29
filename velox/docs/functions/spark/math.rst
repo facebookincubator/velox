@@ -209,6 +209,10 @@ Mathematical Functions
     Returns true if x is Nan, or false otherwise. Returns false is x is NULL.
     Supported types are: REAL, DOUBLE.
 
+.. spark:function:: ln(x) -> double
+
+    Returns the natural logarithm of ``x``. Return null for zero and non-positive input.
+
 .. spark:function:: log(base, expr) -> double
 
     Returns the logarithm of ``expr`` with ``base``.
@@ -263,6 +267,10 @@ Mathematical Functions
 .. spark:function:: power(x, p) -> double
 
     Returns ``x`` raised to the power of ``p``.
+
+.. spark:function:: radians(x) -> double
+
+    Converts angle x in degrees to radians.
 
 .. spark:function:: rand() -> double
 
@@ -324,6 +332,10 @@ Mathematical Functions
     * 1.0 if the argument is +Infinity,
     * -1.0 if the argument is -Infinity.
 
+.. spark:function:: sin(x) -> double
+
+    Returns the sine of ``x``.
+
 .. spark:function:: sinh(x) -> double
 
     Returns hyperbolic sine of ``x``.
@@ -344,6 +356,14 @@ Mathematical Functions
         SELECT CAST(-999999999999999999999999999.999 as DECIMAL(30, 3)) - CAST(-999999999999999999999999999.999 as DECIMAL(30, 3)); -- DECIMAL(31, 3) 0.000
         SELECT CAST(99999999999999999999999999999999.99998 as DECIMAL(38, 6)) - CAST(-0.00001 as DECIMAL(38, 5)); -- DECIMAL(38, 6) 99999999999999999999999999999999.999990
         SELECT CAST(-99999999999999999999999999999999990.0 as DECIMAL(38, 3)) - CAST(0.00001 as DECIMAL(38, 7)); -- DECIMAL(38, 6) NULL
+
+.. spark:function:: tan(x) -> double
+
+    Returns the tangent of ``x``.
+
+.. spark:function:: tanh(x) -> double
+
+    Returns the hyperbolic tangent of ``x``.
 
 .. spark:function:: unaryminus(x) -> [same as x]
 
