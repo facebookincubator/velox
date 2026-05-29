@@ -33,6 +33,7 @@ on:
         required: false
         type: boolean
       cmake-targets:
+        description: >
           Space-separated cmake target list for the adapters job's selective
           build. Empty = full build, non-empty = selective
           (builds only the listed targets).
