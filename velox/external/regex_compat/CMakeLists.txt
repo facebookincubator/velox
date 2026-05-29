@@ -14,10 +14,10 @@
 
 # Only entered when VELOX_ENABLE_REGEX_COMPAT_TESTS=ON.
 
-velox_add_library(velox_regex_compat Re2Regex.cpp)
+velox_add_library(velox_regex_compat Re2Regex.cpp Pcre2Regex.cpp)
 
 velox_link_libraries(velox_regex_compat
-  PUBLIC re2::re2
+  PUBLIC re2::re2 pcre2-8::pcre2-8
   PRIVATE velox_functions_lib)
 
 if(${VELOX_BUILD_TESTING})

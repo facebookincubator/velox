@@ -2,7 +2,8 @@
 # (Apache-2.0)
 
 add_executable(velox_regex_compat_test
-  Re2RegexTest.cpp)
+  Re2RegexTest.cpp
+  Pcre2RegexTest.cpp)
 
 target_link_libraries(velox_regex_compat_test
   PRIVATE velox_regex_compat GTest::gtest GTest::gtest_main GTest::gmock)
