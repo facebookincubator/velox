@@ -142,6 +142,10 @@ option(VELOX_ENABLE_TPCDS_CONNECTOR "Build TPC-DS connector." ON)
 option(VELOX_ENABLE_PRESTO_FUNCTIONS "Build Presto SQL functions." ON)
 option(VELOX_ENABLE_SPARK_FUNCTIONS "Build Spark SQL functions." ON)
 option(VELOX_ENABLE_ICEBERG_FUNCTIONS "Build Iceberg functions." ON)
+option(
+  VELOX_ENABLE_REGEX_COMPAT_TESTS
+  "Build the PCRE2 vs RE2 Java-regex compatibility test suite (pulls in PCRE2 dep)."
+  OFF)
 option(VELOX_ENABLE_EXPRESSION "Build expression." ON)
 option(
   VELOX_ENABLE_EXAMPLES
@@ -625,6 +629,11 @@ endif()
 
 velox_set_source(re2)
 velox_resolve_dependency(re2)
+
+if(VELOX_ENABLE_REGEX_COMPAT_TESTS)
+  velox_set_source(pcre2)
+  velox_resolve_dependency(pcre2)
+endif()
 
 if(${VELOX_BUILD_PYTHON_PACKAGE})
   find_package(Python 3.9 COMPONENTS Interpreter Development.Module REQUIRED)
