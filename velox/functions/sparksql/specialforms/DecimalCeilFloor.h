@@ -53,6 +53,9 @@ class DecimalCeilFloorCallToSpecialFormBase
       const std::string& funcName);
 };
 
+/// Spark decimal_ceil special form: rounds a decimal value toward +∞ to the
+/// specified target scale. Scale is silently clamped to [-38, 38]. Overflow
+/// beyond the result precision returns NULL.
 class DecimalCeilCallToSpecialForm
     : public DecimalCeilFloorCallToSpecialFormBase {
  public:
@@ -65,6 +68,9 @@ class DecimalCeilCallToSpecialForm
   static constexpr const char* kCeilDecimal = "decimal_ceil";
 };
 
+/// Spark decimal_floor special form: rounds a decimal value toward -∞ to the
+/// specified target scale. Scale is silently clamped to [-38, 38]. Overflow
+/// beyond the result precision returns NULL.
 class DecimalFloorCallToSpecialForm
     : public DecimalCeilFloorCallToSpecialFormBase {
  public:

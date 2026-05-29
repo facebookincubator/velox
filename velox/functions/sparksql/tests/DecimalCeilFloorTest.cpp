@@ -171,6 +171,66 @@ TEST_F(DecimalCeilFloorTest, longDecimal) {
       Mode::kCeil,
       makeFlatVector<int64_t>(
           {1234567890123457LL, -1234567890123456LL, 0}, DECIMAL(18, 2)));
+
+  // Long-decimal floor path.
+  testCall(
+      makeFlatVector<int128_t>(
+          {1234567890123456789LL, -1234567890123456789LL, 0}, DECIMAL(20, 5)),
+      2,
+      Mode::kFloor,
+      makeFlatVector<int64_t>(
+          {1234567890123456LL, -1234567890123457LL, 0}, DECIMAL(18, 2)));
+}
+
+TEST_F(DecimalCeilFloorTest, longToLongDecimal) {
+  // Long-decimal input → long-decimal result (divide-only path, no multiply).
+  // DECIMAL(38, 2) with scale=1 → DECIMAL(38, 1).
+  const int128_t val = static_cast<int128_t>(99999999999999999LL) * 100 + 55;
+  testCall(
+      makeFlatVector<int128_t>({val, -val, 0}, DECIMAL(38, 2)),
+      1,
+      Mode::kCeil,
+      makeFlatVector<int128_t>(
+          {static_cast<int128_t>(99999999999999999LL) * 10 + 6,
+           -static_cast<int128_t>(99999999999999999LL) * 10 - 5,
+           0},
+          DECIMAL(38, 1)));
+
+  testCall(
+      makeFlatVector<int128_t>({val, -val, 0}, DECIMAL(38, 2)),
+      1,
+      Mode::kFloor,
+      makeFlatVector<int128_t>(
+          {static_cast<int128_t>(99999999999999999LL) * 10 + 5,
+           -static_cast<int128_t>(99999999999999999LL) * 10 - 6,
+           0},
+          DECIMAL(38, 1)));
+}
+
+TEST_F(DecimalCeilFloorTest, shortToLongDecimal) {
+  // Short-decimal input → long-decimal result.
+  // DECIMAL(18, 0) with scale=-1 → result precision 19 → long decimal.
+  testCall(
+      makeFlatVector<int64_t>(
+          {999999999999999999LL, -999999999999999999LL, 55LL}, DECIMAL(18, 0)),
+      -1,
+      Mode::kCeil,
+      makeFlatVector<int128_t>(
+          {static_cast<int128_t>(1000000000000000000LL),
+           static_cast<int128_t>(-999999999999999990LL),
+           static_cast<int128_t>(60)},
+          DECIMAL(19, 0)));
+
+  testCall(
+      makeFlatVector<int64_t>(
+          {999999999999999999LL, -999999999999999999LL, 55LL}, DECIMAL(18, 0)),
+      -1,
+      Mode::kFloor,
+      makeFlatVector<int128_t>(
+          {static_cast<int128_t>(999999999999999990LL),
+           static_cast<int128_t>(-1000000000000000000LL),
+           static_cast<int128_t>(50)},
+          DECIMAL(19, 0)));
 }
 
 TEST_F(DecimalCeilFloorTest, nullPropagation) {
@@ -194,6 +254,99 @@ TEST_F(DecimalCeilFloorTest, precisionOverflow) {
       Mode::kCeil,
       makeNullableFlatVector<int128_t>(
           {std::nullopt, std::nullopt, std::nullopt}, DECIMAL(38, 0)));
+
+  // floor with negative values should also overflow to NULL.
+  testCall(
+      makeFlatVector<int128_t>({-huge, -huge, -huge}, DECIMAL(38, 0)),
+      -1,
+      Mode::kFloor,
+      makeNullableFlatVector<int128_t>(
+          {std::nullopt, std::nullopt, std::nullopt}, DECIMAL(38, 0)));
+
+  // Mixed: some overflow, some don't.
+  testCall(
+      makeFlatVector<int128_t>({huge, 0, -huge}, DECIMAL(38, 0)),
+      -1,
+      Mode::kCeil,
+      makeNullableFlatVector<int128_t>(
+          {std::nullopt, static_cast<int128_t>(0), std::nullopt},
+          DECIMAL(38, 0)));
+}
+
+TEST_F(DecimalCeilFloorTest, scaleClampBoundaries) {
+  // scale = -100 → clamped to -38. For DECIMAL(5, 2) → result DECIMAL(38, 0).
+  // Any small value divided by 10^(2+38)=10^40 (capped to 10^38) yields
+  // quotient=0. Ceil of 0.01 should be 10^38 which overflows → NULL.
+  // But 0 stays 0.
+  testCall(
+      makeFlatVector<int64_t>({0}, DECIMAL(5, 2)),
+      -100,
+      Mode::kCeil,
+      makeFlatVector<int128_t>({0}, DECIMAL(38, 0)));
+
+  // scale = 100 → clamped to 38 → treated as >= input scale → identity.
+  testCall(
+      makeFlatVector<int64_t>({123, -456, 0}, DECIMAL(5, 2)),
+      100,
+      Mode::kCeil,
+      makeFlatVector<int64_t>({123, -456, 0}, DECIMAL(6, 2)));
+
+  testCall(
+      makeFlatVector<int64_t>({123, -456, 0}, DECIMAL(5, 2)),
+      100,
+      Mode::kFloor,
+      makeFlatVector<int64_t>({123, -456, 0}, DECIMAL(6, 2)));
+}
+
+TEST_F(DecimalCeilFloorTest, negativeScaleRemainderZero) {
+  // When remainder is 0, both ceil and floor return the same value.
+  // 100.0 (unscaled 1000, DECIMAL(4,1)) with scale=-1 → already divisible
+  // by 10, so both ceil and floor should be 100.
+  testCall(
+      makeFlatVector<int64_t>({1000, -1000, 0}, DECIMAL(4, 1)),
+      -1,
+      Mode::kCeil,
+      makeFlatVector<int64_t>({100, -100, 0}, DECIMAL(4, 0)));
+
+  testCall(
+      makeFlatVector<int64_t>({1000, -1000, 0}, DECIMAL(4, 1)),
+      -1,
+      Mode::kFloor,
+      makeFlatVector<int64_t>({100, -100, 0}, DECIMAL(4, 0)));
+}
+
+TEST_F(DecimalCeilFloorTest, scaleBoundaryMinus38) {
+  // DECIMAL(38, 0), scale=-38. Result DECIMAL(38, 0).
+  // Any value not exactly a multiple of 10^38 should:
+  //   ceil → 10^38 for positive (overflow → NULL), 0 for negative
+  //   floor → 0 for positive, -10^38 for negative (overflow → NULL)
+  testCall(
+      makeFlatVector<int128_t>({1, -1, 0}, DECIMAL(38, 0)),
+      -38,
+      Mode::kCeil,
+      makeNullableFlatVector<int128_t>(
+          {std::nullopt, static_cast<int128_t>(0), static_cast<int128_t>(0)},
+          DECIMAL(38, 0)));
+
+  testCall(
+      makeFlatVector<int128_t>({1, -1, 0}, DECIMAL(38, 0)),
+      -38,
+      Mode::kFloor,
+      makeNullableFlatVector<int128_t>(
+          {static_cast<int128_t>(0), std::nullopt, static_cast<int128_t>(0)},
+          DECIMAL(38, 0)));
+}
+
+TEST_F(DecimalCeilFloorTest, floorIdentityLongDecimal) {
+  // Identity path (scale >= inputScale) for long decimal floor.
+  constexpr int64_t kTenToNine = 1000000000LL;
+  const int128_t bigVal =
+      static_cast<int128_t>(kTenToNine) * kTenToNine * kTenToNine * 123;
+  testCall(
+      makeFlatVector<int128_t>({bigVal, -bigVal, 0}, DECIMAL(38, 38)),
+      38,
+      Mode::kFloor,
+      makeFlatVector<int128_t>({bigVal, -bigVal, 0}, DECIMAL(38, 38)));
 }
 
 } // namespace

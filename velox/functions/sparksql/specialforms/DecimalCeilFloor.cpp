@@ -36,10 +36,22 @@ class DecimalCeilFloorFunction : public exec::VectorFunction {
       uint8_t resultPrecision,
       uint8_t resultScale)
       : roundScale_{clampScale(roundScale)},
-        inputPrecision_{inputPrecision},
         inputScale_{inputScale},
-        resultPrecision_{resultPrecision},
-        resultScale_{resultScale} {
+        resultPrecision_{resultPrecision} {
+    // Validate that result type matches expected Spark semantics.
+    const auto [expectedP, expectedS] =
+        DecimalCeilFloorCallToSpecialFormBase::getResultPrecisionScale(
+            inputPrecision, inputScale, roundScale);
+    VELOX_USER_CHECK_EQ(
+        expectedP,
+        resultPrecision,
+        "The result precision of {} is inconsistent with Spark expected.",
+        ceiling ? "decimal_ceil" : "decimal_floor");
+    VELOX_USER_CHECK_EQ(
+        expectedS,
+        resultScale,
+        "The result scale of {} is inconsistent with Spark expected.",
+        ceiling ? "decimal_ceil" : "decimal_floor");
     // Precompute scaling factors for the three regimes:
     //   roundScale_ >= inputScale_  : no-op (resultScale == inputScale, the
     //                                  unscaled value is already correct).
@@ -64,6 +76,8 @@ class DecimalCeilFloorFunction : public exec::VectorFunction {
           divDigits, static_cast<int32_t>(LongDecimalType::kMaxPrecision));
       divideFactor_ = DecimalUtil::kPowersOfTen[cappedDivDigits];
       if (roundScale_ < 0) {
+        VELOX_DCHECK_LE(
+            -roundScale_, static_cast<int32_t>(LongDecimalType::kMaxPrecision));
         multiplyFactor_ = DecimalUtil::kPowersOfTen[-roundScale_];
       }
     }
@@ -80,7 +94,8 @@ class DecimalCeilFloorFunction : public exec::VectorFunction {
       VectorPtr& result) const override {
     VELOX_USER_CHECK(
         args[0]->isConstantEncoding() || args[0]->isFlatEncoding(),
-        "Decimal ceil/floor first arg must be flat or constant.");
+        "Decimal ceil/floor first arg must be flat or constant, got: {}.",
+        args[0]->encoding());
     context.ensureWritable(rows, resultType, result);
     result->clearNulls(rows);
     auto* flat = result->asUnchecked<FlatVector<TResult>>();
@@ -94,7 +109,7 @@ class DecimalCeilFloorFunction : public exec::VectorFunction {
       bool isNull;
       const TResult value = applyOne(constArg->valueAt(0), isNull);
       rows.applyToSelected([&](auto row) {
-        if (isNull) {
+        if (FOLLY_UNLIKELY(isNull)) {
           flat->setNull(row, true);
         } else {
           rawResults[row] = value;
@@ -104,19 +119,31 @@ class DecimalCeilFloorFunction : public exec::VectorFunction {
       auto* flatArg = args[0]->asUnchecked<FlatVector<TInput>>();
       const auto* rawValues = flatArg->rawValues();
       const uint64_t* nulls = flatArg->rawNulls();
-      rows.applyToSelected([&](auto row) {
-        if (nulls && bits::isBitNull(nulls, row)) {
-          flat->setNull(row, true);
-          return;
-        }
-        bool isNull;
-        const TResult value = applyOne(rawValues[row], isNull);
-        if (isNull) {
-          flat->setNull(row, true);
-        } else {
-          rawResults[row] = value;
-        }
-      });
+      if (nulls) {
+        rows.applyToSelected([&](auto row) {
+          if (bits::isBitNull(nulls, row)) {
+            flat->setNull(row, true);
+            return;
+          }
+          bool isNull;
+          const TResult value = applyOne(rawValues[row], isNull);
+          if (FOLLY_UNLIKELY(isNull)) {
+            flat->setNull(row, true);
+          } else {
+            rawResults[row] = value;
+          }
+        });
+      } else {
+        rows.applyToSelected([&](auto row) {
+          bool isNull;
+          const TResult value = applyOne(rawValues[row], isNull);
+          if (FOLLY_UNLIKELY(isNull)) {
+            flat->setNull(row, true);
+          } else {
+            rawResults[row] = value;
+          }
+        });
+      }
     }
   }
 
@@ -169,7 +196,7 @@ class DecimalCeilFloorFunction : public exec::VectorFunction {
       return true;
     }
     const int128_t maxAbs = overflowBound_ / factor;
-    if (value > maxAbs || value < -maxAbs) {
+    if (value >= maxAbs || value <= -maxAbs) {
       return false;
     }
     value *= factor;
@@ -178,6 +205,7 @@ class DecimalCeilFloorFunction : public exec::VectorFunction {
 
   static int32_t clampScale(int32_t s) {
     constexpr int32_t kMax = LongDecimalType::kMaxPrecision;
+    // Handles INT32_MIN safely: comparison fires before any negation.
     if (s > kMax) {
       return kMax;
     }
@@ -188,10 +216,8 @@ class DecimalCeilFloorFunction : public exec::VectorFunction {
   }
 
   const int32_t roundScale_;
-  const uint8_t inputPrecision_;
   const uint8_t inputScale_;
   const uint8_t resultPrecision_;
-  const uint8_t resultScale_;
   std::optional<int128_t> divideFactor_;
   std::optional<int128_t> multiplyFactor_;
   int128_t overflowBound_;
@@ -230,8 +256,9 @@ int32_t extractConstantInt32(const exec::ExprPtr& expr, const char* funcName) {
   VELOX_USER_CHECK_EQ(
       expr->type()->kind(),
       TypeKind::INTEGER,
-      "The second argument of {} must be INTEGER.",
-      funcName);
+      "The second argument of {} must be INTEGER, got: {}.",
+      funcName,
+      expr->type()->toString());
   auto constantExpr = std::dynamic_pointer_cast<exec::ConstantExpr>(expr);
   VELOX_USER_CHECK_NOT_NULL(
       constantExpr,
