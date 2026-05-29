@@ -78,6 +78,10 @@ class SparkCastHooks : public exec::CastHooks {
 
   exec::PolicyType getPolicy() const override;
 
+  void castDateTimestampToGMT(
+      Timestamp& timestamp,
+      const tz::TimeZone& timeZone) const override;
+
   bool isScientific() const override {
     return true;
   }
