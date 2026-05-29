@@ -29,6 +29,7 @@
 #ifdef VELOX_ENABLE_PARQUET
 #include "velox/dwio/parquet/RegisterParquetWriter.h"
 #include "velox/dwio/parquet/reader/ParquetReader.h"
+#include "velox/dwio/parquet/writer/Writer.h"
 #endif
 
 namespace facebook::velox::connector::hive::iceberg::test {
@@ -78,6 +79,16 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
   void setConnectorSessionProperty(
       const std::string& key,
       const std::string& value);
+
+  // Verify the total row count across all partitions.
+  void verifyTotalRowCount(
+      const RowTypePtr& rowType,
+      const std::string& outputPath,
+      int32_t expectedRowCount);
+
+  std::shared_ptr<TempDirectoryPath> writeBatchesWithTransforms(
+      const std::vector<RowVectorPtr>& batches,
+      const std::vector<test::PartitionField>& partitionFields);
 
   /// Recreates the connector query context with the given session timezone
   /// and timestamp-adjustment flag. Tests use this to exercise non-UTC

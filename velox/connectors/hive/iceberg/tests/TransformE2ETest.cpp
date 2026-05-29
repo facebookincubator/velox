@@ -86,25 +86,6 @@ class TransformE2ETest : public test::IcebergTestBase {
     return batches;
   }
 
-  std::shared_ptr<TempDirectoryPath> writeBatchesWithTransforms(
-      const std::vector<RowVectorPtr>& batches,
-      const std::vector<test::PartitionField>& partitionFields) {
-    VELOX_CHECK(!batches.empty(), "input cannot be empty");
-
-    int64_t expectedRowCount = 0;
-    for (const auto& batch : batches) {
-      expectedRowCount += batch->size();
-    }
-
-    auto rowType = batches.front()->rowType();
-    auto outputDirectory = TempDirectoryPath::create();
-    const auto dataSink = createDataSinkAndAppendData(
-        batches, outputDirectory->getPath(), partitionFields);
-    dataSink->close();
-    verifyTotalRowCount(rowType, outputDirectory->getPath(), expectedRowCount);
-    return outputDirectory;
-  }
-
   // Generate a key from a timestamp and transform type.
   // The key format depends on the transform type:
   // - kMonth: "YYYY-MM"
@@ -199,26 +180,6 @@ class TransformE2ETest : public test::IcebergTestBase {
           << " does not follow Iceberg naming convention";
     }
     return partitionDirs;
-  }
-
-  // Verify the total row count across all partitions.
-  void verifyTotalRowCount(
-      const RowTypePtr& rowType,
-      const std::string& outputPath,
-      int32_t expectedRowCount) {
-    auto splits = createSplitsForDirectory(outputPath);
-
-    const auto plan = PlanBuilder()
-                          .startTableScan()
-                          .connectorId(test::kIcebergConnectorId)
-                          .outputType(rowType)
-                          .endTableScan()
-                          .planNode();
-
-    const auto actualRowCount =
-        AssertQueryBuilder(plan).splits(splits).countResults();
-
-    ASSERT_EQ(actualRowCount, expectedRowCount);
   }
 
   // Verify data in a specific partition.

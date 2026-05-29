@@ -19,9 +19,11 @@
 #include <vector>
 
 namespace facebook::velox::parquet {
-/// Parquet field IDs during write operations. Each ID must be unique positive
-/// number, do not need to be sequential.
-/// Used to explicitly control field ID assignment in the Parquet schema.
+/// Parquet field IDs for explicit schema identity during reads and
+/// writes. Writer-provided field IDs must be unique positive numbers within
+/// their containing schema level and do not need to be sequential. Reader code
+/// may use negative sentinel IDs internally to represent requested fields that
+/// should not match any physical Parquet field.
 struct ParquetFieldId {
   int32_t fieldId;
   std::vector<ParquetFieldId> children;

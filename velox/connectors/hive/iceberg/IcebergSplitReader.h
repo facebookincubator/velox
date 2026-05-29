@@ -128,6 +128,13 @@ class IcebergSplitReader : public FileSplitReader {
   // projection naturally drops them from the operator output.
   void configureEqualityDeleteColumns();
 
+  // Configures base reader options for Iceberg data files. For Parquet files,
+  // enables field-id column mapping and passes Parquet field IDs in table
+  // schema order so renamed, reordered, deleted, and re-added Iceberg columns
+  // are matched by field ID instead of name or position. Non-Parquet formats
+  // keep the base FileSplitReader options unchanged.
+  void configureBaseReaderOptions() override;
+
   // Names of scan-spec children that 'configureEqualityDeleteColumns'
   // pre-installed a partition-value constant on for the current split.
   // Mirrors the Java 'PARTITION_KEY' column-type distinction in
