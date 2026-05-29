@@ -41,6 +41,7 @@ class TestPyVeloxRunner(unittest.TestCase):
         unregister_all()
 
     def test_empty(self):
+        # pyrefly: ignore [missing-argument]
         plan_builder = PlanBuilder().values()
         runner = LocalRunner(plan_builder.get_plan_node())
         total_size = 0
@@ -51,12 +52,14 @@ class TestPyVeloxRunner(unittest.TestCase):
 
     def test_not_executed(self):
         # Ensure it won't hang on destruction when it was not executed.
+        # pyrefly: ignore [missing-argument]
         plan_builder = PlanBuilder().values()
         LocalRunner(plan_builder.get_plan_node())
 
     def test_execute_twice(self):
         # Ensure a runner can be executed twice.
         vector = to_velox(
+            # pyrefly: ignore [bad-argument-type]
             pyarrow.record_batch([pyarrow.array(list(range(10)))], names=["c0"])
         )
 
@@ -80,6 +83,7 @@ class TestPyVeloxRunner(unittest.TestCase):
 
         for i in range(num_batches):
             array = pyarrow.array(list(range(i * batch_size, (i + 1) * batch_size)))
+            # pyrefly: ignore [bad-argument-type]
             batch = pyarrow.record_batch([array], names=["c0"])
             vectors.append(to_velox(batch))
 
@@ -98,10 +102,12 @@ class TestPyVeloxRunner(unittest.TestCase):
 
         for i in range(num_batches):
             array = pyarrow.array(list(range(i * batch_size, (i + 1) * batch_size)))
+            # pyrefly: ignore [bad-argument-type]
             batch = pyarrow.record_batch([array], names=["c0"])
             vectors.append(to_velox(batch))
 
         plan_builder = (
+            # pyrefly: ignore [missing-attribute]
             PlanBuilder().values(vectors).order_by(["c0 DESC"]).limit(5, offset=2)
         )
         runner = LocalRunner(plan_builder.get_plan_node())
@@ -111,6 +117,7 @@ class TestPyVeloxRunner(unittest.TestCase):
         self.assertRaises(StopIteration, next, iterator)
 
         expected_result = to_velox(
+            # pyrefly: ignore [bad-argument-type]
             pyarrow.record_batch([pyarrow.array([97, 96, 95, 94, 93])], names=["c0"])
         )
         self.assertEqual(output, expected_result)
@@ -118,6 +125,7 @@ class TestPyVeloxRunner(unittest.TestCase):
     def test_mark_sorted(self):
         # Sorted data: marker column should be all True.
         vector = to_velox(
+            # pyrefly: ignore [bad-argument-type]
             pyarrow.record_batch([pyarrow.array([1, 2, 3, 4, 5])], names=["c0"])
         )
 
@@ -143,6 +151,7 @@ class TestPyVeloxRunner(unittest.TestCase):
     def test_mark_sorted_unsorted(self):
         # Unsorted data: row at index 2 breaks sort order (3 -> 2).
         vector = to_velox(
+            # pyrefly: ignore [bad-argument-type]
             pyarrow.record_batch([pyarrow.array([1, 3, 2, 4, 5])], names=["c0"])
         )
 
@@ -172,9 +181,11 @@ class TestPyVeloxRunner(unittest.TestCase):
         random.shuffle(build)
 
         probe_vector = to_velox(
+            # pyrefly: ignore [bad-argument-type]
             pyarrow.record_batch([pyarrow.array(probe)], names=["c0"])
         )
         build_vector = to_velox(
+            # pyrefly: ignore [bad-argument-type]
             pyarrow.record_batch([pyarrow.array(build)], names=["c1"])
         )
 
@@ -187,6 +198,7 @@ class TestPyVeloxRunner(unittest.TestCase):
             ),
             output=["c0"],
         )
+        # pyrefly: ignore [missing-argument]
         plan_builder.aggregate(aggregations=["sum(c0)"])
 
         runner = LocalRunner(plan_builder.get_plan_node())
@@ -202,9 +214,11 @@ class TestPyVeloxRunner(unittest.TestCase):
     def test_merge_join(self):
         batch_size = 10
         array = pyarrow.array([42] * batch_size)
+        # pyrefly: ignore [bad-argument-type]
         batch = to_velox(pyarrow.record_batch([array], names=["c0"]))
 
         plan_builder = PlanBuilder()
+        # pyrefly: ignore [missing-attribute]
         plan_builder.values([batch]).merge_join(
             left_keys=["c0"],
             right_keys=["c0"],
@@ -222,9 +236,11 @@ class TestPyVeloxRunner(unittest.TestCase):
 
     def test_merge_sort(self):
         array = pyarrow.array([0, 1, 2, 3, 4])
+        # pyrefly: ignore [bad-argument-type]
         batch = to_velox(pyarrow.record_batch([array], names=["c0"]))
 
         plan_builder = PlanBuilder()
+        # pyrefly: ignore [missing-attribute]
         plan_builder.sorted_merge(
             keys=["c0"],
             sources=(
@@ -242,6 +258,7 @@ class TestPyVeloxRunner(unittest.TestCase):
         expected = to_velox(
             pyarrow.record_batch(
                 [pyarrow.array([0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4])],
+                # pyrefly: ignore [bad-argument-type]
                 names=["c0"],
             )
         )
@@ -252,6 +269,7 @@ class TestPyVeloxRunner(unittest.TestCase):
         base = list(range(batch_size))
 
         input_vector = to_velox(
+            # pyrefly: ignore [bad-argument-type]
             pyarrow.record_batch([pyarrow.array([base])], names=["c0"])
         )
         # Single row containing an array column with `batch_size` elements.
@@ -299,11 +317,13 @@ class TestPyVeloxRunner(unittest.TestCase):
     def test_write_read_file(self):
         # Test writing a batch of data to a dwrf file on disk, then
         # reading it back.
+        # pyrefly: ignore [missing-argument]
         register_hive()
 
         # Generate input data.
         batch_size = 10
         array = pyarrow.array([42] * batch_size)
+        # pyrefly: ignore [bad-argument-type]
         input_batch = to_velox(pyarrow.record_batch([array], names=["c0"]))
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -376,6 +396,7 @@ class TestPyVeloxRunner(unittest.TestCase):
             plan_builder.tpch_gen(
                 table_name="lineitem",
                 connector_id="tpch",
+                # pyrefly: ignore [bad-argument-type]
                 scale_factor=0.001,
                 num_parts=num_output_files,
                 columns=["l_orderkey", "l_partkey", "l_quantity", "l_comment"],
