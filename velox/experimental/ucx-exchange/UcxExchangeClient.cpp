@@ -103,11 +103,9 @@ UcxExchangeClient::next(int consumerId, bool* atEnd, ContinueFuture* future) {
       return data;
     }
 
-    // TODO: Review this primitive form of flow control.
-    // Maybe need to inspect the #bytes rather than the #tables?
     // Don't request more data when queue size exceeds the configured limit.
     // NOTE: This check is currently a no-op because the UCX exchange is
-    // push-based — there is no mechanism to "request" or "not request" more
+    // push-based: there is no mechanism to "request" or "not request" more
     // data. The server pushes unconditionally. Real backpressure is
     // implemented in UcxExchangeSource::process() (ReadyToReceive state).
     if (data != nullptr && queue_->size() > maxQueuedColumns_) {
@@ -138,13 +136,19 @@ UcxExchangeClient::next(int consumerId, bool* atEnd, ContinueFuture* future) {
       }
     }
 
-    // Collect sources that need resuming while holding the lock.
+    // Collect sources that need resuming while holding the lock. Sources sleep
+    // when the receive queue reaches its adaptive byte prefetch budget. Wake
+    // them once the table queue is below low-water and the byte budget has room
+    // for another receive.
     // We call resumeFromBackpressure() outside the lock to avoid a
     // lock-ordering hazard: it acquires WorkQueue::mutex_ via
     // addToWorkQueue(), and holding queue_->mutex_ here would impose
-    // queue_->mutex_ → WorkQueue::mutex_ ordering.
-    if (data != nullptr &&
-        queue_->size() <= UcxExchangeSource::kBackpressureLowWaterMark) {
+    // queue_->mutex_ -> WorkQueue::mutex_ ordering.
+    const bool queueBelowTableLowWater =
+        queue_->size() <= UcxExchangeSource::backpressureLowWaterMark();
+    const bool shouldResume =
+        queueBelowTableLowWater && queue_->receiveCanPrefetchLocked();
+    if (shouldResume) {
       sourcesToResume.assign(sources_.begin(), sources_.end());
     }
   }
@@ -157,6 +161,24 @@ UcxExchangeClient::next(int consumerId, bool* atEnd, ContinueFuture* future) {
     stalePromise.setValue();
   }
   return data;
+}
+
+void UcxExchangeClient::releaseInFlightReceiveBytes(uint64_t bytes) {
+  std::vector<std::shared_ptr<UcxExchangeSource>> sourcesToResume;
+  {
+    std::lock_guard<std::mutex> l(queue_->mutex());
+    queue_->releaseInFlightReceiveBytesLocked(bytes);
+    const bool queueCanPrefetch =
+        queue_->receiveCanPrefetchLocked() &&
+        queue_->size() <= UcxExchangeSource::backpressureLowWaterMark();
+    if (!closed_ && queueCanPrefetch) {
+      sourcesToResume.assign(sources_.begin(), sources_.end());
+    }
+  }
+
+  for (auto& source : sourcesToResume) {
+    source->resumeFromBackpressure();
+  }
 }
 
 UcxExchangeClient::~UcxExchangeClient() {

@@ -34,12 +34,15 @@ class UcxExchangeClient
       std::string taskId,
       int destination,
       int32_t numberOfConsumers,
+      uint64_t receiveHighWaterBytes = 0,
       int32_t requestDataSizesMaxWaitSec = 10)
       : taskId_{std::move(taskId)},
         destination_(destination),
         maxQueuedColumns_(kDefaultMaxQueuedColumns),
         kRequestDataSizesMaxWaitSec_(requestDataSizesMaxWaitSec),
-        queue_(std::make_shared<UcxExchangeQueue>(numberOfConsumers)) {
+        queue_(std::make_shared<UcxExchangeQueue>(
+            numberOfConsumers,
+            receiveHighWaterBytes)) {
     VELOX_CHECK_GE(
         destination, 0, "Exchange client destination must not be negative");
   }
@@ -74,6 +77,12 @@ class UcxExchangeClient
   ///
   PackedTableWithStreamPtr
   next(int consumerId, bool* atEnd, ContinueFuture* future);
+
+  void releaseInFlightReceiveBytes(uint64_t bytes);
+
+  bool tracksInFlightReceiveBytes() const {
+    return queue_->tracksInFlightReceiveBytes();
+  }
 
   std::string toString() const;
 

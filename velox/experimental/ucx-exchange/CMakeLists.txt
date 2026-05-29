@@ -22,6 +22,7 @@ set(
   UcxExchangeServer.cpp
   UcxExchangeQueue.cpp
   UcxExchangeClient.cpp
+  UcxCudfDriverAdapter.cpp
   Communicator.cpp
   Acceptor.cpp
   EndpointRef.cpp
