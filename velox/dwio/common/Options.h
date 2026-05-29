@@ -579,6 +579,8 @@ class ReaderOptions : public io::ReaderOptions {
       1024 * 1024; // 1MB
   static constexpr uint64_t kDefaultFilePreloadThreshold =
       1024 * 1024 * 8; // 8MB
+  static constexpr uint64_t kDefaultParquetFooterMemoryTrackingThreshold =
+      std::numeric_limits<uint64_t>::max(); // Disabled by default.
 
   explicit ReaderOptions(velox::memory::MemoryPool* pool)
       : io::ReaderOptions(pool) {}
@@ -627,6 +629,10 @@ class ReaderOptions : public io::ReaderOptions {
 
   ReaderOptions& setFooterSpeculativeIoSize(uint64_t size) {
     footerSpeculativeIoSize_ = size;
+    return *this;
+  }
+  ReaderOptions& setParquetFooterMemoryTrackingThreshold(uint64_t size) {
+    parquetFooterMemoryTrackingThreshold_ = size;
     return *this;
   }
 
@@ -689,6 +695,10 @@ class ReaderOptions : public io::ReaderOptions {
 
   uint64_t footerSpeculativeIoSize() const {
     return footerSpeculativeIoSize_;
+  }
+
+  uint64_t parquetFooterMemoryTrackingThreshold() const {
+    return parquetFooterMemoryTrackingThreshold_;
   }
 
   uint64_t filePreloadThreshold() const {
@@ -789,6 +799,16 @@ class ReaderOptions : public io::ReaderOptions {
     pinIndex_ = value;
   }
 
+  /// If true, caches data column reads in the async data cache. Default false
+  /// keeps the cache scoped to metadata/index only.
+  bool cacheData() const {
+    return cacheData_;
+  }
+
+  void setCacheData(bool value) {
+    cacheData_ = value;
+  }
+
   /// Whether to load and initialize the cluster index during file open.
   /// When true, the cluster index section is preloaded and the structured
   /// ClusterIndex object is created. Default false.
@@ -798,6 +818,18 @@ class ReaderOptions : public io::ReaderOptions {
 
   void setLoadClusterIndex(bool value) {
     loadClusterIndex_ = value;
+  }
+
+  /// Whether to eagerly preload all per-partition metadata and decode all
+  /// per-partition key streams during file open. Only effective when
+  /// loadClusterIndex() is also true. Implies pinning so preloaded chunks
+  /// are not evicted on first lookup. Default false.
+  bool preloadIndex() const {
+    return preloadIndex_;
+  }
+
+  void setPreloadIndex(bool value) {
+    preloadIndex_ = value;
   }
 
   /// Whether to load and initialize the chunk index during file open.
@@ -853,10 +885,14 @@ class ReaderOptions : public io::ReaderOptions {
   bool pinMetadata_{false};
   bool cacheIndex_{false};
   bool pinIndex_{false};
+  bool cacheData_{true};
   bool loadClusterIndex_{false};
+  bool preloadIndex_{false};
   bool loadChunkIndex_{true};
   bool allowEmptyFile_{false};
   bool allowInt32Narrowing_{false};
+  uint64_t parquetFooterMemoryTrackingThreshold_{
+      kDefaultParquetFooterMemoryTrackingThreshold};
 };
 
 struct WriterOptions {

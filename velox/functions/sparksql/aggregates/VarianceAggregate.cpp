@@ -17,8 +17,11 @@
 
 #include <limits>
 #include "velox/functions/lib/aggregates/VarianceAggregatesBase.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 
 namespace facebook::velox::functions::aggregate::sparksql {
+
+using functions::sparksql::SparkQueryConfig;
 
 namespace {
 
@@ -101,7 +104,7 @@ exec::AggregateRegistrationResult registerVariance(
               "Unsupported input type: {}. "
               "Expected DOUBLE.",
               inputType->toString());
-          if (config.sparkLegacyStatisticalAggregate()) {
+          if (SparkQueryConfig{config}.legacyStatisticalAggregate()) {
             return std::make_unique<
                 VarianceAggregate<double, TResultAccessor<false>>>(resultType);
           }
@@ -112,7 +115,7 @@ exec::AggregateRegistrationResult registerVariance(
             inputType,
             "Input type for final aggregation must be "
             "(count:bigint, mean:double, m2:double) struct");
-        if (config.sparkLegacyStatisticalAggregate()) {
+        if (SparkQueryConfig{config}.legacyStatisticalAggregate()) {
           return std::make_unique<
               VarianceAggregate<double, TResultAccessor<false>>>(resultType);
         }

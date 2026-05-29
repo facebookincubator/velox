@@ -53,7 +53,8 @@ class DateTimeFunctionsTest : public SparkFunctionBaseTest {
 
   void enableLegacyFormatter() {
     queryCtx_->testingOverrideConfigUnsafe({
-        {core::QueryConfig::kSparkLegacyDateFormatter, "true"},
+        {SparkQueryConfig::qualify(SparkQueryConfig::kLegacyDateFormatter),
+         "true"},
     });
   }
 

@@ -74,6 +74,7 @@ add_executable(
   SparkCastExprTest.cpp
   XORShiftRandomTest.cpp
   SparkPartitionIdTest.cpp
+  SparkQueryConfigTest.cpp
   SplitTest.cpp
   StringTest.cpp
   StringToMapTest.cpp
