@@ -18,8 +18,12 @@
 
 #include <limits>
 #include "velox/functions/lib/aggregates/CentralMomentsAggregatesBase.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 
 namespace facebook::velox::functions::aggregate::sparksql {
+
+using functions::sparksql::SparkQueryConfig;
+
 namespace {
 
 // Calculate the skewness value from m2, count and m3.
@@ -104,7 +108,7 @@ exec::AggregateRegistrationResult registerCentralMoments(
               "Unsupported input type: {}. "
               "Expected DOUBLE.",
               inputType->toString());
-          if (config.sparkLegacyStatisticalAggregate()) {
+          if (SparkQueryConfig{config}.legacyStatisticalAggregate()) {
             return std::make_unique<
                 CentralMomentsAggregatesBase<double, TResultAccessor<false>>>(
                 resultType);
@@ -117,7 +121,7 @@ exec::AggregateRegistrationResult registerCentralMoments(
             inputType,
             "Input type for final aggregation must be "
             "(count:bigint, m1:double, m2:double, m3:double, m4:double) struct");
-        if (config.sparkLegacyStatisticalAggregate()) {
+        if (SparkQueryConfig{config}.legacyStatisticalAggregate()) {
           return std::make_unique<CentralMomentsAggregatesBase<
               int64_t /*unused*/,
               TResultAccessor<false>>>(resultType);

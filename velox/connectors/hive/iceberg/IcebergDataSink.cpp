@@ -76,6 +76,7 @@ template <>
 folly::dynamic extractPartitionValue<TypeKind::TIMESTAMP>(
     const VectorPtr& child,
     vector_size_t row) {
+  VELOX_DCHECK(child->type()->equivalent(*TIMESTAMP()));
   return child->asChecked<SimpleVector<Timestamp>>()->valueAt(row).toMicros();
 }
 

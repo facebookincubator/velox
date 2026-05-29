@@ -77,6 +77,8 @@ void configureReaderOptions(
       useColumnNamesForColumnMapping);
   readerOptions.setFileSchema(fileSchema);
   readerOptions.setFilePreloadThreshold(fileConfig->filePreloadThreshold());
+  readerOptions.setParquetFooterMemoryTrackingThreshold(
+      fileConfig->parquetFooterMemoryTrackingThreshold(sessionProperties));
   readerOptions.setPrefetchRowGroups(fileConfig->prefetchRowGroups());
   readerOptions.setCacheable(fileSplit->cacheable);
   const auto& sessionTzName = connectorQueryCtx->sessionTimezone();
@@ -205,6 +207,7 @@ bool applyPartitionFilter(
       return applyFilter(*filter, folly::to<bool>(partitionValue));
     }
     case TypeKind::TIMESTAMP: {
+      VELOX_DCHECK(type->equivalent(*TIMESTAMP()));
       auto result = util::fromTimestampString(
           StringView(partitionValue), util::TimestampParseMode::kPrestoCast);
       VELOX_CHECK(!result.hasError());
