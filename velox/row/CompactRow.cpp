@@ -230,6 +230,7 @@ void CompactRow::initialize(const TypePtr& type) {
     }
     case TypeKind::ROW: {
       auto* rowBase = base->as<RowVector>();
+      children_.reserve(children_.size() + rowBase->children().size());
       for (const auto& child : rowBase->children()) {
         children_.push_back(CompactRow(child));
         childIsFixedWidth_.push_back(child->type()->isFixedWidth());
