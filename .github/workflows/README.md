@@ -116,7 +116,7 @@ The plan uploads a `selective-build-comment` artifact containing the comment mar
 Two events escalate an in-flight selective build to a full build, even for fork PRs:
 
 - **An approving review** — typically the final gate before merging.
-- **Anyone posting `/full-build` as a PR comment** — for forcing full coverage *before* approving, or when the path-based heuristics underestimate impact. No author restriction; this controls CI spend, not access.
+- **Anyone posting `/full-build` as a PR comment** — for forcing full coverage *before* approving, or when the path-based heuristics underestimate impact. Restricted to repo contributors (`OWNER`, `MEMBER`, `COLLABORATOR`, or `CONTRIBUTOR`).
 
 Both signals are sticky: every subsequent push on the PR also runs in full mode while the approval stands or the `/full-build` comment exists. Deleting the comment or having the approval dismissed is a no-op for the in-flight build — symmetric in both directions.
 

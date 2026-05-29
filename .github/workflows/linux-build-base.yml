@@ -33,10 +33,9 @@ on:
         required: false
         type: boolean
       cmake-targets:
-        description: >
-          Space-separated cmake target list for ubuntu-debug's selective
-          build. Empty = full build (MONO_LIBRARY=ON), non-empty = selective
-          (MONO_LIBRARY=OFF).
+          Space-separated cmake target list for the adapters job's selective
+          build. Empty = full build, non-empty = selective
+          (builds only the listed targets).
         default: ''
         required: false
         type: string
