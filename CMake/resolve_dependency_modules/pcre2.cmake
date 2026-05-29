@@ -16,14 +16,14 @@ include_guard(GLOBAL)
 if(DEFINED ENV{VELOX_PCRE2_URL})
   set(VELOX_PCRE2_SOURCE_URL "$ENV{VELOX_PCRE2_URL}")
 else()
-  set(VELOX_PCRE2_VERSION 10.45)
+  set(VELOX_PCRE2_VERSION 10.47)
   set(
     VELOX_PCRE2_SOURCE_URL
     "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-${VELOX_PCRE2_VERSION}/pcre2-${VELOX_PCRE2_VERSION}.tar.gz"
   )
   set(
     VELOX_PCRE2_BUILD_SHA256_CHECKSUM
-    0e138387df7835d7403b8351e2226c1377da804e0737db0e071b48f07c9d12ee
+    c08ae2388ef333e8403e670ad70c0a11f1eed021fd88308d7e02f596fcd9dc16
   )
 endif()
 
