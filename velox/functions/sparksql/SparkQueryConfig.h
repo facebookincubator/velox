@@ -162,6 +162,20 @@ class SparkQueryConfig {
       true,
       "If true, Spark collect_list() ignores nulls in the input.")
 
+  /// If true (default), keep the legacy (pre SPARK-49968, i.e. Spark < 4.1)
+  /// behavior for split() with an empty delimiter: the result only contains
+  /// the first `limit` characters and the trailing substring is discarded,
+  /// e.g. split('ab', '', 1) -> ["a"]. If false, the fixed behavior is used:
+  /// the last element contains all remaining input, e.g.
+  /// split('ab', '', 1) -> ["ab"].
+  VELOX_SPARK_CONFIG(
+      kLegacySplitEmptyPattern,
+      legacySplitEmptyPattern,
+      "legacy_split_empty_pattern",
+      bool,
+      true,
+      "Use pre-SPARK-49968 behavior for split() with an empty delimiter.")
+
   /// Returns all registered Spark config properties. Property names are
   /// unqualified (no "spark." prefix).
   static const std::vector<config::ConfigProperty>& registeredProperties();

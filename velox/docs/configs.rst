@@ -1328,6 +1328,16 @@ Spark-specific Configuration
      - bool
      - true
      - If true, Spark ``collect_list`` aggregate function ignores nulls in the input.
+   * - spark.legacy_split_empty_pattern
+     - bool
+     - true
+     - If true (default), ``split`` with an empty delimiter keeps the pre SPARK-49968 (Spark < 4.1)
+       behavior: when ``limit`` is positive and smaller than the string's character count, the
+       result only contains the first ``limit`` single-character elements and the trailing
+       substring is discarded, e.g. ``split('ab', '', 1)`` returns ``["a"]``.
+       If false, the behavior aligns with SPARK-49968 (Spark 4.1+): the last element
+       contains all remaining input that exceeds ``limit``, e.g. ``split('ab', '', 1)`` returns
+       ``["ab"]``.
 
 Tracing
 --------

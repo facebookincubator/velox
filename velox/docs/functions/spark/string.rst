@@ -394,19 +394,38 @@ String Functions
     which controls the number of times the regex is applied. By default, ``limit`` is -1. When ``limit`` > 0,
     the resulting array's length will not be more than ``limit``, and the resulting array's last entry will
     contain all input beyond the last matched regex. When ``limit`` <= 0, ``regex`` will be applied as many
-    times as possible, and the resulting array can be of any size. When ``delimiter`` is empty, if ``limit``
-    is smaller than the size of ``string``, the resulting array only contains ``limit`` number of single characters
-    splitting from ``string``, if ``limit`` is not provided or is larger than the size of ``string``, the resulting
-    array contains all the single characters of ``string`` and does not include an empty tail character.
-    The split function align with vanilla spark 3.4+ split function. ::
+    times as possible, and the resulting array can be of any size.
+    The split function align with vanilla spark 3.4+ split function.
+
+    **Empty Delimiter Behavior** (controlled by ``spark.legacy_split_empty_pattern``):
+
+    When ``spark.legacy_split_empty_pattern=true`` (default, aligned with the legacy behavior
+    pre-SPARK-49968 / Spark < 4.1), when ``limit`` is positive and smaller than the string's
+    character count, the result only contains the first ``limit`` single-character elements
+    and the trailing substring is discarded. ::
+
+        -- With spark.legacy_split_empty_pattern=true (default):
+        SELECT split('abcd', ''); -- ["a","b","c","d"]
+        SELECT split('abcd', '', 3); -- ["a","b","c"]
+        SELECT split('abcd', '', 5); -- ["a","b","c","d"]
+        SELECT split('ab', '', 1); -- ["a"]
+
+    When ``spark.legacy_split_empty_pattern=false``, the fixed behavior introduced by SPARK-49968
+    (Spark 4.1+) is used: the last element contains all remaining input when ``limit`` is
+    reached. ::
+
+        -- With spark.legacy_split_empty_pattern=false:
+        SELECT split('abcd', ''); -- ["a","b","c","d"]
+        SELECT split('abcd', '', 3); -- ["a","b","cd"]
+        SELECT split('abcd', '', 5); -- ["a","b","c","d"]
+        SELECT split('ab', '', 1); -- ["ab"]
+
+    Examples with non-empty delimiters (not affected by the configuration above): ::
 
         SELECT split('oneAtwoBthreeC', '[ABC]'); -- ["one","two","three",""]
         SELECT split('oneAtwoBthreeC', '[ABC]', 2); -- ["one","twoBthreeC"]
         SELECT split('oneAtwoBthreeC', '[ABC]', 5); -- ["one","two","three",""]
         SELECT split('one', '1'); -- ["one"]
-        SELECT split('abcd', ''); -- ["a","b","c","d"]
-        SELECT split('abcd', '', 3); -- ["a","b","c"]
-        SELECT split('abcd', '', 5); -- ["a","b","c","d"]
 
 .. spark:function:: startswith(left, right) -> boolean
 
