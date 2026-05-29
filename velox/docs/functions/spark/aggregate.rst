@@ -22,6 +22,22 @@ General Aggregate Functions
 
     Returns the bitwise XOR of all non-null input values, or null if none.
 
+.. spark:function:: bitmap_construct_agg(position) -> varbinary
+
+    Builds a fixed-size 4096-byte (32768-bit) bitmap by setting bits at the
+    specified positions. Input positions must be BIGINT values in [0, 32767].
+    Null inputs are ignored. Returns an all-zeros bitmap for empty or all-null
+    input (this is a non-nullable aggregate).
+
+.. spark:function:: bitmap_or_agg(bitmap) -> varbinary
+
+    Merges multiple VARBINARY bitmaps into a single bitmap using bitwise OR.
+    This is the companion to ``bitmap_construct_agg``: while that function builds
+    per-bucket bitmaps from bit positions, ``bitmap_or_agg`` merges those bitmaps
+    during the final count-distinct rollup. Null inputs are ignored. Returns an
+    all-zeros 4096-byte bitmap for empty or all-null input (this is a non-nullable
+    aggregate). Input bitmaps must be exactly 4096 bytes.
+
 .. spark:function:: bloom_filter_agg(hash, estimatedNumItems, numBits) -> varbinary
 
     Creates bloom filter from input hashes and returns it serialized into VARBINARY.

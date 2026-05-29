@@ -1069,6 +1069,7 @@ void HiveIndexSource::addSplits(
     } else {
       VELOX_CHECK(
           hiveSplit->fileFormat == dwio::common::FileFormat::NIMBLE ||
+              hiveSplit->fileFormat == dwio::common::FileFormat::FLUX ||
               hiveSplit->fileFormat == dwio::common::FileFormat::SST,
           "No IndexReaderFactory registered for format: {}",
           dwio::common::toString(hiveSplit->fileFormat));

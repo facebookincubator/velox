@@ -56,6 +56,37 @@ When the author says "addressed comments", re-review the full diff — don't
 just check the boxes from the previous round. Docs, naming, design choices,
 and new code added while addressing feedback all need fresh eyes.
 
+### Re-review rejected
+
+When the author requests re-review but clearly hasn't fully addressed prior
+feedback (e.g., explicitly flagged bugs still present, items silently
+skipped, sloppy fixes), lead with a process comment before the technical
+points:
+
+> @author, please review your changes more carefully before requesting
+> re-review. [Specific example: "The UB bug was explicitly flagged with a
+> fix, yet it's still present."]. Each re-review round costs reviewer
+> time — please make sure feedback is fully addressed.
+
+Then list the remaining issues. Don't re-explain items that were already
+explained with code snippets in the previous round — just say "not fixed"
+and refer back.
+
+### Refactoring PRs
+
+Refactoring PRs require extra scrutiny beyond "does the code compile and
+tests pass":
+
+- **Re-read the PR description as a cold reader.** If you can't explain
+  the before/after component responsibilities from the description alone,
+  send it back.
+- **Read new files end-to-end.** Verify that class names match file names,
+  APIs are minimal (no private methods promoted to public), and
+  abstractions are clean. Don't trust "I renamed X and extracted Y" —
+  verify the result is well-designed, not just mechanically reorganized.
+- **Check that the refactoring is pure.** No behavioral changes, no new
+  tests (unless closing a pre-existing coverage gap in a separate PR).
+
 ## What to check
 
 ### Correctness
@@ -82,7 +113,8 @@ and new code added while addressing feedback all need fresh eyes.
   [.claude/CLAUDE.md](../../.claude/CLAUDE.md).
 - **Comments.** Flag verbose code comments that restate the code, duplicate
   docs elsewhere, or explain obvious behavior. Remove references to other
-  implementations ("like Java Presto") — logic should stand on its own.
+  implementations ("like Java Presto") unless the goal is to match that
+  engine's semantics — logic should stand on its own.
 - **Naming.** Check variable names, file names, class names against coding
   style conventions. Do not abbreviate parameter names.
 - **Enums.** `kPascalCase` enumerators, trailing commas, `VELOX_DEFINE_ENUM_NAME`.
@@ -95,6 +127,9 @@ and new code added while addressing feedback all need fresh eyes.
   duplication? Do test names follow conventions?
 - **Test files.** Each test file should have one test suite with a matching
   name. Empty test fixtures should use `TEST()` instead of `TEST_F()`.
+- **Error message tests.** When tests verify error messages, ensure they
+  match the full descriptive text, not just the auto-generated comparison
+  output from `VELOX_CHECK_*` macros.
 
 ### Documentation
 
@@ -103,4 +138,8 @@ and new code added while addressing feedback all need fresh eyes.
 - Check if **existing** doc pages need updating — e.g., a change to plan output
   may require updating the print-plan-with-stats page, a dependency version
   bump may require updating the dependency table.
+- **Debuggability of new APIs.** When a PR adds new operations to an
+  existing subsystem, check that stats and `toString()` distinguish the new
+  operations from existing ones. Shared counters hide information needed
+  for troubleshooting.
 - **When unsure about conventions**, CC the maintainer rather than guessing.
