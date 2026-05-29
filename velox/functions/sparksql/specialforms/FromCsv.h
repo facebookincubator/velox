@@ -21,11 +21,11 @@ namespace facebook::velox::functions::sparksql {
 
 class FromCsvCallToSpecialForm : public exec::FunctionCallToSpecialForm {
  public:
-  /// Throws not supported exception.
+  // Throws not supported exception.
   TypePtr resolveType(const std::vector<TypePtr>& argTypes) override;
 
-  /// Returns an expression for from_csv special form, wrapping a custom
-  /// VectorFunction implementation.
+  /// @brief Returns an expression for from_csv special form. The expression
+  /// is a regular expression based on a custom VectorFunction implementation.
   exec::ExprPtr constructSpecialForm(
       const TypePtr& type,
       std::vector<exec::ExprPtr>&& args,

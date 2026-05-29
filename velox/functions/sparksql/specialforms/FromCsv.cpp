@@ -26,6 +26,8 @@
 #include "velox/expression/Expr.h"
 #include "velox/expression/SpecialForm.h"
 #include "velox/expression/VectorFunction.h"
+#include "velox/type/DecimalUtil.h"
+#include "velox/type/TimestampConversion.h"
 
 using namespace facebook::velox::exec;
 
@@ -33,12 +35,12 @@ namespace facebook::velox::functions::sparksql {
 namespace {
 
 // Maximum CSV input line size (10 MB) to prevent DoS from unbounded allocation.
-constexpr size_t kMaxCsvLineSize = 10 * 1'024 * 1'024;
+constexpr size_t kMaxCsvLineSize = 10 * 1024 * 1024;
 
 // Trims leading and trailing ASCII whitespace from a string_view.
-// Used for numeric/boolean fields before parsing (Spark's Double.parseDouble
-// accepts surrounding whitespace; for integer types we trim to be lenient in
-// PERMISSIVE mode). VARCHAR fields are NOT trimmed.
+// Used only for REAL/DOUBLE and DECIMAL fields before parsing (Java's
+// parseDouble, parseFloat, and BigDecimal accept surrounding whitespace).
+// Integer, boolean, and VARCHAR fields are NOT trimmed.
 std::string_view trimWhitespace(std::string_view s) {
   size_t start = 0;
   while (start < s.size() &&
@@ -72,12 +74,13 @@ void splitCsvLine(
     size_t maxFields,
     std::vector<std::string>& fields) {
   fields.clear();
-  if (maxFields > 0) {
-    fields.reserve(maxFields);
-  }
-  // Guard against extremely large inputs (DoS mitigation).
+  // Note: caller (FromCsvFunction::apply) already guards against oversized
+  // input and returns NULL row. This check is retained as defense-in-depth.
   if (line.size() > kMaxCsvLineSize) {
     return;
+  }
+  if (maxFields > 0) {
+    fields.reserve(maxFields);
   }
   size_t i = 0;
   bool trailingDelimiter = false;
@@ -95,7 +98,7 @@ void splitCsvLine(
       std::string content;
       // Reserve an estimate for quoted field content to reduce reallocations.
       size_t remaining = line.size() - i - 1;
-      content.reserve(std::min(remaining, size_t{128}));
+      content.reserve(std::min(remaining, size_t(128)));
       size_t j = i + 1;
       bool closedProperly = false;
       while (j < line.size()) {
@@ -115,9 +118,11 @@ void splitCsvLine(
         }
       }
       if (!closedProperly) {
-        // Unclosed quote: treat opening quote as literal, re-parse as
-        // unquoted field (matches Spark STOP_AT_DELIMITER behavior).
-        size_t start = i;
+        // Unclosed quote: Spark's UnivocityParser strips the opening quote
+        // and returns the rest as the field value. Skip past the opening
+        // quote character (at position i) and take the remainder up to the
+        // next delimiter.
+        size_t start = i + 1; // skip opening quote
         i = start;
         while (i < line.size() && line[i] != delimiter) {
           ++i;
@@ -260,6 +265,9 @@ bool parseFloat(std::string_view s, T& out) {
   // Strip leading '+' before from_chars (Spark/Java accepts "+1.23" but
   // std::from_chars rejects it). Guard against malformed "+-" or "++".
   auto numStr = stripLeadingPlus(s);
+  if (numStr.empty()) {
+    return false;
+  }
   // Use std::from_chars: locale-independent and allocation-free.
   T val;
   auto [ptr, ec] = std::from_chars(
@@ -270,17 +278,40 @@ bool parseFloat(std::string_view s, T& out) {
   if (ec == std::errc::result_out_of_range &&
       ptr == numStr.data() + numStr.size() && !numStr.empty()) {
     // Numeric overflow/underflow. Java returns ±Infinity for overflow, 0 for
-    // underflow. Determine direction from the exponent sign.
+    // underflow. Determine direction from the exponent sign or magnitude.
+    bool hasExponent = false;
     bool hasNegativeExponent = false;
     for (size_t k = 0; k < numStr.size(); ++k) {
       if (numStr[k] == 'e' || numStr[k] == 'E') {
+        hasExponent = true;
         hasNegativeExponent = (k + 1 < numStr.size() && numStr[k + 1] == '-');
         break;
       }
     }
-    if (hasNegativeExponent) {
+    if (hasExponent && hasNegativeExponent) {
+      // Explicit negative exponent (e.g., "1e-999") → underflow to zero.
       out = T(0);
+    } else if (!hasExponent) {
+      // No exponent notation but out_of_range — must be an extremely long
+      // decimal like "0.000...0001" (underflow) or "999...999" (overflow).
+      // Check if the absolute value is < 1 by looking for leading "0." or "."
+      // pattern (e.g., ".000...1" also underflows).
+      auto abs = numStr;
+      if (!abs.empty() && abs[0] == '-') {
+        abs = abs.substr(1);
+      }
+      bool isSmall =
+          (!abs.empty() &&
+           ((abs[0] == '0' && abs.size() > 1 && abs[1] == '.') ||
+            abs[0] == '.'));
+      if (isSmall) {
+        out = T(0);
+      } else {
+        out = (numStr[0] == '-') ? -std::numeric_limits<T>::infinity()
+                                 : std::numeric_limits<T>::infinity();
+      }
     } else {
+      // Positive or no exponent sign → overflow.
       out = (numStr[0] == '-') ? -std::numeric_limits<T>::infinity()
                                : std::numeric_limits<T>::infinity();
     }
@@ -309,28 +340,52 @@ bool isSupportedLeafType(const TypePtr& type) {
     case TypeKind::REAL:
     case TypeKind::DOUBLE:
     case TypeKind::VARCHAR:
+    case TypeKind::VARBINARY:
+    case TypeKind::TIMESTAMP:
       return true;
+    case TypeKind::HUGEINT:
+      // Only long decimal (precision > 18) is supported; plain HUGEINT is not.
+      return type->isLongDecimal();
     default:
-      return false;
+      return type->isShortDecimal() || type->isDate();
   }
 }
 
-// Parses a CSV string into a ROW (struct) type. Fields are matched
-// positionally to the schema columns.
-//
-// Key Behavior (matches Spark's from_csv with default options):
-// - NULL input returns NULL.
-// - Fewer CSV fields than schema columns: remaining columns are NULL.
-// - More CSV fields than schema columns: extra fields are ignored.
-// - Fields that cannot be parsed to the target type become NULL.
-// - Whitespace is NOT trimmed from fields (Spark's from_csv defaults:
-//   ignoreLeadingWhiteSpace=false, ignoreTrailingWhiteSpace=false).
-// - Quoted fields (RFC 4180) are supported.
-// - No escape character (Spark's from_csv default: escape='\u0000').
+/// @brief Parses a CSV string into a ROW (struct) type. Fields are matched
+/// positionally to the schema columns.
+///
+/// Supported field types:
+///   BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE, VARCHAR,
+///   VARBINARY, DECIMAL (short and long), DATE, TIMESTAMP.
+///
+/// Key Behavior (matches Spark's from_csv with default options):
+/// - NULL input returns NULL.
+/// - Fewer CSV fields than schema columns: remaining columns are NULL.
+/// - More CSV fields than schema columns: extra fields are ignored.
+/// - Fields that cannot be parsed to the target type become NULL.
+/// - Whitespace is NOT trimmed from fields (Spark's from_csv defaults:
+///   ignoreLeadingWhiteSpace=false, ignoreTrailingWhiteSpace=false).
+/// - Quoted fields (RFC 4180) are supported.
+/// - No escape character (Spark's from_csv default: escape='\u0000').
+/// - TIMESTAMP parsing is best-effort: timezone-naive only (no session tz).
 class FromCsvFunction : public exec::VectorFunction {
  public:
-  explicit FromCsvFunction(const TypePtr& outputType, char delimiter = ',')
-      : outputType_(outputType), delimiter_(delimiter) {
+  /// @param outputType  Target ROW type.
+  /// @param delimiter   Field separator character (default: ',').
+  /// @param nullValue   Sentinel string for null fields (default: "").
+  /// @param ignoreLeadingWhiteSpace  Trim leading whitespace from fields.
+  /// @param ignoreTrailingWhiteSpace Trim trailing whitespace from fields.
+  explicit FromCsvFunction(
+      const TypePtr& outputType,
+      char delimiter = ',',
+      std::string nullValue = "",
+      bool ignoreLeadingWhiteSpace = false,
+      bool ignoreTrailingWhiteSpace = false)
+      : outputType_(outputType),
+        delimiter_(delimiter),
+        nullValue_(std::move(nullValue)),
+        ignoreLeadingWhiteSpace_(ignoreLeadingWhiteSpace),
+        ignoreTrailingWhiteSpace_(ignoreTrailingWhiteSpace) {
     VELOX_CHECK_EQ(outputType->kind(), TypeKind::ROW);
   }
 
@@ -355,11 +410,14 @@ class FromCsvFunction : public exec::VectorFunction {
     struct ColumnInfo {
       BaseVector* child;
       TypeKind kind;
+      TypePtr type;
     };
     std::vector<ColumnInfo> columns(numFields);
     for (column_index_t col = 0; col < numFields; ++col) {
       columns[col] = {
-          flatResult->childAt(col).get(), rowType.childAt(col)->kind()};
+          flatResult->childAt(col).get(),
+          rowType.childAt(col)->kind(),
+          rowType.childAt(col)};
     }
 
     // Reuse fields vector across rows to avoid per-row allocation.
@@ -372,9 +430,20 @@ class FromCsvFunction : public exec::VectorFunction {
       }
 
       const auto csvStr = decodedInput->valueAt<StringView>(row);
-      // Spark's from_csv returns NULL struct for empty input (UnivocityParser
-      // returns null for empty/whitespace-only strings).
+      // Spark's from_csv returns NULL struct for empty or whitespace-only input
+      // (UnivocityParser returns null for empty/whitespace-only strings).
       if (csvStr.size() == 0) {
+        flatResult->setNull(row, true);
+        return;
+      }
+      auto csvView = std::string_view(csvStr.data(), csvStr.size());
+      auto trimmedView = trimWhitespace(csvView);
+      if (trimmedView.empty()) {
+        flatResult->setNull(row, true);
+        return;
+      }
+      // Guard against extremely large inputs — return NULL row (DoS mitigation).
+      if (csvView.size() > kMaxCsvLineSize) {
         flatResult->setNull(row, true);
         return;
       }
@@ -390,18 +459,41 @@ class FromCsvFunction : public exec::VectorFunction {
       for (column_index_t col = 0; col < numFields; ++col) {
         auto* childVector = columns[col].child;
         auto typeKind = columns[col].kind;
+        const auto& colType = columns[col].type;
 
         if (static_cast<size_t>(col) < fields.size()) {
           const auto& fieldStr = fields[col];
-          // Spark default nullValue="": empty field → null for all types.
-          // No whitespace trimming — matches Spark's from_csv defaults
-          // (ignoreLeadingWhiteSpace=false, ignoreTrailingWhiteSpace=false).
-          if (fieldStr.empty()) {
+          // Apply whitespace trimming if configured.
+          std::string_view fieldView(fieldStr);
+          if (ignoreLeadingWhiteSpace_ || ignoreTrailingWhiteSpace_) {
+            if (ignoreLeadingWhiteSpace_ && ignoreTrailingWhiteSpace_) {
+              fieldView = trimWhitespace(fieldView);
+            } else if (ignoreLeadingWhiteSpace_) {
+              size_t start = 0;
+              while (start < fieldView.size() &&
+                     (fieldView[start] == ' ' || fieldView[start] == '\t' ||
+                      fieldView[start] == '\r' || fieldView[start] == '\n')) {
+                ++start;
+              }
+              fieldView = fieldView.substr(start);
+            } else {
+              size_t end = fieldView.size();
+              while (
+                  end > 0 &&
+                  (fieldView[end - 1] == ' ' || fieldView[end - 1] == '\t' ||
+                   fieldView[end - 1] == '\r' ||
+                   fieldView[end - 1] == '\n')) {
+                --end;
+              }
+              fieldView = fieldView.substr(0, end);
+            }
+          }
+          // Check against nullValue sentinel (default: empty string → null).
+          if (fieldView == std::string_view(nullValue_)) {
             childVector->setNull(row, true);
           } else {
             childVector->setNull(row, false);
-            std::string_view fieldView(fieldStr);
-            setCsvFieldToChild(childVector, row, fieldView, typeKind);
+            setCsvFieldToChild(childVector, row, fieldView, typeKind, colType);
           }
         } else {
           // Missing field — set null.
@@ -419,12 +511,17 @@ class FromCsvFunction : public exec::VectorFunction {
   // - BOOLEAN: No trimming. Scala's toBoolean rejects " true ".
   // - Integer types: No trimming. Java's parseInt rejects " 123 ".
   // - REAL/DOUBLE: Trimmed. Java's parseDouble/parseFloat accept whitespace.
-  // - VARCHAR: No trimming. Whitespace is preserved as-is.
+  // - DECIMAL: Trimmed. Java's BigDecimal(String) accepts surrounding
+  //   whitespace.
+  // - DATE: No trimming. Parsed as yyyy-MM-dd (Spark's default dateFormat).
+  // - TIMESTAMP: No trimming. Parsed as yyyy-MM-dd'T'HH:mm:ss (best-effort).
+  // - VARCHAR/VARBINARY: No trimming. Whitespace is preserved as-is.
   void setCsvFieldToChild(
       BaseVector* child,
       vector_size_t row,
       std::string_view field,
-      TypeKind typeKind) const {
+      TypeKind typeKind,
+      const TypePtr& type) const {
     switch (typeKind) {
       case TypeKind::BOOLEAN: {
         auto* flat = child->asFlatVector<bool>();
@@ -468,22 +565,50 @@ class FromCsvFunction : public exec::VectorFunction {
         break;
       }
       case TypeKind::INTEGER: {
-        auto* flat = child->asFlatVector<int32_t>();
-        int32_t val;
-        if (parseInt<int32_t>(field, val)) {
-          flat->set(row, val);
+        // Could be either INTEGER or DATE (days since epoch).
+        if (type->isDate()) {
+          // Parse as yyyy-MM-dd (Spark's default dateFormat for from_csv).
+          auto result = util::fromDateString(
+              StringView(field.data(), field.size()),
+              util::ParseMode::kSparkCast);
+          if (result.hasValue()) {
+            child->asFlatVector<int32_t>()->set(row, result.value());
+          } else {
+            child->setNull(row, true);
+          }
         } else {
-          child->setNull(row, true);
+          auto* flat = child->asFlatVector<int32_t>();
+          int32_t val;
+          if (parseInt<int32_t>(field, val)) {
+            flat->set(row, val);
+          } else {
+            child->setNull(row, true);
+          }
         }
         break;
       }
       case TypeKind::BIGINT: {
-        auto* flat = child->asFlatVector<int64_t>();
-        int64_t val;
-        if (parseInt<int64_t>(field, val)) {
-          flat->set(row, val);
+        // Could be either BIGINT or SHORT DECIMAL (precision <= 18).
+        if (type->isShortDecimal()) {
+          auto [precision, scale] = getDecimalPrecisionScale(*type);
+          auto trimmed = trimWhitespace(field);
+          StringView sv(trimmed.data(), trimmed.size());
+          int64_t decimalValue = 0;
+          auto status =
+              DecimalUtil::castFromString(sv, precision, scale, decimalValue);
+          if (status.ok()) {
+            child->asFlatVector<int64_t>()->set(row, decimalValue);
+          } else {
+            child->setNull(row, true);
+          }
         } else {
-          child->setNull(row, true);
+          auto* flat = child->asFlatVector<int64_t>();
+          int64_t val;
+          if (parseInt<int64_t>(field, val)) {
+            flat->set(row, val);
+          } else {
+            child->setNull(row, true);
+          }
         }
         break;
       }
@@ -518,6 +643,45 @@ class FromCsvFunction : public exec::VectorFunction {
         flat->set(row, StringView(field.data(), field.size()));
         break;
       }
+      case TypeKind::VARBINARY: {
+        // Spark's from_csv treats BINARY fields as raw UTF-8 bytes.
+        auto* flat = child->asFlatVector<StringView>();
+        flat->set(row, StringView(field.data(), field.size()));
+        break;
+      }
+      case TypeKind::HUGEINT: {
+        if (type->isLongDecimal()) {
+          // LONG DECIMAL (precision > 18).
+          auto [precision, scale] = getDecimalPrecisionScale(*type);
+          auto trimmed = trimWhitespace(field);
+          StringView sv(trimmed.data(), trimmed.size());
+          int128_t decimalValue = 0;
+          auto status =
+              DecimalUtil::castFromString(sv, precision, scale, decimalValue);
+          if (status.ok()) {
+            child->asFlatVector<int128_t>()->set(row, decimalValue);
+          } else {
+            child->setNull(row, true);
+          }
+        } else {
+          child->setNull(row, true);
+        }
+        break;
+      }
+      case TypeKind::TIMESTAMP: {
+        // Parse as yyyy-MM-dd'T'HH:mm:ss or yyyy-MM-dd HH:mm:ss.
+        // Note: Timezone handling is best-effort — Spark's full timestamp
+        // parsing depends on session timezone which is not available here.
+        auto result = util::fromTimestampString(
+            StringView(field.data(), field.size()),
+            util::TimestampParseMode::kSparkCast);
+        if (result.hasValue()) {
+          child->asFlatVector<Timestamp>()->set(row, result.value());
+        } else {
+          child->setNull(row, true);
+        }
+        break;
+      }
       default:
         child->setNull(row, true);
         break;
@@ -526,6 +690,9 @@ class FromCsvFunction : public exec::VectorFunction {
 
   const TypePtr outputType_;
   const char delimiter_;
+  const std::string nullValue_;
+  const bool ignoreLeadingWhiteSpace_;
+  const bool ignoreTrailingWhiteSpace_;
 };
 
 } // namespace

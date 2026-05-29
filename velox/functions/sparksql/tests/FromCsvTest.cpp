@@ -415,12 +415,8 @@ TEST_F(FromCsvTest, intAndBigintOverflow) {
   EXPECT_TRUE(bigRow->childAt(0)->isNullAt(1));
 }
 
-// Unclosed quoted field — Velox parser keeps the leading quote in the
-// output (treats the field as unquoted on missing close-quote). Spark's
-// Univocity parser strips the leading quote and accepts the rest as the
-// field value. This divergence is tracked under ADO 5199738; until the
-// Velox parser is fixed, capture current behavior so the test reflects
-// reality and we get a regression signal if behavior changes.
+// Unclosed quoted field — Spark's UnivocityParser strips the opening quote
+// and returns the rest as the field value.
 TEST_F(FromCsvTest, unclosedQuote) {
   auto input = makeFlatVector<std::string>({R"("unclosed)"});
   auto expr = createFromCsv(ROW({"a"}, {VARCHAR()}));
@@ -428,9 +424,9 @@ TEST_F(FromCsvTest, unclosedQuote) {
   auto* resultRow = result->as<RowVector>();
   auto* childA = resultRow->childAt(0)->asFlatVector<StringView>();
   EXPECT_FALSE(childA->isNullAt(0));
-  // TODO(ADO 5199738): Spark returns "unclosed" (quote stripped). Update
-  // expected value to "unclosed" once Velox parser is fixed for parity.
-  EXPECT_EQ(childA->valueAt(0).str(), "\"unclosed");
+  // Spark's UnivocityParser strips the leading quote for unclosed quoted
+  // fields.
+  EXPECT_EQ(childA->valueAt(0).str(), "unclosed");
 }
 
 // Empty input line produces null ROW (Spark's UnivocityParser returns null for
@@ -564,6 +560,160 @@ TEST_F(FromCsvTest, unsupportedFieldType) {
   auto expr = createFromCsv(ROW({"a"}, {ARRAY(INTEGER())}));
   VELOX_ASSERT_THROW(
       evaluate(expr, makeRowVector({input})), "Unsupported field type");
+}
+
+// Oversized input (>10MB) returns NULL row (DoS guard).
+TEST_F(FromCsvTest, oversizedInput) {
+  // Create a string larger than kMaxCsvLineSize (10 MB).
+  std::string largeStr(10 * 1024 * 1024 + 1, 'a');
+  auto input = makeFlatVector<std::string>({largeStr});
+  auto expr = createFromCsv(ROW({"a", "b"}, {VARCHAR(), INTEGER()}));
+  auto result = evaluate(expr, makeRowVector({input}));
+  // Row itself is null for oversized input.
+  EXPECT_TRUE(result->isNullAt(0));
+}
+
+// Whitespace-only input returns NULL struct (matches Spark's UnivocityParser).
+TEST_F(FromCsvTest, whitespaceOnlyInput) {
+  auto input = makeFlatVector<std::string>({"   ", " \t\n ", "\t"});
+  auto expr = createFromCsv(ROW({"a", "b"}, {INTEGER(), VARCHAR()}));
+  auto result = evaluate(expr, makeRowVector({input}));
+  EXPECT_TRUE(result->isNullAt(0));
+  EXPECT_TRUE(result->isNullAt(1));
+  EXPECT_TRUE(result->isNullAt(2));
+}
+
+// Short decimal (precision <= 18) parsing.
+TEST_F(FromCsvTest, shortDecimal) {
+  auto input = makeFlatVector<std::string>(
+      {"123.45", "  -99.99  ", "abc", "0.01", ""});
+  auto decType = DECIMAL(10, 2);
+  auto expr = createFromCsv(ROW({"a"}, {decType}));
+  auto result = evaluate(expr, makeRowVector({input}));
+  auto* resultRow = result->as<RowVector>();
+  auto* child = resultRow->childAt(0)->asFlatVector<int64_t>();
+  // "123.45" → 12345 (scaled by 10^2)
+  EXPECT_FALSE(child->isNullAt(0));
+  EXPECT_EQ(child->valueAt(0), 12345);
+  // "  -99.99  " (whitespace trimmed for decimal) → -9999
+  EXPECT_FALSE(child->isNullAt(1));
+  EXPECT_EQ(child->valueAt(1), -9999);
+  // "abc" → null (parse failure)
+  EXPECT_TRUE(child->isNullAt(2));
+  // "0.01" → 1
+  EXPECT_FALSE(child->isNullAt(3));
+  EXPECT_EQ(child->valueAt(3), 1);
+  // "" → null (empty field = nullValue sentinel)
+  EXPECT_TRUE(child->isNullAt(4));
+}
+
+// Long decimal (precision > 18) parsing.
+TEST_F(FromCsvTest, longDecimal) {
+  auto input = makeFlatVector<std::string>(
+      {"12345678901234567890.12", "  0.00  ", "invalid"});
+  auto decType = DECIMAL(30, 2);
+  auto expr = createFromCsv(ROW({"a"}, {decType}));
+  auto result = evaluate(expr, makeRowVector({input}));
+  auto* resultRow = result->as<RowVector>();
+  auto* child = resultRow->childAt(0)->asFlatVector<int128_t>();
+  // "12345678901234567890.12" → 1234567890123456789012
+  EXPECT_FALSE(child->isNullAt(0));
+  int128_t expected = int128_t(12345678901234567890ULL) * 100 + 12;
+  EXPECT_EQ(child->valueAt(0), expected);
+  // "  0.00  " → 0
+  EXPECT_FALSE(child->isNullAt(1));
+  EXPECT_EQ(child->valueAt(1), 0);
+  // "invalid" → null
+  EXPECT_TRUE(child->isNullAt(2));
+}
+
+// DATE field parsing (yyyy-MM-dd).
+TEST_F(FromCsvTest, dateField) {
+  auto input =
+      makeFlatVector<std::string>({"2023-01-15", "1970-01-01", "bad-date", ""});
+  auto expr = createFromCsv(ROW({"a"}, {DATE()}));
+  auto result = evaluate(expr, makeRowVector({input}));
+  auto* resultRow = result->as<RowVector>();
+  auto* child = resultRow->childAt(0)->asFlatVector<int32_t>();
+  // 2023-01-15 = days since epoch
+  EXPECT_FALSE(child->isNullAt(0));
+  EXPECT_EQ(child->valueAt(0), 19372); // 2023-01-15
+  // 1970-01-01 = 0
+  EXPECT_FALSE(child->isNullAt(1));
+  EXPECT_EQ(child->valueAt(1), 0);
+  // "bad-date" → null
+  EXPECT_TRUE(child->isNullAt(2));
+  // "" → null (nullValue sentinel)
+  EXPECT_TRUE(child->isNullAt(3));
+}
+
+// TIMESTAMP field parsing.
+TEST_F(FromCsvTest, timestampField) {
+  auto input = makeFlatVector<std::string>(
+      {"2023-01-15T10:30:00", "1970-01-01 00:00:00", "bad-ts", ""});
+  auto expr = createFromCsv(ROW({"a"}, {TIMESTAMP()}));
+  auto result = evaluate(expr, makeRowVector({input}));
+  auto* resultRow = result->as<RowVector>();
+  auto* child = resultRow->childAt(0)->asFlatVector<Timestamp>();
+  // "2023-01-15T10:30:00" parses successfully (interpreted as UTC wall-clock
+  // time; fromTimestampString with kSparkCast does not apply timezone offset).
+  EXPECT_FALSE(child->isNullAt(0));
+  EXPECT_EQ(child->valueAt(0), Timestamp(1673778600, 0));
+  // "1970-01-01 00:00:00" → epoch
+  EXPECT_FALSE(child->isNullAt(1));
+  EXPECT_EQ(child->valueAt(1), Timestamp(0, 0));
+  // "bad-ts" → null
+  EXPECT_TRUE(child->isNullAt(2));
+  // "" → null
+  EXPECT_TRUE(child->isNullAt(3));
+}
+
+// VARBINARY field parsing (raw bytes preserved as-is).
+TEST_F(FromCsvTest, varbinaryField) {
+  auto input =
+      makeFlatVector<std::string>({"hello,world", "binary\x01\x02,data"});
+  auto expr = createFromCsv(ROW({"a", "b"}, {VARBINARY(), VARBINARY()}));
+  auto result = evaluate(expr, makeRowVector({input}));
+  auto* resultRow = result->as<RowVector>();
+  auto* childA = resultRow->childAt(0)->asFlatVector<StringView>();
+  auto* childB = resultRow->childAt(1)->asFlatVector<StringView>();
+  // First row: "hello" and "world"
+  EXPECT_EQ(childA->valueAt(0).getString(), "hello");
+  EXPECT_EQ(childB->valueAt(0).getString(), "world");
+  // Second row: "binary\x01\x02" and "data" (binary content preserved)
+  EXPECT_EQ(childA->valueAt(1).getString(), std::string("binary\x01\x02"));
+  EXPECT_EQ(childB->valueAt(1).getString(), "data");
+}
+
+// Float underflow edge cases.
+TEST_F(FromCsvTest, floatUnderflow) {
+  // ".000...1" pattern (leading dot without 0) should underflow to zero.
+  std::string tinyDot = "." + std::string(400, '0') + "1";
+  // "0.000...1" pattern (leading 0.) should underflow to zero.
+  std::string tinyZeroDot = "0." + std::string(400, '0') + "1";
+  auto input = makeFlatVector<std::string>({tinyDot, tinyZeroDot});
+  auto expr = createFromCsv(ROW({"a"}, {DOUBLE()}));
+  auto result = evaluate(expr, makeRowVector({input}));
+  auto* resultRow = result->as<RowVector>();
+  auto* child = resultRow->childAt(0)->asFlatVector<double>();
+  // Both should underflow to 0 (not ±Infinity).
+  EXPECT_FALSE(child->isNullAt(0));
+  EXPECT_EQ(child->valueAt(0), 0.0);
+  EXPECT_FALSE(child->isNullAt(1));
+  EXPECT_EQ(child->valueAt(1), 0.0);
+}
+
+// parseFloat rejects bare "+" sign (empty after strip).
+TEST_F(FromCsvTest, barePlusSign) {
+  auto input = makeFlatVector<std::string>({"+", "+-1", "++"});
+  auto expr = createFromCsv(ROW({"a"}, {DOUBLE()}));
+  auto result = evaluate(expr, makeRowVector({input}));
+  auto* resultRow = result->as<RowVector>();
+  auto* child = resultRow->childAt(0)->asFlatVector<double>();
+  // All should be null (invalid float).
+  EXPECT_TRUE(child->isNullAt(0));
+  EXPECT_TRUE(child->isNullAt(1));
+  EXPECT_TRUE(child->isNullAt(2));
 }
 
 } // namespace
