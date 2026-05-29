@@ -146,6 +146,10 @@ option(
   VELOX_ENABLE_REGEX_COMPAT_TESTS
   "Build the PCRE2 vs RE2 Java-regex compatibility test suite (pulls in PCRE2 dep)."
   OFF)
+option(
+  VELOX_ENABLE_REGEX_COMPAT_JAVA_BACKEND
+  "Within the regex-compat test suite, also exercise an embedded-JVM Java backend as a third backend / oracle. Requires JDK on the build host. If JNI cannot be found, this option is auto-disabled with a warning. Only consulted when VELOX_ENABLE_REGEX_COMPAT_TESTS=ON."
+  ON)
 option(VELOX_ENABLE_EXPRESSION "Build expression." ON)
 option(
   VELOX_ENABLE_EXAMPLES
@@ -633,6 +637,24 @@ velox_resolve_dependency(re2)
 if(VELOX_ENABLE_REGEX_COMPAT_TESTS)
   velox_set_source(pcre2)
   velox_resolve_dependency(pcre2)
+
+  if(VELOX_ENABLE_REGEX_COMPAT_JAVA_BACKEND)
+    # Probe for a JDK so the test suite can embed a JVM as a third (oracle)
+    # backend.  This is the only place in upstream Velox that touches JNI, and
+    # it is fully opt-in (gated by the regex-compat option above).  If JNI is
+    # not found we silently degrade — the test suite still builds with the
+    # PCRE2 + RE2 backends only.
+    find_package(JNI QUIET)
+    if(JNI_FOUND)
+      message(STATUS
+        "Regex-compat: enabling embedded-JVM Java backend (JNI: ${JNI_INCLUDE_DIRS})")
+    else()
+      message(WARNING
+        "Regex-compat: JNI not found, disabling Java backend. "
+        "Install a JDK or pass -DVELOX_ENABLE_REGEX_COMPAT_JAVA_BACKEND=OFF to silence.")
+      set(VELOX_ENABLE_REGEX_COMPAT_JAVA_BACKEND OFF CACHE BOOL "" FORCE)
+    endif()
+  endif()
 endif()
 
 if(${VELOX_BUILD_PYTHON_PACKAGE})
