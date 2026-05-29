@@ -42,6 +42,20 @@ const fs::path& projectRoot() {
   return root;
 }
 
+// Preserves the legacy cwd-based lookup for builds where __FILE__ is rewritten
+// to be source-relative, e.g. by -ffile-prefix-map.
+std::string getDataFilePathFromCurrentDirectory(
+    const std::string& baseDir,
+    const fs::path& requestedPath) {
+  const std::string currentPath = fs::current_path().string();
+  if (currentPath.ends_with("fbcode")) {
+    return (fs::path{currentPath} / baseDir / requestedPath)
+        .lexically_normal()
+        .string();
+  }
+  return (fs::path{currentPath} / requestedPath).lexically_normal().string();
+}
+
 } // namespace
 
 std::string getDataFilePath(
@@ -52,7 +66,12 @@ std::string getDataFilePath(
     return requestedPath.string();
   }
 
-  return (projectRoot() / baseDir / requestedPath).lexically_normal().string();
+  const auto& root = projectRoot();
+  if (root.is_absolute()) {
+    return (root / baseDir / requestedPath).lexically_normal().string();
+  }
+
+  return getDataFilePathFromCurrentDirectory(baseDir, requestedPath);
 }
 
 } // namespace facebook::velox::test
