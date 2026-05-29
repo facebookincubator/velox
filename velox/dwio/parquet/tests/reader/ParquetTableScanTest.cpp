@@ -810,6 +810,41 @@ TEST_F(ParquetTableScanTest, array) {
       .assertResults(expected);
 }
 
+// LIST-style ARRAY<ROW<...>> in Parquet: outer LIST group is not REPEATED, and
+// inner names like "array" are not struct fields. Reader must pass the element
+// ROW through the wrapper and map each leaf to the right field type (e.g.
+// BIGINT vs whole ROW in convertType). Written with Velox writer, read with
+// parquet column names enabled and tableScan dataColumns.
+TEST_F(ParquetTableScanTest, listAnnotatedArrayOfStructByColumnName) {
+  const RowTypePtr elementType =
+      ROW({"c1", "c2", "c3"}, {INTEGER(), VARCHAR(), BIGINT()});
+  const RowTypePtr tableType = ROW({"c0"}, {ARRAY(elementType)});
+
+  const std::vector<std::vector<Variant>> arrayData = {
+      {variant::row({1, "a", int64_t(10)}),
+       variant::row({2, "b", int64_t(20)})},
+      {variant::row({3, "c", int64_t(30)})},
+  };
+  const auto c0Vector = makeArrayOfRowVector(elementType, arrayData);
+  const auto input = makeRowVector({"c0"}, {c0Vector});
+
+  const auto filePath = TempFilePath::create();
+  WriterOptions options;
+  writeToParquetFile(filePath->getPath(), {input}, options);
+
+  auto plan = PlanBuilder(pool_.get())
+                  .tableScan(tableType, {}, "", tableType, {})
+                  .planNode();
+
+  AssertQueryBuilder(plan)
+      .connectorSessionProperty(
+          kHiveConnectorId,
+          connector::hive::HiveConfig::kParquetUseColumnNamesSession,
+          "true")
+      .splits({makeSplit(filePath->getPath())})
+      .assertResults(input);
+}
+
 // Optional array with required elements.
 TEST_F(ParquetTableScanTest, optArrayReqEle) {
   auto vector = makeArrayVector<StringView>({});
