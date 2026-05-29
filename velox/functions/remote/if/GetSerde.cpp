@@ -15,6 +15,7 @@
  */
 
 #include "velox/functions/remote/if/GetSerde.h"
+#include "velox/serializers/ArrowSerializer.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/serializers/UnsafeRowSerializer.h"
 
@@ -27,6 +28,9 @@ std::unique_ptr<VectorSerde> getSerde(const remote::PageFormat& format) {
 
     case remote::PageFormat::SPARK_UNSAFE_ROW:
       return std::make_unique<serializer::spark::UnsafeRowVectorSerde>();
+
+    case remote::PageFormat::ARROW_IPC:
+      return std::make_unique<serializer::arrow::ArrowVectorSerde>();
   }
   VELOX_UNREACHABLE();
 }
@@ -42,6 +46,7 @@ std::unique_ptr<VectorSerde::Options> getSerdeOptions(
       return options;
     }
     case remote::PageFormat::SPARK_UNSAFE_ROW:
+    case remote::PageFormat::ARROW_IPC:
       return std::make_unique<VectorSerde::Options>();
   }
   VELOX_UNREACHABLE();

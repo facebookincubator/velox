@@ -29,6 +29,10 @@ velox_link_libraries(
   velox_vector
 )
 
+velox_add_library(velox_arrow_serializer ArrowSerializer.cpp HEADERS ArrowSerializer.h)
+
+velox_link_libraries(velox_arrow_serializer velox_vector velox_arrow_bridge arrow)
+
 velox_add_library(
   velox_presto_serializer
   CompactRowSerializer.cpp

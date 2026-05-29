@@ -210,6 +210,7 @@ class VectorSerde {
     kPresto,
     kCompactRow,
     kUnsafeRow,
+    kArrowIpc,
   };
 
   static std::string kindName(Kind type);
@@ -353,6 +354,17 @@ class VectorSerde {
       const Options* options = nullptr) {
     VELOX_NYI();
   }
+
+  /// Deserializes data directly from an IOBuf, enabling zero-copy paths for
+  /// formats like Arrow IPC that can wrap IOBuf memory without copying. The
+  /// default implementation converts to a ByteInputStream and calls the
+  /// regular deserialize().
+  virtual void deserialize(
+      const folly::IOBuf& source,
+      velox::memory::MemoryPool* pool,
+      RowTypePtr type,
+      RowVectorPtr* result,
+      const Options* options = nullptr);
 
  protected:
   explicit VectorSerde(std::string kind) : kind_(std::move(kind)) {}
