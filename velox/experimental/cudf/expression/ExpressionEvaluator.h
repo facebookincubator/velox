@@ -74,21 +74,16 @@ using CudfFunctionFactory = std::function<std::shared_ptr<CudfFunction>(
     const std::string& name,
     const std::shared_ptr<velox::exec::Expr>& expr)>;
 
-using CudfCanEvaluate =
-    std::function<bool(const std::shared_ptr<velox::exec::Expr>&)>;
-
 struct CudfFunctionSpec {
   CudfFunctionFactory factory;
   std::vector<exec::FunctionSignaturePtr> signatures;
-  CudfCanEvaluate canEvaluate;
 };
 
 bool registerCudfFunction(
     const std::string& name,
     CudfFunctionFactory factory,
     const std::vector<exec::FunctionSignaturePtr>& signatures,
-    bool overwrite = true,
-    CudfCanEvaluate canEvaluate = nullptr);
+    bool overwrite = true);
 
 void registerCudfFunctions(
     const std::vector<std::string>& aliases,

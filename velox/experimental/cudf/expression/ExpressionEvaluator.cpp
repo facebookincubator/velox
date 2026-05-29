@@ -1263,6 +1263,18 @@ class ExtractComponentFunction : public CudfFunction {
   cudf::datetime::datetime_component component_;
 };
 
+// Builds an ExtractComponentFunction for a fixed datetime component, avoiding a
+// near-identical registration lambda for every component (year, month, ...).
+struct ExtractComponentFactory {
+  cudf::datetime::datetime_component component;
+
+  std::shared_ptr<CudfFunction> operator()(
+      const std::string&,
+      const std::shared_ptr<velox::exec::Expr>& expr) const {
+    return std::make_shared<ExtractComponentFunction>(expr, component);
+  }
+};
+
 class QuarterFunction : public CudfFunction {
  public:
   explicit QuarterFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
@@ -1903,14 +1915,12 @@ bool registerCudfFunction(
     const std::string& name,
     CudfFunctionFactory factory,
     const std::vector<exec::FunctionSignaturePtr>& signatures,
-    bool overwrite,
-    CudfCanEvaluate canEvaluate) {
+    bool overwrite) {
   auto& registry = getCudfFunctionRegistry();
   if (!overwrite && !registry[name].empty()) {
     return false;
   }
-  registry[name].push_back(
-      CudfFunctionSpec{std::move(factory), signatures, std::move(canEvaluate)});
+  registry[name].push_back(CudfFunctionSpec{std::move(factory), signatures});
   return true;
 }
 
@@ -1937,9 +1947,6 @@ std::shared_ptr<CudfFunction> createCudfFunction(
     // the special case of cast.
     if (!spec.signatures.empty() &&
         !matchCallAgainstSignatures(*expr, spec.signatures)) {
-      continue;
-    }
-    if (spec.canEvaluate && !spec.canEvaluate(expr)) {
       continue;
     }
     return spec.factory(name, expr);
@@ -2102,34 +2109,22 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "year",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<ExtractComponentFunction>(
-            expr, cudf::datetime::datetime_component::YEAR);
-      },
+      ExtractComponentFactory{cudf::datetime::datetime_component::YEAR},
       timestampDateIntegerSignatures);
 
   registerCudfFunction(
       prefix + "month",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<ExtractComponentFunction>(
-            expr, cudf::datetime::datetime_component::MONTH);
-      },
+      ExtractComponentFactory{cudf::datetime::datetime_component::MONTH},
       timestampDateIntegerSignatures);
 
   registerCudfFunction(
       prefix + "day",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<ExtractComponentFunction>(
-            expr, cudf::datetime::datetime_component::DAY);
-      },
+      ExtractComponentFactory{cudf::datetime::datetime_component::DAY},
       timestampDateIntegerSignatures);
 
   registerCudfFunctions(
       {prefix + "dow", prefix + "day_of_week"},
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<ExtractComponentFunction>(
-            expr, cudf::datetime::datetime_component::WEEKDAY);
-      },
+      ExtractComponentFactory{cudf::datetime::datetime_component::WEEKDAY},
       timestampDateIntegerSignatures);
 
   registerCudfFunctions(
@@ -2162,34 +2157,22 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "hour",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<ExtractComponentFunction>(
-            expr, cudf::datetime::datetime_component::HOUR);
-      },
+      ExtractComponentFactory{cudf::datetime::datetime_component::HOUR},
       timestampDateIntegerSignatures);
 
   registerCudfFunction(
       prefix + "minute",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<ExtractComponentFunction>(
-            expr, cudf::datetime::datetime_component::MINUTE);
-      },
+      ExtractComponentFactory{cudf::datetime::datetime_component::MINUTE},
       timestampDateIntegerSignatures);
 
   registerCudfFunction(
       prefix + "second",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<ExtractComponentFunction>(
-            expr, cudf::datetime::datetime_component::SECOND);
-      },
+      ExtractComponentFactory{cudf::datetime::datetime_component::SECOND},
       timestampDateIntegerSignatures);
 
   registerCudfFunction(
       prefix + "millisecond",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<ExtractComponentFunction>(
-            expr, cudf::datetime::datetime_component::MILLISECOND);
-      },
+      ExtractComponentFactory{cudf::datetime::datetime_component::MILLISECOND},
       timestampDateIntegerSignatures);
 
   registerCudfFunction(
@@ -2620,9 +2603,6 @@ bool FunctionExpression::canEvaluate(std::shared_ptr<velox::exec::Expr> expr) {
   for (const auto& spec : it->second) {
     if (!spec.signatures.empty() &&
         !matchCallAgainstSignatures(*expr, spec.signatures)) {
-      continue;
-    }
-    if (spec.canEvaluate && !spec.canEvaluate(expr)) {
       continue;
     }
     return true;

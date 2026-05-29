@@ -17,7 +17,6 @@ add_library(
   AstExpression.cpp
   DecimalExpressionKernels.cpp
   DecimalExpressionKernels.cu
-  DecimalTypeCheck.cpp
   ExpressionEvaluator.cpp
   JitExpression.cpp
   prestosql/DatePlusIntervalFunction.cpp
