@@ -34,9 +34,12 @@ namespace velox_iceberg = ::facebook::velox::connector::hive::iceberg;
 /// - Deletion vectors (V3) for row-level deletes.
 /// - Positional delete files (V2) for row-level deletes.
 /// - Equality delete files for column-level deletes.
+/// - Schema evolution with column adaptation (missing/added columns).
 ///
 /// The following features are not yet supported:
-/// - Schema evolution with column adaptation.
+/// - Identity partition columns are limited to VARCHAR, INTEGER, and BIGINT;
+///   other partition types (e.g. BOOLEAN, DATE, TIMESTAMP, DECIMAL, REAL,
+///   DOUBLE, VARBINARY) are not yet supported.
 /// - Iceberg-specific metadata columns.
 class CudfIcebergDataSource : public ::facebook::velox::cudf_velox::connector::
                                   hive::CudfHiveDataSource {

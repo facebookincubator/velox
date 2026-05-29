@@ -137,8 +137,10 @@ void CudfDeletionVectorReader::loadBitmap(rmm::cuda_stream_view stream) {
   auto numKeys = unalignedLoad<uint64_t>(payload);
   VELOX_CHECK_GT(numKeys, 0, "Deletion vector has zero keys");
 
-  // Single key. Use 32-bit dispatch
-  if (numKeys == 1) {
+  const auto firstKey = unalignedLoad<uint32_t>(payload, sizeof(uint64_t));
+
+  // Single, high-bits key == 0, use faster 32-bit dispatch
+  if (numKeys == 1 and firstKey == 0) {
     // Skip the numKeys (8 bytes) + first key (4 bytes) prefix to get the
     // roaring32 bitmap.
     constexpr std::size_t kRoaring32Offset =
@@ -146,7 +148,7 @@ void CudfDeletionVectorReader::loadBitmap(rmm::cuda_stream_view stream) {
     auto roaring32 = std::string_view(payload).substr(kRoaring32Offset);
     buildBitmap(cudf::roaring_bitmap_type::BITS_32, roaring32, stream);
   } else {
-    // Multiple keys. Use 64-bit dispatch
+    // Multiple keys, or high-bits key != 0, use 64-bit dispatch
     buildBitmap(cudf::roaring_bitmap_type::BITS_64, payload, stream);
   }
 
@@ -158,29 +160,34 @@ CudfDeletionVectorReader::loadBlobSource() {
   // Start with a raw DV blob source
   BlobSource source;
 
-  uint64_t blobOffset = 0;
-  uint64_t blobLength = dvFile_.fileSizeInBytes;
+  // Prefer the typed contentOffset / contentLength fields if available.
+  uint64_t blobOffset = static_cast<uint64_t>(dvFile_.contentOffset);
+  uint64_t blobLength = dvFile_.contentLength > 0
+      ? static_cast<uint64_t>(dvFile_.contentLength)
+      : dvFile_.fileSizeInBytes;
 
-  // Read the envoded DB blob offset and length from the `IcebergDeleteFile`
-  // bounds maps (encoded by the coordinator).
-  if (auto it =
-          dvFile_.lowerBounds.find(CudfDeletionVectorReader::kDvOffsetFieldId);
-      it != dvFile_.lowerBounds.end()) {
-    try {
-      blobOffset = std::stoull(it->second);
-    } catch (const std::exception& e) {
-      VELOX_FAIL(
-          "Failed to parse DV blob offset from bounds map: {}", e.what());
+  // The legacy bounds-map encoding (kDvOffsetFieldId / kDvLengthFieldId) is
+  // kept as a fallback for callers that have not migrated yet.
+  if (dvFile_.contentLength == 0) {
+    if (auto it = dvFile_.lowerBounds.find(
+            CudfDeletionVectorReader::kDvOffsetFieldId);
+        it != dvFile_.lowerBounds.end()) {
+      try {
+        blobOffset = std::stoull(it->second);
+      } catch (const std::exception& e) {
+        VELOX_FAIL(
+            "Failed to parse DV blob offset from bounds map: {}", e.what());
+      }
     }
-  }
-  if (auto it =
-          dvFile_.upperBounds.find(CudfDeletionVectorReader::kDvLengthFieldId);
-      it != dvFile_.upperBounds.end()) {
-    try {
-      blobLength = std::stoull(it->second);
-    } catch (const std::exception& e) {
-      VELOX_FAIL(
-          "Failed to parse DV blob length from bounds map: {}", e.what());
+    if (auto it = dvFile_.upperBounds.find(
+            CudfDeletionVectorReader::kDvLengthFieldId);
+        it != dvFile_.upperBounds.end()) {
+      try {
+        blobLength = std::stoull(it->second);
+      } catch (const std::exception& e) {
+        VELOX_FAIL(
+            "Failed to parse DV blob length from bounds map: {}", e.what());
+      }
     }
   }
 
@@ -314,7 +321,7 @@ void CudfDeletionVectorReader::applyDeletes(
       : cudf::type_to_id<uint64_t>();
 
   // Construct row index column if needed
-  if (not rowIndices_ or rowIndices_->size() < numRows or
+  if (not rowIndices_ or std::cmp_less(rowIndices_->size(), numRows) or
       rowIndices_->type().id() != valueTypeId) {
     rowIndices_ = cudf::make_numeric_column(
         cudf::data_type{valueTypeId},
@@ -324,7 +331,7 @@ void CudfDeletionVectorReader::applyDeletes(
         temp_mr);
   }
 
-  // Generate row indices
+  // Generate row indices into the first `numRows` entries of the buffer.
   if (bitmap_->type() == cudf::roaring_bitmap_type::BITS_32) {
     fillSequence<uint32_t>(
         rowIndices_->mutable_view(),
@@ -341,7 +348,14 @@ void CudfDeletionVectorReader::applyDeletes(
         temp_mr);
   }
 
-  bitmap_->contains_async(rowIndices_->view(), deleteMask, stream);
+  const auto rowIndicesView = cudf::column_view{
+      rowIndices_->type(),
+      static_cast<cudf::size_type>(numRows),
+      rowIndices_->view().head(),
+      nullptr /*null_mask=*/,
+      0 /*null_count=*/};
+
+  bitmap_->contains_async(rowIndicesView, deleteMask, stream);
 }
 
 } // namespace facebook::velox::cudf_velox::connector::hive::iceberg

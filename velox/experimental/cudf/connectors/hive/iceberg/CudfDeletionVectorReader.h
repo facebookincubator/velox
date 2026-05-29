@@ -58,12 +58,6 @@ class CudfDeletionVectorReader {
   CudfDeletionVectorReader(const CudfDeletionVectorReader&) = delete;
   CudfDeletionVectorReader& operator=(const CudfDeletionVectorReader&) = delete;
 
-  /// Returns true when there is no more data. For DVs this is always true
-  /// after `loadBitmap` has been called.
-  bool noMoreData() const {
-    return loaded_;
-  }
-
   /// Updates the deleted positions in the row mask in-place
   ///
   /// @param rowMask Mutable boolean mask column on device.

@@ -172,7 +172,7 @@ CudfIcebergSplitReader::readNextChunk(
 
   if (isApplyingDeletes) {
     // Allocate deletion mask column if needed (nothing is deleted)
-    if (not deleteMask_ or deleteMask_->size() < numRows) {
+    if (not deleteMask_ or std::cmp_less(deleteMask_->size(), numRows)) {
       auto false_scalar =
           cudf::numeric_scalar<bool>(false, true, stream_, get_temp_mr());
       deleteMask_ = cudf::make_column_from_scalar(
@@ -185,6 +185,14 @@ CudfIcebergSplitReader::readNextChunk(
           numRows * sizeof(bool),
           stream_));
     }
+
+    // Set the current mutable view into the deleteMask_ column.
+    deleteMaskView_ = cudf::mutable_column_view(
+        deleteMask_->type(),
+        numRows,
+        deleteMask_->mutable_view().data<bool>(),
+        nullptr,
+        0);
 
     // Apply deletion vector
     if (deletionVectorReader_) {
@@ -200,13 +208,17 @@ CudfIcebergSplitReader::readNextChunk(
     }
 
     cudfTable = cudf::apply_deletion_mask(
-        cudfTable->view(), deleteMask_->view(), stream_, get_output_mr());
+        cudfTable->view(), deleteMaskView_, stream_, get_output_mr());
   }
 
   // Strip extra equality delete key columns added by
   // setupColumnProjection()
   if (not extraEqualityColumns_.empty()) {
     auto columns = cudfTable->release();
+    VELOX_CHECK_GE(
+        columns.size(),
+        extraEqualityColumns_.size(),
+        "cuDF table has fewer columns than the appended equality delete keys");
     columns.resize(columns.size() - extraEqualityColumns_.size());
     cudfTable = std::make_unique<cudf::table>(std::move(columns));
   }
@@ -333,6 +345,26 @@ void CudfIcebergSplitReader::setupDeleteFileReaders(
               /*isEqualityDelete=*/false)) {
         continue;
       }
+
+      // If 'referencedDataFile' is set and does not match the split's
+      // data file, log a warning. Do NOT skip the DV: silently dropping
+      // a coordinator-shipped DV could mask deletes if the planner and
+      // worker disagree on path normalization (trailing slash, scheme
+      // prefix like s3:// vs s3a://, percent-encoding). The coordinator
+      // already filters per-split, so the worker-side check is purely
+      // diagnostic.
+      if (!deleteFile.referencedDataFile.empty() &&
+          deleteFile.referencedDataFile != split_->filePath) {
+        LOG(WARNING)
+            << "Iceberg DV referencedDataFile does not match split path. "
+            << "Applying DV anyway. referencedDataFile='"
+            << deleteFile.referencedDataFile << "' splitPath='"
+            << split_->filePath << "'";
+      }
+
+      VELOX_USER_CHECK(
+          not deletionVectorReader_,
+          "CudfIcebergSplitReader encountered multiple deletion vector files for the split");
       deletionVectorReader_ =
           std::make_unique<CudfDeletionVectorReader>(deleteFile, splitOffset);
     } else {
@@ -347,16 +379,7 @@ void CudfIcebergSplitReader::applyDeletionVector(cudf::table_view input) {
   // Apply deletion vector into the deleteMask_
   const auto numRows = input.num_rows();
   deletionVectorReader_->applyDeletes(
-      deleteMask_->mutable_view(),
-      baseReadOffset_,
-      numRows,
-      stream_,
-      get_temp_mr());
-
-  // Reset the deletion vector reader if we have read the entire bitmap.
-  if (deletionVectorReader_->noMoreData()) {
-    deletionVectorReader_.reset();
-  }
+      deleteMaskView_, baseReadOffset_, numRows, stream_, get_temp_mr());
 }
 
 void CudfIcebergSplitReader::applyPositionalDeletes(cudf::table_view input) {
@@ -372,6 +395,8 @@ void CudfIcebergSplitReader::applyPositionalDeletes(cudf::table_view input) {
       connectorQueryCtx_->memoryPool(),
       false,
       true);
+  // Reset the host delete bitmap
+  std::memset(deleteBitmap_->asMutable<uint8_t>(), 0, numBitmaskBytes);
   if (not deviceBitmap_ or deviceBitmap_->size() < numBitmaskBytes) {
     deviceBitmap_ = std::make_shared<rmm::device_buffer>(
         numBitmaskBytes, stream_, get_temp_mr());
@@ -404,19 +429,18 @@ void CudfIcebergSplitReader::applyPositionalDeletes(cudf::table_view input) {
   applyBitmapToMask(
       cudf::device_span<cudf::bitmask_type>(
           static_cast<cudf::bitmask_type*>(deviceBitmap_->data()), numWords),
-      deleteMask_->mutable_view(),
+      deleteMaskView_,
       stream_,
       get_temp_mr());
 }
 
 void CudfIcebergSplitReader::applyEqualityDeletes(cudf::table_view input) {
-  // Reset the row mask to all-true to start
+  // Apply equality deletes against the running deleteMask_.
   const auto numRows = input.num_rows();
 
   // Iteratively apply equality deletes, if any
   for (auto& reader : equalityDeleteFileReaders_) {
-    reader->applyDeletes(
-        input, readColumnNames_, deleteMask_->mutable_view(), stream_);
+    reader->applyDeletes(input, readColumnNames_, deleteMaskView_, stream_);
   }
 }
 
@@ -524,6 +548,13 @@ void CudfIcebergSplitReader::adaptColumns() {
     std::erase_if(readColumnNames_, [&injectedNames](const auto& name) {
       return injectedNames.contains(name);
     });
+    // Sort injected columns by output index once here
+    std::sort(
+        injectedColumns_.begin(),
+        injectedColumns_.end(),
+        [](const auto& a, const auto& b) {
+          return a.outputIndex < b.outputIndex;
+        });
   }
 }
 
@@ -538,13 +569,14 @@ std::unique_ptr<cudf::table> CudfIcebergSplitReader::injectMissingColumns(
       [&](const std::string& value,
           cudf::data_type cudfType,
           const InjectedColumn& col) -> std::unique_ptr<cudf::scalar> {
-    VELOX_CHECK(
-        cudfType.id() == cudf::type_id::STRING or
-            cudfType.id() == cudf::type_id::INT32 or
-            cudfType.id() == cudf::type_id::INT64,
-        "Unsupported partition column type: column '{}', type {}",
-        col.name,
-        col.veloxType->toString());
+    if (cudfType.id() != cudf::type_id::STRING and
+        cudfType.id() != cudf::type_id::INT32 and
+        cudfType.id() != cudf::type_id::INT64) {
+      VELOX_NYI(
+          "Identity partition columns are limited to VARCHAR, INTEGER, and BIGINT only. Other types are not yet supported. Column: '{}', Type: {}",
+          col.name,
+          col.veloxType->toString());
+    }
     try {
       switch (cudfType.id()) {
         case cudf::type_id::STRING:
@@ -573,14 +605,6 @@ std::unique_ptr<cudf::table> CudfIcebergSplitReader::injectMissingColumns(
   const auto totalColumns = columns.size() + injectedColumns_.size();
   std::vector<std::unique_ptr<cudf::column>> output;
   output.reserve(totalColumns);
-
-  // Sort injected columns by output index for sequential interleaving.
-  std::sort(
-      injectedColumns_.begin(),
-      injectedColumns_.end(),
-      [](const auto& a, const auto& b) {
-        return a.outputIndex < b.outputIndex;
-      });
 
   auto injectedColIter = injectedColumns_.begin();
   auto dataColIter = columns.begin();

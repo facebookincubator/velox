@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/tests/CudfDeletionVectorTestUtils.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/tests/CudfIcebergTestBase.h"
 
@@ -22,6 +23,9 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
 #include <gtest/gtest.h>
+
+#include <numeric>
+#include <unordered_set>
 
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::connector::hive::iceberg;
@@ -874,6 +878,151 @@ TEST_F(CudfIcebergGapTests, deletionVectorPlusPositionalDelete) {
       makeFlatVector<int64_t>({20, 40, 50}),
       makeFlatVector<int64_t>({2, 4, 5}),
   });
+
+  assertEqualResults({expected}, {result});
+}
+
+// Chunked read with deletion vector
+TEST_F(CudfIcebergGapTests, deletionVectorAcrossMultipleChunks) {
+  constexpr int64_t kNumRowGroups = 4;
+  constexpr int64_t kRowsPerGroup = 10'000;
+  constexpr int64_t kNumRows = kNumRowGroups * kRowsPerGroup;
+
+  auto rowType = ROW({"c0"}, {BIGINT()});
+  std::vector<RowVectorPtr> dataVectors;
+  dataVectors.reserve(kNumRowGroups);
+
+  for (int64_t i = 0; i < kNumRowGroups; ++i) {
+    const auto begin = i * kRowsPerGroup;
+    const auto count = std::min(kRowsPerGroup, kNumRows - begin);
+    std::vector<int64_t> values(count);
+    std::iota(values.begin(), values.end(), begin);
+    dataVectors.push_back(makeRowVector({makeFlatVector<int64_t>(values)}));
+  }
+
+  auto dataFile = TempFilePath::create();
+  writeToFile(dataFile->getPath(), dataVectors);
+
+  // Delete positions spread across the file
+  std::vector<int64_t> deletedPositions;
+  for (int64_t pos = 0; pos < kNumRows; pos += 1000) {
+    deletedPositions.push_back(pos);
+  }
+  auto bitmapData = serializeRoaringBitmapNoRun<int64_t>(deletedPositions);
+  auto dvFile = writeDvFile(bitmapData);
+  auto dvDelete = makeDvDeleteFile(
+      dvFile->getPath(),
+      bitmapData.size(),
+      static_cast<int64_t>(deletedPositions.size()),
+      0,
+      {},
+      /*dataSequenceNumber=*/2);
+
+  auto splits =
+      makeIcebergSplits(dataFile->getPath(), {dvDelete}, {}, 1, /*dataSeq=*/1);
+
+  // Expected rows: all of [0, kNumRows) except the deleted positions.
+  std::vector<int64_t> expectedValues;
+  expectedValues.reserve(kNumRows - deletedPositions.size());
+  std::unordered_set<int64_t> deletedSet(
+      deletedPositions.begin(), deletedPositions.end());
+  for (int64_t v = 0; v < kNumRows; ++v) {
+    if (deletedSet.count(v) == 0) {
+      expectedValues.push_back(v);
+    }
+  }
+  auto expected = makeRowVector({makeFlatVector<int64_t>(expectedValues)});
+
+  // Use a small chunk-read-limit to force the reader to emit several output
+  // chunks.
+  auto plan = makeTableScanPlan(rowType);
+  auto result = AssertQueryBuilder(plan)
+                    .connectorSessionProperty(
+                        kCudfIcebergConnectorId,
+                        cudf_velox::connector::hive::CudfHiveConfig::
+                            kMaxChunkReadLimitSession,
+                        "1024")
+                    .splits(splits)
+                    .copyResults(pool());
+
+  assertEqualResults({expected}, {result});
+}
+
+// Chunked read with positional deletes
+TEST_F(CudfIcebergGapTests, positionalDeletesAcrossMultipleChunks) {
+  constexpr int64_t kNumRowGroups = 4;
+  constexpr int64_t kRowsPerGroup = 10'000;
+  constexpr int64_t kNumRows = kNumRowGroups * kRowsPerGroup;
+
+  auto rowType = ROW({"c0"}, {BIGINT()});
+  std::vector<RowVectorPtr> dataVectors;
+  dataVectors.reserve(kNumRowGroups);
+
+  for (int64_t i = 0; i < kNumRowGroups; ++i) {
+    const auto begin = i * kRowsPerGroup;
+    const auto count = std::min(kRowsPerGroup, kNumRows - begin);
+    std::vector<int64_t> values(count);
+    std::iota(values.begin(), values.end(), begin);
+    dataVectors.push_back(makeRowVector({makeFlatVector<int64_t>(values)}));
+  }
+  auto dataFile = TempFilePath::create();
+  writeToFile(dataFile->getPath(), dataVectors);
+
+  std::vector<int64_t> deletedPositions;
+  for (int64_t pos = 500; pos < kNumRows; pos += 1500) {
+    deletedPositions.push_back(pos);
+  }
+
+  auto pathColumn = IcebergMetadataColumn::icebergDeleteFilePathColumn();
+  auto posColumn = IcebergMetadataColumn::icebergDeletePosColumn();
+  auto posDeleteFile = TempFilePath::create();
+  auto filePathVec = makeFlatVector<std::string>(
+      static_cast<vector_size_t>(deletedPositions.size()),
+      [&](vector_size_t) { return dataFile->getPath(); });
+  auto posVec = makeFlatVector<int64_t>(deletedPositions);
+  auto posDeleteVector =
+      makeRowVector({pathColumn->name, posColumn->name}, {filePathVec, posVec});
+  writeDeleteFile(
+      DeleteFileFormat::DWRF,
+      posDeleteFile->getPath(),
+      std::vector<RowVectorPtr>{posDeleteVector});
+
+  IcebergDeleteFile posDelete(
+      FileContent::kPositionalDeletes,
+      posDeleteFile->getPath(),
+      dwio::common::FileFormat::DWRF,
+      static_cast<int64_t>(deletedPositions.size()),
+      getFileSize(posDeleteFile->getPath()),
+      /*equalityFieldIds=*/{},
+      /*lowerBounds=*/{},
+      /*upperBounds=*/{},
+      /*dataSequenceNumber=*/2);
+
+  auto splits =
+      makeIcebergSplits(dataFile->getPath(), {posDelete}, {}, 1, /*dataSeq=*/1);
+
+  std::vector<int64_t> expectedValues;
+  expectedValues.reserve(kNumRows - deletedPositions.size());
+  std::unordered_set<int64_t> deletedSet(
+      deletedPositions.begin(), deletedPositions.end());
+  for (int64_t v = 0; v < kNumRows; ++v) {
+    if (deletedSet.count(v) == 0) {
+      expectedValues.push_back(v);
+    }
+  }
+  auto expected = makeRowVector({makeFlatVector<int64_t>(expectedValues)});
+
+  // Use a small chunk-read-limit to force the reader to emit several output
+  // chunks.
+  auto plan = makeTableScanPlan(rowType);
+  auto result = AssertQueryBuilder(plan)
+                    .connectorSessionProperty(
+                        kCudfIcebergConnectorId,
+                        cudf_velox::connector::hive::CudfHiveConfig::
+                            kMaxChunkReadLimitSession,
+                        "1024")
+                    .splits(splits)
+                    .copyResults(pool());
 
   assertEqualResults({expected}, {result});
 }

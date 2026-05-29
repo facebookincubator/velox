@@ -138,7 +138,8 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   std::shared_ptr<const velox_iceberg::HiveIcebergSplit> icebergSplit_;
   std::shared_ptr<const velox_hive::HiveConfig> hiveConfig_;
 
-  // cuCollections-accelerated deletion vector (roaring bitmap) reader
+  // cuDF-accelerated reader for Iceberg V3 deletion vector (Puffin-encoded
+  // roaring bitmaps).
   std::unique_ptr<CudfDeletionVectorReader> deletionVectorReader_;
 
   // Positional delete file readers
@@ -173,6 +174,8 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   BufferPtr deleteBitmap_{nullptr};
   std::shared_ptr<rmm::device_buffer> deviceBitmap_;
   std::unique_ptr<cudf::column> deleteMask_;
+  // Current mutable view into the deleteMask_ column.
+  cudf::mutable_column_view deleteMaskView_;
 };
 
 } // namespace facebook::velox::cudf_velox::connector::hive::iceberg

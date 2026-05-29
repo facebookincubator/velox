@@ -112,6 +112,43 @@ std::string serializeRoaringBitmapWithRuns(
   return data;
 }
 
+// Wraps a DV-v1 payload (numKeys + per-group [key + roaring32]) in the
+// Puffin DV-v1 blob envelope:
+//   [combined length = magic + payload (4 bytes, big-endian)]
+//   [magic {0xD1,0xD3,0x39,0x64} (4 bytes)]
+//   [payload (N bytes)]
+//   [CRC (4 bytes, ignored on read)]
+std::string serializeDvV1Envelope(const std::string& payload) {
+  constexpr uint8_t kMagic[4] = {0xD1, 0xD3, 0x39, 0x64};
+  const uint32_t combinedLength = static_cast<uint32_t>(4 + payload.size());
+
+  std::string blob;
+  // Combined length, big-endian.
+  blob.push_back(static_cast<char>((combinedLength >> 24) & 0xFF));
+  blob.push_back(static_cast<char>((combinedLength >> 16) & 0xFF));
+  blob.push_back(static_cast<char>((combinedLength >> 8) & 0xFF));
+  blob.push_back(static_cast<char>(combinedLength & 0xFF));
+  blob.append(reinterpret_cast<const char*>(kMagic), 4);
+  blob.append(payload);
+  // CRC placeholder (not validated by the reader).
+  blob.append(4, '\0');
+  return blob;
+}
+
+// Builds a single-group DV-v1 payload: numKeys=1, the group's high-32-bits
+// key, then a roaring32 bitmap of the group's low positions.
+template <typename IndexType>
+std::string serializeSingleGroupDvV1Payload(
+    uint32_t highBitsKey,
+    const std::vector<IndexType>& lowPositions) {
+  std::string payload;
+  const uint64_t numKeys = 1;
+  payload.append(reinterpret_cast<const char*>(&numKeys), sizeof(uint64_t));
+  payload.append(reinterpret_cast<const char*>(&highBitsKey), sizeof(uint32_t));
+  payload.append(serializeRoaringBitmapNoRun<IndexType>(lowPositions));
+  return payload;
+}
+
 // Expands a list of run-encoded containers into the full set of positions
 // they represent. Each container is keyed by its high 16 bits and contains
 // runs of (start, lengthMinus1)
@@ -207,7 +244,6 @@ TEST_F(CudfDeletionVectorReaderTest, basicArrayContainer) {
 
   auto dvFile = makeDvDeleteFile(tempFile->getPath(), fileSize);
   CudfDeletionVectorReader reader(dvFile);
-  EXPECT_FALSE(reader.noMoreData());
 
   constexpr auto numRows = 100;
   auto deleteMask = makeDeletionColumn(numRows, stream(), mr());
@@ -215,7 +251,6 @@ TEST_F(CudfDeletionVectorReaderTest, basicArrayContainer) {
 
   auto setBits = getSetBits<IndexType>(deleteMask->view(), numRows, stream());
   EXPECT_EQ(setBits, positions);
-  EXPECT_TRUE(reader.noMoreData());
 }
 
 TEST_F(CudfDeletionVectorReaderTest, batchRangeFiltering) {
@@ -318,7 +353,6 @@ TEST_F(CudfDeletionVectorReaderTest, runContainersWithOffsetHeader) {
   auto setBits = getSetBits<IndexType>(deleteMask->view(), numRows, stream());
 
   EXPECT_EQ(setBits, expected);
-  EXPECT_TRUE(reader.noMoreData());
 }
 
 TEST_F(CudfDeletionVectorReaderTest, largePositionsMultipleContainers) {
@@ -429,10 +463,9 @@ TEST_F(CudfDeletionVectorReaderTest, startRowOffset) {
   EXPECT_EQ(setBits, (std::vector<IndexType>{0, 5, 10}));
 }
 
-TEST_F(CudfDeletionVectorReaderTest, noMoreDataAfterAllConsumed) {
-  // GPU reader loads the bitmap lazily on the first `applyDeletes` call and
-  // sets noMoreData() to true thereafter. Subsequent calls re-use the same
-  // bitmap but do not reload it.
+TEST_F(CudfDeletionVectorReaderTest, reusableAcrossChunks) {
+  // GPU reader loads the bitmap lazily on the first `applyDeletes` call
+  // and remains usable until destroyed.
   using IndexType = int64_t;
   std::vector<IndexType> positions = {0, 1, 2};
   auto bitmapData = serializeRoaringBitmapNoRun<IndexType>(positions);
@@ -441,12 +474,10 @@ TEST_F(CudfDeletionVectorReaderTest, noMoreDataAfterAllConsumed) {
 
   auto dvFile = makeDvDeleteFile(tempFile->getPath(), fileSize);
   CudfDeletionVectorReader reader(dvFile);
-  EXPECT_FALSE(reader.noMoreData());
 
   constexpr uint64_t numRows = 10;
   auto mask1 = makeDeletionColumn(numRows, stream(), mr());
   reader.applyDeletes(mask1->mutable_view(), 0, numRows, stream(), mr());
-  EXPECT_TRUE(reader.noMoreData());
 
   auto bits1 = getSetBits<IndexType>(mask1->view(), numRows, stream());
   EXPECT_EQ(bits1, (std::vector<IndexType>{0, 1, 2}));
@@ -457,7 +488,6 @@ TEST_F(CudfDeletionVectorReaderTest, noMoreDataAfterAllConsumed) {
   reader.applyDeletes(mask2->mutable_view(), 10, numRows, stream(), mr());
   auto bits2 = getSetBits<IndexType>(mask2->view(), numRows, stream());
   EXPECT_TRUE(bits2.empty());
-  EXPECT_TRUE(reader.noMoreData());
 }
 
 TEST_F(CudfDeletionVectorReaderTest, largeDeletionVector) {
@@ -495,6 +525,27 @@ TEST_F(CudfDeletionVectorReaderTest, largeDeletionVector) {
     expected.push_back(i);
   }
   EXPECT_EQ(setBits, expected);
+}
+
+TEST_F(CudfDeletionVectorReaderTest, singleBitmapNonZeroHighBits) {
+  // Regression test for a single-bitmap DV-v1 blob whose group key is non-zero.
+  using IndexType = int64_t;
+  auto payload = serializeSingleGroupDvV1Payload<IndexType>(
+      /*highBitsKey=*/1, /*lowPositions=*/{3, 7});
+  auto blob = serializeDvV1Envelope(payload);
+  auto tempFile = writeDvFile(blob);
+  auto fileSize = static_cast<uint64_t>(blob.size());
+
+  auto dvFile =
+      makeDvDeleteFile(tempFile->getPath(), fileSize, /*recordCount=*/2);
+  CudfDeletionVectorReader reader(dvFile);
+
+  constexpr auto numRows = 20;
+  auto deleteMask = makeDeletionColumn(numRows, stream(), mr());
+  reader.applyDeletes(deleteMask->mutable_view(), 0, numRows, stream(), mr());
+
+  auto setBits = getSetBits<IndexType>(deleteMask->view(), numRows, stream());
+  EXPECT_TRUE(setBits.empty());
 }
 
 // ---------------------------------------------------------------------------

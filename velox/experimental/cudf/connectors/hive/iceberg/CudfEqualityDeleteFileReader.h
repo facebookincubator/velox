@@ -148,7 +148,7 @@ class CudfEqualityDeleteFileReader {
   std::vector<std::string> equalityColumnNames_;
 
   // Number of delete key tuples loaded from the file.
-  size_t numDeleteKeys_;
+  size_t numDeleteKeys_{0};
 
   // Transient CPU and GPU tables containing all rows read from the equality
   // delete file, used for equality comparison during probing.
