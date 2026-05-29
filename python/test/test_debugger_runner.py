@@ -111,6 +111,7 @@ class TestPyVeloxDebuggerRunner(unittest.TestCase):
         # Create data with some duplicates for aggregation.
         values = [i % 10 for i in range(batch_size)]
         array = pyarrow.array(values)
+        # pyrefly: ignore [bad-argument-type]
         batch = pyarrow.record_batch([array], names=["c0"])
         vector = to_velox(batch)
 
@@ -126,19 +127,26 @@ class TestPyVeloxDebuggerRunner(unittest.TestCase):
         it = runner.execute()
 
         # Get aggregate first input, 100 records.
+        # pyrefly: ignore [missing-attribute]
         it.step()
+        # pyrefly: ignore [missing-attribute]
         self.assertEqual(it.current().size(), 100)
 
         # Get aggregate second input, 100 records.
+        # pyrefly: ignore [missing-attribute]
         it.step()
+        # pyrefly: ignore [missing-attribute]
         self.assertEqual(it.current().size(), 100)
 
         # Ignore next aggregate input and move to the task output, 10 records.
+        # pyrefly: ignore [missing-attribute]
         it.next()
+        # pyrefly: ignore [missing-attribute]
         self.assertEqual(it.current().size(), 10)
 
         # Should be done now.
         with self.assertRaises(StopIteration):
+            # pyrefly: ignore [missing-attribute]
             it.next()
 
     def test_iterator_at(self):
@@ -147,34 +155,52 @@ class TestPyVeloxDebuggerRunner(unittest.TestCase):
         runner.set_breakpoint(self._node_ids[8])
 
         it = runner.execute()
+        # pyrefly: ignore [missing-attribute]
         self.assertEqual(it.at(), "")
 
+        # pyrefly: ignore [missing-attribute]
         it.step()
+        # pyrefly: ignore [missing-attribute]
         self.assertEqual(it.at(), self._node_ids[3])
 
+        # pyrefly: ignore [missing-attribute]
         it.step()
+        # pyrefly: ignore [missing-attribute]
         self.assertEqual(it.at(), self._node_ids[8])
 
+        # pyrefly: ignore [missing-attribute]
         it.step()
+        # pyrefly: ignore [missing-attribute]
         self.assertEqual(it.at(), "")
 
+        # pyrefly: ignore [missing-attribute]
         it.step()
+        # pyrefly: ignore [missing-attribute]
         self.assertEqual(it.at(), self._node_ids[3])
 
+        # pyrefly: ignore [missing-attribute]
         it.next()
+        # pyrefly: ignore [missing-attribute]
         self.assertEqual(it.at(), "")
 
+        # pyrefly: ignore [missing-attribute]
         it.next()
+        # pyrefly: ignore [missing-attribute]
         self.assertEqual(it.at(), "")
 
+        # pyrefly: ignore [missing-attribute]
         it.step()
+        # pyrefly: ignore [missing-attribute]
         self.assertEqual(it.at(), self._node_ids[3])
 
     def test_hook_always_stop(self):
         """Hook that always returns True should behave like set_breakpoint."""
         runner = LocalDebuggerRunner(self._plan_node)
+        # pyrefly: ignore [missing-attribute]
         runner.set_hook(self._node_ids[3], lambda v: True)
+        # pyrefly: ignore [missing-attribute]
         runner.set_hook(self._node_ids[5], lambda v: True)
+        # pyrefly: ignore [missing-attribute]
         runner.set_hook(self._node_ids[8], lambda v: True)
         self.assertEqual(
             self._count_step(runner), self._batch_size * self._num_batches * 4
@@ -183,8 +209,11 @@ class TestPyVeloxDebuggerRunner(unittest.TestCase):
     def test_hook_never_stop(self):
         """Hook that always returns False should skip the breakpoint."""
         runner = LocalDebuggerRunner(self._plan_node)
+        # pyrefly: ignore [missing-attribute]
         runner.set_hook(self._node_ids[3], lambda v: False)
+        # pyrefly: ignore [missing-attribute]
         runner.set_hook(self._node_ids[5], lambda v: False)
+        # pyrefly: ignore [missing-attribute]
         runner.set_hook(self._node_ids[8], lambda v: False)
         # Since all hooks return False, step() should behave like next()
         self.assertEqual(self._count_step(runner), self._batch_size * self._num_batches)
@@ -202,6 +231,7 @@ class TestPyVeloxDebuggerRunner(unittest.TestCase):
             # Stop only on odd calls.
             return call_count % 2 == 1
 
+        # pyrefly: ignore [missing-attribute]
         runner.set_hook(self._node_ids[5], conditional_hook)
 
         # The hook is called for each batch (10 batches).
@@ -218,9 +248,11 @@ class TestPyVeloxDebuggerRunner(unittest.TestCase):
         runner.set_breakpoint(self._node_ids[3])
 
         # set_hook that never stops.
+        # pyrefly: ignore [missing-attribute]
         runner.set_hook(self._node_ids[5], lambda v: False)
 
         # set_hook that always stops.
+        # pyrefly: ignore [missing-attribute]
         runner.set_hook(self._node_ids[8], lambda v: True)
 
         # node_ids[3] stops (10 batches), node_ids[8] stops (10 batches),
@@ -239,6 +271,7 @@ class TestPyVeloxDebuggerRunner(unittest.TestCase):
             received_sizes.append(vector.size())
             return True
 
+        # pyrefly: ignore [missing-attribute]
         runner.set_hook(self._node_ids[5], inspect_hook)
 
         it = runner.execute()
@@ -246,6 +279,7 @@ class TestPyVeloxDebuggerRunner(unittest.TestCase):
         # Consume all output.
         while True:
             try:
+                # pyrefly: ignore [missing-attribute]
                 it.step()
             except StopIteration:
                 break
@@ -266,17 +300,23 @@ class TestPyVeloxDebuggerRunner(unittest.TestCase):
 
         # Step targeting node_ids[5] should skip node_ids[3] and stop at
         # node_ids[5].
+        # pyrefly: ignore [missing-attribute]
         it.step(self._node_ids[5])
+        # pyrefly: ignore [missing-attribute]
         self.assertEqual(it.at(), self._node_ids[5])
 
         # Step targeting node_ids[8] should skip node_ids[5] (remaining) and
         # stop at node_ids[8].
+        # pyrefly: ignore [missing-attribute]
         it.step(self._node_ids[8])
+        # pyrefly: ignore [missing-attribute]
         self.assertEqual(it.at(), self._node_ids[8])
 
         # Step with no filter (default) stops at the next breakpoint or task
         # output.
+        # pyrefly: ignore [missing-attribute]
         it.step()
+        # pyrefly: ignore [missing-attribute]
         self.assertEqual(it.at(), "")
 
     def test_step_with_plan_id_counts(self):
@@ -292,6 +332,7 @@ class TestPyVeloxDebuggerRunner(unittest.TestCase):
         # Only step to node_ids[5], skipping node_ids[3].
         while True:
             try:
+                # pyrefly: ignore [missing-attribute]
                 vector = it.step(self._node_ids[5])
                 total_size += vector.size()
             except StopIteration:
