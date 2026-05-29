@@ -121,6 +121,44 @@ Mathematical Functions
 
     Returns the cosecant of ``x``.
 
+.. spark:function:: decimal_ceil(x, scale) -> decimal
+
+    Returns the decimal value ``x`` rounded toward positive infinity to the
+    specified target ``scale``. The first argument must be a DECIMAL and the
+    second must be a constant INTEGER representing the desired number of digits
+    after the decimal point.
+
+    When ``scale`` is negative, rounds to a power of 10 (e.g., scale = -2
+    rounds to the nearest hundred toward +∞). When ``scale`` >= the input
+    scale, returns the value unchanged. Values that overflow the result
+    precision return NULL.
+
+    The result type precision and scale follow Spark's ``RoundBase.dataType``
+    logic. ::
+
+        SELECT decimal_ceil(1.234, 1); -- 1.3 (DECIMAL(3,1))
+        SELECT decimal_ceil(-1.234, 1); -- -1.2 (DECIMAL(3,1))
+        SELECT decimal_ceil(99.0, -1); -- 100 (DECIMAL(4,0))
+
+.. spark:function:: decimal_floor(x, scale) -> decimal
+
+    Returns the decimal value ``x`` rounded toward negative infinity to the
+    specified target ``scale``. The first argument must be a DECIMAL and the
+    second must be a constant INTEGER representing the desired number of digits
+    after the decimal point.
+
+    When ``scale`` is negative, rounds to a power of 10 (e.g., scale = -2
+    rounds to the nearest hundred toward -∞). When ``scale`` >= the input
+    scale, returns the value unchanged. Values that overflow the result
+    precision return NULL.
+
+    The result type precision and scale follow Spark's ``RoundBase.dataType``
+    logic. ::
+
+        SELECT decimal_floor(1.234, 1); -- 1.2 (DECIMAL(3,1))
+        SELECT decimal_floor(-1.234, 1); -- -1.3 (DECIMAL(3,1))
+        SELECT decimal_floor(99.0, -1); -- 90 (DECIMAL(4,0))
+
 .. spark:function:: degrees(x) -> double
 
     Converts angle x in radians to degrees.
