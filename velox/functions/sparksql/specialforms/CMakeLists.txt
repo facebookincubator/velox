@@ -15,6 +15,7 @@
 velox_add_library(
   velox_functions_spark_specialforms
   AtLeastNNonNulls.cpp
+  DecimalCeilFloor.cpp
   DecimalRound.cpp
   FromJson.cpp
   GetArrayStructFields.cpp
@@ -24,6 +25,7 @@ velox_add_library(
   SparkCastHooks.cpp
   HEADERS
   AtLeastNNonNulls.h
+  DecimalCeilFloor.h
   DecimalRound.h
   FromJson.h
   GetArrayStructFields.h

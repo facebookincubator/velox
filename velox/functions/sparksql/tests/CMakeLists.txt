@@ -37,6 +37,7 @@ add_executable(
   DateTimeFunctionsTest.cpp
   DecimalArithmeticTest.cpp
   DecimalCompareTest.cpp
+  DecimalCeilFloorTest.cpp
   DecimalRoundTest.cpp
   DecimalUtilTest.cpp
   ElementAtTest.cpp

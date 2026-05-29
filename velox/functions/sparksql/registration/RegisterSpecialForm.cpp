@@ -18,6 +18,7 @@
 #include "velox/expression/RowConstructor.h"
 #include "velox/expression/SpecialFormRegistry.h"
 #include "velox/functions/sparksql/specialforms/AtLeastNNonNulls.h"
+#include "velox/functions/sparksql/specialforms/DecimalCeilFloor.h"
 #include "velox/functions/sparksql/specialforms/DecimalRound.h"
 #include "velox/functions/sparksql/specialforms/FromJson.h"
 #include "velox/functions/sparksql/specialforms/GetArrayStructFields.h"
@@ -39,6 +40,12 @@ void registerSpecialFormGeneralFunctions(const std::string& prefix) {
   exec::registerFunctionCallToSpecialForm(
       DecimalRoundCallToSpecialForm::kRoundDecimal,
       std::make_unique<DecimalRoundCallToSpecialForm>());
+  exec::registerFunctionCallToSpecialForm(
+      DecimalCeilCallToSpecialForm::kCeilDecimal,
+      std::make_unique<DecimalCeilCallToSpecialForm>());
+  exec::registerFunctionCallToSpecialForm(
+      DecimalFloorCallToSpecialForm::kFloorDecimal,
+      std::make_unique<DecimalFloorCallToSpecialForm>());
   exec::registerFunctionCallToSpecialForm(
       AtLeastNNonNullsCallToSpecialForm::kAtLeastNNonNulls,
       std::make_unique<AtLeastNNonNullsCallToSpecialForm>());
