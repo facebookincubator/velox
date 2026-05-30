@@ -1167,6 +1167,15 @@ std::unordered_map<std::string, RuntimeMetric> HiveIndexSource::runtimeStats() {
           static_cast<int64_t>(ssdRead.max()),
           RuntimeCounter::Unit::kBytes);
     }
+    const auto& readGap = ioStatistics_->readGap();
+    if (readGap.count() > 0) {
+      stats[std::string(FileDataSource::kReadGapBytes)] = RuntimeMetric(
+          static_cast<int64_t>(readGap.sum()),
+          readGap.count(),
+          static_cast<int64_t>(readGap.min()),
+          static_cast<int64_t>(readGap.max()),
+          RuntimeCounter::Unit::kBytes);
+    }
   }
 
   return stats;
