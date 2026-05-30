@@ -63,8 +63,17 @@ Re2Regex::Re2Regex(std::string_view javaPattern, Options opt) {
   // Translate Java syntax to RE2 syntax using the same helper Velox
   // Spark/Presto functions use.  This is a free function in Re2Functions.h
   // (FOLLY_ALWAYS_INLINE), so there's no separate dependency.
-  const std::string re2Pattern =
+  std::string re2Pattern =
       functions::prepareRegexpReplacePattern(toVelox(javaPattern));
+  // Java's MULTILINE flag doesn't map cleanly to any RE2 Options bit:
+  // RE2's default behavior is that `^` and `$` only match at the start/end
+  // of the entire input.  The inline `(?m)` modifier is the only way to
+  // enable per-line anchoring.  We prepend it when the caller asks for
+  // MULTILINE (oneLine == false).  Java MULTILINE is purely additive
+  // (it doesn't affect `.` or non-anchor metas), so prepending is safe.
+  if (!opt.oneLine) {
+    re2Pattern = "(?m)" + re2Pattern;
+  }
   re_ = std::make_unique<re2::RE2>(toSp(re2Pattern), toRe2Options(opt));
   if (!re_->ok()) {
     error_ = re_->error();
