@@ -763,6 +763,13 @@ read operation.</p></td>
 <td><p>The total bytes read from the in-memory (RAM) cache, including min and
 max per read operation.</p></td>
 </tr>
+<tr class="row-even"><td><p>readGapBytes</p></td>
+<td><p>bytes</p></td>
+<td><p>The total gap bytes between consecutive read regions before I/O
+coalescing. Measures data locality on disk — smaller gaps indicate
+co-accessed columns are physically adjacent in the file. Includes
+min and max per gap.</p></td>
+</tr>
 </tbody>
 </table>
 </section>
