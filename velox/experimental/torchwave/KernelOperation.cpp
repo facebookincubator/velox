@@ -624,11 +624,35 @@ void collectElementwiseLeaves(
     if (!seen.insert(value).second) {
       continue;
     }
-    if (subgraphInputs.count(value) || !value->producer()) {
+    auto* producer = value->producer();
+    if (producer && producer->target() == "prim.ListPack") {
+      bool isRegister = meta && i < meta->argumentMeta.size() &&
+          meta->argumentMeta[i].isRegister;
+      if (isRegister) {
+        for (const auto& listInput : producer->inputs()) {
+          auto* lv = listInput.value;
+          if (!seen.insert(lv).second) {
+            continue;
+          }
+          if (subgraphInputs.count(lv) || !lv->producer()) {
+            leafIds.push_back(lv->id());
+          } else {
+            auto* lp = lv->producer();
+            auto* lpMeta = Registry::metadata(lp->target());
+            if (lpMeta && lpMeta->elementwise) {
+              collectElementwiseLeaves(lp, subgraphInputs, seen, leafIds);
+            } else {
+              leafIds.push_back(lv->id());
+            }
+          }
+        }
+        continue;
+      }
+    }
+    if (subgraphInputs.count(value) || !producer) {
       leafIds.push_back(value->id());
       continue;
     }
-    auto* producer = value->producer();
     auto* producerMeta = Registry::metadata(producer->target());
     if (producerMeta && producerMeta->elementwise) {
       collectElementwiseLeaves(producer, subgraphInputs, seen, leafIds);
@@ -806,11 +830,12 @@ OutputDesc KernelOperation::makeOutputDesc(
 
   if (returnMeta.reserveShape) {
     auto reserveShape = returnMeta.reserveShape;
-    desc.reserveShape = [node, reserveShape](
-                            NodeCP /*unused*/,
+    auto* originalNode = compileCtx_.originalFromVariant(node);
+    desc.reserveShape = [node, originalNode, reserveShape](
                             nativert::ExecutionFrame& frame,
-                            const FormalToActual& map) {
-      return reserveShape(node, frame, map);
+                            const FormalToActual& map,
+                            const NodeMap& nodeMap) {
+      return reserveShape(node, frame, map, originalNode, nodeMap);
     };
   }
 
@@ -940,7 +965,7 @@ void KernelOperation::setOutputs(
   }
 }
 
-std::string KernelOperation::toString() const {
+std::string KernelOperation::toString(const OpInvocation* invocation) const {
   std::unordered_set<ValueCP> inputSet(
       orderedInputs_.begin(), orderedInputs_.begin() + numInputs_);
   std::unordered_set<ValueCP> outputSet(
@@ -950,6 +975,9 @@ std::string KernelOperation::toString() const {
   opts.boundaryValues = &inputSet;
   opts.breakoutValues = &outputSet;
   opts.showOutputIds = true;
+  if (invocation) {
+    opts.formalToActual = &invocation->bindings();
+  }
   if (waveGraph_) {
     opts.valueTypes = &waveGraph_->types();
     opts.graph = waveGraph_->graph();
