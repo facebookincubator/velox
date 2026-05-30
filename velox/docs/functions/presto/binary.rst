@@ -173,5 +173,6 @@ Binary Functions
     Computes the xxhash64 hash of ``binary``.
 
 .. function:: xxhash64(binary, bigint) -> varbinary
+   :noindex:
 
     Computes the xxhash64 hash of ``binary`` with ``bigint`` seed.

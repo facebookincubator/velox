@@ -27,6 +27,7 @@ Aggregate Functions
     the unique identifiers associated with each key.
 
 .. function:: merge(KHyperLogLog) -> KHyperLogLog
+   :noindex:
 
     Returns the ``KHyperLogLog`` of the aggregate union of the individual ``KHyperLogLog``
     structures.
@@ -35,6 +36,7 @@ Scalar Functions
 ----------------
 
 .. function:: cardinality(khll) -> bigint
+   :noindex:
 
     Returns the estimated total cardinality (number of unique keys) from the
     ``KHyperLogLog`` sketch ``khll``.
