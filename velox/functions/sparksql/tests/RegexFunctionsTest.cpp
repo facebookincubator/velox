@@ -53,6 +53,13 @@ class RegexFunctionsTest : public test::SparkFunctionBaseTest {
         fmt::format("regexp_extract(c0, '{}')", pattern), str);
   }
 
+  std::optional<int32_t> regexpInstr(
+      std::optional<std::string> str,
+      std::string pattern) {
+    return evaluateOnce<int32_t>(
+        fmt::format("regexp_instr(c0, '{}')", pattern), str);
+  }
+
   std::string testRegexpReplace(
       const std::optional<std::string>& input,
       const std::string& pattern,
@@ -665,11 +672,6 @@ TEST_F(RegexFunctionsTest, regexpReplacePreprocess) {
 }
 
 TEST_F(RegexFunctionsTest, regexpInstrBasic) {
-  auto regexpInstr = [&](std::optional<std::string> str, std::string pattern) {
-    return evaluateOnce<int32_t>(
-        fmt::format("regexp_instr(c0, '{}')", pattern), str);
-  };
-
   // Basic match at start.
   EXPECT_EQ(regexpInstr("hello world", "world"), 7);
   // Match at position 1.
@@ -693,11 +695,6 @@ TEST_F(RegexFunctionsTest, regexpInstrBasic) {
 }
 
 TEST_F(RegexFunctionsTest, regexpInstrUnicode) {
-  auto regexpInstr = [&](std::optional<std::string> str, std::string pattern) {
-    return evaluateOnce<int32_t>(
-        fmt::format("regexp_instr(c0, '{}')", pattern), str);
-  };
-
   // Unicode: each character is multi-byte but position should be
   // character-based.
   // \xC3\xA9 = é, \xC3\xA8 = è, \xC3\xA0 = à (each 2 bytes, 1 char).
@@ -729,8 +726,8 @@ TEST_F(RegexFunctionsTest, regexpInstrUnicode) {
 TEST_F(RegexFunctionsTest, regexpInstrDynamicPattern) {
   // Test with non-constant (dynamic) pattern using two column inputs.
   auto strings =
-      makeFlatVector<StringView>({"hello world", "abc123", "test", "foo bar"});
-  auto patterns = makeFlatVector<StringView>({"world", "[0-9]+", "xyz", "bar"});
+      makeFlatVector({"hello world"_sv, "abc123"_sv, "test"_sv, "foo bar"_sv});
+  auto patterns = makeFlatVector({"world"_sv, "[0-9]+"_sv, "xyz"_sv, "bar"_sv});
   auto result =
       evaluate("regexp_instr(c0, c1)", makeRowVector({strings, patterns}));
   auto expected = makeFlatVector<int32_t>({7, 4, 0, 5});
@@ -738,29 +735,19 @@ TEST_F(RegexFunctionsTest, regexpInstrDynamicPattern) {
 }
 
 TEST_F(RegexFunctionsTest, regexpInstrInvalidPattern) {
-  auto regexpInstr = [&](std::optional<std::string> str, std::string pattern) {
-    return evaluateOnce<int32_t>(
-        fmt::format("regexp_instr(c0, '{}')", pattern), str);
-  };
-
   // Invalid regex pattern should throw (constant pattern path).
   VELOX_ASSERT_THROW(
       regexpInstr("hello", "[invalid"), "Invalid regular expression");
 
   // Invalid regex pattern with dynamic (non-constant) pattern column.
-  auto strings = makeFlatVector<StringView>({"hello"});
-  auto patterns = makeFlatVector<StringView>({"[invalid"});
+  auto strings = makeFlatVector({"hello"_sv});
+  auto patterns = makeFlatVector({"[invalid"_sv});
   VELOX_ASSERT_THROW(
       evaluate("regexp_instr(c0, c1)", makeRowVector({strings, patterns})),
       "invalid regular expression");
 }
 
 TEST_F(RegexFunctionsTest, regexpInstrMultipleMatches) {
-  auto regexpInstr = [&](std::optional<std::string> str, std::string pattern) {
-    return evaluateOnce<int32_t>(
-        fmt::format("regexp_instr(c0, '{}')", pattern), str);
-  };
-
   // Always returns position of FIRST match.
   EXPECT_EQ(regexpInstr("aaa", "a"), 1);
   EXPECT_EQ(regexpInstr("baa", "a"), 2);

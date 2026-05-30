@@ -228,14 +228,8 @@ void registerRegexpReplace(const std::string& prefix) {
       int32_t>({prefix + "regexp_replace"});
 }
 
-// REGEXP_INSTR(string, pattern) → integer
-//
-// Returns the 1-based character position of the first substring that matches
-// the given regex pattern. Returns 0 if no match is found.
 template <typename T>
 struct RegexpInstrFunction {
-  RegexpInstrFunction() : cache_(0) {}
-
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   static constexpr bool is_default_ascii_behavior = true;
@@ -246,9 +240,6 @@ struct RegexpInstrFunction {
       const arg_type<Varchar>* /*stringInput*/,
       const arg_type<Varchar>* pattern) {
     if (pattern) {
-      // Converts Java named groups (?<name>...) to RE2 (?P<name>...) syntax.
-      // Despite the name, this function only handles named group conversion
-      // and is safe for match-only patterns.
       const auto processedPattern = prepareRegexpReplacePattern(*pattern);
       re_.emplace(processedPattern, RE2::Quiet);
       VELOX_USER_CHECK(
@@ -260,15 +251,7 @@ struct RegexpInstrFunction {
     cache_.setMaxCompiledRegexes(config.exprMaxCompiledRegexes());
   }
 
-  FOLLY_ALWAYS_INLINE bool call(
-      int32_t& result,
-      const arg_type<Varchar>& stringInput,
-      const arg_type<Varchar>& pattern) {
-    return callImpl(result, stringInput, pattern);
-  }
-
- private:
-  FOLLY_ALWAYS_INLINE bool callImpl(
+  FOLLY_ALWAYS_INLINE void call(
       int32_t& result,
       const arg_type<Varchar>& stringInput,
       const arg_type<Varchar>& pattern) {
@@ -282,12 +265,8 @@ struct RegexpInstrFunction {
       if (byteOffset == 0) {
         result = 1;
       } else {
-        // Use lengthUnicode to count UTF-8 characters up to the match start.
-        // This handles both ASCII (tight inner loop) and multi-byte sequences
-        // in a single pass.
         const int64_t charCount =
             functions::stringCore::lengthUnicode(input.data(), byteOffset);
-        // Guard against overflow (strings >2B chars).
         VELOX_USER_CHECK_LE(
             charCount,
             static_cast<int64_t>(std::numeric_limits<int32_t>::max()) - 1,
@@ -297,18 +276,16 @@ struct RegexpInstrFunction {
     } else {
       result = 0;
     }
-    return true;
   }
 
+ private:
   const RE2& getOrCompileRegex(const arg_type<Varchar>& pattern) {
-    // Store the processed pattern to ensure the StringView remains valid
-    // through the cache lookup.
     processedPatternBuf_ = prepareRegexpReplacePattern(pattern);
     return *cache_.findOrCompile(StringView(processedPatternBuf_));
   }
 
   std::optional<RE2> re_;
-  detail::ReCache cache_;
+  detail::ReCache cache_{0};
   std::string processedPatternBuf_;
 };
 

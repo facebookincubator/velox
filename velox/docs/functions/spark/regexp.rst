@@ -79,11 +79,6 @@ See https://github.com/google/re2/wiki/Syntax for more information.
     that matches the regular expression ``pattern``. Returns 0 if no match is found.
     If ``string`` is NULL, returns NULL.
 
-    Parameters:
-
-    - **string**: The input string to search.
-    - **pattern**: The regular expression pattern to match.
-
     Examples:
 
     ::
