@@ -153,6 +153,76 @@ jint toJavaFlags(const Options& o) {
   return f;
 }
 
+// Convert a Java `String` index (a UTF-16 code-unit offset) into a byte
+// offset in the given UTF-8 source.  Used to translate Matcher.start()/end()
+// results — which are Java char indices — back into byte offsets in our
+// std::string_view input.  Returns std::string_view::npos on bad input or
+// out-of-range index.
+std::size_t javaCharOffsetToByteOffset(
+    std::string_view utf8,
+    int javaCharOffset) {
+  if (javaCharOffset < 0) {
+    return std::string_view::npos;
+  }
+  int chars = 0;
+  for (std::size_t i = 0; i < utf8.size();) {
+    if (chars == javaCharOffset) {
+      return i;
+    }
+    const unsigned char c = static_cast<unsigned char>(utf8[i]);
+    if (c < 0x80) {
+      i += 1;
+      chars += 1;
+    } else if (c < 0xC0) {
+      // Stray continuation byte — advance to avoid an infinite loop.
+      i += 1;
+      chars += 1;
+    } else if (c < 0xE0) {
+      i += 2;
+      chars += 1;
+    } else if (c < 0xF0) {
+      i += 3;
+      chars += 1;
+    } else {
+      // 4-byte UTF-8 = U+10000..U+10FFFF, encoded as a UTF-16 surrogate
+      // pair (2 code units) in Java.
+      i += 4;
+      chars += 2;
+    }
+  }
+  return chars == javaCharOffset ? utf8.size() : std::string_view::npos;
+}
+
+// Inverse of the above: given a UTF-8 byte offset, return the equivalent
+// Java UTF-16 char offset.  Used when we have to hand a byte offset (used
+// by the caller / JavaMatcherAdapter cursor) over to Java's Matcher.region().
+int byteOffsetToJavaCharOffset(
+    std::string_view utf8,
+    std::size_t byteOffset) {
+  int chars = 0;
+  std::size_t i = 0;
+  while (i < utf8.size() && i < byteOffset) {
+    const unsigned char c = static_cast<unsigned char>(utf8[i]);
+    if (c < 0x80) {
+      i += 1;
+      chars += 1;
+    } else if (c < 0xC0) {
+      i += 1;
+      chars += 1;
+    } else if (c < 0xE0) {
+      i += 2;
+      chars += 1;
+    } else if (c < 0xF0) {
+      i += 3;
+      chars += 1;
+    } else {
+      i += 4;
+      chars += 2;
+    }
+  }
+  return chars;
+}
+
 // Convert a std::string_view (UTF-8) to a JNI jstring.  Owned by caller —
 // must DeleteLocalRef after use.
 jstring toJString(JNIEnv* env, std::string_view sv) {
@@ -287,13 +357,15 @@ bool JavaRegex::Match(
   env->DeleteLocalRef(jin);
 
   // Set region so anchors line up with [startpos, endpos).
+  // Java's Matcher.region(start, end) takes UTF-16 char offsets, not bytes —
+  // translate from our byte-offset parameters first.
+  const jint regionStart = static_cast<jint>(
+      byteOffsetToJavaCharOffset(input, startpos));
+  const jint regionEnd = static_cast<jint>(
+      byteOffsetToJavaCharOffset(input, endpos));
   jobject mRegion = env->CallObjectMethod(
-      m,
-      g_ids.regionMethod,
-      static_cast<jint>(startpos),
-      static_cast<jint>(endpos));
+      m, g_ids.regionMethod, regionStart, regionEnd);
   env->DeleteLocalRef(mRegion);
-  // Anchoring bounds enabled by default; matches() / lookingAt() respect them.
 
   jboolean matched = JNI_FALSE;
   switch (anchor) {
@@ -313,13 +385,13 @@ bool JavaRegex::Match(
     return false;
   }
 
-  // Extract submatches: Matcher.start(i)/end(i) return offsets into the
-  // original CharSequence (= our `buf` = a prefix of `input`).  Convert to
-  // string_views pointing into the caller's `input` buffer.
+  // Extract submatches: Matcher.start(i)/end(i) return UTF-16 char offsets
+  // into the original CharSequence (= our `buf` = a prefix of `input`).
+  // Translate each Java char offset back to a byte offset in `input` so
+  // string_view substr arithmetic works for non-ASCII input.
   for (int i = 0; i < nsubmatch; ++i) {
     jint s = env->CallIntMethod(m, g_ids.startMethod, i);
     if (env->ExceptionCheck()) {
-      // Out-of-bounds: leave as empty sentinel.
       env->ExceptionClear();
       submatch[i] = std::string_view{};
       continue;
@@ -327,8 +399,15 @@ bool JavaRegex::Match(
     jint e = env->CallIntMethod(m, g_ids.endMethod, i);
     if (s < 0) {
       submatch[i] = std::string_view{};
+      continue;
+    }
+    const std::size_t sByte = javaCharOffsetToByteOffset(input, s);
+    const std::size_t eByte = javaCharOffsetToByteOffset(input, e);
+    if (sByte == std::string_view::npos || eByte == std::string_view::npos ||
+        eByte < sByte) {
+      submatch[i] = std::string_view{};
     } else {
-      submatch[i] = input.substr(s, e - s);
+      submatch[i] = input.substr(sByte, eByte - sByte);
     }
   }
 
