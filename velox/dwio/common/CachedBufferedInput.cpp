@@ -302,7 +302,7 @@ std::vector<int32_t> CachedBufferedInput::groupRequests(
   std::vector<int32_t> ends;
   ends.reserve(requests.size());
   std::vector<char> ranges;
-  coalesceIo<CacheRequest*, char>(
+  const auto stats = coalesceIo<CacheRequest*, char>(
       requests,
       maxDistance,
       std::numeric_limits<int32_t>::max(),
@@ -328,6 +328,7 @@ std::vector<int32_t> CachedBufferedInput::groupRequests(
           int32_t end,
           uint64_t /*offset*/,
           const std::vector<char>& /*ranges*/) { ends.push_back(end); });
+  ioStatistics_->readGap().merge(stats.gaps);
   return ends;
 }
 
