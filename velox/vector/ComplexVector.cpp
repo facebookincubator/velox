@@ -446,7 +446,7 @@ void RowVector::prepareForReuse() {
       BaseVector::prepareForReuse(child, 0);
     }
   }
-  updateContainsLazyNotLoaded();
+  invalidateContainsLazyNotLoaded();
 }
 
 VectorPtr RowVector::slice(vector_size_t offset, vector_size_t length) const {
@@ -464,33 +464,38 @@ BaseVector* RowVector::loadedVector() {
   if (childrenLoaded_) {
     return this;
   }
-  containsLazyNotLoaded_ = false;
+  bool hasLazy = false;
   for (auto i = 0; i < childrenSize_; ++i) {
     if (!children_[i]) {
       continue;
     }
     auto& newChild = BaseVector::loadedVectorShared(children_[i]);
-    // This is not needed but can potentially optimize decoding speed later.
     if (children_[i].get() != newChild.get()) {
       children_[i] = newChild;
     }
     if (isLazyNotLoaded(*children_[i])) {
-      containsLazyNotLoaded_ = true;
+      hasLazy = true;
     }
   }
+  containsLazyNotLoaded_ = hasLazy ? 1 : 0;
   childrenLoaded_ = true;
   return this;
 }
 
-void RowVector::updateContainsLazyNotLoaded() const {
+void RowVector::invalidateContainsLazyNotLoaded() const {
   childrenLoaded_ = false;
-  containsLazyNotLoaded_ = false;
-  for (auto& child : children_) {
+  containsLazyNotLoaded_ = -1;
+}
+
+void RowVector::computeContainsLazyNotLoaded() const {
+  int8_t result = 0;
+  for (const auto& child : children_) {
     if (child && isLazyNotLoaded(*child)) {
-      containsLazyNotLoaded_ = true;
+      result = 1;
       break;
     }
   }
+  containsLazyNotLoaded_ = result;
 }
 
 void ArrayVectorBase::copyRangesImpl(

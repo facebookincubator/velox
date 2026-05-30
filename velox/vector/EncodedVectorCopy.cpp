@@ -717,7 +717,7 @@ void copyIntoRow(
       copyImpl(
           options, source.childAt(i), ranges, targetChild, targetChildMutable);
     }
-    targetRow->updateContainsLazyNotLoaded();
+    targetRow->invalidateContainsLazyNotLoaded();
   } else {
     BufferPtr nulls;
     if (target->rawNulls() || sourceNulls) {
