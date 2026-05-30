@@ -493,5 +493,58 @@ TEST_F(MapTest, resultSize) {
       {keys, values, condition},
       mapVector);
 }
+
+class TransformValuesTest : public SparkFunctionBaseTest {};
+
+TEST_F(TransformValuesTest, basic) {
+  auto input =
+      makeMapVector<int32_t, int64_t>({{{1, 10}, {2, 20}}, {{3, 30}, {4, 40}}});
+  auto result = evaluate<MapVector>(
+      "transform_values(c0, (k, v) -> v * 2)", makeRowVector({input}));
+  auto expected =
+      makeMapVector<int32_t, int64_t>({{{1, 20}, {2, 40}}, {{3, 60}, {4, 80}}});
+  ::facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(TransformValuesTest, keyAndValueInLambda) {
+  auto input = makeMapVector<int32_t, int64_t>({{{1, 10}, {2, 20}}, {{3, 30}}});
+  auto result = evaluate<MapVector>(
+      "transform_values(c0, (k, v) -> v * k)", makeRowVector({input}));
+  auto expected =
+      makeMapVector<int32_t, int64_t>({{{1, 10}, {2, 40}}, {{3, 90}}});
+  ::facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(TransformValuesTest, nullMap) {
+  // Null input map rows pass through as null output rows.
+  vector_size_t size = 4;
+  auto input = makeMapVector<int32_t, int64_t>(
+      size,
+      [](auto /* row */) { return 2; },
+      [](auto row) { return row % 4; },
+      [](auto row) { return row * 10LL; },
+      nullEvery(2));
+  auto result = evaluate<MapVector>(
+      "transform_values(c0, (k, v) -> v * 2)", makeRowVector({input}));
+  auto expected = makeMapVector<int32_t, int64_t>(
+      size,
+      [](auto /* row */) { return 2; },
+      [](auto row) { return row % 4; },
+      [](auto row) { return row * 20LL; },
+      nullEvery(2));
+  ::facebook::velox::test::assertEqualVectors(expected, result);
+}
+TEST_F(TransformValuesTest, nullValueInMap) {
+  // Null values inside a non-null map must not be skipped — the lambda is
+  // applied to every entry regardless of whether its value is null.
+  auto input =
+      makeMapVectorFromJson<int32_t, int64_t>({"{1: 10, 2: null, 3: 30}"});
+  auto result = evaluate<MapVector>(
+      "transform_values(c0, (k, v) -> k * 100)", makeRowVector({input}));
+  auto expected =
+      makeMapVectorFromJson<int32_t, int64_t>({"{1: 100, 2: 200, 3: 300}"});
+  ::facebook::velox::test::assertEqualVectors(expected, result);
+}
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
