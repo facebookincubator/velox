@@ -37,7 +37,14 @@ OperatorCtx::OperatorCtx(
       planNodeId_(planNodeId),
       operatorId_(operatorId),
       operatorType_(operatorType),
-      pool_(driverCtx_->addOperatorPool(planNodeId, operatorType_)) {}
+      pool_(driverCtx_->addOperatorPool(planNodeId, operatorType_)),
+      customPools_(
+          driverCtx_->addCustomOperatorPools(planNodeId, operatorType_)) {}
+
+memory::MemoryPool* OperatorCtx::customPool(std::string_view tag) const {
+  auto it = customPools_.find(std::string(tag));
+  return it == customPools_.end() ? nullptr : it->second;
+}
 
 core::ExecCtx* OperatorCtx::execCtx() const {
   if (!execCtx_) {

@@ -24,9 +24,9 @@
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/FlushPolicy.h"
 #include "velox/dwio/common/Options.h"
+#include "velox/dwio/common/ParquetFieldId.h"
 #include "velox/dwio/common/Writer.h"
 #include "velox/dwio/common/WriterFactory.h"
-#include "velox/dwio/parquet/ParquetFieldId.h"
 #include "velox/dwio/parquet/writer/WriterConfig.h"
 #include "velox/dwio/parquet/writer/arrow/Metadata.h"
 #include "velox/dwio/parquet/writer/arrow/Types.h"
@@ -134,6 +134,13 @@ struct WriterOptions : public dwio::common::WriterOptions {
   std::optional<int64_t> dataPageSize;
   std::optional<int64_t> dictionaryPageSizeLimit;
   std::optional<bool> enableDictionary;
+  /// Controls how DECIMAL values are stored by the Writer.
+  /// - If unset, the Writer defaults to storing as integer (true),
+  /// using INT32/INT64 for short DECIMAL precisions; higher precisions are
+  /// stored as FIXED_LEN_BYTE_ARRAY.
+  /// - If set to false, DECIMAL values are stored as FIXED_LEN_BYTE_ARRAY,
+  /// regardless of precision.
+  std::optional<bool> enableStoreDecimalAsInteger;
   std::optional<bool> useParquetDataPageV2;
   std::optional<std::string> createdBy;
 

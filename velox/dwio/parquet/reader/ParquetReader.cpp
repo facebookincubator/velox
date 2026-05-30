@@ -27,6 +27,8 @@
 
 namespace facebook::velox::parquet {
 
+using dwio::common::ColumnMappingMode;
+
 namespace {
 
 /// Finds the node with the given ID in the TypeWithId tree. Uses a full
@@ -141,7 +143,7 @@ class ReaderBase {
       std::unique_ptr<dwio::common::BufferedInput>,
       const dwio::common::ReaderOptions& options);
 
-  virtual ~ReaderBase() = default;
+  virtual ~ReaderBase();
 
   memory::MemoryPool& getMemoryPool() const {
     return pool_;
@@ -204,6 +206,27 @@ class ReaderBase {
   /// the data still exists in the buffered inputs.
   bool isRowGroupBuffered(int32_t rowGroupIndex) const;
 
+  /// Returns true if the deserialized Thrift footer's memory has been
+  /// reported to the memory pool. False when the footer was smaller than
+  /// the tracking threshold, so no allocation was reported.
+  bool isThriftMemoryReported() const {
+    return thriftMemoryReported_;
+  }
+
+  /// Returns the estimated footer size reported to the pool at
+  /// construction. Unchanged by later releaseThriftBytes() calls, so it
+  /// reflects the initial estimate rather than the remaining reservation.
+  /// Zero when tracking was not engaged.
+  size_t initialThriftSize() const {
+    return initialThriftSize_;
+  }
+
+  /// Releases 'bytes' from the previously reported Thrift footer memory
+  /// back to the pool and reduces the remaining tracked size accordingly.
+  /// Called when parts of the footer (e.g. cleared row group columns) are
+  /// released early, before ~ReaderBase frees the rest.
+  void releaseThriftBytes(size_t bytes);
+
  private:
   // Reads and parses file footer.
   void loadFileMetaData();
@@ -248,6 +271,23 @@ class ReaderBase {
   // Map from row group index to pre-created loading BufferedInput.
   std::unordered_map<uint32_t, std::shared_ptr<dwio::common::BufferedInput>>
       inputs_;
+
+  // Whether the deserialized Thrift footer's heap footprint has been
+  // reported to 'pool_'. Set once in the constructor after a successful
+  // reportExternalAllocation, and consulted by ~ReaderBase and
+  // releaseThriftBytes to decide whether the pool needs to be notified on
+  // release.
+  bool thriftMemoryReported_{false};
+
+  // Estimated bytes of heap memory held by 'fileMetaData_' that have been
+  // reported to 'pool_' and not yet released. Decreases as row group
+  // columns are cleared early; the remainder is released by ~ReaderBase.
+  size_t thriftSize_{0};
+
+  // The value of 'thriftSize_' at construction time, captured before any
+  // releaseThriftBytes() calls shrink it. Surfaced as a runtime stat so
+  // operators can compare the estimate against actual pool usage.
+  size_t initialThriftSize_{0};
 };
 
 ReaderBase::ReaderBase(
@@ -265,6 +305,29 @@ ReaderBase::ReaderBase(
   loadFileMetaData();
   initializeSchema();
   initializeVersion();
+
+  // Report the thrift footer reservation only after all other initialization
+  // succeeds. If a step before this throws, ~ReaderBase will not run, so a
+  // reportExternalAllocation made earlier in the constructor would leak.
+  // Doing it last keeps reportExternalAllocation/reportExternalFree paired
+  // through ~ReaderBase.
+  if (thriftSize_ > 0) {
+    pool_.reportExternalAllocation(thriftSize_);
+    thriftMemoryReported_ = true;
+    initialThriftSize_ = thriftSize_;
+  }
+}
+
+ReaderBase::~ReaderBase() {
+  if (thriftMemoryReported_ && thriftSize_ > 0) {
+    pool_.reportExternalFree(thriftSize_);
+  }
+}
+
+void ReaderBase::releaseThriftBytes(size_t bytes) {
+  VELOX_CHECK_GE(thriftSize_, bytes);
+  pool_.reportExternalFree(bytes);
+  thriftSize_ -= bytes;
 }
 
 void ReaderBase::loadFileMetaData() {
@@ -316,11 +379,17 @@ void ReaderBase::loadFileMetaData() {
       thriftTransport);
   fileMetaData_ = std::make_unique<thrift::FileMetaData>();
   fileMetaData_->read(thriftProtocol.get());
+  if (footerLength > options().parquetFooterMemoryTrackingThreshold()) {
+    thriftSize_ = fileMetaData().estimateFileMetadataSize();
+  }
 }
 
 void ReaderBase::initializeSchema() {
   if (fileMetaData_->__isset.encryption_algorithm) {
     VELOX_UNSUPPORTED("Encrypted Parquet files are not supported");
+  }
+  if (options_.columnMappingMode() == ColumnMappingMode::kParquetFieldId) {
+    VELOX_NYI("Parquet field ID column mapping is not implemented yet.");
   }
 
   VELOX_CHECK_GT(
@@ -403,7 +472,8 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
     name = functions::stringImpl::utf8StrToLowerCopy(name);
   }
 
-  if (!options_.useColumnNamesForColumnMapping() && options_.fileSchema()) {
+  if (options_.columnMappingMode() != ColumnMappingMode::kName &&
+      options_.fileSchema()) {
     if (isParquetReservedKeyword(name, parentSchemaIdx, curSchemaIdx)) {
       columnNames.push_back(name);
     }
@@ -449,7 +519,7 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
         }
 
         if (requestedRowType) {
-          if (options_.useColumnNamesForColumnMapping()) {
+          if (options_.columnMappingMode() == ColumnMappingMode::kName) {
             auto fileTypeIdx = requestedRowType->getChildIdxIfExists(childName);
             if (fileTypeIdx.has_value()) {
               childRequestedType = requestedRowType->childAt(*fileTypeIdx);
@@ -1342,6 +1412,7 @@ class ParquetRowReader::Impl {
     }
 
     uint64_t rowNumber = 0;
+    size_t freedThriftSize = 0;
     for (auto i = 0; i < rowGroups_.size(); i++) {
       VELOX_CHECK_GT(rowGroups_[i].columns.size(), 0);
       auto fileOffset =
@@ -1368,7 +1439,19 @@ class ParquetRowReader::Impl {
           // Clear the metadata of row groups that are not read. This helps
           // reduce the memory consumption. ColumnChunks consume the most
           // memory. Skip the 0th RowGroup as it is used by estimatedRowSize().
-          rowGroups_[i].columns.clear();
+          // Measure the columns BEFORE clearing so we can release the matching
+          // amount from the pool reservation that ReaderBase reported.
+          if (readerBase_->isThriftMemoryReported()) {
+            for (const auto& column : rowGroups_[i].columns) {
+              freedThriftSize +=
+                  ColumnChunkMetaDataPtr(&column).estimateColumnMetadataSize();
+            }
+          }
+          // Swap with a fresh empty vector to actually release the buffer.
+          // operator=({}) and clear() preserve capacity, so the bytes
+          // reported as freed would still be resident; only the
+          // swap-with-empty idiom guarantees the allocation is released.
+          std::vector<thrift::ColumnChunk>().swap(rowGroups_[i].columns);
         }
         if (rowGroupInRange) {
           skippedStrides_++;
@@ -1376,6 +1459,13 @@ class ParquetRowReader::Impl {
       }
 
       rowNumber += rowGroups_[i].num_rows;
+    }
+
+    if (freedThriftSize > 0) {
+      // ReaderBase reported the full thrift footprint at construction. Release
+      // the portion we just freed by clearing skipped row groups; the
+      // remainder is released by ~ReaderBase.
+      readerBase_->releaseThriftBytes(freedThriftSize);
     }
   }
 
@@ -1437,6 +1527,7 @@ class ParquetRowReader::Impl {
   void updateRuntimeStats(dwio::common::RuntimeStatistics& stats) const {
     stats.skippedStrides += skippedStrides_;
     stats.processedStrides += rowGroupIds_.size();
+    stats.parquetFooterEstimatedBytes += readerBase_->initialThriftSize();
     stats.columnReaderStats.pageLoadTimeNs.merge(
         columnReaderStats_.pageLoadTimeNs);
   }

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/GroupingSet.h"
+#include "velox/common/base/BitUtil.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
@@ -140,9 +141,10 @@ std::unique_ptr<GroupingSet> GroupingSet::createForDistinct(
     const RowTypePtr& inputType,
     std::vector<std::unique_ptr<VectorHasher>>&& hashers,
     std::vector<column_index_t>&& preGroupedKeys,
+    std::vector<Accumulator> extraAccumulators,
     OperatorCtx* operatorCtx,
     tsan_atomic<bool>* nonReclaimableSection) {
-  return std::make_unique<GroupingSet>(
+  auto groupingSet = std::make_unique<GroupingSet>(
       inputType,
       std::move(hashers),
       std::move(preGroupedKeys),
@@ -158,7 +160,15 @@ std::unique_ptr<GroupingSet> GroupingSet::createForDistinct(
       &operatorCtx->driverCtx()->queryConfig(),
       operatorCtx->pool(),
       /*spillStats=*/nullptr);
-};
+
+  if (extraAccumulators.empty()) {
+    return groupingSet;
+  }
+
+  groupingSet->extraAccumulators_ = std::move(extraAccumulators);
+  groupingSet->createHashTable();
+  return groupingSet;
+}
 
 namespace {
 bool equalKeys(
@@ -410,7 +420,7 @@ void initializeAggregates(
 
 std::vector<Accumulator> GroupingSet::accumulators(bool excludeToIntermediate) {
   std::vector<Accumulator> accumulators;
-  accumulators.reserve(aggregates_.size());
+  accumulators.reserve(aggregates_.size() + extraAccumulators_.size());
   for (auto& aggregate : aggregates_) {
     if (!excludeToIntermediate ||
         !aggregate.function->supportsToIntermediate()) {
@@ -427,6 +437,10 @@ std::vector<Accumulator> GroupingSet::accumulators(bool excludeToIntermediate) {
     if (aggregation != nullptr) {
       accumulators.push_back(aggregation->accumulator());
     }
+  }
+
+  for (const auto& extra : extraAccumulators_) {
+    accumulators.push_back(extra);
   }
   return accumulators;
 }
@@ -901,6 +915,16 @@ void GroupingSet::resetTable(bool freeTable) {
   if (table_ != nullptr) {
     table_->clear(freeTable);
   }
+}
+
+void GroupingSet::resetGlobalAggregation() {
+  VELOX_CHECK(
+      isGlobal_,
+      "resetGlobalAggregation should only be called for global grouping sets");
+  destroyGlobalAggregations();
+  rows_.clear();
+  stringAllocator_.clear();
+  globalAggregationInitialized_ = false;
 }
 
 bool GroupingSet::isPartialFull(int64_t maxBytes) {

@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/registration/Register.h"
 #include "velox/parse/TypeResolver.h"
 
@@ -35,7 +36,8 @@ class SparkFunctionBaseTest : public FunctionBaseTest {
 
   void setSparkPartitionId(int32_t partitionId) {
     queryCtx_->testingOverrideConfigUnsafe(
-        {{core::QueryConfig::kSparkPartitionId, std::to_string(partitionId)}});
+        {{SparkQueryConfig::qualify(SparkQueryConfig::kPartitionId),
+          std::to_string(partitionId)}});
   }
 };
 

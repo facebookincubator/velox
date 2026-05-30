@@ -72,6 +72,21 @@ Then list the remaining issues. Don't re-explain items that were already
 explained with code snippets in the previous round — just say "not fixed"
 and refer back.
 
+### Refactoring PRs
+
+Refactoring PRs require extra scrutiny beyond "does the code compile and
+tests pass":
+
+- **Re-read the PR description as a cold reader.** If you can't explain
+  the before/after component responsibilities from the description alone,
+  send it back.
+- **Read new files end-to-end.** Verify that class names match file names,
+  APIs are minimal (no private methods promoted to public), and
+  abstractions are clean. Don't trust "I renamed X and extracted Y" —
+  verify the result is well-designed, not just mechanically reorganized.
+- **Check that the refactoring is pure.** No behavioral changes, no new
+  tests (unless closing a pre-existing coverage gap in a separate PR).
+
 ## What to check
 
 ### Correctness

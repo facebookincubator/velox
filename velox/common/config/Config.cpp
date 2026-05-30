@@ -145,6 +145,12 @@ std::string ConfigBase::toConfigKey(std::string_view sessionKey) {
   return configKey;
 }
 
+std::string ConfigBase::toSessionKey(std::string_view configKey) {
+  std::string sessionKey{configKey};
+  std::replace(sessionKey.begin(), sessionKey.end(), '-', '_');
+  return sessionKey;
+}
+
 std::optional<std::string> ConfigBase::access(const std::string& key) const {
   std::shared_lock l{mutex_};
   if (auto it = configs_.find(key); it != configs_.end()) {
