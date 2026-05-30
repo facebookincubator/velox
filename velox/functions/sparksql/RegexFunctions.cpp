@@ -232,8 +232,6 @@ template <typename T>
 struct RegexpInstrFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  static constexpr bool is_default_ascii_behavior = true;
-
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
