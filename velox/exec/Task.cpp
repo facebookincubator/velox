@@ -505,8 +505,8 @@ Task::~Task() {
   CLEAR(customTaskPools_.clear());
   CLEAR(customChildPools_.clear());
   CLEAR(childPools_.clear());
-  CLEAR(pool_.reset());
   CLEAR(planFragment_ = core::PlanFragment());
+  CLEAR(pool_.reset());
   CLEAR(queryCtx_.reset());
   clearStage = "exiting ~Task()";
 
