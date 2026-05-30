@@ -87,6 +87,29 @@ struct WaveConfig {
   // corruption.
   bool reverify{false};
 
+  // If true, copy per-block debug info from device to thread-local storage
+  // before returning the execution state to the pool.
+  bool keepStatsOnThread{true};
+
+  // If true, throw after execution if any block reported an error.
+  bool throwOnError{true};
+
+  // If true, skip the elementwise fast path and always generate the slow
+  // path with complexIdx.
+  bool noElementwiseFastPath{false};
+
+  // If true, log reference mismatches but continue execution instead of
+  // throwing.
+  bool continueAfterMismatch{false};
+
+  // Enable device-side debug printfs. Emergency use only.
+  bool kernelDebugOutput{false};
+
+  // Launch kernel once per block for debugging, waiting between launches.
+  // Each kernel op runs as a standalone invocation so device-side errors
+  // can be attributed to a single op.
+  bool debugSingleOps{false};
+
   /// Not thread-safe. All mutations must happen before concurrent reads.
   FOLLY_EXPORT static WaveConfig& get() {
     static WaveConfig instance;

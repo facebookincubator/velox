@@ -34,6 +34,7 @@
 namespace torch::wave {
 
 class CompileCtx;
+class OpInvocation;
 
 enum Listing { kExprs = 0, kGrids };
 
@@ -76,7 +77,9 @@ struct SizeExpr {
 /// Describes a single output of a KernelOperation.
 struct OutputDesc {
   /// Determines the shape to allocate for this output.
-  OutputReserveFunc reserveShape;
+  std::function<std::vector<std::vector<
+      Dim>>(nativert::ExecutionFrame&, const FormalToActual&, const NodeMap&)>
+      reserveShape;
 
   /// True if device code sets the dims. If reserveFunc is nullptr,
   /// and shapeSetOnDevice is true, then the device code does a view and
@@ -95,10 +98,6 @@ struct OutputDesc {
   /// True if allocation is delegated to another output, e.g. when creating
   /// coordinated views.
   bool delegated{false};
-
-  /// If this is a view that is not allocated, it still gets a storage from some
-  /// Value.
-  ValueCP storageFrom{nullptr};
 
   /// If set, this output is produced by executing a standalone view node
   /// (e.g. view, reshape) rather than allocating a new tensor.
@@ -306,6 +305,10 @@ class KernelOperation {
     return alwaysSingleBlock_;
   }
 
+  void setAlwaysSingleBlock(bool value) {
+    alwaysSingleBlock_ = value;
+  }
+
   bool isGridChoice() const {
     return isGridChoice_;
   }
@@ -318,7 +321,7 @@ class KernelOperation {
     return sizeExpr_;
   }
 
-  std::string toString() const;
+  std::string toString(const OpInvocation* invocation = nullptr) const;
 
   void setLabel(std::string label) {
     label_ = std::move(label);

@@ -60,7 +60,27 @@ struct LaunchDebugInfo {
   DebugInfo* pinnedInfo;
   DebugInfo* deviceInfo;
   int32_t numBlocks;
+  int32_t sequenceNumber;
+  int32_t stepIdx;
 };
+
+/// Per-launch metadata stored in thread-local alongside the DebugInfo.
+struct LaunchMeta {
+  int32_t sequenceNumber;
+  int32_t stepIdx;
+  int32_t numBlocks;
+};
+
+/// Per-thread debug info from the most recent wave execution. Populated by
+/// executeWave when WaveConfig::keepStatsOnThread is true.
+struct WaveThreadInfo {
+  std::vector<std::vector<DebugInfo>> debugInfo;
+  std::vector<LaunchMeta> launchMeta;
+  std::string errors;
+};
+
+/// Returns the thread-local WaveThreadInfo for the current thread.
+const WaveThreadInfo& waveThreadInfo();
 
 /// Preallocated vectors reused across executions for a given
 /// (compositeInvocation, stepIdx) pair.  Avoids per-step heap allocation
@@ -129,8 +149,8 @@ struct ExecutionState {
   const folly::F14FastMap<NodeCP, int32_t>* standaloneIndices{nullptr};
   std::vector<StandaloneStats>* standaloneStats{nullptr};
 
-  /// Per-launch debug info collected during execution (owned by executor).
-  std::vector<LaunchDebugInfo>* launchDebugInfos{nullptr};
+  /// Per-launch debug info collected during execution.
+  std::vector<LaunchDebugInfo> launchDebugInfos;
 
   /// Counters for reference frame verification (owned by executor).
   int64_t* numRefTensorsChecked{nullptr};
@@ -138,8 +158,13 @@ struct ExecutionState {
 
   /// Reusable device buffers indexed by [sequenceNumber][stepIdx].
   std::vector<std::vector<facebook::velox::wave::WaveBufferPtr>> deviceBuffers;
-  /// Reusable pinned buffers indexed by [sequenceNumber][stepIdx].
+  /// Reusable pinned buffers indexed by
+  /// [sequenceNumber][stepIdx]. These are on;ly to be used for their
+  /// particular sequence and step and must not be
+  /// overwritten. Constant parts of the frame are kept in these
+  /// buffers between runs of the pipeline.
   std::vector<std::vector<facebook::velox::wave::WaveBufferPtr>> pinnedBuffers;
+
   /// Preallocated per-step vectors indexed by [sequenceNumber][stepIdx].
   std::vector<std::vector<StepVectors>> stepVectors;
 
@@ -149,6 +174,10 @@ struct ExecutionState {
   /// Value ids that passed reference verification. Used by reverify to detect
   /// corruption of previously correct values.
   std::vector<nativert::ValueId> verifiedIds;
+
+  /// Generation counter from the last execution. Incremented by returnFrame
+  /// to signal that launch caches are stale.
+  uint64_t lastFrameGeneration{0};
 };
 
 /// Executes a single node via its OpKernel with tracing and error logging.
@@ -196,11 +225,38 @@ int64_t paramSymInt(
     nativert::ExecutionFrame& frame,
     const FormalToActual& map);
 
+/// Returns the int64 value for a named argument that may be either an input
+/// value (translated via map) or an attribute (on the actual node found via
+/// nodeMap).
+int64_t paramIntByName(
+    NodeCP node,
+    std::string_view name,
+    nativert::ExecutionFrame& frame,
+    const FormalToActual& map,
+    const NodeMap& nodeMap);
+
+/// Returns the int64 list for a named argument that may be either an input
+/// value / prim.ListPack (translated via map) or a vector<int64_t> attribute
+/// (on the actual node found via nodeMap).
+std::vector<int64_t> paramIntListByName(
+    NodeCP node,
+    std::string_view name,
+    nativert::ExecutionFrame& frame,
+    const FormalToActual& map,
+    const NodeMap& nodeMap);
+
+/// Formats a NodeMap as human-readable text with one formal -> actual pair
+/// per entry, each node printed with NodePrinter stopping at inputs.
+std::string printNodeMap(const NodeMap& nodeMap);
+
 /// Executes a WaveGraph as a GraphExecutorBase subclass, allowing it to
 /// be used wherever the standard nativert executors are used.
 class WaveGraphExecutor : public nativert::GraphExecutorBase {
  public:
-  explicit WaveGraphExecutor(std::shared_ptr<ModelContext> modelContext);
+  /// Takes exclusive ownership of the nativert::Graph in modelContext and
+  /// mutates it internally during WaveGraph compilation. The graph must not
+  /// be used externally after construction.
+  explicit WaveGraphExecutor(std::unique_ptr<ModelContext> modelContext);
 
   /// Creates an ExecutionFrame on CPU with all constants and weights
   /// pre-filled.
@@ -226,11 +282,10 @@ class WaveGraphExecutor : public nativert::GraphExecutorBase {
   /// Returns 'frame' to the pool after clearing non-persistent values.
   void returnFrame(std::unique_ptr<nativert::ExecutionFrame> frame);
 
-  /// Returns per-block DebugInfo from the most recent execution. Transfers
-  /// device-side debug info to host. The outer vector has one element per
-  /// kernel launch; the inner vector has one DebugInfo per block in that
-  /// launch.
-  std::vector<std::vector<DebugInfo>> getDebugInfo();
+  /// Returns a human-readable error string from the most recent execution.
+  /// Checks thread-local debug info for non-zero error lines and maps each
+  /// error back to the originating kernel op via the WaveGraph structure.
+  std::string errorString() const;
 
   /// Returns standalone execution stats: pairs of (node string, micros)
   /// from the most recent execution. The node string is formatted as in
@@ -239,6 +294,10 @@ class WaveGraphExecutor : public nativert::GraphExecutorBase {
 
   WaveGraph* waveGraph() const {
     return waveGraph_.get();
+  }
+
+  const nativert::Graph& graph() const {
+    return *modelContext_->graph;
   }
 
   int64_t numRefTensorsChecked() const {
@@ -261,7 +320,11 @@ class WaveGraphExecutor : public nativert::GraphExecutorBase {
   /// Runs the WaveGraph on the given frame.
   void executeWave(nativert::ExecutionFrame& frame, WaveGraph& waveGraph);
 
-  std::shared_ptr<ModelContext> modelContext_;
+  /// Transfers device-side debug info to host and stores in thread-local
+  /// WaveThreadInfo.
+  void collectDebugInfo(ExecutionState& state);
+
+  std::unique_ptr<ModelContext> modelContext_;
 
   std::unique_ptr<WaveGraph> waveGraph_;
 
@@ -271,8 +334,7 @@ class WaveGraphExecutor : public nativert::GraphExecutorBase {
   /// Pool of device-side ExecutionFrames with persistent tensors on GPU.
   std::unique_ptr<Pool<nativert::ExecutionFrame>> framePool_;
 
-  /// Per-launch debug info from the most recent execution.
-  std::vector<LaunchDebugInfo> launchDebugInfos_;
+  uint64_t frameGeneration_{0};
 
   int64_t numRefTensorsChecked_{0};
   int64_t numRefNodesChecked_{0};
