@@ -28,6 +28,7 @@
 #include "velox/expression/VectorFunction.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/TimestampConversion.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 using namespace facebook::velox::exec;
 
@@ -58,21 +59,24 @@ std::string_view trimWhitespace(std::string_view s) {
 }
 
 // Splits a single CSV line into fields, handling quoted fields.
-// Follows RFC 4180 quoting rules:
+// Follows Spark's CSV parsing rules (Univocity defaults):
 // - Fields may be enclosed in double quotes.
-// - A double quote inside a quoted field is escaped by another double quote
-//   (unescaped to a single double quote in the output).
-// - Unquoted fields are taken as-is (no escape character — matches Spark's
-//   from_csv default where escape is disabled).
+// - Inside a quoted field, the escape character (default: backslash '\')
+//   followed by a quote emits a literal quote. Doubled quotes ("") also
+//   emit a literal quote (RFC 4180 compatibility).
+// - Unquoted fields are taken as-is.
 // - Characters between a closing quote and the next delimiter are skipped
 //   (permissive handling of malformed CSV, matching Spark's default mode).
 // maxFields: stop parsing once this many fields are produced (0 = unlimited).
+// escape: escape character for quotes inside quoted fields (default: '\\').
+//   Use '\0' to disable escape handling.
 // Populates the provided `fields` vector (cleared first) to allow reuse.
 void splitCsvLine(
     std::string_view line,
     char delimiter,
     size_t maxFields,
-    std::vector<std::string>& fields) {
+    std::vector<std::string>& fields,
+    char escape = '\\') {
   fields.clear();
   // Note: caller (FromCsvFunction::apply) already guards against oversized
   // input and returns NULL row. This check is retained as defense-in-depth.
@@ -91,7 +95,7 @@ void splitCsvLine(
     }
     trailingDelimiter = false;
     if (line[i] == '"') {
-      // Quoted field: build content, unescaping doubled quotes.
+      // Quoted field: build content, handling escaped quotes.
       // Spark's default unescapedQuoteHandling=STOP_AT_DELIMITER: if the
       // quote is not properly closed before EOL, treat it as literal text
       // and re-parse from the opening quote as an unquoted field.
@@ -102,9 +106,14 @@ void splitCsvLine(
       size_t j = i + 1;
       bool closedProperly = false;
       while (j < line.size()) {
-        if (line[j] == '"') {
+        if (escape != '\0' && line[j] == escape && j + 1 < line.size() &&
+            line[j + 1] == '"') {
+          // Escape char followed by quote — emit a literal quote.
+          content.push_back('"');
+          j += 2;
+        } else if (line[j] == '"') {
           if (j + 1 < line.size() && line[j + 1] == '"') {
-            // Escaped double quote — emit a single quote.
+            // Doubled quote — emit a single quote (RFC 4180).
             content.push_back('"');
             j += 2;
           } else {
@@ -359,31 +368,30 @@ bool isSupportedLeafType(const TypePtr& type) {
 ///   VARBINARY, DECIMAL (short and long), DATE, TIMESTAMP.
 ///
 /// Key Behavior (matches Spark's from_csv with default options):
-/// - NULL input returns NULL.
+/// - NULL input returns NULL struct.
+/// - Empty or whitespace-only input returns a non-null struct with null fields.
 /// - Fewer CSV fields than schema columns: remaining columns are NULL.
 /// - More CSV fields than schema columns: extra fields are ignored.
 /// - Fields that cannot be parsed to the target type become NULL.
 /// - Whitespace is NOT trimmed from fields (Spark's from_csv defaults:
 ///   ignoreLeadingWhiteSpace=false, ignoreTrailingWhiteSpace=false).
-/// - Quoted fields (RFC 4180) are supported.
-/// - No escape character (Spark's from_csv default: escape='\u0000').
-/// - TIMESTAMP parsing is best-effort: timezone-naive only (no session tz).
+/// - Quoted fields are supported with backslash escape (Spark default).
+/// - TIMESTAMP fields use session timezone for naive timestamps.
 class FromCsvFunction : public exec::VectorFunction {
  public:
-  /// @param outputType  Target ROW type.
-  /// @param delimiter   Field separator character (default: ',').
-  /// @param nullValue   Sentinel string for null fields (default: "").
-  /// @param ignoreLeadingWhiteSpace  Trim leading whitespace from fields.
-  /// @param ignoreTrailingWhiteSpace Trim trailing whitespace from fields.
   explicit FromCsvFunction(
       const TypePtr& outputType,
+      const tz::TimeZone* sessionTimeZone = nullptr,
       char delimiter = ',',
       std::string nullValue = "",
+      char escape = '\\',
       bool ignoreLeadingWhiteSpace = false,
       bool ignoreTrailingWhiteSpace = false)
       : outputType_(outputType),
+        sessionTimeZone_(sessionTimeZone),
         delimiter_(delimiter),
         nullValue_(std::move(nullValue)),
+        escape_(escape),
         ignoreLeadingWhiteSpace_(ignoreLeadingWhiteSpace),
         ignoreTrailingWhiteSpace_(ignoreTrailingWhiteSpace) {
     VELOX_CHECK_EQ(outputType->kind(), TypeKind::ROW);
@@ -430,19 +438,8 @@ class FromCsvFunction : public exec::VectorFunction {
       }
 
       const auto csvStr = decodedInput->valueAt<StringView>(row);
-      // Spark's from_csv returns NULL struct for empty or whitespace-only input
-      // (UnivocityParser returns null for empty/whitespace-only strings).
-      if (csvStr.size() == 0) {
-        flatResult->setNull(row, true);
-        return;
-      }
-      auto csvView = std::string_view(csvStr.data(), csvStr.size());
-      auto trimmedView = trimWhitespace(csvView);
-      if (trimmedView.empty()) {
-        flatResult->setNull(row, true);
-        return;
-      }
       // Guard against extremely large inputs — return NULL row (DoS mitigation).
+      auto csvView = std::string_view(csvStr.data(), csvStr.size());
       if (csvView.size() > kMaxCsvLineSize) {
         flatResult->setNull(row, true);
         return;
@@ -450,11 +447,22 @@ class FromCsvFunction : public exec::VectorFunction {
 
       bits::clearNull(rawResultNulls, row);
 
+      // Empty or whitespace-only input: Spark returns a non-null struct with
+      // all-null fields (not a null struct). The empty tokens match nullValue
+      // ("") so each field becomes null, but the Row itself is non-null.
+      if (csvStr.size() == 0 || trimWhitespace(csvView).empty()) {
+        for (column_index_t col = 0; col < numFields; ++col) {
+          columns[col].child->setNull(row, true);
+        }
+        return;
+      }
+
       splitCsvLine(
           std::string_view(csvStr.data(), csvStr.size()),
           delimiter_,
           numFields,
-          fields);
+          fields,
+          escape_);
 
       for (column_index_t col = 0; col < numFields; ++col) {
         auto* childVector = columns[col].child;
@@ -669,14 +677,16 @@ class FromCsvFunction : public exec::VectorFunction {
         break;
       }
       case TypeKind::TIMESTAMP: {
-        // Parse as yyyy-MM-dd'T'HH:mm:ss or yyyy-MM-dd HH:mm:ss.
-        // Note: Timezone handling is best-effort — Spark's full timestamp
-        // parsing depends on session timezone which is not available here.
-        auto result = util::fromTimestampString(
+        // Parse timestamp string and apply session timezone for naive
+        // timestamps (no timezone offset in the string). Spark's from_csv
+        // uses session timezone via TimestampFormatter.
+        auto result = util::fromTimestampWithTimezoneString(
             StringView(field.data(), field.size()),
             util::TimestampParseMode::kSparkCast);
         if (result.hasValue()) {
-          child->asFlatVector<Timestamp>()->set(row, result.value());
+          auto ts = util::fromParsedTimestampWithTimeZone(
+              result.value(), sessionTimeZone_);
+          child->asFlatVector<Timestamp>()->set(row, ts);
         } else {
           child->setNull(row, true);
         }
@@ -689,8 +699,10 @@ class FromCsvFunction : public exec::VectorFunction {
   }
 
   const TypePtr outputType_;
+  const tz::TimeZone* sessionTimeZone_;
   const char delimiter_;
   const std::string nullValue_;
+  const char escape_;
   const bool ignoreLeadingWhiteSpace_;
   const bool ignoreTrailingWhiteSpace_;
 };
@@ -706,7 +718,7 @@ exec::ExprPtr FromCsvCallToSpecialForm::constructSpecialForm(
     const TypePtr& type,
     std::vector<exec::ExprPtr>&& args,
     bool trackCpuUsage,
-    const core::QueryConfig& /*config*/) {
+    const core::QueryConfig& config) {
   VELOX_USER_CHECK_EQ(args.size(), 1, "from_csv expects one argument.");
   VELOX_USER_CHECK_EQ(
       args[0]->type()->kind(),
@@ -723,7 +735,16 @@ exec::ExprPtr FromCsvCallToSpecialForm::constructSpecialForm(
         rowType.childAt(i)->toString());
   }
 
-  auto func = std::make_shared<FromCsvFunction>(type);
+  // Resolve session timezone for timestamp parsing. Spark's from_csv
+  // interprets naive timestamps (no timezone in string) using the session
+  // timezone.
+  const tz::TimeZone* sessionTimeZone = nullptr;
+  const auto sessionTzName = config.sessionTimezone();
+  if (!sessionTzName.empty()) {
+    sessionTimeZone = tz::locateZone(sessionTzName);
+  }
+
+  auto func = std::make_shared<FromCsvFunction>(type, sessionTimeZone);
   return std::make_shared<exec::Expr>(
       type,
       std::move(args),

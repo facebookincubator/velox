@@ -15,6 +15,7 @@
  */
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
 using namespace facebook::velox::test;
@@ -429,14 +430,19 @@ TEST_F(FromCsvTest, unclosedQuote) {
   EXPECT_EQ(childA->valueAt(0).str(), "unclosed");
 }
 
-// Empty input line produces null ROW (Spark's UnivocityParser returns null for
-// empty input).
+// Empty input line produces a non-null ROW with all-null fields. Spark's
+// from_csv returns a non-null Row(null, null, ...) for empty input — the struct
+// itself is not null, only its fields are.
 TEST_F(FromCsvTest, emptyInputLine) {
   auto input = makeFlatVector<std::string>({""});
   auto expr = createFromCsv(ROW({"a", "b"}, {INTEGER(), VARCHAR()}));
   auto result = evaluate(expr, makeRowVector({input}));
-  // The struct itself is null for empty input.
-  EXPECT_TRUE(result->isNullAt(0));
+  // The struct itself is NOT null — Spark returns a live row.
+  EXPECT_FALSE(result->isNullAt(0));
+  auto* resultRow = result->as<RowVector>();
+  // But all child fields are null.
+  EXPECT_TRUE(resultRow->childAt(0)->isNullAt(0));
+  EXPECT_TRUE(resultRow->childAt(1)->isNullAt(0));
 }
 
 // Empty VARCHAR fields become null (Spark default nullValue="").
@@ -539,19 +545,20 @@ TEST_F(FromCsvTest, garbageAfterQuote) {
   EXPECT_EQ(childB->valueAt(0), 1);
 }
 
-// Row nullness: non-null non-empty input always produces non-null row, even if
-// all fields fail to parse. Empty string input produces null row.
+// Row nullness: non-null input always produces non-null row, even if all
+// fields fail to parse. Only SQL NULL input produces a null row.
 TEST_F(FromCsvTest, rowNullness) {
-  auto input = makeFlatVector<std::string>({"abc,xyz", ",", "1,2", ""});
+  auto input =
+      makeNullableFlatVector<std::string>({"abc,xyz", ",", "1,2", "", std::nullopt});
   auto expr = createFromCsv(ROW({"a", "b"}, {INTEGER(), INTEGER()}));
   auto result = evaluate(expr, makeRowVector({input}));
   auto* resultRow = result->as<RowVector>();
-  // Non-empty input: row is never null, even when all fields are null.
-  for (int i = 0; i < 3; ++i) {
+  // Non-null input (including empty string): row is never null.
+  for (int i = 0; i < 4; ++i) {
     EXPECT_FALSE(resultRow->isNullAt(i)) << "row " << i;
   }
-  // Empty string input: row is null (matches Spark).
-  EXPECT_TRUE(result->isNullAt(3));
+  // SQL NULL input: row is null.
+  EXPECT_TRUE(result->isNullAt(4));
 }
 
 // Unsupported field type throws.
@@ -573,14 +580,23 @@ TEST_F(FromCsvTest, oversizedInput) {
   EXPECT_TRUE(result->isNullAt(0));
 }
 
-// Whitespace-only input returns NULL struct (matches Spark's UnivocityParser).
+// Whitespace-only input returns a non-null struct with all-null fields
+// (matches Spark: empty tokens match nullValue="" → null fields, but the
+// struct row itself is non-null).
 TEST_F(FromCsvTest, whitespaceOnlyInput) {
   auto input = makeFlatVector<std::string>({"   ", " \t\n ", "\t"});
   auto expr = createFromCsv(ROW({"a", "b"}, {INTEGER(), VARCHAR()}));
   auto result = evaluate(expr, makeRowVector({input}));
-  EXPECT_TRUE(result->isNullAt(0));
-  EXPECT_TRUE(result->isNullAt(1));
-  EXPECT_TRUE(result->isNullAt(2));
+  auto* resultRow = result->as<RowVector>();
+  // Struct rows are NOT null.
+  EXPECT_FALSE(result->isNullAt(0));
+  EXPECT_FALSE(result->isNullAt(1));
+  EXPECT_FALSE(result->isNullAt(2));
+  // But all child fields are null.
+  for (int row = 0; row < 3; ++row) {
+    EXPECT_TRUE(resultRow->childAt(0)->isNullAt(row));
+    EXPECT_TRUE(resultRow->childAt(1)->isNullAt(row));
+  }
 }
 
 // Short decimal (precision <= 18) parsing.
@@ -655,8 +671,8 @@ TEST_F(FromCsvTest, timestampField) {
   auto result = evaluate(expr, makeRowVector({input}));
   auto* resultRow = result->as<RowVector>();
   auto* child = resultRow->childAt(0)->asFlatVector<Timestamp>();
-  // "2023-01-15T10:30:00" parses successfully (interpreted as UTC wall-clock
-  // time; fromTimestampString with kSparkCast does not apply timezone offset).
+  // "2023-01-15T10:30:00" parses as wall-clock time (no session timezone
+  // configured in test → no adjustment).
   EXPECT_FALSE(child->isNullAt(0));
   EXPECT_EQ(child->valueAt(0), Timestamp(1673778600, 0));
   // "1970-01-01 00:00:00" → epoch
@@ -666,6 +682,41 @@ TEST_F(FromCsvTest, timestampField) {
   EXPECT_TRUE(child->isNullAt(2));
   // "" → null
   EXPECT_TRUE(child->isNullAt(3));
+}
+
+// Naive timestamp with session timezone: Spark interprets naive timestamps
+// (no timezone offset in string) using the session timezone.
+TEST_F(FromCsvTest, timestampWithSessionTimezone) {
+  // Set session timezone to America/Los_Angeles (UTC-8 in winter).
+  queryCtx_->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kSessionTimezone, "America/Los_Angeles"},
+  });
+  auto input = makeFlatVector<std::string>({"2023-01-15T10:30:00"});
+  auto expr = createFromCsv(ROW({"a"}, {TIMESTAMP()}));
+  auto result = evaluate(expr, makeRowVector({input}));
+  auto* resultRow = result->as<RowVector>();
+  auto* child = resultRow->childAt(0)->asFlatVector<Timestamp>();
+  EXPECT_FALSE(child->isNullAt(0));
+  // 2023-01-15 10:30:00 PST = 2023-01-15 18:30:00 UTC = epoch 1673807400
+  EXPECT_EQ(child->valueAt(0), Timestamp(1673807400, 0));
+}
+
+// Backslash escape in quoted fields (Spark default escape='\\').
+TEST_F(FromCsvTest, backslashEscapeInQuotedField) {
+  // \" inside a quoted field should emit a literal quote.
+  auto input = makeFlatVector<std::string>(
+      {R"("hello \"world\"",1)", R"("no escape",2)"});
+  auto expr = createFromCsv(ROW({"s", "i"}, {VARCHAR(), INTEGER()}));
+  auto result = evaluate(expr, makeRowVector({input}));
+  auto* resultRow = result->as<RowVector>();
+  auto* childS = resultRow->childAt(0)->asFlatVector<StringView>();
+  auto* childI = resultRow->childAt(1)->asFlatVector<int32_t>();
+  // Row 0: backslash-escaped quotes → literal quotes in output.
+  EXPECT_EQ(childS->valueAt(0).str(), "hello \"world\"");
+  EXPECT_EQ(childI->valueAt(0), 1);
+  // Row 1: no escape needed.
+  EXPECT_EQ(childS->valueAt(1).str(), "no escape");
+  EXPECT_EQ(childI->valueAt(1), 2);
 }
 
 // VARBINARY field parsing (raw bytes preserved as-is).
