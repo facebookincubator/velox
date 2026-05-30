@@ -747,6 +747,17 @@ TEST_F(RegexFunctionsTest, regexpInstrInvalidPattern) {
       "invalid regular expression");
 }
 
+TEST_F(RegexFunctionsTest, regexpInstrNullPattern) {
+  // NULL pattern should return NULL.
+  auto strings = makeFlatVector({"hello"_sv, "world"_sv});
+  auto patterns = makeNullableFlatVector<StringView>(
+      {std::nullopt, std::nullopt});
+  auto result =
+      evaluate("regexp_instr(c0, c1)", makeRowVector({strings, patterns}));
+  auto expected = makeNullableFlatVector<int32_t>({std::nullopt, std::nullopt});
+  velox::test::assertEqualVectors(expected, result);
+}
+
 TEST_F(RegexFunctionsTest, regexpInstrMultipleMatches) {
   // Always returns position of FIRST match.
   EXPECT_EQ(regexpInstr("aaa", "a"), 1);
