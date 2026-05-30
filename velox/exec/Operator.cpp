@@ -467,10 +467,13 @@ void Operator::recordSpillStats() {
   }
 
   // Collect filesystem I/O stats for spilling.
+  const auto& spillIoStatsKeySuffix =
+      operatorCtx_->task()->queryCtx()->queryConfig().spillIoStatsKeySuffix();
   const auto ioStatsMap = spillStats_->ioStats.stats();
   for (const auto& [statName, statValue] : ioStatsMap) {
     lockedStats->addRuntimeStat(
-        statName, RuntimeCounter(statValue.sum, statValue.unit));
+        statName + spillIoStatsKeySuffix,
+        RuntimeCounter(statValue.sum, statValue.unit));
   }
 
   spillStats_->reset();
