@@ -123,41 +123,82 @@ Mathematical Functions
 
 .. spark:function:: decimal_ceil(x, scale) -> decimal
 
-    Returns the decimal value ``x`` rounded toward positive infinity to the
+    Rounds the decimal value ``x`` up (toward positive infinity) to the
     specified target ``scale``. The first argument must be a DECIMAL and the
     second must be a constant INTEGER representing the desired number of digits
     after the decimal point.
 
-    When ``scale`` is negative, rounds to a power of 10 (e.g., scale = -2
-    rounds to the nearest hundred toward +∞). When ``scale`` >= the input
+    When ``scale`` is negative, rounds up to a power of 10 (e.g., scale = -2
+    rounds up to the nearest hundred). When ``scale`` >= the input
     scale, returns the value unchanged. Values that overflow the result
     precision return NULL.
 
-    The result type precision and scale follow Spark's ``RoundBase.dataType``
-    logic. ::
+    **Result type rules:**
 
-        SELECT decimal_ceil(1.234, 1); -- 1.3 (DECIMAL(3,1))
-        SELECT decimal_ceil(-1.234, 1); -- -1.2 (DECIMAL(3,1))
-        SELECT decimal_ceil(99.0, -1); -- 100 (DECIMAL(4,0))
+    The result type is determined by the input type ``DECIMAL(p, s)`` and
+    the target ``scale`` (n):
+
+    * When n >= 0: result is ``DECIMAL(min(p - s + 1 + min(s, n), 38), min(s, n))``.
+      The ``+1`` accounts for carry (e.g., ``ceil(9.9, 0)`` = 10 needs an extra digit).
+      The result scale is ``min(s, n)`` — it never pads with trailing zeros beyond the
+      input scale.
+    * When n < 0: result is ``DECIMAL(min(max(p - s + 1, |n| + 1), 38), 0)``.
+      The result scale is always 0. ``|n| + 1`` digits are needed because rounding
+      to the nearest 10^|n| can produce a value one digit wider.
+
+    Examples (input type annotated)::
+
+        -- scale 0: round up to integer
+        SELECT decimal_ceil(DECIMAL(4,3) 1.234, 0); -- 2 (DECIMAL(2,0))
+        SELECT decimal_ceil(DECIMAL(4,3) -1.234, 0); -- -1 (DECIMAL(2,0))
+
+        -- scale 1: one fractional digit
+        SELECT decimal_ceil(DECIMAL(4,3) 1.234, 1); -- 1.3 (DECIMAL(3,1))
+        SELECT decimal_ceil(DECIMAL(4,3) -1.234, 1); -- -1.2 (DECIMAL(3,1))
+
+        -- scale 2: two fractional digits
+        SELECT decimal_ceil(DECIMAL(4,3) 1.234, 2); -- 1.24 (DECIMAL(4,2))
+
+        -- scale >= input scale: identity (no rounding needed)
+        SELECT decimal_ceil(DECIMAL(3,1) 10.1, 5); -- 10.1 (DECIMAL(4,1))
+
+        -- negative scale: round up to power of 10
+        SELECT decimal_ceil(DECIMAL(3,1) 99.0, -1); -- 100 (DECIMAL(4,0))
 
 .. spark:function:: decimal_floor(x, scale) -> decimal
 
-    Returns the decimal value ``x`` rounded toward negative infinity to the
+    Rounds the decimal value ``x`` down (toward negative infinity) to the
     specified target ``scale``. The first argument must be a DECIMAL and the
     second must be a constant INTEGER representing the desired number of digits
     after the decimal point.
 
-    When ``scale`` is negative, rounds to a power of 10 (e.g., scale = -2
-    rounds to the nearest hundred toward -∞). When ``scale`` >= the input
+    When ``scale`` is negative, rounds down to a power of 10 (e.g., scale = -2
+    rounds down to the nearest hundred). When ``scale`` >= the input
     scale, returns the value unchanged. Values that overflow the result
     precision return NULL.
 
-    The result type precision and scale follow Spark's ``RoundBase.dataType``
-    logic. ::
+    **Result type rules:**
 
-        SELECT decimal_floor(1.234, 1); -- 1.2 (DECIMAL(3,1))
-        SELECT decimal_floor(-1.234, 1); -- -1.3 (DECIMAL(3,1))
-        SELECT decimal_floor(99.0, -1); -- 90 (DECIMAL(4,0))
+    Same as ``decimal_ceil`` — see above.
+
+    Examples (input type annotated)::
+
+        -- scale 0: round down to integer
+        SELECT decimal_floor(DECIMAL(4,3) 1.234, 0); -- 1 (DECIMAL(2,0))
+        SELECT decimal_floor(DECIMAL(4,3) -1.234, 0); -- -2 (DECIMAL(2,0))
+
+        -- scale 1: one fractional digit
+        SELECT decimal_floor(DECIMAL(4,3) 1.234, 1); -- 1.2 (DECIMAL(3,1))
+        SELECT decimal_floor(DECIMAL(4,3) -1.234, 1); -- -1.3 (DECIMAL(3,1))
+
+        -- scale 2: two fractional digits
+        SELECT decimal_floor(DECIMAL(4,3) 1.234, 2); -- 1.23 (DECIMAL(4,2))
+
+        -- scale >= input scale: identity (no rounding needed)
+        SELECT decimal_floor(DECIMAL(3,1) 10.1, 5); -- 10.1 (DECIMAL(4,1))
+
+        -- negative scale: round down to power of 10
+        SELECT decimal_floor(DECIMAL(3,1) 99.0, -1); -- 90 (DECIMAL(4,0))
 
 .. spark:function:: degrees(x) -> double
 

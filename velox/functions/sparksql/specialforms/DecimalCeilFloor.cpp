@@ -252,7 +252,9 @@ std::shared_ptr<exec::VectorFunction> createDecimalCeilFloor(
       scale, inputPrecision, inputScale, resultPrecision, resultScale);
 }
 
-int32_t extractConstantInt32(const exec::ExprPtr& expr, const char* funcName) {
+int32_t extractConstantInt32(
+    const exec::ExprPtr& expr,
+    std::string_view funcName) {
   VELOX_USER_CHECK_EQ(
       expr->type()->kind(),
       TypeKind::INTEGER,
@@ -278,40 +280,6 @@ int32_t extractConstantInt32(const exec::ExprPtr& expr, const char* funcName) {
 }
 } // namespace
 
-std::pair<uint8_t, uint8_t>
-DecimalCeilFloorCallToSpecialFormBase::getResultPrecisionScale(
-    uint8_t precision,
-    uint8_t scale,
-    int32_t roundScale) {
-  // Spark RoundBase.dataType for DecimalType:
-  //   integralLeastNumDigits = p - s + 1
-  //   if (_scale < 0):
-  //     newPrecision = max(integralLeastNumDigits, -_scale + 1)
-  //     return DecimalType(min(newPrecision, 38), 0)
-  //   else:
-  //     newScale = min(s, _scale)
-  //     return DecimalType(min(integralLeastNumDigits + newScale, 38),
-  //     newScale)
-  const int32_t integralLeastNumDigits =
-      static_cast<int32_t>(precision) - static_cast<int32_t>(scale) + 1;
-  if (roundScale < 0) {
-    const int32_t clamped = std::max(
-        roundScale, -static_cast<int32_t>(LongDecimalType::kMaxPrecision));
-    const int32_t newPrecision = std::max(integralLeastNumDigits, -clamped + 1);
-    return {
-        static_cast<uint8_t>(std::min(
-            newPrecision,
-            static_cast<int32_t>(LongDecimalType::kMaxPrecision))),
-        0};
-  }
-  const int32_t newScale = std::min(static_cast<int32_t>(scale), roundScale);
-  return {
-      static_cast<uint8_t>(std::min(
-          integralLeastNumDigits + newScale,
-          static_cast<int32_t>(LongDecimalType::kMaxPrecision))),
-      static_cast<uint8_t>(newScale)};
-}
-
 TypePtr DecimalCeilFloorCallToSpecialFormBase::resolveType(
     const std::vector<TypePtr>& /*argTypes*/) {
   VELOX_FAIL(
@@ -324,7 +292,7 @@ exec::ExprPtr DecimalCeilFloorCallToSpecialFormBase::makeSpecialForm(
     bool trackCpuUsage,
     const core::QueryConfig& /*config*/,
     bool ceiling,
-    const std::string& funcName) {
+    std::string_view funcName) {
   VELOX_USER_CHECK(
       type->isDecimal(), "The result type of {} must be decimal.", funcName);
   VELOX_USER_CHECK_EQ(
@@ -337,7 +305,7 @@ exec::ExprPtr DecimalCeilFloorCallToSpecialFormBase::makeSpecialForm(
       "The first argument of {} must be decimal.",
       funcName);
 
-  const int32_t scale = extractConstantInt32(args[1], funcName.c_str());
+  const int32_t scale = extractConstantInt32(args[1], funcName);
   auto func = ceiling
       ? createDecimalCeilFloor<true>(args[0]->type(), scale, type)
       : createDecimalCeilFloor<false>(args[0]->type(), scale, type);
@@ -346,7 +314,7 @@ exec::ExprPtr DecimalCeilFloorCallToSpecialFormBase::makeSpecialForm(
       std::move(args),
       std::move(func),
       exec::VectorFunctionMetadata{},
-      funcName,
+      std::string(funcName),
       trackCpuUsage);
 }
 

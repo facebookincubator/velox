@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/expression/FunctionCallToSpecialForm.h"
+#include "velox/functions/sparksql/specialforms/DecimalRound.h"
 
 namespace facebook::velox::functions::sparksql {
 
@@ -27,30 +28,30 @@ namespace facebook::velox::functions::sparksql {
 /// The result type is fully determined by the input decimal type and the
 /// constant target scale, which is why these are modeled as special forms
 /// (the constant value cannot be expressed via SignatureVariable constraints).
+///
+/// The result type rules are identical to DecimalRound (Spark's
+/// RoundBase.dataType) — see DecimalRoundCallToSpecialForm::getResultPrecisionScale.
 class DecimalCeilFloorCallToSpecialFormBase
     : public exec::FunctionCallToSpecialForm {
  public:
   TypePtr resolveType(const std::vector<TypePtr>& argTypes) override;
 
-  /// Returns the result precision and scale after applying ceil/floor to a
-  /// decimal of (precision, scale) at the requested target `roundScale`.
-  /// Logic mirrors Spark's RoundBase.dataType for DecimalType, which is shared
-  /// by Round, RoundCeil and RoundFloor.
+  /// Delegates to DecimalRoundCallToSpecialForm::getResultPrecisionScale —
+  /// the result type rules are shared across Round, RoundCeil, and RoundFloor.
   static std::pair<uint8_t, uint8_t>
-  getResultPrecisionScale(uint8_t precision, uint8_t scale, int32_t roundScale);
+  getResultPrecisionScale(uint8_t precision, uint8_t scale, int32_t roundScale) {
+    return DecimalRoundCallToSpecialForm::getResultPrecisionScale(
+        precision, scale, roundScale);
+  }
 
  protected:
-  // Produces the final special-form expression for the given rounding mode.
-  // `funcName` is used for diagnostics and for the registered special-form
-  // name (e.g. "decimal_ceil" or "decimal_floor"). `ceiling` selects rounding
-  // direction: true → toward +∞ (ceil), false → toward -∞ (floor).
   exec::ExprPtr makeSpecialForm(
       const TypePtr& type,
       std::vector<exec::ExprPtr>&& args,
       bool trackCpuUsage,
       const core::QueryConfig& config,
       bool ceiling,
-      const std::string& funcName);
+      std::string_view funcName);
 };
 
 /// Spark decimal_ceil special form: rounds a decimal value toward +∞ to the
