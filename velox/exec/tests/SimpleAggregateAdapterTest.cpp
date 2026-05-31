@@ -473,6 +473,107 @@ TEST_F(SimpleCountNullsAggregationTest, basic) {
   testAggregations({vectors}, {}, {"simple_count_nulls(c2)"}, {expected});
 }
 
+class ConstantInputForwardingAggregate {
+ public:
+  using InputType = Row<int64_t, int64_t>;
+  using IntermediateType = int64_t;
+  using OutputType = int64_t;
+
+  void setConstantInputs(const std::vector<VectorPtr>& constantInputs) {
+    VELOX_CHECK_EQ(constantInputs.size(), 2);
+    VELOX_CHECK_NULL(constantInputs[0]);
+    VELOX_CHECK_NOT_NULL(constantInputs[1]);
+    auto* constant = constantInputs[1]->as<ConstantVector<int64_t>>();
+    VELOX_CHECK_NOT_NULL(constant);
+
+    offset_ = constant->valueAt(0);
+    hasOffset_ = true;
+  }
+
+  struct Accumulator {
+    int64_t sum{0};
+    ConstantInputForwardingAggregate* fn;
+
+    explicit Accumulator(
+        HashStringAllocator* /*allocator*/,
+        ConstantInputForwardingAggregate* fn)
+        : fn(fn) {}
+
+    void addInput(
+        HashStringAllocator* /*allocator*/,
+        exec::arg_type<int64_t> value,
+        exec::arg_type<int64_t> /*constantValue*/) {
+      VELOX_CHECK(fn->hasOffset_);
+      sum += value + fn->offset_;
+    }
+
+    void combine(
+        HashStringAllocator* /*allocator*/,
+        exec::arg_type<int64_t> other) {
+      sum += other;
+    }
+
+    bool writeIntermediateResult(exec::out_type<IntermediateType>& out) {
+      out = sum;
+      return true;
+    }
+
+    bool writeFinalResult(exec::out_type<OutputType>& out) {
+      out = sum;
+      return true;
+    }
+  };
+
+  using AccumulatorType = Accumulator;
+
+  bool hasOffset_{false};
+  int64_t offset_{0};
+};
+
+class SimpleConstantInputForwardingAggregationTest
+    : public AggregationTestBase {};
+
+TEST_F(SimpleConstantInputForwardingAggregationTest, forwardsConstantInputs) {
+  SimpleAggregateAdapter<ConstantInputForwardingAggregate> aggregate(
+      core::AggregationNode::Step::kSingle, {BIGINT(), BIGINT()}, BIGINT());
+
+  HashStringAllocator stringAllocator{pool()};
+  aggregate.setAllocator(&stringAllocator);
+
+  int32_t rowSizeOffset = bits::nbytes(1);
+  int32_t offset = rowSizeOffset + sizeof(uint32_t);
+  offset = bits::roundUp(offset, aggregate.accumulatorAlignmentSize());
+  aggregate.setOffsets(
+      offset,
+      RowContainer::nullByte(0),
+      RowContainer::nullMask(0),
+      RowContainer::initializedByte(0),
+      RowContainer::initializedMask(0),
+      rowSizeOffset);
+
+  auto constantInput = makeConstant<int64_t>(10, 1);
+  aggregate.setConstantInputs(std::vector<VectorPtr>{nullptr, constantInput});
+
+  std::vector<char> group(offset + aggregate.accumulatorFixedWidthSize());
+  std::vector<char*> groups{group.data()};
+  std::vector<vector_size_t> indices{0};
+  aggregate.initializeNewGroups(groups.data(), indices);
+
+  auto input = makeFlatVector<int64_t>({1, 2, 3});
+  auto constantArg =
+      BaseVector::wrapInConstant(input->size(), 0, constantInput);
+  aggregate.addSingleGroupRawInput(
+      group.data(),
+      SelectivityVector(input->size()),
+      {input, constantArg},
+      false);
+
+  auto result = BaseVector::create(BIGINT(), 1, pool());
+  aggregate.extractValues(groups.data(), 1, &result);
+
+  ASSERT_EQ(result->as<FlatVector<int64_t>>()->valueAt(0), 36);
+}
+
 // A testing simple avg aggregate function, and it is used to check for
 // expectations for function-level variables. The validation logic is in the
 // Accumulator::addInput method.
