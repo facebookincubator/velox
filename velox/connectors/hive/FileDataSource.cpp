@@ -151,6 +151,11 @@ void addIoStatsToRuntimeStats(
       key(FileDataSource::kRamReadBytes),
       RuntimeCounter::Unit::kBytes,
       res);
+  addIoStatsMetric(
+      ioStats.readGap(),
+      key(FileDataSource::kReadGapBytes),
+      RuntimeCounter::Unit::kBytes,
+      res);
 }
 
 } // namespace
