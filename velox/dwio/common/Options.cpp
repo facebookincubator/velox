@@ -16,7 +16,24 @@
 
 #include "velox/dwio/common/Options.h"
 
+#include "velox/common/EnumDefine.h"
+
 namespace facebook::velox::dwio::common {
+
+namespace {
+
+const auto& columnMappingModeNames() {
+  static const folly::F14FastMap<ColumnMappingMode, std::string_view> kNames = {
+      {ColumnMappingMode::kPosition, "POSITION"},
+      {ColumnMappingMode::kName, "NAME"},
+      {ColumnMappingMode::kParquetFieldId, "PARQUET_FIELD_ID"},
+  };
+  return kNames;
+}
+
+} // namespace
+
+VELOX_DEFINE_ENUM_NAME(ColumnMappingMode, columnMappingModeNames);
 
 FileFormat toFileFormat(std::string_view s) {
   if (s == "dwrf") {
@@ -84,8 +101,7 @@ std::string_view toString(FileFormat fmt) {
 
 ColumnReaderOptions makeColumnReaderOptions(const ReaderOptions& options) {
   ColumnReaderOptions columnReaderOptions;
-  columnReaderOptions.useColumnNamesForColumnMapping_ =
-      options.useColumnNamesForColumnMapping();
+  columnReaderOptions.columnMappingMode_ = options.columnMappingMode();
   return columnReaderOptions;
 }
 

@@ -18,6 +18,7 @@
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConfig.h"
+#include "velox/connectors/hive/HiveConfigProvider.h"
 #include "velox/core/PlanNode.h"
 
 namespace facebook::velox::dwio::common {
@@ -87,6 +88,7 @@ class HiveConnector : public Connector {
 
  protected:
   const std::shared_ptr<HiveConfig> hiveConfig_;
+  HiveConfigProvider configProvider_;
   FileHandleFactory fileHandleFactory_;
   folly::Executor* ioExecutor_;
 };

@@ -39,6 +39,8 @@
 #include "velox/experimental/torchwave/WaveConfig.h"
 #include "velox/experimental/torchwave/WaveGraph.h"
 
+// debug_single_ops is now WaveConfig::debugSingleOps
+
 DEFINE_bool(print_timing, false, "Print timing for wave graph execution");
 DEFINE_int32(num_repeats, 1, "Number of timed repetitions for each run type");
 DEFINE_bool(
@@ -52,6 +54,10 @@ DEFINE_int32(
     "Force single block grid: -1=auto, 0=multi, 1=single");
 DEFINE_int32(cg, -1, "Force cooperative grid: -1=auto, 0=off, 1=on");
 DEFINE_bool(wave_only, false, "Skip serial CPU and serial GPU execution");
+DEFINE_int32(
+    single_ops,
+    -1,
+    "Debug single ops mode: -1=run normal and single-ops, 0=normal only, 1=single-ops only");
 DEFINE_bool(
     standalone_timing,
     false,
@@ -102,6 +108,26 @@ DEFINE_int32(
     tensor_print_limit,
     100,
     "Max elements printed per tensor when tracing values; 0 for no limit");
+DEFINE_bool(
+    throw_on_error,
+    true,
+    "Throw on kernel error; if false, print error after verify instead");
+DEFINE_bool(
+    no_elementwise_fast_path,
+    false,
+    "Skip elementwise fast path; always use slow path with complexIdx");
+DEFINE_bool(
+    continue_after_mismatch,
+    false,
+    "Log reference mismatches but continue instead of throwing");
+DEFINE_bool(
+    kernel_debug_output,
+    false,
+    "Enable device-side debug printfs. Emergency use only");
+DEFINE_bool(
+    debug_single_ops,
+    false,
+    "Launch kernel once per block for debugging, waiting after each launch");
 
 namespace torch::wave {
 
@@ -392,9 +418,12 @@ std::vector<std::unique_ptr<nativert::OpKernel>> ModelFixture::makeKernels()
   return std::move(execKernels.nodeKernels);
 }
 
-std::shared_ptr<ModelContext> ModelFixture::makeModelContext() const {
-  auto ctx = std::make_shared<ModelContext>();
-  ctx->graph = model.graph.get();
+std::unique_ptr<ModelContext> ModelFixture::makeModelContext() {
+  TORCH_CHECK(
+      model.graph != nullptr,
+      "ModelFixture::makeModelContext: graph already moved");
+  auto ctx = std::make_unique<ModelContext>();
+  ctx->graph = std::move(model.graph);
   ctx->weights = weights;
   ctx->config = config;
   return ctx;
@@ -444,6 +473,11 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().traceValues = FLAGS_trace_values;
   WaveConfig::get().tensorPrintElementLimit = FLAGS_tensor_print_limit;
   WaveConfig::get().reverify = FLAGS_reverify;
+  WaveConfig::get().throwOnError = FLAGS_throw_on_error;
+  WaveConfig::get().noElementwiseFastPath = FLAGS_no_elementwise_fast_path;
+  WaveConfig::get().continueAfterMismatch = FLAGS_continue_after_mismatch;
+  WaveConfig::get().kernelDebugOutput = FLAGS_kernel_debug_output;
+  WaveConfig::get().debugSingleOps = FLAGS_debug_single_ops;
   if (!FLAGS_print_options.empty()) {
     NodePrinter::setDefaults(
         NodePrinter::parsePrintOptions(FLAGS_print_options));
@@ -649,9 +683,8 @@ void ExecutorTestBase::fillWaveFrame(
 
 RunTiming ExecutorTestBase::runWave(
     ModelFixture& fixture,
-    const std::vector<c10::IValue>& expected) {
-  auto& graph = *fixture.model.graph;
-
+    const std::vector<c10::IValue>& expected,
+    const std::function<void(nativert::ExecutionFrame&)>& alterInputs) {
   std::unordered_map<int32_t, c10::IValue> refFrame;
   if (!FLAGS_reference_frame.empty()) {
     refFrame = loadReferenceFrame(FLAGS_reference_frame);
@@ -661,6 +694,7 @@ RunTiming ExecutorTestBase::runWave(
   }
 
   WaveGraphExecutor waveExec(fixture.makeModelContext());
+  auto& graph = waveExec.graph();
 
   auto pooledFrame = waveExec.getFrame();
   EXPECT_NE(pooledFrame, nullptr);
@@ -669,6 +703,10 @@ RunTiming ExecutorTestBase::runWave(
   auto [deviceInputs, dataMovUs] = inputsToDevice(inputs);
 
   fillWaveFrame(graph, *pooledFrame, deviceInputs);
+
+  if (alterInputs) {
+    alterInputs(*pooledFrame);
+  }
 
   if (!serialFrameSnapshot_.empty()) {
     auto waveSnapshot =
@@ -687,8 +725,6 @@ RunTiming ExecutorTestBase::runWave(
                     Clock::now() - waveStart)
                     .count();
 
-  auto debugInfo = waveExec.getDebugInfo();
-
   waveExec.returnFrame(std::move(pooledFrame));
 
   lastRefTensorsChecked_ = waveExec.numRefTensorsChecked();
@@ -698,7 +734,7 @@ RunTiming ExecutorTestBase::runWave(
 
   auto hostOutputs = outputsToHost(waveOutputs, "wave");
   verifyOutputs(hostOutputs, expected, "wave");
-  return {dataMovUs, waveUs, std::move(debugInfo)};
+  return {dataMovUs, waveUs, waveThreadInfo().debugInfo};
 }
 
 void ExecutorTestBase::runTest(
@@ -737,6 +773,7 @@ void ExecutorTestBase::runTestWithFixture(
     std::unique_ptr<ModelFixture> fixture,
     const std::vector<c10::IValue>& expected,
     const std::string& label) {
+  displayName_ = label;
   auto displayName = label;
 
   const int repeats = FLAGS_num_repeats;
@@ -790,100 +827,132 @@ void ExecutorTestBase::runTestWithFixture(
   }
 
   // Wave.
-  auto& graph = *fixture->model.graph;
   WaveGraphExecutor waveExec(fixture->makeModelContext());
+  auto& graph = waveExec.graph();
 
   if (FLAGS_list > 0) {
     auto mode = static_cast<Listing>(FLAGS_list - 1);
     std::cout << waveExec.waveGraph()->toString(mode) << std::endl;
   }
 
-  auto pooledFrame = waveExec.getFrame();
-  ASSERT_NE(pooledFrame, nullptr);
-
   auto inputs = loadSampleInputs(*fixture);
   auto [deviceInputs, dataMovUs] = inputsToDevice(inputs);
 
-  // Initial run: fill frame, execute, verify.
-  fillWaveFrame(graph, *pooledFrame, deviceInputs);
+  if (FLAGS_single_ops != 1) {
+    auto pooledFrame = waveExec.getFrame();
+    ASSERT_NE(pooledFrame, nullptr);
 
-  auto waveStart = Clock::now();
-  auto waveOutputs = waveExec.executeWithPrefilledFrame(*pooledFrame);
-  auto waveColdUs = std::chrono::duration_cast<std::chrono::microseconds>(
-                        Clock::now() - waveStart)
-                        .count();
-
-  auto hostOutputs = outputsToHost(waveOutputs, "wave");
-  verifyOutputs(hostOutputs, expected, "wave");
-
-  // Repeated runs: refill inputs and re-execute only.
-  int64_t waveMin = INT64_MAX, waveMax = 0, waveSum = 0;
-  std::vector<int64_t> waveTimes(repeats);
-  std::vector<std::vector<DebugInfo>> lastDebugInfo;
-  for (int i = 0; i < repeats; ++i) {
+    // Initial run: fill frame, execute, verify.
     fillWaveFrame(graph, *pooledFrame, deviceInputs);
 
-    auto start = Clock::now();
-    waveExec.executeWithPrefilledFrame(*pooledFrame);
-    auto us = std::chrono::duration_cast<std::chrono::microseconds>(
-                  Clock::now() - start)
-                  .count();
-    waveTimes[i] = us;
-    waveMin = std::min(waveMin, us);
-    waveMax = std::max(waveMax, us);
-    waveSum += us;
-    if (i == repeats - 1) {
-      lastDebugInfo = waveExec.getDebugInfo();
-    }
-  }
+    auto waveStart = Clock::now();
+    auto waveOutputs = waveExec.executeWithPrefilledFrame(*pooledFrame);
+    auto waveColdUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                          Clock::now() - waveStart)
+                          .count();
 
-  waveExec.returnFrame(std::move(pooledFrame));
-
-  std::sort(waveTimes.begin(), waveTimes.end());
-  auto waveP90 = waveTimes[repeats * 90 / 100];
-  LOG(INFO) << displayName << " wave H2D: cold=" << dataMovUs << " us";
-  LOG(INFO) << displayName << " wave (" << repeats
-            << " repeats): min=" << waveMin << " avg=" << waveSum / repeats
-            << " p90=" << waveP90 << " max=" << waveMax
-            << " us (cold=" << waveColdUs << " us)";
-
-  for (size_t li = 0; li < lastDebugInfo.size(); ++li) {
-    const auto& blocks = lastDebugInfo[li];
-    struct OpStats {
-      int64_t count{0};
-      int64_t minClocks{std::numeric_limits<int64_t>::max()};
-      int64_t maxClocks{0};
-      int64_t sumClocks{0};
-    };
-    std::map<int32_t, OpStats> opMap;
-    for (const auto& b : blocks) {
-      auto& s = opMap[b.op];
-      s.count++;
-      s.minClocks = std::min(s.minClocks, b.clocks);
-      s.maxClocks = std::max(s.maxClocks, b.clocks);
-      s.sumClocks += b.clocks;
-    }
-    std::vector<std::pair<int32_t, OpStats>> sorted(opMap.begin(), opMap.end());
-    std::sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) {
-      return (a.second.sumClocks / a.second.count) <
-          (b.second.sumClocks / b.second.count);
-    });
-    std::stringstream ss;
-    ss << displayName << " launch " << li << ": ";
-    bool first = true;
-    for (const auto& [op, s] : sorted) {
-      if (!first) {
-        ss << ", ";
+    auto hostOutputs = outputsToHost(waveOutputs, "wave");
+    verifyOutputs(hostOutputs, expected, "wave");
+    if (!FLAGS_throw_on_error) {
+      auto& errors = waveThreadInfo().errors;
+      if (!errors.empty()) {
+        LOG(ERROR) << "Wave kernel errors:\n" << errors;
       }
-      first = false;
-      ss << "op " << op << " count: " << s.count << " " << s.minClocks << "/"
-         << (s.sumClocks / s.count) << "/" << s.maxClocks;
     }
-    LOG(INFO) << ss.str();
+
+    // Repeated runs: refill inputs and re-execute only.
+    int64_t waveMin = INT64_MAX, waveMax = 0, waveSum = 0;
+    std::vector<int64_t> waveTimes(repeats);
+    std::vector<std::vector<DebugInfo>> lastDebugInfo;
+    for (int i = 0; i < repeats; ++i) {
+      fillWaveFrame(graph, *pooledFrame, deviceInputs);
+
+      auto start = Clock::now();
+      waveExec.executeWithPrefilledFrame(*pooledFrame);
+      auto us = std::chrono::duration_cast<std::chrono::microseconds>(
+                    Clock::now() - start)
+                    .count();
+      waveTimes[i] = us;
+      waveMin = std::min(waveMin, us);
+      waveMax = std::max(waveMax, us);
+      waveSum += us;
+      if (i == repeats - 1) {
+        lastDebugInfo = waveThreadInfo().debugInfo;
+      }
+    }
+
+    waveExec.returnFrame(std::move(pooledFrame));
+
+    std::sort(waveTimes.begin(), waveTimes.end());
+    auto waveP90 = waveTimes[repeats * 90 / 100];
+    LOG(INFO) << displayName << " wave H2D: cold=" << dataMovUs << " us";
+    LOG(INFO) << displayName << " wave (" << repeats
+              << " repeats): min=" << waveMin << " avg=" << waveSum / repeats
+              << " p90=" << waveP90 << " max=" << waveMax
+              << " us (cold=" << waveColdUs << " us)";
+
+    for (size_t li = 0; li < lastDebugInfo.size(); ++li) {
+      const auto& blocks = lastDebugInfo[li];
+      struct OpStats {
+        int64_t count{0};
+        int64_t minClocks{std::numeric_limits<int64_t>::max()};
+        int64_t maxClocks{0};
+        int64_t sumClocks{0};
+      };
+      std::map<int32_t, OpStats> opMap;
+      for (const auto& b : blocks) {
+        auto& s = opMap[b.op];
+        s.count++;
+        s.minClocks = std::min(s.minClocks, b.clocks);
+        s.maxClocks = std::max(s.maxClocks, b.clocks);
+        s.sumClocks += b.clocks;
+      }
+      std::vector<std::pair<int32_t, OpStats>> sorted(
+          opMap.begin(), opMap.end());
+      std::sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) {
+        return (a.second.sumClocks / a.second.count) <
+            (b.second.sumClocks / b.second.count);
+      });
+      std::stringstream ss;
+      ss << displayName << " launch " << li << ": ";
+      bool first = true;
+      for (const auto& [op, s] : sorted) {
+        if (!first) {
+          ss << ", ";
+        }
+        first = false;
+        ss << "op " << op << " count: " << s.count << " " << s.minClocks << "/"
+           << (s.sumClocks / s.count) << "/" << s.maxClocks;
+      }
+      LOG(INFO) << ss.str();
+    }
+
+    if (FLAGS_standalone_timing) {
+      standaloneReport(waveExec);
+    }
   }
 
-  if (FLAGS_standalone_timing) {
-    standaloneReport(waveExec);
+  if (FLAGS_single_ops != 0) {
+    WaveConfig::get().debugSingleOps = true;
+    auto debugLabel = displayName + " debug_single_ops";
+    auto debugFrame = waveExec.getFrame();
+    ASSERT_NE(debugFrame, nullptr);
+    for (int run = 0; run < 2; ++run) {
+      fillWaveFrame(graph, *debugFrame, deviceInputs);
+      auto outputs = waveExec.executeWithPrefilledFrame(*debugFrame);
+      if (run == 1) {
+        auto hostOutputs = outputsToHost(outputs, debugLabel);
+        verifyOutputs(hostOutputs, expected, debugLabel);
+        if (!FLAGS_throw_on_error) {
+          auto& errors = waveThreadInfo().errors;
+          if (!errors.empty()) {
+            LOG(ERROR) << "Wave kernel errors (debug_single_ops):\n" << errors;
+          }
+        }
+      }
+    }
+    waveExec.returnFrame(std::move(debugFrame));
+    WaveConfig::get().debugSingleOps = false;
   }
 }
 
@@ -945,17 +1014,19 @@ void ExecutorTestBase::verifyOutputs(
   if (expected.empty()) {
     return;
   }
+  auto fullLabel = displayName_.empty() ? label : displayName_ + " " + label;
   ASSERT_EQ(outputs.size(), expected.size())
-      << label << ": output count mismatch";
+      << fullLabel << ": output count mismatch";
   for (size_t i = 0; i < expected.size(); ++i) {
     const auto& actual = outputs[i];
     const auto& exp = expected[i];
     if (exp.isTensor()) {
       ASSERT_TRUE(actual.isTensor())
-          << label << " output " << i << " expected tensor, got non-tensor";
+          << fullLabel << " output " << i << " expected tensor, got non-tensor";
       auto match = tensorsMatch(actual.toTensor(), exp.toTensor());
       auto limit = WaveConfig::get().tensorPrintElementLimit;
-      EXPECT_TRUE(match) << label << " output " << i << " differs from expected"
+      EXPECT_TRUE(match) << fullLabel << " output " << i
+                         << " differs from expected"
                          << "\n  "
                          << firstDifference(actual.toTensor(), exp.toTensor())
                          << "\n  expected: "
@@ -963,30 +1034,30 @@ void ExecutorTestBase::verifyOutputs(
                          << "\n  actual:   "
                          << tensorDebugString(actual.toTensor(), limit);
       if (!match && FLAGS_print_full_mismatch) {
-        LOG(INFO) << label << " output " << i << " expected:\n"
+        LOG(INFO) << fullLabel << " output " << i << " expected:\n"
                   << tensorToString(exp.toTensor());
-        LOG(INFO) << label << " output " << i << " actual:\n"
+        LOG(INFO) << fullLabel << " output " << i << " actual:\n"
                   << tensorToString(actual.toTensor());
       }
     } else if (exp.isDouble()) {
       ASSERT_TRUE(actual.isDouble())
-          << label << " output " << i << " expected double, got "
+          << fullLabel << " output " << i << " expected double, got "
           << actual.tagKind();
       EXPECT_NEAR(actual.toDouble(), exp.toDouble(), 1e-5)
-          << label << " output " << i << " scalar mismatch";
+          << fullLabel << " output " << i << " scalar mismatch";
     } else if (exp.isInt()) {
-      ASSERT_TRUE(actual.isInt()) << label << " output " << i
+      ASSERT_TRUE(actual.isInt()) << fullLabel << " output " << i
                                   << " expected int, got " << actual.tagKind();
       EXPECT_EQ(actual.toInt(), exp.toInt())
-          << label << " output " << i << " scalar mismatch";
+          << fullLabel << " output " << i << " scalar mismatch";
     } else if (exp.isBool()) {
       ASSERT_TRUE(actual.isBool())
-          << label << " output " << i << " expected bool, got "
+          << fullLabel << " output " << i << " expected bool, got "
           << actual.tagKind();
       EXPECT_EQ(actual.toBool(), exp.toBool())
-          << label << " output " << i << " scalar mismatch";
+          << fullLabel << " output " << i << " scalar mismatch";
     } else {
-      ADD_FAILURE() << label << " output " << i
+      ADD_FAILURE() << fullLabel << " output " << i
                     << " unsupported expected type: " << exp.tagKind();
     }
   }

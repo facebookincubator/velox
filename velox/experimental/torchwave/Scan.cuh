@@ -704,6 +704,154 @@ __device__ void masked_select_cg(
   opBarrier(block, bar2);
 }
 
+// Single-block nonzero for 1D input. Returns indices where input != 0.
+template <int32_t kBlockSize, typename T>
+__device__ void nonzero1d(
+    Tensor* input,
+    Tensor* output,
+    void* temp,
+    uint32_t& size,
+    uint32_t& counter,
+    BlockInfo& block) {
+  int64_t* out = storage<int64_t>(output);
+  T* in = storage<T>(input);
+  if (threadIdx.x == 0) {
+    size = numEl(*input);
+    counter = 0;
+  }
+  __syncthreads();
+  auto rounded = roundUpPwr2(size, kBlockSize);
+  for (uint32_t idx = threadIdx.x; idx < rounded; idx += blockDim.x) {
+    bool flag = (idx < size) ? (in[idx] != T(0)) : false;
+    int32_t val = static_cast<int32_t>(flag);
+    if (threadIdx.x == 0) {
+      val += counter;
+    }
+    int32_t sum = facebook::velox::wave::inclusiveSum<int32_t, kBlockSize>(
+        val, nullptr, static_cast<int32_t*>(temp));
+    if (flag) {
+      out[sum - 1] = static_cast<int64_t>(idx);
+    }
+    if (threadIdx.x == blockDim.x - 1) {
+      counter = sum;
+    }
+    __syncthreads();
+  }
+  if (threadIdx.x == 0) {
+    output->dims[0] = counter;
+    output->dims[1] = 1;
+  }
+}
+
+// Multi-block nonzero head: counts non-zero elements per block.
+template <int32_t kBlockSize, typename T>
+__device__ void nonzero1d_head(
+    Tensor* input,
+    Tensor* output,
+    void* temp,
+    uint32_t& size,
+    uint32_t& rounded,
+    BlockInfo& block) {
+  T* in = storage<T>(input);
+  int32_t* out = storage<int32_t>(output);
+  if (threadIdx.x == 0) {
+    size = numEl(*input);
+    rounded = roundUpPwr2(size, kBlockSize);
+  }
+  __syncthreads();
+  uint32_t blockIdx = block.blockInOp;
+  for (uint32_t idx = block.blockInOp * blockDim.x + threadIdx.x; idx < rounded;
+       idx += block.numBlocksInOp * blockDim.x) {
+    uint32_t flag = (idx < size) ? static_cast<uint32_t>(in[idx] != T(0)) : 0;
+    auto count = reduce<kBlockSize, uint32_t>(
+        flag, [](uint32_t a, uint32_t b) { return a + b; }, temp);
+    if (threadIdx.x == 0) {
+      out[blockIdx] = count;
+      blockIdx += block.numBlocksInOp;
+    }
+  }
+}
+
+// Multi-block nonzero final: scatters indices using prefix-summed counts.
+template <int32_t kBlockSize, typename T>
+__device__ void nonzero1d_final(
+    Tensor* input,
+    Tensor* counts,
+    int32_t* total,
+    Tensor* output,
+    void* temp,
+    uint32_t& size,
+    uint32_t& rounded,
+    BlockInfo& block) {
+  if (threadIdx.x == 0) {
+    size = numEl(*input);
+    rounded = roundUpPwr2(size, kBlockSize);
+  }
+  __syncthreads();
+  T* in = storage<T>(input);
+  int32_t* cnt = storage<int32_t>(counts);
+  int64_t* out = storage<int64_t>(output);
+  uint32_t blockIdx = block.blockInOp;
+  for (uint32_t idx = block.blockInOp * blockDim.x + threadIdx.x; idx < rounded;
+       idx += block.numBlocksInOp * blockDim.x) {
+    bool flag = (idx < size) ? (in[idx] != T(0)) : false;
+    auto base = blockIdx == 0 ? 0 : cnt[blockIdx - 1];
+    int32_t val = static_cast<int32_t>(flag);
+    if (threadIdx.x == 0) {
+      val += base;
+    }
+    int32_t sum = facebook::velox::wave::inclusiveSum<int32_t, kBlockSize>(
+        val, nullptr, static_cast<int32_t*>(temp));
+    if (flag) {
+      out[sum - 1] = static_cast<int64_t>(idx);
+    }
+    if (idx == size - 1) {
+      output->dims[0] = sum;
+      output->dims[1] = 1;
+    }
+    blockIdx += block.numBlocksInOp;
+  }
+}
+
+// CG nonzero: 3-pass nonzero in a single cooperative kernel.
+template <int32_t kBlockSize, typename T>
+__device__ void nonzero1d_cg(
+    Tensor* input,
+    Tensor* output,
+    Tensor* counts,
+    void* temp,
+    uint32_t& size,
+    uint32_t& rounded,
+    uint32_t& counter,
+    int32_t bar0,
+    int32_t bar1,
+    int32_t bar2,
+    BlockInfo& block) {
+  nonzero1d_head<kBlockSize, T>(input, counts, temp, size, rounded, block);
+  opBarrier(block, bar0);
+  if (block.blockInOp == 0) {
+    add_sizes<kBlockSize>(
+        counts,
+        static_cast<int32_t*>(nullptr),
+        temp,
+        size,
+        rounded,
+        counter,
+        block);
+  }
+  opBarrier(block, bar1);
+  nonzero1d_final<kBlockSize, T>(
+      input,
+      counts,
+      static_cast<int32_t*>(nullptr),
+      output,
+      temp,
+      size,
+      rounded,
+      block);
+  opBarrier(block, bar2);
+}
+
 template <int32_t kBlockSize, typename TIn, typename TOut>
 __device__ void tw_sum_cg(
     Tensor* input,

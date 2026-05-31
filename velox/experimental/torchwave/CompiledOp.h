@@ -154,7 +154,7 @@ class OpInvocation {
 
   /// Maps each node in the projectOp's formal subgraph to the corresponding
   /// node in the actual subgraph passed at construction.
-  const std::unordered_map<NodeCP, NodeCP>& nodeMap() const {
+  const NodeMap& nodeMap() const {
     return nodeMap_;
   }
 
@@ -163,11 +163,13 @@ class OpInvocation {
     bindings_[formalId] = actualId;
   }
 
+  std::string toString() const;
+
  private:
   ProjectOperation* projectOp_;
   FormalToActual bindings_;
   std::vector<const c10::IValue*> constants_;
-  std::unordered_map<NodeCP, NodeCP> nodeMap_;
+  NodeMap nodeMap_;
 };
 
 /// Compiled CUDA kernel containing one or more ProjectOperations.

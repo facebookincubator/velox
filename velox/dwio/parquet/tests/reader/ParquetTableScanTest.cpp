@@ -293,13 +293,10 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
     VELOX_CHECK(options.parquetWriteTimestampUnit.has_value());
     const auto [values, expectedValues] = timestampValues(
         options.parquetWriteTimestampUnit.value(), readTimestampPrecision);
-    // Parquet writer relies on Arrow bridge for schema conversion.
-    // TODO: Switch back to TIMESTAMP_UTC() once Arrow bridge supports
-    // TimestampUtcType.
     auto vector = makeRowVector(
         {"t"},
         {
-            makeFlatVector<Timestamp>(values, TIMESTAMP()),
+            makeFlatVector<Timestamp>(values, TIMESTAMP_UTC()),
         });
     auto file = TempFilePath::create();
     writeToParquetFile(file->getPath(), {vector}, options);

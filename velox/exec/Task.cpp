@@ -23,6 +23,8 @@
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/memory/CustomMemoryResource.h"
+#include "velox/common/memory/CustomMemoryResourceRegistry.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
 #include "velox/exec/Exchange.h"
@@ -210,6 +212,18 @@ std::string makeUuid() {
 bool isHashJoinOperator(const std::string& operatorType) {
   return (operatorType == OperatorType::kHashBuild) ||
       (operatorType == OperatorType::kHashProbe);
+}
+
+// Returns the CustomMemoryResourceRegistry visible to 'queryCtx': the
+// per-query scoped registry if one has been installed under
+// 'kCustomMemoryResourceRegistryKey', otherwise the process-global
+// registry. Mirrors connector::ConnectorRegistry's per-query lookup.
+memory::CustomMemoryResourceRegistry::Registry& customMemoryResourceRegistryFor(
+    const core::QueryCtx& queryCtx) {
+  auto perQuery =
+      queryCtx.registry<memory::CustomMemoryResourceRegistry::Registry>(
+          memory::kCustomMemoryResourceRegistryKey);
+  return perQuery ? *perQuery : memory::CustomMemoryResourceRegistry::global();
 }
 
 class QueueSplitsStore : public SplitsStore {
@@ -487,9 +501,12 @@ Task::~Task() {
   CLEAR(exchangeClients_.clear());
   CLEAR(exception_ = nullptr);
   CLEAR(nodePools_.clear());
+  CLEAR(customNodePools_.clear());
+  CLEAR(customTaskPools_.clear());
+  CLEAR(customChildPools_.clear());
   CLEAR(childPools_.clear());
-  CLEAR(pool_.reset());
   CLEAR(planFragment_ = core::PlanFragment());
+  CLEAR(pool_.reset());
   CLEAR(queryCtx_.reset());
   clearStage = "exiting ~Task()";
 
@@ -711,6 +728,25 @@ void Task::initTaskPool() {
   VELOX_CHECK_NULL(pool_);
   pool_ = queryCtx_->pool()->addAggregateChild(
       fmt::format("task.{}", taskId_.c_str()), createTaskReclaimer());
+  initCustomTaskPools();
+}
+
+void Task::initCustomTaskPools() {
+  VELOX_CHECK_NOT_NULL(pool_);
+  const auto& customRoots = queryCtx_->customPools();
+  if (customRoots.empty()) {
+    return;
+  }
+  auto& registry = customMemoryResourceRegistryFor(*queryCtx_);
+  for (const auto& [tag, root] : customRoots) {
+    auto resource = registry.find(tag);
+    VELOX_CHECK_NOT_NULL(
+        resource, "No CustomMemoryResource registered for tag: {}", tag);
+    customChildPools_.push_back(root->addAggregateChild(
+        fmt::format("task.{}.{}", taskId_.c_str(), tag),
+        resource->newReclaimer()));
+    customTaskPools_[tag] = customChildPools_.back().get();
+  }
 }
 
 velox::memory::MemoryPool* Task::getOrAddNodePool(
@@ -725,6 +761,31 @@ velox::memory::MemoryPool* Task::getOrAddNodePool(
       })));
   auto* nodePool = childPools_.back().get();
   nodePools_[planNodeId] = nodePool;
+  for (const auto& [tag, _] : queryCtx_->customPools()) {
+    getOrAddCustomNodePool(tag, planNodeId);
+  }
+  return nodePool;
+}
+
+memory::MemoryPool* Task::getOrAddCustomNodePool(
+    const std::string& tag,
+    const core::PlanNodeId& planNodeId) {
+  auto& nodeMap = customNodePools_[tag];
+  if (auto it = nodeMap.find(planNodeId); it != nodeMap.end()) {
+    return it->second;
+  }
+  auto taskIt = customTaskPools_.find(tag);
+  VELOX_CHECK(
+      taskIt != customTaskPools_.end(),
+      "Custom task pool missing for tag: {}",
+      tag);
+  auto resource = customMemoryResourceRegistryFor(*queryCtx_).find(tag);
+  VELOX_CHECK_NOT_NULL(
+      resource, "No CustomMemoryResource registered for tag: {}", tag);
+  customChildPools_.push_back(taskIt->second->addAggregateChild(
+      fmt::format("node.{}.{}", planNodeId, tag), resource->newReclaimer()));
+  auto* nodePool = customChildPools_.back().get();
+  nodeMap[planNodeId] = nodePool;
   return nodePool;
 }
 
@@ -745,7 +806,71 @@ memory::MemoryPool* Task::getOrAddJoinNodePool(
       })));
   auto* nodePool = childPools_.back().get();
   nodePools_[nodeId] = nodePool;
+  for (const auto& [tag, _] : queryCtx_->customPools()) {
+    getOrAddCustomJoinNodePool(tag, planNodeId, splitGroupId);
+  }
   return nodePool;
+}
+
+memory::MemoryPool* Task::getOrAddCustomJoinNodePool(
+    const std::string& tag,
+    const core::PlanNodeId& planNodeId,
+    uint32_t splitGroupId) {
+  const std::string nodeId = splitGroupId == kUngroupedGroupId
+      ? planNodeId
+      : fmt::format("{}[{}]", planNodeId, splitGroupId);
+  auto& nodeMap = customNodePools_[tag];
+  if (auto it = nodeMap.find(nodeId); it != nodeMap.end()) {
+    return it->second;
+  }
+  auto taskIt = customTaskPools_.find(tag);
+  VELOX_CHECK(
+      taskIt != customTaskPools_.end(),
+      "Custom task pool missing for tag: {}",
+      tag);
+  auto resource = customMemoryResourceRegistryFor(*queryCtx_).find(tag);
+  VELOX_CHECK_NOT_NULL(
+      resource, "No CustomMemoryResource registered for tag: {}", tag);
+  customChildPools_.push_back(taskIt->second->addAggregateChild(
+      fmt::format("node.{}.{}", nodeId, tag), resource->newReclaimer()));
+  auto* nodePool = customChildPools_.back().get();
+  nodeMap[nodeId] = nodePool;
+  return nodePool;
+}
+
+memory::MemoryPool* Task::addCustomOperatorPool(
+    const std::string& tag,
+    const core::PlanNodeId& planNodeId,
+    uint32_t splitGroupId,
+    int pipelineId,
+    uint32_t driverId,
+    const std::string& operatorType) {
+  memory::MemoryPool* nodePool;
+  if (isHashJoinOperator(operatorType)) {
+    nodePool = getOrAddCustomJoinNodePool(tag, planNodeId, splitGroupId);
+  } else {
+    nodePool = getOrAddCustomNodePool(tag, planNodeId);
+  }
+  customChildPools_.push_back(nodePool->addLeafChild(
+      fmt::format(
+          "op.{}.{}.{}.{}.{}",
+          planNodeId,
+          pipelineId,
+          driverId,
+          operatorType,
+          tag)));
+  return customChildPools_.back().get();
+}
+
+memory::MemoryPool* Task::customNodePool(
+    const std::string& tag,
+    const core::PlanNodeId& planNodeId) const {
+  auto tagIt = customNodePools_.find(tag);
+  if (tagIt == customNodePools_.end()) {
+    return nullptr;
+  }
+  auto nodeIt = tagIt->second.find(planNodeId);
+  return nodeIt == tagIt->second.end() ? nullptr : nodeIt->second;
 }
 
 std::unique_ptr<memory::MemoryReclaimer> Task::createNodeReclaimer(
