@@ -16,6 +16,7 @@
 
 #include "velox/functions/sparksql/specialforms/FromCsv.h"
 
+#include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <limits>
@@ -76,6 +77,7 @@ void splitCsvLine(
     char delimiter,
     size_t maxFields,
     std::vector<std::string>& fields,
+    std::string& quotedContent,
     char escape = '\\') {
   fields.clear();
   // Note: caller (FromCsvFunction::apply) already guards against oversized
@@ -99,22 +101,19 @@ void splitCsvLine(
       // Spark's default unescapedQuoteHandling=STOP_AT_DELIMITER: if the
       // quote is not properly closed before EOL, treat it as literal text
       // and re-parse from the opening quote as an unquoted field.
-      std::string content;
-      // Reserve an estimate for quoted field content to reduce reallocations.
-      size_t remaining = line.size() - i - 1;
-      content.reserve(std::min(remaining, size_t(128)));
+      quotedContent.clear();
       size_t j = i + 1;
       bool closedProperly = false;
       while (j < line.size()) {
         if (escape != '\0' && line[j] == escape && j + 1 < line.size() &&
             line[j + 1] == '"') {
           // Escape char followed by quote — emit a literal quote.
-          content.push_back('"');
+          quotedContent.push_back('"');
           j += 2;
         } else if (line[j] == '"') {
           if (j + 1 < line.size() && line[j + 1] == '"') {
             // Doubled quote — emit a single quote (RFC 4180).
-            content.push_back('"');
+            quotedContent.push_back('"');
             j += 2;
           } else {
             // End of quoted field.
@@ -122,7 +121,7 @@ void splitCsvLine(
             break;
           }
         } else {
-          content.push_back(line[j]);
+          quotedContent.push_back(line[j]);
           ++j;
         }
       }
@@ -142,7 +141,7 @@ void splitCsvLine(
           trailingDelimiter = true;
         }
       } else {
-        fields.push_back(std::move(content));
+        fields.push_back(std::move(quotedContent));
         // Advance past closing quote.
         ++j;
         // Skip any characters between closing quote and next delimiter
@@ -360,23 +359,23 @@ bool isSupportedLeafType(const TypePtr& type) {
   }
 }
 
-/// @brief Parses a CSV string into a ROW (struct) type. Fields are matched
-/// positionally to the schema columns.
-///
-/// Supported field types:
-///   BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE, VARCHAR,
-///   VARBINARY, DECIMAL (short and long), DATE, TIMESTAMP.
-///
-/// Key Behavior (matches Spark's from_csv with default options):
-/// - NULL input returns NULL struct.
-/// - Empty or whitespace-only input returns a non-null struct with null fields.
-/// - Fewer CSV fields than schema columns: remaining columns are NULL.
-/// - More CSV fields than schema columns: extra fields are ignored.
-/// - Fields that cannot be parsed to the target type become NULL.
-/// - Whitespace is NOT trimmed from fields (Spark's from_csv defaults:
-///   ignoreLeadingWhiteSpace=false, ignoreTrailingWhiteSpace=false).
-/// - Quoted fields are supported with backslash escape (Spark default).
-/// - TIMESTAMP fields use session timezone for naive timestamps.
+// Parses a CSV string into a ROW (struct) type. Fields are matched
+// positionally to the schema columns.
+//
+// Supported field types:
+//   BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE, VARCHAR,
+//   VARBINARY, DECIMAL (short and long), DATE, TIMESTAMP.
+//
+// Key Behavior (matches Spark's from_csv with default options):
+// - NULL input returns NULL struct.
+// - Empty or whitespace-only input returns a non-null struct with null fields.
+// - Fewer CSV fields than schema columns: remaining columns are NULL.
+// - More CSV fields than schema columns: extra fields are ignored.
+// - Fields that cannot be parsed to the target type become NULL.
+// - Whitespace is NOT trimmed from fields (Spark's from_csv defaults:
+//   ignoreLeadingWhiteSpace=false, ignoreTrailingWhiteSpace=false).
+// - Quoted fields are supported with backslash escape (Spark default).
+// - TIMESTAMP fields use session timezone for naive timestamps.
 class FromCsvFunction : public exec::VectorFunction {
  public:
   explicit FromCsvFunction(
@@ -428,8 +427,10 @@ class FromCsvFunction : public exec::VectorFunction {
           rowType.childAt(col)};
     }
 
-    // Reuse fields vector across rows to avoid per-row allocation.
+    // Reuse fields vector and quoted-field buffer across rows to avoid
+    // per-row allocation.
     std::vector<std::string> fields;
+    std::string quotedContent;
 
     rows.applyToSelected([&](auto row) {
       if (decodedInput->isNullAt(row)) {
@@ -438,7 +439,8 @@ class FromCsvFunction : public exec::VectorFunction {
       }
 
       const auto csvStr = decodedInput->valueAt<StringView>(row);
-      // Guard against extremely large inputs — return NULL row (DoS mitigation).
+      // Guard against extremely large inputs — return NULL row (DoS
+      // mitigation).
       auto csvView = std::string_view(csvStr.data(), csvStr.size());
       if (csvView.size() > kMaxCsvLineSize) {
         flatResult->setNull(row, true);
@@ -462,6 +464,7 @@ class FromCsvFunction : public exec::VectorFunction {
           delimiter_,
           numFields,
           fields,
+          quotedContent,
           escape_);
 
       for (column_index_t col = 0; col < numFields; ++col) {
@@ -486,11 +489,10 @@ class FromCsvFunction : public exec::VectorFunction {
               fieldView = fieldView.substr(start);
             } else {
               size_t end = fieldView.size();
-              while (
-                  end > 0 &&
-                  (fieldView[end - 1] == ' ' || fieldView[end - 1] == '\t' ||
-                   fieldView[end - 1] == '\r' ||
-                   fieldView[end - 1] == '\n')) {
+              while (end > 0 &&
+                     (fieldView[end - 1] == ' ' || fieldView[end - 1] == '\t' ||
+                      fieldView[end - 1] == '\r' ||
+                      fieldView[end - 1] == '\n')) {
                 --end;
               }
               fieldView = fieldView.substr(0, end);

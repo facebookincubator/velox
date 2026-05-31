@@ -548,8 +548,8 @@ TEST_F(FromCsvTest, garbageAfterQuote) {
 // Row nullness: non-null input always produces non-null row, even if all
 // fields fail to parse. Only SQL NULL input produces a null row.
 TEST_F(FromCsvTest, rowNullness) {
-  auto input =
-      makeNullableFlatVector<std::string>({"abc,xyz", ",", "1,2", "", std::nullopt});
+  auto input = makeNullableFlatVector<std::string>(
+      {"abc,xyz", ",", "1,2", "", std::nullopt});
   auto expr = createFromCsv(ROW({"a", "b"}, {INTEGER(), INTEGER()}));
   auto result = evaluate(expr, makeRowVector({input}));
   auto* resultRow = result->as<RowVector>();
@@ -601,8 +601,8 @@ TEST_F(FromCsvTest, whitespaceOnlyInput) {
 
 // Short decimal (precision <= 18) parsing.
 TEST_F(FromCsvTest, shortDecimal) {
-  auto input = makeFlatVector<std::string>(
-      {"123.45", "  -99.99  ", "abc", "0.01", ""});
+  auto input =
+      makeFlatVector<std::string>({"123.45", "  -99.99  ", "abc", "0.01", ""});
   auto decType = DECIMAL(10, 2);
   auto expr = createFromCsv(ROW({"a"}, {decType}));
   auto result = evaluate(expr, makeRowVector({input}));
@@ -762,6 +762,48 @@ TEST_F(FromCsvTest, barePlusSign) {
   auto* resultRow = result->as<RowVector>();
   auto* child = resultRow->childAt(0)->asFlatVector<double>();
   // All should be null (invalid float).
+  EXPECT_TRUE(child->isNullAt(0));
+  EXPECT_TRUE(child->isNullAt(1));
+  EXPECT_TRUE(child->isNullAt(2));
+}
+
+TEST_F(FromCsvTest, delimiterOnlyInput) {
+  // A single delimiter with a 2-field schema produces two empty (null) fields.
+  auto input = makeFlatVector<StringView>({","_sv, ",,,"_sv});
+  auto expr = createFromCsv(ROW({"a", "b"}, {INTEGER(), INTEGER()}));
+  auto result = evaluate(expr, makeRowVector({input}));
+  auto* resultRow = result->as<RowVector>();
+  auto* a = resultRow->childAt(0)->asFlatVector<int32_t>();
+  auto* b = resultRow->childAt(1)->asFlatVector<int32_t>();
+  // "," → two empty fields → both null.
+  EXPECT_TRUE(a->isNullAt(0));
+  EXPECT_TRUE(b->isNullAt(0));
+  // ",,," → 4 fields but schema has 2, extras ignored; first two are empty →
+  // null.
+  EXPECT_TRUE(a->isNullAt(1));
+  EXPECT_TRUE(b->isNullAt(1));
+}
+
+TEST_F(FromCsvTest, integerWithDecimalPoint) {
+  // "123.0" is not a valid integer — should return NULL.
+  auto input = makeFlatVector<StringView>({"123.0"_sv, "45.6"_sv, "7.0"_sv});
+  auto expr = createFromCsv(ROW({"a"}, {INTEGER()}));
+  auto result = evaluate(expr, makeRowVector({input}));
+  auto* resultRow = result->as<RowVector>();
+  auto* child = resultRow->childAt(0)->asFlatVector<int32_t>();
+  EXPECT_TRUE(child->isNullAt(0));
+  EXPECT_TRUE(child->isNullAt(1));
+  EXPECT_TRUE(child->isNullAt(2));
+}
+
+TEST_F(FromCsvTest, hexIntegerRejected) {
+  // Hex prefixed integers should be rejected (not valid for Spark integer
+  // parsing).
+  auto input = makeFlatVector<StringView>({"0x1A"_sv, "0X10"_sv, "0xff"_sv});
+  auto expr = createFromCsv(ROW({"a"}, {INTEGER()}));
+  auto result = evaluate(expr, makeRowVector({input}));
+  auto* resultRow = result->as<RowVector>();
+  auto* child = resultRow->childAt(0)->asFlatVector<int32_t>();
   EXPECT_TRUE(child->isNullAt(0));
   EXPECT_TRUE(child->isNullAt(1));
   EXPECT_TRUE(child->isNullAt(2));
