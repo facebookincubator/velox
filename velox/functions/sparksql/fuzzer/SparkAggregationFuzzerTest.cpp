@@ -14,10 +14,13 @@
  * limitations under the License.
  */
 
+#include <folly/String.h>
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
 #include <gtest/gtest.h>
+#include <string_view>
 #include <unordered_set>
+#include <vector>
 
 #include "velox/dwio/parquet/RegisterParquetWriter.h"
 #include "velox/exec/fuzzer/AggregationFuzzerOptions.h"
@@ -45,6 +48,37 @@ DEFINE_string(
     "If specified, Fuzzer will only choose functions from "
     "this comma separated list of function names "
     "(e.g: --only \"min\" or --only \"sum,avg\").");
+
+namespace {
+
+bool onlyContainsSkippedFunctions(
+    const std::string& onlyFunctions,
+    const std::unordered_set<std::string>& skipFunctions) {
+  if (onlyFunctions.empty()) {
+    return false;
+  }
+
+  std::vector<std::string_view> requestedFunctions;
+  folly::split(',', onlyFunctions, requestedFunctions);
+
+  bool hasRequestedFunction = false;
+  for (auto requestedFunction : requestedFunctions) {
+    auto functionName = folly::trimWhitespace(requestedFunction).toString();
+    folly::toLowerAscii(functionName);
+    if (functionName.empty()) {
+      continue;
+    }
+
+    hasRequestedFunction = true;
+    if (!skipFunctions.count(functionName)) {
+      return false;
+    }
+  }
+
+  return hasRequestedFunction;
+}
+
+} // namespace
 
 int main(int argc, char** argv) {
   facebook::velox::functions::aggregate::sparksql::registerAggregateFunctions(
@@ -98,6 +132,11 @@ int main(int argc, char** argv) {
       // Correctness mismatches and OOM during KLL sketch operations.
       "approx_percentile",
   };
+
+  if (onlyContainsSkippedFunctions(FLAGS_only, skipFunctions)) {
+    LOG(INFO) << "All functions requested by --only are skipped.";
+    return 0;
+  }
 
   using facebook::velox::exec::test::TransformResultVerifier;
 
