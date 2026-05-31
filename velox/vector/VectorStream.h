@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <functional>
+
 #include <folly/Range.h>
 
 #include "velox/common/base/RuntimeMetrics.h"
@@ -210,6 +212,7 @@ class VectorSerde {
     kPresto,
     kCompactRow,
     kUnsafeRow,
+    kArrowIpc,
   };
 
   static std::string kindName(Kind type);
@@ -354,6 +357,17 @@ class VectorSerde {
     VELOX_NYI();
   }
 
+  /// Deserializes data directly from an IOBuf, enabling zero-copy paths for
+  /// formats like Arrow IPC that can wrap IOBuf memory without copying. The
+  /// default implementation converts to a ByteInputStream and calls the
+  /// regular deserialize().
+  virtual void deserialize(
+      const folly::IOBuf& source,
+      velox::memory::MemoryPool* pool,
+      RowTypePtr type,
+      RowVectorPtr* result,
+      const Options* options = nullptr);
+
  protected:
   explicit VectorSerde(std::string kind) : kind_(std::move(kind)) {}
 
@@ -375,16 +389,33 @@ VectorSerde* getVectorSerde();
 /// Register/deregister a named vector serde. `serdeName` is a handle that
 /// allows users to register multiple serde formats.
 void registerNamedVectorSerde(
-    const std::string& kind,
+    const std::string& serdeName,
     std::unique_ptr<VectorSerde> serdeToRegister);
-void deregisterNamedVectorSerde(const std::string& kind);
+void deregisterNamedVectorSerde(const std::string& serdeName);
 
 /// Check if a named vector serde has been registered with `serdeName` as a
 /// handle.
-bool isRegisteredNamedVectorSerde(const std::string& kind);
+bool isRegisteredNamedVectorSerde(const std::string& serdeName);
 
 /// Get the vector serde identified by `serdeName`. Throws if not found.
-VectorSerde* getNamedVectorSerde(const std::string& kind);
+VectorSerde* getNamedVectorSerde(const std::string& serdeName);
+
+/// Factory function type for creating new VectorSerde instances by name.
+using VectorSerdeFactory = std::function<std::unique_ptr<VectorSerde>()>;
+
+/// Registers a factory that creates new VectorSerde instances under 'name'.
+/// 'name' is an arbitrary identifier chosen by the caller (e.g. "ArrowIpc",
+/// "Presto") and does not need to correspond to a VectorSerde::Kind.
+void registerVectorSerdeFactory(
+    const std::string& name,
+    VectorSerdeFactory factory);
+
+/// Returns true if a factory has been registered under 'name'.
+bool isRegisteredVectorSerdeFactory(const std::string& name);
+
+/// Creates a new VectorSerde instance using the factory registered under
+/// 'name'. Throws if no factory is registered for 'name'.
+std::unique_ptr<VectorSerde> createVectorSerde(const std::string& name);
 
 class VectorStreamGroup : public StreamArena {
  public:
