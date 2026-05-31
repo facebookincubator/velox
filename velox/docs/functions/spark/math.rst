@@ -146,7 +146,7 @@ Mathematical Functions
       The result scale is always 0. ``|n| + 1`` digits are needed because rounding
       to the nearest 10^|n| can produce a value one digit wider.
 
-    Examples (input type annotated)::
+    Examples (type annotations for clarity, not executable SQL)::
 
         -- scale 0: round up to integer
         SELECT decimal_ceil(DECIMAL(4,3) 1.234, 0); -- 2 (DECIMAL(2,0))
@@ -181,7 +181,7 @@ Mathematical Functions
 
     Same as ``decimal_ceil`` — see above.
 
-    Examples (input type annotated)::
+    Examples (type annotations for clarity, not executable SQL)::
 
         -- scale 0: round down to integer
         SELECT decimal_floor(DECIMAL(4,3) 1.234, 0); -- 1 (DECIMAL(2,0))

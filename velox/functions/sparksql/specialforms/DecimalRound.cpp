@@ -15,7 +15,7 @@
  */
 
 #include "velox/functions/sparksql/specialforms/DecimalRound.h"
-#include "velox/expression/ConstantExpr.h"
+#include "velox/functions/sparksql/specialforms/DecimalScaleDispatch.h"
 
 namespace facebook::velox::functions::sparksql {
 namespace {
@@ -29,14 +29,7 @@ class DecimalRoundFunction : public exec::VectorFunction {
       uint8_t inputScale,
       uint8_t resultPrecision,
       uint8_t resultScale)
-      : scale_(
-            scale >= 0
-                ? std::min(
-                      scale,
-                      static_cast<int32_t>(LongDecimalType::kMaxPrecision))
-                : std::max(
-                      scale,
-                      -static_cast<int32_t>(LongDecimalType::kMaxPrecision))),
+      : scale_(detail::clampDecimalScale(scale)),
         inputPrecision_(inputPrecision),
         inputScale_(inputScale),
         resultPrecision_(resultPrecision),
@@ -149,23 +142,13 @@ std::shared_ptr<exec::VectorFunction> createDecimalRound(
       getDecimalPrecisionScale(*inputType);
   const auto [resultPrecision, resultScale] =
       getDecimalPrecisionScale(*resultType);
-  if (inputType->isShortDecimal()) {
-    if (resultType->isShortDecimal()) {
-      return std::make_shared<DecimalRoundFunction<int64_t, int64_t>>(
-          scale, inputPrecision, inputScale, resultPrecision, resultScale);
-    } else {
-      return std::make_shared<DecimalRoundFunction<int128_t, int64_t>>(
-          scale, inputPrecision, inputScale, resultPrecision, resultScale);
-    }
-  } else {
-    if (resultType->isShortDecimal()) {
-      return std::make_shared<DecimalRoundFunction<int64_t, int128_t>>(
-          scale, inputPrecision, inputScale, resultPrecision, resultScale);
-    } else {
-      return std::make_shared<DecimalRoundFunction<int128_t, int128_t>>(
-          scale, inputPrecision, inputScale, resultPrecision, resultScale);
-    }
-  }
+  return detail::dispatchDecimalTypes(
+      inputType, resultType, [&](auto resultTag, auto inputTag) {
+        using TResult = typename decltype(resultTag)::type;
+        using TInput = typename decltype(inputTag)::type;
+        return std::make_shared<DecimalRoundFunction<TResult, TInput>>(
+            scale, inputPrecision, inputScale, resultPrecision, resultScale);
+      });
 }
 } // namespace
 
@@ -226,23 +209,7 @@ exec::ExprPtr DecimalRoundCallToSpecialForm::constructSpecialForm(
 
   int32_t scale = 0;
   if (args.size() > 1) {
-    VELOX_USER_CHECK_EQ(
-        args[1]->type()->kind(),
-        TypeKind::INTEGER,
-        "The second argument of decimal_round should be of integer type.");
-    auto constantExpr = std::dynamic_pointer_cast<exec::ConstantExpr>(args[1]);
-    VELOX_USER_CHECK_NOT_NULL(
-        constantExpr,
-        "The second argument of decimal_round should be constant expression.");
-    VELOX_USER_CHECK(
-        constantExpr->value()->isConstantEncoding(),
-        "The second argument of decimal_round should be wrapped in constant vector.");
-    auto constantVector =
-        constantExpr->value()->asUnchecked<ConstantVector<int32_t>>();
-    VELOX_USER_CHECK(
-        !constantVector->isNullAt(0),
-        "The second argument of decimal_round is non-nullable.");
-    scale = constantVector->valueAt(0);
+    scale = detail::extractConstantScaleArg(args[1], kRoundDecimal);
   }
 
   auto decimalRound = createDecimalRound(args[0]->type(), scale, type);

@@ -16,7 +16,7 @@
 
 #include "velox/functions/sparksql/specialforms/DecimalCeilFloor.h"
 
-#include "velox/expression/ConstantExpr.h"
+#include "velox/functions/sparksql/specialforms/DecimalScaleDispatch.h"
 
 namespace facebook::velox::functions::sparksql {
 namespace {
@@ -35,7 +35,7 @@ class DecimalCeilFloorFunction : public exec::VectorFunction {
       uint8_t inputScale,
       uint8_t resultPrecision,
       uint8_t resultScale)
-      : roundScale_{clampScale(roundScale)},
+      : roundScale_{detail::clampDecimalScale(roundScale)},
         inputScale_{inputScale},
         resultPrecision_{resultPrecision} {
     // Validate that result type matches expected Spark semantics.
@@ -191,28 +191,14 @@ class DecimalCeilFloorFunction : public exec::VectorFunction {
   // arithmetic well within range.
   inline bool mulWithBoundCheck(int128_t& value) const {
     const int128_t factor = multiplyFactor_.value();
-    if (factor == 0) {
-      value = 0;
-      return true;
-    }
+    VELOX_DCHECK_GT(
+        factor, 0, "multiplyFactor_ is always a positive power of 10.");
     const int128_t maxAbs = overflowBound_ / factor;
     if (value >= maxAbs || value <= -maxAbs) {
       return false;
     }
     value *= factor;
     return true;
-  }
-
-  static int32_t clampScale(int32_t s) {
-    constexpr int32_t kMax = LongDecimalType::kMaxPrecision;
-    // Handles INT32_MIN safely: comparison fires before any negation.
-    if (s > kMax) {
-      return kMax;
-    }
-    if (s < -kMax) {
-      return -kMax;
-    }
-    return s;
   }
 
   const int32_t roundScale_;
@@ -232,52 +218,16 @@ std::shared_ptr<exec::VectorFunction> createDecimalCeilFloor(
       getDecimalPrecisionScale(*inputType);
   const auto [resultPrecision, resultScale] =
       getDecimalPrecisionScale(*resultType);
-  if (inputType->isShortDecimal()) {
-    if (resultType->isShortDecimal()) {
-      return std::make_shared<
-          DecimalCeilFloorFunction<int64_t, int64_t, ceiling>>(
-          scale, inputPrecision, inputScale, resultPrecision, resultScale);
-    }
-    return std::make_shared<
-        DecimalCeilFloorFunction<int128_t, int64_t, ceiling>>(
-        scale, inputPrecision, inputScale, resultPrecision, resultScale);
-  }
-  if (resultType->isShortDecimal()) {
-    return std::make_shared<
-        DecimalCeilFloorFunction<int64_t, int128_t, ceiling>>(
-        scale, inputPrecision, inputScale, resultPrecision, resultScale);
-  }
-  return std::make_shared<
-      DecimalCeilFloorFunction<int128_t, int128_t, ceiling>>(
-      scale, inputPrecision, inputScale, resultPrecision, resultScale);
+  return detail::dispatchDecimalTypes(
+      inputType, resultType, [&](auto resultTag, auto inputTag) {
+        using TResult = typename decltype(resultTag)::type;
+        using TInput = typename decltype(inputTag)::type;
+        return std::make_shared<
+            DecimalCeilFloorFunction<TResult, TInput, ceiling>>(
+            scale, inputPrecision, inputScale, resultPrecision, resultScale);
+      });
 }
 
-int32_t extractConstantInt32(
-    const exec::ExprPtr& expr,
-    std::string_view funcName) {
-  VELOX_USER_CHECK_EQ(
-      expr->type()->kind(),
-      TypeKind::INTEGER,
-      "The second argument of {} must be INTEGER, got: {}.",
-      funcName,
-      expr->type()->toString());
-  auto constantExpr = std::dynamic_pointer_cast<exec::ConstantExpr>(expr);
-  VELOX_USER_CHECK_NOT_NULL(
-      constantExpr,
-      "The second argument of {} must be a constant expression.",
-      funcName);
-  VELOX_USER_CHECK(
-      constantExpr->value()->isConstantEncoding(),
-      "The second argument of {} must be a constant vector.",
-      funcName);
-  auto* constantVector =
-      constantExpr->value()->asUnchecked<ConstantVector<int32_t>>();
-  VELOX_USER_CHECK(
-      !constantVector->isNullAt(0),
-      "The second argument of {} must not be NULL.",
-      funcName);
-  return constantVector->valueAt(0);
-}
 } // namespace
 
 TypePtr DecimalCeilFloorCallToSpecialFormBase::resolveType(
@@ -305,7 +255,7 @@ exec::ExprPtr DecimalCeilFloorCallToSpecialFormBase::makeSpecialForm(
       "The first argument of {} must be decimal.",
       funcName);
 
-  const int32_t scale = extractConstantInt32(args[1], funcName);
+  const int32_t scale = detail::extractConstantScaleArg(args[1], funcName);
   auto func = ceiling
       ? createDecimalCeilFloor<true>(args[0]->type(), scale, type)
       : createDecimalCeilFloor<false>(args[0]->type(), scale, type);

@@ -30,7 +30,8 @@ namespace facebook::velox::functions::sparksql {
 /// (the constant value cannot be expressed via SignatureVariable constraints).
 ///
 /// The result type rules are identical to DecimalRound (Spark's
-/// RoundBase.dataType) — see DecimalRoundCallToSpecialForm::getResultPrecisionScale.
+/// RoundBase.dataType) — see
+/// DecimalRoundCallToSpecialForm::getResultPrecisionScale.
 class DecimalCeilFloorCallToSpecialFormBase
     : public exec::FunctionCallToSpecialForm {
  public:
@@ -38,8 +39,10 @@ class DecimalCeilFloorCallToSpecialFormBase
 
   /// Delegates to DecimalRoundCallToSpecialForm::getResultPrecisionScale —
   /// the result type rules are shared across Round, RoundCeil, and RoundFloor.
-  static std::pair<uint8_t, uint8_t>
-  getResultPrecisionScale(uint8_t precision, uint8_t scale, int32_t roundScale) {
+  static std::pair<uint8_t, uint8_t> getResultPrecisionScale(
+      uint8_t precision,
+      uint8_t scale,
+      int32_t roundScale) {
     return DecimalRoundCallToSpecialForm::getResultPrecisionScale(
         precision, scale, roundScale);
   }
