@@ -50,6 +50,24 @@ class PerBackendTallyListener : public ::testing::EmptyTestEventListener {
                 << "  (" << pct << "%)\n";
     }
     std::cout << "====================================================\n";
+
+    // JavaRegex IS the ground truth — any failure means our port or JNI
+    // bridge is wrong, not a real engine difference.  Loud-warn so it does
+    // not get silently buried in the per-suite tally above.
+    for (const auto& [name, t] : tally_) {
+      if (name.find("Java") == std::string::npos) {
+        continue;
+      }
+      if (t.passed != t.total) {
+        std::cerr
+            << "*** JavaRegex backend has " << (t.total - t.passed)
+            << " failing test(s) in '" << name
+            << "' — Java IS the canonical reference; failures here are"
+            << " bugs in our port/JNI bridge, NOT real engine differences."
+            << " Investigate or, after 5 unsuccessful fix attempts, mark"
+            << " them as TODO for human review.\n";
+      }
+    }
   }
 
  private:

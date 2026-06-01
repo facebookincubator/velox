@@ -213,6 +213,42 @@ class JavaMatcherAdapter {
     return out;
   }
 
+  /// `Matcher.appendReplacement(sb, repl)`: stateful incremental replace.
+  /// Appends to `sb` the prefix-since-last-call plus the expanded
+  /// replacement for the most recent match.  Must be called only after a
+  /// successful `find()`.  Throws `std::logic_error` (mirrors Java's
+  /// `IllegalStateException`) if no match is available.
+  void appendReplacement(std::string& sb, std::string_view javaReplacement) {
+    if (!matched_) {
+      throw std::logic_error(
+          "appendReplacement: no match available (call find() first)");
+    }
+    const std::size_t s = matchBeg();
+    const std::size_t e = matchEnd();
+    sb.append(input_.substr(lastAppendPos_, s - lastAppendPos_));
+    sb.append(expandJavaReplacement(javaReplacement, groups_));
+    lastAppendPos_ = e;
+  }
+
+  /// `Matcher.appendTail(sb)`: appends input from lastAppendPosition to end.
+  void appendTail(std::string& sb) const {
+    sb.append(input_.substr(lastAppendPos_));
+  }
+
+  /// `Matcher.quoteReplacement(s)` static: escape `$` and `\` in `s` so it
+  /// can be safely used as a literal replacement.
+  static std::string quoteReplacement(std::string_view s) {
+    std::string out;
+    out.reserve(s.size());
+    for (char c : s) {
+      if (c == '\\' || c == '$') {
+        out.push_back('\\');
+      }
+      out.push_back(c);
+    }
+    return out;
+  }
+
  private:
   std::size_t matchBeg() const {
     return groups_[0].data() - input_.data();
@@ -277,6 +313,7 @@ class JavaMatcherAdapter {
   std::size_t regionStart_ = 0;
   std::size_t regionEnd_ = 0;
   std::size_t cursor_ = 0;
+  std::size_t lastAppendPos_ = 0;
   bool matched_ = false;
   std::vector<std::string_view> groups_;
 };

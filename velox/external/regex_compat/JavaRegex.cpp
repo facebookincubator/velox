@@ -225,21 +225,97 @@ int byteOffsetToJavaCharOffset(
 
 // Convert a std::string_view (UTF-8) to a JNI jstring.  Owned by caller —
 // must DeleteLocalRef after use.
+//
+// NewStringUTF interprets its input as JNI's "modified UTF-8" — bytes >= 0x80
+// are taken to be the first byte of a 2-byte sequence (essentially
+// Latin-1-ish), which mangles real 3- and 4-byte UTF-8 sequences.  To
+// faithfully round-trip UTF-8 we transcode to UTF-16 here and use
+// NewString(jchar*, jsize) instead.
 jstring toJString(JNIEnv* env, std::string_view sv) {
-  // jstring wants a NUL-terminated modified-UTF-8 string; copy to a std::string
-  // to guarantee NUL termination, then NewStringUTF.
-  std::string copy(sv);
-  return env->NewStringUTF(copy.c_str());
+  std::vector<jchar> u16;
+  u16.reserve(sv.size());
+  for (std::size_t i = 0; i < sv.size();) {
+    const unsigned char c = static_cast<unsigned char>(sv[i]);
+    std::uint32_t cp = 0;
+    std::size_t step = 1;
+    if (c < 0x80) {
+      cp = c;
+      step = 1;
+    } else if (c < 0xC0) {
+      // Stray continuation; emit replacement to keep length sane.
+      u16.push_back(0xFFFD);
+      ++i;
+      continue;
+    } else if (c < 0xE0 && i + 1 < sv.size()) {
+      cp = ((c & 0x1F) << 6) |
+          (static_cast<unsigned char>(sv[i + 1]) & 0x3F);
+      step = 2;
+    } else if (c < 0xF0 && i + 2 < sv.size()) {
+      cp = ((c & 0x0F) << 12) |
+          ((static_cast<unsigned char>(sv[i + 1]) & 0x3F) << 6) |
+          (static_cast<unsigned char>(sv[i + 2]) & 0x3F);
+      step = 3;
+    } else if (i + 3 < sv.size()) {
+      cp = ((c & 0x07) << 18) |
+          ((static_cast<unsigned char>(sv[i + 1]) & 0x3F) << 12) |
+          ((static_cast<unsigned char>(sv[i + 2]) & 0x3F) << 6) |
+          (static_cast<unsigned char>(sv[i + 3]) & 0x3F);
+      step = 4;
+    } else {
+      u16.push_back(0xFFFD);
+      ++i;
+      continue;
+    }
+    if (cp <= 0xFFFF) {
+      u16.push_back(static_cast<jchar>(cp));
+    } else {
+      cp -= 0x10000;
+      u16.push_back(static_cast<jchar>(0xD800 | (cp >> 10)));
+      u16.push_back(static_cast<jchar>(0xDC00 | (cp & 0x3FF)));
+    }
+    i += step;
+  }
+  return env->NewString(u16.data(), static_cast<jsize>(u16.size()));
 }
 
 // Read a jstring into a std::string (UTF-8).  Caller still owns the jstring.
+// We use GetStringChars (UTF-16) and transcode to UTF-8 ourselves to avoid
+// GetStringUTFChars's "modified UTF-8" which can't represent supplementary
+// chars in their 4-byte UTF-8 form.
 std::string fromJString(JNIEnv* env, jstring s) {
   if (!s) {
     return {};
   }
-  const char* chars = env->GetStringUTFChars(s, nullptr);
-  std::string out(chars);
-  env->ReleaseStringUTFChars(s, chars);
+  const jsize len = env->GetStringLength(s);
+  const jchar* u16 = env->GetStringChars(s, nullptr);
+  std::string out;
+  out.reserve(static_cast<std::size_t>(len));
+  for (jsize i = 0; i < len; ++i) {
+    std::uint32_t cp = u16[i];
+    if (cp >= 0xD800 && cp <= 0xDBFF && i + 1 < len) {
+      const std::uint32_t lo = u16[i + 1];
+      if (lo >= 0xDC00 && lo <= 0xDFFF) {
+        cp = 0x10000 + (((cp - 0xD800) << 10) | (lo - 0xDC00));
+        ++i;
+      }
+    }
+    if (cp < 0x80) {
+      out.push_back(static_cast<char>(cp));
+    } else if (cp < 0x800) {
+      out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+      out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    } else if (cp < 0x10000) {
+      out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+      out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+      out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    } else {
+      out.push_back(static_cast<char>(0xF0 | (cp >> 18)));
+      out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+      out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+      out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    }
+  }
+  env->ReleaseStringChars(s, u16);
   return out;
 }
 
