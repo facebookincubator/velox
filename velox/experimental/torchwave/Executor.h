@@ -66,9 +66,19 @@ struct LaunchDebugInfo {
 
 /// Per-launch metadata stored in thread-local alongside the DebugInfo.
 struct LaunchMeta {
-  int32_t sequenceNumber;
-  int32_t stepIdx;
-  int32_t numBlocks;
+  int32_t sequenceNumber{0};
+  int32_t stepIdx{0};
+  int32_t numBlocks{0};
+  int64_t gatherUs{0};
+  int64_t gridUs{0};
+  int64_t allocUs{0};
+  int64_t fillUs{0};
+  int64_t kernelUs{0};
+  int64_t standaloneUs{0};
+  bool standaloneBound{false};
+  bool noDtoH{false};
+  int64_t inputBytes{0};
+  int64_t outputBytes{0};
 };
 
 /// Per-thread debug info from the most recent wave execution. Populated by
@@ -77,6 +87,11 @@ struct WaveThreadInfo {
   std::vector<std::vector<DebugInfo>> debugInfo;
   std::vector<LaunchMeta> launchMeta;
   std::string errors;
+  /// Standalone execution times, sorted descending. Paired with labels.
+  std::vector<int64_t> standaloneTimes;
+  std::vector<std::string> standaloneLabels;
+  /// Performance report, filled when trace kTiming is on.
+  std::string perfReport;
 };
 
 /// Returns the thread-local WaveThreadInfo for the current thread.
@@ -129,6 +144,18 @@ struct StepVectors {
   /// Set by gatherLaunches when any kernel op in this step has op barriers
   /// (multi-block synchronization). Causes cooperative launch.
   bool isCgGrid{false};
+
+  // Timing fields, populated when kTiming trace bit or printTiming is on.
+  int64_t gatherUs{0};
+  int64_t gridUs{0};
+  int64_t allocUs{0};
+  int64_t fillUs{0};
+  int64_t kernelUs{0};
+  int64_t standaloneUs{0};
+  bool standaloneBound{false};
+  bool noDtoH{false};
+  int64_t inputBytes{0};
+  int64_t outputBytes{0};
 };
 
 /// Holds runtime state for executing a WaveGraph.  Pooled by WaveGraph
@@ -200,7 +227,7 @@ void runStandalones(
 /// vectors in 'sv' (blocks, launchIndices, costs, maxBlocks,
 /// numBlocksPerLaunch). Returns the block size (threads per block).
 int32_t makeGrid(
-    const std::vector<LaunchData>& launches,
+    std::vector<LaunchData>& launches,
     StepVectors& sv,
     int32_t maxBlocksPerSM = 0);
 
@@ -287,6 +314,11 @@ class WaveGraphExecutor : public nativert::GraphExecutorBase {
   /// error back to the originating kernel op via the WaveGraph structure.
   std::string errorString() const;
 
+  /// Produces a performance report with per-node timing, throughput,
+  /// thread block balance, and top consumers. Called inside executeWave
+  /// while execution state is live.
+  std::string makePerfReport(ExecutionState& state, int64_t wallUs) const;
+
   /// Returns standalone execution stats: pairs of (node string, micros)
   /// from the most recent execution. The node string is formatted as in
   /// Launch::toString for standalone nodes.
@@ -323,6 +355,11 @@ class WaveGraphExecutor : public nativert::GraphExecutorBase {
   /// Transfers device-side debug info to host and stores in thread-local
   /// WaveThreadInfo.
   void collectDebugInfo(ExecutionState& state);
+
+  /// Adjusts per-launch costAdjustFactor based on actual vs expected thread
+  /// block clock distribution. Invalidates the grid cache when the adjustment
+  /// exceeds 1.1x.
+  void adjustCosts(ExecutionState& state);
 
   std::unique_ptr<ModelContext> modelContext_;
 

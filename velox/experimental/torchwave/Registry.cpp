@@ -332,6 +332,12 @@ MetadataBuilder& MetadataBuilder::cost(float val) {
   return *this;
 }
 
+MetadataBuilder& MetadataBuilder::costFunction(
+    std::function<float(NodeCP, const Metadata&)> func) {
+  md_.costFunction = std::move(func);
+  return *this;
+}
+
 MetadataBuilder& MetadataBuilder::viewOfArg(int32_t ordinal) {
   md_.viewOfArg = ordinal;
   return *this;
