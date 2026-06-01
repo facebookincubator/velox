@@ -85,12 +85,10 @@ slice(const std::vector<TypePtr>& types, int32_t start, int32_t end) {
 
 WindowBuild::WindowBuild(
     const std::shared_ptr<const core::WindowNode>& windowNode,
-    velox::memory::MemoryPool* pool,
+    velox::memory::MemoryPool* /*pool*/,
     const common::SpillConfig* spillConfig,
     tsan_atomic<bool>* nonReclaimableSection)
-    : spillConfig_{spillConfig},
-      nonReclaimableSection_{nonReclaimableSection},
-      decodedInputVectors_(windowNode->inputType()->size()) {
+    : spillConfig_{spillConfig}, nonReclaimableSection_{nonReclaimableSection} {
   std::tie(inputChannels_, inversedInputChannels_, inputType_) =
       reorderInputChannels(
           windowNode->inputType(),
@@ -99,12 +97,6 @@ WindowBuild::WindowBuild(
 
   const auto numPartitionKeys = windowNode->partitionKeys().size();
   const auto numSortingKeys = windowNode->sortingKeys().size();
-  const auto numKeys = numPartitionKeys + numSortingKeys;
-  data_ = std::make_unique<RowContainer>(
-      slice(inputType_->children(), 0, numKeys),
-      slice(inputType_->children(), numKeys, inputType_->size()),
-      pool);
-
   for (auto i = 0; i < numPartitionKeys; ++i) {
     partitionKeyInfo_.push_back(std::make_pair(i, core::SortOrder{true, true}));
   }
@@ -113,6 +105,20 @@ WindowBuild::WindowBuild(
     sortKeyInfo_.push_back(
         std::make_pair(numPartitionKeys + i, windowNode->sortingOrders()[i]));
   }
+}
+
+void WindowBuild::initializeRowContainer(velox::memory::MemoryPool* pool) {
+  VELOX_CHECK_NULL(data_);
+  const auto numKeys = partitionKeyInfo_.size() + sortKeyInfo_.size();
+  data_ = std::make_unique<RowContainer>(
+      slice(inputType_->children(), 0, numKeys),
+      slice(inputType_->children(), numKeys, inputType_->size()),
+      pool);
+}
+
+void WindowBuild::initializeDecodedInputVectors() {
+  VELOX_CHECK(decodedInputVectors_.empty());
+  decodedInputVectors_.resize(inputChannels_.size());
 }
 
 bool WindowBuild::compareRowsWithKeys(
