@@ -10,7 +10,8 @@ add_executable(velox_regex_compat_test
   PatternPortedTest.cpp
   MatcherMatchingPortedTest.cpp
   MatcherReplacementPortedTest.cpp
-  MatcherResultsPortedTest.cpp)
+  MatcherResultsPortedTest.cpp
+  MatcherMatchResultPortedTest.cpp)
 
 target_link_libraries(velox_regex_compat_test
   PRIVATE velox_regex_compat GTest::gtest GTest::gmock)

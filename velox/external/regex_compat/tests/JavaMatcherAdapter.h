@@ -182,6 +182,24 @@ class JavaMatcherAdapter {
         groups_[i].data() + groups_[i].size() - input_.data());
   }
 
+  int start(const std::string& name) const {
+    const auto& named = re_->NamedCapturingGroups();
+    auto it = named.find(name);
+    if (it == named.end()) {
+      throw std::out_of_range("unknown group name: " + name);
+    }
+    return start(it->second);
+  }
+
+  int end(const std::string& name) const {
+    const auto& named = re_->NamedCapturingGroups();
+    auto it = named.find(name);
+    if (it == named.end()) {
+      throw std::out_of_range("unknown group name: " + name);
+    }
+    return end(it->second);
+  }
+
   // ----- Replacement -----
 
   /// `Matcher.replaceAll(repl)`: delegates to backend's GlobalReplace.  The
