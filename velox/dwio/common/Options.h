@@ -41,6 +41,13 @@
 #include "velox/type/Timestamp.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
+namespace facebook::velox {
+struct FileHandle;
+namespace cache {
+class AsyncDataCache;
+} // namespace cache
+} // namespace facebook::velox
+
 namespace facebook::velox::dwio::common {
 
 enum class FileFormat {
@@ -910,6 +917,31 @@ class ReaderOptions : public io::ReaderOptions {
     allowInt32Narrowing_ = value;
   }
 
+  /// File handle providing the cache key (uuid) for metadata caching in
+  /// Nimble's TabletReader. The pointer is only dereferenced during reader
+  /// construction to extract the uuid; it does not need to outlive the
+  /// reader factory call.
+  const FileHandle* fileHandle() const {
+    return fileHandle_;
+  }
+
+  void setFileHandle(const FileHandle* handle) {
+    fileHandle_ = handle;
+  }
+
+  /// Process-wide async data cache for Nimble metadata caching. When both
+  /// fileHandle and cache are set, TabletReader creates a
+  /// CachedMetadataInput that caches decompressed footer, stripes, and
+  /// index metadata across readers on the same file.
+  cache::AsyncDataCache* cache() const {
+    return cache_;
+  }
+
+  void setCache(cache::AsyncDataCache* cache) {
+    VELOX_CHECK_NOT_NULL(cache);
+    cache_ = cache;
+  }
+
  private:
   uint64_t tailLocation_{std::numeric_limits<uint64_t>::max()};
   FileFormat fileFormat_{FileFormat::UNKNOWN};
@@ -936,6 +968,8 @@ class ReaderOptions : public io::ReaderOptions {
   bool loadChunkIndex_{true};
   bool allowEmptyFile_{false};
   bool allowInt32Narrowing_{false};
+  const FileHandle* fileHandle_{nullptr};
+  cache::AsyncDataCache* cache_{nullptr};
   uint64_t parquetFooterMemoryTrackingThreshold_{
       kDefaultParquetFooterMemoryTrackingThreshold};
 };
