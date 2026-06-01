@@ -226,6 +226,12 @@ ClassNode parseEscape(std::string_view s, std::size_t& pos) {
   if (pos >= s.size()) {
     throw std::invalid_argument("Trailing backslash inside character class");
   }
+  if (static_cast<unsigned char>(s[pos]) >= 0x80) {
+    std::size_t width = 0;
+    const auto cp = codePointAt(s, pos, width);
+    pos += width;
+    return ClassNode(Literal(cp));
+  }
   const char esc = s[pos++];
   switch (esc) {
     case 'n':

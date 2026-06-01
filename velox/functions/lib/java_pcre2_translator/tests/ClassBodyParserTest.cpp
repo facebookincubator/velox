@@ -125,6 +125,10 @@ TEST(ClassBodyParser, unicodeEscape) {
   EXPECT_EQ(ClassNode(Literal('A')), parse("[\\u0041]"));
 }
 
+TEST(ClassBodyParser, escapedNonAsciiLiteralConsumesWholeCodePoint) {
+  EXPECT_EQ(ClassNode(Range('a', 0x4444)), parse("[a-\\\xE4\x91\x84]"));
+}
+
 TEST(ClassBodyParser, multipleIntersectionOperands) {
   auto* inter = parse("[a-m&&m-z&&a-c]").getIf<Intersection>();
   ASSERT_NE(nullptr, inter);
