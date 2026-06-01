@@ -160,6 +160,15 @@ message StripeFooter {
   repeated bytes encryptionGroups = 3;
 }
 
+// A generic string-keyed attribute pair attached to a schema node.
+// Wire-layout-compatible with Apache ORC's `StringPair` so DWRF and ORC
+// can carry the same per-Type attribute bag (e.g. Iceberg field-id
+// metadata: `iceberg.id`, `iceberg.required`, `iceberg.long-type`, etc).
+message StringPair {
+  optional string key = 1;
+  optional string value = 2;
+}
+
 message Type {
   enum Kind {
     BOOLEAN = 0;
@@ -180,6 +189,24 @@ message Type {
   required Kind kind = 1;
   repeated uint32 subtypes = 2 [ packed = true ];
   repeated string fieldNames = 3;
+  // Slots 4, 5, 6 are intentionally reserved to remain wire-layout-aligned
+  // with Apache ORC's `Type.maximumLength`, `Type.precision`, `Type.scale`
+  // (orc_proto.proto). DWRF does not use them today but reserving them
+  // keeps `attributes` at the same field number as ORC.
+  // reserved 4, 5, 6;
+  // Per-Type string-keyed attribute bag. Matches Apache ORC's
+  // `Type.attributes` (slot 7). Iceberg V3 stores its column id and type
+  // disambiguation metadata here, per the Iceberg spec's ORC mapping
+  // (Appendix A: Format-specific Requirements -> ORC):
+  //   - iceberg.id            : decimal-string field id (e.g. "12")
+  //   - iceberg.required      : "true" / "false"
+  //   - iceberg.long-type     : "LONG"
+  //   - iceberg.timestamp-unit: "MICROS" / "NANOS"
+  //   - iceberg.binary-type   : FIXED / UUID / Variant disambiguation
+  //   - iceberg.length        : decimal-string width for FIXED
+  //   - iceberg.struct-type   : enum string for Variant
+  // Optional; old readers ignore unknown fields (proto2 wire compat).
+  repeated StringPair attributes = 7;
 }
 
 message StripeInformation {
