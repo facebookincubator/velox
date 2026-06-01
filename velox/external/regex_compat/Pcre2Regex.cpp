@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/external/regex_compat/Pcre2Regex.h"
+#include "velox/functions/lib/java_pcre2_translator/JavaRegexTranslator.h"
 
 #define PCRE2_CODE_UNIT_WIDTH 8
 #include <pcre2.h>
@@ -65,11 +66,24 @@ std::string pcre2ErrorToString(int code, PCRE2_SIZE offset) {
 } // namespace
 
 Pcre2Regex::Pcre2Regex(std::string_view javaPattern, Options opt) {
+  // Translate Java regex syntax → PCRE2 syntax before compiling.  When
+  // the translator cannot express the pattern in PCRE2 (e.g. an
+  // unsupported `\p{...}` property in an intersection), we report the
+  // translator message verbatim and leave the pattern uncompiled.
+  std::string pcre2Pattern;
+  try {
+    pcre2Pattern = functions::java_pcre2_translator::toPcre2Pattern(javaPattern);
+  } catch (const functions::java_pcre2_translator::EvaluationFailedException&
+               ex) {
+    error_ = std::string("Java→PCRE2 translator: ") + ex.what();
+    return;
+  }
+
   int err = 0;
   PCRE2_SIZE off = 0;
   code_ = pcre2_compile_8(
-      reinterpret_cast<PCRE2_SPTR8>(javaPattern.data()),
-      javaPattern.size(),
+      reinterpret_cast<PCRE2_SPTR8>(pcre2Pattern.data()),
+      pcre2Pattern.size(),
       toPcre2Options(opt),
       &err,
       &off,

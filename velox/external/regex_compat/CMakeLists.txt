@@ -26,7 +26,7 @@ velox_add_library(velox_regex_compat ${_REGEX_COMPAT_SRC})
 
 velox_link_libraries(velox_regex_compat
   PUBLIC ${_REGEX_COMPAT_LIBS}
-  PRIVATE velox_functions_lib)
+  PRIVATE velox_functions_lib velox_java_pcre2_translator)
 
 if(VELOX_ENABLE_REGEX_COMPAT_JAVA_BACKEND)
   velox_include_directories(velox_regex_compat PUBLIC ${JNI_INCLUDE_DIRS})
