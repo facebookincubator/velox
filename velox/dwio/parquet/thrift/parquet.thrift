@@ -37,6 +37,11 @@
  * File format description for the parquet file format
  */
 
+include "thrift/annotation/thrift.thrift"
+
+@thrift.AllowLegacyMissingUris
+package;
+
 namespace cpp parquet.format
 namespace java org.apache.parquet.format
 
