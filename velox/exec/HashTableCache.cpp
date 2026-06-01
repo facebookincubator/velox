@@ -143,4 +143,53 @@ void HashTableCache::drop(const std::string& key) {
   }
 }
 
+std::shared_ptr<HashTableCacheEntry> HashTableCache::injectTable(
+    const std::string& key,
+    std::shared_ptr<BaseHashTable> table,
+    bool hasNullKeys,
+    std::shared_ptr<memory::MemoryPool> tablePool) {
+  VELOX_CHECK_NOT_NULL(table, "Cannot inject null table");
+  VELOX_CHECK_NOT_NULL(tablePool, "Cannot inject with null pool");
+
+  std::vector<ContinuePromise> promises;
+  std::shared_ptr<HashTableCacheEntry> entry;
+
+  {
+    std::lock_guard<std::mutex> guard(lock_);
+
+    auto it = tables_.find(key);
+    if (it != tables_.end()) {
+      entry = it->second;
+      if (entry->buildComplete) {
+        return entry;
+      }
+
+      VELOX_CHECK_NULL(entry->table, "Table already set for key '{}'", key);
+      entry->table = std::move(table);
+      entry->hasNullKeys = hasNullKeys;
+      entry->buildComplete = true;
+      promises = std::move(entry->buildPromises);
+    } else {
+      entry = std::make_shared<HashTableCacheEntry>(
+          key, "external_gluten", std::move(tablePool));
+      entry->table = std::move(table);
+      entry->hasNullKeys = hasNullKeys;
+      entry->buildComplete = true;
+      tables_.insert({key, entry});
+    }
+  }
+
+  for (auto& promise : promises) {
+    promise.setValue();
+  }
+
+  return entry;
+}
+
+bool HashTableCache::hasTable(const std::string& key) {
+  std::lock_guard<std::mutex> guard(lock_);
+  auto it = tables_.find(key);
+  return it != tables_.end() && it->second->buildComplete;
+}
+
 } // namespace facebook::velox::exec
