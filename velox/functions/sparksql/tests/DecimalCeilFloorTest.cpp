@@ -264,12 +264,18 @@ TEST_F(DecimalCeilFloorTest, precisionOverflow) {
           {std::nullopt, std::nullopt, std::nullopt}, DECIMAL(38, 0)));
 
   // Mixed: some overflow, some don't.
+  // ceil(huge, -1) overflows (quotient+1 = 10^37 which == maxAbs).
+  // ceil(0, -1) = 0 (no overflow).
+  // ceil(-huge, -1) does NOT overflow: quotient = -(10^37-1), remainder < 0,
+  // so no +1 adjustment → result = -(10^37-1)*10 = valid 38-digit number.
+  const int128_t ceilNegHuge =
+      -(DecimalUtil::kPowersOfTen[37] - 1) * static_cast<int128_t>(10);
   testCall(
       makeFlatVector<int128_t>({huge, 0, -huge}, DECIMAL(38, 0)),
       -1,
       Mode::kCeil,
       makeNullableFlatVector<int128_t>(
-          {std::nullopt, static_cast<int128_t>(0), std::nullopt},
+          {std::nullopt, static_cast<int128_t>(0), ceilNegHuge},
           DECIMAL(38, 0)));
 }
 
@@ -279,10 +285,10 @@ TEST_F(DecimalCeilFloorTest, scaleClampBoundaries) {
   // quotient=0. Ceil of 0.01 should be 10^38 which overflows → NULL.
   // But 0 stays 0.
   testCall(
-      makeFlatVector<int64_t>({0}, DECIMAL(5, 2)),
+      makeFlatVector<int64_t>({0, 0, 0}, DECIMAL(5, 2)),
       -100,
       Mode::kCeil,
-      makeFlatVector<int128_t>({0}, DECIMAL(38, 0)));
+      makeFlatVector<int128_t>({0, 0, 0}, DECIMAL(38, 0)));
 
   // scale = 100 → clamped to 38 → treated as >= input scale → identity.
   testCall(

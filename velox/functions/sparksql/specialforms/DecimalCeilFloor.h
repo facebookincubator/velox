@@ -20,25 +20,14 @@
 
 namespace facebook::velox::functions::sparksql {
 
-/// Base class for Spark RoundCeil / RoundFloor 2-argument decimal forms.
-/// Spark's `ceiling(x, scale)` / `floor(x, scale)` route to RoundCeil /
-/// RoundFloor, which take a decimal value and a foldable INTEGER target scale,
-/// and return a decimal value rounded toward +∞ (ceil) or -∞ (floor).
-///
+/// Base class for Spark's 2-arg decimal_ceil / decimal_floor special forms.
 /// The result type is fully determined by the input decimal type and the
-/// constant target scale, which is why these are modeled as special forms
-/// (the constant value cannot be expressed via SignatureVariable constraints).
-///
-/// The result type rules are identical to DecimalRound (Spark's
-/// RoundBase.dataType) — see
-/// DecimalRoundCallToSpecialForm::getResultPrecisionScale.
+/// constant target scale (same rules as DecimalRound).
 class DecimalCeilFloorCallToSpecialFormBase
     : public exec::FunctionCallToSpecialForm {
  public:
   TypePtr resolveType(const std::vector<TypePtr>& argTypes) override;
 
-  /// Delegates to DecimalRoundCallToSpecialForm::getResultPrecisionScale —
-  /// the result type rules are shared across Round, RoundCeil, and RoundFloor.
   static std::pair<uint8_t, uint8_t> getResultPrecisionScale(
       uint8_t precision,
       uint8_t scale,
@@ -57,9 +46,7 @@ class DecimalCeilFloorCallToSpecialFormBase
       std::string_view funcName);
 };
 
-/// Spark decimal_ceil special form: rounds a decimal value toward +∞ to the
-/// specified target scale. Scale is silently clamped to [-38, 38]. Overflow
-/// beyond the result precision returns NULL.
+/// Spark decimal_ceil: rounds toward +∞ to the specified target scale.
 class DecimalCeilCallToSpecialForm
     : public DecimalCeilFloorCallToSpecialFormBase {
  public:
@@ -72,9 +59,7 @@ class DecimalCeilCallToSpecialForm
   static constexpr const char* kCeilDecimal = "decimal_ceil";
 };
 
-/// Spark decimal_floor special form: rounds a decimal value toward -∞ to the
-/// specified target scale. Scale is silently clamped to [-38, 38]. Overflow
-/// beyond the result precision returns NULL.
+/// Spark decimal_floor: rounds toward -∞ to the specified target scale.
 class DecimalFloorCallToSpecialForm
     : public DecimalCeilFloorCallToSpecialFormBase {
  public:

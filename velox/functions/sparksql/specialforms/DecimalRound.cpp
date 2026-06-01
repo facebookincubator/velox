@@ -15,79 +15,34 @@
  */
 
 #include "velox/functions/sparksql/specialforms/DecimalRound.h"
-#include "velox/functions/sparksql/specialforms/DecimalScaleDispatch.h"
+#include "velox/functions/sparksql/specialforms/DecimalRoundBase.h"
 
 namespace facebook::velox::functions::sparksql {
 namespace {
 
+// Half-up rounding (Spark's ROUND_HALF_UP). Never overflows.
 template <typename TResult, typename TInput>
-class DecimalRoundFunction : public exec::VectorFunction {
- public:
-  DecimalRoundFunction(
-      int32_t scale,
-      uint8_t inputPrecision,
-      uint8_t inputScale,
-      uint8_t resultPrecision,
-      uint8_t resultScale)
-      : scale_(detail::clampDecimalScale(scale)),
-        inputPrecision_(inputPrecision),
-        inputScale_(inputScale),
-        resultPrecision_(resultPrecision),
-        resultScale_(resultScale) {
+struct RoundHalfUpPolicy {
+  static constexpr bool canOverflow = false;
+
+  using Factors = DecimalRoundBase::ScaleFactors;
+
+  explicit RoundHalfUpPolicy(const Factors& f)
+      : scaleNonNegative_(f.scale >= 0),
+        inputPrecision_(f.inputPrecision),
+        inputScale_(f.inputScale),
+        resultPrecision_(f.resultPrecision),
+        resultScale_(f.resultScale),
+        divideFactor_(f.divideFactor.value_or(1)),
+        multiplyFactor_(f.multiplyFactor.value_or(1)) {
     const auto [p, s] = DecimalRoundCallToSpecialForm::getResultPrecisionScale(
-        inputPrecision, inputScale, scale);
-    VELOX_USER_CHECK_EQ(
-        p,
-        resultPrecision,
-        "The result precision of decimal_round is inconsistent with Spark expected.");
-    VELOX_USER_CHECK_EQ(
-        s,
-        resultScale,
-        "The result scale of decimal_round is inconsistent with Spark expected.");
-
-    // Decide the rescale factor of divide and multiply when rounding to a
-    // negative scale.
-    auto rescaleFactor = [&](int32_t rescale) {
-      VELOX_USER_CHECK_GT(
-          rescale, 0, "A non-negative rescale value is expected.");
-      return DecimalUtil::kPowersOfTen[std::min(
-          rescale, static_cast<int32_t>(LongDecimalType::kMaxPrecision))];
-    };
-    if (scale_ < 0) {
-      divideFactor_ = rescaleFactor(inputScale_ - scale_);
-      multiplyFactor_ = rescaleFactor(-scale_);
-    }
+        f.inputPrecision, f.inputScale, f.scale);
+    VELOX_DCHECK_EQ(p, f.resultPrecision);
+    VELOX_DCHECK_EQ(s, f.resultScale);
   }
 
-  void apply(
-      const SelectivityVector& rows,
-      std::vector<VectorPtr>& args,
-      const TypePtr& resultType,
-      exec::EvalCtx& context,
-      VectorPtr& result) const override {
-    VELOX_USER_CHECK(
-        args[0]->isConstantEncoding() || args[0]->isFlatEncoding(),
-        "Single-arg deterministic functions receive their only argument as flat or constant vector.");
-    context.ensureWritable(rows, resultType, result);
-    result->clearNulls(rows);
-    auto rawResults =
-        result->asUnchecked<FlatVector<TResult>>()->mutableRawValues();
-    if (args[0]->isConstantEncoding()) {
-      // Fast path for constant vector.
-      applyConstant(rows, args[0], rawResults);
-    } else {
-      // Fast path for flat vector.
-      applyFlat(rows, args[0], rawResults);
-    }
-  }
-
-  bool supportsFlatNoNullsFastPath() const override {
-    return true;
-  }
-
- private:
-  inline TResult applyRound(const TInput& input) const {
-    if (scale_ >= 0) {
+  std::optional<TResult> applyOne(const TInput& input) const {
+    if (scaleNonNegative_) {
       TResult rescaledValue;
       const auto status = DecimalUtil::rescaleWithRoundUp<TInput, TResult>(
           input,
@@ -98,58 +53,24 @@ class DecimalRoundFunction : public exec::VectorFunction {
           rescaledValue);
       VELOX_DCHECK(status.ok());
       return rescaledValue;
-    } else {
-      TResult rescaledValue;
-      DecimalUtil::divideWithRoundUp<TResult, TInput, int128_t>(
-          rescaledValue, input, divideFactor_.value(), false, 0, 0);
-      rescaledValue *= multiplyFactor_.value();
-      return rescaledValue;
     }
+    TResult rescaledValue;
+    DecimalUtil::divideWithRoundUp<TResult, TInput, int128_t>(
+        rescaledValue, input, divideFactor_, false, 0, 0);
+    rescaledValue *= multiplyFactor_;
+    return rescaledValue;
   }
 
-  void applyConstant(
-      const SelectivityVector& rows,
-      const VectorPtr& arg,
-      TResult* rawResults) const {
-    const TResult rounded =
-        applyRound(arg->asUnchecked<ConstantVector<TInput>>()->valueAt(0));
-    rows.applyToSelected([&](auto row) { rawResults[row] = rounded; });
-  }
-
-  void applyFlat(
-      const SelectivityVector& rows,
-      const VectorPtr& arg,
-      TResult* rawResults) const {
-    auto rawValues = arg->asUnchecked<FlatVector<TInput>>()->mutableRawValues();
-    rows.applyToSelected(
-        [&](auto row) { rawResults[row] = applyRound(rawValues[row]); });
-  }
-
-  const int32_t scale_;
+ private:
+  const bool scaleNonNegative_;
   const uint8_t inputPrecision_;
   const uint8_t inputScale_;
   const uint8_t resultPrecision_;
   const uint8_t resultScale_;
-  std::optional<int128_t> divideFactor_ = std::nullopt;
-  std::optional<int128_t> multiplyFactor_ = std::nullopt;
+  const int128_t divideFactor_;
+  const int128_t multiplyFactor_;
 };
 
-std::shared_ptr<exec::VectorFunction> createDecimalRound(
-    const TypePtr& inputType,
-    int32_t scale,
-    const TypePtr& resultType) {
-  const auto [inputPrecision, inputScale] =
-      getDecimalPrecisionScale(*inputType);
-  const auto [resultPrecision, resultScale] =
-      getDecimalPrecisionScale(*resultType);
-  return detail::dispatchDecimalTypes(
-      inputType, resultType, [&](auto resultTag, auto inputTag) {
-        using TResult = typename decltype(resultTag)::type;
-        using TInput = typename decltype(inputTag)::type;
-        return std::make_shared<DecimalRoundFunction<TResult, TInput>>(
-            scale, inputPrecision, inputScale, resultPrecision, resultScale);
-      });
-}
 } // namespace
 
 std::pair<uint8_t, uint8_t>
@@ -157,28 +78,19 @@ DecimalRoundCallToSpecialForm::getResultPrecisionScale(
     uint8_t precision,
     uint8_t scale,
     int32_t roundScale) {
-  // After rounding we may need one more digit in the integral part,
-  // e.g. 'decimal_round(9.9, 0)' -> '10', 'decimal_round(99, -1)' -> '100'.
   const int32_t integralLeastNumDigits = precision - scale + 1;
   if (roundScale < 0) {
-    // Negative scale means we need to adjust `-scale` number of digits before
-    // the decimal point, which means we need at least `-scale + 1` digits after
-    // rounding, and the result scale is 0.
     const auto newPrecision = std::max(
         integralLeastNumDigits,
         -std::max(
             roundScale, -static_cast<int32_t>(LongDecimalType::kMaxPrecision)) +
             1);
-    // We have to accept the risk of overflow as we can't exceed the max
-    // precision.
     return {
         std::min(
             newPrecision, static_cast<int32_t>(LongDecimalType::kMaxPrecision)),
         0};
   }
   const uint8_t newScale = std::min(static_cast<int32_t>(scale), roundScale);
-  // We have to accept the risk of overflow as we cannot exceed the max
-  // precision.
   return {
       std::min(
           integralLeastNumDigits + newScale,
@@ -209,17 +121,22 @@ exec::ExprPtr DecimalRoundCallToSpecialForm::constructSpecialForm(
 
   int32_t scale = 0;
   if (args.size() > 1) {
-    scale = detail::extractConstantScaleArg(args[1], kRoundDecimal);
+    scale = DecimalRoundBase::extractConstantScaleArg(args[1], kRoundDecimal);
   }
 
-  auto decimalRound = createDecimalRound(args[0]->type(), scale, type);
-
-  return std::make_shared<exec::Expr>(
+  auto func = DecimalRoundBase::createFunction(
+      args[0]->type(),
+      scale,
       type,
-      std::move(args),
-      std::move(decimalRound),
-      exec::VectorFunctionMetadata{},
-      kRoundDecimal,
-      trackCpuUsage);
+      [](auto resultTag, auto inputTag, const auto& factors) {
+        using TResult = typename decltype(resultTag)::type;
+        using TInput = typename decltype(inputTag)::type;
+        using Policy = RoundHalfUpPolicy<TResult, TInput>;
+        return std::make_shared<DecimalRoundFunction<TResult, TInput, Policy>>(
+            factors);
+      });
+
+  return DecimalRoundBase::buildExpr(
+      type, std::move(args), std::move(func), kRoundDecimal, trackCpuUsage);
 }
 } // namespace facebook::velox::functions::sparksql

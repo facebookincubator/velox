@@ -27,6 +27,7 @@ velox_add_library(
   AtLeastNNonNulls.h
   DecimalCeilFloor.h
   DecimalRound.h
+  DecimalRoundBase.h
   FromJson.h
   GetArrayStructFields.h
   GetStructField.h
