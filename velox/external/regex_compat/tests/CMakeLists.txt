@@ -46,6 +46,7 @@ add_executable(velox_regex_compat_test
   MatcherMatchResultPortedTest.cpp
   PatternSplitPortedTest.cpp
   MatcherUnicodePortedTest.cpp
+  RegExTestPortedTest.cpp
   OpenJdkCorpusDiffTest.cpp)
 
 target_compile_definitions(velox_regex_compat_test
