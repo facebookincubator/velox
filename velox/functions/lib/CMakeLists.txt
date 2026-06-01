@@ -104,6 +104,7 @@ velox_link_libraries(
 )
 
 add_subdirectory(aggregates)
+add_subdirectory(java_pcre2_translator)
 add_subdirectory(sfm)
 add_subdirectory(string)
 add_subdirectory(window)
