@@ -834,93 +834,6 @@ reserve a small amount of memory capacity in <em>MmapAllocator</em> to compensat
 these ad-hoc small allocations in practice.</p>
 </section>
 </section>
-<section id="custom-memory-resources">
-<h2>Custom Memory Resources<a class="headerlink" href="#custom-memory-resources" title="Link to this heading">¶</a></h2>
-<p><em>CustomMemoryResource</em> lets an extension expose memory tiers other than
-host DRAM (GPU device memory, CXL-attached memory, pinned host memory,
-NUMA-bound pools) side-by-side with the default CPU tier. A resource
-bundles a tag, an allocator, an arbitrator, and a factory that builds a
-per-query reclaimer. The constructor requires a non-empty tag and
-non-null allocator, arbitrator, and reclaimerFactory; the resource is
-immutable once constructed:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">class</span><span class="w"> </span><span class="nc">CustomMemoryResource</span><span class="w"> </span><span class="p">{</span>
-<span class="w"> </span><span class="k">public</span><span class="o">:</span>
-<span class="w">  </span><span class="n">CustomMemoryResource</span><span class="p">(</span>
-<span class="w">      </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="w"> </span><span class="n">tag</span><span class="p">,</span>
-<span class="w">      </span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">MemoryAllocator</span><span class="o">&gt;</span><span class="w"> </span><span class="n">allocator</span><span class="p">,</span>
-<span class="w">      </span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">MemoryArbitrator</span><span class="o">&gt;</span><span class="w"> </span><span class="n">arbitrator</span><span class="p">,</span>
-<span class="w">      </span><span class="n">std</span><span class="o">::</span><span class="n">function</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">unique_ptr</span><span class="o">&lt;</span><span class="n">MemoryReclaimer</span><span class="o">&gt;</span><span class="p">()</span><span class="o">&gt;</span><span class="w"> </span><span class="n">reclaimerFactory</span><span class="p">,</span>
-<span class="w">      </span><span class="kt">int64_t</span><span class="w"> </span><span class="n">maxCapacity</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">numeric_limits</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;::</span><span class="n">max</span><span class="p">());</span>
-
-<span class="w">  </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="nf">tag</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
-<span class="w">  </span><span class="kt">int64_t</span><span class="w"> </span><span class="nf">maxCapacity</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
-<span class="w">  </span><span class="n">MemoryAllocator</span><span class="o">*</span><span class="w"> </span><span class="nf">allocator</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
-<span class="w">  </span><span class="n">MemoryArbitrator</span><span class="o">*</span><span class="w"> </span><span class="nf">arbitrator</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
-<span class="w">  </span><span class="n">std</span><span class="o">::</span><span class="n">unique_ptr</span><span class="o">&lt;</span><span class="n">MemoryReclaimer</span><span class="o">&gt;</span><span class="w"> </span><span class="n">newReclaimer</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
-<span class="p">};</span>
-</pre></div>
-</div>
-<p>Each resource carries its own allocator and arbitrator; the default CPU
-allocator and arbitrator on <em>MemoryManager</em> are not shared with custom
-resources. Per-tier accounting and capacity decisions stay self-contained,
-which matters when tiers differ in size, latency, alignment, or allocation
-failure modes.</p>
-<section id="registration">
-<h3>Registration<a class="headerlink" href="#registration" title="Link to this heading">¶</a></h3>
-<p>Resources are tracked by <em>CustomMemoryResourceRegistry</em>. The class exposes
-a process-global root via <em>global()</em> and creates child scopes via
-<em>createRegistry(parent)</em>. Registration and lookup go directly through the
-<em>Registry</em> instance (its <em>insert</em>, <em>find</em>, and <em>clear</em> methods); each
-scope is protected by its own lock. Extensions register resources in the
-global scope at process startup, after <em>initializeMemoryManager</em>:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">resource</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_shared</span><span class="o">&lt;</span><span class="n">memory</span><span class="o">::</span><span class="n">CustomMemoryResource</span><span class="o">&gt;</span><span class="p">(</span>
-<span class="w">    </span><span class="s">&quot;device&quot;</span><span class="p">,</span>
-<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">make_shared</span><span class="o">&lt;</span><span class="n">MyTieredAllocator</span><span class="o">&gt;</span><span class="p">(...),</span>
-<span class="w">    </span><span class="n">MemoryArbitrator</span><span class="o">::</span><span class="n">create</span><span class="p">(...),</span>
-<span class="w">    </span><span class="p">[]()</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_unique</span><span class="o">&lt;</span><span class="n">MyReclaimer</span><span class="o">&gt;</span><span class="p">();</span><span class="w"> </span><span class="p">},</span>
-<span class="w">    </span><span class="n">deviceCapacity</span><span class="p">);</span>
-<span class="n">memory</span><span class="o">::</span><span class="n">CustomMemoryResourceRegistry</span><span class="o">::</span><span class="n">global</span><span class="p">().</span><span class="n">insert</span><span class="p">(</span>
-<span class="w">    </span><span class="n">resource</span><span class="o">-&gt;</span><span class="n">tag</span><span class="p">(),</span><span class="w"> </span><span class="n">resource</span><span class="p">);</span>
-</pre></div>
-</div>
-<p>For each query that wants to use a registered resource, the caller looks
-the resource up by tag, materializes the per-resource root pool through
-<em>MemoryManager::addCustomRootPool</em>, and hands the pool to the <em>QueryCtx</em>
-via <em>Builder::customPool</em>:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="o">*</span><span class="w"> </span><span class="n">manager</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">memory</span><span class="o">::</span><span class="n">memoryManager</span><span class="p">();</span>
-<span class="k">auto</span><span class="w"> </span><span class="n">resource</span><span class="w"> </span><span class="o">=</span>
-<span class="w">    </span><span class="n">memory</span><span class="o">::</span><span class="n">CustomMemoryResourceRegistry</span><span class="o">::</span><span class="n">global</span><span class="p">().</span><span class="n">find</span><span class="p">(</span><span class="s">&quot;device&quot;</span><span class="p">);</span>
-<span class="n">VELOX_USER_CHECK_NOT_NULL</span><span class="p">(</span><span class="n">resource</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;Unknown resource tag: device&quot;</span><span class="p">);</span>
-<span class="k">auto</span><span class="w"> </span><span class="n">devicePool</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">manager</span><span class="o">-&gt;</span><span class="n">addCustomRootPool</span><span class="p">(</span><span class="s">&quot;query.q0.device&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">resource</span><span class="p">);</span>
-<span class="k">auto</span><span class="w"> </span><span class="n">queryCtx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">core</span><span class="o">::</span><span class="n">QueryCtx</span><span class="o">::</span><span class="n">Builder</span><span class="p">()</span>
-<span class="w">                    </span><span class="p">.</span><span class="n">customPool</span><span class="p">(</span><span class="s">&quot;device&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">devicePool</span><span class="p">))</span>
-<span class="w">                    </span><span class="p">.</span><span class="n">queryId</span><span class="p">(</span><span class="s">&quot;q0&quot;</span><span class="p">)</span>
-<span class="w">                    </span><span class="p">.</span><span class="n">build</span><span class="p">();</span>
-</pre></div>
-</div>
-<p><em>addCustomRootPool</em> invokes <em>resource-&gt;newReclaimer()</em> to build the
-pool’s reclaimer, uses <em>resource-&gt;maxCapacity()</em> as the pool capacity, and
-backs the pool with <em>resource-&gt;allocator()</em> and <em>resource-&gt;arbitrator()</em>.
-The root pool is exposed on <em>QueryCtx</em> keyed by tag:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Returns the custom root pool for the given resource tag, or nullptr.</span>
-<span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">memory</span><span class="o">::</span><span class="n">MemoryPool</span><span class="o">&gt;</span><span class="w"> </span><span class="n">QueryCtx</span><span class="o">::</span><span class="n">customPool</span><span class="p">(</span>
-<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">tag</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
-</pre></div>
-</div>
-</section>
-<section id="per-query-pool-hierarchy">
-<h3>Per-Query Pool Hierarchy<a class="headerlink" href="#per-query-pool-hierarchy" title="Link to this heading">¶</a></h3>
-<p>For every custom root pool registered on <em>QueryCtx</em> via
-<em>Builder::customPool</em>, <em>Task</em> builds a parallel <code class="docutils literal notranslate"><span class="pre">task</span> <span class="pre">→</span> <span class="pre">node</span> <span class="pre">→</span> <span class="pre">operator</span></code>
-aggregate/leaf subtree beneath it that mirrors the default hierarchy.
-Aggregate children under a custom root are created at the same moment as
-their default counterparts. Reclaimers for these aggregates come
-from each resource’s <code class="docutils literal notranslate"><span class="pre">reclaimerFactory</span></code> via
-<em>CustomMemoryResource::newReclaimer</em>, so capacity decisions and reclaim
-on a custom subtree are governed end-to-end by the resource’s own
-arbitrator and reclaimer — separate from the default DRAM tier.</p>
-</section>
-</section>
 <section id="server-oom-prevention">
 <h2>Server OOM Prevention<a class="headerlink" href="#server-oom-prevention" title="Link to this heading">¶</a></h2>
 <p>The memory allocator ensures all the memory usage from Velox doesn’t exceed
@@ -988,11 +901,6 @@ to the transient spiky memory usage from non-Velox components in a query system.
 <li><a class="reference internal" href="#non-contiguous-allocation">Non-Contiguous Allocation</a></li>
 <li><a class="reference internal" href="#contiguous-allocation">Contiguous Allocation</a></li>
 <li><a class="reference internal" href="#small-allocation">Small Allocation</a></li>
-</ul>
-</li>
-<li><a class="reference internal" href="#custom-memory-resources">Custom Memory Resources</a><ul>
-<li><a class="reference internal" href="#registration">Registration</a></li>
-<li><a class="reference internal" href="#per-query-pool-hierarchy">Per-Query Pool Hierarchy</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#server-oom-prevention">Server OOM Prevention</a></li>

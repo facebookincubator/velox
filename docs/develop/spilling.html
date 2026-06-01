@@ -533,94 +533,6 @@ with each one having an equally-sized shard to restore.</p></li>
 </section>
 </section>
 </section>
-<section id="reclaim-across-memory-resources">
-<h2>Reclaim Across Memory Resources<a class="headerlink" href="#reclaim-across-memory-resources" title="Link to this heading">¶</a></h2>
-<p>The spilling algorithms above describe how a spillable operator releases
-memory by serializing in-memory state to disk. With
-<a class="reference external" href="memory.html#custom-memory-resources">custom memory resources</a>, the
-reclaim path is not restricted to disk. The per-query reclaimer attached
-to a custom root pool can move data into a sibling tier — for example,
-copying buffers out of a device memory pool into a pinned-host pool, or
-evicting cold pages from a CXL-attached pool into a local DRAM pool.
-<em>MemoryPool::reclaim</em> on a custom pool dispatches to the reclaimer the
-<em>reclaimerFactory</em> produced; what the reclaimer does is up to the
-extension.</p>
-<p>A chain of reclaimers — for instance, hash table on CPU DRAM → CXL on
-first reclaim → disk on second reclaim — is built by composing reclaimers
-across resources. Each link is an independent reclaim decision made by
-the arbitrator of the pool that ran short. The framework does not
-coordinate the chain; the extension picks the topology by deciding which
-sibling each reclaimer allocates into. A reclaimer can reach a sibling pool
-by closure-capturing the sibling at the resource’s
-<em>reclaimerFactory</em>.</p>
-<section id="example-cxl-backed-hash-aggregation">
-<h3>Example: CXL-Backed Hash Aggregation<a class="headerlink" href="#example-cxl-backed-hash-aggregation" title="Link to this heading">¶</a></h3>
-<p>The reclaim path above is meaningful when the custom resource exposes a
-tier with different access properties from CPU DRAM. CXL-attached memory
-is one such tier: it is slower than local DRAM but exposed to the CPU as
-part of the coherent virtual address space — host code can dereference a
-CXL pointer directly, with no copy back to DRAM required.</p>
-<p>A CXL extension takes advantage of this by registering a CXL custom
-resource and installing a CXL-aware <em>HashAggregation</em> through
-<em>DriverAdapter</em>. The adapter is the standard mechanism Velox uses to swap
-in alternate operator implementations (also used by the cuDF and Wave
-extensions); see <em>DriverAdapter</em> in <em>velox/exec/Driver.h</em>. The CXL-backed
-operator preserves the public <em>HashAggregation</em> contract while changing
-the reclaim policy:</p>
-<ol class="arabic simple">
-<li><p><strong>First reclaim trigger (DRAM is tight).</strong> Like the default operator,
-the CXL-backed <em>HashAggregation</em> selects a spill target — the set of
-partitions with the most data — and processes the corresponding rows
-in its DRAM row container. Unlike the default operator, it copies each
-row into the CXL custom pool and pointer-swizzles the corresponding
-hash-table bucket entries to the new CXL addresses, rather than clearing
-them. The swizzle has the same cost shape as the default operator’s
-hash-table entry removal — a <em>ProbeState</em> walk per row to find each bucket
-slot — but with greater benefit: because CXL memory is coherent with the
-CPU address space, probe and finalize logic continue to read the relocated
-entries directly with no restore step.</p></li>
-<li><p><strong>CXL pool fills.</strong> Subsequent reclaim triggers continue moving
-partitions from DRAM into CXL until the CXL custom pool’s arbitrator
-decides it is out of capacity. At that point arbitration on the CXL
-pool calls <em>MemoryPool::reclaim</em> on the CXL root pool, which dispatches
-to the reclaimer the resource’s <em>reclaimerFactory</em> produced.</p></li>
-<li><p><strong>Second reclaim — CXL into disk.</strong> The reclaimer behaves like the
-default <em>HashAggregation</em> spill path, just sourced from CXL instead of
-DRAM. It scans the partitions stored in CXL, serializes them through
-the standard <em>Spiller</em> onto disk, and notifies the operator to remove
-the corresponding entries from the hash table. Removal happens here,
-not in step 1, because this is the first point at which the entries
-are no longer directly addressable.</p></li>
-<li><p><strong>Finalize.</strong> After receiving all input the operator produces results
-by merging three sources for each partition: rows still in the DRAM row
-container, rows that live in CXL (read directly with no restore), and
-rows on disk (read back through the standard <em>Spiller</em> restore path).
-For partitions that never made it past step 1 the merge degenerates to
-“DRAM + CXL”; for partitions reclaimed in step 3 it degenerates to
-“DRAM + disk” — the same shape as the default <em>HashAggregation</em>
-algorithm.</p></li>
-</ol>
-<p>The CXL pool is registered like any other custom resource on the
-<em>CustomMemoryResourceRegistry</em>. The resource carries the reclaimer factory
-the caller uses to materialize per-query reclaimers for pools tagged
-<code class="docutils literal notranslate"><span class="pre">&quot;cxl&quot;</span></code>:</p>
-<p>The arbitrator passed here governs only the CXL pool’s capacity. The
-framework never makes the <em>decision</em> to move bytes from DRAM to CXL on
-its own; the trigger and the reclaim policy come from the extension.
-Step 1 can be driven as follows: the operator calls <em>MemoryPool::setReclaimer</em>
-on its DRAM-side row pool with a custom reclaimer that moves rows to
-CXL. The default <em>MemoryArbitrator</em> on <em>MemoryManager</em> triggers
-reclaim normally when the query is under capacity pressure; the
-propagation reaches the installed reclaimer, which redirects the move
-to CXL instead of disk. See <em>DramReclaimer</em> in
-<em>velox/common/memory/tests/CustomMemoryEmulationTest.cpp</em> for a
-worked example.</p>
-<p>The CXL → disk hop is analogous: install a reclaimer on the CXL root
-pool through the resource’s <em>reclaimerFactory</em>, and let the CXL
-pool’s arbitrator trigger it when the CXL budget is exhausted. This way,
-we can achieve cross-resource arbitration.</p>
-</section>
-</section>
 <section id="future-work">
 <h2>Future Work<a class="headerlink" href="#future-work" title="Link to this heading">¶</a></h2>
 <section id="memory-arbitration">
@@ -710,10 +622,6 @@ ahead.</p></li>
 <li><a class="reference internal" href="#hashjoinbridge">HashJoinBridge</a></li>
 </ul>
 </li>
-</ul>
-</li>
-<li><a class="reference internal" href="#reclaim-across-memory-resources">Reclaim Across Memory Resources</a><ul>
-<li><a class="reference internal" href="#example-cxl-backed-hash-aggregation">Example: CXL-Backed Hash Aggregation</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#future-work">Future Work</a><ul>
