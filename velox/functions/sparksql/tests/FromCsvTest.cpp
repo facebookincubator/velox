@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <cmath>
+
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryConfig.h"
@@ -569,20 +571,26 @@ TEST_F(FromCsvTest, unsupportedFieldType) {
       evaluate(expr, makeRowVector({input})), "Unsupported field type");
 }
 
-// Oversized input (>10MB) returns NULL row (DoS guard).
+// Oversized input (>10MB) returns non-null row with all-null fields (DoS
+// guard).
 TEST_F(FromCsvTest, oversizedInput) {
   // Create a string larger than kMaxCsvLineSize (10 MB).
   std::string largeStr(10 * 1024 * 1024 + 1, 'a');
   auto input = makeFlatVector<std::string>({largeStr});
   auto expr = createFromCsv(ROW({"a", "b"}, {VARCHAR(), INTEGER()}));
   auto result = evaluate(expr, makeRowVector({input}));
-  // Row itself is null for oversized input.
-  EXPECT_TRUE(result->isNullAt(0));
+  // Row itself is NOT null (Spark permissive mode returns row-present).
+  EXPECT_FALSE(result->isNullAt(0));
+  auto* resultRow = result->as<RowVector>();
+  // But all child fields are null.
+  EXPECT_TRUE(resultRow->childAt(0)->isNullAt(0));
+  EXPECT_TRUE(resultRow->childAt(1)->isNullAt(0));
 }
 
-// Whitespace-only input returns a non-null struct with all-null fields
-// (matches Spark: empty tokens match nullValue="" → null fields, but the
-// struct row itself is non-null).
+// Whitespace-only input is tokenized normally (no special-casing).
+// With default ignoreLeadingWhiteSpace=false and
+// ignoreTrailingWhiteSpace=false, the whitespace is preserved as the field
+// value.
 TEST_F(FromCsvTest, whitespaceOnlyInput) {
   auto input = makeFlatVector<std::string>({"   ", " \t\n ", "\t"});
   auto expr = createFromCsv(ROW({"a", "b"}, {INTEGER(), VARCHAR()}));
@@ -592,11 +600,32 @@ TEST_F(FromCsvTest, whitespaceOnlyInput) {
   EXPECT_FALSE(result->isNullAt(0));
   EXPECT_FALSE(result->isNullAt(1));
   EXPECT_FALSE(result->isNullAt(2));
-  // But all child fields are null.
-  for (int row = 0; row < 3; ++row) {
-    EXPECT_TRUE(resultRow->childAt(0)->isNullAt(row));
-    EXPECT_TRUE(resultRow->childAt(1)->isNullAt(row));
-  }
+  // INTEGER column: whitespace fails integer parsing → null.
+  EXPECT_TRUE(resultRow->childAt(0)->isNullAt(0));
+  EXPECT_TRUE(resultRow->childAt(0)->isNullAt(1));
+  EXPECT_TRUE(resultRow->childAt(0)->isNullAt(2));
+  // VARCHAR column: only one field produced (no delimiter in input), so
+  // second column is missing → null.
+  EXPECT_TRUE(resultRow->childAt(1)->isNullAt(0));
+  EXPECT_TRUE(resultRow->childAt(1)->isNullAt(1));
+  EXPECT_TRUE(resultRow->childAt(1)->isNullAt(2));
+}
+
+// Whitespace-only input with a single VARCHAR column preserves whitespace.
+TEST_F(FromCsvTest, whitespaceOnlyVarchar) {
+  auto input = makeFlatVector<std::string>({"   ", " \t "});
+  auto expr = createFromCsv(ROW({"a"}, {VARCHAR()}));
+  auto result = evaluate(expr, makeRowVector({input}));
+  auto* resultRow = result->as<RowVector>();
+  EXPECT_FALSE(result->isNullAt(0));
+  EXPECT_FALSE(result->isNullAt(1));
+  // VARCHAR field preserves the whitespace (not trimmed, doesn't match
+  // nullValue "").
+  auto* child = resultRow->childAt(0)->asFlatVector<StringView>();
+  EXPECT_FALSE(child->isNullAt(0));
+  EXPECT_EQ(child->valueAt(0).str(), "   ");
+  EXPECT_FALSE(child->isNullAt(1));
+  EXPECT_EQ(child->valueAt(1).str(), " \t ");
 }
 
 // Short decimal (precision <= 18) parsing.

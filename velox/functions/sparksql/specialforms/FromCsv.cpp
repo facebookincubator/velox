@@ -16,7 +16,6 @@
 
 #include "velox/functions/sparksql/specialforms/FromCsv.h"
 
-#include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <limits>
@@ -81,7 +80,7 @@ void splitCsvLine(
     char escape = '\\') {
   fields.clear();
   // Note: caller (FromCsvFunction::apply) already guards against oversized
-  // input and returns NULL row. This check is retained as defense-in-depth.
+  // input. This check is retained as defense-in-depth.
   if (line.size() > kMaxCsvLineSize) {
     return;
   }
@@ -439,20 +438,14 @@ class FromCsvFunction : public exec::VectorFunction {
       }
 
       const auto csvStr = decodedInput->valueAt<StringView>(row);
-      // Guard against extremely large inputs — return NULL row (DoS
-      // mitigation).
       auto csvView = std::string_view(csvStr.data(), csvStr.size());
-      if (csvView.size() > kMaxCsvLineSize) {
-        flatResult->setNull(row, true);
-        return;
-      }
 
       bits::clearNull(rawResultNulls, row);
 
-      // Empty or whitespace-only input: Spark returns a non-null struct with
-      // all-null fields (not a null struct). The empty tokens match nullValue
-      // ("") so each field becomes null, but the Row itself is non-null.
-      if (csvStr.size() == 0 || trimWhitespace(csvView).empty()) {
+      // Guard against extremely large inputs — return non-null row with
+      // all-null fields (DoS mitigation, consistent with Spark permissive
+      // mode).
+      if (csvView.size() > kMaxCsvLineSize) {
         for (column_index_t col = 0; col < numFields; ++col) {
           columns[col].child->setNull(row, true);
         }
