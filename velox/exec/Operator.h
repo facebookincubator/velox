@@ -17,7 +17,6 @@
 
 #include <folly/Synchronized.h>
 #include <string_view>
-#include <unordered_map>
 #include "velox/core/PlanNode.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/exec/Driver.h"
@@ -66,10 +65,6 @@ class OperatorCtx {
     return pool_;
   }
 
-  /// Returns the leaf operator pool under the custom root registered with
-  /// 'tag', or nullptr if no such custom root is registered on this query.
-  velox::memory::MemoryPool* customPool(std::string_view tag) const;
-
   const core::PlanNodeId& planNodeId() const {
     return planNodeId_;
   }
@@ -107,11 +102,6 @@ class OperatorCtx {
   const std::string operatorType_;
   velox::memory::MemoryPool* const pool_;
 
-  // Per-resource-tag leaf pools mirroring 'pool_' under each registered
-  // custom root pool. Empty when no custom pools are registered.
-  const std::unordered_map<std::string, velox::memory::MemoryPool*>
-      customPools_;
-
   // These members are created on demand.
   mutable std::unique_ptr<core::ExecCtx> execCtx_;
 };
@@ -126,11 +116,11 @@ class Operator : public BaseRuntimeStatWriter {
     virtual ~PlanNodeTranslator() = default;
 
     /// Translates plan node to operator. Returns nullptr if the plan node
-    /// cannot be handled by this factory.
+    /// cannot be handled by this factory. Defined out-of-line in Operator.cpp
+    /// because returning `std::unique_ptr<Operator>` here would instantiate
+    /// the unique_ptr destructor while `Operator` is still incomplete.
     virtual std::unique_ptr<Operator>
-    toOperator(DriverCtx* ctx, int32_t id, const core::PlanNodePtr& node) {
-      return nullptr;
-    }
+    toOperator(DriverCtx* ctx, int32_t id, const core::PlanNodePtr& node);
 
     /// An overloaded method that should be called when the operator needs an
     /// ExchangeClient.
@@ -138,9 +128,7 @@ class Operator : public BaseRuntimeStatWriter {
         DriverCtx* ctx,
         int32_t id,
         const core::PlanNodePtr& node,
-        std::shared_ptr<ExchangeClient> exchangeClient) {
-      return nullptr;
-    }
+        std::shared_ptr<ExchangeClient> exchangeClient);
 
     /// Translates plan node to join bridge. Returns nullptr if the plan node
     /// cannot be handled by this factory.
@@ -382,12 +370,6 @@ class Operator : public BaseRuntimeStatWriter {
 
   velox::memory::MemoryPool* pool() const {
     return operatorCtx_->pool();
-  }
-
-  /// Returns this operator's leaf pool under the custom root registered with
-  /// 'tag', or nullptr if no such custom root is registered.
-  velox::memory::MemoryPool* customPool(std::string_view tag) const {
-    return operatorCtx_->customPool(tag);
   }
 
   /// Returns true if the operator is reclaimable. Currently, we only support

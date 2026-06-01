@@ -344,10 +344,6 @@ class TestMemoryPool : public memory::MemoryPool {
     return nullptr;
   }
 
-  memory::MemoryArbitrator* arbitrator() const override {
-    return nullptr;
-  }
-
   void enterArbitration() override {}
 
   void leaveArbitration() noexcept override {}
