@@ -36,6 +36,8 @@ namespace torch::wave {
 
 namespace {
 
+thread_local WaveThreadInfo threadInfo;
+
 struct GlobalResources {
   std::unique_ptr<facebook::velox::wave::GpuArena> deviceArena;
   std::unique_ptr<facebook::velox::wave::GpuArena> pinnedArena;
@@ -333,10 +335,10 @@ void runStandalones(
   }
 }
 
-WaveGraphExecutor::WaveGraphExecutor(std::shared_ptr<ModelContext> modelContext)
+WaveGraphExecutor::WaveGraphExecutor(std::unique_ptr<ModelContext> modelContext)
     : GraphExecutorBase(*modelContext->graph, {}, modelContext->config),
       modelContext_(std::move(modelContext)) {
-  waveGraph_ = std::make_unique<WaveGraph>(modelContext_);
+  waveGraph_ = std::make_unique<WaveGraph>(modelContext_.get());
 
   // Create OpKernels only for standalone nodes, after WaveGraph construction
   // so that the kernels' captured Value* pointers reflect the post-mutation
@@ -402,6 +404,7 @@ std::unique_ptr<nativert::ExecutionFrame> WaveGraphExecutor::getFrame() {
 void WaveGraphExecutor::returnFrame(
     std::unique_ptr<nativert::ExecutionFrame> frame) {
   frame->clearNonPersistentValues();
+  ++frameGeneration_;
   framePool_->put(std::move(frame));
 }
 
@@ -504,11 +507,11 @@ void WaveGraphExecutor::executeWave(
 
   Timer w("top exec", WaveConfig::get().printTiming);
   auto* g = globals();
-  launchDebugInfos_.clear();
 
   // Get a reusable ExecutionState from the pool.
   auto statePtr = waveGraph.getState();
   auto& state = *statePtr;
+  state.launchDebugInfos.clear();
   SCOPE_EXIT {
     if (statePtr->stream) {
       statePtr->streamPool->put(std::move(statePtr->stream));
@@ -516,7 +519,23 @@ void WaveGraphExecutor::executeWave(
     waveGraph.returnState(std::move(statePtr));
   };
 
-  // Fill per-call fields.
+  // Invalidate launch caches when the frame was returned and re-obtained
+  // (clearNonPersistentValues clears intermediates, making cached value
+  // IDs stale).
+  if (state.lastFrameGeneration != frameGeneration_) {
+    for (auto& steps : state.stepVectors) {
+      for (auto& sv : steps) {
+        sv.hasLaunchCache = false;
+        for (auto& data : sv.kernels) {
+          data.tensorsInFrame.clear();
+          data.tensorOffsets.clear();
+          data.scalarsInFrame.clear();
+          data.scalarOffsets.clear();
+        }
+      }
+    }
+    state.lastFrameGeneration = frameGeneration_;
+  }
   state.frame = &frame;
   state.valueTypes = &waveGraph.types();
   state.deviceArena = g->deviceArena.get();
@@ -527,7 +546,6 @@ void WaveGraphExecutor::executeWave(
   state.waveGraph = &waveGraph;
   state.standaloneIndices = &waveGraph.standaloneIndices();
   state.standaloneStats = &waveGraph.standaloneStats();
-  state.launchDebugInfos = &launchDebugInfos_;
   state.numRefTensorsChecked = &numRefTensorsChecked_;
   state.numRefNodesChecked = &numRefNodesChecked_;
   state.traceState = parseTraceValues(WaveConfig::get().traceValues);
@@ -538,27 +556,144 @@ void WaveGraphExecutor::executeWave(
     node->execute(state);
   }
   state.stream->wait();
+  if (WaveConfig::get().keepStatsOnThread) {
+    collectDebugInfo(state);
+    threadInfo.errors = errorString();
+    if (WaveConfig::get().throwOnError && !threadInfo.errors.empty()) {
+      TORCH_CHECK(false, "Wave kernel error:\n", threadInfo.errors);
+    }
+  }
 }
 
-std::vector<std::vector<DebugInfo>> WaveGraphExecutor::getDebugInfo() {
-  auto* g = globals();
-  auto stream = g->streamPool->get();
+const WaveThreadInfo& waveThreadInfo() {
+  return threadInfo;
+}
 
-  // Queue D2H transfers for all launches.
-  for (auto& info : launchDebugInfos_) {
+void WaveGraphExecutor::collectDebugInfo(ExecutionState& state) {
+  auto& infos = state.launchDebugInfos;
+  threadInfo.debugInfo.clear();
+  threadInfo.launchMeta.clear();
+  if (infos.empty()) {
+    return;
+  }
+  auto stream = state.streamPool->get();
+  for (auto& info : infos) {
     stream->deviceToHostAsync(
         info.pinnedInfo, info.deviceInfo, info.numBlocks * sizeof(DebugInfo));
   }
   stream->wait();
-  g->streamPool->put(std::move(stream));
+  state.streamPool->put(std::move(stream));
 
-  // Copy from pinned memory into the result.
-  std::vector<std::vector<DebugInfo>> result;
-  result.reserve(launchDebugInfos_.size());
-  for (auto& info : launchDebugInfos_) {
-    result.emplace_back(info.pinnedInfo, info.pinnedInfo + info.numBlocks);
+  threadInfo.debugInfo.reserve(infos.size());
+  threadInfo.launchMeta.reserve(infos.size());
+  for (auto& info : infos) {
+    threadInfo.debugInfo.emplace_back(
+        info.pinnedInfo, info.pinnedInfo + info.numBlocks);
+    threadInfo.launchMeta.push_back(
+        {info.sequenceNumber, info.stepIdx, info.numBlocks});
   }
-  return result;
+}
+
+std::string WaveGraphExecutor::errorString() const {
+  const auto& info = waveThreadInfo();
+  if (info.debugInfo.empty()) {
+    return {};
+  }
+
+  struct ErrorEntry {
+    int32_t sequenceNumber{0};
+    int32_t stepIdx{0};
+    int32_t blockIdx{0};
+    int32_t opCode{0};
+    int32_t line{0};
+    int64_t extra0{0};
+    int64_t extra1{0};
+    std::string message;
+  };
+
+  // Collect all errors grouped by (sequenceNumber, opCode).
+  using Key = std::pair<int32_t, int32_t>;
+  std::map<Key, std::vector<ErrorEntry>> errorsByOp;
+
+  for (size_t li = 0; li < info.debugInfo.size(); ++li) {
+    const auto& meta = info.launchMeta[li];
+    const auto& blocks = info.debugInfo[li];
+    for (size_t bi = 0; bi < blocks.size(); ++bi) {
+      const auto& dbg = blocks[bi];
+      if (dbg.line != 0) {
+        ErrorEntry entry;
+        entry.sequenceNumber = meta.sequenceNumber;
+        entry.stepIdx = meta.stepIdx;
+        entry.blockIdx = static_cast<int32_t>(bi);
+        entry.opCode = dbg.op;
+        entry.line = dbg.line;
+        entry.extra0 = dbg.extra[0];
+        entry.extra1 = dbg.extra[1];
+        entry.message =
+            std::string(dbg.message, strnlen(dbg.message, sizeof(dbg.message)));
+        errorsByOp[{meta.sequenceNumber, dbg.op}].push_back(entry);
+      }
+    }
+  }
+
+  if (errorsByOp.empty()) {
+    return {};
+  }
+
+  // Build opCode → Launch text map from the WaveGraph structure.
+  std::map<Key, std::string> opText;
+  const auto& nodes = waveGraph_->nodes();
+  for (const auto& node : nodes) {
+    const auto* composite = node->kernels();
+    if (!composite) {
+      continue;
+    }
+    // Walk ops to find matching opcodes.
+    for (size_t oi = 0; oi < composite->ops().size(); ++oi) {
+      const auto& op = composite->ops()[oi];
+      auto* projectOp = op.projectOp();
+      auto scanGrid = [&](const LaunchGrid& grid) {
+        for (const auto& step : grid) {
+          for (const auto& launch : step) {
+            if (launch.op) {
+              int32_t code = launch.op->opCode();
+              // Check all sequence numbers that have errors with this opcode.
+              for (const auto& [key, _] : errorsByOp) {
+                if (key.second == code) {
+                  Key k = {key.first, code};
+                  if (opText.find(k) == opText.end()) {
+                    opText[k] = fmt::format(
+                        "Seq {} Op {} {}", key.first, oi, launch.toString());
+                  }
+                }
+              }
+            }
+          }
+        }
+      };
+      scanGrid(projectOp->grid());
+      scanGrid(projectOp->singleBlockGrid());
+      scanGrid(projectOp->cgGrid());
+    }
+  }
+
+  std::stringstream ss;
+  for (const auto& [key, entries] : errorsByOp) {
+    auto it = opText.find(key);
+    if (it != opText.end()) {
+      ss << it->second << "\n";
+    }
+    for (const auto& entry : entries) {
+      ss << "  Seq " << entry.sequenceNumber << " step " << entry.stepIdx
+         << " TB " << entry.blockIdx << " L " << entry.line << " "
+         << entry.extra0 << " " << entry.extra1;
+      if (!entry.message.empty()) {
+        ss << " " << entry.message;
+      }
+      ss << "\n";
+    }
+  }
+  return ss.str();
 }
 
 std::vector<std::pair<std::string, int64_t>>

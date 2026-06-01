@@ -126,7 +126,9 @@ const char* PageReader::readBytes(int32_t size, BufferPtr& copy) {
       bufferStart_ = reinterpret_cast<const char*>(buffer);
       bufferEnd_ = bufferStart_ + bufferSize;
     }
-    if (bufferEnd_ - bufferStart_ >= size) {
+    // Fall through to the AlignedBuffer copy when the stream buffer does
+    // not have kPageReadPadding trailing bytes past 'size'.
+    if (bufferEnd_ - bufferStart_ >= size + kPageReadPadding) {
       bufferStart_ += size;
       return bufferStart_ - size;
     }

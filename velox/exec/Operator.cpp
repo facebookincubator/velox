@@ -37,14 +37,7 @@ OperatorCtx::OperatorCtx(
       planNodeId_(planNodeId),
       operatorId_(operatorId),
       operatorType_(operatorType),
-      pool_(driverCtx_->addOperatorPool(planNodeId, operatorType_)),
-      customPools_(
-          driverCtx_->addCustomOperatorPools(planNodeId, operatorType_)) {}
-
-memory::MemoryPool* OperatorCtx::customPool(std::string_view tag) const {
-  auto it = customPools_.find(std::string(tag));
-  return it == customPools_.end() ? nullptr : it->second;
-}
+      pool_(driverCtx_->addOperatorPool(planNodeId, operatorType_)) {}
 
 core::ExecCtx* OperatorCtx::execCtx() const {
   if (!execCtx_) {
@@ -148,6 +141,21 @@ void Operator::finishTrace() {
   if (splitTracer_ != nullptr) {
     splitTracer_->finish();
   }
+}
+
+std::unique_ptr<Operator> Operator::PlanNodeTranslator::toOperator(
+    DriverCtx* /*ctx*/,
+    int32_t /*id*/,
+    const core::PlanNodePtr& /*node*/) {
+  return nullptr;
+}
+
+std::unique_ptr<Operator> Operator::PlanNodeTranslator::toOperator(
+    DriverCtx* /*ctx*/,
+    int32_t /*id*/,
+    const core::PlanNodePtr& /*node*/,
+    std::shared_ptr<ExchangeClient> /*exchangeClient*/) {
+  return nullptr;
 }
 
 std::vector<std::unique_ptr<Operator::PlanNodeTranslator>>&

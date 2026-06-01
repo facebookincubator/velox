@@ -59,6 +59,8 @@ SortWindowBuild::SortWindowBuild(
       partitionStartRows_(0, memory::StlAllocator<char*>(*pool)) {
   VELOX_CHECK_NOT_NULL(pool_);
   VELOX_CHECK_NOT_NULL(opStats_);
+  initializeRowContainer(pool_);
+  initializeDecodedInputVectors();
   allKeyInfo_.reserve(partitionKeyInfo_.size() + sortKeyInfo_.size());
   allKeyInfo_.insert(
       allKeyInfo_.cend(), partitionKeyInfo_.begin(), partitionKeyInfo_.end());

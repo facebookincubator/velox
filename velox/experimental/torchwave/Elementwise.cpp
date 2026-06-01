@@ -32,9 +32,29 @@ void CompileCtx::collectSubgraphInputs(
     const std::unordered_set<ValueCP>& sgInputs,
     std::unordered_set<ValueCP>& seen,
     std::vector<ValueCP>& result) const {
-  for (auto& input : node->inputs()) {
-    auto* value = input.value;
+  auto* meta = nodeMeta(node);
+  for (size_t i = 0; i < node->inputs().size(); ++i) {
+    auto* value = node->inputs()[i].value;
     auto* producer = value->producer();
+    // When a placed prim.ListPack has isRegister in the consumer's
+    // argument meta, expand to its individual tensor elements so they
+    // appear in the ElementExpr parameter set.
+    if (producer && placed_.count(producer) &&
+        producer->target() == "prim.ListPack" && meta &&
+        i < meta->argumentMeta.size() && meta->argumentMeta[i].isRegister) {
+      for (auto& listInput : producer->inputs()) {
+        auto* lv = listInput.value;
+        auto* lp = lv->producer();
+        if (sgInputs.count(lv) || (lp && placed_.count(lp))) {
+          if (seen.insert(lv).second) {
+            result.push_back(lv);
+          }
+        } else if (lp) {
+          collectSubgraphInputs(lp, sgInputs, seen, result);
+        }
+      }
+      continue;
+    }
     if (sgInputs.count(value) || (producer && placed_.count(producer))) {
       if (seen.insert(value).second) {
         result.push_back(value);
@@ -129,6 +149,24 @@ void CompileCtx::generateElementwise(
   // Get unique leaf inputs by walking subgraph roots.
   auto leafInputs = subgraphInputs(subgraphs);
 
+  // Remove values whose producer is an elementwise op with non-register
+  // first return (e.g. index_put_elt_*). Their output is sized by the
+  // source tensor, not the elementwise loop.
+  leafInputs.erase(
+      std::remove_if(
+          leafInputs.begin(),
+          leafInputs.end(),
+          [](ValueCP v) {
+            auto* producer = v->producer();
+            if (!producer) {
+              return false;
+            }
+            auto* meta = nodeMeta(producer);
+            return meta && meta->elementwise && !meta->returnMeta.empty() &&
+                !meta->returnMeta[0].isRegister;
+          }),
+      leafInputs.end());
+
   // Build ElementExprs early so altParamOffset is available during code gen.
   std::vector<ElementExpr> newExprs;
   for (size_t s = 0; s < subgraphs.size(); ++s) {
@@ -168,10 +206,24 @@ void CompileCtx::generateElementwise(
     newExprs.push_back(std::move(ee));
   }
 
-  for (auto& rs : resultSpecs) {
-    if (rs.value &&
-        std::find(leafInputs.begin(), leafInputs.end(), rs.value) ==
-            leafInputs.end()) {
+  for (size_t s = 0; s < resultSpecs.size(); ++s) {
+    auto& rs = resultSpecs[s];
+    if (!rs.value) {
+      continue;
+    }
+    // Skip output tensors for ops with non-register return (e.g.
+    // index_put_elt_*). Their output is a view of the self tensor and
+    // has a different size than the elementwise loop — including it
+    // would make the loop iterate over the wrong number of elements.
+    if (s < subgraphs.size()) {
+      auto* rootMeta = nodeMeta(subgraphs[s].root);
+      if (rootMeta && !rootMeta->returnMeta.empty() &&
+          !rootMeta->returnMeta[0].isRegister) {
+        continue;
+      }
+    }
+    if (std::find(leafInputs.begin(), leafInputs.end(), rs.value) ==
+        leafInputs.end()) {
       leafInputs.push_back(rs.value);
     }
   }
@@ -194,26 +246,87 @@ void CompileCtx::generateElementwise(
 
   code_ << "  {\n";
 
-  // Collect values marked as wholeTensor in any subgraph node's argumentMeta.
-  std::unordered_set<ValueCP> wholeTensorValues;
+  // Emit a comment with the subgraph text and param offsets for inputs.
   for (const auto& sg : subgraphs) {
-    auto* meta = nodeMeta(sg.root);
-    if (meta) {
-      const auto& inputs = sg.root->inputs();
-      for (size_t i = 0; i < inputs.size() && i < meta->argumentMeta.size();
-           ++i) {
-        if (meta->argumentMeta[i].wholeTensor) {
-          wholeTensorValues.insert(inputs[i].value);
-        }
-      }
+    auto text = sg.toString();
+    std::istringstream stream(text);
+    std::string line;
+    while (std::getline(stream, line)) {
+      code_ << "  // " << line << "\n";
+    }
+  }
+  for (auto* v : leafInputs) {
+    if (v->type().kind() == nativert::Type::Kind::Tensor) {
+      code_ << "  // %" << v->id() << " offset = " << op.paramOffset(v) << "\n";
     }
   }
 
-  // Build tensor-only bit index for fast path processing.
+  // Collect values marked as wholeTensor in all elementwise nodes in
+  // the subgraph tree, not just the root.  When index_elt_* is fused
+  // with downstream arithmetic, the root is the arithmetic op and the
+  // wholeTensor source lives in an inner node.
+  std::unordered_set<ValueCP> wholeTensorValues;
+  std::unordered_set<ValueCP> leafInputSet(
+      leafInputs.begin(), leafInputs.end());
+  std::function<void(NodeCP)> collectWholeTensor = [&](NodeCP node) {
+    auto* meta = nodeMeta(node);
+    if (!meta || !meta->elementwise) {
+      return;
+    }
+    const auto& inputs = node->inputs();
+    for (size_t i = 0; i < inputs.size(); ++i) {
+      auto* v = inputs[i].value;
+      const ArgumentMeta* am =
+          (i < meta->argumentMeta.size()) ? &meta->argumentMeta[i] : nullptr;
+      if (am && am->wholeTensor) {
+        wholeTensorValues.insert(v);
+      }
+      auto* producer = v->producer();
+      if (producer && producer->target() == "prim.ListPack") {
+        if (am && am->isRegister) {
+          for (const auto& listInput : producer->inputs()) {
+            if (!leafInputSet.count(listInput.value) &&
+                listInput.value->producer()) {
+              auto* lp = listInput.value->producer();
+              if (nodeMeta(lp) && nodeMeta(lp)->elementwise) {
+                collectWholeTensor(lp);
+              }
+            }
+          }
+        }
+      } else if (!leafInputSet.count(v) && producer) {
+        collectWholeTensor(producer);
+      }
+    }
+  };
+  for (const auto& sg : subgraphs) {
+    collectWholeTensor(sg.root);
+  }
+
+  // Exclude output values whose return meta has both wholeTensor and
+  // randomAccess (e.g. index_put_elt_* where the output is a view of
+  // the randomly-accessed source tensor, sized differently from the
+  // elementwise loop).
+  std::unordered_set<ValueCP> sizeExcludedValues = wholeTensorValues;
+  for (size_t s = 0; s < subgraphs.size() && s < resultSpecs.size(); ++s) {
+    if (!resultSpecs[s].value) {
+      continue;
+    }
+    auto* rootMeta = nodeMeta(subgraphs[s].root);
+    if (rootMeta && !rootMeta->returnMeta.empty() &&
+        rootMeta->returnMeta[0].wholeTensor &&
+        rootMeta->returnMeta[0].randomAccess) {
+      sizeExcludedValues.insert(resultSpecs[s].value);
+    }
+  }
+
+  // Build tensor-only bit index for fast path processing, skipping
+  // wholeTensor values which are not accessed per-element.
   int32_t tensorCount = 0;
   fastPathBitIndex_.assign(leafInputs.size(), -1);
   for (size_t i = 0; i < leafInputs.size(); ++i) {
-    if (leafInputs[i]->type().kind() == nativert::Type::Kind::Tensor) {
+    if (leafInputs[i]->type().kind() == nativert::Type::Kind::Tensor &&
+        !wholeTensorValues.count(leafInputs[i])) {
       fastPathBitIndex_[i] = tensorCount++;
     }
   }
@@ -243,7 +356,12 @@ void CompileCtx::generateElementwise(
     auto bitIdx = fastPathBitIndex_[valueIdx];
     auto W = bitIdx / kBitsPerWord;
     auto B = bitIdx % kBitsPerWord;
-    if (firstTensor) {
+    bool skipSize = sizeExcludedValues.count(leafInputs[valueIdx]);
+    if (skipSize) {
+      code_ << "    isFastPath" << W << " |= (uint32_t)"
+            << param(leafInputs[valueIdx], op) << "->contiguous << " << B
+            << ";\n";
+    } else if (firstTensor) {
       code_ << "    Tensor* temp = " << param(leafInputs[valueIdx], op)
             << ";\n    size = temp->numEl;\n"
             << "    isFastPath0 |= temp->contiguous;\n";
@@ -276,6 +394,44 @@ void CompileCtx::generateElementwise(
   }
   code_ << "  }\n"
         << "  __syncthreads();\n";
+
+  // If any node in any elementwise subgraph has a randomAccess input
+  // produced in this kernel without a prior barrier, emit one after
+  // the size setup.
+  {
+    bool needsBarrier = false;
+    std::function<void(ValueCP)> checkTree = [&](ValueCP value) {
+      if (needsBarrier || leafInputSet.count(value) || !value->producer()) {
+        return;
+      }
+      auto* node = value->producer();
+      if (callNeedsBarrier(node)) {
+        needsBarrier = true;
+        return;
+      }
+      for (const auto& input : node->inputs()) {
+        checkTree(input.value);
+      }
+    };
+    for (const auto& sg : subgraphs) {
+      if (callNeedsBarrier(sg.root)) {
+        needsBarrier = true;
+        break;
+      }
+      for (const auto& input : sg.root->inputs()) {
+        checkTree(input.value);
+        if (needsBarrier) {
+          break;
+        }
+      }
+      if (needsBarrier) {
+        break;
+      }
+    }
+    if (needsBarrier) {
+      emitBarrier();
+    }
+  }
 
   addInclude("velox/experimental/torchwave/Elementwise.cuh");
 
@@ -317,35 +473,121 @@ void CompileCtx::generateElementwise(
     }
   }
 
+  bool skipFastPath = WaveConfig::get().noElementwiseFastPath;
+
   // Generate fast path test for tensor leaf inputs.
-  code_ << "  if (";
-  for (size_t i = 0; i < numFastPathVars; ++i) {
-    if (i > 0) {
-      code_ << " && ";
+  if (!skipFastPath) {
+    code_ << "  if (";
+    if (numFastPathVars == 0) {
+      code_ << "true";
     }
-    uint32_t mask;
-    if (i < numFastPathVars - 1) {
-      mask = 0xffffffff;
-    } else {
-      auto bitsInLast = tensorCount - i * kBitsPerWord;
-      if (bitsInLast >= kBitsPerWord) {
+    for (size_t i = 0; i < numFastPathVars; ++i) {
+      if (i > 0) {
+        code_ << " && ";
+      }
+      uint32_t mask;
+      if (i < numFastPathVars - 1) {
         mask = 0xffffffff;
       } else {
-        mask = (1u << bitsInLast) - 1;
+        auto bitsInLast = tensorCount - i * kBitsPerWord;
+        if (bitsInLast >= kBitsPerWord) {
+          mask = 0xffffffff;
+        } else {
+          mask = (1u << bitsInLast) - 1;
+        }
       }
+      code_ << "isFastPath" << i << " == 0x" << std::hex << mask << std::dec;
     }
-    code_ << "isFastPath" << i << " == 0x" << std::hex << mask << std::dec;
-  }
-  code_ << ") {\n";
+    code_ << ") {\n";
 
-  // Fast path body: loop over all elements, computing all expressions.
+    // Fast path body: loop over all elements, computing all expressions.
+    if (fullBlockResult) {
+      code_
+          << "    uint32_t rounded = roundUpPwr2(size, blockDim.x);\n"
+          << "    for (uint32_t idx = blockInfo.blockInOp * blockDim.x + threadIdx.x; idx < rounded; idx += blockInfo.numBlocksInOp * blockDim.x) {\n";
+      eltTrace(
+          code_,
+          "\"%d %d idx %d blockIdx %d\\n\", blockInfo.op, blockInfo.blockInOp, idx, blockIdx.x");
+      for (size_t s = 0; s < subgraphs.size(); ++s) {
+        auto tp = resultSpecs[s].value ? cudaType(resultSpecs[s].value)
+                                       : cudaType(allInputs.at(0));
+        code_ << "      " << tp << " result" << s << ";\n";
+      }
+      code_ << "      if (idx < size) {\n";
+      for (size_t s = 0; s < subgraphs.size(); ++s) {
+        auto resultVar = fmt::format("result{}", s);
+        elementwiseExpr(
+            subgraphs[s].root->outputs()[0], resultVar, op, allInputs);
+        if (resultSpecs[s].value) {
+          auto it = std::find(
+              allInputs.begin(), allInputs.end(), resultSpecs[s].value);
+          auto id = it - allInputs.begin();
+          if (resultSpecs[s].value->type().kind() ==
+              nativert::Type::Kind::Tensor) {
+            code_ << "        " << storageRef(id) << "[idx] = " << resultVar
+                  << ";\n";
+          } else {
+            code_ << "        " << storageRef(id) << "[0] = " << resultVar
+                  << ";\n";
+          }
+        } else {
+          code_ << "        " << resultSpecs[s].variable << " = " << resultVar
+                << ";\n";
+        }
+      }
+      code_ << "      }\n";
+      if (!resultStmt.empty()) {
+        code_ << "      " << resultStmt << "\n";
+      }
+      code_ << "    }\n";
+    } else {
+      code_
+          << "    for (uint32_t idx = blockInfo.blockInOp * blockDim.x + threadIdx.x; idx < size; idx += blockInfo.numBlocksInOp * blockDim.x) {\n";
+      eltTrace(
+          code_,
+          "\"%d %d idx %d blockIdx %d\\n\", blockInfo.op, blockInfo.blockInOp, idx, blockIdx.x");
+      for (size_t s = 0; s < subgraphs.size(); ++s) {
+        auto* rootMeta = nodeMeta(subgraphs[s].root);
+        bool resultInRegister = !rootMeta || rootMeta->returnMeta.empty() ||
+            rootMeta->returnMeta[0].isRegister;
+        auto tp = resultSpecs[s].value ? cudaType(resultSpecs[s].value)
+                                       : cudaType(allInputs.at(0));
+        auto resultVar = fmt::format("result{}", s);
+        code_ << "      " << tp << " " << resultVar << ";\n";
+        elementwiseExpr(
+            subgraphs[s].root->outputs()[0], resultVar, op, allInputs);
+        if (!resultInRegister) {
+          continue;
+        }
+        if (resultSpecs[s].value) {
+          auto it = std::find(
+              allInputs.begin(), allInputs.end(), resultSpecs[s].value);
+          auto id = it - allInputs.begin();
+          if (resultSpecs[s].value->type().kind() ==
+              nativert::Type::Kind::Tensor) {
+            code_ << "      " << storageRef(id) << "[idx] = " << resultVar
+                  << ";\n";
+          } else {
+            code_ << "      " << storageRef(id) << "[0] = " << resultVar
+                  << ";\n";
+          }
+        } else {
+          code_ << "       " << resultSpecs[s].variable << " = " << resultVar
+                << ";\n";
+        }
+      }
+      if (!resultStmt.empty()) {
+        code_ << "      " << resultStmt << "\n";
+      }
+      code_ << "    }\n";
+    }
+
+    code_ << "  } else {\n";
+  }
   if (fullBlockResult) {
     code_
         << "    uint32_t rounded = roundUpPwr2(size, blockDim.x);\n"
         << "    for (uint32_t idx = blockInfo.blockInOp * blockDim.x + threadIdx.x; idx < rounded; idx += blockInfo.numBlocksInOp * blockDim.x) {\n";
-    eltTrace(
-        code_,
-        "\"%d %d idx %d blockIdx %d\\n\", blockInfo.op, blockInfo.blockInOp, idx, blockIdx.x");
     for (size_t s = 0; s < subgraphs.size(); ++s) {
       auto tp = resultSpecs[s].value ? cudaType(resultSpecs[s].value)
                                      : cudaType(allInputs.at(0));
@@ -353,81 +595,15 @@ void CompileCtx::generateElementwise(
     }
     code_ << "      if (idx < size) {\n";
     for (size_t s = 0; s < subgraphs.size(); ++s) {
-      auto resultVar = fmt::format("result{}", s);
-      elementwiseExpr(
-          subgraphs[s].root->outputs()[0], resultVar, op, allInputs);
-      if (resultSpecs[s].value) {
-        auto it =
-            std::find(allInputs.begin(), allInputs.end(), resultSpecs[s].value);
-        auto id = it - allInputs.begin();
-        if (resultSpecs[s].value->type().kind() ==
-            nativert::Type::Kind::Tensor) {
-          code_ << "        " << storageRef(id) << "[idx] = " << resultVar
-                << ";\n";
-        } else {
-          code_ << "        " << storageRef(id) << "[0] = " << resultVar
-                << ";\n";
-        }
-      } else {
-        code_ << "        " << resultSpecs[s].variable << " = " << resultVar
-              << ";\n";
-      }
-    }
-    code_ << "      }\n";
-    if (!resultStmt.empty()) {
-      code_ << "      " << resultStmt << "\n";
-    }
-    code_ << "    }\n";
-  } else {
-    code_
-        << "    for (uint32_t idx = blockInfo.blockInOp * blockDim.x + threadIdx.x; idx < size; idx += blockInfo.numBlocksInOp * blockDim.x) {\n";
-    eltTrace(
-        code_,
-        "\"%d %d idx %d blockIdx %d\\n\", blockInfo.op, blockInfo.blockInOp, idx, blockIdx.x");
-    for (size_t s = 0; s < subgraphs.size(); ++s) {
-      auto tp = resultSpecs[s].value ? cudaType(resultSpecs[s].value)
-                                     : cudaType(allInputs.at(0));
-      auto resultVar = fmt::format("result{}", s);
-      code_ << "      " << tp << " " << resultVar << ";\n";
-      elementwiseExpr(
-          subgraphs[s].root->outputs()[0], resultVar, op, allInputs);
-      if (resultSpecs[s].value) {
-        auto it =
-            std::find(allInputs.begin(), allInputs.end(), resultSpecs[s].value);
-        auto id = it - allInputs.begin();
-        if (resultSpecs[s].value->type().kind() ==
-            nativert::Type::Kind::Tensor) {
-          code_ << "      " << storageRef(id) << "[idx] = " << resultVar
-                << ";\n";
-        } else {
-          code_ << "      " << storageRef(id) << "[0] = " << resultVar << ";\n";
-        }
-      } else {
-        code_ << "       " << resultSpecs[s].variable << " = " << resultVar
-              << ";\n";
-      }
-    }
-    if (!resultStmt.empty()) {
-      code_ << "      " << resultStmt << "\n";
-    }
-    code_ << "    }\n";
-  }
-
-  code_ << "  } else {\n";
-  if (fullBlockResult) {
-    code_
-        << "    uint32_t rounded = roundUpPwr2(size, blockDim.x);\n"
-        << "    for (uint32_t idx = blockInfo.blockInOp * blockDim.x + threadIdx.x; idx < rounded; idx += blockInfo.numBlocksInOp * blockDim.x) {\n";
-    for (size_t s = 0; s < subgraphs.size(); ++s) {
-      auto tp = resultSpecs[s].value ? cudaType(resultSpecs[s].value)
-                                     : cudaType(allInputs.at(0));
-      code_ << "      " << tp << " result" << s << ";\n";
-    }
-    code_ << "      if (idx < size) {\n";
-    for (size_t s = 0; s < subgraphs.size(); ++s) {
+      auto* rootMeta = nodeMeta(subgraphs[s].root);
+      bool resultInRegister = !rootMeta || rootMeta->returnMeta.empty() ||
+          rootMeta->returnMeta[0].isRegister;
       auto resultVar = fmt::format("result{}", s);
       elementwiseExpr(
           subgraphs[s].root->outputs()[0], resultVar, op, allInputs, true);
+      if (!resultInRegister) {
+        continue;
+      }
       if (resultSpecs[s].value) {
         auto it =
             std::find(allInputs.begin(), allInputs.end(), resultSpecs[s].value);
@@ -457,12 +633,18 @@ void CompileCtx::generateElementwise(
     code_
         << "    for (uint32_t idx = blockInfo.blockInOp * blockDim.x + threadIdx.x; idx < size; idx += blockInfo.numBlocksInOp * blockDim.x) {\n";
     for (size_t s = 0; s < subgraphs.size(); ++s) {
+      auto* rootMeta = nodeMeta(subgraphs[s].root);
+      bool resultInRegister = !rootMeta || rootMeta->returnMeta.empty() ||
+          rootMeta->returnMeta[0].isRegister;
       auto tp = resultSpecs[s].value ? cudaType(resultSpecs[s].value)
                                      : cudaType(allInputs.at(0));
       auto resultVar = fmt::format("result{}", s);
       code_ << "      " << tp << " " << resultVar << ";\n";
       elementwiseExpr(
           subgraphs[s].root->outputs()[0], resultVar, op, allInputs, true);
+      if (!resultInRegister) {
+        continue;
+      }
       if (resultSpecs[s].value) {
         auto it =
             std::find(allInputs.begin(), allInputs.end(), resultSpecs[s].value);
@@ -487,12 +669,220 @@ void CompileCtx::generateElementwise(
     }
     code_ << "    }\n";
   }
-  code_ << "  }\n";
+  if (!skipFastPath) {
+    code_ << "  }\n";
+  }
+  // Wait for all warps to finish before size in shared memory is reused.
+  code_ << "  __syncthreads();\n";
   code_ << "  }\n";
 
   for (auto& ee : newExprs) {
     op.elementExprs().push_back(std::move(ee));
   }
+}
+
+std::string CompileCtx::formatLeafAccess(
+    ValueCP value,
+    const std::vector<ValueCP>& inputs,
+    const KernelOperation& op,
+    bool slowPath) {
+  auto it = std::find(inputs.begin(), inputs.end(), value);
+  TORCH_CHECK(it != inputs.end(), "Input value not found in inputs vector");
+  auto valueIdx = it - inputs.begin();
+  auto varIt = elementwiseVarNames_.find(valueIdx);
+  std::string base;
+  if (varIt != elementwiseVarNames_.end()) {
+    base = varIt->second;
+  } else {
+    auto tp = cudaType(value);
+    if (value->type().kind() == nativert::Type::Kind::Tensor) {
+      base = fmt::format("storage<{}>({})", tp, param(value, op));
+    } else {
+      base = param(value, op);
+    }
+  }
+  if (value->type().kind() != nativert::Type::Kind::Tensor) {
+    return fmt::format("*{}", base);
+  }
+  if (slowPath) {
+    auto bitIdx = fastPathBitIndex_[valueIdx];
+    return fmt::format(
+        "{}[complexIdx(isFastPath{} & (1 << {}), {}, idx)]",
+        base,
+        bitIdx / kBitsPerWord,
+        bitIdx % kBitsPerWord,
+        param(value, op));
+  }
+  return fmt::format("{}[idx]", base);
+}
+
+std::string CompileCtx::buildElementwiseCall(
+    const Metadata& meta,
+    NodeCP node,
+    const KernelOperation& /*op*/,
+    const std::vector<std::string>& argTexts) {
+  const auto& ew = *meta.elementwise;
+  std::stringstream ss;
+  ss << ew.functionName;
+  auto ewPresenceParams = meta.hasPresentTemplateParams()
+      ? presentTemplateParams(meta, node)
+      : std::string();
+  if (!meta.typeTemplateParams.empty() || meta.hasDtypeTemplateParam ||
+      !ewPresenceParams.empty()) {
+    ss << "<";
+    const auto& nodeInputs = node->inputs();
+    bool firstTp = true;
+    for (size_t i = 0; i < meta.typeTemplateParams.size(); ++i) {
+      if (!firstTp) {
+        ss << ", ";
+      }
+      firstTp = false;
+      ss << cudaType(nodeInputs[meta.typeTemplateParams[i]].value);
+    }
+    if (meta.hasDtypeTemplateParam) {
+      if (!firstTp) {
+        ss << ", ";
+      }
+      const auto* dtypeAttr = node->tryGetAttribute("dtype");
+      TORCH_CHECK(dtypeAttr, node->target(), ": missing dtype attribute");
+      ss << cudaTypeFromDtype(*dtypeAttr);
+    }
+    if (!ewPresenceParams.empty()) {
+      if (!firstTp) {
+        ss << ", ";
+      }
+      ss << ewPresenceParams;
+    }
+    ss << ">";
+  }
+  ss << "(";
+  bool first = true;
+  if (ew.hasIdxArg) {
+    ss << "idx";
+    first = false;
+  }
+  if (ew.hasSizeArg) {
+    if (!first) {
+      ss << ", ";
+    }
+    ss << "size";
+    first = false;
+  }
+  for (const auto& arg : argTexts) {
+    if (!first) {
+      ss << ", ";
+    }
+    first = false;
+    ss << arg;
+  }
+  if (ew.hasBlockInfo) {
+    if (!first) {
+      ss << ", ";
+    }
+    ss << "blockInfo";
+  }
+  ss << ")";
+  return ss.str();
+}
+
+void CompileCtx::maybeExtractOutOfLine(
+    ValueCP value,
+    const std::string& resultName,
+    const std::vector<ValueCP>& inputs,
+    size_t codeStart,
+    size_t tempLogStart,
+    bool slowPath) {
+  auto codeEnd = static_cast<size_t>(code_.tellp());
+  if (WaveConfig::get().outOfLineExprSize <= 0 ||
+      static_cast<int32_t>(codeEnd - codeStart) <=
+          WaveConfig::get().outOfLineExprSize) {
+    return;
+  }
+  auto fullCode = code_.str();
+  auto extractedCode = fullCode.substr(codeStart, codeEnd - codeStart);
+
+  std::set<std::pair<std::string, std::string>> uniqueTemps;
+  for (size_t i = tempLogStart; i < tempUseLog_.size(); ++i) {
+    uniqueTemps.insert(tempUseLog_[i]);
+  }
+
+  std::set<size_t> usedIndices;
+  for (auto& [idx, varName] : elementwiseVarNames_) {
+    if (extractedCode.find(varName + "[") != std::string::npos ||
+        extractedCode.find("*" + varName) != std::string::npos) {
+      usedIndices.insert(idx);
+    }
+  }
+  for (auto& [helperName, deps] : helperVarDeps_) {
+    if (extractedCode.find(helperName + "(") != std::string::npos) {
+      usedIndices.insert(deps.begin(), deps.end());
+    }
+  }
+  std::vector<std::pair<size_t, std::string>> usedVars;
+  for (auto idx : usedIndices) {
+    auto it = elementwiseVarNames_.find(idx);
+    if (it != elementwiseVarNames_.end()) {
+      usedVars.emplace_back(idx, it->second);
+    }
+  }
+
+  auto funcName = fmt::format("elementExpr{}", outOfLineCounter_++);
+  auto returnType = cudaType(value);
+
+  outOfLineFunctions_ << "__device__ __noinline__ " << returnType << " "
+                      << funcName
+                      << "(\n    uint32_t idx, uint32_t size, "
+                         "BlockInfo& blockInfo";
+  int32_t numFastPathUsed = 0;
+  if (slowPath) {
+    for (int32_t i = 0;; ++i) {
+      if (extractedCode.find("isFastPath" + std::to_string(i)) ==
+          std::string::npos) {
+        numFastPathUsed = i;
+        break;
+      }
+    }
+    for (int32_t i = 0; i < numFastPathUsed; ++i) {
+      outOfLineFunctions_ << ",\n    uint32_t isFastPath" << i;
+    }
+  }
+  for (auto& [idx, varName] : usedVars) {
+    outOfLineFunctions_ << ",\n    " << cudaType(inputs[idx]) << "* "
+                        << varName;
+  }
+  outOfLineFunctions_ << ") {\n";
+
+  std::set<std::string> declaredInHelper;
+  for (auto& [type, name] : uniqueTemps) {
+    if (declaredInHelper.insert(name).second) {
+      outOfLineFunctions_ << "  " << type << " " << name << ";\n";
+    }
+  }
+  if (!declaredInHelper.count(resultName)) {
+    outOfLineFunctions_ << "  " << returnType << " " << resultName << ";\n";
+  }
+
+  outOfLineFunctions_ << extractedCode;
+  outOfLineFunctions_ << "  return " << resultName << ";\n";
+  outOfLineFunctions_ << "}\n\n";
+
+  helperVarDeps_[funcName] = usedIndices;
+
+  code_.str(fullCode.substr(0, codeStart));
+  code_.seekp(0, std::ios::end);
+  code_ << "      " << resultName << " = " << funcName
+        << "(idx, size, blockInfo";
+  for (int32_t i = 0; i < numFastPathUsed; ++i) {
+    code_ << ", isFastPath" << i;
+  }
+  for (auto& [idx, varName] : usedVars) {
+    code_ << ", " << varName;
+  }
+  code_ << ");\n";
+
+  tempUseLog_.erase(
+      tempUseLog_.begin() + static_cast<ptrdiff_t>(tempLogStart),
+      tempUseLog_.end());
 }
 
 void CompileCtx::elementwiseExprImpl(
@@ -505,42 +895,16 @@ void CompileCtx::elementwiseExprImpl(
   auto codeStart = static_cast<size_t>(code_.tellp());
   auto tempLogStart = tempUseLog_.size();
 
-  auto leafText = [&](ValueCP v) -> std::string {
-    auto it = std::find(inputs.begin(), inputs.end(), v);
-    TORCH_CHECK(it != inputs.end(), "Input value not found in inputs vector");
-    auto valueIdx = it - inputs.begin();
-    auto varIt = elementwiseVarNames_.find(valueIdx);
-    std::string base;
-    if (varIt != elementwiseVarNames_.end()) {
-      base = varIt->second;
-    } else {
-      auto tp = cudaType(v);
-      if (v->type().kind() == nativert::Type::Kind::Tensor) {
-        base = fmt::format("storage<{}>({})", tp, param(v, op));
-      } else {
-        base = param(v, op);
-      }
-    }
-    if (v->type().kind() != nativert::Type::Kind::Tensor) {
-      return fmt::format("*{}", base);
-    } else if (slowPath) {
-      auto bitIdx = fastPathBitIndex_[valueIdx];
-      std::stringstream ls;
-      ls << base << "[complexIdx(isFastPath" << bitIdx / kBitsPerWord
-         << " & (1 << " << bitIdx % kBitsPerWord << "), " << param(v, op)
-         << ", idx)]";
-      return ls.str();
-    } else {
-      return fmt::format("{}[idx]", base);
-    }
+  auto leaf = [&](ValueCP v) {
+    return formatLeafAccess(v, inputs, op, slowPath);
   };
 
-  auto isTerminal = [&](ValueCP v) -> bool {
+  auto isTerminal = [&](ValueCP v) {
     return inputSet.count(v) || !v->producer();
   };
 
   if (isTerminal(value)) {
-    code_ << "      " << resultName << " = " << leafText(value) << ";\n";
+    code_ << "      " << resultName << " = " << leaf(value) << ";\n";
     return;
   }
 
@@ -551,7 +915,6 @@ void CompileCtx::elementwiseExprImpl(
   auto* meta = nodeMeta(node);
   TORCH_CHECK(
       meta && meta->elementwise, "Not an elementwise op: ", node->target());
-  const auto& ew = *meta->elementwise;
 
   if (!meta->headerFile.empty()) {
     addInclude(meta->headerFile);
@@ -561,32 +924,39 @@ void CompileCtx::elementwiseExprImpl(
   std::vector<std::pair<ValueCP, std::string>> tempsToRelease;
   bool firstValue = true;
 
-  auto processValue = [&](ValueCP v, bool isWhole) {
+  // Processes a single value input. wholeTensor args pass the tensor
+  // pointer; ListPack args with isRegister flatten their elements as
+  // individual scalar args (f(x, ListPack(a,b)) → f(x, a, b));
+  // ListPack args without isRegister pass as TensorList*. Terminal
+  // values read from storage; the first same-type sub-expression
+  // reuses resultName to avoid a temp allocation.
+  auto processValue = [&](ValueCP v, bool isWhole, bool isRegister) {
     if (isWhole) {
       argTexts.push_back(param(v, op));
       firstValue = false;
       return;
     }
-
     auto* producer = v->producer();
-    bool isListPack = producer && producer->target() == "prim.ListPack";
-
-    if (isListPack) {
-      placed_.insert(producer);
-      generatingOp_->allNodes().insert(producer);
-      for (const auto& listInput : producer->inputs()) {
-        auto* lv = listInput.value;
-        if (isTerminal(lv)) {
-          argTexts.push_back(leafText(lv));
-        } else {
-          auto tempName = useTemp(lv);
-          elementwiseExprImpl(lv, tempName, inputSet, inputs, op, slowPath);
-          argTexts.push_back(tempName);
-          tempsToRelease.emplace_back(lv, tempName);
+    if (producer && producer->target() == "prim.ListPack") {
+      if (isRegister) {
+        placed_.insert(producer);
+        generatingOp_->allNodes().insert(producer);
+        for (const auto& listInput : producer->inputs()) {
+          auto* lv = listInput.value;
+          if (isTerminal(lv)) {
+            argTexts.push_back(leaf(lv));
+          } else {
+            auto tempName = useTemp(lv);
+            elementwiseExprImpl(lv, tempName, inputSet, inputs, op, slowPath);
+            argTexts.push_back(tempName);
+            tempsToRelease.emplace_back(lv, tempName);
+          }
         }
+      } else {
+        argTexts.push_back(param(v, op));
       }
     } else if (isTerminal(v)) {
-      argTexts.push_back(leafText(v));
+      argTexts.push_back(leaf(v));
     } else if (firstValue && cudaType(v) == cudaType(value)) {
       elementwiseExprImpl(v, resultName, inputSet, inputs, op, slowPath);
       argTexts.push_back(resultName);
@@ -601,205 +971,50 @@ void CompileCtx::elementwiseExprImpl(
 
   if (meta->generateCall) {
     for (const auto& input : node->inputs()) {
-      processValue(input.value, false);
+      processValue(input.value, false, true);
     }
     std::stringstream callSs;
     meta->generateCall(callSs, node, std::move(argTexts));
     code_ << "      " << resultName << " = " << callSs.str() << ";\n";
-    for (auto& [v, name] : tempsToRelease) {
-      tempDone(v, name);
-    }
-    return;
-  }
-
-  int32_t emittedArgs = 0;
-  forArguments(
-      *meta,
-      node,
-      [&](size_t schemaIdx, ValueCP v, const nativert::Attribute* attr) {
-        if (emittedArgs >= ew.numArgs) {
-          return;
-        }
-        if (v) {
-          ++emittedArgs;
-          bool isWhole = schemaIdx < meta->argumentMeta.size() &&
-              meta->argumentMeta[schemaIdx].wholeTensor;
-          processValue(v, isWhole);
-        } else if (attr) {
-          ++emittedArgs;
-          if (std::holds_alternative<nativert::None>(attr->value)) {
-            argTexts.emplace_back("0");
-          } else {
-            auto off = op.attrOffset(node, attr->name);
-            auto tp = cudaAttrType(attr->value);
-            argTexts.push_back(
-                fmt::format("*param<{}>(blockInfo, {})", tp, off));
+  } else {
+    int32_t emittedArgs = 0;
+    int32_t numArgs = meta->elementwise->numArgs;
+    forArguments(
+        *meta,
+        node,
+        [&](size_t schemaIdx, ValueCP v, const nativert::Attribute* attr) {
+          if (emittedArgs >= numArgs) {
+            return;
           }
-        }
-      });
-
-  std::stringstream callSs;
-  callSs << ew.functionName;
-  auto ewPresenceParams = meta->hasPresentTemplateParams()
-      ? presentTemplateParams(*meta, node)
-      : std::string();
-  if (!meta->typeTemplateParams.empty() || meta->hasDtypeTemplateParam ||
-      !ewPresenceParams.empty()) {
-    callSs << "<";
-    const auto& nodeInputs = node->inputs();
-    bool firstTp = true;
-    for (size_t i = 0; i < meta->typeTemplateParams.size(); ++i) {
-      if (!firstTp) {
-        callSs << ", ";
-      }
-      firstTp = false;
-      auto idx = meta->typeTemplateParams[i];
-      callSs << cudaType(nodeInputs[idx].value);
-    }
-    if (meta->hasDtypeTemplateParam) {
-      if (!firstTp) {
-        callSs << ", ";
-      }
-      const auto* dtypeAttr = node->tryGetAttribute("dtype");
-      TORCH_CHECK(dtypeAttr, node->target(), ": missing dtype attribute");
-      callSs << cudaTypeFromDtype(*dtypeAttr);
-    }
-    if (!ewPresenceParams.empty()) {
-      if (!firstTp) {
-        callSs << ", ";
-      }
-      callSs << ewPresenceParams;
-    }
-    callSs << ">";
+          if (v) {
+            ++emittedArgs;
+            bool isWhole = schemaIdx < meta->argumentMeta.size() &&
+                meta->argumentMeta[schemaIdx].wholeTensor;
+            bool isReg = schemaIdx < meta->argumentMeta.size() &&
+                meta->argumentMeta[schemaIdx].isRegister;
+            processValue(v, isWhole, isReg);
+          } else if (attr) {
+            ++emittedArgs;
+            if (std::holds_alternative<nativert::None>(attr->value)) {
+              argTexts.emplace_back("0");
+            } else {
+              auto off = op.attrOffset(node, attr->name);
+              auto tp = cudaAttrType(attr->value);
+              argTexts.push_back(
+                  fmt::format("*param<{}>(blockInfo, {})", tp, off));
+            }
+          }
+        });
+    code_ << "      " << resultName << " = "
+          << buildElementwiseCall(*meta, node, op, argTexts) << ";\n";
   }
-  callSs << "(";
-  bool first = true;
-  if (ew.hasIdxArg) {
-    callSs << "idx";
-    first = false;
-  }
-  if (ew.hasSizeArg) {
-    if (!first) {
-      callSs << ", ";
-    }
-    callSs << "size";
-    first = false;
-  }
-  for (const auto& arg : argTexts) {
-    if (!first) {
-      callSs << ", ";
-    }
-    first = false;
-    callSs << arg;
-  }
-  callSs << ")";
-  code_ << "      " << resultName << " = " << callSs.str() << ";\n";
 
   for (auto& [v, name] : tempsToRelease) {
     tempDone(v, name);
   }
 
-  auto codeEnd = static_cast<size_t>(code_.tellp());
-  if (WaveConfig::get().outOfLineExprSize > 0 &&
-      static_cast<int32_t>(codeEnd - codeStart) >
-          WaveConfig::get().outOfLineExprSize) {
-    auto fullCode = code_.str();
-    auto extractedCode = fullCode.substr(codeStart, codeEnd - codeStart);
-
-    // Collect unique temps used in the extracted range.
-    std::set<std::pair<std::string, std::string>> uniqueTemps;
-    for (size_t i = tempLogStart; i < tempUseLog_.size(); ++i) {
-      uniqueTemps.insert(tempUseLog_[i]);
-    }
-
-    // Find which bN variables are referenced in the extracted code,
-    // including transitively via any helper functions called from it.
-    std::set<size_t> usedIndices;
-    for (auto& [idx, varName] : elementwiseVarNames_) {
-      if (extractedCode.find(varName + "[") != std::string::npos ||
-          extractedCode.find("*" + varName) != std::string::npos) {
-        usedIndices.insert(idx);
-      }
-    }
-    // Add vars needed by called helpers (transitive deps).
-    for (auto& [helperName, deps] : helperVarDeps_) {
-      if (extractedCode.find(helperName + "(") != std::string::npos) {
-        usedIndices.insert(deps.begin(), deps.end());
-      }
-    }
-    std::vector<std::pair<size_t, std::string>> usedVars;
-    for (auto idx : usedIndices) {
-      auto it = elementwiseVarNames_.find(idx);
-      if (it != elementwiseVarNames_.end()) {
-        usedVars.emplace_back(idx, it->second);
-      }
-    }
-
-    auto funcName = fmt::format("elementExpr{}", outOfLineCounter_++);
-    auto returnType = cudaType(value);
-
-    // Build the helper function.
-    outOfLineFunctions_ << "__device__ __noinline__ " << returnType << " "
-                        << funcName
-                        << "(\n    uint32_t idx, uint32_t size, "
-                           "BlockInfo& blockInfo";
-    // Find how many isFastPath variables are referenced.
-    int32_t numFastPathUsed = 0;
-    if (slowPath) {
-      for (int32_t i = 0;; ++i) {
-        if (extractedCode.find("isFastPath" + std::to_string(i)) ==
-            std::string::npos) {
-          numFastPathUsed = i;
-          break;
-        }
-      }
-      for (int32_t i = 0; i < numFastPathUsed; ++i) {
-        outOfLineFunctions_ << ",\n    uint32_t isFastPath" << i;
-      }
-    }
-    for (auto& [idx, varName] : usedVars) {
-      auto tp = cudaType(inputs[idx]);
-      outOfLineFunctions_ << ",\n    " << tp << "* " << varName;
-    }
-    outOfLineFunctions_ << ") {\n";
-
-    // Declare local temps inside the helper. The resultName temp is also
-    // declared in the main kernel (for the call site assignment).
-    std::set<std::string> declaredInHelper;
-    for (auto& [type, name] : uniqueTemps) {
-      if (declaredInHelper.insert(name).second) {
-        outOfLineFunctions_ << "  " << type << " " << name << ";\n";
-      }
-    }
-    if (!declaredInHelper.count(resultName)) {
-      outOfLineFunctions_ << "  " << returnType << " " << resultName << ";\n";
-    }
-
-    outOfLineFunctions_ << extractedCode;
-    outOfLineFunctions_ << "  return " << resultName << ";\n";
-    outOfLineFunctions_ << "}\n\n";
-
-    // Record this helper's variable dependencies for transitive propagation.
-    helperVarDeps_[funcName] = usedIndices;
-
-    // Replace extracted code with a function call.
-    code_.str(fullCode.substr(0, codeStart));
-    code_.seekp(0, std::ios::end);
-    code_ << "      " << resultName << " = " << funcName
-          << "(idx, size, blockInfo";
-    for (int32_t i = 0; i < numFastPathUsed; ++i) {
-      code_ << ", isFastPath" << i;
-    }
-    for (auto& [idx, varName] : usedVars) {
-      code_ << ", " << varName;
-    }
-    code_ << ");\n";
-
-    // Remove extracted temps from the log so they won't be double-counted.
-    tempUseLog_.erase(
-        tempUseLog_.begin() + static_cast<ptrdiff_t>(tempLogStart),
-        tempUseLog_.end());
-  }
+  maybeExtractOutOfLine(
+      value, resultName, inputs, codeStart, tempLogStart, slowPath);
 }
 
 void CompileCtx::elementwiseExpr(
