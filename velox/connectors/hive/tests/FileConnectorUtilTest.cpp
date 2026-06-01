@@ -80,8 +80,8 @@ class FileConnectorUtilTest : public exec::test::HiveConnectorTestBase {
 
   std::unique_ptr<dwio::common::Reader> makeReader(const std::string& path) {
     dwio::common::ReaderOptions readerOpts(pool_.get());
-    readerOpts.setDataIoStats(dataIoStats_.get());
-    readerOpts.setMetadataIoStats(metadataIoStats_.get());
+    readerOpts.setDataIoStats(dataIoStats_);
+    readerOpts.setMetadataIoStats(metadataIoStats_);
     readerOpts.setFileFormat(dwio::common::FileFormat::DWRF);
     auto readFile = std::make_shared<LocalReadFile>(path);
     auto input = std::make_unique<dwio::common::BufferedInput>(
@@ -106,8 +106,8 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
     auto holder = makeConnectorQueryCtx();
     auto split = makeSplit(dwio::common::FileFormat::DWRF);
     dwio::common::ReaderOptions readerOptions(pool_.get());
-    readerOptions.setDataIoStats(dataIoStats_.get());
-    readerOptions.setMetadataIoStats(metadataIoStats_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
     hive::configureReaderOptions(
         fileConfig,
         holder.ctx.get(),
@@ -118,7 +118,9 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
 
     EXPECT_EQ(readerOptions.fileFormat(), dwio::common::FileFormat::DWRF);
     EXPECT_FALSE(readerOptions.fileColumnNamesReadAsLowerCase());
-    EXPECT_FALSE(readerOptions.useColumnNamesForColumnMapping());
+    EXPECT_EQ(
+        readerOptions.columnMappingMode(),
+        dwio::common::ColumnMappingMode::kPosition);
   }
 
   // Test with ORC format and useColumnNames enabled via session.
@@ -127,8 +129,8 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
         {{hive::FileConfig::kOrcUseColumnNamesSession, "true"}});
     auto split = makeSplit(dwio::common::FileFormat::ORC);
     dwio::common::ReaderOptions readerOptions(pool_.get());
-    readerOptions.setDataIoStats(dataIoStats_.get());
-    readerOptions.setMetadataIoStats(metadataIoStats_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
     hive::configureReaderOptions(
         fileConfig,
         holder.ctx.get(),
@@ -138,7 +140,9 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
         readerOptions);
 
     EXPECT_EQ(readerOptions.fileFormat(), dwio::common::FileFormat::ORC);
-    EXPECT_TRUE(readerOptions.useColumnNamesForColumnMapping());
+    EXPECT_EQ(
+        readerOptions.columnMappingMode(),
+        dwio::common::ColumnMappingMode::kName);
   }
 
   // Test with Parquet format and useColumnNames enabled via session.
@@ -147,8 +151,8 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
         {{hive::FileConfig::kParquetUseColumnNamesSession, "true"}});
     auto split = makeSplit(dwio::common::FileFormat::PARQUET);
     dwio::common::ReaderOptions readerOptions(pool_.get());
-    readerOptions.setDataIoStats(dataIoStats_.get());
-    readerOptions.setMetadataIoStats(metadataIoStats_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
     hive::configureReaderOptions(
         fileConfig,
         holder.ctx.get(),
@@ -158,7 +162,9 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
         readerOptions);
 
     EXPECT_EQ(readerOptions.fileFormat(), dwio::common::FileFormat::PARQUET);
-    EXPECT_TRUE(readerOptions.useColumnNamesForColumnMapping());
+    EXPECT_EQ(
+        readerOptions.columnMappingMode(),
+        dwio::common::ColumnMappingMode::kName);
   }
 
   // Test format mismatch throws.
@@ -166,8 +172,8 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
     auto holder = makeConnectorQueryCtx();
     auto split = makeSplit(dwio::common::FileFormat::DWRF);
     dwio::common::ReaderOptions readerOptions(pool_.get());
-    readerOptions.setDataIoStats(dataIoStats_.get());
-    readerOptions.setMetadataIoStats(metadataIoStats_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
     readerOptions.setFileFormat(dwio::common::FileFormat::PARQUET);
     VELOX_ASSERT_THROW(
         hive::configureReaderOptions(

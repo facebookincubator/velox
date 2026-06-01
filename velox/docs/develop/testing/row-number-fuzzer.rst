@@ -8,14 +8,29 @@ the results. They works as follows:
 
 1. Data Generation: Generate a random set of input data, also known as a vector. This data can
    have a variety of encodings and data layouts to ensure thorough testing.
-2. Plan Generation: Generate two equivalent query plans: one is RowNumber over ValuesNode as
-   the base plan and the other is over TableScanNode as the alternative plan. The TopNRowNumberFuzzer generates similar
-   plans with TopNRowNumber node instead.
+2. Plan Generation: Generate equivalent query plans and validate results across all of them.
+
+   For RowNumberFuzzer:
+
+   * Base plan: RowNumber over ValuesNode.
+   * Alternative plan: RowNumber over TableScanNode.
+
+   For TopNRowNumberFuzzer:
+
+   * Base plan: TopNRowNumber over ValuesNode using a randomly chosen rank function
+     (``row_number``, ``rank``, or ``dense_rank``) with a random row limit.
+   * Alternative plan: WindowNode over ValuesNode using the same rank function and partition/sort
+     keys, followed by a filter on the rank value to apply the same limit. This validates that the
+     optimised TopNRowNumber operator produces results consistent with the general Window operator.
+   * Alternative plan: TopNRowNumber over TableScanNode using the same rank function and limit.
+
 3. Query Execution: Executes those equivalent query plans using the generated data and asserts that the results are
    consistent across different plans.
+
   i. Execute the base plan, compare the result with the reference (DuckDB or Presto) and use it as the expected result.
-  #. Execute the alter plan multiple times with and without spill, and compare each result with the
+  #. Execute the alternative plans multiple times with and without spill, and compare each result with the
      expected result.
+
 4. Iteration: This process is repeated multiple times to ensure reliability and robustness.
 
 How to run

@@ -13,4 +13,6 @@
 # limitations under the License.
 velox_add_library(velox_future INTERFACE HEADERS VeloxPromise.h)
 
+velox_link_libraries(velox_future INTERFACE Folly::folly)
+
 velox_install_library_headers()

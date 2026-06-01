@@ -19,8 +19,11 @@
 #include <limits>
 #include <string>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 #include <folly/Executor.h>
+#include "velox/common/EnumDeclare.h"
 #include "velox/common/base/RandomUtil.h"
 #include "velox/common/base/SpillConfig.h"
 #include "velox/common/compression/Compression.h"
@@ -54,6 +57,10 @@ enum class FileFormat {
   SST = 10, // rocksdb sst format
   FLUX = 11,
   AVRO = 12,
+  PUFFIN =
+      13, // Iceberg V3 Puffin blob container (e.g. deletion vectors).
+          // Not consumed by dwio::ReaderFactory; read directly by the
+          // Iceberg connector via FileSystem::pread of the blob byte-range.
 };
 
 FileFormat toFileFormat(std::string_view s);
@@ -65,6 +72,48 @@ FOLLY_ALWAYS_INLINE std::ostream& operator<<(
   output << toString(fmt);
   return output;
 }
+
+/// Controls how a reader maps the requested table schema to physical file
+/// columns.
+enum class ColumnMappingMode {
+  /// Match columns by physical position. This is the default and keeps legacy
+  /// behavior for formats and callers that rely on ordinal schema matching.
+  kPosition,
+
+  /// Match columns by field name. This supports files whose physical column
+  /// order differs from the requested schema, as long as the relevant names
+  /// are stable and present in the file schema.
+  kName,
+
+  /// Matches physical Parquet fields to requested columns by Parquet field_id.
+  ///
+  /// Use this mode for table formats, such as Iceberg, where a column's
+  /// identity is its field ID rather than its name or ordinal position. This
+  /// allows the reader to handle schema evolution where columns are renamed,
+  /// reordered, deleted, or added back later with the same name but a different
+  /// type.
+  ///
+  /// The caller must provide ReaderOptions::parquetFieldIds() ordered to match
+  /// ReaderOptions::fileSchema() at every row-typed level. Each ParquetFieldId
+  /// entry describes the table field ID for the corresponding requested column,
+  /// and nested children describe field IDs below structs, arrays, and maps.
+  ///
+  /// Physical Parquet schema nodes that do not have field_id metadata are
+  /// treated as having a missing field ID and therefore do not match positive
+  /// Iceberg field IDs. This is expected for legacy Hive-style Parquet files or
+  /// files written by producers that do not preserve field IDs. In that case,
+  /// kParquetFieldId can still be used, but any requested positive field ID
+  /// without a matching physical field is read as missing and is materialized
+  /// by the connector as null or as the table format's default value. Use kName
+  /// or kPosition instead when reading files whose schema identity must come
+  /// from names or positions.
+  ///
+  /// This is Parquet-specific. Readers for other formats should reject this
+  /// mode instead of interpreting it as a generic column identity mechanism.
+  kParquetFieldId,
+};
+
+VELOX_DECLARE_ENUM_NAME(ColumnMappingMode);
 
 /// Formatting options for serialization.
 enum class SerDeSeparator {
@@ -575,16 +624,11 @@ class ReaderOptions : public io::ReaderOptions {
       1024 * 1024; // 1MB
   static constexpr uint64_t kDefaultFilePreloadThreshold =
       1024 * 1024 * 8; // 8MB
+  static constexpr uint64_t kDefaultParquetFooterMemoryTrackingThreshold =
+      std::numeric_limits<uint64_t>::max(); // Disabled by default.
 
   explicit ReaderOptions(velox::memory::MemoryPool* pool)
       : io::ReaderOptions(pool) {}
-
-  // Deprecated: use pool-only constructor + setDataIoStats/setMetadataIoStats.
-  ReaderOptions(
-      velox::memory::MemoryPool* pool,
-      velox::io::IoStatistics* dataIoStats,
-      velox::io::IoStatistics* metadataIoStats)
-      : io::ReaderOptions(pool, dataIoStats, metadataIoStats) {}
 
   /// Sets the format of the file, such as "rc" or "dwrf". The default is
   /// "dwrf".
@@ -632,6 +676,10 @@ class ReaderOptions : public io::ReaderOptions {
     footerSpeculativeIoSize_ = size;
     return *this;
   }
+  ReaderOptions& setParquetFooterMemoryTrackingThreshold(uint64_t size) {
+    parquetFooterMemoryTrackingThreshold_ = size;
+    return *this;
+  }
 
   ReaderOptions& setFilePreloadThreshold(uint64_t threshold) {
     filePreloadThreshold_ = threshold;
@@ -643,8 +691,8 @@ class ReaderOptions : public io::ReaderOptions {
     return *this;
   }
 
-  ReaderOptions& setUseColumnNamesForColumnMapping(bool flag) {
-    useColumnNamesForColumnMapping_ = flag;
+  ReaderOptions& setColumnMappingMode(ColumnMappingMode mode) {
+    columnMappingMode_ = mode;
     return *this;
   }
 
@@ -694,6 +742,10 @@ class ReaderOptions : public io::ReaderOptions {
     return footerSpeculativeIoSize_;
   }
 
+  uint64_t parquetFooterMemoryTrackingThreshold() const {
+    return parquetFooterMemoryTrackingThreshold_;
+  }
+
   uint64_t filePreloadThreshold() const {
     return filePreloadThreshold_;
   }
@@ -710,8 +762,8 @@ class ReaderOptions : public io::ReaderOptions {
     return fileColumnNamesReadAsLowerCase_;
   }
 
-  bool useColumnNamesForColumnMapping() const {
-    return useColumnNamesForColumnMapping_;
+  ColumnMappingMode columnMappingMode() const {
+    return columnMappingMode_;
   }
 
   const std::shared_ptr<random::RandomSkipTracker>& randomSkip() const {
@@ -750,35 +802,79 @@ class ReaderOptions : public io::ReaderOptions {
   /// process-wide AsyncDataCache. When enabled, the first reader performs a
   /// speculative tail read and populates the cache; subsequent readers on the
   /// same file initialize from the cache with zero additional IO.
-  bool fileMetadataCacheEnabled() const {
-    return fileMetadataCacheEnabled_;
+  bool cacheMetadata() const {
+    return cacheMetadata_;
   }
 
-  void setFileMetadataCacheEnabled(bool value) {
-    fileMetadataCacheEnabled_ = value;
+  void setCacheMetadata(bool value) {
+    cacheMetadata_ = value;
   }
 
   /// If true, pins parsed metadata objects (e.g., StripeGroup, IndexGroup) in
   /// the reader's metadata cache with strong references so they are never
   /// evicted. This avoids re-reading and re-parsing metadata on every stripe
-  /// access when weak-pointer cache entries would otherwise expire.
-  bool pinFileMetadata() const {
-    return pinFileMetadata_;
+  /// access when weak-pointer cache entries would otherwise expire. Works
+  /// independently of cacheMetadata.
+  bool pinMetadata() const {
+    return pinMetadata_;
   }
 
-  void setPinFileMetadata(bool value) {
-    pinFileMetadata_ = value;
+  void setPinMetadata(bool value) {
+    pinMetadata_ = value;
+  }
+
+  /// If true, caches index data (e.g., cluster index key stream) in the
+  /// async data cache.
+  bool cacheIndex() const {
+    return cacheIndex_;
+  }
+
+  void setCacheIndex(bool value) {
+    cacheIndex_ = value;
+  }
+
+  /// If true, pins parsed index objects in the reader's index cache with
+  /// strong references so they are never evicted. Works independently of
+  /// cacheIndex.
+  bool pinIndex() const {
+    return pinIndex_;
+  }
+
+  void setPinIndex(bool value) {
+    pinIndex_ = value;
+  }
+
+  /// If true, caches data column reads in the async data cache. Default false
+  /// keeps the cache scoped to metadata/index only.
+  bool cacheData() const {
+    return cacheData_;
+  }
+
+  void setCacheData(bool value) {
+    cacheData_ = value;
   }
 
   /// Whether to load and initialize the cluster index during file open.
   /// When true, the cluster index section is preloaded and the structured
-  /// ClusterIndex object is created. Default true.
+  /// ClusterIndex object is created. Default false.
   bool loadClusterIndex() const {
     return loadClusterIndex_;
   }
 
   void setLoadClusterIndex(bool value) {
     loadClusterIndex_ = value;
+  }
+
+  /// Whether to eagerly preload all per-partition metadata and decode all
+  /// per-partition key streams during file open. Only effective when
+  /// loadClusterIndex() is also true. Implies pinning so preloaded chunks
+  /// are not evicted on first lookup. Default false.
+  bool preloadIndex() const {
+    return preloadIndex_;
+  }
+
+  void setPreloadIndex(bool value) {
+    preloadIndex_ = value;
   }
 
   /// Whether to load and initialize the chunk index during file open.
@@ -824,18 +920,24 @@ class ReaderOptions : public io::ReaderOptions {
   uint64_t footerSpeculativeIoSize_{kDefaultFooterSpeculativeIoSize};
   uint64_t filePreloadThreshold_{kDefaultFilePreloadThreshold};
   bool fileColumnNamesReadAsLowerCase_{false};
-  bool useColumnNamesForColumnMapping_{false};
+  ColumnMappingMode columnMappingMode_{ColumnMappingMode::kPosition};
   std::shared_ptr<random::RandomSkipTracker> randomSkip_;
   std::shared_ptr<velox::common::ScanSpec> scanSpec_;
   const tz::TimeZone* sessionTimezone_{nullptr};
   bool adjustTimestampToTimezone_{false};
   bool selectiveNimbleReaderEnabled_{false};
-  bool fileMetadataCacheEnabled_{false};
-  bool pinFileMetadata_{false};
-  bool loadClusterIndex_{true};
+  bool cacheMetadata_{false};
+  bool pinMetadata_{false};
+  bool cacheIndex_{false};
+  bool pinIndex_{false};
+  bool cacheData_{true};
+  bool loadClusterIndex_{false};
+  bool preloadIndex_{false};
   bool loadChunkIndex_{true};
   bool allowEmptyFile_{false};
   bool allowInt32Narrowing_{false};
+  uint64_t parquetFooterMemoryTrackingThreshold_{
+      kDefaultParquetFooterMemoryTrackingThreshold};
 };
 
 struct WriterOptions {
@@ -871,9 +973,8 @@ struct WriterOptions {
 
 // Options for creating a column reader.
 struct ColumnReaderOptions {
-  // Whether to map table field names to file field names using names, not
-  // indices.
-  bool useColumnNamesForColumnMapping_{false};
+  /// How to map table fields to file fields.
+  ColumnMappingMode columnMappingMode_{ColumnMappingMode::kPosition};
 };
 
 ColumnReaderOptions makeColumnReaderOptions(const ReaderOptions& options);
@@ -888,5 +989,18 @@ struct fmt::formatter<facebook::velox::dwio::common::FileFormat>
       const {
     return formatter<std::string_view>::format(
         facebook::velox::dwio::common::toString(fmt), ctx);
+  }
+};
+
+template <>
+struct fmt::formatter<facebook::velox::dwio::common::ColumnMappingMode>
+    : fmt::formatter<std::string_view> {
+  template <typename FormatContext>
+  auto format(
+      facebook::velox::dwio::common::ColumnMappingMode mode,
+      FormatContext& ctx) const {
+    return formatter<std::string_view>::format(
+        facebook::velox::dwio::common::ColumnMappingModeName::toName(mode),
+        ctx);
   }
 };

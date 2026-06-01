@@ -865,13 +865,19 @@ DwrfReader::DwrfReader(
     const ReaderOptions& options,
     std::unique_ptr<dwio::common::BufferedInput> input)
     : readerBase_(std::make_unique<ReaderBase>(options, std::move(input))) {
+  VELOX_CHECK_NE(
+      readerBase_->readerOptions().columnMappingMode(),
+      dwio::common::ColumnMappingMode::kParquetFieldId,
+      "Parquet field ID column mapping is not supported by DWRF.");
+
   // If we are not using column names to map table columns to file columns,
   // then we use indices. In that case we need to ensure the names completely
   // match, because we are still mapping columns by names further down the
   // code. So we rename column names in the file schema to match table schema.
   // We test the options to have 'fileSchema' (actually table schema) as most
   // of the unit tests fail to provide it.
-  if ((!readerBase_->readerOptions().useColumnNamesForColumnMapping()) &&
+  if (readerBase_->readerOptions().columnMappingMode() !=
+          dwio::common::ColumnMappingMode::kName &&
       (readerBase_->readerOptions().fileSchema() != nullptr)) {
     updateColumnNamesFromTableSchema();
   }

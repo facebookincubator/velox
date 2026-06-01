@@ -97,8 +97,8 @@ TEST_F(DirectBufferedInputTest, reset) {
     auto readFile = std::make_shared<InMemoryReadFile>(content);
 
     io::ReaderOptions readerOptions(pool_.get());
-    readerOptions.setDataIoStats(dataIoStats_.get());
-    readerOptions.setMetadataIoStats(metadataIoStats_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
     readerOptions.setLoadQuantum(1 << 20);
 
     auto& ids = fileIds();
@@ -224,8 +224,8 @@ TEST_F(DirectBufferedInputTest, readAfterReset) {
     auto readFile = std::make_shared<InMemoryReadFile>(content);
 
     io::ReaderOptions readerOptions(pool_.get());
-    readerOptions.setDataIoStats(dataIoStats_.get());
-    readerOptions.setMetadataIoStats(metadataIoStats_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
     readerOptions.setLoadQuantum(1 << 20);
 
     auto& ids = fileIds();
@@ -304,8 +304,8 @@ DEBUG_ONLY_TEST_F(DirectBufferedInputTest, resetInputWithBeforeLoading) {
     auto readFile = std::make_shared<InMemoryReadFile>(content);
 
     io::ReaderOptions readerOptions(pool_.get());
-    readerOptions.setDataIoStats(dataIoStats_.get());
-    readerOptions.setMetadataIoStats(metadataIoStats_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
     readerOptions.setLoadQuantum(1 << 20);
 
     auto& ids = fileIds();
@@ -411,8 +411,8 @@ DEBUG_ONLY_TEST_F(DirectBufferedInputTest, resetInputWithAfterLoading) {
     auto readFile = std::make_shared<InMemoryReadFile>(content);
 
     io::ReaderOptions readerOptions(pool_.get());
-    readerOptions.setDataIoStats(dataIoStats_.get());
-    readerOptions.setMetadataIoStats(metadataIoStats_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
     readerOptions.setLoadQuantum(1 << 20);
 
     auto& ids = fileIds();
@@ -504,8 +504,8 @@ TEST_F(DirectBufferedInputTest, preloadCalledTwice) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto& ids = fileIds();
   StringIdLease fileId(ids, "preloadTwice");
   StringIdLease groupId(ids, "preloadTwiceGroup");
@@ -531,8 +531,8 @@ TEST_F(DirectBufferedInputTest, isBufferedWithPreload) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto& ids = fileIds();
   StringIdLease fileId(ids, "isBufferedPreload");
   StringIdLease groupId(ids, "isBufferedPreloadGroup");
@@ -564,8 +564,8 @@ TEST_F(DirectBufferedInputTest, enqueueSkipsRequestsWhenPreloaded) {
   auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto& ids = fileIds();
   StringIdLease fileId(ids, "enqueueSkipsRequests");
   StringIdLease groupId(ids, "enqueueSkipsRequestsGroup");
@@ -610,8 +610,8 @@ TEST_F(DirectBufferedInputTest, preloadAfterEnqueue) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto& ids = fileIds();
   StringIdLease fileId(ids, "preloadAfterEnqueue");
   StringIdLease groupId(ids, "preloadAfterEnqueueGroup");
@@ -637,8 +637,8 @@ TEST_F(DirectBufferedInputTest, preloadedDataWithoutPreload) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto& ids = fileIds();
   StringIdLease fileId(ids, "preloadedDataNoPreload");
   StringIdLease groupId(ids, "preloadedDataNoPreloadGroup");
@@ -663,8 +663,8 @@ TEST_F(DirectBufferedInputTest, preloadedDataOffsetOutOfRange) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto& ids = fileIds();
   StringIdLease fileId(ids, "preloadedDataOOR");
   StringIdLease groupId(ids, "preloadedDataOORGroup");
@@ -712,8 +712,8 @@ TEST_F(DirectBufferedInputTest, preload) {
     auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
 
     io::ReaderOptions readerOptions(pool_.get());
-    readerOptions.setDataIoStats(dataIoStats_.get());
-    readerOptions.setMetadataIoStats(metadataIoStats_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
     readerOptions.setLoadQuantum(1 << 20);
 
     auto& ids = fileIds();
@@ -823,8 +823,8 @@ TEST_F(DirectBufferedInputTest, preloadedData) {
     auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
 
     io::ReaderOptions readerOptions(pool_.get());
-    readerOptions.setDataIoStats(dataIoStats_.get());
-    readerOptions.setMetadataIoStats(metadataIoStats_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
     auto& ids = fileIds();
     StringIdLease fileId(
         ids,
@@ -889,8 +889,8 @@ TEST_F(DirectBufferedInputTest, hasCache) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
 
   auto& ids = fileIds();
   StringIdLease fileId(ids, "testFile");
@@ -913,6 +913,71 @@ TEST_F(DirectBufferedInputTest, hasCache) {
       "cacheRegion requires a backing cache");
   VELOX_ASSERT_THROW(
       input.findCachedRegion(0), "findCachedRegion requires a backing cache");
+}
+
+TEST_F(DirectBufferedInputTest, readGapTracking) {
+  constexpr int32_t kContentSize = 1 << 20; // 1MB
+  std::string content(kContentSize, 'x');
+  auto readFile = std::make_shared<InMemoryReadFile>(content);
+  auto& ids = fileIds();
+
+  struct TestCase {
+    std::vector<common::Region> regions;
+    uint64_t expectedGapCount;
+    uint64_t expectedGapSum;
+    uint64_t expectedGapMin;
+    uint64_t expectedGapMax;
+    std::string debugString() const {
+      return fmt::format(
+          "regions {}, expectedGapCount {}", regions.size(), expectedGapCount);
+    }
+  };
+
+  std::vector<TestCase> testCases = {
+      // Scattered regions: gaps of 9'900 and 39'900 bytes.
+      {{{0, 100}, {10'000, 100}, {50'000, 100}}, 2, 49'800, 9'900, 39'900},
+      // Contiguous regions: no gaps.
+      {{{0, 100}, {100, 100}, {200, 100}},
+       0,
+       0,
+       std::numeric_limits<uint64_t>::max(),
+       0},
+  };
+
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(testCase.debugString());
+
+    auto ioStats = std::make_shared<IoStatistics>();
+    io::ReaderOptions readerOptions(pool_.get());
+    readerOptions.setDataIoStats(ioStats);
+    readerOptions.setMetadataIoStats(std::make_shared<IoStatistics>());
+    readerOptions.setMaxCoalesceDistance(0);
+
+    StringIdLease fileId(
+        ids, fmt::format("file_{}", testCase.expectedGapCount));
+    StringIdLease groupId(
+        ids, fmt::format("group_{}", testCase.expectedGapCount));
+    DirectBufferedInput input(
+        readFile,
+        MetricsLog::voidLog(),
+        std::move(fileId),
+        tracker_,
+        std::move(groupId),
+        ioStats,
+        nullptr,
+        executor_.get(),
+        readerOptions);
+
+    for (const auto& region : testCase.regions) {
+      input.enqueue(region, nullptr);
+    }
+    input.load(LogType::TEST);
+
+    EXPECT_EQ(ioStats->readGap().count(), testCase.expectedGapCount);
+    EXPECT_EQ(ioStats->readGap().sum(), testCase.expectedGapSum);
+    EXPECT_EQ(ioStats->readGap().min(), testCase.expectedGapMin);
+    EXPECT_EQ(ioStats->readGap().max(), testCase.expectedGapMax);
+  }
 }
 
 } // namespace

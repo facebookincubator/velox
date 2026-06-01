@@ -677,8 +677,7 @@ bool MmapAllocator::SizeClass::allocateLocked(
 
 namespace {
 bool isAllZero(xsimd::batch<uint64_t> bits) {
-  return simd::allSetBitMask<uint64_t>() ==
-      simd::toBitMask(bits == xsimd::broadcast<uint64_t>(0));
+  return simd::all(bits == xsimd::broadcast<uint64_t>(0));
 }
 } // namespace
 

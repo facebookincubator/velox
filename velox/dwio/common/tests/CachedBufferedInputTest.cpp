@@ -150,8 +150,8 @@ TEST_F(CachedBufferedInputTest, reset) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setLoadQuantum(1 << 20);
 
   auto& ids = fileIds();
@@ -289,8 +289,8 @@ TEST_F(CachedBufferedInputTest, readAfterReset) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setLoadQuantum(1 << 20);
 
   auto& ids = fileIds();
@@ -358,8 +358,8 @@ DEBUG_ONLY_TEST_F(CachedBufferedInputTest, resetInputWithBeforeLoading) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setLoadQuantum(1 << 20);
 
   auto& ids = fileIds();
@@ -456,8 +456,8 @@ DEBUG_ONLY_TEST_F(CachedBufferedInputTest, resetInputWithAfterLoading) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setLoadQuantum(1 << 20);
 
   auto& ids = fileIds();
@@ -554,8 +554,8 @@ TEST_F(CachedBufferedInputTest, hasCache) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto& ids = fileIds();
   StringIdLease fileId(ids, "testFile");
   StringIdLease groupId(ids, "testGroup");
@@ -587,8 +587,8 @@ TEST_P(CacheRegionTest, cacheAndFind) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto& ids = fileIds();
   StringIdLease fileId(ids, "testFile_cacheAndFind");
   StringIdLease groupId(ids, "testGroup_cacheAndFind");
@@ -656,8 +656,8 @@ TEST_P(CacheRegionTest, smallEntry) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto& ids = fileIds();
   StringIdLease fileId(ids, "testFile_smallEntry");
   StringIdLease groupId(ids, "testGroup_smallEntry");
@@ -727,8 +727,8 @@ TEST_P(CacheRegionTest, largeEntry) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto& ids = fileIds();
   StringIdLease fileId(ids, "testFile_largeEntry");
   StringIdLease groupId(ids, "testGroup_largeEntry");
@@ -792,8 +792,8 @@ TEST_P(CacheRegionTest, miss) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto& ids = fileIds();
   StringIdLease fileId(ids, "testFile_miss");
   StringIdLease groupId(ids, "testGroup_miss");
@@ -825,8 +825,8 @@ TEST_P(CacheRegionTest, pinKeepsDataAlive) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto& ids = fileIds();
   StringIdLease fileId(ids, "testFile_pinAlive");
   StringIdLease groupId(ids, "testGroup_pinAlive");
@@ -894,8 +894,8 @@ TEST_F(CachedBufferedInputTest, findCachedRegionExclusiveWithWait) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto& ids = fileIds();
   const std::string fileName = "testFile_findWait";
   StringIdLease fileId(ids, fileName);
@@ -978,8 +978,8 @@ TEST_F(CachedBufferedInputTest, cacheRegionSkipsOngoingInsert) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto& ids = fileIds();
   const std::string fileName = "testFile_skipInsert";
   StringIdLease fileId(ids, fileName);
@@ -1044,8 +1044,8 @@ TEST_F(CachedBufferedInputTest, preloadCalledTwice) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto& ids = fileIds();
   StringIdLease fileId(ids, "preloadTwice");
   StringIdLease groupId(ids, "preloadTwiceGroup");
@@ -1072,8 +1072,8 @@ TEST_F(CachedBufferedInputTest, isBufferedWithPreload) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto& ids = fileIds();
   StringIdLease fileId(ids, "isBufferedPreload");
   StringIdLease groupId(ids, "isBufferedPreloadGroup");
@@ -1106,8 +1106,8 @@ TEST_F(CachedBufferedInputTest, enqueueSkipsRequestsWhenPreloaded) {
   auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto& ids = fileIds();
   StringIdLease fileId(ids, "enqueueSkipsRequests");
   StringIdLease groupId(ids, "enqueueSkipsRequestsGroup");
@@ -1158,8 +1158,8 @@ TEST_F(CachedBufferedInputTest, readSetsPreloadedPinWhenPreloaded) {
   auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setLoadQuantum(1 << 20);
 
   auto& ids = fileIds();
@@ -1202,8 +1202,8 @@ TEST_F(CachedBufferedInputTest, preloadAfterEnqueue) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   auto& ids = fileIds();
   StringIdLease fileId(ids, "preloadAfterEnqueue");
   StringIdLease groupId(ids, "preloadAfterEnqueueGroup");
@@ -1239,8 +1239,8 @@ TEST_F(CachedBufferedInputTest, preloadedStreamSkipsEviction) {
   auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setCacheable(false);
   readerOptions.setLoadQuantum(1 << 20);
 
@@ -1304,8 +1304,8 @@ TEST_F(CachedBufferedInputTest, preloadRespectsNotCacheable) {
   auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setCacheable(false);
   readerOptions.setLoadQuantum(1 << 20);
 
@@ -1352,8 +1352,8 @@ TEST_F(CachedBufferedInputTest, preloadRespectsCacheable) {
   auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setCacheable(true);
   readerOptions.setLoadQuantum(1 << 20);
 
@@ -1412,8 +1412,8 @@ TEST_F(CachedBufferedInputTest, preload) {
     auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
 
     io::ReaderOptions readerOptions(pool_.get());
-    readerOptions.setDataIoStats(dataIoStats_.get());
-    readerOptions.setMetadataIoStats(metadataIoStats_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
     readerOptions.setLoadQuantum(1 << 20);
 
     auto& ids = fileIds();
@@ -1495,8 +1495,8 @@ TEST_F(CachedBufferedInputTest, preloadCacheSharing) {
   auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setLoadQuantum(1 << 20);
 
   auto& ids = fileIds();
@@ -1580,8 +1580,8 @@ TEST_F(CachedBufferedInputTest, prefetchScope) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
 
   auto& ids = fileIds();
   StringIdLease fileId(ids, "testFile");
@@ -1644,8 +1644,8 @@ TEST_F(CachedBufferedInputTest, cloneNonCacheable) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setLoadQuantum(1 << 20);
 
   auto& ids = fileIds();
@@ -1728,6 +1728,72 @@ TEST_F(CachedBufferedInputTest, cloneNonCacheable) {
   auto statsAfterCacheable = cache_->refreshStats();
   EXPECT_GT(statsAfterCacheable.numEntries, 0);
   EXPECT_FALSE(cache_->testingIsEvictable(cacheKey2));
+}
+
+TEST_F(CachedBufferedInputTest, readGapTracking) {
+  constexpr int32_t kContentSize = 1 << 20; // 1MB
+  std::string content(kContentSize, 'x');
+  auto readFile = std::make_shared<InMemoryReadFile>(content);
+  auto& ids = fileIds();
+
+  struct TestCase {
+    std::vector<common::Region> regions;
+    uint64_t expectedGapCount;
+    uint64_t expectedGapSum;
+    uint64_t expectedGapMin;
+    uint64_t expectedGapMax;
+    std::string debugString() const {
+      return fmt::format(
+          "regions {}, expectedGapCount {}", regions.size(), expectedGapCount);
+    }
+  };
+
+  std::vector<TestCase> testCases = {
+      // Scattered regions: gaps of 9'900 and 39'900 bytes.
+      {{{0, 100}, {10'000, 100}, {50'000, 100}}, 2, 49'800, 9'900, 39'900},
+      // Contiguous regions: no gaps.
+      {{{0, 100}, {100, 100}, {200, 100}},
+       0,
+       0,
+       std::numeric_limits<uint64_t>::max(),
+       0},
+  };
+
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(testCase.debugString());
+
+    auto ioStats = std::make_shared<IoStatistics>();
+    io::ReaderOptions readerOptions(pool_.get());
+    readerOptions.setDataIoStats(ioStats);
+    readerOptions.setMetadataIoStats(std::make_shared<IoStatistics>());
+    readerOptions.setMaxCoalesceDistance(0);
+
+    StringIdLease fileId(
+        ids, fmt::format("file_{}", testCase.expectedGapCount));
+    StringIdLease groupId(
+        ids, fmt::format("group_{}", testCase.expectedGapCount));
+    CachedBufferedInput input(
+        readFile,
+        MetricsLog::voidLog(),
+        std::move(fileId),
+        cache_.get(),
+        tracker_,
+        std::move(groupId),
+        ioStats,
+        nullptr,
+        executor_.get(),
+        readerOptions);
+
+    for (const auto& region : testCase.regions) {
+      input.enqueue(region, nullptr);
+    }
+    input.load(LogType::TEST);
+
+    EXPECT_EQ(ioStats->readGap().count(), testCase.expectedGapCount);
+    EXPECT_EQ(ioStats->readGap().sum(), testCase.expectedGapSum);
+    EXPECT_EQ(ioStats->readGap().min(), testCase.expectedGapMin);
+    EXPECT_EQ(ioStats->readGap().max(), testCase.expectedGapMax);
+  }
 }
 
 } // namespace

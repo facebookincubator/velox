@@ -54,29 +54,32 @@ void configureReaderOptions(
   readerOptions.setFileColumnNamesReadAsLowerCase(
       fileConfig->isFileColumnNamesReadAsLowerCase(sessionProperties));
   readerOptions.setAllowEmptyFile(true);
-  bool useColumnNamesForColumnMapping = false;
+  auto columnMappingMode = dwio::common::ColumnMappingMode::kPosition;
   switch (fileSplit->fileFormat) {
     case dwio::common::FileFormat::DWRF:
     case dwio::common::FileFormat::ORC: {
-      useColumnNamesForColumnMapping =
-          fileConfig->isOrcUseColumnNames(sessionProperties);
+      columnMappingMode = fileConfig->isOrcUseColumnNames(sessionProperties)
+          ? dwio::common::ColumnMappingMode::kName
+          : dwio::common::ColumnMappingMode::kPosition;
       break;
     }
     case dwio::common::FileFormat::PARQUET: {
-      useColumnNamesForColumnMapping =
-          fileConfig->isParquetUseColumnNames(sessionProperties);
+      columnMappingMode = fileConfig->isParquetUseColumnNames(sessionProperties)
+          ? dwio::common::ColumnMappingMode::kName
+          : dwio::common::ColumnMappingMode::kPosition;
       readerOptions.setAllowInt32Narrowing(
           fileConfig->allowInt32Narrowing(sessionProperties));
       break;
     }
     default:
-      useColumnNamesForColumnMapping = false;
+      columnMappingMode = dwio::common::ColumnMappingMode::kPosition;
   }
 
-  readerOptions.setUseColumnNamesForColumnMapping(
-      useColumnNamesForColumnMapping);
+  readerOptions.setColumnMappingMode(columnMappingMode);
   readerOptions.setFileSchema(fileSchema);
   readerOptions.setFilePreloadThreshold(fileConfig->filePreloadThreshold());
+  readerOptions.setParquetFooterMemoryTrackingThreshold(
+      fileConfig->parquetFooterMemoryTrackingThreshold(sessionProperties));
   readerOptions.setPrefetchRowGroups(fileConfig->prefetchRowGroups());
   readerOptions.setCacheable(fileSplit->cacheable);
   const auto& sessionTzName = connectorQueryCtx->sessionTimezone();
@@ -97,10 +100,10 @@ void configureReaderOptions(
     readerOptions.setSelectiveNimbleReaderEnabled(
         connectorQueryCtx->selectiveNimbleReaderEnabled());
   }
-  readerOptions.setFileMetadataCacheEnabled(
-      fileConfig->fileMetadataCacheEnabled(sessionProperties));
-  readerOptions.setPinFileMetadata(
-      fileConfig->pinFileMetadata(sessionProperties));
+  readerOptions.setCacheMetadata(fileConfig->cacheMetadata(sessionProperties));
+  readerOptions.setPinMetadata(fileConfig->pinMetadata(sessionProperties));
+  readerOptions.setCacheIndex(fileConfig->cacheIndex(sessionProperties));
+  readerOptions.setPinIndex(fileConfig->pinIndex(sessionProperties));
 
   // Set footer speculative IO size based on file format.
   switch (fileSplit->fileFormat) {
@@ -205,6 +208,7 @@ bool applyPartitionFilter(
       return applyFilter(*filter, folly::to<bool>(partitionValue));
     }
     case TypeKind::TIMESTAMP: {
+      VELOX_DCHECK(type->equivalent(*TIMESTAMP()));
       auto result = util::fromTimestampString(
           StringView(partitionValue), util::TimestampParseMode::kPrestoCast);
       VELOX_CHECK(!result.hasError());

@@ -17,60 +17,16 @@
 #pragma once
 
 #include "velox/common/base/BitUtil.h"
+#include "velox/common/base/Nulls.h"
 #include "velox/dwio/parquet/reader/DeltaBpDecoder.h"
 
 namespace facebook::velox::parquet {
 
-// DeltaByteArrayDecoder is adapted from Apache Arrow:
-// https://github.com/apache/arrow/blob/apache-arrow-15.0.0/cpp/src/parquet/encoding.cc#L2758-L2889
-class DeltaLengthByteArrayDecoder {
+class DeltaByteArrayDecoderBase {
  public:
-  explicit DeltaLengthByteArrayDecoder(const char* start) {
-    lengthDecoder_ = std::make_unique<DeltaBpDecoder>(start);
-    decodeLengths();
-    bufferStart_ = lengthDecoder_->bufferStart();
-  }
+  virtual ~DeltaByteArrayDecoderBase() = default;
 
-  std::string_view readString() {
-    const int64_t length = bufferedLength_[lengthIdx_++];
-    VELOX_CHECK_GE(length, 0, "negative string delta length");
-    bufferStart_ += length;
-    return std::string_view(bufferStart_ - length, length);
-  }
-
- private:
-  void decodeLengths() {
-    int64_t numLength = lengthDecoder_->validValuesCount();
-    bufferedLength_.resize(numLength);
-    lengthDecoder_->readValues<uint32_t>(bufferedLength_.data(), numLength);
-
-    lengthIdx_ = 0;
-    numValidValues_ = numLength;
-  }
-
-  const char* bufferStart_;
-  std::unique_ptr<DeltaBpDecoder> lengthDecoder_;
-  int32_t numValidValues_{0};
-  uint32_t lengthIdx_{0};
-  std::vector<uint32_t> bufferedLength_;
-};
-
-// DeltaByteArrayDecoder is adapted from Apache Arrow:
-// https://github.com/apache/arrow/blob/apache-arrow-15.0.0/cpp/src/parquet/encoding.cc#L3301-L3545
-class DeltaByteArrayDecoder {
- public:
-  explicit DeltaByteArrayDecoder(const char* start) {
-    prefixLenDecoder_ = std::make_unique<DeltaBpDecoder>(start);
-    int64_t numPrefix = prefixLenDecoder_->validValuesCount();
-    bufferedPrefixLength_.resize(numPrefix);
-    prefixLenDecoder_->readValues<uint32_t>(
-        bufferedPrefixLength_.data(), numPrefix);
-    prefixLenOffset_ = 0;
-    numValidValues_ = numPrefix;
-
-    suffixDecoder_ = std::make_unique<DeltaLengthByteArrayDecoder>(
-        prefixLenDecoder_->bufferStart());
-  }
+  virtual std::string_view readString() = 0;
 
   void skip(uint64_t numValues) {
     skip<false>(numValues, 0, nullptr);
@@ -120,8 +76,61 @@ class DeltaByteArrayDecoder {
       }
     }
   }
+};
 
-  std::string_view readString() {
+// DeltaByteArrayDecoder is adapted from Apache Arrow:
+// https://github.com/apache/arrow/blob/apache-arrow-15.0.0/cpp/src/parquet/encoding.cc#L2758-L2889
+class DeltaLengthByteArrayDecoder : public DeltaByteArrayDecoderBase {
+ public:
+  explicit DeltaLengthByteArrayDecoder(const char* start) {
+    lengthDecoder_ = std::make_unique<DeltaBpDecoder>(start);
+    decodeLengths();
+    bufferStart_ = lengthDecoder_->bufferStart();
+  }
+
+  std::string_view readString() override {
+    const int64_t length = bufferedLength_[lengthIdx_++];
+    VELOX_CHECK_GE(length, 0, "negative string delta length");
+    bufferStart_ += length;
+    return std::string_view(bufferStart_ - length, length);
+  }
+
+ private:
+  void decodeLengths() {
+    int64_t numLength = lengthDecoder_->validValuesCount();
+    bufferedLength_.resize(numLength);
+    lengthDecoder_->readValues<uint32_t>(
+        bufferedLength_.data(), static_cast<int32_t>(numLength));
+
+    lengthIdx_ = 0;
+    numValidValues_ = static_cast<int32_t>(numLength);
+  }
+
+  const char* bufferStart_;
+  std::unique_ptr<DeltaBpDecoder> lengthDecoder_;
+  int32_t numValidValues_{0};
+  uint32_t lengthIdx_{0};
+  std::vector<uint32_t> bufferedLength_;
+};
+
+// DeltaByteArrayDecoder is adapted from Apache Arrow:
+// https://github.com/apache/arrow/blob/apache-arrow-15.0.0/cpp/src/parquet/encoding.cc#L3301-L3545
+class DeltaByteArrayDecoder : public DeltaByteArrayDecoderBase {
+ public:
+  explicit DeltaByteArrayDecoder(const char* start) {
+    prefixLenDecoder_ = std::make_unique<DeltaBpDecoder>(start);
+    int64_t numPrefix = prefixLenDecoder_->validValuesCount();
+    bufferedPrefixLength_.resize(numPrefix);
+    prefixLenDecoder_->readValues<uint32_t>(
+        bufferedPrefixLength_.data(), static_cast<int32_t>(numPrefix));
+    prefixLenOffset_ = 0;
+    numValidValues_ = static_cast<int32_t>(numPrefix);
+
+    suffixDecoder_ = std::make_unique<DeltaLengthByteArrayDecoder>(
+        prefixLenDecoder_->bufferStart());
+  }
+
+  std::string_view readString() override {
     auto suffix = suffixDecoder_->readString();
     bool isFirstRun = (prefixLenOffset_ == 0);
     const int64_t prefixLength = bufferedPrefixLength_[prefixLenOffset_++];

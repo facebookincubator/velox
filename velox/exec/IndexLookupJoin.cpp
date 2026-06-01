@@ -302,13 +302,16 @@ IndexLookupJoin::IndexLookupJoin(
           operatorId,
           joinNode->id(),
           OperatorType::kIndexLookupJoin),
-      splitOutput_{driverCtx->queryConfig().indexLookupJoinSplitOutput()},
+      splitOutput_{
+          (joinNode->splitOutput().has_value() &&
+           joinNode->splitOutput().value()) ||
+          (!joinNode->splitOutput().has_value() &&
+           driverCtx->queryConfig().indexLookupJoinSplitOutput())},
       // TODO: support to update output batch size with output size stats during
       // the lookup processing.
       outputBatchSize_{
-          driverCtx->queryConfig().indexLookupJoinSplitOutput()
-              ? outputBatchRows()
-              : std::numeric_limits<vector_size_t>::max()},
+          splitOutput_ ? outputBatchRows()
+                       : std::numeric_limits<vector_size_t>::max()},
       joinType_{joinNode->joinType()},
       hasMarker_(joinNode->hasMarker()),
       probeType_{joinNode->sources()[0]->outputType()},

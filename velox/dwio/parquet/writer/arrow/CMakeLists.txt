@@ -37,6 +37,7 @@ velox_add_library(
   Properties.cpp
   Schema.cpp
   Statistics.cpp
+  StringTruncation.cpp
   Types.cpp
   Writer.cpp
   HEADERS
@@ -59,6 +60,7 @@ velox_add_library(
   Schema.h
   SchemaInternal.h
   Statistics.h
+  StringTruncation.h
   ThriftInternal.h
   Types.h
   Writer.h

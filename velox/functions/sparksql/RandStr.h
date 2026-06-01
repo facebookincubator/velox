@@ -20,6 +20,7 @@
 #include "velox/core/QueryConfig.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/lib/XORShiftRandom.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 
 namespace facebook::velox::functions::sparksql {
 
@@ -53,7 +54,8 @@ struct RandStrFunction {
     VELOX_USER_CHECK_GE(
         static_cast<int64_t>(*length), 0, "length must be non-negative");
     length_ = static_cast<int32_t>(*length);
-    generator_.setSeed(static_cast<int64_t>(*seed) + config.sparkPartitionId());
+    generator_.setSeed(
+        static_cast<int64_t>(*seed) + SparkQueryConfig{config}.partitionId());
   }
 
   /// Uses the seeded XORShift generator for Spark-compatible reproducibility.

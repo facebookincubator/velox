@@ -795,6 +795,9 @@ TEST(DecimalTest, castFromStringError) {
       "9e", 12, 2, "Value is not a number. The exponent part is empty.");
   testCastFromString<int64_t>(
       "09{xi+yD", 12, 2, "Value is not a number. Chars are invalid.");
+
+  // Large negative exponent string.
+  testCastFromString<int128_t>("6E-120", 38, 0, "Value too large.");
 }
 } // namespace
 } // namespace facebook::velox

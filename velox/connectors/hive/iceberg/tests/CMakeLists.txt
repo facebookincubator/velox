@@ -63,6 +63,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     velox_hive_iceberg_insert_test
     IcebergConnectorTest.cpp
     IcebergInsertTest.cpp
+    IcebergParquetStatsTest.cpp
     IcebergTestBase.cpp
     Main.cpp
     PartitionNameTest.cpp
@@ -156,6 +157,18 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     velox_dwio_dwrf_writer
     velox_dwio_parquet_reader
     velox_dwio_parquet_writer
+    GTest::gtest
+    GTest::gtest_main
+  )
+
+  add_executable(velox_hive_writer_options_adapter_test WriterOptionsAdapterTest.cpp)
+  add_test(velox_hive_writer_options_adapter_test velox_hive_writer_options_adapter_test)
+
+  target_link_libraries(
+    velox_hive_writer_options_adapter_test
+    velox_hive_connector
+    velox_hive_iceberg_splitreader
+    velox_dwio_common_exception
     GTest::gtest
     GTest::gtest_main
   )

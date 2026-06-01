@@ -29,9 +29,9 @@ add_executable(velox_cudf_tpcds_benchmark CudfTpcdsBenchmark.cpp)
 
 target_link_libraries(
   velox_cudf_tpcds_benchmark
-  velox_tpcds_benchmark_lib
   velox_cudf_exec
   velox_cudf_exec_test_lib
+  velox_tpcds_benchmark_lib
 )
 
 # --- other benchmarks ---
@@ -41,9 +41,9 @@ add_executable(velox_cudf_interop_benchmark CudfInteropBenchmark.cpp)
 target_link_libraries(
   velox_cudf_interop_benchmark
   velox_cudf_exec
-  velox_vector
   velox_memory
+  velox_vector
+  velox_vector_fuzzer
   Folly::folly
   Folly::follybenchmark
-  velox_vector_fuzzer
 )

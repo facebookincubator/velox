@@ -20,6 +20,7 @@
 
 #include "velox/core/QueryConfig.h"
 #include "velox/functions/Macros.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 
 namespace facebook::velox::functions::sparksql {
 
@@ -36,7 +37,7 @@ struct UuidFunction {
       const core::QueryConfig& config,
       const int64_t* seed) {
     VELOX_CHECK_NOT_NULL(seed, "seed argument must be constant");
-    const int32_t partitionId = config.sparkPartitionId();
+    const int32_t partitionId = SparkQueryConfig{config}.partitionId();
     generator_.seed((*seed) + partitionId);
   }
 
