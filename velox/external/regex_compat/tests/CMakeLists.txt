@@ -2,8 +2,9 @@
 # (Apache-2.0)
 
 # Fetch OpenJDK 17 regex corpus files at configure time.  Pinned to
-# jdk-17.0.13-ga (SHA256 verified).  All three are processed by
-# OpenJDK's own RegExTest.processFile.
+# jdk-17.0.13-ga (SHA256 verified).  TestCases/BMP/Supplementary are
+# processed by OpenJDK's own RegExTest.processFile; GraphemeTestCases uses the
+# Unicode GraphemeBreakTest format and has its own parser.
 set(_openjdk_corpus_base
   "https://raw.githubusercontent.com/openjdk/jdk17u/jdk-17.0.13-ga/test/jdk/java/util/regex")
 set(_openjdk_corpus_dir "${CMAKE_CURRENT_BINARY_DIR}/openjdk_corpus")
@@ -32,6 +33,8 @@ _fetch_corpus_file(BMPTestCases.txt
   6dbdfc4c64797831b798ad5d4b546f8cbfb2e76036018fe11013f168fc4f11f2)
 _fetch_corpus_file(SupplementaryTestCases.txt
   96a56b7e3d0732f6cb30d307c9025517fdf515732d2ce1ae9e5496e30367a019)
+_fetch_corpus_file(GraphemeTestCases.txt
+  eda68465fe85d88d1c37a6411d1fe714fc5a5de3397bd73b1c10abb612722562)
 
 add_executable(velox_regex_compat_test
   TestMain.cpp
