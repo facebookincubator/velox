@@ -20,6 +20,8 @@
 //
 #include "velox/functions/lib/java_pcre2_translator/PropertyMap.h"
 
+#include "velox/functions/lib/java_pcre2_translator/JdkPropertyExpander.h"
+
 #include <cctype>
 #include <unordered_map>
 
@@ -29,28 +31,16 @@ namespace {
 
 const std::unordered_map<std::string, std::string>& table() {
   static const std::unordered_map<std::string, std::string> kTable{
-      // --- Block properties with surrogate-range expansion ---
-      // PCRE2_UTF rejects code points in the surrogate range; we still emit
-      // the explicit hex ranges so the syntax is at least accepted by the
-      // parser.  Users must disable UTF mode manually if PCRE2 still rejects
-      // these.
-      {"InHIGH_SURROGATES", "[\\x{D800}-\\x{DB7F}]"},
-      {"InHIGH_PRIVATE_USE_SURROGATES", "[\\x{DB80}-\\x{DBFF}]"},
-      {"InLOW_SURROGATES", "[\\x{DC00}-\\x{DFFF}]"},
-
       // --- Short alias: L1 (JDK's Latin-1 shorthand) ---
       {"L1", "[\\x{00}-\\x{FF}]"},
 
       // --- \p{javaXxx} Java-specific properties ---
-      {"javaLowerCase", "Ll"},
-      {"javaUpperCase", "Lu"},
       {"javaTitleCase", "Lt"},
       {"javaDigit", "Nd"},
       {"javaLetter", "L"},
       {"javaLetterOrDigit", "[\\p{L}\\p{Nd}]"},
       {"javaAlphabetic", "Alphabetic"},
       {"javaIdeographic", "Ideographic"},
-      {"javaSpaceChar", "Zs"},
       {"javaMirrored", "Bidi_Mirrored"},
       {"javaDefined", "\\P{Cn}"},
       {"javaISOControl", "[\\x00-\\x1F\\x{7F}-\\x{9F}]"},
@@ -116,6 +106,51 @@ std::optional<std::string> resolveOrPass(std::string_view value) {
   return std::string(value);
 }
 
+std::string camelCaseToUnderscores(std::string_view s);
+
+std::string upperBlockKey(std::string_view value) {
+  std::string out(value);
+  for (char& c : out) {
+    if (c == ' ') {
+      c = '_';
+    } else {
+      c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    }
+  }
+  return out;
+}
+
+std::string normalizedBlockKey(std::string_view value) {
+  std::string out;
+  out.reserve(value.size());
+  for (char c : value) {
+    const auto uc = static_cast<unsigned char>(c);
+    if (c == '_' || c == '-' || std::isspace(uc)) {
+      continue;
+    }
+    out.push_back(static_cast<char>(std::toupper(uc)));
+  }
+  return out;
+}
+
+std::string resolveBlock(std::string_view blockName) {
+  const std::string upper = upperBlockKey(blockName);
+  if (upper == "HIGH_SURROGATES" || upper == "HIGH_PRIVATE_USE_SURROGATES" ||
+      upper == "LOW_SURROGATES") {
+    return std::string(PropertyMap::kNeverMatch);
+  }
+  const std::string normalized = normalizedBlockKey(blockName);
+  if (normalized == "HIGHSURROGATES" ||
+      normalized == "HIGHPRIVATEUSESURROGATES" ||
+      normalized == "LOWSURROGATES") {
+    return std::string(PropertyMap::kNeverMatch);
+  }
+  if (auto materialized = JdkPropertyExpander::materializeUnicodeBlock(blockName)) {
+    return *materialized;
+  }
+  return camelCaseToUnderscores(blockName);
+}
+
 // Inserts an `_` between every lowercase→uppercase boundary in a CamelCase
 // string.  E.g. `BasicLatin` → `Basic_Latin`.  Returns `s` unchanged when
 // the input already contains an underscore.
@@ -151,9 +186,14 @@ std::optional<std::string> PropertyMap::apply(std::string_view name) {
       return resolveOrPass(value);
     }
     if (key == "blk" || key == "block") {
-      return resolveOrPass(std::string("In") + std::string(value));
+      return resolveBlock(value);
     }
     return std::nullopt;
+  }
+
+  if (name == "javaLowerCase" || name == "javaUpperCase" ||
+      name == "javaSpaceChar") {
+    return JdkPropertyExpander::materializeJavaProperty(name);
   }
 
   // 1. Exact table match.
@@ -178,7 +218,7 @@ std::optional<std::string> PropertyMap::apply(std::string_view name) {
   //    boundaries so PCRE2's block-name lookup succeeds.  Note that
   //    ALL_CAPS_WITH_UNDERSCORES block names were already handled in step 1.
   if (name.size() > 2 && name[0] == 'I' && name[1] == 'n') {
-    return camelCaseToUnderscores(name.substr(2));
+    return resolveBlock(name.substr(2));
   }
 
   // 4. No rewrite.

@@ -170,11 +170,23 @@ std::string renderWithIntersection(const ClassNode& inner, bool negated) {
 } // namespace
 
 std::string ClassRenderer::render(const ClassNode& node) {
+  return renderWithSignal(node).text;
+}
+
+ClassRenderer::RenderResult ClassRenderer::renderWithSignal(const ClassNode& node) {
   const bool negated = node.is<Negated>();
   const ClassNode& inner = negated ? *node.getIf<Negated>()->child : node;
 
   if (containsIntersection(inner)) {
-    return renderWithIntersection(inner, negated);
+    auto rendered = renderWithIntersection(inner, negated);
+    return {rendered, rendered.find("&&") != std::string::npos};
+  }
+
+  if (auto rs = Evaluator::tryToRangeSet(inner)) {
+    RangeSet effective = negated ? rs->complement() : *rs;
+    if (effective.isEmpty()) {
+      return {kEmptyClass, false};
+    }
   }
 
   std::string sb;
@@ -192,10 +204,10 @@ std::string ClassRenderer::render(const ClassNode& node) {
     }
     emitOriginalStyle(inner, fallback);
     fallback.push_back(']');
-    return fallback;
+    return {fallback, false};
   }
   sb.push_back(']');
-  return sb;
+  return {sb, false};
 }
 
 void ClassRenderer::emitLiteralInClass(std::int32_t cp, std::string& sb) {
@@ -214,8 +226,13 @@ void ClassRenderer::emitLiteralInClass(std::int32_t cp, std::string& sb) {
     }
   }
   if (cp >= 0xD800 && cp <= 0xDFFF) {
-    appendCodePointUtf8(cp, sb);
-    return;
+    char buf[96];
+    std::snprintf(
+        buf,
+        sizeof(buf),
+        "Lone surrogate U+%04X is not representable in PCRE2 UTF mode",
+        static_cast<unsigned>(cp));
+    throw std::invalid_argument(buf);
   }
   char buf[16];
   std::snprintf(buf, sizeof(buf), "\\x{%X}", static_cast<unsigned>(cp));

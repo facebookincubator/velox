@@ -31,13 +31,12 @@ TEST(JavaRegexTranslator, passthroughForPatternsWithoutProperties) {
 }
 
 TEST(JavaRegexTranslator, rewritesInBlockProperty) {
-  EXPECT_EQ("\\p{Greek}", toPcre2Pattern("\\p{InGreek}"));
-  EXPECT_EQ("\\P{Greek}", toPcre2Pattern("\\P{InGreek}"));
-  EXPECT_EQ("\\p{Greek}", toPcre2Pattern("\\p{blk=Greek}"));
-  EXPECT_EQ("\\P{Greek}", toPcre2Pattern("\\P{block=Greek}"));
-  EXPECT_EQ("\\p{Basic_Latin}", toPcre2Pattern("\\p{blk=BasicLatin}"));
-  EXPECT_EQ("a\\p{Greek}b", toPcre2Pattern("a\\p{InGreek}b"));
-  EXPECT_EQ("[\\p{Greek}]", toPcre2Pattern("[\\p{InGreek}]"));
+  EXPECT_EQ("[\\x{370}-\\x{3FF}]", toPcre2Pattern("\\p{InGreek}"));
+  EXPECT_EQ("[^\\x{370}-\\x{3FF}]", toPcre2Pattern("\\P{InGreek}"));
+  EXPECT_EQ("[\\x{370}-\\x{3FF}]", toPcre2Pattern("\\p{blk=Greek}"));
+  EXPECT_EQ("[^\\x{370}-\\x{3FF}]", toPcre2Pattern("\\P{block=Greek}"));
+  EXPECT_EQ("[\\x{0}-\\x{7F}]", toPcre2Pattern("\\p{blk=BasicLatin}"));
+  EXPECT_EQ("a[\\x{370}-\\x{3FF}]b", toPcre2Pattern("a\\p{InGreek}b"));
 }
 
 TEST(JavaRegexTranslator, rewritesIsScriptProperty) {
@@ -51,7 +50,10 @@ TEST(JavaRegexTranslator, rewritesShortAliases) {
 }
 
 TEST(JavaRegexTranslator, rewritesJavaProperty) {
-  EXPECT_EQ("\\p{Ll}", toPcre2Pattern("\\p{javaLowerCase}"));
+  const auto result = toPcre2Pattern("\\p{javaLowerCase}");
+  EXPECT_TRUE(result.starts_with("[")) << result;
+  EXPECT_NE(std::string::npos, result.find("\\x{AA}")) << result;
+  EXPECT_NE("\\p{Ll}", result);
 }
 
 TEST(JavaRegexTranslator, rewritesUnicodeEscapeSurrogatePairs) {
@@ -82,20 +84,20 @@ TEST(JavaRegexTranslator, acceptsValidQuantifiers) {
 }
 
 TEST(JavaRegexTranslator, escapeHatchDisablesTranslator) {
-  EXPECT_EQ("\\p{Greek}", toPcre2Pattern("\\p{InGreek}"));
+  EXPECT_EQ("[\\x{370}-\\x{3FF}]", toPcre2Pattern("\\p{InGreek}"));
 }
 
 TEST(JavaRegexTranslator, rewritesSurrogateBlockToRange) {
-  EXPECT_EQ("[\\x{D800}-\\x{DB7F}]", toPcre2Pattern("\\p{InHIGH_SURROGATES}"));
-  EXPECT_EQ("[\\x{DC00}-\\x{DFFF}]", toPcre2Pattern("\\p{InLOW_SURROGATES}"));
+  EXPECT_EQ("(?!)", toPcre2Pattern("\\p{InHIGH_SURROGATES}"));
+  EXPECT_EQ("(?!)", toPcre2Pattern("\\p{InLOW_SURROGATES}"));
 }
 
-TEST(JavaRegexTranslator, reportsSurrogateRangeNeedsRawByteMode) {
+TEST(JavaRegexTranslator, surrogateBlockDoesNotNeedRawByteMode) {
   bool needsRawByteMode = false;
   EXPECT_EQ(
-      "[\\x{D800}-\\x{DB7F}]",
+      "(?!)",
       toPcre2Pattern("\\p{InHIGH_SURROGATES}", needsRawByteMode));
-  EXPECT_TRUE(needsRawByteMode);
+  EXPECT_FALSE(needsRawByteMode);
 }
 
 TEST(JavaRegexTranslator, reportsRawSurrogateBytesNeedRawByteMode) {
@@ -113,7 +115,7 @@ TEST(JavaRegexTranslator, doesNotReportRawByteModeForSupplementaryScalar) {
 }
 
 TEST(JavaRegexTranslator, negatedSurrogateBlockIsNegated) {
-  EXPECT_EQ("[^\\x{D800}-\\x{DB7F}]", toPcre2Pattern("\\P{InHIGH_SURROGATES}"));
+  EXPECT_EQ("[\\x{0}-\\x{10FFFF}]", toPcre2Pattern("\\P{InHIGH_SURROGATES}"));
 }
 
 TEST(JavaRegexTranslator, rewritesJavaDefinedAsNegatedUnassigned) {
@@ -121,7 +123,9 @@ TEST(JavaRegexTranslator, rewritesJavaDefinedAsNegatedUnassigned) {
 }
 
 TEST(JavaRegexTranslator, multipleTokensInOnePattern) {
-  EXPECT_EQ("\\p{Greek}\\p{Hiragana}", toPcre2Pattern("\\p{InGreek}\\p{InHiragana}"));
+  EXPECT_EQ(
+      "[\\x{370}-\\x{3FF}][\\x{3040}-\\x{309F}]",
+      toPcre2Pattern("\\p{InGreek}\\p{InHiragana}"));
 }
 
 TEST(JavaRegexTranslator, nestedUnionFlattens) {
@@ -145,8 +149,17 @@ TEST(JavaRegexTranslator, classBodyRewritePreservesOutsidePattern) {
 
 TEST(JavaRegexTranslator, propertyInsideClassRewritten) {
   const auto result = toPcre2Pattern("[\\p{InGreek}]");
-  EXPECT_NE(std::string::npos, result.find("\\p{Greek}")) << result;
+  EXPECT_TRUE(
+      result.find("\\x{370}") != std::string::npos ||
+      result.find("\\x{3FF}") != std::string::npos)
+      << result;
   EXPECT_EQ(std::string::npos, result.find("\\p{InGreek}")) << result;
+}
+
+TEST(JavaRegexTranslator, surrogateBlockInsideNestedClassIsNeverMatch) {
+  EXPECT_EQ(
+      "[^\\x{0}-\\x{10FFFF}]",
+      toPcre2Pattern("[[\\p{InHIGH_SURROGATES}\\p{InLOW_SURROGATES}]]"));
 }
 
 TEST(JavaRegexTranslator, intersectionWithKnownPropertyEvaluated) {
@@ -216,12 +229,14 @@ TEST(JavaRegexTranslator, inlineCaseInsensitiveExpandsCasedClassProperty) {
 
 TEST(JavaRegexTranslator, inlineCaseInsensitiveExpandsNegatedCasedClassProperty) {
   EXPECT_EQ(
-      "(?i)[^\\p{Lu}\\p{Ll}\\p{Lt}]",
+      "(?i)[\\P{Lu}]",
       toPcre2Pattern("(?i)[\\P{Lu}]"));
 }
 
 TEST(JavaRegexTranslator, inlineCaseInsensitiveKeepsLiteralAsciiRange) {
-  EXPECT_EQ("(?i)[A-Z]", toPcre2Pattern("(?i)[A-Z]"));
+  EXPECT_EQ(
+      "(?i)[A-Z\\p{Lu}\\p{Ll}\\p{Lt}]",
+      toPcre2Pattern("(?i)[A-Z]"));
 }
 
 TEST(JavaRegexTranslator, embeddedFlagsDoNotLeakPastEnclosingGroup) {
@@ -255,7 +270,7 @@ TEST(JavaRegexTranslator, commentsModeIgnoresBracesInLineComments) {
 }
 
 TEST(JavaRegexTranslatorRe2, reusesPropertyAndClassPipeline) {
-  EXPECT_EQ("\\p{Greek}", toRe2Pattern("\\p{InGreek}"));
+  EXPECT_EQ("[\\x{370}-\\x{3FF}]", toRe2Pattern("\\p{InGreek}"));
   EXPECT_EQ("[abcdef]", toRe2Pattern("[abc[def]]"));
   EXPECT_EQ("[^\\x{0}-\\x{10FFFF}]", toRe2Pattern("[a-c&&d-f]"));
 }

@@ -105,6 +105,81 @@ TEST(Pcre2RegexTest, caseInsensitiveOption) {
   EXPECT_TRUE(Pcre2Regex::PartialMatch("HELLO world", re));
 }
 
+TEST(Pcre2RegexTest, defaultWordClassIsAscii) {
+  Pcre2Regex re("(?<!あ)\\w");
+  ASSERT_TRUE(re.ok()) << re.error();
+
+  std::string_view sub[1];
+  std::string_view in = "###あぃいa###";
+  ASSERT_TRUE(re.Match(in, 0, in.size(), Anchor::kUnanchored, sub, 1));
+  EXPECT_EQ("a", sub[0]);
+}
+
+TEST(Pcre2RegexTest, matchCanCrossLoneSurrogateUtf8) {
+  Pcre2Regex re("(.)([^a])xyz");
+  ASSERT_TRUE(re.ok()) << re.error();
+
+  const std::string in =
+      std::string("\xED\xA0\x80", 3) + "\xF0\x90\x80\x80" + "xyz";
+  std::string_view sub[3];
+  ASSERT_TRUE(re.Match(in, 0, in.size(), Anchor::kUnanchored, sub, 3));
+  EXPECT_EQ(in, sub[0]);
+  EXPECT_EQ(std::string("\xED\xA0\x80", 3), sub[1]);
+  EXPECT_EQ("\xF0\x90\x80\x80", sub[2]);
+}
+
+TEST(Pcre2RegexTest, rawSurrogateQuantifierAppliesToWholeCodeUnit) {
+  Pcre2Regex re(std::string("\xED\xA0\x80", 3) + "?\xF0\x90\x80\x82");
+  ASSERT_TRUE(re.ok()) << re.error();
+
+  const std::string in = "\xF0\x90\x80\x82";
+  std::string_view sub[1];
+  ASSERT_TRUE(re.Match(in, 0, in.size(), Anchor::kUnanchored, sub, 1));
+  EXPECT_EQ(in, sub[0]);
+}
+
+TEST(Pcre2RegexTest, surrogateHexRangeClassMatchesLoneSurrogateOnly) {
+  Pcre2Regex re("[\\x{d800}-\\x{dbff}\\x{dc00}-\\x{dfff}]");
+  ASSERT_TRUE(re.ok()) << re.error();
+
+  const std::string lone = std::string("xxx") + "\xED\xB2\xA9" + "\xED\xA0\xBD" + "yyy";
+  std::string_view sub[1];
+  ASSERT_TRUE(re.Match(lone, 0, lone.size(), Anchor::kUnanchored, sub, 1));
+  EXPECT_EQ(std::string("\xED\xB2\xA9", 3), sub[0]);
+
+  const std::string validPair = "\xF0\x9F\x92\xA9";
+  EXPECT_FALSE(re.Match(validPair, 0, validPair.size(), Anchor::kUnanchored, sub, 1));
+}
+
+TEST(Pcre2RegexTest, rawUtf8SurrogateRangeClassMatchesWholeCodeUnit) {
+  Pcre2Regex re(std::string("[") + "\xED\xA0\x80" + "-" + "\xED\xBF\xBF" + "]");
+  ASSERT_TRUE(re.ok()) << re.error();
+
+  const std::string lone = std::string("\xED\xBF\xBF", 3) + "\xED\xA0\x80";
+  std::string_view sub[1];
+  ASSERT_TRUE(re.Match(lone, 0, lone.size(), Anchor::kUnanchored, sub, 1));
+  EXPECT_EQ(std::string("\xED\xBF\xBF", 3), sub[0]);
+
+  const std::string validPair = "\xF0\x90\x8F\xBF";
+  EXPECT_FALSE(re.Match(validPair, 0, validPair.size(), Anchor::kUnanchored, sub, 1));
+}
+
+TEST(Pcre2RegexTest, rawUtf8SurrogateLiteralInClassMatchesWholeCodeUnit) {
+  Pcre2Regex re(std::string("[a") + "\xED\xA0\x80" + "]");
+  ASSERT_TRUE(re.ok()) << re.error();
+
+  std::string_view sub[1];
+  const std::string lone = std::string("\xED\xA0\x80", 3);
+  ASSERT_TRUE(re.Match(lone, 0, lone.size(), Anchor::kUnanchored, sub, 1));
+  EXPECT_EQ(lone, sub[0]);
+
+  EXPECT_FALSE(re.Match(lone.substr(0, 1), 0, 1, Anchor::kUnanchored, sub, 1));
+
+  const std::string ascii = "a";
+  ASSERT_TRUE(re.Match(ascii, 0, ascii.size(), Anchor::kUnanchored, sub, 1));
+  EXPECT_EQ(ascii, sub[0]);
+}
+
 TEST(Pcre2RegexTest, lookaheadSupported) {
   // PCRE2 supports lookahead (unlike RE2).  This is the headline reason for
   // adding PCRE2 as an alternative backend.

@@ -23,7 +23,7 @@
 namespace facebook::velox::functions::java_pcre2_translator::test {
 
 TEST(PropertyMap, inPrefixStrip) {
-  EXPECT_EQ("Greek", PropertyMap::apply("InGreek").value());
+  EXPECT_EQ("[\\x{370}-\\x{3FF}]", PropertyMap::apply("InGreek").value());
 }
 
 TEST(PropertyMap, isPrefixStrip) {
@@ -39,17 +39,22 @@ TEST(PropertyMap, l1ExpandsToRange) {
 }
 
 TEST(PropertyMap, javaLowerCase) {
-  EXPECT_EQ("Ll", PropertyMap::apply("javaLowerCase").value());
+  const auto result = PropertyMap::apply("javaLowerCase").value();
+  EXPECT_TRUE(result.starts_with("["));
+  EXPECT_NE(std::string::npos, result.find("\\x{AA}")) << result;
 }
 
-TEST(PropertyMap, highSurrogatesExpandToRange) {
+TEST(PropertyMap, highSurrogatesNeverMatchSentinel) {
+  EXPECT_EQ(PropertyMap::kNeverMatch, PropertyMap::apply("InHIGH_SURROGATES").value());
+  EXPECT_EQ(PropertyMap::kNeverMatch, PropertyMap::apply("InHighSurrogates").value());
+  EXPECT_EQ(PropertyMap::kNeverMatch, PropertyMap::apply("blk=HighSurrogates").value());
   EXPECT_EQ(
-      "[\\x{D800}-\\x{DB7F}]", PropertyMap::apply("InHIGH_SURROGATES").value());
+      PropertyMap::kNeverMatch,
+      PropertyMap::apply("InHighPrivateUseSurrogates").value());
 }
 
-TEST(PropertyMap, lowSurrogatesExpandToRange) {
-  EXPECT_EQ(
-      "[\\x{DC00}-\\x{DFFF}]", PropertyMap::apply("InLOW_SURROGATES").value());
+TEST(PropertyMap, lowSurrogatesNeverMatchSentinel) {
+  EXPECT_EQ(PropertyMap::kNeverMatch, PropertyMap::apply("InLOW_SURROGATES").value());
 }
 
 TEST(PropertyMap, isAsciiStripsIs) {

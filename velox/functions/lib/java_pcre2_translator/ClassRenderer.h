@@ -29,7 +29,13 @@ namespace facebook::velox::functions::java_pcre2_translator {
 
 class ClassRenderer {
  public:
+  struct RenderResult {
+    std::string text;
+    bool intersectionUnresolved{false};
+  };
+
   static std::string render(const ClassNode& node);
+  static RenderResult renderWithSignal(const ClassNode& node);
   static void emitLiteralInClass(std::int32_t cp, std::string& sb);
   static bool containsIntersection(const ClassNode& node);
 

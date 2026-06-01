@@ -130,7 +130,7 @@ std::size_t findPropertyTokenEnd(std::string_view s, std::size_t start) {
 bool isCasedLetterCategory(std::string_view resolved) {
   return resolved == "Lu" || resolved == "Ll" || resolved == "Lt" ||
       resolved == "Lowercase" || resolved == "Uppercase" ||
-      resolved == "Titlecase";
+      resolved == "Titlecase" || resolved == "[a-z]" || resolved == "[A-Z]";
 }
 
 std::size_t tryAppendPropertyToken(
@@ -166,6 +166,19 @@ std::size_t tryAppendPropertyToken(
 
   if (!replacement) {
     out.append(s.substr(start, tokenEnd - start));
+  } else if (*replacement == PropertyMap::kNeverMatch) {
+    if (pOrP == 'P') {
+      out += "[\\x{0}-\\x{10FFFF}]";
+    } else {
+      out += "(?!)";
+    }
+  } else if (replacement->rfind("[^", 0) == 0) {
+    if (pOrP == 'P') {
+      out.push_back('[');
+      out.append(replacement->substr(2));
+    } else {
+      out += *replacement;
+    }
   } else if (!replacement->empty() && replacement->front() == '[') {
     if (pOrP == 'P') {
       out += "[^";
@@ -419,12 +432,15 @@ bool containsAscii(std::string_view s, std::string_view needle) {
 std::string expandCasedPropertiesInClass(std::string_view classText) {
   const bool hasProp =
       containsAscii(classText, "\\p{") || containsAscii(classText, "\\P{");
-  if (!hasProp) {
+  const bool hasAsciiCasedRange =
+      containsAscii(classText, "a-z") || containsAscii(classText, "A-Z");
+  if (!hasProp && !hasAsciiCasedRange) {
     return std::string(classText);
   }
 
   std::string sb;
   sb.reserve(classText.size() + 32);
+  bool appendedCasedUnion = false;
   for (std::size_t i = 0; i < classText.size(); ++i) {
     const char c = classText[i];
     if (c == '\\' && i + 3 < classText.size() &&
@@ -435,15 +451,10 @@ std::string expandCasedPropertiesInClass(std::string_view classText) {
         const auto body = classText.substr(i + 3, close - i - 3);
         if (isCasedLetterCategory(body)) {
           if (classText[i + 1] == 'P') {
-            if (sb == "[" && close + 1 == classText.size() - 1) {
-              sb += "^\\p{Lu}\\p{Ll}\\p{Lt}";
-            } else {
-              throw EvaluationFailedException(
-                  "CASE_INSENSITIVE negated cased property inside complex "
-                  "character class cannot be safely translated");
-            }
+            sb.append(classText.substr(i, close + 1 - i));
           } else {
             sb += "\\p{Lu}\\p{Ll}\\p{Lt}";
+            appendedCasedUnion = true;
           }
           i = close;
           continue;
@@ -451,6 +462,10 @@ std::string expandCasedPropertiesInClass(std::string_view classText) {
       }
     }
     sb.push_back(c);
+  }
+  if (hasAsciiCasedRange && !appendedCasedUnion && sb.size() > 1 &&
+      sb.back() == ']') {
+    sb.insert(sb.size() - 1, "\\p{Lu}\\p{Ll}\\p{Lt}");
   }
   return sb;
 }
@@ -1282,13 +1297,14 @@ std::string toPcre2Pattern(
           throw EvaluationFailedException(
               "UNICODE_CHARACTER_CLASS intersection cannot be safely translated");
         }
-        const std::string rendered = ClassRenderer::render(classNode);
+        const auto renderResult = ClassRenderer::renderWithSignal(classNode);
+        const std::string& rendered = renderResult.text;
         const std::string renderedWithMappedProperties =
             rewritePropertiesOnly(rendered, 0, rendered.size());
         const std::string maybeFolded = caseless
             ? expandCasedPropertiesInClass(renderedWithMappedProperties)
             : renderedWithMappedProperties;
-        if (maybeFolded.find("&&") != std::string::npos) {
+        if (renderResult.intersectionUnresolved) {
           out += rewritePropertiesOnly(javaPattern, classStart, classEnd);
         } else {
           out += maybeFolded;

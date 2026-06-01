@@ -37,6 +37,8 @@ namespace facebook::velox::functions::java_pcre2_translator {
 ///   * `std::nullopt` → no rewrite; leave the token as-is.
 class PropertyMap {
  public:
+  static constexpr std::string_view kNeverMatch{"\x01NEVER_MATCH\x01"};
+
   /// Resolves a Java regex property name to a PCRE2 equivalent.  Returns
   /// `std::nullopt` when no rewrite is needed (the caller should pass the
   /// token through unchanged).

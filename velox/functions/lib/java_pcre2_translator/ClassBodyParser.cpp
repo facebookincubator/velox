@@ -21,6 +21,7 @@
 #include "velox/functions/lib/java_pcre2_translator/ClassBodyParser.h"
 
 #include "velox/functions/lib/java_pcre2_translator/PropertyMap.h"
+#include "velox/functions/lib/java_pcre2_translator/RangeSet.h"
 
 #include <unicode/uchar.h>
 
@@ -193,6 +194,20 @@ ClassNode parsePropertyEscape(std::string_view s, std::size_t& pos, char esc) {
     std::string token;
     if (!rewritten.has_value()) {
       token = std::string("\\") + esc + "{" + propName + "}";
+    } else if (*rewritten == PropertyMap::kNeverMatch) {
+      if (neg) {
+        return ClassNode(Range(0, RangeSet::kMaxCp));
+      }
+      return ClassNode(Union(std::vector<ClassNode>{}));
+    } else if (startsWith(*rewritten, "[^") && rewritten->back() == ']') {
+      std::string positive("[");
+      positive.append(rewritten->substr(2));
+      std::size_t rewritePos = 0;
+      auto node = ClassBodyParser::parseClass(neg ? positive : *rewritten, rewritePos);
+      if (rewritePos != (neg ? positive.size() : rewritten->size())) {
+        throw std::invalid_argument("Unexpected trailing content in property rewrite");
+      }
+      return node;
     } else if (startsWith(*rewritten, "[") && rewritten->back() == ']' && !neg) {
       std::size_t rewritePos = 0;
       auto node = ClassBodyParser::parseClass(*rewritten, rewritePos);

@@ -28,8 +28,9 @@ namespace facebook::velox::regex_compat {
 namespace {
 
 std::uint32_t toPcre2Options(const Options& o) {
-  // PCRE2_UTF + PCRE2_UCP: UTF-8 input + Unicode-aware character properties.
-  std::uint32_t opts = PCRE2_UTF | PCRE2_UCP;
+  // Java's default \d, \s and \w shorthands are ASCII-only.  Keep UTF enabled
+  // for Unicode literals and \p{...}, but do not enable PCRE2_UCP here.
+  std::uint32_t opts = PCRE2_UTF;
   if (!o.caseSensitive) {
     opts |= PCRE2_CASELESS;
   }
@@ -82,11 +83,175 @@ std::string surrogateUtf8ByteEscapes(std::uint32_t cp) {
   return buf;
 }
 
+std::string rawSurrogateUtf8BytePattern(
+    unsigned char b0,
+    unsigned char b1,
+    unsigned char b2) {
+  char buf[40];
+  std::snprintf(
+      buf,
+      sizeof(buf),
+      "(?:\\x{%02X}\\x{%02X}\\x{%02X})",
+      b0,
+      b1,
+      b2);
+  return buf;
+}
+
+bool rawSurrogateUtf8At(std::string_view s, std::size_t i) {
+  if (i + 2 >= s.size()) {
+    return false;
+  }
+  const auto b0 = static_cast<unsigned char>(s[i]);
+  const auto b1 = static_cast<unsigned char>(s[i + 1]);
+  const auto b2 = static_cast<unsigned char>(s[i + 2]);
+  return b0 == 0xED && b1 >= 0xA0 && b1 <= 0xBF && b2 >= 0x80 &&
+      b2 <= 0xBF;
+}
+
+std::string rewriteRawSurrogateUtf8Classes(std::string pattern) {
+  std::string out;
+  out.reserve(pattern.size());
+  for (std::size_t i = 0; i < pattern.size();) {
+    if (pattern[i] != '[') {
+      out.push_back(pattern[i++]);
+      continue;
+    }
+
+    const std::size_t start = i;
+    std::size_t j = i + 1;
+    if (j < pattern.size() && pattern[j] == '^') {
+      out.push_back(pattern[i++]);
+      continue;
+    }
+    bool escaped = false;
+    for (; j < pattern.size(); ++j) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (pattern[j] == '\\') {
+        escaped = true;
+        continue;
+      }
+      if (pattern[j] == ']') {
+        break;
+      }
+    }
+    if (j == pattern.size()) {
+      out.push_back(pattern[i++]);
+      continue;
+    }
+
+    const std::string_view body(pattern.data() + i + 1, j - i - 1);
+    if (body.find("&&") != std::string_view::npos) {
+      out.append(pattern, start, j + 1 - start);
+      i = j + 1;
+      continue;
+    }
+
+    std::string byteClass;
+    std::vector<std::string> surrogateAlts;
+    bool unsupportedRange = false;
+    for (std::size_t k = 0; k < body.size();) {
+      if (rawSurrogateUtf8At(body, k)) {
+        if ((k > 0 && body[k - 1] == '-') ||
+            (k + 3 < body.size() && body[k + 3] == '-')) {
+          unsupportedRange = true;
+          break;
+        }
+        surrogateAlts.push_back(rawSurrogateUtf8BytePattern(
+            static_cast<unsigned char>(body[k]),
+            static_cast<unsigned char>(body[k + 1]),
+            static_cast<unsigned char>(body[k + 2])));
+        k += 3;
+        continue;
+      }
+      byteClass.push_back(body[k++]);
+    }
+
+    if (surrogateAlts.empty() || unsupportedRange) {
+      out.append(pattern, start, j + 1 - start);
+    } else {
+      out += "(?:";
+      bool needPipe = false;
+      if (!byteClass.empty()) {
+        out.push_back('[');
+        out += byteClass;
+        out.push_back(']');
+        needPipe = true;
+      }
+      for (const auto& alt : surrogateAlts) {
+        if (needPipe) {
+          out.push_back('|');
+        }
+        out += alt;
+        needPipe = true;
+      }
+      out.push_back(')');
+    }
+    i = j + 1;
+  }
+  return out;
+}
+
+std::string rewriteRawSurrogateUtf8Literals(std::string pattern) {
+  std::string out;
+  out.reserve(pattern.size());
+  bool inClass = false;
+  for (std::size_t i = 0; i < pattern.size();) {
+    const char c = pattern[i];
+    if (c == '\\' && i + 1 < pattern.size()) {
+      out.push_back(pattern[i++]);
+      out.push_back(pattern[i++]);
+      continue;
+    }
+    if (c == '[') {
+      inClass = true;
+      out.push_back(c);
+      ++i;
+      continue;
+    }
+    if (c == ']' && inClass) {
+      inClass = false;
+      out.push_back(c);
+      ++i;
+      continue;
+    }
+    if (!inClass && rawSurrogateUtf8At(pattern, i)) {
+      const auto b0 = static_cast<unsigned char>(pattern[i]);
+      const auto b1 = static_cast<unsigned char>(pattern[i + 1]);
+      const auto b2 = static_cast<unsigned char>(pattern[i + 2]);
+      out += rawSurrogateUtf8BytePattern(b0, b1, b2);
+      i += 3;
+      continue;
+    }
+    out.push_back(c);
+    ++i;
+  }
+  return out;
+}
+
 std::string rewriteSurrogateEscapesForRawByteMode(std::string pattern) {
   // The translator reports raw-byte mode via a side-channel bool.  PCRE2 in
   // non-UTF mode accepts literal surrogate UTF-8 bytes, but not \x{D800};
   // rewrite the surrogate block aliases to byte-sequence regexes before
   // dropping PCRE2_UTF.
+  constexpr std::string_view kAnySurrogateBytes =
+      "(?:\\x{ED}[\\x{A0}-\\x{AF}][\\x{80}-\\x{BF}]|"
+      "\\x{ED}[\\x{B0}-\\x{BF}][\\x{80}-\\x{BF}])";
+  constexpr std::string_view kLowSurrogateBytes =
+      "(?:\\x{ED}[\\x{B0}-\\x{BF}][\\x{80}-\\x{BF}])";
+  replaceAll(
+      pattern,
+      "[\\x{d800}-\\x{dbff}\\x{dc00}-\\x{dfff}]",
+      kAnySurrogateBytes);
+  replaceAll(
+      pattern,
+      "[\\x{D800}-\\x{DBFF}\\x{DC00}-\\x{DFFF}]",
+      kAnySurrogateBytes);
+  replaceAll(pattern, "[\\x{dc00}-\\x{dfff}]", kLowSurrogateBytes);
+  replaceAll(pattern, "[\\x{DC00}-\\x{DFFF}]", kLowSurrogateBytes);
   replaceAll(
       pattern,
       "[\\x{D800}-\\x{DB7F}]",
@@ -104,8 +269,44 @@ std::string rewriteSurrogateEscapesForRawByteMode(std::string pattern) {
     char token[16];
     std::snprintf(token, sizeof(token), "\\x{%04X}", cp);
     replaceAll(pattern, token, surrogateUtf8ByteEscapes(cp));
+    std::snprintf(token, sizeof(token), "\\x{%04x}", cp);
+    replaceAll(pattern, token, surrogateUtf8ByteEscapes(cp));
   }
-  return pattern;
+  const std::string rawAnySurrogateRange =
+      std::string("[") + std::string("\xED\xA0\x80", 3) + "-" +
+      std::string("\xED\xBF\xBF", 3) + "]";
+  const std::string rawNotAnySurrogateRange =
+      std::string("[^") + std::string("\xED\xA0\x80", 3) + "-" +
+      std::string("\xED\xBF\xBF", 3) + "]";
+  constexpr std::string_view kValidUtf8NonSurrogate =
+      "(?:[\\x{00}-\\x{7F}]|"
+      "[\\x{C2}-\\x{DF}][\\x{80}-\\x{BF}]|"
+      "\\x{E0}[\\x{A0}-\\x{BF}][\\x{80}-\\x{BF}]|"
+      "[\\x{E1}-\\x{EC}\\x{EE}-\\x{EF}][\\x{80}-\\x{BF}][\\x{80}-\\x{BF}]|"
+      "\\x{ED}[\\x{80}-\\x{9F}][\\x{80}-\\x{BF}]|"
+      "\\x{F0}[\\x{90}-\\x{BF}][\\x{80}-\\x{BF}][\\x{80}-\\x{BF}]|"
+      "[\\x{F1}-\\x{F3}][\\x{80}-\\x{BF}][\\x{80}-\\x{BF}][\\x{80}-\\x{BF}]|"
+      "\\x{F4}[\\x{80}-\\x{8F}][\\x{80}-\\x{BF}][\\x{80}-\\x{BF}])";
+  replaceAll(pattern, rawNotAnySurrogateRange, kValidUtf8NonSurrogate);
+  replaceAll(
+      pattern,
+      rawAnySurrogateRange,
+      "(?:\\x{ED}[\\x{A0}-\\x{BF}][\\x{80}-\\x{BF}])");
+  return rewriteRawSurrogateUtf8Literals(
+      rewriteRawSurrogateUtf8Classes(std::move(pattern)));
+}
+
+bool containsSurrogateUtf8(std::string_view s) {
+  for (std::size_t i = 0; i + 2 < s.size(); ++i) {
+    const auto b0 = static_cast<unsigned char>(s[i]);
+    const auto b1 = static_cast<unsigned char>(s[i + 1]);
+    const auto b2 = static_cast<unsigned char>(s[i + 2]);
+    if (b0 == 0xED && b1 >= 0xA0 && b1 <= 0xBF && b2 >= 0x80 &&
+        b2 <= 0xBF) {
+      return true;
+    }
+  }
+  return false;
 }
 
 } // namespace
@@ -205,7 +406,9 @@ bool Pcre2Regex::Match(
       reinterpret_cast<PCRE2_SPTR8>(input.data()),
       endpos,
       startpos,
-      toPcre2MatchOptions(anchor),
+      toPcre2MatchOptions(anchor) |
+          (containsSurrogateUtf8(input.substr(0, endpos)) ? PCRE2_NO_UTF_CHECK
+                                                          : 0),
       md,
       nullptr);
   if (rc < 0) {

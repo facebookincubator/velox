@@ -30,6 +30,8 @@ namespace facebook::velox::functions::java_pcre2_translator {
 class JdkPropertyExpander {
  public:
   static std::optional<RangeSet> expand(std::string_view pcre2Token);
+  static std::optional<std::string> materializeJavaProperty(std::string_view name);
+  static std::optional<std::string> materializeUnicodeBlock(std::string_view name);
 
  private:
   JdkPropertyExpander() = delete;
