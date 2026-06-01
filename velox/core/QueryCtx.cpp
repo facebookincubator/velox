@@ -15,50 +15,52 @@
  */
 
 #include "velox/core/QueryCtx.h"
-#include "velox/common/EnumDefine.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/SpillConfig.h"
 #include "velox/common/config/Config.h"
 
 namespace facebook::velox::core {
 
-namespace {
-const auto& transportTypeNames() {
-  static const folly::F14FastMap<TransportType, std::string_view> kNames = {
-      {TransportType::kHttp, "HTTP"},
-      {TransportType::kUcx, "UCX"},
-  };
-  return kNames;
-}
-} // namespace
-
-VELOX_DEFINE_ENUM_NAME(TransportType, transportTypeNames)
-
-TransportType QueryCtx::inputTransportType(const PlanNodeId& planNodeId) const {
-  return inputTransportTypes_.withRLock([&](const auto& map) -> TransportType {
+std::string QueryCtx::inputTransportType(const PlanNodeId& planNodeId) const {
+  return inputTransportTypes_.withRLock([&](const auto& map) -> std::string {
     auto it = map.find(planNodeId);
-    return it != map.end() ? it->second : TransportType::kHttp;
+    return it != map.end() ? it->second : TransportKind::kHttp;
   });
 }
 
-TransportType QueryCtx::outputTransportType(
-    const PlanNodeId& planNodeId) const {
-  return outputTransportTypes_.withRLock([&](const auto& map) -> TransportType {
+std::string QueryCtx::outputTransportType(const PlanNodeId& planNodeId) const {
+  return outputTransportTypes_.withRLock([&](const auto& map) -> std::string {
     auto it = map.find(planNodeId);
-    return it != map.end() ? it->second : TransportType::kHttp;
+    return it != map.end() ? it->second : TransportKind::kHttp;
   });
 }
 
 void QueryCtx::setInputTransportType(
     const PlanNodeId& planNodeId,
-    TransportType type) {
-  inputTransportTypes_.withWLock([&](auto& map) { map[planNodeId] = type; });
+    const std::string& type) {
+  inputTransportTypes_.withWLock([&](auto& map) {
+    auto [it, inserted] = map.emplace(planNodeId, type);
+    VELOX_CHECK(
+        inserted || it->second == type,
+        "Conflicting input transport type for node {}: existing '{}', new '{}'",
+        planNodeId,
+        it->second,
+        type);
+  });
 }
 
 void QueryCtx::setOutputTransportType(
     const PlanNodeId& planNodeId,
-    TransportType type) {
-  outputTransportTypes_.withWLock([&](auto& map) { map[planNodeId] = type; });
+    const std::string& type) {
+  outputTransportTypes_.withWLock([&](auto& map) {
+    auto [it, inserted] = map.emplace(planNodeId, type);
+    VELOX_CHECK(
+        inserted || it->second == type,
+        "Conflicting output transport type for node {}: existing '{}', new '{}'",
+        planNodeId,
+        it->second,
+        type);
+  });
 }
 
 // static
@@ -82,6 +84,32 @@ std::shared_ptr<QueryCtx> QueryCtx::create(
       .queryId(std::move(queryId))
       .tokenProvider(std::move(tokenProvider))
       .build();
+}
+
+QueryCtx::Builder& QueryCtx::Builder::inputTransportType(
+    const PlanNodeId& planNodeId,
+    const std::string& type) {
+  auto [it, inserted] = inputTransportTypes_.emplace(planNodeId, type);
+  VELOX_CHECK(
+      inserted || it->second == type,
+      "Conflicting input transport type for node {}: existing '{}', new '{}'",
+      planNodeId,
+      it->second,
+      type);
+  return *this;
+}
+
+QueryCtx::Builder& QueryCtx::Builder::outputTransportType(
+    const PlanNodeId& planNodeId,
+    const std::string& type) {
+  auto [it, inserted] = outputTransportTypes_.emplace(planNodeId, type);
+  VELOX_CHECK(
+      inserted || it->second == type,
+      "Conflicting output transport type for node {}: existing '{}', new '{}'",
+      planNodeId,
+      it->second,
+      type);
+  return *this;
 }
 
 std::shared_ptr<QueryCtx> QueryCtx::Builder::build() {

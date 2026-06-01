@@ -23,7 +23,6 @@
 #include <functional>
 #include <string_view>
 #include <typeindex>
-#include "velox/common/EnumDeclare.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/memory/Memory.h"
@@ -41,10 +40,17 @@ namespace facebook::velox::core {
 // Duplicated from PlanNode.h to avoid a heavyweight include.
 using PlanNodeId = std::string;
 
-/// Determines how data is physically transferred between tasks.
-enum class TransportType { kHttp, kUcx };
-
-VELOX_DECLARE_ENUM_NAME(TransportType);
+/// Well-known transport type identifiers for use with inputTransportType /
+/// outputTransportType maps. For example, in Presto with GPU workers the
+/// Exchange nodes use UCX to receive from peers while the PartitionedOutput
+/// node uses HTTP to send results to the Java coordinator. Other applications
+/// may define additional identifiers without modifying this header.
+struct TransportKind {
+  /// Standard HTTP/HTTPS-based Presto exchange protocol.
+  inline static const std::string kHttp{"HTTP"};
+  /// UCX-based RDMA exchange for high-bandwidth GPU transfers between workers.
+  inline static const std::string kUcx{"UCX"};
+};
 
 struct PlanFragment;
 
@@ -214,21 +220,18 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
       return *this;
     }
 
-    /// Sets the input transport type for a specific exchange node.
+    /// Sets the input transport type for a specific exchange node. Setting the
+    /// same value for a node is idempotent; setting a different value throws.
     Builder& inputTransportType(
         const PlanNodeId& planNodeId,
-        TransportType type) {
-      inputTransportTypes_[planNodeId] = type;
-      return *this;
-    }
+        const std::string& type);
 
     /// Sets the output transport type for a specific partitioned output node.
+    /// Setting the same value for a node is idempotent; setting a different
+    /// value throws.
     Builder& outputTransportType(
         const PlanNodeId& planNodeId,
-        TransportType type) {
-      outputTransportTypes_[planNodeId] = type;
-      return *this;
-    }
+        const std::string& type);
 
     /// Constructs and returns a QueryCtx with the configured parameters.
     ///
@@ -247,8 +250,8 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     std::shared_ptr<filesystems::TokenProvider> tokenProvider_;
     std::deque<ReleaseCallback> releaseCallbacks_;
     TraceCtxProvider traceCtxProvider_;
-    folly::F14FastMap<PlanNodeId, TransportType> inputTransportTypes_;
-    folly::F14FastMap<PlanNodeId, TransportType> outputTransportTypes_;
+    folly::F14FastMap<PlanNodeId, std::string> inputTransportTypes_;
+    folly::F14FastMap<PlanNodeId, std::string> outputTransportTypes_;
     std::unordered_map<std::string, std::shared_ptr<memory::MemoryPool>>
         customPools_;
   };
@@ -282,22 +285,31 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   }
 
   /// Returns the transport type for a specific Exchange (input) node.
-  /// Defaults to kHttp if the node ID is not in the map. The caller is
-  /// responsible for passing valid plan node IDs assigned by the coordinator.
-  TransportType inputTransportType(const PlanNodeId& planNodeId) const;
+  /// Defaults to TransportKind::kHttp if the node ID is not in the map. The
+  /// caller is responsible for passing valid plan node IDs assigned by the
+  /// coordinator.
+  std::string inputTransportType(const PlanNodeId& planNodeId) const;
 
   /// Returns the transport type for a specific PartitionedOutput node.
-  /// Defaults to kHttp if the node ID is not in the map. The caller is
-  /// responsible for passing valid plan node IDs assigned by the coordinator.
-  TransportType outputTransportType(const PlanNodeId& planNodeId) const;
+  /// Defaults to TransportKind::kHttp if the node ID is not in the map. The
+  /// caller is responsible for passing valid plan node IDs assigned by the
+  /// coordinator.
+  std::string outputTransportType(const PlanNodeId& planNodeId) const;
 
   /// Sets the input transport type for a specific exchange node. Mutable
   /// setters exist because the host app discovers transport types during plan
-  /// conversion, after the QueryCtx is already created and cached.
-  void setInputTransportType(const PlanNodeId& planNodeId, TransportType type);
+  /// conversion, after the QueryCtx is already created and cached. Setting the
+  /// same value for a node is idempotent; setting a different value throws.
+  void setInputTransportType(
+      const PlanNodeId& planNodeId,
+      const std::string& type);
 
   /// Sets the output transport type for a specific partitioned output node.
-  void setOutputTransportType(const PlanNodeId& planNodeId, TransportType type);
+  /// Setting the same value for a node is idempotent; setting a different
+  /// value throws.
+  void setOutputTransportType(
+      const PlanNodeId& planNodeId,
+      const std::string& type);
 
   const QueryConfig& queryConfig() const {
     return queryConfig_;
@@ -575,9 +587,9 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   // within a query (assigned by the coordinator), so a single flat map per
   // direction works even though a QueryCtx is shared across all tasks in the
   // query.
-  folly::Synchronized<folly::F14FastMap<PlanNodeId, TransportType>>
+  folly::Synchronized<folly::F14FastMap<PlanNodeId, std::string>>
       inputTransportTypes_;
-  folly::Synchronized<folly::F14FastMap<PlanNodeId, TransportType>>
+  folly::Synchronized<folly::F14FastMap<PlanNodeId, std::string>>
       outputTransportTypes_;
 
   // Type-erased registry entry for per-query overrides.
