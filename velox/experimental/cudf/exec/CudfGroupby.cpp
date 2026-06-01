@@ -41,6 +41,7 @@
 namespace {
 
 using namespace facebook::velox;
+using cudf_velox::castDecimal64InputToDecimal128;
 using cudf_velox::CountInputKind;
 using cudf_velox::finalizeDecimalAverage;
 using cudf_velox::get_output_mr;
@@ -202,10 +203,14 @@ void addDecimalRawPartialSingleSumRequest(
     uint32_t inputIndex,
     std::vector<cudf::groupby::aggregation_request>& requests,
     bool includeCountAggregation,
-    uint32_t& sumIdx) {
+    rmm::cuda_stream_view stream,
+    uint32_t& sumIdx,
+    std::unique_ptr<cudf::column>& castedInput) {
+  auto inputView = castDecimal64InputToDecimal128(
+      tbl.column(inputIndex), castedInput, stream);
   auto& request = requests.emplace_back();
   sumIdx = requests.size() - 1;
-  request.values = tbl.column(inputIndex);
+  request.values = inputView;
   request.aggregations.push_back(
       cudf::make_sum_aggregation<cudf::groupby_aggregation>());
   if (includeCountAggregation) {
@@ -247,7 +252,9 @@ struct GroupbyDecimalSumAggregator : GroupbyAggregator {
           inputIndex,
           requests,
           step == core::AggregationNode::Step::kPartial,
-          sumIdx_);
+          stream,
+          sumIdx_,
+          castedInput_);
     }
   }
 
@@ -277,6 +284,9 @@ struct GroupbyDecimalSumAggregator : GroupbyAggregator {
   uint32_t countIdx_{0};
   std::unique_ptr<cudf::column> decodedSum_;
   std::unique_ptr<cudf::column> decodedCount_;
+  // Holds the DECIMAL64->DECIMAL128 cast of raw input (kPartial/kSingle), kept
+  // alive while the groupby request references its view.
+  std::unique_ptr<cudf::column> castedInput_;
 };
 
 struct GroupbyDecimalAvgAggregator : GroupbyAggregator {
@@ -320,7 +330,9 @@ struct GroupbyDecimalAvgAggregator : GroupbyAggregator {
           requests,
           step == core::AggregationNode::Step::kPartial ||
               step == core::AggregationNode::Step::kSingle,
-          sumIdx_);
+          stream,
+          sumIdx_,
+          castedInput_);
     }
   }
 
@@ -360,6 +372,9 @@ struct GroupbyDecimalAvgAggregator : GroupbyAggregator {
   uint32_t countIdx_{0};
   std::unique_ptr<cudf::column> decodedSum_;
   std::unique_ptr<cudf::column> decodedCount_;
+  // Holds the DECIMAL64->DECIMAL128 cast of raw input (kPartial/kSingle), kept
+  // alive while the groupby request references its view.
+  std::unique_ptr<cudf::column> castedInput_;
 };
 
 struct GroupbyCountAggregator : GroupbyAggregator {

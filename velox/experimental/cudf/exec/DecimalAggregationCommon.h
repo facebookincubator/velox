@@ -31,6 +31,15 @@ namespace facebook::velox::cudf_velox {
 // sum/count payloads (see serializeDecimalSumState).
 void validateIntermediateColumnType(cudf::column_view const& column);
 
+// Casts a DECIMAL64 column up to DECIMAL128 (scale preserved) so a subsequent
+// SUM accumulates in 128 bits instead of wrapping. Allocates the casted column
+// from the temporary memory resource into holder and returns its view.
+// Lifetime stays valid only while holder is alive.
+cudf::column_view castDecimal64InputToDecimal128(
+    cudf::column_view inputCol,
+    std::unique_ptr<cudf::column>& holder,
+    rmm::cuda_stream_view stream);
+
 // Ensures the partial-row count column is INT64, casting with the default GPU
 // output memory resource when the incoming type differs.
 std::unique_ptr<cudf::column> castCountColumnToInt64(

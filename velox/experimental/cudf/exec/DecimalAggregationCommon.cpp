@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationCommon.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationKernels.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
@@ -33,6 +34,21 @@ void validateIntermediateColumnType(cudf::column_view const& column) {
       static_cast<int>(cudf::type_id::STRING),
       "Expected serialized decimal aggregation state: Velox VARBINARY represented as cuDF STRING (got type {})",
       colType);
+}
+
+cudf::column_view castDecimal64InputToDecimal128(
+    cudf::column_view inputCol,
+    std::unique_ptr<cudf::column>& holder,
+    rmm::cuda_stream_view stream) {
+  if (inputCol.type().id() != cudf::type_id::DECIMAL64) {
+    return inputCol;
+  }
+  holder = cudf::cast(
+      inputCol,
+      cudf::data_type{cudf::type_id::DECIMAL128, inputCol.type().scale()},
+      stream,
+      get_temp_mr());
+  return holder->view();
 }
 
 std::unique_ptr<cudf::column> castCountColumnToInt64(

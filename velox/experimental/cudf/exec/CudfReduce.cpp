@@ -42,6 +42,7 @@
 namespace {
 
 using namespace facebook::velox;
+using facebook::velox::cudf_velox::castDecimal64InputToDecimal128;
 using facebook::velox::cudf_velox::CountInputKind;
 using facebook::velox::cudf_velox::finalizeDecimalAverage;
 using facebook::velox::cudf_velox::get_output_mr;
@@ -255,6 +256,8 @@ struct ReduceMeanAggregator : ReduceAggregator {
 std::unique_ptr<cudf::column> partialDecimalSumCountToSerializedString(
     cudf::column_view inputCol,
     rmm::cuda_stream_view stream) {
+  std::unique_ptr<cudf::column> castedInput;
+  inputCol = castDecimal64InputToDecimal128(inputCol, castedInput, stream);
   auto const sumAgg = cudf::make_sum_aggregation<cudf::reduce_aggregation>();
   auto sumScalar =
       cudf::reduce(inputCol, *sumAgg, inputCol.type(), stream, get_temp_mr());
@@ -333,6 +336,8 @@ std::unique_ptr<cudf::column> singleDecimalAvgFromRawColumn(
     cudf::column_view inputCol,
     TypePtr const& resultType,
     rmm::cuda_stream_view stream) {
+  std::unique_ptr<cudf::column> castedInput;
+  inputCol = castDecimal64InputToDecimal128(inputCol, castedInput, stream);
   auto const sumAgg = cudf::make_sum_aggregation<cudf::reduce_aggregation>();
   auto sumScalar =
       cudf::reduce(inputCol, *sumAgg, inputCol.type(), stream, get_temp_mr());
