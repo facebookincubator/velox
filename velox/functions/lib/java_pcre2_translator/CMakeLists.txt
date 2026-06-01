@@ -15,9 +15,11 @@
 velox_add_library(
   velox_java_pcre2_translator
   JavaRegexTranslator.cpp
+  RangeSet.cpp
   HEADERS
   EvaluationFailedException.h
   JavaRegexTranslator.h
+  RangeSet.h
 )
 
 if(${VELOX_BUILD_TESTING})

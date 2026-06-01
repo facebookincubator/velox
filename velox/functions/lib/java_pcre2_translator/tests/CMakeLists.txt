@@ -2,7 +2,8 @@
 # (Apache-2.0)
 
 add_executable(velox_java_pcre2_translator_test
-  JavaRegexTranslatorTest.cpp)
+  JavaRegexTranslatorTest.cpp
+  RangeSetTest.cpp)
 
 target_link_libraries(velox_java_pcre2_translator_test
   PRIVATE velox_java_pcre2_translator GTest::gtest GTest::gtest_main)
