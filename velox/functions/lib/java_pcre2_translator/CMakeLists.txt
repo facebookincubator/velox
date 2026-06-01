@@ -15,10 +15,12 @@
 velox_add_library(
   velox_java_pcre2_translator
   JavaRegexTranslator.cpp
+  PropertyMap.cpp
   RangeSet.cpp
   HEADERS
   EvaluationFailedException.h
   JavaRegexTranslator.h
+  PropertyMap.h
   RangeSet.h
 )
 

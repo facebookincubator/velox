@@ -3,6 +3,7 @@
 
 add_executable(velox_java_pcre2_translator_test
   JavaRegexTranslatorTest.cpp
+  PropertyMapTest.cpp
   RangeSetTest.cpp)
 
 target_link_libraries(velox_java_pcre2_translator_test
