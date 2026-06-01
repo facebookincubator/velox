@@ -39,12 +39,18 @@
 #include <string>
 #include <vector>
 
-#ifndef OPENJDK_CORPUS_PATH
-#error "OPENJDK_CORPUS_PATH must be defined by the build system"
+#ifndef OPENJDK_CORPUS_DIR
+#error "OPENJDK_CORPUS_DIR must be defined by the build system"
 #endif
 
 namespace facebook::velox::regex_compat::test {
 namespace {
+
+static const char* const kCorpusFiles[] = {
+    "TestCases.txt",
+    "BMPTestCases.txt",
+    "SupplementaryTestCases.txt",
+};
 
 struct CorpusCase {
   std::string pattern;
@@ -153,16 +159,16 @@ static std::vector<CorpusCase> loadCorpus(const std::string& path) {
   return cases;
 }
 
-// Per-backend tally.  Printed by the global Environment at TearDown.
+// Per-(backend, file) tally — keyed by "backend|file".
 struct CorpusStats {
   int passed = 0;
   int failed = 0;
   int compileErrors = 0;
 };
 
-CorpusStats& statsFor(const std::string& backend) {
+std::map<std::string, CorpusStats>& allStats() {
   static std::map<std::string, CorpusStats> s;
-  return s[backend];
+  return s;
 }
 
 // Tear-down printer.  Registered as a global Environment so it runs after
@@ -170,19 +176,41 @@ CorpusStats& statsFor(const std::string& backend) {
 class CorpusReporter : public ::testing::Environment {
  public:
   void TearDown() override {
-    extern std::map<std::string, CorpusStats>& allStats();
     auto& m = allStats();
     if (m.empty()) {
       return;
     }
     std::fprintf(stderr, "\n");
     std::fprintf(stderr, "========== OpenJDK corpus compat rate ==========\n");
-    for (const auto& [name, st] : m) {
+    // Aggregate per backend across all files; also print per-file.
+    std::map<std::string, CorpusStats> agg;
+    for (const auto& [key, st] : m) {
+      auto bar = key.find('|');
+      std::string backend = key.substr(0, bar);
+      auto& a = agg[backend];
+      a.passed += st.passed;
+      a.failed += st.failed;
+      a.compileErrors += st.compileErrors;
+    }
+    for (const auto& [key, st] : m) {
       int total = st.passed + st.failed + st.compileErrors;
       double pct = total > 0 ? 100.0 * st.passed / total : 0.0;
       std::fprintf(
           stderr,
-          "  %-12s %4d / %4d  (%.2f%%)   [compile-err: %d]\n",
+          "  %-50s %4d / %4d  (%.2f%%)   [compile-err: %d]\n",
+          key.c_str(),
+          st.passed,
+          total,
+          pct,
+          st.compileErrors);
+    }
+    std::fprintf(stderr, "  ---- aggregate ----\n");
+    for (const auto& [name, st] : agg) {
+      int total = st.passed + st.failed + st.compileErrors;
+      double pct = total > 0 ? 100.0 * st.passed / total : 0.0;
+      std::fprintf(
+          stderr,
+          "  %-50s %4d / %4d  (%.2f%%)   [compile-err: %d]\n",
           name.c_str(),
           st.passed,
           total,
@@ -192,12 +220,6 @@ class CorpusReporter : public ::testing::Environment {
     std::fprintf(stderr, "================================================\n");
   }
 };
-
-// Definition for the extern declaration above.
-std::map<std::string, CorpusStats>& allStats() {
-  static std::map<std::string, CorpusStats> s;
-  return s;
-}
 
 // Register the reporter exactly once.
 [[maybe_unused]] static auto* kReporter =
@@ -219,78 +241,80 @@ using OpenJdkCorpusDiffTest = BackendTest<R>;
 TYPED_TEST_SUITE(OpenJdkCorpusDiffTest, AllBackends);
 
 TYPED_TEST(OpenJdkCorpusDiffTest, runCorpus) {
-  static const std::vector<CorpusCase> kCorpus = loadCorpus(OPENJDK_CORPUS_PATH);
-  ASSERT_FALSE(kCorpus.empty())
-      << "Corpus is empty — failed to load " << OPENJDK_CORPUS_PATH;
+  const std::string backend = backendName<TypeParam>();
+  int totalCases = 0;
+  int totalJavaFailures = 0;
+  for (const char* fname : kCorpusFiles) {
+    std::string path = std::string(OPENJDK_CORPUS_DIR) + "/" + fname;
+    std::vector<CorpusCase> kCorpus = loadCorpus(path);
+    ASSERT_FALSE(kCorpus.empty()) << "Corpus is empty — failed to load " << path;
+    totalCases += static_cast<int>(kCorpus.size());
 
-  const std::string name = backendName<TypeParam>();
-  auto& st = allStats()[name];
+    const std::string key = backend + "|" + fname;
+    auto& st = allStats()[key];
 
-  for (const auto& c : kCorpus) {
-    TypeParam re(c.pattern);
-    if (!re.ok()) {
-      // OpenJDK convention: expected-line starting with "error" means
-      // the pattern is intentionally invalid; a compile-error here is
-      // the correct outcome.
-      if (c.expectedResult.rfind("error", 0) == 0) {
+    for (const auto& c : kCorpus) {
+      TypeParam re(c.pattern);
+      if (!re.ok()) {
+        if (c.expectedResult.rfind("error", 0) == 0) {
+          ++st.passed;
+        } else {
+          ++st.compileErrors;
+          if constexpr (std::is_same_v<TypeParam, JavaRegex>) {
+            ++totalJavaFailures;
+            std::fprintf(
+                stderr,
+                "[OpenJDK %s] Java compile-err: pattern=[%s] err=[%s]\n",
+                fname,
+                c.pattern.c_str(),
+                re.error().c_str());
+          }
+        }
+        continue;
+      }
+      JavaMatcherAdapter<TypeParam> m(&re, c.input);
+      const bool found = m.find();
+      std::string actual;
+      if (found) {
+        actual.append("true ");
+        actual.append(std::string(m.group(0).value()));
+        actual.push_back(' ');
+        actual.append(std::to_string(m.groupCount()));
+        for (int i = 1; i <= m.groupCount(); ++i) {
+          auto gi = m.group(i);
+          if (gi) {
+            actual.push_back(' ');
+            actual.append(std::string(*gi));
+          }
+        }
+      } else {
+        actual.append("false ");
+        actual.append(std::to_string(m.groupCount()));
+      }
+      if (actual == c.expectedResult) {
         ++st.passed;
       } else {
-        ++st.compileErrors;
+        ++st.failed;
         if constexpr (std::is_same_v<TypeParam, JavaRegex>) {
+          ++totalJavaFailures;
           std::fprintf(
               stderr,
-              "[OpenJDK corpus] Java compile-err: pattern=[%s] err=[%s]\n",
+              "[OpenJDK %s] Java mismatch:\n  pattern=[%s]\n  input=[%s]\n  expected=[%s]\n  actual=  [%s]\n",
+              fname,
               c.pattern.c_str(),
-              re.error().c_str());
+              c.input.c_str(),
+              c.expectedResult.c_str(),
+              actual.c_str());
         }
-      }
-      continue;
-    }
-    JavaMatcherAdapter<TypeParam> m(&re, c.input);
-    const bool found = m.find();
-    // Rebuild the result string in exactly the same shape OpenJDK does
-    // in RegExTest.processFile: "true <g0> <gc> <g1> <g2> ..."
-    // (each captured non-null group appended) or "false 0".
-    std::string actual;
-    if (found) {
-      actual.append("true ");
-      actual.append(std::string(m.group(0).value()));
-      actual.push_back(' ');
-      actual.append(std::to_string(m.groupCount()));
-      for (int i = 1; i <= m.groupCount(); ++i) {
-        auto gi = m.group(i);
-        if (gi) {
-          actual.push_back(' ');
-          actual.append(std::string(*gi));
-        }
-      }
-    } else {
-      actual.append("false ");
-      actual.append(std::to_string(m.groupCount()));
-    }
-    if (actual == c.expectedResult) {
-      ++st.passed;
-    } else {
-      ++st.failed;
-      if constexpr (std::is_same_v<TypeParam, JavaRegex>) {
-        std::fprintf(
-            stderr,
-            "[OpenJDK corpus] Java mismatch:\n  pattern=[%s]\n  input=[%s]\n  expected=[%s]\n  actual=  [%s]\n",
-            c.pattern.c_str(),
-            c.input.c_str(),
-            c.expectedResult.c_str(),
-            actual.c_str());
       }
     }
   }
 
-  // Java backend must round-trip the entire corpus (it IS java.util.regex).
   if constexpr (std::is_same_v<TypeParam, JavaRegex>) {
-    EXPECT_EQ(0, st.failed)
-        << "Java backend should match every case in OpenJDK's own corpus";
-    EXPECT_EQ(0, st.compileErrors)
-        << "Java backend should compile every pattern in OpenJDK's own corpus";
+    EXPECT_EQ(0, totalJavaFailures)
+        << "Java backend should match every case across all OpenJDK corpus files";
   }
+  EXPECT_GT(totalCases, 0);
 }
 
 } // namespace
