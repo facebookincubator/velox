@@ -2,7 +2,11 @@
 # (Apache-2.0)
 
 add_executable(velox_java_pcre2_translator_test
+  ClassBodyParserTest.cpp
+  ClassRendererTest.cpp
+  EvaluatorTest.cpp
   JavaRegexTranslatorTest.cpp
+  JdkPropertyExpanderTest.cpp
   PropertyMapTest.cpp
   RangeSetTest.cpp)
 

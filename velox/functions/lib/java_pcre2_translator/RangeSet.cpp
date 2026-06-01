@@ -83,6 +83,21 @@ RangeSet RangeSet::range(std::int32_t lo, std::int32_t hi) {
   return RangeSet({lo, hi});
 }
 
+RangeSet RangeSet::fromSortedPairs(std::vector<std::int32_t> pairs) {
+  if (pairs.size() % 2 != 0) {
+    throw std::invalid_argument("Range pair vector must have even length");
+  }
+  for (std::size_t i = 0; i < pairs.size(); i += 2) {
+    if (pairs[i] < 0 || pairs[i + 1] > kMaxCp || pairs[i] > pairs[i + 1]) {
+      throw std::invalid_argument("Invalid sorted range pair");
+    }
+    if (i > 0 && pairs[i] < pairs[i - 2]) {
+      throw std::invalid_argument("Range pairs must be sorted by lower bound");
+    }
+  }
+  return normalise(std::move(pairs));
+}
+
 RangeSet RangeSet::unionWith(const RangeSet& other) const {
   if (isEmpty()) {
     return other;

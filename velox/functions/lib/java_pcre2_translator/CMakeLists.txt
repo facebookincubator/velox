@@ -14,15 +14,26 @@
 
 velox_add_library(
   velox_java_pcre2_translator
+  ClassBodyParser.cpp
+  ClassRenderer.cpp
+  Evaluator.cpp
   JavaRegexTranslator.cpp
+  JdkPropertyExpander.cpp
   PropertyMap.cpp
   RangeSet.cpp
   HEADERS
+  ClassBodyParser.h
+  ClassNode.h
+  ClassRenderer.h
   EvaluationFailedException.h
+  Evaluator.h
   JavaRegexTranslator.h
+  JdkPropertyExpander.h
   PropertyMap.h
   RangeSet.h
 )
+
+velox_link_libraries(velox_java_pcre2_translator PRIVATE ICU::uc)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

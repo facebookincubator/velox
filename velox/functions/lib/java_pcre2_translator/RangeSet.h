@@ -49,6 +49,9 @@ class RangeSet {
   /// Throws `std::invalid_argument` when the range is invalid.
   static RangeSet range(std::int32_t lo, std::int32_t hi);
 
+  /// Creates a set from already sorted [lo, hi] pairs, merging adjacent spans.
+  static RangeSet fromSortedPairs(std::vector<std::int32_t> pairs);
+
   /// Returns the union of this set and `other`.
   RangeSet unionWith(const RangeSet& other) const;
 
