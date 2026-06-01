@@ -320,15 +320,46 @@ array are ignored. Empty array input returns null.</p>
 <dt class="sig sig-object py" id="geometry_union_agg">
 <span class="sig-name descname"><span class="pre">geometry_union_agg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">union:</span> <span class="pre">Geometry</span></span></span><a class="headerlink" href="#geometry_union_agg" title="Link to this definition">¶</a></dt>
 <dd><p>Returns a geometry that represents the point set union of the aggregated
-input geometries. Null geometries are ignored. Empty input returns null.</p>
+input geometries. The result type depends on the input geometries:</p>
+<ul class="simple">
+<li><p>Geometries of the same type are merged into the corresponding
+<code class="docutils literal notranslate"><span class="pre">MULTI*</span></code> type (e.g., multiple <code class="docutils literal notranslate"><span class="pre">POINT</span></code> inputs yield a
+<code class="docutils literal notranslate"><span class="pre">MULTIPOINT</span></code>).</p></li>
+<li><p>Adjacent or overlapping polygons are dissolved into a single
+<code class="docutils literal notranslate"><span class="pre">POLYGON</span></code>.</p></li>
+<li><p>Geometries of different types are combined into a
+<code class="docutils literal notranslate"><span class="pre">GEOMETRYCOLLECTION</span></code>.</p></li>
+<li><p>A geometry that is fully contained within another is absorbed and
+does not appear separately in the result.</p></li>
+</ul>
+<p>NULL inputs are ignored. Empty geometry inputs (e.g., <code class="docutils literal notranslate"><span class="pre">POINT</span> <span class="pre">EMPTY</span></code>)
+contribute nothing to the union; if all inputs are empty geometries the
+result is <code class="docutils literal notranslate"><span class="pre">GEOMETRYCOLLECTION</span> <span class="pre">EMPTY</span></code>. Returns NULL when there are no
+rows or all inputs are NULL.</p>
+<p>The union semantics are defined by the underlying GEOS
+<a class="reference external" href="https://libgeos.org/doxygen/classgeos_1_1geom_1_1Geometry.html#a90ca3e6e3a30ac3e1ed7fb6dd1e52810">Geometry::Union()</a>
+operation.</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="convex_hull_agg">
-<span class="sig-name descname"><span class="pre">convex_hull_agg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">union:</span> <span class="pre">Geometry</span></span></span><a class="headerlink" href="#convex_hull_agg" title="Link to this definition">¶</a></dt>
-<dd><p>Returns a geometry that represents the convex hull of the points in the
-aggregated input geometries.  Null geometries are ignored. Empty input
-returns null.</p>
+<span class="sig-name descname"><span class="pre">convex_hull_agg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">hull:</span> <span class="pre">Geometry</span></span></span><a class="headerlink" href="#convex_hull_agg" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a geometry that represents the convex hull of the combined point
+set of all aggregated input geometries. The result type depends on the
+geometry of the inputs:</p>
+<ul class="simple">
+<li><p>A single point, or multiple identical points, yields a <code class="docutils literal notranslate"><span class="pre">POINT</span></code>.</p></li>
+<li><p>Collinear points yield a <code class="docutils literal notranslate"><span class="pre">LINESTRING</span></code>.</p></li>
+<li><p>All other non-empty inputs yield a <code class="docutils literal notranslate"><span class="pre">POLYGON</span></code>.</p></li>
+<li><p>If all inputs are empty geometries the result is
+<code class="docutils literal notranslate"><span class="pre">GEOMETRYCOLLECTION</span> <span class="pre">EMPTY</span></code>.</p></li>
+</ul>
+<p>NULL inputs are ignored. Empty geometry inputs (e.g., <code class="docutils literal notranslate"><span class="pre">POINT</span> <span class="pre">EMPTY</span></code>)
+contribute no points to the hull computation. Returns NULL when there
+are no rows or all inputs are NULL.</p>
+<p>The convex hull semantics are defined by the underlying GEOS
+<a class="reference external" href="https://libgeos.org/doxygen/classgeos_1_1geom_1_1Geometry.html#a79b3790fbb2a2df4bde530979e740ad2">Geometry::convexHull()</a>
+operation.</p>
 </dd></dl>
 
 </section>
