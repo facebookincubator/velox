@@ -103,8 +103,7 @@ TEST(JavaRegexTranslator, surrogateBlockNeedsRawByteMode) {
 TEST(JavaRegexTranslator, reportsRawSurrogateBytesNeedRawByteMode) {
   bool needsRawByteMode = false;
   EXPECT_EQ(
-      "[\xED\xA0\x80]",
-      toPcre2Pattern("[\xED\xA0\x80]", needsRawByteMode));
+      "[\xED\xA0\x80]", toPcre2Pattern("[\xED\xA0\x80]", needsRawByteMode));
   EXPECT_TRUE(needsRawByteMode);
 }
 
@@ -216,27 +215,21 @@ TEST(JavaRegexTranslator, propertyIntersectionEndToEnd) {
 }
 
 TEST(JavaRegexTranslator, inlineCaseInsensitiveExpandsCasedTopLevelProperty) {
-  EXPECT_EQ(
-      "(?i)[\\p{Lu}\\p{Ll}\\p{Lt}]",
-      toPcre2Pattern("(?i)\\p{Lu}"));
+  EXPECT_EQ("(?i)[\\p{Lu}\\p{Ll}\\p{Lt}]", toPcre2Pattern("(?i)\\p{Lu}"));
 }
 
 TEST(JavaRegexTranslator, inlineCaseInsensitiveExpandsCasedClassProperty) {
-  EXPECT_EQ(
-      "(?i)[\\p{Lu}\\p{Ll}\\p{Lt}]",
-      toPcre2Pattern("(?i)[\\p{Lu}]"));
+  EXPECT_EQ("(?i)[\\p{Lu}\\p{Ll}\\p{Lt}]", toPcre2Pattern("(?i)[\\p{Lu}]"));
 }
 
-TEST(JavaRegexTranslator, inlineCaseInsensitiveExpandsNegatedCasedClassProperty) {
-  EXPECT_EQ(
-      "(?i)[\\P{Lu}]",
-      toPcre2Pattern("(?i)[\\P{Lu}]"));
+TEST(
+    JavaRegexTranslator,
+    inlineCaseInsensitiveExpandsNegatedCasedClassProperty) {
+  EXPECT_EQ("(?i)[\\P{Lu}]", toPcre2Pattern("(?i)[\\P{Lu}]"));
 }
 
 TEST(JavaRegexTranslator, inlineCaseInsensitiveKeepsLiteralAsciiRange) {
-  EXPECT_EQ(
-      "(?i)[A-Z\\p{Lu}\\p{Ll}\\p{Lt}]",
-      toPcre2Pattern("(?i)[A-Z]"));
+  EXPECT_EQ("(?i)[A-Z\\p{Lu}\\p{Ll}\\p{Lt}]", toPcre2Pattern("(?i)[A-Z]"));
 }
 
 TEST(JavaRegexTranslator, embeddedFlagsDoNotLeakPastEnclosingGroup) {
@@ -248,10 +241,11 @@ TEST(JavaRegexTranslator, longBackreferenceDoesNotOverflow) {
   EXPECT_EQ(0, result.rfind("(*F)", 0)) << result;
 }
 
-TEST(JavaRegexTranslator, unicodeCharacterClassIntersectionThrowsInsteadOfAsciiEvaluation) {
+TEST(
+    JavaRegexTranslator,
+    unicodeCharacterClassIntersectionThrowsInsteadOfAsciiEvaluation) {
   EXPECT_THROW(
-      toPcre2Pattern("(?U)[\\d&&\\p{InArabic}]"),
-      EvaluationFailedException);
+      toPcre2Pattern("(?U)[\\d&&\\p{InArabic}]"), EvaluationFailedException);
 }
 
 TEST(JavaRegexTranslator, escapedBraceIsNotQuantifier) {
@@ -304,7 +298,9 @@ TEST(JavaRegexTranslatorRe2, rewritesJavaNamedCapturingGroups) {
   EXPECT_EQ("(a(?P<num>\\d+))", toRe2Pattern("(a(?<num>\\d+))"));
 }
 
-TEST(JavaRegexTranslatorRe2, doesNotRewriteNamedGroupLookalikesInQuotesOrClasses) {
+TEST(
+    JavaRegexTranslatorRe2,
+    doesNotRewriteNamedGroupLookalikesInQuotesOrClasses) {
   EXPECT_EQ("\\Q(?<name>foo)\\E", toRe2Pattern("\\Q(?<name>foo)\\E"));
   EXPECT_EQ("[(?<name>)]", toRe2Pattern("[(?<name>)]"));
 }

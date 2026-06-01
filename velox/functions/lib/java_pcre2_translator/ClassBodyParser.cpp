@@ -65,7 +65,8 @@ int hexDigit(char c) {
   throw std::invalid_argument("Invalid hex digit: " + std::string(1, c));
 }
 
-std::int32_t codePointAt(std::string_view s, std::size_t pos, std::size_t& width) {
+std::int32_t
+codePointAt(std::string_view s, std::size_t pos, std::size_t& width) {
   const auto b0 = static_cast<unsigned char>(s[pos]);
   if (b0 < 0x80) {
     width = 1;
@@ -116,7 +117,8 @@ ClassNode parseIntersection(std::string_view s, std::size_t& pos) {
     while (pos + 1 < s.size() && s[pos] == '&' && s[pos + 1] == '&') {
       pos += 2;
       if (pos >= s.size() || s[pos] == ']') {
-        throw std::invalid_argument("Bad intersection syntax near index " + std::to_string(pos));
+        throw std::invalid_argument(
+            "Bad intersection syntax near index " + std::to_string(pos));
       }
       operands.push_back(parseUnion(s, pos));
     }
@@ -144,27 +146,31 @@ ClassNode parseItem(std::string_view s, std::size_t& pos) {
   ClassNode atom = parseAtom(s, pos);
 
   if (const auto* litLo = atom.getIf<Literal>(); litLo != nullptr &&
-      pos < s.size() && s[pos] == '-' && pos + 1 < s.size() && s[pos + 1] != ']') {
+      pos < s.size() && s[pos] == '-' && pos + 1 < s.size() &&
+      s[pos + 1] != ']') {
     ++pos;
     ClassNode atomHi = parseAtom(s, pos);
     if (const auto* litHi = atomHi.getIf<Literal>()) {
       return ClassNode(Range(litLo->cp, litHi->cp));
     }
-    return ClassNode(Union(std::vector<ClassNode>{atom, ClassNode(Literal('-')), atomHi}));
+    return ClassNode(
+        Union(std::vector<ClassNode>{atom, ClassNode(Literal('-')), atomHi}));
   }
 
   if (atom.is<PropertyLeaf>() && pos < s.size() && s[pos] == '-' &&
       pos + 1 < s.size() && s[pos + 1] != ']') {
     ++pos;
     ClassNode next = parseAtom(s, pos);
-    return ClassNode(Union(std::vector<ClassNode>{atom, ClassNode(Literal('-')), next}));
+    return ClassNode(
+        Union(std::vector<ClassNode>{atom, ClassNode(Literal('-')), next}));
   }
   return atom;
 }
 
 ClassNode parseAtom(std::string_view s, std::size_t& pos) {
   if (pos >= s.size()) {
-    throw std::invalid_argument("Unexpected end of pattern inside character class");
+    throw std::invalid_argument(
+        "Unexpected end of pattern inside character class");
   }
   if (s[pos] == '[') {
     return ClassBodyParser::parseClass(s, pos);
@@ -203,23 +209,28 @@ ClassNode parsePropertyEscape(std::string_view s, std::size_t& pos, char esc) {
       std::string positive("[");
       positive.append(rewritten->substr(2));
       std::size_t rewritePos = 0;
-      auto node = ClassBodyParser::parseClass(neg ? positive : *rewritten, rewritePos);
+      auto node =
+          ClassBodyParser::parseClass(neg ? positive : *rewritten, rewritePos);
       if (rewritePos != (neg ? positive.size() : rewritten->size())) {
-        throw std::invalid_argument("Unexpected trailing content in property rewrite");
+        throw std::invalid_argument(
+            "Unexpected trailing content in property rewrite");
       }
       return node;
-    } else if (startsWith(*rewritten, "[") && rewritten->back() == ']' && !neg) {
+    } else if (
+        startsWith(*rewritten, "[") && rewritten->back() == ']' && !neg) {
       std::size_t rewritePos = 0;
       auto node = ClassBodyParser::parseClass(*rewritten, rewritePos);
       if (rewritePos != rewritten->size()) {
-        throw std::invalid_argument("Unexpected trailing content in property rewrite");
+        throw std::invalid_argument(
+            "Unexpected trailing content in property rewrite");
       }
       return node;
     } else if (startsWith(*rewritten, "[")) {
       std::size_t rewritePos = 0;
       auto node = ClassBodyParser::parseClass(*rewritten, rewritePos);
       if (rewritePos != rewritten->size()) {
-        throw std::invalid_argument("Unexpected trailing content in property rewrite");
+        throw std::invalid_argument(
+            "Unexpected trailing content in property rewrite");
       }
       return ClassNode(Negated(node));
     } else if (startsWith(*rewritten, "\\P{")) {
@@ -295,7 +306,8 @@ ClassNode parseEscape(std::string_view s, std::size_t& pos) {
         while (pos < s.size() && s[pos] != '}') {
           val = val * 16 + hexDigit(s[pos++]);
           if (val > 0x10FFFF) {
-            throw std::invalid_argument("\\x{...} code point out of Unicode range");
+            throw std::invalid_argument(
+                "\\x{...} code point out of Unicode range");
           }
           any = true;
         }
@@ -309,7 +321,8 @@ ClassNode parseEscape(std::string_view s, std::size_t& pos) {
         return ClassNode(Literal(static_cast<std::int32_t>(val)));
       }
       if (pos + 1 >= s.size()) {
-        throw std::invalid_argument("Incomplete \\x escape (need 2 hex digits)");
+        throw std::invalid_argument(
+            "Incomplete \\x escape (need 2 hex digits)");
       }
       const int hi = hexDigit(s[pos++]);
       const int lo = hexDigit(s[pos++]);
@@ -317,7 +330,8 @@ ClassNode parseEscape(std::string_view s, std::size_t& pos) {
     }
     case 'u': {
       if (pos + 3 >= s.size()) {
-        throw std::invalid_argument("Incomplete \\u escape (need 4 hex digits)");
+        throw std::invalid_argument(
+            "Incomplete \\u escape (need 4 hex digits)");
       }
       int val = 0;
       for (int i = 0; i < 4; ++i) {
@@ -372,10 +386,12 @@ ClassNode parseEscape(std::string_view s, std::size_t& pos) {
           ++pos;
         }
         const std::string braced(s.substr(start, pos - start));
-        if (braced.size() >= 2 && braced.front() == '{' && braced.back() == '}') {
+        if (braced.size() >= 2 && braced.front() == '{' &&
+            braced.back() == '}') {
           const std::string name = braced.substr(1, braced.size() - 2);
           UErrorCode status = U_ZERO_ERROR;
-          const UChar32 cp = u_charFromName(U_EXTENDED_CHAR_NAME, name.c_str(), &status);
+          const UChar32 cp =
+              u_charFromName(U_EXTENDED_CHAR_NAME, name.c_str(), &status);
           if (U_SUCCESS(status)) {
             return ClassNode(Literal(cp));
           }
@@ -396,7 +412,9 @@ ClassNode ClassBodyParser::parseClass(std::string_view s, std::size_t& pos) {
   return parseClassBody(s, pos);
 }
 
-ClassNode ClassBodyParser::parseClassBody(std::string_view s, std::size_t& pos) {
+ClassNode ClassBodyParser::parseClassBody(
+    std::string_view s,
+    std::size_t& pos) {
   const bool negated = pos < s.size() && s[pos] == '^';
   if (negated) {
     ++pos;

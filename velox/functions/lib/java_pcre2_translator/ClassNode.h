@@ -35,7 +35,9 @@ using ClassNodePtr = std::shared_ptr<const ClassNode>;
 struct Literal {
   std::int32_t cp;
   explicit Literal(std::int32_t cpIn) : cp(cpIn) {}
-  bool operator==(const Literal& other) const { return cp == other.cp; }
+  bool operator==(const Literal& other) const {
+    return cp == other.cp;
+  }
 };
 
 struct Range {
@@ -81,7 +83,8 @@ struct Intersection {
 };
 
 struct ClassNode {
-  using Variant = std::variant<Literal, Range, PropertyLeaf, Negated, Union, Intersection>;
+  using Variant =
+      std::variant<Literal, Range, PropertyLeaf, Negated, Union, Intersection>;
 
   Variant value;
 

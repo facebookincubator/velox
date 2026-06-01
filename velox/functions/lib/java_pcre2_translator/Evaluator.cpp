@@ -42,19 +42,19 @@ const RangeSet& digit() {
 
 const RangeSet& word() {
   static const RangeSet k = RangeSet::range('A', 'Z')
-                               .unionWith(RangeSet::range('a', 'z'))
-                               .unionWith(RangeSet::range('0', '9'))
-                               .unionWith(RangeSet::single('_'));
+                                .unionWith(RangeSet::range('a', 'z'))
+                                .unionWith(RangeSet::range('0', '9'))
+                                .unionWith(RangeSet::single('_'));
   return k;
 }
 
 const RangeSet& space() {
   static const RangeSet k = RangeSet::single('\t')
-                               .unionWith(RangeSet::single('\n'))
-                               .unionWith(RangeSet::single(0x0B))
-                               .unionWith(RangeSet::single('\f'))
-                               .unionWith(RangeSet::single('\r'))
-                               .unionWith(RangeSet::single(' '));
+                                .unionWith(RangeSet::single('\n'))
+                                .unionWith(RangeSet::single(0x0B))
+                                .unionWith(RangeSet::single('\f'))
+                                .unionWith(RangeSet::single('\r'))
+                                .unionWith(RangeSet::single(' '));
   return k;
 }
 
@@ -64,7 +64,8 @@ const RangeSet& ascii() {
 }
 
 const RangeSet& alpha() {
-  static const RangeSet k = RangeSet::range('A', 'Z').unionWith(RangeSet::range('a', 'z'));
+  static const RangeSet k =
+      RangeSet::range('A', 'Z').unionWith(RangeSet::range('a', 'z'));
   return k;
 }
 
@@ -84,17 +85,21 @@ const RangeSet& upper() {
 }
 
 const RangeSet& hexDigit() {
-  static const RangeSet k = digit().unionWith(RangeSet::range('A', 'F')).unionWith(RangeSet::range('a', 'f'));
+  static const RangeSet k = digit()
+                                .unionWith(RangeSet::range('A', 'F'))
+                                .unionWith(RangeSet::range('a', 'f'));
   return k;
 }
 
 const RangeSet& blank() {
-  static const RangeSet k = RangeSet::single(' ').unionWith(RangeSet::single('\t'));
+  static const RangeSet k =
+      RangeSet::single(' ').unionWith(RangeSet::single('\t'));
   return k;
 }
 
 const RangeSet& cntrl() {
-  static const RangeSet k = RangeSet::range(0x00, 0x1F).unionWith(RangeSet::single(0x7F));
+  static const RangeSet k =
+      RangeSet::range(0x00, 0x1F).unionWith(RangeSet::single(0x7F));
   return k;
 }
 
@@ -109,7 +114,8 @@ const RangeSet& print() {
 }
 
 const RangeSet& punct() {
-  static const RangeSet k = print().subtract(alnum()).subtract(RangeSet::single(' '));
+  static const RangeSet k =
+      print().subtract(alnum()).subtract(RangeSet::single(' '));
   return k;
 }
 
@@ -187,7 +193,9 @@ RangeSet Evaluator::toRangeSet(const ClassNode& node) {
       Overloaded{
           [](const Literal& lit) { return RangeSet::single(lit.cp); },
           [](const Range& r) { return RangeSet::range(r.lo, r.hi); },
-          [](const Negated& neg) { return Evaluator::toRangeSet(*neg.child).complement(); },
+          [](const Negated& neg) {
+            return Evaluator::toRangeSet(*neg.child).complement();
+          },
           [](const Union& u) {
             RangeSet result = RangeSet::empty();
             for (const auto& child : u.children) {

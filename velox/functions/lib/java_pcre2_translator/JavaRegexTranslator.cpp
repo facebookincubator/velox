@@ -32,10 +32,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <set>
 #include <vector>
 
 namespace facebook::velox::functions::java_pcre2_translator {
@@ -152,9 +152,8 @@ std::size_t tryAppendPropertyToken(
       replacement = std::move(normalized);
     }
   }
-  const std::string_view effective = replacement
-      ? std::string_view(*replacement)
-      : std::string_view(name);
+  const std::string_view effective =
+      replacement ? std::string_view(*replacement) : std::string_view(name);
 
   if (caseless && isCasedLetterCategory(effective)) {
     if (pOrP == 'P') {
@@ -204,10 +203,8 @@ std::size_t tryAppendPropertyToken(
   return tokenEnd;
 }
 
-std::string rewritePropertiesOnly(
-    std::string_view s,
-    std::size_t from,
-    std::size_t to) {
+std::string
+rewritePropertiesOnly(std::string_view s, std::size_t from, std::size_t to) {
   std::string sb;
   sb.reserve(to - from + 8);
   std::size_t i = from;
@@ -247,14 +244,12 @@ std::string rewritePropertiesOnly(
 }
 
 bool isJavaModeFlag(char c) {
-  return c == 'i' || c == 'd' || c == 'm' || c == 's' || c == 'u' ||
-      c == 'c' || c == 'x' || c == 'U';
+  return c == 'i' || c == 'd' || c == 'm' || c == 's' || c == 'u' || c == 'c' ||
+      c == 'x' || c == 'U';
 }
 
-std::string filterModeFlags(
-    std::string_view s,
-    std::size_t from,
-    std::size_t to) {
+std::string
+filterModeFlags(std::string_view s, std::size_t from, std::size_t to) {
   std::string out;
   out.reserve(to - from);
   for (std::size_t k = from; k < to; ++k) {
@@ -278,7 +273,11 @@ struct ModeTranslation {
   bool offX{false};
 };
 
-bool containsFlag(std::string_view s, std::size_t from, std::size_t to, char flag) {
+bool containsFlag(
+    std::string_view s,
+    std::size_t from,
+    std::size_t to,
+    char flag) {
   for (std::size_t i = from; i < to; ++i) {
     if (s[i] == flag) {
       return true;
@@ -414,10 +413,12 @@ int countCapturingGroups(std::string_view pattern) {
     if (c == '(') {
       if (i + 1 >= pattern.size() || pattern[i + 1] != '?') {
         ++count;
-      } else if (i + 3 < pattern.size() && pattern[i + 2] == '<' &&
+      } else if (
+          i + 3 < pattern.size() && pattern[i + 2] == '<' &&
           pattern[i + 3] != '=' && pattern[i + 3] != '!') {
         ++count;
-      } else if (i + 3 < pattern.size() && pattern[i + 2] == 'P' &&
+      } else if (
+          i + 3 < pattern.size() && pattern[i + 2] == 'P' &&
           pattern[i + 3] == '<') {
         ++count;
       }
@@ -471,7 +472,10 @@ std::string expandCasedPropertiesInClass(std::string_view classText) {
   return sb;
 }
 
-bool decodeUtf8CodePoint(std::string_view s, std::size_t& i, std::uint32_t& cp) {
+bool decodeUtf8CodePoint(
+    std::string_view s,
+    std::size_t& i,
+    std::uint32_t& cp) {
   const unsigned char b0 = static_cast<unsigned char>(s[i]);
   if (b0 < 0x80) {
     cp = b0;
@@ -509,7 +513,10 @@ bool decodeUtf8CodePoint(std::string_view s, std::size_t& i, std::uint32_t& cp) 
   return true;
 }
 
-bool containsRawSurrogate(std::string_view s, std::size_t from, std::size_t to) {
+bool containsRawSurrogate(
+    std::string_view s,
+    std::size_t from,
+    std::size_t to) {
   const std::size_t limit = std::min(to, s.size());
   for (std::size_t k = from; k < limit;) {
     std::uint32_t cp = 0;
@@ -548,8 +555,7 @@ bool containsSurrogateHexToken(std::string_view s) {
       any = true;
       ++k;
     }
-    if (any && k < s.size() && s[k] == '}' && cp >= 0xD800 &&
-        cp <= 0xDFFF) {
+    if (any && k < s.size() && s[k] == '}' && cp >= 0xD800 && cp <= 0xDFFF) {
       return true;
     }
   }
@@ -656,8 +662,8 @@ void appendRe2ModeModifier(
   };
 
   const bool hasOn = hasKeptFlag(onStart, onEnd);
-  const bool hasOff = offStart != std::string_view::npos &&
-      hasKeptFlag(offStart, offEnd);
+  const bool hasOff =
+      offStart != std::string_view::npos && hasKeptFlag(offStart, offEnd);
 
   if (term == ')') {
     if (hasOn || hasOff) {
@@ -796,7 +802,8 @@ void rejectUnsupportedRe2Features(std::string_view javaPattern) {
 
     if (c == '(' && !hasOddBackslashesBefore(javaPattern, i)) {
       commentsStack.push_back(commentsMode);
-    } else if (c == ')' && !hasOddBackslashesBefore(javaPattern, i) &&
+    } else if (
+        c == ')' && !hasOddBackslashesBefore(javaPattern, i) &&
         !commentsStack.empty()) {
       commentsMode = commentsStack.back();
       commentsStack.pop_back();
@@ -974,8 +981,8 @@ std::string translateCommentsModeForRe2(std::string_view pattern) {
 
     if (c == '(' && !hasOddTrailingBackslashes(out)) {
       commentsStack.push_back(commentsMode);
-    } else if (c == ')' && !hasOddTrailingBackslashes(out) &&
-        !commentsStack.empty()) {
+    } else if (
+        c == ')' && !hasOddTrailingBackslashes(out) && !commentsStack.empty()) {
       commentsMode = commentsStack.back();
       commentsStack.pop_back();
     }
@@ -1292,7 +1299,8 @@ std::string toPcre2Pattern(
 
       if (next == 'p' || next == 'P') {
         if (!hasOddTrailingBackslashes(out)) {
-          const auto tokenEnd = tryAppendPropertyToken(javaPattern, i, next, out, caseless);
+          const auto tokenEnd =
+              tryAppendPropertyToken(javaPattern, i, next, out, caseless);
           if (tokenEnd > i) {
             i = tokenEnd;
             continue;
@@ -1395,7 +1403,8 @@ std::string toPcre2Pattern(
 
       if (next >= '1' && next <= '9') {
         std::size_t k = i + 2;
-        while (k < len && std::isdigit(static_cast<unsigned char>(javaPattern[k]))) {
+        while (k < len &&
+               std::isdigit(static_cast<unsigned char>(javaPattern[k]))) {
           ++k;
         }
         const int groupCount = countCapturingGroups(javaPattern);
@@ -1456,15 +1465,18 @@ std::string toPcre2Pattern(
       const std::size_t classStart = i;
       std::size_t pos = i;
       try {
-        const ClassNode classNode = ClassBodyParser::parseClass(javaPattern, pos);
+        const ClassNode classNode =
+            ClassBodyParser::parseClass(javaPattern, pos);
         const std::size_t classEnd = pos;
         if (containsRawSurrogate(javaPattern, classStart, classEnd)) {
           out += rewritePropertiesOnly(javaPattern, classStart, classEnd);
           i = classEnd;
           continue;
         }
-        const auto classText = javaPattern.substr(classStart, classEnd - classStart);
-        if (unicodeCharacterClass && classText.find("&&") != std::string_view::npos &&
+        const auto classText =
+            javaPattern.substr(classStart, classEnd - classStart);
+        if (unicodeCharacterClass &&
+            classText.find("&&") != std::string_view::npos &&
             (classText.find("\\d") != std::string_view::npos ||
              classText.find("\\D") != std::string_view::npos ||
              classText.find("\\w") != std::string_view::npos ||
@@ -1490,7 +1502,8 @@ std::string toPcre2Pattern(
         continue;
       } catch (const std::invalid_argument& e) {
         if (e.what() != nullptr &&
-            std::string_view(e.what()).rfind("Bad intersection syntax", 0) == 0) {
+            std::string_view(e.what()).rfind("Bad intersection syntax", 0) ==
+                0) {
           throw EvaluationFailedException("Bad intersection syntax");
         }
         out.push_back(c);
@@ -1501,11 +1514,11 @@ std::string toPcre2Pattern(
 
     if (c == '(' && i + 1 < len && javaPattern[i + 1] == '?' &&
         !hasOddTrailingBackslashes(out)) {
-      const auto modeResult = tryTranslateModeModifier(javaPattern, i, len, out);
+      const auto modeResult =
+          tryTranslateModeModifier(javaPattern, i, len, out);
       if (modeResult.end != std::string_view::npos) {
         if (modeResult.term == ':') {
-          groupStack.push_back(
-              {caseless, unicodeCharacterClass, commentsMode});
+          groupStack.push_back({caseless, unicodeCharacterClass, commentsMode});
         }
         if (modeResult.onI) {
           caseless = true;
@@ -1584,9 +1597,8 @@ std::string toPcre2PatternWithUnicodeCase(std::string_view javaPattern) {
 
 std::string toRe2Pattern(std::string_view javaPattern) {
   rejectUnsupportedRe2Features(javaPattern);
-  return rewriteJavaNamedGroupsForRe2(
-      translatePcre2OctalEscapesForRe2(
-          toPcre2Pattern(translateCommentsModeForRe2(javaPattern))));
+  return rewriteJavaNamedGroupsForRe2(translatePcre2OctalEscapesForRe2(
+      toPcre2Pattern(translateCommentsModeForRe2(javaPattern))));
 }
 
 std::string toRe2PatternWithUnicodeCase(std::string_view javaPattern) {

@@ -45,16 +45,21 @@ TEST(PropertyMap, javaLowerCase) {
 }
 
 TEST(PropertyMap, highSurrogatesExpandToRange) {
-  EXPECT_EQ("[\\x{D800}-\\x{DB7F}]", PropertyMap::apply("InHIGH_SURROGATES").value());
-  EXPECT_EQ("[\\x{D800}-\\x{DB7F}]", PropertyMap::apply("InHighSurrogates").value());
-  EXPECT_EQ("[\\x{D800}-\\x{DB7F}]", PropertyMap::apply("blk=HighSurrogates").value());
+  EXPECT_EQ(
+      "[\\x{D800}-\\x{DB7F}]", PropertyMap::apply("InHIGH_SURROGATES").value());
+  EXPECT_EQ(
+      "[\\x{D800}-\\x{DB7F}]", PropertyMap::apply("InHighSurrogates").value());
+  EXPECT_EQ(
+      "[\\x{D800}-\\x{DB7F}]",
+      PropertyMap::apply("blk=HighSurrogates").value());
   EXPECT_EQ(
       "[\\x{DB80}-\\x{DBFF}]",
       PropertyMap::apply("InHighPrivateUseSurrogates").value());
 }
 
 TEST(PropertyMap, lowSurrogatesExpandToRange) {
-  EXPECT_EQ("[\\x{DC00}-\\x{DFFF}]", PropertyMap::apply("InLOW_SURROGATES").value());
+  EXPECT_EQ(
+      "[\\x{DC00}-\\x{DFFF}]", PropertyMap::apply("InLOW_SURROGATES").value());
 }
 
 TEST(PropertyMap, isAsciiStripsIs) {

@@ -187,10 +187,10 @@ RangeSet unionOf(
 }
 
 bool isJavaWhitespace(std::int32_t cp) {
-  return cp == '\t' || cp == '\n' || cp == 0x0B || cp == '\f' ||
-      cp == '\r' || cp == ' ' || (cp >= 0x1C && cp <= 0x1F) ||
-      cp == 0x1680 || (cp >= 0x2000 && cp <= 0x200A) ||
-      cp == 0x2028 || cp == 0x2029 || cp == 0x205F || cp == 0x3000;
+  return cp == '\t' || cp == '\n' || cp == 0x0B || cp == '\f' || cp == '\r' ||
+      cp == ' ' || (cp >= 0x1C && cp <= 0x1F) || cp == 0x1680 ||
+      (cp >= 0x2000 && cp <= 0x200A) || cp == 0x2028 || cp == 0x2029 ||
+      cp == 0x205F || cp == 0x3000;
 }
 
 bool isJavaLetter(std::int32_t cp) {
@@ -207,136 +207,136 @@ bool isJavaLetter(std::int32_t cp) {
 }
 
 std::unordered_map<std::string, RangeSet> buildJavaPropertyMap() {
-      std::unordered_map<std::string, SpanBuilder> builders;
-      for (const char* name :
-           {"javaLowerCase",
-            "javaUpperCase",
-            "javaTitleCase",
-            "javaSpaceChar",
-            "javaMirrored",
-            "javaDefined",
-            "javaDigit",
-            "javaAlphabetic",
-            "javaIdeographic",
-            "javaISOControl",
-            "javaWhitespace",
-            "javaLetter",
-            "javaLetterOrDigit",
-            "javaJavaIdentifierStart",
-            "javaJavaIdentifierPart",
-            "javaUnicodeIdentifierStart",
-            "javaUnicodeIdentifierPart",
-            "javaIdentifierIgnorable"}) {
-        builders.emplace(name, SpanBuilder{});
-      }
+  std::unordered_map<std::string, SpanBuilder> builders;
+  for (const char* name :
+       {"javaLowerCase",
+        "javaUpperCase",
+        "javaTitleCase",
+        "javaSpaceChar",
+        "javaMirrored",
+        "javaDefined",
+        "javaDigit",
+        "javaAlphabetic",
+        "javaIdeographic",
+        "javaISOControl",
+        "javaWhitespace",
+        "javaLetter",
+        "javaLetterOrDigit",
+        "javaJavaIdentifierStart",
+        "javaJavaIdentifierPart",
+        "javaUnicodeIdentifierStart",
+        "javaUnicodeIdentifierPart",
+        "javaIdentifierIgnorable"}) {
+    builders.emplace(name, SpanBuilder{});
+  }
 
-      for (std::int32_t cp = 0; cp <= RangeSet::kMaxCp; ++cp) {
-        const UChar32 ucp = static_cast<UChar32>(cp);
-        const auto type = u_charType(ucp);
-        const bool letter = isJavaLetter(cp);
-        if (u_hasBinaryProperty(ucp, UCHAR_LOWERCASE)) {
-          builders["javaLowerCase"].add(cp);
-        }
-        if (u_hasBinaryProperty(ucp, UCHAR_UPPERCASE)) {
-          builders["javaUpperCase"].add(cp);
-        }
-        if (type == U_TITLECASE_LETTER) {
-          builders["javaTitleCase"].add(cp);
-        }
-        if (u_isJavaSpaceChar(ucp)) {
-          builders["javaSpaceChar"].add(cp);
-        }
-        if (u_isMirrored(ucp)) {
-          builders["javaMirrored"].add(cp);
-        }
-        if (type != U_UNASSIGNED) {
-          builders["javaDefined"].add(cp);
-        }
-        if (u_isdigit(ucp)) {
-          builders["javaDigit"].add(cp);
-        }
-        if (u_hasBinaryProperty(ucp, UCHAR_ALPHABETIC)) {
-          builders["javaAlphabetic"].add(cp);
-        }
-        if (u_hasBinaryProperty(ucp, UCHAR_IDEOGRAPHIC)) {
-          builders["javaIdeographic"].add(cp);
-        }
-        if ((cp >= 0x00 && cp <= 0x1F) || (cp >= 0x7F && cp <= 0x9F)) {
-          builders["javaISOControl"].add(cp);
-        }
-        if (isJavaWhitespace(cp)) {
-          builders["javaWhitespace"].add(cp);
-        }
-        if (letter) {
-          builders["javaLetter"].add(cp);
-        }
-        if (letter || u_isdigit(ucp)) {
-          builders["javaLetterOrDigit"].add(cp);
-        }
-        if (u_isJavaIDStart(ucp)) {
-          builders["javaJavaIdentifierStart"].add(cp);
-        }
-        if (u_isJavaIDPart(ucp)) {
-          builders["javaJavaIdentifierPart"].add(cp);
-        }
-        if (u_isIDStart(ucp)) {
-          builders["javaUnicodeIdentifierStart"].add(cp);
-        }
-        if (u_isIDPart(ucp)) {
-          builders["javaUnicodeIdentifierPart"].add(cp);
-        }
-        if (u_isIDIgnorable(ucp)) {
-          builders["javaIdentifierIgnorable"].add(cp);
-        }
-      }
-
-      std::unordered_map<std::string, RangeSet> map;
-      for (auto& [name, builder] : builders) {
-        map.emplace(name, builder.build());
-      }
-      return map;
+  for (std::int32_t cp = 0; cp <= RangeSet::kMaxCp; ++cp) {
+    const UChar32 ucp = static_cast<UChar32>(cp);
+    const auto type = u_charType(ucp);
+    const bool letter = isJavaLetter(cp);
+    if (u_hasBinaryProperty(ucp, UCHAR_LOWERCASE)) {
+      builders["javaLowerCase"].add(cp);
     }
-
-    const std::unordered_map<std::string, RangeSet>& javaPropertyMap() {
-      static const auto kMap = buildJavaPropertyMap();
-      return kMap;
+    if (u_hasBinaryProperty(ucp, UCHAR_UPPERCASE)) {
+      builders["javaUpperCase"].add(cp);
     }
-
-    std::unordered_map<std::string, RangeSet> buildBlockMap() {
-      std::unordered_map<std::string, SpanBuilder> builders;
-      for (std::int32_t cp = 0; cp <= RangeSet::kMaxCp; ++cp) {
-        const auto block = ublock_getCode(static_cast<UChar32>(cp));
-        addNormalizedAlias(
-            builders,
-            u_getPropertyValueName(UCHAR_BLOCK, block, U_LONG_PROPERTY_NAME),
-            cp);
-        addNormalizedAlias(
-            builders,
-            u_getPropertyValueName(UCHAR_BLOCK, block, U_SHORT_PROPERTY_NAME),
-            cp);
-      }
-
-      std::unordered_map<std::string, RangeSet> map;
-      for (auto& [name, builder] : builders) {
-        auto range = builder.build();
-        if (!range.isEmpty()) {
-          map.emplace(name, std::move(range));
-        }
-      }
-      return map;
+    if (type == U_TITLECASE_LETTER) {
+      builders["javaTitleCase"].add(cp);
     }
-
-    const std::unordered_map<std::string, RangeSet>& blockMap() {
-      static const auto kMap = buildBlockMap();
-      return kMap;
+    if (u_isJavaSpaceChar(ucp)) {
+      builders["javaSpaceChar"].add(cp);
     }
+    if (u_isMirrored(ucp)) {
+      builders["javaMirrored"].add(cp);
+    }
+    if (type != U_UNASSIGNED) {
+      builders["javaDefined"].add(cp);
+    }
+    if (u_isdigit(ucp)) {
+      builders["javaDigit"].add(cp);
+    }
+    if (u_hasBinaryProperty(ucp, UCHAR_ALPHABETIC)) {
+      builders["javaAlphabetic"].add(cp);
+    }
+    if (u_hasBinaryProperty(ucp, UCHAR_IDEOGRAPHIC)) {
+      builders["javaIdeographic"].add(cp);
+    }
+    if ((cp >= 0x00 && cp <= 0x1F) || (cp >= 0x7F && cp <= 0x9F)) {
+      builders["javaISOControl"].add(cp);
+    }
+    if (isJavaWhitespace(cp)) {
+      builders["javaWhitespace"].add(cp);
+    }
+    if (letter) {
+      builders["javaLetter"].add(cp);
+    }
+    if (letter || u_isdigit(ucp)) {
+      builders["javaLetterOrDigit"].add(cp);
+    }
+    if (u_isJavaIDStart(ucp)) {
+      builders["javaJavaIdentifierStart"].add(cp);
+    }
+    if (u_isJavaIDPart(ucp)) {
+      builders["javaJavaIdentifierPart"].add(cp);
+    }
+    if (u_isIDStart(ucp)) {
+      builders["javaUnicodeIdentifierStart"].add(cp);
+    }
+    if (u_isIDPart(ucp)) {
+      builders["javaUnicodeIdentifierPart"].add(cp);
+    }
+    if (u_isIDIgnorable(ucp)) {
+      builders["javaIdentifierIgnorable"].add(cp);
+    }
+  }
 
-    std::unordered_map<std::string, RangeSet> buildPositiveMap() {
+  std::unordered_map<std::string, RangeSet> map;
+  for (auto& [name, builder] : builders) {
+    map.emplace(name, builder.build());
+  }
+  return map;
+}
+
+const std::unordered_map<std::string, RangeSet>& javaPropertyMap() {
+  static const auto kMap = buildJavaPropertyMap();
+  return kMap;
+}
+
+std::unordered_map<std::string, RangeSet> buildBlockMap() {
+  std::unordered_map<std::string, SpanBuilder> builders;
+  for (std::int32_t cp = 0; cp <= RangeSet::kMaxCp; ++cp) {
+    const auto block = ublock_getCode(static_cast<UChar32>(cp));
+    addNormalizedAlias(
+        builders,
+        u_getPropertyValueName(UCHAR_BLOCK, block, U_LONG_PROPERTY_NAME),
+        cp);
+    addNormalizedAlias(
+        builders,
+        u_getPropertyValueName(UCHAR_BLOCK, block, U_SHORT_PROPERTY_NAME),
+        cp);
+  }
+
+  std::unordered_map<std::string, RangeSet> map;
+  for (auto& [name, builder] : builders) {
+    auto range = builder.build();
+    if (!range.isEmpty()) {
+      map.emplace(name, std::move(range));
+    }
+  }
+  return map;
+}
+
+const std::unordered_map<std::string, RangeSet>& blockMap() {
+  static const auto kMap = buildBlockMap();
+  return kMap;
+}
+
+std::unordered_map<std::string, RangeSet> buildPositiveMap() {
   std::unordered_map<std::string, SpanBuilder> catBuilders;
-  for (const char* cat : {"LU", "LL", "LT", "LM", "LO", "MN", "ME", "MC",
-                          "ND", "NL", "NO", "PC", "PD", "PS", "PE", "PI",
-                          "PF", "PO", "SM", "SC", "SK", "SO", "ZS", "ZL",
-                          "ZP", "CC", "CF", "CS", "CO", "CN"}) {
+  for (const char* cat :
+       {"LU", "LL", "LT", "LM", "LO", "MN", "ME", "MC", "ND", "NL",
+        "NO", "PC", "PD", "PS", "PE", "PI", "PF", "PO", "SM", "SC",
+        "SK", "SO", "ZS", "ZL", "ZP", "CC", "CF", "CS", "CO", "CN"}) {
     catBuilders.emplace(cat, SpanBuilder{});
   }
 
@@ -344,16 +344,18 @@ std::unordered_map<std::string, RangeSet> buildJavaPropertyMap() {
   std::unordered_map<std::string, SpanBuilder> blockBuilders;
   std::unordered_map<std::string, SpanBuilder> binaryBuilders;
 
-  // Strategy choice: use Velox's existing ICU dependency instead of adding a new
-  // dependency or generating source tables. ICU's u_charType/uscript_getScript
-  // provide the same kind of full-code-point scan as Java Character APIs.
+  // Strategy choice: use Velox's existing ICU dependency instead of adding a
+  // new dependency or generating source tables. ICU's
+  // u_charType/uscript_getScript provide the same kind of full-code-point scan
+  // as Java Character APIs.
   for (std::int32_t cp = 0; cp <= RangeSet::kMaxCp; ++cp) {
     if (const char* cat = categoryName(u_charType(static_cast<UChar32>(cp)))) {
       catBuilders[cat].add(cp);
     }
 
     UErrorCode status = U_ZERO_ERROR;
-    const UScriptCode script = uscript_getScript(static_cast<UChar32>(cp), &status);
+    const UScriptCode script =
+        uscript_getScript(static_cast<UChar32>(cp), &status);
     if (U_SUCCESS(status)) {
       const char* name = uscript_getName(script);
       if (name != nullptr) {
@@ -423,9 +425,12 @@ const std::unordered_map<std::string, RangeSet>& positiveMap() {
 std::optional<RangeSet> compute(std::string_view token) {
   bool negate = false;
   std::string name;
-  if (token.size() >= 4 && token.substr(0, 3) == "\\p{" && token.back() == '}') {
+  if (token.size() >= 4 && token.substr(0, 3) == "\\p{" &&
+      token.back() == '}') {
     name = upperAscii(token.substr(3, token.size() - 4));
-  } else if (token.size() >= 4 && token.substr(0, 3) == "\\P{" && token.back() == '}') {
+  } else if (
+      token.size() >= 4 && token.substr(0, 3) == "\\P{" &&
+      token.back() == '}') {
     negate = true;
     name = upperAscii(token.substr(3, token.size() - 4));
   } else {
@@ -453,7 +458,8 @@ std::optional<RangeSet> compute(std::string_view token) {
   }
   if (name.rfind("JAVA", 0) == 0) {
     const auto braceOpen = token.find('{');
-    const std::string original(token.substr(braceOpen + 1, token.size() - braceOpen - 2));
+    const std::string original(
+        token.substr(braceOpen + 1, token.size() - braceOpen - 2));
     auto javaIt = javaPropertyMap().find(original);
     if (javaIt != javaPropertyMap().end()) {
       return negate ? std::optional<RangeSet>(javaIt->second.complement())
@@ -468,7 +474,8 @@ std::unordered_map<std::string, std::optional<RangeSet>> cache;
 
 } // namespace
 
-std::optional<RangeSet> JdkPropertyExpander::expand(std::string_view pcre2Token) {
+std::optional<RangeSet> JdkPropertyExpander::expand(
+    std::string_view pcre2Token) {
   const std::string key(pcre2Token);
   std::lock_guard<std::mutex> l(cacheMutex);
   auto it = cache.find(key);

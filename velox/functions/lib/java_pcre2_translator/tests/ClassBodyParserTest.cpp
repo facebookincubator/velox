@@ -130,7 +130,8 @@ TEST(ClassBodyParser, escapedNonAsciiLiteralConsumesWholeCodePoint) {
 }
 
 TEST(ClassBodyParser, multipleIntersectionOperands) {
-  auto* inter = parse("[a-m&&m-z&&a-c]").getIf<Intersection>();
+  auto node = parse("[a-m&&m-z&&a-c]");
+  auto* inter = node.getIf<Intersection>();
   ASSERT_NE(nullptr, inter);
   EXPECT_EQ(3, inter->operands.size());
 }

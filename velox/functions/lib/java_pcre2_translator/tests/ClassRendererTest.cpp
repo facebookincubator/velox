@@ -105,8 +105,10 @@ TEST(ClassRenderer, pureIntersectionFallbackWithUnknownProperty) {
   const auto result = render("[\\p{UnknownXyz}&&[a-z]]");
   EXPECT_NE(result.find("\\p{UnknownXyz}"), std::string::npos) << result;
   EXPECT_NE(result.find("&&"), std::string::npos) << result;
-  EXPECT_TRUE(result.find("a-z") != std::string::npos ||
-              (result.find("a") != std::string::npos && result.find("z") != std::string::npos))
+  EXPECT_TRUE(
+      result.find("a-z") != std::string::npos ||
+      (result.find("a") != std::string::npos &&
+       result.find("z") != std::string::npos))
       << result;
 }
 

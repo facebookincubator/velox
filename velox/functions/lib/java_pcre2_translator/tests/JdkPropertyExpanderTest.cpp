@@ -15,8 +15,8 @@
  */
 //
 // Originally authored by Oleksii PELYKH for pcre4j; ported from
-// org.pcre4j.regex.translate.JdkPropertyExpanderTest (Java) under Apache-2.0 by the
-// same author for inclusion in Velox.
+// org.pcre4j.regex.translate.JdkPropertyExpanderTest (Java) under Apache-2.0 by
+// the same author for inclusion in Velox.
 //
 #include "velox/functions/lib/java_pcre2_translator/JdkPropertyExpander.h"
 

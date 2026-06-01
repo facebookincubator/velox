@@ -74,7 +74,9 @@ RangeSet tryEvaluateIntersectionRangeSet(const Intersection& inter, bool& ok) {
   return result;
 }
 
-void emitIntersectionFallbackOriginal(const Intersection& inter, std::string& sb) {
+void emitIntersectionFallbackOriginal(
+    const Intersection& inter,
+    std::string& sb) {
   for (std::size_t i = 0; i < inter.operands.size(); ++i) {
     if (i > 0) {
       sb.append("&&");
@@ -86,7 +88,9 @@ void emitIntersectionFallbackOriginal(const Intersection& inter, std::string& sb
 void emitFlat(const ClassNode& node, std::string& sb) {
   std::visit(
       Overloaded{
-          [&](const Literal& lit) { ClassRenderer::emitLiteralInClass(lit.cp, sb); },
+          [&](const Literal& lit) {
+            ClassRenderer::emitLiteralInClass(lit.cp, sb);
+          },
           [&](const Range& r) {
             ClassRenderer::emitLiteralInClass(r.lo, sb);
             sb.push_back('-');
@@ -95,9 +99,13 @@ void emitFlat(const ClassNode& node, std::string& sb) {
           [&](const PropertyLeaf& leaf) { sb.append(leaf.pcre2Token); },
           [&](const Negated& neg) {
             try {
-              sb.append(Evaluator::toRangeSet(*neg.child).complement().toPcre2ClassBody());
+              sb.append(
+                  Evaluator::toRangeSet(*neg.child)
+                      .complement()
+                      .toPcre2ClassBody());
             } catch (const EvaluationFailedException& e) {
-              throw EvaluationFailedException("Cannot flatten nested [^...]; caller must fall back");
+              throw EvaluationFailedException(
+                  "Cannot flatten nested [^...]; caller must fall back");
             }
           },
           [&](const Union& u) {
@@ -106,7 +114,8 @@ void emitFlat(const ClassNode& node, std::string& sb) {
             }
           },
           [&](const Intersection&) {
-            throw std::logic_error("emitFlat must not be called on Intersection nodes");
+            throw std::logic_error(
+                "emitFlat must not be called on Intersection nodes");
           }},
       node.value);
 }
@@ -114,7 +123,9 @@ void emitFlat(const ClassNode& node, std::string& sb) {
 void emitOriginalStyle(const ClassNode& node, std::string& sb) {
   std::visit(
       Overloaded{
-          [&](const Literal& lit) { ClassRenderer::emitLiteralInClass(lit.cp, sb); },
+          [&](const Literal& lit) {
+            ClassRenderer::emitLiteralInClass(lit.cp, sb);
+          },
           [&](const Range& r) {
             ClassRenderer::emitLiteralInClass(r.lo, sb);
             sb.push_back('-');
@@ -131,7 +142,9 @@ void emitOriginalStyle(const ClassNode& node, std::string& sb) {
               emitOriginalStyle(*child, sb);
             }
           },
-          [&](const Intersection& inter) { emitIntersectionFallbackOriginal(inter, sb); }},
+          [&](const Intersection& inter) {
+            emitIntersectionFallbackOriginal(inter, sb);
+          }},
       node.value);
 }
 
@@ -173,7 +186,8 @@ std::string ClassRenderer::render(const ClassNode& node) {
   return renderWithSignal(node).text;
 }
 
-ClassRenderer::RenderResult ClassRenderer::renderWithSignal(const ClassNode& node) {
+ClassRenderer::RenderResult ClassRenderer::renderWithSignal(
+    const ClassNode& node) {
   const bool negated = node.is<Negated>();
   const ClassNode& inner = negated ? *node.getIf<Negated>()->child : node;
 
@@ -234,7 +248,9 @@ bool ClassRenderer::containsIntersection(const ClassNode& node) {
   return std::visit(
       Overloaded{
           [](const Intersection&) { return true; },
-          [](const Negated& neg) { return ClassRenderer::containsIntersection(*neg.child); },
+          [](const Negated& neg) {
+            return ClassRenderer::containsIntersection(*neg.child);
+          },
           [](const Union& u) {
             for (const auto& child : u.children) {
               if (ClassRenderer::containsIntersection(*child)) {

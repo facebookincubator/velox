@@ -45,7 +45,8 @@ const std::unordered_map<std::string, std::string>& table() {
       {"javaDefined", "\\P{Cn}"},
       {"javaISOControl", "[\\x00-\\x1F\\x{7F}-\\x{9F}]"},
       {"javaJavaIdentifierStart", "[\\p{L}\\p{Nl}_$]"},
-      {"javaJavaIdentifierPart", "[\\p{L}\\p{Nl}\\p{Mn}\\p{Mc}\\p{Nd}\\p{Pc}_$]"},
+      {"javaJavaIdentifierPart",
+       "[\\p{L}\\p{Nl}\\p{Mn}\\p{Mc}\\p{Nd}\\p{Pc}_$]"},
       {"javaUnicodeIdentifierStart", "[\\p{L}\\p{Nl}]"},
       {"javaUnicodeIdentifierPart",
        "[\\p{L}\\p{Nl}\\p{Mn}\\p{Mc}\\p{Nd}\\p{Pc}]"},
@@ -154,7 +155,8 @@ std::string resolveBlock(std::string_view blockName) {
   if (normalized == "LOWSURROGATES") {
     return "[\\x{DC00}-\\x{DFFF}]";
   }
-  if (auto materialized = JdkPropertyExpander::materializeUnicodeBlock(blockName)) {
+  if (auto materialized =
+          JdkPropertyExpander::materializeUnicodeBlock(blockName)) {
     return *materialized;
   }
   return camelCaseToUnderscores(blockName);

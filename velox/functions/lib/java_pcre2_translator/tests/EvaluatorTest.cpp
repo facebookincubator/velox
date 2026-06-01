@@ -30,7 +30,9 @@ namespace facebook::velox::functions::java_pcre2_translator::test {
 class EvaluatorPosixShorthand
     : public testing::TestWithParam<std::tuple<std::string, int>> {};
 
-TEST_P(EvaluatorPosixShorthand, positivePosixShorthandsContainExpectedCodePoint) {
+TEST_P(
+    EvaluatorPosixShorthand,
+    positivePosixShorthandsContainExpectedCodePoint) {
   auto [token, cp] = GetParam();
   auto rs = Evaluator::toRangeSet(ClassNode(PropertyLeaf(token, false)));
   EXPECT_TRUE(rs.contains(cp)) << token;
@@ -69,18 +71,24 @@ TEST(Evaluator, negatedShorthandsComplementCorrectly) {
 
 TEST(Evaluator, unknownPropertyThrowsEvaluationFailed) {
   EXPECT_THROW(
-      Evaluator::toRangeSet(ClassNode(PropertyLeaf("\\p{ThisPropertyDoesNotExistXyz}", false))),
+      Evaluator::toRangeSet(
+          ClassNode(PropertyLeaf("\\p{ThisPropertyDoesNotExistXyz}", false))),
       EvaluationFailedException);
 }
 
 TEST(Evaluator, unknownPropertyInsideIntersectionThrows) {
-  auto inter = ClassNode(Intersection(std::vector<ClassNode>{
-      ClassNode(PropertyLeaf("\\p{UnknownXyz}", false)), ClassNode(Range('a', 'z'))}));
+  auto inter = ClassNode(Intersection(
+      std::vector<ClassNode>{
+          ClassNode(PropertyLeaf("\\p{UnknownXyz}", false)),
+          ClassNode(Range('a', 'z'))}));
   EXPECT_THROW(Evaluator::toRangeSet(inter), EvaluationFailedException);
 }
 
 TEST(Evaluator, tryToRangeSetReturnsNullOnFailure) {
-  EXPECT_FALSE(Evaluator::tryToRangeSet(ClassNode(PropertyLeaf("\\p{UnknownXyz}", false))).has_value());
+  EXPECT_FALSE(
+      Evaluator::tryToRangeSet(
+          ClassNode(PropertyLeaf("\\p{UnknownXyz}", false)))
+          .has_value());
 }
 
 TEST(Evaluator, tryToRangeSetReturnsRangeSetOnSuccess) {
