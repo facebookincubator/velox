@@ -36,6 +36,13 @@ class PerBackendTallyListener : public ::testing::EmptyTestEventListener {
     const std::string suite(info.test_suite_name());
     const std::string backend = extractBackend(suite);
     auto& t = tally_[backend];
+    // Skipped tests are excluded from both numerator and denominator so
+    // that "Java-API-only" GTEST_SKIP entries do not show up as Java
+    // failures in the per-backend rate.
+    if (info.result()->Skipped()) {
+      ++t.skipped;
+      return;
+    }
     ++t.total;
     if (info.result()->Passed()) {
       ++t.passed;
@@ -47,7 +54,11 @@ class PerBackendTallyListener : public ::testing::EmptyTestEventListener {
     for (const auto& [name, t] : tally_) {
       const double pct = 100.0 * t.passed / std::max(t.total, 1);
       std::cout << "  " << name << "  " << t.passed << " / " << t.total
-                << "  (" << pct << "%)\n";
+                << "  (" << pct << "%)";
+      if (t.skipped > 0) {
+        std::cout << "   [skipped: " << t.skipped << "]";
+      }
+      std::cout << "\n";
     }
     std::cout << "====================================================\n";
 
@@ -74,6 +85,7 @@ class PerBackendTallyListener : public ::testing::EmptyTestEventListener {
   struct Tally {
     int total = 0;
     int passed = 0;
+    int skipped = 0;
   };
   std::map<std::string, Tally> tally_;
 
