@@ -16,6 +16,7 @@
 
 #include <gtest/gtest.h>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/RawVector.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -716,6 +717,197 @@ TEST_F(LazyVectorTest, chain) {
   });
   auto expected = makeFlatVector<int32_t>(10, [](auto i) { return i * 2; });
   assertEqualVectors(expected, lazy);
+}
+
+// Verify containsLazyNotLoaded is lazily evaluated and correctly recomputed
+// after invalidation for RowVectors.
+TEST_F(LazyVectorTest, containsLazyNotLoadedLazyEvaluation) {
+  constexpr vector_size_t size = 100;
+
+  // RowVector with no lazy children.
+  auto flat = makeFlatVector<int32_t>(size, folly::identity);
+  auto rowVector = makeRowVector({flat});
+  EXPECT_FALSE(rowVector->containsLazyNotLoaded());
+
+  // RowVector with a lazy child.
+  auto lazy = vectorMaker_.lazyFlatVector<int32_t>(
+      size, [](vector_size_t row) { return row; });
+  auto rowWithLazy = makeRowVector({flat, lazy});
+  EXPECT_TRUE(rowWithLazy->containsLazyNotLoaded());
+
+  // After loading the lazy child, invalidate and verify recomputation.
+  lazy->loadedVector();
+  rowWithLazy->invalidateContainsLazyNotLoaded();
+  EXPECT_FALSE(rowWithLazy->containsLazyNotLoaded());
+
+  // Replace a child with a new lazy vector after invalidation, verify
+  // recomputation picks it up.
+  auto lazy2 = vectorMaker_.lazyFlatVector<int32_t>(
+      size, [](vector_size_t row) { return row * 2; });
+  rowWithLazy->childAt(1) = lazy2;
+  rowWithLazy->invalidateContainsLazyNotLoaded();
+  EXPECT_TRUE(rowWithLazy->containsLazyNotLoaded());
+}
+
+TEST_F(LazyVectorTest, arrayRejectsLazyElements) {
+  constexpr vector_size_t size = 10;
+
+  auto offsets = allocateOffsets(1, pool_.get());
+  auto sizes = allocateSizes(1, pool_.get());
+  sizes->asMutable<vector_size_t>()[0] = size;
+
+  // Lazy flat vector as elements.
+  auto lazyFlat = std::make_shared<LazyVector>(
+      pool_.get(),
+      INTEGER(),
+      size,
+      std::make_unique<SimpleVectorLoader>([&](RowSet) {
+        return makeFlatVector<int32_t>(size, folly::identity);
+      }));
+
+  VELOX_ASSERT_THROW(
+      std::make_shared<ArrayVector>(
+          pool_.get(), ARRAY(INTEGER()), nullptr, 1, offsets, sizes, lazyFlat),
+      "Cannot construct ArrayVector with an unloaded lazy vector as elements.");
+
+  // Lazy ROW vector as elements.
+  auto rowType = ROW({INTEGER(), INTEGER()});
+  auto lazyRow = std::make_shared<LazyVector>(
+      pool_.get(),
+      rowType,
+      size,
+      std::make_unique<SimpleVectorLoader>([&](RowSet) {
+        return vectorMaker_.rowVector(
+            {makeFlatVector<int32_t>(size, folly::identity),
+             makeFlatVector<int32_t>(size, folly::identity)});
+      }));
+
+  VELOX_ASSERT_THROW(
+      std::make_shared<ArrayVector>(
+          pool_.get(), ARRAY(rowType), nullptr, 1, offsets, sizes, lazyRow),
+      "Cannot construct ArrayVector with an unloaded lazy vector as elements.");
+
+  // After loading, construction should succeed.
+  lazyFlat->loadedVector();
+  EXPECT_NO_THROW(
+      std::make_shared<ArrayVector>(
+          pool_.get(), ARRAY(INTEGER()), nullptr, 1, offsets, sizes, lazyFlat));
+
+  lazyRow->loadedVector();
+  EXPECT_NO_THROW(
+      std::make_shared<ArrayVector>(
+          pool_.get(), ARRAY(rowType), nullptr, 1, offsets, sizes, lazyRow));
+}
+
+TEST_F(LazyVectorTest, mapRejectsLazyKeysOrValues) {
+  constexpr vector_size_t size = 10;
+
+  auto offsets = allocateOffsets(1, pool_.get());
+  auto sizes = allocateSizes(1, pool_.get());
+  sizes->asMutable<vector_size_t>()[0] = size;
+  auto flatIntegers = makeFlatVector<int32_t>(size, folly::identity);
+
+  auto makeLazyFlat = [&]() {
+    return std::make_shared<LazyVector>(
+        pool_.get(),
+        INTEGER(),
+        size,
+        std::make_unique<SimpleVectorLoader>([&](RowSet) {
+          return makeFlatVector<int32_t>(size, folly::identity);
+        }));
+  };
+
+  auto rowType = ROW({INTEGER(), INTEGER()});
+  auto makeLazyRow = [&]() {
+    return std::make_shared<LazyVector>(
+        pool_.get(),
+        rowType,
+        size,
+        std::make_unique<SimpleVectorLoader>([&](RowSet) {
+          return vectorMaker_.rowVector(
+              {makeFlatVector<int32_t>(size, folly::identity),
+               makeFlatVector<int32_t>(size, folly::identity)});
+        }));
+  };
+
+  // Lazy flat as keys.
+  VELOX_ASSERT_THROW(
+      std::make_shared<MapVector>(
+          pool_.get(),
+          MAP(INTEGER(), INTEGER()),
+          nullptr,
+          1,
+          offsets,
+          sizes,
+          makeLazyFlat(),
+          flatIntegers),
+      "Cannot construct MapVector with an unloaded lazy vector as keys.");
+
+  // Lazy flat as values.
+  VELOX_ASSERT_THROW(
+      std::make_shared<MapVector>(
+          pool_.get(),
+          MAP(INTEGER(), INTEGER()),
+          nullptr,
+          1,
+          offsets,
+          sizes,
+          flatIntegers,
+          makeLazyFlat()),
+      "Cannot construct MapVector with an unloaded lazy vector as values.");
+
+  // Lazy ROW as keys.
+  VELOX_ASSERT_THROW(
+      std::make_shared<MapVector>(
+          pool_.get(),
+          MAP(rowType, INTEGER()),
+          nullptr,
+          1,
+          offsets,
+          sizes,
+          makeLazyRow(),
+          flatIntegers),
+      "Cannot construct MapVector with an unloaded lazy vector as keys.");
+
+  // Lazy ROW as values.
+  VELOX_ASSERT_THROW(
+      std::make_shared<MapVector>(
+          pool_.get(),
+          MAP(INTEGER(), rowType),
+          nullptr,
+          1,
+          offsets,
+          sizes,
+          flatIntegers,
+          makeLazyRow()),
+      "Cannot construct MapVector with an unloaded lazy vector as values.");
+
+  // After loading, construction should succeed.
+  auto lazyFlat = makeLazyFlat();
+  lazyFlat->loadedVector();
+  EXPECT_NO_THROW(
+      std::make_shared<MapVector>(
+          pool_.get(),
+          MAP(INTEGER(), INTEGER()),
+          nullptr,
+          1,
+          offsets,
+          sizes,
+          flatIntegers,
+          lazyFlat));
+
+  auto lazyRow = makeLazyRow();
+  lazyRow->loadedVector();
+  EXPECT_NO_THROW(
+      std::make_shared<MapVector>(
+          pool_.get(),
+          MAP(INTEGER(), rowType),
+          nullptr,
+          1,
+          offsets,
+          sizes,
+          flatIntegers,
+          lazyRow));
 }
 
 } // namespace

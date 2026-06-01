@@ -68,7 +68,6 @@ class RowVector : public BaseVector {
             type->childAt(i)->toString());
       }
     }
-    updateContainsLazyNotLoaded();
   }
 
   static std::shared_ptr<RowVector> createEmpty(
@@ -221,11 +220,21 @@ class RowVector : public BaseVector {
 
   VectorPtr slice(vector_size_t offset, vector_size_t length) const override;
 
+  /// Whether any child is a lazy vector that has not been loaded yet. The
+  /// result is cached and computed lazily on first access to avoid scanning
+  /// children when the flag is never read (common for intermediate RowVectors).
   bool containsLazyNotLoaded() const {
-    return containsLazyNotLoaded_;
+    if (containsLazyNotLoaded_ < 0) {
+      computeContainsLazyNotLoaded();
+    }
+    return containsLazyNotLoaded_ == 1;
   }
 
-  void updateContainsLazyNotLoaded() const;
+  /// Invalidates the cached containsLazyNotLoaded flag, causing it to be
+  /// recomputed on next access. Must be called after directly manipulating or
+  /// replacing children (e.g. setting lazy fields, wrapping children in
+  /// dictionaries).
+  void invalidateContainsLazyNotLoaded() const;
 
   void validate(const VectorValidateOptions& options) const override;
 
@@ -297,13 +306,12 @@ class RowVector : public BaseVector {
   const size_t childrenSize_;
   mutable std::vector<VectorPtr> children_;
 
-  // Flag to indicate if any children of this vector contain lazy vector that
-  // has not been loaded.  Used to optimize recursive laziness check.  This will
-  // be initialized in the constructor, and should be updated by calling
-  // updateContainsLazyNotLoaded whenever a new lazy child is set (e.g. in table
-  // scan), or a lazy child is loaded (e.g. in LazyVector::ensureLoadedRows and
-  // loadedVector).
-  mutable bool containsLazyNotLoaded_;
+  void computeContainsLazyNotLoaded() const;
+
+  // Lazily evaluated flag indicating whether any children contain unloaded lazy
+  // vectors. -1 means dirty (needs recomputation on next access), 0 means
+  // false, 1 means true.
+  mutable int8_t containsLazyNotLoaded_{-1};
 
   // Flag to indicate all children has been loaded (non-recursively).  Used to
   // optimize loadedVector calls.  If this is true, we don't recurse into
@@ -478,6 +486,9 @@ class ArrayVector : public ArrayVectorBase {
         "Unexpected element type: {}. Expected: {}",
         elements_->type()->toString(),
         type->childAt(0)->toString());
+    VELOX_CHECK(
+        !isLazyNotLoaded(*elements_),
+        "Cannot construct ArrayVector with an unloaded lazy vector as elements.");
   }
 
   bool containsNullAt(vector_size_t idx) const override;
@@ -609,6 +620,12 @@ class MapVector : public ArrayVectorBase {
         "Unexpected value type: {}. Expected: {}",
         values_->type()->toString(),
         type->childAt(1)->toString());
+    VELOX_CHECK(
+        !isLazyNotLoaded(*keys_),
+        "Cannot construct MapVector with an unloaded lazy vector as keys.");
+    VELOX_CHECK(
+        !isLazyNotLoaded(*values_),
+        "Cannot construct MapVector with an unloaded lazy vector as values.");
   }
 
   ~MapVector() override = default;
