@@ -203,6 +203,25 @@ Returns 0, if the string was not found or if the given string <code class="docut
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="format_number">
+<span class="sig-name descname"><span class="pre">format_number</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">number</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">decimalPlaces</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#format_number" title="Link to this definition">¶</a></dt>
+<dd><p>Formats <code class="docutils literal notranslate"><span class="pre">number</span></code> with commas as thousands separator, dot as decimal
+separator, and <code class="docutils literal notranslate"><span class="pre">decimalPlaces</span></code> fixed decimal digits using HALF_EVEN
+(banker’s) rounding. Uses the default format pattern
+<code class="docutils literal notranslate"><span class="pre">#,###,###,###,###,###,##0</span></code>. Returns NULL if <code class="docutils literal notranslate"><span class="pre">decimalPlaces</span></code> is negative.</p>
+<p>Unlike <code class="docutils literal notranslate"><span class="pre">CAST(number</span> <span class="pre">AS</span> <span class="pre">VARCHAR)</span></code>, this adds thousands separators and
+fixed decimal places. Supports tinyint, smallint, integer, bigint, float,
+and double.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">format_number</span><span class="p">(</span><span class="mf">12345.678</span><span class="p">,</span> <span class="mi">2</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;12,345.68&#39;</span>
+<span class="n">SELECT</span> <span class="n">format_number</span><span class="p">(</span><span class="mi">12345</span><span class="p">,</span> <span class="mi">0</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;12,345&#39;</span>
+<span class="n">SELECT</span> <span class="n">format_number</span><span class="p">(</span><span class="o">-</span><span class="mf">1234567.89</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;-1,234,567.9&#39;</span>
+<span class="n">SELECT</span> <span class="n">format_number</span><span class="p">(</span><span class="mf">2.5</span><span class="p">,</span> <span class="mi">0</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;2&#39;</span> <span class="p">(</span><span class="n">HALF_EVEN</span> <span class="n">rounds</span> <span class="n">to</span> <span class="n">even</span><span class="p">)</span>
+<span class="n">SELECT</span> <span class="n">format_number</span><span class="p">(</span><span class="mi">123</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="initcap">
 <span class="sig-name descname"><span class="pre">initcap</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#initcap" title="Link to this definition">¶</a></dt>
 <dd><p>The <code class="docutils literal notranslate"><span class="pre">initcap</span></code> function converts the first character of each word to uppercase
@@ -748,6 +767,7 @@ Note: This function is not directly callable in Spark SQL, but internally used f
 <li><a class="reference internal" href="#empty2null"><code class="docutils literal notranslate"><span class="pre">empty2null()</span></code></a></li>
 <li><a class="reference internal" href="#endswith"><code class="docutils literal notranslate"><span class="pre">endswith()</span></code></a></li>
 <li><a class="reference internal" href="#find_in_set"><code class="docutils literal notranslate"><span class="pre">find_in_set()</span></code></a></li>
+<li><a class="reference internal" href="#format_number"><code class="docutils literal notranslate"><span class="pre">format_number()</span></code></a></li>
 <li><a class="reference internal" href="#initcap"><code class="docutils literal notranslate"><span class="pre">initcap()</span></code></a></li>
 <li><a class="reference internal" href="#instr"><code class="docutils literal notranslate"><span class="pre">instr()</span></code></a></li>
 <li><a class="reference internal" href="#left"><code class="docutils literal notranslate"><span class="pre">left()</span></code></a></li>
