@@ -232,6 +232,11 @@ std::string cudaTypeFromScalarTypeName(const std::string& name) {
       {"Byte", "uint8_t"},
       {"Bool", "bool"},
   };
+  // PT2 export serializes dtype=None as "".  Default to Float, matching
+  // PyTorch's c10::get_default_dtype() (caffe2/c10/core/DefaultDtype.cpp:5).
+  if (typeName.empty()) {
+    return "float";
+  }
   auto it = kMap.find(typeName);
   TORCH_CHECK(it != kMap.end(), "Unsupported ScalarType name: ", name);
   return it->second;
