@@ -20,10 +20,6 @@ add_executable(
   ArbitrationParticipantTest.cpp
   ByteStreamTest.cpp
   CompactDoubleListTest.cpp
-  CustomMemoryEmulationTest.cpp
-  CustomMemoryHierarchyTest.cpp
-  CustomMemoryPoolTest.cpp
-  CustomMemoryRegistrationTest.cpp
   HashStringAllocatorTest.cpp
   MemoryAllocatorTest.cpp
   MemoryArbitratorTest.cpp
@@ -42,7 +38,6 @@ target_link_libraries(
   PRIVATE
     velox_caching
     velox_common_base
-    velox_custom_memory_resource_registry
     velox_exception
     velox_exec
     velox_exec_test_lib
