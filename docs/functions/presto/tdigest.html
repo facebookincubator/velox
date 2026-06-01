@@ -99,9 +99,11 @@ they may be cast to/from <code class="docutils literal notranslate"><span class=
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="merge">
-<span class="sig-name descname"><span class="pre">merge</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">tdigest&lt;double&gt;</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">tdigest&lt;double&gt;</span></span></span><a class="headerlink" href="#merge" title="Link to this definition">¶</a></dt>
-<dd><p>Merges all input <code class="docutils literal notranslate"><span class="pre">tdigest</span></code>s into a single <code class="docutils literal notranslate"><span class="pre">tdigest</span></code>.</p>
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">merge</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">tdigest&lt;double&gt;</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">tdigest&lt;double&gt;</span></span></span></dt>
+<dd><blockquote>
+<div><p>Merges all input <code class="docutils literal notranslate"><span class="pre">tdigest</span></code>s into a single <code class="docutils literal notranslate"><span class="pre">tdigest</span></code>.</p>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
@@ -217,17 +219,21 @@ means more accuracy at the cost of more memory.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="value_at_quantile">
-<span class="sig-name descname"><span class="pre">value_at_quantile</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">digest:</span> <span class="pre">tdigest&lt;double&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">quantile:</span> <span class="pre">double</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#value_at_quantile" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the approximate percentile value from the T-digest <code class="docutils literal notranslate"><span class="pre">digest</span></code> at the given <code class="docutils literal notranslate"><span class="pre">quantile</span></code>.
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">value_at_quantile</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">digest:</span> <span class="pre">tdigest&lt;double&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">quantile:</span> <span class="pre">double</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns the approximate percentile value from the T-digest <code class="docutils literal notranslate"><span class="pre">digest</span></code> at the given <code class="docutils literal notranslate"><span class="pre">quantile</span></code>.
 The <code class="docutils literal notranslate"><span class="pre">quantile</span></code> must be between zero and one (inclusive).</p>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="values_at_quantiles">
-<span class="sig-name descname"><span class="pre">values_at_quantiles</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">digest:</span> <span class="pre">tdigest&lt;double&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">quantiles:</span> <span class="pre">array&lt;double&gt;</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array&lt;double&gt;</span></span></span><a class="headerlink" href="#values_at_quantiles" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the approximate percentile values as an array from the T-digest <code class="docutils literal notranslate"><span class="pre">digest</span></code> at each of the specified quantiles given in the <code class="docutils literal notranslate"><span class="pre">quantiles</span></code> array.
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">values_at_quantiles</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">digest:</span> <span class="pre">tdigest&lt;double&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">quantiles:</span> <span class="pre">array&lt;double&gt;</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array&lt;double&gt;</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns the approximate percentile values as an array from the T-digest <code class="docutils literal notranslate"><span class="pre">digest</span></code> at each of the specified quantiles given in the <code class="docutils literal notranslate"><span class="pre">quantiles</span></code> array.
 All quantile values must be between zero and one (inclusive).</p>
+</div></blockquote>
 </dd></dl>
 
 </section>
@@ -248,7 +254,6 @@ All quantile values must be between zero and one (inclusive).</p>
 <li><a class="reference internal" href="#functions">Functions</a><ul>
 <li><a class="reference internal" href="#construct_tdigest"><code class="docutils literal notranslate"><span class="pre">construct_tdigest()</span></code></a></li>
 <li><a class="reference internal" href="#destructure_tdigest"><code class="docutils literal notranslate"><span class="pre">destructure_tdigest()</span></code></a></li>
-<li><a class="reference internal" href="#merge"><code class="docutils literal notranslate"><span class="pre">merge()</span></code></a></li>
 <li><a class="reference internal" href="#merge_tdigest"><code class="docutils literal notranslate"><span class="pre">merge_tdigest()</span></code></a></li>
 <li><a class="reference internal" href="#quantile_at_value"><code class="docutils literal notranslate"><span class="pre">quantile_at_value()</span></code></a></li>
 <li><a class="reference internal" href="#quantiles_at_values"><code class="docutils literal notranslate"><span class="pre">quantiles_at_values()</span></code></a></li>
@@ -257,8 +262,6 @@ All quantile values must be between zero and one (inclusive).</p>
 <li><a class="reference internal" href="#trimmed_mean"><code class="docutils literal notranslate"><span class="pre">trimmed_mean()</span></code></a></li>
 <li><a class="reference internal" href="#winsorized_mean"><code class="docutils literal notranslate"><span class="pre">winsorized_mean()</span></code></a></li>
 <li><a class="reference internal" href="#approx_winsorized_mean"><code class="docutils literal notranslate"><span class="pre">approx_winsorized_mean()</span></code></a></li>
-<li><a class="reference internal" href="#value_at_quantile"><code class="docutils literal notranslate"><span class="pre">value_at_quantile()</span></code></a></li>
-<li><a class="reference internal" href="#values_at_quantiles"><code class="docutils literal notranslate"><span class="pre">values_at_quantiles()</span></code></a></li>
 </ul>
 </li>
 </ul>

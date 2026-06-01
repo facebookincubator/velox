@@ -42,9 +42,11 @@
   <section id="mathematical-functions">
 <h1>Mathematical Functions<a class="headerlink" href="#mathematical-functions" title="Link to this heading">¶</a></h1>
 <dl class="py function">
-<dt class="sig sig-object py" id="abs">
-<span class="sig-name descname"><span class="pre">abs</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#abs" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the absolute value of <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">abs</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns the absolute value of <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
@@ -54,9 +56,11 @@
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="ceil">
-<span class="sig-name descname"><span class="pre">ceil</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#ceil" title="Link to this definition">¶</a></dt>
-<dd><p>This is an alias for <a class="reference internal" href="#ceiling" title="ceiling"><code class="xref py py-func docutils literal notranslate"><span class="pre">ceiling()</span></code></a>.</p>
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">ceil</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span></dt>
+<dd><blockquote>
+<div><p>This is an alias for <a class="reference internal" href="#ceiling" title="ceiling"><code class="xref py py-func docutils literal notranslate"><span class="pre">ceiling()</span></code></a>.</p>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
@@ -88,9 +92,10 @@ If any input map is empty, the function returns NaN.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id0">
-<span class="sig-name descname"><span class="pre">cosine_similarity</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(double)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">array(double)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#id0" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the <a class="reference external" href="https://en.wikipedia.org/wiki/Cosine_similarity">cosine similarity</a> between the vectors represented as array(double).
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">cosine_similarity</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(double)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">array(double)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns the <a class="reference external" href="https://en.wikipedia.org/wiki/Cosine_similarity">cosine similarity</a> between the vectors represented as array(double).
 If any input array is empty, the function returns NaN. If the input arrays have different sizes, the function throws VeloxUserError.</p>
 <blockquote>
 <div><p>SELECT cosine_similarity(ARRAY[1], ARRAY[2]); – 1.0</p>
@@ -98,13 +103,16 @@ If any input array is empty, the function returns NaN. If the input arrays have 
 <p>SELECT cosine_similarity(ARRAY[], ARRAY[2, 3]); – Throws VeloxUserError</p>
 <p>SELECT cosine_similarity(ARRAY[], ARRAY[]); – NaN</p>
 </div></blockquote>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id2">
-<span class="sig-name descname"><span class="pre">cosine_similarity</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(real)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">array(real)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">real</span></span></span><a class="headerlink" href="#id2" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the <a class="reference external" href="https://en.wikipedia.org/wiki/Cosine_similarity">cosine similarity</a> between the vectors represented as array(real).
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">cosine_similarity</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(real)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">array(real)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">real</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns the <a class="reference external" href="https://en.wikipedia.org/wiki/Cosine_similarity">cosine similarity</a> between the vectors represented as array(real).
 If any input array is empty, the function returns NaN. If the input arrays have different sizes, the function throws VeloxUserError.</p>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
@@ -121,16 +129,19 @@ If any input array is empty, the function returns NaN. If the input arrays have 
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id4">
-<span class="sig-name descname"><span class="pre">l2_squared</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(double)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">array(double)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#id4" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the squared <a class="reference external" href="https://en.wikipedia.org/wiki/Euclidean_distance">Euclidean distance</a> between the vectors represented as array(double).
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">l2_squared</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(double)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">array(double)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns the squared <a class="reference external" href="https://en.wikipedia.org/wiki/Euclidean_distance">Euclidean distance</a> between the vectors represented as array(double).
 If any input array is empty, the function returns NaN. If the input arrays have different sizes, the function throws VeloxUserError.</p>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="dot_product">
-<span class="sig-name descname"><span class="pre">dot_product</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(real)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">array(real)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">real</span></span></span><a class="headerlink" href="#dot_product" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the <a class="reference external" href="https://en.wikipedia.org/wiki/Dot_product">Dot Product</a> between the vectors represented as array(real).
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">dot_product</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(real)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">array(real)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">real</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns the <a class="reference external" href="https://en.wikipedia.org/wiki/Dot_product">Dot Product</a> between the vectors represented as array(real).
 If any input array is empty, the function returns NaN. If the input arrays have different sizes, the function throws VeloxUserError.</p>
 <blockquote>
 <div><p>SELECT dot_product(ARRAY[1], ARRAY[2]); – 2.0</p>
@@ -138,13 +149,16 @@ If any input array is empty, the function returns NaN. If the input arrays have 
 <p>SELECT dot_product(ARRAY[], ARRAY[2, 3]); – Throws VeloxUserError</p>
 <p>SELECT dot_product(ARRAY[], ARRAY[]); – NaN</p>
 </div></blockquote>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id6">
-<span class="sig-name descname"><span class="pre">dot_product</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(double)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">array(double)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#id6" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the <a class="reference external" href="https://en.wikipedia.org/wiki/Dot_product">Dot Product</a> between the vectors represented as array(double).
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">dot_product</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(double)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">array(double)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns the <a class="reference external" href="https://en.wikipedia.org/wiki/Dot_product">Dot Product</a> between the vectors represented as array(double).
 If any input array is empty, the function returns NaN. If the input arrays have different sizes, the function throws VeloxUserError.</p>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
@@ -154,13 +168,15 @@ If any input array is empty, the function returns NaN. If the input arrays have 
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="divide">
-<span class="sig-name descname"><span class="pre">divide</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#divide" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the results of dividing x by y. The types of x and y must be the same.
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">divide</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns the results of dividing x by y. The types of x and y must be the same.
 The result of dividing by zero depends on the input types. For integral types,
 division by zero results in an error. For floating point types,  division by
 zero returns positive infinity if x is greater than zero, negative infinity if
 x if less than zero and NaN if x is equal to zero.</p>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
@@ -176,9 +192,11 @@ x if less than zero and NaN if x is equal to zero.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="floor">
-<span class="sig-name descname"><span class="pre">floor</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#floor" title="Link to this definition">¶</a></dt>
-<dd><p>Returns <code class="docutils literal notranslate"><span class="pre">x</span></code> rounded down to the nearest integer.</p>
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">floor</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns <code class="docutils literal notranslate"><span class="pre">x</span></code> rounded down to the nearest integer.</p>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
@@ -206,10 +224,12 @@ x if less than zero and NaN if x is equal to zero.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="minus">
-<span class="sig-name descname"><span class="pre">minus</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#minus" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the result of subtracting y from x. The types of x and y must be the same.
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">minus</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns the result of subtracting y from x. The types of x and y must be the same.
 For integral types, overflow results in an error.</p>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
@@ -219,16 +239,20 @@ For integral types, overflow results in an error.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="multiply">
-<span class="sig-name descname"><span class="pre">multiply</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#multiply" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the result of multiplying x by y. The types of x and y must be the same.
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">multiply</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns the result of multiplying x by y. The types of x and y must be the same.
 For integral types, overflow results in an error.</p>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="negate">
-<span class="sig-name descname"><span class="pre">negate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#negate" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the additive inverse of x, e.g. the number that, when added to x, yields zero.</p>
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">negate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns the additive inverse of x, e.g. the number that, when added to x, yields zero.</p>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
@@ -238,10 +262,12 @@ For integral types, overflow results in an error.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="plus">
-<span class="sig-name descname"><span class="pre">plus</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#plus" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the result of adding x to y. The types of x and y must be the same.
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">plus</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns the result of adding x to y. The types of x and y must be the same.
 For integral types, overflow results in an error.</p>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
@@ -283,9 +309,11 @@ For integral types, overflow results in an error.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="round">
-<span class="sig-name descname"><span class="pre">round</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#round" title="Link to this definition">¶</a></dt>
-<dd><p>Returns <code class="docutils literal notranslate"><span class="pre">x</span></code> rounded to the nearest integer.</p>
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">round</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns <code class="docutils literal notranslate"><span class="pre">x</span></code> rounded to the nearest integer.</p>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
@@ -299,7 +327,7 @@ For integral types, overflow results in an error.</p>
 <dl class="py function">
 <dt class="sig sig-object py" id="secure_rand">
 <span class="sig-name descname"><span class="pre">secure_rand</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#secure_rand" title="Link to this definition">¶</a></dt>
-<dd><p>This is an alias for <a class="reference internal" href="#id8" title="secure_random"><code class="xref py py-func docutils literal notranslate"><span class="pre">secure_random()</span></code></a>.</p>
+<dd><p>This is an alias for <a class="reference internal" href="#secure_random" title="secure_random"><code class="xref py py-func docutils literal notranslate"><span class="pre">secure_random()</span></code></a>.</p>
 </dd></dl>
 
 <dl class="py function">
@@ -309,9 +337,11 @@ For integral types, overflow results in an error.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id8">
-<span class="sig-name descname"><span class="pre">secure_random</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">lower</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">upper</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">input]</span></span></span><a class="headerlink" href="#id8" title="Link to this definition">¶</a></dt>
-<dd><p>Returns a cryptographically secure random value in the range lower &lt;= x &lt; upper, where lower &lt; upper.</p>
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">secure_random</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">lower</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">upper</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">input]</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns a cryptographically secure random value in the range lower &lt;= x &lt; upper, where lower &lt; upper.</p>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
@@ -340,10 +370,12 @@ For integral types, overflow results in an error.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="truncate">
-<span class="sig-name descname"><span class="pre">truncate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#truncate" title="Link to this definition">¶</a></dt>
-<dd><p>Returns x rounded to integer by dropping digits after decimal point.
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">truncate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns x rounded to integer by dropping digits after decimal point.
 Supported types of <code class="docutils literal notranslate"><span class="pre">x</span></code> are: REAL and DOUBLE.</p>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
@@ -604,15 +636,6 @@ The probability <code class="docutils literal notranslate"><span class="pre">p</
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id9">
-<span class="sig-name descname"><span class="pre">inverse_normal_cdf</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">mean</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sd</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">p</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#id9" title="Link to this definition">¶</a></dt>
-<dd><p>Compute the inverse of the Normal cdf with given mean and standard
-deviation (sd) for the cumulative probability (p): P(N &lt; n). The mean must be
-a real value and the standard deviation must be a real and positive value (both of type DOUBLE).
-The probability p must lie on the interval (0, 1).</p>
-</dd></dl>
-
-<dl class="py function">
 <dt class="sig sig-object py" id="inverse_gamma_cdf">
 <span class="sig-name descname"><span class="pre">inverse_gamma_cdf</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">shape</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">scale</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">p</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#inverse_gamma_cdf" title="Link to this definition">¶</a></dt>
 <dd><p>Compute the inverse of the Gamma cdf with given shape and scale parameters for the cumulative
@@ -684,46 +707,30 @@ at a confidence specified by the z-score z.</p>
     <h3><a href="../../index.html">Table of Contents</a></h3>
     <ul>
 <li><a class="reference internal" href="#">Mathematical Functions</a><ul>
-<li><a class="reference internal" href="#abs"><code class="docutils literal notranslate"><span class="pre">abs()</span></code></a></li>
 <li><a class="reference internal" href="#cbrt"><code class="docutils literal notranslate"><span class="pre">cbrt()</span></code></a></li>
-<li><a class="reference internal" href="#ceil"><code class="docutils literal notranslate"><span class="pre">ceil()</span></code></a></li>
 <li><a class="reference internal" href="#ceiling"><code class="docutils literal notranslate"><span class="pre">ceiling()</span></code></a></li>
 <li><a class="reference internal" href="#clamp"><code class="docutils literal notranslate"><span class="pre">clamp()</span></code></a></li>
 <li><a class="reference internal" href="#cosine_similarity"><code class="docutils literal notranslate"><span class="pre">cosine_similarity()</span></code></a></li>
-<li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">cosine_similarity()</span></code></a></li>
-<li><a class="reference internal" href="#id2"><code class="docutils literal notranslate"><span class="pre">cosine_similarity()</span></code></a></li>
 <li><a class="reference internal" href="#l2_squared"><code class="docutils literal notranslate"><span class="pre">l2_squared()</span></code></a></li>
-<li><a class="reference internal" href="#id4"><code class="docutils literal notranslate"><span class="pre">l2_squared()</span></code></a></li>
-<li><a class="reference internal" href="#dot_product"><code class="docutils literal notranslate"><span class="pre">dot_product()</span></code></a></li>
-<li><a class="reference internal" href="#id6"><code class="docutils literal notranslate"><span class="pre">dot_product()</span></code></a></li>
 <li><a class="reference internal" href="#degrees"><code class="docutils literal notranslate"><span class="pre">degrees()</span></code></a></li>
-<li><a class="reference internal" href="#divide"><code class="docutils literal notranslate"><span class="pre">divide()</span></code></a></li>
 <li><a class="reference internal" href="#e"><code class="docutils literal notranslate"><span class="pre">e()</span></code></a></li>
 <li><a class="reference internal" href="#exp"><code class="docutils literal notranslate"><span class="pre">exp()</span></code></a></li>
-<li><a class="reference internal" href="#floor"><code class="docutils literal notranslate"><span class="pre">floor()</span></code></a></li>
 <li><a class="reference internal" href="#from_base"><code class="docutils literal notranslate"><span class="pre">from_base()</span></code></a></li>
 <li><a class="reference internal" href="#ln"><code class="docutils literal notranslate"><span class="pre">ln()</span></code></a></li>
 <li><a class="reference internal" href="#log2"><code class="docutils literal notranslate"><span class="pre">log2()</span></code></a></li>
 <li><a class="reference internal" href="#log10"><code class="docutils literal notranslate"><span class="pre">log10()</span></code></a></li>
-<li><a class="reference internal" href="#minus"><code class="docutils literal notranslate"><span class="pre">minus()</span></code></a></li>
 <li><a class="reference internal" href="#mod"><code class="docutils literal notranslate"><span class="pre">mod()</span></code></a></li>
-<li><a class="reference internal" href="#multiply"><code class="docutils literal notranslate"><span class="pre">multiply()</span></code></a></li>
-<li><a class="reference internal" href="#negate"><code class="docutils literal notranslate"><span class="pre">negate()</span></code></a></li>
 <li><a class="reference internal" href="#pi"><code class="docutils literal notranslate"><span class="pre">pi()</span></code></a></li>
-<li><a class="reference internal" href="#plus"><code class="docutils literal notranslate"><span class="pre">plus()</span></code></a></li>
 <li><a class="reference internal" href="#pow"><code class="docutils literal notranslate"><span class="pre">pow()</span></code></a></li>
 <li><a class="reference internal" href="#power"><code class="docutils literal notranslate"><span class="pre">power()</span></code></a></li>
 <li><a class="reference internal" href="#radians"><code class="docutils literal notranslate"><span class="pre">radians()</span></code></a></li>
 <li><a class="reference internal" href="#rand"><code class="docutils literal notranslate"><span class="pre">rand()</span></code></a></li>
 <li><a class="reference internal" href="#random"><code class="docutils literal notranslate"><span class="pre">random()</span></code></a></li>
-<li><a class="reference internal" href="#round"><code class="docutils literal notranslate"><span class="pre">round()</span></code></a></li>
 <li><a class="reference internal" href="#secure_rand"><code class="docutils literal notranslate"><span class="pre">secure_rand()</span></code></a></li>
 <li><a class="reference internal" href="#secure_random"><code class="docutils literal notranslate"><span class="pre">secure_random()</span></code></a></li>
-<li><a class="reference internal" href="#id8"><code class="docutils literal notranslate"><span class="pre">secure_random()</span></code></a></li>
 <li><a class="reference internal" href="#sign"><code class="docutils literal notranslate"><span class="pre">sign()</span></code></a></li>
 <li><a class="reference internal" href="#sqrt"><code class="docutils literal notranslate"><span class="pre">sqrt()</span></code></a></li>
 <li><a class="reference internal" href="#to_base"><code class="docutils literal notranslate"><span class="pre">to_base()</span></code></a></li>
-<li><a class="reference internal" href="#truncate"><code class="docutils literal notranslate"><span class="pre">truncate()</span></code></a></li>
 <li><a class="reference internal" href="#width_bucket"><code class="docutils literal notranslate"><span class="pre">width_bucket()</span></code></a></li>
 </ul>
 </li>
@@ -768,7 +775,6 @@ at a confidence specified by the z-score z.</p>
 <li><a class="reference internal" href="#inverse_cauchy_cdf"><code class="docutils literal notranslate"><span class="pre">inverse_cauchy_cdf()</span></code></a></li>
 <li><a class="reference internal" href="#inverse_laplace_cdf"><code class="docutils literal notranslate"><span class="pre">inverse_laplace_cdf()</span></code></a></li>
 <li><a class="reference internal" href="#inverse_f_cdf"><code class="docutils literal notranslate"><span class="pre">inverse_f_cdf()</span></code></a></li>
-<li><a class="reference internal" href="#id9"><code class="docutils literal notranslate"><span class="pre">inverse_normal_cdf()</span></code></a></li>
 <li><a class="reference internal" href="#inverse_gamma_cdf"><code class="docutils literal notranslate"><span class="pre">inverse_gamma_cdf()</span></code></a></li>
 <li><a class="reference internal" href="#inverse_binomial_cdf"><code class="docutils literal notranslate"><span class="pre">inverse_binomial_cdf()</span></code></a></li>
 <li><a class="reference internal" href="#inverse_poisson_cdf"><code class="docutils literal notranslate"><span class="pre">inverse_poisson_cdf()</span></code></a></li>

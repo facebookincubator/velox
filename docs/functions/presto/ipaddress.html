@@ -97,14 +97,16 @@ in the subnet specified by <code class="docutils literal notranslate"><span clas
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id0">
-<span class="sig-name descname"><span class="pre">is_subnet_of</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">ip_prefix1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ip_prefix2</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#id0" title="Link to this definition">¶</a></dt>
-<dd><p>Returns <code class="docutils literal notranslate"><span class="pre">true</span></code> if <code class="docutils literal notranslate"><span class="pre">ip_prefix2</span></code> is a subnet of <code class="docutils literal notranslate"><span class="pre">ip_prefix1</span></code>.</p>
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">is_subnet_of</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">ip_prefix1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ip_prefix2</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns <code class="docutils literal notranslate"><span class="pre">true</span></code> if <code class="docutils literal notranslate"><span class="pre">ip_prefix2</span></code> is a subnet of <code class="docutils literal notranslate"><span class="pre">ip_prefix1</span></code>.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">is_subnet_of</span><span class="p">(</span><span class="n">IPPREFIX</span> <span class="s1">&#39;192.168.3.131/26&#39;</span><span class="p">,</span> <span class="n">IPPREFIX</span> <span class="s1">&#39;192.168.3.144/30&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
 <span class="n">SELECT</span> <span class="n">is_subnet_of</span><span class="p">(</span><span class="n">IPPREFIX</span> <span class="s1">&#39;64:ff9b::17/64&#39;</span><span class="p">,</span> <span class="n">IPPREFIX</span> <span class="s1">&#39;64:ffff::17/64&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">false</span>
 <span class="n">SELECT</span> <span class="n">is_subnet_of</span><span class="p">(</span><span class="n">IPPREFIX</span> <span class="s1">&#39;192.168.3.131/26&#39;</span><span class="p">,</span> <span class="n">IPPREFIX</span> <span class="s1">&#39;192.168.3.131/26&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
 </pre></div>
 </div>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
@@ -147,15 +149,17 @@ IPv4-mapped IPv6 addresses (e.g. <code class="docutils literal notranslate"><spa
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id1">
-<span class="sig-name descname"><span class="pre">ip_version</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">ip_prefix</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#id1" title="Link to this definition">¶</a></dt>
-<dd><p>Returns <code class="docutils literal notranslate"><span class="pre">4</span></code> if <code class="docutils literal notranslate"><span class="pre">ip_prefix</span></code> contains an IPv4 address, <code class="docutils literal notranslate"><span class="pre">6</span></code> if it contains an IPv6 address.
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">ip_version</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">ip_prefix</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns <code class="docutils literal notranslate"><span class="pre">4</span></code> if <code class="docutils literal notranslate"><span class="pre">ip_prefix</span></code> contains an IPv4 address, <code class="docutils literal notranslate"><span class="pre">6</span></code> if it contains an IPv6 address.
 IPv4-mapped IPv6 prefixes are treated as IPv4.
 <code class="docutils literal notranslate"><span class="pre">ip_prefix</span></code> is of type <code class="docutils literal notranslate"><span class="pre">IPPREFIX</span></code>.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">ip_version</span><span class="p">(</span><span class="n">IPPREFIX</span> <span class="s1">&#39;1.2.3.4/24&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">4</span>
 <span class="n">SELECT</span> <span class="n">ip_version</span><span class="p">(</span><span class="n">IPPREFIX</span> <span class="s1">&#39;64:ff9b::17/64&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">6</span>
 </pre></div>
 </div>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
@@ -201,11 +205,9 @@ that is not considered globally reachable by IANA. For more information, see <a 
 <li><a class="reference internal" href="#ip_subnet_max"><code class="docutils literal notranslate"><span class="pre">ip_subnet_max()</span></code></a></li>
 <li><a class="reference internal" href="#ip_subnet_range"><code class="docutils literal notranslate"><span class="pre">ip_subnet_range()</span></code></a></li>
 <li><a class="reference internal" href="#is_subnet_of"><code class="docutils literal notranslate"><span class="pre">is_subnet_of()</span></code></a></li>
-<li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">is_subnet_of()</span></code></a></li>
 <li><a class="reference internal" href="#ip_prefix_collapse"><code class="docutils literal notranslate"><span class="pre">ip_prefix_collapse()</span></code></a></li>
 <li><a class="reference internal" href="#ip_prefix_subnets"><code class="docutils literal notranslate"><span class="pre">ip_prefix_subnets()</span></code></a></li>
 <li><a class="reference internal" href="#ip_version"><code class="docutils literal notranslate"><span class="pre">ip_version()</span></code></a></li>
-<li><a class="reference internal" href="#id1"><code class="docutils literal notranslate"><span class="pre">ip_version()</span></code></a></li>
 <li><a class="reference internal" href="#ip_prefix_masklen"><code class="docutils literal notranslate"><span class="pre">ip_prefix_masklen()</span></code></a></li>
 <li><a class="reference internal" href="#is_private_ip"><code class="docutils literal notranslate"><span class="pre">is_private_ip()</span></code></a></li>
 </ul>

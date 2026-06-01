@@ -165,7 +165,7 @@ table.coverage tr:nth-child(18) td:nth-child(7) {background-color: #6BA81E;}
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="string.html#lower" title="lower"><code class="xref py py-func docutils literal notranslate"><span class="pre">lower()</span></code></a></p></td>
 <td><p><a class="reference internal" href="json.html#json_extract_scalar" title="json_extract_scalar"><code class="xref py py-func docutils literal notranslate"><span class="pre">json_extract_scalar()</span></code></a></p></td>
-<td><p><a class="reference internal" href="math.html#abs" title="abs"><code class="xref py py-func docutils literal notranslate"><span class="pre">abs()</span></code></a></p></td>
+<td><p><a class="reference internal" href="decimal.html#abs" title="abs"><code class="xref py py-func docutils literal notranslate"><span class="pre">abs()</span></code></a></p></td>
 <td><p><a class="reference internal" href="array.html#flatten" title="flatten"><code class="xref py py-func docutils literal notranslate"><span class="pre">flatten()</span></code></a></p></td>
 <td><p><a class="reference internal" href="binary.html#from_big_endian_64" title="from_big_endian_64"><code class="xref py py-func docutils literal notranslate"><span class="pre">from_big_endian_64()</span></code></a></p></td>
 <td></td>
@@ -175,7 +175,7 @@ table.coverage tr:nth-child(18) td:nth-child(7) {background-color: #6BA81E;}
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="json.html#json_format" title="json_format"><code class="xref py py-func docutils literal notranslate"><span class="pre">json_format()</span></code></a></p></td>
 <td><p><a class="reference internal" href="array.html#array_sort" title="array_sort"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_sort()</span></code></a></p></td>
-<td><p><a class="reference internal" href="math.html#round" title="round"><code class="xref py py-func docutils literal notranslate"><span class="pre">round()</span></code></a></p></td>
+<td><p><a class="reference internal" href="decimal.html#round" title="round"><code class="xref py py-func docutils literal notranslate"><span class="pre">round()</span></code></a></p></td>
 <td><p><a class="reference internal" href="string.html#trim" title="trim"><code class="xref py py-func docutils literal notranslate"><span class="pre">trim()</span></code></a></p></td>
 <td><p><a class="reference internal" href="binary.html#md5" title="md5"><code class="xref py py-func docutils literal notranslate"><span class="pre">md5()</span></code></a></p></td>
 <td></td>
@@ -187,7 +187,7 @@ table.coverage tr:nth-child(18) td:nth-child(7) {background-color: #6BA81E;}
 <td><p><a class="reference internal" href="map.html#transform_values" title="transform_values"><code class="xref py py-func docutils literal notranslate"><span class="pre">transform_values()</span></code></a></p></td>
 <td><p><a class="reference internal" href="map.html#map_filter" title="map_filter"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_filter()</span></code></a></p></td>
 <td><p><a class="reference internal" href="map.html#map_zip_with" title="map_zip_with"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_zip_with()</span></code></a></p></td>
-<td><p><a class="reference internal" href="binary.html#id0" title="xxhash64"><code class="xref py py-func docutils literal notranslate"><span class="pre">xxhash64()</span></code></a></p></td>
+<td><p><a class="reference internal" href="binary.html#xxhash64" title="xxhash64"><code class="xref py py-func docutils literal notranslate"><span class="pre">xxhash64()</span></code></a></p></td>
 <td></td>
 <td><p><a class="reference internal" href="aggregate.html#array_agg" title="array_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_agg()</span></code></a></p></td>
 <td></td>
@@ -204,7 +204,7 @@ table.coverage tr:nth-child(18) td:nth-child(7) {background-color: #6BA81E;}
 <td></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="math.html#random" title="random"><code class="xref py py-func docutils literal notranslate"><span class="pre">random()</span></code></a></p></td>
-<td><p><a class="reference internal" href="string.html#concat" title="concat"><code class="xref py py-func docutils literal notranslate"><span class="pre">concat()</span></code></a></p></td>
+<td><p><a class="reference internal" href="array.html#concat" title="concat"><code class="xref py py-func docutils literal notranslate"><span class="pre">concat()</span></code></a></p></td>
 <td><p><a class="reference internal" href="map.html#map_values" title="map_values"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_values()</span></code></a></p></td>
 <td><p><a class="reference internal" href="array.html#slice" title="slice"><code class="xref py py-func docutils literal notranslate"><span class="pre">slice()</span></code></a></p></td>
 <td><p><a class="reference internal" href="map.html#transform_keys" title="transform_keys"><code class="xref py py-func docutils literal notranslate"><span class="pre">transform_keys()</span></code></a></p></td>
@@ -213,8 +213,8 @@ table.coverage tr:nth-child(18) td:nth-child(7) {background-color: #6BA81E;}
 <td></td>
 <td></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="math.html#floor" title="floor"><code class="xref py py-func docutils literal notranslate"><span class="pre">floor()</span></code></a></p></td>
-<td><p><a class="reference internal" href="setdigest.html#cardinality" title="cardinality"><code class="xref py py-func docutils literal notranslate"><span class="pre">cardinality()</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="decimal.html#floor" title="floor"><code class="xref py py-func docutils literal notranslate"><span class="pre">floor()</span></code></a></p></td>
+<td><p><a class="reference internal" href="aggregate.html#cardinality" title="cardinality"><code class="xref py py-func docutils literal notranslate"><span class="pre">cardinality()</span></code></a></p></td>
 <td><p><a class="reference internal" href="map.html#map_keys" title="map_keys"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_keys()</span></code></a></p></td>
 <td><p><a class="reference internal" href="datetime.html#month" title="month"><code class="xref py py-func docutils literal notranslate"><span class="pre">month()</span></code></a></p></td>
 <td><p><a class="reference internal" href="geospatial.html#bing_tile_quadkey" title="bing_tile_quadkey"><code class="xref py py-func docutils literal notranslate"><span class="pre">bing_tile_quadkey()</span></code></a></p></td>
@@ -243,7 +243,7 @@ table.coverage tr:nth-child(18) td:nth-child(7) {background-color: #6BA81E;}
 <td></td>
 <td></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="string.html#length" title="length"><code class="xref py py-func docutils literal notranslate"><span class="pre">length()</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="binary.html#length" title="length"><code class="xref py py-func docutils literal notranslate"><span class="pre">length()</span></code></a></p></td>
 <td><p><a class="reference internal" href="datetime.html#date" title="date"><code class="xref py py-func docutils literal notranslate"><span class="pre">date()</span></code></a></p></td>
 <td><p><a class="reference internal" href="datetime.html#date_trunc" title="date_trunc"><code class="xref py py-func docutils literal notranslate"><span class="pre">date_trunc()</span></code></a></p></td>
 <td><p><a class="reference internal" href="datetime.html#date_parse" title="date_parse"><code class="xref py py-func docutils literal notranslate"><span class="pre">date_parse()</span></code></a></p></td>
@@ -253,7 +253,7 @@ table.coverage tr:nth-child(18) td:nth-child(7) {background-color: #6BA81E;}
 <td></td>
 <td></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="datetime.html#id1" title="from_unixtime"><code class="xref py py-func docutils literal notranslate"><span class="pre">from_unixtime()</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="datetime.html#from_unixtime" title="from_unixtime"><code class="xref py py-func docutils literal notranslate"><span class="pre">from_unixtime()</span></code></a></p></td>
 <td><p><a class="reference internal" href="math.html#is_nan" title="is_nan"><code class="xref py py-func docutils literal notranslate"><span class="pre">is_nan()</span></code></a></p></td>
 <td><p><a class="reference internal" href="datetime.html#date_diff" title="date_diff"><code class="xref py py-func docutils literal notranslate"><span class="pre">date_diff()</span></code></a></p></td>
 <td><p><a class="reference internal" href="geospatial.html#bing_tile_at" title="bing_tile_at"><code class="xref py py-func docutils literal notranslate"><span class="pre">bing_tile_at()</span></code></a></p></td>
@@ -277,7 +277,7 @@ table.coverage tr:nth-child(18) td:nth-child(7) {background-color: #6BA81E;}
 <td><p><a class="reference internal" href="array.html#filter" title="filter"><code class="xref py py-func docutils literal notranslate"><span class="pre">filter()</span></code></a></p></td>
 <td><p><a class="reference internal" href="datetime.html#from_iso8601_date" title="from_iso8601_date"><code class="xref py py-func docutils literal notranslate"><span class="pre">from_iso8601_date()</span></code></a></p></td>
 <td><p><a class="reference internal" href="array.html#reverse" title="reverse"><code class="xref py py-func docutils literal notranslate"><span class="pre">reverse()</span></code></a></p></td>
-<td><p><a class="reference internal" href="math.html#truncate" title="truncate"><code class="xref py py-func docutils literal notranslate"><span class="pre">truncate()</span></code></a></p></td>
+<td><p><a class="reference internal" href="decimal.html#truncate" title="truncate"><code class="xref py py-func docutils literal notranslate"><span class="pre">truncate()</span></code></a></p></td>
 <td></td>
 <td><p><a class="reference internal" href="aggregate.html#min_by" title="min_by"><code class="xref py py-func docutils literal notranslate"><span class="pre">min_by()</span></code></a></p></td>
 <td></td>
@@ -313,7 +313,7 @@ table.coverage tr:nth-child(18) td:nth-child(7) {background-color: #6BA81E;}
 <td></td>
 <td></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="regexp.html#id0" title="regexp_replace"><code class="xref py py-func docutils literal notranslate"><span class="pre">regexp_replace()</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="regexp.html#regexp_replace" title="regexp_replace"><code class="xref py py-func docutils literal notranslate"><span class="pre">regexp_replace()</span></code></a></p></td>
 <td><p><a class="reference internal" href="map.html#map_from_entries" title="map_from_entries"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_from_entries()</span></code></a></p></td>
 <td><p><a class="reference internal" href="math.html#pow" title="pow"><code class="xref py py-func docutils literal notranslate"><span class="pre">pow()</span></code></a></p></td>
 <td><p><a class="reference internal" href="string.html#split_part" title="split_part"><code class="xref py py-func docutils literal notranslate"><span class="pre">split_part()</span></code></a></p></td>
@@ -329,7 +329,7 @@ table.coverage tr:nth-child(18) td:nth-child(7) {background-color: #6BA81E;}
 <td><p><a class="reference internal" href="math.html#log10" title="log10"><code class="xref py py-func docutils literal notranslate"><span class="pre">log10()</span></code></a></p></td>
 <td></td>
 <td></td>
-<td><p><a class="reference internal" href="tdigest.html#merge" title="merge"><code class="xref py py-func docutils literal notranslate"><span class="pre">merge()</span></code></a></p></td>
+<td><p><a class="reference internal" href="aggregate.html#merge" title="merge"><code class="xref py py-func docutils literal notranslate"><span class="pre">merge()</span></code></a></p></td>
 <td></td>
 <td></td>
 </tr>

@@ -64,20 +64,24 @@ the unique identifiers associated with each key.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="merge">
-<span class="sig-name descname"><span class="pre">merge</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">KHyperLogLog</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">KHyperLogLog</span></span></span><a class="headerlink" href="#merge" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the <code class="docutils literal notranslate"><span class="pre">KHyperLogLog</span></code> of the aggregate union of the individual <code class="docutils literal notranslate"><span class="pre">KHyperLogLog</span></code>
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">merge</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">KHyperLogLog</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">KHyperLogLog</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns the <code class="docutils literal notranslate"><span class="pre">KHyperLogLog</span></code> of the aggregate union of the individual <code class="docutils literal notranslate"><span class="pre">KHyperLogLog</span></code>
 structures.</p>
+</div></blockquote>
 </dd></dl>
 
 </section>
 <section id="scalar-functions">
 <h2>Scalar Functions<a class="headerlink" href="#scalar-functions" title="Link to this heading">¶</a></h2>
 <dl class="py function">
-<dt class="sig sig-object py" id="cardinality">
-<span class="sig-name descname"><span class="pre">cardinality</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">khll</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#cardinality" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the estimated total cardinality (number of unique keys) from the
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">cardinality</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">khll</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns the estimated total cardinality (number of unique keys) from the
 <code class="docutils literal notranslate"><span class="pre">KHyperLogLog</span></code> sketch <code class="docutils literal notranslate"><span class="pre">khll</span></code>.</p>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
@@ -156,11 +160,9 @@ the fraction of keys falling into that bucket.</p>
 <li><a class="reference internal" href="#data-structures">Data Structures</a></li>
 <li><a class="reference internal" href="#aggregate-functions">Aggregate Functions</a><ul>
 <li><a class="reference internal" href="#khyperloglog_agg"><code class="docutils literal notranslate"><span class="pre">khyperloglog_agg()</span></code></a></li>
-<li><a class="reference internal" href="#merge"><code class="docutils literal notranslate"><span class="pre">merge()</span></code></a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#scalar-functions">Scalar Functions</a><ul>
-<li><a class="reference internal" href="#cardinality"><code class="docutils literal notranslate"><span class="pre">cardinality()</span></code></a></li>
 <li><a class="reference internal" href="#intersection_cardinality"><code class="docutils literal notranslate"><span class="pre">intersection_cardinality()</span></code></a></li>
 <li><a class="reference internal" href="#jaccard_index"><code class="docutils literal notranslate"><span class="pre">jaccard_index()</span></code></a></li>
 <li><a class="reference internal" href="#merge_khll"><code class="docutils literal notranslate"><span class="pre">merge_khll()</span></code></a></li>

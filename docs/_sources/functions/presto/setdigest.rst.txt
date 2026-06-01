@@ -42,12 +42,14 @@ Scalar Functions
 ----------------
 
 .. function:: cardinality(setdigest) -> bigint
+   :noindex:
 
     Returns the estimated cardinality of the set represented by the ``SetDigest`` sketch.
     If the digest is exact (low cardinality), returns the exact count.
     Otherwise, returns an approximation using HyperLogLog.
 
 .. function:: intersection_cardinality(setdigest1, setdigest2) -> bigint
+   :noindex:
 
     Returns the estimated intersection cardinality between two ``SetDigest`` sketches.
 
@@ -58,6 +60,7 @@ Scalar Functions
     ensure logical consistency.
 
 .. function:: jaccard_index(setdigest1, setdigest2) -> double
+   :noindex:
 
     Returns the Jaccard index (similarity coefficient) between two ``SetDigest`` sketches.
     The Jaccard index is a value in [0, 1] where:

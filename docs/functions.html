@@ -113,7 +113,7 @@ table.rows td:nth-child(4), td:nth-child(6) {
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p><a class="reference internal" href="functions/presto/math.html#abs" title="abs"><code class="xref py py-func docutils literal notranslate"><span class="pre">abs()</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="functions/presto/decimal.html#abs" title="abs"><code class="xref py py-func docutils literal notranslate"><span class="pre">abs()</span></code></a></p></td>
 <td><p><code class="xref py py-func docutils literal notranslate"><span class="pre">hash_counts()</span></code></p></td>
 <td><p><a class="reference internal" href="functions/presto/geospatial.html#s2_cell_parent" title="s2_cell_parent"><code class="xref py py-func docutils literal notranslate"><span class="pre">s2_cell_parent()</span></code></a></p></td>
 <td></td>
@@ -131,7 +131,7 @@ table.rows td:nth-child(4), td:nth-child(6) {
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="functions/presto/map.html#all_keys_match" title="all_keys_match"><code class="xref py py-func docutils literal notranslate"><span class="pre">all_keys_match()</span></code></a></p></td>
 <td><p><a class="reference internal" href="functions/presto/binary.html#hmac_sha1" title="hmac_sha1"><code class="xref py py-func docutils literal notranslate"><span class="pre">hmac_sha1()</span></code></a></p></td>
-<td><p><a class="reference internal" href="functions/presto/geospatial.html#id11" title="s2_cells"><code class="xref py py-func docutils literal notranslate"><span class="pre">s2_cells()</span></code></a></p></td>
+<td><p><a class="reference internal" href="functions/presto/geospatial.html#s2_cells" title="s2_cells"><code class="xref py py-func docutils literal notranslate"><span class="pre">s2_cells()</span></code></a></p></td>
 <td></td>
 <td><p><a class="reference internal" href="functions/presto/aggregate.html#approx_most_frequent" title="approx_most_frequent"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_most_frequent()</span></code></a></p></td>
 <td></td>
@@ -170,8 +170,8 @@ table.rows td:nth-child(4), td:nth-child(6) {
 <td><p><a class="reference internal" href="functions/presto/window.html#nth_value" title="nth_value"><code class="xref py py-func docutils literal notranslate"><span class="pre">nth_value()</span></code></a></p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="functions/presto/array.html#array_average" title="array_average"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_average()</span></code></a></p></td>
-<td><p><a class="reference internal" href="functions/presto/setdigest.html#intersection_cardinality" title="intersection_cardinality"><code class="xref py py-func docutils literal notranslate"><span class="pre">intersection_cardinality()</span></code></a></p></td>
-<td><p><a class="reference internal" href="functions/presto/math.html#id8" title="secure_random"><code class="xref py py-func docutils literal notranslate"><span class="pre">secure_random()</span></code></a></p></td>
+<td><p><a class="reference internal" href="functions/presto/khyperloglog.html#intersection_cardinality" title="intersection_cardinality"><code class="xref py py-func docutils literal notranslate"><span class="pre">intersection_cardinality()</span></code></a></p></td>
+<td><p><a class="reference internal" href="functions/presto/math.html#secure_random" title="secure_random"><code class="xref py py-func docutils literal notranslate"><span class="pre">secure_random()</span></code></a></p></td>
 <td></td>
 <td><p><a class="reference internal" href="functions/presto/aggregate.html#array_agg" title="array_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_agg()</span></code></a></p></td>
 <td></td>
@@ -234,10 +234,10 @@ table.rows td:nth-child(4), td:nth-child(6) {
 <td></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="functions/presto/array.html#array_intersect" title="array_intersect"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_intersect()</span></code></a></p></td>
-<td><p><a class="reference internal" href="functions/presto/math.html#id9" title="inverse_normal_cdf"><code class="xref py py-func docutils literal notranslate"><span class="pre">inverse_normal_cdf()</span></code></a></p></td>
+<td><p><a class="reference internal" href="functions/presto/math.html#inverse_normal_cdf" title="inverse_normal_cdf"><code class="xref py py-func docutils literal notranslate"><span class="pre">inverse_normal_cdf()</span></code></a></p></td>
 <td><p><a class="reference internal" href="functions/presto/math.html#sin" title="sin"><code class="xref py py-func docutils literal notranslate"><span class="pre">sin()</span></code></a></p></td>
 <td></td>
-<td><p><a class="reference internal" href="functions/presto/aggregate.html#id4" title="classification_fall_out"><code class="xref py py-func docutils literal notranslate"><span class="pre">classification_fall_out()</span></code></a></p></td>
+<td><p><a class="reference internal" href="functions/presto/aggregate.html#classification_fall_out" title="classification_fall_out"><code class="xref py py-func docutils literal notranslate"><span class="pre">classification_fall_out()</span></code></a></p></td>
 <td></td>
 <td></td>
 </tr>
@@ -245,7 +245,7 @@ table.rows td:nth-child(4), td:nth-child(6) {
 <td><p><a class="reference internal" href="functions/presto/math.html#inverse_poisson_cdf" title="inverse_poisson_cdf"><code class="xref py py-func docutils literal notranslate"><span class="pre">inverse_poisson_cdf()</span></code></a></p></td>
 <td><p><a class="reference internal" href="functions/presto/array.html#slice" title="slice"><code class="xref py py-func docutils literal notranslate"><span class="pre">slice()</span></code></a></p></td>
 <td></td>
-<td><p><a class="reference internal" href="functions/presto/aggregate.html#id3" title="classification_miss_rate"><code class="xref py py-func docutils literal notranslate"><span class="pre">classification_miss_rate()</span></code></a></p></td>
+<td><p><a class="reference internal" href="functions/presto/aggregate.html#classification_miss_rate" title="classification_miss_rate"><code class="xref py py-func docutils literal notranslate"><span class="pre">classification_miss_rate()</span></code></a></p></td>
 <td></td>
 <td></td>
 </tr>
@@ -253,7 +253,7 @@ table.rows td:nth-child(4), td:nth-child(6) {
 <td><p><a class="reference internal" href="functions/presto/math.html#inverse_t_cdf" title="inverse_t_cdf"><code class="xref py py-func docutils literal notranslate"><span class="pre">inverse_t_cdf()</span></code></a></p></td>
 <td><p><a class="reference internal" href="functions/presto/string.html#split" title="split"><code class="xref py py-func docutils literal notranslate"><span class="pre">split()</span></code></a></p></td>
 <td></td>
-<td><p><a class="reference internal" href="functions/presto/aggregate.html#id5" title="classification_precision"><code class="xref py py-func docutils literal notranslate"><span class="pre">classification_precision()</span></code></a></p></td>
+<td><p><a class="reference internal" href="functions/presto/aggregate.html#classification_precision" title="classification_precision"><code class="xref py py-func docutils literal notranslate"><span class="pre">classification_precision()</span></code></a></p></td>
 <td></td>
 <td></td>
 </tr>
@@ -261,13 +261,13 @@ table.rows td:nth-child(4), td:nth-child(6) {
 <td><p><a class="reference internal" href="functions/presto/math.html#inverse_weibull_cdf" title="inverse_weibull_cdf"><code class="xref py py-func docutils literal notranslate"><span class="pre">inverse_weibull_cdf()</span></code></a></p></td>
 <td><p><a class="reference internal" href="functions/presto/string.html#split_part" title="split_part"><code class="xref py py-func docutils literal notranslate"><span class="pre">split_part()</span></code></a></p></td>
 <td></td>
-<td><p><a class="reference internal" href="functions/presto/aggregate.html#id6" title="classification_recall"><code class="xref py py-func docutils literal notranslate"><span class="pre">classification_recall()</span></code></a></p></td>
+<td><p><a class="reference internal" href="functions/presto/aggregate.html#classification_recall" title="classification_recall"><code class="xref py py-func docutils literal notranslate"><span class="pre">classification_recall()</span></code></a></p></td>
 <td></td>
 <td></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="functions/presto/array.html#array_min" title="array_min"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_min()</span></code></a></p></td>
 <td><p><a class="reference internal" href="functions/presto/ipaddress.html#ip_prefix" title="ip_prefix"><code class="xref py py-func docutils literal notranslate"><span class="pre">ip_prefix()</span></code></a></p></td>
-<td><p><a class="reference internal" href="functions/presto/string.html#id0" title="split_to_map"><code class="xref py py-func docutils literal notranslate"><span class="pre">split_to_map()</span></code></a></p></td>
+<td><p><a class="reference internal" href="functions/presto/string.html#split_to_map" title="split_to_map"><code class="xref py py-func docutils literal notranslate"><span class="pre">split_to_map()</span></code></a></p></td>
 <td></td>
 <td><p><a class="reference internal" href="functions/presto/aggregate.html#classification_thresholds" title="classification_thresholds"><code class="xref py py-func docutils literal notranslate"><span class="pre">classification_thresholds()</span></code></a></p></td>
 <td></td>
@@ -322,7 +322,7 @@ table.rows td:nth-child(4), td:nth-child(6) {
 <td></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="functions/presto/array.html#array_split_into_chunks" title="array_split_into_chunks"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_split_into_chunks()</span></code></a></p></td>
-<td><p><a class="reference internal" href="functions/presto/ipaddress.html#id1" title="ip_version"><code class="xref py py-func docutils literal notranslate"><span class="pre">ip_version()</span></code></a></p></td>
+<td><p><a class="reference internal" href="functions/presto/ipaddress.html#ip_version" title="ip_version"><code class="xref py py-func docutils literal notranslate"><span class="pre">ip_version()</span></code></a></p></td>
 <td><p><code class="xref py py-func docutils literal notranslate"><span class="pre">st_astext()</span></code></p></td>
 <td></td>
 <td><p><a class="reference internal" href="functions/presto/aggregate.html#entropy" title="entropy"><code class="xref py py-func docutils literal notranslate"><span class="pre">entropy()</span></code></a></p></td>
@@ -378,7 +378,7 @@ table.rows td:nth-child(4), td:nth-child(6) {
 <td></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="functions/presto/math.html#asin" title="asin"><code class="xref py py-func docutils literal notranslate"><span class="pre">asin()</span></code></a></p></td>
-<td><p><a class="reference internal" href="functions/presto/ipaddress.html#id0" title="is_subnet_of"><code class="xref py py-func docutils literal notranslate"><span class="pre">is_subnet_of()</span></code></a></p></td>
+<td><p><a class="reference internal" href="functions/presto/ipaddress.html#is_subnet_of" title="is_subnet_of"><code class="xref py py-func docutils literal notranslate"><span class="pre">is_subnet_of()</span></code></a></p></td>
 <td><p><code class="xref py py-func docutils literal notranslate"><span class="pre">st_crosses()</span></code></p></td>
 <td></td>
 <td><p><a class="reference internal" href="functions/presto/setdigest.html#make_set_digest" title="make_set_digest"><code class="xref py py-func docutils literal notranslate"><span class="pre">make_set_digest()</span></code></a></p></td>
@@ -386,7 +386,7 @@ table.rows td:nth-child(4), td:nth-child(6) {
 <td></td>
 </tr>
 <tr class="row-even"><td><p><code class="xref py py-func docutils literal notranslate"><span class="pre">at_timezone()</span></code></p></td>
-<td><p><a class="reference internal" href="functions/presto/setdigest.html#jaccard_index" title="jaccard_index"><code class="xref py py-func docutils literal notranslate"><span class="pre">jaccard_index()</span></code></a></p></td>
+<td><p><a class="reference internal" href="functions/presto/khyperloglog.html#jaccard_index" title="jaccard_index"><code class="xref py py-func docutils literal notranslate"><span class="pre">jaccard_index()</span></code></a></p></td>
 <td><p><code class="xref py py-func docutils literal notranslate"><span class="pre">st_difference()</span></code></p></td>
 <td></td>
 <td><p><a class="reference internal" href="functions/presto/aggregate.html#map_agg" title="map_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_agg()</span></code></a></p></td>
@@ -425,7 +425,7 @@ table.rows td:nth-child(4), td:nth-child(6) {
 <td></td>
 <td></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="functions/presto/geospatial.html#id7" title="bing_tile"><code class="xref py py-func docutils literal notranslate"><span class="pre">bing_tile()</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="functions/presto/geospatial.html#bing_tile" title="bing_tile"><code class="xref py py-func docutils literal notranslate"><span class="pre">bing_tile()</span></code></a></p></td>
 <td><p><a class="reference internal" href="functions/presto/json.html#json_extract" title="json_extract"><code class="xref py py-func docutils literal notranslate"><span class="pre">json_extract()</span></code></a></p></td>
 <td><p><code class="xref py py-func docutils literal notranslate"><span class="pre">st_envelope()</span></code></p></td>
 <td></td>
@@ -437,11 +437,11 @@ table.rows td:nth-child(4), td:nth-child(6) {
 <td><p><a class="reference internal" href="functions/presto/json.html#json_extract_scalar" title="json_extract_scalar"><code class="xref py py-func docutils literal notranslate"><span class="pre">json_extract_scalar()</span></code></a></p></td>
 <td><p><code class="xref py py-func docutils literal notranslate"><span class="pre">st_envelopeaspts()</span></code></p></td>
 <td></td>
-<td><p><a class="reference internal" href="functions/presto/tdigest.html#merge" title="merge"><code class="xref py py-func docutils literal notranslate"><span class="pre">merge()</span></code></a></p></td>
+<td><p><a class="reference internal" href="functions/presto/aggregate.html#merge" title="merge"><code class="xref py py-func docutils literal notranslate"><span class="pre">merge()</span></code></a></p></td>
 <td></td>
 <td></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="functions/presto/geospatial.html#id10" title="bing_tile_children"><code class="xref py py-func docutils literal notranslate"><span class="pre">bing_tile_children()</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="functions/presto/geospatial.html#bing_tile_children" title="bing_tile_children"><code class="xref py py-func docutils literal notranslate"><span class="pre">bing_tile_children()</span></code></a></p></td>
 <td><p><a class="reference internal" href="functions/presto/json.html#json_format" title="json_format"><code class="xref py py-func docutils literal notranslate"><span class="pre">json_format()</span></code></a></p></td>
 <td><p><code class="xref py py-func docutils literal notranslate"><span class="pre">st_equals()</span></code></p></td>
 <td></td>
@@ -457,7 +457,7 @@ table.rows td:nth-child(4), td:nth-child(6) {
 <td></td>
 <td></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="functions/presto/geospatial.html#id9" title="bing_tile_parent"><code class="xref py py-func docutils literal notranslate"><span class="pre">bing_tile_parent()</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="functions/presto/geospatial.html#bing_tile_parent" title="bing_tile_parent"><code class="xref py py-func docutils literal notranslate"><span class="pre">bing_tile_parent()</span></code></a></p></td>
 <td><p><a class="reference internal" href="functions/presto/json.html#json_size" title="json_size"><code class="xref py py-func docutils literal notranslate"><span class="pre">json_size()</span></code></a></p></td>
 <td><p><code class="xref py py-func docutils literal notranslate"><span class="pre">st_geometries()</span></code></p></td>
 <td></td>
@@ -474,7 +474,7 @@ table.rows td:nth-child(4), td:nth-child(6) {
 <td></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="functions/presto/geospatial.html#bing_tile_quadkey" title="bing_tile_quadkey"><code class="xref py py-func docutils literal notranslate"><span class="pre">bing_tile_quadkey()</span></code></a></p></td>
-<td><p><a class="reference internal" href="functions/presto/array.html#id2" title="l2_norm"><code class="xref py py-func docutils literal notranslate"><span class="pre">l2_norm()</span></code></a></p></td>
+<td><p><a class="reference internal" href="functions/presto/array.html#l2_norm" title="l2_norm"><code class="xref py py-func docutils literal notranslate"><span class="pre">l2_norm()</span></code></a></p></td>
 <td><p><code class="xref py py-func docutils literal notranslate"><span class="pre">st_geometryn()</span></code></p></td>
 <td></td>
 <td><p><a class="reference internal" href="functions/presto/aggregate.html#noisy_approx_distinct_sfm" title="noisy_approx_distinct_sfm"><code class="xref py py-func docutils literal notranslate"><span class="pre">noisy_approx_distinct_sfm()</span></code></a></p></td>
@@ -489,7 +489,7 @@ table.rows td:nth-child(4), td:nth-child(6) {
 <td></td>
 <td></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="functions/presto/geospatial.html#id8" title="bing_tiles_around"><code class="xref py py-func docutils literal notranslate"><span class="pre">bing_tiles_around()</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="functions/presto/geospatial.html#bing_tiles_around" title="bing_tiles_around"><code class="xref py py-func docutils literal notranslate"><span class="pre">bing_tiles_around()</span></code></a></p></td>
 <td><p><a class="reference internal" href="functions/presto/datetime.html#last_day_of_month" title="last_day_of_month"><code class="xref py py-func docutils literal notranslate"><span class="pre">last_day_of_month()</span></code></a></p></td>
 <td><p><code class="xref py py-func docutils literal notranslate"><span class="pre">st_geomfrombinary()</span></code></p></td>
 <td></td>
@@ -501,12 +501,12 @@ table.rows td:nth-child(4), td:nth-child(6) {
 <td><p><a class="reference internal" href="functions/presto/comparison.html#least" title="least"><code class="xref py py-func docutils literal notranslate"><span class="pre">least()</span></code></a></p></td>
 <td><p><code class="xref py py-func docutils literal notranslate"><span class="pre">st_interiorringn()</span></code></p></td>
 <td></td>
-<td><p><a class="reference internal" href="functions/presto/aggregate.html#id8" title="noisy_avg_gaussian"><code class="xref py py-func docutils literal notranslate"><span class="pre">noisy_avg_gaussian()</span></code></a></p></td>
+<td><p><a class="reference internal" href="functions/presto/aggregate.html#noisy_avg_gaussian" title="noisy_avg_gaussian"><code class="xref py py-func docutils literal notranslate"><span class="pre">noisy_avg_gaussian()</span></code></a></p></td>
 <td></td>
 <td></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="functions/presto/bitwise.html#bit_count" title="bit_count"><code class="xref py py-func docutils literal notranslate"><span class="pre">bit_count()</span></code></a></p></td>
-<td><p><a class="reference internal" href="functions/presto/string.html#length" title="length"><code class="xref py py-func docutils literal notranslate"><span class="pre">length()</span></code></a></p></td>
+<td><p><a class="reference internal" href="functions/presto/binary.html#length" title="length"><code class="xref py py-func docutils literal notranslate"><span class="pre">length()</span></code></a></p></td>
 <td><p><code class="xref py py-func docutils literal notranslate"><span class="pre">st_interiorrings()</span></code></p></td>
 <td></td>
 <td><p><a class="reference internal" href="functions/presto/aggregate.html#noisy_count_gaussian" title="noisy_count_gaussian"><code class="xref py py-func docutils literal notranslate"><span class="pre">noisy_count_gaussian()</span></code></a></p></td>
@@ -525,7 +525,7 @@ table.rows td:nth-child(4), td:nth-child(6) {
 <td><p><a class="reference internal" href="functions/presto/regexp.html#like" title="like"><code class="xref py py-func docutils literal notranslate"><span class="pre">like()</span></code></a></p></td>
 <td><p><code class="xref py py-func docutils literal notranslate"><span class="pre">st_intersects()</span></code></p></td>
 <td></td>
-<td><p><a class="reference internal" href="functions/presto/aggregate.html#id7" title="noisy_sum_gaussian"><code class="xref py py-func docutils literal notranslate"><span class="pre">noisy_sum_gaussian()</span></code></a></p></td>
+<td><p><a class="reference internal" href="functions/presto/aggregate.html#noisy_sum_gaussian" title="noisy_sum_gaussian"><code class="xref py py-func docutils literal notranslate"><span class="pre">noisy_sum_gaussian()</span></code></a></p></td>
 <td></td>
 <td></td>
 </tr>
@@ -533,7 +533,7 @@ table.rows td:nth-child(4), td:nth-child(6) {
 <td><p><a class="reference internal" href="functions/presto/geospatial.html#line_interpolate_point" title="line_interpolate_point"><code class="xref py py-func docutils literal notranslate"><span class="pre">line_interpolate_point()</span></code></a></p></td>
 <td><p><code class="xref py py-func docutils literal notranslate"><span class="pre">st_isclosed()</span></code></p></td>
 <td></td>
-<td><p><a class="reference internal" href="functions/presto/aggregate.html#id0" title="numeric_histogram"><code class="xref py py-func docutils literal notranslate"><span class="pre">numeric_histogram()</span></code></a></p></td>
+<td><p><a class="reference internal" href="functions/presto/aggregate.html#numeric_histogram" title="numeric_histogram"><code class="xref py py-func docutils literal notranslate"><span class="pre">numeric_histogram()</span></code></a></p></td>
 <td></td>
 <td></td>
 </tr>
@@ -601,7 +601,7 @@ table.rows td:nth-child(4), td:nth-child(6) {
 <td></td>
 <td></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="functions/presto/setdigest.html#cardinality" title="cardinality"><code class="xref py py-func docutils literal notranslate"><span class="pre">cardinality()</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="functions/presto/aggregate.html#cardinality" title="cardinality"><code class="xref py py-func docutils literal notranslate"><span class="pre">cardinality()</span></code></a></p></td>
 <td><p><a class="reference internal" href="functions/presto/string.html#lpad" title="lpad"><code class="xref py py-func docutils literal notranslate"><span class="pre">lpad()</span></code></a></p></td>
 <td><p><code class="xref py py-func docutils literal notranslate"><span class="pre">st_numgeometries()</span></code></p></td>
 <td></td>
@@ -625,7 +625,7 @@ table.rows td:nth-child(4), td:nth-child(6) {
 <td></td>
 <td></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="functions/presto/math.html#ceil" title="ceil"><code class="xref py py-func docutils literal notranslate"><span class="pre">ceil()</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="functions/presto/decimal.html#ceil" title="ceil"><code class="xref py py-func docutils literal notranslate"><span class="pre">ceil()</span></code></a></p></td>
 <td><p><a class="reference internal" href="functions/presto/string.html#ltrim" title="ltrim"><code class="xref py py-func docutils literal notranslate"><span class="pre">ltrim()</span></code></a></p></td>
 <td><p><code class="xref py py-func docutils literal notranslate"><span class="pre">st_overlaps()</span></code></p></td>
 <td></td>
@@ -689,7 +689,7 @@ table.rows td:nth-child(4), td:nth-child(6) {
 <td></td>
 <td></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="functions/presto/string.html#concat" title="concat"><code class="xref py py-func docutils literal notranslate"><span class="pre">concat()</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="functions/presto/array.html#concat" title="concat"><code class="xref py py-func docutils literal notranslate"><span class="pre">concat()</span></code></a></p></td>
 <td><p><a class="reference internal" href="functions/presto/map.html#map_intersect" title="map_intersect"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_intersect()</span></code></a></p></td>
 <td><p><code class="xref py py-func docutils literal notranslate"><span class="pre">st_touches()</span></code></p></td>
 <td></td>
@@ -729,7 +729,7 @@ table.rows td:nth-child(4), td:nth-child(6) {
 <td></td>
 <td></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="functions/presto/math.html#id2" title="cosine_similarity"><code class="xref py py-func docutils literal notranslate"><span class="pre">cosine_similarity()</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="functions/presto/math.html#cosine_similarity" title="cosine_similarity"><code class="xref py py-func docutils literal notranslate"><span class="pre">cosine_similarity()</span></code></a></p></td>
 <td><p><a class="reference internal" href="functions/presto/map.html#map_normalize" title="map_normalize"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_normalize()</span></code></a></p></td>
 <td><p><code class="xref py py-func docutils literal notranslate"><span class="pre">st_xmin()</span></code></p></td>
 <td></td>
@@ -866,7 +866,7 @@ table.rows td:nth-child(4), td:nth-child(6) {
 <td></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="functions/presto/tdigest.html#destructure_tdigest" title="destructure_tdigest"><code class="xref py py-func docutils literal notranslate"><span class="pre">destructure_tdigest()</span></code></a></p></td>
-<td><p><a class="reference internal" href="functions/presto/math.html#minus" title="minus"><code class="xref py py-func docutils literal notranslate"><span class="pre">minus()</span></code></a></p></td>
+<td><p><a class="reference internal" href="functions/presto/decimal.html#minus" title="minus"><code class="xref py py-func docutils literal notranslate"><span class="pre">minus()</span></code></a></p></td>
 <td><p><a class="reference internal" href="functions/presto/binary.html#to_base64url" title="to_base64url"><code class="xref py py-func docutils literal notranslate"><span class="pre">to_base64url()</span></code></a></p></td>
 <td></td>
 <td></td>
@@ -881,7 +881,7 @@ table.rows td:nth-child(4), td:nth-child(6) {
 <td></td>
 <td></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="functions/presto/math.html#divide" title="divide"><code class="xref py py-func docutils literal notranslate"><span class="pre">divide()</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="functions/presto/datetime.html#divide" title="divide"><code class="xref py py-func docutils literal notranslate"><span class="pre">divide()</span></code></a></p></td>
 <td><p><a class="reference internal" href="functions/presto/math.html#mod" title="mod"><code class="xref py py-func docutils literal notranslate"><span class="pre">mod()</span></code></a></p></td>
 <td><p><a class="reference internal" href="functions/presto/binary.html#to_big_endian_64" title="to_big_endian_64"><code class="xref py py-func docutils literal notranslate"><span class="pre">to_big_endian_64()</span></code></a></p></td>
 <td></td>
@@ -889,7 +889,7 @@ table.rows td:nth-child(4), td:nth-child(6) {
 <td></td>
 <td></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="functions/presto/math.html#id6" title="dot_product"><code class="xref py py-func docutils literal notranslate"><span class="pre">dot_product()</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="functions/presto/array.html#dot_product" title="dot_product"><code class="xref py py-func docutils literal notranslate"><span class="pre">dot_product()</span></code></a></p></td>
 <td><p><a class="reference internal" href="functions/presto/datetime.html#month" title="month"><code class="xref py py-func docutils literal notranslate"><span class="pre">month()</span></code></a></p></td>
 <td><p><a class="reference internal" href="functions/presto/geospatial.html#to_geometry" title="to_geometry"><code class="xref py py-func docutils literal notranslate"><span class="pre">to_geometry()</span></code></a></p></td>
 <td></td>
@@ -906,7 +906,7 @@ table.rows td:nth-child(4), td:nth-child(6) {
 <td></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="functions/presto/datetime.html#doy" title="doy"><code class="xref py py-func docutils literal notranslate"><span class="pre">doy()</span></code></a></p></td>
-<td><p><a class="reference internal" href="functions/presto/math.html#multiply" title="multiply"><code class="xref py py-func docutils literal notranslate"><span class="pre">multiply()</span></code></a></p></td>
+<td><p><a class="reference internal" href="functions/presto/datetime.html#multiply" title="multiply"><code class="xref py py-func docutils literal notranslate"><span class="pre">multiply()</span></code></a></p></td>
 <td><p><a class="reference internal" href="functions/presto/binary.html#to_ieee754_32" title="to_ieee754_32"><code class="xref py py-func docutils literal notranslate"><span class="pre">to_ieee754_32()</span></code></a></p></td>
 <td></td>
 <td></td>
@@ -930,7 +930,7 @@ table.rows td:nth-child(4), td:nth-child(6) {
 <td></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="functions/presto/hyperloglog.html#empty_approx_set" title="empty_approx_set"><code class="xref py py-func docutils literal notranslate"><span class="pre">empty_approx_set()</span></code></a></p></td>
-<td><p><a class="reference internal" href="functions/presto/math.html#negate" title="negate"><code class="xref py py-func docutils literal notranslate"><span class="pre">negate()</span></code></a></p></td>
+<td><p><a class="reference internal" href="functions/presto/decimal.html#negate" title="negate"><code class="xref py py-func docutils literal notranslate"><span class="pre">negate()</span></code></a></p></td>
 <td><p><a class="reference internal" href="functions/presto/datetime.html#to_milliseconds" title="to_milliseconds"><code class="xref py py-func docutils literal notranslate"><span class="pre">to_milliseconds()</span></code></a></p></td>
 <td></td>
 <td></td>
@@ -985,7 +985,7 @@ table.rows td:nth-child(4), td:nth-child(6) {
 <td></td>
 <td></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="functions/presto/misc.html#id2" title="fail"><code class="xref py py-func docutils literal notranslate"><span class="pre">fail()</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="functions/presto/misc.html#fail" title="fail"><code class="xref py py-func docutils literal notranslate"><span class="pre">fail()</span></code></a></p></td>
 <td><p><a class="reference internal" href="functions/presto/math.html#normal_cdf" title="normal_cdf"><code class="xref py py-func docutils literal notranslate"><span class="pre">normal_cdf()</span></code></a></p></td>
 <td><p><a class="reference internal" href="functions/presto/map.html#transform_values" title="transform_values"><code class="xref py py-func docutils literal notranslate"><span class="pre">transform_values()</span></code></a></p></td>
 <td></td>
@@ -994,7 +994,7 @@ table.rows td:nth-child(4), td:nth-child(6) {
 <td></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="functions/presto/array.html#filter" title="filter"><code class="xref py py-func docutils literal notranslate"><span class="pre">filter()</span></code></a></p></td>
-<td><p><a class="reference internal" href="functions/presto/string.html#id2" title="normalize"><code class="xref py py-func docutils literal notranslate"><span class="pre">normalize()</span></code></a></p></td>
+<td><p><a class="reference internal" href="functions/presto/string.html#normalize" title="normalize"><code class="xref py py-func docutils literal notranslate"><span class="pre">normalize()</span></code></a></p></td>
 <td><p><a class="reference internal" href="functions/presto/array.html#transform_with_index" title="transform_with_index"><code class="xref py py-func docutils literal notranslate"><span class="pre">transform_with_index()</span></code></a></p></td>
 <td></td>
 <td></td>
@@ -1027,13 +1027,13 @@ table.rows td:nth-child(4), td:nth-child(6) {
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="functions/presto/geospatial.html#flatten_geometry_collections" title="flatten_geometry_collections"><code class="xref py py-func docutils literal notranslate"><span class="pre">flatten_geometry_collections()</span></code></a></p></td>
 <td><p><a class="reference internal" href="functions/presto/conversion.html#parse_presto_data_size" title="parse_presto_data_size"><code class="xref py py-func docutils literal notranslate"><span class="pre">parse_presto_data_size()</span></code></a></p></td>
-<td><p><a class="reference internal" href="functions/presto/math.html#truncate" title="truncate"><code class="xref py py-func docutils literal notranslate"><span class="pre">truncate()</span></code></a></p></td>
+<td><p><a class="reference internal" href="functions/presto/decimal.html#truncate" title="truncate"><code class="xref py py-func docutils literal notranslate"><span class="pre">truncate()</span></code></a></p></td>
 <td></td>
 <td></td>
 <td></td>
 <td></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="functions/presto/math.html#floor" title="floor"><code class="xref py py-func docutils literal notranslate"><span class="pre">floor()</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="functions/presto/decimal.html#floor" title="floor"><code class="xref py py-func docutils literal notranslate"><span class="pre">floor()</span></code></a></p></td>
 <td><p><a class="reference internal" href="functions/presto/math.html#pi" title="pi"><code class="xref py py-func docutils literal notranslate"><span class="pre">pi()</span></code></a></p></td>
 <td><p><a class="reference internal" href="functions/presto/conversion.html#typeof" title="typeof"><code class="xref py py-func docutils literal notranslate"><span class="pre">typeof()</span></code></a></p></td>
 <td></td>
@@ -1042,7 +1042,7 @@ table.rows td:nth-child(4), td:nth-child(6) {
 <td></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="functions/presto/binary.html#fnv1_32" title="fnv1_32"><code class="xref py py-func docutils literal notranslate"><span class="pre">fnv1_32()</span></code></a></p></td>
-<td><p><a class="reference internal" href="functions/presto/math.html#plus" title="plus"><code class="xref py py-func docutils literal notranslate"><span class="pre">plus()</span></code></a></p></td>
+<td><p><a class="reference internal" href="functions/presto/decimal.html#plus" title="plus"><code class="xref py py-func docutils literal notranslate"><span class="pre">plus()</span></code></a></p></td>
 <td><p><a class="reference internal" href="functions/presto/khyperloglog.html#uniqueness_distribution" title="uniqueness_distribution"><code class="xref py py-func docutils literal notranslate"><span class="pre">uniqueness_distribution()</span></code></a></p></td>
 <td></td>
 <td></td>
@@ -1139,7 +1139,7 @@ table.rows td:nth-child(4), td:nth-child(6) {
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="functions/presto/binary.html#from_ieee754_32" title="from_ieee754_32"><code class="xref py py-func docutils literal notranslate"><span class="pre">from_ieee754_32()</span></code></a></p></td>
 <td><p><a class="reference internal" href="functions/presto/regexp.html#regexp_extract" title="regexp_extract"><code class="xref py py-func docutils literal notranslate"><span class="pre">regexp_extract()</span></code></a></p></td>
-<td><p><a class="reference internal" href="functions/presto/tdigest.html#value_at_quantile" title="value_at_quantile"><code class="xref py py-func docutils literal notranslate"><span class="pre">value_at_quantile()</span></code></a></p></td>
+<td><p><a class="reference internal" href="functions/presto/qdigest.html#value_at_quantile" title="value_at_quantile"><code class="xref py py-func docutils literal notranslate"><span class="pre">value_at_quantile()</span></code></a></p></td>
 <td></td>
 <td></td>
 <td></td>
@@ -1147,7 +1147,7 @@ table.rows td:nth-child(4), td:nth-child(6) {
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="functions/presto/binary.html#from_ieee754_64" title="from_ieee754_64"><code class="xref py py-func docutils literal notranslate"><span class="pre">from_ieee754_64()</span></code></a></p></td>
 <td><p><a class="reference internal" href="functions/presto/regexp.html#regexp_extract_all" title="regexp_extract_all"><code class="xref py py-func docutils literal notranslate"><span class="pre">regexp_extract_all()</span></code></a></p></td>
-<td><p><a class="reference internal" href="functions/presto/tdigest.html#values_at_quantiles" title="values_at_quantiles"><code class="xref py py-func docutils literal notranslate"><span class="pre">values_at_quantiles()</span></code></a></p></td>
+<td><p><a class="reference internal" href="functions/presto/qdigest.html#values_at_quantiles" title="values_at_quantiles"><code class="xref py py-func docutils literal notranslate"><span class="pre">values_at_quantiles()</span></code></a></p></td>
 <td></td>
 <td></td>
 <td></td>
@@ -1162,14 +1162,14 @@ table.rows td:nth-child(4), td:nth-child(6) {
 <td></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="functions/presto/datetime.html#from_iso8601_timestamp" title="from_iso8601_timestamp"><code class="xref py py-func docutils literal notranslate"><span class="pre">from_iso8601_timestamp()</span></code></a></p></td>
-<td><p><a class="reference internal" href="functions/presto/regexp.html#id0" title="regexp_replace"><code class="xref py py-func docutils literal notranslate"><span class="pre">regexp_replace()</span></code></a></p></td>
-<td><p><a class="reference internal" href="functions/spark/datetime.html#week_of_year" title="week_of_year"><code class="xref py py-func docutils literal notranslate"><span class="pre">week_of_year()</span></code></a></p></td>
+<td><p><a class="reference internal" href="functions/presto/regexp.html#regexp_replace" title="regexp_replace"><code class="xref py py-func docutils literal notranslate"><span class="pre">regexp_replace()</span></code></a></p></td>
+<td><p><a class="reference internal" href="functions/presto/datetime.html#week_of_year" title="week_of_year"><code class="xref py py-func docutils literal notranslate"><span class="pre">week_of_year()</span></code></a></p></td>
 <td></td>
 <td></td>
 <td></td>
 <td></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="functions/presto/datetime.html#id1" title="from_unixtime"><code class="xref py py-func docutils literal notranslate"><span class="pre">from_unixtime()</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="functions/presto/datetime.html#from_unixtime" title="from_unixtime"><code class="xref py py-func docutils literal notranslate"><span class="pre">from_unixtime()</span></code></a></p></td>
 <td><p><a class="reference internal" href="functions/presto/regexp.html#regexp_split" title="regexp_split"><code class="xref py py-func docutils literal notranslate"><span class="pre">regexp_split()</span></code></a></p></td>
 <td><p><a class="reference internal" href="functions/presto/math.html#weibull_cdf" title="weibull_cdf"><code class="xref py py-func docutils literal notranslate"><span class="pre">weibull_cdf()</span></code></a></p></td>
 <td></td>
@@ -1211,7 +1211,7 @@ table.rows td:nth-child(4), td:nth-child(6) {
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="functions/presto/geospatial.html#geometry_invalid_reason" title="geometry_invalid_reason"><code class="xref py py-func docutils literal notranslate"><span class="pre">geometry_invalid_reason()</span></code></a></p></td>
 <td><p><a class="reference internal" href="functions/presto/string.html#replace" title="replace"><code class="xref py py-func docutils literal notranslate"><span class="pre">replace()</span></code></a></p></td>
-<td><p><a class="reference internal" href="functions/presto/string.html#id1" title="word_stem"><code class="xref py py-func docutils literal notranslate"><span class="pre">word_stem()</span></code></a></p></td>
+<td><p><a class="reference internal" href="functions/presto/string.html#word_stem" title="word_stem"><code class="xref py py-func docutils literal notranslate"><span class="pre">word_stem()</span></code></a></p></td>
 <td></td>
 <td></td>
 <td></td>
@@ -1219,7 +1219,7 @@ table.rows td:nth-child(4), td:nth-child(6) {
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="functions/presto/geospatial.html#geometry_nearest_points" title="geometry_nearest_points"><code class="xref py py-func docutils literal notranslate"><span class="pre">geometry_nearest_points()</span></code></a></p></td>
 <td><p><a class="reference internal" href="functions/presto/string.html#replace_first" title="replace_first"><code class="xref py py-func docutils literal notranslate"><span class="pre">replace_first()</span></code></a></p></td>
-<td><p><a class="reference internal" href="functions/presto/binary.html#id0" title="xxhash64"><code class="xref py py-func docutils literal notranslate"><span class="pre">xxhash64()</span></code></a></p></td>
+<td><p><a class="reference internal" href="functions/presto/binary.html#xxhash64" title="xxhash64"><code class="xref py py-func docutils literal notranslate"><span class="pre">xxhash64()</span></code></a></p></td>
 <td></td>
 <td></td>
 <td></td>
@@ -1234,7 +1234,7 @@ table.rows td:nth-child(4), td:nth-child(6) {
 <td></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="functions/presto/geospatial.html#geometry_to_dissolved_bing_tiles" title="geometry_to_dissolved_bing_tiles"><code class="xref py py-func docutils literal notranslate"><span class="pre">geometry_to_dissolved_bing_tiles()</span></code></a></p></td>
-<td><p><a class="reference internal" href="functions/presto/math.html#round" title="round"><code class="xref py py-func docutils literal notranslate"><span class="pre">round()</span></code></a></p></td>
+<td><p><a class="reference internal" href="functions/presto/decimal.html#round" title="round"><code class="xref py py-func docutils literal notranslate"><span class="pre">round()</span></code></a></p></td>
 <td><p><a class="reference internal" href="functions/presto/datetime.html#year" title="year"><code class="xref py py-func docutils literal notranslate"><span class="pre">year()</span></code></a></p></td>
 <td></td>
 <td></td>

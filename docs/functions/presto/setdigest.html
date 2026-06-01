@@ -80,35 +80,41 @@ structures.</p>
 <section id="scalar-functions">
 <h2>Scalar Functions<a class="headerlink" href="#scalar-functions" title="Link to this heading">¶</a></h2>
 <dl class="py function">
-<dt class="sig sig-object py" id="cardinality">
-<span class="sig-name descname"><span class="pre">cardinality</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">setdigest</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#cardinality" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the estimated cardinality of the set represented by the <code class="docutils literal notranslate"><span class="pre">SetDigest</span></code> sketch.
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">cardinality</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">setdigest</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns the estimated cardinality of the set represented by the <code class="docutils literal notranslate"><span class="pre">SetDigest</span></code> sketch.
 If the digest is exact (low cardinality), returns the exact count.
 Otherwise, returns an approximation using HyperLogLog.</p>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="intersection_cardinality">
-<span class="sig-name descname"><span class="pre">intersection_cardinality</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">setdigest1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">setdigest2</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#intersection_cardinality" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the estimated intersection cardinality between two <code class="docutils literal notranslate"><span class="pre">SetDigest</span></code> sketches.</p>
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">intersection_cardinality</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">setdigest1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">setdigest2</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns the estimated intersection cardinality between two <code class="docutils literal notranslate"><span class="pre">SetDigest</span></code> sketches.</p>
 <ul class="simple">
 <li><p>If both digests are exact: returns the exact intersection count</p></li>
 <li><p>If either digest is approximate: returns an estimation using the Jaccard index</p></li>
 </ul>
 <p>The result is capped at the minimum cardinality of the two input digests to
 ensure logical consistency.</p>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="jaccard_index">
-<span class="sig-name descname"><span class="pre">jaccard_index</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">setdigest1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">setdigest2</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#jaccard_index" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the Jaccard index (similarity coefficient) between two <code class="docutils literal notranslate"><span class="pre">SetDigest</span></code> sketches.
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">jaccard_index</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">setdigest1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">setdigest2</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns the Jaccard index (similarity coefficient) between two <code class="docutils literal notranslate"><span class="pre">SetDigest</span></code> sketches.
 The Jaccard index is a value in [0, 1] where:</p>
 <ul class="simple">
 <li><p>1.0 means the sets are identical</p></li>
 <li><p>0.0 means the sets are disjoint (no overlap)</p></li>
 </ul>
 <p>Uses MinHash estimation for efficient computation.</p>
+</div></blockquote>
 </dd></dl>
 
 </section>
@@ -131,12 +137,7 @@ The Jaccard index is a value in [0, 1] where:</p>
 <li><a class="reference internal" href="#merge_set_digest"><code class="docutils literal notranslate"><span class="pre">merge_set_digest()</span></code></a></li>
 </ul>
 </li>
-<li><a class="reference internal" href="#scalar-functions">Scalar Functions</a><ul>
-<li><a class="reference internal" href="#cardinality"><code class="docutils literal notranslate"><span class="pre">cardinality()</span></code></a></li>
-<li><a class="reference internal" href="#intersection_cardinality"><code class="docutils literal notranslate"><span class="pre">intersection_cardinality()</span></code></a></li>
-<li><a class="reference internal" href="#jaccard_index"><code class="docutils literal notranslate"><span class="pre">jaccard_index()</span></code></a></li>
-</ul>
-</li>
+<li><a class="reference internal" href="#scalar-functions">Scalar Functions</a></li>
 </ul>
 </li>
 </ul>

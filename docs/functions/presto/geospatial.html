@@ -54,7 +54,7 @@ Geometry type is a plane. The shortest path between two points on the plane is a
 straight line. That means calculations on geometries (areas, distances, lengths,
 intersections, etc) can be calculated using cartesian mathematics and straight
 line vectors.</p>
-<p>Functions that begin with the <a href="#id12"><span class="problematic" id="id13">ST_</span></a> prefix are compliant with the <a href="#id14"><span class="problematic" id="id15">`SQL/MM Part 3:
+<p>Functions that begin with the <a href="#id3"><span class="problematic" id="id4">ST_</span></a> prefix are compliant with the <a href="#id5"><span class="problematic" id="id6">`SQL/MM Part 3:
 Spatial`_</span></a> specification`. As such, many Geometry functions assume that
 geometries that are operated on are both simple and valid. Functions may raise
 an exception or return an arbitrary value for non-simple or non-valid
@@ -368,14 +368,14 @@ operation.</p>
 <dl class="py function">
 <dt class="sig sig-object py" id="ST_IsValid">
 <span class="sig-name descname"><span class="pre">ST_IsValid</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">valid:</span> <span class="pre">bool</span></span></span><a class="headerlink" href="#ST_IsValid" title="Link to this definition">¶</a></dt>
-<dd><p>Returns if <code class="docutils literal notranslate"><span class="pre">geometry</span></code> is valid, according to <a href="#id16"><span class="problematic" id="id17">`SQL/MM Part 3: Spatial`_</span></a>.
+<dd><p>Returns if <code class="docutils literal notranslate"><span class="pre">geometry</span></code> is valid, according to <a href="#id7"><span class="problematic" id="id8">`SQL/MM Part 3: Spatial`_</span></a>.
 Examples of non-valid geometries include Polygons with self-intersecting shells.</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="ST_IsSimple">
 <span class="sig-name descname"><span class="pre">ST_IsSimple</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">simple:</span> <span class="pre">bool</span></span></span><a class="headerlink" href="#ST_IsSimple" title="Link to this definition">¶</a></dt>
-<dd><p>Returns if <code class="docutils literal notranslate"><span class="pre">geometry</span></code> is simple, according to <a href="#id18"><span class="problematic" id="id19">`SQL/MM Part 3: Spatial`_</span></a>.
+<dd><p>Returns if <code class="docutils literal notranslate"><span class="pre">geometry</span></code> is simple, according to <a href="#id9"><span class="problematic" id="id10">`SQL/MM Part 3: Spatial`_</span></a>.
 Examples of non-simple geometries include LineStrings with self-intersections,
 Polygons with empty rings for holes, and more.</p>
 </dd></dl>
@@ -410,11 +410,13 @@ return an error if the input geometry is not a LineString or MultiLineString.</p
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id0">
-<span class="sig-name descname"><span class="pre">ST_Length</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">sphericalgeography</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">SphericalGeography</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">length:</span> <span class="pre">double</span></span></span><a class="headerlink" href="#id0" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the length of a <code class="docutils literal notranslate"><span class="pre">LineString</span></code> or <code class="docutils literal notranslate"><span class="pre">MultiLineString</span></code> on a spherical model of the
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">ST_Length</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">sphericalgeography</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">SphericalGeography</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">length:</span> <span class="pre">double</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns the length of a <code class="docutils literal notranslate"><span class="pre">LineString</span></code> or <code class="docutils literal notranslate"><span class="pre">MultiLineString</span></code> on a spherical model of the
 Earth. This is equivalent to the sum of great-circle distances between adjacent points
 on the <code class="docutils literal notranslate"><span class="pre">LineString</span></code>.</p>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
@@ -483,9 +485,11 @@ return 0.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id3">
-<span class="sig-name descname"><span class="pre">ST_Area</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">sphericalgeography</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">SphericalGeography</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">area:</span> <span class="pre">double</span></span></span><a class="headerlink" href="#id3" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the area of a polygon or multi-polygon in square meters using a spherical model for Earth.</p>
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">ST_Area</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">sphericalgeography</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">SphericalGeography</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">area:</span> <span class="pre">double</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns the area of a polygon or multi-polygon in square meters using a spherical model for Earth.</p>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
@@ -496,9 +500,10 @@ Empty geometry inputs result in null output.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id4">
-<span class="sig-name descname"><span class="pre">ST_Centroid</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">SphericalGeography</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Point</span></span></span><a class="headerlink" href="#id4" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the point value that is the mathematical centroid of a spherical geometry.
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">ST_Centroid</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">SphericalGeography</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Point</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns the point value that is the mathematical centroid of a spherical geometry.
 Empty geometry inputs result in null output.</p>
 <p>It supports Points and MultiPoints as input and returns the three-dimensional
 centroid projected onto the surface of the (spherical) Earth.
@@ -506,6 +511,7 @@ For example, MULTIPOINT (0 -45, 0 45, 30 0, -30 0) returns Point(0, 0).
 Note: In the case that the three-dimensional centroid is at (0, 0, 0)
 (e.g. MULTIPOINT (0 0, -180 0)), the spherical centroid is undefined and an
 arbitrary point will be returned.</p>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
@@ -516,9 +522,11 @@ between two geometries in projected units. Empty geometries result in null outpu
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id5">
-<span class="sig-name descname"><span class="pre">ST_Distance</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">sphericalgeography1</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">SphericalGeography</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sphericalgeography2</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">SphericalGeography</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">distance:</span> <span class="pre">double</span></span></span><a class="headerlink" href="#id5" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the great-circle distance in meters between two SphericalGeography points.</p>
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">ST_Distance</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">sphericalgeography1</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">SphericalGeography</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sphericalgeography2</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">SphericalGeography</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">distance:</span> <span class="pre">double</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns the great-circle distance in meters between two SphericalGeography points.</p>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
@@ -684,9 +692,11 @@ must be less than or equal to the coordinate dimension.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id6">
-<span class="sig-name descname"><span class="pre">ST_ExteriorRing</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">output:</span> <span class="pre">Geometry</span></span></span><a class="headerlink" href="#id6" title="Link to this definition">¶</a></dt>
-<dd><p>Returns a line string representing the exterior ring of the input polygon.</p>
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">ST_ExteriorRing</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">output:</span> <span class="pre">Geometry</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns a line string representing the exterior ring of the input polygon.</p>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
@@ -771,9 +781,11 @@ described above.  Invalid parameters will return a User Error.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id7">
-<span class="sig-name descname"><span class="pre">bing_tile</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">quadKey</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">varchar</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">tile:</span> <span class="pre">BingTile</span></span></span><a class="headerlink" href="#id7" title="Link to this definition">¶</a></dt>
-<dd><p>Creates a Bing tile object from a quadkey. An invalid quadkey will return a User Error.</p>
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">bing_tile</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">quadKey</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">varchar</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">tile:</span> <span class="pre">BingTile</span></span></span></dt>
+<dd><blockquote>
+<div><p>Creates a Bing tile object from a quadkey. An invalid quadkey will return a User Error.</p>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
@@ -784,10 +796,12 @@ by the latitude and longitude arguments at a given zoom level.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id8">
-<span class="sig-name descname"><span class="pre">bing_tiles_around</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">latitude</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">longitude</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">zoom_level</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">radius_in_km</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#id8" title="Link to this definition">¶</a></dt>
-<dd><p>Returns a minimum set of Bing tiles at specified zoom level that cover a circle of specified
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">bing_tiles_around</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">latitude</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">longitude</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">zoom_level</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">radius_in_km</span></span></em><span class="sig-paren">)</span></dt>
+<dd><blockquote>
+<div><p>Returns a minimum set of Bing tiles at specified zoom level that cover a circle of specified
 radius in km around a specified (latitude, longitude) point.</p>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
@@ -810,11 +824,13 @@ exception if tile is at zoom level 0.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id9">
-<span class="sig-name descname"><span class="pre">bing_tile_parent</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">tile</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">parentZoom</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">parent:</span> <span class="pre">BingTile</span></span></span><a class="headerlink" href="#id9" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the parent of the Bing tile at the specified lower zoom level.
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">bing_tile_parent</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">tile</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">parentZoom</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">parent:</span> <span class="pre">BingTile</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns the parent of the Bing tile at the specified lower zoom level.
 Throws an exception if parentZoom is less than 0, or parentZoom is greater
 than the tile’s zoom.</p>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
@@ -825,12 +841,14 @@ exception if tile is at max zoom level.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id10">
-<span class="sig-name descname"><span class="pre">bing_tile_children</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">tile</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">childZoom)</span> <span class="pre">-&gt;</span> <span class="pre">children:</span> <span class="pre">array(BingTile</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#id10" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the children of the Bing tile at the specified higher zoom level.
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">bing_tile_children</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">tile</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">childZoom)</span> <span class="pre">-&gt;</span> <span class="pre">children:</span> <span class="pre">array(BingTile</span></span></em><span class="sig-paren">)</span></dt>
+<dd><blockquote>
+<div><p>Returns the children of the Bing tile at the specified higher zoom level.
 Throws an exception if childZoom is greater than the max zoom level, or
 childZoom is less than the tile’s zoom.  The order is deterministic but not
 specified.</p>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
@@ -947,9 +965,10 @@ empty array, null geometries return null. The <code class="docutils literal notr
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id11">
-<span class="sig-name descname"><span class="pre">s2_cells</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry:</span> <span class="pre">Geometry</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">min_level:</span> <span class="pre">integer</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_level:</span> <span class="pre">integer</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_cells:</span> <span class="pre">integer)</span> <span class="pre">-&gt;</span> <span class="pre">cell_ids:</span> <span class="pre">array(bigint</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#id11" title="Link to this definition">¶</a></dt>
-<dd><p>Returns a compact set of S2 cell IDs at mixed levels that cover the given
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">s2_cells</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry:</span> <span class="pre">Geometry</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">min_level:</span> <span class="pre">integer</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_level:</span> <span class="pre">integer</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_cells:</span> <span class="pre">integer)</span> <span class="pre">-&gt;</span> <span class="pre">cell_ids:</span> <span class="pre">array(bigint</span></span></em><span class="sig-paren">)</span></dt>
+<dd><blockquote>
+<div><p>Returns a compact set of S2 cell IDs at mixed levels that cover the given
 geometry, similar to <code class="docutils literal notranslate"><span class="pre">geometry_to_dissolved_bing_tiles</span></code>. The coverer uses
 large cells (at <code class="docutils literal notranslate"><span class="pre">min_level</span></code>) for interiors and small cells (up to
 <code class="docutils literal notranslate"><span class="pre">max_level</span></code>) for boundaries, targeting at most <code class="docutils literal notranslate"><span class="pre">max_cells</span></code> cells. This
@@ -964,6 +983,7 @@ cells below <code class="docutils literal notranslate"><span class="pre">min_lev
 to be returned. If <code class="docutils literal notranslate"><span class="pre">max_cells</span></code> is less than 4, the covering area may be
 significantly larger than the original region. A value of 8 or higher is
 recommended for a reasonable approximation.</p>
+</div></blockquote>
 </dd></dl>
 
 </section>
@@ -1028,7 +1048,6 @@ recommended for a reasonable approximation.</p>
 <li><a class="reference internal" href="#ST_IsRing"><code class="docutils literal notranslate"><span class="pre">ST_IsRing()</span></code></a></li>
 <li><a class="reference internal" href="#ST_IsEmpty"><code class="docutils literal notranslate"><span class="pre">ST_IsEmpty()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Length"><code class="docutils literal notranslate"><span class="pre">ST_Length()</span></code></a></li>
-<li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">ST_Length()</span></code></a></li>
 <li><a class="reference internal" href="#ST_PointN"><code class="docutils literal notranslate"><span class="pre">ST_PointN()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Points"><code class="docutils literal notranslate"><span class="pre">ST_Points()</span></code></a></li>
 <li><a class="reference internal" href="#ST_NumPoints"><code class="docutils literal notranslate"><span class="pre">ST_NumPoints()</span></code></a></li>
@@ -1037,11 +1056,8 @@ recommended for a reasonable approximation.</p>
 <li><a class="reference internal" href="#geometry_invalid_reason"><code class="docutils literal notranslate"><span class="pre">geometry_invalid_reason()</span></code></a></li>
 <li><a class="reference internal" href="#great_circle_distance"><code class="docutils literal notranslate"><span class="pre">great_circle_distance()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Area"><code class="docutils literal notranslate"><span class="pre">ST_Area()</span></code></a></li>
-<li><a class="reference internal" href="#id3"><code class="docutils literal notranslate"><span class="pre">ST_Area()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Centroid"><code class="docutils literal notranslate"><span class="pre">ST_Centroid()</span></code></a></li>
-<li><a class="reference internal" href="#id4"><code class="docutils literal notranslate"><span class="pre">ST_Centroid()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Distance"><code class="docutils literal notranslate"><span class="pre">ST_Distance()</span></code></a></li>
-<li><a class="reference internal" href="#id5"><code class="docutils literal notranslate"><span class="pre">ST_Distance()</span></code></a></li>
 <li><a class="reference internal" href="#ST_GeometryType"><code class="docutils literal notranslate"><span class="pre">ST_GeometryType()</span></code></a></li>
 <li><a class="reference internal" href="#ST_X"><code class="docutils literal notranslate"><span class="pre">ST_X()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Y"><code class="docutils literal notranslate"><span class="pre">ST_Y()</span></code></a></li>
@@ -1061,7 +1077,6 @@ recommended for a reasonable approximation.</p>
 <li><a class="reference internal" href="#ST_ConvexHull"><code class="docutils literal notranslate"><span class="pre">ST_ConvexHull()</span></code></a></li>
 <li><a class="reference internal" href="#ST_CoordDim"><code class="docutils literal notranslate"><span class="pre">ST_CoordDim()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Dimension"><code class="docutils literal notranslate"><span class="pre">ST_Dimension()</span></code></a></li>
-<li><a class="reference internal" href="#id6"><code class="docutils literal notranslate"><span class="pre">ST_ExteriorRing()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Buffer"><code class="docutils literal notranslate"><span class="pre">ST_Buffer()</span></code></a></li>
 <li><a class="reference internal" href="#simplify_geometry"><code class="docutils literal notranslate"><span class="pre">simplify_geometry()</span></code></a></li>
 <li><a class="reference internal" href="#line_locate_point"><code class="docutils literal notranslate"><span class="pre">line_locate_point()</span></code></a></li>
@@ -1072,15 +1087,11 @@ recommended for a reasonable approximation.</p>
 </li>
 <li><a class="reference internal" href="#bing-tile-functions">Bing Tile Functions</a><ul>
 <li><a class="reference internal" href="#bing_tile"><code class="docutils literal notranslate"><span class="pre">bing_tile()</span></code></a></li>
-<li><a class="reference internal" href="#id7"><code class="docutils literal notranslate"><span class="pre">bing_tile()</span></code></a></li>
 <li><a class="reference internal" href="#bing_tiles_around"><code class="docutils literal notranslate"><span class="pre">bing_tiles_around()</span></code></a></li>
-<li><a class="reference internal" href="#id8"><code class="docutils literal notranslate"><span class="pre">bing_tiles_around()</span></code></a></li>
 <li><a class="reference internal" href="#bing_tile_coordinates"><code class="docutils literal notranslate"><span class="pre">bing_tile_coordinates()</span></code></a></li>
 <li><a class="reference internal" href="#bing_tile_zoom_level"><code class="docutils literal notranslate"><span class="pre">bing_tile_zoom_level()</span></code></a></li>
 <li><a class="reference internal" href="#bing_tile_parent"><code class="docutils literal notranslate"><span class="pre">bing_tile_parent()</span></code></a></li>
-<li><a class="reference internal" href="#id9"><code class="docutils literal notranslate"><span class="pre">bing_tile_parent()</span></code></a></li>
 <li><a class="reference internal" href="#bing_tile_children"><code class="docutils literal notranslate"><span class="pre">bing_tile_children()</span></code></a></li>
-<li><a class="reference internal" href="#id10"><code class="docutils literal notranslate"><span class="pre">bing_tile_children()</span></code></a></li>
 <li><a class="reference internal" href="#bing_tile_polygon"><code class="docutils literal notranslate"><span class="pre">bing_tile_polygon()</span></code></a></li>
 <li><a class="reference internal" href="#bing_tile_at"><code class="docutils literal notranslate"><span class="pre">bing_tile_at()</span></code></a></li>
 <li><a class="reference internal" href="#bing_tile_quadkey"><code class="docutils literal notranslate"><span class="pre">bing_tile_quadkey()</span></code></a></li>
@@ -1096,7 +1107,6 @@ recommended for a reasonable approximation.</p>
 <li><a class="reference internal" href="#s2_cell_parent"><code class="docutils literal notranslate"><span class="pre">s2_cell_parent()</span></code></a></li>
 <li><a class="reference internal" href="#s2_cell_to_token"><code class="docutils literal notranslate"><span class="pre">s2_cell_to_token()</span></code></a></li>
 <li><a class="reference internal" href="#s2_cells"><code class="docutils literal notranslate"><span class="pre">s2_cells()</span></code></a></li>
-<li><a class="reference internal" href="#id11"><code class="docutils literal notranslate"><span class="pre">s2_cells()</span></code></a></li>
 </ul>
 </li>
 </ul>

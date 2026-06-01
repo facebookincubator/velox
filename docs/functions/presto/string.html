@@ -78,11 +78,13 @@ Lithuanian, Turkish and Azeri.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="concat">
-<span class="sig-name descname"><span class="pre">concat</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">stringN</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#concat" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the concatenation of <code class="docutils literal notranslate"><span class="pre">string1</span></code>, <code class="docutils literal notranslate"><span class="pre">string2</span></code>, <code class="docutils literal notranslate"><span class="pre">...</span></code>, <code class="docutils literal notranslate"><span class="pre">stringN</span></code>.
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">concat</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">stringN</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns the concatenation of <code class="docutils literal notranslate"><span class="pre">string1</span></code>, <code class="docutils literal notranslate"><span class="pre">string2</span></code>, <code class="docutils literal notranslate"><span class="pre">...</span></code>, <code class="docutils literal notranslate"><span class="pre">stringN</span></code>.
 This function provides the same functionality as the
 SQL-standard concatenation operator (<code class="docutils literal notranslate"><span class="pre">||</span></code>).</p>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
@@ -126,9 +128,11 @@ Note that the two strings must have the same length.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="length">
-<span class="sig-name descname"><span class="pre">length</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#length" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the length of <code class="docutils literal notranslate"><span class="pre">string</span></code> in characters.</p>
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">length</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns the length of <code class="docutils literal notranslate"><span class="pre">string</span></code> in characters.</p>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
@@ -270,9 +274,10 @@ interpreted literally, i.e., as full string matches.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id0">
-<span class="sig-name descname"><span class="pre">split_to_map</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">entryDelimiter</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">keyValueDelimiter</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">function(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V2</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">R)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">map&lt;varchar,</span> <span class="pre">varchar&gt;</span></span></span><a class="headerlink" href="#id0" title="Link to this definition">¶</a></dt>
-<dd><p>Splits <code class="docutils literal notranslate"><span class="pre">string</span></code> by <code class="docutils literal notranslate"><span class="pre">entryDelimiter</span></code> and <code class="docutils literal notranslate"><span class="pre">keyValueDelimiter</span></code> and returns a map.
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">split_to_map</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">entryDelimiter</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">keyValueDelimiter</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">function(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V2</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">R)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">map&lt;varchar,</span> <span class="pre">varchar&gt;</span></span></span></dt>
+<dd><blockquote>
+<div><p>Splits <code class="docutils literal notranslate"><span class="pre">string</span></code> by <code class="docutils literal notranslate"><span class="pre">entryDelimiter</span></code> and <code class="docutils literal notranslate"><span class="pre">keyValueDelimiter</span></code> and returns a map.
 <code class="docutils literal notranslate"><span class="pre">entryDelimiter</span></code> splits <code class="docutils literal notranslate"><span class="pre">string</span></code> into key-value pairs. <code class="docutils literal notranslate"><span class="pre">keyValueDelimiter</span></code> splits
 each pair into key and value. Note that <code class="docutils literal notranslate"><span class="pre">entryDelimiter</span></code> and <code class="docutils literal notranslate"><span class="pre">keyValueDelimiter</span></code> are
 interpreted literally, i.e., as full string matches.</p>
@@ -283,6 +288,7 @@ value. Arbitrary functions are not supported.</p>
 <span class="n">SELECT</span><span class="p">(</span><span class="n">split_to_map</span><span class="p">(</span><span class="s1">&#39;a:1;b:2;a:3&#39;</span><span class="p">,</span> <span class="s1">&#39;;&#39;</span><span class="p">,</span> <span class="s1">&#39;:&#39;</span><span class="p">,</span> <span class="p">(</span><span class="n">k</span><span class="p">,</span> <span class="n">v1</span><span class="p">,</span> <span class="n">v2</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">v2</span><span class="p">));</span> <span class="o">--</span> <span class="p">{</span><span class="s2">&quot;a&quot;</span><span class="p">:</span> <span class="s2">&quot;3&quot;</span><span class="p">,</span> <span class="s2">&quot;b&quot;</span><span class="p">:</span> <span class="s2">&quot;2&quot;</span><span class="p">}</span>
 </pre></div>
 </div>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
@@ -495,9 +501,10 @@ the <code class="docutils literal notranslate"><span class="pre">word</span></co
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id1">
-<span class="sig-name descname"><span class="pre">word_stem</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">word</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">lang</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#id1" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the stem of <code class="docutils literal notranslate"><span class="pre">word</span></code> in the <code class="docutils literal notranslate"><span class="pre">lang</span></code> language. This function supports the following languages:</p>
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">word_stem</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">word</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">lang</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns the stem of <code class="docutils literal notranslate"><span class="pre">word</span></code> in the <code class="docutils literal notranslate"><span class="pre">lang</span></code> language. This function supports the following languages:</p>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head"><p>lang</p></th>
@@ -568,6 +575,7 @@ the <code class="docutils literal notranslate"><span class="pre">word</span></co
 </tbody>
 </table>
 <p>If the specified <code class="docutils literal notranslate"><span class="pre">lang</span></code> is not supported, this function throws a user error.</p>
+</div></blockquote>
 </dd></dl>
 
 <section id="unicode-functions">
@@ -579,9 +587,10 @@ the <code class="docutils literal notranslate"><span class="pre">word</span></co
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id2">
-<span class="sig-name descname"><span class="pre">normalize</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">form</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#id2" title="Link to this definition">¶</a></dt>
-<dd><p>Reference: <a class="reference external" href="https://unicode.org/reports/tr15/#Norm_Forms">https://unicode.org/reports/tr15/#Norm_Forms</a>
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">normalize</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">form</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span></dt>
+<dd><blockquote>
+<div><p>Reference: <a class="reference external" href="https://unicode.org/reports/tr15/#Norm_Forms">https://unicode.org/reports/tr15/#Norm_Forms</a>
 Transforms <code class="docutils literal notranslate"><span class="pre">string</span></code> with the specified normalization form.
 <code class="docutils literal notranslate"><span class="pre">form</span></code> must be be one of the following keywords:</p>
 <table class="docutils align-default">
@@ -610,6 +619,7 @@ Transforms <code class="docutils literal notranslate"><span class="pre">string</
 <p>This SQL-standard function has special syntax and requires
 specifying <code class="docutils literal notranslate"><span class="pre">form</span></code> as a keyword, not as a string.</p>
 </div>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
@@ -642,12 +652,10 @@ This function is useful for deterministic sampling of data.</p>
 <li><a class="reference internal" href="#bit_length"><code class="docutils literal notranslate"><span class="pre">bit_length()</span></code></a></li>
 <li><a class="reference internal" href="#chr"><code class="docutils literal notranslate"><span class="pre">chr()</span></code></a></li>
 <li><a class="reference internal" href="#codepoint"><code class="docutils literal notranslate"><span class="pre">codepoint()</span></code></a></li>
-<li><a class="reference internal" href="#concat"><code class="docutils literal notranslate"><span class="pre">concat()</span></code></a></li>
 <li><a class="reference internal" href="#ends_with"><code class="docutils literal notranslate"><span class="pre">ends_with()</span></code></a></li>
 <li><a class="reference internal" href="#from_utf8"><code class="docutils literal notranslate"><span class="pre">from_utf8()</span></code></a></li>
 <li><a class="reference internal" href="#hamming_distance"><code class="docutils literal notranslate"><span class="pre">hamming_distance()</span></code></a></li>
 <li><a class="reference internal" href="#jarowinkler_similarity"><code class="docutils literal notranslate"><span class="pre">jarowinkler_similarity()</span></code></a></li>
-<li><a class="reference internal" href="#length"><code class="docutils literal notranslate"><span class="pre">length()</span></code></a></li>
 <li><a class="reference internal" href="#levenshtein_distance"><code class="docutils literal notranslate"><span class="pre">levenshtein_distance()</span></code></a></li>
 <li><a class="reference internal" href="#longest_common_prefix"><code class="docutils literal notranslate"><span class="pre">longest_common_prefix()</span></code></a></li>
 <li><a class="reference internal" href="#lower"><code class="docutils literal notranslate"><span class="pre">lower()</span></code></a></li>
@@ -660,7 +668,6 @@ This function is useful for deterministic sampling of data.</p>
 <li><a class="reference internal" href="#split"><code class="docutils literal notranslate"><span class="pre">split()</span></code></a></li>
 <li><a class="reference internal" href="#split_part"><code class="docutils literal notranslate"><span class="pre">split_part()</span></code></a></li>
 <li><a class="reference internal" href="#split_to_map"><code class="docutils literal notranslate"><span class="pre">split_to_map()</span></code></a></li>
-<li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">split_to_map()</span></code></a></li>
 <li><a class="reference internal" href="#split_to_multimap"><code class="docutils literal notranslate"><span class="pre">split_to_multimap()</span></code></a></li>
 <li><a class="reference internal" href="#starts_with"><code class="docutils literal notranslate"><span class="pre">starts_with()</span></code></a></li>
 <li><a class="reference internal" href="#strpos"><code class="docutils literal notranslate"><span class="pre">strpos()</span></code></a></li>
@@ -670,10 +677,8 @@ This function is useful for deterministic sampling of data.</p>
 <li><a class="reference internal" href="#trim"><code class="docutils literal notranslate"><span class="pre">trim()</span></code></a></li>
 <li><a class="reference internal" href="#upper"><code class="docutils literal notranslate"><span class="pre">upper()</span></code></a></li>
 <li><a class="reference internal" href="#word_stem"><code class="docutils literal notranslate"><span class="pre">word_stem()</span></code></a></li>
-<li><a class="reference internal" href="#id1"><code class="docutils literal notranslate"><span class="pre">word_stem()</span></code></a></li>
 <li><a class="reference internal" href="#unicode-functions">Unicode Functions</a><ul>
 <li><a class="reference internal" href="#normalize"><code class="docutils literal notranslate"><span class="pre">normalize()</span></code></a></li>
-<li><a class="reference internal" href="#id2"><code class="docutils literal notranslate"><span class="pre">normalize()</span></code></a></li>
 <li><a class="reference internal" href="#to_utf8"><code class="docutils literal notranslate"><span class="pre">to_utf8()</span></code></a></li>
 <li><a class="reference internal" href="#key_sampling_percent"><code class="docutils literal notranslate"><span class="pre">key_sampling_percent()</span></code></a></li>
 </ul>

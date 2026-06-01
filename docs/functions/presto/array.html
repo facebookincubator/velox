@@ -382,9 +382,11 @@ For REAL and DOUBLE, NANs (Not-a-Number) are considered equal.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="cardinality">
-<span class="sig-name descname"><span class="pre">cardinality</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#cardinality" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the cardinality (size) of the array <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">cardinality</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns the cardinality (size) of the array <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
@@ -438,9 +440,10 @@ For empty integer arrays, returns 0. For empty floating-point arrays, returns Na
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id1">
-<span class="sig-name descname"><span class="pre">dot_product</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">map(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">map(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint/double</span></span></span><a class="headerlink" href="#id1" title="Link to this definition">¶</a></dt>
-<dd><p>Computes the dot product of two maps. For maps, the dot product is computed by
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">dot_product</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">map(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">map(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint/double</span></span></span></dt>
+<dd><blockquote>
+<div><p>Computes the dot product of two maps. For maps, the dot product is computed by
 multiplying values with matching keys and summing the results. Keys present in only
 one map contribute zero to the result. If either map is null, returns null.
 Null values in maps are treated as zero.
@@ -449,6 +452,7 @@ Returns bigint for integer value maps, double for floating-point value maps.</p>
 <span class="n">SELECT</span> <span class="n">dot_product</span><span class="p">(</span><span class="n">MAP</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="s1">&#39;a&#39;</span><span class="p">,</span> <span class="s1">&#39;b&#39;</span><span class="p">],</span> <span class="n">ARRAY</span><span class="p">[</span><span class="mf">1.0</span><span class="p">,</span> <span class="mf">2.0</span><span class="p">]),</span> <span class="n">MAP</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="s1">&#39;a&#39;</span><span class="p">,</span> <span class="s1">&#39;c&#39;</span><span class="p">],</span> <span class="n">ARRAY</span><span class="p">[</span><span class="mf">3.0</span><span class="p">,</span> <span class="mf">4.0</span><span class="p">]));</span> <span class="o">--</span> <span class="mf">3.0</span> <span class="p">(</span><span class="n">only</span> <span class="s1">&#39;a&#39;</span> <span class="n">matches</span><span class="p">)</span>
 </pre></div>
 </div>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
@@ -544,9 +548,10 @@ Supports integer and floating point types.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id2">
-<span class="sig-name descname"><span class="pre">l2_norm</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">map(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#id2" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the Euclidean norm (L2 norm) of the values in a map.
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">l2_norm</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">map(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns the Euclidean norm (L2 norm) of the values in a map.
 The L2 norm is calculated as the square root of the sum of squares of all values: sqrt(sum(v^2)).
 Keys are ignored; only values are used in the calculation.
 Returns 0.0 for empty maps. Null values are skipped in the calculation.
@@ -556,6 +561,7 @@ Supports maps with numeric value types (integer or floating point).</p>
 <span class="n">SELECT</span> <span class="n">l2_norm</span><span class="p">(</span><span class="n">MAP</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[],</span> <span class="n">ARRAY</span><span class="p">[]));</span> <span class="o">--</span> <span class="mf">0.0</span>
 </pre></div>
 </div>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
@@ -776,19 +782,16 @@ longer array, before applying <code class="docutils literal notranslate"><span c
 <li><a class="reference internal" href="#array_top_n"><code class="docutils literal notranslate"><span class="pre">array_top_n()</span></code></a></li>
 <li><a class="reference internal" href="#arrays_overlap"><code class="docutils literal notranslate"><span class="pre">arrays_overlap()</span></code></a></li>
 <li><a class="reference internal" href="#arrays_union"><code class="docutils literal notranslate"><span class="pre">arrays_union()</span></code></a></li>
-<li><a class="reference internal" href="#cardinality"><code class="docutils literal notranslate"><span class="pre">cardinality()</span></code></a></li>
 <li><a class="reference internal" href="#combinations"><code class="docutils literal notranslate"><span class="pre">combinations()</span></code></a></li>
 <li><a class="reference internal" href="#concat"><code class="docutils literal notranslate"><span class="pre">concat()</span></code></a></li>
 <li><a class="reference internal" href="#contains"><code class="docutils literal notranslate"><span class="pre">contains()</span></code></a></li>
 <li><a class="reference internal" href="#dot_product"><code class="docutils literal notranslate"><span class="pre">dot_product()</span></code></a></li>
-<li><a class="reference internal" href="#id1"><code class="docutils literal notranslate"><span class="pre">dot_product()</span></code></a></li>
 <li><a class="reference internal" href="#element_at"><code class="docutils literal notranslate"><span class="pre">element_at()</span></code></a></li>
 <li><a class="reference internal" href="#filter"><code class="docutils literal notranslate"><span class="pre">filter()</span></code></a></li>
 <li><a class="reference internal" href="#find_first"><code class="docutils literal notranslate"><span class="pre">find_first()</span></code></a></li>
 <li><a class="reference internal" href="#find_first_index"><code class="docutils literal notranslate"><span class="pre">find_first_index()</span></code></a></li>
 <li><a class="reference internal" href="#flatten"><code class="docutils literal notranslate"><span class="pre">flatten()</span></code></a></li>
 <li><a class="reference internal" href="#l2_norm"><code class="docutils literal notranslate"><span class="pre">l2_norm()</span></code></a></li>
-<li><a class="reference internal" href="#id2"><code class="docutils literal notranslate"><span class="pre">l2_norm()</span></code></a></li>
 <li><a class="reference internal" href="#ngrams"><code class="docutils literal notranslate"><span class="pre">ngrams()</span></code></a></li>
 <li><a class="reference internal" href="#reduce"><code class="docutils literal notranslate"><span class="pre">reduce()</span></code></a></li>
 <li><a class="reference internal" href="#remove_nulls"><code class="docutils literal notranslate"><span class="pre">remove_nulls()</span></code></a></li>
