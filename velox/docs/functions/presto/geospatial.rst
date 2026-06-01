@@ -225,13 +225,46 @@ Spatial Operations
 .. function:: geometry_union_agg(geometry: Geometry) -> union: Geometry
 
     Returns a geometry that represents the point set union of the aggregated
-    input geometries. Null geometries are ignored. Empty input returns null.
+    input geometries. The result type depends on the input geometries:
 
-.. function:: convex_hull_agg(geometry: Geometry) -> union: Geometry
+    * Geometries of the same type are merged into the corresponding
+      ``MULTI*`` type (e.g., multiple ``POINT`` inputs yield a
+      ``MULTIPOINT``).
+    * Adjacent or overlapping polygons are dissolved into a single
+      ``POLYGON``.
+    * Geometries of different types are combined into a
+      ``GEOMETRYCOLLECTION``.
+    * A geometry that is fully contained within another is absorbed and
+      does not appear separately in the result.
 
-    Returns a geometry that represents the convex hull of the points in the
-    aggregated input geometries.  Null geometries are ignored. Empty input
-    returns null.
+    NULL inputs are ignored. Empty geometry inputs (e.g., ``POINT EMPTY``)
+    contribute nothing to the union; if all inputs are empty geometries the
+    result is ``GEOMETRYCOLLECTION EMPTY``. Returns NULL when there are no
+    rows or all inputs are NULL.
+
+    The union semantics are defined by the underlying GEOS
+    `Geometry::Union() <https://libgeos.org/doxygen/classgeos_1_1geom_1_1Geometry.html#a90ca3e6e3a30ac3e1ed7fb6dd1e52810>`_
+    operation.
+
+.. function:: convex_hull_agg(geometry: Geometry) -> hull: Geometry
+
+    Returns a geometry that represents the convex hull of the combined point
+    set of all aggregated input geometries. The result type depends on the
+    geometry of the inputs:
+
+    * A single point, or multiple identical points, yields a ``POINT``.
+    * Collinear points yield a ``LINESTRING``.
+    * All other non-empty inputs yield a ``POLYGON``.
+    * If all inputs are empty geometries the result is
+      ``GEOMETRYCOLLECTION EMPTY``.
+
+    NULL inputs are ignored. Empty geometry inputs (e.g., ``POINT EMPTY``)
+    contribute no points to the hull computation. Returns NULL when there
+    are no rows or all inputs are NULL.
+
+    The convex hull semantics are defined by the underlying GEOS
+    `Geometry::convexHull() <https://libgeos.org/doxygen/classgeos_1_1geom_1_1Geometry.html#a79b3790fbb2a2df4bde530979e740ad2>`_
+    operation.
 
 Accessors
 ---------
