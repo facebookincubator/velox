@@ -232,4 +232,75 @@ TEST(JavaRegexTranslator, commentsModeIgnoresBracesInLineComments) {
   EXPECT_EQ("(?x:# {\n a)", toPcre2Pattern("(?x:# {\n a)"));
 }
 
+TEST(JavaRegexTranslatorRe2, reusesPropertyAndClassPipeline) {
+  EXPECT_EQ("\\p{Greek}", toRe2Pattern("\\p{InGreek}"));
+  EXPECT_EQ("[abcdef]", toRe2Pattern("[abc[def]]"));
+  EXPECT_EQ("[^\\x{0}-\\x{10FFFF}]", toRe2Pattern("[a-c&&d-f]"));
+}
+
+TEST(JavaRegexTranslatorRe2, rewritesJavaNamedCapturingGroups) {
+  EXPECT_EQ("(?P<name>foo)", toRe2Pattern("(?<name>foo)"));
+  EXPECT_EQ("(a(?P<num>\\d+))", toRe2Pattern("(a(?<num>\\d+))"));
+}
+
+TEST(JavaRegexTranslatorRe2, doesNotRewriteNamedGroupLookalikesInQuotesOrClasses) {
+  EXPECT_EQ("\\Q(?<name>foo)\\E", toRe2Pattern("\\Q(?<name>foo)\\E"));
+  EXPECT_EQ("[(?<name>)]", toRe2Pattern("[(?<name>)]"));
+}
+
+TEST(JavaRegexTranslatorRe2, rejectsLookaround) {
+  EXPECT_THROW(toRe2Pattern("(?=foo)"), EvaluationFailedException);
+  EXPECT_THROW(toRe2Pattern("(?!foo)"), EvaluationFailedException);
+  EXPECT_THROW(toRe2Pattern("(?<=foo)"), EvaluationFailedException);
+  EXPECT_THROW(toRe2Pattern("(?<!foo)"), EvaluationFailedException);
+}
+
+TEST(JavaRegexTranslatorRe2, rejectsBackreferencesOutsideClasses) {
+  EXPECT_THROW(toRe2Pattern("(a)\\1"), EvaluationFailedException);
+  EXPECT_THROW(toRe2Pattern("(?<n>a)\\k<n>"), EvaluationFailedException);
+  EXPECT_NO_THROW(toRe2Pattern("[\\1\\k<n>]"));
+}
+
+TEST(JavaRegexTranslatorRe2, rejectsPossessiveQuantifiers) {
+  EXPECT_THROW(toRe2Pattern("a*+"), EvaluationFailedException);
+  EXPECT_THROW(toRe2Pattern("a?+"), EvaluationFailedException);
+  EXPECT_THROW(toRe2Pattern("a++"), EvaluationFailedException);
+  EXPECT_THROW(toRe2Pattern("a{1,3}+"), EvaluationFailedException);
+}
+
+TEST(JavaRegexTranslatorRe2, rejectsAtomicGroupsAndUnsupportedFlags) {
+  EXPECT_THROW(toRe2Pattern("(?>foo)"), EvaluationFailedException);
+  EXPECT_THROW(toRe2Pattern("(?U)foo"), EvaluationFailedException);
+  EXPECT_THROW(toRe2Pattern("(?d)foo"), EvaluationFailedException);
+  EXPECT_THROW(toRe2Pattern("(?c)foo"), EvaluationFailedException);
+  EXPECT_THROW(toRe2Pattern("(?id:foo)"), EvaluationFailedException);
+  EXPECT_EQ("foo", toRe2Pattern("(?u)foo"));
+  EXPECT_EQ("foo", toRe2Pattern("(?-U)foo"));
+  EXPECT_EQ("(?i:foo)", toRe2Pattern("(?i-d:foo)"));
+  EXPECT_EQ("foo", toRe2Pattern("(?-c)foo"));
+}
+
+TEST(JavaRegexTranslatorRe2, rewritesJavaOctalEscapesForRe2) {
+  EXPECT_EQ("\\x{a}", toRe2Pattern("\\012"));
+}
+
+TEST(JavaRegexTranslatorRe2, translatesCommentsModeForRe2) {
+  EXPECT_EQ("abc", toRe2Pattern("(?x)a b c"));
+  EXPECT_EQ("abcdef", toRe2Pattern("(?x)abc # comment\ndef"));
+  EXPECT_EQ("a b", toRe2Pattern("(?x)a\\ b"));
+  EXPECT_EQ("[a]", toRe2Pattern("(?x)[ a]"));
+  EXPECT_EQ("[ ]", toRe2Pattern("(?x)[\\ ]"));
+  EXPECT_EQ("[a]", toRe2Pattern("(?x)[a# comment\n]"));
+  EXPECT_THROW(toRe2Pattern("(?x)[a# comment]"), EvaluationFailedException);
+  EXPECT_EQ("(?i:ab)", toRe2Pattern("(?ix:a b)"));
+  EXPECT_THROW(toRe2Pattern("(?x)(? <name>a)"), EvaluationFailedException);
+  EXPECT_THROW(toRe2Pattern("(?x)(? :a)"), EvaluationFailedException);
+}
+
+TEST(JavaRegexTranslatorRe2, unsupportedFeatureLookalikesInQuotesAreLiterals) {
+  EXPECT_EQ(
+      "\\Q(?=foo)\\1*+(?>x)(?U)\\E",
+      toRe2Pattern("\\Q(?=foo)\\1*+(?>x)(?U)\\E"));
+}
+
 } // namespace facebook::velox::functions::java_pcre2_translator::test

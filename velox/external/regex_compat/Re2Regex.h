@@ -34,12 +34,11 @@ namespace facebook::velox::regex_compat {
 /// test-suite typed-test surface aligned with Velox's existing RE2 usage.
 ///
 /// **Pattern / replacement input** is Java `java.util.regex` syntax.
-/// Internally, the constructor and `GlobalReplace` call into Velox's existing
-/// `prepareRegexpReplacePattern` / `prepareRegexpReplaceReplacement`
-/// (`Re2Functions.h:402,422`) to translate Java syntax to RE2 syntax.  Java
-/// features that RE2 cannot express (lookaround / backrefs / possessive /
-/// atomic group) cause `ok() == false` with an error message coming directly
-/// from `re2::RE2::error()`; no separate pre-flight scanner is run.
+/// Internally, the constructor uses `java_pcre2_translator::toRe2Pattern` and
+/// `GlobalReplace` calls Velox's existing
+/// `prepareRegexpReplaceReplacement` (`Re2Functions.h:422`).  Java features
+/// that RE2 cannot express (lookaround / backrefs / possessive / atomic group)
+/// cause `ok() == false` with a translator error message.
 class Re2Regex {
  public:
   explicit Re2Regex(std::string_view javaPattern, Options opt = {});

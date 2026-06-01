@@ -511,6 +511,507 @@ bool containsRawSurrogate(std::string_view s, std::size_t from, std::size_t to) 
   return false;
 }
 
+bool hasOddBackslashesBefore(std::string_view s, std::size_t pos) {
+  std::size_t count = 0;
+  while (pos > 0 && s[pos - 1] == '\\') {
+    --pos;
+    ++count;
+  }
+  return (count & 1U) == 1U;
+}
+
+std::size_t trySkipClass(std::string_view s, std::size_t start) {
+  std::size_t pos = start;
+  try {
+    ClassBodyParser::parseClass(s, pos);
+    return pos;
+  } catch (const std::invalid_argument&) {
+    return start;
+  }
+}
+
+bool validModeModifierHasUnsupportedRe2Flag(
+    std::string_view s,
+    std::size_t start,
+    char& flag) {
+  std::size_t j = start + 2;
+  bool hasUnsupported = false;
+  char unsupported = 0;
+
+  while (j < s.size() && isJavaModeFlag(s[j])) {
+    if (s[j] == 'U' || s[j] == 'd' || s[j] == 'c') {
+      hasUnsupported = true;
+      unsupported = s[j];
+    }
+    ++j;
+  }
+
+  if (j < s.size() && s[j] == '-') {
+    ++j;
+    while (j < s.size() && isJavaModeFlag(s[j])) {
+      ++j;
+    }
+  }
+
+  if (j >= s.size() || (s[j] != ')' && s[j] != ':')) {
+    return false;
+  }
+
+  flag = unsupported;
+  return hasUnsupported;
+}
+
+void appendRe2ModeModifier(
+    std::string_view s,
+    std::size_t start,
+    std::size_t end,
+    char term,
+    bool hasDash,
+    std::string& out) {
+  const auto appendFlags = [&](std::size_t from, std::size_t to) {
+    for (std::size_t k = from; k < to; ++k) {
+      if (s[k] != 'x' && s[k] != 'u' && s[k] != 'U' && s[k] != 'd' &&
+          s[k] != 'c') {
+        out.push_back(s[k]);
+      }
+    }
+  };
+
+  std::size_t j = start + 2;
+  const std::size_t onStart = j;
+  while (j < end && isJavaModeFlag(s[j])) {
+    ++j;
+  }
+  const std::size_t onEnd = j;
+
+  std::size_t offStart = std::string_view::npos;
+  std::size_t offEnd = std::string_view::npos;
+  if (hasDash) {
+    ++j;
+    offStart = j;
+    while (j < end && isJavaModeFlag(s[j])) {
+      ++j;
+    }
+    offEnd = j;
+  }
+
+  const auto hasKeptFlag = [&](std::size_t from, std::size_t to) {
+    for (std::size_t k = from; k < to; ++k) {
+      if (s[k] != 'x' && s[k] != 'u' && s[k] != 'U' && s[k] != 'd' &&
+          s[k] != 'c') {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  const bool hasOn = hasKeptFlag(onStart, onEnd);
+  const bool hasOff = offStart != std::string_view::npos &&
+      hasKeptFlag(offStart, offEnd);
+
+  if (term == ')') {
+    if (hasOn || hasOff) {
+      out += "(?";
+      appendFlags(onStart, onEnd);
+      if (hasOff) {
+        out.push_back('-');
+        appendFlags(offStart, offEnd);
+      }
+      out.push_back(')');
+    }
+    return;
+  }
+
+  if (!hasOn && !hasOff) {
+    out += "(?:";
+  } else {
+    out += "(?";
+    appendFlags(onStart, onEnd);
+    if (hasOff) {
+      out.push_back('-');
+      appendFlags(offStart, offEnd);
+    }
+    out.push_back(':');
+  }
+}
+
+void rejectUnsupportedRe2Features(std::string_view javaPattern) {
+  bool inQuotation = false;
+  bool commentsMode = false;
+  std::vector<bool> commentsStack;
+
+  for (std::size_t i = 0; i < javaPattern.size();) {
+    const char c = javaPattern[i];
+
+    if (c == '\\' && i + 1 < javaPattern.size()) {
+      const char next = javaPattern[i + 1];
+      if (!inQuotation && next == 'Q') {
+        inQuotation = true;
+        i += 2;
+        continue;
+      }
+      if (inQuotation && next == 'E') {
+        inQuotation = false;
+        i += 2;
+        continue;
+      }
+      if (inQuotation) {
+        ++i;
+        continue;
+      }
+      if (next >= '1' && next <= '9') {
+        throw EvaluationFailedException(
+            "RE2 does not support Java backreferences (\\1-\\9)");
+      }
+      if (next == 'k' && i + 2 < javaPattern.size() &&
+          javaPattern[i + 2] == '<') {
+        throw EvaluationFailedException(
+            "RE2 does not support Java named backreferences (\\k<name>)");
+      }
+      i += 2;
+      continue;
+    }
+
+    if (inQuotation) {
+      ++i;
+      continue;
+    }
+
+    if (commentsMode && c == '#' && !hasOddBackslashesBefore(javaPattern, i)) {
+      while (i < javaPattern.size() && javaPattern[i] != '\n') {
+        ++i;
+      }
+      continue;
+    }
+
+    if (c == '[' && !hasOddBackslashesBefore(javaPattern, i)) {
+      const auto classEnd = trySkipClass(javaPattern, i);
+      if (classEnd > i) {
+        i = classEnd;
+        continue;
+      }
+    }
+
+    if (c == '(' && i + 1 < javaPattern.size() && javaPattern[i + 1] == '?' &&
+        !hasOddBackslashesBefore(javaPattern, i)) {
+      if (i + 2 < javaPattern.size()) {
+        const char op = javaPattern[i + 2];
+        if (op == '=' || op == '!') {
+          throw EvaluationFailedException(
+              "RE2 does not support Java lookaround assertions");
+        }
+        if (op == '>') {
+          throw EvaluationFailedException(
+              "RE2 does not support Java atomic groups (?>...)");
+        }
+        if (op == '<' && i + 3 < javaPattern.size() &&
+            (javaPattern[i + 3] == '=' || javaPattern[i + 3] == '!')) {
+          throw EvaluationFailedException(
+              "RE2 does not support Java lookaround assertions");
+        }
+      }
+
+      char unsupportedFlag = 0;
+      if (validModeModifierHasUnsupportedRe2Flag(
+              javaPattern, i, unsupportedFlag)) {
+        if (unsupportedFlag == 'U') {
+          throw EvaluationFailedException(
+              "RE2 does not support Java UNICODE_CHARACTER_CLASS flag (?U)");
+        }
+        if (unsupportedFlag == 'c') {
+          throw EvaluationFailedException(
+              "RE2 does not support Java CANON_EQ flag (?c)");
+        }
+        throw EvaluationFailedException(
+            "RE2 does not support Java UNIX_LINES flag (?d)");
+      }
+
+      std::string ignored;
+      const auto modeResult =
+          tryTranslateModeModifier(javaPattern, i, javaPattern.size(), ignored);
+      if (modeResult.end != std::string_view::npos) {
+        if (modeResult.term == ':') {
+          commentsStack.push_back(commentsMode);
+        }
+        if (modeResult.onX) {
+          commentsMode = true;
+        }
+        if (modeResult.hasDash && modeResult.offX) {
+          commentsMode = false;
+        }
+        i = modeResult.end;
+        continue;
+      }
+    }
+
+    if (c == '(' && !hasOddBackslashesBefore(javaPattern, i)) {
+      commentsStack.push_back(commentsMode);
+    } else if (c == ')' && !hasOddBackslashesBefore(javaPattern, i) &&
+        !commentsStack.empty()) {
+      commentsMode = commentsStack.back();
+      commentsStack.pop_back();
+    }
+
+    if ((c == '*' || c == '?' || c == '+') && i + 1 < javaPattern.size() &&
+        javaPattern[i + 1] == '+' && !hasOddBackslashesBefore(javaPattern, i)) {
+      throw EvaluationFailedException(
+          "RE2 does not support Java possessive quantifiers");
+    }
+
+    if (c == '{' && !hasOddBackslashesBefore(javaPattern, i)) {
+      const auto close = javaPattern.find('}', i + 1);
+      if (close != std::string_view::npos &&
+          isValidQuantifierBody(javaPattern.substr(i + 1, close - i - 1)) &&
+          close + 1 < javaPattern.size() && javaPattern[close + 1] == '+') {
+        throw EvaluationFailedException(
+            "RE2 does not support Java possessive quantifiers");
+      }
+    }
+
+    ++i;
+  }
+}
+
+void appendCommentsModeClassForRe2(
+    std::string_view pattern,
+    std::size_t classStart,
+    std::size_t classEnd,
+    std::string& out) {
+  out.push_back('[');
+  bool inQuotation = false;
+
+  for (std::size_t i = classStart + 1; i + 1 < classEnd;) {
+    const char c = pattern[i];
+    if (c == '\\' && i + 1 < classEnd) {
+      const char next = pattern[i + 1];
+      if (!inQuotation && next == 'Q') {
+        inQuotation = true;
+      } else if (inQuotation && next == 'E') {
+        inQuotation = false;
+      }
+      out.push_back(c);
+      out.push_back(next);
+      i += 2;
+      continue;
+    }
+
+    if (!inQuotation && c == '#') {
+      while (i + 1 < classEnd && pattern[i] != '\n') {
+        ++i;
+      }
+      if (i + 1 >= classEnd) {
+        throw EvaluationFailedException(
+            "Java COMMENTS mode comment in character class is not terminated");
+      }
+      continue;
+    }
+
+    if (!inQuotation && std::isspace(static_cast<unsigned char>(c))) {
+      ++i;
+      continue;
+    }
+
+    out.push_back(c);
+    ++i;
+  }
+
+  out.push_back(']');
+}
+
+std::string translateCommentsModeForRe2(std::string_view pattern) {
+  std::string out;
+  out.reserve(pattern.size());
+  bool inQuotation = false;
+  bool commentsMode = false;
+  std::vector<bool> commentsStack;
+
+  for (std::size_t i = 0; i < pattern.size();) {
+    const char c = pattern[i];
+
+    if (c == '\\' && i + 1 < pattern.size()) {
+      const char next = pattern[i + 1];
+      if (!inQuotation && next == 'Q') {
+        out += "\\Q";
+        inQuotation = true;
+        i += 2;
+        continue;
+      }
+      if (inQuotation && next == 'E') {
+        out += "\\E";
+        inQuotation = false;
+        i += 2;
+        continue;
+      }
+      if (commentsMode && std::isspace(static_cast<unsigned char>(next))) {
+        out.push_back(next);
+        i += 2;
+        continue;
+      }
+      out.push_back(c);
+      out.push_back(next);
+      i += 2;
+      continue;
+    }
+
+    if (inQuotation) {
+      out.push_back(c);
+      ++i;
+      continue;
+    }
+
+    if (c == '[' && !hasOddTrailingBackslashes(out)) {
+      const auto classEnd = trySkipClass(pattern, i);
+      if (classEnd > i) {
+        if (commentsMode) {
+          appendCommentsModeClassForRe2(pattern, i, classEnd, out);
+        } else {
+          out.append(pattern.substr(i, classEnd - i));
+        }
+        i = classEnd;
+        continue;
+      }
+    }
+
+    if (commentsMode && c == '(' && i + 2 < pattern.size() &&
+        pattern[i + 1] == '?' && !hasOddTrailingBackslashes(out) &&
+        (std::isspace(static_cast<unsigned char>(pattern[i + 2])) ||
+         pattern[i + 2] == '#')) {
+      throw EvaluationFailedException(
+          "Java COMMENTS mode does not ignore whitespace in inline group prefixes");
+    }
+
+    if (commentsMode && c == '#') {
+      while (i < pattern.size() && pattern[i] != '\n') {
+        ++i;
+      }
+      if (i < pattern.size()) {
+        ++i;
+      }
+      continue;
+    }
+
+    if (commentsMode && std::isspace(static_cast<unsigned char>(c))) {
+      ++i;
+      continue;
+    }
+
+    if (c == '(' && i + 1 < pattern.size() && pattern[i + 1] == '?' &&
+        !hasOddTrailingBackslashes(out)) {
+      std::string ignored;
+      const auto modeResult =
+          tryTranslateModeModifier(pattern, i, pattern.size(), ignored);
+      if (modeResult.end != std::string_view::npos) {
+        appendRe2ModeModifier(
+            pattern,
+            i,
+            modeResult.end,
+            modeResult.term,
+            modeResult.hasDash,
+            out);
+        if (modeResult.term == ':') {
+          commentsStack.push_back(commentsMode);
+        }
+        if (modeResult.onX) {
+          commentsMode = true;
+        }
+        if (modeResult.hasDash && modeResult.offX) {
+          commentsMode = false;
+        }
+        i = modeResult.end;
+        continue;
+      }
+    }
+
+    if (c == '(' && !hasOddTrailingBackslashes(out)) {
+      commentsStack.push_back(commentsMode);
+    } else if (c == ')' && !hasOddTrailingBackslashes(out) &&
+        !commentsStack.empty()) {
+      commentsMode = commentsStack.back();
+      commentsStack.pop_back();
+    }
+
+    out.push_back(c);
+    ++i;
+  }
+
+  return out;
+}
+
+std::string translatePcre2OctalEscapesForRe2(std::string_view pattern) {
+  std::string out;
+  out.reserve(pattern.size());
+  for (std::size_t i = 0; i < pattern.size();) {
+    if (i + 3 < pattern.size() && pattern[i] == '\\' && pattern[i + 1] == 'o' &&
+        pattern[i + 2] == '{') {
+      const auto close = pattern.find('}', i + 3);
+      if (close != std::string_view::npos) {
+        std::uint32_t value = 0;
+        bool valid = close > i + 3;
+        for (std::size_t k = i + 3; k < close; ++k) {
+          if (!isOctalDigit(pattern[k])) {
+            valid = false;
+            break;
+          }
+          value = (value << 3) + (pattern[k] - '0');
+        }
+        if (valid) {
+          out += "\\x{";
+          out += toLowerHex(value);
+          out.push_back('}');
+          i = close + 1;
+          continue;
+        }
+      }
+    }
+    out.push_back(pattern[i++]);
+  }
+  return out;
+}
+
+std::string rewriteJavaNamedGroupsForRe2(std::string_view pattern) {
+  std::string out;
+  out.reserve(pattern.size() + 8);
+  bool inQuotation = false;
+
+  for (std::size_t i = 0; i < pattern.size();) {
+    const char c = pattern[i];
+    if (c == '\\' && i + 1 < pattern.size()) {
+      const char next = pattern[i + 1];
+      if (!inQuotation && next == 'Q') {
+        inQuotation = true;
+      } else if (inQuotation && next == 'E') {
+        inQuotation = false;
+      }
+      out.push_back(c);
+      out.push_back(next);
+      i += 2;
+      continue;
+    }
+
+    if (!inQuotation && c == '[' && !hasOddBackslashesBefore(pattern, i)) {
+      const auto classEnd = trySkipClass(pattern, i);
+      if (classEnd > i) {
+        out.append(pattern.substr(i, classEnd - i));
+        i = classEnd;
+        continue;
+      }
+    }
+
+    if (!inQuotation && c == '(' && i + 3 < pattern.size() &&
+        pattern[i + 1] == '?' && pattern[i + 2] == '<' &&
+        pattern[i + 3] != '=' && pattern[i + 3] != '!' &&
+        !hasOddBackslashesBefore(pattern, i)) {
+      out += "(?P<";
+      i += 3;
+      continue;
+    }
+
+    out.push_back(c);
+    ++i;
+  }
+  return out;
+}
+
 } // namespace
 
 std::string toPcre2Pattern(std::string_view javaPattern) {
@@ -829,6 +1330,13 @@ std::string toPcre2Pattern(std::string_view javaPattern) {
   }
 
   return out;
+}
+
+std::string toRe2Pattern(std::string_view javaPattern) {
+  rejectUnsupportedRe2Features(javaPattern);
+  return rewriteJavaNamedGroupsForRe2(
+      translatePcre2OctalEscapesForRe2(
+          toPcre2Pattern(translateCommentsModeForRe2(javaPattern))));
 }
 
 } // namespace facebook::velox::functions::java_pcre2_translator

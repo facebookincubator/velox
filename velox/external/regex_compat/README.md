@@ -35,8 +35,8 @@ Three parallel, non-virtual concrete classes:
 
 | Backend     | Implementation                                              |
 | ----------- | ----------------------------------------------------------- |
-| `Re2Regex`  | wraps `re2::RE2`; reuses Velox's inline `prepareRegexpReplacePattern` / `prepareRegexpReplaceReplacement` from `Re2Functions.h` to translate Java syntax to RE2 syntax |
-| `Pcre2Regex`| wraps `pcre2_code_8`; accepts Java syntax natively (PCRE2 understands `(?<name>)`); `GlobalReplace` uses `PCRE2_SUBSTITUTE_EXTENDED` for `$N` / `${name}` |
+| `Re2Regex`  | wraps `re2::RE2`; uses `java_pcre2_translator::toRe2Pattern` for Java pattern syntax and Velox's inline `prepareRegexpReplaceReplacement` from `Re2Functions.h` for Java replacement syntax |
+| `Pcre2Regex`| wraps `pcre2_code_8`; uses `java_pcre2_translator::toPcre2Pattern`; `GlobalReplace` uses `PCRE2_SUBSTITUTE_EXTENDED` for `$N` / `${name}` |
 | `JavaRegex` | drives `java.util.regex.Pattern` / `Matcher` through an embedded JVM (`JNI_CreateJavaVM`) using only standard JDK classes — no Gluten / Hadoop jars needed |
 
 Their public methods deliberately mirror the subset of `re2::RE2` actually
@@ -84,21 +84,20 @@ backends accept Java `(?<name>...)` named groups).
 
 | Java feature                       | Re2Regex                              | Pcre2Regex                  | JavaRegex |
 | ---------------------------------- | ------------------------------------- | --------------------------- | --------- |
-| `(?<name>...)` named groups        | translated via `prepareRegexpReplacePattern` | native                  | native    |
+| `(?<name>...)` named groups        | translated via `toRe2Pattern`         | native                  | native    |
 | `$N` / `${name}` in replacement    | translated via `prepareRegexpReplaceReplacement` | `PCRE2_SUBSTITUTE_EXTENDED` native | native |
 | Lookaround `(?=...)`, `(?!...)`    | not supported (`ok() == false`)       | native                      | native    |
 | Backreferences `\1`                | not supported                         | native                      | native    |
 | Atomic groups `(?>...)`, possessive `*+` | not supported                   | native                      | native    |
-| Java `\p{InGreek}` / `\p{javaXxx}` | not supported                         | not supported (would need Java→PCRE2 translator, future work) | native |
-| Character-class intersection `[a-c&&b-d]` | not supported                  | not supported (translator scope) | native |
-| `(?U)` Java UNICODE_CHARACTER_CLASS | dropped at translation                | semantically reversed (ungreedy in PCRE2) — translator scope | native |
+| Java `\p{InGreek}` / `\p{javaXxx}` | translated where safe                  | translated where safe   | native    |
+| Character-class intersection `[a-c&&b-d]` | translated where safe          | translated where safe   | native    |
+| `(?U)` Java UNICODE_CHARACTER_CLASS | rejected to avoid RE2 ungreedy semantics | translated where safe | native    |
 | Multiline `^`/`$`                  | injected `(?m)` prefix when `oneLine=false` | option-mapped              | option-mapped |
 | `a{` incomplete quantifier         | accepted as literal                   | accepted as literal         | rejected (`PatternSyntaxException`) |
 
-The rows where Pcre2Regex says "translator scope" are the future-work
-items that a C++ port of pcre4j PR #606's `JavaRegexTranslator` would
-close.  See `/root/chang/OneDrive - Microsoft/My/ai-task/regex/specs/`
-for the spec document.
+The translator rows are intentionally conservative: features are translated
+only where the target engine can preserve Java semantics, and otherwise the
+backend reports `ok() == false` with a translator error.
 
 ## Provenance
 
@@ -118,10 +117,9 @@ for the spec document.
   experiment, not a Velox engine swap.  If/when a production decision
   is made the backend classes can be lifted to `velox/functions/lib/`
   but that is a separate task.
-- **No Java → PCRE2 translator** (yet).  The 6.3 % of pcre4j upstream
-  tests that fail without translation (`\p{InGreek}`, `[a-c&&b-d]`,
-  `(?U)`) are documented as failing on PCRE2 in this suite, deliberately,
-  to serve as a quantified backlog for the translator project.
+- **No production regex engine replacement.**  The Java regex translator is
+  wired into this comparison suite's RE2 and PCRE2 backends to measure
+  compatibility, not to change Velox production regex behavior.
 - **No QueryConfig runtime switch.**  Whether Velox should expose
   RE2/PCRE2/Java as a runtime-selectable engine is a downstream
   decision; the backend classes here all happen to be method-compatible,

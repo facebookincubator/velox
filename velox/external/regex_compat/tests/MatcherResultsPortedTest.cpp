@@ -28,6 +28,7 @@
 
 #include <string>
 #include <tuple>
+#include <type_traits>
 #include <vector>
 
 namespace facebook::velox::regex_compat::test {
@@ -106,6 +107,9 @@ TYPED_TEST(ResultsPortedTest, resultsImmutableSnapshots) {
 
 // Zero-width matches via positive lookahead — RE2 lacks lookaround.
 TYPED_TEST(ResultsPortedTest, resultsZeroWidthMatches) {
+  if constexpr (std::is_same_v<TypeParam, Re2Regex>) {
+    GTEST_SKIP() << "RE2 does not support lookahead";
+  }
   TypeParam re("(?=\\d)");
   ASSERT_TRUE(re.ok()) << re.error();
   JavaMatcherAdapter<TypeParam> m(&re, "a1b2c3");

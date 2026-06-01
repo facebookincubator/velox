@@ -21,7 +21,7 @@
 // This header is the public surface of the `java_pcre2_translator`
 // library.  It declares free functions that rewrite a `java.util.regex`
 // pattern string into an equivalent pattern accepted by either PCRE2 or
-// RE2 (the latter is a later phase — currently identity).
+// RE2.
 //
 #pragma once
 
@@ -49,8 +49,15 @@ namespace facebook::velox::functions::java_pcre2_translator {
 /// expressed in PCRE2 syntax (e.g. a property name with no PCRE2
 /// equivalent).  Callers are expected to surface the message verbatim.
 ///
-/// During Phase 1 (scaffolding) this function is implemented as an
-/// identity transform.  Later phases (2-5) wire in the actual logic.
 std::string toPcre2Pattern(std::string_view javaPattern);
+
+/// Rewrites a `java.util.regex.Pattern` source string into an equivalent
+/// pattern accepted by RE2.
+///
+/// This shares the PCRE2 property and character-class translation pipeline,
+/// rewrites Java named groups `(?<name>...)` to RE2 `(?P<name>...)`, and
+/// rejects Java features that RE2 cannot represent without changing
+/// semantics.
+std::string toRe2Pattern(std::string_view javaPattern);
 
 } // namespace facebook::velox::functions::java_pcre2_translator

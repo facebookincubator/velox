@@ -36,7 +36,7 @@ TEST(Re2RegexTest, compileError) {
 
 TEST(Re2RegexTest, javaNamedGroupAccepted) {
   // Java syntax (?<name>...) should be translated to RE2 (?P<name>...) by
-  // prepareRegexpReplacePattern before reaching re2::RE2.
+  // toRe2Pattern before reaching re2::RE2.
   Re2Regex re("(?<num>\\d+)");
   ASSERT_TRUE(re.ok()) << re.error();
   EXPECT_EQ(1, re.NumberOfCapturingGroups());
@@ -102,13 +102,10 @@ TEST(Re2RegexTest, caseInsensitiveOption) {
 }
 
 TEST(Re2RegexTest, lookaroundUnsupportedByRe2) {
-  // RE2 doesn't support lookahead; prepareRegexpReplacePattern doesn't help here
-  // (it only rewrites named groups).  We expect ok()==false with an error.
-  // RE2's exact error message is "invalid perl operator: (?=" — we assert on a
-  // substring so this stays robust across re2 versions.
   Re2Regex re("(?=foo)bar");
   EXPECT_FALSE(re.ok());
-  EXPECT_THAT(re.error(), ::testing::HasSubstr("(?="));
+  EXPECT_THAT(re.error(), ::testing::HasSubstr("Java→RE2 translator"));
+  EXPECT_THAT(re.error(), ::testing::HasSubstr("lookaround"));
 }
 
 } // namespace

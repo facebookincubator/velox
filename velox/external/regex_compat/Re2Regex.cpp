@@ -19,6 +19,7 @@
 #include <re2/stringpiece.h>
 
 #include "velox/functions/lib/Re2Functions.h"
+#include "velox/functions/lib/java_pcre2_translator/JavaRegexTranslator.h"
 #include "velox/type/StringView.h"
 
 namespace facebook::velox::regex_compat {
@@ -60,11 +61,14 @@ re2::RE2::Options toRe2Options(const Options& o) {
 } // namespace
 
 Re2Regex::Re2Regex(std::string_view javaPattern, Options opt) {
-  // Translate Java syntax to RE2 syntax using the same helper Velox
-  // Spark/Presto functions use.  This is a free function in Re2Functions.h
-  // (FOLLY_ALWAYS_INLINE), so there's no separate dependency.
-  std::string re2Pattern =
-      functions::prepareRegexpReplacePattern(toVelox(javaPattern));
+  std::string re2Pattern;
+  try {
+    re2Pattern = functions::java_pcre2_translator::toRe2Pattern(javaPattern);
+  } catch (const functions::java_pcre2_translator::EvaluationFailedException&
+               ex) {
+    error_ = std::string("Java→RE2 translator: ") + ex.what();
+    return;
+  }
   // Java's MULTILINE flag doesn't map cleanly to any RE2 Options bit:
   // RE2's default behavior is that `^` and `$` only match at the start/end
   // of the entire input.  The inline `(?m)` modifier is the only way to
