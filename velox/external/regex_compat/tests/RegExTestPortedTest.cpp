@@ -53,12 +53,23 @@ TYPED_TEST_SUITE(RegExTestPortedTest, AllBackends);
 struct RegExStats {
   int passed = 0;
   int failed = 0;
+  // Tests where any pattern compile in the body was rejected by the
+  // translator as engine-impossible.  Tracked separately so the report
+  // can compute a "translatable subset" rate.
+  int translatorRejected = 0;
 };
 
 std::map<std::string, RegExStats>& regExStats() {
   static std::map<std::string, RegExStats> s;
   return s;
 }
+
+// Thread-local flag set whenever a helper observes the translator
+// rejecting the pattern as engine-impossible (e.g. RE2 lookaround /
+// backref / possessive).  The test macro consumes it after the body
+// runs and bumps a per-backend tally so we can report a "translatable
+// subset" rate that excludes engine-impossible tests.
+inline thread_local bool tlsTranslatorRejected = false;
 
 class RegExReporter : public ::testing::Environment {
  public:
@@ -79,6 +90,19 @@ class RegExReporter : public ::testing::Environment {
           st.passed,
           total,
           pct);
+      if (st.translatorRejected > 0) {
+        const int subsetTotal = total - st.translatorRejected;
+        const double subsetPct =
+            subsetTotal > 0 ? 100.0 * st.passed / subsetTotal : 0.0;
+        std::fprintf(
+            stderr,
+            "  %-8s %4d / %4d  (%.2f%%)  [excludes %d translator-rejected]\n",
+            (backend + " (translatable subset)").c_str(),
+            st.passed,
+            subsetTotal,
+            subsetPct,
+            st.translatorRejected);
+      }
     }
     std::fprintf(stderr, "=================================================\n");
   }
@@ -99,13 +123,17 @@ const char* backendName() {
 }
 
 template <typename R>
-void recordCase(bool ok) {
+void recordCase(bool ok, const char* /*testName*/) {
   auto& st = regExStats()[backendName<R>()];
+  if (tlsTranslatorRejected) {
+    ++st.translatorRejected;
+  }
   if (ok) {
     ++st.passed;
   } else {
     ++st.failed;
   }
+  tlsTranslatorRejected = false;
 }
 
 static Options caseInsensitive() {
@@ -192,10 +220,26 @@ static std::string javaQuote(std::string_view s) {
   return out;
 }
 
+// Thread-local flag set whenever a helper observes the translator
+// rejecting the pattern as engine-impossible (e.g. RE2 lookaround /
+// backref / possessive).  The test macro consumes it after the body
+// runs and bumps a per-backend tally so we can report a "translatable
+// subset" rate that excludes engine-impossible tests.
+// (Declared earlier in the file so recordCase can use it.)
+
+template <typename R>
+inline bool notePatternStatus(const R& re) {
+  if (!re.ok() &&
+      re.error().find("translator: ") != std::string::npos) {
+    tlsTranslatorRejected = true;
+  }
+  return re.ok();
+}
+
 template <typename R>
 bool find(std::string_view pattern, std::string_view input, Options opt = {}) {
   R re(pattern, opt);
-  if (!re.ok()) {
+  if (!notePatternStatus(re)) {
     return false;
   }
   JavaMatcherAdapter<R> m(&re, input);
@@ -205,7 +249,7 @@ bool find(std::string_view pattern, std::string_view input, Options opt = {}) {
 template <typename R>
 bool noFind(std::string_view pattern, std::string_view input, Options opt = {}) {
   R re(pattern, opt);
-  if (!re.ok()) {
+  if (!notePatternStatus(re)) {
     return false;
   }
   JavaMatcherAdapter<R> m(&re, input);
@@ -232,7 +276,7 @@ bool findGroup(
     Options opt = {},
     int group = 0) {
   R re(pattern, opt);
-  if (!re.ok()) {
+  if (!notePatternStatus(re)) {
     return false;
   }
   JavaMatcherAdapter<R> m(&re, input);
@@ -250,7 +294,7 @@ bool findStart(
     int expected,
     Options opt = {}) {
   R re(pattern, opt);
-  if (!re.ok()) {
+  if (!notePatternStatus(re)) {
     return false;
   }
   JavaMatcherAdapter<R> m(&re, input);
@@ -260,7 +304,7 @@ bool findStart(
 template <typename R>
 bool lookingAt(std::string_view pattern, std::string_view input, Options opt = {}) {
   R re(pattern, opt);
-  if (!re.ok()) {
+  if (!notePatternStatus(re)) {
     return false;
   }
   JavaMatcherAdapter<R> m(&re, input);
@@ -270,7 +314,7 @@ bool lookingAt(std::string_view pattern, std::string_view input, Options opt = {
 template <typename R>
 bool notLookingAt(std::string_view pattern, std::string_view input, Options opt = {}) {
   R re(pattern, opt);
-  if (!re.ok()) {
+  if (!notePatternStatus(re)) {
     return false;
   }
   JavaMatcherAdapter<R> m(&re, input);
@@ -285,7 +329,7 @@ bool replaceAllEquals(
     std::string_view expected,
     Options opt = {}) {
   R re(pattern, opt);
-  if (!re.ok()) {
+  if (!notePatternStatus(re)) {
     return false;
   }
   R::GlobalReplace(&input, re, replacement);
@@ -300,7 +344,7 @@ bool replaceFirstEquals(
     std::string_view expected,
     Options opt = {}) {
   R re(pattern, opt);
-  if (!re.ok()) {
+  if (!notePatternStatus(re)) {
     return false;
   }
   JavaMatcherAdapter<R> m(&re, input);
@@ -315,7 +359,7 @@ bool appendWalkEquals(
     std::string_view expected,
     int skipMiddleFinds = 0) {
   R re(pattern);
-  if (!re.ok()) {
+  if (!notePatternStatus(re)) {
     return false;
   }
   JavaMatcherAdapter<R> m(&re, input);
@@ -342,7 +386,7 @@ bool appendReplacementThrowsAndLeavesBuffer(
     std::string_view input,
     std::string_view replacement) {
   R re(pattern);
-  if (!re.ok()) {
+  if (!notePatternStatus(re)) {
     return false;
   }
   JavaMatcherAdapter<R> m(&re, input);
@@ -364,7 +408,7 @@ bool splitEquals(
     std::string_view input,
     const std::vector<std::string>& expected) {
   R re(pattern);
-  if (!re.ok()) {
+  if (!notePatternStatus(re)) {
     return false;
   }
   JavaMatcherAdapter<R> m(&re, input);
@@ -396,12 +440,13 @@ bool rejects(std::string_view pattern, Options opt = {}) {
 #define PORTED_REGEX_TEST(TestName, Body)                                      \
   TYPED_TEST(RegExTestPortedTest, TestName) {                                  \
     bool ok = true;                                                            \
+    tlsTranslatorRejected = false;                                             \
     auto expect = [&](bool value) { ok = ok && value; };                       \
     using R = TypeParam;                                                       \
     (void)expect;                                                              \
     (void)sizeof(R);                                                           \
     Body                                                                       \
-    recordCase<TypeParam>(ok);                                                 \
+    recordCase<TypeParam>(ok, #TestName);                                      \
     if constexpr (std::is_same_v<TypeParam, JavaRegex>) {                      \
       EXPECT_TRUE(ok) << "RegExTest::" #TestName " Java backend regression";  \
     }                                                                          \
@@ -451,7 +496,7 @@ TODO_REGEX_TEST(boundsTest, "transparent and anchoring bounds toggles are not ex
 
 PORTED_REGEX_TEST(findFromTest, {
   R re("\\$0");
-  if (!re.ok()) { expect(false); } else {
+  if (!notePatternStatus(re)) { expect(false); } else {
     JavaMatcherAdapter<R> m(&re, "This is 40 $0 message.");
     expect(m.find());
     expect(!m.find());
@@ -487,7 +532,7 @@ PORTED_REGEX_TEST(literalReplacementTest, {
 
 PORTED_REGEX_TEST(regionTest, {
   R re("abc");
-  if (!re.ok()) { expect(false); } else {
+  if (!notePatternStatus(re)) { expect(false); } else {
     JavaMatcherAdapter<R> m(&re, "abcdefabc");
     expect(m.region(0, 9).find());
     expect(m.find());
@@ -519,7 +564,7 @@ PORTED_REGEX_TEST(nonCaptureRepetitionTest, {
 
 PORTED_REGEX_TEST(notCapturedGroupCurlyMatchTest, {
   R re("(abc)+|(abcd)+");
-  if (!re.ok()) { expect(false); } else {
+  if (!notePatternStatus(re)) { expect(false); } else {
     JavaMatcherAdapter<R> m(&re, "abcd");
     expect(m.matches());
     expect(!m.group(1).has_value());
@@ -533,7 +578,7 @@ TODO_REGEX_TEST(dollarAtEndTest, "UNIX_LINES flag is not represented in regex_co
 
 PORTED_REGEX_TEST(multilineDollarTest, {
   R re("$", multiLine());
-  if (!re.ok()) { expect(false); } else {
+  if (!notePatternStatus(re)) { expect(false); } else {
     JavaMatcherAdapter<R> m(&re, "first bit\nsecond bit");
     expect(m.find() && m.start() == 9);
     expect(m.find() && m.start() == 20);
@@ -582,7 +627,7 @@ PORTED_REGEX_TEST(appendTest, {
   expect(replaceAllEquals<R>("(ab)(cd)", "abcd", "$2$1", "cdab"));
   expect(replaceAllEquals<R>("([a-z]+)( *= *)([0-9]+)", "Swap all: first = 123, second = 456", "$3$2$1", "Swap all: 123 = first, 456 = second"));
   R re("([a-z]+)( *= *)([0-9]+)");
-  if (!re.ok()) { expect(false); } else {
+  if (!notePatternStatus(re)) { expect(false); } else {
     JavaMatcherAdapter<R> m(&re, "Swap one: first = 123, second = 456");
     std::string sb;
     expect(m.find());
@@ -640,7 +685,7 @@ PORTED_REGEX_TEST(group0Test, {
 
 PORTED_REGEX_TEST(findIntTest, {
   R re("blah");
-  if (!re.ok()) { expect(false); } else {
+  if (!notePatternStatus(re)) { expect(false); } else {
     JavaMatcherAdapter<R> m(&re, "zzzzblahzzzzzblah");
     expect(m.find(2));
   }
@@ -653,7 +698,7 @@ PORTED_REGEX_TEST(findIntTest, {
 
 PORTED_REGEX_TEST(emptyPatternTest, {
   R re("");
-  if (!re.ok()) { expect(false); } else {
+  if (!notePatternStatus(re)) { expect(false); } else {
     JavaMatcherAdapter<R> m(&re, "foo");
     expect(m.find() && m.start() == 0);
     m.reset();
@@ -878,7 +923,7 @@ PORTED_REGEX_TEST(slice, {
 
 PORTED_REGEX_TEST(namedGroupCaptureTest, {
   R re("(?<first>[A-Za-z]+) (?<last>[A-Za-z]+)");
-  if (!re.ok()) { expect(false); } else {
+  if (!notePatternStatus(re)) { expect(false); } else {
     JavaMatcherAdapter<R> m(&re, "Jane Doe");
     expect(m.find());
     if (!re.NamedCapturingGroups().empty()) {
@@ -990,7 +1035,7 @@ PORTED_REGEX_TEST(caseInsensitivePMatch, {
 PORTED_REGEX_TEST(surrogatePairOverlapRegion, {
   const std::string cp = utf8(0x10061);
   R re(cp);
-  if (!re.ok()) { expect(false); } else {
+  if (!notePatternStatus(re)) { expect(false); } else {
     JavaMatcherAdapter<R> m(&re, cp);
     expect(m.region(0, cp.size()).find());
     expect(!m.region(0, 1).find());

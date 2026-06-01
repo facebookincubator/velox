@@ -345,6 +345,12 @@ struct CorpusStats {
   int passed = 0;
   int failed = 0;
   int compileErrors = 0;
+  // Subset of `compileErrors` whose root cause is the translator rejecting
+  // the pattern as untranslatable for the engine (e.g. RE2 lookaround /
+  // backref / possessive).  These are engine-feature-impossible, NOT bugs
+  // in our translator; surfaced separately so we can report a rate that
+  // excludes them ("translatable-subset rate").
+  int translatorRejected = 0;
 };
 
 std::map<std::string, CorpusStats>& allStats() {
@@ -372,6 +378,7 @@ class CorpusReporter : public ::testing::Environment {
       a.passed += st.passed;
       a.failed += st.failed;
       a.compileErrors += st.compileErrors;
+      a.translatorRejected += st.translatorRejected;
     }
     for (const auto& [key, st] : m) {
       int total = st.passed + st.failed + st.compileErrors;
@@ -397,6 +404,23 @@ class CorpusReporter : public ::testing::Environment {
           total,
           pct,
           st.compileErrors);
+      // Also report a "translatable subset" rate that excludes patterns
+      // the translator rejected as engine-impossible (e.g. RE2 lookaround
+      // or backref).  This isolates what's actually attributable to the
+      // translator/backend vs to engine ceilings.
+      if (st.translatorRejected > 0) {
+        const int subsetTotal = total - st.translatorRejected;
+        const double subsetPct =
+            subsetTotal > 0 ? 100.0 * st.passed / subsetTotal : 0.0;
+        std::fprintf(
+            stderr,
+            "  %-50s %4d / %4d  (%.2f%%)   [excludes %d translator-rejected]\n",
+            (name + " (translatable subset)").c_str(),
+            st.passed,
+            subsetTotal,
+            subsetPct,
+            st.translatorRejected);
+      }
     }
     std::fprintf(stderr, "================================================\n");
   }
@@ -441,6 +465,9 @@ TYPED_TEST(OpenJdkCorpusDiffTest, runCorpus) {
           ++st.passed;
         } else {
           ++st.compileErrors;
+          if (re.error().find("translator: ") != std::string::npos) {
+            ++st.translatorRejected;
+          }
           if constexpr (std::is_same_v<TypeParam, JavaRegex>) {
             ++totalJavaFailures;
             std::fprintf(
