@@ -771,16 +771,25 @@ TEST_F(FromCsvTest, floatUnderflow) {
   std::string tinyDot = "." + std::string(400, '0') + "1";
   // "0.000...1" pattern (leading 0.) should underflow to zero.
   std::string tinyZeroDot = "0." + std::string(400, '0') + "1";
-  auto input = makeFlatVector<std::string>({tinyDot, tinyZeroDot});
+  // "0000.000...1" pattern (multiple leading zeros) should underflow to zero.
+  std::string tinyMultiZero = "0000." + std::string(400, '0') + "1";
+  // Negative variant: "-0000.000...1" should also underflow to zero.
+  std::string tinyNegMultiZero = "-0000." + std::string(400, '0') + "1";
+  auto input = makeFlatVector<std::string>(
+      {tinyDot, tinyZeroDot, tinyMultiZero, tinyNegMultiZero});
   auto expr = createFromCsv(ROW({"a"}, {DOUBLE()}));
   auto result = evaluate(expr, makeRowVector({input}));
   auto* resultRow = result->as<RowVector>();
   auto* child = resultRow->childAt(0)->asFlatVector<double>();
-  // Both should underflow to 0 (not ±Infinity).
+  // All should underflow to 0 (not ±Infinity).
   EXPECT_FALSE(child->isNullAt(0));
   EXPECT_EQ(child->valueAt(0), 0.0);
   EXPECT_FALSE(child->isNullAt(1));
   EXPECT_EQ(child->valueAt(1), 0.0);
+  EXPECT_FALSE(child->isNullAt(2));
+  EXPECT_EQ(child->valueAt(2), 0.0);
+  EXPECT_FALSE(child->isNullAt(3));
+  EXPECT_EQ(child->valueAt(3), 0.0);
 }
 
 // parseFloat rejects bare "+" sign (empty after strip).

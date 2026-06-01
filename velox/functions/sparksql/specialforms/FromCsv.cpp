@@ -24,13 +24,10 @@
 
 #include "velox/expression/EvalCtx.h"
 #include "velox/expression/Expr.h"
-#include "velox/expression/SpecialForm.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/tz/TimeZoneMap.h"
-
-using namespace facebook::velox::exec;
 
 namespace facebook::velox::functions::sparksql {
 namespace {
@@ -39,9 +36,10 @@ namespace {
 constexpr size_t kMaxCsvLineSize = 10 * 1024 * 1024;
 
 // Trims leading and trailing ASCII whitespace from a string_view.
-// Used only for REAL/DOUBLE and DECIMAL fields before parsing (Java's
-// parseDouble, parseFloat, and BigDecimal accept surrounding whitespace).
-// Integer, boolean, and VARCHAR fields are NOT trimmed.
+// Used for type-specific trimming (REAL/DOUBLE/DECIMAL where Java's parser
+// accepts surrounding whitespace) and for the user-configured
+// ignoreLeadingWhiteSpace/ignoreTrailingWhiteSpace options.
+// Integer, boolean, and VARCHAR fields are NOT type-trimmed.
 std::string_view trimWhitespace(std::string_view s) {
   size_t start = 0;
   while (start < s.size() &&
@@ -56,6 +54,26 @@ std::string_view trimWhitespace(std::string_view s) {
     --end;
   }
   return s.substr(start, end - start);
+}
+
+std::string_view trimLeadingWhitespace(std::string_view s) {
+  size_t start = 0;
+  while (start < s.size() &&
+         (s[start] == ' ' || s[start] == '\t' || s[start] == '\r' ||
+          s[start] == '\n')) {
+    ++start;
+  }
+  return s.substr(start);
+}
+
+std::string_view trimTrailingWhitespace(std::string_view s) {
+  size_t end = s.size();
+  while (end > 0 &&
+         (s[end - 1] == ' ' || s[end - 1] == '\t' || s[end - 1] == '\r' ||
+          s[end - 1] == '\n')) {
+    --end;
+  }
+  return s.substr(0, end);
 }
 
 // Splits a single CSV line into fields, handling quoted fields.
@@ -79,11 +97,10 @@ void splitCsvLine(
     std::string& quotedContent,
     char escape = '\\') {
   fields.clear();
-  // Note: caller (FromCsvFunction::apply) already guards against oversized
-  // input. This check is retained as defense-in-depth.
-  if (line.size() > kMaxCsvLineSize) {
-    return;
-  }
+  VELOX_DCHECK_LE(
+      line.size(),
+      kMaxCsvLineSize,
+      "splitCsvLine called with oversized input — caller should guard.");
   if (maxFields > 0) {
     fields.reserve(maxFields);
   }
@@ -301,16 +318,23 @@ bool parseFloat(std::string_view s, T& out) {
     } else if (!hasExponent) {
       // No exponent notation but out_of_range — must be an extremely long
       // decimal like "0.000...0001" (underflow) or "999...999" (overflow).
-      // Check if the absolute value is < 1 by looking for leading "0." or "."
-      // pattern (e.g., ".000...1" also underflows).
+      // Check if the absolute value is < 1 by skipping leading zeros and
+      // looking for a decimal point (e.g., "0000.000...1" underflows).
       auto abs = numStr;
       if (!abs.empty() && abs[0] == '-') {
         abs = abs.substr(1);
       }
+      // Skip leading zeros to handle "0000.000...1" shapes.
+      size_t i = 0;
+      while (i < abs.size() && abs[i] == '0') {
+        ++i;
+      }
+      // Underflow if: all zeros (shouldn't trigger from_chars), starts with
+      // '.', or leading zeros followed by '.'.
       bool isSmall =
           (!abs.empty() &&
-           ((abs[0] == '0' && abs.size() > 1 && abs[1] == '.') ||
-            abs[0] == '.'));
+           (abs[0] == '.' || (i > 0 && i < abs.size() && abs[i] == '.') ||
+            i == abs.size()));
       if (isSmall) {
         out = T(0);
       } else {
@@ -361,6 +385,12 @@ bool isSupportedLeafType(const TypePtr& type) {
 // Parses a CSV string into a ROW (struct) type. Fields are matched
 // positionally to the schema columns.
 //
+// Note: We do not reuse velox/dwio/text/reader/TextReader because it is
+// designed for file-level multi-line streaming I/O with headers and schema
+// inference. from_csv operates on single-string inputs (one row = one CSV line)
+// where the schema is known at plan time. A custom lightweight parser avoids
+// that overhead.
+//
 // Supported field types:
 //   BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE, VARCHAR,
 //   VARBINARY, DECIMAL (short and long), DATE, TIMESTAMP.
@@ -382,6 +412,11 @@ class FromCsvFunction : public exec::VectorFunction {
       const tz::TimeZone* sessionTimeZone = nullptr,
       char delimiter = ',',
       std::string nullValue = "",
+      // Spark's from_csv SQL function uses Univocity's default escape character
+      // (backslash). This differs from Spark's CSV data source file reader
+      // which uses '\0' (disabled). Both doubled quotes ("") and
+      // backslash-quote (\") are handled inside splitCsvLine regardless of this
+      // setting.
       char escape = '\\',
       bool ignoreLeadingWhiteSpace = false,
       bool ignoreTrailingWhiteSpace = false)
@@ -453,12 +488,7 @@ class FromCsvFunction : public exec::VectorFunction {
       }
 
       splitCsvLine(
-          std::string_view(csvStr.data(), csvStr.size()),
-          delimiter_,
-          numFields,
-          fields,
-          quotedContent,
-          escape_);
+          csvView, delimiter_, numFields, fields, quotedContent, escape_);
 
       for (column_index_t col = 0; col < numFields; ++col) {
         auto* childVector = columns[col].child;
@@ -469,27 +499,12 @@ class FromCsvFunction : public exec::VectorFunction {
           const auto& fieldStr = fields[col];
           // Apply whitespace trimming if configured.
           std::string_view fieldView(fieldStr);
-          if (ignoreLeadingWhiteSpace_ || ignoreTrailingWhiteSpace_) {
-            if (ignoreLeadingWhiteSpace_ && ignoreTrailingWhiteSpace_) {
-              fieldView = trimWhitespace(fieldView);
-            } else if (ignoreLeadingWhiteSpace_) {
-              size_t start = 0;
-              while (start < fieldView.size() &&
-                     (fieldView[start] == ' ' || fieldView[start] == '\t' ||
-                      fieldView[start] == '\r' || fieldView[start] == '\n')) {
-                ++start;
-              }
-              fieldView = fieldView.substr(start);
-            } else {
-              size_t end = fieldView.size();
-              while (end > 0 &&
-                     (fieldView[end - 1] == ' ' || fieldView[end - 1] == '\t' ||
-                      fieldView[end - 1] == '\r' ||
-                      fieldView[end - 1] == '\n')) {
-                --end;
-              }
-              fieldView = fieldView.substr(0, end);
-            }
+          if (ignoreLeadingWhiteSpace_ && ignoreTrailingWhiteSpace_) {
+            fieldView = trimWhitespace(fieldView);
+          } else if (ignoreLeadingWhiteSpace_) {
+            fieldView = trimLeadingWhitespace(fieldView);
+          } else if (ignoreTrailingWhiteSpace_) {
+            fieldView = trimTrailingWhitespace(fieldView);
           }
           // Check against nullValue sentinel (default: empty string → null).
           if (fieldView == std::string_view(nullValue_)) {
@@ -618,7 +633,8 @@ class FromCsvFunction : public exec::VectorFunction {
       case TypeKind::REAL: {
         auto* flat = child->asFlatVector<float>();
         // Trim whitespace: Java's Float.parseFloat accepts surrounding
-        // whitespace.
+        // whitespace. This is idempotent if the caller already trimmed via
+        // ignoreLeadingWhiteSpace/ignoreTrailingWhiteSpace config.
         auto trimmed = trimWhitespace(field);
         float val;
         if (parseFloat<float>(trimmed, val)) {
@@ -744,7 +760,7 @@ exec::ExprPtr FromCsvCallToSpecialForm::constructSpecialForm(
       type,
       std::move(args),
       func,
-      exec::VectorFunctionMetadata{},
+      exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
       kFromCsv,
       trackCpuUsage);
 }
