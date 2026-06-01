@@ -15,14 +15,74 @@
  */
 #include <gtest/gtest.h>
 
+#include <iostream>
+#include <map>
+#include <string>
+
 #if VELOX_REGEX_COMPAT_HAS_JAVA
 #include "velox/external/regex_compat/JvmFixture.h"
 #endif
+
+namespace {
+
+// Per-backend tally listener.  Counts test pass/fail by extracting the
+// backend label from typed-test suite names like "MatchingPortedTest/0"
+// (TypeParam = Re2Regex), "/1" = Pcre2Regex, "/2" = JavaRegex.  Aggregates
+// across all typed tests so we can print a per-backend compatibility rate
+// at the end of the run.
+class PerBackendTallyListener : public ::testing::EmptyTestEventListener {
+ public:
+  void OnTestEnd(const ::testing::TestInfo& info) override {
+    const std::string suite(info.test_suite_name());
+    const std::string backend = extractBackend(suite);
+    auto& t = tally_[backend];
+    ++t.total;
+    if (info.result()->Passed()) {
+      ++t.passed;
+    }
+  }
+
+  void OnTestProgramEnd(const ::testing::UnitTest& /*ut*/) override {
+    std::cout << "\n========== Per-backend compatibility rate ==========\n";
+    for (const auto& [name, t] : tally_) {
+      const double pct = 100.0 * t.passed / std::max(t.total, 1);
+      std::cout << "  " << name << "  " << t.passed << " / " << t.total
+                << "  (" << pct << "%)\n";
+    }
+    std::cout << "====================================================\n";
+  }
+
+ private:
+  struct Tally {
+    int total = 0;
+    int passed = 0;
+  };
+  std::map<std::string, Tally> tally_;
+
+  static std::string extractBackend(const std::string& suite) {
+    // Typed suites name themselves as "<Base>/0", "<Base>/1", "<Base>/2".
+    // Anything without `/N` is a non-typed (backend-specific) suite — pass
+    // its name through so it shows up explicitly in the report.
+    const auto slash = suite.rfind('/');
+    if (slash == std::string::npos) {
+      return suite;
+    }
+    const std::string idx = suite.substr(slash + 1);
+    if (idx == "0") return "Re2Regex  (typed)";
+    if (idx == "1") return "Pcre2Regex (typed)";
+    if (idx == "2") return "JavaRegex (typed)";
+    return suite;
+  }
+};
+
+} // namespace
 
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
 #if VELOX_REGEX_COMPAT_HAS_JAVA
   facebook::velox::regex_compat::JvmFixture::Register();
 #endif
+  ::testing::UnitTest::GetInstance()->listeners().Append(
+      new PerBackendTallyListener);
   return RUN_ALL_TESTS();
 }

@@ -39,6 +39,8 @@ class JavaMatcherAdapter {
   JavaMatcherAdapter(const R* re, std::string_view input)
       : re_(re),
         input_(input),
+        regionStart_(0),
+        regionEnd_(input.size()),
         // +1 for group 0 (full match).
         groups_(re->NumberOfCapturingGroups() + 1) {}
 
@@ -50,10 +52,14 @@ class JavaMatcherAdapter {
       matched_ = false;
       return false;
     }
+    if (cursor_ > regionEnd_) {
+      matched_ = false;
+      return false;
+    }
     matched_ = re_->Match(
         input_,
         cursor_,
-        input_.size(),
+        regionEnd_,
         Anchor::kUnanchored,
         groups_.data(),
         static_cast<int>(groups_.size()));
@@ -75,24 +81,25 @@ class JavaMatcherAdapter {
   }
 
   /// Anchored full-input match (Java `Matcher.matches`).  Does not advance
-  /// the find-cursor.
+  /// the find-cursor.  Honors the active region.
   bool matches() {
     matched_ = re_->Match(
         input_,
-        0,
-        input_.size(),
+        regionStart_,
+        regionEnd_,
         Anchor::kAnchorBoth,
         groups_.data(),
         static_cast<int>(groups_.size()));
     return matched_;
   }
 
-  /// Anchored prefix match (Java `Matcher.lookingAt`).
+  /// Anchored prefix match (Java `Matcher.lookingAt`).  Honors the active
+  /// region.
   bool lookingAt() {
     matched_ = re_->Match(
         input_,
-        0,
-        input_.size(),
+        regionStart_,
+        regionEnd_,
         Anchor::kAnchorStart,
         groups_.data(),
         static_cast<int>(groups_.size()));
@@ -100,13 +107,26 @@ class JavaMatcherAdapter {
   }
 
   void reset() {
-    cursor_ = 0;
+    cursor_ = regionStart_;
     matched_ = false;
   }
 
   void reset(std::string_view input) {
     input_ = input;
+    regionStart_ = 0;
+    regionEnd_ = input.size();
     reset();
+  }
+
+  /// Java `Matcher.region(start, end)` — restrict matching to a sub-range.
+  /// Returns *this for chainability (matches Java's fluent API).  Also
+  /// resets the find() cursor to `start`.
+  JavaMatcherAdapter& region(int start, int end) {
+    regionStart_ = static_cast<std::size_t>(start);
+    regionEnd_ = static_cast<std::size_t>(end);
+    cursor_ = regionStart_;
+    matched_ = false;
+    return *this;
   }
 
   // ----- Group accessors -----
@@ -254,6 +274,8 @@ class JavaMatcherAdapter {
 
   const R* re_;
   std::string_view input_;
+  std::size_t regionStart_ = 0;
+  std::size_t regionEnd_ = 0;
   std::size_t cursor_ = 0;
   bool matched_ = false;
   std::vector<std::string_view> groups_;

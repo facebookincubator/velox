@@ -152,18 +152,12 @@ TYPED_TEST(PatternPortedTest, invalidPatternRejectedSquareBracket) {
   EXPECT_FALSE(re.error().empty());
 }
 
-TYPED_TEST(PatternPortedTest, braceQuantifierBackendDifferences) {
-  // `a{` is "incomplete quantifier" in Java (rejected with
-  // PatternSyntaxException).  PCRE2 and RE2 both accept it (treat `{`
-  // literally when not followed by a valid quantifier).  This test
-  // documents the cross-engine behavioural split rather than asserting one
-  // canonical answer.
+// pcre4j PatternTests: `a{` — Java rejects as incomplete quantifier.
+// PCRE2 and RE2 accept it literally.  This test asserts Java behaviour;
+// other backends will fail, which is the documented compatibility gap.
+TYPED_TEST(PatternPortedTest, braceQuantifierIncomplete) {
   TypeParam re("a{");
-  if constexpr (std::is_same_v<TypeParam, JavaRegex>) {
-    EXPECT_FALSE(re.ok());
-  } else {
-    EXPECT_TRUE(re.ok()) << re.error();
-  }
+  EXPECT_FALSE(re.ok());
 }
 
 // Empty pattern matches empty string anywhere.
