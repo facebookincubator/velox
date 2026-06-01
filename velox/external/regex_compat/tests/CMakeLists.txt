@@ -12,7 +12,8 @@ add_executable(velox_regex_compat_test
   MatcherReplacementPortedTest.cpp
   MatcherResultsPortedTest.cpp
   MatcherMatchResultPortedTest.cpp
-  PatternSplitPortedTest.cpp)
+  PatternSplitPortedTest.cpp
+  MatcherUnicodePortedTest.cpp)
 
 target_link_libraries(velox_regex_compat_test
   PRIVATE velox_regex_compat GTest::gtest GTest::gmock)
