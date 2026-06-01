@@ -105,6 +105,20 @@ TEST(Pcre2RegexTest, caseInsensitiveOption) {
   EXPECT_TRUE(Pcre2Regex::PartialMatch("HELLO world", re));
 }
 
+TEST(Pcre2RegexTest, unicodeCaseOptionPrefoldsKnownLiterals) {
+  Options opt;
+  opt.caseSensitive = false;
+  Pcre2Regex kelvin("\\u212A", opt);
+  ASSERT_TRUE(kelvin.ok()) << kelvin.error();
+  EXPECT_TRUE(Pcre2Regex::FullMatch("k", kelvin));
+  EXPECT_TRUE(Pcre2Regex::FullMatch("K", kelvin));
+
+  Pcre2Regex sigma("\xce\xa3", opt);
+  ASSERT_TRUE(sigma.ok()) << sigma.error();
+  EXPECT_TRUE(Pcre2Regex::FullMatch("\xcf\x82", sigma));
+  EXPECT_TRUE(Pcre2Regex::FullMatch("\xcf\x83", sigma));
+}
+
 TEST(Pcre2RegexTest, defaultWordClassIsAscii) {
   Pcre2Regex re("(?<!あ)\\w");
   ASSERT_TRUE(re.ok()) << re.error();

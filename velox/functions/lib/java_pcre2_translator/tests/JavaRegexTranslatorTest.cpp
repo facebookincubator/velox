@@ -269,6 +269,30 @@ TEST(JavaRegexTranslator, commentsModeIgnoresBracesInLineComments) {
   EXPECT_EQ("(?x:# {\n a)", toPcre2Pattern("(?x:# {\n a)"));
 }
 
+TEST(JavaRegexTranslator, unicodeCaseExpandsAsciiLiterals) {
+  EXPECT_EQ("[Aa][Bb][Cc]", toPcre2PatternWithUnicodeCase("abc"));
+}
+
+TEST(JavaRegexTranslator, unicodeCaseExpandsKnownUnicodeLiterals) {
+  const auto kelvin = toPcre2PatternWithUnicodeCase("\xe2\x84\xaa");
+  EXPECT_NE(std::string::npos, kelvin.find("\\x{212a}")) << kelvin;
+  EXPECT_NE(std::string::npos, kelvin.find("K")) << kelvin;
+  EXPECT_NE(std::string::npos, kelvin.find("k")) << kelvin;
+
+  const auto sigma = toPcre2PatternWithUnicodeCase("\xce\xa3");
+  EXPECT_NE(std::string::npos, sigma.find("\\x{3a3}")) << sigma;
+  EXPECT_NE(std::string::npos, sigma.find("\\x{3c3}")) << sigma;
+  EXPECT_NE(std::string::npos, sigma.find("\\x{3c2}")) << sigma;
+}
+
+TEST(JavaRegexTranslator, unicodeCaseExpandsUnicodeEscapes) {
+  EXPECT_EQ("[Kk\\x{212a}]", toPcre2PatternWithUnicodeCase("\\u212A"));
+}
+
+TEST(JavaRegexTranslator, unicodeCaseSkipsClassesAndQuotes) {
+  EXPECT_EQ("[abc]\\Qabc\\E", toPcre2PatternWithUnicodeCase("[abc]\\Qabc\\E"));
+}
+
 TEST(JavaRegexTranslatorRe2, reusesPropertyAndClassPipeline) {
   EXPECT_EQ("[\\x{370}-\\x{3FF}]", toRe2Pattern("\\p{InGreek}"));
   EXPECT_EQ("[abcdef]", toRe2Pattern("[abc[def]]"));

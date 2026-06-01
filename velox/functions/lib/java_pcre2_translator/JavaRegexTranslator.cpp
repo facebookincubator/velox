@@ -35,6 +35,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <set>
 #include <vector>
 
 namespace facebook::velox::functions::java_pcre2_translator {
@@ -1061,6 +1062,182 @@ std::string rewriteJavaNamedGroupsForRe2(std::string_view pattern) {
   return out;
 }
 
+std::string renderFoldClass(const std::set<std::uint32_t>& cps) {
+  std::string out = "[";
+  for (const auto cp : cps) {
+    if ((cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z')) {
+      out.push_back(static_cast<char>(cp));
+    } else {
+      out += "\\x{";
+      out += toLowerHex(cp);
+      out.push_back('}');
+    }
+  }
+  out.push_back(']');
+  return out;
+}
+
+std::set<std::uint32_t> foldEquivalenceClass(std::uint32_t cp) {
+  // Partial Java UNICODE_CASE literal pre-folding.  ICU simple case mappings
+  // cover ordinary one-code-point upper/lower pairs; the explicit additions
+  // cover common Java/Unicode special case-fold equivalences that PCRE2
+  // caseless matching misses without UCP/full folding.
+  std::set<std::uint32_t> cps{cp};
+  const auto add = [&](std::uint32_t x) {
+    cps.insert(x);
+    const auto lower = static_cast<std::uint32_t>(u_tolower(x));
+    const auto upper = static_cast<std::uint32_t>(u_toupper(x));
+    cps.insert(lower);
+    cps.insert(upper);
+  };
+  add(cp);
+  switch (cp) {
+    case 0x004B:
+    case 0x006B:
+    case 0x212A:
+      add(0x004B);
+      add(0x006B);
+      add(0x212A);
+      break;
+    case 0x0053:
+    case 0x0073:
+    case 0x017F:
+      add(0x0053);
+      add(0x0073);
+      add(0x017F);
+      break;
+    case 0x03A3:
+    case 0x03C3:
+    case 0x03C2:
+      add(0x03A3);
+      add(0x03C3);
+      add(0x03C2);
+      break;
+    case 0x00B5:
+    case 0x039C:
+    case 0x03BC:
+      add(0x00B5);
+      add(0x039C);
+      add(0x03BC);
+      break;
+    case 0x00C5:
+    case 0x00E5:
+    case 0x212B:
+      add(0x00C5);
+      add(0x00E5);
+      add(0x212B);
+      break;
+    case 0x0049:
+    case 0x0069:
+    case 0x0130:
+    case 0x0131:
+      add(0x0049);
+      add(0x0069);
+      add(0x0130);
+      add(0x0131);
+      break;
+    default:
+      break;
+  }
+  return cps;
+}
+
+std::optional<std::uint32_t> parseHexBracedCodePoint(
+    std::string_view s,
+    std::size_t start,
+    std::size_t& end) {
+  if (start + 3 >= s.size() || s[start] != '\\' || s[start + 1] != 'x' ||
+      s[start + 2] != '{') {
+    return std::nullopt;
+  }
+  std::size_t k = start + 3;
+  std::uint32_t cp = 0;
+  bool any = false;
+  while (k < s.size() && s[k] != '}') {
+    if (!isHexDigit(s[k])) {
+      return std::nullopt;
+    }
+    cp = (cp << 4) | hexValue(s[k]);
+    any = true;
+    ++k;
+  }
+  if (!any || k >= s.size() || s[k] != '}') {
+    return std::nullopt;
+  }
+  end = k + 1;
+  return cp;
+}
+
+std::string expandCasedLiteralsForUnicodeCase(std::string_view pattern) {
+  std::string out;
+  out.reserve(pattern.size() + 16);
+  bool inQuotation = false;
+  for (std::size_t i = 0; i < pattern.size();) {
+    const char c = pattern[i];
+    if (c == '\\' && i + 1 < pattern.size()) {
+      const char next = pattern[i + 1];
+      if (!inQuotation && next == 'Q') {
+        out += "\\Q";
+        i += 2;
+        inQuotation = true;
+        continue;
+      }
+      if (inQuotation && next == 'E') {
+        out += "\\E";
+        i += 2;
+        inQuotation = false;
+        continue;
+      }
+      if (!inQuotation) {
+        std::size_t end = i;
+        if (auto cp = parseHexBracedCodePoint(pattern, i, end)) {
+          auto cps = foldEquivalenceClass(*cp);
+          if (cps.size() > 1) {
+            out += renderFoldClass(cps);
+          } else {
+            out.append(pattern.substr(i, end - i));
+          }
+          i = end;
+          continue;
+        }
+      }
+      out.push_back(c);
+      out.push_back(next);
+      i += 2;
+      continue;
+    }
+    if (inQuotation) {
+      out.push_back(c);
+      ++i;
+      continue;
+    }
+    if (c == '[' && !hasOddTrailingBackslashes(out)) {
+      const auto classEnd = trySkipClass(pattern, i);
+      if (classEnd > i) {
+        out.append(pattern.substr(i, classEnd - i));
+        i = classEnd;
+        continue;
+      }
+    }
+
+    std::size_t next = i;
+    std::uint32_t cp = 0;
+    if (decodeUtf8CodePoint(pattern, next, cp)) {
+      auto cps = foldEquivalenceClass(cp);
+      if (cps.size() > 1) {
+        out += renderFoldClass(cps);
+      } else {
+        out.append(pattern.substr(i, next - i));
+      }
+      i = next;
+      continue;
+    }
+    out.push_back(c);
+    ++i;
+  }
+  return out;
+}
+
 } // namespace
 
 std::string toPcre2Pattern(
@@ -1391,11 +1568,29 @@ std::string toPcre2Pattern(std::string_view javaPattern) {
   return toPcre2Pattern(javaPattern, needsRawByteMode);
 }
 
+std::string toPcre2PatternWithUnicodeCase(
+    std::string_view javaPattern,
+    bool& needsRawByteMode) {
+  auto translated = toPcre2Pattern(javaPattern, needsRawByteMode);
+  translated = expandCasedLiteralsForUnicodeCase(translated);
+  needsRawByteMode = needsRawByteModeForPcre2(translated);
+  return translated;
+}
+
+std::string toPcre2PatternWithUnicodeCase(std::string_view javaPattern) {
+  bool needsRawByteMode = false;
+  return toPcre2PatternWithUnicodeCase(javaPattern, needsRawByteMode);
+}
+
 std::string toRe2Pattern(std::string_view javaPattern) {
   rejectUnsupportedRe2Features(javaPattern);
   return rewriteJavaNamedGroupsForRe2(
       translatePcre2OctalEscapesForRe2(
           toPcre2Pattern(translateCommentsModeForRe2(javaPattern))));
+}
+
+std::string toRe2PatternWithUnicodeCase(std::string_view javaPattern) {
+  return expandCasedLiteralsForUnicodeCase(toRe2Pattern(javaPattern));
 }
 
 } // namespace facebook::velox::functions::java_pcre2_translator

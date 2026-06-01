@@ -494,8 +494,11 @@ Pcre2Regex::Pcre2Regex(std::string_view javaPattern, Options opt) {
   std::string pcre2Pattern;
   bool needsRawByteMode = false;
   try {
-    pcre2Pattern = functions::java_pcre2_translator::toPcre2Pattern(
-        javaPattern, needsRawByteMode);
+    pcre2Pattern = opt.caseSensitive
+        ? functions::java_pcre2_translator::toPcre2Pattern(
+              javaPattern, needsRawByteMode)
+        : functions::java_pcre2_translator::toPcre2PatternWithUnicodeCase(
+              javaPattern, needsRawByteMode);
   } catch (const functions::java_pcre2_translator::EvaluationFailedException&
                ex) {
     error_ = std::string("Java→PCRE2 translator: ") + ex.what();

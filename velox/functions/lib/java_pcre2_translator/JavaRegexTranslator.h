@@ -57,6 +57,15 @@ std::string toPcre2Pattern(
     std::string_view javaPattern,
     bool& needsRawByteMode);
 
+/// Rewrites a Java pattern for PCRE2 and pre-expands cased literal code points
+/// for Java's CASE_INSENSITIVE | UNICODE_CASE semantics.  This is intentionally
+/// limited to literals outside character classes and outside \Q...\E quotes.
+std::string toPcre2PatternWithUnicodeCase(
+    std::string_view javaPattern,
+    bool& needsRawByteMode);
+
+std::string toPcre2PatternWithUnicodeCase(std::string_view javaPattern);
+
 /// Rewrites a `java.util.regex.Pattern` source string into an equivalent
 /// pattern accepted by RE2.
 ///
@@ -65,5 +74,7 @@ std::string toPcre2Pattern(
 /// rejects Java features that RE2 cannot represent without changing
 /// semantics.
 std::string toRe2Pattern(std::string_view javaPattern);
+
+std::string toRe2PatternWithUnicodeCase(std::string_view javaPattern);
 
 } // namespace facebook::velox::functions::java_pcre2_translator

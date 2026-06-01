@@ -63,7 +63,10 @@ re2::RE2::Options toRe2Options(const Options& o) {
 Re2Regex::Re2Regex(std::string_view javaPattern, Options opt) {
   std::string re2Pattern;
   try {
-    re2Pattern = functions::java_pcre2_translator::toRe2Pattern(javaPattern);
+    re2Pattern = opt.caseSensitive
+        ? functions::java_pcre2_translator::toRe2Pattern(javaPattern)
+        : functions::java_pcre2_translator::toRe2PatternWithUnicodeCase(
+              javaPattern);
   } catch (const functions::java_pcre2_translator::EvaluationFailedException&
                ex) {
     error_ = std::string("Java→RE2 translator: ") + ex.what();
