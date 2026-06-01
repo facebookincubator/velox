@@ -21,6 +21,7 @@
 #include <cudf/utilities/error.hpp>
 
 #include <cub/device/device_for.cuh>
+#include <cuda/std/type_traits>
 #include <cuda_runtime.h>
 #include <thrust/iterator/counting_iterator.h>
 
@@ -109,10 +110,12 @@ struct AvgRoundFunctor {
       return;
     }
     auto sum = sums[idx];
-    SumT absSum = sum < 0 ? -sum : sum;
-    SumT half = static_cast<SumT>(count / 2);
-    SumT rounded = (absSum + half) / static_cast<SumT>(count);
-    out[idx] = sum < 0 ? -rounded : rounded;
+    using U = cuda::std::make_unsigned_t<SumT>;
+    U absSum = sum < 0 ? -static_cast<U>(sum) : static_cast<U>(sum);
+    U half = static_cast<U>(count / 2);
+    U rounded = (absSum + half) / static_cast<U>(count);
+    // Use `U{0} - rounded` below to avoid signed overflow
+    out[idx] = static_cast<SumT>(sum < 0 ? U{0} - rounded : rounded);
   }
 };
 

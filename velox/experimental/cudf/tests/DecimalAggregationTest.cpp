@@ -37,6 +37,7 @@
 #include <cuda_runtime_api.h>
 
 #include <cstdlib>
+#include <limits>
 #include <optional>
 #include <type_traits>
 
@@ -1176,6 +1177,41 @@ TEST_F(CudfDecimalTest, decimalComputeAverageDecimal128) {
       EXPECT_EQ(outAvg[i], avgUnscaled(sums[i], counts[i]));
     }
   }
+}
+
+TEST_F(CudfDecimalTest, decimalComputeAverageDecimal64MostNegativeSum) {
+  // Negating INT64_MIN in the signed type is overflow UB; the magnitude and
+  // sign must be handled in the unsigned domain. avg of one INT64_MIN is
+  // itself.
+  auto stream = cudf::get_default_stream();
+  constexpr int64_t kMin = std::numeric_limits<int64_t>::min();
+  std::vector<int64_t> sums = {kMin};
+  std::vector<int64_t> counts = {1};
+  std::vector<bool> valid = {true};
+
+  auto sumCol = makeDecimalColumn<int64_t>(sums, 0, &valid, stream);
+  auto countCol = makeInt64Column(counts, &valid, stream);
+  auto avgCol = computeDecimalAverage(sumCol->view(), countCol->view(), stream);
+
+  auto outAvg = copyColumnData<int64_t>(avgCol->view(), stream);
+  EXPECT_EQ(outAvg[0], kMin);
+}
+
+TEST_F(CudfDecimalTest, decimalComputeAverageDecimal128MostNegativeSum) {
+  // Same regression at the __int128 boundary. avg of one -2^127 is itself.
+  auto stream = cudf::get_default_stream();
+  const __int128_t kMin =
+      static_cast<__int128_t>(static_cast<unsigned __int128>(1) << 127);
+  std::vector<__int128_t> sums = {kMin};
+  std::vector<int64_t> counts = {1};
+  std::vector<bool> valid = {true};
+
+  auto sumCol = makeDecimalColumn<__int128_t>(sums, 0, &valid, stream);
+  auto countCol = makeInt64Column(counts, &valid, stream);
+  auto avgCol = computeDecimalAverage(sumCol->view(), countCol->view(), stream);
+
+  auto outAvg = copyColumnData<__int128_t>(avgCol->view(), stream);
+  EXPECT_EQ(outAvg[0], kMin);
 }
 
 TEST_F(CudfDecimalTest, decimalComputeAverageDecimal64AllValid) {
