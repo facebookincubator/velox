@@ -88,16 +88,16 @@ TEST(JavaRegexTranslator, escapeHatchDisablesTranslator) {
 }
 
 TEST(JavaRegexTranslator, rewritesSurrogateBlockToRange) {
-  EXPECT_EQ("(?!)", toPcre2Pattern("\\p{InHIGH_SURROGATES}"));
-  EXPECT_EQ("(?!)", toPcre2Pattern("\\p{InLOW_SURROGATES}"));
+  EXPECT_EQ("[\\x{D800}-\\x{DB7F}]", toPcre2Pattern("\\p{InHIGH_SURROGATES}"));
+  EXPECT_EQ("[\\x{DC00}-\\x{DFFF}]", toPcre2Pattern("\\p{InLOW_SURROGATES}"));
 }
 
-TEST(JavaRegexTranslator, surrogateBlockDoesNotNeedRawByteMode) {
+TEST(JavaRegexTranslator, surrogateBlockNeedsRawByteMode) {
   bool needsRawByteMode = false;
   EXPECT_EQ(
-      "(?!)",
+      "[\\x{D800}-\\x{DB7F}]",
       toPcre2Pattern("\\p{InHIGH_SURROGATES}", needsRawByteMode));
-  EXPECT_FALSE(needsRawByteMode);
+  EXPECT_TRUE(needsRawByteMode);
 }
 
 TEST(JavaRegexTranslator, reportsRawSurrogateBytesNeedRawByteMode) {
@@ -115,7 +115,7 @@ TEST(JavaRegexTranslator, doesNotReportRawByteModeForSupplementaryScalar) {
 }
 
 TEST(JavaRegexTranslator, negatedSurrogateBlockIsNegated) {
-  EXPECT_EQ("[\\x{0}-\\x{10FFFF}]", toPcre2Pattern("\\P{InHIGH_SURROGATES}"));
+  EXPECT_EQ("[^\\x{D800}-\\x{DB7F}]", toPcre2Pattern("\\P{InHIGH_SURROGATES}"));
 }
 
 TEST(JavaRegexTranslator, rewritesJavaDefinedAsNegatedUnassigned) {
@@ -156,9 +156,9 @@ TEST(JavaRegexTranslator, propertyInsideClassRewritten) {
   EXPECT_EQ(std::string::npos, result.find("\\p{InGreek}")) << result;
 }
 
-TEST(JavaRegexTranslator, surrogateBlockInsideNestedClassIsNeverMatch) {
+TEST(JavaRegexTranslator, surrogateBlockInsideNestedClassIsPreserved) {
   EXPECT_EQ(
-      "[^\\x{0}-\\x{10FFFF}]",
+      "[\\x{D800}-\\x{DB7F}\\x{DC00}-\\x{DFFF}]",
       toPcre2Pattern("[[\\p{InHIGH_SURROGATES}\\p{InLOW_SURROGATES}]]"));
 }
 

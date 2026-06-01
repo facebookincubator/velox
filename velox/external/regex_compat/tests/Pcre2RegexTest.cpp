@@ -180,6 +180,82 @@ TEST(Pcre2RegexTest, rawUtf8SurrogateLiteralInClassMatchesWholeCodeUnit) {
   EXPECT_EQ(ascii, sub[0]);
 }
 
+TEST(Pcre2RegexTest, surrogatePropertyClassMatchesLoneSurrogate) {
+  Pcre2Regex re("[\\p{InHIGH_SURROGATES}\\p{InLOW_SURROGATES}]");
+  ASSERT_TRUE(re.ok()) << re.error();
+
+  const std::string lone =
+      std::string("xxx") + "\xED\xB2\xA9" + "\xED\xA0\xBD" + "yyy";
+  std::string_view sub[1];
+  ASSERT_TRUE(re.Match(lone, 0, lone.size(), Anchor::kUnanchored, sub, 1));
+  EXPECT_EQ(std::string("\xED\xB2\xA9", 3), sub[0]);
+
+  const std::string validPair = "\xF0\x9F\x92\xA9";
+  EXPECT_FALSE(re.Match(validPair, 0, validPair.size(), Anchor::kUnanchored, sub, 1));
+}
+
+TEST(Pcre2RegexTest, rawUtf8NegatedClassConsumesWholeCodePoint) {
+  Pcre2Regex re(std::string("[^\xF0\x90\x81\xA1\xF0\x90\xA0\x82"
+                            "\xF0\x90\xB0\x83\xED\xA0\x80]+"));
+  ASSERT_TRUE(re.ok()) << re.error();
+
+  const std::string input = std::string("\xF0\x90\x81\xA1\xF0\x90\x81\xA1"
+                                        "\xF0\x90\x81\xA1\xF0\x90\xA0\x82"
+                                        "\xF0\x90\xA0\x82\xF0\x90\xA0\x82"
+                                        "\xF0\x90\xB0\x83\xF0\x90\xB0\x83"
+                                        "\xF0\x90\xB0\x83\xF0\x91\x80\x84") +
+      "abc";
+  std::string_view sub[1];
+  ASSERT_TRUE(re.Match(input, 0, input.size(), Anchor::kUnanchored, sub, 1));
+  EXPECT_EQ(std::string("\xF0\x91\x80\x84") + "abc", sub[0]);
+}
+
+TEST(Pcre2RegexTest, rawUtf8IntersectionUsesCodePointSemantics) {
+  Pcre2Regex re(std::string("[[\xF0\x90\x81\xA1]&&[\xF0\x90\xA0\x82]"
+                            "[\xED\xA0\x80][\xF0\x90\x81\xA1]&&"
+                            "[^\xF0\x91\x80\x84]]"));
+  ASSERT_TRUE(re.ok()) << re.error();
+
+  const std::string input = "\xF0\x90\x81\xA1";
+  std::string_view sub[1];
+  ASSERT_TRUE(re.Match(input, 0, input.size(), Anchor::kUnanchored, sub, 1));
+  EXPECT_EQ(input, sub[0]);
+}
+
+TEST(Pcre2RegexTest, rawUtf8IntersectionMatchesLoneSurrogateCodeUnits) {
+  {
+    Pcre2Regex re(std::string("[", 1) + std::string("\x00", 1) +
+        std::string("-\xEF\xBF\xBF&&[\xED\xBF\xBF\xED\xA0\x80]]"));
+    ASSERT_TRUE(re.ok()) << re.error();
+
+    const std::string input = "\xED\xA0\x80";
+    std::string_view sub[1];
+    ASSERT_TRUE(re.Match(input, 0, input.size(), Anchor::kUnanchored, sub, 1));
+    EXPECT_EQ(input, sub[0]);
+  }
+  {
+    Pcre2Regex re(std::string("[", 1) + std::string("\x00", 1) +
+        std::string("-\xED\xBF\xBF&&[\xED\xA0\x80-\xEF\xBF\xBF]]"));
+    ASSERT_TRUE(re.ok()) << re.error();
+
+    const std::string input = std::string("\xED\xBF\xBF", 3) + "\xED\xA0\x80";
+    std::string_view sub[1];
+    ASSERT_TRUE(re.Match(input, 0, input.size(), Anchor::kUnanchored, sub, 1));
+    EXPECT_EQ(std::string("\xED\xBF\xBF", 3), sub[0]);
+  }
+  {
+    Pcre2Regex re(std::string("[", 1) + std::string("\x00", 1) +
+        std::string("-\xF0\x90\x8F\xBF&&[^\xED\xB0\x80"
+                    "\xED\xA0\x80\xED\xAF\xBF]]"));
+    ASSERT_TRUE(re.ok()) << re.error();
+
+    const std::string input = "\xF0\x90\x80\x80";
+    std::string_view sub[1];
+    ASSERT_TRUE(re.Match(input, 0, input.size(), Anchor::kUnanchored, sub, 1));
+    EXPECT_EQ(input, sub[0]);
+  }
+}
+
 TEST(Pcre2RegexTest, lookaheadSupported) {
   // PCRE2 supports lookahead (unlike RE2).  This is the headline reason for
   // adding PCRE2 as an alternative backend.

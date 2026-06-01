@@ -135,15 +135,24 @@ std::string normalizedBlockKey(std::string_view value) {
 
 std::string resolveBlock(std::string_view blockName) {
   const std::string upper = upperBlockKey(blockName);
-  if (upper == "HIGH_SURROGATES" || upper == "HIGH_PRIVATE_USE_SURROGATES" ||
-      upper == "LOW_SURROGATES") {
-    return std::string(PropertyMap::kNeverMatch);
+  if (upper == "HIGH_SURROGATES") {
+    return "[\\x{D800}-\\x{DB7F}]";
+  }
+  if (upper == "HIGH_PRIVATE_USE_SURROGATES") {
+    return "[\\x{DB80}-\\x{DBFF}]";
+  }
+  if (upper == "LOW_SURROGATES") {
+    return "[\\x{DC00}-\\x{DFFF}]";
   }
   const std::string normalized = normalizedBlockKey(blockName);
-  if (normalized == "HIGHSURROGATES" ||
-      normalized == "HIGHPRIVATEUSESURROGATES" ||
-      normalized == "LOWSURROGATES") {
-    return std::string(PropertyMap::kNeverMatch);
+  if (normalized == "HIGHSURROGATES") {
+    return "[\\x{D800}-\\x{DB7F}]";
+  }
+  if (normalized == "HIGHPRIVATEUSESURROGATES") {
+    return "[\\x{DB80}-\\x{DBFF}]";
+  }
+  if (normalized == "LOWSURROGATES") {
+    return "[\\x{DC00}-\\x{DFFF}]";
   }
   if (auto materialized = JdkPropertyExpander::materializeUnicodeBlock(blockName)) {
     return *materialized;

@@ -85,6 +85,10 @@ class RangeSet {
     return static_cast<int>(ranges_.size() / 2);
   }
 
+  const std::vector<std::int32_t>& ranges() const {
+    return ranges_;
+  }
+
   /// Equality based on the normalised range vector.
   bool operator==(const RangeSet& other) const {
     return ranges_ == other.ranges_;

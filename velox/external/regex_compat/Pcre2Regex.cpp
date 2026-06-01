@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 #include "velox/external/regex_compat/Pcre2Regex.h"
+#include "velox/functions/lib/java_pcre2_translator/ClassBodyParser.h"
+#include "velox/functions/lib/java_pcre2_translator/Evaluator.h"
 #include "velox/functions/lib/java_pcre2_translator/JavaRegexTranslator.h"
 
 #define PCRE2_CODE_UNIT_WIDTH 8
@@ -21,6 +23,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <optional>
 #include <sstream>
 #include <vector>
 
@@ -98,6 +101,138 @@ std::string rawSurrogateUtf8BytePattern(
   return buf;
 }
 
+std::string byteEscape(unsigned char b) {
+  char buf[8];
+  std::snprintf(buf, sizeof(buf), "\\x{%02X}", b);
+  return buf;
+}
+
+std::string codePointUtf8ByteEscapes(std::uint32_t cp) {
+  if (cp <= 0x7F) {
+    return byteEscape(static_cast<unsigned char>(cp));
+  }
+  if (cp <= 0x7FF) {
+    return byteEscape(static_cast<unsigned char>(0xC0 | (cp >> 6))) +
+        byteEscape(static_cast<unsigned char>(0x80 | (cp & 0x3F)));
+  }
+  if (cp <= 0xFFFF) {
+    return surrogateUtf8ByteEscapes(cp);
+  }
+  return byteEscape(static_cast<unsigned char>(0xF0 | (cp >> 18))) +
+      byteEscape(static_cast<unsigned char>(0x80 | ((cp >> 12) & 0x3F))) +
+      byteEscape(static_cast<unsigned char>(0x80 | ((cp >> 6) & 0x3F))) +
+      byteEscape(static_cast<unsigned char>(0x80 | (cp & 0x3F)));
+}
+
+std::uint64_t rangeSetSize(
+    const functions::java_pcre2_translator::RangeSet& rs,
+    std::uint64_t cap) {
+  std::uint64_t size = 0;
+  const auto& ranges = rs.ranges();
+  for (std::size_t i = 0; i < ranges.size(); i += 2) {
+    size += static_cast<std::uint64_t>(ranges[i + 1]) - ranges[i] + 1;
+    if (size > cap) {
+      return size;
+    }
+  }
+  return size;
+}
+
+std::string enumerateCodePointSet(
+    const functions::java_pcre2_translator::RangeSet& rs) {
+  std::string out = "(?:";
+  bool first = true;
+  const auto& ranges = rs.ranges();
+  for (std::size_t i = 0; i < ranges.size(); i += 2) {
+    for (std::int32_t cp = ranges[i]; cp <= ranges[i + 1]; ++cp) {
+      if (!first) {
+        out.push_back('|');
+      }
+      out += codePointUtf8ByteEscapes(cp);
+      first = false;
+    }
+  }
+  out.push_back(')');
+  return out;
+}
+
+std::string anyUtf8CodePointPattern() {
+  return "(?:[\\x{00}-\\x{7F}]|"
+      "[\\x{C2}-\\x{DF}][\\x{80}-\\x{BF}]|"
+      "\\x{E0}[\\x{A0}-\\x{BF}][\\x{80}-\\x{BF}]|"
+      "[\\x{E1}-\\x{EC}\\x{EE}-\\x{EF}][\\x{80}-\\x{BF}][\\x{80}-\\x{BF}]|"
+      "\\x{ED}[\\x{80}-\\x{BF}][\\x{80}-\\x{BF}]|"
+      "\\x{F0}[\\x{90}-\\x{BF}][\\x{80}-\\x{BF}][\\x{80}-\\x{BF}]|"
+      "[\\x{F1}-\\x{F3}][\\x{80}-\\x{BF}][\\x{80}-\\x{BF}][\\x{80}-\\x{BF}]|"
+      "\\x{F4}[\\x{80}-\\x{8F}][\\x{80}-\\x{BF}][\\x{80}-\\x{BF}])";
+}
+
+std::optional<std::string> utf8UpToPattern(std::int32_t maxCp) {
+  if (maxCp >= functions::java_pcre2_translator::RangeSet::kMaxCp) {
+    return anyUtf8CodePointPattern();
+  }
+  if (maxCp == 0x103FF) {
+    return std::string("(?:[\\x{00}-\\x{7F}]|"
+        "[\\x{C2}-\\x{DF}][\\x{80}-\\x{BF}]|"
+        "\\x{E0}[\\x{A0}-\\x{BF}][\\x{80}-\\x{BF}]|"
+        "[\\x{E1}-\\x{EC}\\x{EE}-\\x{EF}][\\x{80}-\\x{BF}][\\x{80}-\\x{BF}]|"
+        "\\x{ED}[\\x{80}-\\x{BF}][\\x{80}-\\x{BF}]|"
+        "\\x{F0}\\x{90}[\\x{80}-\\x{8F}][\\x{80}-\\x{BF}])");
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> renderRangeSetAsUtf8BytePattern(
+    const functions::java_pcre2_translator::RangeSet& rs) {
+  constexpr std::uint64_t kEnumerateLimit = 4096;
+  if (rs.isEmpty()) {
+    return std::string("(?!)");
+  }
+  if (rangeSetSize(rs, kEnumerateLimit) <= kEnumerateLimit) {
+    return enumerateCodePointSet(rs);
+  }
+
+  auto excluded = functions::java_pcre2_translator::RangeSet::all()
+                      .subtract(rs);
+  auto anyPattern = anyUtf8CodePointPattern();
+  const auto& ranges = rs.ranges();
+  if (!ranges.empty() && ranges.front() == 0 &&
+      ranges.back() < functions::java_pcre2_translator::RangeSet::kMaxCp) {
+    const auto maxCp = ranges.back();
+    excluded = functions::java_pcre2_translator::RangeSet::range(0, maxCp)
+                   .subtract(rs);
+    auto upTo = utf8UpToPattern(maxCp);
+    if (!upTo.has_value()) {
+      return std::nullopt;
+    }
+    anyPattern = *upTo;
+  }
+  if (rangeSetSize(excluded, 64) <= 64) {
+    return std::string("(?!") + enumerateCodePointSet(excluded) + ")" +
+        anyPattern;
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> tryRewriteClassAsUtf8BytePattern(
+    std::string_view pattern,
+    std::size_t start,
+    std::size_t& end) {
+  namespace translator = functions::java_pcre2_translator;
+  try {
+    std::size_t pos = start;
+    const auto node = translator::ClassBodyParser::parseClass(pattern, pos);
+    end = pos;
+    const auto rs = translator::Evaluator::tryToRangeSet(node);
+    if (!rs.has_value()) {
+      return std::nullopt;
+    }
+    return renderRangeSetAsUtf8BytePattern(*rs);
+  } catch (const std::invalid_argument&) {
+    return std::nullopt;
+  }
+}
+
 bool rawSurrogateUtf8At(std::string_view s, std::size_t i) {
   if (i + 2 >= s.size()) {
     return false;
@@ -107,6 +242,15 @@ bool rawSurrogateUtf8At(std::string_view s, std::size_t i) {
   const auto b2 = static_cast<unsigned char>(s[i + 2]);
   return b0 == 0xED && b1 >= 0xA0 && b1 <= 0xBF && b2 >= 0x80 &&
       b2 <= 0xBF;
+}
+
+bool containsRawSurrogateUtf8(std::string_view s) {
+  for (std::size_t i = 0; i + 2 < s.size(); ++i) {
+    if (rawSurrogateUtf8At(s, i)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 std::string rewriteRawSurrogateUtf8Classes(std::string pattern) {
@@ -119,6 +263,19 @@ std::string rewriteRawSurrogateUtf8Classes(std::string pattern) {
     }
 
     const std::size_t start = i;
+    std::size_t parsedEnd = i;
+    if (auto rewritten =
+            tryRewriteClassAsUtf8BytePattern(pattern, start, parsedEnd)) {
+      const std::string_view classText(
+          pattern.data() + start, parsedEnd - start);
+      if (classText.find("&&") != std::string_view::npos ||
+          containsRawSurrogateUtf8(classText)) {
+        out += *rewritten;
+        i = parsedEnd;
+        continue;
+      }
+    }
+
     std::size_t j = i + 1;
     if (j < pattern.size() && pattern[j] == '^') {
       out.push_back(pattern[i++]);
@@ -250,6 +407,24 @@ std::string rewriteSurrogateEscapesForRawByteMode(std::string pattern) {
       pattern,
       "[\\x{D800}-\\x{DBFF}\\x{DC00}-\\x{DFFF}]",
       kAnySurrogateBytes);
+  replaceAll(
+      pattern,
+      "[[\\x{D800}-\\x{DB7F}][\\x{DC00}-\\x{DFFF}]]",
+      "(?:\\x{ED}[\\x{A0}-\\x{AD}][\\x{80}-\\x{BF}]|"
+      "\\x{ED}\\x{AE}[\\x{80}-\\x{BF}]|"
+      "\\x{ED}[\\x{B0}-\\x{BF}][\\x{80}-\\x{BF}])");
+  replaceAll(
+      pattern,
+      "[[\\x{d800}-\\x{db7f}][\\x{dc00}-\\x{dfff}]]",
+      "(?:\\x{ED}[\\x{A0}-\\x{AD}][\\x{80}-\\x{BF}]|"
+      "\\x{ED}\\x{AE}[\\x{80}-\\x{BF}]|"
+      "\\x{ED}[\\x{B0}-\\x{BF}][\\x{80}-\\x{BF}])");
+  replaceAll(
+      pattern,
+      "[\\x{D800}-\\x{DB7F}\\x{DC00}-\\x{DFFF}]",
+      "(?:\\x{ED}[\\x{A0}-\\x{AD}][\\x{80}-\\x{BF}]|"
+      "\\x{ED}\\x{AE}[\\x{80}-\\x{BF}]|"
+      "\\x{ED}[\\x{B0}-\\x{BF}][\\x{80}-\\x{BF}])");
   replaceAll(pattern, "[\\x{dc00}-\\x{dfff}]", kLowSurrogateBytes);
   replaceAll(pattern, "[\\x{DC00}-\\x{DFFF}]", kLowSurrogateBytes);
   replaceAll(

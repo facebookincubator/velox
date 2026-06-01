@@ -44,17 +44,17 @@ TEST(PropertyMap, javaLowerCase) {
   EXPECT_NE(std::string::npos, result.find("\\x{AA}")) << result;
 }
 
-TEST(PropertyMap, highSurrogatesNeverMatchSentinel) {
-  EXPECT_EQ(PropertyMap::kNeverMatch, PropertyMap::apply("InHIGH_SURROGATES").value());
-  EXPECT_EQ(PropertyMap::kNeverMatch, PropertyMap::apply("InHighSurrogates").value());
-  EXPECT_EQ(PropertyMap::kNeverMatch, PropertyMap::apply("blk=HighSurrogates").value());
+TEST(PropertyMap, highSurrogatesExpandToRange) {
+  EXPECT_EQ("[\\x{D800}-\\x{DB7F}]", PropertyMap::apply("InHIGH_SURROGATES").value());
+  EXPECT_EQ("[\\x{D800}-\\x{DB7F}]", PropertyMap::apply("InHighSurrogates").value());
+  EXPECT_EQ("[\\x{D800}-\\x{DB7F}]", PropertyMap::apply("blk=HighSurrogates").value());
   EXPECT_EQ(
-      PropertyMap::kNeverMatch,
+      "[\\x{DB80}-\\x{DBFF}]",
       PropertyMap::apply("InHighPrivateUseSurrogates").value());
 }
 
-TEST(PropertyMap, lowSurrogatesNeverMatchSentinel) {
-  EXPECT_EQ(PropertyMap::kNeverMatch, PropertyMap::apply("InLOW_SURROGATES").value());
+TEST(PropertyMap, lowSurrogatesExpandToRange) {
+  EXPECT_EQ("[\\x{DC00}-\\x{DFFF}]", PropertyMap::apply("InLOW_SURROGATES").value());
 }
 
 TEST(PropertyMap, isAsciiStripsIs) {

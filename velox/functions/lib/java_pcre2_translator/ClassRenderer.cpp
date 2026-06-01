@@ -225,15 +225,6 @@ void ClassRenderer::emitLiteralInClass(std::int32_t cp, std::string& sb) {
         return;
     }
   }
-  if (cp >= 0xD800 && cp <= 0xDFFF) {
-    char buf[96];
-    std::snprintf(
-        buf,
-        sizeof(buf),
-        "Lone surrogate U+%04X is not representable in PCRE2 UTF mode",
-        static_cast<unsigned>(cp));
-    throw std::invalid_argument(buf);
-  }
   char buf[16];
   std::snprintf(buf, sizeof(buf), "\\x{%X}", static_cast<unsigned>(cp));
   sb.append(buf);
