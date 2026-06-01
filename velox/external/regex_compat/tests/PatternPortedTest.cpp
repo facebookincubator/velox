@@ -168,5 +168,73 @@ TYPED_TEST(PatternPortedTest, emptyPatternMatchesEverywhere) {
   EXPECT_TRUE(TypeParam::FullMatch("", re));
 }
 
+// Java-style `Pattern.quote(s)` wraps `s` in `\Q...\E` so the input is
+// treated as a literal string.  Embedded `\E` in `s` must be escaped to
+// avoid prematurely ending the literal section.
+static std::string javaQuote(std::string_view s) {
+  std::string out = "\\Q";
+  std::size_t i = 0;
+  while (true) {
+    auto j = s.find("\\E", i);
+    if (j == std::string_view::npos) {
+      out.append(s.substr(i));
+      break;
+    }
+    out.append(s.substr(i, j - i));
+    out.append("\\E\\\\E\\Q");
+    i = j + 2;
+  }
+  out.append("\\E");
+  return out;
+}
+
+// `Pattern.quote` round-trips any literal string through the regex engine.
+TYPED_TEST(PatternPortedTest, quote) {
+  for (const std::string_view sample : {
+           std::string_view(""),
+           std::string_view(".*+?^$|()[]\\{}"),
+           std::string_view("abc\\Edef"),
+       }) {
+    TypeParam re(javaQuote(sample));
+    ASSERT_TRUE(re.ok()) << re.error() << " for [" << sample << "]";
+    EXPECT_TRUE(TypeParam::FullMatch(sample, re)) << "input=[" << sample << "]";
+  }
+}
+
+// (?x) free-spacing: unescaped whitespace in pattern is ignored.
+TYPED_TEST(PatternPortedTest, commentsWhitespaceIgnored) {
+  TypeParam re("(?x)a b c");
+  ASSERT_TRUE(re.ok()) << re.error();
+  EXPECT_TRUE(TypeParam::FullMatch("abc", re));
+}
+
+// (?x) `#` to end of line is a comment.
+TYPED_TEST(PatternPortedTest, commentsHashComments) {
+  TypeParam re("(?x)abc # this is a comment\ndef");
+  ASSERT_TRUE(re.ok()) << re.error();
+  EXPECT_TRUE(TypeParam::FullMatch("abcdef", re));
+}
+
+// (?x) escaped whitespace is matched literally.
+TYPED_TEST(PatternPortedTest, commentsEscapedWhitespace) {
+  TypeParam re("(?x)a\\ b");
+  ASSERT_TRUE(re.ok()) << re.error();
+  EXPECT_TRUE(TypeParam::FullMatch("a b", re));
+}
+
+// (?x) escaped whitespace inside a character class is matched literally.
+TYPED_TEST(PatternPortedTest, commentsWhitespaceInCharacterClass) {
+  TypeParam re("(?x)[\\ ]");
+  ASSERT_TRUE(re.ok()) << re.error();
+  EXPECT_TRUE(TypeParam::FullMatch(" ", re));
+}
+
+// Embedded (?x) flag at start enables COMMENTS for the rest of the pattern.
+TYPED_TEST(PatternPortedTest, commentsEmbeddedFlag) {
+  TypeParam re("(?x)a b c");
+  ASSERT_TRUE(re.ok()) << re.error();
+  EXPECT_TRUE(TypeParam::FullMatch("abc", re));
+}
+
 } // namespace
 } // namespace facebook::velox::regex_compat::test
