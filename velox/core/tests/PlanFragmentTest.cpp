@@ -378,3 +378,22 @@ TEST_F(PlanFragmentTest, supportsBarrier) {
     ASSERT_TRUE(planFragment.firstNodeNotSupportingBarrier() == nullptr);
   }
 }
+
+TEST_F(PlanFragmentTest, transportTypeDefaults) {
+  PlanFragment planFragment{valueNode_};
+  EXPECT_EQ(planFragment.inputTransportType("node1"), TransportKind::kHttp);
+  EXPECT_EQ(planFragment.outputTransportType("node1"), TransportKind::kHttp);
+}
+
+TEST_F(PlanFragmentTest, transportTypeSetAndGet) {
+  PlanFragment planFragment{valueNode_};
+  planFragment.inputTransportTypes["exchange1"] = TransportKind::kUcx;
+  planFragment.inputTransportTypes["exchange2"] = TransportKind::kHttp;
+  planFragment.outputTransportTypes["output1"] = TransportKind::kUcx;
+
+  EXPECT_EQ(planFragment.inputTransportType("exchange1"), TransportKind::kUcx);
+  EXPECT_EQ(planFragment.inputTransportType("exchange2"), TransportKind::kHttp);
+  EXPECT_EQ(planFragment.outputTransportType("output1"), TransportKind::kUcx);
+  // Unset node defaults to kHttp.
+  EXPECT_EQ(planFragment.outputTransportType("output2"), TransportKind::kHttp);
+}

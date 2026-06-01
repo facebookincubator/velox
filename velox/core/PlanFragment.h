@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #pragma once
+#include <folly/container/F14Map.h>
 #include <memory>
 #include <unordered_set>
 #include <vector>
@@ -22,6 +23,18 @@
 namespace facebook::velox::core {
 
 class QueryConfig;
+
+/// Well-known transport type identifiers for use with inputTransportTypes /
+/// outputTransportTypes maps. For example, in Presto with GPU workers the
+/// Exchange nodes use UCX to receive from peers while the PartitionedOutput
+/// node uses HTTP to send results to the Java coordinator. Other applications
+/// may define additional identifiers without modifying this header.
+struct TransportKind {
+  /// Standard HTTP/HTTPS-based Presto exchange protocol.
+  inline static const std::string kHttp{"HTTP"};
+  /// UCX-based RDMA exchange for high-bandwidth GPU transfers between workers.
+  inline static const std::string kUcx{"UCX"};
+};
 
 /// Gives hints on how to execute the fragment of a plan.
 enum class ExecutionStrategy {
@@ -47,6 +60,25 @@ struct PlanFragment {
 
   /// Contains leaf plan nodes that need to be executed in the grouped mode.
   std::unordered_set<PlanNodeId> groupedExecutionLeafNodeIds;
+
+  /// Per-node transport types assigned by the coordinator at task creation time
+  /// based on cluster topology.
+  folly::F14FastMap<PlanNodeId, std::string> inputTransportTypes;
+  folly::F14FastMap<PlanNodeId, std::string> outputTransportTypes;
+
+  /// Returns the transport type for a specific Exchange (input) node.
+  /// Defaults to TransportKind::kHttp if the node ID is not in the map.
+  std::string inputTransportType(const PlanNodeId& planNodeId) const {
+    auto it = inputTransportTypes.find(planNodeId);
+    return it != inputTransportTypes.end() ? it->second : TransportKind::kHttp;
+  }
+
+  /// Returns the transport type for a specific PartitionedOutput node.
+  /// Defaults to TransportKind::kHttp if the node ID is not in the map.
+  std::string outputTransportType(const PlanNodeId& planNodeId) const {
+    auto it = outputTransportTypes.find(planNodeId);
+    return it != outputTransportTypes.end() ? it->second : TransportKind::kHttp;
+  }
 
   /// Returns true if the fragment uses grouped execution strategy meaning that
   /// at least one pipeline has a leaf node that should run grouped execution.
