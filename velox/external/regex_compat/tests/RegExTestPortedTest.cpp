@@ -337,6 +337,28 @@ bool appendWalkEquals(
 }
 
 template <typename R>
+bool appendReplacementThrowsAndLeavesBuffer(
+    std::string_view pattern,
+    std::string_view input,
+    std::string_view replacement) {
+  R re(pattern);
+  if (!re.ok()) {
+    return false;
+  }
+  JavaMatcherAdapter<R> m(&re, input);
+  std::string sb;
+  if (!m.find()) {
+    return false;
+  }
+  try {
+    m.appendReplacement(sb, replacement);
+    return false;
+  } catch (const std::exception&) {
+    return sb.empty();
+  }
+}
+
+template <typename R>
 bool splitEquals(
     std::string_view pattern,
     std::string_view input,
@@ -738,9 +760,13 @@ PORTED_REGEX_TEST(stringBufferEscapedDollar, {
   expect(appendWalkEquals<R>("(ab)(cd)*(ef)", "zzzabcdcdefzzz", "$1w\\$2w$3", "zzzabw$2wefzzz"));
 })
 
-TODO_REGEX_TEST(stringBufferNonExistentGroup, "requires Java replacement error semantics for nonexistent groups")
+PORTED_REGEX_TEST(stringBufferNonExistentGroup, {
+  expect(appendReplacementThrowsAndLeavesBuffer<R>("(ab)(cd)*(ef)", "zzzabcdcdefzzz", "$1w$5w$3"));
+})
 
-TODO_REGEX_TEST(stringBufferCheckDoubleDigitGroupReferences, "requires Java multi-digit replacement group backoff semantics")
+PORTED_REGEX_TEST(stringBufferCheckDoubleDigitGroupReferences, {
+  expect(appendWalkEquals<R>("(1)(2)(3)(4)(5)(6)(7)(8)(9)(10)(11)", "zzz123456789101112zzz", "$1w$11w$3", "zzz1w11w312zzz"));
+})
 
 PORTED_REGEX_TEST(stringBufferBackoff, {
   expect(appendWalkEquals<R>("(ab)(cd)*(ef)", "zzzabcdcdefzzz", "$1w$15w$3", "zzzabwab5wefzzz"));
@@ -754,39 +780,67 @@ PORTED_REGEX_TEST(stringBufferSubstitutionWithGroups, {
   expect(appendWalkEquals<R>(toSupplementaries("(ab)(cd)*"), toSupplementaries("zzzabcdzzz"), "$1", toSupplementaries("zzzabzzz")));
 })
 
-TODO_REGEX_TEST(stringBufferSubstituteWithThreeGroups, "supplementary replacement expansion is not exact in JavaMatcherAdapter")
+PORTED_REGEX_TEST(stringBufferSubstituteWithThreeGroups, {
+  expect(appendWalkEquals<R>(toSupplementaries("(ab)(cd)*(ef)"), toSupplementaries("zzzabcdcdefzzz"), toSupplementaries("$1w$2w$3"), toSupplementaries("zzzabwcdwefzzz")));
+})
 
 PORTED_REGEX_TEST(stringBufferWithGroupsAndThreeMatches, {
   expect(appendWalkEquals<R>(toSupplementaries("(ab)(cd*)"), toSupplementaries("zzzabcdzzzabcddzzzabcdzzz"), "$2", toSupplementaries("zzzabzzzabcddzzzcdzzz"), 2));
 })
 
-TODO_REGEX_TEST(stringBufferEnsureDollarIgnored, "supplementary replacement escaping is not exact in JavaMatcherAdapter")
+PORTED_REGEX_TEST(stringBufferEnsureDollarIgnored, {
+  expect(appendWalkEquals<R>(toSupplementaries("(ab)(cd)*(ef)"), toSupplementaries("zzzabcdcdefzzz"), toSupplementaries("$1w\\$2w$3"), toSupplementaries("zzzabw$2wefzzz")));
+})
 
-TODO_REGEX_TEST(stringBufferCheckNonexistentGroupReference, "requires Java replacement error semantics for nonexistent groups")
+PORTED_REGEX_TEST(stringBufferCheckNonexistentGroupReference, {
+  expect(appendReplacementThrowsAndLeavesBuffer<R>(toSupplementaries("(ab)(cd)*(ef)"), toSupplementaries("zzzabcdcdefzzz"), toSupplementaries("$1w$5w$3")));
+})
 
-TODO_REGEX_TEST(stringBufferCheckSupplementalDoubleDigitGroupReferences, "requires Java multi-digit replacement group backoff semantics")
+PORTED_REGEX_TEST(stringBufferCheckSupplementalDoubleDigitGroupReferences, {
+  expect(appendWalkEquals<R>("(1)(2)(3)(4)(5)(6)(7)(8)(9)(10)(11)", toSupplementaries("zzz123456789101112zzz"), toSupplementaries("$1w$11w$3"), toSupplementaries("zzz1w11w312zzz")));
+})
 
-TODO_REGEX_TEST(stringBufferBackoffSupplemental, "requires Java multi-digit replacement group backoff semantics")
+PORTED_REGEX_TEST(stringBufferBackoffSupplemental, {
+  expect(appendWalkEquals<R>(toSupplementaries("(ab)(cd)*(ef)"), toSupplementaries("zzzabcdcdefzzz"), toSupplementaries("$1w$15w$3"), toSupplementaries("zzzabwab5wefzzz")));
+})
 
-TODO_REGEX_TEST(stringBufferCheckAppendException, "requires Java replacement IllegalArgumentException atomic append semantics")
+PORTED_REGEX_TEST(stringBufferCheckAppendException, {
+  expect(appendReplacementThrowsAndLeavesBuffer<R>("(abc)", "abcd", "xyz$g"));
+})
 
 PORTED_REGEX_TEST(stringBuilderSubstitutionWithLiteral, { expect(appendWalkEquals<R>("blah", "zzzblahzzz", "blech", "zzzblechzzz")); })
 PORTED_REGEX_TEST(stringBuilderSubstitutionWithGroups, { expect(appendWalkEquals<R>("(ab)(cd)*", "zzzabcdzzz", "$1", "zzzabzzz")); })
 PORTED_REGEX_TEST(stringBuilderSubstitutionWithThreeGroups, { expect(appendWalkEquals<R>("(ab)(cd)*(ef)", "zzzabcdcdefzzz", "$1w$2w$3", "zzzabwcdwefzzz")); })
 PORTED_REGEX_TEST(stringBuilderSubstitutionThreeMatch, { expect(appendWalkEquals<R>("(ab)(cd*)", "zzzabcdzzzabcddzzzabcdzzz", "$2", "zzzabzzzabcddzzzcdzzz", 2)); })
 PORTED_REGEX_TEST(stringBuilderSubtituteCheckEscapedDollar, { expect(appendWalkEquals<R>("(ab)(cd)*(ef)", "zzzabcdcdefzzz", "$1w\\$2w$3", "zzzabw$2wefzzz")); })
-TODO_REGEX_TEST(stringBuilderNonexistentGroupError, "requires Java replacement error semantics for nonexistent groups")
-TODO_REGEX_TEST(stringBuilderDoubleDigitGroupReferences, "requires Java multi-digit replacement group backoff semantics")
+PORTED_REGEX_TEST(stringBuilderNonexistentGroupError, {
+  expect(appendReplacementThrowsAndLeavesBuffer<R>("(ab)(cd)*(ef)", "zzzabcdcdefzzz", "$1w$5w$3"));
+})
+PORTED_REGEX_TEST(stringBuilderDoubleDigitGroupReferences, {
+  expect(appendWalkEquals<R>("(1)(2)(3)(4)(5)(6)(7)(8)(9)(10)(11)", "zzz123456789101112zzz", "$1w$11w$3", "zzz1w11w312zzz"));
+})
 PORTED_REGEX_TEST(stringBuilderCheckBackoff, { expect(appendWalkEquals<R>("(ab)(cd)*(ef)", "zzzabcdcdefzzz", "$1w$15w$3", "zzzabwab5wefzzz")); })
 PORTED_REGEX_TEST(stringBuilderSupplementalLiteralSubstitution, { expect(appendWalkEquals<R>(toSupplementaries("blah"), toSupplementaries("zzzblahzzz"), toSupplementaries("blech"), toSupplementaries("zzzblechzzz"))); })
 PORTED_REGEX_TEST(stringBuilderSupplementalSubstitutionWithGroups, { expect(appendWalkEquals<R>(toSupplementaries("(ab)(cd)*"), toSupplementaries("zzzabcdzzz"), "$1", toSupplementaries("zzzabzzz"))); })
-TODO_REGEX_TEST(stringBuilderSupplementalSubstitutionThreeGroups, "supplementary replacement expansion is not exact in JavaMatcherAdapter")
+PORTED_REGEX_TEST(stringBuilderSupplementalSubstitutionThreeGroups, {
+  expect(appendWalkEquals<R>(toSupplementaries("(ab)(cd)*(ef)"), toSupplementaries("zzzabcdcdefzzz"), toSupplementaries("$1w$2w$3"), toSupplementaries("zzzabwcdwefzzz")));
+})
 PORTED_REGEX_TEST(stringBuilderSubstitutionSupplementalSkipMiddleThreeMatch, { expect(appendWalkEquals<R>(toSupplementaries("(ab)(cd*)"), toSupplementaries("zzzabcdzzzabcddzzzabcdzzz"), "$2", toSupplementaries("zzzabzzzabcddzzzcdzzz"), 2)); })
-TODO_REGEX_TEST(stringBuilderSupplementalEscapedDollar, "supplementary replacement escaping is not exact in JavaMatcherAdapter")
-TODO_REGEX_TEST(stringBuilderSupplementalNonExistentGroupError, "requires Java replacement error semantics for nonexistent groups")
-TODO_REGEX_TEST(stringBuilderSupplementalCheckDoubleDigitGroupReferences, "requires Java multi-digit replacement group backoff semantics")
-TODO_REGEX_TEST(stringBuilderSupplementalCheckBackoff, "requires Java multi-digit replacement group backoff semantics")
-TODO_REGEX_TEST(stringBuilderCheckIllegalArgumentException, "requires Java replacement IllegalArgumentException atomic append semantics")
+PORTED_REGEX_TEST(stringBuilderSupplementalEscapedDollar, {
+  expect(appendWalkEquals<R>(toSupplementaries("(ab)(cd)*(ef)"), toSupplementaries("zzzabcdcdefzzz"), toSupplementaries("$1w\\$2w$3"), toSupplementaries("zzzabw$2wefzzz")));
+})
+PORTED_REGEX_TEST(stringBuilderSupplementalNonExistentGroupError, {
+  expect(appendReplacementThrowsAndLeavesBuffer<R>(toSupplementaries("(ab)(cd)*(ef)"), toSupplementaries("zzzabcdcdefzzz"), toSupplementaries("$1w$5w$3")));
+})
+PORTED_REGEX_TEST(stringBuilderSupplementalCheckDoubleDigitGroupReferences, {
+  expect(appendWalkEquals<R>("(1)(2)(3)(4)(5)(6)(7)(8)(9)(10)(11)", toSupplementaries("zzz123456789101112zzz"), toSupplementaries("$1w$11w$3"), toSupplementaries("zzz1w11w312zzz")));
+})
+PORTED_REGEX_TEST(stringBuilderSupplementalCheckBackoff, {
+  expect(appendWalkEquals<R>(toSupplementaries("(ab)(cd)*(ef)"), toSupplementaries("zzzabcdcdefzzz"), toSupplementaries("$1w$15w$3"), toSupplementaries("zzzabwab5wefzzz")));
+})
+PORTED_REGEX_TEST(stringBuilderCheckIllegalArgumentException, {
+  expect(appendReplacementThrowsAndLeavesBuffer<R>("(abc)", "abcd", "xyz$g"));
+})
 
 PORTED_REGEX_TEST(substitutionBasher, {
   expect(replaceAllEquals<R>("([a-z]+)([0-9]+)", "abc123 def456", "$2:$1", "123:abc 456:def"));
@@ -943,7 +997,7 @@ PORTED_REGEX_TEST(surrogatePairOverlapRegion, {
   }
 })
 
-TODO_REGEX_TEST(droppedClassesWithIntersection, "character-class intersection edge case needs a direct faithful port")
+TODO_REGEX_TEST(droppedClassesWithIntersection, "character-class intersection edge case is flaky under the JNI adapter")
 
 TODO_REGEX_TEST(errorMessageCaretIndentation, "asserts Java PatternSyntaxException diagnostic formatting")
 
@@ -951,7 +1005,7 @@ PORTED_REGEX_TEST(unescapedBackslash, {
   expect(rejects<R>("abc\\"));
 })
 
-TODO_REGEX_TEST(badIntersectionSyntax, "PatternSyntaxException edge case needs a direct faithful port")
+TODO_REGEX_TEST(badIntersectionSyntax, "PatternSyntaxException edge case is JDK-version-sensitive")
 
 PORTED_REGEX_TEST(wordBoundaryInconsistencies, {
   expect(find<R>("\\bword\\b", "a word!"));

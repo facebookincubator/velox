@@ -243,8 +243,10 @@ class JavaMatcherAdapter {
     }
     const std::size_t s = matchBeg();
     const std::size_t e = matchEnd();
+    const std::string replacement =
+        expandJavaReplacement(javaReplacement, groups_);
     sb.append(input_.substr(lastAppendPos_, s - lastAppendPos_));
-    sb.append(expandJavaReplacement(javaReplacement, groups_));
+    sb.append(replacement);
     lastAppendPos_ = e;
   }
 
@@ -298,27 +300,44 @@ class JavaMatcherAdapter {
         char n = r[i + 1];
         if (n >= '0' && n <= '9') {
           int idx = n - '0';
-          if (idx < static_cast<int>(g.size()) && g[idx].data() != nullptr) {
+          std::size_t lastConsumed = i + 1;
+          for (std::size_t j = i + 2; j < r.size() && r[j] >= '0' &&
+               r[j] <= '9';
+               ++j) {
+            const int candidate = idx * 10 + (r[j] - '0');
+            if (candidate >= static_cast<int>(g.size())) {
+              break;
+            }
+            idx = candidate;
+            lastConsumed = j;
+          }
+          if (idx >= static_cast<int>(g.size())) {
+            throw std::out_of_range("replacement group index out of range");
+          }
+          if (g[idx].data() != nullptr) {
             out.append(g[idx]);
           }
-          ++i;
+          i = lastConsumed;
         } else if (n == '{') {
           auto endBrace = r.find('}', i + 2);
           if (endBrace == std::string_view::npos) {
-            out.push_back(c);
-            continue;
+            throw std::invalid_argument("unterminated named replacement group");
           }
           const std::string name(r.substr(i + 2, endBrace - i - 2));
           const auto& named = re_->NamedCapturingGroups();
           auto it = named.find(name);
-          if (it != named.end() && it->second < static_cast<int>(g.size()) &&
-              g[it->second].data() != nullptr) {
+          if (it == named.end() || it->second >= static_cast<int>(g.size())) {
+            throw std::out_of_range("unknown replacement group name: " + name);
+          }
+          if (g[it->second].data() != nullptr) {
             out.append(g[it->second]);
           }
           i = endBrace;
         } else {
-          out.push_back(c);
+          throw std::invalid_argument("illegal replacement group reference");
         }
+      } else if (c == '$') {
+        throw std::invalid_argument("dangling replacement group marker");
       } else {
         out.push_back(c);
       }
