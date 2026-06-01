@@ -389,20 +389,29 @@ String Functions
 
 .. spark:function:: split(string, delimiter[, limit]) -> array(string)
 
-    Splits ``string`` around occurrences that match ``delimiter`` and returns an array with a length of
-    at most ``limit``. ``delimiter`` is a string representing regular expression. ``limit`` is an integer
-    which controls the number of times the regex is applied. By default, ``limit`` is -1. When ``limit`` > 0,
-    the resulting array's length will not be more than ``limit``, and the resulting array's last entry will
-    contain all input beyond the last matched regex. When ``limit`` <= 0, ``regex`` will be applied as many
-    times as possible, and the resulting array can be of any size. When ``delimiter`` is empty, if ``limit``
-    is smaller than the size of ``string``, the resulting array only contains ``limit`` number of single characters
-    splitting from ``string``, if ``limit`` is not provided or is larger than the size of ``string``, the resulting
-    array contains all the single characters of ``string`` and does not include an empty tail character.
-    The split function align with vanilla spark 3.4+ split function. ::
+    Splits ``string`` around matches of ``delimiter`` and returns an array with at most ``limit`` elements.
+    ``delimiter`` is a string pattern, and ``limit`` is an integer that controls how many times the pattern
+    is applied. By default, ``limit`` is -1.
 
-        SELECT split('oneAtwoBthreeC', '[ABC]'); -- ["one","two","three",""]
-        SELECT split('oneAtwoBthreeC', '[ABC]', 2); -- ["one","twoBthreeC"]
-        SELECT split('oneAtwoBthreeC', '[ABC]', 5); -- ["one","two","three",""]
+    When ``limit`` > 0, the result length is at most ``limit``, and the last element contains the remaining
+    input after the final match. When ``limit`` <= 0, the pattern is applied as many times as possible, and
+    the result can have any length.
+
+    When ``delimiter`` is empty, the input is split into single characters. If ``limit`` is smaller than
+    ``string`` length, only ``limit`` characters are returned. If ``limit`` is not provided or is greater than
+    ``string`` length, all characters are returned without an empty trailing element.
+
+    This behavior aligns with Spark 3.4+.
+
+    Note that ``delimiter`` is always interpreted as a regular expression if it contains regex metacharacters.
+    An example pitfall is ``split(path, '.')`` splits on any character rather than literal dots.
+
+    For ``delimiter`` without regex metacharacters, Velox uses literal-matching fast paths. In this case, regex
+    compilation is skipped and these delimiters do not count toward the ``expression.max_compiled_regexes`` cache
+    limit.
+
+    ::
+
         SELECT split('one', '1'); -- ["one"]
         SELECT split('abcd', ''); -- ["a","b","c","d"]
         SELECT split('abcd', '', 3); -- ["a","b","c"]

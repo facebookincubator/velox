@@ -206,12 +206,13 @@ class DeltaBpDecoder {
     uint64_t consumedBits =
         (valuesPerMiniBlock_ - valuesRemainingCurrentMiniBlock_) *
         deltaBitWidth_;
-    bits::copyBits(
-        reinterpret_cast<const uint64_t*>(bufferStart_),
-        consumedBits,
-        reinterpret_cast<uint64_t*>(&value),
-        0,
-        deltaBitWidth_);
+    if (deltaBitWidth_) {
+      value = bits::detail::loadBits<uint64_t>(
+          reinterpret_cast<const uint64_t*>(bufferStart_),
+          consumedBits,
+          deltaBitWidth_);
+      value &= (~0ULL >> (64 - deltaBitWidth_));
+    }
     // Addition between minDelta_, packed int and lastValue_ should be treated
     // as unsigned addition. Overflow is as expected.
     value = static_cast<uint64_t>(minDelta_) + static_cast<uint64_t>(value) +
