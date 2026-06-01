@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <string>
+
 #include "velox/expression/CastExpr.h"
 #include "velox/functions/sparksql/specialforms/SparkCastHooks.h"
 
@@ -45,7 +47,6 @@ class SparkCastCallToSpecialForm : public exec::CastCallToSpecialForm {
       bool trackCpuUsage,
       const core::QueryConfig& config) override;
 
- private:
   /// Determines if ANSI mode is supported for casting from fromType to toType.
   /// TODO: Remove this function once all cast operations support ANSI mode.
   /// @param fromType The source type of the cast
@@ -62,4 +63,8 @@ class SparkTryCastCallToSpecialForm : public exec::TryCastCallToSpecialForm {
       bool trackCpuUsage,
       const core::QueryConfig& config) override;
 };
+
+void registerSparkCastModeSpecialForms(
+    const std::string& ansiCastName,
+    const std::string& legacyCastName);
 } // namespace facebook::velox::functions::sparksql

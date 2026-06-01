@@ -16,6 +16,7 @@
 
 #include "velox/functions/sparksql/specialforms/SparkCastExpr.h"
 
+#include "velox/expression/SpecialFormRegistry.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -25,6 +26,70 @@ bool isIntegralType(const TypePtr& type) {
   return type == TINYINT() || type == SMALLINT() || type == INTEGER() ||
       type == BIGINT();
 }
+
+exec::ExprPtr makeSparkCastExpr(
+    const TypePtr& type,
+    exec::ExprPtr&& input,
+    bool trackCpuUsage,
+    bool isTryCast,
+    bool allowOverflow,
+    const core::QueryConfig& config) {
+  return std::make_shared<SparkCastExpr>(
+      type,
+      std::move(input),
+      trackCpuUsage,
+      isTryCast,
+      std::make_shared<SparkCastHooks>(config, allowOverflow));
+}
+
+class SparkAnsiCastCallToSpecialForm : public exec::CastCallToSpecialForm {
+ public:
+  exec::ExprPtr constructSpecialForm(
+      const TypePtr& type,
+      std::vector<exec::ExprPtr>&& compiledChildren,
+      bool trackCpuUsage,
+      const core::QueryConfig& config) override {
+    VELOX_CHECK_EQ(
+        compiledChildren.size(),
+        1,
+        "ANSI CAST statements expect exactly 1 argument, received {}.",
+        compiledChildren.size());
+
+    const auto& fromType = compiledChildren[0]->type();
+    const bool isTryCast =
+        !SparkCastCallToSpecialForm::isAnsiSupported(fromType, type);
+    return makeSparkCastExpr(
+        type,
+        std::move(compiledChildren[0]),
+        trackCpuUsage,
+        isTryCast,
+        isTryCast,
+        config);
+  }
+};
+
+class SparkLegacyCastCallToSpecialForm : public exec::CastCallToSpecialForm {
+ public:
+  exec::ExprPtr constructSpecialForm(
+      const TypePtr& type,
+      std::vector<exec::ExprPtr>&& compiledChildren,
+      bool trackCpuUsage,
+      const core::QueryConfig& config) override {
+    VELOX_CHECK_EQ(
+        compiledChildren.size(),
+        1,
+        "LEGACY CAST statements expect exactly 1 argument, received {}.",
+        compiledChildren.size());
+
+    return makeSparkCastExpr(
+        type,
+        std::move(compiledChildren[0]),
+        trackCpuUsage,
+        true,
+        true,
+        config);
+  }
+};
 
 } // namespace
 
@@ -94,6 +159,15 @@ exec::ExprPtr SparkTryCastCallToSpecialForm::constructSpecialForm(
       trackCpuUsage,
       true,
       std::make_shared<SparkCastHooks>(config, false));
+}
+
+void registerSparkCastModeSpecialForms(
+    const std::string& ansiCastName,
+    const std::string& legacyCastName) {
+  exec::registerFunctionCallToSpecialForm(
+      ansiCastName, std::make_unique<SparkAnsiCastCallToSpecialForm>());
+  exec::registerFunctionCallToSpecialForm(
+      legacyCastName, std::make_unique<SparkLegacyCastCallToSpecialForm>());
 }
 
 } // namespace facebook::velox::functions::sparksql
