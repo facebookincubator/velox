@@ -90,6 +90,28 @@ TEST(JavaRegexTranslator, rewritesSurrogateBlockToRange) {
   EXPECT_EQ("[\\x{DC00}-\\x{DFFF}]", toPcre2Pattern("\\p{InLOW_SURROGATES}"));
 }
 
+TEST(JavaRegexTranslator, reportsSurrogateRangeNeedsRawByteMode) {
+  bool needsRawByteMode = false;
+  EXPECT_EQ(
+      "[\\x{D800}-\\x{DB7F}]",
+      toPcre2Pattern("\\p{InHIGH_SURROGATES}", needsRawByteMode));
+  EXPECT_TRUE(needsRawByteMode);
+}
+
+TEST(JavaRegexTranslator, reportsRawSurrogateBytesNeedRawByteMode) {
+  bool needsRawByteMode = false;
+  EXPECT_EQ(
+      "[\xED\xA0\x80]",
+      toPcre2Pattern("[\xED\xA0\x80]", needsRawByteMode));
+  EXPECT_TRUE(needsRawByteMode);
+}
+
+TEST(JavaRegexTranslator, doesNotReportRawByteModeForSupplementaryScalar) {
+  bool needsRawByteMode = true;
+  EXPECT_EQ("\\x{1f600}", toPcre2Pattern("\\uD83D\\uDE00", needsRawByteMode));
+  EXPECT_FALSE(needsRawByteMode);
+}
+
 TEST(JavaRegexTranslator, negatedSurrogateBlockIsNegated) {
   EXPECT_EQ("[^\\x{D800}-\\x{DB7F}]", toPcre2Pattern("\\P{InHIGH_SURROGATES}"));
 }

@@ -34,6 +34,11 @@ TEST(Pcre2RegexTest, compileError) {
   EXPECT_FALSE(re.error().empty());
 }
 
+TEST(Pcre2RegexTest, surrogateBlockCompilesInRawByteMode) {
+  Pcre2Regex re("\\p{InHIGH_SURROGATES}");
+  EXPECT_TRUE(re.ok()) << re.error();
+}
+
 TEST(Pcre2RegexTest, javaNamedGroupAccepted) {
   // PCRE2 natively understands (?<name>...) — no translation needed.
   Pcre2Regex re("(?<num>\\d+)");

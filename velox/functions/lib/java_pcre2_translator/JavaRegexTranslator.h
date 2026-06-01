@@ -51,6 +51,12 @@ namespace facebook::velox::functions::java_pcre2_translator {
 ///
 std::string toPcre2Pattern(std::string_view javaPattern);
 
+/// Rewrites a Java pattern and reports whether the resulting PCRE2 compile
+/// must omit PCRE2_UTF to allow lone surrogate code units.
+std::string toPcre2Pattern(
+    std::string_view javaPattern,
+    bool& needsRawByteMode);
+
 /// Rewrites a `java.util.regex.Pattern` source string into an equivalent
 /// pattern accepted by RE2.
 ///

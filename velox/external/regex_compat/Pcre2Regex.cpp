@@ -63,6 +63,51 @@ std::string pcre2ErrorToString(int code, PCRE2_SIZE offset) {
   return os.str();
 }
 
+void replaceAll(std::string& s, std::string_view from, std::string_view to) {
+  for (std::size_t pos = 0; (pos = s.find(from, pos)) != std::string::npos;
+       pos += to.size()) {
+    s.replace(pos, from.size(), to);
+  }
+}
+
+std::string surrogateUtf8ByteEscapes(std::uint32_t cp) {
+  char buf[32];
+  std::snprintf(
+      buf,
+      sizeof(buf),
+      "\\x{%02X}\\x{%02X}\\x{%02X}",
+      0xE0 | (cp >> 12),
+      0x80 | ((cp >> 6) & 0x3F),
+      0x80 | (cp & 0x3F));
+  return buf;
+}
+
+std::string rewriteSurrogateEscapesForRawByteMode(std::string pattern) {
+  // The translator reports raw-byte mode via a side-channel bool.  PCRE2 in
+  // non-UTF mode accepts literal surrogate UTF-8 bytes, but not \x{D800};
+  // rewrite the surrogate block aliases to byte-sequence regexes before
+  // dropping PCRE2_UTF.
+  replaceAll(
+      pattern,
+      "[\\x{D800}-\\x{DB7F}]",
+      "(?:\\x{ED}[\\x{A0}-\\x{AD}][\\x{80}-\\x{BF}])");
+  replaceAll(
+      pattern,
+      "[\\x{DB80}-\\x{DBFF}]",
+      "(?:\\x{ED}[\\x{AE}-\\x{AF}][\\x{80}-\\x{BF}])");
+  replaceAll(
+      pattern,
+      "[\\x{DC00}-\\x{DFFF}]",
+      "(?:\\x{ED}[\\x{B0}-\\x{BF}][\\x{80}-\\x{BF}])");
+
+  for (std::uint32_t cp = 0xD800; cp <= 0xDFFF; ++cp) {
+    char token[16];
+    std::snprintf(token, sizeof(token), "\\x{%04X}", cp);
+    replaceAll(pattern, token, surrogateUtf8ByteEscapes(cp));
+  }
+  return pattern;
+}
+
 } // namespace
 
 Pcre2Regex::Pcre2Regex(std::string_view javaPattern, Options opt) {
@@ -71,12 +116,17 @@ Pcre2Regex::Pcre2Regex(std::string_view javaPattern, Options opt) {
   // unsupported `\p{...}` property in an intersection), we report the
   // translator message verbatim and leave the pattern uncompiled.
   std::string pcre2Pattern;
+  bool needsRawByteMode = false;
   try {
-    pcre2Pattern = functions::java_pcre2_translator::toPcre2Pattern(javaPattern);
+    pcre2Pattern = functions::java_pcre2_translator::toPcre2Pattern(
+        javaPattern, needsRawByteMode);
   } catch (const functions::java_pcre2_translator::EvaluationFailedException&
                ex) {
     error_ = std::string("Java→PCRE2 translator: ") + ex.what();
     return;
+  }
+  if (needsRawByteMode) {
+    pcre2Pattern = rewriteSurrogateEscapesForRawByteMode(std::move(pcre2Pattern));
   }
 
   int err = 0;
@@ -84,7 +134,7 @@ Pcre2Regex::Pcre2Regex(std::string_view javaPattern, Options opt) {
   code_ = pcre2_compile_8(
       reinterpret_cast<PCRE2_SPTR8>(pcre2Pattern.data()),
       pcre2Pattern.size(),
-      toPcre2Options(opt),
+      toPcre2Options(opt) & (needsRawByteMode ? ~PCRE2_UTF : ~0u),
       &err,
       &off,
       nullptr);

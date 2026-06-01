@@ -511,6 +511,40 @@ bool containsRawSurrogate(std::string_view s, std::size_t from, std::size_t to) 
   return false;
 }
 
+bool containsRawSurrogate(std::string_view s) {
+  return containsRawSurrogate(s, 0, s.size());
+}
+
+bool containsSurrogateHexToken(std::string_view s) {
+  for (std::size_t i = 0; i + 3 < s.size(); ++i) {
+    if (s[i] != '\\' || s[i + 1] != 'x' || s[i + 2] != '{') {
+      continue;
+    }
+    std::size_t k = i + 3;
+    std::uint32_t cp = 0;
+    bool any = false;
+    while (k < s.size() && s[k] != '}') {
+      if (!isHexDigit(s[k])) {
+        any = false;
+        break;
+      }
+      cp = (cp << 4) | hexValue(s[k]);
+      any = true;
+      ++k;
+    }
+    if (any && k < s.size() && s[k] == '}' && cp >= 0xD800 &&
+        cp <= 0xDFFF) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool needsRawByteModeForPcre2(std::string_view translatedPattern) {
+  return containsSurrogateHexToken(translatedPattern) ||
+      containsRawSurrogate(translatedPattern);
+}
+
 bool hasOddBackslashesBefore(std::string_view s, std::size_t pos) {
   std::size_t count = 0;
   while (pos > 0 && s[pos - 1] == '\\') {
@@ -1014,7 +1048,10 @@ std::string rewriteJavaNamedGroupsForRe2(std::string_view pattern) {
 
 } // namespace
 
-std::string toPcre2Pattern(std::string_view javaPattern) {
+std::string toPcre2Pattern(
+    std::string_view javaPattern,
+    bool& needsRawByteMode) {
+  needsRawByteMode = false;
   if (javaPattern.empty()) {
     return std::string(javaPattern);
   }
@@ -1329,7 +1366,13 @@ std::string toPcre2Pattern(std::string_view javaPattern) {
     ++i;
   }
 
+  needsRawByteMode = needsRawByteModeForPcre2(out);
   return out;
+}
+
+std::string toPcre2Pattern(std::string_view javaPattern) {
+  bool needsRawByteMode = false;
+  return toPcre2Pattern(javaPattern, needsRawByteMode);
 }
 
 std::string toRe2Pattern(std::string_view javaPattern) {
