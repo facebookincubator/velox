@@ -254,7 +254,7 @@ TEST_F(IcebergInsertTest, maxTargetFileSizeRotation) {
   const auto dataSink = createDataSinkAndAppendData(vectors, outputPath);
   const auto commitTasks = dataSink->close();
 
-  ASSERT_EQ(listFiles(outputPath).size(), 5);
+  ASSERT_EQ(listFiles(outputPath).size(), 10);
 
   auto splits = createSplitsForDirectory(outputPath);
   auto plan = exec::test::PlanBuilder()
