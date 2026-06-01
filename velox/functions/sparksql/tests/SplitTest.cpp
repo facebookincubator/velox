@@ -13,7 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <folly/ScopeGuard.h>
+
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 #include "velox/type/Type.h"
 
@@ -142,7 +145,110 @@ TEST_F(SplitTest, basic) {
   testSplit(input, "A", std::nullopt, numRows, expected);
 }
 
-TEST_F(SplitTest, emptyDelimiter) {
+TEST_F(SplitTest, emptyDelimiterNonLegacy) {
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{SparkQueryConfig::qualify(SparkQueryConfig::kLegacySplitEmptyPattern),
+        "false"}});
+  auto guard = folly::makeGuard([&]() {
+    queryCtx_->testingOverrideConfigUnsafe({});
+  });
+
+  auto numRows = 4;
+  auto input = std::vector<std::string>{
+      {"I,he,she,they"}, // Simple
+      {"one,,,four,"}, // Empty strings
+      {"a\xED\xA0@123"}, // Not a well-formed UTF-8 string
+      {""}, // The whole string is empty
+  };
+  auto expected = std::vector<std::vector<std::string>>({
+      {"I", ",", "h", "e", ",", "s", "h", "e", ",", "t", "h", "e", "y"},
+      {"o", "n", "e", ",", ",", ",", "f", "o", "u", "r", ","},
+      {"a", "\xED\xA0", "@", "1", "2", "3"},
+      {""},
+  });
+
+  // No limit provided.
+  testSplit(input, "", std::nullopt, numRows, expected);
+
+  // Limit <= 0.
+  testSplit(input, "", -1, numRows, expected);
+
+  // High limit, the limit greater than the input string size.
+  testSplit(input, "", 20, numRows, expected);
+
+  // Small limit, the limit is smaller than or equals to input string size.
+  // Non-legacy behavior: the last element contains all remaining input.
+  expected = {
+      {"I", ",", "he,she,they"},
+      {"o", "n", "e,,,four,"},
+      {"a", "\xED\xA0", "@123"},
+      {""},
+  };
+  testSplit(input, "", 3, numRows, expected);
+
+  // limit = 1, the resulting array only has one entry to contain all input.
+  expected = {
+      {"I,he,she,they"},
+      {"one,,,four,"},
+      {"a\xED\xA0@123"},
+      {""},
+  };
+  testSplit(input, "", 1, numRows, expected);
+
+  // Non-ascii, empty delimiter.
+  input = std::vector<std::string>{
+      {"синяя赤いトマト緑の"},
+      {"Hello世界🙂"},
+      {"a\xED\xA0@123"}, // Not a well-formed UTF-8 string
+      {""},
+  };
+  expected = {
+      {"с", "и", "н", "я", "я", "赤", "い", "ト", "マ", "ト", "緑", "の"},
+      {"H", "e", "l", "l", "o", "世", "界", "🙂"},
+      {"a", "\xED\xA0", "@", "1", "2", "3"},
+      {""},
+  };
+  testSplit(input, "", std::nullopt, numRows, expected);
+
+  // Non-legacy behavior: last element keeps the remaining substring.
+  expected = {
+      {"с", "иняя赤いトマト緑の"},
+      {"H", "ello世界🙂"},
+      {"a", "\xED\xA0@123"},
+      {""},
+  };
+  testSplit(input, "", 2, numRows, expected);
+
+  // Additional single-row cases.
+  numRows = 1;
+
+  // split('hello', '', 1) -> ["hello"]
+  testSplit({"hello"}, "", 1, numRows, {{"hello"}});
+
+  // split('hello', '', 3) -> ["h", "e", "llo"]
+  testSplit({"hello"}, "", 3, numRows, {{"h", "e", "llo"}});
+
+  // split('hello', '', 5) -> ["h", "e", "l", "l", "o"]
+  testSplit({"hello"}, "", 5, numRows, {{"h", "e", "l", "l", "o"}});
+
+  // split('hello', '', 100) -> ["h", "e", "l", "l", "o"] (no empty tail)
+  testSplit({"hello"}, "", 100, numRows, {{"h", "e", "l", "l", "o"}});
+
+  // split('1A2A3A4', '', 3) -> ["1", "A", "2A3A4"]
+  testSplit({"1A2A3A4"}, "", 3, numRows, {{"1", "A", "2A3A4"}});
+
+  // split('ab', '', 1) -> ["ab"]
+  testSplit({"ab"}, "", 1, numRows, {{"ab"}});
+
+  // Empty string with positive limit still yields a single empty element.
+  testSplit({""},  "", 1, numRows, {{""}});
+  testSplit({""},  "", 3, numRows, {{""}});
+}
+
+// Tests the legacy behavior (the default) for split() with an empty
+// delimiter: only the first `limit` single-character elements are returned
+// and the trailing substring is dropped.
+TEST_F(SplitTest, emptyDelimiterLegacy) {
   auto numRows = 4;
   auto input = std::vector<std::string>{
       {"I,he,she,they"}, // Simple

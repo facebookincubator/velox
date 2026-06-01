@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/functions/lib/Utf8Utils.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 
 namespace facebook::velox::functions::sparksql {
 
@@ -50,6 +51,11 @@ struct Split {
       const arg_type<Varchar>* delimiter,
       const arg_type<int32_t>* /*limit*/) {
     cache_.setMaxCompiledRegexes(config.exprMaxCompiledRegexes());
+    // When true (default), keeps the pre SPARK-49968 (Spark < 4.1) behavior
+    // for split() with an empty delimiter: the trailing substring beyond
+    // `limit` chars is discarded. When false, the last element contains all
+    // remaining input, matching Spark 4.1+.
+    legacySplitEmptyPattern_ = SparkQueryConfig{config}.legacySplitEmptyPattern();
     if (delimiter) {
       initializeFastPath(delimiter->data(), delimiter->size());
       isConstantDelimiter_ = true;
@@ -107,9 +113,16 @@ struct Split {
   // When pattern is empty, split each character out. Since Spark 3.4, when
   // delimiter is empty, the result does not include an empty tail string, e.g.
   // split('abc', '') outputs ["a", "b", "c"] instead of ["a", "b", "c", ""].
-  // The result does not include remaining string when limit is smaller than the
-  // string size, e.g. split('abc', '', 2) outputs ["a", "b"] instead of ["a",
-  // "bc"].
+  //
+  // Behavior when limit is positive and smaller than the string's character
+  // count is controlled by `spark.legacy_split_empty_pattern`:
+  //  - legacy=true (default, pre SPARK-49968 / Spark < 4.1): the result only
+  //    contains the first `limit` single-character elements and the tail is
+  //    discarded. e.g. split('abc', '', 2) outputs ["a", "b"];
+  //    split('ab', '', 1) outputs ["a"].
+  //  - legacy=false (aligned with SPARK-49968 / Spark 4.1+): the last
+  //    element contains all remaining input. e.g. split('abc', '', 2)
+  //    outputs ["a", "bc"]; split('ab', '', 1) outputs ["ab"].
   void splitEmptyDelimiter(
       out_type<Array<Varchar>>& result,
       const arg_type<Varchar>& input,
@@ -123,17 +136,32 @@ struct Split {
     const char* start = input.data();
     size_t pos = 0;
     int32_t count = 0;
-    while (pos < end && count < limit) {
+    auto emitNextChar = [&]() {
+      // Emits the next UTF-8 character at `pos` as a single element and
+      // advances `pos`/`count`. For invalid UTF-8 character, the length is
+      // the absolute value of result of `tryGetUtf8CharLength`, so that
+      // scanning always makes progress.
       int32_t codePoint;
       auto charLength = tryGetUtf8CharLength(start + pos, end - pos, codePoint);
       if (charLength <= 0) {
-        // Invalid UTF-8 character, the length of the invalid
-        // character is the absolute value of result of `tryGetUtf8CharLength`.
         charLength = -charLength;
       }
       result.add_item().setNoCopy(StringView(start + pos, charLength));
       pos += charLength;
       count += 1;
+    };
+
+    // Always append the first limit - 1 items to the result.
+    while (pos < end && count + 1 < limit) {
+      emitNextChar();
+    }
+
+    if (pos < end) {
+      if (legacySplitEmptyPattern_) {
+        emitNextChar();
+      } else {
+        result.add_item().setNoCopy(StringView(start + pos, end - pos));
+      }
     }
   }
 
@@ -265,5 +293,10 @@ struct Split {
   // Single character delimiter for fast path.
   char singleCharDelimiter_;
   bool isConstantDelimiter_{false};
+  // Whether to use the legacy (pre SPARK-49968) behavior for split() with an
+  // empty delimiter. Cached from `spark.legacy_split_empty_pattern` at
+  // initialization time. Defaults to true to align with the legacy Spark
+  // behavior.
+  bool legacySplitEmptyPattern_{true};
 };
 } // namespace facebook::velox::functions::sparksql

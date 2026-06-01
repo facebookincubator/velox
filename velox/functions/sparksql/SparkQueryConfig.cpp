@@ -35,6 +35,7 @@ SparkQueryConfig::registeredProperties() {
     VELOX_REGISTER_SPARK_CONFIG(kLegacyStatisticalAggregate);
     VELOX_REGISTER_SPARK_CONFIG(kJsonIgnoreNullFields);
     VELOX_REGISTER_SPARK_CONFIG(kCollectListIgnoreNulls);
+    VELOX_REGISTER_SPARK_CONFIG(kLegacySplitEmptyPattern);
 
 #undef VELOX_REGISTER_SPARK_CONFIG
 
