@@ -127,15 +127,36 @@ get_version() {
   fi
 }
 
+get_repo_version() {
+  local repo=$1 ref=$2
+  local response
+  response=$(fetch_github_api "repos/rapidsai/${repo}/contents/VERSION?ref=${ref}") || return 1
+  echo "$response" | jq -r '.content' | base64 -d | grep -oP '^[0-9]+\.[0-9]+' || {
+    echo "Error: Failed to parse VERSION file from $repo:$ref" >&2
+    return 1
+  }
+}
+
+get_ucxx_branch() {
+  local branch=$1 version=$2
+  if [[ $branch =~ ^release/ ]]; then
+    local ucxx_version
+    ucxx_version=$(curl -sL --max-time 30 "https://version.gpuci.io/rapids/${version}") || return 1
+    echo "release/${ucxx_version}"
+  else
+    echo "$branch"
+  fi
+}
+
 update_dependency() {
-  local var=$1 commit=$2 date=$3 checksum=$4
+  local var=$1 commit=$2 date=$3 checksum=$4 version=${5:-$VERSION}
   sed -i "s/# ${var} commit [a-f0-9]* from [0-9-]*/# ${var} commit ${commit:0:7} from ${date}/" "$CMAKE_FILE"
   sed -i "s/set(VELOX_${var}_COMMIT [a-f0-9]*)/set(VELOX_${var}_COMMIT ${commit})/" "$CMAKE_FILE"
 
   if [[ $var == "cudf" ]]; then
-    sed -i "s/set(VELOX_${var}_VERSION [0-9.]* CACHE/set(VELOX_${var}_VERSION ${VERSION} CACHE/" "$CMAKE_FILE"
+    sed -i "s/set(VELOX_${var}_VERSION [0-9.]* CACHE/set(VELOX_${var}_VERSION ${version} CACHE/" "$CMAKE_FILE"
   else
-    sed -i "s/set(VELOX_${var}_VERSION [0-9.]*)/set(VELOX_${var}_VERSION ${VERSION})/" "$CMAKE_FILE"
+    sed -i "s/set(VELOX_${var}_VERSION [0-9.]*)/set(VELOX_${var}_VERSION ${version})/" "$CMAKE_FILE"
   fi
 
   awk -v var="VELOX_${var}_BUILD_SHA256_CHECKSUM" -v sum="$checksum" '
@@ -175,14 +196,14 @@ elif [[ $MODE == "--commit" ]]; then
   echo "  Version: $VERSION"
   echo
 
-  declare -A COMMITS DATES CHECKSUMS
+  declare -A COMMITS DATES CHECKSUMS VERSIONS
   COMMITS[cudf]=$SHA
   DATES[cudf]=$DATE
 
   echo "Finding compatible dependency versions (main branch commits before $TIMESTAMP)..."
   echo
 
-  for dep in rapids_cmake rmm kvikio; do
+  for dep in rapids_cmake rmm kvikio ucxx; do
     repo=${dep//_/-}
     echo "Fetching $repo..."
     read -r commit date < <(get_commit_before_date "$repo" "$TIMESTAMP") || exit 1
@@ -194,6 +215,9 @@ elif [[ $MODE == "--commit" ]]; then
     COMMITS[$dep]=$commit
     DATES[$dep]=$date
     CHECKSUMS[$dep]=$checksum
+    if [[ $dep == "ucxx" ]]; then
+      VERSIONS[$dep]=$(get_repo_version "$repo" "$commit") || exit 1
+    fi
     echo
   done
 
@@ -203,27 +227,32 @@ elif [[ $MODE == "--commit" ]]; then
   echo
 
   echo "Updating $CMAKE_FILE..."
-  for dep in rapids_cmake rmm kvikio cudf; do
-    update_dependency "$dep" "${COMMITS[$dep]}" "${DATES[$dep]}" "${CHECKSUMS[$dep]}"
+  for dep in rapids_cmake rmm kvikio ucxx cudf; do
+    update_dependency "$dep" "${COMMITS[$dep]}" "${DATES[$dep]}" "${CHECKSUMS[$dep]}" "${VERSIONS[$dep]:-$VERSION}"
   done
 
   echo "Done! Updated dependencies:"
-  for dep in rapids_cmake rmm kvikio cudf; do
+  for dep in rapids_cmake rmm kvikio ucxx cudf; do
     echo "  $dep: ${COMMITS[$dep]:0:7} (${DATES[$dep]})"
   done
 
 elif [[ $MODE == "--branch" ]]; then
   VERSION=$(get_version "$ARG") || exit 1
+  UCXX_BRANCH=$(get_ucxx_branch "$ARG" "$VERSION") || exit 1
   echo "Updating cuDF dependencies from branch $ARG (version $VERSION)"
   echo
 
-  declare -A COMMITS DATES CHECKSUMS
+  declare -A COMMITS DATES CHECKSUMS VERSIONS
 
-  for dep in rapids_cmake rmm kvikio cudf; do
+  for dep in rapids_cmake rmm kvikio ucxx cudf; do
     repo=${dep//_/-}
     echo "Fetching $repo..."
 
-    read -r commit date < <(get_commit_info "$repo" "$ARG") || exit 1
+    if [[ $dep == "ucxx" ]]; then
+      read -r commit date < <(get_commit_info "$repo" "$UCXX_BRANCH") || exit 1
+    else
+      read -r commit date < <(get_commit_info "$repo" "$ARG") || exit 1
+    fi
     echo "  Commit: ${commit:0:7} from $date"
     echo "  Computing SHA256..."
     checksum=$(get_sha256 "$repo" "$commit") || exit 1
@@ -232,16 +261,19 @@ elif [[ $MODE == "--branch" ]]; then
     COMMITS[$dep]=$commit
     DATES[$dep]=$date
     CHECKSUMS[$dep]=$checksum
+    if [[ $dep == "ucxx" ]]; then
+      VERSIONS[$dep]=$(get_repo_version "$repo" "$commit") || exit 1
+    fi
     echo
   done
 
   echo "Updating $CMAKE_FILE..."
-  for dep in rapids_cmake rmm kvikio cudf; do
-    update_dependency "$dep" "${COMMITS[$dep]}" "${DATES[$dep]}" "${CHECKSUMS[$dep]}"
+  for dep in rapids_cmake rmm kvikio ucxx cudf; do
+    update_dependency "$dep" "${COMMITS[$dep]}" "${DATES[$dep]}" "${CHECKSUMS[$dep]}" "${VERSIONS[$dep]:-$VERSION}"
   done
 
   echo "Done! Updated dependencies:"
-  for dep in rapids_cmake rmm kvikio cudf; do
+  for dep in rapids_cmake rmm kvikio ucxx cudf; do
     echo "  $dep: ${COMMITS[$dep]:0:7} (${DATES[$dep]})"
   done
 else
