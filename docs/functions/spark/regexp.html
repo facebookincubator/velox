@@ -120,6 +120,20 @@ in <code class="docutils literal notranslate"><span class="pre">string</span></c
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="regexp_instr">
+<span class="sig-name descname"><span class="pre">regexp_instr</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#regexp_instr" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the 1-based character position of the first substring in <code class="docutils literal notranslate"><span class="pre">string</span></code>
+that matches the regular expression <code class="docutils literal notranslate"><span class="pre">pattern</span></code>. Returns 0 if no match is found.
+If <code class="docutils literal notranslate"><span class="pre">string</span></code> is NULL, returns NULL.</p>
+<p>Examples:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">regexp_instr</span><span class="p">(</span><span class="s1">&#39;hello world&#39;</span><span class="p">,</span> <span class="s1">&#39;world&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">7</span>
+<span class="n">SELECT</span> <span class="n">regexp_instr</span><span class="p">(</span><span class="s1">&#39;abc123def&#39;</span><span class="p">,</span> <span class="s1">&#39;[0-9]+&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">4</span>
+<span class="n">SELECT</span> <span class="n">regexp_instr</span><span class="p">(</span><span class="s1">&#39;hello&#39;</span><span class="p">,</span> <span class="s1">&#39;xyz&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">0</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="rlike">
 <span class="sig-name descname"><span class="pre">rlike</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#rlike" title="Link to this definition">¶</a></dt>
 <dd><p>Evaluates the regular expression <code class="docutils literal notranslate"><span class="pre">pattern</span></code> and determines if it is
@@ -199,6 +213,7 @@ Parameters:</p>
 <li><a class="reference internal" href="#like"><code class="docutils literal notranslate"><span class="pre">like()</span></code></a></li>
 <li><a class="reference internal" href="#regexp_extract"><code class="docutils literal notranslate"><span class="pre">regexp_extract()</span></code></a></li>
 <li><a class="reference internal" href="#regexp_extract_all"><code class="docutils literal notranslate"><span class="pre">regexp_extract_all()</span></code></a></li>
+<li><a class="reference internal" href="#regexp_instr"><code class="docutils literal notranslate"><span class="pre">regexp_instr()</span></code></a></li>
 <li><a class="reference internal" href="#rlike"><code class="docutils literal notranslate"><span class="pre">rlike()</span></code></a></li>
 <li><a class="reference internal" href="#regexp_replace"><code class="docutils literal notranslate"><span class="pre">regexp_replace()</span></code></a></li>
 </ul>
