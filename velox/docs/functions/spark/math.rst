@@ -146,6 +146,8 @@ Mathematical Functions
       The result scale is always 0. ``|n| + 1`` digits are needed because rounding
       to the nearest 10^|n| can produce a value one digit wider.
 
+    See `Spark's RoundBase.dataType <https://github.com/apache/spark/blob/master/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/mathExpressions.scala>`_.
+
     Examples (type annotations for clarity, not executable SQL)::
 
         -- scale 0: round up to integer

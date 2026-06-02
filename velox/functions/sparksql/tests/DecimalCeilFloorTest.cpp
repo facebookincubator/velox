@@ -30,15 +30,15 @@ class DecimalCeilFloorTest : public SparkFunctionBaseTest {
     std::vector<core::TypedExprPtr> inputs = {
         std::make_shared<core::FieldAccessTypedExpr>(inputType, "c0"),
         std::make_shared<core::ConstantTypedExpr>(INTEGER(), variant(scale))};
-    const auto [p, s] = getDecimalPrecisionScale(*inputType);
-    const auto [rp, rs] =
+    const auto [precision, inputScale] = getDecimalPrecisionScale(*inputType);
+    const auto [resultPrecision, resultScale] =
         DecimalCeilFloorCallToSpecialFormBase::getResultPrecisionScale(
-            p, s, scale);
+            precision, inputScale, scale);
     const std::string& name = mode == Mode::kCeil
         ? std::string(DecimalCeilCallToSpecialForm::kCeilDecimal)
         : std::string(DecimalFloorCallToSpecialForm::kFloorDecimal);
     return std::make_shared<const core::CallTypedExpr>(
-        DECIMAL(rp, rs), std::move(inputs), name);
+        DECIMAL(resultPrecision, resultScale), std::move(inputs), name);
   }
 
   void testCall(
@@ -353,6 +353,23 @@ TEST_F(DecimalCeilFloorTest, floorIdentityLongDecimal) {
       38,
       Mode::kFloor,
       makeFlatVector<int128_t>({bigVal, -bigVal, 0}, DECIMAL(38, 38)));
+}
+
+TEST_F(DecimalCeilFloorTest, nonConstantScaleError) {
+  // The scale argument must be a constant. Passing a non-constant (field
+  // reference) should fail during special form construction.
+  auto inputType = DECIMAL(10, 5);
+  std::vector<core::TypedExprPtr> inputs = {
+      std::make_shared<core::FieldAccessTypedExpr>(inputType, "c0"),
+      std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c1")};
+  // Result type is irrelevant — error fires before it's used.
+  auto callExpr = std::make_shared<const core::CallTypedExpr>(
+      DECIMAL(8, 2), std::move(inputs), "decimal_ceil");
+  auto input = makeFlatVector<int64_t>({12345}, inputType);
+  auto scaleCol = makeFlatVector<int32_t>({2});
+  VELOX_ASSERT_THROW(
+      evaluate(callExpr, makeRowVector({input, scaleCol})),
+      "The second argument of decimal_ceil must be a constant expression.");
 }
 
 } // namespace

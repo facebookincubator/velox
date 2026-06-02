@@ -28,6 +28,8 @@ class DecimalCeilFloorCallToSpecialFormBase
  public:
   TypePtr resolveType(const std::vector<TypePtr>& argTypes) override;
 
+  /// Returns the result precision and scale for ceil/floor (same rules as
+  /// DecimalRound).
   static std::pair<uint8_t, uint8_t> getResultPrecisionScale(
       uint8_t precision,
       uint8_t scale,

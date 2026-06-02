@@ -27,10 +27,11 @@ struct RoundHalfUpPolicy {
 
   explicit RoundHalfUpPolicy(const DecimalRoundOps::ScaleFactors& f)
       : factors_(f) {
-    const auto [p, s] = DecimalRoundCallToSpecialForm::getResultPrecisionScale(
-        f.inputPrecision, f.inputScale, f.scale);
-    VELOX_DCHECK_EQ(p, f.resultPrecision);
-    VELOX_DCHECK_EQ(s, f.resultScale);
+    const auto [expectedPrecision, expectedScale] =
+        DecimalRoundCallToSpecialForm::getResultPrecisionScale(
+            f.inputPrecision, f.inputScale, f.scale);
+    VELOX_DCHECK_EQ(expectedPrecision, f.resultPrecision);
+    VELOX_DCHECK_EQ(expectedScale, f.resultScale);
   }
 
   std::optional<TResult> applyOne(const TInput& input) const {

@@ -61,9 +61,9 @@ class DecimalRoundOps {
     int128_t overflowBound;
   };
 
-  static int32_t clampScale(int32_t s) {
+  static int32_t clampScale(int32_t scale) {
     constexpr int32_t kMax = LongDecimalType::kMaxPrecision;
-    return std::max(-kMax, std::min(s, kMax));
+    return std::max(-kMax, std::min(scale, kMax));
   }
 
   /// Computes the divide and multiply factors for a given scale adjustment.
@@ -73,27 +73,29 @@ class DecimalRoundOps {
       uint8_t inputScale,
       uint8_t resultPrecision,
       uint8_t resultScale) {
-    ScaleFactors f{};
-    f.scale = clampScale(scale);
-    f.inputPrecision = inputPrecision;
-    f.inputScale = inputScale;
-    f.resultPrecision = resultPrecision;
-    f.resultScale = resultScale;
-    f.overflowBound = DecimalUtil::kPowersOfTen[resultPrecision];
+    ScaleFactors factors{};
+    factors.scale = clampScale(scale);
+    factors.inputPrecision = inputPrecision;
+    factors.inputScale = inputScale;
+    factors.resultPrecision = resultPrecision;
+    factors.resultScale = resultScale;
+    factors.overflowBound = DecimalUtil::kPowersOfTen[resultPrecision];
 
-    if (f.scale < static_cast<int32_t>(inputScale)) {
-      const int32_t divDigits = static_cast<int32_t>(inputScale) - f.scale;
+    if (factors.scale < static_cast<int32_t>(inputScale)) {
+      const int32_t divDigits =
+          static_cast<int32_t>(inputScale) - factors.scale;
       VELOX_DCHECK_GT(divDigits, 0);
       const int32_t cappedDivDigits = std::min(
           divDigits, static_cast<int32_t>(LongDecimalType::kMaxPrecision));
-      f.divideFactor = DecimalUtil::kPowersOfTen[cappedDivDigits];
-      if (f.scale < 0) {
+      factors.divideFactor = DecimalUtil::kPowersOfTen[cappedDivDigits];
+      if (factors.scale < 0) {
         VELOX_DCHECK_LE(
-            -f.scale, static_cast<int32_t>(LongDecimalType::kMaxPrecision));
-        f.multiplyFactor = DecimalUtil::kPowersOfTen[-f.scale];
+            -factors.scale,
+            static_cast<int32_t>(LongDecimalType::kMaxPrecision));
+        factors.multiplyFactor = DecimalUtil::kPowersOfTen[-factors.scale];
       }
     }
-    return f;
+    return factors;
   }
 
   static int32_t extractConstantScaleArg(

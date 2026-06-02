@@ -28,11 +28,11 @@ struct CeilFloorPolicy {
 
   explicit CeilFloorPolicy(const DecimalRoundOps::ScaleFactors& f)
       : factors_(f) {
-    const auto [expectedP, expectedS] =
+    const auto [expectedPrecision, expectedScale] =
         DecimalCeilFloorCallToSpecialFormBase::getResultPrecisionScale(
             f.inputPrecision, f.inputScale, f.scale);
-    VELOX_DCHECK_EQ(expectedP, f.resultPrecision);
-    VELOX_DCHECK_EQ(expectedS, f.resultScale);
+    VELOX_DCHECK_EQ(expectedPrecision, f.resultPrecision);
+    VELOX_DCHECK_EQ(expectedScale, f.resultScale);
   }
 
   std::optional<TResult> applyOne(const TInput& input) const {
