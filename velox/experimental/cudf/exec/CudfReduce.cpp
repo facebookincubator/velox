@@ -253,6 +253,18 @@ struct ReduceMeanAggregator : ReduceAggregator {
   }
 };
 
+// Materializes reduced sum/count scalars into 1-row columns.
+cudf_velox::DecimalSumStateColumns makeSumCountColumns(
+    cudf::scalar const& sumScalar,
+    cudf::scalar const& countScalar,
+    rmm::cuda_stream_view stream) {
+  cudf_velox::DecimalSumStateColumns cols;
+  cols.sum = cudf::make_column_from_scalar(sumScalar, 1, stream, get_temp_mr());
+  cols.count =
+      cudf::make_column_from_scalar(countScalar, 1, stream, get_temp_mr());
+  return cols;
+}
+
 std::unique_ptr<cudf::column> partialDecimalSumCountToSerializedString(
     cudf::column_view inputCol,
     rmm::cuda_stream_view stream) {
@@ -269,17 +281,17 @@ std::unique_ptr<cudf::column> partialDecimalSumCountToSerializedString(
       cudf::data_type{cudf::type_id::INT64},
       stream,
       get_temp_mr());
-  // sumCol/countCol are consumed by the serialize/finalize call below and never
-  // leave the operator, so they come from the temporary memory resource.
-  auto sumCol =
-      cudf::make_column_from_scalar(*sumScalar, 1, stream, get_temp_mr());
-  auto countCol =
-      cudf::make_column_from_scalar(*countScalar, 1, stream, get_temp_mr());
+  auto cols = makeSumCountColumns(*sumScalar, *countScalar, stream);
   return serializeDecimalPartialOrIntermediateState(
-      std::move(sumCol), std::move(countCol), stream);
+      std::move(cols.sum), std::move(cols.count), stream);
 }
 
-std::unique_ptr<cudf::column> intermediateDecimalMergeSerializedString(
+// Decodes serialized decimal SUM state, sums the per-row partial sums and
+// counts, and returns them as 1-row columns. Shared by the intermediate and
+// final reduce steps before re-serializing or finalizing. The merged columns
+// are consumed by the caller and never leave the operator, so they come from
+// the temporary memory resource.
+cudf_velox::DecimalSumStateColumns mergeSerializedDecimalSumState(
     cudf::column_view inputCol,
     int32_t scale,
     rmm::cuda_stream_view stream) {
@@ -298,14 +310,16 @@ std::unique_ptr<cudf::column> intermediateDecimalMergeSerializedString(
       cudf::data_type{cudf::type_id::INT64},
       stream,
       get_temp_mr());
-  // sumCol/countCol are consumed by the serialize/finalize call below and never
-  // leave the operator, so they come from the temporary memory resource.
-  auto sumCol =
-      cudf::make_column_from_scalar(*sumScalar, 1, stream, get_temp_mr());
-  auto countCol =
-      cudf::make_column_from_scalar(*countScalar, 1, stream, get_temp_mr());
+  return makeSumCountColumns(*sumScalar, *countScalar, stream);
+}
+
+std::unique_ptr<cudf::column> intermediateDecimalMergeSerializedString(
+    cudf::column_view inputCol,
+    int32_t scale,
+    rmm::cuda_stream_view stream) {
+  auto merged = mergeSerializedDecimalSumState(inputCol, scale, stream);
   return serializeDecimalPartialOrIntermediateState(
-      std::move(sumCol), std::move(countCol), stream);
+      std::move(merged.sum), std::move(merged.count), stream);
 }
 
 std::unique_ptr<cudf::column> finalDecimalAvgFromSerializedString(
@@ -313,29 +327,9 @@ std::unique_ptr<cudf::column> finalDecimalAvgFromSerializedString(
     int32_t scale,
     TypePtr const& resultType,
     rmm::cuda_stream_view stream) {
-  auto const sumAgg = cudf::make_sum_aggregation<cudf::reduce_aggregation>();
-  auto sumAndCount =
-      cudf_velox::deserializeDecimalSumState(inputCol, scale, stream);
-  auto sumScalar = cudf::reduce(
-      sumAndCount.sum->view(),
-      *sumAgg,
-      sumAndCount.sum->view().type(),
-      stream,
-      get_temp_mr());
-  auto countScalar = cudf::reduce(
-      sumAndCount.count->view(),
-      *sumAgg,
-      cudf::data_type{cudf::type_id::INT64},
-      stream,
-      get_temp_mr());
-  // sumCol/countCol are consumed by the serialize/finalize call below and never
-  // leave the operator, so they come from the temporary memory resource.
-  auto sumCol =
-      cudf::make_column_from_scalar(*sumScalar, 1, stream, get_temp_mr());
-  auto countCol =
-      cudf::make_column_from_scalar(*countScalar, 1, stream, get_temp_mr());
+  auto merged = mergeSerializedDecimalSumState(inputCol, scale, stream);
   return finalizeDecimalAverage(
-      std::move(sumCol), std::move(countCol), resultType, stream);
+      std::move(merged.sum), std::move(merged.count), resultType, stream);
 }
 
 std::unique_ptr<cudf::column> singleDecimalAvgFromRawColumn(
@@ -355,14 +349,9 @@ std::unique_ptr<cudf::column> singleDecimalAvgFromRawColumn(
       cudf::data_type{cudf::type_id::INT64},
       stream,
       get_temp_mr());
-  // sumCol/countCol are consumed by the serialize/finalize call below and never
-  // leave the operator, so they come from the temporary memory resource.
-  auto sumCol =
-      cudf::make_column_from_scalar(*sumScalar, 1, stream, get_temp_mr());
-  auto countCol =
-      cudf::make_column_from_scalar(*countScalar, 1, stream, get_temp_mr());
+  auto cols = makeSumCountColumns(*sumScalar, *countScalar, stream);
   return finalizeDecimalAverage(
-      std::move(sumCol), std::move(countCol), resultType, stream);
+      std::move(cols.sum), std::move(cols.count), resultType, stream);
 }
 
 std::unique_ptr<cudf::column> singleOrRawDecimalSumWithCast(
