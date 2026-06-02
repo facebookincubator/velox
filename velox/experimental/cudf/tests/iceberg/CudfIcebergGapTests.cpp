@@ -15,8 +15,8 @@
  */
 
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
-#include "velox/experimental/cudf/connectors/hive/iceberg/tests/CudfDeletionVectorTestUtils.h"
-#include "velox/experimental/cudf/connectors/hive/iceberg/tests/CudfIcebergTestBase.h"
+#include "velox/experimental/cudf/tests/iceberg/CudfDeletionVectorTestUtils.h"
+#include "velox/experimental/cudf/tests/iceberg/CudfIcebergTestBase.h"
 
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"

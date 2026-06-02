@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/connectors/hive/iceberg/tests/CudfDeletionVectorTestUtils.h"
+#include "velox/experimental/cudf/tests/iceberg/CudfDeletionVectorTestUtils.h"
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/tests/GTestUtils.h"

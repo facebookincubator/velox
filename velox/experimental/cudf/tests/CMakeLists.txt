@@ -15,6 +15,14 @@
 # Common libraries shared by most cudf tests.
 set(CUDF_TEST_DEFAULT_LIBS velox_cudf_exec velox_exec velox_exec_test_lib velox_test_util)
 
+# Where every cudf test executable should be placed. This keeps all
+# velox_cudf_* test binaries co-located even when their CMakeLists.txt
+# lives under a subdirectory (e.g. iceberg/) added via add_subdirectory().
+# The cudf-tests CI artifact glob and ctest invocation in
+# .github/workflows/linux-build-base.yml only look at this single
+# directory.
+set(CUDF_TESTS_OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR})
+
 # Adds a cudf test target with standard boilerplate.
 #
 # Usage:
@@ -38,6 +46,8 @@ function(velox_add_cudf_test)
   endif()
 
   add_executable(${ARG_NAME} ${ARG_SOURCES})
+  set_target_properties(${ARG_NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY
+                                               ${CUDF_TESTS_OUTPUT_DIR})
   add_test(NAME ${ARG_NAME} COMMAND ${ARG_NAME} WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
   set_tests_properties(${ARG_NAME} PROPERTIES LABELS cuda_driver TIMEOUT ${ARG_TIMEOUT})
   target_link_libraries(${ARG_NAME} ${ARG_LIBS} gtest gtest_main)
@@ -228,6 +238,7 @@ velox_add_cudf_test(
   LIBS ${CUDF_TEST_DEFAULT_LIBS} fmt::fmt
 )
 
+add_subdirectory(iceberg)
 add_subdirectory(utils)
 
 if(${VELOX_ENABLE_SPARK_FUNCTIONS})

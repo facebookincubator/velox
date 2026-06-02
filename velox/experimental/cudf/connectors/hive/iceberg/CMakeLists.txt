@@ -34,7 +34,3 @@ target_link_libraries(
   PRIVATE velox_hive_iceberg_splitreader velox_hive_connector velox_functions_iceberg cuco::cuco
   PUBLIC cudf::cudf velox_cudf_hive_connector
 )
-
-if(${VELOX_BUILD_TESTING})
-  add_subdirectory(tests)
-endif()
