@@ -30,7 +30,9 @@
 
 #include "velox/external/regex_compat/tests/BackendTestBase.h"
 #include "velox/external/regex_compat/tests/JavaMatcherAdapter.h"
+#if VELOX_REGEX_COMPAT_HAS_JAVA
 #include "velox/external/regex_compat/JvmFixture.h"
+#endif
 
 #include <gtest/gtest.h>
 
@@ -167,6 +169,7 @@ static std::uint32_t parseHexCodePoint(std::string_view token) {
   return cp;
 }
 
+#if VELOX_REGEX_COMPAT_HAS_JAVA
 static jstring toJString(JNIEnv* env, std::string_view sv) {
   std::vector<jchar> u16;
   u16.reserve(sv.size());
@@ -270,6 +273,7 @@ static std::vector<int> directJavaGraphemeBreakOffsets(std::string_view input) {
   env->DeleteLocalRef(patternCls);
   return offsets;
 }
+#endif // VELOX_REGEX_COMPAT_HAS_JAVA
 
 struct GraphemeCase {
   std::string input;
@@ -468,6 +472,7 @@ TYPED_TEST(OpenJdkCorpusDiffTest, runCorpus) {
           if (re.error().find("translator: ") != std::string::npos) {
             ++st.translatorRejected;
           }
+#if VELOX_REGEX_COMPAT_HAS_JAVA
           if constexpr (std::is_same_v<TypeParam, JavaRegex>) {
             ++totalJavaFailures;
             std::fprintf(
@@ -477,6 +482,7 @@ TYPED_TEST(OpenJdkCorpusDiffTest, runCorpus) {
                 c.pattern.c_str(),
                 re.error().c_str());
           }
+#endif
         }
         continue;
       }
@@ -503,6 +509,7 @@ TYPED_TEST(OpenJdkCorpusDiffTest, runCorpus) {
         ++st.passed;
       } else {
         ++st.failed;
+#if VELOX_REGEX_COMPAT_HAS_JAVA
         if constexpr (std::is_same_v<TypeParam, JavaRegex>) {
           ++totalJavaFailures;
           std::fprintf(
@@ -514,14 +521,17 @@ TYPED_TEST(OpenJdkCorpusDiffTest, runCorpus) {
               c.expectedResult.c_str(),
               actual.c_str());
         }
+#endif
       }
     }
   }
 
+#if VELOX_REGEX_COMPAT_HAS_JAVA
   if constexpr (std::is_same_v<TypeParam, JavaRegex>) {
     EXPECT_EQ(0, totalJavaFailures)
         << "Java backend should match every case across all OpenJDK corpus files";
   }
+#endif
   EXPECT_GT(totalCases, 0);
 }
 
@@ -580,6 +590,7 @@ TYPED_TEST(GraphemeCorpusTest, runGraphemeBreakCorpus) {
     TypeParam re("\\b{g}");
     if (!re.ok()) {
       ++st.compileErrors;
+#if VELOX_REGEX_COMPAT_HAS_JAVA
       if constexpr (std::is_same_v<TypeParam, JavaRegex>) {
         ++javaFailures;
         std::fprintf(
@@ -587,13 +598,17 @@ TYPED_TEST(GraphemeCorpusTest, runGraphemeBreakCorpus) {
             "[OpenJDK Grapheme] Java compile-err: %s\n",
             re.error().c_str());
       }
+#endif
       continue;
     }
 
     std::vector<int> actual;
+#if VELOX_REGEX_COMPAT_HAS_JAVA
     if constexpr (std::is_same_v<TypeParam, JavaRegex>) {
       actual = directJavaGraphemeBreakOffsets(c.input);
-    } else {
+    } else
+#endif
+    {
       JavaMatcherAdapter<TypeParam> m(&re, c.input);
       while (m.find()) {
         actual.push_back(m.start());
@@ -603,6 +618,7 @@ TYPED_TEST(GraphemeCorpusTest, runGraphemeBreakCorpus) {
       ++st.passed;
     } else {
       ++st.failed;
+#if VELOX_REGEX_COMPAT_HAS_JAVA
       if constexpr (std::is_same_v<TypeParam, JavaRegex>) {
         ++javaFailures;
         std::fprintf(
@@ -611,13 +627,16 @@ TYPED_TEST(GraphemeCorpusTest, runGraphemeBreakCorpus) {
             c.expectedBreakOffsets.size(),
             actual.size());
       }
+#endif
     }
   }
 
+#if VELOX_REGEX_COMPAT_HAS_JAVA
   if constexpr (std::is_same_v<TypeParam, JavaRegex>) {
     EXPECT_EQ(0, javaFailures)
         << "Java backend should match every GraphemeTestCases.txt case";
   }
+#endif
 }
 
 } // namespace

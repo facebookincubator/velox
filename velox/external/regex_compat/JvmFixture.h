@@ -15,6 +15,10 @@
  */
 #pragma once
 
+// Guarded the same way as JavaRegex.h: clang-tidy scans diff-changed headers
+// in isolation and cannot find <jni.h> on hosts without a JDK.
+#if VELOX_REGEX_COMPAT_HAS_JAVA
+
 #include <jni.h>
 
 namespace facebook::velox::regex_compat {
@@ -46,3 +50,5 @@ class JvmFixture {
 };
 
 } // namespace facebook::velox::regex_compat
+
+#endif // VELOX_REGEX_COMPAT_HAS_JAVA

@@ -15,6 +15,12 @@
  */
 #pragma once
 
+// This header is only meaningful when the Java backend is enabled.  Clang-tidy
+// scans changed headers in isolation and cannot find <jni.h> on hosts without
+// a JDK, so guard the entire content rather than relying on every consumer to
+// gate the include.
+#if VELOX_REGEX_COMPAT_HAS_JAVA
+
 #include <map>
 #include <string>
 #include <string_view>
@@ -72,3 +78,5 @@ class JavaRegex {
 };
 
 } // namespace facebook::velox::regex_compat
+
+#endif // VELOX_REGEX_COMPAT_HAS_JAVA

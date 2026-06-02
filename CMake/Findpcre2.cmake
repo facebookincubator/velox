@@ -34,12 +34,15 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(PCRE2_8 QUIET libpcre2-8)
 if(PCRE2_8_FOUND)
   add_library(pcre2-8::pcre2-8 INTERFACE IMPORTED)
-  set_property(TARGET pcre2-8::pcre2-8 PROPERTY INTERFACE_INCLUDE_DIRECTORIES
-               "${PCRE2_8_INCLUDE_DIRS}")
-  set_property(TARGET pcre2-8::pcre2-8 PROPERTY INTERFACE_LINK_LIBRARIES
-               "${PCRE2_8_LDFLAGS}")
-  set_property(TARGET pcre2-8::pcre2-8 PROPERTY INTERFACE_COMPILE_DEFINITIONS
-               "PCRE2_CODE_UNIT_WIDTH=8")
+  set_property(
+    TARGET pcre2-8::pcre2-8
+    PROPERTY INTERFACE_INCLUDE_DIRECTORIES "${PCRE2_8_INCLUDE_DIRS}"
+  )
+  set_property(TARGET pcre2-8::pcre2-8 PROPERTY INTERFACE_LINK_LIBRARIES "${PCRE2_8_LDFLAGS}")
+  set_property(
+    TARGET pcre2-8::pcre2-8
+    PROPERTY INTERFACE_COMPILE_DEFINITIONS "PCRE2_CODE_UNIT_WIDTH=8"
+  )
   set(pcre2_FOUND TRUE)
   message(STATUS "Found PCRE2 via pkg-config.")
   return()

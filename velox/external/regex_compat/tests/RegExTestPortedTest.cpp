@@ -437,6 +437,15 @@ bool rejects(std::string_view pattern, Options opt = {}) {
   return !re.ok();
 }
 
+#if VELOX_REGEX_COMPAT_HAS_JAVA
+#define PORTED_REGEX_TEST_JAVA_GUARD(TestName)                                 \
+  if constexpr (std::is_same_v<TypeParam, JavaRegex>) {                        \
+    EXPECT_TRUE(ok) << "RegExTest::" #TestName " Java backend regression";     \
+  }
+#else
+#define PORTED_REGEX_TEST_JAVA_GUARD(TestName) (void)0
+#endif
+
 #define PORTED_REGEX_TEST(TestName, Body)                                      \
   TYPED_TEST(RegExTestPortedTest, TestName) {                                  \
     bool ok = true;                                                            \
@@ -447,9 +456,7 @@ bool rejects(std::string_view pattern, Options opt = {}) {
     (void)sizeof(R);                                                           \
     Body                                                                       \
     recordCase<TypeParam>(ok, #TestName);                                      \
-    if constexpr (std::is_same_v<TypeParam, JavaRegex>) {                      \
-      EXPECT_TRUE(ok) << "RegExTest::" #TestName " Java backend regression";  \
-    }                                                                          \
+    PORTED_REGEX_TEST_JAVA_GUARD(TestName);                                    \
   }
 
 #define TODO_REGEX_TEST(TestName, Reason)                                      \
