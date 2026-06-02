@@ -96,7 +96,9 @@ void run_case(char const* name, cudf::binary_operator op, bool expect_sanitizer_
       cudf::make_fixed_point_scalar<decimal64>(500, scale_type{-2}, stream(), mr());
 
   cudf::data_type out_type;
-  if (op == cudf::binary_operator::EQUAL) {
+  if (op == cudf::binary_operator::EQUAL ||
+      op == cudf::binary_operator::NULL_EQUALS ||
+      op == cudf::binary_operator::NULL_NOT_EQUALS) {
     out_type = cudf::data_type{cudf::type_id::BOOL8};
   } else {
     out_type = cudf::binary_operation_fixed_point_output_type(
@@ -104,7 +106,7 @@ void run_case(char const* name, cudf::binary_operator op, bool expect_sanitizer_
   }
 
   auto result =
-      cudf::binary_operation(col->view(), *scalar, op, out_type, stream(), mr);
+      cudf::binary_operation(col->view(), *scalar, op, out_type, stream(), mr());
   stream().synchronize();
   CUDA_CHECK(cudaGetLastError());
 
