@@ -541,3 +541,9 @@ Metadata IO stats (footer, stripe groups, index) use a ``metadata.`` prefix
      - bytes
      - The total bytes read from the in-memory (RAM) cache, including min and
        max per read operation.
+   * - readGapBytes
+     - bytes
+     - The total gap bytes between consecutive read regions before I/O
+       coalescing. Measures data locality on disk — smaller gaps indicate
+       co-accessed columns are physically adjacent in the file. Includes
+       min and max per gap.

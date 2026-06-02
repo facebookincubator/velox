@@ -74,6 +74,7 @@ VectorPtr newConstantFromStringImpl(
                       VELOX_USER_FAIL("{}", status.message());
                     });
     if constexpr (kind == TypeKind::TIMESTAMP) {
+      VELOX_DCHECK(type->equivalent(*TIMESTAMP()));
       if (isLocalTimestamp) {
         copy.toGMT(Timestamp::defaultTimezone());
       }
@@ -303,6 +304,11 @@ void FileSplitReader::createReader(
   if (auto* cacheTTLController = cache::CacheTTLController::getInstance()) {
     cacheTTLController->addOpenFileInfo(fileHandleCachePtr->uuid.id());
   }
+  if (auto* cache = connectorQueryCtx_->cache()) {
+    baseReaderOpts_.setFileHandle(&(*fileHandleCachePtr));
+    baseReaderOpts_.setCache(cache);
+  }
+
   auto baseFileInput = BufferedInputBuilder::getInstance()->create(
       *fileHandleCachePtr,
       baseReaderOpts_,

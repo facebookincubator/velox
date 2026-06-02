@@ -65,7 +65,7 @@ class MemoryManager {
   struct Options {
     Options() {}
     /// Specifies the default memory allocation alignment.
-    uint16_t alignment{MemoryAllocator::kMaxAlignment};
+    uint16_t alignment{MemoryAllocator::kDefaultAlignment};
 
     /// If true, enable memory usage tracking in the default memory pool.
     bool trackDefaultUsage{

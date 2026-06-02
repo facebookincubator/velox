@@ -16,11 +16,19 @@
 
 #pragma once
 
+#include <cstdint>
 #include <string>
 
 #include "velox/exec/AggregateUtil.h"
 
 namespace facebook::velox::functions::aggregate::sparksql {
+
+// Fixed bitmap size matching Spark's BitmapExpressionUtils.NUM_BYTES (4096
+// bytes = 32768 bits). Used by both bitmap_construct_agg and bitmap_or_agg.
+// See org.apache.spark.sql.catalyst.expressions.BitmapConstructAgg and
+// org.apache.spark.sql.catalyst.expressions.BitmapOrAgg.
+constexpr int32_t kBitmapNumBytes = 4096;
+constexpr int64_t kBitmapNumBits = static_cast<int64_t>(kBitmapNumBytes) * 8;
 
 exec::AggregateRegistrationResult registerBitmapConstructAggAggregate(
     const std::string& name,

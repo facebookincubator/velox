@@ -225,13 +225,46 @@ Spatial Operations
 .. function:: geometry_union_agg(geometry: Geometry) -> union: Geometry
 
     Returns a geometry that represents the point set union of the aggregated
-    input geometries. Null geometries are ignored. Empty input returns null.
+    input geometries. The result type depends on the input geometries:
 
-.. function:: convex_hull_agg(geometry: Geometry) -> union: Geometry
+    * Geometries of the same type are merged into the corresponding
+      ``MULTI*`` type (e.g., multiple ``POINT`` inputs yield a
+      ``MULTIPOINT``).
+    * Adjacent or overlapping polygons are dissolved into a single
+      ``POLYGON``.
+    * Geometries of different types are combined into a
+      ``GEOMETRYCOLLECTION``.
+    * A geometry that is fully contained within another is absorbed and
+      does not appear separately in the result.
 
-    Returns a geometry that represents the convex hull of the points in the
-    aggregated input geometries.  Null geometries are ignored. Empty input
-    returns null.
+    NULL inputs are ignored. Empty geometry inputs (e.g., ``POINT EMPTY``)
+    contribute nothing to the union; if all inputs are empty geometries the
+    result is ``GEOMETRYCOLLECTION EMPTY``. Returns NULL when there are no
+    rows or all inputs are NULL.
+
+    The union semantics are defined by the underlying GEOS
+    `Geometry::Union() <https://libgeos.org/doxygen/classgeos_1_1geom_1_1Geometry.html#a90ca3e6e3a30ac3e1ed7fb6dd1e52810>`_
+    operation.
+
+.. function:: convex_hull_agg(geometry: Geometry) -> hull: Geometry
+
+    Returns a geometry that represents the convex hull of the combined point
+    set of all aggregated input geometries. The result type depends on the
+    geometry of the inputs:
+
+    * A single point, or multiple identical points, yields a ``POINT``.
+    * Collinear points yield a ``LINESTRING``.
+    * All other non-empty inputs yield a ``POLYGON``.
+    * If all inputs are empty geometries the result is
+      ``GEOMETRYCOLLECTION EMPTY``.
+
+    NULL inputs are ignored. Empty geometry inputs (e.g., ``POINT EMPTY``)
+    contribute no points to the hull computation. Returns NULL when there
+    are no rows or all inputs are NULL.
+
+    The convex hull semantics are defined by the underlying GEOS
+    `Geometry::convexHull() <https://libgeos.org/doxygen/classgeos_1_1geom_1_1Geometry.html#a79b3790fbb2a2df4bde530979e740ad2>`_
+    operation.
 
 Accessors
 ---------
@@ -268,6 +301,7 @@ Accessors
    return an error if the input geometry is not a LineString or MultiLineString.
 
 .. function:: ST_Length(sphericalgeography: SphericalGeography) -> length: double
+   :noindex:
 
     Returns the length of a ``LineString`` or ``MultiLineString`` on a spherical model of the
     Earth. This is equivalent to the sum of great-circle distances between adjacent points
@@ -323,6 +357,7 @@ Accessors
     return 0.
 
 .. function:: ST_Area(sphericalgeography: SphericalGeography) -> area: double
+   :noindex:
 
     Returns the area of a polygon or multi-polygon in square meters using a spherical model for Earth.
 
@@ -332,6 +367,7 @@ Accessors
     Empty geometry inputs result in null output.
 
 .. function:: ST_Centroid(SphericalGeography) -> Point
+   :noindex:
 
     Returns the point value that is the mathematical centroid of a spherical geometry.
     Empty geometry inputs result in null output.
@@ -349,6 +385,7 @@ Accessors
     between two geometries in projected units. Empty geometries result in null output.
 
 .. function:: ST_Distance(sphericalgeography1: SphericalGeography, sphericalgeography2: SphericalGeography) -> distance: double
+   :noindex:
 
     Returns the great-circle distance in meters between two SphericalGeography points.
 
@@ -478,6 +515,7 @@ Accessors
     must be less than or equal to the coordinate dimension.
 
 .. function:: ST_ExteriorRing(geometry: Geometry) -> output: Geometry
+   :noindex:
 
     Returns a line string representing the exterior ring of the input polygon.
 
@@ -553,6 +591,7 @@ for more details.
     described above.  Invalid parameters will return a User Error.
 
 .. function:: bing_tile(quadKey: varchar) -> tile: BingTile
+   :noindex:
 
     Creates a Bing tile object from a quadkey. An invalid quadkey will return a User Error.
 
@@ -562,6 +601,7 @@ for more details.
     by the latitude and longitude arguments at a given zoom level.
 
 .. function:: bing_tiles_around(latitude, longitude, zoom_level, radius_in_km) -> array(BingTile)
+   :noindex:
 
     Returns a minimum set of Bing tiles at specified zoom level that cover a circle of specified
     radius in km around a specified (latitude, longitude) point.
@@ -580,6 +620,7 @@ for more details.
     exception if tile is at zoom level 0.
 
 .. function:: bing_tile_parent(tile, parentZoom) -> parent: BingTile
+   :noindex:
 
     Returns the parent of the Bing tile at the specified lower zoom level.
     Throws an exception if parentZoom is less than 0, or parentZoom is greater
@@ -591,6 +632,7 @@ for more details.
     exception if tile is at max zoom level.
 
 .. function:: bing_tile_children(tile, childZoom) -> children: array(BingTile)
+   :noindex:
 
     Returns the children of the Bing tile at the specified higher zoom level.
     Throws an exception if childZoom is greater than the max zoom level, or
@@ -692,6 +734,7 @@ that use the token format.
     ``[0, 30]`` range.
 
 .. function:: s2_cells(geometry: Geometry, min_level: integer, max_level: integer, max_cells: integer) -> cell_ids: array(bigint)
+   :noindex:
 
     Returns a compact set of S2 cell IDs at mixed levels that cover the given
     geometry, similar to ``geometry_to_dissolved_bing_tiles``. The coverer uses
