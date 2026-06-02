@@ -42,6 +42,13 @@ class CustomMemoryHierarchyTest : public testing::Test {
     vectorPool_ = memoryManager()->addLeafPool("test-vec");
   }
 
+  void TearDown() override {
+    for (const auto& task : tasks_) {
+      task->requestCancel();
+    }
+    tasks_.clear();
+  }
+
   std::shared_ptr<CustomMemoryResource> makeResource(
       const std::string& tag,
       int64_t capacity = 1L << 30) {
@@ -96,13 +103,16 @@ class CustomMemoryHierarchyTest : public testing::Test {
   std::shared_ptr<exec::Task> makeTask(
       const std::string& taskId,
       const std::shared_ptr<core::QueryCtx>& queryCtx) {
-    return exec::Task::create(
+    auto task = exec::Task::create(
         taskId,
         makePlan(),
         /*destination=*/0,
         queryCtx,
         exec::Task::ExecutionMode::kSerial,
         exec::Consumer{});
+    // Track so TearDown can cancel it and release the Task<->Driver cycle.
+    tasks_.push_back(task);
+    return task;
   }
 
   // Returns the first child of 'pool' whose name matches 'name', or nullptr.
@@ -119,6 +129,10 @@ class CustomMemoryHierarchyTest : public testing::Test {
   }
 
   std::shared_ptr<MemoryPool> vectorPool_;
+
+  // Tasks created via makeTask, cancelled in TearDown to break the
+  // Task<->Driver cycle and release their pools.
+  std::vector<std::shared_ptr<exec::Task>> tasks_;
 };
 
 // Task construction creates 'task.<id>.<tag>' aggregate under each

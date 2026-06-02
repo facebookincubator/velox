@@ -504,9 +504,6 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
       connectorSessionProperties_;
   std::shared_ptr<memory::MemoryPool> pool_;
 
-  std::unordered_map<std::string, std::shared_ptr<memory::MemoryPool>>
-      customPools_;
-
   QueryConfig queryConfig_;
   std::atomic<uint64_t> numSpilledBytes_{0};
   std::atomic<uint64_t> numTracedBytes_{0};
@@ -535,6 +532,10 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   // Per-query registry overrides keyed by subsystem name.
   folly::Synchronized<folly::F14FastMap<std::string, RegistryEntry>>
       registries_;
+
+  // Custom root memory pools keyed by tag.
+  std::unordered_map<std::string, std::shared_ptr<memory::MemoryPool>>
+      customPools_;
 };
 
 // Represents the state of one thread of query execution.
