@@ -38,6 +38,8 @@ RowsStreamingWindowBuild::RowsStreamingWindowBuild(
     tsan_atomic<bool>* nonReclaimableSection)
     : WindowBuild(windowNode, pool, spillConfig, nonReclaimableSection),
       hasRangeFrame_(hasRangeFrame(windowNode)) {
+  initializeRowContainer(pool);
+  initializeDecodedInputVectors();
   velox::common::testutil::TestValue::adjust(
       "facebook::velox::exec::RowsStreamingWindowBuild::RowsStreamingWindowBuild",
       this);

@@ -35,10 +35,7 @@
 
 #include "velox/experimental/wave/common/GpuArena.h"
 
-DEFINE_bool(
-    debug_single_ops,
-    false,
-    "Launch kernel once per block for debugging, waiting after each launch");
+// debug_single_ops is now WaveConfig::debugSingleOps
 DEFINE_string(
     debug_kernel_dir,
     "",
@@ -50,6 +47,55 @@ DEFINE_bool(
 namespace torch::wave {
 
 namespace {
+
+facebook::velox::wave::CompiledKernel& patchOpcodesKernel() {
+  static std::unique_ptr<facebook::velox::wave::CompiledKernel> kernel;
+  static std::once_flag flag; // @lint-ignore facebook-hte-std::once_flag
+  std::call_once(flag, [] { // @lint-ignore facebook-hte-std::call_once
+    kernel =
+        facebook::velox::wave::CompiledKernel::getKernel("patchOpcodes", [] {
+          facebook::velox::wave::KernelSpec spec;
+          spec.code = R"(
+struct BlockInfo {
+  int op;
+  int blockInOp;
+  int numBlocksInOp;
+  void* params;
+  void* debugInfo;
+  long long start;
+  long long barrierClocks;
+};
+
+extern "C" __global__ void patchOpcodes(
+    BlockInfo* blocks,
+    int startBlock,
+    int count,
+    int opcode) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < count) {
+    blocks[startBlock + idx].op = opcode;
+  }
+}
+)";
+          spec.entryPoints = {"patchOpcodes"};
+          return spec;
+        });
+  });
+  return *kernel;
+}
+
+void setOpCodes(
+    BlockInfo* deviceBlocks,
+    int32_t startBlock,
+    int32_t count,
+    int32_t opcode,
+    facebook::velox::wave::Stream* stream) {
+  auto& kernel = patchOpcodesKernel();
+  int32_t numThreads = 256;
+  int32_t numBlocks = (count + numThreads - 1) / numThreads;
+  void* args[] = {&deviceBlocks, &startBlock, &count, &opcode};
+  kernel.launch(0, numBlocks, numThreads, 0, stream, args);
+}
 
 void fillShapeOnlyTensorParam(const at::Tensor& tensor, void* dest) {
   TORCH_CHECK(
@@ -178,6 +224,77 @@ int64_t paramSymInt(
   return frame.getSymInt(it->second);
 }
 
+namespace {
+
+NodeCP actualNode(NodeCP formalNode, const NodeMap& nodeMap) {
+  auto it = nodeMap.find(formalNode);
+  return it != nodeMap.end() ? it->second : formalNode;
+}
+
+} // namespace
+
+int64_t paramIntByName(
+    NodeCP node,
+    std::string_view name,
+    nativert::ExecutionFrame& frame,
+    const FormalToActual& map,
+    const NodeMap& nodeMap) {
+  auto* input = node->tryGetInput(name);
+  if (input) {
+    return paramSymInt(input->value, frame, map);
+  }
+  auto* actual = actualNode(node, nodeMap);
+  const auto* attr = actual->tryGetAttribute(name);
+  TORCH_CHECK(
+      attr, actual->target(), ": missing input or attribute '", name, "'");
+  return std::get<int64_t>(attr->value);
+}
+
+std::vector<int64_t> paramIntListByName(
+    NodeCP node,
+    std::string_view name,
+    nativert::ExecutionFrame& frame,
+    const FormalToActual& map,
+    const NodeMap& nodeMap) {
+  auto* input = node->tryGetInput(name);
+  if (input) {
+    auto it = map.find(input->value->id());
+    TORCH_CHECK(it != map.end(), node->target(), ": '", name, "' not in map");
+    auto& ivalue = frame.getIValue(it->second);
+    if (!ivalue.isNone()) {
+      return ivalue.toIntVector();
+    }
+    auto& idToValue = waveGraph()->idToValue();
+    auto valueIt = idToValue.find(it->second);
+    TORCH_CHECK(
+        valueIt != idToValue.end(),
+        node->target(),
+        ": '",
+        name,
+        "' value id not in idToValue");
+    auto* producer = valueIt->second->producer();
+    TORCH_CHECK(
+        producer && producer->target() == "prim.ListPack",
+        node->target(),
+        ": expected prim.ListPack producer for '",
+        name,
+        "'");
+    std::vector<int64_t> result;
+    for (const auto& elem : producer->inputs()) {
+      auto elemIt = map.find(elem.value->id());
+      TORCH_CHECK(
+          elemIt != map.end(), node->target(), ": ListPack element not in map");
+      result.push_back(frame.getIValue(elemIt->second).toInt());
+    }
+    return result;
+  }
+  auto* actual = actualNode(node, nodeMap);
+  const auto* attr = actual->tryGetAttribute(name);
+  TORCH_CHECK(
+      attr, actual->target(), ": missing input or attribute '", name, "'");
+  return std::get<std::vector<int64_t>>(attr->value);
+}
+
 std::vector<std::vector<Dim>> elementwiseInputShape(
     NodeCP node,
     nativert::ExecutionFrame& frame,
@@ -229,17 +346,19 @@ constexpr int32_t kDefaultNumSMs = 100;
 constexpr int32_t kDefaultBlocksPerSM = 4;
 
 int32_t makeGrid(
-    const std::vector<LaunchData>& launches,
+    std::vector<LaunchData>& launches,
     StepVectors& sv,
     int32_t maxBlocksPerSM) {
   const int32_t blockSize = WaveConfig::get().blockSize;
 
-  // Compute cost per launch: numElements * unitCost.
+  // Compute cost per launch: numElements * unitCost * costAdjustFactor.
   sv.costs.resize(launches.size());
   float totalCost = 0;
   for (size_t i = 0; i < launches.size(); ++i) {
+    float adjust =
+        launches[i].costAdjustFactor > 0 ? launches[i].costAdjustFactor : 1.0f;
     sv.costs[i] = static_cast<float>(launches[i].numElements) *
-        launches[i].launch->op->unitCost();
+        launches[i].launch->op->unitCost() * adjust;
     totalCost += sv.costs[i];
   }
 
@@ -266,8 +385,7 @@ int32_t makeGrid(
   int32_t blocksPerSM =
       maxBlocksPerSM > 0 ? maxBlocksPerSM : kDefaultBlocksPerSM;
   int32_t maxBlocks = numSMs * blocksPerSM;
-  int32_t targetBlocks =
-      sv.isCgGrid ? static_cast<int32_t>(maxBlocks * 0.95f) : maxBlocks;
+  int32_t targetBlocks = maxBlocks;
 
   // Assign blocks pro rata by cost, at least 1 per launch, capped by
   // maxBlocks.
@@ -305,24 +423,90 @@ int32_t makeGrid(
   // For cooperative grids, cap total blocks at what the GPU can run
   // concurrently.
   if (sv.isCgGrid && totalAssigned > targetBlocks) {
-    float scale =
-        static_cast<float>(targetBlocks) / static_cast<float>(totalAssigned);
-    totalAssigned = 0;
-    for (size_t i = 0; i < launches.size(); ++i) {
-      auto scaled = std::max(
-          1, static_cast<int32_t>(sv.numBlocksPerLaunch[i] * scale + 0.5f));
-      sv.numBlocksPerLaunch[i] = scaled;
-      totalAssigned += scaled;
+    // Trim excess blocks from launches with the most blocks first,
+    // preserving the proportional allocation for small launches.
+    while (totalAssigned > targetBlocks) {
+      int32_t before = totalAssigned;
+      // Find the current max block count.
+      int32_t maxVal = 1;
+      for (size_t i = 0; i < launches.size(); ++i) {
+        maxVal = std::max(maxVal, sv.numBlocksPerLaunch[i]);
+      }
+      if (maxVal <= 1) {
+        break;
+      }
+      // Remove one block from all launches at the max level.
+      for (size_t i = 0; i < launches.size() && totalAssigned > targetBlocks;
+           ++i) {
+        if (sv.numBlocksPerLaunch[i] == maxVal) {
+          --sv.numBlocksPerLaunch[i];
+          --totalAssigned;
+        }
+      }
+      if (totalAssigned == before) {
+        break;
+      }
     }
-    TORCH_CHECK(
-        totalAssigned <= maxBlocks,
-        "Cooperative grid requires ",
-        totalAssigned,
-        " blocks but GPU supports at most ",
-        maxBlocks,
-        " (",
-        launches.size(),
-        " launches)");
+  }
+
+  // Balance projected latency: move blocks from the largest-blocked op to the
+  // highest-latency op when the highest-latency op has fewer blocks.
+  if (launches.size() > 1) {
+    for (int32_t pass = 0; pass < 20; ++pass) {
+      int32_t highLatIdx = -1;
+      float highLat = 0;
+      int32_t donorIdx = -1;
+      float donorLat = 0;
+      int32_t donorBlocks = 0;
+      for (size_t i = 0; i < launches.size(); ++i) {
+        if (sv.numBlocksPerLaunch[i] <= 0) {
+          continue;
+        }
+        float lat = sv.costs[i] / static_cast<float>(sv.numBlocksPerLaunch[i]);
+        if (lat > highLat) {
+          highLat = lat;
+          highLatIdx = static_cast<int32_t>(i);
+        }
+      }
+      if (highLatIdx < 0) {
+        break;
+      }
+      for (size_t i = 0; i < launches.size(); ++i) {
+        if (static_cast<int32_t>(i) == highLatIdx ||
+            sv.numBlocksPerLaunch[i] <= 1) {
+          continue;
+        }
+        float lat = sv.costs[i] / static_cast<float>(sv.numBlocksPerLaunch[i]);
+        if (sv.numBlocksPerLaunch[i] > donorBlocks ||
+            (sv.numBlocksPerLaunch[i] == donorBlocks && lat < donorLat)) {
+          donorIdx = static_cast<int32_t>(i);
+          donorLat = lat;
+          donorBlocks = sv.numBlocksPerLaunch[i];
+        }
+      }
+      if (donorIdx < 0 || donorLat >= highLat) {
+        break;
+      }
+      // Check if moving a block actually helps: the donor's new latency
+      // must stay below the receiver's new latency.
+      float newHighLat = sv.costs[highLatIdx] /
+          static_cast<float>(sv.numBlocksPerLaunch[highLatIdx] + 1);
+      float newDonorLat = sv.costs[donorIdx] /
+          static_cast<float>(sv.numBlocksPerLaunch[donorIdx] - 1);
+      if (newDonorLat >= highLat || newHighLat >= highLat * 0.95f) {
+        break;
+      }
+      if (sv.numBlocksPerLaunch[highLatIdx] >= sv.maxBlocks[highLatIdx]) {
+        break;
+      }
+      ++sv.numBlocksPerLaunch[highLatIdx];
+      --sv.numBlocksPerLaunch[donorIdx];
+    }
+  }
+
+  // Record expected fraction for cost adjustment feedback.
+  for (size_t i = 0; i < launches.size(); ++i) {
+    launches[i].expectedFraction = totalCost > 0 ? sv.costs[i] / totalCost : 0;
   }
 
   // Fill blocks and launchIndices.
@@ -511,7 +695,7 @@ void walkSubgraphPairs(
 void makeNodeMap(
     const Subgraph& formalSg,
     const Subgraph& actualSg,
-    std::unordered_map<NodeCP, NodeCP>& nodeMap) {
+    NodeMap& nodeMap) {
   walkSubgraphPairs(formalSg, actualSg, [&](NodeCP formal, NodeCP actual) {
     nodeMap.emplace(formal, actual);
   });
@@ -566,6 +750,30 @@ OpInvocation::OpInvocation(
   makeNodeMap(formalSg, sg, nodeMap_);
 }
 
+std::string printNodeMap(const NodeMap& nodeMap) {
+  std::stringstream ss;
+  for (auto& [formal, actual] : nodeMap) {
+    ss << "  " << static_cast<const void*>(formal) << " "
+       << standaloneToString(formal) << "\n    -> "
+       << static_cast<const void*>(actual) << " " << standaloneToString(actual)
+       << "\n";
+  }
+  return ss.str();
+}
+
+std::string OpInvocation::toString() const {
+  std::stringstream ss;
+  ss << "OpInvocation bindings:\n";
+  std::vector<std::pair<int32_t, int32_t>> sortedBindings(
+      bindings_.begin(), bindings_.end());
+  std::sort(sortedBindings.begin(), sortedBindings.end());
+  for (auto& [formal, actual] : sortedBindings) {
+    ss << "  %" << formal << " -> %" << actual << "\n";
+  }
+  ss << "OpInvocation nodeMap:\n" << printNodeMap(nodeMap_);
+  return ss.str();
+}
+
 // --- LaunchData ---
 
 LaunchData::LaunchData(
@@ -612,9 +820,6 @@ LaunchData::LaunchData(
       const auto& desc = outputDescs[i];
       OutputDesc actualDesc = desc;
       actualDesc.sizeExpr = desc.sizeExpr.toActual(bindings, idToValue);
-      if (desc.storageFrom) {
-        actualDesc.storageFrom = idToValue.at(translateId(desc.storageFrom));
-      }
       if (desc.viewNode) {
         auto viewIt = op.nodeMap().find(desc.viewNode);
         TORCH_CHECK(
@@ -894,7 +1099,7 @@ void CompositeKernel::warmup() {
   memset(&params, 0, sizeof(params));
   params.info = nullptr;
   params.debugInfo = nullptr;
-  params.inlineInfo[0].op = -1;
+  params.inlineInfo[0].op = kDebugNoOp;
   void* args[] = {&params};
   facebook::velox::wave::Stream stream;
   kernel_->launch(0, 1, 1, 0, &stream, args);
@@ -1032,6 +1237,9 @@ void fillLaunchParams(
     int32_t& returnEnd) {
   if (!launch.tensorsInFrame.empty() || !launch.scalarsInFrame.empty()) {
     // Cached path: fill only variable tensors and scalars, skip constants.
+    TORCH_CHECK(
+        launch.tensorsInFrame.size() == launch.tensorOffsets.size(),
+        "tensorsInFrame/tensorOffsets size mismatch");
     for (size_t i = 0; i < launch.tensorsInFrame.size(); ++i) {
       if (launch.shapeOnlyTensorIndices.count(i)) {
         fillShapeOnlyTensorParam(
@@ -1274,6 +1482,7 @@ void allocateLaunchOutputs(
   }
 
   const auto& bindings = launch.invocation->bindings();
+  const auto& nodeMap = launch.invocation->nodeMap();
   for (size_t i = 0; i < descs.size(); ++i) {
     // Skip non-tensor and non-tensor-list outputs.
     if (i < outputTypes.size() &&
@@ -1301,7 +1510,7 @@ void allocateLaunchOutputs(
       if (!descs[i].reserveShape) {
         continue;
       }
-      auto shapes = descs[i].reserveShape(nullptr, frame, bindings);
+      auto shapes = descs[i].reserveShape(frame, bindings, nodeMap);
       auto valueIt = idToValue.find(actualId);
       TORCH_CHECK(
           valueIt != idToValue.end(),
@@ -1328,7 +1537,7 @@ void allocateLaunchOutputs(
 
     std::vector<int64_t> dims;
     if (descs[i].reserveShape) {
-      auto shapes = descs[i].reserveShape(nullptr, frame, bindings);
+      auto shapes = descs[i].reserveShape(frame, bindings, nodeMap);
       TORCH_CHECK(
           !shapes.empty(),
           "OutputReserveFunc returned empty shapes for output ",
@@ -1367,7 +1576,8 @@ facebook::velox::wave::WaveBufferPtr& getOrAllocateBuffer(
     int32_t sequenceNumber,
     int32_t stepIdx,
     int64_t requiredBytes,
-    facebook::velox::wave::GpuArena* arena) {
+    facebook::velox::wave::GpuArena* arena,
+    const std::function<void(void*, int64_t)>& initFunc = nullptr) {
   if (static_cast<int32_t>(buffers.size()) <= sequenceNumber) {
     buffers.resize(sequenceNumber + 1);
   }
@@ -1378,6 +1588,9 @@ facebook::velox::wave::WaveBufferPtr& getOrAllocateBuffer(
   auto& buffer = steps.at(stepIdx);
   if (!buffer || buffer->capacity() < static_cast<size_t>(requiredBytes)) {
     buffer = arena->allocateBytes(requiredBytes);
+    if (initFunc) {
+      initFunc(buffer->as<void>(), requiredBytes);
+    }
   }
   return buffer;
 }
@@ -1444,7 +1657,8 @@ int64_t numElementsFromReserve(
       descs[0].reserveShape,
       "sizeExpr is kNone but output desc has no reserveShape");
   const auto& bindings = data.invocation->bindings();
-  auto shapes = descs[0].reserveShape(nullptr, frame, bindings);
+  const auto& nodeMap = data.invocation->nodeMap();
+  auto shapes = descs[0].reserveShape(frame, bindings, nodeMap);
   TORCH_CHECK(!shapes.empty(), "reserveShape returned empty shapes");
   int64_t numElements = 1;
   for (auto dim : shapes[0]) {
@@ -1553,7 +1767,17 @@ void CompositeInvocation::gatherLaunches(
   }
 }
 
-void invalidateStepVectors(std::vector<StepVectors>& steps, int32_t stepIdx) {
+// Invalidates cached grid, launch, and param state for the given step and all
+// subsequent steps. Called when the grid choice changes at runtime (e.g.
+// switching between single-block and multi-block). Frees pinned buffers so
+// that fillLaunchParams writes a complete fresh copy on the next execution
+// instead of incrementally updating stale data from the previous grid layout.
+void invalidateReusedState(
+    std::vector<StepVectors>& steps,
+    std::vector<std::vector<facebook::velox::wave::WaveBufferPtr>>&
+        pinnedBuffers,
+    int32_t sequenceNumber,
+    int32_t stepIdx) {
   for (auto i = stepIdx; i < static_cast<int32_t>(steps.size()); ++i) {
     auto& sv = steps[i];
     sv.hasGridCache = false;
@@ -1563,6 +1787,12 @@ void invalidateStepVectors(std::vector<StepVectors>& steps, int32_t stepIdx) {
       data.tensorOffsets.clear();
       data.scalarsInFrame.clear();
       data.scalarOffsets.clear();
+    }
+  }
+  if (sequenceNumber < static_cast<int32_t>(pinnedBuffers.size())) {
+    auto& buffers = pinnedBuffers[sequenceNumber];
+    for (auto i = stepIdx; i < static_cast<int32_t>(buffers.size()); ++i) {
+      buffers[i].reset();
     }
   }
 }
@@ -1639,6 +1869,32 @@ void verifyAgainstReference(
   // Re-verify all previously passed values to detect corruption.
   int32_t numCorrupted = 0;
   if (WaveConfig::get().reverify) {
+    // Check inputs of current launches for corruption.
+    for (const auto& data : launches) {
+      for (auto actualId : data.actualInputs) {
+        auto refIt = ref->find(actualId);
+        if (refIt == ref->end() || !refIt->second.isTensor()) {
+          continue;
+        }
+        const auto& actual = frame.getIValue(actualId);
+        if (!actual.isTensor()) {
+          continue;
+        }
+        if (!tensorsMatch(actual.toTensor(), refIt->second.toTensor())) {
+          ++numCorrupted;
+          auto limit = WaveConfig::get().tensorPrintElementLimit;
+          LOG(ERROR) << "INPUT CORRUPTION: value %" << actualId
+                     << " no longer matches reference\n  "
+                     << firstDifference(
+                            actual.toTensor(), refIt->second.toTensor())
+                     << "\n  expected: "
+                     << tensorDebugString(refIt->second.toTensor(), limit)
+                     << "\n  actual:   "
+                     << tensorDebugString(actual.toTensor(), limit);
+        }
+      }
+    }
+    // Re-verify previously passed outputs.
     for (auto prevId : state.verifiedIds) {
       auto refIt = ref->find(prevId);
       if (refIt == ref->end() || !refIt->second.isTensor()) {
@@ -1668,16 +1924,19 @@ void verifyAgainstReference(
       std::cout << "  Passed: " << passedIds << std::endl;
     }
   }
-  TORCH_CHECK(
-      numMismatches == 0 && numCorrupted == 0,
-      numMismatches,
-      " reference mismatches, ",
-      numCorrupted,
-      " corrupted, ",
-      numPassed,
-      " passed (",
-      passedIds,
-      ")");
+  if (numMismatches > 0 || numCorrupted > 0) {
+    auto msg = fmt::format(
+        "{} reference mismatches, {} corrupted, {} passed ({})",
+        numMismatches,
+        numCorrupted,
+        numPassed,
+        passedIds);
+    if (WaveConfig::get().continueAfterMismatch) {
+      LOG(ERROR) << msg;
+    } else {
+      TORCH_CHECK(false, msg);
+    }
+  }
 }
 
 } // namespace
@@ -1785,7 +2044,7 @@ void CompositeInvocation::execute(ExecutionState& state) {
   Timer ex("comp inv execute", WaveConfig::get().printTiming);
   auto& frame = *state.frame;
 
-  if (WaveConfig::get().trace) {
+  if (WaveConfig::get().trace & (WaveConfig::kNodes | WaveConfig::kLaunches)) {
     std::cout << "==== Node " << sequenceNumber_ << std::endl;
   }
 
@@ -1797,6 +2056,15 @@ void CompositeInvocation::execute(ExecutionState& state) {
     }
   }
 
+  using Clock = std::chrono::high_resolution_clock;
+  bool doTiming = WaveConfig::get().printTiming ||
+      (WaveConfig::get().trace & WaveConfig::kTiming);
+  auto elapsed = [](Clock::time_point start) {
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+               Clock::now() - start)
+        .count();
+  };
+
   int32_t blockSize;
   for (int32_t stepIdx = 0;; ++stepIdx) {
     auto& sv = getStepVectors(state.stepVectors, sequenceNumber_, stepIdx);
@@ -1805,26 +2073,40 @@ void CompositeInvocation::execute(ExecutionState& state) {
         state.stepVectors.at(sequenceNumber_).at(0).gridChoices;
 
     {
-      Timer t("gather", WaveConfig::get().printTiming);
+      auto t0 = Clock::now();
       gatherLaunches(state, currentGridChoices, stepIdx, sv);
+      if (doTiming) {
+        sv.gatherUs = elapsed(t0);
+      }
     }
     if (sv.gridChanged) {
-      invalidateStepVectors(state.stepVectors[sequenceNumber_], stepIdx);
+      invalidateReusedState(
+          state.stepVectors[sequenceNumber_],
+          state.pinnedBuffers,
+          sequenceNumber_,
+          stepIdx);
     }
     if (sv.kernels.empty() && sv.standalones.empty()) {
       break;
     }
 
     if (sv.kernels.empty()) {
-      if (WaveConfig::get().trace) {
+      if (WaveConfig::get().trace &
+          (WaveConfig::kNodes | WaveConfig::kLaunches)) {
         traceStep(stepIdx, sv, currentGridChoices);
       }
+      auto tStandalone = Clock::now();
       runStandalones(
           sv.standalones,
           state,
           *state.kernelMap,
           *state.standaloneIndices,
           *state.standaloneStats);
+      if (doTiming) {
+        sv.standaloneUs = elapsed(tStandalone);
+      }
+      state.launchDebugInfos.push_back(
+          {nullptr, nullptr, 0, sequenceNumber_, stepIdx});
       verifyAgainstReference(sv.standalones, frame, state);
       continue;
     }
@@ -1837,7 +2119,7 @@ void CompositeInvocation::execute(ExecutionState& state) {
     }
 
     {
-      Timer t("grid", WaveConfig::get().printTiming);
+      auto t0 = Clock::now();
       if (gridSizesMatch(sv.kernels, sv)) {
         blockSize = sv.cachedBlockSize;
       } else {
@@ -1850,6 +2132,9 @@ void CompositeInvocation::execute(ExecutionState& state) {
         sv.cachedBlockSize = blockSize;
         updateGridSizeBounds(sv.kernels, sv);
       }
+      if (doTiming) {
+        sv.gridUs = elapsed(t0);
+      }
     }
 
     auto numBlocks = sv.blocks.size();
@@ -1861,7 +2146,7 @@ void CompositeInvocation::execute(ExecutionState& state) {
     uint8_t* pinnedBase;
     uint8_t* deviceBase;
     {
-      Timer t("alloc outputs", WaveConfig::get().printTiming);
+      auto t0 = Clock::now();
       sv.paramOffsets.resize(sv.kernels.size());
       int64_t paramCursor = blockInfoBytes;
       for (size_t i = 0; i < sv.kernels.size(); ++i) {
@@ -1879,7 +2164,11 @@ void CompositeInvocation::execute(ExecutionState& state) {
           sequenceNumber_,
           stepIdx,
           totalAllocBytes,
-          state.pinnedArena);
+          state.pinnedArena,
+          WaveConfig::get().debugSingleOps
+              ? std::function<void(void*, int64_t)>(
+                    [](void* ptr, int64_t bytes) { memset(ptr, 0xaa, bytes); })
+              : nullptr);
       auto& deviceBuffer = getOrAllocateBuffer(
           state.deviceBuffers,
           sequenceNumber_,
@@ -1888,8 +2177,8 @@ void CompositeInvocation::execute(ExecutionState& state) {
           state.deviceArena);
       pinnedBase = pinnedBuffer->as<uint8_t>();
       deviceBase = deviceBuffer->as<uint8_t>();
-      if (FLAGS_debug_single_ops) {
-        memset(pinnedBase, 0xaa, totalAllocBytes);
+      if (doTiming) {
+        sv.allocUs = elapsed(t0);
       }
     }
 
@@ -1898,7 +2187,7 @@ void CompositeInvocation::execute(ExecutionState& state) {
     int32_t returnBegin = -1;
     int32_t returnEnd = -1;
     {
-      Timer t("fill params", WaveConfig::get().printTiming);
+      auto t0 = Clock::now();
       if (!sv.blocks.empty()) {
         memcpy(pinnedBase, sv.blocks.data(), blockInfoBytes);
       }
@@ -1929,30 +2218,60 @@ void CompositeInvocation::execute(ExecutionState& state) {
             pinnedBase + sv.paramOffsets[i],
             deviceBase + sv.paramOffsets[i]);
       }
+      if (doTiming) {
+        sv.fillUs = elapsed(t0);
+        sv.inputBytes = 0;
+        sv.outputBytes = 0;
+        for (size_t i = 0; i < sv.kernels.size(); ++i) {
+          for (size_t j = 0; j < sv.kernels[i].tensorsInFrame.size(); ++j) {
+            auto off = sv.kernels[i].tensorOffsets[j];
+            auto* t = reinterpret_cast<Tensor*>(
+                pinnedBase + sv.paramOffsets[i] + off);
+            auto bytes = static_cast<int64_t>(t->numEl) * t->elementSize;
+            if (sv.kernels[i].shapeOnlyTensorIndices.count(j)) {
+              continue;
+            }
+            if (j <
+                static_cast<size_t>(sv.kernels[i].launch->op->numInputs())) {
+              sv.inputBytes += bytes;
+            } else {
+              sv.outputBytes += bytes;
+            }
+          }
+        }
+      }
     }
 
-    if (WaveConfig::get().trace) {
+    if (WaveConfig::get().trace &
+        (WaveConfig::kNodes | WaveConfig::kLaunches)) {
       traceStep(stepIdx, sv, currentGridChoices);
     }
 
-    state.launchDebugInfos->push_back(
+    state.launchDebugInfos.push_back(
         {reinterpret_cast<DebugInfo*>(pinnedBase + totalPinnedBytes),
          deviceDebugBase,
-         static_cast<int32_t>(numBlocks)});
+         static_cast<int32_t>(numBlocks),
+         sequenceNumber_,
+         stepIdx});
 
+    int64_t standaloneElapsed = 0;
     auto runStepStandalones = [&]() {
       if (!sv.standalones.empty()) {
+        auto tStandalone = Clock::now();
         runStandalones(
             sv.standalones,
             state,
             *state.kernelMap,
             *state.standaloneIndices,
             *state.standaloneStats);
+        if (doTiming) {
+          standaloneElapsed = elapsed(tStandalone);
+        }
       }
     };
 
     {
-      Timer t("launch1", WaveConfig::get().printTiming);
+      auto tLaunch = Clock::now();
       launch(
           static_cast<int32_t>(numBlocks),
           blockSize,
@@ -1966,10 +2285,16 @@ void CompositeInvocation::execute(ExecutionState& state) {
           sv,
           stepIdx,
           runStepStandalones);
-    }
 
-    if (returnBegin >= 0) {
-      processReturnData(sv, frame, pinnedBase);
+      if (returnBegin >= 0) {
+        processReturnData(sv, frame, pinnedBase);
+      }
+      if (doTiming) {
+        sv.kernelUs = elapsed(tLaunch);
+        sv.standaloneUs = standaloneElapsed;
+        sv.standaloneBound = standaloneElapsed > sv.kernelUs;
+        sv.noDtoH = (returnBegin < 0);
+      }
     }
 
     // Trace outputs of kernel launches after execution.
@@ -2006,43 +2331,67 @@ void CompositeInvocation::launch(
 
   auto* pinnedBlocks = reinterpret_cast<BlockInfo*>(pinnedBase);
 
-  if (FLAGS_debug_single_ops) {
+  if (WaveConfig::get().debugSingleOps) {
     std::vector<int32_t> originalOps(numBlocks);
     for (int32_t b = 0; b < numBlocks; ++b) {
       originalOps[b] = pinnedBlocks[b].op;
     }
 
-    // Group blocks by launch index. Ops with barriers must launch all their
-    // blocks together.
-    folly::F14FastSet<int32_t> launched;
+    // Transfer pinned buffer to device once.
+    stream->hostToDeviceAsync(deviceBase, pinnedBase, totalPinnedBytes);
+    stream->wait();
+
+    auto* deviceBlocks = reinterpret_cast<BlockInfo*>(deviceBase);
+
+    // Run blocks individually or grouped. Ops with barrierCounters need all
+    // blocks of the same project op launched together with cooperative launch.
+    folly::F14FastSet<uintptr_t> launched;
     for (int32_t active = 0; active < numBlocks; ++active) {
       auto launchIdx = sv.launchIndices[active];
-      if (!launched.insert(launchIdx).second) {
-        continue;
-      }
       bool hasBarriers = launchIdx < static_cast<int32_t>(sv.kernels.size()) &&
           sv.kernels[launchIdx].launch && sv.kernels[launchIdx].launch->op &&
           !sv.kernels[launchIdx].launch->op->barrierCounters().empty();
-      for (int32_t b = 0; b < numBlocks; ++b) {
-        if (hasBarriers) {
-          pinnedBlocks[b].op =
-              (sv.launchIndices[b] == launchIdx) ? originalOps[b] : -1;
-        } else {
-          pinnedBlocks[b].op = (b == active) ? originalOps[b] : -1;
+
+      // Set all opcodes to kDebugNoOp on device.
+      setOpCodes(deviceBlocks, 0, numBlocks, kDebugNoOp, stream);
+
+      if (hasBarriers) {
+        auto* inv = sv.kernels[launchIdx].invocation;
+        if (!launched.insert(reinterpret_cast<intptr_t>(inv)).second) {
+          continue;
+        }
+        // Activate all blocks belonging to the same project op.
+        for (int32_t b = 0; b < numBlocks; ++b) {
+          auto bIdx = sv.launchIndices[b];
+          bool sameOp = bIdx < static_cast<int32_t>(sv.kernels.size()) &&
+              sv.kernels[bIdx].invocation == inv;
+          if (sameOp) {
+            setOpCodes(deviceBlocks, b, 1, originalOps[b], stream);
+          }
+        }
+      } else {
+        setOpCodes(deviceBlocks, active, 1, originalOps[active], stream);
+      }
+
+      // Reset barrier counters on device for the active op.
+      if (hasBarriers) {
+        for (size_t li = 0; li < sv.kernels.size(); ++li) {
+          if (sv.kernels[li].invocation == sv.kernels[launchIdx].invocation) {
+            auto* kernelOp = sv.kernels[li].launch->op;
+            for (auto offset : kernelOp->barrierCounters()) {
+              int32_t zero = 0;
+              auto* dest = deviceBase + sv.paramOffsets[li] + offset;
+              stream->hostToDeviceAsync(dest, &zero, sizeof(zero));
+            }
+          }
         }
       }
+
       try {
-        stream->hostToDeviceAsync(deviceBase, pinnedBase, totalPinnedBytes);
         if (hasBarriers) {
           kernel_->launchCooperative(numBlocks, blockSize, 0, stream, args);
         } else {
           kernel_->launch(numBlocks, blockSize, 0, stream, args);
-        }
-        if (returnBegin >= 0) {
-          stream->deviceToHostAsync(
-              pinnedBase + returnBegin,
-              deviceBase + returnBegin,
-              returnEnd - returnBegin);
         }
         stream->wait();
       } catch (const std::exception& e) {
@@ -2052,7 +2401,7 @@ void CompositeInvocation::launch(
         if (launchIdx < static_cast<int32_t>(sv.kernels.size()) &&
             sv.kernels[launchIdx].launch && sv.kernels[launchIdx].launch->op) {
           auto* kernelOp = sv.kernels[launchIdx].launch->op;
-          opText = kernelOp->toString();
+          opText = kernelOp->toString(sv.kernels[launchIdx].invocation);
           auto* opParams = pinnedBase + sv.paramOffsets.at(launchIdx);
           paramText = dumpOpParams(*kernelOp, opParams);
         }
@@ -2065,9 +2414,15 @@ void CompositeInvocation::launch(
       }
     }
 
-    for (int32_t b = 0; b < numBlocks; ++b) {
-      pinnedBlocks[b].op = originalOps[b];
+    // D2H transfer after all blocks complete.
+    if (returnBegin >= 0) {
+      stream->deviceToHostAsync(
+          pinnedBase + returnBegin,
+          deviceBase + returnBegin,
+          returnEnd - returnBegin);
+      stream->wait();
     }
+
     if (betweenLaunchAndSync) {
       betweenLaunchAndSync();
     }
@@ -2087,8 +2442,13 @@ void CompositeInvocation::launch(
         betweenLaunchAndSync();
       }
       stream->wait();
-    } else if (betweenLaunchAndSync) {
-      betweenLaunchAndSync();
+    } else {
+      if (betweenLaunchAndSync) {
+        betweenLaunchAndSync();
+      }
+      if (WaveConfig::get().trace & WaveConfig::kTiming) {
+        stream->wait();
+      }
     }
   }
 }
@@ -2135,12 +2495,7 @@ void CompositeInvocation::traceStep(
     if (launch.standalone) {
       opStr = "standalone";
     } else {
-      auto savedDefaults = NodePrinter::defaults();
-      auto opts = savedDefaults;
-      opts.formalToActual = &launch.invocation->bindings();
-      NodePrinter::setDefaults(opts);
-      opStr = launch.launch->op->toString();
-      NodePrinter::setDefaults(savedDefaults);
+      opStr = launch.launch->op->toString(launch.invocation);
     }
     std::cout << sequenceNumber_ << "." << opIdx << " " << gridLabel << " op "
               << distinctOpIdx << " " << launch.numElements

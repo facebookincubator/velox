@@ -35,12 +35,12 @@ class HiveConfig;
 
 /// Provides index lookup for Hive-metastore-backed tables.
 ///
-/// Owns format-agnostic orchestration: remaining filter evaluation and output
-/// projection. Delegates format-specific reads to either the built-in
-/// FileIndexReader (for Nimble) or external SplitIndexReader implementations
-/// registered via IndexReaderFactoryRegistry. Supports partitioned tables by
-/// synthesizing partition column values from split metadata via scan-spec
-/// constants.
+/// Owns format-agnostic orchestration: remaining filter evaluation, output
+/// projection, and partition routing. Delegates format-specific reads to
+/// either the built-in FileIndexReader (for Nimble) or external
+/// SplitIndexReader implementations registered via IndexReaderFactoryRegistry.
+/// Handles partitioned tables by routing probe rows to the correct file based
+/// on partition column values from split metadata.
 class HiveIndexSource : public IndexSource,
                         public std::enable_shared_from_this<HiveIndexSource> {
  public:
@@ -107,10 +107,13 @@ class HiveIndexSource : public IndexSource,
       const BufferPtr& remainingIndices,
       const RowVectorPtr& rowVector);
 
-  // Sets partition column constants on scanSpec_ from the first split's
-  // partition values. No-op if there are no partition columns or no splits.
-  void setPartitionValues(
-      const std::vector<std::shared_ptr<ConnectorSplit>>& splits);
+  // Builds a fresh scan spec from the configured reader output type,
+  // projected subfields, filters, and data columns. When partitionValues
+  // is provided, sets partition column constants on the spec via
+  // setPartitionValue().
+  std::shared_ptr<common::ScanSpec> buildScanSpec(
+      const std::unordered_map<std::string, std::optional<std::string>>*
+          partitionValues = nullptr);
 
   // Sets a constant partition value on the scanSpec for a partition column.
   void setPartitionValue(
@@ -122,12 +125,13 @@ class HiveIndexSource : public IndexSource,
       const ColumnHandleMap& assignments,
       const std::vector<core::IndexLookupConditionPtr>& indexLookupConditions);
 
-  // Initializes all join conditions:
-  // - Index conditions are pushed to indexLookupConditions_ (filters on
-  //   index columns are converted to index lookup conditions).
-  // - Non-index conditions are resolved to nonIndexConditions_ for
-  //   post-read equality filtering, and their columns are added to
-  //   readColumnNames/readColumnTypes if not already present.
+  // Initializes all join conditions into three buckets:
+  // 1. Index conditions stored in indexLookupConditions_, pushed to the reader.
+  // 2. Partition conditions stored in partitionIndexConditions_.
+  // 3. Non-index conditions stored in nonIndexConditions_ for post-read
+  //    equality filtering. Their columns are added to
+  //    readColumnNames/readColumnTypes if not already present.
+  // TODO: refactor into sub-methods for each bucket.
   void initConditions(
       const std::vector<core::IndexLookupConditionPtr>& indexLookupConditions,
       const ColumnHandleMap& assignments,
@@ -145,8 +149,18 @@ class HiveIndexSource : public IndexSource,
       std::vector<std::string>& readColumnNames,
       std::vector<TypePtr>& readColumnTypes);
 
-  // Creates a UnionResultIterator that unions results from all readers.
-  std::shared_ptr<ResultIterator> createUnionLookupIterator(
+  // Creates a lookup iterator over the given readers: a single
+  // HiveLookupIterator if there's only one reader, otherwise a
+  // UnionResultIterator that k-way-merges per-reader results.
+  std::shared_ptr<ResultIterator> createLookupIterator(
+      const Request& request,
+      const std::vector<SplitIndexReader*>& readers,
+      const SplitIndexReader::Options& options);
+
+  // Creates a partitioned lookup iterator when probe rows target different
+  // partition groups. Splits the probe batch by partition, dispatches each
+  // sub-batch to the matching group's readers, and merges results.
+  std::shared_ptr<ResultIterator> createPartitionLookupIterator(
       const Request& request,
       const SplitIndexReader::Options& options);
 
@@ -156,7 +170,54 @@ class HiveIndexSource : public IndexSource,
       std::shared_ptr<const HiveConnectorSplit> split);
 
   // Creates a FileIndexReader for a single split.
-  void createFileIndexReader(std::shared_ptr<const HiveConnectorSplit> split);
+  void createFileIndexReader(
+      std::shared_ptr<const HiveConnectorSplit> split,
+      const std::shared_ptr<common::ScanSpec>& scanSpec);
+
+  // Creates readers from splits into readers_. Uses a registered
+  // IndexReaderFactory when available, otherwise falls back to
+  // FileIndexReader.
+  void createReadersFromSplits(
+      std::vector<std::shared_ptr<const HiveConnectorSplit>> splits,
+      const std::shared_ptr<common::ScanSpec>& scanSpec);
+
+  // Groups splits by their routing-column partition values, then builds
+  // one PartitionGroup per distinct partition with its own scan
+  // spec (partition columns set as constants) and routing constants for
+  // runtime probe matching. Populates partitionGroups_. Called from
+  // addSplits() when partitionIndexConditions_ is non-empty.
+  void buildPartitionGroups(
+      std::vector<std::shared_ptr<const HiveConnectorSplit>> hiveSplits);
+
+  // Groups splits by their partition column values.
+  folly::F14FastMap<
+      std::string,
+      std::vector<std::shared_ptr<const HiveConnectorSplit>>>
+  groupSplitsByPartitions(
+      std::vector<std::shared_ptr<const HiveConnectorSplit>> hiveSplits) const;
+
+  // Encodes a split's partition values into an opaque grouping key.
+  std::string makePartitionKey(const HiveConnectorSplit& split) const;
+
+  // Splits sharing the same partition values, grouped during addSplits().
+  // One group per distinct set of partition column values. Each group owns
+  // its own scan spec with partition-column constants set, so the underlying
+  // reader emits partition values directly.
+  struct PartitionGroup {
+    // Raw pointers into readers_; ownership stays with readers_.
+    std::vector<SplitIndexReader*> readers;
+    // Typed constants aligned with partitionIndexConditions_, used by
+    // findPartitionGroup() to match against probe row values.
+    std::vector<VectorPtr> partitionValues;
+  };
+
+  // Finds the partition group whose partition values match the given probe
+  // row's partition column values. Returns nullptr if no group matches.
+  // TODO: accept a batch of rows and return a per-row group mapping to
+  // avoid redundant per-row calls from PartitionDispatchIterator.
+  PartitionGroup* findPartitionGroup(
+      const RowVectorPtr& probeInput,
+      vector_size_t row);
 
   // Per-iteration timing breakdown for index lookups.
   struct IterationStats {
@@ -209,18 +270,37 @@ class HiveIndexSource : public IndexSource,
   std::vector<core::IndexLookupConditionPtr> indexLookupConditions_;
 
   // Non-index equi-join conditions: join keys that are not index columns
-  // (e.g., bucket columns used for colocated joins). Applied as post-read
-  // equality filters during lookup.
+  // and not partition columns (e.g., bucket columns used for colocated
+  // joins). Applied as post-read equality filters during lookup.
+  // Partition column conditions are stored separately in
+  // partitionIndexConditions_.
   struct NonIndexCondition {
     column_index_t outputColumnIndex;
     column_index_t requestColumnIndex;
   };
   std::vector<NonIndexCondition> nonIndexConditions_;
 
+  // Partition index condition: join condition on a partition column.
+  // Used to dispatch probe rows to the correct partition group's readers.
+  struct PartitionIndexCondition {
+    // Table-side column name (handle->name()), used to look up the partition
+    // value from HiveConnectorSplit::partitionKeys.
+    std::string partitionColumnName;
+    // Index of the corresponding probe column in requestType_.
+    column_index_t requestColumnIndex;
+    // True when the partition value string is encoded as days-since-epoch
+    // (alternative to a YYYY-MM-DD date string). Mirrors the same flag on
+    // HiveColumnHandle and is consumed by newConstantFromString.
+    bool isPartitionDateValueDaysSinceEpoch{false};
+  };
+  std::vector<PartitionIndexCondition> partitionIndexConditions_;
+
   // Partition column handles, keyed by table column name (handle->name()).
-  // Populated from kPartitionKey assignments in init(). Used to feed
-  // partition handles into makeScanSpec() and to look up dataType() when
-  // parsing partition value strings into typed constants.
+  // Populated from kPartitionKey assignments in init(). Used to:
+  // - classify a join condition as a routing condition
+  // - feed partition handles into makeScanSpec()
+  // - look up dataType() and isPartitionDateValueDaysSinceEpoch() when
+  //   parsing partition value strings into typed constants
   std::unordered_map<std::string, FileColumnHandlePtr> partitionKeyHandles_;
 
   // Filters for pushdown. Includes subfield filters from table handle and
@@ -250,16 +330,19 @@ class HiveIndexSource : public IndexSource,
   folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
       projectedSubfields_;
 
-  // Scan spec for the index reader.
-  std::shared_ptr<common::ScanSpec> scanSpec_;
   // Output type for the index reader. Includes partition columns when they
   // appear in outputType_; the per-split reader emits their values as
   // constants via the scan spec's setConstantValue().
   RowTypePtr readerOutputType_;
-  // All index readers (both built-in and external). FileIndexReader
-  // (Nimble) and external readers both implement SplitIndexReader.
-  // Created by addSplits().
+  // All index readers (both built-in and external). Owns every reader
+  // regardless of partitioned vs non-partitioned path. Created by addSplits().
   std::vector<std::unique_ptr<SplitIndexReader>> readers_;
+  // Raw pointers into readers_ for the non-partitioned path. Built once
+  // in addSplits() to avoid per-lookup allocation.
+  std::vector<SplitIndexReader*> defaultReaders_;
+  // Partition groups built during addSplits() when partition index conditions
+  // are present. One group per distinct set of partition column values.
+  std::vector<PartitionGroup> partitionGroups_;
 
   // Cached empty output vector.
   RowVectorPtr emptyOutput_;

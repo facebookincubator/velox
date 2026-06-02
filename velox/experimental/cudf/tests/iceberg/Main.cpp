@@ -14,20 +14,16 @@
  * limitations under the License.
  */
 
-#include "velox/common/memory/CustomMemoryResourceRegistry.h"
+#include "velox/common/process/ThreadDebugInfo.h"
 
-namespace facebook::velox::memory {
+#include <folly/init/Init.h>
+#include <gtest/gtest.h>
 
-// static
-CustomMemoryResourceRegistry::Registry& CustomMemoryResourceRegistry::global() {
-  static Registry instance;
-  return instance;
+// This main is needed for some tests on linux.
+int main(int argc, char** argv) {
+  testing::InitGoogleTest(&argc, argv);
+  // Signal handler required for ThreadDebugInfoTest
+  facebook::velox::process::addDefaultFatalSignalHandler();
+  folly::Init init(&argc, &argv, false);
+  return RUN_ALL_TESTS();
 }
-
-// static
-std::shared_ptr<CustomMemoryResourceRegistry::Registry>
-CustomMemoryResourceRegistry::createRegistry(Registry* parent) {
-  return std::make_shared<Registry>(parent);
-}
-
-} // namespace facebook::velox::memory

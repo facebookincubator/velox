@@ -270,7 +270,7 @@ class TypedColumnWriter : public ColumnWriter {
       int64_t validBitsOffset,
       const T* values) = 0;
 
-  // Estimated size of the values that are not written to a page yet
+  // Estimated size of the values that are not written to a page yet.
   virtual int64_t estimatedBufferedValueBytes() const = 0;
 };
 

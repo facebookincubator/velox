@@ -22,6 +22,7 @@
 #include "velox/functions/sparksql/Base64Function.h"
 #include "velox/functions/sparksql/CharTypeWriteSideCheck.h"
 #include "velox/functions/sparksql/ConcatWs.h"
+#include "velox/functions/sparksql/FormatNumber.h"
 #include "velox/functions/sparksql/InitcapFunction.h"
 #include "velox/functions/sparksql/LuhnCheckFunction.h"
 #include "velox/functions/sparksql/MaskFunction.h"
@@ -228,6 +229,19 @@ void registerStringFunctions(const std::string& prefix) {
   registerFunction<UnBase64Function, Varbinary, Varchar>({prefix + "unbase64"});
 
   registerFunction<InitCapFunction, Varchar, Varchar>({prefix + "initcap"});
+
+  registerFunction<FormatNumberFunction, Varchar, int8_t, int32_t>(
+      {prefix + "format_number"});
+  registerFunction<FormatNumberFunction, Varchar, int16_t, int32_t>(
+      {prefix + "format_number"});
+  registerFunction<FormatNumberFunction, Varchar, int32_t, int32_t>(
+      {prefix + "format_number"});
+  registerFunction<FormatNumberFunction, Varchar, int64_t, int32_t>(
+      {prefix + "format_number"});
+  registerFunction<FormatNumberFunction, Varchar, float, int32_t>(
+      {prefix + "format_number"});
+  registerFunction<FormatNumberFunction, Varchar, double, int32_t>(
+      {prefix + "format_number"});
 
   registerToPrettyStringFunctions(prefix);
 }

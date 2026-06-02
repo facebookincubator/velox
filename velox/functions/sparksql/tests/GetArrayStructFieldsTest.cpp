@@ -26,15 +26,25 @@ namespace {
 
 class GetArrayStructFieldsTest : public SparkFunctionBaseTest {
  protected:
+  core::TypedExprPtr makeGetArrayStructFieldsExpr(
+      const TypePtr& inputType,
+      const TypePtr& resultType,
+      const std::string& inputName,
+      int32_t ordinal) {
+    return std::make_shared<const core::CallTypedExpr>(
+        resultType,
+        GetArrayStructFieldsCallToSpecialForm::kGetArrayStructFields,
+        std::make_shared<const core::FieldAccessTypedExpr>(
+            inputType, inputName),
+        std::make_shared<core::ConstantTypedExpr>(INTEGER(), variant(ordinal)));
+  }
+
   void testGetArrayStructFields(
       const VectorPtr& input,
       int ordinal,
       const VectorPtr& expected) {
-    auto expr = std::make_shared<const core::CallTypedExpr>(
-        expected->type(),
-        GetArrayStructFieldsCallToSpecialForm::kGetArrayStructFields,
-        std::make_shared<const core::FieldAccessTypedExpr>(input->type(), "c0"),
-        std::make_shared<core::ConstantTypedExpr>(INTEGER(), variant(ordinal)));
+    auto expr = makeGetArrayStructFieldsExpr(
+        input->type(), expected->type(), "c0", ordinal);
 
     // Input is flat.
     auto result = evaluate(expr, makeRowVector({input}));
@@ -148,13 +158,44 @@ TEST_F(GetArrayStructFieldsTest, invalidOrdinal) {
           elementVector, -1, makeArrayVector(offsets, colInt)),
       "The first argument of get_array_struct_fields should be of array(row) type.");
 
-  VELOX_ASSERT_USER_THROW(
+  VELOX_ASSERT_RUNTIME_THROW(
       testGetArrayStructFields(data, -1, makeArrayVector(offsets, colInt)),
       "Invalid ordinal. Should be greater than or equal to 0.");
 
   VELOX_ASSERT_USER_THROW(
       testGetArrayStructFields(data, 2, makeArrayVector(offsets, colInt)),
       fmt::format("(2 vs. 1) Invalid ordinal 2 for struct with 1 fields."));
+}
+
+TEST_F(GetArrayStructFieldsTest, switchWithGetArrayStructFieldsInBranches) {
+  const auto rowType = ROW({"c0"}, {INTEGER()});
+  auto data = makeRowVector({
+      makeFlatVector<bool>({true, false, true, false}),
+      makeArrayOfRowVector<std::tuple<int32_t>>(
+          {{{std::tuple{1}}},
+           {{std::tuple{2}}},
+           {{std::tuple{3}}},
+           {{std::tuple{4}}}},
+          rowType),
+      makeArrayOfRowVector<std::tuple<int32_t>>(
+          {{{std::tuple{10}}},
+           {{std::tuple{20}}},
+           {{std::tuple{30}}},
+           {{std::tuple{40}}}},
+          rowType),
+  });
+
+  auto switchExpr = std::make_shared<const core::CallTypedExpr>(
+      ARRAY(INTEGER()),
+      "switch",
+      std::make_shared<const core::FieldAccessTypedExpr>(BOOLEAN(), "c0"),
+      makeGetArrayStructFieldsExpr(
+          data->childAt(1)->type(), ARRAY(INTEGER()), "c1", 0),
+      makeGetArrayStructFieldsExpr(
+          data->childAt(2)->type(), ARRAY(INTEGER()), "c2", 0));
+  auto result = evaluate(switchExpr, data);
+  assertEqualVectors(
+      makeArrayVectorFromJson<int32_t>({"[1]", "[20]", "[3]", "[40]"}), result);
 }
 
 } // namespace

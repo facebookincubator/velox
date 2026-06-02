@@ -59,8 +59,8 @@ inline std::vector<ResultSpec> inputSpecs(NodeCP node) {
 // Bits per word for the isFastPath bitmask in elementwise codegen.
 constexpr int32_t kBitsPerWord = 32;
 
-/// If FLAGS_elt_trace is on, appends an if (threadIdx.x == 0) {printf(...)}
-/// statement to 'ss'.
+/// If WaveConfig::kernelDebugOutput is on, appends an if (threadIdx.x == 0)
+/// {printf(...)} statement to 'ss'.
 void eltTrace(std::stringstream& ss, std::string_view printf);
 
 std::string cudaAttrType(const nativert::Constant& c);
@@ -95,9 +95,6 @@ struct SubgraphEqual {
 
 using SubgraphMap = std::
     unordered_map<Subgraph, ProjectOperation*, SubgraphHash, SubgraphEqual>;
-
-using SubgraphKernelMap =
-    std::unordered_map<Subgraph, KernelOperation*, SubgraphHash, SubgraphEqual>;
 
 enum class Context { kTop, kFused, kFusedBreak, kStandalone };
 
@@ -206,6 +203,10 @@ class CompileCtx {
   void emitCode(std::string_view text);
 
   void emitBarrier();
+
+  /// Returns true if 'node' has a randomAccess input whose value is
+  /// produced in generatingOp_ but not yet covered by a barrier.
+  bool callNeedsBarrier(NodeCP node);
 
   void addInclude(std::string_view header);
 
@@ -352,6 +353,26 @@ class CompileCtx {
       const KernelOperation& op,
       bool slowPath);
 
+  std::string formatLeafAccess(
+      ValueCP value,
+      const std::vector<ValueCP>& inputs,
+      const KernelOperation& op,
+      bool slowPath);
+
+  std::string buildElementwiseCall(
+      const Metadata& meta,
+      NodeCP node,
+      const KernelOperation& op,
+      const std::vector<std::string>& argTexts);
+
+  void maybeExtractOutOfLine(
+      ValueCP value,
+      const std::string& resultName,
+      const std::vector<ValueCP>& inputs,
+      size_t codeStart,
+      size_t tempLogStart,
+      bool slowPath);
+
   /// Marks matching kernel ops in grid_ and singleBlockGrid_ as grid choices.
   void setGridChoice(ProjectOperation* projectOp);
 
@@ -393,9 +414,6 @@ class CompileCtx {
   std::deque<c10::IValue> ivalueStorage_;
   LaunchGrid grid_;
 
-  // Distinct kernel ops for the ProjectOperation being made.
-  SubgraphKernelMap projectKernelOps_;
-
   /// The Subgraph for the ProjectOperation being made.
   const Subgraph* projectOpSubgraph_{nullptr};
 
@@ -420,6 +438,11 @@ class CompileCtx {
   // variables are generated. When empty, elementwiseExprImpl inlines the
   // storage expression instead.
   std::unordered_map<size_t, std::string> elementwiseVarNames_;
+
+  // Output values of nodes placed before the last emitBarrier. A
+  // randomAccess input whose value is in this set does not need a new
+  // barrier because its producer is already separated by one.
+  std::unordered_set<ValueCP> preBarrierValues_;
 
   // Maps variant subgraph copy nodes back to original graph nodes.
   std::unordered_map<NodeCP, NodeCP> variantToOriginal_;

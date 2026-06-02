@@ -16,6 +16,7 @@
 
 #include "velox/common/base/CoalesceIo.h"
 
+#include <fmt/format.h>
 #include <gtest/gtest.h>
 
 using namespace facebook::velox;
@@ -112,4 +113,89 @@ TEST(CoalesceIoTest, basic) {
   EXPECT_EQ(2, ioGroups[1].size());
   EXPECT_EQ(1, ioGroups[2].size());
   EXPECT_EQ(1, ioGroups[3].size());
+
+  // Gap distribution: tracks gaps between consecutive items before coalescing.
+  // data[0] ends at 101'000, data[1] starts at 105'000 -> gap 4'000
+  // data[1] ends at 205'000, data[2] starts at 220'000 -> gap 15'000
+  // data[2] ends at 320'000, data[3] starts at 330'000 -> gap 10'000
+  // data[3] ends at 430'000, data[4] starts at 700'000 -> gap 270'000
+  // data[4] ends at 800'000, data[5] starts at 810'000 -> gap 10'000
+  EXPECT_EQ(5, stats.gaps.count());
+  EXPECT_EQ(4'000 + 15'000 + 10'000 + 270'000 + 10'000, stats.gaps.sum());
+  EXPECT_EQ(4'000, stats.gaps.min());
+  EXPECT_EQ(270'000, stats.gaps.max());
+}
+
+TEST(CoalesceIoTest, gaps) {
+  struct TestParam {
+    std::vector<IoUnit> data;
+    int32_t maxGap;
+    uint64_t expectedCount;
+    uint64_t expectedSum;
+    uint64_t expectedMin;
+    uint64_t expectedMax;
+
+    std::string debugString() const {
+      return fmt::format(
+          "items {}, maxGap {}, expectedCount {}",
+          data.size(),
+          maxGap,
+          expectedCount);
+    }
+  };
+
+  auto makeItems = [](std::initializer_list<std::tuple<int64_t, int32_t>> specs)
+      -> std::vector<IoUnit> {
+    std::vector<IoUnit> items;
+    for (const auto& [offset, size] : specs) {
+      items.emplace_back(offset, size, 1);
+    }
+    return items;
+  };
+
+  std::vector<TestParam> testSettings = {
+      // Contiguous reads (no gaps).
+      {makeItems({{0, 100}, {100, 200}, {300, 150}}),
+       1'000,
+       0,
+       0,
+       std::numeric_limits<uint64_t>::max(),
+       0},
+      // Gaps of 50, 200, 1'000 bytes.
+      {makeItems({{0, 100}, {150, 100}, {450, 100}, {1'550, 100}}),
+       500,
+       3,
+       1'250,
+       50,
+       1'000},
+  };
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+
+    const auto& data = testData.data;
+    auto stats = coalesceIo<IoUnit, Range>(
+        data,
+        testData.maxGap,
+        10,
+        [&](int32_t i) { return data[i].offset; },
+        [&](int32_t i) { return data[i].size; },
+        [&](int32_t) { return 1; },
+        [&](const IoUnit& item, std::vector<Range>& ranges) {
+          ranges.emplace_back(item.size, 1);
+        },
+        [&](int32_t skip, std::vector<Range>& ranges) {
+          ranges.emplace_back(skip, 0);
+        },
+        [&](const std::vector<IoUnit>&,
+            int32_t,
+            int32_t,
+            uint64_t,
+            const std::vector<Range>&) {});
+
+    EXPECT_EQ(stats.gaps.count(), testData.expectedCount);
+    EXPECT_EQ(stats.gaps.sum(), testData.expectedSum);
+    EXPECT_EQ(stats.gaps.min(), testData.expectedMin);
+    EXPECT_EQ(stats.gaps.max(), testData.expectedMax);
+  }
 }

@@ -304,6 +304,11 @@ void FileSplitReader::createReader(
   if (auto* cacheTTLController = cache::CacheTTLController::getInstance()) {
     cacheTTLController->addOpenFileInfo(fileHandleCachePtr->uuid.id());
   }
+  if (auto* cache = connectorQueryCtx_->cache()) {
+    baseReaderOpts_.setFileHandle(&(*fileHandleCachePtr));
+    baseReaderOpts_.setCache(cache);
+  }
+
   auto baseFileInput = BufferedInputBuilder::getInstance()->create(
       *fileHandleCachePtr,
       baseReaderOpts_,

@@ -474,6 +474,7 @@ These functions support TIMESTAMP and DATE input types.
         SELECT unix_timestamp(CAST(-1739933174 AS TIMESTAMP)); -- -1739933174
 
 .. function:: week_of_year(x) -> integer
+   :noindex:
 
     Returns the `ISO-Week`_ of the year from x. The value ranges from ``1`` to ``53``.
     A week is considered to start on a Monday and week 1 is the first week with >3 days.
