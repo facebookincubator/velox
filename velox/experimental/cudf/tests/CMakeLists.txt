@@ -46,8 +46,7 @@ function(velox_add_cudf_test)
   endif()
 
   add_executable(${ARG_NAME} ${ARG_SOURCES})
-  set_target_properties(${ARG_NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY
-                                               ${CUDF_TESTS_OUTPUT_DIR})
+  set_target_properties(${ARG_NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CUDF_TESTS_OUTPUT_DIR})
   add_test(NAME ${ARG_NAME} COMMAND ${ARG_NAME} WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
   set_tests_properties(${ARG_NAME} PROPERTIES LABELS cuda_driver TIMEOUT ${ARG_TIMEOUT})
   target_link_libraries(${ARG_NAME} ${ARG_LIBS} gtest gtest_main)
