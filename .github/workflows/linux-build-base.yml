@@ -82,7 +82,7 @@ jobs:
     # prevent errors when forks ff their main branch
     if: ${{ github.repository == 'facebookincubator/velox' }}
     runs-on: 32-core-ubuntu
-    container: ghcr.io/facebookincubator/velox-dev:adapters
+    container: ghcr.io/czentgr/czentgr-test:thrift-deps
     defaults:
       run:
         shell: bash
@@ -805,7 +805,7 @@ jobs:
     if: ${{ github.repository == 'facebookincubator/velox' }}
     runs-on: 32-core-ubuntu
     container:
-      image: ghcr.io/facebookincubator/velox-dev:adapters
+      image: ghcr.io/czentgr/czentgr-test:thrift-deps
       volumes:
         - /usr:/host_usr
         - /opt:/host_opt
