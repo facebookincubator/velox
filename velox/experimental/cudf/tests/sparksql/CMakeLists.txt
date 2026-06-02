@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 velox_add_cudf_test(
   NAME velox_cudf_spark_aggregates_test
   SOURCES AggregationTest.cpp Main.cpp
