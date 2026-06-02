@@ -16,7 +16,7 @@
 
 #include "velox/functions/sparksql/specialforms/DecimalCeilFloor.h"
 
-#include "velox/functions/sparksql/specialforms/DecimalRoundBase.h"
+#include "velox/functions/sparksql/specialforms/DecimalRoundOps.h"
 
 namespace facebook::velox::functions::sparksql {
 namespace {
@@ -26,14 +26,8 @@ template <typename TResult, typename TInput, bool ceiling>
 struct CeilFloorPolicy {
   static constexpr bool canOverflow = true;
 
-  using Factors = DecimalRoundBase::ScaleFactors;
-
-  explicit CeilFloorPolicy(const Factors& f)
-      : hasDivisor_(f.divideFactor.has_value()),
-        divisor_(f.divideFactor.value_or(1)),
-        hasMultiplier_(f.multiplyFactor.has_value()),
-        multiplier_(f.multiplyFactor.value_or(1)),
-        overflowBound_(f.overflowBound) {
+  explicit CeilFloorPolicy(const DecimalRoundOps::ScaleFactors& f)
+      : factors_(f) {
     const auto [expectedP, expectedS] =
         DecimalCeilFloorCallToSpecialFormBase::getResultPrecisionScale(
             f.inputPrecision, f.inputScale, f.scale);
@@ -43,42 +37,37 @@ struct CeilFloorPolicy {
 
   std::optional<TResult> applyOne(const TInput& input) const {
     int128_t out = 0;
-    if (!hasDivisor_) {
-      // Identity path: scale >= inputScale, no truncation needed. The planner
-      // may route here when ceil/floor targets a scale equal to the input
-      // scale.
+    if (!factors_.divideFactor.has_value()) {
       out = static_cast<int128_t>(input);
     } else {
       auto in = static_cast<int128_t>(input);
-      const int128_t quotient = in / divisor_;
-      const int128_t remainder = in % divisor_;
+      const int128_t divisor = factors_.divideFactor.value();
+      const int128_t quotient = in / divisor;
+      const int128_t remainder = in % divisor;
       int128_t rounded = 0;
       if constexpr (ceiling) {
         rounded = quotient + (remainder > 0 ? 1 : 0);
       } else {
         rounded = quotient + (remainder < 0 ? -1 : 0);
       }
-      if (hasMultiplier_) {
-        const int128_t maxAbs = overflowBound_ / multiplier_;
+      if (factors_.multiplyFactor.has_value()) {
+        const int128_t multiplier = factors_.multiplyFactor.value();
+        const int128_t maxAbs = factors_.overflowBound / multiplier;
         if (rounded >= maxAbs || rounded <= -maxAbs) {
           return std::nullopt;
         }
-        rounded *= multiplier_;
+        rounded *= multiplier;
       }
       out = rounded;
     }
-    if (out >= overflowBound_ || out <= -overflowBound_) {
+    if (out >= factors_.overflowBound || out <= -factors_.overflowBound) {
       return std::nullopt;
     }
     return static_cast<TResult>(out);
   }
 
  private:
-  const bool hasDivisor_;
-  const int128_t divisor_;
-  const bool hasMultiplier_;
-  const int128_t multiplier_;
-  const int128_t overflowBound_;
+  const DecimalRoundOps::ScaleFactors factors_;
 };
 
 // Each instantiation of createCeilFloorFunction produces only one template
@@ -88,7 +77,7 @@ std::shared_ptr<exec::VectorFunction> createCeilFloorFunction(
     const TypePtr& inputType,
     int32_t scale,
     const TypePtr& resultType) {
-  return DecimalRoundBase::createFunction(
+  return DecimalRoundOps::createFunction(
       inputType,
       scale,
       resultType,
@@ -129,14 +118,19 @@ exec::ExprPtr DecimalCeilFloorCallToSpecialFormBase::makeSpecialForm(
       funcName);
 
   const int32_t scale =
-      DecimalRoundBase::extractConstantScaleArg(args[1], funcName);
+      DecimalRoundOps::extractConstantScaleArg(args[1], funcName);
 
   auto func = ceiling
       ? createCeilFloorFunction<true>(args[0]->type(), scale, type)
       : createCeilFloorFunction<false>(args[0]->type(), scale, type);
 
-  return DecimalRoundBase::buildExpr(
-      type, std::move(args), std::move(func), funcName, trackCpuUsage);
+  return std::make_shared<exec::Expr>(
+      type,
+      std::move(args),
+      std::move(func),
+      exec::VectorFunctionMetadata{},
+      std::string(funcName),
+      trackCpuUsage);
 }
 
 exec::ExprPtr DecimalCeilCallToSpecialForm::constructSpecialForm(

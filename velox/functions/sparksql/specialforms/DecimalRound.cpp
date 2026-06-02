@@ -15,7 +15,7 @@
  */
 
 #include "velox/functions/sparksql/specialforms/DecimalRound.h"
-#include "velox/functions/sparksql/specialforms/DecimalRoundBase.h"
+#include "velox/functions/sparksql/specialforms/DecimalRoundOps.h"
 
 namespace facebook::velox::functions::sparksql {
 namespace {
@@ -25,16 +25,8 @@ template <typename TResult, typename TInput>
 struct RoundHalfUpPolicy {
   static constexpr bool canOverflow = false;
 
-  using Factors = DecimalRoundBase::ScaleFactors;
-
-  explicit RoundHalfUpPolicy(const Factors& f)
-      : scaleNonNegative_(f.scale >= 0),
-        inputPrecision_(f.inputPrecision),
-        inputScale_(f.inputScale),
-        resultPrecision_(f.resultPrecision),
-        resultScale_(f.resultScale),
-        divideFactor_(f.divideFactor.value_or(1)),
-        multiplyFactor_(f.multiplyFactor.value_or(1)) {
+  explicit RoundHalfUpPolicy(const DecimalRoundOps::ScaleFactors& f)
+      : factors_(f) {
     const auto [p, s] = DecimalRoundCallToSpecialForm::getResultPrecisionScale(
         f.inputPrecision, f.inputScale, f.scale);
     VELOX_DCHECK_EQ(p, f.resultPrecision);
@@ -42,33 +34,32 @@ struct RoundHalfUpPolicy {
   }
 
   std::optional<TResult> applyOne(const TInput& input) const {
-    if (scaleNonNegative_) {
+    if (factors_.scale >= 0) {
       TResult rescaledValue;
       const auto status = DecimalUtil::rescaleWithRoundUp<TInput, TResult>(
           input,
-          inputPrecision_,
-          inputScale_,
-          resultPrecision_,
-          resultScale_,
+          factors_.inputPrecision,
+          factors_.inputScale,
+          factors_.resultPrecision,
+          factors_.resultScale,
           rescaledValue);
       VELOX_DCHECK(status.ok());
       return rescaledValue;
     }
     TResult rescaledValue;
     DecimalUtil::divideWithRoundUp<TResult, TInput, int128_t>(
-        rescaledValue, input, divideFactor_, false, 0, 0);
-    rescaledValue *= multiplyFactor_;
+        rescaledValue,
+        input,
+        factors_.divideFactor.value_or(1),
+        false,
+        0,
+        0);
+    rescaledValue *= factors_.multiplyFactor.value_or(1);
     return rescaledValue;
   }
 
  private:
-  const bool scaleNonNegative_;
-  const uint8_t inputPrecision_;
-  const uint8_t inputScale_;
-  const uint8_t resultPrecision_;
-  const uint8_t resultScale_;
-  const int128_t divideFactor_;
-  const int128_t multiplyFactor_;
+  const DecimalRoundOps::ScaleFactors factors_;
 };
 
 } // namespace
@@ -121,10 +112,10 @@ exec::ExprPtr DecimalRoundCallToSpecialForm::constructSpecialForm(
 
   int32_t scale = 0;
   if (args.size() > 1) {
-    scale = DecimalRoundBase::extractConstantScaleArg(args[1], kRoundDecimal);
+    scale = DecimalRoundOps::extractConstantScaleArg(args[1], kRoundDecimal);
   }
 
-  auto func = DecimalRoundBase::createFunction(
+  auto func = DecimalRoundOps::createFunction(
       args[0]->type(),
       scale,
       type,
@@ -136,7 +127,12 @@ exec::ExprPtr DecimalRoundCallToSpecialForm::constructSpecialForm(
             factors);
       });
 
-  return DecimalRoundBase::buildExpr(
-      type, std::move(args), std::move(func), kRoundDecimal, trackCpuUsage);
+  return std::make_shared<exec::Expr>(
+      type,
+      std::move(args),
+      std::move(func),
+      exec::VectorFunctionMetadata{},
+      std::string(kRoundDecimal),
+      trackCpuUsage);
 }
 } // namespace facebook::velox::functions::sparksql

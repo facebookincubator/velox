@@ -24,45 +24,18 @@
 
 namespace facebook::velox::functions::sparksql {
 
-/// Design overview — decimal rounding in Spark
-/// =============================================
+/// Shared infrastructure for Spark's decimal rounding special forms
+/// (decimal_round, decimal_ceil, decimal_floor).
 ///
-/// Spark's decimal_round, decimal_ceil, and decimal_floor are special forms
-/// (not simple functions) because their *result type* depends on the runtime
-/// value of the scale argument, not just input types. The type resolution
-/// happens at plan time via constructSpecialForm / makeSpecialForm in each
-/// .cpp file.
+/// These are special forms because the result type depends on the runtime value
+/// of the scale argument. All three share the same structure: compute scale
+/// factors, then for each row divide/truncate/adjust/multiply. The only
+/// difference is the adjustment logic (rounding direction).
 ///
-/// All three operations share the same structure:
-///   1. Compute scale factors (divide/multiply powers of 10) from input/result
-///      precision and the target scale.
-///   2. For each row: divide to truncate, optionally adjust (the rounding
-///      direction), multiply back. Check for overflow.
-///
-/// The only difference between round/ceil/floor is step 2's adjustment logic.
-/// This file captures the shared parts:
-///
-///   DecimalRoundBase     — static helpers: computeFactors, dispatchTypes,
-///                          createFunction, buildExpr, extractConstantScaleArg,
-///                          clampScale, getResultPrecisionScale.
-///
-///   ScaleFactors         — precomputed divide/multiply factors, overflow
-///   bound.
-///                          Computed once per expression, not per row.
-///
-///   DecimalRoundFunction<TResult, TInput, Policy>
-///                        — the VectorFunction. Handles constant/flat dispatch
-///                          and calls Policy::applyOne per element.
-///
-/// Each rounding form defines a tiny Policy struct in its .cpp file:
-///   - RoundHalfUpPolicy  (DecimalRound.cpp)  — round half-up, never overflows.
-///   - CeilFloorPolicy<>  (DecimalCeilFloor.cpp) — directional, may overflow.
-///
-/// A Policy must provide:
-///   - static constexpr bool canOverflow
-///   - Constructor(const ScaleFactors& factors)
-///   - std::optional<TResult> applyOne(const TInput& value) const
-class DecimalRoundBase {
+/// DecimalRoundOps provides static helpers used by all three forms.
+/// DecimalRoundFunction<Policy> is the shared VectorFunction template.
+/// Each form defines a Policy struct (in its .cpp) with applyOne().
+class DecimalRoundOps {
  public:
   template <typename T>
   struct TypeTag {
@@ -94,7 +67,6 @@ class DecimalRoundBase {
   }
 
   /// Computes the divide and multiply factors for a given scale adjustment.
-  /// The logic is shared across all three rounding directions.
   static ScaleFactors computeFactors(
       int32_t scale,
       uint8_t inputPrecision,
@@ -190,38 +162,17 @@ class DecimalRoundBase {
           return factory(resultTag, inputTag, factors);
         });
   }
-
-  /// Builds the final exec::Expr from a VectorFunction. Shared boilerplate
-  /// for all decimal rounding constructSpecialForm implementations.
-  static exec::ExprPtr buildExpr(
-      const TypePtr& type,
-      std::vector<exec::ExprPtr>&& args,
-      std::shared_ptr<exec::VectorFunction> func,
-      std::string_view funcName,
-      bool trackCpuUsage) {
-    return std::make_shared<exec::Expr>(
-        type,
-        std::move(args),
-        std::move(func),
-        exec::VectorFunctionMetadata{},
-        std::string(funcName),
-        trackCpuUsage);
-  }
 };
 
 /// Generic VectorFunction for decimal rounding, parameterized on a Policy.
 /// Policy must define:
 ///   - static constexpr bool canOverflow
-///   - Constructor(const DecimalRoundBase::ScaleFactors&)
+///   - Constructor(const DecimalRoundOps::ScaleFactors&)
 ///   - std::optional<TResult> applyOne(const TInput&) const
-///
-/// Relies on the Expr framework's defaultNullBehavior (true by default):
-/// 'rows' never includes positions where the input is null, so no manual
-/// null propagation is needed.
 template <typename TResult, typename TInput, typename Policy>
 class DecimalRoundFunction : public exec::VectorFunction {
  public:
-  explicit DecimalRoundFunction(const DecimalRoundBase::ScaleFactors& factors)
+  explicit DecimalRoundFunction(const DecimalRoundOps::ScaleFactors& factors)
       : policy_(factors) {}
 
   void apply(
