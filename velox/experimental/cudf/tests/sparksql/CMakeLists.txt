@@ -12,52 +12,32 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_cudf_spark_aggregates_test AggregationTest.cpp Main.cpp)
 
-add_test(
+velox_add_cudf_test(
   NAME velox_cudf_spark_aggregates_test
-  COMMAND velox_cudf_spark_aggregates_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  SOURCES AggregationTest.cpp Main.cpp
+  LIBS
+    velox_cudf_exec
+    velox_exec_test_lib
+    velox_functions_aggregates_test_lib
+    velox_functions_spark
+    velox_functions_spark_aggregates
+    velox_hive_connector
+    velox_vector_fuzzer
+    velox_vector_test_lib
+    gflags::gflags
+  TIMEOUT 3000
 )
 
-set_tests_properties(velox_cudf_spark_aggregates_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
-
-target_link_libraries(
-  velox_cudf_spark_aggregates_test
-  velox_cudf_exec
-  velox_exec_test_lib
-  velox_functions_aggregates_test_lib
-  velox_functions_spark
-  velox_functions_spark_aggregates
-  velox_hive_connector
-  velox_vector_fuzzer
-  velox_vector_test_lib
-  gflags::gflags
-  GTest::gtest
-  GTest::gtest_main
-)
-
-add_executable(velox_cudf_spark_filter_project_test FilterProjectTest.cpp Main.cpp)
-
-add_test(
+velox_add_cudf_test(
   NAME velox_cudf_spark_filter_project_test
-  COMMAND velox_cudf_spark_filter_project_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-)
-
-set_tests_properties(
-  velox_cudf_spark_filter_project_test
-  PROPERTIES LABELS cuda_driver TIMEOUT 3000
-)
-
-target_link_libraries(
-  velox_cudf_spark_filter_project_test
-  velox_cudf_exec
-  velox_exec_test_lib
-  velox_functions_spark
-  velox_vector_fuzzer
-  velox_vector_test_lib
-  gflags::gflags
-  GTest::gtest
-  GTest::gtest_main
+  SOURCES FilterProjectTest.cpp Main.cpp
+  LIBS
+    velox_cudf_exec
+    velox_exec_test_lib
+    velox_functions_spark
+    velox_vector_fuzzer
+    velox_vector_test_lib
+    gflags::gflags
+  TIMEOUT 3000
 )
