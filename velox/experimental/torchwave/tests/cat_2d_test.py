@@ -12,23 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(
-  velox_dwio_dwrf_utils_test
-  ProtoUtilsTests.cpp
-  BitIteratorTests.cpp
-  BufferedWriterTest.cpp
-  TypeAttributesTest.cpp
-)
+import torch
+from torch import nn, Tensor
 
-add_test(velox_dwio_dwrf_utils_test velox_dwio_dwrf_utils_test)
 
-target_link_libraries(
-  velox_dwio_dwrf_utils_test
-  velox_dwio_common
-  velox_dwio_dwrf_utils
-  velox_dwio_common_exception
-  velox_type_fbhive
-  GTest::gtest
-  GTest::gtest_main
-  glog::glog
-)
+class Cat2dTest(nn.Module):
+    """Tests aten.cat and aten.concat of 2D tensors along dim=1.
+
+    Inputs: a (100x50 float), b (100x30 float).
+    Outputs:
+        o1: torch.cat([a, b], dim=1)        -> 100x80
+        o2: torch.concat([a, b], dim=1)     -> 100x80
+    """
+
+    def forward(self, a: Tensor, b: Tensor) -> tuple[Tensor, Tensor]:
+        o1 = torch.cat([a, b], dim=1)
+        o2 = torch.concat([a, b], dim=1)
+        return o1, o2

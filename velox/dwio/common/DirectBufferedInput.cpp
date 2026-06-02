@@ -16,7 +16,6 @@
 
 #include "velox/dwio/common/DirectBufferedInput.h"
 #include "velox/common/memory/Allocation.h"
-#include "velox/common/process/TraceContext.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/DirectInputStream.h"
 
@@ -229,7 +228,6 @@ void DirectBufferedInput::readRegions(
         AsyncLoadHolder loadHolder{
             .load = load, .pool = pool_->shared_from_this()};
         executor_->add([asyncLoad = std::move(loadHolder)]() {
-          process::TraceContext trace("Read Ahead");
           VELOX_CHECK_NOT_NULL(asyncLoad.load);
           asyncLoad.load->loadOrFuture(nullptr);
         });

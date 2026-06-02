@@ -91,6 +91,29 @@ class E2EFilterTest : public E2EFilterTestBase,
     return std::make_unique<ParquetReader>(std::move(input), opts);
   }
 
+  // Returns true if the given encoding appears in the encodings list of the
+  // first column chunk of the first row group of the most recently written
+  // file. Uses ColumnChunkMetaDataPtr::encodings() — no PageReader needed.
+  bool columnChunkUsesEncoding(
+      facebook::velox::parquet::arrow::Encoding::type encoding) {
+    dwio::common::ReaderOptions readerOpts(leafPool_.get());
+    readerOpts.setDataIoStats(dataIoStats_);
+    readerOpts.setMetadataIoStats(metadataIoStats_);
+    auto reader = std::make_unique<ParquetReader>(
+        std::make_unique<dwio::common::BufferedInput>(
+            std::make_shared<InMemoryReadFile>(std::string(sinkData_)),
+            readerOpts.memoryPool()),
+        readerOpts);
+    const auto expected = static_cast<thrift::Encoding::type>(encoding);
+    for (const auto fileEncoding :
+         reader->fileMetaData().rowGroup(0).columnChunk(0).encodings()) {
+      if (fileEncoding == expected) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   std::shared_ptr<velox::io::IoStatistics> dataIoStats_ =
       std::make_shared<velox::io::IoStatistics>();
   std::shared_ptr<velox::io::IoStatistics> metadataIoStats_ =
@@ -130,6 +153,7 @@ TEST_F(E2EFilterTest, integerDeltaBinaryPack) {
   options_.enableDictionary = false;
   options_.encoding =
       facebook::velox::parquet::arrow::Encoding::kDeltaBinaryPacked;
+  const auto expectedEncoding = options_.encoding;
 
   testWithTypes(
       "short_val:smallint,"
@@ -140,6 +164,7 @@ TEST_F(E2EFilterTest, integerDeltaBinaryPack) {
       true,
       {"short_val", "int_val", "long_val"},
       20);
+  EXPECT_TRUE(columnChunkUsesEncoding(expectedEncoding));
 }
 
 TEST_F(E2EFilterTest, compression) {
@@ -519,6 +544,7 @@ TEST_F(E2EFilterTest, stringDeltaByteArray) {
   options_.enableDictionary = false;
   options_.encoding =
       facebook::velox::parquet::arrow::Encoding::kDeltaByteArray;
+  const auto expectedEncoding = options_.encoding;
 
   testWithTypes(
       "string_val:string,"
@@ -530,12 +556,14 @@ TEST_F(E2EFilterTest, stringDeltaByteArray) {
       true,
       {"string_val", "string_val_2"},
       20);
+  EXPECT_TRUE(columnChunkUsesEncoding(expectedEncoding));
 }
 
 TEST_F(E2EFilterTest, stringDeltaLengthByteArray) {
   options_.enableDictionary = false;
   options_.encoding =
       facebook::velox::parquet::arrow::Encoding::kDeltaLengthByteArray;
+  const auto expectedEncoding = options_.encoding;
 
   testWithTypes(
       "string_val:string,"
@@ -547,6 +575,7 @@ TEST_F(E2EFilterTest, stringDeltaLengthByteArray) {
       true,
       {"string_val", "string_val_2"},
       20);
+  EXPECT_TRUE(columnChunkUsesEncoding(expectedEncoding));
 }
 
 TEST_F(E2EFilterTest, dedictionarize) {
@@ -724,6 +753,12 @@ TEST_F(E2EFilterTest, time) {
         false,
         {"time_val"},
         20);
+    // kPlain always appears in the encodings list (dictionary pages use PLAIN),
+    // so skip the check for it — it would pass regardless of whether the option
+    // was forwarded.
+    if (testCase.encoding != parquet::arrow::Encoding::kPlain) {
+      EXPECT_TRUE(columnChunkUsesEncoding(testCase.encoding));
+    }
   }
 }
 
@@ -772,6 +807,12 @@ TEST_F(E2EFilterTest, timeMicros) {
         false,
         {"time_val"},
         20);
+    // kPlain always appears in the encodings list (dictionary pages use PLAIN),
+    // so skip the check for it — it would pass regardless of whether the option
+    // was forwarded.
+    if (testCase.encoding != parquet::arrow::Encoding::kPlain) {
+      EXPECT_TRUE(columnChunkUsesEncoding(testCase.encoding));
+    }
   }
 }
 
@@ -900,6 +941,7 @@ TEST_F(E2EFilterTest, booleanRle) {
   options_.enableDictionary = false;
   options_.encoding = facebook::velox::parquet::arrow::Encoding::kRle;
   options_.useParquetDataPageV2 = true;
+  const auto expectedEncoding = options_.encoding;
 
   testWithTypes(
       "boolean_val:boolean,"
@@ -908,6 +950,7 @@ TEST_F(E2EFilterTest, booleanRle) {
       false,
       {"boolean_val"},
       20);
+  EXPECT_TRUE(columnChunkUsesEncoding(expectedEncoding));
 }
 
 // Define main so that gflags get processed.
