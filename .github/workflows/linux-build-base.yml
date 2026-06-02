@@ -312,7 +312,7 @@ jobs:
           name: cudftestbinaries
           path: |
             velox/dwio/parquet/tests/examples/int.parquet
-            velox/experimental/cudf/tests/CMakeLists.txt
+            velox/experimental/cudf/tests/**/CMakeLists.txt
             _build/release/velox/experimental/cudf/tests/velox_cudf_*
             _build/release/velox/experimental/cudf/tests/**/CTestTestfile.cmake
             _build/release/velox/experimental/cudf/cudf-libs.tar
