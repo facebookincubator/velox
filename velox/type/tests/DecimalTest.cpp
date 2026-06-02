@@ -798,7 +798,7 @@ TEST(DecimalTest, castFromStringError) {
 }
 
 TEST(DecimalTest, castFromStringNegativeExponent) {
-  testCastFromString<int64_t>(
+  testCastFromString<int128_t>(
       std::vector<std::string>{
           "123E-2",
           "123E-3",
@@ -816,7 +816,7 @@ TEST(DecimalTest, castFromStringNegativeExponent) {
           "49999999999999999999999999999999999999E-38"},
       38,
       0,
-      std::vector<int64_t>{1, 0, 1, 0, 1, 0, -1, 0, 1, 0, 0, 1, 1, 0});
+      std::vector<int128_t>{1, 0, 1, 0, 1, 0, -1, 0, 1, 0, 0, 1, 1, 0});
 }
 } // namespace
 } // namespace facebook::velox
