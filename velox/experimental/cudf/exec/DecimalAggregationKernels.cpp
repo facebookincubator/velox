@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationKernels.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationKernelsGpu.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
@@ -37,6 +38,9 @@ DecimalSumStateColumns deserializeDecimalSumState(
       stateCol.type().id() == cudf::type_id::STRING,
       "Decimal sum state requires STRING/VARBINARY column (type is {})",
       static_cast<int>(stateCol.type().id()));
+  // The decoded sum/count columns are consumed by the next groupby/reduce and
+  // never leave the operator and should use the temporary memory resource.
+  auto const mr = get_temp_mr();
   auto numRows = stateCol.size();
   if (numRows == 0) {
     DecimalSumStateColumns empty;
@@ -45,13 +49,13 @@ DecimalSumStateColumns deserializeDecimalSumState(
         0,
         cudf::mask_state::UNALLOCATED,
         stream,
-        get_output_mr());
+        mr);
     empty.count = cudf::make_fixed_width_column(
         cudf::data_type{cudf::type_id::INT64},
         0,
         cudf::mask_state::UNALLOCATED,
         stream,
-        get_output_mr());
+        mr);
     return empty;
   }
 
@@ -64,13 +68,13 @@ DecimalSumStateColumns deserializeDecimalSumState(
         numRows,
         cudf::mask_state::ALL_NULL,
         stream,
-        get_output_mr());
+        mr);
     allNull.count = cudf::make_fixed_width_column(
         cudf::data_type{cudf::type_id::INT64},
         numRows,
         cudf::mask_state::ALL_NULL,
         stream,
-        get_output_mr());
+        mr);
     return allNull;
   }
 
@@ -86,13 +90,13 @@ DecimalSumStateColumns deserializeDecimalSumState(
       numRows,
       cudf::mask_state::UNALLOCATED,
       stream,
-      get_output_mr());
+      mr);
   auto countCol = cudf::make_fixed_width_column(
       cudf::data_type{cudf::type_id::INT64},
       numRows,
       cudf::mask_state::UNALLOCATED,
       stream,
-      get_output_mr());
+      mr);
 
   auto sumView = sumCol->mutable_view();
   auto countView = countCol->mutable_view();
@@ -116,10 +120,10 @@ DecimalSumStateColumns deserializeDecimalSumState(
   }
 
   if (stateCol.nullable()) {
-    auto nullMask = cudf::copy_bitmask(stateCol, stream, get_output_mr());
+    auto nullMask = cudf::copy_bitmask(stateCol, stream, mr);
     auto nullCount = stateCol.null_count();
     sumCol->set_null_mask(std::move(nullMask), nullCount);
-    auto countMask = cudf::copy_bitmask(stateCol, stream, get_output_mr());
+    auto countMask = cudf::copy_bitmask(stateCol, stream, mr);
     countCol->set_null_mask(std::move(countMask), nullCount);
   }
 

@@ -56,7 +56,7 @@ std::unique_ptr<cudf::column> castCountColumnToInt64(
     rmm::cuda_stream_view stream) {
   if (count->type().id() != cudf::type_id::INT64) {
     count = cudf::cast(
-        *count, cudf::data_type{cudf::type_id::INT64}, stream, get_output_mr());
+        *count, cudf::data_type{cudf::type_id::INT64}, stream, get_temp_mr());
   }
   return count;
 }

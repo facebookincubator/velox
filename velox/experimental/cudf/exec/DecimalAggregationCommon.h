@@ -40,8 +40,9 @@ cudf::column_view castDecimal64InputToDecimal128(
     std::unique_ptr<cudf::column>& holder,
     rmm::cuda_stream_view stream);
 
-// Ensures the partial-row count column is INT64, casting with the default GPU
-// output memory resource when the incoming type differs.
+// Ensures the partial-row count column is INT64, casting with the temporary
+// memory resource (the result is consumed internally, not part of operator
+// output) when the incoming type differs.
 std::unique_ptr<cudf::column> castCountColumnToInt64(
     std::unique_ptr<cudf::column> count,
     rmm::cuda_stream_view stream);

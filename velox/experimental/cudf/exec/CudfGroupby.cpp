@@ -1014,7 +1014,7 @@ void CudfGroupby::computePartialGroupbyStreaming(CudfVectorPtr tbl) {
         std::move(tablesToConcat),
         bufferedResultType_,
         partialOutputStream,
-        get_output_mr());
+        get_temp_mr());
 
     // Now we have to groupby again but this time with intermediate aggregators.
     // Keep concatenatedTable alive while we use its view.
@@ -1264,7 +1264,7 @@ RowVectorPtr CudfGroupby::doGetOutput() {
   auto stream = cudfGlobalStreamPool().get_stream();
 
   auto tbl = getConcatenatedTable(
-      std::exchange(inputs_, {}), inputType_, stream, get_output_mr());
+      std::exchange(inputs_, {}), inputType_, stream, get_temp_mr());
 
   // Release input data after synchronizing.
   stream.synchronize();
