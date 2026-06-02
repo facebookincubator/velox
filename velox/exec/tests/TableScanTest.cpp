@@ -5301,6 +5301,60 @@ TEST_F(TableScanTest, timestampPartitionKey) {
       .assertResults(getExpected(false));
 }
 
+TEST_F(TableScanTest, timestampUtcPartitionKey) {
+  const char* inputs[] = {"2023-10-14 07:00:00.0", "2024-01-06 04:00:00.0"};
+
+  auto vectors = makeVectors(1, 1);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+
+  const auto getSplits = [&]() {
+    std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
+    for (const auto& timestampInput : inputs) {
+      splits.push_back(
+          exec::test::HiveConnectorSplitBuilder(filePath->getPath())
+              .partitionKey("t", timestampInput)
+              .build());
+    }
+    return splits;
+  };
+
+  std::vector<Timestamp> expectedValues;
+  for (const auto& timestampInput : inputs) {
+    expectedValues.push_back(
+        util::fromTimestampString(
+            timestampInput, util::TimestampParseMode::kPrestoCast)
+            .value());
+  }
+  auto expected = makeRowVector(
+      {"t"}, {makeFlatVector<Timestamp>(expectedValues, TIMESTAMP_UTC())});
+
+  connector::ColumnHandleMap assignments = {
+      {"t", partitionKey("t", TIMESTAMP_UTC())}};
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .outputType(ROW({"t"}, {TIMESTAMP_UTC()}))
+                  .assignments(assignments)
+                  .endTableScan()
+                  .planNode();
+
+  // TIMESTAMP_UTC partition values must always be interpreted as UTC,
+  // independent of local-time partition parsing setting.
+  const char* configValues[] = {"true", "false"};
+  for (const auto* configValue : configValues) {
+    SCOPED_TRACE(
+        fmt::format("readTimestampPartitionValueAsLocalTime={}", configValue));
+    AssertQueryBuilder(plan)
+        .connectorSessionProperty(
+            kHiveConnectorId,
+            connector::hive::HiveConfig::
+                kReadTimestampPartitionValueAsLocalTimeSession,
+            configValue)
+        .splits(getSplits())
+        .assertResults(expected);
+  }
+}
+
 TEST_F(TableScanTest, partitionKeyNotMatchPartitionKeysHandle) {
   auto vectors = makeVectors(1, 1'000);
   auto filePath = TempFilePath::create();
