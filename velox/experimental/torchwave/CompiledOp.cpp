@@ -346,17 +346,19 @@ constexpr int32_t kDefaultNumSMs = 100;
 constexpr int32_t kDefaultBlocksPerSM = 4;
 
 int32_t makeGrid(
-    const std::vector<LaunchData>& launches,
+    std::vector<LaunchData>& launches,
     StepVectors& sv,
     int32_t maxBlocksPerSM) {
   const int32_t blockSize = WaveConfig::get().blockSize;
 
-  // Compute cost per launch: numElements * unitCost.
+  // Compute cost per launch: numElements * unitCost * costAdjustFactor.
   sv.costs.resize(launches.size());
   float totalCost = 0;
   for (size_t i = 0; i < launches.size(); ++i) {
+    float adjust =
+        launches[i].costAdjustFactor > 0 ? launches[i].costAdjustFactor : 1.0f;
     sv.costs[i] = static_cast<float>(launches[i].numElements) *
-        launches[i].launch->op->unitCost();
+        launches[i].launch->op->unitCost() * adjust;
     totalCost += sv.costs[i];
   }
 
@@ -383,8 +385,7 @@ int32_t makeGrid(
   int32_t blocksPerSM =
       maxBlocksPerSM > 0 ? maxBlocksPerSM : kDefaultBlocksPerSM;
   int32_t maxBlocks = numSMs * blocksPerSM;
-  int32_t targetBlocks =
-      sv.isCgGrid ? static_cast<int32_t>(maxBlocks * 0.90f) : maxBlocks;
+  int32_t targetBlocks = maxBlocks;
 
   // Assign blocks pro rata by cost, at least 1 per launch, capped by
   // maxBlocks.
@@ -422,26 +423,90 @@ int32_t makeGrid(
   // For cooperative grids, cap total blocks at what the GPU can run
   // concurrently.
   if (sv.isCgGrid && totalAssigned > targetBlocks) {
-    float scale =
-        static_cast<float>(targetBlocks) / static_cast<float>(totalAssigned);
-    totalAssigned = 0;
-    for (size_t i = 0; i < launches.size(); ++i) {
-      auto scaled = std::max(
-          1, static_cast<int32_t>(sv.numBlocksPerLaunch[i] * scale + 0.5f));
-      sv.numBlocksPerLaunch[i] = scaled;
-      totalAssigned += scaled;
-    }
-    if (totalAssigned > maxBlocks) {
-      int32_t avg = totalAssigned / static_cast<int32_t>(launches.size());
-      int32_t excess = totalAssigned - maxBlocks;
-      for (size_t i = 0; i < launches.size() && excess > 0; ++i) {
-        if (sv.numBlocksPerLaunch[i] > avg && sv.numBlocksPerLaunch[i] > 1) {
+    // Trim excess blocks from launches with the most blocks first,
+    // preserving the proportional allocation for small launches.
+    while (totalAssigned > targetBlocks) {
+      int32_t before = totalAssigned;
+      // Find the current max block count.
+      int32_t maxVal = 1;
+      for (size_t i = 0; i < launches.size(); ++i) {
+        maxVal = std::max(maxVal, sv.numBlocksPerLaunch[i]);
+      }
+      if (maxVal <= 1) {
+        break;
+      }
+      // Remove one block from all launches at the max level.
+      for (size_t i = 0; i < launches.size() && totalAssigned > targetBlocks;
+           ++i) {
+        if (sv.numBlocksPerLaunch[i] == maxVal) {
           --sv.numBlocksPerLaunch[i];
           --totalAssigned;
-          --excess;
         }
       }
+      if (totalAssigned == before) {
+        break;
+      }
     }
+  }
+
+  // Balance projected latency: move blocks from the largest-blocked op to the
+  // highest-latency op when the highest-latency op has fewer blocks.
+  if (launches.size() > 1) {
+    for (int32_t pass = 0; pass < 20; ++pass) {
+      int32_t highLatIdx = -1;
+      float highLat = 0;
+      int32_t donorIdx = -1;
+      float donorLat = 0;
+      int32_t donorBlocks = 0;
+      for (size_t i = 0; i < launches.size(); ++i) {
+        if (sv.numBlocksPerLaunch[i] <= 0) {
+          continue;
+        }
+        float lat = sv.costs[i] / static_cast<float>(sv.numBlocksPerLaunch[i]);
+        if (lat > highLat) {
+          highLat = lat;
+          highLatIdx = static_cast<int32_t>(i);
+        }
+      }
+      if (highLatIdx < 0) {
+        break;
+      }
+      for (size_t i = 0; i < launches.size(); ++i) {
+        if (static_cast<int32_t>(i) == highLatIdx ||
+            sv.numBlocksPerLaunch[i] <= 1) {
+          continue;
+        }
+        float lat = sv.costs[i] / static_cast<float>(sv.numBlocksPerLaunch[i]);
+        if (sv.numBlocksPerLaunch[i] > donorBlocks ||
+            (sv.numBlocksPerLaunch[i] == donorBlocks && lat < donorLat)) {
+          donorIdx = static_cast<int32_t>(i);
+          donorLat = lat;
+          donorBlocks = sv.numBlocksPerLaunch[i];
+        }
+      }
+      if (donorIdx < 0 || donorLat >= highLat) {
+        break;
+      }
+      // Check if moving a block actually helps: the donor's new latency
+      // must stay below the receiver's new latency.
+      float newHighLat = sv.costs[highLatIdx] /
+          static_cast<float>(sv.numBlocksPerLaunch[highLatIdx] + 1);
+      float newDonorLat = sv.costs[donorIdx] /
+          static_cast<float>(sv.numBlocksPerLaunch[donorIdx] - 1);
+      if (newDonorLat >= highLat || newHighLat >= highLat * 0.95f) {
+        break;
+      }
+      if (sv.numBlocksPerLaunch[highLatIdx] >= sv.maxBlocks[highLatIdx]) {
+        break;
+      }
+      ++sv.numBlocksPerLaunch[highLatIdx];
+      --sv.numBlocksPerLaunch[donorIdx];
+    }
+  }
+
+  // Record expected fraction for cost adjustment feedback.
+  for (size_t i = 0; i < launches.size(); ++i) {
+    launches[i].expectedFraction = totalCost > 0 ? sv.costs[i] / totalCost : 0;
   }
 
   // Fill blocks and launchIndices.
@@ -1979,7 +2044,7 @@ void CompositeInvocation::execute(ExecutionState& state) {
   Timer ex("comp inv execute", WaveConfig::get().printTiming);
   auto& frame = *state.frame;
 
-  if (WaveConfig::get().trace) {
+  if (WaveConfig::get().trace & (WaveConfig::kNodes | WaveConfig::kLaunches)) {
     std::cout << "==== Node " << sequenceNumber_ << std::endl;
   }
 
@@ -1991,6 +2056,15 @@ void CompositeInvocation::execute(ExecutionState& state) {
     }
   }
 
+  using Clock = std::chrono::high_resolution_clock;
+  bool doTiming = WaveConfig::get().printTiming ||
+      (WaveConfig::get().trace & WaveConfig::kTiming);
+  auto elapsed = [](Clock::time_point start) {
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+               Clock::now() - start)
+        .count();
+  };
+
   int32_t blockSize;
   for (int32_t stepIdx = 0;; ++stepIdx) {
     auto& sv = getStepVectors(state.stepVectors, sequenceNumber_, stepIdx);
@@ -1999,8 +2073,11 @@ void CompositeInvocation::execute(ExecutionState& state) {
         state.stepVectors.at(sequenceNumber_).at(0).gridChoices;
 
     {
-      Timer t("gather", WaveConfig::get().printTiming);
+      auto t0 = Clock::now();
       gatherLaunches(state, currentGridChoices, stepIdx, sv);
+      if (doTiming) {
+        sv.gatherUs = elapsed(t0);
+      }
     }
     if (sv.gridChanged) {
       invalidateReusedState(
@@ -2014,15 +2091,22 @@ void CompositeInvocation::execute(ExecutionState& state) {
     }
 
     if (sv.kernels.empty()) {
-      if (WaveConfig::get().trace) {
+      if (WaveConfig::get().trace &
+          (WaveConfig::kNodes | WaveConfig::kLaunches)) {
         traceStep(stepIdx, sv, currentGridChoices);
       }
+      auto tStandalone = Clock::now();
       runStandalones(
           sv.standalones,
           state,
           *state.kernelMap,
           *state.standaloneIndices,
           *state.standaloneStats);
+      if (doTiming) {
+        sv.standaloneUs = elapsed(tStandalone);
+      }
+      state.launchDebugInfos.push_back(
+          {nullptr, nullptr, 0, sequenceNumber_, stepIdx});
       verifyAgainstReference(sv.standalones, frame, state);
       continue;
     }
@@ -2035,7 +2119,7 @@ void CompositeInvocation::execute(ExecutionState& state) {
     }
 
     {
-      Timer t("grid", WaveConfig::get().printTiming);
+      auto t0 = Clock::now();
       if (gridSizesMatch(sv.kernels, sv)) {
         blockSize = sv.cachedBlockSize;
       } else {
@@ -2048,6 +2132,9 @@ void CompositeInvocation::execute(ExecutionState& state) {
         sv.cachedBlockSize = blockSize;
         updateGridSizeBounds(sv.kernels, sv);
       }
+      if (doTiming) {
+        sv.gridUs = elapsed(t0);
+      }
     }
 
     auto numBlocks = sv.blocks.size();
@@ -2059,7 +2146,7 @@ void CompositeInvocation::execute(ExecutionState& state) {
     uint8_t* pinnedBase;
     uint8_t* deviceBase;
     {
-      Timer t("alloc outputs", WaveConfig::get().printTiming);
+      auto t0 = Clock::now();
       sv.paramOffsets.resize(sv.kernels.size());
       int64_t paramCursor = blockInfoBytes;
       for (size_t i = 0; i < sv.kernels.size(); ++i) {
@@ -2090,6 +2177,9 @@ void CompositeInvocation::execute(ExecutionState& state) {
           state.deviceArena);
       pinnedBase = pinnedBuffer->as<uint8_t>();
       deviceBase = deviceBuffer->as<uint8_t>();
+      if (doTiming) {
+        sv.allocUs = elapsed(t0);
+      }
     }
 
     auto* deviceDebugBase =
@@ -2097,7 +2187,7 @@ void CompositeInvocation::execute(ExecutionState& state) {
     int32_t returnBegin = -1;
     int32_t returnEnd = -1;
     {
-      Timer t("fill params", WaveConfig::get().printTiming);
+      auto t0 = Clock::now();
       if (!sv.blocks.empty()) {
         memcpy(pinnedBase, sv.blocks.data(), blockInfoBytes);
       }
@@ -2128,9 +2218,32 @@ void CompositeInvocation::execute(ExecutionState& state) {
             pinnedBase + sv.paramOffsets[i],
             deviceBase + sv.paramOffsets[i]);
       }
+      if (doTiming) {
+        sv.fillUs = elapsed(t0);
+        sv.inputBytes = 0;
+        sv.outputBytes = 0;
+        for (size_t i = 0; i < sv.kernels.size(); ++i) {
+          for (size_t j = 0; j < sv.kernels[i].tensorsInFrame.size(); ++j) {
+            auto off = sv.kernels[i].tensorOffsets[j];
+            auto* t = reinterpret_cast<Tensor*>(
+                pinnedBase + sv.paramOffsets[i] + off);
+            auto bytes = static_cast<int64_t>(t->numEl) * t->elementSize;
+            if (sv.kernels[i].shapeOnlyTensorIndices.count(j)) {
+              continue;
+            }
+            if (j <
+                static_cast<size_t>(sv.kernels[i].launch->op->numInputs())) {
+              sv.inputBytes += bytes;
+            } else {
+              sv.outputBytes += bytes;
+            }
+          }
+        }
+      }
     }
 
-    if (WaveConfig::get().trace) {
+    if (WaveConfig::get().trace &
+        (WaveConfig::kNodes | WaveConfig::kLaunches)) {
       traceStep(stepIdx, sv, currentGridChoices);
     }
 
@@ -2141,19 +2254,24 @@ void CompositeInvocation::execute(ExecutionState& state) {
          sequenceNumber_,
          stepIdx});
 
+    int64_t standaloneElapsed = 0;
     auto runStepStandalones = [&]() {
       if (!sv.standalones.empty()) {
+        auto tStandalone = Clock::now();
         runStandalones(
             sv.standalones,
             state,
             *state.kernelMap,
             *state.standaloneIndices,
             *state.standaloneStats);
+        if (doTiming) {
+          standaloneElapsed = elapsed(tStandalone);
+        }
       }
     };
 
     {
-      Timer t("launch1", WaveConfig::get().printTiming);
+      auto tLaunch = Clock::now();
       launch(
           static_cast<int32_t>(numBlocks),
           blockSize,
@@ -2167,10 +2285,16 @@ void CompositeInvocation::execute(ExecutionState& state) {
           sv,
           stepIdx,
           runStepStandalones);
-    }
 
-    if (returnBegin >= 0) {
-      processReturnData(sv, frame, pinnedBase);
+      if (returnBegin >= 0) {
+        processReturnData(sv, frame, pinnedBase);
+      }
+      if (doTiming) {
+        sv.kernelUs = elapsed(tLaunch);
+        sv.standaloneUs = standaloneElapsed;
+        sv.standaloneBound = standaloneElapsed > sv.kernelUs;
+        sv.noDtoH = (returnBegin < 0);
+      }
     }
 
     // Trace outputs of kernel launches after execution.
@@ -2318,8 +2442,13 @@ void CompositeInvocation::launch(
         betweenLaunchAndSync();
       }
       stream->wait();
-    } else if (betweenLaunchAndSync) {
-      betweenLaunchAndSync();
+    } else {
+      if (betweenLaunchAndSync) {
+        betweenLaunchAndSync();
+      }
+      if (WaveConfig::get().trace & WaveConfig::kTiming) {
+        stream->wait();
+      }
     }
   }
 }

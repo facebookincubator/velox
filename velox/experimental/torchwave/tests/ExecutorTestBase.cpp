@@ -128,6 +128,10 @@ DEFINE_bool(
     debug_single_ops,
     false,
     "Launch kernel once per block for debugging, waiting after each launch");
+DEFINE_bool(
+    auto_adjust_cost,
+    false,
+    "Adjust per-op cost multipliers after each execution based on actual thread block clocks");
 
 namespace torch::wave {
 
@@ -478,6 +482,7 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().continueAfterMismatch = FLAGS_continue_after_mismatch;
   WaveConfig::get().kernelDebugOutput = FLAGS_kernel_debug_output;
   WaveConfig::get().debugSingleOps = FLAGS_debug_single_ops;
+  WaveConfig::get().autoAdjustCost = FLAGS_auto_adjust_cost;
   if (!FLAGS_print_options.empty()) {
     NodePrinter::setDefaults(
         NodePrinter::parsePrintOptions(FLAGS_print_options));
@@ -878,6 +883,12 @@ void ExecutorTestBase::runTestWithFixture(
       waveSum += us;
       if (i == repeats - 1) {
         lastDebugInfo = waveThreadInfo().debugInfo;
+      }
+      if (WaveConfig::get().trace & WaveConfig::kTiming) {
+        const auto& report = waveThreadInfo().perfReport;
+        if (!report.empty()) {
+          std::cout << "--- repeat " << i << " ---\n" << report << std::endl;
+        }
       }
     }
 
