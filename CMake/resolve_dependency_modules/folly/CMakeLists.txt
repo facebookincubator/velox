@@ -17,10 +17,10 @@ cmake_minimum_required(VERSION 3.28)
 velox_set_source(FastFloat)
 velox_resolve_dependency(FastFloat CONFIG REQUIRED)
 
-set(VELOX_FOLLY_BUILD_VERSION v2026.02.16.00)
+set(VELOX_FOLLY_BUILD_VERSION v2026.06.01.00)
 set(
   VELOX_FOLLY_BUILD_SHA256_CHECKSUM
-  f58556f7a58d77a424559ec7bd0c455cf7632aa39d8ead6ea197f42cdf7f5aea
+  0410dd47be4d4a1af1e6dfcb26e15b511f45ace363391e76e4dc29309620c856
 )
 set(
   VELOX_FOLLY_SOURCE_URL
