@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include <folly/container/F14Map.h>
+#include <limits>
 #include "velox/functions/lib/Re2Functions.h"
 #include "velox/functions/lib/string/StringImpl.h"
 
@@ -225,6 +226,70 @@ void registerRegexpReplace(const std::string& prefix) {
       Varchar,
       Varchar,
       int32_t>({prefix + "regexp_replace"});
+}
+
+template <typename T>
+struct RegexpInstrFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const arg_type<Varchar>* /*stringInput*/,
+      const arg_type<Varchar>* pattern) {
+    if (pattern) {
+      const auto processedPattern = prepareRegexpReplacePattern(*pattern);
+      re_.emplace(processedPattern, RE2::Quiet);
+      VELOX_USER_CHECK(
+          re_->ok(),
+          "Invalid regular expression {}: {}.",
+          processedPattern,
+          re_->error());
+    }
+    cache_.setMaxCompiledRegexes(config.exprMaxCompiledRegexes());
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      int32_t& result,
+      const arg_type<Varchar>& stringInput,
+      const arg_type<Varchar>& pattern) {
+    const re2::StringPiece input(stringInput.data(), stringInput.size());
+    const RE2& re = re_.has_value() ? re_.value() : getOrCompileRegex(pattern);
+
+    re2::StringPiece match;
+    if (re.Match(input, 0, input.size(), RE2::UNANCHORED, &match, 1)) {
+      const size_t byteOffset =
+          static_cast<size_t>(match.data() - input.data());
+      if (byteOffset == 0) {
+        result = 1;
+      } else {
+        const int64_t charCount =
+            functions::stringCore::lengthUnicode(input.data(), byteOffset);
+        VELOX_USER_CHECK_LE(
+            charCount,
+            static_cast<int64_t>(std::numeric_limits<int32_t>::max()) - 1,
+            "regexp_instr: string has too many characters for int32_t result");
+        result = static_cast<int32_t>(charCount + 1);
+      }
+    } else {
+      result = 0;
+    }
+  }
+
+ private:
+  const RE2& getOrCompileRegex(const arg_type<Varchar>& pattern) {
+    processedPatternBuf_ = prepareRegexpReplacePattern(pattern);
+    return *cache_.findOrCompile(StringView(processedPatternBuf_));
+  }
+
+  std::optional<RE2> re_;
+  detail::ReCache cache_{0};
+  std::string processedPatternBuf_;
+};
+
+void registerRegexpInstr(const std::string& prefix) {
+  registerFunction<RegexpInstrFunction, int32_t, Varchar, Varchar>(
+      {prefix + "regexp_instr"});
 }
 
 } // namespace facebook::velox::functions::sparksql
