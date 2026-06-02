@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/common/file/File.h"
+#include "velox/connectors/hive/iceberg/DeletionVectorReader.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 
 #include <cudf/table/table.hpp>
@@ -71,12 +72,6 @@ class CudfDeletionVectorReader {
       std::size_t numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref temp_mr);
-
-  /// Field IDs used to encode DV blob offset and length in the
-  /// IcebergDeleteFile bounds maps. The coordinator encodes these when
-  /// building splits from Puffin file metadata.
-  static constexpr int32_t kDvOffsetFieldId = 100;
-  static constexpr int32_t kDvLengthFieldId = 101;
 
  private:
   // Representation of deletion vector v1 (DV-v1) blob source.

@@ -19,6 +19,7 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/connectors/hive/iceberg/DeletionVectorReader.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 
 #include <cudf/column/column_factories.hpp>
@@ -47,6 +48,10 @@ template <typename T>
 T inline unalignedLoad(std::string_view payload, std::size_t offset = 0)
   requires(std::is_integral_v<T>)
 {
+  VELOX_CHECK_GE(
+      payload.size() - offset,
+      sizeof(T),
+      "Payload is too small to contain the value.");
   T value;
   std::memcpy(&value, payload.data() + offset, sizeof(T));
   return value;
@@ -135,8 +140,11 @@ void CudfDeletionVectorReader::loadBitmap(rmm::cuda_stream_view stream) {
   //    [Nth Key (4 bytes)]
   //    [Nth 32 bit roaring bitmap]
   auto numKeys = unalignedLoad<uint64_t>(payload);
-  VELOX_CHECK_GT(numKeys, 0, "Deletion vector has zero keys");
-
+  // Zero keys means no bitmap to apply.
+  if (numKeys == 0) {
+    loaded_ = true;
+    return;
+  }
   const auto firstKey = unalignedLoad<uint32_t>(payload, sizeof(uint64_t));
 
   // Single, high-bits key == 0, use faster 32-bit dispatch
@@ -170,7 +178,7 @@ CudfDeletionVectorReader::loadBlobSource() {
   // kept as a fallback for callers that have not migrated yet.
   if (dvFile_.contentLength == 0) {
     if (auto it = dvFile_.lowerBounds.find(
-            CudfDeletionVectorReader::kDvOffsetFieldId);
+            velox_iceberg::DeletionVectorReader::kDvOffsetFieldId);
         it != dvFile_.lowerBounds.end()) {
       try {
         blobOffset = std::stoull(it->second);
@@ -180,7 +188,7 @@ CudfDeletionVectorReader::loadBlobSource() {
       }
     }
     if (auto it = dvFile_.upperBounds.find(
-            CudfDeletionVectorReader::kDvLengthFieldId);
+            velox_iceberg::DeletionVectorReader::kDvLengthFieldId);
         it != dvFile_.upperBounds.end()) {
       try {
         blobLength = std::stoull(it->second);

@@ -117,13 +117,11 @@ inline velox_iceberg::IcebergDeleteFile makeDvDeleteFile(
     uint64_t blobOffset = 0,
     std::optional<uint64_t> blobLength = std::nullopt,
     int64_t dataSequenceNumber = 0) {
-  using connector::hive::iceberg::CudfDeletionVectorReader;
-
   std::unordered_map<int32_t, std::string> lowerBounds;
   std::unordered_map<int32_t, std::string> upperBounds;
-  lowerBounds[CudfDeletionVectorReader::kDvOffsetFieldId] =
+  lowerBounds[velox_iceberg::DeletionVectorReader::kDvOffsetFieldId] =
       std::to_string(blobOffset);
-  upperBounds[CudfDeletionVectorReader::kDvLengthFieldId] =
+  upperBounds[velox_iceberg::DeletionVectorReader::kDvLengthFieldId] =
       std::to_string(blobLength.value_or(fileSize));
   return velox_iceberg::IcebergDeleteFile(
       velox_iceberg::FileContent::kDeletionVector,
