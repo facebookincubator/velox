@@ -360,11 +360,8 @@ struct GroupbyDecimalAvgAggregator : GroupbyAggregator {
       return finalizeDecimalAverage(
           std::move(col), std::move(count), resultType, stream);
     }
-    auto const cudfResType = cudf_velox::veloxToCudfDataType(resultType);
-    if (col->type() != cudfResType) {
-      col = cudf::cast(*col, cudfResType, stream, cudf_velox::get_output_mr());
-    }
-    return col;
+    // All four aggregation steps are handled above.
+    VELOX_UNREACHABLE();
   }
 
  private:

@@ -79,7 +79,6 @@ DecimalSumStateColumns deserializeDecimalSumState(
   }
 
   cudf::strings_column_view strings(stateCol);
-  numRows = strings.size();
 
   auto offsetsView = strings.offsets();
   auto offsetsType = offsetsView.type().id();
@@ -101,23 +100,21 @@ DecimalSumStateColumns deserializeDecimalSumState(
   auto sumView = sumCol->mutable_view();
   auto countView = countCol->mutable_view();
 
-  if (numRows > 0) {
-    auto const rowCount = static_cast<int32_t>(numRows);
-    const bool offsets64 = (offsetsType == cudf::type_id::INT64);
-    VELOX_CHECK(
-        offsets64 || offsetsType == cudf::type_id::INT32,
-        "Decimal sum state requires INT32 or INT64 offsets (offset type is {})",
-        static_cast<int>(offsetsType));
-    detail::unpackDecimalSumState(
-        offsets64,
-        offsets64 ? static_cast<const void*>(offsetsView.data<int64_t>())
-                  : static_cast<const void*>(offsetsView.data<int32_t>()),
-        charsPtr,
-        sumView.data<__int128_t>(),
-        countView.data<int64_t>(),
-        rowCount,
-        stream);
-  }
+  // numRows is guaranteed positive here
+  const bool offsets64 = (offsetsType == cudf::type_id::INT64);
+  VELOX_CHECK(
+      offsets64 || offsetsType == cudf::type_id::INT32,
+      "Decimal sum state requires INT32 or INT64 offsets (offset type is {})",
+      static_cast<int>(offsetsType));
+  detail::unpackDecimalSumState(
+      offsets64,
+      offsets64 ? static_cast<const void*>(offsetsView.data<int64_t>())
+                : static_cast<const void*>(offsetsView.data<int32_t>()),
+      charsPtr,
+      sumView.data<__int128_t>(),
+      countView.data<int64_t>(),
+      numRows,
+      stream);
 
   if (stateCol.nullable()) {
     auto nullMask = cudf::copy_bitmask(stateCol, stream, mr);
@@ -153,6 +150,10 @@ std::unique_ptr<cudf::column> serializeDecimalSumState(
       static_cast<cudf::size_type>(std::numeric_limits<int32_t>::max()),
       "Too many rows to serialize decimal sum state (row count is {})",
       numRows);
+
+  if (numRows == 0) {
+    return cudf::make_empty_column(cudf::type_id::STRING);
+  }
 
   auto const rowCount = static_cast<int32_t>(numRows);
 
@@ -190,30 +191,28 @@ std::unique_ptr<cudf::column> serializeDecimalSumState(
       rowCount,
       stream);
 
-  if (numRows > 0) {
-    auto charsPtr = reinterpret_cast<uint8_t*>(charsBuf.data());
-    const void* offsetsPtr = useLargeOffsets
-        ? static_cast<const void*>(offsetsView.data<int64_t>())
-        : static_cast<const void*>(offsetsView.data<int32_t>());
-    const auto sumType = sumCol.type().id();
-    VELOX_CHECK(
-        sumType == cudf::type_id::DECIMAL64 ||
-            sumType == cudf::type_id::DECIMAL128,
-        "Unsupported decimal sum column type (type is {})",
-        static_cast<int>(sumType));
-    const void* sumPtr = sumType == cudf::type_id::DECIMAL64
-        ? static_cast<const void*>(sumCol.data<int64_t>())
-        : static_cast<const void*>(sumCol.data<__int128_t>());
-    detail::packDecimalSumState(
-        sumType,
-        useLargeOffsets,
-        sumPtr,
-        countCol.data<int64_t>(),
-        offsetsPtr,
-        charsPtr,
-        rowCount,
-        stream);
-  }
+  auto charsPtr = reinterpret_cast<uint8_t*>(charsBuf.data());
+  const void* offsetsPtr = useLargeOffsets
+      ? static_cast<const void*>(offsetsView.data<int64_t>())
+      : static_cast<const void*>(offsetsView.data<int32_t>());
+  const auto sumType = sumCol.type().id();
+  VELOX_CHECK(
+      sumType == cudf::type_id::DECIMAL64 ||
+          sumType == cudf::type_id::DECIMAL128,
+      "Unsupported decimal sum column type (type is {})",
+      static_cast<int>(sumType));
+  const void* sumPtr = sumType == cudf::type_id::DECIMAL64
+      ? static_cast<const void*>(sumCol.data<int64_t>())
+      : static_cast<const void*>(sumCol.data<__int128_t>());
+  detail::packDecimalSumState(
+      sumType,
+      useLargeOffsets,
+      sumPtr,
+      countCol.data<int64_t>(),
+      offsetsPtr,
+      charsPtr,
+      rowCount,
+      stream);
 
   auto [nullMask, nullCount] =
       detail::buildStateValidityMask(sumCol, countCol, stream, get_output_mr());
