@@ -30,10 +30,13 @@
 namespace facebook::velox::cudf_velox {
 namespace {
 
-// TODO: Handle overflow as in CPU.
+// Mirrors the CPU LongDecimalWithOverflowState layout so serialized SUM state
+// is interchangeable between CPU and GPU aggregation.
+// TODO: Track int128 overflow as the CPU does (DecimalUtil::addWithOverflow);
+// the `overflow` field is reserved for that and is always 0 until then.
 struct DecimalSumState {
   int64_t count; // count of non-null input rows aggregated
-  int64_t overflow; // overflow/extension field, not used by GPU
+  int64_t overflow; // net int128 carries (CPU parity); always 0 on GPU for now
   uint64_t lower; // lower 64 bits of the decimal sum
   int64_t upper; // upper 64 bits of the decimal sum (signed)
 };
