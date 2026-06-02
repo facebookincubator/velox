@@ -85,15 +85,6 @@ cudf::size_type resolveFieldReferenceIndex(
   return static_cast<cudf::size_type>(fieldIndex);
 }
 
-std::shared_ptr<velox::exec::ConstantExpr> asConstantExpr(
-    const std::shared_ptr<velox::exec::Expr>& expr) {
-  return std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr);
-}
-
-bool isLiteralExpr(const std::shared_ptr<velox::exec::Expr>& expr) {
-  return asConstantExpr(expr) != nullptr;
-}
-
 bool decimalScalarIsZero(
     const cudf::scalar& scalar,
     rmm::cuda_stream_view stream) {
@@ -286,7 +277,9 @@ static bool matchCallAgainstSignatures(
     const size_t fixed = std::min(constArgs.size(), n);
     bool ok = true;
     for (size_t i = 0; i < fixed; ++i) {
-      if (constArgs[i] && !isLiteralExpr(call.inputs()[i])) {
+      if (constArgs[i] &&
+          !std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
+              call.inputs()[i])) {
         ok = false;
         break;
       }
@@ -1847,7 +1840,7 @@ class RowConstructorFunction : public CudfFunction {
     bool hasNonLiteralInput = false;
     literals_.reserve(numInputs_);
     for (const auto& input : expr->inputs()) {
-      if (auto constant = asConstantExpr(input)) {
+      if (auto constant = std::dynamic_pointer_cast<ConstantExpr>(input)) {
         literals_.push_back(makeScalarFromConstantExpr(constant));
       } else {
         hasNonLiteralInput = true;
@@ -2456,7 +2449,7 @@ std::shared_ptr<FunctionExpression> FunctionExpression::create(
 
   if (node->function_ || std::dynamic_pointer_cast<FieldReference>(expr)) {
     for (const auto& input : expr->inputs()) {
-      if (!isLiteralExpr(input)) {
+      if (!std::dynamic_pointer_cast<velox::exec::ConstantExpr>(input)) {
         node->subexpressions_.push_back(
             createCudfExpression(input, inputRowSchema));
       }
@@ -2615,7 +2608,7 @@ bool canBeEvaluatedByCudf(std::shared_ptr<velox::exec::Expr> expr, bool deep) {
 
   if (deep) {
     for (const auto& input : expr->inputs()) {
-      if (!isLiteralExpr(input) && !canBeEvaluatedByCudf(input, true)) {
+      if (input->name() != "literal" && !canBeEvaluatedByCudf(input, true)) {
         return false;
       }
     }
