@@ -651,7 +651,9 @@ void BaseVector::clearNulls(vector_size_t begin, vector_size_t end) {
 void BaseVector::setNulls(const BufferPtr& nulls) {
   if (nulls) {
     VELOX_DCHECK_GE(nulls->size(), bits::nbytes(length_));
-    nulls_ = nulls;
+    if (nulls_ != nulls) {
+      nulls_ = nulls;
+    }
     rawNulls_ = nulls->as<uint64_t>();
     nullCount_ = std::nullopt;
   } else {
