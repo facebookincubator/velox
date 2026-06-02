@@ -85,6 +85,15 @@ cudf::size_type resolveFieldReferenceIndex(
   return static_cast<cudf::size_type>(fieldIndex);
 }
 
+std::shared_ptr<velox::exec::ConstantExpr> asConstantExpr(
+    const std::shared_ptr<velox::exec::Expr>& expr) {
+  return std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr);
+}
+
+bool isLiteralExpr(const std::shared_ptr<velox::exec::Expr>& expr) {
+  return asConstantExpr(expr) != nullptr;
+}
+
 bool decimalScalarIsZero(
     const cudf::scalar& scalar,
     rmm::cuda_stream_view stream) {
@@ -277,7 +286,7 @@ static bool matchCallAgainstSignatures(
     const size_t fixed = std::min(constArgs.size(), n);
     bool ok = true;
     for (size_t i = 0; i < fixed; ++i) {
-      if (constArgs[i] && call.inputs()[i]->name() != "literal") {
+      if (constArgs[i] && !isLiteralExpr(call.inputs()[i])) {
         ok = false;
         break;
       }
@@ -290,29 +299,30 @@ static bool matchCallAgainstSignatures(
   return false;
 }
 
-void mergeSecondaryNullsIntoResult(
+void mergeNullSourceNullsIntoResult(
     cudf::column& result,
-    cudf::column_view secondaryColumn,
+    cudf::column_view nullSourceColumn,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
-  // Merge secondary-input nulls back only when present to preserve Velox CPU
+  // Merge null-source nulls back only when present to preserve Velox CPU
   // null propagation semantics without extra mask work unless it is required.
-  if (!secondaryColumn.has_nulls()) {
+  VELOX_DCHECK_EQ(result.size(), nullSourceColumn.size());
+  if (!nullSourceColumn.has_nulls()) {
     return;
   }
 
   if (!result.nullable()) {
     result.set_null_mask(
-        cudf::copy_bitmask(secondaryColumn, stream, mr),
-        secondaryColumn.null_count());
+        cudf::copy_bitmask(nullSourceColumn, stream, mr),
+        nullSourceColumn.null_count());
     return;
   }
 
   std::vector<cudf::bitmask_type const*> masks{
       result.view().null_mask(),
-      secondaryColumn.null_mask(),
+      nullSourceColumn.null_mask(),
   };
-  std::vector<cudf::size_type> beginBits{0, secondaryColumn.offset()};
+  std::vector<cudf::size_type> beginBits{0, nullSourceColumn.offset()};
   auto [nullMask, nullCount] =
       cudf::bitmask_and(masks, beginBits, result.size(), stream, mr);
   result.set_null_mask(std::move(nullMask), nullCount);
@@ -1446,7 +1456,7 @@ class LikeFunction : public CudfFunction {
     // Velox returns null if either the input or pattern row is null. cuDF
     // already propagated input nulls into the result, so only merge the pattern
     // nulls back when needed.
-    mergeSecondaryNullsIntoResult(*result, patternCol, stream, mr);
+    mergeNullSourceNullsIntoResult(*result, patternCol, stream, mr);
     return result;
   }
 
@@ -1660,7 +1670,7 @@ class StringPatternPredicateFunction : public CudfFunction {
     // can return a valid false when the pattern row is null, but Velox returns
     // null if either side is null. cuDF already propagated input nulls into the
     // result, so only merge the pattern nulls back when needed.
-    mergeSecondaryNullsIntoResult(*result, patternCol, stream, mr);
+    mergeNullSourceNullsIntoResult(*result, patternCol, stream, mr);
     return result;
   }
 
@@ -1837,7 +1847,7 @@ class RowConstructorFunction : public CudfFunction {
     bool hasNonLiteralInput = false;
     literals_.reserve(numInputs_);
     for (const auto& input : expr->inputs()) {
-      if (auto constant = std::dynamic_pointer_cast<ConstantExpr>(input)) {
+      if (auto constant = asConstantExpr(input)) {
         literals_.push_back(makeScalarFromConstantExpr(constant));
       } else {
         hasNonLiteralInput = true;
@@ -2446,7 +2456,7 @@ std::shared_ptr<FunctionExpression> FunctionExpression::create(
 
   if (node->function_ || std::dynamic_pointer_cast<FieldReference>(expr)) {
     for (const auto& input : expr->inputs()) {
-      if (input->name() != "literal") {
+      if (!isLiteralExpr(input)) {
         node->subexpressions_.push_back(
             createCudfExpression(input, inputRowSchema));
       }
@@ -2473,7 +2483,7 @@ std::unique_ptr<cudf::column> FunctionExpression::makeStructChildColumn(
               cudf::structs_column_view(value).get_sliced_child(
                   childIndex, stream);
           auto child = std::make_unique<cudf::column>(childView, stream, mr);
-          mergeSecondaryNullsIntoResult(*child, value, stream, mr);
+          mergeNullSourceNullsIntoResult(*child, value, stream, mr);
           return child;
         } else {
           auto const structView = value->view();
@@ -2487,7 +2497,7 @@ std::unique_ptr<cudf::column> FunctionExpression::makeStructChildColumn(
           // merging parent nulls so structView's null mask remains valid.
           auto contents = value->release();
           auto child = std::move(contents.children[childIndex]);
-          mergeSecondaryNullsIntoResult(*child, structView, stream, mr);
+          mergeNullSourceNullsIntoResult(*child, structView, stream, mr);
           return child;
         }
       },
@@ -2518,8 +2528,11 @@ ColumnOrView FunctionExpression::eval(
 
     auto parent = subexpressions_[0]->eval(inputColumnViews, stream, mr);
     VELOX_DCHECK_GE(fieldIndex_, 0);
-    return FunctionExpression::makeStructChildColumn(
+    auto child = FunctionExpression::makeStructChildColumn(
         parent, static_cast<cudf::size_type>(fieldIndex_), stream, mr);
+    VELOX_DCHECK(
+        child->view().type() == cudf_velox::veloxToCudfDataType(expr_->type()));
+    return child;
   }
 
   if (function_) {
@@ -2602,7 +2615,7 @@ bool canBeEvaluatedByCudf(std::shared_ptr<velox::exec::Expr> expr, bool deep) {
 
   if (deep) {
     for (const auto& input : expr->inputs()) {
-      if (input->name() != "literal" && !canBeEvaluatedByCudf(input, true)) {
+      if (!isLiteralExpr(input) && !canBeEvaluatedByCudf(input, true)) {
         return false;
       }
     }

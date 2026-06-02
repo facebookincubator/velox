@@ -30,6 +30,7 @@
 #include "velox/functions/sparksql/registration/Register.h"
 #include "velox/type/Type.h"
 
+#include <folly/ScopeGuard.h>
 #include <gtest/gtest.h>
 
 using namespace facebook::velox;
@@ -81,6 +82,10 @@ class CudfExpressionSelectionTest : public ::testing::Test {
 TEST_F(CudfExpressionSelectionTest, astRoot) {
   auto prevAst = CudfConfig::getInstance().astExpressionEnabled;
   auto prevJit = CudfConfig::getInstance().jitExpressionEnabled;
+  SCOPE_EXIT {
+    CudfConfig::getInstance().astExpressionEnabled = prevAst;
+    CudfConfig::getInstance().jitExpressionEnabled = prevJit;
+  };
   CudfConfig::getInstance().astExpressionEnabled = true;
   CudfConfig::getInstance().jitExpressionEnabled = true;
   auto expr = compileExecExpr("a + c", rowType_, execCtx_.get());
@@ -88,8 +93,6 @@ TEST_F(CudfExpressionSelectionTest, astRoot) {
   auto* ast = dynamic_cast<ASTExpression*>(cudfExpr.get());
   auto* jit = dynamic_cast<JitExpression*>(cudfExpr.get());
   ASSERT_TRUE(ast != nullptr || jit != nullptr);
-  CudfConfig::getInstance().astExpressionEnabled = prevAst;
-  CudfConfig::getInstance().jitExpressionEnabled = prevJit;
 }
 
 TEST_F(CudfExpressionSelectionTest, functionRoot) {
@@ -103,6 +106,10 @@ TEST_F(CudfExpressionSelectionTest, functionRoot) {
 TEST_F(CudfExpressionSelectionTest, astTopLevelWithFunctionPrecompute) {
   auto prevAst = CudfConfig::getInstance().astExpressionEnabled;
   auto prevJit = CudfConfig::getInstance().jitExpressionEnabled;
+  SCOPE_EXIT {
+    CudfConfig::getInstance().astExpressionEnabled = prevAst;
+    CudfConfig::getInstance().jitExpressionEnabled = prevJit;
+  };
   CudfConfig::getInstance().astExpressionEnabled = true;
   CudfConfig::getInstance().jitExpressionEnabled = true;
   auto expr = compileExecExpr(
@@ -112,8 +119,6 @@ TEST_F(CudfExpressionSelectionTest, astTopLevelWithFunctionPrecompute) {
   auto* ast = dynamic_cast<ASTExpression*>(cudfExpr.get());
   auto* jit = dynamic_cast<JitExpression*>(cudfExpr.get());
   ASSERT_TRUE(ast != nullptr || jit != nullptr);
-  CudfConfig::getInstance().astExpressionEnabled = prevAst;
-  CudfConfig::getInstance().jitExpressionEnabled = prevJit;
 }
 
 TEST_F(CudfExpressionSelectionTest, functionTopLevelWithNestedFunction) {
@@ -159,6 +164,10 @@ TEST_F(
 TEST_F(CudfExpressionSelectionTest, nestedRowDereferenceUsesFunctionEvaluator) {
   auto prevAst = CudfConfig::getInstance().astExpressionEnabled;
   auto prevJit = CudfConfig::getInstance().jitExpressionEnabled;
+  SCOPE_EXIT {
+    CudfConfig::getInstance().astExpressionEnabled = prevAst;
+    CudfConfig::getInstance().jitExpressionEnabled = prevJit;
+  };
   CudfConfig::getInstance().astExpressionEnabled = true;
   CudfConfig::getInstance().jitExpressionEnabled = true;
 
@@ -171,9 +180,6 @@ TEST_F(CudfExpressionSelectionTest, nestedRowDereferenceUsesFunctionEvaluator) {
   auto cudfExpr = createCudfExpression(expr, rowType_);
   auto* functionExpr = dynamic_cast<FunctionExpression*>(cudfExpr.get());
   ASSERT_NE(functionExpr, nullptr);
-
-  CudfConfig::getInstance().astExpressionEnabled = prevAst;
-  CudfConfig::getInstance().jitExpressionEnabled = prevJit;
 }
 
 TEST_F(

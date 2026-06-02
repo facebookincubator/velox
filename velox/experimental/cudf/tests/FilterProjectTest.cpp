@@ -1541,6 +1541,17 @@ TEST_F(CudfSimpleFilterProjectTest, rowConstructorAndDereference) {
       rowType);
 }
 
+TEST_F(CudfSimpleFilterProjectTest, nullableStructDereference) {
+  auto rowType = ROW({{"r", ROW({{"a", INTEGER()}, {"b", VARCHAR()}})}});
+  auto a = makeNullableFlatVector<int32_t>({1, 2, std::nullopt, 4});
+  auto b = makeNullableFlatVector<std::string>({"x", std::nullopt, "z", "w"});
+  auto nullableStruct = makeRowVector({a, b}, nullEvery(2));
+  auto input = makeRowVector({"r"}, {nullableStruct});
+
+  assertExpressionMatchesCpu("r.a", input, rowType);
+  assertExpressionMatchesCpu("r.b", input, rowType);
+}
+
 TEST_F(CudfSimpleFilterProjectTest, rowConstructorDereferenceByIndex) {
   auto c0 = makeNullableFlatVector<int32_t>({1, std::nullopt, 3});
   auto c1 = makeNullableFlatVector<std::string>({"x", "y", std::nullopt});
