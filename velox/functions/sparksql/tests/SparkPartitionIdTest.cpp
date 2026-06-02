@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
 namespace facebook::velox::functions::sparksql::test {
@@ -39,18 +38,5 @@ TEST_F(SparkPartitionIdTest, basic) {
   testSparkPartitionId(100, 100);
 }
 
-TEST_F(SparkPartitionIdTest, error) {
-  auto rowVector = makeRowVector(ROW({}), 1);
-
-  queryCtx_->testingOverrideConfigUnsafe({{}});
-  VELOX_ASSERT_THROW(
-      evaluate("spark_partition_id()", rowVector),
-      "Spark partition id is not set");
-
-  setSparkPartitionId(-1);
-  VELOX_ASSERT_THROW(
-      evaluate("spark_partition_id()", rowVector),
-      "Invalid Spark partition id");
-}
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

@@ -22,13 +22,15 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/vector/arrow/Bridge.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
 
 namespace facebook::velox::test {
 namespace {
 
 static void mockRelease(ArrowSchema*) {}
 
-class ArrowBridgeSchemaExportTest : public testing::Test {
+class ArrowBridgeSchemaExportTest : public testing::Test,
+                                    public VectorTestBase {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
@@ -37,11 +39,12 @@ class ArrowBridgeSchemaExportTest : public testing::Test {
   void testScalarType(
       const TypePtr& type,
       const char* arrowFormat,
-      const ArrowOptions& options = ArrowOptions{}) {
+      const ArrowOptions& options = ArrowOptions{},
+      bool expectMetadata = false) {
     ArrowSchema arrowSchema;
     exportToArrow(type, arrowSchema, options);
 
-    verifyScalarType(arrowSchema, arrowFormat);
+    verifyScalarType(arrowSchema, arrowFormat, nullptr, expectMetadata);
 
     arrowSchema.release(&arrowSchema);
     EXPECT_EQ(nullptr, arrowSchema.release);
@@ -51,14 +54,19 @@ class ArrowBridgeSchemaExportTest : public testing::Test {
   void verifyScalarType(
       const ArrowSchema& arrowSchema,
       const char* arrowFormat,
-      const char* name = nullptr) {
+      const char* name = nullptr,
+      bool expectMetadata = false) {
     EXPECT_STREQ(arrowFormat, arrowSchema.format);
     if (name == nullptr) {
       EXPECT_EQ(nullptr, arrowSchema.name);
     } else {
       EXPECT_STREQ(name, arrowSchema.name);
     }
-    EXPECT_EQ(nullptr, arrowSchema.metadata);
+    if (expectMetadata) {
+      EXPECT_NE(nullptr, arrowSchema.metadata);
+    } else {
+      EXPECT_EQ(nullptr, arrowSchema.metadata);
+    }
     EXPECT_EQ(arrowSchema.flags | ARROW_FLAG_NULLABLE, ARROW_FLAG_NULLABLE);
 
     EXPECT_EQ(0, arrowSchema.n_children);
@@ -126,11 +134,11 @@ class ArrowBridgeSchemaExportTest : public testing::Test {
     // complex vector first, then wrap it in a dictionary.
     auto constantVector = isScalar
         ? BaseVector::createConstant(
-              type, variant(type->kind()), constantSize, pool_.get())
+              type, variant(type->kind()), constantSize, pool())
         : BaseVector::wrapInConstant(
               constantSize,
               3, // index to use for the constant
-              BaseVector::create(type, 100, pool_.get()));
+              BaseVector::create(type, 100, pool()));
 
     velox::exportToArrow(constantVector, arrowSchema, options);
 
@@ -170,8 +178,7 @@ class ArrowBridgeSchemaExportTest : public testing::Test {
       const TypePtr& type,
       ArrowSchema& out,
       const ArrowOptions& options = ArrowOptions{}) {
-    velox::exportToArrow(
-        BaseVector::create(type, 0, pool_.get()), out, options);
+    velox::exportToArrow(BaseVector::create(type, 0, pool()), out, options);
   }
 
   ArrowSchema makeArrowSchema(const char* format) {
@@ -187,9 +194,6 @@ class ArrowBridgeSchemaExportTest : public testing::Test {
         .private_data = nullptr,
     };
   }
-
-  std::shared_ptr<memory::MemoryPool> pool_{
-      memory::memoryManager()->addLeafPool()};
 };
 
 TEST_F(ArrowBridgeSchemaExportTest, scalar) {
@@ -206,33 +210,60 @@ TEST_F(ArrowBridgeSchemaExportTest, scalar) {
   testScalarType(VARCHAR(), "u");
   testScalarType(VARBINARY(), "z");
 
-  // Test default timezone
-  testScalarType(
-      TIMESTAMP(), "tss:", {.timestampUnit = TimestampUnit::kSecond});
-  testScalarType(TIMESTAMP(), "tsm:", {.timestampUnit = TimestampUnit::kMilli});
-  testScalarType(TIMESTAMP(), "tsu:", {.timestampUnit = TimestampUnit::kMicro});
-  testScalarType(TIMESTAMP(), "tsn:", {.timestampUnit = TimestampUnit::kNano});
-
   testScalarType(VARCHAR(), "vu", {.exportToStringView = true});
   testScalarType(VARBINARY(), "vz", {.exportToStringView = true});
 
-  // Test specific timezone
-  testScalarType(
-      TIMESTAMP(),
-      "tss:+01:0",
-      {.timestampUnit = TimestampUnit::kSecond, .timestampTimeZone = "+01:0"});
-  testScalarType(
-      TIMESTAMP(),
-      "tsm:+01:0",
-      {.timestampUnit = TimestampUnit::kMilli, .timestampTimeZone = "+01:0"});
-  testScalarType(
-      TIMESTAMP(),
-      "tsu:+01:0",
-      {.timestampUnit = TimestampUnit::kMicro, .timestampTimeZone = "+01:0"});
-  testScalarType(
-      TIMESTAMP(),
-      "tsn:+01:0",
-      {.timestampUnit = TimestampUnit::kNano, .timestampTimeZone = "+01:0"});
+  {
+    struct TimestampCase {
+      TimestampUnit unit;
+      const char* format;
+    };
+
+    const TimestampCase kDefaultTimestampCases[] = {
+        {TimestampUnit::kSecond, "tss:"},
+        {TimestampUnit::kMilli, "tsm:"},
+        {TimestampUnit::kMicro, "tsu:"},
+        {TimestampUnit::kNano, "tsn:"},
+    };
+
+    const TimestampCase kTimezoneTimestampCases[] = {
+        {TimestampUnit::kSecond, "tss:+01:0"},
+        {TimestampUnit::kMilli, "tsm:+01:0"},
+        {TimestampUnit::kMicro, "tsu:+01:0"},
+        {TimestampUnit::kNano, "tsn:+01:0"},
+    };
+
+    for (const auto& timestampCase : kDefaultTimestampCases) {
+      testScalarType(
+          TIMESTAMP(),
+          timestampCase.format,
+          {.timestampUnit = timestampCase.unit});
+    }
+
+    for (const auto& timestampCase : kDefaultTimestampCases) {
+      testScalarType(
+          TIMESTAMP_UTC(),
+          timestampCase.format,
+          {.timestampUnit = timestampCase.unit},
+          true);
+    }
+
+    for (const auto& timestampCase : kTimezoneTimestampCases) {
+      testScalarType(
+          TIMESTAMP(),
+          timestampCase.format,
+          {.timestampUnit = timestampCase.unit, .timestampTimeZone = "+01:0"});
+    }
+
+    // TIMESTAMP_UTC is timezone-agnostic and ignores timestampTimeZone option.
+    for (const auto& timestampCase : kDefaultTimestampCases) {
+      testScalarType(
+          TIMESTAMP_UTC(),
+          timestampCase.format,
+          {.timestampUnit = timestampCase.unit, .timestampTimeZone = "+01:0"},
+          true);
+    }
+  }
 
   testScalarType(DATE(), "tdD");
   testScalarType(INTERVAL_YEAR_MONTH(), "tiM");
@@ -312,11 +343,53 @@ TEST_F(ArrowBridgeSchemaExportTest, constant) {
       "Flattening is only supported for scalar types.");
 }
 
+TEST_F(ArrowBridgeSchemaExportTest, dictionaryTimestampUtc) {
+  auto dictionaryValues = makeFlatVector<Timestamp>(
+      {
+          Timestamp(0, 0),
+          Timestamp(1, 12'349),
+          Timestamp(2, 999'999'999),
+      },
+      TIMESTAMP_UTC());
+  auto dictionaryVector =
+      wrapInDictionary(makeIndicesInReverse(3), dictionaryValues);
+
+  ArrowSchema arrowSchema;
+  velox::exportToArrow(dictionaryVector, arrowSchema);
+
+  auto importedType = importFromArrow(arrowSchema);
+  EXPECT_EQ(*TIMESTAMP_UTC(), *importedType);
+
+  arrowSchema.release(&arrowSchema);
+
+  velox::exportToArrow(
+      dictionaryVector, arrowSchema, ArrowOptions{.flattenDictionary = true});
+
+  importedType = importFromArrow(arrowSchema);
+  EXPECT_EQ(*TIMESTAMP_UTC(), *importedType);
+
+  arrowSchema.release(&arrowSchema);
+}
+
 class ArrowBridgeSchemaImportTest : public ArrowBridgeSchemaExportTest {
  protected:
-  TypePtr testSchemaImport(const char* format) {
+  TypePtr testSchemaImport(
+      const char* format,
+      bool withTimestampUtcMetadata = false) {
     auto arrowSchema = makeArrowSchema(format);
+
+    ArrowSchema timestampUtcSchema;
+    if (withTimestampUtcMetadata) {
+      exportToArrow(TIMESTAMP_UTC(), timestampUtcSchema);
+      arrowSchema.metadata = timestampUtcSchema.metadata;
+    }
+
     auto type = importFromArrow(arrowSchema);
+
+    if (withTimestampUtcMetadata) {
+      timestampUtcSchema.release(&timestampUtcSchema);
+    }
+
     arrowSchema.release(&arrowSchema);
     return type;
   }
@@ -426,6 +499,7 @@ TEST_F(ArrowBridgeSchemaImportTest, scalar) {
 
   // Temporal.
   EXPECT_EQ(*TIMESTAMP(), *testSchemaImport("tsn:"));
+  EXPECT_EQ(*TIMESTAMP_UTC(), *testSchemaImport("tsn:", true));
   EXPECT_EQ(*DATE(), *testSchemaImport("tdD"));
   EXPECT_EQ(*INTERVAL_YEAR_MONTH(), *testSchemaImport("tiM"));
 
@@ -538,6 +612,8 @@ TEST_F(ArrowBridgeSchemaTest, roundtrip) {
   roundtripTest(VARCHAR());
   roundtripTest(VARCHAR(), {.exportToStringView = true});
   roundtripTest(REAL());
+  roundtripTest(TIMESTAMP());
+  roundtripTest(TIMESTAMP_UTC());
   roundtripTest(ARRAY(DOUBLE()));
   roundtripTest(ARRAY(ARRAY(ARRAY(ARRAY(VARBINARY())))));
   roundtripTest(MAP(VARCHAR(), REAL()));

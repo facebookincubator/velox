@@ -2456,4 +2456,35 @@ regexpReplaceWithLambdaSignatures() {
               .argumentType("function(array(varchar), varchar)")
               .build()};
 }
+
+std::string unescapeReplacement(const std::string& replacement) {
+  std::string result;
+  result.reserve(replacement.size());
+  for (size_t i = 0; i < replacement.size();) {
+    const char current = replacement[i];
+    const bool hasNext = i + 1 < replacement.size();
+    if (current == '\\' && hasNext) {
+      const char following = replacement[i + 1];
+      if (following == '\\' || (following >= '0' && following <= '9')) {
+        // '\\\\' and '\\<digit>' have the same meaning in RE2 and in
+        // java.util.regex; keep them as a two-byte unit.
+        result.push_back(current);
+        result.push_back(following);
+        i += 2;
+      } else {
+        // '\\<other>' in java.util.regex is just <other>; emit the trailing
+        // byte and skip the backslash.
+        result.push_back(following);
+        i += 2;
+      }
+    } else {
+      // Plain byte, or a trailing lone '\\'. The latter is invalid in both
+      // engines; we keep the byte so RE2 surfaces the error later instead of
+      // silently dropping input here.
+      result.push_back(current);
+      ++i;
+    }
+  }
+  return result;
+}
 } // namespace facebook::velox::functions

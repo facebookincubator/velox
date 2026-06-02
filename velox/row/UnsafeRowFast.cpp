@@ -108,6 +108,7 @@ void UnsafeRowFast::initialize(const TypePtr& type) {
       supportsBulkCopy_ = decoded_.isIdentityMapping();
       break;
     case TypeKind::TIMESTAMP:
+      VELOX_DCHECK(type->equivalent(*TIMESTAMP()));
       valueBytes_ = sizeof(int64_t);
       fixedWidthTypeKind_ = true;
       break;
@@ -181,6 +182,7 @@ void UnsafeRowFast::serializeFixedWidth(vector_size_t index, char* buffer)
       *reinterpret_cast<bool*>(buffer) = decoded_.valueAt<bool>(index);
       break;
     case TypeKind::TIMESTAMP:
+      VELOX_DCHECK(decoded_.base()->type()->equivalent(*TIMESTAMP()));
       *reinterpret_cast<int64_t*>(buffer) =
           decoded_.valueAt<Timestamp>(index).toMicros();
       break;

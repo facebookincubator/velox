@@ -113,6 +113,7 @@ Device* setDriverDevice(int32_t deviceId) {
   device->sharedMemPerSM = prop.sharedMemPerMultiprocessor;
   device->L2Size = prop.l2CacheSize;
   device->persistingL2MaxSize = prop.persistingL2CacheMaxSize;
+  device->float32To64Ratio = prop.singleToDoublePrecisionPerfRatio;
   CU_CHECK(cuCtxSetCurrent(contexts[deviceId]));
   return devices[deviceId].get();
 }
