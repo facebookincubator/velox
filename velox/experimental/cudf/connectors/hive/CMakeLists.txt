@@ -30,9 +30,6 @@ add_subdirectory(io_sources)
 
 target_link_libraries(
   velox_cudf_hive_connector
-  PRIVATE
-    velox_dwio_common
-    velox_hive_connector
-    velox_cudf_io_source_registry
+  PRIVATE velox_dwio_common velox_hive_connector velox_cudf_io_source_registry
   PUBLIC cudf::cudf velox_cudf_expression
 )

@@ -14,9 +14,6 @@
 
 add_library(velox_cudf_io_source_registry CudfIoSourceRegistry.cpp)
 
-target_link_libraries(
-  velox_cudf_io_source_registry
-  PUBLIC velox_common_config cudf::cudf
-)
+target_link_libraries(velox_cudf_io_source_registry PUBLIC velox_common_config cudf::cudf)
 
 add_subdirectory(kvikio)

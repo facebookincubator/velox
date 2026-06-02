@@ -14,7 +14,4 @@
 
 add_library(velox_cudf_kvikio_io_source RegisterCudfKvikIoSource.cpp)
 
-target_link_libraries(
-  velox_cudf_kvikio_io_source
-  PUBLIC velox_cudf_io_source_registry cudf::cudf
-)
+target_link_libraries(velox_cudf_kvikio_io_source PUBLIC velox_cudf_io_source_registry cudf::cudf)
